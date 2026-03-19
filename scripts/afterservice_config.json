@@ -1,0 +1,2649 @@
+{
+  "dataModels": [
+    {
+      "modelName": "客户主数据",
+      "modelCode": "customer",
+      "description": "客户主数据",
+      "fields": [
+        {
+          "fieldName": "客户ID",
+          "fieldCode": "customer_id",
+          "fieldType": "STRING",
+          "fieldDescription": "客户ID"
+        },
+        {
+          "fieldName": "客户名称",
+          "fieldCode": "customer_name",
+          "fieldType": "STRING",
+          "fieldDescription": "客户名称"
+        },
+        {
+          "fieldName": "国家/区域",
+          "fieldCode": "country_region",
+          "fieldType": "STRING",
+          "fieldDescription": "国家/区域"
+        },
+        {
+          "fieldName": "联系人",
+          "fieldCode": "contact_name",
+          "fieldType": "STRING",
+          "fieldDescription": "联系人"
+        },
+        {
+          "fieldName": "联系电话",
+          "fieldCode": "contact_phone",
+          "fieldType": "STRING",
+          "fieldDescription": "联系电话"
+        },
+        {
+          "fieldName": "客户等级",
+          "fieldCode": "customer_level",
+          "fieldType": "STRING",
+          "fieldDescription": "客户等级"
+        },
+        {
+          "fieldName": "备注",
+          "fieldCode": "remark_info",
+          "fieldType": "BIG_TEXT",
+          "fieldDescription": "备注"
+        }
+      ]
+    },
+    {
+      "modelName": "站点主数据",
+      "modelCode": "site",
+      "description": "站点主数据",
+      "fields": [
+        {
+          "fieldName": "站点ID",
+          "fieldCode": "site_id",
+          "fieldType": "STRING",
+          "fieldDescription": "站点ID"
+        },
+        {
+          "fieldName": "所属客户",
+          "fieldCode": "customer_ref",
+          "fieldType": "STRING",
+          "fieldDescription": "所属客户"
+        },
+        {
+          "fieldName": "站点名称",
+          "fieldCode": "site_name",
+          "fieldType": "STRING",
+          "fieldDescription": "站点名称"
+        },
+        {
+          "fieldName": "地理位置",
+          "fieldCode": "location_info",
+          "fieldType": "STRING",
+          "fieldDescription": "地理位置"
+        },
+        {
+          "fieldName": "时区",
+          "fieldCode": "timezone_val",
+          "fieldType": "STRING",
+          "fieldDescription": "时区"
+        },
+        {
+          "fieldName": "备注",
+          "fieldCode": "remark_info",
+          "fieldType": "BIG_TEXT",
+          "fieldDescription": "备注"
+        }
+      ]
+    },
+    {
+      "modelName": "设备主数据",
+      "modelCode": "device",
+      "description": "设备主数据",
+      "fields": [
+        {
+          "fieldName": "设备ID",
+          "fieldCode": "device_id",
+          "fieldType": "STRING",
+          "fieldDescription": "设备ID"
+        },
+        {
+          "fieldName": "设备名称",
+          "fieldCode": "device_name",
+          "fieldType": "STRING",
+          "fieldDescription": "设备名称"
+        },
+        {
+          "fieldName": "SN序列号",
+          "fieldCode": "serial_no",
+          "fieldType": "STRING",
+          "fieldDescription": "SN序列号"
+        },
+        {
+          "fieldName": "型号",
+          "fieldCode": "model_no",
+          "fieldType": "STRING",
+          "fieldDescription": "型号"
+        },
+        {
+          "fieldName": "安装日期",
+          "fieldCode": "install_date",
+          "fieldType": "DATE",
+          "fieldDescription": "安装日期"
+        },
+        {
+          "fieldName": "保修截止日期",
+          "fieldCode": "warranty_end",
+          "fieldType": "DATE",
+          "fieldDescription": "保修截止日期"
+        },
+        {
+          "fieldName": "设备状态",
+          "fieldCode": "device_status",
+          "fieldType": "STRING",
+          "fieldDescription": "设备状态"
+        },
+        {
+          "fieldName": "所属客户",
+          "fieldCode": "customer_ref",
+          "fieldType": "STRING",
+          "fieldDescription": "所属客户"
+        },
+        {
+          "fieldName": "所属站点",
+          "fieldCode": "site_ref",
+          "fieldType": "STRING",
+          "fieldDescription": "所属站点"
+        }
+      ]
+    },
+    {
+      "modelName": "工程师主数据",
+      "modelCode": "engineer",
+      "description": "工程师主数据",
+      "fields": [
+        {
+          "fieldName": "工程师ID",
+          "fieldCode": "engineer_id",
+          "fieldType": "STRING",
+          "fieldDescription": "工程师ID"
+        },
+        {
+          "fieldName": "姓名",
+          "fieldCode": "eng_name",
+          "fieldType": "STRING",
+          "fieldDescription": "姓名"
+        },
+        {
+          "fieldName": "区域",
+          "fieldCode": "region_val",
+          "fieldType": "STRING",
+          "fieldDescription": "区域"
+        },
+        {
+          "fieldName": "技能标签",
+          "fieldCode": "skill_tag",
+          "fieldType": "STRING",
+          "fieldDescription": "技能标签"
+        },
+        {
+          "fieldName": "手机号",
+          "fieldCode": "phone_no",
+          "fieldType": "STRING",
+          "fieldDescription": "手机号"
+        },
+        {
+          "fieldName": "邮箱",
+          "fieldCode": "email_addr",
+          "fieldType": "STRING",
+          "fieldDescription": "邮箱"
+        },
+        {
+          "fieldName": "在职状态",
+          "fieldCode": "eng_status",
+          "fieldType": "STRING",
+          "fieldDescription": "在职状态"
+        }
+      ]
+    },
+    {
+      "modelName": "配件主数据",
+      "modelCode": "part_info",
+      "description": "配件主数据",
+      "fields": [
+        {
+          "fieldName": "配件编码",
+          "fieldCode": "part_code",
+          "fieldType": "STRING",
+          "fieldDescription": "配件编码"
+        },
+        {
+          "fieldName": "配件名称",
+          "fieldCode": "part_name",
+          "fieldType": "STRING",
+          "fieldDescription": "配件名称"
+        },
+        {
+          "fieldName": "规格型号",
+          "fieldCode": "spec_info",
+          "fieldType": "STRING",
+          "fieldDescription": "规格型号"
+        },
+        {
+          "fieldName": "单位",
+          "fieldCode": "unit_val",
+          "fieldType": "STRING",
+          "fieldDescription": "单位"
+        },
+        {
+          "fieldName": "分类",
+          "fieldCode": "category_val",
+          "fieldType": "STRING",
+          "fieldDescription": "分类"
+        },
+        {
+          "fieldName": "成本价",
+          "fieldCode": "cost_price",
+          "fieldType": "NUM",
+          "fieldDescription": "成本价"
+        },
+        {
+          "fieldName": "售价",
+          "fieldCode": "retail_price",
+          "fieldType": "NUM",
+          "fieldDescription": "售价"
+        },
+        {
+          "fieldName": "状态",
+          "fieldCode": "part_status",
+          "fieldType": "STRING",
+          "fieldDescription": "状态"
+        }
+      ]
+    },
+    {
+      "modelName": "仓库主数据",
+      "modelCode": "warehouse",
+      "description": "仓库主数据",
+      "fields": [
+        {
+          "fieldName": "仓库ID",
+          "fieldCode": "warehouse_id",
+          "fieldType": "STRING",
+          "fieldDescription": "仓库ID"
+        },
+        {
+          "fieldName": "仓库名称",
+          "fieldCode": "warehouse_name",
+          "fieldType": "STRING",
+          "fieldDescription": "仓库名称"
+        },
+        {
+          "fieldName": "区域",
+          "fieldCode": "region_val",
+          "fieldType": "STRING",
+          "fieldDescription": "区域"
+        },
+        {
+          "fieldName": "地址",
+          "fieldCode": "address_info",
+          "fieldType": "BIG_TEXT",
+          "fieldDescription": "地址"
+        },
+        {
+          "fieldName": "仓库负责人",
+          "fieldCode": "manager_user",
+          "fieldType": "STRING",
+          "fieldDescription": "仓库负责人"
+        }
+      ]
+    },
+    {
+      "modelName": "工单",
+      "modelCode": "service_order",
+      "description": "工单",
+      "fields": [
+        {
+          "fieldName": "工单编号",
+          "fieldCode": "order_code",
+          "fieldType": "STRING",
+          "fieldDescription": "工单编号"
+        },
+        {
+          "fieldName": "工单标题",
+          "fieldCode": "order_title",
+          "fieldType": "STRING",
+          "fieldDescription": "工单标题"
+        },
+        {
+          "fieldName": "客户",
+          "fieldCode": "customer_ref",
+          "fieldType": "STRING",
+          "fieldDescription": "客户"
+        },
+        {
+          "fieldName": "站点",
+          "fieldCode": "site_ref",
+          "fieldType": "STRING",
+          "fieldDescription": "站点"
+        },
+        {
+          "fieldName": "设备",
+          "fieldCode": "device_ref",
+          "fieldType": "STRING",
+          "fieldDescription": "设备"
+        },
+        {
+          "fieldName": "联系人",
+          "fieldCode": "contact_name",
+          "fieldType": "STRING",
+          "fieldDescription": "联系人"
+        },
+        {
+          "fieldName": "联系电话",
+          "fieldCode": "contact_phone",
+          "fieldType": "STRING",
+          "fieldDescription": "联系电话"
+        },
+        {
+          "fieldName": "故障类型",
+          "fieldCode": "fault_type",
+          "fieldType": "STRING",
+          "fieldDescription": "故障类型"
+        },
+        {
+          "fieldName": "故障描述",
+          "fieldCode": "fault_desc",
+          "fieldType": "BIG_TEXT",
+          "fieldDescription": "故障描述"
+        },
+        {
+          "fieldName": "报修来源",
+          "fieldCode": "order_source",
+          "fieldType": "STRING",
+          "fieldDescription": "报修来源"
+        },
+        {
+          "fieldName": "优先级",
+          "fieldCode": "priority_val",
+          "fieldType": "STRING",
+          "fieldDescription": "优先级"
+        },
+        {
+          "fieldName": "当前状态",
+          "fieldCode": "order_status",
+          "fieldType": "STRING",
+          "fieldDescription": "当前状态"
+        },
+        {
+          "fieldName": "是否需要配件",
+          "fieldCode": "need_parts",
+          "fieldType": "STRING",
+          "fieldDescription": "是否需要配件"
+        },
+        {
+          "fieldName": "受理时间",
+          "fieldCode": "created_at",
+          "fieldType": "DATE",
+          "fieldDescription": "受理时间"
+        },
+        {
+          "fieldName": "预计完成时间",
+          "fieldCode": "expected_finish",
+          "fieldType": "DATE",
+          "fieldDescription": "预计完成时间"
+        },
+        {
+          "fieldName": "附件",
+          "fieldCode": "attachments",
+          "fieldType": "STRING",
+          "fieldDescription": "附件"
+        },
+        {
+          "fieldName": "备注",
+          "fieldCode": "remark_info",
+          "fieldType": "BIG_TEXT",
+          "fieldDescription": "备注"
+        }
+      ]
+    },
+    {
+      "modelName": "派单日志",
+      "modelCode": "dispatch_log",
+      "description": "派单日志",
+      "fields": [
+        {
+          "fieldName": "派单编号",
+          "fieldCode": "dispatch_id",
+          "fieldType": "STRING",
+          "fieldDescription": "派单编号"
+        },
+        {
+          "fieldName": "工单编号",
+          "fieldCode": "order_ref",
+          "fieldType": "STRING",
+          "fieldDescription": "工单编号"
+        },
+        {
+          "fieldName": "派单类型",
+          "fieldCode": "dispatch_type",
+          "fieldType": "STRING",
+          "fieldDescription": "派单类型"
+        },
+        {
+          "fieldName": "派单人",
+          "fieldCode": "dispatch_user",
+          "fieldType": "STRING",
+          "fieldDescription": "派单人"
+        },
+        {
+          "fieldName": "被指派工程师",
+          "fieldCode": "engineer_ref",
+          "fieldType": "STRING",
+          "fieldDescription": "被指派工程师"
+        },
+        {
+          "fieldName": "派单时间",
+          "fieldCode": "dispatch_time",
+          "fieldType": "DATE",
+          "fieldDescription": "派单时间"
+        },
+        {
+          "fieldName": "接单时间",
+          "fieldCode": "accepted_time",
+          "fieldType": "DATE",
+          "fieldDescription": "接单时间"
+        },
+        {
+          "fieldName": "状态",
+          "fieldCode": "dispatch_status",
+          "fieldType": "STRING",
+          "fieldDescription": "状态"
+        },
+        {
+          "fieldName": "派单备注",
+          "fieldCode": "dispatch_remark",
+          "fieldType": "BIG_TEXT",
+          "fieldDescription": "派单备注"
+        }
+      ]
+    },
+    {
+      "modelName": "使用配件明细",
+      "modelCode": "service_record_parts",
+      "description": "使用配件明细",
+      "fields": [
+        {
+          "fieldName": "配件编码",
+          "fieldCode": "part_ref",
+          "fieldType": "STRING",
+          "fieldDescription": "配件编码"
+        },
+        {
+          "fieldName": "使用数量",
+          "fieldCode": "qty_val",
+          "fieldType": "NUM",
+          "fieldDescription": "使用数量"
+        }
+      ]
+    },
+    {
+      "modelName": "服务执行与质检",
+      "modelCode": "service_record",
+      "description": "服务执行与质检",
+      "fields": [
+        {
+          "fieldName": "记录编号",
+          "fieldCode": "record_id",
+          "fieldType": "STRING",
+          "fieldDescription": "记录编号"
+        },
+        {
+          "fieldName": "工单编号",
+          "fieldCode": "order_ref",
+          "fieldType": "STRING",
+          "fieldDescription": "工单编号"
+        },
+        {
+          "fieldName": "工程师",
+          "fieldCode": "engineer_ref",
+          "fieldType": "STRING",
+          "fieldDescription": "工程师"
+        },
+        {
+          "fieldName": "到场时间",
+          "fieldCode": "arrival_time",
+          "fieldType": "DATE",
+          "fieldDescription": "到场时间"
+        },
+        {
+          "fieldName": "开始时间",
+          "fieldCode": "start_time",
+          "fieldType": "DATE",
+          "fieldDescription": "开始时间"
+        },
+        {
+          "fieldName": "结束时间",
+          "fieldCode": "end_time",
+          "fieldType": "DATE",
+          "fieldDescription": "结束时间"
+        },
+        {
+          "fieldName": "工时",
+          "fieldCode": "duration_val",
+          "fieldType": "NUM",
+          "fieldDescription": "工时"
+        },
+        {
+          "fieldName": "维修结果",
+          "fieldCode": "result_type",
+          "fieldType": "STRING",
+          "fieldDescription": "维修结果"
+        },
+        {
+          "fieldName": "执行内容",
+          "fieldCode": "work_desc",
+          "fieldType": "BIG_TEXT",
+          "fieldDescription": "执行内容"
+        },
+        {
+          "fieldName": "现场图片",
+          "fieldCode": "photos",
+          "fieldType": "STRING",
+          "fieldDescription": "现场图片"
+        },
+        {
+          "fieldName": "客户确认",
+          "fieldCode": "customer_signed",
+          "fieldType": "STRING",
+          "fieldDescription": "客户确认"
+        },
+        {
+          "fieldName": "质检结果",
+          "fieldCode": "qc_result",
+          "fieldType": "STRING",
+          "fieldDescription": "质检结果"
+        },
+        {
+          "fieldName": "质检说明",
+          "fieldCode": "qc_comment",
+          "fieldType": "BIG_TEXT",
+          "fieldDescription": "质检说明"
+        },
+        {
+          "fieldName": "提交时间",
+          "fieldCode": "created_at",
+          "fieldType": "DATE",
+          "fieldDescription": "提交时间"
+        }
+      ]
+    },
+    {
+      "modelName": "备件申请与库存台账",
+      "modelCode": "part_flow_ledger",
+      "description": "备件申请与库存台账",
+      "fields": [
+        {
+          "fieldName": "流转单号",
+          "fieldCode": "flow_id",
+          "fieldType": "STRING",
+          "fieldDescription": "流转单号"
+        },
+        {
+          "fieldName": "工单编号",
+          "fieldCode": "order_ref",
+          "fieldType": "STRING",
+          "fieldDescription": "工单编号"
+        },
+        {
+          "fieldName": "业务类型",
+          "fieldCode": "flow_type",
+          "fieldType": "STRING",
+          "fieldDescription": "业务类型"
+        },
+        {
+          "fieldName": "仓库",
+          "fieldCode": "warehouse_ref",
+          "fieldType": "STRING",
+          "fieldDescription": "仓库"
+        },
+        {
+          "fieldName": "配件编码",
+          "fieldCode": "part_ref",
+          "fieldType": "STRING",
+          "fieldDescription": "配件编码"
+        },
+        {
+          "fieldName": "申请数量",
+          "fieldCode": "qty_request",
+          "fieldType": "NUM",
+          "fieldDescription": "申请数量"
+        },
+        {
+          "fieldName": "出库数量",
+          "fieldCode": "qty_out",
+          "fieldType": "NUM",
+          "fieldDescription": "出库数量"
+        },
+        {
+          "fieldName": "入库数量",
+          "fieldCode": "qty_in",
+          "fieldType": "NUM",
+          "fieldDescription": "入库数量"
+        },
+        {
+          "fieldName": "当前库存",
+          "fieldCode": "qty_current",
+          "fieldType": "NUM",
+          "fieldDescription": "当前库存"
+        },
+        {
+          "fieldName": "锁定库存",
+          "fieldCode": "qty_locked",
+          "fieldType": "NUM",
+          "fieldDescription": "锁定库存"
+        },
+        {
+          "fieldName": "可用库存",
+          "fieldCode": "qty_available",
+          "fieldType": "NUM",
+          "fieldDescription": "可用库存"
+        },
+        {
+          "fieldName": "审批状态",
+          "fieldCode": "approval_status",
+          "fieldType": "STRING",
+          "fieldDescription": "审批状态"
+        },
+        {
+          "fieldName": "审批人",
+          "fieldCode": "approval_user",
+          "fieldType": "STRING",
+          "fieldDescription": "审批人"
+        },
+        {
+          "fieldName": "发生时间",
+          "fieldCode": "flow_time",
+          "fieldType": "DATE",
+          "fieldDescription": "发生时间"
+        },
+        {
+          "fieldName": "备注",
+          "fieldCode": "remark_info",
+          "fieldType": "BIG_TEXT",
+          "fieldDescription": "备注"
+        }
+      ]
+    },
+    {
+      "modelName": "SLA记录",
+      "modelCode": "sla_record",
+      "description": "SLA记录",
+      "fields": [
+        {
+          "fieldName": "SLA编号",
+          "fieldCode": "sla_id",
+          "fieldType": "STRING",
+          "fieldDescription": "SLA编号"
+        },
+        {
+          "fieldName": "工单编号",
+          "fieldCode": "order_ref",
+          "fieldType": "STRING",
+          "fieldDescription": "工单编号"
+        },
+        {
+          "fieldName": "报修时间",
+          "fieldCode": "created_at",
+          "fieldType": "DATE",
+          "fieldDescription": "报修时间"
+        },
+        {
+          "fieldName": "接单时间",
+          "fieldCode": "accepted_time",
+          "fieldType": "DATE",
+          "fieldDescription": "接单时间"
+        },
+        {
+          "fieldName": "响应时长(小时)",
+          "fieldCode": "response_hours",
+          "fieldType": "NUM",
+          "fieldDescription": "响应时长(小时)"
+        },
+        {
+          "fieldName": "修复时长(小时)",
+          "fieldCode": "repair_hours",
+          "fieldType": "NUM",
+          "fieldDescription": "修复时长(小时)"
+        },
+        {
+          "fieldName": "SLA结果",
+          "fieldCode": "sla_result",
+          "fieldType": "STRING",
+          "fieldDescription": "SLA结果"
+        }
+      ]
+    },
+    {
+      "modelName": "结算单",
+      "modelCode": "settlement",
+      "description": "结算单",
+      "fields": [
+        {
+          "fieldName": "结算单号",
+          "fieldCode": "settle_code",
+          "fieldType": "STRING",
+          "fieldDescription": "结算单号"
+        },
+        {
+          "fieldName": "工单编号",
+          "fieldCode": "order_ref",
+          "fieldType": "STRING",
+          "fieldDescription": "工单编号"
+        },
+        {
+          "fieldName": "客户",
+          "fieldCode": "customer_ref",
+          "fieldType": "STRING",
+          "fieldDescription": "客户"
+        },
+        {
+          "fieldName": "费用项",
+          "fieldCode": "fee_type",
+          "fieldType": "STRING",
+          "fieldDescription": "费用项"
+        },
+        {
+          "fieldName": "金额",
+          "fieldCode": "amount_val",
+          "fieldType": "NUM",
+          "fieldDescription": "金额"
+        },
+        {
+          "fieldName": "币种",
+          "fieldCode": "currency_val",
+          "fieldType": "STRING",
+          "fieldDescription": "币种"
+        },
+        {
+          "fieldName": "审核状态",
+          "fieldCode": "audit_status",
+          "fieldType": "STRING",
+          "fieldDescription": "审核状态"
+        }
+      ]
+    },
+    {
+      "modelName": "审计日志",
+      "modelCode": "audit_log",
+      "description": "审计日志",
+      "fields": [
+        {
+          "fieldName": "日志编号",
+          "fieldCode": "log_id",
+          "fieldType": "STRING",
+          "fieldDescription": "日志编号"
+        },
+        {
+          "fieldName": "业务对象类型",
+          "fieldCode": "biz_type",
+          "fieldType": "STRING",
+          "fieldDescription": "业务对象类型"
+        },
+        {
+          "fieldName": "业务对象ID",
+          "fieldCode": "biz_id",
+          "fieldType": "STRING",
+          "fieldDescription": "业务对象ID"
+        },
+        {
+          "fieldName": "操作类型",
+          "fieldCode": "action_type",
+          "fieldType": "STRING",
+          "fieldDescription": "操作类型"
+        },
+        {
+          "fieldName": "操作人",
+          "fieldCode": "operator_user",
+          "fieldType": "STRING",
+          "fieldDescription": "操作人"
+        },
+        {
+          "fieldName": "操作时间",
+          "fieldCode": "operate_time",
+          "fieldType": "DATE",
+          "fieldDescription": "操作时间"
+        },
+        {
+          "fieldName": "操作前快照",
+          "fieldCode": "before_snapshot",
+          "fieldType": "BIG_TEXT",
+          "fieldDescription": "操作前快照"
+        },
+        {
+          "fieldName": "操作后快照",
+          "fieldCode": "after_snapshot",
+          "fieldType": "BIG_TEXT",
+          "fieldDescription": "操作后快照"
+        }
+      ]
+    },
+    {
+      "modelName": "系统用户",
+      "modelCode": "sys_user_info",
+      "description": "系统用户",
+      "fields": [
+        {
+          "fieldName": "用户ID",
+          "fieldCode": "user_id",
+          "fieldType": "STRING",
+          "fieldDescription": "用户ID"
+        },
+        {
+          "fieldName": "登录账号",
+          "fieldCode": "account_name",
+          "fieldType": "STRING",
+          "fieldDescription": "登录账号"
+        },
+        {
+          "fieldName": "用户姓名",
+          "fieldCode": "username_val",
+          "fieldType": "STRING",
+          "fieldDescription": "用户姓名"
+        },
+        {
+          "fieldName": "手机号",
+          "fieldCode": "phone_no",
+          "fieldType": "STRING",
+          "fieldDescription": "手机号"
+        },
+        {
+          "fieldName": "邮箱",
+          "fieldCode": "email_addr",
+          "fieldType": "STRING",
+          "fieldDescription": "邮箱"
+        },
+        {
+          "fieldName": "所属区域",
+          "fieldCode": "region_val",
+          "fieldType": "STRING",
+          "fieldDescription": "所属区域"
+        },
+        {
+          "fieldName": "状态",
+          "fieldCode": "user_status",
+          "fieldType": "STRING",
+          "fieldDescription": "状态"
+        }
+      ]
+    },
+    {
+      "modelName": "系统角色",
+      "modelCode": "sys_role_info",
+      "description": "系统角色",
+      "fields": [
+        {
+          "fieldName": "角色ID",
+          "fieldCode": "role_id",
+          "fieldType": "STRING",
+          "fieldDescription": "角色ID"
+        },
+        {
+          "fieldName": "角色编码",
+          "fieldCode": "role_code",
+          "fieldType": "STRING",
+          "fieldDescription": "角色编码"
+        },
+        {
+          "fieldName": "角色名称",
+          "fieldCode": "role_name",
+          "fieldType": "STRING",
+          "fieldDescription": "角色名称"
+        },
+        {
+          "fieldName": "角色描述",
+          "fieldCode": "role_desc",
+          "fieldType": "BIG_TEXT",
+          "fieldDescription": "角色描述"
+        },
+        {
+          "fieldName": "启用状态",
+          "fieldCode": "role_status",
+          "fieldType": "STRING",
+          "fieldDescription": "启用状态"
+        }
+      ]
+    }
+  ],
+  "formConfigs": [
+    {
+      "formName": "客户主数据",
+      "formCode": "customer_form",
+      "allModelCodes": [
+        "customer"
+      ],
+      "formComponents": [
+        {
+          "componentType": "FORM_DOCUMENT_NUMBER",
+          "label": "客户ID",
+          "modelField": "customer.customer_id"
+        },
+        {
+          "componentType": "FORM_TEXT_INPUT",
+          "label": "客户名称",
+          "modelField": "customer.customer_name"
+        },
+        {
+          "componentType": "FORM_SELECT_INPUT_SINGLE",
+          "label": "国家/区域",
+          "modelField": "customer.country_region",
+          "dictionarySelectConfig": {
+            "dictionaryCode": "region",
+            "dictionarySelectOptions": [
+              {
+                "id": "cn",
+                "label": "中国区"
+              },
+              {
+                "id": "eu",
+                "label": "欧洲区"
+              },
+              {
+                "id": "na",
+                "label": "北美区"
+              },
+              {
+                "id": "apac",
+                "label": "亚太区"
+              }
+            ]
+          }
+        },
+        {
+          "componentType": "FORM_TEXT_INPUT",
+          "label": "联系人",
+          "modelField": "customer.contact_name"
+        },
+        {
+          "componentType": "FORM_PHONE_INPUT",
+          "label": "联系电话",
+          "modelField": "customer.contact_phone"
+        },
+        {
+          "componentType": "FORM_SELECT_INPUT_SINGLE",
+          "label": "客户等级",
+          "modelField": "customer.customer_level",
+          "dictionarySelectConfig": {
+            "dictionaryCode": "customer_level",
+            "dictionarySelectOptions": [
+              {
+                "id": "vip",
+                "label": "VIP"
+              },
+              {
+                "id": "normal",
+                "label": "普通"
+              },
+              {
+                "id": "strategic",
+                "label": "战略客户"
+              }
+            ]
+          }
+        },
+        {
+          "componentType": "FORM_TEXTAREA_INPUT",
+          "label": "备注",
+          "modelField": "customer.remark_info"
+        }
+      ],
+      "listPageView": {
+        "queryConditions": [
+          "customer.customer_id",
+          "customer.customer_name",
+          "customer.country_region",
+          "customer.contact_name",
+          "customer.contact_phone",
+          "customer.customer_level"
+        ],
+        "queryList": [
+          "customer.customer_id",
+          "customer.customer_name",
+          "customer.country_region",
+          "customer.contact_name",
+          "customer.contact_phone",
+          "customer.customer_level"
+        ]
+      }
+    },
+    {
+      "formName": "站点主数据",
+      "formCode": "site_form",
+      "allModelCodes": [
+        "site"
+      ],
+      "formComponents": [
+        {
+          "componentType": "FORM_DOCUMENT_NUMBER",
+          "label": "站点ID",
+          "modelField": "site.site_id"
+        },
+        {
+          "componentType": "FORM_DATA_SELECTOR_SINGLE",
+          "label": "所属客户",
+          "modelField": "site.customer_ref",
+          "dataSelectorConfig": {
+            "type": "LOV_CHOOSE",
+            "otherModelCode": "customer",
+            "otherFieldCode": "customer_name"
+          }
+        },
+        {
+          "componentType": "FORM_TEXT_INPUT",
+          "label": "站点名称",
+          "modelField": "site.site_name"
+        },
+        {
+          "componentType": "FORM_WIDGET_LOCATION",
+          "label": "地理位置",
+          "modelField": "site.location_info"
+        },
+        {
+          "componentType": "FORM_SELECT_INPUT_SINGLE",
+          "label": "时区",
+          "modelField": "site.timezone_val",
+          "dictionarySelectConfig": {
+            "dictionaryCode": "timezone",
+            "dictionarySelectOptions": [
+              {
+                "id": "UTC",
+                "label": "UTC"
+              },
+              {
+                "id": "UTC8",
+                "label": "UTC+8"
+              },
+              {
+                "id": "UTC1",
+                "label": "UTC+1"
+              },
+              {
+                "id": "UTC_5",
+                "label": "UTC-5"
+              }
+            ]
+          }
+        },
+        {
+          "componentType": "FORM_TEXTAREA_INPUT",
+          "label": "备注",
+          "modelField": "site.remark_info"
+        }
+      ],
+      "listPageView": {
+        "queryConditions": [
+          "site.site_id",
+          "site.customer_ref",
+          "site.site_name",
+          "site.timezone_val"
+        ],
+        "queryList": [
+          "site.site_id",
+          "site.customer_ref",
+          "site.site_name",
+          "site.location_info",
+          "site.timezone_val"
+        ]
+      }
+    },
+    {
+      "formName": "设备主数据",
+      "formCode": "device_form",
+      "allModelCodes": [
+        "device"
+      ],
+      "formComponents": [
+        {
+          "componentType": "FORM_DOCUMENT_NUMBER",
+          "label": "设备ID",
+          "modelField": "device.device_id"
+        },
+        {
+          "componentType": "FORM_TEXT_INPUT",
+          "label": "设备名称",
+          "modelField": "device.device_name"
+        },
+        {
+          "componentType": "FORM_TEXT_INPUT",
+          "label": "SN序列号",
+          "modelField": "device.serial_no"
+        },
+        {
+          "componentType": "FORM_TEXT_INPUT",
+          "label": "型号",
+          "modelField": "device.model_no"
+        },
+        {
+          "componentType": "FORM_DATEPICK_INPUT",
+          "label": "安装日期",
+          "modelField": "device.install_date"
+        },
+        {
+          "componentType": "FORM_DATEPICK_INPUT",
+          "label": "保修截止日期",
+          "modelField": "device.warranty_end"
+        },
+        {
+          "componentType": "FORM_SELECT_INPUT_SINGLE",
+          "label": "设备状态",
+          "modelField": "device.device_status",
+          "dictionarySelectConfig": {
+            "dictionaryCode": "device_status",
+            "dictionarySelectOptions": [
+              {
+                "id": "running",
+                "label": "运行中"
+              },
+              {
+                "id": "stopped",
+                "label": "停机"
+              },
+              {
+                "id": "scrapped",
+                "label": "报废"
+              },
+              {
+                "id": "maintenance",
+                "label": "维修中"
+              }
+            ]
+          }
+        },
+        {
+          "componentType": "FORM_DATA_SELECTOR_SINGLE",
+          "label": "所属客户",
+          "modelField": "device.customer_ref",
+          "dataSelectorConfig": {
+            "type": "LOV_CHOOSE",
+            "otherModelCode": "customer",
+            "otherFieldCode": "customer_name"
+          }
+        },
+        {
+          "componentType": "FORM_DATA_SELECTOR_SINGLE",
+          "label": "所属站点",
+          "modelField": "device.site_ref",
+          "dataSelectorConfig": {
+            "type": "LOV_CHOOSE",
+            "otherModelCode": "site",
+            "otherFieldCode": "site_name"
+          }
+        }
+      ],
+      "listPageView": {
+        "queryConditions": [
+          "device.device_id",
+          "device.device_name",
+          "device.serial_no",
+          "device.model_no",
+          "device.warranty_end",
+          "device.device_status",
+          "device.customer_ref"
+        ],
+        "queryList": [
+          "device.device_id",
+          "device.device_name",
+          "device.serial_no",
+          "device.model_no",
+          "device.install_date",
+          "device.warranty_end",
+          "device.device_status",
+          "device.customer_ref",
+          "device.site_ref"
+        ]
+      }
+    },
+    {
+      "formName": "工程师主数据",
+      "formCode": "engineer_form",
+      "allModelCodes": [
+        "engineer"
+      ],
+      "formComponents": [
+        {
+          "componentType": "FORM_DOCUMENT_NUMBER",
+          "label": "工程师ID",
+          "modelField": "engineer.engineer_id"
+        },
+        {
+          "componentType": "FORM_TEXT_INPUT",
+          "label": "姓名",
+          "modelField": "engineer.eng_name"
+        },
+        {
+          "componentType": "FORM_SELECT_INPUT_SINGLE",
+          "label": "区域",
+          "modelField": "engineer.region_val",
+          "dictionarySelectConfig": {
+            "dictionaryCode": "region",
+            "dictionarySelectOptions": [
+              {
+                "id": "cn",
+                "label": "中国区"
+              },
+              {
+                "id": "eu",
+                "label": "欧洲区"
+              },
+              {
+                "id": "na",
+                "label": "北美区"
+              },
+              {
+                "id": "apac",
+                "label": "亚太区"
+              }
+            ]
+          }
+        },
+        {
+          "componentType": "FORM_SELECT_INPUT",
+          "label": "技能标签",
+          "modelField": "engineer.skill_tag",
+          "dictionarySelectConfig": {
+            "dictionaryCode": "skill_tag",
+            "dictionarySelectOptions": [
+              {
+                "id": "mechanical",
+                "label": "机械"
+              },
+              {
+                "id": "electrical",
+                "label": "电气"
+              },
+              {
+                "id": "software",
+                "label": "软件"
+              },
+              {
+                "id": "hydraulic",
+                "label": "液压"
+              }
+            ]
+          }
+        },
+        {
+          "componentType": "FORM_PHONE_INPUT",
+          "label": "手机号",
+          "modelField": "engineer.phone_no"
+        },
+        {
+          "componentType": "FORM_EMAIL_INPUT",
+          "label": "邮箱",
+          "modelField": "engineer.email_addr"
+        },
+        {
+          "componentType": "FORM_SELECT_INPUT_SINGLE",
+          "label": "在职状态",
+          "modelField": "engineer.eng_status",
+          "dictionarySelectConfig": {
+            "dictionaryCode": "engineer_status",
+            "dictionarySelectOptions": [
+              {
+                "id": "active",
+                "label": "在职"
+              },
+              {
+                "id": "leave",
+                "label": "休假"
+              },
+              {
+                "id": "resigned",
+                "label": "离职"
+              }
+            ]
+          }
+        }
+      ],
+      "listPageView": {
+        "queryConditions": [
+          "engineer.engineer_id",
+          "engineer.eng_name",
+          "engineer.region_val",
+          "engineer.skill_tag",
+          "engineer.phone_no",
+          "engineer.eng_status"
+        ],
+        "queryList": [
+          "engineer.engineer_id",
+          "engineer.eng_name",
+          "engineer.region_val",
+          "engineer.skill_tag",
+          "engineer.phone_no",
+          "engineer.eng_status"
+        ]
+      }
+    },
+    {
+      "formName": "配件主数据",
+      "formCode": "part_info_form",
+      "allModelCodes": [
+        "part_info"
+      ],
+      "formComponents": [
+        {
+          "componentType": "FORM_DOCUMENT_NUMBER",
+          "label": "配件编码",
+          "modelField": "part_info.part_code"
+        },
+        {
+          "componentType": "FORM_TEXT_INPUT",
+          "label": "配件名称",
+          "modelField": "part_info.part_name"
+        },
+        {
+          "componentType": "FORM_TEXT_INPUT",
+          "label": "规格型号",
+          "modelField": "part_info.spec_info"
+        },
+        {
+          "componentType": "FORM_TEXT_INPUT",
+          "label": "单位",
+          "modelField": "part_info.unit_val"
+        },
+        {
+          "componentType": "FORM_SELECT_INPUT_SINGLE",
+          "label": "分类",
+          "modelField": "part_info.category_val",
+          "dictionarySelectConfig": {
+            "dictionaryCode": "part_category",
+            "dictionarySelectOptions": [
+              {
+                "id": "consumable",
+                "label": "易耗件"
+              },
+              {
+                "id": "spare",
+                "label": "备件"
+              },
+              {
+                "id": "tool",
+                "label": "工具"
+              }
+            ]
+          }
+        },
+        {
+          "componentType": "FORM_NUMBER_INPUT",
+          "label": "成本价",
+          "modelField": "part_info.cost_price"
+        },
+        {
+          "componentType": "FORM_NUMBER_INPUT",
+          "label": "售价",
+          "modelField": "part_info.retail_price"
+        },
+        {
+          "componentType": "FORM_SELECT_INPUT_SINGLE",
+          "label": "状态",
+          "modelField": "part_info.part_status",
+          "dictionarySelectConfig": {
+            "dictionaryCode": "part_status",
+            "dictionarySelectOptions": [
+              {
+                "id": "enabled",
+                "label": "启用"
+              },
+              {
+                "id": "disabled",
+                "label": "停用"
+              }
+            ]
+          }
+        }
+      ],
+      "listPageView": {
+        "queryConditions": [
+          "part_info.part_code",
+          "part_info.part_name",
+          "part_info.spec_info",
+          "part_info.unit_val",
+          "part_info.category_val",
+          "part_info.part_status"
+        ],
+        "queryList": [
+          "part_info.part_code",
+          "part_info.part_name",
+          "part_info.spec_info",
+          "part_info.unit_val",
+          "part_info.category_val",
+          "part_info.cost_price",
+          "part_info.retail_price",
+          "part_info.part_status"
+        ]
+      }
+    },
+    {
+      "formName": "仓库主数据",
+      "formCode": "warehouse_form",
+      "allModelCodes": [
+        "warehouse"
+      ],
+      "formComponents": [
+        {
+          "componentType": "FORM_DOCUMENT_NUMBER",
+          "label": "仓库ID",
+          "modelField": "warehouse.warehouse_id"
+        },
+        {
+          "componentType": "FORM_TEXT_INPUT",
+          "label": "仓库名称",
+          "modelField": "warehouse.warehouse_name"
+        },
+        {
+          "componentType": "FORM_SELECT_INPUT_SINGLE",
+          "label": "区域",
+          "modelField": "warehouse.region_val",
+          "dictionarySelectConfig": {
+            "dictionaryCode": "region",
+            "dictionarySelectOptions": [
+              {
+                "id": "cn",
+                "label": "中国区"
+              },
+              {
+                "id": "eu",
+                "label": "欧洲区"
+              },
+              {
+                "id": "na",
+                "label": "北美区"
+              },
+              {
+                "id": "apac",
+                "label": "亚太区"
+              }
+            ]
+          }
+        },
+        {
+          "componentType": "FORM_TEXTAREA_INPUT",
+          "label": "地址",
+          "modelField": "warehouse.address_info"
+        },
+        {
+          "componentType": "FORM_PEOPLE_SELECT",
+          "label": "仓库负责人",
+          "modelField": "warehouse.manager_user"
+        }
+      ],
+      "listPageView": {
+        "queryConditions": [
+          "warehouse.warehouse_id",
+          "warehouse.warehouse_name",
+          "warehouse.region_val",
+          "warehouse.manager_user"
+        ],
+        "queryList": [
+          "warehouse.warehouse_id",
+          "warehouse.warehouse_name",
+          "warehouse.region_val",
+          "warehouse.address_info",
+          "warehouse.manager_user"
+        ]
+      }
+    },
+    {
+      "formName": "工单",
+      "formCode": "service_order_form",
+      "allModelCodes": [
+        "service_order"
+      ],
+      "formComponents": [
+        {
+          "componentType": "FORM_DOCUMENT_NUMBER",
+          "label": "工单编号",
+          "modelField": "service_order.order_code"
+        },
+        {
+          "componentType": "FORM_TEXT_INPUT",
+          "label": "工单标题",
+          "modelField": "service_order.order_title"
+        },
+        {
+          "componentType": "FORM_DATA_SELECTOR_SINGLE",
+          "label": "客户",
+          "modelField": "service_order.customer_ref",
+          "dataSelectorConfig": {
+            "type": "LOV_CHOOSE",
+            "otherModelCode": "customer",
+            "otherFieldCode": "customer_name"
+          }
+        },
+        {
+          "componentType": "FORM_DATA_SELECTOR_SINGLE",
+          "label": "站点",
+          "modelField": "service_order.site_ref",
+          "dataSelectorConfig": {
+            "type": "LOV_CHOOSE",
+            "otherModelCode": "site",
+            "otherFieldCode": "site_name"
+          }
+        },
+        {
+          "componentType": "FORM_DATA_SELECTOR_SINGLE",
+          "label": "设备",
+          "modelField": "service_order.device_ref",
+          "dataSelectorConfig": {
+            "type": "LOV_CHOOSE",
+            "otherModelCode": "device",
+            "otherFieldCode": "serial_no"
+          }
+        },
+        {
+          "componentType": "FORM_TEXT_INPUT",
+          "label": "联系人",
+          "modelField": "service_order.contact_name"
+        },
+        {
+          "componentType": "FORM_PHONE_INPUT",
+          "label": "联系电话",
+          "modelField": "service_order.contact_phone"
+        },
+        {
+          "componentType": "FORM_SELECT_INPUT_SINGLE",
+          "label": "故障类型",
+          "modelField": "service_order.fault_type",
+          "dictionarySelectConfig": {
+            "dictionaryCode": "fault_type",
+            "dictionarySelectOptions": [
+              {
+                "id": "hardware",
+                "label": "硬件故障"
+              },
+              {
+                "id": "software",
+                "label": "软件故障"
+              },
+              {
+                "id": "network",
+                "label": "网络故障"
+              },
+              {
+                "id": "other",
+                "label": "其他"
+              }
+            ]
+          }
+        },
+        {
+          "componentType": "FORM_TEXTAREA_INPUT",
+          "label": "故障描述",
+          "modelField": "service_order.fault_desc"
+        },
+        {
+          "componentType": "FORM_SELECT_INPUT_SINGLE",
+          "label": "报修来源",
+          "modelField": "service_order.order_source",
+          "dictionarySelectConfig": {
+            "dictionaryCode": "order_source",
+            "dictionarySelectOptions": [
+              {
+                "id": "phone",
+                "label": "电话"
+              },
+              {
+                "id": "email",
+                "label": "邮件"
+              },
+              {
+                "id": "portal",
+                "label": "自助门户"
+              },
+              {
+                "id": "wechat",
+                "label": "微信"
+              }
+            ]
+          }
+        },
+        {
+          "componentType": "FORM_SELECT_INPUT_SINGLE",
+          "label": "优先级",
+          "modelField": "service_order.priority_val",
+          "dictionarySelectConfig": {
+            "dictionaryCode": "priority",
+            "dictionarySelectOptions": [
+              {
+                "id": "urgent",
+                "label": "紧急"
+              },
+              {
+                "id": "high",
+                "label": "高"
+              },
+              {
+                "id": "medium",
+                "label": "中"
+              },
+              {
+                "id": "low",
+                "label": "低"
+              }
+            ]
+          }
+        },
+        {
+          "componentType": "FORM_SELECT_INPUT_SINGLE",
+          "label": "当前状态",
+          "modelField": "service_order.order_status",
+          "dictionarySelectConfig": {
+            "dictionaryCode": "order_status",
+            "dictionarySelectOptions": [
+              {
+                "id": "new",
+                "label": "新建"
+              },
+              {
+                "id": "accepted",
+                "label": "已受理"
+              },
+              {
+                "id": "processing",
+                "label": "处理中"
+              },
+              {
+                "id": "pending_parts",
+                "label": "待配件"
+              },
+              {
+                "id": "completed",
+                "label": "已完成"
+              },
+              {
+                "id": "closed",
+                "label": "已关闭"
+              }
+            ]
+          }
+        },
+        {
+          "componentType": "FORM_SWITCH_SELECT",
+          "label": "是否需要配件",
+          "modelField": "service_order.need_parts"
+        },
+        {
+          "componentType": "FORM_DATEPICK_INPUT",
+          "label": "受理时间",
+          "modelField": "service_order.created_at"
+        },
+        {
+          "componentType": "FORM_DATEPICK_INPUT",
+          "label": "预计完成时间",
+          "modelField": "service_order.expected_finish"
+        },
+        {
+          "componentType": "FORM_FILE_UPLOAD",
+          "label": "附件",
+          "modelField": "service_order.attachments"
+        },
+        {
+          "componentType": "FORM_TEXTAREA_INPUT",
+          "label": "备注",
+          "modelField": "service_order.remark_info"
+        }
+      ],
+      "listPageView": {
+        "queryConditions": [
+          "service_order.order_code",
+          "service_order.order_title",
+          "service_order.customer_ref",
+          "service_order.site_ref",
+          "service_order.device_ref",
+          "service_order.fault_type",
+          "service_order.order_source",
+          "service_order.priority_val",
+          "service_order.order_status"
+        ],
+        "queryList": [
+          "service_order.order_code",
+          "service_order.order_title",
+          "service_order.customer_ref",
+          "service_order.site_ref",
+          "service_order.device_ref",
+          "service_order.contact_name",
+          "service_order.contact_phone",
+          "service_order.fault_type",
+          "service_order.order_source",
+          "service_order.priority_val",
+          "service_order.order_status",
+          "service_order.need_parts",
+          "service_order.created_at",
+          "service_order.expected_finish"
+        ]
+      }
+    },
+    {
+      "formName": "派单日志",
+      "formCode": "dispatch_log_form",
+      "allModelCodes": [
+        "dispatch_log"
+      ],
+      "formComponents": [
+        {
+          "componentType": "FORM_DOCUMENT_NUMBER",
+          "label": "派单编号",
+          "modelField": "dispatch_log.dispatch_id"
+        },
+        {
+          "componentType": "FORM_DATA_SELECTOR_SINGLE",
+          "label": "工单编号",
+          "modelField": "dispatch_log.order_ref",
+          "dataSelectorConfig": {
+            "type": "LOV_CHOOSE",
+            "otherModelCode": "service_order",
+            "otherFieldCode": "order_code"
+          }
+        },
+        {
+          "componentType": "FORM_SELECT_INPUT_SINGLE",
+          "label": "派单类型",
+          "modelField": "dispatch_log.dispatch_type",
+          "dictionarySelectConfig": {
+            "dictionaryCode": "dispatch_type",
+            "dictionarySelectOptions": [
+              {
+                "id": "first",
+                "label": "首次派单"
+              },
+              {
+                "id": "reassign",
+                "label": "改派"
+              },
+              {
+                "id": "escalate",
+                "label": "升级"
+              }
+            ]
+          }
+        },
+        {
+          "componentType": "FORM_PEOPLE_SELECT",
+          "label": "派单人",
+          "modelField": "dispatch_log.dispatch_user"
+        },
+        {
+          "componentType": "FORM_DATA_SELECTOR_SINGLE",
+          "label": "被指派工程师",
+          "modelField": "dispatch_log.engineer_ref",
+          "dataSelectorConfig": {
+            "type": "LOV_CHOOSE",
+            "otherModelCode": "engineer",
+            "otherFieldCode": "eng_name"
+          }
+        },
+        {
+          "componentType": "FORM_DATEPICK_INPUT",
+          "label": "派单时间",
+          "modelField": "dispatch_log.dispatch_time"
+        },
+        {
+          "componentType": "FORM_DATEPICK_INPUT",
+          "label": "接单时间",
+          "modelField": "dispatch_log.accepted_time"
+        },
+        {
+          "componentType": "FORM_SELECT_INPUT_SINGLE",
+          "label": "状态",
+          "modelField": "dispatch_log.dispatch_status",
+          "dictionarySelectConfig": {
+            "dictionaryCode": "dispatch_status",
+            "dictionarySelectOptions": [
+              {
+                "id": "dispatched",
+                "label": "已派"
+              },
+              {
+                "id": "accepted",
+                "label": "已接单"
+              },
+              {
+                "id": "rejected",
+                "label": "拒绝"
+              },
+              {
+                "id": "done",
+                "label": "已完成"
+              }
+            ]
+          }
+        },
+        {
+          "componentType": "FORM_TEXTAREA_INPUT",
+          "label": "派单备注",
+          "modelField": "dispatch_log.dispatch_remark"
+        }
+      ],
+      "listPageView": {
+        "queryConditions": [
+          "dispatch_log.dispatch_id",
+          "dispatch_log.order_ref",
+          "dispatch_log.dispatch_type",
+          "dispatch_log.dispatch_user",
+          "dispatch_log.engineer_ref",
+          "dispatch_log.dispatch_status"
+        ],
+        "queryList": [
+          "dispatch_log.dispatch_id",
+          "dispatch_log.order_ref",
+          "dispatch_log.dispatch_type",
+          "dispatch_log.dispatch_user",
+          "dispatch_log.engineer_ref",
+          "dispatch_log.dispatch_time",
+          "dispatch_log.accepted_time",
+          "dispatch_log.dispatch_status"
+        ]
+      }
+    },
+    {
+      "formName": "服务执行与质检",
+      "formCode": "service_record_form",
+      "allModelCodes": [
+        "service_record",
+        "service_record_parts"
+      ],
+      "formComponents": [
+        {
+          "componentType": "FORM_DOCUMENT_NUMBER",
+          "label": "记录编号",
+          "modelField": "service_record.record_id"
+        },
+        {
+          "componentType": "FORM_DATA_SELECTOR_SINGLE",
+          "label": "工单编号",
+          "modelField": "service_record.order_ref",
+          "dataSelectorConfig": {
+            "type": "LOV_CHOOSE",
+            "otherModelCode": "service_order",
+            "otherFieldCode": "order_code"
+          }
+        },
+        {
+          "componentType": "FORM_DATA_SELECTOR_SINGLE",
+          "label": "工程师",
+          "modelField": "service_record.engineer_ref",
+          "dataSelectorConfig": {
+            "type": "LOV_CHOOSE",
+            "otherModelCode": "engineer",
+            "otherFieldCode": "eng_name"
+          }
+        },
+        {
+          "componentType": "FORM_DATEPICK_INPUT",
+          "label": "到场时间",
+          "modelField": "service_record.arrival_time"
+        },
+        {
+          "componentType": "FORM_DATEPICK_INPUT",
+          "label": "开始时间",
+          "modelField": "service_record.start_time"
+        },
+        {
+          "componentType": "FORM_DATEPICK_INPUT",
+          "label": "结束时间",
+          "modelField": "service_record.end_time"
+        },
+        {
+          "componentType": "FORM_NUMBER_INPUT",
+          "label": "工时",
+          "modelField": "service_record.duration_val"
+        },
+        {
+          "componentType": "FORM_SELECT_INPUT_SINGLE",
+          "label": "维修结果",
+          "modelField": "service_record.result_type",
+          "dictionarySelectConfig": {
+            "dictionaryCode": "repair_result",
+            "dictionarySelectOptions": [
+              {
+                "id": "fixed",
+                "label": "已修复"
+              },
+              {
+                "id": "pending_parts",
+                "label": "待配件"
+              },
+              {
+                "id": "cannot_fix",
+                "label": "无法修复"
+              }
+            ]
+          }
+        },
+        {
+          "componentType": "FORM_TEXTAREA_INPUT",
+          "label": "执行内容",
+          "modelField": "service_record.work_desc"
+        },
+        {
+          "componentType": "FORM_FILE_UPLOAD",
+          "label": "现场图片",
+          "modelField": "service_record.photos"
+        },
+        {
+          "componentType": "FORM_SWITCH_SELECT",
+          "label": "客户确认",
+          "modelField": "service_record.customer_signed"
+        },
+        {
+          "componentType": "FORM_SELECT_INPUT_SINGLE",
+          "label": "质检结果",
+          "modelField": "service_record.qc_result",
+          "dictionarySelectConfig": {
+            "dictionaryCode": "qc_result",
+            "dictionarySelectOptions": [
+              {
+                "id": "pass",
+                "label": "合格"
+              },
+              {
+                "id": "fail",
+                "label": "不合格"
+              }
+            ]
+          }
+        },
+        {
+          "componentType": "FORM_TEXTAREA_INPUT",
+          "label": "质检说明",
+          "modelField": "service_record.qc_comment"
+        },
+        {
+          "componentType": "FORM_DATEPICK_INPUT",
+          "label": "提交时间",
+          "modelField": "service_record.created_at"
+        },
+        {
+          "componentType": "FORM_WIDGET_SON_TABLE",
+          "label": "使用配件明细",
+          "tableColumn": [
+            {
+              "componentType": "FORM_DATA_SELECTOR_SINGLE",
+              "label": "配件编码",
+              "modelField": "service_record_parts.part_ref",
+              "dataSelectorConfig": {
+                "type": "LOV_CHOOSE",
+                "otherModelCode": "part_info",
+                "otherFieldCode": "part_code"
+              }
+            },
+            {
+              "componentType": "FORM_NUMBER_INPUT",
+              "label": "使用数量",
+              "modelField": "service_record_parts.qty_val"
+            }
+          ]
+        }
+      ],
+      "listPageView": {
+        "queryConditions": [
+          "service_record.record_id",
+          "service_record.order_ref",
+          "service_record.engineer_ref",
+          "service_record.result_type",
+          "service_record.customer_signed",
+          "service_record.qc_result",
+          "service_record.created_at"
+        ],
+        "queryList": [
+          "service_record.record_id",
+          "service_record.order_ref",
+          "service_record.engineer_ref",
+          "service_record.arrival_time",
+          "service_record.start_time",
+          "service_record.end_time",
+          "service_record.duration_val",
+          "service_record.result_type",
+          "service_record.customer_signed",
+          "service_record.qc_result",
+          "service_record.created_at"
+        ]
+      }
+    },
+    {
+      "formName": "备件申请与库存台账",
+      "formCode": "part_flow_ledger_form",
+      "allModelCodes": [
+        "part_flow_ledger"
+      ],
+      "formComponents": [
+        {
+          "componentType": "FORM_DOCUMENT_NUMBER",
+          "label": "流转单号",
+          "modelField": "part_flow_ledger.flow_id"
+        },
+        {
+          "componentType": "FORM_DATA_SELECTOR_SINGLE",
+          "label": "工单编号",
+          "modelField": "part_flow_ledger.order_ref",
+          "dataSelectorConfig": {
+            "type": "LOV_CHOOSE",
+            "otherModelCode": "service_order",
+            "otherFieldCode": "order_code"
+          }
+        },
+        {
+          "componentType": "FORM_SELECT_INPUT_SINGLE",
+          "label": "业务类型",
+          "modelField": "part_flow_ledger.flow_type",
+          "dictionarySelectConfig": {
+            "dictionaryCode": "part_flow_type",
+            "dictionarySelectOptions": [
+              {
+                "id": "request",
+                "label": "备件申请"
+              },
+              {
+                "id": "outbound",
+                "label": "配件出库"
+              },
+              {
+                "id": "inbound",
+                "label": "配件入库"
+              },
+              {
+                "id": "adjust",
+                "label": "库存调整"
+              }
+            ]
+          }
+        },
+        {
+          "componentType": "FORM_DATA_SELECTOR_SINGLE",
+          "label": "仓库",
+          "modelField": "part_flow_ledger.warehouse_ref",
+          "dataSelectorConfig": {
+            "type": "LOV_CHOOSE",
+            "otherModelCode": "warehouse",
+            "otherFieldCode": "warehouse_name"
+          }
+        },
+        {
+          "componentType": "FORM_DATA_SELECTOR_SINGLE",
+          "label": "配件编码",
+          "modelField": "part_flow_ledger.part_ref",
+          "dataSelectorConfig": {
+            "type": "LOV_CHOOSE",
+            "otherModelCode": "part_info",
+            "otherFieldCode": "part_code"
+          }
+        },
+        {
+          "componentType": "FORM_NUMBER_INPUT",
+          "label": "申请数量",
+          "modelField": "part_flow_ledger.qty_request"
+        },
+        {
+          "componentType": "FORM_NUMBER_INPUT",
+          "label": "出库数量",
+          "modelField": "part_flow_ledger.qty_out"
+        },
+        {
+          "componentType": "FORM_NUMBER_INPUT",
+          "label": "入库数量",
+          "modelField": "part_flow_ledger.qty_in"
+        },
+        {
+          "componentType": "FORM_NUMBER_INPUT",
+          "label": "当前库存",
+          "modelField": "part_flow_ledger.qty_current"
+        },
+        {
+          "componentType": "FORM_NUMBER_INPUT",
+          "label": "锁定库存",
+          "modelField": "part_flow_ledger.qty_locked"
+        },
+        {
+          "componentType": "FORM_NUMBER_INPUT",
+          "label": "可用库存",
+          "modelField": "part_flow_ledger.qty_available"
+        },
+        {
+          "componentType": "FORM_SELECT_INPUT_SINGLE",
+          "label": "审批状态",
+          "modelField": "part_flow_ledger.approval_status",
+          "dictionarySelectConfig": {
+            "dictionaryCode": "approval_status",
+            "dictionarySelectOptions": [
+              {
+                "id": "pending",
+                "label": "待审批"
+              },
+              {
+                "id": "approved",
+                "label": "已通过"
+              },
+              {
+                "id": "rejected",
+                "label": "已拒绝"
+              }
+            ]
+          }
+        },
+        {
+          "componentType": "FORM_PEOPLE_SELECT",
+          "label": "审批人",
+          "modelField": "part_flow_ledger.approval_user"
+        },
+        {
+          "componentType": "FORM_DATEPICK_INPUT",
+          "label": "发生时间",
+          "modelField": "part_flow_ledger.flow_time"
+        },
+        {
+          "componentType": "FORM_TEXTAREA_INPUT",
+          "label": "备注",
+          "modelField": "part_flow_ledger.remark_info"
+        }
+      ],
+      "listPageView": {
+        "queryConditions": [
+          "part_flow_ledger.flow_id",
+          "part_flow_ledger.order_ref",
+          "part_flow_ledger.flow_type",
+          "part_flow_ledger.warehouse_ref",
+          "part_flow_ledger.part_ref",
+          "part_flow_ledger.qty_current",
+          "part_flow_ledger.qty_available",
+          "part_flow_ledger.approval_status",
+          "part_flow_ledger.flow_time"
+        ],
+        "queryList": [
+          "part_flow_ledger.flow_id",
+          "part_flow_ledger.order_ref",
+          "part_flow_ledger.flow_type",
+          "part_flow_ledger.warehouse_ref",
+          "part_flow_ledger.part_ref",
+          "part_flow_ledger.qty_request",
+          "part_flow_ledger.qty_out",
+          "part_flow_ledger.qty_in",
+          "part_flow_ledger.qty_current",
+          "part_flow_ledger.qty_locked",
+          "part_flow_ledger.qty_available",
+          "part_flow_ledger.approval_status",
+          "part_flow_ledger.approval_user",
+          "part_flow_ledger.flow_time"
+        ]
+      }
+    },
+    {
+      "formName": "SLA记录",
+      "formCode": "sla_record_form",
+      "allModelCodes": [
+        "sla_record"
+      ],
+      "formComponents": [
+        {
+          "componentType": "FORM_DOCUMENT_NUMBER",
+          "label": "SLA编号",
+          "modelField": "sla_record.sla_id"
+        },
+        {
+          "componentType": "FORM_DATA_SELECTOR_SINGLE",
+          "label": "工单编号",
+          "modelField": "sla_record.order_ref",
+          "dataSelectorConfig": {
+            "type": "LOV_CHOOSE",
+            "otherModelCode": "service_order",
+            "otherFieldCode": "order_code"
+          }
+        },
+        {
+          "componentType": "FORM_DATEPICK_INPUT",
+          "label": "报修时间",
+          "modelField": "sla_record.created_at"
+        },
+        {
+          "componentType": "FORM_DATEPICK_INPUT",
+          "label": "接单时间",
+          "modelField": "sla_record.accepted_time"
+        },
+        {
+          "componentType": "FORM_NUMBER_INPUT",
+          "label": "响应时长(小时)",
+          "modelField": "sla_record.response_hours"
+        },
+        {
+          "componentType": "FORM_NUMBER_INPUT",
+          "label": "修复时长(小时)",
+          "modelField": "sla_record.repair_hours"
+        },
+        {
+          "componentType": "FORM_SELECT_INPUT_SINGLE",
+          "label": "SLA结果",
+          "modelField": "sla_record.sla_result",
+          "dictionarySelectConfig": {
+            "dictionaryCode": "sla_result",
+            "dictionarySelectOptions": [
+              {
+                "id": "ok",
+                "label": "达标"
+              },
+              {
+                "id": "overtime",
+                "label": "超时"
+              }
+            ]
+          }
+        }
+      ],
+      "listPageView": {
+        "queryConditions": [
+          "sla_record.sla_id",
+          "sla_record.order_ref",
+          "sla_record.created_at",
+          "sla_record.sla_result"
+        ],
+        "queryList": [
+          "sla_record.sla_id",
+          "sla_record.order_ref",
+          "sla_record.created_at",
+          "sla_record.accepted_time",
+          "sla_record.response_hours",
+          "sla_record.repair_hours",
+          "sla_record.sla_result"
+        ]
+      }
+    },
+    {
+      "formName": "结算单",
+      "formCode": "settlement_form",
+      "allModelCodes": [
+        "settlement"
+      ],
+      "formComponents": [
+        {
+          "componentType": "FORM_DOCUMENT_NUMBER",
+          "label": "结算单号",
+          "modelField": "settlement.settle_code"
+        },
+        {
+          "componentType": "FORM_DATA_SELECTOR_SINGLE",
+          "label": "工单编号",
+          "modelField": "settlement.order_ref",
+          "dataSelectorConfig": {
+            "type": "LOV_CHOOSE",
+            "otherModelCode": "service_order",
+            "otherFieldCode": "order_code"
+          }
+        },
+        {
+          "componentType": "FORM_DATA_SELECTOR_SINGLE",
+          "label": "客户",
+          "modelField": "settlement.customer_ref",
+          "dataSelectorConfig": {
+            "type": "LOV_CHOOSE",
+            "otherModelCode": "customer",
+            "otherFieldCode": "customer_name"
+          }
+        },
+        {
+          "componentType": "FORM_SELECT_INPUT_SINGLE",
+          "label": "费用项",
+          "modelField": "settlement.fee_type",
+          "dictionarySelectConfig": {
+            "dictionaryCode": "fee_type",
+            "dictionarySelectOptions": [
+              {
+                "id": "labor",
+                "label": "人工费"
+              },
+              {
+                "id": "parts",
+                "label": "配件费"
+              },
+              {
+                "id": "travel",
+                "label": "差旅费"
+              },
+              {
+                "id": "other",
+                "label": "其他"
+              }
+            ]
+          }
+        },
+        {
+          "componentType": "FORM_MONEY_INPUT",
+          "label": "金额",
+          "modelField": "settlement.amount_val"
+        },
+        {
+          "componentType": "FORM_SELECT_INPUT_SINGLE",
+          "label": "币种",
+          "modelField": "settlement.currency_val",
+          "dictionarySelectConfig": {
+            "dictionaryCode": "currency",
+            "dictionarySelectOptions": [
+              {
+                "id": "CNY",
+                "label": "人民币"
+              },
+              {
+                "id": "USD",
+                "label": "美元"
+              },
+              {
+                "id": "EUR",
+                "label": "欧元"
+              }
+            ]
+          }
+        },
+        {
+          "componentType": "FORM_SELECT_INPUT_SINGLE",
+          "label": "审核状态",
+          "modelField": "settlement.audit_status",
+          "dictionarySelectConfig": {
+            "dictionaryCode": "audit_status",
+            "dictionarySelectOptions": [
+              {
+                "id": "pending",
+                "label": "待审核"
+              },
+              {
+                "id": "approved",
+                "label": "已审核"
+              },
+              {
+                "id": "settled",
+                "label": "已结算"
+              }
+            ]
+          }
+        }
+      ],
+      "listPageView": {
+        "queryConditions": [
+          "settlement.settle_code",
+          "settlement.order_ref",
+          "settlement.customer_ref",
+          "settlement.fee_type",
+          "settlement.currency_val",
+          "settlement.audit_status"
+        ],
+        "queryList": [
+          "settlement.settle_code",
+          "settlement.order_ref",
+          "settlement.customer_ref",
+          "settlement.fee_type",
+          "settlement.amount_val",
+          "settlement.currency_val",
+          "settlement.audit_status"
+        ]
+      }
+    },
+    {
+      "formName": "审计日志",
+      "formCode": "audit_log_form",
+      "allModelCodes": [
+        "audit_log"
+      ],
+      "formComponents": [
+        {
+          "componentType": "FORM_DOCUMENT_NUMBER",
+          "label": "日志编号",
+          "modelField": "audit_log.log_id"
+        },
+        {
+          "componentType": "FORM_SELECT_INPUT_SINGLE",
+          "label": "业务对象类型",
+          "modelField": "audit_log.biz_type",
+          "dictionarySelectConfig": {
+            "dictionaryCode": "biz_object_type",
+            "dictionarySelectOptions": [
+              {
+                "id": "service_order",
+                "label": "工单"
+              },
+              {
+                "id": "dispatch",
+                "label": "派单"
+              },
+              {
+                "id": "part_flow",
+                "label": "备件流转"
+              },
+              {
+                "id": "settlement",
+                "label": "结算"
+              }
+            ]
+          }
+        },
+        {
+          "componentType": "FORM_TEXT_INPUT",
+          "label": "业务对象ID",
+          "modelField": "audit_log.biz_id"
+        },
+        {
+          "componentType": "FORM_SELECT_INPUT_SINGLE",
+          "label": "操作类型",
+          "modelField": "audit_log.action_type",
+          "dictionarySelectConfig": {
+            "dictionaryCode": "audit_action",
+            "dictionarySelectOptions": [
+              {
+                "id": "create",
+                "label": "新增"
+              },
+              {
+                "id": "update",
+                "label": "修改"
+              },
+              {
+                "id": "delete",
+                "label": "删除"
+              },
+              {
+                "id": "approve",
+                "label": "审批"
+              }
+            ]
+          }
+        },
+        {
+          "componentType": "FORM_PEOPLE_SELECT",
+          "label": "操作人",
+          "modelField": "audit_log.operator_user"
+        },
+        {
+          "componentType": "FORM_DATEPICK_INPUT",
+          "label": "操作时间",
+          "modelField": "audit_log.operate_time"
+        },
+        {
+          "componentType": "FORM_TEXTAREA_INPUT",
+          "label": "操作前快照",
+          "modelField": "audit_log.before_snapshot"
+        },
+        {
+          "componentType": "FORM_TEXTAREA_INPUT",
+          "label": "操作后快照",
+          "modelField": "audit_log.after_snapshot"
+        }
+      ],
+      "listPageView": {
+        "queryConditions": [
+          "audit_log.log_id",
+          "audit_log.biz_type",
+          "audit_log.biz_id",
+          "audit_log.action_type",
+          "audit_log.operator_user",
+          "audit_log.operate_time"
+        ],
+        "queryList": [
+          "audit_log.log_id",
+          "audit_log.biz_type",
+          "audit_log.biz_id",
+          "audit_log.action_type",
+          "audit_log.operator_user",
+          "audit_log.operate_time"
+        ]
+      }
+    },
+    {
+      "formName": "系统用户",
+      "formCode": "sys_user_info_form",
+      "allModelCodes": [
+        "sys_user_info"
+      ],
+      "formComponents": [
+        {
+          "componentType": "FORM_DOCUMENT_NUMBER",
+          "label": "用户ID",
+          "modelField": "sys_user_info.user_id"
+        },
+        {
+          "componentType": "FORM_TEXT_INPUT",
+          "label": "登录账号",
+          "modelField": "sys_user_info.account_name"
+        },
+        {
+          "componentType": "FORM_TEXT_INPUT",
+          "label": "用户姓名",
+          "modelField": "sys_user_info.username_val"
+        },
+        {
+          "componentType": "FORM_PHONE_INPUT",
+          "label": "手机号",
+          "modelField": "sys_user_info.phone_no"
+        },
+        {
+          "componentType": "FORM_EMAIL_INPUT",
+          "label": "邮箱",
+          "modelField": "sys_user_info.email_addr"
+        },
+        {
+          "componentType": "FORM_SELECT_INPUT_SINGLE",
+          "label": "所属区域",
+          "modelField": "sys_user_info.region_val",
+          "dictionarySelectConfig": {
+            "dictionaryCode": "region",
+            "dictionarySelectOptions": [
+              {
+                "id": "cn",
+                "label": "中国区"
+              },
+              {
+                "id": "eu",
+                "label": "欧洲区"
+              },
+              {
+                "id": "na",
+                "label": "北美区"
+              },
+              {
+                "id": "apac",
+                "label": "亚太区"
+              }
+            ]
+          }
+        },
+        {
+          "componentType": "FORM_SELECT_INPUT_SINGLE",
+          "label": "状态",
+          "modelField": "sys_user_info.user_status",
+          "dictionarySelectConfig": {
+            "dictionaryCode": "user_status",
+            "dictionarySelectOptions": [
+              {
+                "id": "enabled",
+                "label": "启用"
+              },
+              {
+                "id": "disabled",
+                "label": "停用"
+              }
+            ]
+          }
+        }
+      ],
+      "listPageView": {
+        "queryConditions": [
+          "sys_user_info.user_id",
+          "sys_user_info.account_name",
+          "sys_user_info.username_val",
+          "sys_user_info.phone_no",
+          "sys_user_info.region_val",
+          "sys_user_info.user_status"
+        ],
+        "queryList": [
+          "sys_user_info.user_id",
+          "sys_user_info.account_name",
+          "sys_user_info.username_val",
+          "sys_user_info.phone_no",
+          "sys_user_info.region_val",
+          "sys_user_info.user_status"
+        ]
+      }
+    },
+    {
+      "formName": "系统角色",
+      "formCode": "sys_role_info_form",
+      "allModelCodes": [
+        "sys_role_info"
+      ],
+      "formComponents": [
+        {
+          "componentType": "FORM_DOCUMENT_NUMBER",
+          "label": "角色ID",
+          "modelField": "sys_role_info.role_id"
+        },
+        {
+          "componentType": "FORM_TEXT_INPUT",
+          "label": "角色编码",
+          "modelField": "sys_role_info.role_code"
+        },
+        {
+          "componentType": "FORM_TEXT_INPUT",
+          "label": "角色名称",
+          "modelField": "sys_role_info.role_name"
+        },
+        {
+          "componentType": "FORM_TEXTAREA_INPUT",
+          "label": "角色描述",
+          "modelField": "sys_role_info.role_desc"
+        },
+        {
+          "componentType": "FORM_SELECT_INPUT_SINGLE",
+          "label": "启用状态",
+          "modelField": "sys_role_info.role_status",
+          "dictionarySelectConfig": {
+            "dictionaryCode": "role_status",
+            "dictionarySelectOptions": [
+              {
+                "id": "enabled",
+                "label": "启用"
+              },
+              {
+                "id": "disabled",
+                "label": "停用"
+              }
+            ]
+          }
+        }
+      ],
+      "listPageView": {
+        "queryConditions": [
+          "sys_role_info.role_id",
+          "sys_role_info.role_code",
+          "sys_role_info.role_name",
+          "sys_role_info.role_status"
+        ],
+        "queryList": [
+          "sys_role_info.role_id",
+          "sys_role_info.role_code",
+          "sys_role_info.role_name",
+          "sys_role_info.role_status"
+        ]
+      }
+    }
+  ]
+}

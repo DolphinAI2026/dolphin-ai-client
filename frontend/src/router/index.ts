@@ -1,0 +1,83 @@
+import { createRouter, createWebHistory } from 'vue-router'
+import { useUserStore } from '@/stores/user'
+import { usePreviewStore } from '@/stores/preview'
+
+const router = createRouter({
+  history: createWebHistory(),
+  routes: [
+    {
+      path: '/login',
+      name: 'Login',
+      component: () => import('@/views/Login.vue')
+    },
+    {
+      path: '/tenant-select',
+      name: 'TenantSelect',
+      component: () => import('@/views/TenantSelect.vue')
+    },
+    {
+      path: '/',
+      name: 'Home',
+      component: () => import('@/views/Landing.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/chat/:id?',
+      name: 'Chat',
+      component: () => import('@/views/ChatPage.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/apps',
+      name: 'Apps',
+      component: () => import('@/views/Apps.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/generate/:id?',
+      name: 'Generate',
+      // 重定向到 ChatPage 并自动打开部署面板
+      redirect: to => ({ path: '/chat', query: { deploy_app_id: to.params.id as string } }),
+      meta: { requiresAuth: true }
+    }
+  ]
+})
+
+router.beforeEach(async (to, _from, next) => {
+  const userStore = useUserStore()
+
+  if (to.meta.requiresAuth && !userStore.token) {
+    next('/login')
+    return
+  }
+
+  // 有 token 但 user 对象为空（页面刷新后），自动恢复用户信息 + aPaaS 连接状态
+  if (userStore.token && !userStore.user) {
+    try {
+      await userStore.fetchUser()
+      // 同时恢复 aPaaS 连接状态
+      const previewStore = usePreviewStore()
+      try {
+        const res = await fetch('/api/apaas/status', {
+          headers: { 'Authorization': `Bearer ${userStore.token}` }
+        })
+        if (res.ok) {
+          const data = await res.json()
+          previewStore.connected = data.connected
+        }
+      } catch { /* ignore */ }
+    } catch {
+      // token 过期或无效，跳登录
+      next('/login')
+      return
+    }
+  }
+
+  if (to.path === '/login' && userStore.token) {
+    next('/')
+  } else {
+    next()
+  }
+})
+
+export default router

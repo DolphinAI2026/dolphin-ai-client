@@ -1,0 +1,91 @@
+name: 资产管理系统
+description: 企业资产管理应用
+
+dicts:
+  - name: 资产类别
+    code: asset_category
+    options:
+      - name: 电子设备
+        code: electronic
+      - name: 办公家具
+        code: furniture
+      - name: 车辆
+        code: vehicle
+      - name: 其他
+        code: other
+
+  - name: 使用状态
+    code: usage_status
+    options:
+      - name: 在用
+        code: in_use
+      - name: 闲置
+        code: idle
+      - name: 维修中
+        code: repairing
+      - name: 已报废
+        code: scrapped
+
+models:
+  - name: 资产
+    code: asset
+    description: 资产主数据
+    fields:
+      - name: 资产名称
+        code: asset_name
+        type: 单行输入
+        required: true
+      - name: 资产编号
+        code: asset_no
+        type: 单行输入
+        required: true
+      - name: 资产类别
+        code: category
+        type: 下拉单选
+        dict: asset_category
+        required: true
+      - name: 购买日期
+        code: purchase_date
+        type: 日期时间
+      - name: 购买金额
+        code: purchase_amount
+        type: 金额
+      - name: 使用状态
+        code: usage_status
+        type: 下拉单选
+        dict: usage_status
+      - name: 使用部门
+        code: department
+        type: 单行输入
+      - name: 责任人
+        code: owner
+        type: 人员选择
+
+forms:
+  - name: 资产
+    model: asset
+    components:
+      - field: asset_name
+        required: true
+        placeholder: 请输入资产名称
+      - field: asset_no
+        required: true
+        placeholder: 请输入资产编号
+      - field: category
+        required: true
+      - field: purchase_date
+      - field: purchase_amount
+      - field: usage_status
+      - field: department
+      - field: owner
+    list_query_fields:
+      - asset_name
+      - asset_no
+      - category
+    list_display_fields:
+      - asset_name
+      - asset_no
+      - category
+      - purchase_date
+      - usage_status
+      - department

@@ -1,0 +1,105 @@
+name: 客户管理系统
+description: CRM 客户关系管理应用
+
+dicts:
+  - name: 客户等级
+    code: customer_level
+    options:
+      - name: VIP客户
+        code: vip
+      - name: 普通客户
+        code: normal
+      - name: 战略客户
+        code: strategic
+      - name: 潜在客户
+        code: potential
+
+  - name: 客户来源
+    code: customer_source
+    options:
+      - name: 线上推广
+        code: online
+      - name: 线下活动
+        code: offline
+      - name: 客户推荐
+        code: referral
+      - name: 主动开发
+        code: proactive
+
+models:
+  - name: 客户
+    code: customer
+    description: 客户主数据
+    fields:
+      - name: 客户名称
+        code: customer_name
+        type: 单行输入
+        required: true
+      - name: 客户编号
+        code: customer_no
+        type: 单据号
+        required: true
+      - name: 客户等级
+        code: customer_level
+        type: 下拉单选
+        dict: customer_level
+        required: true
+      - name: 客户来源
+        code: customer_source
+        type: 下拉单选
+        dict: customer_source
+      - name: 联系人
+        code: contact_person
+        type: 单行输入
+      - name: 联系电话
+        code: contact_phone
+        type: 手机号码
+      - name: 联系邮箱
+        code: contact_email
+        type: 电子邮箱
+      - name: 公司地址
+        code: company_address
+        type: 地理位置
+      - name: 年度预算
+        code: annual_budget
+        type: 金额
+      - name: 客户经理
+        code: account_manager
+        type: 人员选择
+      - name: 备注
+        code: remark
+        type: 多行输入
+
+forms:
+  - name: 客户
+    model: customer
+    components:
+      - field: customer_name
+        required: true
+        placeholder: 请输入客户名称
+      - field: customer_no
+        required: true
+      - field: customer_level
+        required: true
+      - field: customer_source
+      - field: contact_person
+        placeholder: 请输入联系人姓名
+      - field: contact_phone
+      - field: contact_email
+      - field: company_address
+      - field: annual_budget
+      - field: account_manager
+      - field: remark
+        placeholder: 请输入备注信息
+    list_query_fields:
+      - customer_name
+      - customer_no
+      - customer_level
+      - contact_phone
+    list_display_fields:
+      - customer_name
+      - customer_no
+      - customer_level
+      - contact_person
+      - contact_phone
+      - account_manager

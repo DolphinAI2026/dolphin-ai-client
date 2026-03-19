@@ -1,0 +1,47 @@
+import request from '@/utils/request'
+import type { Application, MergedApplication } from '@/types'
+
+export const applicationApi = {
+  list(params?: { include_remote?: boolean; source_filter?: string }) {
+    return request.get<any, MergedApplication[]>('/applications', { params })
+  },
+  get(id: number) {
+    return request.get<any, Application>(`/applications/${id}`)
+  },
+  create(data: { conversation_id: number; app_name: string; app_code: string; description?: string; config_preview?: any }) {
+    return request.post<any, Application>('/applications', data)
+  },
+  update(id: number, data: { conversation_id: number; app_name: string; app_code: string; description?: string; config_preview?: any }) {
+    return request.put<any, Application>(`/applications/${id}`, data)
+  },
+  delete(id: number) {
+    return request.delete(`/applications/${id}`)
+  },
+  uploadDoc(file: File) {
+    const formData = new FormData()
+    formData.append('file', file)
+    return request.post<any, any>('/applications/upload-doc', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 300000
+    })
+  },
+  uploadDocWithConversation(file: File) {
+    const formData = new FormData()
+    formData.append('file', file)
+    return request.post<any, { conversation_id: number; summary: string; preview: any }>('/applications/upload-doc-with-conversation', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 300000  // 大文档 AI 解析需要较长时间（5分钟）
+    })
+  },
+
+  // Copilot 分步生成
+  getStepStatus(appId: number) {
+    return request.get<any, any>(`/applications/${appId}/steps/status`)
+  },
+  executeStep(appId: number, step: string) {
+    return request.post<any, any>(`/applications/${appId}/steps/execute`, { step })
+  },
+  resetStep(appId: number, step?: string) {
+    return request.post<any, any>(`/applications/${appId}/steps/reset`, { step: step || null })
+  }
+}

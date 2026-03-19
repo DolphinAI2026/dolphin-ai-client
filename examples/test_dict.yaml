@@ -1,0 +1,34 @@
+name: 测试系统
+description: 测试字典绑定
+
+dicts:
+  - name: 测试字典
+    code: test_dict
+    options:
+      - name: 选项A
+        code: option_a
+      - name: 选项B
+        code: option_b
+
+models:
+  - name: 测试
+    code: test
+    fields:
+      - name: 名称
+        code: test_name
+        type: 单行输入
+        required: true
+      - name: 类型
+        code: test_type
+        type: 下拉单选
+        dict: test_dict
+        required: true
+
+forms:
+  - name: 测试
+    model: test
+    components:
+      - field: test_name
+        required: true
+      - field: test_type
+        required: true
