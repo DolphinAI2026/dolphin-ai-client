@@ -61,6 +61,20 @@
         </div>
       </div>
 
+      <!-- Vibe Coding 入口 -->
+      <div class="section">
+        <div class="coding-entry" @click="router.push('/coding')">
+          <div class="coding-entry-left">
+            <div class="coding-logo">⚡</div>
+            <div>
+              <div class="coding-title">Vibe Coding</div>
+              <div class="coding-desc">用自然语言生成aPaaS自开发代码 - 组件、页面、接口、脚本</div>
+            </div>
+          </div>
+          <span class="coding-arrow">→</span>
+        </div>
+      </div>
+
       <div class="section">
         <h3>从模板开始</h3>
         <div class="templates">
@@ -242,4 +256,12 @@ const handleUserCommand = (command: string) => {
 .app-icon.linked { background: #ecfdf5; color: #059669; }
 .app-stats { display: flex; gap: 16px; font-size: 12px; color: #9ca3af; }
 .empty-hint { text-align: center; color: #9ca3af; font-size: 13px; padding: 24px; }
+
+.coding-entry { display: flex; align-items: center; justify-content: space-between; background: linear-gradient(135deg, #1e1b4b, #312e81); border-radius: 16px; padding: 20px 24px; cursor: pointer; transition: all 0.3s; color: #fff; }
+.coding-entry:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(79,70,229,0.3); }
+.coding-entry-left { display: flex; align-items: center; gap: 16px; }
+.coding-logo { width: 48px; height: 48px; background: rgba(255,255,255,0.15); border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 24px; }
+.coding-title { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
+.coding-desc { font-size: 12px; color: rgba(255,255,255,0.7); }
+.coding-arrow { font-size: 20px; color: rgba(255,255,255,0.5); }
 </style>

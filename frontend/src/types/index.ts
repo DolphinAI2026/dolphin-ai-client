@@ -46,7 +46,7 @@ export interface TenantSelectRequest {
 export interface Conversation {
   id: number
   title: string
-  agent_type: 'builder' | 'assistant' | 'developer'
+  agent_type: 'builder' | 'assistant' | 'developer' | 'coding'
   status: string
   created_at: string
   updated_at: string
@@ -102,7 +102,7 @@ export interface ChatRequest {
 }
 
 export interface ConversationCreate {
-  agent_type: 'builder' | 'assistant' | 'developer'
+  agent_type: 'builder' | 'assistant' | 'developer' | 'coding'
 }
 
 // Preview types
