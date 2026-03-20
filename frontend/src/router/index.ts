@@ -34,6 +34,12 @@ const router = createRouter({
       meta: { requiresAuth: true }
     },
     {
+      path: '/coding',
+      name: 'Coding',
+      component: () => import('@/views/CodingPage.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
       path: '/generate/:id?',
       name: 'Generate',
       // 重定向到 ChatPage 并自动打开部署面板
