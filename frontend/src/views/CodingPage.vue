@@ -1,6 +1,6 @@
 <template>
   <div class="coding-page">
-    <!-- 顶部工具栏 -->
+    <!-- Header -->
     <header class="coding-header">
       <div class="header-left">
         <el-button text @click="$router.push('/')">
@@ -10,310 +10,189 @@
         <el-tag v-if="codingStore.workspace" size="small" type="info">
           {{ codingStore.workspace.project_name }}
         </el-tag>
-        <el-tag v-if="codingStore.workspaceStatus" size="small" :type="statusTagType">
-          {{ statusText }}
-        </el-tag>
       </div>
       <div class="header-right">
-        <el-button v-if="codingStore.workspace" size="small" @click="showWorkspaceList = true">
-          <el-icon><FolderOpened /></el-icon> 工作区
+        <el-button
+          v-if="codingStore.workspace"
+          size="small"
+          @click="openInVSCode"
+          class="header-btn"
+        >
+          <el-icon><FolderOpened /></el-icon> 在 VS Code 中打开
         </el-button>
-        <el-button v-if="codingStore.generatedFiles.length" size="small" @click="downloadProject">
-          <el-icon><Download /></el-icon> 下载代码
+        <el-button
+          v-if="codingStore.workspace"
+          size="small"
+          type="success"
+          @click="debugProject"
+          :loading="isDebugging"
+          class="header-btn"
+        >
+          <el-icon><Monitor /></el-icon> Debug 预览
+        </el-button>
+        <el-button
+          v-if="codingStore.workspace"
+          size="small"
+          type="primary"
+          @click="publishProject"
+          :loading="isPublishing"
+          class="header-btn"
+        >
+          <el-icon><Upload /></el-icon> 打包发布
+        </el-button>
+        <el-button
+          v-if="codingStore.workspace"
+          size="small"
+          @click="showWorkspaceList = true"
+          class="header-btn"
+        >
+          <el-icon><Menu /></el-icon>
         </el-button>
       </div>
     </header>
 
-    <!-- ============ 初始化向导（无工作区时） ============ -->
-    <div v-if="!codingStore.workspace" class="init-wizard">
-      <div class="wizard-container">
-        <div class="wizard-header">
-          <h2>创建自开发项目</h2>
-          <p>选择项目类型并命名，系统会自动生成符合 aPaaS 规范的脚手架</p>
-        </div>
-
-        <!-- 已有工作区列表 -->
-        <div v-if="existingWorkspaces.length > 0" class="existing-workspaces">
-          <div class="section-label">继续已有项目</div>
-          <div class="workspace-list">
-            <div
-              v-for="ws in existingWorkspaces"
-              :key="ws.id"
-              class="workspace-item"
-              @click="openExistingWorkspace(ws)"
-            >
-              <span class="ws-icon">{{ projectTypeIcons[ws.project_type] || '📦' }}</span>
-              <div class="ws-info">
-                <span class="ws-name">{{ ws.project_name }}</span>
-                <span class="ws-type">{{ projectTypeLabels[ws.project_type] }}</span>
-              </div>
-              <el-tag size="small" :type="ws.status === 'ready' ? 'success' : 'warning'">{{ ws.status }}</el-tag>
-            </div>
-          </div>
-          <div class="divider-text">或创建新项目</div>
-        </div>
-
-        <!-- 项目类型选择 -->
-        <div class="type-selector">
-          <div class="section-label">项目类型</div>
-          <div class="type-grid">
-            <div
-              v-for="pt in projectTypes"
-              :key="pt.value"
-              :class="['type-card', { selected: newProjectType === pt.value }]"
-              @click="newProjectType = pt.value"
-            >
-              <div class="type-icon">{{ pt.icon }}</div>
-              <div class="type-name">{{ pt.label }}</div>
-              <div class="type-desc">{{ pt.desc }}</div>
-            </div>
-          </div>
-        </div>
-
-        <!-- 项目名称 -->
-        <div class="name-input-section">
-          <div class="section-label">项目名称</div>
-          <el-input
-            v-model="newProjectName"
-            placeholder="例如: avatar-upload, smart-dispatch"
-            size="large"
-            @keydown.enter="createProject"
+    <!-- Chat Area (full width, scrollable) -->
+    <div class="chat-area" ref="chatAreaRef">
+      <!-- Welcome message when no workspace -->
+      <div v-if="!codingStore.workspace && codingStore.messages.length === 0" class="welcome">
+        <div class="welcome-icon">&#x2728;</div>
+        <h2>描述你想要的组件</h2>
+        <p class="welcome-desc">告诉我你想开发什么，我会自动创建项目、生成代码、安装依赖并启动开发服务器。</p>
+        <div class="suggestions">
+          <button
+            v-for="s in suggestions"
+            :key="s"
+            class="suggestion-btn"
+            @click="sendSuggestion(s)"
           >
-            <template #prepend>{{ projectNamePrefix }}</template>
-          </el-input>
+            {{ s }}
+          </button>
+        </div>
+      </div>
+
+      <!-- Messages -->
+      <div v-for="(msg, idx) in codingStore.messages" :key="idx" class="message" :class="msg.role">
+        <!-- User message -->
+        <div v-if="msg.role === 'user'" class="user-msg">
+          <div class="msg-avatar user-avatar">U</div>
+          <div class="msg-bubble user-bubble">{{ msg.content }}</div>
         </div>
 
-        <!-- 创建按钮 -->
+        <!-- Assistant message with pipeline steps -->
+        <div v-if="msg.role === 'assistant'" class="assistant-msg">
+          <div class="msg-avatar assistant-avatar">AI</div>
+          <div class="msg-bubble assistant-bubble">
+            <!-- Pipeline progress (if present) -->
+            <div v-if="msg.pipelineSteps && msg.pipelineSteps.length" class="pipeline-steps">
+              <div
+                v-for="step in msg.pipelineSteps"
+                :key="step.name"
+                class="step"
+                :class="step.status"
+              >
+                <span class="step-icon">{{ stepIcon(step) }}</span>
+                <span class="step-label">{{ step.label }}</span>
+              </div>
+            </div>
+            <!-- Debug screenshots -->
+            <div v-if="msg.screenshots && msg.screenshots.length" class="debug-screenshots">
+              <div class="screenshot-header">Debug 截图</div>
+              <img v-for="(url, i) in msg.screenshots" :key="i" :src="url" class="debug-screenshot" @click="previewScreenshot(url)" />
+            </div>
+            <!-- Text content -->
+            <div v-if="msg.textContent" class="msg-text" v-html="renderMarkdown(msg.textContent)"></div>
+            <!-- 内嵌组件预览 -->
+            <div v-if="msg.fileNames && msg.fileNames.length && msg.previewHtml" class="inline-preview">
+              <div class="preview-header">
+                <span class="preview-icon">👁</span> 组件预览
+                <el-button size="small" text @click="msg._previewCollapsed = !msg._previewCollapsed">
+                  {{ msg._previewCollapsed ? '展开' : '收起' }}
+                </el-button>
+              </div>
+              <iframe
+                v-show="!msg._previewCollapsed"
+                :srcdoc="msg.previewHtml"
+                class="preview-iframe"
+                sandbox="allow-scripts allow-same-origin"
+              ></iframe>
+            </div>
+            <!-- File change summary -->
+            <div v-if="msg.fileNames && msg.fileNames.length" class="file-summary">
+              <span class="file-summary-icon">&#128196;</span>
+              已更新 {{ msg.fileNames.length }} 个文件：{{ msg.fileNames.join(', ') }}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Streaming / Processing indicator -->
+      <div v-if="codingStore.isProcessing" class="message assistant">
+        <div class="assistant-msg">
+          <div class="msg-avatar assistant-avatar">AI</div>
+          <div class="msg-bubble assistant-bubble">
+            <!-- Live pipeline steps -->
+            <div v-if="codingStore.currentPipelineSteps.length" class="pipeline-steps">
+              <div
+                v-for="step in codingStore.currentPipelineSteps"
+                :key="step.name"
+                class="step"
+                :class="step.status"
+              >
+                <span class="step-icon">{{ stepIcon(step) }}</span>
+                <span class="step-label">{{ step.label }}</span>
+              </div>
+            </div>
+            <!-- Streaming text -->
+            <div v-if="codingStore.streamContent" class="msg-text" v-html="renderMarkdown(codingStore.streamContent)"></div>
+            <span v-if="codingStore.streamContent" class="typing-cursor">&#9608;</span>
+            <div v-if="!codingStore.streamContent && !codingStore.currentPipelineSteps.some(s => s.status === 'running')" class="thinking-dots">
+              <span></span><span></span><span></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Scroll anchor -->
+      <div ref="scrollAnchor"></div>
+    </div>
+
+    <!-- Input Area (bottom) -->
+    <div class="input-area">
+      <div class="input-wrapper">
+        <el-input
+          v-model="userInput"
+          type="textarea"
+          :rows="2"
+          :autosize="{ minRows: 1, maxRows: 6 }"
+          :placeholder="inputPlaceholder"
+          @keydown.ctrl.enter="sendMessage"
+          @keydown.meta.enter="sendMessage"
+          :disabled="codingStore.isProcessing"
+          resize="none"
+        />
         <el-button
           type="primary"
-          size="large"
-          class="create-btn"
-          :loading="isCreating"
-          :disabled="!newProjectName.trim() || !newProjectType"
-          @click="createProject"
+          class="send-btn"
+          :loading="codingStore.isProcessing"
+          @click="sendMessage"
+          :disabled="!userInput.trim() || codingStore.isProcessing"
+          circle
         >
-          创建项目并初始化脚手架
+          <el-icon v-if="!codingStore.isProcessing"><TopRight /></el-icon>
         </el-button>
       </div>
+      <div class="input-hint">Ctrl + Enter 发送</div>
     </div>
 
-    <!-- ============ 工作区主界面 ============ -->
-    <div v-else class="coding-main">
-      <!-- 左侧：对话面板 -->
-      <div class="panel-chat">
-        <div class="panel-section-title">AI 对话</div>
-
-        <!-- 对话消息 -->
-        <div ref="messagesRef" class="messages-area">
-          <!-- 初始提示 -->
-          <div v-if="codingStore.messages.length === 0" class="welcome-message">
-            <div class="message message-assistant">
-              <div class="message-avatar">🤖</div>
-              <div class="message-content">
-                项目 <strong>{{ codingStore.workspace?.project_name }}</strong> 已创建，脚手架已就绪。<br><br>
-                你可以直接描述需求，我会帮你修改和生成代码。例如：<br>
-                <span class="suggestion" @click="userInput = suggestion" v-for="suggestion in quickSuggestions" :key="suggestion">
-                  「{{ suggestion }}」
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <div
-            v-for="(msg, idx) in codingStore.messages"
-            :key="idx"
-            :class="['message', `message-${msg.role}`]"
-          >
-            <div class="message-avatar">{{ msg.role === 'user' ? '👤' : '🤖' }}</div>
-            <div class="message-content">
-              <div v-if="msg.role === 'assistant'" v-html="renderMarkdown(msg.content)"></div>
-              <div v-else>{{ msg.content }}</div>
-            </div>
-          </div>
-          <!-- 流式输出 -->
-          <div v-if="codingStore.isGenerating" class="message message-assistant">
-            <div class="message-avatar">🤖</div>
-            <div class="message-content">
-              <div v-html="renderMarkdown(codingStore.streamContent)"></div>
-              <span class="typing-cursor">▊</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- 输入框 -->
-        <div class="input-area">
-          <el-input
-            v-model="userInput"
-            type="textarea"
-            :rows="3"
-            :placeholder="inputPlaceholder"
-            @keydown.enter.ctrl="sendMessage"
-            :disabled="codingStore.isGenerating"
-          />
-          <el-button
-            type="primary"
-            :loading="codingStore.isGenerating"
-            @click="sendMessage"
-            :disabled="!userInput.trim()"
-          >
-            发送
-          </el-button>
-        </div>
+    <!-- Workspace List Dialog -->
+    <el-dialog v-model="showWorkspaceList" title="我的工作区" width="520px" class="ws-dialog">
+      <!-- 新建工作区按钮 -->
+      <div class="ws-actions">
+        <el-button type="primary" size="small" @click="startNewWorkspace" style="width:100%">
+          <el-icon><Plus /></el-icon> 新建工作区
+        </el-button>
       </div>
 
-      <!-- 中间：代码编辑器 + 预览 -->
-      <div class="panel-editor">
-        <div class="panel-section-title">
-          <div class="editor-tabs">
-            <button
-              :class="['editor-tab', { active: editorMode === 'code' }]"
-              @click="editorMode = 'code'"
-            >
-              代码
-            </button>
-            <button
-              :class="['editor-tab', { active: editorMode === 'preview' }]"
-              @click="editorMode = 'preview'"
-              :disabled="!codingStore.generatedFiles.length"
-            >
-              预览
-            </button>
-          </div>
-          <span v-if="editorMode === 'code' && codingStore.activeFilePath" class="active-file-path">
-            {{ codingStore.activeFilePath }}
-          </span>
-          <span v-if="editorMode === 'preview'" class="preview-hint">
-            沙箱预览 (Vue 2 + Element UI + Mock aPaaS)
-          </span>
-        </div>
-
-        <!-- 文件标签（代码模式） -->
-        <div v-if="editorMode === 'code' && codingStore.generatedFiles.length" class="file-tabs">
-          <div
-            v-for="file in codingStore.generatedFiles"
-            :key="file.path"
-            :class="['file-tab', { active: file.path === codingStore.activeFilePath }]"
-            @click="codingStore.activeFilePath = file.path"
-            :title="file.path"
-          >
-            <span class="file-icon">{{ getFileIcon(file.language) }}</span>
-            <span class="file-name">{{ getFileName(file.path) }}</span>
-          </div>
-        </div>
-
-        <!-- 预览文件选择（预览模式） -->
-        <div v-if="editorMode === 'preview' && previewableFiles.length > 1" class="file-tabs">
-          <div
-            v-for="file in previewableFiles"
-            :key="file.path"
-            :class="['file-tab', { active: file.path === previewFilePath }]"
-            @click="previewFilePath = file.path"
-            :title="file.path"
-          >
-            <span class="file-icon">{{ getFileIcon(file.language) }}</span>
-            <span class="file-name">{{ getFileName(file.path) }}</span>
-          </div>
-        </div>
-
-        <!-- 代码展示区 -->
-        <div v-show="editorMode === 'code'" class="code-area">
-          <div v-if="!codingStore.generatedFiles.length" class="empty-state">
-            <div class="empty-icon">💻</div>
-            <p>在左侧对话中描述需求，AI 会修改工作区文件</p>
-          </div>
-          <div v-else class="code-editor-wrapper">
-            <div class="code-toolbar">
-              <el-button size="small" text @click="copyCode">
-                <el-icon><CopyDocument /></el-icon> 复制
-              </el-button>
-            </div>
-            <pre class="code-content"><code>{{ codingStore.activeFileContent }}</code></pre>
-          </div>
-        </div>
-
-        <!-- 预览区域 -->
-        <div v-show="editorMode === 'preview'" class="preview-area">
-          <div v-if="!codingStore.generatedFiles.length" class="empty-state">
-            <div class="empty-icon">👁️</div>
-            <p>生成代码后可在此预览组件效果</p>
-          </div>
-          <iframe
-            v-else
-            ref="previewIframeRef"
-            :srcdoc="previewHtml"
-            class="preview-iframe"
-            sandbox="allow-scripts allow-same-origin"
-          ></iframe>
-        </div>
-      </div>
-
-      <!-- 右侧：文件树 + 操作 -->
-      <div class="panel-sidebar">
-        <div class="panel-section-title">
-          项目结构
-          <el-button size="small" text @click="refreshWorkspaceFiles" style="margin-left:auto;">
-            刷新
-          </el-button>
-        </div>
-
-        <!-- 工作区操作按钮 -->
-        <div class="workspace-actions">
-          <el-button size="small" @click="installDeps" :loading="isInstalling" :disabled="isInstalling">
-            npm install
-          </el-button>
-          <el-button size="small" @click="buildProject" :loading="isBuilding" :disabled="isBuilding">
-            构建
-          </el-button>
-        </div>
-
-        <!-- 文件树（层级） -->
-        <div class="file-tree">
-          <div v-if="!codingStore.workspaceFiles.length" class="empty-state-small">
-            暂无文件
-          </div>
-          <div v-else>
-            <template v-for="node in fileTree" :key="node.path">
-              <div
-                v-if="node.type === 'dir'"
-                v-show="!isFileHidden(node.path + '/x')"
-                :class="['tree-dir', { collapsed: collapsedDirs.has(node.path) }]"
-              >
-                <div class="tree-dir-header" @click="toggleDir(node.path)" :style="{ paddingLeft: (node.depth * 14 + 8) + 'px' }">
-                  <span class="tree-arrow">{{ collapsedDirs.has(node.path) ? '▸' : '▾' }}</span>
-                  <span class="tree-dir-icon">📁</span>
-                  <span class="tree-dir-name">{{ node.name }}</span>
-                </div>
-              </div>
-              <div
-                v-else
-                v-show="!isFileHidden(node.path)"
-                :class="['tree-item', { active: node.path === codingStore.activeFilePath }]"
-                @click="openWorkspaceFile(node.path)"
-                :style="{ paddingLeft: (node.depth * 14 + 8) + 'px' }"
-              >
-                <span class="tree-icon">{{ getFileIcon(detectLanguage(node.path)) }}</span>
-                <span class="tree-path">{{ node.name }}</span>
-              </div>
-            </template>
-          </div>
-        </div>
-
-        <!-- 校验结果 -->
-        <div v-if="codingStore.validationErrors.length" class="validation-section">
-          <div class="panel-section-title validation-title">
-            ⚠️ 规范校验
-          </div>
-          <div class="validation-list">
-            <div v-for="(err, idx) in codingStore.validationErrors" :key="idx" class="validation-item">
-              {{ err }}
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- 工作区列表弹窗 -->
-    <el-dialog v-model="showWorkspaceList" title="我的工作区" width="500px">
       <div v-if="existingWorkspaces.length === 0" style="text-align:center;color:#999;padding:20px;">
         暂无工作区
       </div>
@@ -324,12 +203,20 @@
           class="workspace-item"
           @click="openExistingWorkspace(ws); showWorkspaceList = false"
         >
-          <span class="ws-icon">{{ projectTypeIcons[ws.project_type] || '📦' }}</span>
           <div class="ws-info">
             <span class="ws-name">{{ ws.project_name }}</span>
-            <span class="ws-type">{{ projectTypeLabels[ws.project_type] }}</span>
+            <span class="ws-type">{{ ws.project_type }}</span>
           </div>
-          <el-tag size="small" :type="ws.status === 'ready' ? 'success' : 'warning'">{{ ws.status }}</el-tag>
+          <div class="ws-actions-right">
+            <el-tag size="small" :type="ws.status === 'ready' ? 'success' : 'warning'">{{ ws.status }}</el-tag>
+            <el-button
+              size="small"
+              type="danger"
+              text
+              @click.stop="deleteWorkspace(ws)"
+              class="ws-delete-btn"
+            >删除</el-button>
+          </div>
         </div>
       </div>
     </el-dialog>
@@ -340,11 +227,12 @@
 import { ref, computed, onMounted, nextTick, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ArrowLeft, Download, CopyDocument, FolderOpened } from '@element-plus/icons-vue'
+import { ArrowLeft, FolderOpened, Upload, Menu, TopRight, Monitor, Plus } from '@element-plus/icons-vue'
 import { useCodingStore } from '@/stores/coding'
+import type { PipelineStep, ChatMessage } from '@/stores/coding'
 import { useUserStore } from '@/stores/user'
 import { codingApi } from '@/api/coding'
-import type { CodingScene, GeneratedFile, WorkspaceInfo } from '@/api/coding'
+import type { GeneratedFile, WorkspaceInfo } from '@/api/coding'
 
 const router = useRouter()
 const route = useRoute()
@@ -352,134 +240,58 @@ const codingStore = useCodingStore()
 const userStore = useUserStore()
 
 const userInput = ref('')
-const messagesRef = ref<HTMLElement>()
-const previewIframeRef = ref<HTMLIFrameElement>()
-const editorMode = ref<'code' | 'preview'>('code')
-const previewFilePath = ref('')
+const chatAreaRef = ref<HTMLElement>()
+const scrollAnchor = ref<HTMLElement>()
 
-// ============ 初始化向导状态 ============
-const newProjectType = ref('form-component')
-const newProjectName = ref('')
-const isCreating = ref(false)
 const existingWorkspaces = ref<WorkspaceInfo[]>([])
 const showWorkspaceList = ref(false)
-const isInstalling = ref(false)
-const isBuilding = ref(false)
+const isPublishing = ref(false)
+const isDebugging = ref(false)
 
-const projectTypes = [
-  { value: 'form-component', label: '表单组件', icon: '🧩', desc: '自定义表单字段组件' },
-  { value: 'form-page', label: '菜单页面', icon: '📄', desc: '自定义菜单页面' },
-  { value: 'form-list', label: '列表视图', icon: '📋', desc: '自定义列表展示' },
-  { value: 'backend-api', label: '后端接口', icon: '⚙️', desc: 'Java SpringBoot 接口' },
+// ============ Suggestions ============
+
+const suggestions = [
+  '开发一个头像上传组件，支持裁剪和预览',
+  '做一个数据查询表格页面，带搜索和分页',
+  '实现一个日期范围选择器组件',
+  '创建一个审批流程页面',
 ]
 
-const projectTypeLabels: Record<string, string> = {
-  'form-component': '表单组件',
-  'form-page': '菜单页面',
-  'form-list': '列表视图',
-  'backend-api': '后端接口',
-}
-
-const projectTypeIcons: Record<string, string> = {
-  'form-component': '🧩',
-  'form-page': '📄',
-  'form-list': '📋',
-  'backend-api': '⚙️',
-}
-
-const projectNamePrefix = computed(() => {
-  const prefixes: Record<string, string> = {
-    'form-component': 'form-component-',
-    'form-page': 'form-page-',
-    'form-list': 'form-list-',
-    'backend-api': 'backend-api-',
-  }
-  return prefixes[newProjectType.value] || ''
-})
-
-const quickSuggestions = computed(() => {
-  const type = codingStore.workspace?.project_type
-  if (type === 'form-component') {
-    return ['实现一个头像上传组件', '添加一个日期范围选择器', '做一个富文本编辑器组件']
-  } else if (type === 'form-page') {
-    return ['添加一个数据查询表格页面', '增加新增和编辑弹窗功能', '添加搜索筛选条件']
-  } else if (type === 'form-list') {
-    return ['自定义列表列渲染', '添加行操作按钮', '实现批量操作功能']
-  } else if (type === 'backend-api') {
-    return ['添加分页查询接口', '增加新增和删除接口', '添加Excel导出功能']
-  }
-  return ['描述你要开发的功能']
-})
-
-const statusText = computed(() => {
-  const map: Record<string, string> = {
-    creating: '创建中...',
-    installing: '安装依赖中...',
-    ready: '就绪',
-    building: '构建中...',
-    error: '异常',
-  }
-  return map[codingStore.workspaceStatus] || codingStore.workspaceStatus
-})
-
-const statusTagType = computed(() => {
-  const map: Record<string, string> = {
-    creating: 'warning',
-    installing: 'warning',
-    ready: 'success',
-    building: 'warning',
-    error: 'danger',
-  }
-  return (map[codingStore.workspaceStatus] || 'info') as any
-})
-
 const inputPlaceholder = computed(() => {
-  return '描述你的开发需求，AI 会直接修改工作区文件... (Ctrl+Enter 发送)'
+  if (codingStore.workspace) {
+    return '描述你的修改需求... (Ctrl+Enter 发送)'
+  }
+  return '描述你想开发的组件或页面... (Ctrl+Enter 发送)'
 })
 
-// ============ 生命周期 ============
+// ============ Lifecycle ============
 
 onMounted(async () => {
-  // 加载用户已有工作区
   try {
     existingWorkspaces.value = await codingApi.listWorkspaces()
   } catch (e) {
     console.error('获取工作区列表失败:', e)
   }
 
-  // 如果有 workspace_id 参数，直接打开
-  const wsId = route.query.workspace_id as string
+  // If workspace_id in query, open it
+  const wsId = (route.query.workspace_id || route.query.ws) as string
   if (wsId) {
     await openWorkspaceById(wsId)
+  } else {
+    const lastWsId = localStorage.getItem('coding_last_workspace_id')
+    if (lastWsId && existingWorkspaces.value.some(w => w.id === lastWsId)) {
+      await openWorkspaceById(lastWsId)
+    }
   }
 
-  // 如果有对话ID参数，恢复对话
+  // Restore conversation if specified
   const convId = route.query.conversation_id
   if (convId) {
     await restoreConversation(Number(convId))
   }
 })
 
-// ============ 工作区操作 ============
-
-async function createProject() {
-  if (!newProjectName.value.trim() || !newProjectType.value || isCreating.value) return
-
-  isCreating.value = true
-  try {
-    const ws = await codingApi.createWorkspace(newProjectType.value, newProjectName.value.trim())
-    codingStore.setWorkspace(ws)
-
-    // 加载脚手架文件到编辑器
-    await loadWorkspaceFiles(ws.id)
-
-    ElMessage.success('项目创建成功，脚手架已就绪')
-  } catch (error: any) {
-    ElMessage.error(`创建失败: ${error.message}`)
-  } finally {
-    isCreating.value = false
-  }
-}
+// ============ Workspace operations ============
 
 async function openExistingWorkspace(ws: WorkspaceInfo) {
   await openWorkspaceById(ws.id)
@@ -489,9 +301,19 @@ async function openWorkspaceById(wsId: string) {
   try {
     const ws = await codingApi.getWorkspace(wsId)
     codingStore.setWorkspace(ws)
-    await loadWorkspaceFiles(wsId)
-    // 加载工作区的历史对话
+    localStorage.setItem('coding_last_workspace_id', wsId)
+
+    // Load conversation history
     await loadWorkspaceConversation(wsId)
+
+    // Check serve status
+    try {
+      const serveStatus = await codingApi.getServeStatus(wsId)
+      codingStore.serveRunning = serveStatus.running
+      codingStore.serveUrl = serveStatus.url || null
+    } catch {
+      // ignore
+    }
   } catch (error: any) {
     ElMessage.error(`打开工作区失败: ${error.message}`)
   }
@@ -504,131 +326,96 @@ async function loadWorkspaceConversation(wsId: string) {
       codingStore.conversationId = data.conversation_id
       for (const msg of data.messages) {
         if (msg.role === 'user' || msg.role === 'assistant') {
-          codingStore.addMessage({ role: msg.role, content: msg.content })
+          const chatMsg: ChatMessage = { role: msg.role, content: msg.content }
+          if (msg.role === 'assistant') {
+            chatMsg.textContent = msg.content
+            const files = parseFilesFromContent(msg.content)
+            if (files.length > 0) {
+              chatMsg.fileNames = files.map(f => getFileName(f.path))
+            }
+          }
+          codingStore.addMessage(chatMsg)
         }
       }
     }
   } catch {
-    // 无历史对话，忽略
+    // no history, ignore
   }
 }
 
-async function loadWorkspaceFiles(wsId: string) {
+async function restoreConversation(conversationId: number) {
   try {
-    const files = await codingApi.listFiles(wsId)
-    codingStore.workspaceFiles = files
-
-    // 加载所有文件内容到编辑器
-    const generatedFiles: GeneratedFile[] = []
-    for (const fp of files) {
-      try {
-        const { content } = await codingApi.readFile(wsId, fp)
-        generatedFiles.push({
-          path: fp,
-          content,
-          language: detectLanguage(fp),
-        })
-      } catch {
-        // skip unreadable files
+    codingStore.conversationId = conversationId
+    const messages = await codingApi.getMessages(conversationId)
+    for (const msg of messages) {
+      const chatMsg: ChatMessage = {
+        id: msg.id,
+        role: msg.role,
+        content: msg.content,
+        created_at: msg.created_at,
       }
+      if (msg.role === 'assistant') {
+        chatMsg.textContent = msg.content
+        const files = parseFilesFromContent(msg.content)
+        if (files.length > 0) {
+          chatMsg.fileNames = files.map(f => getFileName(f.path))
+        }
+      }
+      codingStore.addMessage(chatMsg)
     }
-    codingStore.setFiles(generatedFiles)
-  } catch (error: any) {
-    console.error('加载文件失败:', error)
+  } catch (e) {
+    console.error('恢复对话失败:', e)
   }
 }
 
-async function refreshWorkspaceFiles() {
-  if (!codingStore.workspace) return
-  await loadWorkspaceFiles(codingStore.workspace.id)
-  ElMessage.success('已刷新')
-}
+// ============ Send Message / Auto Pipeline ============
 
-async function openWorkspaceFile(filePath: string) {
-  codingStore.activeFilePath = filePath
-  // 如果文件还没加载内容，从后端读取
-  const existing = codingStore.generatedFiles.find(f => f.path === filePath)
-  if (!existing && codingStore.workspace) {
-    try {
-      const { content } = await codingApi.readFile(codingStore.workspace.id, filePath)
-      codingStore.generatedFiles.push({
-        path: filePath,
-        content,
-        language: detectLanguage(filePath),
-      })
-    } catch (e: any) {
-      ElMessage.error(`读取文件失败: ${e.message}`)
-    }
-  }
+function sendSuggestion(text: string) {
+  userInput.value = text
+  sendMessage()
 }
-
-async function installDeps() {
-  if (!codingStore.workspace) return
-  isInstalling.value = true
-  codingStore.workspaceStatus = 'installing'
-  try {
-    const result = await codingApi.installDeps(codingStore.workspace.id)
-    if (result.status === 'ok' || result.status === 'skip') {
-      ElMessage.success(result.message)
-      codingStore.workspaceStatus = 'ready'
-    } else {
-      ElMessage.error(result.message)
-      codingStore.workspaceStatus = 'error'
-    }
-  } catch (error: any) {
-    ElMessage.error(`安装失败: ${error.message}`)
-    codingStore.workspaceStatus = 'error'
-  } finally {
-    isInstalling.value = false
-  }
-}
-
-async function buildProject() {
-  if (!codingStore.workspace) return
-  isBuilding.value = true
-  codingStore.workspaceStatus = 'building'
-  try {
-    const result = await codingApi.buildProject(codingStore.workspace.id)
-    if (result.status === 'ok') {
-      ElMessage.success(result.message)
-      codingStore.workspaceStatus = 'ready'
-    } else {
-      ElMessage.error(result.message)
-      codingStore.workspaceStatus = 'error'
-    }
-  } catch (error: any) {
-    ElMessage.error(`构建失败: ${error.message}`)
-    codingStore.workspaceStatus = 'error'
-  } finally {
-    isBuilding.value = false
-  }
-}
-
-// ============ AI 对话 ============
 
 async function sendMessage() {
   const message = userInput.value.trim()
-  if (!message || codingStore.isGenerating) return
+  if (!message || codingStore.isProcessing) return
 
   userInput.value = ''
   codingStore.addMessage({ role: 'user', content: message })
-  codingStore.isGenerating = true
+  codingStore.isProcessing = true
   codingStore.streamContent = ''
 
   await nextTick()
   scrollToBottom()
 
+  const isNewWorkspace = !codingStore.workspace
+  const msgLower = message.toLowerCase()
+  const isDebugIntent = ['debug', '调试', '预览'].some(kw => msgLower.includes(kw))
+  const isPublishIntent = ['发布', '打包', 'publish', 'build'].some(kw => msgLower.includes(kw))
+
+  if (isDebugIntent && !isNewWorkspace) {
+    codingStore.currentPipelineSteps = [
+      { name: 'serve', label: '启动服务', status: 'pending' },
+      { name: 'debug', label: '自动登录+截图', status: 'pending' },
+      { name: 'verify', label: 'AI 验证', status: 'pending' },
+    ]
+  } else if (isPublishIntent && !isNewWorkspace) {
+    codingStore.currentPipelineSteps = [
+      { name: 'build', label: '构建打包', status: 'pending' },
+    ]
+  } else {
+    codingStore.initPipelineSteps(isNewWorkspace)
+  }
+
   try {
     const token = userStore.token
     const body: Record<string, any> = {
       message,
-      scene_type: sceneTypeFromProjectType(codingStore.workspace?.project_type),
-      conversation_id: codingStore.conversationId,
-      app_id: route.query.app_id as string || null,
       workspace_id: codingStore.workspace?.id || null,
+      conversation_id: codingStore.conversationId || null,
+      app_id: (route.query.app_id as string) || null,
     }
 
-    const response = await fetch('/api/coding/generate-stream', {
+    const response = await fetch('/api/coding/auto-pipeline', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -638,20 +425,25 @@ async function sendMessage() {
     })
 
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`)
+      const errBody = await response.json().catch(() => ({ detail: `HTTP ${response.status}` }))
+      throw new Error(errBody.detail || `HTTP ${response.status}`)
     }
 
     const reader = response.body?.getReader()
     const decoder = new TextDecoder()
     let fullContent = ''
+    let changedFiles: string[] = []
+    let currentScreenshots: string[] = []
 
     if (reader) {
+      let buffer = ''
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
 
-        const text = decoder.decode(value, { stream: true })
-        const lines = text.split('\n')
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || '' // keep incomplete line in buffer
 
         for (const line of lines) {
           if (!line.startsWith('data: ')) continue
@@ -661,14 +453,52 @@ async function sendMessage() {
           try {
             const parsed = JSON.parse(data)
 
-            if (parsed.type === 'scene_detected') {
-              codingStore.conversationId = parsed.conversation_id
+            if (parsed.type === 'step') {
+              // Pipeline step event
+              codingStore.updatePipelineStep(parsed.step, parsed.status, parsed.message)
+
+              // If workspace was created, update store
+              if (parsed.step === 'create_workspace' && parsed.status === 'done' && parsed.data) {
+                // 后端返回 workspace_id，前端 store 需要 id
+                const wsData = {
+                  ...parsed.data,
+                  id: parsed.data.workspace_id || parsed.data.id,
+                }
+                codingStore.setWorkspace(wsData)
+                codingStore.workspacePath = parsed.data.workspace_path || null
+                localStorage.setItem('coding_last_workspace_id', wsData.id)
+              }
+
+              // If serve started, update store
+              if (parsed.step === 'serve' && parsed.status === 'done' && parsed.data) {
+                codingStore.serveRunning = true
+                codingStore.serveUrl = parsed.data.url || null
+              }
+
+              scrollToBottom()
             } else if (parsed.type === 'content') {
               fullContent += parsed.content
               codingStore.streamContent = fullContent
               scrollToBottom()
+            } else if (parsed.type === 'files') {
+              // File list from generation
+              if (parsed.files && Array.isArray(parsed.files)) {
+                changedFiles = parsed.files
+              }
+            } else if (parsed.type === 'screenshot') {
+              // Store screenshot URL for display
+              currentScreenshots.push(parsed.url)
+            } else if (parsed.type === 'scene_detected') {
+              codingStore.conversationId = parsed.conversation_id
             } else if (parsed.type === 'done') {
               codingStore.conversationId = parsed.conversation_id
+              if (parsed.workspace_id && !codingStore.workspace) {
+                try {
+                  const ws = await codingApi.getWorkspace(parsed.workspace_id)
+                  codingStore.setWorkspace(ws)
+                  localStorage.setItem('coding_last_workspace_id', ws.id)
+                } catch { /* ignore */ }
+              }
             }
           } catch {
             // skip unparseable lines
@@ -677,84 +507,161 @@ async function sendMessage() {
       }
     }
 
-    // 流式结束，解析文件
-    codingStore.addMessage({ role: 'assistant', content: fullContent })
-
-    // 从回复中提取文件并写入工作区
-    const files = parseFilesFromContent(fullContent)
-    if (files.length > 0 && codingStore.workspace) {
-      // 写入工作区
-      for (const file of files) {
-        try {
-          await codingApi.writeFile(codingStore.workspace.id, file.path, file.content)
-        } catch (e) {
-          console.error(`写入文件失败: ${file.path}`, e)
-        }
-      }
-
-      // 更新编辑器中的文件
-      for (const file of files) {
-        const existing = codingStore.generatedFiles.find(f => f.path === file.path)
-        if (existing) {
-          existing.content = file.content
-        } else {
-          codingStore.generatedFiles.push(file)
-        }
-        // 也更新文件列表
-        if (!codingStore.workspaceFiles.includes(file.path)) {
-          codingStore.workspaceFiles.push(file.path)
-        }
-      }
-
-      // 激活第一个变更的文件
-      codingStore.activeFilePath = files[0].path
+    // Extract files from AI content if not provided via event
+    if (changedFiles.length === 0) {
+      const parsed = parseFilesFromContent(fullContent)
+      changedFiles = parsed.map(f => f.path)
     }
 
-    // 检查元数据（校验结果）
-    const metaMatch = fullContent.match(/<!--GENERATION_META:(.*?)-->/)
-    if (metaMatch) {
+    // Build preview HTML from generated edit.vue
+    let previewHtml = ''
+    if (changedFiles.length > 0) {
+      const editFile = parseFilesFromContent(fullContent).find(f => f.path.includes('edit/') || f.path.includes('-edit.vue'))
+      const settingFile = parseFilesFromContent(fullContent).find(f => f.path.includes('setting'))
+      if (editFile) {
+        previewHtml = buildPreviewHtml(editFile.content, settingFile?.content)
+      }
+    }
+
+    // Build the assistant message
+    const assistantMsg: ChatMessage = {
+      role: 'assistant',
+      content: fullContent,
+      textContent: fullContent,
+      pipelineSteps: [...codingStore.currentPipelineSteps],
+      fileNames: changedFiles.map(f => getFileName(f)),
+      previewHtml,
+      screenshots: currentScreenshots.length > 0 ? currentScreenshots : undefined,
+    } as any
+    codingStore.addMessage(assistantMsg)
+
+    // Refresh workspace file list
+    if (codingStore.workspace) {
       try {
-        const meta = JSON.parse(metaMatch[1])
-        if (meta.validation_errors?.length) {
-          codingStore.validationErrors = meta.validation_errors
-        }
-      } catch {}
+        existingWorkspaces.value = await codingApi.listWorkspaces()
+      } catch { /* ignore */ }
+    }
+
+  } catch (error: any) {
+    ElMessage.error(`处理失败: ${error.message}`)
+    codingStore.addMessage({
+      role: 'assistant',
+      content: `处理失败: ${error.message}`,
+      textContent: `处理失败: ${error.message}`,
+    })
+  } finally {
+    codingStore.isProcessing = false
+    codingStore.streamContent = ''
+    codingStore.currentPipelineSteps = []
+  }
+}
+
+// ============ Header Actions ============
+
+async function openInVSCode() {
+  if (!codingStore.workspace) return
+  // 从后端获取工作区绝对路径
+  try {
+    const info = await codingApi.getWorkspace(codingStore.workspace.id)
+    const absPath = info.workspace_path || `/Users/mars/Vibe Coding/apaas-builder-ai/workspaces/${codingStore.workspace.id}`
+    // 尝试打开 VS Code（浏览器可能阻止 vscode:// 协议）
+    window.location.href = `vscode://file${absPath}`
+    // 同时复制路径到剪贴板作为备选
+    try {
+      await navigator.clipboard.writeText(absPath)
+      ElMessage.success(`路径已复制: ${absPath}`)
+    } catch {
+      ElMessage.info(`VS Code 路径: ${absPath}`)
+    }
+  } catch {
+    const fallbackPath = `/Users/mars/Vibe Coding/apaas-builder-ai/workspaces/${codingStore.workspace.id}`
+    window.location.href = `vscode://file${fallbackPath}`
+    ElMessage.info(`VS Code 路径: ${fallbackPath}`)
+  }
+}
+
+async function publishProject() {
+  if (!codingStore.workspace || isPublishing.value) return
+  isPublishing.value = true
+  try {
+    const blob = await codingApi.publish(codingStore.workspace.id)
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${codingStore.workspace.project_name}.zip`
+    a.click()
+    URL.revokeObjectURL(url)
+    ElMessage.success('打包完成，已开始下载')
+  } catch (error: any) {
+    ElMessage.error(error.message || '发布失败')
+  } finally {
+    isPublishing.value = false
+  }
+}
+
+function startNewWorkspace() {
+  showWorkspaceList.value = false
+  codingStore.reset()
+  localStorage.removeItem('coding_last_workspace_id')
+  // 回到欢迎页
+}
+
+async function deleteWorkspace(ws: WorkspaceInfo) {
+  try {
+    await codingApi.deleteWorkspace(ws.id)
+    existingWorkspaces.value = existingWorkspaces.value.filter(w => w.id !== ws.id)
+    // 如果删的是当前工作区，重置
+    if (codingStore.workspace?.id === ws.id) {
+      codingStore.reset()
+      localStorage.removeItem('coding_last_workspace_id')
+    }
+    ElMessage.success('已删除')
+  } catch (e: any) {
+    ElMessage.error(e.message || '删除失败')
+  }
+}
+
+async function debugProject() {
+  if (!codingStore.workspace || isDebugging.value) return
+  isDebugging.value = true
+  try {
+    const token = userStore.token
+    const resp = await fetch(`/api/coding/workspace/${codingStore.workspace.id}/debug`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        platform_url: 'https://apaas-dev8.dfy.definesys.cn/platform/',
+        tenant_id: '566642786573484033',
+        app_id: '806997227284201472',
+      }),
+    })
+    const result = await resp.json()
+    if (result.status === 'ok') {
+      ElMessage.success('Debug 已启动！请在 Chromium 中登录平台后 F5 刷新')
+    } else {
+      ElMessage.error(result.message || result.detail || 'Debug 启动失败')
     }
   } catch (error: any) {
-    ElMessage.error(`生成失败: ${error.message}`)
-    codingStore.addMessage({ role: 'assistant', content: `生成失败: ${error.message}` })
+    ElMessage.error(error.message || 'Debug 启动失败')
   } finally {
-    codingStore.isGenerating = false
-    codingStore.streamContent = ''
+    isDebugging.value = false
   }
 }
 
-function sceneTypeFromProjectType(projectType?: string): string | null {
-  const map: Record<string, string> = {
-    'form-component': 'web_component',
-    'form-page': 'web_page',
-    'form-list': 'web_list_view',
-    'backend-api': 'backend_api',
-  }
-  return projectType ? map[projectType] || null : null
-}
-
-// ============ 文件解析 ============
+// ============ File Parsing ============
 
 function parseFilesFromContent(content: string): GeneratedFile[] {
   const files: GeneratedFile[] = []
-  // 支持 ```file:path 和 ```language:path 两种格式
   const regex = /```(?:file|[\w]+):([^\n]+)\n([\s\S]*?)```/g
   let match
   while ((match = regex.exec(content)) !== null) {
     const path = match[1].trim()
     const fileContent = match[2].trim()
     if (path && fileContent) {
-      files.push({
-        path,
-        content: fileContent,
-        language: detectLanguage(path),
-      })
+      files.push({ path, content: fileContent, language: detectLanguage(path) })
     }
   }
   return files
@@ -773,381 +680,167 @@ function detectLanguage(path: string): string {
   return 'text'
 }
 
-async function restoreConversation(conversationId: number) {
-  try {
-    codingStore.conversationId = conversationId
-    const messages = await codingApi.getMessages(conversationId)
-    for (const msg of messages) {
-      codingStore.addMessage({
-        id: msg.id,
-        role: msg.role,
-        content: msg.content,
-        created_at: msg.created_at,
-      })
-      if (msg.role === 'assistant') {
-        const files = parseFilesFromContent(msg.content)
-        if (files.length > 0) {
-          codingStore.setFiles(files)
-        }
-      }
-    }
-  } catch (e) {
-    console.error('恢复对话失败:', e)
-  }
-}
+// ============ Preview Sandbox ============
 
-// ============ 文件树（层级） ============
+function buildPreviewHtml(editVueContent: string, settingVueContent?: string): string {
+  // 从 .vue SFC 中提取 template 和 script
+  const templateMatch = editVueContent.match(/<template>([\s\S]*?)<\/template>/)
+  const scriptMatch = editVueContent.match(/<script>([\s\S]*?)<\/script>/)
+  const styleMatch = editVueContent.match(/<style[^>]*>([\s\S]*?)<\/style>/)
 
-interface TreeNode {
-  type: 'file' | 'dir'
-  name: string
-  path: string   // 对于 dir 是目录前缀，对于 file 是完整路径
-  depth: number
-}
+  if (!templateMatch) return ''
 
-const collapsedDirs = ref<Set<string>>(new Set())
+  const template = templateMatch[1]
+    .replace(/<x-proxy-form-item[^>]*>/g, '<div class="mock-form-item">')
+    .replace(/<\/x-proxy-form-item>/g, '</div>')
 
-const fileTree = computed<TreeNode[]>(() => {
-  const files = codingStore.workspaceFiles
-  if (!files.length) return []
-
-  const nodes: TreeNode[] = []
-  const seenDirs = new Set<string>()
-
-  for (const fp of files.sort()) {
-    const parts = fp.split('/')
-    // 添加目录节点
-    for (let i = 0; i < parts.length - 1; i++) {
-      const dirPath = parts.slice(0, i + 1).join('/')
-      if (!seenDirs.has(dirPath)) {
-        seenDirs.add(dirPath)
-        nodes.push({ type: 'dir', name: parts[i], path: dirPath, depth: i })
-      }
-    }
-    // 添加文件节点
-    nodes.push({ type: 'file', name: parts[parts.length - 1], path: fp, depth: parts.length - 1 })
+  let scriptBody = ''
+  if (scriptMatch) {
+    scriptBody = scriptMatch[1]
+      .replace(/import\s+.*from\s+['"][^'"]+['"]/g, '')  // 移除 import
+      .replace(/mixins:\s*\[[^\]]*\],?/g, '')             // 移除 mixins
+      .replace(/export\s+default\s*/, 'var componentDef = ')
   }
 
-  return nodes
-})
-
-function toggleDir(dirPath: string) {
-  const newSet = new Set(collapsedDirs.value)
-  if (newSet.has(dirPath)) {
-    newSet.delete(dirPath)
-  } else {
-    newSet.add(dirPath)
-  }
-  collapsedDirs.value = newSet
-}
-
-function isFileHidden(filePath: string): boolean {
-  // 如果任何父目录被折叠则隐藏
-  const parts = filePath.split('/')
-  for (let i = 1; i < parts.length; i++) {
-    const parentDir = parts.slice(0, i).join('/')
-    if (collapsedDirs.value.has(parentDir)) return true
-  }
-  return false
-}
-
-// ============ UI 工具 ============
-
-function getFileName(path: string): string {
-  return path.split('/').pop() || path
-}
-
-function getFileIcon(language: string): string {
-  const icons: Record<string, string> = {
-    vue: '💚', javascript: '📒', typescript: '💙', json: '📋',
-    css: '🎨', scss: '🎨', java: '☕', python: '🐍',
-    groovy: '☕', xml: '📄', html: '🌐', text: '📄',
-  }
-  return icons[language] || '📄'
-}
-
-function renderMarkdown(content: string): string {
-  return content
-    .replace(/```file:([^\n]+)\n([\s\S]*?)```/g, '<div class="code-block"><div class="code-block-header">$1</div><pre><code>$2</code></pre></div>')
-    .replace(/```(\w+)\n([\s\S]*?)```/g, '<pre class="code-inline"><code>$2</code></pre>')
-    .replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>')
-    .replace(/\n/g, '<br>')
-}
-
-async function copyCode() {
-  const content = codingStore.activeFileContent
-  if (content) {
-    await navigator.clipboard.writeText(content)
-    ElMessage.success('已复制到剪贴板')
-  }
-}
-
-function downloadProject() {
-  const files = codingStore.generatedFiles
-  if (!files.length) return
-
-  if (files.length === 1) {
-    const blob = new Blob([files[0].content], { type: 'text/plain' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = getFileName(files[0].path)
-    a.click()
-    URL.revokeObjectURL(url)
-    return
-  }
-
-  let combined = ''
-  for (const file of files) {
-    combined += `\n${'='.repeat(60)}\n`
-    combined += `// 文件: ${file.path}\n`
-    combined += `${'='.repeat(60)}\n\n`
-    combined += file.content
-    combined += '\n'
-  }
-  const blob = new Blob([combined], { type: 'text/plain' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `${codingStore.workspace?.project_name || 'apaas-custom-code'}.txt`
-  a.click()
-  URL.revokeObjectURL(url)
-}
-
-// ============ 预览相关 ============
-
-function isPreviewable(file: GeneratedFile): boolean {
-  if (file.path.endsWith('.vue')) return true
-  if (file.path.endsWith('.js') && (
-    file.content.includes('template:') ||
-    file.content.includes('<template>') ||
-    (file.content.includes('export default') && (file.content.includes('mixins') || file.content.includes('data(') || file.content.includes('render(')))
-  )) return true
-  return false
-}
-
-const previewableFiles = computed(() =>
-  codingStore.generatedFiles.filter(f => isPreviewable(f))
-)
-
-function parseSFC(content: string) {
-  const templateMatch = content.match(/<template>([\s\S]*?)<\/template>/)
-  const scriptMatch = content.match(/<script>([\s\S]*?)<\/script>/)
-  const styleMatch = content.match(/<style[^>]*>([\s\S]*?)<\/style>/)
-
-  const template = templateMatch ? templateMatch[1].trim() : ''
-  const scriptRaw = scriptMatch ? scriptMatch[1] : ''
   const style = styleMatch ? styleMatch[1] : ''
 
-  const processedScript = scriptRaw
-    .replace(/import\s+[\s\S]*?from\s+['"][^'"]*['"]\s*;?/g, '')
-    .replace(/export\s+default\s*\{/, 'var __component__ = {')
-    .trim()
-
-  return { template, script: processedScript, style }
-}
-
-function parseJSComponent(content: string) {
-  let script = content
-    .replace(/import\s+[\s\S]*?from\s+['"][^'"]*['"]\s*;?/g, '')
-    .trim()
-
-  const templateLiteralMatch = script.match(/template\s*:\s*`([\s\S]*?)`/)
-  const templateStringMatch = script.match(/template\s*:\s*'([\s\S]*?)'/)
-  const template = templateLiteralMatch ? templateLiteralMatch[1]
-    : templateStringMatch ? templateStringMatch[1]
-    : ''
-
-  script = script
-    .replace(/export\s+default\s*\{/, 'var __component__ = {')
-    .trim()
-
-  if (!script.includes('__component__')) {
-    script = script.replace(/module\.exports\s*=\s*\{/, 'var __component__ = {')
+  // setting 组件预览
+  let settingPreview = ''
+  if (settingVueContent) {
+    const stMatch = settingVueContent.match(/<template>([\s\S]*?)<\/template>/)
+    if (stMatch) {
+      settingPreview = `
+        <div style="border-top:1px solid #eee;margin-top:16px;padding-top:12px;">
+          <div style="font-size:12px;color:#999;margin-bottom:8px;">设置面板预览</div>
+          <div id="setting-preview"></div>
+        </div>`
+    }
   }
-
-  return { template, script, style: '' }
-}
-
-const previewHtml = computed(() => {
-  const files = codingStore.generatedFiles
-  if (!files.length) return ''
-
-  const targetPath = previewFilePath.value
-  const previewFile = files.find(f => f.path === targetPath && isPreviewable(f))
-    || files.find(f => f.path.endsWith('.vue') && f.path.includes('edit'))
-    || files.find(f => f.path.endsWith('.vue') && !f.path.includes('read'))
-    || files.find(f => f.path.endsWith('.vue'))
-    || files.find(f => f.path.endsWith('.js') && f.path.includes('/edit/') && isPreviewable(f))
-    || files.find(f => f.path.endsWith('.js') && isPreviewable(f) && !f.path.includes('/read/') && !f.path.endsWith('/index.js'))
-    || previewableFiles.value[0]
-
-  if (!previewFile) return '<html><body style="color:#888;text-align:center;padding:40px;font-family:sans-serif;"><p>没有可预览的组件文件</p><p style="font-size:12px;color:#aaa;">需要生成包含 template 的 .vue 或 .js 文件</p></body></html>'
-
-  if (!previewFilePath.value && previewFile) {
-    previewFilePath.value = previewFile.path
-  }
-
-  const isVue = previewFile.path.endsWith('.vue')
-  const parsed = isVue ? parseSFC(previewFile.content) : parseJSComponent(previewFile.content)
-  const isReadMode = previewFile.path.includes('/read/') || previewFile.path.includes('-read')
-
-  return buildSandboxHtml(parsed.template, parsed.script, parsed.style, isReadMode)
-})
-
-function buildSandboxHtml(template: string, script: string, style: string, isReadMode: boolean): string {
-  const safeTemplate = template.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$\{/g, '\\${')
 
   return `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="stylesheet" href="https://unpkg.com/element-ui@2.15.14/lib/theme-chalk/index.css">
-  <script src="https://unpkg.com/vue@2.7.16/dist/vue.js"><\/script>
+  <script src="https://unpkg.com/vue@2.7.14/dist/vue.min.js"><\/script>
   <script src="https://unpkg.com/element-ui@2.15.14/lib/index.js"><\/script>
   <style>
-    * { box-sizing: border-box; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      padding: 24px;
-      margin: 0;
-      background: #fff;
-      color: #333;
-    }
-    .preview-header {
-      margin-bottom: 20px;
-      padding-bottom: 12px;
-      border-bottom: 1px solid #eee;
-    }
-    .preview-header h3 { margin: 0 0 4px; font-size: 16px; color: #333; }
-    .preview-header p { margin: 0; font-size: 12px; color: #999; }
-    .preview-form { max-width: 600px; }
-    .x-proxy-form-item { margin-bottom: 16px; }
-    .el-form-item { margin-bottom: 16px; }
-    ${style}
+    body { margin: 0; padding: 16px; font-family: -apple-system, sans-serif; background: #fff; }
+    .mock-form-item { margin-bottom: 12px; }
+    .mock-form-item label { display: block; font-size: 13px; color: #606266; margin-bottom: 4px; }
+    ${style.replace(/:deep\(/g, '').replace(/\)/g, '')}
   </style>
 </head>
 <body>
   <div id="app">
-    <div class="preview-header">
-      <h3>${isReadMode ? '只读模式预览' : '编辑模式预览'}</h3>
-      <p>aPaaS 沙箱环境 · Vue 2 + Element UI · Mock 平台组件</p>
-    </div>
-    <div class="preview-form">
-      <el-form label-width="100px" label-position="top">
-        <preview-component></preview-component>
-      </el-form>
-    </div>
+    <div style="font-size:12px;color:#999;margin-bottom:12px;">编辑态预览 · aPaaS 沙箱</div>
+    ${template}
+    ${settingPreview}
   </div>
-
   <script>
-    var FormWidgetConfigMixin = {
-      props: {
-        widget: {
-          type: Object,
-          default: function() {
-            return { code: 'demo_field', name: '示例字段', label: '示例字段', config: { placeholder: '请输入' }, isInTable: false };
-          }
-        },
-        validatorRules: { type: Array, default: function() { return []; } },
-        disabled: { type: Boolean, default: false },
-        formType: { type: String, default: '${isReadMode ? 'read' : 'edit'}' },
-        formReadonly: { type: Boolean, default: ${isReadMode} },
-        formDisabled: { type: Boolean, default: false },
-        showRequired: { type: Boolean, default: false },
-        validateKey: { type: String, default: '' },
-        validateInfo: { type: Object, default: function() { return {}; } }
-      },
-      data: function() {
-        return {
-          formValue: ''
-        };
-      },
-      methods: {
-        handleValueChange: function(val) {
-          this.formValue = val;
-          this.$emit('value-change', { code: this.widget.code, value: val });
-        }
-      }
-    };
-
-    Vue.component('x-proxy-form-item', {
-      props: {
-        widget: { type: Object, default: function() { return { name: '字段', label: '字段' }; } },
-        isInTable: { type: Boolean, default: false },
-        showRequired: { type: Boolean, default: false },
-        label: { type: String, default: '' },
-        formType: { type: String, default: 'edit' },
-        validatorRules: { type: Array, default: function() { return []; } },
-        validateKey: { type: String, default: '' },
-        validateInfo: { type: Object, default: function() { return {}; } }
-      },
-      template: '<div class="x-proxy-form-item"><el-form-item :label="label || (widget && widget.label) || (widget && widget.name)" :rules="validatorRules"><slot></slot></el-form-item></div>'
-    });
-
-    Vue.component('x-ag-grid', {
-      props: { rowKey: String, tableData: Array, colConfigs: Array, pagination: Object },
-      template: '<div class="x-ag-grid-mock"><el-table :data="tableData" border style="width:100%"><el-table-column v-for="col in colConfigs" :key="col.field" :prop="col.field" :label="col.headerName"></el-table-column></el-table><el-pagination v-if="pagination" layout="total,prev,pager,next" :total="pagination.total" :page-size="pagination.pageSize" :current-page="pagination.currentPage" @current-change="$emit(\\\'current-page-change\\\', $event)" @size-change="$emit(\\\'size-change\\\', $event)" style="margin-top:16px;"></el-pagination></div>'
-    });
-
-    try {
-      ${script}
-
-      if (__component__) {
-        if (__component__.mixins) {
-          __component__.mixins = __component__.mixins.map(function(m) {
-            if (m === undefined || m === null || typeof m === 'string') return FormWidgetConfigMixin;
-            return m;
-          });
-        } else {
-          __component__.mixins = [FormWidgetConfigMixin];
-        }
-
-        var tpl = \`${safeTemplate}\`;
-        if (tpl && tpl.trim()) {
-          __component__.template = tpl;
-        }
-        if (!__component__.template) {
-          __component__.template = '<div style="color:#999;padding:20px;">组件未定义 template</div>';
-        }
-
-        Vue.component('preview-component', __component__);
-        new Vue({ el: '#app' });
-      }
-    } catch(e) {
-      document.getElementById('app').innerHTML =
-        '<div style="color:#e74c3c;padding:20px;">' +
-        '<h3>预览渲染出错</h3>' +
-        '<pre style="background:#f8f8f8;padding:12px;border-radius:4px;font-size:12px;overflow:auto;">' +
-        e.message + '\\n\\n' + e.stack +
-        '</pre></div>';
+    // Mock FormWidgetMixin data
+    ${scriptBody || 'var componentDef = {}'}
+    if (!componentDef.data) componentDef.data = function() { return {} }
+    var origData = componentDef.data
+    componentDef.data = function() {
+      var d = typeof origData === 'function' ? origData.call(this) : (origData || {})
+      d.formValue = d.formValue || ''
+      return d
     }
+    componentDef.computed = componentDef.computed || {}
+    if (!componentDef.computed.formValue) {
+      componentDef.computed.formValue = {
+        get: function() { return this.$data._formValue || '' },
+        set: function(v) { this.$set(this.$data, '_formValue', v) }
+      }
+    }
+    componentDef.computed.widget = componentDef.computed.widget || function() { return { label: '示例字段', customComponentConfig: {} } }
+    componentDef.computed.showRequired = componentDef.computed.showRequired || function() { return false }
+    componentDef.computed.validatorRules = componentDef.computed.validatorRules || function() { return [] }
+    componentDef.computed.validateKey = componentDef.computed.validateKey || function() { return '' }
+    componentDef.computed.validateInfo = componentDef.computed.validateInfo || function() { return {} }
+    componentDef.computed.webFormSettings = componentDef.computed.webFormSettings || function() { return {} }
+    componentDef.computed.renderScene = componentDef.computed.renderScene || function() { return 'edit' }
+    componentDef.computed.formData = componentDef.computed.formData || function() { return {} }
+    componentDef.el = '#app'
+    try { new Vue(componentDef) } catch(e) { document.getElementById('app').innerHTML = '<p style="color:#f56c6c">预览渲染失败: ' + e.message + '</p>' }
   <\/script>
 </body>
-</html>`;
+</html>`
 }
 
-// 代码生成完成后自动切换到预览
-watch(() => codingStore.generatedFiles.length, (newLen, oldLen) => {
-  if (newLen > 0 && oldLen === 0) {
-    const hasPreviewable = codingStore.generatedFiles.some(f => isPreviewable(f))
-    if (hasPreviewable) {
-      editorMode.value = 'preview'
-      previewFilePath.value = ''
-    }
+// ============ UI Helpers ============
+
+function getFileName(path: string): string {
+  return path.split('/').pop() || path
+}
+
+function stepIcon(step: PipelineStep): string {
+  switch (step.status) {
+    case 'pending': return '\u25CB'   // ○
+    case 'running': return '\u25D4'   // ◔ (spinner-like)
+    case 'done': return '\u2713'      // ✓
+    case 'error': return '\u2717'     // ✗
+    default: return '\u25CB'
   }
-})
+}
+
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+function renderMarkdown(content: string): string {
+  // 先处理 file 代码块（可折叠，默认展开显示代码）
+  let result = content.replace(/```file:([^\n]+)\n([\s\S]*?)```/g, (_m, path: string, code: string) => {
+    const fileName = path.trim().split('/').pop() || path.trim()
+    const escapedCode = escapeHtml(code.trim())
+    const lineCount = code.trim().split('\n').length
+    return `<details class="code-block" open>
+      <summary class="code-block-header">
+        <span class="code-file-icon">📄</span>
+        <span class="code-file-name">${escapeHtml(fileName)}</span>
+        <span class="code-file-path">${escapeHtml(path.trim())}</span>
+        <span class="code-line-count">${lineCount} 行</span>
+      </summary>
+      <pre><code>${escapedCode}</code></pre>
+    </details>`
+  })
+
+  // 普通代码块
+  result = result.replace(/```(\w*)\n([\s\S]*?)```/g, (_m, _lang: string, code: string) => {
+    return `<pre class="code-inline"><code>${escapeHtml(code.trim())}</code></pre>`
+  })
+
+  // 行内代码
+  result = result.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>')
+  // 粗体
+  result = result.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+  // 换行
+  result = result.replace(/\n/g, '<br>')
+
+  return result
+}
+
+function previewScreenshot(url: string) {
+  window.open(url, '_blank')
+}
 
 function scrollToBottom() {
   nextTick(() => {
-    if (messagesRef.value) {
-      messagesRef.value.scrollTop = messagesRef.value.scrollHeight
-    }
+    scrollAnchor.value?.scrollIntoView({ behavior: 'smooth' })
   })
 }
 
-// 清理
+// Auto scroll when new messages appear
+watch(() => codingStore.messages.length, () => {
+  scrollToBottom()
+})
+
+// Cleanup on route change
 watch(() => route.path, () => {
   if (!route.path.startsWith('/coding')) {
     codingStore.reset()
@@ -1164,7 +857,7 @@ watch(() => route.path, () => {
   color: #e0e0e0;
 }
 
-/* Header */
+/* ============ Header ============ */
 .coding-header {
   display: flex;
   align-items: center;
@@ -1175,11 +868,13 @@ watch(() => route.path, () => {
   height: 48px;
   flex-shrink: 0;
 }
+
 .header-left {
   display: flex;
   align-items: center;
   gap: 12px;
 }
+
 .header-title {
   font-size: 16px;
   font-weight: 600;
@@ -1188,560 +883,539 @@ watch(() => route.path, () => {
   -webkit-text-fill-color: transparent;
   margin: 0;
 }
+
 .header-right {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-/* ============ 初始化向导 ============ */
-.init-wizard {
+.header-btn {
+  border-color: #333;
+  background: #1a1a1a;
+  color: #ccc;
+}
+
+.header-btn:hover {
+  border-color: #555;
+  background: #252525;
+  color: #fff;
+}
+
+/* ============ Chat Area ============ */
+.chat-area {
   flex: 1;
+  overflow-y: auto;
+  padding: 24px 0;
   display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* ============ Welcome ============ */
+.welcome {
+  display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  overflow-y: auto;
-  padding: 40px 20px;
-}
-.wizard-container {
-  max-width: 640px;
-  width: 100%;
-}
-.wizard-header {
+  flex: 1;
+  padding: 60px 24px;
   text-align: center;
-  margin-bottom: 32px;
+  max-width: 640px;
 }
-.wizard-header h2 {
-  font-size: 24px;
+
+.welcome-icon {
+  font-size: 48px;
+  margin-bottom: 16px;
+}
+
+.welcome h2 {
+  font-size: 28px;
   font-weight: 700;
-  margin: 0 0 8px;
+  margin: 0 0 12px;
   background: linear-gradient(135deg, #667eea, #764ba2);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
 }
-.wizard-header p {
+
+.welcome-desc {
   color: #888;
-  font-size: 14px;
-  margin: 0;
-}
-
-.section-label {
-  font-size: 13px;
-  font-weight: 600;
-  color: #aaa;
-  margin-bottom: 10px;
-}
-
-/* 已有工作区 */
-.existing-workspaces {
-  margin-bottom: 24px;
-}
-.workspace-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-bottom: 16px;
-}
-.workspace-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 14px;
-  background: #151515;
-  border: 1px solid #222;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-.workspace-item:hover {
-  border-color: #667eea;
-  background: #1a1a2e;
-}
-.ws-icon { font-size: 20px; }
-.ws-info {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.ws-name { font-size: 13px; font-weight: 500; }
-.ws-type { font-size: 11px; color: #888; }
-
-.divider-text {
-  text-align: center;
-  color: #555;
-  font-size: 12px;
-  margin: 16px 0;
-  position: relative;
-}
-.divider-text::before,
-.divider-text::after {
-  content: '';
-  position: absolute;
-  top: 50%;
-  width: 40%;
-  height: 1px;
-  background: #222;
-}
-.divider-text::before { left: 0; }
-.divider-text::after { right: 0; }
-
-/* 项目类型选择 */
-.type-selector {
-  margin-bottom: 20px;
-}
-.type-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 10px;
-}
-.type-card {
-  padding: 16px 12px;
-  border: 1px solid #222;
-  border-radius: 10px;
-  text-align: center;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-.type-card:hover {
-  border-color: #444;
-  background: #151515;
-}
-.type-card.selected {
-  border-color: #667eea;
-  background: #1a1a2e;
-  box-shadow: 0 0 0 1px #667eea;
-}
-.type-icon {
-  font-size: 28px;
-  margin-bottom: 6px;
-}
-.type-name {
-  font-size: 14px;
-  font-weight: 600;
-  margin-bottom: 4px;
-}
-.type-desc {
-  font-size: 11px;
-  color: #888;
-}
-
-/* 名称输入 */
-.name-input-section {
-  margin-bottom: 24px;
-}
-.name-input-section :deep(.el-input__wrapper) {
-  background: #151515;
-  box-shadow: 0 0 0 1px #2a2a2a inset;
-}
-.name-input-section :deep(.el-input__inner) {
-  color: #e0e0e0;
-}
-.name-input-section :deep(.el-input-group__prepend) {
-  background: #1a1a1a;
-  color: #888;
-  border-color: #2a2a2a;
-}
-
-.create-btn {
-  width: 100%;
-  height: 44px;
   font-size: 15px;
+  margin: 0 0 32px;
+  line-height: 1.6;
 }
 
-/* ============ 主体区域 ============ */
-.coding-main {
-  flex: 1;
+.suggestions {
   display: flex;
-  overflow: hidden;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: center;
 }
 
-/* Chat Panel */
-.panel-chat {
-  width: 380px;
-  min-width: 320px;
-  display: flex;
-  flex-direction: column;
-  border-right: 1px solid #1e1e1e;
-  background: #0d0d0d;
+.suggestion-btn {
+  padding: 10px 18px;
+  border-radius: 20px;
+  border: 1px solid #2a2a2a;
+  background: #151515;
+  color: #ccc;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
 }
 
-.panel-section-title {
-  padding: 10px 16px;
-  font-size: 12px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: #888;
-  border-bottom: 1px solid #1a1a1a;
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.suggestion-btn:hover {
+  border-color: #667eea;
+  background: #1a1a2e;
+  color: #fff;
 }
 
-/* Messages */
-.messages-area {
-  flex: 1;
-  overflow-y: auto;
-  padding: 12px;
-}
+/* ============ Messages ============ */
 .message {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 16px;
+  width: 100%;
+  max-width: 760px;
+  padding: 0 24px;
+  margin-bottom: 24px;
 }
-.message-avatar {
-  width: 28px;
-  height: 28px;
+
+.user-msg,
+.assistant-msg {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.msg-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 16px;
+  font-size: 12px;
+  font-weight: 700;
   flex-shrink: 0;
 }
-.message-content {
+
+.user-avatar {
+  background: #333;
+  color: #fff;
+}
+
+.assistant-avatar {
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  color: #fff;
+}
+
+.msg-bubble {
   flex: 1;
-  font-size: 13px;
-  line-height: 1.6;
-  overflow-wrap: break-word;
-}
-.message-user .message-content {
-  background: #1a1a2e;
-  padding: 8px 12px;
-  border-radius: 8px;
-}
-
-.suggestion {
-  display: inline-block;
-  margin: 4px 4px 4px 0;
-  padding: 4px 10px;
-  background: #1a1a2e;
-  border: 1px solid #333;
-  border-radius: 12px;
-  font-size: 12px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-.suggestion:hover {
-  border-color: #667eea;
-  background: #222244;
-}
-
-.typing-cursor {
-  animation: blink 1s infinite;
-  color: #667eea;
-}
-@keyframes blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0; }
-}
-
-/* Input */
-.input-area {
-  padding: 12px;
-  border-top: 1px solid #1a1a1a;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.input-area :deep(.el-textarea__inner) {
-  background: #151515;
-  border-color: #2a2a2a;
-  color: #e0e0e0;
-  resize: none;
-}
-.input-area :deep(.el-textarea__inner:focus) {
-  border-color: #667eea;
-}
-
-/* Editor Panel */
-.panel-editor {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
   min-width: 0;
 }
 
-/* Editor mode tabs */
-.editor-tabs {
-  display: flex;
-  gap: 2px;
+.user-bubble {
+  background: #1a1a2e;
+  border-radius: 12px;
+  padding: 12px 16px;
+  color: #e0e0e0;
+  font-size: 14px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
-.editor-tab {
-  padding: 4px 14px;
+
+.assistant-bubble {
+  padding: 4px 0;
+  font-size: 14px;
+  line-height: 1.7;
+  color: #d0d0d0;
+}
+
+/* ============ Pipeline Steps ============ */
+.pipeline-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.step {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 16px;
   font-size: 12px;
   font-weight: 500;
-  color: #666;
-  background: transparent;
   border: 1px solid transparent;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: all 0.2s;
 }
-.editor-tab:hover:not(:disabled) {
-  color: #aaa;
+
+.step.pending {
   background: #1a1a1a;
+  color: #666;
+  border-color: #2a2a2a;
 }
-.editor-tab.active {
-  color: #667eea;
+
+.step.running {
   background: #1a1a2e;
-  border-color: #333;
-}
-.editor-tab:disabled {
-  opacity: 0.3;
-  cursor: not-allowed;
-}
-
-.preview-hint {
-  font-weight: 400;
-  color: #10b981;
-  font-size: 11px;
-  margin-left: auto;
-}
-
-.active-file-path {
-  font-weight: 400;
   color: #667eea;
-  font-size: 11px;
-  margin-left: auto;
+  border-color: #334;
+  animation: pulse-border 1.5s ease-in-out infinite;
 }
 
-/* Preview */
-.preview-area {
-  flex: 1;
-  overflow: hidden;
-  background: #fff;
-  border-radius: 0;
-}
-.preview-iframe {
-  width: 100%;
-  height: 100%;
-  border: none;
-  background: #fff;
+.step.done {
+  background: #0d2818;
+  color: #4ade80;
+  border-color: #1a3a2a;
 }
 
-.file-tabs {
-  display: flex;
-  overflow-x: auto;
-  border-bottom: 1px solid #1a1a1a;
-  background: #0d0d0d;
-}
-.file-tab {
-  padding: 6px 14px;
-  font-size: 12px;
-  color: #888;
-  cursor: pointer;
-  border-bottom: 2px solid transparent;
-  white-space: nowrap;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  transition: all 0.2s;
-}
-.file-tab:hover {
-  color: #ccc;
-  background: #151515;
-}
-.file-tab.active {
-  color: #e0e0e0;
-  border-bottom-color: #667eea;
-  background: #111;
-}
-.file-icon { font-size: 12px; }
-.file-name { font-size: 12px; }
-
-.code-area {
-  flex: 1;
-  overflow: auto;
-  position: relative;
+.step.error {
+  background: #2a0d0d;
+  color: #f87171;
+  border-color: #3a1a1a;
 }
 
-.empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  height: 100%;
-  color: #555;
+@keyframes pulse-border {
+  0%, 100% { border-color: #334; }
+  50% { border-color: #667eea; }
 }
-.empty-icon {
-  font-size: 48px;
-  margin-bottom: 16px;
-}
-.empty-state p {
+
+.step-icon {
   font-size: 14px;
 }
 
-.code-editor-wrapper {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-}
-.code-toolbar {
-  display: flex;
-  justify-content: flex-end;
-  padding: 4px 8px;
-  border-bottom: 1px solid #1a1a1a;
-  background: #0d0d0d;
-}
-.code-content {
-  flex: 1;
-  margin: 0;
-  padding: 16px;
-  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
-  font-size: 13px;
-  line-height: 1.6;
-  color: #d4d4d4;
-  background: #0a0a0a;
-  overflow: auto;
-  tab-size: 2;
-  white-space: pre;
+.step-label {
+  white-space: nowrap;
 }
 
-/* Sidebar */
-.panel-sidebar {
-  width: 280px;
-  min-width: 240px;
-  border-left: 1px solid #1e1e1e;
-  background: #0d0d0d;
-  display: flex;
-  flex-direction: column;
-  overflow-y: auto;
+/* ============ Message Text ============ */
+.msg-text {
+  word-break: break-word;
 }
 
-.workspace-actions {
+.msg-text :deep(.code-block) {
+  margin: 12px 0;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #0d0d0d;
+  border: 1px solid #1e1e1e;
+}
+
+.msg-text :deep(.code-block-header) {
   padding: 8px 12px;
+  background: #151515;
+  font-size: 12px;
+  color: #999;
+  border-bottom: 1px solid #1e1e1e;
+  cursor: pointer;
   display: flex;
-  gap: 6px;
-  border-bottom: 1px solid #1a1a1a;
+  align-items: center;
+  gap: 8px;
+  user-select: none;
+  list-style: none;
 }
 
-.file-tree {
+.msg-text :deep(.code-block-header::-webkit-details-marker) {
+  display: none;
+}
+
+.msg-text :deep(.code-block-header::before) {
+  content: '▶';
+  font-size: 10px;
+  color: #555;
+  transition: transform 0.2s;
+}
+
+.msg-text :deep(.code-block[open] > .code-block-header::before) {
+  transform: rotate(90deg);
+}
+
+.msg-text :deep(.code-file-icon) {
+  font-size: 14px;
+}
+
+.msg-text :deep(.code-file-name) {
+  font-weight: 600;
+  color: #a78bfa;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+}
+
+.msg-text :deep(.code-file-path) {
+  color: #555;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 11px;
   flex: 1;
-  padding: 4px 0;
+}
+
+.msg-text :deep(.code-line-count) {
+  color: #444;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.msg-text :deep(.code-block pre) {
+  margin: 0;
+  padding: 12px 16px;
+  overflow-x: auto;
+  max-height: 400px;
   overflow-y: auto;
 }
-.tree-dir-header {
-  padding: 3px 8px;
+
+.msg-text :deep(.code-block code) {
   font-size: 12px;
-  color: #ccc;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  user-select: none;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  color: #c0c0c0;
+  line-height: 1.6;
 }
-.tree-dir-header:hover {
-  background: #1a1a1a;
+
+.msg-text :deep(.code-inline) {
+  margin: 8px 0;
+  padding: 10px 12px;
+  background: #111;
+  border-radius: 6px;
+  border: 1px solid #222;
+  overflow-x: auto;
 }
-.tree-arrow {
-  font-size: 10px;
-  color: #666;
-  width: 12px;
-  text-align: center;
-  flex-shrink: 0;
-}
-.tree-dir-icon {
+
+.msg-text :deep(.code-inline code) {
   font-size: 12px;
-  flex-shrink: 0;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  color: #c0c0c0;
 }
-.tree-dir-name {
-  font-size: 12px;
-  font-weight: 500;
-}
-.tree-item {
-  padding: 3px 8px;
-  font-size: 12px;
-  color: #aaa;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-.tree-item:hover {
-  background: #1a1a1a;
-}
-.tree-item.active {
+
+.msg-text :deep(.inline-code) {
   background: #1a1a2e;
-  color: #667eea;
-}
-.tree-icon { font-size: 12px; flex-shrink: 0; }
-.tree-path { font-size: 11px; }
-
-.empty-state-small {
-  padding: 16px;
-  text-align: center;
-  color: #555;
-  font-size: 12px;
-}
-
-/* Validation */
-.validation-section {
-  border-top: 1px solid #1a1a1a;
-}
-.validation-title {
-  color: #f0a020 !important;
-}
-.validation-list {
-  padding: 8px;
-}
-.validation-item {
-  padding: 6px 8px;
-  font-size: 11px;
-  color: #f0a020;
-  background: #1a1a0e;
+  padding: 2px 6px;
   border-radius: 4px;
+  font-size: 12px;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  color: #a78bfa;
+}
+
+/* ============ Inline Preview ============ */
+.inline-preview {
+  margin: 12px 0;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #2a2a2a;
+  background: #111;
+}
+
+.preview-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #1a1a1a;
+  border-bottom: 1px solid #2a2a2a;
+  font-size: 13px;
+  color: #aaa;
+}
+
+.preview-icon {
+  font-size: 16px;
+}
+
+.preview-iframe {
+  width: 100%;
+  height: 280px;
+  border: none;
+  background: #fff;
+  border-radius: 0 0 8px 8px;
+}
+
+/* ============ Debug Screenshots ============ */
+.debug-screenshots {
+  margin: 12px 0;
+}
+
+.screenshot-header {
+  font-size: 12px;
+  color: #888;
+  margin-bottom: 8px;
+}
+
+.debug-screenshot {
+  max-width: 100%;
+  border-radius: 8px;
+  border: 1px solid #2a2a2a;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.debug-screenshot:hover {
+  opacity: 0.85;
+}
+
+/* ============ File Summary ============ */
+.file-summary {
+  margin-top: 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: #111;
+  border: 1px solid #222;
+  font-size: 12px;
+  color: #888;
+}
+
+.file-summary-icon {
+  margin-right: 4px;
+}
+
+/* ============ Typing / Thinking ============ */
+.typing-cursor {
+  color: #667eea;
+  animation: blink 1s step-end infinite;
+}
+
+@keyframes blink {
+  50% { opacity: 0; }
+}
+
+.thinking-dots {
+  display: flex;
+  gap: 4px;
+  padding: 8px 0;
+}
+
+.thinking-dots span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #444;
+  animation: thinking 1.4s ease-in-out infinite;
+}
+
+.thinking-dots span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.thinking-dots span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes thinking {
+  0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
+  40% { opacity: 1; transform: scale(1); }
+}
+
+/* ============ Input Area ============ */
+.input-area {
+  flex-shrink: 0;
+  padding: 12px 24px 16px;
+  border-top: 1px solid #1e1e1e;
+  background: #0a0a0a;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.input-wrapper {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  width: 100%;
+  max-width: 760px;
+  background: #151515;
+  border: 1px solid #2a2a2a;
+  border-radius: 16px;
+  padding: 8px 12px;
+  transition: border-color 0.2s;
+}
+
+.input-wrapper:focus-within {
+  border-color: #667eea;
+}
+
+.input-wrapper :deep(.el-textarea__inner) {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  color: #e0e0e0;
+  font-size: 14px;
+  line-height: 1.5;
+  padding: 4px 0;
+  resize: none;
+}
+
+.send-btn {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+}
+
+.input-hint {
+  font-size: 11px;
+  color: #555;
+  margin-top: 6px;
+}
+
+/* ============ Workspace Dialog ============ */
+.ws-dialog :deep(.el-dialog) {
+  background: #1a1a1a;
+  border: 1px solid #2a2a2a;
+}
+
+.workspace-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.2s;
   margin-bottom: 4px;
 }
 
-/* Markdown code blocks in chat */
-.message-content :deep(.code-block) {
-  margin: 8px 0;
-  border: 1px solid #222;
-  border-radius: 6px;
-  overflow: hidden;
-}
-.message-content :deep(.code-block-header) {
-  padding: 4px 10px;
-  font-size: 11px;
-  color: #888;
-  background: #151515;
-  border-bottom: 1px solid #222;
-}
-.message-content :deep(.code-block pre) {
-  margin: 0;
-  padding: 10px;
-  font-size: 12px;
-  overflow-x: auto;
-}
-.message-content :deep(.code-inline) {
-  margin: 8px 0;
-  padding: 10px;
-  background: #111;
-  border-radius: 4px;
-  font-size: 12px;
-  overflow-x: auto;
-}
-.message-content :deep(.inline-code) {
-  background: #222;
-  padding: 1px 5px;
-  border-radius: 3px;
-  font-size: 12px;
+.workspace-item:hover {
+  background: #252525;
 }
 
-/* Scrollbar */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+.ws-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
-::-webkit-scrollbar-track {
+
+.ws-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: #e0e0e0;
+}
+
+.ws-type {
+  font-size: 12px;
+  color: #888;
+}
+
+.ws-actions {
+  margin-bottom: 12px;
+}
+
+.ws-actions-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ws-delete-btn {
+  font-size: 12px;
+  padding: 2px 6px;
+}
+
+/* ============ Scrollbar ============ */
+.chat-area::-webkit-scrollbar {
+  width: 6px;
+}
+
+.chat-area::-webkit-scrollbar-track {
   background: transparent;
 }
-::-webkit-scrollbar-thumb {
-  background: #333;
+
+.chat-area::-webkit-scrollbar-thumb {
+  background: #2a2a2a;
   border-radius: 3px;
 }
-::-webkit-scrollbar-thumb:hover {
-  background: #555;
+
+.chat-area::-webkit-scrollbar-thumb:hover {
+  background: #3a3a3a;
 }
 </style>

@@ -18,9 +18,10 @@ from app.coding.scenes import SceneType, get_scene, get_all_scenes, get_scenes_b
 from app.coding.generator import CodingGenerator, parse_files_from_response, CodeGenerationResult
 from app.coding.templates import get_project_template
 from app.coding.prompts import get_scene_prompt
-from app.coding.workspace import WorkspaceManager, ProjectType
+from app.coding.workspace import WorkspaceManager, ProjectType, WORKSPACE_ROOT
 from app.llm_client import LLMClient
 from app.apaas_client import APaaSClient
+from app.coding.verifier import ComponentVerifier
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/coding", tags=["coding"])
@@ -69,6 +70,14 @@ class WriteFileRequest(BaseModel):
     """写入文件请求"""
     file_path: str
     content: str
+
+
+class AutoPipelineRequest(BaseModel):
+    """自动化 Pipeline 请求（对话式开发）"""
+    message: str                           # 用户需求描述
+    workspace_id: Optional[str] = None     # 已有工作区（迭代修改）
+    conversation_id: Optional[int] = None  # 已有对话
+    app_id: Optional[str] = None           # aPaaS 应用ID
 
 
 # ============================================================
@@ -397,6 +406,83 @@ async def build_workspace(
         raise HTTPException(status_code=404, detail="工作区不存在")
 
 
+@router.get("/workspace/{ws_id}/download")
+async def download_workspace_zip(
+    ws_id: str,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    type: str = Query(default="dist", description="下载类型: dist=构建产物, src=源代码"),
+):
+    """下载工作区打包文件（zip）"""
+    import zipfile
+    import io
+    from fastapi.responses import StreamingResponse
+
+    try:
+        info = workspace_mgr.get_workspace_info(ws_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="工作区不存在")
+
+    ws_path = WORKSPACE_ROOT / ws_id
+    project_name = info.get("project_name", ws_id)
+
+    if type == "dist":
+        # 下载构建产物
+        dist_path = ws_path / "dist"
+        if not dist_path.exists():
+            raise HTTPException(status_code=400, detail="请先构建项目")
+        target_path = dist_path
+        zip_name = f"{project_name}.zip"
+    else:
+        # 下载源代码（排除 node_modules 和 dist）
+        target_path = ws_path
+        zip_name = f"{project_name}-src.zip"
+
+    # 创建 zip
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for file_path in target_path.rglob("*"):
+            if file_path.is_file():
+                rel = file_path.relative_to(target_path)
+                rel_str = str(rel)
+                # 排除 node_modules、dist（源码模式）、.DS_Store 等
+                if any(part in rel_str for part in ['node_modules', '.DS_Store']):
+                    continue
+                if type == "src" and rel_str.startswith("dist"):
+                    continue
+                zf.write(file_path, rel)
+
+        # dist 模式下，额外加入 apaas.json 和 static 目录（平台需要它们来识别组件）
+        if type == "dist":
+            apaas_json = ws_path / "src" / "apaas.json"
+            if apaas_json.exists():
+                zf.write(apaas_json, "apaas.json")
+
+            # 加入 static/custom/组件名/ 目录（平台需要此目录结构）
+            # 从 apaas.json 的 copyAssets 读取，或用 project_name 兜底
+            import json as _json
+            try:
+                apaas_cfg = _json.loads(apaas_json.read_text())
+                copy_assets = apaas_cfg.get("copyAssets", [])
+            except Exception:
+                copy_assets = []
+
+            # 创建 static 目录占位（空目录需要加一个 entry）
+            if copy_assets:
+                for asset_path in copy_assets:
+                    # public/form-component/xxx -> static/form-component/xxx/
+                    static_dir = asset_path.replace("public/", "static/", 1)
+                    zf.writestr(f"{static_dir}/", "")
+            else:
+                zf.writestr(f"static/custom/{project_name}/", "")
+
+    buffer.seek(0)
+    return StreamingResponse(
+        buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{zip_name}"'}
+    )
+
+
 @router.get("/workspace/{ws_id}")
 async def get_workspace_info(
     ws_id: str,
@@ -553,18 +639,33 @@ async def _save_coding_message(
 
 
 def _build_workspace_context(ws_id: str) -> dict:
-    """构建工作区上下文，用于告知 AI 现有文件结构"""
+    """构建工作区上下文，用于告知 AI 现有文件结构和关键文件内容"""
     try:
         info = workspace_mgr.get_workspace_info(ws_id)
         files = info.get("files", [])
 
-        # 只读取 .vue 文件供 AI 参考（这些是需要修改的核心文件）
-        vue_files = [f for f in files if f.endswith(".vue")]
+        # 读取所有 AI 需要参考的关键文件
+        # 包括：所有 .vue 文件、widget.config.js、editor.config.js、apaas.json、mixin
+        key_extensions = ('.vue', '.widget.config.js', '.editor.config.js')
+        key_names = ('apaas.json', 'form-widget.mixin.js')
+
+        key_file_paths = []
+        for fp in files:
+            basename = fp.split('/')[-1] if '/' in fp else fp
+            if any(fp.endswith(ext) for ext in key_extensions):
+                key_file_paths.append(fp)
+            elif basename in key_names:
+                key_file_paths.append(fp)
 
         key_files = {}
-        for fp in vue_files[:4]:
+        for fp in key_file_paths:
             try:
                 content = workspace_mgr.read_file(ws_id, fp)
+                # 跳过过大的文件（如 mixin > 800行），只传摘要
+                lines = content.split('\n')
+                if len(lines) > 300:
+                    # 对于大文件只传前50行 + 最后20行
+                    content = '\n'.join(lines[:50]) + '\n// ... (省略中间部分) ...\n' + '\n'.join(lines[-20:])
                 key_files[fp] = content
             except Exception:
                 pass
@@ -617,3 +718,455 @@ async def _get_app_context(user: User, app_id: str) -> dict:
     except Exception as e:
         logger.warning(f"获取应用上下文失败: {e}")
         return None
+
+
+# ============================================================
+# 自动化 Pipeline（对话式开发）
+# ============================================================
+
+workspace_mgr = WorkspaceManager()
+
+
+@router.post("/auto-pipeline")
+async def auto_pipeline(
+    req: AutoPipelineRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """
+    自动化 Pipeline（对话式组件开发）
+    串联：检测场景 → 创建工作区 → 生成代码 → 安装依赖 → 启动serve
+    迭代模式（有workspace_id）：生成代码 → 写入文件（热更新自动生效）
+    """
+    user = ctx.user
+    generator = CodingGenerator()
+    ws_mgr = WorkspaceManager()
+
+    async def pipeline_events():
+        ws_id = req.workspace_id
+        conversation_id = req.conversation_id
+        is_iteration = ws_id is not None
+
+        try:
+            # ---- 意图检测：debug/调试/预览/发布 ----
+            msg_lower = req.message.strip().lower()
+            is_debug_intent = any(kw in msg_lower for kw in ['debug', '调试', '预览', '帮我debug', '启动debug', '启动调试'])
+            is_publish_intent = any(kw in msg_lower for kw in ['发布', '打包', '上传', 'publish', 'build'])
+
+            if is_debug_intent and ws_id:
+                yield _sse({"type": "step", "step": "debug", "status": "running", "data": {"message": "正在自动登录平台..."}})
+                ws_path = WORKSPACE_ROOT / ws_id
+                apaas_json_path = ws_path / "src" / "apaas.json"
+                import json as _json
+                apaas_config = _json.loads(apaas_json_path.read_text()) if apaas_json_path.exists() else {}
+                output_name = apaas_config.get("outputName", "")
+                custom_widget_list = apaas_config.get("customWidgetList", [])
+
+                # 确保 serve 在运行
+                serve_info = ws_mgr.is_serve_running(ws_id)
+                if not serve_info["running"]:
+                    yield _sse({"type": "step", "step": "serve", "status": "running"})
+                    serve_result = await ws_mgr.start_serve(ws_id)
+                    serve_port = serve_result.get("port", 8080)
+                    yield _sse({"type": "step", "step": "serve", "status": "done"})
+                else:
+                    serve_port = serve_info["port"]
+
+                # 自动化 Debug（登录 + 导航 + 截图）
+                debug_result = await ws_mgr.start_auto_debug(
+                    ws_id=ws_id, serve_port=serve_port,
+                    platform_url="https://apaas-dev8.dfy.definesys.cn/platform/",
+                    tenant_id="566642786573484033", app_id="806997227284201472",
+                    output_name=output_name, custom_widget_list=custom_widget_list,
+                )
+
+                if debug_result.get("status") == "ok":
+                    yield _sse({"type": "step", "step": "debug", "status": "done"})
+
+                    # Send screenshot URLs to frontend
+                    screenshots = debug_result.get("screenshots", [])
+                    for sc in screenshots:
+                        yield _sse({"type": "screenshot", "url": f"/api/coding/workspace/{ws_id}/debug/screenshot/{sc}"})
+
+                    # AI verification
+                    yield _sse({"type": "step", "step": "verify", "status": "running", "data": {"message": "AI 正在分析截图..."}})
+                    verifier = ComponentVerifier()
+                    requirement = req.message
+                    verify_result = await verifier.analyze_screenshot(ws_id, requirement)
+
+                    if verify_result.passed:
+                        yield _sse({"type": "step", "step": "verify", "status": "done"})
+                        yield _sse({"type": "content", "content": "组件验证通过！组件在表单设计器中正常显示。"})
+                    else:
+                        yield _sse({"type": "step", "step": "verify", "status": "error"})
+                        yield _sse({"type": "content", "content": f"发现问题：{verify_result.issues}\n\n修复建议：{verify_result.fix_suggestion}"})
+                else:
+                    yield _sse({"type": "step", "step": "debug", "status": "error"})
+                    yield _sse({"type": "content", "content": f"Debug 启动失败: {debug_result.get('message', '')}"})
+
+                yield _sse({"type": "done", "workspace_id": ws_id, "conversation_id": conversation_id})
+                return
+
+            if is_publish_intent and ws_id:
+                yield _sse({"type": "step", "step": "build", "status": "running", "data": {"message": "正在构建打包..."}})
+                try:
+                    zip_path = await ws_mgr.build_and_package(ws_id)
+                    yield _sse({"type": "step", "step": "build", "status": "done"})
+                    yield _sse({"type": "content", "content": f"✅ 构建完成！\n\n请点击顶部的「打包发布」按钮下载 zip 文件，然后上传到 aPaaS 平台。"})
+                except Exception as e:
+                    yield _sse({"type": "step", "step": "build", "status": "error"})
+                    yield _sse({"type": "content", "content": f"❌ 构建失败: {str(e)}"})
+                yield _sse({"type": "done", "workspace_id": ws_id, "conversation_id": conversation_id})
+                return
+
+            # ---- 意图判断：修改当前组件 vs 做新组件 ----
+            if is_iteration:
+                # 有工作区时，判断用户是想修改当前组件还是做一个全新的组件
+                is_new_component = await _is_new_component_intent(generator, req.message, ws_id, ws_mgr)
+                if is_new_component:
+                    # 用户想做新组件 → 自动创建新工作区
+                    is_iteration = False
+                    ws_id = None
+                    yield _sse({"type": "content", "content": "💡 检测到你想做一个新组件，正在为你创建新的工作区...\n\n"})
+
+            # ---- Step 1: 检测场景 ----
+            if not is_iteration:
+                yield _sse({"type": "step", "step": "detect_scene", "status": "running"})
+                scene_type = await generator.detect_scene(req.message)
+                yield _sse({"type": "step", "step": "detect_scene", "status": "done",
+                            "data": {"scene_type": scene_type.value}})
+            else:
+                # 迭代模式：从工作区元数据推断场景类型
+                info = ws_mgr.get_workspace_info(ws_id)
+                pt = info.get("project_type", "form-component")
+                scene_map = {
+                    "form-component": SceneType.WEB_COMPONENT,
+                    "form-page": SceneType.WEB_PAGE,
+                    "form-list": SceneType.WEB_LIST_VIEW,
+                    "backend-api": SceneType.BACKEND_API,
+                }
+                scene_type = scene_map.get(pt, SceneType.WEB_COMPONENT)
+
+            # ---- Step 2: 创建工作区 ----
+            if not is_iteration:
+                yield _sse({"type": "step", "step": "create_workspace", "status": "running"})
+                # 从需求中提取项目名
+                project_name = await _extract_project_name(generator, req.message)
+                project_type_str = _scene_to_project_type(scene_type)
+                project_type_enum = ProjectType(project_type_str)
+                meta = ws_mgr.create_workspace(project_type_enum, project_name, user.id)
+                ws_id = meta["id"]
+                yield _sse({"type": "step", "step": "create_workspace", "status": "done",
+                            "data": {"workspace_id": ws_id, "project_name": meta["project_name"]}})
+
+            # ---- Step 3: 生成代码 ----
+            yield _sse({"type": "step", "step": "generate", "status": "running"})
+
+            # 获取对话历史
+            history = []
+            if conversation_id:
+                history = await _get_conversation_history(db, conversation_id)
+
+            # 获取应用上下文
+            app_context = None
+            if req.app_id and user.apaas_token:
+                app_context = await _get_app_context(user, req.app_id)
+
+            # 获取工作区上下文
+            workspace_context = _build_workspace_context(ws_id)
+
+            # 创建或获取对话
+            if not conversation_id:
+                conv = Conversation(
+                    title=req.message[:50],
+                    user_id=user.id,
+                    tenant_id=ctx.tenant_id,
+                    agent_type="coding",
+                    workspace_id=ws_id,
+                )
+                db.add(conv)
+                await db.commit()
+                await db.refresh(conv)
+                conversation_id = conv.id
+
+            await _save_coding_message(db, conversation_id, "user", req.message)
+
+            # 流式生成代码
+            full_response = ""
+            async for chunk in generator.generate_stream(
+                scene_type=scene_type,
+                user_requirement=req.message,
+                conversation_history=history,
+                app_context=app_context,
+                workspace_context=workspace_context,
+            ):
+                full_response += chunk
+                yield _sse({"type": "content", "content": chunk})
+
+            await _save_coding_message(db, conversation_id, "assistant", full_response)
+
+            # 解析并写入文件
+            generated_files = parse_files_from_response(full_response)
+            written_files = []
+            # 保护关键脚手架文件不被 AI 覆盖
+            protected_files = {"package.json", "vue.config.js", "babel.config.js", "jsconfig.json",
+                               "src/index.js", "src/apaas.json"}
+            for gf in generated_files:
+                if gf.path in protected_files:
+                    logger.info(f"跳过受保护文件: {gf.path}")
+                    continue
+                try:
+                    ws_mgr.write_file(ws_id, gf.path, gf.content)
+                    written_files.append(gf.path)
+                except Exception as e:
+                    logger.warning(f"写入文件失败 {gf.path}: {e}")
+
+            yield _sse({"type": "step", "step": "generate", "status": "done",
+                        "data": {"files": written_files, "file_count": len(written_files)}})
+
+            # ---- 迭代模式到此结束（serve 热更新自动生效）----
+            if is_iteration:
+                # 检查 serve 是否在运行
+                serve_status = ws_mgr.is_serve_running(ws_id)
+                yield _sse({"type": "step", "step": "hot_reload", "status": "done",
+                            "data": {"serve_running": serve_status["running"],
+                                     "port": serve_status.get("port")}})
+                yield _sse({"type": "done", "workspace_id": ws_id,
+                            "conversation_id": conversation_id})
+                return
+
+            # ---- Step 4: 安装依赖（首次创建）----
+            yield _sse({"type": "step", "step": "install", "status": "running"})
+            install_result = await ws_mgr.install_deps(ws_id)
+            if install_result["status"] == "error":
+                yield _sse({"type": "step", "step": "install", "status": "error",
+                            "data": {"message": install_result["message"]}})
+            else:
+                yield _sse({"type": "step", "step": "install", "status": "done"})
+
+            # ---- Step 5: 启动 serve ----
+            yield _sse({"type": "step", "step": "serve", "status": "running"})
+            serve_result = await ws_mgr.start_serve(ws_id)
+            yield _sse({"type": "step", "step": "serve", "status": "done" if serve_result["status"] == "ok" else "error",
+                        "data": {"port": serve_result.get("port"),
+                                 "url": f"https://localhost:{serve_result.get('port', 8080)}/"}})
+
+            yield _sse({"type": "done", "workspace_id": ws_id,
+                        "conversation_id": conversation_id})
+
+        except Exception as e:
+            logger.exception("auto-pipeline 错误")
+            yield _sse({"type": "error", "message": str(e)})
+
+    return EventSourceResponse(pipeline_events())
+
+
+@router.post("/workspace/{ws_id}/serve")
+async def manage_serve(
+    ws_id: str,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    action: str = Query(default="start", description="start 或 stop"),
+):
+    """启动或停止工作区的 serve 进程"""
+    ws_mgr = WorkspaceManager()
+    if action == "start":
+        result = await ws_mgr.start_serve(ws_id)
+    elif action == "stop":
+        result = await ws_mgr.stop_serve(ws_id)
+    else:
+        raise HTTPException(status_code=400, detail="action 必须是 start 或 stop")
+    return result
+
+
+@router.get("/workspace/{ws_id}/serve-status")
+async def get_serve_status(
+    ws_id: str,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+):
+    """查询 serve 运行状态"""
+    ws_mgr = WorkspaceManager()
+    return ws_mgr.is_serve_running(ws_id)
+
+
+@router.post("/workspace/{ws_id}/publish")
+async def publish_workspace(
+    ws_id: str,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+):
+    """构建 + 打包 zip（一键发布）"""
+    ws_mgr = WorkspaceManager()
+    try:
+        zip_path = await ws_mgr.build_and_package(ws_id)
+        # 返回下载链接
+        from fastapi.responses import FileResponse
+        return FileResponse(
+            zip_path,
+            media_type="application/zip",
+            filename=zip_path.split("/")[-1] if isinstance(zip_path, str) else zip_path.name,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/workspace/{ws_id}/debug/screenshot/{filename}")
+async def get_debug_screenshot(ws_id: str, filename: str):
+    """Serve debug screenshot image"""
+    import re
+    # Sanitize filename to prevent directory traversal
+    if not re.match(r'^[\w\-\.]+\.(png|jpg|jpeg)$', filename):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    screenshot_path = WORKSPACE_ROOT / ws_id / "debug" / "screenshots" / filename
+    if not screenshot_path.exists():
+        raise HTTPException(status_code=404, detail="Screenshot not found")
+    from fastapi.responses import FileResponse
+    return FileResponse(str(screenshot_path), media_type="image/png")
+
+
+class DebugRequest(BaseModel):
+    """Debug 请求"""
+    platform_url: str = "https://apaas-dev8.dfy.definesys.cn/platform/"
+    tenant_id: str = "566642786573484033"
+    app_id: str = "806997227284201472"
+
+
+@router.post("/workspace/{ws_id}/debug")
+async def debug_workspace(
+    ws_id: str,
+    req: DebugRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+):
+    """启动 Debug 模式：确保 serve 运行 + 启动 Puppeteer 注入组件到平台"""
+    ws_mgr = WorkspaceManager()
+
+    # 1. 确保 serve 在运行
+    serve_info = ws_mgr.is_serve_running(ws_id)
+    if not serve_info["running"]:
+        serve_result = await ws_mgr.start_serve(ws_id)
+        if serve_result["status"] != "ok":
+            raise HTTPException(status_code=500, detail=f"启动 serve 失败: {serve_result.get('message', '')}")
+        serve_port = serve_result["port"]
+    else:
+        serve_port = serve_info["port"]
+
+    # 2. 读取 apaas.json 获取组件信息
+    ws_path = WORKSPACE_ROOT / ws_id
+    apaas_json_path = ws_path / "src" / "apaas.json"
+    if not apaas_json_path.exists():
+        raise HTTPException(status_code=400, detail="apaas.json 不存在")
+
+    import json as _json
+    apaas_config = _json.loads(apaas_json_path.read_text())
+    output_name = apaas_config.get("outputName", "")
+    custom_widget_list = apaas_config.get("customWidgetList", [])
+
+    # 3. 启动 Puppeteer debug（后台进程）
+    debug_result = await ws_mgr.start_debug(
+        ws_id=ws_id,
+        serve_port=serve_port,
+        platform_url=req.platform_url,
+        tenant_id=req.tenant_id,
+        app_id=req.app_id,
+        output_name=output_name,
+        custom_widget_list=custom_widget_list,
+    )
+
+    return debug_result
+
+
+def _sse(data: dict) -> str:
+    """SSE 事件格式化"""
+    return json.dumps(data, ensure_ascii=False)
+
+
+def _scene_to_project_type(scene_type: SceneType) -> str:
+    """场景类型转项目类型"""
+    mapping = {
+        SceneType.WEB_COMPONENT: "form-component",
+        SceneType.WEB_PAGE: "form-page",
+        SceneType.WEB_LIST_VIEW: "form-list",
+        SceneType.BACKEND_API: "backend-api",
+        SceneType.MOBILE_COMPONENT: "form-component",
+        SceneType.MOBILE_PAGE: "form-page",
+    }
+    return mapping.get(scene_type, "form-component")
+
+
+async def _extract_project_name(generator: CodingGenerator, message: str) -> str:
+    """从用户需求中提取项目名称"""
+    import re
+
+    # 先用简单规则快速提取（不调 LLM）
+    keyword_map = {
+        "甘特图": "gantt-chart", "审批": "approval-flow", "进度条": "progress-bar",
+        "评分": "star-rating", "颜色选择": "color-picker", "标签": "tag-input",
+        "图表": "chart", "日期": "date-picker", "上传": "file-upload",
+        "头像": "avatar", "签名": "signature", "二维码": "qrcode",
+        "地图": "map-view", "富文本": "rich-text", "树形": "tree-select",
+        "级联": "cascader", "表格": "data-table", "看板": "kanban",
+    }
+    msg_lower = message.lower()
+    for cn, en in keyword_map.items():
+        if cn in msg_lower:
+            return en
+
+    # LLM 提取
+    try:
+        llm = LLMClient()
+        resp = await llm.chat_completion([
+            {"role": "system", "content": "从用户需求中提取一个简短的英文项目名称（kebab-case格式）。\n\n示例：\n- 做一个评分组件 → star-rating\n- 创建审批流程页面 → approval-flow\n- 甘特图组件 → gantt-chart\n\n直接返回名称，格式如 xxx-yyy，不要其他内容。"},
+            {"role": "user", "content": message}
+        ], max_tokens=100)
+        content = resp.get("choices", [{}])[0].get("message", {}).get("content", "")
+
+        # 从内容中用正则提取 kebab-case 名称
+        matches = re.findall(r'\b([a-z][a-z0-9]*(?:-[a-z0-9]+)+)\b', content.lower())
+        if matches:
+            # 取最后一个匹配（通常是最终答案）
+            name = matches[-1]
+            if name and name != "custom-component":
+                return name
+
+        # fallback：清理整个内容
+        name = re.sub(r'<think>[\s\S]*?</think>', '', content).strip()
+        name = name.strip('"').strip("'").lower()
+        name = re.sub(r'[^a-z0-9-]', '-', name).strip('-')
+        name = re.sub(r'-+', '-', name)
+        return name if name and len(name) > 2 and name != "custom-component" else "custom-component"
+    except Exception as e:
+        logger.warning(f"提取项目名失败: {e}")
+        return "custom-component"
+
+
+async def _is_new_component_intent(generator: CodingGenerator, message: str, ws_id: str, ws_mgr: WorkspaceManager) -> bool:
+    """判断用户消息是要修改当前组件还是做一个全新的组件"""
+    import re
+
+    # 快速关键词判断（不调 LLM）
+    msg_lower = message.lower()
+    new_keywords = ["做一个新", "创建一个新", "新建一个", "开发一个新", "新组件", "新工作区", "另一个组件"]
+    modify_keywords = ["修改", "改一下", "调整", "优化", "加个", "删掉", "改成", "换个", "bug", "fix",
+                       "空白", "渲染", "不对", "报错", "完善", "补充", "实现", "请用", "改为", "更新"]
+
+    has_new = any(kw in msg_lower for kw in new_keywords)
+    has_modify = any(kw in msg_lower for kw in modify_keywords)
+
+    if has_new and not has_modify:
+        return True
+    if has_modify and not has_new:
+        return False
+
+    # 都有或都没有，用 LLM 判断
+    try:
+        info = ws_mgr.get_workspace_info(ws_id)
+        project_name = info.get("project_name", "")
+
+        llm = LLMClient()
+        resp = await llm.chat_completion([
+            {"role": "system", "content": f"当前工作区的组件是 '{project_name}'。判断用户的消息是想【修改当前组件】还是想【做一个全新的、不同的组件】。回答中必须包含 MODIFY 或 NEW 这个词。"},
+            {"role": "user", "content": message}
+        ], max_tokens=50)
+        answer = resp.get("choices", [{}])[0].get("message", {}).get("content", "").upper()
+        return "NEW" in answer
+    except Exception as e:
+        logger.warning(f"意图判断失败: {e}")
+        return False

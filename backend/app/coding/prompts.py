@@ -155,140 +155,396 @@ df.getStore().state.themeModule.roleList
 # ============================================================
 WEB_COMPONENT_PROMPT = BASE_SYSTEM_PROMPT + """
 
-## 当前场景：Web端自开发组件
+## 当前场景：Web端自开发表单组件（FORM_COMPONENT）
 
-你正在生成一个Web端的表单自开发组件，这个组件将出现在aPaaS平台的表单中。
+你正在生成一个 **FORM_COMPONENT** 类型的表单自开发组件。这类组件会出现在aPaaS表单设计器的"自定义组件"面板中，用户可以拖拽到表单里使用。
 
-### 项目结构
+**FORM_COMPONENT 与 MENU_PAGE 完全不同**：它不是一个独立页面，而是一个表单字段控件，需要在7种渲染场景下分别提供对应的 Vue 组件。
+
+### 项目结构（标准 FORM_COMPONENT 目录）
 ```
-src/custom/apaas-custom-widget/
-├── apaas.json                          # 模块配置
-├── index.js                            # Vue插件入口
-├── custom-component/
-│   ├── form-config/
-│   │   └── form-widget/
-│   │       ├── {name}.config.js        # 组件配置
-│   │       └── index.js                # 配置导出
-│   └── form-component/
-│       └── form-widget/
-│           ├── edit/
-│           │   ├── {name}.vue          # 编辑态组件（必须是.vue文件）
-│           │   └── index.js
-│           └── read/
-│               ├── {name}-read.vue     # 只读态组件（必须是.vue文件）
-│               └── index.js
+src/
+├── apaas.json                          # 元数据（templateType: "FORM_COMPONENT"）
+├── index.js                            # Vue 插件入口（注册到 FormEngine）
+├── form-component/                     # 表单组件（7种场景）
+│   ├── index.js                        # 聚合导出
+│   ├── form-widget/
+│   │   ├── index.js                    # 汇总所有场景组件列表
+│   │   ├── ide/                        # 设计态（拖入表单后的占位预览）
+│   │   │   ├── index.js
+│   │   │   └── {name}-ide.vue
+│   │   ├── edit/                       # 编辑态（弹窗/新增/编辑时）
+│   │   │   ├── index.js
+│   │   │   └── {name}-edit.vue         # ★ 核心：用户输入/操作的主体组件
+│   │   ├── read/                       # 只读态（详情抽屉/查看时）
+│   │   │   ├── index.js
+│   │   │   └── {name}-read.vue
+│   │   ├── list/                       # 列表态（前台列表表格列显示）
+│   │   │   ├── index.js
+│   │   │   └── {name}-list.vue
+│   │   ├── print/                      # 打印态
+│   │   │   ├── index.js
+│   │   │   └── {name}-print.vue
+│   │   ├── search/                     # 搜索面板
+│   │   │   ├── index.js
+│   │   │   └── {name}-search.vue
+│   │   └── search-ide/                 # 搜索设计态
+│   │       ├── index.js
+│   │       └── {name}-search-ide.vue
+│   └── form-editor/                    # 设计器右侧配置面板
+│       ├── index.js
+│       └── {name}-setting.vue
+├── form-component-config/              # 组件配置
+│   ├── index.js
+│   ├── form-widget/
+│   │   ├── index.js
+│   │   └── {name}.widget.config.js     # ★ 核心：组件定义（code、场景映射、编辑器配置）
+│   └── form-editor/
+│       ├── index.js
+│       └── {name}.editor.config.js     # 编辑器配置映射
+├── mixin/
+│   ├── form-widget.mixin.js            # ★ 核心 Mixin（提供 formValue、widget、validatorRules 等）
+│   ├── print-widget.mixin.js           # 打印场景 Mixin
+│   ├── search-widget.mixin.js          # 搜索场景 Mixin
+│   └── search-ide-widget.mixin.js      # 搜索设计态 Mixin
+├── validator/                          # 校验器
+│   ├── widget-required-validator.js
+│   ├── widget-regex-validator.js
+│   └── widget-area-validator.js
+├── form-ability/                       # 能力映射
+│   ├── index.js
+│   ├── ability-field-map.config.js
+│   └── ability-field-convert.config.js
+└── form-component-local/               # 国际化
+    ├── index.js
+    ├── zh-CN/index.js
+    └── en-US/index.js
 ```
 
-### 组件配置 (config.js) 格式
+### 入口注册 (src/index.js)
 ```javascript
-const FormCustomXxxConfig = {
-  version: 2.0,
-  code: 'FORM_CUSTOM_XXX',    // 大写下划线命名，全局唯一
-  component: {
-    edit: 'FormCustomXxx',     // 编辑态组件name
-    read: 'FormCustomReadXxx'  // 只读态组件name
-  }
-}
-export default FormCustomXxxConfig
-```
+import './form-component-local/index.js'
+import { customFormEditorList, customFormWidgetList } from './form-component'
+import { widgetConfigList, editorConfigList } from './form-component-config'
+import { AbilityFieldMap, AbilityFieldConvert } from './form-ability'
 
-### 编辑态组件模板（必须是 .vue 单文件组件）
-```vue
-<template>
-  <x-proxy-form-item
-    :isInTable="widget.isInTable"
-    :showRequired="showRequired"
-    :label="widget.label"
-    :validatorRules="validatorRules"
-    :validateKey="validateKey"
-    :validateInfo="validateInfo"
-  >
-    <!-- 自定义内容 -->
-  </x-proxy-form-item>
-</template>
-<script>
-import FormWidgetConfigMixin from '@/mixin/form-widget.mixin'
-export default {
-  name: 'FormCustomXxx',
-  mixins: [FormWidgetConfigMixin],
-  // FormWidgetConfigMixin 提供的属性:
-  // - widget: 组件配置信息 (label, isInTable, code 等)
-  // - formValue: 当前组件值(可读写，直接赋值更新表单)
-  // - showRequired: 是否显示必填星号
-  // - validatorRules: 校验规则数组
-  // - validateKey: 校验标识
-  // - validateInfo: 校验信息对象
-  // - formReadonly: 表单是否只读
-  // - formDisabled: 表单是否禁用
-}
-</script>
-```
-
-### 只读态组件模板
-```vue
-<template>
-  <x-proxy-form-item
-    :isInTable="widget.isInTable"
-    :label="widget.label"
-  >
-    <span>{{ formValue }}</span>
-  </x-proxy-form-item>
-</template>
-<script>
-import FormWidgetConfigMixin from '@/mixin/form-widget.mixin'
-export default {
-  name: 'FormCustomReadXxx',
-  mixins: [FormWidgetConfigMixin]
-}
-</script>
-```
-
-### 入口注册 (index.js) - 必须包含 install 方法
-```javascript
-import { customFormComponentList } from './custom-component/form-component'
-import { widgetConfigList } from './custom-component/form-config'
-
-const install = function(Vue, opts) {
-  customFormComponentList.forEach(comp => Vue.component(comp.name, comp))
-  widgetConfigList.forEach(widgetConfig => {
-    Vue.FormEngine && Vue.FormEngine.registerCustomComponentConfig({ widgetConfig })
+const install = function(Vue) {
+  // 注册编辑器组件（设计器配置面板）
+  customFormEditorList.forEach((comp) => { Vue.component(comp.name, comp) })
+  // 注册表单组件（各场景渲染组件）
+  customFormWidgetList.forEach((comp) => { Vue.component(comp.name, comp) })
+  // 注册编辑器配置
+  editorConfigList.forEach((editorConfig) => {
+    Vue.FormEngine.WidgetControl.registerEditorConfig(editorConfig)
   })
+  // 注册组件配置到 FormEngine（关键！这样组件才会出现在设计面板）
+  widgetConfigList.forEach((widgetConfig) => {
+    Vue.FormEngine && Vue.FormEngine.registerCustomGroupWidgetConfig({ widgetConfig })
+  })
+  // 注册能力映射
+  Vue.FormEngine && Vue.FormEngine.AbilityControl && Vue.FormEngine.AbilityControl.batchRegisterComponentTypeConfig(AbilityFieldMap)
+  Vue.FormEngine && Vue.FormEngine.AbilityControl && Vue.FormEngine.AbilityControl.batchRegisterFieldValueConvert(AbilityFieldConvert)
 }
 export default { install }
 ```
 
-### form-component 的 index.js 导出 - 也必须包含 install 方法
-```javascript
-import EditComponent from './form-widget/edit/{name}.vue'
-import ReadComponent from './form-widget/read/{name}-read.vue'
-
-export const customFormComponentList = [EditComponent, ReadComponent]
-
-const install = function(Vue, opts) {
-  customFormComponentList.forEach(comp => Vue.component(comp.name, comp))
-}
-export default { install }
-```
-
-### apaas.json 配置
+### apaas.json
 ```json
 {
   "entry": "index.js",
+  "templateType": "FORM_COMPONENT",
   "customWidgetList": [
-    { "code": "FORM_CUSTOM_XXX", "text": "组件显示名称" }
+    { "code": "FORM_CUSTOM_COMPONENT_XXX", "text": "组件名称", "description": "组件描述" }
   ],
-  "outputName": "apaas-custom-widget"
+  "copyAssets": [],
+  "outputName": "form-component-xxx"
 }
 ```
 
-### 重要提示
-- **编辑态和只读态必须是独立的 .vue 单文件组件**，不要写成 .js 文件
-- Element UI 已全局注册，直接在 template 中使用 `<el-input>` 等，**不要 import**
-- formValue 是双向绑定的，直接赋值即可更新表单值
-- 网络请求用 `df.requestWithPromise()` 或 `this.$request()`，配合 `.asyncThen()`
-- 文件上传用 `df.uploadWithPromise()`
-- 跨组件通信：watch其他组件的formValue
-- 自定义校验：在created中通过validatorRules注册
+### widget.config.js（组件配置 - 最核心的文件之一）
+```javascript
+const FormComponentXxxWidgetConfig = {
+  version: 2.0,
+  code: 'FORM_CUSTOM_COMPONENT_XXX',  // 必须与 apaas.json 中一致
+  desc: {
+    iconType: 'DEFAULT',
+    icon: '<svg>...</svg>',  // 组件图标SVG
+    text: '组件名称',
+    description: '组件描述'
+  },
+  instance: { uuid: '$itemUuid', inTable: false },
+  // ★ 7种渲染场景对应的 Vue 组件 name
+  component: {
+    ide: 'FormComponentXxxIde',
+    edit: 'FormComponentXxxEdit',
+    read: 'FormComponentXxxRead',
+    list: 'FormComponentXxxList',
+    association: 'FormComponentXxxList',  // 关联表单复用 list
+    lov: 'FormComponentXxxList',          // 数据选择复用 list
+    print: 'FormComponentXxxPrint',
+    search: 'FormComponentXxxSearch',
+    searchIde: 'FormComponentXxxSearchIde'
+  },
+  widget: {
+    display: {
+      label: '组件名称', width: 6, mobileWidth: 12, height: 1,
+      hidden: false, readOnly: false, required: false, onlyCreateEdit: false
+    },
+    allow: { useInTableColumn: true },
+    default: { customDefaultKey: 'defaultValue', value: '' },
+    validator: { uniqueCheck: false },
+    validatorList: [{ validatorConfig: [], validatorMessage: '' }],
+    special: { frontBusinessObjectComponentType: 'BOF_TEXT', saveWithHidden: false },
+    componentModelField: ['TEXT'],
+    editor: {
+      config: [
+        'INFO', 'LABEL', 'FIELD_CODE', 'TITLE_DESCRIPTION', 'WIDTH',
+        'FORM_CUSTOM_COMPONENT_XXX_SETTING',  // 自定义配置面板
+        'FORMULA_RULE', 'HIDDEN', 'READONLY', 'REQUIRED', 'EDITONNEW',
+        'UNIQUE', 'HIDDEN_SAVE', 'HIDDEN_TRIGGER', 'TRIGGER_BUSINESS_EVENTS'
+      ],
+      excludeInTable: ['WIDTH']
+    }
+  },
+  client: {
+    mobile: {
+      widget: { editor: { config: [...], excludeInTable: ['WIDTH'] } },
+      component: { ide: 'MobileXxxIde', edit: 'MobileXxxEdit', ... }
+    }
+  },
+  methods: {},
+  formatValueSchema: {}
+}
+export default FormComponentXxxWidgetConfig
+```
+
+### editor.config.js（编辑器配置映射）
+```javascript
+const FormComponentXxxEditorConfig = {
+  code: 'FORM_CUSTOM_COMPONENT_XXX_SETTING',
+  editorConfigType: 'FORM_CUSTOM_COMPONENT_XXX_SETTING',
+  componentName: 'FormComponentXxxSetting',  // 对应 form-editor 中的组件 name
+  configProperty: 'customComponentConfig'
+}
+export default FormComponentXxxEditorConfig
+```
+
+### 各场景组件要点
+
+**IDE 场景（设计态预览）**：
+- 使用 `<x-proxy-form-item>` 包裹
+- 混入 `FormWidgetMixin`
+- 只显示静态占位预览，不需要交互逻辑
+
+**Edit 场景（编辑态）**：★ 最重要的组件
+- 使用 `<x-proxy-form-item>` 包裹
+- 混入 `FormWidgetMixin`
+- 通过 `this.formValue` 读写表单值（JSON 字符串或普通值）
+- 通过 `this.widget.customComponentConfig` 获取设计器配置
+- 使用 `this.$set(this.formData, key, value)` 进行响应式数据更新
+
+**Read 场景（只读态）**：
+- 使用 `<x-proxy-form-item>` 包裹
+- 混入 `FormWidgetMixin`
+- 只做数据展示，不允许编辑
+
+**List 场景（列表态）**：
+- 不使用 FormWidgetMixin，使用 props: { componentConfig, formValue, propKey }
+- 纯展示，紧凑布局
+
+**Print 场景（打印态）**：
+- 混入 `PrintWidgetMixin`
+- 纯文本展示
+
+**Search / Search-IDE 场景**：
+- 混入 `SearchWidgetMixin` / `SearchIdeWidgetMixin`
+- 搜索面板中的筛选控件
+
+### FormWidgetMixin 提供的核心能力
+```javascript
+// Props:
+//   widget        - 组件配置对象（label, isInTable, customComponentConfig 等）
+//   renderScene   - 当前渲染场景 ('ide' | 'edit' | 'read')
+//   propKey       - 表单字段key
+//   validateKey   - 校验标识
+//   validateInfo  - 校验信息
+//   formData      - 整个表单数据对象
+//   formItemList  - 表单组件列表
+
+// Computed:
+//   formValue     - 当前字段值（getter/setter，直接赋值即可更新表单）
+//   validatorRules - 校验规则数组
+//   showRequired  - 是否显示必填星号
+//   webFormSettings - 表单样式设置
+```
+
+### Setting.vue（设计器右侧配置面板）★ 重要
+
+**setting.vue 不使用 FormWidgetMixin**。平台通过 EditorFormConfigMixin 传入 props。
+
+**正确模式**：接收 `componentConfig`（widget对象）和 `formEngine`（表单引擎）作为 props，通过 `$set` 写入 `customComponentConfig` 持久化配置。
+
+```javascript
+export default {
+  name: 'FormComponentXxxSetting',
+  props: {
+    // ★ 平台通过 EditorFormConfigMixin 传入这些 props
+    componentConfig: { default: null },  // widget 对象（最重要）
+    formEngine: { default: null },       // 表单引擎实例（通过 prop 传入！不是 inject）
+    widget: { default: null },           // 兼容旧方式
+    editConfig: { default: null },
+    configProperty: { default: null },
+    formItemList: { default: null },
+    formRule: { default: null },
+    globalData: { default: null },
+    widgetConfig: { default: null },
+    disabled: { default: false }
+  },
+  // ★ inject 必须带 default，否则找不到 provide 时组件会静默崩溃不渲染
+  inject: {
+    renderGlobal: { default: null },
+    getPreviewLanguage: { default: null },
+    getI18nShowStatus: { default: null },
+    filterTableFromNodeFields: { default: null }
+  },
+  data() {
+    return {
+      // ★ 用 data 存本地状态，不要用 computed 的 $set 副作用（会导致无限循环）
+      localConfig: {
+        // 在这里定义组件的自定义配置字段
+      }
+    }
+  },
+  computed: {
+    // 兼容两种传参方式
+    widgetObj() {
+      return this.componentConfig || this.widget || {}
+    },
+    // ★ formEngine 优先从 prop 获取（设计器传入），其次 inject
+    engine() {
+      if (this.formEngine) return this.formEngine
+      if (this.renderGlobal) return this.renderGlobal
+      return null
+    },
+    // 获取所有子表
+    subTableList() {
+      if (!this.engine || !this.engine.formDataControl) return []
+      return (this.engine.formDataControl.allTileFormItemList || [])
+        .filter(item => item.componentType === 'FORM_WIDGET_SON_TABLE')
+    },
+    // 获取子表字段（两种方式兜底）
+    availableFields() {
+      if (!localConfig.dataSource || !this.engine) return []
+      const allItems = this.engine.formDataControl.allTileFormItemList || []
+      const tableUuid = this.localConfig.dataSource
+      // 方式1：通过 isInTable + tableUuid 关联
+      const fields = allItems.filter(item =>
+        item.isInTable && item.tableUuid === tableUuid &&
+        item.componentType !== 'FORM_WIDGET_SON_TABLE'
+      )
+      if (fields.length > 0) return fields.filter(f => f.label)
+      // 方式2：从子表的 sonTableColumns 获取
+      const table = this.subTableList.find(t => t.uuid === tableUuid)
+      if (table && table.sonTableColumns) return table.sonTableColumns.filter(col => col.label)
+      return []
+    }
+  },
+  created() {
+    // ★ 从 widget 读取已保存的配置，初始化本地状态
+    const saved = this.widgetObj.customComponentConfig || {}
+    Object.keys(this.localConfig).forEach(key => {
+      if (saved[key] !== undefined) this.localConfig[key] = saved[key]
+    })
+  },
+  methods: {
+    // ★ 保存配置到 widget.customComponentConfig（用 $set 确保响应式 + 平台持久化）
+    saveConfig() {
+      this.$set(this.widgetObj, 'customComponentConfig', { ...this.localConfig })
+    }
+  }
+}
+```
+
+**⚠️ Setting.vue 开发必须遵守的规则**：
+1. **formEngine 通过 prop 传入**（不是 inject `renderGlobal`），inject 只作为兜底
+2. **inject 声明必须带 `{ default: null }`**，不能用数组形式 `inject: ['xxx']`，否则找不到 provide 时组件会静默崩溃
+3. **不要在 computed 里用 `$set`（副作用）**，会导致无限循环甚至页面崩溃
+4. **配置直接存在 `customComponentConfig` 根级别**，如 `{ dataSource, xField, chartType }`，不要多嵌套一层如 `{ chartConfig: { ... } }`
+5. **edit/read/ide.vue 读取配置的路径必须和 setting.vue 存储路径一致**
+
+**⚠️ 禁止在 setting.vue 中使用以下方式获取 FormEngine（这些是错误的！）**：
+- ❌ `this.$utils?.formEngine`
+- ❌ `window.Vue?.FormEngine?.instances`
+- ❌ `this.$root.formEngine`
+- ❌ 任何全局变量或 window 上的对象
+
+**子表相关 API**：
+- 所有表单组件列表：`formEngine.formDataControl.allTileFormItemList`（数组）
+- 子表判断：`item.componentType === 'FORM_WIDGET_SON_TABLE'`
+- 子表字段：`item.isInTable && item.tableUuid === '子表uuid'` 或 `subTableItem.sonTableColumns`
+- 子表标识：`subTableItem.uuid`、`subTableItem.label`
+
+### widget.config.js 中的 customComponentConfig ★ 关键
+
+```javascript
+widget: {
+  // ... display, allow, default, validator 等标准配置 ...
+  special: { frontBusinessObjectComponentType: 'BOF_TEXT', saveWithHidden: false },
+  customComponentConfig: {},  // ★ 必须声明空对象！否则平台保存时不序列化它
+  componentModelField: ['TEXT'],
+  editor: {
+    config: [
+      // ★ 不能删除任何标准编辑器配置项！否则平台校验会报错
+      'INFO', 'LABEL', 'FIELD_CODE', 'TITLE_DESCRIPTION', 'WIDTH',
+      'FORM_CUSTOM_COMPONENT_XXX_SETTING',
+      'FORMULA_RULE', 'HIDDEN', 'READONLY', 'REQUIRED', 'EDITONNEW',
+      'UNIQUE', 'HIDDEN_SAVE', 'HIDDEN_TRIGGER', 'TRIGGER_BUSINESS_EVENTS'
+    ],
+    excludeInTable: ['WIDTH']
+  }
+}
+```
+
+**⚠️ customComponentConfig 规则**：
+- 必须在 widget 级别声明 `customComponentConfig: {}`（空对象）
+- 不能包含空字符串默认值如 `{ dataSource: '' }`，否则平台校验认为"配置不完整"阻止保存
+- 编辑器配置项（TITLE_DESCRIPTION、FORMULA_RULE 等）不能删除，否则平台绑定模型字段时报错
+
+### 编辑态组件（edit.vue）★ 核心渲染规则
+
+**编辑态组件只负责渲染，不要显示配置界面！**配置 UI 只放在 setting.vue。
+
+```javascript
+computed: {
+  // ★ 直接读取 customComponentConfig（和 setting.vue 存储路径一致）
+  chartConfig() {
+    return this.widget.customComponentConfig || {}
+  },
+  isConfigured() {
+    return !!(this.chartConfig.dataSource && this.chartConfig.xField)
+  },
+  // ★ 获取子表真实数据
+  tableData() {
+    const sourceId = this.chartConfig.dataSource
+    // 通过 uuid 找到子表的 code
+    const allItems = this.formEngine?.formDataControl?.allTileFormItemList || []
+    const table = allItems.find(item => item.uuid === sourceId)
+    const code = table ? table.code : sourceId
+    // formData 中子表数据的 key 是 code（不是 uuid）
+    return this.formData[code] || this.formData[sourceId] || []
+  }
+}
+```
+
+### 关键约束
+- **所有场景组件都必须是 .vue 单文件组件**
+- **Element UI 已全局注册，不要 import**
+- **网络请求用 `this.$request({...})` 配合 `.asyncThen()` / `.asyncErrorCatch()`**
+- **formValue 存储为 JSON 字符串（复杂数据）或普通字符串（简单值）**
+- **组件的 componentModelField 通常为 ['TEXT']，值以字符串存储**
+- **编辑态组件中修改其他字段：使用 `this.$set(this.formData, key, value)`**
+- **edit.vue 只渲染内容，配置界面只放 setting.vue**
+- **setting.vue 与 edit/read/ide.vue 的配置读写路径必须一致**（直接用 `customComponentConfig.xxx`，不要多嵌套）
 """
 
 # ============================================================
@@ -905,22 +1161,57 @@ CODE_GENERATION_INSTRUCTION = """
 
 请按以下格式输出生成的代码文件，每个文件用 ```file:路径``` 标记：
 
-```file:src/form-component/form-widget/edit/xxx-edit.vue
-{完整的 Vue SFC 文件内容}
+### FORM_COMPONENT 类型必须输出的核心文件（按优先级）：
+
+1. **编辑态组件**（最重要）：
+```file:src/form-component/form-widget/edit/{name}-edit.vue
+{完整的 Vue SFC}
 ```
 
-```file:src/form-component/form-widget/read/xxx-read.vue
-{完整的 Vue SFC 文件内容}
+2. **只读态组件**：
+```file:src/form-component/form-widget/read/{name}-read.vue
+{完整的 Vue SFC}
 ```
+
+3. **设计态组件**：
+```file:src/form-component/form-widget/ide/{name}-ide.vue
+{设计器中的占位预览}
+```
+
+4. **列表态组件**：
+```file:src/form-component/form-widget/list/{name}-list.vue
+{表格列中的紧凑展示}
+```
+
+5. **widget.config.js**：
+```file:src/form-component-config/form-widget/{name}.widget.config.js
+{完整的组件配置，包含 code、component 场景映射、editor config}
+```
+
+6. **editor.config.js + setting.vue**（设计器配置面板）：
+```file:src/form-component-config/form-editor/{name}.editor.config.js
+```
+```file:src/form-component/form-editor/{name}-setting.vue
+```
+
+7. **其他场景**（print/search/search-ide）
 
 ### 重要规则
-1. **必须输出实际的组件 .vue 文件**（编辑态和只读态），这是最重要的产出
+1. **必须输出 7 种场景的 .vue 组件文件 + widget.config.js + editor.config.js**，这是 FORM_COMPONENT 的完整产出
 2. 每个文件都必须是完整的、可以直接使用的代码，不要留 TODO 占位符
 3. 如果有工作区上下文，使用工作区中已有的文件路径，不要创建新的目录结构
 4. 文件路径使用相对于项目根目录的路径
 5. Vue 组件必须生成 .vue 单文件组件格式（包含 <template>、<script>、<style>）
-6. 所有入口 index.js 文件必须包含 install 方法（Vue 插件格式）
-7. Element UI 不需要 import，宿主已全局注册
-8. 配置文件（widget.config.js）也要一起输出
-9. **直接生成代码**，不要尝试调用任何工具，不要读取文件，直接输出完整的代码文件
+6. Element UI 不需要 import，宿主已全局注册
+7. **mixin、validator、form-ability、index.js 聚合文件、i18n 等不需要输出**（脚手架已包含）
+8. **直接生成代码**，不要尝试调用任何工具，不要读取文件，直接输出完整的代码文件
+9. 编辑态组件中使用 `this.formValue` 读写值，值存储为 JSON 字符串（复杂数据）
+10. **edit.vue 只渲染内容，不要显示配置界面**。配置 UI 只放在 setting.vue 中
+11. **setting.vue 的 props 必须包含 `componentConfig`（widget对象）和 `formEngine`（表单引擎）**，这两个由平台 EditorFormConfigMixin 传入。`inject` 只作为兜底，且必须带 `{ default: null }`
+12. **setting.vue 中不要在 computed 里用 `$set`**（会导致无限循环），用 data + methods 代替
+13. **setting.vue 和 edit/read/ide.vue 的 customComponentConfig 读写路径必须一致**。配置直接存在 `customComponentConfig` 根级别（如 `{ dataSource, xField }`），不要多嵌套一层（如 `{ chartConfig: { dataSource } }`）
+14. **widget.config.js 中必须声明 `customComponentConfig: {}`**（空对象），否则平台保存时不会序列化它。不能包含空字符串默认值
+15. **widget.config.js 的 editor.config 不能删除标准项**（INFO, LABEL, FIELD_CODE, TITLE_DESCRIPTION, WIDTH, FORMULA_RULE, HIDDEN, READONLY, REQUIRED, EDITONNEW, UNIQUE, HIDDEN_SAVE, HIDDEN_TRIGGER, TRIGGER_BUSINESS_EVENTS），否则平台校验报错
+16. 如需在 setting.vue 中访问子表列表，使用 `this.formEngine.formDataControl.allTileFormItemList` 并按 `componentType === 'FORM_WIDGET_SON_TABLE'` 过滤
+17. **获取子表真实数据时**，formData 中子表数据的 key 是子表的 `code`（不是 uuid），需要先通过 uuid 找到子表再取其 code
 """

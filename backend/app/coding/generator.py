@@ -142,22 +142,84 @@ class CodingGenerator:
                 for fp, content in key_files.items():
                     ws_str += f"\n**{fp}**:\n```\n{content}\n```\n"
 
-            ws_str += "\n### 重要规则\n"
-            ws_str += "- 直接输出代码文件，不要尝试调用工具或读取文件，你已经拥有所有需要的信息\n"
+            ws_str += "\n### 重要规则（必须严格遵守）\n"
+            ws_str += "- **禁止**尝试读取文件、调用工具、或说'让我先查看文件'。你已经拥有所有需要的信息(上面已提供关键文件内容)\n"
+            ws_str += "- **直接输出代码**，使用 ```file:path 格式，path 必须是上面文件列表中已有的路径\n"
             ws_str += "- **必须修改现有脚手架文件**，不要创建新的目录结构\n"
-            ws_str += "- 使用 ```file:path 格式输出文件，path 必须是上面文件列表中已有的路径\n"
-            ws_str += "- **必须输出 .vue 组件文件（编辑态和只读态）**，这是用户最需要的核心代码\n"
+            ws_str += "- **必须输出所有7个场景的 .vue 组件文件**（edit、read、ide、list、print、search、search-ide）和 setting.vue\n"
             ws_str += "- .vue 文件中不要留 TODO 占位符，要实现完整的功能逻辑\n"
+            ws_str += "- **禁止修改 package.json 添加私有包**（如 babel-preset-definesys、df-apaas-cli 等）。如需第三方库（如 echarts），只能添加 npm 公共 registry 上的包\n"
+            ws_str += "- 先用简短的一段话说明实现方案，然后立即开始输出代码文件\n"
             system_prompt += ws_str
 
         messages = [{"role": "system", "content": system_prompt}]
 
-        # 添加历史对话
+        # 添加历史对话（智能截断，避免上下文爆炸）
         if conversation_history:
-            messages.extend(conversation_history)
+            messages.extend(
+                self._truncate_history(conversation_history, has_workspace=workspace_context is not None)
+            )
 
         messages.append({"role": "user", "content": user_requirement})
         return messages
+
+    def _truncate_history(
+        self,
+        history: List[Dict[str, str]],
+        has_workspace: bool = False,
+        max_rounds: int = 6,
+        max_assistant_chars: int = 500,
+    ) -> List[Dict[str, str]]:
+        """
+        智能截断历史对话，防止上下文爆炸。
+
+        策略：
+        - 有工作区时：AI 的代码回复不需要保留（最新代码在 workspace_context 里），
+          只保留用户消息 + AI 回复的摘要（去掉代码块）
+        - 无工作区时：保留最近 max_rounds 轮完整对话
+        - 每条 AI 回复最多 max_assistant_chars 字符
+        """
+        if not history:
+            return []
+
+        truncated = []
+
+        if has_workspace:
+            # 有工作区：只保留最近 max_rounds 轮，AI 回复去掉代码只留摘要
+            import re
+            # 按轮次配对 (user, assistant)
+            rounds = []
+            current_round = []
+            for msg in history:
+                current_round.append(msg)
+                if msg["role"] == "assistant":
+                    rounds.append(current_round)
+                    current_round = []
+            if current_round:
+                rounds.append(current_round)
+
+            # 只取最近 max_rounds 轮
+            recent_rounds = rounds[-max_rounds:]
+
+            for round_msgs in recent_rounds:
+                for msg in round_msgs:
+                    if msg["role"] == "user":
+                        truncated.append(msg)
+                    elif msg["role"] == "assistant":
+                        content = msg["content"]
+                        # 去掉代码块（```file:... ``` 和 ```lang ... ```）
+                        summary = re.sub(r'```[\s\S]*?```', '[代码已省略，见工作区文件]', content)
+                        # 截断过长的摘要
+                        if len(summary) > max_assistant_chars:
+                            summary = summary[:max_assistant_chars] + "...[截断]"
+                        truncated.append({"role": "assistant", "content": summary})
+                    else:
+                        truncated.append(msg)
+        else:
+            # 无工作区：保留最近 max_rounds * 2 条消息
+            truncated = history[-(max_rounds * 2):]
+
+        return truncated
 
     async def generate(
         self,
