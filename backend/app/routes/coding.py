@@ -956,7 +956,22 @@ async def auto_pipeline(
             # ---- Step 1: 检测场景 ----
             if not is_iteration:
                 yield _sse({"type": "step", "step": "detect_scene", "status": "running"})
-                scene_type = await generator.detect_scene(req.message)
+                # 前端指定了 project_type 时直接使用，不调 LLM 检测
+                if req.project_type:
+                    type_to_scene = {
+                        "form-component": SceneType.WEB_COMPONENT,
+                        "menu-page": SceneType.WEB_PAGE,
+                        "form-page": SceneType.WEB_PAGE,
+                        "form-list": SceneType.WEB_LIST_VIEW,
+                        "backend-api": SceneType.BACKEND_API,
+                    }
+                    scene_type = type_to_scene.get(req.project_type, SceneType.WEB_COMPONENT)
+                else:
+                    try:
+                        scene_type = await generator.detect_scene(req.message)
+                    except Exception as e:
+                        logger.warning(f"场景检测失败，默认使用 WEB_COMPONENT: {e}")
+                        scene_type = SceneType.WEB_COMPONENT
                 yield _sse({"type": "step", "step": "detect_scene", "status": "done",
                             "data": {"scene_type": scene_type.value}})
             else:
@@ -975,8 +990,12 @@ async def auto_pipeline(
             # ---- Step 2: 创建工作区 ----
             if not is_iteration:
                 yield _sse({"type": "step", "step": "create_workspace", "status": "running"})
-                # 从需求中提取项目名
-                project_name = await _extract_project_name(generator, req.message)
+                # 从需求中提取项目名（LLM 失败时用关键词提取）
+                try:
+                    project_name = await _extract_project_name(generator, req.message)
+                except Exception as e:
+                    logger.warning(f"项目名提取失败，使用 fallback: {e}")
+                    project_name = "custom-dev"
                 # 前端指定的 project_type 优先（如从"页面开发"入口进来）
                 project_type_str = req.project_type or _scene_to_project_type(scene_type)
                 project_type_enum = ProjectType(project_type_str)
