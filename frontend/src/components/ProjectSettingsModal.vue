@@ -284,8 +284,9 @@ watch(() => props.project, (p) => {
     tokenForm.token = ''
     platformApps.value = []
     members.value = []
-    newMemberUsername.value = ''
+    selectedUserId.value = null
     newMemberRole.value = 'member'
+    availableUsers.value = []
   }
   // Reset to basic tab when dialog opens
   activeTab.value = 'basic'
