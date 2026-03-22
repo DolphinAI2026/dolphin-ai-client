@@ -50,8 +50,12 @@ def _truncate(s: str, maxlen: int = 300) -> str:
 class VibeCodingAgent:
     """
     Wraps the Claude Agent SDK to perform autonomous coding within an aPaaS workspace.
-    Yields SSE-compatible event dicts as the agent works.
+    Agent runs in a background asyncio.Task. Events are pushed to an asyncio.Queue.
+    SSE consumers read from the queue — if SSE disconnects, the agent keeps running.
     """
+
+    # 全局注册表：{ws_id: {"task": Task, "queue": Queue, "events": list, "done": bool}}
+    _running_agents: dict = {}
 
     def __init__(self, ws_id: str, system_prompt: str | None = None):
         self.ws_id = ws_id
@@ -59,30 +63,89 @@ class VibeCodingAgent:
         self.ws_mgr = WorkspaceManager()
         self._system_prompt = system_prompt
 
-    async def run(
+    async def start(
         self,
         requirement: str,
         conversation_summary: str = "",
         max_turns: int = 30,
         model: str | None = None,
-    ) -> AsyncIterator[dict]:
+    ) -> str:
         """
-        Run the agent loop, yielding SSE event dicts.
+        Start the agent as a background task. Returns immediately.
+        Use stream_events() to consume events via SSE.
+        If agent is already running for this workspace, returns existing task info.
+        """
+        import asyncio
 
-        Events yielded:
-            {"type": "agent_thinking", "content": "..."}
-            {"type": "agent_tool", "tool": "Read", "input_preview": "..."}
-            {"type": "agent_result", "tool_use_id": "...", "output_preview": "...", "is_error": false}
-            {"type": "agent_done", "result": "...", "session_id": "...", "num_turns": N, "cost_usd": ...}
-            {"type": "agent_error", "message": "..."}
+        if self.ws_id in self._running_agents:
+            info = self._running_agents[self.ws_id]
+            if not info["done"]:
+                logger.info(f"Agent already running for {self.ws_id}")
+                return "already_running"
+
+        # 创建事件队列
+        event_queue: asyncio.Queue = asyncio.Queue(maxsize=500)
+        events_history: list = []
+
+        # 启动后台任务
+        task = asyncio.create_task(
+            self._run_background(requirement, conversation_summary, max_turns, model, event_queue, events_history)
+        )
+
+        VibeCodingAgent._running_agents[self.ws_id] = {
+            "task": task,
+            "queue": event_queue,
+            "events": events_history,
+            "done": False,
+        }
+
+        return "started"
+
+    async def stream_events(self) -> AsyncIterator[dict]:
         """
+        Consume events from a running agent. Can be called multiple times
+        (e.g., after SSE reconnect) — missed events are replayed from history.
+        """
+        import asyncio
+
+        if self.ws_id not in self._running_agents:
+            yield {"type": "agent_error", "message": "No agent running for this workspace"}
+            return
+
+        info = self._running_agents[self.ws_id]
+        queue = info["queue"]
+        events = info["events"]
+
+        # 先回放已有的事件历史（处理重连场景）
+        for event in events:
+            yield event
+
+        # 然后从队列实时消费新事件
+        while True:
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=1.0)
+                yield event
+                if event.get("type") in ("agent_done", "agent_error"):
+                    break
+            except asyncio.TimeoutError:
+                # 检查 Agent 是否已完成
+                if info["done"]:
+                    break
+                # 发心跳保持 SSE 连接
+                yield {"type": "heartbeat"}
+
+    async def _run_background(
+        self,
+        requirement: str,
+        conversation_summary: str,
+        max_turns: int,
+        model: str | None,
+        event_queue,
+        events_history: list,
+    ):
+        """Background task that runs the agent loop and pushes events to queue."""
         prompt = self._build_prompt(requirement, conversation_summary)
-
-        # 从 .env 文件直接读取 Agent SDK 配置（通过 MiniMax 代理 Claude API）
-        # 不用 os.getenv，避免被宿主 Claude Code 的环境变量覆盖
         agent_env = self._load_agent_env()
-
-        # 模型优先级：参数 > .env 配置 > 默认
         agent_model = model or agent_env.get("ANTHROPIC_MODEL") or None
 
         options = ClaudeAgentOptions(
@@ -92,17 +155,47 @@ class VibeCodingAgent:
             max_turns=max_turns,
             cwd=str(self.ws_path),
             model=agent_model,
-            env=agent_env if agent_env else {},  # 传给 Agent 子进程，不影响宿主
+            env=agent_env if agent_env else {},
         )
 
         try:
             async for message in query(prompt=prompt, options=options):
-                events = self._convert_message(message)
-                for event in events:
-                    yield event
+                converted = self._convert_message(message)
+                for event in converted:
+                    events_history.append(event)
+                    try:
+                        event_queue.put_nowait(event)
+                    except Exception:
+                        pass  # Queue full, skip (history still has it)
         except Exception as e:
-            logger.exception("VibeCodingAgent error")
-            yield {"type": "agent_error", "message": str(e)}
+            logger.exception("VibeCodingAgent background error")
+            error_event = {"type": "agent_error", "message": str(e)}
+            events_history.append(error_event)
+            try:
+                event_queue.put_nowait(error_event)
+            except Exception:
+                pass
+        finally:
+            if self.ws_id in self._running_agents:
+                self._running_agents[self.ws_id]["done"] = True
+
+    # Legacy sync run (kept for backward compatibility)
+    async def run(
+        self,
+        requirement: str,
+        conversation_summary: str = "",
+        max_turns: int = 30,
+        model: str | None = None,
+    ) -> AsyncIterator[dict]:
+        """Start agent and stream events. Agent survives SSE disconnect."""
+        status = await self.start(requirement, conversation_summary, max_turns, model)
+        if status == "already_running":
+            yield {"type": "agent_thinking", "content": "Agent 正在运行中，重新连接事件流..."}
+
+        async for event in self.stream_events():
+            if event.get("type") == "heartbeat":
+                continue
+            yield event
 
     @staticmethod
     def _load_agent_env() -> dict:

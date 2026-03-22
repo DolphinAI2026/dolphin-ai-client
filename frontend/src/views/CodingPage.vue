@@ -460,6 +460,9 @@ async function sendMessage() {
                 codingStore.setWorkspace(wsData)
                 codingStore.workspacePath = parsed.data.workspace_path || null
                 localStorage.setItem('coding_last_workspace_id', wsData.id)
+                // 刷新左侧工作区列表
+                try { existingWorkspaces.value = await codingApi.listWorkspaces() } catch {}
+
               }
 
               // If serve started, update store
@@ -522,6 +525,9 @@ async function sendMessage() {
             } else if (parsed.type === 'screenshot') {
               // Store screenshot URL for display
               currentScreenshots.push(parsed.url)
+            } else if (parsed.type === 'heartbeat') {
+              // Agent 心跳，保持连接
+              continue
             } else if (parsed.type === 'scene_detected') {
               codingStore.conversationId = parsed.conversation_id
             } else if (parsed.type === 'done') {
