@@ -7,10 +7,7 @@
         <span class="badge">Beta</span>
       </div>
       <div class="nav-right">
-        <button class="connect-btn" @click="previewStore.showConnectModal = true">
-          <span class="dot" :class="{ active: previewStore.connected }"></span>
-          <span>{{ previewStore.connected ? '已连接得帆云' : '未连接' }}</span>
-        </button>
+        <!-- 平台连接已移到项目级配置 -->
         <el-dropdown @command="handleUserCommand">
           <button class="user-btn">
             <div class="user-avatar">{{ userStore.user?.username?.charAt(0).toUpperCase() || 'U' }}</div>
@@ -88,45 +85,56 @@
 
       <div class="section">
         <div class="section-header">
-          <h3>我的应用</h3>
-          <button class="link-btn" @click="router.push('/apps')">查看全部</button>
+          <h3>我的项目</h3>
+          <div style="display:flex;gap:12px;align-items:center">
+            <button class="link-btn" @click="openCreateProject">+ 新建项目</button>
+          </div>
         </div>
-        <div class="app-list" v-if="apps.length > 0">
-          <div v-for="a in apps" :key="a.id" class="app-row" @click="router.push('/apps')">
+        <div class="app-list" v-if="projects.length > 0">
+          <div v-for="p in projects" :key="p.id" class="app-row" @click="goToProject(p)">
             <div class="app-row-left">
-              <div class="app-icon" :class="a.source === 'remote' ? 'remote' : a.source === 'linked' ? 'linked' : a.local_status === 'completed' ? 'success' : 'generating'">
-                {{ a.source === 'remote' ? '☁️' : a.source === 'linked' ? '🔗' : a.local_status === 'completed' ? '✓' : '⟳' }}
+              <div class="app-icon" :class="p.platform_connected ? 'success' : 'generating'">
+                {{ p.platform_connected ? '🟢' : '⚪' }}
               </div>
               <div>
                 <div class="app-name-row">
-                  <span class="app-name">{{ a.app_name }}</span>
-                  <span class="source-tag" :class="a.source">{{ a.source === 'local' ? '本地' : a.source === 'remote' ? '平台' : '已同步' }}</span>
+                  <span class="app-name">{{ p.name }}</span>
+                  <span class="source-tag" :class="p.platform_connected ? 'linked' : 'local'">
+                    {{ p.platform_connected ? '已连接' : '未连接' }}
+                  </span>
                 </div>
-                <div class="app-date">{{ a.updated_at?.slice(0, 16) }}</div>
+                <div class="app-date">{{ p.created_at?.slice(0, 16) }}</div>
               </div>
             </div>
             <div class="app-stats">
-              <span>{{ a.models || 0 }} 模型</span>
-              <span>{{ a.forms || 0 }} 表单</span>
+              <span v-if="p.platform_app_name">{{ p.platform_app_name }}</span>
+              <button class="link-btn" @click.stop="openEditProject(p)" title="项目设置">⚙️</button>
             </div>
           </div>
         </div>
-        <div v-else class="empty-hint">暂无应用，开始对话创建你的第一个应用</div>
+        <div v-else class="empty-hint">暂无项目，点击"新建项目"开始</div>
       </div>
     </div>
 
     <ConnectModal v-model="previewStore.showConnectModal" />
+    <ProjectSettingsModal
+      v-model="showProjectModal"
+      :project="editingProject"
+      @saved="onProjectSaved"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { usePreviewStore } from '@/stores/preview'
 import { useUserStore } from '@/stores/user'
 import { applicationApi } from '@/api/application'
+import { projectsApi, type Project } from '@/api/projects'
 import ConnectModal from '@/components/ConnectModal.vue'
+import ProjectSettingsModal from '@/components/ProjectSettingsModal.vue'
 import type { MergedApplication } from '@/types'
 
 const router = useRouter()
@@ -134,6 +142,9 @@ const previewStore = usePreviewStore()
 const userStore = useUserStore()
 const inputText = ref('')
 const apps = ref<MergedApplication[]>([])
+const projects = ref<Project[]>([])
+const showProjectModal = ref(false)
+const editingProject = ref<Project | null>(null)
 
 const templates = [
   { icon: '👥', name: 'CRM客户管理', desc: '客户、联系人、跟进、合同', prompt: '我想做一个客户管理系统' },
@@ -143,10 +154,29 @@ const templates = [
 
 onMounted(async () => {
   try {
-    const list = await applicationApi.list()
-    apps.value = (Array.isArray(list) ? list : []).slice(0, 3)
+    projects.value = await projectsApi.list()
   } catch (e) { /* ignore */ }
 })
+
+const openCreateProject = () => {
+  editingProject.value = null
+  showProjectModal.value = true
+}
+
+const openEditProject = (p: Project) => {
+  editingProject.value = p
+  showProjectModal.value = true
+}
+
+const onProjectSaved = async () => {
+  showProjectModal.value = false
+  projects.value = await projectsApi.list()
+}
+
+const goToProject = (p: Project) => {
+  localStorage.setItem('coding_last_project_id', String(p.id))
+  router.push('/coding')
+}
 
 const startChat = () => {
   const text = inputText.value.trim()
