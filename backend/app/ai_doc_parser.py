@@ -218,9 +218,27 @@ async def parse_doc_with_ai(
 
 async def _parse_single(text: str, filename: str) -> Dict:
     client = LLMClient()
-    # 大文档截断，防止 API 超时（保留前 60000 字符，约 30000 汉字）
-    truncated = text[:60000] if len(text) > 60000 else text
-    user_msg = f"请分析以下需求文档，提取所有业务表单、字段、角色、字典等信息，输出标准 JSON。\n\n"
+    # 智能截断：优先保留 ER 图和业务具体方案（含子表/字段定义）
+    if len(text) > 60000:
+        import re
+        # 找关键章节
+        er_match = re.search(r'(#{1,3}\s*.*?ER图.*?)(?=\n#{1,2}\s|\Z)', text, re.DOTALL)
+        biz_match = re.search(r'(#{1,3}\s*.*?业务具体方案.*?)(?=\n#{1,2}\s[^#]|\Z)', text, re.DOTALL)
+        perm_match = re.search(r'(#{1,3}\s*.*?(?:权限|角色|组织).*?)(?=\n#{1,2}\s|\Z)', text, re.DOTALL)
+
+        # 前 30000 字符（背景、目标、流程等）
+        head = text[:30000]
+        # 拼接关键章节
+        critical = ""
+        for m in [er_match, biz_match, perm_match]:
+            if m and m.group(1) not in head:
+                critical += "\n\n" + m.group(1)[:15000]  # 每个关键章节最多 15000 字符
+        truncated = head + critical
+        truncated = truncated[:80000]  # 最终上限 80000
+    else:
+        truncated = text
+
+    user_msg = f"请分析以下需求文档，提取所有业务表单、字段、角色、字典等信息，输出标准 JSON。\n特别注意：\n- 识别所有子表/明细表关系（1:N），用 sub_fields 表示\n- 识别权限角色和数据权限规则\n\n"
     if filename:
         user_msg += f"文档名：{filename}\n\n"
     user_msg += f"---\n\n{truncated}"
