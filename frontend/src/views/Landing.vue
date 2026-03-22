@@ -195,8 +195,7 @@ const onProjectSaved = async () => {
 }
 
 const goToProject = (p: Project) => {
-  localStorage.setItem('coding_last_project_id', String(p.id))
-  router.push('/coding')
+  router.push(`/project/${p.id}`)
 }
 
 const startChat = () => {
