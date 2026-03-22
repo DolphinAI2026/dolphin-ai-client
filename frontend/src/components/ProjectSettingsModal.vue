@@ -390,7 +390,7 @@ async function handleSave() {
 }
 </script>
 
-<style scoped>
+<style>
 .project-settings-modal :deep(.el-dialog) {
   background: #111;
   border: 1px solid rgba(255,255,255,0.06);
