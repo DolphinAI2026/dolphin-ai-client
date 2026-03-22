@@ -392,21 +392,97 @@ async function handleSave() {
 
 <style scoped>
 .project-settings-modal :deep(.el-dialog) {
-  background: #1a1a1a;
-  border: 1px solid #2a2a2a;
+  background: #111;
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 16px;
 }
 .project-settings-modal :deep(.el-dialog__header) {
-  border-bottom: 1px solid #2a2a2a;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  padding: 16px 20px;
 }
 .project-settings-modal :deep(.el-dialog__title) {
-  color: #e0e0e0;
+  color: rgba(255,255,255,0.9);
+  font-weight: 600;
+}
+.project-settings-modal :deep(.el-dialog__body) {
+  padding: 20px;
+}
+.project-settings-modal :deep(.el-dialog__headerbtn .el-dialog__close) {
+  color: rgba(255,255,255,0.4);
 }
 .project-settings-modal :deep(.el-form-item__label) {
-  color: #aaa;
+  color: rgba(255,255,255,0.55);
+  font-size: 13px;
+}
+.project-settings-modal :deep(.el-input__wrapper) {
+  background: #161622;
+  border: 1px solid rgba(255,255,255,0.08);
+  box-shadow: none;
+  border-radius: 10px;
+}
+.project-settings-modal :deep(.el-input__wrapper:hover) {
+  border-color: rgba(255,255,255,0.15);
+}
+.project-settings-modal :deep(.el-input__wrapper.is-focus) {
+  border-color: #7c3aed;
+  box-shadow: 0 0 0 3px rgba(124,58,237,0.15);
+}
+.project-settings-modal :deep(.el-input__inner) {
+  color: rgba(255,255,255,0.9);
+}
+.project-settings-modal :deep(.el-input__inner::placeholder) {
+  color: rgba(255,255,255,0.25);
+}
+.project-settings-modal :deep(.el-textarea__inner) {
+  background: #161622;
+  border: 1px solid rgba(255,255,255,0.08);
+  color: rgba(255,255,255,0.9);
+  border-radius: 10px;
+  box-shadow: none;
+}
+.project-settings-modal :deep(.el-textarea__inner:focus) {
+  border-color: #7c3aed;
+  box-shadow: 0 0 0 3px rgba(124,58,237,0.15);
+}
+.project-settings-modal :deep(.el-textarea__inner::placeholder) {
+  color: rgba(255,255,255,0.25);
+}
+.project-settings-modal :deep(.el-select .el-select__wrapper) {
+  background: #161622;
+  border: 1px solid rgba(255,255,255,0.08);
+  box-shadow: none;
+  border-radius: 10px;
+}
+.project-settings-modal :deep(.el-button--primary) {
+  background: linear-gradient(135deg, #7c3aed, #6366f1);
+  border: none;
+  border-radius: 10px;
+}
+.project-settings-modal :deep(.el-button--primary:hover) {
+  opacity: 0.9;
+}
+.project-settings-modal :deep(.el-button--default) {
+  background: #161622;
+  border: 1px solid rgba(255,255,255,0.08);
+  color: rgba(255,255,255,0.7);
+  border-radius: 10px;
+}
+.project-settings-modal :deep(.el-tabs__item) {
+  color: rgba(255,255,255,0.45);
+}
+.project-settings-modal :deep(.el-tabs__item.is-active) {
+  color: #a78bfa;
+}
+.project-settings-modal :deep(.el-tabs__active-bar) {
+  background: linear-gradient(135deg, #7c3aed, #6366f1);
 }
 .project-settings-modal :deep(.el-divider__text) {
-  color: #888;
-  background: #1a1a1a;
+  color: rgba(255,255,255,0.35);
+  background: #111;
+  font-size: 13px;
+}
+.project-settings-modal :deep(.el-divider) {
+  border-color: rgba(255,255,255,0.06);
 }
 
 /* 团队成员 */
@@ -434,9 +510,10 @@ async function handleSave() {
 .member-item {
   display: flex;
   align-items: center;
-  padding: 6px 8px;
-  border-radius: 4px;
-  background: #222;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: #161622;
+  border: 1px solid rgba(255,255,255,0.06);
   gap: 8px;
 }
 .member-name {
