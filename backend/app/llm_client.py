@@ -140,3 +140,54 @@ class LLMClient:
             import re
             content = re.sub(r'<think>[\s\S]*?</think>', '', content).strip()
             return content
+
+    async def claude_completion(self, messages: List[Dict[str, str]], *, max_tokens: int = 16384, timeout: float = 300.0, temperature: float = 0.2) -> str:
+        """
+        通过 MiniMax 代理的 Anthropic API 调用 Claude（大上下文窗口）。
+        适合大文档解析等需要长上下文的场景。
+        返回纯文本内容。
+        """
+        # 从 .env 文件读取，避免被宿主环境变量覆盖
+        from dotenv import dotenv_values
+        env_path = Path(__file__).parent.parent / ".env"
+        env_vals = dotenv_values(env_path)
+        api_base = env_vals.get("ANTHROPIC_BASE_URL", "https://api.minimaxi.com/anthropic")
+        api_key = env_vals.get("ANTHROPIC_API_KEY", self.api_key)
+        model = env_vals.get("ANTHROPIC_MODEL", "MiniMax-M2.7")
+
+        # Anthropic API 格式：system 单独传，messages 只有 user/assistant
+        system_text = ""
+        api_messages = []
+        for msg in messages:
+            if msg["role"] == "system":
+                system_text += msg["content"] + "\n"
+            else:
+                api_messages.append({"role": msg["role"], "content": msg["content"]})
+
+        headers = {
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json"
+        }
+
+        payload = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "messages": api_messages,
+        }
+        if system_text.strip():
+            payload["system"] = system_text.strip()
+
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                f"{api_base}/v1/messages",
+                headers=headers,
+                json=payload
+            )
+            response.raise_for_status()
+            data = response.json()
+            # Anthropic 格式：content 是数组 [{"type": "text", "text": "..."}]
+            content_blocks = data.get("content", [])
+            texts = [b.get("text", "") for b in content_blocks if b.get("type") == "text"]
+            return "\n".join(texts)

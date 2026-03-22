@@ -249,31 +249,30 @@ async def assemble_config_streaming(
     """
     client = LLMClient()
 
-    # 大文档预处理：提取摘要用于骨架阶段，保留原文用于后续阶段
+    # 保留原文用于后续阶段
     original_context = context
     is_large_doc = len(context) > LARGE_DOC_THRESHOLD
-    if is_large_doc:
-        logger.info(f"检测到大文档（{len(context)} 字符），进行预处理摘要")
-        skeleton_context = _summarize_doc_for_skeleton(context)
-        logger.info(f"摘要后长度：{len(skeleton_context)} 字符")
-    else:
-        skeleton_context = context
 
     # ── Phase 1: 骨架 ──
-    yield {"phase": "skeleton", "status": "running", "message": f"正在分析需求，提取配置骨架...{'（大文档模式）' if is_large_doc else ''}"}
+    yield {"phase": "skeleton", "status": "running", "message": f"正在分析需求，提取配置骨架...{'（大文档模式，使用 Claude）' if is_large_doc else ''}"}
 
     skeleton_messages = [
         {"role": "system", "content": SKELETON_PROMPT},
-        {"role": "user", "content": f"{skeleton_context}\n\n{user_prompt}" if skeleton_context else user_prompt},
+        {"role": "user", "content": f"{context}\n\n{user_prompt}" if context else user_prompt},
     ]
-    # 大文档给更长超时
-    skeleton_timeout = 180.0 if is_large_doc else 90.0
-    # 文档解析用非 thinking 模型，避免超时
-    skeleton_result = await client.chat_completion(
-        skeleton_messages, max_tokens=4096, timeout=skeleton_timeout, temperature=0.2,
-        model="MiniMax-M2.5"
-    )
-    skeleton_text = skeleton_result["choices"][0]["message"]["content"]
+
+    # 大文档用 Claude API（上下文窗口大，不截断）；小文档用 MiniMax
+    if is_large_doc:
+        logger.info(f"大文档（{len(context)} 字符），使用 Claude API 解析骨架")
+        skeleton_text = await client.claude_completion(
+            skeleton_messages, max_tokens=8192, timeout=300.0, temperature=0.2
+        )
+    else:
+        skeleton_result = await client.chat_completion(
+            skeleton_messages, max_tokens=4096, timeout=90.0, temperature=0.2,
+            model="MiniMax-M2.5"
+        )
+        skeleton_text = skeleton_result["choices"][0]["message"]["content"]
     skeleton = _extract_json(skeleton_text)
     if not skeleton:
         yield {"phase": "skeleton", "status": "error", "message": "无法解析骨架配置"}
@@ -387,10 +386,15 @@ async def assemble_config_streaming(
                 )},
             ]
             try:
-                model_result = await client.chat_completion(
-                    model_messages, max_tokens=8192, timeout=180.0, temperature=0.2, model="MiniMax-M2.5"
-                )
-                model_text = model_result["choices"][0]["message"]["content"]
+                if is_large_doc:
+                    model_text = await client.claude_completion(
+                        model_messages, max_tokens=8192, timeout=300.0, temperature=0.2
+                    )
+                else:
+                    model_result = await client.chat_completion(
+                        model_messages, max_tokens=8192, timeout=180.0, temperature=0.2, model="MiniMax-M2.5"
+                    )
+                    model_text = model_result["choices"][0]["message"]["content"]
                 batch_models = _extract_json_array(model_text)
                 if batch_models:
                     all_models.extend(batch_models)
