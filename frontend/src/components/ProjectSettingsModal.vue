@@ -132,7 +132,6 @@
                 type="primary"
                 size="small"
                 :loading="addingMember"
-                :disabled="!newMemberUsername"
                 style="margin-left: 8px"
                 @click="handleAddMember"
               >
