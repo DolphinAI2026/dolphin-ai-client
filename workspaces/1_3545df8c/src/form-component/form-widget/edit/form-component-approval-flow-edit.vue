@@ -13,8 +13,23 @@
       :webFormSettings="webFormSettings"
     >
       <div class="approval-flow-container">
+        <!-- 加载状态 -->
+        <div class="loading-state" v-if="loading">
+          <i class="el-icon-loading loading-icon"></i>
+          <span class="loading-text">加载中...</span>
+        </div>
+
+        <!-- 错误状态 -->
+        <div class="error-state" v-else-if="error">
+          <i class="el-icon-warning-outline error-icon"></i>
+          <span class="error-text">{{ error }}</span>
+          <el-button type="text" size="small" @click="refreshData" class="retry-btn">
+            <i class="el-icon-refresh"></i> 重试
+          </el-button>
+        </div>
+
         <!-- 流程时间线 -->
-        <div class="approval-timeline" v-if="approvalList && approvalList.length > 0">
+        <div class="approval-timeline" v-else-if="approvalList && approvalList.length > 0">
           <div
             v-for="(item, index) in approvalList"
             :key="index"
@@ -62,7 +77,7 @@
         <!-- 空状态 -->
         <div class="empty-state" v-else>
           <i class="el-icon-s-claim empty-icon"></i>
-          <span class="empty-text">暂无审批记录</span>
+          <span class="empty-text">{{ componentConfig.emptyText || '暂无审批记录' }}</span>
         </div>
       </div>
     </x-proxy-form-item>
@@ -78,7 +93,11 @@ export default {
   data() {
     return {
       // 审批数据列表
-      approvalList: []
+      approvalList: [],
+      // 加载状态
+      loading: false,
+      // 错误信息
+      error: null
     }
   },
   computed: {
@@ -98,29 +117,144 @@ export default {
       set(val) {
         this.formValue = val
       }
+    },
+    // 获取组件配置
+    componentConfig() {
+      return this.widget.customComponentConfig || {}
+    },
+    // 数据来源类型
+    dataSourceType() {
+      return this.componentConfig.dataSourceType || 'formValue'
+    },
+    // API配置
+    apiConfig() {
+      return {
+        url: this.componentConfig.apiUrl || '/api/approval/history',
+        method: this.componentConfig.requestMethod || 'GET',
+        businessIdField: this.componentConfig.businessIdField || ''
+      }
     }
   },
   watch: {
     // 监听formValue变化，更新本地审批列表
     editValue: {
       handler(newVal) {
-        if (Array.isArray(newVal)) {
-          this.approvalList = newVal
-        } else if (newVal) {
-          try {
-            this.approvalList = JSON.parse(newVal)
-          } catch (e) {
-            this.approvalList = []
-          }
-        } else {
-          this.approvalList = []
+        // 只有当数据来源是 formValue 时，才同步本地数据
+        if (this.dataSourceType === 'formValue') {
+          this.syncFromFormValue(newVal)
         }
       },
-      immediate: true,
+      immediate: false,
       deep: true
     }
   },
+  created() {
+    this.initData()
+  },
   methods: {
+    // 初始化数据
+    async initData() {
+      const dataSourceType = this.dataSourceType
+
+      if (dataSourceType === 'formValue') {
+        this.syncFromFormValue(this.editValue)
+      } else if (dataSourceType === 'api') {
+        await this.loadDataFromApi()
+      } else if (dataSourceType === 'static') {
+        this.loadStaticData()
+      }
+    },
+
+    // 从表单值同步数据
+    syncFromFormValue(value) {
+      if (Array.isArray(value)) {
+        this.approvalList = value
+      } else if (value) {
+        try {
+          this.approvalList = JSON.parse(value)
+        } catch (e) {
+          this.approvalList = []
+        }
+      } else {
+        this.approvalList = []
+      }
+    },
+
+    // 从API加载数据
+    async loadDataFromApi() {
+      const { url, method, businessIdField } = this.apiConfig
+
+      if (!url) {
+        this.error = '请先配置API地址'
+        return
+      }
+
+      this.loading = true
+      this.error = null
+
+      try {
+        let params = {}
+
+        // 如果配置了业务ID字段，从表单数据中获取值
+        if (businessIdField && this.formData) {
+          params.businessId = this.formData[businessIdField]
+        } else if (this.formEngineContext && this.formEngineContext.instance) {
+          // 默认使用表单实例ID
+          params.businessId = this.formEngineContext.instance.documentId
+        }
+
+        let res
+        if (method === 'GET') {
+          res = await this.$request({
+            url: url.replace('{businessId}', params.businessId || ''),
+            method: 'GET',
+            params: params.businessId ? { businessId: params.businessId } : undefined
+          }).asyncThen()
+        } else {
+          res = await this.$request({
+            url: url,
+            method: 'POST',
+            data: params
+          }).asyncThen()
+        }
+
+        // 处理返回数据
+        if (res && res.data) {
+          this.approvalList = Array.isArray(res.data) ? res.data : [res.data]
+        } else if (Array.isArray(res)) {
+          this.approvalList = res
+        } else {
+          this.approvalList = []
+        }
+      } catch (e) {
+        console.error('加载审批历史数据失败:', e)
+        this.error = '加载数据失败'
+        this.approvalList = []
+      } finally {
+        this.loading = false
+      }
+    },
+
+    // 加载静态数据
+    loadStaticData() {
+      const staticData = this.componentConfig.staticData
+      if (staticData) {
+        try {
+          this.approvalList = JSON.parse(staticData)
+        } catch (e) {
+          console.error('静态数据JSON格式错误:', e)
+          this.approvalList = []
+        }
+      } else {
+        this.approvalList = []
+      }
+    },
+
+    // 手动刷新数据（供外部调用）
+    refreshData() {
+      return this.initData()
+    },
+
     // 获取节点类型名称
     getNodeTypeName(nodeType) {
       const typeMap = {
@@ -367,6 +501,55 @@ export default {
     .empty-text {
       font-size: 14px;
       color: #909399;
+    }
+  }
+
+  .loading-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 32px 16px;
+    background-color: #F5F7FA;
+    border-radius: 4px;
+
+    .loading-icon {
+      font-size: 32px;
+      color: #409EFF;
+      margin-bottom: 8px;
+    }
+
+    .loading-text {
+      font-size: 14px;
+      color: #909399;
+    }
+  }
+
+  .error-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 24px 16px;
+    background-color: #FEF0F0;
+    border-radius: 4px;
+    border: 1px solid #FDE2E2;
+
+    .error-icon {
+      font-size: 32px;
+      color: #F56C6C;
+      margin-bottom: 8px;
+    }
+
+    .error-text {
+      font-size: 14px;
+      color: #F56C6C;
+      margin-bottom: 8px;
+    }
+
+    .retry-btn {
+      color: #409EFF;
+      font-size: 13px;
     }
   }
 }

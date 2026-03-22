@@ -4,6 +4,59 @@
       <el-form size="mini" label-width="100px">
         <!-- 审批流程配置 -->
 
+        <!-- 数据来源类型 -->
+        <el-form-item label="数据来源">
+          <el-select v-model="localConfig.dataSourceType" placeholder="请选择数据来源" @change="onDataSourceTypeChange">
+            <el-option label="表单值" value="formValue" />
+            <el-option label="API接口" value="api" />
+            <el-option label="静态数据" value="static" />
+          </el-select>
+        </el-form-item>
+
+        <!-- API地址 -->
+        <el-form-item label="API地址" v-if="localConfig.dataSourceType === 'api'">
+          <el-input
+            v-model="localConfig.apiUrl"
+            placeholder="请输入API地址，如 /api/approval/history"
+            @change="saveConfig"
+            clearable
+          />
+        </el-form-item>
+
+        <!-- 业务ID字段 -->
+        <el-form-item label="业务ID字段" v-if="localConfig.dataSourceType === 'api'">
+          <el-select v-model="localConfig.businessIdField" placeholder="请选择业务ID字段" @change="saveConfig" clearable>
+            <el-option
+              v-for="field in availableFields"
+              :key="field.uuid || field.fieldCode"
+              :label="field.label || field.fieldCode"
+              :value="field.uuid || field.fieldCode"
+            />
+          </el-select>
+        </el-form-item>
+
+        <!-- 请求方法 -->
+        <el-form-item label="请求方法" v-if="localConfig.dataSourceType === 'api'">
+          <el-radio-group v-model="localConfig.requestMethod" @change="saveConfig">
+            <el-radio label="GET">GET</el-radio>
+            <el-radio label="POST">POST</el-radio>
+          </el-radio-group>
+        </el-form-item>
+
+        <!-- 静态数据 -->
+        <el-form-item label="静态数据" v-if="localConfig.dataSourceType === 'static'">
+          <el-input
+            type="textarea"
+            v-model="localConfig.staticData"
+            placeholder="请输入JSON格式的静态数据"
+            :rows="4"
+            @change="saveConfig"
+          />
+          <div class="config-tip">格式示例：[{"nodeType":"approval","approverName":"张三","status":"approved","comment":"同意"}]</div>
+        </el-form-item>
+
+        <el-divider v-if="localConfig.dataSourceType !== 'static'" />
+
         <!-- 显示模式 -->
         <el-form-item label="显示模式">
           <el-select v-model="localConfig.displayMode" placeholder="请选择显示模式" @change="saveConfig">
@@ -95,6 +148,13 @@ export default {
   data() {
     return {
       localConfig: {
+        // 数据来源配置
+        dataSourceType: 'formValue',   // 数据来源类型：formValue/api/static
+        apiUrl: '',                   // API地址
+        businessIdField: '',          // 业务ID字段
+        requestMethod: 'GET',         // 请求方法
+        staticData: '',               // 静态数据（JSON字符串）
+        // 显示配置
         displayMode: 'timeline',      // 显示模式
         showAvatar: true,             // 是否显示头像
         showTime: true,              // 是否显示时间
@@ -120,6 +180,12 @@ export default {
       if (!this.engine || !this.engine.formDataControl) return []
       return (this.engine.formDataControl.allTileFormItemList || [])
         .filter(item => item.componentType === 'FORM_WIDGET_SON_TABLE')
+    },
+    // 可选的字段列表（用于业务ID字段选择）
+    availableFields() {
+      if (!this.engine || !this.engine.formDataControl) return []
+      return (this.engine.formDataControl.allTileFormItemList || [])
+        .filter(item => item.uuid && item.label)
     }
   },
   created() {
@@ -131,6 +197,20 @@ export default {
     })
   },
   methods: {
+    onDataSourceTypeChange(val) {
+      // 切换数据来源类型时，清空相关配置
+      if (val === 'static') {
+        this.localConfig.staticData = JSON.stringify([
+          { nodeType: 'start', approverName: '申请人', status: 'approved', handleTime: this.formatDate() },
+          { nodeType: 'approval', approverName: '审批人', status: 'pending' }
+        ], null, 2)
+      }
+      this.saveConfig()
+    },
+    formatDate() {
+      const now = new Date()
+      return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
+    },
     saveConfig() {
       this.$set(this.widgetObj, 'customComponentConfig', { ...this.localConfig })
     }
@@ -158,6 +238,17 @@ export default {
         margin-right: 12px;
         margin-bottom: 4px;
       }
+    }
+
+    .el-divider {
+      margin: 16px 0 12px;
+    }
+
+    .config-tip {
+      font-size: 12px;
+      color: #909399;
+      line-height: 1.5;
+      margin-top: 4px;
     }
   }
 }

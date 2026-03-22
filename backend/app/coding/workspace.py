@@ -23,6 +23,7 @@ class ProjectType(str, Enum):
     """项目类型"""
     FORM_COMPONENT = "form-component"   # 表单自开发组件
     FORM_PAGE = "form-page"             # 自开发菜单页面
+    MENU_PAGE = "menu-page"             # 自开发菜单页面（别名）
     FORM_LIST = "form-list"             # 自开发列表视图
     BACKEND_API = "backend-api"         # 后端自开发接口
 
@@ -65,6 +66,7 @@ class WorkspaceManager:
             prefix_map = {
                 ProjectType.FORM_COMPONENT: "form-component-",
                 ProjectType.FORM_PAGE: "form-page-",
+                ProjectType.MENU_PAGE: "form-page-",
                 ProjectType.FORM_LIST: "form-list-",
                 ProjectType.BACKEND_API: "backend-api-",
             }
@@ -86,7 +88,7 @@ class WorkspaceManager:
         # 生成脚手架
         if project_type == ProjectType.FORM_COMPONENT:
             self._scaffold_form_component(ws_path, safe_name)
-        elif project_type == ProjectType.FORM_PAGE:
+        elif project_type in (ProjectType.FORM_PAGE, ProjectType.MENU_PAGE):
             self._scaffold_form_page(ws_path, safe_name)
         elif project_type == ProjectType.FORM_LIST:
             self._scaffold_form_list(ws_path, safe_name)
@@ -1535,63 +1537,128 @@ export default FormWidgetMixin
 """
 
     def _scaffold_form_page(self, ws_path: Path, name: str):
-        """菜单页面脚手架"""
+        """菜单页面脚手架 - 完整 MENU_PAGE 架构（带筛选+表格+分页+多选+getSelectedData）"""
         # 公共文件
         self._write_common_files(ws_path, name, "MENU_PAGE")
 
-        # package.json
+        # 组件标签名
+        # name 格式: form-page-xxx-yyy
+        kebab = name.replace("form-page-", "")
+        component_tag = f"apaas-custom-{kebab}"
+
+        # ======== package.json ========
         self._write(ws_path, "package.json", json.dumps({
             "name": name,
             "version": "1.0.0",
-            "private": True,
+            "engines": {"node": "16.x"},
             "templateType": "MENU_PAGE",
+            "private": True,
             "scripts": {
-                "serve": "vue-cli-service serve",
-                "build": f"vue-cli-service build --target lib --name {name} src/index.js"
+                "lint": "vue-cli-service lint",
+                "preview": "VUE_APP_PREVIEW=true vue-cli-service serve preview/main.js",
+                "serve": "vue-cli-service serve src/index.js",
+                "debug": "df-apaas-cli debug",
+                "build": "df-apaas-cli build"
             },
-            "dependencies": {},
+            "dependencies": {
+                "core-js": "3.8.3",
+                "element-ui": "^2.15.14",
+                "vue": "2.7.14"
+            },
             "devDependencies": {
-                "@vue/cli-service": "~5.0.0",
-                "vue-template-compiler": "^2.7.16",
-                "vue": "^2.7.16"
+                "@babel/core": "7.12.16",
+                "@babel/eslint-parser": "7.12.16",
+                "@vue/cli-plugin-babel": "5.0.0",
+                "@vue/cli-plugin-eslint": "5.0.0",
+                "@vue/cli-service": "5.0.8",
+                "dart-sass": "1.25.0",
+                "eslint": "7.32.0",
+                "eslint-plugin-vue": "8.0.3",
+                "sass": "1.85.1",
+                "sass-loader": "8.0.2",
+                "vue-template-compiler": "2.7.14"
             },
-            "browserslist": ["> 1%", "last 2 versions", "not dead"]
+            "eslintConfig": {
+                "root": True,
+                "env": {"node": True},
+                "extends": ["plugin:vue/essential", "eslint:recommended"],
+                "parserOptions": {"parser": "@babel/eslint-parser"},
+                "rules": {}
+            },
+            "browserslist": ["> 1%", "last 2 versions", "not dead", "Chrome 40.0", "ie >= 11"]
         }, indent=2, ensure_ascii=False))
 
-        # vue.config.js - 读取 apaas.json
+        # ======== vue.config.js ========
         self._write(ws_path, "vue.config.js", """const { defineConfig } = require('@vue/cli-service')
+const fs = require('fs')
+const path = require('path')
 const apaasJson = require('./src/apaas.json')
 
+const isPreview = process.env.VUE_APP_PREVIEW === 'true'
+
 module.exports = defineConfig({
-  css: { extract: false },
-  configureWebpack: {
-    output: {
-      library: apaasJson.outputName,
-      libraryTarget: 'umd',
-      libraryExport: 'default'
-    },
-    externals: {
-      vue: 'Vue'
+  transpileDependencies: true,
+  productionSourceMap: false,
+  devServer: {
+    host: '0.0.0.0',
+    port: isPreview ? 8090 : 8080,
+    hot: true,
+    allowedHosts: 'all',
+    ...(isPreview ? {} : {
+      https: (() => {
+        const keyPath = './https/server.key'
+        const certPath = './https/server.crt'
+        if (fs.existsSync(keyPath) && fs.existsSync(certPath)) {
+          return { key: fs.readFileSync(keyPath), cert: fs.readFileSync(certPath) }
+        }
+        return false
+      })()
+    }),
+    headers: { 'Access-Control-Allow-Origin': '*' },
+    client: { overlay: false },
+    proxy: {
+      '/custom': {
+        target: 'http://localhost:9092',
+        changeOrigin: true
+      }
+    }
+  },
+  configureWebpack: (config) => {
+    if (isPreview) {
+      delete config.output.library
+      delete config.output.libraryTarget
+    } else {
+      config.output.library = apaasJson.outputName
+      config.output.libraryTarget = 'umd'
+    }
+  },
+  chainWebpack: (config) => {
+    if (isPreview) {
+      config.plugin('html').tap(args => {
+        args[0].template = path.resolve(__dirname, 'preview/index.html')
+        return args
+      })
+    }
+  },
+  css: {
+    loaderOptions: {
+      sass: { implementation: require('sass') }
     }
   }
 })
 """)
 
-        # babel.config.js
-        self._write(ws_path, "babel.config.js", """module.exports = {
-  presets: ['@vue/cli-plugin-babel/preset']
-}
-""")
+        # ======== babel.config.js ========
+        self._write(ws_path, "babel.config.js", "module.exports = {\n  presets: ['@vue/cli-plugin-babel/preset']\n}\n")
 
-        # apaas.json
+        # ======== src/apaas.json ========
         self._write(ws_path, "src/apaas.json", json.dumps({
             "entry": "index.js",
             "templateType": "MENU_PAGE",
             "router": {
-                f"apaas-custom-{name}": {
-                    "name": f"apaas-custom-{name}",
-                    "path": f"apaas-custom-{name}",
-                    "meta": {"title": name}
+                component_tag: {
+                    "name": component_tag,
+                    "path": component_tag
                 }
             },
             "customWidgetList": [],
@@ -1599,32 +1666,105 @@ module.exports = defineConfig({
             "outputName": name
         }, indent=2, ensure_ascii=False))
 
-        # index.js
-        component_tag = f"apaas-custom-{name}"
-        self._write(ws_path, "src/index.js", f"""import ApaasCustomPage from './form-page/{component_tag}.vue'
+        # ======== src/index.js ========
+        self._write(ws_path, "src/index.js", f"""import "./form-page-local/index.js";
+import ApaasCustomPage from "./form-page/{component_tag}.vue";
 
-const install = function(Vue, opts) {{
-  Vue.component('{component_tag}', ApaasCustomPage)
-}}
+const install = function (Vue) {{
+  Vue.component("{component_tag}", ApaasCustomPage);
+  window[Symbol.for("{component_tag}")] = ApaasCustomPage;
+}};
 
-export default {{ install }}
+export default {{ install }};
 """)
 
-        # 主页面组件
+        # ======== src/api/index.js ========
+        self._write(ws_path, "src/api/index.js", """const Api = {
+  QUERY_LIST: {
+    url: '/custom/demo/list',
+    method: 'POST',
+    disableSuccessMsg: true,
+  },
+}
+
+export default Api
+""")
+
+        # ======== src/form-page/component.vue ========
         self._write(ws_path, f"src/form-page/{component_tag}.vue", f"""<template>
   <div class="{component_tag}">
-    <div class="page-header">
-      <h2>{{{{ pageTitle }}}}</h2>
+
+    <!-- 筛选区 -->
+    <div class="filter-area">
+      <el-input
+        v-model="filterForm.keyword"
+        placeholder="请输入关键词"
+        size="small"
+        clearable
+        style="width: 220px"
+      />
     </div>
 
-    <x-ag-grid
-      rowKey="id"
-      :tableData="tableData"
-      :colConfigs="colConfigs"
-      :pagination="pagination"
-      @size-change="onSizeChange"
-      @current-page-change="onCurrentPageChange"
-    ></x-ag-grid>
+    <!-- 查询 / 重置 -->
+    <div class="filter-actions">
+      <el-button type="primary" size="small" @click="handleQuery">查询</el-button>
+      <el-button size="small" @click="handleReset">重置</el-button>
+    </div>
+
+    <!-- 已选提示条（弹窗选择场景需要） -->
+    <div class="selected-bar">
+      <span class="selected-bar-title">
+        已选数据
+        <span v-if="selectedRows.length" class="selected-badge">{{{{ selectedRows.length }}}}</span>
+      </span>
+      <template v-if="selectedRows.length === 0">
+        <span class="selected-bar-empty">暂未选择</span>
+      </template>
+      <template v-else>
+        <div class="selected-bar-tags">
+          <span v-for="row in selectedRows" :key="row.id" class="bar-tag">
+            <span class="bar-tag-label">{{{{ row.name || row.id }}}}</span>
+            <span class="bar-tag-close" @click="removeSelected(row)">&times;</span>
+          </span>
+        </div>
+        <span class="bar-clear" @click="clearAllSelected">清空</span>
+      </template>
+    </div>
+
+    <!-- 数据表格 -->
+    <div class="table-wrapper" style="overflow-y:auto; flex:1; min-height:0;">
+      <el-table
+        ref="elTable"
+        :data="tableConfig.tableData || []"
+        border
+        style="width:100%;"
+        :max-height="tableConfig.maxHeight || undefined"
+        @selection-change="handleSelectionChange"
+      >
+        <el-table-column type="selection" width="50" fixed />
+        <el-table-column type="index" label="序" width="50" fixed :index="indexStart" />
+        <el-table-column
+          v-for="col in visibleCols"
+          :key="col.columnKey"
+          :prop="col.prop"
+          :label="col.label"
+          :min-width="col.minWidth || 120"
+          show-overflow-tooltip
+        />
+      </el-table>
+      <el-pagination
+        v-if="tableConfig.pagination"
+        style="margin-top: 8px; text-align: right; padding: 4px 0"
+        :current-page="tableConfig.pagination.currentPage"
+        :page-size="tableConfig.pagination.pageSize"
+        :total="tableConfig.pagination.total"
+        :page-sizes="[10, 50, 100]"
+        layout="total, sizes, prev, pager, next"
+        @size-change="onSizeChange"
+        @current-change="onCurrentPageChange"
+      />
+    </div>
+
   </div>
 </template>
 
@@ -1633,57 +1773,141 @@ import Api from "../api";
 
 export default {{
   name: "{component_tag}",
+
   data() {{
     return {{
-      pageTitle: "{name}",
-      tableData: [],
-      colConfigs: [
-        {{ headerName: "名称", field: "name" }},
-        {{ headerName: "状态", field: "status" }},
-      ],
-      pagination: {{
-        currentPage: 1,
-        pageSize: 10,
-        total: 0,
+      filterForm: {{
+        keyword: "",
+      }},
+      selectedRows: [],
+
+      tableConfig: {{
+        maxHeight: "500",
+        colConfigs: [
+          {{ prop: "name", columnKey: "name", displayFlag: true, label: "名称", minWidth: 150 }},
+          {{ prop: "code", columnKey: "code", displayFlag: true, label: "编码", minWidth: 150 }},
+          {{ prop: "status", columnKey: "status", displayFlag: true, label: "状态", minWidth: 100 }},
+        ],
+        tableData: [],
+        pagination: {{
+          currentPage: 1,
+          pageSize: 10,
+          total: 0,
+        }},
       }},
     }};
   }},
-  created() {{
-    // this.getTableData();
+
+  computed: {{
+    visibleCols() {{
+      return (this.tableConfig.colConfigs || []).filter((c) => c.displayFlag);
+    }},
+    indexStart() {{
+      const p = this.tableConfig.pagination;
+      if (!p) return 1;
+      return (p.currentPage - 1) * p.pageSize + 1;
+    }},
   }},
+
+  created() {{
+    this.loadTableData();
+  }},
+
   methods: {{
-    onSizeChange(size) {{
-      this.pagination.pageSize = size;
-      this.getTableData();
-    }},
-    onCurrentPageChange(page) {{
-      this.pagination.currentPage = page;
-      this.getTableData();
-    }},
-    getTableData() {{
-      const {{ currentPage, pageSize }} = this.pagination;
+    loadTableData() {{
+      const {{ currentPage, pageSize }} = this.tableConfig.pagination;
       this.$request({{
         ...Api.QUERY_LIST,
-        url: Api.QUERY_LIST.url + `?page=${{currentPage}}&pageSize=${{pageSize}}`,
+        params: {{
+          page: currentPage,
+          pageSize,
+          keyword: this.filterForm.keyword,
+        }},
       }})
-        .asyncThen(
-          (resp) => {{
-            if (resp.code === "ok") {{
-              this.tableData = resp.table || [];
-              this.pagination.total = resp.total || 0;
-            }} else {{
-              this.$message.error(resp.message || "获取列表失败");
-            }}
-          }},
-          (error) => {{
-            console.error("获取列表失败", error);
-            this.$message.error("获取列表失败");
+        .asyncThen((resp) => {{
+          const list = resp && resp.data ? resp.data : [];
+          const total = resp && resp.total ? resp.total : 0;
+          this.$set(this.tableConfig, "tableData", list);
+          this.$set(this.tableConfig.pagination, "total", total);
+          const selectedIds = this.selectedRows.map((r) => r.id);
+          if (selectedIds.length) {{
+            this.reapplySelection(selectedIds);
           }}
-        )
+        }})
         .asyncErrorCatch((error) => {{
-          console.error("请求异常", error);
-          this.$message.error("请求异常");
+          console.error("加载数据失败:", error);
         }});
+    }},
+
+    handleQuery() {{
+      this.$set(this.tableConfig.pagination, "currentPage", 1);
+      this.loadTableData();
+    }},
+
+    handleReset() {{
+      this.filterForm.keyword = "";
+      this.$set(this.tableConfig.pagination, "currentPage", 1);
+      this.loadTableData();
+    }},
+
+    onSizeChange(size) {{
+      this.$set(this.tableConfig.pagination, "pageSize", size);
+      this.$set(this.tableConfig.pagination, "currentPage", 1);
+      this.loadTableData();
+    }},
+
+    onCurrentPageChange(page) {{
+      this.$set(this.tableConfig.pagination, "currentPage", page);
+      this.loadTableData();
+    }},
+
+    handleSelectionChange(rows) {{
+      const currentPageIds = new Set(
+        (this.tableConfig.tableData || []).map((r) => r.id)
+      );
+      const otherPageRows = this.selectedRows.filter(
+        (r) => !currentPageIds.has(r.id)
+      );
+      this.selectedRows = [
+        ...otherPageRows,
+        ...(Array.isArray(rows) ? rows : []),
+      ];
+    }},
+
+    reapplySelection(selectedIds) {{
+      this.$nextTick(() => {{
+        const table = this.$refs.elTable;
+        if (!table) return;
+        table.clearSelection();
+        (this.tableConfig.tableData || []).forEach((row) => {{
+          if (selectedIds.includes(row.id)) {{
+            table.toggleRowSelection(row, true);
+          }}
+        }});
+      }});
+    }},
+
+    removeSelected(row) {{
+      this.selectedRows = this.selectedRows.filter((r) => r.id !== row.id);
+      const table = this.$refs.elTable;
+      const tableData = this.tableConfig.tableData || [];
+      const found = tableData.find((r) => r.id === row.id);
+      if (found && table) {{
+        table.toggleRowSelection(found, false);
+      }}
+    }},
+
+    clearAllSelected() {{
+      this.selectedRows = [];
+      const table = this.$refs.elTable;
+      if (table) table.clearSelection();
+    }},
+
+    /**
+     * 供弹窗"确定"按钮调用，返回当前所有已选行数据
+     */
+    getSelectedData() {{
+      return this.selectedRows;
     }},
   }},
 }};
@@ -1691,84 +1915,204 @@ export default {{
 
 <style lang="scss">
 .{component_tag} {{
+  height: 100%;
+  width: 100%;
   box-sizing: border-box;
-  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 16px;
+  overflow: hidden;
 
-  .page-header {{
-    margin-bottom: 16px;
-    h2 {{
-      font-size: 18px;
+  .filter-area {{
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-shrink: 0;
+    flex-wrap: wrap;
+  }}
+
+  .filter-actions {{
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    flex-shrink: 0;
+  }}
+
+  .selected-bar {{
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    flex-shrink: 0;
+    padding: 6px 10px;
+    background: #f0f7ff;
+    border: 1px solid #b3d8ff;
+    border-radius: 4px;
+    font-size: 13px;
+    min-height: 36px;
+    max-height: 72px;
+    overflow-y: auto;
+
+    .selected-bar-title {{
       font-weight: 600;
       color: #303133;
-      margin: 0;
+      white-space: nowrap;
+      flex-shrink: 0;
+
+      .selected-badge {{
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 18px;
+        height: 18px;
+        padding: 0 5px;
+        background: #409eff;
+        color: #fff;
+        border-radius: 9px;
+        font-size: 11px;
+        font-weight: 600;
+        margin-left: 4px;
+      }}
     }}
+
+    .selected-bar-empty {{ color: #c0c4cc; font-style: italic; }}
+
+    .selected-bar-tags {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      flex: 1;
+
+      .bar-tag {{
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        height: 22px;
+        padding: 0 6px;
+        background: #fff;
+        border: 1px solid #b3d8ff;
+        border-radius: 3px;
+        font-size: 12px;
+        color: #409eff;
+
+        .bar-tag-label {{ max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+        .bar-tag-close {{ cursor: pointer; color: #909399; &:hover {{ color: #f56c6c; }} }}
+      }}
+    }}
+
+    .bar-clear {{
+      margin-left: auto;
+      color: #909399;
+      cursor: pointer;
+      font-size: 12px;
+      white-space: nowrap;
+      flex-shrink: 0;
+      &:hover {{ color: #f56c6c; }}
+    }}
+  }}
+}}
+
+.x-lov-modal {{
+  .{component_tag} {{
+    // 弹窗内高度有限，按需压缩各区域
   }}
 }}
 </style>
 """)
 
-        # API
-        self._write(ws_path, "src/api/index.js", """const Api = {
-  QUERY_LIST: {
-    url: 'xdap-app/custom/demo/list',
-    method: 'get'
-  },
-  CREATE_ITEM: {
-    url: 'xdap-app/custom/demo/create',
-    method: 'post'
-  },
-  UPDATE_ITEM: {
-    url: 'xdap-app/custom/demo/update',
-    method: 'post'
-  },
-  DELETE_ITEM: {
-    url: 'xdap-app/custom/demo/delete',
-    method: 'post'
-  }
+        # ======== src/form-page-local/ (国际化) ========
+        self._write(ws_path, "src/form-page-local/index.js", """import zhLocaleModule from './zh-CN/index.js'
+import enLocaleModule from './en-US/index.js'
+
+if (window.df && window.df.getI18n && window.df.getI18n().mergeLocaleMessage) {
+  window.df.getI18n().mergeLocaleMessage('zh-CN', zhLocaleModule)
+  window.df.getI18n().mergeLocaleMessage('en-US', enLocaleModule)
 }
-
-export default Api
-""")
-
-        # mixin
-        self._write(ws_path, "src/mixin/custom-permissions.mixin.js", """/**
- * 自定义权限 Mixin
- * 提供 customPagePermissions 对象，用于按钮权限控制
- */
-export default {
-  data() {
-    return {
-      customPagePermissions: {}
-    }
-  },
-  created() {
-    // 在 aPaaS 平台中，权限由系统自动注入
-    // 本地开发时默认全部开放
-    this.customPagePermissions = {
-      canCreate: true,
-      canEdit: true,
-      canDelete: true,
-      canExport: true
-    }
-  }
-}
-""")
-
-        # i18n
-        self._write(ws_path, "src/form-page-local/index.js", """import zhCN from './zh-CN'
-import enUS from './en-US'
-
-export default { 'zh-CN': zhCN, 'en-US': enUS }
 """)
         self._write(ws_path, "src/form-page-local/zh-CN/index.js", """export default {
-  customPage: {
-    title: '页面标题'
-  }
-}
+  formPage: {},
+};
 """)
         self._write(ws_path, "src/form-page-local/en-US/index.js", """export default {
-  customPage: {
-    title: 'Page Title'
+  formPage: {},
+};
+""")
+
+        # ======== preview/ (本地预览环境) ========
+        self._write(ws_path, "preview/index.html", """<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>本地预览</title>
+</head>
+<body>
+  <div id="app"></div>
+</body>
+</html>
+""")
+
+        self._write(ws_path, "preview/App.vue", f"""<template>
+  <div style="min-height: 100vh;">
+    <{component_tag} />
+  </div>
+</template>
+
+<script>
+export default {{ name: 'PreviewApp' }}
+</script>
+""")
+
+        self._write(ws_path, "preview/main.js", f"""import Vue from 'vue'
+import ElementUI from 'element-ui'
+import 'element-ui/lib/theme-chalk/index.css'
+
+import {{ installMockRequest }} from './mock-api'
+import ApaasCustomPage from '../src/form-page/{component_tag}.vue'
+import App from './App.vue'
+
+Vue.use(ElementUI)
+
+// 注入 $request mock
+installMockRequest(Vue)
+
+// 注册业务组件
+Vue.component('{component_tag}', ApaasCustomPage)
+
+new Vue({{
+  el: '#app',
+  render: h => h(App)
+}})
+""")
+
+        self._write(ws_path, "preview/mock-api.js", """/**
+ * 模拟平台 $request：通过 devServer proxy 转发到后端
+ * 支持 .asyncThen().asyncErrorCatch() 链式调用（与平台行为一致）
+ */
+export function installMockRequest(Vue) {
+  Vue.prototype.$request = function (config) {
+    const ctrl = {}
+
+    const promise = fetch(config.url, {
+      method: (config.method || 'GET').toUpperCase(),
+      headers: { 'Content-Type': 'application/json' },
+      body: config.params != null ? JSON.stringify(config.params) : undefined
+    }).then(function (res) {
+      if (!res.ok) throw new Error('HTTP ' + res.status)
+      return res.json()
+    })
+
+    ctrl.asyncThen = function (onSuccess, onError) {
+      promise.then(onSuccess).catch(onError || function () {})
+      return ctrl
+    }
+
+    ctrl.asyncErrorCatch = function (onError) {
+      promise.catch(onError)
+      return ctrl
+    }
+
+    return ctrl
   }
 }
 """)

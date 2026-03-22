@@ -965,6 +965,7 @@ async def auto_pipeline(
                 scene_map = {
                     "form-component": SceneType.WEB_COMPONENT,
                     "form-page": SceneType.WEB_PAGE,
+                    "menu-page": SceneType.WEB_PAGE,
                     "form-list": SceneType.WEB_LIST_VIEW,
                     "backend-api": SceneType.BACKEND_API,
                 }

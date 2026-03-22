@@ -74,6 +74,32 @@
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
             </div>
           </div>
+
+          <div class="entry-card" @click="goToPageDev">
+            <div class="entry-icon page-icon">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z" stroke="url(#pageGrad)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                <polyline points="14 2 14 8 20 8" stroke="url(#pageGrad)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                <line x1="8" y1="13" x2="16" y2="13" stroke="url(#pageGrad)" stroke-width="1.5" stroke-linecap="round"/>
+                <line x1="8" y1="17" x2="13" y2="17" stroke="url(#pageGrad)" stroke-width="1.5" stroke-linecap="round"/>
+                <defs>
+                  <linearGradient id="pageGrad" x1="4" y1="2" x2="20" y2="22">
+                    <stop offset="0%" stop-color="#34d399"/>
+                    <stop offset="100%" stop-color="#059669"/>
+                  </linearGradient>
+                </defs>
+              </svg>
+            </div>
+            <div class="entry-body">
+              <div class="entry-title">页面开发</div>
+              <div class="entry-subtitle">AI 自开发页面</div>
+              <div class="entry-tags">菜单页面 · 弹窗 · 数据查询</div>
+            </div>
+            <div class="entry-action">
+              <span class="action-text">进入</span>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+            </div>
+          </div>
         </div>
 
         <!-- Workspaces -->
@@ -177,6 +203,11 @@ const goToAppBuilder = () => {
 const goToCoding = () => {
   localStorage.setItem('coding_last_project_id', String(projectId))
   router.push({ path: '/coding', query: { project_id: String(projectId) } })
+}
+
+const goToPageDev = () => {
+  localStorage.setItem('coding_last_project_id', String(projectId))
+  router.push({ path: '/coding', query: { project_id: String(projectId), type: 'page' } })
 }
 
 const openWorkspace = (ws: WorkspaceInfo) => {
@@ -362,7 +393,7 @@ const onProjectSaved = async () => {
 /* ── Entry Cards ── */
 .entry-cards {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, 1fr);
   gap: 16px;
   margin-bottom: 48px;
 }
@@ -401,6 +432,10 @@ const onProjectSaved = async () => {
 
 .coding-icon {
   background: rgba(251, 191, 36, 0.1);
+}
+
+.page-icon {
+  background: rgba(52, 211, 153, 0.1);
 }
 
 .entry-body {

@@ -1189,12 +1189,69 @@ AGENT_SYSTEM_PROMPT = """你是一个 aPaaS 低代码平台的专业前端组件
 - 通过 `this.widget.customComponentConfig` 获取设计器配置
 - 使用 `this.$set(this.formData, key, value)` 进行响应式更新
 
+### MENU_PAGE 类型（自开发菜单页面 / 弹窗页面）
+
+页面打包为 UMD 组件后部署，可作为独立菜单页面或被平台弹窗（x-lov）引用。
+
+**项目结构**：
+```
+src/
+  index.js              # UMD 入口：Vue.component + window[Symbol.for("组件名")]
+  apaas.json            # templateType: MENU_PAGE, router 配置
+  api/index.js          # 接口定义（url 以 /custom/ 开头）
+  form-page/
+    apaas-custom-xxx.vue  # 核心业务组件
+  form-page-local/      # 国际化（必须存在）
+    index.js
+    zh-CN/index.js
+    en-US/index.js
+preview/                # 本地预览环境
+  index.html / main.js / App.vue / mock-api.js
+```
+
+**核心规则**：
+1. **不要使用 x-http-block-table / x-ag-grid** — 直接使用 Element UI 的 `<el-table>` + `<el-pagination>`
+2. **$request 不是 Promise** — 必须用 `.asyncThen()` / `.asyncErrorCatch()`，不能用 `.then()` / `.catch()`
+3. **getSelectedData() 方法** — 弹窗场景必须实现，返回 `this.selectedRows` 数组
+4. **window Symbol 注册** — `src/index.js` 中必须 `window[Symbol.for("组件名")] = Component`
+5. **跨页多选** — el-table 翻页会清空选中，需自己维护 `selectedRows`：
+   - `handleSelectionChange`：合并当前页选中 + 其他页已选
+   - `reapplySelection`：翻页后用 `toggleRowSelection` 恢复勾选
+   - 数据更新用 `this.$set()` 确保响应式
+6. **布局** — 用 flex 布局，表格区域 `flex: 1` 填充剩余空间
+7. **组件名** — `apaas-custom-{kebab-name}` 格式
+8. **只修改 src/ 下的业务文件**（form-page/*.vue, api/index.js 等），不要修改 vue.config.js、babel.config.js
+
+**edit.vue 模板要点**：
+```vue
+<template>
+  <div class="apaas-custom-xxx">
+    <!-- 筛选区 -->
+    <!-- 查询/重置按钮 -->
+    <!-- 已选提示条（弹窗场景） -->
+    <!-- el-table + el-pagination -->
+  </div>
+</template>
+<script>
+export default {
+  name: 'apaas-custom-xxx',
+  data() { return { selectedRows: [], tableConfig: { tableData: [], pagination: {...} } } },
+  methods: {
+    loadTableData() { this.$request({...}).asyncThen(...).asyncErrorCatch(...) },
+    handleSelectionChange(rows) { /* 跨页多选逻辑 */ },
+    getSelectedData() { return this.selectedRows }
+  }
+}
+</script>
+```
+
 ## 重要约束
 - 不要修改 vue.config.js、babel.config.js 等基础设施文件
 - 只有需要新增 npm 依赖时才可以修改 package.json（修改后要运行 npm install）
 - Element UI 已全局注册，不要 import
 - 组件代码必须是完整的 .vue 单文件组件
-- 所有场景组件的 name 必须与 widget.config.js 中 component 映射一致
+- FORM_COMPONENT: 所有场景组件的 name 必须与 widget.config.js 中 component 映射一致
+- MENU_PAGE: 组件名必须是 apaas-custom-{kebab-name} 格式，与 apaas.json router 一致
 
 ## 输出要求
 - 完成后给出简要总结，列出修改了哪些文件

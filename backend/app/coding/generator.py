@@ -297,7 +297,7 @@ class CodingGenerator:
         detect_prompt = """根据用户的需求描述，判断属于以下哪种aPaaS自开发场景，只返回场景代码，不要其他内容：
 
 - web_component: Web端自开发组件（表单组件、输入控件等）
-- web_page: Web端自开发页面（完整页面、图表页面等）
+- web_page: Web端自开发页面（菜单页面、弹窗页面、数据查询页面、完整页面、图表页面等，用户说"做一个XX页面"属于此类）
 - web_list_view: Web端自开发列表视图（自定义列表展示）
 - web_layout: Web端自定义布局
 - web_login: Web端自定义登录页
