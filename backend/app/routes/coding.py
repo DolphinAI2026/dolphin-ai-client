@@ -17,10 +17,12 @@ from app.deps import get_auth_context, AuthContext
 from app.coding.scenes import SceneType, get_scene, get_all_scenes, get_scenes_by_category
 from app.coding.generator import CodingGenerator, parse_files_from_response, CodeGenerationResult
 from app.coding.templates import get_project_template
-from app.coding.prompts import get_scene_prompt
+from app.coding.prompts import get_scene_prompt, AGENT_SYSTEM_PROMPT
 from app.coding.workspace import WorkspaceManager, ProjectType, WORKSPACE_ROOT
+from app.coding.vibe_agent import VibeCodingAgent
 from app.llm_client import LLMClient
 from app.apaas_client import APaaSClient
+from app.config import settings
 from app.coding.verifier import ComponentVerifier
 
 logger = logging.getLogger(__name__)
@@ -772,11 +774,16 @@ async def auto_pipeline(
                 else:
                     serve_port = serve_info["port"]
 
+                # 从用户的平台连接信息获取 debug 参数（不再硬编码）
+                _platform_url = _get_user_platform_url(user)
+                _tenant_id = user.apaas_tenant_id or settings.apaas_tenant_id
+                _app_id = req.app_id or "806997227284201472"
+
                 # 自动化 Debug（登录 + 导航 + 截图）
                 debug_result = await ws_mgr.start_auto_debug(
                     ws_id=ws_id, serve_port=serve_port,
-                    platform_url="https://apaas-dev8.dfy.definesys.cn/platform/",
-                    tenant_id="566642786573484033", app_id="806997227284201472",
+                    platform_url=_platform_url,
+                    tenant_id=_tenant_id, app_id=_app_id,
                     output_name=output_name, custom_widget_list=custom_widget_list,
                 )
 
@@ -859,21 +866,8 @@ async def auto_pipeline(
                 yield _sse({"type": "step", "step": "create_workspace", "status": "done",
                             "data": {"workspace_id": ws_id, "project_name": meta["project_name"]}})
 
-            # ---- Step 3: 生成代码 ----
+            # ---- Step 3: 生成代码（Agent 模式）----
             yield _sse({"type": "step", "step": "generate", "status": "running"})
-
-            # 获取对话历史
-            history = []
-            if conversation_id:
-                history = await _get_conversation_history(db, conversation_id)
-
-            # 获取应用上下文
-            app_context = None
-            if req.app_id and user.apaas_token:
-                app_context = await _get_app_context(user, req.app_id)
-
-            # 获取工作区上下文
-            workspace_context = _build_workspace_context(ws_id)
 
             # 创建或获取对话
             if not conversation_id:
@@ -891,42 +885,46 @@ async def auto_pipeline(
 
             await _save_coding_message(db, conversation_id, "user", req.message)
 
-            # 流式生成代码
-            full_response = ""
-            async for chunk in generator.generate_stream(
-                scene_type=scene_type,
-                user_requirement=req.message,
-                conversation_history=history,
-                app_context=app_context,
-                workspace_context=workspace_context,
+            # 获取对话历史摘要
+            conversation_summary = ""
+            if conversation_id:
+                history = await _get_conversation_history(db, conversation_id)
+                if history:
+                    conversation_summary = "\n".join(
+                        f"{'User' if m.get('role') == 'user' else 'Assistant'}: {m.get('content', '')[:200]}"
+                        for m in history[-6:]  # Last 3 rounds
+                    )
+
+            # Use VibeCodingAgent for autonomous coding
+            agent = VibeCodingAgent(ws_id, system_prompt=AGENT_SYSTEM_PROMPT)
+            agent_result_text = ""
+
+            async for event in agent.run(
+                requirement=req.message,
+                conversation_summary=conversation_summary,
+                max_turns=30,
             ):
-                full_response += chunk
-                yield _sse({"type": "content", "content": chunk})
+                # Forward all agent events to frontend via SSE
+                yield _sse(event)
 
-            await _save_coding_message(db, conversation_id, "assistant", full_response)
+                # Collect agent thinking for conversation history
+                if event.get("type") == "agent_thinking":
+                    agent_result_text += event.get("content", "") + "\n"
+                elif event.get("type") == "agent_done":
+                    if event.get("result"):
+                        agent_result_text += "\n" + event["result"]
 
-            # 解析并写入文件
-            generated_files = parse_files_from_response(full_response)
-            written_files = []
-            # 保护关键脚手架文件不被 AI 覆盖
-            protected_files = {"package.json", "vue.config.js", "babel.config.js", "jsconfig.json",
-                               "src/index.js", "src/apaas.json"}
-            for gf in generated_files:
-                if gf.path in protected_files:
-                    logger.info(f"跳过受保护文件: {gf.path}")
-                    continue
-                try:
-                    ws_mgr.write_file(ws_id, gf.path, gf.content)
-                    written_files.append(gf.path)
-                except Exception as e:
-                    logger.warning(f"写入文件失败 {gf.path}: {e}")
+            # Save agent output to conversation
+            if agent_result_text.strip():
+                await _save_coding_message(db, conversation_id, "assistant", agent_result_text.strip())
 
+            # Agent handles file writes, npm install, and serve internally
+            # Just report generation step as done
             yield _sse({"type": "step", "step": "generate", "status": "done",
-                        "data": {"files": written_files, "file_count": len(written_files)}})
+                        "data": {"files": [], "file_count": 0, "agent_mode": True}})
 
-            # ---- 迭代模式到此结束（serve 热更新自动生效）----
+            # For iteration mode, agent already handles everything
             if is_iteration:
-                # 检查 serve 是否在运行
                 serve_status = ws_mgr.is_serve_running(ws_id)
                 yield _sse({"type": "step", "step": "hot_reload", "status": "done",
                             "data": {"serve_running": serve_status["running"],
@@ -935,21 +933,30 @@ async def auto_pipeline(
                             "conversation_id": conversation_id})
                 return
 
-            # ---- Step 4: 安装依赖（首次创建）----
-            yield _sse({"type": "step", "step": "install", "status": "running"})
-            install_result = await ws_mgr.install_deps(ws_id)
-            if install_result["status"] == "error":
-                yield _sse({"type": "step", "step": "install", "status": "error",
-                            "data": {"message": install_result["message"]}})
+            # For first-time creation, agent should have run npm install + serve
+            # But check and do it as fallback if agent didn't
+            serve_status = ws_mgr.is_serve_running(ws_id)
+            if not serve_status["running"]:
+                # ---- Step 4: 安装依赖（首次创建 fallback）----
+                yield _sse({"type": "step", "step": "install", "status": "running"})
+                install_result = await ws_mgr.install_deps(ws_id)
+                if install_result["status"] == "error":
+                    yield _sse({"type": "step", "step": "install", "status": "error",
+                                "data": {"message": install_result["message"]}})
+                else:
+                    yield _sse({"type": "step", "step": "install", "status": "done"})
+
+                # ---- Step 5: 启动 serve ----
+                yield _sse({"type": "step", "step": "serve", "status": "running"})
+                serve_result = await ws_mgr.start_serve(ws_id)
+                yield _sse({"type": "step", "step": "serve", "status": "done" if serve_result["status"] == "ok" else "error",
+                            "data": {"port": serve_result.get("port"),
+                                     "url": f"https://localhost:{serve_result.get('port', 8080)}/"}})
             else:
                 yield _sse({"type": "step", "step": "install", "status": "done"})
-
-            # ---- Step 5: 启动 serve ----
-            yield _sse({"type": "step", "step": "serve", "status": "running"})
-            serve_result = await ws_mgr.start_serve(ws_id)
-            yield _sse({"type": "step", "step": "serve", "status": "done" if serve_result["status"] == "ok" else "error",
-                        "data": {"port": serve_result.get("port"),
-                                 "url": f"https://localhost:{serve_result.get('port', 8080)}/"}})
+                yield _sse({"type": "step", "step": "serve", "status": "done",
+                            "data": {"port": serve_status.get("port"),
+                                     "url": f"https://localhost:{serve_status.get('port', 8080)}/"}})
 
             yield _sse({"type": "done", "workspace_id": ws_id,
                         "conversation_id": conversation_id})
@@ -1023,10 +1030,10 @@ async def get_debug_screenshot(ws_id: str, filename: str):
 
 
 class DebugRequest(BaseModel):
-    """Debug 请求"""
-    platform_url: str = "https://apaas-dev8.dfy.definesys.cn/platform/"
-    tenant_id: str = "566642786573484033"
-    app_id: str = "806997227284201472"
+    """Debug 请求（参数可选，优先从用户平台连接信息读取）"""
+    platform_url: Optional[str] = None
+    tenant_id: Optional[str] = None
+    app_id: Optional[str] = None
 
 
 @router.post("/workspace/{ws_id}/debug")
@@ -1059,18 +1066,36 @@ async def debug_workspace(
     output_name = apaas_config.get("outputName", "")
     custom_widget_list = apaas_config.get("customWidgetList", [])
 
-    # 3. 启动 Puppeteer debug（后台进程）
+    # 3. 从请求参数或用户平台连接信息获取 debug 参数
+    user = ctx.user
+    _platform_url = req.platform_url or _get_user_platform_url(user)
+    _tenant_id = req.tenant_id or user.apaas_tenant_id or settings.apaas_tenant_id
+    _app_id = req.app_id or "806997227284201472"
+
+    # 4. 启动 Puppeteer debug（后台进程）
     debug_result = await ws_mgr.start_debug(
         ws_id=ws_id,
         serve_port=serve_port,
-        platform_url=req.platform_url,
-        tenant_id=req.tenant_id,
-        app_id=req.app_id,
+        platform_url=_platform_url,
+        tenant_id=_tenant_id,
+        app_id=_app_id,
         output_name=output_name,
         custom_widget_list=custom_widget_list,
     )
 
     return debug_result
+
+
+def _get_user_platform_url(user) -> str:
+    """从用户的平台连接信息推导出平台前端 URL"""
+    base = user.apaas_base_url or settings.apaas_base_url or ""
+    # apaas_base_url 通常是后端地址如 https://apaas-dev8.dfy.definesys.cn/backend
+    # 平台前端地址是 https://apaas-dev8.dfy.definesys.cn/platform/
+    if "/backend" in base:
+        return base.replace("/backend", "/platform/")
+    if base and not base.endswith("/"):
+        return base + "/platform/"
+    return base + "platform/" if base else "https://apaas-dev8.dfy.definesys.cn/platform/"
 
 
 def _sse(data: dict) -> str:

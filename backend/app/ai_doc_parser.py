@@ -453,17 +453,17 @@ def _sanitize_codes(data: Dict):
             return ascii_part
         return 'c' + hashlib.md5(code.encode()).hexdigest()[:7]
 
-    for r in data.get("roles", []):
+    for r in (data.get("roles") or []):
         r["code"] = _fix(r.get("code"), r.get("name", ""))
 
-    for d in data.get("dicts", []):
+    for d in (data.get("dicts") or []):
         d["code"] = _fix(d.get("code"), d.get("name", ""))
-        for opt in d.get("options", []):
+        for opt in (d.get("options") or []):
             opt["code"] = _fix(opt.get("code"), opt.get("name", ""))
 
-    for m in data.get("models", []):
+    for m in (data.get("models") or []):
         m["code"] = _fix(m.get("code"), m.get("name", ""))
-        for f in m.get("fields", []):
+        for f in (m.get("fields") or []):
             f["code"] = _fix(f.get("code"), f.get("name", ""))
             if f.get("dict"):
                 f["dict"] = _fix(f["dict"])
@@ -472,7 +472,7 @@ def _sanitize_codes(data: Dict):
                 f["ref"]["field"] = _fix(f["ref"].get("field", ""))
             if f.get("sub_code"):
                 f["sub_code"] = _fix(f["sub_code"])
-            for sf in f.get("sub_fields", []):
+            for sf in (f.get("sub_fields") or []):
                 sf["code"] = _fix(sf.get("code"), sf.get("name", ""))
                 if sf.get("dict"):
                     sf["dict"] = _fix(sf["dict"])
@@ -492,11 +492,11 @@ _ICON_MAP = {
 
 def _fill_icons(data: Dict):
     """补充缺失的 icon 字段"""
-    for m in data.get("models", []):
-        for f in m.get("fields", []):
+    for m in (data.get("models") or []):
+        for f in (m.get("fields") or []):
             if not f.get("icon"):
                 f["icon"] = _ICON_MAP.get(f.get("type", ""), "T")
-            for sf in f.get("sub_fields", []):
+            for sf in (f.get("sub_fields") or []):
                 if not sf.get("icon"):
                     sf["icon"] = _ICON_MAP.get(sf.get("type", ""), "T")
 
@@ -505,7 +505,7 @@ def _dedup_dicts(data: Dict):
     """去重字典（分段解析可能产生重复）"""
     seen = {}
     deduped = []
-    for d in data.get("dicts", []):
+    for d in (data.get("dicts") or []):
         code = d.get("code", "")
         if code not in seen:
             seen[code] = d

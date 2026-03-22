@@ -511,8 +511,9 @@ async def upload_doc_with_conversation(
                     data = event["data"]
 
         except Exception as e:
-            logger.error(f"AI 文档解析失败: {e}", exc_info=True)
-            yield {"event": "error", "data": json.dumps({"message": f"文档解析失败: {e}"}, ensure_ascii=False)}
+            err_msg = str(e) or repr(e) or type(e).__name__
+            logger.error(f"AI 文档解析失败: {err_msg}", exc_info=True)
+            yield {"event": "error", "data": json.dumps({"message": f"文档解析失败: {err_msg}"}, ensure_ascii=False)}
             return
 
         if not data:

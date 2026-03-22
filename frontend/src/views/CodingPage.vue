@@ -3,10 +3,10 @@
     <!-- Header -->
     <header class="coding-header">
       <div class="header-left">
-        <el-button text @click="$router.push('/')">
+        <el-button text @click="$router.push('/chat')">
           <el-icon><ArrowLeft /></el-icon>
         </el-button>
-        <h3 class="header-title">Vibe Coding</h3>
+        <h3 class="header-title">复杂开发智能体</h3>
         <el-tag v-if="codingStore.workspace" size="small" type="info">
           {{ codingStore.workspace.project_name }}
         </el-tag>
@@ -40,18 +40,46 @@
         >
           <el-icon><Upload /></el-icon> 打包发布
         </el-button>
-        <el-button
-          v-if="codingStore.workspace"
-          size="small"
-          @click="showWorkspaceList = true"
-          class="header-btn"
-        >
-          <el-icon><Menu /></el-icon>
-        </el-button>
       </div>
     </header>
 
-    <!-- Chat Area (full width, scrollable) -->
+    <div class="coding-body">
+      <!-- Left Sidebar: Workspace List -->
+      <aside class="workspace-sidebar">
+        <div class="sidebar-header">
+          <span class="sidebar-title">工作区</span>
+          <el-button size="small" type="primary" text @click="startNewWorkspace">
+            <el-icon><Plus /></el-icon>
+          </el-button>
+        </div>
+        <div class="sidebar-list">
+          <div
+            v-for="ws in existingWorkspaces"
+            :key="ws.id"
+            class="sidebar-ws-item"
+            :class="{ active: codingStore.workspace?.id === ws.id }"
+            @click="openExistingWorkspace(ws)"
+          >
+            <div class="sidebar-ws-name">{{ ws.project_name }}</div>
+            <div class="sidebar-ws-meta">
+              <span class="sidebar-ws-type">{{ ws.project_type }}</span>
+              <el-button
+                size="small"
+                type="danger"
+                text
+                @click.stop="deleteWorkspace(ws)"
+                class="sidebar-ws-del"
+              >×</el-button>
+            </div>
+          </div>
+          <div v-if="existingWorkspaces.length === 0" class="sidebar-empty">
+            暂无工作区
+          </div>
+        </div>
+      </aside>
+
+      <!-- Main Content -->
+      <div class="main-content">
     <div class="chat-area" ref="chatAreaRef">
       <!-- Welcome message when no workspace -->
       <div v-if="!codingStore.workspace && codingStore.messages.length === 0" class="welcome">
@@ -184,42 +212,8 @@
       <div class="input-hint">Ctrl + Enter 发送</div>
     </div>
 
-    <!-- Workspace List Dialog -->
-    <el-dialog v-model="showWorkspaceList" title="我的工作区" width="520px" class="ws-dialog">
-      <!-- 新建工作区按钮 -->
-      <div class="ws-actions">
-        <el-button type="primary" size="small" @click="startNewWorkspace" style="width:100%">
-          <el-icon><Plus /></el-icon> 新建工作区
-        </el-button>
       </div>
-
-      <div v-if="existingWorkspaces.length === 0" style="text-align:center;color:#999;padding:20px;">
-        暂无工作区
-      </div>
-      <div v-else>
-        <div
-          v-for="ws in existingWorkspaces"
-          :key="ws.id"
-          class="workspace-item"
-          @click="openExistingWorkspace(ws); showWorkspaceList = false"
-        >
-          <div class="ws-info">
-            <span class="ws-name">{{ ws.project_name }}</span>
-            <span class="ws-type">{{ ws.project_type }}</span>
-          </div>
-          <div class="ws-actions-right">
-            <el-tag size="small" :type="ws.status === 'ready' ? 'success' : 'warning'">{{ ws.status }}</el-tag>
-            <el-button
-              size="small"
-              type="danger"
-              text
-              @click.stop="deleteWorkspace(ws)"
-              class="ws-delete-btn"
-            >删除</el-button>
-          </div>
-        </div>
-      </div>
-    </el-dialog>
+    </div>
   </div>
 </template>
 
@@ -244,7 +238,6 @@ const chatAreaRef = ref<HTMLElement>()
 const scrollAnchor = ref<HTMLElement>()
 
 const existingWorkspaces = ref<WorkspaceInfo[]>([])
-const showWorkspaceList = ref(false)
 const isPublishing = ref(false)
 const isDebugging = ref(false)
 
@@ -478,6 +471,47 @@ async function sendMessage() {
               scrollToBottom()
             } else if (parsed.type === 'content') {
               fullContent += parsed.content
+              codingStore.streamContent = fullContent
+              scrollToBottom()
+            } else if (parsed.type === 'agent_thinking') {
+              // Agent reasoning / text output
+              fullContent += parsed.content + '\n'
+              codingStore.streamContent = fullContent
+              scrollToBottom()
+            } else if (parsed.type === 'agent_tool') {
+              // Agent tool call - show what tool is being used
+              const toolDisplay = parsed.tool_display || parsed.tool
+              const preview = parsed.input_preview || ''
+              fullContent += `\n**${toolDisplay}**: ${preview}\n`
+              codingStore.streamContent = fullContent
+              scrollToBottom()
+            } else if (parsed.type === 'agent_result') {
+              // Agent tool result - show output preview
+              if (parsed.is_error) {
+                fullContent += `\n> Error: ${parsed.output_preview}\n`
+              } else if (parsed.output_preview) {
+                // Show truncated result for context
+                const preview = parsed.output_preview.length > 200
+                  ? parsed.output_preview.substring(0, 200) + '...'
+                  : parsed.output_preview
+                fullContent += `\n> ${preview}\n`
+              }
+              codingStore.streamContent = fullContent
+              scrollToBottom()
+            } else if (parsed.type === 'agent_done') {
+              // Agent completed its loop
+              if (parsed.result) {
+                fullContent += '\n' + parsed.result + '\n'
+                codingStore.streamContent = fullContent
+              }
+              if (parsed.cost_usd) {
+                fullContent += `\n*Agent completed in ${parsed.num_turns || '?'} turns (cost: $${parsed.cost_usd.toFixed(4)})*\n`
+                codingStore.streamContent = fullContent
+              }
+              scrollToBottom()
+            } else if (parsed.type === 'agent_error') {
+              // Agent error
+              fullContent += `\n**Agent Error**: ${parsed.message}\n`
               codingStore.streamContent = fullContent
               scrollToBottom()
             } else if (parsed.type === 'files') {
@@ -855,6 +889,109 @@ watch(() => route.path, () => {
   flex-direction: column;
   background: #0a0a0a;
   color: #e0e0e0;
+}
+
+/* ============ Body Layout ============ */
+.coding-body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* ============ Workspace Sidebar ============ */
+.workspace-sidebar {
+  width: 220px;
+  flex-shrink: 0;
+  border-right: 1px solid #1e1e1e;
+  background: #111;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid #1e1e1e;
+}
+
+.sidebar-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #aaa;
+}
+
+.sidebar-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.sidebar-ws-item {
+  padding: 10px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  margin-bottom: 2px;
+  transition: background 0.15s;
+}
+
+.sidebar-ws-item:hover {
+  background: #1a1a2e;
+}
+
+.sidebar-ws-item.active {
+  background: #1a1a2e;
+  border-left: 2px solid #667eea;
+  padding-left: 8px;
+}
+
+.sidebar-ws-name {
+  font-size: 13px;
+  color: #e0e0e0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 2px;
+}
+
+.sidebar-ws-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sidebar-ws-type {
+  font-size: 11px;
+  color: #555;
+}
+
+.sidebar-ws-del {
+  font-size: 14px;
+  padding: 0 4px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.sidebar-ws-item:hover .sidebar-ws-del {
+  opacity: 1;
+}
+
+.sidebar-empty {
+  text-align: center;
+  color: #555;
+  font-size: 12px;
+  padding: 20px 0;
+}
+
+/* ============ Main Content ============ */
+.main-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
 }
 
 /* ============ Header ============ */
@@ -1349,57 +1486,7 @@ watch(() => route.path, () => {
 }
 
 /* ============ Workspace Dialog ============ */
-.ws-dialog :deep(.el-dialog) {
-  background: #1a1a1a;
-  border: 1px solid #2a2a2a;
-}
-
-.workspace-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 16px;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: background 0.2s;
-  margin-bottom: 4px;
-}
-
-.workspace-item:hover {
-  background: #252525;
-}
-
-.ws-info {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.ws-name {
-  font-size: 14px;
-  font-weight: 500;
-  color: #e0e0e0;
-}
-
-.ws-type {
-  font-size: 12px;
-  color: #888;
-}
-
-.ws-actions {
-  margin-bottom: 12px;
-}
-
-.ws-actions-right {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.ws-delete-btn {
-  font-size: 12px;
-  padding: 2px 6px;
-}
+/* (old workspace dialog styles removed - now using sidebar) */
 
 /* ============ Scrollbar ============ */
 .chat-area::-webkit-scrollbar {

@@ -346,14 +346,21 @@ const messages = reactive<Message[]>([
 const scrollToBottom = () => { nextTick(() => { if (messagesRef.value) messagesRef.value.scrollTop = messagesRef.value.scrollHeight }) }
 
 const switchAgent = (key: string) => {
+  // 复杂开发智能体 → 跳转到 Vibe Coding 页面
+  if (key === 'developer') {
+    router.push('/coding')
+    return
+  }
+
   currentAgent.value = key
   const greetings: Record<string, string> = {
     builder: '已切换到搭建智能体。告诉我你想创建什么应用？',
     assistant: '已切换到辅助开发智能体。我可以帮你完善已有应用：\n• 创建审批流程\n• 配置业务规则\n• 调整表单组件\n• 配置数据权限',
-    developer: '已切换到复杂开发智能体。我可以帮你：\n• 自定义Vue组件\n• 后端接口集成\n• Groovy脚本编写'
   }
-  messages.push({ id: Date.now(), role: 'assistant', agent: key, content: greetings[key], created_at: '' })
-  scrollToBottom()
+  if (greetings[key]) {
+    messages.push({ id: Date.now(), role: 'assistant', agent: key, content: greetings[key], created_at: '' })
+    scrollToBottom()
+  }
 }
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))

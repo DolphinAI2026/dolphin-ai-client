@@ -1,0 +1,13 @@
+{
+  "entry": "index.js",
+  "templateType": "MENU_PAGE",
+  "router": {
+    "apaas-custom-avatar-picker": {
+      "name": "apaas-custom-avatar-picker",
+      "path": "apaas-custom-avatar-picker"
+    }
+  },
+  "customWidgetList": [],
+  "copyAssets": ["public/form-page/form-page-avatar-picker"],
+  "outputName": "form-page-avatar-picker"
+}
