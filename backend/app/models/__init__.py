@@ -25,6 +25,38 @@ class User(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
 
+class DocumentVersion(Base):
+    """文档版本 — 跟踪上传的设计文档"""
+    __tablename__ = "document_versions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    application_id: Mapped[int] = mapped_column(Integer, ForeignKey("applications.id"), nullable=False, index=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    raw_content: Mapped[str] = mapped_column(Text, nullable=False)
+    structure_index: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON 章节索引
+    parsed_config: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON 解析配置
+    summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class ChangePlan(Base):
+    """变更计划 — 文档版本间的增量变更"""
+    __tablename__ = "change_plans"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    application_id: Mapped[int] = mapped_column(Integer, ForeignKey("applications.id"), nullable=False, index=True)
+    conversation_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    from_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    to_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    diff_summary: Mapped[str] = mapped_column(Text, nullable=False)  # JSON {added, modified, removed}
+    actions: Mapped[str] = mapped_column(Text, nullable=False)  # JSON patch actions 数组
+    status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)  # pending/confirmed/completed/cancelled
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    executed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
 class Conversation(Base):
     __tablename__ = "conversations"
 
@@ -122,6 +154,7 @@ class Application(Base):
     requirement_doc: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON
     config_preview: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON
     generation_state: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON - copilot 中间状态
+    current_doc_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 当前文档版本号
     status: Mapped[str] = mapped_column(String(20), default="draft", nullable=False)  # draft/generating/completed/failed
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)

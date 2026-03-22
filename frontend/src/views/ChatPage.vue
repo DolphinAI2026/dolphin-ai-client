@@ -242,6 +242,71 @@
           </div>
         </div>
 
+        <!-- 变更计划确认 overlay -->
+        <div v-if="store.showChangePlan && store.changePlan" class="change-plan-overlay">
+          <div class="change-plan-header">
+            <h3>变更计划（V{{ store.changePlan.fromVersion }} → V{{ store.changePlan.toVersion }}）</h3>
+            <button class="change-plan-close" @click="store.showChangePlan = false">✕</button>
+          </div>
+
+          <div class="change-plan-body">
+            <!-- 新增 -->
+            <div class="change-group" v-if="addedActions.length">
+              <div class="group-title" @click="toggleChangePlanGroup('added')">
+                <span class="group-arrow" :class="{ expanded: expandedGroups.added }">▸</span>
+                新增 ({{ addedActions.length }})
+              </div>
+              <template v-if="expandedGroups.added">
+                <div v-for="action in addedActions" :key="action.id" class="change-item">
+                  <input type="checkbox" v-model="action.selected" class="change-checkbox" />
+                  <span class="change-icon add">+</span>
+                  <span class="change-desc">{{ action.description }}</span>
+                </div>
+              </template>
+            </div>
+
+            <!-- 修改 -->
+            <div class="change-group" v-if="modifiedActions.length">
+              <div class="group-title" @click="toggleChangePlanGroup('modified')">
+                <span class="group-arrow" :class="{ expanded: expandedGroups.modified }">▸</span>
+                修改 ({{ modifiedActions.length }})
+              </div>
+              <template v-if="expandedGroups.modified">
+                <div v-for="action in modifiedActions" :key="action.id" class="change-item">
+                  <input type="checkbox" v-model="action.selected" class="change-checkbox" />
+                  <span class="change-icon modify">~</span>
+                  <span class="change-desc">{{ action.description }}</span>
+                </div>
+              </template>
+            </div>
+
+            <!-- 删除 -->
+            <div class="change-group" v-if="removedActions.length">
+              <div class="group-title" @click="toggleChangePlanGroup('removed')">
+                <span class="group-arrow" :class="{ expanded: expandedGroups.removed }">▸</span>
+                删除 ({{ removedActions.length }})
+              </div>
+              <template v-if="expandedGroups.removed">
+                <div v-for="action in removedActions" :key="action.id" class="change-item">
+                  <input type="checkbox" v-model="action.selected" class="change-checkbox" />
+                  <span class="change-icon remove">-</span>
+                  <span class="change-desc">{{ action.description }}</span>
+                </div>
+              </template>
+            </div>
+          </div>
+
+          <div class="change-plan-footer">
+            <button class="cp-btn" @click="changePlanSelectAll(true)">全选</button>
+            <button class="cp-btn" @click="changePlanSelectAll(false)">取消全选</button>
+            <span class="cp-count">已选 {{ changePlanSelectedCount }}/{{ changePlanTotalCount }} 项</span>
+            <button class="cp-btn primary" @click="executeChangePlan" :disabled="changePlanSelectedCount === 0 || executingChangePlan">
+              {{ executingChangePlan ? '执行中...' : '确认执行' }}
+            </button>
+            <button class="cp-btn" @click="cancelChangePlan">取消</button>
+          </div>
+        </div>
+
         <!-- 未连接提示 -->
         <div v-if="!store.connected && store.currentApp" class="connect-warn">
           <div class="warn-title">⚠ 未连接得帆云平台</div>
@@ -901,6 +966,12 @@ const handleDocUpload = async (e: Event) => {
   if (!file) return
   target.value = '' // reset for re-upload
 
+  // 增量流程：已有配置且有关联应用时，走增量文档上传
+  if (store.preview.models.length > 0 && existingAppId.value) {
+    await handleIncrementalDocUpload(file)
+    return
+  }
+
   const userMsgId = Date.now()
   messages.push({ id: userMsgId, role: 'user', content: `📄 上传设计文档: ${file.name}`, created_at: '' })
 
@@ -1065,6 +1136,282 @@ const handleDocUpload = async (e: Event) => {
     } else {
       messages.push({ id: Date.now(), role: 'assistant', agent: 'builder', content: `文档解析失败: ${err?.message || '未知错误'}`, created_at: '' })
     }
+  }
+  scrollToBottom()
+}
+
+// ── 增量文档变更 ──
+const executingChangePlan = ref(false)
+const expandedGroups = reactive<Record<string, boolean>>({ added: true, modified: true, removed: true })
+
+const addedActions = computed(() =>
+  store.changePlan?.actions.filter(a => a.op === 'add' || a.op === 'create') || []
+)
+const modifiedActions = computed(() =>
+  store.changePlan?.actions.filter(a => a.op === 'modify' || a.op === 'update') || []
+)
+const removedActions = computed(() =>
+  store.changePlan?.actions.filter(a => a.op === 'remove' || a.op === 'delete') || []
+)
+const changePlanSelectedCount = computed(() =>
+  store.changePlan?.actions.filter(a => a.selected).length || 0
+)
+const changePlanTotalCount = computed(() =>
+  store.changePlan?.actions.length || 0
+)
+
+const toggleChangePlanGroup = (group: string) => {
+  expandedGroups[group] = !expandedGroups[group]
+}
+
+const changePlanSelectAll = (val: boolean) => {
+  if (!store.changePlan) return
+  store.changePlan.actions.forEach(a => { a.selected = val })
+}
+
+const cancelChangePlan = () => {
+  store.showChangePlan = false
+  store.changePlan = null
+  messages.push({
+    id: Date.now(),
+    role: 'assistant',
+    agent: 'builder',
+    content: '已取消变更计划。',
+    created_at: ''
+  })
+  scrollToBottom()
+}
+
+const handleIncrementalDocUpload = async (file: File) => {
+  const appId = existingAppId.value!
+  const userMsgId = Date.now()
+  messages.push({ id: userMsgId, role: 'user', content: `📄 上传文档新版本: ${file.name}`, created_at: '' })
+
+  const progressMsgId = userMsgId + 1
+  messages.push({
+    id: progressMsgId,
+    role: 'assistant',
+    agent: 'builder',
+    content: '正在分析文档变更...',
+    created_at: ''
+  })
+  scrollToBottom()
+
+  try {
+    const token = localStorage.getItem('token')
+    const formData = new FormData()
+    formData.append('file', file)
+
+    const url = applicationApi.uploadDocVersionUrl(appId)
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+      body: formData
+    })
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ detail: '请求失败' }))
+      throw new Error(err.detail || '文档上传失败')
+    }
+
+    const reader = response.body?.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let changePlanData: any = null
+
+    while (reader) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+
+      let currentEvent = ''
+      for (const line of lines) {
+        if (line.startsWith('event:')) {
+          currentEvent = line.slice(6).trim()
+        } else if (line.startsWith('data:')) {
+          const dataStr = line.slice(5).trim()
+          if (!dataStr) continue
+          try {
+            const data = JSON.parse(dataStr)
+
+            if (currentEvent === 'progress') {
+              const pmsg = messages.find(m => m.id === progressMsgId)
+              if (pmsg) {
+                const step = data.step || data.phase || ''
+                const msg = data.message || ''
+                const icon = step === 'indexing' ? '📑' : step === 'parsing' ? '🔍' : step === 'diffing' ? '📊' : '⏳'
+                pmsg.content = `${icon} ${msg}`
+              }
+              scrollToBottom()
+            } else if (currentEvent === 'done') {
+              changePlanData = data.change_plan || data
+            } else if (currentEvent === 'error') {
+              throw new Error(data.message || '文档分析失败')
+            }
+          } catch (parseErr: any) {
+            if (parseErr.message && !parseErr.message.includes('JSON')) throw parseErr
+          }
+        }
+      }
+    }
+
+    // 处理变更计划
+    if (changePlanData) {
+      // 确保 actions 有 selected 属性
+      if (changePlanData.actions) {
+        changePlanData.actions = changePlanData.actions.map((a: any) => ({
+          ...a,
+          selected: a.selected !== undefined ? a.selected : true
+        }))
+      }
+      store.changePlan = changePlanData
+      store.showChangePlan = true
+
+      const pmsg = messages.find(m => m.id === progressMsgId)
+      if (pmsg) {
+        const addCount = changePlanData.actions?.filter((a: any) => a.op === 'add' || a.op === 'create').length || 0
+        const modCount = changePlanData.actions?.filter((a: any) => a.op === 'modify' || a.op === 'update').length || 0
+        const delCount = changePlanData.actions?.filter((a: any) => a.op === 'remove' || a.op === 'delete').length || 0
+        pmsg.content = `📊 文档变更分析完成：新增 ${addCount} 项，修改 ${modCount} 项，删除 ${delCount} 项。\n\n请在右侧面板确认要执行的变更。`
+      }
+    } else {
+      const pmsg = messages.find(m => m.id === progressMsgId)
+      if (pmsg) {
+        pmsg.content = '文档分析完成，未发现配置变更。'
+      }
+    }
+  } catch (err: any) {
+    const pmsg = messages.find(m => m.id === progressMsgId)
+    if (pmsg) {
+      pmsg.content = `❌ 文档变更分析失败: ${err?.message || '未知错误'}`
+    } else {
+      messages.push({
+        id: Date.now(),
+        role: 'assistant',
+        agent: 'builder',
+        content: `文档变更分析失败: ${err?.message || '未知错误'}`,
+        created_at: ''
+      })
+    }
+  }
+  scrollToBottom()
+}
+
+const executeChangePlan = async () => {
+  if (!store.changePlan || !existingAppId.value) return
+  const appId = existingAppId.value
+  const planId = store.changePlan.id
+
+  executingChangePlan.value = true
+
+  // 构建 selections
+  const selections: Record<string, boolean> = {}
+  store.changePlan.actions.forEach(a => {
+    selections[a.id] = a.selected
+  })
+
+  const execMsgId = Date.now()
+  messages.push({
+    id: execMsgId,
+    role: 'assistant',
+    agent: 'builder',
+    content: '正在执行变更计划...',
+    created_at: ''
+  })
+  scrollToBottom()
+
+  try {
+    // 先提交 selections
+    await applicationApi.updateSelections(appId, planId, selections)
+
+    // SSE 执行
+    const token = localStorage.getItem('token')
+    const url = applicationApi.executeChangePlanUrl(appId, planId)
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+    })
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ detail: '请求失败' }))
+      throw new Error(err.detail || '执行失败')
+    }
+
+    const reader = response.body?.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let updatedConfig: any = null
+
+    while (reader) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+
+      let currentEvent = ''
+      for (const line of lines) {
+        if (line.startsWith('event:')) {
+          currentEvent = line.slice(6).trim()
+        } else if (line.startsWith('data:')) {
+          const dataStr = line.slice(5).trim()
+          if (!dataStr) continue
+          try {
+            const data = JSON.parse(dataStr)
+
+            if (currentEvent === 'progress') {
+              const emsg = messages.find(m => m.id === execMsgId)
+              if (emsg) {
+                const msg = data.message || ''
+                const step = data.step || ''
+                const icon = data.status === 'done' ? '✅' : '⏳'
+                emsg.content = `${icon} ${msg || step}`
+              }
+              scrollToBottom()
+            } else if (currentEvent === 'done') {
+              updatedConfig = data.updated_config || data.config || data
+            } else if (currentEvent === 'error') {
+              throw new Error(data.message || '执行失败')
+            }
+          } catch (parseErr: any) {
+            if (parseErr.message && !parseErr.message.includes('JSON')) throw parseErr
+          }
+        }
+      }
+    }
+
+    // 完成：更新 store
+    if (updatedConfig) {
+      const previewData = updatedConfig.data || updatedConfig
+      if (previewData.appName || previewData.models) {
+        store.preview.appName = previewData.appName || store.preview.appName
+        store.preview.roles = previewData.roles || store.preview.roles
+        store.preview.dicts = previewData.dicts || store.preview.dicts
+        store.preview.models = previewData.models || store.preview.models
+        store.preview.workflows = previewData.workflows || store.preview.workflows
+        store.preview.permissions = previewData.permissions || store.preview.permissions
+      }
+    }
+
+    const emsg = messages.find(m => m.id === execMsgId)
+    if (emsg) {
+      emsg.content = `✅ 变更计划执行完成！已选 ${changePlanSelectedCount.value} 项变更已应用。`
+    }
+
+    // 关闭面板
+    store.showChangePlan = false
+    store.changePlan = null
+  } catch (err: any) {
+    const emsg = messages.find(m => m.id === execMsgId)
+    if (emsg) {
+      emsg.content = `❌ 变更执行失败: ${err?.message || '未知错误'}`
+    }
+  } finally {
+    executingChangePlan.value = false
   }
   scrollToBottom()
 }
@@ -1576,7 +1923,7 @@ onMounted(async () => {
 /* ── 右侧预览面板 ── */
 .preview-side {
   flex: 1; background: #111; border-left: 1px solid rgba(255,255,255,0.06);
-  display: flex; flex-direction: column; min-width: 0;
+  display: flex; flex-direction: column; min-width: 0; position: relative;
 }
 .preview-tabs { display: flex; border-bottom: 1px solid rgba(255,255,255,0.06); padding: 0 8px; flex-shrink: 0; }
 .ptab {
@@ -1946,6 +2293,152 @@ onMounted(async () => {
 .app-status-dot.pending { background: rgba(255,255,255,0.2); }
 .app-status-dot.generating { background: #fbbf24; }
 .app-name-text { flex: 1; }
+
+/* ── 变更计划 overlay ── */
+.change-plan-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  background: #111;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid rgba(255,255,255,0.06);
+}
+.change-plan-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+.change-plan-header h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.9);
+}
+.change-plan-close {
+  background: none;
+  border: none;
+  color: rgba(255,255,255,0.4);
+  font-size: 18px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+.change-plan-close:hover {
+  color: #fff;
+  background: rgba(255,255,255,0.08);
+}
+.change-plan-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 20px;
+}
+.change-group {
+  margin-bottom: 16px;
+}
+.group-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.7);
+  cursor: pointer;
+  padding: 6px 0;
+  user-select: none;
+}
+.group-title:hover { color: rgba(255,255,255,0.9); }
+.group-arrow {
+  display: inline-block;
+  transition: transform 0.15s;
+  font-size: 11px;
+}
+.group-arrow.expanded { transform: rotate(90deg); }
+.change-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 18px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: rgba(255,255,255,0.8);
+}
+.change-item:hover { background: rgba(255,255,255,0.04); }
+.change-checkbox {
+  accent-color: #7c3aed;
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+}
+.change-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.change-icon.add {
+  background: rgba(16, 185, 129, 0.15);
+  color: #10b981;
+}
+.change-icon.modify {
+  background: rgba(234, 179, 8, 0.15);
+  color: #eab308;
+}
+.change-icon.remove {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+}
+.change-desc { flex: 1; line-height: 1.4; }
+.change-plan-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 20px;
+  border-top: 1px solid rgba(255,255,255,0.08);
+  flex-wrap: wrap;
+}
+.cp-btn {
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.05);
+  color: rgba(255,255,255,0.7);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.cp-btn:hover {
+  background: rgba(255,255,255,0.1);
+  color: #fff;
+}
+.cp-btn.primary {
+  background: #7c3aed;
+  border-color: #7c3aed;
+  color: #fff;
+}
+.cp-btn.primary:hover { background: #6d28d9; }
+.cp-btn.primary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.cp-count {
+  font-size: 12px;
+  color: rgba(255,255,255,0.5);
+  margin-left: auto;
+  margin-right: 4px;
+}
+
+.change-plan-body::-webkit-scrollbar { width: 4px; }
+.change-plan-body::-webkit-scrollbar-track { background: transparent; }
+.change-plan-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+.change-plan-body::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
 
 /* ── 滚动条 ── */
 .messages::-webkit-scrollbar,

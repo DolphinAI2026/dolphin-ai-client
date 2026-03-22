@@ -40,6 +40,8 @@ async def init_db():
             # Projects table columns (in case table existed before new columns were added)
             "ALTER TABLE projects ADD COLUMN platform_username VARCHAR(100)",
             "ALTER TABLE projects ADD COLUMN platform_app_name VARCHAR(100)",
+            # Document-driven incremental development
+            "ALTER TABLE applications ADD COLUMN current_doc_version INTEGER",
         ]:
             try:
                 await conn.execute(text(stmt))
@@ -53,3 +55,14 @@ async def init_db():
             ))
         except Exception:
             pass
+
+        # document_versions / change_plans — create_all 已处理，确保索引存在
+        for idx_stmt in [
+            "CREATE INDEX IF NOT EXISTS ix_document_versions_application_id ON document_versions(application_id)",
+            "CREATE INDEX IF NOT EXISTS ix_change_plans_application_id ON change_plans(application_id)",
+            "CREATE INDEX IF NOT EXISTS ix_change_plans_conversation_id ON change_plans(conversation_id)",
+        ]:
+            try:
+                await conn.execute(text(idx_stmt))
+            except Exception:
+                pass

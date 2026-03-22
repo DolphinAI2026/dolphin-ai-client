@@ -10,6 +10,30 @@ export const usePreviewStore = defineStore('preview', () => {
   const showConnectModal = ref(false)
   const pendingFile = ref<File | null>(null)  // 从 Landing 页带过来的待解析文件
 
+  // 增量变更计划
+  const changePlan = ref<{
+    id: number
+    fromVersion: number
+    toVersion: number
+    diffSummary: {
+      added: { models: any[], dicts: any[], roles: any[], fields: any[] }
+      modified: { models: any[], dicts: any[], fields: any[] }
+      removed: { models: any[], dicts: any[], roles: any[], fields: any[] }
+    }
+    actions: Array<{
+      id: string
+      selected: boolean
+      op: string
+      target?: string
+      model?: string
+      value?: any
+      description: string
+    }>
+    status: string
+  } | null>(null)
+
+  const showChangePlan = ref(false)
+
   const preview = reactive<PreviewData>({
     appName: '',
     roles: [],
@@ -51,7 +75,7 @@ export const usePreviewStore = defineStore('preview', () => {
 
   return {
     currentApp, previewTab, previewFormIdx, connected, showConnectModal, pendingFile,
-    preview, genProgress,
+    preview, genProgress, changePlan, showChangePlan,
     resetGenProgress, reset
   }
 })
