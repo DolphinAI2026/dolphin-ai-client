@@ -306,7 +306,15 @@ async function fetchMembers() {
 }
 
 async function handleAddMember() {
-  if (!props.project?.id || !newMemberUsername.value.trim()) return
+  console.log('[AddMember] project:', props.project?.id, 'username:', JSON.stringify(newMemberUsername.value))
+  if (!props.project?.id) {
+    ElMessage.warning('请先保存项目')
+    return
+  }
+  if (!newMemberUsername.value || !newMemberUsername.value.trim()) {
+    ElMessage.warning('请输入用户名')
+    return
+  }
   addingMember.value = true
   try {
     const member = await projectsApi.addMember(props.project.id, {
