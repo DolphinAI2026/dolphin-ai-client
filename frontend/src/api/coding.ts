@@ -45,6 +45,13 @@ export interface WorkspaceInfo {
   files?: string[]
 }
 
+export interface UploadResult {
+  filename: string
+  content_type: string
+  content?: string
+  file_path: string
+}
+
 export const codingApi = {
   /** 获取所有开发场景 */
   getScenes(category?: string) {
@@ -197,5 +204,25 @@ export const codingApi = {
       throw new Error(err.detail || '发布失败')
     }
     return resp.blob()
+  },
+
+  /** 上传文件（图片/文档附件） */
+  async uploadFile(file: File, workspaceId?: string): Promise<UploadResult> {
+    const token = localStorage.getItem('token') || ''
+    const formData = new FormData()
+    formData.append('file', file)
+    const params = new URLSearchParams()
+    if (workspaceId) params.set('workspace_id', workspaceId)
+    const query = params.toString() ? `?${params.toString()}` : ''
+    const resp = await fetch(`/api/coding/upload${query}`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}` },
+      body: formData,
+    })
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ detail: '上传失败' }))
+      throw new Error(err.detail || '上传失败')
+    }
+    return resp.json()
   },
 }

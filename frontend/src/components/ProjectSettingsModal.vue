@@ -60,10 +60,22 @@
 
         <!-- 应用选择 -->
         <el-form-item label="关联应用">
-          <div style="display: flex; gap: 8px; width: 100%">
-            <el-input v-model="form.platform_app_id" placeholder="应用ID" style="flex: 1" />
-            <el-input v-model="form.platform_app_name" placeholder="应用名称（可选）" style="flex: 1" />
-          </div>
+          <el-select
+            v-model="form.platform_app_id"
+            placeholder="请先连接平台后选择应用"
+            :disabled="!form.platform_connected"
+            :loading="loadingApps"
+            filterable
+            style="width: 100%"
+            @change="handleAppSelect"
+          >
+            <el-option
+              v-for="app in platformApps"
+              :key="app.app_id"
+              :label="`${app.app_name}（${app.app_code}）`"
+              :value="app.app_id"
+            />
+          </el-select>
         </el-form-item>
       </template>
     </el-form>
@@ -81,7 +93,7 @@
 import { ref, reactive, computed, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { projectsApi } from '@/api/projects'
-import type { Project } from '@/api/projects'
+import type { Project, PlatformApp } from '@/api/projects'
 
 const props = defineProps<{
   project?: Project | null
@@ -110,6 +122,8 @@ const loginForm = reactive({ username: '', password: '' })
 const tokenForm = reactive({ token: '' })
 const connecting = ref(false)
 const saving = ref(false)
+const loadingApps = ref(false)
+const platformApps = ref<PlatformApp[]>([])
 
 const canConnect = computed(() => {
   return form.platform_url && form.platform_tenant_id && loginForm.username && loginForm.password
@@ -128,6 +142,10 @@ watch(() => props.project, (p) => {
     loginForm.username = p.platform_username || ''
     loginForm.password = ''
     tokenForm.token = ''
+    // 已连接平台时自动加载应用列表
+    if (p.platform_connected) {
+      fetchPlatformApps()
+    }
   } else {
     form.name = ''
     form.description = ''
@@ -139,8 +157,29 @@ watch(() => props.project, (p) => {
     loginForm.username = ''
     loginForm.password = ''
     tokenForm.token = ''
+    platformApps.value = []
   }
 }, { immediate: true })
+
+async function fetchPlatformApps() {
+  if (!props.project?.id || !form.platform_connected) return
+  loadingApps.value = true
+  try {
+    platformApps.value = await projectsApi.listPlatformApps(props.project.id)
+  } catch (e: any) {
+    console.error('获取应用列表失败:', e)
+    platformApps.value = []
+  } finally {
+    loadingApps.value = false
+  }
+}
+
+function handleAppSelect(appId: string) {
+  const app = platformApps.value.find(a => a.app_id === appId)
+  if (app) {
+    form.platform_app_name = app.app_name
+  }
+}
 
 async function handleConnect() {
   if (!props.project?.id) return
@@ -155,6 +194,8 @@ async function handleConnect() {
     form.platform_connected = true
     ElMessage.success('平台连接成功')
     emit('saved', updated)
+    // 连接成功后自动加载应用列表
+    await fetchPlatformApps()
   } catch (e: any) {
     ElMessage.error(e.message || '连接失败')
   } finally {

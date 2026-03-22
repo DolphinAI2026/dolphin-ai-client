@@ -5,7 +5,7 @@ Coding API 路由 - aPaaS Vibe Coding 接口
 import json
 import logging
 from typing import Optional, Annotated
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -723,6 +723,92 @@ async def _get_app_context(user: User, app_id: str) -> dict:
     except Exception as e:
         logger.warning(f"获取应用上下文失败: {e}")
         return None
+
+
+# ============================================================
+# 文件上传接口
+# ============================================================
+
+@router.post("/upload")
+async def upload_file(
+    file: UploadFile = File(...),
+    workspace_id: Optional[str] = Query(None),
+    ctx: Annotated[AuthContext, Depends(get_auth_context)] = None,
+):
+    """
+    上传文件（图片/文档）用于对话附件。
+    - 图片: 保存到工作区或临时目录，返回文件路径
+    - 文本文档(.md, .txt): 读取并返回文本内容
+    - 其他文档(.pdf, .docx): 尝试提取文本，否则返回文件路径
+    """
+    import os
+    import tempfile
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="文件名不能为空")
+
+    content_bytes = await file.read()
+    filename = file.filename
+    content_type = file.content_type or "application/octet-stream"
+    ext = os.path.splitext(filename)[1].lower()
+
+    # Determine save directory
+    if workspace_id:
+        ws_mgr_temp = WorkspaceManager()
+        try:
+            ws_info = ws_mgr_temp.get_workspace_info(workspace_id)
+            save_dir = os.path.join(ws_info["path"], "uploads")
+        except Exception:
+            save_dir = os.path.join(tempfile.gettempdir(), "coding_uploads")
+    else:
+        save_dir = os.path.join(tempfile.gettempdir(), "coding_uploads")
+
+    os.makedirs(save_dir, exist_ok=True)
+
+    # Generate unique filename to avoid conflicts
+    import uuid
+    unique_name = f"{uuid.uuid4().hex[:8]}_{filename}"
+    file_path = os.path.join(save_dir, unique_name)
+
+    with open(file_path, "wb") as f:
+        f.write(content_bytes)
+
+    result = {
+        "filename": filename,
+        "content_type": content_type,
+        "file_path": file_path,
+    }
+
+    # For text-based documents, extract content
+    if ext in (".md", ".txt"):
+        try:
+            text_content = content_bytes.decode("utf-8")
+            result["content"] = text_content
+        except UnicodeDecodeError:
+            pass  # Binary file, just return path
+    elif ext == ".docx":
+        try:
+            from docx import Document as DocxDocument
+            import io
+            doc = DocxDocument(io.BytesIO(content_bytes))
+            text_content = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+            result["content"] = text_content
+        except ImportError:
+            logger.info("python-docx not installed, returning file path only for .docx")
+        except Exception as e:
+            logger.warning(f"Failed to extract .docx content: {e}")
+    elif ext == ".pdf":
+        try:
+            from markitdown import MarkItDown
+            mid = MarkItDown()
+            md_result = mid.convert(file_path)
+            result["content"] = md_result.text_content
+        except ImportError:
+            logger.info("markitdown not installed, returning file path only for .pdf")
+        except Exception as e:
+            logger.warning(f"Failed to extract PDF content: {e}")
+
+    return result
 
 
 # ============================================================

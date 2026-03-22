@@ -38,6 +38,13 @@ export interface ProjectConnectData {
   tenant_id: string
 }
 
+export interface PlatformApp {
+  app_id: string
+  app_name: string
+  app_code: string
+  status: string
+}
+
 export const projectsApi = {
   /** 列出用户所有项目 */
   list() {
@@ -67,6 +74,11 @@ export const projectsApi = {
   /** 连接平台（登录） */
   connect(id: number, data: ProjectConnectData) {
     return request.post<any, Project>(`/projects/${id}/connect`, data)
+  },
+
+  /** 获取平台应用列表 */
+  listPlatformApps(id: number) {
+    return request.get<any, PlatformApp[]>(`/projects/${id}/platform-apps`)
   },
 
   /** 列出项目下的工作区 */

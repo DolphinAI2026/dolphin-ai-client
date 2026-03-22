@@ -242,7 +242,37 @@
 
     <!-- Input Area (bottom) -->
     <div class="input-area">
-      <div class="input-wrapper">
+      <!-- Attachment Preview -->
+      <div v-if="attachedFile" class="attachment-preview">
+        <div v-if="attachedPreviewUrl" class="attachment-thumb">
+          <img :src="attachedPreviewUrl" alt="preview" />
+          <button class="attachment-remove" @click="removeAttachment">&times;</button>
+        </div>
+        <div v-else class="attachment-file">
+          <span class="attachment-file-icon">&#128196;</span>
+          <span class="attachment-file-name">{{ attachedFile.name }}</span>
+          <button class="attachment-remove" @click="removeAttachment">&times;</button>
+        </div>
+      </div>
+
+      <div class="input-wrapper" @paste="handlePaste">
+        <!-- Hidden file input -->
+        <input
+          ref="fileInputRef"
+          type="file"
+          accept=".md,.pdf,.docx,.txt,.png,.jpg,.jpeg"
+          style="display: none"
+          @change="handleFileSelect"
+        />
+        <el-button
+          text
+          class="attach-btn"
+          @click="fileInputRef?.click()"
+          :disabled="codingStore.isProcessing"
+          title="上传附件"
+        >
+          <el-icon :size="18"><Paperclip /></el-icon>
+        </el-button>
         <el-input
           v-model="userInput"
           type="textarea"
@@ -257,15 +287,15 @@
         <el-button
           type="primary"
           class="send-btn"
-          :loading="codingStore.isProcessing"
+          :loading="codingStore.isProcessing || isUploading"
           @click="sendMessage"
-          :disabled="!userInput.trim() || codingStore.isProcessing"
+          :disabled="(!userInput.trim() && !attachedFile) || codingStore.isProcessing"
           circle
         >
-          <el-icon v-if="!codingStore.isProcessing"><TopRight /></el-icon>
+          <el-icon v-if="!codingStore.isProcessing && !isUploading"><TopRight /></el-icon>
         </el-button>
       </div>
-      <div class="input-hint">Ctrl + Enter 发送</div>
+      <div class="input-hint">Ctrl + Enter 发送 | 粘贴截图或点击回形针添加附件</div>
     </div>
 
       </div>
@@ -277,12 +307,12 @@
 import { ref, computed, onMounted, nextTick, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ArrowLeft, FolderOpened, Upload, Menu, TopRight, Monitor, Plus, Setting } from '@element-plus/icons-vue'
+import { ArrowLeft, FolderOpened, Upload, Menu, TopRight, Monitor, Plus, Setting, Paperclip } from '@element-plus/icons-vue'
 import { useCodingStore } from '@/stores/coding'
 import type { PipelineStep, ChatMessage } from '@/stores/coding'
 import { useUserStore } from '@/stores/user'
 import { codingApi } from '@/api/coding'
-import type { GeneratedFile, WorkspaceInfo } from '@/api/coding'
+import type { GeneratedFile, WorkspaceInfo, UploadResult } from '@/api/coding'
 import { projectsApi } from '@/api/projects'
 import type { Project } from '@/api/projects'
 import ProjectSettingsModal from '@/components/ProjectSettingsModal.vue'
@@ -299,6 +329,12 @@ const scrollAnchor = ref<HTMLElement>()
 const existingWorkspaces = ref<WorkspaceInfo[]>([])
 const isPublishing = ref(false)
 const isDebugging = ref(false)
+
+// ============ Attachment state ============
+const attachedFile = ref<File | null>(null)
+const attachedPreviewUrl = ref<string | null>(null)
+const isUploading = ref(false)
+const fileInputRef = ref<HTMLInputElement>()
 
 // ============ Projects ============
 const projects = ref<Project[]>([])
@@ -519,6 +555,46 @@ async function restoreConversation(conversationId: number) {
   }
 }
 
+// ============ Attachment Handling ============
+
+function handlePaste(event: ClipboardEvent) {
+  const items = event.clipboardData?.items
+  if (!items) return
+  for (const item of items) {
+    if (item.type.startsWith('image/')) {
+      event.preventDefault()
+      const file = item.getAsFile()
+      if (file) setAttachment(file)
+      return
+    }
+  }
+}
+
+function handleFileSelect(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (file) setAttachment(file)
+  // Reset so the same file can be re-selected
+  input.value = ''
+}
+
+function setAttachment(file: File) {
+  attachedFile.value = file
+  if (file.type.startsWith('image/')) {
+    attachedPreviewUrl.value = URL.createObjectURL(file)
+  } else {
+    attachedPreviewUrl.value = null
+  }
+}
+
+function removeAttachment() {
+  if (attachedPreviewUrl.value) {
+    URL.revokeObjectURL(attachedPreviewUrl.value)
+  }
+  attachedFile.value = null
+  attachedPreviewUrl.value = null
+}
+
 // ============ Send Message / Auto Pipeline ============
 
 function sendSuggestion(text: string) {
@@ -528,18 +604,54 @@ function sendSuggestion(text: string) {
 
 async function sendMessage() {
   const message = userInput.value.trim()
-  if (!message || codingStore.isProcessing) return
+  if (!message && !attachedFile.value) return
+  if (codingStore.isProcessing) return
 
   userInput.value = ''
-  codingStore.addMessage({ role: 'user', content: message })
+  const currentAttachment = attachedFile.value
+  const currentPreviewUrl = attachedPreviewUrl.value
+  attachedFile.value = null
+  attachedPreviewUrl.value = null
+
+  // Show user message (include attachment indicator)
+  const displayMsg = currentAttachment
+    ? `${message}${message ? '\n' : ''}[附件: ${currentAttachment.name}]`
+    : message
+  codingStore.addMessage({ role: 'user', content: displayMsg })
   codingStore.isProcessing = true
   codingStore.streamContent = ''
 
   await nextTick()
   scrollToBottom()
 
+  // Upload attachment if present
+  let uploadResult: UploadResult | null = null
+  if (currentAttachment) {
+    try {
+      isUploading.value = true
+      uploadResult = await codingApi.uploadFile(currentAttachment, codingStore.workspace?.id)
+    } catch (e: any) {
+      ElMessage.error(`附件上传失败: ${e.message}`)
+    } finally {
+      isUploading.value = false
+      if (currentPreviewUrl) URL.revokeObjectURL(currentPreviewUrl)
+    }
+  }
+
+  // Build final message with attachment context
+  let finalMessage = message
+  if (uploadResult) {
+    if (uploadResult.content) {
+      // Text document: prepend content as context
+      finalMessage = `[附件文档: ${uploadResult.filename}]\n\`\`\`\n${uploadResult.content}\n\`\`\`\n\n${message}`
+    } else {
+      // Image or binary file: mention path
+      finalMessage = `${message}\n\n[附件图片: ${uploadResult.filename}, 已保存至: ${uploadResult.file_path}]`
+    }
+  }
+
   const isNewWorkspace = !codingStore.workspace
-  const msgLower = message.toLowerCase()
+  const msgLower = (message || '').toLowerCase()
   const isDebugIntent = ['debug', '调试', '预览'].some(kw => msgLower.includes(kw))
   const isPublishIntent = ['发布', '打包', 'publish', 'build'].some(kw => msgLower.includes(kw))
 
@@ -560,7 +672,7 @@ async function sendMessage() {
   try {
     const token = userStore.token
     const body: Record<string, any> = {
-      message,
+      message: finalMessage,
       workspace_id: codingStore.workspace?.id || null,
       conversation_id: codingStore.conversationId || null,
       app_id: (route.query.app_id as string) || null,
@@ -1730,10 +1842,93 @@ watch(() => route.path, () => {
   height: 36px;
 }
 
+.attach-btn {
+  flex-shrink: 0;
+  color: #888;
+  padding: 4px;
+}
+
+.attach-btn:hover {
+  color: #ccc;
+}
+
 .input-hint {
   font-size: 11px;
   color: #555;
   margin-top: 6px;
+}
+
+/* ============ Attachment Preview ============ */
+.attachment-preview {
+  width: 100%;
+  max-width: 760px;
+  margin-bottom: 8px;
+  padding: 8px 12px;
+  background: #1a1a2e;
+  border: 1px solid #333;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.attachment-thumb {
+  position: relative;
+  display: inline-block;
+}
+
+.attachment-thumb img {
+  width: 60px;
+  height: 60px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid #444;
+}
+
+.attachment-file {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #ccc;
+  font-size: 13px;
+}
+
+.attachment-file-icon {
+  font-size: 18px;
+}
+
+.attachment-file-name {
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-remove {
+  background: rgba(255, 255, 255, 0.1);
+  border: none;
+  color: #aaa;
+  cursor: pointer;
+  font-size: 16px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  transition: background 0.2s, color 0.2s;
+}
+
+.attachment-remove:hover {
+  background: rgba(255, 80, 80, 0.3);
+  color: #ff6b6b;
+}
+
+.attachment-thumb .attachment-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
 }
 
 /* ============ Workspace Dialog ============ */

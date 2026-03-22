@@ -170,6 +170,40 @@ async def delete_project(
 # 平台连接
 # ============================================================
 
+@router.get("/{project_id}/platform-apps")
+async def list_platform_apps(
+    project_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """获取项目已连接平台的应用列表"""
+    project = await _get_project_or_404(project_id, ctx.user.id, db)
+
+    if not project.platform_token:
+        raise HTTPException(status_code=400, detail="项目尚未连接平台，请先登录")
+
+    client = APaaSClient(
+        base_url=project.platform_url,
+        tenant_id=project.platform_tenant_id,
+        token=project.platform_token,
+    )
+    try:
+        apps = await client.query_app_list()
+        # 返回简化列表
+        return [
+            {
+                "app_id": str(app.get("id", "")),
+                "app_name": app.get("appName", ""),
+                "app_code": app.get("appCode", ""),
+                "status": app.get("appStatus", ""),
+            }
+            for app in apps
+        ]
+    except Exception as e:
+        logger.error(f"查询平台应用列表失败: {e}")
+        raise HTTPException(status_code=400, detail=f"查询应用列表失败: {e}")
+
+
 @router.post("/{project_id}/connect")
 async def connect_project_platform(
     project_id: int,
