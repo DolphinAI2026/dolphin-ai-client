@@ -196,10 +196,17 @@ async def send_message(
             "content": summary
         })
 
-    llm_messages.extend([
-        {"role": msg.role, "content": msg.content}
-        for msg in messages
-    ])
+    # 截断历史消息：只保留最近的消息，总字符数不超过 30000
+    history_msgs = [{"role": msg.role, "content": msg.content} for msg in messages]
+    truncated = []
+    total_chars = 0
+    for msg in reversed(history_msgs):
+        msg_len = len(msg["content"] or "")
+        if total_chars + msg_len > 30000 and truncated:
+            break
+        truncated.insert(0, msg)
+        total_chars += msg_len
+    llm_messages.extend(truncated)
 
     # 流式响应
     async def event_generator():
