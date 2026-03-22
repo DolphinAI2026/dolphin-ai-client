@@ -212,21 +212,30 @@ async def send_message(
     async def event_generator():
         llm_client = LLMClient()
         assistant_content = ""
+        thinking_sent = False
 
         try:
             async for chunk in llm_client.chat_completion_stream(llm_messages):
                 chunk_data = json.loads(chunk)
                 if "choices" in chunk_data and len(chunk_data["choices"]) > 0:
                     delta = chunk_data["choices"][0].get("delta", {})
-                    # MiniMax-M1 thinking 模式：content 可能为空，实际内容在 reasoning_content
                     content = delta.get("content") or ""
-                    reasoning = delta.get("reasoning_content") or ""
-                    text = content or reasoning
-                    if text:
-                        assistant_content += text
+
+                    # MiniMax thinking 模式：前面是思考 chunk（content 空），最后才有实际回答
+                    # 思考阶段发一个 thinking 提示，让前端显示"思考中..."
+                    has_reasoning = bool(delta.get("reasoning_details") or delta.get("reasoning_content"))
+                    if has_reasoning and not thinking_sent:
+                        thinking_sent = True
+                        yield {
+                            "event": "thinking",
+                            "data": json.dumps({"type": "thinking", "data": "思考中..."})
+                        }
+
+                    if content:
+                        assistant_content += content
                         yield {
                             "event": "message",
-                            "data": json.dumps({"type": "message", "data": text})
+                            "data": json.dumps({"type": "message", "data": content})
                         }
 
             # 保存助手消息
