@@ -40,6 +40,12 @@ const router = createRouter({
       meta: { requiresAuth: true }
     },
     {
+      path: '/marketplace',
+      name: 'Marketplace',
+      component: () => import('@/views/MarketplacePage.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
       path: '/generate/:id?',
       name: 'Generate',
       // 重定向到 ChatPage 并自动打开部署面板

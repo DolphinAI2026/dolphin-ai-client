@@ -45,3 +45,11 @@ async def init_db():
                 await conn.execute(text(stmt))
             except Exception:
                 pass  # 列已存在
+
+        # project_members 表 — create_all 已处理，此处确保唯一约束
+        try:
+            await conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_project_member ON project_members(project_id, user_id)"
+            ))
+        except Exception:
+            pass

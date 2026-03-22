@@ -9,11 +9,11 @@ from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import Project
+from app.models import Project, ProjectMember, User
 from app.deps import get_auth_context, AuthContext
 from app.apaas_client import APaaSClient
 from app.coding.workspace import WorkspaceManager, WORKSPACE_ROOT
@@ -49,6 +49,16 @@ class ProjectConnectRequest(BaseModel):
     tenant_id: str
 
 
+class AddMemberRequest(BaseModel):
+    username: Optional[str] = None
+    user_id: Optional[int] = None
+    role: str = "member"
+
+
+class UpdateMemberRoleRequest(BaseModel):
+    role: str  # "admin" | "member"
+
+
 # ============================================================
 # 辅助函数
 # ============================================================
@@ -74,13 +84,37 @@ async def _get_project_or_404(
     user_id: int,
     db: AsyncSession,
 ) -> Project:
+    """获取项目 — 允许项目所有者或成员访问"""
     result = await db.execute(
-        select(Project).where(Project.id == project_id, Project.user_id == user_id)
+        select(Project).where(Project.id == project_id)
     )
     project = result.scalar_one_or_none()
     if not project:
         raise HTTPException(status_code=404, detail="项目不存在")
-    return project
+    # 检查是否为项目所有者或成员
+    if project.user_id == user_id:
+        return project
+    member_result = await db.execute(
+        select(ProjectMember).where(
+            ProjectMember.project_id == project_id,
+            ProjectMember.user_id == user_id,
+        )
+    )
+    if member_result.scalar_one_or_none():
+        return project
+    raise HTTPException(status_code=404, detail="项目不存在")
+
+
+async def _get_member_role(project_id: int, user_id: int, db: AsyncSession) -> Optional[str]:
+    """获取用户在项目中的角色"""
+    result = await db.execute(
+        select(ProjectMember).where(
+            ProjectMember.project_id == project_id,
+            ProjectMember.user_id == user_id,
+        )
+    )
+    member = result.scalar_one_or_none()
+    return member.role if member else None
 
 
 # ============================================================
@@ -92,10 +126,22 @@ async def list_projects(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """列出当前用户的所有项目"""
+    """列出当前用户的所有项目（包括作为成员参与的项目）"""
+    # 查询用户参与的项目 ID 列表
+    member_result = await db.execute(
+        select(ProjectMember.project_id).where(ProjectMember.user_id == ctx.user.id)
+    )
+    member_project_ids = [row[0] for row in member_result.all()]
+
     result = await db.execute(
         select(Project)
-        .where(Project.user_id == ctx.user.id, Project.tenant_id == ctx.tenant_id)
+        .where(
+            Project.tenant_id == ctx.tenant_id,
+            or_(
+                Project.user_id == ctx.user.id,
+                Project.id.in_(member_project_ids) if member_project_ids else False,
+            ),
+        )
         .order_by(Project.updated_at.desc())
     )
     projects = result.scalars().all()
@@ -116,6 +162,15 @@ async def create_project(
         tenant_id=ctx.tenant_id,
     )
     db.add(project)
+    await db.flush()  # 获取 project.id
+
+    # 自动添加创建者为 owner
+    owner_member = ProjectMember(
+        project_id=project.id,
+        user_id=ctx.user.id,
+        role="owner",
+    )
+    db.add(owner_member)
     await db.commit()
     await db.refresh(project)
     return _project_to_dict(project)
@@ -229,6 +284,163 @@ async def connect_project_platform(
         return _project_to_dict(project)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"平台登录失败: {e}")
+
+
+# ============================================================
+# 团队成员管理
+# ============================================================
+
+@router.get("/{project_id}/members")
+async def list_members(
+    project_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """列出项目所有成员"""
+    await _get_project_or_404(project_id, ctx.user.id, db)
+    result = await db.execute(
+        select(ProjectMember, User)
+        .join(User, ProjectMember.user_id == User.id)
+        .where(ProjectMember.project_id == project_id)
+        .order_by(ProjectMember.created_at)
+    )
+    rows = result.all()
+    return [
+        {
+            "id": member.id,
+            "user_id": member.user_id,
+            "username": user.username,
+            "role": member.role,
+            "created_at": member.created_at.isoformat() if member.created_at else None,
+        }
+        for member, user in rows
+    ]
+
+
+@router.post("/{project_id}/members")
+async def add_member(
+    project_id: int,
+    req: AddMemberRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """添加项目成员（需要 owner 或 admin 权限）"""
+    await _get_project_or_404(project_id, ctx.user.id, db)
+
+    # 权限检查
+    caller_role = await _get_member_role(project_id, ctx.user.id, db)
+    if caller_role not in ("owner", "admin"):
+        raise HTTPException(status_code=403, detail="无权添加成员")
+
+    # 查找目标用户
+    if req.user_id:
+        result = await db.execute(select(User).where(User.id == req.user_id))
+    elif req.username:
+        result = await db.execute(select(User).where(User.username == req.username))
+    else:
+        raise HTTPException(status_code=400, detail="请提供 username 或 user_id")
+
+    target_user = result.scalar_one_or_none()
+    if not target_user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+
+    # 检查是否已是成员
+    existing = await db.execute(
+        select(ProjectMember).where(
+            ProjectMember.project_id == project_id,
+            ProjectMember.user_id == target_user.id,
+        )
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="该用户已是项目成员")
+
+    role = req.role if req.role in ("admin", "member") else "member"
+    member = ProjectMember(
+        project_id=project_id,
+        user_id=target_user.id,
+        role=role,
+    )
+    db.add(member)
+    await db.commit()
+    await db.refresh(member)
+    return {
+        "id": member.id,
+        "user_id": member.user_id,
+        "username": target_user.username,
+        "role": member.role,
+        "created_at": member.created_at.isoformat() if member.created_at else None,
+    }
+
+
+@router.delete("/{project_id}/members/{member_id}")
+async def remove_member(
+    project_id: int,
+    member_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """移除项目成员（owner 不可被移除）"""
+    await _get_project_or_404(project_id, ctx.user.id, db)
+
+    caller_role = await _get_member_role(project_id, ctx.user.id, db)
+    if caller_role not in ("owner", "admin"):
+        raise HTTPException(status_code=403, detail="无权移除成员")
+
+    result = await db.execute(
+        select(ProjectMember).where(
+            ProjectMember.id == member_id,
+            ProjectMember.project_id == project_id,
+        )
+    )
+    member = result.scalar_one_or_none()
+    if not member:
+        raise HTTPException(status_code=404, detail="成员不存在")
+    if member.role == "owner":
+        raise HTTPException(status_code=400, detail="无法移除项目所有者")
+
+    await db.delete(member)
+    await db.commit()
+    return {"status": "ok"}
+
+
+@router.put("/{project_id}/members/{member_id}")
+async def update_member_role(
+    project_id: int,
+    member_id: int,
+    req: UpdateMemberRoleRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """更新成员角色（仅 owner 可操作）"""
+    await _get_project_or_404(project_id, ctx.user.id, db)
+
+    caller_role = await _get_member_role(project_id, ctx.user.id, db)
+    if caller_role != "owner":
+        raise HTTPException(status_code=403, detail="仅项目所有者可修改角色")
+
+    result = await db.execute(
+        select(ProjectMember).where(
+            ProjectMember.id == member_id,
+            ProjectMember.project_id == project_id,
+        )
+    )
+    member = result.scalar_one_or_none()
+    if not member:
+        raise HTTPException(status_code=404, detail="成员不存在")
+    if member.role == "owner":
+        raise HTTPException(status_code=400, detail="无法修改所有者角色")
+
+    if req.role not in ("admin", "member"):
+        raise HTTPException(status_code=400, detail="角色只能是 admin 或 member")
+
+    member.role = req.role
+    await db.commit()
+    await db.refresh(member)
+    return {
+        "id": member.id,
+        "user_id": member.user_id,
+        "role": member.role,
+    }
 
 
 # ============================================================

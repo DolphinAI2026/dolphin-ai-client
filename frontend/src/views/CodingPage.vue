@@ -13,6 +13,13 @@
       </div>
       <div class="header-right">
         <el-button
+          size="small"
+          @click="$router.push('/marketplace')"
+          class="header-btn"
+        >
+          <el-icon><Goods /></el-icon> 组件市场
+        </el-button>
+        <el-button
           v-if="codingStore.workspace"
           size="small"
           @click="openInVSCode"
@@ -307,7 +314,7 @@
 import { ref, computed, onMounted, nextTick, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ArrowLeft, FolderOpened, Upload, Menu, TopRight, Monitor, Plus, Setting, Paperclip } from '@element-plus/icons-vue'
+import { ArrowLeft, FolderOpened, Upload, Menu, TopRight, Monitor, Plus, Setting, Paperclip, Goods } from '@element-plus/icons-vue'
 import { useCodingStore } from '@/stores/coding'
 import type { PipelineStep, ChatMessage } from '@/stores/coding'
 import { useUserStore } from '@/stores/user'

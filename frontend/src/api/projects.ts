@@ -45,6 +45,20 @@ export interface PlatformApp {
   status: string
 }
 
+export interface ProjectMember {
+  id: number
+  user_id: number
+  username: string
+  role: 'owner' | 'admin' | 'member'
+  created_at: string
+}
+
+export interface AddMemberData {
+  username?: string
+  user_id?: number
+  role?: string
+}
+
 export const projectsApi = {
   /** 列出用户所有项目 */
   list() {
@@ -84,5 +98,25 @@ export const projectsApi = {
   /** 列出项目下的工作区 */
   listWorkspaces(id: number) {
     return request.get<any, WorkspaceInfo[]>(`/projects/${id}/workspaces`)
+  },
+
+  /** 列出项目成员 */
+  listMembers(id: number) {
+    return request.get<any, ProjectMember[]>(`/projects/${id}/members`)
+  },
+
+  /** 添加项目成员 */
+  addMember(id: number, data: AddMemberData) {
+    return request.post<any, ProjectMember>(`/projects/${id}/members`, data)
+  },
+
+  /** 移除项目成员 */
+  removeMember(projectId: number, memberId: number) {
+    return request.delete<any, void>(`/projects/${projectId}/members/${memberId}`)
+  },
+
+  /** 更新成员角色 */
+  updateMemberRole(projectId: number, memberId: number, role: string) {
+    return request.put<any, any>(`/projects/${projectId}/members/${memberId}`, { role })
   },
 }

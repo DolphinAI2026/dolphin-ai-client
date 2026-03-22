@@ -77,6 +77,75 @@
             />
           </el-select>
         </el-form-item>
+
+        <!-- 团队成员 -->
+        <el-divider content-position="left">团队成员</el-divider>
+
+        <div class="team-members-section">
+          <!-- 添加成员 -->
+          <div class="add-member-row">
+            <el-input
+              v-model="newMemberUsername"
+              placeholder="输入用户名添加成员"
+              size="small"
+              style="flex: 1"
+              @keyup.enter="handleAddMember"
+            />
+            <el-select v-model="newMemberRole" size="small" style="width: 100px; margin-left: 8px">
+              <el-option label="管理员" value="admin" />
+              <el-option label="成员" value="member" />
+            </el-select>
+            <el-button
+              type="primary"
+              size="small"
+              :loading="addingMember"
+              :disabled="!newMemberUsername.trim()"
+              style="margin-left: 8px"
+              @click="handleAddMember"
+            >
+              添加
+            </el-button>
+          </div>
+
+          <!-- 成员列表 -->
+          <div v-if="loadingMembers" class="members-loading">
+            <el-icon class="is-loading"><Loading /></el-icon>
+            <span>加载中...</span>
+          </div>
+          <div v-else class="members-list">
+            <div v-for="member in members" :key="member.id" class="member-item">
+              <span class="member-name">{{ member.username }}</span>
+              <el-tag
+                :type="member.role === 'owner' ? 'warning' : member.role === 'admin' ? 'primary' : 'info'"
+                size="small"
+                class="member-role-tag"
+              >
+                {{ member.role === 'owner' ? '所有者' : member.role === 'admin' ? '管理员' : '成员' }}
+              </el-tag>
+              <template v-if="member.role !== 'owner'">
+                <el-select
+                  :model-value="member.role"
+                  size="small"
+                  style="width: 90px; margin-left: auto"
+                  @change="(val: string) => handleUpdateRole(member, val)"
+                >
+                  <el-option label="管理员" value="admin" />
+                  <el-option label="成员" value="member" />
+                </el-select>
+                <el-button
+                  type="danger"
+                  size="small"
+                  text
+                  style="margin-left: 4px"
+                  @click="handleRemoveMember(member)"
+                >
+                  <el-icon><Close /></el-icon>
+                </el-button>
+              </template>
+            </div>
+            <div v-if="!members.length" class="no-members">暂无成员</div>
+          </div>
+        </div>
       </template>
     </el-form>
 
@@ -91,9 +160,10 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Loading, Close } from '@element-plus/icons-vue'
 import { projectsApi } from '@/api/projects'
-import type { Project, PlatformApp } from '@/api/projects'
+import type { Project, PlatformApp, ProjectMember } from '@/api/projects'
 
 const props = defineProps<{
   project?: Project | null
@@ -125,6 +195,13 @@ const saving = ref(false)
 const loadingApps = ref(false)
 const platformApps = ref<PlatformApp[]>([])
 
+// 团队成员
+const members = ref<ProjectMember[]>([])
+const loadingMembers = ref(false)
+const addingMember = ref(false)
+const newMemberUsername = ref('')
+const newMemberRole = ref('member')
+
 const canConnect = computed(() => {
   return form.platform_url && form.platform_tenant_id && loginForm.username && loginForm.password
 })
@@ -146,6 +223,8 @@ watch(() => props.project, (p) => {
     if (p.platform_connected) {
       fetchPlatformApps()
     }
+    // 加载成员列表
+    fetchMembers()
   } else {
     form.name = ''
     form.description = ''
@@ -158,6 +237,9 @@ watch(() => props.project, (p) => {
     loginForm.password = ''
     tokenForm.token = ''
     platformApps.value = []
+    members.value = []
+    newMemberUsername.value = ''
+    newMemberRole.value = 'member'
   }
 }, { immediate: true })
 
@@ -171,6 +253,67 @@ async function fetchPlatformApps() {
     platformApps.value = []
   } finally {
     loadingApps.value = false
+  }
+}
+
+async function fetchMembers() {
+  if (!props.project?.id) return
+  loadingMembers.value = true
+  try {
+    members.value = await projectsApi.listMembers(props.project.id)
+  } catch (e: any) {
+    console.error('获取成员列表失败:', e)
+    members.value = []
+  } finally {
+    loadingMembers.value = false
+  }
+}
+
+async function handleAddMember() {
+  if (!props.project?.id || !newMemberUsername.value.trim()) return
+  addingMember.value = true
+  try {
+    const member = await projectsApi.addMember(props.project.id, {
+      username: newMemberUsername.value.trim(),
+      role: newMemberRole.value,
+    })
+    members.value.push(member)
+    newMemberUsername.value = ''
+    newMemberRole.value = 'member'
+    ElMessage.success('成员已添加')
+  } catch (e: any) {
+    ElMessage.error(e.message || '添加成员失败')
+  } finally {
+    addingMember.value = false
+  }
+}
+
+async function handleRemoveMember(member: ProjectMember) {
+  if (!props.project?.id) return
+  try {
+    await ElMessageBox.confirm(`确定移除成员 ${member.username}？`, '确认移除', {
+      confirmButtonText: '移除',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+    await projectsApi.removeMember(props.project.id, member.id)
+    members.value = members.value.filter(m => m.id !== member.id)
+    ElMessage.success('成员已移除')
+  } catch (e: any) {
+    if (e !== 'cancel') {
+      ElMessage.error(e.message || '移除失败')
+    }
+  }
+}
+
+async function handleUpdateRole(member: ProjectMember, newRole: string) {
+  if (!props.project?.id) return
+  try {
+    await projectsApi.updateMemberRole(props.project.id, member.id, newRole)
+    member.role = newRole as ProjectMember['role']
+    ElMessage.success('角色已更新')
+  } catch (e: any) {
+    ElMessage.error(e.message || '更新角色失败')
   }
 }
 
@@ -264,5 +407,49 @@ async function handleSave() {
 .project-settings-modal :deep(.el-divider__text) {
   color: #888;
   background: #1a1a1a;
+}
+
+/* 团队成员 */
+.team-members-section {
+  margin-top: 4px;
+}
+.add-member-row {
+  display: flex;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.members-loading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #888;
+  font-size: 13px;
+  padding: 8px 0;
+}
+.members-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.member-item {
+  display: flex;
+  align-items: center;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: #222;
+  gap: 8px;
+}
+.member-name {
+  color: #e0e0e0;
+  font-size: 13px;
+}
+.member-role-tag {
+  flex-shrink: 0;
+}
+.no-members {
+  color: #666;
+  font-size: 13px;
+  text-align: center;
+  padding: 12px 0;
 }
 </style>
