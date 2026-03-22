@@ -391,97 +391,97 @@ async function handleSave() {
 </script>
 
 <style>
-.project-settings-modal :deep(.el-dialog) {
+.el-dialog.project-settings-modal {
   background: #111;
   border: 1px solid rgba(255,255,255,0.06);
   border-radius: 16px;
 }
-.project-settings-modal :deep(.el-dialog__header) {
+.project-settings-modal .el-dialog__header {
   border-bottom: 1px solid rgba(255,255,255,0.06);
   padding: 16px 20px;
 }
-.project-settings-modal :deep(.el-dialog__title) {
+.project-settings-modal .el-dialog__title {
   color: rgba(255,255,255,0.9);
   font-weight: 600;
 }
-.project-settings-modal :deep(.el-dialog__body) {
+.project-settings-modal .el-dialog__body {
   padding: 20px;
 }
-.project-settings-modal :deep(.el-dialog__headerbtn .el-dialog__close) {
+.project-settings-modal .el-dialog__headerbtn .el-dialog__close {
   color: rgba(255,255,255,0.4);
 }
-.project-settings-modal :deep(.el-form-item__label) {
+.project-settings-modal .el-form-item__label {
   color: rgba(255,255,255,0.55);
   font-size: 13px;
 }
-.project-settings-modal :deep(.el-input__wrapper) {
+.project-settings-modal .el-input__wrapper {
   background: #161622;
   border: 1px solid rgba(255,255,255,0.08);
   box-shadow: none;
   border-radius: 10px;
 }
-.project-settings-modal :deep(.el-input__wrapper:hover) {
+.project-settings-modal .el-input__wrapper:hover {
   border-color: rgba(255,255,255,0.15);
 }
-.project-settings-modal :deep(.el-input__wrapper.is-focus) {
+.project-settings-modal .el-input__wrapper.is-focus {
   border-color: #7c3aed;
   box-shadow: 0 0 0 3px rgba(124,58,237,0.15);
 }
-.project-settings-modal :deep(.el-input__inner) {
+.project-settings-modal .el-input__inner {
   color: rgba(255,255,255,0.9);
 }
-.project-settings-modal :deep(.el-input__inner::placeholder) {
+.project-settings-modal .el-input__inner::placeholder {
   color: rgba(255,255,255,0.25);
 }
-.project-settings-modal :deep(.el-textarea__inner) {
+.project-settings-modal .el-textarea__inner {
   background: #161622;
   border: 1px solid rgba(255,255,255,0.08);
   color: rgba(255,255,255,0.9);
   border-radius: 10px;
   box-shadow: none;
 }
-.project-settings-modal :deep(.el-textarea__inner:focus) {
+.project-settings-modal .el-textarea__inner:focus {
   border-color: #7c3aed;
   box-shadow: 0 0 0 3px rgba(124,58,237,0.15);
 }
-.project-settings-modal :deep(.el-textarea__inner::placeholder) {
+.project-settings-modal .el-textarea__inner::placeholder {
   color: rgba(255,255,255,0.25);
 }
-.project-settings-modal :deep(.el-select .el-select__wrapper) {
+.project-settings-modal .el-select .el-select__wrapper {
   background: #161622;
   border: 1px solid rgba(255,255,255,0.08);
   box-shadow: none;
   border-radius: 10px;
 }
-.project-settings-modal :deep(.el-button--primary) {
+.project-settings-modal .el-button--primary {
   background: linear-gradient(135deg, #7c3aed, #6366f1);
   border: none;
   border-radius: 10px;
 }
-.project-settings-modal :deep(.el-button--primary:hover) {
+.project-settings-modal .el-button--primary:hover {
   opacity: 0.9;
 }
-.project-settings-modal :deep(.el-button--default) {
+.project-settings-modal .el-button--default {
   background: #161622;
   border: 1px solid rgba(255,255,255,0.08);
   color: rgba(255,255,255,0.7);
   border-radius: 10px;
 }
-.project-settings-modal :deep(.el-tabs__item) {
+.project-settings-modal .el-tabs__item {
   color: rgba(255,255,255,0.45);
 }
-.project-settings-modal :deep(.el-tabs__item.is-active) {
+.project-settings-modal .el-tabs__item.is-active {
   color: #a78bfa;
 }
-.project-settings-modal :deep(.el-tabs__active-bar) {
+.project-settings-modal .el-tabs__active-bar {
   background: linear-gradient(135deg, #7c3aed, #6366f1);
 }
-.project-settings-modal :deep(.el-divider__text) {
+.project-settings-modal .el-divider__text {
   color: rgba(255,255,255,0.35);
   background: #111;
   font-size: 13px;
 }
-.project-settings-modal :deep(.el-divider) {
+.project-settings-modal .el-divider {
   border-color: rgba(255,255,255,0.06);
 }
 
