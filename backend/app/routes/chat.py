@@ -218,12 +218,15 @@ async def send_message(
                 chunk_data = json.loads(chunk)
                 if "choices" in chunk_data and len(chunk_data["choices"]) > 0:
                     delta = chunk_data["choices"][0].get("delta", {})
-                    if "content" in delta:
-                        content = delta["content"]
-                        assistant_content += content
+                    # MiniMax-M1 thinking 模式：content 可能为空，实际内容在 reasoning_content
+                    content = delta.get("content") or ""
+                    reasoning = delta.get("reasoning_content") or ""
+                    text = content or reasoning
+                    if text:
+                        assistant_content += text
                         yield {
                             "event": "message",
-                            "data": json.dumps({"type": "message", "data": content})
+                            "data": json.dumps({"type": "message", "data": text})
                         }
 
             # 保存助手消息
