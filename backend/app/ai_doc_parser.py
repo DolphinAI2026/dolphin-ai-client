@@ -219,22 +219,22 @@ async def parse_doc_with_ai(
 async def _parse_single(text: str, filename: str) -> Dict:
     client = LLMClient()
     # 智能截断：优先保留 ER 图和业务具体方案（含子表/字段定义）
-    if len(text) > 60000:
+    if len(text) > 40000:
         import re
         # 找关键章节
         er_match = re.search(r'(#{1,3}\s*.*?ER图.*?)(?=\n#{1,2}\s|\Z)', text, re.DOTALL)
         biz_match = re.search(r'(#{1,3}\s*.*?业务具体方案.*?)(?=\n#{1,2}\s[^#]|\Z)', text, re.DOTALL)
         perm_match = re.search(r'(#{1,3}\s*.*?(?:权限|角色|组织).*?)(?=\n#{1,2}\s|\Z)', text, re.DOTALL)
 
-        # 前 30000 字符（背景、目标、流程等）
-        head = text[:30000]
+        # 前 20000 字符（背景、目标、流程等）
+        head = text[:20000]
         # 拼接关键章节
         critical = ""
         for m in [er_match, biz_match, perm_match]:
             if m and m.group(1) not in head:
                 critical += "\n\n" + m.group(1)[:15000]  # 每个关键章节最多 15000 字符
         truncated = head + critical
-        truncated = truncated[:80000]  # 最终上限 80000
+        truncated = truncated[:50000]  # 最终上限 50000
     else:
         truncated = text
 
@@ -243,10 +243,12 @@ async def _parse_single(text: str, filename: str) -> Dict:
         user_msg += f"文档名：{filename}\n\n"
     user_msg += f"---\n\n{truncated}"
 
+    # 文档解析用非 thinking 模型（MiniMax-M2.5），避免 thinking 模式超时
     result = await client.chat_completion(
         [{"role": "system", "content": SINGLE_SYSTEM_PROMPT},
          {"role": "user", "content": user_msg}],
-        max_tokens=16384, timeout=300.0, temperature=0.2
+        max_tokens=16384, timeout=300.0, temperature=0.2,
+        model="MiniMax-M2.5"
     )
     content = result["choices"][0]["message"]["content"]
     data = _extract_json(content)

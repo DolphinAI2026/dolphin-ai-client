@@ -54,7 +54,7 @@ class LLMClient:
                             break
                         yield data
 
-    async def chat_completion(self, messages: List[Dict[str, str]], *, max_tokens: int = 8192, timeout: float = 120.0, temperature: float = 0.3) -> Dict[str, Any]:
+    async def chat_completion(self, messages: List[Dict[str, str]], *, max_tokens: int = 8192, timeout: float = 120.0, temperature: float = 0.3, model: str = None) -> Dict[str, Any]:
         """
         调用LLM API进行非流式对话
         """
@@ -64,7 +64,7 @@ class LLMClient:
         }
 
         payload = {
-            "model": self.model,
+            "model": model or self.model,
             "messages": messages,
             "stream": False,
             "max_tokens": max_tokens,
