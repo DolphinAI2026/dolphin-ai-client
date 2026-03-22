@@ -46,6 +46,7 @@ class WorkspaceManager:
         project_type: ProjectType,
         project_name: str,
         user_id: int,
+        project_id: Optional[int] = None,
     ) -> dict:
         """创建新工作区并生成脚手架"""
         # 生成 workspace ID
@@ -72,6 +73,7 @@ class WorkspaceManager:
         # 写入 workspace 元信息
         meta = {
             "id": ws_id,
+            "project_id": project_id,
             "project_type": project_type.value,
             "project_name": safe_name,
             "user_id": user_id,

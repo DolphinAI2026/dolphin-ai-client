@@ -37,6 +37,9 @@ async def init_db():
             "ALTER TABLE applications ADD COLUMN generation_state TEXT",
             "ALTER TABLE users ADD COLUMN apaas_base_url VARCHAR(255)",
             "ALTER TABLE users ADD COLUMN apaas_tenant_id VARCHAR(50)",
+            # Projects table columns (in case table existed before new columns were added)
+            "ALTER TABLE projects ADD COLUMN platform_username VARCHAR(100)",
+            "ALTER TABLE projects ADD COLUMN platform_app_name VARCHAR(100)",
         ]:
             try:
                 await conn.execute(text(stmt))

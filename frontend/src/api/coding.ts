@@ -37,6 +37,7 @@ export interface CodingMessage {
 
 export interface WorkspaceInfo {
   id: string
+  project_id?: number
   project_type: string
   project_name: string
   user_id: number
@@ -84,8 +85,8 @@ export const codingApi = {
   // ========== Workspace API ==========
 
   /** 创建工作区 */
-  createWorkspace(project_type: string, project_name: string) {
-    return request.post<any, WorkspaceInfo>('/coding/workspace/create', { project_type, project_name })
+  createWorkspace(project_type: string, project_name: string, project_id?: number) {
+    return request.post<any, WorkspaceInfo>('/coding/workspace/create', { project_type, project_name, project_id })
   },
 
   /** 安装依赖（npm install 可能较慢，5分钟超时） */

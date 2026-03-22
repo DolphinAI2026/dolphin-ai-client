@@ -44,39 +44,95 @@
     </header>
 
     <div class="coding-body">
-      <!-- Left Sidebar: Workspace List -->
+      <!-- Left Sidebar: Project → Workspace Tree -->
       <aside class="workspace-sidebar">
+        <!-- Project Selector -->
         <div class="sidebar-header">
-          <span class="sidebar-title">工作区</span>
-          <el-button size="small" type="primary" text @click="startNewWorkspace">
+          <el-select
+            v-model="currentProjectId"
+            placeholder="选择项目"
+            size="small"
+            class="project-select"
+            @change="onProjectChange"
+          >
+            <el-option
+              v-for="p in projects"
+              :key="p.id"
+              :label="p.name"
+              :value="p.id"
+            />
+          </el-select>
+          <el-button size="small" type="primary" text @click="showCreateProject">
             <el-icon><Plus /></el-icon>
           </el-button>
         </div>
-        <div class="sidebar-list">
-          <div
-            v-for="ws in existingWorkspaces"
-            :key="ws.id"
-            class="sidebar-ws-item"
-            :class="{ active: codingStore.workspace?.id === ws.id }"
-            @click="openExistingWorkspace(ws)"
-          >
-            <div class="sidebar-ws-name">{{ ws.project_name }}</div>
-            <div class="sidebar-ws-meta">
-              <span class="sidebar-ws-type">{{ ws.project_type }}</span>
-              <el-button
-                size="small"
-                type="danger"
-                text
-                @click.stop="deleteWorkspace(ws)"
-                class="sidebar-ws-del"
-              >×</el-button>
+
+        <!-- Platform Status -->
+        <div v-if="currentProject" class="sidebar-platform-status">
+          <div class="platform-status-row">
+            <span class="platform-dot" :class="currentProject.platform_connected ? 'connected' : 'disconnected'"></span>
+            <span class="platform-label">{{ currentProject.platform_connected ? '平台已连接' : '未连接平台' }}</span>
+          </div>
+          <el-button size="small" text class="platform-config-btn" @click="showProjectSettings">
+            配置平台环境
+          </el-button>
+        </div>
+
+        <!-- No Project Prompt -->
+        <div v-if="projects.length === 0" class="sidebar-empty-project">
+          <div class="empty-icon">&#128194;</div>
+          <div class="empty-text">创建你的第一个项目</div>
+          <el-button size="small" type="primary" @click="showCreateProject">新建项目</el-button>
+        </div>
+
+        <!-- Workspace List (under selected project) -->
+        <template v-if="currentProject">
+          <div class="sidebar-section-header">
+            <span class="sidebar-title">工作区</span>
+            <el-button size="small" type="primary" text @click="startNewWorkspace">
+              <el-icon><Plus /></el-icon>
+            </el-button>
+          </div>
+          <div class="sidebar-list">
+            <div
+              v-for="ws in existingWorkspaces"
+              :key="ws.id"
+              class="sidebar-ws-item"
+              :class="{ active: codingStore.workspace?.id === ws.id }"
+              @click="openExistingWorkspace(ws)"
+            >
+              <div class="sidebar-ws-name">{{ ws.project_name }}</div>
+              <div class="sidebar-ws-meta">
+                <span class="sidebar-ws-type">{{ ws.project_type }}</span>
+                <el-button
+                  size="small"
+                  type="danger"
+                  text
+                  @click.stop="deleteWorkspace(ws)"
+                  class="sidebar-ws-del"
+                >×</el-button>
+              </div>
+            </div>
+            <div v-if="existingWorkspaces.length === 0" class="sidebar-empty">
+              暂无工作区，发消息自动创建
             </div>
           </div>
-          <div v-if="existingWorkspaces.length === 0" class="sidebar-empty">
-            暂无工作区
-          </div>
+        </template>
+
+        <!-- Project Actions (bottom) -->
+        <div v-if="currentProject" class="sidebar-footer">
+          <el-button size="small" text type="danger" @click="deleteProject" class="sidebar-delete-btn">
+            删除项目
+          </el-button>
         </div>
       </aside>
+
+      <!-- Project Settings Modal -->
+      <ProjectSettingsModal
+        v-model="projectSettingsVisible"
+        :project="editingProject"
+        @saved="onProjectSaved"
+      />
 
       <!-- Main Content -->
       <div class="main-content">
@@ -221,12 +277,15 @@
 import { ref, computed, onMounted, nextTick, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ArrowLeft, FolderOpened, Upload, Menu, TopRight, Monitor, Plus } from '@element-plus/icons-vue'
+import { ArrowLeft, FolderOpened, Upload, Menu, TopRight, Monitor, Plus, Setting } from '@element-plus/icons-vue'
 import { useCodingStore } from '@/stores/coding'
 import type { PipelineStep, ChatMessage } from '@/stores/coding'
 import { useUserStore } from '@/stores/user'
 import { codingApi } from '@/api/coding'
 import type { GeneratedFile, WorkspaceInfo } from '@/api/coding'
+import { projectsApi } from '@/api/projects'
+import type { Project } from '@/api/projects'
+import ProjectSettingsModal from '@/components/ProjectSettingsModal.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -240,6 +299,17 @@ const scrollAnchor = ref<HTMLElement>()
 const existingWorkspaces = ref<WorkspaceInfo[]>([])
 const isPublishing = ref(false)
 const isDebugging = ref(false)
+
+// ============ Projects ============
+const projects = ref<Project[]>([])
+const currentProjectId = ref<number | null>(null)
+const projectSettingsVisible = ref(false)
+const editingProject = ref<Project | null>(null)
+
+const currentProject = computed(() => {
+  if (!currentProjectId.value) return null
+  return projects.value.find(p => p.id === currentProjectId.value) || null
+})
 
 // ============ Suggestions ============
 
@@ -260,10 +330,28 @@ const inputPlaceholder = computed(() => {
 // ============ Lifecycle ============
 
 onMounted(async () => {
+  // Load projects
   try {
-    existingWorkspaces.value = await codingApi.listWorkspaces()
+    projects.value = await projectsApi.list()
   } catch (e) {
-    console.error('获取工作区列表失败:', e)
+    console.error('获取项目列表失败:', e)
+  }
+
+  // Restore last selected project
+  const lastProjectId = localStorage.getItem('coding_last_project_id')
+  if (lastProjectId && projects.value.some(p => p.id === Number(lastProjectId))) {
+    currentProjectId.value = Number(lastProjectId)
+    await loadProjectWorkspaces()
+  } else if (projects.value.length > 0) {
+    currentProjectId.value = projects.value[0].id
+    await loadProjectWorkspaces()
+  } else {
+    // No projects: load all workspaces (backward compatibility)
+    try {
+      existingWorkspaces.value = await codingApi.listWorkspaces()
+    } catch (e) {
+      console.error('获取工作区列表失败:', e)
+    }
   }
 
   // If workspace_id in query, open it
@@ -283,6 +371,76 @@ onMounted(async () => {
     await restoreConversation(Number(convId))
   }
 })
+
+// ============ Project operations ============
+
+async function loadProjectWorkspaces() {
+  if (!currentProjectId.value) {
+    existingWorkspaces.value = []
+    return
+  }
+  try {
+    // Load all user workspaces and filter by project_id
+    const allWs = await codingApi.listWorkspaces()
+    existingWorkspaces.value = allWs.filter(
+      (ws: any) => ws.project_id === currentProjectId.value
+    )
+  } catch (e) {
+    console.error('获取工作区列表失败:', e)
+    existingWorkspaces.value = []
+  }
+}
+
+async function onProjectChange(projectId: number) {
+  currentProjectId.value = projectId
+  localStorage.setItem('coding_last_project_id', String(projectId))
+  codingStore.reset()
+  localStorage.removeItem('coding_last_workspace_id')
+  await loadProjectWorkspaces()
+}
+
+function showCreateProject() {
+  editingProject.value = null
+  projectSettingsVisible.value = true
+}
+
+function showProjectSettings() {
+  editingProject.value = currentProject.value
+  projectSettingsVisible.value = true
+}
+
+async function onProjectSaved(project: Project) {
+  // Refresh project list
+  try {
+    projects.value = await projectsApi.list()
+  } catch { /* ignore */ }
+
+  // Select the saved project
+  currentProjectId.value = project.id
+  localStorage.setItem('coding_last_project_id', String(project.id))
+  await loadProjectWorkspaces()
+}
+
+async function deleteProject() {
+  if (!currentProject.value) return
+  try {
+    await projectsApi.delete(currentProject.value.id)
+    projects.value = projects.value.filter(p => p.id !== currentProject.value!.id)
+    localStorage.removeItem('coding_last_project_id')
+    codingStore.reset()
+    existingWorkspaces.value = []
+    if (projects.value.length > 0) {
+      currentProjectId.value = projects.value[0].id
+      localStorage.setItem('coding_last_project_id', String(currentProjectId.value))
+      await loadProjectWorkspaces()
+    } else {
+      currentProjectId.value = null
+    }
+    ElMessage.success('项目已删除')
+  } catch (e: any) {
+    ElMessage.error(e.message || '删除失败')
+  }
+}
 
 // ============ Workspace operations ============
 
@@ -406,6 +564,7 @@ async function sendMessage() {
       workspace_id: codingStore.workspace?.id || null,
       conversation_id: codingStore.conversationId || null,
       app_id: (route.query.app_id as string) || null,
+      project_id: currentProjectId.value || null,
     }
 
     const response = await fetch('/api/coding/auto-pipeline', {
@@ -461,7 +620,7 @@ async function sendMessage() {
                 codingStore.workspacePath = parsed.data.workspace_path || null
                 localStorage.setItem('coding_last_workspace_id', wsData.id)
                 // 刷新左侧工作区列表
-                try { existingWorkspaces.value = await codingApi.listWorkspaces() } catch {}
+                try { await loadProjectWorkspaces() } catch {}
 
               }
 
@@ -578,7 +737,7 @@ async function sendMessage() {
     // Refresh workspace file list
     if (codingStore.workspace) {
       try {
-        existingWorkspaces.value = await codingApi.listWorkspaces()
+        await loadProjectWorkspaces()
       } catch { /* ignore */ }
     }
 
@@ -640,7 +799,6 @@ async function publishProject() {
 }
 
 function startNewWorkspace() {
-  showWorkspaceList.value = false
   codingStore.reset()
   localStorage.removeItem('coding_last_workspace_id')
   // 回到欢迎页
@@ -673,9 +831,10 @@ async function debugProject() {
         'Authorization': `Bearer ${token}`,
       },
       body: JSON.stringify({
-        platform_url: 'https://apaas-dev8.dfy.definesys.cn/platform/',
-        tenant_id: '566642786573484033',
-        app_id: '806997227284201472',
+        project_id: currentProjectId.value || null,
+        platform_url: currentProject.value?.platform_url ? undefined : 'https://apaas-dev8.dfy.definesys.cn/platform/',
+        tenant_id: currentProject.value?.platform_tenant_id || '566642786573484033',
+        app_id: currentProject.value?.platform_app_id || '806997227284201472',
       }),
     })
     const result = await resp.json()
@@ -989,6 +1148,92 @@ watch(() => route.path, () => {
   color: #555;
   font-size: 12px;
   padding: 20px 0;
+}
+
+/* ============ Project Selector ============ */
+.project-select {
+  flex: 1;
+}
+.project-select :deep(.el-input__wrapper) {
+  background: #1a1a1a;
+  border-color: #2a2a2a;
+  box-shadow: none;
+}
+.project-select :deep(.el-input__inner) {
+  color: #e0e0e0;
+  font-size: 13px;
+}
+
+/* ============ Platform Status ============ */
+.sidebar-platform-status {
+  padding: 8px 14px;
+  border-bottom: 1px solid #1e1e1e;
+}
+.platform-status-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.platform-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.platform-dot.connected {
+  background: #4ade80;
+}
+.platform-dot.disconnected {
+  background: #666;
+}
+.platform-label {
+  font-size: 11px;
+  color: #888;
+}
+.platform-config-btn {
+  font-size: 11px;
+  padding: 0;
+  color: #667eea;
+}
+
+/* ============ Section Header ============ */
+.sidebar-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px 4px;
+}
+
+/* ============ Empty Project Prompt ============ */
+.sidebar-empty-project {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 16px;
+  flex: 1;
+}
+.empty-icon {
+  font-size: 32px;
+  margin-bottom: 12px;
+  opacity: 0.5;
+}
+.empty-text {
+  font-size: 13px;
+  color: #666;
+  margin-bottom: 16px;
+}
+
+/* ============ Sidebar Footer ============ */
+.sidebar-footer {
+  padding: 8px 14px;
+  border-top: 1px solid #1e1e1e;
+  margin-top: auto;
+}
+.sidebar-delete-btn {
+  font-size: 11px;
+  padding: 0;
 }
 
 /* ============ Main Content ============ */

@@ -14,8 +14,8 @@
         :placeholder="placeholderText"
         :disabled="widget.readOnly"
         :clearable="!widget.readOnly"
-        :start-placeholder="$t('formWidget.dateRangePicker.startDate') || '开始日期'"
-        :end-placeholder="$t('formWidget.dateRangePicker.endDate') || '结束日期'"
+        start-placeholder="开始日期"
+        end-placeholder="结束日期"
         :picker-options="pickerOptions"
         range-separator="~"
         align="left"
@@ -56,7 +56,7 @@ export default {
     // 占位符文本
     placeholderText() {
       const config = this.widget.customComponentConfig || {}
-      return config.placeholder || this.$t('formWidget.dateRangePicker.selectRange') || '请选择日期范围'
+      return config.placeholder || '请选择日期范围'
     },
     // 快捷选项配置
     pickerOptions() {

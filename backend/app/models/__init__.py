@@ -49,6 +49,28 @@ class Message(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class Project(Base):
+    """项目 — 每个项目拥有独立的平台环境配置"""
+    __tablename__ = "projects"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+
+    # Platform environment config (per-project)
+    platform_url: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    platform_tenant_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    platform_token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    platform_username: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    platform_app_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    platform_app_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
 class Application(Base):
     __tablename__ = "applications"
 

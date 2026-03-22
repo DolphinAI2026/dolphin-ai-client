@@ -8,7 +8,7 @@
     >
       <div class="date-picker-ide-preview">
         <i class="el-icon-date date-icon"></i>
-        <span class="preview-text">{{ $t('formWidget.dateRangePicker.selectRange') || '请选择日期范围' }}</span>
+        <span class="preview-text">请选择日期范围</span>
       </div>
     </x-proxy-form-item>
   </div>

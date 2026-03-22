@@ -4,7 +4,7 @@ const cliBase = process.env.DF_APAAS_CLI_PATH || '/Users/mars/.nvm/versions/node
 const puppeteer = require(path.join(cliBase, 'node_modules/puppeteer-core'))
 const os = require('os')
 
-const localServerRunningAt = 'https://localhost:8081/'
+const localServerRunningAt = 'https://localhost:8080/'
 const targetServerRunningAt = 'https://apaas-dev8.dfy.definesys.cn/platform/'
 const targetEnv = 'platform'
 const tenantId = '566642786573484033'

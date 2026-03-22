@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.database import get_db
-from app.models import User, Conversation, Message
+from app.models import User, Conversation, Message, Project
 from app.deps import get_auth_context, AuthContext
 from app.coding.scenes import SceneType, get_scene, get_all_scenes, get_scenes_by_category
 from app.coding.generator import CodingGenerator, parse_files_from_response, CodeGenerationResult
@@ -66,6 +66,7 @@ class CreateWorkspaceRequest(BaseModel):
     """创建工作区请求"""
     project_type: str   # form-component, form-page, form-list, backend-api
     project_name: str   # 项目名称
+    project_id: Optional[int] = None  # 关联项目ID
 
 
 class WriteFileRequest(BaseModel):
@@ -79,7 +80,8 @@ class AutoPipelineRequest(BaseModel):
     message: str                           # 用户需求描述
     workspace_id: Optional[str] = None     # 已有工作区（迭代修改）
     conversation_id: Optional[int] = None  # 已有对话
-    app_id: Optional[str] = None           # aPaaS 应用ID
+    app_id: Optional[str] = None           # aPaaS 应用ID (deprecated, use project_id)
+    project_id: Optional[int] = None       # 关联项目ID（优先使用项目的平台配置）
 
 
 # ============================================================
@@ -377,6 +379,7 @@ async def create_workspace(
         project_type=project_type,
         project_name=req.project_name,
         user_id=ctx.user.id,
+        project_id=req.project_id,
     )
     meta["files"] = workspace_mgr.list_files(meta["id"])
     return meta
@@ -749,6 +752,28 @@ async def auto_pipeline(
         conversation_id = req.conversation_id
         is_iteration = ws_id is not None
 
+        # Load project config if project_id is provided
+        project = None
+        project_id = req.project_id
+        if project_id:
+            result = await db.execute(
+                select(Project).where(Project.id == project_id, Project.user_id == user.id)
+            )
+            project = result.scalar_one_or_none()
+        elif ws_id:
+            # Try to get project_id from workspace metadata
+            try:
+                ws_info = ws_mgr.get_workspace_info(ws_id)
+                _ws_project_id = ws_info.get("project_id")
+                if _ws_project_id:
+                    project_id = _ws_project_id
+                    result = await db.execute(
+                        select(Project).where(Project.id == project_id, Project.user_id == user.id)
+                    )
+                    project = result.scalar_one_or_none()
+            except Exception:
+                pass
+
         try:
             # ---- 意图检测：debug/调试/预览/发布 ----
             msg_lower = req.message.strip().lower()
@@ -774,10 +799,15 @@ async def auto_pipeline(
                 else:
                     serve_port = serve_info["port"]
 
-                # 从用户的平台连接信息获取 debug 参数（不再硬编码）
-                _platform_url = _get_user_platform_url(user)
-                _tenant_id = user.apaas_tenant_id or settings.apaas_tenant_id
-                _app_id = req.app_id or "806997227284201472"
+                # 优先从项目配置获取平台参数，回退到用户全局配置
+                if project and project.platform_url:
+                    _platform_url = _get_platform_frontend_url(project.platform_url)
+                    _tenant_id = project.platform_tenant_id or settings.apaas_tenant_id
+                    _app_id = project.platform_app_id or req.app_id or "806997227284201472"
+                else:
+                    _platform_url = _get_user_platform_url(user)
+                    _tenant_id = user.apaas_tenant_id or settings.apaas_tenant_id
+                    _app_id = req.app_id or "806997227284201472"
 
                 # 自动化 Debug（登录 + 导航 + 截图）
                 debug_result = await ws_mgr.start_auto_debug(
@@ -861,7 +891,7 @@ async def auto_pipeline(
                 project_name = await _extract_project_name(generator, req.message)
                 project_type_str = _scene_to_project_type(scene_type)
                 project_type_enum = ProjectType(project_type_str)
-                meta = ws_mgr.create_workspace(project_type_enum, project_name, user.id)
+                meta = ws_mgr.create_workspace(project_type_enum, project_name, user.id, project_id=project_id)
                 ws_id = meta["id"]
                 yield _sse({"type": "step", "step": "create_workspace", "status": "done",
                             "data": {"workspace_id": ws_id, "project_name": meta["project_name"]}})
@@ -1030,10 +1060,11 @@ async def get_debug_screenshot(ws_id: str, filename: str):
 
 
 class DebugRequest(BaseModel):
-    """Debug 请求（参数可选，优先从用户平台连接信息读取）"""
+    """Debug 请求（参数可选，优先从项目配置读取，回退到用户平台连接信息）"""
     platform_url: Optional[str] = None
     tenant_id: Optional[str] = None
     app_id: Optional[str] = None
+    project_id: Optional[int] = None
 
 
 @router.post("/workspace/{ws_id}/debug")
@@ -1041,6 +1072,7 @@ async def debug_workspace(
     ws_id: str,
     req: DebugRequest,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """启动 Debug 模式：确保 serve 运行 + 启动 Puppeteer 注入组件到平台"""
     ws_mgr = WorkspaceManager()
@@ -1066,11 +1098,28 @@ async def debug_workspace(
     output_name = apaas_config.get("outputName", "")
     custom_widget_list = apaas_config.get("customWidgetList", [])
 
-    # 3. 从请求参数或用户平台连接信息获取 debug 参数
+    # 3. 从项目配置 / 请求参数 / 用户平台连接信息获取 debug 参数
     user = ctx.user
-    _platform_url = req.platform_url or _get_user_platform_url(user)
-    _tenant_id = req.tenant_id or user.apaas_tenant_id or settings.apaas_tenant_id
-    _app_id = req.app_id or "806997227284201472"
+    project = None
+    _project_id = req.project_id
+    if not _project_id:
+        # Try to get project_id from workspace metadata
+        ws_info_meta = ws_mgr.get_workspace_info(ws_id)
+        _project_id = ws_info_meta.get("project_id")
+    if _project_id:
+        result = await db.execute(
+            select(Project).where(Project.id == _project_id, Project.user_id == user.id)
+        )
+        project = result.scalar_one_or_none()
+
+    if project and project.platform_url:
+        _platform_url = req.platform_url or _get_platform_frontend_url(project.platform_url)
+        _tenant_id = req.tenant_id or project.platform_tenant_id or settings.apaas_tenant_id
+        _app_id = req.app_id or project.platform_app_id or "806997227284201472"
+    else:
+        _platform_url = req.platform_url or _get_user_platform_url(user)
+        _tenant_id = req.tenant_id or user.apaas_tenant_id or settings.apaas_tenant_id
+        _app_id = req.app_id or "806997227284201472"
 
     # 4. 启动 Puppeteer debug（后台进程）
     debug_result = await ws_mgr.start_debug(
@@ -1084,6 +1133,16 @@ async def debug_workspace(
     )
 
     return debug_result
+
+
+def _get_platform_frontend_url(backend_url: str) -> str:
+    """从平台后端 URL 推导出平台前端 URL"""
+    base = backend_url or ""
+    if "/backend" in base:
+        return base.replace("/backend", "/platform/")
+    if base and not base.endswith("/"):
+        return base + "/platform/"
+    return base + "platform/" if base else "https://apaas-dev8.dfy.definesys.cn/platform/"
 
 
 def _get_user_platform_url(user) -> str:
