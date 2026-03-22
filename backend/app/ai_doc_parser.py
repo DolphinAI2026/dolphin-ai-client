@@ -218,15 +218,17 @@ async def parse_doc_with_ai(
 
 async def _parse_single(text: str, filename: str) -> Dict:
     client = LLMClient()
+    # 大文档截断，防止 API 超时（保留前 60000 字符，约 30000 汉字）
+    truncated = text[:60000] if len(text) > 60000 else text
     user_msg = f"请分析以下需求文档，提取所有业务表单、字段、角色、字典等信息，输出标准 JSON。\n\n"
     if filename:
         user_msg += f"文档名：{filename}\n\n"
-    user_msg += f"---\n\n{text}"
+    user_msg += f"---\n\n{truncated}"
 
     result = await client.chat_completion(
         [{"role": "system", "content": SINGLE_SYSTEM_PROMPT},
          {"role": "user", "content": user_msg}],
-        max_tokens=16384, timeout=180.0, temperature=0.2
+        max_tokens=16384, timeout=300.0, temperature=0.2
     )
     content = result["choices"][0]["message"]["content"]
     data = _extract_json(content)

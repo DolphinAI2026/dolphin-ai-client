@@ -9,8 +9,11 @@
         <span class="logo-text">aPaaS Builder AI</span>
       </div>
       <div class="nav-right">
-        <button class="nav-link" @click="router.push('/apps')">我的应用</button>
-        <span class="dot" :class="{ active: store.connected }" @click="store.showConnectModal = true" style="cursor:pointer" :title="store.connected ? '已连接得帆云' : '未连接，点击连接'"></span>
+        <button class="nav-link" :class="{ active: showProjectsPanel }" @click="showProjectsPanel = !showProjectsPanel">
+          📁 我的项目
+          <span v-if="projects.length" class="project-count">{{ projects.length }}</span>
+        </button>
+        <button class="nav-link" @click="openCreateProject">+ 新建项目</button>
       </div>
     </nav>
 
@@ -301,7 +304,83 @@
       </div>
     </div>
 
+    <!-- 我的项目面板 -->
+    <div class="projects-panel" :class="{ open: showProjectsPanel }">
+      <div class="projects-header">
+        <h3>我的项目</h3>
+        <div class="projects-header-actions">
+          <button class="projects-add-btn" @click="openCreateProject">+ 新建项目</button>
+          <button class="projects-close-btn" @click="showProjectsPanel = false">✕</button>
+        </div>
+      </div>
+      <div v-if="loadingProjects" class="projects-loading">
+        <span class="loading-spinner">⟳</span> 加载中...
+      </div>
+      <div v-else-if="projects.length === 0" class="projects-empty">
+        <div class="empty-icon">📁</div>
+        <p>还没有项目</p>
+        <button class="create-first-btn" @click="openCreateProject">创建第一个项目</button>
+      </div>
+      <div v-else class="projects-list">
+        <div
+          v-for="proj in projects"
+          :key="proj.id"
+          class="project-card"
+          @click="toggleProjectExpand(proj.id)"
+        >
+          <div class="project-card-header">
+            <div class="project-card-left">
+              <span class="platform-dot" :class="{ connected: proj.platform_connected }"></span>
+              <span class="project-name">{{ proj.name }}</span>
+            </div>
+            <div class="project-card-actions">
+              <button class="project-settings-btn" @click.stop="openProjectSettings(proj)" title="项目设置">
+                ⚙️
+              </button>
+              <span class="expand-arrow" :class="{ expanded: expandedProjectId === proj.id }">▸</span>
+            </div>
+          </div>
+          <div class="project-card-meta">
+            <span class="meta-item" :title="proj.platform_connected ? '已连接平台' : '未连接平台'">
+              {{ proj.platform_connected ? '🟢 已连接' : '⚪ 未连接' }}
+            </span>
+            <span class="meta-item" v-if="projectApps[proj.id]">📦 {{ projectApps[proj.id].length }} 个应用</span>
+            <span class="meta-item" v-if="projectWorkspaces[proj.id]">🗂 {{ projectWorkspaces[proj.id].length }} 个工作区</span>
+            <span class="meta-item">{{ formatDate(proj.created_at) }}</span>
+          </div>
+          <!-- 团队成员头像 -->
+          <div class="project-members-avatars" v-if="projectMembers[proj.id]?.length">
+            <div
+              v-for="member in projectMembers[proj.id].slice(0, 5)"
+              :key="member.id"
+              class="member-avatar"
+              :title="member.username + ' (' + (member.role === 'owner' ? '所有者' : member.role === 'admin' ? '管理员' : '成员') + ')'"
+            >
+              {{ member.username.charAt(0).toUpperCase() }}
+            </div>
+            <div v-if="projectMembers[proj.id].length > 5" class="member-avatar more">
+              +{{ projectMembers[proj.id].length - 5 }}
+            </div>
+          </div>
+          <!-- 展开的应用列表 -->
+          <div v-if="expandedProjectId === proj.id" class="project-apps-list" @click.stop>
+            <div v-if="!projectApps[proj.id]" class="apps-loading">加载中...</div>
+            <div v-else-if="projectApps[proj.id].length === 0" class="apps-empty">暂无应用</div>
+            <div v-else v-for="app in projectApps[proj.id]" :key="app.id" class="project-app-item" @click="goToApp(app)">
+              <span class="app-status-dot" :class="app.local_status || 'pending'"></span>
+              <span class="app-name-text">{{ app.app_name || app.name }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <ConnectModal v-model="store.showConnectModal" />
+    <ProjectSettingsModal
+      v-model="showProjectSettingsModal"
+      :project="editingProject"
+      @saved="onProjectSaved"
+    />
   </div>
 </template>
 
@@ -314,7 +393,10 @@ import { usePreviewStore } from '@/stores/preview'
 import { useUserStore } from '@/stores/user'
 import { applicationApi } from '@/api/application'
 import { conversationApi } from '@/api/conversation'
+import { projectsApi } from '@/api/projects'
+import type { Project, ProjectMember } from '@/api/projects'
 import ConnectModal from '@/components/ConnectModal.vue'
+import ProjectSettingsModal from '@/components/ProjectSettingsModal.vue'
 import type { Message } from '@/types'
 
 const router = useRouter()
@@ -327,6 +409,92 @@ const fileInputRef = ref<HTMLInputElement>()
 const inputText = ref('')
 const isTyping = ref(false)
 const currentAgent = ref('builder')
+
+// ── 项目相关 ──
+const showProjectsPanel = ref(false)
+const loadingProjects = ref(false)
+const projects = ref<Project[]>([])
+const expandedProjectId = ref<number | null>(null)
+const projectApps = ref<Record<number, any[]>>({})
+const projectWorkspaces = ref<Record<number, any[]>>({})
+const projectMembers = ref<Record<number, ProjectMember[]>>({})
+const showProjectSettingsModal = ref(false)
+const editingProject = ref<Project | null>(null)
+
+const fetchProjects = async () => {
+  loadingProjects.value = true
+  try {
+    projects.value = await projectsApi.list()
+    // 并行加载每个项目的成员
+    await Promise.all(projects.value.map(async (proj) => {
+      try {
+        projectMembers.value[proj.id] = await projectsApi.listMembers(proj.id)
+      } catch { projectMembers.value[proj.id] = [] }
+    }))
+  } catch (e: any) {
+    console.error('获取项目列表失败:', e)
+  } finally {
+    loadingProjects.value = false
+  }
+}
+
+const toggleProjectExpand = async (projectId: number) => {
+  if (expandedProjectId.value === projectId) {
+    expandedProjectId.value = null
+    return
+  }
+  expandedProjectId.value = projectId
+  // 加载项目应用和工作区
+  if (!projectApps.value[projectId]) {
+    try {
+      const apps = await applicationApi.list() as any[]
+      projectApps.value[projectId] = apps.filter((a: any) => a.project_id === projectId)
+    } catch { projectApps.value[projectId] = [] }
+  }
+  if (!projectWorkspaces.value[projectId]) {
+    try {
+      projectWorkspaces.value[projectId] = await projectsApi.listWorkspaces(projectId)
+    } catch { projectWorkspaces.value[projectId] = [] }
+  }
+}
+
+const openCreateProject = () => {
+  editingProject.value = null
+  showProjectSettingsModal.value = true
+}
+
+const openProjectSettings = (proj: Project) => {
+  editingProject.value = proj
+  showProjectSettingsModal.value = true
+}
+
+const onProjectSaved = (proj: Project) => {
+  const idx = projects.value.findIndex(p => p.id === proj.id)
+  if (idx >= 0) {
+    projects.value[idx] = proj
+  } else {
+    projects.value.unshift(proj)
+  }
+}
+
+const goToApp = (app: any) => {
+  if (app.conversation_id) {
+    router.push(`/chat/${app.conversation_id}?app_id=${app.id}`)
+  } else {
+    router.push('/apps')
+  }
+}
+
+const formatDate = (dateStr: string) => {
+  if (!dateStr) return ''
+  const d = new Date(dateStr)
+  const now = new Date()
+  const diff = now.getTime() - d.getTime()
+  if (diff < 86400000) return '今天'
+  if (diff < 172800000) return '昨天'
+  if (diff < 604800000) return `${Math.floor(diff / 86400000)} 天前`
+  return `${d.getMonth() + 1}/${d.getDate()}`
+}
 
 const agents: Record<string, { name: string; icon: string }> = {
   builder: { name: '搭建智能体', icon: '🤖' },
@@ -1288,6 +1456,9 @@ onMounted(async () => {
       handleDocUpload({ target: fakeInput } as any)
     })
   }
+
+  // 加载项目列表
+  fetchProjects()
 })
 </script>
 
@@ -1553,4 +1724,125 @@ onMounted(async () => {
 .deploy-done { padding: 12px 16px; text-align: center; font-size: 13px; color: #0a8; font-weight: 500; }
 .deploy-done-btn { background: #0a8; color: #fff; border: none; border-radius: 6px; padding: 5px 12px; font-size: 12px; cursor: pointer; margin-left: 8px; }
 .deploy-done-btn:hover { background: #087; }
+
+/* ── nav-right 项目按钮 ── */
+.nav-link.active { background: #eef2ff; color: #4338ca; }
+.project-count {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 18px; height: 18px; padding: 0 5px;
+  background: #4f46e5; color: #fff; border-radius: 9px;
+  font-size: 10px; font-weight: 600; margin-left: 4px;
+}
+
+/* ── 我的项目面板 ── */
+.projects-panel {
+  position: fixed; top: 0; right: 0; bottom: 0; width: 400px;
+  background: #fff; border-left: 1px solid #e5e7eb;
+  box-shadow: -4px 0 24px rgba(0,0,0,0.08);
+  z-index: 30; display: flex; flex-direction: column;
+  transform: translateX(100%); transition: transform 0.3s ease;
+}
+.projects-panel.open { transform: translateX(0); }
+
+.projects-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 16px 20px; border-bottom: 1px solid #e5e7eb; flex-shrink: 0;
+}
+.projects-header h3 { margin: 0; font-size: 15px; font-weight: 600; color: #1f2937; }
+.projects-header-actions { display: flex; align-items: center; gap: 8px; }
+.projects-add-btn {
+  background: #4f46e5; color: #fff; border: none; border-radius: 6px;
+  padding: 5px 12px; font-size: 12px; cursor: pointer; font-weight: 500;
+}
+.projects-add-btn:hover { background: #4338ca; }
+.projects-close-btn {
+  all: unset; cursor: pointer; color: #9ca3af; font-size: 16px; padding: 4px;
+}
+.projects-close-btn:hover { color: #374151; }
+
+.projects-loading {
+  padding: 40px; text-align: center; color: #9ca3af; font-size: 13px;
+}
+.loading-spinner { display: inline-block; animation: spin 1s linear infinite; }
+
+.projects-empty {
+  padding: 60px 20px; text-align: center; color: #9ca3af;
+}
+.projects-empty .empty-icon { font-size: 40px; opacity: 0.4; margin-bottom: 8px; }
+.projects-empty p { font-size: 13px; margin: 0 0 16px; }
+.create-first-btn {
+  background: #4f46e5; color: #fff; border: none; border-radius: 8px;
+  padding: 8px 20px; font-size: 13px; cursor: pointer;
+}
+.create-first-btn:hover { background: #4338ca; }
+
+.projects-list { flex: 1; overflow-y: auto; padding: 12px; }
+
+.project-card {
+  background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 10px;
+  padding: 12px 14px; margin-bottom: 10px; cursor: pointer;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.project-card:hover { border-color: #a5b4fc; box-shadow: 0 2px 8px rgba(79,70,229,0.08); }
+
+.project-card-header {
+  display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;
+}
+.project-card-left { display: flex; align-items: center; gap: 8px; }
+.platform-dot {
+  width: 8px; height: 8px; border-radius: 50%; background: #d1d5db; flex-shrink: 0;
+}
+.platform-dot.connected { background: #10b981; }
+.project-name { font-size: 13px; font-weight: 600; color: #1f2937; }
+
+.project-card-actions { display: flex; align-items: center; gap: 4px; }
+.project-settings-btn {
+  background: none; border: none; cursor: pointer; font-size: 14px;
+  padding: 2px 4px; border-radius: 4px; opacity: 0.4; transition: opacity 0.2s;
+}
+.project-card:hover .project-settings-btn { opacity: 0.8; }
+.project-settings-btn:hover { opacity: 1 !important; background: #e5e7eb; }
+.expand-arrow {
+  font-size: 10px; color: #9ca3af; transition: transform 0.2s; display: inline-block;
+}
+.expand-arrow.expanded { transform: rotate(90deg); }
+
+.project-card-meta {
+  display: flex; flex-wrap: wrap; gap: 8px; font-size: 11px; color: #9ca3af;
+}
+.meta-item { white-space: nowrap; }
+
+/* 团队成员头像 */
+.project-members-avatars {
+  display: flex; gap: 0; margin-top: 8px;
+}
+.member-avatar {
+  width: 24px; height: 24px; border-radius: 50%;
+  background: #eef2ff; color: #4338ca; border: 2px solid #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 10px; font-weight: 600; margin-left: -6px;
+}
+.member-avatar:first-child { margin-left: 0; }
+.member-avatar.more { background: #f3f4f6; color: #9ca3af; font-size: 9px; }
+
+/* 展开的应用列表 */
+.project-apps-list {
+  margin-top: 10px; padding-top: 10px; border-top: 1px solid #e5e7eb;
+}
+.apps-loading, .apps-empty {
+  font-size: 12px; color: #9ca3af; padding: 4px 0;
+}
+.project-app-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px; border-radius: 6px; cursor: pointer;
+  font-size: 12px; color: #374151;
+}
+.project-app-item:hover { background: #eef2ff; }
+.app-status-dot {
+  width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+}
+.app-status-dot.completed { background: #10b981; }
+.app-status-dot.pending { background: #d1d5db; }
+.app-status-dot.generating { background: #f59e0b; }
+.app-name-text { flex: 1; }
 </style>
