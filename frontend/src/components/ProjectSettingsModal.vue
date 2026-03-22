@@ -117,13 +117,22 @@
           <div class="team-members-section">
             <!-- 添加成员 -->
             <div class="add-member-row">
-              <el-input
-                v-model="newMemberUsername"
-                placeholder="输入用户名添加成员"
+              <el-select
+                v-model="selectedUserId"
+                filterable
+                placeholder="选择用户"
                 size="small"
                 style="flex: 1"
-                @keyup.enter="handleAddMember"
-              />
+                :loading="loadingUsers"
+                @focus="fetchAvailableUsers"
+              >
+                <el-option
+                  v-for="u in availableUsers"
+                  :key="u.id"
+                  :label="u.username"
+                  :value="u.id"
+                />
+              </el-select>
               <el-select v-model="newMemberRole" size="small" style="width: 100px; margin-left: 8px">
                 <el-option label="管理员" value="admin" />
                 <el-option label="成员" value="member" />
@@ -132,6 +141,7 @@
                 type="primary"
                 size="small"
                 :loading="addingMember"
+                :disabled="!selectedUserId"
                 style="margin-left: 8px"
                 @click="handleAddMember"
               >
@@ -233,8 +243,10 @@ const platformApps = ref<PlatformApp[]>([])
 const members = ref<ProjectMember[]>([])
 const loadingMembers = ref(false)
 const addingMember = ref(false)
-const newMemberUsername = ref('')
+const selectedUserId = ref<number | null>(null)
 const newMemberRole = ref('member')
+const availableUsers = ref<{ id: number; username: string }[]>([])
+const loadingUsers = ref(false)
 
 const canConnect = computed(() => {
   return form.platform_url && form.platform_tenant_id && loginForm.username && loginForm.password
@@ -305,25 +317,46 @@ async function fetchMembers() {
   }
 }
 
+async function fetchAvailableUsers() {
+  if (availableUsers.value.length > 0) return
+  loadingUsers.value = true
+  try {
+    const token = localStorage.getItem('token') || ''
+    const resp = await fetch('/api/auth/users', {
+      headers: { 'Authorization': `Bearer ${token}` }
+    })
+    if (resp.ok) {
+      const allUsers: { id: number; username: string }[] = await resp.json()
+      const memberIds = new Set(members.value.map(m => m.user_id))
+      availableUsers.value = allUsers.filter(u => !memberIds.has(u.id))
+    }
+  } catch (e) {
+    console.error('获取用户列表失败', e)
+  } finally {
+    loadingUsers.value = false
+  }
+}
+
 async function handleAddMember() {
-  console.log('[AddMember] project:', props.project?.id, 'username:', JSON.stringify(newMemberUsername.value))
   if (!props.project?.id) {
     ElMessage.warning('请先保存项目')
     return
   }
-  if (!newMemberUsername.value || !newMemberUsername.value.trim()) {
-    ElMessage.warning('请输入用户名')
+  if (!selectedUserId.value) {
+    ElMessage.warning('请选择用户')
     return
   }
   addingMember.value = true
   try {
     const member = await projectsApi.addMember(props.project.id, {
-      username: newMemberUsername.value.trim(),
+      user_id: selectedUserId.value,
       role: newMemberRole.value,
     })
     members.value.push(member)
-    newMemberUsername.value = ''
+    selectedUserId.value = null
     newMemberRole.value = 'member'
+    // 刷新可选用户列表
+    availableUsers.value = availableUsers.value.filter(u => u.id !== member.user_id)
     ElMessage.success('成员已添加')
   } catch (e: any) {
     ElMessage.error(e.message || '添加成员失败')
