@@ -82,6 +82,7 @@ class AutoPipelineRequest(BaseModel):
     conversation_id: Optional[int] = None  # 已有对话
     app_id: Optional[str] = None           # aPaaS 应用ID (deprecated, use project_id)
     project_id: Optional[int] = None       # 关联项目ID（优先使用项目的平台配置）
+    project_type: Optional[str] = None     # 前端指定的项目类型（menu-page 等）
 
 
 # ============================================================
@@ -976,7 +977,8 @@ async def auto_pipeline(
                 yield _sse({"type": "step", "step": "create_workspace", "status": "running"})
                 # 从需求中提取项目名
                 project_name = await _extract_project_name(generator, req.message)
-                project_type_str = _scene_to_project_type(scene_type)
+                # 前端指定的 project_type 优先（如从"页面开发"入口进来）
+                project_type_str = req.project_type or _scene_to_project_type(scene_type)
                 project_type_enum = ProjectType(project_type_str)
                 meta = ws_mgr.create_workspace(project_type_enum, project_name, user.id, project_id=project_id)
                 ws_id = meta["id"]

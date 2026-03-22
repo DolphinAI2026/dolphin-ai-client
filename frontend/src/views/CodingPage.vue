@@ -147,7 +147,7 @@
       <!-- Welcome message when no workspace -->
       <div v-if="!codingStore.workspace && codingStore.messages.length === 0" class="welcome">
         <div class="welcome-icon">&#x2728;</div>
-        <h2>描述你想要的组件</h2>
+        <h2>{{ isPageDev ? '描述你想要的页面' : '描述你想要的组件' }}</h2>
         <p class="welcome-desc">告诉我你想开发什么，我会自动创建项目、生成代码、安装依赖并启动开发服务器。</p>
         <div class="suggestions">
           <button
@@ -333,6 +333,10 @@ const userInput = ref('')
 const chatAreaRef = ref<HTMLElement>()
 const scrollAnchor = ref<HTMLElement>()
 
+// 页面类型：从 URL query 读取，page=页面开发，否则=组件开发
+const devType = computed(() => route.query.type === 'page' ? 'page' : 'component')
+const isPageDev = computed(() => devType.value === 'page')
+
 const existingWorkspaces = ref<WorkspaceInfo[]>([])
 const isPublishing = ref(false)
 const isDebugging = ref(false)
@@ -356,12 +360,21 @@ const currentProject = computed(() => {
 
 // ============ Suggestions ============
 
-const suggestions = [
+const componentSuggestions = [
   '开发一个头像上传组件，支持裁剪和预览',
-  '做一个数据查询表格页面，带搜索和分页',
   '实现一个日期范围选择器组件',
-  '创建一个审批流程页面',
+  '做一个评分组件，支持半星和自定义颜色',
+  '创建一个图表分析组件，支持柱状图和饼图',
 ]
+
+const pageSuggestions = [
+  '做一个数据查询表格页面，带搜索和分页',
+  '创建一个项目分析图表页面',
+  '做一个审批流程页面，支持多级审批',
+  '开发一个供应商管理弹窗选择页面',
+]
+
+const suggestions = computed(() => isPageDev.value ? pageSuggestions : componentSuggestions)
 
 const inputPlaceholder = computed(() => {
   if (codingStore.workspace) {
@@ -684,6 +697,7 @@ async function sendMessage() {
       conversation_id: codingStore.conversationId || null,
       app_id: (route.query.app_id as string) || null,
       project_id: currentProjectId.value || null,
+      project_type: isPageDev.value ? 'menu-page' : null,
     }
 
     const response = await fetch('/api/coding/auto-pipeline', {
