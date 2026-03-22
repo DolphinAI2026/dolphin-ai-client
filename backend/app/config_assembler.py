@@ -267,9 +267,11 @@ async def assemble_config_streaming(
         {"role": "user", "content": f"{skeleton_context}\n\n{user_prompt}" if skeleton_context else user_prompt},
     ]
     # 大文档给更长超时
-    skeleton_timeout = 120.0 if is_large_doc else 60.0
+    skeleton_timeout = 180.0 if is_large_doc else 90.0
+    # 文档解析用非 thinking 模型，避免超时
     skeleton_result = await client.chat_completion(
-        skeleton_messages, max_tokens=4096, timeout=skeleton_timeout, temperature=0.2
+        skeleton_messages, max_tokens=4096, timeout=skeleton_timeout, temperature=0.2,
+        model="MiniMax-M2.5"
     )
     skeleton_text = skeleton_result["choices"][0]["message"]["content"]
     skeleton = _extract_json(skeleton_text)
@@ -317,7 +319,7 @@ async def assemble_config_streaming(
             ]
             try:
                 dict_result = await client.chat_completion(
-                    dict_messages, max_tokens=8192, timeout=90.0, temperature=0.2
+                    dict_messages, max_tokens=8192, timeout=120.0, temperature=0.2, model="MiniMax-M2.5"
                 )
                 dict_text = dict_result["choices"][0]["message"]["content"]
                 batch_dicts = _extract_json_array(dict_text)
@@ -386,7 +388,7 @@ async def assemble_config_streaming(
             ]
             try:
                 model_result = await client.chat_completion(
-                    model_messages, max_tokens=8192, timeout=120.0, temperature=0.2
+                    model_messages, max_tokens=8192, timeout=180.0, temperature=0.2, model="MiniMax-M2.5"
                 )
                 model_text = model_result["choices"][0]["message"]["content"]
                 batch_models = _extract_json_array(model_text)
@@ -432,7 +434,7 @@ async def assemble_config_streaming(
         ]
         try:
             wf_result = await client.chat_completion(
-                wf_messages, max_tokens=4096, timeout=60.0, temperature=0.2
+                wf_messages, max_tokens=4096, timeout=120.0, temperature=0.2, model="MiniMax-M2.5"
             )
             wf_text = wf_result["choices"][0]["message"]["content"]
             wf_data = _extract_json_array(wf_text)
