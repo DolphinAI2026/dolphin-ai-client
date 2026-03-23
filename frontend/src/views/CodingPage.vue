@@ -27,16 +27,24 @@
         >
           <el-icon><FolderOpened /></el-icon> 在 VS Code 中打开
         </el-button>
-        <el-button
+        <el-dropdown
           v-if="codingStore.workspace"
-          size="small"
+          split-button
           type="success"
-          @click="debugProject"
+          size="small"
           :loading="isDebugging"
-          class="header-btn"
+          class="header-btn debug-dropdown"
+          @click="handleDebug('app')"
+          @command="handleDebug"
         >
           <el-icon><Monitor /></el-icon> Debug 预览
-        </el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="app">应用调试（看效果）</el-dropdown-item>
+              <el-dropdown-item command="platform">平台调试（设计器）</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
         <el-button
           v-if="codingStore.workspace"
           size="small"
@@ -952,7 +960,11 @@ async function deleteWorkspace(ws: WorkspaceInfo) {
   }
 }
 
-async function debugProject() {
+function handleDebug(mode: string) {
+  debugProject(mode as 'app' | 'platform')
+}
+
+async function debugProject(debugMode: 'app' | 'platform' = 'app') {
   if (!codingStore.workspace || isDebugging.value) return
   isDebugging.value = true
   try {
@@ -968,11 +980,13 @@ async function debugProject() {
         platform_url: currentProject.value?.platform_url ? undefined : 'https://apaas-dev8.dfy.definesys.cn/platform/',
         tenant_id: currentProject.value?.platform_tenant_id || '566642786573484033',
         app_id: currentProject.value?.platform_app_id || '806997227284201472',
+        debug_mode: debugMode,
       }),
     })
     const result = await resp.json()
     if (result.status === 'ok') {
-      ElMessage.success('Debug 已启动！请在 Chromium 中登录平台后 F5 刷新')
+      const modeLabel = debugMode === 'app' ? '应用前台' : '平台设计器'
+      ElMessage.success(`Debug 已启动（${modeLabel}）！请在 Chromium 中登录后 F5 刷新`)
     } else {
       ElMessage.error(result.message || result.detail || 'Debug 启动失败')
     }
@@ -1451,6 +1465,26 @@ watch(() => route.path, () => {
 }
 
 .header-btn:hover {
+  border-color: rgba(124, 58, 237, 0.3);
+  background: rgba(124, 58, 237, 0.1);
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.debug-dropdown :deep(.el-button) {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: #161622;
+  color: rgba(255, 255, 255, 0.7);
+  border-radius: 10px 0 0 10px;
+  font-size: 13px;
+}
+.debug-dropdown :deep(.el-dropdown__caret-button) {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: #161622;
+  color: rgba(255, 255, 255, 0.7);
+  border-radius: 0 10px 10px 0;
+}
+.debug-dropdown :deep(.el-button:hover),
+.debug-dropdown :deep(.el-dropdown__caret-button:hover) {
   border-color: rgba(124, 58, 237, 0.3);
   background: rgba(124, 58, 237, 0.1);
   color: rgba(255, 255, 255, 0.95);

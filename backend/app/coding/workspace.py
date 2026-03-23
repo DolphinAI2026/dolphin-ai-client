@@ -292,8 +292,10 @@ class WorkspaceManager:
 
     async def start_debug(self, ws_id: str, serve_port: int,
                           platform_url: str, tenant_id: str, app_id: str,
-                          output_name: str, custom_widget_list: list) -> dict:
-        """启动 Puppeteer debug 模式，注入组件到平台"""
+                          output_name: str, custom_widget_list: list,
+                          debug_mode: str = "platform",
+                          app_code: str = "") -> dict:
+        """启动 Puppeteer debug 模式，注入组件到平台或应用"""
         # 如果已有 debug 进程在运行，先停止
         if ws_id in self._debug_processes:
             old_proc = self._debug_processes[ws_id]["process"]
@@ -306,6 +308,13 @@ class WorkspaceManager:
 
         ws_path = WORKSPACE_ROOT / ws_id
 
+        # 根据 debug_mode 计算目标 URL
+        _base_url = platform_url.replace("/platform/", "/").rstrip("/") + "/"
+        if debug_mode == "app" and app_code:
+            target_url = f"{_base_url}app/dragonfly/{app_code}/{tenant_id}/app/app-page?appId={app_id}"
+        else:
+            target_url = platform_url
+
         # 生成 debug 脚本
         debug_script = f"""
 const path = require('path')
@@ -314,8 +323,7 @@ const puppeteer = require(path.join(cliBase, 'node_modules/puppeteer-core'))
 const os = require('os')
 
 const localServerRunningAt = 'https://localhost:{serve_port}/'
-const targetServerRunningAt = '{platform_url}'
-const targetEnv = 'platform'
+const targetEnv = '{debug_mode}'
 const tenantId = '{tenant_id}'
 const appId = '{app_id}'
 const outputName = '{output_name}'
@@ -378,7 +386,7 @@ const INJECT_CODE = `(function(params) {{
   const injectCall = `${{INJECT_CODE}}(${{JSON.stringify(injectParams)}})`
   await page.evaluateOnNewDocument(injectCall)
   try {{
-    await page.goto(targetServerRunningAt, {{ waitUntil: 'domcontentloaded', timeout: 120000 }})
+    await page.goto('{target_url}', {{ waitUntil: 'domcontentloaded', timeout: 120000 }})
   }} catch(e) {{ console.log('Nav issue:', e.message.split('\\n')[0]) }}
   await page.evaluate(injectCall)
   console.log('✅ Debug active')
@@ -408,16 +416,20 @@ const INJECT_CODE = `(function(params) {{
                 stdout, stderr = await proc.communicate()
                 return {"status": "error", "message": f"Debug 启动失败: {stderr.decode('utf-8', errors='replace')[:300]}"}
 
+        _mode_label = "应用前台" if debug_mode == "app" else "平台设计器"
         return {
             "status": "ok",
-            "message": f"Debug 已启动，请在打开的 Chromium 中登录平台后 F5 刷新",
+            "message": f"Debug 已启动（{_mode_label}），请在打开的 Chromium 中登录后 F5 刷新",
             "serve_port": serve_port,
             "platform_url": platform_url,
+            "debug_mode": debug_mode,
         }
 
     async def start_auto_debug(self, ws_id: str, serve_port: int,
                                 platform_url: str, tenant_id: str, app_id: str,
-                                output_name: str, custom_widget_list: list) -> dict:
+                                output_name: str, custom_widget_list: list,
+                                debug_mode: str = "platform",
+                                app_code: str = "") -> dict:
         """启动自动化 Debug：自动登录 + 导航 + 截图 + 组件注入"""
         # 如果已有 debug 进程在运行，先停止
         if ws_id in self._debug_processes:
@@ -437,8 +449,16 @@ const INJECT_CODE = `(function(params) {{
         if result_json_path.exists():
             result_json_path.unlink()
 
-        form_url = f"{platform_url}{tenant_id}/default/data-model-fn-config?appId={app_id}&menuId=819626319129083904&formId=69b138fe49b6ac36772fa040"
+        # platform_url 通常以 /platform/ 结尾，提取 base（如 https://apaas-dev8.dfy.definesys.cn/）
+        _base_url = platform_url.replace("/platform/", "/").rstrip("/") + "/"
         login_url = f"{platform_url}account/login"
+
+        if debug_mode == "app" and app_code:
+            # 应用 debug（运行态）— 打开应用前台
+            form_url = f"{_base_url}app/dragonfly/{app_code}/{tenant_id}/app/app-page?appId={app_id}&menuId=819626319129083904&formId=69b138fe49b6ac36772fa040"
+        else:
+            # 平台 debug（设计态）— 打开表单设计器
+            form_url = f"{platform_url}{tenant_id}/default/data-model-fn-config?appId={app_id}&menuId=819626319129083904&formId=69b138fe49b6ac36772fa040"
 
         debug_script = f"""
 const path = require('path')
@@ -448,7 +468,6 @@ const puppeteer = require(path.join(cliBase, 'node_modules/puppeteer-core'))
 const os = require('os')
 
 const localServerRunningAt = 'https://localhost:{serve_port}/'
-const targetServerRunningAt = '{platform_url}'
 const tenantId = '{tenant_id}'
 const appId = '{app_id}'
 const outputName = '{output_name}'
@@ -551,12 +570,12 @@ const resultPath = '{str(result_json_path)}'
     console.log('[AUTO-DEBUG] Login successful!')
 
     // Step 3: Set up component injection
-    const injectParams = {{ localServerRunningAt, outputName, targetEnv: 'platform', customWidgetList, tenantId, appId }}
+    const injectParams = {{ localServerRunningAt, outputName, targetEnv: '{debug_mode}', customWidgetList, tenantId, appId }}
     const injectCall = `${{INJECT_CODE}}(${{JSON.stringify(injectParams)}})`
     await page.evaluateOnNewDocument(injectCall)
 
-    // Step 4: Navigate to form designer
-    console.log('[AUTO-DEBUG] Navigating to form designer...')
+    // Step 4: Navigate to target page
+    console.log('[AUTO-DEBUG] Navigating to {debug_mode} debug target...')
     await page.goto('{form_url}', {{ waitUntil: 'domcontentloaded', timeout: 60000 }})
     await page.evaluate(injectCall)
 

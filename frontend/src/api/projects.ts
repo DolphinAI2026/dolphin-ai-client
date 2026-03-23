@@ -10,6 +10,7 @@ export interface Project {
   platform_username?: string
   platform_app_id?: string
   platform_app_name?: string
+  platform_app_code?: string
   platform_connected: boolean
   created_at: string
   updated_at: string
@@ -29,6 +30,7 @@ export interface UpdateProjectData {
   platform_username?: string
   platform_app_id?: string
   platform_app_name?: string
+  platform_app_code?: string
 }
 
 export interface ProjectConnectData {

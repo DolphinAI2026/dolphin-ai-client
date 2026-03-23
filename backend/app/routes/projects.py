@@ -40,6 +40,7 @@ class UpdateProjectRequest(BaseModel):
     platform_username: Optional[str] = None
     platform_app_id: Optional[str] = None
     platform_app_name: Optional[str] = None
+    platform_app_code: Optional[str] = None
 
 
 class ProjectConnectRequest(BaseModel):
@@ -73,6 +74,7 @@ def _project_to_dict(p: Project) -> dict:
         "platform_username": p.platform_username,
         "platform_app_id": p.platform_app_id,
         "platform_app_name": p.platform_app_name,
+        "platform_app_code": p.platform_app_code,
         "platform_connected": bool(p.platform_token),
         "created_at": p.created_at.isoformat() if p.created_at else None,
         "updated_at": p.updated_at.isoformat() if p.updated_at else None,
@@ -198,7 +200,8 @@ async def update_project(
     project = await _get_project_or_404(project_id, ctx.user.id, db)
 
     for field in ["name", "description", "platform_url", "platform_tenant_id",
-                  "platform_token", "platform_username", "platform_app_id", "platform_app_name"]:
+                  "platform_token", "platform_username", "platform_app_id", "platform_app_name",
+                  "platform_app_code"]:
         value = getattr(req, field, None)
         if value is not None:
             setattr(project, field, value)

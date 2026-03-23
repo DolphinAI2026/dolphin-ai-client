@@ -228,6 +228,7 @@ const form = reactive({
   platform_tenant_id: '',
   platform_app_id: '',
   platform_app_name: '',
+  platform_app_code: '',
   platform_connected: false,
 })
 
@@ -261,6 +262,7 @@ watch(() => props.project, (p) => {
     form.platform_tenant_id = p.platform_tenant_id || ''
     form.platform_app_id = p.platform_app_id || ''
     form.platform_app_name = p.platform_app_name || ''
+    form.platform_app_code = p.platform_app_code || ''
     form.platform_connected = p.platform_connected || false
     loginForm.username = p.platform_username || ''
     loginForm.password = ''
@@ -278,6 +280,7 @@ watch(() => props.project, (p) => {
     form.platform_tenant_id = ''
     form.platform_app_id = ''
     form.platform_app_name = ''
+    form.platform_app_code = ''
     form.platform_connected = false
     loginForm.username = ''
     loginForm.password = ''
@@ -399,6 +402,7 @@ function handleAppSelect(appId: string) {
   const app = platformApps.value.find(a => a.app_id === appId)
   if (app) {
     form.platform_app_name = app.app_name
+    form.platform_app_code = app.app_code || ''
   }
 }
 
@@ -441,6 +445,7 @@ async function handleSave() {
         platform_tenant_id: form.platform_tenant_id,
         platform_app_id: form.platform_app_id,
         platform_app_name: form.platform_app_name,
+        platform_app_code: form.platform_app_code,
       }
       // If token mode, include token
       if (connectMode.value === 'token' && tokenForm.token.trim()) {

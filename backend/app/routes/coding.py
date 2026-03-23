@@ -867,8 +867,13 @@ async def auto_pipeline(
             is_debug_intent = any(kw in msg_lower for kw in ['debug', '调试', '预览', '帮我debug', '启动debug', '启动调试'])
             is_publish_intent = any(kw in msg_lower for kw in ['发布', '打包', '上传', 'publish', 'build'])
 
+            # 检测 debug 模式：平台调试 vs 应用调试（默认应用调试）
+            _is_platform_debug = any(kw in msg_lower for kw in ['平台调试', '设计器调试', '配置调试', '平台debug', 'platform debug'])
+            _debug_mode = "platform" if _is_platform_debug else "app"
+
             if is_debug_intent and ws_id:
-                yield _sse({"type": "step", "step": "debug", "status": "running", "data": {"message": "正在自动登录平台..."}})
+                _mode_label = "平台设计器" if _debug_mode == "platform" else "应用前台"
+                yield _sse({"type": "step", "step": "debug", "status": "running", "data": {"message": f"正在自动登录{_mode_label}..."}})
                 ws_path = WORKSPACE_ROOT / ws_id
                 apaas_json_path = ws_path / "src" / "apaas.json"
                 import json as _json
@@ -896,12 +901,18 @@ async def auto_pipeline(
                     _tenant_id = user.apaas_tenant_id or settings.apaas_tenant_id
                     _app_id = req.app_id or "806997227284201472"
 
+                # 获取 app_code
+                _app_code = ""
+                if project:
+                    _app_code = getattr(project, 'platform_app_code', '') or ''
+
                 # 自动化 Debug（登录 + 导航 + 截图）
                 debug_result = await ws_mgr.start_auto_debug(
                     ws_id=ws_id, serve_port=serve_port,
                     platform_url=_platform_url,
                     tenant_id=_tenant_id, app_id=_app_id,
                     output_name=output_name, custom_widget_list=custom_widget_list,
+                    debug_mode=_debug_mode, app_code=_app_code,
                 )
 
                 if debug_result.get("status") == "ok":
@@ -1173,6 +1184,7 @@ class DebugRequest(BaseModel):
     tenant_id: Optional[str] = None
     app_id: Optional[str] = None
     project_id: Optional[int] = None
+    debug_mode: str = "app"  # "platform"（设计态） or "app"（运行态）
 
 
 @router.post("/workspace/{ws_id}/debug")
@@ -1229,7 +1241,12 @@ async def debug_workspace(
         _tenant_id = req.tenant_id or user.apaas_tenant_id or settings.apaas_tenant_id
         _app_id = req.app_id or "806997227284201472"
 
-    # 4. 启动 Puppeteer debug（后台进程）
+    # 4. 获取 app_code（用于应用 debug 模式）
+    _app_code = ""
+    if project:
+        _app_code = getattr(project, 'platform_app_code', '') or ''
+
+    # 5. 启动 Puppeteer debug（后台进程）
     debug_result = await ws_mgr.start_debug(
         ws_id=ws_id,
         serve_port=serve_port,
@@ -1238,6 +1255,8 @@ async def debug_workspace(
         app_id=_app_id,
         output_name=output_name,
         custom_widget_list=custom_widget_list,
+        debug_mode=req.debug_mode,
+        app_code=_app_code,
     )
 
     return debug_result

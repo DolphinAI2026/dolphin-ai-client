@@ -43,6 +43,8 @@ async def init_db():
             "ALTER TABLE projects ADD COLUMN platform_app_name VARCHAR(100)",
             # Document-driven incremental development
             "ALTER TABLE applications ADD COLUMN current_doc_version INTEGER",
+            # App code for app-mode debug
+            "ALTER TABLE projects ADD COLUMN platform_app_code VARCHAR(100)",
         ]:
             try:
                 await conn.execute(text(stmt))

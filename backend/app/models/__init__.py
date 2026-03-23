@@ -98,6 +98,7 @@ class Project(Base):
     platform_username: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     platform_app_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     platform_app_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    platform_app_code: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)

@@ -76,10 +76,19 @@ export default {
   mixins: [FormWidgetMixin],
   data() {
     return {
-      approvalList: []
+      approvalList: [],
+      platformWorkflowLoading: false
     }
   },
   computed: {
+    // 获取组件配置
+    componentConfig() {
+      return this.widget.customComponentConfig || {}
+    },
+    // 数据来源类型
+    dataSourceType() {
+      return this.componentConfig.dataSourceType || 'formValue'
+    },
     // 处理formValue
     approvalData() {
       if (!this.formValue) return []
@@ -96,14 +105,23 @@ export default {
   watch: {
     approvalData: {
       handler(newVal) {
-        if (Array.isArray(newVal)) {
-          this.approvalList = newVal
-        } else {
-          this.approvalList = []
+        // 只有当数据来源是 formValue 时，才从表单值同步数据
+        if (this.dataSourceType === 'formValue') {
+          if (Array.isArray(newVal)) {
+            this.approvalList = newVal
+          } else {
+            this.approvalList = []
+          }
         }
       },
       immediate: true,
       deep: true
+    }
+  },
+  created() {
+    // 如果数据来源是平台流程，则加载平台数据
+    if (this.dataSourceType === 'platformWorkflow') {
+      this.loadDataFromPlatformWorkflow()
     }
   },
   methods: {
@@ -165,6 +183,159 @@ export default {
     getAvatarText(name) {
       if (!name) return '?'
       return name.charAt(0).toUpperCase()
+    },
+
+    // 从平台获取流程审批历史
+    async loadDataFromPlatformWorkflow() {
+      const apiUrl = this.componentConfig.platformApiUrl || '/wflow/common/getFlowHisByBusinessKey'
+
+      this.platformWorkflowLoading = true
+
+      try {
+        // 获取当前表单实例ID
+        let businessKey = null
+
+        // 方式1：从 formEngineContext.instance 获取
+        if (this.formEngineContext && this.formEngineContext.instance) {
+          businessKey = this.formEngineContext.instance.documentId ||
+                        this.formEngineContext.instance.id ||
+                        this.formEngineContext.instance.businessKey
+        }
+
+        // 方式2：从表单数据中获取（如果有配置）
+        if (!businessKey && this.componentConfig.businessIdField && this.formData) {
+          businessKey = this.formData[this.componentConfig.businessIdField]
+        }
+
+        // 方式3：从 URL 参数或全局数据获取
+        if (!businessKey && this.globalFormData) {
+          businessKey = this.globalFormData.id || this.globalFormData.instanceId
+        }
+
+        // 方式4：尝试使用 df.sdk 获取
+        if (!businessKey) {
+          try {
+            const dfVue = window.df && window.df.getVue()
+            if (dfVue && dfVue.$route) {
+              const params = dfVue.$route.params || dfVue.$route.query || {}
+              businessKey = params.id || params.instanceId || params.businessKey
+            }
+          } catch (e) {
+            console.warn('[ApprovalFlow-Read] df.sdk 获取失败:', e)
+          }
+        }
+
+        // 调用平台流程历史接口
+        const res = await this.$request({
+          url: apiUrl,
+          method: 'GET',
+          params: { businessKey: businessKey }
+        }).asyncThen()
+
+        // 处理返回数据
+        this.approvalList = this.parsePlatformWorkflowData(res)
+
+      } catch (e) {
+        console.error('[ApprovalFlow-Read] 加载平台流程审批历史失败:', e)
+        this.approvalList = []
+      } finally {
+        this.platformWorkflowLoading = false
+      }
+    },
+
+    // 解析平台流程历史数据
+    parsePlatformWorkflowData(res) {
+      if (!res) return []
+
+      if (Array.isArray(res)) {
+        return this.transformWorkflowItem(res)
+      }
+      if (res.data && Array.isArray(res.data)) {
+        return this.transformWorkflowItem(res.data)
+      }
+      if (res.data && res.data.records && Array.isArray(res.data.records)) {
+        return this.transformWorkflowItem(res.data.records)
+      }
+      if (res.records && Array.isArray(res.records)) {
+        return this.transformWorkflowItem(res.records)
+      }
+      if (res.result && Array.isArray(res.result)) {
+        return this.transformWorkflowItem(res.result)
+      }
+      if (res.workflowHistoryList && Array.isArray(res.workflowHistoryList)) {
+        return this.transformWorkflowItem(res.workflowHistoryList)
+      }
+
+      return []
+    },
+
+    // 转换流程历史数据
+    transformWorkflowItem(items) {
+      if (!Array.isArray(items)) return []
+
+      return items.map(item => {
+        return {
+          nodeType: item.nodeType || item.taskType || item.type || 'approval',
+          nodeName: item.nodeName || item.taskName || item.activityName || item.nodeType || '',
+          approverName: item.approverName || item.assigneeName || item.userName || item.createUserName || item.handleUserName || '',
+          approverAvatar: item.approverAvatar || item.avatar || '',
+          status: this.normalizeWorkflowStatus(item.status || item.state || item.result),
+          comment: item.comment || item.remark || item.opinion || item.message || item.content || '',
+          handleTime: this.formatWorkflowTime(item.handleTime || item.finishTime || item.endTime || item.createTime),
+          createTime: item.createTime || '',
+          taskId: item.taskId || item.id || '',
+          businessKey: item.businessKey || '',
+          _rawData: item
+        }
+      })
+    },
+
+    // 标准化流程状态
+    normalizeWorkflowStatus(status) {
+      if (!status) return 'pending'
+
+      const statusStr = String(status).toLowerCase()
+
+      if (['pass', 'agree', 'approved', 'complete', 'completed', 'success'].includes(statusStr)) {
+        return 'approved'
+      }
+      if (['reject', 'disagree', 'rejected', 'refuse', 'refused', 'no'].includes(statusStr)) {
+        return 'rejected'
+      }
+      if (['pending', 'processing', 'running', 'active', 'todo', 'await', 'waiting'].includes(statusStr)) {
+        return 'pending'
+      }
+      if (['revoke', 'revoked', 'withdraw', 'withdrawn', 'cancel', 'cancelled'].includes(statusStr)) {
+        return 'revoked'
+      }
+      if (['return', 'returned', 'back'].includes(statusStr)) {
+        return 'returned'
+      }
+      if (['skip', 'skipped', 'jump', 'jumped'].includes(statusStr)) {
+        return 'skip'
+      }
+
+      return 'pending'
+    },
+
+    // 格式化流程时间
+    formatWorkflowTime(time) {
+      if (!time) return ''
+
+      if (typeof time === 'string' && /^\d{4}-\d{2}-\d{2}/.test(time)) {
+        return time
+      }
+
+      try {
+        const date = new Date(time)
+        if (!isNaN(date.getTime())) {
+          return this.$dayjs(date).format('YYYY-MM-DD HH:mm:ss')
+        }
+      } catch (e) {
+        console.warn('[ApprovalFlow-Read] 时间格式化失败:', time)
+      }
+
+      return String(time)
     }
   }
 }

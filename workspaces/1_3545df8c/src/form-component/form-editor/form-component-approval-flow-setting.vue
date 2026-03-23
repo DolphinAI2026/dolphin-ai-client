@@ -10,7 +10,27 @@
             <el-option label="表单值" value="formValue" />
             <el-option label="API接口" value="api" />
             <el-option label="静态数据" value="static" />
+            <el-option label="平台流程(当前表单)" value="platformWorkflow" />
           </el-select>
+        </el-form-item>
+
+        <!-- 平台流程说明 -->
+        <el-form-item label="" v-if="localConfig.dataSourceType === 'platformWorkflow'" class="platform-workflow-tip">
+          <div class="tip-content">
+            <i class="el-icon-info"></i>
+            <span>将自动获取当前表单关联的流程审批历史记录</span>
+          </div>
+        </el-form-item>
+
+        <!-- 平台流程API配置 -->
+        <el-form-item label="流程历史接口" v-if="localConfig.dataSourceType === 'platformWorkflow'">
+          <el-input
+            v-model="localConfig.platformApiUrl"
+            placeholder="默认: /wflow/common/getFlowHisByBusinessKey"
+            @change="saveConfig"
+            clearable
+          />
+          <div class="config-tip">留空使用平台默认接口，将自动传入当前表单实例ID</div>
         </el-form-item>
 
         <!-- API地址 -->
@@ -149,11 +169,12 @@ export default {
     return {
       localConfig: {
         // 数据来源配置
-        dataSourceType: 'formValue',   // 数据来源类型：formValue/api/static
+        dataSourceType: 'formValue',   // 数据来源类型：formValue/api/static/platformWorkflow
         apiUrl: '',                   // API地址
         businessIdField: '',          // 业务ID字段
         requestMethod: 'GET',         // 请求方法
         staticData: '',               // 静态数据（JSON字符串）
+        platformApiUrl: '',           // 平台流程历史接口地址
         // 显示配置
         displayMode: 'timeline',      // 显示模式
         showAvatar: true,             // 是否显示头像
@@ -249,6 +270,25 @@ export default {
       color: #909399;
       line-height: 1.5;
       margin-top: 4px;
+    }
+
+    .platform-workflow-tip {
+      margin-bottom: 0;
+
+      .tip-content {
+        display: flex;
+        align-items: center;
+        background-color: #ecf5ff;
+        border: 1px solid #d9ecff;
+        border-radius: 4px;
+        padding: 8px 12px;
+        font-size: 12px;
+        color: #409EFF;
+
+        i {
+          margin-right: 6px;
+        }
+      }
     }
   }
 }
