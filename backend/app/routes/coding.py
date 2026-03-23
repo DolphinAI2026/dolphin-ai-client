@@ -867,9 +867,16 @@ async def auto_pipeline(
             is_debug_intent = any(kw in msg_lower for kw in ['debug', '调试', '预览', '帮我debug', '启动debug', '启动调试'])
             is_publish_intent = any(kw in msg_lower for kw in ['发布', '打包', '上传', 'publish', 'build'])
 
-            # 检测 debug 模式：平台调试 vs 应用调试（默认应用调试）
-            _is_platform_debug = any(kw in msg_lower for kw in ['平台调试', '设计器调试', '配置调试', '平台debug', 'platform debug'])
-            _debug_mode = "platform" if _is_platform_debug else "app"
+            # 检测 debug 模式：用户明确指定了类型就直接执行，否则先问
+            _is_platform_debug = any(kw in msg_lower for kw in ['平台调试', '设计器调试', '配置调试', '平台debug', 'platform debug', '设计器'])
+            _is_app_debug = any(kw in msg_lower for kw in ['应用调试', '前台调试', '看效果', '应用debug', 'app debug', '前台'])
+            _debug_mode = "platform" if _is_platform_debug else ("app" if _is_app_debug else None)
+
+            if is_debug_intent and ws_id and _debug_mode is None:
+                # 用户只说了"debug"，没指定类型 → 先问
+                yield _sse({"type": "content", "content": "请选择调试模式：\n\n**1. 平台调试（设计态）** — 在平台后台的表单设计器中拖入组件、配置属性\n\n**2. 应用调试（运行态）** — 在应用前台查看组件/页面的实际效果\n\n请回复 **平台调试** 或 **应用调试**"})
+                yield _sse({"type": "done", "workspace_id": ws_id, "conversation_id": conversation_id})
+                return
 
             if is_debug_intent and ws_id:
                 _mode_label = "平台" if _debug_mode == "platform" else "应用"
