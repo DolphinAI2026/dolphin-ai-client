@@ -5,11 +5,11 @@ const cliBase = process.env.DF_APAAS_CLI_PATH || '/Users/mars/.nvm/versions/node
 const puppeteer = require(path.join(cliBase, 'node_modules/puppeteer-core'))
 const os = require('os')
 
-const localServerRunningAt = 'https://localhost:8081/'
+const localServerRunningAt = 'https://localhost:8082/'
 const tenantId = '566642786573484033'
 const appId = '806997227284201472'
-const outputName = 'form-page-map-view'
-const customWidgetList = []
+const outputName = 'form-component-star-rating'
+const customWidgetList = [{"code": "FORM_CUSTOM_COMPONENT_STAR_RATING", "text": "star-rating", "description": "star-rating"}]
 
 const INJECT_CODE = `(function(params) {
   if (window.__APAAS_DEBUG_INJECTED__) return;
@@ -49,8 +49,8 @@ const INJECT_CODE = `(function(params) {
   }, 1000);
 })`
 
-const screenshotsDir = '/Users/mars/Vibe Coding/apaas-builder-ai/workspaces/1_01af4a3f/debug/screenshots'
-const resultPath = '/Users/mars/Vibe Coding/apaas-builder-ai/workspaces/1_01af4a3f/debug/result.json'
+const screenshotsDir = '/Users/mars/Vibe Coding/apaas-builder-ai/workspaces/1_01f9c544/debug/screenshots'
+const resultPath = '/Users/mars/Vibe Coding/apaas-builder-ai/workspaces/1_01f9c544/debug/result.json'
 
 ;(async () => {
   const realArch = os.arch()

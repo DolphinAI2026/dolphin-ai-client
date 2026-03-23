@@ -454,11 +454,11 @@ const INJECT_CODE = `(function(params) {{
         login_url = f"{platform_url}account/login"
 
         if debug_mode == "app" and app_code:
-            # 应用 debug（运行态）— 打开应用前台
-            form_url = f"{_base_url}app/dragonfly/{app_code}/{tenant_id}/app/app-page?appId={app_id}&menuId=819626319129083904&formId=69b138fe49b6ac36772fa040"
+            # 应用 debug（运行态）— 打开应用首页，用户自己导航到要测试的页面
+            form_url = f"{_base_url}app/dragonfly/{app_code}/"
         else:
-            # 平台 debug（设计态）— 打开表单设计器
-            form_url = f"{platform_url}{tenant_id}/default/data-model-fn-config?appId={app_id}&menuId=819626319129083904&formId=69b138fe49b6ac36772fa040"
+            # 平台 debug（设计态）— 打开应用的表单管理页，用户选择要配置的表单
+            form_url = f"{platform_url}{tenant_id}/admin/app-store/edit-app?appId={app_id}&currentStepIndex=2"
 
         debug_script = f"""
 const path = require('path')
