@@ -187,6 +187,7 @@
             </div>
             <div class="stat-grid">
               <div class="stat-card indigo"><div class="stat-num">{{ store.preview.models.length }}</div><div class="stat-label">数据模型</div></div>
+              <div class="stat-card teal"><div class="stat-num">{{ store.preview.models.length }}</div><div class="stat-label">表单配置</div></div>
               <div class="stat-card emerald"><div class="stat-num">{{ store.preview.roles.length }}</div><div class="stat-label">角色</div></div>
               <div class="stat-card amber"><div class="stat-num">{{ store.preview.dicts.length }}</div><div class="stat-label">数据字典</div></div>
               <div class="stat-card purple"><div class="stat-num">{{ store.preview.workflows.length }}</div><div class="stat-label">流程</div></div>
@@ -730,8 +731,9 @@ const agents: Record<string, { name: string; icon: string }> = {
 }
 
 const tabs = [
-  { k: 'docs', l: '文档' }, { k: 'overview', l: '概览' }, { k: 'models', l: '模型' },
-  { k: 'forms', l: '表单' }, { k: 'workflow', l: '流程' }, { k: 'perms', l: '权限' }
+  { k: 'overview', l: '概览' }, { k: 'models', l: '模型' },
+  { k: 'forms', l: '表单' }, { k: 'workflow', l: '流程' }, { k: 'perms', l: '权限' },
+  { k: 'docs', l: '文档' }
 ]
 
 const messages = reactive<Message[]>([
@@ -2821,14 +2823,16 @@ watch(conversationId, (id) => {
 }
 .deployed-link { background: none; border: none; color: #a78bfa; cursor: pointer; font-size: 12px; text-decoration: underline; margin-left: 8px; }
 .status-tag.talking { background: rgba(124,58,237,0.15); color: #a78bfa; }
-.stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 16px; }
+.stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 16px; }
 .stat-card { border-radius: 12px; padding: 12px; text-align: center; border: 1px solid rgba(255,255,255,0.06); }
 .stat-card.indigo { background: rgba(99,102,241,0.1); }
 .stat-card.emerald { background: rgba(16,185,129,0.1); }
 .stat-card.amber { background: rgba(245,158,11,0.1); }
+.stat-card.teal { background: rgba(20,184,166,0.1); }
 .stat-card.purple { background: rgba(124,58,237,0.1); }
 .stat-num { font-size: 20px; font-weight: 700; }
 .stat-card.indigo .stat-num { color: #818cf8; }
+.stat-card.teal .stat-num { color: #2dd4bf; }
 .stat-card.emerald .stat-num { color: #34d399; }
 .stat-card.amber .stat-num { color: #fbbf24; }
 .stat-card.purple .stat-num { color: #a78bfa; }
