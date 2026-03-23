@@ -96,6 +96,62 @@
         </div>
 
         <div v-else class="preview-body">
+          <!-- 文档版本 -->
+          <div v-show="store.previewTab === 'docs'" class="tab-content doc-versions-tab">
+            <div class="doc-upload-bar">
+              <span class="doc-tab-title">文档版本</span>
+              <input type="file" accept=".md" ref="docUploadInputRef" @change="handleDocVersionUpload" style="display:none" />
+              <button class="doc-upload-btn" @click="triggerDocUpload">+ 上传新版本</button>
+            </div>
+            <div v-if="docVersionsLoading" class="preview-empty small">加载中...</div>
+            <div v-else-if="docVersions.length === 0" class="preview-empty small">暂无文档版本</div>
+            <div v-else class="doc-version-list">
+              <div v-for="ver in docVersions" :key="ver.id" class="doc-version-card">
+                <div class="doc-ver-header">
+                  <span class="doc-ver-num">V{{ ver.version }}</span>
+                  <span class="doc-ver-filename">{{ ver.filename }}</span>
+                </div>
+                <div class="doc-ver-meta">
+                  <span class="doc-ver-time">{{ formatDocTime(ver.created_at) }}</span>
+                  <span v-if="ver.summary" class="doc-ver-summary">{{ ver.summary }}</span>
+                </div>
+                <div class="doc-ver-actions">
+                  <button class="doc-action-btn" @click="openDocPreview(ver)">预览</button>
+                  <button v-if="ver.version >= 2" class="doc-action-btn diff" @click="openDocDiff(ver)">与上一版本对比</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 文档预览弹窗 -->
+          <el-dialog v-model="docPreviewVisible" :title="docPreviewTitle" width="70%" class="doc-preview-dialog" :append-to-body="true">
+            <div class="doc-preview-body" v-html="formatContent(docPreviewContent)"></div>
+          </el-dialog>
+
+          <!-- 文档对比弹窗 -->
+          <el-dialog v-model="docDiffVisible" title="版本对比" width="90%" class="doc-diff-dialog" :append-to-body="true">
+            <div class="doc-diff-container">
+              <div class="doc-diff-pane">
+                <div class="doc-diff-pane-title">{{ docDiffLeftTitle }}</div>
+                <div class="doc-diff-content">
+                  <div v-for="(line, idx) in docDiffResult.left" :key="'l'+idx" class="doc-diff-line" :class="{ removed: line.type === 'removed' }">
+                    <span class="doc-diff-lineno">{{ idx + 1 }}</span>
+                    <span class="doc-diff-text">{{ line.text }}</span>
+                  </div>
+                </div>
+              </div>
+              <div class="doc-diff-pane">
+                <div class="doc-diff-pane-title">{{ docDiffRightTitle }}</div>
+                <div class="doc-diff-content">
+                  <div v-for="(line, idx) in docDiffResult.right" :key="'r'+idx" class="doc-diff-line" :class="{ added: line.type === 'added' }">
+                    <span class="doc-diff-lineno">{{ idx + 1 }}</span>
+                    <span class="doc-diff-text">{{ line.text }}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </el-dialog>
+
           <div v-show="store.previewTab === 'overview'" class="tab-content">
             <div class="overview-header">
               <h4>{{ store.preview.appName }}</h4>
@@ -527,7 +583,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, nextTick, onMounted } from 'vue'
+import { ref, reactive, computed, nextTick, onMounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ArrowLeft, Promotion } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
@@ -648,7 +704,7 @@ const agents: Record<string, { name: string; icon: string }> = {
 }
 
 const tabs = [
-  { k: 'overview', l: '概览' }, { k: 'models', l: '模型' },
+  { k: 'docs', l: '文档' }, { k: 'overview', l: '概览' }, { k: 'models', l: '模型' },
   { k: 'forms', l: '表单' }, { k: 'workflow', l: '流程' }, { k: 'perms', l: '权限' }
 ]
 
@@ -894,6 +950,140 @@ const removeDict = (idx: number) => {
 const conversationId = ref<number | null>(null)
 const existingAppId = ref<number | null>(null)  // 从"继续完善"进来时，关联的已有应用ID
 const generating = ref(false)
+
+// ── 文档版本 ──
+interface DocVersion {
+  id: number
+  version: number
+  filename: string
+  summary: string
+  raw_content: string
+  created_at: string
+}
+const docVersions = ref<DocVersion[]>([])
+const docVersionsLoading = ref(false)
+const docPreviewVisible = ref(false)
+const docPreviewContent = ref('')
+const docPreviewTitle = ref('')
+const docDiffVisible = ref(false)
+const docDiffLeft = ref('')
+const docDiffRight = ref('')
+const docDiffLeftTitle = ref('')
+const docDiffRightTitle = ref('')
+const docUploadInputRef = ref<HTMLInputElement | null>(null)
+
+const fetchDocVersions = async () => {
+  if (!existingAppId.value) return
+  docVersionsLoading.value = true
+  try {
+    const res = await applicationApi.getDocVersions(existingAppId.value)
+    docVersions.value = Array.isArray(res) ? res : (res?.data || [])
+  } catch (e) {
+    console.error('Failed to fetch doc versions', e)
+  } finally {
+    docVersionsLoading.value = false
+  }
+}
+
+const formatDocTime = (dateStr: string) => {
+  if (!dateStr) return ''
+  const d = new Date(dateStr)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+const openDocPreview = (ver: DocVersion) => {
+  docPreviewTitle.value = `V${ver.version} — ${ver.filename}`
+  docPreviewContent.value = ver.raw_content || '（无内容）'
+  docPreviewVisible.value = true
+}
+
+const openDocDiff = (ver: DocVersion) => {
+  const prevVer = docVersions.value.find(v => v.version === ver.version - 1)
+  if (!prevVer) return
+  docDiffLeftTitle.value = `V${prevVer.version} — ${prevVer.filename}`
+  docDiffRightTitle.value = `V${ver.version} — ${ver.filename}`
+  docDiffLeft.value = prevVer.raw_content || ''
+  docDiffRight.value = ver.raw_content || ''
+  docDiffVisible.value = true
+}
+
+const computeLineDiff = (oldText: string, newText: string) => {
+  const oldLines = oldText.split('\n')
+  const newLines = newText.split('\n')
+  // Simple LCS-based diff
+  const m = oldLines.length, n = newLines.length
+  const dp: number[][] = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0))
+  for (let i = 1; i <= m; i++)
+    for (let j = 1; j <= n; j++)
+      dp[i][j] = oldLines[i - 1] === newLines[j - 1] ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1])
+
+  const leftResult: { text: string; type: 'same' | 'removed' }[] = []
+  const rightResult: { text: string; type: 'same' | 'added' }[] = []
+  let i = m, j = n
+  const leftTmp: typeof leftResult = []
+  const rightTmp: typeof rightResult = []
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
+      leftTmp.push({ text: oldLines[i - 1], type: 'same' })
+      rightTmp.push({ text: newLines[j - 1], type: 'same' })
+      i--; j--
+    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+      leftTmp.push({ text: '', type: 'same' })
+      rightTmp.push({ text: newLines[j - 1], type: 'added' })
+      j--
+    } else {
+      leftTmp.push({ text: oldLines[i - 1], type: 'removed' })
+      rightTmp.push({ text: '', type: 'same' })
+      i--
+    }
+  }
+  leftTmp.reverse()
+  rightTmp.reverse()
+  return { left: leftTmp, right: rightTmp }
+}
+
+const docDiffResult = computed(() => {
+  if (!docDiffLeft.value && !docDiffRight.value) return { left: [], right: [] }
+  return computeLineDiff(docDiffLeft.value, docDiffRight.value)
+})
+
+const triggerDocUpload = () => {
+  docUploadInputRef.value?.click()
+}
+
+const handleDocVersionUpload = async (e: Event) => {
+  const target = e.target as HTMLInputElement
+  const file = target.files?.[0]
+  if (!file || !existingAppId.value) return
+  target.value = ''
+
+  const appId = existingAppId.value
+  const formData = new FormData()
+  formData.append('file', file)
+  if (conversationId.value) {
+    formData.append('conversation_id', conversationId.value.toString())
+  }
+
+  const url = applicationApi.uploadDocVersionUrl(appId)
+  const token = localStorage.getItem('token') || ''
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+      body: formData,
+    })
+    if (response.ok) {
+      ElMessage.success('文档版本上传成功')
+      await fetchDocVersions()
+    } else {
+      ElMessage.error('上传失败')
+    }
+  } catch (err) {
+    ElMessage.error('上传失败')
+    console.error(err)
+  }
+}
 
 // ── 部署面板 ──
 interface DeployStep { key: string; label: string; status: 'pending' | 'completed' | 'error'; deps_met: boolean; error?: string; result?: any }
@@ -2195,6 +2385,18 @@ onMounted(async () => {
   // 加载项目列表
   fetchProjects()
 })
+
+// 切换到文档 tab 时自动加载版本列表
+watch(() => store.previewTab, (tab) => {
+  if (tab === 'docs' && existingAppId.value && docVersions.value.length === 0) {
+    fetchDocVersions()
+  }
+})
+watch(existingAppId, (id) => {
+  if (id && store.previewTab === 'docs') {
+    fetchDocVersions()
+  }
+})
 </script>
 
 <style scoped>
@@ -2330,6 +2532,87 @@ onMounted(async () => {
 .preview-empty.small { margin-top: 0; padding: 32px; }
 .preview-body { flex: 1; overflow-y: auto; }
 .tab-content { padding: 16px; }
+
+/* ── 文档版本 ── */
+.doc-versions-tab { display: flex; flex-direction: column; gap: 12px; }
+.doc-upload-bar { display: flex; align-items: center; justify-content: space-between; }
+.doc-tab-title { font-size: 14px; font-weight: 600; color: rgba(255,255,255,0.9); }
+.doc-upload-btn {
+  padding: 6px 14px; font-size: 12px; font-weight: 500; border: none; border-radius: 8px;
+  background: linear-gradient(135deg, #7c3aed, #6366f1); color: #fff; cursor: pointer;
+  transition: opacity 0.2s;
+}
+.doc-upload-btn:hover { opacity: 0.85; }
+.doc-version-list { display: flex; flex-direction: column; gap: 10px; }
+.doc-version-card {
+  border: 1px solid rgba(255,255,255,0.06); border-radius: 12px; padding: 12px 14px;
+  background: #161622; transition: border-color 0.2s;
+}
+.doc-version-card:hover { border-color: rgba(124,58,237,0.3); }
+.doc-ver-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.doc-ver-num {
+  font-size: 13px; font-weight: 700;
+  background: linear-gradient(135deg, #7c3aed, #6366f1);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.doc-ver-filename { font-size: 13px; color: rgba(255,255,255,0.85); font-weight: 500; }
+.doc-ver-meta { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.doc-ver-time { font-size: 11px; color: rgba(255,255,255,0.4); }
+.doc-ver-summary { font-size: 11px; color: rgba(255,255,255,0.55); }
+.doc-ver-actions { display: flex; gap: 8px; }
+.doc-action-btn {
+  padding: 4px 10px; font-size: 11px; border-radius: 6px; cursor: pointer;
+  border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.04);
+  color: rgba(255,255,255,0.7); transition: all 0.2s;
+}
+.doc-action-btn:hover { background: rgba(255,255,255,0.08); color: #fff; }
+.doc-action-btn.diff { border-color: rgba(124,58,237,0.3); color: #a78bfa; }
+.doc-action-btn.diff:hover { background: rgba(124,58,237,0.12); }
+
+/* 文档预览弹窗 */
+:deep(.doc-preview-dialog) .el-dialog { background: #1a1a2e; color: rgba(255,255,255,0.9); }
+:deep(.doc-preview-dialog) .el-dialog__header { border-bottom: 1px solid rgba(255,255,255,0.06); }
+:deep(.doc-preview-dialog) .el-dialog__title { color: rgba(255,255,255,0.9); }
+:deep(.doc-preview-dialog) .el-dialog__headerbtn .el-dialog__close { color: rgba(255,255,255,0.5); }
+.doc-preview-body {
+  max-height: 70vh; overflow-y: auto; padding: 16px;
+  font-size: 13px; line-height: 1.7; color: rgba(255,255,255,0.85);
+  background: #111; border-radius: 8px;
+}
+.doc-preview-body :deep(h1),
+.doc-preview-body :deep(h2),
+.doc-preview-body :deep(h3) { color: rgba(255,255,255,0.95); margin-top: 16px; }
+.doc-preview-body :deep(code) { background: rgba(255,255,255,0.06); padding: 2px 6px; border-radius: 4px; font-size: 12px; }
+.doc-preview-body :deep(pre) { background: rgba(255,255,255,0.04); padding: 12px; border-radius: 8px; overflow-x: auto; }
+
+/* 文档对比弹窗 */
+:deep(.doc-diff-dialog) .el-dialog { background: #1a1a2e; color: rgba(255,255,255,0.9); }
+:deep(.doc-diff-dialog) .el-dialog__header { border-bottom: 1px solid rgba(255,255,255,0.06); }
+:deep(.doc-diff-dialog) .el-dialog__title { color: rgba(255,255,255,0.9); }
+:deep(.doc-diff-dialog) .el-dialog__headerbtn .el-dialog__close { color: rgba(255,255,255,0.5); }
+.doc-diff-container { display: flex; gap: 8px; max-height: 70vh; }
+.doc-diff-pane { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.doc-diff-pane-title {
+  font-size: 12px; font-weight: 600; padding: 8px 12px;
+  background: rgba(255,255,255,0.04); border-radius: 8px 8px 0 0;
+  color: rgba(255,255,255,0.7); border: 1px solid rgba(255,255,255,0.06);
+  border-bottom: none;
+}
+.doc-diff-content {
+  flex: 1; overflow-y: auto; background: #111; border-radius: 0 0 8px 8px;
+  border: 1px solid rgba(255,255,255,0.06); font-size: 12px; font-family: 'Menlo', 'Monaco', monospace;
+}
+.doc-diff-line { display: flex; min-height: 20px; line-height: 20px; }
+.doc-diff-lineno {
+  width: 36px; text-align: right; padding-right: 8px; flex-shrink: 0;
+  color: rgba(255,255,255,0.2); user-select: none;
+}
+.doc-diff-text { flex: 1; padding: 0 8px; white-space: pre-wrap; word-break: break-all; color: rgba(255,255,255,0.75); }
+.doc-diff-line.removed { background: rgba(239,68,68,0.12); }
+.doc-diff-line.removed .doc-diff-text { color: #fca5a5; }
+.doc-diff-line.added { background: rgba(34,197,94,0.12); }
+.doc-diff-line.added .doc-diff-text { color: #86efac; }
 
 /* ── 概览 ── */
 .overview-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
