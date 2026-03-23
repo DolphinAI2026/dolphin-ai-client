@@ -667,6 +667,7 @@ async def upload_doc_version(
     async def event_generator():
         from app.database import AsyncSessionLocal
         from app.doc_differ import build_structure_index, semantic_diff, diff_to_actions, compute_hash
+        from app.config_diff import compute_config_diff
 
         try:
             yield {"event": "progress", "data": json.dumps({"step": "读取文档内容..."}, ensure_ascii=False)}
@@ -706,7 +707,7 @@ async def upload_doc_version(
             from app.ai_doc_parser import parse_doc_with_ai
             v2_config = await parse_doc_with_ai(text, filename=fname)
 
-            yield {"event": "progress", "data": json.dumps({"step": "对比配置差异..."}, ensure_ascii=False)}
+            yield {"event": "progress", "data": json.dumps({"step": "对比资源差异..."}, ensure_ascii=False)}
 
             # 6. 加载 V1 配置
             v1_config: dict = {}
@@ -717,21 +718,22 @@ async def upload_doc_version(
                 except Exception:
                     pass
 
-            # 7. 语义对比
+            # 7. 资源级差异对比（用于前端展示）
+            resource_diff = compute_config_diff(v1_config, v2_config)
+            resource_diff_dict = resource_diff.to_dict()
+
+            # 8. 语义对比（用于生成可勾选 actions）
             diff = semantic_diff(v1_config, v2_config)
 
-            # 8. 生成 patch actions
+            # 9. 生成 patch actions
             actions = diff_to_actions(diff, v2_config)
 
-            # 9. 生成摘要
-            added_count = len(diff["added"]["models"]) + len(diff["added"]["dicts"]) + len(diff["added"]["roles"])
-            modified_count = len(diff["modified"]["models"]) + len(diff["modified"]["dicts"])
-            removed_count = len(diff["removed"]["models"]) + len(diff["removed"]["dicts"]) + len(diff["removed"]["roles"])
-            summary = f"文档 V{new_version}：新增{added_count}项，修改{modified_count}项，删除{removed_count}项"
+            # 10. 生成摘要
+            summary = resource_diff.summary or f"文档 V{new_version} 资源变更分析完成"
 
             yield {"event": "progress", "data": json.dumps({"step": "保存版本记录..."}, ensure_ascii=False)}
 
-            # 10. 创建 DocumentVersion + ChangePlan
+            # 11. 创建 DocumentVersion + ChangePlan
             async with AsyncSessionLocal() as session:
                 doc_ver = DocumentVersion(
                     application_id=app_id_val,
@@ -751,7 +753,7 @@ async def upload_doc_version(
                     conversation_id=conversation_id,
                     from_version=max_ver,
                     to_version=new_version,
-                    diff_summary=json.dumps(diff, ensure_ascii=False),
+                    diff_summary=json.dumps(resource_diff_dict, ensure_ascii=False),
                     actions=json.dumps(actions, ensure_ascii=False),
                     status="pending",
                 )
@@ -772,7 +774,8 @@ async def upload_doc_version(
                     "data": json.dumps({
                         "version": new_version,
                         "summary": summary,
-                        "diff": diff,
+                        "diff": resource_diff_dict,
+                        "semantic_diff": diff,
                         "actions": actions,
                         "change_plan_id": change_plan.id,
                         "is_first_version": max_ver == 0,
@@ -869,7 +872,7 @@ async def execute_change_plan(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """执行变更计划，将选中的 actions 应用到 config_preview（SSE 流式返回进度）"""
+    """执行变更计划，将选中的 actions 应用到 config_preview 并同步到得帆云平台（SSE 流式返回进度）"""
     result = await db.execute(
         select(Application).where(Application.id == app_id, Application.tenant_id == ctx.tenant_id)
     )
@@ -887,6 +890,13 @@ async def execute_change_plan(
     if plan.status not in ("pending", "confirmed"):
         raise HTTPException(status_code=400, detail=f"变更计划状态为 {plan.status}，不能执行")
 
+    # 保存用户 APaaS 凭证（在 event_generator 前）
+    apaas_token = ctx.user.apaas_token
+    apaas_base_url = ctx.user.apaas_base_url
+    apaas_tenant_id = ctx.user.apaas_tenant_id
+    apaas_app_id = app.apaas_app_id
+    app_name = app.app_name
+
     app_id_val = app.id
     current_config_str = app.config_preview
     plan_id_val = plan.id
@@ -895,6 +905,9 @@ async def execute_change_plan(
     async def event_generator():
         from app.database import AsyncSessionLocal
         from app.doc_differ import apply_actions_to_config
+        from app.apaas_client import APaaSClient
+        from app.config_diff import compute_config_diff
+        from app.incremental_executor import IncrementalExecutor, fetch_remote_data
 
         try:
             yield {"event": "progress", "data": json.dumps({"step": "加载当前配置..."}, ensure_ascii=False)}
@@ -913,12 +926,62 @@ async def execute_change_plan(
 
             yield {"event": "progress", "data": json.dumps({"step": f"应用 {len(selected)} 项变更..."}, ensure_ascii=False)}
 
-            # 应用 patch
+            # 应用 patch 得到 new_config
             new_config = apply_actions_to_config(current_config, actions)
 
-            yield {"event": "progress", "data": json.dumps({"step": "保存新配置..."}, ensure_ascii=False)}
+            # 判断是否需要同步到平台
+            can_sync = apaas_token and apaas_base_url and apaas_app_id
+            sync_result = None
+            sync_errors = []
 
-            # 保存
+            if can_sync:
+                yield {"event": "progress", "data": json.dumps({"step": "同步到得帆云平台..."}, ensure_ascii=False)}
+                try:
+                    # 创建 APaaSClient
+                    client = APaaSClient(
+                        base_url=apaas_base_url,
+                        token=apaas_token,
+                        tenant_id=apaas_tenant_id
+                    )
+
+                    # 获取远程数据
+                    yield {"event": "progress", "data": json.dumps({"step": "获取平台现有资源..."}, ensure_ascii=False)}
+                    remote_data = await fetch_remote_data(client, apaas_app_id)
+
+                    # 计算差异
+                    yield {"event": "progress", "data": json.dumps({"step": "计算资源变更差异..."}, ensure_ascii=False)}
+                    diff = compute_config_diff(current_config, new_config, remote_data)
+
+                    if diff.has_changes:
+                        # 创建执行器并执行
+                        executor = IncrementalExecutor(client, apaas_app_id, app_name)
+
+                        # 流式执行差异
+                        async for progress in executor.execute_diff_stream(diff):
+                            if progress.get("type") == "complete":
+                                sync_result = progress.get("result", {})
+                            elif progress.get("type") == "error":
+                                sync_errors.append(progress.get("message", "未知错误"))
+                            else:
+                                # 转发执行进度
+                                step_msg = progress.get("step", "")
+                                yield {"event": "progress", "data": json.dumps({"step": f"平台同步: {step_msg}"}, ensure_ascii=False)}
+                    else:
+                        logger.info("无平台资源变更需要同步")
+                        sync_result = {"message": "无变更需要同步"}
+
+                except Exception as e:
+                    logger.warning(f"平台同步失败（将继续保存本地配置）: {e}", exc_info=True)
+                    sync_errors.append(str(e))
+            else:
+                if not apaas_token:
+                    logger.info("用户未连接平台，跳过同步")
+                elif not apaas_app_id:
+                    logger.info("应用未创建到平台，跳过同步")
+
+            yield {"event": "progress", "data": json.dumps({"step": "保存本地配置..."}, ensure_ascii=False)}
+
+            # 保存本地配置
             async with AsyncSessionLocal() as session:
                 app_result = await session.execute(
                     select(Application).where(Application.id == app_id_val)
@@ -935,13 +998,21 @@ async def execute_change_plan(
 
                 await session.commit()
 
+            # 构建响应数据
+            response_data = {
+                "config": new_config,
+                "applied_count": len(selected),
+                "total_count": len(actions),
+                "platform_synced": can_sync and not sync_errors,
+            }
+            if sync_result:
+                response_data["sync_result"] = sync_result
+            if sync_errors:
+                response_data["sync_errors"] = sync_errors
+
             yield {
                 "event": "done",
-                "data": json.dumps({
-                    "config": new_config,
-                    "applied_count": len(selected),
-                    "total_count": len(actions),
-                }, ensure_ascii=False),
+                "data": json.dumps(response_data, ensure_ascii=False),
             }
 
         except Exception as e:

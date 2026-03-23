@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, reactive } from 'vue'
 import type { PreviewData, GenProgress } from '@/types'
+import type { DiffResponse } from '@/api/incremental'
 
 export const usePreviewStore = defineStore('preview', () => {
   const currentApp = ref<{ name: string; status: string } | null>(null)
@@ -15,11 +16,7 @@ export const usePreviewStore = defineStore('preview', () => {
     id: number
     fromVersion: number
     toVersion: number
-    diffSummary: {
-      added: { models: any[], dicts: any[], roles: any[], fields: any[] }
-      modified: { models: any[], dicts: any[], fields: any[] }
-      removed: { models: any[], dicts: any[], roles: any[], fields: any[] }
-    }
+    diffSummary: DiffResponse | null
     actions: Array<{
       id: string
       selected: boolean

@@ -1,5 +1,15 @@
-# Vue 3 + TypeScript + Vite
+# Frontend
 
-This template should help get you started developing with Vue 3 and TypeScript in Vite. The template uses Vue 3 `<script setup>` SFCs, check out the [script setup docs](https://v3.vuejs.org/api/sfc-script-setup.html#sfc-script-setup) to learn more.
+## Stack
 
-Learn more about the recommended Project Setup and IDE Support in the [Vue Docs TypeScript Guide](https://vuejs.org/guide/typescript/overview.html#project-setup).
+- Vue 3
+- TypeScript
+- Vite
+- Element Plus
+- Less
+
+## Styling
+
+- 现有页面里的 `.css` 可以继续保留，不要求一次性迁移。
+- 新增前端组件统一使用 `<style lang="less">` 或独立 `.less` 文件。
+- Vite 已经注入共享 Less 变量文件 `src/styles/tokens.less`，新组件可直接使用其中的变量和 mixin。

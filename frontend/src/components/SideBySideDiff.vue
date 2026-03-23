@@ -197,7 +197,7 @@ const changeTypeLabel = (type: string): string => {
 }
 </script>
 
-<style scoped>
+<style scoped lang="less">
 .side-by-side-diff {
   margin-top: 8px;
 }

@@ -22,7 +22,7 @@ from app.config_diff import (
     RoleChange, DictChange, DictOptionChange,
     ModelChange, FieldChange, FormChange, ProcessChange
 )
-from app.apaas_client import APaaSClient
+from app.apaas_client import APaaSClient, _extract_query_params, _log_request, _log_response
 
 logger = logging.getLogger(__name__)
 
@@ -887,6 +887,9 @@ class IncrementalExecutor:
         import httpx
 
         url = f"{self.client.base_url}/xdap-app{path}" if not path.startswith("/xdap-app") else f"{self.client.base_url}{path}"
+        params = _extract_query_params(url)
+        _log_request("POST", url, payload=payload, params=params)
+        start = time.time()
 
         async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
             response = await client.post(
@@ -894,8 +897,10 @@ class IncrementalExecutor:
                 headers=self.client._get_headers(app_id=self.app_id),
                 json=payload
             )
+            elapsed_ms = (time.time() - start) * 1000
             response.raise_for_status()
             data = response.json()
+            _log_response(url, response.status_code, data, elapsed_ms)
 
             if data.get("code") not in ("ok", 200):
                 raise Exception(data.get("message", "API 调用失败"))
@@ -907,14 +912,19 @@ class IncrementalExecutor:
         import httpx
 
         url = f"{self.client.base_url}/xdap-app{path}" if not path.startswith("/xdap-app") else f"{self.client.base_url}{path}"
+        params = _extract_query_params(url)
+        _log_request("GET", url, params=params)
+        start = time.time()
 
         async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
             response = await client.get(
                 url,
                 headers=self.client._get_headers(app_id=self.app_id)
             )
+            elapsed_ms = (time.time() - start) * 1000
             response.raise_for_status()
             data = response.json()
+            _log_response(url, response.status_code, data, elapsed_ms)
 
             if data.get("code") not in ("ok", 200):
                 raise Exception(data.get("message", "API 调用失败"))

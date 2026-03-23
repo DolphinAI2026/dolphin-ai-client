@@ -276,11 +276,21 @@ async def connect_project_platform(
     try:
         result = await client.login(req.username, req.password)
         token = result.get("token", "")
+        user_info = result.get("user", {})
 
+        # 更新 Project 表
         project.platform_url = req.base_url
         project.platform_tenant_id = req.tenant_id
         project.platform_token = token
         project.platform_username = req.username
+
+        # 同步更新 User 表（generation_steps 等核心功能使用 User.apaas_token）
+        user_result = await db.execute(select(User).where(User.id == ctx.user.id))
+        user = user_result.scalar_one()
+        user.apaas_token = token
+        user.apaas_base_url = req.base_url
+        user.apaas_tenant_id = req.tenant_id
+        user.apaas_user_id = str(user_info.get("id", ""))
 
         await db.commit()
         await db.refresh(project)

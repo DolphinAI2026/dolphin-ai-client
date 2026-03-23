@@ -98,7 +98,7 @@
 - `HOST`: `0.0.0.0`
 - `PORT`: `8001`
 - `APAAS_BASE_URL`: 指向一套得帆云 dev 环境
-- `LLM_API_BASE`: OpenAI 兼容接口
+- `LLM_API_BASE`: 兼容保留字段，运行时统一走 `ANTHROPIC_BASE_URL`
 - `LLM_MODEL`: `claude-haiku-4-5-20251001`
 
 这说明：

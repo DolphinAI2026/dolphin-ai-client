@@ -240,11 +240,19 @@ async def execute_step(
         return StepExecuteResponse(step=step_key, status="completed", result=result)
 
     except Exception as e:
-        logger.error(f"步骤 {step_key} 执行失败: {e}", exc_info=True)
-        state.setdefault("step_errors", {})[step_key] = str(e)
+        error_msg = str(e)
+        logger.error(f"步骤 {step_key} 执行失败: {error_msg}", exc_info=True)
+
+        # Token 过期时清除无效 token，让前端知道需要重新连接
+        if "Token已过期" in error_msg or "401" in error_msg:
+            user.apaas_token = None
+            await db.commit()
+            raise HTTPException(status_code=401, detail="APaaS平台Token已过期，请重新连接")
+
+        state.setdefault("step_errors", {})[step_key] = error_msg
         _save_state(app, state)
         await db.commit()
-        return StepExecuteResponse(step=step_key, status="error", error=str(e))
+        return StepExecuteResponse(step=step_key, status="error", error=error_msg)
 
 
 async def _execute_step_impl(

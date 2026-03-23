@@ -473,7 +473,7 @@ async function handleSave() {
 }
 </script>
 
-<style>
+<style lang="less">
 /* ===== 弹窗外壳 ===== */
 .el-dialog.project-settings-modal {
   background: #111;

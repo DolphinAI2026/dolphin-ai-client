@@ -121,7 +121,7 @@ const categoryLabel = (category: string) => {
 }
 </script>
 
-<style scoped>
+<style scoped lang="less">
 .update-steps {
   background: #1a1a2e;
   border-radius: 12px;

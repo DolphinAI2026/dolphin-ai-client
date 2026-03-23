@@ -14,9 +14,15 @@ class Settings(BaseSettings):
     apaas_tenant_id: str = "743906758237356033"
 
     # LLM Configuration
-    llm_api_base: str = "https://api.jiekou.ai/openai"
+    # 兼容保留：运行时统一走 ANTHROPIC_BASE_URL，LLM_API_BASE 不再实际参与请求
+    llm_api_base: str = "https://api.minimaxi.com/anthropic"
     llm_api_key: str
     llm_model: str = "claude-haiku-4-5-20251001"
+    llm_doc_model: str = "MiniMax-M2.5"
+    llm_vision_model: str = "MiniMax-M2.7"
+    anthropic_base_url: str = "https://api.minimaxi.com/anthropic"
+    anthropic_api_key: str | None = None
+    anthropic_model: str = "MiniMax-M2.7"
 
     # Database
     database_url: str = "sqlite+aiosqlite:///./apaas_builder.db"

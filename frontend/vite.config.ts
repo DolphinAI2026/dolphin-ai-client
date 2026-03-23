@@ -5,6 +5,13 @@ import { resolve } from 'path'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [vue()],
+  css: {
+    preprocessorOptions: {
+      less: {
+        additionalData: '@import (reference) "@/styles/tokens.less";'
+      }
+    }
+  },
   resolve: {
     alias: {
       '@': resolve(__dirname, 'src')

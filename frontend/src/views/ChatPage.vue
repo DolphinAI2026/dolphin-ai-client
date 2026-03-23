@@ -250,6 +250,21 @@
           </div>
 
           <div class="change-plan-body">
+            <ConfigDiff
+              v-if="changePlanResourceDiff"
+              :has-changes="changePlanResourceDiff.has_changes"
+              :summary="changePlanResourceDiff.summary"
+              :role-changes="changePlanResourceDiff.role_changes"
+              :dict-changes="changePlanResourceDiff.dict_changes"
+              :model-changes="changePlanResourceDiff.model_changes"
+              :form-changes="changePlanResourceDiff.form_changes"
+              :process-changes="changePlanResourceDiff.process_changes"
+              :warnings="changePlanResourceDiff.warnings"
+              :unsupported-changes="changePlanResourceDiff.unsupported_changes"
+              :show-actions="false"
+              class="change-plan-diff"
+            />
+
             <!-- 新增 -->
             <div class="change-group" v-if="addedActions.length">
               <div class="group-title" @click="toggleChangePlanGroup('added')">
@@ -1364,14 +1379,36 @@ const executingChangePlan = ref(false)
 const expandedGroups = reactive<Record<string, boolean>>({ added: true, modified: true, removed: true })
 
 const addedActions = computed(() =>
-  store.changePlan?.actions.filter(a => a.op === 'add' || a.op === 'create') || []
+  store.changePlan?.actions.filter(a => a.op?.startsWith('add')) || []
 )
 const modifiedActions = computed(() =>
-  store.changePlan?.actions.filter(a => a.op === 'modify' || a.op === 'update') || []
+  store.changePlan?.actions.filter(a => a.op?.startsWith('modify') || a.op?.startsWith('update')) || []
 )
 const removedActions = computed(() =>
-  store.changePlan?.actions.filter(a => a.op === 'remove' || a.op === 'delete') || []
+  store.changePlan?.actions.filter(a => a.op?.startsWith('remove') || a.op?.startsWith('delete')) || []
 )
+const changePlanResourceDiff = computed<DiffResponse | null>(() => {
+  const diff = store.changePlan?.diffSummary as Partial<DiffResponse> | null | undefined
+  if (!diff) return null
+  if (!Array.isArray(diff.role_changes)) return null
+  if (!Array.isArray(diff.dict_changes)) return null
+  if (!Array.isArray(diff.model_changes)) return null
+  if (!Array.isArray(diff.form_changes)) return null
+  if (!Array.isArray(diff.process_changes)) return null
+  if (!Array.isArray(diff.warnings)) return null
+  if (!Array.isArray(diff.unsupported_changes)) return null
+  return {
+    has_changes: Boolean(diff.has_changes),
+    summary: diff.summary || '',
+    role_changes: diff.role_changes,
+    dict_changes: diff.dict_changes,
+    model_changes: diff.model_changes,
+    form_changes: diff.form_changes,
+    process_changes: diff.process_changes,
+    warnings: diff.warnings,
+    unsupported_changes: diff.unsupported_changes
+  }
+})
 const changePlanSelectedCount = computed(() =>
   store.changePlan?.actions.filter(a => a.selected).length || 0
 )
@@ -1417,9 +1454,13 @@ const handleIncrementalDocUpload = async (file: File) => {
   scrollToBottom()
 
   try {
+    if (!conversationId.value) {
+      throw new Error('会话ID不存在，请先创建或选择一个会话')
+    }
     const token = localStorage.getItem('token')
     const formData = new FormData()
     formData.append('file', file)
+    formData.append('conversation_id', conversationId.value.toString())
 
     const url = applicationApi.uploadDocVersionUrl(appId)
     const response = await fetch(url, {
@@ -1486,14 +1527,23 @@ const handleIncrementalDocUpload = async (file: File) => {
           selected: a.selected !== undefined ? a.selected : true
         }))
       }
-      store.changePlan = changePlanData
+      // 映射后端字段名到前端期望的字段名
+      const toVersion = changePlanData.version || 1
+      store.changePlan = {
+        ...changePlanData,
+        id: changePlanData.change_plan_id || changePlanData.id,
+        fromVersion: changePlanData.is_first_version ? 0 : (toVersion - 1),
+        toVersion: toVersion,
+        diffSummary: changePlanData.diff || changePlanData.diffSummary,
+      }
       store.showChangePlan = true
 
       const pmsg = messages.find(m => m.id === progressMsgId)
       if (pmsg) {
-        const addCount = changePlanData.actions?.filter((a: any) => a.op === 'add' || a.op === 'create').length || 0
-        const modCount = changePlanData.actions?.filter((a: any) => a.op === 'modify' || a.op === 'update').length || 0
-        const delCount = changePlanData.actions?.filter((a: any) => a.op === 'remove' || a.op === 'delete').length || 0
+        // op 格式为 add_model, add_dict, modify_field, remove_role 等
+        const addCount = changePlanData.actions?.filter((a: any) => a.op?.startsWith('add')).length || 0
+        const modCount = changePlanData.actions?.filter((a: any) => a.op?.startsWith('modify') || a.op?.startsWith('update')).length || 0
+        const delCount = changePlanData.actions?.filter((a: any) => a.op?.startsWith('remove') || a.op?.startsWith('delete')).length || 0
         pmsg.content = `📊 文档变更分析完成：新增 ${addCount} 项，修改 ${modCount} 项，删除 ${delCount} 项。\n\n请在右侧面板确认要执行的变更。`
       }
     } else {
@@ -2553,6 +2603,9 @@ onMounted(async () => {
   flex: 1;
   overflow-y: auto;
   padding: 12px 20px;
+}
+.change-plan-diff {
+  margin-bottom: 16px;
 }
 .change-group {
   margin-bottom: 16px;

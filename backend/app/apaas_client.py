@@ -4,6 +4,7 @@ import time
 import base64
 import json
 from typing import Optional, Any
+from urllib.parse import parse_qsl, urlsplit
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.backends import default_backend
@@ -23,10 +24,16 @@ def _to_json(obj: Any) -> str:
 def _log_request(method: str, url: str, payload: Any = None, params: Any = None):
     """记录请求日志"""
     logger.info(f">>> APaaS API 请求: {method} {url}")
-    if params:
+    if params is not None:
         logger.info(f"    参数: {_to_json(params)}")
-    if payload:
+    if payload is not None:
         logger.info(f"    请求体: {_to_json(payload)}")
+
+
+def _extract_query_params(url: str) -> Optional[dict[str, str]]:
+    """从 URL 中提取 query 参数，便于统一打印日志。"""
+    query_items = dict(parse_qsl(urlsplit(url).query, keep_blank_values=True))
+    return query_items or None
 
 
 def _log_response(url: str, status: int, data: Any, elapsed_ms: float):

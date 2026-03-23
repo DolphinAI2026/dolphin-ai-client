@@ -70,6 +70,13 @@
 - 字典选项：支持 merge 模式（跳过已有，添加新增）
 - 模型/字典/表单：按名称检测，跳过已存在
 
+### 关联规则
+
+1. 角色使用角色名称roleName进行关联
+2. 字典、字典选项使用 dictionaryCode、 valueCode进行关联
+3. 模型、字段使用 modelCode 进行关联
+4. 表单组件通过 modelField 进行关联，子表通过tableModelCode进行关联，子表内组件通过 modelField 进行关联
+
 ---
 
 ## 实现方案

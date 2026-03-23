@@ -19,11 +19,20 @@ from app.coding.generator import CodingGenerator, parse_files_from_response, Cod
 from app.coding.templates import get_project_template
 from app.coding.prompts import get_scene_prompt, AGENT_SYSTEM_PROMPT
 from app.coding.workspace import WorkspaceManager, ProjectType, WORKSPACE_ROOT
-from app.coding.vibe_agent import VibeCodingAgent
 from app.llm_client import LLMClient
 from app.apaas_client import APaaSClient
 from app.config import settings
 from app.coding.verifier import ComponentVerifier
+
+try:
+    from app.coding.vibe_agent import VibeCodingAgent
+    _VIBE_AGENT_IMPORT_ERROR = None
+except ModuleNotFoundError as exc:
+    if exc.name == "claude_agent_sdk":
+        VibeCodingAgent = None
+        _VIBE_AGENT_IMPORT_ERROR = exc
+    else:
+        raise
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/coding", tags=["coding"])
@@ -1033,6 +1042,14 @@ async def auto_pipeline(
                     )
 
             # Use VibeCodingAgent for autonomous coding
+            if VibeCodingAgent is None:
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        "Vibe Coding Agent 依赖未安装：缺少 claude_agent_sdk。"
+                        "请在 backend 虚拟环境中执行 `pip install -r requirements.txt`。"
+                    ),
+                ) from _VIBE_AGENT_IMPORT_ERROR
             agent = VibeCodingAgent(ws_id, system_prompt=AGENT_SYSTEM_PROMPT)
             agent_result_text = ""
 

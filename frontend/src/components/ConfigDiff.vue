@@ -316,7 +316,7 @@ const formatComponentType = (type?: string): string => {
 }
 </script>
 
-<style scoped>
+<style scoped lang="less">
 .config-diff {
   background: #1a1a2e;
   border-radius: 12px;

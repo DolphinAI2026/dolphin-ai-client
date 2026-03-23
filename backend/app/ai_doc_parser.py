@@ -196,6 +196,11 @@ async def parse_doc_with_ai(
     else:
         data = await _parse_chunked(text, filename, _progress)
 
+    # 对 Markdown 中显式定义的字典做规则兜底，避免 LLM 漏掉未引用字典或漏掉选项
+    extracted_dicts = _extract_markdown_dicts(text)
+    if extracted_dicts:
+        _merge_explicit_dicts(data, extracted_dicts)
+
     # 后处理
     await _progress("正在整理结果...")
     _sanitize_codes(data)
@@ -243,12 +248,12 @@ async def _parse_single(text: str, filename: str) -> Dict:
         user_msg += f"文档名：{filename}\n\n"
     user_msg += f"---\n\n{truncated}"
 
-    # 文档解析用非 thinking 模型（MiniMax-M2.5），避免 thinking 模式超时
+    # 文档解析用配置中的文档模型，避免业务代码写死模型名
     result = await client.chat_completion(
         [{"role": "system", "content": SINGLE_SYSTEM_PROMPT},
          {"role": "user", "content": user_msg}],
         max_tokens=16384, timeout=300.0, temperature=0.2,
-        model="MiniMax-M2.5"
+        model=client.doc_model
     )
     content = result["choices"][0]["message"]["content"]
     data = _extract_json(content)
@@ -425,6 +430,93 @@ def _split_large_section(text: str) -> List[str]:
     if current:
         chunks.append('\n'.join(current))
     return chunks
+
+
+def _extract_markdown_dicts(text: str) -> List[Dict]:
+    """从 Markdown 文档中直接提取显式定义的数据字典和选项。"""
+    lines = text.splitlines()
+    in_dict_section = False
+    current: Optional[Dict] = None
+    extracted: List[Dict] = []
+
+    def flush_current():
+        nonlocal current
+        if current and current.get("name") and current.get("code"):
+            extracted.append(current)
+        current = None
+
+    for line in lines:
+        stripped = line.strip()
+
+        if stripped.startswith("## "):
+            if current:
+                flush_current()
+            lowered = stripped.lower()
+            in_dict_section = "数据字典" in stripped or "dictionary" in lowered
+            continue
+
+        if not in_dict_section:
+            continue
+
+        heading_match = re.match(
+            r"^###\s+(?:\d+(?:\.\d+)?\s+)?(.+?)\s+\(`([^`]+)`\)\s*$",
+            stripped,
+        )
+        if heading_match:
+            flush_current()
+            current = {
+                "name": heading_match.group(1).strip(),
+                "code": heading_match.group(2).strip(),
+                "options": [],
+            }
+            continue
+
+        if not current or not stripped.startswith("|"):
+            continue
+
+        cols = [col.strip() for col in stripped.strip("|").split("|")]
+        if len(cols) < 2:
+            continue
+
+        raw_code = cols[0].strip("`").strip()
+        raw_name = cols[1].strip("`").strip()
+        code_lower = raw_code.lower()
+        name_lower = raw_name.lower()
+
+        if code_lower in {"编码", "code", "valuecode"}:
+            continue
+        if not raw_code or set(raw_code) <= {"-", ":"}:
+            continue
+        if name_lower in {"显示值", "名称", "name", "valuename"}:
+            continue
+
+        current["options"].append({"code": raw_code, "name": raw_name})
+
+    if current:
+        flush_current()
+
+    return extracted
+
+
+def _merge_explicit_dicts(data: Dict, extracted_dicts: List[Dict]):
+    """用文档中显式定义的字典覆盖/补全 AI 结果。"""
+    dicts = list(data.get("dicts", []) or [])
+    by_code = {d.get("code", ""): d for d in dicts if d.get("code")}
+    by_name = {d.get("name", ""): d for d in dicts if d.get("name")}
+
+    for extracted in extracted_dicts:
+        target = by_code.get(extracted["code"]) or by_name.get(extracted["name"])
+        if target:
+            target["name"] = extracted["name"]
+            target["code"] = extracted["code"]
+            if extracted.get("options"):
+                target["options"] = extracted["options"]
+        else:
+            dicts.append(extracted)
+            by_code[extracted["code"]] = extracted
+            by_name[extracted["name"]] = extracted
+
+    data["dicts"] = dicts
 
 
 # ================================================================
