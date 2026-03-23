@@ -281,20 +281,26 @@ async def create_application(
                 select(Message).where(
                     Message.conversation_id == data.conversation_id,
                     Message.role == "system",
-                    Message.content.like('%"type": "doc_raw"%')
+                    Message.content.like('%doc_raw%')
                 ).order_by(Message.id.desc()).limit(1)
             )
             doc_msg = msg_result.scalar_one_or_none()
 
             doc_content = ""
             doc_filename = f"{data.app_name or 'design-doc'}.md"
-            if doc_msg:
+            if doc_msg and doc_msg.content:
                 try:
-                    doc_data = json.loads(doc_msg.content)
-                    doc_content = doc_data.get("content", "")
+                    # 格式: ```doc_raw\n{json}\n```
+                    raw = doc_msg.content
+                    if '```doc_raw' in raw:
+                        json_str = raw.split('```doc_raw\n', 1)[1].rsplit('\n```', 1)[0]
+                    else:
+                        json_str = raw
+                    doc_data = json.loads(json_str)
+                    doc_content = doc_data.get("raw_content", "")
                     doc_filename = doc_data.get("filename", doc_filename)
-                except json.JSONDecodeError:
-                    pass
+                except (json.JSONDecodeError, IndexError, ValueError):
+                    logger.warning("Failed to parse doc_raw message")
 
             models_count = len(data.config_preview.get('models', [])) if isinstance(data.config_preview, dict) else 0
             dicts_count = len(data.config_preview.get('dicts', [])) if isinstance(data.config_preview, dict) else 0
@@ -660,6 +666,10 @@ async def upload_doc_with_conversation(
             # 保存完整配置 JSON 作为 system 消息（刷新页面时可恢复）
             config_msg = '```json\n' + json.dumps({"type": "preview", "data": data}, ensure_ascii=False) + '\n```'
             session.add(Message(conversation_id=conversation.id, role="system", content=config_msg))
+
+            # 保存原始文档内容（用于后续创建 DocumentVersion）
+            doc_msg = '```doc_raw\n' + json.dumps({"filename": fname, "raw_content": text}, ensure_ascii=False) + '\n```'
+            session.add(Message(conversation_id=conversation.id, role="system", content=doc_msg))
 
             await session.commit()
 
