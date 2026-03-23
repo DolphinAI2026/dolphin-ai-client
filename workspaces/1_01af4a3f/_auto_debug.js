@@ -5,7 +5,7 @@ const cliBase = process.env.DF_APAAS_CLI_PATH || '/Users/mars/.nvm/versions/node
 const puppeteer = require(path.join(cliBase, 'node_modules/puppeteer-core'))
 const os = require('os')
 
-const localServerRunningAt = 'https://localhost:8081/'
+const localServerRunningAt = 'https://localhost:8086/'
 const tenantId = '566642786573484033'
 const appId = '806997227284201472'
 const outputName = 'form-page-map-view'
@@ -114,7 +114,7 @@ const resultPath = '/Users/mars/Vibe Coding/apaas-builder-ai/workspaces/1_01af4a
 
     // Step 4: Navigate to target page
     console.log('[AUTO-DEBUG] Navigating to app debug target...')
-    await page.goto('https://apaas-dev8.dfy.definesys.cn/platform//566642786573484033/default/data-model-fn-config?appId=806997227284201472&menuId=819626319129083904&formId=69b138fe49b6ac36772fa040', { waitUntil: 'domcontentloaded', timeout: 60000 })
+    await page.goto('https://apaas-dev8.dfy.definesys.cn/platform//account/login', { waitUntil: 'domcontentloaded', timeout: 60000 })
     await page.evaluate(injectCall)
 
     // Step 5: Wait for page load + component injection

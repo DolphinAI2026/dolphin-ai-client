@@ -872,8 +872,9 @@ async def auto_pipeline(
             _debug_mode = "platform" if _is_platform_debug else "app"
 
             if is_debug_intent and ws_id:
-                _mode_label = "平台设计器" if _debug_mode == "platform" else "应用前台"
-                yield _sse({"type": "step", "step": "debug", "status": "running", "data": {"message": f"正在自动登录{_mode_label}..."}})
+                _mode_label = "平台" if _debug_mode == "platform" else "应用"
+                yield _sse({"type": "step", "step": "debug", "status": "running", "data": {"message": f"正在启动{_mode_label}调试..."}})
+
                 ws_path = WORKSPACE_ROOT / ws_id
                 apaas_json_path = ws_path / "src" / "apaas.json"
                 import json as _json
@@ -891,65 +892,30 @@ async def auto_pipeline(
                 else:
                     serve_port = serve_info["port"]
 
-                # 优先从项目配置获取平台参数，回退到用户全局配置
+                # 从项目配置获取平台参数
                 if project and project.platform_url:
                     _platform_url = _get_platform_frontend_url(project.platform_url)
                     _tenant_id = project.platform_tenant_id or settings.apaas_tenant_id
-                    _app_id = project.platform_app_id or req.app_id or "806997227284201472"
+                    _app_id = project.platform_app_id or ""
                 else:
                     _platform_url = _get_user_platform_url(user)
                     _tenant_id = user.apaas_tenant_id or settings.apaas_tenant_id
-                    _app_id = req.app_id or "806997227284201472"
+                    _app_id = ""
 
-                # 获取 app_code
-                _app_code = ""
-                if project:
-                    _app_code = getattr(project, 'platform_app_code', '') or ''
+                _app_code = getattr(project, 'platform_app_code', '') if project else ''
 
-                # 获取 platform_token 和 platform_backend_url（自动创建表单需要）
-                _apaas_token = ""
-                _platform_backend_url = ""
-                if project:
-                    _apaas_token = getattr(project, 'platform_token', '') or ''
-                    _platform_backend_url = getattr(project, 'platform_url', '') or ''
-
-                # 从组件配置中提取组件名称
-                _component_name = ""
-                if custom_widget_list:
-                    _component_name = custom_widget_list[0].get("name", "") or custom_widget_list[0].get("code", "")
-
-                # 自动化 Debug（登录 + 导航 + 截图）
-                debug_result = await ws_mgr.start_auto_debug(
+                # 简单 debug：打开浏览器 + 注入组件，用户手动导航
+                debug_result = await ws_mgr.start_debug(
                     ws_id=ws_id, serve_port=serve_port,
                     platform_url=_platform_url,
                     tenant_id=_tenant_id, app_id=_app_id,
                     output_name=output_name, custom_widget_list=custom_widget_list,
                     debug_mode=_debug_mode, app_code=_app_code,
-                    component_name=_component_name,
-                    apaas_token=_apaas_token,
-                    platform_backend_url=_platform_backend_url,
                 )
 
                 if debug_result.get("status") == "ok":
                     yield _sse({"type": "step", "step": "debug", "status": "done"})
-
-                    # Send screenshot URLs to frontend
-                    screenshots = debug_result.get("screenshots", [])
-                    for sc in screenshots:
-                        yield _sse({"type": "screenshot", "url": f"/api/coding/workspace/{ws_id}/debug/screenshot/{sc}"})
-
-                    # AI verification
-                    yield _sse({"type": "step", "step": "verify", "status": "running", "data": {"message": "AI 正在分析截图..."}})
-                    verifier = ComponentVerifier()
-                    requirement = req.message
-                    verify_result = await verifier.analyze_screenshot(ws_id, requirement)
-
-                    if verify_result.passed:
-                        yield _sse({"type": "step", "step": "verify", "status": "done"})
-                        yield _sse({"type": "content", "content": "组件验证通过！组件在表单设计器中正常显示。"})
-                    else:
-                        yield _sse({"type": "step", "step": "verify", "status": "error"})
-                        yield _sse({"type": "content", "content": f"发现问题：{verify_result.issues}\n\n修复建议：{verify_result.fix_suggestion}"})
+                    yield _sse({"type": "content", "content": f"✅ Debug 浏览器已打开！\n\n请在 Chromium 中：\n1. **登录平台**\n2. **导航到目标表单/页面**\n3. **F5 刷新**页面，组件会自动注入\n\n修改代码后刷新浏览器即可看到更新。"})
                 else:
                     yield _sse({"type": "step", "step": "debug", "status": "error"})
                     yield _sse({"type": "content", "content": f"Debug 启动失败: {debug_result.get('message', '')}"})
