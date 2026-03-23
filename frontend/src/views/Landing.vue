@@ -236,19 +236,21 @@ const handleUserCommand = (command: string) => {
 <style scoped>
 /* ── CSS Variables ── */
 .landing {
-  --bg-base: #0a0a0a;
-  --bg-card: #111111;
-  --bg-card-hover: #161616;
-  --bg-elevated: #1a1a1a;
-  --border-subtle: rgba(255, 255, 255, 0.06);
-  --border-hover: rgba(255, 255, 255, 0.12);
-  --text-primary: #f5f5f5;
+  --bg-base: #141418;
+  --bg-nav: rgba(26, 26, 32, 0.82);
+  --bg-card: #1e1e26;
+  --bg-card-hover: #28283a;
+  --bg-input: #252530;
+  --bg-elevated: #28283a;
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-hover: rgba(255, 255, 255, 0.14);
+  --text-primary: rgba(255, 255, 255, 0.92);
   --text-secondary: rgba(255, 255, 255, 0.55);
   --text-tertiary: rgba(255, 255, 255, 0.35);
   --accent-gradient: linear-gradient(135deg, #7c3aed, #6366f1);
   --accent-purple: #7c3aed;
   --accent-indigo: #6366f1;
-  --accent-glow: rgba(124, 58, 237, 0.15);
+  --accent-glow: rgba(124, 58, 237, 0.18);
   --radius-sm: 8px;
   --radius-md: 12px;
   --radius-lg: 16px;
@@ -282,8 +284,9 @@ const handleUserCommand = (command: string) => {
   justify-content: space-between;
   align-items: center;
   padding: 12px 24px;
-  background: rgba(10, 10, 10, 0.8);
-  backdrop-filter: blur(12px);
+  background: var(--bg-nav);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   border-bottom: 1px solid var(--border-subtle);
   position: sticky;
   top: 0;
@@ -357,12 +360,29 @@ const handleUserCommand = (command: string) => {
 .hero {
   text-align: center;
   padding: 56px 0 40px;
+  position: relative;
+}
+
+/* Purple ambient glow behind hero */
+.hero::before {
+  content: '';
+  position: absolute;
+  top: 10%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 480px;
+  height: 260px;
+  background: radial-gradient(ellipse at center, rgba(124, 58, 237, 0.12) 0%, rgba(99, 102, 241, 0.06) 40%, transparent 70%);
+  pointer-events: none;
+  z-index: 0;
 }
 
 .hero-sparkle {
   font-size: 40px;
   margin-bottom: 16px;
   filter: saturate(1.2);
+  position: relative;
+  z-index: 1;
 }
 
 .hero-title {
@@ -374,6 +394,8 @@ const handleUserCommand = (command: string) => {
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
+  position: relative;
+  z-index: 1;
 }
 
 .hero-desc {
@@ -381,6 +403,8 @@ const handleUserCommand = (command: string) => {
   color: var(--text-secondary);
   margin: 0;
   font-weight: 400;
+  position: relative;
+  z-index: 1;
 }
 
 /* ── Input Box ── */
@@ -392,7 +416,7 @@ const handleUserCommand = (command: string) => {
   display: flex;
   align-items: center;
   gap: 8px;
-  background: var(--bg-card);
+  background: var(--bg-input);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
   padding: 6px 6px 6px 14px;
@@ -400,7 +424,7 @@ const handleUserCommand = (command: string) => {
 }
 
 .input-row:focus-within {
-  border-color: rgba(124, 58, 237, 0.4);
+  border-color: rgba(124, 58, 237, 0.45);
   box-shadow: 0 0 0 3px var(--accent-glow);
 }
 
@@ -473,7 +497,7 @@ const handleUserCommand = (command: string) => {
   border-radius: var(--radius-lg);
   padding: 20px;
   cursor: pointer;
-  transition: transform 0.2s, border-color 0.2s, box-shadow 0.2s;
+  transition: transform 0.2s, border-color 0.2s, box-shadow 0.2s, background 0.2s;
   display: flex;
   align-items: center;
   gap: 14px;
@@ -481,8 +505,9 @@ const handleUserCommand = (command: string) => {
 
 .entry-card:hover {
   transform: translateY(-2px);
+  background: var(--bg-card-hover);
   border-color: var(--border-hover);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
 }
 
 .entry-icon {
@@ -567,14 +592,15 @@ const handleUserCommand = (command: string) => {
   padding: 18px;
   text-align: left;
   cursor: pointer;
-  transition: transform 0.2s, border-color 0.2s, box-shadow 0.2s;
+  transition: transform 0.2s, border-color 0.3s, box-shadow 0.3s, background 0.2s;
   color: inherit;
 }
 
 .tpl-card:hover {
   transform: translateY(-2px);
-  border-color: var(--border-hover);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+  background: var(--bg-card-hover);
+  border-color: rgba(124, 58, 237, 0.35);
+  box-shadow: 0 6px 24px rgba(124, 58, 237, 0.1), 0 4px 16px rgba(0, 0, 0, 0.2);
 }
 
 .tpl-icon {
@@ -632,13 +658,14 @@ const handleUserCommand = (command: string) => {
   border-radius: var(--radius-md);
   padding: 14px 18px;
   cursor: pointer;
-  transition: transform 0.2s, border-color 0.2s, box-shadow 0.2s;
+  transition: transform 0.2s, border-color 0.2s, box-shadow 0.2s, background 0.2s;
 }
 
 .app-row:hover {
   transform: translateY(-1px);
+  background: var(--bg-card-hover);
   border-color: var(--border-hover);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
 }
 
 .app-row-left {
@@ -740,7 +767,7 @@ const handleUserCommand = (command: string) => {
   font-size: 13px;
   padding: 40px 20px;
   background: var(--bg-card);
-  border: 1px dashed rgba(255, 255, 255, 0.08);
+  border: 1px dashed rgba(255, 255, 255, 0.1);
   border-radius: var(--radius-md);
 }
 
