@@ -605,14 +605,12 @@ _ICON_MAP = {
 
 
 def _fill_icons(data: Dict):
-    """补充缺失的 icon 字段"""
+    """始终用 _ICON_MAP 覆盖 icon 字段（LLM 可能返回中文类型名导致竖排）"""
     for m in (data.get("models") or []):
         for f in (m.get("fields") or []):
-            if not f.get("icon"):
-                f["icon"] = _ICON_MAP.get(f.get("type", ""), "T")
+            f["icon"] = _ICON_MAP.get(f.get("type", ""), "T")
             for sf in (f.get("sub_fields") or []):
-                if not sf.get("icon"):
-                    sf["icon"] = _ICON_MAP.get(sf.get("type", ""), "T")
+                sf["icon"] = _ICON_MAP.get(sf.get("type", ""), "T")
 
 
 def _dedup_dicts(data: Dict):

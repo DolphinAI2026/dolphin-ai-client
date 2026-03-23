@@ -2881,17 +2881,17 @@ watch(conversationId, (id) => {
 .model-name { font-weight: 600; color: rgba(255,255,255,0.9); }
 .model-code { margin-left: auto; font-size: 10px; color: rgba(255,255,255,0.35); font-family: monospace; }
 .field-list { }
-.field-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 12px; border-top: 1px solid rgba(255,255,255,0.04); }
+.field-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 12px; height: 36px; border-top: 1px solid rgba(255,255,255,0.04); }
 .field-row:hover { background: rgba(255,255,255,0.03); }
-.field-left { display: flex; align-items: center; gap: 8px; }
-.field-icon { width: 16px; text-align: center; font-size: 10px; }
-.field-name { font-size: 12px; color: rgba(255,255,255,0.8); }
+.field-left { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.field-icon { width: 22px; min-width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; font-size: 11px; background: rgba(255,255,255,0.06); border-radius: 4px; color: rgba(255,255,255,0.5); overflow: hidden; white-space: nowrap; }
+.field-name { font-size: 12px; color: rgba(255,255,255,0.8); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .req { color: #f87171; font-size: 10px; margin-left: 2px; }
-.field-right { display: flex; align-items: center; gap: 6px; }
-.ftag { font-size: 10px; padding: 1px 6px; border-radius: 3px; }
+.field-right { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.ftag { font-size: 10px; padding: 1px 6px; border-radius: 3px; white-space: nowrap; }
 .ftag.dict { background: rgba(245,158,11,0.12); color: #fbbf24; }
 .ftag.ref { background: rgba(96,165,250,0.12); color: #60a5fa; }
-.ftype { font-size: 10px; color: rgba(255,255,255,0.35); }
+.ftype { font-size: 10px; color: rgba(255,255,255,0.35); white-space: nowrap; }
 
 /* 模型选择 */
 .model-select-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; padding: 8px 12px; background: rgba(255,255,255,0.04); border-radius: 8px; }

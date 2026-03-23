@@ -1,0 +1,21 @@
+export default {
+  formPage: {
+    workOrderList: '工单列表',
+    workOrderCount: '共 {count} 条',
+    statusPending: '待派单',
+    statusAssigned: '已派单',
+    statusProcessing: '处理中',
+    statusCompleted: '已完成',
+    statusCancel: '已取消',
+    orderDetail: '工单详情',
+    dispatch: '派单',
+    selectHandler: '请选择处理人',
+    dispatchRemark: '派单备注',
+    dispatchRemarkPlaceholder: '请输入派单备注',
+    dispatchSuccess: '派单成功',
+    dispatchFailed: '派单失败',
+    noData: '暂无工单数据',
+    searchPlaceholder: '搜索工单',
+    filterByStatus: '工单状态',
+  },
+};

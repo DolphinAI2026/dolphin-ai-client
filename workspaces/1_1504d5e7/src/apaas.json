@@ -1,0 +1,16 @@
+{
+  "entry": "index.js",
+  "templateType": "FORM_COMPONENT",
+  "customWidgetList": [
+    {
+      "code": "FORM_CUSTOM_COMPONENT_AI_IMAGE_COMPARE",
+      "text": "ai-image-compare",
+      "description": "ai-image-compare"
+    }
+  ],
+  "copyAssets": [
+    "public/form-component/form-component-ai-image-compare"
+  ],
+  "router": {},
+  "outputName": "form-component-ai-image-compare"
+}
