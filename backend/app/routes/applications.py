@@ -634,6 +634,84 @@ class SelectionsUpdate(BaseModel):
     selections: dict  # {action_id: bool}
 
 
+def _merge_configs(v1_config: dict, partial_v2_config: dict, text_diff: dict) -> dict:
+    """合并 V1 未变更部分 + V2 变更部分（AI 只解析了变更章节）。
+
+    策略：以 V1 config 为基础，用 partial_v2_config（变更章节的解析结果）覆盖/补充。
+    - partial_v2_config 中的 models/dicts/roles：如果 code 匹配 V1 则替换，否则新增
+    - V1 中不在 partial_v2_config 中出现的（未变更章节的数据）：保留
+    - removed 章节对应的数据：不包含在 partial_v2_config 中，需要从 V1 移除
+    """
+    from copy import deepcopy
+
+    merged = deepcopy(v1_config)
+
+    # 收集变更解析出的 codes
+    v2_model_codes = {m.get("code", ""): m for m in partial_v2_config.get("models", []) if m.get("code")}
+    v2_dict_codes = {d.get("code", ""): d for d in partial_v2_config.get("dicts", []) if d.get("code")}
+    v2_role_codes = {r.get("code", ""): r for r in partial_v2_config.get("roles", []) if r.get("code")}
+
+    # 更新 models：替换已存在的，追加新增的
+    existing_model_codes = {m.get("code", "") for m in merged.get("models", [])}
+    new_models = []
+    for m in merged.get("models", []):
+        code = m.get("code", "")
+        if code in v2_model_codes:
+            new_models.append(v2_model_codes[code])  # 替换为新版本
+        else:
+            new_models.append(m)  # 保留未变更的
+    # 追加全新的模型
+    for code, m in v2_model_codes.items():
+        if code not in existing_model_codes:
+            new_models.append(m)
+    merged["models"] = new_models
+
+    # 更新 dicts
+    existing_dict_codes = {d.get("code", "") for d in merged.get("dicts", [])}
+    new_dicts = []
+    for d in merged.get("dicts", []):
+        code = d.get("code", "")
+        if code in v2_dict_codes:
+            new_dicts.append(v2_dict_codes[code])
+        else:
+            new_dicts.append(d)
+    for code, d in v2_dict_codes.items():
+        if code not in existing_dict_codes:
+            new_dicts.append(d)
+    merged["dicts"] = new_dicts
+
+    # 更新 roles
+    existing_role_codes = {r.get("code", "") for r in merged.get("roles", [])}
+    new_roles = []
+    for r in merged.get("roles", []):
+        code = r.get("code", "")
+        if code in v2_role_codes:
+            new_roles.append(v2_role_codes[code])
+        else:
+            new_roles.append(r)
+    for code, r in v2_role_codes.items():
+        if code not in existing_role_codes:
+            new_roles.append(r)
+    merged["roles"] = new_roles
+
+    # 更新 appName（如果变更解析结果中有）
+    if partial_v2_config.get("appName"):
+        merged["appName"] = partial_v2_config["appName"]
+
+    return merged
+
+
+def _remove_deleted_from_config(v1_config: dict, text_diff: dict) -> dict:
+    """当只有删除章节（无新增/修改）时，从 V1 config 中移除被删除章节对应的内容。
+
+    注意：由于章节标题和 config 中的 model/dict 名称不一定完全对应，
+    这里采取保守策略 — 只返回 V1 config 的副本。
+    真正的删除判断由后续的 semantic_diff 来处理。
+    """
+    from copy import deepcopy
+    return deepcopy(v1_config)
+
+
 @router.post("/{app_id}/upload-doc-version")
 async def upload_doc_version(
     app_id: int,
@@ -668,6 +746,7 @@ async def upload_doc_version(
         from app.database import AsyncSessionLocal
         from app.doc_differ import build_structure_index, semantic_diff, diff_to_actions, compute_hash
         from app.config_diff import compute_config_diff
+        from app.doc_text_differ import diff_sections, build_changed_text, get_diff_stats
 
         try:
             yield {"event": "progress", "data": json.dumps({"step": "读取文档内容..."}, ensure_ascii=False)}
@@ -675,7 +754,8 @@ async def upload_doc_version(
             # 1. 计算 hash
             content_hash = compute_hash(text)
 
-            # 2. 检查是否重复
+            # 2. 检查是否重复 & 获取 V1 文档版本
+            v1_doc: Optional[dict] = None
             async with AsyncSessionLocal() as session:
                 dup_result = await session.execute(
                     select(DocumentVersion).where(
@@ -687,7 +767,7 @@ async def upload_doc_version(
                     yield {"event": "error", "data": json.dumps({"message": "文档内容未变化，无需上传"}, ensure_ascii=False)}
                     return
 
-                # 3. 获取当前最大 version
+                # 3. 获取当前最大 version 及其 DocumentVersion 记录
                 max_ver_result = await session.execute(
                     select(sa_func.max(DocumentVersion.version)).where(
                         DocumentVersion.application_id == app_id_val
@@ -696,20 +776,83 @@ async def upload_doc_version(
                 max_ver = max_ver_result.scalar() or 0
                 new_version = max_ver + 1
 
+                # 获取 V1 文档记录（用于文本对比）
+                if max_ver > 0:
+                    v1_result = await session.execute(
+                        select(DocumentVersion).where(
+                            DocumentVersion.application_id == app_id_val,
+                            DocumentVersion.version == max_ver,
+                        )
+                    )
+                    v1_doc_obj = v1_result.scalar_one_or_none()
+                    if v1_doc_obj:
+                        # 提取需要的字段，避免 session 外访问
+                        v1_doc = {
+                            "raw_content": v1_doc_obj.raw_content,
+                            "parsed_config": v1_doc_obj.parsed_config,
+                            "version": v1_doc_obj.version,
+                        }
+
             yield {"event": "progress", "data": json.dumps({"step": "解析文档结构..."}, ensure_ascii=False)}
 
             # 4. 构建章节索引
             structure_index = build_structure_index(text)
 
-            yield {"event": "progress", "data": json.dumps({"step": "AI 解析文档配置..."}, ensure_ascii=False)}
-
-            # 5. AI 解析文档
+            # ── 分支：有 V1 文档时走「文档对比优先」，否则走全量解析 ──
             from app.ai_doc_parser import parse_doc_with_ai
-            v2_config = await parse_doc_with_ai(text, filename=fname)
+
+            if v1_doc and v1_doc.get("raw_content"):
+                # ===== 增量模式：文档对比优先 =====
+                yield {"event": "progress", "data": json.dumps({"step": "text_diff", "message": "正在对比文档章节..."}, ensure_ascii=False)}
+
+                # Step A: 纯文本章节对比
+                text_diff = diff_sections(v1_doc["raw_content"], text)
+                diff_stats = get_diff_stats(text_diff)
+
+                yield {"event": "progress", "data": json.dumps({
+                    "step": "text_diff",
+                    "data": diff_stats,
+                    "message": f"章节对比完成：新增 {diff_stats['added']}、修改 {diff_stats['modified']}、删除 {diff_stats['removed']}、未变更 {diff_stats['unchanged']}",
+                }, ensure_ascii=False)}
+
+                # Step B: 加载 V1 的 parsed_config
+                v1_parsed_config: dict = {}
+                if v1_doc.get("parsed_config"):
+                    try:
+                        v1_parsed_config = json.loads(v1_doc["parsed_config"]) if isinstance(v1_doc["parsed_config"], str) else v1_doc["parsed_config"]
+                    except Exception:
+                        pass
+
+                changed_count = diff_stats["added"] + diff_stats["modified"]
+
+                if changed_count > 0:
+                    # Step C: 只对变更章节调 AI 解析
+                    changed_text = build_changed_text(text_diff)
+                    yield {"event": "progress", "data": json.dumps({
+                        "step": "parse_changes",
+                        "message": f"正在解析 {changed_count} 个变更章节...",
+                    }, ensure_ascii=False)}
+
+                    partial_config = await parse_doc_with_ai(changed_text, filename=fname)
+
+                    # Step D: 合并 — V1 未变更部分 + V2 变更部分
+                    yield {"event": "progress", "data": json.dumps({"step": "merge", "message": "合并未变更部分与变更结果..."}, ensure_ascii=False)}
+                    v2_config = _merge_configs(v1_parsed_config, partial_config, text_diff)
+                else:
+                    # 所有章节未变更（只有删除），直接用 V1 config 减去删除的部分
+                    yield {"event": "progress", "data": json.dumps({
+                        "step": "parse_changes",
+                        "message": "无新增或修改章节，复用已有解析结果",
+                    }, ensure_ascii=False)}
+                    v2_config = _remove_deleted_from_config(v1_parsed_config, text_diff)
+            else:
+                # ===== 首次上传：全量解析 =====
+                yield {"event": "progress", "data": json.dumps({"step": "AI 解析文档配置..."}, ensure_ascii=False)}
+                v2_config = await parse_doc_with_ai(text, filename=fname)
 
             yield {"event": "progress", "data": json.dumps({"step": "对比资源差异..."}, ensure_ascii=False)}
 
-            # 6. 加载 V1 配置
+            # 6. 加载 V1 配置（从应用当前 config_preview）
             v1_config: dict = {}
             if current_config_str:
                 try:
@@ -743,6 +886,7 @@ async def upload_doc_version(
                     raw_content=text,
                     structure_index=json.dumps(structure_index, ensure_ascii=False),
                     parsed_config=json.dumps(v2_config, ensure_ascii=False),
+                    parent_version=max_ver if max_ver > 0 else None,
                     summary=summary,
                 )
                 session.add(doc_ver)

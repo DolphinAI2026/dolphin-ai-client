@@ -97,7 +97,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ArrowLeft } from '@element-plus/icons-vue'
-import { ElIcon, ElMessage } from 'element-plus'
+import { ElIcon, ElMessage, ElMessageBox } from 'element-plus'
 import { applicationApi } from '@/api/application'
 
 interface Step { key: string; label: string; status: 'pending' | 'completed' | 'error'; deps_met: boolean; model_index?: number; error?: string; result?: Record<string, any> }
@@ -143,11 +143,31 @@ async function loadStatus() {
   } catch { ElMessage.error('加载失败') }
 }
 
+async function handleConflict(resp: any, stepKey: string) {
+  const c = resp.conflict
+  try {
+    const { value: newCode } = await ElMessageBox.prompt(
+      `${c.model_name}的编码 "${c.current_code}" 在平台上已存在，请输入一个新的编码：`,
+      '编码冲突',
+      { confirmButtonText: '确认修复', cancelButtonText: '取消', inputValue: c.current_code + '_v2', inputPattern: /^\w+$/, inputErrorMessage: '编码只能包含字母、数字和下划线' }
+    )
+    if (newCode && newCode !== c.current_code) {
+      await applicationApi.resolveConflict(appId.value, { step: stepKey, model_name: c.model_name, old_code: c.current_code, new_code: newCode })
+      ElMessage.success(`编码已更新：${c.current_code} → ${newCode}，正在重试...`)
+      await executeOne(stepKey)
+    }
+  } catch { /* cancelled */ }
+}
+
 async function executeOne(stepKey: string) {
   executingStep.value = stepKey
   try {
     const resp = await applicationApi.executeStep(appId.value, stepKey)
-    if (resp.status === 'error') ElMessage.error(resp.error || '失败')
+    if (resp.status === 'conflict' && resp.conflict) {
+      await handleConflict(resp, stepKey)
+    } else if (resp.status === 'error') {
+      ElMessage.error(resp.error || '失败')
+    }
   } catch (e: any) { ElMessage.error(e.message || '失败') }
   finally { executingStep.value = null; await loadStatus() }
 }
@@ -167,6 +187,11 @@ async function runAll() {
     executingStep.value = s.key
     const resp = await applicationApi.executeStep(appId.value, s.key)
     await loadStatus()
+    if (resp.status === 'conflict' && resp.conflict) {
+      executingStep.value = null
+      await handleConflict(resp, s.key)
+      return
+    }
     if (resp.status === 'error') { ElMessage.error(resp.error + '，已暂停'); executingStep.value = null; return }
   }
   executingStep.value = null

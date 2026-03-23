@@ -45,6 +45,28 @@
               </div>
             </div>
           </div>
+          <!-- 编码冲突修复输入 -->
+          <div v-if="activeConflict" class="chat-bubble assistant">
+            <div class="bubble-inner">
+              <div class="agent-label"><span>🤖</span><span>搭建智能体</span></div>
+              <div class="bubble-content assistant conflict-resolve-box">
+                <div class="conflict-label">请输入新编码替换 <code>{{ activeConflict.current_code }}</code>：</div>
+                <div class="conflict-input-row">
+                  <input
+                    v-model="activeConflict.newCode"
+                    class="conflict-input"
+                    placeholder="输入新编码，如 xxx_v2"
+                    @keydown.enter="resolveConflictAndRetry"
+                    :disabled="activeConflict.resolving"
+                  />
+                  <button class="conflict-btn confirm" @click="resolveConflictAndRetry" :disabled="activeConflict.resolving">
+                    {{ activeConflict.resolving ? '修复中...' : '确认修复' }}
+                  </button>
+                  <button class="conflict-btn cancel" @click="cancelConflict" :disabled="activeConflict.resolving">取消</button>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
 
         <div class="input-bar">
@@ -880,6 +902,17 @@ const deployAppId = ref<number | null>(null)
 const deploySteps = ref<DeployStep[]>([])
 const deployExecuting = ref<string | null>(null)
 
+// ── 编码冲突修复 ──
+interface ConflictState {
+  step: string
+  model_name: string
+  current_code: string
+  message: string
+  newCode: string
+  resolving: boolean
+}
+const activeConflict = ref<ConflictState | null>(null)
+
 const deployDoneCount = computed(() => deploySteps.value.filter(s => s.status === 'completed').length)
 const deployPercent = computed(() => deploySteps.value.length ? Math.round(deployDoneCount.value / deploySteps.value.length * 100) : 0)
 const deployAllDone = computed(() => deploySteps.value.length > 0 && deployDoneCount.value === deploySteps.value.length)
@@ -927,7 +960,11 @@ async function deployExec(key: string) {
   deployExecuting.value = key
   try {
     const resp = await applicationApi.executeStep(deployAppId.value, key)
-    if (resp.status === 'error') ElMessage.error(resp.error || '失败')
+    if (resp.status === 'conflict' && resp.conflict) {
+      handleConflict(resp, key)
+    } else if (resp.status === 'error') {
+      ElMessage.error(resp.error || '失败')
+    }
   } catch (e: any) { ElMessage.error(e.message || '失败') }
   finally { deployExecuting.value = null; await loadDeployStatus() }
 }
@@ -948,11 +985,93 @@ async function deployRunAll() {
     deployExecuting.value = s.key
     const resp = await applicationApi.executeStep(deployAppId.value!, s.key)
     await loadDeployStatus()
+    if (resp.status === 'conflict' && resp.conflict) {
+      handleConflict(resp, s.key)
+      deployExecuting.value = null
+      return  // 暂停，等用户修复冲突后可再次一键执行
+    }
     if (resp.status === 'error') { ElMessage.error(resp.error + '，已暂停'); deployExecuting.value = null; return }
   }
   deployExecuting.value = null
   ElMessage.success('全部完成！')
 }
+function handleConflict(resp: any, stepKey: string) {
+  const c = resp.conflict
+  // 在对话区显示冲突信息
+  messages.push({
+    id: Date.now(),
+    role: 'assistant',
+    agent: 'builder',
+    content: `\u26a0\ufe0f **编码冲突**：${c.model_name}的编码 \`${c.current_code}\` 在平台上已存在。\n\n请在下方输入一个新的编码来替换它：`,
+    created_at: new Date().toISOString(),
+  })
+  scrollToBottom()
+  // 设置冲突状态
+  activeConflict.value = {
+    step: stepKey,
+    model_name: c.model_name,
+    current_code: c.current_code,
+    message: c.message,
+    newCode: c.current_code + '_v2',
+    resolving: false,
+  }
+}
+
+async function resolveConflictAndRetry() {
+  if (!activeConflict.value || !deployAppId.value) return
+  const c = activeConflict.value
+  if (!c.newCode.trim()) { ElMessage.warning('请输入新编码'); return }
+  if (c.newCode === c.current_code) { ElMessage.warning('新编码不能和旧编码相同'); return }
+
+  c.resolving = true
+  try {
+    await applicationApi.resolveConflict(deployAppId.value, {
+      step: c.step,
+      model_name: c.model_name,
+      old_code: c.current_code,
+      new_code: c.newCode,
+    })
+    // 在对话区显示修复成功
+    messages.push({
+      id: Date.now(),
+      role: 'assistant',
+      agent: 'builder',
+      content: `\u2705 编码已更新：\`${c.current_code}\` \u2192 \`${c.newCode}\`\n\n正在重试该步骤...`,
+      created_at: new Date().toISOString(),
+    })
+    scrollToBottom()
+    const conflictStep = c.step
+    activeConflict.value = null
+    // 重新加载配置预览（编码已变）
+    try {
+      const appData = await applicationApi.get(deployAppId.value) as any
+      if (appData.config_preview) {
+        const cfg = typeof appData.config_preview === 'string' ? JSON.parse(appData.config_preview) : appData.config_preview
+        const d = cfg.data || cfg
+        store.preview = { appName: appData.app_name, models: d.models || [], roles: d.roles || [], dicts: d.dicts || [], workflows: d.workflows || [], permissions: d.permissions || [] }
+      }
+    } catch { /* ignore */ }
+    // 自动重试
+    await deployExec(conflictStep)
+  } catch (e: any) {
+    ElMessage.error(e.message || '修复失败')
+  } finally {
+    if (activeConflict.value) activeConflict.value.resolving = false
+  }
+}
+
+function cancelConflict() {
+  activeConflict.value = null
+  messages.push({
+    id: Date.now(),
+    role: 'assistant',
+    agent: 'builder',
+    content: '\u274c 已取消编码修复。你可以在部署面板中点击"重试"来重新执行该步骤。',
+    created_at: new Date().toISOString(),
+  })
+  scrollToBottom()
+}
+
 const selectedModelIndices = ref<number[]>([])  // 选中的模型索引，空=全选
 
 const toggleSelectAll = () => {
@@ -2791,4 +2910,19 @@ onMounted(async () => {
 .preview-body::-webkit-scrollbar-thumb:hover,
 .deploy-groups::-webkit-scrollbar-thumb:hover,
 .projects-list::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+
+/* 编码冲突修复 */
+.conflict-resolve-box { padding: 4px 0; }
+.conflict-label { margin-bottom: 8px; font-size: 13px; }
+.conflict-label code { background: rgba(139, 92, 246, 0.2); color: #a78bfa; padding: 1px 6px; border-radius: 4px; font-family: monospace; font-size: 12px; }
+.conflict-input-row { display: flex; gap: 8px; align-items: center; }
+.conflict-input { flex: 1; padding: 6px 10px; border: 1px solid rgba(255,255,255,0.15); border-radius: 6px; background: rgba(255,255,255,0.06); color: #e2e8f0; font-size: 13px; font-family: monospace; outline: none; transition: border-color 0.2s; }
+.conflict-input:focus { border-color: #7c3aed; }
+.conflict-input:disabled { opacity: 0.5; }
+.conflict-btn { border: none; cursor: pointer; border-radius: 6px; font-size: 12px; font-weight: 500; padding: 6px 14px; transition: all 0.2s; }
+.conflict-btn.confirm { background: linear-gradient(135deg, #7c3aed, #6366f1); color: #fff; }
+.conflict-btn.confirm:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 2px 8px rgba(124, 58, 237, 0.4); }
+.conflict-btn.cancel { background: rgba(255,255,255,0.08); color: #94a3b8; }
+.conflict-btn.cancel:hover:not(:disabled) { background: rgba(255,255,255,0.12); }
+.conflict-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 </style>

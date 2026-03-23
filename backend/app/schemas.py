@@ -165,8 +165,25 @@ class GenerationStatusResponse(BaseModel):
     steps: List[StepStatus]
 
 
+class ConflictInfo(BaseModel):
+    """编码冲突详情"""
+    conflict_type: str  # code_duplicate
+    model_name: str  # 冲突的模型/字典/角色名称
+    current_code: str  # 当前冲突的编码
+    message: str  # 提示信息
+
+
 class StepExecuteResponse(BaseModel):
     step: str
-    status: str  # completed | error
+    status: str  # completed | error | conflict
     result: Optional[dict] = None
     error: Optional[str] = None
+    conflict: Optional[ConflictInfo] = None
+
+
+class ResolveConflictRequest(BaseModel):
+    """编码冲突修复请求"""
+    step: str  # e.g. "create_model:0"
+    model_name: str  # 模型/字典/角色名称
+    old_code: str  # 原编码
+    new_code: str  # 新编码

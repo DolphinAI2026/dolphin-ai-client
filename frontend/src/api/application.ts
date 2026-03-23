@@ -71,5 +71,10 @@ export const applicationApi = {
   /** 获取文档版本列表 */
   getDocVersions(appId: number) {
     return request.get<any, any>(`/applications/${appId}/doc-versions`)
+  },
+
+  /** 编码冲突修复 */
+  resolveConflict(appId: number, data: { step: string; model_name: string; old_code: string; new_code: string }) {
+    return request.post<any, any>(`/applications/${appId}/resolve-conflict`, data)
   }
 }

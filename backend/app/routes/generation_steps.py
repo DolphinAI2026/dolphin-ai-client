@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -20,6 +21,7 @@ from app.models import Application, User
 from app.schemas import (
     StepExecuteRequest, StepResetRequest,
     StepStatus, GenerationStatusResponse, StepExecuteResponse,
+    ConflictInfo, ResolveConflictRequest,
 )
 from app.step_executor import (
     execute_create_app, execute_create_roles_dicts,
@@ -148,6 +150,67 @@ async def _get_app(app_id: int, ctx: AuthContext, db: AsyncSession) -> Applicati
     return app
 
 
+def _detect_code_conflict(error_msg: str, step_key: str, data: dict, models: list) -> Optional[ConflictInfo]:
+    """检测错误信息中是否包含编码冲突，返回 ConflictInfo 或 None。"""
+    # 常见的编码冲突错误关键词
+    conflict_patterns = [
+        r"编码[「\"]?(\w+)[」\"]?.*(?:重复|已存在|冲突)",
+        r"code[「\"]?(\w+)[」\"]?.*(?:already exists|duplicate|conflict)",
+        r"(?:重复|已存在|冲突).*编码[「\"]?(\w+)[」\"]?",
+        r"模型编码(\w+)已存在",
+        r"字典编码(\w+)已存在",
+        r"角色编码(\w+)已存在",
+        r"编码(\w+)重复",
+    ]
+
+    # 也检测 HTTP 400/409 + 编码相关信息
+    is_conflict_error = any(kw in error_msg for kw in [
+        "编码重复", "编码已存在", "code already exists", "duplicate",
+        "编码冲突", "code duplicate", "已存在同名",
+    ])
+
+    if not is_conflict_error:
+        return None
+
+    # 尝试从错误信息中提取冲突编码
+    conflict_code = None
+    for pattern in conflict_patterns:
+        match = re.search(pattern, error_msg, re.IGNORECASE)
+        if match:
+            conflict_code = match.group(1)
+            break
+
+    # 根据步骤类型确定名称和编码
+    entity_name = "未知"
+    entity_code = conflict_code or "unknown"
+
+    if step_key.startswith("create_model:"):
+        idx = int(step_key.split(":")[1])
+        if idx < len(models):
+            entity_name = models[idx].get("name", f"模型{idx}")
+            if not conflict_code:
+                entity_code = models[idx].get("code", "unknown")
+    elif step_key == "create_roles_dicts":
+        entity_name = "角色/字典"
+        # 尝试从错误信息中提取更具体的名称
+        name_match = re.search(r"[「\"](.+?)[」\"]", error_msg)
+        if name_match:
+            entity_name = name_match.group(1)
+    elif step_key.startswith("create_form:"):
+        idx = int(step_key.split(":")[1])
+        if idx < len(models):
+            entity_name = models[idx].get("name", f"表单{idx}")
+            if not conflict_code:
+                entity_code = models[idx].get("code", "unknown")
+
+    return ConflictInfo(
+        conflict_type="code_duplicate",
+        model_name=entity_name,
+        current_code=entity_code,
+        message=f"编码 {entity_code} 在平台上已存在，请提供一个新的编码",
+    )
+
+
 # ------------------------------------------------------------------
 # GET /status
 # ------------------------------------------------------------------
@@ -267,6 +330,14 @@ async def execute_step(
             await db.commit()
             raise HTTPException(status_code=401, detail="APaaS平台Token已过期，请重新连接")
 
+        # 检测编码冲突错误
+        conflict = _detect_code_conflict(error_msg, step_key, data, models)
+        if conflict:
+            state.setdefault("step_errors", {})[step_key] = error_msg
+            _save_state(app, state)
+            await db.commit()
+            return StepExecuteResponse(step=step_key, status="conflict", error=error_msg, conflict=conflict)
+
         state.setdefault("step_errors", {})[step_key] = error_msg
         _save_state(app, state)
         await db.commit()
@@ -382,3 +453,133 @@ async def reset_step(
     app.status = "draft"
     await db.commit()
     return {"ok": True}
+
+
+# ------------------------------------------------------------------
+# POST /resolve-conflict
+# ------------------------------------------------------------------
+
+def _replace_code_in_obj(obj, old_code: str, new_code: str):
+    """递归遍历 dict/list，将所有值等于 old_code 的字符串替换为 new_code。"""
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if isinstance(v, str) and v == old_code:
+                obj[k] = new_code
+            elif isinstance(v, (dict, list)):
+                _replace_code_in_obj(v, old_code, new_code)
+    elif isinstance(obj, list):
+        for i, item in enumerate(obj):
+            if isinstance(item, str) and item == old_code:
+                obj[i] = new_code
+            elif isinstance(item, (dict, list)):
+                _replace_code_in_obj(item, old_code, new_code)
+
+
+@router.post("/applications/{app_id}/resolve-conflict")
+async def resolve_conflict(
+    app_id: int,
+    body: ResolveConflictRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """编码冲突修复：将 config_preview 中 old_code 替换为 new_code，并更新所有引用。"""
+    app = await _get_app(app_id, ctx, db)
+    config = _load_config(app)
+    data = config.get("data", config)
+
+    old_code = body.old_code
+    new_code = body.new_code
+
+    if old_code == new_code:
+        raise HTTPException(status_code=400, detail="新编码不能和旧编码相同")
+    if not new_code.strip():
+        raise HTTPException(status_code=400, detail="新编码不能为空")
+
+    # 1. 在 models 中查找并替换主 code
+    models = data.get("models", [])
+    found = False
+    for m in models:
+        if m.get("code") == old_code:
+            m["code"] = new_code
+            found = True
+        # 替换字段中引用该 code 的地方（如 ref 关联）
+        for f in m.get("fields", []):
+            if isinstance(f.get("ref"), str) and f["ref"] == old_code:
+                f["ref"] = new_code
+            elif isinstance(f.get("ref"), dict) and f["ref"].get("model") == old_code:
+                f["ref"]["model"] = new_code
+
+    # 2. 在 dicts 中查找并替换
+    for d in data.get("dicts", []):
+        if d.get("code") == old_code:
+            d["code"] = new_code
+            found = True
+
+    # 3. 在 roles 中查找并替换
+    for r in data.get("roles", []):
+        if r.get("code") == old_code:
+            r["code"] = new_code
+            found = True
+
+    # 4. 在 workflows 中替换引用
+    for wf in data.get("workflows", []):
+        if wf.get("form") == old_code:
+            wf["form"] = new_code
+        # 替换 nodes 中的引用
+        _replace_code_in_obj(wf.get("nodes", []), old_code, new_code)
+
+    # 5. 在 permissions 中替换引用
+    for perm in data.get("permissions", []):
+        if perm.get("role") == old_code:
+            perm["role"] = new_code
+        forms = perm.get("forms", [])
+        for fp in forms:
+            if fp.get("form") == old_code:
+                fp["form"] = new_code
+
+    if not found:
+        raise HTTPException(status_code=404, detail=f"未找到编码 {old_code} 对应的模型/字典/角色")
+
+    # 6. 记录编码映射到 meta
+    meta = data.setdefault("meta", {})
+    code_remaps = meta.setdefault("code_remaps", {})
+    code_remaps[old_code] = new_code
+
+    # 7. 保存更新后的 config_preview
+    app.config_preview = json.dumps(config, ensure_ascii=False)
+
+    # 8. 清除该步骤的错误状态，让重试可以执行
+    state = _load_state(app)
+    state.get("step_errors", {}).pop(body.step, None)
+    _save_state(app, state)
+
+    # 9. 如果有文档版本，保存新版本
+    doc_version_id = None
+    if app.current_doc_version:
+        from app.models import DocumentVersion
+        import hashlib
+        new_version = app.current_doc_version + 1
+        config_json = json.dumps(config, ensure_ascii=False)
+        dv = DocumentVersion(
+            application_id=app.id,
+            version=new_version,
+            filename=f"conflict-fix-v{new_version}",
+            content_hash=hashlib.sha256(config_json.encode()).hexdigest(),
+            raw_content="",  # 编码修复不涉及原始文档变更
+            parsed_config=config_json,
+            summary=f"编码冲突修复: {old_code} → {new_code}",
+        )
+        db.add(dv)
+        app.current_doc_version = new_version
+        doc_version_id = new_version
+
+    await db.commit()
+
+    return {
+        "ok": True,
+        "old_code": old_code,
+        "new_code": new_code,
+        "step": body.step,
+        "doc_version": doc_version_id,
+        "message": f"编码已从 {old_code} 更新为 {new_code}，请重试该步骤",
+    }

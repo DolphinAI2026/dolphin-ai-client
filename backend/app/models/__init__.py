@@ -37,6 +37,7 @@ class DocumentVersion(Base):
     raw_content: Mapped[str] = mapped_column(Text, nullable=False)
     structure_index: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON 章节索引
     parsed_config: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON 解析配置
+    parent_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 基于哪个版本修改的（版本链）
     summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
