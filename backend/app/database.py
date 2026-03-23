@@ -45,6 +45,7 @@ async def init_db():
             "ALTER TABLE applications ADD COLUMN current_doc_version INTEGER",
             # App code for app-mode debug
             "ALTER TABLE projects ADD COLUMN platform_app_code VARCHAR(100)",
+            "ALTER TABLE projects ADD COLUMN platform_password_enc TEXT",
         ]:
             try:
                 await conn.execute(text(stmt))

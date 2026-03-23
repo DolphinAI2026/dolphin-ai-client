@@ -4,8 +4,8 @@ const cliBase = process.env.DF_APAAS_CLI_PATH || '/Users/mars/.nvm/versions/node
 const puppeteer = require(path.join(cliBase, 'node_modules/puppeteer-core'))
 const os = require('os')
 
-const localServerRunningAt = 'https://localhost:8087/'
-const targetEnv = 'app'
+const localServerRunningAt = 'https://localhost:8088/'
+const targetEnv = 'platform'
 const tenantId = '566642786573484033'
 const appId = '806997227284201472'
 const outputName = 'form-page-map-view'

@@ -96,6 +96,7 @@ class Project(Base):
     platform_tenant_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     platform_token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     platform_username: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    platform_password_enc: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # base64 encoded
     platform_app_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     platform_app_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     platform_app_code: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)

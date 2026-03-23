@@ -4,7 +4,7 @@ const cliBase = process.env.DF_APAAS_CLI_PATH || '/Users/mars/.nvm/versions/node
 const puppeteer = require(path.join(cliBase, 'node_modules/puppeteer-core'))
 const os = require('os')
 
-const localServerRunningAt = 'https://localhost:8083/'
+const localServerRunningAt = 'https://localhost:8088/'
 const targetEnv = 'app'
 const tenantId = '566642786573484033'
 const appId = '806997227284201472'
@@ -68,7 +68,7 @@ const INJECT_CODE = `(function(params) {
   const injectCall = `${INJECT_CODE}(${JSON.stringify(injectParams)})`
   await page.evaluateOnNewDocument(injectCall)
   try {
-    await page.goto('https://apaas-dev8.dfy.definesys.cn/platform//', { waitUntil: 'domcontentloaded', timeout: 120000 })
+    await page.goto('https://apaas-dev8.dfy.definesys.cn/platform//account/login', { waitUntil: 'domcontentloaded', timeout: 120000 })
   } catch(e) { console.log('Nav issue:', e.message.split('\n')[0]) }
   await page.evaluate(injectCall)
   console.log('✅ Debug active')

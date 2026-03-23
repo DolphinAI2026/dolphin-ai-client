@@ -22,6 +22,46 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/projects", tags=["projects"])
 
 
+async def ensure_platform_token(project: Project, db: AsyncSession) -> str:
+    """确保项目的平台 token 有效。如果过期，自动用保存的凭证重新登录。"""
+    import base64
+
+    if not project.platform_url or not project.platform_tenant_id:
+        raise HTTPException(400, "项目未配置平台环境")
+
+    # 先试用现有 token
+    if project.platform_token:
+        try:
+            client = APaaSClient(base_url=project.platform_url, tenant_id=project.platform_tenant_id, token=project.platform_token)
+            await client.query_app_list()  # 简单验证 token 有效性
+            return project.platform_token
+        except Exception:
+            logger.info(f"项目 {project.id} 的 token 已过期，尝试自动刷新")
+
+    # Token 无效，用保存的凭证重新登录
+    if not project.platform_username or not project.platform_password_enc:
+        raise HTTPException(401, "Token已过期，请在项目设置中重新连接平台")
+
+    try:
+        password = base64.b64decode(project.platform_password_enc).decode()
+        client = APaaSClient(base_url=project.platform_url, tenant_id=project.platform_tenant_id)
+        result = await client.login(project.platform_username, password)
+        new_token = result.get("token", "")
+        if not new_token:
+            raise HTTPException(401, "自动刷新 token 失败，请重新连接平台")
+
+        # 更新 token
+        project.platform_token = new_token
+        await db.commit()
+        logger.info(f"项目 {project.id} token 自动刷新成功")
+        return new_token
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"自动刷新 token 失败: {e}")
+        raise HTTPException(401, "Token已过期且自动刷新失败，请在项目设置中重新连接平台")
+
+
 # ============================================================
 # 请求/响应模型
 # ============================================================
@@ -279,10 +319,12 @@ async def connect_project_platform(
         user_info = result.get("user", {})
 
         # 更新 Project 表
+        import base64
         project.platform_url = req.base_url
         project.platform_tenant_id = req.tenant_id
         project.platform_token = token
         project.platform_username = req.username
+        project.platform_password_enc = base64.b64encode(req.password.encode()).decode()
 
         # 同步更新 User 表（generation_steps 等核心功能使用 User.apaas_token）
         user_result = await db.execute(select(User).where(User.id == ctx.user.id))
