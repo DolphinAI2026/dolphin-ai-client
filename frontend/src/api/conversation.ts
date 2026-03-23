@@ -1,6 +1,17 @@
 import request from '@/utils/request'
 import type { Conversation, ConversationCreate, Message } from '@/types'
 
+export interface ConversationWithApp {
+  id: number
+  title: string
+  agent_type: string
+  status: string
+  created_at: string
+  updated_at: string
+  app_id?: number
+  app_name?: string
+}
+
 export const conversationApi = {
   create(data: ConversationCreate) {
     return request.post<any, Conversation>('/conversations', data)
@@ -16,5 +27,10 @@ export const conversationApi = {
 
   getMessages(conversationId: number) {
     return request.get<any, Message[]>(`/conversations/${conversationId}/messages`)
+  },
+
+  /** 获取带应用信息的对话列表（用于对话历史） */
+  listWithApps(params?: { agent_type?: string }) {
+    return request.get<any, ConversationWithApp[]>('/conversations/with-apps/list', { params })
   }
 }

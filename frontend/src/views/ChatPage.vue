@@ -28,6 +28,34 @@
           </button>
         </div>
 
+        <!-- 对话历史栏 -->
+        <div class="conversation-history-bar">
+          <div class="conv-history-left">
+            <span class="conv-history-label">对话历史</span>
+            <el-select
+              v-model="selectedConversationId"
+              placeholder="选择对话..."
+              class="conv-history-select"
+              :teleported="false"
+              @change="onConversationSwitch"
+              popper-class="conv-history-popper"
+            >
+              <el-option
+                v-for="conv in conversationList"
+                :key="conv.id"
+                :value="conv.id"
+                :label="getConversationLabel(conv)"
+              >
+                <div class="conv-option-row">
+                  <span class="conv-option-title">{{ getConversationLabel(conv) }}</span>
+                  <span class="conv-option-time">{{ formatConvTime(conv.created_at) }}</span>
+                </div>
+              </el-option>
+            </el-select>
+          </div>
+          <button class="conv-new-btn" @click="startNewConversation">+ 新建对话</button>
+        </div>
+
         <div class="messages" ref="messagesRef">
           <div v-for="(msg, idx) in messages" :key="idx" class="chat-bubble" :class="msg.role">
             <div class="bubble-inner">
@@ -591,7 +619,7 @@ import { usePreviewStore } from '@/stores/preview'
 import { useUserStore } from '@/stores/user'
 import { applicationApi } from '@/api/application'
 import { incrementalApi, type DiffResponse, type ExecuteResponse } from '@/api/incremental'
-import { conversationApi } from '@/api/conversation'
+import { conversationApi, type ConversationWithApp } from '@/api/conversation'
 import { projectsApi } from '@/api/projects'
 import type { Project, ProjectMember } from '@/api/projects'
 import ConnectModal from '@/components/ConnectModal.vue'
@@ -950,6 +978,118 @@ const removeDict = (idx: number) => {
 const conversationId = ref<number | null>(null)
 const existingAppId = ref<number | null>(null)  // 从"继续完善"进来时，关联的已有应用ID
 const generating = ref(false)
+
+// ── 对话历史 ──
+const conversationList = ref<ConversationWithApp[]>([])
+const selectedConversationId = ref<number | null>(null)
+
+const getConversationLabel = (conv: ConversationWithApp) => {
+  if (conv.app_name) return conv.app_name
+  const title = conv.title || '新对话'
+  return title.length > 30 ? title.slice(0, 30) + '...' : title
+}
+
+const formatConvTime = (dateStr: string) => {
+  if (!dateStr) return ''
+  const d = new Date(dateStr)
+  const now = new Date()
+  const diff = now.getTime() - d.getTime()
+  if (diff < 60000) return '刚刚'
+  if (diff < 3600000) return `${Math.floor(diff / 60000)} 分钟前`
+  if (diff < 86400000) return '今天'
+  if (diff < 172800000) return '昨天'
+  return `${d.getMonth() + 1}/${d.getDate()}`
+}
+
+const fetchConversationList = async () => {
+  try {
+    conversationList.value = await conversationApi.listWithApps()
+    // 同步选中状态
+    if (conversationId.value) {
+      selectedConversationId.value = conversationId.value
+    }
+  } catch (e) {
+    console.error('获取对话列表失败:', e)
+  }
+}
+
+const loadConversation = async (cid: number) => {
+  conversationId.value = cid
+  selectedConversationId.value = cid
+
+  // 重置预览状态
+  store.reset()
+  messages.splice(0, messages.length)
+
+  try {
+    const historyMessages = await conversationApi.getMessages(cid)
+    if (historyMessages && historyMessages.length > 0) {
+      for (const msg of historyMessages) {
+        if (msg.role === 'system') {
+          extractPreviewData(msg.content)
+          continue
+        }
+        messages.push({
+          id: msg.id,
+          role: msg.role as any,
+          agent: msg.role === 'assistant' ? 'builder' : undefined,
+          content: msg.content,
+          created_at: msg.created_at
+        })
+        if (msg.role === 'assistant') {
+          extractPreviewData(msg.content)
+        }
+      }
+      scrollToBottom()
+    } else {
+      // 空对话，显示欢迎消息
+      messages.push({ id: 0, role: 'assistant', agent: 'builder', content: '你好！我是 aPaaS 搭建智能体，可以帮你通过对话的方式在得帆云平台上快速搭建应用。\n\n你可以告诉我想要创建什么系统，我会帮你理清需求并自动生成。', created_at: '' })
+    }
+
+    // 恢复关联的应用配置
+    if (!store.preview.appName && store.preview.models.length === 0) {
+      try {
+        const apps = await applicationApi.list() as any[]
+        const linkedApp = apps.find((a: any) => a.conversation_id === cid && a.config_preview)
+        if (linkedApp?.config_preview) {
+          const data = linkedApp.config_preview.data || linkedApp.config_preview
+          store.preview.appName = data.appName || ''
+          store.preview.models = data.models || []
+          store.preview.dicts = data.dicts || []
+          store.preview.roles = data.roles || []
+          store.preview.workflows = data.workflows || []
+          store.preview.permissions = data.permissions || []
+          store.currentApp = { name: store.preview.appName, status: 'ready' }
+          if (linkedApp.id && typeof linkedApp.id === 'number') {
+            existingAppId.value = linkedApp.id
+          }
+        }
+      } catch { /* ignore */ }
+    }
+
+    // 更新 URL
+    router.replace(`/chat/${cid}`)
+  } catch (e) {
+    console.error('加载对话失败:', e)
+    messages.push({ id: 0, role: 'assistant', agent: 'builder', content: '加载对话历史失败，请重试。', created_at: '' })
+  }
+}
+
+const onConversationSwitch = (newId: number) => {
+  if (newId && newId !== conversationId.value) {
+    loadConversation(newId)
+  }
+}
+
+const startNewConversation = () => {
+  conversationId.value = null
+  selectedConversationId.value = null
+  existingAppId.value = null
+  store.reset()
+  messages.splice(0, messages.length)
+  messages.push({ id: 0, role: 'assistant', agent: 'builder', content: '你好！我是 aPaaS 搭建智能体，可以帮你通过对话的方式在得帆云平台上快速搭建应用。\n\n你可以告诉我想要创建什么系统，我会帮你理清需求并自动生成。\n\n比如：\n• "我想做一个客户管理系统"\n• "帮我搭建一个项目管理应用"\n• "创建一个售后服务工单系统"', created_at: '' })
+  router.replace('/chat')
+}
 
 // ── 文档版本 ──
 interface DocVersion {
@@ -2137,8 +2277,11 @@ const createConversation = async () => {
   if (res.ok) {
     const data = await res.json()
     conversationId.value = data.id
+    selectedConversationId.value = data.id
     // 更新 URL，刷新后能恢复对话
     router.replace(`/chat/${data.id}`)
+    // 刷新对话列表
+    fetchConversationList()
   }
 }
 
@@ -2382,6 +2525,14 @@ onMounted(async () => {
     })
   }
 
+  // 同步对话历史选中
+  if (conversationId.value) {
+    selectedConversationId.value = conversationId.value
+  }
+
+  // 加载对话历史列表
+  fetchConversationList()
+
   // 加载项目列表
   fetchProjects()
 })
@@ -2463,6 +2614,71 @@ watch(existingAppId, (id) => {
 .active-dot { width: 6px; height: 6px; border-radius: 50%; background: #10b981; }
 
 /* 消息区 */
+/* ── 对话历史栏 ── */
+.conversation-history-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 16px; flex-shrink: 0;
+  background: #141418; border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.conv-history-left {
+  display: flex; align-items: center; gap: 10px;
+}
+.conv-history-label {
+  font-size: 12px; color: rgba(255,255,255,0.4); white-space: nowrap; font-weight: 500;
+}
+.conv-history-select {
+  width: 280px;
+}
+.conv-history-select :deep(.el-input__wrapper) {
+  background: #1e1e24 !important; border: 1px solid rgba(255,255,255,0.08) !important;
+  box-shadow: none !important; border-radius: 8px !important; height: 30px;
+}
+.conv-history-select :deep(.el-input__inner) {
+  color: rgba(255,255,255,0.8) !important; font-size: 12px !important;
+}
+.conv-history-select :deep(.el-input__suffix) {
+  color: rgba(255,255,255,0.3) !important;
+}
+.conv-history-select :deep(.el-select-dropdown) {
+  background: #1e1e24 !important; border: 1px solid rgba(255,255,255,0.1) !important;
+  border-radius: 10px !important;
+}
+.conv-history-select :deep(.el-select-dropdown__item) {
+  color: rgba(255,255,255,0.7) !important; font-size: 12px !important;
+  padding: 6px 12px !important;
+}
+.conv-history-select :deep(.el-select-dropdown__item.is-selected) {
+  color: #a78bfa !important; font-weight: 600;
+}
+.conv-history-select :deep(.el-select-dropdown__item:hover),
+.conv-history-select :deep(.el-select-dropdown__item.hover) {
+  background: rgba(124,58,237,0.12) !important;
+}
+.conv-history-select :deep(.el-popper.is-light) {
+  background: #1e1e24 !important; border: 1px solid rgba(255,255,255,0.1) !important;
+}
+.conv-history-select :deep(.el-popper.is-light .el-popper__arrow::before) {
+  background: #1e1e24 !important; border-color: rgba(255,255,255,0.1) !important;
+}
+.conv-option-row {
+  display: flex; justify-content: space-between; align-items: center; width: 100%; gap: 12px;
+}
+.conv-option-title {
+  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.conv-option-time {
+  flex-shrink: 0; font-size: 11px; color: rgba(255,255,255,0.3);
+}
+.conv-new-btn {
+  all: unset; cursor: pointer; font-size: 12px; font-weight: 500;
+  color: #a78bfa; padding: 4px 12px; border-radius: 8px;
+  border: 1px solid rgba(167,139,250,0.25); transition: all 0.2s;
+  white-space: nowrap;
+}
+.conv-new-btn:hover {
+  background: rgba(124,58,237,0.12); border-color: rgba(167,139,250,0.4);
+}
+
 .messages { flex: 1; overflow-y: auto; padding: 16px; background: #0a0a0a; }
 .chat-bubble { margin-bottom: 16px; animation: fadeUp 0.3s ease-out; }
 .chat-bubble.user { display: flex; justify-content: flex-end; }

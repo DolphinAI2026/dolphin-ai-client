@@ -1,9 +1,10 @@
-from typing import Annotated
-from fastapi import APIRouter, Depends, HTTPException
+from typing import Annotated, Optional
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy import select, desc, asc
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
-from app.models import User, Conversation, Message
+from app.models import User, Conversation, Message, Application
 from app.schemas import ConversationCreate, ConversationResponse, MessageResponse
 from app.deps import get_auth_context, AuthContext
 
@@ -125,3 +126,66 @@ async def list_messages(
         )
         for msg in result.scalars().all()
     ]
+
+
+# ── 带应用信息的对话列表（用于对话历史面板）──
+
+class ConversationWithAppResponse(BaseModel):
+    id: int
+    title: str
+    agent_type: str
+    status: str
+    created_at: str
+    updated_at: str
+    app_id: Optional[int] = None
+    app_name: Optional[str] = None
+
+
+@router.get("/with-apps/list", response_model=list[ConversationWithAppResponse])
+async def list_conversations_with_apps(
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    agent_type: Optional[str] = Query(None),
+):
+    """获取当前用户的所有对话，并附带关联的应用信息"""
+    query = (
+        select(Conversation)
+        .where(
+            Conversation.user_id == ctx.user.id,
+            Conversation.tenant_id == ctx.tenant_id,
+        )
+        .order_by(desc(Conversation.updated_at))
+    )
+    if agent_type:
+        query = query.where(Conversation.agent_type == agent_type)
+
+    result = await db.execute(query)
+    conversations = result.scalars().all()
+
+    if not conversations:
+        return []
+
+    # 批量查询关联的应用
+    conv_ids = [c.id for c in conversations]
+    app_result = await db.execute(
+        select(Application).where(Application.conversation_id.in_(conv_ids))
+    )
+    apps_by_conv: dict[int, Application] = {}
+    for app in app_result.scalars().all():
+        apps_by_conv[app.conversation_id] = app
+
+    items = []
+    for conv in conversations:
+        app = apps_by_conv.get(conv.id)
+        items.append(ConversationWithAppResponse(
+            id=conv.id,
+            title=conv.title,
+            agent_type=conv.agent_type,
+            status=conv.status,
+            created_at=str(conv.created_at),
+            updated_at=str(conv.updated_at),
+            app_id=app.id if app else None,
+            app_name=app.app_name if app else None,
+        ))
+
+    return items
