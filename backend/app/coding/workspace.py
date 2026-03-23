@@ -313,29 +313,14 @@ class WorkspaceManager:
 
         ws_path = WORKSPACE_ROOT / ws_id
 
-        # 根据 debug_mode 计算目标 URL
+        # 根据 debug_mode 计算目标 URL — 简单模式：打开平台/应用首页，用户自己导航
         _base_url = platform_url.replace("/platform/", "/").rstrip("/") + "/"
         if debug_mode == "app" and app_code:
-            target_url = f"{_base_url}app/dragonfly/{app_code}/{tenant_id}/app/app-page?appId={app_id}"
-        elif debug_mode == "platform" and form_id and menu_id:
-            # 直接打开指定表单的设计器
-            target_url = f"{platform_url}{tenant_id}/default/data-model-fn-config?appId={app_id}&menuId={menu_id}&formId={form_id}"
-        elif debug_mode == "platform" and apaas_token:
-            # 自动创建测试表单
-            try:
-                _backend_url = platform_backend_url or platform_url.replace("/platform/", "/backend")
-                auto_form_id, auto_menu_id = await self._ensure_debug_form(
-                    ws_id=ws_id, ws_path=ws_path,
-                    app_id=app_id, component_name=component_name,
-                    apaas_token=apaas_token, platform_backend_url=_backend_url,
-                    tenant_id=tenant_id,
-                )
-                target_url = f"{platform_url}{tenant_id}/default/data-model-fn-config?appId={app_id}&menuId={auto_menu_id}&formId={auto_form_id}"
-            except Exception as e:
-                logger.warning(f"[DEBUG] 自动创建测试表单失败，回退到平台首页: {e}")
-                target_url = platform_url
+            # 应用调试 → 打开应用首页
+            target_url = f"{_base_url}app/dragonfly/{app_code}/"
         else:
-            target_url = platform_url
+            # 平台调试 → 打开平台首页（用户自己选择表单）
+            target_url = f"{platform_url}account/login"
 
         # 生成 debug 脚本
         debug_script = f"""
@@ -549,29 +534,11 @@ const INJECT_CODE = `(function(params) {{
         login_url = f"{platform_url}account/login"
 
         if debug_mode == "app" and app_code:
-            # 应用 debug（运行态）— 打开应用首页，用户自己导航到要测试的页面
+            # 应用调试 → 打开应用首页
             form_url = f"{_base_url}app/dragonfly/{app_code}/"
-        elif debug_mode == "platform" and form_id and menu_id:
-            # 平台 debug（设计态）— 直接打开指定表单的设计器
-            form_url = f"{platform_url}{tenant_id}/default/data-model-fn-config?appId={app_id}&menuId={menu_id}&formId={form_id}"
-        elif debug_mode == "platform" and apaas_token:
-            # 平台 debug（设计态）— 没有指定表单，自动创建测试表单
-            try:
-                _backend_url = platform_backend_url or platform_url.replace("/platform/", "/backend")
-                auto_form_id, auto_menu_id = await self._ensure_debug_form(
-                    ws_id=ws_id, ws_path=ws_path,
-                    app_id=app_id, component_name=component_name,
-                    apaas_token=apaas_token, platform_backend_url=_backend_url,
-                    tenant_id=tenant_id,
-                )
-                form_url = f"{platform_url}{tenant_id}/default/data-model-fn-config?appId={app_id}&menuId={auto_menu_id}&formId={auto_form_id}"
-                logger.info(f"[DEBUG] 自动创建表单，导航到: {form_url}")
-            except Exception as e:
-                logger.warning(f"[DEBUG] 自动创建测试表单失败，回退到表单管理页: {e}")
-                form_url = f"{platform_url}{tenant_id}/admin/app-store/edit-app?appId={app_id}&currentStepIndex=2"
         else:
-            # 平台 debug（设计态）— 打开应用的表单管理页，用户选择要配置的表单
-            form_url = f"{platform_url}{tenant_id}/admin/app-store/edit-app?appId={app_id}&currentStepIndex=2"
+            # 平台调试 → 打开平台登录页，用户自己导航到表单设计器
+            form_url = login_url
 
         debug_script = f"""
 const path = require('path')
