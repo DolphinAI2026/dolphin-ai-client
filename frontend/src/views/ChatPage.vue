@@ -2617,21 +2617,21 @@ watch(existingAppId, (id) => {
 /* ── 对话历史栏 ── */
 .conversation-history-bar {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 6px 16px; flex-shrink: 0;
-  background: #141418; border-bottom: 1px solid rgba(255,255,255,0.06);
+  padding: 4px 16px; flex-shrink: 0;
+  background: transparent; border-bottom: 1px solid rgba(255,255,255,0.04);
 }
 .conv-history-left {
   display: flex; align-items: center; gap: 10px;
 }
 .conv-history-label {
-  font-size: 12px; color: rgba(255,255,255,0.4); white-space: nowrap; font-weight: 500;
+  font-size: 11px; color: rgba(255,255,255,0.3); white-space: nowrap; font-weight: 400;
 }
 .conv-history-select {
-  width: 280px;
+  width: 300px;
 }
 .conv-history-select :deep(.el-input__wrapper) {
-  background: #1e1e24 !important; border: 1px solid rgba(255,255,255,0.08) !important;
-  box-shadow: none !important; border-radius: 8px !important; height: 30px;
+  background: transparent !important; border: 1px solid rgba(255,255,255,0.06) !important;
+  box-shadow: none !important; border-radius: 8px !important; height: 28px;
 }
 .conv-history-select :deep(.el-input__inner) {
   color: rgba(255,255,255,0.8) !important; font-size: 12px !important;
@@ -2670,16 +2670,16 @@ watch(existingAppId, (id) => {
   flex-shrink: 0; font-size: 11px; color: rgba(255,255,255,0.3);
 }
 .conv-new-btn {
-  all: unset; cursor: pointer; font-size: 12px; font-weight: 500;
-  color: #a78bfa; padding: 4px 12px; border-radius: 8px;
-  border: 1px solid rgba(167,139,250,0.25); transition: all 0.2s;
+  all: unset; cursor: pointer; font-size: 11px; font-weight: 400;
+  color: rgba(255,255,255,0.4); padding: 3px 10px; border-radius: 6px;
+  border: 1px solid rgba(255,255,255,0.06); transition: all 0.2s;
   white-space: nowrap;
 }
 .conv-new-btn:hover {
-  background: rgba(124,58,237,0.12); border-color: rgba(167,139,250,0.4);
+  color: #a78bfa; background: rgba(124,58,237,0.08); border-color: rgba(167,139,250,0.2);
 }
 
-.messages { flex: 1; overflow-y: auto; padding: 16px; background: #0a0a0a; }
+.messages { flex: 1; overflow-y: auto; padding: 16px; background: #141418; }
 .chat-bubble { margin-bottom: 16px; animation: fadeUp 0.3s ease-out; }
 .chat-bubble.user { display: flex; justify-content: flex-end; }
 .chat-bubble.assistant { display: flex; justify-content: flex-start; }
