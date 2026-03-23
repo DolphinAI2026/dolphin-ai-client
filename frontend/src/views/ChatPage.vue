@@ -245,7 +245,7 @@
               </div>
               <div class="field-list">
                 <div v-for="(f, fi) in m.fields" :key="fi" class="field-row">
-                  <div class="field-left"><span class="field-icon">{{ f.icon }}</span><span class="field-name">{{ f.name }}</span><span v-if="f.required" class="req">*</span></div>
+                  <div class="field-left"><span class="field-icon" :title="f.type">{{ getFieldIcon(f) }}</span><span class="field-name">{{ f.name }}</span><span v-if="f.required" class="req">*</span></div>
                   <div class="field-right"><span v-if="f.dict" class="ftag dict">{{ f.dict }}</span><span v-if="f.ref" class="ftag ref">→{{ typeof f.ref === 'object' ? f.ref.model : f.ref }}</span><span class="ftype">{{ f.type }}</span></div>
                 </div>
               </div>
@@ -713,6 +713,24 @@ const goToApp = (app: any) => {
   }
 }
 
+// 字段类型图标映射（兜底，防止后端返回中文导致竖排）
+const FIELD_ICON_MAP: Record<string, string> = {
+  '单据号': '#', '单行输入': 'T', '多行输入': '¶',
+  '手机号码': 'P', '电子邮箱': '@', '下拉单选': '▼',
+  '下拉多选': '☰', '数据单选': '⇢', '数据多选': '⇢', '日期时间': 'D',
+  '金额': '¥', '数字': 'N', '附件上传': '⊕',
+  '开关': '⊘', '人员选择': '⊙', '部门选择': '⊙',
+  '地理位置': '◎', '子表': '▦', '地区地址': '◎',
+  '单选框': '○', '多选框': '☐', '富文本': 'R',
+  '超链接': '⊕', '证件号': '#', '签名': 'S',
+}
+const getFieldIcon = (f: any) => {
+  // 如果 icon 是单字符或已是合法符号，直接用
+  if (f.icon && f.icon.length <= 2) return f.icon
+  // 否则从 type 映射
+  return FIELD_ICON_MAP[f.type] || FIELD_ICON_MAP[f.icon] || 'T'
+}
+
 const formatDate = (dateStr: string) => {
   if (!dateStr) return ''
   const d = new Date(dateStr)
@@ -733,7 +751,7 @@ const agents: Record<string, { name: string; icon: string }> = {
 const tabs = [
   { k: 'overview', l: '概览' }, { k: 'models', l: '模型' },
   { k: 'forms', l: '表单' }, { k: 'workflow', l: '流程' }, { k: 'perms', l: '权限' },
-  { k: 'docs', l: '文档' }
+  { k: 'docs', l: '文档' },
 ]
 
 const messages = reactive<Message[]>([
