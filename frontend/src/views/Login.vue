@@ -1,100 +1,121 @@
 <template>
-  <div class="login-container">
-    <div class="login-box">
-      <div class="login-header">
-        <div class="logo-mark">A</div>
-        <h1 class="brand-title">aPaaS Builder AI</h1>
-        <p class="brand-desc">得帆云智能搭建助手</p>
+  <div class="login-page">
+    <!-- 左侧品牌区 -->
+    <div class="brand-panel">
+      <div class="brand-content">
+        <div class="brand-logo">
+          <div class="logo-mark">A</div>
+          <span class="logo-text">aPaaS Builder AI</span>
+        </div>
+        <h1 class="brand-headline">企业级 AI 低代码搭建平台</h1>
+        <p class="brand-sub">用对话驱动应用构建，让开发效率提升 10 倍</p>
+        <ul class="feature-list">
+          <li><span class="dot"></span>对话式应用搭建</li>
+          <li><span class="dot"></span>AI 驱动组件开发</li>
+          <li><span class="dot"></span>智能文档解析</li>
+          <li><span class="dot"></span>一键部署到平台</li>
+        </ul>
       </div>
+      <div class="brand-footer">
+        <span>&copy; 2024 aPaaS Builder AI</span>
+      </div>
+    </div>
 
-      <el-tabs v-model="activeTab" class="login-tabs">
-        <el-tab-pane label="登录" name="login">
-          <el-form :model="loginForm" :rules="loginRules" ref="loginFormRef" @submit.prevent="handleLogin">
-            <el-form-item prop="username">
-              <el-input
-                v-model="loginForm.username"
-                placeholder="请输入用户名"
-                size="large"
-                prefix-icon="User"
-                clearable
-              />
-            </el-form-item>
+    <!-- 右侧登录区 -->
+    <div class="form-panel">
+      <div class="form-card">
+        <h2 class="form-title">欢迎使用</h2>
+        <p class="form-subtitle">登录或注册以开始使用 aPaaS Builder AI</p>
 
-            <el-form-item prop="password">
-              <el-input
-                v-model="loginForm.password"
-                type="password"
-                placeholder="请输入密码"
-                size="large"
-                prefix-icon="Lock"
-                show-password
-                @keyup.enter="handleLogin"
-              />
-            </el-form-item>
+        <el-tabs v-model="activeTab" class="login-tabs">
+          <el-tab-pane label="登录" name="login">
+            <el-form :model="loginForm" :rules="loginRules" ref="loginFormRef" @submit.prevent="handleLogin">
+              <el-form-item prop="username">
+                <el-input
+                  v-model="loginForm.username"
+                  placeholder="请输入用户名"
+                  size="large"
+                  prefix-icon="User"
+                  clearable
+                />
+              </el-form-item>
 
-            <el-form-item>
-              <el-button
-                type="primary"
-                size="large"
-                :loading="loginLoading"
-                @click="handleLogin"
-                class="submit-btn"
-              >
-                登录
-              </el-button>
-            </el-form-item>
-          </el-form>
-        </el-tab-pane>
+              <el-form-item prop="password">
+                <el-input
+                  v-model="loginForm.password"
+                  type="password"
+                  placeholder="请输入密码"
+                  size="large"
+                  prefix-icon="Lock"
+                  show-password
+                  @keyup.enter="handleLogin"
+                />
+              </el-form-item>
 
-        <el-tab-pane label="注册" name="register">
-          <el-form :model="registerForm" :rules="registerRules" ref="registerFormRef" @submit.prevent="handleRegister">
-            <el-form-item prop="username">
-              <el-input
-                v-model="registerForm.username"
-                placeholder="请输入用户名"
-                size="large"
-                prefix-icon="User"
-                clearable
-              />
-            </el-form-item>
+              <el-form-item>
+                <el-button
+                  type="primary"
+                  size="large"
+                  :loading="loginLoading"
+                  @click="handleLogin"
+                  class="submit-btn"
+                >
+                  登录
+                </el-button>
+              </el-form-item>
+            </el-form>
+          </el-tab-pane>
 
-            <el-form-item prop="password">
-              <el-input
-                v-model="registerForm.password"
-                type="password"
-                placeholder="请输入密码（至少6位）"
-                size="large"
-                prefix-icon="Lock"
-                show-password
-              />
-            </el-form-item>
+          <el-tab-pane label="注册" name="register">
+            <el-form :model="registerForm" :rules="registerRules" ref="registerFormRef" @submit.prevent="handleRegister">
+              <el-form-item prop="username">
+                <el-input
+                  v-model="registerForm.username"
+                  placeholder="请输入用户名"
+                  size="large"
+                  prefix-icon="User"
+                  clearable
+                />
+              </el-form-item>
 
-            <el-form-item prop="confirmPassword">
-              <el-input
-                v-model="registerForm.confirmPassword"
-                type="password"
-                placeholder="请确认密码"
-                size="large"
-                prefix-icon="Lock"
-                show-password
-                @keyup.enter="handleRegister"
-              />
-            </el-form-item>
+              <el-form-item prop="password">
+                <el-input
+                  v-model="registerForm.password"
+                  type="password"
+                  placeholder="请输入密码（至少6位）"
+                  size="large"
+                  prefix-icon="Lock"
+                  show-password
+                />
+              </el-form-item>
 
-            <el-form-item>
-              <el-button
-                type="primary"
-                size="large"
-                :loading="registerLoading"
-                @click="handleRegister"
-                class="submit-btn"
-              >
-                注册
-              </el-button>
-            </el-form-item>
-          </el-form>
-        </el-tab-pane>
-      </el-tabs>
+              <el-form-item prop="confirmPassword">
+                <el-input
+                  v-model="registerForm.confirmPassword"
+                  type="password"
+                  placeholder="请确认密码"
+                  size="large"
+                  prefix-icon="Lock"
+                  show-password
+                  @keyup.enter="handleRegister"
+                />
+              </el-form-item>
+
+              <el-form-item>
+                <el-button
+                  type="primary"
+                  size="large"
+                  :loading="registerLoading"
+                  @click="handleRegister"
+                  class="submit-btn"
+                >
+                  注册
+                </el-button>
+              </el-form-item>
+            </el-form>
+          </el-tab-pane>
+        </el-tabs>
+      </div>
     </div>
   </div>
 </template>
@@ -214,17 +235,142 @@ const handleRegister = async () => {
 </script>
 
 <style scoped>
-/* ── Dark theme login ── */
-.login-container {
+/* ── Page layout: left brand + right form ── */
+.login-page {
   min-height: 100vh;
   display: flex;
-  justify-content: center;
-  align-items: center;
-  background: #0a0a0a;
-  padding: 20px;
 }
 
-.login-box {
+/* ── Left brand panel ── */
+.brand-panel {
+  flex: 0 0 44%;
+  background: linear-gradient(160deg, #7c3aed 0%, #6366f1 100%);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 48px 56px;
+  position: relative;
+  overflow: hidden;
+}
+
+.brand-panel::before {
+  content: '';
+  position: absolute;
+  top: -120px;
+  right: -120px;
+  width: 360px;
+  height: 360px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.brand-panel::after {
+  content: '';
+  position: absolute;
+  bottom: -80px;
+  left: -80px;
+  width: 260px;
+  height: 260px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.brand-content {
+  position: relative;
+  z-index: 1;
+  margin-top: 32px;
+}
+
+.brand-logo {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 48px;
+}
+
+.logo-mark {
+  width: 48px;
+  height: 48px;
+  background: rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(8px);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -1px;
+  flex-shrink: 0;
+}
+
+.logo-text {
+  font-size: 20px;
+  font-weight: 700;
+  color: #fff;
+  letter-spacing: -0.3px;
+}
+
+.brand-headline {
+  margin: 0 0 16px 0;
+  font-size: 34px;
+  font-weight: 700;
+  color: #fff;
+  line-height: 1.3;
+  letter-spacing: -0.5px;
+}
+
+.brand-sub {
+  margin: 0 0 48px 0;
+  font-size: 16px;
+  color: rgba(255, 255, 255, 0.75);
+  line-height: 1.6;
+}
+
+.feature-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.feature-list li {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 15px;
+  color: rgba(255, 255, 255, 0.9);
+  font-weight: 500;
+}
+
+.feature-list .dot {
+  width: 8px;
+  height: 8px;
+  background: rgba(255, 255, 255, 0.6);
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.brand-footer {
+  position: relative;
+  z-index: 1;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+/* ── Right form panel ── */
+.form-panel {
+  flex: 1;
+  background: #0a0a0a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+}
+
+.form-card {
   width: 100%;
   max-width: 420px;
   background: #111;
@@ -233,46 +379,22 @@ const handleRegister = async () => {
   padding: 40px;
 }
 
-/* ── Header / Logo ── */
-.login-header {
-  text-align: center;
-  margin-bottom: 32px;
-}
-
-.logo-mark {
-  width: 52px;
-  height: 52px;
-  margin: 0 auto 18px;
-  background: linear-gradient(135deg, #7c3aed, #6366f1);
-  border-radius: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #fff;
-  font-size: 24px;
-  font-weight: 700;
-  letter-spacing: -1px;
-}
-
-.brand-title {
-  margin: 0 0 6px 0;
+.form-title {
+  margin: 0 0 8px 0;
   font-size: 26px;
   font-weight: 700;
-  background: linear-gradient(135deg, #c4b5fd, #7c3aed);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  color: #fff;
 }
 
-.brand-desc {
-  margin: 0;
+.form-subtitle {
+  margin: 0 0 28px 0;
   font-size: 14px;
   color: rgba(255, 255, 255, 0.4);
 }
 
 /* ── Tabs ── */
 .login-tabs {
-  margin-top: 24px;
+  margin-top: 0;
 }
 
 .login-tabs :deep(.el-tabs__header) {
@@ -370,5 +492,42 @@ const handleRegister = async () => {
 .submit-btn:active {
   transform: translateY(0);
   box-shadow: none;
+}
+
+/* ── Responsive: stack on small screens ── */
+@media (max-width: 900px) {
+  .login-page {
+    flex-direction: column;
+  }
+
+  .brand-panel {
+    flex: none;
+    padding: 32px 28px;
+    min-height: auto;
+  }
+
+  .brand-headline {
+    font-size: 24px;
+  }
+
+  .brand-sub {
+    margin-bottom: 24px;
+  }
+
+  .feature-list {
+    gap: 12px;
+  }
+
+  .brand-footer {
+    display: none;
+  }
+
+  .form-panel {
+    padding: 24px;
+  }
+
+  .form-card {
+    padding: 28px;
+  }
 }
 </style>
