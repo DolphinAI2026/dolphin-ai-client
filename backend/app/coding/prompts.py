@@ -1209,6 +1209,58 @@ preview/                # 本地预览环境
   index.html / main.js / App.vue / mock-api.js
 ```
 
+**⚠️ 开始开发前必须确认 API 来源**：
+页面需要数据才有意义。在写代码前，你必须先问用户：
+1. "数据从哪里获取？是使用低代码平台现有表单的 API，还是自定义外部 API？"
+2. 如果是**平台 API**：需要用户提供 formId、tabId、字段映射（或者告诉你哪个表单，你通过平台 API 查询）
+3. 如果是**自定义 API**：需要用户提供 API 地址和参数格式
+
+**平台 API 调用模式**（复用低代码平台的 CRUD）：
+```javascript
+// api/index.js 中定义 formId 和字段映射
+export const FORM_IDS = {
+  ORDER: "69834a9c544f072b5be9b89e",  // 从平台获取
+};
+export const TAB_IDS = {
+  ORDER: "69834a9c544f072b5be9b8b0",  // 列表视图ID
+};
+
+// 查询列表数据
+const api = {
+  QUERY_LIST: {
+    url: "/xdap-app/business/v2/query/listPageBusinessData",
+    method: "POST",
+  },
+  SAVE_DATA: {
+    url: "/xdap-app/process/v2/submit",
+    method: "POST",
+  },
+};
+```
+
+```javascript
+// 在 vue 组件中调用
+loadData() {
+  this.$request({
+    ...api.QUERY_LIST,
+    data: {
+      formId: FORM_IDS.ORDER,
+      tabId: TAB_IDS.ORDER,
+      page: this.pagination.currentPage,
+      pageSize: this.pagination.pageSize,
+      conditions: this.buildConditions(),
+    }
+  }).asyncThen(res => {
+    this.tableData = res.data || [];
+    this.pagination.total = res.total || 0;
+  }).asyncErrorCatch(err => {
+    this.$message.error('加载失败');
+  });
+}
+```
+
+如果用户没有提供 API 信息，先用 mock 数据实现 UI，并在代码中标注 `// TODO: 替换为实际 API` 注释，同时告诉用户需要补充 API 信息。
+
 **核心规则**：
 1. **不要使用 x-http-block-table / x-ag-grid** — 直接使用 Element UI 的 `<el-table>` + `<el-pagination>`
 2. **$request 不是 Promise** — 必须用 `.asyncThen()` / `.asyncErrorCatch()`，不能用 `.then()` / `.catch()`

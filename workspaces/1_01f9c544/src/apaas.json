@@ -1,0 +1,16 @@
+{
+  "entry": "index.js",
+  "templateType": "FORM_COMPONENT",
+  "customWidgetList": [
+    {
+      "code": "FORM_CUSTOM_COMPONENT_STAR_RATING",
+      "text": "star-rating",
+      "description": "star-rating"
+    }
+  ],
+  "copyAssets": [
+    "public/form-component/form-component-star-rating"
+  ],
+  "router": {},
+  "outputName": "form-component-star-rating"
+}
