@@ -2,11 +2,21 @@ import { defineStore } from 'pinia'
 import { ref, reactive, computed } from 'vue'
 import type { CodingScene, GeneratedFile, CodingConversation, WorkspaceInfo } from '@/api/coding'
 
-export interface CodingMessage {
+export interface PipelineStep {
+  name: string
+  label: string
+  status: 'pending' | 'running' | 'done' | 'error'
+  message?: string
+}
+
+export interface ChatMessage {
   id?: number
   role: 'user' | 'assistant' | 'system'
   content: string
   files?: GeneratedFile[]
+  pipelineSteps?: PipelineStep[]
+  textContent?: string
+  fileNames?: string[]
   created_at?: string
 }
 
@@ -17,13 +27,14 @@ export const useCodingStore = defineStore('coding', () => {
 
   // 工作区
   const workspace = ref<WorkspaceInfo | null>(null)
-  const workspaceFiles = ref<string[]>([])       // 工作区文件路径列表
-  const workspaceStatus = ref<string>('')         // creating | installing | ready | building | error
+  const workspaceFiles = ref<string[]>([])
+  const workspaceStatus = ref<string>('')
+  const workspacePath = ref<string | null>(null)
 
   // 对话
   const conversationId = ref<number | null>(null)
   const conversations = ref<CodingConversation[]>([])
-  const messages = ref<CodingMessage[]>([])
+  const messages = ref<ChatMessage[]>([])
 
   // 生成的文件（编辑器中展示的文件内容）
   const generatedFiles = ref<GeneratedFile[]>([])
@@ -32,7 +43,15 @@ export const useCodingStore = defineStore('coding', () => {
 
   // 状态
   const isGenerating = ref(false)
+  const isProcessing = ref(false)
   const streamContent = ref('')
+
+  // Pipeline
+  const currentPipelineSteps = ref<PipelineStep[]>([])
+
+  // Serve
+  const serveUrl = ref<string | null>(null)
+  const serveRunning = ref(false)
 
   // 当前选中文件的内容
   const activeFileContent = computed(() => {
@@ -53,14 +72,6 @@ export const useCodingStore = defineStore('coding', () => {
     workspace.value = ws
     workspaceFiles.value = ws.files || []
     workspaceStatus.value = ws.status
-    // 切换工作区时清空对话和编辑器状态
-    conversationId.value = null
-    messages.value = []
-    generatedFiles.value = []
-    activeFilePath.value = ''
-    validationErrors.value = []
-    isGenerating.value = false
-    streamContent.value = ''
   }
 
   function setFiles(files: GeneratedFile[]) {
@@ -77,8 +88,31 @@ export const useCodingStore = defineStore('coding', () => {
     }
   }
 
-  function addMessage(msg: CodingMessage) {
+  function addMessage(msg: ChatMessage) {
     messages.value.push(msg)
+  }
+
+  function initPipelineSteps(isNewWorkspace: boolean) {
+    if (isNewWorkspace) {
+      currentPipelineSteps.value = [
+        { name: 'create_workspace', label: '创建工作区', status: 'pending' },
+        { name: 'generate', label: '生成代码', status: 'pending' },
+        { name: 'install', label: '安装依赖', status: 'pending' },
+        { name: 'serve', label: '启动服务', status: 'pending' },
+      ]
+    } else {
+      currentPipelineSteps.value = [
+        { name: 'generate', label: '生成代码', status: 'pending' },
+      ]
+    }
+  }
+
+  function updatePipelineStep(stepName: string, status: PipelineStep['status'], message?: string) {
+    const step = currentPipelineSteps.value.find(s => s.name === stepName)
+    if (step) {
+      step.status = status
+      if (message) step.message = message
+    }
   }
 
   function reset() {
@@ -86,21 +120,28 @@ export const useCodingStore = defineStore('coding', () => {
     workspace.value = null
     workspaceFiles.value = []
     workspaceStatus.value = ''
+    workspacePath.value = null
     conversationId.value = null
     messages.value = []
     generatedFiles.value = []
     activeFilePath.value = ''
     validationErrors.value = []
     isGenerating.value = false
+    isProcessing.value = false
     streamContent.value = ''
+    currentPipelineSteps.value = []
+    serveUrl.value = null
+    serveRunning.value = false
   }
 
   return {
     currentScene, scenes,
-    workspace, workspaceFiles, workspaceStatus,
+    workspace, workspaceFiles, workspaceStatus, workspacePath,
     conversationId, conversations, messages,
     generatedFiles, activeFilePath, activeFileContent, activeFileLanguage,
-    validationErrors, isGenerating, streamContent,
-    setScene, setWorkspace, setFiles, updateFileContent, addMessage, reset,
+    validationErrors, isGenerating, isProcessing, streamContent,
+    currentPipelineSteps, serveUrl, serveRunning,
+    setScene, setWorkspace, setFiles, updateFileContent, addMessage,
+    initPipelineSteps, updatePipelineStep, reset,
   }
 })

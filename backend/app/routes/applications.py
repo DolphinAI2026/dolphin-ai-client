@@ -1,13 +1,15 @@
 from __future__ import annotations
 import json
 import logging
+from datetime import datetime
 from typing import Annotated, List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
-from sqlalchemy import select, desc
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
+from pydantic import BaseModel
+from sqlalchemy import select, desc, func as sa_func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 from app.database import get_db
-from app.models import User, Application
+from app.models import User, Application, DocumentVersion, ChangePlan
 from app.auth import get_current_user
 from app.schemas import ApplicationCreate, ApplicationResponse, MergedAppResponse
 from app.deps import get_auth_context, AuthContext
@@ -219,8 +221,29 @@ async def create_application(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)]
 ):
+    granted_permissions = sorted(
+        code for code, allowed in (ctx.org_permissions or {}).items() if allowed
+    )
+    logger.info(
+        "create_application request user_id=%s tenant_id=%s tenant_role=%s conversation_id=%s app_code=%s granted_permissions=%s",
+        ctx.user.id,
+        ctx.tenant_id,
+        ctx.tenant_role,
+        data.conversation_id,
+        data.app_code,
+        granted_permissions,
+    )
+
     # 检查创建权限
     if not has_org_permission(ctx.org_permissions, "application", Action.CREATE):
+        logger.warning(
+            "create_application forbidden user_id=%s tenant_id=%s tenant_role=%s missing_permission=%s granted_permissions=%s",
+            ctx.user.id,
+            ctx.tenant_id,
+            ctx.tenant_role,
+            "application:create",
+            granted_permissions,
+        )
         raise HTTPException(status_code=403, detail="你的角色没有创建应用的权限")
 
     config_str = json.dumps(data.config_preview, ensure_ascii=False) if data.config_preview else None
@@ -239,6 +262,14 @@ async def create_application(
     db.add(app)
     await db.commit()
     await db.refresh(app)
+
+    logger.info(
+        "create_application success app_id=%s user_id=%s tenant_id=%s app_code=%s",
+        app.id,
+        ctx.user.id,
+        ctx.tenant_id,
+        app.app_code,
+    )
 
     resp = _enrich(app)
     resp.permissions = {Action.EDIT: True, Action.DELETE: True, Action.CLONE: True}  # 创建者全部权限
@@ -511,8 +542,9 @@ async def upload_doc_with_conversation(
                     data = event["data"]
 
         except Exception as e:
-            logger.error(f"AI 文档解析失败: {e}", exc_info=True)
-            yield {"event": "error", "data": json.dumps({"message": f"文档解析失败: {e}"}, ensure_ascii=False)}
+            err_msg = str(e) or repr(e) or type(e).__name__
+            logger.error(f"AI 文档解析失败: {err_msg}", exc_info=True)
+            yield {"event": "error", "data": json.dumps({"message": f"文档解析失败: {err_msg}"}, ensure_ascii=False)}
             return
 
         if not data:
@@ -592,3 +624,390 @@ async def upload_doc_with_conversation(
 
     from sse_starlette.sse import EventSourceResponse
     return EventSourceResponse(event_generator())
+
+
+# ── 文档驱动增量开发 ──────────────────────────────────
+
+
+class SelectionsUpdate(BaseModel):
+    """更新 change plan 中 actions 的选择状态"""
+    selections: dict  # {action_id: bool}
+
+
+@router.post("/{app_id}/upload-doc-version")
+async def upload_doc_version(
+    app_id: int,
+    file: UploadFile = File(...),
+    conversation_id: int = Form(...),
+    ctx: Annotated[AuthContext, Depends(get_auth_context)] = None,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+):
+    """上传新版本设计文档，AI 解析后与当前配置做语义对比（SSE 流式返回进度）"""
+    if not file.filename or not file.filename.endswith('.md'):
+        raise HTTPException(status_code=400, detail="仅支持 .md 格式文件")
+
+    # 加载应用
+    result = await db.execute(
+        select(Application).where(Application.id == app_id, Application.tenant_id == ctx.tenant_id)
+    )
+    app = result.scalar_one_or_none()
+    if not app:
+        raise HTTPException(status_code=404, detail="应用不存在")
+    await check_resource_permission(ctx, db, app, "application", Action.EDIT)
+
+    content_bytes = await file.read()
+    text = content_bytes.decode('utf-8')
+    fname = file.filename or ""
+
+    # 提前获取需要的值（SSE generator 不能用原始 db session）
+    app_id_val = app.id
+    tenant_id_val = ctx.tenant_id
+    current_config_str = app.config_preview
+
+    async def event_generator():
+        from app.database import AsyncSessionLocal
+        from app.doc_differ import build_structure_index, semantic_diff, diff_to_actions, compute_hash
+
+        try:
+            yield {"event": "progress", "data": json.dumps({"step": "读取文档内容..."}, ensure_ascii=False)}
+
+            # 1. 计算 hash
+            content_hash = compute_hash(text)
+
+            # 2. 检查是否重复
+            async with AsyncSessionLocal() as session:
+                dup_result = await session.execute(
+                    select(DocumentVersion).where(
+                        DocumentVersion.application_id == app_id_val,
+                        DocumentVersion.content_hash == content_hash,
+                    )
+                )
+                if dup_result.scalar_one_or_none():
+                    yield {"event": "error", "data": json.dumps({"message": "文档内容未变化，无需上传"}, ensure_ascii=False)}
+                    return
+
+                # 3. 获取当前最大 version
+                max_ver_result = await session.execute(
+                    select(sa_func.max(DocumentVersion.version)).where(
+                        DocumentVersion.application_id == app_id_val
+                    )
+                )
+                max_ver = max_ver_result.scalar() or 0
+                new_version = max_ver + 1
+
+            yield {"event": "progress", "data": json.dumps({"step": "解析文档结构..."}, ensure_ascii=False)}
+
+            # 4. 构建章节索引
+            structure_index = build_structure_index(text)
+
+            yield {"event": "progress", "data": json.dumps({"step": "AI 解析文档配置..."}, ensure_ascii=False)}
+
+            # 5. AI 解析文档
+            from app.ai_doc_parser import parse_doc_with_ai
+            v2_config = await parse_doc_with_ai(text, filename=fname)
+
+            yield {"event": "progress", "data": json.dumps({"step": "对比配置差异..."}, ensure_ascii=False)}
+
+            # 6. 加载 V1 配置
+            v1_config: dict = {}
+            if current_config_str:
+                try:
+                    loaded = json.loads(current_config_str) if isinstance(current_config_str, str) else current_config_str
+                    v1_config = loaded.get("data", loaded)
+                except Exception:
+                    pass
+
+            # 7. 语义对比
+            diff = semantic_diff(v1_config, v2_config)
+
+            # 8. 生成 patch actions
+            actions = diff_to_actions(diff, v2_config)
+
+            # 9. 生成摘要
+            added_count = len(diff["added"]["models"]) + len(diff["added"]["dicts"]) + len(diff["added"]["roles"])
+            modified_count = len(diff["modified"]["models"]) + len(diff["modified"]["dicts"])
+            removed_count = len(diff["removed"]["models"]) + len(diff["removed"]["dicts"]) + len(diff["removed"]["roles"])
+            summary = f"文档 V{new_version}：新增{added_count}项，修改{modified_count}项，删除{removed_count}项"
+
+            yield {"event": "progress", "data": json.dumps({"step": "保存版本记录..."}, ensure_ascii=False)}
+
+            # 10. 创建 DocumentVersion + ChangePlan
+            async with AsyncSessionLocal() as session:
+                doc_ver = DocumentVersion(
+                    application_id=app_id_val,
+                    version=new_version,
+                    filename=fname,
+                    content_hash=content_hash,
+                    raw_content=text,
+                    structure_index=json.dumps(structure_index, ensure_ascii=False),
+                    parsed_config=json.dumps(v2_config, ensure_ascii=False),
+                    summary=summary,
+                )
+                session.add(doc_ver)
+                await session.flush()
+
+                change_plan = ChangePlan(
+                    application_id=app_id_val,
+                    conversation_id=conversation_id,
+                    from_version=max_ver,
+                    to_version=new_version,
+                    diff_summary=json.dumps(diff, ensure_ascii=False),
+                    actions=json.dumps(actions, ensure_ascii=False),
+                    status="pending",
+                )
+                session.add(change_plan)
+
+                # 更新应用的当前文档版本
+                app_result = await session.execute(
+                    select(Application).where(Application.id == app_id_val)
+                )
+                app_obj = app_result.scalar_one()
+                app_obj.current_doc_version = new_version
+
+                await session.commit()
+                await session.refresh(change_plan)
+
+                yield {
+                    "event": "done",
+                    "data": json.dumps({
+                        "version": new_version,
+                        "summary": summary,
+                        "diff": diff,
+                        "actions": actions,
+                        "change_plan_id": change_plan.id,
+                        "is_first_version": max_ver == 0,
+                        "parsed_config": v2_config,
+                    }, ensure_ascii=False),
+                }
+
+        except Exception as e:
+            logger.error(f"文档版本上传失败: {e}", exc_info=True)
+            yield {"event": "error", "data": json.dumps({"message": f"处理失败: {str(e)}"}, ensure_ascii=False)}
+
+    return EventSourceResponse(event_generator())
+
+
+@router.get("/{app_id}/change-plans/{plan_id}")
+async def get_change_plan(
+    app_id: int,
+    plan_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """获取变更计划详情"""
+    # 验证应用权限
+    result = await db.execute(
+        select(Application).where(Application.id == app_id, Application.tenant_id == ctx.tenant_id)
+    )
+    app = result.scalar_one_or_none()
+    if not app:
+        raise HTTPException(status_code=404, detail="应用不存在")
+    await check_resource_permission(ctx, db, app, "application", Action.VIEW)
+
+    result = await db.execute(
+        select(ChangePlan).where(ChangePlan.id == plan_id, ChangePlan.application_id == app_id)
+    )
+    plan = result.scalar_one_or_none()
+    if not plan:
+        raise HTTPException(status_code=404, detail="变更计划不存在")
+
+    return {
+        "id": plan.id,
+        "application_id": plan.application_id,
+        "conversation_id": plan.conversation_id,
+        "from_version": plan.from_version,
+        "to_version": plan.to_version,
+        "diff_summary": json.loads(plan.diff_summary) if isinstance(plan.diff_summary, str) else plan.diff_summary,
+        "actions": json.loads(plan.actions) if isinstance(plan.actions, str) else plan.actions,
+        "status": plan.status,
+        "created_at": str(plan.created_at) if plan.created_at else None,
+        "executed_at": str(plan.executed_at) if plan.executed_at else None,
+    }
+
+
+@router.put("/{app_id}/change-plans/{plan_id}/selections")
+async def update_change_plan_selections(
+    app_id: int,
+    plan_id: int,
+    body: SelectionsUpdate,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """更新变更计划中各 action 的勾选状态"""
+    result = await db.execute(
+        select(Application).where(Application.id == app_id, Application.tenant_id == ctx.tenant_id)
+    )
+    app = result.scalar_one_or_none()
+    if not app:
+        raise HTTPException(status_code=404, detail="应用不存在")
+    await check_resource_permission(ctx, db, app, "application", Action.EDIT)
+
+    result = await db.execute(
+        select(ChangePlan).where(ChangePlan.id == plan_id, ChangePlan.application_id == app_id)
+    )
+    plan = result.scalar_one_or_none()
+    if not plan:
+        raise HTTPException(status_code=404, detail="变更计划不存在")
+    if plan.status != "pending":
+        raise HTTPException(status_code=400, detail=f"变更计划状态为 {plan.status}，不能修改")
+
+    actions = json.loads(plan.actions) if isinstance(plan.actions, str) else plan.actions
+    for action in actions:
+        aid = action.get("id")
+        if aid and aid in body.selections:
+            action["selected"] = body.selections[aid]
+
+    plan.actions = json.dumps(actions, ensure_ascii=False)
+    await db.commit()
+    return {"ok": True, "actions": actions}
+
+
+@router.post("/{app_id}/change-plans/{plan_id}/execute")
+async def execute_change_plan(
+    app_id: int,
+    plan_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """执行变更计划，将选中的 actions 应用到 config_preview（SSE 流式返回进度）"""
+    result = await db.execute(
+        select(Application).where(Application.id == app_id, Application.tenant_id == ctx.tenant_id)
+    )
+    app = result.scalar_one_or_none()
+    if not app:
+        raise HTTPException(status_code=404, detail="应用不存在")
+    await check_resource_permission(ctx, db, app, "application", Action.EDIT)
+
+    result = await db.execute(
+        select(ChangePlan).where(ChangePlan.id == plan_id, ChangePlan.application_id == app_id)
+    )
+    plan = result.scalar_one_or_none()
+    if not plan:
+        raise HTTPException(status_code=404, detail="变更计划不存在")
+    if plan.status not in ("pending", "confirmed"):
+        raise HTTPException(status_code=400, detail=f"变更计划状态为 {plan.status}，不能执行")
+
+    app_id_val = app.id
+    current_config_str = app.config_preview
+    plan_id_val = plan.id
+    actions_str = plan.actions
+
+    async def event_generator():
+        from app.database import AsyncSessionLocal
+        from app.doc_differ import apply_actions_to_config
+
+        try:
+            yield {"event": "progress", "data": json.dumps({"step": "加载当前配置..."}, ensure_ascii=False)}
+
+            # 加载当前配置
+            current_config: dict = {}
+            if current_config_str:
+                try:
+                    loaded = json.loads(current_config_str) if isinstance(current_config_str, str) else current_config_str
+                    current_config = loaded.get("data", loaded)
+                except Exception:
+                    pass
+
+            actions = json.loads(actions_str) if isinstance(actions_str, str) else actions_str
+            selected = [a for a in actions if a.get("selected", True)]
+
+            yield {"event": "progress", "data": json.dumps({"step": f"应用 {len(selected)} 项变更..."}, ensure_ascii=False)}
+
+            # 应用 patch
+            new_config = apply_actions_to_config(current_config, actions)
+
+            yield {"event": "progress", "data": json.dumps({"step": "保存新配置..."}, ensure_ascii=False)}
+
+            # 保存
+            async with AsyncSessionLocal() as session:
+                app_result = await session.execute(
+                    select(Application).where(Application.id == app_id_val)
+                )
+                app_obj = app_result.scalar_one()
+                app_obj.config_preview = json.dumps(new_config, ensure_ascii=False)
+
+                plan_result = await session.execute(
+                    select(ChangePlan).where(ChangePlan.id == plan_id_val)
+                )
+                plan_obj = plan_result.scalar_one()
+                plan_obj.status = "completed"
+                plan_obj.executed_at = datetime.utcnow()
+
+                await session.commit()
+
+            yield {
+                "event": "done",
+                "data": json.dumps({
+                    "config": new_config,
+                    "applied_count": len(selected),
+                    "total_count": len(actions),
+                }, ensure_ascii=False),
+            }
+
+        except Exception as e:
+            logger.error(f"变更计划执行失败: {e}", exc_info=True)
+            yield {"event": "error", "data": json.dumps({"message": f"执行失败: {str(e)}"}, ensure_ascii=False)}
+
+    return EventSourceResponse(event_generator())
+
+
+@router.get("/{app_id}/doc-versions")
+async def list_doc_versions(
+    app_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """获取应用的文档版本历史"""
+    result = await db.execute(
+        select(Application).where(Application.id == app_id, Application.tenant_id == ctx.tenant_id)
+    )
+    app = result.scalar_one_or_none()
+    if not app:
+        raise HTTPException(status_code=404, detail="应用不存在")
+    await check_resource_permission(ctx, db, app, "application", Action.VIEW)
+
+    result = await db.execute(
+        select(DocumentVersion)
+        .where(DocumentVersion.application_id == app_id)
+        .order_by(desc(DocumentVersion.version))
+    )
+    versions = result.scalars().all()
+
+    # 同时加载关联的 change plans
+    result = await db.execute(
+        select(ChangePlan)
+        .where(ChangePlan.application_id == app_id)
+        .order_by(desc(ChangePlan.created_at))
+    )
+    plans = result.scalars().all()
+    plans_by_to_version = {}
+    for p in plans:
+        plans_by_to_version.setdefault(p.to_version, []).append(p)
+
+    items = []
+    for v in versions:
+        related_plans = plans_by_to_version.get(v.version, [])
+        items.append({
+            "id": v.id,
+            "version": v.version,
+            "filename": v.filename,
+            "content_hash": v.content_hash,
+            "summary": v.summary,
+            "structure_index": json.loads(v.structure_index) if v.structure_index else None,
+            "created_at": str(v.created_at) if v.created_at else None,
+            "change_plans": [
+                {
+                    "id": p.id,
+                    "from_version": p.from_version,
+                    "to_version": p.to_version,
+                    "status": p.status,
+                    "created_at": str(p.created_at) if p.created_at else None,
+                }
+                for p in related_plans
+            ],
+        })
+
+    return {
+        "current_version": app.current_doc_version,
+        "versions": items,
+    }

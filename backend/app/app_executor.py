@@ -13,10 +13,25 @@ import httpx
 from typing import Dict, List, Optional
 from app.apaas_client import APaaSClient
 from app.app_config_schema import AppConfig, DictConfig, ModelConfig, FormConfig
+from app.config import settings
 
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _generate_suffix() -> str:
+    """根据配置决定是否生成随机后缀"""
+    if settings.enable_code_suffix:
+        return ''.join(random.choices(string.ascii_lowercase + string.digits, k=4))
+    return ""
+
+
+def _apply_suffix(code: str, suffix: str) -> str:
+    """为编码添加后缀（如果有）"""
+    if suffix:
+        return f"{code}_{suffix}"
+    return code
 
 
 class AppExecutor:
@@ -110,13 +125,14 @@ class AppExecutor:
     async def _phase1_create_app(self, config: AppConfig):
         """Phase 1: 创建应用"""
         logger.info("=== Phase 1: 创建应用 ===")
+        logger.info(f"编码后缀模式: {'开启' if settings.enable_code_suffix else '关闭'}")
 
-        # 生成唯一后缀
-        suffix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=4))
+        # 根据配置决定是否生成后缀
+        suffix = _generate_suffix()
 
         # 生成 app_code
         if config.code:
-            app_code = f"{config.code}-{suffix}"
+            app_code = f"{config.code}-{suffix}" if suffix else config.code
         else:
             # 中文转拼音或使用通用名称
             import re
@@ -126,7 +142,10 @@ class AppExecutor:
                 # 如果全是中文，使用通用名称
                 base_code = "app"
             base_code = base_code.replace(' ', '-').strip('-')
-            app_code = f"{base_code}-{suffix}" if base_code else f"app-{suffix}"
+            if suffix:
+                app_code = f"{base_code}-{suffix}" if base_code else f"app-{suffix}"
+            else:
+                app_code = base_code if base_code else "app"
 
         # 创建应用
         result = await self.client.create_app(
@@ -160,7 +179,7 @@ class AppExecutor:
         # Step 1: 创建字典（不含选项）
         dict_payload = []
         for d in dicts:
-            dict_code = f"{self._safe_code(d.code)}_{suffix}"
+            dict_code = _apply_suffix(self._safe_code(d.code), suffix)
             dict_payload.append({
                 "appId": app_id,
                 "dictionaryCode": dict_code,
@@ -201,7 +220,7 @@ class AppExecutor:
                     if d.options:
                         options_payload = []
                         for opt in d.options:
-                            opt_code = f"{self._safe_code(opt.code)}_{suffix}"
+                            opt_code = _apply_suffix(self._safe_code(opt.code), suffix)
                             options_payload.append({
                                 "valueCode": opt_code,
                                 "valueName": opt.name
@@ -228,7 +247,7 @@ class AppExecutor:
 
         data_models = []
         for model in models:
-            model_code = f"{self._safe_code(model.code)}_{suffix}"
+            model_code = _apply_suffix(self._safe_code(model.code), suffix)
             self.progress['model_codes'][model.code] = model_code
 
             fields = []

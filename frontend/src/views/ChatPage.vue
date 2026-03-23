@@ -9,8 +9,11 @@
         <span class="logo-text">aPaaS Builder AI</span>
       </div>
       <div class="nav-right">
-        <button class="nav-link" @click="router.push('/apps')">我的应用</button>
-        <span class="dot" :class="{ active: store.connected }" @click="store.showConnectModal = true" style="cursor:pointer" :title="store.connected ? '已连接得帆云' : '未连接，点击连接'"></span>
+        <button class="nav-link" :class="{ active: showProjectsPanel }" @click="showProjectsPanel = !showProjectsPanel">
+          📁 我的项目
+          <span v-if="projects.length" class="project-count">{{ projects.length }}</span>
+        </button>
+        <button class="nav-link" @click="openCreateProject">+ 新建项目</button>
       </div>
     </nav>
 
@@ -239,6 +242,71 @@
           </div>
         </div>
 
+        <!-- 变更计划确认 overlay -->
+        <div v-if="store.showChangePlan && store.changePlan" class="change-plan-overlay">
+          <div class="change-plan-header">
+            <h3>变更计划（V{{ store.changePlan.fromVersion }} → V{{ store.changePlan.toVersion }}）</h3>
+            <button class="change-plan-close" @click="store.showChangePlan = false">✕</button>
+          </div>
+
+          <div class="change-plan-body">
+            <!-- 新增 -->
+            <div class="change-group" v-if="addedActions.length">
+              <div class="group-title" @click="toggleChangePlanGroup('added')">
+                <span class="group-arrow" :class="{ expanded: expandedGroups.added }">▸</span>
+                新增 ({{ addedActions.length }})
+              </div>
+              <template v-if="expandedGroups.added">
+                <div v-for="action in addedActions" :key="action.id" class="change-item">
+                  <input type="checkbox" v-model="action.selected" class="change-checkbox" />
+                  <span class="change-icon add">+</span>
+                  <span class="change-desc">{{ action.description }}</span>
+                </div>
+              </template>
+            </div>
+
+            <!-- 修改 -->
+            <div class="change-group" v-if="modifiedActions.length">
+              <div class="group-title" @click="toggleChangePlanGroup('modified')">
+                <span class="group-arrow" :class="{ expanded: expandedGroups.modified }">▸</span>
+                修改 ({{ modifiedActions.length }})
+              </div>
+              <template v-if="expandedGroups.modified">
+                <div v-for="action in modifiedActions" :key="action.id" class="change-item">
+                  <input type="checkbox" v-model="action.selected" class="change-checkbox" />
+                  <span class="change-icon modify">~</span>
+                  <span class="change-desc">{{ action.description }}</span>
+                </div>
+              </template>
+            </div>
+
+            <!-- 删除 -->
+            <div class="change-group" v-if="removedActions.length">
+              <div class="group-title" @click="toggleChangePlanGroup('removed')">
+                <span class="group-arrow" :class="{ expanded: expandedGroups.removed }">▸</span>
+                删除 ({{ removedActions.length }})
+              </div>
+              <template v-if="expandedGroups.removed">
+                <div v-for="action in removedActions" :key="action.id" class="change-item">
+                  <input type="checkbox" v-model="action.selected" class="change-checkbox" />
+                  <span class="change-icon remove">-</span>
+                  <span class="change-desc">{{ action.description }}</span>
+                </div>
+              </template>
+            </div>
+          </div>
+
+          <div class="change-plan-footer">
+            <button class="cp-btn" @click="changePlanSelectAll(true)">全选</button>
+            <button class="cp-btn" @click="changePlanSelectAll(false)">取消全选</button>
+            <span class="cp-count">已选 {{ changePlanSelectedCount }}/{{ changePlanTotalCount }} 项</span>
+            <button class="cp-btn primary" @click="executeChangePlan" :disabled="changePlanSelectedCount === 0 || executingChangePlan">
+              {{ executingChangePlan ? '执行中...' : '确认执行' }}
+            </button>
+            <button class="cp-btn" @click="cancelChangePlan">取消</button>
+          </div>
+        </div>
+
         <!-- 未连接提示 -->
         <div v-if="!store.connected && store.currentApp" class="connect-warn">
           <div class="warn-title">⚠ 未连接得帆云平台</div>
@@ -301,7 +369,123 @@
       </div>
     </div>
 
+    <!-- 我的项目面板 -->
+    <div class="projects-panel" :class="{ open: showProjectsPanel }">
+      <div class="projects-header">
+        <h3>我的项目</h3>
+        <div class="projects-header-actions">
+          <button class="projects-add-btn" @click="openCreateProject">+ 新建项目</button>
+          <button class="projects-close-btn" @click="showProjectsPanel = false">✕</button>
+        </div>
+      </div>
+      <div v-if="loadingProjects" class="projects-loading">
+        <span class="loading-spinner">⟳</span> 加载中...
+      </div>
+      <div v-else-if="projects.length === 0" class="projects-empty">
+        <div class="empty-icon">📁</div>
+        <p>还没有项目</p>
+        <button class="create-first-btn" @click="openCreateProject">创建第一个项目</button>
+      </div>
+      <div v-else class="projects-list">
+        <div
+          v-for="proj in projects"
+          :key="proj.id"
+          class="project-card"
+          @click="toggleProjectExpand(proj.id)"
+        >
+          <div class="project-card-header">
+            <div class="project-card-left">
+              <span class="platform-dot" :class="{ connected: proj.platform_connected }"></span>
+              <span class="project-name">{{ proj.name }}</span>
+            </div>
+            <div class="project-card-actions">
+              <button class="project-settings-btn" @click.stop="openProjectSettings(proj)" title="项目设置">
+                ⚙️
+              </button>
+              <span class="expand-arrow" :class="{ expanded: expandedProjectId === proj.id }">▸</span>
+            </div>
+          </div>
+          <div class="project-card-meta">
+            <span class="meta-item" :title="proj.platform_connected ? '已连接平台' : '未连接平台'">
+              {{ proj.platform_connected ? '🟢 已连接' : '⚪ 未连接' }}
+            </span>
+            <span class="meta-item" v-if="projectApps[proj.id]">📦 {{ projectApps[proj.id].length }} 个应用</span>
+            <span class="meta-item" v-if="projectWorkspaces[proj.id]">🗂 {{ projectWorkspaces[proj.id].length }} 个工作区</span>
+            <span class="meta-item">{{ formatDate(proj.created_at) }}</span>
+          </div>
+          <!-- 团队成员头像 -->
+          <div class="project-members-avatars" v-if="projectMembers[proj.id]?.length">
+            <div
+              v-for="member in projectMembers[proj.id].slice(0, 5)"
+              :key="member.id"
+              class="member-avatar"
+              :title="member.username + ' (' + (member.role === 'owner' ? '所有者' : member.role === 'admin' ? '管理员' : '成员') + ')'"
+            >
+              {{ member.username.charAt(0).toUpperCase() }}
+            </div>
+            <div v-if="projectMembers[proj.id].length > 5" class="member-avatar more">
+              +{{ projectMembers[proj.id].length - 5 }}
+            </div>
+          </div>
+          <!-- 展开的应用列表 -->
+          <div v-if="expandedProjectId === proj.id" class="project-apps-list" @click.stop>
+            <div v-if="!projectApps[proj.id]" class="apps-loading">加载中...</div>
+            <div v-else-if="projectApps[proj.id].length === 0" class="apps-empty">暂无应用</div>
+            <div v-else v-for="app in projectApps[proj.id]" :key="app.id" class="project-app-item" @click="goToApp(app)">
+              <span class="app-status-dot" :class="app.local_status || 'pending'"></span>
+              <span class="app-name-text">{{ app.app_name || app.name }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <ConnectModal v-model="store.showConnectModal" />
+    <ProjectSettingsModal
+      v-model="showProjectSettingsModal"
+      :project="editingProject"
+      @saved="onProjectSaved"
+    />
+
+    <!-- 增量更新弹窗 -->
+    <div v-if="showIncrementalUpdate" class="incremental-modal-overlay" @click.self="closeIncrementalUpdate">
+      <div class="incremental-modal">
+        <div class="incremental-header">
+          <h3>增量更新</h3>
+          <button class="incremental-close" @click="closeIncrementalUpdate">✕</button>
+        </div>
+
+        <!-- 配置差异预览 -->
+        <div v-if="incrementalDiff" class="incremental-diff">
+          <ConfigDiff
+            :has-changes="incrementalDiff.has_changes"
+            :summary="incrementalDiff.summary"
+            :role-changes="incrementalDiff.role_changes"
+            :dict-changes="incrementalDiff.dict_changes"
+            :model-changes="incrementalDiff.model_changes"
+            :form-changes="incrementalDiff.form_changes"
+            :process-changes="incrementalDiff.process_changes"
+            :warnings="incrementalDiff.warnings"
+            :unsupported-changes="incrementalDiff.unsupported_changes"
+            :show-actions="false"
+          />
+        </div>
+
+        <!-- 更新步骤 -->
+        <div v-if="incrementalSteps.length > 0" class="incremental-steps">
+          <UpdateSteps
+            :steps="incrementalSteps"
+            :executing="incrementalExecuting"
+            :results="incrementalResults?.results"
+            :errors="incrementalResults?.errors"
+            :warnings="incrementalResults?.warnings"
+            @execute="executeIncrementalUpdate"
+            @cancel="closeIncrementalUpdate"
+            @close="closeIncrementalUpdate"
+          />
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -313,8 +497,14 @@ import { ElMessage } from 'element-plus'
 import { usePreviewStore } from '@/stores/preview'
 import { useUserStore } from '@/stores/user'
 import { applicationApi } from '@/api/application'
+import { incrementalApi, type DiffResponse, type ExecuteResponse } from '@/api/incremental'
 import { conversationApi } from '@/api/conversation'
+import { projectsApi } from '@/api/projects'
+import type { Project, ProjectMember } from '@/api/projects'
 import ConnectModal from '@/components/ConnectModal.vue'
+import ProjectSettingsModal from '@/components/ProjectSettingsModal.vue'
+import ConfigDiff from '@/components/ConfigDiff.vue'
+import UpdateSteps from '@/components/UpdateSteps.vue'
 import type { Message } from '@/types'
 
 const router = useRouter()
@@ -327,6 +517,92 @@ const fileInputRef = ref<HTMLInputElement>()
 const inputText = ref('')
 const isTyping = ref(false)
 const currentAgent = ref('builder')
+
+// ── 项目相关 ──
+const showProjectsPanel = ref(false)
+const loadingProjects = ref(false)
+const projects = ref<Project[]>([])
+const expandedProjectId = ref<number | null>(null)
+const projectApps = ref<Record<number, any[]>>({})
+const projectWorkspaces = ref<Record<number, any[]>>({})
+const projectMembers = ref<Record<number, ProjectMember[]>>({})
+const showProjectSettingsModal = ref(false)
+const editingProject = ref<Project | null>(null)
+
+const fetchProjects = async () => {
+  loadingProjects.value = true
+  try {
+    projects.value = await projectsApi.list()
+    // 并行加载每个项目的成员
+    await Promise.all(projects.value.map(async (proj) => {
+      try {
+        projectMembers.value[proj.id] = await projectsApi.listMembers(proj.id)
+      } catch { projectMembers.value[proj.id] = [] }
+    }))
+  } catch (e: any) {
+    console.error('获取项目列表失败:', e)
+  } finally {
+    loadingProjects.value = false
+  }
+}
+
+const toggleProjectExpand = async (projectId: number) => {
+  if (expandedProjectId.value === projectId) {
+    expandedProjectId.value = null
+    return
+  }
+  expandedProjectId.value = projectId
+  // 加载项目应用和工作区
+  if (!projectApps.value[projectId]) {
+    try {
+      const apps = await applicationApi.list() as any[]
+      projectApps.value[projectId] = apps.filter((a: any) => a.project_id === projectId)
+    } catch { projectApps.value[projectId] = [] }
+  }
+  if (!projectWorkspaces.value[projectId]) {
+    try {
+      projectWorkspaces.value[projectId] = await projectsApi.listWorkspaces(projectId)
+    } catch { projectWorkspaces.value[projectId] = [] }
+  }
+}
+
+const openCreateProject = () => {
+  editingProject.value = null
+  showProjectSettingsModal.value = true
+}
+
+const openProjectSettings = (proj: Project) => {
+  editingProject.value = proj
+  showProjectSettingsModal.value = true
+}
+
+const onProjectSaved = (proj: Project) => {
+  const idx = projects.value.findIndex(p => p.id === proj.id)
+  if (idx >= 0) {
+    projects.value[idx] = proj
+  } else {
+    projects.value.unshift(proj)
+  }
+}
+
+const goToApp = (app: any) => {
+  if (app.conversation_id) {
+    router.push(`/chat/${app.conversation_id}?app_id=${app.id}`)
+  } else {
+    router.push('/apps')
+  }
+}
+
+const formatDate = (dateStr: string) => {
+  if (!dateStr) return ''
+  const d = new Date(dateStr)
+  const now = new Date()
+  const diff = now.getTime() - d.getTime()
+  if (diff < 86400000) return '今天'
+  if (diff < 172800000) return '昨天'
+  if (diff < 604800000) return `${Math.floor(diff / 86400000)} 天前`
+  return `${d.getMonth() + 1}/${d.getDate()}`
+}
 
 const agents: Record<string, { name: string; icon: string }> = {
   builder: { name: '搭建智能体', icon: '🤖' },
@@ -346,14 +622,21 @@ const messages = reactive<Message[]>([
 const scrollToBottom = () => { nextTick(() => { if (messagesRef.value) messagesRef.value.scrollTop = messagesRef.value.scrollHeight }) }
 
 const switchAgent = (key: string) => {
+  // 复杂开发智能体 → 跳转到 Vibe Coding 页面
+  if (key === 'developer') {
+    router.push('/coding')
+    return
+  }
+
   currentAgent.value = key
   const greetings: Record<string, string> = {
     builder: '已切换到搭建智能体。告诉我你想创建什么应用？',
     assistant: '已切换到辅助开发智能体。我可以帮你完善已有应用：\n• 创建审批流程\n• 配置业务规则\n• 调整表单组件\n• 配置数据权限',
-    developer: '已切换到复杂开发智能体。我可以帮你：\n• 自定义Vue组件\n• 后端接口集成\n• Groovy脚本编写'
   }
-  messages.push({ id: Date.now(), role: 'assistant', agent: key, content: greetings[key], created_at: '' })
-  scrollToBottom()
+  if (greetings[key]) {
+    messages.push({ id: Date.now(), role: 'assistant', agent: key, content: greetings[key], created_at: '' })
+    scrollToBottom()
+  }
 }
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
@@ -594,6 +877,13 @@ const hasConfigChanged = computed(() => {
   return expectedSteps !== deploySteps.value.length
 })
 
+// ── 增量更新 ──
+const showIncrementalUpdate = ref(false)
+const incrementalDiff = ref<DiffResponse | null>(null)
+const incrementalExecuting = ref(false)
+const incrementalSteps = ref<{ key: string; label: string; status: 'pending' | 'running' | 'completed' | 'error'; details?: string; error?: string }[]>([])
+const incrementalResults = ref<ExecuteResponse | null>(null)
+
 const deployGroups = computed(() => {
   const defs = [
     { title: '初始化', icon: '🚀', test: (s: DeployStep) => s.key === 'create_app' },
@@ -687,6 +977,17 @@ const startGenerate = async () => {
   }
   generating.value = true
   try {
+    // 检查是否已部署到平台（有 apaas_app_id）
+    if (existingAppId.value) {
+      const existingApp = await applicationApi.get(existingAppId.value)
+      if ((existingApp as any).apaas_app_id) {
+        // 已部署，进行增量更新流程
+        await startIncrementalUpdate(existingAppId.value)
+        return
+      }
+    }
+
+    // 未部署，执行全量生成流程
     const appCode = 'app' + Date.now().toString(36)
     const payload = {
       conversation_id: conversationId.value || 0,
@@ -720,11 +1021,175 @@ const startGenerate = async () => {
   }
 }
 
+// 开始增量更新流程
+const startIncrementalUpdate = async (appId: number) => {
+  try {
+    // 构建新配置
+    const newConfig = {
+      type: 'preview',
+      data: { ...store.preview },
+      ...(selectedModelIndices.value.length > 0 ? { selected_model_indices: selectedModelIndices.value } : {})
+    }
+
+    // 计算差异
+    const diff = await incrementalApi.computeDiff(appId, newConfig)
+    incrementalDiff.value = diff
+
+    if (!diff.has_changes) {
+      ElMessage.info('配置无变更，无需更新')
+      generating.value = false
+      return
+    }
+
+    // 显示增量更新面板
+    deployAppId.value = appId
+    showIncrementalUpdate.value = true
+    incrementalSteps.value = buildIncrementalSteps(diff)
+    incrementalResults.value = null
+    generating.value = false
+  } catch (e: any) {
+    ElMessage.error('计算配置差异失败: ' + (e.message || ''))
+    generating.value = false
+  }
+}
+
+// 构建增量更新步骤列表
+const buildIncrementalSteps = (diff: DiffResponse) => {
+  const steps: { key: string; label: string; status: 'pending' | 'running' | 'completed' | 'error'; details?: string; error?: string }[] = []
+
+  if (diff.role_changes.length > 0) {
+    steps.push({ key: 'roles', label: '更新角色', status: 'pending', details: `${diff.role_changes.length} 个变更` })
+  }
+  if (diff.dict_changes.length > 0) {
+    steps.push({ key: 'dicts', label: '更新字典', status: 'pending', details: `${diff.dict_changes.length} 个变更` })
+  }
+  if (diff.model_changes.length > 0) {
+    steps.push({ key: 'models', label: '更新模型', status: 'pending', details: `${diff.model_changes.length} 个变更` })
+  }
+  if (diff.form_changes.length > 0) {
+    steps.push({ key: 'forms', label: '更新表单', status: 'pending', details: `${diff.form_changes.length} 个变更` })
+  }
+  if (diff.process_changes.length > 0) {
+    steps.push({ key: 'processes', label: '更新流程', status: 'pending', details: `${diff.process_changes.length} 个变更` })
+  }
+
+  return steps
+}
+
+// 执行增量更新（流式）
+const executeIncrementalUpdate = async () => {
+  if (!deployAppId.value || !incrementalDiff.value) return
+
+  incrementalExecuting.value = true
+
+  // 重置所有步骤状态为 pending
+  for (const step of incrementalSteps.value) {
+    step.status = 'pending'
+    step.details = undefined
+    step.error = undefined
+  }
+
+  // 构建新配置
+  const newConfig = {
+    type: 'preview',
+    data: { ...store.preview },
+    ...(selectedModelIndices.value.length > 0 ? { selected_model_indices: selectedModelIndices.value } : {})
+  }
+
+  // 获取 token
+  const token = userStore.token
+  if (!token) {
+    ElMessage.error('未登录，请重新登录')
+    incrementalExecuting.value = false
+    return
+  }
+
+  // 使用流式接口执行增量更新
+  incrementalApi.executeUpdateStream(
+    deployAppId.value,
+    newConfig,
+    token,
+    // onProgress
+    (event) => {
+      // 更新对应阶段的步骤状态
+      if (event.stage && event.stage !== 'init') {
+        const stepKey = event.stage
+        const step = incrementalSteps.value.find(s => s.key === stepKey)
+        if (step) {
+          if (event.status === 'running') {
+            step.status = 'running'
+            step.details = event.step
+          } else if (event.status === 'done') {
+            step.status = 'completed'
+            step.details = event.step
+          }
+        }
+      }
+    },
+    // onComplete
+    (result) => {
+      incrementalResults.value = result
+      incrementalExecuting.value = false
+
+      // 确保所有步骤都标记为完成
+      for (const step of incrementalSteps.value) {
+        if (step.status === 'running' || step.status === 'pending') {
+          step.status = 'completed'
+        }
+        // 添加详细结果
+        const category = step.key as keyof typeof result.results
+        if (result.results[category] && result.results[category].length > 0) {
+          step.details = result.results[category].join(', ')
+        }
+      }
+
+      // 检查是否有错误
+      if (result.errors && result.errors.length > 0) {
+        for (const step of incrementalSteps.value) {
+          const matchedError = result.errors.find(e => e.toLowerCase().includes(step.key))
+          if (matchedError) {
+            step.status = 'error'
+            step.error = matchedError
+          }
+        }
+        ElMessage.warning('部分更新失败，请查看详情')
+      } else {
+        ElMessage.success('增量更新完成！')
+      }
+    },
+    // onError
+    (message) => {
+      incrementalExecuting.value = false
+      ElMessage.error('增量更新失败: ' + message)
+      for (const step of incrementalSteps.value) {
+        if (step.status === 'running') {
+          step.status = 'error'
+          step.error = message
+        }
+      }
+    }
+  )
+}
+
+// 关闭增量更新面板
+const closeIncrementalUpdate = () => {
+  showIncrementalUpdate.value = false
+  incrementalDiff.value = null
+  incrementalSteps.value = []
+  incrementalResults.value = null
+}
+
 const handleDocUpload = async (e: Event) => {
   const target = e.target as HTMLInputElement
   const file = target.files?.[0]
   if (!file) return
   target.value = '' // reset for re-upload
+
+  // 增量流程：已有配置且有关联应用时，走增量文档上传
+  if (store.preview.models.length > 0 && existingAppId.value) {
+    await handleIncrementalDocUpload(file)
+    return
+  }
 
   const userMsgId = Date.now()
   messages.push({ id: userMsgId, role: 'user', content: `📄 上传设计文档: ${file.name}`, created_at: '' })
@@ -890,6 +1355,282 @@ const handleDocUpload = async (e: Event) => {
     } else {
       messages.push({ id: Date.now(), role: 'assistant', agent: 'builder', content: `文档解析失败: ${err?.message || '未知错误'}`, created_at: '' })
     }
+  }
+  scrollToBottom()
+}
+
+// ── 增量文档变更 ──
+const executingChangePlan = ref(false)
+const expandedGroups = reactive<Record<string, boolean>>({ added: true, modified: true, removed: true })
+
+const addedActions = computed(() =>
+  store.changePlan?.actions.filter(a => a.op === 'add' || a.op === 'create') || []
+)
+const modifiedActions = computed(() =>
+  store.changePlan?.actions.filter(a => a.op === 'modify' || a.op === 'update') || []
+)
+const removedActions = computed(() =>
+  store.changePlan?.actions.filter(a => a.op === 'remove' || a.op === 'delete') || []
+)
+const changePlanSelectedCount = computed(() =>
+  store.changePlan?.actions.filter(a => a.selected).length || 0
+)
+const changePlanTotalCount = computed(() =>
+  store.changePlan?.actions.length || 0
+)
+
+const toggleChangePlanGroup = (group: string) => {
+  expandedGroups[group] = !expandedGroups[group]
+}
+
+const changePlanSelectAll = (val: boolean) => {
+  if (!store.changePlan) return
+  store.changePlan.actions.forEach(a => { a.selected = val })
+}
+
+const cancelChangePlan = () => {
+  store.showChangePlan = false
+  store.changePlan = null
+  messages.push({
+    id: Date.now(),
+    role: 'assistant',
+    agent: 'builder',
+    content: '已取消变更计划。',
+    created_at: ''
+  })
+  scrollToBottom()
+}
+
+const handleIncrementalDocUpload = async (file: File) => {
+  const appId = existingAppId.value!
+  const userMsgId = Date.now()
+  messages.push({ id: userMsgId, role: 'user', content: `📄 上传文档新版本: ${file.name}`, created_at: '' })
+
+  const progressMsgId = userMsgId + 1
+  messages.push({
+    id: progressMsgId,
+    role: 'assistant',
+    agent: 'builder',
+    content: '正在分析文档变更...',
+    created_at: ''
+  })
+  scrollToBottom()
+
+  try {
+    const token = localStorage.getItem('token')
+    const formData = new FormData()
+    formData.append('file', file)
+
+    const url = applicationApi.uploadDocVersionUrl(appId)
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+      body: formData
+    })
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ detail: '请求失败' }))
+      throw new Error(err.detail || '文档上传失败')
+    }
+
+    const reader = response.body?.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let changePlanData: any = null
+
+    while (reader) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+
+      let currentEvent = ''
+      for (const line of lines) {
+        if (line.startsWith('event:')) {
+          currentEvent = line.slice(6).trim()
+        } else if (line.startsWith('data:')) {
+          const dataStr = line.slice(5).trim()
+          if (!dataStr) continue
+          try {
+            const data = JSON.parse(dataStr)
+
+            if (currentEvent === 'progress') {
+              const pmsg = messages.find(m => m.id === progressMsgId)
+              if (pmsg) {
+                const step = data.step || data.phase || ''
+                const msg = data.message || ''
+                const icon = step === 'indexing' ? '📑' : step === 'parsing' ? '🔍' : step === 'diffing' ? '📊' : '⏳'
+                pmsg.content = `${icon} ${msg}`
+              }
+              scrollToBottom()
+            } else if (currentEvent === 'done') {
+              changePlanData = data.change_plan || data
+            } else if (currentEvent === 'error') {
+              throw new Error(data.message || '文档分析失败')
+            }
+          } catch (parseErr: any) {
+            if (parseErr.message && !parseErr.message.includes('JSON')) throw parseErr
+          }
+        }
+      }
+    }
+
+    // 处理变更计划
+    if (changePlanData) {
+      // 确保 actions 有 selected 属性
+      if (changePlanData.actions) {
+        changePlanData.actions = changePlanData.actions.map((a: any) => ({
+          ...a,
+          selected: a.selected !== undefined ? a.selected : true
+        }))
+      }
+      store.changePlan = changePlanData
+      store.showChangePlan = true
+
+      const pmsg = messages.find(m => m.id === progressMsgId)
+      if (pmsg) {
+        const addCount = changePlanData.actions?.filter((a: any) => a.op === 'add' || a.op === 'create').length || 0
+        const modCount = changePlanData.actions?.filter((a: any) => a.op === 'modify' || a.op === 'update').length || 0
+        const delCount = changePlanData.actions?.filter((a: any) => a.op === 'remove' || a.op === 'delete').length || 0
+        pmsg.content = `📊 文档变更分析完成：新增 ${addCount} 项，修改 ${modCount} 项，删除 ${delCount} 项。\n\n请在右侧面板确认要执行的变更。`
+      }
+    } else {
+      const pmsg = messages.find(m => m.id === progressMsgId)
+      if (pmsg) {
+        pmsg.content = '文档分析完成，未发现配置变更。'
+      }
+    }
+  } catch (err: any) {
+    const pmsg = messages.find(m => m.id === progressMsgId)
+    if (pmsg) {
+      pmsg.content = `❌ 文档变更分析失败: ${err?.message || '未知错误'}`
+    } else {
+      messages.push({
+        id: Date.now(),
+        role: 'assistant',
+        agent: 'builder',
+        content: `文档变更分析失败: ${err?.message || '未知错误'}`,
+        created_at: ''
+      })
+    }
+  }
+  scrollToBottom()
+}
+
+const executeChangePlan = async () => {
+  if (!store.changePlan || !existingAppId.value) return
+  const appId = existingAppId.value
+  const planId = store.changePlan.id
+
+  executingChangePlan.value = true
+
+  // 构建 selections
+  const selections: Record<string, boolean> = {}
+  store.changePlan.actions.forEach(a => {
+    selections[a.id] = a.selected
+  })
+
+  const execMsgId = Date.now()
+  messages.push({
+    id: execMsgId,
+    role: 'assistant',
+    agent: 'builder',
+    content: '正在执行变更计划...',
+    created_at: ''
+  })
+  scrollToBottom()
+
+  try {
+    // 先提交 selections
+    await applicationApi.updateSelections(appId, planId, selections)
+
+    // SSE 执行
+    const token = localStorage.getItem('token')
+    const url = applicationApi.executeChangePlanUrl(appId, planId)
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+    })
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ detail: '请求失败' }))
+      throw new Error(err.detail || '执行失败')
+    }
+
+    const reader = response.body?.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let updatedConfig: any = null
+
+    while (reader) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+
+      let currentEvent = ''
+      for (const line of lines) {
+        if (line.startsWith('event:')) {
+          currentEvent = line.slice(6).trim()
+        } else if (line.startsWith('data:')) {
+          const dataStr = line.slice(5).trim()
+          if (!dataStr) continue
+          try {
+            const data = JSON.parse(dataStr)
+
+            if (currentEvent === 'progress') {
+              const emsg = messages.find(m => m.id === execMsgId)
+              if (emsg) {
+                const msg = data.message || ''
+                const step = data.step || ''
+                const icon = data.status === 'done' ? '✅' : '⏳'
+                emsg.content = `${icon} ${msg || step}`
+              }
+              scrollToBottom()
+            } else if (currentEvent === 'done') {
+              updatedConfig = data.updated_config || data.config || data
+            } else if (currentEvent === 'error') {
+              throw new Error(data.message || '执行失败')
+            }
+          } catch (parseErr: any) {
+            if (parseErr.message && !parseErr.message.includes('JSON')) throw parseErr
+          }
+        }
+      }
+    }
+
+    // 完成：更新 store
+    if (updatedConfig) {
+      const previewData = updatedConfig.data || updatedConfig
+      if (previewData.appName || previewData.models) {
+        store.preview.appName = previewData.appName || store.preview.appName
+        store.preview.roles = previewData.roles || store.preview.roles
+        store.preview.dicts = previewData.dicts || store.preview.dicts
+        store.preview.models = previewData.models || store.preview.models
+        store.preview.workflows = previewData.workflows || store.preview.workflows
+        store.preview.permissions = previewData.permissions || store.preview.permissions
+      }
+    }
+
+    const emsg = messages.find(m => m.id === execMsgId)
+    if (emsg) {
+      emsg.content = `✅ 变更计划执行完成！已选 ${changePlanSelectedCount.value} 项变更已应用。`
+    }
+
+    // 关闭面板
+    store.showChangePlan = false
+    store.changePlan = null
+  } catch (err: any) {
+    const emsg = messages.find(m => m.id === execMsgId)
+    if (emsg) {
+      emsg.content = `❌ 变更执行失败: ${err?.message || '未知错误'}`
+    }
+  } finally {
+    executingChangePlan.value = false
   }
   scrollToBottom()
 }
@@ -1281,269 +2022,720 @@ onMounted(async () => {
       handleDocUpload({ target: fakeInput } as any)
     })
   }
+
+  // 加载项目列表
+  fetchProjects()
 })
 </script>
 
 <style scoped>
-.chat-page { height: 100vh; display: flex; flex-direction: column; background: #f9fafb; }
-.nav-bar { display: flex; justify-content: space-between; align-items: center; padding: 8px 16px; background: #fff; border-bottom: 1px solid #e5e7eb; flex-shrink: 0; }
+/* ══════════════════════════════════════════════
+   Dark Theme — unified with Landing / CodingPage
+   Background: #0a0a0a | Panel: #111 | Card: #161622
+   Border: rgba(255,255,255,0.06)
+   Text: rgba(255,255,255,0.9) / rgba(255,255,255,0.55)
+   Brand: linear-gradient(135deg, #7c3aed, #6366f1)
+   ══════════════════════════════════════════════ */
+
+.chat-page { height: 100vh; display: flex; flex-direction: column; background: #0a0a0a; color: rgba(255,255,255,0.9); }
+
+/* ── 导航栏 ── */
+.nav-bar {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 8px 16px; flex-shrink: 0;
+  background: rgba(17,17,17,0.75);
+  backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
 .nav-left, .nav-right { display: flex; align-items: center; gap: 10px; }
-.back-btn { background: none; border: none; color: #9ca3af; cursor: pointer; padding: 4px; }
-.back-btn:hover { color: #374151; }
-.logo-box { width: 28px; height: 28px; background: #4f46e5; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 700; font-size: 12px; }
-.logo-text { font-size: 14px; font-weight: 600; color: #1f2937; }
-.nav-link { font-size: 12px; color: #6b7280; background: none; border: none; cursor: pointer; padding: 6px 12px; border-radius: 6px; }
-.nav-link:hover { background: #f3f4f6; color: #374151; }
-.dot { width: 8px; height: 8px; border-radius: 50%; background: #d1d5db; }
+.back-btn { background: none; border: none; color: rgba(255,255,255,0.45); cursor: pointer; padding: 4px; transition: color 0.2s; }
+.back-btn:hover { color: rgba(255,255,255,0.9); }
+.logo-box {
+  width: 28px; height: 28px;
+  background: linear-gradient(135deg, #7c3aed, #6366f1);
+  border-radius: 8px; display: flex; align-items: center; justify-content: center;
+  color: #fff; font-weight: 700; font-size: 12px;
+}
+.logo-text { font-size: 14px; font-weight: 600; color: rgba(255,255,255,0.9); }
+.nav-link {
+  font-size: 12px; color: rgba(255,255,255,0.55); background: none; border: none;
+  cursor: pointer; padding: 6px 12px; border-radius: 8px; transition: all 0.2s;
+}
+.nav-link:hover { background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.9); transform: translateY(-1px); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: rgba(255,255,255,0.15); }
 .dot.active { background: #10b981; }
 
 .main-area { flex: 1; display: flex; overflow: hidden; position: relative; }
 
-/* 左侧对话 */
+/* ── 左侧对话 ── */
 .chat-side { flex: 1; display: flex; flex-direction: column; min-width: 0; min-width: 320px; }
-.agent-tabs { display: flex; gap: 4px; padding: 8px 16px; background: #fff; border-bottom: 1px solid #f3f4f6; flex-shrink: 0; }
-.agent-tab { display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 8px; font-size: 12px; font-weight: 500; background: none; border: none; color: #6b7280; cursor: pointer; }
-.agent-tab:hover { background: #f3f4f6; }
-.agent-tab.active { background: #eef2ff; color: #4338ca; }
+
+/* Agent tabs */
+.agent-tabs {
+  display: flex; gap: 4px; padding: 8px 16px; flex-shrink: 0;
+  background: #111; border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.agent-tab {
+  display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 8px;
+  font-size: 12px; font-weight: 500; background: none; border: none;
+  color: rgba(255,255,255,0.45); cursor: pointer; transition: all 0.2s;
+  position: relative;
+}
+.agent-tab:hover { background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.8); }
+.agent-tab.active {
+  background: rgba(124,58,237,0.1); color: #a78bfa;
+}
+.agent-tab.active::after {
+  content: ''; position: absolute; bottom: -8px; left: 12px; right: 12px; height: 2px;
+  background: linear-gradient(135deg, #7c3aed, #6366f1); border-radius: 1px;
+}
 .active-dot { width: 6px; height: 6px; border-radius: 50%; background: #10b981; }
 
-.messages { flex: 1; overflow-y: auto; padding: 16px; }
+/* 消息区 */
+.messages { flex: 1; overflow-y: auto; padding: 16px; background: #0a0a0a; }
 .chat-bubble { margin-bottom: 16px; animation: fadeUp 0.3s ease-out; }
 .chat-bubble.user { display: flex; justify-content: flex-end; }
 .chat-bubble.assistant { display: flex; justify-content: flex-start; }
 .bubble-inner { max-width: 80%; }
-.agent-label { display: flex; align-items: center; gap: 4px; font-size: 11px; color: #9ca3af; margin-bottom: 4px; }
+.agent-label { display: flex; align-items: center; gap: 4px; font-size: 11px; color: rgba(255,255,255,0.4); margin-bottom: 4px; }
 .bubble-content { padding: 10px 14px; border-radius: 14px; font-size: 13px; line-height: 1.6; }
-.bubble-content.user { background: #4f46e5; color: #fff; border-bottom-right-radius: 4px; }
-.bubble-content.assistant { background: #fff; border: 1px solid #e5e7eb; color: #374151; border-bottom-left-radius: 4px; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+.bubble-content.user {
+  background: linear-gradient(135deg, #7c3aed, #6366f1);
+  color: #fff; border-bottom-right-radius: 4px;
+}
+.bubble-content.assistant {
+  background: #161622; border: 1px solid rgba(255,255,255,0.06);
+  color: rgba(255,255,255,0.9); border-bottom-left-radius: 4px;
+}
 @keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 
-.typing-dot { width: 6px; height: 6px; border-radius: 50%; background: #94a3b8; display: inline-block; animation: pulseDot 1.4s infinite ease-in-out both; margin-right: 3px; }
+.typing-dot { width: 6px; height: 6px; border-radius: 50%; background: rgba(255,255,255,0.3); display: inline-block; animation: pulseDot 1.4s infinite ease-in-out both; margin-right: 3px; }
 .typing-dot:nth-child(1) { animation-delay: -0.32s; }
 .typing-dot:nth-child(2) { animation-delay: -0.16s; }
 @keyframes pulseDot { 0%,80%,100% { transform: scale(0); } 40% { transform: scale(1); } }
 
-.input-bar { padding: 12px 16px; background: #fff; border-top: 1px solid #e5e7eb; flex-shrink: 0; }
-.input-wrap { display: flex; align-items: center; gap: 8px; background: #f3f4f6; border-radius: 12px; padding: 8px 8px 8px 12px; border: 1px solid #e5e7eb; }
-.input-wrap:focus-within { border-color: #a5b4fc; box-shadow: 0 0 0 3px rgba(99,102,241,0.1); }
-.upload-btn { cursor: pointer; font-size: 18px; padding: 2px 4px; border-radius: 6px; opacity: 0.6; transition: opacity 0.2s; }
-.upload-btn:hover { opacity: 1; background: #e5e7eb; }
-.input-wrap input { flex: 1; background: transparent; border: none; outline: none; font-size: 13px; color: #374151; }
-.input-wrap input::placeholder { color: #9ca3af; }
-.send-btn { width: 32px; height: 32px; border-radius: 8px; background: #4f46e5; color: #fff; border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; }
-.send-btn.disabled { opacity: 0.4; cursor: not-allowed; }
-.send-btn:hover:not(.disabled) { background: #4338ca; }
+/* 底部输入框 */
+.input-bar { padding: 12px 16px; background: #111; border-top: 1px solid rgba(255,255,255,0.06); flex-shrink: 0; }
+.input-wrap {
+  display: flex; align-items: center; gap: 8px;
+  background: #161622; border-radius: 12px; padding: 8px 8px 8px 12px;
+  border: 1px solid rgba(255,255,255,0.06); transition: border-color 0.3s, box-shadow 0.3s;
+}
+.input-wrap:focus-within {
+  border-color: #7c3aed;
+  box-shadow: 0 0 0 3px rgba(124,58,237,0.15), inset 0 0 0 1px rgba(124,58,237,0.3);
+}
+.upload-btn { cursor: pointer; font-size: 18px; padding: 2px 4px; border-radius: 6px; opacity: 0.5; transition: opacity 0.2s; }
+.upload-btn:hover { opacity: 1; background: rgba(255,255,255,0.06); }
+.input-wrap input { flex: 1; background: transparent; border: none; outline: none; font-size: 13px; color: rgba(255,255,255,0.9); }
+.input-wrap input::placeholder { color: rgba(255,255,255,0.3); }
+.send-btn {
+  width: 32px; height: 32px; border-radius: 8px;
+  background: linear-gradient(135deg, #7c3aed, #6366f1);
+  color: #fff; border: none; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+.send-btn.disabled { opacity: 0.3; cursor: not-allowed; }
+.send-btn:hover:not(.disabled) { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(124,58,237,0.3); }
 
-/* 右侧预览 */
-.preview-side { flex: 1; background: #fff; border-left: 1px solid #e5e7eb; display: flex; flex-direction: column; min-width: 0; }
-.preview-tabs { display: flex; border-bottom: 1px solid #e5e7eb; padding: 0 8px; flex-shrink: 0; }
-.ptab { padding: 10px 12px; font-size: 12px; font-weight: 500; border: none; background: none; color: #9ca3af; cursor: pointer; border-bottom: 2px solid transparent; }
-.ptab.active { color: #4f46e5; border-bottom-color: #4f46e5; }
-.preview-empty { padding: 24px; text-align: center; color: #9ca3af; font-size: 13px; margin-top: 80px; }
-.preview-empty .empty-icon { font-size: 40px; opacity: 0.4; margin-bottom: 12px; }
+/* ── 右侧预览面板 ── */
+.preview-side {
+  flex: 1; background: #111; border-left: 1px solid rgba(255,255,255,0.06);
+  display: flex; flex-direction: column; min-width: 0; position: relative;
+}
+.preview-tabs { display: flex; border-bottom: 1px solid rgba(255,255,255,0.06); padding: 0 8px; flex-shrink: 0; }
+.ptab {
+  padding: 10px 12px; font-size: 12px; font-weight: 500; border: none; background: none;
+  color: rgba(255,255,255,0.4); cursor: pointer; border-bottom: 2px solid transparent;
+  transition: color 0.2s;
+}
+.ptab:hover { color: rgba(255,255,255,0.7); }
+.ptab.active {
+  color: #a78bfa;
+  border-image: linear-gradient(135deg, #7c3aed, #6366f1) 1;
+  border-bottom-width: 2px; border-bottom-style: solid;
+}
+.preview-empty { padding: 24px; text-align: center; color: rgba(255,255,255,0.35); font-size: 13px; margin-top: 80px; }
+.preview-empty .empty-icon { font-size: 40px; opacity: 0.3; margin-bottom: 12px; }
 .preview-empty.small { margin-top: 0; padding: 32px; }
 .preview-body { flex: 1; overflow-y: auto; }
 .tab-content { padding: 16px; }
 
-/* 概览 */
+/* ── 概览 ── */
 .overview-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-.overview-header h4 { font-size: 14px; font-weight: 600; color: #1f2937; margin: 0; }
+.overview-header h4 { font-size: 14px; font-weight: 600; color: rgba(255,255,255,0.9); margin: 0; }
 .status-tag { font-size: 11px; padding: 2px 8px; border-radius: 10px; }
-.status-tag.ready { background: #ecfdf5; color: #059669; }
-.status-tag.deployed { background: #dbeafe; color: #2563eb; }
-.deployed-banner { text-align: center; padding: 10px; background: #eff6ff; color: #2563eb; border-radius: 12px; font-size: 13px; font-weight: 500; margin-top: 8px; }
-.deployed-link { background: none; border: none; color: #4f46e5; cursor: pointer; font-size: 12px; text-decoration: underline; margin-left: 8px; }
-.status-tag.talking { background: #eef2ff; color: #4f46e5; }
+.status-tag.ready { background: rgba(16,185,129,0.15); color: #34d399; }
+.status-tag.deployed { background: rgba(96,165,250,0.15); color: #60a5fa; }
+.deployed-banner {
+  text-align: center; padding: 10px; border-radius: 12px; font-size: 13px; font-weight: 500; margin-top: 8px;
+  background: rgba(96,165,250,0.1); color: #60a5fa; border: 1px solid rgba(96,165,250,0.15);
+}
+.deployed-link { background: none; border: none; color: #a78bfa; cursor: pointer; font-size: 12px; text-decoration: underline; margin-left: 8px; }
+.status-tag.talking { background: rgba(124,58,237,0.15); color: #a78bfa; }
 .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 16px; }
-.stat-card { border-radius: 8px; padding: 12px; text-align: center; }
-.stat-card.indigo { background: #eef2ff; }
-.stat-card.emerald { background: #ecfdf5; }
-.stat-card.amber { background: #fffbeb; }
-.stat-card.purple { background: #faf5ff; }
+.stat-card { border-radius: 12px; padding: 12px; text-align: center; border: 1px solid rgba(255,255,255,0.06); }
+.stat-card.indigo { background: rgba(99,102,241,0.1); }
+.stat-card.emerald { background: rgba(16,185,129,0.1); }
+.stat-card.amber { background: rgba(245,158,11,0.1); }
+.stat-card.purple { background: rgba(124,58,237,0.1); }
 .stat-num { font-size: 20px; font-weight: 700; }
-.stat-card.indigo .stat-num { color: #4f46e5; }
-.stat-card.emerald .stat-num { color: #059669; }
-.stat-card.amber .stat-num { color: #d97706; }
-.stat-card.purple .stat-num { color: #7c3aed; }
-.stat-label { font-size: 11px; color: #9ca3af; }
+.stat-card.indigo .stat-num { color: #818cf8; }
+.stat-card.emerald .stat-num { color: #34d399; }
+.stat-card.amber .stat-num { color: #fbbf24; }
+.stat-card.purple .stat-num { color: #a78bfa; }
+.stat-label { font-size: 11px; color: rgba(255,255,255,0.45); }
 .sub-section { margin-bottom: 16px; }
-.sub-title { font-size: 12px; font-weight: 500; color: #6b7280; margin-bottom: 8px; }
+.sub-title { font-size: 12px; font-weight: 500; color: rgba(255,255,255,0.55); margin-bottom: 8px; }
 .tag-list { display: flex; flex-wrap: wrap; gap: 6px; }
-.tag { font-size: 12px; background: #f3f4f6; color: #4b5563; padding: 4px 10px; border-radius: 6px; }
+.tag { font-size: 12px; background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.7); padding: 4px 10px; border-radius: 6px; }
 .dict-list { display: flex; flex-direction: column; gap: 6px; }
-.dict-row { display: flex; align-items: center; gap: 6px; font-size: 12px; padding: 4px 8px; background: #f9fafb; border-radius: 4px; }
-.dict-name { color: #374151; white-space: nowrap; }
-.dict-opts { flex: 1; }
-.dict-opts.empty { color: #dc2626; }
-.edit-mini, .del-mini { background: none; border: none; cursor: pointer; font-size: 11px; padding: 2px; opacity: 0.4; transition: opacity 0.2s; flex-shrink: 0; }
+.dict-row { display: flex; align-items: center; gap: 6px; font-size: 12px; padding: 4px 8px; background: rgba(255,255,255,0.04); border-radius: 6px; }
+.dict-name { color: rgba(255,255,255,0.8); white-space: nowrap; }
+.dict-opts { flex: 1; color: rgba(255,255,255,0.4); }
+.dict-opts.empty { color: #f87171; }
+.edit-mini, .del-mini { background: none; border: none; cursor: pointer; font-size: 11px; padding: 2px; opacity: 0.3; transition: opacity 0.2s; flex-shrink: 0; color: rgba(255,255,255,0.6); }
 .dict-row:hover .edit-mini, .dict-row:hover .del-mini { opacity: 1; }
-.add-mini { background: none; border: 1px dashed #d1d5db; color: #6b7280; font-size: 11px; padding: 0 6px; border-radius: 4px; cursor: pointer; margin-left: 8px; }
-.add-mini:hover { border-color: #4f46e5; color: #4f46e5; }
+.add-mini { background: none; border: 1px dashed rgba(255,255,255,0.15); color: rgba(255,255,255,0.45); font-size: 11px; padding: 0 6px; border-radius: 4px; cursor: pointer; margin-left: 8px; transition: all 0.2s; }
+.add-mini:hover { border-color: #7c3aed; color: #a78bfa; }
 .tag.editable { cursor: pointer; transition: all 0.2s; }
-.tag.editable:hover { background: #fef2f2; color: #dc2626; border-color: #fecaca; }
-.tag.empty { background: #f9fafb; color: #9ca3af; font-style: italic; }
-.dict-opts { color: #9ca3af; }
-.assemble-btn { width: 100%; padding: 10px; background: #f59e0b; color: #fff; border: none; border-radius: 12px; font-size: 13px; font-weight: 500; cursor: pointer; margin-top: 8px; }
-.assemble-btn:hover { background: #d97706; }
-.assemble-progress { display: flex; align-items: center; gap: 8px; padding: 10px 12px; background: #fffbeb; border: 1px solid #fde68a; border-radius: 12px; font-size: 12px; color: #92400e; margin-top: 8px; }
+.tag.editable:hover { background: rgba(239,68,68,0.15); color: #f87171; }
+.tag.empty { background: rgba(255,255,255,0.03); color: rgba(255,255,255,0.3); font-style: italic; }
+.assemble-btn {
+  width: 100%; padding: 10px; border: none; border-radius: 12px;
+  font-size: 13px; font-weight: 500; cursor: pointer; margin-top: 8px;
+  background: rgba(245,158,11,0.15); color: #fbbf24;
+  border: 1px solid rgba(245,158,11,0.2); transition: all 0.2s;
+}
+.assemble-btn:hover { background: rgba(245,158,11,0.25); transform: translateY(-1px); }
+.assemble-progress {
+  display: flex; align-items: center; gap: 8px; padding: 10px 12px;
+  background: rgba(245,158,11,0.08); border: 1px solid rgba(245,158,11,0.15);
+  border-radius: 12px; font-size: 12px; color: #fbbf24; margin-top: 8px;
+}
 .assemble-spinner { animation: spin 1s linear infinite; display: inline-block; font-size: 16px; }
-.gen-btn { width: 100%; padding: 10px; background: #4f46e5; color: #fff; border: none; border-radius: 12px; font-size: 13px; font-weight: 500; cursor: pointer; margin-top: 8px; }
-.gen-btn:hover { background: #4338ca; }
+.gen-btn {
+  width: 100%; padding: 10px;
+  background: linear-gradient(135deg, #7c3aed, #6366f1);
+  color: #fff; border: none; border-radius: 12px; font-size: 13px; font-weight: 500;
+  cursor: pointer; margin-top: 8px; transition: transform 0.2s, box-shadow 0.2s;
+}
+.gen-btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 4px 16px rgba(124,58,237,0.3); }
+.gen-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
-/* 模型 */
-.model-card { border: 1px solid #e5e7eb; border-radius: 12px; overflow: hidden; margin-bottom: 12px; }
-.model-header { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: #f9fafb; font-size: 12px; }
-.model-name { font-weight: 600; color: #374151; }
-.model-code { margin-left: auto; font-size: 10px; color: #9ca3af; font-family: monospace; }
+/* ── 模型 ── */
+.model-card { border: 1px solid rgba(255,255,255,0.06); border-radius: 12px; overflow: hidden; margin-bottom: 12px; background: #161622; }
+.model-header { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: rgba(255,255,255,0.03); font-size: 12px; }
+.model-name { font-weight: 600; color: rgba(255,255,255,0.9); }
+.model-code { margin-left: auto; font-size: 10px; color: rgba(255,255,255,0.35); font-family: monospace; }
 .field-list { }
-.field-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 12px; border-top: 1px solid #f3f4f6; }
-.field-row:hover { background: #f9fafb; }
+.field-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 12px; border-top: 1px solid rgba(255,255,255,0.04); }
+.field-row:hover { background: rgba(255,255,255,0.03); }
 .field-left { display: flex; align-items: center; gap: 8px; }
 .field-icon { width: 16px; text-align: center; font-size: 10px; }
-.field-name { font-size: 12px; color: #374151; }
-.req { color: #ef4444; font-size: 10px; margin-left: 2px; }
+.field-name { font-size: 12px; color: rgba(255,255,255,0.8); }
+.req { color: #f87171; font-size: 10px; margin-left: 2px; }
 .field-right { display: flex; align-items: center; gap: 6px; }
 .ftag { font-size: 10px; padding: 1px 6px; border-radius: 3px; }
-.ftag.dict { background: #fffbeb; color: #d97706; }
-.ftag.ref { background: #eff6ff; color: #2563eb; }
-.ftype { font-size: 10px; color: #9ca3af; }
+.ftag.dict { background: rgba(245,158,11,0.12); color: #fbbf24; }
+.ftag.ref { background: rgba(96,165,250,0.12); color: #60a5fa; }
+.ftype { font-size: 10px; color: rgba(255,255,255,0.35); }
 
 /* 模型选择 */
-.model-select-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; padding: 8px 12px; background: #f9fafb; border-radius: 8px; }
-.model-select-all { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #374151; cursor: pointer; }
-.model-select-all input { accent-color: #4f46e5; }
-.model-select-tip { font-size: 11px; color: #9ca3af; }
+.model-select-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; padding: 8px 12px; background: rgba(255,255,255,0.04); border-radius: 8px; }
+.model-select-all { display: flex; align-items: center; gap: 6px; font-size: 12px; color: rgba(255,255,255,0.8); cursor: pointer; }
+.model-select-all input { accent-color: #7c3aed; }
+.model-select-tip { font-size: 11px; color: rgba(255,255,255,0.35); }
 .model-checkbox { display: flex; align-items: center; cursor: pointer; }
-.model-checkbox input { accent-color: #4f46e5; width: 14px; height: 14px; }
-.model-card.model-deselected { opacity: 0.45; }
-.model-card.model-deselected:hover { opacity: 0.7; }
+.model-checkbox input { accent-color: #7c3aed; width: 14px; height: 14px; }
+.model-card.model-deselected { opacity: 0.35; }
+.model-card.model-deselected:hover { opacity: 0.6; }
 
-/* 表单 */
+/* ── 表单 ── */
 .form-selector { display: flex; gap: 4px; margin-bottom: 12px; overflow-x: auto; padding-bottom: 4px; }
-.form-tab { font-size: 12px; padding: 4px 10px; border-radius: 8px; border: none; background: none; color: #6b7280; cursor: pointer; white-space: nowrap; }
-.form-tab.active { background: #eef2ff; color: #4338ca; font-weight: 500; }
-.form-preview { border: 1px solid #e5e7eb; border-radius: 12px; overflow: hidden; }
-.form-title { background: #eef2ff; padding: 8px 16px; font-size: 12px; font-weight: 600; color: #4338ca; border-bottom: 1px solid #c7d2fe; }
+.form-tab { font-size: 12px; padding: 4px 10px; border-radius: 8px; border: none; background: none; color: rgba(255,255,255,0.45); cursor: pointer; white-space: nowrap; transition: all 0.2s; }
+.form-tab.active { background: rgba(124,58,237,0.12); color: #a78bfa; font-weight: 500; }
+.form-preview { border: 1px solid rgba(255,255,255,0.06); border-radius: 12px; overflow: hidden; background: #161622; }
+.form-title { background: rgba(124,58,237,0.1); padding: 8px 16px; font-size: 12px; font-weight: 600; color: #a78bfa; border-bottom: 1px solid rgba(124,58,237,0.15); }
 .form-fields-grid { padding: 16px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .form-field { min-width: 0; }
 .form-field.full-width { grid-column: 1 / -1; }
-.form-label { font-size: 12px; color: #4b5563; margin-bottom: 4px; }
-.form-mock { border: 1px solid #e5e7eb; border-radius: 8px; padding: 6px 10px; font-size: 12px; color: #9ca3af; background: #f9fafb; display: flex; justify-content: space-between; }
+.form-label { font-size: 12px; color: rgba(255,255,255,0.55); margin-bottom: 4px; }
+.form-mock { border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 6px 10px; font-size: 12px; color: rgba(255,255,255,0.3); background: rgba(255,255,255,0.03); display: flex; justify-content: space-between; }
 .form-mock.tall { min-height: 56px; }
-.mock-auto { font-style: italic; color: #d1d5db; }
-.mock-arrow { color: #9ca3af; }
+.mock-auto { font-style: italic; color: rgba(255,255,255,0.2); }
+.mock-arrow { color: rgba(255,255,255,0.3); }
 .mock-link { color: #60a5fa; }
-.mock-switch { color: #d1d5db; font-size: 10px; letter-spacing: -1px; }
+.mock-switch { color: rgba(255,255,255,0.2); font-size: 10px; letter-spacing: -1px; }
 
-/* 子表 */
-.subtable-wrapper { border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden; }
+/* ── 子表 ── */
+.subtable-wrapper { border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; overflow: hidden; }
 .subtable { width: 100%; border-collapse: collapse; font-size: 12px; }
-.subtable thead { background: #f3f4f6; }
-.subtable th { padding: 6px 10px; text-align: left; font-weight: 500; color: #6b7280; border-bottom: 1px solid #e5e7eb; white-space: nowrap; }
-.subtable td { padding: 6px 10px; border-bottom: 1px solid #f3f4f6; color: #374151; }
-.subtable-idx { width: 32px; text-align: center; color: #9ca3af; }
+.subtable thead { background: rgba(255,255,255,0.04); }
+.subtable th { padding: 6px 10px; text-align: left; font-weight: 500; color: rgba(255,255,255,0.5); border-bottom: 1px solid rgba(255,255,255,0.06); white-space: nowrap; }
+.subtable td { padding: 6px 10px; border-bottom: 1px solid rgba(255,255,255,0.04); color: rgba(255,255,255,0.7); }
+.subtable-idx { width: 32px; text-align: center; color: rgba(255,255,255,0.3); }
 .subtable-op { width: 48px; text-align: center; }
-.subtable-del { color: #ef4444; cursor: pointer; font-size: 11px; }
-.subtable-placeholder { color: #d1d5db; display: flex; justify-content: space-between; align-items: center; }
+.subtable-del { color: #f87171; cursor: pointer; font-size: 11px; }
+.subtable-placeholder { color: rgba(255,255,255,0.2); display: flex; justify-content: space-between; align-items: center; }
 .subtable-data-selector { display: flex; justify-content: space-between; align-items: center; }
-.subtable-add { padding: 8px; text-align: center; font-size: 12px; color: #4f46e5; cursor: pointer; border-top: 1px dashed #e5e7eb; }
-.subtable-add:hover { background: #f9fafb; }
+.subtable-add { padding: 8px; text-align: center; font-size: 12px; color: #a78bfa; cursor: pointer; border-top: 1px dashed rgba(255,255,255,0.08); transition: background 0.2s; }
+.subtable-add:hover { background: rgba(255,255,255,0.04); }
 
-/* 流程 */
-.wf-card { border: 1px solid #e5e7eb; border-radius: 12px; overflow: hidden; margin-bottom: 12px; }
-.wf-header { display: flex; justify-content: space-between; padding: 8px 12px; background: #f9fafb; }
-.wf-name { font-size: 12px; font-weight: 600; color: #374151; }
-.wf-form { font-size: 10px; color: #9ca3af; }
+/* ── 流程 ── */
+.wf-card { border: 1px solid rgba(255,255,255,0.06); border-radius: 12px; overflow: hidden; margin-bottom: 12px; background: #161622; }
+.wf-header { display: flex; justify-content: space-between; padding: 8px 12px; background: rgba(255,255,255,0.03); }
+.wf-name { font-size: 12px; font-weight: 600; color: rgba(255,255,255,0.9); }
+.wf-form { font-size: 10px; color: rgba(255,255,255,0.35); }
 .wf-nodes { display: flex; flex-direction: column; align-items: center; padding: 16px; gap: 4px; }
 .wf-node { padding: 8px 16px; border-radius: 8px; font-size: 12px; font-weight: 500; text-align: center; min-width: 120px; }
-.wf-node.start { background: #ecfdf5; color: #059669; border-radius: 20px; }
-.wf-node.approve { background: #eef2ff; color: #4338ca; }
-.wf-node.end { background: #f3f4f6; color: #6b7280; border-radius: 20px; }
+.wf-node.start { background: rgba(16,185,129,0.12); color: #34d399; border-radius: 20px; }
+.wf-node.approve { background: rgba(124,58,237,0.12); color: #a78bfa; }
+.wf-node.end { background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.45); border-radius: 20px; }
 .wf-role { font-size: 10px; opacity: 0.7; margin-top: 2px; }
-.wf-arrow { color: #d1d5db; font-size: 12px; }
+.wf-arrow { color: rgba(255,255,255,0.15); font-size: 12px; }
 
-/* 权限 */
-.perm-card { border: 1px solid #e5e7eb; border-radius: 12px; overflow: hidden; margin-bottom: 12px; }
-.perm-header { padding: 8px 12px; background: #f9fafb; font-size: 12px; font-weight: 600; color: #374151; }
+/* ── 权限 ── */
+.perm-card { border: 1px solid rgba(255,255,255,0.06); border-radius: 12px; overflow: hidden; margin-bottom: 12px; background: #161622; }
+.perm-header { padding: 8px 12px; background: rgba(255,255,255,0.03); font-size: 12px; font-weight: 600; color: rgba(255,255,255,0.9); }
 .perm-table { width: 100%; border-collapse: collapse; }
-.perm-table th { font-size: 10px; color: #9ca3af; font-weight: 500; text-align: left; padding: 6px 12px; border-bottom: 1px solid #f3f4f6; }
-.perm-table td { font-size: 12px; color: #374151; padding: 6px 12px; border-bottom: 1px solid #f9fafb; }
+.perm-table th { font-size: 10px; color: rgba(255,255,255,0.4); font-weight: 500; text-align: left; padding: 6px 12px; border-bottom: 1px solid rgba(255,255,255,0.06); }
+.perm-table td { font-size: 12px; color: rgba(255,255,255,0.7); padding: 6px 12px; border-bottom: 1px solid rgba(255,255,255,0.04); }
 .data-tag { font-size: 10px; padding: 2px 6px; border-radius: 4px; }
-.data-tag.all { background: #fef2f2; color: #dc2626; }
-.data-tag.dept { background: #fffbeb; color: #d97706; }
-.data-tag.self { background: #eff6ff; color: #2563eb; }
+.data-tag.all { background: rgba(239,68,68,0.12); color: #f87171; }
+.data-tag.dept { background: rgba(245,158,11,0.12); color: #fbbf24; }
+.data-tag.self { background: rgba(96,165,250,0.12); color: #60a5fa; }
 
 .connect-warn { padding: 16px; }
-.connect-warn > div { background: #fffbeb; border: 1px solid #fde68a; border-radius: 12px; padding: 12px; font-size: 12px; }
-.warn-title { color: #92400e; font-weight: 500; margin-bottom: 4px; }
-.connect-warn p { color: #b45309; margin: 0 0 8px; }
-.warn-link { color: #92400e; text-decoration: underline; background: none; border: none; cursor: pointer; font-size: 12px; }
+.connect-warn > div { background: rgba(245,158,11,0.08); border: 1px solid rgba(245,158,11,0.15); border-radius: 12px; padding: 12px; font-size: 12px; }
+.warn-title { color: #fbbf24; font-weight: 500; margin-bottom: 4px; }
+.connect-warn p { color: rgba(245,158,11,0.7); margin: 0 0 8px; }
+.warn-link { color: #fbbf24; text-decoration: underline; background: none; border: none; cursor: pointer; font-size: 12px; }
 
 /* ── 部署面板（第三栏） ── */
 .deploy-side {
-  width: 0; min-width: 0; overflow: hidden; background: #fafbfc; border-left: 1px solid #eee;
+  width: 0; min-width: 0; overflow: hidden;
+  background: #111; border-left: 1px solid rgba(255,255,255,0.06);
   display: flex; flex-direction: column; transition: width 0.3s ease, min-width 0.3s ease;
 }
 .deploy-side.open { width: 340px; min-width: 340px; }
 @media (max-width: 1200px) {
-  .deploy-side.open { position: absolute; right: 0; top: 0; bottom: 0; z-index: 20; width: 360px; min-width: 360px; box-shadow: -4px 0 20px rgba(0,0,0,0.08); }
+  .deploy-side.open { position: absolute; right: 0; top: 0; bottom: 0; z-index: 20; width: 360px; min-width: 360px; box-shadow: -4px 0 24px rgba(0,0,0,0.4); }
 }
 
 .deploy-header { display: flex; justify-content: space-between; align-items: center; padding: 16px 16px 8px; }
-.deploy-title { font-size: 14px; font-weight: 700; color: #111; }
-.deploy-desc { font-size: 11px; color: #aaa; margin-top: 2px; }
-.deploy-close { all: unset; cursor: pointer; color: #ccc; font-size: 16px; padding: 4px; }
-.deploy-close:hover { color: #666; }
+.deploy-title { font-size: 14px; font-weight: 700; color: rgba(255,255,255,0.9); }
+.deploy-desc { font-size: 11px; color: rgba(255,255,255,0.35); margin-top: 2px; }
+.deploy-close { all: unset; cursor: pointer; color: rgba(255,255,255,0.3); font-size: 16px; padding: 4px; transition: color 0.2s; }
+.deploy-close:hover { color: rgba(255,255,255,0.7); }
 
 .deploy-progress { padding: 0 16px 8px; display: flex; align-items: center; gap: 8px; }
-.dp-track { flex: 1; height: 3px; background: #eee; border-radius: 2px; overflow: hidden; }
-.dp-fill { height: 100%; background: linear-gradient(90deg, #6366f1, #8b5cf6); border-radius: 2px; transition: width 0.5s; }
-.dp-meta { font-size: 10px; color: #bbb; white-space: nowrap; }
+.dp-track { flex: 1; height: 3px; background: rgba(255,255,255,0.08); border-radius: 2px; overflow: hidden; }
+.dp-fill { height: 100%; background: linear-gradient(90deg, #7c3aed, #6366f1); border-radius: 2px; transition: width 0.5s; }
+.dp-meta { font-size: 10px; color: rgba(255,255,255,0.35); white-space: nowrap; }
 
 .deploy-actions { padding: 0 16px 12px; }
-.dp-run-all { width: 100%; padding: 8px; background: #111; color: #fff; border: none; border-radius: 8px; font-size: 12px; cursor: pointer; font-weight: 500; }
-.dp-run-all:hover:not(:disabled) { background: #333; }
-.dp-run-all:disabled { opacity: 0.35; cursor: not-allowed; }
+.dp-run-all {
+  width: 100%; padding: 8px;
+  background: linear-gradient(135deg, #7c3aed, #6366f1);
+  color: #fff; border: none; border-radius: 8px; font-size: 12px; cursor: pointer; font-weight: 500;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+.dp-run-all:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(124,58,237,0.3); }
+.dp-run-all:disabled { opacity: 0.35; cursor: not-allowed; background: rgba(255,255,255,0.1); }
 
 .deploy-groups { flex: 1; overflow-y: auto; padding: 0 12px 12px; }
-.dg { background: #fff; border: 1px solid #eee; border-radius: 10px; margin-bottom: 8px; overflow: hidden; }
-.dg.done { border-color: #c6f6d5; }
-.dg.err { border-color: #fed7d7; }
-.dg-hd { display: flex; align-items: center; gap: 6px; padding: 10px 14px; background: #fafbfc; font-size: 12px; }
+.dg { background: #161622; border: 1px solid rgba(255,255,255,0.06); border-radius: 12px; margin-bottom: 8px; overflow: hidden; }
+.dg.done { border-color: rgba(16,185,129,0.25); }
+.dg.err { border-color: rgba(239,68,68,0.25); }
+.dg-hd { display: flex; align-items: center; gap: 6px; padding: 10px 14px; background: rgba(255,255,255,0.03); font-size: 12px; }
 .dg-icon { font-size: 13px; }
-.dg-name { font-weight: 600; color: #444; flex: 1; }
-.dg-badge { font-size: 9px; padding: 1px 6px; border-radius: 99px; font-weight: 600; background: #f0f0f0; color: #999; }
-.dg-badge.done { background: #e8faf0; color: #0a8; }
-.dg-badge.err { background: #fff0f0; color: #e53; }
+.dg-name { font-weight: 600; color: rgba(255,255,255,0.8); flex: 1; }
+.dg-badge { font-size: 9px; padding: 1px 6px; border-radius: 99px; font-weight: 600; background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.4); }
+.dg-badge.done { background: rgba(16,185,129,0.12); color: #34d399; }
+.dg-badge.err { background: rgba(239,68,68,0.12); color: #f87171; }
 
 .ds { display: flex; align-items: center; padding: 7px 14px; gap: 10px; font-size: 12px; }
-.ds + .ds { border-top: 1px solid #f7f7f7; }
-.ds:hover { background: #fcfcfd; }
+.ds + .ds { border-top: 1px solid rgba(255,255,255,0.04); }
+.ds:hover { background: rgba(255,255,255,0.03); }
 .ds-dot { width: 18px; height: 18px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 700; color: #fff; flex-shrink: 0; }
-.ds-dot.completed { background: #0a8; }
-.ds-dot.error { background: #e53; }
-.ds-dot.pending { background: #ddd; width: 7px; height: 7px; margin: 0 5.5px; }
-.ds-dot.pulse { background: #6366f1; animation: dpulse 1.5s infinite; }
-@keyframes dpulse { 0%,100% { box-shadow: 0 0 0 0 rgba(99,102,241,0.3); } 50% { box-shadow: 0 0 0 5px rgba(99,102,241,0); } }
+.ds-dot.completed { background: #10b981; }
+.ds-dot.error { background: #ef4444; }
+.ds-dot.pending { background: rgba(255,255,255,0.15); width: 7px; height: 7px; margin: 0 5.5px; }
+.ds-dot.pulse { background: #7c3aed; animation: dpulse 1.5s infinite; }
+@keyframes dpulse { 0%,100% { box-shadow: 0 0 0 0 rgba(124,58,237,0.3); } 50% { box-shadow: 0 0 0 5px rgba(124,58,237,0); } }
 
 .ds-body { flex: 1; min-width: 0; }
-.ds-name { color: #333; }
-.ds.completed .ds-name { color: #999; }
-.ds.pending .ds-name { color: #ccc; }
-.ds-err { font-size: 10px; color: #e53; margin-top: 1px; }
+.ds-name { color: rgba(255,255,255,0.8); }
+.ds.completed .ds-name { color: rgba(255,255,255,0.4); }
+.ds.pending .ds-name { color: rgba(255,255,255,0.25); }
+.ds-err { font-size: 10px; color: #f87171; margin-top: 1px; }
 
 .ds-act { flex-shrink: 0; }
-.ds-btn { border: none; cursor: pointer; border-radius: 5px; font-weight: 500; font-size: 11px; }
-.ds-btn.run { padding: 3px 10px; background: #6366f1; color: #fff; }
-.ds-btn.run:hover { background: #4f46e5; }
-.ds-btn.retry { padding: 3px 10px; background: #e53; color: #fff; }
-.ds-btn.redo { padding: 2px 5px; background: none; color: #ccc; font-size: 14px; }
-.ds-btn.redo:hover { color: #6366f1; }
-.ds-spin { display: inline-block; width: 14px; height: 14px; border: 2px solid #eee; border-top-color: #6366f1; border-radius: 50%; animation: spin 0.7s linear infinite; }
+.ds-btn { border: none; cursor: pointer; border-radius: 6px; font-weight: 500; font-size: 11px; transition: transform 0.2s; }
+.ds-btn.run { padding: 3px 10px; background: linear-gradient(135deg, #7c3aed, #6366f1); color: #fff; }
+.ds-btn.run:hover { transform: translateY(-1px); }
+.ds-btn.retry { padding: 3px 10px; background: #ef4444; color: #fff; }
+.ds-btn.redo { padding: 2px 5px; background: none; color: rgba(255,255,255,0.25); font-size: 14px; }
+.ds-btn.redo:hover { color: #a78bfa; }
+.ds-spin { display: inline-block; width: 14px; height: 14px; border: 2px solid rgba(255,255,255,0.1); border-top-color: #7c3aed; border-radius: 50%; animation: spin 0.7s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
-.ds-lock { font-size: 11px; opacity: 0.2; }
+.ds-lock { font-size: 11px; opacity: 0.15; }
 
-.deploy-done { padding: 12px 16px; text-align: center; font-size: 13px; color: #0a8; font-weight: 500; }
-.deploy-done-btn { background: #0a8; color: #fff; border: none; border-radius: 6px; padding: 5px 12px; font-size: 12px; cursor: pointer; margin-left: 8px; }
-.deploy-done-btn:hover { background: #087; }
+.deploy-done { padding: 12px 16px; text-align: center; font-size: 13px; color: #34d399; font-weight: 500; }
+.deploy-done-btn {
+  background: linear-gradient(135deg, #7c3aed, #6366f1); color: #fff; border: none;
+  border-radius: 6px; padding: 5px 12px; font-size: 12px; cursor: pointer; margin-left: 8px;
+  transition: transform 0.2s;
+}
+.deploy-done-btn:hover { transform: translateY(-1px); }
+
+/* ── nav-right 项目按钮 ── */
+.nav-link.active { background: rgba(124,58,237,0.15); color: #a78bfa; }
+.project-count {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 18px; height: 18px; padding: 0 5px;
+  background: linear-gradient(135deg, #7c3aed, #6366f1); color: #fff; border-radius: 9px;
+  font-size: 10px; font-weight: 600; margin-left: 4px;
+}
+
+/* ── 我的项目面板 ── */
+.projects-panel {
+  position: fixed; top: 0; right: 0; bottom: 0; width: 400px;
+  background: #111; border-left: 1px solid rgba(255,255,255,0.06);
+  box-shadow: -4px 0 24px rgba(0,0,0,0.4);
+  z-index: 30; display: flex; flex-direction: column;
+  transform: translateX(100%); transition: transform 0.3s ease;
+}
+.projects-panel.open { transform: translateX(0); }
+
+.projects-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 16px 20px; border-bottom: 1px solid rgba(255,255,255,0.06); flex-shrink: 0;
+}
+.projects-header h3 { margin: 0; font-size: 15px; font-weight: 600; color: rgba(255,255,255,0.9); }
+.projects-header-actions { display: flex; align-items: center; gap: 8px; }
+.projects-add-btn {
+  background: linear-gradient(135deg, #7c3aed, #6366f1); color: #fff; border: none; border-radius: 8px;
+  padding: 5px 12px; font-size: 12px; cursor: pointer; font-weight: 500;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+.projects-add-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(124,58,237,0.3); }
+.projects-close-btn {
+  all: unset; cursor: pointer; color: rgba(255,255,255,0.35); font-size: 16px; padding: 4px; transition: color 0.2s;
+}
+.projects-close-btn:hover { color: rgba(255,255,255,0.8); }
+
+.projects-loading {
+  padding: 40px; text-align: center; color: rgba(255,255,255,0.4); font-size: 13px;
+}
+.loading-spinner { display: inline-block; animation: spin 1s linear infinite; }
+
+.projects-empty {
+  padding: 60px 20px; text-align: center; color: rgba(255,255,255,0.35);
+}
+.projects-empty .empty-icon { font-size: 40px; opacity: 0.3; margin-bottom: 8px; }
+.projects-empty p { font-size: 13px; margin: 0 0 16px; }
+.create-first-btn {
+  background: linear-gradient(135deg, #7c3aed, #6366f1); color: #fff; border: none; border-radius: 12px;
+  padding: 8px 20px; font-size: 13px; cursor: pointer; transition: transform 0.2s, box-shadow 0.2s;
+}
+.create-first-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(124,58,237,0.3); }
+
+.projects-list { flex: 1; overflow-y: auto; padding: 12px; }
+
+.project-card {
+  background: #161622; border: 1px solid rgba(255,255,255,0.06); border-radius: 12px;
+  padding: 12px 14px; margin-bottom: 10px; cursor: pointer;
+  transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
+}
+.project-card:hover { border-color: rgba(124,58,237,0.3); box-shadow: 0 2px 12px rgba(124,58,237,0.1); transform: translateY(-1px); }
+
+.project-card-header {
+  display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;
+}
+.project-card-left { display: flex; align-items: center; gap: 8px; }
+.platform-dot {
+  width: 8px; height: 8px; border-radius: 50%; background: rgba(255,255,255,0.15); flex-shrink: 0;
+}
+.platform-dot.connected { background: #10b981; }
+.project-name { font-size: 13px; font-weight: 600; color: rgba(255,255,255,0.9); }
+
+.project-card-actions { display: flex; align-items: center; gap: 4px; }
+.project-settings-btn {
+  background: none; border: none; cursor: pointer; font-size: 14px;
+  padding: 2px 4px; border-radius: 4px; opacity: 0.3; transition: opacity 0.2s;
+}
+.project-card:hover .project-settings-btn { opacity: 0.7; }
+.project-settings-btn:hover { opacity: 1 !important; background: rgba(255,255,255,0.08); }
+.expand-arrow {
+  font-size: 10px; color: rgba(255,255,255,0.35); transition: transform 0.2s; display: inline-block;
+}
+.expand-arrow.expanded { transform: rotate(90deg); }
+
+.project-card-meta {
+  display: flex; flex-wrap: wrap; gap: 8px; font-size: 11px; color: rgba(255,255,255,0.4);
+}
+.meta-item { white-space: nowrap; }
+
+/* 团队成员头像 */
+.project-members-avatars {
+  display: flex; gap: 0; margin-top: 8px;
+}
+.member-avatar {
+  width: 24px; height: 24px; border-radius: 50%;
+  background: rgba(124,58,237,0.15); color: #a78bfa; border: 2px solid #161622;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 10px; font-weight: 600; margin-left: -6px;
+}
+.member-avatar:first-child { margin-left: 0; }
+.member-avatar.more { background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.4); font-size: 9px; }
+
+/* 展开的应用列表 */
+.project-apps-list {
+  margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.06);
+}
+.apps-loading, .apps-empty {
+  font-size: 12px; color: rgba(255,255,255,0.35); padding: 4px 0;
+}
+.project-app-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px; border-radius: 8px; cursor: pointer;
+  font-size: 12px; color: rgba(255,255,255,0.7); transition: background 0.2s;
+}
+.project-app-item:hover { background: rgba(124,58,237,0.1); }
+.app-status-dot {
+  width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+}
+.app-status-dot.completed { background: #10b981; }
+.app-status-dot.pending { background: rgba(255,255,255,0.2); }
+.app-status-dot.generating { background: #fbbf24; }
+.app-name-text { flex: 1; }
+
+/* ── 变更计划 overlay ── */
+.change-plan-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  background: #111;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid rgba(255,255,255,0.06);
+}
+.change-plan-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+.change-plan-header h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.9);
+}
+.change-plan-close {
+  background: none;
+  border: none;
+  color: rgba(255,255,255,0.4);
+  font-size: 18px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+.change-plan-close:hover {
+  color: #fff;
+  background: rgba(255,255,255,0.08);
+}
+.change-plan-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 20px;
+}
+.change-group {
+  margin-bottom: 16px;
+}
+.group-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.7);
+  cursor: pointer;
+  padding: 6px 0;
+  user-select: none;
+}
+.group-title:hover { color: rgba(255,255,255,0.9); }
+.group-arrow {
+  display: inline-block;
+  transition: transform 0.15s;
+  font-size: 11px;
+}
+.group-arrow.expanded { transform: rotate(90deg); }
+.change-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 18px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: rgba(255,255,255,0.8);
+}
+.change-item:hover { background: rgba(255,255,255,0.04); }
+.change-checkbox {
+  accent-color: #7c3aed;
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+}
+.change-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.change-icon.add {
+  background: rgba(16, 185, 129, 0.15);
+  color: #10b981;
+}
+.change-icon.modify {
+  background: rgba(234, 179, 8, 0.15);
+  color: #eab308;
+}
+.change-icon.remove {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+}
+.change-desc { flex: 1; line-height: 1.4; }
+.change-plan-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 20px;
+  border-top: 1px solid rgba(255,255,255,0.08);
+  flex-wrap: wrap;
+}
+.cp-btn {
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.05);
+  color: rgba(255,255,255,0.7);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.cp-btn:hover {
+  background: rgba(255,255,255,0.1);
+  color: #fff;
+}
+.cp-btn.primary {
+  background: #7c3aed;
+  border-color: #7c3aed;
+  color: #fff;
+}
+.cp-btn.primary:hover { background: #6d28d9; }
+.cp-btn.primary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.cp-count {
+  font-size: 12px;
+  color: rgba(255,255,255,0.5);
+  margin-left: auto;
+  margin-right: 4px;
+}
+.change-plan-body::-webkit-scrollbar { width: 4px; }
+.change-plan-body::-webkit-scrollbar-track { background: transparent; }
+.change-plan-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+.change-plan-body::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+
+/* 增量更新弹窗 */
+.incremental-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.incremental-modal {
+  background: #1a1a2e;
+  border-radius: 16px;
+  width: 90%;
+  max-width: 600px;
+  max-height: 80vh;
+  overflow-y: auto;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+}
+
+.incremental-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.incremental-header h3 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: #fff;
+}
+
+.incremental-close {
+  background: none;
+  border: none;
+  color: #888;
+  font-size: 20px;
+  cursor: pointer;
+  padding: 4px;
+  line-height: 1;
+  transition: color 0.2s;
+}
+
+.incremental-close:hover {
+  color: #fff;
+}
+
+.incremental-diff {
+  padding: 16px 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.incremental-steps {
+  padding: 16px 20px;
+}
+
+/* ── 滚动条 ── */
+.messages::-webkit-scrollbar,
+.preview-body::-webkit-scrollbar,
+.deploy-groups::-webkit-scrollbar,
+.projects-list::-webkit-scrollbar { width: 4px; }
+.messages::-webkit-scrollbar-track,
+.preview-body::-webkit-scrollbar-track,
+.deploy-groups::-webkit-scrollbar-track,
+.projects-list::-webkit-scrollbar-track { background: transparent; }
+.messages::-webkit-scrollbar-thumb,
+.preview-body::-webkit-scrollbar-thumb,
+.deploy-groups::-webkit-scrollbar-thumb,
+.projects-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+.messages::-webkit-scrollbar-thumb:hover,
+.preview-body::-webkit-scrollbar-thumb:hover,
+.deploy-groups::-webkit-scrollbar-thumb:hover,
+.projects-list::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
 </style>

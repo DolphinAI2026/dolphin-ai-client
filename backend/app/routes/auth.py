@@ -181,6 +181,18 @@ async def select_tenant(
     return Token(access_token=access_token)
 
 
+@router.get("/users")
+async def list_users(ctx: Annotated[AuthContext, Depends(get_auth_context)], db: Annotated[AsyncSession, Depends(get_db)]):
+    """获取同租户下的所有用户（用于团队成员选择）"""
+    if ctx.tenant_id:
+        result = await db.execute(
+            select(User.id, User.username).join(UserTenant, User.id == UserTenant.user_id).where(UserTenant.tenant_id == ctx.tenant_id, User.is_active == True)
+        )
+    else:
+        result = await db.execute(select(User.id, User.username).where(User.is_active == True))
+    return [{"id": row[0], "username": row[1]} for row in result.fetchall()]
+
+
 @router.get("/me", response_model=UserInfo)
 async def get_me(ctx: Annotated[AuthContext, Depends(get_auth_context)], db: Annotated[AsyncSession, Depends(get_db)]):
     # 获取租户信息

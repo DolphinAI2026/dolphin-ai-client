@@ -58,19 +58,22 @@ def _load_config(app: Application) -> dict:
     return json.loads(app.config_preview) if isinstance(app.config_preview, str) else app.config_preview
 
 
-def _build_steps(config: dict, state: dict) -> list[StepStatus]:
+def _build_steps(config: dict, state: dict, apaas_app_id: str = None) -> list[StepStatus]:
     """根据 config 和 state 构建完整步骤列表。"""
     data = config.get("data", config)
     models = data.get("models", [])
     completed = set(state.get("steps_completed", []))
     errors = state.get("step_errors", {})
 
+    # 如果平台应用已存在，create_app 步骤视为已完成
+    app_created = "create_app" in completed or bool(apaas_app_id)
+
     steps: list[StepStatus] = []
 
     # 1. 创建应用
     steps.append(StepStatus(
         key="create_app", label="创建平台应用",
-        status="completed" if "create_app" in completed else ("error" if "create_app" in errors else "pending"),
+        status="completed" if app_created else ("error" if "create_app" in errors else "pending"),
         deps_met=True,
         error=errors.get("create_app"),
     ))
@@ -79,7 +82,7 @@ def _build_steps(config: dict, state: dict) -> list[StepStatus]:
     steps.append(StepStatus(
         key="create_roles_dicts", label="创建角色+字典",
         status="completed" if "create_roles_dicts" in completed else ("error" if "create_roles_dicts" in errors else "pending"),
-        deps_met="create_app" in completed,
+        deps_met=app_created,
         error=errors.get("create_roles_dicts"),
     ))
 
@@ -89,7 +92,7 @@ def _build_steps(config: dict, state: dict) -> list[StepStatus]:
         steps.append(StepStatus(
             key=key, label=f"创建模型: {m['name']}",
             status="completed" if key in completed else ("error" if key in errors else "pending"),
-            deps_met="create_app" in completed,
+            deps_met=app_created,
             model_index=idx,
             error=errors.get(key),
         ))
@@ -158,9 +161,10 @@ async def get_step_status(
     app = await _get_app(app_id, ctx, db)
     config = _load_config(app)
     state = _load_state(app)
-    steps = _build_steps(config, state)
+    apaas_app_id = state.get("apaas_app_id") or app.apaas_app_id
+    steps = _build_steps(config, state, apaas_app_id)
     return GenerationStatusResponse(
-        apaas_app_id=state.get("apaas_app_id") or app.apaas_app_id,
+        apaas_app_id=apaas_app_id,
         steps=steps,
     )
 
@@ -184,9 +188,10 @@ async def execute_step(
     data = config.get("data", config)
     models = data.get("models", [])
     step_key = body.step
+    apaas_app_id = state.get("apaas_app_id") or app.apaas_app_id
 
     # 验证步骤存在
-    steps = _build_steps(config, state)
+    steps = _build_steps(config, state, apaas_app_id)
     step_info = next((s for s in steps if s.key == step_key), None)
     if not step_info:
         raise HTTPException(status_code=400, detail=f"无效步骤: {step_key}")
@@ -199,6 +204,17 @@ async def execute_step(
     completed = set(state.get("steps_completed", []))
     if step_key in completed:
         return StepExecuteResponse(step=step_key, status="completed", result={"message": "已完成，跳过"})
+
+    # 特殊处理：如果平台应用已存在，create_app 步骤直接跳过
+    if step_key == "create_app" and apaas_app_id:
+        # 确保 state 中记录了 apaas_app_id
+        state["apaas_app_id"] = apaas_app_id
+        state.setdefault("steps_completed", [])
+        if "create_app" not in state["steps_completed"]:
+            state["steps_completed"].append("create_app")
+        _save_state(app, state)
+        await db.commit()
+        return StepExecuteResponse(step=step_key, status="completed", result={"message": "平台应用已存在，跳过创建"})
 
     # 获取用户的 apaas 连接信息
     user_result = await db.execute(select(User).where(User.id == ctx.user.id))

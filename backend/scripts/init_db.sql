@@ -178,15 +178,15 @@ INSERT INTO tenants (tenant_name, tenant_code, plan_type, max_applications, stat
 VALUES ('Default Tenant', 'default', 'free', 100, 1)
 ON DUPLICATE KEY UPDATE tenant_name = tenant_name;
 
--- 默认管理员角色
+-- 默认管理员角色（完整权限）
 INSERT INTO roles (tenant_id, role_name, role_code, permissions, is_system)
-SELECT t.id, 'Admin', 'admin', '{"application:create":true,"application:delete":true,"application:edit":true,"tenant:manage":true}', 1
+SELECT t.id, 'Admin', 'admin', '{"application:view":true,"application:create":true,"application:edit":true,"application:delete":true,"application:clone":true,"conversation:view":true,"conversation:create":true,"conversation:delete":true,"team:view":true,"team:create":true,"team:manage":true,"member:view":true,"member:invite":true,"member:manage":true,"role:view":true,"role:create":true,"role:edit":true,"role:delete":true}', 1
 FROM tenants t WHERE t.tenant_code = 'default'
 ON DUPLICATE KEY UPDATE role_name = role_name;
 
--- 默认普通用户角色
+-- 默认普通用户角色（基础权限）
 INSERT INTO roles (tenant_id, role_name, role_code, permissions, is_system)
-SELECT t.id, 'Member', 'member', '{"application:create":true,"application:edit":true}', 0
+SELECT t.id, 'Member', 'member', '{"application:view":true,"application:create":true,"application:edit":true,"application:delete":true,"application:clone":true,"conversation:view":true,"conversation:create":true,"conversation:delete":true,"team:view":true}', 0
 FROM tenants t WHERE t.tenant_code = 'default'
 ON DUPLICATE KEY UPDATE role_name = role_name;
 

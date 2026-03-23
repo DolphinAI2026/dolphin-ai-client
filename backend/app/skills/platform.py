@@ -11,6 +11,7 @@ import logging
 from typing import Dict, List, Optional, Tuple
 
 from app.apaas_client import APaaSClient
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +19,24 @@ logger = logging.getLogger(__name__)
 # ── 工具函数 ──
 
 def _rand(n: int = 4) -> str:
-    return ''.join(random.choices(string.ascii_lowercase + string.digits, k=n))
+    """生成随机字符串（仅在启用后缀时有效）"""
+    if settings.enable_code_suffix:
+        return ''.join(random.choices(string.ascii_lowercase + string.digits, k=n))
+    return ""
+
+
+def _generate_suffix() -> str:
+    """根据配置决定是否生成随机后缀"""
+    if settings.enable_code_suffix:
+        return ''.join(random.choices(string.ascii_lowercase + string.digits, k=4))
+    return ""
+
+
+def _apply_suffix(code: str, suffix: str) -> str:
+    """为编码添加后缀（如果有）"""
+    if suffix:
+        return f"{code}_{suffix}"
+    return code
 
 
 _RESERVED_WORDS = {
@@ -120,29 +138,29 @@ def _build_model_payload(
     Args:
         app_id: 应用 ID
         models: 预览格式模型列表
-        suffix: 随机后缀（可选，自动生成）
+        suffix: 随机后缀（可选，根据配置自动生成）
 
     Returns:
         (payload, code_map)
         - payload: API 请求体
-        - code_map: 原始编码 → 带后缀编码的映射
+        - code_map: 原始编码 → 最终编码的映射
     """
-    if not suffix:
-        suffix = _rand(4)
+    if suffix is None:
+        suffix = _generate_suffix()
 
     data_models = []
     code_map = {}
 
     for m in models:
         base_code = _safe_code(m.get("code") or "model")
-        model_code = f"{base_code}_{suffix}"
+        model_code = _apply_suffix(base_code, suffix)
         code_map[base_code] = model_code
 
         # 先处理子表 → 生成子表模型
         for f in m.get("fields", []):
             if f.get("type") == "子表" and f.get("sub_fields"):
                 sub_code = f.get("sub_code") or f"{base_code}_sub"
-                sub_model_code = f"{sub_code}_{suffix}"
+                sub_model_code = _apply_suffix(sub_code, suffix)
                 code_map[sub_code] = sub_model_code
 
                 sub_fields = []
@@ -222,15 +240,15 @@ def _build_dict_payload(
     suffix: Optional[str] = None,
 ) -> Tuple[List[Dict], Dict[str, str]]:
     """将预览格式的字典定义转换为 API payload。"""
-    if not suffix:
-        suffix = _rand(4)
+    if suffix is None:
+        suffix = _generate_suffix()
 
     result = []
     dict_code_map: Dict[str, str] = {}
 
     for d in dicts:
         base_code = _safe_code(d.get("code", "dict"))
-        dict_code = f"{base_code}_{suffix}"
+        dict_code = _apply_suffix(base_code, suffix)
         dict_code_map[d.get("code", base_code)] = dict_code
 
         options = d.get("options", [])
@@ -238,14 +256,16 @@ def _build_dict_payload(
         for i, opt in enumerate(options):
             if isinstance(opt, str):
                 opt_name = opt
-                opt_code = f"{base_code}_{i+1}_{suffix}"
+                opt_base = f"{base_code}_{i+1}"
+                opt_code = _apply_suffix(opt_base, suffix)
             elif isinstance(opt, dict):
                 raw_opt_code = _safe_code(opt.get("code", opt.get("id", f"{base_code}_{i+1}")))
                 opt_name = opt.get("name", opt.get("label", str(opt)))
-                opt_code = f"{raw_opt_code}_{suffix}"
+                opt_code = _apply_suffix(raw_opt_code, suffix)
             else:
                 opt_name = str(opt)
-                opt_code = f"{base_code}_{i+1}_{suffix}"
+                opt_base = f"{base_code}_{i+1}"
+                opt_code = _apply_suffix(opt_base, suffix)
 
             dict_options.append({
                 "optionName": opt_name,
@@ -290,14 +310,17 @@ async def create_dicts(
 
 def _build_role_payload(app_id: str, roles: List[Dict]) -> List[Dict]:
     """将预览格式的角色定义转换为 API payload。"""
-    return [
-        {
+    suffix = _generate_suffix()
+    result = []
+    for r in roles:
+        base_code = f"R_{r.get('code', r['name'])}"
+        role_code = _apply_suffix(base_code, suffix)
+        result.append({
             "appId": app_id,
-            "roleCode": f"R_{r.get('code', r['name'])}_{_rand()}",
+            "roleCode": role_code,
             "roleName": r["name"],
-        }
-        for r in roles
-    ]
+        })
+    return result
 
 
 async def create_roles(

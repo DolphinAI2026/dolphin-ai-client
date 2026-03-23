@@ -30,5 +30,10 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
 
+    # Code Generation
+    # 是否为资源编码添加随机后缀（避免编码冲突）
+    # 开发/测试环境建议开启，生产环境建议关闭
+    enable_code_suffix: bool = False
+
 
 settings = Settings()

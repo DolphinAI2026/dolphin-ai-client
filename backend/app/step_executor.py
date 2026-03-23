@@ -13,7 +13,7 @@ import httpx
 from app.apaas_client import APaaSClient
 from app.generator_v2 import (
     _rand, _sanitize_code, _safe_field_code, _extract_fields,
-    _build_component, FIELD_TYPE_MAP, COMP_TYPE_MAP,
+    _build_component, FIELD_TYPE_MAP, COMP_TYPE_MAP, _apply_suffix,
 )
 
 logger = logging.getLogger(__name__)
@@ -64,7 +64,7 @@ async def execute_create_roles_dicts(
     if roles:
         for r in roles:
             original_code = r.get("code", r["name"])
-            platform_code = f"R_{_sanitize_code(original_code)}_{suffix}"
+            platform_code = _apply_suffix(f"R_{_sanitize_code(original_code)}", suffix)
             role_codes[original_code] = {"roleCode": platform_code, "roleName": r["name"]}
             try:
                 await client.create_roles(app_id, [{
@@ -98,7 +98,7 @@ async def execute_create_roles_dicts(
                 if d.get("options"):
                     dicts_needing_options.append(d)
             else:
-                dc = f"{_sanitize_code(d.get('code', 'dict'))}_{suffix}"
+                dc = _apply_suffix(_sanitize_code(d.get('code', 'dict')), suffix)
                 dict_codes[d["name"]] = dc
                 dict_codes[d.get("code", d["name"])] = dc
                 new_dicts.append(d)
@@ -154,7 +154,7 @@ async def execute_create_roles_dicts(
                                 json={
                                     "appId": app_id,
                                     "dictionaryId": dict_id,
-                                    "valueCode": f"{_sanitize_code(opt_code_raw)}_{suffix}",
+                                    "valueCode": _apply_suffix(_sanitize_code(opt_code_raw), suffix),
                                     "valueName": opt_name,
                                     "valueNameI18nAssociated": False,
                                     "valueNameI18nResourceCode": "",
@@ -221,14 +221,14 @@ async def execute_create_model(
         }
 
     # 构建新模型
-    mc = f"{_sanitize_code(model.get('code', 'model'))}_{suffix}"
+    mc = _apply_suffix(_sanitize_code(model.get('code', 'model')), suffix)
     fields_map = {}
     data_models = []
 
     # 子表模型
     for f in model.get("fields", []):
         if f.get("type") == "子表" and f.get("sub_fields"):
-            sub_code = f"{_sanitize_code(f.get('sub_code') or model.get('code', 'model') + '_sub')}_{suffix}"
+            sub_code = _apply_suffix(_sanitize_code(f.get('sub_code') or model.get('code', 'model') + '_sub'), suffix)
             sub_fields = []
             sub_fields_map = {}
             for sf in f["sub_fields"]:
@@ -408,9 +408,17 @@ async def execute_create_form(
     if not components:
         raise ValueError(f"表单 {model['name']} 无可用字段组件")
 
+    # formCode: 使用模型编码或生成唯一标识
+    form_code_suffix = _rand(6)
+    if form_code_suffix:
+        form_code = f"form_{form_code_suffix}"
+    else:
+        # 后缀禁用时，使用模型编码作为表单编码基础
+        form_code = f"form_{_sanitize_code(model.get('code', model['name']))}"
+
     form_payload = [{
         "formName": model["name"],
-        "formCode": f"form_{_rand(6)}",
+        "formCode": form_code,
         "allModelCodes": all_model_codes,
         "formComponents": components,
         "listPageView": {

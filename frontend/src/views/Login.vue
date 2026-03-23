@@ -2,15 +2,9 @@
   <div class="login-container">
     <div class="login-box">
       <div class="login-header">
-        <div class="logo">
-          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-            <path d="M2 17L12 22L22 17" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-            <path d="M2 12L12 17L22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-        </div>
-        <h1>aPaaS Builder AI</h1>
-        <p>得帆云智能搭建助手</p>
+        <div class="logo-mark">A</div>
+        <h1 class="brand-title">aPaaS Builder AI</h1>
+        <p class="brand-desc">得帆云智能搭建助手</p>
       </div>
 
       <el-tabs v-model="activeTab" class="login-tabs">
@@ -220,64 +214,63 @@ const handleRegister = async () => {
 </script>
 
 <style scoped>
+/* ── Dark theme login ── */
 .login-container {
   min-height: 100vh;
   display: flex;
   justify-content: center;
   align-items: center;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: #0a0a0a;
   padding: 20px;
 }
 
 .login-box {
   width: 100%;
   max-width: 420px;
-  background: rgba(255, 255, 255, 0.95);
-  backdrop-filter: blur(10px);
+  background: #111;
+  border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 16px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
   padding: 40px;
 }
 
+/* ── Header / Logo ── */
 .login-header {
   text-align: center;
   margin-bottom: 32px;
 }
 
-.logo {
-  width: 64px;
-  height: 64px;
-  margin: 0 auto 16px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  border-radius: 16px;
+.logo-mark {
+  width: 52px;
+  height: 52px;
+  margin: 0 auto 18px;
+  background: linear-gradient(135deg, #7c3aed, #6366f1);
+  border-radius: 12px;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: white;
+  color: #fff;
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -1px;
 }
 
-.logo svg {
-  width: 36px;
-  height: 36px;
-}
-
-.login-header h1 {
-  margin: 0 0 8px 0;
-  font-size: 28px;
-  font-weight: 600;
-  color: #303133;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+.brand-title {
+  margin: 0 0 6px 0;
+  font-size: 26px;
+  font-weight: 700;
+  background: linear-gradient(135deg, #c4b5fd, #7c3aed);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
 }
 
-.login-header p {
+.brand-desc {
   margin: 0;
   font-size: 14px;
-  color: #909399;
+  color: rgba(255, 255, 255, 0.4);
 }
 
+/* ── Tabs ── */
 .login-tabs {
   margin-top: 24px;
 }
@@ -291,57 +284,91 @@ const handleRegister = async () => {
 }
 
 .login-tabs :deep(.el-tabs__item) {
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 500;
+  color: rgba(255, 255, 255, 0.45);
+  transition: color 0.2s;
 }
 
-.login-tabs :deep(.el-tabs__active-bar) {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+.login-tabs :deep(.el-tabs__item:hover) {
+  color: rgba(255, 255, 255, 0.7);
 }
 
 .login-tabs :deep(.el-tabs__item.is-active) {
-  color: #667eea;
+  color: #c4b5fd;
 }
 
-.submit-btn {
-  width: 100%;
-  height: 44px;
-  font-size: 16px;
-  font-weight: 500;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  border: none;
-  border-radius: 8px;
-  transition: all 0.3s;
+.login-tabs :deep(.el-tabs__active-bar) {
+  background: linear-gradient(135deg, #7c3aed, #6366f1);
 }
 
-.submit-btn:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
-}
-
-.submit-btn:active {
-  transform: translateY(0);
-}
-
+/* ── Input fields ── */
 :deep(.el-input__wrapper) {
-  border-radius: 8px;
-  box-shadow: 0 0 0 1px #dcdfe6 inset;
-  transition: all 0.3s;
+  background: #161622;
+  border-radius: 10px;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08) inset;
+  transition: all 0.25s;
 }
 
 :deep(.el-input__wrapper:hover) {
-  box-shadow: 0 0 0 1px #c0c4cc inset;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.15) inset;
 }
 
 :deep(.el-input__wrapper.is-focus) {
-  box-shadow: 0 0 0 1px #667eea inset;
+  box-shadow: 0 0 0 1px #7c3aed inset;
 }
 
+:deep(.el-input__inner) {
+  color: #fff;
+}
+
+:deep(.el-input__inner::placeholder) {
+  color: rgba(255, 255, 255, 0.3);
+}
+
+:deep(.el-input__prefix .el-icon) {
+  color: rgba(255, 255, 255, 0.35);
+}
+
+:deep(.el-input__suffix .el-icon) {
+  color: rgba(255, 255, 255, 0.35);
+}
+
+/* ── Form items ── */
 :deep(.el-form-item) {
   margin-bottom: 20px;
 }
 
 :deep(.el-form-item:last-child) {
   margin-bottom: 0;
+}
+
+:deep(.el-form-item__error) {
+  color: #f87171;
+}
+
+/* ── Submit button ── */
+.submit-btn {
+  width: 100%;
+  height: 44px;
+  font-size: 15px;
+  font-weight: 600;
+  background: linear-gradient(135deg, #7c3aed, #6366f1);
+  border: none;
+  border-radius: 10px;
+  color: #fff;
+  transition: all 0.25s;
+}
+
+.submit-btn:hover,
+.submit-btn:focus {
+  background: linear-gradient(135deg, #7c3aed, #6366f1);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(124, 58, 237, 0.35);
+}
+
+.submit-btn:active {
+  transform: translateY(0);
+  box-shadow: none;
 }
 </style>

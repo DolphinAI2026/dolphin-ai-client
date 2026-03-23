@@ -19,6 +19,7 @@ from typing import AsyncGenerator, Dict, List, Optional
 import httpx
 
 from app.apaas_client import APaaSClient
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,17 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 def _rand(n: int = 4) -> str:
-    return "".join(random.choices(string.ascii_lowercase + string.digits, k=n))
+    """根据配置决定是否生成随机后缀"""
+    if settings.enable_code_suffix:
+        return "".join(random.choices(string.ascii_lowercase + string.digits, k=n))
+    return ""
+
+
+def _apply_suffix(code: str, suffix: str) -> str:
+    """为编码添加后缀（如果有）"""
+    if suffix:
+        return f"{code}_{suffix}"
+    return code
 
 
 def _sanitize_code(code: str) -> str:

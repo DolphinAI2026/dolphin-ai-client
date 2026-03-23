@@ -218,15 +218,37 @@ async def parse_doc_with_ai(
 
 async def _parse_single(text: str, filename: str) -> Dict:
     client = LLMClient()
-    user_msg = f"请分析以下需求文档，提取所有业务表单、字段、角色、字典等信息，输出标准 JSON。\n\n"
+    # 智能截断：优先保留 ER 图和业务具体方案（含子表/字段定义）
+    if len(text) > 40000:
+        import re
+        # 找关键章节
+        er_match = re.search(r'(#{1,3}\s*.*?ER图.*?)(?=\n#{1,2}\s|\Z)', text, re.DOTALL)
+        biz_match = re.search(r'(#{1,3}\s*.*?业务具体方案.*?)(?=\n#{1,2}\s[^#]|\Z)', text, re.DOTALL)
+        perm_match = re.search(r'(#{1,3}\s*.*?(?:权限|角色|组织).*?)(?=\n#{1,2}\s|\Z)', text, re.DOTALL)
+
+        # 前 20000 字符（背景、目标、流程等）
+        head = text[:20000]
+        # 拼接关键章节
+        critical = ""
+        for m in [er_match, biz_match, perm_match]:
+            if m and m.group(1) not in head:
+                critical += "\n\n" + m.group(1)[:15000]  # 每个关键章节最多 15000 字符
+        truncated = head + critical
+        truncated = truncated[:50000]  # 最终上限 50000
+    else:
+        truncated = text
+
+    user_msg = f"请分析以下需求文档，提取所有业务表单、字段、角色、字典等信息，输出标准 JSON。\n特别注意：\n- 识别所有子表/明细表关系（1:N），用 sub_fields 表示\n- 识别权限角色和数据权限规则\n\n"
     if filename:
         user_msg += f"文档名：{filename}\n\n"
-    user_msg += f"---\n\n{text}"
+    user_msg += f"---\n\n{truncated}"
 
+    # 文档解析用非 thinking 模型（MiniMax-M2.5），避免 thinking 模式超时
     result = await client.chat_completion(
         [{"role": "system", "content": SINGLE_SYSTEM_PROMPT},
          {"role": "user", "content": user_msg}],
-        max_tokens=16384, timeout=180.0, temperature=0.2
+        max_tokens=16384, timeout=300.0, temperature=0.2,
+        model="MiniMax-M2.5"
     )
     content = result["choices"][0]["message"]["content"]
     data = _extract_json(content)
@@ -453,17 +475,17 @@ def _sanitize_codes(data: Dict):
             return ascii_part
         return 'c' + hashlib.md5(code.encode()).hexdigest()[:7]
 
-    for r in data.get("roles", []):
+    for r in (data.get("roles") or []):
         r["code"] = _fix(r.get("code"), r.get("name", ""))
 
-    for d in data.get("dicts", []):
+    for d in (data.get("dicts") or []):
         d["code"] = _fix(d.get("code"), d.get("name", ""))
-        for opt in d.get("options", []):
+        for opt in (d.get("options") or []):
             opt["code"] = _fix(opt.get("code"), opt.get("name", ""))
 
-    for m in data.get("models", []):
+    for m in (data.get("models") or []):
         m["code"] = _fix(m.get("code"), m.get("name", ""))
-        for f in m.get("fields", []):
+        for f in (m.get("fields") or []):
             f["code"] = _fix(f.get("code"), f.get("name", ""))
             if f.get("dict"):
                 f["dict"] = _fix(f["dict"])
@@ -472,7 +494,7 @@ def _sanitize_codes(data: Dict):
                 f["ref"]["field"] = _fix(f["ref"].get("field", ""))
             if f.get("sub_code"):
                 f["sub_code"] = _fix(f["sub_code"])
-            for sf in f.get("sub_fields", []):
+            for sf in (f.get("sub_fields") or []):
                 sf["code"] = _fix(sf.get("code"), sf.get("name", ""))
                 if sf.get("dict"):
                     sf["dict"] = _fix(sf["dict"])
@@ -492,11 +514,11 @@ _ICON_MAP = {
 
 def _fill_icons(data: Dict):
     """补充缺失的 icon 字段"""
-    for m in data.get("models", []):
-        for f in m.get("fields", []):
+    for m in (data.get("models") or []):
+        for f in (m.get("fields") or []):
             if not f.get("icon"):
                 f["icon"] = _ICON_MAP.get(f.get("type", ""), "T")
-            for sf in f.get("sub_fields", []):
+            for sf in (f.get("sub_fields") or []):
                 if not sf.get("icon"):
                     sf["icon"] = _ICON_MAP.get(sf.get("type", ""), "T")
 
@@ -505,7 +527,7 @@ def _dedup_dicts(data: Dict):
     """去重字典（分段解析可能产生重复）"""
     seen = {}
     deduped = []
-    for d in data.get("dicts", []):
+    for d in (data.get("dicts") or []):
         code = d.get("code", "")
         if code not in seen:
             seen[code] = d

@@ -2,7 +2,8 @@ from __future__ import annotations
 import httpx
 import time
 import base64
-from typing import Optional
+import json
+from typing import Optional, Any
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.backends import default_backend
@@ -10,6 +11,36 @@ from cryptography.hazmat.backends import default_backend
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _to_json(obj: Any) -> str:
+    """将对象转为 JSON 字符串（不截断）"""
+    if isinstance(obj, str):
+        return obj
+    return json.dumps(obj, ensure_ascii=False, indent=2)
+
+
+def _log_request(method: str, url: str, payload: Any = None, params: Any = None):
+    """记录请求日志"""
+    logger.info(f">>> APaaS API 请求: {method} {url}")
+    if params:
+        logger.info(f"    参数: {_to_json(params)}")
+    if payload:
+        logger.info(f"    请求体: {_to_json(payload)}")
+
+
+def _log_response(url: str, status: int, data: Any, elapsed_ms: float):
+    """记录响应日志"""
+    code = data.get("code") if isinstance(data, dict) else None
+    message = data.get("message") if isinstance(data, dict) else None
+
+    if code == "ok" or code == 200:
+        logger.info(f"<<< APaaS API 响应: {status} OK ({elapsed_ms:.0f}ms) - {url.split('/')[-1]}")
+        if isinstance(data, dict) and "data" in data:
+            logger.debug(f"    响应数据: {_to_json(data.get('data'))}")
+    else:
+        logger.warning(f"<<< APaaS API 响应: {status} FAILED ({elapsed_ms:.0f}ms) - code={code}, message={message}")
+        logger.warning(f"    完整响应: {_to_json(data)}")
 
 # POC环境RSA公钥（getPublicKey接口需要认证，硬编码避免鸡生蛋问题）
 DEFAULT_PUBLIC_KEY_B64 = (
@@ -64,9 +95,20 @@ class APaaSClient:
         pk = public_key_b64 or DEFAULT_PUBLIC_KEY_B64
         encrypted_password = self._encrypt_password(password, pk)
 
+        url = f"{self.base_url}/xdap-admin/user/login"
+        payload = {
+            "account": account,
+            "password": "******",  # 日志中隐藏密码
+            "type": "account",
+            "tenantId": self.tenant_id,
+            "loginType": "MANAGE"
+        }
+        _log_request("POST", url, payload)
+        start = time.time()
+
         async with httpx.AsyncClient(verify=False, timeout=15.0) as client:
             response = await client.post(
-                f"{self.base_url}/xdap-admin/user/login",
+                url,
                 headers={"Content-Type": "application/json"},
                 json={
                     "account": account,
@@ -76,29 +118,38 @@ class APaaSClient:
                     "loginType": "MANAGE"
                 }
             )
+            elapsed_ms = (time.time() - start) * 1000
             response.raise_for_status()
             data = response.json()
+
+            _log_response(url, response.status_code, data, elapsed_ms)
+
             if data.get("code") == "ok":
                 self.token = data["data"]["token"]
                 user = data["data"].get("user", {})
                 self.user_id = str(user.get("id", ""))
-                logger.info(f"登录成功 - token已设置: {bool(self.token)}, user_id: {self.user_id}")
+                logger.info(f"登录成功 - user_id: {self.user_id}")
                 return data["data"]
             else:
-                logger.error(f"登录失败: {data.get('message')}")
                 raise Exception(data.get("message", "登录失败"))
 
     async def test_connection(self) -> dict:
         """测试连接：用当前token调一个轻量接口验证是否有效"""
+        url = f"{self.base_url}/xdap-app/apaasApplications/queryAppList"
+        params = {"page": 1, "pageSize": 1}
+        _log_request("GET", url, params=params)
+        start = time.time()
+
         async with httpx.AsyncClient(verify=False, timeout=15.0) as client:
-            response = await client.get(
-                f"{self.base_url}/xdap-app/apaasApplications/queryAppList",
-                headers=self._get_headers(),
-                params={"page": 1, "pageSize": 1}
-            )
+            response = await client.get(url, headers=self._get_headers(), params=params)
+            elapsed_ms = (time.time() - start) * 1000
             response.raise_for_status()
             data = response.json()
+
+            _log_response(url, response.status_code, data, elapsed_ms)
+
             if data.get("code") == "ok":
+                logger.info("连接测试成功")
                 return {"status": "ok", "message": "连接成功"}
             else:
                 raise Exception(data.get("message", "连接失败"))
@@ -108,29 +159,31 @@ class APaaSClient:
         if not self.token:
             raise Exception("未设置token，请先调用login()或在初始化时传入token")
 
-        headers = self._get_headers()
-        logger.info(f"创建应用请求 - app_name: {app_name}, token存在: {bool(self.token)}")
+        url = f"{self.base_url}/xdap-app/apaasApplications/addApp"
+        payload = {
+            "appName": app_name,
+            "appCode": app_code,
+            "appDesc": description,
+            "appType": "CUSTOM"
+        }
+        _log_request("POST", url, payload)
+        start = time.time()
 
         async with httpx.AsyncClient(verify=False, timeout=15.0) as client:
-            response = await client.post(
-                f"{self.base_url}/xdap-app/apaasApplications/addApp",
-                json={
-                    "appName": app_name,
-                    "appCode": app_code,
-                    "appDesc": description,
-                    "appType": "CUSTOM"
-                },
-                headers=headers
-            )
+            response = await client.post(url, json=payload, headers=self._get_headers())
+            elapsed_ms = (time.time() - start) * 1000
 
             if response.status_code == 401:
                 logger.error(f"401 Unauthorized - token可能已过期或无效")
-                logger.error(f"Response: {response.text}")
                 raise Exception("Token已过期或无效，请重新连接APaaS平台")
 
             response.raise_for_status()
             data = response.json()
+
+            _log_response(url, response.status_code, data, elapsed_ms)
+
             if data.get("code") == "ok":
+                logger.info(f"应用创建成功: {app_name} (id={data.get('data', {}).get('id')})")
                 return data.get("data", {})
             else:
                 raise Exception(f"创建应用失败: {data.get('message')}")
@@ -141,17 +194,23 @@ class APaaSClient:
 
     async def _post_resource(self, path: str, payload: dict, app_id: Optional[str] = None) -> dict:
         """通用资源创建方法"""
+        url = f"{self._manage_url}{path}"
+        _log_request("POST", url, payload)
+        start = time.time()
+
         async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
-            url = f"{self._manage_url}{path}"
             response = await client.post(
                 url,
                 headers=self._get_headers(app_id=app_id),
                 json=payload
             )
+            elapsed_ms = (time.time() - start) * 1000
             response.raise_for_status()
             data = response.json()
+
+            _log_response(url, response.status_code, data, elapsed_ms)
+
             code = data.get("code")
-            logger.info(f"API {path} response: code={code}, data_keys={list(data.keys()) if isinstance(data, dict) else type(data)}")
             # 平台API返回 code:"ok" 或 code:200 表示成功
             if code == "ok" or code == 200:
                 return data.get("data") or {}
@@ -188,15 +247,19 @@ class APaaSClient:
 
     async def save_process_config(self, app_id: str, payload: dict) -> dict:
         """用平台内部 save API 创建/保存流程（需要完整的 nodes + edges + bpmn）"""
+        url = f"{self.base_url}/xdap-app/process/save/processConfig"
+        _log_request("POST", url, payload)
+        start = time.time()
+
         async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
             headers = self._get_headers(app_id)
-            response = await client.post(
-                f"{self.base_url}/xdap-app/process/save/processConfig",
-                headers=headers,
-                json=payload,
-            )
+            response = await client.post(url, headers=headers, json=payload)
+            elapsed_ms = (time.time() - start) * 1000
             response.raise_for_status()
             data = response.json()
+
+            _log_response(url, response.status_code, data, elapsed_ms)
+
             if data.get("code") not in ("ok",):
                 raise Exception(data.get("message", "保存流程失败"))
             return data
@@ -206,68 +269,95 @@ class APaaSClient:
 
     async def query_app_list(self, page: int = 1, page_size: int = 200) -> list:
         """查询得帆云平台应用列表"""
+        url = f"{self.base_url}/xdap-app/apaasApplications/queryAppList"
+        params = {"page": page, "pageSize": page_size, "keyword": "", "status": ""}
+        _log_request("GET", url, params=params)
+        start = time.time()
+
         async with httpx.AsyncClient(verify=False, timeout=15.0) as client:
-            response = await client.get(
-                f"{self.base_url}/xdap-app/apaasApplications/queryAppList",
-                headers=self._get_headers(),
-                params={"page": page, "pageSize": page_size, "keyword": "", "status": ""}
-            )
+            response = await client.get(url, headers=self._get_headers(), params=params)
+            elapsed_ms = (time.time() - start) * 1000
             response.raise_for_status()
             data = response.json()
+
+            _log_response(url, response.status_code, data, elapsed_ms)
+
             if data.get("code") == "ok":
                 result = data.get("table", [])
+                logger.info(f"查询到 {len(result)} 个应用")
                 return result if isinstance(result, list) else []
             return []
 
     async def query_models(self, app_id: str) -> list:
         """查询应用下的所有数据模型（含字段）"""
+        url = f"{self.base_url}/xdap-app/dataModel/query/modelWithField"
+        payload = {"appId": app_id}
+        _log_request("POST", url, payload)
+        start = time.time()
+
         async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
-            response = await client.post(
-                f"{self.base_url}/xdap-app/dataModel/query/modelWithField",
-                headers=self._get_headers(app_id),
-                json={"appId": app_id}
-            )
+            response = await client.post(url, headers=self._get_headers(app_id), json=payload)
+            elapsed_ms = (time.time() - start) * 1000
             response.raise_for_status()
             data = response.json()
+
+            _log_response(url, response.status_code, data, elapsed_ms)
+
             if data.get("code") == "ok":
                 models = data.get("table", [])
                 # 平台返回的字段在 dataModelFields 中，统一转换为 fields
                 for m in models:
                     if 'dataModelFields' in m and 'fields' not in m:
                         m['fields'] = m['dataModelFields']
+                logger.info(f"查询到 {len(models)} 个模型: {[m.get('modelCode') for m in models]}")
                 return models
             return []
 
     async def query_dicts(self, app_id: str) -> list:
         """查询应用下的所有数据字典"""
+        url = f"{self.base_url}/xdap-app/dataDictionary/query/dataDictionaryList"
+        payload = {"keyword": "", "appId": app_id}
+        _log_request("POST", url, payload)
+        start = time.time()
+
         async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
-            response = await client.post(
-                f"{self.base_url}/xdap-app/dataDictionary/query/dataDictionaryList",
-                headers=self._get_headers(app_id),
-                json={"keyword": "", "appId": app_id}
-            )
+            response = await client.post(url, headers=self._get_headers(app_id), json=payload)
+            elapsed_ms = (time.time() - start) * 1000
             response.raise_for_status()
             data = response.json()
+
+            _log_response(url, response.status_code, data, elapsed_ms)
+
             if data.get("code") == "ok":
-                return data.get("table", [])
+                dicts = data.get("table", [])
+                logger.info(f"查询到 {len(dicts)} 个字典: {[d.get('dictionaryCode') for d in dicts]}")
+                return dicts
             return []
 
     async def query_dict_options(self, app_id: str, dict_id: str) -> list:
         """查询字典的所有选项"""
+        url = f"{self.base_url}/xdap-app/dataDictionary/query/dictionaryValueList"
+        payload = {"dictionaryId": dict_id}
+        _log_request("POST", url, payload)
+        start = time.time()
+
         async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
-            response = await client.post(
-                f"{self.base_url}/xdap-app/dataDictionary/query/dictionaryValueList",
-                headers=self._get_headers(app_id),
-                json={"dictionaryId": dict_id}
-            )
+            response = await client.post(url, headers=self._get_headers(app_id), json=payload)
+            elapsed_ms = (time.time() - start) * 1000
             response.raise_for_status()
             data = response.json()
+
+            _log_response(url, response.status_code, data, elapsed_ms)
+
             if data.get("code") == "ok":
-                return data.get("table", [])
+                options = data.get("table", [])
+                logger.debug(f"查询到字典 {dict_id} 的 {len(options)} 个选项")
+                return options
             return []
 
     async def add_dict_option(self, app_id: str, dict_id: str, option_code: str, option_name: str, display_order: int = 0) -> dict:
         """为字典添加一个选项"""
+        url = f"{self.base_url}/xdap-app/dataDictionary/add/dictionaryValue"
         payload = {
             "appId": app_id,
             "dictionaryId": dict_id,
@@ -281,83 +371,113 @@ class APaaSClient:
             "valueStatus": "ENABLE",
             "valueMulticolor": "#027AFF"
         }
+        _log_request("POST", url, payload)
+        start = time.time()
+
         async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
-            response = await client.post(
-                f"{self.base_url}/xdap-app/dataDictionary/add/dictionaryValue",
-                headers=self._get_headers(app_id),
-                json=payload
-            )
+            response = await client.post(url, headers=self._get_headers(app_id), json=payload)
+            elapsed_ms = (time.time() - start) * 1000
             response.raise_for_status()
             data = response.json()
+
+            _log_response(url, response.status_code, data, elapsed_ms)
+
             if data.get("code") != "ok":
                 raise Exception(data.get("message", "添加字典选项失败"))
             return data
 
     async def create_menu(self, app_id: str, menu_name: str, form_id: str, menu_order: int = 0) -> dict:
         """创建表单菜单 — /menu/save/menu"""
+        url = f"{self.base_url}/xdap-app/menu/save/menu"
+        payload = {
+            "appId": app_id,
+            "menuName": menu_name,
+            "menuType": "MODEL",
+            "menuOrder": menu_order,
+            "menuDisplay": "ALL",
+            "formId": form_id,
+            "menuIcon": "userInfo",
+        }
+        _log_request("POST", url, payload)
+        start = time.time()
+
         async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
-            response = await client.post(
-                f"{self.base_url}/xdap-app/menu/save/menu",
-                headers=self._get_headers(app_id),
-                json={
-                    "appId": app_id,
-                    "menuName": menu_name,
-                    "menuType": "MODEL",
-                    "menuOrder": menu_order,
-                    "menuDisplay": "ALL",
-                    "formId": form_id,
-                    "menuIcon": "userInfo",
-                }
-            )
+            response = await client.post(url, headers=self._get_headers(app_id), json=payload)
+            elapsed_ms = (time.time() - start) * 1000
             response.raise_for_status()
             data = response.json()
+
+            _log_response(url, response.status_code, data, elapsed_ms)
+
             if data.get("code") == "ok":
+                logger.info(f"菜单创建成功: {menu_name}")
                 return data.get("data", {})
             raise Exception(data.get("message", "创建菜单失败"))
 
     async def query_menus(self, app_id: str) -> list:
         """查询应用的菜单列表（包含表单）"""
+        url = f"{self.base_url}/xdap-app/menu/query/manageAppMenu"
+        payload = {"appId": app_id}
+        _log_request("POST", url, payload)
+        start = time.time()
+
         async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
-            response = await client.post(
-                f"{self.base_url}/xdap-app/menu/query/manageAppMenu",
-                headers=self._get_headers(app_id),
-                json={"appId": app_id}
-            )
+            response = await client.post(url, headers=self._get_headers(app_id), json=payload)
+            elapsed_ms = (time.time() - start) * 1000
             response.raise_for_status()
             data = response.json()
+
+            _log_response(url, response.status_code, data, elapsed_ms)
+
             if data.get("code") == "ok":
-                return data.get("data", [])
+                menus = data.get("data", [])
+                logger.info(f"查询到 {len(menus)} 个菜单")
+                return menus
             return []
 
     async def query_form_config(self, app_id: str, form_id: str) -> dict:
         """查询表单的完整配置"""
+        url = f"{self.base_url}/xdap-app/v2/form/query/formContext?formId={form_id}"
+        _log_request("GET", url)
+        start = time.time()
+
         async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
-            response = await client.get(
-                f"{self.base_url}/xdap-app/v2/form/query/formContext?formId={form_id}",
-                headers=self._get_headers(app_id)
-            )
+            response = await client.get(url, headers=self._get_headers(app_id))
+            elapsed_ms = (time.time() - start) * 1000
             response.raise_for_status()
             data = response.json()
+
+            _log_response(url, response.status_code, data, elapsed_ms)
+
             if data.get("code") == "ok":
-                return data.get("data", {}).get("simpleFormConfig", {})
+                form_config = data.get("data", {}).get("simpleFormConfig", {})
+                logger.info(f"查询表单配置成功: formId={form_id}")
+                return form_config
             raise Exception(data.get("message", "查询表单配置失败"))
 
     async def save_form_config(self, app_id: str, form_config: dict) -> dict:
         """保存表单配置（全量更新）"""
+        url = f"{self.base_url}/xdap-app/formConfig/save/formConfigDetail"
+        _log_request("POST", url, form_config)
+        start = time.time()
+
         async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
-            response = await client.post(
-                f"{self.base_url}/xdap-app/formConfig/save/formConfigDetail",
-                headers=self._get_headers(app_id),
-                json=form_config
-            )
+            response = await client.post(url, headers=self._get_headers(app_id), json=form_config)
+            elapsed_ms = (time.time() - start) * 1000
             response.raise_for_status()
             data = response.json()
+
+            _log_response(url, response.status_code, data, elapsed_ms)
+
             if data.get("code") != "ok":
                 raise Exception(data.get("message", "保存表单配置失败"))
+            logger.info(f"保存表单配置成功: formName={form_config.get('formName')}")
             return data
 
     async def update_form_component(self, app_id: str, form_id: str, component_label: str, updates: dict) -> dict:
         """更新表单中指定组件的属性"""
+        logger.info(f"更新表单组件: formId={form_id}, label={component_label}, updates={_to_json(updates)}")
+
         # 查询表单配置
         form_config = await self.query_form_config(app_id, form_id)
         components = form_config.get('detailPage', {}).get('formComponents', [])
@@ -368,9 +488,11 @@ class APaaSClient:
             if comp.get('label') == component_label:
                 comp.update(updates)
                 found = True
+                logger.info(f"找到并更新组件: {component_label}")
                 break
 
         if not found:
+            logger.warning(f"未找到标签为 '{component_label}' 的组件")
             raise Exception(f"未找到标签为 '{component_label}' 的组件")
 
         # 保存

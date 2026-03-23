@@ -42,10 +42,12 @@ TEAM_ROLE_ACTIONS: dict[str, set[str]] = {
 _OWNER_ONLY_ACTIONS = {Action.EDIT, Action.DELETE}
 
 
-def has_org_permission(permissions: dict | None, resource_type: str, action: str) -> bool:
+def has_org_permission(permissions: dict | None, resource_type: str, action: str | Action) -> bool:
     """Check if the org role's permission JSON allows the given action on a resource type."""
     if not permissions:
         return False
+    if isinstance(action, Action):
+        action = action.value
     key = f"{resource_type}:{action}"
     return bool(permissions.get(key, False))
 

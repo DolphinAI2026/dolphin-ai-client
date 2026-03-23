@@ -5,29 +5,35 @@
 
 ## API 端点
 ```
-GET /xdap-app/user/select/queryRoleList
+POST /xdap-app/roles/query/rolesList
 ```
 
 ## 请求头
 ```json
 {
-  "Content-Type": "application/json",
+  "Content-Type": "application/json;charset=UTF-8",
   "xdaptenantid": "<tenant_id>",
   "xdaptimestamp": "<millisecond_timestamp>",
-  "xdaptoken": "<auth_token>",
-  "appid": "<app_id>"
+  "xdaptoken": "<auth_token>"
 }
 ```
 
 ## 请求参数
 | 参数 | 位置 | 类型 | 必填 | 说明 |
 |------|------|------|------|------|
-| appId | query | string | 是 | 应用 ID，按应用过滤 |
-| timestamp | query | string | 是 | 毫秒时间戳 |
+| keyWord | body | string | 否 | 关键字搜索（角色名称） |
+| appId | body | string | 是 | 应用 ID |
+| appQueryFlag | body | boolean | 是 | 是否按应用查询，通常为 `true` |
 
 ### 请求示例
-```
-GET /xdap-app/user/select/queryRoleList?appId=755484864311984128&timestamp=1773568000000
+```json
+POST /xdap-app/roles/query/rolesList
+
+{
+  "keyWord": "",
+  "appId": "822790159832449024",
+  "appQueryFlag": true
+}
 ```
 
 ## 响应格式
@@ -81,11 +87,16 @@ GET /xdap-app/user/select/queryRoleList?appId=755484864311984128&timestamp=17735
 ```python
 from app.apaas_client import APaaSClient
 
-async def query_roles(client: APaaSClient, app_id: str):
+async def query_roles(client: APaaSClient, app_id: str, keyword: str = ""):
     """查询应用下所有角色"""
     result = await client.request(
-        "GET",
-        f"/xdap-app/user/select/queryRoleList?appId={app_id}",
+        "POST",
+        "/xdap-app/roles/query/rolesList",
+        json={
+            "keyWord": keyword,
+            "appId": app_id,
+            "appQueryFlag": True
+        },
         app_id=app_id
     )
 
@@ -103,8 +114,13 @@ async def query_roles(client: APaaSClient, app_id: str):
 async def query_app_roles(client: APaaSClient, app_id: str):
     """只获取应用级角色（排除全局角色）"""
     result = await client.request(
-        "GET",
-        f"/xdap-app/user/select/queryRoleList?appId={app_id}",
+        "POST",
+        "/xdap-app/roles/query/rolesList",
+        json={
+            "keyWord": "",
+            "appId": app_id,
+            "appQueryFlag": True
+        },
         app_id=app_id
     )
 
@@ -117,8 +133,13 @@ async def query_app_roles(client: APaaSClient, app_id: str):
 async def find_role_by_code(client: APaaSClient, app_id: str, role_code: str):
     """按 roleCode 查找角色"""
     result = await client.request(
-        "GET",
-        f"/xdap-app/user/select/queryRoleList?appId={app_id}",
+        "POST",
+        "/xdap-app/roles/query/rolesList",
+        json={
+            "keyWord": "",
+            "appId": app_id,
+            "appQueryFlag": True
+        },
         app_id=app_id
     )
 
@@ -126,6 +147,24 @@ async def find_role_by_code(client: APaaSClient, app_id: str, role_code: str):
         if r["roleCode"] == role_code:
             return r
     return None
+```
+
+### 按关键字搜索角色
+```python
+async def search_roles(client: APaaSClient, app_id: str, keyword: str):
+    """按关键字搜索角色"""
+    result = await client.request(
+        "POST",
+        "/xdap-app/roles/query/rolesList",
+        json={
+            "keyWord": keyword,
+            "appId": app_id,
+            "appQueryFlag": True
+        },
+        app_id=app_id
+    )
+
+    return result.get("table", [])
 ```
 
 ## 注意事项

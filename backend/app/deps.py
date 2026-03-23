@@ -1,5 +1,6 @@
 """Authentication dependencies and context."""
 from __future__ import annotations
+import logging
 from dataclasses import dataclass
 from typing import Annotated
 from fastapi import Depends, HTTPException, status
@@ -11,6 +12,8 @@ from app.database import get_db
 from app.models import User
 from app.models.tenant import UserTenant, Role
 from app.auth import security
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -50,6 +53,10 @@ async def get_auth_context(
             result = await db.execute(select(User).where(User.id == user_id))
             user = result.scalar_one_or_none()
             if not user or not user.is_platform_admin:
+                logger.warning(
+                    "auth_context forbidden: token has no tenant_id but user is not platform admin user_id=%s",
+                    user_id,
+                )
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="平台管理员才能访问此资源",
@@ -82,6 +89,11 @@ async def get_auth_context(
     )
     user_tenant = result.scalar_one_or_none()
     if not user_tenant:
+        logger.warning(
+            "auth_context forbidden: user is not an active tenant member user_id=%s tenant_id=%s",
+            user_id,
+            tenant_id,
+        )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="你不是该租户的成员",

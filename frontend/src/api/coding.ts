@@ -37,11 +37,19 @@ export interface CodingMessage {
 
 export interface WorkspaceInfo {
   id: string
+  project_id?: number
   project_type: string
   project_name: string
   user_id: number
   status: string
   files?: string[]
+}
+
+export interface UploadResult {
+  filename: string
+  content_type: string
+  content?: string
+  file_path: string
 }
 
 export const codingApi = {
@@ -84,18 +92,40 @@ export const codingApi = {
   // ========== Workspace API ==========
 
   /** 创建工作区 */
-  createWorkspace(project_type: string, project_name: string) {
-    return request.post<any, WorkspaceInfo>('/coding/workspace/create', { project_type, project_name })
+  createWorkspace(project_type: string, project_name: string, project_id?: number) {
+    return request.post<any, WorkspaceInfo>('/coding/workspace/create', { project_type, project_name, project_id })
   },
 
-  /** 安装依赖 */
+  /** 安装依赖（npm install 可能较慢，5分钟超时） */
   installDeps(wsId: string) {
-    return request.post<any, { status: string; message: string }>(`/coding/workspace/${wsId}/install`)
+    return request.post<any, { status: string; message: string }>(`/coding/workspace/${wsId}/install`, {}, { timeout: 300000 })
   },
 
-  /** 构建项目 */
+  /** 构建项目（构建可能较慢，5分钟超时） */
   buildProject(wsId: string) {
-    return request.post<any, { status: string; message: string }>(`/coding/workspace/${wsId}/build`)
+    return request.post<any, { status: string; message: string }>(`/coding/workspace/${wsId}/build`, {}, { timeout: 300000 })
+  },
+
+  /** 下载构建包或源码 zip */
+  async downloadZip(wsId: string, type: 'dist' | 'src' = 'dist') {
+    const token = localStorage.getItem('token') || ''
+    const resp = await fetch(`/api/coding/workspace/${wsId}/download?type=${type}`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    })
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ detail: '下载失败' }))
+      throw new Error(err.detail || '下载失败')
+    }
+    const blob = await resp.blob()
+    const disposition = resp.headers.get('Content-Disposition') || ''
+    const match = disposition.match(/filename="?(.+?)"?$/)
+    const filename = match ? match[1] : `${wsId}.zip`
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    a.click()
+    URL.revokeObjectURL(url)
   },
 
   /** 获取工作区信息 */
@@ -131,5 +161,68 @@ export const codingApi = {
   /** 删除工作区 */
   deleteWorkspace(wsId: string) {
     return request.delete<any, { status: string }>(`/coding/workspace/${wsId}`)
+  },
+
+  // ========== Auto Pipeline API ==========
+
+  /** 自动流水线 SSE URL（detect-scene → create-workspace → generate → install → serve） */
+  autoPipelineUrl(params: { message: string; workspace_id?: string; conversation_id?: number; app_id?: string }): string {
+    const query = new URLSearchParams()
+    query.set('message', params.message)
+    if (params.workspace_id) query.set('workspace_id', params.workspace_id)
+    if (params.conversation_id) query.set('conversation_id', String(params.conversation_id))
+    if (params.app_id) query.set('app_id', params.app_id)
+    const token = localStorage.getItem('token') || ''
+    query.set('token', token)
+    return `/api/coding/auto-pipeline?${query.toString()}`
+  },
+
+  /** 启动开发服务器 */
+  startServe(wsId: string) {
+    return request.post<any, { status: string; url?: string; message?: string }>(`/coding/workspace/${wsId}/serve`, {}, { params: { action: 'start' }, timeout: 120000 })
+  },
+
+  /** 停止开发服务器 */
+  stopServe(wsId: string) {
+    return request.post<any, { status: string; message?: string }>(`/coding/workspace/${wsId}/serve`, {}, { params: { action: 'stop' } })
+  },
+
+  /** 获取开发服务器状态 */
+  getServeStatus(wsId: string) {
+    return request.get<any, { running: boolean; url?: string }>(`/coding/workspace/${wsId}/serve-status`)
+  },
+
+  /** 打包发布（返回 zip blob） */
+  async publish(wsId: string): Promise<Blob> {
+    const token = localStorage.getItem('token') || ''
+    const resp = await fetch(`/api/coding/workspace/${wsId}/publish`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}` }
+    })
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ detail: '发布失败' }))
+      throw new Error(err.detail || '发布失败')
+    }
+    return resp.blob()
+  },
+
+  /** 上传文件（图片/文档附件） */
+  async uploadFile(file: File, workspaceId?: string): Promise<UploadResult> {
+    const token = localStorage.getItem('token') || ''
+    const formData = new FormData()
+    formData.append('file', file)
+    const params = new URLSearchParams()
+    if (workspaceId) params.set('workspace_id', workspaceId)
+    const query = params.toString() ? `?${params.toString()}` : ''
+    const resp = await fetch(`/api/coding/upload${query}`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}` },
+      body: formData,
+    })
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ detail: '上传失败' }))
+      throw new Error(err.detail || '上传失败')
+    }
+    return resp.json()
   },
 }

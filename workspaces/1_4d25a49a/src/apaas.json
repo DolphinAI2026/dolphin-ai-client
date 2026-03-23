@@ -1,0 +1,16 @@
+{
+  "entry": "index.js",
+  "templateType": "FORM_COMPONENT",
+  "customWidgetList": [
+    {
+      "code": "FORM_CUSTOM_COMPONENT_DATE_PICKER",
+      "text": "date-picker",
+      "description": "date-picker"
+    }
+  ],
+  "copyAssets": [
+    "public/form-component/form-component-date-picker"
+  ],
+  "router": {},
+  "outputName": "form-component-date-picker"
+}

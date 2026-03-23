@@ -196,23 +196,42 @@ async def send_message(
             "content": summary
         })
 
-    llm_messages.extend([
-        {"role": msg.role, "content": msg.content}
-        for msg in messages
-    ])
+    # 截断历史消息：只保留最近的消息，总字符数不超过 30000
+    history_msgs = [{"role": msg.role, "content": msg.content} for msg in messages]
+    truncated = []
+    total_chars = 0
+    for msg in reversed(history_msgs):
+        msg_len = len(msg["content"] or "")
+        if total_chars + msg_len > 30000 and truncated:
+            break
+        truncated.insert(0, msg)
+        total_chars += msg_len
+    llm_messages.extend(truncated)
 
     # 流式响应
     async def event_generator():
         llm_client = LLMClient()
         assistant_content = ""
+        thinking_sent = False
 
         try:
             async for chunk in llm_client.chat_completion_stream(llm_messages):
                 chunk_data = json.loads(chunk)
                 if "choices" in chunk_data and len(chunk_data["choices"]) > 0:
                     delta = chunk_data["choices"][0].get("delta", {})
-                    if "content" in delta:
-                        content = delta["content"]
+                    content = delta.get("content") or ""
+
+                    # MiniMax thinking 模式：前面是思考 chunk（content 空），最后才有实际回答
+                    # 思考阶段发一个 thinking 提示，让前端显示"思考中..."
+                    has_reasoning = bool(delta.get("reasoning_details") or delta.get("reasoning_content"))
+                    if has_reasoning and not thinking_sent:
+                        thinking_sent = True
+                        yield {
+                            "event": "thinking",
+                            "data": json.dumps({"type": "thinking", "data": "思考中..."})
+                        }
+
+                    if content:
                         assistant_content += content
                         yield {
                             "event": "message",
