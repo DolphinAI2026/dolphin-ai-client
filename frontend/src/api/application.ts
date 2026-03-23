@@ -68,9 +68,14 @@ export const applicationApi = {
     return `/api/applications/${appId}/change-plans/${planId}/execute?token=${token}`
   },
 
-  /** 获取文档版本列表 */
+  /** 获取文档版本列表（通过 appId） */
   getDocVersions(appId: number) {
     return request.get<any, any>(`/applications/${appId}/doc-versions`)
+  },
+
+  /** 获取文档版本列表（通过 conversationId，Application 创建前使用） */
+  getDocVersionsByConversation(conversationId: number) {
+    return request.get<any, any>(`/applications/doc-versions-by-conversation/${conversationId}`)
   },
 
   /** 编码冲突修复 */

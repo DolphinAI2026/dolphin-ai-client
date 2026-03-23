@@ -128,8 +128,6 @@
           <div v-show="store.previewTab === 'docs'" class="tab-content doc-versions-tab">
             <div class="doc-upload-bar">
               <span class="doc-tab-title">文档版本</span>
-              <input type="file" accept=".md" ref="docUploadInputRef" @change="handleDocVersionUpload" style="display:none" />
-              <button class="doc-upload-btn" @click="triggerDocUpload">+ 上传新版本</button>
             </div>
             <div v-if="docVersionsLoading" class="preview-empty small">加载中...</div>
             <div v-else-if="docVersions.length === 0" class="preview-empty small">暂无文档版本</div>
@@ -1110,14 +1108,22 @@ const docDiffLeft = ref('')
 const docDiffRight = ref('')
 const docDiffLeftTitle = ref('')
 const docDiffRightTitle = ref('')
-const docUploadInputRef = ref<HTMLInputElement | null>(null)
+// docUploadInputRef removed — upload is via chat input only
 
 const fetchDocVersions = async () => {
-  if (!existingAppId.value) return
   docVersionsLoading.value = true
   try {
-    const res = await applicationApi.getDocVersions(existingAppId.value)
-    docVersions.value = Array.isArray(res) ? res : (res?.data || [])
+    let res: any
+    if (existingAppId.value) {
+      res = await applicationApi.getDocVersions(existingAppId.value)
+    } else if (conversationId.value) {
+      res = await applicationApi.getDocVersionsByConversation(conversationId.value)
+    } else {
+      docVersionsLoading.value = false
+      return
+    }
+    const versions = Array.isArray(res) ? res : (res?.versions || res?.data || [])
+    docVersions.value = versions
   } catch (e) {
     console.error('Failed to fetch doc versions', e)
   } finally {
@@ -1188,42 +1194,7 @@ const docDiffResult = computed(() => {
   return computeLineDiff(docDiffLeft.value, docDiffRight.value)
 })
 
-const triggerDocUpload = () => {
-  docUploadInputRef.value?.click()
-}
-
-const handleDocVersionUpload = async (e: Event) => {
-  const target = e.target as HTMLInputElement
-  const file = target.files?.[0]
-  if (!file || !existingAppId.value) return
-  target.value = ''
-
-  const appId = existingAppId.value
-  const formData = new FormData()
-  formData.append('file', file)
-  if (conversationId.value) {
-    formData.append('conversation_id', conversationId.value.toString())
-  }
-
-  const url = applicationApi.uploadDocVersionUrl(appId)
-  const token = localStorage.getItem('token') || ''
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: token ? { 'Authorization': `Bearer ${token}` } : {},
-      body: formData,
-    })
-    if (response.ok) {
-      ElMessage.success('文档版本上传成功')
-      await fetchDocVersions()
-    } else {
-      ElMessage.error('上传失败')
-    }
-  } catch (err) {
-    ElMessage.error('上传失败')
-    console.error(err)
-  }
-}
+// triggerDocUpload / handleDocVersionUpload removed — doc upload is via chat input only
 
 // ── 部署面板 ──
 interface DeployStep { key: string; label: string; status: 'pending' | 'completed' | 'error'; deps_met: boolean; error?: string; result?: any }
@@ -1802,6 +1773,9 @@ const handleDocUpload = async (e: Event) => {
         store.preview.workflows = previewData.workflows || []
         store.preview.permissions = previewData.permissions || []
       }
+
+      // 文档上传完成后自动刷新文档版本列表
+      fetchDocVersions()
 
       // 替换进度消息为完成总结
       if (pmsg) {
@@ -2539,12 +2513,17 @@ onMounted(async () => {
 
 // 切换到文档 tab 时自动加载版本列表
 watch(() => store.previewTab, (tab) => {
-  if (tab === 'docs' && existingAppId.value && docVersions.value.length === 0) {
+  if (tab === 'docs' && (existingAppId.value || conversationId.value) && docVersions.value.length === 0) {
     fetchDocVersions()
   }
 })
 watch(existingAppId, (id) => {
   if (id && store.previewTab === 'docs') {
+    fetchDocVersions()
+  }
+})
+watch(conversationId, (id) => {
+  if (id && store.previewTab === 'docs' && !existingAppId.value) {
     fetchDocVersions()
   }
 })

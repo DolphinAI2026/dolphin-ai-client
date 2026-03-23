@@ -48,6 +48,8 @@ async def init_db():
             "ALTER TABLE projects ADD COLUMN platform_password_enc TEXT",
             # Document version chain support
             "ALTER TABLE document_versions ADD COLUMN parent_version INTEGER",
+            # conversation_id for doc versions created before application exists
+            "ALTER TABLE document_versions ADD COLUMN conversation_id INTEGER",
         ]:
             try:
                 await conn.execute(text(stmt))
@@ -67,6 +69,7 @@ async def init_db():
             "CREATE INDEX IF NOT EXISTS ix_document_versions_application_id ON document_versions(application_id)",
             "CREATE INDEX IF NOT EXISTS ix_change_plans_application_id ON change_plans(application_id)",
             "CREATE INDEX IF NOT EXISTS ix_change_plans_conversation_id ON change_plans(conversation_id)",
+            "CREATE INDEX IF NOT EXISTS ix_document_versions_conversation_id ON document_versions(conversation_id)",
         ]:
             try:
                 await conn.execute(text(idx_stmt))

@@ -271,57 +271,72 @@ async def create_application(
         app.app_code,
     )
 
-    # 如果有对话，从 doc_raw 消息恢复原始文档并保存 DocumentVersion
-    if data.conversation_id and config_str:
+    # 把对话中已创建的 DocumentVersion 关联到新 Application
+    if data.conversation_id:
         try:
-            import hashlib
-            from app.models import Message
-            # 查找 doc_raw 类型的 system 消息（保存了原始文档内容）
-            msg_result = await db.execute(
-                select(Message).where(
-                    Message.conversation_id == data.conversation_id,
-                    Message.role == "system",
-                    Message.content.like('%doc_raw%')
-                ).order_by(Message.id.desc()).limit(1)
+            from sqlalchemy import update as sa_update
+            result = await db.execute(
+                select(DocumentVersion).where(
+                    DocumentVersion.conversation_id == data.conversation_id,
+                    DocumentVersion.application_id.is_(None)
+                )
             )
-            doc_msg = msg_result.scalar_one_or_none()
-
-            doc_content = ""
-            doc_filename = f"{data.app_name or 'design-doc'}.md"
-            if doc_msg and doc_msg.content:
-                try:
-                    # 格式: ```doc_raw\n{json}\n```
-                    raw = doc_msg.content
-                    if '```doc_raw' in raw:
-                        json_str = raw.split('```doc_raw\n', 1)[1].rsplit('\n```', 1)[0]
-                    else:
-                        json_str = raw
-                    doc_data = json.loads(json_str)
-                    doc_content = doc_data.get("raw_content", "")
-                    doc_filename = doc_data.get("filename", doc_filename)
-                except (json.JSONDecodeError, IndexError, ValueError):
-                    logger.warning("Failed to parse doc_raw message")
-
-            models_count = len(data.config_preview.get('models', [])) if isinstance(data.config_preview, dict) else 0
-            dicts_count = len(data.config_preview.get('dicts', [])) if isinstance(data.config_preview, dict) else 0
-            roles_count = len(data.config_preview.get('roles', [])) if isinstance(data.config_preview, dict) else 0
-
-            doc_ver = DocumentVersion(
-                application_id=app.id,
-                version=1,
-                filename=doc_filename,
-                content_hash=hashlib.sha256(doc_content.encode()).hexdigest() if doc_content else "",
-                raw_content=doc_content,
-                parsed_config=config_str,
-                summary=f"{models_count} 模型, {dicts_count} 字典, {roles_count} 角色",
-            )
-            db.add(doc_ver)
-            app.current_doc_version = 1
-            await db.commit()
-            await db.refresh(app)
-            logger.info(f"Auto-created DocumentVersion V1 for app {app.id} with {len(doc_content)} chars")
+            conv_versions = result.scalars().all()
+            if conv_versions:
+                for v in conv_versions:
+                    v.application_id = app.id
+                max_ver = max(v.version for v in conv_versions)
+                app.current_doc_version = max_ver
+                await db.commit()
+                await db.refresh(app)
+                logger.info(f"Linked {len(conv_versions)} DocumentVersion(s) to app {app.id}")
+            else:
+                # 兼容旧流程：如果对话中没有 DocumentVersion，尝试从 doc_raw 消息创建
+                import hashlib
+                from app.models import Message
+                msg_result = await db.execute(
+                    select(Message).where(
+                        Message.conversation_id == data.conversation_id,
+                        Message.role == "system",
+                        Message.content.like('%doc_raw%')
+                    ).order_by(Message.id.desc()).limit(1)
+                )
+                doc_msg = msg_result.scalar_one_or_none()
+                doc_content = ""
+                doc_filename = f"{data.app_name or 'design-doc'}.md"
+                if doc_msg and doc_msg.content:
+                    try:
+                        raw = doc_msg.content
+                        if '```doc_raw' in raw:
+                            json_str = raw.split('```doc_raw\n', 1)[1].rsplit('\n```', 1)[0]
+                        else:
+                            json_str = raw
+                        doc_data = json.loads(json_str)
+                        doc_content = doc_data.get("raw_content", "")
+                        doc_filename = doc_data.get("filename", doc_filename)
+                    except (json.JSONDecodeError, IndexError, ValueError):
+                        pass
+                if doc_content:
+                    models_count = len(data.config_preview.get('models', [])) if isinstance(data.config_preview, dict) else 0
+                    dicts_count = len(data.config_preview.get('dicts', [])) if isinstance(data.config_preview, dict) else 0
+                    roles_count = len(data.config_preview.get('roles', [])) if isinstance(data.config_preview, dict) else 0
+                    doc_ver = DocumentVersion(
+                        application_id=app.id,
+                        conversation_id=data.conversation_id,
+                        version=1,
+                        filename=doc_filename,
+                        content_hash=hashlib.sha256(doc_content.encode()).hexdigest(),
+                        raw_content=doc_content,
+                        parsed_config=config_str,
+                        summary=f"{models_count} 模型, {dicts_count} 字典, {roles_count} 角色",
+                    )
+                    db.add(doc_ver)
+                    app.current_doc_version = 1
+                    await db.commit()
+                    await db.refresh(app)
+                    logger.info(f"Fallback: created DocumentVersion V1 for app {app.id}")
         except Exception as e:
-            logger.warning(f"Failed to auto-create DocumentVersion: {e}")
+            logger.warning(f"Failed to link/create DocumentVersion: {e}")
 
     resp = _enrich(app)
     resp.permissions = {Action.EDIT: True, Action.DELETE: True, Action.CLONE: True}  # 创建者全部权限
@@ -670,6 +685,29 @@ async def upload_doc_with_conversation(
             # 保存原始文档内容（用于后续创建 DocumentVersion）
             doc_msg = '```doc_raw\n' + json.dumps({"filename": fname, "raw_content": text}, ensure_ascii=False) + '\n```'
             session.add(Message(conversation_id=conversation.id, role="system", content=doc_msg))
+
+            # 自动保存 DocumentVersion（conversation_id 关联，application_id 待后续绑定）
+            import hashlib
+            # 检查同一 conversation 下已有版本号
+            existing_ver_result = await session.execute(
+                select(sa_func.max(DocumentVersion.version))
+                .where(DocumentVersion.conversation_id == conversation.id)
+            )
+            max_ver = existing_ver_result.scalar() or 0
+            new_version = max_ver + 1
+
+            config_json_str = json.dumps(data, ensure_ascii=False)
+            doc_ver = DocumentVersion(
+                application_id=None,
+                conversation_id=conversation.id,
+                version=new_version,
+                filename=fname,
+                content_hash=hashlib.sha256(text.encode()).hexdigest(),
+                raw_content=text,
+                parsed_config=config_json_str,
+                summary=f"{models_count} 模型, {dicts_count} 字典, {roles_count} 角色",
+            )
+            session.add(doc_ver)
 
             await session.commit()
 
@@ -1267,6 +1305,7 @@ async def list_doc_versions(
             "version": v.version,
             "filename": v.filename,
             "content_hash": v.content_hash,
+            "raw_content": v.raw_content,
             "summary": v.summary,
             "structure_index": json.loads(v.structure_index) if v.structure_index else None,
             "created_at": str(v.created_at) if v.created_at else None,
@@ -1284,5 +1323,49 @@ async def list_doc_versions(
 
     return {
         "current_version": app.current_doc_version,
+        "versions": items,
+    }
+
+
+@router.get("/doc-versions-by-conversation/{conversation_id}")
+async def list_doc_versions_by_conversation(
+    conversation_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """通过 conversation_id 获取文档版本（在 Application 创建之前使用）"""
+    from app.models import Conversation
+    # 验证对话属于当前用户/租户
+    result = await db.execute(
+        select(Conversation).where(
+            Conversation.id == conversation_id,
+            Conversation.tenant_id == ctx.tenant_id,
+        )
+    )
+    conv = result.scalar_one_or_none()
+    if not conv:
+        raise HTTPException(status_code=404, detail="对话不存在")
+
+    result = await db.execute(
+        select(DocumentVersion)
+        .where(DocumentVersion.conversation_id == conversation_id)
+        .order_by(desc(DocumentVersion.version))
+    )
+    versions = result.scalars().all()
+
+    items = []
+    for v in versions:
+        items.append({
+            "id": v.id,
+            "version": v.version,
+            "filename": v.filename,
+            "content_hash": v.content_hash,
+            "raw_content": v.raw_content,
+            "summary": v.summary,
+            "structure_index": json.loads(v.structure_index) if v.structure_index else None,
+            "created_at": str(v.created_at) if v.created_at else None,
+        })
+
+    return {
         "versions": items,
     }
