@@ -271,6 +271,39 @@ async def create_application(
         app.app_code,
     )
 
+    # 如果有对话，尝试从对话历史中恢复文档内容并保存 DocumentVersion
+    if data.conversation_id and config_str:
+        try:
+            import hashlib
+            from app.models import Conversation, Message
+            # 查找对话中的用户上传消息（包含文件名）
+            msg_result = await db.execute(
+                select(Message).where(
+                    Message.conversation_id == data.conversation_id,
+                    Message.role == "system"
+                ).order_by(Message.id.asc()).limit(1)
+            )
+            sys_msg = msg_result.scalar_one_or_none()
+            doc_content = sys_msg.content if sys_msg else ""
+            doc_filename = data.app_name or "design-doc"
+
+            doc_ver = DocumentVersion(
+                application_id=app.id,
+                version=1,
+                filename=f"{doc_filename}.md",
+                content_hash=hashlib.sha256(doc_content.encode()).hexdigest(),
+                raw_content=doc_content,
+                parsed_config=config_str,
+                summary=f"{len(data.config_preview.get('models', []))} 模型, {len(data.config_preview.get('dicts', []))} 字典, {len(data.config_preview.get('roles', []))} 角色" if isinstance(data.config_preview, dict) else "",
+            )
+            db.add(doc_ver)
+            app.current_doc_version = 1
+            await db.commit()
+            await db.refresh(app)
+            logger.info(f"Auto-created DocumentVersion V1 for app {app.id}")
+        except Exception as e:
+            logger.warning(f"Failed to auto-create DocumentVersion: {e}")
+
     resp = _enrich(app)
     resp.permissions = {Action.EDIT: True, Action.DELETE: True, Action.CLONE: True}  # 创建者全部权限
     return resp
