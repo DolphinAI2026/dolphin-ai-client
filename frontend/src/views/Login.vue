@@ -243,7 +243,7 @@ const handleRegister = async () => {
 
 /* ── Left brand panel ── */
 .brand-panel {
-  flex: 0 0 44%;
+  flex: 0 0 58%;
   background: linear-gradient(160deg, #7c3aed 0%, #6366f1 100%);
   display: flex;
   flex-direction: column;
