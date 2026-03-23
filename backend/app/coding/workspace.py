@@ -294,7 +294,12 @@ class WorkspaceManager:
                           platform_url: str, tenant_id: str, app_id: str,
                           output_name: str, custom_widget_list: list,
                           debug_mode: str = "platform",
-                          app_code: str = "") -> dict:
+                          app_code: str = "",
+                          form_id: str = "",
+                          menu_id: str = "",
+                          component_name: str = "",
+                          apaas_token: str = "",
+                          platform_backend_url: str = "") -> dict:
         """启动 Puppeteer debug 模式，注入组件到平台或应用"""
         # 如果已有 debug 进程在运行，先停止
         if ws_id in self._debug_processes:
@@ -312,6 +317,23 @@ class WorkspaceManager:
         _base_url = platform_url.replace("/platform/", "/").rstrip("/") + "/"
         if debug_mode == "app" and app_code:
             target_url = f"{_base_url}app/dragonfly/{app_code}/{tenant_id}/app/app-page?appId={app_id}"
+        elif debug_mode == "platform" and form_id and menu_id:
+            # 直接打开指定表单的设计器
+            target_url = f"{platform_url}{tenant_id}/default/data-model-fn-config?appId={app_id}&menuId={menu_id}&formId={form_id}"
+        elif debug_mode == "platform" and apaas_token:
+            # 自动创建测试表单
+            try:
+                _backend_url = platform_backend_url or platform_url.replace("/platform/", "/backend")
+                auto_form_id, auto_menu_id = await self._ensure_debug_form(
+                    ws_id=ws_id, ws_path=ws_path,
+                    app_id=app_id, component_name=component_name,
+                    apaas_token=apaas_token, platform_backend_url=_backend_url,
+                    tenant_id=tenant_id,
+                )
+                target_url = f"{platform_url}{tenant_id}/default/data-model-fn-config?appId={app_id}&menuId={auto_menu_id}&formId={auto_form_id}"
+            except Exception as e:
+                logger.warning(f"[DEBUG] 自动创建测试表单失败，回退到平台首页: {e}")
+                target_url = platform_url
         else:
             target_url = platform_url
 
@@ -425,12 +447,85 @@ const INJECT_CODE = `(function(params) {{
             "debug_mode": debug_mode,
         }
 
+    async def _ensure_debug_form(self, ws_id: str, ws_path: Path,
+                                  app_id: str, component_name: str,
+                                  apaas_token: str, platform_backend_url: str,
+                                  tenant_id: str) -> tuple:
+        """确保 debug 用的测试表单存在，返回 (form_id, menu_id)。
+        优先从 .workspace.json 缓存读取，缓存不存在则调用 aPaaS API 创建。
+        """
+        # 1. 尝试从工作区元数据读取缓存
+        meta = self._read_meta(ws_path)
+        cached_form_id = meta.get("debug_form_id")
+        cached_menu_id = meta.get("debug_menu_id")
+        if cached_form_id and cached_menu_id:
+            logger.info(f"[DEBUG] 复用已缓存的测试表单: formId={cached_form_id}, menuId={cached_menu_id}")
+            return cached_form_id, cached_menu_id
+
+        # 2. 调用 aPaaS API 创建空白测试表单
+        from app.apaas_client import APaaSClient
+        client = APaaSClient(base_url=platform_backend_url, tenant_id=tenant_id, token=apaas_token)
+
+        form_name = f"AI测试-{component_name}" if component_name else f"AI测试-{ws_id[:8]}"
+        form_code = f"ai_test_{ws_id[:8].replace('-', '_')}"
+        form_payload = [{
+            "formName": form_name,
+            "formCode": form_code,
+            "allModelCodes": [],
+            "formComponents": [],
+        }]
+
+        logger.info(f"[DEBUG] 自动创建测试表单: {form_name}")
+        result = await client.create_form_config(app_id, form_payload)
+
+        form_id = ""
+        menu_id = ""
+        if isinstance(result, list):
+            for fr in result:
+                if isinstance(fr, dict) and fr.get("id"):
+                    form_id = fr["id"]
+                    menu_id = fr.get("menuId", "")
+                    break
+
+        if not form_id:
+            raise Exception(f"自动创建测试表单失败: {result}")
+
+        # 如果 API 没有返回 menuId，手动创建菜单
+        if not menu_id:
+            logger.info(f"[DEBUG] 表单创建未返回 menuId，手动创建菜单...")
+            menu_result = await client.create_menu(app_id, form_name, form_id)
+            menu_id = menu_result.get("id", "") if isinstance(menu_result, dict) else ""
+
+        if not menu_id:
+            raise Exception(f"自动创建测试菜单失败")
+
+        # 3. 缓存到 .workspace.json
+        meta["debug_form_id"] = form_id
+        meta["debug_menu_id"] = menu_id
+        meta["debug_form_name"] = form_name
+        self._write_meta(ws_path, meta)
+        logger.info(f"[DEBUG] 测试表单创建成功并已缓存: formId={form_id}, menuId={menu_id}")
+
+        return form_id, menu_id
+
     async def start_auto_debug(self, ws_id: str, serve_port: int,
                                 platform_url: str, tenant_id: str, app_id: str,
                                 output_name: str, custom_widget_list: list,
                                 debug_mode: str = "platform",
-                                app_code: str = "") -> dict:
-        """启动自动化 Debug：自动登录 + 导航 + 截图 + 组件注入"""
+                                app_code: str = "",
+                                form_id: str = "",
+                                menu_id: str = "",
+                                component_name: str = "",
+                                apaas_token: str = "",
+                                platform_backend_url: str = "") -> dict:
+        """启动自动化 Debug：自动登录 + 导航 + 截图 + 组件注入
+
+        新增参数:
+          form_id / menu_id — 用户指定的表单/菜单ID，为空则自动创建
+          component_name — 组件名称，用于命名自动创建的测试表单
+          apaas_token — 平台认证token，自动创建表单时需要
+          platform_backend_url — 平台后端URL，自动创建表单时需要
+        """
         # 如果已有 debug 进程在运行，先停止
         if ws_id in self._debug_processes:
             old_proc = self._debug_processes[ws_id]["process"]
@@ -456,6 +551,24 @@ const INJECT_CODE = `(function(params) {{
         if debug_mode == "app" and app_code:
             # 应用 debug（运行态）— 打开应用首页，用户自己导航到要测试的页面
             form_url = f"{_base_url}app/dragonfly/{app_code}/"
+        elif debug_mode == "platform" and form_id and menu_id:
+            # 平台 debug（设计态）— 直接打开指定表单的设计器
+            form_url = f"{platform_url}{tenant_id}/default/data-model-fn-config?appId={app_id}&menuId={menu_id}&formId={form_id}"
+        elif debug_mode == "platform" and apaas_token:
+            # 平台 debug（设计态）— 没有指定表单，自动创建测试表单
+            try:
+                _backend_url = platform_backend_url or platform_url.replace("/platform/", "/backend")
+                auto_form_id, auto_menu_id = await self._ensure_debug_form(
+                    ws_id=ws_id, ws_path=ws_path,
+                    app_id=app_id, component_name=component_name,
+                    apaas_token=apaas_token, platform_backend_url=_backend_url,
+                    tenant_id=tenant_id,
+                )
+                form_url = f"{platform_url}{tenant_id}/default/data-model-fn-config?appId={app_id}&menuId={auto_menu_id}&formId={auto_form_id}"
+                logger.info(f"[DEBUG] 自动创建表单，导航到: {form_url}")
+            except Exception as e:
+                logger.warning(f"[DEBUG] 自动创建测试表单失败，回退到表单管理页: {e}")
+                form_url = f"{platform_url}{tenant_id}/admin/app-store/edit-app?appId={app_id}&currentStepIndex=2"
         else:
             # 平台 debug（设计态）— 打开应用的表单管理页，用户选择要配置的表单
             form_url = f"{platform_url}{tenant_id}/admin/app-store/edit-app?appId={app_id}&currentStepIndex=2"

@@ -906,6 +906,18 @@ async def auto_pipeline(
                 if project:
                     _app_code = getattr(project, 'platform_app_code', '') or ''
 
+                # 获取 platform_token 和 platform_backend_url（自动创建表单需要）
+                _apaas_token = ""
+                _platform_backend_url = ""
+                if project:
+                    _apaas_token = getattr(project, 'platform_token', '') or ''
+                    _platform_backend_url = getattr(project, 'platform_url', '') or ''
+
+                # 从组件配置中提取组件名称
+                _component_name = ""
+                if custom_widget_list:
+                    _component_name = custom_widget_list[0].get("name", "") or custom_widget_list[0].get("code", "")
+
                 # 自动化 Debug（登录 + 导航 + 截图）
                 debug_result = await ws_mgr.start_auto_debug(
                     ws_id=ws_id, serve_port=serve_port,
@@ -913,6 +925,9 @@ async def auto_pipeline(
                     tenant_id=_tenant_id, app_id=_app_id,
                     output_name=output_name, custom_widget_list=custom_widget_list,
                     debug_mode=_debug_mode, app_code=_app_code,
+                    component_name=_component_name,
+                    apaas_token=_apaas_token,
+                    platform_backend_url=_platform_backend_url,
                 )
 
                 if debug_result.get("status") == "ok":
@@ -1185,6 +1200,8 @@ class DebugRequest(BaseModel):
     app_id: Optional[str] = None
     project_id: Optional[int] = None
     debug_mode: str = "app"  # "platform"（设计态） or "app"（运行态）
+    form_id: Optional[str] = None   # 用户指定的表单ID（为空则自动创建）
+    menu_id: Optional[str] = None   # 用户指定的菜单ID
 
 
 @router.post("/workspace/{ws_id}/debug")
@@ -1246,6 +1263,18 @@ async def debug_workspace(
     if project:
         _app_code = getattr(project, 'platform_app_code', '') or ''
 
+    # 获取 platform_token 和 platform_backend_url（自动创建表单需要）
+    _apaas_token = ""
+    _platform_backend_url = ""
+    if project:
+        _apaas_token = getattr(project, 'platform_token', '') or ''
+        _platform_backend_url = getattr(project, 'platform_url', '') or ''
+
+    # 从组件配置中提取组件名称
+    _component_name = ""
+    if custom_widget_list:
+        _component_name = custom_widget_list[0].get("name", "") or custom_widget_list[0].get("code", "")
+
     # 5. 启动 Puppeteer debug（后台进程）
     debug_result = await ws_mgr.start_debug(
         ws_id=ws_id,
@@ -1257,6 +1286,11 @@ async def debug_workspace(
         custom_widget_list=custom_widget_list,
         debug_mode=req.debug_mode,
         app_code=_app_code,
+        form_id=req.form_id or "",
+        menu_id=req.menu_id or "",
+        component_name=_component_name,
+        apaas_token=_apaas_token,
+        platform_backend_url=_platform_backend_url,
     )
 
     return debug_result
