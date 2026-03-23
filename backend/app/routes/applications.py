@@ -271,36 +271,49 @@ async def create_application(
         app.app_code,
     )
 
-    # 如果有对话，尝试从对话历史中恢复文档内容并保存 DocumentVersion
+    # 如果有对话，从 doc_raw 消息恢复原始文档并保存 DocumentVersion
     if data.conversation_id and config_str:
         try:
             import hashlib
-            from app.models import Conversation, Message
-            # 查找对话中的用户上传消息（包含文件名）
+            from app.models import Message
+            # 查找 doc_raw 类型的 system 消息（保存了原始文档内容）
             msg_result = await db.execute(
                 select(Message).where(
                     Message.conversation_id == data.conversation_id,
-                    Message.role == "system"
-                ).order_by(Message.id.asc()).limit(1)
+                    Message.role == "system",
+                    Message.content.like('%"type": "doc_raw"%')
+                ).order_by(Message.id.desc()).limit(1)
             )
-            sys_msg = msg_result.scalar_one_or_none()
-            doc_content = sys_msg.content if sys_msg else ""
-            doc_filename = data.app_name or "design-doc"
+            doc_msg = msg_result.scalar_one_or_none()
+
+            doc_content = ""
+            doc_filename = f"{data.app_name or 'design-doc'}.md"
+            if doc_msg:
+                try:
+                    doc_data = json.loads(doc_msg.content)
+                    doc_content = doc_data.get("content", "")
+                    doc_filename = doc_data.get("filename", doc_filename)
+                except json.JSONDecodeError:
+                    pass
+
+            models_count = len(data.config_preview.get('models', [])) if isinstance(data.config_preview, dict) else 0
+            dicts_count = len(data.config_preview.get('dicts', [])) if isinstance(data.config_preview, dict) else 0
+            roles_count = len(data.config_preview.get('roles', [])) if isinstance(data.config_preview, dict) else 0
 
             doc_ver = DocumentVersion(
                 application_id=app.id,
                 version=1,
-                filename=f"{doc_filename}.md",
-                content_hash=hashlib.sha256(doc_content.encode()).hexdigest(),
+                filename=doc_filename,
+                content_hash=hashlib.sha256(doc_content.encode()).hexdigest() if doc_content else "",
                 raw_content=doc_content,
                 parsed_config=config_str,
-                summary=f"{len(data.config_preview.get('models', []))} 模型, {len(data.config_preview.get('dicts', []))} 字典, {len(data.config_preview.get('roles', []))} 角色" if isinstance(data.config_preview, dict) else "",
+                summary=f"{models_count} 模型, {dicts_count} 字典, {roles_count} 角色",
             )
             db.add(doc_ver)
             app.current_doc_version = 1
             await db.commit()
             await db.refresh(app)
-            logger.info(f"Auto-created DocumentVersion V1 for app {app.id}")
+            logger.info(f"Auto-created DocumentVersion V1 for app {app.id} with {len(doc_content)} chars")
         except Exception as e:
             logger.warning(f"Failed to auto-create DocumentVersion: {e}")
 
@@ -618,6 +631,10 @@ async def upload_doc_with_conversation(
             context_content += "用户可能会要求修改配置。当用户确认后，生成完整的配置JSON。"
 
             session.add(Message(conversation_id=conversation.id, role="system", content=context_content))
+
+            # 保存原始文档内容（供后续创建 DocumentVersion 使用）
+            doc_raw_msg = json.dumps({"type": "doc_raw", "filename": fname, "content": text}, ensure_ascii=False)
+            session.add(Message(conversation_id=conversation.id, role="system", content=doc_raw_msg))
 
             # 生成摘要
             models_count = len(data.get("models", []))
