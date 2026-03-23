@@ -360,10 +360,10 @@ const handleRegister = async () => {
   color: rgba(255, 255, 255, 0.4);
 }
 
-/* ── Right form panel ── */
+/* ── Right form panel (白色背景，参考 MarsAgent) ── */
 .form-panel {
   flex: 1;
-  background: #0a0a0a;
+  background: #fff;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -373,23 +373,20 @@ const handleRegister = async () => {
 .form-card {
   width: 100%;
   max-width: 420px;
-  background: #111;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 16px;
-  padding: 40px;
+  padding: 0 20px;
 }
 
 .form-title {
   margin: 0 0 8px 0;
-  font-size: 26px;
+  font-size: 28px;
   font-weight: 700;
-  color: #fff;
+  color: #1a1a1a;
 }
 
 .form-subtitle {
-  margin: 0 0 28px 0;
+  margin: 0 0 32px 0;
   font-size: 14px;
-  color: rgba(255, 255, 255, 0.4);
+  color: #888;
 }
 
 /* ── Tabs ── */
@@ -406,54 +403,65 @@ const handleRegister = async () => {
 }
 
 .login-tabs :deep(.el-tabs__item) {
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 500;
-  color: rgba(255, 255, 255, 0.45);
+  color: #999;
   transition: color 0.2s;
 }
 
 .login-tabs :deep(.el-tabs__item:hover) {
-  color: rgba(255, 255, 255, 0.7);
+  color: #555;
 }
 
 .login-tabs :deep(.el-tabs__item.is-active) {
-  color: #c4b5fd;
+  color: #1a1a1a;
+  font-weight: 600;
 }
 
 .login-tabs :deep(.el-tabs__active-bar) {
   background: linear-gradient(135deg, #7c3aed, #6366f1);
 }
 
-/* ── Input fields ── */
+.login-tabs :deep(.el-tabs__nav-wrap::after) {
+  background-color: #e5e7eb;
+}
+
+/* ── Input fields (白色背景下) ── */
 :deep(.el-input__wrapper) {
-  background: #161622;
+  background: #fff;
   border-radius: 10px;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08) inset;
+  box-shadow: 0 0 0 1px #d1d5db inset;
   transition: all 0.25s;
 }
 
 :deep(.el-input__wrapper:hover) {
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.15) inset;
+  box-shadow: 0 0 0 1px #9ca3af inset;
 }
 
 :deep(.el-input__wrapper.is-focus) {
-  box-shadow: 0 0 0 1px #7c3aed inset;
+  box-shadow: 0 0 0 2px #7c3aed inset;
 }
 
 :deep(.el-input__inner) {
-  color: #fff;
+  color: #1a1a1a;
 }
 
 :deep(.el-input__inner::placeholder) {
-  color: rgba(255, 255, 255, 0.3);
+  color: #9ca3af;
 }
 
 :deep(.el-input__prefix .el-icon) {
-  color: rgba(255, 255, 255, 0.35);
+  color: #9ca3af;
 }
 
 :deep(.el-input__suffix .el-icon) {
-  color: rgba(255, 255, 255, 0.35);
+  color: #9ca3af;
+}
+
+/* ── Form labels ── */
+:deep(.el-form-item__label) {
+  color: #374151;
+  font-weight: 500;
 }
 
 /* ── Form items ── */
@@ -466,7 +474,11 @@ const handleRegister = async () => {
 }
 
 :deep(.el-form-item__error) {
-  color: #f87171;
+  color: #ef4444;
+}
+
+:deep(.el-tabs__header) {
+  margin-bottom: 24px;
 }
 
 /* ── Submit button ── */
@@ -495,7 +507,7 @@ const handleRegister = async () => {
 }
 
 /* ── Responsive: stack on small screens ── */
-@media (max-width: 900px) {
+@media (max-width: 640px) {
   .login-page {
     flex-direction: column;
   }
