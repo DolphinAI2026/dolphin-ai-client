@@ -260,9 +260,22 @@ def _detect_code_conflict(error_msg: str, step_key: str, data: dict, models: lis
             entity_name = models[idx].get("name", f"模型{idx}")
             if not conflict_code:
                 entity_code = models[idx].get("code", "unknown")
+    elif step_key.startswith("create_role:"):
+        idx = int(step_key.split(":")[1])
+        roles = data.get("roles", [])
+        if idx < len(roles):
+            entity_name = roles[idx].get("name", f"角色{idx}")
+            if not conflict_code:
+                entity_code = roles[idx].get("code", entity_code)
+    elif step_key.startswith("create_dict:"):
+        idx = int(step_key.split(":")[1])
+        dicts = data.get("dicts", [])
+        if idx < len(dicts):
+            entity_name = dicts[idx].get("name", f"字典{idx}")
+            if not conflict_code:
+                entity_code = dicts[idx].get("code", entity_code)
     elif step_key == "create_roles_dicts":
         entity_name = "角色/字典"
-        # 尝试从错误信息中提取更具体的名称
         name_match = re.search(r"[「\"](.+?)[」\"]", error_msg)
         if name_match:
             entity_name = name_match.group(1)
