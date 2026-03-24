@@ -1021,7 +1021,7 @@ const formatConvTime = (dateStr: string) => {
 
 const fetchConversationList = async () => {
   try {
-    conversationList.value = await conversationApi.listWithApps()
+    conversationList.value = await conversationApi.listWithApps({ agent_type: 'builder' })
     // 同步选中状态
     if (conversationId.value) {
       selectedConversationId.value = conversationId.value
