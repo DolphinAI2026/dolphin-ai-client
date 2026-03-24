@@ -14,6 +14,7 @@ class SceneType(str, Enum):
     WEB_LIST_VIEW = "web_list_view"           # Web端自开发列表视图
     WEB_LAYOUT = "web_layout"                 # Web端自定义布局
     WEB_LOGIN = "web_login"                   # Web端自定义登录页
+    WEB_PLUGIN = "web_plugin"                 # Web端自开发插件
     MOBILE_COMPONENT = "mobile_component"     # 移动端自开发组件
     MOBILE_PAGE = "mobile_page"               # 移动端自开发页面
     BACKEND_API = "backend_api"               # 后端自开发接口
@@ -102,6 +103,20 @@ SCENE_REGISTRY: Dict[SceneType, SceneInfo] = {
             "需配置SSO重定向URL",
             "通过env.tmpl.js获取window.GLOBAL_ENV",
             "登录后跳转/app/callback/apaas/index.html",
+        ],
+    ),
+    SceneType.WEB_PLUGIN: SceneInfo(
+        type=SceneType.WEB_PLUGIN,
+        name="Web端自开发插件",
+        description="自定义平台扩展插件，基于ExtensionEngine注册扩展能力",
+        category="frontend",
+        platform="web",
+        file_patterns=["extension.js", "tab-config.js", "*.vue", "index.js", "apaas.json", "local/index.js"],
+        required_conventions=[
+            "使用Vue._extensionEngine.registerExtensionConfig()注册",
+            "apaas.json中配置extensionConfigList",
+            "支持i18n国际化注册",
+            "组件名必须以apaas-custom-开头",
         ],
     ),
     SceneType.MOBILE_COMPONENT: SceneInfo(

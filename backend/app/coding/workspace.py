@@ -21,11 +21,16 @@ WORKSPACE_ROOT = Path(__file__).parent.parent.parent.parent / "workspaces"
 
 class ProjectType(str, Enum):
     """项目类型"""
-    FORM_COMPONENT = "form-component"   # 表单自开发组件
-    FORM_PAGE = "form-page"             # 自开发菜单页面
-    MENU_PAGE = "menu-page"             # 自开发菜单页面（别名）
-    FORM_LIST = "form-list"             # 自开发列表视图
-    BACKEND_API = "backend-api"         # 后端自开发接口
+    FORM_COMPONENT = "form-component"           # 表单自开发组件（PC）
+    MOBILE_COMPONENT = "mobile-component"       # 移动端自开发组件
+    FORM_PAGE = "form-page"                     # 自开发菜单页面（PC）
+    MENU_PAGE = "menu-page"                     # 自开发菜单页面（PC，别名）
+    MOBILE_PAGE = "mobile-page"                 # 移动端自开发页面
+    FORM_LIST = "form-list"                     # 自开发列表视图
+    LAYOUT = "layout"                           # 自定义布局
+    PLUGIN = "plugin"                           # 自开发插件
+    BACKEND_API = "backend-api"                 # 后端自开发接口
+    SCRIPT = "script"                           # 脚本扩展
 
 
 class WorkspaceStatus(str, Enum):
@@ -86,14 +91,26 @@ class WorkspaceManager:
         )
 
         # 生成脚手架
-        if project_type == ProjectType.FORM_COMPONENT:
+        if project_type == ProjectType.MOBILE_COMPONENT:
+            # 移动端组件复用 PC 组件脚手架（结构相同，只是 widgetConfigList 多 client.mobile 节点）
+            self._scaffold_form_component(ws_path, safe_name, mobile=True)
+        elif project_type == ProjectType.FORM_COMPONENT:
             self._scaffold_form_component(ws_path, safe_name)
+        elif project_type == ProjectType.MOBILE_PAGE:
+            # 移动端页面复用 PC 页面脚手架（结构相同）
+            self._scaffold_form_page(ws_path, safe_name, mobile=True)
         elif project_type in (ProjectType.FORM_PAGE, ProjectType.MENU_PAGE):
             self._scaffold_form_page(ws_path, safe_name)
         elif project_type == ProjectType.FORM_LIST:
             self._scaffold_form_list(ws_path, safe_name)
         elif project_type == ProjectType.BACKEND_API:
             self._scaffold_backend_api(ws_path, safe_name)
+        elif project_type == ProjectType.LAYOUT:
+            self._scaffold_form_page(ws_path, safe_name)  # layout 暂用 page 脚手架
+        elif project_type == ProjectType.PLUGIN:
+            self._scaffold_form_page(ws_path, safe_name)  # plugin 暂用 page 脚手架
+        elif project_type == ProjectType.SCRIPT:
+            self._scaffold_backend_api(ws_path, safe_name)  # script 暂用 backend 脚手架
 
         # 更新状态
         meta["status"] = WorkspaceStatus.READY.value
@@ -389,6 +406,8 @@ const INJECT_CODE = `(function(params) {{
   }})
   const pages = await browser.pages()
   const page = pages[0]
+  page.setDefaultNavigationTimeout(120000)
+  page.setDefaultTimeout(120000)
   const injectParams = {{ localServerRunningAt, outputName, targetEnv, customWidgetList, tenantId, appId }}
   const injectCall = `${{INJECT_CODE}}(${{JSON.stringify(injectParams)}})`
   await page.evaluateOnNewDocument(injectCall)
@@ -610,6 +629,8 @@ const resultPath = '{str(result_json_path)}'
   }})
   const pages = await browser.pages()
   const page = pages[0]
+  page.setDefaultNavigationTimeout(120000)
+  page.setDefaultTimeout(120000)
 
   const result = {{ status: 'ok', screenshots: [], message: '' }}
 
@@ -859,7 +880,7 @@ dist/
 
     # ========== 脚手架模板 ==========
 
-    def _scaffold_form_component(self, ws_path: Path, name: str):
+    def _scaffold_form_component(self, ws_path: Path, name: str, mobile: bool = False):
         """表单自开发组件脚手架 - 完整 FORM_COMPONENT 7场景架构"""
         # 公共文件
         self._write_common_files(ws_path, name, "FORM_COMPONENT")
@@ -1635,7 +1656,7 @@ const FormWidgetMixin = {
 export default FormWidgetMixin
 """
 
-    def _scaffold_form_page(self, ws_path: Path, name: str):
+    def _scaffold_form_page(self, ws_path: Path, name: str, mobile: bool = False):
         """菜单页面脚手架 - 完整 MENU_PAGE 架构（带筛选+表格+分页+多选+getSelectedData）"""
         # 公共文件
         self._write_common_files(ws_path, name, "MENU_PAGE")

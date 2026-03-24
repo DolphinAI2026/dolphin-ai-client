@@ -109,25 +109,34 @@
             </el-button>
           </div>
           <div class="sidebar-list">
-            <div
-              v-for="ws in existingWorkspaces"
-              :key="ws.id"
-              class="sidebar-ws-item"
-              :class="{ active: codingStore.workspace?.id === ws.id }"
-              @click="openExistingWorkspace(ws)"
-            >
-              <div class="sidebar-ws-name">{{ ws.project_name }}</div>
-              <div class="sidebar-ws-meta">
-                <span class="sidebar-ws-type">{{ ws.project_type }}</span>
-                <el-button
-                  size="small"
-                  type="danger"
-                  text
-                  @click.stop="deleteWorkspace(ws)"
-                  class="sidebar-ws-del"
-                >×</el-button>
+            <template v-for="group in groupedWorkspaces" :key="group.key">
+              <div class="sidebar-group-header" @click="toggleGroup(group.key)">
+                <span class="sidebar-group-icon">{{ group.icon }}</span>
+                <span class="sidebar-group-label">{{ group.label }}</span>
+                <span class="sidebar-group-count">{{ group.items.length }}</span>
+                <span class="sidebar-group-arrow" :class="{ collapsed: collapsedGroups.has(group.key) }">‹</span>
               </div>
-            </div>
+              <template v-if="!collapsedGroups.has(group.key)">
+                <div
+                  v-for="ws in group.items"
+                  :key="ws.id"
+                  class="sidebar-ws-item"
+                  :class="{ active: codingStore.workspace?.id === ws.id }"
+                  @click="openExistingWorkspace(ws)"
+                >
+                  <div class="sidebar-ws-name">{{ ws.project_name }}</div>
+                  <div class="sidebar-ws-meta">
+                    <el-button
+                      size="small"
+                      type="danger"
+                      text
+                      @click.stop="deleteWorkspace(ws)"
+                      class="sidebar-ws-del"
+                    >×</el-button>
+                  </div>
+                </div>
+              </template>
+            </template>
             <div v-if="existingWorkspaces.length === 0" class="sidebar-empty">
               暂无工作区，发消息自动创建
             </div>
@@ -155,11 +164,26 @@
       <!-- Welcome message when no workspace -->
       <div v-if="!codingStore.workspace && codingStore.messages.length === 0" class="welcome">
         <div class="welcome-icon">&#x2728;</div>
-        <h2>{{ isPageDev ? '描述你想要的页面' : '描述你想要的组件' }}</h2>
+        <h2>描述你想开发的内容</h2>
         <p class="welcome-desc">告诉我你想开发什么，我会自动创建项目、生成代码、安装依赖并启动开发服务器。</p>
+
+        <!-- Scene Category Tabs -->
+        <div class="scene-tabs">
+          <button
+            v-for="cat in sceneCategories"
+            :key="cat.key"
+            class="scene-tab"
+            :class="{ active: activeSceneCategory === cat.key }"
+            @click="activeSceneCategory = cat.key"
+          >
+            <span class="scene-tab-icon">{{ cat.icon }}</span>
+            {{ cat.label }}
+          </button>
+        </div>
+
         <div class="suggestions">
           <button
-            v-for="s in suggestions"
+            v-for="s in activeSuggestions"
             :key="s"
             class="suggestion-btn"
             @click="sendSuggestion(s)"
@@ -349,6 +373,42 @@ const existingWorkspaces = ref<WorkspaceInfo[]>([])
 const isPublishing = ref(false)
 const isDebugging = ref(false)
 
+// ============ Workspace Grouping ============
+const collapsedGroups = ref(new Set<string>())
+
+const wsTypeGroupMap: Record<string, { key: string; icon: string; label: string; order: number }> = {
+  'form-component':   { key: 'component-pc',     icon: '🧩', label: 'PC 组件',     order: 1 },
+  'mobile-component': { key: 'component-mobile', icon: '📱', label: '移动端组件',  order: 2 },
+  'menu-page':        { key: 'page-pc',          icon: '🖥️', label: 'PC 页面',     order: 3 },
+  'form-page':        { key: 'page-pc',          icon: '🖥️', label: 'PC 页面',     order: 3 },
+  'mobile-page':      { key: 'page-mobile',      icon: '📱', label: '移动端页面',  order: 4 },
+  'form-list':        { key: 'list-view',         icon: '📋', label: '列表视图',   order: 5 },
+  'layout':           { key: 'layout',            icon: '📐', label: '应用布局',   order: 6 },
+  'plugin':           { key: 'plugin',            icon: '🔌', label: '扩展插件',   order: 7 },
+  'backend-api':      { key: 'backend',           icon: '⚙️', label: '后端接口',   order: 8 },
+  'script':           { key: 'script',            icon: '⚡', label: '脚本/事件',  order: 9 },
+}
+
+const groupedWorkspaces = computed(() => {
+  const groups: Record<string, { key: string; icon: string; label: string; order: number; items: WorkspaceInfo[] }> = {}
+  for (const ws of existingWorkspaces.value) {
+    const mapping = wsTypeGroupMap[ws.project_type] || { key: 'other', icon: '📦', label: '其他', order: 99 }
+    if (!groups[mapping.key]) {
+      groups[mapping.key] = { ...mapping, items: [] }
+    }
+    groups[mapping.key].items.push(ws)
+  }
+  return Object.values(groups).sort((a, b) => a.order - b.order)
+})
+
+function toggleGroup(key: string) {
+  if (collapsedGroups.value.has(key)) {
+    collapsedGroups.value.delete(key)
+  } else {
+    collapsedGroups.value.add(key)
+  }
+}
+
 // ============ Attachment state ============
 const attachedFile = ref<File | null>(null)
 const attachedPreviewUrl = ref<string | null>(null)
@@ -368,21 +428,82 @@ const currentProject = computed(() => {
 
 // ============ Suggestions ============
 
-const componentSuggestions = [
-  '开发一个头像上传组件，支持裁剪和预览',
-  '实现一个日期范围选择器组件',
-  '做一个评分组件，支持半星和自定义颜色',
-  '创建一个图表分析组件，支持柱状图和饼图',
+// ============ Scene Categories & Suggestions ============
+const sceneCategories = [
+  { key: 'component-pc', icon: '🧩', label: 'PC组件' },
+  { key: 'component-mobile', icon: '📱', label: '移动端组件' },
+  { key: 'page-pc', icon: '🖥️', label: 'PC页面' },
+  { key: 'page-mobile', icon: '📱', label: '移动端页面' },
+  { key: 'layout', icon: '📐', label: '应用布局' },
+  { key: 'plugin', icon: '🔌', label: '扩展插件' },
+  { key: 'script', icon: '⚡', label: '脚本/事件' },
+  { key: 'backend', icon: '⚙️', label: '后端接口' },
 ]
 
-const pageSuggestions = [
-  '做一个数据查询表格页面，带搜索和分页',
-  '创建一个项目分析图表页面',
-  '做一个审批流程页面，支持多级审批',
-  '开发一个供应商管理弹窗选择页面',
-]
+const sceneSuggestions: Record<string, string[]> = {
+  'component-pc': [
+    '开发一个头像上传组件，支持裁剪和预览',
+    '实现一个日期范围选择器组件',
+    '做一个评分组件，支持半星和自定义颜色',
+    '创建一个图表分析组件，支持柱状图和饼图',
+  ],
+  'component-mobile': [
+    '做一个移动端签名板组件，支持手写签名',
+    '开发一个移动端图片选择组件，支持拍照和相册',
+    '实现一个移动端地理位置选择组件（Cube UI）',
+    '为已有PC评分组件开发对应的移动端版本',
+  ],
+  'page-pc': [
+    '做一个数据查询表格页面，带搜索和分页',
+    '开发一个供应商管理弹窗选择页面',
+    '创建一个项目分析图表页面',
+    '做一个审批流程页面，支持多级审批',
+  ],
+  'page-mobile': [
+    '做一个移动端扫码签到页面',
+    '开发一个移动端巡检记录页面',
+    '创建一个移动端审批详情页面',
+    '做一个移动端数据采集表单页面',
+  ],
+  layout: [
+    '做一个带顶部公告栏的自定义布局',
+    '创建一个双栏布局，左侧菜单可折叠',
+    '开发一个暗色主题的自定义应用布局',
+  ],
+  plugin: [
+    '开发一个应用详情页的自定义Tab插件',
+    '做一个自定义面板扩展，显示统计数据',
+    '创建一个系统通知管理扩展插件',
+  ],
+  script: [
+    '写一个表单提交前的数据校验脚本',
+    '做一个业务事件弹窗，采集审批意见',
+    '开发一个自动计算金额的JavaScript脚本',
+    '写一个后端Python脚本处理数据同步',
+  ],
+  backend: [
+    '开发一个自定义数据查询接口',
+    '做一个批量导入的后端接口',
+    '创建一个报表统计的后端API',
+  ],
+}
 
-const suggestions = computed(() => isPageDev.value ? pageSuggestions : componentSuggestions)
+const activeSceneCategory = ref('component-pc')
+const pendingSceneCategory = ref<string | null>(null) // 点建议按钮时锁定的场景类别
+
+const activeSuggestions = computed(() => sceneSuggestions[activeSceneCategory.value] || [])
+
+// 场景分类 → 后端 project_type 映射
+const sceneCategoryToProjectType: Record<string, string> = {
+  'component-pc': 'form-component',
+  'component-mobile': 'mobile-component',
+  'page-pc': 'menu-page',
+  'page-mobile': 'mobile-page',
+  layout: 'layout',
+  plugin: 'plugin',
+  script: 'script',
+  backend: 'backend-api',
+}
 
 const inputPlaceholder = computed(() => {
   if (codingStore.workspace) {
@@ -627,6 +748,8 @@ function removeAttachment() {
 
 function sendSuggestion(text: string) {
   userInput.value = text
+  // 记住当前选中的场景类别，用于传给后端
+  pendingSceneCategory.value = activeSceneCategory.value
   sendMessage()
 }
 
@@ -699,13 +822,18 @@ async function sendMessage() {
 
   try {
     const token = userStore.token
+    // 确定 project_type：优先用点击建议时锁定的场景，其次用 URL query，最后用当前选中的 Tab
+    const _sceneKey = pendingSceneCategory.value || activeSceneCategory.value
+    const _projectType = sceneCategoryToProjectType[_sceneKey] || route.query.type as string || null
+    pendingSceneCategory.value = null  // 重置
+
     const body: Record<string, any> = {
       message: finalMessage,
       workspace_id: codingStore.workspace?.id || null,
       conversation_id: codingStore.conversationId || null,
       app_id: (route.query.app_id as string) || null,
       project_id: currentProjectId.value || null,
-      project_type: isPageDev.value ? 'menu-page' : null,
+      project_type: _projectType,
     }
 
     const response = await fetch('/api/coding/auto-pipeline', {
@@ -1251,6 +1379,54 @@ watch(() => route.path, () => {
   padding: 8px 10px;
 }
 
+.sidebar-group-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px 6px;
+  cursor: pointer;
+  user-select: none;
+  margin-top: 4px;
+}
+
+.sidebar-group-header:first-child {
+  margin-top: 0;
+}
+
+.sidebar-group-icon {
+  font-size: 13px;
+}
+
+.sidebar-group-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.45);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  flex: 1;
+}
+
+.sidebar-group-count {
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.06);
+  padding: 1px 6px;
+  border-radius: 8px;
+  min-width: 18px;
+  text-align: center;
+}
+
+.sidebar-group-arrow {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.25);
+  transition: transform 0.2s ease;
+  transform: rotate(-90deg);
+}
+
+.sidebar-group-arrow.collapsed {
+  transform: rotate(-180deg);
+}
+
 .sidebar-ws-item {
   padding: 10px 12px;
   border-radius: 12px;
@@ -1284,12 +1460,7 @@ watch(() => route.path, () => {
 .sidebar-ws-meta {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-}
-
-.sidebar-ws-type {
-  font-size: 11px;
-  color: rgba(255, 255, 255, 0.35);
+  justify-content: flex-end;
 }
 
 .sidebar-ws-del {
@@ -1509,7 +1680,7 @@ watch(() => route.path, () => {
   flex: 1;
   padding: 60px 24px;
   text-align: center;
-  max-width: 640px;
+  max-width: 720px;
 }
 
 .welcome-icon {
@@ -1532,9 +1703,46 @@ watch(() => route.path, () => {
 .welcome-desc {
   color: rgba(255, 255, 255, 0.5);
   font-size: 15px;
-  margin: 0 0 36px;
+  margin: 0 0 24px;
   line-height: 1.7;
   max-width: 460px;
+}
+
+.scene-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  margin-bottom: 24px;
+}
+
+.scene-tab {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 14px;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: transparent;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.scene-tab:hover {
+  border-color: rgba(124, 58, 237, 0.3);
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.scene-tab.active {
+  border-color: rgba(124, 58, 237, 0.6);
+  background: rgba(124, 58, 237, 0.15);
+  color: #c4b5fd;
+}
+
+.scene-tab-icon {
+  font-size: 14px;
 }
 
 .suggestions {

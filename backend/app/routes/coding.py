@@ -1319,9 +1319,15 @@ def _scene_to_project_type(scene_type: SceneType) -> str:
         SceneType.WEB_COMPONENT: "form-component",
         SceneType.WEB_PAGE: "form-page",
         SceneType.WEB_LIST_VIEW: "form-list",
+        SceneType.WEB_LAYOUT: "layout",
+        SceneType.WEB_PLUGIN: "plugin",
         SceneType.BACKEND_API: "backend-api",
-        SceneType.MOBILE_COMPONENT: "form-component",
-        SceneType.MOBILE_PAGE: "form-page",
+        SceneType.MOBILE_COMPONENT: "mobile-component",
+        SceneType.MOBILE_PAGE: "mobile-page",
+        SceneType.SCRIPT_JS: "script",
+        SceneType.SCRIPT_PYTHON: "script",
+        SceneType.SCRIPT_GROOVY: "script",
+        SceneType.BUSINESS_DIALOG: "script",
     }
     return mapping.get(scene_type, "form-component")
 

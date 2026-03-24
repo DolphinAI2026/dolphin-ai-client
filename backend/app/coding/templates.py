@@ -15,6 +15,8 @@ def get_project_template(scene_type: SceneType, module_name: str) -> Dict[str, s
         SceneType.WEB_LIST_VIEW: _web_list_view_template,
         SceneType.MOBILE_PAGE: _mobile_page_template,
         SceneType.MOBILE_COMPONENT: _mobile_component_template,
+        SceneType.WEB_LAYOUT: _web_layout_template,
+        SceneType.WEB_PLUGIN: _web_plugin_template,
         SceneType.BACKEND_API: _backend_api_template,
     }
     generator = generators.get(scene_type)
@@ -381,8 +383,443 @@ export default {{
 
 
 def _mobile_component_template(name: str) -> Dict[str, str]:
-    """移动端自开发组件模板 - 与Web端组件结构相同"""
-    return _web_component_template(name)
+    """移动端自开发组件模板 - 简化版（仅 ide/edit/read 三态）"""
+    code = "FORM_CUSTOM_COMPONENT_" + name.upper().replace("-", "_")
+    parts = name.split("-")
+    pascal = "".join(w.capitalize() for w in parts)
+    prefix = f"FormComponent{pascal}"
+    full_kebab = f"form-component-{name}-mobile"
+
+    return {
+        f"src/apaas.json": json.dumps({
+            "entry": "index.js",
+            "templateType": "FORM_COMPONENT",
+            "customWidgetList": [{"code": code, "text": name, "description": f"{name} (移动端)"}],
+            "copyAssets": [f"public/form-component/{full_kebab}"],
+            "router": {},
+            "outputName": full_kebab
+        }, indent=2, ensure_ascii=False),
+
+        f"src/index.js": f"""\
+import {{ customFormEditorList, customFormWidgetList }} from './component'
+import {{ widgetConfigList, editorConfigList }} from './config'
+
+const install = function(Vue) {{
+  customFormWidgetList.forEach((comp) => {{ Vue.component(comp.name, comp) }})
+  customFormEditorList.forEach((comp) => {{ Vue.component(comp.name, comp) }})
+  widgetConfigList.forEach((wc) => {{
+    Vue.FormEngine && Vue.FormEngine.registerCustomGroupWidgetConfig({{ widgetConfig: wc }})
+  }})
+  editorConfigList.forEach((ec) => {{
+    Vue.FormEngine && Vue.FormEngine.registerCustomEditorConfig(ec)
+  }})
+}}
+export default {{ install }}
+""",
+
+        f"src/config/widgetConfigList.js": f"""\
+const widgetConfigList = [{{
+  version: 2.0,
+  code: '{code}',
+  desc: {{ iconType: 'DEFAULT', icon: '', text: '{name}', description: '{name} (移动端)' }},
+  instance: {{ uuid: '$itemUuid', inTable: false }},
+  component: {{
+    ide: '{prefix}Edit',
+    edit: '{prefix}Edit',
+    read: '{prefix}Read'
+  }},
+  widget: {{
+    display: {{ label: '{name}', width: 12, mobileWidth: 12, height: 1, hidden: false, readOnly: false, required: false }},
+    allow: {{ useInTableColumn: true }},
+    default: {{ customDefaultKey: 'defaultValue', value: '' }},
+    validator: {{ uniqueCheck: false }},
+    special: {{ frontBusinessObjectComponentType: 'BOF_TEXT', saveWithHidden: false }},
+    customComponentConfig: {{}},
+    componentModelField: ['TEXT'],
+    editor: {{
+      config: ['INFO', 'LABEL', 'WIDTH', '{code}_SETTING', 'HIDDEN', 'READONLY', 'REQUIRED', 'EDITONNEW']
+    }}
+  }},
+  client: {{
+    mobile: {{
+      widget: {{
+        editor: {{
+          config: ['INFO', 'LABEL', 'HIDDEN', 'READONLY', 'REQUIRED']
+        }}
+      }},
+      component: {{
+        ide: '{prefix}Edit',
+        edit: '{prefix}Edit',
+        read: '{prefix}Read'
+      }}
+    }}
+  }},
+  methods: {{}},
+  formatValueSchema: {{}}
+}}]
+export default widgetConfigList
+""",
+
+        f"src/config/editorConfigList.js": f"""\
+const editorConfigList = [{{
+  code: '{code}_SETTING',
+  editorConfigType: '{code}_SETTING',
+  componentName: '{prefix}Setting',
+  configProperty: 'customComponentConfig'
+}}]
+export default editorConfigList
+""",
+
+        f"src/config/index.js": f"""\
+import widgetConfigList from './widgetConfigList'
+import editorConfigList from './editorConfigList'
+export {{ widgetConfigList, editorConfigList }}
+""",
+
+        f"src/component/form-widget/{full_kebab}-edit.vue": f"""\
+<template>
+  <div class="form-widget {full_kebab}-edit">
+    <x-proxy-form-item :isInTable="widget.isInTable" :showRequired="showRequired" :label="widget.label"
+      :validatorRules="validatorRules" :validateKey="validateKey" :validateInfo="validateInfo">
+      <input v-model="editValue" class="mobile-input" placeholder="请输入" />
+    </x-proxy-form-item>
+  </div>
+</template>
+<script>
+import FormWidgetMixin from '@/mixin/form-widget.mixin'
+export default {{
+  name: '{prefix}Edit', mixins: [FormWidgetMixin],
+  computed: {{ editValue: {{ get() {{ return this.formValue || '' }}, set(v) {{ this.formValue = v }} }} }}
+}}
+</script>
+<style scoped>
+.mobile-input {{ width: 100%; padding: 8px 12px; border: 1px solid #dcdfe6; border-radius: 4px; font-size: 14px; }}
+</style>
+""",
+
+        f"src/component/form-widget/{full_kebab}-read.vue": f"""\
+<template>
+  <div class="form-widget {full_kebab}-read">
+    <x-proxy-form-item :isInTable="widget.isInTable" :label="widget.label">
+      <span>{{{{ formValue || '-' }}}}</span>
+    </x-proxy-form-item>
+  </div>
+</template>
+<script>
+import FormWidgetMixin from '@/mixin/form-widget.mixin'
+export default {{ name: '{prefix}Read', mixins: [FormWidgetMixin] }}
+</script>
+""",
+
+        f"src/component/form-config/BasicSetting.vue": f"""\
+<template>
+  <div class="form-config-item {full_kebab}-setting">
+    <div class="setting-panel">
+      <el-form size="mini" label-width="80px">
+        <!-- 在此添加移动端组件配置项 -->
+      </el-form>
+    </div>
+  </div>
+</template>
+<script>
+export default {{
+  name: '{prefix}Setting',
+  props: {{
+    componentConfig: {{ default: null }},
+    formEngine: {{ default: null }},
+    widget: {{ default: null }},
+    editConfig: {{ default: null }},
+    configProperty: {{ default: null }}
+  }},
+  computed: {{
+    widgetObj() {{ return this.componentConfig || this.widget || {{}} }}
+  }},
+  data() {{ return {{ localConfig: {{}} }} }},
+  created() {{
+    const saved = this.widgetObj.customComponentConfig || {{}}
+    Object.keys(this.localConfig).forEach(key => {{
+      if (saved[key] !== undefined) this.localConfig[key] = saved[key]
+    }})
+  }},
+  methods: {{
+    saveConfig() {{
+      this.$set(this.widgetObj, 'customComponentConfig', {{ ...this.localConfig }})
+    }}
+  }}
+}}
+</script>
+""",
+
+        f"src/component/index.js": f"""\
+import {prefix}Edit from './form-widget/{full_kebab}-edit.vue'
+import {prefix}Read from './form-widget/{full_kebab}-read.vue'
+import {prefix}Setting from './form-config/BasicSetting.vue'
+
+export const customFormWidgetList = [{prefix}Edit, {prefix}Read]
+export const customFormEditorList = [{prefix}Setting]
+""",
+    }
+
+
+def _web_layout_template(name: str) -> Dict[str, str]:
+    """Web端自定义布局模板 - 基于LayoutEngine"""
+    module = f"apaas-custom-layout-{name}"
+    camel = "".join(w.capitalize() for w in name.split("-"))
+
+    return {
+        f"src/apaas.json": json.dumps({
+            "entry": "index.js",
+            "copyAssets": [],
+            "layout": [{
+                "name": module,
+                "desc": f"自定义布局-{name}",
+                "status": "ENABLE"
+            }],
+            "outputName": module
+        }, indent=2, ensure_ascii=False),
+
+        f"src/index.js": f"""\
+import Home from './Home.vue'
+
+const install = function(Vue, opts) {{
+  if (Vue.LayoutEngine) {{
+    const layoutEngine = Vue.LayoutEngine.getInstance(
+      Vue.LayoutEngine.currentLayoutId
+    )
+    Vue.component('{module}', Home)
+    layoutEngine.registerLayoutComponent(Home)
+  }}
+}}
+
+export default {{ install }}
+""",
+
+        f"src/Home.vue": f"""\
+<template>
+  <div class="{module}">
+    <x-app-layout :layout-engine="layoutEngine" :is-collapse="isCollapse">
+      <template v-slot:header>
+        <x-app-header
+          v-if="appInfo"
+          :layout-engine="layoutEngine"
+          :app-info="appInfo"
+        />
+      </template>
+      <template v-slot:menu>
+        <x-app-menu
+          :menu-config="menuConfig"
+          :show-menu="showMenu && !!appInfo"
+          :is-collapse="isCollapse"
+          :layout-engine="layoutEngine"
+          @menu-add-click="menuAddClick"
+        />
+      </template>
+      <template v-slot:appPage>
+        <!-- 平台会在此注入页面内容 -->
+        <slot name="appPage"></slot>
+      </template>
+    </x-app-layout>
+  </div>
+</template>
+
+<script>
+export default {{
+  name: 'ApaasCustomLayout{camel}',
+  props: {{
+    layoutEngine: {{
+      type: Object,
+      default: () => ({{}})
+    }},
+    pkgVersion: {{
+      type: String,
+      default: ''
+    }}
+  }},
+  data() {{
+    return {{
+      isCollapse: false,
+      showMenu: true
+    }}
+  }},
+  computed: {{
+    appInfo() {{
+      return this.layoutEngine?.layoutDataControl?.appInfo ?? {{}}
+    }},
+    menuConfig() {{
+      return this.layoutEngine?.layoutDataControl?.menuConfig ?? {{
+        menu: [],
+        defaultActive: null,
+        menuTreeData: []
+      }}
+    }}
+  }},
+  methods: {{
+    menuAddClick(e) {{
+      this.$emit('menu-add-click', e)
+    }}
+  }}
+}}
+</script>
+
+<style lang="scss" scoped>
+.{module} {{
+  height: 100%;
+  width: 100%;
+}}
+</style>
+""",
+    }
+
+
+def _web_plugin_template(name: str) -> Dict[str, str]:
+    """Web端自开发插件模板 - 基于ExtensionEngine"""
+    module = f"apaas-custom-{name}"
+    camel = "".join(w.capitalize() for w in name.split("-"))
+    ext_code = f"CUSTOM_{name.upper().replace('-', '_')}_EXTENSION"
+
+    return {
+        f"src/apaas.json": json.dumps({
+            "entry": "index.js",
+            "copyAssets": [],
+            "extensionConfigList": [{
+                "code": ext_code,
+                "text": f"自开发插件-{name}"
+            }],
+            "outputName": module
+        }, indent=2, ensure_ascii=False),
+
+        f"src/index.js": f"""\
+import customTabList from './custom-tab/index.js'
+import extensionConfig from './extension.js'
+import registerI18n from './local/index.js'
+
+const install = function(Vue, opts) {{
+  // 注册国际化
+  registerI18n()
+
+  // 注册组件
+  if (customTabList && Array.isArray(customTabList)) {{
+    customTabList.forEach(component => {{
+      Vue.component(component.name, component)
+    }})
+  }}
+
+  // 注册扩展配置
+  if (Vue._extensionEngine) {{
+    Vue._extensionEngine.registerExtensionConfig(extensionConfig)
+  }}
+}}
+
+export default {{ install }}
+""",
+
+        f"src/extension.js": f"""\
+import {{ getCustomTabConfig }} from './tab-config.js'
+
+const extensionConfig = {{
+  code: '{ext_code}',
+  name: '自开发插件-{name}',
+  blocks: [
+    {{
+      code: 'CustomTabExtension',
+      name: '自定义Tab扩展',
+      funs: [
+        {{
+          code: 'CustomTabExtension',
+          abbr: '__{name}__',
+          name: '',
+          versions: ['TRIAL_EDITION', 'TEAM_EDITION', 'STANDARD_EDITION', 'PREMIUM_EDITION']
+        }}
+      ]
+    }}
+  ],
+  versions: ['TRIAL_EDITION', 'TEAM_EDITION', 'STANDARD_EDITION', 'PREMIUM_EDITION'],
+  enable: true,
+  extensionMethods: {{
+    'custom-tab': {{
+      getCustomTabConfig
+    }}
+  }}
+}}
+
+export default extensionConfig
+""",
+
+        f"src/tab-config.js": f"""\
+export function getCustomTabConfig() {{
+  return [
+    {{
+      code: 'customPanel{camel}',
+      title: '自定义面板',
+      componentName: '{module}-panel',
+      resourceCode: 'APP_INFORMATION'
+    }}
+  ]
+}}
+""",
+
+        f"src/local/index.js": f"""\
+const locale = ['zh-CN', 'en-US']
+const messages = {{
+  'zh-CN': {{
+    '{name}': {{
+      panel: '自定义面板',
+      title: '插件标题'
+    }}
+  }},
+  'en-US': {{
+    '{name}': {{
+      panel: 'Custom Panel',
+      title: 'Plugin Title'
+    }}
+  }}
+}}
+
+const registerI18n = () => {{
+  locale.forEach(item => {{
+    if (window.APaaSSDK && window.APaaSSDK.context && window.APaaSSDK.context.globalVueI18n) {{
+      window.APaaSSDK.context.globalVueI18n.mergeLocaleMessage(item, messages[item])
+    }}
+  }})
+}}
+
+export default registerI18n
+""",
+
+        f"src/custom-tab/index.js": f"""\
+import CustomPanel from './custom-panel.vue'
+
+export default [CustomPanel]
+""",
+
+        f"src/custom-tab/custom-panel.vue": f"""\
+<template>
+  <div class="{module}-panel">
+    <h3>自定义面板 - {name}</h3>
+    <!-- 在此添加面板内容 -->
+  </div>
+</template>
+
+<script>
+export default {{
+  name: '{module}-panel',
+  data() {{
+    return {{}}
+  }},
+  created() {{
+    // 初始化逻辑
+  }},
+  methods: {{}}
+}}
+</script>
+
+<style lang="scss" scoped>
+.{module}-panel {{
+  padding: 20px;
+}}
+</style>
+""",
+    }
 
 
 def _backend_api_template(name: str) -> Dict[str, str]:

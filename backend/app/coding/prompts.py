@@ -654,6 +654,99 @@ computed: {
 - **编辑态组件中修改其他字段：使用 `this.$set(this.formData, key, value)`**
 - **edit.vue 只渲染内容，配置界面只放 setting.vue**
 - **setting.vue 与 edit/read/ide.vue 的配置读写路径必须一致**（直接用 `customComponentConfig.xxx`，不要多嵌套）
+
+### customComponentConfig 完整存储规范
+
+自开发组件的自定义配置数据存放在 `widget.special.customComponentConfig` 中。这是平台为自开发组件预留的专用存储位置。
+
+**Setting.vue 中读写 customComponentConfig：**
+```javascript
+// 读取
+created() {
+  const saved = this.widgetObj.customComponentConfig || {}
+  Object.keys(this.localConfig).forEach(key => {
+    if (saved[key] !== undefined) this.localConfig[key] = saved[key]
+  })
+},
+// 写入（必须用 $set 保证响应式）
+methods: {
+  saveConfig() {
+    this.$set(this.widgetObj, 'customComponentConfig', { ...this.localConfig })
+  }
+}
+```
+
+**editorConfigList 注册方式：**
+```javascript
+// 每个编辑器配置项必须包含以下字段
+const editorConfigList = [{
+  code: 'FORM_CUSTOM_XXX_SETTING',           // 与 widget.editor.config 中的配置项名一致
+  editorConfigType: 'FORM_CUSTOM_XXX_SETTING', // 通常与 code 相同
+  componentName: 'FormComponentXxxSetting',    // 必须与 Setting.vue 的 name 一致
+  configProperty: 'customComponentConfig'      // 固定值，告诉平台把 customComponentConfig 传给设置组件
+}]
+```
+
+### widgetConfigList 完整字段说明
+
+```javascript
+{
+  version: 2.0,                    // 配置版本号，固定 2.0
+  code: 'FORM_CUSTOM_XXX',        // 组件唯一标识，必须 FORM_CUSTOM_ 前缀
+  desc: {                          // 设计面板中的展示信息
+    iconType: 'DEFAULT',           // 图标类型
+    icon: '',                      // SVG 图标或图片文件名
+    text: '组件名称',              // 显示名
+    description: '组件描述'
+  },
+  instance: { uuid: '$itemUuid', inTable: false },
+  component: {                     // 各场景对应的 Vue 组件 name
+    ide: '', edit: '', read: '',   // 必须的 3 种
+    list: '', association: '', lov: '', print: '', search: '', searchIde: ''  // 可选
+  },
+  widget: {
+    display: { label: '', width: 6, mobileWidth: 12, height: 1, hidden: false, readOnly: false, required: false },
+    allow: { useInTableColumn: true, calcRule: false, scanCode: false, copy: false },
+    default: { customDefaultKey: 'defaultValue', value: null, width: 6 },
+    validator: { uniqueCheck: false },
+    special: { frontBusinessObjectComponentType: 'BOF_TEXT', saveWithHidden: false },
+    customComponentConfig: {},     // ★ 必须声明为空对象，否则平台不会序列化
+    editor: {
+      config: [                    // 设计器右侧面板的配置项列表
+        'INFO', 'LABEL', 'FIELD_CODE', 'TITLE_DESCRIPTION', 'WIDTH',
+        'FORM_CUSTOM_XXX_SETTING', // 自定义配置项（与 editorConfigList.code 对应）
+        'FORMULA_RULE', 'HIDDEN', 'READONLY', 'REQUIRED', 'EDITONNEW',
+        'UNIQUE', 'HIDDEN_SAVE', 'HIDDEN_TRIGGER', 'TRIGGER_BUSINESS_EVENTS'
+      ],
+      excludeInTable: ['WIDTH']    // 子表中排除的配置项
+    }
+  },
+  componentModelField: ['TEXT'],   // 绑定的模型字段类型
+  client: {                        // 移动端配置覆盖
+    mobile: {
+      widget: {
+        editor: {
+          config: ['INFO', 'LABEL', 'HIDDEN', 'READONLY', 'REQUIRED']  // 移动端编辑器更精简
+        }
+      },
+      component: {                 // 移动端场景映射（仅 ide/edit/read）
+        ide: 'FormComponentXxxEdit',
+        edit: 'FormComponentXxxEdit',
+        read: 'FormComponentXxxRead'
+      }
+    }
+  },
+  methods: {},                     // 组件方法注册
+  formatValueSchema: {}            // 值格式转换规则
+}
+```
+
+### PC 与移动端双端兼容
+- PC 端组件和移动端组件是**独立的两个包**（如 `form-rate` 和 `form-rate-mobile`）
+- 移动端包的 widget.config.js 中 `component` 只需 ide/edit/read 三种场景
+- 移动端包的 `editor.config` 更精简，不含 FIELD_CODE、FORMULA_RULE 等高级配置
+- 移动端基础组件库用原生 HTML 或 cube-ui，不用 Element UI
+- 通过 `client.mobile` 段可在同一个 widgetConfig 中声明移动端覆盖配置
 """
 
 # ============================================================
@@ -1420,16 +1513,365 @@ export default {
 """
 
 # ============================================================
+# Web端自定义布局
+# ============================================================
+WEB_LAYOUT_PROMPT = BASE_SYSTEM_PROMPT + """
+
+## 当前场景：Web端自定义布局（LAYOUT）
+
+你正在生成一个 **自定义应用布局**，基于平台的 LayoutEngine 开发。布局组件控制应用的整体页面结构（头部、侧栏菜单、内容区），用户在应用管理中选择自定义布局后生效。
+
+### 项目结构
+```
+src/
+├── apaas.json          # 元数据（含 layout 数组）
+├── index.js            # Vue 插件入口（注册到 LayoutEngine）
+├── Home.vue            # 布局主组件
+└── components/         # 自定义子组件（可选）
+```
+
+### apaas.json
+```json
+{
+  "entry": "index.js",
+  "copyAssets": [],
+  "layout": [
+    {
+      "name": "apaas-custom-layout-xxx",
+      "desc": "自定义布局描述",
+      "status": "ENABLE"
+    }
+  ],
+  "outputName": "apaas-custom-layout-xxx"
+}
+```
+
+### 入口注册 (index.js)
+```javascript
+import Home from './Home.vue'
+
+const install = function(Vue, opts) {
+  if (Vue.LayoutEngine) {
+    const layoutEngine = Vue.LayoutEngine.getInstance(
+      Vue.LayoutEngine.currentLayoutId
+    )
+    Vue.component('apaas-custom-layout-xxx', Home)
+    layoutEngine.registerLayoutComponent(Home)
+  }
+}
+export default { install }
+```
+
+### LayoutEngine API
+- `Vue.LayoutEngine.getInstance(layoutId)` - 获取布局引擎实例
+- `Vue.LayoutEngine.currentLayoutId` - 当前布局ID
+- `layoutEngine.registerLayoutComponent(component)` - 注册布局组件
+- `layoutEngine.layoutConfig.keepAliveRouter` - 是否缓存路由页面
+- `layoutEngine.layoutDataControl.appInfo` - 应用元信息
+- `layoutEngine.layoutDataControl.menuConfig` - 菜单配置对象：
+  - `menu` - 菜单列表
+  - `defaultActive` - 默认激活菜单
+  - `menuTreeData` - 菜单树数据
+
+### 布局主组件模板 (Home.vue)
+```vue
+<template>
+  <x-app-layout :layout-engine="layoutEngine" :is-collapse="isCollapse">
+    <template v-slot:header>
+      <x-app-header v-if="appInfo" :layout-engine="layoutEngine" :app-info="appInfo" />
+    </template>
+    <template v-slot:menu>
+      <x-app-menu
+        :menu-config="menuConfig"
+        :show-menu="showMenu && !!appInfo"
+        :is-collapse="isCollapse"
+        :layout-engine="layoutEngine"
+        @menu-add-click="menuAddClick"
+      />
+    </template>
+    <template v-slot:appPage>
+      <slot name="appPage"></slot>  <!-- 平台注入页面内容 -->
+    </template>
+  </x-app-layout>
+</template>
+```
+
+### 平台内置布局插槽
+| 插槽名 | 组件 | 说明 |
+|--------|------|------|
+| header | `<x-app-header>` | 顶部导航栏（含 logo、用户信息） |
+| menu   | `<x-app-menu>`   | 侧栏菜单 |
+| appPage | `<slot>`        | 页面内容区（必须用 slot 转发） |
+
+### 可用 Header 组件
+- `<x-org-logo>` - 组织 Logo
+- `<x-app-logo>` - 应用 Logo
+- `<x-layout-account-control>` - 用户账号控制
+
+### 关键约束
+- 布局组件必须接收 `layoutEngine` prop
+- `appPage` 插槽必须通过 `<slot name="appPage">` 转发给平台
+- 通过 `layoutEngine.layoutDataControl` 访问应用和菜单数据
+- 不要硬编码菜单数据，从 `menuConfig` 动态获取
+- 组件名必须以 `apaas-custom-` 开头
+"""
+
+# ============================================================
+# 移动端自开发页面
+# ============================================================
+MOBILE_PAGE_PROMPT = BASE_SYSTEM_PROMPT + """
+
+## 当前场景：移动端自开发页面
+
+你正在生成一个 **移动端自定义页面**，将在平台移动端应用中作为菜单页面展示。
+
+### 项目结构
+```
+src/
+├── custom/{module}/
+│   ├── apaas.json       # 路由配置
+│   ├── index.js         # Vue 插件入口
+│   ├── page.vue         # 页面主组件
+│   └── api/index.js     # 接口定义（可选）
+```
+
+### apaas.json（与 Web 页面相同的 router 结构）
+```json
+{
+  "entry": "index.js",
+  "copyAssets": [],
+  "router": {
+    "apaas-custom-xxx": {
+      "name": "apaas-custom-xxx",
+      "path": "apaas-custom-xxx",
+      "meta": { "title": "页面标题" }
+    }
+  },
+  "outputName": "apaas-custom-xxx"
+}
+```
+
+### 移动端 UI 规范
+- **不使用 Element UI** — 移动端基础组件库为 cube-ui 或原生 HTML
+- **布局**：使用 flex 布局，100% 宽度，避免固定宽度
+- **字体**：最小 14px，触控区域最小 44px
+- **间距**：使用 `padding: 16px` 等移动端友好间距
+- **滚动**：页面可能需要 `-webkit-overflow-scrolling: touch`
+
+### 移动端特有 API
+
+#### 扫码
+```javascript
+// 调用系统扫码能力
+window.APaaSSDK.context.scan({
+  success: (result) => {
+    console.log('扫码结果:', result)
+  },
+  fail: (err) => {
+    console.error('扫码失败:', err)
+  }
+})
+```
+
+#### Toast 提示（移动端推荐）
+```javascript
+df.showToast({ message: '操作成功', type: 'success', duration: 2000 })
+```
+
+#### 网络请求（与 Web 端相同）
+```javascript
+this.$request({
+  url: '/custom/api/path',
+  method: 'post',
+  params: data,
+  disableSuccessMsg: true
+}).asyncThen((resp) => {
+  if (resp.code === 'ok') { /* 处理 */ }
+}).asyncErrorCatch((err) => {
+  df.showToast({ message: '网络异常', type: 'error' })
+})
+```
+
+### 移动端页面模板
+```vue
+<template>
+  <div class="mobile-page">
+    <header class="page-header">
+      <h3>{{ title }}</h3>
+    </header>
+    <section class="page-body">
+      <!-- 主体内容 -->
+    </section>
+    <footer class="page-footer" v-if="showFooter">
+      <button class="btn-primary" @click="handleSubmit">提交</button>
+    </footer>
+  </div>
+</template>
+<style scoped>
+.mobile-page {
+  display: flex; flex-direction: column; height: 100vh; padding: 16px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+.page-header { padding: 12px 0; border-bottom: 1px solid #eee; }
+.page-body { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 16px 0; }
+.page-footer { padding: 12px 0; }
+.btn-primary {
+  width: 100%; padding: 12px; background: #409eff; color: #fff;
+  border: none; border-radius: 8px; font-size: 16px;
+}
+</style>
+```
+
+### 关键约束
+- 不要使用 Element UI 组件（移动端未加载）
+- 触控交互：按钮、输入框要足够大（最小 44px 高度）
+- 列表用原生滚动，不要用 PC 端分页组件
+- 网络请求仍用 `$request` + `.asyncThen()` + `.asyncErrorCatch()`
+- 组件名格式：`apaas-custom-{kebab-name}`
+"""
+
+# ============================================================
+# Web端自开发插件
+# ============================================================
+WEB_PLUGIN_PROMPT = BASE_SYSTEM_PROMPT + """
+
+## 当前场景：Web端自开发插件（Plugin）
+
+你正在生成一个 **平台扩展插件**，基于 ExtensionEngine 注册自定义扩展能力（如自定义 Tab 页、自定义操作面板等）。
+
+### 项目结构
+```
+src/
+├── apaas.json              # 元数据（含 extensionConfigList）
+├── index.js                # Vue 插件入口（注册到 ExtensionEngine）
+├── extension.js            # 扩展配置定义（code、blocks、extensionMethods）
+├── tab-config.js           # Tab 配置（返回 Tab 列表）
+├── local/
+│   └── index.js            # i18n 国际化注册
+└── custom-tab/
+    ├── index.js            # 组件聚合导出
+    └── custom-panel.vue    # 自定义面板组件
+```
+
+### apaas.json
+```json
+{
+  "entry": "index.js",
+  "copyAssets": [],
+  "extensionConfigList": [
+    {
+      "code": "CUSTOM_XXX_EXTENSION",
+      "text": "扩展描述"
+    }
+  ],
+  "outputName": "apaas-custom-xxx"
+}
+```
+
+### 入口注册 (index.js)
+```javascript
+import customTabList from './custom-tab/index.js'
+import extensionConfig from './extension.js'
+import registerI18n from './local/index.js'
+
+const install = function(Vue, opts) {
+  registerI18n()  // 注册国际化
+
+  // 注册组件
+  customTabList.forEach(component => {
+    Vue.component(component.name, component)
+  })
+
+  // 注册扩展配置
+  if (Vue._extensionEngine) {
+    Vue._extensionEngine.registerExtensionConfig(extensionConfig)
+  }
+}
+export default { install }
+```
+
+### ExtensionEngine API
+- `Vue._extensionEngine.registerExtensionConfig(config)` - 注册扩展
+
+### 扩展配置结构 (extension.js)
+```javascript
+const extensionConfig = {
+  code: 'CUSTOM_XXX_EXTENSION',     // 唯一标识，与 apaas.json 一致
+  name: '扩展名称',
+  blocks: [                          // 功能块列表
+    {
+      code: 'CustomTabExtension',
+      name: '功能描述',
+      funs: [                        // 功能点列表
+        {
+          code: 'CustomTabExtension',
+          abbr: '__xxx__',           // 缩写标识
+          name: '',
+          versions: ['TRIAL_EDITION', 'TEAM_EDITION', 'STANDARD_EDITION', 'PREMIUM_EDITION']
+        }
+      ]
+    }
+  ],
+  versions: ['TRIAL_EDITION', 'TEAM_EDITION', 'STANDARD_EDITION', 'PREMIUM_EDITION'],
+  enable: true,
+  extensionMethods: {                // 扩展方法注册
+    'custom-tab': {                  // 方法命名空间
+      getCustomTabConfig             // 方法引用
+    }
+  }
+}
+```
+
+### Tab 配置 (tab-config.js)
+```javascript
+export function getCustomTabConfig() {
+  return [
+    {
+      code: 'customPanel',            // Tab 唯一标识
+      title: '面板标题',              // 显示名（或 i18n key）
+      componentName: 'custom-panel',  // 必须与 Vue.component 注册名一致
+      resourceCode: 'APP_INFORMATION' // 资源权限码
+    }
+  ]
+}
+```
+
+### i18n 国际化 (local/index.js)
+```javascript
+const messages = {
+  'zh-CN': { plugin: { panel: '自定义面板' } },
+  'en-US': { plugin: { panel: 'Custom Panel' } }
+}
+
+const registerI18n = () => {
+  ['zh-CN', 'en-US'].forEach(locale => {
+    window.APaaSSDK.context.globalVueI18n?.mergeLocaleMessage(locale, messages[locale])
+  })
+}
+export default registerI18n
+```
+
+### 关键约束
+- 扩展 `code` 必须唯一且稳定，部署后不可更改
+- `tab-config.js` 中的 `componentName` 必须与 `Vue.component()` 注册的 kebab-case 名一致
+- 必须支持 i18n（至少 zh-CN 和 en-US）
+- `versions` 数组控制在哪些平台版本中可用
+- `extensionMethods` 的命名空间（如 `'custom-tab'`）由平台扩展点定义
+- 组件名必须以 `apaas-custom-` 开头
+"""
+
+# ============================================================
 # Prompt选择器
 # ============================================================
 SCENE_PROMPTS = {
     SceneType.WEB_COMPONENT: WEB_COMPONENT_PROMPT,
     SceneType.WEB_PAGE: WEB_PAGE_PROMPT,
     SceneType.WEB_LIST_VIEW: WEB_LIST_VIEW_PROMPT,
-    SceneType.WEB_LAYOUT: WEB_PAGE_PROMPT,  # 布局与页面类似
+    SceneType.WEB_LAYOUT: WEB_LAYOUT_PROMPT,
     SceneType.WEB_LOGIN: WEB_PAGE_PROMPT,   # 登录页与页面类似
-    SceneType.MOBILE_COMPONENT: WEB_COMPONENT_PROMPT,  # 移动端组件规范类似
-    SceneType.MOBILE_PAGE: WEB_PAGE_PROMPT,
+    SceneType.WEB_PLUGIN: WEB_PLUGIN_PROMPT,
+    SceneType.MOBILE_COMPONENT: WEB_COMPONENT_PROMPT,  # 移动端组件规范类似，模板已差异化
+    SceneType.MOBILE_PAGE: MOBILE_PAGE_PROMPT,
     SceneType.BACKEND_API: BACKEND_API_PROMPT,
     SceneType.SCRIPT_JS: SCRIPT_JS_PROMPT,
     SceneType.SCRIPT_PYTHON: SCRIPT_PYTHON_PROMPT,
