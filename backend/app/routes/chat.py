@@ -9,6 +9,7 @@ from app.models import User, Conversation, Message
 from app.schemas import ChatRequest
 from app.deps import get_auth_context, AuthContext
 from app.llm_client import LLMClient
+from app.field_types import build_prompt_field_types_compact
 
 router = APIRouter(prefix="/chat", tags=["聊天"])
 
@@ -104,7 +105,7 @@ BUILDER_SYSTEM_PROMPT = """你是 aPaaS Builder AI，得帆云低代码平台的
 ```
 
 ## 字段类型（type可选值及icon）
-单据号=#, 单行输入=T, 多行输入=¶, 手机号码=P, 电子邮箱=@, 下拉单选=V, 下拉多选=M, 数据单选=L, 日期时间=D, 金额=$, 数字=N, 附件上传=F, 开关=S, 人员选择=U, 地理位置=G, 子表=Z
+""" + build_prompt_field_types_compact() + """
 
 ## 字段属性说明
 - code: 字段编码，英文+下划线，如 asset_name

@@ -809,8 +809,11 @@ const extractPreviewData = (content: string) => {
 
       // 增量 patch 模式
       if (parsed.type === 'patch' && parsed.actions) {
-        console.log('Applying patch:', parsed.actions.length, 'actions')
-        applyPatch(parsed.actions)
+        const validActions = validateAndFixActions(parsed.actions)
+        console.log(`Applying patch: ${validActions.length}/${parsed.actions.length} valid actions`)
+        if (validActions.length > 0) {
+          applyPatch(validActions)
+        }
         continue
       }
 
@@ -858,6 +861,75 @@ const extractPreviewData = (content: string) => {
       console.error('Failed to parse JSON block:', e)
     }
   }
+}
+
+// ── Patch 校验 & 自动修复 ──
+
+const VALID_PATCH_OPS = new Set([
+  'add_dict', 'update_dict', 'remove_dict',
+  'add_field', 'update_field', 'remove_field',
+  'add_model', 'remove_model',
+  'add_role', 'remove_role',
+  'add_workflow', 'update_workflow', 'remove_workflow',
+  'add_permission', 'update_permission', 'remove_permission', 'set_permissions',
+])
+
+const generateCode = (name: string): string => {
+  if (!name) return 'c_' + Math.random().toString(36).slice(2, 9)
+  const ascii = name.replace(/[^a-zA-Z0-9_]/g, '').toLowerCase()
+  return ascii.length >= 2 ? ascii : 'c_' + Math.random().toString(36).slice(2, 9)
+}
+
+const validateAndFixActions = (actions: any[]): any[] => {
+  return actions.filter((action, i) => {
+    if (!action || typeof action !== 'object') {
+      console.warn(`Patch action[${i}]: 不是对象，已跳过`)
+      return false
+    }
+    if (!action.op || !VALID_PATCH_OPS.has(action.op)) {
+      console.warn(`Patch action[${i}]: 未知操作 '${action.op}'，已跳过`)
+      return false
+    }
+    // remove 操作需要 target
+    if (action.op.startsWith('remove_') && !action.target) {
+      console.warn(`Patch action[${i}] (${action.op}): 缺失 target，已跳过`)
+      return false
+    }
+    // add 操作需要 value
+    if (action.op.startsWith('add_') && !action.value) {
+      console.warn(`Patch action[${i}] (${action.op}): 缺失 value，已跳过`)
+      return false
+    }
+    // field 操作需要 model
+    if (['add_field', 'update_field', 'remove_field'].includes(action.op) && !action.model) {
+      console.warn(`Patch action[${i}] (${action.op}): 缺失 model，已跳过`)
+      return false
+    }
+    // 自动修复 value 中缺失的 code
+    if (action.value && typeof action.value === 'object') {
+      if (action.value.name && !action.value.code) {
+        action.value.code = generateCode(action.value.name)
+        console.log(`Patch action[${i}]: 自动生成 code '${action.value.code}'`)
+      }
+      // 修复 fields 中的 code
+      if (Array.isArray(action.value.fields)) {
+        for (const f of action.value.fields) {
+          if (f && f.name && !f.code) {
+            f.code = generateCode(f.name)
+          }
+        }
+      }
+      // 修复 options 中的 code
+      if (Array.isArray(action.value.options)) {
+        for (const opt of action.value.options) {
+          if (opt && opt.name && !opt.code) {
+            opt.code = generateCode(opt.name)
+          }
+        }
+      }
+    }
+    return true
+  })
 }
 
 // 应用 patch 操作到 store.preview

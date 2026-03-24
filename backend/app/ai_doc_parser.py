@@ -19,6 +19,8 @@ from typing import Callable, Coroutine, Dict, List, Optional
 ProgressCallback = Optional[Callable[[str], Coroutine]]
 
 from app.llm_client import LLMClient
+from app.config_validator import validate_full_config
+from app.field_types import get_icon_map, build_prompt_field_types_table
 
 logger = logging.getLogger(__name__)
 
@@ -71,27 +73,7 @@ _OUTPUT_SPEC = """\
 }
 ```"""
 
-_FIELD_TYPES = """\
-## 字段类型及图标（只能使用以下类型）
-
-| type | icon | 使用场景 |
-|------|------|----------|
-| 单据号 | # | 唯一编号，自动生成 |
-| 单行输入 | T | 普通文本：名称、标题 |
-| 多行输入 | ¶ | 长文本：描述、备注 |
-| 手机号码 | 📱 | 手机号 |
-| 电子邮箱 | ✉ | 邮箱 |
-| 下拉单选 | ▼ | 固定选项单选，必须绑定字典（设 dict 字段） |
-| 下拉多选 | ☰ | 固定选项多选，必须绑定字典 |
-| 数据单选 | 🔗 | 关联其他表单数据，必须设 ref |
-| 日期时间 | 📅 | 日期、时间 |
-| 金额 | 💰 | 金额 |
-| 数字 | 123 | 数量、数值 |
-| 附件上传 | 📎 | 文件上传 |
-| 开关 | ⊘ | 是/否 |
-| 人员选择 | 👤 | 选择系统用户 |
-| 地理位置 | 📍 | 地址定位 |
-| 子表 | ▦ | 明细行（订单行、配件清单等） |"""
+_FIELD_TYPES = build_prompt_field_types_table()
 
 _RULES = """\
 ## 核心规则
@@ -210,6 +192,18 @@ async def parse_doc_with_ai(
     _sanitize_codes(data)
     _fill_icons(data)
     _dedup_dicts(data)
+
+    # Schema 校验 & 自动修复
+    try:
+        data, validation_warnings = validate_full_config(data)
+        if validation_warnings:
+            logger.info(f"配置校验产生 {len(validation_warnings)} 条警告")
+            for w in validation_warnings[:10]:  # 最多记录前 10 条
+                logger.warning(f"  校验: {w}")
+    except ValueError as e:
+        logger.error(f"配置校验失败: {e}")
+        # 不阻断流程，返回原始数据
+        pass
 
     summary = (
         f"解析完成！{len(data.get('models', []))} 个表单、"
@@ -674,16 +668,7 @@ def _sanitize_codes(data: Dict):
                     sf["ref"]["field"] = _fix(sf["ref"].get("field", ""))
 
 
-_ICON_MAP = {
-    '单据号': '#', '单行输入': 'T', '多行输入': '¶',
-    '手机号码': 'P', '电子邮箱': '@', '下拉单选': '▼',
-    '下拉多选': '☰', '数据单选': '⇢', '数据多选': '⇢', '日期时间': 'D',
-    '金额': '¥', '数字': 'N', '附件上传': '⊕',
-    '开关': '⊘', '人员选择': '⊙', '部门选择': '⊙',
-    '地理位置': '◎', '子表': '▦', '地区地址': '◎',
-    '单选框': '○', '多选框': '☐', '富文本': 'R',
-    '超链接': '⊕', '证件号': '#', '签名': 'S',
-}
+_ICON_MAP = get_icon_map()
 
 
 def _fill_icons(data: Dict):

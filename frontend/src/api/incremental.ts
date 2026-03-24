@@ -83,6 +83,14 @@ export interface ExecuteResponse {
   warnings: string[]
 }
 
+export interface VersionInfo {
+  id: number
+  version: number
+  source: string
+  summary: string
+  created_at: string
+}
+
 export interface RemoteData {
   roles: any[]
   dicts: any[]
@@ -221,6 +229,84 @@ export const incrementalApi = {
    */
   getRemoteData(appId: number) {
     return request.get<any, RemoteData>(`/applications/${appId}/incremental/remote-data`)
+  },
+
+  /**
+   * 预览平台同步差异
+   */
+  syncPreview(appId: number) {
+    return request.get<any, {
+      platform_config: any
+      local_config: any
+      diff: DiffResponse
+    }>(`/applications/${appId}/incremental/sync-preview`)
+  },
+
+  /**
+   * 应用平台同步
+   */
+  syncApply(appId: number, strategy: 'platform_wins' | 'local_wins' = 'platform_wins') {
+    return request.post<any, { success: boolean; message: string; config?: any }>(
+      `/applications/${appId}/incremental/sync-apply`,
+      { strategy }
+    )
+  },
+
+  /**
+   * 选择性执行增量更新
+   */
+  executeUpdateSelective(appId: number, newConfig: any, selectedChanges: {
+    type: string
+    code: string
+    change_type: string
+  }[]) {
+    return request.post<any, ExecuteResponse>(`/applications/${appId}/incremental/execute`, {
+      new_config: newConfig,
+      selected_changes: selectedChanges,
+    })
+  },
+
+  /**
+   * 获取版本历史
+   */
+  getVersionHistory(appId: number, limit = 50) {
+    return request.get<any, { versions: VersionInfo[] }>(
+      `/applications/${appId}/incremental/versions?limit=${limit}`
+    )
+  },
+
+  /**
+   * 获取指定版本配置
+   */
+  getVersionConfig(appId: number, version: number) {
+    return request.get<any, { version: number; config: any }>(
+      `/applications/${appId}/incremental/versions/${version}`
+    )
+  },
+
+  /**
+   * 回滚到指定版本
+   */
+  rollbackToVersion(appId: number, targetVersion: number) {
+    return request.post<any, { success: boolean; message: string; diff: DiffResponse; config: any }>(
+      `/applications/${appId}/incremental/rollback`,
+      { target_version: targetVersion }
+    )
+  },
+
+  /**
+   * 三方冲突检测
+   */
+  checkConflicts(appId: number, incomingConfig: any, baseVersion?: number) {
+    return request.post<any, {
+      has_conflicts: boolean
+      conflicts: any[]
+      safe_incoming: any[]
+      safe_current: any[]
+    }>(`/applications/${appId}/incremental/check-conflicts`, {
+      incoming_config: incomingConfig,
+      base_version: baseVersion,
+    })
   }
 }
 

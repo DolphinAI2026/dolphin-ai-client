@@ -23,6 +23,13 @@ from app.config_diff import compute_config_diff, ConfigDiff
 from app.incremental_executor import IncrementalExecutor, ExecutionResult, fetch_remote_data
 from app.apaas_client import APaaSClient
 from app.config import settings
+from app.app_locks import acquire_app_lock
+from app.platform_sync import sync_from_platform
+from app.config_version import (
+    save_config_snapshot, get_version_history,
+    get_snapshot_config, three_way_diff,
+)
+from app.models import ConfigSnapshot
 
 router = APIRouter(prefix="/applications", tags=["增量更新"])
 logger = logging.getLogger(__name__)
@@ -48,6 +55,13 @@ class DiffResponse(BaseModel):
     unsupported_changes: list
 
 
+class SelectedChange(BaseModel):
+    """选中的单个变更项"""
+    type: str       # "role" | "dict" | "model" | "form" | "process"
+    code: str       # 资源编码
+    change_type: str  # "added" | "modified" | "deleted"
+
+
 class ExecuteRequest(BaseModel):
     """执行请求"""
     new_config: Dict[str, Any]
@@ -57,6 +71,8 @@ class ExecuteRequest(BaseModel):
     skip_models: bool = False
     skip_forms: bool = False
     skip_processes: bool = False
+    # 可选：选择性执行（如果提供，只执行选中的变更）
+    selected_changes: Optional[list] = None
 
 
 class ExecuteResponse(BaseModel):
@@ -179,49 +195,64 @@ async def execute_update(
         logger.error(f"获取平台远程数据失败: {e}")
         raise HTTPException(status_code=500, detail=f"获取平台数据失败: {e}")
 
-    # 5. 计算差异
-    diff = compute_config_diff(old_config, request.new_config, remote_data)
+    # 5-8: 计算差异并执行（加并发锁保护）
+    async with acquire_app_lock(app_id, "增量更新执行"):
+        diff = compute_config_diff(old_config, request.new_config, remote_data)
 
-    if not diff.has_changes:
-        return ExecuteResponse(
-            success=True,
-            results={"roles": [], "dicts": [], "models": [], "forms": [], "processes": []},
-            errors=[],
-            warnings=["无变更需要执行"]
+        if not diff.has_changes:
+            return ExecuteResponse(
+                success=True,
+                results={"roles": [], "dicts": [], "models": [], "forms": [], "processes": []},
+                errors=[],
+                warnings=["无变更需要执行"]
+            )
+
+        # 根据跳过选项过滤变更
+        if request.skip_roles:
+            diff.role_changes = []
+        if request.skip_dicts:
+            diff.dict_changes = []
+        if request.skip_models:
+            diff.model_changes = []
+        if request.skip_forms:
+            diff.form_changes = []
+        if request.skip_processes:
+            diff.process_changes = []
+
+        # 选择性执行：只保留用户勾选的变更
+        if request.selected_changes is not None:
+            selected_set = {
+                (s.get("type") if isinstance(s, dict) else s.type,
+                 s.get("code") if isinstance(s, dict) else s.code)
+                for s in request.selected_changes
+            }
+            diff.role_changes = [c for c in diff.role_changes if ("role", c.code) in selected_set]
+            diff.dict_changes = [c for c in diff.dict_changes if ("dict", c.code) in selected_set]
+            diff.model_changes = [c for c in diff.model_changes if ("model", c.code) in selected_set]
+            diff.form_changes = [c for c in diff.form_changes if ("form", c.code) in selected_set]
+            diff.process_changes = [c for c in diff.process_changes if ("process", c.code) in selected_set]
+
+        # 执行增量更新
+        executor = IncrementalExecutor(
+            client=client,
+            app_id=app.apaas_app_id,
+            app_name=app.app_name
         )
 
-    # 6. 根据跳过选项过滤变更
-    if request.skip_roles:
-        diff.role_changes = []
-    if request.skip_dicts:
-        diff.dict_changes = []
-    if request.skip_models:
-        diff.model_changes = []
-    if request.skip_forms:
-        diff.form_changes = []
-    if request.skip_processes:
-        diff.process_changes = []
+        try:
+            result = await executor.execute_diff(diff)
+        except Exception as e:
+            logger.error(f"增量更新执行失败: {e}")
+            raise HTTPException(status_code=500, detail=f"增量更新执行失败: {e}")
 
-    # 7. 执行增量更新
-    executor = IncrementalExecutor(
-        client=client,
-        app_id=app.apaas_app_id,
-        app_name=app.app_name
-    )
+        # 更新本地配置 + 保存快照
+        if result.success:
+            app.config_preview = json.dumps(request.new_config, ensure_ascii=False)
+            await save_config_snapshot(db, app_id, request.new_config, source="incremental", summary="增量更新")
+            await db.commit()
+            logger.info(f"应用 {app_id} 配置已更新")
 
-    try:
-        result = await executor.execute_diff(diff)
-    except Exception as e:
-        logger.error(f"增量更新执行失败: {e}")
-        raise HTTPException(status_code=500, detail=f"增量更新执行失败: {e}")
-
-    # 8. 更新本地配置
-    if result.success:
-        app.config_preview = json.dumps(request.new_config, ensure_ascii=False)
-        await db.commit()
-        logger.info(f"应用 {app_id} 配置已更新")
-
-    return ExecuteResponse(**result.to_dict())
+        return ExecuteResponse(**result.to_dict())
 
 
 @router.get("/{app_id}/incremental/execute-stream")
@@ -298,61 +329,63 @@ async def execute_update_stream(
     async def event_generator():
         async with AsyncSessionLocal() as session:
             try:
-                # 1. 获取旧配置
-                old_config = None
-                if old_config_str:
-                    try:
-                        old_config = json.loads(old_config_str) if isinstance(old_config_str, str) else old_config_str
-                    except Exception:
-                        pass
+                # 并发锁保护
+                async with acquire_app_lock(app_id, "增量更新流式执行"):
+                    # 1. 获取旧配置
+                    old_config = None
+                    if old_config_str:
+                        try:
+                            old_config = json.loads(old_config_str) if isinstance(old_config_str, str) else old_config_str
+                        except Exception:
+                            pass
 
-                yield {"event": "progress", "data": json.dumps({"stage": "init", "status": "running", "step": "初始化..."}, ensure_ascii=False)}
+                    yield {"event": "progress", "data": json.dumps({"stage": "init", "status": "running", "step": "初始化..."}, ensure_ascii=False)}
 
-                # 2. 创建客户端并获取远程数据
-                client = APaaSClient(
-                    base_url=apaas_base_url,
-                    tenant_id=apaas_tenant_id,
-                    token=apaas_token
-                )
+                    # 2. 创建客户端并获取远程数据
+                    client = APaaSClient(
+                        base_url=apaas_base_url,
+                        tenant_id=apaas_tenant_id,
+                        token=apaas_token
+                    )
 
-                yield {"event": "progress", "data": json.dumps({"stage": "init", "status": "running", "step": "获取平台数据..."}, ensure_ascii=False)}
+                    yield {"event": "progress", "data": json.dumps({"stage": "init", "status": "running", "step": "获取平台数据..."}, ensure_ascii=False)}
 
-                remote_data = await fetch_remote_data(client, apaas_app_id)
+                    remote_data = await fetch_remote_data(client, apaas_app_id)
 
-                # 3. 计算差异
-                yield {"event": "progress", "data": json.dumps({"stage": "init", "status": "running", "step": "计算配置差异..."}, ensure_ascii=False)}
+                    # 3. 计算差异
+                    yield {"event": "progress", "data": json.dumps({"stage": "init", "status": "running", "step": "计算配置差异..."}, ensure_ascii=False)}
 
-                diff = compute_config_diff(old_config, new_config_dict, remote_data)
+                    diff = compute_config_diff(old_config, new_config_dict, remote_data)
 
-                if not diff.has_changes:
-                    yield {"event": "done", "data": json.dumps({"type": "complete", "message": "无变更需要执行", "result": {"success": True, "results": {}, "errors": [], "warnings": []}}, ensure_ascii=False)}
-                    return
+                    if not diff.has_changes:
+                        yield {"event": "done", "data": json.dumps({"type": "complete", "message": "无变更需要执行", "result": {"success": True, "results": {}, "errors": [], "warnings": []}}, ensure_ascii=False)}
+                        return
 
-                yield {"event": "progress", "data": json.dumps({"stage": "init", "status": "done", "step": f"发现 {diff.summary}"}, ensure_ascii=False)}
+                    yield {"event": "progress", "data": json.dumps({"stage": "init", "status": "done", "step": f"发现 {diff.summary}"}, ensure_ascii=False)}
 
-                # 4. 执行增量更新（流式）
-                executor = IncrementalExecutor(
-                    client=client,
-                    app_id=apaas_app_id,
-                    app_name=app_name
-                )
+                    # 4. 执行增量更新（流式）
+                    executor = IncrementalExecutor(
+                        client=client,
+                        app_id=apaas_app_id,
+                        app_name=app_name
+                    )
 
-                async for event in executor.execute_diff_stream(diff):
-                    if event.get("type") == "complete":
-                        # 更新本地配置
-                        result = await session.execute(
-                            select(Application).where(Application.id == app_id)
-                        )
-                        app_obj = result.scalar_one()
-                        app_obj.config_preview = json.dumps(new_config_dict, ensure_ascii=False)
-                        await session.commit()
-                        logger.info(f"应用 {app_id} 配置已更新")
+                    async for event in executor.execute_diff_stream(diff):
+                        if event.get("type") == "complete":
+                            # 更新本地配置
+                            result = await session.execute(
+                                select(Application).where(Application.id == app_id)
+                            )
+                            app_obj = result.scalar_one()
+                            app_obj.config_preview = json.dumps(new_config_dict, ensure_ascii=False)
+                            await session.commit()
+                            logger.info(f"应用 {app_id} 配置已更新")
 
-                        yield {"event": "done", "data": json.dumps(event, ensure_ascii=False)}
-                    elif event.get("type") == "error":
-                        yield {"event": "error", "data": json.dumps(event, ensure_ascii=False)}
-                    else:
-                        yield {"event": "progress", "data": json.dumps(event, ensure_ascii=False)}
+                            yield {"event": "done", "data": json.dumps(event, ensure_ascii=False)}
+                        elif event.get("type") == "error":
+                            yield {"event": "error", "data": json.dumps(event, ensure_ascii=False)}
+                        else:
+                            yield {"event": "progress", "data": json.dumps(event, ensure_ascii=False)}
 
             except Exception as e:
                 logger.exception(f"增量更新失败: {e}")
@@ -393,6 +426,257 @@ async def get_remote_data(
     except Exception as e:
         logger.error(f"获取平台远程数据失败: {e}")
         raise HTTPException(status_code=500, detail=f"获取平台数据失败: {e}")
+
+
+# ==================== 平台同步 ====================
+
+class SyncApplyRequest(BaseModel):
+    """同步应用请求"""
+    strategy: str = "platform_wins"  # "platform_wins" | "local_wins"
+
+
+@router.get("/{app_id}/incremental/sync-preview")
+async def sync_preview(
+    app_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)]
+):
+    """
+    预览平台同步：对比平台当前状态与本地配置的差异
+
+    返回：平台配置 + diff 报告
+    """
+    app = await _get_application(app_id, ctx.tenant_id, db)
+    await check_resource_permission(ctx, db, app, "application", Action.VIEW)
+
+    if not ctx.user.apaas_token:
+        raise HTTPException(status_code=400, detail="未连接得帆云平台")
+    if not app.apaas_app_id:
+        raise HTTPException(status_code=400, detail="应用尚未在平台创建")
+
+    client = APaaSClient(
+        base_url=ctx.user.apaas_base_url,
+        tenant_id=ctx.user.apaas_tenant_id,
+        token=ctx.user.apaas_token
+    )
+
+    try:
+        platform_config = await sync_from_platform(client, app.apaas_app_id, app.app_name or "")
+    except Exception as e:
+        logger.error(f"平台同步失败: {e}")
+        raise HTTPException(status_code=500, detail=f"平台同步失败: {e}")
+
+    # 本地配置
+    local_config = None
+    if app.config_preview:
+        try:
+            local_config = json.loads(app.config_preview) if isinstance(app.config_preview, str) else app.config_preview
+        except Exception:
+            pass
+
+    # 计算差异：以本地为 old，平台为 new
+    diff = compute_config_diff(local_config, platform_config)
+
+    return {
+        "platform_config": platform_config,
+        "local_config": local_config,
+        "diff": diff.to_dict(),
+    }
+
+
+@router.post("/{app_id}/incremental/sync-apply")
+async def sync_apply(
+    app_id: int,
+    request: SyncApplyRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)]
+):
+    """
+    应用平台同步结果
+
+    strategy:
+    - "platform_wins": 用平台配置覆盖本地（拉取）
+    - "local_wins": 保持本地配置不变（忽略平台差异）
+    """
+    app = await _get_application(app_id, ctx.tenant_id, db)
+    await check_resource_permission(ctx, db, app, "application", Action.EDIT)
+
+    if request.strategy == "platform_wins":
+        if not ctx.user.apaas_token:
+            raise HTTPException(status_code=400, detail="未连接得帆云平台")
+        if not app.apaas_app_id:
+            raise HTTPException(status_code=400, detail="应用尚未在平台创建")
+
+        client = APaaSClient(
+            base_url=ctx.user.apaas_base_url,
+            tenant_id=ctx.user.apaas_tenant_id,
+            token=ctx.user.apaas_token
+        )
+
+        try:
+            platform_config = await sync_from_platform(client, app.apaas_app_id, app.app_name or "")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"平台同步失败: {e}")
+
+        app.config_preview = json.dumps(platform_config, ensure_ascii=False)
+        await save_config_snapshot(db, app_id, platform_config, source="sync", summary="平台同步(platform_wins)")
+        await db.commit()
+        logger.info(f"应用 {app_id} 已同步为平台配置 (platform_wins)")
+
+        return {"success": True, "message": "已同步为平台配置", "config": platform_config}
+
+    elif request.strategy == "local_wins":
+        return {"success": True, "message": "保持本地配置不变"}
+
+    else:
+        raise HTTPException(status_code=400, detail=f"未知同步策略: {request.strategy}")
+
+
+# ==================== 版本管理 ====================
+
+@router.get("/{app_id}/incremental/versions")
+async def list_versions(
+    app_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    limit: int = Query(50, le=100),
+):
+    """获取配置版本历史"""
+    app = await _get_application(app_id, ctx.tenant_id, db)
+    await check_resource_permission(ctx, db, app, "application", Action.VIEW)
+    history = await get_version_history(db, app_id, limit)
+    return {"versions": history}
+
+
+@router.get("/{app_id}/incremental/versions/{version}")
+async def get_version(
+    app_id: int,
+    version: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """获取指定版本的配置内容"""
+    app = await _get_application(app_id, ctx.tenant_id, db)
+    await check_resource_permission(ctx, db, app, "application", Action.VIEW)
+    config = await get_snapshot_config(db, app_id, version)
+    if config is None:
+        raise HTTPException(status_code=404, detail=f"版本 {version} 不存在")
+    return {"version": version, "config": config}
+
+
+class RollbackRequest(BaseModel):
+    target_version: int
+
+
+@router.post("/{app_id}/incremental/rollback")
+async def rollback_version(
+    app_id: int,
+    request: RollbackRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """
+    回滚到指定版本
+
+    1. 加载目标版本配置
+    2. 计算当前 → 目标的 diff（用于展示）
+    3. 更新 config_preview 为目标版本
+    4. 保存新快照（source=rollback）
+    """
+    app = await _get_application(app_id, ctx.tenant_id, db)
+    await check_resource_permission(ctx, db, app, "application", Action.EDIT)
+
+    target_config = await get_snapshot_config(db, app_id, request.target_version)
+    if target_config is None:
+        raise HTTPException(status_code=404, detail=f"版本 {request.target_version} 不存在")
+
+    # 当前配置
+    current_config = None
+    if app.config_preview:
+        try:
+            current_config = json.loads(app.config_preview) if isinstance(app.config_preview, str) else app.config_preview
+        except Exception:
+            pass
+
+    # 计算 diff（仅供参考）
+    diff = compute_config_diff(current_config, target_config)
+
+    # 执行回滚
+    async with acquire_app_lock(app_id, "版本回滚"):
+        app.config_preview = json.dumps(target_config, ensure_ascii=False)
+        await save_config_snapshot(
+            db, app_id, target_config,
+            source="rollback",
+            summary=f"回滚到 v{request.target_version}",
+        )
+        await db.commit()
+
+    logger.info(f"应用 {app_id} 已回滚到 v{request.target_version}")
+
+    return {
+        "success": True,
+        "message": f"已回滚到 v{request.target_version}",
+        "diff": diff.to_dict(),
+        "config": target_config,
+    }
+
+
+class ConflictCheckRequest(BaseModel):
+    """冲突检测请求"""
+    incoming_config: Dict[str, Any]
+    base_version: Optional[int] = None  # 如果不指定，用上一次文档版本
+
+
+@router.post("/{app_id}/incremental/check-conflicts")
+async def check_conflicts(
+    app_id: int,
+    request: ConflictCheckRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """
+    三方冲突检测
+
+    对比 base（公共基础） vs current（当前本地） vs incoming（新来源），
+    检测双方都修改了同一资源的冲突。
+    """
+    app = await _get_application(app_id, ctx.tenant_id, db)
+    await check_resource_permission(ctx, db, app, "application", Action.VIEW)
+
+    # 当前配置
+    current_config = None
+    if app.config_preview:
+        try:
+            current_config = json.loads(app.config_preview) if isinstance(app.config_preview, str) else app.config_preview
+        except Exception:
+            pass
+
+    # 基础版本
+    base_config = None
+    if request.base_version:
+        base_config = await get_snapshot_config(db, app_id, request.base_version)
+    else:
+        # 找最近的 document 来源快照作为 base
+        result = await db.execute(
+            select(ConfigSnapshot)
+            .where(
+                ConfigSnapshot.application_id == app_id,
+                ConfigSnapshot.source == "document",
+            )
+            .order_by(ConfigSnapshot.version.desc())
+            .limit(1)
+        )
+        snapshot = result.scalar_one_or_none()
+        if snapshot:
+            try:
+                base_config = json.loads(snapshot.config_json)
+            except Exception:
+                pass
+
+    # 三方 diff
+    result = three_way_diff(base_config, current_config, request.incoming_config)
+
+    return result
 
 
 # ==================== 辅助函数 ====================

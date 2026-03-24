@@ -11,6 +11,13 @@
     </div>
 
     <div v-else class="diff-content">
+      <!-- 选择操作栏 -->
+      <div v-if="selectable" class="selection-bar">
+        <span class="selection-info">已选 {{ selectedCount }}/{{ totalChanges }} 项</span>
+        <button class="btn-link" @click="selectAll">全选</button>
+        <button class="btn-link" @click="deselectAll">取消全选</button>
+      </div>
+
       <!-- 角色变更 -->
       <div v-if="roleChanges.length > 0" class="diff-section">
         <div class="section-title">
@@ -24,6 +31,13 @@
               :class="change.change_type"
               @click="toggleExpand('role', change.code)"
             >
+              <input
+                v-if="selectable"
+                type="checkbox"
+                class="change-checkbox"
+                :checked="isSelected('role', change.code)"
+                @click.stop="toggleSelection('role', change.code)"
+              />
               <span class="change-tag" :class="change.change_type">
                 {{ changeTypeLabel(change.change_type) }}
               </span>
@@ -55,6 +69,13 @@
               :class="change.change_type"
               @click="toggleExpand('dict', change.code)"
             >
+              <input
+                v-if="selectable"
+                type="checkbox"
+                class="change-checkbox"
+                :checked="isSelected('dict', change.code)"
+                @click.stop="toggleSelection('dict', change.code)"
+              />
               <span class="change-tag" :class="change.change_type">
                 {{ changeTypeLabel(change.change_type) }}
               </span>
@@ -91,6 +112,13 @@
               :class="change.change_type"
               @click="toggleExpand('model', change.code)"
             >
+              <input
+                v-if="selectable"
+                type="checkbox"
+                class="change-checkbox"
+                :checked="isSelected('model', change.code)"
+                @click.stop="toggleSelection('model', change.code)"
+              />
               <span class="change-tag" :class="change.change_type">
                 {{ changeTypeLabel(change.change_type) }}
               </span>
@@ -127,6 +155,13 @@
               :class="change.change_type"
               @click="toggleExpand('form', change.code)"
             >
+              <input
+                v-if="selectable"
+                type="checkbox"
+                class="change-checkbox"
+                :checked="isSelected('form', change.code)"
+                @click.stop="toggleSelection('form', change.code)"
+              />
               <span class="change-tag" :class="change.change_type">
                 {{ changeTypeLabel(change.change_type) }}
               </span>
@@ -185,6 +220,13 @@
               :class="change.change_type"
               @click="toggleExpand('process', change.code)"
             >
+              <input
+                v-if="selectable"
+                type="checkbox"
+                class="change-checkbox"
+                :checked="isSelected('process', change.code)"
+                @click.stop="toggleSelection('process', change.code)"
+              />
               <span class="change-tag" :class="change.change_type">
                 {{ changeTypeLabel(change.change_type) }}
               </span>
@@ -236,7 +278,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed, watch } from 'vue'
 import type { ChangeItem, DictChange, ModelChange, FormChange } from '@/api/incremental'
 import SideBySideDiff from './SideBySideDiff.vue'
 
@@ -252,17 +294,105 @@ interface Props {
   unsupportedChanges: string[]
   showActions?: boolean
   executing?: boolean
+  selectable?: boolean  // 是否启用选择模式
 }
 
 const props = withDefaults(defineProps<Props>(), {
   showActions: true,
-  executing: false
+  executing: false,
+  selectable: false,
 })
 
-defineEmits<{
+const emit = defineEmits<{
   cancel: []
   execute: []
+  'selection-change': [selected: { type: string; code: string; change_type: string }[]]
 }>()
+
+// ── 选择状态 ──
+const selectedKeys = ref<Set<string>>(new Set())
+
+const makeKey = (type: string, code: string) => `${type}:${code}`
+
+// 初始化：全选
+watch(() => [props.roleChanges, props.dictChanges, props.modelChanges, props.formChanges, props.processChanges], () => {
+  if (!props.selectable) return
+  const keys = new Set<string>()
+  for (const c of props.roleChanges) keys.add(makeKey('role', c.code))
+  for (const c of props.dictChanges) keys.add(makeKey('dict', c.code))
+  for (const c of props.modelChanges) keys.add(makeKey('model', c.code))
+  for (const c of props.formChanges) keys.add(makeKey('form', c.code))
+  for (const c of props.processChanges) keys.add(makeKey('process', c.code))
+  selectedKeys.value = keys
+}, { immediate: true })
+
+const isSelected = (type: string, code: string) => selectedKeys.value.has(makeKey(type, code))
+
+const toggleSelection = (type: string, code: string) => {
+  const key = makeKey(type, code)
+  const newSet = new Set(selectedKeys.value)
+  if (newSet.has(key)) newSet.delete(key)
+  else newSet.add(key)
+  selectedKeys.value = newSet
+  emitSelection()
+}
+
+const selectAll = () => {
+  const keys = new Set<string>()
+  for (const c of props.roleChanges) keys.add(makeKey('role', c.code))
+  for (const c of props.dictChanges) keys.add(makeKey('dict', c.code))
+  for (const c of props.modelChanges) keys.add(makeKey('model', c.code))
+  for (const c of props.formChanges) keys.add(makeKey('form', c.code))
+  for (const c of props.processChanges) keys.add(makeKey('process', c.code))
+  selectedKeys.value = keys
+  emitSelection()
+}
+
+const deselectAll = () => {
+  selectedKeys.value = new Set()
+  emitSelection()
+}
+
+const totalChanges = computed(() =>
+  props.roleChanges.length + props.dictChanges.length +
+  props.modelChanges.length + props.formChanges.length + props.processChanges.length
+)
+
+const selectedCount = computed(() => selectedKeys.value.size)
+
+const emitSelection = () => {
+  const selected: { type: string; code: string; change_type: string }[] = []
+  const collect = (type: string, changes: ChangeItem[]) => {
+    for (const c of changes) {
+      if (selectedKeys.value.has(makeKey(type, c.code))) {
+        selected.push({ type, code: c.code, change_type: c.change_type })
+      }
+    }
+  }
+  collect('role', props.roleChanges)
+  collect('dict', props.dictChanges)
+  collect('model', props.modelChanges)
+  collect('form', props.formChanges)
+  collect('process', props.processChanges)
+  emit('selection-change', selected)
+}
+
+defineExpose({ getSelectedChanges: () => {
+  const selected: { type: string; code: string; change_type: string }[] = []
+  const collect = (type: string, changes: ChangeItem[]) => {
+    for (const c of changes) {
+      if (selectedKeys.value.has(makeKey(type, c.code))) {
+        selected.push({ type, code: c.code, change_type: c.change_type })
+      }
+    }
+  }
+  collect('role', props.roleChanges)
+  collect('dict', props.dictChanges)
+  collect('model', props.modelChanges)
+  collect('form', props.formChanges)
+  collect('process', props.processChanges)
+  return selected
+}})
 
 // 展开状态管理
 const expandedItems = ref<Set<string>>(new Set())
@@ -601,5 +731,45 @@ const formatComponentType = (type?: string): string => {
 .btn-execute:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+.selection-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  background: rgba(99, 102, 241, 0.1);
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.selection-info {
+  color: #a5b4fc;
+  font-weight: 500;
+}
+
+.btn-link {
+  background: none;
+  border: none;
+  color: #818cf8;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+
+.btn-link:hover {
+  background: rgba(99, 102, 241, 0.2);
+  color: #a5b4fc;
+}
+
+.change-checkbox {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: #6366f1;
+  flex-shrink: 0;
 }
 </style>

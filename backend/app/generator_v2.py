@@ -135,30 +135,13 @@ def _safe_field_code(code: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# 类型映射
+# 类型映射（从集中注册表派生）
 # ---------------------------------------------------------------------------
 
-# 预览字段类型 → 数据模型字段类型
-FIELD_TYPE_MAP = {
-    "单据号": "STRING", "单行输入": "STRING", "多行输入": "BIG_TEXT",
-    "手机号码": "STRING", "电子邮箱": "STRING", "下拉单选": "STRING",
-    "下拉多选": "STRING", "数据单选": "STRING", "日期时间": "DATE",
-    "金额": "NUM", "数字": "NUM", "附件上传": "STRING",
-    "开关": "STRING", "布尔": "STRING", "人员选择": "STRING", "地理位置": "STRING",
-}
+from app.field_types import get_field_type_map, get_comp_type_map
 
-# 预览字段类型 → 表单组件类型
-COMP_TYPE_MAP = {
-    "单据号": "FORM_DOCUMENT_NUMBER", "单行输入": "FORM_TEXT_INPUT",
-    "多行输入": "FORM_TEXTAREA_INPUT", "手机号码": "FORM_PHONE_INPUT",
-    "电子邮箱": "FORM_EMAIL_INPUT", "下拉单选": "FORM_SELECT_INPUT_SINGLE",
-    "下拉多选": "FORM_SELECT_INPUT", "数据单选": "FORM_DATA_SELECTOR_SINGLE",
-    "日期时间": "FORM_DATEPICK_INPUT", "金额": "FORM_MONEY_INPUT",
-    "数字": "FORM_NUMBER_INPUT", "附件上传": "FORM_FILE_UPLOAD",
-    "开关": "FORM_SWITCH_SELECT", "布尔": "FORM_SWITCH_SELECT",
-    "人员选择": "FORM_PEOPLE_SELECT", "地理位置": "FORM_WIDGET_LOCATION",
-    "子表": "FORM_WIDGET_SON_TABLE",
-}
+FIELD_TYPE_MAP = get_field_type_map()
+COMP_TYPE_MAP = get_comp_type_map()
 
 
 # ---------------------------------------------------------------------------

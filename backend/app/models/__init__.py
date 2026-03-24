@@ -142,6 +142,19 @@ class MarketplaceComponent(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
+class ConfigSnapshot(Base):
+    """配置快照 — 每次 config_preview 变更时保存，用于版本回滚"""
+    __tablename__ = "config_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    application_id: Mapped[int] = mapped_column(Integer, ForeignKey("applications.id"), nullable=False, index=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    config_json: Mapped[str] = mapped_column(Text, nullable=False)  # JSON: 完整 config_preview 内容
+    source: Mapped[str] = mapped_column(String(30), nullable=False)  # "chat" | "document" | "sync" | "rollback" | "generation"
+    summary: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)  # 变更摘要
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class Application(Base):
     __tablename__ = "applications"
 

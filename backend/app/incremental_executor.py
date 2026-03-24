@@ -12,6 +12,7 @@
 """
 
 from __future__ import annotations
+import asyncio
 import time
 import logging
 from typing import Optional, Dict, Any, List, AsyncGenerator
@@ -25,6 +26,63 @@ from app.config_diff import (
 from app.apaas_client import APaaSClient, _extract_query_params, _log_request, _log_response
 
 logger = logging.getLogger(__name__)
+
+# ── 重试配置 ──
+MAX_RETRIES = 2
+RETRY_DELAY_SECONDS = 1.0
+
+
+# ══════════════════════════════════════════════════════════════
+# 执行日志（Journal）— 记录每个 API 操作，用于回滚
+# ══════════════════════════════════════════════════════════════
+
+@dataclass
+class JournalEntry:
+    """单条执行日志"""
+    resource_type: str          # "role" | "dict" | "model" | "form" | "process"
+    operation: str              # "create" | "update" | "delete" | "disable"
+    resource_name: str          # 资源名称
+    resource_code: str          # 资源编码
+    platform_id: Optional[str] = None   # 平台返回的 ID
+    old_value: Optional[Dict] = None    # 修改前的值（用于回滚）
+    timestamp: float = 0.0
+
+    def __post_init__(self):
+        if self.timestamp == 0.0:
+            self.timestamp = time.time()
+
+
+@dataclass
+class ExecutionJournal:
+    """执行日志集合"""
+    entries: List[JournalEntry] = field(default_factory=list)
+
+    def record(self, resource_type: str, operation: str, name: str, code: str,
+               platform_id: Optional[str] = None, old_value: Optional[Dict] = None):
+        """记录一条操作"""
+        entry = JournalEntry(
+            resource_type=resource_type,
+            operation=operation,
+            resource_name=name,
+            resource_code=code,
+            platform_id=platform_id,
+            old_value=old_value,
+        )
+        self.entries.append(entry)
+        return entry
+
+    def to_dict(self) -> List[Dict]:
+        return [
+            {
+                "resource_type": e.resource_type,
+                "operation": e.operation,
+                "resource_name": e.resource_name,
+                "resource_code": e.resource_code,
+                "platform_id": e.platform_id,
+                "timestamp": e.timestamp,
+            }
+            for e in self.entries
+        ]
 
 
 @dataclass
@@ -40,6 +98,7 @@ class ExecutionResult:
     })
     errors: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
+    journal: ExecutionJournal = field(default_factory=ExecutionJournal)
 
     def add_success(self, category: str, message: str):
         """添加成功记录"""
@@ -59,7 +118,8 @@ class ExecutionResult:
             "success": self.success,
             "results": self.results,
             "errors": self.errors,
-            "warnings": self.warnings
+            "warnings": self.warnings,
+            "journal": self.journal.to_dict(),
         }
 
 
@@ -260,17 +320,43 @@ class IncrementalExecutor:
             self.result.add_error(str(e))
             yield {"type": "error", "message": str(e), "result": self.result.to_dict()}
 
-    # ==================== 单个变更执行方法 ====================
+    # ==================== 重试辅助 ====================
+
+    async def _with_retry(self, func, resource_type: str, resource_name: str):
+        """带重试的执行包装。最多重试 MAX_RETRIES 次。"""
+        last_error = None
+        for attempt in range(1, MAX_RETRIES + 2):  # 1 次正常 + MAX_RETRIES 次重试
+            try:
+                return await func()
+            except Exception as e:
+                last_error = e
+                if attempt <= MAX_RETRIES:
+                    logger.warning(
+                        f"{resource_type}「{resource_name}」第 {attempt} 次失败: {e}，"
+                        f"{RETRY_DELAY_SECONDS}s 后重试..."
+                    )
+                    await asyncio.sleep(RETRY_DELAY_SECONDS)
+                else:
+                    raise last_error
+
+    # ==================== 单个变更执行方法（带重试 + 日志） ====================
 
     async def _execute_single_role_change(self, change: RoleChange):
         """执行单个角色变更"""
         try:
-            if change.change_type == ChangeType.ADDED:
-                await self._create_role(change)
-            elif change.change_type == ChangeType.MODIFIED:
-                await self._update_role(change)
-            elif change.change_type == ChangeType.DELETED:
-                await self._delete_role(change)
+            async def _do():
+                if change.change_type == ChangeType.ADDED:
+                    await self._create_role(change)
+                    self.result.journal.record("role", "create", change.name, change.code)
+                elif change.change_type == ChangeType.MODIFIED:
+                    await self._update_role(change)
+                    self.result.journal.record("role", "update", change.name, change.code,
+                                               platform_id=change.remote_id, old_value=change.old_value)
+                elif change.change_type == ChangeType.DELETED:
+                    await self._delete_role(change)
+                    self.result.journal.record("role", "delete", change.name, change.code,
+                                               platform_id=change.remote_id)
+            await self._with_retry(_do, "角色", change.name)
         except Exception as e:
             self.result.add_error(f"角色「{change.name}」操作失败: {str(e)}")
             logger.exception(f"角色操作失败: {change.name}")
@@ -278,15 +364,21 @@ class IncrementalExecutor:
     async def _execute_single_dict_change(self, change: DictChange):
         """执行单个字典变更"""
         try:
-            if change.change_type == ChangeType.ADDED:
-                await self._create_dict(change)
-            elif change.change_type == ChangeType.MODIFIED:
-                await self._update_dict(change)
-            elif change.change_type == ChangeType.DELETED:
-                await self._disable_dict(change)
-
-            # 处理字典选项变更
-            await self._execute_dict_option_changes(change)
+            async def _do():
+                if change.change_type == ChangeType.ADDED:
+                    await self._create_dict(change)
+                    self.result.journal.record("dict", "create", change.name, change.code)
+                elif change.change_type == ChangeType.MODIFIED:
+                    await self._update_dict(change)
+                    self.result.journal.record("dict", "update", change.name, change.code,
+                                               platform_id=change.remote_id, old_value=change.old_value)
+                elif change.change_type == ChangeType.DELETED:
+                    await self._disable_dict(change)
+                    self.result.journal.record("dict", "disable", change.name, change.code,
+                                               platform_id=change.remote_id)
+                # 处理字典选项变更
+                await self._execute_dict_option_changes(change)
+            await self._with_retry(_do, "字典", change.name)
         except Exception as e:
             self.result.add_error(f"字典「{change.name}」操作失败: {str(e)}")
             logger.exception(f"字典操作失败: {change.name}")
@@ -294,17 +386,21 @@ class IncrementalExecutor:
     async def _execute_single_model_change(self, change: ModelChange):
         """执行单个模型变更"""
         try:
-            if change.change_type == ChangeType.ADDED:
-                await self._create_model(change)
-            elif change.change_type == ChangeType.MODIFIED:
-                await self._update_model(change)
-            elif change.change_type == ChangeType.DELETED:
-                self.result.add_warning(f"模型「{change.name}」删除: 平台不支持删除模型，已忽略")
-                return
-
-            # 处理字段变更
-            if change.change_type != ChangeType.DELETED:
-                await self._execute_field_changes(change)
+            async def _do():
+                if change.change_type == ChangeType.ADDED:
+                    await self._create_model(change)
+                    self.result.journal.record("model", "create", change.name, change.code)
+                elif change.change_type == ChangeType.MODIFIED:
+                    await self._update_model(change)
+                    self.result.journal.record("model", "update", change.name, change.code,
+                                               platform_id=change.remote_id, old_value=change.old_value)
+                elif change.change_type == ChangeType.DELETED:
+                    self.result.add_warning(f"模型「{change.name}」删除: 平台不支持删除模型，已忽略")
+                    return
+                # 处理字段变更
+                if change.change_type != ChangeType.DELETED:
+                    await self._execute_field_changes(change)
+            await self._with_retry(_do, "模型", change.name)
         except Exception as e:
             self.result.add_error(f"模型「{change.name}」操作失败: {str(e)}")
             logger.exception(f"模型操作失败: {change.name}")
@@ -312,12 +408,19 @@ class IncrementalExecutor:
     async def _execute_single_form_change(self, change: FormChange):
         """执行单个表单变更"""
         try:
-            if change.change_type == ChangeType.ADDED:
-                await self._create_form(change)
-            elif change.change_type == ChangeType.MODIFIED:
-                await self._update_form(change)
-            elif change.change_type == ChangeType.DELETED:
-                await self._delete_form(change)
+            async def _do():
+                if change.change_type == ChangeType.ADDED:
+                    await self._create_form(change)
+                    self.result.journal.record("form", "create", change.name, change.code)
+                elif change.change_type == ChangeType.MODIFIED:
+                    await self._update_form(change)
+                    self.result.journal.record("form", "update", change.name, change.code,
+                                               platform_id=change.remote_id, old_value=change.old_value)
+                elif change.change_type == ChangeType.DELETED:
+                    await self._delete_form(change)
+                    self.result.journal.record("form", "delete", change.name, change.code,
+                                               platform_id=change.remote_id)
+            await self._with_retry(_do, "表单", change.name)
         except Exception as e:
             self.result.add_error(f"表单「{change.name}」操作失败: {str(e)}")
             logger.exception(f"表单操作失败: {change.name}")
@@ -325,12 +428,19 @@ class IncrementalExecutor:
     async def _execute_single_process_change(self, change: ProcessChange):
         """执行单个流程变更"""
         try:
-            if change.change_type == ChangeType.ADDED:
-                await self._create_process(change)
-            elif change.change_type == ChangeType.MODIFIED:
-                await self._update_process(change)
-            elif change.change_type == ChangeType.DELETED:
-                await self._close_process(change)
+            async def _do():
+                if change.change_type == ChangeType.ADDED:
+                    await self._create_process(change)
+                    self.result.journal.record("process", "create", change.name, change.code)
+                elif change.change_type == ChangeType.MODIFIED:
+                    await self._update_process(change)
+                    self.result.journal.record("process", "update", change.name, change.code,
+                                               platform_id=change.remote_id, old_value=change.old_value)
+                elif change.change_type == ChangeType.DELETED:
+                    await self._close_process(change)
+                    self.result.journal.record("process", "close", change.name, change.code,
+                                               platform_id=change.remote_id)
+            await self._with_retry(_do, "流程", change.name)
         except Exception as e:
             self.result.add_error(f"流程「{change.name}」操作失败: {str(e)}")
             logger.exception(f"流程操作失败: {change.name}")

@@ -28,6 +28,7 @@ from app.step_executor import (
     execute_create_model, execute_create_form,
     execute_create_workflow, execute_configure_permissions,
 )
+from app.app_locks import acquire_app_lock
 
 logger = logging.getLogger(__name__)
 
@@ -308,40 +309,41 @@ async def execute_step(
         token=user.apaas_token,
     )
 
-    # 执行
-    try:
-        result = await _execute_step_impl(client, app, config, state, step_key, data, models)
-        # 标记完成
-        state.setdefault("steps_completed", [])
-        if step_key not in state["steps_completed"]:
-            state["steps_completed"].append(step_key)
-        state.get("step_errors", {}).pop(step_key, None)
-        _save_state(app, state)
-        await db.commit()
-        return StepExecuteResponse(step=step_key, status="completed", result=result)
-
-    except Exception as e:
-        error_msg = str(e)
-        logger.error(f"步骤 {step_key} 执行失败: {error_msg}", exc_info=True)
-
-        # Token 过期时清除无效 token，让前端知道需要重新连接
-        if "Token已过期" in error_msg or "401" in error_msg:
-            user.apaas_token = None
+    # 执行（加并发锁保护）
+    async with acquire_app_lock(app_id, f"步骤执行:{step_key}"):
+        try:
+            result = await _execute_step_impl(client, app, config, state, step_key, data, models)
+            # 标记完成
+            state.setdefault("steps_completed", [])
+            if step_key not in state["steps_completed"]:
+                state["steps_completed"].append(step_key)
+            state.get("step_errors", {}).pop(step_key, None)
+            _save_state(app, state)
             await db.commit()
-            raise HTTPException(status_code=401, detail="APaaS平台Token已过期，请重新连接")
+            return StepExecuteResponse(step=step_key, status="completed", result=result)
 
-        # 检测编码冲突错误
-        conflict = _detect_code_conflict(error_msg, step_key, data, models)
-        if conflict:
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"步骤 {step_key} 执行失败: {error_msg}", exc_info=True)
+
+            # Token 过期时清除无效 token，让前端知道需要重新连接
+            if "Token已过期" in error_msg or "401" in error_msg:
+                user.apaas_token = None
+                await db.commit()
+                raise HTTPException(status_code=401, detail="APaaS平台Token已过期，请重新连接")
+
+            # 检测编码冲突错误
+            conflict = _detect_code_conflict(error_msg, step_key, data, models)
+            if conflict:
+                state.setdefault("step_errors", {})[step_key] = error_msg
+                _save_state(app, state)
+                await db.commit()
+                return StepExecuteResponse(step=step_key, status="conflict", error=error_msg, conflict=conflict)
+
             state.setdefault("step_errors", {})[step_key] = error_msg
             _save_state(app, state)
             await db.commit()
-            return StepExecuteResponse(step=step_key, status="conflict", error=error_msg, conflict=conflict)
-
-        state.setdefault("step_errors", {})[step_key] = error_msg
-        _save_state(app, state)
-        await db.commit()
-        return StepExecuteResponse(step=step_key, status="error", error=error_msg)
+            return StepExecuteResponse(step=step_key, status="error", error=error_msg)
 
 
 async def _execute_step_impl(
