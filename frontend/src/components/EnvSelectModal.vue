@@ -207,33 +207,6 @@ function goToEnvs() {
   color: #c4b5fd;
 }
 
-/* ── Dialog dark theme ── */
-:deep(.env-select-dialog .el-dialog) {
-  background: #1a1a2e;
-  color: rgba(255, 255, 255, 0.9);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 16px;
-}
-:deep(.env-select-dialog .el-dialog__header) {
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  padding: 16px 20px;
-}
-:deep(.env-select-dialog .el-dialog__title) {
-  color: rgba(255, 255, 255, 0.92);
-  font-size: 15px;
-  font-weight: 600;
-}
-:deep(.env-select-dialog .el-dialog__headerbtn .el-dialog__close) {
-  color: rgba(255, 255, 255, 0.4);
-}
-:deep(.env-select-dialog .el-dialog__body) {
-  padding: 20px;
-}
-:deep(.env-select-dialog .el-dialog__footer) {
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
-  padding: 14px 20px;
-}
-
 /* Scrollbar */
 .env-list::-webkit-scrollbar {
   width: 5px;
@@ -244,5 +217,33 @@ function goToEnvs() {
 .env-list::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.08);
   border-radius: 3px;
+}
+</style>
+
+<style>
+.el-dialog.env-select-dialog {
+  background: #1a1a2e !important;
+  color: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+}
+.el-dialog.env-select-dialog .el-dialog__header {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 16px 20px;
+}
+.el-dialog.env-select-dialog .el-dialog__title {
+  color: rgba(255, 255, 255, 0.92) !important;
+  font-size: 15px;
+  font-weight: 600;
+}
+.el-dialog.env-select-dialog .el-dialog__headerbtn .el-dialog__close {
+  color: rgba(255, 255, 255, 0.4);
+}
+.el-dialog.env-select-dialog .el-dialog__body {
+  padding: 20px;
+}
+.el-dialog.env-select-dialog .el-dialog__footer {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 14px 20px;
 }
 </style>
