@@ -31,6 +31,13 @@ class ProjectType(str, Enum):
     PLUGIN = "plugin"                           # 自开发插件
     BACKEND_API = "backend-api"                 # 后端自开发接口
     SCRIPT = "script"                           # 脚本扩展
+    SCRIPT_JS = "script-js"                     # JavaScript脚本扩展
+    SCRIPT_PYTHON = "script-python"             # Python脚本扩展
+    SCRIPT_GROOVY = "script-groovy"             # Groovy脚本扩展
+    BUSINESS_DIALOG = "business-dialog"         # 业务事件自定义弹窗
+    UI_STYLE = "ui-style"                       # UI样式扩展（CSS）
+    LIST_CUSTOM_MODULE = "list-custom-module"   # 列表自定义模块
+    WEB_LOGIN = "web-login"                     # 自定义登录页
 
 
 class WorkspaceStatus(str, Enum):
@@ -106,11 +113,25 @@ class WorkspaceManager:
         elif project_type == ProjectType.BACKEND_API:
             self._scaffold_backend_api(ws_path, safe_name)
         elif project_type == ProjectType.LAYOUT:
-            self._scaffold_form_page(ws_path, safe_name)  # layout 暂用 page 脚手架
+            self._scaffold_layout(ws_path, safe_name)
         elif project_type == ProjectType.PLUGIN:
-            self._scaffold_form_page(ws_path, safe_name)  # plugin 暂用 page 脚手架
+            self._scaffold_plugin(ws_path, safe_name)
         elif project_type == ProjectType.SCRIPT:
-            self._scaffold_backend_api(ws_path, safe_name)  # script 暂用 backend 脚手架
+            self._scaffold_script_js(ws_path, safe_name)  # generic script defaults to JS
+        elif project_type == ProjectType.SCRIPT_JS:
+            self._scaffold_script_js(ws_path, safe_name)
+        elif project_type == ProjectType.SCRIPT_PYTHON:
+            self._scaffold_script_python(ws_path, safe_name)
+        elif project_type == ProjectType.SCRIPT_GROOVY:
+            self._scaffold_script_groovy(ws_path, safe_name)
+        elif project_type == ProjectType.BUSINESS_DIALOG:
+            self._scaffold_business_dialog(ws_path, safe_name)
+        elif project_type == ProjectType.UI_STYLE:
+            self._scaffold_ui_style(ws_path, safe_name)
+        elif project_type == ProjectType.LIST_CUSTOM_MODULE:
+            self._scaffold_list_custom_module(ws_path, safe_name)
+        elif project_type == ProjectType.WEB_LOGIN:
+            self._scaffold_web_login(ws_path, safe_name)
 
         # 更新状态
         meta["status"] = WorkspaceStatus.READY.value
@@ -127,8 +148,17 @@ class WorkspaceManager:
             raise FileNotFoundError(f"Workspace {ws_id} not found")
 
         meta = self._read_meta(ws_path)
-        if meta["project_type"] == ProjectType.BACKEND_API.value:
-            return {"status": "skip", "message": "后端项目无需 npm install"}
+        if meta["project_type"] in (
+            ProjectType.BACKEND_API.value,
+            ProjectType.SCRIPT_JS.value,
+            ProjectType.SCRIPT_PYTHON.value,
+            ProjectType.SCRIPT_GROOVY.value,
+            ProjectType.BUSINESS_DIALOG.value,
+            ProjectType.SCRIPT.value,
+            ProjectType.UI_STYLE.value,
+            ProjectType.LIST_CUSTOM_MODULE.value,
+        ):
+            return {"status": "skip", "message": "此类型项目无需 npm install"}
 
         meta["status"] = WorkspaceStatus.INSTALLING.value
         self._write_meta(ws_path, meta)
@@ -1656,6 +1686,371 @@ const FormWidgetMixin = {
 export default FormWidgetMixin
 """
 
+    # ------------------------------------------------------------------
+    # Layout scaffold
+    # ------------------------------------------------------------------
+    def _scaffold_layout(self, ws_path: Path, name: str):
+        """布局脚手架 - WEB_LAYOUT 架构"""
+        self._write_common_files(ws_path, name, "LAYOUT")
+
+        pascal = "".join(w.capitalize() for w in name.split("-"))
+        output_name = f"apaas-custom-layout-{name}"
+
+        # ======== package.json ========
+        self._write(ws_path, "package.json", json.dumps({
+            "name": name,
+            "version": "1.0.0",
+            "engines": {"node": "16.x"},
+            "templateType": "LAYOUT",
+            "private": True,
+            "scripts": {
+                "lint": "vue-cli-service lint",
+                "preview": "VUE_APP_PREVIEW=true vue-cli-service serve preview/main.js",
+                "serve": "vue-cli-service serve src/index.js",
+                "debug": "df-apaas-cli debug",
+                "build": "df-apaas-cli build"
+            },
+            "dependencies": {
+                "core-js": "3.8.3",
+                "element-ui": "^2.15.14",
+                "vue": "2.7.14"
+            },
+            "devDependencies": {
+                "@babel/core": "7.12.16",
+                "@babel/eslint-parser": "7.12.16",
+                "@vue/cli-plugin-babel": "5.0.0",
+                "@vue/cli-plugin-eslint": "5.0.0",
+                "@vue/cli-service": "5.0.8",
+                "dart-sass": "1.25.0",
+                "eslint": "7.32.0",
+                "eslint-plugin-vue": "8.0.3",
+                "sass": "1.85.1",
+                "sass-loader": "8.0.2",
+                "vue-template-compiler": "2.7.14"
+            },
+            "eslintConfig": {
+                "root": True,
+                "env": {"node": True},
+                "extends": ["plugin:vue/essential", "eslint:recommended"],
+                "parserOptions": {"parser": "@babel/eslint-parser"},
+                "rules": {}
+            },
+            "browserslist": ["> 1%", "last 2 versions", "not dead", "Chrome 40.0", "ie >= 11"]
+        }, indent=2, ensure_ascii=False))
+
+        # ======== vue.config.js ========
+        self._write(ws_path, "vue.config.js", """const { defineConfig } = require('@vue/cli-service')
+const fs = require('fs')
+const path = require('path')
+const apaasJson = require('./src/apaas.json')
+
+const isPreview = process.env.VUE_APP_PREVIEW === 'true'
+
+module.exports = defineConfig({
+  transpileDependencies: true,
+  productionSourceMap: false,
+  devServer: {
+    host: '0.0.0.0',
+    port: isPreview ? 8090 : 8080,
+    hot: true,
+    allowedHosts: 'all',
+    ...(isPreview ? {} : {
+      https: (() => {
+        const keyPath = './https/server.key'
+        const certPath = './https/server.crt'
+        if (fs.existsSync(keyPath) && fs.existsSync(certPath)) {
+          return { key: fs.readFileSync(keyPath), cert: fs.readFileSync(certPath) }
+        }
+        return false
+      })()
+    }),
+    headers: { 'Access-Control-Allow-Origin': '*' },
+    client: { overlay: false }
+  },
+  configureWebpack: (config) => {
+    if (isPreview) {
+      delete config.output.library
+      delete config.output.libraryTarget
+    } else {
+      config.output.library = apaasJson.outputName
+      config.output.libraryTarget = 'umd'
+    }
+  },
+  chainWebpack: (config) => {
+    if (isPreview) {
+      config.plugin('html').tap(args => {
+        args[0].template = path.resolve(__dirname, 'preview/index.html')
+        return args
+      })
+    }
+  },
+  css: {
+    loaderOptions: {
+      sass: { implementation: require('sass') }
+    }
+  }
+})
+""")
+
+        # ======== babel.config.js ========
+        self._write(ws_path, "babel.config.js", "module.exports = {\n  presets: ['@vue/cli-plugin-babel/preset']\n}\n")
+
+        # ======== src/apaas.json ========
+        self._write(ws_path, "src/apaas.json", json.dumps({
+            "entry": "index.js",
+            "layout": [{"name": output_name, "desc": name, "status": "ENABLE"}],
+            "outputName": output_name
+        }, indent=2, ensure_ascii=False))
+
+        # ======== src/index.js ========
+        self._write(ws_path, "src/index.js", f"""import Home from './Home.vue'
+
+const install = function (Vue) {{
+  const layoutId = '{output_name}'
+  const layoutEngine = Vue.LayoutEngine.getInstance(layoutId)
+  Vue.component(layoutId, Home)
+  layoutEngine.registerLayoutComponent(Home)
+}}
+
+export default {{ install }}
+""")
+
+        # ======== src/Home.vue ========
+        self._write(ws_path, "src/Home.vue", f"""<template>
+  <x-app-layout>
+    <template #header>
+      <slot name="header">
+        <div class="layout-header">Header</div>
+      </slot>
+    </template>
+    <template #menu>
+      <slot name="menu">
+        <div class="layout-menu">Menu</div>
+      </slot>
+    </template>
+    <template #appPage>
+      <slot name="appPage">
+        <div class="layout-app-page">Content</div>
+      </slot>
+    </template>
+  </x-app-layout>
+</template>
+
+<script>
+export default {{
+  name: '{pascal}Layout',
+}}
+</script>
+
+<style scoped>
+.layout-header {{
+  padding: 10px 20px;
+  background: #f5f7fa;
+}}
+.layout-menu {{
+  width: 200px;
+  background: #fafafa;
+}}
+.layout-app-page {{
+  flex: 1;
+  padding: 20px;
+}}
+</style>
+""")
+
+    # ------------------------------------------------------------------
+    # Plugin scaffold
+    # ------------------------------------------------------------------
+    def _scaffold_plugin(self, ws_path: Path, name: str):
+        """插件脚手架 - WEB_PLUGIN 架构"""
+        self._write_common_files(ws_path, name, "PLUGIN")
+
+        pascal = "".join(w.capitalize() for w in name.split("-"))
+        name_upper = name.replace("-", "_").upper()
+        output_name = f"apaas-custom-{name}"
+
+        # ======== package.json ========
+        self._write(ws_path, "package.json", json.dumps({
+            "name": name,
+            "version": "1.0.0",
+            "engines": {"node": "16.x"},
+            "templateType": "PLUGIN",
+            "private": True,
+            "scripts": {
+                "lint": "vue-cli-service lint",
+                "preview": "VUE_APP_PREVIEW=true vue-cli-service serve preview/main.js",
+                "serve": "vue-cli-service serve src/index.js",
+                "debug": "df-apaas-cli debug",
+                "build": "df-apaas-cli build"
+            },
+            "dependencies": {
+                "core-js": "3.8.3",
+                "element-ui": "^2.15.14",
+                "vue": "2.7.14"
+            },
+            "devDependencies": {
+                "@babel/core": "7.12.16",
+                "@babel/eslint-parser": "7.12.16",
+                "@vue/cli-plugin-babel": "5.0.0",
+                "@vue/cli-plugin-eslint": "5.0.0",
+                "@vue/cli-service": "5.0.8",
+                "dart-sass": "1.25.0",
+                "eslint": "7.32.0",
+                "eslint-plugin-vue": "8.0.3",
+                "sass": "1.85.1",
+                "sass-loader": "8.0.2",
+                "vue-template-compiler": "2.7.14"
+            },
+            "eslintConfig": {
+                "root": True,
+                "env": {"node": True},
+                "extends": ["plugin:vue/essential", "eslint:recommended"],
+                "parserOptions": {"parser": "@babel/eslint-parser"},
+                "rules": {}
+            },
+            "browserslist": ["> 1%", "last 2 versions", "not dead", "Chrome 40.0", "ie >= 11"]
+        }, indent=2, ensure_ascii=False))
+
+        # ======== vue.config.js ========
+        self._write(ws_path, "vue.config.js", """const { defineConfig } = require('@vue/cli-service')
+const fs = require('fs')
+const path = require('path')
+const apaasJson = require('./src/apaas.json')
+
+const isPreview = process.env.VUE_APP_PREVIEW === 'true'
+
+module.exports = defineConfig({
+  transpileDependencies: true,
+  productionSourceMap: false,
+  devServer: {
+    host: '0.0.0.0',
+    port: isPreview ? 8090 : 8080,
+    hot: true,
+    allowedHosts: 'all',
+    ...(isPreview ? {} : {
+      https: (() => {
+        const keyPath = './https/server.key'
+        const certPath = './https/server.crt'
+        if (fs.existsSync(keyPath) && fs.existsSync(certPath)) {
+          return { key: fs.readFileSync(keyPath), cert: fs.readFileSync(certPath) }
+        }
+        return false
+      })()
+    }),
+    headers: { 'Access-Control-Allow-Origin': '*' },
+    client: { overlay: false }
+  },
+  configureWebpack: (config) => {
+    if (isPreview) {
+      delete config.output.library
+      delete config.output.libraryTarget
+    } else {
+      config.output.library = apaasJson.outputName
+      config.output.libraryTarget = 'umd'
+    }
+  },
+  chainWebpack: (config) => {
+    if (isPreview) {
+      config.plugin('html').tap(args => {
+        args[0].template = path.resolve(__dirname, 'preview/index.html')
+        return args
+      })
+    }
+  },
+  css: {
+    loaderOptions: {
+      sass: { implementation: require('sass') }
+    }
+  }
+})
+""")
+
+        # ======== babel.config.js ========
+        self._write(ws_path, "babel.config.js", "module.exports = {\n  presets: ['@vue/cli-plugin-babel/preset']\n}\n")
+
+        # ======== src/apaas.json ========
+        self._write(ws_path, "src/apaas.json", json.dumps({
+            "entry": "index.js",
+            "extensionConfigList": [{"code": f"CUSTOM_{name_upper}_EXTENSION", "text": name}],
+            "outputName": output_name
+        }, indent=2, ensure_ascii=False))
+
+        # ======== src/index.js ========
+        self._write(ws_path, "src/index.js", f"""import extensionConfig from './extension'
+import CustomPanel from './custom-tab/custom-panel.vue'
+import {{ localMessages }} from './local'
+
+const install = function (Vue) {{
+  // Register i18n
+  const i18n = window.APaaSSDK?.context?.globalVueI18n
+  if (i18n) Object.keys(localMessages).forEach(lang => i18n.mergeLocaleMessage(lang, localMessages[lang]))
+
+  // Register component
+  Vue.component('CustomPanel{pascal}', CustomPanel)
+
+  // Register extension
+  if (Vue._extensionEngine) Vue._extensionEngine.registerExtensionConfig(extensionConfig)
+}}
+
+export default {{ install }}
+""")
+
+        # ======== src/extension.js ========
+        self._write(ws_path, "src/extension.js", f"""export default {{
+  code: 'CUSTOM_{name_upper}_EXTENSION',
+  blocks: [],
+  funs: [],
+  versions: ['V1'],
+  extensionMethods: {{}}
+}}
+""")
+
+        # ======== src/custom-tab/custom-panel.vue ========
+        self._write(ws_path, "src/custom-tab/custom-panel.vue", f"""<template>
+  <div class="custom-panel-{name}">
+    <h3>{{{{ title }}}}</h3>
+    <div class="panel-content">
+      <slot />
+    </div>
+  </div>
+</template>
+
+<script>
+export default {{
+  name: 'CustomPanel{pascal}',
+  data() {{
+    return {{
+      title: '{name} Plugin Panel',
+    }}
+  }},
+}}
+</script>
+
+<style scoped>
+.custom-panel-{name} {{
+  padding: 16px;
+}}
+.panel-content {{
+  margin-top: 12px;
+}}
+</style>
+""")
+
+        # ======== src/local/index.js ========
+        self._write(ws_path, "src/local/index.js", f"""export const localMessages = {{
+  'zh-CN': {{
+    '{name}': {{
+      title: '{name}',
+    }},
+  }},
+  'en-US': {{
+    '{name}': {{
+      title: '{name}',
+    }},
+  }},
+}}
+""")
+
     def _scaffold_form_page(self, ws_path: Path, name: str, mobile: bool = False):
         """菜单页面脚手架 - 完整 MENU_PAGE 架构（带筛选+表格+分页+多选+getSelectedData）"""
         # 公共文件
@@ -2433,6 +2828,288 @@ public class AllowUrlConfig implements com.definesys.mpaas.common.http.AllowUrlM
         return urlSet;
     }}
 }}
+""")
+
+    # ======== 轻量级脚手架（脚本 & 业务弹窗）========
+
+    def _scaffold_script_js(self, ws_path: Path, name: str):
+        """JavaScript 脚本扩展脚手架 - 仅生成 src/script.js"""
+        self._write(ws_path, "src/script.js", f"""\
+/**
+ * JavaScript 脚本扩展 - {name}
+ * 在业务事件中嵌入前端 JavaScript 脚本
+ *
+ * API:
+ *   lowCodeContext.businessEventEngine.customNodeData  - 当前节点数据
+ *   lowCodeContext.businessEventEngine.inputDatas       - 触发数据
+ *   lowCodeContext.businessEventEngine.confirmEventEmit(result) - 确认执行
+ *   lowCodeContext.businessEventEngine.cancelEventEmit()  - 取消执行
+ */
+
+// 获取触发数据
+const inputDatas = lowCodeContext.businessEventEngine.inputDatas
+const formData = inputDatas[0] || {{}}
+
+// TODO: 实现业务逻辑
+
+// 返回结果
+return {{}}
+""")
+
+    def _scaffold_script_python(self, ws_path: Path, name: str):
+        """Python 脚本扩展脚手架 - 仅生成 src/script.py"""
+        self._write(ws_path, "src/script.py", f"""\
+\"\"\"
+Python 脚本扩展 - {name}
+在后端业务事件中执行 Python 脚本
+
+API:
+  definesys.input()    - 获取输入参数（dict）
+  definesys.output()   - 设置输出结果
+  definesys.log()      - 日志输出
+  definesys.http_get/http_post - HTTP 请求
+\"\"\"
+
+# 获取输入数据
+params = definesys.input()
+
+# TODO: 实现业务逻辑
+
+# 返回结果
+definesys.output({{"status": "ok"}})
+""")
+
+    def _scaffold_script_groovy(self, ws_path: Path, name: str):
+        """Groovy 脚本扩展脚手架 - 仅生成 src/script.groovy"""
+        self._write(ws_path, "src/script.groovy", f"""\
+/**
+ * Groovy 脚本扩展 - {name}
+ * 在后端业务事件中执行 Groovy 脚本
+ *
+ * API:
+ *   xdapEventSystemFunctions.getFullData() - 获取完整表单数据
+ *   xdapEventSystemFunctions.setResult()   - 设置返回结果
+ */
+
+def fullData = xdapEventSystemFunctions.getFullData()
+
+// TODO: 实现业务逻辑
+
+xdapEventSystemFunctions.setResult(["status": "ok"])
+""")
+
+    def _scaffold_business_dialog(self, ws_path: Path, name: str):
+        """业务事件自定义弹窗脚手架 - 仅生成 src/setting.js"""
+        self._write(ws_path, "src/setting.js", f"""\
+/**
+ * 业务事件自定义弹窗 - {name}
+ * 在业务事件触发时弹出自定义对话框，采集用户输入
+ */
+const componentOptions = {{
+  language: 'Vue',
+  template: `
+    <div class="custom-dialog-{name}">
+      <el-form ref="ruleForm" :model="formData" :rules="rules" label-width="80px">
+        <el-form-item label="备注" prop="remark">
+          <el-input v-model="formData.remark" type="textarea" :rows="3" placeholder="请输入"></el-input>
+        </el-form-item>
+      </el-form>
+    </div>
+  `,
+  footerTemplate: `
+    <el-button @click="onCancel">取消</el-button>
+    <el-button type="primary" @click="onSubmit" :loading="submitting">确定</el-button>
+  `,
+  data() {{
+    return {{
+      modalOptions: {{
+        modalVisible: true,
+        title: '{name}',
+        width: '480',
+        loading: false,
+        closeConfig: {{
+          onClose: () => {{ lowCodeContext.businessEventEngine.cancelEventEmit() }},
+        }},
+      }},
+      formData: {{ remark: '' }},
+      rules: {{ remark: [{{ required: true, message: '请输入备注', trigger: 'blur' }}] }},
+      submitting: false,
+    }}
+  }},
+  methods: {{
+    onSubmit() {{
+      this.$refs.ruleForm.validate((valid) => {{
+        if (valid) {{
+          this.submitting = true
+          lowCodeContext.businessEventEngine.confirmEventEmit(this.formData)
+          this.modalOptions.modalVisible = false
+        }}
+      }})
+    }},
+    onCancel() {{
+      lowCodeContext.businessEventEngine.cancelEventEmit()
+      this.modalOptions.modalVisible = false
+    }},
+  }},
+}}
+""")
+
+    def _scaffold_ui_style(self, ws_path: Path, name: str):
+        """UI 样式扩展脚手架 — 轻量，仅生成 CSS 文件"""
+        self._write(ws_path, "src/style.css", f"""/**
+ * UI 样式扩展 - {name}
+ * 使用 .form-custom-style 作用域，或 [data-component-id="xxx"] 定位字段
+ */
+
+.form-custom-style {{
+  .el-form-item__label {{ font-weight: 600; }}
+  .el-input__inner {{ border-radius: 6px; }}
+}}
+""")
+
+    def _scaffold_list_custom_module(self, ws_path: Path, name: str):
+        """列表自定义模块脚手架 — 轻量，生成 Vue 模板 + SCSS"""
+        pascal = "".join(w.capitalize() for w in name.split("-"))
+        self._write(ws_path, "src/module-template.vue", f"""<template>
+  <div class="list-custom-module-{name}">
+    <div v-for="(item, idx) in listData" :key="idx" class="module-item">
+      {{{{ item.name || '-' }}}}
+    </div>
+    <div v-if="!listData.length" class="module-empty">暂无数据</div>
+  </div>
+</template>
+<script>
+export default {{
+  name: '{pascal}Module',
+  props: {{ lowCodeContext: {{ type: Object, default: () => ({{}}) }} }},
+  data() {{ return {{ listData: [], total: 0 }} }},
+  mounted() {{
+    const cfg = this.lowCodeContext?.pageViewConfig
+    if (cfg) {{ this.listData = cfg.data || []; this.total = cfg.total || 0 }}
+  }},
+}}
+</script>
+""")
+        self._write(ws_path, "src/module-style.scss", f""".list-custom-module-{name} {{
+  padding: 16px;
+  .module-item {{ padding: 10px 12px; border-bottom: 1px solid #ebeef5; font-size: 14px; }}
+  .module-empty {{ text-align: center; color: #c0c4cc; padding: 40px 0; }}
+}}
+""")
+
+    def _scaffold_web_login(self, ws_path: Path, name: str):
+        """自定义登录页脚手架 — 完整 Vue 项目"""
+        self._write_common_files(ws_path, name, "WEB_LOGIN")
+
+        full_name = f"apaas-custom-{name}"
+        pascal = "".join(w.capitalize() for w in name.split("-"))
+
+        # package.json
+        self._write(ws_path, "package.json", json.dumps({{
+            "name": full_name,
+            "version": "1.0.0",
+            "private": True,
+            "scripts": {{
+                "serve": "vue-cli-service serve src/index.js",
+                "build": "vue-cli-service build",
+            }},
+            "dependencies": {{
+                "core-js": "^3.8.3", "vue": "^2.7.14", "element-ui": "^2.15.14",
+            }},
+            "devDependencies": {{
+                "@vue/cli-service": "~5.0.0",
+                "@vue/cli-plugin-babel": "~5.0.0",
+                "sass": "^1.32.7", "sass-loader": "^12.0.0",
+            }},
+        }}, indent=2))
+
+        # vue.config.js
+        self._write(ws_path, "vue.config.js", f"""const path = require('path')
+module.exports = {{
+  outputDir: 'dist',
+  configureWebpack: {{
+    output: {{ library: '{full_name}', libraryTarget: 'umd', jsonpFunction: 'webpackJsonp_{full_name.replace("-","_")}' }},
+    resolve: {{ alias: {{ '@': path.resolve(__dirname, 'src') }} }},
+  }},
+  devServer: {{ port: 8080, https: true, headers: {{ 'Access-Control-Allow-Origin': '*' }} }},
+}}
+""")
+
+        # babel.config.js
+        self._write(ws_path, "babel.config.js", "module.exports = { presets: ['@vue/cli-plugin-babel/preset'] }\n")
+
+        # src/apaas.json
+        self._write(ws_path, "src/apaas.json", json.dumps({{
+            "entry": "index.js",
+            "router": {{full_name: full_name}},
+            "outputName": full_name,
+        }}, indent=2, ensure_ascii=False))
+
+        # src/index.js
+        self._write(ws_path, "src/index.js", f"""import LoginPage from './login.vue'
+const install = function(Vue) {{ Vue.component('{full_name}', LoginPage) }}
+export default {{ install }}
+""")
+
+        # src/login.vue
+        self._write(ws_path, "src/login.vue", f"""<template>
+  <div class="custom-login-page">
+    <div class="login-box">
+      <h1>系统登录</h1>
+      <el-form ref="form" :model="form" :rules="rules">
+        <el-form-item prop="username">
+          <el-input v-model="form.username" prefix-icon="el-icon-user" placeholder="账号" />
+        </el-form-item>
+        <el-form-item prop="password">
+          <el-input v-model="form.password" prefix-icon="el-icon-lock" placeholder="密码"
+            type="password" show-password @keyup.enter.native="handleLogin" />
+        </el-form-item>
+        <el-button type="primary" :loading="loading" style="width:100%" @click="handleLogin">登 录</el-button>
+      </el-form>
+    </div>
+  </div>
+</template>
+<script>
+export default {{
+  name: '{pascal}Login',
+  data() {{
+    return {{
+      loading: false,
+      form: {{ username: '', password: '' }},
+      rules: {{
+        username: [{{ required: true, message: '请输入账号', trigger: 'blur' }}],
+        password: [{{ required: true, message: '请输入密码', trigger: 'blur' }}],
+      }},
+    }}
+  }},
+  methods: {{
+    handleLogin() {{
+      this.$refs.form.validate(async (valid) => {{
+        if (!valid) return
+        this.loading = true
+        try {{
+          // TODO: 调用登录接口
+        }} catch (e) {{
+          this.$message.error(e.message || '登录失败')
+        }} finally {{ this.loading = false }}
+      }})
+    }},
+  }},
+}}
+</script>
+<style scoped>
+.custom-login-page {{ min-height:100vh; display:flex; align-items:center; justify-content:center; background:linear-gradient(135deg,#667eea,#764ba2); }}
+.login-box {{ width:400px; padding:40px; background:#fff; border-radius:12px; box-shadow:0 20px 60px rgba(0,0,0,.15); }}
+.login-box h1 {{ text-align:center; margin:0 0 30px; font-size:28px; color:#303133; }}
+</style>
+""")
+
+        # env.tmpl.js
+        self._write(ws_path, "env.tmpl.js", """window.GLOBAL_ENV = {
+  ENV: '${ENV}',
+  SSO_URL: '${SSO_URL}',
+  API_BASE: '${API_BASE}',
+}
 """)
 
     def _generate_https_cert(self, ws_path: Path):

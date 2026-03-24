@@ -972,8 +972,27 @@ async def auto_pipeline(
                         "form-page": SceneType.WEB_PAGE,
                         "form-list": SceneType.WEB_LIST_VIEW,
                         "backend-api": SceneType.BACKEND_API,
+                        "layout": SceneType.WEB_LAYOUT,
+                        "plugin": SceneType.WEB_PLUGIN,
+                        "mobile-component": SceneType.MOBILE_COMPONENT,
+                        "mobile-page": SceneType.MOBILE_PAGE,
+                        "script-js": SceneType.SCRIPT_JS,
+                        "script-python": SceneType.SCRIPT_PYTHON,
+                        "script-groovy": SceneType.SCRIPT_GROOVY,
+                        "business-dialog": SceneType.BUSINESS_DIALOG,
+                        "ui-style": SceneType.UI_STYLE,
+                        "list-custom-module": SceneType.LIST_CUSTOM_MODULE,
+                        "web-login": SceneType.WEB_LOGIN,
                     }
-                    scene_type = type_to_scene.get(req.project_type, SceneType.WEB_COMPONENT)
+                    # "script" 类型需要 LLM 自动识别子类型
+                    if req.project_type in ("script",):
+                        try:
+                            scene_type = await generator.detect_scene(req.message)
+                        except Exception as e:
+                            logger.warning(f"脚本场景检测失败，默认 SCRIPT_JS: {e}")
+                            scene_type = SceneType.SCRIPT_JS
+                    else:
+                        scene_type = type_to_scene.get(req.project_type, SceneType.WEB_COMPONENT)
                 else:
                     try:
                         scene_type = await generator.detect_scene(req.message)
@@ -992,6 +1011,17 @@ async def auto_pipeline(
                     "menu-page": SceneType.WEB_PAGE,
                     "form-list": SceneType.WEB_LIST_VIEW,
                     "backend-api": SceneType.BACKEND_API,
+                    "layout": SceneType.WEB_LAYOUT,
+                    "plugin": SceneType.WEB_PLUGIN,
+                    "mobile-component": SceneType.MOBILE_COMPONENT,
+                    "mobile-page": SceneType.MOBILE_PAGE,
+                    "script-js": SceneType.SCRIPT_JS,
+                    "script-python": SceneType.SCRIPT_PYTHON,
+                    "script-groovy": SceneType.SCRIPT_GROOVY,
+                    "business-dialog": SceneType.BUSINESS_DIALOG,
+                    "ui-style": SceneType.UI_STYLE,
+                    "list-custom-module": SceneType.LIST_CUSTOM_MODULE,
+                    "web-login": SceneType.WEB_LOGIN,
                 }
                 scene_type = scene_map.get(pt, SceneType.WEB_COMPONENT)
 
@@ -1328,6 +1358,9 @@ def _scene_to_project_type(scene_type: SceneType) -> str:
         SceneType.SCRIPT_PYTHON: "script",
         SceneType.SCRIPT_GROOVY: "script",
         SceneType.BUSINESS_DIALOG: "script",
+        SceneType.WEB_LOGIN: "web-login",
+        SceneType.UI_STYLE: "ui-style",
+        SceneType.LIST_CUSTOM_MODULE: "list-custom-module",
     }
     return mapping.get(scene_type, "form-component")
 

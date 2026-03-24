@@ -387,6 +387,13 @@ const wsTypeGroupMap: Record<string, { key: string; icon: string; label: string;
   'plugin':           { key: 'plugin',            icon: '🔌', label: '扩展插件',   order: 7 },
   'backend-api':      { key: 'backend',           icon: '⚙️', label: '后端接口',   order: 8 },
   'script':           { key: 'script',            icon: '⚡', label: '脚本/事件',  order: 9 },
+  'script-js':        { key: 'script',            icon: '⚡', label: '脚本/事件',  order: 9 },
+  'script-python':    { key: 'script',            icon: '⚡', label: '脚本/事件',  order: 9 },
+  'script-groovy':    { key: 'script',            icon: '⚡', label: '脚本/事件',  order: 9 },
+  'business-dialog':  { key: 'dialog',            icon: '💬', label: '业务弹窗',   order: 10 },
+  'ui-style':         { key: 'style',             icon: '🎨', label: 'UI 样式',   order: 11 },
+  'list-custom-module': { key: 'list-module',     icon: '📊', label: '列表模块',   order: 12 },
+  'web-login':        { key: 'login',             icon: '🔑', label: '登录页',     order: 13 },
 }
 
 const groupedWorkspaces = computed(() => {
@@ -476,10 +483,10 @@ const sceneSuggestions: Record<string, string[]> = {
     '创建一个系统通知管理扩展插件',
   ],
   script: [
-    '写一个表单提交前的数据校验脚本',
-    '做一个业务事件弹窗，采集审批意见',
-    '开发一个自动计算金额的JavaScript脚本',
+    '写一个JavaScript前端脚本，表单提交前校验数据',
+    '做一个业务事件自定义弹窗，采集审批意见',
     '写一个后端Python脚本处理数据同步',
+    '开发一个自定义CSS样式，美化表单界面',
   ],
   backend: [
     '开发一个自定义数据查询接口',

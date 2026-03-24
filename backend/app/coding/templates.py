@@ -18,6 +18,13 @@ def get_project_template(scene_type: SceneType, module_name: str) -> Dict[str, s
         SceneType.WEB_LAYOUT: _web_layout_template,
         SceneType.WEB_PLUGIN: _web_plugin_template,
         SceneType.BACKEND_API: _backend_api_template,
+        SceneType.SCRIPT_JS: _script_js_template,
+        SceneType.SCRIPT_PYTHON: _script_python_template,
+        SceneType.SCRIPT_GROOVY: _script_groovy_template,
+        SceneType.BUSINESS_DIALOG: _business_dialog_template,
+        SceneType.UI_STYLE: _ui_style_template,
+        SceneType.LIST_CUSTOM_MODULE: _list_custom_module_template,
+        SceneType.WEB_LOGIN: _web_login_template,
     }
     generator = generators.get(scene_type)
     if generator:
@@ -903,5 +910,407 @@ public class {camel}AllowUrlConfig implements AllowUrlManage {{
         return urlSet;
     }}
 }}
+""",
+    }
+
+
+def _script_js_template(name: str) -> Dict[str, str]:
+    """JavaScript 脚本扩展模板"""
+    return {
+        "src/script.js": f"""\
+/**
+ * JavaScript 脚本扩展 - {name}
+ * 在业务事件中嵌入前端 JavaScript 脚本
+ *
+ * API:
+ *   lowCodeContext.businessEventEngine.customNodeData  - 当前节点数据
+ *   lowCodeContext.businessEventEngine.inputDatas       - 触发数据
+ *   lowCodeContext.businessEventEngine.confirmEventEmit(result) - 确认执行
+ *   lowCodeContext.businessEventEngine.cancelEventEmit()  - 取消执行
+ */
+
+// 获取触发数据
+const inputDatas = lowCodeContext.businessEventEngine.inputDatas
+const formData = inputDatas[0] || {{}}
+
+// TODO: 实现业务逻辑
+
+// 返回结果
+return {{}}
+""",
+    }
+
+
+def _script_python_template(name: str) -> Dict[str, str]:
+    """Python 脚本扩展模板"""
+    return {
+        "src/script.py": f"""\
+\"\"\"
+Python 脚本扩展 - {name}
+在后端业务事件中执行 Python 脚本
+
+API:
+  definesys.input()    - 获取输入参数（dict）
+  definesys.output()   - 设置输出结果
+  definesys.log()      - 日志输出
+  definesys.http_get/http_post - HTTP 请求
+\"\"\"
+
+# 获取输入数据
+params = definesys.input()
+
+# TODO: 实现业务逻辑
+
+# 返回结果
+definesys.output({{"status": "ok"}})
+""",
+    }
+
+
+def _script_groovy_template(name: str) -> Dict[str, str]:
+    """Groovy 脚本扩展模板"""
+    return {
+        "src/script.groovy": f"""\
+/**
+ * Groovy 脚本扩展 - {name}
+ * 在后端业务事件中执行 Groovy 脚本
+ *
+ * API:
+ *   xdapEventSystemFunctions.getFullData() - 获取完整表单数据
+ *   xdapEventSystemFunctions.setResult()   - 设置返回结果
+ */
+
+def fullData = xdapEventSystemFunctions.getFullData()
+
+// TODO: 实现业务逻辑
+
+xdapEventSystemFunctions.setResult(["status": "ok"])
+""",
+    }
+
+
+def _business_dialog_template(name: str) -> Dict[str, str]:
+    """业务事件自定义弹窗模板"""
+    return {
+        "src/setting.js": f"""\
+/**
+ * 业务事件自定义弹窗 - {name}
+ * 在业务事件触发时弹出自定义对话框，采集用户输入
+ */
+const componentOptions = {{
+  language: 'Vue',
+  template: `
+    <div class="custom-dialog-{name}">
+      <el-form ref="ruleForm" :model="formData" :rules="rules" label-width="80px">
+        <el-form-item label="备注" prop="remark">
+          <el-input v-model="formData.remark" type="textarea" :rows="3" placeholder="请输入"></el-input>
+        </el-form-item>
+      </el-form>
+    </div>
+  `,
+  footerTemplate: `
+    <el-button @click="onCancel">取消</el-button>
+    <el-button type="primary" @click="onSubmit" :loading="submitting">确定</el-button>
+  `,
+  data() {{
+    return {{
+      modalOptions: {{
+        modalVisible: true,
+        title: '{name}',
+        width: '480',
+        loading: false,
+        closeConfig: {{
+          onClose: () => {{ lowCodeContext.businessEventEngine.cancelEventEmit() }},
+        }},
+      }},
+      formData: {{ remark: '' }},
+      rules: {{ remark: [{{ required: true, message: '请输入备注', trigger: 'blur' }}] }},
+      submitting: false,
+    }}
+  }},
+  methods: {{
+    onSubmit() {{
+      this.$refs.ruleForm.validate((valid) => {{
+        if (valid) {{
+          this.submitting = true
+          lowCodeContext.businessEventEngine.confirmEventEmit(this.formData)
+          this.modalOptions.modalVisible = false
+        }}
+      }})
+    }},
+    onCancel() {{
+      lowCodeContext.businessEventEngine.cancelEventEmit()
+      this.modalOptions.modalVisible = false
+    }},
+  }},
+}}
+""",
+    }
+
+
+def _ui_style_template(name: str) -> Dict[str, str]:
+    """UI 样式扩展模板 — 纯 CSS"""
+    return {
+        "src/style.css": f"""/**
+ * UI 样式扩展 - {name}
+ *
+ * 使用 .form-custom-style 作用域限制影响范围
+ * 使用 [data-component-id="xxx"] 定位具体字段
+ *
+ * 常用 Element UI 类名:
+ *   .el-input__inner          输入框
+ *   .el-form-item__label      标签
+ *   .el-select .el-input      下拉框
+ *   .el-table th              表头
+ *   .el-button--primary       主按钮
+ *   .x-form-build-render      表单渲染区
+ */
+
+/* ====== 全局样式 ====== */
+.form-custom-style {{
+  /* 表单标签加粗 */
+  .el-form-item__label {{
+    font-weight: 600;
+  }}
+
+  /* 输入框统一圆角 */
+  .el-input__inner {{
+    border-radius: 6px;
+  }}
+}}
+
+/* ====== 按字段定位（替换为实际 data-component-id）====== */
+/*
+[data-component-id="your-field-uuid"] {{
+  .el-input__inner {{
+    background-color: #f5f7fa;
+  }}
+}}
+*/
+
+/* ====== 响应式 ====== */
+@media (max-width: 768px) {{
+  .form-custom-style {{
+    .el-form-item__label {{
+      font-size: 13px;
+    }}
+  }}
+}}
+""",
+    }
+
+
+def _list_custom_module_template(name: str) -> Dict[str, str]:
+    """列表自定义模块模板 — Vue/HTML + SCSS"""
+    pascal = "".join(w.capitalize() for w in name.split("-"))
+    return {
+        "src/module-template.vue": f"""<template>
+  <div class="list-custom-module-{name}">
+    <div class="module-header">
+      <h3>{{{{ title }}}}</h3>
+      <span class="module-count">共 {{{{ total }}}} 条</span>
+    </div>
+    <div class="module-content">
+      <!-- TODO: 自定义列表内容 -->
+      <div v-for="(item, index) in listData" :key="index" class="module-item">
+        <span>{{{{ item.name || '-' }}}}</span>
+      </div>
+      <div v-if="!listData.length" class="module-empty">暂无数据</div>
+    </div>
+  </div>
+</template>
+
+<script>
+export default {{
+  name: '{pascal}Module',
+  props: {{
+    lowCodeContext: {{ type: Object, default: () => ({{}}), }},
+  }},
+  data() {{
+    return {{
+      title: '{name}',
+      listData: [],
+      total: 0,
+    }}
+  }},
+  mounted() {{
+    this.loadData()
+  }},
+  methods: {{
+    loadData() {{
+      // 通过 lowCodeContext.pageViewConfig 获取列表数据
+      const pageViewConfig = this.lowCodeContext?.pageViewConfig
+      if (pageViewConfig) {{
+        this.listData = pageViewConfig.data || []
+        this.total = pageViewConfig.total || 0
+      }}
+    }},
+  }},
+}}
+</script>
+""",
+        "src/module-style.scss": f"""/* 列表自定义模块样式 - {name} */
+.list-custom-module-{name} {{
+  padding: 16px;
+
+  .module-header {{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+
+    h3 {{
+      margin: 0;
+      font-size: 16px;
+      font-weight: 600;
+    }}
+
+    .module-count {{
+      color: #909399;
+      font-size: 13px;
+    }}
+  }}
+
+  .module-item {{
+    padding: 10px 12px;
+    border-bottom: 1px solid #ebeef5;
+    font-size: 14px;
+
+    &:last-child {{
+      border-bottom: none;
+    }}
+  }}
+
+  .module-empty {{
+    text-align: center;
+    color: #c0c4cc;
+    padding: 40px 0;
+    font-size: 14px;
+  }}
+}}
+""",
+    }
+
+
+def _web_login_template(name: str) -> Dict[str, str]:
+    """自定义登录页模板 — 完整 Vue 项目"""
+    pascal = "".join(w.capitalize() for w in name.split("-"))
+    full_name = f"apaas-custom-{name}"
+    apaas_config = {
+        "entry": "index.js",
+        "router": {full_name: full_name},
+        "outputName": full_name,
+    }
+    return {
+        "src/apaas.json": json.dumps(apaas_config, indent=2, ensure_ascii=False),
+        "src/index.js": f"""import LoginPage from './login.vue'
+
+const install = function(Vue) {{
+  Vue.component('apaas-custom-{name}', LoginPage)
+}}
+
+export default {{ install }}
+""",
+        "src/login.vue": f"""<template>
+  <div class="custom-login-page">
+    <div class="login-container">
+      <div class="login-header">
+        <h1>{{{{ title }}}}</h1>
+        <p>欢迎使用</p>
+      </div>
+      <el-form ref="loginForm" :model="form" :rules="rules" class="login-form">
+        <el-form-item prop="username">
+          <el-input v-model="form.username" prefix-icon="el-icon-user" placeholder="请输入账号" />
+        </el-form-item>
+        <el-form-item prop="password">
+          <el-input v-model="form.password" prefix-icon="el-icon-lock" placeholder="请输入密码"
+            type="password" show-password @keyup.enter.native="handleLogin" />
+        </el-form-item>
+        <el-button type="primary" :loading="loading" class="login-btn" @click="handleLogin">
+          登 录
+        </el-button>
+      </el-form>
+    </div>
+  </div>
+</template>
+
+<script>
+export default {{
+  name: '{pascal}Login',
+  data() {{
+    return {{
+      title: '系统登录',
+      loading: false,
+      form: {{ username: '', password: '' }},
+      rules: {{
+        username: [{{ required: true, message: '请输入账号', trigger: 'blur' }}],
+        password: [{{ required: true, message: '请输入密码', trigger: 'blur' }}],
+      }},
+    }}
+  }},
+  methods: {{
+    handleLogin() {{
+      this.$refs.loginForm.validate(async (valid) => {{
+        if (!valid) return
+        this.loading = true
+        try {{
+          // TODO: 调用登录接口
+          // const res = await this.$request(...)
+          // 登录成功后跳转
+          // window.location.href = '/app/callback/apaas/index.html'
+        }} catch (e) {{
+          this.$message.error(e.message || '登录失败')
+        }} finally {{
+          this.loading = false
+        }}
+      }})
+    }},
+  }},
+}}
+</script>
+
+<style scoped>
+.custom-login-page {{
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}}
+.login-container {{
+  width: 400px;
+  padding: 40px;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.15);
+}}
+.login-header {{
+  text-align: center;
+  margin-bottom: 30px;
+}}
+.login-header h1 {{
+  margin: 0 0 8px;
+  font-size: 28px;
+  color: #303133;
+}}
+.login-header p {{
+  margin: 0;
+  color: #909399;
+}}
+.login-btn {{
+  width: 100%;
+  height: 44px;
+  font-size: 16px;
+  margin-top: 10px;
+}}
+</style>
+""",
+        "env.tmpl.js": """// 环境变量模板 - 部署时替换
+window.GLOBAL_ENV = {
+  ENV: '${ENV}',           // GRAY / OL
+  SSO_URL: '${SSO_URL}',  // SSO 登录地址
+  API_BASE: '${API_BASE}', // 后端 API 地址
+  CALLBACK_URL: '${CALLBACK_URL}', // 登录回调地址
+}
 """,
     }
