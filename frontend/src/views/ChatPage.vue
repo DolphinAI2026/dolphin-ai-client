@@ -1931,7 +1931,13 @@ const handleDocUpload = async (e: Event) => {
       if (pmsg) {
         phases.complete.status = 'done'
         phases.complete.detail = `${store.preview.models.length} 模型, ${store.preview.dicts.length} 字典, ${store.preview.roles.length} 角色`
-        pmsg.content = buildProgressContent() + '\n\n你可以调整配置，或点击"开始生成"部署到平台。'
+        if (!store.connected) {
+          pmsg.content = buildProgressContent() + '\n\n配置已就绪！请先连接得帆云平台环境，然后点击"开始生成"部署。'
+          // 自动弹出连接弹窗
+          store.showConnectModal = true
+        } else {
+          pmsg.content = buildProgressContent() + '\n\n你可以调整配置，或点击"开始生成"部署到平台。'
+        }
       }
     } else if (pmsg) {
       pmsg.content += '\n\n⚠️ 解析完成但未获取到配置数据'
