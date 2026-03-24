@@ -470,12 +470,9 @@ async def _execute_step_impl(
                 dict_id = dict_obj.get("id")
                 existing_opts = {o.get("optionName") for o in dict_obj.get("options", [])}
                 new_opts = [o for o in d["options"] if o["name"] not in existing_opts]
-                for o in new_opts:
+                for i, o in enumerate(new_opts):
                     oc = _sanitize_code(o.get("code", o["name"]))
-                    await client.create_dict_options(apaas_app_id, dict_id, [{
-                        "optionName": o["name"],
-                        "optionCode": oc,
-                    }])
+                    await client.add_dict_option(apaas_app_id, dict_id, oc, o["name"], display_order=i)
         return {"dict": d["name"], "options": len(d.get("options", []))}
 
     elif step_key.startswith("create_model:"):
