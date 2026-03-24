@@ -1332,6 +1332,7 @@ async def _extract_project_name(generator: CodingGenerator, message: str) -> str
 
     # 1. 关键词直接映射（最快、最可靠）
     keyword_map = {
+        # 组件类
         "甘特图": "gantt-chart", "审批流程": "approval-flow", "审批": "approval",
         "进度条": "progress-bar", "评分": "star-rating", "颜色选择": "color-picker",
         "标签": "tag-input", "图表分析": "chart-analysis", "图表": "chart",
@@ -1339,11 +1340,27 @@ async def _extract_project_name(generator: CodingGenerator, message: str) -> str
         "上传": "upload", "头像": "avatar", "签名": "signature", "二维码": "qrcode",
         "地图": "map-view", "富文本": "rich-text", "树形": "tree-select",
         "级联": "cascader", "数据表格": "data-table", "表格": "data-table",
-        "看板": "kanban", "数据查询": "data-query", "供应商": "supplier",
-        "采购": "purchase", "客户管理": "customer", "工单": "work-order",
-        "派工": "dispatch", "订单": "order", "库存": "inventory",
-        "考勤": "attendance", "报表": "report", "仪表盘": "dashboard",
-        "弹窗选择": "popup-select", "人员选择": "person-select",
+        "看板": "kanban", "数据查询": "data-query", "弹窗选择": "popup-select",
+        "人员选择": "person-select", "图片识别": "image-recognition",
+        "截图": "screenshot", "AI分析": "ai-analysis", "拍照": "camera",
+        "水印": "watermark", "倒计时": "countdown", "步骤条": "steps",
+        "时间轴": "timeline", "轮播": "carousel", "抽屉": "drawer",
+        "物料选择": "material-select", "地图选点": "map-picker",
+        # 页面类
+        "供应商管理": "supplier-mgmt", "供应商": "supplier",
+        "采购管理": "purchase-mgmt", "采购": "purchase",
+        "客户管理": "customer-mgmt", "客户": "customer",
+        "工单管理": "work-order-mgmt", "工单": "work-order",
+        "派工管理": "dispatch-mgmt", "派工": "dispatch", "智能派工": "smart-dispatch",
+        "订单管理": "order-mgmt", "订单": "order",
+        "库存管理": "inventory-mgmt", "库存": "inventory",
+        "考勤管理": "attendance-mgmt", "考勤": "attendance",
+        "报表": "report", "仪表盘": "dashboard", "数据分析": "data-analysis",
+        "设备管理": "device-mgmt", "设备": "device",
+        "项目管理": "project-mgmt", "任务管理": "task-mgmt",
+        "合同管理": "contract-mgmt", "合同": "contract",
+        "费用管理": "expense-mgmt", "费用": "expense",
+        "预算管理": "budget-mgmt", "预算": "budget",
     }
     msg_lower = message.lower()
     for cn, en in keyword_map.items():
@@ -1351,10 +1368,10 @@ async def _extract_project_name(generator: CodingGenerator, message: str) -> str
             return en
 
     # 2. 从中文需求中提取核心名词（正则）
-    # 匹配 "做一个XXX组件/页面" 中的 XXX
     patterns = [
-        r'(?:做|开发|创建|实现|搭建|写)一?个?\s*(.{2,8}?)(?:组件|页面|模块|系统|功能)',
-        r'(.{2,8}?)(?:组件|页面|模块|系统)(?:开发|设计|需求)',
+        r'(?:做|开发|创建|实现|搭建|写|生成)一?个?\s*(.{2,12}?)(?:的?\s*(?:组件|页面|模块|系统|功能|弹窗|选择器|面板))',
+        r'(.{2,12}?)(?:组件|页面|模块|系统|弹窗|选择器)(?:的?\s*(?:开发|设计|需求))',
+        r'(?:做|开发|创建|实现)一?个?\s*(.{2,12}?)$',
     ]
     for pat in patterns:
         m = re.search(pat, message)

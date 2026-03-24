@@ -2841,7 +2841,7 @@ watch(conversationId, (id) => {
 }
 .deployed-link { background: none; border: none; color: #a78bfa; cursor: pointer; font-size: 12px; text-decoration: underline; margin-left: 8px; }
 .status-tag.talking { background: rgba(124,58,237,0.15); color: #a78bfa; }
-.stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 16px; }
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(80px, 1fr)); gap: 8px; margin-bottom: 16px; }
 .stat-card { border-radius: 12px; padding: 12px; text-align: center; border: 1px solid rgba(255,255,255,0.06); }
 .stat-card.indigo { background: rgba(99,102,241,0.1); }
 .stat-card.emerald { background: rgba(16,185,129,0.1); }
@@ -2894,22 +2894,22 @@ watch(conversationId, (id) => {
 .gen-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* ── 模型 ── */
-.model-card { border: 1px solid rgba(255,255,255,0.06); border-radius: 12px; overflow: hidden; margin-bottom: 12px; background: #161622; }
-.model-header { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: rgba(255,255,255,0.03); font-size: 12px; }
+.model-card { border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; overflow: hidden; margin-bottom: 12px; background: #1e1e26; }
+.model-header { display: flex; align-items: center; gap: 8px; padding: 10px 12px; background: rgba(255,255,255,0.03); font-size: 12px; }
 .model-name { font-weight: 600; color: rgba(255,255,255,0.9); }
 .model-code { margin-left: auto; font-size: 10px; color: rgba(255,255,255,0.35); font-family: monospace; }
 .field-list { }
-.field-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 12px; height: 36px; border-top: 1px solid rgba(255,255,255,0.04); }
-.field-row:hover { background: rgba(255,255,255,0.03); }
-.field-left { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.field-icon { width: 22px; min-width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; font-size: 11px; background: rgba(255,255,255,0.06); border-radius: 4px; color: rgba(255,255,255,0.5); overflow: hidden; white-space: nowrap; }
-.field-name { font-size: 12px; color: rgba(255,255,255,0.8); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.req { color: #f87171; font-size: 10px; margin-left: 2px; }
-.field-right { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
-.ftag { font-size: 10px; padding: 1px 6px; border-radius: 3px; white-space: nowrap; }
+.field-row { display: flex; justify-content: space-between; align-items: center; padding: 0 12px; height: 44px; min-height: 44px; border-top: 1px solid rgba(255,255,255,0.04); transition: background 0.15s; }
+.field-row:hover { background: rgba(255,255,255,0.04); }
+.field-left { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
+.field-icon { width: 24px; min-width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-size: 12px; background: rgba(255,255,255,0.06); border-radius: 6px; color: rgba(255,255,255,0.5); flex-shrink: 0; }
+.field-name { font-size: 13px; color: rgba(255,255,255,0.85); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.req { color: #f87171; font-size: 10px; margin-left: 2px; flex-shrink: 0; }
+.field-right { display: flex; align-items: center; gap: 6px; flex-shrink: 0; margin-left: 12px; }
+.ftag { font-size: 10px; padding: 2px 8px; border-radius: 4px; white-space: nowrap; line-height: 1.4; }
 .ftag.dict { background: rgba(245,158,11,0.12); color: #fbbf24; }
 .ftag.ref { background: rgba(96,165,250,0.12); color: #60a5fa; }
-.ftype { font-size: 10px; color: rgba(255,255,255,0.35); white-space: nowrap; }
+.ftype { font-size: 11px; color: rgba(255,255,255,0.35); white-space: nowrap; }
 
 /* 模型选择 */
 .model-select-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; padding: 8px 12px; background: rgba(255,255,255,0.04); border-radius: 8px; }
