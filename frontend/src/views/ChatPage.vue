@@ -151,7 +151,7 @@
 
           <!-- 文档预览弹窗 -->
           <el-dialog v-model="docPreviewVisible" :title="docPreviewTitle" width="70%" class="doc-preview-dialog" :append-to-body="true">
-            <div class="doc-preview-body" v-html="formatContent(docPreviewContent)"></div>
+            <div class="doc-preview-body markdown-body" v-html="renderMarkdown(docPreviewContent)"></div>
           </el-dialog>
 
           <!-- 文档对比弹窗 -->
@@ -620,6 +620,7 @@ import { applicationApi } from '@/api/application'
 import { incrementalApi, type DiffResponse, type ExecuteResponse } from '@/api/incremental'
 import { conversationApi, type ConversationWithApp } from '@/api/conversation'
 import { projectsApi } from '@/api/projects'
+import { marked } from 'marked'
 import type { Project, ProjectMember } from '@/api/projects'
 import ConnectModal from '@/components/ConnectModal.vue'
 import ProjectSettingsModal from '@/components/ProjectSettingsModal.vue'
@@ -2514,6 +2515,11 @@ const sendMessage = async () => {
   }
 }
 
+const renderMarkdown = (t: string) => {
+  if (!t) return '<p>（无内容）</p>'
+  return marked.parse(t, { breaks: true, gfm: true }) as string
+}
+
 const formatContent = (t: string) => {
   // 隐藏JSON代码块，只显示文字部分
   let text = t.replace(/```json[\s\S]*?```/g, '')
@@ -2970,11 +2976,21 @@ watch(conversationId, (id) => {
   font-size: 13px; line-height: 1.7; color: rgba(255,255,255,0.85);
   background: #111; border-radius: 8px;
 }
-.doc-preview-body :deep(h1),
-.doc-preview-body :deep(h2),
-.doc-preview-body :deep(h3) { color: rgba(255,255,255,0.95); margin-top: 16px; }
-.doc-preview-body :deep(code) { background: rgba(255,255,255,0.06); padding: 2px 6px; border-radius: 4px; font-size: 12px; }
+.doc-preview-body :deep(h1) { font-size: 20px; color: #fff; margin: 20px 0 12px; padding-bottom: 8px; border-bottom: 1px solid rgba(255,255,255,0.1); }
+.doc-preview-body :deep(h2) { font-size: 17px; color: rgba(255,255,255,0.95); margin: 18px 0 10px; }
+.doc-preview-body :deep(h3) { font-size: 15px; color: rgba(255,255,255,0.9); margin: 14px 0 8px; }
+.doc-preview-body :deep(h4) { font-size: 13px; color: rgba(255,255,255,0.85); margin: 10px 0 6px; }
+.doc-preview-body :deep(p) { margin: 6px 0; }
+.doc-preview-body :deep(ul), .doc-preview-body :deep(ol) { padding-left: 20px; margin: 6px 0; }
+.doc-preview-body :deep(li) { margin: 3px 0; }
+.doc-preview-body :deep(code) { background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 4px; font-size: 12px; }
 .doc-preview-body :deep(pre) { background: rgba(255,255,255,0.04); padding: 12px; border-radius: 8px; overflow-x: auto; }
+.doc-preview-body :deep(table) { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 12px; }
+.doc-preview-body :deep(th) { background: rgba(124,58,237,0.15); color: #c4b5fd; text-align: left; padding: 8px 12px; border: 1px solid rgba(255,255,255,0.1); font-weight: 600; }
+.doc-preview-body :deep(td) { padding: 6px 12px; border: 1px solid rgba(255,255,255,0.06); }
+.doc-preview-body :deep(tr:hover td) { background: rgba(255,255,255,0.03); }
+.doc-preview-body :deep(strong) { color: #c4b5fd; }
+.doc-preview-body :deep(hr) { border: none; border-top: 1px solid rgba(255,255,255,0.1); margin: 16px 0; }
 
 /* 文档对比弹窗 */
 :deep(.doc-diff-dialog) .el-dialog { background: #1a1a2e; color: rgba(255,255,255,0.9); }
