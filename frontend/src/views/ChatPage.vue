@@ -223,7 +223,10 @@
             </div>
             <!-- 开始生成（部署到平台） -->
             <!-- 开始生成 / 已部署状态 -->
-            <div v-if="deployAllDone && !hasConfigChanged" class="deployed-banner">✅ 已部署到平台</div>
+            <div v-if="deployAllDone && !hasConfigChanged" class="deployed-banner">
+              <span>✅ 已部署到平台</span>
+              <button class="view-deploy-btn" @click="openDeployPanel">查看部署记录</button>
+            </div>
             <button v-else-if="!assembling && store.preview.models.length > 0 && (store.currentApp?.status === 'ready' || store.currentApp?.status === 'conversation' || store.currentApp?.status === 'draft' || hasConfigChanged)" class="gen-btn" :disabled="generating" @click="startGenerate">{{ generating ? '创建中...' : hasConfigChanged ? '⚡ 更新配置并部署' : deployAppId ? '⚡ 重新部署' : '⚡ 开始生成' }}</button>
           </div>
 
@@ -1369,6 +1372,14 @@ const deployGroups = computed(() => {
     return { ...d, steps: ss, allDone: ss.length > 0 && ss.every(s => s.status === 'completed'), hasError: ss.some(s => s.status === 'error'), doneCount: ss.filter(s => s.status === 'completed').length }
   }).filter(d => d.steps.length > 0)
 })
+
+async function openDeployPanel() {
+  if (existingAppId.value) {
+    deployAppId.value = existingAppId.value
+    deployOpen.value = true
+    await loadDeployStatus()
+  }
+}
 
 async function loadDeployStatus() {
   if (!deployAppId.value) return
@@ -3133,9 +3144,14 @@ watch(conversationId, (id) => {
 .status-tag.ready { background: rgba(16,185,129,0.15); color: #34d399; }
 .status-tag.deployed { background: rgba(96,165,250,0.15); color: #60a5fa; }
 .deployed-banner {
-  text-align: center; padding: 10px; border-radius: 12px; font-size: 13px; font-weight: 500; margin-top: 8px;
+  display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; border-radius: 12px; font-size: 13px; font-weight: 500; margin-top: 8px;
   background: rgba(96,165,250,0.1); color: #60a5fa; border: 1px solid rgba(96,165,250,0.15);
 }
+.view-deploy-btn {
+  background: none; border: 1px solid rgba(96,165,250,0.3); color: #60a5fa; cursor: pointer;
+  font-size: 11px; padding: 3px 10px; border-radius: 6px; transition: all 0.2s;
+}
+.view-deploy-btn:hover { background: rgba(96,165,250,0.15); }
 .deployed-link { background: none; border: none; color: #a78bfa; cursor: pointer; font-size: 12px; text-decoration: underline; margin-left: 8px; }
 .status-tag.talking { background: rgba(124,58,237,0.15); color: #a78bfa; }
 .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(80px, 1fr)); gap: 8px; margin-bottom: 16px; }
