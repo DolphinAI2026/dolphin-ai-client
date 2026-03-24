@@ -280,34 +280,53 @@ async def execute_step(
         await db.commit()
         return StepExecuteResponse(step=step_key, status="completed", result={"message": "平台应用已存在，跳过创建"})
 
-    # 获取用户的 apaas 连接信息（优先使用项目级 token 并自动刷新）
-    user_result = await db.execute(select(User).where(User.id == ctx.user.id))
-    user = user_result.scalar_one()
+    # 获取连接信息：优先从 PlatformEnv → 回退到 User
+    from app.models import PlatformEnv
+    env = None
+    if hasattr(app, 'platform_env_id') and app.platform_env_id:
+        env_result = await db.execute(select(PlatformEnv).where(PlatformEnv.id == app.platform_env_id))
+        env = env_result.scalar_one_or_none()
 
-    # 尝试从项目获取 token（带自动刷新）
-    from app.models import Project
-    from app.routes.projects import ensure_platform_token
-    project_result = await db.execute(
-        select(Project).where(Project.id == app.project_id) if hasattr(app, 'project_id') and app.project_id else select(Project).where(Project.user_id == ctx.user.id).order_by(Project.updated_at.desc()).limit(1)
-    )
-    project = project_result.scalar_one_or_none()
+    if not env:
+        # 回退：查找默认环境
+        env_result = await db.execute(
+            select(PlatformEnv).where(PlatformEnv.tenant_id == ctx.tenant_id, PlatformEnv.is_default == True)
+        )
+        env = env_result.scalar_one_or_none()
 
-    if project and project.platform_url:
-        try:
-            token = await ensure_platform_token(project, db)
-            # 同步更新 user 表
-            user.apaas_token = token
-            await db.commit()
-        except Exception:
-            pass  # fallback to user token
+    if env and env.token:
+        client = APaaSClient(
+            base_url=env.base_url,
+            tenant_id=env.platform_tenant_id,
+            token=env.token,
+        )
+    else:
+        # 最终回退：用户级连接（兼容旧逻辑）
+        user_result = await db.execute(select(User).where(User.id == ctx.user.id))
+        user = user_result.scalar_one()
 
-    if not user.apaas_token:
-        raise HTTPException(status_code=400, detail="未连接得帆云平台，请在项目设置中连接")
-    client = APaaSClient(
-        base_url=user.apaas_base_url or (project.platform_url if project else None),
-        tenant_id=user.apaas_tenant_id or (project.platform_tenant_id if project else None),
-        token=user.apaas_token,
-    )
+        from app.models import Project
+        from app.routes.projects import ensure_platform_token
+        project_result = await db.execute(
+            select(Project).where(Project.id == app.project_id) if hasattr(app, 'project_id') and app.project_id else select(Project).where(Project.user_id == ctx.user.id).order_by(Project.updated_at.desc()).limit(1)
+        )
+        project = project_result.scalar_one_or_none()
+
+        if project and project.platform_url:
+            try:
+                token = await ensure_platform_token(project, db)
+                user.apaas_token = token
+                await db.commit()
+            except Exception:
+                pass
+
+        if not user.apaas_token:
+            raise HTTPException(status_code=400, detail="未配置平台环境，请在环境管理中添加并连接")
+        client = APaaSClient(
+            base_url=user.apaas_base_url or (project.platform_url if project else None),
+            tenant_id=user.apaas_tenant_id or (project.platform_tenant_id if project else None),
+            token=user.apaas_token,
+        )
 
     # 执行（加并发锁保护）
     async with acquire_app_lock(app_id, f"步骤执行:{step_key}"):

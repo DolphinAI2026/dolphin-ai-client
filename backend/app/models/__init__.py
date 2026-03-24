@@ -155,6 +155,24 @@ class ConfigSnapshot(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class PlatformEnv(Base):
+    """平台环境配置"""
+    __tablename__ = "platform_envs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    env_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    base_url: Mapped[str] = mapped_column(String(255), nullable=False)
+    platform_tenant_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    username: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    password_enc: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="disconnected", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
 class Application(Base):
     __tablename__ = "applications"
 
@@ -165,6 +183,7 @@ class Application(Base):
     created_by: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     conversation_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     project_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)  # 过渡字段，兼容旧 Project
+    platform_env_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("platform_envs.id"), nullable=True, index=True)
 
     # 平台环境配置（从 Project 合并过来）
     platform_url: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)

@@ -561,6 +561,7 @@
     </div>
 
     <ConnectModal v-model="store.showConnectModal" />
+    <EnvSelectModal v-model="showEnvSelect" @selected="onEnvSelected" />
     <ProjectSettingsModal
       v-model="showProjectSettingsModal"
       :project="editingProject"
@@ -623,6 +624,8 @@ import { projectsApi } from '@/api/projects'
 import { marked } from 'marked'
 import type { Project, ProjectMember } from '@/api/projects'
 import ConnectModal from '@/components/ConnectModal.vue'
+import EnvSelectModal from '@/components/EnvSelectModal.vue'
+import { platformEnvApi } from '@/api/platformEnv'
 import ProjectSettingsModal from '@/components/ProjectSettingsModal.vue'
 import ConfigDiff from '@/components/ConfigDiff.vue'
 import UpdateSteps from '@/components/UpdateSteps.vue'
@@ -1084,6 +1087,15 @@ const removeDict = (idx: number) => {
 const conversationId = ref<number | null>(null)
 const existingAppId = ref<number | null>(null)  // 从"继续完善"进来时，关联的已有应用ID
 const generating = ref(false)
+const showEnvSelect = ref(false)
+const selectedEnvId = ref<number | null>(null)
+
+const onEnvSelected = (envId: number) => {
+  selectedEnvId.value = envId
+  showEnvSelect.value = false
+  // 继续生成流程
+  startGenerateWithEnv(envId)
+}
 
 // ── 对话历史 ──
 const conversationList = ref<ConversationWithApp[]>([])
@@ -1534,22 +1546,49 @@ const toggleModelSelect = (idx: number) => {
 }
 
 const startGenerate = async () => {
-  if (!store.connected) {
-    ElMessage.warning('请先连接得帆云平台')
-    store.showConnectModal = true
-    return
+  // 检查是否已部署到平台（有 apaas_app_id）
+  if (existingAppId.value) {
+    const existingApp = await applicationApi.get(existingAppId.value)
+    if ((existingApp as any).apaas_app_id) {
+      await startIncrementalUpdate(existingAppId.value)
+      return
+    }
+    // 应用已绑定环境？直接继续
+    if ((existingApp as any).platform_env_id) {
+      selectedEnvId.value = (existingApp as any).platform_env_id
+    }
   }
-  generating.value = true
-  try {
-    // 检查是否已部署到平台（有 apaas_app_id）
-    if (existingAppId.value) {
-      const existingApp = await applicationApi.get(existingAppId.value)
-      if ((existingApp as any).apaas_app_id) {
-        // 已部署，进行增量更新流程
-        await startIncrementalUpdate(existingAppId.value)
+
+  // 检查是否有可用环境
+  if (!selectedEnvId.value) {
+    try {
+      const envs = await platformEnvApi.list()
+      const defaultEnv = envs.find(e => e.is_default && e.status === 'connected')
+      if (defaultEnv) {
+        selectedEnvId.value = defaultEnv.id
+      } else if (envs.some(e => e.status === 'connected')) {
+        // 有已连接环境但没默认，弹出选择
+        showEnvSelect.value = true
+        return
+      } else {
+        // 没有任何已连接环境
+        ElMessage.warning('请先在环境管理中添加并连接平台环境')
+        router.push('/platform-envs')
         return
       }
+    } catch {
+      ElMessage.warning('请先在环境管理中添加平台环境')
+      router.push('/platform-envs')
+      return
     }
+  }
+
+  await startGenerateWithEnv(selectedEnvId.value!)
+}
+
+const startGenerateWithEnv = async (envId: number) => {
+  generating.value = true
+  try {
 
     // 未部署，执行全量生成流程 — 让用户确认/修改应用编码
     const defaultCode = 'app' + Date.now().toString(36)
@@ -1578,6 +1617,7 @@ const startGenerate = async () => {
       app_name: store.preview.appName,
       app_code: appCode,
       description: store.preview.appName,
+      platform_env_id: envId,
       config_preview: {
         type: 'preview',
         data: { ...store.preview },
