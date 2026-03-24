@@ -1558,6 +1558,20 @@ const startGenerate = async () => {
   if (existingAppId.value) {
     const existingApp = await applicationApi.get(existingAppId.value)
     if ((existingApp as any).apaas_app_id) {
+      // 先检查是否有未完成的步骤 — 如果有，直接打开部署面板继续
+      try {
+        const stepStatus = await applicationApi.getStepStatus(existingAppId.value)
+        const steps = stepStatus.steps || []
+        const hasIncomplete = steps.some((s: any) => s.status !== 'completed')
+        if (hasIncomplete) {
+          // 有未完成步骤，直接打开部署面板继续
+          deployAppId.value = existingAppId.value
+          deployOpen.value = true
+          await loadDeployStatus()
+          return
+        }
+      } catch { /* ignore, fall through to incremental */ }
+      // 所有步骤都完成了，走增量更新流程
       await startIncrementalUpdate(existingAppId.value)
       return
     }
