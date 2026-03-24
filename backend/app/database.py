@@ -50,6 +50,15 @@ async def init_db():
             "ALTER TABLE document_versions ADD COLUMN parent_version INTEGER",
             # conversation_id for doc versions created before application exists
             "ALTER TABLE document_versions ADD COLUMN conversation_id INTEGER",
+            # Application 合并 Project 平台配置 + conversation_id 改可选
+            "ALTER TABLE applications ADD COLUMN project_id INTEGER",
+            "ALTER TABLE applications ADD COLUMN platform_url VARCHAR(255)",
+            "ALTER TABLE applications ADD COLUMN platform_tenant_id VARCHAR(50)",
+            "ALTER TABLE applications ADD COLUMN platform_token TEXT",
+            "ALTER TABLE applications ADD COLUMN platform_username VARCHAR(100)",
+            "ALTER TABLE applications ADD COLUMN platform_password_enc TEXT",
+            # conversation_id 改为可空（MySQL ALTER COLUMN MODIFY）
+            "ALTER TABLE applications MODIFY COLUMN conversation_id INTEGER NULL",
         ]:
             try:
                 await conn.execute(text(stmt))

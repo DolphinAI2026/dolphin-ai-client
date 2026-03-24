@@ -343,6 +343,98 @@ async def create_application(
     return resp
 
 
+class AutoCreateRequest(BaseModel):
+    """前端首次生成配置时自动创建应用"""
+    app_name: str
+    config_preview: dict
+    conversation_id: Optional[int] = None
+
+
+class AutoCreateResponse(BaseModel):
+    app_id: int
+    app_name: str
+    app_code: str
+    is_new: bool  # True=新建, False=已存在
+
+
+@router.post("/auto-create", response_model=AutoCreateResponse)
+async def auto_create_application(
+    data: AutoCreateRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)]
+):
+    """首次生成配置时自动创建 Application。
+
+    如果 conversation_id 已有关联应用，返回已有应用（不重复创建）。
+    否则创建新的 draft 应用。
+    """
+    # 如果有 conversation_id，检查是否已有关联应用
+    if data.conversation_id:
+        result = await db.execute(
+            select(Application).where(
+                Application.conversation_id == data.conversation_id,
+                Application.tenant_id == ctx.tenant_id,
+            )
+        )
+        existing = result.scalar_one_or_none()
+        if existing:
+            # 更新配置
+            existing.config_preview = json.dumps(data.config_preview, ensure_ascii=False)
+            existing.app_name = data.app_name
+            await db.commit()
+            return AutoCreateResponse(
+                app_id=existing.id,
+                app_name=existing.app_name,
+                app_code=existing.app_code,
+                is_new=False,
+            )
+
+    # 生成 app_code
+    import hashlib
+    code_base = data.app_name.lower().replace(" ", "_")
+    ascii_code = ''.join(c for c in code_base if c.isascii() and (c.isalnum() or c == '_'))
+    if len(ascii_code) < 2:
+        ascii_code = "app_" + hashlib.md5(data.app_name.encode()).hexdigest()[:6]
+
+    config_str = json.dumps(data.config_preview, ensure_ascii=False)
+    app = Application(
+        user_id=ctx.user.id,
+        tenant_id=ctx.tenant_id,
+        created_by=ctx.user.id,
+        conversation_id=data.conversation_id,
+        app_name=data.app_name,
+        app_code=ascii_code,
+        config_preview=config_str,
+        status="draft",
+    )
+    db.add(app)
+    await db.commit()
+    await db.refresh(app)
+
+    # 关联已有的 DocumentVersion
+    if data.conversation_id:
+        try:
+            result = await db.execute(
+                select(DocumentVersion).where(
+                    DocumentVersion.conversation_id == data.conversation_id,
+                    DocumentVersion.application_id.is_(None),
+                )
+            )
+            for v in result.scalars().all():
+                v.application_id = app.id
+            await db.commit()
+        except Exception as e:
+            logger.warning(f"auto-create: link DocumentVersions failed: {e}")
+
+    logger.info(f"auto-create: app_id={app.id}, app_name={app.app_name}")
+    return AutoCreateResponse(
+        app_id=app.id,
+        app_name=app.app_name,
+        app_code=app.app_code,
+        is_new=True,
+    )
+
+
 @router.put("/{app_id}", response_model=ApplicationResponse)
 async def update_application(
     app_id: int,
@@ -373,6 +465,47 @@ async def update_application(
     await db.commit()
     await db.refresh(app)
     return _enrich(app)
+
+
+class PlatformConfigUpdate(BaseModel):
+    """更新应用的平台环境配置"""
+    platform_url: Optional[str] = None
+    platform_tenant_id: Optional[str] = None
+    platform_username: Optional[str] = None
+    platform_password_enc: Optional[str] = None
+
+
+@router.patch("/{app_id}/platform-config")
+async def update_platform_config(
+    app_id: int,
+    data: PlatformConfigUpdate,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """更新应用的平台环境配置"""
+    result = await db.execute(
+        select(Application).where(
+            Application.id == app_id,
+            Application.tenant_id == ctx.tenant_id,
+        )
+    )
+    app = result.scalar_one_or_none()
+    if not app:
+        raise HTTPException(status_code=404, detail="应用不存在")
+
+    await check_resource_permission(ctx, db, app, "application", Action.EDIT)
+
+    if data.platform_url is not None:
+        app.platform_url = data.platform_url
+    if data.platform_tenant_id is not None:
+        app.platform_tenant_id = data.platform_tenant_id
+    if data.platform_username is not None:
+        app.platform_username = data.platform_username
+    if data.platform_password_enc is not None:
+        app.platform_password_enc = data.platform_password_enc
+
+    await db.commit()
+    return {"success": True, "message": "平台配置已更新"}
 
 
 @router.delete("/{app_id}")

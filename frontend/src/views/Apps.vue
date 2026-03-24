@@ -42,7 +42,7 @@
             <template v-if="a.source === 'local'">
               <button v-if="a.local_status === 'draft' || a.local_status === 'failed'" class="action-primary" @click="router.push({ path: '/chat', query: { deploy_app_id: String(a.id) } })">生成到平台</button>
               <button v-if="a.local_status === 'completed' && a.apaas_app_id" class="action-primary" @click="router.push({ path: '/chat', query: { deploy_app_id: String(a.id) } })">重新生成</button>
-              <button class="action-secondary" @click="router.push(a.conversation_id ? `/chat/${a.conversation_id}?app_id=${a.id}` : '/chat')">继续完善</button>
+              <button class="action-secondary" @click="router.push({ path: '/chat', query: { app_id: String(a.id) } })">继续完善</button>
               <button class="action-danger" @click="confirmDelete(a)">删除</button>
             </template>
             <template v-else-if="a.source === 'remote'">
@@ -51,7 +51,7 @@
             <template v-else>
               <a v-if="a.apaas_url" :href="a.apaas_url" target="_blank" class="action-primary">在平台中打开</a>
               <button class="action-primary" @click="router.push({ path: '/chat', query: { deploy_app_id: String(a.id) } })">重新生成</button>
-              <button class="action-secondary" @click="router.push(a.conversation_id ? `/chat/${a.conversation_id}?app_id=${a.id}` : '/chat')">继续完善</button>
+              <button class="action-secondary" @click="router.push({ path: '/chat', query: { app_id: String(a.id) } })">继续完善</button>
               <button class="action-danger" @click="confirmDelete(a)">删除</button>
             </template>
           </div>

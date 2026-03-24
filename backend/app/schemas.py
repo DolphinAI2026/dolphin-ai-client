@@ -80,11 +80,14 @@ class MessageResponse(BaseModel):
 
 # Application schemas
 class ApplicationCreate(BaseModel):
-    conversation_id: int
+    conversation_id: Optional[int] = None
     app_name: str
     app_code: str
     description: Optional[str] = None
     config_preview: Optional[dict] = None
+    # 平台环境配置（可选）
+    platform_url: Optional[str] = None
+    platform_tenant_id: Optional[str] = None
 
 
 class ApplicationResponse(BaseModel):

@@ -163,7 +163,15 @@ class Application(Base):
     tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
     team_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("teams.id"), nullable=True, index=True)
     created_by: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
-    conversation_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    conversation_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    project_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)  # 过渡字段，兼容旧 Project
+
+    # 平台环境配置（从 Project 合并过来）
+    platform_url: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    platform_tenant_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    platform_token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    platform_username: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    platform_password_enc: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     apaas_app_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     app_name: Mapped[str] = mapped_column(String(100), nullable=False)
     app_code: Mapped[str] = mapped_column(String(50), nullable=False)

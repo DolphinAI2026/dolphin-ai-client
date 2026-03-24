@@ -8,11 +8,19 @@ export const applicationApi = {
   get(id: number) {
     return request.get<any, Application>(`/applications/${id}`)
   },
-  create(data: { conversation_id: number; app_name: string; app_code: string; description?: string; config_preview?: any }) {
+  create(data: { conversation_id?: number; app_name: string; app_code: string; description?: string; config_preview?: any }) {
     return request.post<any, Application>('/applications', data)
   },
-  update(id: number, data: { conversation_id: number; app_name: string; app_code: string; description?: string; config_preview?: any }) {
+  update(id: number, data: { conversation_id?: number; app_name: string; app_code: string; description?: string; config_preview?: any }) {
     return request.put<any, Application>(`/applications/${id}`, data)
+  },
+  /** 首次生成配置时自动创建应用（不重复创建） */
+  autoCreate(data: { app_name: string; config_preview: any; conversation_id?: number }) {
+    return request.post<any, { app_id: number; app_name: string; app_code: string; is_new: boolean }>('/applications/auto-create', data)
+  },
+  /** 更新应用的平台环境配置 */
+  updatePlatformConfig(appId: number, data: { platform_url?: string; platform_tenant_id?: string; platform_username?: string; platform_password_enc?: string }) {
+    return request.patch<any, { success: boolean }>(`/applications/${appId}/platform-config`, data)
   },
   delete(id: number) {
     return request.delete(`/applications/${id}`)

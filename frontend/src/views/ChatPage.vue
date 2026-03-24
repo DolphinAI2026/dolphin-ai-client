@@ -10,10 +10,10 @@
       </div>
       <div class="nav-right">
         <button class="nav-link" :class="{ active: showProjectsPanel }" @click="showProjectsPanel = !showProjectsPanel">
-          📁 我的项目
+          📁 我的应用
           <span v-if="projects.length" class="project-count">{{ projects.length }}</span>
         </button>
-        <button class="nav-link" @click="openCreateProject">+ 新建项目</button>
+        <button class="nav-link" @click="openCreateProject">+ 新建应用</button>
       </div>
     </nav>
 
@@ -489,12 +489,12 @@
       </div>
     </div>
 
-    <!-- 我的项目面板 -->
+    <!-- 我的应用面板 -->
     <div class="projects-panel" :class="{ open: showProjectsPanel }">
       <div class="projects-header">
-        <h3>我的项目</h3>
+        <h3>我的应用</h3>
         <div class="projects-header-actions">
-          <button class="projects-add-btn" @click="openCreateProject">+ 新建项目</button>
+          <button class="projects-add-btn" @click="openCreateProject">+ 新建应用</button>
           <button class="projects-close-btn" @click="showProjectsPanel = false">✕</button>
         </div>
       </div>
@@ -804,6 +804,21 @@ const extractPreviewData = (content: string) => {
         store.preview.models = parsed.data.models || []
         store.preview.workflows = parsed.data.workflows || []
         store.preview.permissions = parsed.data.permissions || []
+
+        // 自动创建 Application（如果还没有）
+        if (!existingAppId.value && parsed.data.appName) {
+          applicationApi.autoCreate({
+            app_name: parsed.data.appName,
+            config_preview: parsed.data,
+            conversation_id: conversationId.value || undefined,
+          }).then(result => {
+            existingAppId.value = result.app_id
+            router.replace({ query: { ...route.query, app_id: String(result.app_id) } })
+            console.log(`Auto-created app: id=${result.app_id}, is_new=${result.is_new}`)
+          }).catch(e => {
+            console.error('Auto-create application failed:', e)
+          })
+        }
         continue
       }
 
@@ -1712,8 +1727,8 @@ const handleDocUpload = async (e: Event) => {
   if (!file) return
   target.value = '' // reset for re-upload
 
-  // 增量流程：已有配置且有关联应用时，走增量文档上传
-  if (store.preview.models.length > 0 && existingAppId.value) {
+  // 增量流程：已有关联应用时，走增量文档上传（不再依赖 preview 状态）
+  if (existingAppId.value) {
     await handleIncrementalDocUpload(file)
     return
   }
@@ -2463,71 +2478,100 @@ onMounted(async () => {
     }
   } catch (e) { /* ignore */ }
 
-  // 如果URL带了对话ID，加载历史消息和预览数据
-  const idParam = route.params.id as string
-  if (idParam) {
-    const cid = Number(idParam)
-    if (!isNaN(cid)) {
-      conversationId.value = cid
-      // 检查是否从"继续完善"进来（带 app_id 参数）
-      const appIdParam = route.query.app_id as string
-      if (appIdParam) {
-        existingAppId.value = Number(appIdParam)
-      }
+  // ── 优先通过 app_id 加载应用（应用为锚点）──
+  const appIdParam = route.query.app_id as string
+  if (appIdParam) {
+    const aid = Number(appIdParam)
+    if (aid) {
+      existingAppId.value = aid
       try {
-        // 加载历史消息
-        const historyMessages = await conversationApi.getMessages(cid)
-        if (historyMessages && historyMessages.length > 0) {
-          // 清空默认欢迎消息，替换为历史记录
-          messages.splice(0, messages.length)
-          for (const msg of historyMessages) {
-            // 系统消息不显示，但要提取其中的配置 JSON
-            if (msg.role === 'system') {
-              extractPreviewData(msg.content)
-              continue
-            }
-
-            messages.push({
-              id: msg.id,
-              role: msg.role as any,
-              agent: msg.role === 'assistant' ? 'builder' : undefined,
-              content: msg.content,
-              created_at: msg.created_at
-            })
-            // 从assistant消息中提取预览数据
-            if (msg.role === 'assistant') {
-              extractPreviewData(msg.content)
-            }
-          }
-          scrollToBottom()
+        const app = await applicationApi.get(aid) as any
+        // 恢复配置
+        if (app.config_preview) {
+          const data = app.config_preview.data || app.config_preview
+          store.preview.appName = data.appName || app.app_name || ''
+          store.preview.models = data.models || []
+          store.preview.dicts = data.dicts || []
+          store.preview.roles = data.roles || []
+          store.preview.workflows = data.workflows || []
+          store.preview.permissions = data.permissions || []
+          store.currentApp = { name: store.preview.appName, status: 'ready' }
         }
-        // 如果历史消息中没有恢复出配置，尝试从关联应用的 config_preview 恢复
-        if (!store.preview.appName && store.preview.models.length === 0) {
-          try {
-            // 查找和这个对话关联的应用
-            const apps = await applicationApi.list() as any[]
-            const linkedApp = apps.find((a: any) => a.conversation_id === cid && a.config_preview)
-            if (linkedApp?.config_preview) {
-              const data = linkedApp.config_preview.data || linkedApp.config_preview
-              store.preview.appName = data.appName || ''
-              store.preview.models = data.models || []
-              store.preview.dicts = data.dicts || []
-              store.preview.roles = data.roles || []
-              store.preview.workflows = data.workflows || []
-              store.preview.permissions = data.permissions || []
-              store.currentApp = { name: store.preview.appName, status: 'ready' }
-              if (linkedApp.id && typeof linkedApp.id === 'number') {
-                existingAppId.value = linkedApp.id
-              }
-              console.log('Recovered config from linked application:', store.preview.appName)
+        // 加载关联对话的历史消息
+        if (app.conversation_id) {
+          conversationId.value = app.conversation_id
+          const historyMessages = await conversationApi.getMessages(app.conversation_id)
+          if (historyMessages?.length) {
+            messages.splice(0, messages.length)
+            for (const msg of historyMessages) {
+              if (msg.role === 'system') continue
+              messages.push({ id: msg.id, role: msg.role as any, agent: msg.role === 'assistant' ? 'builder' : undefined, content: msg.content, created_at: msg.created_at })
             }
-          } catch (e2) {
-            console.warn('Failed to recover config from app:', e2)
+            scrollToBottom()
           }
         }
-
+        console.log(`Loaded app ${aid}: ${app.app_name}`)
       } catch (e) {
-        console.error('Failed to load conversation history:', e)
+        console.error('Failed to load application:', e)
+      }
+    }
+  }
+  // ── 兼容旧链接：通过 conversation_id 加载 ──
+  else {
+    const idParam = route.params.id as string
+    if (idParam) {
+      const cid = Number(idParam)
+      if (!isNaN(cid)) {
+        conversationId.value = cid
+        try {
+          // 加载历史消息
+          const historyMessages = await conversationApi.getMessages(cid)
+          if (historyMessages && historyMessages.length > 0) {
+            messages.splice(0, messages.length)
+            for (const msg of historyMessages) {
+              if (msg.role === 'system') {
+                extractPreviewData(msg.content)
+                continue
+              }
+              messages.push({
+                id: msg.id,
+                role: msg.role as any,
+                agent: msg.role === 'assistant' ? 'builder' : undefined,
+                content: msg.content,
+                created_at: msg.created_at
+              })
+              if (msg.role === 'assistant') {
+                extractPreviewData(msg.content)
+              }
+            }
+            scrollToBottom()
+          }
+          // 查找关联的应用
+          if (!existingAppId.value) {
+            try {
+              const apps = await applicationApi.list() as any[]
+              const linkedApp = apps.find((a: any) => a.conversation_id === cid && a.config_preview)
+              if (linkedApp?.config_preview) {
+                const data = linkedApp.config_preview.data || linkedApp.config_preview
+                store.preview.appName = data.appName || ''
+                store.preview.models = data.models || []
+                store.preview.dicts = data.dicts || []
+                store.preview.roles = data.roles || []
+                store.preview.workflows = data.workflows || []
+                store.preview.permissions = data.permissions || []
+                store.currentApp = { name: store.preview.appName, status: 'ready' }
+                existingAppId.value = linkedApp.id
+                // 更新 URL 为 app_id 模式
+                router.replace({ path: '/chat', query: { app_id: String(linkedApp.id) } })
+                console.log('Migrated to app-centric URL:', linkedApp.id)
+              }
+            } catch (e2) {
+              console.warn('Failed to recover config from app:', e2)
+            }
+          }
+        } catch (e) {
+          console.error('Failed to load conversation history:', e)
+        }
       }
     }
   }
@@ -3141,7 +3185,7 @@ watch(conversationId, (id) => {
   font-size: 10px; font-weight: 600; margin-left: 4px;
 }
 
-/* ── 我的项目面板 ── */
+/* ── 我的应用面板 ── */
 .projects-panel {
   position: fixed; top: 0; right: 0; bottom: 0; width: 400px;
   background: #111; border-left: 1px solid rgba(255,255,255,0.06);
