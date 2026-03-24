@@ -1204,13 +1204,22 @@ const onConversationSwitch = (newId: number) => {
 }
 
 const startNewConversation = () => {
+  const currentAppId = existingAppId.value
   conversationId.value = null
   selectedConversationId.value = null
-  existingAppId.value = null
-  store.reset()
   messages.splice(0, messages.length)
-  messages.push({ id: 0, role: 'assistant', agent: 'builder', content: '你好！我是 aPaaS 搭建智能体，可以帮你通过对话的方式在得帆云平台上快速搭建应用。\n\n你可以告诉我想要创建什么系统，我会帮你理清需求并自动生成。\n\n比如：\n• "我想做一个客户管理系统"\n• "帮我搭建一个项目管理应用"\n• "创建一个售后服务工单系统"', created_at: '' })
-  router.replace('/chat')
+
+  if (currentAppId) {
+    // 在应用上下文中新建对话：保留应用关联，不清空配置
+    messages.push({ id: 0, role: 'assistant', agent: 'builder', content: `继续完善「${store.preview.appName}」。\n\n你可以：\n• 上传新版本需求文档进行增量更新\n• 描述需要修改的内容\n• 说"开始生成"部署到平台`, created_at: '' })
+    router.replace({ path: '/chat', query: { app_id: String(currentAppId) } })
+  } else {
+    // 全新对话：清空一切
+    existingAppId.value = null
+    store.reset()
+    messages.push({ id: 0, role: 'assistant', agent: 'builder', content: '你好！我是 aPaaS 搭建智能体，可以帮你通过对话的方式在得帆云平台上快速搭建应用。\n\n你可以告诉我想要创建什么系统，我会帮你理清需求并自动生成。\n\n比如：\n• "我想做一个客户管理系统"\n• "帮我搭建一个项目管理应用"\n• "创建一个售后服务工单系统"', created_at: '' })
+    router.replace('/chat')
+  }
 }
 
 // ── 文档版本 ──
@@ -2143,8 +2152,15 @@ const handleIncrementalDocUpload = async (file: File) => {
   scrollToBottom()
 
   try {
+    // 如果没有会话ID，自动创建一个关联到当前应用
     if (!conversationId.value) {
-      throw new Error('会话ID不存在，请先创建或选择一个会话')
+      try {
+        const newConv = await conversationApi.create('builder')
+        conversationId.value = newConv.id
+        selectedConversationId.value = newConv.id
+      } catch {
+        throw new Error('创建会话失败')
+      }
     }
     const token = localStorage.getItem('token')
     const formData = new FormData()
