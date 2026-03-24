@@ -1330,46 +1330,71 @@ async def _extract_project_name(generator: CodingGenerator, message: str) -> str
     """从用户需求中提取项目名称"""
     import re
 
-    # 先用简单规则快速提取（不调 LLM）
+    # 1. 关键词直接映射（最快、最可靠）
     keyword_map = {
-        "甘特图": "gantt-chart", "审批": "approval-flow", "进度条": "progress-bar",
-        "评分": "star-rating", "颜色选择": "color-picker", "标签": "tag-input",
-        "图表": "chart", "日期": "date-picker", "上传": "file-upload",
-        "头像": "avatar", "签名": "signature", "二维码": "qrcode",
+        "甘特图": "gantt-chart", "审批流程": "approval-flow", "审批": "approval",
+        "进度条": "progress-bar", "评分": "star-rating", "颜色选择": "color-picker",
+        "标签": "tag-input", "图表分析": "chart-analysis", "图表": "chart",
+        "日期选择": "date-picker", "日期范围": "date-range", "文件上传": "file-upload",
+        "上传": "upload", "头像": "avatar", "签名": "signature", "二维码": "qrcode",
         "地图": "map-view", "富文本": "rich-text", "树形": "tree-select",
-        "级联": "cascader", "表格": "data-table", "看板": "kanban",
+        "级联": "cascader", "数据表格": "data-table", "表格": "data-table",
+        "看板": "kanban", "数据查询": "data-query", "供应商": "supplier",
+        "采购": "purchase", "客户管理": "customer", "工单": "work-order",
+        "派工": "dispatch", "订单": "order", "库存": "inventory",
+        "考勤": "attendance", "报表": "report", "仪表盘": "dashboard",
+        "弹窗选择": "popup-select", "人员选择": "person-select",
     }
     msg_lower = message.lower()
     for cn, en in keyword_map.items():
         if cn in msg_lower:
             return en
 
-    # LLM 提取
+    # 2. 从中文需求中提取核心名词（正则）
+    # 匹配 "做一个XXX组件/页面" 中的 XXX
+    patterns = [
+        r'(?:做|开发|创建|实现|搭建|写)一?个?\s*(.{2,8}?)(?:组件|页面|模块|系统|功能)',
+        r'(.{2,8}?)(?:组件|页面|模块|系统)(?:开发|设计|需求)',
+    ]
+    for pat in patterns:
+        m = re.search(pat, message)
+        if m:
+            cn_name = m.group(1).strip()
+            # 用 pypinyin 或简单映射转英文
+            if cn_name in keyword_map:
+                return keyword_map[cn_name]
+            # 简单拼音化：把中文转成 kebab-case（每个字取首字母太短，用全拼更好）
+            # 这里用简单方案：如果全是中文，生成一个 hash-based 短名
+            clean = re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9]', '', cn_name)
+            if clean:
+                # 用中文名直接做 slug
+                import hashlib
+                h = hashlib.md5(clean.encode()).hexdigest()[:6]
+                return f"custom-{h}"
+
+    # 3. LLM 提取（最后手段）
     try:
         llm = LLMClient()
         resp = await llm.chat_completion([
-            {"role": "system", "content": "从用户需求中提取一个简短的英文项目名称（kebab-case格式）。\n\n示例：\n- 做一个评分组件 → star-rating\n- 创建审批流程页面 → approval-flow\n- 甘特图组件 → gantt-chart\n\n直接返回名称，格式如 xxx-yyy，不要其他内容。"},
+            {"role": "system", "content": "从用户需求中提取一个简短的英文项目名称（kebab-case格式）。\n\n示例：\n- 做一个评分组件 → star-rating\n- 创建审批流程页面 → approval-flow\n- 供应商管理弹窗 → supplier-select\n\n直接返回名称，格式如 xxx-yyy，不要其他内容。"},
             {"role": "user", "content": message}
         ], max_tokens=100)
         content = resp.get("choices", [{}])[0].get("message", {}).get("content", "")
 
-        # 从内容中用正则提取 kebab-case 名称
         matches = re.findall(r'\b([a-z][a-z0-9]*(?:-[a-z0-9]+)+)\b', content.lower())
         if matches:
-            # 取最后一个匹配（通常是最终答案）
             name = matches[-1]
             if name and name != "custom-component":
                 return name
 
-        # fallback：清理整个内容
         name = re.sub(r'<think>[\s\S]*?</think>', '', content).strip()
         name = name.strip('"').strip("'").lower()
         name = re.sub(r'[^a-z0-9-]', '-', name).strip('-')
         name = re.sub(r'-+', '-', name)
-        return name if name and len(name) > 2 and name != "custom-component" else "custom-component"
+        return name if name and len(name) > 2 and name != "custom-component" else "custom-dev"
     except Exception as e:
         logger.warning(f"提取项目名失败: {e}")
-        return "custom-component"
+        return "custom-dev"
 
 
 async def _is_new_component_intent(generator: CodingGenerator, message: str, ws_id: str, ws_mgr: WorkspaceManager) -> bool:
