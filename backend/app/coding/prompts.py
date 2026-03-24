@@ -148,6 +148,115 @@ df.getStore().state.authModule.token
 // 获取角色列表
 df.getStore().state.themeModule.roleList
 ```
+
+## 原生平台 SDK（window.APaaSSDK）
+除了 df-sdk，平台还提供原生 APaaSSDK，适用于更底层的操作：
+
+### 打开表单/详情弹窗（原生方式）
+```javascript
+// 通过原生 SDK 打开表单编辑/详情弹窗
+window.APaaSSDK.context.globalVueContext.$root.$formDataOptEvent.showModalWithFormParam({
+    formId: '表单ID',           // 必填
+    rowDocumentId: '数据ID',     // 新增留空，编辑填 documentId
+    title: '弹窗标题',           // 必填
+    type: 'EDIT_FORM',          // 'DETAIL_FORM'(抽屉) 或 'EDIT_FORM'(弹框)
+    onBtnClickCallback(e) {     // 提交/暂存/保存按钮点击回调
+        console.info(e)
+    }
+})
+```
+
+### 打开审批历史/日志/评论抽屉
+```javascript
+const ExtendMap = window.APaaSSDK.context.globalVueContext.$root.constructor.FormEngine.ExtendControl.globalExtendMap
+
+// 日志
+ExtendMap.get('FORM_EXTEND_OPEN_LOG_DRAWER')({}, { documentId: '行ID', formId: '表单ID' })
+
+// 审批历史
+ExtendMap.get('FORM_EXTEND_OPEN_HISTORY_DRAWER')({}, { documentId: '行ID', formId: '表单ID' })
+
+// 评论
+ExtendMap.get('FORM_EXTEND_OPEN_COMMENT_DRAWER')({}, { documentId: '行ID', formId: '表单ID' })
+
+// 消息提醒
+ExtendMap.get('FORM_EXTEND_OPEN_MESSAGE_REMIND_POPOVER')({}, {
+    queryParams: { menuId: '', appId: '', documentId: '', formId: '' }
+})
+```
+
+### EventBus 事件通信（$bus）
+```javascript
+// 发送事件（如清空子表数据）
+window.APaaSSDK.context.globalVueContext.$root.$bus.$emit("CLEAR_SON_TABLE", "子表uuid")
+
+// 在自开发组件中监听
+this.$bus.$on("事件名", (data) => { /* 处理 */ })
+// 记得在 beforeDestroy 中 $off
+```
+
+### 获取表单数据（在自开发组件内）
+```javascript
+// 当前组件的表单数据（子表行数据）
+this.formData
+
+// 获取整个主表单数据（在子表组件中获取父表数据）
+this.formEngine.formDataControl.formValue
+
+// 获取表单字段的 UUID 映射
+this.formEngine.formDataControl.componentMap  // Map<uuid, {uuid, label, children}>
+
+// 获取组件属性（控制只读/隐藏等），通过 uuid 查找
+this.formEngine.formDataControl.allTileFormItemList
+```
+
+### 页面路由跳转
+```javascript
+// 跳转到系统表单页面
+this.$router.push({
+    name: 'app-page',
+    query: { appId: 'appId', formId: 'formId', title: '页面标题', currentMenu: 'menuId', t: Date.now() }
+})
+
+// 跳转到自开发页面
+this.$router.push({
+    name: 'custom-page',
+    params: { customPath: 'apaas-custom-模块名' }
+})
+
+// 跳转到待办页面
+this.$router.push({
+    name: 'todo-page',
+    query: { appId: 'appId', title: '我的待办', currentMenu: 'menuId', t: Date.now() }
+})
+```
+
+### 获取主题色
+```javascript
+// 从 Vuex 获取
+const theme = this.$store.state.themeModule
+theme.currentThemeColor.color  // 当前主题色
+theme.defaultThemeColor.color  // 默认主题色
+```
+
+### Vue Devtools 调试（开发环境）
+```javascript
+// 在控制台执行，打开 Vue devtools 调试
+var Vue, walker, node;
+walker = document.createTreeWalker(document.body, 1);
+while ((node = walker.nextNode())) {
+  if (node.__vue__) {
+    Vue = node.__vue__.$options._base;
+    if (!Vue.config.devtools) {
+      Vue.config.devtools = true;
+      if (window.__VUE_DEVTOOLS_GLOBAL_HOOK__) {
+        window.__VUE_DEVTOOLS_GLOBAL_HOOK__.emit("init", Vue);
+      }
+    }
+    break;
+  }
+}
+```
 """
 
 # ============================================================
