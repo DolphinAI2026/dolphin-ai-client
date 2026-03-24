@@ -70,7 +70,7 @@ def _b64_to_pem(b64_key: str) -> str:
 class APaaSClient:
     def __init__(self, base_url: Optional[str] = None, tenant_id: Optional[str] = None, token: Optional[str] = None):
         from app.config import settings
-        self.base_url = base_url or settings.apaas_base_url
+        self.base_url = (base_url or settings.apaas_base_url).rstrip("/")
         self.tenant_id = tenant_id or settings.apaas_tenant_id
         self.token = token
         self.user_id = None

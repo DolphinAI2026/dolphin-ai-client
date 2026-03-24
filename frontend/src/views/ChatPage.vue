@@ -626,6 +626,7 @@ import type { Project, ProjectMember } from '@/api/projects'
 import ConnectModal from '@/components/ConnectModal.vue'
 import EnvSelectModal from '@/components/EnvSelectModal.vue'
 import { platformEnvApi } from '@/api/platformEnv'
+import request from '@/utils/request'
 import ProjectSettingsModal from '@/components/ProjectSettingsModal.vue'
 import ConfigDiff from '@/components/ConfigDiff.vue'
 import UpdateSteps from '@/components/UpdateSteps.vue'
@@ -1388,13 +1389,19 @@ async function deployExec(key: string) {
       if (key === 'create_app' && resp.error && (resp.error.includes('编码') || resp.error.includes('code') || resp.error.includes('Code'))) {
         try {
           const { value: newCode } = await ElMessageBox.prompt(
-            `创建失败：${resp.error}\n\n请输入新的应用编码：`,
+            `创建失败：${resp.error}\n\n请输入新的应用编码（如 asset-manage）：`,
             '修改应用编码',
-            { inputValue: store.preview.appName, confirmButtonText: '重试', cancelButtonText: '取消' }
+            {
+              inputValue: 'app-' + Date.now().toString(36),
+              inputPattern: /^[a-zA-Z][a-zA-Z0-9\-]*$/,
+              inputErrorMessage: '编码只能包含英文字母、数字和连字符(-)，且以字母开头',
+              confirmButtonText: '重试',
+              cancelButtonText: '取消'
+            }
           )
           if (newCode) {
             // 更新后端应用编码
-            await applicationApi.update(deployAppId.value, { app_code: newCode })
+            await request.patch(`/applications/${deployAppId.value}/code`, { app_code: newCode })
             // 重置步骤并重试
             await applicationApi.resetStep(deployAppId.value, key)
             await loadDeployStatus()

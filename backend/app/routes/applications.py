@@ -458,6 +458,10 @@ async def update_application(
 
     app.app_name = data.app_name
     app.description = data.description
+    if hasattr(data, 'app_code') and data.app_code:
+        app.app_code = data.app_code
+    if hasattr(data, 'platform_env_id') and data.platform_env_id:
+        app.platform_env_id = data.platform_env_id
     if data.config_preview:
         app.config_preview = json.dumps(data.config_preview, ensure_ascii=False)
     # 重置状态为 draft，允许重新生成
@@ -466,6 +470,28 @@ async def update_application(
     await db.commit()
     await db.refresh(app)
     return _enrich(app)
+
+
+@router.patch("/{app_id}/code")
+async def update_app_code(
+    app_id: int,
+    body: dict,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)]
+):
+    """更新应用编码（部署失败后修改）"""
+    result = await db.execute(
+        select(Application).where(Application.id == app_id, Application.tenant_id == ctx.tenant_id)
+    )
+    app = result.scalar_one_or_none()
+    if not app:
+        raise HTTPException(status_code=404, detail="应用不存在")
+    new_code = body.get("app_code")
+    if not new_code:
+        raise HTTPException(status_code=400, detail="app_code 不能为空")
+    app.app_code = new_code
+    await db.commit()
+    return {"ok": True, "app_code": new_code}
 
 
 class PlatformConfigUpdate(BaseModel):
