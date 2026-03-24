@@ -257,8 +257,13 @@ async def delete_project(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """删除项目"""
+    """删除项目（级联删除关联的成员记录）"""
     project = await _get_project_or_404(project_id, ctx.user.id, db)
+    # 先删除关联的 project_members
+    from app.models import ProjectMember
+    result = await db.execute(select(ProjectMember).where(ProjectMember.project_id == project_id))
+    for member in result.scalars().all():
+        await db.delete(member)
     await db.delete(project)
     await db.commit()
     return {"status": "ok"}
