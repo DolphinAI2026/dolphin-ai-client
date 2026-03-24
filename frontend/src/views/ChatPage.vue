@@ -2669,8 +2669,9 @@ onMounted(async () => {
           store.preview.roles = data.roles || []
           store.preview.workflows = data.workflows || []
           store.preview.permissions = data.permissions || []
-          store.currentApp = { name: store.preview.appName, status: 'ready' }
+          store.currentApp = { name: store.preview.appName, status: app.status || 'ready' }
         }
+        console.log(`Loaded app ${aid}: ${app.app_name}, status=${app.status}`)
         // 加载关联对话的历史消息
         if (app.conversation_id) {
           conversationId.value = app.conversation_id
@@ -2768,7 +2769,7 @@ onMounted(async () => {
           store.preview.models = data.models || []
           store.preview.dicts = data.dicts || []
           store.preview.roles = data.roles || []
-          store.currentApp = { name: store.preview.appName, status: 'ready' }
+          store.currentApp = { name: store.preview.appName, status: app.status || 'ready' }
         }
         // 加载关联的对话
         if (app.conversation_id) {
