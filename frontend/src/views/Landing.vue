@@ -84,7 +84,10 @@
 
         <!-- Templates -->
         <div class="section">
-          <h3 class="section-title">从模板开始</h3>
+          <div class="section-header">
+            <h3 class="section-title">从模板开始</h3>
+            <el-button size="small" text @click="showTemplateManager = true">管理模板</el-button>
+          </div>
           <div class="templates">
             <button v-for="t in templates" :key="t.code" class="tpl-card" :class="{ loading: templateLoading === t.code }" @click="startWithTemplate(t)">
               <div class="tpl-icon">
@@ -137,6 +140,7 @@
       </div>
     </div>
 
+    <TemplateManager v-model="showTemplateManager" @updated="reloadTemplates" />
     <ConnectModal v-model="previewStore.showConnectModal" />
     <ProjectSettingsModal
       v-model="showProjectModal"
@@ -157,6 +161,7 @@ import { applicationApi } from '@/api/application'
 import { projectsApi, type Project } from '@/api/projects'
 import ConnectModal from '@/components/ConnectModal.vue'
 import ProjectSettingsModal from '@/components/ProjectSettingsModal.vue'
+import TemplateManager from '@/components/TemplateManager.vue'
 import type { MergedApplication } from '@/types'
 
 const router = useRouter()
@@ -166,6 +171,7 @@ const inputText = ref('')
 const apps = ref<MergedApplication[]>([])
 const projects = ref<Project[]>([])
 const showProjectModal = ref(false)
+const showTemplateManager = ref(false)
 const editingProject = ref<Project | null>(null)
 
 interface TemplateItem {
@@ -205,6 +211,12 @@ const onProjectSaved = async () => {
 
 const goToProject = (p: Project) => {
   router.push(`/project/${p.id}`)
+}
+
+const reloadTemplates = async () => {
+  try {
+    templates.value = await request.get<any, TemplateItem[]>('/templates')
+  } catch (e) { /* ignore */ }
 }
 
 const startChat = () => {
