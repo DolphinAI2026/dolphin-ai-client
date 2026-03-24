@@ -10,8 +10,43 @@ from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.backends import default_backend
 
 import logging
+import threading
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# API 调用日志收集器（线程安全）
+# ---------------------------------------------------------------------------
+
+_call_log_buffer: list = []
+_call_log_lock = threading.Lock()
+
+
+def collect_call_log(
+    method: str, url: str, request_body: str,
+    status: int, response_body: str,
+    success: bool, error: str, elapsed_ms: float,
+):
+    """将一条 API 调用记录追加到缓冲区"""
+    with _call_log_lock:
+        _call_log_buffer.append({
+            "method": method,
+            "url": url,
+            "request_body": request_body[:2000] if request_body else None,
+            "response_status": status,
+            "response_body": response_body[:2000] if response_body else None,
+            "success": success,
+            "error_message": error,
+            "elapsed_ms": int(elapsed_ms),
+        })
+
+
+def flush_call_logs() -> list:
+    """取出并清空缓冲区，返回累积的日志列表"""
+    with _call_log_lock:
+        logs = _call_log_buffer.copy()
+        _call_log_buffer.clear()
+    return logs
 
 
 def _to_json(obj: Any) -> str:
@@ -36,18 +71,35 @@ def _extract_query_params(url: str) -> Optional[dict[str, str]]:
     return query_items or None
 
 
-def _log_response(url: str, status: int, data: Any, elapsed_ms: float):
-    """记录响应日志"""
+def _log_response(
+    url: str, status: int, data: Any, elapsed_ms: float,
+    method: str = "POST", request_body: str | None = None,
+):
+    """记录响应日志，同时追加到持久化缓冲区"""
     code = data.get("code") if isinstance(data, dict) else None
     message = data.get("message") if isinstance(data, dict) else None
+    success = code == "ok" or code == 200
 
-    if code == "ok" or code == 200:
+    if success:
         logger.info(f"<<< APaaS API 响应: {status} OK ({elapsed_ms:.0f}ms) - {url.split('/')[-1]}")
         if isinstance(data, dict) and "data" in data:
             logger.debug(f"    响应数据: {_to_json(data.get('data'))}")
     else:
         logger.warning(f"<<< APaaS API 响应: {status} FAILED ({elapsed_ms:.0f}ms) - code={code}, message={message}")
         logger.warning(f"    完整响应: {_to_json(data)}")
+
+    # 持久化到缓冲区
+    response_body = _to_json(data) if data else None
+    collect_call_log(
+        method=method,
+        url=url,
+        request_body=request_body,
+        status=status,
+        response_body=response_body,
+        success=success,
+        error=str(message) if not success and message else "",
+        elapsed_ms=elapsed_ms,
+    )
 
 # POC环境RSA公钥（getPublicKey接口需要认证，硬编码避免鸡生蛋问题）
 DEFAULT_PUBLIC_KEY_B64 = (
@@ -129,7 +181,7 @@ class APaaSClient:
             response.raise_for_status()
             data = response.json()
 
-            _log_response(url, response.status_code, data, elapsed_ms)
+            _log_response(url, response.status_code, data, elapsed_ms, method="POST", request_body=_to_json(payload))
 
             if data.get("code") == "ok":
                 self.token = data["data"]["token"]
@@ -153,7 +205,7 @@ class APaaSClient:
             response.raise_for_status()
             data = response.json()
 
-            _log_response(url, response.status_code, data, elapsed_ms)
+            _log_response(url, response.status_code, data, elapsed_ms, method="GET")
 
             if data.get("code") == "ok":
                 logger.info("连接测试成功")
@@ -187,7 +239,7 @@ class APaaSClient:
             response.raise_for_status()
             data = response.json()
 
-            _log_response(url, response.status_code, data, elapsed_ms)
+            _log_response(url, response.status_code, data, elapsed_ms, method="POST", request_body=_to_json(payload))
 
             if data.get("code") == "ok":
                 logger.info(f"应用创建成功: {app_name} (id={data.get('data', {}).get('id')})")
@@ -215,7 +267,7 @@ class APaaSClient:
             response.raise_for_status()
             data = response.json()
 
-            _log_response(url, response.status_code, data, elapsed_ms)
+            _log_response(url, response.status_code, data, elapsed_ms, method="POST", request_body=_to_json(payload))
 
             code = data.get("code")
             # 平台API返回 code:"ok" 或 code:200 表示成功
@@ -265,7 +317,7 @@ class APaaSClient:
             response.raise_for_status()
             data = response.json()
 
-            _log_response(url, response.status_code, data, elapsed_ms)
+            _log_response(url, response.status_code, data, elapsed_ms, method="POST", request_body=_to_json(payload))
 
             if data.get("code") not in ("ok",):
                 raise Exception(data.get("message", "保存流程失败"))
@@ -287,7 +339,7 @@ class APaaSClient:
             response.raise_for_status()
             data = response.json()
 
-            _log_response(url, response.status_code, data, elapsed_ms)
+            _log_response(url, response.status_code, data, elapsed_ms, method="GET")
 
             if data.get("code") == "ok":
                 result = data.get("table", [])
@@ -308,7 +360,7 @@ class APaaSClient:
             response.raise_for_status()
             data = response.json()
 
-            _log_response(url, response.status_code, data, elapsed_ms)
+            _log_response(url, response.status_code, data, elapsed_ms, request_body=_to_json(payload))
 
             if data.get("code") == "ok":
                 models = data.get("table", [])
@@ -454,7 +506,7 @@ class APaaSClient:
             response.raise_for_status()
             data = response.json()
 
-            _log_response(url, response.status_code, data, elapsed_ms)
+            _log_response(url, response.status_code, data, elapsed_ms, method="GET")
 
             if data.get("code") == "ok":
                 form_config = data.get("data", {}).get("simpleFormConfig", {})

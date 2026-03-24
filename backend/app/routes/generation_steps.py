@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.deps import get_auth_context, AuthContext
-from app.models import Application, User
+from app.models import Application, User, ApiCallLog
 from app.schemas import (
     StepExecuteRequest, StepResetRequest,
     StepStatus, GenerationStatusResponse, StepExecuteResponse,
@@ -411,7 +411,11 @@ async def execute_step(
         )
 
     # 执行（加并发锁保护）
+    from app.apaas_client import flush_call_logs
+
     async with acquire_app_lock(app_id, f"步骤执行:{step_key}"):
+        step_response: Optional[StepExecuteResponse] = None
+        step_exception: Optional[Exception] = None
         try:
             result = await _execute_step_impl(client, app, config, state, step_key, data, models)
             # 标记完成
@@ -429,8 +433,7 @@ async def execute_step(
                 _sync_platform_codes_to_config(app, state, data)
                 logger.info(f"应用 {app.id} 所有步骤完成，状态更新为 completed")
 
-            await db.commit()
-            return StepExecuteResponse(step=step_key, status="completed", result=result)
+            step_response = StepExecuteResponse(step=step_key, status="completed", result=result)
 
         except Exception as e:
             error_msg = str(e)
@@ -440,20 +443,40 @@ async def execute_step(
             if "Token已过期" in error_msg or "401" in error_msg:
                 user.apaas_token = None
                 await db.commit()
-                raise HTTPException(status_code=401, detail="APaaS平台Token已过期，请重新连接")
+                step_exception = HTTPException(status_code=401, detail="APaaS平台Token已过期，请重新连接")
+            else:
+                # 检测编码冲突错误
+                conflict = _detect_code_conflict(error_msg, step_key, data, models)
+                if conflict:
+                    state.setdefault("step_errors", {})[step_key] = error_msg
+                    _save_state(app, state)
+                    step_response = StepExecuteResponse(step=step_key, status="conflict", error=error_msg, conflict=conflict)
+                else:
+                    state.setdefault("step_errors", {})[step_key] = error_msg
+                    _save_state(app, state)
+                    step_response = StepExecuteResponse(step=step_key, status="error", error=error_msg)
 
-            # 检测编码冲突错误
-            conflict = _detect_code_conflict(error_msg, step_key, data, models)
-            if conflict:
-                state.setdefault("step_errors", {})[step_key] = error_msg
-                _save_state(app, state)
-                await db.commit()
-                return StepExecuteResponse(step=step_key, status="conflict", error=error_msg, conflict=conflict)
+        finally:
+            # 持久化 API 调用日志
+            try:
+                logs = flush_call_logs()
+                if logs:
+                    for log_entry in logs:
+                        db.add(ApiCallLog(
+                            tenant_id=ctx.tenant_id,
+                            user_id=ctx.user.id,
+                            application_id=app.id,
+                            step_key=step_key,
+                            **log_entry,
+                        ))
+            except Exception as log_err:
+                logger.warning(f"持久化 API 调用日志失败: {log_err}")
 
-            state.setdefault("step_errors", {})[step_key] = error_msg
-            _save_state(app, state)
             await db.commit()
-            return StepExecuteResponse(step=step_key, status="error", error=error_msg)
+
+        if step_exception:
+            raise step_exception
+        return step_response
 
 
 async def _execute_step_impl(

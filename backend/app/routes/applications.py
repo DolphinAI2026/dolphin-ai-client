@@ -9,7 +9,7 @@ from sqlalchemy import select, desc, func as sa_func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 from app.database import get_db
-from app.models import User, Application, DocumentVersion, ChangePlan
+from app.models import User, Application, DocumentVersion, ChangePlan, ApiCallLog
 from app.auth import get_current_user
 from app.schemas import ApplicationCreate, ApplicationResponse, MergedAppResponse
 from app.deps import get_auth_context, AuthContext
@@ -1646,4 +1646,73 @@ async def list_doc_versions_by_conversation(
 
     return {
         "versions": items,
+    }
+
+
+# ── API 调用日志 ──
+
+@router.get("/{app_id}/api-logs")
+async def list_api_logs(
+    app_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    step_key: Optional[str] = Query(None),
+    success: Optional[bool] = Query(None),
+):
+    """查询应用的平台 API 调用日志（分页）"""
+    # 验证应用归属
+    result = await db.execute(
+        select(Application).where(
+            Application.id == app_id,
+            Application.tenant_id == ctx.tenant_id,
+        )
+    )
+    app = result.scalar_one_or_none()
+    if not app:
+        raise HTTPException(status_code=404, detail="应用不存在")
+
+    await check_resource_permission(ctx, db, app, "application", Action.VIEW)
+
+    # 构建查询
+    query = select(ApiCallLog).where(ApiCallLog.application_id == app_id)
+    count_query = select(sa_func.count()).select_from(ApiCallLog).where(ApiCallLog.application_id == app_id)
+
+    if step_key:
+        query = query.where(ApiCallLog.step_key == step_key)
+        count_query = count_query.where(ApiCallLog.step_key == step_key)
+    if success is not None:
+        query = query.where(ApiCallLog.success == success)
+        count_query = count_query.where(ApiCallLog.success == success)
+
+    # 总数
+    total_result = await db.execute(count_query)
+    total = total_result.scalar() or 0
+
+    # 分页查询
+    query = query.order_by(desc(ApiCallLog.created_at)).offset((page - 1) * page_size).limit(page_size)
+    result = await db.execute(query)
+    logs = result.scalars().all()
+
+    return {
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "items": [
+            {
+                "id": log.id,
+                "step_key": log.step_key,
+                "method": log.method,
+                "url": log.url,
+                "request_body": log.request_body,
+                "response_status": log.response_status,
+                "response_body": log.response_body,
+                "success": log.success,
+                "error_message": log.error_message,
+                "elapsed_ms": log.elapsed_ms,
+                "created_at": str(log.created_at) if log.created_at else None,
+            }
+            for log in logs
+        ],
     }

@@ -202,3 +202,23 @@ class Application(Base):
     status: Mapped[str] = mapped_column(String(20), default="draft", nullable=False)  # draft/generating/completed/failed
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class ApiCallLog(Base):
+    """平台 API 调用日志"""
+    __tablename__ = "api_call_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    application_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    step_key: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # create_app, create_role:0, etc
+    method: Mapped[str] = mapped_column(String(10), nullable=False)  # GET/POST
+    url: Mapped[str] = mapped_column(String(500), nullable=False)
+    request_body: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON
+    response_status: Mapped[int] = mapped_column(Integer, nullable=False)
+    response_body: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON (truncated)
+    success: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    elapsed_ms: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
