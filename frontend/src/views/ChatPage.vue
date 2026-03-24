@@ -2919,9 +2919,32 @@ watch(conversationId, (id) => {
 .conv-history-select {
   width: 300px;
 }
-.conv-history-select :deep(.el-input__wrapper) {
+.conv-history-select :deep(.el-select__wrapper),
+.conv-history-select :deep(.el-input__wrapper),
+.conv-history-select :deep(.el-select__wrapper.is-focused),
+.conv-history-select :deep(.el-select__wrapper.is-hovering) {
   background: transparent !important; border: 1px solid rgba(255,255,255,0.06) !important;
   box-shadow: none !important; border-radius: 8px !important; height: 28px;
+}
+.conv-history-select :deep(.el-select__wrapper.is-hovering) {
+  border-color: rgba(255,255,255,0.12) !important;
+}
+.conv-history-select :deep(.el-select__wrapper.is-focused) {
+  border-color: rgba(124,58,237,0.4) !important;
+}
+.conv-history-select :deep(.el-select__selection) {
+  color: rgba(255,255,255,0.8) !important;
+}
+.conv-history-select :deep(.el-select__placeholder),
+.conv-history-select :deep(.el-select__placeholder.is-transparent) {
+  color: rgba(255,255,255,0.3) !important;
+}
+.conv-history-select :deep(.el-select__caret),
+.conv-history-select :deep(.el-select__suffix) {
+  color: rgba(255,255,255,0.3) !important;
+}
+.conv-history-select :deep(.el-select__selected-item .el-tag) {
+  background: transparent !important; border: none !important; color: rgba(255,255,255,0.8) !important;
 }
 .conv-history-select :deep(.el-input__wrapper:hover) {
   border-color: rgba(255,255,255,0.12) !important;
