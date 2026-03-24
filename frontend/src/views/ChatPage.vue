@@ -1908,6 +1908,22 @@ const handleDocUpload = async (e: Event) => {
         store.preview.permissions = previewData.permissions || []
       }
 
+      // 文档上传完成后自动创建 Application（如果还没有）
+      if (!existingAppId.value && store.preview.appName) {
+        try {
+          const result = await applicationApi.autoCreate({
+            app_name: store.preview.appName,
+            config_preview: { ...store.preview },
+            conversation_id: conversationId.value || undefined,
+          })
+          existingAppId.value = result.app_id
+          router.replace({ query: { ...route.query, app_id: String(result.app_id) } })
+          console.log(`Doc upload auto-created app: id=${result.app_id}, is_new=${result.is_new}`)
+        } catch (e) {
+          console.warn('文档上传后自动创建应用失败:', e)
+        }
+      }
+
       // 文档上传完成后自动刷新文档版本列表
       fetchDocVersions()
 
