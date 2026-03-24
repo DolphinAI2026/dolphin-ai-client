@@ -259,12 +259,10 @@ async def delete_project(
 ):
     """删除项目（级联删除关联的成员记录）"""
     project = await _get_project_or_404(project_id, ctx.user.id, db)
-    # 先删除关联的 project_members
-    from app.models import ProjectMember
-    result = await db.execute(select(ProjectMember).where(ProjectMember.project_id == project_id))
-    for member in result.scalars().all():
-        await db.delete(member)
-    await db.delete(project)
+    # 先用原始 SQL 删除关联的 project_members（避免 ORM flush 顺序问题）
+    from sqlalchemy import text
+    await db.execute(text("DELETE FROM project_members WHERE project_id = :pid"), {"pid": project_id})
+    await db.execute(text("DELETE FROM projects WHERE id = :pid"), {"pid": project_id})
     await db.commit()
     return {"status": "ok"}
 
