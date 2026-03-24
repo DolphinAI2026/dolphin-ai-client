@@ -86,14 +86,14 @@
         <div class="section">
           <h3 class="section-title">从模板开始</h3>
           <div class="templates">
-            <button v-for="t in templates" :key="t.name" class="tpl-card" @click="startWithTemplate(t.prompt)">
+            <button v-for="t in templates" :key="t.code" class="tpl-card" :class="{ loading: templateLoading === t.code }" @click="startWithTemplate(t)">
               <div class="tpl-icon">
                 <svg v-if="t.icon === 'users'" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
                 <svg v-else-if="t.icon === 'wrench'" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
                 <svg v-else-if="t.icon === 'clipboard'" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#34d399" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/><line x1="8" y1="10" x2="16" y2="10"/><line x1="8" y1="14" x2="16" y2="14"/><line x1="8" y1="18" x2="12" y2="18"/></svg>
               </div>
               <div class="tpl-name">{{ t.name }}</div>
-              <div class="tpl-desc">{{ t.desc }}</div>
+              <div class="tpl-desc">{{ t.description }}</div>
             </button>
           </div>
         </div>
@@ -152,6 +152,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { usePreviewStore } from '@/stores/preview'
 import { useUserStore } from '@/stores/user'
+import request from '@/utils/request'
 import { applicationApi } from '@/api/application'
 import { projectsApi, type Project } from '@/api/projects'
 import ConnectModal from '@/components/ConnectModal.vue'
@@ -167,15 +168,23 @@ const projects = ref<Project[]>([])
 const showProjectModal = ref(false)
 const editingProject = ref<Project | null>(null)
 
-const templates = [
-  { icon: 'users', name: 'CRM客户管理', desc: '客户、联系人、跟进、合同', prompt: '我想做一个客户管理系统' },
-  { icon: 'wrench', name: '售后工单系统', desc: '工单、派单、执行、备件', prompt: '我想做一个售后服务工单系统' },
-  { icon: 'clipboard', name: '项目管理', desc: '项目、任务、里程碑、资源', prompt: '我想做一个项目管理系统' }
-]
+interface TemplateItem {
+  code: string
+  name: string
+  icon: string
+  description: string
+  category: string
+}
+const templates = ref<TemplateItem[]>([])
+const templateLoading = ref<string | null>(null) // 正在加载的模板 code
 
 onMounted(async () => {
   try {
     projects.value = await projectsApi.list()
+  } catch (e) { /* ignore */ }
+  // 加载模板列表
+  try {
+    templates.value = await request.get<any, TemplateItem[]>('/templates')
   } catch (e) { /* ignore */ }
 })
 
@@ -204,8 +213,21 @@ const startChat = () => {
   router.push({ path: '/chat', query: { prompt: text } })
 }
 
-const startWithTemplate = (prompt: string) => {
-  router.push({ path: '/chat', query: { prompt } })
+const startWithTemplate = async (tpl: TemplateItem) => {
+  templateLoading.value = tpl.code
+  try {
+    // 获取模板完整 MD 内容
+    const detail = await request.get<any, { content: string; name: string }>(`/templates/${tpl.code}`)
+    // 构造 File 对象，复用已有文档上传流程
+    const blob = new Blob([detail.content], { type: 'text/markdown' })
+    const file = new File([blob], `${tpl.code}.md`, { type: 'text/markdown' })
+    previewStore.pendingFile = file
+    router.push('/chat')
+  } catch (e) {
+    ElMessage.error('加载模板失败')
+  } finally {
+    templateLoading.value = null
+  }
 }
 
 const handleDocUpload = (e: Event) => {
