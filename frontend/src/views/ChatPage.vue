@@ -2671,10 +2671,11 @@ onMounted(async () => {
           store.preview.permissions = data.permissions || []
           store.currentApp = { name: store.preview.appName, status: app.status || 'ready' }
         }
-        console.log(`Loaded app ${aid}: ${app.app_name}, status=${app.status}`)
+        console.log(`Loaded app ${aid}: ${app.app_name}, status=${app.status}, conv=${app.conversation_id}`)
         // 加载关联对话的历史消息
         if (app.conversation_id) {
           conversationId.value = app.conversation_id
+          selectedConversationId.value = app.conversation_id
           const historyMessages = await conversationApi.getMessages(app.conversation_id)
           if (historyMessages?.length) {
             messages.splice(0, messages.length)
