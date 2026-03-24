@@ -224,7 +224,7 @@
             <!-- 开始生成（部署到平台） -->
             <!-- 开始生成 / 已部署状态 -->
             <div v-if="deployAllDone && !hasConfigChanged" class="deployed-banner">✅ 已部署到平台</div>
-            <button v-else-if="store.preview.models.length > 0 && (store.currentApp?.status === 'ready' || store.currentApp?.status === 'conversation' || store.currentApp?.status === 'draft' || hasConfigChanged)" class="gen-btn" :disabled="generating" @click="startGenerate">{{ generating ? '创建中...' : hasConfigChanged ? '⚡ 更新配置并部署' : existingAppId ? '⚡ 更新并生成' : '⚡ 开始生成' }}</button>
+            <button v-else-if="!assembling && store.preview.models.length > 0 && (store.currentApp?.status === 'ready' || store.currentApp?.status === 'conversation' || store.currentApp?.status === 'draft' || hasConfigChanged)" class="gen-btn" :disabled="generating" @click="startGenerate">{{ generating ? '创建中...' : hasConfigChanged ? '⚡ 更新配置并部署' : deployAppId ? '⚡ 重新部署' : '⚡ 开始生成' }}</button>
           </div>
 
           <!-- 模型 -->
@@ -1372,7 +1372,28 @@ async function deployExec(key: string) {
     if (resp.status === 'conflict' && resp.conflict) {
       handleConflict(resp, key)
     } else if (resp.status === 'error') {
-      ElMessage.error(resp.error || '失败')
+      // create_app 失败且涉及编码问题，弹出编码修改框
+      if (key === 'create_app' && resp.error && (resp.error.includes('编码') || resp.error.includes('code') || resp.error.includes('Code'))) {
+        try {
+          const { value: newCode } = await ElMessageBox.prompt(
+            `创建失败：${resp.error}\n\n请输入新的应用编码：`,
+            '修改应用编码',
+            { inputValue: store.preview.appName, confirmButtonText: '重试', cancelButtonText: '取消' }
+          )
+          if (newCode) {
+            // 更新后端应用编码
+            await applicationApi.update(deployAppId.value, { app_code: newCode })
+            // 重置步骤并重试
+            await applicationApi.resetStep(deployAppId.value, key)
+            await loadDeployStatus()
+            deployExecuting.value = null
+            await deployExec(key)
+            return
+          }
+        } catch { /* cancelled */ }
+      } else {
+        ElMessage.error(resp.error || '失败')
+      }
     }
   } catch (e: any) { ElMessage.error(e.message || '失败') }
   finally { deployExecuting.value = null; await loadDeployStatus() }
