@@ -522,6 +522,7 @@ async def _execute_step_impl(
             state["dict_codes"][d.get("code", d["name"])] = dc
             try:
                 await client.create_dicts(apaas_app_id, [{
+                    "appId": apaas_app_id,
                     "dictionaryName": d["name"],
                     "dictionaryCode": dc,
                     "dictionaryType": "CUSTOM",
