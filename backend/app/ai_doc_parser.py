@@ -173,7 +173,8 @@ SINGLE_SYSTEM_PROMPT = f"""你是得帆云低代码平台的功能设计专家�
 # ================================================================
 
 async def parse_doc_with_ai(
-    text: str, filename: str = "", on_progress: ProgressCallback = None
+    text: str, filename: str = "", on_progress: ProgressCallback = None,
+    existing_codes: Optional[Dict] = None,
 ) -> Dict:
     """用 AI 解析任意格式的需求文档，返回标准 preview JSON。
 
@@ -181,6 +182,9 @@ async def parse_doc_with_ai(
     大文档：先提概览，再按章节分段解析，最后合并
 
     on_progress: 可选的异步回调，用于报告解析进度
+    existing_codes: 可选的已有编码信息（用于增量解析时复用编码），格式：
+        {"model_codes": [...], "dict_codes": [...], "role_codes": [...],
+         "field_codes": {...model_code: [field_codes]}}
     """
     logger.info(f"AI 文档解析: {filename}, 长度 {len(text)} 字符")
 
@@ -192,9 +196,9 @@ async def parse_doc_with_ai(
 
     if len(text) <= CHUNK_CHAR_LIMIT:
         await _progress("小文档，单次 AI 解析...")
-        data = await _parse_single(text, filename)
+        data = await _parse_single(text, filename, existing_codes=existing_codes)
     else:
-        data = await _parse_chunked(text, filename, _progress)
+        data = await _parse_chunked(text, filename, _progress, existing_codes=existing_codes)
 
     # 对 Markdown 中显式定义的字典做规则兜底，避免 LLM 漏掉未引用字典或漏掉选项
     extracted_dicts = _extract_markdown_dicts(text)
@@ -218,10 +222,79 @@ async def parse_doc_with_ai(
 
 
 # ================================================================
+# 已有编码提取 & prompt 构建
+# ================================================================
+
+def extract_existing_codes(parsed_config: Dict) -> Dict:
+    """从已有的 parsed_config 中提取所有编码信息，用于增量解析时传给 AI。
+
+    返回:
+    {
+        "model_codes": ["work_order", "engineer", ...],
+        "dict_codes": ["customer_level", "work_order_status", ...],
+        "role_codes": ["admin", "dispatcher", ...],
+        "field_codes": {"work_order": ["order_no", "title", ...], ...}
+    }
+    """
+    model_codes = []
+    field_codes = {}
+    for m in parsed_config.get("models", []):
+        code = m.get("code", "")
+        if code:
+            model_codes.append(code)
+            fields = []
+            for f in m.get("fields", []):
+                fc = f.get("code", "")
+                if fc:
+                    fields.append(fc)
+                for sf in f.get("sub_fields", []):
+                    sfc = sf.get("code", "")
+                    if sfc:
+                        fields.append(sfc)
+            if fields:
+                field_codes[code] = fields
+
+    dict_codes = [d.get("code", "") for d in parsed_config.get("dicts", []) if d.get("code")]
+    role_codes = [r.get("code", "") for r in parsed_config.get("roles", []) if r.get("code")]
+
+    return {
+        "model_codes": model_codes,
+        "dict_codes": dict_codes,
+        "role_codes": role_codes,
+        "field_codes": field_codes,
+    }
+
+
+def _build_existing_codes_prompt(existing_codes: Dict) -> str:
+    """构建"复用已有编码"的 prompt 片段。"""
+    parts = []
+    if existing_codes.get("model_codes"):
+        parts.append(f"已有的数据模型编码：{', '.join(existing_codes['model_codes'])}")
+    if existing_codes.get("dict_codes"):
+        parts.append(f"已有的字典编码：{', '.join(existing_codes['dict_codes'])}")
+    if existing_codes.get("role_codes"):
+        parts.append(f"已有的角色编码：{', '.join(existing_codes['role_codes'])}")
+    if existing_codes.get("field_codes"):
+        field_parts = []
+        for model_code, fields in existing_codes["field_codes"].items():
+            field_parts.append(f"  {model_code}: {', '.join(fields)}")
+        parts.append("已有的字段编码：\n" + "\n".join(field_parts))
+
+    if not parts:
+        return ""
+
+    return (
+        "【重要】以下是上一版本已有的编码，如果本次内容对应已有的业务概念，"
+        "请复用已有编码，不要重新生成新编码。文档中明确标注了编码的以文档为准。\n\n"
+        + "\n".join(parts) + "\n\n"
+    )
+
+
+# ================================================================
 # 小文档：单次调用
 # ================================================================
 
-async def _parse_single(text: str, filename: str) -> Dict:
+async def _parse_single(text: str, filename: str, existing_codes: Optional[Dict] = None) -> Dict:
     client = LLMClient()
     # 智能截断：优先保留 ER 图和业务具体方案（含子表/字段定义）
     if len(text) > 40000:
@@ -244,6 +317,8 @@ async def _parse_single(text: str, filename: str) -> Dict:
         truncated = text
 
     user_msg = f"请分析以下需求文档，提取所有业务表单、字段、角色、字典等信息，输出标准 JSON。\n特别注意：\n- 识别所有子表/明细表关系（1:N），用 sub_fields 表示\n- 识别权限角色和数据权限规则\n\n"
+    if existing_codes:
+        user_msg += _build_existing_codes_prompt(existing_codes)
     if filename:
         user_msg += f"文档名：{filename}\n\n"
     user_msg += f"---\n\n{truncated}"
@@ -266,7 +341,7 @@ async def _parse_single(text: str, filename: str) -> Dict:
 # 大文档：分段解析
 # ================================================================
 
-async def _parse_chunked(text: str, filename: str, progress=None) -> Dict:
+async def _parse_chunked(text: str, filename: str, progress=None, existing_codes: Optional[Dict] = None) -> Dict:
     """大文档分段解析流程：
     1. 用 AI 快速提取概览（应用名、角色、表单清单）
     2. 按章节拆分文档
@@ -316,9 +391,13 @@ async def _parse_chunked(text: str, filename: str, progress=None) -> Dict:
             await _p(f"Step 3/3: 解析第 {idx+1}/{len(chunks)} 段...")
             logger.info(f"解析段 {idx+1}/{len(chunks)}, 长度 {len(chunk)} 字符")
             try:
+                chunk_user_msg = "以下是需求文档的一部分，请提取其中的表单和字典配置：\n\n"
+                if existing_codes:
+                    chunk_user_msg += _build_existing_codes_prompt(existing_codes)
+                chunk_user_msg += f"---\n\n{chunk}"
                 r = await client.chat_completion(
                     [{"role": "system", "content": DETAIL_SYSTEM_PROMPT},
-                     {"role": "user", "content": f"以下是需求文档的一部分，请提取其中的表单和字典配置：\n\n---\n\n{chunk}"}],
+                     {"role": "user", "content": chunk_user_msg}],
                     max_tokens=16384, timeout=180.0, temperature=0.2
                 )
                 c = r["choices"][0]["message"]["content"]

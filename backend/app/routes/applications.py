@@ -560,11 +560,16 @@ async def upload_design_doc(
 @router.post("/upload-doc-with-conversation")
 async def upload_doc_with_conversation(
     file: UploadFile = File(...),
+    conversation_id: Optional[int] = Form(None),
     current_user: Annotated[User, Depends(get_current_user)] = None,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
     ctx: Annotated[AuthContext, Depends(get_auth_context)] = None,
 ):
     """上传功能设计文档并创建对话会话（SSE 流式返回解析进度）
+
+    支持两种模式：
+    - V1（首次上传）：不传 conversation_id，完整解析，创建新对话
+    - V2+（增量上传）：传 conversation_id，对比文档文本，只解析变化部分
 
     事件格式：
     - event: progress / data: {"message": "..."} — 解析进度
@@ -581,32 +586,114 @@ async def upload_doc_with_conversation(
     # 把 db session 相关的值先存好
     user_id = current_user.id
     tenant_id = ctx.tenant_id
+    existing_conversation_id = conversation_id
+
+    # 如果传了 conversation_id，预先查找 V1 文档版本
+    v1_doc_info: Optional[dict] = None
+    if existing_conversation_id:
+        v1_result = await db.execute(
+            select(DocumentVersion)
+            .where(DocumentVersion.conversation_id == existing_conversation_id)
+            .order_by(desc(DocumentVersion.version))
+            .limit(1)
+        )
+        v1_doc_obj = v1_result.scalar_one_or_none()
+        if v1_doc_obj:
+            v1_doc_info = {
+                "raw_content": v1_doc_obj.raw_content,
+                "parsed_config": v1_doc_obj.parsed_config,
+                "version": v1_doc_obj.version,
+            }
 
     async def event_generator():
         from app.config_assembler import assemble_config_streaming
         from app.database import AsyncSessionLocal
+        from app.doc_text_differ import diff_sections, build_changed_text, get_diff_stats
+        from app.ai_doc_parser import parse_doc_with_ai, extract_existing_codes
+        from app.config_diff import compute_config_diff
 
         data = None
+        is_incremental = False
+        v1_parsed_config = None
+        diff_result = None
+
         try:
-            async for event in assemble_config_streaming(
-                user_prompt=f"请根据以下设计文档生成完整的应用配置。文档名：{fname}",
-                context=text,  # 完整文档内容作为上下文
-            ):
-                phase = event.get("phase", "")
-                status = event.get("status", "")
-                message = event.get("message", "")
+            # ── 判断是否走增量模式 ──
+            if v1_doc_info and v1_doc_info.get("raw_content"):
+                is_incremental = True
 
-                # 转发进度事件（带 batch 数据供前端实时更新预览）
-                progress_data: dict = {"message": f"[{phase}] {message}"}
-                if event.get("batch"):
-                    progress_data["batch"] = event["batch"]
-                if event.get("data"):
-                    progress_data["data"] = event["data"]
-                yield {"event": "progress", "data": json.dumps(progress_data, ensure_ascii=False)}
+                # Step 1: 文本级章节对比
+                yield {"event": "progress", "data": json.dumps({"message": "正在对比文档..."}, ensure_ascii=False)}
+                diff_result = diff_sections(v1_doc_info["raw_content"], text)
+                diff_stats = get_diff_stats(diff_result)
 
-                # 最终结果
-                if phase == "complete" and event.get("data"):
-                    data = event["data"]
+                total_changes = diff_stats["added"] + diff_stats["modified"] + diff_stats["removed"]
+                yield {"event": "progress", "data": json.dumps({
+                    "message": f"发现 {total_changes} 个章节变化（新增 {diff_stats['added']} 个，修改 {diff_stats['modified']} 个，删除 {diff_stats['removed']} 个）",
+                    "diff_stats": diff_stats,
+                }, ensure_ascii=False)}
+
+                # 加载 V1 parsed_config
+                if v1_doc_info.get("parsed_config"):
+                    try:
+                        v1_parsed_config = json.loads(v1_doc_info["parsed_config"]) if isinstance(v1_doc_info["parsed_config"], str) else v1_doc_info["parsed_config"]
+                    except Exception:
+                        v1_parsed_config = None
+
+                changed_count = diff_stats["added"] + diff_stats["modified"]
+
+                if changed_count == 0 and diff_stats["removed"] == 0:
+                    # 文档完全无变化
+                    yield {"event": "error", "data": json.dumps({"message": "文档内容无变化，无需重新上传"}, ensure_ascii=False)}
+                    return
+
+                if changed_count > 0 and v1_parsed_config:
+                    # Step 2: 只解析变化部分
+                    changed_text = build_changed_text(diff_result)
+                    yield {"event": "progress", "data": json.dumps({
+                        "message": f"正在解析变化部分（{changed_count} 个章节）...",
+                    }, ensure_ascii=False)}
+
+                    # 提取 V1 已有编码作为上下文
+                    existing_codes = extract_existing_codes(v1_parsed_config)
+
+                    # 只对变化部分调 AI 解析
+                    partial_config = await parse_doc_with_ai(
+                        changed_text, filename=fname, existing_codes=existing_codes
+                    )
+
+                    # Step 3: 合并配置
+                    yield {"event": "progress", "data": json.dumps({"message": "合并配置..."}, ensure_ascii=False)}
+                    data = _merge_configs(v1_parsed_config, partial_config, diff_result)
+
+                elif v1_parsed_config:
+                    # 只有删除，无新增/修改
+                    yield {"event": "progress", "data": json.dumps({
+                        "message": "无新增或修改章节，复用已有解析结果",
+                    }, ensure_ascii=False)}
+                    data = _remove_deleted_from_config(v1_parsed_config, diff_result)
+                else:
+                    # V1 没有 parsed_config，回退全量解析
+                    is_incremental = False
+
+            # ── V1 首次上传：全量解析 ──
+            if not is_incremental:
+                async for event in assemble_config_streaming(
+                    user_prompt=f"请根据以下设计文档生成完整的应用配置。文档名：{fname}",
+                    context=text,
+                ):
+                    phase = event.get("phase", "")
+                    message = event.get("message", "")
+
+                    progress_data: dict = {"message": f"[{phase}] {message}"}
+                    if event.get("batch"):
+                        progress_data["batch"] = event["batch"]
+                    if event.get("data"):
+                        progress_data["data"] = event["data"]
+                    yield {"event": "progress", "data": json.dumps(progress_data, ensure_ascii=False)}
+
+                    if phase == "complete" and event.get("data"):
+                        data = event["data"]
 
         except Exception as e:
             err_msg = str(e) or repr(e) or type(e).__name__
@@ -629,12 +716,17 @@ async def upload_doc_with_conversation(
         async with AsyncSessionLocal() as session:
             from app.models import Conversation, Message
 
-            conversation = Conversation(
-                user_id=user_id, tenant_id=tenant_id,
-                title=f"文档：{fname}", agent_type="builder", status="active"
-            )
-            session.add(conversation)
-            await session.flush()
+            # 增量模式复用已有对话，首次上传创建新对话
+            if existing_conversation_id:
+                conv_id = existing_conversation_id
+            else:
+                conversation = Conversation(
+                    user_id=user_id, tenant_id=tenant_id,
+                    title=f"文档：{fname}", agent_type="builder", status="active"
+                )
+                session.add(conversation)
+                await session.flush()
+                conv_id = conversation.id
 
             # 系统上下文
             models_summary = []
@@ -651,11 +743,11 @@ async def upload_doc_with_conversation(
             context_content += f"业务表单：\n" + "\n".join(models_summary) + "\n\n"
             context_content += "用户可能会要求修改配置。当用户确认后，生成完整的配置JSON。"
 
-            session.add(Message(conversation_id=conversation.id, role="system", content=context_content))
+            session.add(Message(conversation_id=conv_id, role="system", content=context_content))
 
             # 保存原始文档内容（供后续创建 DocumentVersion 使用）
             doc_raw_msg = json.dumps({"type": "doc_raw", "filename": fname, "content": text}, ensure_ascii=False)
-            session.add(Message(conversation_id=conversation.id, role="system", content=doc_raw_msg))
+            session.add(Message(conversation_id=conv_id, role="system", content=doc_raw_msg))
 
             # 生成摘要
             models_count = len(data.get("models", []))
@@ -668,30 +760,41 @@ async def upload_doc_with_conversation(
                 tag = f"{opts_count}个选项" if opts_count > 0 else "⚠️ 空字典"
                 dicts_list.append(f"  - {d.get('name', '')}（{d.get('code', '')}）：{tag}")
 
-            summary = f"我已经理解了设计文档《{fname}》，识别出：\n\n"
-            summary += f"- **{models_count} 个业务表单**\n"
-            summary += f"- **{roles_count} 个角色**\n"
-            summary += f"- **{dicts_count} 个数据字典**\n"
-            if dicts_list:
-                summary += "\n数据字典详情：\n" + "\n".join(dicts_list) + "\n"
-            summary += "\n你可以告诉我需要调整的地方，或者直接说\"开始生成\"。"
+            if is_incremental and v1_parsed_config:
+                # 增量模式：用 config_diff 展示差异
+                v1_for_diff = v1_parsed_config
+                resource_diff = compute_config_diff(v1_for_diff, data)
+                diff_summary_text = resource_diff.summary or "文档更新解析完成"
 
-            session.add(Message(conversation_id=conversation.id, role="assistant", content=summary))
+                summary = f"文档《{fname}》已更新（V{v1_doc_info['version'] + 1}），增量解析完成：\n\n"
+                summary += diff_summary_text + "\n\n"
+                summary += f"当前配置：**{models_count} 个表单**、**{roles_count} 个角色**、**{dicts_count} 个字典**\n"
+                summary += "\n你可以告诉我需要调整的地方，或者直接说\"开始生成\"。"
+            else:
+                summary = f"我已经理解了设计文档《{fname}》，识别出：\n\n"
+                summary += f"- **{models_count} 个业务表单**\n"
+                summary += f"- **{roles_count} 个角色**\n"
+                summary += f"- **{dicts_count} 个数据字典**\n"
+                if dicts_list:
+                    summary += "\n数据字典详情：\n" + "\n".join(dicts_list) + "\n"
+                summary += "\n你可以告诉我需要调整的地方，或者直接说\"开始生成\"。"
+
+            session.add(Message(conversation_id=conv_id, role="assistant", content=summary))
 
             # 保存完整配置 JSON 作为 system 消息（刷新页面时可恢复）
             config_msg = '```json\n' + json.dumps({"type": "preview", "data": data}, ensure_ascii=False) + '\n```'
-            session.add(Message(conversation_id=conversation.id, role="system", content=config_msg))
+            session.add(Message(conversation_id=conv_id, role="system", content=config_msg))
 
             # 保存原始文档内容（用于后续创建 DocumentVersion）
             doc_msg = '```doc_raw\n' + json.dumps({"filename": fname, "raw_content": text}, ensure_ascii=False) + '\n```'
-            session.add(Message(conversation_id=conversation.id, role="system", content=doc_msg))
+            session.add(Message(conversation_id=conv_id, role="system", content=doc_msg))
 
             # 自动保存 DocumentVersion（conversation_id 关联，application_id 待后续绑定）
             import hashlib
             # 检查同一 conversation 下已有版本号
             existing_ver_result = await session.execute(
                 select(sa_func.max(DocumentVersion.version))
-                .where(DocumentVersion.conversation_id == conversation.id)
+                .where(DocumentVersion.conversation_id == conv_id)
             )
             max_ver = existing_ver_result.scalar() or 0
             new_version = max_ver + 1
@@ -699,25 +802,34 @@ async def upload_doc_with_conversation(
             config_json_str = json.dumps(data, ensure_ascii=False)
             doc_ver = DocumentVersion(
                 application_id=None,
-                conversation_id=conversation.id,
+                conversation_id=conv_id,
                 version=new_version,
                 filename=fname,
                 content_hash=hashlib.sha256(text.encode()).hexdigest(),
                 raw_content=text,
                 parsed_config=config_json_str,
+                parent_version=max_ver if max_ver > 0 else None,
                 summary=f"{models_count} 模型, {dicts_count} 字典, {roles_count} 角色",
             )
             session.add(doc_ver)
 
             await session.commit()
 
+            done_data = {
+                "conversation_id": conv_id,
+                "summary": summary,
+                "preview": data,
+                "version": new_version,
+                "is_incremental": is_incremental,
+            }
+            # 增量模式下额外返回 diff 信息
+            if is_incremental and v1_parsed_config:
+                resource_diff_dict = resource_diff.to_dict()
+                done_data["diff"] = resource_diff_dict
+
             yield {
                 "event": "done",
-                "data": json.dumps({
-                    "conversation_id": conversation.id,
-                    "summary": summary,
-                    "preview": data,
-                }, ensure_ascii=False)
+                "data": json.dumps(done_data, ensure_ascii=False)
             }
 
     from sse_starlette.sse import EventSourceResponse
@@ -897,7 +1009,7 @@ async def upload_doc_version(
             structure_index = build_structure_index(text)
 
             # ── 分支：有 V1 文档时走「文档对比优先」，否则走全量解析 ──
-            from app.ai_doc_parser import parse_doc_with_ai
+            from app.ai_doc_parser import parse_doc_with_ai, extract_existing_codes
 
             if v1_doc and v1_doc.get("raw_content"):
                 # ===== 增量模式：文档对比优先 =====
@@ -924,14 +1036,15 @@ async def upload_doc_version(
                 changed_count = diff_stats["added"] + diff_stats["modified"]
 
                 if changed_count > 0:
-                    # Step C: 只对变更章节调 AI 解析
+                    # Step C: 只对变更章节调 AI 解析（传入 V1 已有编码让 AI 复用）
                     changed_text = build_changed_text(text_diff)
                     yield {"event": "progress", "data": json.dumps({
                         "step": "parse_changes",
                         "message": f"正在解析 {changed_count} 个变更章节...",
                     }, ensure_ascii=False)}
 
-                    partial_config = await parse_doc_with_ai(changed_text, filename=fname)
+                    existing_codes = extract_existing_codes(v1_parsed_config) if v1_parsed_config else None
+                    partial_config = await parse_doc_with_ai(changed_text, filename=fname, existing_codes=existing_codes)
 
                     # Step D: 合并 — V1 未变更部分 + V2 变更部分
                     yield {"event": "progress", "data": json.dumps({"step": "merge", "message": "合并未变更部分与变更结果..."}, ensure_ascii=False)}
