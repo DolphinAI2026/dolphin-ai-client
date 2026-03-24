@@ -176,6 +176,11 @@ def _build_component(
         "modelField": f"{model_code}.{field_code}",
     }
 
+    # 必填属性
+    if field.get("required"):
+        comp["required"] = True
+        comp["validators"] = [{"type": "REQUIRED", "message": f"{field['name']}不能为空"}]
+
     # 字典绑定
     if ftype in ("下拉单选", "下拉多选") and field.get("dict"):
         dcode = dict_codes.get(field["dict"])
@@ -190,14 +195,19 @@ def _build_component(
         ref = field["ref"]
         ref_model = ref.get("model", "") if isinstance(ref, dict) else str(ref)
         ref_field = ref.get("field", "") if isinstance(ref, dict) else ""
+        # 按 code 和 name 都尝试匹配
         for ridx, rm in enumerate(models):
-            if rm["name"] == ref_model:
-                ref_mi = model_info.get(ridx)
+            if rm.get("name") == ref_model or rm.get("code") == ref_model:
+                ref_mi = model_info.get(str(ridx))
                 if ref_mi:
+                    # 解析显示字段的平台编码
+                    display_field_code = ref_field
+                    if ref_mi.get("fields") and ref_field:
+                        display_field_code = ref_mi["fields"].get(ref_field, ref_field)
                     comp["dataSelectorConfig"] = {
                         "type": "LOV_CHOOSE",
                         "otherModelCode": ref_mi["code"],
-                        "otherFieldCode": ref_field,
+                        "otherFieldCode": display_field_code,
                     }
                 break
 
