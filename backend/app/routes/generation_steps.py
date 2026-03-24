@@ -507,11 +507,31 @@ async def _execute_step_impl(
             dc = _apply_suffix(_sanitize_code(d.get('code', 'dict')), suffix)
             state.setdefault("dict_codes", {})[d["name"]] = dc
             state["dict_codes"][d.get("code", d["name"])] = dc
-            await client.create_dicts(apaas_app_id, [{
-                "dictionaryName": d["name"],
-                "dictionaryCode": dc,
-                "dictionaryType": "CUSTOM",
-            }])
+            try:
+                await client.create_dicts(apaas_app_id, [{
+                    "dictionaryName": d["name"],
+                    "dictionaryCode": dc,
+                    "dictionaryType": "CUSTOM",
+                }])
+            except Exception as e:
+                if "重复" in str(e) or "已存在" in str(e) or "duplicate" in str(e).lower():
+                    # 编码重复，尝试按名称或编码查找已有字典并复用
+                    logger.warning(f"字典编码冲突，尝试复用: {d['name']} ({dc})")
+                    refreshed = {dd.get("dictionaryName"): dd for dd in await client.query_dicts(apaas_app_id)}
+                    # 按名称查
+                    found = refreshed.get(d["name"])
+                    if not found:
+                        # 按编码查
+                        found = next((dd for dd in refreshed.values() if dd.get("dictionaryCode") == dc), None)
+                    if found:
+                        pc = found["dictionaryCode"]
+                        state["dict_codes"][d["name"]] = pc
+                        state["dict_codes"][d.get("code", d["name"])] = pc
+                        logger.info(f"复用已有字典: {d['name']} -> {pc}")
+                    else:
+                        raise
+                else:
+                    raise
         # 创建选项
         if d.get("options"):
             final_code = state["dict_codes"].get(d["name"], "")
