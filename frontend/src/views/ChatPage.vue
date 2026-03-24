@@ -504,6 +504,7 @@
         </div>
         <div v-if="deployAllDone" class="deploy-done">
           🎉 部署完成！<button class="deploy-done-btn" @click="router.push('/apps')">查看应用 →</button>
+          <button class="deploy-log-btn" @click="showApiLogs = true">📋 API日志</button>
         </div>
       </div>
     </div>
@@ -581,6 +582,35 @@
 
     <ConnectModal v-model="store.showConnectModal" />
     <EnvSelectModal v-model="showEnvSelect" @selected="onEnvSelected" />
+
+    <!-- API 调用日志弹窗 -->
+    <el-dialog v-model="showApiLogs" title="API 调用日志" width="80%" :append-to-body="true">
+      <div class="api-logs-header">
+        <el-select v-model="apiLogFilter" placeholder="筛选步骤" clearable size="small" style="width:200px">
+          <el-option label="全部" value="" />
+          <el-option label="仅失败" value="failed" />
+        </el-select>
+        <span class="api-logs-count">共 {{ apiLogs.length }} 条记录</span>
+      </div>
+      <div class="api-logs-table">
+        <table>
+          <thead>
+            <tr><th>时间</th><th>步骤</th><th>API</th><th>状态</th><th>耗时</th><th>结果</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="log in apiLogs" :key="log.id" :class="{ error: !log.success }">
+              <td class="log-time">{{ log.created_at?.slice(11, 19) }}</td>
+              <td class="log-step">{{ log.step_key }}</td>
+              <td class="log-url" :title="log.url">{{ log.url?.split('/').pop() }}</td>
+              <td class="log-status" :class="log.success ? 'ok' : 'fail'">{{ log.response_status }}</td>
+              <td class="log-ms">{{ log.elapsed_ms }}ms</td>
+              <td class="log-result">{{ log.success ? '✓' : log.error_message?.slice(0, 40) }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <div v-if="apiLogs.length === 0" class="api-logs-empty">暂无日志</div>
+      </div>
+    </el-dialog>
     <ProjectSettingsModal
       v-model="showProjectSettingsModal"
       :project="editingProject"
@@ -1109,6 +1139,20 @@ const existingAppId = ref<number | null>(null)  // 从"继续完善"进来时，
 const generating = ref(false)
 const showEnvSelect = ref(false)
 const selectedEnvId = ref<number | null>(null)
+const showApiLogs = ref(false)
+const apiLogs = ref<any[]>([])
+const apiLogFilter = ref('')
+
+watch(showApiLogs, async (val) => {
+  if (val && existingAppId.value) {
+    try {
+      const params = new URLSearchParams({ page: '1', page_size: '200' })
+      if (apiLogFilter.value === 'failed') params.set('success', 'false')
+      const res = await request.get(`/applications/${existingAppId.value}/api-logs?${params}`)
+      apiLogs.value = (res as any).items || []
+    } catch { apiLogs.value = [] }
+  }
+})
 
 const onEnvSelected = (envId: number) => {
   selectedEnvId.value = envId
@@ -3533,6 +3577,29 @@ watch(conversationId, (id) => {
   transition: transform 0.2s;
 }
 .deploy-done-btn:hover { transform: translateY(-1px); }
+.deploy-log-btn {
+  background: none; border: 1px solid rgba(255,255,255,0.1); color: rgba(255,255,255,0.6);
+  border-radius: 6px; padding: 5px 10px; font-size: 11px; cursor: pointer; margin-left: 6px;
+}
+.deploy-log-btn:hover { background: rgba(255,255,255,0.06); color: #fff; }
+
+/* API 日志弹窗 */
+.api-logs-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.api-logs-count { font-size: 12px; color: rgba(255,255,255,0.4); }
+.api-logs-table { max-height: 500px; overflow-y: auto; }
+.api-logs-table table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.api-logs-table th { text-align: left; padding: 8px 10px; color: rgba(255,255,255,0.5); border-bottom: 1px solid rgba(255,255,255,0.08); font-weight: 500; }
+.api-logs-table td { padding: 6px 10px; border-bottom: 1px solid rgba(255,255,255,0.04); color: rgba(255,255,255,0.75); }
+.api-logs-table tr.error td { color: #f87171; }
+.api-logs-table tr:hover td { background: rgba(255,255,255,0.03); }
+.log-time { font-family: monospace; color: rgba(255,255,255,0.4); }
+.log-step { color: #a78bfa; }
+.log-url { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.log-status.ok { color: #34d399; }
+.log-status.fail { color: #f87171; font-weight: 600; }
+.log-ms { font-family: monospace; color: rgba(255,255,255,0.5); }
+.log-result { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.api-logs-empty { text-align: center; padding: 40px; color: rgba(255,255,255,0.3); }
 
 /* ── nav-right 项目按钮 ── */
 .nav-link.active { background: rgba(124,58,237,0.15); color: #a78bfa; }
