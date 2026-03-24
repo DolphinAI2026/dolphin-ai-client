@@ -81,15 +81,42 @@ def _build_steps(config: dict, state: dict, apaas_app_id: str = None) -> list[St
         error=errors.get("create_app"),
     ))
 
-    # 2. 角色+字典
-    steps.append(StepStatus(
-        key="create_roles_dicts", label="创建角色+字典",
-        status="completed" if "create_roles_dicts" in completed else ("error" if "create_roles_dicts" in errors else "pending"),
-        deps_met=app_created,
-        error=errors.get("create_roles_dicts"),
-    ))
+    # 2. 角色（逐个）
+    roles = data.get("roles", [])
+    for idx, r in enumerate(roles):
+        key = f"create_role:{idx}"
+        steps.append(StepStatus(
+            key=key, label=f"创建角色: {r.get('name', f'角色{idx}')}",
+            status="completed" if key in completed else ("error" if key in errors else "pending"),
+            deps_met=app_created,
+            error=errors.get(key),
+        ))
 
-    # 3. 数据模型（每个独立）
+    # 3. 字典（逐个）
+    dicts = data.get("dicts", [])
+    for idx, d in enumerate(dicts):
+        key = f"create_dict:{idx}"
+        steps.append(StepStatus(
+            key=key, label=f"创建字典: {d.get('name', f'字典{idx}')}",
+            status="completed" if key in completed else ("error" if key in errors else "pending"),
+            deps_met=app_created,
+            error=errors.get(key),
+        ))
+
+    # 兼容旧的 create_roles_dicts 步骤（如果已完成，标记所有角色和字典步骤为已完成）
+    if "create_roles_dicts" in completed:
+        for idx in range(len(roles)):
+            k = f"create_role:{idx}"
+            if k not in completed:
+                completed.add(k)
+        for idx in range(len(dicts)):
+            k = f"create_dict:{idx}"
+            if k not in completed:
+                completed.add(k)
+
+    # 4. 数据模型（每个独立）
+    all_roles_done = all(f"create_role:{i}" in completed for i in range(len(roles))) if roles else True
+    all_dicts_done = all(f"create_dict:{i}" in completed for i in range(len(dicts))) if dicts else True
     for idx, m in enumerate(models):
         key = f"create_model:{idx}"
         steps.append(StepStatus(
@@ -100,11 +127,11 @@ def _build_steps(config: dict, state: dict, apaas_app_id: str = None) -> list[St
             error=errors.get(key),
         ))
 
-    # 4. 表单（每个独立）
+    # 5. 表单（每个独立）
     for idx, m in enumerate(models):
         key = f"create_form:{idx}"
         model_key = f"create_model:{idx}"
-        deps_ok = "create_roles_dicts" in completed and model_key in completed
+        deps_ok = all_roles_done and all_dicts_done and model_key in completed
         steps.append(StepStatus(
             key=key, label=f"创建表单: {m['name']}",
             status="completed" if key in completed else ("error" if key in errors else "pending"),
@@ -381,6 +408,7 @@ async def _execute_step_impl(
         return result
 
     elif step_key == "create_roles_dicts":
+        # 兼容旧步骤
         result = await execute_create_roles_dicts(
             client, apaas_app_id,
             data.get("roles", []), data.get("dicts", []), suffix,
@@ -388,6 +416,67 @@ async def _execute_step_impl(
         state["dict_codes"] = result["dict_codes"]
         state["role_codes"] = result.get("role_codes", {})
         return result
+
+    elif step_key.startswith("create_role:"):
+        idx = int(step_key.split(":")[1])
+        roles = data.get("roles", [])
+        if idx >= len(roles):
+            raise ValueError(f"角色索引 {idx} 超出范围")
+        r = roles[idx]
+        from app.step_executor import _apply_suffix, _sanitize_code
+        original_code = r.get("code", r["name"])
+        platform_code = _apply_suffix(f"R_{_sanitize_code(original_code)}", suffix)
+        try:
+            await client.create_roles(apaas_app_id, [{
+                "appId": apaas_app_id,
+                "roleCode": platform_code,
+                "roleName": r["name"],
+            }])
+        except Exception as e:
+            if "已存在" not in str(e) and "重复" not in str(e):
+                raise
+        state.setdefault("role_codes", {})[original_code] = {"roleCode": platform_code, "roleName": r["name"]}
+        return {"role": r["name"], "code": platform_code}
+
+    elif step_key.startswith("create_dict:"):
+        idx = int(step_key.split(":")[1])
+        dicts_list = data.get("dicts", [])
+        if idx >= len(dicts_list):
+            raise ValueError(f"字典索引 {idx} 超出范围")
+        d = dicts_list[idx]
+        from app.step_executor import _apply_suffix, _sanitize_code
+        # 查询已有字典
+        existing = {dd.get("dictionaryName"): dd for dd in await client.query_dicts(apaas_app_id)}
+        ed = existing.get(d["name"])
+        if ed:
+            pc = ed["dictionaryCode"]
+            state.setdefault("dict_codes", {})[d["name"]] = pc
+            state["dict_codes"][d.get("code", d["name"])] = pc
+        else:
+            dc = _apply_suffix(_sanitize_code(d.get('code', 'dict')), suffix)
+            state.setdefault("dict_codes", {})[d["name"]] = dc
+            state["dict_codes"][d.get("code", d["name"])] = dc
+            await client.create_dicts(apaas_app_id, [{
+                "dictionaryName": d["name"],
+                "dictionaryCode": dc,
+                "dictionaryType": "CUSTOM",
+            }])
+        # 创建选项
+        if d.get("options"):
+            final_code = state["dict_codes"].get(d["name"], "")
+            all_dicts = await client.query_dicts(apaas_app_id)
+            dict_obj = next((dd for dd in all_dicts if dd.get("dictionaryCode") == final_code), None)
+            if dict_obj:
+                dict_id = dict_obj.get("id")
+                existing_opts = {o.get("optionName") for o in dict_obj.get("options", [])}
+                new_opts = [o for o in d["options"] if o["name"] not in existing_opts]
+                for o in new_opts:
+                    oc = _sanitize_code(o.get("code", o["name"]))
+                    await client.create_dict_options(apaas_app_id, dict_id, [{
+                        "optionName": o["name"],
+                        "optionCode": oc,
+                    }])
+        return {"dict": d["name"], "options": len(d.get("options", []))}
 
     elif step_key.startswith("create_model:"):
         idx = int(step_key.split(":")[1])

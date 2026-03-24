@@ -1357,7 +1357,8 @@ const incrementalResults = ref<ExecuteResponse | null>(null)
 const deployGroups = computed(() => {
   const defs = [
     { title: '初始化', icon: '🚀', test: (s: DeployStep) => s.key === 'create_app' },
-    { title: '公共资源', icon: '📦', test: (s: DeployStep) => s.key === 'create_roles_dicts' },
+    { title: '角色', icon: '👥', test: (s: DeployStep) => s.key.startsWith('create_role:') || s.key === 'create_roles_dicts' },
+    { title: '数据字典', icon: '📖', test: (s: DeployStep) => s.key.startsWith('create_dict:') },
     { title: '数据模型', icon: '🗃', test: (s: DeployStep) => s.key.startsWith('create_model:') },
     { title: '表单配置', icon: '📋', test: (s: DeployStep) => s.key.startsWith('create_form:') },
     { title: '审批流程', icon: '🔄', test: (s: DeployStep) => s.key.startsWith('create_workflow:') },
