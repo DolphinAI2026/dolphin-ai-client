@@ -65,7 +65,7 @@
         <div class="sidebar-header">
           <el-select
             v-model="currentProjectId"
-            placeholder="选择项目"
+            placeholder="选择应用"
             size="small"
             class="project-select"
             @change="onProjectChange"
@@ -96,8 +96,8 @@
         <!-- No Project Prompt -->
         <div v-if="projects.length === 0" class="sidebar-empty-project">
           <div class="empty-icon">&#128194;</div>
-          <div class="empty-text">创建你的第一个项目</div>
-          <el-button size="small" type="primary" @click="showCreateProject">新建项目</el-button>
+          <div class="empty-text">创建你的第一个应用</div>
+          <el-button size="small" type="primary" @click="showCreateProject">新建应用</el-button>
         </div>
 
         <!-- Workspace List (under selected project) -->
@@ -137,7 +137,7 @@
         <!-- Project Actions (bottom) -->
         <div v-if="currentProject" class="sidebar-footer">
           <el-button size="small" text type="danger" @click="deleteProject" class="sidebar-delete-btn">
-            删除项目
+            删除应用
           </el-button>
         </div>
       </aside>
@@ -500,7 +500,7 @@ async function deleteProject() {
     } else {
       currentProjectId.value = null
     }
-    ElMessage.success('项目已删除')
+    ElMessage.success('应用已删除')
   } catch (e: any) {
     ElMessage.error(e.message || '删除失败')
   }

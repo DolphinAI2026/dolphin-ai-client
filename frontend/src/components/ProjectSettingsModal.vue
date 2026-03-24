@@ -1,7 +1,7 @@
 <template>
   <el-dialog
     v-model="visible"
-    :title="isEdit ? '项目设置' : '新建项目'"
+    :title="isEdit ? '应用设置' : '新建应用'"
     width="640px"
     :close-on-click-modal="false"
     class="project-settings-modal"
@@ -39,11 +39,11 @@
         <!-- 基本信息 -->
         <div v-show="activeTab === 'basic'" class="settings-pane">
           <el-form :model="form" label-position="top" size="default">
-            <el-form-item label="项目名称" required>
+            <el-form-item label="应用名称" required>
               <el-input v-model="form.name" placeholder="例如：劳务管理系统" />
             </el-form-item>
-            <el-form-item label="项目描述">
-              <el-input v-model="form.description" type="textarea" :rows="3" placeholder="简要描述项目用途" />
+            <el-form-item label="应用描述">
+              <el-input v-model="form.description" type="textarea" :rows="3" placeholder="简要描述应用用途" />
             </el-form-item>
           </el-form>
         </div>
@@ -343,7 +343,7 @@ async function fetchAvailableUsers() {
 
 async function handleAddMember() {
   if (!props.project?.id) {
-    ElMessage.warning('请先保存项目')
+    ElMessage.warning('请先保存应用')
     return
   }
   if (!selectedUserId.value) {
@@ -430,7 +430,7 @@ async function handleConnect() {
 
 async function handleSave() {
   if (!form.name.trim()) {
-    ElMessage.warning('请输入项目名称')
+    ElMessage.warning('请输入应用名称')
     return
   }
   saving.value = true
@@ -462,7 +462,7 @@ async function handleSave() {
         description: form.description,
       })
     }
-    ElMessage.success(isEdit.value ? '项目已保存' : '项目已创建')
+    ElMessage.success(isEdit.value ? '应用已保存' : '应用已创建')
     emit('saved', result)
     visible.value = false
   } catch (e: any) {

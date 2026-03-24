@@ -503,8 +503,8 @@
       </div>
       <div v-else-if="projects.length === 0" class="projects-empty">
         <div class="empty-icon">📁</div>
-        <p>还没有项目</p>
-        <button class="create-first-btn" @click="openCreateProject">创建第一个项目</button>
+        <p>还没有应用</p>
+        <button class="create-first-btn" @click="openCreateProject">创建第一个应用</button>
       </div>
       <div v-else class="projects-list">
         <div
@@ -519,7 +519,7 @@
               <span class="project-name">{{ proj.name }}</span>
             </div>
             <div class="project-card-actions">
-              <button class="project-settings-btn" @click.stop="openProjectSettings(proj)" title="项目设置">
+              <button class="project-settings-btn" @click.stop="openProjectSettings(proj)" title="应用设置">
                 ⚙️
               </button>
               <span class="expand-arrow" :class="{ expanded: expandedProjectId === proj.id }">▸</span>
