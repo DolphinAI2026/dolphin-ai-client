@@ -2903,6 +2903,22 @@ watch(conversationId, (id) => {
 .conv-history-select :deep(.el-input.is-focus .el-input__wrapper) {
   border-color: rgba(124,58,237,0.4) !important; box-shadow: none !important;
 }
+.conv-history-select :deep(.el-select__tags),
+.conv-history-select :deep(.el-tag) {
+  background: transparent !important;
+}
+.conv-history-select :deep(.el-tag .el-tag__content) {
+  color: rgba(255,255,255,0.8) !important;
+}
+.conv-history-select :deep(.el-select__input) {
+  background: transparent !important; color: rgba(255,255,255,0.8) !important;
+}
+.conv-history-select :deep(.el-select__placeholder) {
+  color: rgba(255,255,255,0.3) !important;
+}
+.conv-history-select :deep(.el-select__selected-item) {
+  color: rgba(255,255,255,0.8) !important;
+}
 .conv-history-select :deep(.el-input__inner) {
   color: rgba(255,255,255,0.8) !important; font-size: 12px !important;
 }
