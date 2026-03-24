@@ -2275,6 +2275,17 @@ const handleIncrementalDocUpload = async (file: File) => {
               scrollToBottom()
             } else if (currentEvent === 'done') {
               changePlanData = data.change_plan || data
+              // P0: 用 V2 配置更新 preview store
+              if (data.parsed_config) {
+                const pc = data.parsed_config.data || data.parsed_config
+                store.preview.appName = pc.appName || store.preview.appName
+                store.preview.models = pc.models || []
+                store.preview.dicts = pc.dicts || []
+                store.preview.roles = pc.roles || []
+                store.preview.workflows = pc.workflows || []
+                store.preview.permissions = pc.permissions || []
+                store.currentApp = { name: store.preview.appName, status: 'draft' }
+              }
             } else if (currentEvent === 'error') {
               throw new Error(data.message || '文档分析失败')
             }

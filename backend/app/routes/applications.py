@@ -1274,12 +1274,17 @@ async def upload_doc_version(
                 )
                 session.add(change_plan)
 
-                # 更新应用的当前文档版本
+                # 更新应用：文档版本 + 配置 + 状态
                 app_result = await session.execute(
                     select(Application).where(Application.id == app_id_val)
                 )
                 app_obj = app_result.scalar_one()
                 app_obj.current_doc_version = new_version
+                # 关键：用 V2 配置更新 config_preview
+                app_obj.config_preview = json.dumps({"type": "preview", "data": v2_config}, ensure_ascii=False)
+                # 标记需要重新部署
+                if app_obj.status == "completed":
+                    app_obj.status = "draft"
 
                 await session.commit()
                 await session.refresh(change_plan)
