@@ -59,3 +59,29 @@ html, body, #app {
 .el-message-box__errormsg {
   color: #f87171 !important;
 }
+
+/* ── Global: All el-dialog dark theme ── */
+.el-dialog {
+  background: #1a1a2e !important;
+  color: rgba(255, 255, 255, 0.9) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px !important;
+}
+.el-dialog__header {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.el-dialog__title {
+  color: rgba(255, 255, 255, 0.92) !important;
+}
+.el-dialog__headerbtn .el-dialog__close {
+  color: rgba(255, 255, 255, 0.4) !important;
+}
+.el-dialog__body {
+  color: rgba(255, 255, 255, 0.85);
+}
+.el-dialog__footer {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.el-overlay {
+  background-color: rgba(0, 0, 0, 0.6) !important;
+}
