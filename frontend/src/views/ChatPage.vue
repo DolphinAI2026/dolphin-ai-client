@@ -2896,6 +2896,13 @@ watch(conversationId, (id) => {
   background: transparent !important; border: 1px solid rgba(255,255,255,0.06) !important;
   box-shadow: none !important; border-radius: 8px !important; height: 28px;
 }
+.conv-history-select :deep(.el-input__wrapper:hover) {
+  border-color: rgba(255,255,255,0.12) !important;
+}
+.conv-history-select :deep(.el-input__wrapper.is-focus),
+.conv-history-select :deep(.el-input.is-focus .el-input__wrapper) {
+  border-color: rgba(124,58,237,0.4) !important; box-shadow: none !important;
+}
 .conv-history-select :deep(.el-input__inner) {
   color: rgba(255,255,255,0.8) !important; font-size: 12px !important;
 }
