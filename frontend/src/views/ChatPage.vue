@@ -180,6 +180,17 @@
                   </div>
                 </div>
               </div>
+              <!-- 变更摘要面板 -->
+              <div class="diff-changes-panel">
+                <div class="dcp-title">变更摘要</div>
+                <div class="dcp-list">
+                  <div v-for="(change, idx) in diffChangeSummary" :key="idx" class="dcp-item" :class="change.type">
+                    <span class="dcp-icon">{{ change.type === 'added' ? '+' : change.type === 'removed' ? '-' : '~' }}</span>
+                    <span class="dcp-text">{{ change.text }}</span>
+                  </div>
+                  <div v-if="diffChangeSummary.length === 0" class="dcp-empty">无结构化变更</div>
+                </div>
+              </div>
             </div>
           </el-dialog>
 
@@ -1330,6 +1341,52 @@ const computeLineDiff = (oldText: string, newText: string) => {
 const docDiffResult = computed(() => {
   if (!docDiffLeft.value && !docDiffRight.value) return { left: [], right: [] }
   return computeLineDiff(docDiffLeft.value, docDiffRight.value)
+})
+
+// 变更摘要：从 diff 的新增行中提取结构化变更（章节标题、表单、字典、角色等）
+const diffChangeSummary = computed(() => {
+  const changes: { type: string; text: string }[] = []
+  const addedLines = docDiffResult.value.right.filter(l => l.type === 'added').map(l => l.text.trim()).filter(Boolean)
+  const removedLines = docDiffResult.value.left.filter(l => l.type === 'removed').map(l => l.text.trim()).filter(Boolean)
+
+  // 提取新增的章节标题
+  for (const line of addedLines) {
+    if (line.startsWith('##')) {
+      changes.push({ type: 'added', text: line.replace(/^#+\s*/, '') })
+    } else if (line.startsWith('|') && line.includes('【新增】')) {
+      const cells = line.split('|').map(c => c.trim()).filter(Boolean)
+      changes.push({ type: 'added', text: cells[0] || line })
+    } else if (line.includes('【新增') || line.includes('新增')) {
+      const clean = line.replace(/^[\s|*-]+/, '').replace(/\*\*/g, '')
+      if (clean.length < 60) changes.push({ type: 'added', text: clean })
+    }
+  }
+
+  // 提取删除的章节
+  for (const line of removedLines) {
+    if (line.startsWith('##')) {
+      changes.push({ type: 'removed', text: line.replace(/^#+\s*/, '') })
+    }
+  }
+
+  // 提取修改的行（新增中包含已有章节名称的）
+  for (const line of addedLines) {
+    if (line.startsWith('|') && !line.includes('【新增】') && !line.startsWith('|--') && !line.startsWith('| 字')) {
+      const cells = line.split('|').map(c => c.trim()).filter(Boolean)
+      if (cells.length >= 2 && cells.some(c => c.includes('**'))) {
+        changes.push({ type: 'modified', text: `${cells[0]}: 选项变更` })
+      }
+    }
+  }
+
+  // 去重
+  const seen = new Set<string>()
+  return changes.filter(c => {
+    const key = c.type + c.text
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  }).slice(0, 30)
 })
 
 // triggerDocUpload / handleDocVersionUpload removed — doc upload is via chat input only
@@ -3184,6 +3241,29 @@ watch(conversationId, (id) => {
 .diff-stat.removed { color: #f87171; }
 .diff-stat.unchanged { color: rgba(255,255,255,0.4); }
 .doc-diff-container { display: flex; gap: 8px; max-height: 70vh; }
+
+/* 变更摘要面板 */
+.diff-changes-panel {
+  width: 240px; flex-shrink: 0; display: flex; flex-direction: column;
+  background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 10px; overflow: hidden;
+}
+.dcp-title {
+  font-size: 12px; font-weight: 600; color: rgba(255,255,255,0.7);
+  padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,0.06);
+  background: rgba(255,255,255,0.03);
+}
+.dcp-list { flex: 1; overflow-y: auto; padding: 8px; }
+.dcp-item {
+  display: flex; align-items: flex-start; gap: 6px; padding: 5px 6px;
+  font-size: 11px; line-height: 1.4; border-radius: 6px; margin-bottom: 2px;
+}
+.dcp-item.added { color: #34d399; background: rgba(52,211,153,0.06); }
+.dcp-item.removed { color: #f87171; background: rgba(248,113,113,0.06); }
+.dcp-item.modified { color: #fbbf24; background: rgba(251,191,36,0.06); }
+.dcp-icon { font-weight: 700; flex-shrink: 0; width: 14px; text-align: center; }
+.dcp-text { word-break: break-all; }
+.dcp-empty { text-align: center; color: rgba(255,255,255,0.3); font-size: 11px; padding: 20px 0; }
 .doc-diff-pane { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 .doc-diff-pane-title {
   font-size: 12px; font-weight: 600; padding: 8px 12px;
