@@ -87,6 +87,7 @@
       width="520px"
       :close-on-click-modal="false"
       class="env-dialog"
+      :append-to-body="true"
     >
       <el-form :model="form" label-position="top" class="env-form">
         <el-form-item label="环境名称" required>
@@ -561,56 +562,7 @@ onMounted(() => {
   color: #f87171;
 }
 
-/* ── Dialog dark theme ── */
-:deep(.env-dialog .el-dialog) {
-  background: #1a1a2e;
-  color: rgba(255, 255, 255, 0.9);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 16px;
-}
-:deep(.env-dialog .el-dialog__header) {
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  padding: 16px 20px;
-}
-:deep(.env-dialog .el-dialog__title) {
-  color: rgba(255, 255, 255, 0.92);
-  font-size: 15px;
-  font-weight: 600;
-}
-:deep(.env-dialog .el-dialog__headerbtn .el-dialog__close) {
-  color: rgba(255, 255, 255, 0.4);
-}
-:deep(.env-dialog .el-dialog__body) {
-  padding: 20px;
-}
-:deep(.env-dialog .el-dialog__footer) {
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
-  padding: 14px 20px;
-}
-:deep(.env-dialog .el-form-item__label) {
-  color: rgba(255, 255, 255, 0.7);
-  font-size: 13px;
-}
-:deep(.env-dialog .el-input__wrapper) {
-  background: #252530;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08) inset;
-}
-:deep(.env-dialog .el-input__inner) {
-  color: rgba(255, 255, 255, 0.9);
-}
-:deep(.env-dialog .el-textarea__inner) {
-  background: #252530;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08) inset;
-  color: rgba(255, 255, 255, 0.9);
-}
-:deep(.env-dialog .el-input__wrapper:hover),
-:deep(.env-dialog .el-textarea__inner:hover) {
-  box-shadow: 0 0 0 1px rgba(124, 58, 237, 0.3) inset;
-}
-:deep(.env-dialog .el-input__wrapper.is-focus),
-:deep(.env-dialog .el-textarea__inner:focus) {
-  box-shadow: 0 0 0 1px rgba(124, 58, 237, 0.5) inset;
-}
+/* Dialog styles moved to non-scoped block below */
 
 /* Auth tabs */
 .auth-tabs {
@@ -655,5 +607,69 @@ onMounted(() => {
 }
 .env-content::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.15);
+}
+</style>
+
+<style>
+/* ── Dialog dark theme (non-scoped for teleported el-dialog) ── */
+.el-dialog.env-dialog {
+  background: #1a1a2e !important;
+  color: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+}
+.el-dialog.env-dialog .el-dialog__header {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 16px 20px;
+}
+.el-dialog.env-dialog .el-dialog__title {
+  color: rgba(255, 255, 255, 0.92) !important;
+  font-size: 15px;
+  font-weight: 600;
+}
+.el-dialog.env-dialog .el-dialog__headerbtn .el-dialog__close {
+  color: rgba(255, 255, 255, 0.4);
+}
+.el-dialog.env-dialog .el-dialog__body {
+  padding: 20px;
+}
+.el-dialog.env-dialog .el-dialog__footer {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 14px 20px;
+}
+.el-dialog.env-dialog .el-form-item__label {
+  color: rgba(255, 255, 255, 0.7) !important;
+  font-size: 13px;
+}
+.el-dialog.env-dialog .el-input__wrapper {
+  background: #252530 !important;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08) inset !important;
+}
+.el-dialog.env-dialog .el-input__inner {
+  color: rgba(255, 255, 255, 0.9) !important;
+  -webkit-text-fill-color: rgba(255, 255, 255, 0.9) !important;
+}
+.el-dialog.env-dialog .el-input__inner::placeholder {
+  color: rgba(255, 255, 255, 0.3) !important;
+  -webkit-text-fill-color: rgba(255, 255, 255, 0.3) !important;
+}
+.el-dialog.env-dialog .el-textarea__inner {
+  background: #252530 !important;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08) inset !important;
+  color: rgba(255, 255, 255, 0.9) !important;
+}
+.el-dialog.env-dialog .el-input__wrapper:hover,
+.el-dialog.env-dialog .el-textarea__inner:hover {
+  box-shadow: 0 0 0 1px rgba(124, 58, 237, 0.3) inset !important;
+}
+.el-dialog.env-dialog .el-input__wrapper.is-focus,
+.el-dialog.env-dialog .el-textarea__inner:focus {
+  box-shadow: 0 0 0 1px rgba(124, 58, 237, 0.5) inset !important;
+}
+.el-dialog.env-dialog .el-overlay {
+  background-color: rgba(0, 0, 0, 0.6) !important;
+}
+.el-dialog.env-dialog .el-input__suffix {
+  color: rgba(255, 255, 255, 0.4);
 }
 </style>
