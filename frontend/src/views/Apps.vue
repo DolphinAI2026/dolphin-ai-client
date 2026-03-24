@@ -2,10 +2,16 @@
   <div class="apps-page">
     <nav class="nav-bar">
       <div class="nav-left">
-        <button class="back-btn" @click="router.push('/')"><el-icon><ArrowLeft /></el-icon></button>
+        <button class="back-btn" @click="router.push('/')">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <div class="logo-box">A</div>
         <span class="title">我的应用</span>
       </div>
-      <button class="new-btn" @click="router.push('/chat')">+ 新建应用</button>
+      <button class="new-btn" @click="router.push('/chat')">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        新建应用
+      </button>
     </nav>
 
     <!-- Filter tabs -->
@@ -19,41 +25,38 @@
     </div>
 
     <div class="app-grid">
-      <div v-if="loading" style="text-align:center;color:#9ca3af;padding:48px">加载中...</div>
-      <div v-else-if="filteredApps.length === 0" style="text-align:center;color:#9ca3af;padding:48px">暂无应用</div>
-      <div v-for="a in filteredApps" :key="a.id" class="app-card">
-        <div class="card-top">
+      <div v-if="loading" class="empty-state">加载中...</div>
+      <div v-else-if="filteredApps.length === 0" class="empty-state">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.3"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        <span>暂无应用</span>
+      </div>
+      <div v-for="a in filteredApps" :key="a.id" class="app-card" @click="router.push({ path: '/chat', query: { app_id: String(a.id) } })">
+        <div class="card-header">
           <div class="card-left">
             <div class="card-icon" :class="sourceIconClass(a)">{{ sourceIcon(a) }}</div>
-            <div>
+            <div class="card-info">
               <div class="card-name-row">
                 <h3>{{ a.app_name }}</h3>
                 <span class="source-badge" :class="a.source">{{ sourceBadgeText(a) }}</span>
+                <span class="card-status" :class="statusClass(a)">{{ a.status }}</span>
               </div>
               <div class="card-meta">
                 <span>{{ a.updated_at?.slice(0, 16) }}</span>
                 <span v-if="a.app_code" class="card-code">{{ a.app_code }}</span>
-                <span v-if="a.apaas_app_id" class="card-code apaas">ID: {{ a.apaas_app_id }}</span>
-                <span class="card-status" :class="statusClass(a)">{{ a.status }}</span>
+                <span v-if="a.apaas_app_id" class="card-code">ID: {{ a.apaas_app_id }}</span>
               </div>
             </div>
           </div>
-          <div class="card-actions">
-            <template v-if="a.source === 'local'">
-              <button v-if="a.local_status === 'draft' || a.local_status === 'failed'" class="action-primary" @click="router.push({ path: '/chat', query: { deploy_app_id: String(a.id) } })">生成到平台</button>
-              <button v-if="a.local_status === 'completed' && a.apaas_app_id" class="action-primary" @click="router.push({ path: '/chat', query: { deploy_app_id: String(a.id) } })">重新生成</button>
-              <button class="action-secondary" @click="router.push({ path: '/chat', query: { app_id: String(a.id) } })">继续完善</button>
-              <button class="action-danger" @click="confirmDelete(a)">删除</button>
-            </template>
-            <template v-else-if="a.source === 'remote'">
-              <a v-if="a.apaas_url" :href="a.apaas_url" target="_blank" class="action-primary">在平台中打开</a>
-            </template>
-            <template v-else>
-              <a v-if="a.apaas_url" :href="a.apaas_url" target="_blank" class="action-primary">在平台中打开</a>
-              <button class="action-primary" @click="router.push({ path: '/chat', query: { deploy_app_id: String(a.id) } })">重新生成</button>
-              <button class="action-secondary" @click="router.push({ path: '/chat', query: { app_id: String(a.id) } })">继续完善</button>
-              <button class="action-danger" @click="confirmDelete(a)">删除</button>
-            </template>
+          <div class="card-actions" @click.stop>
+            <a v-if="a.apaas_url" :href="a.apaas_url" target="_blank" class="action-btn primary" title="在平台中打开">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+            </a>
+            <button v-if="a.source === 'local' && (a.local_status === 'draft' || a.local_status === 'failed')" class="action-btn primary" @click.stop="router.push({ path: '/chat', query: { deploy_app_id: String(a.id) } })" title="生成到平台">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            </button>
+            <button class="action-btn danger" @click.stop="confirmDelete(a)" title="删除">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            </button>
           </div>
         </div>
         <div v-if="a.models || a.forms || a.roles || a.dicts" class="card-stats">
@@ -70,7 +73,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { ArrowLeft } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { applicationApi } from '@/api/application'
 import type { MergedApplication } from '@/types'
@@ -113,12 +115,12 @@ function sourceIcon(a: MergedApplication) {
 function sourceIconClass(a: MergedApplication) {
   if (a.source === 'remote') return 'remote'
   if (a.source === 'linked') return 'linked'
-  return a.local_status === 'completed' ? 'success' : 'generating'
+  return a.local_status === 'completed' ? 'success' : 'draft'
 }
 
 function sourceBadgeText(a: MergedApplication) {
   if (a.source === 'local') return '本地'
-  if (a.source === 'remote') return '平台应用'
+  if (a.source === 'remote') return '平台'
   return '已同步'
 }
 
@@ -127,7 +129,7 @@ function statusClass(a: MergedApplication) {
   if (a.source === 'remote') return 'remote'
   if (a.local_status === 'completed') return 'success'
   if (a.local_status === 'failed') return 'failed'
-  return 'generating'
+  return 'draft'
 }
 
 async function confirmDelete(a: MergedApplication) {
@@ -153,58 +155,289 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.apps-page { height: 100vh; display: flex; flex-direction: column; background: #f9fafb; }
-.nav-bar { display: flex; justify-content: space-between; align-items: center; padding: 8px 16px; background: #fff; border-bottom: 1px solid #e5e7eb; flex-shrink: 0; }
-.nav-left { display: flex; align-items: center; gap: 10px; }
-.back-btn { background: none; border: none; color: #9ca3af; cursor: pointer; padding: 4px; }
-.title { font-size: 14px; font-weight: 600; color: #1f2937; }
-.new-btn { background: #4f46e5; color: #fff; border: none; padding: 6px 16px; border-radius: 8px; font-size: 12px; font-weight: 500; cursor: pointer; }
-.new-btn:hover { background: #4338ca; }
+.apps-page {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: #141418;
+  color: rgba(255, 255, 255, 0.92);
+}
 
-.filter-bar { display: flex; gap: 4px; padding: 12px 16px 0; max-width: 900px; margin: 0 auto; width: 100%; }
-.filter-tab { background: none; border: none; padding: 6px 14px; font-size: 13px; color: #6b7280; cursor: pointer; border-radius: 8px; display: flex; align-items: center; gap: 6px; transition: all 0.15s; }
-.filter-tab:hover { background: #f3f4f6; color: #374151; }
-.filter-tab.active { background: #eef2ff; color: #4f46e5; font-weight: 600; }
-.tab-count { font-size: 11px; background: #e5e7eb; color: #6b7280; padding: 0 6px; border-radius: 10px; min-width: 18px; text-align: center; }
-.filter-tab.active .tab-count { background: #c7d2fe; color: #4338ca; }
+/* ── Nav ── */
+.nav-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 24px;
+  background: rgba(26, 26, 32, 0.82);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+}
 
-.app-grid { flex: 1; overflow-y: auto; max-width: 900px; margin: 0 auto; width: 100%; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
-.app-card { background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 20px; transition: box-shadow 0.2s; }
-.app-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
-.card-top { display: flex; justify-content: space-between; align-items: flex-start; }
-.card-left { display: flex; gap: 16px; align-items: center; }
-.card-icon { width: 48px; height: 48px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 18px; }
-.card-icon.success { background: #eef2ff; }
-.card-icon.generating { background: #fffbeb; }
-.card-icon.remote { background: #eff6ff; }
-.card-icon.linked { background: #ecfdf5; }
-.card-name-row { display: flex; align-items: center; gap: 8px; }
-.card-left h3 { font-size: 15px; font-weight: 600; color: #1f2937; margin: 0; }
+.nav-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
 
-.source-badge { font-size: 11px; padding: 1px 8px; border-radius: 10px; font-weight: 500; white-space: nowrap; }
-.source-badge.local { background: #f3f4f6; color: #6b7280; }
-.source-badge.remote { background: #eff6ff; color: #2563eb; }
-.source-badge.linked { background: #ecfdf5; color: #059669; }
+.back-btn {
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  transition: all 0.2s;
+}
+.back-btn:hover { color: #fff; background: rgba(255,255,255,0.06); }
 
-.card-meta { display: flex; gap: 12px; font-size: 12px; color: #9ca3af; align-items: center; margin-top: 4px; flex-wrap: wrap; }
-.card-code { font-family: 'SF Mono', Monaco, Consolas, monospace; font-size: 11px; color: #9ca3af; background: #f3f4f6; padding: 1px 6px; border-radius: 4px; }
-.card-code.apaas { color: #6b7280; }
-.card-status { padding: 2px 8px; border-radius: 10px; font-size: 11px; }
-.card-status.success { background: #ecfdf5; color: #059669; }
-.card-status.generating { background: #fffbeb; color: #d97706; }
-.card-status.linked { background: #ecfdf5; color: #059669; }
-.card-status.remote { background: #eff6ff; color: #2563eb; }
-.card-status.failed { background: #fef2f2; color: #dc2626; }
+.logo-box {
+  width: 28px;
+  height: 28px;
+  background: linear-gradient(135deg, #7c3aed, #6366f1);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-weight: 700;
+  font-size: 12px;
+}
 
-.card-actions { display: flex; gap: 8px; }
-.action-primary { font-size: 12px; color: #4f46e5; background: none; border: none; cursor: pointer; padding: 6px 12px; border-radius: 6px; text-decoration: none; }
-.action-primary:hover { background: #eef2ff; }
-.action-secondary { font-size: 12px; color: #6b7280; background: none; border: none; cursor: pointer; padding: 6px 12px; border-radius: 6px; }
-.action-secondary:hover { background: #f3f4f6; }
-.action-danger { font-size: 12px; color: #dc2626; background: none; border: none; cursor: pointer; padding: 6px 12px; border-radius: 6px; }
-.action-danger:hover { background: #fef2f2; }
-.card-stats { display: flex; gap: 24px; margin-top: 16px; font-size: 12px; color: #6b7280; }
-.card-stats .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 4px; }
+.title {
+  font-size: 15px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.new-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: linear-gradient(135deg, #7c3aed, #6366f1);
+  color: #fff;
+  border: none;
+  padding: 8px 18px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+.new-btn:hover { opacity: 0.9; }
+
+/* ── Filter ── */
+.filter-bar {
+  display: flex;
+  gap: 4px;
+  padding: 16px 24px 0;
+  max-width: 960px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.filter-tab {
+  background: none;
+  border: none;
+  padding: 7px 16px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.15s;
+}
+.filter-tab:hover { background: rgba(255, 255, 255, 0.06); color: rgba(255, 255, 255, 0.8); }
+.filter-tab.active { background: rgba(124, 58, 237, 0.15); color: #c4b5fd; font-weight: 600; }
+
+.tab-count {
+  font-size: 11px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.5);
+  padding: 0 7px;
+  border-radius: 10px;
+  min-width: 20px;
+  text-align: center;
+}
+.filter-tab.active .tab-count { background: rgba(124, 58, 237, 0.25); color: #c4b5fd; }
+
+/* ── Grid ── */
+.app-grid {
+  flex: 1;
+  overflow-y: auto;
+  max-width: 960px;
+  margin: 0 auto;
+  width: 100%;
+  padding: 16px 24px 60px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.empty-state {
+  text-align: center;
+  color: rgba(255, 255, 255, 0.35);
+  padding: 80px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  font-size: 14px;
+}
+
+/* ── Card ── */
+.app-card {
+  background: #1e1e26;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 14px;
+  padding: 18px 20px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.app-card:hover {
+  background: #252530;
+  border-color: rgba(255, 255, 255, 0.1);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.card-left {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  min-width: 0;
+}
+
+.card-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  flex-shrink: 0;
+}
+.card-icon.success { background: rgba(124, 58, 237, 0.12); }
+.card-icon.draft { background: rgba(255, 255, 255, 0.06); }
+.card-icon.remote { background: rgba(59, 130, 246, 0.12); }
+.card-icon.linked { background: rgba(52, 211, 153, 0.12); }
+
+.card-info { min-width: 0; }
+
+.card-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.card-name-row h3 {
+  font-size: 14px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.92);
+  margin: 0;
+  white-space: nowrap;
+}
+
+.source-badge {
+  font-size: 10px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.source-badge.local { background: rgba(255, 255, 255, 0.08); color: rgba(255, 255, 255, 0.5); }
+.source-badge.remote { background: rgba(59, 130, 246, 0.15); color: #60a5fa; }
+.source-badge.linked { background: rgba(52, 211, 153, 0.15); color: #34d399; }
+
+.card-status {
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 500;
+}
+.card-status.success { background: rgba(52, 211, 153, 0.15); color: #34d399; }
+.card-status.draft { background: rgba(255, 255, 255, 0.06); color: rgba(255, 255, 255, 0.4); }
+.card-status.linked { background: rgba(52, 211, 153, 0.15); color: #34d399; }
+.card-status.remote { background: rgba(59, 130, 246, 0.15); color: #60a5fa; }
+.card-status.failed { background: rgba(239, 68, 68, 0.15); color: #f87171; }
+
+.card-meta {
+  display: flex;
+  gap: 10px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.35);
+  align-items: center;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+
+.card-code {
+  font-family: 'SF Mono', Monaco, Consolas, monospace;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.4);
+  background: rgba(255, 255, 255, 0.06);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+/* ── Actions ── */
+.card-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.action-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+  text-decoration: none;
+}
+.action-btn:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
+.action-btn.primary { border-color: rgba(124, 58, 237, 0.2); color: #a78bfa; }
+.action-btn.primary:hover { background: rgba(124, 58, 237, 0.12); color: #c4b5fd; }
+.action-btn.danger { border-color: rgba(239, 68, 68, 0.15); color: rgba(239, 68, 68, 0.5); }
+.action-btn.danger:hover { background: rgba(239, 68, 68, 0.1); color: #f87171; }
+
+/* ── Stats ── */
+.card-stats {
+  display: flex;
+  gap: 20px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.card-stats .dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  margin-right: 5px;
+}
 .dot.indigo { background: #818cf8; }
 .dot.emerald { background: #34d399; }
 .dot.amber { background: #fbbf24; }

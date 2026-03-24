@@ -21,10 +21,10 @@
       <!-- 左侧对话区 -->
       <div class="chat-side">
         <div class="agent-tabs">
-          <button v-for="(agent, key) in agents" :key="key" class="agent-tab" :class="{ active: currentAgent === key }" @click="switchAgent(key as string)">
-            <span>{{ agent.icon }}</span>
-            <span>{{ agent.name }}</span>
-            <span v-if="currentAgent === key" class="active-dot"></span>
+          <button class="agent-tab active">
+            <span>🤖</span>
+            <span>搭建智能体</span>
+            <span class="active-dot"></span>
           </button>
         </div>
 
@@ -224,7 +224,7 @@
             <!-- 开始生成（部署到平台） -->
             <!-- 开始生成 / 已部署状态 -->
             <div v-if="deployAllDone && !hasConfigChanged" class="deployed-banner">✅ 已部署到平台</div>
-            <button v-else-if="store.preview.models.length > 0 && (store.currentApp?.status === 'ready' || store.currentApp?.status === 'conversation' || hasConfigChanged)" class="gen-btn" :disabled="generating" @click="startGenerate">{{ generating ? '创建中...' : hasConfigChanged ? '⚡ 更新配置并部署' : existingAppId ? '⚡ 更新并生成' : '⚡ 开始生成' }}</button>
+            <button v-else-if="store.preview.models.length > 0 && (store.currentApp?.status === 'ready' || store.currentApp?.status === 'conversation' || store.currentApp?.status === 'draft' || hasConfigChanged)" class="gen-btn" :disabled="generating" @click="startGenerate">{{ generating ? '创建中...' : hasConfigChanged ? '⚡ 更新配置并部署' : existingAppId ? '⚡ 更新并生成' : '⚡ 开始生成' }}</button>
           </div>
 
           <!-- 模型 -->
@@ -613,7 +613,7 @@
 import { ref, reactive, computed, nextTick, onMounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ArrowLeft, Promotion } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { usePreviewStore } from '@/stores/preview'
 import { useUserStore } from '@/stores/user'
 import { applicationApi } from '@/api/application'
