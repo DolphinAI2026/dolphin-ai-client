@@ -6,6 +6,20 @@
         <div class="logo-box">A</div>
         <span class="logo-text">aPaaS Builder AI</span>
       </div>
+      <div class="nav-center">
+        <button class="nav-link" @click="router.push('/apps')">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+          我的应用
+        </button>
+        <button class="nav-link" @click="router.push('/coding')">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+          AI Coding
+        </button>
+        <button class="nav-link" @click="router.push('/marketplace')">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+          组件市场
+        </button>
+      </div>
       <div class="nav-right">
         <el-dropdown @command="handleUserCommand">
           <button class="user-btn">
@@ -62,26 +76,6 @@
           </div>
         </div>
 
-        <!-- Entry cards -->
-        <div class="entry-cards">
-          <div class="entry-card" @click="router.push('/coding')">
-            <div class="entry-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" fill="url(#boltGrad)"/><defs><linearGradient id="boltGrad" x1="3" y1="2" x2="22" y2="22"><stop offset="0%" stop-color="#fbbf24"/><stop offset="100%" stop-color="#f59e0b"/></linearGradient></defs></svg></div>
-            <div class="entry-body">
-              <div class="entry-title">Vibe Coding</div>
-              <div class="entry-desc">用自然语言生成 aPaaS 自开发代码</div>
-            </div>
-            <svg class="entry-arrow" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
-          </div>
-          <div class="entry-card" @click="router.push('/marketplace')">
-            <div class="entry-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg></div>
-            <div class="entry-body">
-              <div class="entry-title">组件市场</div>
-              <div class="entry-desc">浏览和复用社区共享组件</div>
-            </div>
-            <svg class="entry-arrow" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
-          </div>
-        </div>
-
         <!-- Templates -->
         <div class="section">
           <div class="section-header">
@@ -101,47 +95,7 @@
           </div>
         </div>
 
-        <!-- Projects -->
-        <div class="section">
-          <div class="section-header">
-            <h3 class="section-title">我的应用</h3>
-            <button class="create-btn" @click="openCreateProject">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-              新建应用
-            </button>
-          </div>
-          <div class="app-list" v-if="projects.length > 0">
-            <div v-for="p in projects" :key="p.id" class="app-row" @click="goToProject(p)">
-              <div class="app-row-left">
-                <div class="app-status-dot" :class="p.platform_connected ? 'connected' : 'disconnected'"></div>
-                <div class="app-info">
-                  <div class="app-name-row">
-                    <span class="app-name">{{ p.name }}</span>
-                    <span class="conn-tag" :class="p.platform_connected ? 'linked' : 'unlinked'">
-                      {{ p.platform_connected ? '已连接' : '未连接' }}
-                    </span>
-                  </div>
-                  <div class="app-meta">
-                    <span v-if="p.platform_app_name" class="app-platform">{{ p.platform_app_name }}</span>
-                    <span class="app-date">{{ p.created_at?.slice(0, 16) }}</span>
-                  </div>
-                </div>
-              </div>
-              <div class="app-row-actions">
-                <button class="settings-btn" @click.stop="openEditProject(p)" title="应用设置">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-                </button>
-                <button class="settings-btn delete-btn" @click.stop="deleteProject(p)" title="删除应用">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-                </button>
-              </div>
-            </div>
-          </div>
-          <div v-else class="empty-hint">
-            <div class="empty-icon"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></div>
-            <div>暂无应用，点击「新建应用」开始</div>
-          </div>
-        </div>
+        <!-- 我的应用已移至导航栏 -->
       </div>
     </div>
 
@@ -327,7 +281,7 @@ const handleUserCommand = (command: string) => {
 }
 
 .center-area {
-  max-width: 720px;
+  max-width: 800px;
   width: 100%;
   margin: 0 auto;
 }
@@ -371,6 +325,33 @@ const handleUserCommand = (command: string) => {
   font-weight: 600;
   color: var(--text-primary);
   letter-spacing: -0.01em;
+}
+
+/* ── Nav Center Links ── */
+.nav-center {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.nav-link {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border: none;
+  background: none;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: all 0.2s;
+}
+
+.nav-link:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.06);
 }
 
 .nav-right {
@@ -463,18 +444,19 @@ const handleUserCommand = (command: string) => {
 
 /* ── Input Box ── */
 .input-box {
-  margin-bottom: 40px;
+  margin-bottom: 48px;
 }
 
 .input-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   background: var(--bg-input);
   border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-lg);
-  padding: 6px 6px 6px 14px;
+  border-radius: var(--radius-xl);
+  padding: 10px 10px 10px 20px;
   transition: border-color 0.2s, box-shadow 0.2s;
+  min-height: 56px;
 }
 
 .input-row:focus-within {
@@ -486,7 +468,7 @@ const handleUserCommand = (command: string) => {
   flex: 1;
   border: none;
   outline: none;
-  font-size: 14px;
+  font-size: 15px;
   color: var(--text-primary);
   background: transparent;
   min-width: 0;
@@ -513,8 +495,8 @@ const handleUserCommand = (command: string) => {
 }
 
 .send-btn {
-  width: 36px;
-  height: 36px;
+  width: 40px;
+  height: 40px;
   border-radius: var(--radius-md);
   border: none;
   background: var(--accent-gradient);
