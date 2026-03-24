@@ -374,7 +374,7 @@ async def auto_create_application(
             select(Application).where(
                 Application.conversation_id == data.conversation_id,
                 Application.tenant_id == ctx.tenant_id,
-            )
+            ).order_by(Application.id.desc()).limit(1)
         )
         existing = result.scalar_one_or_none()
         if existing:
