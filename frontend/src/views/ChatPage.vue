@@ -156,6 +156,11 @@
 
           <!-- 文档对比弹窗 -->
           <el-dialog v-model="docDiffVisible" title="版本对比" width="90%" class="doc-diff-dialog" :append-to-body="true">
+            <div class="diff-summary-bar">
+              <span class="diff-stat added">+ {{ docDiffResult.right.filter(l => l.type === 'added').length }} 行新增</span>
+              <span class="diff-stat removed">- {{ docDiffResult.left.filter(l => l.type === 'removed').length }} 行删除</span>
+              <span class="diff-stat unchanged">{{ docDiffResult.right.filter(l => l.type === 'same' && l.text).length }} 行未变</span>
+            </div>
             <div class="doc-diff-container">
               <div class="doc-diff-pane">
                 <div class="doc-diff-pane-title">{{ docDiffLeftTitle }}</div>
@@ -3170,6 +3175,14 @@ watch(conversationId, (id) => {
 :deep(.doc-diff-dialog) .el-dialog__header { border-bottom: 1px solid rgba(255,255,255,0.06); }
 :deep(.doc-diff-dialog) .el-dialog__title { color: rgba(255,255,255,0.9); }
 :deep(.doc-diff-dialog) .el-dialog__headerbtn .el-dialog__close { color: rgba(255,255,255,0.5); }
+.diff-summary-bar {
+  display: flex; gap: 16px; padding: 10px 14px; margin-bottom: 12px;
+  background: rgba(255,255,255,0.03); border-radius: 10px; border: 1px solid rgba(255,255,255,0.06);
+}
+.diff-stat { font-size: 13px; font-weight: 500; }
+.diff-stat.added { color: #34d399; }
+.diff-stat.removed { color: #f87171; }
+.diff-stat.unchanged { color: rgba(255,255,255,0.4); }
 .doc-diff-container { display: flex; gap: 8px; max-height: 70vh; }
 .doc-diff-pane { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 .doc-diff-pane-title {
