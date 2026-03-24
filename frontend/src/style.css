@@ -85,3 +85,22 @@ html, body, #app {
 .el-overlay {
   background-color: rgba(0, 0, 0, 0.6) !important;
 }
+
+/* ── Global: ElMessage toast dark theme ── */
+.el-message {
+  background: #1e1e2e !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  border-radius: 10px !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4) !important;
+}
+.el-message__content {
+  color: rgba(255, 255, 255, 0.88) !important;
+}
+.el-message .el-message__icon {
+  color: inherit !important;
+}
+.el-message--success { border-color: rgba(52, 211, 153, 0.2) !important; }
+.el-message--warning { border-color: rgba(251, 191, 36, 0.2) !important; }
+.el-message--error { border-color: rgba(248, 113, 113, 0.2) !important; }
+.el-message--info { border-color: rgba(96, 165, 250, 0.2) !important; }
+.el-message__closeBtn { color: rgba(255, 255, 255, 0.4) !important; }

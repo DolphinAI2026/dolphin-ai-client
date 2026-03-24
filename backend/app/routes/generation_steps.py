@@ -441,9 +441,12 @@ async def execute_step(
 
             # Token 过期时清除无效 token，让前端知道需要重新连接
             if "Token已过期" in error_msg or "401" in error_msg:
-                user.apaas_token = None
+                # 清除环境级 token
+                if env:
+                    env.token = None
+                    env.status = "disconnected"
                 await db.commit()
-                step_exception = HTTPException(status_code=401, detail="APaaS平台Token已过期，请重新连接")
+                step_exception = HTTPException(status_code=401, detail="APaaS平台Token已过期，请在环境管理中重新登录")
             else:
                 # 检测编码冲突错误
                 conflict = _detect_code_conflict(error_msg, step_key, data, models)

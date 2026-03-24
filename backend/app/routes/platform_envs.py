@@ -3,8 +3,8 @@ Platform Environment API 路由 — 低代码平台环境管理
 """
 from __future__ import annotations
 
-import base64
 import logging
+from app.crypto import encrypt_password, decrypt_password
 from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -87,7 +87,7 @@ async def create_env(
         base_url=data.base_url.rstrip("/"),
         platform_tenant_id=data.platform_tenant_id,
         username=data.username,
-        password_enc=base64.b64encode(data.password.encode()).decode() if data.password else None,
+        password_enc=encrypt_password(data.password) if data.password else None,
         token=data.token,
         status="disconnected",
     )
@@ -124,7 +124,7 @@ async def update_env(
     if data.username is not None:
         env.username = data.username
     if data.password is not None:
-        env.password_enc = base64.b64encode(data.password.encode()).decode()
+        env.password_enc = encrypt_password(data.password)
     if data.token is not None:
         env.token = data.token
 
@@ -186,6 +186,20 @@ async def test_env(
         await db.commit()
         return {"ok": True, "status": "connected"}
     except Exception as e:
+        # Token 过期：尝试用保存的账号密码自动刷新
+        if ("401" in str(e) or "Token" in str(e)) and env.username and env.password_enc:
+            try:
+                password = decrypt_password(env.password_enc)
+                refresh_client = APaaSClient(base_url=env.base_url, tenant_id=env.platform_tenant_id)
+                login_result = await refresh_client.login(env.username, password)
+                new_token = login_result.get("token") if isinstance(login_result, dict) else None
+                if new_token:
+                    env.token = new_token
+                    env.status = "connected"
+                    await db.commit()
+                    return {"ok": True, "status": "connected", "refreshed": True}
+            except Exception:
+                pass  # 刷新失败，继续走断开逻辑
         env.status = "disconnected"
         await db.commit()
         return {"ok": False, "status": "disconnected", "error": str(e)}
@@ -212,7 +226,7 @@ async def login_env(
         raise HTTPException(status_code=400, detail="未配置登录信息")
 
     try:
-        password = base64.b64decode(env.password_enc).decode()
+        password = decrypt_password(env.password_enc)
         client = APaaSClient(
             base_url=env.base_url,
             tenant_id=env.platform_tenant_id,

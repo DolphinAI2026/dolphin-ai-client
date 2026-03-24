@@ -243,7 +243,7 @@
               <span>✅ 已部署到平台</span>
               <button class="view-deploy-btn" @click="openDeployPanel">查看部署记录</button>
             </div>
-            <button v-else-if="!assembling && store.preview.models.length > 0 && (store.currentApp?.status === 'ready' || store.currentApp?.status === 'conversation' || store.currentApp?.status === 'draft' || hasConfigChanged)" class="gen-btn" :disabled="generating" @click="startGenerate">{{ generating ? '创建中...' : hasConfigChanged ? '⚡ 更新配置并部署' : deployAppId ? '⚡ 重新部署' : '⚡ 开始生成' }}</button>
+            <button v-else-if="!assembling && store.preview.models.length > 0 && (store.currentApp?.status === 'draft' || store.currentApp?.status === 'generating' || store.currentApp?.status === 'failed' || hasConfigChanged)" class="gen-btn" :disabled="generating" @click="startGenerate">{{ generating ? '创建中...' : hasConfigChanged ? '⚡ 更新配置并部署' : deployAppId ? '⚡ 重新部署' : '⚡ 开始生成' }}</button>
           </div>
 
           <!-- 模型 -->
@@ -821,7 +821,7 @@ const extractPreviewData = (content: string) => {
           console.warn('已有配置，忽略 LLM 重复输出的完整 JSON')
           continue
         }
-        store.currentApp = { name: parsed.data.appName, status: 'ready' }
+        store.currentApp = { name: parsed.data.appName, status: 'draft' }
         store.preview.appName = parsed.data.appName || ''
         store.preview.roles = parsed.data.roles || []
         store.preview.dicts = parsed.data.dicts || []
@@ -1055,7 +1055,7 @@ const applyPatch = (actions: any[]) => {
   }
   // 标记配置已更新
   if (!store.currentApp) {
-    store.currentApp = { name: store.preview.appName, status: 'ready' }
+    store.currentApp = { name: store.preview.appName, status: 'draft' }
   }
 }
 
@@ -1197,7 +1197,7 @@ const loadConversation = async (cid: number) => {
           store.preview.roles = data.roles || []
           store.preview.workflows = data.workflows || []
           store.preview.permissions = data.permissions || []
-          store.currentApp = { name: store.preview.appName, status: 'ready' }
+          store.currentApp = { name: store.preview.appName, status: 'draft' }
           if (linkedApp.id && typeof linkedApp.id === 'number') {
             existingAppId.value = linkedApp.id
           }
@@ -1423,9 +1423,10 @@ const appDisplayStatus = computed(() => {
 const appDisplayStatusText = computed(() => {
   const s = appDisplayStatus.value
   if (s === 'deployed' || s === 'completed') return '已部署'
-  if (s === 'ready' || s === 'draft') return '待生成'
-  if (s === 'conversation') return '配置调整中'
-  return '对话中'
+  if (s === 'draft') return '待生成'
+  if (s === 'generating') return '生成中'
+  if (s === 'failed') return '生成失败'
+  return '待生成'
 })
 
 // 检测配置是否有变更（对比当前 preview 和已部署的步骤）
@@ -2048,7 +2049,7 @@ const handleDocUpload = async (e: Event) => {
               if (data.data?.appName && !store.preview.appName) {
                 store.preview.appName = data.data.appName
                 store.preview.roles = data.data.roles || []
-                store.currentApp = { name: data.data.appName, status: 'conversation' }
+                store.currentApp = { name: data.data.appName, status: 'draft' }
               }
 
               // 更新进度消息
@@ -2080,7 +2081,7 @@ const handleDocUpload = async (e: Event) => {
       // 最终更新 store
       const previewData = finalResult.preview?.data || finalResult.preview
       if (previewData?.appName || previewData?.models) {
-        store.currentApp = { name: previewData.appName, status: 'conversation' }
+        store.currentApp = { name: previewData.appName, status: 'draft' }
         store.preview.appName = previewData.appName || ''
         store.preview.roles = previewData.roles || []
         store.preview.dicts = previewData.dicts || []
@@ -2520,7 +2521,7 @@ const startAssembleConfig = async () => {
             store.preview.models = (sk.model_names || []).map((m: any) => ({
               name: m.name, code: m.code, fields: []
             }))
-            store.currentApp = { name: store.preview.appName, status: 'conversation' }
+            store.currentApp = { name: store.preview.appName, status: 'draft' }
           }
 
           // 字典批次完成 → 更新对应字典的选项
@@ -2581,7 +2582,7 @@ const startAssembleConfig = async () => {
             store.preview.models = d.models || store.preview.models
             store.preview.workflows = d.workflows || []
             store.preview.permissions = d.permissions || []
-            store.currentApp = { name: store.preview.appName, status: 'ready' }
+            store.currentApp = { name: store.preview.appName, status: 'draft' }
           }
 
           if (evt.type === 'done') break
@@ -2824,7 +2825,7 @@ onMounted(async () => {
                 store.preview.roles = data.roles || []
                 store.preview.workflows = data.workflows || []
                 store.preview.permissions = data.permissions || []
-                store.currentApp = { name: store.preview.appName, status: 'ready' }
+                store.currentApp = { name: store.preview.appName, status: 'draft' }
                 existingAppId.value = linkedApp.id
                 // 更新 URL 为 app_id 模式
                 router.replace({ path: '/chat', query: { app_id: String(linkedApp.id) } })

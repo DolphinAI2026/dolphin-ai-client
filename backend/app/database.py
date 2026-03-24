@@ -74,6 +74,12 @@ async def init_db():
         except Exception:
             pass
 
+        # 清理孤立的文档版本（application_id 为 NULL 的）
+        try:
+            await conn.execute(text("DELETE FROM document_versions WHERE application_id IS NULL"))
+        except Exception:
+            pass
+
         # document_versions / change_plans — create_all 已处理，确保索引存在
         for idx_stmt in [
             "CREATE INDEX IF NOT EXISTS ix_document_versions_application_id ON document_versions(application_id)",

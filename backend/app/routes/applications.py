@@ -1285,6 +1285,16 @@ async def upload_doc_version(
                 # 标记需要重新部署
                 if app_obj.status == "completed":
                     app_obj.status = "draft"
+                # 在 generation_state 中记录配置版本变更
+                if app_obj.generation_state:
+                    try:
+                        from datetime import datetime as dt
+                        gs = json.loads(app_obj.generation_state)
+                        gs["config_version"] = new_version
+                        gs["config_updated_at"] = dt.utcnow().isoformat()
+                        app_obj.generation_state = json.dumps(gs, ensure_ascii=False)
+                    except Exception:
+                        pass
 
                 await session.commit()
                 await session.refresh(change_plan)
