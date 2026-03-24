@@ -69,7 +69,14 @@ _OUTPUT_SPEC = """\
     }
   ],
   "workflows": [],
-  "permissions": []
+  "permissions": [
+    {
+      "form": "表单名（中文，对应 models 中的 name）",
+      "rules": [
+        {"role": "角色code 或 all", "op": "all 或 add/edit/delete", "data": "ALL/SELF/CURRENT_USER_DEPT"}
+      ]
+    }
+  ]
 }
 ```"""
 
@@ -88,7 +95,12 @@ _RULES = """\
    - 人员 → 人员选择
    - 状态字段有固定选项 → 下拉单选 + 字典
 5. **有明细行的数据**（订单行、配件等）→ 使用子表，子表内字段放 sub_fields
-6. **下拉单选/多选字段必须设 dict**，数据单选字段必须设 ref"""
+6. **下拉单选/多选字段必须设 dict**，数据单选字段必须设 ref
+7. **权限配置**：根据文档中的角色和权限描述，为每个表单生成权限规则：
+   - role: 角色code（对应 roles 中的 code），"all" 表示全部人员
+   - op: 操作类型，"all"=全部操作, "add"=新增, "edit"=编辑, "delete"=删除
+   - data: 数据范围，"ALL"=全部数据, "SELF"=仅本人数据, "CURRENT_USER_DEPT"=本部门数据
+   - 如果文档未明确权限，默认为每个表单生成 {"role":"all","op":"all","data":"ALL"}"""
 
 # ── Step 1: 概览提取 ──
 OVERVIEW_SYSTEM_PROMPT = f"""你是得帆云低代码平台的功能设计专家。
@@ -147,6 +159,7 @@ SINGLE_SYSTEM_PROMPT = f"""你是得帆云低代码平台的功能设计专家�
 - 下拉单选/多选字段都设了 dict
 - 数据单选字段都设了 ref
 - 子表字段都设了 sub_code 和 sub_fields
+- 每个表单都有对应的 permissions 规则
 """
 
 
@@ -376,6 +389,7 @@ async def _parse_chunked(text: str, filename: str, progress=None, existing_codes
     # ── Step 3: 并发解析每段 ──
     all_models = []
     all_dicts = []
+    all_permissions = []
 
     # 控制并发数（避免 API rate limit）
     semaphore = asyncio.Semaphore(3)
@@ -410,6 +424,7 @@ async def _parse_chunked(text: str, filename: str, progress=None, existing_codes
             continue
         all_models.extend(part.get("models", []))
         all_dicts.extend(part.get("dicts", []))
+        all_permissions.extend(part.get("permissions", []))
         # 从分段结果中也收集角色（可能概览漏掉）
         for r in part.get("roles", []):
             if r not in roles:
@@ -424,7 +439,7 @@ async def _parse_chunked(text: str, filename: str, progress=None, existing_codes
         "dicts": all_dicts,
         "models": all_models,
         "workflows": [],
-        "permissions": [],
+        "permissions": all_permissions,
     }
 
 

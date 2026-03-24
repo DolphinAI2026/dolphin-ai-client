@@ -1833,6 +1833,13 @@ const handleDocUpload = async (e: Event) => {
                   for (const w of data.batch) {
                     store.preview.workflows.push(w)
                   }
+                } else if (phaseKey === 'permissions') {
+                  if (!store.preview.permissions) store.preview.permissions = []
+                  for (const p of data.batch) {
+                    const existing = store.preview.permissions.find((x: any) => x.form === p.form)
+                    if (existing) Object.assign(existing, p)
+                    else store.preview.permissions.push(p)
+                  }
                 }
               }
 
@@ -2311,6 +2318,16 @@ const startAssembleConfig = async () => {
               const existing = store.preview.workflows.find((w: any) => w.name === wf.name || w.form === wf.form)
               if (existing) Object.assign(existing, wf)
               else store.preview.workflows.push(wf)
+            }
+          }
+
+          // 权限批次完成 → 更新 permissions
+          if (evt.phase === 'permissions' && evt.batch) {
+            if (!store.preview.permissions) store.preview.permissions = []
+            for (const p of evt.batch) {
+              const existing = store.preview.permissions.find((x: any) => x.form === p.form)
+              if (existing) Object.assign(existing, p)
+              else store.preview.permissions.push(p)
             }
           }
 

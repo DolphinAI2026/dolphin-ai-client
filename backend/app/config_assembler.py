@@ -112,6 +112,34 @@ MODEL_PROMPT = """你是得帆云低代码平台的配置设计专家。
 - 明细行 → 子表 + sub_code + sub_fields
 - 唯一编号 → 单据号"""
 
+PERMISSION_PROMPT = """你是得帆云低代码平台的权限配置专家。
+
+请为指定的表单生成权限配置。
+
+只返回 JSON 数组，不要其他文字：
+```json
+[
+  {
+    "form": "表单名（中文）",
+    "rules": [
+      {"role": "角色code 或 all", "op": "all 或 add/edit/delete/view", "data": "ALL/SELF/CURRENT_USER_DEPT/CURRENT_USER_DEPT_LOW_LEVEL"}
+    ]
+  }
+]
+```
+
+字段说明：
+- form: 表单名称（中文），必须匹配表单列表中的名称
+- role: 角色code（对应可用角色列表），"all" 表示全部人员
+- op: 操作权限，"all"=全部操作, "view"=仅查看, "add"=新增, "edit"=编辑, "delete"=删除
+- data: 数据范围，"ALL"=全部数据, "SELF"=仅本人创建的数据, "CURRENT_USER_DEPT"=本部门数据, "CURRENT_USER_DEPT_LOW_LEVEL"=本部门及下级
+
+规则：
+- 管理员角色通常拥有全部操作权限和全部数据范围
+- 普通角色通常只能看到自己或本部门的数据
+- 每个表单至少要有一条权限规则
+- 根据业务场景合理分配权限（如：工程师只能编辑自己的工单）"""
+
 WORKFLOW_PROMPT = """你是得帆云低代码平台的流程设计专家。
 
 请为以下表单生成审批流程配置。
@@ -458,6 +486,41 @@ async def assemble_config_streaming(
         if not workflow_hints:
             yield {"phase": "workflows", "status": "done", "message": "无需审批流程"}
 
+    # ── Phase 5: 权限生成 ──
+    all_permissions: List[dict] = []
+    if roles and all_models:
+        yield {"phase": "permissions", "status": "running", "message": "生成权限配置..."}
+
+        model_names = ", ".join(f"「{m['name']}」" for m in all_models)
+        available_roles = ", ".join(f"{r['name']}({r['code']})" for r in roles)
+        perm_messages = [
+            {"role": "system", "content": PERMISSION_PROMPT},
+            {"role": "user", "content": f"请为以下表单生成权限配置：\n\n表单列表: {model_names}\n可用角色: {available_roles}\n\n背景：{user_prompt[:800]}"},
+        ]
+        try:
+            perm_result = await client.chat_completion(
+                perm_messages, max_tokens=4096, timeout=120.0, temperature=0.2, model=client.doc_model
+            )
+            perm_text = perm_result["choices"][0]["message"]["content"]
+            perm_data = _extract_json_array(perm_text)
+            if perm_data:
+                all_permissions = perm_data
+                yield {
+                    "phase": "permissions", "status": "running",
+                    "message": f"权限生成完成（{len(all_permissions)} 条规则）",
+                    "batch": all_permissions,
+                }
+        except Exception as e:
+            logger.warning(f"权限生成失败: {e}")
+            yield {"phase": "permissions", "status": "running", "message": f"权限生成失败（不阻断）: {e}"}
+
+        yield {"phase": "permissions", "status": "done", "message": f"权限完成：{len(all_permissions)} 条"}
+    else:
+        # 默认权限：所有表单对所有人开放
+        for m in all_models:
+            all_permissions.append({"form": m["name"], "rules": [{"role": "all", "op": "all", "data": "ALL"}]})
+        yield {"phase": "permissions", "status": "done", "message": "默认权限（全部开放）"}
+
     # ── 组装完整配置 ──
     complete_config = {
         "appName": app_name,
@@ -465,7 +528,7 @@ async def assemble_config_streaming(
         "dicts": all_dicts,
         "models": all_models,
         "workflows": all_workflows,
-        "permissions": [],
+        "permissions": all_permissions,
     }
 
     # 后处理（加保护，不让后处理错误导致整体失败）
