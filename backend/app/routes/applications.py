@@ -391,10 +391,11 @@ async def auto_create_application(
 
     # 生成 app_code
     import hashlib
-    code_base = data.app_name.lower().replace(" ", "_")
-    ascii_code = ''.join(c for c in code_base if c.isascii() and (c.isalnum() or c == '_'))
+    code_base = data.app_name.lower().replace(" ", "-").replace("_", "-")
+    ascii_code = ''.join(c for c in code_base if c.isascii() and (c.isalnum() or c == '-'))
+    ascii_code = ascii_code.strip('-')
     if len(ascii_code) < 2:
-        ascii_code = "app_" + hashlib.md5(data.app_name.encode()).hexdigest()[:6]
+        ascii_code = "app-" + hashlib.md5(data.app_name.encode()).hexdigest()[:6]
 
     config_str = json.dumps(data.config_preview, ensure_ascii=False)
     app = Application(

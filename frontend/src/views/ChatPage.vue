@@ -1591,16 +1591,16 @@ const startGenerateWithEnv = async (envId: number) => {
   try {
 
     // 未部署，执行全量生成流程 — 让用户确认/修改应用编码
-    const defaultCode = 'app' + Date.now().toString(36)
+    const defaultCode = 'app-' + Date.now().toString(36)
     let appCode: string
     try {
       const { value } = await ElMessageBox.prompt(
-        '应用编码创建后不可修改，请确认或调整：',
+        '应用编码创建后不可修改，请确认或调整（如 asset-manage）：',
         '确认应用编码',
         {
           inputValue: defaultCode,
-          inputPattern: /^[a-zA-Z][a-zA-Z0-9_]*$/,
-          inputErrorMessage: '编码只能包含英文字母、数字和下划线，且以字母开头',
+          inputPattern: /^[a-zA-Z][a-zA-Z0-9\-]*$/,
+          inputErrorMessage: '编码只能包含英文字母、数字和连字符(-)，且以字母开头',
           confirmButtonText: '确认生成',
           cancelButtonText: '取消',
         }
