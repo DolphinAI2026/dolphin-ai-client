@@ -165,6 +165,48 @@ def _build_steps(config: dict, state: dict, apaas_app_id: str = None) -> list[St
     return steps
 
 
+def _sync_platform_codes_to_config(app: Application, state: dict, data: dict):
+    """部署完成后，将平台真实编码回写到 config_preview"""
+    try:
+        config = json.loads(app.config_preview) if isinstance(app.config_preview, str) else app.config_preview
+        cfg_data = config.get("data", config)
+
+        # 回写角色编码
+        role_codes = state.get("role_codes", {})
+        for r in cfg_data.get("roles", []):
+            rc = role_codes.get(r.get("code", r["name"]))
+            if rc:
+                r["platform_code"] = rc.get("roleCode", "")
+
+        # 回写字典编码
+        dict_codes = state.get("dict_codes", {})
+        for d in cfg_data.get("dicts", []):
+            dc = dict_codes.get(d.get("name")) or dict_codes.get(d.get("code", ""))
+            if dc:
+                d["platform_code"] = dc
+
+        # 回写模型编码
+        model_info = state.get("model_info", {})
+        for idx, m in enumerate(cfg_data.get("models", [])):
+            mi = model_info.get(str(idx))
+            if mi:
+                m["platform_code"] = mi.get("code", "")
+                # 回写字段编码
+                platform_fields = mi.get("fields", {})
+                for f in m.get("fields", []):
+                    pfc = platform_fields.get(f["name"])
+                    if pfc:
+                        f["platform_code"] = pfc
+
+        # 回写 apaas_app_id
+        cfg_data["apaas_app_id"] = state.get("apaas_app_id") or app.apaas_app_id
+
+        app.config_preview = json.dumps(config, ensure_ascii=False)
+        logger.info(f"平台编码已回写到 config_preview (app_id={app.id})")
+    except Exception as e:
+        logger.warning(f"回写平台编码失败: {e}")
+
+
 async def _get_app(app_id: int, ctx: AuthContext, db: AsyncSession) -> Application:
     result = await db.execute(
         select(Application).where(
@@ -365,6 +407,15 @@ async def execute_step(
                 state["steps_completed"].append(step_key)
             state.get("step_errors", {}).pop(step_key, None)
             _save_state(app, state)
+
+            # 检查是否所有步骤都完成了
+            all_steps = _build_steps(config, state, state.get("apaas_app_id") or app.apaas_app_id)
+            if all(s.status == "completed" for s in all_steps):
+                app.status = "completed"
+                # 回写平台编码到 config_preview
+                _sync_platform_codes_to_config(app, state, data)
+                logger.info(f"应用 {app.id} 所有步骤完成，状态更新为 completed")
+
             await db.commit()
             return StepExecuteResponse(step=step_key, status="completed", result=result)
 

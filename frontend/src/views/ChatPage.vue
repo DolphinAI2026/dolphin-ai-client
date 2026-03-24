@@ -181,8 +181,8 @@
           <div v-show="store.previewTab === 'overview'" class="tab-content">
             <div class="overview-header">
               <h4>{{ store.preview.appName }}</h4>
-              <span class="status-tag" :class="deployAllDone ? 'deployed' : store.currentApp?.status">
-                {{ deployAllDone ? '已部署' : store.currentApp?.status === 'ready' ? '待生成' : store.currentApp?.status === 'conversation' ? '配置调整中' : '对话中' }}
+              <span class="status-tag" :class="appDisplayStatus">
+                {{ appDisplayStatusText }}
               </span>
             </div>
             <div class="stat-grid">
@@ -223,7 +223,7 @@
             </div>
             <!-- 开始生成（部署到平台） -->
             <!-- 开始生成 / 已部署状态 -->
-            <div v-if="deployAllDone && !hasConfigChanged" class="deployed-banner">
+            <div v-if="(deployAllDone || store.currentApp?.status === 'completed') && !hasConfigChanged" class="deployed-banner">
               <span>✅ 已部署到平台</span>
               <button class="view-deploy-btn" @click="openDeployPanel">查看部署记录</button>
             </div>
@@ -1341,6 +1341,21 @@ const activeConflict = ref<ConflictState | null>(null)
 const deployDoneCount = computed(() => deploySteps.value.filter(s => s.status === 'completed').length)
 const deployPercent = computed(() => deploySteps.value.length ? Math.round(deployDoneCount.value / deploySteps.value.length * 100) : 0)
 const deployAllDone = computed(() => deploySteps.value.length > 0 && deployDoneCount.value === deploySteps.value.length)
+
+// 应用状态（综合 deployAllDone 和 app.status）
+const appDisplayStatus = computed(() => {
+  if (deployAllDone.value) return 'deployed'
+  const s = store.currentApp?.status
+  if (s === 'completed') return 'deployed'
+  return s || 'draft'
+})
+const appDisplayStatusText = computed(() => {
+  const s = appDisplayStatus.value
+  if (s === 'deployed' || s === 'completed') return '已部署'
+  if (s === 'ready' || s === 'draft') return '待生成'
+  if (s === 'conversation') return '配置调整中'
+  return '对话中'
+})
 
 // 检测配置是否有变更（对比当前 preview 和已部署的步骤）
 const hasConfigChanged = computed(() => {
