@@ -325,3 +325,25 @@ async def proxy_platform(request: Request, path: str):
 @router.api_route("/backend/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
 async def proxy_backend(request: Request, path: str):
     return await _proxy_request(request, f"backend/{path}", inject_auth=True)
+
+
+# 代理平台插件 /plugin/...
+@router.api_route("/plugin/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+async def proxy_plugin(request: Request, path: str):
+    return await _proxy_request(request, f"plugin/{path}", inject_auth=True)
+
+
+# 代理其他平台路径 /xdap-open/..., /smartbi/..., /apaas/...
+@router.api_route("/xdap-open/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+async def proxy_xdap_open(request: Request, path: str):
+    return await _proxy_request(request, f"xdap-open/{path}", inject_auth=True)
+
+
+@router.api_route("/smartbi/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+async def proxy_smartbi(request: Request, path: str):
+    return await _proxy_request(request, f"smartbi/{path}", inject_auth=True)
+
+
+@router.api_route("/apaas/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+async def proxy_apaas(request: Request, path: str):
+    return await _proxy_request(request, f"apaas/{path}", inject_auth=True)

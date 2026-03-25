@@ -31,6 +31,22 @@ export default defineConfig({
       '/backend': {
         target: 'http://localhost:8001',
         changeOrigin: true
+      },
+      '/plugin': {
+        target: 'http://localhost:8001',
+        changeOrigin: true
+      },
+      '/xdap-open': {
+        target: 'http://localhost:8001',
+        changeOrigin: true
+      },
+      '/smartbi': {
+        target: 'http://localhost:8001',
+        changeOrigin: true
+      },
+      '/apaas': {
+        target: 'http://localhost:8001',
+        changeOrigin: true
       }
     }
   }
