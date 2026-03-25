@@ -563,9 +563,18 @@ class IncrementalExecutor:
             ]
         }]
 
-        await self.client.create_dicts(self.app_id, payload)
-        self.result.add_success("dicts", f"新增字典: {change.name} ({len(options)} 个选项)")
-        logger.info(f"创建字典成功: {change.name} ({change.code})")
+        try:
+            await self.client.create_dicts(self.app_id, payload)
+            self.result.add_success("dicts", f"新增字典: {change.name} ({len(options)} 个选项)")
+            logger.info(f"创建字典成功: {change.name} ({change.code})")
+        except Exception as e:
+            err_msg = str(e)
+            if "重复" in err_msg or "已存在" in err_msg or "duplicate" in err_msg.lower():
+                # 字典已存在，降级为更新 + 逐个添加选项
+                logger.info(f"字典「{change.name}」已存在，降级为更新操作")
+                await self._update_dict(change)
+            else:
+                raise
 
     async def _update_dict(self, change: DictChange):
         """更新字典"""
@@ -623,17 +632,25 @@ class IncrementalExecutor:
                 logger.exception(f"字典选项操作失败: {opt_change.name}")
 
     async def _create_dict_option(self, dict_id: str, change: DictOptionChange):
-        """创建字典选项"""
+        """创建字典选项（如果已存在则降级为更新）"""
         opt_data = change.new_value or {}
-        await self.client.add_dict_option(
-            self.app_id,
-            dict_id,
-            change.code,
-            change.name,
-            opt_data.get("displayOrder", 0)
-        )
-        self.result.add_success("dicts", f"字典选项新增: {change.name}")
-        logger.info(f"创建字典选项成功: {change.name} ({change.code})")
+        try:
+            await self.client.add_dict_option(
+                self.app_id,
+                dict_id,
+                change.code,
+                change.name,
+                opt_data.get("displayOrder", 0)
+            )
+            self.result.add_success("dicts", f"字典选项新增: {change.name}")
+            logger.info(f"创建字典选项成功: {change.name} ({change.code})")
+        except Exception as e:
+            err_msg = str(e)
+            if "重复" in err_msg or "已存在" in err_msg or "duplicate" in err_msg.lower():
+                logger.info(f"字典选项「{change.name}」已存在，降级为更新操作")
+                await self._update_dict_option(dict_id, change)
+            else:
+                raise
 
     async def _update_dict_option(self, dict_id: str, change: DictOptionChange):
         """更新字典选项"""

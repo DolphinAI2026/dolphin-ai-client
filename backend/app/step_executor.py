@@ -167,7 +167,11 @@ async def execute_create_roles_dicts(
                             )
                             options_created += 1
                         except Exception as e:
-                            logger.warning(f"选项创建失败 {d['name']}/{opt_name}: {e}")
+                            err_msg = str(e)
+                            if "重复" in err_msg or "已存在" in err_msg:
+                                logger.info(f"选项已存在，跳过: {d['name']}/{opt_name}")
+                            else:
+                                logger.warning(f"选项创建失败 {d['name']}/{opt_name}: {e}")
 
     return {
         "dict_codes": dict_codes,
