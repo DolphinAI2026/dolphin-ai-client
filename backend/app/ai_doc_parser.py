@@ -170,6 +170,7 @@ SINGLE_SYSTEM_PROMPT = f"""你是得帆云低代码平台的功能设计专家�
 async def parse_doc_with_ai(
     text: str, filename: str = "", on_progress: ProgressCallback = None,
     existing_codes: Optional[Dict] = None,
+    existing_config: Optional[Dict] = None,
 ) -> Dict:
     """用 AI 解析任意格式的需求文档，返回标准 preview JSON。
 
@@ -180,6 +181,8 @@ async def parse_doc_with_ai(
     existing_codes: 可选的已有编码信息（用于增量解析时复用编码），格式：
         {"model_codes": [...], "dict_codes": [...], "role_codes": [...],
          "field_codes": {...model_code: [field_codes]}}
+    existing_config: 可选的 V1 完整配置（用于增量解析时保持名称和编码一致），
+        传入时会在 prompt 中注入详细的约束信息（名称+编码映射）
     """
     logger.info(f"AI 文档解析: {filename}, 长度 {len(text)} 字符")
 
@@ -189,11 +192,18 @@ async def parse_doc_with_ai(
 
     await _progress(f"文档长度 {len(text)} 字符，开始解析...")
 
+    # 构建已有配置约束文本（仅增量模式）
+    config_constraint = ""
+    if existing_config:
+        config_constraint = _build_existing_config_constraint(existing_config)
+        if config_constraint:
+            logger.info(f"增量解析：注入已有配置约束（{len(config_constraint)} 字符）")
+
     if len(text) <= CHUNK_CHAR_LIMIT:
         await _progress("小文档，单次 AI 解析...")
-        data = await _parse_single(text, filename, existing_codes=existing_codes)
+        data = await _parse_single(text, filename, existing_codes=existing_codes, config_constraint=config_constraint)
     else:
-        data = await _parse_chunked(text, filename, _progress, existing_codes=existing_codes)
+        data = await _parse_chunked(text, filename, _progress, existing_codes=existing_codes, config_constraint=config_constraint)
 
     # 对 Markdown 中显式定义的字典做规则兜底，避免 LLM 漏掉未引用字典或漏掉选项
     extracted_dicts = _extract_markdown_dicts(text)
@@ -297,11 +307,95 @@ def _build_existing_codes_prompt(existing_codes: Dict) -> str:
     )
 
 
+def _build_existing_config_constraint(config: Dict) -> str:
+    """从 V1 完整配置中构建约束文本，注入到 V2 解析 prompt 中。
+
+    与 _build_existing_codes_prompt 不同，此函数输出名称+编码的完整映射，
+    让 AI 能准确匹配语义相同但措辞不同的实体，从而保持一致性。
+    """
+    if not config:
+        return ""
+
+    parts = []
+
+    # 角色
+    roles = config.get("roles", [])
+    if roles:
+        role_lines = []
+        for r in roles:
+            name = r.get("name", "")
+            code = r.get("code", "")
+            if name and code:
+                role_lines.append(f"- {name} ({code})")
+        if role_lines:
+            parts.append("### 已有角色\n" + "\n".join(role_lines))
+
+    # 字典
+    dicts = config.get("dicts", [])
+    if dicts:
+        dict_lines = []
+        for d in dicts:
+            name = d.get("name", "")
+            code = d.get("code", "")
+            if name and code:
+                options = d.get("options", [])
+                opt_names = [o.get("name", "") for o in options[:6] if o.get("name")]
+                opt_str = ", ".join(opt_names)
+                if len(options) > 6:
+                    opt_str += f" 等共{len(options)}项"
+                dict_lines.append(f"- {name} ({code}): {opt_str}" if opt_str else f"- {name} ({code})")
+        if dict_lines:
+            parts.append("### 已有字典\n" + "\n".join(dict_lines))
+
+    # 模型及字段
+    models = config.get("models", [])
+    if models:
+        model_lines = []
+        for m in models:
+            name = m.get("name", "")
+            code = m.get("code", "")
+            if name and code:
+                fields = m.get("fields", [])
+                field_strs = []
+                for f in fields[:10]:
+                    fn = f.get("name", "")
+                    fc = f.get("code", "")
+                    ft = f.get("type", "")
+                    freq = f.get("required", False)
+                    if fn and fc:
+                        desc = f"{fn}({fc})"
+                        if ft:
+                            desc += f"[{ft}]"
+                        if freq:
+                            desc += "[必填]"
+                        field_strs.append(desc)
+                suffix = ""
+                if len(fields) > 10:
+                    suffix = f" ...等共{len(fields)}个字段"
+                model_lines.append(f"- {name} ({code}): {', '.join(field_strs)}{suffix}")
+        if model_lines:
+            parts.append("### 已有模型及字段\n" + "\n".join(model_lines))
+
+    if not parts:
+        return ""
+
+    header = (
+        "## 已有配置约束（重要！必须严格遵守）\n\n"
+        "当前应用已有以下配置，请在解析新文档时严格遵守：\n\n"
+        "1. **已有实体必须保持原名称和编码**，不得擅自改名或改编码\n"
+        "2. 如果新文档中的实体与已有实体功能相同（即使措辞略有不同），必须使用已有的名称和编码\n"
+        "3. 已有字段的 required 等属性如果文档未明确变更，保持原值不变\n"
+        "4. 只有新文档中明确新增的实体才使用新的名称和编码\n\n"
+    )
+
+    return header + "\n\n".join(parts) + "\n\n"
+
+
 # ================================================================
 # 小文档：单次调用
 # ================================================================
 
-async def _parse_single(text: str, filename: str, existing_codes: Optional[Dict] = None) -> Dict:
+async def _parse_single(text: str, filename: str, existing_codes: Optional[Dict] = None, config_constraint: str = "") -> Dict:
     client = LLMClient()
     # 智能截断：优先保留 ER 图和业务具体方案（含子表/字段定义）
     if len(text) > 40000:
@@ -324,7 +418,9 @@ async def _parse_single(text: str, filename: str, existing_codes: Optional[Dict]
         truncated = text
 
     user_msg = f"请分析以下需求文档，提取所有业务表单、字段、角色、字典等信息，输出标准 JSON。\n特别注意：\n- 识别所有子表/明细表关系（1:N），用 sub_fields 表示\n- 识别权限角色和数据权限规则\n\n"
-    if existing_codes:
+    if config_constraint:
+        user_msg += config_constraint
+    elif existing_codes:
         user_msg += _build_existing_codes_prompt(existing_codes)
     if filename:
         user_msg += f"文档名：{filename}\n\n"
@@ -348,7 +444,7 @@ async def _parse_single(text: str, filename: str, existing_codes: Optional[Dict]
 # 大文档：分段解析
 # ================================================================
 
-async def _parse_chunked(text: str, filename: str, progress=None, existing_codes: Optional[Dict] = None) -> Dict:
+async def _parse_chunked(text: str, filename: str, progress=None, existing_codes: Optional[Dict] = None, config_constraint: str = "") -> Dict:
     """大文档分段解析流程：
     1. 用 AI 快速提取概览（应用名、角色、表单清单）
     2. 按章节拆分文档
@@ -367,9 +463,14 @@ async def _parse_chunked(text: str, filename: str, progress=None, existing_codes
     # 概览只需要看每个章节的标题和开头，截取摘要
     overview_text = _build_overview_text(text)
 
+    overview_user_msg = f"文档名：{filename}\n\n"
+    if config_constraint:
+        overview_user_msg += config_constraint
+    overview_user_msg += f"---\n\n{overview_text}"
+
     overview_result = await client.chat_completion(
         [{"role": "system", "content": OVERVIEW_SYSTEM_PROMPT},
-         {"role": "user", "content": f"文档名：{filename}\n\n---\n\n{overview_text}"}],
+         {"role": "user", "content": overview_user_msg}],
         max_tokens=4096, timeout=60.0, temperature=0.1
     )
     overview_content = overview_result["choices"][0]["message"]["content"]
@@ -400,7 +501,9 @@ async def _parse_chunked(text: str, filename: str, progress=None, existing_codes
             logger.info(f"解析段 {idx+1}/{len(chunks)}, 长度 {len(chunk)} 字符")
             try:
                 chunk_user_msg = "以下是需求文档的一部分，请提取其中的表单和字典配置：\n\n"
-                if existing_codes:
+                if config_constraint:
+                    chunk_user_msg += config_constraint
+                elif existing_codes:
                     chunk_user_msg += _build_existing_codes_prompt(existing_codes)
                 chunk_user_msg += f"---\n\n{chunk}"
                 r = await client.chat_completion(

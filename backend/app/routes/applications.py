@@ -834,9 +834,10 @@ async def upload_doc_with_conversation(
                     # 提取 V1 已有编码作为上下文
                     existing_codes = extract_existing_codes(v1_parsed_config)
 
-                    # 只对变化部分调 AI 解析
+                    # 只对变化部分调 AI 解析（传入 V1 完整配置约束）
                     partial_config = await parse_doc_with_ai(
-                        changed_text, filename=fname, existing_codes=existing_codes
+                        changed_text, filename=fname, existing_codes=existing_codes,
+                        existing_config=v1_parsed_config
                     )
 
                     # Step 3: 合并配置
@@ -1224,7 +1225,10 @@ async def upload_doc_version(
                     }, ensure_ascii=False)}
 
                     existing_codes = extract_existing_codes(v1_parsed_config) if v1_parsed_config else None
-                    partial_config = await parse_doc_with_ai(changed_text, filename=fname, existing_codes=existing_codes)
+                    partial_config = await parse_doc_with_ai(
+                        changed_text, filename=fname, existing_codes=existing_codes,
+                        existing_config=v1_parsed_config
+                    )
 
                     # Step D: 合并 — V1 未变更部分 + V2 变更部分
                     yield {"event": "progress", "data": json.dumps({"step": "merge", "message": "合并未变更部分与变更结果..."}, ensure_ascii=False)}
