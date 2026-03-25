@@ -2262,7 +2262,7 @@ const handleIncrementalDocUpload = async (file: File) => {
     // 如果没有会话ID，自动创建一个关联到当前应用
     if (!conversationId.value) {
       try {
-        const newConv = await conversationApi.create('builder')
+        const newConv = await conversationApi.create({ agent_type: 'builder' })
         conversationId.value = newConv.id
         selectedConversationId.value = newConv.id
       } catch {
