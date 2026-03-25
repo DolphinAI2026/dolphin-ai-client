@@ -245,10 +245,11 @@ async def execute_update(
             logger.error(f"增量更新执行失败: {e}")
             raise HTTPException(status_code=500, detail=f"增量更新执行失败: {e}")
 
-        # 更新本地配置 + 保存快照
+        # 更新本地配置 + 保存快照（使用编码继承修正后的配置）
         if result.success:
-            app.config_preview = json.dumps(request.new_config, ensure_ascii=False)
-            await save_config_snapshot(db, app_id, request.new_config, source="incremental", summary="增量更新")
+            save_config = diff.normalized_new_config or request.new_config
+            app.config_preview = json.dumps(save_config, ensure_ascii=False)
+            await save_config_snapshot(db, app_id, save_config, source="incremental", summary="增量更新")
             await db.commit()
             logger.info(f"应用 {app_id} 配置已更新")
 
@@ -370,6 +371,9 @@ async def execute_update_stream(
                         app_name=app_name
                     )
 
+                    # 使用编码继承修正后的配置
+                    save_config = diff.normalized_new_config or new_config_dict
+
                     async for event in executor.execute_diff_stream(diff):
                         if event.get("type") == "complete":
                             # 更新本地配置
@@ -377,7 +381,7 @@ async def execute_update_stream(
                                 select(Application).where(Application.id == app_id)
                             )
                             app_obj = result.scalar_one()
-                            app_obj.config_preview = json.dumps(new_config_dict, ensure_ascii=False)
+                            app_obj.config_preview = json.dumps(save_config, ensure_ascii=False)
                             await session.commit()
                             logger.info(f"应用 {app_id} 配置已更新")
 

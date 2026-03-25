@@ -113,6 +113,9 @@ class ConfigDiff:
     # 统计
     summary: str = ""
 
+    # 经过编码继承修正后的新配置（调用方保存时应使用此版本）
+    normalized_new_config: Optional[Dict[str, Any]] = field(default=None, repr=False)
+
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典格式，用于 API 响应"""
         return {
@@ -213,6 +216,166 @@ def _normalize_config(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# 名称优先匹配 & V1 编码继承
+# ---------------------------------------------------------------------------
+
+def _inherit_codes_from_old(
+    old_config: Optional[Dict[str, Any]],
+    new_config: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    将 V2（new_config）中与 V1（old_config）**同名**实体的 code 替换为 V1 的 code。
+
+    这样后续按 code 做 diff 时，同名实体不会因为 AI 生成的编码不同而被误判为
+    "删除旧 + 新增新"。
+
+    **就地修改** new_config（的副本）并返回修改后的版本。
+    """
+    import copy
+    new_config = copy.deepcopy(new_config)
+
+    old = _normalize_config(old_config)
+    new = _normalize_config(new_config)
+
+    # --- 角色 ---
+    _inherit_list_codes(
+        old_list=old["roles"],
+        new_list=new["roles"],
+        name_key="roleName",
+        name_fallback="name",
+        code_key="roleCode",
+        code_fallback="code",
+    )
+
+    # --- 字典 ---
+    old_dict_by_name = _inherit_list_codes(
+        old_list=old["dicts"],
+        new_list=new["dicts"],
+        name_key="dictionaryName",
+        name_fallback="name",
+        code_key="dictionaryCode",
+        code_fallback="code",
+    )
+    # 字典选项
+    for new_d in new["dicts"]:
+        d_name = new_d.get("dictionaryName", new_d.get("name", ""))
+        old_d = old_dict_by_name.get(d_name)
+        if old_d is not None:
+            old_opts = old_d.get("values", old_d.get("options", []))
+            new_opts = new_d.get("values", new_d.get("options", []))
+            _inherit_list_codes(
+                old_list=old_opts,
+                new_list=new_opts,
+                name_key="valueName",
+                name_fallback="name",
+                code_key="valueCode",
+                code_fallback="code",
+            )
+
+    # --- 模型 & 字段 ---
+    old_model_by_name = _inherit_list_codes(
+        old_list=old["models"],
+        new_list=new["models"],
+        name_key="modelName",
+        name_fallback="name",
+        code_key="modelCode",
+        code_fallback="code",
+    )
+    for new_m in new["models"]:
+        m_name = new_m.get("modelName", new_m.get("name", ""))
+        old_m = old_model_by_name.get(m_name)
+        if old_m is not None:
+            old_fields = old_m.get("fields", old_m.get("dataModelFields", []))
+            new_fields = new_m.get("fields", new_m.get("dataModelFields", []))
+            _inherit_list_codes(
+                old_list=old_fields,
+                new_list=new_fields,
+                name_key="fieldName",
+                name_fallback="name",
+                code_key="fieldCode",
+                code_fallback="code",
+            )
+
+    # --- 表单 ---
+    _inherit_list_codes(
+        old_list=old["forms"],
+        new_list=new["forms"],
+        name_key="formName",
+        name_fallback="name",
+        code_key="formCode",
+        code_fallback="code",
+    )
+
+    # --- 流程 ---
+    _inherit_list_codes(
+        old_list=old["processes"],
+        new_list=new["processes"],
+        name_key="processName",
+        name_fallback="name",
+        code_key="processCode",
+        code_fallback="code",
+    )
+
+    # 将修改后的列表写回 new_config
+    if "data" in new_config:
+        target = new_config["data"]
+    else:
+        target = new_config
+    target["roles"] = new["roles"]
+    target["dicts"] = new["dicts"]
+    target["models"] = new["models"]
+    target["forms"] = new["forms"]
+    target["processes"] = new["processes"]
+
+    return new_config
+
+
+def _inherit_list_codes(
+    old_list: List[Dict],
+    new_list: List[Dict],
+    name_key: str,
+    name_fallback: str,
+    code_key: str,
+    code_fallback: str,
+) -> Dict[str, Dict]:
+    """
+    对 new_list 中的每一项，按 **名称** 在 old_list 中查找同名实体。
+    如果找到，将 new 项的 code 替换为 old 项的 code（就地修改 new_list）。
+
+    返回 old_list 的 name -> item 映射，方便调用方做子级继承。
+    """
+    def _get_name(item: Dict) -> str:
+        return item.get(name_key, item.get(name_fallback, ""))
+
+    def _get_code(item: Dict) -> str:
+        return item.get(code_key, item.get(code_fallback, ""))
+
+    old_by_name: Dict[str, Dict] = {}
+    for item in old_list:
+        n = _get_name(item)
+        if n:
+            old_by_name[n] = item
+
+    for new_item in new_list:
+        n = _get_name(new_item)
+        if not n:
+            continue
+        old_item = old_by_name.get(n)
+        if old_item is None:
+            continue
+        old_code = _get_code(old_item)
+        if not old_code:
+            continue
+        # 将 V2 的 code 替换为 V1 的 code
+        if code_key in new_item:
+            new_item[code_key] = old_code
+        elif code_fallback in new_item:
+            new_item[code_fallback] = old_code
+
+    return old_by_name
+
+
 def _compare_roles(
     old_roles: List[Dict],
     new_roles: List[Dict],
@@ -246,8 +409,8 @@ def _compare_roles(
         new_role = new_map.get(role_name)
         remote_role = remote_map.get(role_name)
 
-        # 获取角色编码（优先使用新配置的编码）
-        role_code = get_role_code(new_role) if new_role else get_role_code(old_role) if old_role else ""
+        # 获取角色编码（优先使用旧配置的编码，保持一致性）
+        role_code = get_role_code(old_role) if old_role else get_role_code(new_role) if new_role else ""
 
         if role_name not in old_map and role_name in new_map:
             # 新增
@@ -268,19 +431,10 @@ def _compare_roles(
                 remote_id=remote_role.get("id") if remote_role else None
             ))
         elif old_role and new_role:
-            # 比较是否有修改（角色编码变更也视为修改）
-            old_code = get_role_code(old_role)
-            new_code = get_role_code(new_role)
-
-            if old_code != new_code:
-                changes.append(RoleChange(
-                    name=role_name,
-                    code=new_code,
-                    change_type=ChangeType.MODIFIED,
-                    old_value=old_role,
-                    new_value=new_role,
-                    remote_id=remote_role.get("id") if remote_role else None
-                ))
+            # 角色同名 → 视为同一实体
+            # 编码差异已在 _inherit_codes_from_old 中修正，不再视为修改
+            # 角色目前没有其他业务属性需要对比，故同名即"未变更"
+            pass
 
     return changes
 
@@ -291,10 +445,15 @@ def _compare_dict_options(
     dict_code: str,
     remote_options: Optional[List[Dict]] = None
 ) -> List[DictOptionChange]:
-    """对比字典选项变更"""
+    """
+    对比字典选项变更 — 按**名称优先**匹配。
+
+    编码已在 _inherit_codes_from_old 中完成继承，此处用 code 做映射即可。
+    同名同 code 的选项视为未变更（不再因 code 差异误报）。
+    """
     changes = []
 
-    # 建立 code -> option 映射
+    # 编码继承已完成，按 code 建立映射
     old_map = {o.get("valueCode", o.get("code", "")): o for o in old_options}
     new_map = {o.get("valueCode", o.get("code", "")): o for o in new_options}
     remote_map = {}
@@ -333,6 +492,7 @@ def _compare_dict_options(
                 remote_id=remote_opt.get("id") if remote_opt else None
             ))
         elif old_opt and new_opt:
+            # 同 code 选项 — 只比较名称是否真的变了
             old_name = old_opt.get("valueName", old_opt.get("name", ""))
             new_name = new_opt.get("valueName", new_opt.get("name", ""))
 
@@ -507,15 +667,42 @@ def _compare_fields(
                 remote_id=_get_remote_field_id(remote_field)
             ))
         elif old_field and new_field:
-            # 比较关键属性
-            old_name = old_field.get("fieldName", old_field.get("name", ""))
-            new_name = new_field.get("fieldName", new_field.get("name", ""))
+            # 比较关键业务属性（编码差异已在继承阶段修正）
+            modified = False
+
+            # 字段类型
+            old_type = old_field.get("fieldType", old_field.get("type", ""))
+            new_type = new_field.get("fieldType", new_field.get("type", ""))
+            if old_type != new_type:
+                modified = True
+
+            # 是否必填
+            old_req = old_field.get("required", False)
+            new_req = new_field.get("required", False)
+            if old_req != new_req:
+                modified = True
+
+            # 关联字典
+            old_dict = old_field.get("dictionaryCode", old_field.get("dict", ""))
+            new_dict = new_field.get("dictionaryCode", new_field.get("dict", ""))
+            if old_dict != new_dict:
+                modified = True
+
+            # 关联引用
+            old_ref = old_field.get("refModelCode", old_field.get("ref", ""))
+            new_ref = new_field.get("refModelCode", new_field.get("ref", ""))
+            if old_ref != new_ref:
+                modified = True
+
+            # 备注/描述
             old_comment = _get_field_comment(old_field)
             new_comment = _get_field_comment(new_field)
+            if old_comment != new_comment:
+                modified = True
 
-            if old_name != new_name or old_comment != new_comment:
+            if modified:
                 changes.append(FieldChange(
-                    name=new_name,
+                    name=name,
                     code=code,
                     change_type=ChangeType.MODIFIED,
                     model_code=model_code,
@@ -1054,6 +1241,10 @@ def compute_config_diff(
     Returns:
         ConfigDiff: 差异报告
     """
+    # ★ 关键步骤：按名称匹配，将 V2 的编码继承为 V1 的编码
+    # 这样后续按 code 做 diff 时，同名实体不会因 AI 编码差异被误判
+    new_config = _inherit_codes_from_old(old_config, new_config)
+
     old = _normalize_config(old_config)
     new = _normalize_config(new_config)
 
@@ -1065,6 +1256,7 @@ def compute_config_diff(
     remote_processes = remote_data.get("processes", []) if remote_data else None
 
     diff = ConfigDiff()
+    diff.normalized_new_config = new_config  # 保存编码继承后的配置
 
     # 对比各资源
     diff.role_changes = _compare_roles(old["roles"], new["roles"], remote_roles)

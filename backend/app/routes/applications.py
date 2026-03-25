@@ -938,9 +938,12 @@ async def upload_doc_with_conversation(
                 dicts_list.append(f"  - {d.get('name', '')}（{d.get('code', '')}）：{tag}")
 
             if is_incremental and v1_parsed_config:
-                # 增量模式：用 config_diff 展示差异
+                # 增量模式：用 config_diff 展示差异（会自动完成编码继承）
                 v1_for_diff = v1_parsed_config
                 resource_diff = compute_config_diff(v1_for_diff, data)
+                # 使用编码继承后的配置，确保 V1 的 code 被保留
+                if resource_diff.normalized_new_config:
+                    data = resource_diff.normalized_new_config
                 diff_summary_text = resource_diff.summary or "文档更新解析完成"
 
                 summary = f"文档《{fname}》已更新（V{v1_doc_info['version'] + 1}），增量解析完成：\n\n"
@@ -1249,8 +1252,11 @@ async def upload_doc_version(
                 except Exception:
                     pass
 
-            # 7. 资源级差异对比（用于前端展示）
+            # 7. 资源级差异对比（用于前端展示，会自动完成编码继承）
             resource_diff = compute_config_diff(v1_config, v2_config)
+            # 使用编码继承后的配置，确保 V1 的 code 被保留
+            if resource_diff.normalized_new_config:
+                v2_config = resource_diff.normalized_new_config
             resource_diff_dict = resource_diff.to_dict()
 
             # 8. 语义对比（用于生成可勾选 actions）
@@ -1495,9 +1501,12 @@ async def execute_change_plan(
                     yield {"event": "progress", "data": json.dumps({"step": "获取平台现有资源..."}, ensure_ascii=False)}
                     remote_data = await fetch_remote_data(client, apaas_app_id)
 
-                    # 计算差异
+                    # 计算差异（会自动完成编码继承）
                     yield {"event": "progress", "data": json.dumps({"step": "计算资源变更差异..."}, ensure_ascii=False)}
                     diff = compute_config_diff(current_config, new_config, remote_data)
+                    # 使用编码继承后的配置，确保 V1 的 code 被保留
+                    if diff.normalized_new_config:
+                        new_config = diff.normalized_new_config
 
                     if diff.has_changes:
                         # 创建执行器并执行
