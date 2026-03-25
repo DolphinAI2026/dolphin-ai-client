@@ -1,6 +1,6 @@
 <template>
   <div class="chat-page">
-    <nav class="nav-bar" v-show="activeView !== 'platform'">
+    <nav class="nav-bar">
       <div class="nav-left">
         <button class="back-btn" @click="router.push('/')">
           <el-icon><ArrowLeft /></el-icon>
@@ -18,20 +18,33 @@
     </nav>
 
     <div class="main-area">
-      <!-- 顶部 Tab 切换 -->
-      <div v-if="activeView === 'platform'" class="platform-iframe-container">
-        <div class="platform-tab-bar">
-          <button class="agent-tab" @click="activeView = 'builder'" title="返回搭建智能体">
-            <span>🤖</span>
-            <span>搭建智能体</span>
-          </button>
-          <button class="agent-tab active">
-            <span>🖥️</span>
-            <span>平台配置</span>
-            <span class="active-dot"></span>
-          </button>
-          <button class="platform-fullscreen-btn" @click="openPlatformNewTab" title="新窗口打开">↗</button>
-        </div>
+      <!-- 顶部 Tab 切换（始终可见） -->
+      <div class="agent-tabs">
+        <button class="agent-tab" :class="{ active: activeView === 'builder' }" @click="activeView = 'builder'">
+          <span>🤖</span>
+          <span>搭建智能体</span>
+          <span v-if="activeView === 'builder'" class="active-dot"></span>
+        </button>
+        <button
+          v-if="store.currentApp?.apaas_app_id"
+          class="agent-tab"
+          :class="{ active: activeView === 'platform' }"
+          @click="switchToPlatform"
+        >
+          <span>🖥️</span>
+          <span>平台配置</span>
+          <span v-if="activeView === 'platform'" class="active-dot"></span>
+        </button>
+        <button
+          v-if="activeView === 'platform' && platformIframeUrl"
+          class="agent-tab-action"
+          @click="openPlatformNewTab"
+          title="在新窗口打开"
+        >↗</button>
+      </div>
+
+      <!-- 平台配置 iframe（v-show 保持不销毁） -->
+      <div v-show="activeView === 'platform'" class="platform-iframe-container">
         <div v-if="platformLoading" class="platform-loading">
           <span class="loading-spinner">⟳</span> 加载平台配置...
         </div>
@@ -59,24 +72,10 @@
         </template>
       </div>
 
+      <!-- 搭建智能体内容区（横向布局） -->
+      <div v-show="activeView === 'builder'" class="builder-content">
       <!-- 左侧对话区 -->
-      <div v-show="activeView === 'builder'" class="chat-side">
-        <div class="agent-tabs">
-          <button class="agent-tab active">
-            <span>🤖</span>
-            <span>搭建智能体</span>
-            <span class="active-dot"></span>
-          </button>
-          <button
-            v-if="store.currentApp?.apaas_app_id"
-            class="agent-tab"
-            @click="switchToPlatform"
-          >
-            <span>🖥️</span>
-            <span>平台配置</span>
-          </button>
-        </div>
-
+      <div class="chat-side">
         <!-- 对话历史栏 -->
         <div class="conversation-history-bar">
           <div class="conv-history-left">
@@ -629,6 +628,7 @@
           />
         </div>
       </div>
+      </div><!-- /builder-content -->
     </div>
   </div>
 </template>
@@ -2974,7 +2974,10 @@ watch(conversationId, (id) => {
 .dot { width: 8px; height: 8px; border-radius: 50%; background: rgba(255,255,255,0.15); }
 .dot.active { background: #10b981; }
 
-.main-area { flex: 1; display: flex; overflow: hidden; position: relative; }
+.main-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
+
+/* ── 搭建智能体内容区（横向布局） ── */
+.builder-content { flex: 1; display: flex; overflow: hidden; min-height: 0; }
 
 /* ── 左侧对话 ── */
 .chat-side { flex: 1; display: flex; flex-direction: column; min-width: 0; min-width: 320px; }
@@ -2999,6 +3002,12 @@ watch(conversationId, (id) => {
   background: linear-gradient(135deg, #7c3aed, #6366f1); border-radius: 1px;
 }
 .active-dot { width: 6px; height: 6px; border-radius: 50%; background: #10b981; }
+.agent-tab-action {
+  margin-left: auto; padding: 4px 8px; border-radius: 6px;
+  font-size: 14px; background: none; border: none;
+  color: rgba(255,255,255,0.35); cursor: pointer; transition: all 0.2s;
+}
+.agent-tab-action:hover { background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.8); }
 
 /* 消息区 */
 /* ── 对话历史栏 ── */
@@ -3575,8 +3584,7 @@ watch(conversationId, (id) => {
 
 /* ── 平台配置 iframe ── */
 .platform-iframe-container {
-  flex: 1; display: flex; flex-direction: column; overflow: hidden;
-  height: 100%; min-height: 0;
+  flex: 1; position: relative; overflow: hidden; min-height: 0;
 }
 .platform-tab-bar {
   display: flex; align-items: center; gap: 4px; padding: 4px 16px;
@@ -3605,7 +3613,7 @@ watch(conversationId, (id) => {
 }
 .hint-dismiss-btn:hover { color: rgba(255,255,255,0.7); }
 .platform-iframe {
-  flex: 1; width: 100%; border: none; background: #fff; min-height: 0;
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; background: #fff;
 }
 .platform-loading {
   flex: 1; display: flex; align-items: center; justify-content: center;

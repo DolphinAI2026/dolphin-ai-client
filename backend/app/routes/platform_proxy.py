@@ -113,20 +113,40 @@ def _build_vuex_state(token: str, tenant_id: str, username: str) -> str:
 def _inject_sso_script(html: str, vuex_state: str) -> str:
     """在 HTML <head> 中注入 SSO 脚本"""
     escaped = json.dumps(vuex_state)
+    # CSS: 隐藏平台顶部导航栏 + JS: 延迟隐藏兜底
+    style = (
+        "\n<style id='iframe-overrides'>\n"
+        "  .header-wrap, .layout-header, .main-header, .platform-header,\n"
+        "  .x-header, #header, header.el-header, .el-header,\n"
+        "  .tenant-header, .app-top-header { display: none !important; }\n"
+        "</style>\n"
+    )
     script = (
         "\n<script>\n"
         "(function(){\n"
         "  try {\n"
         "    var k='__vuex__local', v=" + escaped + ";\n"
         "    localStorage.setItem(k,v);\n"
-        "    console.log('[SSO] token injected, uid='+JSON.parse(v).authModule.userInfo.id);\n"
+        "    console.log('[SSO] token injected');\n"
         "  }catch(ex){console.error('[SSO]',ex)}\n"
+        "  // 延迟隐藏顶部导航（兜底，等 Vue 渲染完成）\n"
+        "  setTimeout(function(){\n"
+        "    var h=document.querySelector('.header-wrap,.layout-header,.main-header,.x-header,.el-header,header');\n"
+        "    if(h&&h.offsetHeight<80){h.style.display='none';}\n"
+        "    // 通用：隐藏第一个 header 高度 < 80px 的元素\n"
+        "    document.querySelectorAll('header,[class*=header]').forEach(function(el){\n"
+        "      if(el.offsetHeight>0&&el.offsetHeight<80&&el.offsetWidth>window.innerWidth*0.8){\n"
+        "        el.style.display='none';\n"
+        "      }\n"
+        "    });\n"
+        "  }, 3000);\n"
         "})();\n"
         "</script>\n"
     )
+    inject = style + script
     if "<head>" in html:
-        return html.replace("<head>", "<head>" + script, 1)
-    return script + html
+        return html.replace("<head>", "<head>" + inject, 1)
+    return inject + html
 
 
 # ============================================================
