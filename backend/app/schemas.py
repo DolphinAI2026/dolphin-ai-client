@@ -97,6 +97,7 @@ class ApplicationResponse(BaseModel):
     description: Optional[str]
     status: str
     apaas_app_id: Optional[str] = None
+    apaas_url: Optional[str] = None
     config_preview: Optional[dict] = None
     models: int = 0
     forms: int = 0

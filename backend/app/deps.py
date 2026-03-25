@@ -122,6 +122,24 @@ async def get_auth_context(
     )
 
 
+async def get_auth_context_from_token(token: str) -> AuthContext:
+    """从 token 字符串获取 auth context（供非标准路由使用，如 proxy 入口）"""
+    from app.database import AsyncSessionLocal
+
+    payload = jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
+    user_id = int(payload.get("sub", 0))
+    tenant_id = int(payload.get("tid", 0))
+    if not user_id:
+        raise ValueError("Invalid token")
+
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(select(User).where(User.id == user_id))
+        user = result.scalar_one_or_none()
+        if not user:
+            raise ValueError("User not found")
+        return AuthContext(user=user, tenant_id=tenant_id, tenant_role="member", org_permissions={})
+
+
 async def require_tenant_admin(
     ctx: Annotated[AuthContext, Depends(get_auth_context)]
 ) -> AuthContext:

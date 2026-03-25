@@ -19,4 +19,5 @@ export const platformEnvApi = {
   test: (id: number) => request.post<any, { ok: boolean; status: string; error?: string }>(`/platform-envs/${id}/test`),
   login: (id: number) => request.post<any, { ok: boolean; status: string }>(`/platform-envs/${id}/login`),
   setDefault: (id: number) => request.post(`/platform-envs/${id}/set-default`),
+  getEmbedUrl: (appId: number) => request.get<any, { url: string; env_name: string }>(`/platform-envs/embed-url?app_id=${appId}`),
 }

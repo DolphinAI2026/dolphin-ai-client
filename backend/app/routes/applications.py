@@ -9,7 +9,7 @@ from sqlalchemy import select, desc, func as sa_func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 from app.database import get_db
-from app.models import User, Application, DocumentVersion, ChangePlan, ApiCallLog
+from app.models import User, Application, DocumentVersion, ChangePlan, ApiCallLog, PlatformEnv
 from app.auth import get_current_user
 from app.schemas import ApplicationCreate, ApplicationResponse, MergedAppResponse
 from app.deps import get_auth_context, AuthContext
@@ -63,7 +63,7 @@ def _build_apaas_url(apaas_app_id: str, base_url: str | None = None, tenant_id: 
     """得帆云平台应用直达链接（从环境配置取地址）"""
     host = base_url.rstrip("/").replace("/backend", "") if base_url else "https://apaas-poc.definesys.cn"
     tid = tenant_id or settings.apaas_tenant_id
-    return f"{host}/platform/{tid}/admin/app-store/{apaas_app_id}"
+    return f"{host}/platform/{tid}/admin/app-store/edit-app?appId={apaas_app_id}&currentStepIndex=2"
 
 
 def _build_local(app: Application, perms: dict | None = None, env_name: str | None = None, env_status: str | None = None) -> MergedAppResponse:
@@ -241,6 +241,25 @@ async def get_application(
 
     resp = _enrich(app)
     resp.permissions = (await batch_get_permissions(ctx, db, [app], "application"))[0]
+
+    # 构建平台直达链接
+    if app.apaas_app_id:
+        env_base_url = env_tenant_id = None
+        if app.platform_env_id:
+            env_result = await db.execute(select(PlatformEnv).where(PlatformEnv.id == app.platform_env_id))
+            env = env_result.scalar_one_or_none()
+            if env:
+                env_base_url, env_tenant_id = env.base_url, env.platform_tenant_id
+        if not env_base_url:
+            # 回退到默认环境
+            default_env_result = await db.execute(
+                select(PlatformEnv).where(PlatformEnv.tenant_id == ctx.tenant_id, PlatformEnv.is_default == True)
+            )
+            default_env = default_env_result.scalar_one_or_none()
+            if default_env:
+                env_base_url, env_tenant_id = default_env.base_url, default_env.platform_tenant_id
+        resp.apaas_url = _build_apaas_url(str(app.apaas_app_id), env_base_url, env_tenant_id)
+
     return resp
 
 
@@ -1472,6 +1491,8 @@ async def execute_change_plan(
     current_config_str = app.config_preview
     plan_id_val = plan.id
     actions_str = plan.actions
+    plan_from_version = plan.from_version
+    plan_to_version = plan.to_version
 
     async def event_generator():
         from app.database import AsyncSessionLocal
@@ -1483,9 +1504,24 @@ async def execute_change_plan(
         try:
             yield {"event": "progress", "data": json.dumps({"step": "加载当前配置..."}, ensure_ascii=False)}
 
-            # 加载当前配置
+            # 加载基础配置：优先使用 from_version 的 parsed_config（避免 config_preview 已被更新为 V2 导致 apply_actions 重复）
             current_config: dict = {}
-            if current_config_str:
+            async with AsyncSessionLocal() as session:
+                from_doc = await session.execute(
+                    select(DocumentVersion).where(
+                        DocumentVersion.application_id == app_id_val,
+                        DocumentVersion.version == plan_from_version
+                    )
+                )
+                from_doc_obj = from_doc.scalar_one_or_none()
+                if from_doc_obj and from_doc_obj.parsed_config:
+                    try:
+                        current_config = json.loads(from_doc_obj.parsed_config) if isinstance(from_doc_obj.parsed_config, str) else from_doc_obj.parsed_config
+                    except Exception:
+                        pass
+
+            # 回退：如果没有找到 from_version 的配置，使用 config_preview
+            if not current_config and current_config_str:
                 try:
                     loaded = json.loads(current_config_str) if isinstance(current_config_str, str) else current_config_str
                     current_config = loaded.get("data", loaded)
@@ -1497,7 +1533,7 @@ async def execute_change_plan(
 
             yield {"event": "progress", "data": json.dumps({"step": f"应用 {len(selected)} 项变更..."}, ensure_ascii=False)}
 
-            # 应用 patch 得到 new_config
+            # 应用 patch 得到 new_config（基于 from_version 的配置）
             new_config = apply_actions_to_config(current_config, actions)
 
             # 判断是否需要同步到平台

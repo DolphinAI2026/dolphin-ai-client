@@ -262,3 +262,72 @@ async def set_default(
         e.is_default = (e.id == env_id)
     await db.commit()
     return {"ok": True}
+
+
+# ============================================================
+# iframe 嵌入 URL
+# ============================================================
+
+@router.get("/embed-url")
+async def get_embed_url(
+    app_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """获取嵌入低代码平台的 iframe URL（含 token）"""
+    from app.models import Application
+
+    # 查应用
+    result = await db.execute(
+        select(Application).where(Application.id == app_id, Application.tenant_id == ctx.tenant_id)
+    )
+    app = result.scalar_one_or_none()
+    if not app:
+        raise HTTPException(status_code=404, detail="应用不存在")
+    if not app.apaas_app_id:
+        raise HTTPException(status_code=400, detail="应用尚未部署到平台")
+
+    # 查环境（优先应用关联的，其次默认环境）
+    env = None
+    if app.platform_env_id:
+        env_result = await db.execute(select(PlatformEnv).where(PlatformEnv.id == app.platform_env_id))
+        env = env_result.scalar_one_or_none()
+    if not env:
+        env_result = await db.execute(
+            select(PlatformEnv).where(PlatformEnv.tenant_id == ctx.tenant_id, PlatformEnv.is_default == True)
+        )
+        env = env_result.scalar_one_or_none()
+    if not env:
+        raise HTTPException(status_code=400, detail="未配置平台环境")
+
+    # 确保 token 有效：先测试，失败则尝试重新登录
+    token = env.token
+    if not token and env.username and env.password_enc:
+        try:
+            password = decrypt_password(env.password_enc)
+            client = APaaSClient(base_url=env.base_url, tenant_id=env.platform_tenant_id)
+            login_result = await client.login(env.username, password)
+            token = login_result.get("token", "")
+            if token:
+                env.token = token
+                env.status = "connected"
+                await db.commit()
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"平台登录失败: {e}")
+
+    if not token:
+        raise HTTPException(status_code=400, detail="平台 token 不可用，请先在环境管理中登录")
+
+    # 构建 URL（不传 token — 平台不支持 URL token 免登）
+    host = env.base_url.rstrip("/").replace("/backend", "")
+    tid = env.platform_tenant_id
+    embed_url = f"{host}/platform/{tid}/admin/app-store/edit-app?appId={app.apaas_app_id}&currentStepIndex=2"
+
+    return {
+        "url": embed_url,
+        "env_name": env.env_name,
+        "username": env.username or "",
+        "token": token,
+        "tenant_id": tid,
+        "host": host,
+    }

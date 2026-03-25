@@ -4,7 +4,7 @@ import type { PreviewData, GenProgress } from '@/types'
 import type { DiffResponse } from '@/api/incremental'
 
 export const usePreviewStore = defineStore('preview', () => {
-  const currentApp = ref<{ name: string; status: string } | null>(null)
+  const currentApp = ref<{ name: string; status: string; apaas_app_id?: string } | null>(null)
   const previewTab = ref('overview')
   const previewFormIdx = ref(0)
   const connected = ref(false)

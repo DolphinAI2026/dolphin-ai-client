@@ -1,6 +1,6 @@
 <template>
   <div class="chat-page">
-    <nav class="nav-bar">
+    <nav class="nav-bar" v-show="activeView !== 'platform'">
       <div class="nav-left">
         <button class="back-btn" @click="router.push('/')">
           <el-icon><ArrowLeft /></el-icon>
@@ -9,22 +9,71 @@
         <span class="logo-text">aPaaS Builder AI</span>
       </div>
       <div class="nav-right">
-        <button class="nav-link" :class="{ active: showProjectsPanel }" @click="showProjectsPanel = !showProjectsPanel">
+        <button class="nav-link" @click="router.push('/apps')">
           📁 我的应用
-          <span v-if="projects.length" class="project-count">{{ projects.length }}</span>
+          <span v-if="appCount > 0" class="project-count">{{ appCount }}</span>
         </button>
-        <button class="nav-link" @click="openCreateProject">+ 新建应用</button>
+        <button class="nav-link" @click="router.push('/')">+ 新建应用</button>
       </div>
     </nav>
 
     <div class="main-area">
+      <!-- 顶部 Tab 切换 -->
+      <div v-if="activeView === 'platform'" class="platform-iframe-container">
+        <div class="platform-tab-bar">
+          <button class="agent-tab" @click="activeView = 'builder'" title="返回搭建智能体">
+            <span>🤖</span>
+            <span>搭建智能体</span>
+          </button>
+          <button class="agent-tab active">
+            <span>🖥️</span>
+            <span>平台配置</span>
+            <span class="active-dot"></span>
+          </button>
+          <button class="platform-fullscreen-btn" @click="openPlatformNewTab" title="新窗口打开">↗</button>
+        </div>
+        <div v-if="platformLoading" class="platform-loading">
+          <span class="loading-spinner">⟳</span> 加载平台配置...
+        </div>
+        <div v-else-if="platformError" class="platform-error">
+          <p>{{ platformError }}</p>
+          <div class="platform-error-actions">
+            <button class="platform-retry-btn" @click="loadPlatformUrl">重试</button>
+            <button class="platform-open-btn" @click="openPlatformNewTab">在新窗口打开</button>
+          </div>
+        </div>
+        <template v-else-if="platformIframeUrl">
+          <div v-if="platformLoginHint" class="platform-login-hint">
+            <span>💡 首次使用请在下方登录平台（账号: <b>{{ platformLoginHint }}</b>）</span>
+            <button class="hint-nav-btn" @click="navigateIframeToApp" title="登录后点击跳转到应用配置页">🔄 跳转到应用</button>
+            <button class="hint-dismiss-btn" @click="platformLoginHint = ''">✕</button>
+          </div>
+          <iframe
+            ref="platformIframeRef"
+            :src="platformIframeUrl"
+            class="platform-iframe"
+            frameborder="0"
+            allow="clipboard-read; clipboard-write"
+            @error="onIframeError"
+          ></iframe>
+        </template>
+      </div>
+
       <!-- 左侧对话区 -->
-      <div class="chat-side">
+      <div v-show="activeView === 'builder'" class="chat-side">
         <div class="agent-tabs">
           <button class="agent-tab active">
             <span>🤖</span>
             <span>搭建智能体</span>
             <span class="active-dot"></span>
+          </button>
+          <button
+            v-if="store.currentApp?.apaas_app_id"
+            class="agent-tab"
+            @click="switchToPlatform"
+          >
+            <span>🖥️</span>
+            <span>平台配置</span>
           </button>
         </div>
 
@@ -112,7 +161,7 @@
       </div>
 
       <!-- 右侧预览面板 -->
-      <div class="preview-side">
+      <div v-show="activeView === 'builder'" class="preview-side">
         <div v-if="store.currentApp" class="preview-tabs">
           <button v-for="tab in tabs" :key="tab.k" class="ptab" :class="{ active: store.previewTab === tab.k }" @click="store.previewTab = tab.k">{{ tab.l }}</button>
         </div>
@@ -455,7 +504,7 @@
       </div>
 
       <!-- 第三栏：部署面板 -->
-      <div class="deploy-side" :class="{ open: deployOpen }">
+      <div class="deploy-side" :class="{ open: deployOpen && activeView === 'builder' }">
         <div class="deploy-header">
           <div>
             <div class="deploy-title">部署到平台</div>
@@ -509,77 +558,6 @@
       </div>
     </div>
 
-    <!-- 我的应用面板 -->
-    <div class="projects-panel" :class="{ open: showProjectsPanel }">
-      <div class="projects-header">
-        <h3>我的应用</h3>
-        <div class="projects-header-actions">
-          <button class="projects-add-btn" @click="openCreateProject">+ 新建应用</button>
-          <button class="projects-close-btn" @click="showProjectsPanel = false">✕</button>
-        </div>
-      </div>
-      <div v-if="loadingProjects" class="projects-loading">
-        <span class="loading-spinner">⟳</span> 加载中...
-      </div>
-      <div v-else-if="projects.length === 0" class="projects-empty">
-        <div class="empty-icon">📁</div>
-        <p>还没有应用</p>
-        <button class="create-first-btn" @click="openCreateProject">创建第一个应用</button>
-      </div>
-      <div v-else class="projects-list">
-        <div
-          v-for="proj in projects"
-          :key="proj.id"
-          class="project-card"
-          @click="toggleProjectExpand(proj.id)"
-        >
-          <div class="project-card-header">
-            <div class="project-card-left">
-              <span class="platform-dot" :class="{ connected: proj.platform_connected }"></span>
-              <span class="project-name">{{ proj.name }}</span>
-            </div>
-            <div class="project-card-actions">
-              <button class="project-settings-btn" @click.stop="openProjectSettings(proj)" title="应用设置">
-                ⚙️
-              </button>
-              <span class="expand-arrow" :class="{ expanded: expandedProjectId === proj.id }">▸</span>
-            </div>
-          </div>
-          <div class="project-card-meta">
-            <span class="meta-item" :title="proj.platform_connected ? '已连接平台' : '未连接平台'">
-              {{ proj.platform_connected ? '🟢 已连接' : '⚪ 未连接' }}
-            </span>
-            <span class="meta-item" v-if="projectApps[proj.id]">📦 {{ projectApps[proj.id].length }} 个应用</span>
-            <span class="meta-item" v-if="projectWorkspaces[proj.id]">🗂 {{ projectWorkspaces[proj.id].length }} 个工作区</span>
-            <span class="meta-item">{{ formatDate(proj.created_at) }}</span>
-          </div>
-          <!-- 团队成员头像 -->
-          <div class="project-members-avatars" v-if="projectMembers[proj.id]?.length">
-            <div
-              v-for="member in projectMembers[proj.id].slice(0, 5)"
-              :key="member.id"
-              class="member-avatar"
-              :title="member.username + ' (' + (member.role === 'owner' ? '所有者' : member.role === 'admin' ? '管理员' : '成员') + ')'"
-            >
-              {{ member.username.charAt(0).toUpperCase() }}
-            </div>
-            <div v-if="projectMembers[proj.id].length > 5" class="member-avatar more">
-              +{{ projectMembers[proj.id].length - 5 }}
-            </div>
-          </div>
-          <!-- 展开的应用列表 -->
-          <div v-if="expandedProjectId === proj.id" class="project-apps-list" @click.stop>
-            <div v-if="!projectApps[proj.id]" class="apps-loading">加载中...</div>
-            <div v-else-if="projectApps[proj.id].length === 0" class="apps-empty">暂无应用</div>
-            <div v-else v-for="app in projectApps[proj.id]" :key="app.id" class="project-app-item" @click="goToApp(app)">
-              <span class="app-status-dot" :class="app.local_status || 'pending'"></span>
-              <span class="app-name-text">{{ app.app_name || app.name }}</span>
-              <span v-if="app.env_name" class="app-env-tag">{{ app.env_name }}</span>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
 
     <ConnectModal v-model="store.showConnectModal" />
     <EnvSelectModal v-model="showEnvSelect" @selected="onEnvSelected" />
@@ -612,11 +590,6 @@
         <div v-if="apiLogs.length === 0" class="api-logs-empty">暂无日志</div>
       </div>
     </el-dialog>
-    <ProjectSettingsModal
-      v-model="showProjectSettingsModal"
-      :project="editingProject"
-      @saved="onProjectSaved"
-    />
 
     <!-- 增量更新弹窗 -->
     <div v-if="showIncrementalUpdate" class="incremental-modal-overlay" @click.self="closeIncrementalUpdate">
@@ -670,14 +643,11 @@ import { useUserStore } from '@/stores/user'
 import { applicationApi } from '@/api/application'
 import { incrementalApi, type DiffResponse, type ExecuteResponse } from '@/api/incremental'
 import { conversationApi, type ConversationWithApp } from '@/api/conversation'
-import { projectsApi } from '@/api/projects'
 import { marked } from 'marked'
-import type { Project, ProjectMember } from '@/api/projects'
 import ConnectModal from '@/components/ConnectModal.vue'
 import EnvSelectModal from '@/components/EnvSelectModal.vue'
 import { platformEnvApi } from '@/api/platformEnv'
 import request from '@/utils/request'
-import ProjectSettingsModal from '@/components/ProjectSettingsModal.vue'
 import ConfigDiff from '@/components/ConfigDiff.vue'
 import UpdateSteps from '@/components/UpdateSteps.vue'
 import type { Message } from '@/types'
@@ -693,79 +663,63 @@ const inputText = ref('')
 const isTyping = ref(false)
 const currentAgent = ref('builder')
 
-// ── 项目相关 ──
-const showProjectsPanel = ref(false)
-const loadingProjects = ref(false)
-const projects = ref<Project[]>([])
-const expandedProjectId = ref<number | null>(null)
-const projectApps = ref<Record<number, any[]>>({})
-const projectWorkspaces = ref<Record<number, any[]>>({})
-const projectMembers = ref<Record<number, ProjectMember[]>>({})
-const showProjectSettingsModal = ref(false)
-const editingProject = ref<Project | null>(null)
-
-const fetchProjects = async () => {
-  loadingProjects.value = true
+// ── 应用计数（导航栏徽标） ──
+const appCount = ref(0)
+const fetchAppCount = async () => {
   try {
-    projects.value = await projectsApi.list()
-    // 并行加载每个项目的成员
-    await Promise.all(projects.value.map(async (proj) => {
-      try {
-        projectMembers.value[proj.id] = await projectsApi.listMembers(proj.id)
-      } catch { projectMembers.value[proj.id] = [] }
-    }))
+    const apps = await applicationApi.list() as any[]
+    appCount.value = apps.length
+  } catch { /* ignore */ }
+}
+
+// ── 平台配置 iframe ──
+const activeView = ref<'builder' | 'platform'>('builder')
+const platformIframeUrl = ref('')
+const platformAppUrl = ref('')  // 应用配置页 URL（登录后跳转用）
+const platformLoading = ref(false)
+const platformError = ref('')
+const platformLoginHint = ref('')
+const platformIframeRef = ref<HTMLIFrameElement | null>(null)
+
+const loadPlatformUrl = async () => {
+  if (!existingAppId.value) return
+  platformLoading.value = true
+  platformError.value = ''
+  try {
+    const authToken = localStorage.getItem('token') || ''
+    // 通过后端 SSO 入口加载：只代理 HTML（注入 token），JS/CSS/API 直接从平台加载
+    platformIframeUrl.value = `/api/platform-proxy/entry?app_id=${existingAppId.value}&_auth=${authToken}`
+    platformAppUrl.value = platformIframeUrl.value
+    platformLoginHint.value = ''
   } catch (e: any) {
-    console.error('获取项目列表失败:', e)
+    platformError.value = e?.response?.data?.detail || e?.message || '获取平台链接失败'
   } finally {
-    loadingProjects.value = false
+    platformLoading.value = false
   }
 }
 
-const toggleProjectExpand = async (projectId: number) => {
-  if (expandedProjectId.value === projectId) {
-    expandedProjectId.value = null
-    return
-  }
-  expandedProjectId.value = projectId
-  // 加载项目应用和工作区
-  if (!projectApps.value[projectId]) {
-    try {
-      const apps = await applicationApi.list() as any[]
-      projectApps.value[projectId] = apps.filter((a: any) => a.project_id === projectId)
-    } catch { projectApps.value[projectId] = [] }
-  }
-  if (!projectWorkspaces.value[projectId]) {
-    try {
-      projectWorkspaces.value[projectId] = await projectsApi.listWorkspaces(projectId)
-    } catch { projectWorkspaces.value[projectId] = [] }
+const switchToPlatform = () => {
+  activeView.value = 'platform'
+  if (!platformIframeUrl.value) {
+    loadPlatformUrl()
   }
 }
 
-const openCreateProject = () => {
-  editingProject.value = null
-  showProjectSettingsModal.value = true
-}
-
-const openProjectSettings = (proj: Project) => {
-  editingProject.value = proj
-  showProjectSettingsModal.value = true
-}
-
-const onProjectSaved = (proj: Project) => {
-  const idx = projects.value.findIndex(p => p.id === proj.id)
-  if (idx >= 0) {
-    projects.value[idx] = proj
-  } else {
-    projects.value.unshift(proj)
+const navigateIframeToApp = () => {
+  if (platformIframeRef.value && platformAppUrl.value) {
+    platformIframeRef.value.src = platformAppUrl.value
+    platformLoginHint.value = ''
   }
 }
 
-const goToApp = (app: any) => {
-  if (app.conversation_id) {
-    router.push(`/chat/${app.conversation_id}?app_id=${app.id}`)
-  } else {
-    router.push('/apps')
+const openPlatformNewTab = () => {
+  if (platformAppUrl.value || platformIframeUrl.value) {
+    window.open(platformAppUrl.value || platformIframeUrl.value, '_blank')
   }
+}
+
+const onIframeError = () => {
+  platformError.value = '平台页面加载失败，可能不支持 iframe 嵌入'
 }
 
 // 字段类型图标映射（兜底，防止后端返回中文导致竖排）
@@ -784,17 +738,6 @@ const getFieldIcon = (f: any) => {
   if (f.icon && f.icon.length <= 2) return f.icon
   // 否则从 type 映射
   return FIELD_ICON_MAP[f.type] || FIELD_ICON_MAP[f.icon] || 'T'
-}
-
-const formatDate = (dateStr: string) => {
-  if (!dateStr) return ''
-  const d = new Date(dateStr)
-  const now = new Date()
-  const diff = now.getTime() - d.getTime()
-  if (diff < 86400000) return '今天'
-  if (diff < 172800000) return '昨天'
-  if (diff < 604800000) return `${Math.floor(diff / 86400000)} 天前`
-  return `${d.getMonth() + 1}/${d.getDate()}`
 }
 
 const agents: Record<string, { name: string; icon: string }> = {
@@ -2822,7 +2765,7 @@ onMounted(async () => {
           store.preview.roles = data.roles || []
           store.preview.workflows = data.workflows || []
           store.preview.permissions = data.permissions || []
-          store.currentApp = { name: store.preview.appName, status: app.status || 'ready' }
+          store.currentApp = { name: store.preview.appName, status: app.status || 'ready', apaas_app_id: app.apaas_app_id }
         }
         console.log(`Loaded app ${aid}: ${app.app_name}, status=${app.status}, conv=${app.conversation_id}`)
         // 加载关联对话的历史消息
@@ -2972,8 +2915,8 @@ onMounted(async () => {
   // 加载对话历史列表
   fetchConversationList()
 
-  // 加载项目列表
-  fetchProjects()
+  // 加载应用计数
+  fetchAppCount()
 })
 
 // 切换到文档 tab 时自动加载版本列表
@@ -3629,123 +3572,66 @@ watch(conversationId, (id) => {
   font-size: 10px; font-weight: 600; margin-left: 4px;
 }
 
-/* ── 我的应用面板 ── */
-.projects-panel {
-  position: fixed; top: 0; right: 0; bottom: 0; width: 400px;
-  background: #111; border-left: 1px solid rgba(255,255,255,0.06);
-  box-shadow: -4px 0 24px rgba(0,0,0,0.4);
-  z-index: 30; display: flex; flex-direction: column;
-  transform: translateX(100%); transition: transform 0.3s ease;
-}
-.projects-panel.open { transform: translateX(0); }
 
-.projects-header {
-  display: flex; justify-content: space-between; align-items: center;
-  padding: 16px 20px; border-bottom: 1px solid rgba(255,255,255,0.06); flex-shrink: 0;
+/* ── 平台配置 iframe ── */
+.platform-iframe-container {
+  flex: 1; display: flex; flex-direction: column; overflow: hidden;
+  height: 100%; min-height: 0;
 }
-.projects-header h3 { margin: 0; font-size: 15px; font-weight: 600; color: rgba(255,255,255,0.9); }
-.projects-header-actions { display: flex; align-items: center; gap: 8px; }
-.projects-add-btn {
-  background: linear-gradient(135deg, #7c3aed, #6366f1); color: #fff; border: none; border-radius: 8px;
-  padding: 5px 12px; font-size: 12px; cursor: pointer; font-weight: 500;
-  transition: transform 0.2s, box-shadow 0.2s;
+.platform-tab-bar {
+  display: flex; align-items: center; gap: 4px; padding: 4px 16px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  flex-shrink: 0; background: rgba(0,0,0,0.3); height: 36px;
 }
-.projects-add-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(124,58,237,0.3); }
-.projects-close-btn {
-  all: unset; cursor: pointer; color: rgba(255,255,255,0.35); font-size: 16px; padding: 4px; transition: color 0.2s;
+.platform-fullscreen-btn {
+  all: unset; cursor: pointer; margin-left: auto; color: rgba(255,255,255,0.4);
+  font-size: 16px; padding: 2px 8px; border-radius: 4px;
 }
-.projects-close-btn:hover { color: rgba(255,255,255,0.8); }
-
-.projects-loading {
-  padding: 40px; text-align: center; color: rgba(255,255,255,0.4); font-size: 13px;
+.platform-fullscreen-btn:hover { color: #fff; background: rgba(255,255,255,0.1); }
+.platform-login-hint {
+  display: flex; align-items: center; gap: 12px; padding: 6px 16px;
+  background: rgba(124,58,237,0.1); border-bottom: 1px solid rgba(124,58,237,0.2);
+  font-size: 12px; color: rgba(255,255,255,0.7); flex-shrink: 0;
 }
-.loading-spinner { display: inline-block; animation: spin 1s linear infinite; }
-
-.projects-empty {
-  padding: 60px 20px; text-align: center; color: rgba(255,255,255,0.35);
+.platform-login-hint b { color: #a78bfa; }
+.hint-nav-btn {
+  margin-left: auto; background: linear-gradient(135deg, #7c3aed, #6366f1); color: #fff;
+  border: none; border-radius: 6px; padding: 4px 12px; font-size: 12px; cursor: pointer;
+  white-space: nowrap;
 }
-.projects-empty .empty-icon { font-size: 40px; opacity: 0.3; margin-bottom: 8px; }
-.projects-empty p { font-size: 13px; margin: 0 0 16px; }
-.create-first-btn {
-  background: linear-gradient(135deg, #7c3aed, #6366f1); color: #fff; border: none; border-radius: 12px;
-  padding: 8px 20px; font-size: 13px; cursor: pointer; transition: transform 0.2s, box-shadow 0.2s;
+.hint-nav-btn:hover { opacity: 0.9; }
+.hint-dismiss-btn {
+  all: unset; cursor: pointer; color: rgba(255,255,255,0.3); font-size: 14px; padding: 2px;
 }
-.create-first-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(124,58,237,0.3); }
-
-.projects-list { flex: 1; overflow-y: auto; padding: 12px; }
-
-.project-card {
-  background: #161622; border: 1px solid rgba(255,255,255,0.06); border-radius: 12px;
-  padding: 12px 14px; margin-bottom: 10px; cursor: pointer;
-  transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
+.hint-dismiss-btn:hover { color: rgba(255,255,255,0.7); }
+.platform-iframe {
+  flex: 1; width: 100%; border: none; background: #fff; min-height: 0;
 }
-.project-card:hover { border-color: rgba(124,58,237,0.3); box-shadow: 0 2px 12px rgba(124,58,237,0.1); transform: translateY(-1px); }
-
-.project-card-header {
-  display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;
+.platform-loading {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  color: rgba(255,255,255,0.5); font-size: 14px; gap: 8px;
 }
-.project-card-left { display: flex; align-items: center; gap: 8px; }
-.platform-dot {
-  width: 8px; height: 8px; border-radius: 50%; background: rgba(255,255,255,0.15); flex-shrink: 0;
+.platform-loading .loading-spinner {
+  display: inline-block; animation: spin 1s linear infinite;
 }
-.platform-dot.connected { background: #10b981; }
-.project-name { font-size: 13px; font-weight: 600; color: rgba(255,255,255,0.9); }
-
-.project-card-actions { display: flex; align-items: center; gap: 4px; }
-.project-settings-btn {
-  background: none; border: none; cursor: pointer; font-size: 14px;
-  padding: 2px 4px; border-radius: 4px; opacity: 0.3; transition: opacity 0.2s;
+.platform-error {
+  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  color: rgba(255,255,255,0.5); gap: 16px; padding: 40px;
 }
-.project-card:hover .project-settings-btn { opacity: 0.7; }
-.project-settings-btn:hover { opacity: 1 !important; background: rgba(255,255,255,0.08); }
-.expand-arrow {
-  font-size: 10px; color: rgba(255,255,255,0.35); transition: transform 0.2s; display: inline-block;
+.platform-error p { margin: 0; font-size: 14px; text-align: center; max-width: 400px; }
+.platform-error-actions { display: flex; gap: 12px; }
+.platform-retry-btn, .platform-open-btn {
+  padding: 8px 20px; border-radius: 8px; border: none; cursor: pointer;
+  font-size: 13px; transition: transform 0.2s, box-shadow 0.2s;
 }
-.expand-arrow.expanded { transform: rotate(90deg); }
-
-.project-card-meta {
-  display: flex; flex-wrap: wrap; gap: 8px; font-size: 11px; color: rgba(255,255,255,0.4);
+.platform-retry-btn {
+  background: linear-gradient(135deg, #7c3aed, #6366f1); color: #fff;
 }
-.meta-item { white-space: nowrap; }
-
-/* 团队成员头像 */
-.project-members-avatars {
-  display: flex; gap: 0; margin-top: 8px;
+.platform-retry-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(124,58,237,0.3); }
+.platform-open-btn {
+  background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.7); border: 1px solid rgba(255,255,255,0.1);
 }
-.member-avatar {
-  width: 24px; height: 24px; border-radius: 50%;
-  background: rgba(124,58,237,0.15); color: #a78bfa; border: 2px solid #161622;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 10px; font-weight: 600; margin-left: -6px;
-}
-.member-avatar:first-child { margin-left: 0; }
-.member-avatar.more { background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.4); font-size: 9px; }
-
-/* 展开的应用列表 */
-.project-apps-list {
-  margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.06);
-}
-.apps-loading, .apps-empty {
-  font-size: 12px; color: rgba(255,255,255,0.35); padding: 4px 0;
-}
-.project-app-item {
-  display: flex; align-items: center; gap: 8px;
-  padding: 6px 8px; border-radius: 8px; cursor: pointer;
-  font-size: 12px; color: rgba(255,255,255,0.7); transition: background 0.2s;
-}
-.project-app-item:hover { background: rgba(124,58,237,0.1); }
-.app-status-dot {
-  width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
-}
-.app-status-dot.completed { background: #10b981; }
-.app-status-dot.pending { background: rgba(255,255,255,0.2); }
-.app-status-dot.generating { background: #fbbf24; }
-.app-name-text { flex: 1; }
-.app-env-tag {
-  font-size: 9px; padding: 0 6px; border-radius: 8px; flex-shrink: 0;
-  background: rgba(56, 189, 248, 0.12); color: #38bdf8;
-  max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
+.platform-open-btn:hover { background: rgba(255,255,255,0.12); }
 
 /* ── 变更计划 overlay ── */
 .change-plan-overlay {
