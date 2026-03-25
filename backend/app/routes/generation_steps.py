@@ -448,16 +448,25 @@ async def execute_step(
                 await db.commit()
                 step_exception = HTTPException(status_code=401, detail="APaaS平台Token已过期，请在环境管理中重新登录")
             else:
-                # 检测编码冲突错误
-                conflict = _detect_code_conflict(error_msg, step_key, data, models)
-                if conflict:
-                    state.setdefault("step_errors", {})[step_key] = error_msg
+                # 字典/角色编码冲突时自动跳过（已存在即复用，不需要改名）
+                is_dict_or_role_step = step_key.startswith("create_dict:") or step_key.startswith("create_role:") or step_key == "create_roles_dicts"
+                is_duplicate = any(kw in error_msg for kw in ["编码重复", "已存在", "duplicate"])
+                if is_dict_or_role_step and is_duplicate:
+                    logger.info(f"步骤 {step_key} 编码已存在，自动跳过: {error_msg}")
+                    state.setdefault("completed_steps", []).append(step_key)
                     _save_state(app, state)
-                    step_response = StepExecuteResponse(step=step_key, status="conflict", error=error_msg, conflict=conflict)
+                    step_response = StepExecuteResponse(step=step_key, status="ok", error=None)
                 else:
-                    state.setdefault("step_errors", {})[step_key] = error_msg
-                    _save_state(app, state)
-                    step_response = StepExecuteResponse(step=step_key, status="error", error=error_msg)
+                    # 检测编码冲突错误（模型/表单等需要用户手动改名）
+                    conflict = _detect_code_conflict(error_msg, step_key, data, models)
+                    if conflict:
+                        state.setdefault("step_errors", {})[step_key] = error_msg
+                        _save_state(app, state)
+                        step_response = StepExecuteResponse(step=step_key, status="conflict", error=error_msg, conflict=conflict)
+                    else:
+                        state.setdefault("step_errors", {})[step_key] = error_msg
+                        _save_state(app, state)
+                        step_response = StepExecuteResponse(step=step_key, status="error", error=error_msg)
 
         finally:
             # 持久化 API 调用日志
