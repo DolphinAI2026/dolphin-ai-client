@@ -1307,7 +1307,9 @@ async def upload_doc_version(
                 )
                 app_obj = app_result.scalar_one()
                 app_obj.current_doc_version = new_version
-                # 关键：用 V2 配置更新 config_preview
+                # 关键：用 V2 配置更新 config_preview（保留原始 appName）
+                if app_obj.app_name:
+                    v2_config["appName"] = app_obj.app_name
                 app_obj.config_preview = json.dumps({"type": "preview", "data": v2_config}, ensure_ascii=False)
                 # 标记需要重新部署
                 if app_obj.status == "completed":
@@ -1555,6 +1557,13 @@ async def execute_change_plan(
                 plan_obj = plan_result.scalar_one()
                 plan_obj.status = "completed"
                 plan_obj.executed_at = datetime.utcnow()
+
+                # 更新应用状态为已部署
+                app_result = await session.execute(
+                    select(Application).where(Application.id == app_id)
+                )
+                app_obj = app_result.scalar_one()
+                app_obj.status = "completed"
 
                 await session.commit()
 
