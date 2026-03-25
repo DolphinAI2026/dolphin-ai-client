@@ -117,12 +117,27 @@ def semantic_diff(v1_config: dict, v2_config: dict) -> dict:
 
 
 def _diff_fields(v1_fields: list, v2_fields: list) -> dict:
-    """对比两个字段列表"""
+    """对比两个字段列表，只比较核心业务属性（type/dict/ref）"""
     v1 = {f.get("code", ""): f for f in v1_fields if f.get("code")}
     v2 = {f.get("code", ""): f for f in v2_fields if f.get("code")}
+
+    modified = []
+    for c in v2:
+        if c in v1:
+            f1, f2 = v1[c], v2[c]
+            # 只比较核心属性，忽略 required/icon/comment 等 AI 不稳定输出
+            t1 = f1.get("type", "")
+            t2 = f2.get("type", "")
+            d1 = f1.get("dict", "") or ""
+            d2 = f2.get("dict", "") or ""
+            r1 = str(f1.get("ref", "") or "")
+            r2 = str(f2.get("ref", "") or "")
+            if (t1 and t2 and t1 != t2) or d1 != d2 or r1 != r2:
+                modified.append({"old": f1, "new": f2})
+
     return {
         "added": [f for c, f in v2.items() if c not in v1],
-        "modified": [{"old": v1[c], "new": v2[c]} for c in v2 if c in v1 and v1[c] != v2[c]],
+        "modified": modified,
         "removed": [f for c, f in v1.items() if c not in v2],
     }
 
