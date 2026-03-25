@@ -454,6 +454,8 @@ async def execute_step(
                 if is_dict_or_role_step and is_duplicate:
                     logger.info(f"步骤 {step_key} 编码已存在，自动跳过: {error_msg}")
                     state.setdefault("completed_steps", []).append(step_key)
+                    # 清除之前可能残留的错误状态
+                    state.get("step_errors", {}).pop(step_key, None)
                     _save_state(app, state)
                     step_response = StepExecuteResponse(step=step_key, status="ok", error=None)
                 else:
