@@ -667,37 +667,33 @@ def _compare_fields(
                 remote_id=_get_remote_field_id(remote_field)
             ))
         elif old_field and new_field:
-            # 比较关键业务属性（编码差异已在继承阶段修正）
+            # 只比较核心业务属性（type 和 dict/ref）
+            # required/comment 等次要属性差异忽略，因为 AI 两次解析可能不一致
             modified = False
 
-            # 字段类型
+            # 字段类型（核心属性）
             old_type = old_field.get("fieldType", old_field.get("type", ""))
             new_type = new_field.get("fieldType", new_field.get("type", ""))
-            if old_type != new_type:
+            if old_type and new_type and old_type != new_type:
                 modified = True
 
-            # 是否必填
-            old_req = old_field.get("required", False)
-            new_req = new_field.get("required", False)
-            if old_req != new_req:
+            # 关联字典（核心属性）
+            old_dict_code = old_field.get("dictionaryCode", old_field.get("dict", "")) or ""
+            new_dict_code = new_field.get("dictionaryCode", new_field.get("dict", "")) or ""
+            if old_dict_code != new_dict_code:
                 modified = True
 
-            # 关联字典
-            old_dict = old_field.get("dictionaryCode", old_field.get("dict", ""))
-            new_dict = new_field.get("dictionaryCode", new_field.get("dict", ""))
-            if old_dict != new_dict:
-                modified = True
-
-            # 关联引用
-            old_ref = old_field.get("refModelCode", old_field.get("ref", ""))
-            new_ref = new_field.get("refModelCode", new_field.get("ref", ""))
-            if old_ref != new_ref:
-                modified = True
-
-            # 备注/描述
-            old_comment = _get_field_comment(old_field)
-            new_comment = _get_field_comment(new_field)
-            if old_comment != new_comment:
+            # 关联引用模型（核心属性）
+            old_ref_val = old_field.get("refModelCode", "") or ""
+            new_ref_val = new_field.get("refModelCode", "") or ""
+            # ref 也可能是 dict 格式 {"model": "xxx"}
+            if not old_ref_val and old_field.get("ref"):
+                r = old_field["ref"]
+                old_ref_val = r.get("model", "") if isinstance(r, dict) else str(r)
+            if not new_ref_val and new_field.get("ref"):
+                r = new_field["ref"]
+                new_ref_val = r.get("model", "") if isinstance(r, dict) else str(r)
+            if old_ref_val != new_ref_val:
                 modified = True
 
             if modified:
