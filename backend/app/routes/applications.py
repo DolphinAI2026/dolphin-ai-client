@@ -1698,6 +1698,48 @@ async def list_doc_versions_by_conversation(
     }
 
 
+# ── 获取单个应用信息 ──
+
+@router.get("/{app_id}")
+async def get_application(
+    app_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """获取单个应用详情（包含平台链接）"""
+    result = await db.execute(
+        select(Application).where(Application.id == app_id, Application.tenant_id == ctx.tenant_id)
+    )
+    app = result.scalar_one_or_none()
+    if not app:
+        raise HTTPException(status_code=404, detail="应用不存在")
+
+    # 获取关联的平台环境
+    env_base_url = None
+    env_tenant_id = None
+    if app.platform_env_id:
+        env_result = await db.execute(select(PlatformEnv).where(PlatformEnv.id == app.platform_env_id))
+        env = env_result.scalar_one_or_none()
+        if env:
+            env_base_url = env.base_url
+            env_tenant_id = env.platform_tenant_id
+
+    apaas_url = None
+    if app.apaas_app_id:
+        apaas_url = _build_apaas_url(str(app.apaas_app_id), env_base_url, env_tenant_id)
+
+    return {
+        "id": app.id,
+        "app_name": app.app_name,
+        "app_code": app.app_code,
+        "status": app.status,
+        "apaas_app_id": app.apaas_app_id,
+        "apaas_url": apaas_url,
+        "platform_env_id": app.platform_env_id,
+        "created_at": str(app.created_at) if app.created_at else None,
+    }
+
+
 # ── API 调用日志 ──
 
 @router.get("/{app_id}/api-logs")

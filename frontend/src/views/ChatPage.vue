@@ -503,7 +503,7 @@
           </template>
         </div>
         <div v-if="deployAllDone" class="deploy-done">
-          🎉 部署完成！<button class="deploy-done-btn" @click="router.push('/apps')">查看应用 →</button>
+          🎉 部署完成！<button class="deploy-done-btn" @click="openInPlatform">查看应用 →</button>
           <button class="deploy-log-btn" @click="showApiLogs = true">📋 API日志</button>
         </div>
       </div>
@@ -1509,6 +1509,24 @@ async function openDeployPanel() {
     deployAppId.value = existingAppId.value
     deployOpen.value = true
     await loadDeployStatus()
+  }
+}
+
+async function openInPlatform() {
+  if (!existingAppId.value) {
+    router.push('/apps')
+    return
+  }
+  try {
+    const app = await request.get(`/applications/${existingAppId.value}`)
+    const url = (app as any).apaas_url
+    if (url) {
+      window.open(url, '_blank')
+    } else {
+      router.push('/apps')
+    }
+  } catch {
+    router.push('/apps')
   }
 }
 
