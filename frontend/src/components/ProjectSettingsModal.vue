@@ -202,6 +202,7 @@
 </template>
 
 <script setup lang="ts">
+import { API_PREFIX } from '@/utils/request'
 import { ref, reactive, computed, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Loading, Close } from '@element-plus/icons-vue'
@@ -326,7 +327,7 @@ async function fetchAvailableUsers() {
   loadingUsers.value = true
   try {
     const token = localStorage.getItem('token') || ''
-    const resp = await fetch('/api/auth/users', {
+    const resp = await fetch(`${API_PREFIX}/auth/users`, {
       headers: { 'Authorization': `Bearer ${token}` }
     })
     if (resp.ok) {

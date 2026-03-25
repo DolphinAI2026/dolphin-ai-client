@@ -1,4 +1,5 @@
 import request from '@/utils/request'
+import { API_PREFIX } from '@/utils/request'
 
 export interface CodingScene {
   type: string
@@ -109,7 +110,7 @@ export const codingApi = {
   /** 下载构建包或源码 zip */
   async downloadZip(wsId: string, type: 'dist' | 'src' = 'dist') {
     const token = localStorage.getItem('token') || ''
-    const resp = await fetch(`/api/coding/workspace/${wsId}/download?type=${type}`, {
+    const resp = await fetch(`${API_PREFIX}/coding/workspace/${wsId}/download?type=${type}`, {
       headers: { 'Authorization': `Bearer ${token}` }
     })
     if (!resp.ok) {
@@ -174,7 +175,7 @@ export const codingApi = {
     if (params.app_id) query.set('app_id', params.app_id)
     const token = localStorage.getItem('token') || ''
     query.set('token', token)
-    return `/api/coding/auto-pipeline?${query.toString()}`
+    return `${API_PREFIX}/coding/auto-pipeline?${query.toString()}`
   },
 
   /** 启动开发服务器 */
@@ -195,7 +196,7 @@ export const codingApi = {
   /** 打包发布（返回 zip blob） */
   async publish(wsId: string): Promise<Blob> {
     const token = localStorage.getItem('token') || ''
-    const resp = await fetch(`/api/coding/workspace/${wsId}/publish`, {
+    const resp = await fetch(`${API_PREFIX}/coding/workspace/${wsId}/publish`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${token}` }
     })
@@ -214,7 +215,7 @@ export const codingApi = {
     const params = new URLSearchParams()
     if (workspaceId) params.set('workspace_id', workspaceId)
     const query = params.toString() ? `?${params.toString()}` : ''
-    const resp = await fetch(`/api/coding/upload${query}`, {
+    const resp = await fetch(`${API_PREFIX}/coding/upload${query}`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${token}` },
       body: formData,

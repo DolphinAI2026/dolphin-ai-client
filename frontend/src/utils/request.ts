@@ -1,8 +1,11 @@
 import axios from 'axios'
 import type { AxiosInstance, AxiosResponse } from 'axios'
 
+/** API 路径前缀，适配 vite base（本地 /api，生产 /ai-builder/api） */
+export const API_PREFIX = `${import.meta.env.BASE_URL}api`.replace('//', '/')
+
 const request: AxiosInstance = axios.create({
-  baseURL: '/api',
+  baseURL: API_PREFIX,
   timeout: 60000
 })
 
@@ -29,7 +32,7 @@ request.interceptors.response.use(
     const status = error.response?.status
     if (status === 401 || status === 403) {
       localStorage.removeItem('token')
-      window.location.href = '/login'
+      window.location.href = `${import.meta.env.BASE_URL}login`
     }
     return Promise.reject(error)
   }

@@ -382,6 +382,16 @@ async def execute_step(
         )
         env = env_result.scalar_one_or_none()
 
+    if not env:
+        # 兜底：取第一个已连接的环境
+        env_result = await db.execute(
+            select(PlatformEnv).where(
+                PlatformEnv.tenant_id == ctx.tenant_id,
+                PlatformEnv.status == "connected",
+            ).limit(1)
+        )
+        env = env_result.scalar_one_or_none()
+
     if env and env.token:
         client = APaaSClient(
             base_url=env.base_url,
@@ -596,11 +606,32 @@ async def _execute_step_impl(
             dict_obj = next((dd for dd in all_dicts if dd.get("dictionaryCode") == final_code), None)
             if dict_obj:
                 dict_id = dict_obj.get("id")
-                existing_opts = {o.get("optionName") for o in dict_obj.get("options", [])}
-                new_opts = [o for o in d["options"] if o["name"] not in existing_opts]
-                for i, o in enumerate(new_opts):
+                # 按名称和编码建索引
+                existing_by_name = {o.get("optionName"): o for o in dict_obj.get("options", [])}
+                existing_by_code = {o.get("valueCode"): o for o in dict_obj.get("options", [])}
+                for i, o in enumerate(d["options"]):
                     oc = _sanitize_code(o.get("code", o["name"]))
-                    await client.add_dict_option(apaas_app_id, dict_id, oc, o["name"], display_order=i)
+                    if o["name"] in existing_by_name:
+                        continue  # 名称完全匹配，跳过
+                    existing_opt = existing_by_code.get(oc)
+                    if existing_opt:
+                        # 编码相同但名称不同 → 更新选项名
+                        opt_id = existing_opt.get("id")
+                        if opt_id and existing_opt.get("optionName") != o["name"]:
+                            try:
+                                await client._post_resource(
+                                    "/dataDictionary/edit/dictionaryValue/fromApp",
+                                    {"id": opt_id, "appId": apaas_app_id,
+                                     "dictionaryId": dict_id, "valueCode": oc,
+                                     "valueName": o["name"], "valueStatus": "ENABLE",
+                                     "displayOrder": i},
+                                    app_id=apaas_app_id)
+                                logger.info(f"更新字典选项: {existing_opt.get('optionName')} → {o['name']}")
+                            except Exception as ue:
+                                logger.warning(f"更新字典选项 {o['name']} 失败: {ue}")
+                    else:
+                        # 新选项 → 添加
+                        await client.add_dict_option(apaas_app_id, dict_id, oc, o["name"], display_order=i)
         return {"dict": d["name"], "options": len(d.get("options", []))}
 
     elif step_key.startswith("create_model:"):

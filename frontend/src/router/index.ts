@@ -1,9 +1,10 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 import { usePreviewStore } from '@/stores/preview'
+import { API_PREFIX } from '@/utils/request'
 
 const router = createRouter({
-  history: createWebHistory(),
+  history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     {
       path: '/login',
@@ -82,7 +83,7 @@ router.beforeEach(async (to, _from, next) => {
       // 同时恢复 aPaaS 连接状态
       const previewStore = usePreviewStore()
       try {
-        const res = await fetch('/api/apaas/status', {
+        const res = await fetch(`${API_PREFIX}/apaas/status`, {
           headers: { 'Authorization': `Bearer ${userStore.token}` }
         })
         if (res.ok) {

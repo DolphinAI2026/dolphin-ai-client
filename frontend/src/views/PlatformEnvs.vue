@@ -100,32 +100,35 @@
           <el-input v-model="form.platform_tenant_id" placeholder="输入平台租户ID" />
         </el-form-item>
 
-        <div class="auth-tabs">
-          <button
-            :class="['auth-tab', { active: authMode === 'password' }]"
-            @click="authMode = 'password'"
-            type="button"
-          >账号密码</button>
-          <button
-            :class="['auth-tab', { active: authMode === 'token' }]"
-            @click="authMode = 'token'"
-            type="button"
-          >Token 直连</button>
-        </div>
+        <div class="auth-section">
+          <div class="auth-section-label">认证方式</div>
+          <div class="auth-tabs">
+            <button
+              :class="['auth-tab', { active: authMode === 'password' }]"
+              @click="authMode = 'password'"
+              type="button"
+            >账号密码</button>
+            <button
+              :class="['auth-tab', { active: authMode === 'token' }]"
+              @click="authMode = 'token'"
+              type="button"
+            >Token 直连</button>
+          </div>
 
-        <template v-if="authMode === 'password'">
-          <el-form-item label="用户名">
-            <el-input v-model="form.username" placeholder="平台登录用户名" />
-          </el-form-item>
-          <el-form-item label="密码">
-            <el-input v-model="form.password" type="password" show-password placeholder="平台登录密码" />
-          </el-form-item>
-        </template>
-        <template v-else>
-          <el-form-item label="Token">
-            <el-input v-model="form.token" type="textarea" :rows="3" placeholder="粘贴平台 Token" />
-          </el-form-item>
-        </template>
+          <template v-if="authMode === 'password'">
+            <el-form-item label="用户名">
+              <el-input v-model="form.username" placeholder="平台登录用户名" />
+            </el-form-item>
+            <el-form-item label="密码">
+              <el-input v-model="form.password" type="password" show-password placeholder="平台登录密码" />
+            </el-form-item>
+          </template>
+          <template v-else>
+            <el-form-item label="Token">
+              <el-input v-model="form.token" type="textarea" :rows="3" placeholder="粘贴平台 Token" />
+            </el-form-item>
+          </template>
+        </div>
       </el-form>
 
       <template #footer>
@@ -564,6 +567,21 @@ onMounted(() => {
 
 /* Dialog styles moved to non-scoped block below */
 
+/* Auth section */
+.auth-section {
+  margin-top: 8px;
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+}
+.auth-section-label {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.45);
+  margin-bottom: 10px;
+  font-weight: 500;
+}
+
 /* Auth tabs */
 .auth-tabs {
   display: flex;
@@ -571,12 +589,12 @@ onMounted(() => {
   background: rgba(255, 255, 255, 0.04);
   border-radius: 10px;
   padding: 3px;
-  margin-bottom: 16px;
+  margin: 8px 0 20px;
 }
 
 .auth-tab {
   flex: 1;
-  padding: 7px 0;
+  padding: 8px 0;
   border: none;
   background: none;
   color: rgba(255, 255, 255, 0.5);
@@ -589,7 +607,7 @@ onMounted(() => {
   color: rgba(255, 255, 255, 0.7);
 }
 .auth-tab.active {
-  background: rgba(124, 58, 237, 0.2);
+  background: rgba(124, 58, 237, 0.25);
   color: #c4b5fd;
   font-weight: 600;
 }
@@ -671,5 +689,39 @@ onMounted(() => {
 }
 .el-dialog.env-dialog .el-input__suffix {
   color: rgba(255, 255, 255, 0.4);
+}
+/* 密码框眼睛图标 */
+.el-dialog.env-dialog .el-input__password {
+  color: rgba(255, 255, 255, 0.4) !important;
+}
+.el-dialog.env-dialog .el-input__password:hover {
+  color: rgba(255, 255, 255, 0.7) !important;
+}
+/* 确保 prefix/suffix icon 颜色 */
+.el-dialog.env-dialog .el-input__prefix,
+.el-dialog.env-dialog .el-input__suffix-inner {
+  color: rgba(255, 255, 255, 0.4) !important;
+}
+/* 覆盖浏览器自动填充的背景色 */
+.el-dialog.env-dialog .el-input__inner:-webkit-autofill,
+.el-dialog.env-dialog .el-input__inner:-webkit-autofill:hover,
+.el-dialog.env-dialog .el-input__inner:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0 1000px #252530 inset !important;
+  -webkit-text-fill-color: rgba(255, 255, 255, 0.9) !important;
+  transition: background-color 5000s ease-in-out 0s;
+}
+/* 按钮样式覆盖 */
+.el-dialog.env-dialog .el-button--primary {
+  background: linear-gradient(135deg, #7c3aed, #6366f1) !important;
+  border: none !important;
+}
+.el-dialog.env-dialog .el-button--default {
+  background: rgba(255, 255, 255, 0.06) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  color: rgba(255, 255, 255, 0.7) !important;
+}
+.el-dialog.env-dialog .el-button--default:hover {
+  background: rgba(255, 255, 255, 0.1) !important;
+  color: rgba(255, 255, 255, 0.9) !important;
 }
 </style>

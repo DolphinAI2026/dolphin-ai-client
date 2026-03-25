@@ -634,6 +634,7 @@
 </template>
 
 <script setup lang="ts">
+import { API_PREFIX } from '@/utils/request'
 import { ref, reactive, computed, nextTick, onMounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ArrowLeft, Promotion } from '@element-plus/icons-vue'
@@ -688,7 +689,7 @@ const loadPlatformUrl = async () => {
   try {
     const authToken = localStorage.getItem('token') || ''
     // 通过后端 SSO 入口加载：只代理 HTML（注入 token），JS/CSS/API 直接从平台加载
-    platformIframeUrl.value = `/api/platform-proxy/entry?app_id=${existingAppId.value}&_auth=${authToken}`
+    platformIframeUrl.value = `${API_PREFIX}/platform-proxy/entry?app_id=${existingAppId.value}&_auth=${authToken}`
     platformAppUrl.value = platformIframeUrl.value
     platformLoginHint.value = ''
   } catch (e: any) {
@@ -1457,21 +1458,13 @@ async function openDeployPanel() {
 }
 
 async function openInPlatform() {
-  if (!existingAppId.value) {
-    router.push('/apps')
+  // 优先切换到平台配置 tab
+  if (store.currentApp?.apaas_app_id) {
+    switchToPlatform()
     return
   }
-  try {
-    const app = await request.get(`/applications/${existingAppId.value}`)
-    const url = (app as any).apaas_url
-    if (url) {
-      window.open(url, '_blank')
-    } else {
-      router.push('/apps')
-    }
-  } catch {
-    router.push('/apps')
-  }
+  // 没有 apaas_app_id 则跳应用列表
+  router.push('/apps')
 }
 
 async function loadDeployStatus() {
@@ -1971,7 +1964,7 @@ const handleDocUpload = async (e: Event) => {
     const formData = new FormData()
     formData.append('file', file)
 
-    const response = await fetch('/api/applications/upload-doc-with-conversation', {
+    const response = await fetch(`${API_PREFIX}/applications/upload-doc-with-conversation`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${token}` },
       body: formData
@@ -2489,7 +2482,7 @@ const startAssembleConfig = async () => {
 
   try {
     const token = localStorage.getItem('token')
-    const response = await fetch('/api/chat/generate-config', {
+    const response = await fetch(`${API_PREFIX}/chat/generate-config`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
       body: JSON.stringify({ conversation_id: conversationId.value, message: prompt })
@@ -2615,7 +2608,7 @@ const startAssembleConfig = async () => {
 
 const createConversation = async () => {
   const token = localStorage.getItem('token')
-  const res = await fetch('/api/conversations', {
+  const res = await fetch(`${API_PREFIX}/conversations`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
     body: JSON.stringify({ agent_type: currentAgent.value })
@@ -2654,7 +2647,7 @@ const sendMessage = async () => {
   // 调用后端API
   try {
     const token = localStorage.getItem('token')
-    const response = await fetch('/api/chat/send', {
+    const response = await fetch(`${API_PREFIX}/chat/send`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
       body: JSON.stringify({
@@ -2666,7 +2659,6 @@ const sendMessage = async () => {
 
     if (!response.ok) throw new Error('发送失败')
 
-    isTyping.value = false
     const reader = response.body?.getReader()
     const decoder = new TextDecoder()
     let assistantContent = ''
@@ -2684,7 +2676,10 @@ const sendMessage = async () => {
         if (line.startsWith('data: ')) {
           try {
             const parsed = JSON.parse(line.slice(6))
-            if (parsed.type === 'message') {
+            if (parsed.type === 'thinking') {
+              // AI 正在思考，保持 isTyping 状态
+            } else if (parsed.type === 'message') {
+              isTyping.value = false
               assistantContent += parsed.data
               // 更新最后一条消息或创建新消息
               const lastMsg = messages[messages.length - 1]
@@ -2695,6 +2690,7 @@ const sendMessage = async () => {
               }
               scrollToBottom()
             } else if (parsed.type === 'done') {
+              isTyping.value = false
               // 标记完成，设置正式id
               const lastMsg = messages[messages.length - 1]
               if (lastMsg && lastMsg.id === -1) lastMsg.id = Date.now()
@@ -2738,7 +2734,7 @@ onMounted(async () => {
   try {
     const token = localStorage.getItem('token')
     if (token) {
-      const res = await fetch('/api/apaas/status', {
+      const res = await fetch(`${API_PREFIX}/apaas/status`, {
         headers: { 'Authorization': `Bearer ${token}` }
       })
       if (res.ok) {

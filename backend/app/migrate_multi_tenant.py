@@ -1,24 +1,40 @@
-"""Database migration script for multi-tenant support."""
+"""Database migration script for multi-tenant support (MySQL compatible)."""
 import asyncio
-import sqlite3
-from pathlib import Path
+
+from sqlalchemy import text
+from app.database import engine
+
+
+async def _column_exists(conn, table: str, column: str) -> bool:
+    """检查 MySQL 表中是否存在指定列"""
+    result = await conn.execute(text(
+        "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS "
+        "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :table AND COLUMN_NAME = :column"
+    ), {"table": table, "column": column})
+    return result.scalar() > 0
+
+
+async def _table_exists(conn, table: str) -> bool:
+    """检查 MySQL 数据库中是否存在指定表"""
+    result = await conn.execute(text(
+        "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES "
+        "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :table"
+    ), {"table": table})
+    return result.scalar() > 0
+
+
+async def _add_column_if_not_exists(conn, table: str, column: str, col_def: str):
+    """如果列不存在则添加"""
+    if not await _column_exists(conn, table, column):
+        await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {col_def}"))
+        print(f"  {table} 表已添加 {column} 字段")
 
 
 async def migrate_to_multi_tenant():
     """迁移现有数据库到多租户架构"""
-    db_path = Path(__file__).parent.parent / "apaas_builder.db"
-
-    if not db_path.exists():
-        print("数据库文件不存在，跳过迁移")
-        return
-
-    conn = sqlite3.connect(str(db_path))
-    cursor = conn.cursor()
-
-    try:
+    async with engine.begin() as conn:
         # 1. 检查是否已经迁移过
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='tenants'")
-        if cursor.fetchone():
+        if await _table_exists(conn, "tenants"):
             print("多租户表已存在，跳过迁移")
             return
 
@@ -26,9 +42,9 @@ async def migrate_to_multi_tenant():
 
         # 2. 创建默认租户
         print("创建默认租户...")
-        cursor.execute("""
+        await conn.execute(text("""
             CREATE TABLE IF NOT EXISTS tenants (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id INTEGER PRIMARY KEY AUTO_INCREMENT,
                 tenant_name VARCHAR(128) NOT NULL,
                 tenant_code VARCHAR(64) NOT NULL UNIQUE,
                 plan_type VARCHAR(32) NOT NULL DEFAULT 'free',
@@ -37,67 +53,69 @@ async def migrate_to_multi_tenant():
                 contact_name VARCHAR(64),
                 contact_email VARCHAR(128),
                 created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
             )
-        """)
+        """))
 
-        cursor.execute("""
+        await conn.execute(text("""
             INSERT INTO tenants (tenant_name, tenant_code, plan_type, max_applications, status)
             VALUES ('Default Tenant', 'default', 'free', 100, 1)
-        """)
-        default_tenant_id = cursor.lastrowid
+        """))
+
+        result = await conn.execute(text("SELECT LAST_INSERT_ID()"))
+        default_tenant_id = result.scalar()
         print(f"默认租户已创建，ID: {default_tenant_id}")
 
         # 3. 修改 users 表 — 添加 is_platform_admin
         print("修改 users 表...")
-        cursor.execute("PRAGMA table_info(users)")
-        columns = [col[1] for col in cursor.fetchall()]
-
-        if 'is_platform_admin' not in columns:
-            cursor.execute("ALTER TABLE users ADD COLUMN is_platform_admin BOOLEAN NOT NULL DEFAULT 0")
-            print("users 表已添加 is_platform_admin 字段")
+        await _add_column_if_not_exists(conn, "users", "is_platform_admin", "BOOLEAN NOT NULL DEFAULT 0")
 
         # 4. 修改 conversations 表 — 添加 tenant_id
         print("修改 conversations 表...")
-        cursor.execute("PRAGMA table_info(conversations)")
-        columns = [col[1] for col in cursor.fetchall()]
-
-        if 'tenant_id' not in columns:
-            cursor.execute(f"ALTER TABLE conversations ADD COLUMN tenant_id INTEGER NOT NULL DEFAULT {default_tenant_id}")
-            cursor.execute(f"CREATE INDEX IF NOT EXISTS ix_conversations_tenant_id ON conversations(tenant_id)")
-            print("conversations 表已添加 tenant_id 字段")
+        await _add_column_if_not_exists(
+            conn, "conversations", "tenant_id",
+            f"INTEGER NOT NULL DEFAULT {default_tenant_id}"
+        )
+        try:
+            await conn.execute(text(
+                "CREATE INDEX ix_conversations_tenant_id ON conversations(tenant_id)"
+            ))
+        except Exception:
+            pass
 
         # 5. 修改 applications 表 — 添加 tenant_id, team_id, created_by
         print("修改 applications 表...")
-        cursor.execute("PRAGMA table_info(applications)")
-        columns = [col[1] for col in cursor.fetchall()]
+        await _add_column_if_not_exists(
+            conn, "applications", "tenant_id",
+            f"INTEGER NOT NULL DEFAULT {default_tenant_id}"
+        )
+        try:
+            await conn.execute(text(
+                "CREATE INDEX ix_applications_tenant_id ON applications(tenant_id)"
+            ))
+        except Exception:
+            pass
 
-        if 'tenant_id' not in columns:
-            cursor.execute(f"ALTER TABLE applications ADD COLUMN tenant_id INTEGER NOT NULL DEFAULT {default_tenant_id}")
-            cursor.execute(f"CREATE INDEX IF NOT EXISTS ix_applications_tenant_id ON applications(tenant_id)")
-            print("applications 表已添加 tenant_id 字段")
+        await _add_column_if_not_exists(conn, "applications", "team_id", "INTEGER")
+        try:
+            await conn.execute(text(
+                "CREATE INDEX ix_applications_team_id ON applications(team_id)"
+            ))
+        except Exception:
+            pass
 
-        if 'team_id' not in columns:
-            cursor.execute("ALTER TABLE applications ADD COLUMN team_id INTEGER")
-            cursor.execute("CREATE INDEX IF NOT EXISTS ix_applications_team_id ON applications(team_id)")
-            print("applications 表已添加 team_id 字段")
+        await _add_column_if_not_exists(conn, "applications", "created_by", "INTEGER NOT NULL DEFAULT 0")
+        try:
+            await conn.execute(text(
+                "UPDATE applications SET created_by = user_id WHERE created_by = 0"
+            ))
+            await conn.execute(text(
+                "CREATE INDEX ix_applications_created_by ON applications(created_by)"
+            ))
+        except Exception:
+            pass
 
-        if 'created_by' not in columns:
-            # 将 created_by 设为 user_id（现有应用的创建者就是 user_id）
-            cursor.execute("ALTER TABLE applications ADD COLUMN created_by INTEGER NOT NULL DEFAULT 0")
-            cursor.execute("UPDATE applications SET created_by = user_id WHERE created_by = 0")
-            cursor.execute("CREATE INDEX IF NOT EXISTS ix_applications_created_by ON applications(created_by)")
-            print("applications 表已添加 created_by 字段")
-
-        conn.commit()
         print("✅ 数据库迁移完成")
-
-    except Exception as e:
-        conn.rollback()
-        print(f"❌ 迁移失败: {e}")
-        raise
-    finally:
-        conn.close()
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@
         </el-tag>
       </div>
       <div class="header-right">
+        <!-- 组件市场 - 暂时隐藏
         <el-button
           size="small"
           @click="$router.push('/marketplace')"
@@ -19,6 +20,7 @@
         >
           <el-icon><Goods /></el-icon> 组件市场
         </el-button>
+        -->
         <el-button
           v-if="codingStore.workspace"
           size="small"
@@ -343,6 +345,7 @@
 </template>
 
 <script setup lang="ts">
+import { API_PREFIX } from '@/utils/request'
 import { ref, computed, onMounted, nextTick, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -843,7 +846,7 @@ async function sendMessage() {
       project_type: _projectType,
     }
 
-    const response = await fetch('/api/coding/auto-pipeline', {
+    const response = await fetch(`${API_PREFIX}/coding/auto-pipeline`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1104,7 +1107,7 @@ async function debugProject(debugMode: 'app' | 'platform' = 'app') {
   isDebugging.value = true
   try {
     const token = userStore.token
-    const resp = await fetch(`/api/coding/workspace/${codingStore.workspace.id}/debug`, {
+    const resp = await fetch(`${API_PREFIX}/coding/workspace/${codingStore.workspace.id}/debug`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

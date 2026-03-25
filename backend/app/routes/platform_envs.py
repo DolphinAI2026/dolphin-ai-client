@@ -115,21 +115,50 @@ async def update_env(
     if not env:
         raise HTTPException(status_code=404, detail="环境不存在")
 
+    # 跟踪关键字段是否变更（需要重新登录）
+    need_relogin = False
+
     if data.env_name is not None:
         env.env_name = data.env_name
-    if data.base_url is not None:
+    if data.base_url is not None and data.base_url.rstrip("/") != env.base_url:
         env.base_url = data.base_url.rstrip("/")
-    if data.platform_tenant_id is not None:
+        need_relogin = True
+    if data.platform_tenant_id is not None and data.platform_tenant_id != env.platform_tenant_id:
         env.platform_tenant_id = data.platform_tenant_id
+        need_relogin = True
     if data.username is not None:
+        if data.username != env.username:
+            need_relogin = True
         env.username = data.username
     if data.password is not None:
         env.password_enc = encrypt_password(data.password)
+        need_relogin = True
     if data.token is not None:
         env.token = data.token
+        need_relogin = False  # 直接提供了新 token
+
+    # 关键字段变更后，旧 token 无效，必须清空并重新登录
+    if need_relogin:
+        env.token = None
+        env.status = "disconnected"
 
     await db.commit()
-    return {"ok": True}
+
+    # 如果需要重新登录且有账号密码，自动尝试登录
+    if need_relogin and env.username and env.password_enc:
+        try:
+            password = decrypt_password(env.password_enc)
+            client = APaaSClient(base_url=env.base_url, tenant_id=env.platform_tenant_id)
+            login_result = await client.login(env.username, password)
+            token = login_result.get("token", "")
+            if token:
+                env.token = token
+                env.status = "connected"
+                await db.commit()
+        except Exception:
+            pass  # 自动登录失败，用户需要手动点登录
+
+    return {"ok": True, "need_relogin": need_relogin, "status": env.status}
 
 
 @router.delete("/{env_id}")
@@ -287,7 +316,7 @@ async def get_embed_url(
     if not app.apaas_app_id:
         raise HTTPException(status_code=400, detail="应用尚未部署到平台")
 
-    # 查环境（优先应用关联的，其次默认环境）
+    # 查环境（优先应用关联 → 默认环境 → 任意已连接环境）
     env = None
     if app.platform_env_id:
         env_result = await db.execute(select(PlatformEnv).where(PlatformEnv.id == app.platform_env_id))
@@ -298,7 +327,16 @@ async def get_embed_url(
         )
         env = env_result.scalar_one_or_none()
     if not env:
-        raise HTTPException(status_code=400, detail="未配置平台环境")
+        # 兜底：取第一个已连接的环境
+        env_result = await db.execute(
+            select(PlatformEnv).where(
+                PlatformEnv.tenant_id == ctx.tenant_id,
+                PlatformEnv.status == "connected",
+            ).limit(1)
+        )
+        env = env_result.scalar_one_or_none()
+    if not env:
+        raise HTTPException(status_code=400, detail="未配置平台环境，请在环境管理中添加并连接")
 
     # 确保 token 有效：先测试，失败则尝试重新登录
     token = env.token

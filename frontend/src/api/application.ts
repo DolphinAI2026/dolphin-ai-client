@@ -1,5 +1,6 @@
 import request from '@/utils/request'
 import type { Application, MergedApplication } from '@/types'
+import { API_PREFIX } from '@/utils/request'
 
 export const applicationApi = {
   list(params?: { include_remote?: boolean; source_filter?: string }) {
@@ -57,7 +58,7 @@ export const applicationApi = {
   /** 上传文档新版本（SSE） */
   uploadDocVersionUrl(appId: number): string {
     const token = localStorage.getItem('token') || ''
-    return `/api/applications/${appId}/upload-doc-version?token=${token}`
+    return `${API_PREFIX}/applications/${appId}/upload-doc-version?token=${token}`
   },
 
   /** 获取变更计划 */
@@ -73,7 +74,7 @@ export const applicationApi = {
   /** 执行变更计划（SSE） */
   executeChangePlanUrl(appId: number, planId: number): string {
     const token = localStorage.getItem('token') || ''
-    return `/api/applications/${appId}/change-plans/${planId}/execute?token=${token}`
+    return `${API_PREFIX}/applications/${appId}/change-plans/${planId}/execute?token=${token}`
   },
 
   /** 获取文档版本列表（通过 appId） */

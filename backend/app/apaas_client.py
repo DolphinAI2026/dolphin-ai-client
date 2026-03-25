@@ -445,8 +445,10 @@ class APaaSClient:
                 raise Exception(data.get("message", "添加字典选项失败"))
             return data
 
-    async def create_menu(self, app_id: str, menu_name: str, form_id: str, menu_order: int = 0) -> dict:
-        """创建表单菜单 — /menu/save/menu"""
+    async def create_menu(self, app_id: str, menu_name: str, form_id: str, menu_order: int = 0, menu_id: str = "") -> dict:
+        """创建或更新表单菜单 — /menu/save/menu
+        如果传了 menu_id，则更新已有菜单（改名）；否则创建新菜单。
+        """
         url = f"{self.base_url}/xdap-app/menu/save/menu"
         payload = {
             "appId": app_id,
@@ -457,6 +459,8 @@ class APaaSClient:
             "formId": form_id,
             "menuIcon": "userInfo",
         }
+        if menu_id:
+            payload["id"] = menu_id
         _log_request("POST", url, payload)
         start = time.time()
 

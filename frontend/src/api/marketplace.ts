@@ -1,4 +1,5 @@
 import request from '@/utils/request'
+import { API_PREFIX } from '@/utils/request'
 
 export interface MarketplaceComponent {
   id: number
@@ -48,7 +49,7 @@ export const marketplaceApi = {
   /** 下载组件 zip */
   async download(id: number) {
     const token = localStorage.getItem('token') || ''
-    const resp = await fetch(`/api/marketplace/${id}/download`, {
+    const resp = await fetch(`${API_PREFIX}/marketplace/${id}/download`, {
       headers: { 'Authorization': `Bearer ${token}` }
     })
     if (!resp.ok) {
