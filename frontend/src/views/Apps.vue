@@ -50,6 +50,7 @@
             <div class="grid-card-badges">
               <span class="source-badge" :class="a.source">{{ sourceBadgeText(a) }}</span>
               <span class="card-status" :class="statusClass(a)">{{ a.status }}</span>
+              <span v-if="a.env_name" class="env-badge">{{ a.env_name }}</span>
             </div>
           </div>
           <h3 class="grid-card-name">{{ a.app_name }}</h3>
@@ -88,6 +89,7 @@
                   <h3>{{ a.app_name }}</h3>
                   <span class="source-badge" :class="a.source">{{ sourceBadgeText(a) }}</span>
                   <span class="card-status" :class="statusClass(a)">{{ a.status }}</span>
+                  <span v-if="a.env_name" class="env-badge">{{ a.env_name }}</span>
                 </div>
                 <div class="card-meta">
                   <span>{{ a.updated_at?.slice(0, 16) }}</span>
@@ -617,4 +619,18 @@ onMounted(async () => {
 .dot.emerald { background: #34d399; }
 .dot.amber { background: #fbbf24; }
 .dot.purple { background: #a78bfa; }
+
+/* ── Env badge ── */
+.env-badge {
+  font-size: 10px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-weight: 500;
+  white-space: nowrap;
+  background: rgba(56, 189, 248, 0.12);
+  color: #38bdf8;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 </style>

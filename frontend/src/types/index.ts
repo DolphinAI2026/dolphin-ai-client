@@ -92,6 +92,8 @@ export interface MergedApplication {
   dicts: number
   config_preview?: any
   permissions?: Record<string, boolean>
+  env_name?: string
+  env_status?: string
   created_at?: string
   updated_at?: string
 }

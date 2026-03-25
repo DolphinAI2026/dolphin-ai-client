@@ -126,6 +126,8 @@ class MergedAppResponse(BaseModel):
     dicts: int = 0
     config_preview: Optional[dict] = None
     permissions: Optional[dict] = None
+    env_name: Optional[str] = None          # 关联平台环境名称
+    env_status: Optional[str] = None        # 关联平台环境连接状态
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 

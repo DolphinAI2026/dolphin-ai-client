@@ -66,7 +66,7 @@ def _build_apaas_url(apaas_app_id: str, base_url: str | None = None, tenant_id: 
     return f"{host}/platform/{tid}/admin/app-store/{apaas_app_id}"
 
 
-def _build_local(app: Application, perms: dict | None = None) -> MergedAppResponse:
+def _build_local(app: Application, perms: dict | None = None, env_name: str | None = None, env_status: str | None = None) -> MergedAppResponse:
     enriched = _enrich(app)
     return MergedAppResponse(
         id=str(app.id),
@@ -82,12 +82,14 @@ def _build_local(app: Application, perms: dict | None = None) -> MergedAppRespon
         roles=enriched.roles, dicts=enriched.dicts,
         config_preview=enriched.config_preview,
         permissions=perms,
+        env_name=env_name,
+        env_status=env_status,
         created_at=str(enriched.created_at) if enriched.created_at else None,
         updated_at=str(enriched.updated_at) if enriched.updated_at else None,
     )
 
 
-def _build_linked(app: Application, remote: dict, perms: dict | None = None, env_base_url: str | None = None, env_tenant_id: str | None = None) -> MergedAppResponse:
+def _build_linked(app: Application, remote: dict, perms: dict | None = None, env_base_url: str | None = None, env_tenant_id: str | None = None, env_name: str | None = None, env_status: str | None = None) -> MergedAppResponse:
     enriched = _enrich(app)
     remote_status = remote.get("status") or remote.get("appStatus") or ""
     apaas_id = str(remote.get("id", app.apaas_app_id or ""))
@@ -107,6 +109,8 @@ def _build_linked(app: Application, remote: dict, perms: dict | None = None, env
         roles=enriched.roles, dicts=enriched.dicts,
         config_preview=enriched.config_preview,
         permissions=perms,
+        env_name=env_name,
+        env_status=env_status,
         created_at=str(enriched.created_at) if enriched.created_at else None,
         updated_at=str(enriched.updated_at) if enriched.updated_at else None,
     )
@@ -151,18 +155,21 @@ async def list_applications(
 
     permissions_list = await batch_get_permissions(ctx, db, local_apps, "application")
 
-    # 1.5 获取默认环境信息（用于构建 URL）
+    # 1.5 获取所有环境信息（用于构建 URL 和显示环境名称）
     env_base_url = None
     env_tenant_id = None
+    env_map: dict[int, dict] = {}  # env_id → {env_name, status}
     try:
         from app.models import PlatformEnv
         env_result = await db.execute(
-            select(PlatformEnv).where(PlatformEnv.tenant_id == ctx.tenant_id, PlatformEnv.is_default == True)
+            select(PlatformEnv).where(PlatformEnv.tenant_id == ctx.tenant_id)
         )
-        default_env = env_result.scalar_one_or_none()
-        if default_env:
-            env_base_url = default_env.base_url
-            env_tenant_id = default_env.platform_tenant_id
+        all_envs = env_result.scalars().all()
+        for env in all_envs:
+            env_map[env.id] = {"env_name": env.env_name, "status": env.status}
+            if env.is_default:
+                env_base_url = env.base_url
+                env_tenant_id = env.platform_tenant_id
     except Exception:
         pass
 
@@ -187,15 +194,20 @@ async def list_applications(
     matched_remote_ids: set[str] = set()
 
     for app, perms in zip(local_apps, permissions_list):
+        # 查找应用关联的环境信息
+        app_env = env_map.get(app.platform_env_id) if app.platform_env_id else None
+        app_env_name = app_env["env_name"] if app_env else None
+        app_env_status = app_env["status"] if app_env else None
+
         if app.apaas_app_id and app.apaas_app_id in remote_map:
             matched_remote_ids.add(app.apaas_app_id)
             if source_filter and source_filter != "linked":
                 continue
-            merged.append(_build_linked(app, remote_map[app.apaas_app_id], perms, env_base_url, env_tenant_id))
+            merged.append(_build_linked(app, remote_map[app.apaas_app_id], perms, env_base_url, env_tenant_id, app_env_name, app_env_status))
         else:
             if source_filter and source_filter != "local":
                 continue
-            merged.append(_build_local(app, perms))
+            merged.append(_build_local(app, perms, app_env_name, app_env_status))
 
     # 未匹配的远程应用
     if source_filter != "local":

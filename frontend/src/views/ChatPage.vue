@@ -574,6 +574,7 @@
             <div v-else v-for="app in projectApps[proj.id]" :key="app.id" class="project-app-item" @click="goToApp(app)">
               <span class="app-status-dot" :class="app.local_status || 'pending'"></span>
               <span class="app-name-text">{{ app.app_name || app.name }}</span>
+              <span v-if="app.env_name" class="app-env-tag">{{ app.env_name }}</span>
             </div>
           </div>
         </div>
@@ -3740,6 +3741,11 @@ watch(conversationId, (id) => {
 .app-status-dot.pending { background: rgba(255,255,255,0.2); }
 .app-status-dot.generating { background: #fbbf24; }
 .app-name-text { flex: 1; }
+.app-env-tag {
+  font-size: 9px; padding: 0 6px; border-radius: 8px; flex-shrink: 0;
+  background: rgba(56, 189, 248, 0.12); color: #38bdf8;
+  max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 
 /* ── 变更计划 overlay ── */
 .change-plan-overlay {
