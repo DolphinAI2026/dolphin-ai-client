@@ -160,7 +160,7 @@
       </div>
 
       <!-- 右侧预览面板 -->
-      <div v-show="activeView === 'builder'" class="preview-side">
+      <div class="preview-side">
         <div v-if="store.currentApp" class="preview-tabs">
           <button v-for="tab in tabs" :key="tab.k" class="ptab" :class="{ active: store.previewTab === tab.k }" @click="store.previewTab = tab.k">{{ tab.l }}</button>
         </div>
