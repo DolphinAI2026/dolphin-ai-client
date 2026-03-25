@@ -85,22 +85,28 @@ def _build_steps(config: dict, state: dict, apaas_app_id: str = None) -> list[St
     roles = data.get("roles", [])
     for idx, r in enumerate(roles):
         key = f"create_role:{idx}"
+        err = errors.get(key)
+        # 角色编码重复 → 视为已完成（复用已有）
+        auto_ok = err and any(kw in err for kw in ["重复", "已存在", "duplicate"])
         steps.append(StepStatus(
             key=key, label=f"创建角色: {r.get('name', f'角色{idx}')}",
-            status="completed" if key in completed else ("error" if key in errors else "pending"),
+            status="completed" if (key in completed or auto_ok) else ("error" if key in errors else "pending"),
             deps_met=app_created,
-            error=errors.get(key),
+            error=None if auto_ok else err,
         ))
 
     # 3. 字典（逐个）
     dicts = data.get("dicts", [])
     for idx, d in enumerate(dicts):
         key = f"create_dict:{idx}"
+        err = errors.get(key)
+        # 字典编码重复 → 视为已完成（复用已有）
+        auto_ok = err and any(kw in err for kw in ["重复", "已存在", "duplicate"])
         steps.append(StepStatus(
             key=key, label=f"创建字典: {d.get('name', f'字典{idx}')}",
-            status="completed" if key in completed else ("error" if key in errors else "pending"),
+            status="completed" if (key in completed or auto_ok) else ("error" if key in errors else "pending"),
             deps_met=app_created,
-            error=errors.get(key),
+            error=None if auto_ok else err,
         ))
 
     # 兼容旧的 create_roles_dicts 步骤（如果已完成，标记所有角色和字典步骤为已完成）
