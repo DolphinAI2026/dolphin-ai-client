@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 from typing import Dict, List, Optional
 
@@ -187,6 +188,47 @@ async def execute_create_roles_dicts(
 # Step 3: 创建单个数据模型
 # ------------------------------------------------------------------
 
+def _is_model_keyword_conflict(err: object) -> bool:
+    msg = str(err)
+    return "数据库关键词" in msg or "关键词重复" in msg
+
+
+def _make_keyword_safe_model_name(name: str) -> str:
+    if name.endswith(("模型", "数据", "记录", "配置表")):
+        return f"{name}业务"
+    return f"{name}模型"
+
+
+def _make_keyword_safe_model_code(code: str) -> str:
+    if code.startswith("biz_"):
+        return _sanitize_code(f"{code}_m")
+    return _sanitize_code(f"biz_{code}")
+
+
+def _build_keyword_safe_models(data_models: List[dict]) -> tuple[List[dict], Dict[str, str]]:
+    safe_models: List[dict] = []
+    code_map: Dict[str, str] = {}
+
+    for dm in data_models:
+        old_code = dm["modelCode"]
+        new_code = _make_keyword_safe_model_code(old_code)
+        code_map[old_code] = new_code
+        safe_models.append({
+            **dm,
+            "modelName": _make_keyword_safe_model_name(dm["modelName"]),
+            "modelCode": new_code,
+        })
+
+    return safe_models, code_map
+
+
+def _remap_model_info_codes(model_info_entries: Dict[str, dict], code_map: Dict[str, str]) -> None:
+    for info in model_info_entries.values():
+        current_code = info.get("code", "")
+        if current_code in code_map:
+            info["code"] = code_map[current_code]
+
+
 async def execute_create_model(
     client: APaaSClient,
     app_id: str,
@@ -311,10 +353,29 @@ async def execute_create_model(
     }
 
     payload = {"appId": app_id, "datasourceId": "", "dataModels": data_models}
+    keyword_retry_applied = False
 
     try:
         await client.create_models(app_id, payload)
     except Exception as e:
+        if _is_model_keyword_conflict(e):
+            safe_models, code_map = _build_keyword_safe_models(data_models)
+            _remap_model_info_codes(model_info_entries, code_map)
+            safe_payload = {"appId": app_id, "datasourceId": "", "dataModels": safe_models}
+            logger.warning(
+                "模型 %s 创建命中数据库关键词，自动使用安全名称重试: %s",
+                model["name"],
+                json.dumps(
+                    [{"from": dm["modelName"], "to": sm["modelName"], "code": sm["modelCode"]} for dm, sm in zip(data_models, safe_models)],
+                    ensure_ascii=False,
+                ),
+            )
+            try:
+                await client.create_models(app_id, safe_payload)
+                keyword_retry_applied = True
+            except Exception as retry_err:
+                e = retry_err
+
         if "编码重复" in str(e) or "已存在" in str(e):
             # 回退到复用模式 — 优先按编码匹配，同名时选字段最多的
             refreshed = await client.query_models(app_id)
@@ -325,7 +386,8 @@ async def execute_create_model(
                 # 同名模型保留字段最多的（避免误匹配到子表）
                 if name not in ref_by_name or len(rm.get("fields", [])) > len(ref_by_name[name].get("fields", [])):
                     ref_by_name[name] = rm
-            rm = ref_by_code.get(mc) or ref_by_name.get(model["name"])
+            current_main_code = model_info_entries.get(str(model_index), {}).get("code", mc)
+            rm = ref_by_code.get(current_main_code) or ref_by_name.get(model["name"])
             if rm:
                 existing_fields = _extract_fields(rm)
                 model_info_entries[str(model_index)] = {
@@ -394,7 +456,7 @@ async def execute_create_model(
     return {
         "model_info_entries": model_info_entries,
         "reused": False,
-        "message": f"创建成功: {model['name']} ({len(main_fields)} 个字段)",
+        "message": f"创建成功: {model['name']} ({len(main_fields)} 个字段)" + ("，已自动规避数据库关键词" if keyword_retry_applied else ""),
     }
 
 
@@ -443,6 +505,11 @@ async def _update_existing_form(
 
     # 追加到已有配置
     form_config.setdefault("components", []).extend(new_components)
+    logger.info(
+        "save_form_config reason: 补齐已有表单缺失组件 (form=%s, added=%s)",
+        model["name"],
+        len(new_components),
+    )
     await client.save_form_config(app_id, form_config)
     logger.info(f"表单 {model['name']} 补齐 {len(new_components)} 个组件")
 
@@ -581,6 +648,12 @@ async def execute_create_form(
         },
     }]
 
+    logger.info(
+        "execute_create_form payload (%s):\n%s",
+        model["name"],
+        json.dumps(form_payload, ensure_ascii=False, indent=2),
+    )
+
     result = await client.create_form_config(app_id, form_payload)
     form_result = {
         "formId": "", "formName": model["name"], "formCode": "", "menuId": "",
@@ -674,6 +747,7 @@ async def execute_create_form(
                             updated = True
 
             if updated:
+                logger.info("save_form_config reason: 字典绑定回写 (form=%s)", model["name"])
                 await client.save_form_config(app_id, fc)
                 form_result["message"] += "（含字典绑定）"
         except Exception as e:
@@ -806,6 +880,172 @@ async def execute_create_workflow(
 # Step 6: 配置权限
 # ------------------------------------------------------------------
 
+def _parse_permission_ops(op: object) -> set[str]:
+    if isinstance(op, str):
+        raw_ops = op.replace(" ", "").split(",") if "," in op else [op]
+    elif isinstance(op, (list, tuple, set)):
+        raw_ops = list(op)
+    else:
+        raw_ops = ["all"]
+    return {str(item).strip() for item in raw_ops if str(item).strip()}
+
+
+def _resolve_permission_object(rule: dict, role_codes: Dict[str, dict]) -> dict:
+    role_code = rule.get("role", "")
+    if role_code and role_code != "all":
+        role_info = role_codes.get(role_code, {})
+        return {
+            "permissionObjectType": "ROLE",
+            "permissionObjectValue": role_info.get("roleCode", role_code),
+            "permissionObjectDisplayName": role_info.get("roleName", role_code),
+        }
+    return {
+        "permissionObjectType": "ALL_USER",
+        "permissionObjectValue": "",
+        "permissionObjectDisplayName": "全部人员",
+    }
+
+
+def _normalize_permission_range(data_range: object) -> str:
+    range_map = {
+        "all": "ALL",
+        "self": "SELF",
+        "dept": "CURRENT_USER_DEPT",
+        "dept_sub": "CURRENT_USER_DEPT_LOW_LEVEL",
+    }
+    if isinstance(data_range, str):
+        return range_map.get(data_range, data_range.upper())
+    return "ALL"
+
+
+def _default_form_permission_payload(app_id: str, form_code: str, form_id: str) -> dict:
+    return {
+        "formCode": form_code,
+        "appId": app_id,
+        "tenantId": "",
+        "formId": form_id,
+        "operationPermissionGroups": [{
+            "permissionName": "默认操作权限",
+            "permissionDescribe": "全部人员可操作",
+            "permissionObjects": [{
+                "permissionObjectDisplayName": "全部人员",
+                "permissionObjectType": "ALL_USER",
+                "permissionObjectValue": "",
+                "permissionRange": {"rangeType": "ALL"},
+            }],
+            "permissionOperationType": {
+                "addPermission": True,
+                "batchAgreePermission": False,
+                "batchDeletePermission": False,
+                "batchRejectPermission": False,
+                "copyAddPermission": False,
+                "importPermission": False,
+                "shareFormPermission": False,
+                "temporaryStoragePermission": False,
+            },
+        }],
+        "dataPermissionGroups": [{
+            "permissionName": "默认数据权限",
+            "permissionDescribe": "全部人员可查看全部数据",
+            "permissionObjects": [{
+                "permissionObjectDisplayName": "全部人员",
+                "permissionObjectType": "ALL_USER",
+                "permissionObjectValue": "",
+                "permissionRange": {"rangeType": "ALL"},
+            }],
+            "permissionOperationType": {
+                "queryPermission": True,
+                "deletePermission": False,
+                "updatePermission": False,
+            },
+        }],
+    }
+
+
+def _build_form_permission_payload(
+    app_id: str,
+    form_code: str,
+    form_id: str,
+    rules: List[dict],
+    role_codes: Dict[str, dict],
+) -> dict:
+    operation_groups: Dict[tuple, dict] = {}
+    data_groups: Dict[tuple, dict] = {}
+
+    for rule in rules:
+        perm_obj = _resolve_permission_object(rule, role_codes)
+        perm_obj_type = perm_obj["permissionObjectType"]
+        perm_obj_value = perm_obj["permissionObjectValue"]
+        perm_obj_name = perm_obj["permissionObjectDisplayName"]
+        ops = _parse_permission_ops(rule.get("op", "all"))
+        range_type = _normalize_permission_range(rule.get("data", "ALL"))
+
+        has_write = "all" in ops or bool(ops - {"view"})
+        if has_write:
+            op_key = (perm_obj_type, perm_obj_value)
+            if op_key not in operation_groups:
+                operation_groups[op_key] = {
+                    "permissionName": f"{perm_obj_name}操作权限",
+                    "permissionDescribe": "",
+                    "permissionObjects": [{
+                        "permissionObjectDisplayName": perm_obj_name,
+                        "permissionObjectType": perm_obj_type,
+                        "permissionObjectValue": perm_obj_value,
+                        "permissionRange": {"rangeType": "ALL"},
+                    }],
+                    "permissionOperationType": {
+                        "addPermission": False,
+                        "batchAgreePermission": False,
+                        "batchDeletePermission": False,
+                        "batchRejectPermission": False,
+                        "copyAddPermission": False,
+                        "importPermission": False,
+                        "shareFormPermission": False,
+                        "temporaryStoragePermission": False,
+                    },
+                }
+
+            perm_op = operation_groups[op_key]["permissionOperationType"]
+            perm_op["addPermission"] = perm_op["addPermission"] or ("all" in ops or "add" in ops or "edit" in ops)
+            perm_op["batchAgreePermission"] = perm_op["batchAgreePermission"] or ("all" in ops or "approve" in ops)
+            perm_op["batchDeletePermission"] = perm_op["batchDeletePermission"] or ("all" in ops or "delete" in ops)
+            perm_op["batchRejectPermission"] = perm_op["batchRejectPermission"] or ("all" in ops or "approve" in ops)
+            perm_op["copyAddPermission"] = perm_op["copyAddPermission"] or ("all" in ops)
+            perm_op["importPermission"] = perm_op["importPermission"] or ("all" in ops or "import" in ops)
+            perm_op["temporaryStoragePermission"] = perm_op["temporaryStoragePermission"] or ("all" in ops or "add" in ops)
+
+        data_key = (perm_obj_type, perm_obj_value, range_type)
+        if data_key not in data_groups:
+            data_groups[data_key] = {
+                "permissionName": f"{perm_obj_name}数据权限",
+                "permissionDescribe": "",
+                "permissionObjects": [{
+                    "permissionObjectDisplayName": perm_obj_name,
+                    "permissionObjectType": perm_obj_type,
+                    "permissionObjectValue": perm_obj_value,
+                    "permissionRange": {"rangeType": range_type},
+                }],
+                "permissionOperationType": {
+                    "queryPermission": True,
+                    "deletePermission": False,
+                    "updatePermission": False,
+                },
+            }
+
+        data_perm = data_groups[data_key]["permissionOperationType"]
+        data_perm["deletePermission"] = data_perm["deletePermission"] or ("all" in ops or "delete" in ops)
+        data_perm["updatePermission"] = data_perm["updatePermission"] or ("all" in ops or "edit" in ops)
+
+    return {
+        "formCode": form_code,
+        "appId": app_id,
+        "tenantId": "",
+        "formId": form_id,
+        "operationPermissionGroups": list(operation_groups.values()),
+        "dataPermissionGroups": list(data_groups.values()),
+    }
+
+
 async def execute_configure_permissions(
     client: APaaSClient,
     app_id: str,
@@ -823,114 +1063,17 @@ async def execute_configure_permissions(
         user_perm = next((p for p in permissions if p.get("form") == fr.get("formName")), None)
 
         if user_perm and user_perm.get("rules"):
-            op_groups = []
-            data_groups = []
-            for rule in user_perm["rules"]:
-                role_code = rule.get("role", "")
-                perm_obj_type = "ALL_USER"
-                perm_obj_value = ""
-                perm_obj_name = "全部人员"
-                if role_code and role_code != "all":
-                    perm_obj_type = "ROLE"
-                    # 使用平台实际的 roleCode，而非配置里的原始 code
-                    role_info = role_codes.get(role_code, {})
-                    perm_obj_value = role_info.get("roleCode", role_code)
-                    perm_obj_name = role_info.get("roleName", role_code)
-
-                op = rule.get("op", "all")
-                # 支持逗号分隔的多操作，如 "add,edit,delete"
-                ops = set(op.replace(" ", "").split(",")) if "," in op else {op}
-
-                data_range = rule.get("data", "ALL")
-                range_map = {
-                    "all": "ALL", "self": "SELF", "dept": "CURRENT_USER_DEPT",
-                    "dept_sub": "CURRENT_USER_DEPT_LOW_LEVEL",
-                }
-                range_type = range_map.get(data_range, data_range.upper() if isinstance(data_range, str) else "ALL")
-
-                # 操作权限：view-only 不创建操作权限组
-                has_write = "all" in ops or bool(ops - {"view"})
-                if has_write:
-                    perm_op = {
-                        "addPermission": "all" in ops or "add" in ops or "edit" in ops,
-                        "batchAgreePermission": "all" in ops or "approve" in ops,
-                        "batchDeletePermission": "all" in ops or "delete" in ops,
-                        "batchRejectPermission": "all" in ops or "approve" in ops,
-                        "copyAddPermission": "all" in ops,
-                        "importPermission": "all" in ops or "import" in ops,
-                        "shareFormPermission": False,
-                        "temporaryStoragePermission": "all" in ops or "add" in ops,
-                    }
-                    op_groups.append({
-                        "permissionName": f"{perm_obj_name}操作权限",
-                        "permissionDescribe": "",
-                        "PermissionObjects": [{
-                            "permissionObjectDisplayName": perm_obj_name,
-                            "permissionObjectType": perm_obj_type,
-                            "permissionObjectValue": perm_obj_value,
-                            "permissionRange": {"rangeType": "ALL"},
-                        }],
-                        "permissionOperationType": perm_op,
-                    })
-
-                # 数据权限：始终创建（包括 view-only）
-                data_groups.append({
-                    "permissionName": f"{perm_obj_name}数据权限",
-                    "permissionDescribe": "",
-                    "permissionObjects": [{
-                        "permissionObjectDisplayName": perm_obj_name,
-                        "permissionObjectType": perm_obj_type,
-                        "permissionObjectValue": perm_obj_value,
-                        "permissionRange": {"rangeType": range_type},
-                    }],
-                    "permissionOperationType": {
-                        "queryPermission": True,
-                        "deletePermission": "all" in ops or "delete" in ops,
-                        "updatePermission": "all" in ops or "edit" in ops,
-                    },
-                })
-
-            perm_payloads.append({
-                "formCode": form_code, "appId": app_id, "tenantId": "",
-                "formId": form_id,
-                "operationPermissionGroups": op_groups,
-                "dataPermissionGroups": data_groups,
-            })
+            perm_payloads.append(
+                _build_form_permission_payload(
+                    app_id=app_id,
+                    form_code=form_code,
+                    form_id=form_id,
+                    rules=user_perm["rules"],
+                    role_codes=role_codes,
+                )
+            )
         else:
-            # 默认权限
-            perm_payloads.append({
-                "formCode": form_code, "appId": app_id, "tenantId": "",
-                "formId": form_id,
-                "operationPermissionGroups": [{
-                    "permissionName": "默认操作权限",
-                    "permissionDescribe": "全部人员可操作",
-                    "PermissionObjects": [{
-                        "permissionObjectDisplayName": "全部人员",
-                        "permissionObjectType": "ALL_USER",
-                        "permissionObjectValue": "",
-                        "permissionRange": {"rangeType": "ALL"},
-                    }],
-                    "permissionOperationType": {
-                        "addPermission": True, "batchAgreePermission": False,
-                        "batchDeletePermission": False, "batchRejectPermission": False,
-                        "copyAddPermission": False, "importPermission": False,
-                        "shareFormPermission": False, "temporaryStoragePermission": False,
-                    },
-                }],
-                "dataPermissionGroups": [{
-                    "permissionName": "默认数据权限",
-                    "permissionDescribe": "全部人员可查看全部数据",
-                    "permissionObjects": [{
-                        "permissionObjectDisplayName": "全部人员",
-                        "permissionObjectType": "ALL_USER",
-                        "permissionObjectValue": "",
-                        "permissionRange": {"rangeType": "ALL"},
-                    }],
-                    "permissionOperationType": {
-                        "queryPermission": True, "deletePermission": False, "updatePermission": False,
-                    },
-                }],
-            })
+            perm_payloads.append(_default_form_permission_payload(app_id, form_code, form_id))
 
     if perm_payloads:
         await client.create_form_permissions(app_id, perm_payloads)

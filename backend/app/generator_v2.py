@@ -734,7 +734,7 @@ async def run_complete_generation(
                         op_groups.append({
                             "permissionName": f"{perm_obj_name}操作权限",
                             "permissionDescribe": "",
-                            "PermissionObjects": [{
+                            "permissionObjects": [{
                                 "permissionObjectDisplayName": perm_obj_name,
                                 "permissionObjectType": perm_obj_type,
                                 "permissionObjectValue": perm_obj_value,
@@ -776,7 +776,7 @@ async def run_complete_generation(
                         "operationPermissionGroups": [{
                             "permissionName": "默认操作权限",
                             "permissionDescribe": "全部人员可操作",
-                            "PermissionObjects": [{
+                            "permissionObjects": [{
                                 "permissionObjectDisplayName": "全部人员",
                                 "permissionObjectType": "ALL_USER",
                                 "permissionObjectValue": "",

@@ -34,6 +34,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["生成步骤"])
 
+# 临时关闭审批流程创建步骤，避免部署链路被当前流程配置问题阻塞。
+WORKFLOW_STEPS_ENABLED = False
+
 
 # ------------------------------------------------------------------
 # helpers
@@ -146,21 +149,21 @@ def _build_steps(config: dict, state: dict, apaas_app_id: str = None) -> list[St
             error=errors.get(key),
         ))
 
-    # 5. 审批流程（每个独立）
-    workflows = data.get("workflows", [])
     all_forms_done = all(f"create_form:{i}" in completed for i in range(len(models)))
-    for idx, wf in enumerate(workflows):
-        key = f"create_workflow:{idx}"
-        steps.append(StepStatus(
-            key=key, label=f"创建流程: {wf.get('name', wf.get('form', f'流程{idx}'))}",
-            status="completed" if key in completed else ("error" if key in errors else "pending"),
-            deps_met=all_forms_done,
-            error=errors.get(key),
-        ))
+    workflows = data.get("workflows", [])
+    if WORKFLOW_STEPS_ENABLED:
+        for idx, wf in enumerate(workflows):
+            key = f"create_workflow:{idx}"
+            steps.append(StepStatus(
+                key=key, label=f"创建流程: {wf.get('name', wf.get('form', f'流程{idx}'))}",
+                status="completed" if key in completed else ("error" if key in errors else "pending"),
+                deps_met=all_forms_done,
+                error=errors.get(key),
+            ))
 
     # 6. 权限
     all_workflows_done = all(f"create_workflow:{i}" in completed for i in range(len(workflows))) if workflows else True
-    perm_deps = all_forms_done and all_workflows_done
+    perm_deps = all_forms_done and all_workflows_done if WORKFLOW_STEPS_ENABLED else all_forms_done
     steps.append(StepStatus(
         key="configure_permissions", label="配置权限",
         status="completed" if "configure_permissions" in completed else ("error" if "configure_permissions" in errors else "pending"),

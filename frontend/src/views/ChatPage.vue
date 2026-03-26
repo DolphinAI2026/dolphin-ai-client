@@ -254,7 +254,6 @@
               <div class="stat-card teal"><div class="stat-num">{{ store.preview.models.length }}</div><div class="stat-label">表单配置</div></div>
               <div class="stat-card emerald"><div class="stat-num">{{ store.preview.roles.length }}</div><div class="stat-label">角色</div></div>
               <div class="stat-card amber"><div class="stat-num">{{ store.preview.dicts.length }}</div><div class="stat-label">数据字典</div></div>
-              <div class="stat-card purple"><div class="stat-num">{{ store.preview.workflows.length }}</div><div class="stat-label">流程</div></div>
             </div>
             <div class="sub-section">
               <div class="sub-title">角色 <button class="add-mini" @click="addRole">+</button></div>
@@ -382,20 +381,6 @@
             </div>
           </div>
 
-          <!-- 流程 -->
-          <div v-show="store.previewTab === 'workflow'" class="tab-content">
-            <div v-for="(wf, wi) in store.preview.workflows" :key="wi" class="wf-card">
-              <div class="wf-header"><span class="wf-name">{{ wf.name }}</span><span class="wf-form">关联: {{ wf.form }}</span></div>
-              <div class="wf-nodes">
-                <template v-for="(nd, ni) in wf.nodes" :key="ni">
-                  <div class="wf-node" :class="nd.type"><div>{{ nd.name }}</div><div v-if="nd.role" class="wf-role">{{ nd.role }}</div></div>
-                  <div v-if="ni < wf.nodes.length - 1" class="wf-arrow">▼</div>
-                </template>
-              </div>
-            </div>
-            <div v-if="store.preview.workflows.length === 0" class="preview-empty small">暂无流程配置</div>
-          </div>
-
           <!-- 权限 -->
           <div v-show="store.previewTab === 'perms'" class="tab-content">
             <div v-for="(p, pi) in store.preview.permissions" :key="pi" class="perm-card">
@@ -430,7 +415,7 @@
               :dict-changes="changePlanResourceDiff.dict_changes"
               :model-changes="changePlanResourceDiff.model_changes"
               :form-changes="changePlanResourceDiff.form_changes"
-              :process-changes="changePlanResourceDiff.process_changes"
+              :process-changes="[]"
               :warnings="changePlanResourceDiff.warnings"
               :unsupported-changes="changePlanResourceDiff.unsupported_changes"
               :show-actions="false"
@@ -607,7 +592,7 @@
             :dict-changes="incrementalDiff.dict_changes"
             :model-changes="incrementalDiff.model_changes"
             :form-changes="incrementalDiff.form_changes"
-            :process-changes="incrementalDiff.process_changes"
+            :process-changes="[]"
             :warnings="incrementalDiff.warnings"
             :unsupported-changes="incrementalDiff.unsupported_changes"
             :show-actions="false"
@@ -749,9 +734,13 @@ const agents: Record<string, { name: string; icon: string }> = {
 
 const tabs = [
   { k: 'overview', l: '概览' }, { k: 'models', l: '模型' },
-  { k: 'forms', l: '表单' }, { k: 'workflow', l: '流程' }, { k: 'perms', l: '权限' },
+  { k: 'forms', l: '表单' }, { k: 'perms', l: '权限' },
   { k: 'docs', l: '文档' },
 ]
+
+if (store.previewTab === 'workflow') {
+  store.previewTab = 'overview'
+}
 
 const messages = reactive<Message[]>([
   { id: 0, role: 'assistant', agent: 'builder', content: '你好！我是 aPaaS 搭建智能体，可以帮你通过对话的方式在得帆云平台上快速搭建应用。\n\n你可以告诉我想要创建什么系统，我会帮你理清需求并自动生成。\n\n比如：\n• "我想做一个客户管理系统"\n• "帮我搭建一个项目管理应用"\n• "创建一个售后服务工单系统"', created_at: '' }
@@ -1421,8 +1410,8 @@ const appDisplayStatusText = computed(() => {
 // 检测配置是否有变更（对比当前 preview 和已部署的步骤）
 const hasConfigChanged = computed(() => {
   if (!deploySteps.value.length) return false
-  // 计算当前配置应有的步骤数：1(app) + 1(roles_dicts) + models + forms + workflows + 1(perms)
-  const expectedSteps = 1 + 1 + store.preview.models.length + store.preview.models.length + store.preview.workflows.length + 1
+  // 当前部署链路暂时隐藏审批流程步骤：1(app) + 1(roles_dicts) + models + forms + 1(perms)
+  const expectedSteps = 1 + 1 + store.preview.models.length + store.preview.models.length + 1
   return expectedSteps !== deploySteps.value.length
 })
 
@@ -1440,7 +1429,6 @@ const deployGroups = computed(() => {
     { title: '数据字典', icon: '📖', test: (s: DeployStep) => s.key.startsWith('create_dict:') },
     { title: '数据模型', icon: '🗃', test: (s: DeployStep) => s.key.startsWith('create_model:') },
     { title: '表单配置', icon: '📋', test: (s: DeployStep) => s.key.startsWith('create_form:') },
-    { title: '审批流程', icon: '🔄', test: (s: DeployStep) => s.key.startsWith('create_workflow:') },
     { title: '权限配置', icon: '🔐', test: (s: DeployStep) => s.key === 'configure_permissions' },
   ]
   return defs.map(d => {
@@ -1812,9 +1800,6 @@ const buildIncrementalSteps = (diff: DiffResponse) => {
   if (diff.form_changes.length > 0) {
     steps.push({ key: 'forms', label: '更新表单', status: 'pending', details: `${diff.form_changes.length} 个变更` })
   }
-  if (diff.process_changes.length > 0) {
-    steps.push({ key: 'processes', label: '更新流程', status: 'pending', details: `${diff.process_changes.length} 个变更` })
-  }
 
   return steps
 }
@@ -1943,7 +1928,6 @@ const handleDocUpload = async (e: Event) => {
     skeleton: { icon: '📋', label: '提取骨架', status: 'pending', detail: '' },
     dicts: { icon: '📖', label: '字典选项', status: 'pending', detail: '' },
     models: { icon: '🗃', label: '模型字段', status: 'pending', detail: '' },
-    workflows: { icon: '🔄', label: '流程设计', status: 'pending', detail: '' },
     complete: { icon: '✨', label: '拼装配置', status: 'pending', detail: '' },
   })
 
@@ -2917,6 +2901,10 @@ onMounted(async () => {
 
 // 切换到文档 tab 时自动加载版本列表
 watch(() => store.previewTab, (tab) => {
+  if (tab === 'workflow') {
+    store.previewTab = 'overview'
+    return
+  }
   if (tab === 'docs' && (existingAppId.value || conversationId.value) && docVersions.value.length === 0) {
     fetchDocVersions()
   }

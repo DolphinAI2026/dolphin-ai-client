@@ -521,6 +521,12 @@ class APaaSClient:
     async def save_form_config(self, app_id: str, form_config: dict) -> dict:
         """保存表单配置（全量更新）"""
         url = f"{self.base_url}/xdap-app/formConfig/save/formConfigDetail"
+        logger.info(
+            "save_form_config payload (formName=%s, formId=%s):\n%s",
+            form_config.get("formName", ""),
+            form_config.get("id", ""),
+            _to_json(form_config),
+        )
         _log_request("POST", url, form_config)
         start = time.time()
 

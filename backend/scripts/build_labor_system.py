@@ -679,7 +679,7 @@ async def main():
             "operationPermissionGroups": [{
                 "permissionName": "默认操作权限",
                 "permissionDescribe": "全部人员可操作",
-                "PermissionObjects": [{
+                "permissionObjects": [{
                     "permissionObjectDisplayName": "全部人员",
                     "permissionObjectType": "ALL_USER",
                     "permissionObjectValue": "",
