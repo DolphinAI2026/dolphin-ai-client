@@ -1200,7 +1200,9 @@ const onConversationSwitch = (newId: number) => {
 }
 
 const startNewConversation = () => {
-  const currentAppId = existingAppId.value
+  const isFromAppEntry = route.query.app_id != null
+  const currentAppId = isFromAppEntry ? existingAppId.value : null
+
   conversationId.value = null
   selectedConversationId.value = null
   messages.splice(0, messages.length)
@@ -1210,9 +1212,10 @@ const startNewConversation = () => {
     messages.push({ id: 0, role: 'assistant', agent: 'builder', content: `继续完善「${store.preview.appName}」。\n\n你可以：\n• 上传新版本需求文档进行增量更新\n• 描述需要修改的内容\n• 说"开始生成"部署到平台`, created_at: '' })
     router.replace({ path: '/chat', query: { app_id: String(currentAppId) } })
   } else {
-    // 全新对话：清空一切
+    // 全新对话：清空一切（包括应用关联和文档）
     existingAppId.value = null
     store.reset()
+    docVersions.value = []
     messages.push({ id: 0, role: 'assistant', agent: 'builder', content: '你好！我是 aPaaS 搭建智能体，可以帮你通过对话的方式在得帆云平台上快速搭建应用。\n\n你可以告诉我想要创建什么系统，我会帮你理清需求并自动生成。\n\n比如：\n• "我想做一个客户管理系统"\n• "帮我搭建一个项目管理应用"\n• "创建一个售后服务工单系统"', created_at: '' })
     router.replace('/chat')
   }

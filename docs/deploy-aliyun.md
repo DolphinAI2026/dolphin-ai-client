@@ -358,7 +358,21 @@ EOF
 
 > **说明**：code-server 监听 127.0.0.1，通过 Nginx 反向代理对外暴露，不直接暴露端口。
 
-### 9.3 启动 code-server（systemd）
+### 9.3 预装 AI Chat 扩展（Continue）
+
+code-server 内置的 Chat 功能依赖 GitHub Copilot 登录。为避免强制登录，使用 **Continue** 扩展接入 MiniMax LLM，无需任何账号登录。
+
+```bash
+# 安装 Continue 扩展
+code-server --install-extension Continue.continue
+
+# （可选）禁用 GitHub Copilot Chat 面板，避免显示"需要登录"提示
+# code-server --uninstall-extension GitHub.copilot-chat 2>/dev/null || true
+```
+
+> **说明**：每个 workspace 创建时会自动生成 `.continue/config.json`，配置 MiniMax 模型和 API Key（从后端 `.env` 中读取），用户打开 workspace 即可直接使用 AI Chat，无需额外配置。
+
+### 9.4 启动 code-server（systemd）
 
 ```bash
 # 启用并启动
@@ -368,7 +382,7 @@ systemctl enable --now code-server@root
 systemctl status code-server@root
 ```
 
-### 9.4 Nginx 代理 code-server
+### 9.5 Nginx 代理 code-server
 
 在 `/etc/nginx/apaas-builder.conf` 中追加：
 
@@ -393,7 +407,7 @@ location /ide/ {
 nginx -t && nginx -s reload
 ```
 
-### 9.5 配置后端环境变量
+### 9.6 配置后端环境变量
 
 在 `/root/apaas-builder/backend/.env` 中添加：
 
@@ -408,7 +422,7 @@ CODE_SERVER_BASE_URL=https://your-domain.com/ide
 systemctl restart apaas-builder
 ```
 
-### 9.6 验证
+### 9.7 验证
 
 1. 访问 `https://your-domain.com/ide/` 确认 code-server 登录页正常
 2. 进入 AI Coding 页面，点击「在 IDE 中打开」→「Web IDE（浏览器）」

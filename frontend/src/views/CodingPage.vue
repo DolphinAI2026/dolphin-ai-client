@@ -30,24 +30,16 @@
         >
           <el-icon><FolderOpened /></el-icon> 在 IDE 中打开
         </el-button>
-        <el-dropdown
+        <el-button
           v-if="codingStore.workspace"
-          split-button
-          type="success"
           size="small"
+          type="success"
           :loading="isDebugging"
-          class="header-btn debug-dropdown"
-          @click="handleDebug('app')"
-          @command="handleDebug"
+          class="header-btn"
+          @click="handlePreview"
         >
           <el-icon><Monitor /></el-icon> Debug 预览
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item command="app">应用调试（看效果）</el-dropdown-item>
-              <el-dropdown-item command="platform">平台调试（设计器）</el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
+        </el-button>
         <el-button
           v-if="codingStore.workspace"
           size="small"
@@ -62,104 +54,48 @@
     </header>
 
     <div class="coding-body">
-      <!-- Left Sidebar: Project → Workspace Tree -->
+      <!-- Left Sidebar: Workspace List -->
       <aside class="workspace-sidebar">
-        <!-- Project Selector -->
-        <div class="sidebar-header">
-          <el-select
-            v-model="currentProjectId"
-            placeholder="选择应用"
-            size="small"
-            class="project-select"
-            @change="onProjectChange"
-          >
-            <el-option
-              v-for="p in projects"
-              :key="p.id"
-              :label="p.name"
-              :value="p.id"
-            />
-          </el-select>
-          <el-button size="small" type="primary" text @click="showCreateProject">
+        <div class="sidebar-section-header">
+          <span class="sidebar-title">工作区</span>
+          <el-button size="small" type="primary" text @click="startNewWorkspace">
             <el-icon><Plus /></el-icon>
           </el-button>
         </div>
-
-        <!-- Platform Status -->
-        <div v-if="currentProject" class="sidebar-platform-status">
-          <div class="platform-status-row">
-            <span class="platform-dot" :class="currentProject.platform_connected ? 'connected' : 'disconnected'"></span>
-            <span class="platform-label">{{ currentProject.platform_connected ? '平台已连接' : '未连接平台' }}</span>
-          </div>
-          <el-button size="small" text class="platform-config-btn" @click="showProjectSettings">
-            配置平台环境
-          </el-button>
-        </div>
-
-        <!-- No Project Prompt -->
-        <div v-if="projects.length === 0" class="sidebar-empty-project">
-          <div class="empty-icon">&#128194;</div>
-          <div class="empty-text">创建你的第一个应用</div>
-          <el-button size="small" type="primary" @click="showCreateProject">新建应用</el-button>
-        </div>
-
-        <!-- Workspace List (under selected project) -->
-        <template v-if="currentProject">
-          <div class="sidebar-section-header">
-            <span class="sidebar-title">工作区</span>
-            <el-button size="small" type="primary" text @click="startNewWorkspace">
-              <el-icon><Plus /></el-icon>
-            </el-button>
-          </div>
-          <div class="sidebar-list">
-            <template v-for="group in groupedWorkspaces" :key="group.key">
-              <div class="sidebar-group-header" @click="toggleGroup(group.key)">
-                <span class="sidebar-group-icon">{{ group.icon }}</span>
-                <span class="sidebar-group-label">{{ group.label }}</span>
-                <span class="sidebar-group-count">{{ group.items.length }}</span>
-                <span class="sidebar-group-arrow" :class="{ collapsed: collapsedGroups.has(group.key) }">‹</span>
-              </div>
-              <template v-if="!collapsedGroups.has(group.key)">
-                <div
-                  v-for="ws in group.items"
-                  :key="ws.id"
-                  class="sidebar-ws-item"
-                  :class="{ active: codingStore.workspace?.id === ws.id }"
-                  @click="openExistingWorkspace(ws)"
-                >
-                  <div class="sidebar-ws-name">{{ ws.project_name }}</div>
-                  <div class="sidebar-ws-meta">
-                    <el-button
-                      size="small"
-                      type="danger"
-                      text
-                      @click.stop="deleteWorkspace(ws)"
-                      class="sidebar-ws-del"
-                    >×</el-button>
-                  </div>
-                </div>
-              </template>
-            </template>
-            <div v-if="existingWorkspaces.length === 0" class="sidebar-empty">
-              暂无工作区，发消息自动创建
+        <div class="sidebar-list">
+          <template v-for="group in groupedWorkspaces" :key="group.key">
+            <div class="sidebar-group-header" @click="toggleGroup(group.key)">
+              <span class="sidebar-group-icon">{{ group.icon }}</span>
+              <span class="sidebar-group-label">{{ group.label }}</span>
+              <span class="sidebar-group-count">{{ group.items.length }}</span>
+              <span class="sidebar-group-arrow" :class="{ collapsed: collapsedGroups.has(group.key) }">‹</span>
             </div>
+            <template v-if="!collapsedGroups.has(group.key)">
+              <div
+                v-for="ws in group.items"
+                :key="ws.id"
+                class="sidebar-ws-item"
+                :class="{ active: codingStore.workspace?.id === ws.id }"
+                @click="openExistingWorkspace(ws)"
+              >
+                <div class="sidebar-ws-name">{{ ws.project_name }}</div>
+                <div class="sidebar-ws-meta">
+                  <el-button
+                    size="small"
+                    type="danger"
+                    text
+                    @click.stop="deleteWorkspace(ws)"
+                    class="sidebar-ws-del"
+                  >×</el-button>
+                </div>
+              </div>
+            </template>
+          </template>
+          <div v-if="existingWorkspaces.length === 0" class="sidebar-empty">
+            暂无工作区，发消息自动创建
           </div>
-        </template>
-
-        <!-- Project Actions (bottom) -->
-        <div v-if="currentProject" class="sidebar-footer">
-          <el-button size="small" text type="danger" @click="deleteProject" class="sidebar-delete-btn">
-            删除应用
-          </el-button>
         </div>
       </aside>
-
-      <!-- Project Settings Modal -->
-      <ProjectSettingsModal
-        v-model="projectSettingsVisible"
-        :project="editingProject"
-        @saved="onProjectSaved"
-      />
 
       <!-- Main Content -->
       <div class="main-content">
@@ -341,6 +277,29 @@
     </div>
 
       </div>
+
+      <!-- Preview Panel -->
+      <aside v-if="showPreviewPanel && previewUrl" class="preview-panel">
+        <div class="preview-panel-header">
+          <span class="preview-panel-title">📦 组件预览</span>
+          <div class="preview-panel-actions">
+            <el-button text size="small" @click="refreshPreview" title="刷新预览">
+              <el-icon><RefreshRight /></el-icon>
+            </el-button>
+            <el-button text size="small" @click="showPreviewPanel = false" title="关闭">
+              ✕
+            </el-button>
+          </div>
+        </div>
+        <iframe
+          :key="previewKey"
+          :src="previewUrl"
+          class="preview-panel-iframe"
+          frameborder="0"
+          sandbox="allow-scripts allow-same-origin allow-popups"
+        ></iframe>
+      </aside>
+
     </div>
   </div>
 </template>
@@ -350,15 +309,12 @@ import { API_PREFIX } from '@/utils/request'
 import { ref, computed, onMounted, nextTick, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ArrowLeft, FolderOpened, Upload, Menu, TopRight, Monitor, Plus, Setting, Paperclip, Goods } from '@element-plus/icons-vue'
+import { ArrowLeft, FolderOpened, Upload, Menu, TopRight, Monitor, Plus, Setting, Paperclip, Goods, RefreshRight } from '@element-plus/icons-vue'
 import { useCodingStore } from '@/stores/coding'
 import type { PipelineStep, ChatMessage } from '@/stores/coding'
 import { useUserStore } from '@/stores/user'
 import { codingApi } from '@/api/coding'
 import type { GeneratedFile, WorkspaceInfo, UploadResult } from '@/api/coding'
-import { projectsApi } from '@/api/projects'
-import type { Project } from '@/api/projects'
-import ProjectSettingsModal from '@/components/ProjectSettingsModal.vue'
 import ThemeToggle from '@/components/ThemeToggle.vue'
 
 const router = useRouter()
@@ -377,6 +333,9 @@ const isPageDev = computed(() => devType.value === 'page')
 const existingWorkspaces = ref<WorkspaceInfo[]>([])
 const isPublishing = ref(false)
 const isDebugging = ref(false)
+const showPreviewPanel = ref(false)
+const previewUrl = ref<string | null>(null)
+const previewKey = ref(0) // 用于刷新 iframe
 
 // ============ Workspace Grouping ============
 const collapsedGroups = ref(new Set<string>())
@@ -428,15 +387,6 @@ const isUploading = ref(false)
 const fileInputRef = ref<HTMLInputElement>()
 
 // ============ Projects ============
-const projects = ref<Project[]>([])
-const currentProjectId = ref<number | null>(null)
-const projectSettingsVisible = ref(false)
-const editingProject = ref<Project | null>(null)
-
-const currentProject = computed(() => {
-  if (!currentProjectId.value) return null
-  return projects.value.find(p => p.id === currentProjectId.value) || null
-})
 
 // ============ Suggestions ============
 
@@ -527,28 +477,11 @@ const inputPlaceholder = computed(() => {
 // ============ Lifecycle ============
 
 onMounted(async () => {
-  // Load projects
+  // Load all workspaces
   try {
-    projects.value = await projectsApi.list()
+    existingWorkspaces.value = await codingApi.listWorkspaces()
   } catch (e) {
-    console.error('获取项目列表失败:', e)
-  }
-
-  // Restore last selected project
-  const lastProjectId = localStorage.getItem('coding_last_project_id')
-  if (lastProjectId && projects.value.some(p => p.id === Number(lastProjectId))) {
-    currentProjectId.value = Number(lastProjectId)
-    await loadProjectWorkspaces()
-  } else if (projects.value.length > 0) {
-    currentProjectId.value = projects.value[0].id
-    await loadProjectWorkspaces()
-  } else {
-    // No projects: load all workspaces (backward compatibility)
-    try {
-      existingWorkspaces.value = await codingApi.listWorkspaces()
-    } catch (e) {
-      console.error('获取工作区列表失败:', e)
-    }
+    console.error('获取工作区列表失败:', e)
   }
 
   // If workspace_id in query, open it
@@ -568,76 +501,6 @@ onMounted(async () => {
     await restoreConversation(Number(convId))
   }
 })
-
-// ============ Project operations ============
-
-async function loadProjectWorkspaces() {
-  if (!currentProjectId.value) {
-    existingWorkspaces.value = []
-    return
-  }
-  try {
-    // Load all user workspaces and filter by project_id
-    const allWs = await codingApi.listWorkspaces()
-    existingWorkspaces.value = allWs.filter(
-      (ws: any) => ws.project_id === currentProjectId.value
-    )
-  } catch (e) {
-    console.error('获取工作区列表失败:', e)
-    existingWorkspaces.value = []
-  }
-}
-
-async function onProjectChange(projectId: number) {
-  currentProjectId.value = projectId
-  localStorage.setItem('coding_last_project_id', String(projectId))
-  codingStore.reset()
-  localStorage.removeItem('coding_last_workspace_id')
-  await loadProjectWorkspaces()
-}
-
-function showCreateProject() {
-  editingProject.value = null
-  projectSettingsVisible.value = true
-}
-
-function showProjectSettings() {
-  editingProject.value = currentProject.value
-  projectSettingsVisible.value = true
-}
-
-async function onProjectSaved(project: Project) {
-  // Refresh project list
-  try {
-    projects.value = await projectsApi.list()
-  } catch { /* ignore */ }
-
-  // Select the saved project
-  currentProjectId.value = project.id
-  localStorage.setItem('coding_last_project_id', String(project.id))
-  await loadProjectWorkspaces()
-}
-
-async function deleteProject() {
-  if (!currentProject.value) return
-  try {
-    await projectsApi.delete(currentProject.value.id)
-    projects.value = projects.value.filter(p => p.id !== currentProject.value!.id)
-    localStorage.removeItem('coding_last_project_id')
-    codingStore.reset()
-    existingWorkspaces.value = []
-    if (projects.value.length > 0) {
-      currentProjectId.value = projects.value[0].id
-      localStorage.setItem('coding_last_project_id', String(currentProjectId.value))
-      await loadProjectWorkspaces()
-    } else {
-      currentProjectId.value = null
-    }
-    ElMessage.success('应用已删除')
-  } catch (e: any) {
-    ElMessage.error(e.message || '删除失败')
-  }
-}
 
 // ============ Workspace operations ============
 
@@ -844,7 +707,6 @@ async function sendMessage() {
       workspace_id: codingStore.workspace?.id || null,
       conversation_id: codingStore.conversationId || null,
       app_id: (route.query.app_id as string) || null,
-      project_id: currentProjectId.value || null,
       project_type: _projectType,
     }
 
@@ -901,7 +763,7 @@ async function sendMessage() {
                 codingStore.workspacePath = parsed.data.workspace_path || null
                 localStorage.setItem('coding_last_workspace_id', wsData.id)
                 // 刷新左侧工作区列表
-                try { await loadProjectWorkspaces() } catch {}
+                try { existingWorkspaces.value = await codingApi.listWorkspaces() } catch {}
 
               }
 
@@ -917,7 +779,8 @@ async function sendMessage() {
               codingStore.streamContent = fullContent
               scrollToBottom()
             } else if (parsed.type === 'agent_thinking_delta') {
-              // Streaming thinking delta — append character by character
+              // Streaming thinking delta — remove thinking indicator and append
+              fullContent = fullContent.replace(/\n🤔 AI 正在思考中...\n$/, '\n')
               fullContent += parsed.content
               codingStore.streamContent = fullContent
               scrollToBottom()
@@ -930,7 +793,8 @@ async function sendMessage() {
               }
               scrollToBottom()
             } else if (parsed.type === 'agent_tool') {
-              // Agent tool call — formatted card-like display
+              // Agent tool call — remove thinking indicator and show tool
+              fullContent = fullContent.replace(/\n🤔 AI 正在思考中...\n$/, '\n')
               const toolDisplay = parsed.tool_display || parsed.tool
               const preview = parsed.input_preview || ''
               fullContent += `\n🔧 **${toolDisplay}** \`${preview}\`\n`
@@ -971,7 +835,17 @@ async function sendMessage() {
               // Store screenshot URL for display
               currentScreenshots.push(parsed.url)
             } else if (parsed.type === 'heartbeat') {
-              // Agent 心跳，保持连接
+              // Agent 心跳 — 显示思考中状态让用户知道 Agent 还在工作
+              if (!fullContent.endsWith('🤔 AI 正在思考中...\n') && !fullContent.endsWith('...\n')) {
+                // Only add thinking indicator if last line isn't already one
+                const lines = fullContent.split('\n')
+                const lastLine = lines[lines.length - 1] || lines[lines.length - 2] || ''
+                if (!lastLine.includes('正在思考') && !lastLine.includes('正在生成')) {
+                  fullContent += '\n🤔 AI 正在思考中...\n'
+                  codingStore.streamContent = fullContent
+                  scrollToBottom()
+                }
+              }
               continue
             } else if (parsed.type === 'scene_detected') {
               codingStore.conversationId = parsed.conversation_id
@@ -1023,7 +897,7 @@ async function sendMessage() {
     // Refresh workspace file list
     if (codingStore.workspace) {
       try {
-        await loadProjectWorkspaces()
+        existingWorkspaces.value = await codingApi.listWorkspaces()
       } catch { /* ignore */ }
     }
 
@@ -1094,41 +968,30 @@ async function deleteWorkspace(ws: WorkspaceInfo) {
   }
 }
 
-function handleDebug(mode: string) {
-  debugProject(mode as 'app' | 'platform')
-}
-
-async function debugProject(debugMode: 'app' | 'platform' = 'app') {
+async function handlePreview() {
   if (!codingStore.workspace || isDebugging.value) return
   isDebugging.value = true
   try {
-    const token = userStore.token
-    const resp = await fetch(`${API_PREFIX}/coding/workspace/${codingStore.workspace.id}/debug`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        project_id: currentProjectId.value || null,
-        platform_url: currentProject.value?.platform_url ? undefined : 'https://apaas-dev8.dfy.definesys.cn/platform/',
-        tenant_id: currentProject.value?.platform_tenant_id || '566642786573484033',
-        app_id: currentProject.value?.platform_app_id || '806997227284201472',
-        debug_mode: debugMode,
-      }),
-    })
-    const result = await resp.json()
+    const result = await codingApi.preview(codingStore.workspace.id)
     if (result.status === 'ok') {
-      const modeLabel = debugMode === 'app' ? '应用前台' : '平台设计器'
-      ElMessage.success(`Debug 已启动（${modeLabel}）！请在 Chromium 中登录后 F5 刷新`)
+      // preview_url 已经是 /api/coding/... 格式，用 BASE_URL 拼接即可
+      const basePath = import.meta.env.BASE_URL || '/'
+      previewUrl.value = basePath + result.preview_url.replace(/^\//, '')
+      showPreviewPanel.value = true
+      previewKey.value++
+      ElMessage.success(result.build_message || '预览已就绪')
     } else {
-      ElMessage.error(result.message || result.detail || 'Debug 启动失败')
+      ElMessage.error('预览构建失败')
     }
   } catch (error: any) {
-    ElMessage.error(error.message || 'Debug 启动失败')
+    ElMessage.error(error?.response?.data?.detail || error.message || '预览失败')
   } finally {
     isDebugging.value = false
   }
+}
+
+function refreshPreview() {
+  previewKey.value++
 }
 
 // ============ File Parsing ============
@@ -1274,8 +1137,16 @@ function escapeHtml(str: string): string {
 }
 
 function renderMarkdown(content: string): string {
+  // Handle unclosed code blocks during streaming (prevent regex from eating everything)
+  let safeContent = content
+  const backtickCount = (safeContent.match(/```/g) || []).length
+  if (backtickCount % 2 !== 0) {
+    // Odd number of ``` means unclosed block — add closing
+    safeContent += '\n```'
+  }
+
   // 先处理 file 代码块（可折叠，默认展开显示代码）
-  let result = content.replace(/```file:([^\n]+)\n([\s\S]*?)```/g, (_m, path: string, code: string) => {
+  let result = safeContent.replace(/```file:([^\n]+)\n([\s\S]*?)```/g, (_m, path: string, code: string) => {
     const fileName = path.trim().split('/').pop() || path.trim()
     const escapedCode = escapeHtml(code.trim())
     const lineCount = code.trim().split('\n').length
@@ -1309,10 +1180,15 @@ function previewScreenshot(url: string) {
   window.open(url, '_blank')
 }
 
+let _scrollTimer: ReturnType<typeof setTimeout> | null = null
 function scrollToBottom() {
-  nextTick(() => {
-    scrollAnchor.value?.scrollIntoView({ behavior: 'smooth' })
-  })
+  // Debounce scroll to avoid animation stacking during rapid SSE events
+  if (_scrollTimer) clearTimeout(_scrollTimer)
+  _scrollTimer = setTimeout(() => {
+    nextTick(() => {
+      scrollAnchor.value?.scrollIntoView({ behavior: 'auto' })
+    })
+  }, 100)
 }
 
 // Auto scroll when new messages appear
@@ -2343,5 +2219,43 @@ watch(() => route.path, () => {
 .coding-page :deep(.el-button--success:hover) {
   background: rgba(74, 222, 128, 0.25);
   border-color: rgba(74, 222, 128, 0.45);
+}
+
+/* ============ Preview Panel ============ */
+.preview-panel {
+  width: 420px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--t-border-subtle);
+  background: var(--t-bg-base);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.preview-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--t-border-subtle);
+  background: var(--t-bg-elevated);
+}
+
+.preview-panel-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--t-text-primary);
+}
+
+.preview-panel-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.preview-panel-iframe {
+  flex: 1;
+  width: 100%;
+  border: none;
+  background: #fff;
 }
 </style>

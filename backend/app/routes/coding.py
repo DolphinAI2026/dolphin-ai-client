@@ -1167,7 +1167,7 @@ async def auto_pipeline(
             logger.exception("auto-pipeline 错误")
             yield _sse({"type": "error", "message": str(e)})
 
-    return EventSourceResponse(pipeline_events())
+    return EventSourceResponse(pipeline_events(), ping=15)
 
 
 @router.post("/workspace/{ws_id}/serve")
@@ -1504,3 +1504,101 @@ async def _is_new_component_intent(generator: CodingGenerator, message: str, ws_
     except Exception as e:
         logger.warning(f"意图判断失败: {e}")
         return False
+
+
+# ========== 组件预览 ==========
+
+from fastapi.responses import HTMLResponse, FileResponse as StaticFileResponse
+from app.coding.preview import generate_preview_html
+
+
+@router.post("/workspace/{ws_id}/preview")
+async def preview_workspace(ws_id: str):
+    """触发构建（如需）并返回预览 URL"""
+    ws_path = WORKSPACE_ROOT / ws_id
+    if not ws_path.exists():
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
+    # 按需构建
+    ws_mgr = WorkspaceManager()
+    build_result = await ws_mgr.build_if_needed(ws_id)
+    if build_result.get("status") == "error":
+        raise HTTPException(status_code=500, detail=f"构建失败: {build_result.get('message', '')}")
+
+    # 读取 apaas.json
+    apaas_json_path = ws_path / "src" / "apaas.json"
+    apaas_config = {}
+    if apaas_json_path.exists():
+        with open(apaas_json_path, "r", encoding="utf-8") as f:
+            apaas_config = json.load(f)
+
+    output_name = apaas_config.get("outputName", ws_id)
+    template_type = apaas_config.get("templateType", "FORM_COMPONENT")
+
+    return {
+        "status": "ok",
+        "preview_url": f"/api/coding/workspace/{ws_id}/preview/sandbox",
+        "output_name": output_name,
+        "template_type": template_type,
+        "build_message": build_result.get("message", ""),
+    }
+
+
+@router.get("/workspace/{ws_id}/preview/sandbox")
+async def preview_sandbox(ws_id: str):
+    """返回预览沙箱 HTML 页面"""
+    ws_path = WORKSPACE_ROOT / ws_id
+    if not ws_path.exists():
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
+    # 读取 apaas.json
+    apaas_json_path = ws_path / "src" / "apaas.json"
+    apaas_config = {}
+    if apaas_json_path.exists():
+        with open(apaas_json_path, "r", encoding="utf-8") as f:
+            apaas_config = json.load(f)
+
+    output_name = apaas_config.get("outputName", ws_id)
+    template_type = apaas_config.get("templateType", "FORM_COMPONENT")
+    dist_base_url = f"/api/coding/workspace/{ws_id}/preview/dist"
+
+    html = generate_preview_html(template_type, apaas_config, dist_base_url, output_name)
+    return HTMLResponse(content=html)
+
+
+@router.get("/workspace/{ws_id}/preview/dist/{filename:path}")
+async def preview_dist_file(ws_id: str, filename: str):
+    """静态服务 dist 目录下的文件"""
+    ws_path = WORKSPACE_ROOT / ws_id
+    file_path = ws_path / "dist" / filename
+
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(status_code=404, detail=f"File not found: {filename}")
+
+    # 安全检查：确保文件在 dist 目录下
+    try:
+        file_path.resolve().relative_to((ws_path / "dist").resolve())
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # 确定 MIME 类型
+    suffix = file_path.suffix.lower()
+    media_types = {
+        ".js": "application/javascript",
+        ".css": "text/css",
+        ".json": "application/json",
+        ".map": "application/json",
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".svg": "image/svg+xml",
+        ".woff": "font/woff",
+        ".woff2": "font/woff2",
+        ".ttf": "font/ttf",
+    }
+    media_type = media_types.get(suffix, "application/octet-stream")
+
+    return StaticFileResponse(
+        path=str(file_path),
+        media_type=media_type,
+        headers={"Cache-Control": "no-cache"},
+    )

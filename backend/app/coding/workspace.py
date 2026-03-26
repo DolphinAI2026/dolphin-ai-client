@@ -133,6 +133,12 @@ class WorkspaceManager:
         elif project_type == ProjectType.WEB_LOGIN:
             self._scaffold_web_login(ws_path, safe_name)
 
+        # 生成 VS Code AI Chat 配置（接入 LLM）
+        try:
+            self._setup_vscode_ai_config(ws_path)
+        except Exception as e:
+            logger.warning(f"Failed to setup VS Code AI config: {e}")
+
         # 更新状态
         meta["status"] = WorkspaceStatus.READY.value
         (ws_path / ".workspace.json").write_text(
@@ -188,6 +194,39 @@ class WorkspaceManager:
             meta["status"] = WorkspaceStatus.ERROR.value
             self._write_meta(ws_path, meta)
             return {"status": "error", "message": str(e)}
+
+    async def build_if_needed(self, ws_id: str) -> dict:
+        """按需构建 - 仅在 src 文件比 dist 更新时重新构建"""
+        ws_path = WORKSPACE_ROOT / ws_id
+        if not ws_path.exists():
+            raise FileNotFoundError(f"Workspace {ws_id} not found")
+
+        dist_path = ws_path / "dist"
+        src_path = ws_path / "src"
+
+        # 如果 dist 不存在，必须构建
+        if not dist_path.exists():
+            return await self.build_project(ws_id)
+
+        # 比较 src 和 dist 的最新修改时间
+        def _latest_mtime(directory: Path) -> float:
+            latest = 0
+            for f in directory.rglob("*"):
+                if f.is_file() and not f.name.startswith("."):
+                    mtime = f.stat().st_mtime
+                    if mtime > latest:
+                        latest = mtime
+            return latest
+
+        src_mtime = _latest_mtime(src_path) if src_path.exists() else 0
+        dist_mtime = _latest_mtime(dist_path)
+
+        if src_mtime > dist_mtime:
+            logger.info(f"[build_if_needed] src is newer, rebuilding {ws_id}")
+            return await self.build_project(ws_id)
+        else:
+            logger.info(f"[build_if_needed] dist is up-to-date for {ws_id}")
+            return {"status": "ok", "message": "已是最新，无需重新构建"}
 
     async def build_project(self, ws_id: str) -> dict:
         """构建项目"""
@@ -907,6 +946,74 @@ dist/
 
         # HTTPS 自签名证书（debug 模式必需）
         self._generate_https_cert(ws_path)
+
+    # ========== VS Code AI 配置 ==========
+
+    def _setup_vscode_ai_config(self, ws_path: Path):
+        """为 workspace 生成 VS Code AI Chat 配置，接入 LLM（如 MiniMax）"""
+        from app.config import settings
+
+        api_base = settings.llm_api_base.rstrip("/")
+        api_key = settings.llm_api_key
+        model = settings.llm_model
+
+        if not api_key:
+            return
+
+        # ---- .vscode/settings.json ----
+        vscode_dir = ws_path / ".vscode"
+        vscode_dir.mkdir(exist_ok=True)
+
+        vscode_settings = {
+            # Continue 扩展配置（OpenAI 兼容端点）
+            "continue.enableTabAutocomplete": True,
+            # GitHub Copilot Chat 自定义模型（VS Code 1.99+）
+            "github.copilot.chat.models": [
+                {
+                    "vendor": "copilot",
+                    "family": "openai-compatible",
+                    "id": model,
+                    "url": f"{api_base}/v1/chat/completions",
+                    "headers": {
+                        "Authorization": f"Bearer {api_key}"
+                    },
+                }
+            ],
+        }
+
+        settings_file = vscode_dir / "settings.json"
+        settings_file.write_text(
+            json.dumps(vscode_settings, ensure_ascii=False, indent=2)
+        )
+
+        # ---- .continue/config.json（Continue 扩展的配置） ----
+        continue_dir = ws_path / ".continue"
+        continue_dir.mkdir(exist_ok=True)
+
+        continue_config = {
+            "models": [
+                {
+                    "title": f"MiniMax ({model})",
+                    "provider": "openai",
+                    "model": model,
+                    "apiBase": f"{api_base}/v1",
+                    "apiKey": api_key,
+                }
+            ],
+            "tabAutocompleteModel": {
+                "title": "MiniMax Autocomplete",
+                "provider": "openai",
+                "model": model,
+                "apiBase": f"{api_base}/v1",
+                "apiKey": api_key,
+            },
+            "allowAnonymousTelemetry": False,
+        }
+
+        continue_file = continue_dir / "config.json"
+        continue_file.write_text(
+            json.dumps(continue_config, ensure_ascii=False, indent=2)
+        )
 
     # ========== 脚手架模板 ==========
 

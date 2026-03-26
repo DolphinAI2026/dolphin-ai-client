@@ -212,6 +212,13 @@ export const codingApi = {
     return resp.blob()
   },
 
+  /** 预览组件（触发构建 + 返回预览 URL） */
+  preview(wsId: string) {
+    return request.post<any, { status: string; preview_url: string; output_name: string; template_type: string; build_message: string }>(
+      `/coding/workspace/${wsId}/preview`, {}, { timeout: 300000 }
+    )
+  },
+
   /** 上传文件（图片/文档附件） */
   async uploadFile(file: File, workspaceId?: string): Promise<UploadResult> {
     const token = localStorage.getItem('token') || ''
