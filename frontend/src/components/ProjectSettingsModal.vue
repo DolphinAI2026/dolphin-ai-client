@@ -477,18 +477,18 @@ async function handleSave() {
 <style lang="less">
 /* ===== 弹窗外壳 ===== */
 .el-dialog.project-settings-modal {
-  background: #111;
-  border: 1px solid rgba(255,255,255,0.06);
+  background: var(--t-bg-base);
+  border: 1px solid var(--t-border-subtle);
   border-radius: 16px;
   overflow: hidden;
 }
 .project-settings-modal .el-dialog__header {
-  border-bottom: 1px solid rgba(255,255,255,0.06);
+  border-bottom: 1px solid var(--t-border-subtle);
   padding: 16px 20px;
   margin-right: 0;
 }
 .project-settings-modal .el-dialog__title {
-  color: rgba(255,255,255,0.9);
+  color: var(--t-text-primary);
   font-weight: 600;
 }
 .project-settings-modal .el-dialog__body {
@@ -497,13 +497,13 @@ async function handleSave() {
   overflow: hidden;
 }
 .project-settings-modal .el-dialog__headerbtn .el-dialog__close {
-  color: rgba(255,255,255,0.4);
+  color: var(--t-text-muted);
 }
 .project-settings-modal .el-dialog__headerbtn .el-dialog__close:hover {
-  color: rgba(255,255,255,0.7);
+  color: var(--t-text-secondary);
 }
 .project-settings-modal .el-dialog__footer {
-  border-top: 1px solid rgba(255,255,255,0.06);
+  border-top: 1px solid var(--t-border-subtle);
   padding: 14px 20px;
 }
 
@@ -517,8 +517,8 @@ async function handleSave() {
 .project-settings-modal .settings-tabs {
   width: 140px;
   min-width: 140px;
-  background: #0a0a0a;
-  border-right: 1px solid rgba(255,255,255,0.06);
+  background: var(--t-bg-base);
+  border-right: 1px solid var(--t-border-subtle);
   padding: 8px 0;
   display: flex;
   flex-direction: column;
@@ -527,20 +527,20 @@ async function handleSave() {
 .project-settings-modal .settings-tab-item {
   padding: 10px 20px;
   font-size: 13px;
-  color: rgba(255,255,255,0.4);
+  color: var(--t-text-muted);
   cursor: pointer;
   transition: all 0.2s;
   border-left: 3px solid transparent;
   user-select: none;
 }
 .project-settings-modal .settings-tab-item:hover {
-  color: rgba(255,255,255,0.65);
-  background: rgba(255,255,255,0.03);
+  color: var(--t-text-secondary);
+  background: var(--t-bg-subtle);
 }
 .project-settings-modal .settings-tab-item.active {
-  color: #a78bfa;
-  background: rgba(124,58,237,0.08);
-  border-left-color: #7c3aed;
+  color: var(--t-brand-light);
+  background: var(--t-brand-subtle);
+  border-left-color: var(--t-brand);
 }
 
 /* 右侧内容区 */
@@ -550,7 +550,7 @@ async function handleSave() {
   overflow-y: auto;
   overflow-x: hidden;
   padding: 20px 24px;
-  background: #111;
+  background: var(--t-bg-base);
 }
 .project-settings-modal .settings-content::-webkit-scrollbar {
   width: 5px;
@@ -559,7 +559,7 @@ async function handleSave() {
   background: transparent;
 }
 .project-settings-modal .settings-content::-webkit-scrollbar-thumb {
-  background: rgba(255,255,255,0.1);
+  background: var(--t-border-strong);
   border-radius: 3px;
 }
 .project-settings-modal .settings-content::-webkit-scrollbar-thumb:hover {
@@ -572,52 +572,52 @@ async function handleSave() {
 
 /* ===== 表单元素 ===== */
 .project-settings-modal .el-form-item__label {
-  color: rgba(255,255,255,0.55);
+  color: var(--t-text-secondary);
   font-size: 13px;
 }
 .project-settings-modal .el-input__wrapper {
-  background: #161622;
-  border: 1px solid rgba(255,255,255,0.08);
+  background: var(--t-bg-elevated);
+  border: 1px solid var(--t-border-subtle);
   box-shadow: none;
   border-radius: 10px;
 }
 .project-settings-modal .el-input__wrapper:hover {
-  border-color: rgba(255,255,255,0.15);
+  border-color: var(--t-border-strong);
 }
 .project-settings-modal .el-input__wrapper.is-focus {
-  border-color: #7c3aed;
-  box-shadow: 0 0 0 3px rgba(124,58,237,0.15);
+  border-color: var(--t-brand);
+  box-shadow: 0 0 0 3px var(--t-brand-subtle);
 }
 .project-settings-modal .el-input__inner {
-  color: rgba(255,255,255,0.9);
+  color: var(--t-text-primary);
 }
 .project-settings-modal .el-input__inner::placeholder {
-  color: rgba(255,255,255,0.25);
+  color: var(--t-text-muted);
 }
 .project-settings-modal .el-textarea__inner {
-  background: #161622;
-  border: 1px solid rgba(255,255,255,0.08);
-  color: rgba(255,255,255,0.9);
+  background: var(--t-bg-elevated);
+  border: 1px solid var(--t-border-subtle);
+  color: var(--t-text-primary);
   border-radius: 10px;
   box-shadow: none;
 }
 .project-settings-modal .el-textarea__inner:focus {
-  border-color: #7c3aed;
-  box-shadow: 0 0 0 3px rgba(124,58,237,0.15);
+  border-color: var(--t-brand);
+  box-shadow: 0 0 0 3px var(--t-brand-subtle);
 }
 .project-settings-modal .el-textarea__inner::placeholder {
-  color: rgba(255,255,255,0.25);
+  color: var(--t-text-muted);
 }
 .project-settings-modal .el-select .el-select__wrapper {
-  background: #161622;
-  border: 1px solid rgba(255,255,255,0.08);
+  background: var(--t-bg-elevated);
+  border: 1px solid var(--t-border-subtle);
   box-shadow: none;
   border-radius: 10px;
 }
 
 /* ===== 按钮 ===== */
 .project-settings-modal .el-button--primary {
-  background: linear-gradient(135deg, #7c3aed, #6366f1);
+  background: var(--t-brand-gradient);
   border: none;
   border-radius: 10px;
 }
@@ -625,14 +625,14 @@ async function handleSave() {
   opacity: 0.9;
 }
 .project-settings-modal .el-button--default {
-  background: #161622;
-  border: 1px solid rgba(255,255,255,0.08);
-  color: rgba(255,255,255,0.7);
+  background: var(--t-bg-elevated);
+  border: 1px solid var(--t-border-subtle);
+  color: var(--t-text-secondary);
   border-radius: 10px;
 }
 .project-settings-modal .el-button--default:hover {
-  border-color: rgba(255,255,255,0.18);
-  color: rgba(255,255,255,0.85);
+  border-color: var(--t-border-strong);
+  color: var(--t-text-primary);
 }
 
 /* ===== 内嵌 Tabs（账号登录/Token直连） ===== */
@@ -640,38 +640,38 @@ async function handleSave() {
   margin-bottom: 8px;
 }
 .project-settings-modal .el-tabs__item {
-  color: rgba(255,255,255,0.45);
+  color: var(--t-text-muted);
 }
 .project-settings-modal .el-tabs__item.is-active {
-  color: #a78bfa;
+  color: var(--t-brand-light);
 }
 .project-settings-modal .el-tabs__active-bar {
-  background: linear-gradient(135deg, #7c3aed, #6366f1);
+  background: var(--t-brand-gradient);
 }
 .project-settings-modal .el-tabs__nav-wrap::after {
-  background-color: rgba(255,255,255,0.06);
+  background-color: var(--t-border-subtle);
 }
 
 /* ===== Alert ===== */
 .project-settings-modal .el-alert--info {
-  background: rgba(124,58,237,0.08);
-  border: 1px solid rgba(124,58,237,0.15);
+  background: var(--t-brand-subtle);
+  border: 1px solid var(--t-brand-subtle);
 }
 .project-settings-modal .el-alert--info .el-alert__description,
 .project-settings-modal .el-alert--info .el-alert__title {
-  color: rgba(255,255,255,0.6);
+  color: var(--t-text-secondary);
 }
 
 /* ===== Tag ===== */
 .project-settings-modal .el-tag--info {
-  background: rgba(255,255,255,0.06);
-  border-color: rgba(255,255,255,0.08);
-  color: rgba(255,255,255,0.5);
+  background: var(--t-bg-subtle);
+  border-color: var(--t-border-subtle);
+  color: var(--t-text-secondary);
 }
 .project-settings-modal .el-tag--success {
   background: rgba(52,211,153,0.1);
   border-color: rgba(52,211,153,0.2);
-  color: #34d399;
+  color: var(--t-success);
 }
 
 /* ===== 团队成员 ===== */
@@ -687,7 +687,7 @@ async function handleSave() {
   display: flex;
   align-items: center;
   gap: 6px;
-  color: rgba(255,255,255,0.4);
+  color: var(--t-text-muted);
   font-size: 13px;
   padding: 8px 0;
 }
@@ -701,23 +701,23 @@ async function handleSave() {
   align-items: center;
   padding: 10px 12px;
   border-radius: 10px;
-  background: #161622;
-  border: 1px solid rgba(255,255,255,0.06);
+  background: var(--t-bg-elevated);
+  border: 1px solid var(--t-border-subtle);
   gap: 8px;
   transition: border-color 0.2s;
 }
 .project-settings-modal .member-item:hover {
-  border-color: rgba(255,255,255,0.1);
+  border-color: var(--t-border-strong);
 }
 .project-settings-modal .member-name {
-  color: rgba(255,255,255,0.85);
+  color: var(--t-text-primary);
   font-size: 13px;
 }
 .project-settings-modal .member-role-tag {
   flex-shrink: 0;
 }
 .project-settings-modal .no-members {
-  color: rgba(255,255,255,0.3);
+  color: var(--t-text-muted);
   font-size: 13px;
   text-align: center;
   padding: 24px 0;

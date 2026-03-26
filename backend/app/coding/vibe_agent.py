@@ -1,8 +1,9 @@
 """
-VibeCodingAgent - 基于 Claude Agent SDK 的 aPaaS 组件开发 Agent
+VibeCodingAgent - OpenAI-compatible API agent for aPaaS component development
 
-替代原有的一次性代码生成模式，实现：
-  用户需求 → Agent 循环：读文件 → 写代码 → 跑命令 → 看报错 → 改代码 → 直到成功
+Replaces the Claude Agent SDK with direct httpx calls using OpenAI function-calling format.
+Implements an autonomous agent loop:
+  User requirement -> LLM -> tool calls -> execute tools -> feed results back -> repeat until done
 """
 
 import json
@@ -10,19 +11,8 @@ import logging
 from pathlib import Path
 from typing import AsyncIterator
 
-from claude_agent_sdk import (
-    query,
-    ClaudeAgentOptions,
-    AssistantMessage,
-    ResultMessage,
-    SystemMessage,
-    TextBlock,
-    ThinkingBlock,
-    ToolUseBlock,
-    ToolResultBlock,
-    StreamEvent,
-    PermissionResultAllow,
-)
+import httpx
+
 from app.coding.workspace import WorkspaceManager, WORKSPACE_ROOT
 
 logger = logging.getLogger(__name__)
@@ -30,13 +20,12 @@ logger = logging.getLogger(__name__)
 
 # Tool display names for frontend
 TOOL_ICONS = {
-    "Read": "\U0001f4c2 Read",
-    "Write": "\U0001f4dd Write",
-    "Edit": "\u270f\ufe0f Edit",
-    "Bash": "\u26a1 Bash",
-    "Glob": "\U0001f50d Glob",
-    "Grep": "\U0001f50e Grep",
-    "MultiEdit": "\u270f\ufe0f MultiEdit",
+    "read_file": "\U0001f4c2 Read",
+    "write_file": "\U0001f4dd Write",
+    "edit_file": "\u270f\ufe0f Edit",
+    "run_command": "\u26a1 Command",
+    "glob_files": "\U0001f50d Glob",
+    "grep_search": "\U0001f50e Grep",
 }
 
 
@@ -49,12 +38,12 @@ def _truncate(s: str, maxlen: int = 300) -> str:
 
 class VibeCodingAgent:
     """
-    Wraps the Claude Agent SDK to perform autonomous coding within an aPaaS workspace.
+    Wraps an OpenAI-compatible API to perform autonomous coding within an aPaaS workspace.
     Agent runs in a background asyncio.Task. Events are pushed to an asyncio.Queue.
-    SSE consumers read from the queue — if SSE disconnects, the agent keeps running.
+    SSE consumers read from the queue -- if SSE disconnects, the agent keeps running.
     """
 
-    # 全局注册表：{ws_id: {"task": Task, "queue": Queue, "events": list, "done": bool}}
+    # Global registry: {ws_id: {"task": Task, "queue": Queue, "events": list, "done": bool}}
     _running_agents: dict = {}
 
     def __init__(self, ws_id: str, system_prompt: str | None = None):
@@ -83,11 +72,11 @@ class VibeCodingAgent:
                 logger.info(f"Agent already running for {self.ws_id}")
                 return "already_running"
 
-        # 创建事件队列
+        # Create event queue
         event_queue: asyncio.Queue = asyncio.Queue(maxsize=500)
         events_history: list = []
 
-        # 启动后台任务
+        # Start background task
         task = asyncio.create_task(
             self._run_background(requirement, conversation_summary, max_turns, model, event_queue, events_history)
         )
@@ -104,7 +93,7 @@ class VibeCodingAgent:
     async def stream_events(self) -> AsyncIterator[dict]:
         """
         Consume events from a running agent. Can be called multiple times
-        (e.g., after SSE reconnect) — missed events are replayed from history.
+        (e.g., after SSE reconnect) -- missed events are replayed from history.
         """
         import asyncio
 
@@ -116,11 +105,11 @@ class VibeCodingAgent:
         queue = info["queue"]
         events = info["events"]
 
-        # 先回放已有的事件历史（处理重连场景）
+        # Replay existing event history (handles reconnect scenario)
         for event in events:
             yield event
 
-        # 然后从队列实时消费新事件
+        # Then consume new events from queue in real-time
         while True:
             try:
                 event = await asyncio.wait_for(queue.get(), timeout=1.0)
@@ -128,10 +117,10 @@ class VibeCodingAgent:
                 if event.get("type") in ("agent_done", "agent_error"):
                     break
             except asyncio.TimeoutError:
-                # 检查 Agent 是否已完成
+                # Check if agent has finished
                 if info["done"]:
                     break
-                # 发心跳保持 SSE 连接
+                # Send heartbeat to keep SSE connection alive
                 yield {"type": "heartbeat"}
 
     async def _run_background(
@@ -144,37 +133,158 @@ class VibeCodingAgent:
         events_history: list,
     ):
         """Background task that runs the agent loop and pushes events to queue."""
+        from app.coding.tools import TOOL_DEFINITIONS, execute_tool
+
         prompt = self._build_prompt(requirement, conversation_summary)
-        agent_env = self._load_agent_env()
-        agent_model = model or agent_env.get("ANTHROPIC_MODEL") or None
 
-        options = ClaudeAgentOptions(
-            allowed_tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "MultiEdit"],
-            system_prompt=self._system_prompt,
-            permission_mode="bypassPermissions",
-            max_turns=max_turns,
-            cwd=str(self.ws_path),
-            model=agent_model,
-            env=agent_env if agent_env else {},
-        )
+        # Load LLM config: try DB first, fall back to .env
+        base_url, api_key, llm_model = await self._load_llm_config(model)
 
-        try:
-            async for message in query(prompt=prompt, options=options):
-                converted = self._convert_message(message)
-                for event in converted:
-                    events_history.append(event)
-                    try:
-                        event_queue.put_nowait(event)
-                    except Exception:
-                        pass  # Queue full, skip (history still has it)
-        except Exception as e:
-            logger.exception("VibeCodingAgent background error")
-            error_event = {"type": "agent_error", "message": str(e)}
-            events_history.append(error_event)
+        messages = [{"role": "user", "content": prompt}]
+
+        def _emit(event: dict):
+            """Push event to queue and history."""
+            events_history.append(event)
             try:
-                event_queue.put_nowait(error_event)
+                event_queue.put_nowait(event)
             except Exception:
                 pass
+
+        turn = 0
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(connect=10, read=300, write=10, pool=10)
+            ) as client:
+                for turn in range(max_turns):
+                    # Build request payload
+                    payload = {
+                        "model": llm_model,
+                        "messages": [{"role": "system", "content": self._system_prompt}] + messages,
+                        "tools": TOOL_DEFINITIONS,
+                        "max_tokens": 8192,
+                        "temperature": 0.2,
+                        "stream": True,
+                    }
+
+                    # ── Streaming LLM call ──
+                    full_content = ""
+                    tool_calls_map: dict = {}  # index -> {id, name, arguments}
+
+                    async with client.stream(
+                        "POST",
+                        f"{base_url}/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json=payload,
+                    ) as stream:
+                        async for line in stream.aiter_lines():
+                            if not line.startswith("data: "):
+                                continue
+                            data_str = line[6:]
+                            if data_str.strip() == "[DONE]":
+                                break
+                            try:
+                                chunk = json.loads(data_str)
+                            except json.JSONDecodeError:
+                                continue
+
+                            delta = chunk.get("choices", [{}])[0].get("delta", {})
+
+                            # ── Streaming text content (thinking) ──
+                            if delta.get("content"):
+                                text = delta["content"]
+                                full_content += text
+                                _emit({"type": "agent_thinking_delta", "content": text})
+
+                            # ── Streaming tool calls ──
+                            if delta.get("tool_calls"):
+                                for tc_delta in delta["tool_calls"]:
+                                    idx = tc_delta.get("index", 0)
+                                    if idx not in tool_calls_map:
+                                        tool_calls_map[idx] = {
+                                            "id": tc_delta.get("id", ""),
+                                            "name": "",
+                                            "arguments": "",
+                                        }
+                                    entry = tool_calls_map[idx]
+                                    if tc_delta.get("id"):
+                                        entry["id"] = tc_delta["id"]
+                                    func = tc_delta.get("function", {})
+                                    if func.get("name"):
+                                        entry["name"] = func["name"]
+                                    if func.get("arguments"):
+                                        entry["arguments"] += func["arguments"]
+
+                    # ── End of thinking: emit full thinking block ──
+                    if full_content:
+                        _emit({"type": "agent_thinking", "content": full_content})
+
+                    # ── Reconstruct assistant message for conversation history ──
+                    assistant_msg: dict = {"role": "assistant", "content": full_content or None}
+                    assembled_tool_calls = []
+                    for idx in sorted(tool_calls_map.keys()):
+                        entry = tool_calls_map[idx]
+                        assembled_tool_calls.append({
+                            "id": entry["id"],
+                            "type": "function",
+                            "function": {"name": entry["name"], "arguments": entry["arguments"]},
+                        })
+                    if assembled_tool_calls:
+                        assistant_msg["tool_calls"] = assembled_tool_calls
+                    messages.append(assistant_msg)
+
+                    # ── If no tool_calls, agent is done ──
+                    if not assembled_tool_calls:
+                        break
+
+                    # ── Execute each tool call ──
+                    for tc in assembled_tool_calls:
+                        func_name = tc["function"]["name"]
+                        raw_args = tc["function"]["arguments"]
+                        try:
+                            func_args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                        except json.JSONDecodeError:
+                            func_args = {}
+
+                        # Emit tool event
+                        _emit({
+                            "type": "agent_tool",
+                            "tool": func_name,
+                            "tool_display": TOOL_ICONS.get(func_name, func_name),
+                            "input_preview": self._format_tool_input(func_name, func_args),
+                        })
+
+                        # Execute tool
+                        result = await execute_tool(func_name, func_args, self.ws_path)
+
+                        # Emit result event
+                        _emit({
+                            "type": "agent_result",
+                            "tool": func_name,
+                            "tool_display": TOOL_ICONS.get(func_name, func_name),
+                            "output_preview": _truncate(result, 500) if result else "(empty)",
+                        })
+
+                        # Add tool result to messages
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc["id"],
+                            "content": result,
+                        })
+
+            # Done event
+            _emit({
+                "type": "agent_done",
+                "result": "completed",
+                "num_turns": min(turn + 1, max_turns),
+                "is_error": False,
+            })
+
+        except Exception as e:
+            logger.exception("VibeCodingAgent background error")
+            _emit({"type": "agent_error", "message": str(e)})
         finally:
             if self.ws_id in self._running_agents:
                 self._running_agents[self.ws_id]["done"] = True
@@ -199,7 +309,7 @@ class VibeCodingAgent:
 
     @staticmethod
     def _load_agent_env() -> dict:
-        """直接从 .env 文件读取 Agent 相关的环境变量，不受宿主 Claude Code 影响"""
+        """Read agent-related env vars directly from .env file."""
         env = {}
         env_path = Path(__file__).parent.parent.parent / ".env"
         if not env_path.exists():
@@ -217,6 +327,39 @@ class VibeCodingAgent:
         except Exception:
             pass
         return env
+
+    async def _load_llm_config(self, model_override=None):
+        """Load LLM config from DB (preferred) or .env (fallback)."""
+        # Try DB first
+        try:
+            from app.database import AsyncSessionLocal
+            from app.routes.llm_configs import get_llm_config_for_purpose
+
+            async with AsyncSessionLocal() as db:
+                # Use tenant_id=1 as default (workspace doesn't carry tenant context)
+                config = await get_llm_config_for_purpose(db, tenant_id=1, purpose="coding")
+                if config:
+                    from app.crypto import decrypt_password
+
+                    return (
+                        config.base_url,
+                        decrypt_password(config.api_key_enc),
+                        model_override or config.model,
+                    )
+        except Exception:
+            pass
+
+        # Fallback to .env
+        env = self._load_agent_env()
+        base_url = env.get("ANTHROPIC_BASE_URL", "https://api.minimax.chat/v1")
+        # Convert Anthropic URL format to OpenAI-compatible
+        if "/anthropic" in base_url:
+            base_url = base_url.replace("/anthropic", "/v1")
+        if not base_url.endswith("/v1"):
+            base_url = base_url.rstrip("/") + "/v1"
+        api_key = env.get("ANTHROPIC_API_KEY", "")
+        llm_model = model_override or env.get("ANTHROPIC_MODEL", "MiniMax-M2.7")
+        return base_url, api_key, llm_model
 
     def _build_prompt(self, requirement: str, conversation_summary: str) -> str:
         """Build the user prompt that tells the agent what to do."""
@@ -236,7 +379,7 @@ class VibeCodingAgent:
 
         parts.append("""
 ## Workflow
-1. Use Glob and Read to understand the existing scaffold structure
+1. Use glob_files and read_file to understand the existing scaffold structure
 2. Write/modify component code (edit.vue, read.vue, ide.vue, setting.vue, etc.)
 3. Run `npm run serve` to check compilation
 4. If errors occur, read the error output and fix the code
@@ -251,105 +394,29 @@ class VibeCodingAgent:
 """)
         return "\n".join(parts)
 
-    def _convert_message(self, message) -> list[dict]:
-        """Convert a single SDK message to a list of SSE event dicts."""
-        events = []
-
-        # --- AssistantMessage: Claude's thinking and tool calls ---
-        if isinstance(message, AssistantMessage):
-            for block in message.content:
-                if isinstance(block, TextBlock) and block.text.strip():
-                    events.append({
-                        "type": "agent_thinking",
-                        "content": block.text,
-                    })
-                elif isinstance(block, ThinkingBlock) and block.thinking.strip():
-                    # Extended thinking - could optionally surface this
-                    events.append({
-                        "type": "agent_thinking",
-                        "content": block.thinking,
-                    })
-                elif isinstance(block, ToolUseBlock):
-                    # Format the tool call info for display
-                    tool_display = TOOL_ICONS.get(block.name, block.name)
-                    input_preview = self._format_tool_input(block.name, block.input)
-                    events.append({
-                        "type": "agent_tool",
-                        "tool": block.name,
-                        "tool_display": tool_display,
-                        "tool_use_id": block.id,
-                        "input_preview": input_preview,
-                    })
-                elif isinstance(block, ToolResultBlock):
-                    content_str = ""
-                    if isinstance(block.content, str):
-                        content_str = block.content
-                    elif isinstance(block.content, list):
-                        for item in block.content:
-                            if isinstance(item, dict) and item.get("text"):
-                                content_str += item["text"]
-                    events.append({
-                        "type": "agent_result",
-                        "tool_use_id": block.tool_use_id,
-                        "output_preview": _truncate(content_str),
-                        "is_error": bool(block.is_error),
-                    })
-
-        # --- ResultMessage: Agent finished ---
-        elif isinstance(message, ResultMessage):
-            events.append({
-                "type": "agent_done",
-                "result": message.result or "",
-                "session_id": message.session_id,
-                "num_turns": message.num_turns,
-                "cost_usd": message.total_cost_usd,
-                "is_error": message.is_error,
-            })
-
-        # --- SystemMessage: init, progress etc ---
-        elif isinstance(message, SystemMessage):
-            if message.subtype == "init":
-                events.append({
-                    "type": "agent_thinking",
-                    "content": "Agent session initialized...",
-                })
-
-        # --- StreamEvent: partial streaming events ---
-        elif isinstance(message, StreamEvent):
-            # StreamEvent contains raw event dicts from the CLI
-            ev = message.event
-            ev_type = ev.get("type", "")
-            if ev_type == "assistant" and "content" in ev:
-                # Partial assistant text
-                for block in ev.get("content", []):
-                    if block.get("type") == "text" and block.get("text", "").strip():
-                        events.append({
-                            "type": "agent_thinking",
-                            "content": block["text"],
-                        })
-
-        return events
-
     def _format_tool_input(self, tool_name: str, tool_input: dict) -> str:
         """Format tool input for display in the frontend."""
-        if tool_name in ("Read", "Glob"):
-            path = tool_input.get("file_path") or tool_input.get("pattern") or tool_input.get("path", "")
-            return _truncate(str(path), 200)
-        elif tool_name == "Write":
+        if tool_name == "read_file":
+            return _truncate(str(tool_input.get("file_path", "")), 200)
+        elif tool_name == "glob_files":
+            pattern = tool_input.get("pattern", "")
+            path = tool_input.get("path", "")
+            return _truncate(f"{pattern}" + (f" in {path}" if path else ""), 200)
+        elif tool_name == "write_file":
             path = tool_input.get("file_path", "")
             content = tool_input.get("content", "")
             lines = content.count("\n") + 1
             return f"{path} ({lines} lines)"
-        elif tool_name == "Edit":
+        elif tool_name == "edit_file":
             path = tool_input.get("file_path", "")
             old = _truncate(tool_input.get("old_string", ""), 60)
             return f"{path}: {old} -> ..."
-        elif tool_name == "Bash":
+        elif tool_name == "run_command":
             cmd = tool_input.get("command", "")
             return _truncate(cmd, 200)
-        elif tool_name == "Grep":
+        elif tool_name == "grep_search":
             pattern = tool_input.get("pattern", "")
             path = tool_input.get("path", "")
-            return f"/{pattern}/ in {path}"
+            return f"/{pattern}/" + (f" in {path}" if path else "")
         else:
             return _truncate(json.dumps(tool_input, ensure_ascii=False), 200)

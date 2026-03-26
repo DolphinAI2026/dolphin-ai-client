@@ -134,6 +134,11 @@ export const codingApi = {
     return request.get<any, WorkspaceInfo>(`/coding/workspace/${wsId}`)
   },
 
+  /** 获取工作区 Web IDE URL */
+  getIdeUrl(wsId: string) {
+    return request.get<any, { ide_url: string }>(`/coding/workspace/${wsId}/ide-url`)
+  },
+
   /** 列出工作区文件 */
   listFiles(wsId: string) {
     return request.get<any, string[]>(`/coding/workspace/${wsId}/files`)

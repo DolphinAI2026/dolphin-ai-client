@@ -1,0 +1,135 @@
+/* ══════════════════════════════════════════════════════
+   Theme Variables — Light & Dark
+   Design System: Synthetix Lumina inspired
+   CSS custom properties with --t- prefix
+   Element Plus brand overrides with --el- prefix
+   ══════════════════════════════════════════════════════ */
+
+/* ── Light Theme (default) ── */
+:root,
+html[data-theme="light"] {
+  /* Surfaces */
+  --t-bg-base: #f4f5f7;
+  --t-bg-panel: #ffffff;
+  --t-bg-panel-hover: #f0f1f4;
+  --t-bg-input: #f0f1f4;
+  --t-bg-elevated: #ffffff;
+  --t-bg-nav: rgba(255, 255, 255, 0.92);
+  --t-bg-overlay: rgba(0, 0, 0, 0.35);
+  --t-bg-subtle: rgba(0, 0, 0, 0.02);
+  --t-bg-code: #f6f7fa;
+
+  /* Text */
+  --t-text-primary: #1a1a2e;
+  --t-text-secondary: #6b7280;
+  --t-text-muted: #9ca3af;
+  --t-text-inverse: rgba(255, 255, 255, 0.95);
+
+  /* Borders */
+  --t-border-subtle: rgba(0, 0, 0, 0.06);
+  --t-border-strong: rgba(0, 0, 0, 0.12);
+
+  /* Brand — Indigo / Purple */
+  --t-brand: #6366f1;
+  --t-brand-light: #818cf8;
+  --t-brand-dark: #4f46e5;
+  --t-brand-subtle: rgba(99, 102, 241, 0.08);
+  --t-brand-gradient: linear-gradient(135deg, #6366f1, #818cf8);
+  --t-brand-glow: rgba(99, 102, 241, 0.15);
+  --t-brand-text: #6366f1;
+
+  /* Status */
+  --t-success: #10b981;
+  --t-success-subtle: rgba(16, 185, 129, 0.08);
+  --t-warning: #f59e0b;
+  --t-warning-subtle: rgba(245, 158, 11, 0.08);
+  --t-danger: #ef4444;
+  --t-danger-subtle: rgba(239, 68, 68, 0.08);
+  --t-info: #6366f1;
+
+  /* Shadows */
+  --t-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --t-shadow-md: 0 4px 16px rgba(0, 0, 0, 0.06);
+  --t-shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.10);
+
+  /* Radii */
+  --t-radius-sm: 8px;
+  --t-radius-md: 12px;
+  --t-radius-lg: 16px;
+  --t-radius-xl: 20px;
+
+  /* Scrollbar */
+  --t-scrollbar-thumb: rgba(0, 0, 0, 0.12);
+  --t-scrollbar-thumb-hover: rgba(0, 0, 0, 0.22);
+  --t-scrollbar-track: transparent;
+
+  /* Element Plus brand overrides */
+  --el-color-primary: #6366f1;
+  --el-color-primary-light-3: #818cf8;
+  --el-color-primary-light-5: #a5b4fc;
+  --el-color-primary-light-7: #c7d2fe;
+  --el-color-primary-light-8: #e0e7ff;
+  --el-color-primary-light-9: #eef2ff;
+  --el-color-primary-dark-2: #4f46e5;
+}
+
+/* ── Dark Theme ── */
+html[data-theme="dark"] {
+  /* Surfaces — deeper, layered */
+  --t-bg-base: #0f0f17;
+  --t-bg-panel: #181824;
+  --t-bg-panel-hover: #222233;
+  --t-bg-input: #1e1e2e;
+  --t-bg-elevated: #1c1c2c;
+  --t-bg-nav: rgba(15, 15, 23, 0.92);
+  --t-bg-overlay: rgba(0, 0, 0, 0.65);
+  --t-bg-subtle: rgba(255, 255, 255, 0.03);
+  --t-bg-code: #1a1a28;
+
+  /* Text */
+  --t-text-primary: rgba(255, 255, 255, 0.93);
+  --t-text-secondary: rgba(255, 255, 255, 0.55);
+  --t-text-muted: rgba(255, 255, 255, 0.30);
+  --t-text-inverse: #1a1a2e;
+
+  /* Borders */
+  --t-border-subtle: rgba(255, 255, 255, 0.07);
+  --t-border-strong: rgba(255, 255, 255, 0.13);
+
+  /* Brand — Indigo / Purple */
+  --t-brand: #818cf8;
+  --t-brand-light: #a5b4fc;
+  --t-brand-dark: #6366f1;
+  --t-brand-subtle: rgba(129, 140, 248, 0.12);
+  --t-brand-gradient: linear-gradient(135deg, #6366f1, #818cf8);
+  --t-brand-glow: rgba(129, 140, 248, 0.18);
+  --t-brand-text: #a5b4fc;
+
+  /* Status */
+  --t-success: #34d399;
+  --t-success-subtle: rgba(52, 211, 153, 0.12);
+  --t-warning: #fbbf24;
+  --t-warning-subtle: rgba(251, 191, 36, 0.12);
+  --t-danger: #f87171;
+  --t-danger-subtle: rgba(248, 113, 113, 0.12);
+  --t-info: #818cf8;
+
+  /* Shadows */
+  --t-shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4);
+  --t-shadow-md: 0 4px 16px rgba(0, 0, 0, 0.45);
+  --t-shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.55);
+
+  /* Scrollbar */
+  --t-scrollbar-thumb: rgba(255, 255, 255, 0.12);
+  --t-scrollbar-thumb-hover: rgba(255, 255, 255, 0.22);
+  --t-scrollbar-track: transparent;
+
+  /* Element Plus brand overrides (dark) */
+  --el-color-primary: #818cf8;
+  --el-color-primary-light-3: #a5b4fc;
+  --el-color-primary-light-5: #c7d2fe;
+  --el-color-primary-light-7: #252550;
+  --el-color-primary-light-8: #1e1e40;
+  --el-color-primary-light-9: #151530;
+  --el-color-primary-dark-2: #6366f1;
+}

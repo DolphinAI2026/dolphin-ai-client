@@ -97,7 +97,7 @@ function goToEnvs() {
 
 <style scoped>
 .env-select-hint {
-  color: rgba(255, 255, 255, 0.6);
+  color: var(--t-text-secondary);
   font-size: 13px;
   margin: 0 0 16px;
 }
@@ -115,19 +115,19 @@ function goToEnvs() {
   align-items: center;
   gap: 12px;
   padding: 14px 16px;
-  background: #252530;
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: var(--t-bg-input);
+  border: 1px solid var(--t-border-subtle);
   border-radius: 10px;
   cursor: pointer;
   transition: all 0.2s;
 }
 .env-option:hover:not(.disabled) {
-  background: #2a2a3a;
-  border-color: rgba(124, 58, 237, 0.3);
+  background: var(--t-bg-panel-hover);
+  border-color: var(--t-brand-glow);
 }
 .env-option.selected {
-  border-color: #7c3aed;
-  background: rgba(124, 58, 237, 0.1);
+  border-color: var(--t-brand);
+  background: var(--t-brand-subtle);
 }
 .env-option.disabled {
   opacity: 0.45;
@@ -141,7 +141,7 @@ function goToEnvs() {
   flex-shrink: 0;
 }
 .env-status-dot.connected {
-  background: #34d399;
+  background: var(--t-success);
   box-shadow: 0 0 8px rgba(52, 211, 153, 0.4);
 }
 .env-status-dot.disconnected {
@@ -156,7 +156,7 @@ function goToEnvs() {
 .env-name {
   font-size: 14px;
   font-weight: 500;
-  color: rgba(255, 255, 255, 0.92);
+  color: var(--t-text-primary);
   display: flex;
   align-items: center;
   gap: 8px;
@@ -166,14 +166,14 @@ function goToEnvs() {
   font-size: 10px;
   padding: 1px 8px;
   border-radius: 10px;
-  background: rgba(124, 58, 237, 0.15);
-  color: #c4b5fd;
+  background: var(--t-brand-subtle);
+  color: var(--t-brand-light);
   font-weight: 500;
 }
 
 .env-url {
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.4);
+  color: var(--t-text-muted);
   margin-top: 2px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -181,7 +181,7 @@ function goToEnvs() {
 }
 
 .env-check {
-  color: #7c3aed;
+  color: var(--t-brand);
   font-size: 16px;
   font-weight: 700;
   flex-shrink: 0;
@@ -189,7 +189,7 @@ function goToEnvs() {
 
 .no-env {
   text-align: center;
-  color: rgba(255, 255, 255, 0.4);
+  color: var(--t-text-muted);
   font-size: 13px;
   padding: 32px 0;
 }
@@ -197,14 +197,14 @@ function goToEnvs() {
 .link-btn {
   background: none;
   border: none;
-  color: #a78bfa;
+  color: var(--t-brand-light);
   cursor: pointer;
   font-size: 13px;
   text-decoration: underline;
   padding: 0;
 }
 .link-btn:hover {
-  color: #c4b5fd;
+  color: var(--t-brand-light);
 }
 
 /* Scrollbar */
@@ -222,28 +222,28 @@ function goToEnvs() {
 
 <style>
 .el-dialog.env-select-dialog {
-  background: #1a1a2e !important;
-  color: rgba(255, 255, 255, 0.9);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--t-bg-panel) !important;
+  color: var(--t-text-primary);
+  border: 1px solid var(--t-border-subtle);
   border-radius: 16px;
 }
 .el-dialog.env-select-dialog .el-dialog__header {
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid var(--t-border-subtle);
   padding: 16px 20px;
 }
 .el-dialog.env-select-dialog .el-dialog__title {
-  color: rgba(255, 255, 255, 0.92) !important;
+  color: var(--t-text-primary) !important;
   font-size: 15px;
   font-weight: 600;
 }
 .el-dialog.env-select-dialog .el-dialog__headerbtn .el-dialog__close {
-  color: rgba(255, 255, 255, 0.4);
+  color: var(--t-text-muted);
 }
 .el-dialog.env-select-dialog .el-dialog__body {
   padding: 20px;
 }
 .el-dialog.env-select-dialog .el-dialog__footer {
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  border-top: 1px solid var(--t-border-subtle);
   padding: 14px 20px;
 }
 </style>

@@ -204,6 +204,26 @@ class Application(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
 
+class LLMConfig(Base):
+    """LLM 模型配置 — 管理员通过前台配置接入的大模型"""
+    __tablename__ = "llm_configs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    config_name: Mapped[str] = mapped_column(String(100), nullable=False)  # "通义千问", "DeepSeek" 等
+    provider: Mapped[str] = mapped_column(String(50), nullable=False)  # qwen, deepseek, minimax, openai, anthropic
+    base_url: Mapped[str] = mapped_column(String(500), nullable=False)
+    api_key_enc: Mapped[str] = mapped_column(Text, nullable=False)  # Fernet 加密
+    model: Mapped[str] = mapped_column(String(100), nullable=False)
+    purpose: Mapped[str] = mapped_column(String(20), default="all", nullable=False)  # builder, coding, all
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    max_tokens: Mapped[int] = mapped_column(Integer, default=8192, nullable=False)
+    temperature: Mapped[float] = mapped_column(default=0.3, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="active", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
 class ApiCallLog(Base):
     """平台 API 调用日志"""
     __tablename__ = "api_call_logs"

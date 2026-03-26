@@ -10,6 +10,7 @@
         <el-tag size="small" type="warning">Beta</el-tag>
       </div>
       <div class="mp-header-right">
+        <ThemeToggle />
         <el-button size="small" @click="showMyComponents = !showMyComponents" class="mp-btn">
           {{ showMyComponents ? '浏览市场' : '我的发布' }}
         </el-button>
@@ -142,6 +143,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowLeft, Monitor, Search, Download } from '@element-plus/icons-vue'
 import { marketplaceApi, type MarketplaceComponent } from '@/api/marketplace'
 import { useUserStore } from '@/stores/user'
+import ThemeToggle from '@/components/ThemeToggle.vue'
 
 const userStore = useUserStore()
 const currentUserId = computed(() => userStore.user?.id)
@@ -246,28 +248,13 @@ onMounted(() => loadComponents())
 </script>
 
 <style scoped>
-/* ============ Design Tokens ============ */
-.marketplace-page {
-  --bg-base: #0a0a0a;
-  --bg-card: #111;
-  --bg-elevated: #161616;
-  --border-color: rgba(255, 255, 255, 0.06);
-  --text-primary: rgba(255, 255, 255, 0.9);
-  --text-secondary: rgba(255, 255, 255, 0.55);
-  --text-tertiary: rgba(255, 255, 255, 0.35);
-  --accent-gradient: linear-gradient(135deg, #7c3aed, #6366f1);
-  --accent-purple: #7c3aed;
-  --accent-indigo: #6366f1;
-  --radius-md: 12px;
-  --radius-lg: 16px;
-}
-
+/* ============ Layout ============ */
 .marketplace-page {
   height: 100vh;
   display: flex;
   flex-direction: column;
-  background: var(--bg-base);
-  color: var(--text-primary);
+  background: var(--t-bg-base);
+  color: var(--t-text-primary);
 }
 
 /* ============ Header ============ */
@@ -276,8 +263,8 @@ onMounted(() => loadComponents())
   align-items: center;
   justify-content: space-between;
   padding: 8px 20px;
-  border-bottom: 1px solid var(--border-color);
-  background: var(--bg-card);
+  border-bottom: 1px solid var(--t-border-subtle);
+  background: var(--t-bg-panel);
   height: 52px;
   flex-shrink: 0;
 }
@@ -289,16 +276,16 @@ onMounted(() => loadComponents())
 }
 
 .mp-header-left :deep(.el-button) {
-  color: var(--text-secondary);
+  color: var(--t-text-secondary);
 }
 .mp-header-left :deep(.el-button:hover) {
-  color: var(--text-primary);
+  color: var(--t-text-primary);
 }
 
 .mp-title {
   font-size: 16px;
   font-weight: 700;
-  background: var(--accent-gradient);
+  background: var(--t-brand-gradient);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   margin: 0;
@@ -306,9 +293,9 @@ onMounted(() => loadComponents())
 }
 
 .mp-header-left :deep(.el-tag) {
-  background: rgba(124, 58, 237, 0.15);
-  border-color: rgba(124, 58, 237, 0.3);
-  color: #a78bfa;
+  background: var(--t-brand-subtle);
+  border-color: var(--t-brand-glow);
+  color: var(--t-brand-light);
 }
 
 .mp-header-right {
@@ -318,17 +305,17 @@ onMounted(() => loadComponents())
 }
 
 .mp-btn {
-  border: 1px solid var(--border-color) !important;
-  background: var(--bg-elevated) !important;
-  color: var(--text-secondary) !important;
+  border: 1px solid var(--t-border-subtle) !important;
+  background: var(--t-bg-elevated) !important;
+  color: var(--t-text-secondary) !important;
   border-radius: 8px !important;
   transition: all 0.2s ease !important;
 }
 
 .mp-btn:hover {
-  border-color: rgba(124, 58, 237, 0.4) !important;
-  background: rgba(124, 58, 237, 0.1) !important;
-  color: var(--text-primary) !important;
+  border-color: var(--t-brand-glow) !important;
+  background: var(--t-brand-subtle) !important;
+  color: var(--t-text-primary) !important;
 }
 
 /* ============ Toolbar ============ */
@@ -337,8 +324,8 @@ onMounted(() => loadComponents())
   align-items: center;
   gap: 12px;
   padding: 16px 24px;
-  border-bottom: 1px solid var(--border-color);
-  background: var(--bg-base);
+  border-bottom: 1px solid var(--t-border-subtle);
+  background: var(--t-bg-base);
 }
 
 .mp-search {
@@ -347,8 +334,8 @@ onMounted(() => loadComponents())
 }
 
 .mp-search :deep(.el-input__wrapper) {
-  background: var(--bg-card);
-  border: 1px solid var(--border-color);
+  background: var(--t-bg-panel);
+  border: 1px solid var(--t-border-subtle);
   border-radius: 10px;
   box-shadow: none !important;
   transition: border-color 0.2s ease;
@@ -356,19 +343,19 @@ onMounted(() => loadComponents())
 
 .mp-search :deep(.el-input__wrapper:hover),
 .mp-search :deep(.el-input__wrapper.is-focus) {
-  border-color: rgba(124, 58, 237, 0.4);
+  border-color: var(--t-brand-glow);
 }
 
 .mp-search :deep(.el-input__inner) {
-  color: var(--text-primary);
+  color: var(--t-text-primary);
 }
 
 .mp-search :deep(.el-input__inner::placeholder) {
-  color: var(--text-tertiary);
+  color: var(--t-text-muted);
 }
 
 .mp-search :deep(.el-input__prefix .el-icon) {
-  color: var(--text-tertiary);
+  color: var(--t-text-muted);
 }
 
 .mp-category,
@@ -378,8 +365,8 @@ onMounted(() => loadComponents())
 
 .mp-category :deep(.el-input__wrapper),
 .mp-sort :deep(.el-input__wrapper) {
-  background: var(--bg-card);
-  border: 1px solid var(--border-color);
+  background: var(--t-bg-panel);
+  border: 1px solid var(--t-border-subtle);
   border-radius: 10px;
   box-shadow: none !important;
   transition: border-color 0.2s ease;
@@ -389,12 +376,12 @@ onMounted(() => loadComponents())
 .mp-sort :deep(.el-input__wrapper:hover),
 .mp-category :deep(.el-input__wrapper.is-focus),
 .mp-sort :deep(.el-input__wrapper.is-focus) {
-  border-color: rgba(124, 58, 237, 0.4);
+  border-color: var(--t-brand-glow);
 }
 
 .mp-category :deep(.el-input__inner),
 .mp-sort :deep(.el-input__inner) {
-  color: var(--text-primary);
+  color: var(--t-text-primary);
 }
 
 /* ============ Content ============ */
@@ -411,18 +398,18 @@ onMounted(() => loadComponents())
   background: transparent;
 }
 .mp-content::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--t-border-subtle);
   border-radius: 3px;
 }
 .mp-content::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.14);
+  background: var(--t-border-strong);
 }
 
 /* ============ Empty State ============ */
 .mp-empty {
   text-align: center;
   padding: 100px 0;
-  color: var(--text-tertiary);
+  color: var(--t-text-muted);
 }
 
 .mp-empty-icon {
@@ -432,7 +419,7 @@ onMounted(() => loadComponents())
 
 .mp-empty p {
   font-size: 15px;
-  color: var(--text-secondary);
+  color: var(--t-text-secondary);
   margin: 0;
 }
 
@@ -444,9 +431,9 @@ onMounted(() => loadComponents())
 }
 
 .mp-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
+  background: var(--t-bg-panel);
+  border: 1px solid var(--t-border-subtle);
+  border-radius: 12px;
   padding: 20px;
   cursor: pointer;
   transition: all 0.25s ease;
@@ -456,10 +443,10 @@ onMounted(() => loadComponents())
 }
 
 .mp-card:hover {
-  border-color: rgba(124, 58, 237, 0.25);
-  background: var(--bg-elevated);
+  border-color: var(--t-brand-glow);
+  background: var(--t-bg-elevated);
   transform: translateY(-2px);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(124, 58, 237, 0.1);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), 0 0 0 1px var(--t-brand-subtle);
 }
 
 .mp-card-header {
@@ -474,8 +461,8 @@ onMounted(() => loadComponents())
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(124, 58, 237, 0.08);
-  border: 1px solid rgba(124, 58, 237, 0.12);
+  background: var(--t-brand-subtle);
+  border: 1px solid var(--t-brand-subtle);
   border-radius: 10px;
   flex-shrink: 0;
 }
@@ -488,7 +475,7 @@ onMounted(() => loadComponents())
 .mp-card-name {
   font-size: 15px;
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--t-text-primary);
   margin: 0;
   white-space: nowrap;
   overflow: hidden;
@@ -497,12 +484,12 @@ onMounted(() => loadComponents())
 
 .mp-card-version {
   font-size: 12px;
-  color: var(--text-tertiary);
+  color: var(--t-text-muted);
 }
 
 .mp-card-desc {
   font-size: 13px;
-  color: var(--text-secondary);
+  color: var(--t-text-secondary);
   margin: 0;
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -518,9 +505,9 @@ onMounted(() => loadComponents())
 }
 
 .mp-tag {
-  background: rgba(124, 58, 237, 0.08) !important;
-  border-color: rgba(124, 58, 237, 0.18) !important;
-  color: #a78bfa !important;
+  background: var(--t-brand-subtle) !important;
+  border-color: var(--t-brand-subtle) !important;
+  color: var(--t-brand-light) !important;
   border-radius: 6px !important;
 }
 
@@ -529,10 +516,10 @@ onMounted(() => loadComponents())
   align-items: center;
   justify-content: space-between;
   font-size: 12px;
-  color: var(--text-tertiary);
+  color: var(--t-text-muted);
   margin-top: auto;
   padding-top: 8px;
-  border-top: 1px solid var(--border-color);
+  border-top: 1px solid var(--t-border-subtle);
 }
 
 .mp-card-downloads {
@@ -543,31 +530,31 @@ onMounted(() => loadComponents())
 
 /* ============ Detail Dialog ============ */
 .mp-dialog :deep(.el-dialog) {
-  background: var(--bg-card);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-lg);
+  background: var(--t-bg-panel);
+  border: 1px solid var(--t-border-subtle);
+  border-radius: 16px;
   overflow: hidden;
 }
 
 .mp-dialog :deep(.el-dialog__header) {
-  border-bottom: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--t-border-subtle);
   padding: 16px 20px;
 }
 
 .mp-dialog :deep(.el-dialog__title) {
-  color: var(--text-primary);
+  color: var(--t-text-primary);
   font-weight: 600;
 }
 
 .mp-dialog :deep(.el-dialog__headerbtn .el-icon) {
-  color: var(--text-tertiary);
+  color: var(--t-text-muted);
 }
 .mp-dialog :deep(.el-dialog__headerbtn:hover .el-icon) {
-  color: var(--text-primary);
+  color: var(--t-text-primary);
 }
 
 .mp-dialog :deep(.el-dialog__body) {
-  color: var(--text-secondary);
+  color: var(--t-text-secondary);
   padding: 20px;
 }
 
@@ -589,16 +576,16 @@ onMounted(() => loadComponents())
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(124, 58, 237, 0.1);
-  border: 1px solid rgba(124, 58, 237, 0.15);
-  border-radius: var(--radius-md);
+  background: var(--t-brand-subtle);
+  border: 1px solid var(--t-brand-subtle);
+  border-radius: 12px;
 }
 
 .mp-detail-info h2 {
   margin: 0 0 6px;
   font-size: 20px;
   font-weight: 700;
-  color: var(--text-primary);
+  color: var(--t-text-primary);
 }
 
 .mp-detail-meta {
@@ -606,18 +593,18 @@ onMounted(() => loadComponents())
   align-items: center;
   gap: 12px;
   font-size: 13px;
-  color: var(--text-secondary);
+  color: var(--t-text-secondary);
 }
 
 .mp-detail-meta :deep(.el-tag) {
-  background: rgba(124, 58, 237, 0.1);
-  border-color: rgba(124, 58, 237, 0.2);
-  color: #a78bfa;
+  background: var(--t-brand-subtle);
+  border-color: var(--t-brand-subtle);
+  color: var(--t-brand-light);
 }
 
 .mp-detail-desc {
   font-size: 14px;
-  color: var(--text-secondary);
+  color: var(--t-text-secondary);
   line-height: 1.7;
 }
 
@@ -629,17 +616,17 @@ onMounted(() => loadComponents())
 
 .mp-detail-readme h4 {
   margin: 0 0 8px;
-  color: var(--text-primary);
+  color: var(--t-text-primary);
   font-weight: 600;
 }
 
 .mp-readme-content {
-  background: var(--bg-base);
-  border: 1px solid var(--border-color);
+  background: var(--t-bg-base);
+  border: 1px solid var(--t-border-subtle);
   border-radius: 10px;
   padding: 16px;
   font-size: 13px;
-  color: var(--text-secondary);
+  color: var(--t-text-secondary);
   white-space: pre-wrap;
   word-break: break-word;
   max-height: 300px;
@@ -652,7 +639,7 @@ onMounted(() => loadComponents())
   width: 4px;
 }
 .mp-readme-content::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--t-border-subtle);
   border-radius: 2px;
 }
 
@@ -660,11 +647,11 @@ onMounted(() => loadComponents())
   display: flex;
   gap: 12px;
   padding-top: 12px;
-  border-top: 1px solid var(--border-color);
+  border-top: 1px solid var(--t-border-subtle);
 }
 
 .mp-detail-actions :deep(.el-button--primary) {
-  background: var(--accent-gradient) !important;
+  background: var(--t-brand-gradient) !important;
   border: none !important;
   border-radius: 10px !important;
   font-weight: 600;
@@ -674,47 +661,47 @@ onMounted(() => loadComponents())
 
 .mp-detail-actions :deep(.el-button--primary:hover) {
   filter: brightness(1.15);
-  box-shadow: 0 4px 16px rgba(124, 58, 237, 0.35);
+  box-shadow: 0 4px 16px var(--t-brand-glow);
 }
 
 .mp-detail-actions :deep(.el-button--danger) {
   border-radius: 10px !important;
   background: transparent !important;
-  border-color: rgba(239, 68, 68, 0.3) !important;
-  color: #f87171 !important;
+  border-color: var(--t-danger) !important;
+  color: var(--t-danger) !important;
 }
 
 .mp-detail-actions :deep(.el-button--danger:hover) {
-  background: rgba(239, 68, 68, 0.1) !important;
-  border-color: rgba(239, 68, 68, 0.5) !important;
+  background: var(--t-bg-subtle) !important;
+  border-color: var(--t-danger) !important;
 }
 
 /* ============ Element Plus Dropdown Override ============ */
 .marketplace-page :deep(.el-select-dropdown) {
-  background: var(--bg-card);
-  border: 1px solid var(--border-color);
+  background: var(--t-bg-panel);
+  border: 1px solid var(--t-border-subtle);
 }
 
 .marketplace-page :deep(.el-select-dropdown__item) {
-  color: var(--text-secondary);
+  color: var(--t-text-secondary);
 }
 
 .marketplace-page :deep(.el-select-dropdown__item:hover),
 .marketplace-page :deep(.el-select-dropdown__item.selected) {
-  background: rgba(124, 58, 237, 0.1);
-  color: var(--text-primary);
+  background: var(--t-brand-subtle);
+  color: var(--t-text-primary);
 }
 
 /* ============ Loading Override ============ */
 .mp-content :deep(.el-loading-mask) {
-  background: rgba(10, 10, 10, 0.7);
+  background: var(--t-bg-base);
 }
 
 .mp-content :deep(.el-loading-spinner .path) {
-  stroke: var(--accent-purple);
+  stroke: var(--t-brand);
 }
 
 .mp-content :deep(.el-loading-text) {
-  color: var(--text-secondary);
+  color: var(--t-text-secondary);
 }
 </style>

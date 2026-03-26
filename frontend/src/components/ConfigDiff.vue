@@ -448,10 +448,10 @@ const formatComponentType = (type?: string): string => {
 
 <style scoped lang="less">
 .config-diff {
-  background: #1a1a2e;
+  background: var(--t-bg-panel);
   border-radius: 12px;
   padding: 16px;
-  color: #e0e0e0;
+  color: var(--t-text-primary);
 }
 
 .diff-header {
@@ -460,7 +460,7 @@ const formatComponentType = (type?: string): string => {
   justify-content: space-between;
   margin-bottom: 16px;
   padding-bottom: 12px;
-  border-bottom: 1px solid rgba(255,255,255,0.1);
+  border-bottom: 1px solid var(--t-border-strong);
 }
 
 .diff-header h3 {
@@ -471,7 +471,7 @@ const formatComponentType = (type?: string): string => {
 
 .diff-summary {
   font-size: 13px;
-  color: #888;
+  color: var(--t-text-secondary);
 }
 
 .no-changes {
@@ -480,7 +480,7 @@ const formatComponentType = (type?: string): string => {
   justify-content: center;
   gap: 8px;
   padding: 32px;
-  color: #4ade80;
+  color: var(--t-success);
   font-size: 14px;
 }
 
@@ -503,11 +503,11 @@ const formatComponentType = (type?: string): string => {
 }
 
 .section-title.warning {
-  color: #fbbf24;
+  color: var(--t-warning);
 }
 
 .section-title.unsupported {
-  color: #f87171;
+  color: var(--t-danger);
 }
 
 .section-title .icon {
@@ -530,7 +530,7 @@ const formatComponentType = (type?: string): string => {
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
-  background: rgba(255,255,255,0.05);
+  background: var(--t-bg-subtle);
   border-radius: 6px;
   font-size: 13px;
 }
@@ -547,7 +547,7 @@ const formatComponentType = (type?: string): string => {
 .expand-icon {
   margin-left: auto;
   font-size: 10px;
-  color: #666;
+  color: var(--t-text-muted);
   transition: transform 0.2s;
 }
 
@@ -568,17 +568,17 @@ const formatComponentType = (type?: string): string => {
 
 .change-tag.added {
   background: rgba(74, 222, 128, 0.2);
-  color: #4ade80;
+  color: var(--t-success);
 }
 
 .change-tag.modified {
   background: rgba(251, 191, 36, 0.2);
-  color: #fbbf24;
+  color: var(--t-warning);
 }
 
 .change-tag.deleted {
   background: rgba(248, 113, 113, 0.2);
-  color: #f87171;
+  color: var(--t-danger);
 }
 
 .change-name {
@@ -586,26 +586,26 @@ const formatComponentType = (type?: string): string => {
 }
 
 .change-code {
-  color: #888;
+  color: var(--t-text-secondary);
   font-size: 12px;
 }
 
 .option-changes,
 .field-changes,
 .component-changes {
-  color: #888;
+  color: var(--t-text-secondary);
   font-size: 12px;
 }
 
 .component-changes-detail {
   margin-bottom: 12px;
   padding-bottom: 12px;
-  border-bottom: 1px solid rgba(255,255,255,0.1);
+  border-bottom: 1px solid var(--t-border-strong);
 }
 
 .nested-label {
   font-size: 12px;
-  color: #888;
+  color: var(--t-text-secondary);
   margin-bottom: 8px;
 }
 
@@ -620,21 +620,21 @@ const formatComponentType = (type?: string): string => {
   align-items: center;
   gap: 6px;
   padding: 6px 10px;
-  background: rgba(255,255,255,0.03);
+  background: var(--t-bg-subtle);
   border-radius: 4px;
   font-size: 12px;
 }
 
 .nested-item.added {
-  border-left: 2px solid #4ade80;
+  border-left: 2px solid var(--t-success);
 }
 
 .nested-item.modified {
-  border-left: 2px solid #fbbf24;
+  border-left: 2px solid var(--t-warning);
 }
 
 .nested-item.deleted {
-  border-left: 2px solid #f87171;
+  border-left: 2px solid var(--t-danger);
 }
 
 .change-tag.small {
@@ -644,7 +644,7 @@ const formatComponentType = (type?: string): string => {
 
 .comp-label {
   font-weight: 500;
-  color: #e0e0e0;
+  color: var(--t-text-primary);
 }
 
 .comp-type {
@@ -654,19 +654,19 @@ const formatComponentType = (type?: string): string => {
 
 .sub-table-badge {
   padding: 1px 6px;
-  background: rgba(139, 92, 246, 0.2);
-  color: #a78bfa;
+  background: var(--t-brand-subtle);
+  color: var(--t-brand-light);
   border-radius: 3px;
   font-size: 10px;
 }
 
 .sub-table-badge.child {
   background: rgba(99, 102, 241, 0.15);
-  color: #818cf8;
+  color: var(--t-brand-light);
 }
 
 .changed-props {
-  color: #fbbf24;
+  color: var(--t-warning);
   font-size: 11px;
   margin-left: auto;
 }
@@ -679,12 +679,12 @@ const formatComponentType = (type?: string): string => {
 }
 
 .warning-list li {
-  color: #fbbf24;
+  color: var(--t-warning);
   margin-bottom: 4px;
 }
 
 .unsupported-list li {
-  color: #f87171;
+  color: var(--t-danger);
   margin-bottom: 4px;
 }
 
@@ -694,15 +694,15 @@ const formatComponentType = (type?: string): string => {
   gap: 12px;
   margin-top: 16px;
   padding-top: 16px;
-  border-top: 1px solid rgba(255,255,255,0.1);
+  border-top: 1px solid var(--t-border-strong);
 }
 
 .btn-cancel {
   padding: 8px 16px;
   background: transparent;
-  border: 1px solid rgba(255,255,255,0.2);
+  border: 1px solid var(--t-border-strong);
   border-radius: 6px;
-  color: #888;
+  color: var(--t-text-secondary);
   cursor: pointer;
   transition: all 0.2s;
 }
@@ -714,7 +714,7 @@ const formatComponentType = (type?: string): string => {
 
 .btn-execute {
   padding: 8px 20px;
-  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  background: var(--t-brand-gradient);
   border: none;
   border-radius: 6px;
   color: #fff;
@@ -725,7 +725,7 @@ const formatComponentType = (type?: string): string => {
 
 .btn-execute:hover:not(:disabled) {
   transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+  box-shadow: 0 4px 12px var(--t-brand-glow);
 }
 
 .btn-execute:disabled {
@@ -752,7 +752,7 @@ const formatComponentType = (type?: string): string => {
 .btn-link {
   background: none;
   border: none;
-  color: #818cf8;
+  color: var(--t-brand-light);
   cursor: pointer;
   font-size: 12px;
   padding: 2px 6px;
@@ -769,7 +769,7 @@ const formatComponentType = (type?: string): string => {
   width: 16px;
   height: 16px;
   cursor: pointer;
-  accent-color: #6366f1;
+  accent-color: var(--t-brand-light);
   flex-shrink: 0;
 }
 </style>

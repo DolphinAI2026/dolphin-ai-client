@@ -12,6 +12,7 @@
         </el-tag>
       </div>
       <div class="header-right">
+        <ThemeToggle />
         <!-- 组件市场 - 暂时隐藏
         <el-button
           size="small"
@@ -24,10 +25,10 @@
         <el-button
           v-if="codingStore.workspace"
           size="small"
-          @click="openInVSCode"
           class="header-btn"
+          @click="openInWebIDE()"
         >
-          <el-icon><FolderOpened /></el-icon> 在 VS Code 中打开
+          <el-icon><FolderOpened /></el-icon> 在 IDE 中打开
         </el-button>
         <el-dropdown
           v-if="codingStore.workspace"
@@ -358,6 +359,7 @@ import type { GeneratedFile, WorkspaceInfo, UploadResult } from '@/api/coding'
 import { projectsApi } from '@/api/projects'
 import type { Project } from '@/api/projects'
 import ProjectSettingsModal from '@/components/ProjectSettingsModal.vue'
+import ThemeToggle from '@/components/ThemeToggle.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -914,45 +916,50 @@ async function sendMessage() {
               fullContent += parsed.content
               codingStore.streamContent = fullContent
               scrollToBottom()
-            } else if (parsed.type === 'agent_thinking') {
-              // Agent reasoning / text output
-              fullContent += parsed.content + '\n'
+            } else if (parsed.type === 'agent_thinking_delta') {
+              // Streaming thinking delta — append character by character
+              fullContent += parsed.content
               codingStore.streamContent = fullContent
               scrollToBottom()
+            } else if (parsed.type === 'agent_thinking') {
+              // Full thinking block (end of stream) — skip if delta already covered it
+              // Only add if fullContent doesn't already end with this content
+              if (!fullContent.endsWith(parsed.content)) {
+                fullContent += parsed.content + '\n'
+                codingStore.streamContent = fullContent
+              }
+              scrollToBottom()
             } else if (parsed.type === 'agent_tool') {
-              // Agent tool call - show what tool is being used
+              // Agent tool call — formatted card-like display
               const toolDisplay = parsed.tool_display || parsed.tool
               const preview = parsed.input_preview || ''
-              fullContent += `\n**${toolDisplay}**: ${preview}\n`
+              fullContent += `\n🔧 **${toolDisplay}** \`${preview}\`\n`
               codingStore.streamContent = fullContent
               scrollToBottom()
             } else if (parsed.type === 'agent_result') {
-              // Agent tool result - show output preview
+              // Agent tool result — collapsible preview
+              const toolDisplay = parsed.tool_display || parsed.tool || ''
               if (parsed.is_error) {
-                fullContent += `\n> Error: ${parsed.output_preview}\n`
-              } else if (parsed.output_preview) {
-                // Show truncated result for context
-                const preview = parsed.output_preview.length > 200
-                  ? parsed.output_preview.substring(0, 200) + '...'
+                fullContent += `> ❌ ${parsed.output_preview}\n\n`
+              } else if (parsed.output_preview && parsed.output_preview !== '(empty)') {
+                const preview = parsed.output_preview.length > 300
+                  ? parsed.output_preview.substring(0, 300) + '...'
                   : parsed.output_preview
-                fullContent += `\n> ${preview}\n`
+                fullContent += `> ✅ ${preview}\n\n`
+              } else {
+                fullContent += `> ✅ 完成\n\n`
               }
               codingStore.streamContent = fullContent
               scrollToBottom()
             } else if (parsed.type === 'agent_done') {
               // Agent completed its loop
-              if (parsed.result) {
-                fullContent += '\n' + parsed.result + '\n'
-                codingStore.streamContent = fullContent
-              }
-              if (parsed.cost_usd) {
-                fullContent += `\n*Agent completed in ${parsed.num_turns || '?'} turns (cost: $${parsed.cost_usd.toFixed(4)})*\n`
-                codingStore.streamContent = fullContent
-              }
+              const turns = parsed.num_turns || '?'
+              fullContent += `\n---\n✨ **Agent 完成** (${turns} 轮对话)\n`
+              codingStore.streamContent = fullContent
               scrollToBottom()
             } else if (parsed.type === 'agent_error') {
               // Agent error
-              fullContent += `\n**Agent Error**: ${parsed.message}\n`
+              fullContent += `\n❌ **Agent 错误**: ${parsed.message}\n`
               codingStore.streamContent = fullContent
               scrollToBottom()
             } else if (parsed.type === 'files') {
@@ -1036,25 +1043,14 @@ async function sendMessage() {
 
 // ============ Header Actions ============
 
-async function openInVSCode() {
+async function openInWebIDE() {
   if (!codingStore.workspace) return
-  // 从后端获取工作区绝对路径
   try {
-    const info = await codingApi.getWorkspace(codingStore.workspace.id)
-    const absPath = info.workspace_path || `/Users/mars/Vibe Coding/apaas-builder-ai/workspaces/${codingStore.workspace.id}`
-    // 尝试打开 VS Code（浏览器可能阻止 vscode:// 协议）
-    window.location.href = `vscode://file${absPath}`
-    // 同时复制路径到剪贴板作为备选
-    try {
-      await navigator.clipboard.writeText(absPath)
-      ElMessage.success(`路径已复制: ${absPath}`)
-    } catch {
-      ElMessage.info(`VS Code 路径: ${absPath}`)
-    }
-  } catch {
-    const fallbackPath = `/Users/mars/Vibe Coding/apaas-builder-ai/workspaces/${codingStore.workspace.id}`
-    window.location.href = `vscode://file${fallbackPath}`
-    ElMessage.info(`VS Code 路径: ${fallbackPath}`)
+    const { ide_url } = await codingApi.getIdeUrl(codingStore.workspace.id)
+    window.open(ide_url, '_blank')
+  } catch (err: any) {
+    const msg = err?.response?.data?.detail || err?.message || 'Web IDE 打开失败，请检查 CODE_SERVER_BASE_URL 配置'
+    ElMessage.warning(msg)
   }
 }
 
@@ -1343,8 +1339,8 @@ watch(() => route.path, () => {
   height: 100vh;
   display: flex;
   flex-direction: column;
-  background: #0a0a0a;
-  color: rgba(255, 255, 255, 0.9);
+  background: var(--t-bg-base);
+  color: var(--t-text-primary);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
 }
 
@@ -1359,8 +1355,8 @@ watch(() => route.path, () => {
 .workspace-sidebar {
   width: 240px;
   flex-shrink: 0;
-  border-right: 1px solid rgba(255, 255, 255, 0.06);
-  background: #111;
+  border-right: 1px solid var(--t-border-subtle);
+  background: var(--t-bg-base);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -1371,14 +1367,14 @@ watch(() => route.path, () => {
   align-items: center;
   justify-content: space-between;
   padding: 14px 16px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid var(--t-border-subtle);
   gap: 8px;
 }
 
 .sidebar-title {
   font-size: 11px;
   font-weight: 600;
-  color: rgba(255, 255, 255, 0.4);
+  color: var(--t-text-muted);
   text-transform: uppercase;
   letter-spacing: 0.08em;
 }
@@ -1410,7 +1406,7 @@ watch(() => route.path, () => {
 .sidebar-group-label {
   font-size: 11px;
   font-weight: 600;
-  color: rgba(255, 255, 255, 0.45);
+  color: var(--t-text-muted);
   text-transform: uppercase;
   letter-spacing: 0.03em;
   flex: 1;
@@ -1418,8 +1414,8 @@ watch(() => route.path, () => {
 
 .sidebar-group-count {
   font-size: 10px;
-  color: rgba(255, 255, 255, 0.25);
-  background: rgba(255, 255, 255, 0.06);
+  color: var(--t-text-muted);
+  background: var(--t-border-subtle);
   padding: 1px 6px;
   border-radius: 8px;
   min-width: 18px;
@@ -1428,7 +1424,7 @@ watch(() => route.path, () => {
 
 .sidebar-group-arrow {
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.25);
+  color: var(--t-text-muted);
   transition: transform 0.2s ease;
   transform: rotate(-90deg);
 }
@@ -1447,19 +1443,19 @@ watch(() => route.path, () => {
 }
 
 .sidebar-ws-item:hover {
-  background: rgba(124, 58, 237, 0.08);
-  border-color: rgba(124, 58, 237, 0.15);
+  background: var(--t-brand-subtle);
+  border-color: var(--t-brand-subtle);
 }
 
 .sidebar-ws-item.active {
-  background: #161622;
-  border-color: rgba(124, 58, 237, 0.3);
-  box-shadow: 0 0 0 1px rgba(124, 58, 237, 0.15) inset;
+  background: var(--t-bg-elevated);
+  border-color: var(--t-brand-glow);
+  box-shadow: 0 0 0 1px var(--t-brand-subtle) inset;
 }
 
 .sidebar-ws-name {
   font-size: 13px;
-  color: rgba(255, 255, 255, 0.9);
+  color: var(--t-text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1486,7 +1482,7 @@ watch(() => route.path, () => {
 
 .sidebar-empty {
   text-align: center;
-  color: rgba(255, 255, 255, 0.3);
+  color: var(--t-text-muted);
   font-size: 12px;
   padding: 24px 0;
 }
@@ -1496,28 +1492,28 @@ watch(() => route.path, () => {
   flex: 1;
 }
 .project-select :deep(.el-input__wrapper) {
-  background: #161622;
-  border-color: rgba(255, 255, 255, 0.06);
+  background: var(--t-bg-elevated);
+  border-color: var(--t-border-subtle);
   box-shadow: none;
   border-radius: 10px;
   transition: border-color 0.2s ease;
 }
 .project-select :deep(.el-input__wrapper:hover) {
-  border-color: rgba(124, 58, 237, 0.3);
+  border-color: var(--t-brand-glow);
 }
 .project-select :deep(.el-input__wrapper.is-focus) {
-  border-color: #7c3aed;
-  box-shadow: 0 0 0 2px rgba(124, 58, 237, 0.15);
+  border-color: var(--t-brand);
+  box-shadow: 0 0 0 2px var(--t-brand-subtle);
 }
 .project-select :deep(.el-input__inner) {
-  color: rgba(255, 255, 255, 0.9);
+  color: var(--t-text-primary);
   font-size: 13px;
 }
 
 /* ============ Platform Status ============ */
 .sidebar-platform-status {
   padding: 10px 16px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid var(--t-border-subtle);
 }
 .platform-status-row {
   display: flex;
@@ -1532,7 +1528,7 @@ watch(() => route.path, () => {
   flex-shrink: 0;
 }
 .platform-dot.connected {
-  background: #4ade80;
+  background: var(--t-success);
   box-shadow: 0 0 6px rgba(74, 222, 128, 0.4);
 }
 .platform-dot.disconnected {
@@ -1540,16 +1536,16 @@ watch(() => route.path, () => {
 }
 .platform-label {
   font-size: 11px;
-  color: rgba(255, 255, 255, 0.5);
+  color: var(--t-text-secondary);
 }
 .platform-config-btn {
   font-size: 11px;
   padding: 0;
-  color: #7c3aed;
+  color: var(--t-brand);
   transition: color 0.2s ease;
 }
 .platform-config-btn:hover {
-  color: #a78bfa;
+  color: var(--t-brand-light);
 }
 
 /* ============ Section Header ============ */
@@ -1576,14 +1572,14 @@ watch(() => route.path, () => {
 }
 .empty-text {
   font-size: 13px;
-  color: rgba(255, 255, 255, 0.4);
+  color: var(--t-text-muted);
   margin-bottom: 18px;
 }
 
 /* ============ Sidebar Footer ============ */
 .sidebar-footer {
   padding: 10px 16px;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  border-top: 1px solid var(--t-border-subtle);
   margin-top: auto;
 }
 .sidebar-delete-btn {
@@ -1607,8 +1603,8 @@ watch(() => route.path, () => {
   align-items: center;
   justify-content: space-between;
   padding: 0 20px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  background: #111;
+  border-bottom: 1px solid var(--t-border-subtle);
+  background: var(--t-bg-base);
   height: 52px;
   flex-shrink: 0;
 }
@@ -1622,7 +1618,7 @@ watch(() => route.path, () => {
 .header-title {
   font-size: 16px;
   font-weight: 700;
-  background: linear-gradient(135deg, #7c3aed, #6366f1);
+  background: var(--t-brand-gradient);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -1637,38 +1633,38 @@ watch(() => route.path, () => {
 }
 
 .header-btn {
-  border-color: rgba(255, 255, 255, 0.08);
-  background: #161622;
-  color: rgba(255, 255, 255, 0.7);
+  border-color: var(--t-border-subtle);
+  background: var(--t-bg-elevated);
+  color: var(--t-text-secondary);
   border-radius: 10px;
   font-size: 13px;
   transition: all 0.2s ease;
 }
 
 .header-btn:hover {
-  border-color: rgba(124, 58, 237, 0.3);
-  background: rgba(124, 58, 237, 0.1);
-  color: rgba(255, 255, 255, 0.95);
+  border-color: var(--t-brand-glow);
+  background: var(--t-brand-subtle);
+  color: var(--t-text-primary);
 }
 
 .debug-dropdown :deep(.el-button) {
-  border-color: rgba(255, 255, 255, 0.08);
-  background: #161622;
-  color: rgba(255, 255, 255, 0.7);
+  border-color: var(--t-border-subtle);
+  background: var(--t-bg-elevated);
+  color: var(--t-text-secondary);
   border-radius: 10px 0 0 10px;
   font-size: 13px;
 }
 .debug-dropdown :deep(.el-dropdown__caret-button) {
-  border-color: rgba(255, 255, 255, 0.08);
-  background: #161622;
-  color: rgba(255, 255, 255, 0.7);
+  border-color: var(--t-border-subtle);
+  background: var(--t-bg-elevated);
+  color: var(--t-text-secondary);
   border-radius: 0 10px 10px 0;
 }
 .debug-dropdown :deep(.el-button:hover),
 .debug-dropdown :deep(.el-dropdown__caret-button:hover) {
-  border-color: rgba(124, 58, 237, 0.3);
-  background: rgba(124, 58, 237, 0.1);
-  color: rgba(255, 255, 255, 0.95);
+  border-color: var(--t-brand-glow);
+  background: var(--t-brand-subtle);
+  color: var(--t-text-primary);
 }
 
 /* ============ Chat Area ============ */
@@ -1696,14 +1692,14 @@ watch(() => route.path, () => {
 .welcome-icon {
   font-size: 52px;
   margin-bottom: 20px;
-  filter: drop-shadow(0 0 24px rgba(124, 58, 237, 0.3));
+  filter: drop-shadow(0 0 24px var(--t-brand-glow));
 }
 
 .welcome h2 {
   font-size: 32px;
   font-weight: 800;
   margin: 0 0 14px;
-  background: linear-gradient(135deg, #7c3aed, #6366f1);
+  background: var(--t-brand-gradient);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -1711,7 +1707,7 @@ watch(() => route.path, () => {
 }
 
 .welcome-desc {
-  color: rgba(255, 255, 255, 0.5);
+  color: var(--t-text-secondary);
   font-size: 15px;
   margin: 0 0 24px;
   line-height: 1.7;
@@ -1732,23 +1728,23 @@ watch(() => route.path, () => {
   gap: 5px;
   padding: 7px 14px;
   border-radius: 20px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--t-border-subtle);
   background: transparent;
-  color: rgba(255, 255, 255, 0.5);
+  color: var(--t-text-secondary);
   font-size: 13px;
   cursor: pointer;
   transition: all 0.2s ease;
 }
 
 .scene-tab:hover {
-  border-color: rgba(124, 58, 237, 0.3);
-  color: rgba(255, 255, 255, 0.8);
+  border-color: var(--t-brand-glow);
+  color: var(--t-text-primary);
 }
 
 .scene-tab.active {
-  border-color: rgba(124, 58, 237, 0.6);
-  background: rgba(124, 58, 237, 0.15);
-  color: #c4b5fd;
+  border-color: var(--t-brand);
+  background: var(--t-brand-subtle);
+  color: var(--t-brand-light);
 }
 
 .scene-tab-icon {
@@ -1765,9 +1761,9 @@ watch(() => route.path, () => {
 .suggestion-btn {
   padding: 11px 20px;
   border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: #161622;
-  color: rgba(255, 255, 255, 0.7);
+  border: 1px solid var(--t-border-subtle);
+  background: var(--t-bg-elevated);
+  color: var(--t-text-secondary);
   font-size: 13px;
   cursor: pointer;
   transition: all 0.25s ease;
@@ -1775,11 +1771,11 @@ watch(() => route.path, () => {
 }
 
 .suggestion-btn:hover {
-  border-color: rgba(124, 58, 237, 0.4);
-  background: rgba(124, 58, 237, 0.1);
-  color: rgba(255, 255, 255, 0.95);
+  border-color: var(--t-brand-glow);
+  background: var(--t-brand-subtle);
+  color: var(--t-text-primary);
   transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(124, 58, 237, 0.15);
+  box-shadow: 0 4px 12px var(--t-brand-subtle);
 }
 
 /* ============ Messages ============ */
@@ -1811,15 +1807,15 @@ watch(() => route.path, () => {
 }
 
 .user-avatar {
-  background: #262630;
-  color: rgba(255, 255, 255, 0.7);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: var(--t-bg-panel-hover);
+  color: var(--t-text-secondary);
+  border: 1px solid var(--t-border-subtle);
 }
 
 .assistant-avatar {
-  background: linear-gradient(135deg, #7c3aed, #6366f1);
+  background: var(--t-brand-gradient);
   color: #fff;
-  box-shadow: 0 2px 8px rgba(124, 58, 237, 0.3);
+  box-shadow: 0 2px 8px var(--t-brand-glow);
 }
 
 .msg-bubble {
@@ -1828,11 +1824,11 @@ watch(() => route.path, () => {
 }
 
 .user-bubble {
-  background: #161622;
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: var(--t-bg-elevated);
+  border: 1px solid var(--t-border-subtle);
   border-radius: 14px;
   padding: 14px 18px;
-  color: rgba(255, 255, 255, 0.9);
+  color: var(--t-text-primary);
   font-size: 14px;
   line-height: 1.65;
   white-space: pre-wrap;
@@ -1843,8 +1839,8 @@ watch(() => route.path, () => {
   padding: 6px 0;
   font-size: 14px;
   line-height: 1.75;
-  color: rgba(255, 255, 255, 0.82);
-  border-left: 2px solid rgba(124, 58, 237, 0.25);
+  color: var(--t-text-primary);
+  border-left: 2px solid var(--t-brand-glow);
   padding-left: 16px;
 }
 
@@ -1870,38 +1866,38 @@ watch(() => route.path, () => {
 }
 
 .step.pending {
-  background: rgba(255, 255, 255, 0.04);
-  color: rgba(255, 255, 255, 0.35);
-  border-color: rgba(255, 255, 255, 0.06);
+  background: var(--t-bg-subtle);
+  color: var(--t-text-muted);
+  border-color: var(--t-border-subtle);
 }
 
 .step.running {
-  background: rgba(124, 58, 237, 0.12);
-  color: #a78bfa;
-  border-color: rgba(124, 58, 237, 0.25);
+  background: var(--t-brand-subtle);
+  color: var(--t-brand-light);
+  border-color: var(--t-brand-glow);
   animation: pulse-step 2s ease-in-out infinite;
 }
 
 .step.done {
   background: rgba(74, 222, 128, 0.08);
-  color: #4ade80;
+  color: var(--t-success);
   border-color: rgba(74, 222, 128, 0.2);
 }
 
 .step.error {
   background: rgba(248, 113, 113, 0.08);
-  color: #f87171;
+  color: var(--t-danger);
   border-color: rgba(248, 113, 113, 0.2);
 }
 
 @keyframes pulse-step {
   0%, 100% {
-    border-color: rgba(124, 58, 237, 0.25);
-    box-shadow: 0 0 0 0 rgba(124, 58, 237, 0);
+    border-color: var(--t-brand-glow);
+    box-shadow: 0 0 0 0 transparent;
   }
   50% {
-    border-color: rgba(124, 58, 237, 0.5);
-    box-shadow: 0 0 8px rgba(124, 58, 237, 0.15);
+    border-color: var(--t-brand);
+    box-shadow: 0 0 8px var(--t-brand-subtle);
   }
 }
 
@@ -1923,16 +1919,16 @@ watch(() => route.path, () => {
   margin: 14px 0;
   border-radius: 12px;
   overflow: hidden;
-  background: #1a1a2e;
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: var(--t-bg-panel);
+  border: 1px solid var(--t-border-subtle);
 }
 
 .msg-text :deep(.code-block-header) {
   padding: 10px 14px;
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--t-bg-subtle);
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.5);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  color: var(--t-text-secondary);
+  border-bottom: 1px solid var(--t-border-subtle);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -1943,7 +1939,7 @@ watch(() => route.path, () => {
 }
 
 .msg-text :deep(.code-block-header:hover) {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--t-bg-subtle);
 }
 
 .msg-text :deep(.code-block-header::-webkit-details-marker) {
@@ -1953,7 +1949,7 @@ watch(() => route.path, () => {
 .msg-text :deep(.code-block-header::before) {
   content: '▶';
   font-size: 9px;
-  color: rgba(255, 255, 255, 0.3);
+  color: var(--t-text-muted);
   transition: transform 0.25s ease;
 }
 
@@ -1967,19 +1963,19 @@ watch(() => route.path, () => {
 
 .msg-text :deep(.code-file-name) {
   font-weight: 600;
-  color: #a78bfa;
+  color: var(--t-brand-light);
   font-family: 'SF Mono', Menlo, Consolas, monospace;
 }
 
 .msg-text :deep(.code-file-path) {
-  color: rgba(255, 255, 255, 0.3);
+  color: var(--t-text-muted);
   font-family: 'SF Mono', Menlo, Consolas, monospace;
   font-size: 11px;
   flex: 1;
 }
 
 .msg-text :deep(.code-line-count) {
-  color: rgba(255, 255, 255, 0.25);
+  color: var(--t-text-muted);
   font-size: 11px;
   white-space: nowrap;
 }
@@ -1995,32 +1991,32 @@ watch(() => route.path, () => {
 .msg-text :deep(.code-block code) {
   font-size: 12.5px;
   font-family: 'SF Mono', Menlo, Consolas, monospace;
-  color: rgba(255, 255, 255, 0.78);
+  color: var(--t-text-primary);
   line-height: 1.65;
 }
 
 .msg-text :deep(.code-inline) {
   margin: 8px 0;
   padding: 12px 14px;
-  background: #1a1a2e;
+  background: var(--t-bg-panel);
   border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--t-border-subtle);
   overflow-x: auto;
 }
 
 .msg-text :deep(.code-inline code) {
   font-size: 12.5px;
   font-family: 'SF Mono', Menlo, Consolas, monospace;
-  color: rgba(255, 255, 255, 0.78);
+  color: var(--t-text-primary);
 }
 
 .msg-text :deep(.inline-code) {
-  background: rgba(124, 58, 237, 0.12);
+  background: var(--t-brand-subtle);
   padding: 2px 7px;
   border-radius: 6px;
   font-size: 12px;
   font-family: 'SF Mono', Menlo, Consolas, monospace;
-  color: #a78bfa;
+  color: var(--t-brand-light);
 }
 
 /* ============ Inline Preview ============ */
@@ -2028,8 +2024,8 @@ watch(() => route.path, () => {
   margin: 14px 0;
   border-radius: 12px;
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  background: #161622;
+  border: 1px solid var(--t-border-subtle);
+  background: var(--t-bg-elevated);
 }
 
 .preview-header {
@@ -2037,10 +2033,10 @@ watch(() => route.path, () => {
   align-items: center;
   gap: 8px;
   padding: 10px 14px;
-  background: rgba(255, 255, 255, 0.03);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  background: var(--t-bg-subtle);
+  border-bottom: 1px solid var(--t-border-subtle);
   font-size: 13px;
-  color: rgba(255, 255, 255, 0.6);
+  color: var(--t-text-secondary);
 }
 
 .preview-icon {
@@ -2062,7 +2058,7 @@ watch(() => route.path, () => {
 
 .screenshot-header {
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.5);
+  color: var(--t-text-secondary);
   margin-bottom: 10px;
   font-weight: 500;
 }
@@ -2070,7 +2066,7 @@ watch(() => route.path, () => {
 .debug-screenshot {
   max-width: 100%;
   border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--t-border-subtle);
   cursor: pointer;
   transition: all 0.25s ease;
 }
@@ -2085,10 +2081,10 @@ watch(() => route.path, () => {
   margin-top: 12px;
   padding: 10px 14px;
   border-radius: 10px;
-  background: #161622;
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: var(--t-bg-elevated);
+  border: 1px solid var(--t-border-subtle);
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.5);
+  color: var(--t-text-secondary);
 }
 
 .file-summary-icon {
@@ -2097,7 +2093,7 @@ watch(() => route.path, () => {
 
 /* ============ Typing / Thinking ============ */
 .typing-cursor {
-  color: #7c3aed;
+  color: var(--t-brand);
   animation: blink 1s step-end infinite;
 }
 
@@ -2115,7 +2111,7 @@ watch(() => route.path, () => {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #7c3aed;
+  background: var(--t-brand);
   animation: thinking 1.4s ease-in-out infinite;
 }
 
@@ -2136,8 +2132,8 @@ watch(() => route.path, () => {
 .input-area {
   flex-shrink: 0;
   padding: 14px 28px 18px;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
-  background: #0a0a0a;
+  border-top: 1px solid var(--t-border-subtle);
+  background: var(--t-bg-base);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -2149,8 +2145,8 @@ watch(() => route.path, () => {
   gap: 8px;
   width: 100%;
   max-width: 780px;
-  background: #161622;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--t-bg-elevated);
+  border: 1px solid var(--t-border-subtle);
   border-radius: 16px;
   padding: 10px 14px;
   transition: all 0.3s ease;
@@ -2158,17 +2154,17 @@ watch(() => route.path, () => {
 
 .input-wrapper:focus-within {
   border-color: transparent;
-  background: linear-gradient(#161622, #161622) padding-box,
-              linear-gradient(135deg, #7c3aed, #6366f1) border-box;
+  background: linear-gradient(var(--t-bg-elevated), var(--t-bg-elevated)) padding-box,
+              var(--t-brand-gradient) border-box;
   border: 1px solid transparent;
-  box-shadow: 0 0 16px rgba(124, 58, 237, 0.12);
+  box-shadow: 0 0 16px var(--t-brand-subtle);
 }
 
 .input-wrapper :deep(.el-textarea__inner) {
   background: transparent !important;
   border: none !important;
   box-shadow: none !important;
-  color: rgba(255, 255, 255, 0.9);
+  color: var(--t-text-primary);
   font-size: 14px;
   line-height: 1.55;
   padding: 4px 0;
@@ -2179,35 +2175,35 @@ watch(() => route.path, () => {
   flex-shrink: 0;
   width: 36px;
   height: 36px;
-  background: linear-gradient(135deg, #7c3aed, #6366f1) !important;
+  background: var(--t-brand-gradient) !important;
   border: none !important;
   transition: all 0.2s ease;
 }
 
 .send-btn:hover:not(:disabled) {
   transform: scale(1.05);
-  box-shadow: 0 2px 10px rgba(124, 58, 237, 0.4);
+  box-shadow: 0 2px 10px var(--t-brand-glow);
 }
 
 .send-btn:disabled {
   opacity: 0.4;
-  background: rgba(255, 255, 255, 0.1) !important;
+  background: var(--t-border-subtle) !important;
 }
 
 .attach-btn {
   flex-shrink: 0;
-  color: rgba(255, 255, 255, 0.4);
+  color: var(--t-text-muted);
   padding: 4px;
   transition: color 0.2s ease;
 }
 
 .attach-btn:hover {
-  color: rgba(255, 255, 255, 0.8);
+  color: var(--t-text-primary);
 }
 
 .input-hint {
   font-size: 11px;
-  color: rgba(255, 255, 255, 0.25);
+  color: var(--t-text-muted);
   margin-top: 8px;
   letter-spacing: 0.01em;
 }
@@ -2218,8 +2214,8 @@ watch(() => route.path, () => {
   max-width: 780px;
   margin-bottom: 10px;
   padding: 10px 14px;
-  background: #161622;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--t-bg-elevated);
+  border: 1px solid var(--t-border-subtle);
   border-radius: 14px;
   display: flex;
   align-items: center;
@@ -2236,14 +2232,14 @@ watch(() => route.path, () => {
   height: 60px;
   object-fit: cover;
   border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--t-border-subtle);
 }
 
 .attachment-file {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: rgba(255, 255, 255, 0.7);
+  color: var(--t-text-secondary);
   font-size: 13px;
 }
 
@@ -2259,9 +2255,9 @@ watch(() => route.path, () => {
 }
 
 .attachment-remove {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--t-border-subtle);
   border: none;
-  color: rgba(255, 255, 255, 0.5);
+  color: var(--t-text-secondary);
   cursor: pointer;
   font-size: 16px;
   width: 24px;
@@ -2276,7 +2272,7 @@ watch(() => route.path, () => {
 
 .attachment-remove:hover {
   background: rgba(248, 113, 113, 0.2);
-  color: #f87171;
+  color: var(--t-danger);
 }
 
 .attachment-thumb .attachment-remove {
@@ -2298,12 +2294,12 @@ watch(() => route.path, () => {
 }
 
 .chat-area::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--t-border-subtle);
   border-radius: 4px;
 }
 
 .chat-area::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.15);
+  background: var(--t-border-strong);
 }
 
 .sidebar-list::-webkit-scrollbar {
@@ -2315,32 +2311,32 @@ watch(() => route.path, () => {
 }
 
 .sidebar-list::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--t-border-subtle);
   border-radius: 4px;
 }
 
 /* ============ Element Plus Dark Overrides ============ */
 .coding-page :deep(.el-tag--info) {
-  background: rgba(124, 58, 237, 0.12);
-  border-color: rgba(124, 58, 237, 0.2);
-  color: #a78bfa;
+  background: var(--t-brand-subtle);
+  border-color: var(--t-brand-glow);
+  color: var(--t-brand-light);
 }
 
 .coding-page :deep(.el-button--primary) {
-  background: linear-gradient(135deg, #7c3aed, #6366f1);
+  background: var(--t-brand-gradient);
   border: none;
   transition: all 0.2s ease;
 }
 
 .coding-page :deep(.el-button--primary:hover) {
-  box-shadow: 0 2px 10px rgba(124, 58, 237, 0.35);
+  box-shadow: 0 2px 10px var(--t-brand-glow);
   filter: brightness(1.1);
 }
 
 .coding-page :deep(.el-button--success) {
   background: rgba(74, 222, 128, 0.15);
   border-color: rgba(74, 222, 128, 0.3);
-  color: #4ade80;
+  color: var(--t-success);
   transition: all 0.2s ease;
 }
 

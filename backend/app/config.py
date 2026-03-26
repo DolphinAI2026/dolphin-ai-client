@@ -44,5 +44,9 @@ class Settings(BaseSettings):
     # 开发/测试环境建议开启，生产环境建议关闭
     enable_code_suffix: bool = False
 
+    # Web IDE (code-server)
+    # code-server 的外部访问基础 URL，留空则禁用 Web IDE 功能
+    code_server_base_url: str = ""  # e.g. https://your-domain.com/ide/
+
 
 settings = Settings()

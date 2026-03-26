@@ -218,18 +218,18 @@ const changeTypeLabel = (type: string): string => {
   padding: 8px 12px;
   font-size: 12px;
   font-weight: 500;
-  color: #888;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  color: var(--t-text-secondary);
+  border-bottom: 1px solid var(--t-border-subtle);
 }
 
 .old-panel .panel-title {
   background: rgba(248, 113, 113, 0.1);
-  color: #f87171;
+  color: var(--t-danger);
 }
 
 .new-panel .panel-title {
   background: rgba(74, 222, 128, 0.1);
-  color: #4ade80;
+  color: var(--t-success);
 }
 
 .panel-content {
@@ -242,7 +242,7 @@ const changeTypeLabel = (type: string): string => {
 }
 
 .empty-text {
-  color: #666;
+  color: var(--t-text-muted);
   font-size: 13px;
 }
 
@@ -251,7 +251,7 @@ const changeTypeLabel = (type: string): string => {
   justify-content: space-between;
   padding: 4px 0;
   font-size: 12px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  border-bottom: 1px solid var(--t-border-subtle);
 }
 
 .field-row:last-child {
@@ -277,40 +277,40 @@ const changeTypeLabel = (type: string): string => {
 }
 
 .field-key {
-  color: #888;
+  color: var(--t-text-secondary);
   flex-shrink: 0;
 }
 
 .field-value {
-  color: #e0e0e0;
+  color: var(--t-text-primary);
   text-align: right;
   word-break: break-all;
 }
 
 .field-row.deleted .field-value {
   text-decoration: line-through;
-  color: #f87171;
+  color: var(--t-danger);
 }
 
 .field-row.added .field-value {
-  color: #4ade80;
+  color: var(--t-success);
 }
 
 /* 嵌套变更 */
 .nested-changes {
   margin-top: 12px;
   padding-top: 12px;
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  border-top: 1px solid var(--t-border-strong);
 }
 
 .nested-title {
   font-size: 12px;
-  color: #888;
+  color: var(--t-text-secondary);
   margin-bottom: 8px;
 }
 
 .nested-item {
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--t-bg-subtle);
   border-radius: 6px;
   padding: 8px;
   margin-bottom: 8px;
@@ -336,27 +336,27 @@ const changeTypeLabel = (type: string): string => {
 
 .change-tag.added {
   background: rgba(74, 222, 128, 0.2);
-  color: #4ade80;
+  color: var(--t-success);
 }
 
 .change-tag.modified {
   background: rgba(251, 191, 36, 0.2);
-  color: #fbbf24;
+  color: var(--t-warning);
 }
 
 .change-tag.deleted {
   background: rgba(248, 113, 113, 0.2);
-  color: #f87171;
+  color: var(--t-danger);
 }
 
 .nested-name {
   font-size: 12px;
   font-weight: 500;
-  color: #e0e0e0;
+  color: var(--t-text-primary);
 }
 
 .nested-code {
   font-size: 11px;
-  color: #666;
+  color: var(--t-text-muted);
 }
 </style>

@@ -8,10 +8,13 @@
         <div class="logo-box">A</div>
         <span class="title">我的应用</span>
       </div>
-      <button class="new-btn" @click="router.push('/chat')">
+      <div class="nav-right-group">
+        <ThemeToggle />
+        <button class="new-btn" @click="router.push('/chat')">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
         新建应用
       </button>
+      </div>
     </nav>
 
     <!-- Filter tabs + view toggle -->
@@ -128,6 +131,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { applicationApi } from '@/api/application'
 import type { MergedApplication } from '@/types'
+import ThemeToggle from '@/components/ThemeToggle.vue'
 
 const router = useRouter()
 const apps = ref<MergedApplication[]>([])
@@ -212,8 +216,8 @@ onMounted(async () => {
   height: 100vh;
   display: flex;
   flex-direction: column;
-  background: #141418;
-  color: rgba(255, 255, 255, 0.92);
+  background: var(--t-bg-base);
+  color: var(--t-text-primary);
 }
 
 /* ── Nav ── */
@@ -222,10 +226,10 @@ onMounted(async () => {
   justify-content: space-between;
   align-items: center;
   padding: 12px 24px;
-  background: rgba(26, 26, 32, 0.82);
+  background: var(--t-bg-nav);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid var(--t-border-subtle);
   flex-shrink: 0;
 }
 
@@ -238,7 +242,7 @@ onMounted(async () => {
 .back-btn {
   background: none;
   border: none;
-  color: rgba(255, 255, 255, 0.5);
+  color: var(--t-text-secondary);
   cursor: pointer;
   padding: 4px;
   border-radius: 6px;
@@ -246,12 +250,12 @@ onMounted(async () => {
   align-items: center;
   transition: all 0.2s;
 }
-.back-btn:hover { color: #fff; background: rgba(255,255,255,0.06); }
+.back-btn:hover { color: #fff; background: var(--t-border-subtle); }
 
 .logo-box {
   width: 28px;
   height: 28px;
-  background: linear-gradient(135deg, #7c3aed, #6366f1);
+  background: var(--t-brand-gradient);
   border-radius: 8px;
   display: flex;
   align-items: center;
@@ -264,14 +268,14 @@ onMounted(async () => {
 .title {
   font-size: 15px;
   font-weight: 600;
-  color: rgba(255, 255, 255, 0.92);
+  color: var(--t-text-primary);
 }
 
 .new-btn {
   display: flex;
   align-items: center;
   gap: 6px;
-  background: linear-gradient(135deg, #7c3aed, #6366f1);
+  background: var(--t-brand-gradient);
   color: #fff;
   border: none;
   padding: 8px 18px;
@@ -280,6 +284,11 @@ onMounted(async () => {
   font-weight: 500;
   cursor: pointer;
   transition: opacity 0.2s;
+}
+.nav-right-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 .new-btn:hover { opacity: 0.9; }
 
@@ -302,7 +311,7 @@ onMounted(async () => {
 .view-toggle {
   display: flex;
   gap: 2px;
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--t-bg-subtle);
   border-radius: 8px;
   padding: 2px;
 }
@@ -312,7 +321,7 @@ onMounted(async () => {
   height: 32px;
   border: none;
   background: none;
-  color: rgba(255, 255, 255, 0.35);
+  color: var(--t-text-muted);
   cursor: pointer;
   border-radius: 6px;
   display: flex;
@@ -320,15 +329,15 @@ onMounted(async () => {
   justify-content: center;
   transition: all 0.15s;
 }
-.toggle-btn:hover { color: rgba(255, 255, 255, 0.6); }
-.toggle-btn.active { background: rgba(124, 58, 237, 0.2); color: #c4b5fd; }
+.toggle-btn:hover { color: var(--t-text-secondary); }
+.toggle-btn.active { background: var(--t-brand-subtle); color: var(--t-brand-light); }
 
 .filter-tab {
   background: none;
   border: none;
   padding: 7px 16px;
   font-size: 13px;
-  color: rgba(255, 255, 255, 0.5);
+  color: var(--t-text-secondary);
   cursor: pointer;
   border-radius: 8px;
   display: flex;
@@ -336,19 +345,19 @@ onMounted(async () => {
   gap: 6px;
   transition: all 0.15s;
 }
-.filter-tab:hover { background: rgba(255, 255, 255, 0.06); color: rgba(255, 255, 255, 0.8); }
-.filter-tab.active { background: rgba(124, 58, 237, 0.15); color: #c4b5fd; font-weight: 600; }
+.filter-tab:hover { background: var(--t-border-subtle); color: var(--t-text-primary); }
+.filter-tab.active { background: var(--t-brand-subtle); color: var(--t-brand-light); font-weight: 600; }
 
 .tab-count {
   font-size: 11px;
-  background: rgba(255, 255, 255, 0.08);
-  color: rgba(255, 255, 255, 0.5);
+  background: var(--t-border-subtle);
+  color: var(--t-text-secondary);
   padding: 0 7px;
   border-radius: 10px;
   min-width: 20px;
   text-align: center;
 }
-.filter-tab.active .tab-count { background: rgba(124, 58, 237, 0.25); color: #c4b5fd; }
+.filter-tab.active .tab-count { background: var(--t-brand-subtle); color: var(--t-brand-light); }
 
 /* ── Content area ── */
 .app-content {
@@ -375,7 +384,7 @@ onMounted(async () => {
 
 .empty-state {
   text-align: center;
-  color: rgba(255, 255, 255, 0.35);
+  color: var(--t-text-muted);
   padding: 80px 0;
   display: flex;
   flex-direction: column;
@@ -386,8 +395,8 @@ onMounted(async () => {
 
 /* ── Grid Card ── */
 .grid-card {
-  background: #1e1e26;
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: var(--t-bg-panel);
+  border: 1px solid var(--t-border-subtle);
   border-radius: 14px;
   padding: 18px;
   cursor: pointer;
@@ -398,8 +407,8 @@ onMounted(async () => {
   position: relative;
 }
 .grid-card:hover {
-  background: #252530;
-  border-color: rgba(124, 58, 237, 0.25);
+  background: var(--t-bg-input);
+  border-color: var(--t-brand-subtle);
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
   transform: translateY(-2px);
 }
@@ -419,8 +428,8 @@ onMounted(async () => {
   justify-content: center;
   font-size: 20px;
 }
-.grid-card-icon.success { background: rgba(124, 58, 237, 0.12); }
-.grid-card-icon.draft { background: rgba(255, 255, 255, 0.06); }
+.grid-card-icon.success { background: var(--t-brand-subtle); }
+.grid-card-icon.draft { background: var(--t-border-subtle); }
 .grid-card-icon.remote { background: rgba(59, 130, 246, 0.12); }
 .grid-card-icon.linked { background: rgba(52, 211, 153, 0.12); }
 
@@ -432,7 +441,7 @@ onMounted(async () => {
 .grid-card-name {
   font-size: 15px;
   font-weight: 600;
-  color: rgba(255, 255, 255, 0.92);
+  color: var(--t-text-primary);
   margin: 0;
   line-height: 1.3;
 }
@@ -442,7 +451,7 @@ onMounted(async () => {
   gap: 8px;
   align-items: center;
   font-size: 11px;
-  color: rgba(255, 255, 255, 0.35);
+  color: var(--t-text-muted);
 }
 
 .grid-card-date { font-size: 11px; }
@@ -452,9 +461,9 @@ onMounted(async () => {
   flex-wrap: wrap;
   gap: 12px;
   padding-top: 10px;
-  border-top: 1px solid rgba(255, 255, 255, 0.04);
+  border-top: 1px solid var(--t-bg-subtle);
   font-size: 11px;
-  color: rgba(255, 255, 255, 0.45);
+  color: var(--t-text-muted);
 }
 
 .grid-card-actions {
@@ -470,16 +479,16 @@ onMounted(async () => {
 
 /* ── List Card ── */
 .list-card {
-  background: #1e1e26;
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: var(--t-bg-panel);
+  border: 1px solid var(--t-border-subtle);
   border-radius: 14px;
   padding: 18px 20px;
   cursor: pointer;
   transition: all 0.2s;
 }
 .list-card:hover {
-  background: #252530;
-  border-color: rgba(255, 255, 255, 0.1);
+  background: var(--t-bg-input);
+  border-color: var(--t-border-subtle);
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
 }
 
@@ -506,8 +515,8 @@ onMounted(async () => {
   font-size: 18px;
   flex-shrink: 0;
 }
-.card-icon.success { background: rgba(124, 58, 237, 0.12); }
-.card-icon.draft { background: rgba(255, 255, 255, 0.06); }
+.card-icon.success { background: var(--t-brand-subtle); }
+.card-icon.draft { background: var(--t-border-subtle); }
 .card-icon.remote { background: rgba(59, 130, 246, 0.12); }
 .card-icon.linked { background: rgba(52, 211, 153, 0.12); }
 
@@ -523,7 +532,7 @@ onMounted(async () => {
 .card-name-row h3 {
   font-size: 14px;
   font-weight: 600;
-  color: rgba(255, 255, 255, 0.92);
+  color: var(--t-text-primary);
   margin: 0;
   white-space: nowrap;
 }
@@ -535,8 +544,8 @@ onMounted(async () => {
   font-weight: 500;
   white-space: nowrap;
 }
-.source-badge.local { background: rgba(255, 255, 255, 0.08); color: rgba(255, 255, 255, 0.5); }
-.source-badge.remote { background: rgba(59, 130, 246, 0.15); color: #60a5fa; }
+.source-badge.local { background: var(--t-border-subtle); color: var(--t-text-secondary); }
+.source-badge.remote { background: rgba(59, 130, 246, 0.15); color: var(--t-info); }
 .source-badge.linked { background: rgba(52, 211, 153, 0.15); color: #34d399; }
 
 .card-status {
@@ -546,16 +555,16 @@ onMounted(async () => {
   font-weight: 500;
 }
 .card-status.success { background: rgba(52, 211, 153, 0.15); color: #34d399; }
-.card-status.draft { background: rgba(255, 255, 255, 0.06); color: rgba(255, 255, 255, 0.4); }
+.card-status.draft { background: var(--t-border-subtle); color: var(--t-text-muted); }
 .card-status.linked { background: rgba(52, 211, 153, 0.15); color: #34d399; }
-.card-status.remote { background: rgba(59, 130, 246, 0.15); color: #60a5fa; }
-.card-status.failed { background: rgba(239, 68, 68, 0.15); color: #f87171; }
+.card-status.remote { background: rgba(59, 130, 246, 0.15); color: var(--t-info); }
+.card-status.failed { background: rgba(239, 68, 68, 0.15); color: var(--t-danger); }
 
 .card-meta {
   display: flex;
   gap: 10px;
   font-size: 11px;
-  color: rgba(255, 255, 255, 0.35);
+  color: var(--t-text-muted);
   align-items: center;
   margin-top: 4px;
   flex-wrap: wrap;
@@ -564,8 +573,8 @@ onMounted(async () => {
 .card-code {
   font-family: 'SF Mono', Monaco, Consolas, monospace;
   font-size: 10px;
-  color: rgba(255, 255, 255, 0.4);
-  background: rgba(255, 255, 255, 0.06);
+  color: var(--t-text-muted);
+  background: var(--t-border-subtle);
   padding: 1px 6px;
   border-radius: 4px;
 }
@@ -581,9 +590,9 @@ onMounted(async () => {
   width: 32px;
   height: 32px;
   border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.04);
-  color: rgba(255, 255, 255, 0.5);
+  border: 1px solid var(--t-border-subtle);
+  background: var(--t-bg-subtle);
+  color: var(--t-text-secondary);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -591,11 +600,11 @@ onMounted(async () => {
   transition: all 0.2s;
   text-decoration: none;
 }
-.action-btn:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
-.action-btn.primary { border-color: rgba(124, 58, 237, 0.2); color: #a78bfa; }
-.action-btn.primary:hover { background: rgba(124, 58, 237, 0.12); color: #c4b5fd; }
+.action-btn:hover { background: var(--t-border-subtle); color: #fff; }
+.action-btn.primary { border-color: var(--t-brand-subtle); color: var(--t-brand-light); }
+.action-btn.primary:hover { background: var(--t-brand-subtle); color: var(--t-brand-light); }
 .action-btn.danger { border-color: rgba(239, 68, 68, 0.15); color: rgba(239, 68, 68, 0.5); }
-.action-btn.danger:hover { background: rgba(239, 68, 68, 0.1); color: #f87171; }
+.action-btn.danger:hover { background: rgba(239, 68, 68, 0.1); color: var(--t-danger); }
 
 /* ── Stats ── */
 .card-stats {
@@ -603,9 +612,9 @@ onMounted(async () => {
   gap: 20px;
   margin-top: 14px;
   padding-top: 12px;
-  border-top: 1px solid rgba(255, 255, 255, 0.04);
+  border-top: 1px solid var(--t-bg-subtle);
   font-size: 11px;
-  color: rgba(255, 255, 255, 0.45);
+  color: var(--t-text-muted);
 }
 
 .card-stats .dot {
@@ -615,10 +624,10 @@ onMounted(async () => {
   border-radius: 50%;
   margin-right: 5px;
 }
-.dot.indigo { background: #818cf8; }
+.dot.indigo { background: var(--t-brand-light); }
 .dot.emerald { background: #34d399; }
-.dot.amber { background: #fbbf24; }
-.dot.purple { background: #a78bfa; }
+.dot.amber { background: var(--t-warning); }
+.dot.purple { background: var(--t-brand-light); }
 
 /* ── Env badge ── */
 .env-badge {

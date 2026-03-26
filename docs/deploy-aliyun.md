@@ -330,6 +330,90 @@ mysql -u apaas -p apaas_builder -e "SELECT 1"
 
 进入环境管理页面，添加平台连接信息并点击"登录"。确保环境状态为"已连接"。
 
+## 9. Web IDE（code-server）集成（可选）
+
+集成 code-server 后，用户可以直接在浏览器中打开 VS Code 编辑工作区代码，无需安装本地 VS Code 或配置 Remote SSH。
+
+### 9.1 安装 code-server
+
+```bash
+# 一键安装（推荐）
+curl -fsSL https://code-server.dev/install.sh | sh
+
+# 验证
+code-server --version
+```
+
+### 9.2 配置 code-server
+
+```bash
+mkdir -p ~/.config/code-server
+cat > ~/.config/code-server/config.yaml << 'EOF'
+bind-addr: 127.0.0.1:8080
+auth: password
+password: your_ide_password
+cert: false
+EOF
+```
+
+> **说明**：code-server 监听 127.0.0.1，通过 Nginx 反向代理对外暴露，不直接暴露端口。
+
+### 9.3 启动 code-server（systemd）
+
+```bash
+# 启用并启动
+systemctl enable --now code-server@root
+
+# 查看状态
+systemctl status code-server@root
+```
+
+### 9.4 Nginx 代理 code-server
+
+在 `/etc/nginx/apaas-builder.conf` 中追加：
+
+```nginx
+# Web IDE (code-server)
+location /ide/ {
+    proxy_pass http://127.0.0.1:8080/;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_read_timeout 300s;
+}
+```
+
+重载 Nginx：
+
+```bash
+nginx -t && nginx -s reload
+```
+
+### 9.5 配置后端环境变量
+
+在 `/root/apaas-builder/backend/.env` 中添加：
+
+```env
+# Web IDE
+CODE_SERVER_BASE_URL=https://your-domain.com/ide
+```
+
+重启后端：
+
+```bash
+systemctl restart apaas-builder
+```
+
+### 9.6 验证
+
+1. 访问 `https://your-domain.com/ide/` 确认 code-server 登录页正常
+2. 进入 AI Coding 页面，点击「在 IDE 中打开」→「Web IDE（浏览器）」
+3. 浏览器新标签页应打开 code-server 并自动跳转到对应工作区目录
+
 ## 目录结构
 
 ```
@@ -344,5 +428,6 @@ mysql -u apaas -p apaas_builder -e "SELECT 1"
 │   ├── dist/             # 构建产物（Nginx 指向此目录）
 │   ├── src/              # 前端源码
 │   └── package.json
+├── workspaces/           # AI Coding 工作区（code-server 编辑此目录）
 └── backend.log           # 后端日志（nohup 模式）
 ```

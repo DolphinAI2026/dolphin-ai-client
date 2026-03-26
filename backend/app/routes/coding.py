@@ -510,6 +510,24 @@ async def get_workspace_info(
         raise HTTPException(status_code=404, detail="工作区不存在")
 
 
+@router.get("/workspace/{ws_id}/ide-url")
+async def get_workspace_ide_url(
+    ws_id: str,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+):
+    """获取工作区的 Web IDE (code-server) URL"""
+    base_url = settings.code_server_base_url
+    if not base_url:
+        raise HTTPException(status_code=501, detail="Web IDE 未配置，请在 .env 中设置 CODE_SERVER_BASE_URL")
+    ws_path = WORKSPACE_ROOT / ws_id
+    if not ws_path.exists():
+        raise HTTPException(status_code=404, detail="工作区不存在")
+    # code-server 支持 ?folder= 参数直接打开指定目录
+    base_url = base_url.rstrip("/")
+    ide_url = f"{base_url}/?folder={ws_path.resolve()}"
+    return {"ide_url": ide_url}
+
+
 @router.get("/workspace/{ws_id}/files")
 async def list_workspace_files(
     ws_id: str,

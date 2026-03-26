@@ -27,6 +27,7 @@
         </button>
       </div>
       <div class="nav-right">
+        <ThemeToggle />
         <el-dropdown @command="handleUserCommand">
           <button class="user-btn">
             <div class="user-avatar">{{ userStore.user?.username?.charAt(0).toUpperCase() || 'U' }}</div>
@@ -59,7 +60,7 @@
       <div class="center-area">
         <!-- Hero -->
         <div class="hero">
-          <div class="hero-sparkle"><svg width="48" height="48" viewBox="0 0 24 24" fill="none"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" fill="url(#starGrad)" stroke="none"/><defs><linearGradient id="starGrad" x1="2" y1="2" x2="22" y2="22"><stop offset="0%" stop-color="#c4b5fd"/><stop offset="100%" stop-color="#7c3aed"/></linearGradient></defs></svg></div>
+          <div class="hero-sparkle"><svg width="48" height="48" viewBox="0 0 24 24" fill="none"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" fill="url(#starGrad)" stroke="none"/><defs><linearGradient id="starGrad" x1="2" y1="2" x2="22" y2="22"><stop offset="0%" stop-color="#c7d2fe"/><stop offset="100%" stop-color="#6366f1"/></linearGradient></defs></svg></div>
           <h1 class="hero-title">aPaaS Builder AI</h1>
           <p class="hero-desc">用 AI 构建企业级低代码应用</p>
         </div>
@@ -92,7 +93,7 @@
             <button v-for="t in templates" :key="t.code" class="tpl-card" :class="{ loading: templateLoading === t.code }" @click="startWithTemplate(t)">
               <div class="tpl-icon">
                 <svg v-if="t.icon === 'users'" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-                <svg v-else-if="t.icon === 'wrench'" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+                <svg v-else-if="t.icon === 'wrench'" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
                 <svg v-else-if="t.icon === 'clipboard'" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#34d399" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/><line x1="8" y1="10" x2="16" y2="10"/><line x1="8" y1="14" x2="16" y2="14"/><line x1="8" y1="18" x2="12" y2="18"/></svg>
               </div>
               <div class="tpl-name">{{ t.name }}</div>
@@ -127,6 +128,7 @@ import { projectsApi, type Project } from '@/api/projects'
 import ConnectModal from '@/components/ConnectModal.vue'
 import ProjectSettingsModal from '@/components/ProjectSettingsModal.vue'
 import TemplateManager from '@/components/TemplateManager.vue'
+import ThemeToggle from '@/components/ThemeToggle.vue'
 import type { MergedApplication } from '@/types'
 
 const router = useRouter()
@@ -248,36 +250,13 @@ const handleUserCommand = (command: string) => {
 </script>
 
 <style scoped>
-/* ── CSS Variables ── */
-.landing {
-  --bg-base: #141418;
-  --bg-nav: rgba(26, 26, 32, 0.82);
-  --bg-card: #1e1e26;
-  --bg-card-hover: #28283a;
-  --bg-input: #252530;
-  --bg-elevated: #28283a;
-  --border-subtle: rgba(255, 255, 255, 0.08);
-  --border-hover: rgba(255, 255, 255, 0.14);
-  --text-primary: rgba(255, 255, 255, 0.92);
-  --text-secondary: rgba(255, 255, 255, 0.55);
-  --text-tertiary: rgba(255, 255, 255, 0.35);
-  --accent-gradient: linear-gradient(135deg, #7c3aed, #6366f1);
-  --accent-purple: #7c3aed;
-  --accent-indigo: #6366f1;
-  --accent-glow: rgba(124, 58, 237, 0.18);
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
-  --radius-xl: 20px;
-}
-
 /* ── Layout ── */
 .landing {
   height: 100vh;
   display: flex;
   flex-direction: column;
-  background: var(--bg-base);
-  color: var(--text-primary);
+  background: var(--t-bg-base);
+  color: var(--t-text-primary);
 }
 
 .main-scroll {
@@ -298,10 +277,10 @@ const handleUserCommand = (command: string) => {
   justify-content: space-between;
   align-items: center;
   padding: 12px 24px;
-  background: var(--bg-nav);
+  background: var(--t-bg-nav);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--t-border-subtle);
   position: sticky;
   top: 0;
   z-index: 100;
@@ -316,8 +295,8 @@ const handleUserCommand = (command: string) => {
 .logo-box {
   width: 30px;
   height: 30px;
-  background: var(--accent-gradient);
-  border-radius: var(--radius-sm);
+  background: var(--t-brand-gradient);
+  border-radius: var(--t-radius-sm);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -329,7 +308,7 @@ const handleUserCommand = (command: string) => {
 .logo-text {
   font-size: 15px;
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--t-text-primary);
   letter-spacing: -0.01em;
 }
 
@@ -347,22 +326,23 @@ const handleUserCommand = (command: string) => {
   padding: 6px 14px;
   border: none;
   background: none;
-  color: var(--text-secondary);
+  color: var(--t-text-secondary);
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
-  border-radius: var(--radius-sm);
+  border-radius: var(--t-radius-sm);
   transition: all 0.2s;
 }
 
 .nav-link:hover {
-  color: var(--text-primary);
-  background: rgba(255, 255, 255, 0.06);
+  color: var(--t-text-primary);
+  background: var(--t-border-subtle);
 }
 
 .nav-right {
   display: flex;
   align-items: center;
+  gap: 12px;
 }
 
 .user-btn {
@@ -377,14 +357,14 @@ const handleUserCommand = (command: string) => {
 }
 
 .user-btn:hover {
-  box-shadow: 0 0 0 2px var(--border-hover);
+  box-shadow: 0 0 0 2px var(--t-border-strong);
 }
 
 .user-avatar {
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  background: var(--accent-gradient);
+  background: var(--t-brand-gradient);
   color: #fff;
   display: flex;
   align-items: center;
@@ -394,8 +374,8 @@ const handleUserCommand = (command: string) => {
 }
 
 .user-info { padding: 4px 0; }
-.info-label { font-size: 11px; color: var(--text-tertiary); margin-bottom: 2px; }
-.info-value { font-size: 13px; color: var(--text-primary); font-weight: 500; }
+.info-label { font-size: 11px; color: var(--t-text-muted); margin-bottom: 2px; }
+.info-value { font-size: 13px; color: var(--t-text-primary); font-weight: 500; }
 
 /* ── Hero ── */
 .hero {
@@ -413,7 +393,7 @@ const handleUserCommand = (command: string) => {
   transform: translateX(-50%);
   width: 480px;
   height: 260px;
-  background: radial-gradient(ellipse at center, rgba(124, 58, 237, 0.12) 0%, rgba(99, 102, 241, 0.06) 40%, transparent 70%);
+  background: radial-gradient(ellipse at center, var(--t-brand-subtle) 0%, var(--t-brand-subtle) 40%, transparent 70%);
   pointer-events: none;
   z-index: 0;
 }
@@ -431,17 +411,25 @@ const handleUserCommand = (command: string) => {
   font-weight: 700;
   letter-spacing: -0.02em;
   margin: 0 0 10px;
-  background: linear-gradient(135deg, #e0e0e0 0%, #ffffff 40%, #c4b5fd 100%);
+  position: relative;
+  z-index: 1;
+}
+html[data-theme="dark"] .hero-title {
+  background: linear-gradient(135deg, #e0e0e0 0%, #ffffff 40%, var(--t-brand-light) 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
-  position: relative;
-  z-index: 1;
+}
+html[data-theme="light"] .hero-title {
+  background: linear-gradient(135deg, #1e293b 0%, #334155 40%, var(--t-brand) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
 .hero-desc {
   font-size: 16px;
-  color: var(--text-secondary);
+  color: var(--t-text-secondary);
   margin: 0;
   font-weight: 400;
   position: relative;
@@ -457,17 +445,17 @@ const handleUserCommand = (command: string) => {
   display: flex;
   align-items: center;
   gap: 10px;
-  background: var(--bg-input);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-xl);
+  background: var(--t-bg-input);
+  border: 1px solid var(--t-border-subtle);
+  border-radius: var(--t-radius-xl);
   padding: 10px 10px 10px 20px;
   transition: border-color 0.2s, box-shadow 0.2s;
   min-height: 56px;
 }
 
 .input-row:focus-within {
-  border-color: rgba(124, 58, 237, 0.45);
-  box-shadow: 0 0 0 3px var(--accent-glow);
+  border-color: var(--t-brand-glow);
+  box-shadow: 0 0 0 3px var(--t-brand-glow);
 }
 
 .input-row input {
@@ -475,37 +463,37 @@ const handleUserCommand = (command: string) => {
   border: none;
   outline: none;
   font-size: 15px;
-  color: var(--text-primary);
+  color: var(--t-text-primary);
   background: transparent;
   min-width: 0;
 }
 
 .input-row input::placeholder {
-  color: var(--text-tertiary);
+  color: var(--t-text-muted);
 }
 
 .upload-btn {
   cursor: pointer;
   padding: 6px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--t-radius-sm);
   transition: background 0.2s;
-  color: var(--text-tertiary);
+  color: var(--t-text-muted);
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
 .upload-btn:hover {
-  background: var(--bg-elevated);
-  color: var(--text-secondary);
+  background: var(--t-bg-panel-hover);
+  color: var(--t-text-secondary);
 }
 
 .send-btn {
   width: 40px;
   height: 40px;
-  border-radius: var(--radius-md);
+  border-radius: var(--t-radius-md);
   border: none;
-  background: var(--accent-gradient);
+  background: var(--t-brand-gradient);
   color: #fff;
   cursor: pointer;
   display: flex;
@@ -534,9 +522,9 @@ const handleUserCommand = (command: string) => {
 }
 
 .entry-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-lg);
+  background: var(--t-bg-panel);
+  border: 1px solid var(--t-border-subtle);
+  border-radius: var(--t-radius-lg);
   padding: 20px;
   cursor: pointer;
   transition: transform 0.2s, border-color 0.2s, box-shadow 0.2s, background 0.2s;
@@ -547,16 +535,16 @@ const handleUserCommand = (command: string) => {
 
 .entry-card:hover {
   transform: translateY(-2px);
-  background: var(--bg-card-hover);
-  border-color: var(--border-hover);
+  background: var(--t-bg-panel-hover);
+  border-color: var(--t-border-strong);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
 }
 
 .entry-icon {
   width: 44px;
   height: 44px;
-  border-radius: var(--radius-md);
-  background: var(--bg-elevated);
+  border-radius: var(--t-radius-md);
+  background: var(--t-bg-panel-hover);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -572,27 +560,27 @@ const handleUserCommand = (command: string) => {
 .entry-title {
   font-size: 15px;
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--t-text-primary);
   margin-bottom: 3px;
 }
 
 .entry-desc {
   font-size: 12px;
-  color: var(--text-tertiary);
+  color: var(--t-text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .entry-arrow {
-  color: var(--text-tertiary);
+  color: var(--t-text-muted);
   flex-shrink: 0;
   transition: transform 0.2s;
 }
 
 .entry-card:hover .entry-arrow {
   transform: translateX(2px);
-  color: var(--text-secondary);
+  color: var(--t-text-secondary);
 }
 
 /* ── Sections ── */
@@ -603,7 +591,7 @@ const handleUserCommand = (command: string) => {
 .section-title {
   font-size: 13px;
   font-weight: 500;
-  color: var(--text-tertiary);
+  color: var(--t-text-muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   margin: 0 0 16px;
@@ -628,9 +616,9 @@ const handleUserCommand = (command: string) => {
 }
 
 .tpl-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
+  background: var(--t-bg-panel);
+  border: 1px solid var(--t-border-subtle);
+  border-radius: var(--t-radius-md);
   padding: 18px;
   text-align: left;
   cursor: pointer;
@@ -640,9 +628,9 @@ const handleUserCommand = (command: string) => {
 
 .tpl-card:hover {
   transform: translateY(-2px);
-  background: var(--bg-card-hover);
-  border-color: rgba(124, 58, 237, 0.35);
-  box-shadow: 0 6px 24px rgba(124, 58, 237, 0.1), 0 4px 16px rgba(0, 0, 0, 0.2);
+  background: var(--t-bg-panel-hover);
+  border-color: var(--t-brand-glow);
+  box-shadow: 0 6px 24px var(--t-brand-subtle), 0 4px 16px rgba(0, 0, 0, 0.2);
 }
 
 .tpl-icon {
@@ -653,12 +641,12 @@ const handleUserCommand = (command: string) => {
 .tpl-name {
   font-size: 13px;
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--t-text-primary);
 }
 
 .tpl-desc {
   font-size: 11px;
-  color: var(--text-tertiary);
+  color: var(--t-text-muted);
   margin-top: 4px;
   line-height: 1.5;
 }
@@ -670,18 +658,18 @@ const handleUserCommand = (command: string) => {
   gap: 6px;
   font-size: 13px;
   font-weight: 500;
-  color: var(--accent-purple);
+  color: var(--t-brand);
   background: none;
-  border: 1px solid rgba(124, 58, 237, 0.25);
-  border-radius: var(--radius-sm);
+  border: 1px solid var(--t-brand-subtle);
+  border-radius: var(--t-radius-sm);
   padding: 6px 14px;
   cursor: pointer;
   transition: background 0.2s, border-color 0.2s;
 }
 
 .create-btn:hover {
-  background: rgba(124, 58, 237, 0.1);
-  border-color: rgba(124, 58, 237, 0.4);
+  background: var(--t-brand-subtle);
+  border-color: var(--t-brand-glow);
 }
 
 /* ── Project List ── */
@@ -695,9 +683,9 @@ const handleUserCommand = (command: string) => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  background: var(--bg-card);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
+  background: var(--t-bg-panel);
+  border: 1px solid var(--t-border-subtle);
+  border-radius: var(--t-radius-md);
   padding: 14px 18px;
   cursor: pointer;
   transition: transform 0.2s, border-color 0.2s, box-shadow 0.2s, background 0.2s;
@@ -705,8 +693,8 @@ const handleUserCommand = (command: string) => {
 
 .app-row:hover {
   transform: translateY(-1px);
-  background: var(--bg-card-hover);
-  border-color: var(--border-hover);
+  background: var(--t-bg-panel-hover);
+  border-color: var(--t-border-strong);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
 }
 
@@ -725,12 +713,12 @@ const handleUserCommand = (command: string) => {
 }
 
 .app-status-dot.connected {
-  background: #10b981;
+  background: var(--t-success);
   box-shadow: 0 0 8px rgba(16, 185, 129, 0.4);
 }
 
 .app-status-dot.disconnected {
-  background: rgba(255, 255, 255, 0.15);
+  background: var(--t-border-strong);
 }
 
 .app-info {
@@ -746,7 +734,7 @@ const handleUserCommand = (command: string) => {
 .app-name {
   font-size: 14px;
   font-weight: 500;
-  color: var(--text-primary);
+  color: var(--t-text-primary);
 }
 
 .conn-tag {
@@ -763,8 +751,8 @@ const handleUserCommand = (command: string) => {
 }
 
 .conn-tag.unlinked {
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--text-tertiary);
+  background: var(--t-border-subtle);
+  color: var(--t-text-muted);
 }
 
 .app-meta {
@@ -776,21 +764,21 @@ const handleUserCommand = (command: string) => {
 
 .app-platform {
   font-size: 12px;
-  color: var(--text-secondary);
+  color: var(--t-text-secondary);
 }
 
 .app-date {
   font-size: 11px;
-  color: var(--text-tertiary);
+  color: var(--t-text-muted);
 }
 
 .settings-btn {
   background: none;
   border: none;
-  color: var(--text-tertiary);
+  color: var(--t-text-muted);
   cursor: pointer;
   padding: 6px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--t-radius-sm);
   transition: background 0.2s, color 0.2s;
   display: flex;
   align-items: center;
@@ -798,8 +786,8 @@ const handleUserCommand = (command: string) => {
 }
 
 .settings-btn:hover {
-  background: var(--bg-elevated);
-  color: var(--text-secondary);
+  background: var(--t-bg-panel-hover);
+  color: var(--t-text-secondary);
 }
 .app-row-actions {
   display: flex;
@@ -814,12 +802,12 @@ const handleUserCommand = (command: string) => {
 /* ── Empty State ── */
 .empty-hint {
   text-align: center;
-  color: var(--text-tertiary);
+  color: var(--t-text-muted);
   font-size: 13px;
   padding: 40px 20px;
-  background: var(--bg-card);
-  border: 1px dashed rgba(255, 255, 255, 0.1);
-  border-radius: var(--radius-md);
+  background: var(--t-bg-panel);
+  border: 1px dashed var(--t-border-subtle);
+  border-radius: var(--t-radius-md);
 }
 
 .empty-icon {
@@ -838,11 +826,11 @@ const handleUserCommand = (command: string) => {
 }
 
 .main-scroll::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--t-border-subtle);
   border-radius: 3px;
 }
 
 .main-scroll::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.15);
+  background: var(--t-border-strong);
 }
 </style>

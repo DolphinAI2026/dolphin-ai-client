@@ -8,13 +8,27 @@
         <div class="logo-box">E</div>
         <span class="title">环境管理</span>
       </div>
-      <button class="new-btn" @click="openCreate">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-        添加环境
-      </button>
+      <div class="nav-right-group">
+        <ThemeToggle />
+        <button v-if="activeTab === 'envs'" class="new-btn" @click="openCreate">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          添加环境
+        </button>
+        <button v-if="activeTab === 'llm'" class="new-btn" @click="openLlmCreate">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          新增模型
+        </button>
+      </div>
     </nav>
 
-    <div class="env-content">
+    <!-- Tabs -->
+    <div class="tabs-bar">
+      <button :class="['tab-item', { active: activeTab === 'envs' }]" @click="activeTab = 'envs'">平台环境</button>
+      <button :class="['tab-item', { active: activeTab === 'llm' }]" @click="activeTab = 'llm'; loadLlmConfigs()">模型配置</button>
+    </div>
+
+    <!-- ==================== Tab 1: 平台环境 ==================== -->
+    <div v-show="activeTab === 'envs'" class="env-content">
       <div v-if="loading" class="empty-state">加载中...</div>
       <div v-else-if="envs.length === 0" class="empty-state">
         <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.3"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
@@ -80,7 +94,74 @@
       </template>
     </div>
 
-    <!-- Add / Edit Dialog -->
+    <!-- ==================== Tab 2: 模型配置 ==================== -->
+    <div v-show="activeTab === 'llm'" class="env-content">
+      <div v-if="llmLoading" class="empty-state">加载中...</div>
+      <div v-else-if="llmConfigs.length === 0" class="empty-state">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.3"><path d="M12 2a4 4 0 0 0-4 4v2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2h-2V6a4 4 0 0 0-4-4z"/><circle cx="12" cy="15" r="2"/></svg>
+        <span>暂无模型配置</span>
+        <button class="empty-add-btn" @click="openLlmCreate">新增第一个模型</button>
+      </div>
+
+      <template v-else>
+        <div class="env-grid">
+          <div v-for="cfg in llmConfigs" :key="cfg.id" class="env-card">
+            <div class="env-card-header">
+              <div class="env-card-left">
+                <div class="env-status-dot" :class="cfg.status === 'active' ? 'connected' : 'disconnected'"></div>
+                <h3 class="env-name">
+                  {{ cfg.config_name }}
+                  <span v-if="cfg.is_default" class="default-star">&#11088;</span>
+                </h3>
+              </div>
+              <span class="env-status-tag" :class="cfg.status === 'active' ? 'connected' : 'disconnected'">
+                {{ cfg.status === 'active' ? '可用' : cfg.status === 'error' ? '异常' : '未启用' }}
+              </span>
+            </div>
+
+            <div class="env-card-body">
+              <div class="env-field">
+                <span class="env-label">供应商</span>
+                <span class="env-value">{{ providerLabel(cfg.provider) }}</span>
+              </div>
+              <div class="env-field">
+                <span class="env-label">模型</span>
+                <span class="env-value mono">{{ cfg.model }}</span>
+              </div>
+              <div class="env-field">
+                <span class="env-label">用途</span>
+                <span class="env-value">{{ purposeLabel(cfg.purpose) }}</span>
+              </div>
+              <div class="env-field">
+                <span class="env-label">参数</span>
+                <span class="env-value">max_tokens: {{ cfg.max_tokens }} / temperature: {{ cfg.temperature }}</span>
+              </div>
+            </div>
+
+            <div class="env-card-actions">
+              <button class="env-action-btn" @click="handleLlmTest(cfg)" :disabled="cfg._testing" title="测试连接">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                {{ cfg._testing ? '测试中...' : '测试' }}
+              </button>
+              <button v-if="!cfg.is_default" class="env-action-btn" @click="handleLlmSetDefault(cfg)" title="设为默认">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+                默认
+              </button>
+              <button class="env-action-btn" @click="openLlmEdit(cfg)" title="编辑">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                编辑
+              </button>
+              <button class="env-action-btn danger" @click="handleLlmDelete(cfg)" title="删除">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                删除
+              </button>
+            </div>
+          </div>
+        </div>
+      </template>
+    </div>
+
+    <!-- ==================== 平台环境 Dialog ==================== -->
     <el-dialog
       v-model="dialogVisible"
       :title="editingEnv ? '编辑环境' : '添加环境'"
@@ -138,16 +219,98 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <!-- ==================== 模型配置 Dialog ==================== -->
+    <el-dialog
+      v-model="llmDialogVisible"
+      :title="editingLlm ? '编辑模型配置' : '新增模型配置'"
+      width="560px"
+      :close-on-click-modal="false"
+      class="env-dialog"
+      :append-to-body="true"
+    >
+      <el-form :model="llmForm" label-position="top" class="env-form">
+        <el-form-item label="配置名称" required>
+          <el-input v-model="llmForm.config_name" placeholder="如：MiniMax 主力模型" />
+        </el-form-item>
+
+        <el-form-item label="供应商" required>
+          <el-select v-model="llmForm.provider" placeholder="选择供应商" style="width: 100%" @change="onProviderChange">
+            <el-option v-for="p in providerOptions" :key="p.value" :label="p.label" :value="p.value" />
+          </el-select>
+        </el-form-item>
+
+        <el-form-item label="API 地址" required>
+          <el-input v-model="llmForm.base_url" placeholder="https://api.example.com/v1" />
+        </el-form-item>
+
+        <el-form-item label="API Key" required>
+          <el-input v-model="llmForm.api_key" type="password" show-password :placeholder="editingLlm ? '留空则不修改' : '输入 API Key'" />
+        </el-form-item>
+
+        <el-form-item label="模型" required>
+          <el-select
+            v-model="llmForm.model"
+            filterable
+            allow-create
+            default-first-option
+            placeholder="选择或输入模型名称"
+            style="width: 100%"
+          >
+            <el-option v-for="m in currentModelOptions" :key="m" :label="m" :value="m" />
+          </el-select>
+        </el-form-item>
+
+        <el-form-item label="用途">
+          <el-select v-model="llmForm.purpose" style="width: 100%">
+            <el-option label="全部场景" value="all" />
+            <el-option label="应用构建" value="builder" />
+            <el-option label="代码生成" value="coding" />
+          </el-select>
+        </el-form-item>
+
+        <div class="llm-params-row">
+          <el-form-item label="max_tokens" class="llm-param-item">
+            <el-input-number v-model="llmForm.max_tokens" :min="256" :max="128000" :step="256" controls-position="right" style="width: 100%" />
+          </el-form-item>
+          <el-form-item label="temperature" class="llm-param-item">
+            <div class="temperature-control">
+              <el-slider v-model="llmForm.temperature" :min="0" :max="1" :step="0.1" :show-tooltip="true" style="flex:1" />
+              <span class="temperature-value">{{ llmForm.temperature.toFixed(1) }}</span>
+            </div>
+          </el-form-item>
+        </div>
+
+        <el-form-item>
+          <div class="llm-default-switch">
+            <span class="llm-switch-label">设为默认模型</span>
+            <el-switch v-model="llmForm.is_default" />
+          </div>
+        </el-form-item>
+      </el-form>
+
+      <template #footer>
+        <el-button @click="llmDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="handleLlmSave" :loading="llmSaving">
+          {{ editingLlm ? '保存' : '添加' }}
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { platformEnvApi, type PlatformEnv } from '@/api/platformEnv'
+import { llmConfigApi, type LlmConfig, type ProviderPreset } from '@/api/llmConfig'
+import ThemeToggle from '@/components/ThemeToggle.vue'
 
 const router = useRouter()
+const activeTab = ref<'envs' | 'llm'>('envs')
+
+// ==================== 平台环境相关 ====================
 
 interface EnvWithUI extends PlatformEnv {
   _testing?: boolean
@@ -297,6 +460,232 @@ async function handleDelete(env: PlatformEnv) {
   } catch { /* cancelled */ }
 }
 
+// ==================== LLM 模型配置相关 ====================
+
+interface LlmConfigWithUI extends LlmConfig {
+  _testing?: boolean
+}
+
+const llmConfigs = ref<LlmConfigWithUI[]>([])
+const llmLoading = ref(false)
+const llmDialogVisible = ref(false)
+const editingLlm = ref<LlmConfig | null>(null)
+const llmSaving = ref(false)
+const presets = ref<ProviderPreset[]>([])
+const llmLoaded = ref(false)
+
+const providerOptions = [
+  { value: 'minimax', label: 'MiniMax' },
+  { value: 'qwen', label: '通义千问 (Qwen)' },
+  { value: 'deepseek', label: 'DeepSeek' },
+  { value: 'zhipu', label: '智谱 (Zhipu)' },
+  { value: 'moonshot', label: 'Moonshot' },
+  { value: 'openai', label: 'OpenAI' },
+  { value: 'anthropic', label: 'Anthropic' },
+  { value: 'custom', label: '自定义' },
+]
+
+const llmForm = reactive({
+  config_name: '',
+  provider: 'minimax',
+  base_url: '',
+  api_key: '',
+  model: '',
+  purpose: 'all',
+  max_tokens: 4096,
+  temperature: 0.7,
+  is_default: false,
+})
+
+const currentModelOptions = computed(() => {
+  const preset = presets.value.find(p => p.provider === llmForm.provider)
+  return preset?.models || []
+})
+
+function providerLabel(provider: string): string {
+  const opt = providerOptions.find(p => p.value === provider)
+  return opt?.label || provider
+}
+
+function purposeLabel(purpose: string): string {
+  const map: Record<string, string> = { all: '全部场景', builder: '应用构建', coding: '代码生成' }
+  return map[purpose] || purpose
+}
+
+function resetLlmForm() {
+  llmForm.config_name = ''
+  llmForm.provider = 'minimax'
+  llmForm.base_url = ''
+  llmForm.api_key = ''
+  llmForm.model = ''
+  llmForm.purpose = 'all'
+  llmForm.max_tokens = 4096
+  llmForm.temperature = 0.7
+  llmForm.is_default = false
+}
+
+function onProviderChange(provider: string) {
+  const preset = presets.value.find(p => p.provider === provider)
+  if (preset) {
+    llmForm.base_url = preset.base_url
+    if (preset.models.length > 0) {
+      llmForm.model = preset.models[0]
+    }
+  } else {
+    llmForm.base_url = ''
+    llmForm.model = ''
+  }
+}
+
+async function openLlmCreate() {
+  editingLlm.value = null
+  resetLlmForm()
+  await loadPresets()
+  onProviderChange(llmForm.provider)
+  llmDialogVisible.value = true
+}
+
+function openLlmEdit(cfg: LlmConfig) {
+  editingLlm.value = cfg
+  llmForm.config_name = cfg.config_name
+  llmForm.provider = cfg.provider
+  llmForm.base_url = cfg.base_url
+  llmForm.api_key = ''
+  llmForm.model = cfg.model
+  llmForm.purpose = cfg.purpose
+  llmForm.max_tokens = cfg.max_tokens
+  llmForm.temperature = cfg.temperature
+  llmForm.is_default = cfg.is_default
+  loadPresets()
+  llmDialogVisible.value = true
+}
+
+async function loadPresets() {
+  if (presets.value.length > 0) return
+  try {
+    const data = await llmConfigApi.getPresets()
+    // Backend returns {minimax: {base_url, models}, ...} dict, convert to array
+    if (data && typeof data === 'object' && !Array.isArray(data)) {
+      presets.value = Object.entries(data).map(([key, val]: [string, any]) => ({
+        provider: key,
+        label: key,
+        base_url: val.base_url || '',
+        models: val.models || [],
+      }))
+    } else {
+      presets.value = Array.isArray(data) ? data : []
+    }
+  } catch {
+    presets.value = []
+  }
+}
+
+async function loadLlmConfigs() {
+  if (llmLoaded.value) return
+  llmLoading.value = true
+  try {
+    const list = await llmConfigApi.list()
+    llmConfigs.value = Array.isArray(list) ? list : []
+    llmLoaded.value = true
+  } catch {
+    llmConfigs.value = []
+  }
+  llmLoading.value = false
+}
+
+async function reloadLlmConfigs() {
+  llmLoading.value = true
+  try {
+    const list = await llmConfigApi.list()
+    llmConfigs.value = Array.isArray(list) ? list : []
+  } catch {
+    llmConfigs.value = []
+  }
+  llmLoading.value = false
+}
+
+async function handleLlmSave() {
+  if (!llmForm.config_name.trim() || !llmForm.base_url.trim() || !llmForm.model.trim()) {
+    ElMessage.warning('请填写必填字段')
+    return
+  }
+  if (!editingLlm.value && !llmForm.api_key.trim()) {
+    ElMessage.warning('请输入 API Key')
+    return
+  }
+  llmSaving.value = true
+  try {
+    const data: any = {
+      config_name: llmForm.config_name,
+      provider: llmForm.provider,
+      base_url: llmForm.base_url,
+      model: llmForm.model,
+      purpose: llmForm.purpose,
+      max_tokens: llmForm.max_tokens,
+      temperature: llmForm.temperature,
+      is_default: llmForm.is_default,
+    }
+    if (llmForm.api_key) {
+      data.api_key = llmForm.api_key
+    }
+
+    if (editingLlm.value) {
+      await llmConfigApi.update(editingLlm.value.id, data)
+      ElMessage.success('已更新')
+    } else {
+      await llmConfigApi.create(data)
+      ElMessage.success('已添加')
+    }
+    llmDialogVisible.value = false
+    await reloadLlmConfigs()
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || '操作失败')
+  }
+  llmSaving.value = false
+}
+
+async function handleLlmTest(cfg: LlmConfigWithUI) {
+  cfg._testing = true
+  try {
+    const res = await llmConfigApi.test(cfg.id)
+    if (res.success) {
+      ElMessage.success(res.reply ? `连接成功: ${res.reply}` : '连接成功')
+      cfg.status = 'active'
+    } else {
+      ElMessage.error(res.error || '连接失败')
+      cfg.status = 'error'
+    }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || '测试失败')
+  }
+  cfg._testing = false
+}
+
+async function handleLlmSetDefault(cfg: LlmConfig) {
+  try {
+    await llmConfigApi.setDefault(cfg.id)
+    ElMessage.success(`已将「${cfg.config_name}」设为默认模型`)
+    await reloadLlmConfigs()
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || '设置失败')
+  }
+}
+
+async function handleLlmDelete(cfg: LlmConfig) {
+  try {
+    await ElMessageBox.confirm(`确定删除模型配置「${cfg.config_name}」？此操作不可恢复。`, '删除模型配置', {
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+    await llmConfigApi.delete(cfg.id)
+    ElMessage.success('已删除')
+    await reloadLlmConfigs()
+  } catch { /* cancelled */ }
+}
+
+// ==================== Lifecycle ====================
+
 onMounted(() => {
   loadEnvs()
 })
@@ -307,8 +696,8 @@ onMounted(() => {
   height: 100vh;
   display: flex;
   flex-direction: column;
-  background: #141418;
-  color: rgba(255, 255, 255, 0.92);
+  background: var(--t-bg-base);
+  color: var(--t-text-primary);
 }
 
 /* ── Nav ── */
@@ -317,10 +706,10 @@ onMounted(() => {
   justify-content: space-between;
   align-items: center;
   padding: 12px 24px;
-  background: rgba(26, 26, 32, 0.82);
+  background: var(--t-bg-panel);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid var(--t-border-subtle);
   flex-shrink: 0;
 }
 
@@ -333,7 +722,7 @@ onMounted(() => {
 .back-btn {
   background: none;
   border: none;
-  color: rgba(255, 255, 255, 0.5);
+  color: var(--t-text-secondary);
   cursor: pointer;
   padding: 4px;
   border-radius: 6px;
@@ -341,12 +730,12 @@ onMounted(() => {
   align-items: center;
   transition: all 0.2s;
 }
-.back-btn:hover { color: #fff; background: rgba(255,255,255,0.06); }
+.back-btn:hover { color: #fff; background: var(--t-border-subtle); }
 
 .logo-box {
   width: 28px;
   height: 28px;
-  background: linear-gradient(135deg, #7c3aed, #6366f1);
+  background: var(--t-brand-gradient);
   border-radius: 8px;
   display: flex;
   align-items: center;
@@ -359,14 +748,14 @@ onMounted(() => {
 .title {
   font-size: 15px;
   font-weight: 600;
-  color: rgba(255, 255, 255, 0.92);
+  color: var(--t-text-primary);
 }
 
 .new-btn {
   display: flex;
   align-items: center;
   gap: 6px;
-  background: linear-gradient(135deg, #7c3aed, #6366f1);
+  background: var(--t-brand-gradient);
   color: #fff;
   border: none;
   padding: 8px 18px;
@@ -376,7 +765,50 @@ onMounted(() => {
   cursor: pointer;
   transition: opacity 0.2s;
 }
+.nav-right-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
 .new-btn:hover { opacity: 0.9; }
+
+/* ── Tabs Bar ── */
+.tabs-bar {
+  display: flex;
+  gap: 0;
+  padding: 0 24px;
+  background: var(--t-bg-panel);
+  border-bottom: 1px solid var(--t-border-subtle);
+  flex-shrink: 0;
+}
+
+.tab-item {
+  padding: 10px 20px;
+  border: none;
+  background: none;
+  color: var(--t-text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  position: relative;
+  transition: all 0.2s;
+}
+.tab-item:hover {
+  color: var(--t-text-secondary);
+}
+.tab-item.active {
+  color: var(--t-text-primary);
+}
+.tab-item.active::after {
+  content: '';
+  position: absolute;
+  bottom: -1px;
+  left: 8px;
+  right: 8px;
+  height: 2px;
+  background: var(--t-brand-gradient);
+  border-radius: 2px;
+}
 
 /* ── Content ── */
 .env-content {
@@ -390,7 +822,7 @@ onMounted(() => {
 
 .empty-state {
   text-align: center;
-  color: rgba(255, 255, 255, 0.35);
+  color: var(--t-text-muted);
   padding: 80px 0;
   display: flex;
   flex-direction: column;
@@ -401,7 +833,7 @@ onMounted(() => {
 
 .empty-add-btn {
   margin-top: 8px;
-  background: linear-gradient(135deg, #7c3aed, #6366f1);
+  background: var(--t-brand-gradient);
   color: #fff;
   border: none;
   padding: 8px 20px;
@@ -421,8 +853,8 @@ onMounted(() => {
 
 /* ── Card ── */
 .env-card {
-  background: #1e1e26;
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: var(--t-bg-panel);
+  border: 1px solid var(--t-border-subtle);
   border-radius: 14px;
   padding: 20px;
   transition: all 0.2s;
@@ -431,8 +863,8 @@ onMounted(() => {
   gap: 16px;
 }
 .env-card:hover {
-  background: #252530;
-  border-color: rgba(124, 58, 237, 0.25);
+  background: var(--t-bg-input);
+  border-color: var(--t-brand-glow);
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
 }
 
@@ -455,17 +887,17 @@ onMounted(() => {
   flex-shrink: 0;
 }
 .env-status-dot.connected {
-  background: #34d399;
+  background: var(--t-success);
   box-shadow: 0 0 8px rgba(52, 211, 153, 0.4);
 }
 .env-status-dot.disconnected {
-  background: rgba(255, 255, 255, 0.3);
+  background: var(--t-text-muted);
 }
 
 .env-name {
   font-size: 15px;
   font-weight: 600;
-  color: rgba(255, 255, 255, 0.92);
+  color: var(--t-text-primary);
   margin: 0;
   display: flex;
   align-items: center;
@@ -484,11 +916,11 @@ onMounted(() => {
 }
 .env-status-tag.connected {
   background: rgba(52, 211, 153, 0.15);
-  color: #34d399;
+  color: var(--t-success);
 }
 .env-status-tag.disconnected {
-  background: rgba(255, 255, 255, 0.06);
-  color: rgba(255, 255, 255, 0.4);
+  background: var(--t-border-subtle);
+  color: var(--t-text-muted);
 }
 
 .env-card-body {
@@ -505,14 +937,14 @@ onMounted(() => {
 
 .env-label {
   font-size: 11px;
-  color: rgba(255, 255, 255, 0.35);
+  color: var(--t-text-muted);
   flex-shrink: 0;
   min-width: 52px;
 }
 
 .env-value {
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.7);
+  color: var(--t-text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -521,8 +953,8 @@ onMounted(() => {
 .env-value.mono {
   font-family: 'SF Mono', Monaco, Consolas, monospace;
   font-size: 11px;
-  color: rgba(255, 255, 255, 0.5);
-  background: rgba(255, 255, 255, 0.04);
+  color: var(--t-text-secondary);
+  background: var(--t-bg-subtle);
   padding: 1px 6px;
   border-radius: 4px;
 }
@@ -532,7 +964,7 @@ onMounted(() => {
   flex-wrap: wrap;
   gap: 6px;
   padding-top: 12px;
-  border-top: 1px solid rgba(255, 255, 255, 0.04);
+  border-top: 1px solid var(--t-border-subtle);
 }
 
 .env-action-btn {
@@ -541,16 +973,16 @@ onMounted(() => {
   gap: 4px;
   padding: 5px 10px;
   border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.04);
-  color: rgba(255, 255, 255, 0.5);
+  border: 1px solid var(--t-border-subtle);
+  background: var(--t-bg-subtle);
+  color: var(--t-text-secondary);
   font-size: 11px;
   cursor: pointer;
   transition: all 0.2s;
 }
 .env-action-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: rgba(255, 255, 255, 0.9);
+  background: var(--t-border-subtle);
+  color: var(--t-text-primary);
 }
 .env-action-btn:disabled {
   opacity: 0.5;
@@ -562,7 +994,7 @@ onMounted(() => {
 }
 .env-action-btn.danger:hover {
   background: rgba(239, 68, 68, 0.1);
-  color: #f87171;
+  color: var(--t-danger);
 }
 
 /* Dialog styles moved to non-scoped block below */
@@ -571,13 +1003,13 @@ onMounted(() => {
 .auth-section {
   margin-top: 8px;
   padding: 16px;
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: var(--t-bg-subtle);
+  border: 1px solid var(--t-border-subtle);
   border-radius: 12px;
 }
 .auth-section-label {
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.45);
+  color: var(--t-text-muted);
   margin-bottom: 10px;
   font-weight: 500;
 }
@@ -586,7 +1018,7 @@ onMounted(() => {
 .auth-tabs {
   display: flex;
   gap: 2px;
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--t-bg-subtle);
   border-radius: 10px;
   padding: 3px;
   margin: 8px 0 20px;
@@ -597,19 +1029,59 @@ onMounted(() => {
   padding: 8px 0;
   border: none;
   background: none;
-  color: rgba(255, 255, 255, 0.5);
+  color: var(--t-text-secondary);
   font-size: 13px;
   cursor: pointer;
   border-radius: 8px;
   transition: all 0.2s;
 }
 .auth-tab:hover {
-  color: rgba(255, 255, 255, 0.7);
+  color: var(--t-text-secondary);
 }
 .auth-tab.active {
-  background: rgba(124, 58, 237, 0.25);
-  color: #c4b5fd;
+  background: var(--t-brand-glow);
+  color: var(--t-brand-light);
   font-weight: 600;
+}
+
+/* ── LLM Dialog extras ── */
+.llm-params-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.llm-param-item {
+  margin-bottom: 0;
+}
+
+.temperature-control {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+}
+
+.temperature-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--t-text-primary);
+  min-width: 28px;
+  text-align: right;
+  font-family: 'SF Mono', Monaco, Consolas, monospace;
+}
+
+.llm-default-switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 8px 0;
+}
+
+.llm-switch-label {
+  font-size: 13px;
+  color: var(--t-text-secondary);
 }
 
 /* ── Scrollbar ── */
@@ -620,108 +1092,164 @@ onMounted(() => {
   background: transparent;
 }
 .env-content::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--t-border-subtle);
   border-radius: 3px;
 }
 .env-content::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.15);
+  background: var(--t-border-strong);
 }
 </style>
 
 <style>
 /* ── Dialog dark theme (non-scoped for teleported el-dialog) ── */
 .el-dialog.env-dialog {
-  background: #1a1a2e !important;
-  color: rgba(255, 255, 255, 0.9);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--t-bg-panel) !important;
+  color: var(--t-text-primary);
+  border: 1px solid var(--t-border-subtle);
   border-radius: 16px;
 }
 .el-dialog.env-dialog .el-dialog__header {
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid var(--t-border-subtle);
   padding: 16px 20px;
 }
 .el-dialog.env-dialog .el-dialog__title {
-  color: rgba(255, 255, 255, 0.92) !important;
+  color: var(--t-text-primary) !important;
   font-size: 15px;
   font-weight: 600;
 }
 .el-dialog.env-dialog .el-dialog__headerbtn .el-dialog__close {
-  color: rgba(255, 255, 255, 0.4);
+  color: var(--t-text-muted);
 }
 .el-dialog.env-dialog .el-dialog__body {
   padding: 20px;
 }
 .el-dialog.env-dialog .el-dialog__footer {
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  border-top: 1px solid var(--t-border-subtle);
   padding: 14px 20px;
 }
 .el-dialog.env-dialog .el-form-item__label {
-  color: rgba(255, 255, 255, 0.7) !important;
+  color: var(--t-text-secondary) !important;
   font-size: 13px;
 }
 .el-dialog.env-dialog .el-input__wrapper {
-  background: #252530 !important;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08) inset !important;
+  background: var(--t-bg-input) !important;
+  box-shadow: 0 0 0 1px var(--t-border-subtle) inset !important;
 }
 .el-dialog.env-dialog .el-input__inner {
-  color: rgba(255, 255, 255, 0.9) !important;
-  -webkit-text-fill-color: rgba(255, 255, 255, 0.9) !important;
+  color: var(--t-text-primary) !important;
+  -webkit-text-fill-color: var(--t-text-primary) !important;
 }
 .el-dialog.env-dialog .el-input__inner::placeholder {
-  color: rgba(255, 255, 255, 0.3) !important;
-  -webkit-text-fill-color: rgba(255, 255, 255, 0.3) !important;
+  color: var(--t-text-muted) !important;
+  -webkit-text-fill-color: var(--t-text-muted) !important;
 }
 .el-dialog.env-dialog .el-textarea__inner {
-  background: #252530 !important;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08) inset !important;
-  color: rgba(255, 255, 255, 0.9) !important;
+  background: var(--t-bg-input) !important;
+  box-shadow: 0 0 0 1px var(--t-border-subtle) inset !important;
+  color: var(--t-text-primary) !important;
 }
 .el-dialog.env-dialog .el-input__wrapper:hover,
 .el-dialog.env-dialog .el-textarea__inner:hover {
-  box-shadow: 0 0 0 1px rgba(124, 58, 237, 0.3) inset !important;
+  box-shadow: 0 0 0 1px var(--t-brand-glow) inset !important;
 }
 .el-dialog.env-dialog .el-input__wrapper.is-focus,
 .el-dialog.env-dialog .el-textarea__inner:focus {
-  box-shadow: 0 0 0 1px rgba(124, 58, 237, 0.5) inset !important;
+  box-shadow: 0 0 0 1px var(--t-brand) inset !important;
 }
 .el-dialog.env-dialog .el-overlay {
   background-color: rgba(0, 0, 0, 0.6) !important;
 }
 .el-dialog.env-dialog .el-input__suffix {
-  color: rgba(255, 255, 255, 0.4);
+  color: var(--t-text-muted);
 }
 /* 密码框眼睛图标 */
 .el-dialog.env-dialog .el-input__password {
-  color: rgba(255, 255, 255, 0.4) !important;
+  color: var(--t-text-muted) !important;
 }
 .el-dialog.env-dialog .el-input__password:hover {
-  color: rgba(255, 255, 255, 0.7) !important;
+  color: var(--t-text-secondary) !important;
 }
 /* 确保 prefix/suffix icon 颜色 */
 .el-dialog.env-dialog .el-input__prefix,
 .el-dialog.env-dialog .el-input__suffix-inner {
-  color: rgba(255, 255, 255, 0.4) !important;
+  color: var(--t-text-muted) !important;
 }
 /* 覆盖浏览器自动填充的背景色 */
 .el-dialog.env-dialog .el-input__inner:-webkit-autofill,
 .el-dialog.env-dialog .el-input__inner:-webkit-autofill:hover,
 .el-dialog.env-dialog .el-input__inner:-webkit-autofill:focus {
-  -webkit-box-shadow: 0 0 0 1000px #252530 inset !important;
-  -webkit-text-fill-color: rgba(255, 255, 255, 0.9) !important;
+  -webkit-box-shadow: 0 0 0 1000px var(--t-bg-input) inset !important;
+  -webkit-text-fill-color: var(--t-text-primary) !important;
   transition: background-color 5000s ease-in-out 0s;
 }
 /* 按钮样式覆盖 */
 .el-dialog.env-dialog .el-button--primary {
-  background: linear-gradient(135deg, #7c3aed, #6366f1) !important;
+  background: var(--t-brand-gradient) !important;
   border: none !important;
 }
 .el-dialog.env-dialog .el-button--default {
-  background: rgba(255, 255, 255, 0.06) !important;
-  border: 1px solid rgba(255, 255, 255, 0.1) !important;
-  color: rgba(255, 255, 255, 0.7) !important;
+  background: var(--t-border-subtle) !important;
+  border: 1px solid var(--t-border-subtle) !important;
+  color: var(--t-text-secondary) !important;
 }
 .el-dialog.env-dialog .el-button--default:hover {
-  background: rgba(255, 255, 255, 0.1) !important;
-  color: rgba(255, 255, 255, 0.9) !important;
+  background: var(--t-border-strong) !important;
+  color: var(--t-text-primary) !important;
+}
+/* ── Select dropdown 主题 ── */
+.el-dialog.env-dialog .el-select .el-input__wrapper {
+  background: var(--t-bg-input) !important;
+  box-shadow: 0 0 0 1px var(--t-border-subtle) inset !important;
+}
+.el-dialog.env-dialog .el-select .el-input__inner {
+  color: var(--t-text-primary) !important;
+  -webkit-text-fill-color: var(--t-text-primary) !important;
+}
+/* ── InputNumber 主题 ── */
+.el-dialog.env-dialog .el-input-number .el-input__wrapper {
+  background: var(--t-bg-input) !important;
+  box-shadow: 0 0 0 1px var(--t-border-subtle) inset !important;
+}
+.el-dialog.env-dialog .el-input-number__decrease,
+.el-dialog.env-dialog .el-input-number__increase {
+  background: var(--t-bg-subtle) !important;
+  color: var(--t-text-secondary) !important;
+  border-color: var(--t-border-subtle) !important;
+}
+.el-dialog.env-dialog .el-input-number__decrease:hover,
+.el-dialog.env-dialog .el-input-number__increase:hover {
+  color: var(--t-text-primary) !important;
+}
+/* ── Slider 主题 ── */
+.el-dialog.env-dialog .el-slider__runway {
+  background: var(--t-border-subtle) !important;
+}
+.el-dialog.env-dialog .el-slider__button {
+  border-color: var(--t-brand) !important;
+}
+/* ── Switch 主题 ── */
+.el-dialog.env-dialog .el-switch.is-checked .el-switch__core {
+  border-color: var(--t-brand) !important;
+  background-color: var(--t-brand) !important;
+}
+/* ── Select popper 全局样式 ── */
+.el-select-dropdown {
+  background: var(--t-bg-panel) !important;
+  border: 1px solid var(--t-border-subtle) !important;
+}
+.el-select-dropdown__item {
+  color: var(--t-text-secondary) !important;
+}
+.el-select-dropdown__item.hover,
+.el-select-dropdown__item:hover {
+  background: var(--t-bg-input) !important;
+  color: var(--t-text-primary) !important;
+}
+.el-select-dropdown__item.is-selected {
+  color: var(--t-brand-light) !important;
+  font-weight: 600;
+}
+.el-select-dropdown .el-scrollbar__bar {
+  background: var(--t-border-subtle);
 }
 </style>

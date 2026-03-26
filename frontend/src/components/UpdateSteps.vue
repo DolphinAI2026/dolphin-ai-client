@@ -123,10 +123,10 @@ const categoryLabel = (category: string) => {
 
 <style scoped lang="less">
 .update-steps {
-  background: #1a1a2e;
+  background: var(--t-bg-panel);
   border-radius: 12px;
   padding: 16px;
-  color: #e0e0e0;
+  color: var(--t-text-primary);
 }
 
 .steps-header {
@@ -135,7 +135,7 @@ const categoryLabel = (category: string) => {
   justify-content: space-between;
   margin-bottom: 16px;
   padding-bottom: 12px;
-  border-bottom: 1px solid rgba(255,255,255,0.1);
+  border-bottom: 1px solid var(--t-border-strong);
 }
 
 .steps-header h3 {
@@ -158,17 +158,17 @@ const categoryLabel = (category: string) => {
 
 .steps-status.running {
   background: rgba(59, 130, 246, 0.2);
-  color: #3b82f6;
+  color: var(--t-info);
 }
 
 .steps-status.completed {
   background: rgba(74, 222, 128, 0.2);
-  color: #4ade80;
+  color: var(--t-success);
 }
 
 .steps-status.error {
   background: rgba(248, 113, 113, 0.2);
-  color: #f87171;
+  color: var(--t-danger);
 }
 
 .steps-list {
@@ -181,7 +181,7 @@ const categoryLabel = (category: string) => {
   display: flex;
   gap: 12px;
   padding: 12px;
-  background: rgba(255,255,255,0.03);
+  background: var(--t-bg-subtle);
   border-radius: 8px;
   transition: all 0.2s;
 }
@@ -219,18 +219,18 @@ const categoryLabel = (category: string) => {
 
 .icon-running {
   background: rgba(59, 130, 246, 0.2);
-  color: #3b82f6;
+  color: var(--t-info);
   animation: spin 1s linear infinite;
 }
 
 .icon-done {
   background: rgba(74, 222, 128, 0.2);
-  color: #4ade80;
+  color: var(--t-success);
 }
 
 .icon-error {
   background: rgba(248, 113, 113, 0.2);
-  color: #f87171;
+  color: var(--t-danger);
 }
 
 @keyframes spin {
@@ -249,12 +249,12 @@ const categoryLabel = (category: string) => {
 
 .step-details {
   font-size: 12px;
-  color: #888;
+  color: var(--t-text-secondary);
 }
 
 .step-error {
   font-size: 12px;
-  color: #f87171;
+  color: var(--t-danger);
   margin-top: 4px;
 }
 
@@ -263,27 +263,27 @@ const categoryLabel = (category: string) => {
 .warnings-section {
   margin-top: 16px;
   padding-top: 16px;
-  border-top: 1px solid rgba(255,255,255,0.1);
+  border-top: 1px solid var(--t-border-strong);
 }
 
 .results-title {
   font-size: 14px;
   font-weight: 500;
-  color: #4ade80;
+  color: var(--t-success);
   margin-bottom: 8px;
 }
 
 .errors-title {
   font-size: 14px;
   font-weight: 500;
-  color: #f87171;
+  color: var(--t-danger);
   margin-bottom: 8px;
 }
 
 .warnings-title {
   font-size: 14px;
   font-weight: 500;
-  color: #fbbf24;
+  color: var(--t-warning);
   margin-bottom: 8px;
 }
 
@@ -293,7 +293,7 @@ const categoryLabel = (category: string) => {
 
 .category-label {
   font-size: 12px;
-  color: #888;
+  color: var(--t-text-secondary);
   margin-bottom: 4px;
 }
 
@@ -306,17 +306,17 @@ const categoryLabel = (category: string) => {
 }
 
 .results-section li {
-  color: #4ade80;
+  color: var(--t-success);
   margin-bottom: 2px;
 }
 
 .errors-section li {
-  color: #f87171;
+  color: var(--t-danger);
   margin-bottom: 2px;
 }
 
 .warnings-section li {
-  color: #fbbf24;
+  color: var(--t-warning);
   margin-bottom: 2px;
 }
 
@@ -326,13 +326,13 @@ const categoryLabel = (category: string) => {
   gap: 12px;
   margin-top: 16px;
   padding-top: 16px;
-  border-top: 1px solid rgba(255,255,255,0.1);
+  border-top: 1px solid var(--t-border-strong);
 }
 
 .btn-execute,
 .btn-close {
   padding: 8px 20px;
-  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  background: var(--t-brand-gradient);
   border: none;
   border-radius: 6px;
   color: #fff;
@@ -344,15 +344,15 @@ const categoryLabel = (category: string) => {
 .btn-execute:hover,
 .btn-close:hover {
   transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+  box-shadow: 0 4px 12px var(--t-brand-glow);
 }
 
 .btn-cancel {
   padding: 8px 16px;
   background: transparent;
-  border: 1px solid rgba(255,255,255,0.2);
+  border: 1px solid var(--t-border-strong);
   border-radius: 6px;
-  color: #888;
+  color: var(--t-text-secondary);
   cursor: pointer;
   transition: all 0.2s;
 }

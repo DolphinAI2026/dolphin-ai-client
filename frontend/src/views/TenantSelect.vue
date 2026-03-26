@@ -83,14 +83,14 @@ const handleLogout = () => {
   display: flex;
   justify-content: center;
   align-items: center;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: var(--t-brand-gradient);
   padding: 20px;
 }
 
 .select-box {
   width: 100%;
   max-width: 500px;
-  background: rgba(255, 255, 255, 0.95);
+  background: var(--t-bg-panel);
   backdrop-filter: blur(10px);
   border-radius: 16px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
@@ -106,13 +106,13 @@ const handleLogout = () => {
   margin: 0 0 8px 0;
   font-size: 28px;
   font-weight: 600;
-  color: #303133;
+  color: var(--t-text-primary);
 }
 
 .select-header p {
   margin: 0;
   font-size: 14px;
-  color: #909399;
+  color: var(--t-text-secondary);
 }
 
 .tenant-list {
@@ -127,16 +127,16 @@ const handleLogout = () => {
   align-items: center;
   gap: 16px;
   padding: 16px;
-  background: #fff;
-  border: 1px solid #e4e7ed;
+  background: var(--t-bg-elevated);
+  border: 1px solid var(--t-border-subtle);
   border-radius: 12px;
   cursor: pointer;
   transition: all 0.3s;
 }
 
 .tenant-card:hover {
-  border-color: #667eea;
-  box-shadow: 0 2px 12px rgba(102, 126, 234, 0.15);
+  border-color: var(--t-brand);
+  box-shadow: 0 2px 12px var(--t-brand-subtle);
   transform: translateY(-2px);
 }
 
@@ -144,7 +144,7 @@ const handleLogout = () => {
   width: 48px;
   height: 48px;
   border-radius: 12px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: var(--t-brand-gradient);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -161,29 +161,29 @@ const handleLogout = () => {
 .tenant-name {
   font-size: 16px;
   font-weight: 500;
-  color: #303133;
+  color: var(--t-text-primary);
   margin-bottom: 4px;
 }
 
 .tenant-code {
   font-size: 13px;
-  color: #909399;
+  color: var(--t-text-secondary);
 }
 
 .arrow-icon {
   font-size: 20px;
-  color: #c0c4cc;
+  color: var(--t-text-muted);
   transition: all 0.3s;
 }
 
 .tenant-card:hover .arrow-icon {
-  color: #667eea;
+  color: var(--t-brand);
   transform: translateX(4px);
 }
 
 .select-footer {
   text-align: center;
   padding-top: 16px;
-  border-top: 1px solid #e4e7ed;
+  border-top: 1px solid var(--t-border-subtle);
 }
 </style>

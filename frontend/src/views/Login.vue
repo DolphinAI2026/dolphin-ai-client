@@ -244,7 +244,7 @@ const handleRegister = async () => {
 /* ── Left brand panel ── */
 .brand-panel {
   flex: 0 0 58%;
-  background: linear-gradient(160deg, #7c3aed 0%, #6366f1 100%);
+  background: var(--t-brand-gradient);
   display: flex;
   flex-direction: column;
   justify-content: space-between;
@@ -419,7 +419,7 @@ const handleRegister = async () => {
 }
 
 .login-tabs :deep(.el-tabs__active-bar) {
-  background: linear-gradient(135deg, #7c3aed, #6366f1);
+  background: var(--t-brand-gradient);
 }
 
 .login-tabs :deep(.el-tabs__nav-wrap::after) {
@@ -439,7 +439,7 @@ const handleRegister = async () => {
 }
 
 :deep(.el-input__wrapper.is-focus) {
-  box-shadow: 0 0 0 2px #7c3aed inset;
+  box-shadow: 0 0 0 2px var(--t-brand) inset;
 }
 
 :deep(.el-input__inner) {
@@ -474,7 +474,7 @@ const handleRegister = async () => {
 }
 
 :deep(.el-form-item__error) {
-  color: #ef4444;
+  color: var(--t-danger);
 }
 
 :deep(.el-tabs__header) {
@@ -487,7 +487,7 @@ const handleRegister = async () => {
   height: 44px;
   font-size: 15px;
   font-weight: 600;
-  background: linear-gradient(135deg, #7c3aed, #6366f1);
+  background: var(--t-brand-gradient);
   border: none;
   border-radius: 10px;
   color: #fff;
@@ -496,9 +496,9 @@ const handleRegister = async () => {
 
 .submit-btn:hover,
 .submit-btn:focus {
-  background: linear-gradient(135deg, #7c3aed, #6366f1);
+  background: var(--t-brand-gradient);
   transform: translateY(-1px);
-  box-shadow: 0 6px 20px rgba(124, 58, 237, 0.35);
+  box-shadow: 0 6px 20px var(--t-brand-glow);
 }
 
 .submit-btn:active {

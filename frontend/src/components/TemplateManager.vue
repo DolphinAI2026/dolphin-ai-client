@@ -230,7 +230,7 @@ const handleUpload = async (e: Event) => {
   border: 1px solid var(--el-border-color-lighter, #3a3a4a);
   border-radius: 8px;
   margin-bottom: 8px;
-  background: var(--el-bg-color, #1e1e2e);
+  background: var(--el-bg-color, var(--t-bg-panel));
 }
 .tm-item-name {
   font-weight: 600;

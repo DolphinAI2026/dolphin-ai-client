@@ -12,6 +12,7 @@
         </div>
       </div>
       <div class="header-right">
+        <ThemeToggle />
         <span class="conn-status" :class="project?.platform_connected ? 'connected' : 'disconnected'">
           <span class="conn-dot"></span>
           {{ project?.platform_connected ? '已连接' : '未连接' }}
@@ -159,6 +160,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { projectsApi, type Project, type ProjectMember } from '@/api/projects'
 import type { WorkspaceInfo } from '@/api/coding'
 import ProjectSettingsModal from '@/components/ProjectSettingsModal.vue'
+import ThemeToggle from '@/components/ThemeToggle.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -227,17 +229,6 @@ const onProjectSaved = async () => {
 
 <style scoped>
 .project-overview {
-  --bg-base: #0a0a0a;
-  --bg-card: #111111;
-  --bg-card-hover: #161616;
-  --bg-elevated: #1a1a1a;
-  --border-subtle: rgba(255, 255, 255, 0.06);
-  --border-hover: rgba(255, 255, 255, 0.12);
-  --text-primary: #f5f5f5;
-  --text-secondary: rgba(255, 255, 255, 0.55);
-  --text-tertiary: rgba(255, 255, 255, 0.35);
-  --accent-gradient: linear-gradient(135deg, #7c3aed, #6366f1);
-  --accent-purple: #7c3aed;
   --radius-sm: 8px;
   --radius-md: 12px;
   --radius-lg: 16px;
@@ -245,8 +236,8 @@ const onProjectSaved = async () => {
   height: 100vh;
   display: flex;
   flex-direction: column;
-  background: var(--bg-base);
-  color: var(--text-primary);
+  background: var(--t-bg-base);
+  color: var(--t-text-primary);
 }
 
 /* ── Header ── */
@@ -255,9 +246,9 @@ const onProjectSaved = async () => {
   justify-content: space-between;
   align-items: center;
   padding: 14px 24px;
-  background: rgba(10, 10, 10, 0.8);
+  background: var(--t-bg-base);
   backdrop-filter: blur(12px);
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--t-border-subtle);
   position: sticky;
   top: 0;
   z-index: 100;
@@ -274,9 +265,9 @@ const onProjectSaved = async () => {
   width: 36px;
   height: 36px;
   border-radius: var(--radius-sm);
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--t-border-subtle);
   background: transparent;
-  color: var(--text-secondary);
+  color: var(--t-text-secondary);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -286,9 +277,9 @@ const onProjectSaved = async () => {
 }
 
 .back-btn:hover {
-  background: var(--bg-elevated);
-  border-color: var(--border-hover);
-  color: var(--text-primary);
+  background: var(--t-bg-elevated);
+  border-color: var(--t-border-strong);
+  color: var(--t-text-primary);
 }
 
 .header-info {
@@ -306,7 +297,7 @@ const onProjectSaved = async () => {
 
 .project-desc {
   font-size: 12px;
-  color: var(--text-tertiary);
+  color: var(--t-text-muted);
   margin: 2px 0 0;
   white-space: nowrap;
   overflow: hidden;
@@ -332,13 +323,13 @@ const onProjectSaved = async () => {
 }
 
 .conn-status.connected {
-  color: #34d399;
+  color: var(--t-success);
   background: rgba(16, 185, 129, 0.1);
 }
 
 .conn-status.disconnected {
-  color: var(--text-tertiary);
-  background: rgba(255, 255, 255, 0.04);
+  color: var(--t-text-muted);
+  background: var(--t-bg-subtle);
 }
 
 .conn-dot {
@@ -348,7 +339,7 @@ const onProjectSaved = async () => {
 }
 
 .conn-status.connected .conn-dot {
-  background: #10b981;
+  background: var(--t-success);
   box-shadow: 0 0 6px rgba(16, 185, 129, 0.5);
 }
 
@@ -360,9 +351,9 @@ const onProjectSaved = async () => {
   width: 36px;
   height: 36px;
   border-radius: var(--radius-sm);
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--t-border-subtle);
   background: transparent;
-  color: var(--text-secondary);
+  color: var(--t-text-secondary);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -371,9 +362,9 @@ const onProjectSaved = async () => {
 }
 
 .settings-btn:hover {
-  background: var(--bg-elevated);
-  border-color: var(--border-hover);
-  color: var(--text-primary);
+  background: var(--t-bg-elevated);
+  border-color: var(--t-border-strong);
+  color: var(--t-text-primary);
 }
 
 /* ── Scroll Area ── */
@@ -399,8 +390,8 @@ const onProjectSaved = async () => {
 }
 
 .entry-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border-subtle);
+  background: var(--t-bg-panel);
+  border: 1px solid var(--t-border-subtle);
   border-radius: var(--radius-lg);
   padding: 28px 24px;
   cursor: pointer;
@@ -412,7 +403,7 @@ const onProjectSaved = async () => {
 
 .entry-card:hover {
   transform: translateY(-2px);
-  border-color: var(--border-hover);
+  border-color: var(--t-border-strong);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
 }
 
@@ -427,7 +418,7 @@ const onProjectSaved = async () => {
 }
 
 .build-icon {
-  background: rgba(124, 58, 237, 0.1);
+  background: var(--t-brand-subtle);
 }
 
 .coding-icon {
@@ -445,19 +436,19 @@ const onProjectSaved = async () => {
 .entry-title {
   font-size: 17px;
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--t-text-primary);
   margin-bottom: 4px;
 }
 
 .entry-subtitle {
   font-size: 13px;
-  color: var(--text-secondary);
+  color: var(--t-text-secondary);
   margin-bottom: 6px;
 }
 
 .entry-tags {
   font-size: 12px;
-  color: var(--text-tertiary);
+  color: var(--t-text-muted);
 }
 
 .entry-action {
@@ -466,7 +457,7 @@ const onProjectSaved = async () => {
   gap: 4px;
   font-size: 13px;
   font-weight: 500;
-  color: var(--accent-purple);
+  color: var(--t-brand);
   transition: gap 0.2s;
 }
 
@@ -490,7 +481,7 @@ const onProjectSaved = async () => {
 .section-title {
   font-size: 13px;
   font-weight: 500;
-  color: var(--text-tertiary);
+  color: var(--t-text-muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   margin: 0 0 16px;
@@ -507,15 +498,15 @@ const onProjectSaved = async () => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  background: var(--bg-card);
-  border: 1px solid var(--border-subtle);
+  background: var(--t-bg-panel);
+  border: 1px solid var(--t-border-subtle);
   border-radius: var(--radius-md);
   padding: 12px 16px;
   transition: border-color 0.2s;
 }
 
 .workspace-row:hover {
-  border-color: var(--border-hover);
+  border-color: var(--t-border-strong);
 }
 
 .ws-info {
@@ -528,13 +519,13 @@ const onProjectSaved = async () => {
 .ws-name {
   font-size: 14px;
   font-weight: 500;
-  color: var(--text-primary);
+  color: var(--t-text-primary);
 }
 
 .ws-type {
   font-size: 11px;
-  color: var(--text-tertiary);
-  background: rgba(255, 255, 255, 0.04);
+  color: var(--t-text-muted);
+  background: var(--t-bg-subtle);
   padding: 2px 8px;
   border-radius: 4px;
 }
@@ -547,25 +538,25 @@ const onProjectSaved = async () => {
 }
 
 .ws-status.ready {
-  color: #34d399;
+  color: var(--t-success);
   background: rgba(16, 185, 129, 0.1);
 }
 
 .ws-status.building,
 .ws-status.pending {
-  color: #fbbf24;
+  color: var(--t-warning);
   background: rgba(251, 191, 36, 0.1);
 }
 
 .ws-status.error {
-  color: #f87171;
+  color: var(--t-danger);
   background: rgba(248, 113, 113, 0.1);
 }
 
 .ws-action-btn {
   background: none;
   border: none;
-  color: var(--text-tertiary);
+  color: var(--t-text-muted);
   cursor: pointer;
   padding: 6px;
   border-radius: var(--radius-sm);
@@ -576,8 +567,8 @@ const onProjectSaved = async () => {
 }
 
 .ws-action-btn:hover {
-  background: var(--bg-elevated);
-  color: var(--text-secondary);
+  background: var(--t-bg-elevated);
+  color: var(--t-text-secondary);
 }
 
 /* ── Members ── */
@@ -596,14 +587,14 @@ const onProjectSaved = async () => {
   width: 34px;
   height: 34px;
   border-radius: 50%;
-  background: var(--accent-gradient);
+  background: var(--t-brand-gradient);
   color: #fff;
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 13px;
   font-weight: 600;
-  border: 2px solid var(--bg-base);
+  border: 2px solid var(--t-bg-base);
   margin-left: -8px;
   flex-shrink: 0;
 }
@@ -618,9 +609,9 @@ const onProjectSaved = async () => {
   gap: 4px;
   font-size: 12px;
   font-weight: 500;
-  color: var(--text-secondary);
+  color: var(--t-text-secondary);
   background: none;
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--t-border-subtle);
   border-radius: var(--radius-sm);
   padding: 5px 12px;
   cursor: pointer;
@@ -628,19 +619,19 @@ const onProjectSaved = async () => {
 }
 
 .manage-btn:hover {
-  background: var(--bg-elevated);
-  border-color: var(--border-hover);
-  color: var(--text-primary);
+  background: var(--t-bg-elevated);
+  border-color: var(--t-border-strong);
+  color: var(--t-text-primary);
 }
 
 /* ── Empty ── */
 .empty-hint {
   text-align: center;
-  color: var(--text-tertiary);
+  color: var(--t-text-muted);
   font-size: 13px;
   padding: 28px 20px;
-  background: var(--bg-card);
-  border: 1px dashed rgba(255, 255, 255, 0.08);
+  background: var(--t-bg-panel);
+  border: 1px dashed var(--t-border-subtle);
   border-radius: var(--radius-md);
 }
 
@@ -654,11 +645,11 @@ const onProjectSaved = async () => {
 }
 
 .po-scroll::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--t-border-subtle);
   border-radius: 3px;
 }
 
 .po-scroll::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.15);
+  background: var(--t-border-strong);
 }
 </style>

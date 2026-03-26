@@ -1,23 +1,9 @@
-@surface-app: #111111;
-@surface-panel: #1a1a2e;
-@surface-elevated: #161622;
-@surface-subtle: rgba(255, 255, 255, 0.03);
-
-@text-primary: rgba(255, 255, 255, 0.9);
-@text-secondary: rgba(255, 255, 255, 0.65);
-@text-muted: rgba(255, 255, 255, 0.4);
-
-@border-subtle: rgba(255, 255, 255, 0.08);
-@border-strong: rgba(255, 255, 255, 0.15);
-
-@brand-primary: #7c3aed;
-@brand-accent: #6366f1;
-@success-color: #4ade80;
-@warning-color: #fbbf24;
-@danger-color: #f87171;
+// ── Build-time tokens ──
+// Runtime colors are in theme-vars.css (CSS custom properties)
+// Only structural mixins and build-time values belong here
 
 .panel-card() {
-  background: @surface-panel;
-  border-radius: 12px;
-  color: @text-primary;
+  background: var(--t-bg-panel);
+  border-radius: var(--t-radius-md);
+  color: var(--t-text-primary);
 }
