@@ -2,7 +2,7 @@
  * 增量更新 API
  */
 
-import request from '@/utils/request'
+import request, { API_PREFIX } from '@/utils/request'
 
 export interface ChangeItem {
   name: string
@@ -168,59 +168,131 @@ export const incrementalApi = {
     onComplete: (result: ExecuteResponse) => void,
     onError: (message: string) => void
   ): () => void {
-    const baseUrl = import.meta.env.VITE_API_BASE_URL || ''
-    const configParam = encodeURIComponent(JSON.stringify(newConfig))
-    const url = `${baseUrl}/api/applications/${appId}/incremental/execute-stream?token=${token}&new_config=${configParam}`
+    const controller = new AbortController()
+    const url = `${API_PREFIX}/applications/${appId}/incremental/execute-stream`
+    let finished = false
 
-    const eventSource = new EventSource(url)
-
-    eventSource.addEventListener('progress', (e) => {
+    const emitEvent = (eventName: string, rawData: string) => {
       try {
-        const data = JSON.parse(e.data)
-        onProgress(data)
-      } catch (err) {
-        console.error('Failed to parse progress event:', err)
-      }
-    })
-
-    eventSource.addEventListener('done', (e) => {
-      try {
-        const data = JSON.parse(e.data)
-        eventSource.close()
-        if (data.result) {
-          onComplete(data.result)
-        } else {
-          onComplete({ success: true, results: { roles: [], dicts: [], models: [], forms: [], processes: [] }, errors: [], warnings: [] })
+        const data = rawData ? JSON.parse(rawData) : {}
+        if (eventName === 'progress') {
+          onProgress(data)
+          return
         }
-      } catch (err) {
-        console.error('Failed to parse done event:', err)
-        eventSource.close()
-      }
-    })
-
-    eventSource.addEventListener('error', (e) => {
-      try {
-        // @ts-ignore
-        if (e.data) {
-          // @ts-ignore
-          const data = JSON.parse(e.data)
+        if (eventName === 'done') {
+          finished = true
+          onComplete(
+            data.result || {
+              success: true,
+              results: { roles: [], dicts: [], models: [], forms: [], processes: [] },
+              errors: [],
+              warnings: []
+            }
+          )
+          controller.abort()
+          return
+        }
+        if (eventName === 'error') {
+          finished = true
           onError(data.message || '未知错误')
-        } else {
-          onError('连接错误')
+          controller.abort()
         }
-      } catch {
-        onError('连接错误')
+      } catch (err) {
+        console.error(`Failed to parse ${eventName} event:`, err, rawData)
+        if (eventName === 'error') {
+          finished = true
+          onError('连接错误')
+          controller.abort()
+        }
       }
-      eventSource.close()
-    })
-
-    eventSource.onerror = () => {
-      eventSource.close()
     }
 
-    // 返回取消函数
+    const processChunk = (chunk: string) => {
+      let eventName = 'message'
+      const dataLines: string[] = []
+
+      for (const line of chunk.split(/\r?\n/)) {
+        if (!line || line.startsWith(':')) continue
+        if (line.startsWith('event:')) {
+          eventName = line.slice(6).trim()
+        } else if (line.startsWith('data:')) {
+          dataLines.push(line.slice(5).trimStart())
+        }
+      }
+
+      if (dataLines.length > 0) {
+        emitEvent(eventName, dataLines.join('\n'))
+      }
+    }
+
+    void fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'text/event-stream',
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify({ new_config: newConfig }),
+      signal: controller.signal
+    }).then(async (response) => {
+      if (!response.ok) {
+        let message = '连接错误'
+        try {
+          const data = await response.json()
+          message = data.detail || data.message || message
+        } catch {
+          try {
+            const text = await response.text()
+            if (text) message = text
+          } catch {
+            // ignore
+          }
+        }
+        finished = true
+        onError(message)
+        return
+      }
+
+      if (!response.body) {
+        finished = true
+        onError('连接错误')
+        return
+      }
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder('utf-8')
+      let buffer = ''
+
+      while (true) {
+        const { value, done } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n')
+
+        let separatorIndex = buffer.indexOf('\n\n')
+        while (separatorIndex !== -1) {
+          const chunk = buffer.slice(0, separatorIndex)
+          buffer = buffer.slice(separatorIndex + 2)
+          processChunk(chunk)
+          if (finished) return
+          separatorIndex = buffer.indexOf('\n\n')
+        }
+      }
+
+      if (buffer.trim()) {
+        processChunk(buffer)
+      }
+
+      if (!finished) {
+        onError('连接中断')
+      }
+    }).catch((error) => {
+      if (controller.signal.aborted || finished) return
+      console.error('Incremental stream request failed:', error)
+      onError('连接错误')
+    })
+
     return () => {
-      eventSource.close()
+      controller.abort()
     }
   },
 

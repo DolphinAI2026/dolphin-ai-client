@@ -62,12 +62,15 @@ export const usePreviewStore = defineStore('preview', () => {
     currentApp.value = null
     previewTab.value = 'overview'
     previewFormIdx.value = 0
+    changePlan.value = null
+    showChangePlan.value = false
     preview.appName = ''
     preview.roles = []
     preview.dicts = []
     preview.models = []
     preview.workflows = []
     preview.permissions = []
+    resetGenProgress()
   }
 
   return {

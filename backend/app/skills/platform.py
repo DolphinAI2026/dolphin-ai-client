@@ -67,7 +67,7 @@ FIELD_TYPE_MAP = {
     '手机号码': 'STRING', '电子邮箱': 'STRING', '下拉单选': 'STRING',
     '下拉多选': 'STRING', '数据单选': 'STRING', '日期时间': 'DATE',
     '金额': 'NUM', '数字': 'NUM', '附件上传': 'STRING',
-    '开关': 'STRING', '布尔': 'STRING', '人员选择': 'STRING',
+    '开关': 'STRING', '布尔': 'STRING', '人员选择': 'STRING', '部门选择': 'STRING',
     '地理位置': 'STRING',
 }
 

@@ -51,6 +51,7 @@ class AppExecutor:
         "下拉多选": "STRING",
         "数据选择器": "STRING",
         "人员选择": "STRING",
+        "部门选择": "STRING",
         "附件上传": "STRING",
         "开关": "STRING",
         "地理位置": "STRING"
@@ -70,6 +71,7 @@ class AppExecutor:
         "下拉多选": "FORM_SELECT_INPUT",
         "数据选择器": "FORM_DATA_SELECTOR_SINGLE",
         "人员选择": "FORM_PEOPLE_SELECT",
+        "部门选择": "FORM_DEPARTMENT_SELECT",
         "附件上传": "FORM_FILE_UPLOAD",
         "开关": "FORM_SWITCH_SELECT",
         "地理位置": "FORM_WIDGET_LOCATION"

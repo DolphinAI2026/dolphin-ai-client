@@ -441,6 +441,7 @@ const formatComponentType = (type?: string): string => {
     'FORM_CASCADER': '级联',
     'FORM_USER_SELECT': '人员选择',
     'FORM_DEPT_SELECT': '部门选择',
+    'FORM_DEPARTMENT_SELECT': '部门选择',
   }
   return typeMap[type] || type.replace('FORM_', '').replace('_', ' ')
 }

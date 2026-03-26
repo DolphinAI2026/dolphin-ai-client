@@ -95,6 +95,11 @@ FIELD_TYPES: Dict[str, FieldTypeInfo] = {
         component_type="FORM_PEOPLE_SELECT", icon="⊙", prompt_icon="👤",
         description="选择系统用户",
     ),
+    "部门选择": FieldTypeInfo(
+        display_name="部门选择", data_model_type="STRING",
+        component_type="FORM_DEPARTMENT_SELECT", icon="⊙", prompt_icon="🏢",
+        description="选择部门",
+    ),
     "地理位置": FieldTypeInfo(
         display_name="地理位置", data_model_type="STRING",
         component_type="FORM_WIDGET_LOCATION", icon="◎", prompt_icon="📍",
@@ -115,11 +120,6 @@ _COMPAT_TYPES: Dict[str, FieldTypeInfo] = {
         display_name="数据多选", data_model_type="STRING",
         component_type="FORM_DATA_SELECTOR_SINGLE", icon="⇢", prompt_icon="🔗",
         description="关联其他表单数据（多选）",
-    ),
-    "部门选择": FieldTypeInfo(
-        display_name="部门选择", data_model_type="STRING",
-        component_type="FORM_PEOPLE_SELECT", icon="⊙", prompt_icon="⊙",
-        description="选择部门",
     ),
     "单选框": FieldTypeInfo(
         display_name="单选框", data_model_type="STRING",

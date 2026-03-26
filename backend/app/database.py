@@ -64,6 +64,16 @@ async def init_db():
             except Exception:
                 pass  # 列已存在
 
+        # 兼容文档增量流程：DocumentVersion 可先仅绑定 conversation，稍后再关联 application
+        for stmt in [
+            "ALTER TABLE document_versions MODIFY COLUMN application_id INTEGER NULL",
+            "ALTER TABLE document_versions MODIFY COLUMN conversation_id INTEGER NULL",
+        ]:
+            try:
+                await conn.execute(text(stmt))
+            except Exception:
+                pass
+
         # project_members 表 — create_all 已处理，此处确保唯一约束
         try:
             await conn.execute(text(
@@ -72,9 +82,12 @@ async def init_db():
         except Exception:
             pass
 
-        # 清理孤立的文档版本（application_id 为 NULL 的）
+        # 只清理既没有 application_id 也没有 conversation_id 的真正孤立记录。
+        # conversation_id 存在的记录可能还要在应用创建后回填 application_id。
         try:
-            await conn.execute(text("DELETE FROM document_versions WHERE application_id IS NULL"))
+            await conn.execute(text(
+                "DELETE FROM document_versions WHERE application_id IS NULL AND conversation_id IS NULL"
+            ))
         except Exception:
             pass
 

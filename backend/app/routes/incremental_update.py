@@ -16,7 +16,7 @@ from sse_starlette.sse import EventSourceResponse
 from jose import JWTError, jwt
 
 from app.database import get_db, AsyncSessionLocal
-from app.models import User, Application
+from app.models import User, Application, PlatformEnv
 from app.deps import get_auth_context, AuthContext
 from app.permissions import check_resource_permission, Action
 from app.config_diff import compute_config_diff, ConfigDiff
@@ -113,13 +113,9 @@ async def compute_diff(
 
     # 3. 获取平台远程数据（用于填充 remote_id）
     remote_data = None
-    if app.apaas_app_id and ctx.user.apaas_token:
+    if app.apaas_app_id:
         try:
-            client = APaaSClient(
-                base_url=ctx.user.apaas_base_url,
-                tenant_id=ctx.user.apaas_tenant_id,
-                token=ctx.user.apaas_token
-            )
+            client = await _get_platform_client_for_app(app, ctx.user, db)
             remote_data = await fetch_remote_data(client, app.apaas_app_id)
         except Exception as e:
             logger.warning(f"获取平台远程数据失败: {e}")
@@ -168,9 +164,6 @@ async def execute_update(
     await check_resource_permission(ctx, db, app, "application", Action.EDIT)
 
     # 2. 检查是否已连接平台
-    if not ctx.user.apaas_token:
-        raise HTTPException(status_code=400, detail="未连接得帆云平台，请先在设置中连接APaaS平台")
-
     if not app.apaas_app_id:
         raise HTTPException(status_code=400, detail="应用尚未在平台创建，请先完成首次生成")
 
@@ -183,11 +176,12 @@ async def execute_update(
             pass
 
     # 4. 获取平台远程数据
-    client = APaaSClient(
-        base_url=ctx.user.apaas_base_url,
-        tenant_id=ctx.user.apaas_tenant_id,
-        token=ctx.user.apaas_token
-    )
+    try:
+        client = await _get_platform_client_for_app(app, ctx.user, db)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"未连接得帆云平台，请先在环境管理中添加并连接: {e}")
 
     try:
         remote_data = await fetch_remote_data(client, app.apaas_app_id)
@@ -304,9 +298,6 @@ async def execute_update_stream(
     if not app:
         raise HTTPException(status_code=404, detail="应用不存在")
 
-    if not current_user.apaas_token:
-        raise HTTPException(status_code=400, detail="未连接得帆云平台")
-
     if not app.apaas_app_id:
         raise HTTPException(status_code=400, detail="应用尚未在平台创建")
 
@@ -319,83 +310,46 @@ async def execute_update_stream(
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="new_config 格式错误")
 
-    # 保存需要的变量
-    apaas_app_id = app.apaas_app_id
-    app_name = app.app_name
-    old_config_str = app.config_preview
-    apaas_base_url = current_user.apaas_base_url
-    apaas_tenant_id = current_user.apaas_tenant_id
-    apaas_token = current_user.apaas_token
+    client = await _get_platform_client_for_app(app, current_user, db)
 
-    async def event_generator():
-        async with AsyncSessionLocal() as session:
-            try:
-                # 并发锁保护
-                async with acquire_app_lock(app_id, "增量更新流式执行"):
-                    # 1. 获取旧配置
-                    old_config = None
-                    if old_config_str:
-                        try:
-                            old_config = json.loads(old_config_str) if isinstance(old_config_str, str) else old_config_str
-                        except Exception:
-                            pass
+    return _build_execute_stream_response(
+        app_id=app_id,
+        app_name=app.app_name,
+        apaas_app_id=app.apaas_app_id,
+        old_config_str=app.config_preview,
+        apaas_base_url=client.base_url,
+        apaas_tenant_id=client.tenant_id,
+        apaas_token=client.token or "",
+        request=ExecuteRequest(new_config=new_config_dict),
+    )
 
-                    yield {"event": "progress", "data": json.dumps({"stage": "init", "status": "running", "step": "初始化..."}, ensure_ascii=False)}
 
-                    # 2. 创建客户端并获取远程数据
-                    client = APaaSClient(
-                        base_url=apaas_base_url,
-                        tenant_id=apaas_tenant_id,
-                        token=apaas_token
-                    )
+@router.post("/{app_id}/incremental/execute-stream")
+async def execute_update_stream_post(
+    app_id: int,
+    request: ExecuteRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)]
+):
+    """流式执行增量更新（POST），避免大配置走 query string 导致连接失败。"""
+    app = await _get_application(app_id, ctx.tenant_id, db)
+    await check_resource_permission(ctx, db, app, "application", Action.EDIT)
 
-                    yield {"event": "progress", "data": json.dumps({"stage": "init", "status": "running", "step": "获取平台数据..."}, ensure_ascii=False)}
+    if not app.apaas_app_id:
+        raise HTTPException(status_code=400, detail="应用尚未在平台创建")
 
-                    remote_data = await fetch_remote_data(client, apaas_app_id)
+    client = await _get_platform_client_for_app(app, ctx.user, db)
 
-                    # 3. 计算差异
-                    yield {"event": "progress", "data": json.dumps({"stage": "init", "status": "running", "step": "计算配置差异..."}, ensure_ascii=False)}
-
-                    diff = compute_config_diff(old_config, new_config_dict, remote_data)
-
-                    if not diff.has_changes:
-                        yield {"event": "done", "data": json.dumps({"type": "complete", "message": "无变更需要执行", "result": {"success": True, "results": {}, "errors": [], "warnings": []}}, ensure_ascii=False)}
-                        return
-
-                    yield {"event": "progress", "data": json.dumps({"stage": "init", "status": "done", "step": f"发现 {diff.summary}"}, ensure_ascii=False)}
-
-                    # 4. 执行增量更新（流式）
-                    executor = IncrementalExecutor(
-                        client=client,
-                        app_id=apaas_app_id,
-                        app_name=app_name
-                    )
-
-                    # 使用编码继承修正后的配置
-                    save_config = diff.normalized_new_config or new_config_dict
-
-                    async for event in executor.execute_diff_stream(diff):
-                        if event.get("type") == "complete":
-                            # 更新本地配置
-                            result = await session.execute(
-                                select(Application).where(Application.id == app_id)
-                            )
-                            app_obj = result.scalar_one()
-                            app_obj.config_preview = json.dumps(save_config, ensure_ascii=False)
-                            await session.commit()
-                            logger.info(f"应用 {app_id} 配置已更新")
-
-                            yield {"event": "done", "data": json.dumps(event, ensure_ascii=False)}
-                        elif event.get("type") == "error":
-                            yield {"event": "error", "data": json.dumps(event, ensure_ascii=False)}
-                        else:
-                            yield {"event": "progress", "data": json.dumps(event, ensure_ascii=False)}
-
-            except Exception as e:
-                logger.exception(f"增量更新失败: {e}")
-                yield {"event": "error", "data": json.dumps({"type": "error", "message": str(e)}, ensure_ascii=False)}
-
-    return EventSourceResponse(event_generator())
+    return _build_execute_stream_response(
+        app_id=app_id,
+        app_name=app.app_name,
+        apaas_app_id=app.apaas_app_id,
+        old_config_str=app.config_preview,
+        apaas_base_url=client.base_url,
+        apaas_tenant_id=client.tenant_id,
+        apaas_token=client.token or "",
+        request=request,
+    )
 
 
 @router.get("/{app_id}/incremental/remote-data")
@@ -412,17 +366,10 @@ async def get_remote_data(
     app = await _get_application(app_id, ctx.tenant_id, db)
     await check_resource_permission(ctx, db, app, "application", Action.VIEW)
 
-    if not ctx.user.apaas_token:
-        raise HTTPException(status_code=400, detail="未连接得帆云平台")
-
     if not app.apaas_app_id:
         raise HTTPException(status_code=400, detail="应用尚未在平台创建")
 
-    client = APaaSClient(
-        base_url=ctx.user.apaas_base_url,
-        tenant_id=ctx.user.apaas_tenant_id,
-        token=ctx.user.apaas_token
-    )
+    client = await _get_platform_client_for_app(app, ctx.user, db)
 
     try:
         remote_data = await fetch_remote_data(client, app.apaas_app_id)
@@ -453,16 +400,10 @@ async def sync_preview(
     app = await _get_application(app_id, ctx.tenant_id, db)
     await check_resource_permission(ctx, db, app, "application", Action.VIEW)
 
-    if not ctx.user.apaas_token:
-        raise HTTPException(status_code=400, detail="未连接得帆云平台")
     if not app.apaas_app_id:
         raise HTTPException(status_code=400, detail="应用尚未在平台创建")
 
-    client = APaaSClient(
-        base_url=ctx.user.apaas_base_url,
-        tenant_id=ctx.user.apaas_tenant_id,
-        token=ctx.user.apaas_token
-    )
+    client = await _get_platform_client_for_app(app, ctx.user, db)
 
     try:
         platform_config = await sync_from_platform(client, app.apaas_app_id, app.app_name or "")
@@ -506,16 +447,10 @@ async def sync_apply(
     await check_resource_permission(ctx, db, app, "application", Action.EDIT)
 
     if request.strategy == "platform_wins":
-        if not ctx.user.apaas_token:
-            raise HTTPException(status_code=400, detail="未连接得帆云平台")
         if not app.apaas_app_id:
             raise HTTPException(status_code=400, detail="应用尚未在平台创建")
 
-        client = APaaSClient(
-            base_url=ctx.user.apaas_base_url,
-            tenant_id=ctx.user.apaas_tenant_id,
-            token=ctx.user.apaas_token
-        )
+        client = await _get_platform_client_for_app(app, ctx.user, db)
 
         try:
             platform_config = await sync_from_platform(client, app.apaas_app_id, app.app_name or "")
@@ -684,6 +619,165 @@ async def check_conflicts(
 
 
 # ==================== 辅助函数 ====================
+
+async def _get_platform_client_for_app(
+    app: Application,
+    user: User,
+    db: AsyncSession,
+) -> APaaSClient:
+    """优先按应用绑定/默认平台环境获取连接，回退到用户级连接。"""
+    env = None
+
+    if getattr(app, "platform_env_id", None):
+        env_result = await db.execute(
+            select(PlatformEnv).where(PlatformEnv.id == app.platform_env_id)
+        )
+        env = env_result.scalar_one_or_none()
+
+    if not env:
+        env_result = await db.execute(
+            select(PlatformEnv).where(
+                PlatformEnv.tenant_id == app.tenant_id,
+                PlatformEnv.is_default == True,
+            )
+        )
+        env = env_result.scalar_one_or_none()
+
+    if not env:
+        env_result = await db.execute(
+            select(PlatformEnv).where(
+                PlatformEnv.tenant_id == app.tenant_id,
+                PlatformEnv.status == "connected",
+            ).limit(1)
+        )
+        env = env_result.scalar_one_or_none()
+
+    if env and env.token:
+        return APaaSClient(
+            base_url=env.base_url,
+            tenant_id=env.platform_tenant_id,
+            token=env.token,
+        )
+
+    if user.apaas_token and user.apaas_base_url and user.apaas_tenant_id:
+        return APaaSClient(
+            base_url=user.apaas_base_url,
+            tenant_id=user.apaas_tenant_id,
+            token=user.apaas_token,
+        )
+
+    raise HTTPException(status_code=400, detail="未配置平台环境，请在环境管理中添加并连接")
+
+def _build_execute_stream_response(
+    app_id: int,
+    app_name: str,
+    apaas_app_id: str,
+    old_config_str: Optional[str],
+    apaas_base_url: str,
+    apaas_tenant_id: str,
+    apaas_token: str,
+    request: ExecuteRequest,
+) -> EventSourceResponse:
+    async def event_generator():
+        async with AsyncSessionLocal() as session:
+            try:
+                async with acquire_app_lock(app_id, "增量更新流式执行"):
+                    old_config = None
+                    if old_config_str:
+                        try:
+                            old_config = json.loads(old_config_str) if isinstance(old_config_str, str) else old_config_str
+                        except Exception:
+                            pass
+
+                    yield {
+                        "event": "progress",
+                        "data": json.dumps({"stage": "init", "status": "running", "step": "初始化..."}, ensure_ascii=False),
+                    }
+
+                    client = APaaSClient(
+                        base_url=apaas_base_url,
+                        tenant_id=apaas_tenant_id,
+                        token=apaas_token,
+                    )
+
+                    yield {
+                        "event": "progress",
+                        "data": json.dumps({"stage": "init", "status": "running", "step": "获取平台数据..."}, ensure_ascii=False),
+                    }
+                    remote_data = await fetch_remote_data(client, apaas_app_id)
+
+                    yield {
+                        "event": "progress",
+                        "data": json.dumps({"stage": "init", "status": "running", "step": "计算配置差异..."}, ensure_ascii=False),
+                    }
+                    diff = compute_config_diff(old_config, request.new_config, remote_data)
+
+                    if not diff.has_changes:
+                        yield {
+                            "event": "done",
+                            "data": json.dumps({
+                                "type": "complete",
+                                "message": "无变更需要执行",
+                                "result": {"success": True, "results": {}, "errors": [], "warnings": []},
+                            }, ensure_ascii=False),
+                        }
+                        return
+
+                    if request.skip_roles:
+                        diff.role_changes = []
+                    if request.skip_dicts:
+                        diff.dict_changes = []
+                    if request.skip_models:
+                        diff.model_changes = []
+                    if request.skip_forms:
+                        diff.form_changes = []
+                    if request.skip_processes:
+                        diff.process_changes = []
+
+                    if request.selected_changes is not None:
+                        selected_set = {
+                            (s.get("type") if isinstance(s, dict) else s.type,
+                             s.get("code") if isinstance(s, dict) else s.code)
+                            for s in request.selected_changes
+                        }
+                        diff.role_changes = [c for c in diff.role_changes if ("role", c.code) in selected_set]
+                        diff.dict_changes = [c for c in diff.dict_changes if ("dict", c.code) in selected_set]
+                        diff.model_changes = [c for c in diff.model_changes if ("model", c.code) in selected_set]
+                        diff.form_changes = [c for c in diff.form_changes if ("form", c.code) in selected_set]
+                        diff.process_changes = [c for c in diff.process_changes if ("process", c.code) in selected_set]
+
+                    yield {
+                        "event": "progress",
+                        "data": json.dumps({"stage": "init", "status": "done", "step": f"发现 {diff.summary}"}, ensure_ascii=False),
+                    }
+
+                    executor = IncrementalExecutor(
+                        client=client,
+                        app_id=apaas_app_id,
+                        app_name=app_name,
+                    )
+                    save_config = diff.normalized_new_config or request.new_config
+
+                    async for event in executor.execute_diff_stream(diff):
+                        if event.get("type") == "complete":
+                            result = await session.execute(
+                                select(Application).where(Application.id == app_id)
+                            )
+                            app_obj = result.scalar_one()
+                            app_obj.config_preview = json.dumps(save_config, ensure_ascii=False)
+                            await session.commit()
+                            logger.info(f"应用 {app_id} 配置已更新")
+                            yield {"event": "done", "data": json.dumps(event, ensure_ascii=False)}
+                        elif event.get("type") == "error":
+                            yield {"event": "error", "data": json.dumps(event, ensure_ascii=False)}
+                        else:
+                            yield {"event": "progress", "data": json.dumps(event, ensure_ascii=False)}
+
+            except Exception as e:
+                logger.exception(f"增量更新失败: {e}")
+                yield {"event": "error", "data": json.dumps({"type": "error", "message": str(e)}, ensure_ascii=False)}
+
+    return EventSourceResponse(event_generator())
 
 async def _get_application(app_id: int, tenant_id: int, db: AsyncSession) -> Application:
     """获取应用，不存在则抛出 404"""

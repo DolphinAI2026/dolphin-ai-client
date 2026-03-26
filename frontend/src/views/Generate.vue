@@ -21,14 +21,14 @@
               <h2 class="header-title">部署到平台</h2>
               <p class="header-desc">逐步将配置部署到得帆云，每一步可独立验证</p>
             </div>
-            <button class="run-all-btn" :disabled="executingStep !== null || allDone" @click="runAll">
-              {{ allDone ? '✓ 全部完成' : '▶ 一键执行' }}
+            <button class="run-all-btn" :disabled="runningAll || executingStep !== null || allDone" @click="runAll">
+              {{ allDone ? '✓ 全部完成' : runningAll ? '执行中...' : '▶ 一键执行' }}
             </button>
           </div>
           <div class="progress-track"><div class="progress-fill" :style="{ width: progressPercent + '%' }"></div></div>
           <div class="progress-meta">
             <span>{{ completedCount }} / {{ steps.length }} 步完成</span>
-            <span v-if="executingStep" class="exec-hint">正在执行...</span>
+            <span v-if="executingStep || runningAll" class="exec-hint">正在执行...</span>
           </div>
         </div>
 
@@ -61,13 +61,13 @@
                       <span class="spinner"></span>
                     </template>
                     <template v-else-if="s.status === 'completed'">
-                      <button class="act-btn redo" @click="resetAndExecute(s.key)" title="重新执行">↻</button>
+                      <button class="act-btn redo" :disabled="runningAll" @click="resetAndExecute(s.key)" title="重新执行">↻</button>
                     </template>
                     <template v-else-if="s.status === 'error'">
-                      <button class="act-btn retry" @click="executeOne(s.key)">重试</button>
+                      <button class="act-btn retry" :disabled="runningAll" @click="executeOne(s.key)">重试</button>
                     </template>
                     <template v-else-if="s.deps_met">
-                      <button class="act-btn run" @click="executeOne(s.key)">执行</button>
+                      <button class="act-btn run" :disabled="runningAll" @click="executeOne(s.key)">执行</button>
                     </template>
                     <template v-else>
                       <span class="lock">🔒</span>
@@ -108,6 +108,7 @@ const appName = ref('')
 const apaasAppId = ref('')
 const steps = ref<Step[]>([])
 const executingStep = ref<string | null>(null)
+const runningAll = ref(false)
 
 const appId = computed(() => Number(route.params.id))
 const completedCount = computed(() => steps.value.filter(s => s.status === 'completed').length)
@@ -179,23 +180,38 @@ async function resetAndExecute(stepKey: string) {
 }
 
 async function runAll() {
-  for (const s of steps.value) {
-    if (s.status === 'completed') continue
-    await loadStatus()
-    const fresh = steps.value.find(x => x.key === s.key)
-    if (!fresh || !fresh.deps_met) continue
-    executingStep.value = s.key
-    const resp = await applicationApi.executeStep(appId.value, s.key)
-    await loadStatus()
-    if (resp.status === 'conflict' && resp.conflict) {
-      executingStep.value = null
-      await handleConflict(resp, s.key)
-      return
+  if (runningAll.value || executingStep.value !== null || allDone.value) return
+
+  runningAll.value = true
+  try {
+    for (const s of steps.value) {
+      if (s.status === 'completed') continue
+      await loadStatus()
+      const fresh = steps.value.find(x => x.key === s.key)
+      if (!fresh || !fresh.deps_met) continue
+      executingStep.value = s.key
+      const resp = await applicationApi.executeStep(appId.value, s.key)
+      await loadStatus()
+      if (resp.status === 'conflict' && resp.conflict) {
+        executingStep.value = null
+        await handleConflict(resp, s.key)
+        return
+      }
+      if (resp.status === 'error') {
+        ElMessage.error(resp.error + '，已暂停')
+        executingStep.value = null
+        return
+      }
     }
-    if (resp.status === 'error') { ElMessage.error(resp.error + '，已暂停'); executingStep.value = null; return }
+    executingStep.value = null
+    ElMessage.success('全部完成！')
+  } catch (e: any) {
+    ElMessage.error(e.message || '失败')
+  } finally {
+    executingStep.value = null
+    runningAll.value = false
+    await loadStatus()
   }
-  executingStep.value = null
-  ElMessage.success('全部完成！')
 }
 
 onMounted(async () => {
@@ -278,11 +294,12 @@ onMounted(async () => {
 .step-act { flex-shrink: 0; }
 .act-btn { border: none; cursor: pointer; border-radius: 6px; font-weight: 500; }
 .act-btn.run { padding: 4px 12px; background: var(--t-brand-light); color: #fff; font-size: 12px; }
-.act-btn.run:hover { background: var(--t-brand); }
+.act-btn.run:hover:not(:disabled) { background: var(--t-brand); }
 .act-btn.retry { padding: 4px 12px; background: var(--t-danger); color: #fff; font-size: 12px; }
-.act-btn.retry:hover { background: var(--t-danger); }
+.act-btn.retry:hover:not(:disabled) { background: var(--t-danger); }
 .act-btn.redo { padding: 2px 6px; background: none; color: var(--t-text-muted); font-size: 16px; }
-.act-btn.redo:hover { color: var(--t-brand-light); background: var(--t-brand-subtle); }
+.act-btn.redo:hover:not(:disabled) { color: var(--t-brand-light); background: var(--t-brand-subtle); }
+.act-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid var(--t-border-subtle); border-top-color: var(--t-brand-light); border-radius: 50%; animation: spin 0.7s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .lock { font-size: 12px; opacity: 0.25; }

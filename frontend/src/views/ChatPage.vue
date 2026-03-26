@@ -27,7 +27,7 @@
           <span v-if="activeView === 'builder'" class="active-dot"></span>
         </button>
         <button
-          v-if="store.currentApp?.apaas_app_id"
+          v-if="SHOW_PLATFORM_CONFIG && store.currentApp?.apaas_app_id"
           class="agent-tab"
           :class="{ active: activeView === 'platform' }"
           @click="switchToPlatform"
@@ -37,7 +37,7 @@
           <span v-if="activeView === 'platform'" class="active-dot"></span>
         </button>
         <button
-          v-if="activeView === 'platform' && platformIframeUrl"
+          v-if="SHOW_PLATFORM_CONFIG && activeView === 'platform' && platformIframeUrl"
           class="agent-tab-action"
           @click="openPlatformNewTab"
           title="在新窗口打开"
@@ -45,7 +45,7 @@
       </div>
 
       <!-- 平台配置 iframe（v-show 保持不销毁） -->
-      <div v-show="activeView === 'platform'" class="platform-iframe-container">
+      <div v-show="SHOW_PLATFORM_CONFIG && activeView === 'platform'" class="platform-iframe-container">
         <div v-if="platformLoading" class="platform-loading">
           <span class="loading-spinner">⟳</span> 加载平台配置...
         </div>
@@ -74,7 +74,7 @@
       </div>
 
       <!-- 搭建智能体内容区（横向布局） -->
-      <div v-show="activeView === 'builder'" class="builder-content">
+      <div v-show="!SHOW_PLATFORM_CONFIG || activeView === 'builder'" class="builder-content">
       <!-- 左侧对话区 -->
       <div class="chat-side">
         <!-- 对话历史栏 -->
@@ -350,6 +350,7 @@
                               <span v-else-if="sf.type === '金额'" class="subtable-placeholder">¥ 0.00</span>
                               <span v-else-if="sf.type === '数字'" class="subtable-placeholder">0</span>
                               <span v-else-if="sf.type === '人员选择'" class="subtable-placeholder">请选择人员 <span class="mock-arrow">👤</span></span>
+                              <span v-else-if="sf.type === '部门选择'" class="subtable-placeholder">请选择部门 <span class="mock-arrow">🏢</span></span>
                               <span v-else-if="sf.type === '开关'" class="subtable-placeholder"><span class="mock-switch">○───</span></span>
                               <span v-else class="subtable-placeholder">请输入{{ sf.name }}</span>
                             </td>
@@ -373,6 +374,7 @@
                       <template v-else-if="f.type === '附件上传'">📎 点击上传附件</template>
                       <template v-else-if="f.type === '开关'"><span class="mock-switch">○───</span></template>
                       <template v-else-if="f.type === '人员选择'">请选择人员 <span class="mock-arrow">👤</span></template>
+                      <template v-else-if="f.type === '部门选择'">请选择部门 <span class="mock-arrow">🏢</span></template>
                       <template v-else-if="f.type === '地理位置'">请选择位置 <span class="mock-arrow">📍</span></template>
                       <template v-else>请输入{{ f.name }}</template>
                     </div>
@@ -502,8 +504,8 @@
           <span class="dp-meta">{{ deployDoneCount }}/{{ deploySteps.length }}</span>
         </div>
         <div class="deploy-actions">
-          <button class="dp-run-all" :disabled="deployExecuting !== null || deployAllDone" @click="deployRunAll">
-            {{ deployAllDone ? '✓ 全部完成' : '▶ 一键执行' }}
+          <button class="dp-run-all" :disabled="deployRunningAll || deployExecuting !== null || deployAllDone" @click="deployRunAll">
+            {{ deployAllDone ? '✓ 全部完成' : deployRunningAll ? '执行中...' : '▶ 一键执行' }}
           </button>
         </div>
         <div class="deploy-groups">
@@ -527,9 +529,9 @@
                 </div>
                 <div class="ds-act">
                   <span v-if="deployExecuting === s.key" class="ds-spin"></span>
-                  <button v-else-if="s.status === 'completed'" class="ds-btn redo" @click="deployRedo(s.key)">↻</button>
-                  <button v-else-if="s.status === 'error'" class="ds-btn retry" @click="deployExec(s.key)">重试</button>
-                  <button v-else-if="s.deps_met" class="ds-btn run" @click="deployExec(s.key)">执行</button>
+                  <button v-else-if="s.status === 'completed'" class="ds-btn redo" :disabled="deployRunningAll" @click="deployRedo(s.key)">↻</button>
+                  <button v-else-if="s.status === 'error'" class="ds-btn retry" :disabled="deployRunningAll" @click="deployExec(s.key)">重试</button>
+                  <button v-else-if="s.deps_met" class="ds-btn run" :disabled="deployRunningAll" @click="deployExec(s.key)">执行</button>
                   <span v-else class="ds-lock">🔒</span>
                 </div>
               </div>
@@ -650,6 +652,7 @@ const fileInputRef = ref<HTMLInputElement>()
 const inputText = ref('')
 const isTyping = ref(false)
 const currentAgent = ref('builder')
+const SHOW_PLATFORM_CONFIG = false
 
 // ── 应用计数（导航栏徽标） ──
 const appCount = ref(0)
@@ -1132,11 +1135,10 @@ const fetchConversationList = async () => {
 }
 
 const loadConversation = async (cid: number) => {
+  resetConversationWorkspace()
   conversationId.value = cid
   selectedConversationId.value = cid
 
-  // 重置预览状态
-  store.reset()
   messages.splice(0, messages.length)
 
   try {
@@ -1200,25 +1202,12 @@ const onConversationSwitch = (newId: number) => {
 }
 
 const startNewConversation = () => {
-  const isFromAppEntry = route.query.app_id != null
-  const currentAppId = isFromAppEntry ? existingAppId.value : null
-
+  resetConversationWorkspace()
   conversationId.value = null
   selectedConversationId.value = null
   messages.splice(0, messages.length)
-
-  if (currentAppId) {
-    // 在应用上下文中新建对话：保留应用关联，不清空配置
-    messages.push({ id: 0, role: 'assistant', agent: 'builder', content: `继续完善「${store.preview.appName}」。\n\n你可以：\n• 上传新版本需求文档进行增量更新\n• 描述需要修改的内容\n• 说"开始生成"部署到平台`, created_at: '' })
-    router.replace({ path: '/chat', query: { app_id: String(currentAppId) } })
-  } else {
-    // 全新对话：清空一切（包括应用关联和文档）
-    existingAppId.value = null
-    store.reset()
-    docVersions.value = []
-    messages.push({ id: 0, role: 'assistant', agent: 'builder', content: '你好！我是 aPaaS 搭建智能体，可以帮你通过对话的方式在得帆云平台上快速搭建应用。\n\n你可以告诉我想要创建什么系统，我会帮你理清需求并自动生成。\n\n比如：\n• "我想做一个客户管理系统"\n• "帮我搭建一个项目管理应用"\n• "创建一个售后服务工单系统"', created_at: '' })
-    router.replace('/chat')
-  }
+  messages.push({ id: 0, role: 'assistant', agent: 'builder', content: '你好！我是 aPaaS 搭建智能体，可以帮你通过对话的方式在得帆云平台上快速搭建应用。\n\n你可以告诉我想要创建什么系统，我会帮你理清需求并自动生成。\n\n比如：\n• "我想做一个客户管理系统"\n• "帮我搭建一个项目管理应用"\n• "创建一个售后服务工单系统"', created_at: '' })
+  router.replace('/chat')
 }
 
 // ── 文档版本 ──
@@ -1380,6 +1369,7 @@ const deployOpen = ref(false)
 const deployAppId = ref<number | null>(null)
 const deploySteps = ref<DeployStep[]>([])
 const deployExecuting = ref<string | null>(null)
+const deployRunningAll = ref(false)
 
 // ── 编码冲突修复 ──
 interface ConflictState {
@@ -1427,6 +1417,51 @@ const incrementalExecuting = ref(false)
 const incrementalSteps = ref<{ key: string; label: string; status: 'pending' | 'running' | 'completed' | 'error'; details?: string; error?: string }[]>([])
 const incrementalResults = ref<ExecuteResponse | null>(null)
 
+function resetConversationWorkspace() {
+  store.reset()
+  store.pendingFile = null
+  existingAppId.value = null
+  generating.value = false
+  showEnvSelect.value = false
+  selectedEnvId.value = null
+  selectedModelIndices.value = []
+  activeConflict.value = null
+  isTyping.value = false
+  showApiLogs.value = false
+  apiLogs.value = []
+  apiLogFilter.value = ''
+
+  activeView.value = 'builder'
+  platformIframeUrl.value = ''
+  platformAppUrl.value = ''
+  platformLoading.value = false
+  platformError.value = ''
+  platformLoginHint.value = ''
+
+  docVersions.value = []
+  docVersionsLoading.value = false
+  docPreviewVisible.value = false
+  docPreviewContent.value = ''
+  docPreviewTitle.value = ''
+  docDiffVisible.value = false
+  docDiffLeft.value = ''
+  docDiffRight.value = ''
+  docDiffLeftTitle.value = ''
+  docDiffRightTitle.value = ''
+
+  deployOpen.value = false
+  deployAppId.value = null
+  deploySteps.value = []
+  deployExecuting.value = null
+  deployRunningAll.value = false
+
+  showIncrementalUpdate.value = false
+  incrementalDiff.value = null
+  incrementalExecuting.value = false
+  incrementalSteps.value = []
+  incrementalResults.value = null
+}
+
 const deployGroups = computed(() => {
   const defs = [
     { title: '初始化', icon: '🚀', test: (s: DeployStep) => s.key === 'create_app' },
@@ -1451,12 +1486,10 @@ async function openDeployPanel() {
 }
 
 async function openInPlatform() {
-  // 优先切换到平台配置 tab
-  if (store.currentApp?.apaas_app_id) {
+  if (SHOW_PLATFORM_CONFIG && store.currentApp?.apaas_app_id) {
     switchToPlatform()
     return
   }
-  // 没有 apaas_app_id 则跳应用列表
   router.push('/apps')
 }
 
@@ -1517,23 +1550,38 @@ async function deployRedo(key: string) {
 }
 
 async function deployRunAll() {
-  for (const s of deploySteps.value) {
-    if (s.status === 'completed') continue
-    await loadDeployStatus()
-    const fresh = deploySteps.value.find(x => x.key === s.key)
-    if (!fresh?.deps_met) continue
-    deployExecuting.value = s.key
-    const resp = await applicationApi.executeStep(deployAppId.value!, s.key)
-    await loadDeployStatus()
-    if (resp.status === 'conflict' && resp.conflict) {
-      handleConflict(resp, s.key)
-      deployExecuting.value = null
-      return  // 暂停，等用户修复冲突后可再次一键执行
+  if (!deployAppId.value || deployRunningAll.value || deployExecuting.value !== null || deployAllDone.value) return
+
+  deployRunningAll.value = true
+  try {
+    for (const s of deploySteps.value) {
+      if (s.status === 'completed') continue
+      await loadDeployStatus()
+      const fresh = deploySteps.value.find(x => x.key === s.key)
+      if (!fresh?.deps_met) continue
+      deployExecuting.value = s.key
+      const resp = await applicationApi.executeStep(deployAppId.value, s.key)
+      await loadDeployStatus()
+      if (resp.status === 'conflict' && resp.conflict) {
+        handleConflict(resp, s.key)
+        deployExecuting.value = null
+        return  // 暂停，等用户修复冲突后可再次一键执行
+      }
+      if (resp.status === 'error') {
+        ElMessage.error(resp.error + '，已暂停')
+        deployExecuting.value = null
+        return
+      }
     }
-    if (resp.status === 'error') { ElMessage.error(resp.error + '，已暂停'); deployExecuting.value = null; return }
+    deployExecuting.value = null
+    ElMessage.success('全部完成！')
+  } catch (e: any) {
+    ElMessage.error(e.message || '失败')
+  } finally {
+    deployExecuting.value = null
+    deployRunningAll.value = false
+    await loadDeployStatus()
   }
-  deployExecuting.value = null
-  ElMessage.success('全部完成！')
 }
 function handleConflict(resp: any, stepKey: string) {
   const c = resp.conflict
@@ -2879,8 +2927,7 @@ onMounted(async () => {
   if (store.pendingFile) {
     const file = store.pendingFile
     store.pendingFile = null
-    // 清空旧状态
-    store.reset()
+    resetConversationWorkspace()
     messages.splice(0, messages.length)
     nextTick(() => {
       const dt = new DataTransfer()
@@ -3520,10 +3567,11 @@ watch(conversationId, (id) => {
 .ds-act { flex-shrink: 0; }
 .ds-btn { border: none; cursor: pointer; border-radius: 6px; font-weight: 500; font-size: 11px; transition: transform 0.2s; }
 .ds-btn.run { padding: 3px 10px; background: var(--t-brand-gradient); color: #fff; }
-.ds-btn.run:hover { transform: translateY(-1px); }
+.ds-btn.run:hover:not(:disabled) { transform: translateY(-1px); }
 .ds-btn.retry { padding: 3px 10px; background: var(--t-danger); color: #fff; }
 .ds-btn.redo { padding: 2px 5px; background: none; color: var(--t-text-muted); font-size: 14px; }
-.ds-btn.redo:hover { color: var(--t-brand-light); }
+.ds-btn.redo:hover:not(:disabled) { color: var(--t-brand-light); }
+.ds-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 .ds-spin { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--t-border-subtle); border-top-color: var(--t-brand); border-radius: 50%; animation: spin 0.7s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .ds-lock { font-size: 11px; opacity: 0.15; }
