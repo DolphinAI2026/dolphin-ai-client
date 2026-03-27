@@ -1,6 +1,8 @@
 from contextlib import asynccontextmanager
+from urllib.parse import urlparse
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from app.config import settings
 from app.database import init_db
 from app.routes import auth, conversations, chat, applications, apaas, generation_steps, coding, incremental_update, projects, marketplace, templates, platform_envs, platform_proxy, llm_configs
 
@@ -28,9 +30,22 @@ app = FastAPI(
 )
 
 # CORS配置
+cors_origins = [
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "http://localhost:8080",
+    "http://127.0.0.1:8080",
+]
+if settings.code_server_base_url:
+    parsed = urlparse(settings.code_server_base_url)
+    if parsed.scheme and parsed.netloc:
+        ide_origin = f"{parsed.scheme}://{parsed.netloc}"
+        if ide_origin not in cors_origins:
+            cors_origins.append(ide_origin)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

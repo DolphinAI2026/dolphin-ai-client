@@ -11,7 +11,7 @@ from typing import Optional
 from dataclasses import dataclass, field
 
 from app.llm_client import LLMClient
-from app.coding.workspace import WorkspaceManager, WORKSPACE_ROOT
+from app.coding.workspace import WorkspaceManager
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ class ComponentVerifier:
 
     async def analyze_screenshot(self, ws_id: str, requirement: str) -> VerifyResult:
         """Analyze debug screenshot with AI vision"""
-        screenshot_path = WORKSPACE_ROOT / ws_id / "debug" / "screenshots" / "page.png"
+        screenshot_path = self.ws_mgr.get_workspace_path(ws_id) / "debug" / "screenshots" / "page.png"
         if not screenshot_path.exists():
             return VerifyResult(passed=False, issues="截图不存在，debug 可能失败")
 
@@ -100,7 +100,7 @@ class ComponentVerifier:
 
     async def auto_fix(self, ws_id: str, verify_result: VerifyResult, requirement: str) -> dict:
         """Based on verification issues, attempt to auto-fix the component code"""
-        ws_path = WORKSPACE_ROOT / ws_id
+        ws_path = self.ws_mgr.get_workspace_path(ws_id)
 
         # Read current component source files
         src_dir = ws_path / "src"

@@ -9,12 +9,14 @@ import shutil
 import asyncio
 import inspect
 import logging
+import subprocess
 import tempfile
 import re
 import uuid
 import hashlib
+from functools import lru_cache
 from pathlib import Path
-from typing import Awaitable, Callable, Optional
+from typing import Awaitable, Callable, Optional, Union
 from enum import Enum
 
 logger = logging.getLogger(__name__)
@@ -23,7 +25,39 @@ logger = logging.getLogger(__name__)
 WORKSPACE_ROOT = Path(__file__).parent.parent.parent.parent / "workspaces"
 DEPENDENCY_CACHE_ROOT = WORKSPACE_ROOT / ".dependency-cache"
 NPM_CACHE_ROOT = WORKSPACE_ROOT / ".npm-cache"
-DEFAULT_NPM_REGISTRY = os.environ.get("APAAS_NPM_REGISTRY", "https://registry.npmmirror.com")
+DEFAULT_RULES_ROOT = Path(__file__).parent / "default_rules"
+FALLBACK_NPM_REGISTRY = "https://registry.npmmirror.com"
+
+
+@lru_cache(maxsize=1)
+def _resolve_default_npm_registry() -> str:
+    explicit_registry = (
+        os.environ.get("APAAS_NPM_REGISTRY")
+        or os.environ.get("npm_config_registry")
+        or os.environ.get("NPM_CONFIG_REGISTRY")
+        or ""
+    ).strip()
+    if explicit_registry:
+        return explicit_registry
+
+    try:
+        result = subprocess.run(
+            ["npm", "config", "get", "registry"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        resolved_registry = (result.stdout or "").strip()
+        if result.returncode == 0 and resolved_registry and resolved_registry != "undefined":
+            return resolved_registry
+    except Exception:
+        pass
+
+    return FALLBACK_NPM_REGISTRY
+
+
+DEFAULT_NPM_REGISTRY = _resolve_default_npm_registry()
 
 DISPLAY_NAME_HINTS = {
     "gantt-chart": "甘特图组件",
@@ -127,6 +161,27 @@ PROJECT_TYPE_SUFFIXES = {
     "web-login": "登录页",
 }
 
+FRONTEND_RULE_WORKSPACE_TYPES = {
+    "form-component",
+    "mobile-component",
+    "form-page",
+    "menu-page",
+    "mobile-page",
+    "form-list",
+    "layout",
+    "plugin",
+    "business-dialog",
+    "ui-style",
+    "list-custom-module",
+    "web-login",
+}
+
+PAGE_RULE_WORKSPACE_TYPES = {
+    "form-page",
+    "menu-page",
+    "mobile-page",
+}
+
 
 class ProjectType(str, Enum):
     """项目类型"""
@@ -160,11 +215,61 @@ class WorkspaceStatus(str, Enum):
 class WorkspaceManager:
     """工作区管理器"""
     _install_locks: dict[str, asyncio.Lock] = {}
+    _workspace_path_cache: dict[str, Path] = {}
 
     def __init__(self):
         WORKSPACE_ROOT.mkdir(parents=True, exist_ok=True)
         DEPENDENCY_CACHE_ROOT.mkdir(parents=True, exist_ok=True)
         NPM_CACHE_ROOT.mkdir(parents=True, exist_ok=True)
+
+    def _build_workspace_folder_name(self, ws_id: str, project_name: str) -> str:
+        readable_name = self._slugify_project_token(project_name) or "custom-dev"
+        return f"{readable_name}__{ws_id}"
+
+    def _fallback_project_name_from_path(self, ws_path: Path) -> str:
+        folder_name = ws_path.name
+        if "__" in folder_name:
+            return folder_name.split("__", 1)[0].strip() or folder_name
+        return folder_name
+
+    def _iter_workspace_dirs(self):
+        if not WORKSPACE_ROOT.exists():
+            return
+        for candidate in WORKSPACE_ROOT.iterdir():
+            if not candidate.is_dir():
+                continue
+            if candidate.name.startswith("."):
+                continue
+            if not (candidate / ".workspace.json").exists():
+                continue
+            yield candidate
+
+    def get_workspace_path(self, ws_id: str) -> Path:
+        cached = self._workspace_path_cache.get(ws_id)
+        if cached and cached.exists():
+            return cached
+
+        direct = WORKSPACE_ROOT / ws_id
+        if direct.exists():
+            self._workspace_path_cache[ws_id] = direct
+            return direct
+
+        for candidate in self._iter_workspace_dirs():
+            try:
+                meta = self._read_meta(candidate)
+            except Exception:
+                continue
+            if meta.get("id") == ws_id:
+                self._workspace_path_cache[ws_id] = candidate
+                return candidate
+
+        raise FileNotFoundError(f"Workspace {ws_id} not found")
+
+    def _decorate_workspace_meta(self, ws_path: Path, meta: dict) -> dict:
+        hydrated = self._ensure_display_name(ws_path, meta)
+        hydrated["folder_name"] = ws_path.name
+        hydrated["disk_path"] = str(ws_path.resolve())
+        return hydrated
 
     def _read_apaas_config(self, ws_path: Path) -> dict:
         apaas_json_path = ws_path / "src" / "apaas.json"
@@ -186,12 +291,53 @@ class WorkspaceManager:
         md5_code = hashlib.md5(plugin_code.encode("utf-8")).hexdigest()
         return ws_path / "crypto" / md5_code
 
+    def _slugify_project_token(self, raw_name: str) -> str:
+        candidate = (raw_name or "").strip().lower()
+        if not candidate:
+            return ""
+
+        candidate = candidate.replace("&", " and ")
+        candidate = re.sub(r"[^a-z0-9\\s-]", "-", candidate)
+        candidate = candidate.replace("_", "-")
+        candidate = re.sub(r"\s+", "-", candidate)
+        candidate = re.sub(r"-+", "-", candidate).strip("-")
+        candidate = re.sub(r"^[^a-z]+", "", candidate)
+        return candidate[:64].strip("-")
+
     def _normalize_project_name(self, project_type: ProjectType, project_name: str) -> str:
-        safe_name = (project_name or "").strip().replace(" ", "-").lower()
-        if not safe_name.startswith("apaas-custom-"):
-            prefix = PROJECT_TYPE_PREFIXES.get(project_type.value, "")
-            safe_name = prefix + safe_name
-        return safe_name
+        safe_name = self._slugify_project_token(project_name) or "custom-dev"
+        if safe_name.startswith("apaas-custom-"):
+            return safe_name
+
+        prefix = PROJECT_TYPE_PREFIXES.get(project_type.value, "")
+        if prefix and safe_name.startswith(prefix):
+            return safe_name
+        return f"{prefix}{safe_name}" if prefix else safe_name
+
+    def _get_default_rule_files(self, project_type: Union[ProjectType, str]) -> list[Path]:
+        project_type_value = project_type.value if isinstance(project_type, ProjectType) else str(project_type)
+        files: list[Path] = []
+
+        if project_type_value in FRONTEND_RULE_WORKSPACE_TYPES:
+            files.append(DEFAULT_RULES_ROOT / "前端SDK-v2介绍.mdc")
+        if project_type_value in PAGE_RULE_WORKSPACE_TYPES:
+            files.append(DEFAULT_RULES_ROOT / "自开发菜单页面开发指南.mdc")
+
+        return [file for file in files if file.exists()]
+
+    def _seed_default_workspace_rules(self, ws_path: Path, project_type: Union[ProjectType, str]):
+        rule_files = self._get_default_rule_files(project_type)
+        if not rule_files:
+            return
+
+        rules_dir = ws_path / ".cursor" / "rules"
+        rules_dir.mkdir(parents=True, exist_ok=True)
+
+        for source in rule_files:
+            target = rules_dir / source.name
+            if target.exists():
+                continue
+            shutil.copy2(source, target)
 
     def _strip_project_prefix(self, project_type: str, project_name: str) -> str:
         base_name = (project_name or "").strip()
@@ -247,13 +393,33 @@ class WorkspaceManager:
         self._write_meta(ws_path, hydrated_meta)
         return hydrated_meta
 
+    @staticmethod
+    def _resolve_output_name(apaas_config: Optional[dict], fallback: str) -> str:
+        config = apaas_config or {}
+
+        output_name = config.get("outputName")
+        if isinstance(output_name, str) and output_name.strip():
+            return output_name.strip()
+
+        output_path = config.get("outputPath")
+        if isinstance(output_path, str) and output_path.strip():
+            normalized_path = output_path.replace("\\", "/").rstrip("/")
+            candidate = normalized_path.split("/")[-1].strip()
+            if candidate:
+                return candidate
+
+        return fallback
+
     def _get_build_output_dir(self, ws_path: Path, apaas_config: Optional[dict] = None) -> Path:
         apaas_config = apaas_config or self._read_apaas_config(ws_path)
         template_type = (apaas_config.get("templateType") or "").upper()
         meta = self._read_meta(ws_path) if (ws_path / ".workspace.json").exists() else {}
         if meta.get("project_type") == ProjectType.BACKEND_API.value:
             return ws_path / "target"
-        output_name = apaas_config.get("outputName") or ws_path.name
+        output_name = self._resolve_output_name(
+            apaas_config,
+            meta.get("project_name") or self._fallback_project_name_from_path(ws_path),
+        )
         if template_type in {"MENU_PAGE", "FORM_PAGE", "PAGE_LAYOUT", "LIST_VIEW"}:
             return ws_path / output_name
         if template_type in {"FRONTEND_PLUGIN", "PLUGIN"}:
@@ -261,9 +427,7 @@ class WorkspaceManager:
         return ws_path / "dist"
 
     def get_build_output_dir(self, ws_id: str) -> Path:
-        ws_path = WORKSPACE_ROOT / ws_id
-        if not ws_path.exists():
-            raise FileNotFoundError(f"Workspace {ws_id} not found")
+        ws_path = self.get_workspace_path(ws_id)
         return self._get_build_output_dir(ws_path)
 
     def _has_build_artifacts(self, output_dir: Path) -> bool:
@@ -284,6 +448,67 @@ class WorkspaceManager:
             return False
         build_script = ((package_json.get("scripts") or {}).get("build") or "").strip()
         return "df-apaas-cli build" in build_script
+
+    def _project_requires_npm_install(self, project_type: str) -> bool:
+        return project_type not in (
+            ProjectType.BACKEND_API.value,
+            ProjectType.SCRIPT_JS.value,
+            ProjectType.SCRIPT_PYTHON.value,
+            ProjectType.SCRIPT_GROOVY.value,
+            ProjectType.BUSINESS_DIALOG.value,
+            ProjectType.SCRIPT.value,
+            ProjectType.UI_STYLE.value,
+            ProjectType.LIST_CUSTOM_MODULE.value,
+        )
+
+    def _clean_build_output(self, text: str) -> str:
+        if not text:
+            return ""
+
+        cleaned_lines: list[str] = []
+        skip_next_blank = False
+        for line in text.splitlines():
+            if "DEPRECATION WARNING [legacy-js-api]" in line:
+                skip_next_blank = True
+                continue
+            if "More info: https://sass-lang.com/d/legacy-js-api" in line:
+                skip_next_blank = True
+                continue
+            if skip_next_blank and not line.strip():
+                continue
+            skip_next_blank = False
+            cleaned_lines.append(line)
+
+        return "\n".join(cleaned_lines).strip()
+
+    def _summarize_build_failure(self, stdout: bytes, stderr: bytes, limit: int = 1800) -> str:
+        stdout_text = self._clean_build_output(stdout.decode("utf-8", errors="replace"))
+        stderr_text = self._clean_build_output(stderr.decode("utf-8", errors="replace"))
+
+        markers = (
+            "Failed to compile",
+            "[eslint]",
+            "ERROR  Failed to compile",
+            "Error: Build failed with errors.",
+            "error  ",
+        )
+
+        def _focus(text: str) -> str:
+            if not text:
+                return ""
+            last_index = -1
+            for marker in markers:
+                idx = text.rfind(marker)
+                if idx > last_index:
+                    last_index = idx
+            if last_index >= 0:
+                return text[last_index:].strip()
+            return text.strip()
+
+        for candidate in (_focus(stdout_text), _focus(stderr_text), stdout_text, stderr_text):
+            if candidate:
+                return candidate[:limit]
+        return "构建失败"
 
     async def _run_backend_build_process(self, cwd: Path) -> tuple[int, bytes, bytes]:
         mvnw = cwd / "mvnw"
@@ -319,6 +544,7 @@ class WorkspaceManager:
             cwd=str(cwd),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=self._build_npm_env(),
         )
         stdout, stderr = await proc.communicate()
         return proc.returncode, stdout, stderr
@@ -326,7 +552,7 @@ class WorkspaceManager:
     async def _build_with_staging(self, ws_path: Path) -> dict:
         apaas_config = self._read_apaas_config(ws_path)
         output_dir = self._get_build_output_dir(ws_path, apaas_config)
-        output_name = apaas_config.get("outputName") or output_dir.name
+        output_name = self._resolve_output_name(apaas_config, output_dir.name)
 
         with tempfile.TemporaryDirectory(prefix="apaas-build-stage.") as temp_dir:
             stage_path = Path(temp_dir) / "workspace"
@@ -346,7 +572,7 @@ class WorkspaceManager:
 
             stage_output_dir = self._get_build_output_dir(stage_path, apaas_config)
             if returncode != 0 or not self._has_build_artifacts(stage_output_dir):
-                message = (stderr_text or stdout_text or "构建失败")[:1200]
+                message = self._summarize_build_failure(stdout, stderr)
                 return {"status": "error", "message": message}
 
             if output_dir.exists():
@@ -371,22 +597,22 @@ class WorkspaceManager:
         display_name: Optional[str] = None,
     ) -> dict:
         """创建新工作区并生成脚手架"""
-        # 生成 workspace ID
+        # 规范化项目名
+        safe_name = self._normalize_project_name(project_type, project_name)
+        resolved_display_name = self._normalize_display_name(display_name, project_type.value, safe_name)
         ws_id = f"{user_id}_{uuid.uuid4().hex[:8]}"
-        ws_path = WORKSPACE_ROOT / ws_id
+        folder_name = self._build_workspace_folder_name(ws_id, safe_name)
+        ws_path = WORKSPACE_ROOT / folder_name
 
         if ws_path.exists():
             shutil.rmtree(ws_path)
 
         ws_path.mkdir(parents=True)
 
-        # 规范化项目名
-        safe_name = self._normalize_project_name(project_type, project_name)
-        resolved_display_name = self._normalize_display_name(display_name, project_type.value, safe_name)
-
         # 写入 workspace 元信息
         meta = {
             "id": ws_id,
+            "folder_name": folder_name,
             "project_id": project_id,
             "project_type": project_type.value,
             "project_name": safe_name,
@@ -397,6 +623,7 @@ class WorkspaceManager:
         (ws_path / ".workspace.json").write_text(
             json.dumps(meta, ensure_ascii=False, indent=2)
         )
+        self._workspace_path_cache[ws_id] = ws_path
 
         # 生成脚手架
         if project_type == ProjectType.MOBILE_COMPONENT:
@@ -434,6 +661,8 @@ class WorkspaceManager:
         elif project_type == ProjectType.WEB_LOGIN:
             self._scaffold_web_login(ws_path, safe_name)
 
+        self._seed_default_workspace_rules(ws_path, project_type)
+
         # 生成 VS Code AI Chat 配置（接入 LLM）
         try:
             self._setup_vscode_ai_config(ws_path)
@@ -461,7 +690,7 @@ class WorkspaceManager:
 
     @staticmethod
     async def _emit_install_progress(
-        progress_callback: Optional[Callable[[str], Awaitable[None] | None]],
+        progress_callback: Optional[Callable[[str], Optional[Awaitable[None]]]],
         chunk: str,
     ):
         if not progress_callback or not chunk:
@@ -473,6 +702,7 @@ class WorkspaceManager:
     def _build_npm_env(self) -> dict[str, str]:
         env = {**os.environ}
         env.setdefault("npm_config_registry", DEFAULT_NPM_REGISTRY)
+        env.setdefault("NPM_CONFIG_REGISTRY", DEFAULT_NPM_REGISTRY)
         env.setdefault("npm_config_cache", str(NPM_CACHE_ROOT))
         env.setdefault("npm_config_prefer_offline", "true")
         env.setdefault("npm_config_audit", "false")
@@ -556,7 +786,7 @@ class WorkspaceManager:
         self,
         ws_path: Path,
         cache_dir: Path,
-        progress_callback: Optional[Callable[[str], Awaitable[None] | None]] = None,
+        progress_callback: Optional[Callable[[str], Optional[Awaitable[None]]]] = None,
     ) -> tuple[bool, str]:
         await self._emit_install_progress(
             progress_callback,
@@ -613,24 +843,13 @@ class WorkspaceManager:
     async def install_deps(
         self,
         ws_id: str,
-        progress_callback: Optional[Callable[[str], Awaitable[None] | None]] = None,
+        progress_callback: Optional[Callable[[str], Optional[Awaitable[None]]]] = None,
     ) -> dict:
         """安装 npm 依赖"""
-        ws_path = WORKSPACE_ROOT / ws_id
-        if not ws_path.exists():
-            raise FileNotFoundError(f"Workspace {ws_id} not found")
+        ws_path = self.get_workspace_path(ws_id)
 
         meta = self._read_meta(ws_path)
-        if meta["project_type"] in (
-            ProjectType.BACKEND_API.value,
-            ProjectType.SCRIPT_JS.value,
-            ProjectType.SCRIPT_PYTHON.value,
-            ProjectType.SCRIPT_GROOVY.value,
-            ProjectType.BUSINESS_DIALOG.value,
-            ProjectType.SCRIPT.value,
-            ProjectType.UI_STYLE.value,
-            ProjectType.LIST_CUSTOM_MODULE.value,
-        ):
+        if not self._project_requires_npm_install(meta["project_type"]):
             return {"status": "skip", "message": "此类型项目无需 npm install"}
 
         meta["status"] = WorkspaceStatus.INSTALLING.value
@@ -683,9 +902,7 @@ class WorkspaceManager:
 
     async def build_if_needed(self, ws_id: str) -> dict:
         """按需构建 - 仅在源码比构建产物更新时重新构建"""
-        ws_path = WORKSPACE_ROOT / ws_id
-        if not ws_path.exists():
-            raise FileNotFoundError(f"Workspace {ws_id} not found")
+        ws_path = self.get_workspace_path(ws_id)
 
         output_dir = self._get_build_output_dir(ws_path)
         src_path = ws_path / "src"
@@ -716,16 +933,21 @@ class WorkspaceManager:
 
     async def build_project(self, ws_id: str) -> dict:
         """构建项目"""
-        ws_path = WORKSPACE_ROOT / ws_id
-        if not ws_path.exists():
-            raise FileNotFoundError(f"Workspace {ws_id} not found")
+        ws_path = self.get_workspace_path(ws_id)
 
+        self._ensure_menu_page_workspace_compat(ws_path)
         self._ensure_layout_workspace_compat(ws_path)
         self._ensure_form_list_workspace_compat(ws_path)
         self._ensure_plugin_workspace_compat(ws_path)
         self._ensure_backend_workspace_compat(ws_path)
 
         meta = self._read_meta(ws_path)
+        if self._project_requires_npm_install(meta.get("project_type", "")):
+            install_result = await self.install_deps(ws_id)
+            if install_result["status"] == "error":
+                return install_result
+            meta = self._read_meta(ws_path)
+
         meta["status"] = WorkspaceStatus.BUILDING.value
         self._write_meta(ws_path, meta)
 
@@ -740,7 +962,7 @@ class WorkspaceManager:
                 else:
                     build_result = {
                         "status": "error",
-                        "message": (stderr.decode("utf-8", errors="replace") or stdout.decode("utf-8", errors="replace"))[:1200],
+                        "message": self._summarize_build_failure(stdout, stderr),
                     }
 
             if build_result["status"] == "ok":
@@ -768,9 +990,7 @@ class WorkspaceManager:
             if info["process"].returncode is None:  # 还在运行
                 return {"status": "ok", "port": info["port"], "message": "serve 已在运行"}
 
-        ws_path = WORKSPACE_ROOT / ws_id
-        if not ws_path.exists():
-            raise FileNotFoundError(f"Workspace {ws_id} not found")
+        ws_path = self.get_workspace_path(ws_id)
 
         # 找到可用端口
         port = self._next_port
@@ -783,7 +1003,14 @@ class WorkspaceManager:
                 port += 1
                 WorkspaceManager._next_port = port + 1
 
-        env = {**__import__("os").environ, "PORT": str(port)}
+        meta = self._read_meta(ws_path)
+        if self._project_requires_npm_install(meta.get("project_type", "")):
+            install_result = await self.install_deps(ws_id)
+            if install_result["status"] == "error":
+                return install_result
+
+        env = self._build_npm_env()
+        env["PORT"] = str(port)
         proc = await asyncio.create_subprocess_exec(
             "npx", "vue-cli-service", "serve", "src/index.js", "--port", str(port),
             cwd=str(ws_path),
@@ -840,9 +1067,9 @@ class WorkspaceManager:
             raise RuntimeError(f"构建失败: {result['message']}")
 
         # 打包 zip
-        ws_path = WORKSPACE_ROOT / ws_id
+        ws_path = self.get_workspace_path(ws_id)
         meta = self._read_meta(ws_path)
-        project_name = meta.get("project_name", ws_id)
+        project_name = meta.get("project_name") or self._fallback_project_name_from_path(ws_path)
         output_dir = self._get_build_output_dir(ws_path)
         if not self._has_build_artifacts(output_dir):
             raise FileNotFoundError("构建产物目录不存在，构建可能失败")
@@ -890,7 +1117,7 @@ class WorkspaceManager:
                 except asyncio.TimeoutError:
                     old_proc.kill()
 
-        ws_path = WORKSPACE_ROOT / ws_id
+        ws_path = self.get_workspace_path(ws_id)
 
         # 根据 debug_mode 计算目标 URL — 简单模式：打开平台/应用首页，用户自己导航
         _base_url = platform_url.replace("/platform/", "/").rstrip("/") + "/"
@@ -1102,7 +1329,7 @@ const INJECT_CODE = `(function(params) {{
                 except asyncio.TimeoutError:
                     old_proc.kill()
 
-        ws_path = WORKSPACE_ROOT / ws_id
+        ws_path = self.get_workspace_path(ws_id)
         screenshots_dir = ws_path / "debug" / "screenshots"
         screenshots_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1325,9 +1552,7 @@ const resultPath = '{str(result_json_path)}'
 
     def write_file(self, ws_id: str, file_path: str, content: str):
         """写入文件到工作区"""
-        ws_path = WORKSPACE_ROOT / ws_id
-        if not ws_path.exists():
-            raise FileNotFoundError(f"Workspace {ws_id} not found")
+        ws_path = self.get_workspace_path(ws_id)
 
         # 安全检查：不允许写入工作区外
         target = (ws_path / file_path).resolve()
@@ -1339,7 +1564,7 @@ const resultPath = '{str(result_json_path)}'
 
     def read_file(self, ws_id: str, file_path: str) -> str:
         """读取工作区文件"""
-        ws_path = WORKSPACE_ROOT / ws_id
+        ws_path = self.get_workspace_path(ws_id)
         target = (ws_path / file_path).resolve()
         if not str(target).startswith(str(ws_path.resolve())):
             raise ValueError("File path escapes workspace")
@@ -1349,27 +1574,25 @@ const resultPath = '{str(result_json_path)}'
 
     def list_files(self, ws_id: str) -> list:
         """列出工作区的文件树"""
-        ws_path = WORKSPACE_ROOT / ws_id
-        if not ws_path.exists():
-            raise FileNotFoundError(f"Workspace {ws_id} not found")
+        ws_path = self.get_workspace_path(ws_id)
 
         files = []
         for p in sorted(ws_path.rglob("*")):
             if p.is_file():
                 rel = p.relative_to(ws_path)
                 rel_str = str(rel)
-                # 跳过隐藏文件和 node_modules
-                if rel_str.startswith(".") or "node_modules" in rel_str:
+                # 跳过隐藏文件和 node_modules，但保留 .cursor/rules 里的规范文档
+                if "node_modules" in rel_str:
+                    continue
+                if rel_str.startswith(".") and not rel_str.startswith(".cursor/rules/"):
                     continue
                 files.append(rel_str)
         return files
 
     def get_workspace_info(self, ws_id: str) -> dict:
         """获取工作区信息"""
-        ws_path = WORKSPACE_ROOT / ws_id
-        if not ws_path.exists():
-            raise FileNotFoundError(f"Workspace {ws_id} not found")
-        meta = self._ensure_display_name(ws_path, self._read_meta(ws_path))
+        ws_path = self.get_workspace_path(ws_id)
+        meta = self._decorate_workspace_meta(ws_path, self._read_meta(ws_path))
         meta["files"] = self.list_files(ws_id)
         return meta
 
@@ -1378,20 +1601,22 @@ const resultPath = '{str(result_json_path)}'
         results = []
         if not WORKSPACE_ROOT.exists():
             return results
-        for d in WORKSPACE_ROOT.iterdir():
-            if d.is_dir() and d.name.startswith(f"{user_id}_"):
-                try:
-                    meta = self._ensure_display_name(d, self._read_meta(d))
-                    results.append(meta)
-                except Exception:
-                    pass
+        for d in self._iter_workspace_dirs():
+            try:
+                meta = self._decorate_workspace_meta(d, self._read_meta(d))
+                if meta.get("user_id") != user_id:
+                    continue
+                results.append(meta)
+            except Exception:
+                pass
         return results
 
     def delete_workspace(self, ws_id: str):
         """删除工作区"""
-        ws_path = WORKSPACE_ROOT / ws_id
+        ws_path = self.get_workspace_path(ws_id)
         if ws_path.exists():
             shutil.rmtree(ws_path)
+        self._workspace_path_cache.pop(ws_id, None)
 
     # ========== 内部方法 ==========
 
@@ -1456,7 +1681,7 @@ dist/
         if meta.get("project_type") != ProjectType.LAYOUT.value:
             return
 
-        project_name = meta.get("project_name") or ws_path.name
+        project_name = meta.get("project_name") or self._fallback_project_name_from_path(ws_path)
         package_json_path = ws_path / "package.json"
         apaas_json_path = ws_path / "src" / "apaas.json"
 
@@ -1500,7 +1725,7 @@ dist/
         if meta.get("project_type") != ProjectType.FORM_LIST.value:
             return
 
-        project_name = meta.get("project_name") or ws_path.name
+        project_name = meta.get("project_name") or self._fallback_project_name_from_path(ws_path)
         package_json_path = ws_path / "package.json"
         apaas_json_path = ws_path / "src" / "apaas.json"
         public_dir = ws_path / "public" / "form-view" / project_name
@@ -1584,13 +1809,140 @@ dist/
         repaired_apaas["outputName"] = repaired_apaas.get("outputName") or project_name
         apaas_json_path.write_text(json.dumps(repaired_apaas, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    def _ensure_menu_page_workspace_compat(self, ws_path: Path):
+        """修复旧版菜单/表单/移动页面工作区，使其对齐 MENU_PAGE 协议。"""
+        meta = self._read_meta(ws_path)
+        if meta.get("project_type") not in (
+            ProjectType.FORM_PAGE.value,
+            ProjectType.MENU_PAGE.value,
+            ProjectType.MOBILE_PAGE.value,
+        ):
+            return
+
+        project_name = meta.get("project_name") or self._fallback_project_name_from_path(ws_path)
+        package_json_path = ws_path / "package.json"
+        apaas_json_path = ws_path / "src" / "apaas.json"
+        public_dir = ws_path / "public" / "form-page" / project_name
+        public_dir.mkdir(parents=True, exist_ok=True)
+        gitkeep = public_dir / ".gitkeep"
+        if not gitkeep.exists():
+            gitkeep.write_text("", encoding="utf-8")
+
+        if package_json_path.exists():
+            try:
+                package_json = json.loads(package_json_path.read_text(encoding="utf-8"))
+            except Exception:
+                package_json = {}
+        else:
+            package_json = {}
+
+        existing_deps = package_json.get("dependencies") or {}
+        existing_dev_deps = package_json.get("devDependencies") or {}
+        package_json.update({
+            "name": package_json.get("name") or project_name,
+            "version": package_json.get("version") or "1.0.0",
+            "engines": {"node": "16.x"},
+            "templateType": "MENU_PAGE",
+            "private": True,
+            "scripts": {
+                "lint": "vue-cli-service lint",
+                "preview": "VUE_APP_PREVIEW=true vue-cli-service serve preview/main.js",
+                "serve": "vue-cli-service serve src/index.js",
+                "debug": "df-apaas-cli debug",
+                "build": "df-apaas-cli build",
+            },
+        })
+        package_json["dependencies"] = {
+            **existing_deps,
+            "core-js": "3.8.3",
+            "element-ui": existing_deps.get("element-ui") or "^2.15.14",
+            "vue": "2.7.14",
+        }
+        package_json["devDependencies"] = {
+            **existing_dev_deps,
+            "@babel/core": "7.12.16",
+            "@babel/eslint-parser": "7.12.16",
+            "@vue/cli-plugin-babel": "5.0.0",
+            "@vue/cli-plugin-eslint": "5.0.0",
+            "@vue/cli-service": "5.0.8",
+            "dart-sass": "1.25.0",
+            "eslint": "7.32.0",
+            "eslint-plugin-vue": "8.0.3",
+            "sass": "1.85.1",
+            "sass-loader": "8.0.2",
+            "vue-template-compiler": "2.7.14",
+        }
+        package_json["eslintConfig"] = {
+            "root": True,
+            "env": {"node": True},
+            "extends": ["plugin:vue/essential", "eslint:recommended"],
+            "parserOptions": {"parser": "@babel/eslint-parser"},
+            "rules": {},
+        }
+        package_json["browserslist"] = ["> 1%", "last 2 versions", "not dead", "Chrome 40.0", "ie >= 11"]
+        package_json_path.write_text(json.dumps(package_json, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        if apaas_json_path.exists():
+            try:
+                apaas_json = json.loads(apaas_json_path.read_text(encoding="utf-8"))
+            except Exception:
+                apaas_json = {}
+        else:
+            apaas_json = {}
+
+        router = apaas_json.get("router")
+        if not isinstance(router, dict):
+            router = {}
+        if not router:
+            router_name = f"apaas-custom-{self._strip_project_prefix(meta.get('project_type', ''), project_name)}"
+            router = {
+                router_name: {
+                    "name": router_name,
+                    "path": router_name,
+                }
+            }
+
+        repaired_apaas = dict(apaas_json)
+        repaired_apaas["entry"] = repaired_apaas.get("entry") or "index.js"
+        repaired_apaas["templateType"] = "MENU_PAGE"
+        repaired_apaas["router"] = router
+        repaired_apaas["customWidgetList"] = repaired_apaas.get("customWidgetList") or []
+        repaired_apaas["copyAssets"] = repaired_apaas.get("copyAssets") or [f"public/form-page/{project_name}"]
+        repaired_apaas["outputName"] = self._resolve_output_name(repaired_apaas, project_name)
+        apaas_json_path.write_text(json.dumps(repaired_apaas, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        component_tag = next(iter(router.keys()), "")
+        index_path = ws_path / "src" / "index.js"
+        if component_tag and index_path.exists():
+            try:
+                index_content = index_path.read_text(encoding="utf-8")
+            except Exception:
+                index_content = ""
+
+            needs_install_wrapper = "Vue.component(" in index_content and "const install = function" not in index_content
+            if needs_install_wrapper:
+                self._write(
+                    ws_path,
+                    "src/index.js",
+                    f"""import "./form-page-local/index.js";
+import ApaasCustomPage from "./form-page/{component_tag}.vue";
+
+const install = function (Vue) {{
+  Vue.component("{component_tag}", ApaasCustomPage);
+  window[Symbol.for("{component_tag}")] = ApaasCustomPage;
+}};
+
+export default {{ install }};
+""",
+                )
+
     def _ensure_plugin_workspace_compat(self, ws_path: Path):
         """修复旧版插件工作区，使其对齐 FRONTEND_PLUGIN 协议。"""
         meta = self._read_meta(ws_path)
         if meta.get("project_type") != ProjectType.PLUGIN.value:
             return
 
-        project_name = meta.get("project_name") or ws_path.name
+        project_name = meta.get("project_name") or self._fallback_project_name_from_path(ws_path)
         package_json_path = ws_path / "package.json"
         apaas_json_path = ws_path / "src" / "apaas.json"
         public_dir = ws_path / "public" / "frontend-plugin" / project_name
@@ -1823,35 +2175,18 @@ export default { install, activate, staticComponents }
     # ========== VS Code AI 配置 ==========
 
     def _setup_vscode_ai_config(self, ws_path: Path):
-        """为 workspace 生成 VS Code AI Chat 配置，接入 LLM（如 MiniMax）"""
+        """为 workspace 生成安全的 IDE 配置，不在工作区落盘任何 LLM 密钥。"""
         from app.config import settings
 
-        api_base = settings.llm_api_base.rstrip("/")
-        api_key = settings.llm_api_key
         model = settings.llm_model
-
-        if not api_key:
-            return
 
         # ---- .vscode/settings.json ----
         vscode_dir = ws_path / ".vscode"
         vscode_dir.mkdir(exist_ok=True)
 
         vscode_settings = {
-            # Continue 扩展配置（OpenAI 兼容端点）
             "continue.enableTabAutocomplete": True,
-            # GitHub Copilot Chat 自定义模型（VS Code 1.99+）
-            "github.copilot.chat.models": [
-                {
-                    "vendor": "copilot",
-                    "family": "openai-compatible",
-                    "id": model,
-                    "url": f"{api_base}/v1/chat/completions",
-                    "headers": {
-                        "Authorization": f"Bearer {api_key}"
-                    },
-                }
-            ],
+            "minimax.model": model,
         }
 
         settings_file = vscode_dir / "settings.json"
@@ -1859,34 +2194,7 @@ export default { install, activate, staticComponents }
             json.dumps(vscode_settings, ensure_ascii=False, indent=2)
         )
 
-        # ---- .continue/config.json（Continue 扩展的配置） ----
-        continue_dir = ws_path / ".continue"
-        continue_dir.mkdir(exist_ok=True)
-
-        continue_config = {
-            "models": [
-                {
-                    "title": f"MiniMax ({model})",
-                    "provider": "openai",
-                    "model": model,
-                    "apiBase": f"{api_base}/v1",
-                    "apiKey": api_key,
-                }
-            ],
-            "tabAutocompleteModel": {
-                "title": "MiniMax Autocomplete",
-                "provider": "openai",
-                "model": model,
-                "apiBase": f"{api_base}/v1",
-                "apiKey": api_key,
-            },
-            "allowAnonymousTelemetry": False,
-        }
-
-        continue_file = continue_dir / "config.json"
-        continue_file.write_text(
-            json.dumps(continue_config, ensure_ascii=False, indent=2)
-        )
+        # Continue / 内置 Chat 统一改走后端代理，避免在工作区明文写入 API key。
 
     # ========== 脚手架模板 ==========
 

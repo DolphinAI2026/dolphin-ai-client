@@ -13,7 +13,7 @@ from typing import AsyncIterator
 
 import httpx
 
-from app.coding.workspace import WorkspaceManager, WORKSPACE_ROOT
+from app.coding.workspace import WorkspaceManager
 
 logger = logging.getLogger(__name__)
 
@@ -48,8 +48,8 @@ class VibeCodingAgent:
 
     def __init__(self, ws_id: str, system_prompt: str | None = None):
         self.ws_id = ws_id
-        self.ws_path = WORKSPACE_ROOT / ws_id
         self.ws_mgr = WorkspaceManager()
+        self.ws_path = self.ws_mgr.get_workspace_path(ws_id)
         self._system_prompt = system_prompt
 
     async def start(
@@ -494,6 +494,11 @@ class VibeCodingAgent:
         """Build the user prompt that tells the agent what to do."""
         info = self.ws_mgr.get_workspace_info(self.ws_id)
         project_type = (info.get("project_type", "") or "").lower()
+        files = info.get("files", []) or []
+        rule_files = [
+            file_path for file_path in files
+            if file_path.startswith(".cursor/rules/") and file_path.endswith(".mdc")
+        ]
         parts = [
             f"## Task\n{requirement}",
             f"\n## Workspace Info",
@@ -501,6 +506,10 @@ class VibeCodingAgent:
             f"- Project type: {project_type}",
             f"- Working directory: {self.ws_path}",
         ]
+
+        if rule_files:
+            parts.append("\n## Workspace Rules")
+            parts.extend(f"- Read and follow `{rule_file}` before writing code" for rule_file in rule_files)
 
         if conversation_summary:
             parts.append(f"\n## Previous Conversation Summary\n{conversation_summary}")
@@ -511,7 +520,7 @@ class VibeCodingAgent:
 ## Workflow — IMPORTANT: Be efficient! Minimize tool calls.
 0. **Before tool calls**: First write a short, user-facing progress note in Chinese (1-3 sentences) explaining what you understood and what you will do next.
 1. **FIRST** (1 call): Use glob_files to see the project structure
-2. **THEN** (1-2 calls max): Read ONLY the key files you need (edit.vue and mixin). Do NOT read every file.
+2. **THEN** (1-3 calls max): If `.cursor/rules/*.mdc` exists, read those rule files first, then read ONLY the key implementation files you need (edit.vue and mixin). Do NOT read every file.
 3. **IMMEDIATELY write code**: Use write_file to create/update ALL component files in one batch. Call write_file multiple times in a SINGLE turn (parallel tool calls).
 4. **THEN** run `npm run build` to check compilation
 5. If errors, fix and rebuild. If success, report completion.

@@ -2,10 +2,18 @@
 Coding API 路由 - aPaaS Vibe Coding 接口
 """
 
+import asyncio
 import json
 import logging
+import re
+from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Optional, Annotated, AsyncIterator, Any
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
+from urllib.parse import urlencode, urlparse
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Request, Header
+from fastapi.responses import StreamingResponse, JSONResponse
+from jose import JWTError, jwt
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,6 +51,16 @@ SSE_HEADERS = {
     "X-Accel-Buffering": "no",
 }
 
+IDE_EXCLUDED_GLOBS = (
+    "**/node_modules",
+    "**/dist",
+    "**/coverage",
+    "**/.git",
+    "**/.idea",
+    "**/.DS_Store",
+    "**/*.zip",
+)
+
 
 def _event_stream_response(
     generator: AsyncIterator[str] | AsyncIterator[dict[str, Any]],
@@ -54,6 +72,79 @@ def _event_stream_response(
     if ping is not None:
         kwargs["ping"] = ping
     return EventSourceResponse(generator, **kwargs)
+
+
+def _ensure_vibe_workspace_file(ws_path: Path) -> Path:
+    """为 Web IDE 生成轻量 workspace，避免直接打开庞大目录造成白屏或卡顿。"""
+    workspace_file = ws_path / ".vibe-ide.code-workspace"
+    workspace_payload = {
+        "folders": [{"path": str(ws_path.resolve())}],
+        "settings": {
+            "files.exclude": {pattern: True for pattern in IDE_EXCLUDED_GLOBS},
+            "search.exclude": {pattern: True for pattern in IDE_EXCLUDED_GLOBS},
+            "files.watcherExclude": {pattern: True for pattern in IDE_EXCLUDED_GLOBS},
+            "explorer.autoReveal": False,
+            "git.autoRepositoryDetection": "openEditors",
+        },
+    }
+    serialized = json.dumps(workspace_payload, ensure_ascii=False, indent=2)
+    if not workspace_file.exists() or workspace_file.read_text(encoding="utf-8") != serialized:
+        workspace_file.write_text(serialized, encoding="utf-8")
+    return workspace_file
+
+
+def _build_public_api_base(request: Request) -> str:
+    proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc
+    return f"{proto}://{host}".rstrip("/")
+
+
+def _build_ide_proxy_api_base(request: Request, ws_id: str) -> str:
+    """为 code-server 场景优先生成同源代理地址，避免浏览器被 CSP 拦截直连后端。"""
+    public_base = _build_public_api_base(request)
+    code_server_base = (settings.code_server_base_url or "").rstrip("/")
+    if not code_server_base:
+        return f"{public_base}/api/coding/workspace/{ws_id}/ide"
+
+    request_host = (request.url.hostname or "").strip().lower()
+    code_server_host = (urlparse(code_server_base).hostname or "").strip().lower()
+    local_hosts = {"127.0.0.1", "localhost"}
+    backend_port = request.url.port
+
+    if request_host in local_hosts and code_server_host in local_hosts and backend_port:
+        return f"{code_server_base}/proxy/{backend_port}/api/coding/workspace/{ws_id}/ide"
+
+    return f"{public_base}/api/coding/workspace/{ws_id}/ide"
+
+
+def _create_ide_access_token(ctx: AuthContext, ws_id: str) -> str:
+    payload = {
+        "sub": str(ctx.user.id),
+        "tid": ctx.tenant_id,
+        "type": "ide_access",
+        "ws": ws_id,
+        "exp": datetime.utcnow() + timedelta(hours=8),
+    }
+    return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
+
+
+def _verify_ide_access_token(token: str, ws_id: str) -> dict[str, Any]:
+    try:
+        payload = jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
+    except JWTError:
+        raise HTTPException(status_code=401, detail="无效或已过期的 IDE 访问令牌")
+
+    if payload.get("type") != "ide_access" or payload.get("ws") != ws_id:
+        raise HTTPException(status_code=403, detail="IDE 访问令牌与当前工作区不匹配")
+
+    return payload
+
+
+def _build_openai_chat_completions_url() -> str:
+    base = settings.llm_api_base.rstrip("/")
+    if not base.endswith("/v1"):
+        base = f"{base}/v1"
+    return f"{base}/chat/completions"
 
 
 # ============================================================
@@ -457,7 +548,7 @@ async def download_workspace_zip(
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="工作区不存在")
 
-    ws_path = WORKSPACE_ROOT / ws_id
+    ws_path = workspace_mgr.get_workspace_path(ws_id)
     project_name = info.get("project_name", ws_id)
 
     if type == "dist":
@@ -533,19 +624,122 @@ async def get_workspace_info(
 @router.get("/workspace/{ws_id}/ide-url")
 async def get_workspace_ide_url(
     ws_id: str,
+    request: Request,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    conversation_id: Optional[int] = Query(default=None, description="可选，会话ID，用于把上下文带入 Vibe IDE"),
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
 ):
     """获取工作区的 Web IDE (code-server) URL"""
     base_url = settings.code_server_base_url
     if not base_url:
         raise HTTPException(status_code=501, detail="Web IDE 未配置，请在 .env 中设置 CODE_SERVER_BASE_URL")
-    ws_path = WORKSPACE_ROOT / ws_id
+    ws_path = workspace_mgr.get_workspace_path(ws_id)
     if not ws_path.exists():
         raise HTTPException(status_code=404, detail="工作区不存在")
-    # code-server 支持 ?folder= 参数直接打开指定目录
+
+    effective_conversation_id = conversation_id
+    if effective_conversation_id is None and db is not None:
+        stmt = (
+            select(Conversation)
+            .where(
+                Conversation.user_id == ctx.user.id,
+                Conversation.tenant_id == ctx.tenant_id,
+                Conversation.workspace_id == ws_id,
+                Conversation.agent_type == "coding",
+            )
+            .order_by(Conversation.updated_at.desc())
+            .limit(1)
+        )
+        result = await db.execute(stmt)
+        conv = result.scalar_one_or_none()
+        if conv:
+            effective_conversation_id = conv.id
+
+    ide_workspace_file = _ensure_vibe_workspace_file(ws_path)
+    ide_token = _create_ide_access_token(ctx, ws_id)
+    api_base = _build_ide_proxy_api_base(request, ws_id)
+    query_params = {
+        "workspace": str(ide_workspace_file.resolve()),
+        "vibe_workspace_id": ws_id,
+        "vibe_api_base": api_base,
+        "vibe_ide_token": ide_token,
+        "vibe_model": settings.llm_model,
+    }
+    if effective_conversation_id and db is not None:
+        history = await _get_conversation_history(db, effective_conversation_id)
+        ide_context = _build_ide_conversation_context(history)
+        query_params["vibe_conversation_id"] = str(effective_conversation_id)
+        if ide_context:
+            query_params["vibe_context"] = ide_context
+
     base_url = base_url.rstrip("/")
-    ide_url = f"{base_url}/?folder={ws_path.resolve()}"
+    ide_url = f"{base_url}/?{urlencode(query_params)}"
     return {"ide_url": ide_url}
+
+
+@router.post("/workspace/{ws_id}/ide/chat/completions")
+async def ide_chat_completions_proxy(
+    ws_id: str,
+    request: Request,
+    x_vibe_ide_token: Annotated[Optional[str], Header(alias="X-Vibe-IDE-Token")] = None,
+    token: Optional[str] = Query(default=None),
+):
+    """Web IDE Chat 代理：由后端持有真实 LLM API key，浏览器只持有短时 IDE token。"""
+    ide_token = x_vibe_ide_token or token
+    if not ide_token:
+        raise HTTPException(status_code=401, detail="缺少 IDE 访问令牌，请重新从 Builder 打开 Web IDE")
+
+    _verify_ide_access_token(ide_token, ws_id)
+
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="无效的请求体")
+
+    upstream_url = _build_openai_chat_completions_url()
+    upstream_headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {settings.llm_api_key}",
+    }
+    stream = bool(payload.get("stream"))
+
+    if stream:
+        async def _stream() -> AsyncIterator[bytes]:
+            async with httpx.AsyncClient(timeout=None) as client:
+                async with client.stream(
+                    "POST",
+                    upstream_url,
+                    headers=upstream_headers,
+                    json=payload,
+                ) as resp:
+                    if resp.status_code >= 400:
+                        body = await resp.aread()
+                        detail = body.decode("utf-8", errors="ignore") or f"LLM API {resp.status_code}"
+                        raise HTTPException(status_code=resp.status_code, detail=detail)
+                    async for chunk in resp.aiter_bytes():
+                        if chunk:
+                            yield chunk
+
+        return StreamingResponse(
+            _stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache, no-transform"},
+        )
+
+    async with httpx.AsyncClient(timeout=120) as client:
+        try:
+            resp = await client.post(
+                upstream_url,
+                headers=upstream_headers,
+                json=payload,
+            )
+        except httpx.HTTPError as exc:
+            raise HTTPException(status_code=502, detail=f"调用 LLM 失败: {exc}")
+
+    content_type = resp.headers.get("content-type", "")
+    if "application/json" in content_type.lower():
+        return JSONResponse(status_code=resp.status_code, content=resp.json())
+    return JSONResponse(status_code=resp.status_code, content={"detail": resp.text})
 
 
 @router.get("/workspace/{ws_id}/files")
@@ -607,7 +801,6 @@ async def get_workspace_conversation(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """获取工作区关联的对话及消息"""
-    # 查找该工作区最近的对话
     stmt = (
         select(Conversation)
         .where(
@@ -615,25 +808,41 @@ async def get_workspace_conversation(
             Conversation.workspace_id == ws_id,
         )
         .order_by(Conversation.updated_at.desc())
-        .limit(1)
+        .limit(10)
     )
     result = await db.execute(stmt)
-    conv = result.scalar_one_or_none()
+    conversations = result.scalars().all()
 
-    if not conv:
+    if not conversations:
         return {"conversation_id": None, "messages": []}
 
-    # 加载消息
-    stmt = (
-        select(Message)
-        .where(Message.conversation_id == conv.id)
-        .order_by(Message.created_at.asc())
-    )
-    result = await db.execute(stmt)
-    messages = result.scalars().all()
+    selected_conv = conversations[0]
+    selected_messages: list[Message] = []
+
+    for conv in conversations:
+        msg_stmt = (
+            select(Message)
+            .where(Message.conversation_id == conv.id)
+            .order_by(Message.created_at.asc())
+        )
+        msg_result = await db.execute(msg_stmt)
+        messages = msg_result.scalars().all()
+        if not selected_messages:
+            selected_conv = conv
+            selected_messages = messages
+
+        has_assistant_reply = any(
+            m.role == "assistant" and isinstance(m.content, str) and m.content.strip()
+            for m in messages
+        )
+        has_multi_message_history = len(messages) >= 2
+        if has_assistant_reply or has_multi_message_history:
+            selected_conv = conv
+            selected_messages = messages
+            break
 
     return {
-        "conversation_id": conv.id,
+        "conversation_id": selected_conv.id,
         "messages": [
             {
                 "id": m.id,
@@ -641,7 +850,7 @@ async def get_workspace_conversation(
                 "content": m.content,
                 "created_at": m.created_at.isoformat() if m.created_at else None,
             }
-            for m in messages
+            for m in selected_messages
         ],
     }
 
@@ -691,12 +900,51 @@ async def _save_coding_message(
     await db.commit()
 
 
+def _summarize_history_content(content: str, max_chars: int = 220) -> str:
+    if not content:
+        return ""
+
+    text = str(content)
+    text = text.replace("\r\n", "\n")
+    text = text.replace("</think>", "").replace("<think>", "")
+    text = text.replace("[TOOL_CALL]", "").replace("[/TOOL_CALL]", "")
+    text = re.sub(r"```[\s\S]*?```", "[代码片段已省略]", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = " ".join(part.strip() for part in text.splitlines() if part.strip())
+    if len(text) > max_chars:
+        text = text[:max_chars] + "...[截断]"
+    return text
+
+
+def _build_ide_conversation_context(history: list[dict[str, str]], max_messages: int = 6) -> str:
+    if not history:
+        return ""
+
+    recent_messages = history[-max_messages:]
+    lines: list[str] = []
+    for item in recent_messages:
+        role = item.get("role")
+        if role not in {"user", "assistant"}:
+            continue
+        label = "用户" if role == "user" else "AI"
+        summary = _summarize_history_content(item.get("content", ""))
+        if not summary:
+            continue
+        lines.append(f"{label}: {summary}")
+
+    return "\n".join(lines)[:1800]
+
+
 def _build_workspace_context(ws_id: str) -> dict:
     """构建工作区上下文，用于告知 AI 现有文件结构和关键文件内容"""
     try:
         info = workspace_mgr.get_workspace_info(ws_id)
         files = info.get("files", [])
         project_type = (info.get("project_type", "") or "").lower()
+        rule_files = [
+            fp for fp in files
+            if fp.startswith(".cursor/rules/") and fp.endswith(".mdc")
+        ]
 
         # 按项目类型挑选关键文件，避免把表单组件规则错误带到布局/后端项目
         if project_type in {"form-component", "mobile-component"}:
@@ -721,9 +969,11 @@ def _build_workspace_context(ws_id: str) -> dict:
             key_extensions = ('.vue', '.js')
             key_names = ('apaas.json', 'index.js')
 
-        key_file_paths = []
+        key_file_paths = list(rule_files)
         for fp in files:
             basename = fp.split('/')[-1] if '/' in fp else fp
+            if fp in key_file_paths:
+                continue
             if any(fp.endswith(ext) for ext in key_extensions):
                 key_file_paths.append(fp)
             elif basename in key_names:
@@ -948,7 +1198,7 @@ async def auto_pipeline(
                 _mode_label = "平台" if _debug_mode == "platform" else "应用"
                 yield _sse({"type": "step", "step": "debug", "status": "running", "data": {"message": f"正在启动{_mode_label}调试..."}})
 
-                ws_path = WORKSPACE_ROOT / ws_id
+                ws_path = ws_mgr.get_workspace_path(ws_id)
                 apaas_json_path = ws_path / "src" / "apaas.json"
                 import json as _json
                 apaas_config = _json.loads(apaas_json_path.read_text()) if apaas_json_path.exists() else {}
@@ -1150,25 +1400,51 @@ async def auto_pipeline(
                 ) from _VIBE_AGENT_IMPORT_ERROR
             agent = VibeCodingAgent(ws_id, system_prompt=AGENT_SYSTEM_PROMPT)
             agent_result_text = ""
+            persisted_agent_output: list[str] = []
+            assistant_history_saved = False
 
-            async for event in agent.run(
-                requirement=req.message,
-                conversation_summary=conversation_summary,
-                max_turns=30,
-            ):
-                # Forward all agent events to frontend via SSE
-                yield _sse(event)
+            async def _persist_agent_output_if_needed():
+                nonlocal assistant_history_saved
+                if assistant_history_saved:
+                    return
 
-                # Collect agent thinking for conversation history
-                if event.get("type") == "agent_thinking":
-                    agent_result_text += event.get("content", "") + "\n"
-                elif event.get("type") == "agent_done":
-                    if event.get("result"):
-                        agent_result_text += "\n" + event["result"]
+                saved_assistant_output = "".join(persisted_agent_output).strip()
+                if not saved_assistant_output:
+                    saved_assistant_output = agent_result_text.strip()
+                if not saved_assistant_output:
+                    return
 
-            # Save agent output to conversation
-            if agent_result_text.strip():
-                await _save_coding_message(db, conversation_id, "assistant", agent_result_text.strip())
+                try:
+                    await _save_coding_message(db, conversation_id, "assistant", saved_assistant_output)
+                    assistant_history_saved = True
+                except Exception:
+                    logger.exception("保存 Agent 历史失败")
+
+            try:
+                async for event in agent.run(
+                    requirement=req.message,
+                    conversation_summary=conversation_summary,
+                    max_turns=30,
+                ):
+                    # Forward all agent events to frontend via SSE
+                    yield _sse(event)
+
+                    _append_agent_event_to_history(persisted_agent_output, event)
+
+                    # Collect agent thinking for conversation history
+                    if event.get("type") == "agent_thinking":
+                        agent_result_text += event.get("content", "") + "\n"
+                    elif event.get("type") == "agent_done":
+                        if event.get("result"):
+                            agent_result_text += "\n" + event["result"]
+            except asyncio.CancelledError:
+                await _persist_agent_output_if_needed()
+                raise
+            except Exception:
+                await _persist_agent_output_if_needed()
+                raise
+
+            await _persist_agent_output_if_needed()
 
             # Agent handles file writes, npm install, and serve internally
             # Just report generation step as done
@@ -1274,7 +1550,7 @@ async def get_debug_screenshot(ws_id: str, filename: str):
     # Sanitize filename to prevent directory traversal
     if not re.match(r'^[\w\-\.]+\.(png|jpg|jpeg)$', filename):
         raise HTTPException(status_code=400, detail="Invalid filename")
-    screenshot_path = WORKSPACE_ROOT / ws_id / "debug" / "screenshots" / filename
+    screenshot_path = workspace_mgr.get_workspace_path(ws_id) / "debug" / "screenshots" / filename
     if not screenshot_path.exists():
         raise HTTPException(status_code=404, detail="Screenshot not found")
     from fastapi.responses import FileResponse
@@ -1313,7 +1589,7 @@ async def debug_workspace(
         serve_port = serve_info["port"]
 
     # 2. 读取 apaas.json 获取组件信息
-    ws_path = WORKSPACE_ROOT / ws_id
+    ws_path = ws_mgr.get_workspace_path(ws_id)
     apaas_json_path = ws_path / "src" / "apaas.json"
     if not apaas_json_path.exists():
         raise HTTPException(status_code=400, detail="apaas.json 不存在")
@@ -1411,6 +1687,52 @@ def _sse(data: dict) -> str:
     return json.dumps(data, ensure_ascii=False)
 
 
+def _append_agent_event_to_history(history_parts: list[str], event: dict[str, Any]):
+    """将 Agent 的关键执行输出整理成可持久化的文本记录。"""
+    event_type = event.get("type")
+
+    if event_type == "content":
+        content = event.get("content")
+        if isinstance(content, str) and content:
+            history_parts.append(content)
+        return
+
+    if event_type == "agent_tool":
+        tool_name = event.get("tool_display") or event.get("tool") or "工具"
+        preview = event.get("input_preview") or ""
+        if preview:
+            history_parts.append(f"\n🔧 **{tool_name}** `{preview}`\n")
+        else:
+            history_parts.append(f"\n🔧 **{tool_name}**\n")
+        return
+
+    if event_type == "agent_result":
+        preview = event.get("output_preview")
+        if event.get("is_error"):
+            history_parts.append(f"> ❌ {preview or '执行失败'}\n\n")
+        elif isinstance(preview, str) and preview and preview != "(empty)":
+            clipped = preview[:300] + "..." if len(preview) > 300 else preview
+            history_parts.append(f"> ✅ {clipped}\n\n")
+        else:
+            history_parts.append("> ✅ 完成\n\n")
+        return
+
+    if event_type == "agent_command_output":
+        chunk = event.get("chunk")
+        if isinstance(chunk, str) and chunk:
+            history_parts.append(chunk)
+        return
+
+    if event_type == "agent_done":
+        turns = event.get("num_turns") or "?"
+        history_parts.append(f"\n---\n✨ **Agent 完成** ({turns} 轮对话)\n")
+        return
+
+    if event_type == "agent_error":
+        message = event.get("message") or "发生未知错误"
+        history_parts.append(f"\n❌ **Agent 错误**: {message}\n")
+
+
 def _scene_to_project_type(scene_type: SceneType) -> str:
     """场景类型转项目类型"""
     mapping = {
@@ -1437,15 +1759,16 @@ async def _extract_project_name(generator: CodingGenerator, message: str) -> str
     """从用户需求中提取项目名称"""
     import re
 
-    # 1. 关键词直接映射（最快、最可靠）
     keyword_map = {
         # 组件类
         "甘特图": "gantt-chart", "审批流程": "approval-flow", "审批": "approval",
         "进度条": "progress-bar", "评分": "star-rating", "颜色选择": "color-picker",
-        "标签": "tag-input", "图表分析": "chart-analysis", "图表": "chart",
-        "日期选择": "date-picker", "日期范围": "date-range", "文件上传": "file-upload",
-        "上传": "upload", "头像": "avatar", "签名": "signature", "二维码": "qrcode",
-        "地图": "map-view", "富文本": "rich-text", "树形": "tree-select",
+        "颜色选择器": "color-picker", "标签": "tag-input", "图表分析": "chart-analysis",
+        "图表": "chart", "日期选择": "date-picker", "日期范围": "date-range",
+        "文件上传": "file-upload", "上传": "upload", "头像": "avatar",
+        "签名": "signature", "二维码": "qrcode", "地图": "map-view",
+        "富文本": "rich-text", "树形": "tree-select", "组织树": "org-tree",
+        "组织架构树": "org-tree", "组织架构": "org-tree", "部门树": "dept-tree",
         "级联": "cascader", "数据表格": "data-table", "表格": "data-table",
         "看板": "kanban", "数据查询": "data-query", "弹窗选择": "popup-select",
         "人员选择": "person-select", "图片识别": "image-recognition",
@@ -1468,57 +1791,90 @@ async def _extract_project_name(generator: CodingGenerator, message: str) -> str
         "合同管理": "contract-mgmt", "合同": "contract",
         "费用管理": "expense-mgmt", "费用": "expense",
         "预算管理": "budget-mgmt", "预算": "budget",
+        # 其他前端类型
+        "布局": "app-layout", "插件": "frontend-plugin", "登录页": "login-page",
     }
-    msg_lower = message.lower()
-    for cn, en in keyword_map.items():
-        if cn in msg_lower:
+
+    def _slugify(candidate: str) -> str:
+        text = (candidate or "").strip().lower()
+        if not text:
+            return ""
+        text = text.replace("&", " and ")
+        text = re.sub(r"[^a-z0-9\\s-]", "-", text)
+        text = text.replace("_", "-")
+        text = re.sub(r"\s+", "-", text)
+        text = re.sub(r"-+", "-", text).strip("-")
+        text = re.sub(r"^[^a-z]+", "", text)
+        return text[:48].strip("-")
+
+    async def _translate_to_slug(text: str) -> str:
+        candidate = (text or "").strip()
+        if not candidate:
+            return ""
+        try:
+            llm = LLMClient()
+            resp = await llm.chat_completion([
+                {
+                    "role": "system",
+                    "content": (
+                        "把用户给出的功能或模块名称转换成简短、可读的英文 kebab-case 项目名。"
+                        "优先输出语义明确、2-4 段的名字，例如 `date-range`、`org-tree`、`smart-dispatch`。"
+                        "只返回名称本身，不要解释。"
+                    ),
+                },
+                {"role": "user", "content": candidate},
+            ], max_tokens=80)
+            content = resp.get("choices", [{}])[0].get("message", {}).get("content", "")
+            match = re.search(r"\b([a-z][a-z0-9]*(?:-[a-z0-9]+)*)\b", content.lower())
+            return _slugify(match.group(1)) if match else ""
+        except Exception as e:
+            logger.warning(f"LLM 提取项目名失败: {e}")
+            return ""
+
+    msg_lower = (message or "").lower()
+
+    explicit_slug = re.search(r"\b([a-z][a-z0-9]*(?:-[a-z0-9]+)+)\b", msg_lower)
+    if explicit_slug:
+        return explicit_slug.group(1)
+
+    for cn, en in sorted(keyword_map.items(), key=lambda item: len(item[0]), reverse=True):
+        if cn in message:
             return en
 
-    # 2. 从中文需求中提取核心名词（正则）
     patterns = [
-        r'(?:做|开发|创建|实现|搭建|写|生成)一?个?\s*(.{2,12}?)(?:的?\s*(?:组件|页面|模块|系统|功能|弹窗|选择器|面板))',
-        r'(.{2,12}?)(?:组件|页面|模块|系统|弹窗|选择器)(?:的?\s*(?:开发|设计|需求))',
-        r'(?:做|开发|创建|实现)一?个?\s*(.{2,12}?)$',
+        r"(?:叫做|命名为|名称为|项目名为|工作区名为)\s*[`\"']?([A-Za-z][A-Za-z0-9 _-]{2,40})[`\"']?",
+        r"(?:做|开发|创建|实现|搭建|写|生成|补一个|新增|增加|搞一个|做个)\s*(?:一|1)?个?\s*(.{2,24}?)(?:的?\s*(?:组件|页面|模块|系统|功能|弹窗|选择器|面板|布局|插件|登录页))",
+        r"(.{2,24}?)(?:组件|页面|模块|系统|弹窗|选择器|面板|布局|插件|登录页)(?:的?\s*(?:开发|设计|需求))",
+        r"(?:做|开发|创建|实现)\s*(.{2,24}?)$",
     ]
-    for pat in patterns:
-        m = re.search(pat, message)
-        if m:
-            cn_name = m.group(1).strip()
-            # 用 pypinyin 或简单映射转英文
-            if cn_name in keyword_map:
-                return keyword_map[cn_name]
-            # 简单拼音化：把中文转成 kebab-case（每个字取首字母太短，用全拼更好）
-            # 这里用简单方案：如果全是中文，生成一个 hash-based 短名
-            clean = re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9]', '', cn_name)
-            if clean:
-                # 用中文名直接做 slug
-                import hashlib
-                h = hashlib.md5(clean.encode()).hexdigest()[:6]
-                return f"custom-{h}"
 
-    # 3. LLM 提取（最后手段）
-    try:
-        llm = LLMClient()
-        resp = await llm.chat_completion([
-            {"role": "system", "content": "从用户需求中提取一个简短的英文项目名称（kebab-case格式）。\n\n示例：\n- 做一个评分组件 → star-rating\n- 创建审批流程页面 → approval-flow\n- 供应商管理弹窗 → supplier-select\n\n直接返回名称，格式如 xxx-yyy，不要其他内容。"},
-            {"role": "user", "content": message}
-        ], max_tokens=100)
-        content = resp.get("choices", [{}])[0].get("message", {}).get("content", "")
+    candidates: list[str] = []
+    for pattern in patterns:
+        match = re.search(pattern, message, flags=re.IGNORECASE)
+        if not match:
+            continue
+        candidate = match.group(1).strip("，。,.!！?？：: `\"'")
+        if candidate and candidate not in candidates:
+            candidates.append(candidate)
 
-        matches = re.findall(r'\b([a-z][a-z0-9]*(?:-[a-z0-9]+)+)\b', content.lower())
-        if matches:
-            name = matches[-1]
-            if name and name != "custom-component":
-                return name
+    for candidate in candidates:
+        for cn, en in sorted(keyword_map.items(), key=lambda item: len(item[0]), reverse=True):
+            if cn in candidate:
+                return en
+        ascii_slug = _slugify(candidate)
+        if ascii_slug and ascii_slug not in {"custom", "custom-dev", "component", "page"}:
+            return ascii_slug
 
-        name = re.sub(r'<think>[\s\S]*?</think>', '', content).strip()
-        name = name.strip('"').strip("'").lower()
-        name = re.sub(r'[^a-z0-9-]', '-', name).strip('-')
-        name = re.sub(r'-+', '-', name)
-        return name if name and len(name) > 2 and name != "custom-component" else "custom-dev"
-    except Exception as e:
-        logger.warning(f"提取项目名失败: {e}")
-        return "custom-dev"
+    for candidate in candidates:
+        translated = await _translate_to_slug(candidate)
+        if translated and translated not in {"custom", "custom-dev", "component", "page"}:
+            return translated
+
+    translated = await _translate_to_slug(message)
+    if translated and translated not in {"custom", "custom-dev", "component", "page"}:
+        return translated
+
+    return "custom-dev"
 
 
 def _extract_display_name(message: str, project_type: str, fallback_name: str) -> str:
@@ -1611,7 +1967,7 @@ from app.coding.preview import generate_preview_html
 @router.post("/workspace/{ws_id}/preview")
 async def preview_workspace(ws_id: str):
     """触发构建（如需）并返回预览 URL"""
-    ws_path = WORKSPACE_ROOT / ws_id
+    ws_path = workspace_mgr.get_workspace_path(ws_id)
     if not ws_path.exists():
         raise HTTPException(status_code=404, detail="Workspace not found")
 
@@ -1628,13 +1984,13 @@ async def preview_workspace(ws_id: str):
         with open(apaas_json_path, "r", encoding="utf-8") as f:
             apaas_config = json.load(f)
 
-    output_name = apaas_config.get("outputName", ws_id)
-    template_type = apaas_config.get("templateType", "FORM_COMPONENT")
     workspace_meta = {}
     workspace_meta_path = ws_path / ".workspace.json"
     if workspace_meta_path.exists():
         with open(workspace_meta_path, "r", encoding="utf-8") as f:
             workspace_meta = json.load(f)
+    output_name = apaas_config.get("outputName") or workspace_meta.get("project_name") or ws_id
+    template_type = apaas_config.get("templateType", "FORM_COMPONENT")
     project_type = workspace_meta.get("project_type", "")
 
     return {
@@ -1650,7 +2006,7 @@ async def preview_workspace(ws_id: str):
 @router.get("/workspace/{ws_id}/preview/sandbox")
 async def preview_sandbox(ws_id: str):
     """返回预览沙箱 HTML 页面"""
-    ws_path = WORKSPACE_ROOT / ws_id
+    ws_path = workspace_mgr.get_workspace_path(ws_id)
     if not ws_path.exists():
         raise HTTPException(status_code=404, detail="Workspace not found")
 
@@ -1661,13 +2017,13 @@ async def preview_sandbox(ws_id: str):
         with open(apaas_json_path, "r", encoding="utf-8") as f:
             apaas_config = json.load(f)
 
-    output_name = apaas_config.get("outputName", ws_id)
-    template_type = apaas_config.get("templateType", "FORM_COMPONENT")
     workspace_meta = {}
     workspace_meta_path = ws_path / ".workspace.json"
     if workspace_meta_path.exists():
         with open(workspace_meta_path, "r", encoding="utf-8") as f:
             workspace_meta = json.load(f)
+    output_name = apaas_config.get("outputName") or workspace_meta.get("project_name") or ws_id
+    template_type = apaas_config.get("templateType", "FORM_COMPONENT")
     project_type = workspace_meta.get("project_type", "")
     dist_base_url = f"/api/coding/workspace/{ws_id}/preview/dist"
 

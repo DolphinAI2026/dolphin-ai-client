@@ -23,8 +23,10 @@ export interface ChatMessage {
   files?: GeneratedFile[]
   pipelineSteps?: PipelineStep[]
   textContent?: string
+  textHtml?: string
   fileNames?: string[]
   thinkingSummary?: string
+  thinkingHtml?: string
   previewHtml?: string
   screenshots?: string[]
   activityFeed?: ChatActivityItem[]
@@ -104,6 +106,10 @@ export const useCodingStore = defineStore('coding', () => {
     messages.value.push(msg)
   }
 
+  function setMessages(nextMessages: ChatMessage[]) {
+    messages.value = nextMessages
+  }
+
   function initPipelineSteps(isNewWorkspace: boolean) {
     if (isNewWorkspace) {
       currentPipelineSteps.value = [
@@ -153,7 +159,7 @@ export const useCodingStore = defineStore('coding', () => {
     generatedFiles, activeFilePath, activeFileContent, activeFileLanguage,
     validationErrors, isGenerating, isProcessing, streamContent,
     currentPipelineSteps, serveUrl, serveRunning,
-    setScene, setWorkspace, setFiles, updateFileContent, addMessage,
+    setScene, setWorkspace, setFiles, updateFileContent, addMessage, setMessages,
     initPipelineSteps, updatePipelineStep, reset,
   }
 })

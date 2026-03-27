@@ -136,8 +136,10 @@ export const codingApi = {
   },
 
   /** 获取工作区 Web IDE URL */
-  getIdeUrl(wsId: string) {
-    return request.get<any, { ide_url: string }>(`/coding/workspace/${wsId}/ide-url`)
+  getIdeUrl(wsId: string, conversationId?: number | null) {
+    return request.get<any, { ide_url: string }>(`/coding/workspace/${wsId}/ide-url`, {
+      params: conversationId ? { conversation_id: conversationId } : undefined,
+    })
   },
 
   /** 列出工作区文件 */

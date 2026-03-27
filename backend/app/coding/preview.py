@@ -292,7 +292,1162 @@ def _get_mock_form_wrapper() -> str:
     """
 
 
+def _get_component_preview_setting_schema(component_code: str) -> list[dict]:
+    """返回预览面板中可直出展示的组件专属配置 schema。"""
+    normalized_code = (component_code or "").upper()
+
+    if "UPLOAD" in normalized_code or "AVATAR" in normalized_code:
+        return [
+            {
+                "key": "placeholderText",
+                "label": "占位文本",
+                "type": "text",
+                "default": "上传头像",
+                "help": "组件空状态下展示的提示文案。",
+            },
+            {
+                "key": "maxSize",
+                "label": "文件大小限制",
+                "type": "number",
+                "default": 5,
+                "min": 1,
+                "max": 20,
+                "step": 1,
+                "unit": "MB",
+                "help": "限制单张图片上传大小。",
+            },
+            {
+                "key": "enableCropper",
+                "label": "启用裁剪",
+                "type": "boolean",
+                "default": True,
+            },
+            {
+                "key": "circleCrop",
+                "label": "圆形裁剪",
+                "type": "boolean",
+                "default": True,
+            },
+            {
+                "key": "showPreview",
+                "label": "显示预览",
+                "type": "boolean",
+                "default": True,
+            },
+            {
+                "key": "previewShape",
+                "label": "预览形状",
+                "type": "select",
+                "default": "both",
+                "options": [
+                    {"label": "圆形", "value": "circle"},
+                    {"label": "方形", "value": "square"},
+                    {"label": "两者", "value": "both"},
+                ],
+            },
+        ]
+
+    return []
+
+
 def _generate_form_component_preview(
+    apaas_config: dict,
+    dist_base_url: str,
+    output_name: str,
+    mobile: bool = False
+) -> str:
+    """生成表单组件预览 HTML（按设计器通用属性结构映射）"""
+    widget_list = apaas_config.get("customWidgetList", [])
+    component_code = widget_list[0]["code"] if widget_list else "UNKNOWN"
+    component_text = widget_list[0].get("text", "Preview") if widget_list else "Preview"
+
+    edit_tag = f"{output_name}-edit"
+    read_tag = f"{output_name}-read"
+    placeholder = "请选择..." if mobile else "请输入..."
+    width_options = [
+        {"key": "quarter", "label": "1/4", "displayWidth": 6, "mobileWidth": 6, "styleWidth": "25%"},
+        {"key": "third", "label": "1/3", "displayWidth": 8, "mobileWidth": 8, "styleWidth": "33.3333%"},
+        {"key": "half", "label": "1/2", "displayWidth": 12, "mobileWidth": 12, "styleWidth": "50%"},
+        {"key": "twothirds", "label": "2/3", "displayWidth": 16, "mobileWidth": 16, "styleWidth": "66.6667%"},
+        {"key": "threequarters", "label": "3/4", "displayWidth": 18, "mobileWidth": 18, "styleWidth": "75%"},
+        {"key": "full", "label": "整行", "displayWidth": 24, "mobileWidth": 24, "styleWidth": "100%"},
+    ]
+    component_setting_schema = _get_component_preview_setting_schema(component_code)
+
+    widget_defaults = {
+        "label": component_text,
+        "uuid": "preview-widget",
+        "componentType": component_code,
+        "visible": True,
+        "readOnly": False,
+        "required": False,
+        "titleDescription": "",
+        "placeholder": placeholder,
+        "display": {
+            "label": component_text,
+            "width": 24,
+            "mobileWidth": 24,
+            "height": 1,
+            "hidden": False,
+            "readOnly": False,
+            "required": False,
+            "onlyCreateEdit": False,
+        },
+        "allow": {
+            "formulaRule": False,
+        },
+        "validator": {
+            "uniqueCheck": False,
+        },
+        "validatorList": [],
+        "special": {
+            "saveWithHidden": False,
+            "hiddenTrigger": False,
+            "triggerBusinessEvents": [],
+        },
+        "customComponentConfig": {
+            "placeholder": placeholder,
+        },
+    }
+    widget_defaults_json = json.dumps(widget_defaults, ensure_ascii=False)
+    widget_custom_config_json = json.dumps(
+        widget_defaults["customComponentConfig"],
+        ensure_ascii=False,
+        indent=2,
+    )
+    width_options_json = json.dumps(width_options, ensure_ascii=False)
+    component_setting_schema_json = json.dumps(component_setting_schema, ensure_ascii=False)
+    preview_shell_class = "mobile" if mobile else "desktop"
+
+    template = """<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>组件预览 - __COMPONENT_TEXT__</title>
+  <link rel="stylesheet" href="https://unpkg.com/element-ui@2.15.14/lib/theme-chalk/index.css">
+  <link rel="stylesheet" href="__DIST_BASE_URL__/__OUTPUT_NAME__.css" onerror="console.log('No CSS file')">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f4f7fb;
+      padding: 18px;
+      color: #1f2937;
+    }
+    .preview-shell {
+      min-height: calc(100vh - 36px);
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .preview-header {
+      background: #ffffff;
+      border-radius: 18px;
+      padding: 16px 18px;
+      border: 1px solid #e2e8f0;
+      box-shadow: 0 12px 28px rgba(15, 23, 42, 0.05);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .preview-header-main {
+      min-width: 0;
+    }
+    .preview-header h3 {
+      font-size: 16px;
+      color: #0f172a;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+    .preview-header p {
+      font-size: 12px;
+      color: #64748b;
+      line-height: 1.6;
+    }
+    .preview-tabs {
+      display: flex;
+      gap: 8px;
+    }
+    .preview-tabs button {
+      padding: 8px 16px;
+      border: 1px solid #d5dce7;
+      border-radius: 999px;
+      background: #ffffff;
+      cursor: pointer;
+      font-size: 13px;
+      color: #475569;
+      font-weight: 600;
+      transition: all 0.2s;
+    }
+    .preview-tabs button.active {
+      background: #2f80ed;
+      color: #fff;
+      border-color: #2f80ed;
+    }
+    .preview-workbench {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 360px;
+      gap: 16px;
+      align-items: start;
+    }
+    .preview-stage,
+    .preview-inspector {
+      background: #ffffff;
+      border-radius: 20px;
+      border: 1px solid #e2e8f0;
+      box-shadow: 0 16px 32px rgba(15, 23, 42, 0.05);
+    }
+    .preview-stage {
+      padding: 18px;
+    }
+    .preview-stage-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .preview-stage-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: #111827;
+    }
+    .preview-stage-meta {
+      font-size: 12px;
+      color: #64748b;
+      margin-top: 4px;
+    }
+    .preview-canvas-shell {
+      border-radius: 18px;
+      border: 1px dashed #cad5f5;
+      background: #f8fbff;
+      padding: 18px;
+      min-height: 360px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .preview-canvas {
+      width: min(100%, 860px);
+      background: #fff;
+      border-radius: 18px;
+      padding: 24px;
+      box-shadow: 0 16px 30px rgba(15, 23, 42, 0.06);
+      border: 1px solid #e8eef7;
+    }
+    .preview-canvas.mobile {
+      width: min(100%, 390px);
+      min-height: 220px;
+      padding: 18px;
+      border-radius: 28px;
+    }
+    .preview-field-shell {
+      width: 100%;
+      max-width: 100%;
+      margin-right: auto;
+      transition: width 0.2s ease;
+    }
+    .preview-hidden-state {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      align-items: center;
+      justify-content: center;
+      min-height: 220px;
+      text-align: center;
+      color: #64748b;
+    }
+    .preview-hidden-state strong {
+      color: #111827;
+      font-size: 15px;
+    }
+    .preview-inspector {
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      position: sticky;
+      top: 18px;
+      max-height: calc(100vh - 36px);
+      overflow: auto;
+    }
+    .inspector-section {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .inspector-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: #4f46e5;
+    }
+    .inspector-field {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .inspector-field span {
+      font-size: 12px;
+      color: #475569;
+      font-weight: 600;
+    }
+    .inspector-field input,
+    .inspector-field textarea {
+      width: 100%;
+      border: 1px solid #d7e0eb;
+      border-radius: 12px;
+      padding: 12px 14px;
+      font-size: 13px;
+      color: #111827;
+      background: #ffffff;
+      outline: none;
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
+      resize: vertical;
+    }
+    .inspector-field input:focus,
+    .inspector-field textarea:focus {
+      border-color: #7aa9ff;
+      box-shadow: 0 0 0 3px rgba(47, 128, 237, 0.14);
+    }
+    .inspector-field textarea {
+      min-height: 150px;
+      line-height: 1.55;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    }
+    .inspector-widths {
+      display: flex;
+      border: 1px solid #d7e0eb;
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    .inspector-widths button {
+      flex: 1 1 0;
+      border: none;
+      border-right: 1px solid #d7e0eb;
+      background: #ffffff;
+      padding: 11px 0;
+      cursor: pointer;
+      color: #94a3b8;
+      font-size: 13px;
+      font-weight: 600;
+      transition: background 0.2s ease, color 0.2s ease;
+    }
+    .inspector-widths button:last-child {
+      border-right: none;
+    }
+    .inspector-widths button.active {
+      background: #2f80ed;
+      color: #fff;
+    }
+    .rule-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      min-height: 36px;
+    }
+    .rule-label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: #1f2937;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .rule-label .hint {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 20px;
+      height: 20px;
+      border-radius: 999px;
+      border: 1px solid #cfd8e3;
+      color: #94a3b8;
+      font-size: 12px;
+    }
+    .switch {
+      width: 46px;
+      height: 28px;
+      border-radius: 999px;
+      background: #d1d5db;
+      position: relative;
+      border: none;
+      cursor: pointer;
+      transition: background 0.2s ease;
+    }
+    .switch::after {
+      content: '';
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: #fff;
+      box-shadow: 0 2px 6px rgba(15, 23, 42, 0.18);
+      transition: transform 0.2s ease;
+    }
+    .switch.active {
+      background: #2f80ed;
+    }
+    .switch.active::after {
+      transform: translateX(18px);
+    }
+    .business-events {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .business-events-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .icon-button {
+      width: 32px;
+      height: 32px;
+      border-radius: 999px;
+      border: 1px solid #d7e0eb;
+      background: #fff;
+      color: #64748b;
+      font-size: 18px;
+      line-height: 1;
+      cursor: pointer;
+    }
+    .business-event-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .business-event-item input {
+      flex: 1;
+    }
+    .business-empty {
+      font-size: 12px;
+      color: #94a3b8;
+      line-height: 1.6;
+    }
+    .inspector-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .inspector-actions button {
+      border: none;
+      border-radius: 12px;
+      padding: 10px 14px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.2s ease, opacity 0.2s ease;
+    }
+    .inspector-actions button:hover {
+      transform: translateY(-1px);
+    }
+    .inspector-actions .primary {
+      background: #2f80ed;
+      color: #fff;
+    }
+    .inspector-actions .secondary {
+      background: #eef3f8;
+      color: #334155;
+    }
+    .inspector-inline-input {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .inspector-inline-input .unit {
+      font-size: 12px;
+      color: #94a3b8;
+      white-space: nowrap;
+    }
+    .collapsible-panel {
+      border: 1px solid #e2e8f0;
+      border-radius: 14px;
+      padding: 12px;
+      background: #fafcff;
+    }
+    .collapsible-panel summary {
+      list-style: none;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 700;
+      color: #334155;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .collapsible-panel summary::-webkit-details-marker {
+      display: none;
+    }
+    .collapsible-panel summary::after {
+      content: '展开';
+      font-size: 12px;
+      font-weight: 600;
+      color: #94a3b8;
+    }
+    .collapsible-panel[open] summary::after {
+      content: '收起';
+    }
+    .collapsible-panel-body {
+      margin-top: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .inspector-error {
+      font-size: 12px;
+      color: #dc2626;
+      line-height: 1.6;
+    }
+    .inspector-help {
+      font-size: 12px;
+      color: #94a3b8;
+      line-height: 1.7;
+    }
+    .preview-error {
+      color: #f56c6c;
+      padding: 16px;
+      background: #fef0f0;
+      border-radius: 12px;
+      font-size: 13px;
+    }
+    .preview-mode-label {
+      font-size: 12px;
+      color: #64748b;
+    }
+    @media (max-width: 980px) {
+      .preview-workbench {
+        grid-template-columns: 1fr;
+      }
+      .preview-inspector {
+        position: static;
+        top: auto;
+        max-height: none;
+      }
+    }
+    @media (max-width: 640px) {
+      body {
+        padding: 12px;
+      }
+      .preview-header {
+        padding: 12px;
+        border-radius: 16px;
+        align-items: flex-start;
+        flex-direction: column;
+      }
+      .preview-stage,
+      .preview-inspector {
+        border-radius: 18px;
+        padding: 14px;
+      }
+      .preview-canvas {
+        padding: 16px;
+      }
+      .inspector-widths {
+        overflow-x: auto;
+      }
+      .inspector-widths button {
+        min-width: 58px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div class="preview-shell __PREVIEW_SHELL_CLASS__">
+        <div class="preview-header">
+          <div class="preview-header-main">
+            <h3>组件预览 · {{ componentText }}</h3>
+            <p>默认只展示当前预览里会直接生效的通用属性和组件专属配置；更完整的平台级能力收在高级属性中，避免为了对齐结构而干扰调试。</p>
+          </div>
+        <div class="preview-tabs">
+          <button :class="{ active: mode === 'edit' }" @click="mode='edit'">编辑</button>
+          <button :class="{ active: mode === 'read' }" @click="mode='read'">只读</button>
+        </div>
+      </div>
+
+      <div class="preview-workbench">
+        <section class="preview-stage">
+          <div class="preview-stage-head">
+            <div>
+              <div class="preview-stage-title">实时效果</div>
+              <div class="preview-stage-meta">当前模式: {{ mode === 'edit' ? '编辑模式' : '只读模式' }}</div>
+            </div>
+            <div class="preview-mode-label">{{ widget.visible === false ? '当前字段已隐藏' : (widget.required ? '已开启必填' : '未开启必填') }}</div>
+          </div>
+          <div class="preview-canvas-shell">
+            <div class="preview-canvas" :class="{ mobile: isMobile }">
+              <div v-if="widget.visible !== false">
+                <div class="preview-field-shell" :style="fieldShellStyle">
+                  <component
+                    v-if="editComp && mode === 'edit'"
+                    :is="editComp"
+                    :widget="widget"
+                    :render-scene="'edit'"
+                    :form-data="formData"
+                    :global-form-data="formData"
+                    :prop-key="'preview_field'"
+                    :form-item-list="[]"
+                    :value-validated-status="{}"
+                  ></component>
+                  <component
+                    v-if="readComp && mode === 'read'"
+                    :is="readComp"
+                    :widget="widget"
+                    :render-scene="'read'"
+                    :form-data="formData"
+                    :global-form-data="formData"
+                    :prop-key="'preview_field'"
+                    :form-item-list="[]"
+                    :value-validated-status="{}"
+                  ></component>
+                </div>
+                <div v-if="error" class="preview-error">⚠️ {{ error }}</div>
+              </div>
+              <div v-else class="preview-hidden-state">
+                <strong>当前字段处于隐藏状态</strong>
+                <span>关闭“是否隐藏”后，字段会重新出现在预览区域。</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <aside class="preview-inspector">
+          <div class="inspector-section">
+            <div class="inspector-title">基础属性</div>
+            <label class="inspector-field">
+              <span>字段标题</span>
+              <input v-model="widget.display.label" placeholder="请输入字段标题">
+            </label>
+            <label class="inspector-field">
+              <span>说明文案</span>
+              <input v-model="widget.titleDescription" placeholder="例如：支持选择开始和结束日期">
+            </label>
+            <div class="inspector-field">
+              <span>宽度</span>
+              <div class="inspector-widths">
+                <button
+                  v-for="option in widthOptions"
+                  :key="option.key"
+                  type="button"
+                  :class="{ active: widthKey === option.key }"
+                  @click="setWidth(option.key)"
+                >{{ option.label }}</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="inspector-section">
+            <div class="inspector-title">规则配置</div>
+            <div class="rule-row">
+              <div class="rule-label">是否隐藏</div>
+              <button type="button" class="switch" :class="{ active: widget.display.hidden }" @click="toggleDisplayFlag('hidden')"></button>
+            </div>
+            <div class="rule-row">
+              <div class="rule-label">是否只读</div>
+              <button type="button" class="switch" :class="{ active: widget.display.readOnly }" @click="toggleDisplayFlag('readOnly')"></button>
+            </div>
+            <div class="rule-row">
+              <div class="rule-label">是否必填</div>
+              <button type="button" class="switch" :class="{ active: widget.display.required }" @click="toggleDisplayFlag('required')"></button>
+            </div>
+          </div>
+
+          <div class="inspector-section">
+            <div class="inspector-title">组件专属配置</div>
+            <template v-if="componentSettingSchema.length">
+              <template v-for="field in componentSettingSchema">
+                <label v-if="field.type === 'text'" :key="field.key" class="inspector-field">
+                  <span>{{ field.label }}</span>
+                  <input
+                    :value="getComponentSettingValue(field)"
+                    :placeholder="field.default || ''"
+                    @input="updateComponentSetting(field, $event.target.value)"
+                  >
+                  <div v-if="field.help" class="inspector-help">{{ field.help }}</div>
+                </label>
+                <label v-else-if="field.type === 'number'" :key="field.key" class="inspector-field">
+                  <span>{{ field.label }}</span>
+                  <div class="inspector-inline-input">
+                    <input
+                      type="number"
+                      :min="field.min"
+                      :max="field.max"
+                      :step="field.step || 1"
+                      :value="getComponentSettingValue(field)"
+                      @input="updateComponentSetting(field, $event.target.value)"
+                    >
+                    <span v-if="field.unit" class="unit">{{ field.unit }}</span>
+                  </div>
+                  <div v-if="field.help" class="inspector-help">{{ field.help }}</div>
+                </label>
+                <div v-else-if="field.type === 'boolean'" :key="field.key" class="rule-row">
+                  <div class="rule-label">{{ field.label }}</div>
+                  <button type="button" class="switch" :class="{ active: !!getComponentSettingValue(field) }" @click="updateComponentSetting(field, !getComponentSettingValue(field))"></button>
+                </div>
+                <div v-else-if="field.type === 'select'" :key="field.key" class="inspector-field">
+                  <span>{{ field.label }}</span>
+                  <div class="inspector-widths">
+                    <button
+                      v-for="option in field.options"
+                      :key="option.value"
+                      type="button"
+                      :class="{ active: getComponentSettingValue(field) === option.value }"
+                      @click="updateComponentSetting(field, option.value)"
+                    >{{ option.label }}</button>
+                  </div>
+                </div>
+              </template>
+            </template>
+            <div v-else class="inspector-help">当前没有识别到组件专属配置 schema，可以直接通过下面的 JSON 补充。</div>
+            <details class="collapsible-panel">
+              <summary>查看 JSON 配置</summary>
+              <div class="collapsible-panel-body">
+                <label class="inspector-field">
+                  <span>customComponentConfig JSON</span>
+                  <textarea v-model="customConfigText" spellcheck="false"></textarea>
+                </label>
+                <div class="inspector-help">这里用来补充组件专属配置。应用后会同步到 `widget.customComponentConfig`。</div>
+                <div class="inspector-actions">
+                  <button type="button" class="primary" @click="applyCustomConfig">应用配置</button>
+                  <button type="button" class="secondary" @click="resetPreviewConfig">重置属性</button>
+                </div>
+                <div v-if="configError" class="inspector-error">{{ configError }}</div>
+              </div>
+            </details>
+          </div>
+
+          <div class="inspector-section">
+            <div class="inspector-title">调试数据</div>
+            <label class="inspector-field">
+              <span>预览值</span>
+              <input v-model="formData.preview_field" placeholder="给组件一个预览值">
+            </label>
+            <div class="inspector-help">这里的值只用于当前预览沙箱，不会回写到组件配置本身。</div>
+          </div>
+
+          <div class="inspector-section">
+            <details class="collapsible-panel">
+              <summary>高级平台属性</summary>
+              <div class="collapsible-panel-body">
+                <div class="inspector-help">以下字段在平台结构里真实存在，但当前预览不会完整模拟公式、校验、隐藏触发和业务事件引擎行为，所以默认折叠。</div>
+                <div class="rule-row">
+                  <div class="rule-label">公式规则 <span class="hint">?</span></div>
+                  <button type="button" class="switch" :class="{ active: widget.allow.formulaRule }" @click="toggleFormulaRule()"></button>
+                </div>
+                <div class="rule-row">
+                  <div class="rule-label">仅新建可编辑</div>
+                  <button type="button" class="switch" :class="{ active: widget.display.onlyCreateEdit }" @click="toggleDisplayFlag('onlyCreateEdit')"></button>
+                </div>
+                <div class="rule-row">
+                  <div class="rule-label">唯一性校验</div>
+                  <button type="button" class="switch" :class="{ active: widget.validator.uniqueCheck }" @click="toggleUniqueCheck()"></button>
+                </div>
+                <div class="rule-row">
+                  <div class="rule-label">隐藏时提交 <span class="hint">?</span></div>
+                  <button type="button" class="switch" :class="{ active: widget.special.saveWithHidden }" @click="toggleSpecialFlag('saveWithHidden')"></button>
+                </div>
+                <div class="rule-row">
+                  <div class="rule-label">隐藏时触发 <span class="hint">?</span></div>
+                  <button type="button" class="switch" :class="{ active: widget.special.hiddenTrigger }" @click="toggleSpecialFlag('hiddenTrigger')"></button>
+                </div>
+                <div class="business-events">
+                  <div class="business-events-head">
+                    <div class="rule-label">触发业务事件</div>
+                    <button type="button" class="icon-button" @click="addBusinessEvent()">+</button>
+                  </div>
+                  <div v-if="!widget.special.triggerBusinessEvents.length" class="business-empty">暂未添加业务事件，点击右侧加号可追加一条预览用事件编码。</div>
+                  <div v-for="(eventName, index) in widget.special.triggerBusinessEvents" :key="index" class="business-event-item">
+                    <input v-model="widget.special.triggerBusinessEvents[index]" placeholder="例如：onValueChange">
+                    <button type="button" class="icon-button" @click="removeBusinessEvent(index)">-</button>
+                  </div>
+                </div>
+              </div>
+            </details>
+          </div>
+        </aside>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/vue@2.7.14/dist/vue.min.js"></script>
+  <script src="https://unpkg.com/element-ui@2.15.14/lib/index.js"></script>
+
+  <script>
+    __MOCK_SDK_SCRIPT__
+    setupFormEngine();
+    __MOCK_FORM_WRAPPER__
+  </script>
+
+  <script src="__DIST_BASE_URL__/__OUTPUT_NAME__.umd.js"></script>
+
+  <script>
+    try {
+      var lib = window['__OUTPUT_NAME__'] || window['__OUTPUT_NAME_UNDERSCORE__'];
+      if (lib && lib.default && lib.default.install) {
+        lib.default.install(Vue);
+        console.log('[Preview] Component installed successfully');
+      } else if (lib && lib.install) {
+        lib.install(Vue);
+        console.log('[Preview] Component installed (direct)');
+      } else {
+        console.warn('[Preview] No install method found, trying manual registration');
+      }
+    } catch (e) {
+      console.error('[Preview] Install error:', e);
+    }
+
+    window.__PREVIEW_VUE_INSTANCE__ = new Vue({
+      el: '#app',
+      provide: function() {
+        return {
+          formEngine: {
+            formDataControl: mockFormDataControl,
+            engineContext: mockEngineContext,
+            bsEventControl: mockBsEventControl
+          },
+          renderGlobal: {
+            formDataControl: mockFormDataControl,
+            engineContext: mockEngineContext,
+            bsEventControl: mockBsEventControl
+          },
+          themeConfig: { theme: 'light' }
+        };
+      },
+      data: function() {
+        return {
+          mode: 'edit',
+          isMobile: __IS_MOBILE__,
+          componentText: __COMPONENT_TEXT_JSON__,
+          componentSettingSchema: __COMPONENT_SETTING_SCHEMA_JSON__,
+          error: null,
+          editComp: null,
+          readComp: null,
+          formData: { preview_field: '' },
+          configError: '',
+          widthOptions: __WIDTH_OPTIONS_JSON__,
+          widthKey: 'full',
+          widgetDefaults: __WIDGET_DEFAULTS_JSON__,
+          customConfigText: __CUSTOM_CONFIG_TEXT__,
+          widget: JSON.parse(JSON.stringify(__WIDGET_DEFAULTS_JSON__))
+        };
+      },
+      computed: {
+        currentWidthOption: function() {
+          var matched = this.widthOptions.find(function(option) {
+            return option.key === this.widthKey;
+          }, this);
+          return matched || this.widthOptions[this.widthOptions.length - 1];
+        },
+        fieldShellStyle: function() {
+          return {
+            width: this.currentWidthOption.styleWidth
+          };
+        }
+      },
+      watch: {
+        'widget.display.label': function(value) {
+          this.$set(this.widget, 'label', value || '');
+        },
+        'widget.display.required': function(value) {
+          this.$set(this.widget, 'required', !!value);
+        },
+        'widget.display.readOnly': function(value) {
+          this.$set(this.widget, 'readOnly', !!value);
+        },
+        'widget.display.hidden': function(value) {
+          this.$set(this.widget, 'visible', !value);
+        },
+        'widget.customComponentConfig': {
+          handler: function(value) {
+            if (value && Object.prototype.hasOwnProperty.call(value, 'placeholder')) {
+              this.$set(this.widget, 'placeholder', value.placeholder || '');
+            }
+            this.customConfigText = JSON.stringify(value || {}, null, 2);
+          },
+          deep: true
+        }
+      },
+      methods: {
+        normalizeWidget: function(source) {
+          var widget = source || {};
+          if (!widget.display || typeof widget.display !== 'object') {
+            this.$set(widget, 'display', {});
+          }
+          if (!widget.allow || typeof widget.allow !== 'object') {
+            this.$set(widget, 'allow', {});
+          }
+          if (!widget.validator || typeof widget.validator !== 'object') {
+            this.$set(widget, 'validator', {});
+          }
+          if (!widget.special || typeof widget.special !== 'object') {
+            this.$set(widget, 'special', {});
+          }
+          if (!widget.customComponentConfig || typeof widget.customComponentConfig !== 'object') {
+            this.$set(widget, 'customComponentConfig', {});
+          }
+          if (!Array.isArray(widget.special.triggerBusinessEvents)) {
+            this.$set(widget.special, 'triggerBusinessEvents', []);
+          }
+          this.$set(widget.display, 'label', widget.display.label || widget.label || this.componentText);
+          this.$set(widget.display, 'width', Number(widget.display.width || 24));
+          this.$set(widget.display, 'mobileWidth', Number(widget.display.mobileWidth || widget.display.width || 24));
+          this.$set(widget.display, 'height', Number(widget.display.height || 1));
+          this.$set(widget.display, 'hidden', !!widget.display.hidden);
+          this.$set(widget.display, 'readOnly', !!widget.display.readOnly || !!widget.readOnly);
+          this.$set(widget.display, 'required', !!widget.display.required || !!widget.required);
+          this.$set(widget.display, 'onlyCreateEdit', !!widget.display.onlyCreateEdit);
+          this.$set(widget.allow, 'formulaRule', !!widget.allow.formulaRule);
+          this.$set(widget.validator, 'uniqueCheck', !!widget.validator.uniqueCheck);
+          this.$set(widget.special, 'saveWithHidden', !!widget.special.saveWithHidden);
+          this.$set(widget.special, 'hiddenTrigger', !!widget.special.hiddenTrigger);
+          this.$set(widget, 'label', widget.display.label || '');
+          this.$set(widget, 'required', !!widget.display.required);
+          this.$set(widget, 'readOnly', !!widget.display.readOnly);
+          this.$set(widget, 'visible', !widget.display.hidden);
+          this.$set(widget, 'titleDescription', widget.titleDescription || '');
+          this.$set(widget, 'placeholder', widget.placeholder || widget.customComponentConfig.placeholder || '');
+          return widget;
+        },
+        ensureComponentConfigDefaults: function() {
+          if (!this.widget.customComponentConfig || typeof this.widget.customComponentConfig !== 'object') {
+            this.$set(this.widget, 'customComponentConfig', {});
+          }
+          this.componentSettingSchema.forEach(function(field) {
+            if (
+              field &&
+              field.key &&
+              this.widget.customComponentConfig[field.key] === undefined &&
+              Object.prototype.hasOwnProperty.call(field, 'default')
+            ) {
+              this.$set(this.widget.customComponentConfig, field.key, field.default);
+            }
+          }, this);
+        },
+        getComponentSettingValue: function(field) {
+          if (!field || !field.key) {
+            return '';
+          }
+          var current = (this.widget.customComponentConfig || {})[field.key];
+          if (current === undefined && Object.prototype.hasOwnProperty.call(field, 'default')) {
+            return field.default;
+          }
+          return current;
+        },
+        updateComponentSetting: function(field, rawValue) {
+          if (!field || !field.key) {
+            return;
+          }
+          var nextValue = rawValue;
+          if (field.type === 'number') {
+            if (rawValue === '' || rawValue === null || rawValue === undefined) {
+              nextValue = field.default || 0;
+            } else {
+              nextValue = Number(rawValue);
+              if (Number.isNaN(nextValue)) {
+                nextValue = field.default || 0;
+              }
+            }
+          }
+          this.$set(this.widget.customComponentConfig, field.key, nextValue);
+        },
+        resolveWidthKey: function(width) {
+          var target = Number(width || 24);
+          var matched = this.widthOptions.find(function(option) {
+            return Number(option.displayWidth) === target;
+          });
+          return matched ? matched.key : 'full';
+        },
+        setWidth: function(key) {
+          var matched = this.widthOptions.find(function(option) {
+            return option.key === key;
+          });
+          if (!matched) {
+            return;
+          }
+          this.widthKey = matched.key;
+          this.$set(this.widget.display, 'width', matched.displayWidth);
+          this.$set(this.widget.display, 'mobileWidth', matched.mobileWidth);
+        },
+        toggleDisplayFlag: function(key) {
+          this.$set(this.widget.display, key, !this.widget.display[key]);
+        },
+        toggleFormulaRule: function() {
+          this.$set(this.widget.allow, 'formulaRule', !this.widget.allow.formulaRule);
+        },
+        toggleUniqueCheck: function() {
+          this.$set(this.widget.validator, 'uniqueCheck', !this.widget.validator.uniqueCheck);
+        },
+        toggleSpecialFlag: function(key) {
+          this.$set(this.widget.special, key, !this.widget.special[key]);
+        },
+        addBusinessEvent: function() {
+          this.widget.special.triggerBusinessEvents.push('');
+        },
+        removeBusinessEvent: function(index) {
+          this.widget.special.triggerBusinessEvents.splice(index, 1);
+        },
+        applyCustomConfig: function() {
+          try {
+            var parsed = this.customConfigText ? JSON.parse(this.customConfigText) : {};
+            this.$set(this.widget, 'customComponentConfig', parsed || {});
+            this.ensureComponentConfigDefaults();
+            if (Object.prototype.hasOwnProperty.call(parsed || {}, 'placeholder')) {
+              this.$set(this.widget, 'placeholder', parsed.placeholder || '');
+            }
+            this.configError = '';
+          } catch (error) {
+            this.configError = 'JSON 解析失败：' + error.message;
+          }
+        },
+        syncCustomConfigText: function() {
+          this.customConfigText = JSON.stringify(this.widget.customComponentConfig || {}, null, 2);
+        },
+        resetPreviewConfig: function() {
+          var clonedDefaults = JSON.parse(JSON.stringify(this.widgetDefaults));
+          clonedDefaults.uuid = this.widget.uuid;
+          this.widget = this.normalizeWidget(clonedDefaults);
+          this.ensureComponentConfigDefaults();
+          this.widthKey = this.resolveWidthKey(this.widget.display.width);
+          this.formData = { preview_field: '' };
+          this.configError = '';
+          this.syncCustomConfigText();
+        }
+      },
+      created: function() {
+        var editName = '__EDIT_TAG__';
+        var readName = '__READ_TAG__';
+        var registry = Vue.options.components || {};
+        this.widget.uuid = 'preview-' + Date.now();
+        this.widgetDefaults = this.normalizeWidget(JSON.parse(JSON.stringify(this.widgetDefaults)));
+        this.widget = this.normalizeWidget(this.widget);
+        this.ensureComponentConfigDefaults();
+        this.widthKey = this.resolveWidthKey(this.widget.display.width);
+        mockFormDataControl.componentMap.set(this.widget.uuid, this.widget);
+        mockFormDataControl.ctlComponentMap.set('preview_field', this.widget);
+        mockFormDataControl.allTileFormItemList = [this.widget];
+        var normalizeName = function(name) {
+          return String(name || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+        };
+        var toPascalCase = function(name) {
+          return String(name || '')
+            .split(/[^a-zA-Z0-9]+/)
+            .filter(Boolean)
+            .map(function(part) {
+              return part.charAt(0).toUpperCase() + part.slice(1);
+            })
+            .join('');
+        };
+        var resolveComponent = function(candidates) {
+          for (var i = 0; i < candidates.length; i += 1) {
+            if (registry[candidates[i]]) return registry[candidates[i]];
+          }
+          var normalizedCandidates = candidates.map(normalizeName);
+          var keys = Object.keys(registry);
+          for (var j = 0; j < keys.length; j += 1) {
+            if (normalizedCandidates.indexOf(normalizeName(keys[j])) !== -1) {
+              return registry[keys[j]];
+            }
+          }
+          var suffixes = candidates.map(function(candidate) {
+            var normalized = normalizeName(candidate);
+            if (normalized.endsWith('edit')) return 'edit';
+            if (normalized.endsWith('read')) return 'read';
+            if (normalized.endsWith('ide')) return 'ide';
+            if (normalized.endsWith('searchide')) return 'searchide';
+            if (normalized.endsWith('search')) return 'search';
+            if (normalized.endsWith('list')) return 'list';
+            if (normalized.endsWith('print')) return 'print';
+            if (normalized.endsWith('setting')) return 'setting';
+            return '';
+          }).filter(Boolean);
+          var preferredSuffix = suffixes[0] || '';
+          if (preferredSuffix) {
+            var rankedKeys = keys
+              .filter(function(key) {
+                var normalizedKey = normalizeName(key);
+                if (preferredSuffix === 'edit') return normalizedKey.endsWith('edit') && !normalizedKey.includes('search');
+                if (preferredSuffix === 'read') return normalizedKey.endsWith('read');
+                return normalizedKey.endsWith(preferredSuffix);
+              })
+              .sort(function(a, b) {
+                return normalizeName(a).length - normalizeName(b).length;
+              });
+            if (rankedKeys.length > 0) {
+              return registry[rankedKeys[0]];
+            }
+          }
+          return null;
+        };
+
+        var editCandidates = [
+          editName,
+          editName.replace(/-/g, ''),
+          toPascalCase(editName),
+          toPascalCase('__OUTPUT_NAME__') + 'Edit'
+        ];
+        var readCandidates = [
+          readName,
+          readName.replace(/-/g, ''),
+          toPascalCase(readName),
+          toPascalCase('__OUTPUT_NAME__') + 'Read'
+        ];
+
+        this.editComp = resolveComponent(editCandidates);
+        this.readComp = resolveComponent(readCandidates);
+
+        if (!this.editComp) {
+          var keys = Object.keys(registry);
+          var customKeys = keys.filter(function(k) {
+            return k.indexOf('form-component') !== -1 || k.indexOf('FormComponent') !== -1;
+          });
+          console.log('[Preview] Available components:', customKeys);
+          if (customKeys.length > 0) {
+            this.editComp = Vue.options.components[customKeys[0]];
+            if (customKeys.length > 1) {
+              this.readComp = Vue.options.components[customKeys[1]];
+            }
+          }
+        }
+
+        if (!this.editComp) {
+          this.error = '未找到组件 "' + editName + '"，请检查组件是否正确注册。可用组件: ' + Object.keys(Vue.options.components).join(', ');
+        }
+
+        this.syncCustomConfigText();
+      }
+    });
+  </script>
+</body>
+</html>"""
+
+    return (
+        template
+        .replace("__OUTPUT_NAME_UNDERSCORE__", output_name.replace("-", "_"))
+        .replace("__OUTPUT_NAME__", output_name)
+        .replace("__DIST_BASE_URL__", dist_base_url)
+        .replace("__PREVIEW_SHELL_CLASS__", preview_shell_class)
+        .replace("__MOCK_SDK_SCRIPT__", _get_mock_sdk_script())
+        .replace("__MOCK_FORM_WRAPPER__", _get_mock_form_wrapper())
+        .replace("__COMPONENT_TEXT_JSON__", json.dumps(component_text, ensure_ascii=False))
+        .replace("__COMPONENT_TEXT__", component_text)
+        .replace("__WIDGET_DEFAULTS_JSON__", widget_defaults_json)
+        .replace("__CUSTOM_CONFIG_TEXT__", json.dumps(widget_custom_config_json, ensure_ascii=False))
+        .replace("__COMPONENT_SETTING_SCHEMA_JSON__", component_setting_schema_json)
+        .replace("__WIDTH_OPTIONS_JSON__", width_options_json)
+        .replace("__IS_MOBILE__", str(mobile).lower())
+        .replace("__EDIT_TAG__", edit_tag)
+        .replace("__READ_TAG__", read_tag)
+    )
+
+
+def _generate_form_component_preview_legacy(
     apaas_config: dict,
     dist_base_url: str,
     output_name: str,

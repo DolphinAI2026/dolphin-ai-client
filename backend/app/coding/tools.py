@@ -13,10 +13,12 @@ import inspect
 import os
 import re
 import shlex
+import subprocess
+from functools import lru_cache
 from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
-DEFAULT_NPM_REGISTRY = os.environ.get("APAAS_NPM_REGISTRY", "https://registry.npmmirror.com")
+FALLBACK_NPM_REGISTRY = "https://registry.npmmirror.com"
 DEFAULT_NPM_CACHE_DIR = os.environ.get(
     "APAAS_NPM_CACHE_DIR",
     str(Path.home() / ".apaas-builder" / "npm-cache"),
@@ -251,9 +253,39 @@ def _strip_ansi(text: str) -> str:
     return ANSI_ESCAPE_RE.sub("", text)
 
 
+@lru_cache(maxsize=1)
+def _resolve_default_npm_registry() -> str:
+    explicit_registry = (
+        os.environ.get("APAAS_NPM_REGISTRY")
+        or os.environ.get("npm_config_registry")
+        or os.environ.get("NPM_CONFIG_REGISTRY")
+        or ""
+    ).strip()
+    if explicit_registry:
+        return explicit_registry
+
+    try:
+        result = subprocess.run(
+            ["npm", "config", "get", "registry"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        resolved_registry = (result.stdout or "").strip()
+        if result.returncode == 0 and resolved_registry and resolved_registry != "undefined":
+            return resolved_registry
+    except Exception:
+        pass
+
+    return FALLBACK_NPM_REGISTRY
+
+
 def _build_command_env() -> dict[str, str]:
     env = {**os.environ}
-    env.setdefault("npm_config_registry", DEFAULT_NPM_REGISTRY)
+    default_registry = _resolve_default_npm_registry()
+    env.setdefault("npm_config_registry", default_registry)
+    env.setdefault("NPM_CONFIG_REGISTRY", default_registry)
     env.setdefault("npm_config_cache", DEFAULT_NPM_CACHE_DIR)
     env.setdefault("npm_config_prefer_offline", "true")
     env.setdefault("npm_config_audit", "false")
@@ -263,15 +295,39 @@ def _build_command_env() -> dict[str, str]:
 
 
 def _is_plain_npm_install(command: str) -> bool:
-    try:
-        tokens = shlex.split(command)
-    except ValueError:
-        return False
-
+    tokens = _extract_primary_shell_tokens(command)
     if len(tokens) < 2 or tokens[0] != "npm" or tokens[1] not in {"install", "i"}:
         return False
 
     return all(token.startswith("-") for token in tokens[2:])
+
+
+def _extract_primary_shell_tokens(command: str) -> list[str]:
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return []
+
+    if len(tokens) >= 3 and tokens[0] == "cd":
+        for operator in ("&&", ";"):
+            if operator in tokens:
+                tokens = tokens[tokens.index(operator) + 1:]
+                break
+
+    primary_tokens: list[str] = []
+    for token in tokens:
+        if token in {"|", "||", "&&", ";"}:
+            break
+        if ">" in token or "<" in token:
+            continue
+        primary_tokens.append(token)
+
+    return primary_tokens
+
+
+def _is_plain_npm_build(command: str) -> bool:
+    tokens = _extract_primary_shell_tokens(command)
+    return tokens == ["npm", "run", "build"]
 
 
 async def _stream_process_output(
@@ -314,6 +370,19 @@ async def _run_command(
                 workspace_path.name,
                 progress_callback=progress_callback,
             )
+            if result["status"] == "ok":
+                return result["message"]
+            return f"Error: {result['message']}"
+
+        if _is_plain_npm_build(command):
+            from app.coding.workspace import WorkspaceManager
+
+            await _emit_progress(
+                progress_callback,
+                "[build] 检测到 npm run build，已切换为兼容构建流程。\n",
+            )
+            result = await WorkspaceManager().build_project(workspace_path.name)
+            await _emit_progress(progress_callback, f"[build] {result['message']}\n")
             if result["status"] == "ok":
                 return result["message"]
             return f"Error: {result['message']}"

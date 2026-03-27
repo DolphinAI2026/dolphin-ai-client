@@ -6,7 +6,10 @@
         <el-button text @click="$router.push('/chat')">
           <el-icon><ArrowLeft /></el-icon>
         </el-button>
-        <h3 class="header-title">复杂开发智能体</h3>
+        <div class="header-title-group">
+          <h3 class="header-title">复杂开发智能体</h3>
+          <p class="header-subtitle">{{ headerSubtitle }}</p>
+        </div>
         <el-tag
           v-if="codingStore.workspace"
           size="small"
@@ -104,8 +107,22 @@
       </aside>
 
       <!-- Main Content -->
-      <div class="main-content">
+    <div class="main-content">
     <div class="chat-area">
+      <section v-if="codingStore.workspace" class="workspace-overview">
+        <div class="workspace-overview-copy">
+          <span class="workspace-overview-kicker">当前工作区</span>
+          <h2 class="workspace-overview-title">{{ workspaceDisplayName(codingStore.workspace) }}</h2>
+          <p class="workspace-overview-desc">{{ workspaceOverviewDescription }}</p>
+        </div>
+        <div class="workspace-overview-metrics">
+          <div v-for="metric in workspaceOverviewMetrics" :key="metric.label" class="workspace-overview-metric">
+            <span class="workspace-overview-metric-label">{{ metric.label }}</span>
+            <strong class="workspace-overview-metric-value">{{ metric.value }}</strong>
+          </div>
+        </div>
+      </section>
+
       <!-- Welcome message when no workspace -->
       <div v-if="!codingStore.workspace && codingStore.messages.length === 0" class="welcome">
         <div class="welcome-icon">&#x2728;</div>
@@ -139,7 +156,16 @@
       </div>
 
       <!-- Messages -->
-      <div v-for="(msg, idx) in codingStore.messages" :key="idx" class="message" :class="msg.role">
+      <div v-if="hiddenMessageCount > 0" class="message-history-fold">
+        更早的 {{ hiddenMessageCount }} 条记录已折叠，避免长会话拖慢页面。历史仍然保留在当前工作区里。
+      </div>
+
+      <div
+        v-for="(msg, idx) in visibleMessages"
+        :key="msg.id || `${msg.role}-${msg.created_at || ''}-${idx}`"
+        class="message"
+        :class="msg.role"
+      >
         <!-- User message -->
         <div v-if="msg.role === 'user'" class="user-msg">
           <div class="msg-avatar user-avatar">U</div>
@@ -169,7 +195,7 @@
             </div>
             <details v-if="msg.thinkingSummary" class="thinking-summary">
               <summary class="thinking-summary-header">思路摘要</summary>
-              <div class="thinking-summary-body" v-html="renderLiveHtml(msg.thinkingSummary)"></div>
+              <div class="thinking-summary-body" v-html="msg.thinkingHtml || ''"></div>
             </details>
             <details v-if="msg.activityFeed && msg.activityFeed.length" class="thinking-summary execution-trace">
               <summary class="thinking-summary-header">执行过程</summary>
@@ -186,7 +212,7 @@
               </div>
             </details>
             <!-- Text content -->
-            <div v-if="msg.textContent" class="msg-text" v-html="renderMarkdown(msg.textContent)"></div>
+            <div v-if="msg.textHtml" class="msg-text" v-html="msg.textHtml"></div>
             <!-- 内嵌组件预览 -->
             <div v-if="msg.fileNames && msg.fileNames.length && msg.previewHtml" class="inline-preview">
               <div class="preview-header">
@@ -196,7 +222,7 @@
                 </el-button>
               </div>
               <iframe
-                v-show="!msg._previewCollapsed"
+                v-if="!msg._previewCollapsed"
                 :srcdoc="msg.previewHtml"
                 class="preview-iframe"
                 sandbox="allow-scripts allow-same-origin"
@@ -347,14 +373,31 @@
             <div class="preview-panel-loading-desc">正在为当前工作区构建最新预览环境，请稍候。</div>
           </div>
         </div>
-        <iframe
-          v-else-if="previewUrl"
-          :key="previewKey"
-          :src="previewUrl"
-          class="preview-panel-iframe"
-          frameborder="0"
-          sandbox="allow-scripts allow-same-origin allow-popups"
-        ></iframe>
+        <div v-else-if="previewUrl" class="preview-panel-stage">
+          <div
+            class="preview-stage-shell"
+            :class="{ 'is-mobile-shell': effectivePreviewProjectType === 'mobile-page' || effectivePreviewProjectType === 'mobile-component' }"
+          >
+            <div v-if="effectivePreviewProjectType === 'mobile-page' || effectivePreviewProjectType === 'mobile-component'" class="preview-device-frame">
+              <div class="preview-device-speaker"></div>
+              <iframe
+                :key="previewKey"
+                :src="previewUrl"
+                class="preview-panel-iframe"
+                frameborder="0"
+                sandbox="allow-scripts allow-same-origin allow-popups"
+              ></iframe>
+            </div>
+            <iframe
+              v-else
+              :key="previewKey"
+              :src="previewUrl"
+              class="preview-panel-iframe"
+              frameborder="0"
+              sandbox="allow-scripts allow-same-origin allow-popups"
+            ></iframe>
+          </div>
+        </div>
         <div v-else class="preview-panel-empty">
           <div class="preview-panel-empty-title">预览尚未准备好</div>
           <div class="preview-panel-empty-desc">点击上方“Debug 预览”后，这里会显示当前工作区的实时效果。</div>
@@ -404,6 +447,44 @@ const previewPanelTitle = computed(() => {
   if (projectType === 'menu-page' || projectType === 'form-page') return '🖥️ 页面预览'
   return '📦 组件预览'
 })
+const currentWorkspaceCategoryLabel = computed(() => {
+  const projectType = codingStore.workspace?.project_type || ''
+  return wsTypeGroupMap[projectType]?.label || '智能开发工作区'
+})
+const headerSubtitle = computed(() => {
+  if (codingStore.workspace) {
+    return `${currentWorkspaceCategoryLabel.value} · ${codingStore.isProcessing ? 'AI 正在执行中' : '工作区已就绪'}`
+  }
+  return 'AI 协同编码工作台'
+})
+const workspaceOverviewDescription = computed(() => {
+  if (!codingStore.workspace) {
+    return '发送需求后，我会自动创建项目、生成代码、安装依赖，并帮你准备预览环境。'
+  }
+  if (codingStore.isProcessing) {
+    return `正在围绕当前 ${currentWorkspaceCategoryLabel.value} 持续执行开发动作，你可以实时查看日志、思路和预览结果。`
+  }
+  return `当前工作区已经待命，可以继续追加需求、打开 IDE 深改，或者直接调试预览。`
+})
+const workspaceOverviewMetrics = computed(() => [
+  {
+    label: '项目类型',
+    value: currentWorkspaceCategoryLabel.value,
+  },
+  {
+    label: '执行状态',
+    value: codingStore.isProcessing ? '执行中' : '待命',
+  },
+  {
+    label: '预览面板',
+    value: showPreviewPanel.value ? (previewLoading.value ? '同步中' : '已打开') : '未打开',
+  },
+])
+const visibleMessages = computed(() => {
+  if (codingStore.messages.length <= MAX_RENDERED_MESSAGES) return codingStore.messages
+  return codingStore.messages.slice(-MAX_RENDERED_MESSAGES)
+})
+const hiddenMessageCount = computed(() => Math.max(0, codingStore.messages.length - visibleMessages.value.length))
 const codingBodyClasses = computed(() => ({
   'has-preview': showPreviewPanel.value,
   'has-page-preview': showPreviewPanel.value && ['menu-page', 'form-page', 'layout'].includes(effectivePreviewProjectType.value),
@@ -418,6 +499,11 @@ const streamThinkingRaw = ref('')
 const liveClock = ref(Date.now())
 const lastStreamEventAt = ref(0)
 const lastProgressEventAt = ref(0)
+const MAX_RENDERED_MESSAGES = 18
+const LIVE_STREAM_VISIBLE_LIMIT = 12000
+const LIVE_THINKING_VISIBLE_LIMIT = 4000
+const MESSAGE_DISPLAY_VISIBLE_LIMIT = 16000
+const LIVE_STREAM_FLUSH_MS = 120
 
 type LiveActivityTone = ChatActivityItem['tone']
 type LiveActivityItem = ChatActivityItem
@@ -441,6 +527,40 @@ function renderLiveHtml(raw: string): string {
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/\n/g, '<br>')
+}
+
+function buildTailDisplay(tail: string, omitted: number, label: string): string {
+  if (!tail && !omitted) return ''
+  if (!omitted) return tail
+  return `...\n[${label}过长，已折叠前 ${omitted} 个字符]\n\n${tail}`
+}
+
+function appendTailBuffer(currentTail: string, currentOmitted: number, chunk: string, limit: number) {
+  if (!chunk) {
+    return { tail: currentTail, omitted: currentOmitted }
+  }
+
+  const combined = currentTail + chunk
+  if (combined.length <= limit) {
+    return { tail: combined, omitted: currentOmitted }
+  }
+
+  const overflow = combined.length - limit
+  return {
+    tail: combined.slice(-limit),
+    omitted: currentOmitted + overflow,
+  }
+}
+
+function buildDisplayContent(raw: string, limit = MESSAGE_DISPLAY_VISIBLE_LIMIT, label = '执行记录'): string {
+  if (!raw) return ''
+  if (raw.length <= limit) return raw
+  return buildTailDisplay(raw.slice(-limit), raw.length - limit, label)
+}
+
+function buildThinkingDisplay(raw: string): string {
+  const normalized = normalizeThinkingText(raw)
+  return buildDisplayContent(normalized, LIVE_THINKING_VISIBLE_LIMIT, '思路摘要')
 }
 
 // 流式内容直接渲染，完成后再做 markdown
@@ -683,6 +803,13 @@ async function openExistingWorkspace(ws: WorkspaceInfo) {
 async function openWorkspaceById(wsId: string) {
   try {
     const ws = await codingApi.getWorkspace(wsId)
+    codingStore.setMessages([])
+    codingStore.conversationId = null
+    codingStore.streamContent = ''
+    codingStore.currentPipelineSteps = []
+    codingStore.isProcessing = false
+    resetLiveAgentStream()
+    stopLiveClock()
     codingStore.setWorkspace(ws)
     localStorage.setItem('coding_last_workspace_id', wsId)
 
@@ -709,24 +836,31 @@ async function openWorkspaceById(wsId: string) {
 async function loadWorkspaceConversation(wsId: string) {
   try {
     const data = await codingApi.getWorkspaceConversation(wsId)
+    const restoredMessages: ChatMessage[] = []
     if (data.conversation_id) {
       codingStore.conversationId = data.conversation_id
       for (const msg of data.messages) {
         if (msg.role === 'user' || msg.role === 'assistant') {
-          const chatMsg: ChatMessage = { role: msg.role, content: msg.content }
+          const rawContent = typeof msg.content === 'string' ? msg.content : ''
+          const displayContent = msg.role === 'assistant'
+            ? buildDisplayContent(rawContent)
+            : rawContent
+          const chatMsg: ChatMessage = { role: msg.role, content: displayContent }
           if (msg.role === 'assistant') {
-            chatMsg.textContent = msg.content
-            const files = parseFilesFromContent(msg.content)
+            chatMsg.textContent = displayContent
+            const files = rawContent.includes('```') ? parseFilesFromContent(rawContent) : []
             if (files.length > 0) {
               chatMsg.fileNames = files.map(f => getFileName(f.path))
             }
           }
-          codingStore.addMessage(chatMsg)
+          restoredMessages.push(hydrateChatMessage(chatMsg))
         }
       }
     }
+    codingStore.setMessages(restoredMessages)
   } catch {
     // no history, ignore
+    codingStore.setMessages([])
   }
 }
 
@@ -734,22 +868,28 @@ async function restoreConversation(conversationId: number) {
   try {
     codingStore.conversationId = conversationId
     const messages = await codingApi.getMessages(conversationId)
+    const restoredMessages: ChatMessage[] = []
     for (const msg of messages) {
+      const rawContent = typeof msg.content === 'string' ? msg.content : ''
+      const displayContent = msg.role === 'assistant'
+        ? buildDisplayContent(rawContent)
+        : rawContent
       const chatMsg: ChatMessage = {
         id: msg.id,
         role: msg.role,
-        content: msg.content,
+        content: displayContent,
         created_at: msg.created_at,
       }
       if (msg.role === 'assistant') {
-        chatMsg.textContent = msg.content
-        const files = parseFilesFromContent(msg.content)
+        chatMsg.textContent = displayContent
+        const files = rawContent.includes('```') ? parseFilesFromContent(rawContent) : []
         if (files.length > 0) {
           chatMsg.fileNames = files.map(f => getFileName(f.path))
         }
       }
-      codingStore.addMessage(chatMsg)
+      restoredMessages.push(hydrateChatMessage(chatMsg))
     }
+    codingStore.setMessages(restoredMessages)
   } catch (e) {
     console.error('恢复对话失败:', e)
   }
@@ -903,7 +1043,7 @@ async function sendMessage() {
       throw new Error(errBody.detail || `HTTP ${response.status}`)
     }
 
-    let fullContent = ''
+    const fullContentParts: string[] = []
     let changedFiles: string[] = []
     let currentScreenshots: string[] = []
     let thinkingBuffer = ''
@@ -954,9 +1094,10 @@ async function sendMessage() {
 
           shouldPaint = true
         } else if (parsed.type === 'content') {
-          fullContent += parsed.content
-          codingStore.streamContent = fullContent
-          shouldPaint = true
+          const chunk = typeof parsed.content === 'string' ? parsed.content : ''
+          if (!chunk) return
+          fullContentParts.push(chunk)
+          shouldPaint = appendLiveStreamChunk(chunk) || shouldPaint
         } else if (parsed.type === 'agent_thinking_delta') {
           const chunk = typeof parsed.content === 'string' ? parsed.content : ''
           if (!chunk) return
@@ -965,10 +1106,10 @@ async function sendMessage() {
             expectingFreshThinking = false
           }
           thinkingBuffer += chunk
-          const normalized = normalizeThinkingText(thinkingBuffer)
-          if (normalized) {
-            thinkingSummary = normalized
-            streamThinkingRaw.value = thinkingBuffer
+          const displayThinking = buildThinkingDisplay(thinkingBuffer)
+          if (displayThinking) {
+            thinkingSummary = displayThinking
+            streamThinkingRaw.value = displayThinking
             shouldPaint = true
           }
         } else if (parsed.type === 'agent_thinking') {
@@ -980,17 +1121,18 @@ async function sendMessage() {
           } else if (normalizeThinkingText(rawThinking).length >= normalizeThinkingText(thinkingBuffer).length) {
             thinkingBuffer = rawThinking
           }
-          const normalized = normalizeThinkingText(thinkingBuffer)
-          if (normalized) {
-            thinkingSummary = normalized
-            streamThinkingRaw.value = thinkingBuffer
+          const displayThinking = buildThinkingDisplay(thinkingBuffer)
+          if (displayThinking) {
+            thinkingSummary = displayThinking
+            streamThinkingRaw.value = displayThinking
             shouldPaint = true
           }
         } else if (parsed.type === 'agent_tool') {
           const toolDisplay = parsed.tool_display || parsed.tool
           const preview = parsed.input_preview || ''
-          fullContent += `\n🔧 **${toolDisplay}** \`${preview}\`\n`
-          codingStore.streamContent = fullContent
+          const chunk = `\n🔧 **${toolDisplay}** \`${preview}\`\n`
+          fullContentParts.push(chunk)
+          appendLiveStreamChunk(chunk, true)
           pushLiveActivity(toolDisplay, preview || '开始执行', 'default')
           expectingFreshThinking = true
           shouldPaint = true
@@ -998,17 +1140,19 @@ async function sendMessage() {
           const preview = parsed.output_preview && parsed.output_preview !== '(empty)'
             ? (parsed.output_preview.length > 140 ? `${parsed.output_preview.substring(0, 140)}...` : parsed.output_preview)
             : '执行完成'
+          let resultChunk = ''
           if (parsed.is_error) {
-            fullContent += `> ❌ ${parsed.output_preview}\n\n`
+            resultChunk = `> ❌ ${parsed.output_preview}\n\n`
           } else if (parsed.output_preview && parsed.output_preview !== '(empty)') {
             const resultPreview = parsed.output_preview.length > 300
               ? parsed.output_preview.substring(0, 300) + '...'
               : parsed.output_preview
-            fullContent += `> ✅ ${resultPreview}\n\n`
+            resultChunk = `> ✅ ${resultPreview}\n\n`
           } else {
-            fullContent += '> ✅ 完成\n\n'
+            resultChunk = '> ✅ 完成\n\n'
           }
-          codingStore.streamContent = fullContent
+          fullContentParts.push(resultChunk)
+          appendLiveStreamChunk(resultChunk, true)
           pushLiveActivity(
             parsed.tool_display || parsed.tool || '执行结果',
             preview,
@@ -1019,18 +1163,19 @@ async function sendMessage() {
         } else if (parsed.type === 'agent_command_output') {
           const chunk = typeof parsed.chunk === 'string' ? parsed.chunk : ''
           if (!chunk) return
-          fullContent += chunk
-          codingStore.streamContent = fullContent
-          shouldPaint = true
+          fullContentParts.push(chunk)
+          shouldPaint = appendLiveStreamChunk(chunk) || shouldPaint
         } else if (parsed.type === 'agent_done') {
           const turns = parsed.num_turns || '?'
-          fullContent += `\n---\n✨ **Agent 完成** (${turns} 轮对话)\n`
-          codingStore.streamContent = fullContent
+          const chunk = `\n---\n✨ **Agent 完成** (${turns} 轮对话)\n`
+          fullContentParts.push(chunk)
+          appendLiveStreamChunk(chunk, true)
           pushLiveActivity('完成', `Agent 已完成 ${turns} 轮对话`, 'success')
           shouldPaint = true
         } else if (parsed.type === 'agent_error') {
-          fullContent += `\n❌ **Agent 错误**: ${parsed.message}\n`
-          codingStore.streamContent = fullContent
+          const chunk = `\n❌ **Agent 错误**: ${parsed.message}\n`
+          fullContentParts.push(chunk)
+          appendLiveStreamChunk(chunk, true)
           pushLiveActivity('错误', parsed.message || '发生未知错误', 'error')
           shouldPaint = true
         } else if (parsed.type === 'files') {
@@ -1068,28 +1213,34 @@ async function sendMessage() {
     }, { yieldEvery: 6 })
 
     debugSseLog('[SSE] Stream ended (consumeSseResponse finished)')
+    flushLiveStream(true)
+    await nextTick()
+
+    const fullContent = fullContentParts.join('')
+    const parsedFilesFromContent = fullContent.includes('```') ? parseFilesFromContent(fullContent) : []
 
     // Extract files from AI content if not provided via event
     if (changedFiles.length === 0) {
-      const parsed = parseFilesFromContent(fullContent)
-      changedFiles = parsed.map(f => f.path)
+      changedFiles = parsedFilesFromContent.map(f => f.path)
     }
 
     // Build preview HTML from generated edit.vue
     let previewHtml = ''
     if (changedFiles.length > 0) {
-      const editFile = parseFilesFromContent(fullContent).find(f => f.path.includes('edit/') || f.path.includes('-edit.vue'))
-      const settingFile = parseFilesFromContent(fullContent).find(f => f.path.includes('setting'))
+      const editFile = parsedFilesFromContent.find(f => f.path.includes('edit/') || f.path.includes('-edit.vue'))
+      const settingFile = parsedFilesFromContent.find(f => f.path.includes('setting'))
       if (editFile) {
         previewHtml = buildPreviewHtml(editFile.content, settingFile?.content)
       }
     }
 
+    const displayContent = buildDisplayContent(fullContent)
+
     // Build the assistant message
     const assistantMsg: ChatMessage = {
       role: 'assistant',
-      content: fullContent,
-      textContent: fullContent,
+      content: displayContent,
+      textContent: displayContent,
       thinkingSummary: thinkingSummary || effectiveThinkingText.value || undefined,
       pipelineSteps: [...codingStore.currentPipelineSteps],
       fileNames: changedFiles.map(f => getFileName(f)),
@@ -1097,7 +1248,9 @@ async function sendMessage() {
       screenshots: currentScreenshots.length > 0 ? currentScreenshots : undefined,
       activityFeed: streamActivities.value.map(item => ({ ...item })),
     }
-    codingStore.addMessage(assistantMsg)
+    codingStore.addMessage(hydrateChatMessage(assistantMsg))
+    await nextTick()
+    scrollToBottom()
 
     // Refresh workspace file list
     if (codingStore.workspace) {
@@ -1108,11 +1261,11 @@ async function sendMessage() {
 
   } catch (error: any) {
     ElMessage.error(`处理失败: ${error.message}`)
-    codingStore.addMessage({
+    codingStore.addMessage(hydrateChatMessage({
       role: 'assistant',
       content: `处理失败: ${error.message}`,
       textContent: `处理失败: ${error.message}`,
-    })
+    }))
   } finally {
     codingStore.isProcessing = false
     codingStore.streamContent = ''
@@ -1127,8 +1280,13 @@ async function sendMessage() {
 async function openInWebIDE() {
   if (!codingStore.workspace) return
   try {
-    const { ide_url } = await codingApi.getIdeUrl(codingStore.workspace.id)
-    window.open(ide_url, '_blank')
+    // 卸载当前预览 iframe，避免 Builder 预览和 IDE 同时占用过多渲染资源
+    closePreviewPanel()
+    const { ide_url } = await codingApi.getIdeUrl(
+      codingStore.workspace.id,
+      codingStore.conversationId,
+    )
+    window.open(ide_url, '_blank', 'noopener,noreferrer')
   } catch (err: any) {
     const msg = err?.response?.data?.detail || err?.message || 'Web IDE 打开失败，请检查 CODE_SERVER_BASE_URL 配置'
     ElMessage.warning(msg)
@@ -1440,6 +1598,21 @@ function renderMarkdown(content: string): string {
   return result
 }
 
+function hydrateChatMessage(message: ChatMessage): ChatMessage {
+  if (message.role !== 'assistant') {
+    return message
+  }
+
+  const textContent = message.textContent || message.content || ''
+  return {
+    ...message,
+    textContent,
+    textHtml: textContent ? renderMarkdown(textContent) : '',
+    thinkingHtml: message.thinkingSummary ? renderLiveHtml(message.thinkingSummary) : '',
+    _previewCollapsed: message.previewHtml ? (message._previewCollapsed ?? true) : message._previewCollapsed,
+  }
+}
+
 function previewScreenshot(url: string) {
   window.open(url, '_blank')
 }
@@ -1450,6 +1623,13 @@ function resetLiveAgentStream() {
   liveClock.value = Date.now()
   lastStreamEventAt.value = 0
   lastProgressEventAt.value = 0
+  pendingStreamRender = ''
+  pendingStreamOmitted = 0
+  lastStreamFlushAt = 0
+  if (_streamFlushTimer) {
+    clearTimeout(_streamFlushTimer)
+    _streamFlushTimer = null
+  }
 }
 
 function pushLiveActivity(label: string, description: string, tone: LiveActivityTone = 'default') {
@@ -1504,6 +1684,48 @@ function waitForStreamPaint(): Promise<void> {
   })
 }
 
+let pendingStreamRender = ''
+let pendingStreamOmitted = 0
+let lastStreamFlushAt = 0
+let _streamFlushTimer: ReturnType<typeof setTimeout> | null = null
+
+function flushLiveStream(force = false) {
+  if (!pendingStreamRender && !pendingStreamOmitted && !force) return false
+
+  const now = Date.now()
+  if (!force && now - lastStreamFlushAt < LIVE_STREAM_FLUSH_MS) {
+    if (!_streamFlushTimer) {
+      _streamFlushTimer = setTimeout(() => {
+        _streamFlushTimer = null
+        flushLiveStream(true)
+      }, LIVE_STREAM_FLUSH_MS - (now - lastStreamFlushAt))
+    }
+    return false
+  }
+
+  if (_streamFlushTimer) {
+    clearTimeout(_streamFlushTimer)
+    _streamFlushTimer = null
+  }
+
+  lastStreamFlushAt = now
+  codingStore.streamContent = buildTailDisplay(pendingStreamRender, pendingStreamOmitted, '执行日志')
+  nextTick(() => scrollToBottom())
+  return true
+}
+
+function appendLiveStreamChunk(chunk: string, force = false) {
+  const next = appendTailBuffer(
+    pendingStreamRender,
+    pendingStreamOmitted,
+    chunk,
+    LIVE_STREAM_VISIBLE_LIMIT,
+  )
+  pendingStreamRender = next.tail
+  pendingStreamOmitted = next.omitted
+  return flushLiveStream(force)
+}
+
 let _scrollTimer: ReturnType<typeof setTimeout> | null = null
 function scrollToBottom() {
   // Debounce scroll to avoid animation stacking during rapid SSE events
@@ -1553,7 +1775,12 @@ onUnmounted(() => {
   height: 100vh;
   display: flex;
   flex-direction: column;
-  background: var(--t-bg-base);
+  position: relative;
+  background:
+    radial-gradient(circle at top left, rgba(99, 102, 241, 0.1), transparent 26%),
+    radial-gradient(circle at top right, rgba(16, 185, 129, 0.06), transparent 22%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 18%),
+    var(--t-bg-base);
   color: var(--t-text-primary);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
 }
@@ -1565,14 +1792,19 @@ onUnmounted(() => {
   overflow: hidden;
   --workspace-sidebar-width: 228px;
   --preview-panel-width: 480px;
+  min-height: 0;
 }
 
 /* ============ Workspace Sidebar ============ */
 .workspace-sidebar {
+  position: relative;
   width: var(--workspace-sidebar-width);
   flex-shrink: 0;
   border-right: 1px solid var(--t-border-subtle);
-  background: var(--t-bg-base);
+  background:
+    linear-gradient(180deg, rgba(99, 102, 241, 0.08), transparent 18%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 32%),
+    var(--t-bg-base);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -1599,7 +1831,7 @@ onUnmounted(() => {
 .sidebar-list {
   flex: 1;
   overflow-y: auto;
-  padding: 8px 10px;
+  padding: 10px 12px 16px;
   transition: padding 0.22s ease;
 }
 
@@ -1607,10 +1839,16 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 8px 10px 6px;
+  padding: 10px 10px 7px;
   cursor: pointer;
   user-select: none;
-  margin-top: 4px;
+  margin-top: 8px;
+  border-radius: 12px;
+  transition: background 0.2s ease, color 0.2s ease;
+}
+
+.sidebar-group-header:hover {
+  background: rgba(255, 255, 255, 0.03);
 }
 
 .sidebar-group-header:first-child {
@@ -1633,9 +1871,9 @@ onUnmounted(() => {
 .sidebar-group-count {
   font-size: 10px;
   color: var(--t-text-muted);
-  background: var(--t-border-subtle);
-  padding: 1px 6px;
-  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 2px 7px;
+  border-radius: 999px;
   min-width: 18px;
   text-align: center;
 }
@@ -1652,23 +1890,26 @@ onUnmounted(() => {
 }
 
 .sidebar-ws-item {
-  padding: 10px 12px;
-  border-radius: 12px;
+  padding: 12px 12px 10px;
+  border-radius: 16px;
   cursor: pointer;
-  margin-bottom: 4px;
-  border: 1px solid transparent;
-  transition: all 0.2s ease;
+  margin-bottom: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  background: rgba(255, 255, 255, 0.01);
+  transition: all 0.22s ease;
 }
 
 .sidebar-ws-item:hover {
-  background: var(--t-brand-subtle);
-  border-color: var(--t-brand-subtle);
+  transform: translateY(-1px);
+  background: rgba(99, 102, 241, 0.08);
+  border-color: rgba(129, 140, 248, 0.18);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.18);
 }
 
 .sidebar-ws-item.active {
-  background: var(--t-bg-elevated);
-  border-color: var(--t-brand-glow);
-  box-shadow: 0 0 0 1px var(--t-brand-subtle) inset;
+  background: linear-gradient(180deg, rgba(99, 102, 241, 0.16), rgba(99, 102, 241, 0.08));
+  border-color: rgba(129, 140, 248, 0.34);
+  box-shadow: 0 0 0 1px rgba(165, 180, 252, 0.18) inset, 0 14px 28px rgba(30, 41, 59, 0.22);
 }
 
 .sidebar-ws-name {
@@ -1677,8 +1918,9 @@ onUnmounted(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  margin-bottom: 3px;
-  font-weight: 500;
+  margin-bottom: 4px;
+  font-weight: 600;
+  line-height: 1.4;
 }
 
 .sidebar-ws-code {
@@ -1867,6 +2109,9 @@ onUnmounted(() => {
   flex-direction: column;
   overflow: hidden;
   min-width: 0;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 20%),
+    radial-gradient(circle at top, rgba(99, 102, 241, 0.08), transparent 34%);
 }
 
 /* ============ Header ============ */
@@ -1874,17 +2119,25 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 20px;
+  padding: 0 22px;
   border-bottom: 1px solid var(--t-border-subtle);
-  background: var(--t-bg-base);
-  height: 52px;
+  background: rgba(10, 14, 28, 0.78);
+  backdrop-filter: blur(18px);
+  min-height: 64px;
   flex-shrink: 0;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.12);
 }
 
 .header-left {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.header-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .header-title {
@@ -1896,6 +2149,13 @@ onUnmounted(() => {
   background-clip: text;
   margin: 0;
   letter-spacing: -0.01em;
+}
+
+.header-subtitle {
+  margin: 0;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: var(--t-text-muted);
 }
 
 .header-right {
@@ -1943,10 +2203,81 @@ onUnmounted(() => {
 .chat-area {
   flex: 1;
   overflow-y: auto;
-  padding: 28px 0;
+  padding: 22px 0 28px;
   display: flex;
   flex-direction: column;
   align-items: center;
+}
+
+.workspace-overview {
+  width: 100%;
+  max-width: 860px;
+  margin: 0 28px 24px;
+  padding: 22px 24px;
+  border-radius: 22px;
+  border: 1px solid rgba(129, 140, 248, 0.16);
+  background:
+    radial-gradient(circle at top right, rgba(99, 102, 241, 0.18), transparent 34%),
+    linear-gradient(135deg, rgba(15, 23, 42, 0.92), rgba(17, 24, 39, 0.84));
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.22);
+}
+
+.workspace-overview-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.workspace-overview-kicker {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(191, 219, 254, 0.7);
+}
+
+.workspace-overview-title {
+  margin: 0;
+  font-size: 26px;
+  line-height: 1.2;
+  letter-spacing: -0.03em;
+  color: #f8fbff;
+}
+
+.workspace-overview-desc {
+  margin: 0;
+  max-width: 620px;
+  font-size: 14px;
+  line-height: 1.75;
+  color: rgba(226, 232, 240, 0.78);
+}
+
+.workspace-overview-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.workspace-overview-metric {
+  padding: 14px 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.workspace-overview-metric-label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 11px;
+  color: rgba(191, 219, 254, 0.68);
+}
+
+.workspace-overview-metric-value {
+  font-size: 14px;
+  color: #f8fbff;
+  letter-spacing: -0.01em;
 }
 
 /* ============ Welcome ============ */
@@ -2053,9 +2384,21 @@ onUnmounted(() => {
 /* ============ Messages ============ */
 .message {
   width: 100%;
-  max-width: 780px;
+  max-width: 860px;
   padding: 0 28px;
-  margin-bottom: 24px;
+  margin-bottom: 26px;
+}
+
+.message-history-fold {
+  width: min(860px, calc(100% - 56px));
+  margin: 0 28px 18px;
+  padding: 12px 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(129, 140, 248, 0.18);
+  background: rgba(99, 102, 241, 0.08);
+  color: var(--t-text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .user-msg,
@@ -2096,24 +2439,29 @@ onUnmounted(() => {
 }
 
 .user-bubble {
-  background: var(--t-bg-elevated);
-  border: 1px solid var(--t-border-subtle);
-  border-radius: 14px;
-  padding: 14px 18px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02));
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 18px;
+  padding: 16px 18px;
   color: var(--t-text-primary);
   font-size: 14px;
   line-height: 1.65;
   white-space: pre-wrap;
   word-break: break-word;
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.12);
 }
 
 .assistant-bubble {
-  padding: 6px 0;
+  padding: 16px 18px;
   font-size: 14px;
   line-height: 1.75;
   color: var(--t-text-primary);
-  border-left: 2px solid var(--t-brand-glow);
-  padding-left: 16px;
+  border: 1px solid rgba(129, 140, 248, 0.16);
+  border-radius: 20px;
+  background:
+    linear-gradient(180deg, rgba(129, 140, 248, 0.09), rgba(15, 23, 42, 0.04) 36%),
+    rgba(8, 11, 22, 0.46);
+  box-shadow: 0 16px 32px rgba(15, 23, 42, 0.12);
 }
 
 /* ============ Pipeline Steps ============ */
@@ -2551,9 +2899,10 @@ onUnmounted(() => {
 /* ============ Input Area ============ */
 .input-area {
   flex-shrink: 0;
-  padding: 14px 28px 18px;
+  padding: 16px 28px 20px;
   border-top: 1px solid var(--t-border-subtle);
-  background: var(--t-bg-base);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.01), rgba(15, 23, 42, 0.1));
+  backdrop-filter: blur(16px);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -2564,12 +2913,13 @@ onUnmounted(() => {
   align-items: flex-end;
   gap: 8px;
   width: 100%;
-  max-width: 780px;
-  background: var(--t-bg-elevated);
-  border: 1px solid var(--t-border-subtle);
-  border-radius: 16px;
-  padding: 10px 14px;
+  max-width: 860px;
+  background: rgba(10, 14, 28, 0.78);
+  border: 1px solid rgba(129, 140, 248, 0.14);
+  border-radius: 22px;
+  padding: 12px 14px;
   transition: all 0.3s ease;
+  box-shadow: 0 18px 30px rgba(15, 23, 42, 0.18);
 }
 
 .input-wrapper:focus-within {
@@ -2631,7 +2981,7 @@ onUnmounted(() => {
 /* ============ Attachment Preview ============ */
 .attachment-preview {
   width: 100%;
-  max-width: 780px;
+  max-width: 860px;
   margin-bottom: 10px;
   padding: 10px 14px;
   background: var(--t-bg-elevated);
@@ -2770,7 +3120,10 @@ onUnmounted(() => {
   width: var(--preview-panel-width);
   flex-shrink: 0;
   border-left: 1px solid var(--t-border-subtle);
-  background: var(--t-bg-base);
+  background:
+    radial-gradient(circle at top, rgba(99, 102, 241, 0.14), transparent 28%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 24%),
+    var(--t-bg-base);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -2781,9 +3134,10 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 14px;
+  padding: 12px 16px;
   border-bottom: 1px solid var(--t-border-subtle);
-  background: var(--t-bg-elevated);
+  background: rgba(10, 14, 28, 0.54);
+  backdrop-filter: blur(14px);
 }
 
 .preview-panel-heading {
@@ -2820,6 +3174,61 @@ onUnmounted(() => {
     radial-gradient(circle at top, rgba(99, 102, 241, 0.08), transparent 36%),
     linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 58%),
     var(--t-bg-base);
+}
+
+.preview-panel-stage {
+  flex: 1;
+  padding: 18px;
+  background:
+    radial-gradient(circle at top, rgba(129, 140, 248, 0.16), transparent 32%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 40%);
+}
+
+.preview-stage-shell {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  border-radius: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(7, 10, 20, 0.52);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 20px 40px rgba(15, 23, 42, 0.18);
+  overflow: hidden;
+}
+
+.preview-stage-shell.is-mobile-shell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background:
+    radial-gradient(circle at top, rgba(191, 219, 254, 0.16), transparent 24%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(15, 23, 42, 0.22));
+}
+
+.preview-device-frame {
+  position: relative;
+  display: flex;
+  width: min(100%, 420px);
+  height: 100%;
+  max-height: 100%;
+  padding: 24px 12px 14px;
+  border-radius: 32px;
+  background: linear-gradient(180deg, rgba(18, 24, 38, 0.98), rgba(6, 8, 16, 0.98));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 26px 48px rgba(15, 23, 42, 0.3);
+}
+
+.preview-device-speaker {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 104px;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  z-index: 2;
 }
 
 .preview-panel-loading {
@@ -2867,5 +3276,6 @@ onUnmounted(() => {
   width: 100%;
   border: none;
   background: #fff;
+  border-radius: 18px;
 }
 </style>

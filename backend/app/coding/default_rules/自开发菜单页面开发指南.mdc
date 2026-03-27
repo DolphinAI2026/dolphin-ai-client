@@ -1,0 +1,68 @@
+---
+description: aPaaS 自开发菜单页面规则
+globs:
+alwaysApply: true
+---
+# 自开发菜单页面开发指南
+
+## 适用范围
+
+- 适用于 PC 菜单页面、移动端页面等“页面型”前端自开发工作区。
+- 这份规则主要约束页面目录结构、接口请求方式和平台对接协议。
+
+## 目录与职责
+
+- `src/apaas.json`：页面元数据与平台对接配置，优先保持已有字段和 code 不变。
+- `src/index.js`：页面导出入口，保持脚手架的导出结构。
+- `src/form-page/`：主要页面实现。
+- `src/api/`：接口定义与请求封装。
+- `src/form-page-local/`：国际化文案。
+- `src/mixin/`：平台提供的通用 mixin，优先复用。
+
+## 页面实现建议
+
+1. 优先基于脚手架已有页面文件扩展，不要随意改目录协议。
+2. 默认使用宿主已提供的 Vue 2.7 和 Element UI，不要重新引入整套库。
+3. 列表型页面优先采用查询区 + 表格/卡片区 + 分页的结构。
+4. 国际化文案优先放入 `form-page-local`，不要把大量中文文案直接散落在业务代码里。
+
+## 请求方式要求
+
+1. 接口请求优先使用宿主的 `$request`。
+2. URL 查询参数直接拼到 `url` 上并覆盖。
+3. body 参数直接通过 `params` 传递。
+4. 保留 `.asyncThen(...).asyncErrorCatch(...)` 这一类平台常见调用风格时，优先沿用项目现有写法。
+
+### 示例模式
+
+```js
+this.$request({
+  ...Api.GET_ORDER_LIST,
+  url: Api.GET_ORDER_LIST.url + `?pageNum=${currentPage}&pageSize=${pageSize}`,
+  params
+})
+  .asyncThen(
+    (resp) => {
+      if (resp.code === "ok") {
+        this.tableData = resp.table || [];
+        this.pagination.total = resp.total || 0;
+      } else {
+        this.$message.error(resp.message || "获取列表失败");
+      }
+    },
+    (error) => {
+      console.error("获取列表失败", error);
+      this.$message.error("获取列表失败");
+    }
+  )
+  .asyncErrorCatch((error) => {
+    console.error("获取列表请求异常", error);
+    this.$message.error("获取列表请求异常");
+  });
+```
+
+## 生成代码时的默认偏好
+
+- 先读 `src/apaas.json`、`src/index.js`、`src/form-page/`、`src/api/` 再写代码。
+- 不要随意改已有配置项的 `code`、入口名和平台注册协议。
+- 输出更像真实业务页面，而不是纯演示 demo。
