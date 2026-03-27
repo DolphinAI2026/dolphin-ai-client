@@ -945,21 +945,67 @@ WEB_LIST_VIEW_PROMPT = BASE_SYSTEM_PROMPT + """
 
 ## 当前场景：Web端自开发列表视图
 
-你正在生成一个自定义列表视图，基于ListEngine实现。
+你正在生成一个自定义列表视图，基于 ListEngine 实现，并且必须对齐 `LIST_VIEW` 工程协议。
 
 ### 项目结构
 ```
-src/custom/apaas-custom-list/
+src/
 ├── apaas.json
 ├── index.js
-└── custom-list/
-    └── custom-list-view.vue
+├── form-view/
+│   └── apaas-custom-xxx.vue
+└── form-view-local/
+    ├── index.js
+    ├── zh-CN/index.js
+    └── en-US/index.js
+```
+
+### apaas.json
+```json
+{
+  "entry": "index.js",
+  "templateType": "LIST_VIEW",
+  "router": {},
+  "customWidgetList": [],
+  "list": {
+    "apaas-custom-xxx": {
+      "renderLogic": "FORM_LIST_VIEW",
+      "desc": "描述",
+      "status": "ENABLE"
+    }
+  },
+  "copyAssets": ["public/form-view/form-view-xxx"],
+  "outputName": "form-view-xxx"
+}
+```
+
+### 入口文件 (index.js)
+```javascript
+import './form-view-local/index.js'
+import CustomListView from './form-view/apaas-custom-xxx.vue'
+
+const install = function(Vue) {
+  Vue.component('apaas-custom-xxx', CustomListView)
+}
+
+export default { install }
 ```
 
 ### 列表组件模板
 ```vue
 <template>
-  <x-list-view :listEngine="listEngine"></x-list-view>
+  <div class="custom-list-view">
+    <x-list-view :listEngine="listEngine">
+      <template #listTable>
+        <x-list-table
+          ref="xListTableView"
+          :treeViewListEngine="listEngine"
+          :treeViewInAssoc="true"
+          :pageViewComponents="listEngine.listDataControl.tablePanelComponents"
+        ></x-list-table>
+      </template>
+    </x-list-view>
+  </div>
 </template>
 <script>
 export default {
@@ -982,30 +1028,11 @@ export default {
   - `.executeActionWithPromise(name, event)` - 执行异步动作
   - `.executeActionWithSync(name, event)` - 执行同步动作
 
-### apaas.json
-```json
-{
-  "entry": "index.js",
-  "list": {
-    "apaas-custom-list-view": {
-      "renderLogic": "FORM_LIST_VIEW",
-      "desc": "描述",
-      "status": "ENABLE"
-    }
-  },
-  "outputName": "apaas-custom-list"
-}
-```
-
-### 入口文件 (index.js) - 必须包含 install 方法
-```javascript
-import CustomListView from './custom-list/custom-list-view.vue'
-
-const install = function(Vue, opts) {
-  Vue.component('apaas-custom-list-view', CustomListView)
-}
-export default { install }
-```
+### 关键约束
+- `templateType` 必须是 `LIST_VIEW`
+- 组件名必须以 `apaas-custom-` 开头
+- 不要套用表单组件 7 场景规则
+- 必须提供 `form-view-local` 国际化入口
 """
 
 # ============================================================
@@ -1517,46 +1544,53 @@ export default {
 # ============================================================
 WEB_LAYOUT_PROMPT = BASE_SYSTEM_PROMPT + """
 
-## 当前场景：Web端自定义布局（LAYOUT）
+## 当前场景：Web端自定义布局（PAGE_LAYOUT）
 
 你正在生成一个 **自定义应用布局**，基于平台的 LayoutEngine 开发。布局组件控制应用的整体页面结构（头部、侧栏菜单、内容区），用户在应用管理中选择自定义布局后生效。
 
 ### 项目结构
 ```
 src/
-├── apaas.json          # 元数据（含 layout 数组）
-├── index.js            # Vue 插件入口（注册到 LayoutEngine）
-├── Home.vue            # 布局主组件
-└── components/         # 自定义子组件（可选）
+├── apaas.json                        # 元数据（含 templateType/layout/copyAssets）
+├── index.js                          # Vue 插件入口（注册到 LayoutEngine）
+├── form-layout/
+│   └── apaas-custom-xxx.vue          # 布局主组件
+├── form-layout-local/
+│   └── index.js                      # 国际化或本地扩展（可选）
+└── components/                       # 自定义子组件（可选）
 ```
 
 ### apaas.json
 ```json
 {
   "entry": "index.js",
-  "copyAssets": [],
+  "templateType": "PAGE_LAYOUT",
+  "router": {},
+  "customWidgetList": [],
   "layout": [
     {
-      "name": "apaas-custom-layout-xxx",
+      "name": "apaas-custom-xxx",
       "desc": "自定义布局描述",
       "status": "ENABLE"
     }
   ],
-  "outputName": "apaas-custom-layout-xxx"
+  "copyAssets": ["public/form-layout/xxx"],
+  "outputName": "form-layout-xxx"
 }
 ```
 
 ### 入口注册 (index.js)
 ```javascript
-import Home from './Home.vue'
+import './form-layout-local/index.js'
+import LayoutComponent from './form-layout/apaas-custom-xxx.vue'
 
 const install = function(Vue, opts) {
   if (Vue.LayoutEngine) {
     const layoutEngine = Vue.LayoutEngine.getInstance(
       Vue.LayoutEngine.currentLayoutId
     )
-    Vue.component('apaas-custom-layout-xxx', Home)
-    layoutEngine.registerLayoutComponent(Home)
+    Vue.component('apaas-custom-xxx', LayoutComponent)
+    layoutEngine.registerLayoutComponent(LayoutComponent)
   }
 }
 export default { install }
@@ -1573,7 +1607,7 @@ export default { install }
   - `defaultActive` - 默认激活菜单
   - `menuTreeData` - 菜单树数据
 
-### 布局主组件模板 (Home.vue)
+### 布局主组件模板
 ```vue
 <template>
   <x-app-layout :layout-engine="layoutEngine" :is-collapse="isCollapse">
@@ -1614,6 +1648,9 @@ export default { install }
 - 通过 `layoutEngine.layoutDataControl` 访问应用和菜单数据
 - 不要硬编码菜单数据，从 `menuConfig` 动态获取
 - 组件名必须以 `apaas-custom-` 开头
+- **不要套用 FORM_COMPONENT 的 7 个渲染场景**
+- **不要默认生成 `widget.config.js` / `editor.config.js` / `setting.vue`**
+- 优先修改 `src/form-layout/*.vue`、`src/index.js`、`src/apaas.json`
 """
 
 # ============================================================
@@ -1735,83 +1772,78 @@ this.$request({
 # ============================================================
 WEB_PLUGIN_PROMPT = BASE_SYSTEM_PROMPT + """
 
-## 当前场景：Web端自开发插件（Plugin）
+## 当前场景：Web端自开发插件（FRONTEND_PLUGIN）
 
-你正在生成一个 **平台扩展插件**，基于 ExtensionEngine 注册自定义扩展能力（如自定义 Tab 页、自定义操作面板等）。
+你正在生成一个 **平台扩展插件**，必须对齐 `FRONTEND_PLUGIN` 协议。插件入口是 `admin.js / app.js / mobile.js`，每个入口都要默认导出 `{ install, activate, staticComponents }`。
 
 ### 项目结构
 ```
 src/
-├── apaas.json              # 元数据（含 extensionConfigList）
-├── index.js                # Vue 插件入口（注册到 ExtensionEngine）
+├── apaas.json              # 元数据（templateType/code/admin/app/mobile）
+├── admin.js                # 管理端入口
+├── app.js                  # PC 应用端入口
+├── mobile.js               # 移动端入口
 ├── extension.js            # 扩展配置定义（code、blocks、extensionMethods）
 ├── tab-config.js           # Tab 配置（返回 Tab 列表）
-├── local/
+├── plugin-local/
 │   └── index.js            # i18n 国际化注册
 └── custom-tab/
-    ├── index.js            # 组件聚合导出
     └── custom-panel.vue    # 自定义面板组件
 ```
 
 ### apaas.json
 ```json
 {
-  "entry": "index.js",
-  "copyAssets": [],
-  "extensionConfigList": [
-    {
-      "code": "CUSTOM_XXX_EXTENSION",
-      "text": "扩展描述"
-    }
-  ],
-  "outputName": "apaas-custom-xxx"
+  "copyAssets": ["public/frontend-plugin/frontend-plugin-xxx"],
+  "templateType": "FRONTEND_PLUGIN",
+  "code": "PLUGIN_XXX",
+  "name": "",
+  "description": "",
+  "outputName": "frontend-plugin-xxx",
+  "admin": "admin.js",
+  "app": "app.js",
+  "mobile": "mobile.js",
+  "extraConfig": {}
 }
 ```
 
-### 入口注册 (index.js)
+### 入口注册 (admin.js / app.js / mobile.js)
 ```javascript
-import customTabList from './custom-tab/index.js'
+import './plugin-local/index.js'
 import extensionConfig from './extension.js'
-import registerI18n from './local/index.js'
+import CustomPanel from './custom-tab/custom-panel.vue'
 
-const install = function(Vue, opts) {
-  registerI18n()  // 注册国际化
-
-  // 注册组件
-  customTabList.forEach(component => {
-    Vue.component(component.name, component)
-  })
-
-  // 注册扩展配置
-  if (Vue._extensionEngine) {
-    Vue._extensionEngine.registerExtensionConfig(extensionConfig)
+const activateExtension = () => {
+  const engine = window?.Vue?._extensionEngine
+  if (engine && typeof engine.registerExtensionConfig === 'function') {
+    engine.registerExtensionConfig(extensionConfig)
   }
 }
-export default { install }
+
+const install = function(context, hookManager, definition) {
+  activateExtension()
+}
+
+const activate = function(context, hookManager, definition) {
+  activateExtension()
+}
+
+const staticComponents = [CustomPanel]
+
+export default { install, activate, staticComponents }
 ```
 
-### ExtensionEngine API
-- `Vue._extensionEngine.registerExtensionConfig(config)` - 注册扩展
+### 插件生命周期
+- `install(context, hookManager, definition)` - 安装期执行
+- `activate(context, hookManager, definition)` - 启用期执行
+- `staticComponents` - 插件静态组件列表，组件必须包含稳定的 `name`
 
 ### 扩展配置结构 (extension.js)
 ```javascript
 const extensionConfig = {
-  code: 'CUSTOM_XXX_EXTENSION',     // 唯一标识，与 apaas.json 一致
+  code: 'PLUGIN_XXX',               // 唯一标识，与 apaas.json 一致
   name: '扩展名称',
-  blocks: [                          // 功能块列表
-    {
-      code: 'CustomTabExtension',
-      name: '功能描述',
-      funs: [                        // 功能点列表
-        {
-          code: 'CustomTabExtension',
-          abbr: '__xxx__',           // 缩写标识
-          name: '',
-          versions: ['TRIAL_EDITION', 'TEAM_EDITION', 'STANDARD_EDITION', 'PREMIUM_EDITION']
-        }
-      ]
-    }
-  ],
+  blocks: [],
   versions: ['TRIAL_EDITION', 'TEAM_EDITION', 'STANDARD_EDITION', 'PREMIUM_EDITION'],
   enable: true,
   extensionMethods: {                // 扩展方法注册
@@ -1827,37 +1859,36 @@ const extensionConfig = {
 export function getCustomTabConfig() {
   return [
     {
-      code: 'customPanel',            // Tab 唯一标识
-      title: '面板标题',              // 显示名（或 i18n key）
-      componentName: 'custom-panel',  // 必须与 Vue.component 注册名一致
+      code: 'customPanel',
+      title: '面板标题',
+      componentName: 'apaas-plugin-panel',
       resourceCode: 'APP_INFORMATION' // 资源权限码
     }
   ]
 }
 ```
 
-### i18n 国际化 (local/index.js)
+### i18n 国际化 (plugin-local/index.js)
 ```javascript
-const messages = {
-  'zh-CN': { plugin: { panel: '自定义面板' } },
-  'en-US': { plugin: { panel: 'Custom Panel' } }
-}
+import zhLocaleModule from './zh-CN/index.js'
+import enLocaleModule from './en-US/index.js'
 
-const registerI18n = () => {
-  ['zh-CN', 'en-US'].forEach(locale => {
-    window.APaaSSDK.context.globalVueI18n?.mergeLocaleMessage(locale, messages[locale])
-  })
+const mergeLocaleMessage =
+  window.df?.getI18n?.().mergeLocaleMessage?.bind(window.df.getI18n()) ||
+  window.APaaSSDK?.context?.globalVueI18n?.mergeLocaleMessage?.bind(window.APaaSSDK.context.globalVueI18n)
+
+if (mergeLocaleMessage) {
+  mergeLocaleMessage('zh-CN', zhLocaleModule)
+  mergeLocaleMessage('en-US', enLocaleModule)
 }
-export default registerI18n
 ```
 
 ### 关键约束
+- `templateType` 必须是 `FRONTEND_PLUGIN`
 - 扩展 `code` 必须唯一且稳定，部署后不可更改
-- `tab-config.js` 中的 `componentName` 必须与 `Vue.component()` 注册的 kebab-case 名一致
+- `tab-config.js` 中的 `componentName` 必须与 `staticComponents` 里组件的 `name` 一致
 - 必须支持 i18n（至少 zh-CN 和 en-US）
-- `versions` 数组控制在哪些平台版本中可用
-- `extensionMethods` 的命名空间（如 `'custom-tab'`）由平台扩展点定义
-- 组件名必须以 `apaas-custom-` 开头
+- `admin.js / app.js / mobile.js` 必须同时存在
 """
 
 # ============================================================

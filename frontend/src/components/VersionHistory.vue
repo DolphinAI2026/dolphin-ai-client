@@ -2,7 +2,7 @@
   <div class="version-history">
     <div class="vh-header">
       <h3>版本历史</h3>
-      <button class="btn-refresh" @click="loadVersions" :disabled="loading">
+      <button class="btn-refresh" @click="$emit('refresh')" :disabled="loading">
         {{ loading ? '加载中...' : '刷新' }}
       </button>
     </div>
@@ -43,7 +43,6 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
 
 interface VersionInfo {
   id: number
@@ -67,6 +66,7 @@ withDefaults(defineProps<Props>(), {
 defineEmits<{
   preview: [version: number]
   rollback: [version: number]
+  refresh: []
 }>()
 
 const sourceLabel = (source: string): string => {

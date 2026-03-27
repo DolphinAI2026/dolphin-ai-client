@@ -7,8 +7,13 @@
           <el-icon><ArrowLeft /></el-icon>
         </el-button>
         <h3 class="header-title">复杂开发智能体</h3>
-        <el-tag v-if="codingStore.workspace" size="small" type="info">
-          {{ codingStore.workspace.project_name }}
+        <el-tag
+          v-if="codingStore.workspace"
+          size="small"
+          type="info"
+          :title="workspaceTooltip(codingStore.workspace)"
+        >
+          {{ workspaceDisplayName(codingStore.workspace) }}
         </el-tag>
       </div>
       <div class="header-right">
@@ -53,7 +58,7 @@
       </div>
     </header>
 
-    <div class="coding-body">
+    <div class="coding-body" :class="codingBodyClasses">
       <!-- Left Sidebar: Workspace List -->
       <aside class="workspace-sidebar">
         <div class="sidebar-section-header">
@@ -78,7 +83,8 @@
                 :class="{ active: codingStore.workspace?.id === ws.id }"
                 @click="openExistingWorkspace(ws)"
               >
-                <div class="sidebar-ws-name">{{ ws.project_name }}</div>
+                <div class="sidebar-ws-name" :title="workspaceTooltip(ws)">{{ workspaceDisplayName(ws) }}</div>
+                <div v-if="workspaceCodeName(ws)" class="sidebar-ws-code">{{ workspaceCodeName(ws) }}</div>
                 <div class="sidebar-ws-meta">
                   <el-button
                     size="small"
@@ -99,7 +105,7 @@
 
       <!-- Main Content -->
       <div class="main-content">
-    <div class="chat-area" ref="chatAreaRef">
+    <div class="chat-area">
       <!-- Welcome message when no workspace -->
       <div v-if="!codingStore.workspace && codingStore.messages.length === 0" class="welcome">
         <div class="welcome-icon">&#x2728;</div>
@@ -161,6 +167,24 @@
               <div class="screenshot-header">Debug 截图</div>
               <img v-for="(url, i) in msg.screenshots" :key="i" :src="url" class="debug-screenshot" @click="previewScreenshot(url)" />
             </div>
+            <details v-if="msg.thinkingSummary" class="thinking-summary">
+              <summary class="thinking-summary-header">思路摘要</summary>
+              <div class="thinking-summary-body" v-html="renderLiveHtml(msg.thinkingSummary)"></div>
+            </details>
+            <details v-if="msg.activityFeed && msg.activityFeed.length" class="thinking-summary execution-trace">
+              <summary class="thinking-summary-header">执行过程</summary>
+              <div class="agent-activity-feed">
+                <div
+                  v-for="item in msg.activityFeed"
+                  :key="item.id"
+                  class="agent-activity-item"
+                  :class="item.tone"
+                >
+                  <span class="agent-activity-badge">{{ item.label }}</span>
+                  <span class="agent-activity-text">{{ item.description }}</span>
+                </div>
+              </div>
+            </details>
             <!-- Text content -->
             <div v-if="msg.textContent" class="msg-text" v-html="renderMarkdown(msg.textContent)"></div>
             <!-- 内嵌组件预览 -->
@@ -204,10 +228,33 @@
                 <span class="step-label">{{ step.label }}</span>
               </div>
             </div>
+            <div v-if="streamThinkingRaw || visibleLiveActivities.length || currentRunningStep" class="agent-live-panel">
+              <div class="agent-live-header">
+                <span class="agent-live-pulse"></span>
+                <span>{{ liveStatusLabel }}</span>
+              </div>
+              <div v-if="liveStatusMeta" class="agent-live-meta">{{ liveStatusMeta }}</div>
+              <div v-if="renderedThinkingHtml" class="agent-thinking-card">
+                <div class="agent-thinking-title">当前思路</div>
+                <div class="agent-thinking-text" v-html="renderedThinkingHtml"></div>
+              </div>
+              <div v-if="visibleLiveActivities.length" class="agent-activity-feed">
+                <div
+                  v-for="item in visibleLiveActivities"
+                  :key="item.id"
+                  class="agent-activity-item"
+                  :class="item.tone"
+                >
+                  <span class="agent-activity-badge">{{ item.label }}</span>
+                  <span class="agent-activity-text">{{ item.description }}</span>
+                </div>
+              </div>
+            </div>
             <!-- Streaming text -->
-            <div v-if="codingStore.streamContent" class="msg-text" v-html="renderMarkdown(codingStore.streamContent)"></div>
-            <span v-if="codingStore.streamContent" class="typing-cursor">&#9608;</span>
-            <div v-if="!codingStore.streamContent && !codingStore.currentPipelineSteps.some(s => s.status === 'running')" class="thinking-dots">
+            <div v-if="codingStore.streamContent" class="stream-log-label">执行日志</div>
+            <div v-if="codingStore.streamContent" class="msg-text stream-log" v-html="renderedStreamHtml"></div>
+            <span v-if="codingStore.streamContent || renderedThinkingHtml" class="typing-cursor">&#9608;</span>
+            <div v-if="!codingStore.streamContent && !renderedThinkingHtml && !visibleLiveActivities.length && !codingStore.currentPipelineSteps.some(s => s.status === 'running')" class="thinking-dots">
               <span></span><span></span><span></span>
             </div>
           </div>
@@ -279,25 +326,39 @@
       </div>
 
       <!-- Preview Panel -->
-      <aside v-if="showPreviewPanel && previewUrl" class="preview-panel">
+      <aside v-if="showPreviewPanel" class="preview-panel" :class="previewPanelClasses">
         <div class="preview-panel-header">
-          <span class="preview-panel-title">📦 组件预览</span>
+          <div class="preview-panel-heading">
+            <span class="preview-panel-title">{{ previewPanelTitle }}</span>
+            <span v-if="codingStore.workspace" class="preview-panel-subtitle">{{ workspaceDisplayName(codingStore.workspace) }}</span>
+          </div>
           <div class="preview-panel-actions">
-            <el-button text size="small" @click="refreshPreview" title="刷新预览">
+            <el-button text size="small" :disabled="previewLoading" @click="refreshPreview" title="刷新预览">
               <el-icon><RefreshRight /></el-icon>
             </el-button>
-            <el-button text size="small" @click="showPreviewPanel = false" title="关闭">
+            <el-button text size="small" @click="closePreviewPanel" title="关闭">
               ✕
             </el-button>
           </div>
         </div>
+        <div v-if="previewLoading" class="preview-panel-loading">
+          <div class="preview-panel-loading-card">
+            <div class="preview-panel-loading-title">正在同步预览</div>
+            <div class="preview-panel-loading-desc">正在为当前工作区构建最新预览环境，请稍候。</div>
+          </div>
+        </div>
         <iframe
+          v-else-if="previewUrl"
           :key="previewKey"
           :src="previewUrl"
           class="preview-panel-iframe"
           frameborder="0"
           sandbox="allow-scripts allow-same-origin allow-popups"
         ></iframe>
+        <div v-else class="preview-panel-empty">
+          <div class="preview-panel-empty-title">预览尚未准备好</div>
+          <div class="preview-panel-empty-desc">点击上方“Debug 预览”后，这里会显示当前工作区的实时效果。</div>
+        </div>
       </aside>
 
     </div>
@@ -306,36 +367,126 @@
 
 <script setup lang="ts">
 import { API_PREFIX } from '@/utils/request'
-import { ref, computed, onMounted, nextTick, watch } from 'vue'
-import { useRouter, useRoute } from 'vue-router'
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ArrowLeft, FolderOpened, Upload, Menu, TopRight, Monitor, Plus, Setting, Paperclip, Goods, RefreshRight } from '@element-plus/icons-vue'
+import { ArrowLeft, FolderOpened, Upload, TopRight, Monitor, Plus, Paperclip, RefreshRight } from '@element-plus/icons-vue'
 import { useCodingStore } from '@/stores/coding'
-import type { PipelineStep, ChatMessage } from '@/stores/coding'
+import type { PipelineStep, ChatActivityItem, ChatMessage } from '@/stores/coding'
 import { useUserStore } from '@/stores/user'
 import { codingApi } from '@/api/coding'
 import type { GeneratedFile, WorkspaceInfo, UploadResult } from '@/api/coding'
+import { consumeSseResponse } from '@/utils/sse'
 import ThemeToggle from '@/components/ThemeToggle.vue'
 
-const router = useRouter()
 const route = useRoute()
 const codingStore = useCodingStore()
 const userStore = useUserStore()
 
 const userInput = ref('')
-const chatAreaRef = ref<HTMLElement>()
 const scrollAnchor = ref<HTMLElement>()
-
-// 页面类型：从 URL query 读取，page=页面开发，否则=组件开发
-const devType = computed(() => route.query.type === 'page' ? 'page' : 'component')
-const isPageDev = computed(() => devType.value === 'page')
 
 const existingWorkspaces = ref<WorkspaceInfo[]>([])
 const isPublishing = ref(false)
 const isDebugging = ref(false)
 const showPreviewPanel = ref(false)
+const previewLoading = ref(false)
 const previewUrl = ref<string | null>(null)
 const previewKey = ref(0) // 用于刷新 iframe
+const previewWorkspaceId = ref<string | null>(null)
+const previewProjectType = ref<string>('')
+const effectivePreviewProjectType = computed(() => previewProjectType.value || codingStore.workspace?.project_type || '')
+const previewPanelTitle = computed(() => {
+  const projectType = effectivePreviewProjectType.value
+  if (projectType === 'mobile-component') return '📱 移动端组件预览'
+  if (projectType === 'mobile-page') return '📱 移动端页面预览'
+  if (projectType === 'layout') return '📐 布局预览'
+  if (projectType === 'menu-page' || projectType === 'form-page') return '🖥️ 页面预览'
+  return '📦 组件预览'
+})
+const codingBodyClasses = computed(() => ({
+  'has-preview': showPreviewPanel.value,
+  'has-page-preview': showPreviewPanel.value && ['menu-page', 'form-page', 'layout'].includes(effectivePreviewProjectType.value),
+  'has-mobile-preview': showPreviewPanel.value && (effectivePreviewProjectType.value === 'mobile-page' || effectivePreviewProjectType.value === 'mobile-component'),
+}))
+const previewPanelClasses = computed(() => ({
+  'is-page-preview': ['menu-page', 'form-page', 'layout'].includes(effectivePreviewProjectType.value),
+  'is-mobile-preview': effectivePreviewProjectType.value === 'mobile-page' || effectivePreviewProjectType.value === 'mobile-component',
+}))
+const SSE_DEBUG = import.meta.env.DEV
+const streamThinkingRaw = ref('')
+const liveClock = ref(Date.now())
+const lastStreamEventAt = ref(0)
+const lastProgressEventAt = ref(0)
+
+type LiveActivityTone = ChatActivityItem['tone']
+type LiveActivityItem = ChatActivityItem
+
+const streamActivities = ref<LiveActivityItem[]>([])
+
+function normalizeThinkingText(raw: string): string {
+  return raw
+    .replace(/<\/?think>/g, '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+function renderLiveHtml(raw: string): string {
+  if (!raw) return ''
+  return raw
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\n/g, '<br>')
+}
+
+// 流式内容直接渲染，完成后再做 markdown
+const renderedStreamHtml = computed(() => renderLiveHtml(codingStore.streamContent))
+const visibleLiveActivities = computed(() => streamActivities.value.slice(-6))
+const currentRunningStep = computed(() => codingStore.currentPipelineSteps.find(step => step.status === 'running') || null)
+const effectiveThinkingText = computed(() => {
+  const normalized = normalizeThinkingText(streamThinkingRaw.value)
+  if (normalized) return normalized
+
+  const latestActivity = visibleLiveActivities.value[visibleLiveActivities.value.length - 1]
+  if (latestActivity) {
+    if (latestActivity.label === '处理中') {
+      return '我正在等待新的工具结果或下一步分析，很快继续推进。'
+    }
+    return `我正在处理这一步：${latestActivity.label}。${latestActivity.description || '很快会同步结果。'}`
+  }
+
+  if (currentRunningStep.value) {
+    return `我正在${currentRunningStep.value.label}，很快会继续同步具体动作。`
+  }
+
+  return ''
+})
+const renderedThinkingHtml = computed(() => renderLiveHtml(effectiveThinkingText.value))
+const liveStatusLabel = computed(() => {
+  if (normalizeThinkingText(streamThinkingRaw.value)) return 'AI 正在分析实现方案'
+  if (visibleLiveActivities.value.length) return 'AI 正在执行开发动作'
+  if (currentRunningStep.value) return `AI 正在${currentRunningStep.value.label}`
+  return 'AI 正在处理中'
+})
+const idleSeconds = computed(() => {
+  if (!codingStore.isProcessing || !lastProgressEventAt.value) return 0
+  return Math.max(0, Math.floor((liveClock.value - lastProgressEventAt.value) / 1000))
+})
+const liveStatusMeta = computed(() => {
+  if (!codingStore.isProcessing) return ''
+  if (idleSeconds.value < 4) return '持续接收执行反馈中'
+  if (currentRunningStep.value) {
+    return `已等待 ${idleSeconds.value}s，当前还在${currentRunningStep.value.label}阶段，通常是在等待模型返回下一步。`
+  }
+  if (visibleLiveActivities.value.length) {
+    return `已等待 ${idleSeconds.value}s，没有卡住，通常是在等待下一轮分析或命令执行完成。`
+  }
+  return `已等待 ${idleSeconds.value}s，连接仍然保持中。`
+})
 
 // ============ Workspace Grouping ============
 const collapsedGroups = ref(new Set<string>())
@@ -367,10 +518,31 @@ const groupedWorkspaces = computed(() => {
     if (!groups[mapping.key]) {
       groups[mapping.key] = { ...mapping, items: [] }
     }
-    groups[mapping.key].items.push(ws)
+    const group = groups[mapping.key]
+    if (group) {
+      group.items.push(ws)
+    }
   }
   return Object.values(groups).sort((a, b) => a.order - b.order)
 })
+
+function workspaceDisplayName(ws: WorkspaceInfo | null | undefined) {
+  if (!ws) return ''
+  return ws.display_name?.trim() || ws.project_name
+}
+
+function workspaceCodeName(ws: WorkspaceInfo | null | undefined) {
+  if (!ws || !ws.project_name) return ''
+  const displayName = workspaceDisplayName(ws)
+  return displayName !== ws.project_name ? ws.project_name : ''
+}
+
+function workspaceTooltip(ws: WorkspaceInfo | null | undefined) {
+  if (!ws) return ''
+  const displayName = workspaceDisplayName(ws)
+  const codeName = workspaceCodeName(ws)
+  return codeName ? `${displayName}\n${codeName}` : displayName
+}
 
 function toggleGroup(key: string) {
   if (collapsedGroups.value.has(key)) {
@@ -525,6 +697,10 @@ async function openWorkspaceById(wsId: string) {
     } catch {
       // ignore
     }
+
+    if (showPreviewPanel.value) {
+      await openPreviewForWorkspace(ws.id, { silent: true })
+    }
   } catch (error: any) {
     ElMessage.error(`打开工作区失败: ${error.message}`)
   }
@@ -646,6 +822,9 @@ async function sendMessage() {
   codingStore.addMessage({ role: 'user', content: displayMsg })
   codingStore.isProcessing = true
   codingStore.streamContent = ''
+  resetLiveAgentStream()
+  markLiveStreamEvent(false)
+  startLiveClock()
 
   await nextTick()
   scrollToBottom()
@@ -724,147 +903,171 @@ async function sendMessage() {
       throw new Error(errBody.detail || `HTTP ${response.status}`)
     }
 
-    const reader = response.body?.getReader()
-    const decoder = new TextDecoder()
     let fullContent = ''
     let changedFiles: string[] = []
     let currentScreenshots: string[] = []
+    let thinkingBuffer = ''
+    let thinkingSummary = ''
+    let expectingFreshThinking = true
+    debugSseLog('[SSE] Stream connected, reading events...')
 
-    if (reader) {
-      let buffer = ''
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
+    await consumeSseResponse(response, async ({ data }) => {
+      const payload = data.trim()
+      if (!payload || payload === '[DONE]') {
+        return
+      }
 
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() || '' // keep incomplete line in buffer
+      try {
+        const parsed = JSON.parse(payload)
+        debugSseLog(`[SSE] type=${parsed.type}`, parsed.type === 'heartbeat' ? '' : parsed)
+        markLiveStreamEvent(parsed.type !== 'heartbeat')
 
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue
-          const data = line.slice(6).trim()
-          if (!data || data === '[DONE]') continue
+        let shouldPaint = false
 
-          try {
-            const parsed = JSON.parse(data)
+        if (parsed.type === 'step') {
+          codingStore.updatePipelineStep(parsed.step, parsed.status, parsed.message)
 
-            if (parsed.type === 'step') {
-              // Pipeline step event
-              codingStore.updatePipelineStep(parsed.step, parsed.status, parsed.message)
+          const stepLabel = stepLabelForName(parsed.step)
+          if (stepLabel && parsed.status !== 'pending') {
+            const tone: LiveActivityTone = parsed.status === 'error'
+              ? 'error'
+              : (parsed.status === 'done' ? 'success' : 'default')
+            const description = parsed?.data?.message || parsed.message || stepStatusText(parsed.status)
+            pushLiveActivity(stepLabel, description, tone)
+          }
 
-              // If workspace was created, update store
-              if (parsed.step === 'create_workspace' && parsed.status === 'done' && parsed.data) {
-                // 后端返回 workspace_id，前端 store 需要 id
-                const wsData = {
-                  ...parsed.data,
-                  id: parsed.data.workspace_id || parsed.data.id,
-                }
-                codingStore.setWorkspace(wsData)
-                codingStore.workspacePath = parsed.data.workspace_path || null
-                localStorage.setItem('coding_last_workspace_id', wsData.id)
-                // 刷新左侧工作区列表
-                try { existingWorkspaces.value = await codingApi.listWorkspaces() } catch {}
-
-              }
-
-              // If serve started, update store
-              if (parsed.step === 'serve' && parsed.status === 'done' && parsed.data) {
-                codingStore.serveRunning = true
-                codingStore.serveUrl = parsed.data.url || null
-              }
-
-              scrollToBottom()
-            } else if (parsed.type === 'content') {
-              fullContent += parsed.content
-              codingStore.streamContent = fullContent
-              scrollToBottom()
-            } else if (parsed.type === 'agent_thinking_delta') {
-              // Streaming thinking delta — remove thinking indicator and append
-              fullContent = fullContent.replace(/\n🤔 AI 正在思考中...\n$/, '\n')
-              fullContent += parsed.content
-              codingStore.streamContent = fullContent
-              scrollToBottom()
-            } else if (parsed.type === 'agent_thinking') {
-              // Full thinking block (end of stream) — skip if delta already covered it
-              // Only add if fullContent doesn't already end with this content
-              if (!fullContent.endsWith(parsed.content)) {
-                fullContent += parsed.content + '\n'
-                codingStore.streamContent = fullContent
-              }
-              scrollToBottom()
-            } else if (parsed.type === 'agent_tool') {
-              // Agent tool call — remove thinking indicator and show tool
-              fullContent = fullContent.replace(/\n🤔 AI 正在思考中...\n$/, '\n')
-              const toolDisplay = parsed.tool_display || parsed.tool
-              const preview = parsed.input_preview || ''
-              fullContent += `\n🔧 **${toolDisplay}** \`${preview}\`\n`
-              codingStore.streamContent = fullContent
-              scrollToBottom()
-            } else if (parsed.type === 'agent_result') {
-              // Agent tool result — collapsible preview
-              const toolDisplay = parsed.tool_display || parsed.tool || ''
-              if (parsed.is_error) {
-                fullContent += `> ❌ ${parsed.output_preview}\n\n`
-              } else if (parsed.output_preview && parsed.output_preview !== '(empty)') {
-                const preview = parsed.output_preview.length > 300
-                  ? parsed.output_preview.substring(0, 300) + '...'
-                  : parsed.output_preview
-                fullContent += `> ✅ ${preview}\n\n`
-              } else {
-                fullContent += `> ✅ 完成\n\n`
-              }
-              codingStore.streamContent = fullContent
-              scrollToBottom()
-            } else if (parsed.type === 'agent_done') {
-              // Agent completed its loop
-              const turns = parsed.num_turns || '?'
-              fullContent += `\n---\n✨ **Agent 完成** (${turns} 轮对话)\n`
-              codingStore.streamContent = fullContent
-              scrollToBottom()
-            } else if (parsed.type === 'agent_error') {
-              // Agent error
-              fullContent += `\n❌ **Agent 错误**: ${parsed.message}\n`
-              codingStore.streamContent = fullContent
-              scrollToBottom()
-            } else if (parsed.type === 'files') {
-              // File list from generation
-              if (parsed.files && Array.isArray(parsed.files)) {
-                changedFiles = parsed.files
-              }
-            } else if (parsed.type === 'screenshot') {
-              // Store screenshot URL for display
-              currentScreenshots.push(parsed.url)
-            } else if (parsed.type === 'heartbeat') {
-              // Agent 心跳 — 显示思考中状态让用户知道 Agent 还在工作
-              if (!fullContent.endsWith('🤔 AI 正在思考中...\n') && !fullContent.endsWith('...\n')) {
-                // Only add thinking indicator if last line isn't already one
-                const lines = fullContent.split('\n')
-                const lastLine = lines[lines.length - 1] || lines[lines.length - 2] || ''
-                if (!lastLine.includes('正在思考') && !lastLine.includes('正在生成')) {
-                  fullContent += '\n🤔 AI 正在思考中...\n'
-                  codingStore.streamContent = fullContent
-                  scrollToBottom()
-                }
-              }
-              continue
-            } else if (parsed.type === 'scene_detected') {
-              codingStore.conversationId = parsed.conversation_id
-            } else if (parsed.type === 'done') {
-              codingStore.conversationId = parsed.conversation_id
-              if (parsed.workspace_id && !codingStore.workspace) {
-                try {
-                  const ws = await codingApi.getWorkspace(parsed.workspace_id)
-                  codingStore.setWorkspace(ws)
-                  localStorage.setItem('coding_last_workspace_id', ws.id)
-                } catch { /* ignore */ }
-              }
+          if (parsed.step === 'create_workspace' && parsed.status === 'done' && parsed.data) {
+            const wsData = {
+              ...parsed.data,
+              id: parsed.data.workspace_id || parsed.data.id,
             }
-          } catch {
-            // skip unparseable lines
+            codingStore.setWorkspace(wsData)
+            codingStore.workspacePath = parsed.data.workspace_path || null
+            localStorage.setItem('coding_last_workspace_id', wsData.id)
+            try { existingWorkspaces.value = await codingApi.listWorkspaces() } catch {}
+          }
+
+          if (parsed.step === 'serve' && parsed.status === 'done' && parsed.data) {
+            codingStore.serveRunning = true
+            codingStore.serveUrl = parsed.data.url || null
+          }
+
+          shouldPaint = true
+        } else if (parsed.type === 'content') {
+          fullContent += parsed.content
+          codingStore.streamContent = fullContent
+          shouldPaint = true
+        } else if (parsed.type === 'agent_thinking_delta') {
+          const chunk = typeof parsed.content === 'string' ? parsed.content : ''
+          if (!chunk) return
+          if (expectingFreshThinking) {
+            thinkingBuffer = ''
+            expectingFreshThinking = false
+          }
+          thinkingBuffer += chunk
+          const normalized = normalizeThinkingText(thinkingBuffer)
+          if (normalized) {
+            thinkingSummary = normalized
+            streamThinkingRaw.value = thinkingBuffer
+            shouldPaint = true
+          }
+        } else if (parsed.type === 'agent_thinking') {
+          const rawThinking = typeof parsed.content === 'string' ? parsed.content : ''
+          if (!rawThinking) return
+          if (expectingFreshThinking) {
+            thinkingBuffer = rawThinking
+            expectingFreshThinking = false
+          } else if (normalizeThinkingText(rawThinking).length >= normalizeThinkingText(thinkingBuffer).length) {
+            thinkingBuffer = rawThinking
+          }
+          const normalized = normalizeThinkingText(thinkingBuffer)
+          if (normalized) {
+            thinkingSummary = normalized
+            streamThinkingRaw.value = thinkingBuffer
+            shouldPaint = true
+          }
+        } else if (parsed.type === 'agent_tool') {
+          const toolDisplay = parsed.tool_display || parsed.tool
+          const preview = parsed.input_preview || ''
+          fullContent += `\n🔧 **${toolDisplay}** \`${preview}\`\n`
+          codingStore.streamContent = fullContent
+          pushLiveActivity(toolDisplay, preview || '开始执行', 'default')
+          expectingFreshThinking = true
+          shouldPaint = true
+        } else if (parsed.type === 'agent_result') {
+          const preview = parsed.output_preview && parsed.output_preview !== '(empty)'
+            ? (parsed.output_preview.length > 140 ? `${parsed.output_preview.substring(0, 140)}...` : parsed.output_preview)
+            : '执行完成'
+          if (parsed.is_error) {
+            fullContent += `> ❌ ${parsed.output_preview}\n\n`
+          } else if (parsed.output_preview && parsed.output_preview !== '(empty)') {
+            const resultPreview = parsed.output_preview.length > 300
+              ? parsed.output_preview.substring(0, 300) + '...'
+              : parsed.output_preview
+            fullContent += `> ✅ ${resultPreview}\n\n`
+          } else {
+            fullContent += '> ✅ 完成\n\n'
+          }
+          codingStore.streamContent = fullContent
+          pushLiveActivity(
+            parsed.tool_display || parsed.tool || '执行结果',
+            preview,
+            parsed.is_error ? 'error' : 'success',
+          )
+          expectingFreshThinking = true
+          shouldPaint = true
+        } else if (parsed.type === 'agent_command_output') {
+          const chunk = typeof parsed.chunk === 'string' ? parsed.chunk : ''
+          if (!chunk) return
+          fullContent += chunk
+          codingStore.streamContent = fullContent
+          shouldPaint = true
+        } else if (parsed.type === 'agent_done') {
+          const turns = parsed.num_turns || '?'
+          fullContent += `\n---\n✨ **Agent 完成** (${turns} 轮对话)\n`
+          codingStore.streamContent = fullContent
+          pushLiveActivity('完成', `Agent 已完成 ${turns} 轮对话`, 'success')
+          shouldPaint = true
+        } else if (parsed.type === 'agent_error') {
+          fullContent += `\n❌ **Agent 错误**: ${parsed.message}\n`
+          codingStore.streamContent = fullContent
+          pushLiveActivity('错误', parsed.message || '发生未知错误', 'error')
+          shouldPaint = true
+        } else if (parsed.type === 'files') {
+          if (parsed.files && Array.isArray(parsed.files)) {
+            changedFiles = parsed.files
+          }
+        } else if (parsed.type === 'screenshot') {
+          currentScreenshots.push(parsed.url)
+        } else if (parsed.type === 'heartbeat') {
+          if (!streamThinkingRaw.value && !visibleLiveActivities.value.length) {
+            pushLiveActivity('处理中', '正在等待下一步分析或工具执行', 'default')
+            shouldPaint = true
+          }
+        } else if (parsed.type === 'scene_detected') {
+          codingStore.conversationId = parsed.conversation_id
+        } else if (parsed.type === 'done') {
+          codingStore.conversationId = parsed.conversation_id
+          if (parsed.workspace_id && !codingStore.workspace) {
+            try {
+              const ws = await codingApi.getWorkspace(parsed.workspace_id)
+              codingStore.setWorkspace(ws)
+              localStorage.setItem('coding_last_workspace_id', ws.id)
+            } catch { /* ignore */ }
           }
         }
+
+        if (shouldPaint) {
+          scrollToBottom()
+          await nextTick()
+          await waitForStreamPaint()
+        }
+      } catch {
+        // skip unparseable events
       }
-    }
+    }, { yieldEvery: 6 })
+
+    debugSseLog('[SSE] Stream ended (consumeSseResponse finished)')
 
     // Extract files from AI content if not provided via event
     if (changedFiles.length === 0) {
@@ -887,11 +1090,13 @@ async function sendMessage() {
       role: 'assistant',
       content: fullContent,
       textContent: fullContent,
+      thinkingSummary: thinkingSummary || effectiveThinkingText.value || undefined,
       pipelineSteps: [...codingStore.currentPipelineSteps],
       fileNames: changedFiles.map(f => getFileName(f)),
       previewHtml,
       screenshots: currentScreenshots.length > 0 ? currentScreenshots : undefined,
-    } as any
+      activityFeed: streamActivities.value.map(item => ({ ...item })),
+    }
     codingStore.addMessage(assistantMsg)
 
     // Refresh workspace file list
@@ -912,6 +1117,8 @@ async function sendMessage() {
     codingStore.isProcessing = false
     codingStore.streamContent = ''
     codingStore.currentPipelineSteps = []
+    resetLiveAgentStream()
+    stopLiveClock()
   }
 }
 
@@ -936,7 +1143,7 @@ async function publishProject() {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `${codingStore.workspace.project_name}.zip`
+    a.download = `${workspaceDisplayName(codingStore.workspace) || codingStore.workspace.project_name}.zip`
     a.click()
     URL.revokeObjectURL(url)
     ElMessage.success('打包完成，已开始下载')
@@ -950,6 +1157,7 @@ async function publishProject() {
 function startNewWorkspace() {
   codingStore.reset()
   localStorage.removeItem('coding_last_workspace_id')
+  closePreviewPanel()
   // 回到欢迎页
 }
 
@@ -961,6 +1169,7 @@ async function deleteWorkspace(ws: WorkspaceInfo) {
     if (codingStore.workspace?.id === ws.id) {
       codingStore.reset()
       localStorage.removeItem('coding_last_workspace_id')
+      closePreviewPanel()
     }
     ElMessage.success('已删除')
   } catch (e: any) {
@@ -968,30 +1177,57 @@ async function deleteWorkspace(ws: WorkspaceInfo) {
   }
 }
 
-async function handlePreview() {
-  if (!codingStore.workspace || isDebugging.value) return
+async function openPreviewForWorkspace(wsId: string, options?: { silent?: boolean }) {
+  if (!wsId || isDebugging.value) return
+  const silent = options?.silent ?? false
   isDebugging.value = true
+  previewLoading.value = true
+  showPreviewPanel.value = true
+  previewUrl.value = null
+  previewWorkspaceId.value = wsId
+  previewProjectType.value = codingStore.workspace?.project_type || previewProjectType.value
   try {
-    const result = await codingApi.preview(codingStore.workspace.id)
+    const result = await codingApi.preview(wsId)
     if (result.status === 'ok') {
       // preview_url 已经是 /api/coding/... 格式，用 BASE_URL 拼接即可
       const basePath = import.meta.env.BASE_URL || '/'
       previewUrl.value = basePath + result.preview_url.replace(/^\//, '')
-      showPreviewPanel.value = true
+      previewWorkspaceId.value = wsId
+      previewProjectType.value = result.project_type || codingStore.workspace?.project_type || ''
       previewKey.value++
-      ElMessage.success(result.build_message || '预览已就绪')
+      if (!silent) {
+        ElMessage.success(result.build_message || '预览已就绪')
+      }
     } else {
+      previewUrl.value = null
       ElMessage.error('预览构建失败')
     }
   } catch (error: any) {
+    previewUrl.value = null
     ElMessage.error(error?.response?.data?.detail || error.message || '预览失败')
   } finally {
     isDebugging.value = false
+    previewLoading.value = false
   }
 }
 
-function refreshPreview() {
-  previewKey.value++
+async function handlePreview() {
+  if (!codingStore.workspace) return
+  await openPreviewForWorkspace(codingStore.workspace.id)
+}
+
+async function refreshPreview() {
+  const targetWsId = codingStore.workspace?.id || previewWorkspaceId.value
+  if (!targetWsId) return
+  await openPreviewForWorkspace(targetWsId, { silent: true })
+}
+
+function closePreviewPanel() {
+  showPreviewPanel.value = false
+  previewLoading.value = false
+  previewUrl.value = null
+  previewWorkspaceId.value = null
+  previewProjectType.value = ''
 }
 
 // ============ File Parsing ============
@@ -999,10 +1235,10 @@ function refreshPreview() {
 function parseFilesFromContent(content: string): GeneratedFile[] {
   const files: GeneratedFile[] = []
   const regex = /```(?:file|[\w]+):([^\n]+)\n([\s\S]*?)```/g
-  let match
+  let match: RegExpExecArray | null
   while ((match = regex.exec(content)) !== null) {
-    const path = match[1].trim()
-    const fileContent = match[2].trim()
+    const path = match[1]?.trim() || ''
+    const fileContent = match[2]?.trim() || ''
     if (path && fileContent) {
       files.push({ path, content: fileContent, language: detectLanguage(path) })
     }
@@ -1033,19 +1269,19 @@ function buildPreviewHtml(editVueContent: string, settingVueContent?: string): s
 
   if (!templateMatch) return ''
 
-  const template = templateMatch[1]
+  const template = (templateMatch[1] || '')
     .replace(/<x-proxy-form-item[^>]*>/g, '<div class="mock-form-item">')
     .replace(/<\/x-proxy-form-item>/g, '</div>')
 
   let scriptBody = ''
   if (scriptMatch) {
-    scriptBody = scriptMatch[1]
+    scriptBody = (scriptMatch[1] || '')
       .replace(/import\s+.*from\s+['"][^'"]+['"]/g, '')  // 移除 import
       .replace(/mixins:\s*\[[^\]]*\],?/g, '')             // 移除 mixins
       .replace(/export\s+default\s*/, 'var componentDef = ')
   }
 
-  const style = styleMatch ? styleMatch[1] : ''
+  const style = styleMatch?.[1] || ''
 
   // setting 组件预览
   let settingPreview = ''
@@ -1128,6 +1364,34 @@ function stepIcon(step: PipelineStep): string {
   }
 }
 
+function stepLabelForName(stepName: string): string {
+  const current = codingStore.currentPipelineSteps.find(step => step.name === stepName)
+  if (current?.label) return current.label
+
+  const fallbackMap: Record<string, string> = {
+    detect_scene: '识别场景',
+    create_workspace: '创建工作区',
+    generate: '生成代码',
+    install: '安装依赖',
+    serve: '启动服务',
+    hot_reload: '热更新',
+    debug: '调试验证',
+    verify: 'AI 验证',
+    build: '构建打包',
+  }
+
+  return fallbackMap[stepName] || stepName
+}
+
+function stepStatusText(status: PipelineStep['status']): string {
+  switch (status) {
+    case 'running': return '正在执行'
+    case 'done': return '已完成'
+    case 'error': return '执行失败'
+    default: return '等待中'
+  }
+}
+
 function escapeHtml(str: string): string {
   return str
     .replace(/&/g, '&amp;')
@@ -1137,8 +1401,8 @@ function escapeHtml(str: string): string {
 }
 
 function renderMarkdown(content: string): string {
-  // Handle unclosed code blocks during streaming (prevent regex from eating everything)
-  let safeContent = content
+  // Strip <think>...</think> tags (MiniMax thinking output)
+  let safeContent = content.replace(/<think>[\s\S]*?<\/think>/g, '').replace(/<\/?think>/g, '')
   const backtickCount = (safeContent.match(/```/g) || []).length
   if (backtickCount % 2 !== 0) {
     // Odd number of ``` means unclosed block — add closing
@@ -1180,6 +1444,66 @@ function previewScreenshot(url: string) {
   window.open(url, '_blank')
 }
 
+function resetLiveAgentStream() {
+  streamThinkingRaw.value = ''
+  streamActivities.value = []
+  liveClock.value = Date.now()
+  lastStreamEventAt.value = 0
+  lastProgressEventAt.value = 0
+}
+
+function pushLiveActivity(label: string, description: string, tone: LiveActivityTone = 'default') {
+  streamActivities.value = [
+    ...streamActivities.value,
+    {
+      id: Date.now() + streamActivities.value.length,
+      label,
+      description,
+      tone,
+    },
+  ].slice(-10)
+}
+
+function markLiveStreamEvent(hasProgress = true) {
+  const now = Date.now()
+  liveClock.value = now
+  lastStreamEventAt.value = now
+  if (hasProgress) {
+    lastProgressEventAt.value = now
+  }
+}
+
+let liveClockTimer: ReturnType<typeof setInterval> | null = null
+
+function startLiveClock() {
+  if (liveClockTimer) return
+  liveClockTimer = setInterval(() => {
+    liveClock.value = Date.now()
+  }, 1000)
+}
+
+function stopLiveClock() {
+  if (!liveClockTimer) return
+  clearInterval(liveClockTimer)
+  liveClockTimer = null
+}
+
+function debugSseLog(...args: unknown[]) {
+  if (SSE_DEBUG) {
+    console.log(...args)
+  }
+}
+
+function waitForStreamPaint(): Promise<void> {
+  if (typeof window === 'undefined' || typeof window.requestAnimationFrame !== 'function') {
+    return Promise.resolve()
+  }
+
+  return new Promise((resolve) => {
+    window.requestAnimationFrame(() => resolve())
+  })
+}
+
 let _scrollTimer: ReturnType<typeof setTimeout> | null = null
 function scrollToBottom() {
   // Debounce scroll to avoid animation stacking during rapid SSE events
@@ -1200,7 +1524,21 @@ watch(() => codingStore.messages.length, () => {
 watch(() => route.path, () => {
   if (!route.path.startsWith('/coding')) {
     codingStore.reset()
+    resetLiveAgentStream()
+    stopLiveClock()
   }
+})
+
+watch(() => codingStore.isProcessing, (processing) => {
+  if (processing) {
+    startLiveClock()
+  } else {
+    stopLiveClock()
+  }
+})
+
+onUnmounted(() => {
+  stopLiveClock()
 })
 </script>
 
@@ -1225,17 +1563,20 @@ watch(() => route.path, () => {
   display: flex;
   flex: 1;
   overflow: hidden;
+  --workspace-sidebar-width: 228px;
+  --preview-panel-width: 480px;
 }
 
 /* ============ Workspace Sidebar ============ */
 .workspace-sidebar {
-  width: 240px;
+  width: var(--workspace-sidebar-width);
   flex-shrink: 0;
   border-right: 1px solid var(--t-border-subtle);
   background: var(--t-bg-base);
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  transition: width 0.22s ease;
 }
 
 .sidebar-header {
@@ -1259,6 +1600,7 @@ watch(() => route.path, () => {
   flex: 1;
   overflow-y: auto;
   padding: 8px 10px;
+  transition: padding 0.22s ease;
 }
 
 .sidebar-group-header {
@@ -1337,6 +1679,60 @@ watch(() => route.path, () => {
   text-overflow: ellipsis;
   margin-bottom: 3px;
   font-weight: 500;
+}
+
+.sidebar-ws-code {
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--t-text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+.coding-body.has-preview {
+  --workspace-sidebar-width: 188px;
+  --preview-panel-width: clamp(520px, 36vw, 680px);
+}
+
+.coding-body.has-preview.has-page-preview {
+  --workspace-sidebar-width: 176px;
+  --preview-panel-width: clamp(620px, 44vw, 860px);
+}
+
+.coding-body.has-preview.has-mobile-preview {
+  --preview-panel-width: clamp(560px, 38vw, 720px);
+}
+
+.coding-body.has-preview .sidebar-section-header {
+  padding: 10px 12px 6px;
+}
+
+.coding-body.has-preview .sidebar-list {
+  padding: 8px;
+}
+
+.coding-body.has-preview .sidebar-group-header {
+  padding: 7px 8px 5px;
+  gap: 5px;
+}
+
+.coding-body.has-preview .sidebar-group-label {
+  font-size: 10px;
+}
+
+.coding-body.has-preview .sidebar-ws-item {
+  padding: 9px 10px;
+  border-radius: 10px;
+}
+
+.coding-body.has-preview .sidebar-ws-name {
+  font-size: 12px;
+}
+
+.coding-body.has-preview .sidebar-ws-code {
+  font-size: 10px;
 }
 
 .sidebar-ws-meta {
@@ -1728,6 +2124,127 @@ watch(() => route.path, () => {
   margin-bottom: 14px;
 }
 
+.agent-live-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.agent-live-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--t-text-secondary);
+  letter-spacing: 0.02em;
+}
+
+.agent-live-meta {
+  margin-top: -2px;
+  font-size: 12px;
+  color: var(--t-text-muted);
+  line-height: 1.6;
+}
+
+.agent-live-pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--t-brand);
+  box-shadow: 0 0 0 0 rgba(124, 58, 237, 0.45);
+  animation: live-pulse 1.8s ease-in-out infinite;
+}
+
+.agent-thinking-card,
+.thinking-summary {
+  border: 1px solid rgba(124, 58, 237, 0.16);
+  background: linear-gradient(180deg, rgba(124, 58, 237, 0.08), rgba(99, 102, 241, 0.04));
+  border-radius: 14px;
+  padding: 12px 14px;
+}
+
+.agent-thinking-title,
+.thinking-summary-header {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--t-brand-light);
+  margin-bottom: 8px;
+}
+
+.thinking-summary {
+  margin-bottom: 12px;
+}
+
+.thinking-summary-header {
+  cursor: pointer;
+  list-style: none;
+  margin-bottom: 0;
+}
+
+.thinking-summary-header::-webkit-details-marker {
+  display: none;
+}
+
+.thinking-summary-body,
+.agent-thinking-text {
+  margin-top: 8px;
+  color: var(--t-text-primary);
+  line-height: 1.75;
+}
+
+.agent-activity-feed {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.agent-activity-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--t-border-subtle);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.agent-activity-item.success {
+  border-color: rgba(74, 222, 128, 0.22);
+  background: rgba(74, 222, 128, 0.06);
+}
+
+.agent-activity-item.error {
+  border-color: rgba(248, 113, 113, 0.22);
+  background: rgba(248, 113, 113, 0.06);
+}
+
+.agent-activity-badge {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1.6;
+  background: var(--t-brand-subtle);
+  color: var(--t-brand-light);
+}
+
+.agent-activity-item.success .agent-activity-badge {
+  background: rgba(74, 222, 128, 0.14);
+  color: var(--t-success);
+}
+
+.agent-activity-item.error .agent-activity-badge {
+  background: rgba(248, 113, 113, 0.14);
+  color: #fda4af;
+}
+
+.agent-activity-text {
+  color: var(--t-text-secondary);
+  line-height: 1.65;
+  word-break: break-word;
+}
+
 .step {
   display: inline-flex;
   align-items: center;
@@ -1789,6 +2306,18 @@ watch(() => route.path, () => {
 /* ============ Message Text ============ */
 .msg-text {
   word-break: break-word;
+}
+
+.stream-log-label {
+  margin: 4px 0 8px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--t-text-muted);
+}
+
+.stream-log {
+  padding-top: 2px;
 }
 
 .msg-text :deep(.code-block) {
@@ -2002,6 +2531,21 @@ watch(() => route.path, () => {
 @keyframes thinking {
   0%, 80%, 100% { opacity: 0.2; transform: scale(0.7); }
   40% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes live-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(124, 58, 237, 0.45);
+    transform: scale(0.95);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(124, 58, 237, 0);
+    transform: scale(1);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(124, 58, 237, 0);
+    transform: scale(0.95);
+  }
 }
 
 /* ============ Input Area ============ */
@@ -2223,13 +2767,14 @@ watch(() => route.path, () => {
 
 /* ============ Preview Panel ============ */
 .preview-panel {
-  width: 420px;
+  width: var(--preview-panel-width);
   flex-shrink: 0;
   border-left: 1px solid var(--t-border-subtle);
   background: var(--t-bg-base);
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  transition: width 0.22s ease;
 }
 
 .preview-panel-header {
@@ -2241,15 +2786,80 @@ watch(() => route.path, () => {
   background: var(--t-bg-elevated);
 }
 
+.preview-panel-heading {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
 .preview-panel-title {
   font-size: 13px;
   font-weight: 600;
   color: var(--t-text-primary);
 }
 
+.preview-panel-subtitle {
+  font-size: 11px;
+  color: var(--t-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .preview-panel-actions {
   display: flex;
   gap: 4px;
+}
+
+.preview-panel-loading,
+.preview-panel-empty {
+  flex: 1;
+  padding: 18px;
+  background:
+    radial-gradient(circle at top, rgba(99, 102, 241, 0.08), transparent 36%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 58%),
+    var(--t-bg-base);
+}
+
+.preview-panel-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.preview-panel-loading-card,
+.preview-panel-empty {
+  border: 1px solid var(--t-border-subtle);
+  border-radius: 18px;
+  background: var(--t-bg-elevated);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.12);
+}
+
+.preview-panel-loading-card {
+  width: min(100%, 440px);
+  padding: 24px 22px;
+}
+
+.preview-panel-loading-title,
+.preview-panel-empty-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--t-text-primary);
+  margin-bottom: 8px;
+}
+
+.preview-panel-loading-desc,
+.preview-panel-empty-desc {
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--t-text-secondary);
+}
+
+.preview-panel-empty {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 
 .preview-panel-iframe {

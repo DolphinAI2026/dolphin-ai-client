@@ -59,7 +59,7 @@ export const marketplaceApi = {
     const blob = await resp.blob()
     const disposition = resp.headers.get('Content-Disposition') || ''
     const match = disposition.match(/filename="?(.+?)"?$/)
-    const filename = match ? match[1] : `component-${id}.zip`
+    const filename = match?.[1] || `component-${id}.zip`
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url

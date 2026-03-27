@@ -199,6 +199,10 @@ class VibeCodingAgent:
                         "temperature": 0.2,
                         "stream": True,
                     }
+                    # Disable thinking mode for models that support it (e.g. MiniMax)
+                    # Thinking adds overhead and <think> tags that break rendering
+                    if "minimax" in base_url.lower() or "MiniMax" in llm_model:
+                        payload["thoughts"] = {"enabled": False}
 
                     full_content = ""
                     tool_calls_map: dict = {}
@@ -234,7 +238,7 @@ class VibeCodingAgent:
 
                                 delta = chunk.get("choices", [{}])[0].get("delta", {})
 
-                                # Streaming text
+                                # Streaming text — surface concise user-facing progress notes live
                                 if delta.get("content"):
                                     text = delta["content"]
                                     full_content += text
@@ -291,6 +295,11 @@ class VibeCodingAgent:
                         print(f"[Agent] Finished after {turn+1} turns", flush=True)
                         break
 
+                    if not full_content.strip():
+                        progress_note = self._describe_tool_plan(tool_names)
+                        if progress_note:
+                            _emit({"type": "agent_thinking_delta", "content": progress_note})
+
                     # ── Phase 4: Execute tools (parallel when possible) ──
                     has_write = any(t in ("write_file", "edit_file", "run_command") for t in tool_names)
                     if has_write:
@@ -330,7 +339,21 @@ class VibeCodingAgent:
                         })
 
                         # Execute
-                        result = await execute_tool(func_name, func_args, self.ws_path)
+                        async def _tool_progress(chunk: str):
+                            _emit({
+                                "type": "agent_command_output",
+                                "tool": func_name,
+                                "tool_display": TOOL_ICONS.get(func_name, func_name),
+                                "command": func_args.get("command", ""),
+                                "chunk": chunk,
+                            })
+
+                        result = await execute_tool(
+                            func_name,
+                            func_args,
+                            self.ws_path,
+                            progress_callback=_tool_progress if func_name == "run_command" else None,
+                        )
 
                         # Adaptive result truncation based on remaining context budget
                         result_str = result or ""
@@ -470,11 +493,12 @@ class VibeCodingAgent:
     def _build_prompt(self, requirement: str, conversation_summary: str) -> str:
         """Build the user prompt that tells the agent what to do."""
         info = self.ws_mgr.get_workspace_info(self.ws_id)
+        project_type = (info.get("project_type", "") or "").lower()
         parts = [
             f"## Task\n{requirement}",
             f"\n## Workspace Info",
             f"- Project name: {info.get('project_name', '')}",
-            f"- Project type: {info.get('project_type', '')}",
+            f"- Project type: {project_type}",
             f"- Working directory: {self.ws_path}",
         ]
 
@@ -483,8 +507,9 @@ class VibeCodingAgent:
         else:
             parts.append("\n## Previous Conversation Summary\nNone (first development session)")
 
-        parts.append("""
+        workflow = """
 ## Workflow — IMPORTANT: Be efficient! Minimize tool calls.
+0. **Before tool calls**: First write a short, user-facing progress note in Chinese (1-3 sentences) explaining what you understood and what you will do next.
 1. **FIRST** (1 call): Use glob_files to see the project structure
 2. **THEN** (1-2 calls max): Read ONLY the key files you need (edit.vue and mixin). Do NOT read every file.
 3. **IMMEDIATELY write code**: Use write_file to create/update ALL component files in one batch. Call write_file multiple times in a SINGLE turn (parallel tool calls).
@@ -492,6 +517,7 @@ class VibeCodingAgent:
 5. If errors, fix and rebuild. If success, report completion.
 
 ## CRITICAL Rules
+- **Progress notes are visible to the user**: keep them brief, concrete, and friendly. Do NOT dump hidden reasoning or long analysis.
 - **DO NOT loop**: Never read the same file twice. Never read more than 3 files before writing code.
 - **Write ALL files at once**: In a single turn, call write_file for edit.vue, read.vue, ide.vue, setting.vue etc. Do NOT write one file per turn.
 - **Be decisive**: You are an expert. After reading the scaffold structure and 1-2 example files, you have enough context to write the component.
@@ -504,7 +530,71 @@ class VibeCodingAgent:
 - Use FormWidgetMixin (provides formValue, widget, updatePropValue, etc.)
 - setting.vue uses componentConfig prop + formEngine prop
 - The edit.vue is the primary file. read.vue shows readonly view. ide.vue shows placeholder. Others can be minimal.
-""")
+"""
+        if project_type == "layout":
+            workflow = """
+## Workflow — IMPORTANT: Be efficient! Minimize tool calls.
+0. **Before tool calls**: First write a short, user-facing progress note in Chinese (1-3 sentences) explaining what you understood and what you will do next.
+1. **FIRST** (1 call): Use glob_files to see the project structure
+2. **THEN** (1-2 calls max): Read ONLY the key files you need (`src/apaas.json`, `src/index.js`, `src/form-layout/*.vue` or `src/Home.vue`)
+3. **IMMEDIATELY write code**: Update the layout files in one batch. Do NOT apply the 7-scene form-component pattern.
+4. **THEN** run `npm run build` to check compilation
+5. If errors, fix and rebuild. If success, report completion.
+
+## CRITICAL Rules
+- **Progress notes are visible to the user**: keep them brief, concrete, and friendly. Do NOT dump hidden reasoning or long analysis.
+- **Do NOT generate `widget.config.js`, `editor.config.js`, or `setting.vue` by default**.
+- **Focus on layout structure**: `x-app-layout`, `header`, `menu`, `appPage`, and any optional layout-only subcomponents.
+- `templateType` must remain `PAGE_LAYOUT`
+- `appPage` must forward platform content with `<slot name="appPage">`
+- Do NOT modify package.json unless the task explicitly requires it.
+"""
+        elif project_type == "form-list":
+            workflow = """
+## Workflow — IMPORTANT: Be efficient! Minimize tool calls.
+0. **Before tool calls**: First write a short, user-facing progress note in Chinese (1-3 sentences) explaining what you understood and what you will do next.
+1. Use glob_files to inspect the project structure
+2. Read only the key files you need (`src/apaas.json`, `src/index.js`, `src/form-view/*.vue`)
+3. Write the list-view files in one batch
+4. Run `npm run build` to check compilation
+5. If errors, fix and rebuild. If success, report completion.
+
+## CRITICAL Rules
+- `templateType` must remain `LIST_VIEW`
+- Do NOT apply the 7-scene form-component pattern
+- Focus on `index.js`, `apaas.json`, `form-view/*.vue`, and i18n files
+"""
+        elif project_type == "plugin":
+            workflow = """
+## Workflow — IMPORTANT: Be efficient! Minimize tool calls.
+0. **Before tool calls**: First write a short, user-facing progress note in Chinese (1-3 sentences) explaining what you understood and what you will do next.
+1. Use glob_files to inspect the project structure
+2. Read only the key files you need (`src/apaas.json`, `src/admin.js`, `src/app.js`, `src/mobile.js`, `src/extension.js`)
+3. Write the plugin files in one batch
+4. Run `npm run build` to check compilation
+5. If errors, fix and rebuild. If success, report completion.
+
+## CRITICAL Rules
+- `templateType` must remain `FRONTEND_PLUGIN`
+- Every entry file must default-export `{ install, activate, staticComponents }`
+- Do NOT generate form-component files like edit.vue/read.vue/setting.vue
+"""
+        elif project_type == "backend-api":
+            workflow = """
+## Workflow — IMPORTANT: Be efficient! Minimize tool calls.
+0. **Before tool calls**: First write a short, user-facing progress note in Chinese (1-3 sentences) explaining what you understood and what you will do next.
+1. Use glob_files to inspect the project structure
+2. Read only the key backend files you need (controller/service/config/pom)
+3. Write or update the backend files in one batch
+4. Run the appropriate backend build/test command (`mvn test`, `mvn -q -DskipTests package`, etc.)
+5. If errors, fix and rerun. If success, report completion.
+
+## CRITICAL Rules
+- This is a backend project. Do NOT generate Vue component files.
+- Do NOT apply form-component rules like edit.vue/read.vue/setting.vue.
+- Prefer minimal, runnable Java/Spring-style changes that match the scaffold.
+"""
+        parts.append(workflow)
         return "\n".join(parts)
 
     def _format_tool_input(self, tool_name: str, tool_input: dict) -> str:
@@ -533,3 +623,30 @@ class VibeCodingAgent:
             return f"/{pattern}/" + (f" in {path}" if path else "")
         else:
             return _truncate(json.dumps(tool_input, ensure_ascii=False), 200)
+
+    @staticmethod
+    def _describe_tool_plan(tool_names: list[str]) -> str:
+        """Generate a short user-facing progress note when the model omits one."""
+        if not tool_names:
+            return ""
+
+        unique_names = list(dict.fromkeys(tool_names))
+        parts: list[str] = []
+
+        if "glob_files" in unique_names:
+            parts.append("我先快速扫一遍项目结构，确认组件骨架和可复用文件。")
+        if "grep_search" in unique_names:
+            parts.append("我会顺手搜索关键实现，避免漏掉现有约定。")
+        if "read_file" in unique_names:
+            parts.append("接着读取少量关键文件，确认当前组件写法和 mixin 用法。")
+        if "write_file" in unique_names:
+            parts.append("上下文已经够了，下一步开始批量写入组件文件。")
+        if "edit_file" in unique_names:
+            parts.append("我会在现有文件上做定向修改，尽量减少无关变动。")
+        if "run_command" in unique_names:
+            parts.append("代码写完后我会立刻做构建校验，确认没有编译问题。")
+
+        if not parts:
+            return "我正在推进下一步实现，很快会同步新的进展。"
+
+        return " ".join(parts[:2])

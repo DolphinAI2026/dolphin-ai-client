@@ -9,9 +9,19 @@ All file operations are sandboxed to the workspace directory.
 
 import asyncio
 import glob as glob_mod
+import inspect
 import os
 import re
+import shlex
 from pathlib import Path
+from typing import Awaitable, Callable, Optional
+
+DEFAULT_NPM_REGISTRY = os.environ.get("APAAS_NPM_REGISTRY", "https://registry.npmmirror.com")
+DEFAULT_NPM_CACHE_DIR = os.environ.get(
+    "APAAS_NPM_CACHE_DIR",
+    str(Path.home() / ".apaas-builder" / "npm-cache"),
+)
+ANSI_ESCAPE_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 
 # ---------------------------------------------------------------------------
 # Tool definitions (OpenAI function calling format)
@@ -226,23 +236,103 @@ async def _edit_file(args: dict, workspace_path: Path) -> str:
         return f"Error editing file: {e}"
 
 
-async def _run_command(args: dict, workspace_path: Path) -> str:
+async def _emit_progress(
+    progress_callback: Optional[Callable[[str], Awaitable[None] | None]],
+    chunk: str,
+):
+    if not progress_callback or not chunk:
+        return
+    maybe_awaitable = progress_callback(chunk)
+    if inspect.isawaitable(maybe_awaitable):
+        await maybe_awaitable
+
+
+def _strip_ansi(text: str) -> str:
+    return ANSI_ESCAPE_RE.sub("", text)
+
+
+def _build_command_env() -> dict[str, str]:
+    env = {**os.environ}
+    env.setdefault("npm_config_registry", DEFAULT_NPM_REGISTRY)
+    env.setdefault("npm_config_cache", DEFAULT_NPM_CACHE_DIR)
+    env.setdefault("npm_config_prefer_offline", "true")
+    env.setdefault("npm_config_audit", "false")
+    env.setdefault("npm_config_fund", "false")
+    env.setdefault("FORCE_COLOR", "0")
+    return env
+
+
+def _is_plain_npm_install(command: str) -> bool:
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return False
+
+    if len(tokens) < 2 or tokens[0] != "npm" or tokens[1] not in {"install", "i"}:
+        return False
+
+    return all(token.startswith("-") for token in tokens[2:])
+
+
+async def _stream_process_output(
+    proc: asyncio.subprocess.Process,
+    progress_callback: Optional[Callable[[str], Awaitable[None] | None]] = None,
+) -> str:
+    if proc.stdout is None:
+        await proc.wait()
+        return ""
+
+    output_chunks: list[str] = []
+
+    while True:
+        chunk = await proc.stdout.read(1024)
+        if not chunk:
+            break
+        text = _strip_ansi(chunk.decode("utf-8", errors="replace"))
+        if not text:
+            continue
+        output_chunks.append(text)
+        await _emit_progress(progress_callback, text)
+
+    await proc.wait()
+    return "".join(output_chunks)
+
+
+async def _run_command(
+    args: dict,
+    workspace_path: Path,
+    progress_callback: Optional[Callable[[str], Awaitable[None] | None]] = None,
+) -> str:
     command = args.get("command", "")
     if not command:
         return "Error: command is required"
     try:
+        if _is_plain_npm_install(command):
+            from app.coding.workspace import WorkspaceManager
+
+            result = await WorkspaceManager().install_deps(
+                workspace_path.name,
+                progress_callback=progress_callback,
+            )
+            if result["status"] == "ok":
+                return result["message"]
+            return f"Error: {result['message']}"
+
         proc = await asyncio.create_subprocess_shell(
             command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             cwd=str(workspace_path),
+            env=_build_command_env(),
         )
         try:
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=120)
+            output = await asyncio.wait_for(
+                _stream_process_output(proc, progress_callback=progress_callback),
+                timeout=120,
+            )
         except asyncio.TimeoutError:
             proc.kill()
             return "Error: command timed out after 120 seconds"
-        output = stdout.decode("utf-8", errors="replace") if stdout else ""
         exit_info = f"[exit code: {proc.returncode}]"
         if len(output) > 10000:
             output = output[:10000] + f"\n... (truncated)"
@@ -354,9 +444,16 @@ _EXECUTORS = {
 }
 
 
-async def execute_tool(tool_name: str, arguments: dict, workspace_path: Path) -> str:
+async def execute_tool(
+    tool_name: str,
+    arguments: dict,
+    workspace_path: Path,
+    progress_callback: Optional[Callable[[str], Awaitable[None] | None]] = None,
+) -> str:
     """Execute a tool and return the result as a string."""
     executor = _EXECUTORS.get(tool_name)
     if not executor:
         return f"Error: unknown tool '{tool_name}'"
+    if tool_name == "run_command":
+        return await executor(arguments, workspace_path, progress_callback)
     return await executor(arguments, workspace_path)

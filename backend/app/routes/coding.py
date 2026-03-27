@@ -4,7 +4,7 @@ Coding API 路由 - aPaaS Vibe Coding 接口
 
 import json
 import logging
-from typing import Optional, Annotated
+from typing import Optional, Annotated, AsyncIterator, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
@@ -36,6 +36,24 @@ except ModuleNotFoundError as exc:
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/coding", tags=["coding"])
+
+SSE_HEADERS = {
+    "Cache-Control": "no-cache, no-transform",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no",
+}
+
+
+def _event_stream_response(
+    generator: AsyncIterator[str] | AsyncIterator[dict[str, Any]],
+    *,
+    ping: int | None = None,
+) -> EventSourceResponse:
+    """统一 SSE 响应头，尽量避免云上反向代理缓冲流式输出。"""
+    kwargs: dict[str, Any] = {"headers": SSE_HEADERS}
+    if ping is not None:
+        kwargs["ping"] = ping
+    return EventSourceResponse(generator, **kwargs)
 
 
 # ============================================================
@@ -75,6 +93,7 @@ class CreateWorkspaceRequest(BaseModel):
     """创建工作区请求"""
     project_type: str   # form-component, form-page, form-list, backend-api
     project_name: str   # 项目名称
+    display_name: Optional[str] = None  # 展示名称
     project_id: Optional[int] = None  # 关联项目ID
 
 
@@ -294,7 +313,7 @@ async def generate_code_stream(
             "conversation_id": conversation_id,
         }, ensure_ascii=False)
 
-    return EventSourceResponse(event_generator())
+    return _event_stream_response(event_generator())
 
 
 # ============================================================
@@ -388,6 +407,7 @@ async def create_workspace(
     meta = workspace_mgr.create_workspace(
         project_type=project_type,
         project_name=req.project_name,
+        display_name=req.display_name,
         user_id=ctx.user.id,
         project_id=req.project_id,
     )
@@ -442,10 +462,10 @@ async def download_workspace_zip(
 
     if type == "dist":
         # 下载构建产物
-        dist_path = ws_path / "dist"
-        if not dist_path.exists():
+        output_path = workspace_mgr.get_build_output_dir(ws_id)
+        if not workspace_mgr._has_build_artifacts(output_path):
             raise HTTPException(status_code=400, detail="请先构建项目")
-        target_path = dist_path
+        target_path = output_path
         zip_name = f"{project_name}.zip"
     else:
         # 下载源代码（排除 node_modules 和 dist）
@@ -469,7 +489,7 @@ async def download_workspace_zip(
         # dist 模式下，额外加入 apaas.json 和 static 目录（平台需要它们来识别组件）
         if type == "dist":
             apaas_json = ws_path / "src" / "apaas.json"
-            if apaas_json.exists():
+            if apaas_json.exists() and not (target_path / "apaas.json").exists():
                 zf.write(apaas_json, "apaas.json")
 
             # 加入 static/custom/组件名/ 目录（平台需要此目录结构）
@@ -676,11 +696,30 @@ def _build_workspace_context(ws_id: str) -> dict:
     try:
         info = workspace_mgr.get_workspace_info(ws_id)
         files = info.get("files", [])
+        project_type = (info.get("project_type", "") or "").lower()
 
-        # 读取所有 AI 需要参考的关键文件
-        # 包括：所有 .vue 文件、widget.config.js、editor.config.js、apaas.json、mixin
-        key_extensions = ('.vue', '.widget.config.js', '.editor.config.js')
-        key_names = ('apaas.json', 'form-widget.mixin.js')
+        # 按项目类型挑选关键文件，避免把表单组件规则错误带到布局/后端项目
+        if project_type in {"form-component", "mobile-component"}:
+            key_extensions = ('.vue', '.widget.config.js', '.editor.config.js')
+            key_names = ('apaas.json', 'form-widget.mixin.js')
+        elif project_type == "form-list":
+            key_extensions = ('.vue', '.js')
+            key_names = ('apaas.json', 'index.js')
+        elif project_type == "plugin":
+            key_extensions = ('.vue', '.js')
+            key_names = ('apaas.json', 'admin.js', 'app.js', 'mobile.js', 'extension.js', 'tab-config.js')
+        elif project_type == "layout":
+            key_extensions = ('.vue',)
+            key_names = ('apaas.json', 'index.js')
+        elif project_type in {"menu-page", "form-page", "mobile-page"}:
+            key_extensions = ('.vue', '.js')
+            key_names = ('apaas.json', 'index.js')
+        elif project_type == "backend-api":
+            key_extensions = ('.java', '.xml', '.yml', '.yaml', '.properties', '.md')
+            key_names = ('pom.xml', 'application.yml', 'application.yaml', 'application.properties')
+        else:
+            key_extensions = ('.vue', '.js')
+            key_names = ('apaas.json', 'index.js')
 
         key_file_paths = []
         for fp in files:
@@ -1055,10 +1094,21 @@ async def auto_pipeline(
                 # 前端指定的 project_type 优先（如从"页面开发"入口进来）
                 project_type_str = req.project_type or _scene_to_project_type(scene_type)
                 project_type_enum = ProjectType(project_type_str)
-                meta = ws_mgr.create_workspace(project_type_enum, project_name, user.id, project_id=project_id)
+                display_name = _extract_display_name(req.message, project_type_str, project_name)
+                meta = ws_mgr.create_workspace(
+                    project_type_enum,
+                    project_name,
+                    user.id,
+                    project_id=project_id,
+                    display_name=display_name,
+                )
                 ws_id = meta["id"]
                 yield _sse({"type": "step", "step": "create_workspace", "status": "done",
-                            "data": {"workspace_id": ws_id, "project_name": meta["project_name"]}})
+                            "data": {
+                                "workspace_id": ws_id,
+                                "project_name": meta["project_name"],
+                                "display_name": meta.get("display_name", meta["project_name"]),
+                            }})
 
             # ---- Step 3: 生成代码（Agent 模式）----
             yield _sse({"type": "step", "step": "generate", "status": "running"})
@@ -1167,7 +1217,7 @@ async def auto_pipeline(
             logger.exception("auto-pipeline 错误")
             yield _sse({"type": "error", "message": str(e)})
 
-    return EventSourceResponse(pipeline_events(), ping=15)
+    return _event_stream_response(pipeline_events(), ping=15)
 
 
 @router.post("/workspace/{ws_id}/serve")
@@ -1471,6 +1521,52 @@ async def _extract_project_name(generator: CodingGenerator, message: str) -> str
         return "custom-dev"
 
 
+def _extract_display_name(message: str, project_type: str, fallback_name: str) -> str:
+    """提取适合在工作区列表中展示的名称"""
+    import re
+
+    cleaned = re.sub(r"\s+", " ", (message or "").strip())
+    if not cleaned:
+        return fallback_name
+
+    patterns = [
+        r'(?:做|开发|创建|实现|搭建|写|生成|补一个|新增|增加|搞一个|搞个)\s*(?:一|1)?个?\s*(.+?)(?:组件|页面|模块|系统|功能|弹窗|选择器|面板)',
+        r'(.+?)(?:组件|页面|模块|系统|功能|弹窗|选择器|面板)',
+    ]
+    display_name = ""
+    for pattern in patterns:
+        match = re.search(pattern, cleaned)
+        if match:
+            display_name = match.group(1).strip("，。,.!！?？：: ")
+            break
+
+    if not display_name:
+        display_name = cleaned.split("，", 1)[0].split("。", 1)[0].strip()
+
+    display_name = re.sub(
+        r'^(请|帮我|帮忙|我想|我要|想要|需要|帮我做|帮我开发|做一个|做个|开发一个|开发个|实现一个|实现个|创建一个|创建个|生成一个|生成个)\s*',
+        '',
+        display_name,
+    ).strip("，。,.!！?？：: ")
+
+    suffix_map = {
+        "form-component": "组件",
+        "mobile-component": "组件",
+        "form-page": "页面",
+        "menu-page": "页面",
+        "mobile-page": "页面",
+        "form-list": "列表",
+        "layout": "布局",
+        "plugin": "插件",
+        "backend-api": "接口",
+    }
+    suffix = suffix_map.get(project_type, "")
+    if suffix and not any(token in display_name for token in ("组件", "页面", "选择器", "弹窗", "布局", "插件", "接口", "模块", "登录页")):
+        display_name = f"{display_name}{suffix}"
+
+    return (display_name or fallback_name)[:48]
+
+
 async def _is_new_component_intent(generator: CodingGenerator, message: str, ws_id: str, ws_mgr: WorkspaceManager) -> bool:
     """判断用户消息是要修改当前组件还是做一个全新的组件"""
     import re
@@ -1534,12 +1630,19 @@ async def preview_workspace(ws_id: str):
 
     output_name = apaas_config.get("outputName", ws_id)
     template_type = apaas_config.get("templateType", "FORM_COMPONENT")
+    workspace_meta = {}
+    workspace_meta_path = ws_path / ".workspace.json"
+    if workspace_meta_path.exists():
+        with open(workspace_meta_path, "r", encoding="utf-8") as f:
+            workspace_meta = json.load(f)
+    project_type = workspace_meta.get("project_type", "")
 
     return {
         "status": "ok",
         "preview_url": f"/api/coding/workspace/{ws_id}/preview/sandbox",
         "output_name": output_name,
         "template_type": template_type,
+        "project_type": project_type,
         "build_message": build_result.get("message", ""),
     }
 
@@ -1560,24 +1663,36 @@ async def preview_sandbox(ws_id: str):
 
     output_name = apaas_config.get("outputName", ws_id)
     template_type = apaas_config.get("templateType", "FORM_COMPONENT")
+    workspace_meta = {}
+    workspace_meta_path = ws_path / ".workspace.json"
+    if workspace_meta_path.exists():
+        with open(workspace_meta_path, "r", encoding="utf-8") as f:
+            workspace_meta = json.load(f)
+    project_type = workspace_meta.get("project_type", "")
     dist_base_url = f"/api/coding/workspace/{ws_id}/preview/dist"
 
-    html = generate_preview_html(template_type, apaas_config, dist_base_url, output_name)
+    html = generate_preview_html(
+        template_type,
+        apaas_config,
+        dist_base_url,
+        output_name,
+        project_type=project_type,
+    )
     return HTMLResponse(content=html)
 
 
 @router.get("/workspace/{ws_id}/preview/dist/{filename:path}")
 async def preview_dist_file(ws_id: str, filename: str):
-    """静态服务 dist 目录下的文件"""
-    ws_path = WORKSPACE_ROOT / ws_id
-    file_path = ws_path / "dist" / filename
+    """静态服务预览构建产物目录下的文件"""
+    output_dir = workspace_mgr.get_build_output_dir(ws_id)
+    file_path = output_dir / filename
 
     if not file_path.exists() or not file_path.is_file():
         raise HTTPException(status_code=404, detail=f"File not found: {filename}")
 
-    # 安全检查：确保文件在 dist 目录下
+    # 安全检查：确保文件在构建产物目录下
     try:
-        file_path.resolve().relative_to((ws_path / "dist").resolve())
+        file_path.resolve().relative_to(output_dir.resolve())
     except ValueError:
         raise HTTPException(status_code=403, detail="Access denied")
 

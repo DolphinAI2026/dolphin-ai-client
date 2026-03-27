@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, reactive, computed } from 'vue'
+import { ref, computed } from 'vue'
 import type { CodingScene, GeneratedFile, CodingConversation, WorkspaceInfo } from '@/api/coding'
 
 export interface PipelineStep {
@@ -7,6 +7,13 @@ export interface PipelineStep {
   label: string
   status: 'pending' | 'running' | 'done' | 'error'
   message?: string
+}
+
+export interface ChatActivityItem {
+  id: number
+  label: string
+  description: string
+  tone: 'default' | 'success' | 'error'
 }
 
 export interface ChatMessage {
@@ -17,6 +24,11 @@ export interface ChatMessage {
   pipelineSteps?: PipelineStep[]
   textContent?: string
   fileNames?: string[]
+  thinkingSummary?: string
+  previewHtml?: string
+  screenshots?: string[]
+  activityFeed?: ChatActivityItem[]
+  _previewCollapsed?: boolean
   created_at?: string
 }
 
@@ -77,7 +89,7 @@ export const useCodingStore = defineStore('coding', () => {
   function setFiles(files: GeneratedFile[]) {
     generatedFiles.value = files
     if (files.length > 0 && !activeFilePath.value) {
-      activeFilePath.value = files[0].path
+      activeFilePath.value = files[0]?.path || ''
     }
   }
 

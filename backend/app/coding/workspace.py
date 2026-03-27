@@ -7,16 +7,125 @@ import os
 import json
 import shutil
 import asyncio
+import inspect
 import logging
+import tempfile
+import re
 import uuid
+import hashlib
 from pathlib import Path
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 from enum import Enum
 
 logger = logging.getLogger(__name__)
 
 # 工作区根目录
 WORKSPACE_ROOT = Path(__file__).parent.parent.parent.parent / "workspaces"
+DEPENDENCY_CACHE_ROOT = WORKSPACE_ROOT / ".dependency-cache"
+NPM_CACHE_ROOT = WORKSPACE_ROOT / ".npm-cache"
+DEFAULT_NPM_REGISTRY = os.environ.get("APAAS_NPM_REGISTRY", "https://registry.npmmirror.com")
+
+DISPLAY_NAME_HINTS = {
+    "gantt-chart": "甘特图组件",
+    "approval-flow": "审批流程组件",
+    "approval": "审批组件",
+    "progress-bar": "进度条组件",
+    "star-rating": "评分组件",
+    "color-picker": "颜色选择器",
+    "tag-input": "标签输入组件",
+    "chart-analysis": "图表分析组件",
+    "chart": "图表组件",
+    "date-picker": "日期选择器",
+    "date-range": "日期范围选择器",
+    "file-upload": "文件上传组件",
+    "upload": "上传组件",
+    "avatar": "头像组件",
+    "signature": "签名组件",
+    "qrcode": "二维码组件",
+    "map-view": "地图页面",
+    "rich-text": "富文本组件",
+    "tree-select": "树形选择器",
+    "cascader": "级联选择器",
+    "data-table": "数据表格组件",
+    "kanban": "看板页面",
+    "data-query": "数据查询页面",
+    "popup-select": "弹窗选择器",
+    "person-select": "人员选择器",
+    "image-recognition": "图片识别组件",
+    "screenshot": "截图组件",
+    "ai-analysis": "AI分析组件",
+    "camera": "拍照组件",
+    "watermark": "水印组件",
+    "countdown": "倒计时组件",
+    "steps": "步骤条组件",
+    "timeline": "时间轴组件",
+    "carousel": "轮播组件",
+    "drawer": "抽屉组件",
+    "material-select": "物料选择器",
+    "map-picker": "地图选点组件",
+    "supplier-mgmt": "供应商管理页面",
+    "supplier": "供应商页面",
+    "purchase-mgmt": "采购管理页面",
+    "purchase": "采购页面",
+    "customer-mgmt": "客户管理页面",
+    "customer": "客户页面",
+    "work-order-mgmt": "工单管理页面",
+    "work-order": "工单页面",
+    "dispatch-mgmt": "派工管理页面",
+    "dispatch": "派工页面",
+    "smart-dispatch": "智能派工页面",
+    "order-mgmt": "订单管理页面",
+    "order": "订单页面",
+    "inventory-mgmt": "库存管理页面",
+    "inventory": "库存页面",
+    "attendance-mgmt": "考勤管理页面",
+    "attendance": "考勤页面",
+    "report": "报表页面",
+    "dashboard": "仪表盘页面",
+    "data-analysis": "数据分析页面",
+    "device-mgmt": "设备管理页面",
+    "device": "设备页面",
+    "project-mgmt": "项目管理页面",
+    "task-mgmt": "任务管理页面",
+    "contract-mgmt": "合同管理页面",
+    "contract": "合同页面",
+    "expense-mgmt": "费用管理页面",
+    "expense": "费用页面",
+    "budget-mgmt": "预算管理页面",
+    "budget": "预算页面",
+}
+
+PROJECT_TYPE_PREFIXES = {
+    "form-component": "form-component-",
+    "mobile-component": "",
+    "form-page": "form-page-",
+    "menu-page": "form-page-",
+    "mobile-page": "",
+    "form-list": "form-view-",
+    "backend-api": "backend-api-",
+    "layout": "form-layout-",
+    "plugin": "frontend-plugin-",
+}
+
+PROJECT_TYPE_SUFFIXES = {
+    "form-component": "组件",
+    "mobile-component": "组件",
+    "form-page": "页面",
+    "menu-page": "页面",
+    "mobile-page": "页面",
+    "form-list": "列表",
+    "backend-api": "接口",
+    "layout": "布局",
+    "plugin": "插件",
+    "script": "脚本",
+    "script-js": "脚本",
+    "script-python": "脚本",
+    "script-groovy": "脚本",
+    "business-dialog": "弹窗",
+    "ui-style": "样式",
+    "list-custom-module": "模块",
+    "web-login": "登录页",
+}
 
 
 class ProjectType(str, Enum):
@@ -50,9 +159,208 @@ class WorkspaceStatus(str, Enum):
 
 class WorkspaceManager:
     """工作区管理器"""
+    _install_locks: dict[str, asyncio.Lock] = {}
 
     def __init__(self):
         WORKSPACE_ROOT.mkdir(parents=True, exist_ok=True)
+        DEPENDENCY_CACHE_ROOT.mkdir(parents=True, exist_ok=True)
+        NPM_CACHE_ROOT.mkdir(parents=True, exist_ok=True)
+
+    def _read_apaas_config(self, ws_path: Path) -> dict:
+        apaas_json_path = ws_path / "src" / "apaas.json"
+        if not apaas_json_path.exists():
+            return {}
+        try:
+            return json.loads(apaas_json_path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    def _get_frontend_plugin_output_dir(self, ws_path: Path, apaas_config: dict) -> Path:
+        plugin_code = (apaas_config.get("code") or "").strip()
+        if not plugin_code:
+            ext_list = apaas_config.get("extensionConfigList") or []
+            if ext_list and isinstance(ext_list[0], dict):
+                plugin_code = (ext_list[0].get("code") or "").strip()
+        if not plugin_code:
+            return ws_path / "dist"
+        md5_code = hashlib.md5(plugin_code.encode("utf-8")).hexdigest()
+        return ws_path / "crypto" / md5_code
+
+    def _normalize_project_name(self, project_type: ProjectType, project_name: str) -> str:
+        safe_name = (project_name or "").strip().replace(" ", "-").lower()
+        if not safe_name.startswith("apaas-custom-"):
+            prefix = PROJECT_TYPE_PREFIXES.get(project_type.value, "")
+            safe_name = prefix + safe_name
+        return safe_name
+
+    def _strip_project_prefix(self, project_type: str, project_name: str) -> str:
+        base_name = (project_name or "").strip()
+        if base_name.startswith("apaas-custom-"):
+            base_name = base_name[len("apaas-custom-"):]
+        prefix = PROJECT_TYPE_PREFIXES.get(project_type, "")
+        if prefix and base_name.startswith(prefix):
+            base_name = base_name[len(prefix):]
+        return base_name.strip("-_ ")
+
+    def _humanize_project_name(self, project_type: str, project_name: str) -> str:
+        base_name = self._strip_project_prefix(project_type, project_name).lower()
+        if not base_name:
+            return "未命名工作区"
+        if base_name in DISPLAY_NAME_HINTS:
+            return DISPLAY_NAME_HINTS[base_name]
+
+        pretty = re.sub(r"[-_]+", " ", base_name).strip()
+        if not pretty:
+            return "未命名工作区"
+
+        if re.search(r"[\u4e00-\u9fff]", pretty):
+            return pretty
+
+        formatted = " ".join(
+            part.upper() if len(part) <= 3 else part.capitalize()
+            for part in pretty.split()
+        )
+        suffix = PROJECT_TYPE_SUFFIXES.get(project_type, "")
+        if suffix:
+            return f"{formatted} {suffix}".strip()
+        return formatted
+
+    def _normalize_display_name(self, display_name: Optional[str], project_type: str, project_name: str) -> str:
+        candidate = re.sub(r"\s+", " ", (display_name or "").strip())
+        if not candidate:
+            return self._humanize_project_name(project_type, project_name)
+
+        normalized_candidate = candidate.lower().replace(" ", "-")
+        if candidate == project_name or normalized_candidate == project_name.lower():
+            return self._humanize_project_name(project_type, project_name)
+        return candidate[:48]
+
+    def _ensure_display_name(self, ws_path: Path, meta: dict) -> dict:
+        if meta.get("display_name"):
+            return meta
+        hydrated_meta = dict(meta)
+        hydrated_meta["display_name"] = self._normalize_display_name(
+            hydrated_meta.get("project_name", ""),
+            hydrated_meta.get("project_type", ""),
+            hydrated_meta.get("project_name", ""),
+        )
+        self._write_meta(ws_path, hydrated_meta)
+        return hydrated_meta
+
+    def _get_build_output_dir(self, ws_path: Path, apaas_config: Optional[dict] = None) -> Path:
+        apaas_config = apaas_config or self._read_apaas_config(ws_path)
+        template_type = (apaas_config.get("templateType") or "").upper()
+        meta = self._read_meta(ws_path) if (ws_path / ".workspace.json").exists() else {}
+        if meta.get("project_type") == ProjectType.BACKEND_API.value:
+            return ws_path / "target"
+        output_name = apaas_config.get("outputName") or ws_path.name
+        if template_type in {"MENU_PAGE", "FORM_PAGE", "PAGE_LAYOUT", "LIST_VIEW"}:
+            return ws_path / output_name
+        if template_type in {"FRONTEND_PLUGIN", "PLUGIN"}:
+            return self._get_frontend_plugin_output_dir(ws_path, apaas_config)
+        return ws_path / "dist"
+
+    def get_build_output_dir(self, ws_id: str) -> Path:
+        ws_path = WORKSPACE_ROOT / ws_id
+        if not ws_path.exists():
+            raise FileNotFoundError(f"Workspace {ws_id} not found")
+        return self._get_build_output_dir(ws_path)
+
+    def _has_build_artifacts(self, output_dir: Path) -> bool:
+        if not output_dir.exists() or not output_dir.is_dir():
+            return False
+        for suffix in (".js", ".css", ".html", ".jar", ".war"):
+            if any(output_dir.rglob(f"*{suffix}")):
+                return True
+        return False
+
+    def _uses_df_apaas_cli_build(self, ws_path: Path) -> bool:
+        package_json_path = ws_path / "package.json"
+        if not package_json_path.exists():
+            return False
+        try:
+            package_json = json.loads(package_json_path.read_text(encoding="utf-8"))
+        except Exception:
+            return False
+        build_script = ((package_json.get("scripts") or {}).get("build") or "").strip()
+        return "df-apaas-cli build" in build_script
+
+    async def _run_backend_build_process(self, cwd: Path) -> tuple[int, bytes, bytes]:
+        mvnw = cwd / "mvnw"
+        if mvnw.exists():
+            cmd = [str(mvnw), "-q", "-DskipTests", "package", "-P", "lib"]
+        else:
+            mvn_exec = shutil.which("mvn")
+            if not mvn_exec:
+                return 127, b"", "未检测到 Maven，请先安装 Maven/JDK 再构建后端项目".encode("utf-8")
+            cmd = [mvn_exec, "-q", "-DskipTests", "package", "-P", "lib"]
+
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            cwd=str(cwd),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+        return proc.returncode, stdout, stderr
+
+    async def _run_build_process(self, cwd: Path) -> tuple[int, bytes, bytes]:
+        meta_path = cwd / ".workspace.json"
+        if meta_path.exists():
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            except Exception:
+                meta = {}
+            if meta.get("project_type") == ProjectType.BACKEND_API.value:
+                return await self._run_backend_build_process(cwd)
+
+        proc = await asyncio.create_subprocess_exec(
+            "npm", "run", "build",
+            cwd=str(cwd),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+        return proc.returncode, stdout, stderr
+
+    async def _build_with_staging(self, ws_path: Path) -> dict:
+        apaas_config = self._read_apaas_config(ws_path)
+        output_dir = self._get_build_output_dir(ws_path, apaas_config)
+        output_name = apaas_config.get("outputName") or output_dir.name
+
+        with tempfile.TemporaryDirectory(prefix="apaas-build-stage.") as temp_dir:
+            stage_path = Path(temp_dir) / "workspace"
+            shutil.copytree(
+                ws_path,
+                stage_path,
+                ignore=shutil.ignore_patterns("node_modules", "__pycache__", ".DS_Store"),
+            )
+
+            source_node_modules = ws_path / "node_modules"
+            if source_node_modules.exists():
+                os.symlink(source_node_modules, stage_path / "node_modules", target_is_directory=True)
+
+            returncode, stdout, stderr = await self._run_build_process(stage_path)
+            stdout_text = stdout.decode("utf-8", errors="replace")
+            stderr_text = stderr.decode("utf-8", errors="replace")
+
+            stage_output_dir = self._get_build_output_dir(stage_path, apaas_config)
+            if returncode != 0 or not self._has_build_artifacts(stage_output_dir):
+                message = (stderr_text or stdout_text or "构建失败")[:1200]
+                return {"status": "error", "message": message}
+
+            if output_dir.exists():
+                shutil.rmtree(output_dir)
+            shutil.copytree(stage_output_dir, output_dir)
+
+            if (apaas_config.get("templateType") or "").upper() == "FRONTEND_PLUGIN":
+                stage_zip = stage_output_dir.parent / f"{stage_output_dir.name}.zip"
+            else:
+                stage_zip = stage_path / f"{output_name}.zip"
+            if stage_zip.exists():
+                shutil.copy2(stage_zip, ws_path / stage_zip.name)
+
+            return {"status": "ok", "message": "构建成功"}
 
     def create_workspace(
         self,
@@ -60,6 +368,7 @@ class WorkspaceManager:
         project_name: str,
         user_id: int,
         project_id: Optional[int] = None,
+        display_name: Optional[str] = None,
     ) -> dict:
         """创建新工作区并生成脚手架"""
         # 生成 workspace ID
@@ -72,17 +381,8 @@ class WorkspaceManager:
         ws_path.mkdir(parents=True)
 
         # 规范化项目名
-        safe_name = project_name.replace(" ", "-").lower()
-        if not safe_name.startswith("apaas-custom-"):
-            # 根据类型加前缀
-            prefix_map = {
-                ProjectType.FORM_COMPONENT: "form-component-",
-                ProjectType.FORM_PAGE: "form-page-",
-                ProjectType.MENU_PAGE: "form-page-",
-                ProjectType.FORM_LIST: "form-list-",
-                ProjectType.BACKEND_API: "backend-api-",
-            }
-            safe_name = prefix_map.get(project_type, "") + safe_name
+        safe_name = self._normalize_project_name(project_type, project_name)
+        resolved_display_name = self._normalize_display_name(display_name, project_type.value, safe_name)
 
         # 写入 workspace 元信息
         meta = {
@@ -90,6 +390,7 @@ class WorkspaceManager:
             "project_id": project_id,
             "project_type": project_type.value,
             "project_name": safe_name,
+            "display_name": resolved_display_name,
             "user_id": user_id,
             "status": WorkspaceStatus.CREATING.value,
         }
@@ -147,7 +448,173 @@ class WorkspaceManager:
 
         return meta
 
-    async def install_deps(self, ws_id: str) -> dict:
+    @staticmethod
+    def _install_state_path(ws_path: Path) -> Path:
+        return ws_path / ".install-state.json"
+
+    @staticmethod
+    def _remove_path(path: Path):
+        if path.is_symlink() or path.is_file():
+            path.unlink(missing_ok=True)
+        elif path.exists():
+            shutil.rmtree(path, ignore_errors=True)
+
+    @staticmethod
+    async def _emit_install_progress(
+        progress_callback: Optional[Callable[[str], Awaitable[None] | None]],
+        chunk: str,
+    ):
+        if not progress_callback or not chunk:
+            return
+        maybe_awaitable = progress_callback(chunk)
+        if inspect.isawaitable(maybe_awaitable):
+            await maybe_awaitable
+
+    def _build_npm_env(self) -> dict[str, str]:
+        env = {**os.environ}
+        env.setdefault("npm_config_registry", DEFAULT_NPM_REGISTRY)
+        env.setdefault("npm_config_cache", str(NPM_CACHE_ROOT))
+        env.setdefault("npm_config_prefer_offline", "true")
+        env.setdefault("npm_config_audit", "false")
+        env.setdefault("npm_config_fund", "false")
+        env.setdefault("FORCE_COLOR", "0")
+        return env
+
+    def _build_dependency_signature(self, ws_path: Path) -> str:
+        package_json_path = ws_path / "package.json"
+        package_json = json.loads(package_json_path.read_text(encoding="utf-8"))
+        signature_payload = {
+            "templateType": package_json.get("templateType"),
+            "engines": package_json.get("engines") or {},
+            "dependencies": package_json.get("dependencies") or {},
+            "devDependencies": package_json.get("devDependencies") or {},
+            "optionalDependencies": package_json.get("optionalDependencies") or {},
+            "peerDependencies": package_json.get("peerDependencies") or {},
+            "registry": DEFAULT_NPM_REGISTRY,
+        }
+        serialized = json.dumps(signature_payload, ensure_ascii=False, sort_keys=True)
+        return hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:16]
+
+    def _dependency_cache_dir(self, signature: str) -> Path:
+        return DEPENDENCY_CACHE_ROOT / signature
+
+    def _write_install_state(self, ws_path: Path, signature: str, source: str):
+        self._install_state_path(ws_path).write_text(
+            json.dumps({"signature": signature, "source": source}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def _workspace_install_ready(self, ws_path: Path, signature: str) -> bool:
+        node_modules_path = ws_path / "node_modules"
+        if not node_modules_path.exists():
+            return False
+
+        state_path = self._install_state_path(ws_path)
+        if state_path.exists():
+            try:
+                state = json.loads(state_path.read_text(encoding="utf-8"))
+                if state.get("signature") == signature:
+                    return True
+            except Exception:
+                pass
+
+        package_lock_path = ws_path / "package-lock.json"
+        if package_lock_path.exists() or any(node_modules_path.iterdir()):
+            self._write_install_state(ws_path, signature, "workspace")
+            return True
+        return False
+
+    def _cache_ready(self, cache_dir: Path) -> bool:
+        node_modules_path = cache_dir / "node_modules"
+        return node_modules_path.exists() and any(node_modules_path.iterdir())
+
+    def _link_cached_install(self, ws_path: Path, cache_dir: Path, signature: str):
+        cache_node_modules = cache_dir / "node_modules"
+        if not cache_node_modules.exists():
+            raise FileNotFoundError(f"cache missing node_modules: {cache_dir}")
+
+        workspace_node_modules = ws_path / "node_modules"
+        if workspace_node_modules.is_symlink():
+            current_target = workspace_node_modules.resolve()
+            if current_target == cache_node_modules.resolve():
+                self._write_install_state(ws_path, signature, "shared-cache")
+                return
+
+        self._remove_path(workspace_node_modules)
+        try:
+            os.symlink(cache_node_modules, workspace_node_modules, target_is_directory=True)
+        except OSError:
+            shutil.copytree(cache_node_modules, workspace_node_modules)
+
+        cache_package_lock = cache_dir / "package-lock.json"
+        if cache_package_lock.exists():
+            shutil.copy2(cache_package_lock, ws_path / "package-lock.json")
+
+        self._write_install_state(ws_path, signature, "shared-cache")
+
+    async def _install_cache_miss(
+        self,
+        ws_path: Path,
+        cache_dir: Path,
+        progress_callback: Optional[Callable[[str], Awaitable[None] | None]] = None,
+    ) -> tuple[bool, str]:
+        await self._emit_install_progress(
+            progress_callback,
+            "[cache] 未命中共享依赖缓存，正在首次安装依赖...\n",
+        )
+
+        temp_dir = Path(tempfile.mkdtemp(prefix="apaas-npm-install.", dir=str(DEPENDENCY_CACHE_ROOT)))
+        try:
+            shutil.copy2(ws_path / "package.json", temp_dir / "package.json")
+
+            proc = await asyncio.create_subprocess_exec(
+                "npm",
+                "install",
+                "--registry",
+                DEFAULT_NPM_REGISTRY,
+                "--prefer-offline",
+                "--no-audit",
+                "--no-fund",
+                cwd=str(temp_dir),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                env=self._build_npm_env(),
+            )
+
+            output_chunks: list[str] = []
+            while True:
+                chunk = await proc.stdout.read(1024) if proc.stdout else b""
+                if not chunk:
+                    break
+                text = chunk.decode("utf-8", errors="replace")
+                output_chunks.append(text)
+                await self._emit_install_progress(progress_callback, text)
+
+            await proc.wait()
+            output = "".join(output_chunks)
+            if proc.returncode != 0:
+                return False, output[:1200] or "npm install 失败"
+
+            self._remove_path(cache_dir)
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(temp_dir / "node_modules"), str(cache_dir / "node_modules"))
+            package_lock_path = temp_dir / "package-lock.json"
+            if package_lock_path.exists():
+                shutil.move(str(package_lock_path), str(cache_dir / "package-lock.json"))
+
+            await self._emit_install_progress(
+                progress_callback,
+                "[cache] 首次安装完成，后续同依赖工作区将直接复用缓存。\n",
+            )
+            return True, "依赖安装完成（已写入共享缓存）"
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    async def install_deps(
+        self,
+        ws_id: str,
+        progress_callback: Optional[Callable[[str], Awaitable[None] | None]] = None,
+    ) -> dict:
         """安装 npm 依赖"""
         ws_path = WORKSPACE_ROOT / ws_id
         if not ws_path.exists():
@@ -170,42 +637,61 @@ class WorkspaceManager:
         self._write_meta(ws_path, meta)
 
         try:
-            proc = await asyncio.create_subprocess_exec(
-                "npm", "install",
-                "--registry", "https://registry.npmmirror.com",
-                cwd=str(ws_path),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await proc.communicate()
+            signature = self._build_dependency_signature(ws_path)
+            cache_dir = self._dependency_cache_dir(signature)
 
-            if proc.returncode == 0:
+            if self._workspace_install_ready(ws_path, signature):
                 meta["status"] = WorkspaceStatus.READY.value
                 self._write_meta(ws_path, meta)
-                return {"status": "ok", "message": "依赖安装完成"}
-            else:
+                return {"status": "ok", "message": "依赖已就绪"}
+
+            install_lock = self._install_locks.setdefault(signature, asyncio.Lock())
+            async with install_lock:
+                if self._workspace_install_ready(ws_path, signature):
+                    meta["status"] = WorkspaceStatus.READY.value
+                    self._write_meta(ws_path, meta)
+                    return {"status": "ok", "message": "依赖已就绪"}
+
+                if self._cache_ready(cache_dir):
+                    self._link_cached_install(ws_path, cache_dir, signature)
+                    meta["status"] = WorkspaceStatus.READY.value
+                    self._write_meta(ws_path, meta)
+                    await self._emit_install_progress(
+                        progress_callback,
+                        "[cache] 已复用共享依赖缓存，跳过重复 npm install。\n",
+                    )
+                    return {"status": "ok", "message": "依赖已从共享缓存复用"}
+
+                ok, message = await self._install_cache_miss(
+                    ws_path,
+                    cache_dir,
+                    progress_callback=progress_callback,
+                )
+                if ok:
+                    self._link_cached_install(ws_path, cache_dir, signature)
+                    meta["status"] = WorkspaceStatus.READY.value
+                    self._write_meta(ws_path, meta)
+                    return {"status": "ok", "message": message}
+
                 meta["status"] = WorkspaceStatus.ERROR.value
                 self._write_meta(ws_path, meta)
-                return {
-                    "status": "error",
-                    "message": stderr.decode("utf-8", errors="replace")[:500],
-                }
+                return {"status": "error", "message": message[:1200]}
         except Exception as e:
             meta["status"] = WorkspaceStatus.ERROR.value
             self._write_meta(ws_path, meta)
             return {"status": "error", "message": str(e)}
 
     async def build_if_needed(self, ws_id: str) -> dict:
-        """按需构建 - 仅在 src 文件比 dist 更新时重新构建"""
+        """按需构建 - 仅在源码比构建产物更新时重新构建"""
         ws_path = WORKSPACE_ROOT / ws_id
         if not ws_path.exists():
             raise FileNotFoundError(f"Workspace {ws_id} not found")
 
-        dist_path = ws_path / "dist"
+        output_dir = self._get_build_output_dir(ws_path)
         src_path = ws_path / "src"
 
-        # 如果 dist 不存在，必须构建
-        if not dist_path.exists():
+        # 如果构建产物不存在，必须构建
+        if not self._has_build_artifacts(output_dir):
             return await self.build_project(ws_id)
 
         # 比较 src 和 dist 的最新修改时间
@@ -219,13 +705,13 @@ class WorkspaceManager:
             return latest
 
         src_mtime = _latest_mtime(src_path) if src_path.exists() else 0
-        dist_mtime = _latest_mtime(dist_path)
+        output_mtime = _latest_mtime(output_dir)
 
-        if src_mtime > dist_mtime:
+        if src_mtime > output_mtime:
             logger.info(f"[build_if_needed] src is newer, rebuilding {ws_id}")
             return await self.build_project(ws_id)
         else:
-            logger.info(f"[build_if_needed] dist is up-to-date for {ws_id}")
+            logger.info(f"[build_if_needed] build output is up-to-date for {ws_id}")
             return {"status": "ok", "message": "已是最新，无需重新构建"}
 
     async def build_project(self, ws_id: str) -> dict:
@@ -234,30 +720,37 @@ class WorkspaceManager:
         if not ws_path.exists():
             raise FileNotFoundError(f"Workspace {ws_id} not found")
 
+        self._ensure_layout_workspace_compat(ws_path)
+        self._ensure_form_list_workspace_compat(ws_path)
+        self._ensure_plugin_workspace_compat(ws_path)
+        self._ensure_backend_workspace_compat(ws_path)
+
         meta = self._read_meta(ws_path)
         meta["status"] = WorkspaceStatus.BUILDING.value
         self._write_meta(ws_path, meta)
 
         try:
-            proc = await asyncio.create_subprocess_exec(
-                "npm", "run", "build",
-                cwd=str(ws_path),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await proc.communicate()
+            build_result = None
+            if " " in str(ws_path) and self._uses_df_apaas_cli_build(ws_path):
+                build_result = await self._build_with_staging(ws_path)
+            else:
+                returncode, stdout, stderr = await self._run_build_process(ws_path)
+                if returncode == 0 and self._has_build_artifacts(self._get_build_output_dir(ws_path)):
+                    build_result = {"status": "ok", "message": "构建成功"}
+                else:
+                    build_result = {
+                        "status": "error",
+                        "message": (stderr.decode("utf-8", errors="replace") or stdout.decode("utf-8", errors="replace"))[:1200],
+                    }
 
-            if proc.returncode == 0:
+            if build_result["status"] == "ok":
                 meta["status"] = WorkspaceStatus.READY.value
                 self._write_meta(ws_path, meta)
-                return {"status": "ok", "message": "构建成功"}
+                return build_result
             else:
                 meta["status"] = WorkspaceStatus.ERROR.value
                 self._write_meta(ws_path, meta)
-                return {
-                    "status": "error",
-                    "message": stderr.decode("utf-8", errors="replace")[:500],
-                }
+                return build_result
         except Exception as e:
             meta["status"] = WorkspaceStatus.ERROR.value
             self._write_meta(ws_path, meta)
@@ -350,19 +843,19 @@ class WorkspaceManager:
         ws_path = WORKSPACE_ROOT / ws_id
         meta = self._read_meta(ws_path)
         project_name = meta.get("project_name", ws_id)
-        dist_path = ws_path / "dist"
-        if not dist_path.exists():
-            raise FileNotFoundError("dist 目录不存在，构建可能失败")
+        output_dir = self._get_build_output_dir(ws_path)
+        if not self._has_build_artifacts(output_dir):
+            raise FileNotFoundError("构建产物目录不存在，构建可能失败")
 
         import zipfile, io
         zip_path = ws_path / f"{project_name}.zip"
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
-            for f in dist_path.rglob("*"):
+            for f in output_dir.rglob("*"):
                 if f.is_file():
-                    zf.write(f, f.relative_to(dist_path))
+                    zf.write(f, f.relative_to(output_dir))
             # 加入 apaas.json
             apaas_json = ws_path / "src" / "apaas.json"
-            if apaas_json.exists():
+            if apaas_json.exists() and not (output_dir / "apaas.json").exists():
                 zf.write(apaas_json, "apaas.json")
                 try:
                     cfg = json.loads(apaas_json.read_text())
@@ -876,7 +1369,7 @@ const resultPath = '{str(result_json_path)}'
         ws_path = WORKSPACE_ROOT / ws_id
         if not ws_path.exists():
             raise FileNotFoundError(f"Workspace {ws_id} not found")
-        meta = self._read_meta(ws_path)
+        meta = self._ensure_display_name(ws_path, self._read_meta(ws_path))
         meta["files"] = self.list_files(ws_id)
         return meta
 
@@ -888,7 +1381,7 @@ const resultPath = '{str(result_json_path)}'
         for d in WORKSPACE_ROOT.iterdir():
             if d.is_dir() and d.name.startswith(f"{user_id}_"):
                 try:
-                    meta = self._read_meta(d)
+                    meta = self._ensure_display_name(d, self._read_meta(d))
                     results.append(meta)
                 except Exception:
                     pass
@@ -941,11 +1434,391 @@ dist/
 """)
 
         # public 目录占位
-        pub_dir = f"public/{'form-component' if template_type == 'FORM_COMPONENT' else 'form-page'}/{name}"
+        if template_type == "FORM_COMPONENT":
+            public_root = "form-component"
+        elif template_type == "PAGE_LAYOUT":
+            public_root = "form-layout"
+        elif template_type == "LIST_VIEW":
+            public_root = "form-view"
+        elif template_type == "FRONTEND_PLUGIN":
+            public_root = "frontend-plugin"
+        else:
+            public_root = "form-page"
+        pub_dir = f"public/{public_root}/{name}"
         self._write(ws_path, f"{pub_dir}/.gitkeep", "")
 
         # HTTPS 自签名证书（debug 模式必需）
         self._generate_https_cert(ws_path)
+
+    def _ensure_layout_workspace_compat(self, ws_path: Path):
+        """修复旧版布局工作区，使其对齐 PAGE_LAYOUT 脚手架协议。"""
+        meta = self._read_meta(ws_path)
+        if meta.get("project_type") != ProjectType.LAYOUT.value:
+            return
+
+        project_name = meta.get("project_name") or ws_path.name
+        package_json_path = ws_path / "package.json"
+        apaas_json_path = ws_path / "src" / "apaas.json"
+
+        if not package_json_path.exists() or not apaas_json_path.exists():
+            return
+
+        try:
+            package_json = json.loads(package_json_path.read_text(encoding="utf-8"))
+        except Exception:
+            package_json = {}
+        try:
+            apaas_config = json.loads(apaas_json_path.read_text(encoding="utf-8"))
+        except Exception:
+            apaas_config = {}
+
+        layout_items = apaas_config.get("layout")
+        layout_name = None
+        if isinstance(layout_items, list):
+            for item in layout_items:
+                if isinstance(item, dict) and item.get("name"):
+                    layout_name = item["name"]
+                    break
+        if not layout_name:
+            layout_name = f"apaas-custom-{project_name}"
+
+        output_name = apaas_config.get("outputName") or f"form-layout-{project_name}"
+
+        package_changed = False
+        if package_json.get("templateType") != "PAGE_LAYOUT":
+            package_json["templateType"] = "PAGE_LAYOUT"
+            package_changed = True
+        if package_changed:
+            package_json_path.write_text(
+                json.dumps(package_json, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+    def _ensure_form_list_workspace_compat(self, ws_path: Path):
+        """修复旧版列表视图工作区，使其对齐 LIST_VIEW 协议。"""
+        meta = self._read_meta(ws_path)
+        if meta.get("project_type") != ProjectType.FORM_LIST.value:
+            return
+
+        project_name = meta.get("project_name") or ws_path.name
+        package_json_path = ws_path / "package.json"
+        apaas_json_path = ws_path / "src" / "apaas.json"
+        public_dir = ws_path / "public" / "form-view" / project_name
+        public_dir.mkdir(parents=True, exist_ok=True)
+        gitkeep = public_dir / ".gitkeep"
+        if not gitkeep.exists():
+            gitkeep.write_text("", encoding="utf-8")
+
+        if package_json_path.exists():
+            try:
+                package_json = json.loads(package_json_path.read_text(encoding="utf-8"))
+            except Exception:
+                package_json = {}
+        else:
+            package_json = {}
+
+        package_json.update({
+            "name": package_json.get("name") or project_name,
+            "version": package_json.get("version") or "1.0.0",
+            "engines": {"node": "16.x"},
+            "templateType": "LIST_VIEW",
+            "private": True,
+            "scripts": {
+                "lint": "vue-cli-service lint",
+                "serve": "vue-cli-service serve src/index.js",
+                "debug": "df-apaas-cli debug",
+                "build": "df-apaas-cli build",
+            },
+        })
+        package_json["dependencies"] = {
+            **(package_json.get("dependencies") or {}),
+            "core-js": "3.8.3",
+            "vue": "2.7.14",
+        }
+        package_json["devDependencies"] = {
+            **(package_json.get("devDependencies") or {}),
+            "@babel/core": "7.12.16",
+            "@babel/eslint-parser": "7.12.16",
+            "@vue/cli-plugin-babel": "5.0.0",
+            "@vue/cli-plugin-eslint": "5.0.0",
+            "@vue/cli-service": "5.0.8",
+            "dart-sass": "1.25.0",
+            "eslint": "7.32.0",
+            "eslint-plugin-vue": "8.0.3",
+            "sass": "1.85.1",
+            "sass-loader": "8.0.2",
+            "vue-template-compiler": "2.7.14",
+        }
+        package_json["eslintConfig"] = {
+            "root": True,
+            "env": {"node": True},
+            "extends": ["plugin:vue/essential", "eslint:recommended"],
+            "parserOptions": {"parser": "@babel/eslint-parser"},
+            "rules": {},
+        }
+        package_json["browserslist"] = ["> 1%", "last 2 versions", "not dead", "Chrome 40.0", "ie >= 11"]
+        package_json_path.write_text(json.dumps(package_json, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        if apaas_json_path.exists():
+            try:
+                apaas_json = json.loads(apaas_json_path.read_text(encoding="utf-8"))
+            except Exception:
+                apaas_json = {}
+        else:
+            apaas_json = {}
+
+        list_key = next(iter((apaas_json.get("list") or {}).keys()), f"apaas-custom-{self._strip_project_prefix(meta.get('project_type', ''), project_name)}")
+        repaired_apaas = dict(apaas_json)
+        repaired_apaas["entry"] = repaired_apaas.get("entry") or "index.js"
+        repaired_apaas["templateType"] = "LIST_VIEW"
+        repaired_apaas["router"] = repaired_apaas.get("router") or {}
+        repaired_apaas["customWidgetList"] = repaired_apaas.get("customWidgetList") or []
+        repaired_apaas["list"] = repaired_apaas.get("list") or {
+            list_key: {
+                "renderLogic": "FORM_LIST_VIEW",
+                "desc": project_name,
+                "status": "ENABLE",
+            }
+        }
+        repaired_apaas["copyAssets"] = [f"public/form-view/{project_name}"]
+        repaired_apaas["outputName"] = repaired_apaas.get("outputName") or project_name
+        apaas_json_path.write_text(json.dumps(repaired_apaas, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _ensure_plugin_workspace_compat(self, ws_path: Path):
+        """修复旧版插件工作区，使其对齐 FRONTEND_PLUGIN 协议。"""
+        meta = self._read_meta(ws_path)
+        if meta.get("project_type") != ProjectType.PLUGIN.value:
+            return
+
+        project_name = meta.get("project_name") or ws_path.name
+        package_json_path = ws_path / "package.json"
+        apaas_json_path = ws_path / "src" / "apaas.json"
+        public_dir = ws_path / "public" / "frontend-plugin" / project_name
+        public_dir.mkdir(parents=True, exist_ok=True)
+        gitkeep = public_dir / ".gitkeep"
+        if not gitkeep.exists():
+            gitkeep.write_text("", encoding="utf-8")
+
+        if package_json_path.exists():
+            try:
+                package_json = json.loads(package_json_path.read_text(encoding="utf-8"))
+            except Exception:
+                package_json = {}
+        else:
+            package_json = {}
+
+        package_json.update({
+            "name": package_json.get("name") or project_name,
+            "version": package_json.get("version") or "1.0.0",
+            "engines": {"node": "16.x"},
+            "templateType": "FRONTEND_PLUGIN",
+            "private": True,
+            "scripts": {
+                "lint": "vue-cli-service lint",
+                "serve-admin": "vue-cli-service serve src/admin.js",
+                "serve-app": "vue-cli-service serve src/app.js",
+                "serve-mobile": "vue-cli-service serve src/mobile.js",
+                "debug": "df-apaas-cli debug",
+                "build": "df-apaas-cli build",
+            },
+        })
+        package_json["dependencies"] = {
+            **(package_json.get("dependencies") or {}),
+            "core-js": "3.8.3",
+            "vue": "2.7.14",
+            "md5": "2.3.0",
+        }
+        package_json["devDependencies"] = {
+            **(package_json.get("devDependencies") or {}),
+            "@babel/core": "7.12.16",
+            "@babel/eslint-parser": "7.12.16",
+            "@vue/cli-plugin-babel": "5.0.0",
+            "@vue/cli-plugin-eslint": "5.0.0",
+            "@vue/cli-service": "5.0.8",
+            "dart-sass": "1.25.0",
+            "eslint": "7.32.0",
+            "eslint-plugin-vue": "8.0.3",
+            "sass": "1.85.1",
+            "sass-loader": "8.0.2",
+            "vue-template-compiler": "2.7.14",
+        }
+        package_json["eslintConfig"] = {
+            "root": True,
+            "env": {"node": True},
+            "extends": ["plugin:vue/essential", "eslint:recommended"],
+            "parserOptions": {"parser": "@babel/eslint-parser"},
+            "rules": {},
+        }
+        package_json["browserslist"] = ["> 1%", "last 2 versions", "not dead", "Chrome 40.0", "ie >= 11"]
+        package_json_path.write_text(json.dumps(package_json, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        if apaas_json_path.exists():
+            try:
+                apaas_json = json.loads(apaas_json_path.read_text(encoding="utf-8"))
+            except Exception:
+                apaas_json = {}
+        else:
+            apaas_json = {}
+
+        plugin_suffix = self._strip_project_prefix(meta.get("project_type", ""), project_name).replace("-", "_").upper() or "CUSTOM_PLUGIN"
+        plugin_code = apaas_json.get("code")
+        if not plugin_code:
+            ext_list = apaas_json.get("extensionConfigList") or []
+            if ext_list and isinstance(ext_list[0], dict):
+                plugin_code = (ext_list[0].get("code") or "").strip()
+        plugin_code = plugin_code or f"PLUGIN_{plugin_suffix}"
+
+        repaired_apaas = dict(apaas_json)
+        repaired_apaas["templateType"] = "FRONTEND_PLUGIN"
+        repaired_apaas["copyAssets"] = [f"public/frontend-plugin/{project_name}"]
+        repaired_apaas["code"] = plugin_code
+        repaired_apaas["name"] = repaired_apaas.get("name", "")
+        repaired_apaas["description"] = repaired_apaas.get("description", "")
+        repaired_apaas["outputName"] = repaired_apaas.get("outputName") or project_name
+        repaired_apaas["admin"] = "admin.js"
+        repaired_apaas["app"] = "app.js"
+        repaired_apaas["mobile"] = "mobile.js"
+        repaired_apaas["extraConfig"] = repaired_apaas.get("extraConfig") or {}
+        apaas_json_path.write_text(json.dumps(repaired_apaas, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        plugin_local = ws_path / "src" / "plugin-local"
+        plugin_local.mkdir(parents=True, exist_ok=True)
+        (plugin_local / "zh-CN").mkdir(parents=True, exist_ok=True)
+        (plugin_local / "en-US").mkdir(parents=True, exist_ok=True)
+        self._write(ws_path, "src/plugin-local/zh-CN/index.js", f"export default {{ frontendPlugin: {{ title: '{project_name}', panel: '自定义面板' }} }}\n")
+        self._write(ws_path, "src/plugin-local/en-US/index.js", f"export default {{ frontendPlugin: {{ title: '{project_name}', panel: 'Custom Panel' }} }}\n")
+        self._write(ws_path, "src/plugin-local/index.js", """import zhLocaleModule from './zh-CN/index.js'
+import enLocaleModule from './en-US/index.js'
+
+const mergeLocaleMessage =
+  window.df?.getI18n?.().mergeLocaleMessage?.bind(window.df.getI18n()) ||
+  window.APaaSSDK?.context?.globalVueI18n?.mergeLocaleMessage?.bind(window.APaaSSDK.context.globalVueI18n)
+
+if (mergeLocaleMessage) {
+  mergeLocaleMessage('zh-CN', zhLocaleModule)
+  mergeLocaleMessage('en-US', enLocaleModule)
+}
+""")
+
+        self._write(ws_path, "src/tab-config.js", """export function getCustomTabConfig() {
+  return [
+    {
+      code: 'customPanel',
+      title: '自定义面板',
+      componentName: 'apaas-plugin-panel',
+      resourceCode: 'APP_INFORMATION'
+    }
+  ]
+}
+""")
+        self._write(ws_path, "src/extension.js", f"""import {{ getCustomTabConfig }} from './tab-config.js'
+
+const extensionConfig = {{
+  code: '{plugin_code}',
+  name: '{project_name}',
+  blocks: [],
+  versions: ['TRIAL_EDITION', 'TEAM_EDITION', 'STANDARD_EDITION', 'PREMIUM_EDITION'],
+  enable: true,
+  extensionMethods: {{
+    'custom-tab': {{
+      getCustomTabConfig
+    }}
+  }}
+}}
+
+export default extensionConfig
+""")
+        self._write(ws_path, "src/custom-tab/custom-panel.vue", f"""<template>
+  <div class="plugin-panel">
+    <h3>{{{{ $t ? $t('frontendPlugin.title') : '{project_name}' }}}}</h3>
+    <p>{{{{ $t ? $t('frontendPlugin.panel') : '自定义面板' }}}}</p>
+  </div>
+</template>
+
+<script>
+export default {{
+  name: 'apaas-plugin-panel'
+}}
+</script>
+
+<style scoped>
+.plugin-panel {{
+  padding: 16px;
+}}
+</style>
+""")
+        plugin_entry = """import './plugin-local/index.js'
+import extensionConfig from './extension.js'
+import CustomPanel from './custom-tab/custom-panel.vue'
+
+const activateExtension = () => {
+  const engine = window?.Vue?._extensionEngine
+  if (engine && typeof engine.registerExtensionConfig === 'function') {
+    engine.registerExtensionConfig(extensionConfig)
+  }
+}
+
+// eslint-disable-next-line no-unused-vars
+const install = function (context, hookManager, definition) {
+  activateExtension()
+}
+
+// eslint-disable-next-line no-unused-vars
+const activate = function (context, hookManager, definition) {
+  activateExtension()
+}
+
+const staticComponents = [CustomPanel]
+
+export default { install, activate, staticComponents }
+"""
+        self._write(ws_path, "src/admin.js", plugin_entry)
+        self._write(ws_path, "src/app.js", plugin_entry)
+        self._write(ws_path, "src/mobile.js", plugin_entry)
+
+    def _ensure_backend_workspace_compat(self, ws_path: Path):
+        """修复后端工作区 POM，使其至少具备可编译的依赖声明。"""
+        meta = self._read_meta(ws_path)
+        if meta.get("project_type") != ProjectType.BACKEND_API.value:
+            return
+
+        pom_path = ws_path / "pom.xml"
+        if not pom_path.exists():
+            return
+
+        pom_text = pom_path.read_text(encoding="utf-8")
+        if "query-mongodb" not in pom_text:
+            pom_text = pom_text.replace(
+                "</dependencies>",
+                """        <dependency>
+            <groupId>com.definesys</groupId>
+            <artifactId>query-mongodb</artifactId>
+            <version>apaas-1.1.11.bigdata.2</version>
+            <scope>provided</scope>
+        </dependency>
+    </dependencies>""",
+            )
+        if "<build>" not in pom_text:
+            pom_text = pom_text.replace(
+                "</profiles>",
+                """</profiles>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.11.0</version>
+                <configuration>
+                    <source>${java.version}</source>
+                    <target>${java.version}</target>
+                    <encoding>UTF-8</encoding>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>""",
+            )
+        pom_path.write_text(pom_text, encoding="utf-8")
 
     # ========== VS Code AI 配置 ==========
 
@@ -1473,10 +2346,10 @@ export { widgetConfigList, editorConfigList }
         }}
       }},
       component: {{
-        ide: 'Mobile{prefix}Ide', edit: 'Mobile{prefix}Edit',
-        read: 'Mobile{prefix}Read', list: 'Mobile{prefix}List',
-        association: 'Mobile{prefix}Association', lov: 'Mobile{prefix}Lov',
-        tableColumn: 'Mobile{prefix}TableColumn'
+        ide: '{prefix}Ide', edit: '{prefix}Edit',
+        read: '{prefix}Read', list: '{prefix}List',
+        association: '{prefix}List', lov: '{prefix}List',
+        tableColumn: '{prefix}List'
       }}
     }}
   }},
@@ -1798,21 +2671,21 @@ export default FormWidgetMixin
     # ------------------------------------------------------------------
     def _scaffold_layout(self, ws_path: Path, name: str):
         """布局脚手架 - WEB_LAYOUT 架构"""
-        self._write_common_files(ws_path, name, "LAYOUT")
+        self._write_common_files(ws_path, name, "PAGE_LAYOUT")
 
         pascal = "".join(w.capitalize() for w in name.split("-"))
-        output_name = f"apaas-custom-layout-{name}"
+        layout_name = f"apaas-custom-{name}"
+        output_name = f"form-layout-{name}"
 
         # ======== package.json ========
         self._write(ws_path, "package.json", json.dumps({
-            "name": name,
+            "name": output_name,
             "version": "1.0.0",
             "engines": {"node": "16.x"},
-            "templateType": "LAYOUT",
+            "templateType": "PAGE_LAYOUT",
             "private": True,
             "scripts": {
                 "lint": "vue-cli-service lint",
-                "preview": "VUE_APP_PREVIEW=true vue-cli-service serve preview/main.js",
                 "serve": "vue-cli-service serve src/index.js",
                 "debug": "df-apaas-cli debug",
                 "build": "df-apaas-cli build"
@@ -1905,39 +2778,62 @@ module.exports = defineConfig({
         # ======== src/apaas.json ========
         self._write(ws_path, "src/apaas.json", json.dumps({
             "entry": "index.js",
-            "layout": [{"name": output_name, "desc": name, "status": "ENABLE"}],
+            "templateType": "PAGE_LAYOUT",
+            "router": {},
+            "customWidgetList": [],
+            "layout": [{"name": layout_name, "desc": name, "status": "ENABLE"}],
+            "copyAssets": [f"public/form-layout/{name}"],
             "outputName": output_name
         }, indent=2, ensure_ascii=False))
 
+        # ======== src/form-layout-local/index.js ========
+        self._write(ws_path, "src/form-layout-local/index.js", """// 预留给国际化和布局本地扩展
+export default {}
+""")
+
         # ======== src/index.js ========
-        self._write(ws_path, "src/index.js", f"""import Home from './Home.vue'
+        self._write(ws_path, "src/index.js", f"""import './form-layout-local/index.js'
+import LayoutComponent from './form-layout/{layout_name}.vue'
 
 const install = function (Vue) {{
-  const layoutId = '{output_name}'
-  const layoutEngine = Vue.LayoutEngine.getInstance(layoutId)
-  Vue.component(layoutId, Home)
-  layoutEngine.registerLayoutComponent(Home)
+  if (!Vue || !Vue.LayoutEngine) return
+  const activeLayoutId = Vue.LayoutEngine.currentLayoutId || '{layout_name}'
+  const layoutEngine = Vue.LayoutEngine.getInstance(activeLayoutId)
+  Vue.component('{layout_name}', LayoutComponent)
+  layoutEngine.registerLayoutComponent(LayoutComponent)
 }}
 
 export default {{ install }}
 """)
 
-        # ======== src/Home.vue ========
-        self._write(ws_path, "src/Home.vue", f"""<template>
-  <x-app-layout>
+        # ======== src/form-layout/*.vue ========
+        self._write(ws_path, f"src/form-layout/{layout_name}.vue", f"""<template>
+  <x-app-layout :layoutEngine="layoutEngine" :isCollapse="isCollapse">
     <template #header>
       <slot name="header">
-        <div class="layout-header">Header</div>
+        <x-app-header :layoutEngine="layoutEngine" :appInfo="appInfo" />
       </slot>
     </template>
     <template #menu>
       <slot name="menu">
-        <div class="layout-menu">Menu</div>
+        <x-app-menu
+          :layoutEngine="layoutEngine"
+          :menuConfig="menuConfig"
+          :showMenu="showMenu"
+          :isCollapse="isCollapse"
+          @change-collapse="changeCollapse"
+        />
       </slot>
     </template>
     <template #appPage>
       <slot name="appPage">
-        <div class="layout-app-page">Content</div>
+        <div class="layout-app-page">
+          <div class="layout-card">
+            <div class="layout-badge">AI 生成布局</div>
+            <h2>{pascal} Layout</h2>
+            <p>这是一个页面布局骨架，后续可以继续扩展 header、menu 和 appPage 区域。</p>
+          </div>
+        </div>
       </slot>
     </template>
   </x-app-layout>
@@ -1946,21 +2842,84 @@ export default {{ install }}
 <script>
 export default {{
   name: '{pascal}Layout',
+  props: {{
+    layoutEngine: {{
+      type: Object,
+      default: function () {{
+        return {{}}
+      }},
+    }},
+    pkgVersion: {{
+      type: String,
+      default: '',
+    }},
+  }},
+  data() {{
+    return {{
+      isCollapse: false,
+      showMenu: true,
+    }}
+  }},
+  computed: {{
+    appInfo() {{
+      return (
+        (this.layoutEngine &&
+          this.layoutEngine.layoutDataControl &&
+          this.layoutEngine.layoutDataControl.appInfo) ||
+        {{ appName: '{pascal} Layout' }}
+      )
+    }},
+    menuConfig() {{
+      return (
+        (this.layoutEngine &&
+          this.layoutEngine.layoutDataControl &&
+          this.layoutEngine.layoutDataControl.menuConfig) || {{
+          menuTreeData: [],
+        }}
+      )
+    }},
+  }},
+  methods: {{
+    changeCollapse() {{
+      this.isCollapse = !this.isCollapse
+    }},
+  }},
 }}
 </script>
 
 <style scoped>
-.layout-header {{
-  padding: 10px 20px;
-  background: #f5f7fa;
-}}
-.layout-menu {{
-  width: 200px;
-  background: #fafafa;
-}}
 .layout-app-page {{
-  flex: 1;
-  padding: 20px;
+  min-height: 100%;
+  padding: 24px;
+  background: linear-gradient(180deg, #f7f8fc 0%, #eef2f8 100%);
+  box-sizing: border-box;
+}}
+.layout-card {{
+  max-width: 680px;
+  padding: 28px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 18px 36px rgba(31, 35, 71, 0.12);
+}}
+.layout-badge {{
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(64, 158, 255, 0.12);
+  color: #2f6ef2;
+  font-size: 12px;
+  font-weight: 600;
+}}
+.layout-card h2 {{
+  margin: 16px 0 10px;
+  color: #1f2347;
+  font-size: 28px;
+}}
+.layout-card p {{
+  margin: 0;
+  color: #5b6287;
+  line-height: 1.7;
 }}
 </style>
 """)
@@ -1969,31 +2928,30 @@ export default {{
     # Plugin scaffold
     # ------------------------------------------------------------------
     def _scaffold_plugin(self, ws_path: Path, name: str):
-        """插件脚手架 - WEB_PLUGIN 架构"""
-        self._write_common_files(ws_path, name, "PLUGIN")
+        """插件脚手架 - FRONTEND_PLUGIN 架构"""
+        self._write_common_files(ws_path, name, "FRONTEND_PLUGIN")
 
-        pascal = "".join(w.capitalize() for w in name.split("-"))
-        name_upper = name.replace("-", "_").upper()
-        output_name = f"apaas-custom-{name}"
+        base_name = self._strip_project_prefix(ProjectType.PLUGIN.value, name) or name
+        plugin_code = f"PLUGIN_{base_name.replace('-', '_').upper()}"
 
-        # ======== package.json ========
         self._write(ws_path, "package.json", json.dumps({
             "name": name,
             "version": "1.0.0",
             "engines": {"node": "16.x"},
-            "templateType": "PLUGIN",
+            "templateType": "FRONTEND_PLUGIN",
             "private": True,
             "scripts": {
                 "lint": "vue-cli-service lint",
-                "preview": "VUE_APP_PREVIEW=true vue-cli-service serve preview/main.js",
-                "serve": "vue-cli-service serve src/index.js",
+                "serve-admin": "vue-cli-service serve src/admin.js",
+                "serve-app": "vue-cli-service serve src/app.js",
+                "serve-mobile": "vue-cli-service serve src/mobile.js",
                 "debug": "df-apaas-cli debug",
-                "build": "df-apaas-cli build"
+                "build": "df-apaas-cli build",
             },
             "dependencies": {
                 "core-js": "3.8.3",
-                "element-ui": "^2.15.14",
-                "vue": "2.7.14"
+                "vue": "2.7.14",
+                "md5": "2.3.0",
             },
             "devDependencies": {
                 "@babel/core": "7.12.16",
@@ -2006,156 +2964,157 @@ export default {{
                 "eslint-plugin-vue": "8.0.3",
                 "sass": "1.85.1",
                 "sass-loader": "8.0.2",
-                "vue-template-compiler": "2.7.14"
+                "vue-template-compiler": "2.7.14",
             },
             "eslintConfig": {
                 "root": True,
                 "env": {"node": True},
                 "extends": ["plugin:vue/essential", "eslint:recommended"],
                 "parserOptions": {"parser": "@babel/eslint-parser"},
-                "rules": {}
+                "rules": {},
             },
-            "browserslist": ["> 1%", "last 2 versions", "not dead", "Chrome 40.0", "ie >= 11"]
+            "browserslist": ["> 1%", "last 2 versions", "not dead", "Chrome 40.0", "ie >= 11"],
         }, indent=2, ensure_ascii=False))
 
-        # ======== vue.config.js ========
         self._write(ws_path, "vue.config.js", """const { defineConfig } = require('@vue/cli-service')
 const fs = require('fs')
-const path = require('path')
+const md5 = require('md5')
 const apaasJson = require('./src/apaas.json')
-
-const isPreview = process.env.VUE_APP_PREVIEW === 'true'
 
 module.exports = defineConfig({
   transpileDependencies: true,
   productionSourceMap: false,
   devServer: {
     host: '0.0.0.0',
-    port: isPreview ? 8090 : 8080,
+    port: '8080',
     hot: true,
     allowedHosts: 'all',
-    ...(isPreview ? {} : {
-      https: (() => {
-        const keyPath = './https/server.key'
-        const certPath = './https/server.crt'
-        if (fs.existsSync(keyPath) && fs.existsSync(certPath)) {
-          return { key: fs.readFileSync(keyPath), cert: fs.readFileSync(certPath) }
-        }
-        return false
-      })()
-    }),
+    https: { key: fs.readFileSync('./https/server.key'), cert: fs.readFileSync('./https/server.crt') },
     headers: { 'Access-Control-Allow-Origin': '*' },
     client: { overlay: false }
   },
-  configureWebpack: (config) => {
-    if (isPreview) {
-      delete config.output.library
-      delete config.output.libraryTarget
-    } else {
-      config.output.library = apaasJson.outputName
-      config.output.libraryTarget = 'umd'
-    }
-  },
-  chainWebpack: (config) => {
-    if (isPreview) {
-      config.plugin('html').tap(args => {
-        args[0].template = path.resolve(__dirname, 'preview/index.html')
-        return args
-      })
+  configureWebpack: {
+    output: {
+      library: md5(apaasJson.code),
+      libraryTarget: 'umd'
     }
   },
   css: {
     loaderOptions: {
-      sass: { implementation: require('sass') }
+      sass: {
+        implementation: require('sass')
+      }
     }
   }
 })
 """)
-
-        # ======== babel.config.js ========
         self._write(ws_path, "babel.config.js", "module.exports = {\n  presets: ['@vue/cli-plugin-babel/preset']\n}\n")
 
-        # ======== src/apaas.json ========
         self._write(ws_path, "src/apaas.json", json.dumps({
-            "entry": "index.js",
-            "extensionConfigList": [{"code": f"CUSTOM_{name_upper}_EXTENSION", "text": name}],
-            "outputName": output_name
+            "copyAssets": [f"public/frontend-plugin/{name}"],
+            "templateType": "FRONTEND_PLUGIN",
+            "code": plugin_code,
+            "name": "",
+            "description": "",
+            "outputName": name,
+            "admin": "admin.js",
+            "app": "app.js",
+            "mobile": "mobile.js",
+            "extraConfig": {},
         }, indent=2, ensure_ascii=False))
 
-        # ======== src/index.js ========
-        self._write(ws_path, "src/index.js", f"""import extensionConfig from './extension'
+        plugin_entry = """import './plugin-local/index.js'
+import extensionConfig from './extension.js'
 import CustomPanel from './custom-tab/custom-panel.vue'
-import {{ localMessages }} from './local'
 
-const install = function (Vue) {{
-  // Register i18n
-  const i18n = window.APaaSSDK?.context?.globalVueI18n
-  if (i18n) Object.keys(localMessages).forEach(lang => i18n.mergeLocaleMessage(lang, localMessages[lang]))
+const activateExtension = () => {
+  const engine = window?.Vue?._extensionEngine
+  if (engine && typeof engine.registerExtensionConfig === 'function') {
+    engine.registerExtensionConfig(extensionConfig)
+  }
+}
 
-  // Register component
-  Vue.component('CustomPanel{pascal}', CustomPanel)
+// eslint-disable-next-line no-unused-vars
+const install = function (context, hookManager, definition) {
+  activateExtension()
+}
 
-  // Register extension
-  if (Vue._extensionEngine) Vue._extensionEngine.registerExtensionConfig(extensionConfig)
-}}
+// eslint-disable-next-line no-unused-vars
+const activate = function (context, hookManager, definition) {
+  activateExtension()
+}
 
-export default {{ install }}
+const staticComponents = [CustomPanel]
+
+export default { install, activate, staticComponents }
+"""
+        self._write(ws_path, "src/admin.js", plugin_entry)
+        self._write(ws_path, "src/app.js", plugin_entry)
+        self._write(ws_path, "src/mobile.js", plugin_entry)
+        self._write(ws_path, "src/api/index.js", "export default {}\n")
+
+        self._write(ws_path, "src/plugin-local/index.js", """import zhLocaleModule from './zh-CN/index.js'
+import enLocaleModule from './en-US/index.js'
+
+const mergeLocaleMessage =
+  window.df?.getI18n?.().mergeLocaleMessage?.bind(window.df.getI18n()) ||
+  window.APaaSSDK?.context?.globalVueI18n?.mergeLocaleMessage?.bind(window.APaaSSDK.context.globalVueI18n)
+
+if (mergeLocaleMessage) {
+  mergeLocaleMessage('zh-CN', zhLocaleModule)
+  mergeLocaleMessage('en-US', enLocaleModule)
+}
 """)
+        self._write(ws_path, "src/plugin-local/zh-CN/index.js", f"export default {{ frontendPlugin: {{ title: '{name}', panel: '自定义面板' }} }}\n")
+        self._write(ws_path, "src/plugin-local/en-US/index.js", f"export default {{ frontendPlugin: {{ title: '{name}', panel: 'Custom Panel' }} }}\n")
 
-        # ======== src/extension.js ========
-        self._write(ws_path, "src/extension.js", f"""export default {{
-  code: 'CUSTOM_{name_upper}_EXTENSION',
+        self._write(ws_path, "src/tab-config.js", """export function getCustomTabConfig() {
+  return [
+    {
+      code: 'customPanel',
+      title: '自定义面板',
+      componentName: 'apaas-plugin-panel',
+      resourceCode: 'APP_INFORMATION'
+    }
+  ]
+}
+""")
+        self._write(ws_path, "src/extension.js", f"""import {{ getCustomTabConfig }} from './tab-config.js'
+
+const extensionConfig = {{
+  code: '{plugin_code}',
+  name: '{name}',
   blocks: [],
-  funs: [],
-  versions: ['V1'],
-  extensionMethods: {{}}
+  versions: ['TRIAL_EDITION', 'TEAM_EDITION', 'STANDARD_EDITION', 'PREMIUM_EDITION'],
+  enable: true,
+  extensionMethods: {{
+    'custom-tab': {{
+      getCustomTabConfig
+    }}
+  }}
 }}
+
+export default extensionConfig
 """)
 
-        # ======== src/custom-tab/custom-panel.vue ========
         self._write(ws_path, "src/custom-tab/custom-panel.vue", f"""<template>
-  <div class="custom-panel-{name}">
-    <h3>{{{{ title }}}}</h3>
-    <div class="panel-content">
-      <slot />
-    </div>
+  <div class="plugin-panel">
+    <h3>{{{{ $t ? $t('frontendPlugin.title') : '{name}' }}}}</h3>
+    <p>{{{{ $t ? $t('frontendPlugin.panel') : '自定义面板' }}}}</p>
   </div>
 </template>
 
 <script>
 export default {{
-  name: 'CustomPanel{pascal}',
-  data() {{
-    return {{
-      title: '{name} Plugin Panel',
-    }}
-  }},
+  name: 'apaas-plugin-panel'
 }}
 </script>
 
 <style scoped>
-.custom-panel-{name} {{
+.plugin-panel {{
   padding: 16px;
 }}
-.panel-content {{
-  margin-top: 12px;
-}}
 </style>
-""")
-
-        # ======== src/local/index.js ========
-        self._write(ws_path, "src/local/index.js", f"""export const localMessages = {{
-  'zh-CN': {{
-    '{name}': {{
-      title: '{name}',
-    }},
-  }},
-  'en-US': {{
-    '{name}': {{
-      title: '{name}',
-    }},
-  }},
-}}
 """)
 
     def _scaffold_form_page(self, ws_path: Path, name: str, mobile: bool = False):
@@ -2739,81 +3698,522 @@ export function installMockRequest(Vue) {
 }
 """)
 
-    def _scaffold_form_list(self, ws_path: Path, name: str):
-        """列表视图脚手架"""
-        self._write_common_files(ws_path, name, "FORM_LIST")
+        if mobile:
+            self._write(ws_path, f"src/form-page/{component_tag}.vue", f"""<template>
+  <div class="{component_tag}">
+    <header class="page-header">
+      <div class="page-header-main">
+        <div class="page-eyebrow">移动端页面</div>
+        <h2 class="page-title">{kebab}</h2>
+        <p class="page-subtitle">适合扫码、审批、采集等移动业务场景的默认骨架。</p>
+      </div>
+      <button class="ghost-btn" @click="refreshList">刷新</button>
+    </header>
 
-        self._write(ws_path, "package.json", json.dumps({
-            "name": name,
-            "version": "1.0.0",
-            "private": True,
-            "templateType": "FORM_LIST",
-            "scripts": {
-                "serve": "vue-cli-service serve",
-                "build": f"vue-cli-service build --target lib --name {name} src/index.js"
-            },
-            "devDependencies": {
-                "@vue/cli-service": "~5.0.0",
-                "vue-template-compiler": "^2.7.16",
-                "vue": "^2.7.16"
-            },
-            "browserslist": ["> 1%", "last 2 versions", "not dead"]
-        }, indent=2, ensure_ascii=False))
+    <section class="search-card">
+      <label class="field-label">关键字</label>
+      <div class="field-row">
+        <input
+          v-model.trim="keyword"
+          class="field-input"
+          placeholder="请输入名称或编码"
+          @keyup.enter="loadList"
+        />
+        <button class="search-btn" @click="loadList">搜索</button>
+      </div>
+    </section>
 
-        self._write(ws_path, "vue.config.js", """const { defineConfig } = require('@vue/cli-service')
-const apaasJson = require('./src/apaas.json')
+    <section class="summary-card">
+      <div class="summary-label">数据状态</div>
+      <div class="summary-value">{{{{ loading ? '加载中...' : items.length + ' 条记录' }}}}</div>
+      <div class="summary-meta">当前页面为移动端骨架，默认使用原生布局和触屏尺寸。</div>
+    </section>
 
-module.exports = defineConfig({
-  css: { extract: false },
-  configureWebpack: {
-    output: { library: apaasJson.outputName, libraryTarget: 'umd', libraryExport: 'default' },
-    externals: { vue: 'Vue' }
-  }
-})
-""")
-        self._write(ws_path, "babel.config.js", "module.exports = { presets: ['@vue/cli-plugin-babel/preset'] }\n")
+    <section class="list-section">
+      <div v-if="items.length" class="mobile-list">
+        <article v-for="item in items" :key="item.id" class="mobile-card" @click="selectItem(item)">
+          <div class="mobile-card-top">
+            <strong>{{{{ item.name || item.id }}}}</strong>
+            <span class="status-chip">{{{{ item.status || '待处理' }}}}</span>
+          </div>
+          <div class="mobile-card-code">编码：{{{{ item.code || '--' }}}}</div>
+        </article>
+      </div>
+      <div v-else class="empty-state">
+        <div class="empty-title">{{{{ loading ? '正在加载数据' : '暂无数据' }}}}</div>
+        <div class="empty-desc">后续可以在这里接入扫码、定位、审批按钮或更复杂的移动流程。</div>
+      </div>
+    </section>
 
-        self._write(ws_path, "src/apaas.json", json.dumps({
-            "entry": "index.js",
-            "list": {
-                f"apaas-custom-{name}": {
-                    "renderLogic": "FORM_LIST_VIEW",
-                    "desc": name,
-                    "status": "ENABLE"
-                }
-            },
-            "outputName": name
-        }, indent=2, ensure_ascii=False))
-
-        self._write(ws_path, "src/index.js", f"""import CustomListView from './custom-list/custom-list-view.vue'
-
-const install = function(Vue, opts) {{
-  Vue.component('apaas-custom-{name}', CustomListView)
-}}
-
-export default {{ install }}
-""")
-
-        self._write(ws_path, "src/custom-list/custom-list-view.vue", """<template>
-  <div class="custom-list-view">
-    <x-list-view :listEngine="listEngine"></x-list-view>
+    <footer class="page-footer">
+      <button class="primary-btn" @click="handlePrimaryAction">提交操作</button>
+    </footer>
   </div>
 </template>
 
 <script>
-export default {
-  name: 'CustomListView',
-  props: {
-    listEngine: { type: Object }
-  }
-}
+import Api from "../api";
+
+export default {{
+  name: "{component_tag}",
+  data() {{
+    return {{
+      keyword: "",
+      loading: false,
+      items: [],
+      selectedItem: null,
+    }};
+  }},
+  created() {{
+    this.loadList();
+  }},
+  methods: {{
+    loadList() {{
+      this.loading = true;
+      this.$request({{
+        ...Api.QUERY_LIST,
+        params: {{
+          keyword: this.keyword,
+        }},
+      }})
+        .asyncThen((resp) => {{
+          const list = resp && resp.data ? resp.data : [];
+          this.items = Array.isArray(list) ? list : [];
+          this.loading = false;
+        }})
+        .asyncErrorCatch((error) => {{
+          console.error("加载数据失败:", error);
+          this.loading = false;
+        }});
+    }},
+    refreshList() {{
+      this.loadList();
+    }},
+    selectItem(item) {{
+      this.selectedItem = item;
+    }},
+    handlePrimaryAction() {{
+      console.log("mobile primary action", this.selectedItem || null);
+    }},
+  }},
+}};
 </script>
 
-<style lang="scss" scoped>
-.custom-list-view {
-  width: 100%;
-  height: 100%;
+<style lang="scss">
+.{component_tag} {{
+  min-height: 100vh;
+  background: linear-gradient(180deg, #f7f9fc 0%, #eef3f9 100%);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  color: #1f2937;
+  box-sizing: border-box;
+
+  .page-header,
+  .search-card,
+  .summary-card,
+  .mobile-card,
+  .page-footer {{
+    background: #fff;
+    border-radius: 18px;
+    box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+  }}
+
+  .page-header {{
+    padding: 18px 16px;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+  }}
+
+  .page-header-main {{
+    flex: 1;
+  }}
+
+  .page-eyebrow {{
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    color: #64748b;
+    margin-bottom: 6px;
+  }}
+
+  .page-title {{
+    font-size: 22px;
+    line-height: 1.2;
+    margin-bottom: 6px;
+  }}
+
+  .page-subtitle {{
+    font-size: 13px;
+    line-height: 1.5;
+    color: #6b7280;
+  }}
+
+  .ghost-btn,
+  .search-btn,
+  .primary-btn {{
+    min-height: 44px;
+    border: none;
+    border-radius: 14px;
+    font-size: 14px;
+    cursor: pointer;
+  }}
+
+  .ghost-btn {{
+    min-width: 72px;
+    padding: 0 14px;
+    background: #eef4ff;
+    color: #2563eb;
+  }}
+
+  .search-card {{
+    padding: 14px;
+  }}
+
+  .field-label {{
+    display: block;
+    font-size: 13px;
+    color: #64748b;
+    margin-bottom: 8px;
+  }}
+
+  .field-row {{
+    display: flex;
+    gap: 10px;
+  }}
+
+  .field-input {{
+    flex: 1;
+    min-height: 44px;
+    border: 1px solid #dbe3ef;
+    border-radius: 14px;
+    padding: 0 14px;
+    font-size: 15px;
+    background: #f8fafc;
+  }}
+
+  .search-btn {{
+    min-width: 84px;
+    padding: 0 14px;
+    background: #2563eb;
+    color: #fff;
+  }}
+
+  .summary-card {{
+    padding: 16px;
+  }}
+
+  .summary-label {{
+    font-size: 13px;
+    color: #64748b;
+    margin-bottom: 6px;
+  }}
+
+  .summary-value {{
+    font-size: 24px;
+    font-weight: 700;
+    margin-bottom: 8px;
+  }}
+
+  .summary-meta {{
+    font-size: 13px;
+    color: #6b7280;
+    line-height: 1.5;
+  }}
+
+  .list-section {{
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }}
+
+  .mobile-list {{
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }}
+
+  .mobile-card {{
+    padding: 16px;
+    cursor: pointer;
+  }}
+
+  .mobile-card-top {{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 8px;
+  }}
+
+  .mobile-card-code {{
+    font-size: 13px;
+    color: #6b7280;
+  }}
+
+  .status-chip {{
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 28px;
+    padding: 0 10px;
+    border-radius: 999px;
+    background: #e0ecff;
+    color: #2563eb;
+    font-size: 12px;
+    font-weight: 600;
+  }}
+
+  .empty-state {{
+    padding: 28px 18px;
+    text-align: center;
+    color: #6b7280;
+  }}
+
+  .empty-title {{
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 8px;
+    color: #374151;
+  }}
+
+  .empty-desc {{
+    font-size: 13px;
+    line-height: 1.6;
+  }}
+
+  .page-footer {{
+    padding: 14px;
+    position: sticky;
+    bottom: 0;
+  }}
+
+  .primary-btn {{
+    width: 100%;
+    background: linear-gradient(135deg, #2563eb 0%, #4f46e5 100%);
+    color: #fff;
+    font-weight: 600;
+  }}
+}}
+</style>
+""")
+
+            self._write(ws_path, "preview/App.vue", f"""<template>
+  <div class="mobile-preview-shell">
+    <div class="mobile-preview-frame">
+      <div class="mobile-preview-notch"></div>
+      <{component_tag} />
+    </div>
+  </div>
+</template>
+
+<script>
+export default {{ name: 'PreviewApp' }}
+</script>
+
+<style scoped>
+.mobile-preview-shell {{
+  min-height: 100vh;
+  padding: 16px;
+  background: linear-gradient(180deg, #eef2f7 0%, #e6ebf2 100%);
+}}
+
+.mobile-preview-frame {{
+  width: min(100%, 390px);
+  min-height: calc(100vh - 32px);
+  margin: 0 auto;
+  background: #fff;
+  border-radius: 28px;
+  overflow: hidden;
+  box-shadow: 0 20px 48px rgba(15, 23, 42, 0.16);
+}}
+
+.mobile-preview-notch {{
+  width: 120px;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.12);
+  margin: 12px auto 4px;
+}}
+</style>
+""")
+
+            self._write(ws_path, "preview/main.js", f"""import Vue from 'vue'
+import {{ installMockRequest }} from './mock-api'
+import ApaasCustomPage from '../src/form-page/{component_tag}.vue'
+import App from './App.vue'
+
+installMockRequest(Vue)
+
+Vue.component('{component_tag}', ApaasCustomPage)
+
+new Vue({{
+  el: '#app',
+  render: h => h(App)
+}})
+""")
+
+    def _scaffold_form_list(self, ws_path: Path, name: str):
+        """列表视图脚手架"""
+        self._write_common_files(ws_path, name, "LIST_VIEW")
+
+        base_name = self._strip_project_prefix(ProjectType.FORM_LIST.value, name) or name
+        component_tag = f"apaas-custom-{base_name}"
+
+        self._write(ws_path, "package.json", json.dumps({
+            "name": name,
+            "version": "1.0.0",
+            "engines": {"node": "16.x"},
+            "templateType": "LIST_VIEW",
+            "private": True,
+            "scripts": {
+                "lint": "vue-cli-service lint",
+                "serve": "vue-cli-service serve src/index.js",
+                "debug": "df-apaas-cli debug",
+                "build": "df-apaas-cli build",
+            },
+            "dependencies": {
+                "core-js": "3.8.3",
+                "vue": "2.7.14",
+            },
+            "devDependencies": {
+                "@babel/core": "7.12.16",
+                "@babel/eslint-parser": "7.12.16",
+                "@vue/cli-plugin-babel": "5.0.0",
+                "@vue/cli-plugin-eslint": "5.0.0",
+                "@vue/cli-service": "5.0.8",
+                "dart-sass": "1.25.0",
+                "eslint": "7.32.0",
+                "eslint-plugin-vue": "8.0.3",
+                "sass": "1.85.1",
+                "sass-loader": "8.0.2",
+                "vue-template-compiler": "2.7.14",
+            },
+            "eslintConfig": {
+                "root": True,
+                "env": {"node": True},
+                "extends": ["plugin:vue/essential", "eslint:recommended"],
+                "parserOptions": {"parser": "@babel/eslint-parser"},
+                "rules": {},
+            },
+            "browserslist": ["> 1%", "last 2 versions", "not dead", "Chrome 40.0", "ie >= 11"],
+        }, indent=2, ensure_ascii=False))
+
+        self._write(ws_path, "vue.config.js", """const { defineConfig } = require('@vue/cli-service')
+const fs = require('fs')
+const apaasJson = require('./src/apaas.json')
+
+module.exports = defineConfig({
+  transpileDependencies: true,
+  productionSourceMap: false,
+  devServer: {
+    host: '0.0.0.0',
+    port: '8080',
+    hot: true,
+    allowedHosts: 'all',
+    https: { key: fs.readFileSync('./https/server.key'), cert: fs.readFileSync('./https/server.crt') },
+    headers: { 'Access-Control-Allow-Origin': '*' },
+    client: { overlay: false }
+  },
+  configureWebpack: {
+    output: {
+      library: apaasJson.outputName,
+      libraryTarget: 'umd'
+    }
+  },
+  css: {
+    loaderOptions: {
+      sass: {
+        implementation: require('sass')
+      }
+    }
+  }
+})
+""")
+        self._write(ws_path, "babel.config.js", "module.exports = {\n  presets: ['@vue/cli-plugin-babel/preset']\n}\n")
+
+        self._write(ws_path, "src/apaas.json", json.dumps({
+            "entry": "index.js",
+            "templateType": "LIST_VIEW",
+            "router": {},
+            "customWidgetList": [],
+            "list": {
+                component_tag: {
+                    "renderLogic": "FORM_LIST_VIEW",
+                    "desc": name,
+                    "status": "ENABLE",
+                }
+            },
+            "copyAssets": [f"public/form-view/{name}"],
+            "outputName": name,
+        }, indent=2, ensure_ascii=False))
+
+        self._write(ws_path, "src/index.js", f"""import './form-view-local/index.js'
+import CustomListView from './form-view/{component_tag}.vue'
+
+const install = function(Vue) {{
+  Vue.component('{component_tag}', CustomListView)
+}}
+
+export default {{ install }}
+""")
+        self._write(ws_path, "src/api/index.js", "export default {}\n")
+        self._write(ws_path, "src/form-view-local/index.js", """import zhLocaleModule from './zh-CN/index.js'
+import enLocaleModule from './en-US/index.js'
+
+const mergeLocaleMessage =
+  window.df?.getI18n?.().mergeLocaleMessage?.bind(window.df.getI18n()) ||
+  window.APaaSSDK?.context?.globalVueI18n?.mergeLocaleMessage?.bind(window.APaaSSDK.context.globalVueI18n)
+
+if (mergeLocaleMessage) {
+  mergeLocaleMessage('zh-CN', zhLocaleModule)
+  mergeLocaleMessage('en-US', enLocaleModule)
 }
+""")
+        self._write(ws_path, "src/form-view-local/zh-CN/index.js", f"export default {{ formView: {{ title: '{name}' }} }}\n")
+        self._write(ws_path, "src/form-view-local/en-US/index.js", f"export default {{ formView: {{ title: '{name}' }} }}\n")
+
+        self._write(ws_path, f"src/form-view/{component_tag}.vue", f"""<template>
+  <div class="{component_tag}">
+    <x-list-view :listEngine="listEngine">
+      <template #listTable>
+        <x-list-table
+          ref="xListTableView"
+          :treeViewListEngine="listEngine"
+          :treeViewInAssoc="true"
+          :pageViewComponents="listEngine.listDataControl.tablePanelComponents"
+        ></x-list-table>
+      </template>
+    </x-list-view>
+  </div>
+</template>
+
+<script>
+export default {{
+  name: 'CustomListView',
+  props: {{
+    listEngine: {{
+      type: Object,
+      default: () => ({{}})
+    }}
+  }},
+  mounted() {{
+    if (this.$refs.xListTableView) {{
+      this.$refs.xListTableView.handlerRowClick = function () {{
+        return undefined
+      }}
+    }}
+  }}
+}}
+</script>
+
+<style lang="scss">
+.{component_tag} {{
+  height: 100%;
+}}
 </style>
 """)
 
@@ -2846,6 +4246,12 @@ export default {
             <version>${{spring-boot.version}}</version>
             <scope>provided</scope>
         </dependency>
+        <dependency>
+            <groupId>com.definesys</groupId>
+            <artifactId>query-mongodb</artifactId>
+            <version>apaas-1.1.11.bigdata.2</version>
+            <scope>provided</scope>
+        </dependency>
     </dependencies>
 
     <repositories>
@@ -2861,6 +4267,21 @@ export default {
             <!-- 打包时排除第三方依赖 -->
         </profile>
     </profiles>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.11.0</version>
+                <configuration>
+                    <source>${{java.version}}</source>
+                    <target>${{java.version}}</target>
+                    <encoding>UTF-8</encoding>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
 </project>
 """)
 

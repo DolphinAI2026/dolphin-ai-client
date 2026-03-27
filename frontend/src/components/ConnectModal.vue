@@ -56,6 +56,11 @@ import request from '@/utils/request'
 const visible = defineModel<boolean>({ default: false })
 const previewStore = usePreviewStore()
 
+interface ConnectResponse {
+  status: string
+  message?: string
+}
+
 const mode = ref('login')
 const loading = ref(false)
 
@@ -77,7 +82,7 @@ const handleConnect = async () => {
         ElMessage.warning('请输入用户名和密码')
         return
       }
-      const res = await request.post('/apaas/login', {
+      const res = await request.post<any, ConnectResponse>('/apaas/login', {
         username: form.username,
         password: form.password,
         base_url: form.baseUrl,
@@ -97,7 +102,7 @@ const handleConnect = async () => {
         ElMessage.warning('请输入Token')
         return
       }
-      const res = await request.post('/apaas/connect', {
+      const res = await request.post<any, ConnectResponse>('/apaas/connect', {
         token: form.token.trim(),
         base_url: form.baseUrl,
         tenant_id: form.tenantId

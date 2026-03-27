@@ -146,8 +146,26 @@ class CodingGenerator:
             ws_str += "- **禁止**尝试读取文件、调用工具、或说'让我先查看文件'。你已经拥有所有需要的信息(上面已提供关键文件内容)\n"
             ws_str += "- **直接输出代码**，使用 ```file:path 格式，path 必须是上面文件列表中已有的路径\n"
             ws_str += "- **必须修改现有脚手架文件**，不要创建新的目录结构\n"
-            ws_str += "- **必须输出所有7个场景的 .vue 组件文件**（edit、read、ide、list、print、search、search-ide）和 setting.vue\n"
-            ws_str += "- .vue 文件中不要留 TODO 占位符，要实现完整的功能逻辑\n"
+            project_type = (workspace_context.get("project_type", "") or "").lower()
+            if project_type in {"form-component", "mobile-component"}:
+                ws_str += "- **必须输出所有7个场景的 .vue 组件文件**（edit、read、ide、list、print、search、search-ide）和 setting.vue\n"
+                ws_str += "- edit/read/ide.vue 与 setting.vue 的 customComponentConfig 读写路径必须一致\n"
+            elif project_type == "layout":
+                ws_str += "- **布局项目通常只需要 Home.vue、index.js、apaas.json 以及必要的子组件**，不要套用表单组件的 7 场景规则\n"
+                ws_str += "- **不要擅自新增 widget.config.js / editor.config.js / setting.vue**，除非用户明确要求且平台确有这套接入方式\n"
+                ws_str += "- `templateType` 必须是 `PAGE_LAYOUT`，布局组件名必须以 `apaas-custom-` 开头\n"
+                ws_str += "- `appPage` 区域必须通过 `<slot name=\"appPage\">` 转发平台页面内容\n"
+            elif project_type in {"menu-page", "form-page", "mobile-page"}:
+                ws_str += "- 页面项目只输出页面入口、页面组件和必要的 API/样式文件，不要套用组件的 7 场景规则\n"
+            elif project_type == "form-list":
+                ws_str += "- 列表视图项目应遵循 `LIST_VIEW` 协议，重点修改 apaas.json、index.js 和 form-view/*.vue\n"
+                ws_str += "- 不要套用组件 7 场景规则，也不要生成 setting.vue / widget.config.js\n"
+            elif project_type == "plugin":
+                ws_str += "- 插件项目应遵循 `FRONTEND_PLUGIN` 协议，重点修改 admin.js/app.js/mobile.js、extension.js、tab-config.js\n"
+                ws_str += "- 默认导出对象必须包含 install、activate、staticComponents\n"
+            elif project_type == "backend-api":
+                ws_str += "- 后端项目输出接口、Service、DTO、配置等后端文件；不要输出 Vue 组件文件\n"
+            ws_str += "- .vue / .java / .py 文件中不要留 TODO 占位符，要实现完整的功能逻辑\n"
             ws_str += "- **禁止修改 package.json 添加私有包**（如 babel-preset-definesys、df-apaas-cli 等）。如需第三方库（如 echarts），只能添加 npm 公共 registry 上的包\n"
             ws_str += "- 先用简短的一段话说明实现方案，然后立即开始输出代码文件\n"
             system_prompt += ws_str

@@ -41,6 +41,7 @@ export interface WorkspaceInfo {
   project_id?: number
   project_type: string
   project_name: string
+  display_name?: string
   user_id: number
   status: string
   files?: string[]
@@ -93,8 +94,8 @@ export const codingApi = {
   // ========== Workspace API ==========
 
   /** 创建工作区 */
-  createWorkspace(project_type: string, project_name: string, project_id?: number) {
-    return request.post<any, WorkspaceInfo>('/coding/workspace/create', { project_type, project_name, project_id })
+  createWorkspace(project_type: string, project_name: string, project_id?: number, display_name?: string) {
+    return request.post<any, WorkspaceInfo>('/coding/workspace/create', { project_type, project_name, project_id, display_name })
   },
 
   /** 安装依赖（npm install 可能较慢，5分钟超时） */
@@ -120,7 +121,7 @@ export const codingApi = {
     const blob = await resp.blob()
     const disposition = resp.headers.get('Content-Disposition') || ''
     const match = disposition.match(/filename="?(.+?)"?$/)
-    const filename = match ? match[1] : `${wsId}.zip`
+    const filename = match?.[1] || `${wsId}.zip`
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
@@ -214,7 +215,7 @@ export const codingApi = {
 
   /** 预览组件（触发构建 + 返回预览 URL） */
   preview(wsId: string) {
-    return request.post<any, { status: string; preview_url: string; output_name: string; template_type: string; build_message: string }>(
+    return request.post<any, { status: string; preview_url: string; output_name: string; template_type: string; project_type?: string; build_message: string }>(
       `/coding/workspace/${wsId}/preview`, {}, { timeout: 300000 }
     )
   },

@@ -119,23 +119,20 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { usePreviewStore } from '@/stores/preview'
 import { useUserStore } from '@/stores/user'
 import request from '@/utils/request'
-import { applicationApi } from '@/api/application'
 import { projectsApi, type Project } from '@/api/projects'
 import ConnectModal from '@/components/ConnectModal.vue'
 import ProjectSettingsModal from '@/components/ProjectSettingsModal.vue'
 import TemplateManager from '@/components/TemplateManager.vue'
 import ThemeToggle from '@/components/ThemeToggle.vue'
-import type { MergedApplication } from '@/types'
 
 const router = useRouter()
 const previewStore = usePreviewStore()
 const userStore = useUserStore()
 const inputText = ref('')
-const apps = ref<MergedApplication[]>([])
 const projects = ref<Project[]>([])
 const showProjectModal = ref(false)
 const showTemplateManager = ref(false)
@@ -161,38 +158,9 @@ onMounted(async () => {
   } catch (e) { /* ignore */ }
 })
 
-const openCreateProject = () => {
-  editingProject.value = null
-  showProjectModal.value = true
-}
-
-const openEditProject = (p: Project) => {
-  editingProject.value = p
-  showProjectModal.value = true
-}
-
 const onProjectSaved = async () => {
   showProjectModal.value = false
   projects.value = await projectsApi.list()
-}
-
-const goToProject = (p: Project) => {
-  router.push(`/project/${p.id}`)
-}
-
-const deleteProject = async (p: Project) => {
-  try {
-    await ElMessageBox.confirm(`确定删除应用「${p.name}」？此操作不可撤销。`, '删除确认', {
-      type: 'warning',
-      confirmButtonText: '删除',
-      cancelButtonText: '取消',
-    })
-    await projectsApi.delete(p.id)
-    ElMessage.success('删除成功')
-    projects.value = await projectsApi.list()
-  } catch (e) {
-    // 取消或错误
-  }
 }
 
 const reloadTemplates = async () => {

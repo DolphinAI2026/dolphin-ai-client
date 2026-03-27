@@ -276,13 +276,15 @@ export default {{
 
 def _web_list_view_template(name: str) -> Dict[str, str]:
     """Web端自开发列表视图模板"""
-    module = f"apaas-custom-list-{name}"
+    module = f"apaas-custom-{name}"
 
     return {
-        f"src/custom/{module}/apaas.json": f"""\
+        "src/apaas.json": f"""\
 {{
   "entry": "index.js",
-  "copyAssets": ["public/custom/{module}"],
+  "templateType": "LIST_VIEW",
+  "router": {{}},
+  "customWidgetList": [],
   "list": {{
     "{module}": {{
       "renderLogic": "FORM_LIST_VIEW",
@@ -290,23 +292,34 @@ def _web_list_view_template(name: str) -> Dict[str, str]:
       "status": "ENABLE"
     }}
   }},
-  "outputName": "{module}"
+  "copyAssets": ["public/form-view/form-view-{name}"],
+  "outputName": "form-view-{name}"
 }}""",
 
-        f"src/custom/{module}/index.js": f"""\
-import CustomListView from './custom-list/custom-list-view.vue'
+        "src/index.js": f"""\
+import './form-view-local/index.js'
+import CustomListView from './form-view/{module}.vue'
 
-const install = function(Vue, opts) {{
+const install = function(Vue) {{
   Vue.component('{module}', CustomListView)
 }}
 
 export default {{ install }}
 """,
 
-        f"src/custom/{module}/custom-list/custom-list-view.vue": f"""\
+        f"src/form-view/{module}.vue": f"""\
 <template>
   <div class="custom-list-view">
-    <x-list-view :listEngine="listEngine"></x-list-view>
+    <x-list-view :listEngine="listEngine">
+      <template #listTable>
+        <x-list-table
+          ref="xListTableView"
+          :treeViewListEngine="listEngine"
+          :treeViewInAssoc="true"
+          :pageViewComponents="listEngine.listDataControl.tablePanelComponents"
+        ></x-list-table>
+      </template>
+    </x-list-view>
   </div>
 </template>
 
@@ -318,10 +331,13 @@ export default {{
       type: Object
     }}
   }},
-  data() {{
-    return {{}}
+  mounted() {{
+    if (this.$refs.xListTableView) {{
+      this.$refs.xListTableView.handlerRowClick = function () {{
+        return undefined
+      }}
+    }}
   }},
-  methods: {{}}
 }}
 </script>
 
@@ -330,6 +346,32 @@ export default {{
   height: 100%;
 }}
 </style>
+""",
+
+        "src/form-view-local/index.js": """\
+import zhLocaleModule from './zh-CN/index.js'
+import enLocaleModule from './en-US/index.js'
+
+if (window.df.getI18n().mergeLocaleMessage) {
+  window.df.getI18n().mergeLocaleMessage('zh-CN', zhLocaleModule)
+  window.df.getI18n().mergeLocaleMessage('en-US', enLocaleModule)
+}
+""",
+
+        "src/form-view-local/zh-CN/index.js": """\
+export default {
+  formView: {
+    title: '自定义列表视图'
+  }
+}
+""",
+
+        "src/form-view-local/en-US/index.js": """\
+export default {
+  formView: {
+    title: 'Custom List View'
+  }
+}
 """,
     }
 
@@ -570,23 +612,28 @@ export const customFormEditorList = [{prefix}Setting]
 
 def _web_layout_template(name: str) -> Dict[str, str]:
     """Web端自定义布局模板 - 基于LayoutEngine"""
-    module = f"apaas-custom-layout-{name}"
+    module = f"apaas-custom-{name}"
+    output_name = f"form-layout-{name}"
     camel = "".join(w.capitalize() for w in name.split("-"))
 
     return {
         f"src/apaas.json": json.dumps({
             "entry": "index.js",
-            "copyAssets": [],
+            "templateType": "PAGE_LAYOUT",
+            "router": {},
+            "customWidgetList": [],
             "layout": [{
                 "name": module,
                 "desc": f"自定义布局-{name}",
                 "status": "ENABLE"
             }],
-            "outputName": module
+            "copyAssets": [f"public/form-layout/{name}"],
+            "outputName": output_name
         }, indent=2, ensure_ascii=False),
 
         f"src/index.js": f"""\
-import Home from './Home.vue'
+import './form-layout-local/index.js'
+import Home from './form-layout/{module}.vue'
 
 const install = function(Vue, opts) {{
   if (Vue.LayoutEngine) {{
@@ -601,7 +648,9 @@ const install = function(Vue, opts) {{
 export default {{ install }}
 """,
 
-        f"src/Home.vue": f"""\
+        f"src/form-layout-local/index.js": "export default {{}}\\n",
+
+        f"src/form-layout/{module}.vue": f"""\
 <template>
   <div class="{module}">
     <x-app-layout :layout-engine="layoutEngine" :is-collapse="isCollapse">
@@ -679,67 +728,68 @@ export default {{
 
 
 def _web_plugin_template(name: str) -> Dict[str, str]:
-    """Web端自开发插件模板 - 基于ExtensionEngine"""
-    module = f"apaas-custom-{name}"
-    camel = "".join(w.capitalize() for w in name.split("-"))
-    ext_code = f"CUSTOM_{name.upper().replace('-', '_')}_EXTENSION"
+    """Web端自开发插件模板 - 对齐 FRONTEND_PLUGIN 协议"""
+    module = f"frontend-plugin-{name}"
+    ext_code = f"PLUGIN_{name.upper().replace('-', '_')}"
 
     return {
-        f"src/apaas.json": json.dumps({
-            "entry": "index.js",
-            "copyAssets": [],
-            "extensionConfigList": [{
-                "code": ext_code,
-                "text": f"自开发插件-{name}"
-            }],
-            "outputName": module
+        "src/apaas.json": json.dumps({
+            "copyAssets": [f"public/frontend-plugin/{module}"],
+            "templateType": "FRONTEND_PLUGIN",
+            "code": ext_code,
+            "name": "",
+            "description": "",
+            "outputName": module,
+            "admin": "admin.js",
+            "app": "app.js",
+            "mobile": "mobile.js",
+            "extraConfig": {}
         }, indent=2, ensure_ascii=False),
 
-        f"src/index.js": f"""\
-import customTabList from './custom-tab/index.js'
+        "src/admin.js": """\
+import './plugin-local/index.js'
 import extensionConfig from './extension.js'
-import registerI18n from './local/index.js'
+import CustomPanel from './custom-tab/custom-panel.vue'
 
-const install = function(Vue, opts) {{
-  // 注册国际化
-  registerI18n()
+const activateExtension = () => {
+  const engine = window?.Vue?._extensionEngine
+  if (engine && typeof engine.registerExtensionConfig === 'function') {
+    engine.registerExtensionConfig(extensionConfig)
+  }
+}
 
-  // 注册组件
-  if (customTabList && Array.isArray(customTabList)) {{
-    customTabList.forEach(component => {{
-      Vue.component(component.name, component)
-    }})
-  }}
+// eslint-disable-next-line no-unused-vars
+const install = function (context, hookManager, definition) {
+  activateExtension()
+}
 
-  // 注册扩展配置
-  if (Vue._extensionEngine) {{
-    Vue._extensionEngine.registerExtensionConfig(extensionConfig)
-  }}
-}}
+// eslint-disable-next-line no-unused-vars
+const activate = function (context, hookManager, definition) {
+  activateExtension()
+}
 
-export default {{ install }}
+const staticComponents = [CustomPanel]
+
+export default { install, activate, staticComponents }
 """,
 
-        f"src/extension.js": f"""\
+        "src/app.js": """\
+import extension from './admin.js'
+export default extension
+""",
+
+        "src/mobile.js": """\
+import extension from './admin.js'
+export default extension
+""",
+
+        "src/extension.js": f"""\
 import {{ getCustomTabConfig }} from './tab-config.js'
 
 const extensionConfig = {{
   code: '{ext_code}',
   name: '自开发插件-{name}',
-  blocks: [
-    {{
-      code: 'CustomTabExtension',
-      name: '自定义Tab扩展',
-      funs: [
-        {{
-          code: 'CustomTabExtension',
-          abbr: '__{name}__',
-          name: '',
-          versions: ['TRIAL_EDITION', 'TEAM_EDITION', 'STANDARD_EDITION', 'PREMIUM_EDITION']
-        }}
-      ]
-    }}
-  ],
+  blocks: [],
   versions: ['TRIAL_EDITION', 'TEAM_EDITION', 'STANDARD_EDITION', 'PREMIUM_EDITION'],
   enable: true,
   extensionMethods: {{
@@ -752,78 +802,69 @@ const extensionConfig = {{
 export default extensionConfig
 """,
 
-        f"src/tab-config.js": f"""\
-export function getCustomTabConfig() {{
+        "src/tab-config.js": """\
+export function getCustomTabConfig() {
   return [
-    {{
-      code: 'customPanel{camel}',
+    {
+      code: 'customPanel',
       title: '自定义面板',
-      componentName: '{module}-panel',
+      componentName: 'apaas-plugin-panel',
       resourceCode: 'APP_INFORMATION'
-    }}
+    }
   ]
-}}
+}
 """,
 
-        f"src/local/index.js": f"""\
-const locale = ['zh-CN', 'en-US']
-const messages = {{
-  'zh-CN': {{
-    '{name}': {{
-      panel: '自定义面板',
-      title: '插件标题'
-    }}
-  }},
-  'en-US': {{
-    '{name}': {{
-      panel: 'Custom Panel',
-      title: 'Plugin Title'
-    }}
-  }}
-}}
+        "src/plugin-local/index.js": """\
+import zhLocaleModule from './zh-CN/index.js'
+import enLocaleModule from './en-US/index.js'
 
-const registerI18n = () => {{
-  locale.forEach(item => {{
-    if (window.APaaSSDK && window.APaaSSDK.context && window.APaaSSDK.context.globalVueI18n) {{
-      window.APaaSSDK.context.globalVueI18n.mergeLocaleMessage(item, messages[item])
-    }}
-  }})
-}}
+const mergeLocaleMessage =
+  window.df?.getI18n?.().mergeLocaleMessage?.bind(window.df.getI18n()) ||
+  window.APaaSSDK?.context?.globalVueI18n?.mergeLocaleMessage?.bind(window.APaaSSDK.context.globalVueI18n)
 
-export default registerI18n
+if (mergeLocaleMessage) {
+  mergeLocaleMessage('zh-CN', zhLocaleModule)
+  mergeLocaleMessage('en-US', enLocaleModule)
+}
 """,
 
-        f"src/custom-tab/index.js": f"""\
-import CustomPanel from './custom-panel.vue'
-
-export default [CustomPanel]
+        "src/plugin-local/zh-CN/index.js": """\
+export default {
+  frontendPlugin: {
+    title: '插件标题',
+    panel: '自定义面板'
+  }
+}
 """,
 
-        f"src/custom-tab/custom-panel.vue": f"""\
+        "src/plugin-local/en-US/index.js": """\
+export default {
+  frontendPlugin: {
+    title: 'Plugin Title',
+    panel: 'Custom Panel'
+  }
+}
+""",
+
+        "src/custom-tab/custom-panel.vue": """\
 <template>
-  <div class="{module}-panel">
-    <h3>自定义面板 - {name}</h3>
-    <!-- 在此添加面板内容 -->
+  <div class="plugin-panel">
+    <h3>{{ $t ? $t('frontendPlugin.title') : '插件标题' }}</h3>
+    <p>{{ $t ? $t('frontendPlugin.panel') : '自定义面板' }}</p>
   </div>
 </template>
 
 <script>
-export default {{
-  name: '{module}-panel',
-  data() {{
-    return {{}}
-  }},
-  created() {{
-    // 初始化逻辑
-  }},
-  methods: {{}}
-}}
+export default {
+  name: 'apaas-plugin-panel'
+}
 </script>
 
 <style lang="scss" scoped>
-.{module}-panel {{
+.plugin-panel {
   padding: 20px;
-}}
+}
 </style>
 """,
     }

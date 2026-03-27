@@ -528,9 +528,7 @@ function onProviderChange(provider: string) {
   const preset = presets.value.find(p => p.provider === provider)
   if (preset) {
     llmForm.base_url = preset.base_url
-    if (preset.models.length > 0) {
-      llmForm.model = preset.models[0]
-    }
+    llmForm.model = preset.models[0] || ''
   } else {
     llmForm.base_url = ''
     llmForm.model = ''
@@ -648,8 +646,8 @@ async function handleLlmTest(cfg: LlmConfigWithUI) {
   cfg._testing = true
   try {
     const res = await llmConfigApi.test(cfg.id)
-    if (res.success) {
-      ElMessage.success(res.reply ? `连接成功: ${res.reply}` : '连接成功')
+    if (res.ok) {
+      ElMessage.success(res.message ? `连接成功: ${res.message}` : '连接成功')
       cfg.status = 'active'
     } else {
       ElMessage.error(res.error || '连接失败')

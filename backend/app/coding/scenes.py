@@ -108,15 +108,16 @@ SCENE_REGISTRY: Dict[SceneType, SceneInfo] = {
     SceneType.WEB_PLUGIN: SceneInfo(
         type=SceneType.WEB_PLUGIN,
         name="Web端自开发插件",
-        description="自定义平台扩展插件，基于ExtensionEngine注册扩展能力",
+        description="自定义平台扩展插件，遵循 FRONTEND_PLUGIN 协议并基于 ExtensionEngine/HookManager 扩展能力",
         category="frontend",
         platform="web",
-        file_patterns=["extension.js", "tab-config.js", "*.vue", "index.js", "apaas.json", "local/index.js"],
+        file_patterns=["admin.js", "app.js", "mobile.js", "extension.js", "tab-config.js", "*.vue", "apaas.json", "plugin-local/index.js"],
         required_conventions=[
-            "使用Vue._extensionEngine.registerExtensionConfig()注册",
-            "apaas.json中配置extensionConfigList",
+            "apaas.json 中 templateType 必须是 FRONTEND_PLUGIN",
+            "admin.js/app.js/mobile.js 需默认导出 install/activate/staticComponents",
+            "使用 Vue._extensionEngine.registerExtensionConfig() 或宿主注入的 HookManager 扩展能力",
             "支持i18n国际化注册",
-            "组件名必须以apaas-custom-开头",
+            "静态组件必须包含稳定 name",
         ],
     ),
     SceneType.MOBILE_COMPONENT: SceneInfo(

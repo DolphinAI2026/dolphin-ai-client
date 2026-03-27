@@ -149,7 +149,7 @@
         <div class="input-bar">
           <div class="input-wrap">
             <label class="upload-btn" title="上传功能设计文档(.md)">
-              <input type="file" accept=".md" @change="handleDocUpload" style="display:none" ref="fileInputRef" />
+              <input type="file" accept=".md" @change="handleDocUpload" style="display:none" />
               📄
             </label>
             <input v-model="inputText" @keydown.enter="sendMessage" placeholder="输入消息，或上传设计文档..." />
@@ -648,7 +648,6 @@ const store = usePreviewStore()
 const userStore = useUserStore()
 
 const messagesRef = ref<HTMLElement>()
-const fileInputRef = ref<HTMLInputElement>()
 const inputText = ref('')
 const isTyping = ref(false)
 const currentAgent = ref('builder')
@@ -753,26 +752,6 @@ const messages = reactive<Message[]>([
 
 const scrollToBottom = () => { nextTick(() => { if (messagesRef.value) messagesRef.value.scrollTop = messagesRef.value.scrollHeight }) }
 
-const switchAgent = (key: string) => {
-  // 复杂开发智能体 → 跳转到 Vibe Coding 页面
-  if (key === 'developer') {
-    router.push('/coding')
-    return
-  }
-
-  currentAgent.value = key
-  const greetings: Record<string, string> = {
-    builder: '已切换到搭建智能体。告诉我你想创建什么应用？',
-    assistant: '已切换到辅助开发智能体。我可以帮你完善已有应用：\n• 创建审批流程\n• 配置业务规则\n• 调整表单组件\n• 配置数据权限',
-  }
-  if (greetings[key]) {
-    messages.push({ id: Date.now(), role: 'assistant', agent: key, content: greetings[key], created_at: '' })
-    scrollToBottom()
-  }
-}
-
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
-
 // 从AI回复中提取JSON配置（支持 preview 完整配置和 patch 增量修改）
 const extractPreviewData = (content: string) => {
   // 提取所有 ```json 块
@@ -781,7 +760,7 @@ const extractPreviewData = (content: string) => {
 
   for (const match of allMatches) {
     try {
-      const parsed = JSON.parse(match[1].trim())
+      const parsed = JSON.parse((match[1] || '').trim())
       console.log('extractPreviewData: parsed type =', parsed.type, parsed)
 
       // 完整配置模式
@@ -1040,6 +1019,7 @@ const addRole = () => {
 
 const removeRole = (idx: number) => {
   const r = store.preview.roles[idx]
+  if (!r) return
   if (confirm(`删除角色「${r.name}」？`)) {
     store.preview.roles.splice(idx, 1)
   }
@@ -1057,6 +1037,7 @@ const addDict = () => {
 
 const editDict = (idx: number) => {
   const d = store.preview.dicts[idx]
+  if (!d) return
   const currentOpts = d.options?.map((o: any) => typeof o === 'string' ? o : o.name).join('，') || ''
   const newOpts = prompt(`编辑「${d.name}」的选项（逗号分隔）：`, currentOpts)
   if (newOpts === null) return
@@ -1068,6 +1049,7 @@ const editDict = (idx: number) => {
 
 const removeDict = (idx: number) => {
   const d = store.preview.dicts[idx]
+  if (!d) return
   if (confirm(`删除字典「${d.name}」？`)) {
     store.preview.dicts.splice(idx, 1)
   }
@@ -1281,9 +1263,17 @@ const computeLineDiff = (oldText: string, newText: string) => {
   // Simple LCS-based diff
   const m = oldLines.length, n = newLines.length
   const dp: number[][] = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0))
-  for (let i = 1; i <= m; i++)
-    for (let j = 1; j <= n; j++)
-      dp[i][j] = oldLines[i - 1] === newLines[j - 1] ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1])
+  for (let i = 1; i <= m; i++) {
+    const currentRow = dp[i]
+    const prevRow = dp[i - 1]
+    if (!currentRow || !prevRow) continue
+    for (let j = 1; j <= n; j++) {
+      const prevDiag = prevRow[j - 1] ?? 0
+      const prevUp = prevRow[j] ?? 0
+      const prevLeft = currentRow[j - 1] ?? 0
+      currentRow[j] = oldLines[i - 1] === newLines[j - 1] ? prevDiag + 1 : Math.max(prevUp, prevLeft)
+    }
+  }
 
   const leftResult: { text: string; type: 'same' | 'removed' }[] = []
   const rightResult: { text: string; type: 'same' | 'added' }[] = []
@@ -1292,15 +1282,15 @@ const computeLineDiff = (oldText: string, newText: string) => {
   const rightTmp: typeof rightResult = []
   while (i > 0 || j > 0) {
     if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
-      leftTmp.push({ text: oldLines[i - 1], type: 'same' })
-      rightTmp.push({ text: newLines[j - 1], type: 'same' })
+      leftTmp.push({ text: oldLines[i - 1] || '', type: 'same' })
+      rightTmp.push({ text: newLines[j - 1] || '', type: 'same' })
       i--; j--
-    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+    } else if (j > 0 && (i === 0 || (dp[i]?.[j - 1] ?? 0) >= (dp[i - 1]?.[j] ?? 0))) {
       leftTmp.push({ text: '', type: 'same' })
-      rightTmp.push({ text: newLines[j - 1], type: 'added' })
+      rightTmp.push({ text: newLines[j - 1] || '', type: 'added' })
       j--
     } else {
-      leftTmp.push({ text: oldLines[i - 1], type: 'removed' })
+      leftTmp.push({ text: oldLines[i - 1] || '', type: 'removed' })
       rightTmp.push({ text: '', type: 'same' })
       i--
     }
@@ -2146,9 +2136,10 @@ const handleDocUpload = async (e: Event) => {
       fetchDocVersions()
 
       // 替换进度消息为完成总结
-      if (pmsg) {
-        phases.complete.status = 'done'
-        phases.complete.detail = `${store.preview.models.length} 模型, ${store.preview.dicts.length} 字典, ${store.preview.roles.length} 角色`
+      const completePhase = phases.complete
+      if (pmsg && completePhase) {
+        completePhase.status = 'done'
+        completePhase.detail = `${store.preview.models.length} 模型, ${store.preview.dicts.length} 字典, ${store.preview.roles.length} 角色`
         if (!store.connected) {
           pmsg.content = buildProgressContent() + '\n\n配置已就绪！请先连接得帆云平台环境，然后点击"开始生成"部署。'
           // 自动弹出连接弹窗
@@ -2737,7 +2728,7 @@ const sendMessage = async () => {
               if (!store.currentApp && assistantContent.length > 50) {
                 const appNameMatch = assistantContent.match(/搭建.*?[**](.+?)[**]/)
                 if (appNameMatch) {
-                  store.currentApp = { name: appNameMatch[1], status: 'talking' }
+                  store.currentApp = { name: appNameMatch[1] || '', status: 'talking' }
                 }
               }
             }
