@@ -134,7 +134,7 @@ PROJECT_TYPE_PREFIXES = {
     "mobile-component": "",
     "form-page": "form-page-",
     "menu-page": "form-page-",
-    "mobile-page": "",
+    "mobile-page": "form-page-",
     "form-list": "form-view-",
     "backend-api": "backend-api-",
     "layout": "form-layout-",
@@ -1820,9 +1820,12 @@ dist/
             return
 
         project_name = meta.get("project_name") or self._fallback_project_name_from_path(ws_path)
+        asset_name = project_name
+        if meta.get("project_type") == ProjectType.MOBILE_PAGE.value and not asset_name.startswith("form-page-"):
+            asset_name = f"form-page-{asset_name}"
         package_json_path = ws_path / "package.json"
         apaas_json_path = ws_path / "src" / "apaas.json"
-        public_dir = ws_path / "public" / "form-page" / project_name
+        public_dir = ws_path / "public" / "form-page" / asset_name
         public_dir.mkdir(parents=True, exist_ok=True)
         gitkeep = public_dir / ".gitkeep"
         if not gitkeep.exists():
@@ -1838,8 +1841,14 @@ dist/
 
         existing_deps = package_json.get("dependencies") or {}
         existing_dev_deps = package_json.get("devDependencies") or {}
+        current_package_name = (package_json.get("name") or "").strip()
+        if meta.get("project_type") == ProjectType.MOBILE_PAGE.value:
+            normalized_package_name = asset_name
+        else:
+            normalized_package_name = current_package_name or asset_name
+
         package_json.update({
-            "name": package_json.get("name") or project_name,
+            "name": normalized_package_name,
             "version": package_json.get("version") or "1.0.0",
             "engines": {"node": "16.x"},
             "templateType": "MENU_PAGE",
@@ -1907,8 +1916,20 @@ dist/
         repaired_apaas["templateType"] = "MENU_PAGE"
         repaired_apaas["router"] = router
         repaired_apaas["customWidgetList"] = repaired_apaas.get("customWidgetList") or []
-        repaired_apaas["copyAssets"] = repaired_apaas.get("copyAssets") or [f"public/form-page/{project_name}"]
-        repaired_apaas["outputName"] = self._resolve_output_name(repaired_apaas, project_name)
+        current_copy_assets = repaired_apaas.get("copyAssets")
+        if meta.get("project_type") == ProjectType.MOBILE_PAGE.value:
+            normalized_copy_assets = [f"public/form-page/{asset_name}"]
+        else:
+            normalized_copy_assets = current_copy_assets or [f"public/form-page/{asset_name}"]
+
+        current_output_name = self._resolve_output_name(repaired_apaas, asset_name)
+        if meta.get("project_type") == ProjectType.MOBILE_PAGE.value:
+            normalized_output_name = asset_name
+        else:
+            normalized_output_name = current_output_name
+
+        repaired_apaas["copyAssets"] = normalized_copy_assets
+        repaired_apaas["outputName"] = normalized_output_name
         apaas_json_path.write_text(json.dumps(repaired_apaas, ensure_ascii=False, indent=2), encoding="utf-8")
 
         component_tag = next(iter(router.keys()), "")
@@ -3913,9 +3934,13 @@ export default {{
         self._write(ws_path, "src/form-page-local/index.js", """import zhLocaleModule from './zh-CN/index.js'
 import enLocaleModule from './en-US/index.js'
 
-if (window.df && window.df.getI18n && window.df.getI18n().mergeLocaleMessage) {
-  window.df.getI18n().mergeLocaleMessage('zh-CN', zhLocaleModule)
-  window.df.getI18n().mergeLocaleMessage('en-US', enLocaleModule)
+const platformI18n =
+  window.df?.getI18n?.() ||
+  window.APaaSSDK?.context?.globalVueI18n
+
+if (platformI18n?.mergeLocaleMessage) {
+  platformI18n.mergeLocaleMessage('zh-CN', zhLocaleModule)
+  platformI18n.mergeLocaleMessage('en-US', enLocaleModule)
 }
 """)
         self._write(ws_path, "src/form-page-local/zh-CN/index.js", """export default {
