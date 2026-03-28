@@ -467,18 +467,52 @@ async def execute_step(
                 await db.commit()
                 step_exception = HTTPException(status_code=401, detail="APaaS平台Token已过期，请在环境管理中重新登录")
             else:
-                # 字典/角色编码冲突时自动跳过（已存在即复用，不需要改名）
+                # 编码冲突时自动处理
                 is_dict_or_role_step = step_key.startswith("create_dict:") or step_key.startswith("create_role:") or step_key == "create_roles_dicts"
+                is_model_step = step_key.startswith("create_model:")
+                is_form_step = step_key.startswith("create_form:")
                 is_duplicate = any(kw in error_msg for kw in ["编码重复", "已存在", "duplicate"])
+
                 if is_dict_or_role_step and is_duplicate:
+                    # 字典/角色：直接复用
                     logger.info(f"步骤 {step_key} 编码已存在，自动跳过: {error_msg}")
-                    state.setdefault("completed_steps", []).append(step_key)
-                    # 清除之前可能残留的错误状态
+                    state.setdefault("steps_completed", []).append(step_key)
                     state.get("step_errors", {}).pop(step_key, None)
                     _save_state(app, state)
                     step_response = StepExecuteResponse(step=step_key, status="ok", error=None)
+                elif (is_model_step or is_form_step) and is_duplicate:
+                    # 模型/表单：自动加后缀并立即重试
+                    logger.info(f"步骤 {step_key} 编码冲突，自动加后缀重试: {error_msg}")
+                    import random, string
+                    suffix = ''.join(random.choices(string.ascii_lowercase, k=4))
+                    retry_ok = False
+                    if is_model_step:
+                        idx = int(step_key.split(":")[1])
+                        if idx < len(models):
+                            old_code = models[idx].get("code", "")
+                            new_code = f"{old_code}_{suffix}"
+                            models[idx]["code"] = new_code
+                            logger.info(f"模型编码自动重命名: {old_code} -> {new_code}")
+                            app.config_preview = json.dumps(data, ensure_ascii=False)
+                            # 立即用新编码重试
+                            try:
+                                result = await execute_step(client, app_id, step_key, data, state)
+                                # 回填 model_info（重试成功时 execute_step 已经更新了 state）
+                                state.setdefault("steps_completed", []).append(step_key)
+                                state.get("step_errors", {}).pop(step_key, None)
+                                _save_state(app, state)
+                                step_response = StepExecuteResponse(step=step_key, status="completed", result=result)
+                                retry_ok = True
+                            except Exception as retry_err:
+                                logger.warning(f"自动重试也失败: {retry_err}")
+                    if not retry_ok:
+                        # 重试也失败，正常报错让用户知道
+                        logger.warning(f"步骤 {step_key} 自动重命名重试也失败")
+                        state.setdefault("step_errors", {})[step_key] = error_msg
+                        _save_state(app, state)
+                        step_response = StepExecuteResponse(step=step_key, status="error", error=f"编码冲突且自动重命名失败: {error_msg}")
                 else:
-                    # 检测编码冲突错误（模型/表单等需要用户手动改名）
+                    # 其他错误：原样报错
                     conflict = _detect_code_conflict(error_msg, step_key, data, models)
                     if conflict:
                         state.setdefault("step_errors", {})[step_key] = error_msg

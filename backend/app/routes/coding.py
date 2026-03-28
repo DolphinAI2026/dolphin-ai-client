@@ -3,9 +3,11 @@ Coding API 路由 - aPaaS Vibe Coding 接口
 """
 
 import asyncio
+import base64
 import json
 import logging
 import re
+import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Annotated, AsyncIterator, Any
@@ -99,12 +101,29 @@ def _build_public_api_base(request: Request) -> str:
     return f"{proto}://{host}".rstrip("/")
 
 
+def _infer_public_builder_prefix(request: Request) -> str:
+    forwarded_prefix = (request.headers.get("x-forwarded-prefix") or "").strip()
+    if forwarded_prefix:
+        return forwarded_prefix.rstrip("/")
+
+    code_server_base = (settings.code_server_base_url or "").rstrip("/")
+    if not code_server_base:
+        return ""
+
+    parsed = urlparse(code_server_base)
+    code_server_path = (parsed.path or "").rstrip("/")
+    if code_server_path.endswith("/ide"):
+        return code_server_path[:-4]
+    return ""
+
+
 def _build_ide_proxy_api_base(request: Request, ws_id: str) -> str:
     """为 code-server 场景优先生成同源代理地址，避免浏览器被 CSP 拦截直连后端。"""
     public_base = _build_public_api_base(request)
+    public_prefix = _infer_public_builder_prefix(request)
     code_server_base = (settings.code_server_base_url or "").rstrip("/")
     if not code_server_base:
-        return f"{public_base}/api/coding/workspace/{ws_id}/ide"
+        return f"{public_base}{public_prefix}/api/coding/workspace/{ws_id}/ide"
 
     request_host = (request.url.hostname or "").strip().lower()
     code_server_host = (urlparse(code_server_base).hostname or "").strip().lower()
@@ -114,7 +133,7 @@ def _build_ide_proxy_api_base(request: Request, ws_id: str) -> str:
     if request_host in local_hosts and code_server_host in local_hosts and backend_port:
         return f"{code_server_base}/proxy/{backend_port}/api/coding/workspace/{ws_id}/ide"
 
-    return f"{public_base}/api/coding/workspace/{ws_id}/ide"
+    return f"{public_base}{public_prefix}/api/coding/workspace/{ws_id}/ide"
 
 
 def _create_ide_access_token(ctx: AuthContext, ws_id: str) -> str:
@@ -138,6 +157,162 @@ def _verify_ide_access_token(token: str, ws_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=403, detail="IDE 访问令牌与当前工作区不匹配")
 
     return payload
+
+
+def _code_server_chat_images_dir() -> Path:
+    return Path.home() / ".local" / "share" / "code-server" / "User" / "workspaceStorage" / "vscode-chat-images"
+
+
+def _decode_data_url(data_url: str) -> tuple[str, bytes]:
+    match = re.match(r"^data:([^;]+);base64,(.+)$", data_url, re.DOTALL)
+    if not match:
+        raise ValueError("invalid data url")
+    media_type, encoded = match.groups()
+    try:
+        return media_type, base64.b64decode(encoded)
+    except Exception as exc:
+        raise ValueError("invalid base64 image data") from exc
+
+
+def _image_extension_from_media_type(media_type: str) -> str:
+    mapping = {
+        "image/png": ".png",
+        "image/jpeg": ".jpg",
+        "image/webp": ".webp",
+        "image/gif": ".gif",
+    }
+    return mapping.get(media_type.lower(), ".png")
+
+
+def _is_safe_chat_image_name(name: str) -> bool:
+    return bool(re.match(r"^[\w.\- ]+\.(png|jpg|jpeg|webp|gif)$", name or "", re.IGNORECASE))
+
+
+def _latest_chat_image_path() -> Optional[Path]:
+    image_dir = _code_server_chat_images_dir()
+    if not image_dir.exists():
+        return None
+    candidates = [
+        path for path in image_dir.iterdir()
+        if path.is_file() and re.search(r"\.(png|jpg|jpeg|webp|gif)$", path.name, re.IGNORECASE)
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: path.stat().st_mtime)
+
+
+def _extract_ocr_signal_lines(lines: list[str]) -> list[str]:
+    if not lines:
+        return []
+
+    normalized = [re.sub(r"\s+", " ", (line or "")).strip() for line in lines]
+    focused_patterns = [
+        re.compile(r"(TypeError|ReferenceError|SyntaxError|RangeError|Unhandled|Uncaught)", re.IGNORECASE),
+        re.compile(r"(Cannot read properties|Unexpected token|undefined)", re.IGNORECASE),
+    ]
+    weak_patterns = [
+        re.compile(r"\.js:\d+", re.IGNORECASE),
+        re.compile(r"(failed|not found|404|500)", re.IGNORECASE),
+    ]
+
+    signals: list[str] = []
+    seen: set[str] = set()
+
+    def _append_snippet(snippet: str):
+        snippet = re.sub(r"\s+", " ", snippet).strip()
+        if not snippet or len(snippet) < 12:
+            return
+        key = snippet.lower()
+        if key in seen:
+            return
+        seen.add(key)
+        signals.append(snippet[:400])
+
+    for idx, line in enumerate(normalized):
+        if not any(pattern.search(line) for pattern in focused_patterns):
+            continue
+        parts = [part for part in normalized[idx:idx + 4] if part]
+        _append_snippet(" ".join(parts))
+        if len(signals) >= 6:
+            return signals
+
+    for idx, line in enumerate(normalized):
+        if not any(pattern.search(line) for pattern in weak_patterns):
+            continue
+        parts = [part for part in normalized[max(0, idx - 1):idx + 3] if part]
+        _append_snippet(" ".join(parts))
+        if len(signals) >= 8:
+            return signals
+
+    return signals
+
+
+def _extract_ocr_diagnostics(text: str, signal_lines: list[str]) -> list[str]:
+    corpus = re.sub(r"\s+", " ", text or "").strip()
+    diagnostics: list[str] = []
+    seen: set[str] = set()
+
+    def _add(message: str):
+        normalized = re.sub(r"\s+", " ", message).strip()
+        if not normalized:
+            return
+        key = normalized.lower()
+        if key in seen:
+            return
+        seen.add(key)
+        diagnostics.append(normalized)
+
+    compact = corpus.replace(" ", "")
+    patterns = [
+        (re.compile(r"TypeError[\s:：]*Cannot(?:.{0,60})read(?:.{0,80})properties(?:.{0,40})undefined(?:.{0,80})reading(?:.{0,40})zh-?\s*CN", re.IGNORECASE),
+         "TypeError: Cannot read properties of undefined (reading 'zh-CN')"),
+        (re.compile(r"SyntaxError\s*[:：]?\s*Unexpected\s+token\s*['\"]?<['\"]?", re.IGNORECASE),
+         "SyntaxError: Unexpected token '<'"),
+        (re.compile(r"TypeError[\s:：]*Cannot(?:.{0,60})read(?:.{0,80})properties(?:.{0,40})undefined(?:.{0,80})reading(?:.{0,40})default", re.IGNORECASE),
+         "TypeError: Cannot read properties of undefined (reading 'default')"),
+    ]
+
+    for pattern, message in patterns:
+        if pattern.search(corpus) or (
+            message.endswith("'zh-CN')") and "typeerror" in compact.lower() and "reading'zh-cn'" in compact.lower()
+        ) or (
+            message.endswith("'default')") and "typeerror" in compact.lower() and "reading'default'" in compact.lower()
+        ):
+            _add(message)
+
+    for line in signal_lines:
+        clean = re.sub(r"\s+", " ", line).strip()
+        if not clean:
+            continue
+        if re.search(r"(TypeError|ReferenceError|SyntaxError|RangeError|Error|Exception)", clean, re.IGNORECASE):
+            _add(clean)
+        if len(diagnostics) >= 5:
+            break
+
+    return diagnostics[:5]
+
+
+async def _run_local_image_ocr(image_path: Path) -> dict[str, Any]:
+    script_path = Path(__file__).resolve().parents[3] / "scripts" / "ocr_image.swift"
+    if not script_path.exists():
+        raise RuntimeError("OCR script not found")
+
+    process = await asyncio.create_subprocess_exec(
+        "swift",
+        str(script_path),
+        str(image_path),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
+    if process.returncode != 0:
+        detail = stderr.decode("utf-8", errors="ignore").strip() or "OCR process failed"
+        raise RuntimeError(detail)
+
+    try:
+        return json.loads(stdout.decode("utf-8"))
+    except Exception as exc:
+        raise RuntimeError("Invalid OCR output") from exc
 
 
 def _build_openai_chat_completions_url() -> str:
@@ -677,6 +852,15 @@ async def get_workspace_ide_url(
     return {"ide_url": ide_url}
 
 
+class IDEImageOCRItem(BaseModel):
+    name: Optional[str] = None
+    data_url: Optional[str] = None
+
+
+class IDEImageOCRRequest(BaseModel):
+    images: list[IDEImageOCRItem] = []
+
+
 @router.post("/workspace/{ws_id}/ide/chat/completions")
 async def ide_chat_completions_proxy(
     ws_id: str,
@@ -740,6 +924,107 @@ async def ide_chat_completions_proxy(
     if "application/json" in content_type.lower():
         return JSONResponse(status_code=resp.status_code, content=resp.json())
     return JSONResponse(status_code=resp.status_code, content={"detail": resp.text})
+
+
+@router.post("/workspace/{ws_id}/ide/image-context")
+async def ide_image_context_proxy(
+    ws_id: str,
+    req: IDEImageOCRRequest,
+    x_vibe_ide_token: Annotated[Optional[str], Header(alias="X-Vibe-IDE-Token")] = None,
+    token: Optional[str] = Query(default=None),
+):
+    """Web IDE 图片上下文代理：对粘贴到 Chat 的图片做本地 OCR，返回可注入给模型的文字上下文。"""
+    ide_token = x_vibe_ide_token or token
+    if not ide_token:
+        raise HTTPException(status_code=401, detail="缺少 IDE 访问令牌，请重新从 Builder 打开 Web IDE")
+
+    _verify_ide_access_token(ide_token, ws_id)
+
+    if not req.images:
+        raise HTTPException(status_code=400, detail="缺少图片输入")
+
+    results: list[dict[str, Any]] = []
+    chat_images_dir = _code_server_chat_images_dir()
+
+    for image in req.images[:4]:
+        source_name = (image.name or "").strip()
+        temp_path: Optional[Path] = None
+        try:
+            if image.data_url:
+                media_type, raw = _decode_data_url(image.data_url)
+                suffix = _image_extension_from_media_type(media_type)
+                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as fh:
+                    fh.write(raw)
+                    temp_path = Path(fh.name)
+                image_path = temp_path
+            else:
+                if source_name == "__latest__":
+                    latest = _latest_chat_image_path()
+                    if not latest or not latest.exists():
+                        results.append({
+                            "name": "latest-chat-image",
+                            "text": "",
+                            "lines": [],
+                            "error": "no recent chat image found",
+                        })
+                        continue
+                    image_path = latest
+                    source_name = latest.name
+                else:
+                    if not source_name or not _is_safe_chat_image_name(source_name):
+                        results.append({
+                            "name": source_name or "unknown",
+                            "text": "",
+                            "lines": [],
+                            "error": "invalid image name",
+                        })
+                        continue
+                    image_path = chat_images_dir / Path(source_name).name
+                    if not image_path.exists():
+                        results.append({
+                            "name": source_name,
+                            "text": "",
+                            "lines": [],
+                            "error": "image not found in code-server storage",
+                        })
+                        continue
+
+            ocr = await _run_local_image_ocr(image_path)
+            lines = [line for line in (ocr.get("lines") or []) if isinstance(line, str)]
+            text = ocr.get("text") if isinstance(ocr.get("text"), str) else "\n".join(lines)
+            signal_lines = _extract_ocr_signal_lines(lines)
+            diagnostics = _extract_ocr_diagnostics(text, signal_lines)
+            results.append({
+                "name": source_name or image_path.name,
+                "text": text[:8000],
+                "lines": lines[:120],
+                "line_count": len(lines),
+                "signal_lines": signal_lines,
+                "diagnostics": diagnostics,
+                "source": "local_ocr",
+            })
+        except asyncio.TimeoutError:
+            results.append({
+                "name": source_name or (temp_path.name if temp_path else "unknown"),
+                "text": "",
+                "lines": [],
+                "error": "ocr timeout",
+            })
+        except Exception as exc:
+            results.append({
+                "name": source_name or (temp_path.name if temp_path else "unknown"),
+                "text": "",
+                "lines": [],
+                "error": str(exc),
+            })
+        finally:
+            if temp_path and temp_path.exists():
+                try:
+                    temp_path.unlink()
+                except OSError:
+                    pass
+
+    return {"images": results}
 
 
 @router.get("/workspace/{ws_id}/files")
@@ -1463,28 +1748,37 @@ async def auto_pipeline(
 
             # For first-time creation, agent should have run npm install + serve
             # But check and do it as fallback if agent didn't
-            serve_status = ws_mgr.is_serve_running(ws_id)
-            if not serve_status["running"]:
-                # ---- Step 4: 安装依赖（首次创建 fallback）----
-                yield _sse({"type": "step", "step": "install", "status": "running"})
-                install_result = await ws_mgr.install_deps(ws_id)
-                if install_result["status"] == "error":
-                    yield _sse({"type": "step", "step": "install", "status": "error",
-                                "data": {"message": install_result["message"]}})
+            # 后端/脚本项目不需要 npm install 和 serve
+            meta = ws_mgr._read_meta(ws_mgr.get_workspace_path(ws_id))
+            needs_npm = ws_mgr._project_requires_npm_install(meta.get("project_type", ""))
+
+            if needs_npm:
+                serve_status = ws_mgr.is_serve_running(ws_id)
+                if not serve_status["running"]:
+                    # ---- Step 4: 安装依赖（首次创建 fallback）----
+                    yield _sse({"type": "step", "step": "install", "status": "running"})
+                    install_result = await ws_mgr.install_deps(ws_id)
+                    if install_result["status"] == "error":
+                        yield _sse({"type": "step", "step": "install", "status": "error",
+                                    "data": {"message": install_result["message"]}})
+                    else:
+                        yield _sse({"type": "step", "step": "install", "status": "done"})
+
+                    # ---- Step 5: 启动 serve ----
+                    yield _sse({"type": "step", "step": "serve", "status": "running"})
+                    serve_result = await ws_mgr.start_serve(ws_id)
+                    yield _sse({"type": "step", "step": "serve", "status": "done" if serve_result["status"] == "ok" else "error",
+                                "data": {"port": serve_result.get("port"),
+                                         "url": f"https://localhost:{serve_result.get('port', 8080)}/"}})
                 else:
                     yield _sse({"type": "step", "step": "install", "status": "done"})
-
-                # ---- Step 5: 启动 serve ----
-                yield _sse({"type": "step", "step": "serve", "status": "running"})
-                serve_result = await ws_mgr.start_serve(ws_id)
-                yield _sse({"type": "step", "step": "serve", "status": "done" if serve_result["status"] == "ok" else "error",
-                            "data": {"port": serve_result.get("port"),
-                                     "url": f"https://localhost:{serve_result.get('port', 8080)}/"}})
+                    yield _sse({"type": "step", "step": "serve", "status": "done",
+                                "data": {"port": serve_status.get("port"),
+                                         "url": f"https://localhost:{serve_status.get('port', 8080)}/"}})
             else:
-                yield _sse({"type": "step", "step": "install", "status": "done"})
-                yield _sse({"type": "step", "step": "serve", "status": "done",
-                            "data": {"port": serve_status.get("port"),
-                                     "url": f"https://localhost:{serve_status.get('port', 8080)}/"}})
+                # 后端/脚本项目跳过 npm 步骤
+                yield _sse({"type": "step", "step": "install", "status": "skipped"})
+                yield _sse({"type": "step", "step": "serve", "status": "skipped"})
 
             yield _sse({"type": "done", "workspace_id": ws_id,
                         "conversation_id": conversation_id})

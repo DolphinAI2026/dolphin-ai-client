@@ -935,6 +935,7 @@ class WorkspaceManager:
         """构建项目"""
         ws_path = self.get_workspace_path(ws_id)
 
+        self._ensure_form_component_workspace_compat(ws_path)
         self._ensure_menu_page_workspace_compat(ws_path)
         self._ensure_layout_workspace_compat(ws_path)
         self._ensure_form_list_workspace_compat(ws_path)
@@ -1675,6 +1676,32 @@ dist/
         # HTTPS 自签名证书（debug 模式必需）
         self._generate_https_cert(ws_path)
 
+        # .vscode/tasks.json（IDE 便捷命令）
+        self._write(ws_path, ".vscode/tasks.json", json.dumps({
+            "version": "2.0.0",
+            "tasks": [
+                {
+                    "label": "npm install",
+                    "type": "shell",
+                    "command": "npm install",
+                    "problemMatcher": []
+                },
+                {
+                    "label": "npm run serve",
+                    "type": "shell",
+                    "command": "npm run serve",
+                    "isBackground": True,
+                    "problemMatcher": []
+                },
+                {
+                    "label": "npm run build",
+                    "type": "shell",
+                    "command": "npm run build",
+                    "problemMatcher": []
+                }
+            ]
+        }, indent=2, ensure_ascii=False))
+
     def _ensure_layout_workspace_compat(self, ws_path: Path):
         """修复旧版布局工作区，使其对齐 PAGE_LAYOUT 脚手架协议。"""
         meta = self._read_meta(ws_path)
@@ -1808,6 +1835,36 @@ dist/
         repaired_apaas["copyAssets"] = [f"public/form-view/{project_name}"]
         repaired_apaas["outputName"] = repaired_apaas.get("outputName") or project_name
         apaas_json_path.write_text(json.dumps(repaired_apaas, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _ensure_form_component_workspace_compat(self, ws_path: Path):
+        """修复旧版表单组件工作区的 i18n 引导，避免预览/构建时因平台对象未就绪而中断。"""
+        meta = self._read_meta(ws_path)
+        if meta.get("project_type") != ProjectType.FORM_COMPONENT.value:
+            return
+
+        locale_index_path = ws_path / "src" / "form-component-local" / "index.js"
+        if not locale_index_path.exists():
+            return
+
+        locale_index_content = locale_index_path.read_text(encoding="utf-8")
+        if "window.df.getI18n().mergeLocaleMessage" not in locale_index_content:
+            return
+
+        locale_index_path.write_text(
+            """import zhLocaleModule from './zh-CN/index.js'
+import enLocaleModule from './en-US/index.js'
+
+const platformI18n =
+  window.df?.getI18n?.() ||
+  window.APaaSSDK?.context?.globalVueI18n
+
+if (platformI18n?.mergeLocaleMessage) {
+  platformI18n.mergeLocaleMessage('zh-CN', zhLocaleModule)
+  platformI18n.mergeLocaleMessage('en-US', enLocaleModule)
+}
+""",
+            encoding="utf-8",
+        )
 
     def _ensure_menu_page_workspace_compat(self, ws_path: Path):
         """修复旧版菜单/表单/移动页面工作区，使其对齐 MENU_PAGE 协议。"""
@@ -2248,7 +2305,7 @@ export default { install, activate, staticComponents }
                 "lint": "vue-cli-service lint",
                 "serve": "vue-cli-service serve src/index.js",
                 "debug": "df-apaas-cli debug",
-                "build": f"vue-cli-service build --target lib --name {name} src/index.js"
+                "build": "df-apaas-cli build"
             },
             "dependencies": {
                 "core-js": "3.8.3",
@@ -2338,20 +2395,30 @@ import {{ customFormEditorList, customFormWidgetList }} from './form-component'
 import {{ widgetConfigList, editorConfigList }} from './form-component-config'
 import {{ AbilityFieldMap, AbilityFieldConvert }} from './form-ability'
 
-const install = function(Vue) {{
-  customFormEditorList.forEach((comp) => {{ Vue.component(comp.name, comp) }})
-  customFormWidgetList.forEach((comp) => {{ Vue.component(comp.name, comp) }})
-  editorConfigList.forEach((editorConfig) => {{
-    Vue.FormEngine.WidgetControl.registerEditorConfig(editorConfig)
-  }})
-  widgetConfigList.forEach((widgetConfig) => {{
-    Vue.FormEngine && Vue.FormEngine.registerCustomGroupWidgetConfig({{ widgetConfig }})
-  }})
+// eslint-disable-next-line
+const install = function(Vue, opts) {{
+  if (customFormEditorList && Array.isArray(customFormEditorList)) {{
+    customFormEditorList.forEach((comp) => {{ Vue.component(comp.name, comp) }})
+  }}
+  if (customFormWidgetList && Array.isArray(customFormWidgetList)) {{
+    customFormWidgetList.forEach((comp) => {{ Vue.component(comp.name, comp) }})
+  }}
+  if (editorConfigList && Array.isArray(editorConfigList)) {{
+    editorConfigList.forEach((editorConfig) => {{
+      Vue.FormEngine.WidgetControl.registerEditorConfig(editorConfig)
+    }})
+  }}
+  if (widgetConfigList && Array.isArray(widgetConfigList)) {{
+    widgetConfigList.forEach((widgetConfig) => {{
+      Vue.FormEngine && Vue.FormEngine.registerCustomGroupWidgetConfig({{ widgetConfig }})
+    }})
+  }}
   Vue.FormEngine && Vue.FormEngine.AbilityControl && Vue.FormEngine.AbilityControl.batchRegisterComponentTypeConfig(AbilityFieldMap)
   Vue.FormEngine && Vue.FormEngine.AbilityControl && Vue.FormEngine.AbilityControl.batchRegisterFieldValueConvert(AbilityFieldConvert)
 }}
 
-export default {{ install }}
+const FormComponent = {{ install: install }}
+export default FormComponent
 """)
 
         # ======== form-component/（7场景组件）========
@@ -2386,9 +2453,7 @@ export default customFormComponentList
   <div class="form-widget {full_kebab}-ide">
     <x-proxy-form-item
       :isInTable="widget.isInTable" :showRequired="showRequired" :label="widget.label"
-      :titleDescription="widget.titleDescription" :renderScene="renderScene"
-      :processTitle="widget.processTitle" :validatorRules="validatorRules"
-      :validateKey="validateKey" :validateInfo="validateInfo" :webFormSettings="webFormSettings"
+      :validatorRules="validatorRules" :validateKey="validateKey" :validateInfo="validateInfo"
     >
       <div style="border:1px dashed #dcdfe6;padding:12px;border-radius:4px;background:#fafafa;">
         <span style="font-size:12px;color:#909399;">自定义组件（设计态预览）</span>
@@ -2409,9 +2474,7 @@ export default {{ name: '{prefix}Ide', mixins: [FormWidgetMixin] }}
   <div class="form-widget {full_kebab}-edit">
     <x-proxy-form-item
       :isInTable="widget.isInTable" :showRequired="showRequired" :label="widget.label"
-      :titleDescription="widget.titleDescription" :renderScene="renderScene"
-      :processTitle="widget.processTitle" :validatorRules="validatorRules"
-      :validateKey="validateKey" :validateInfo="validateInfo" :webFormSettings="webFormSettings"
+      :validatorRules="validatorRules" :validateKey="validateKey" :validateInfo="validateInfo"
     >
       <!-- TODO: AI 将在此实现编辑态交互组件 -->
       <el-input v-model="editValue" placeholder="请输入" />
@@ -2443,9 +2506,7 @@ export default {{
   <div class="form-widget {full_kebab}-read">
     <x-proxy-form-item
       :isInTable="widget.isInTable" :showRequired="showRequired" :label="widget.label"
-      :titleDescription="widget.titleDescription" :renderScene="renderScene"
-      :processTitle="widget.processTitle" :validatorRules="validatorRules"
-      :validateKey="validateKey" :validateInfo="validateInfo" :webFormSettings="webFormSettings"
+      :validatorRules="validatorRules" :validateKey="validateKey" :validateInfo="validateInfo"
     >
       <span>{{{{ formValue || '-' }}}}</span>
     </x-proxy-form-item>
@@ -2647,7 +2708,7 @@ export { widgetConfigList, editorConfigList }
     }},
     allow: {{ useInTableColumn: true }},
     default: {{ customDefaultKey: 'defaultValue', value: '' }},
-    validator: {{ uniqueCheck: false }},
+    validator: {{ uniqueCheck: false, numberMax: 5 }},
     validatorList: [{{ validatorConfig: [], validatorMessage: '' }}],
     special: {{ frontBusinessObjectComponentType: 'BOF_TEXT', saveWithHidden: false }},
     customComponentConfig: {{}},
@@ -2703,6 +2764,17 @@ export default config
 
         # ======== Mixin（完整版，非 mock）========
         self._write(ws_path, "src/mixin/form-widget.mixin.js", self._get_form_widget_mixin())
+        self._write(ws_path, "src/mixin/form-config.mixin.js", self._get_form_config_mixin())
+        self._write(ws_path, "src/mixin/list-widget.mixin.js", """const ListWidgetMixin = {
+  inject: ["listEngine"],
+  props: {
+    componentConfig: { required: true, type: Object },
+    formValue: { required: true, type: Object },
+    propKey: { required: true, type: String }
+  }
+}
+export default ListWidgetMixin
+""")
         self._write(ws_path, "src/mixin/print-widget.mixin.js", """const PrintWidgetMixin = {
   props: {
     widget: { required: true },
@@ -2739,6 +2811,11 @@ export default PrintWidgetMixin
       return {
         width: this.searchItemConfig.labelWidth ? this.searchItemConfig.labelWidth / 14 + 'rem' : '',
         textAlign: this.searchItemConfig.labelalign || ''
+      }
+    },
+    formItemStyle() {
+      return {
+        minWidth: this.searchItemConfig.labelWidth && this.searchItemConfig.labelalign === 'right' ? (this.searchItemConfig.labelWidth + 12 + 44) / 14 + 'rem' : ''
       }
     }
   }
@@ -2810,9 +2887,13 @@ export { AbilityFieldMap, AbilityFieldConvert }
         self._write(ws_path, "src/form-component-local/index.js", """import zhLocaleModule from './zh-CN/index.js'
 import enLocaleModule from './en-US/index.js'
 
-if (window.df.getI18n().mergeLocaleMessage) {
-  window.df.getI18n().mergeLocaleMessage('zh-CN', zhLocaleModule)
-  window.df.getI18n().mergeLocaleMessage('en-US', enLocaleModule)
+const platformI18n =
+  window.df?.getI18n?.() ||
+  window.APaaSSDK?.context?.globalVueI18n
+
+if (platformI18n?.mergeLocaleMessage) {
+  platformI18n.mergeLocaleMessage('zh-CN', zhLocaleModule)
+  platformI18n.mergeLocaleMessage('en-US', enLocaleModule)
 }
 """)
         self._write(ws_path, "src/form-component-local/zh-CN/index.js", "export default { formComponent: {} }\n")
@@ -2825,174 +2906,294 @@ if (window.df.getI18n().mergeLocaleMessage) {
 export default Api
 """)
 
-    def _get_form_widget_mixin(self):
-        """返回完整的 FormWidgetMixin 代码（平台标准实现）"""
-        return """import WidgetRequiredValidator from '@/validator/widget-required-validator'
-import WidgetRegexValidator from '@/validator/widget-regex-validator'
+        # ======== .cursor/rules 前端开发指南 ========
+        self._write(ws_path, ".cursor/rules/form-component-dev-guide.mdc", f"""---
+description: aPaaS 表单自开发组件规范
+globs: ["**/*.vue", "**/*.js"]
+---
 
-const debounce = window._.debounce
-const XEventBus = window.APaaSSDK.context.XEventBus
-const debounceWaitTime = 150
-const AbilityControl = window.Vue.FormEngine.AbilityControl
+# aPaaS 表单自开发组件规范
+
+## 项目结构
+本项目是 aPaaS 平台的表单自开发组件，基于 Vue 2.7，包含 7 个场景：
+- **IDE**（设计态预览）、**Edit**（编辑态）、**Read**（只读态）
+- **List**（列表列）、**Print**（打印）、**Search**（搜索）、**SearchIde**（搜索设计态）
+
+## 核心文件
+- `src/form-component/form-widget/edit/{full_kebab}-edit.vue` — 编辑态（最重要）
+- `src/form-component/form-widget/ide/{full_kebab}-ide.vue` — 设计器预览
+- `src/form-component/form-widget/read/{full_kebab}-read.vue` — 只读展示
+- `src/form-component/form-editor/{full_kebab}-setting.vue` — 设计器配置面板
+- `src/form-component-config/form-widget/{full_kebab}.widget.config.js` — 组件注册配置
+- `src/mixin/form-widget.mixin.js` — 核心 mixin（提供 formValue 读写）
+
+## FormWidgetMixin 使用
+所有 Edit/IDE/Read 场景的 Vue 组件都必须混入 `FormWidgetMixin`：
+```javascript
+import FormWidgetMixin from '@/mixin/form-widget.mixin'
+export default {{
+  name: '{prefix}Edit',
+  mixins: [FormWidgetMixin],
+  // ...
+}}
+```
+
+### 关键 API
+- `this.formValue` — 读写组件值（getter/setter），**这是与平台数据绑定的唯一方式**
+- `this.widget` — 组件配置对象（label, required, readOnly, hidden 等）
+- `this.showRequired` — 是否显示必填标记
+- `this.validatorRules` — 校验规则数组
+- `this.validateKey` — 校验 key
+- `this.validateInfo` — 校验信息
+- `this.renderScene` — 当前渲染场景（'ide'/'edit'/'read'）
+- `this.$formEventEmit(eventName, event)` — 触发表单事件
+
+## x-proxy-form-item 用法
+Edit/IDE/Read 场景必须用 `x-proxy-form-item` 包裹内容：
+```html
+<x-proxy-form-item
+  :isInTable="widget.isInTable"
+  :showRequired="showRequired"
+  :label="widget.label"
+  :validatorRules="validatorRules"
+  :validateKey="validateKey"
+  :validateInfo="validateInfo"
+>
+  <!-- 你的组件内容 -->
+</x-proxy-form-item>
+```
+
+## List/Print 场景
+- List 不使用 mixin，通过 props 接收 `formValue`、`componentConfig`、`propKey`
+- Print 使用 `PrintWidgetMixin`，通过 `this.formValue` 读取值
+
+## Search 场景
+- 使用 `SearchWidgetMixin`
+- 通过 `this.computeValue`（getter/setter）读写搜索值
+- 使用 `this.$emit('change', value)` 通知搜索变更
+
+## Setting 面板（设计器配置）
+- 在 `{full_kebab}-setting.vue` 中添加配置项
+- 通过 `this.widgetObj.customComponentConfig` 读写自定义配置
+- 调用 `this.saveConfig()` 保存配置
+
+## 样式注意
+- 使用 `<style lang="scss">` 写样式
+- 避免使用 SVG 内联（平台可能不渲染），用 Unicode 字符或 Element UI 图标
+- 可以使用 Element UI 组件（el-input, el-select, el-button 等），平台已全局注册
+
+## 数据存储格式
+- `componentModelField` 在 widget.config.js 中定义存储类型
+- TEXT → 存字符串，NUMBER → 存数字，DATE → 存日期
+- 复杂数据建议序列化为 JSON 字符串存储
+
+## 构建部署
+1. `npm run build`（或 `df-apaas-cli build`）生成 zip
+2. 在平台后台 → 应用 → 自开发资源管理 → 上传 zip
+3. 发布应用后组件生效
+""")
+
+    def _get_form_widget_mixin(self):
+        """返回精简防御版 FormWidgetMixin — 只处理核心 formValue 读写，不依赖平台内部全局变量"""
+        return r"""/**
+ * FormWidgetMixin — 精简防御版
+ * 提供 formValue 读写、基础 props、校验、事件发射。
+ * 不依赖 window._ / window.APaaSSDK 等平台全局对象，确保 debug 注入时不崩溃。
+ */
 
 const FormWidgetMixin = {
-  data() {
-    return {
-      tabindex: '0', componentData: null, widgetRules: null, valueChanged: false,
-      bsUnwatch: null,
-      bsRefreshDebounce: debounce((newValue, oldValue) => {
-        if (newValue !== oldValue) {
-          let event
-          if (this.widget.isInTable) {
-            event = { currentRowTableUuid: this.widget.tableUuid, currentRowIndex: this.rowIndex, vm: this }
-          }
-          if (this.formEngine.engineContext.instance.documentId && this.widget.desensitization &&
-              this.formEngine.formDataControl.dataMaskingValue[this.widget.uuid] &&
-              !this.formEngine.formDataControl.dataMaskingValue[this.widget.uuid].changed) {
-            this.formEngine.formDataControl.dataMaskingValue[this.widget.uuid].changed = true
-          }
-          if (this.formEngine.formDataControl.dataFilterComponentList.triggerComponents.includes(this.widget.uuid)) {
-            const dataSelectors = this.formEngine.formDataControl.dataFilterComponentList.dataSelectors
-            Object.keys(dataSelectors).forEach((key) => {
-              if (dataSelectors[key].includes(this.widget.uuid)) {
-                XEventBus.emit('REFRESH_SELECT_BOX', { uuid: key, currentFormEngineKey: this.formEngine.engineContext.instance.instanceId })
-              }
-            })
-          }
-          try { this.formEngine.bsEventControl.triggerEventValueChange(this.widget, event) } catch (error) { console.error(error) }
-        }
-      }, 500),
-      regexValidatorText: '',
-      specialComponents: ['FORM_DATA_STATISTICS', 'FORM_SWITCH_SELECT'],
-      debounceFormData: debounce(this.watchFormData, debounceWaitTime),
-      debounceFormValue: debounce(this.watchFormValue, debounceWaitTime),
-      debounceShowRequired: debounce(this.watchShowRequired, debounceWaitTime)
-    }
-  },
   props: {
-    widget: { required: true },
-    renderScene: { type: String, required: true, validator: (v) => ['ide', 'edit', 'read'].includes(v) },
+    widget: { type: Object, default: () => ({}) },
+    renderScene: { type: String, default: 'edit' },
     propKey: { type: String, default: '' },
     validateKey: { type: String, default: '' },
-    validateInfo: { type: Object },
-    formData: { type: Object },
-    globalFormData: { type: Object },
-    globalData: { type: Object },
+    validateInfo: { type: Object, default: () => ({}) },
+    formData: { type: Object, default: () => ({}) },
+    globalFormData: { type: Object, default: () => ({}) },
+    globalData: { type: Object, default: () => ({}) },
     formItemList: { type: Array, default: () => [] },
     valueValidatedStatus: { type: Boolean, default: true },
-    rowIndex: { type: Number },
+    rowIndex: { type: Number, default: 0 },
     tableRowChangeFlag: { type: Boolean, default: false }
   },
-  inject: ['renderGlobal', 'themeConfig'],
+  inject: {
+    renderGlobal: { default: null },
+    themeConfig: { default: null }
+  },
   computed: {
     formValue: {
       get() {
-        this.valueChanged = false
-        return this.valueValidatedStatus ? (this.propKey ? this.formData[this.propKey] : undefined) : undefined
+        if (!this.valueValidatedStatus || !this.propKey) return undefined
+        return this.formData ? this.formData[this.propKey] : undefined
       },
       set(value) {
-        const { uuid } = this.widget
-        if (!value && uuid) {
-          const cc = this.formEngine.formDataControl.componentMap.get(uuid)
-          cc.showDesensitizationMark = false
-        }
+        if (!this.formData || !this.propKey) return
         if (this.formData[this.propKey] !== value) {
-          this.valueChanged = true
           this.$set(this.formData, this.propKey, value)
-          if (!this.specialComponents.includes(this.widget.componentType) && this.formEngine) {
-            this.formEngine.formDataControl.ctlFormDataChanged = true
-          }
+          try {
+            const engine = this.renderGlobal
+            if (engine && engine.formDataControl) {
+              engine.formDataControl.ctlFormDataChanged = true
+            }
+          } catch (_) { /* safe */ }
         }
       }
     },
-    formEngine() { return this.renderGlobal },
-    formEngineContext() { return (this.formEngine && this.formEngine.engineContext) || {} },
+    formEngine() { return this.renderGlobal || null },
+    showRequired() { return !!(this.widget && this.widget.required && !this.widget.readOnly) },
     validatorRules() {
-      let rules = []
-      if (this.renderScene === 'edit') {
-        if (this.showRequired && !this.widget.hidden && this._validate) {
-          rules.push(this._validate('required', this.widget.label + ' ' + this.$t('formWidget.common.requiredField')))
+      const rules = []
+      try {
+        if (this.renderScene === 'edit' && this.showRequired && !(this.widget && this.widget.hidden)) {
+          const label = (this.widget && this.widget.label) || ''
+          const msg = label + ' \u4e0d\u80fd\u4e3a\u7a7a'
+          rules.push({
+            trigger: ['blur', 'change'],
+            type: 'required',
+            message: msg,
+            validator: (rule, value, callback) => {
+              if (value === undefined || value === null || value === '' || (Array.isArray(value) && !value.length)) {
+                return callback(new Error(msg))
+              }
+              callback()
+            }
+          })
         }
-        if (this.widget.validatorStatus && this.widget.validatorList && this.widget.validatorList[0] && this._validate) {
-          rules.push(this._validate(WidgetRegexValidator(this.regexValidatorText, this.widget.validatorList[0].validatorMessage || '')))
-        }
-        if (this.widgetRules) rules = [...rules, ...this.widgetRules]
-      }
+      } catch (_) { /* safe */ }
       return rules
     },
-    showRequired() { return this.widget.required && !this.widget.readOnly },
-    webFormSettings() { return { widgetStyle: this.widget.widgetStyle || {}, border: this.widget.border || {} } }
-  },
-  watch: {
-    showRequired: { handler(n, o) { this.debounceShowRequired(n, o) } },
-    formDataWithoutTableData: { handler(n, o) { if (!this.widget.isInTable && n !== o) this.debounceFormData(this.formData) }, deep: true }
-  },
-  created() { this.debounceFormData(this.formData) },
-  mounted() {
-    if (this.renderScene === 'edit' || this.renderScene === 'read') {
-      setTimeout(() => { this.addBsUnwatch() }, 0)
+    webFormSettings() {
+      return {
+        widgetStyle: (this.widget && this.widget.widgetStyle) || {},
+        border: (this.widget && this.widget.border) || {}
+      }
     }
   },
-  beforeDestroy() { this.debounceShowRequired.cancel(); this.debounceFormData.cancel(); this.debounceFormValue.cancel() },
-  destroyed() { if (this.bsUnwatch) this.bsUnwatch() },
   methods: {
-    watchShowRequired() {},
-    watchFormValue(n, o) { if (n !== o) { this.valueChanged = true; this.$formEventEmit('change', this.formValue) } },
-    watchFormData(newValue) {
-      if (newValue) {
-        let td = ''
-        if (this.widget.titleDescription && (!this.widget.titleDescriptionOptions || !this.widget.titleDescriptionOptions.length)) {
-          td = this.widget.titleDescription
-        } else {
-          td = this.titleDesArrToText(newValue, this.widget.titleDescriptionOptions, AbilityControl.TITLE_DESCRIPTION_FORM_FIELD)
-        }
-        const cc = this.renderGlobal.formDataControl.getFormItemByUuid(this.widget.uuid)
-        if (cc) this.$set(cc, 'titleDescription', td)
-      }
-    },
-    addBsUnwatch() {
-      if (this.widget.componentType === 'FORM_WIDGET_SON_TABLE' || this.widget.isInTable) return
-      this.bsUnwatch = this.$watch(function() {
-        let v = this.formValue
-        if (v === null || v === undefined || (typeof v === 'string' && !v) || (Array.isArray(v) && !v.length)) return undefined
-        try { return JSON.stringify(v) } catch (e) { return v }
-      }, (n, o) => {
-        if (n !== o) { this.debounceFormValue(n, o); if (!this.widget.isInTable) this.bsRefreshDebounce(n, o) }
-      })
-    },
-    _validate(type, message, trigger = ['blur', 'change']) {
-      const v = { trigger }
-      if (typeof type === 'string') { v.type = type; if (type === 'required') v.validator = WidgetRequiredValidator(message); v.message = message }
-      else if (typeof type === 'function') v.validator = type
-      return v
-    },
-    updatePropValue(key, value) {
-      if (Object.prototype.hasOwnProperty.call(this.formData, key) || (this.formEngine && this.formEngine.formDataControl.ctlComponentMap.has(key))) {
-        const w = this.formEngine.formDataControl.ctlComponentMap.get(key)
-        this.$set(this.formData, key, value); this.formData[key] = value
-        this.$nextTick(() => { this.$emit('formEventEmit', { eventName: 'change', event: value, propKey: key, widget: w }) })
-      }
-    },
     $formEventEmit(eventName, event) {
       this.$emit(eventName, event)
-      this.$emit('formEventEmit', { eventName, propKey: this.propKey, event, widget: this.widget })
-    },
-    titleDesArrToText(formData, arr, abilityCode) {
-      let text = ''
-      arr && arr.forEach((item) => {
-        if (item.type === 'TEXT') text += item.value
-        else if (item.type === 'COMP') {
-          const allComps = this.formEngine.formDataControl.allTileFormItemList
-          const cc = allComps && allComps.find(i => i.uuid === item.value)
-          text += (AbilityControl.formatFiledValue({ fieldType: cc && cc.componentType, value: formData[item.value], fieldConfig: cc, fieldId: item.value, abilityCode }) || '')
-        }
+      this.$emit('formEventEmit', {
+        eventName,
+        propKey: this.propKey,
+        event,
+        widget: this.widget
       })
-      return text
+    },
+    updatePropValue(key, value) {
+      if (this.formData && key) {
+        this.$set(this.formData, key, value)
+        this.$nextTick(() => {
+          this.$emit('formEventEmit', { eventName: 'change', event: value, propKey: key, widget: null })
+        })
+      }
     }
   }
 }
 
 export default FormWidgetMixin
+"""
+
+    def _get_form_config_mixin(self):
+        """返回标准 EditorFormConfigMixin — 设计器配置面板 mixin"""
+        return r"""import WidgetRequiredValidator from '@/validator/widget-required-validator'
+
+const EditorFormConfigMixin = {
+  props: {
+    widgetConfig: { required: false, default: function() { return {} } },
+    componentConfig: { required: true },
+    editConfig: { required: true },
+    configProperty: {},
+    formItemList: {},
+    formRule: {},
+    globalData: {},
+    formEngine: { type: Object, default() { return {} } },
+    disabled: { type: Boolean, default: function() { return false } },
+    menuTitle: { type: String, default: '' },
+    renderWay: { type: String, default: () => { return 'normal' } },
+    renderDisplayComponentData: { type: Array, default() { return [] } },
+    separateConfigFlag: { type: Boolean, default: false }
+  },
+  inject: ['getPreviewLanguage', 'getI18nShowStatus', 'filterTableFromNodeFields'],
+  computed: {
+    tenantModule() {
+      const sessionStorageTxt = window.sessionStorage && window.sessionStorage.__vuex__session
+      return JSON.parse(sessionStorageTxt || '{}').tenantModule || {}
+    },
+    configValue: {
+      get() { return this.componentConfig[this.configProperty] },
+      set(value) { this.$set(this.componentConfig, this.configProperty, value) }
+    },
+    typeOptions() {
+      return [
+        { type: 'input', label: this.$t('formConfig.selectDataSource.inputValue') },
+        { type: 'rule', label: this.$t('formConfig.formulaRule.formulaRule') }
+      ]
+    },
+    compDefaultValueType: {
+      get() { return this.componentConfig.defaultValueType ? this.componentConfig.defaultValueType : 'input' },
+      set(value) { if (value) { this.$set(this.componentConfig, 'defaultValueType', value) } }
+    },
+    configI18nCode: {
+      get() { return this.componentConfig[this.configProperty + 'I18nResourceCode'] },
+      set(value) { this.$set(this.componentConfig, this.configProperty + 'I18nResourceCode', value) }
+    },
+    configI18nAssociated: {
+      get() { return this.componentConfig[this.configProperty + 'I18nAssociated'] },
+      set(value) { this.$set(this.componentConfig, this.configProperty + 'I18nAssociated', value) }
+    },
+    configI18nData: {
+      get() { return this.componentConfig[this.configProperty + 'I18n'] },
+      set(value) { this.$set(this.componentConfig, this.configProperty + 'I18n', value) }
+    },
+    previewLanguage() {
+      return (
+        (this.getPreviewLanguage && this.getPreviewLanguage() && this.getPreviewLanguage().replace('-', '')) ||
+        (this.$i18n && this.$i18n.locale && this.$i18n.locale.replace('-', ''))
+      )
+    },
+    i18nTextShowStatus() {
+      return this.getI18nShowStatus && this.getI18nShowStatus()
+    }
+  },
+  methods: {
+    updateConfigByKey(key, value) {
+      if (this.editConfig.allowProperties && Array.isArray(this.editConfig.allowProperties)) {
+        if (!this.editConfig.allowProperties.includes(key)) {
+          throw new Error('无法更新configProperty中未定义的属性配置')
+        }
+        this.$set(this.componentConfig, key, value)
+        this.$forceUpdate()
+      }
+    },
+    getConfigByKey(key) { return this.componentConfig[key] },
+    updateRuleByType(type, value) {
+      let currentRules = this.formRule[this.componentConfig.uuid]
+      if (!currentRules) {
+        currentRules = { [type]: [] }
+        currentRules[type].push(value)
+      } else {
+        if (currentRules[type]) { currentRules[type][0] = value } else { currentRules[type] = [value] }
+      }
+      this.$set(this.formRule, this.componentConfig.uuid, currentRules)
+    },
+    getRuleByType(type) {
+      let currentRules = this.formRule[this.componentConfig.uuid]
+      if (!currentRules || !currentRules[type]) { return false }
+      return currentRules[type][0]
+    },
+    _validate(type, message, trigger = ['blur', 'change'], isI18n = false) {
+      const validator = { trigger: trigger }
+      if (typeof type === 'string') {
+        validator.type = type
+        if (type === 'required') { validator.validator = WidgetRequiredValidator(isI18n ? this.$t(message) : message) }
+        validator.message = isI18n ? this.$t(message) : message
+      } else if (typeof type === 'function') { validator.validator = type }
+      return validator
+    }
+  }
+}
+
+export default EditorFormConfigMixin
 """
 
     # ------------------------------------------------------------------
@@ -4551,33 +4752,41 @@ export default {{
 """)
 
     def _scaffold_backend_api(self, ws_path: Path, name: str):
-        """后端接口脚手架（Java/SpringBoot）"""
-        # 包路径
-        pkg_path = name.replace("-", "")
-        class_prefix = "".join(p.capitalize() for p in name.replace("backend-api-", "").split("-"))
+        """后端接口脚手架（Java/SpringBoot）— 对齐 aPaaS 后端自开发标准架构"""
+        # 模块名和类名
+        module_name = name.replace("backend-api-", "")
+        pkg_path = module_name.replace("-", "")
+        class_prefix = "".join(p.capitalize() for p in module_name.split("-"))
+        base_pkg = f"src/main/java/com/xdap/custom/{pkg_path}"
 
+        # ======== pom.xml ========
         self._write(ws_path, "pom.xml", f"""<?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>2.2.7.RELEASE</version>
+    </parent>
+
     <groupId>com.xdap.custom</groupId>
     <artifactId>{name}</artifactId>
     <version>1.0.0</version>
     <packaging>jar</packaging>
+    <name>{name}</name>
 
     <properties>
         <java.version>1.8</java.version>
-        <spring-boot.version>2.3.4.RELEASE</spring-boot.version>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     </properties>
 
     <dependencies>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
-            <version>${{spring-boot.version}}</version>
-            <scope>provided</scope>
         </dependency>
         <dependency>
             <groupId>com.definesys</groupId>
@@ -4585,11 +4794,31 @@ export default {{
             <version>apaas-1.1.11.bigdata.2</version>
             <scope>provided</scope>
         </dependency>
+        <dependency>
+            <groupId>mysql</groupId>
+            <artifactId>mysql-connector-java</artifactId>
+            <version>8.0.22</version>
+        </dependency>
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>com.alibaba</groupId>
+            <artifactId>fastjson</artifactId>
+            <version>1.2.83</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-lang3</artifactId>
+            <version>3.10</version>
+        </dependency>
     </dependencies>
 
     <repositories>
         <repository>
-            <id>definesys-maven</id>
+            <id>dcloud-public</id>
             <url>https://registry.dfy.definesys.cn/repository/maven-public/</url>
         </repository>
     </repositories>
@@ -4597,7 +4826,27 @@ export default {{
     <profiles>
         <profile>
             <id>lib</id>
-            <!-- 打包时排除第三方依赖 -->
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.springframework.boot</groupId>
+                        <artifactId>spring-boot-maven-plugin</artifactId>
+                        <configuration><skip>true</skip></configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        <profile>
+            <id>single</id>
+            <activation><activeByDefault>true</activeByDefault></activation>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.springframework.boot</groupId>
+                        <artifactId>spring-boot-maven-plugin</artifactId>
+                    </plugin>
+                </plugins>
+            </build>
         </profile>
     </profiles>
 
@@ -4606,7 +4855,6 @@ export default {{
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.11.0</version>
                 <configuration>
                     <source>${{java.version}}</source>
                     <target>${{java.version}}</target>
@@ -4618,77 +4866,335 @@ export default {{
 </project>
 """)
 
-        base_pkg = f"src/main/java/com/xdap/custom/{pkg_path}"
+        # ======== application.properties ========
+        self._write(ws_path, "src/main/resources/application.properties", f"""server.port=9092
 
-        self._write(ws_path, f"{base_pkg}/controller/{class_prefix}Controller.java", f"""package com.xdap.custom.{pkg_path}.controller;
+# MySQL 数据源（根据实际环境修改）
+spring.datasource.url=jdbc:mysql://localhost:3306/your_database?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=Asia/Shanghai
+spring.datasource.username=root
+spring.datasource.password=password
+spring.datasource.driver-class-name=com.mysql.cj.jdbc.Driver
 
+# aPaaS 平台（根据实际环境修改）
+apaas.single.tenantId=your_tenant_id
+apaas.single.appId=your_app_id
+""")
+
+        # ======== 启动类 ========
+        self._write(ws_path, f"{base_pkg}/CustomApplication.java", f"""package com.xdap.custom.{pkg_path};
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication(scanBasePackages = "com.xdap")
+public class CustomApplication {{
+    public static void main(String[] args) {{
+        SpringApplication.run(CustomApplication.class, args);
+    }}
+}}
+""")
+
+        # ======== CommDao 通用数据访问层 ========
+        self._write(ws_path, f"{base_pkg}/dao/CommDao.java", f"""package com.xdap.custom.{pkg_path}.dao;
+
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.web.bind.annotation.*;
-import com.xdap.custom.{pkg_path}.service.{class_prefix}Service;
+import org.springframework.stereotype.Component;
+
+import javax.sql.DataSource;
+import java.sql.*;
 import java.util.*;
 
+/**
+ * 通用数据访问层 — 封装 JDBC 操作
+ * 使用 :paramName 命名参数风格
+ */
+@Component
+@Slf4j
+public class CommDao {{
+
+    @Autowired
+    private DataSource dataSource;
+
+    /**
+     * 执行查询，返回 List<Map<String, Object>>
+     */
+    public List<Map<String, Object>> queryForList(String sql, Map<String, Object> params) {{
+        List<Map<String, Object>> result = new ArrayList<>();
+        String processedSql = processNamedParams(sql, params);
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(processedSql)) {{
+            setParams(ps, sql, params);
+            try (ResultSet rs = ps.executeQuery()) {{
+                ResultSetMetaData meta = rs.getMetaData();
+                int columnCount = meta.getColumnCount();
+                while (rs.next()) {{
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    for (int i = 1; i <= columnCount; i++) {{
+                        row.put(meta.getColumnLabel(i), rs.getObject(i));
+                    }}
+                    result.add(row);
+                }}
+            }}
+        }} catch (SQLException e) {{
+            log.error("Query failed: {{}}", sql, e);
+            throw new RuntimeException("数据库查询失败: " + e.getMessage(), e);
+        }}
+        return result;
+    }}
+
+    /**
+     * 执行单条 INSERT/UPDATE/DELETE
+     */
+    public int executeSql(String sql, Map<String, Object> params) {{
+        String processedSql = processNamedParams(sql, params);
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(processedSql)) {{
+            setParams(ps, sql, params);
+            return ps.executeUpdate();
+        }} catch (SQLException e) {{
+            log.error("Execute failed: {{}}", sql, e);
+            throw new RuntimeException("数据库操作失败: " + e.getMessage(), e);
+        }}
+    }}
+
+    private String processNamedParams(String sql, Map<String, Object> params) {{
+        if (params == null) return sql;
+        String result = sql;
+        for (String key : params.keySet()) {{
+            result = result.replace(":" + key, "?");
+        }}
+        return result;
+    }}
+
+    private void setParams(PreparedStatement ps, String sql, Map<String, Object> params) throws SQLException {{
+        if (params == null) return;
+        // 按参数在SQL中出现的顺序设置
+        List<String> orderedKeys = new ArrayList<>();
+        String remaining = sql;
+        while (remaining.contains(":")) {{
+            int idx = remaining.indexOf(":");
+            int end = idx + 1;
+            while (end < remaining.length() && (Character.isLetterOrDigit(remaining.charAt(end)) || remaining.charAt(end) == '_')) {{
+                end++;
+            }}
+            String key = remaining.substring(idx + 1, end);
+            if (params.containsKey(key)) {{
+                orderedKeys.add(key);
+            }}
+            remaining = remaining.substring(end);
+        }}
+        for (int i = 0; i < orderedKeys.size(); i++) {{
+            ps.setObject(i + 1, params.get(orderedKeys.get(i)));
+        }}
+    }}
+}}
+""")
+
+        # ======== Response 统一响应 ========
+        self._write(ws_path, f"{base_pkg}/common/Response.java", f"""package com.xdap.custom.{pkg_path}.common;
+
+import lombok.Data;
+
+@Data
+public class Response {{
+    private String code;
+    private String message;
+    private Object data;
+
+    public static Response ok() {{
+        Response r = new Response();
+        r.setCode("200");
+        r.setMessage("success");
+        return r;
+    }}
+
+    public static Response error(String msg) {{
+        Response r = new Response();
+        r.setCode("500");
+        r.setMessage(msg);
+        return r;
+    }}
+
+    public Response setData(Object data) {{
+        this.data = data;
+        return this;
+    }}
+}}
+""")
+
+        # ======== SnowflakeIdGenerator ========
+        self._write(ws_path, f"{base_pkg}/common/SnowflakeIdGenerator.java", f"""package com.xdap.custom.{pkg_path}.common;
+
+import java.util.concurrent.atomic.AtomicLong;
+
+public class SnowflakeIdGenerator {{
+    private static final AtomicLong sequence = new AtomicLong(0);
+    private static final long START_TIMESTAMP = 1609459200000L;
+
+    public static synchronized long generateId() {{
+        long timestamp = System.currentTimeMillis() - START_TIMESTAMP;
+        return (timestamp << 22) | (sequence.incrementAndGet() & 0x3FFFFF);
+    }}
+
+    public static String generateIdStr() {{
+        return String.valueOf(generateId());
+    }}
+}}
+""")
+
+        # ======== URL 白名单配置 ========
+        self._write(ws_path, f"{base_pkg}/config/AllowUrlConfig.java", f"""package com.xdap.custom.{pkg_path}.config;
+
+import org.springframework.stereotype.Component;
+import java.util.HashSet;
+import java.util.Set;
+
+/**
+ * 接口白名单配置 — 所有 /custom/ 开头的接口路径必须在此注册
+ */
+@Component
+public class AllowUrlConfig {{
+
+    public Set<String> getCustomAllowUrls() {{
+        Set<String> urlSet = new HashSet<>();
+        urlSet.add("/custom/{module_name}/*");
+        return urlSet;
+    }}
+}}
+""")
+
+        # ======== 示例 Controller ========
+        self._write(ws_path, f"{base_pkg}/controller/{class_prefix}Controller.java", f"""package com.xdap.custom.{pkg_path}.controller;
+
+import com.xdap.custom.{pkg_path}.common.Response;
+import com.xdap.custom.{pkg_path}.service.{class_prefix}Service;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.Map;
+
 @RestController
-@RequestMapping("/custom/{name.replace('backend-api-', '')}")
+@RequestMapping("/custom/{module_name}")
+@Slf4j
 public class {class_prefix}Controller {{
 
     @Autowired
     private {class_prefix}Service service;
 
-    @GetMapping("/list")
-    public Map<String, Object> list() {{
-        Map<String, Object> result = new HashMap<>();
-        result.put("code", "ok");
-        result.put("data", service.getList());
-        return result;
+    @PostMapping("/list")
+    public Response list(@RequestBody Map<String, Object> request) {{
+        try {{
+            Object data = service.queryList(request);
+            return Response.ok().setData(data);
+        }} catch (Exception e) {{
+            log.error("查询失败", e);
+            return Response.error("查询失败: " + e.getMessage());
+        }}
     }}
 }}
 """)
 
+        # ======== 示例 Service ========
         self._write(ws_path, f"{base_pkg}/service/{class_prefix}Service.java", f"""package com.xdap.custom.{pkg_path}.service;
 
-import java.util.List;
-import java.util.Map;
-
-public interface {class_prefix}Service {{
-    List<Map<String, Object>> getList();
-}}
-""")
-
-        self._write(ws_path, f"{base_pkg}/service/impl/{class_prefix}ServiceImpl.java", f"""package com.xdap.custom.{pkg_path}.service.impl;
-
+import com.xdap.custom.{pkg_path}.dao.CommDao;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
-import com.xdap.custom.{pkg_path}.service.{class_prefix}Service;
+
 import java.util.*;
 
 @Service
-public class {class_prefix}ServiceImpl implements {class_prefix}Service {{
+@Slf4j
+public class {class_prefix}Service {{
 
-    @Override
-    public List<Map<String, Object>> getList() {{
-        // TODO: 实现业务逻辑
-        return new ArrayList<>();
+    @Autowired
+    private CommDao commDao;
+
+    public List<Map<String, Object>> queryList(Map<String, Object> request) {{
+        // TODO: 根据业务需求实现查询逻辑
+        String sql = "SELECT * FROM your_table LIMIT 10";
+        return commDao.queryForList(sql, new HashMap<>());
     }}
 }}
 """)
 
-        self._write(ws_path, f"{base_pkg}/config/AllowUrlConfig.java", f"""package com.xdap.custom.{pkg_path}.config;
+        # ======== .cursor/rules 开发指南 ========
+        self._write(ws_path, ".cursor/rules/backend-dev-guide.mdc", f"""---
+description: aPaaS 后端自开发规范
+globs: ["**/*.java"]
+---
 
-import org.springframework.stereotype.Component;
-import java.util.*;
+# aPaaS 后端自开发规范
 
-/**
- * 接口白名单配置 - 必须实现
- */
-@Component
-public class AllowUrlConfig implements com.definesys.mpaas.common.http.AllowUrlManage {{
+## 包结构
+- 所有代码在 `com.xdap.custom.{pkg_path}` 包下
+- controller/ — 接口层，`@RestController` + `@PostMapping`
+- service/ — 业务层，`@Service` + 注入 CommDao
+- dao/CommDao — 通用数据访问，不需要单独建 DAO
+- common/ — Response、SnowflakeIdGenerator 等工具类
 
-    @Override
-    public Set<String> getCustomAllowUrls() {{
-        Set<String> urlSet = new HashSet<>();
-        urlSet.add("/custom/{name.replace('backend-api-', '')}/*");
-        return urlSet;
+## 编码规范
+- URL 前缀必须是 `/custom/{module_name}/`
+- HTTP 方法统一用 POST
+- 返回值用 `Response.ok().setData(data)` 或 `Response.error(msg)`
+- Model 类用 `@Data`（Lombok）
+- SQL 参数用 `:paramName` 命名参数
+
+## CommDao 用法
+```java
+// 查询
+String sql = "SELECT * FROM table WHERE field = :value";
+Map<String, Object> params = new HashMap<>();
+params.put("value", "xxx");
+List<Map<String, Object>> rows = commDao.queryForList(sql, params);
+
+// 更新
+String updateSql = "UPDATE table SET field = :val WHERE id = :id";
+commDao.executeSql(updateSql, params);
+```
+
+## Controller 标准模板
+```java
+@PostMapping("/xxx")
+public Response xxx(@RequestBody XxxRequest request) {{
+    // 1. 参数校验
+    if (request.getField() == null) return Response.error("参数不能为空");
+    // 2. 调用 Service
+    try {{
+        Object data = service.doSomething(request);
+        return Response.ok().setData(data);
+    }} catch (Exception e) {{
+        log.error("操作失败", e);
+        return Response.error("操作失败: " + e.getMessage());
     }}
 }}
+```
+
+## 数据字典查询
+```java
+String sql = "SELECT v.value_name FROM apaas_data_dictionary d " +
+    "INNER JOIN apaas_data_dictionary_value v ON d.id = v.dictionary_id " +
+    "WHERE d.dictionary_code = :dictCode AND v.value_code = :valueCode LIMIT 1";
+```
+
+## JSON 数组字段
+数据库字段如 `visitorstatus` 存储格式为 `["01"]`
+- 读取时需要解析：去掉 `[""]` 包装
+- 写入时需要包装：`params.put("status", "[\\"01\\"]")`
+- SQL 中提取：`JSON_UNQUOTE(JSON_EXTRACT(field, '$[0]'))`
+
+## 构建部署
+- 本地测试：`mvn clean package -P single`
+- 上传平台：`mvn clean package -P lib -DskipTests`
+- jar 上传到：平台后台 → 扩展管理 → 自开发管理
+- 关联应用：应用高级设置 → 关联自开发包
+- 发布应用后接口生效
+
+## 白名单
+新增接口路径必须在 AllowUrlConfig 中注册，否则被平台拦截。
 """)
 
     # ======== 轻量级脚手架（脚本 & 业务弹窗）========

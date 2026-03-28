@@ -1,10 +1,12 @@
 from contextlib import asynccontextmanager
+from pathlib import Path
 from urllib.parse import urlparse
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from app.config import settings
 from app.database import init_db
-from app.routes import auth, conversations, chat, applications, apaas, generation_steps, coding, incremental_update, projects, marketplace, templates, platform_envs, platform_proxy, llm_configs
+from app.routes import auth, conversations, chat, applications, apaas, generation_steps, coding, incremental_update, projects, marketplace, templates, platform_envs, platform_proxy, llm_configs, browser
 
 
 @asynccontextmanager
@@ -20,6 +22,8 @@ async def lifespan(app: FastAPI):
 
     yield
     # 关闭时清理资源
+    from app.coding.browser_service import BrowserService
+    await BrowserService.get_instance().stop()
 
 
 app = FastAPI(
@@ -65,8 +69,15 @@ app.include_router(marketplace.router, prefix="/api")
 app.include_router(templates.router, prefix="/api")
 app.include_router(platform_envs.router, prefix="/api")
 app.include_router(llm_configs.router, prefix="/api")
+app.include_router(browser.router, prefix="/api")
 # 平台代理路由注册在根路径（/platform/... 和 /backend/... 需要直接匹配）
 app.include_router(platform_proxy.router)
+
+
+# 静态文件（浏览器预览页面等）
+_static_dir = Path(__file__).parent / "static"
+if _static_dir.is_dir():
+    app.mount("/api/static", StaticFiles(directory=str(_static_dir)), name="static")
 
 
 @app.get("/api/health")

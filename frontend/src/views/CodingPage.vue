@@ -36,27 +36,48 @@
           class="header-btn"
           @click="openInWebIDE()"
         >
-          <el-icon><FolderOpened /></el-icon> 在 IDE 中打开
+          <el-icon><FolderOpened /></el-icon> AI 代码编辑
         </el-button>
+        <el-button
+          v-if="codingStore.workspace"
+          size="small"
+          class="header-btn"
+          @click="showEnvPicker = true; loadPlatformEnvs()"
+        >
+          <el-icon><Monitor /></el-icon> 浏览器预览
+        </el-button>
+
+        <!-- 环境选择对话框 -->
+        <el-dialog v-model="showEnvPicker" title="选择调试平台环境" width="500px" :append-to-body="true">
+          <div v-if="platformEnvs.length === 0" style="text-align:center;color:#999;padding:20px;">
+            暂无平台环境，请先到<el-link type="primary" @click="$router.push('/platform-envs')">环境管理</el-link>添加
+          </div>
+          <div v-else style="display:flex;flex-direction:column;gap:12px;">
+            <div
+              v-for="env in platformEnvs"
+              :key="env.id"
+              style="border:1px solid #dcdfe6;border-radius:8px;padding:16px;cursor:pointer;transition:all 0.2s;"
+              :style="{ borderColor: env.status === 'connected' ? '#67c23a' : '#dcdfe6' }"
+              @click="openBrowserPreviewWithEnv(env)"
+            >
+              <div style="display:flex;justify-content:space-between;align-items:center;">
+                <strong>{{ env.env_name }}</strong>
+                <el-tag v-if="env.status === 'connected'" type="success" size="small">已连接</el-tag>
+                <el-tag v-else type="info" size="small">未连接</el-tag>
+              </div>
+              <div style="color:#999;font-size:12px;margin-top:6px;">{{ env.base_url }}</div>
+            </div>
+          </div>
+        </el-dialog>
         <el-button
           v-if="codingStore.workspace"
           size="small"
           type="success"
-          :loading="isDebugging"
+          :loading="isDownloading"
           class="header-btn"
-          @click="handlePreview"
+          @click="downloadCode"
         >
-          <el-icon><Monitor /></el-icon> Debug 预览
-        </el-button>
-        <el-button
-          v-if="codingStore.workspace"
-          size="small"
-          type="primary"
-          @click="publishProject"
-          :loading="isPublishing"
-          class="header-btn"
-        >
-          <el-icon><Upload /></el-icon> 打包发布
+          <el-icon><Download /></el-icon> 下载代码
         </el-button>
       </div>
     </header>
@@ -352,58 +373,6 @@
       </div>
 
       <!-- Preview Panel -->
-      <aside v-if="showPreviewPanel" class="preview-panel" :class="previewPanelClasses">
-        <div class="preview-panel-header">
-          <div class="preview-panel-heading">
-            <span class="preview-panel-title">{{ previewPanelTitle }}</span>
-            <span v-if="codingStore.workspace" class="preview-panel-subtitle">{{ workspaceDisplayName(codingStore.workspace) }}</span>
-          </div>
-          <div class="preview-panel-actions">
-            <el-button text size="small" :disabled="previewLoading" @click="refreshPreview" title="刷新预览">
-              <el-icon><RefreshRight /></el-icon>
-            </el-button>
-            <el-button text size="small" @click="closePreviewPanel" title="关闭">
-              ✕
-            </el-button>
-          </div>
-        </div>
-        <div v-if="previewLoading" class="preview-panel-loading">
-          <div class="preview-panel-loading-card">
-            <div class="preview-panel-loading-title">正在同步预览</div>
-            <div class="preview-panel-loading-desc">正在为当前工作区构建最新预览环境，请稍候。</div>
-          </div>
-        </div>
-        <div v-else-if="previewUrl" class="preview-panel-stage">
-          <div
-            class="preview-stage-shell"
-            :class="{ 'is-mobile-shell': effectivePreviewProjectType === 'mobile-page' || effectivePreviewProjectType === 'mobile-component' }"
-          >
-            <div v-if="effectivePreviewProjectType === 'mobile-page' || effectivePreviewProjectType === 'mobile-component'" class="preview-device-frame">
-              <div class="preview-device-speaker"></div>
-              <iframe
-                :key="previewKey"
-                :src="previewUrl"
-                class="preview-panel-iframe"
-                frameborder="0"
-                sandbox="allow-scripts allow-same-origin allow-popups"
-              ></iframe>
-            </div>
-            <iframe
-              v-else
-              :key="previewKey"
-              :src="previewUrl"
-              class="preview-panel-iframe"
-              frameborder="0"
-              sandbox="allow-scripts allow-same-origin allow-popups"
-            ></iframe>
-          </div>
-        </div>
-        <div v-else class="preview-panel-empty">
-          <div class="preview-panel-empty-title">预览尚未准备好</div>
-          <div class="preview-panel-empty-desc">点击上方“Debug 预览”后，这里会显示当前工作区的实时效果。</div>
-        </div>
-      </aside>
-
     </div>
   </div>
 </template>
@@ -413,8 +382,9 @@ import { API_PREFIX } from '@/utils/request'
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ArrowLeft, FolderOpened, Upload, TopRight, Monitor, Plus, Paperclip, RefreshRight } from '@element-plus/icons-vue'
+import { ArrowLeft, FolderOpened, Download, TopRight, Plus, Paperclip, Monitor } from '@element-plus/icons-vue'
 import { useCodingStore } from '@/stores/coding'
+import { platformEnvApi, type PlatformEnv } from '@/api/platformEnv'
 import type { PipelineStep, ChatActivityItem, ChatMessage } from '@/stores/coding'
 import { useUserStore } from '@/stores/user'
 import { codingApi } from '@/api/coding'
@@ -430,23 +400,7 @@ const userInput = ref('')
 const scrollAnchor = ref<HTMLElement>()
 
 const existingWorkspaces = ref<WorkspaceInfo[]>([])
-const isPublishing = ref(false)
-const isDebugging = ref(false)
-const showPreviewPanel = ref(false)
-const previewLoading = ref(false)
-const previewUrl = ref<string | null>(null)
-const previewKey = ref(0) // 用于刷新 iframe
-const previewWorkspaceId = ref<string | null>(null)
-const previewProjectType = ref<string>('')
-const effectivePreviewProjectType = computed(() => previewProjectType.value || codingStore.workspace?.project_type || '')
-const previewPanelTitle = computed(() => {
-  const projectType = effectivePreviewProjectType.value
-  if (projectType === 'mobile-component') return '📱 移动端组件预览'
-  if (projectType === 'mobile-page') return '📱 移动端页面预览'
-  if (projectType === 'layout') return '📐 布局预览'
-  if (projectType === 'menu-page' || projectType === 'form-page') return '🖥️ 页面预览'
-  return '📦 组件预览'
-})
+const isDownloading = ref(false)
 const currentWorkspaceCategoryLabel = computed(() => {
   const projectType = codingStore.workspace?.project_type || ''
   return wsTypeGroupMap[projectType]?.label || '智能开发工作区'
@@ -475,25 +429,13 @@ const workspaceOverviewMetrics = computed(() => [
     label: '执行状态',
     value: codingStore.isProcessing ? '执行中' : '待命',
   },
-  {
-    label: '预览面板',
-    value: showPreviewPanel.value ? (previewLoading.value ? '同步中' : '已打开') : '未打开',
-  },
 ])
 const visibleMessages = computed(() => {
   if (codingStore.messages.length <= MAX_RENDERED_MESSAGES) return codingStore.messages
   return codingStore.messages.slice(-MAX_RENDERED_MESSAGES)
 })
 const hiddenMessageCount = computed(() => Math.max(0, codingStore.messages.length - visibleMessages.value.length))
-const codingBodyClasses = computed(() => ({
-  'has-preview': showPreviewPanel.value,
-  'has-page-preview': showPreviewPanel.value && ['menu-page', 'form-page', 'layout'].includes(effectivePreviewProjectType.value),
-  'has-mobile-preview': showPreviewPanel.value && (effectivePreviewProjectType.value === 'mobile-page' || effectivePreviewProjectType.value === 'mobile-component'),
-}))
-const previewPanelClasses = computed(() => ({
-  'is-page-preview': ['menu-page', 'form-page', 'layout'].includes(effectivePreviewProjectType.value),
-  'is-mobile-preview': effectivePreviewProjectType.value === 'mobile-page' || effectivePreviewProjectType.value === 'mobile-component',
-}))
+const codingBodyClasses = computed(() => ({}))
 const SSE_DEBUG = import.meta.env.DEV
 const streamThinkingRaw = ref('')
 const liveClock = ref(Date.now())
@@ -825,9 +767,6 @@ async function openWorkspaceById(wsId: string) {
       // ignore
     }
 
-    if (showPreviewPanel.value) {
-      await openPreviewForWorkspace(ws.id, { silent: true })
-    }
   } catch (error: any) {
     ElMessage.error(`打开工作区失败: ${error.message}`)
   }
@@ -1280,8 +1219,6 @@ async function sendMessage() {
 async function openInWebIDE() {
   if (!codingStore.workspace) return
   try {
-    // 卸载当前预览 iframe，避免 Builder 预览和 IDE 同时占用过多渲染资源
-    closePreviewPanel()
     const { ide_url } = await codingApi.getIdeUrl(
       codingStore.workspace.id,
       codingStore.conversationId,
@@ -1293,29 +1230,50 @@ async function openInWebIDE() {
   }
 }
 
-async function publishProject() {
-  if (!codingStore.workspace || isPublishing.value) return
-  isPublishing.value = true
+const showEnvPicker = ref(false)
+const platformEnvs = ref<PlatformEnv[]>([])
+
+async function loadPlatformEnvs() {
   try {
-    const blob = await codingApi.publish(codingStore.workspace.id)
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${workspaceDisplayName(codingStore.workspace) || codingStore.workspace.project_name}.zip`
-    a.click()
-    URL.revokeObjectURL(url)
-    ElMessage.success('打包完成，已开始下载')
+    platformEnvs.value = await platformEnvApi.list()
+  } catch { /* ignore */ }
+}
+
+async function openBrowserPreviewWithEnv(env: PlatformEnv) {
+  if (!codingStore.workspace) return
+  showEnvPicker.value = false
+  try {
+    const { ide_url } = await codingApi.getIdeUrl(codingStore.workspace.id)
+    const urlParams = new URLSearchParams(new URL(ide_url).search)
+    const token = urlParams.get('vibe_ide_token') || ''
+    const wsId = codingStore.workspace.id
+    // 从 base_url 推导平台前端 URL（去掉 /backend 后缀）
+    const platformBase = env.base_url.replace(/\/backend\/?$/, '')
+    // 直接访问根路径，让平台自己处理重定向到登录页
+    const loginUrl = platformBase
+    const previewUrl = `${API_PREFIX.replace('/api', '')}/api/static/browser-preview.html?ws_id=${wsId}&token=${token}&initial_url=${encodeURIComponent(loginUrl)}`
+    window.open(previewUrl, '_blank', 'noopener,noreferrer')
+  } catch (err: any) {
+    ElMessage.warning(err?.response?.data?.detail || err?.message || '浏览器预览打开失败')
+  }
+}
+
+async function downloadCode() {
+  if (!codingStore.workspace || isDownloading.value) return
+  isDownloading.value = true
+  try {
+    await codingApi.downloadZip(codingStore.workspace.id, 'src')
+    ElMessage.success('代码下载已开始')
   } catch (error: any) {
-    ElMessage.error(error.message || '发布失败')
+    ElMessage.error(error.message || '下载失败')
   } finally {
-    isPublishing.value = false
+    isDownloading.value = false
   }
 }
 
 function startNewWorkspace() {
   codingStore.reset()
   localStorage.removeItem('coding_last_workspace_id')
-  closePreviewPanel()
   // 回到欢迎页
 }
 
@@ -1327,7 +1285,6 @@ async function deleteWorkspace(ws: WorkspaceInfo) {
     if (codingStore.workspace?.id === ws.id) {
       codingStore.reset()
       localStorage.removeItem('coding_last_workspace_id')
-      closePreviewPanel()
     }
     ElMessage.success('已删除')
   } catch (e: any) {
@@ -1335,58 +1292,6 @@ async function deleteWorkspace(ws: WorkspaceInfo) {
   }
 }
 
-async function openPreviewForWorkspace(wsId: string, options?: { silent?: boolean }) {
-  if (!wsId || isDebugging.value) return
-  const silent = options?.silent ?? false
-  isDebugging.value = true
-  previewLoading.value = true
-  showPreviewPanel.value = true
-  previewUrl.value = null
-  previewWorkspaceId.value = wsId
-  previewProjectType.value = codingStore.workspace?.project_type || previewProjectType.value
-  try {
-    const result = await codingApi.preview(wsId)
-    if (result.status === 'ok') {
-      // preview_url 已经是 /api/coding/... 格式，用 BASE_URL 拼接即可
-      const basePath = import.meta.env.BASE_URL || '/'
-      previewUrl.value = basePath + result.preview_url.replace(/^\//, '')
-      previewWorkspaceId.value = wsId
-      previewProjectType.value = result.project_type || codingStore.workspace?.project_type || ''
-      previewKey.value++
-      if (!silent) {
-        ElMessage.success(result.build_message || '预览已就绪')
-      }
-    } else {
-      previewUrl.value = null
-      ElMessage.error('预览构建失败')
-    }
-  } catch (error: any) {
-    previewUrl.value = null
-    ElMessage.error(error?.response?.data?.detail || error.message || '预览失败')
-  } finally {
-    isDebugging.value = false
-    previewLoading.value = false
-  }
-}
-
-async function handlePreview() {
-  if (!codingStore.workspace) return
-  await openPreviewForWorkspace(codingStore.workspace.id)
-}
-
-async function refreshPreview() {
-  const targetWsId = codingStore.workspace?.id || previewWorkspaceId.value
-  if (!targetWsId) return
-  await openPreviewForWorkspace(targetWsId, { silent: true })
-}
-
-function closePreviewPanel() {
-  showPreviewPanel.value = false
-  previewLoading.value = false
-  previewUrl.value = null
-  previewWorkspaceId.value = null
-  previewProjectType.value = ''
-}
 
 // ============ File Parsing ============
 
@@ -1791,7 +1696,6 @@ onUnmounted(() => {
   flex: 1;
   overflow: hidden;
   --workspace-sidebar-width: 228px;
-  --preview-panel-width: 480px;
   min-height: 0;
 }
 
@@ -1931,50 +1835,6 @@ onUnmounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-}
-
-.coding-body.has-preview {
-  --workspace-sidebar-width: 188px;
-  --preview-panel-width: clamp(520px, 36vw, 680px);
-}
-
-.coding-body.has-preview.has-page-preview {
-  --workspace-sidebar-width: 176px;
-  --preview-panel-width: clamp(620px, 44vw, 860px);
-}
-
-.coding-body.has-preview.has-mobile-preview {
-  --preview-panel-width: clamp(560px, 38vw, 720px);
-}
-
-.coding-body.has-preview .sidebar-section-header {
-  padding: 10px 12px 6px;
-}
-
-.coding-body.has-preview .sidebar-list {
-  padding: 8px;
-}
-
-.coding-body.has-preview .sidebar-group-header {
-  padding: 7px 8px 5px;
-  gap: 5px;
-}
-
-.coding-body.has-preview .sidebar-group-label {
-  font-size: 10px;
-}
-
-.coding-body.has-preview .sidebar-ws-item {
-  padding: 9px 10px;
-  border-radius: 10px;
-}
-
-.coding-body.has-preview .sidebar-ws-name {
-  font-size: 12px;
-}
-
-.coding-body.has-preview .sidebar-ws-code {
-  font-size: 10px;
 }
 
 .sidebar-ws-meta {
@@ -3115,167 +2975,4 @@ onUnmounted(() => {
   border-color: rgba(74, 222, 128, 0.45);
 }
 
-/* ============ Preview Panel ============ */
-.preview-panel {
-  width: var(--preview-panel-width);
-  flex-shrink: 0;
-  border-left: 1px solid var(--t-border-subtle);
-  background:
-    radial-gradient(circle at top, rgba(99, 102, 241, 0.14), transparent 28%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 24%),
-    var(--t-bg-base);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  transition: width 0.22s ease;
-}
-
-.preview-panel-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--t-border-subtle);
-  background: rgba(10, 14, 28, 0.54);
-  backdrop-filter: blur(14px);
-}
-
-.preview-panel-heading {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.preview-panel-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--t-text-primary);
-}
-
-.preview-panel-subtitle {
-  font-size: 11px;
-  color: var(--t-text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.preview-panel-actions {
-  display: flex;
-  gap: 4px;
-}
-
-.preview-panel-loading,
-.preview-panel-empty {
-  flex: 1;
-  padding: 18px;
-  background:
-    radial-gradient(circle at top, rgba(99, 102, 241, 0.08), transparent 36%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 58%),
-    var(--t-bg-base);
-}
-
-.preview-panel-stage {
-  flex: 1;
-  padding: 18px;
-  background:
-    radial-gradient(circle at top, rgba(129, 140, 248, 0.16), transparent 32%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 40%);
-}
-
-.preview-stage-shell {
-  display: flex;
-  width: 100%;
-  height: 100%;
-  border-radius: 24px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(7, 10, 20, 0.52);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 20px 40px rgba(15, 23, 42, 0.18);
-  overflow: hidden;
-}
-
-.preview-stage-shell.is-mobile-shell {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  background:
-    radial-gradient(circle at top, rgba(191, 219, 254, 0.16), transparent 24%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(15, 23, 42, 0.22));
-}
-
-.preview-device-frame {
-  position: relative;
-  display: flex;
-  width: min(100%, 420px);
-  height: 100%;
-  max-height: 100%;
-  padding: 24px 12px 14px;
-  border-radius: 32px;
-  background: linear-gradient(180deg, rgba(18, 24, 38, 0.98), rgba(6, 8, 16, 0.98));
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.08),
-    0 26px 48px rgba(15, 23, 42, 0.3);
-}
-
-.preview-device-speaker {
-  position: absolute;
-  top: 12px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 104px;
-  height: 8px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.12);
-  z-index: 2;
-}
-
-.preview-panel-loading {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.preview-panel-loading-card,
-.preview-panel-empty {
-  border: 1px solid var(--t-border-subtle);
-  border-radius: 18px;
-  background: var(--t-bg-elevated);
-  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.12);
-}
-
-.preview-panel-loading-card {
-  width: min(100%, 440px);
-  padding: 24px 22px;
-}
-
-.preview-panel-loading-title,
-.preview-panel-empty-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--t-text-primary);
-  margin-bottom: 8px;
-}
-
-.preview-panel-loading-desc,
-.preview-panel-empty-desc {
-  font-size: 13px;
-  line-height: 1.7;
-  color: var(--t-text-secondary);
-}
-
-.preview-panel-empty {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-}
-
-.preview-panel-iframe {
-  flex: 1;
-  width: 100%;
-  border: none;
-  background: #fff;
-  border-radius: 18px;
-}
 </style>

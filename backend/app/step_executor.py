@@ -377,6 +377,8 @@ async def execute_create_model(
                 e = retry_err
 
         if "编码重复" in str(e) or "已存在" in str(e):
+            # 先确认模型是否真的已存在 — 如果刚创建成功但平台误报，直接当成功处理
+            logger.info(f"模型 {model['name']} 报编码冲突，检查是否实际已创建...")
             # 回退到复用模式 — 优先按编码匹配，同名时选字段最多的
             refreshed = await client.query_models(app_id)
             ref_by_code = {rm.get("modelCode"): rm for rm in refreshed}
