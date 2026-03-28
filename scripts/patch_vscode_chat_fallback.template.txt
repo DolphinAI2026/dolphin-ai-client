@@ -30,12 +30,30 @@ const ue=T=>{
 if(!T)return"";
 if(typeof T=="string")return T;
 try{
-return typeof T.getMarkdown=="function"?T.getMarkdown():typeof T.toString=="function"?T.toString():"";
+if(typeof T.value=="string")return T.value;
+if(typeof T.getMarkdown=="function")return T.getMarkdown();
+if(Array.isArray(T.response)){
+return T.response.map(p=>{
+if(typeof p?.value?.value=="string")return p.value.value;
+if(typeof p?.value=="string")return p.value;
+return"";
+}).filter(Boolean).join("\n");
+}
+if(Array.isArray(T)){
+return T.map(p=>{
+if(typeof p?.value?.value=="string")return p.value.value;
+if(typeof p?.value=="string")return p.value;
+if(typeof p=="string")return p;
+return"";
+}).filter(Boolean).join("\n");
+}
+const s=typeof T.toString=="function"?T.toString():"";
+return s==="[object Object]"?"":s;
 }catch{
 return"";
 }
 };
-const fe=T=>(T||"").replace(/<think>[\s\S]*?<\/think>/gi,"").replace(/\[\/?TOOL_CALL\]/gi,"").trim();
+const fe=T=>(T||"").replace(/<think>[\s\S]*?<\/think>/gi,"").replace(/\[\/?TOOL_CALL\]/gi,"").replace(/<minimax:tool_call>[\s\S]*?<\/minimax:tool_call>/gi,"").replace(/minimax:tool_call/gi,"").replace(/<\/?invoke[^>]*>/gi,"").replace(/\{"tool"\s*[=:>]+\s*"[^"]*"\s*,\s*"path"\s*[=:>]+\s*"[^"]*"\s*\}/g,"").replace(/^\s*[\r\n]+/gm,"").trim();
 const vibeContextState=(()=>{
 try{
 const T=new URL(globalThis.location?.href||"http://localhost/");
@@ -51,44 +69,180 @@ model:T.searchParams.get("vibe_model")||""
 return{workspaceId:"",conversationId:"",context:"",apiBase:"",ideToken:"",model:""};
 }
 })();
-const ee=vibeContextState.apiBase||this.M.getValue("minimax.apiBase")||"";
+const be=(()=>{
+try{
+const T=new URL(globalThis.location?.href||"http://localhost/");
+const ie=(T.pathname||"").replace(/\/+$/,"");
+const oe=ie.endsWith("/ide")?ie.slice(0,-4):"";
+if(!oe||!vibeContextState.workspaceId)return"";
+return`${T.origin}${oe}/api/coding/workspace/${vibeContextState.workspaceId}/ide`;
+}catch{
+return"";
+}
+})();
+const ee=(vibeContextState.apiBase||this.M.getValue("minimax.apiBase")||"").replace(/\/$/,"");
 const ae=vibeContextState.ideToken||"";
+const se=this.M.getValue("minimax.apiKey")||"";
+const Ae=(ae?[be,ee]:[ee]).map(T=>(T||"").replace(/\/$/,"")).filter(Boolean).filter((T,ie,oe)=>oe.indexOf(T)===ie);
 const de=vibeContextState.model||this.M.getValue("minimax.model")||"MiniMax-M2.7";
+console.log("[PATCH] endpoints:",Ae,"hasToken:",!!ae,"hasKey:",!!se);
+const ye=async(T,ie)=>{
+let oe;
+for(let idx=0;idx<Ae.length;idx++){
+const re=Ae[idx];
+const isLast=idx===Ae.length-1;
+const headers={...(ie?.headers||{}),
+"Content-Type":"application/json",
+...(ae?{"X-Vibe-IDE-Token":ae}:{}),
+...(se?{"Authorization":"Bearer "+se}:{})
+};
+const opts={...ie,headers};
+try{
+const pe=await fetch(re+T,opts);
+if(isLast||pe.ok||pe.status===429)return pe;
+oe=pe;
+console.warn("[PATCH] endpoint returned",pe.status,"retrying with fallback",re+T);
+}catch(pe){
+if(isLast)throw pe;
+console.warn("[PATCH] endpoint request failed, retrying with fallback",re+T,pe);
+}
+}
+return oe;
+};
 const ge=()=>{
-let T="",ie=!1;
+let T="",ie=!1,tc=!1;
+const OPEN_TAGS=[["<think>",7,"</think>",8],["<minimax:tool_call>",19,"</minimax:tool_call>",20],["<invoke",7,"</invoke>",9]];
 const oe=re=>{
 const pe=(re||"").replace(/\[\/?TOOL_CALL\]/gi,"");
 if(!pe)return"";
 T+=pe;
 let ve="";
 for(;;){
-if(ie){
-const Le=T.indexOf("</think>");
-if(Le===-1){
-T=T.slice(-32);
-break;
-}
-T=T.slice(Le+8);
-ie=!1;
+if(ie||tc){
+const tag=ie?0:tc===2?2:1;
+const cl=OPEN_TAGS[tag][2],clen=OPEN_TAGS[tag][3];
+const Le=T.indexOf(cl);
+if(Le===-1){T=T.slice(-64);break;}
+T=T.slice(Le+clen);
+ie=!1;tc=!1;
 continue;
 }
-const Le=T.indexOf("<think>");
-if(Le===-1){
-const Je=Math.max(0,T.length-16);
+let best=-1,bestTag=-1;
+for(let k=0;k<OPEN_TAGS.length;k++){
+const idx=T.indexOf(OPEN_TAGS[k][0]);
+if(idx!==-1&&(best===-1||idx<best)){best=idx;bestTag=k;}
+}
+if(best===-1){
+const Je=Math.max(0,T.length-64);
 ve+=T.slice(0,Je);
 T=T.slice(Je);
 break;
 }
-ve+=T.slice(0,Le);
-T=T.slice(Le+7);
-ie=!0;
+ve+=T.slice(0,best);
+T=T.slice(best+OPEN_TAGS[bestTag][1]);
+if(bestTag===0)ie=!0;else tc=bestTag===2?2:!0;
 }
 return ve;
 };
 return{
 push:oe,
-flush:()=>oe("")+(!ie?T:"")
+flush:()=>{const r=oe("");return r+((!ie&&!tc)?T:"");}
 };
+};
+const qe=T=>(T||"").replace(/^[/\\]+/,"").trim();
+const Ie=(T,ie=new Set,oe=0,re=new WeakSet)=>{
+if(T==null||oe>5)return ie;
+if(typeof T=="string"){
+const re=T.match(/(?:^|[\\/])([\w.\- ]+\.(?:png|jpg|jpeg|webp|gif))(?:$|[?&#])/gi)||[];
+for(const pe of re){
+const ve=qe(pe.replace(/^.*[\\/]/,"").replace(/[?&#].*$/,""));
+ve&&/\.(png|jpg|jpeg|webp|gif)$/i.test(ve)&&ie.add(ve);
+}
+const re2=T.match(/\b[\w.\- ]+\.(?:png|jpg|jpeg|webp|gif)\b/gi)||[];
+for(const pe of re2){
+const ve=qe(pe);
+ve&&ie.add(ve);
+}
+return ie;
+}
+if(Array.isArray(T)){
+for(const pe of T)Ie(pe,ie,oe+1,re);
+return ie;
+}
+if(typeof T=="object"){
+if(re.has(T))return ie;
+re.add(T);
+for(const pe of Object.keys(T)){
+if(/^_/.test(pe))continue;
+try{Ie(T[pe],ie,oe+1,re)}catch{}
+}
+}
+return ie;
+};
+const Oe=()=>{
+const T=new Set,ie=[];
+try{
+const oe=[
+...document.querySelectorAll('button[aria-label*="Attached image"]'),
+...document.querySelectorAll('[aria-label*="Attached image"]')
+];
+for(const re of oe){
+const pe=(re?.getAttribute?.("aria-label")||re?.textContent||"").trim();
+if(!pe)continue;
+const ve=pe.match(/Attached image,\s*([^()]+?)(?:\s*\(Delete\))?$/i)||pe.match(/Attached image,\s*(.+)$/i);
+const Le=qe((ve?.[1]||"").replace(/^["']|["']$/g,""));
+if(!Le||T.has(Le)||!/\.(png|jpg|jpeg|webp|gif)$/i.test(Le))continue;
+T.add(Le);
+ie.push({name:Le});
+if(ie.length>=4)break;
+}
+}catch{}
+return ie;
+};
+const Ne=()=>{
+const T=new Set;
+for(const ie of Oe())ie?.name&&T.add(ie.name);
+for(const ie of Ie(M))T.add(ie);
+for(const ie of Ie(Q||[]))T.add(ie);
+return Array.from(T).slice(0,4).map(ie=>({name:ie}));
+};
+const Pe=T=>/(截图|截圖|附件|图片|圖片|image|screenshot|pasted image|报错图|錯誤圖|错误图)/i.test(T||"");
+const Te=T=>{
+if(!Array.isArray(T)||!T.length)return"";
+const ie=T.filter(oe=>typeof oe?.text=="string"&&oe.text.trim()).map(oe=>{
+const re=Array.isArray(oe?.diagnostics)&&oe.diagnostics.length?`OCR_DIAGNOSTICS:\n${oe.diagnostics.map(pe=>`- ${pe}`).join("\n")}\n\n`:"";
+const pe=Array.isArray(oe?.signal_lines)&&oe.signal_lines.length?`OCR_KEY_LINES:\n${oe.signal_lines.map(ve=>`- ${ve}`).join("\n")}\n\n`:"";
+return`### IMAGE: ${oe.name||"attachment"}\nOCR_SOURCE: 本地截图 OCR，仅代表截图里识别出的文字，可能有少量噪声。\n${re}${pe}OCR_TEXT:\n${oe.text.trim()}`;
+});
+return ie.join("\n\n");
+};
+const ke=async()=>{
+const T=Ne();
+if(!T.length){
+const ie=[
+fe(ue(M?.message)),
+...(Q||[]).slice(-4).map(oe=>fe(ue(oe?.request?.message)||ue(oe?.request?.prompt)||""))
+].filter(Boolean).join("\n");
+if(Pe(ie))T.push({name:"__latest__"});
+}
+if(!T.length||!Ae.length||(!ae&&!se))return[];
+try{
+const ie=await ye("/image-context",{
+method:"POST",
+body:JSON.stringify({images:T})
+});
+if(!ie.ok){
+let oe="";
+try{oe=await ie.text()}catch{}
+console.warn("[PATCH] image OCR request failed",ie.status,oe);
+return[];
+}
+const oe=await ie.json();
+return Array.isArray(oe?.images)?oe.images:[];
+}catch(ie){
+console.warn("[PATCH] image OCR failed",ie);
+return[];
+}
 };
 const xe=()=>{
 const T=new Set;
@@ -110,7 +264,7 @@ Le&&T.add(Le);
 }catch{}
 return Array.from(T).slice(0,6);
 };
-const Ce=T=>/(代码|源码|文件|实现|组件|页面|工作区|项目|目录|阅读|查看|看下|看一下|分析|解释|总结|实现思路|修改|重构|调试|报错|bug|review|search|read|file|code|workspace|project|component|page|function|class)/i.test(T||"");
+const Ce=T=>/(代码|源码|文件|实现|组件|页面|工作区|项目|目录|阅读|查看|看下|看一下|分析|解释|总结|实现思路|修改|重构|调试|报错|bug|review|search|read|file|code|workspace|project|component|page|function|class|学习|开发|了解|入门|教|怎么|如何|架构|结构|模块|接口|配置|模型|表单|脚本|模版|模板|规范|规则|指南)/i.test(T||"");
 const Be=T=>{
 const ie=new Set;
 const oe=(T||"").match(/(?:[A-Za-z0-9._-]+\/)+(?:[A-Za-z0-9._-]+)|(?:[A-Za-z0-9._-]+\.(?:vue|js|ts|jsx|tsx|json|md|mdc|css|scss|less|html|yml|yaml))/g)||[];
@@ -120,7 +274,15 @@ if(pe&&!/^https?:/i.test(pe)&&pe.length<220)ie.add(pe);
 }
 return Array.from(ie);
 };
-const We=T=>/(修改|改成|改为|调整|修复|优化|新增|补充|完善|继续补|重构|实现(?!思路)|生成(?!思路)|创建(?!工作区)|删除|替换|补齐|改下|fix|update|edit|change|modify|write|implement|add|refactor)/i.test(T||"");
+const VIBE_STATUS_QUERY=T=>/^(修复了吗|改好了吗|处理好了吗|好了没|搞定了吗|行了吗|还有问题吗|是不是好了|现在好了吗)[？?！!。.\s]*$/i.test((T||"").trim());
+const VIBE_DIAG_QUERY=T=>/(看(到|下|一下)?|分析|解释|排查|定位|诊断|说出|判断).*(截图|报错|错误|控制台|日志|console)|根据.*截图|最关键的报错|主报错|根因/i.test(T||"");
+const VIBE_EDIT_REQUEST=T=>/(修改|改成|改为|调整|修复|优化|新增|补充|完善|继续补|重构|实现(?!思路)|生成(?!思路)|创建(?!工作区)|删除|替换|补齐|改下|写入|写到|写个|写一个|帮我写|帮写|编写|加上|加一下|加个|添加|加入|加到|加注释|加注|fix|update|edit|change|modify|write|implement|add|refactor)/i.test(T||"");
+const We=T=>{
+const ie=(T||"").trim();
+if(!ie||VIBE_STATUS_QUERY(ie))return!1;
+if(VIBE_DIAG_QUERY(ie)&&!/请|直接|帮我|麻烦|顺手/i.test(ie))return!1;
+return VIBE_EDIT_REQUEST(ie);
+};
 const Ee=T=>{
 let ie=fe(T||"");
 const oe=ie.match(/```(?:json)?\s*([\s\S]*?)```/i);
@@ -130,168 +292,102 @@ if(re!==-1&&pe!==-1&&pe>re)ie=ie.slice(re,pe+1);
 return JSON.parse(ie);
 };
 const ft=async T=>{
-if(!Ce(T)&&Be(T).length===0)return"";
+if(!Ae.length||!vibeContextState.workspaceId)return"";
+const wsBase=Ae[0].replace(/\/ide\/?$/,"");
+const wsPfx=wsBase+"/workspace/"+vibeContextState.workspaceId;
+const wsHdr={...(ae?{"X-Vibe-IDE-Token":ae,"Authorization":"Bearer "+ae}:se?{"Authorization":"Bearer "+se}:{})};
 try{
-return await this.H.invokeFunction(async ie=>{
-const oe=ie.get(Qe).getWorkspace();
-const re=ie.get(Me);
-const pe=oe.folders[0];
-if(!pe)return"";
-const ve=new Set(["node_modules","dist",".git",".continue","https","coverage",".idea",".DS_Store"]);
-const Le=[];
-let Je=0;
-const Mt=async(qt,Qt,Ot)=>{
-if(Je>=240||Ot>5)return;
-Je++;
-let ei;
+const filesResp=await fetch(wsPfx+"/files",{headers:wsHdr});
+if(!filesResp.ok)return"";
+const fileList=await filesResp.json();
+const allFiles=Array.isArray(fileList)?fileList:Array.isArray(fileList?.files)?fileList.files:[];
+if(!allFiles.length)return"";
+const srcFiles=allFiles.filter(f=>{
+const p=typeof f==="string"?f:f?.path||f?.name||"";
+return/\.(java|vue|js|ts|jsx|tsx|json|md|mdc|css|html|yml|yaml|properties|xml)$/i.test(p)&&!/node_modules|dist|\.git|coverage/.test(p);
+}).slice(0,60);
+const fileListStr=srcFiles.map(f=>typeof f==="string"?`- ${f}`:`- ${f?.path||f?.name}`).join("\n");
+const keyPatterns=[/\.java$/,/\.vue$/,/\.mdc$/,/apaas\.json$/,/pom\.xml$/,/package\.json$/,/application\.properties$/];
+const toRead=[];
+for(const p of keyPatterns){
+const match=srcFiles.find(f=>{const n=typeof f==="string"?f:f?.path||"";return p.test(n);});
+if(match)toRead.push(typeof match==="string"?match:match?.path||match?.name);
+}
+for(const f of srcFiles.slice(0,10)){
+const p=typeof f==="string"?f:f?.path||"";
+if(!toRead.includes(p))toRead.push(p);
+if(toRead.length>=8)break;
+}
+const excerpts=[];
+let totalLen=0;
+for(const fp of toRead.slice(0,8)){
+if(totalLen>=14000)break;
 try{
-ei=await re.resolve(qt);
-}catch{
-return;
-}
-const ti=Array.isArray(ei.children)?[...ei.children].sort((ni,oi)=>ni.name.localeCompare(oi.name)):[];
-for(const ni of ti){
-const oi=Qt?`${Qt}/${ni.name}`:ni.name;
-if(ni.isDirectory){
-if(!ve.has(ni.name))await Mt(ni.resource,oi,Ot+1);
-}else if(ni.isFile){
-Le.push({rel:oi,resource:ni.resource,size:ni.size??0});
-}
-if(Le.length>=120)break;
-}
-};
-await Mt(pe.uri,"",0);
-if(Le.length===0)return`当前工作区: ${pe.name}\n未扫描到可读取源码文件。`;
-const ni=new Set;
-const oi=[];
-const riHints=xe();
-const ri=qt=>{
-const Qt=qt.replace(/^\/+/,"");
-const Ot=Le.find(ei=>ei.rel===Qt||ei.rel.endsWith(`/${Qt}`));
-if(Ot&&!ni.has(Ot.rel)){
-ni.add(Ot.rel);
-oi.push(Ot);
-}
-};
-for(const qt of riHints)ri(qt);
-for(const qt of Be(T))ri(qt);
-const ai=[
-/^\.cursor\/rules\/.*\.mdc$/,
-/^package\.json$/,
-/^src\/apaas\.json$/,
-/widget\.config\.js$/,
-/editor\.config\.js$/,
-/form-widget\/edit\/.*\.vue$/,
-/form-editor\/.*setting\.vue$/,
-/form-widget\/read\/.*\.vue$/,
-/^src\/Home\.vue$/,
-/^src\/index\.(js|ts|vue)$/,
-/^src\/api\/.*\.(js|ts)$/,
-/^src\/mixin\/.*\.js$/
-];
-for(const qt of ai){
-const Qt=Le.find(Ot=>qt.test(Ot.rel));
-if(Qt&&!ni.has(Qt.rel)){
-ni.add(Qt.rel);
-oi.push(Qt);
-}
-if(oi.length>=8)break;
-}
-const li=new Map;
-for(const qt of Le){
-const Qt=qt.rel.match(/(form-component-[^/.]+|form-page-[^/.]+|mobile-component-[^/.]+|mobile-page-[^/.]+|list-view-[^/.]+|frontend-plugin-[^/.]+)/);
-if(!Qt)continue;
-const Ot=Qt[1];
-li.set(Ot,(li.get(Ot)||0)+1);
-}
-const wi=[...li.entries()].sort((qt,Qt)=>Qt[1]-qt[1])[0]?.[0];
-if(wi){
-for(const qt of Le.filter(Qt=>Qt.rel.includes(wi)).slice(0,6)){
-if(!ni.has(qt.rel)){
-ni.add(qt.rel);
-oi.push(qt);
-}
-}
-}
-for(const qt of Le.filter(Qt=>Qt.rel.startsWith("src/")&&!/\/index\.(js|ts)$/.test(Qt.rel)).slice(0,10)){
-if(!ni.has(qt.rel)){
-ni.add(qt.rel);
-oi.push(qt);
-if(oi.length>=8)break;
-}
-}
-const yi=Le.slice(0,60).map(qt=>`- ${qt.rel}`).join("\n");
-const Si=[];
-let bi=0;
-for(const qt of oi.slice(0,8)){
-if(bi>=14000)break;
-try{
-const Qt=(await re.readFile(qt.resource)).value.toString();
-const Ot=Qt.length>3200?`${Qt.slice(0,3200)}\n/* ... truncated ... */`:Qt;
-Si.push(`### FILE: ${qt.rel}\n\`\`\`\n${Ot}\n\`\`\``);
-bi+=Ot.length;
+const r=await fetch(wsPfx+`/file?file_path=${encodeURIComponent(fp)}`,{headers:wsHdr});
+if(!r.ok)continue;
+const j=await r.json();
+const txt=j?.content||"";
+const trimmed=txt.length>3200?`${txt.slice(0,3200)}\n/* ... truncated ... */`:txt;
+excerpts.push(`### FILE: ${fp}\n\`\`\`\n${trimmed}\n\`\`\``);
+totalLen+=trimmed.length;
 }catch{}
 }
-return `WORKSPACE_NAME: ${pe.name}
-WORKSPACE_ROOT: ${pe.uri.path}
-FILE_COUNT: ${Le.length}
-DOMINANT_STEM: ${wi||"unknown"}
-ACTIVE_EDITOR_HINTS: ${riHints.length?riHints.join(", "):"none"}
-
-FILE_LIST_SAMPLE:
-${yi}
-
-SELECTED_FILE_EXCERPTS:
-${Si.join("\n\n")}`;
-});
-}catch(Tt){
-console.warn("[PATCH] buildWorkspaceContext failed",Tt);
+return`WORKSPACE FILE_COUNT: ${allFiles.length}\n\nFILE_LIST:\n${fileListStr}\n\nFILE_CONTENTS:\n${excerpts.join("\n\n")}`;
+}catch(e){
+console.warn("[PATCH] buildWorkspaceContext via API failed",e);
 return"";
 }
 };
-if(!ee)return{errorDetails:{message:"IDE 后端代理未配置，请重新从 Builder 打开 Web IDE。"}};
-if(!ae)return{errorDetails:{message:"IDE 访问令牌缺失，请重新从 Builder 打开 Web IDE。"}};
-const rt=fe(ue(M?.message));
+if(!Ae.length)return{errorDetails:{message:"IDE 后端代理未配置，请重新从 Builder 打开 Web IDE 或在设置中配置 minimax.apiBase。"}};
+if(!ae&&!se)return{errorDetails:{message:"请在设置中配置 minimax.apiKey，或从 Builder 打开 Web IDE。"}};
+const rt=fe(ue(M?.message)||ue(M?.prompt)||ue(M?.text)||"");
+console.log("[PATCH] rt=",JSON.stringify(rt?.slice(0,100)),"M keys=",M?Object.keys(M).join(","):"null");
+const pt=await ke();
+const mt=Te(pt);
+const gt=mt?`${rt}${rt?"\n\n":""}ATTACHED_IMAGE_CONTEXT:\n${mt}`:rt;
 const kt=await ft(rt);
+console.log("[PATCH] kt length=",kt?.length||0,"Ce=",Ce(rt),"Be=",Be(rt));
 const Et=async()=>{
 const T=[{
 role:"system",
 content:[
 "你是一个集成在 IDE 里的代码修改代理。",
-"如果系统消息里附带了 WORKSPACE CONTEXT / FILE CONTENTS，就把它视为当前工作区的真实代码。",
+"用户消息中可能包含当前工作区的代码文件内容，直接基于这些代码回答或修改。",
 "如果系统消息里附带了 VIBE CODING CONTEXT，也把它视为当前这轮开发任务的真实会话背景，延续之前的实现思路和约束。",
+"如果用户消息里包含 ATTACHED_IMAGE_CONTEXT / OCR_TEXT，请把它视为用户附带截图里真实可读的文字内容。",
+"如果用户消息里包含 OCR_DIAGNOSTICS，请优先参考这些诊断行，它们是从截图里提炼出的关键错误。",
+"如果 OCR_DIAGNOSTICS 同时出现 `Unexpected token '<'` 与 `undefined` / `zh-CN` / `default`，优先判断为静态资源或构建产物路径错误，HTML 被当成 JS 加载，其余多为连锁报错。",
+"当你引用截图内容时，请明确写出“根据截图 OCR 可见”或“根据截图可见报错”。",
+"不要把 OCR 文字直接当成源码事实；如果根因需要源码佐证，请先说截图里明确可见的报错，再补充“结合当前源码推断”。",
+"只有当用户明确要求你修改、生成、删除文件时，才输出改代码方案。像“修复了吗”“好了没”“为什么报错”“看截图里的错误”这类请求，先做诊断和说明，不要假装已经改了代码。",
 "你的任务是直接生成可落盘的文件修改方案。",
-"严格只返回 JSON，不要 Markdown，不要代码围栏，不要解释。",
+"严格只返回 JSON，不要 Markdown，不要代码围栏，不要解释，不要输出 tool_call、invoke、ReadFile 或任何伪工具调用。你没有工具可用，文件内容已在下方上下文中提供。",
 '输出格式: {"summary":"一句中文总结","edits":[{"path":"相对工作区路径","action":"write","content":"完整文件内容"}],"notes":["可选备注"]}',
 "action 仅允许 write、create、delete。",
 "当 action 为 write 或 create 时，content 必须是写入后的完整文件内容，不要返回 diff。",
 "如果当前请求不需要真正改文件，就返回 edits: []。",
-vibeContextState.context?`\n下面是从 aPaaS Builder / 睿鲸 Vibe Coding 页面带入的会话上下文，请延续该上下文继续修改：\nVIBE_WORKSPACE_ID: ${vibeContextState.workspaceId||"unknown"}\nVIBE_CONVERSATION_ID: ${vibeContextState.conversationId||"unknown"}\n${vibeContextState.context}`:"",
-kt?`\n下面是 IDE 自动提供的工作区上下文，请直接基于它制定修改方案：\n${kt}`:""
+vibeContextState.context?`\n下面是从 aPaaS Builder / 睿鲸 Vibe Coding 页面带入的会话上下文，请延续该上下文继续修改：\nVIBE_WORKSPACE_ID: ${vibeContextState.workspaceId||"unknown"}\nVIBE_CONVERSATION_ID: ${vibeContextState.conversationId||"unknown"}\n${vibeContextState.context}`:""
 ].join("\n")
 }];
 for(const ie of Q||[]){
-const oe=fe(ue(ie?.request?.message));
+const oe=fe(ue(ie?.request?.message)||ue(ie?.request?.prompt)||"");
 oe&&T.push({role:"user",content:oe});
 const re=fe(ue(ie?.response));
 re&&T.push({role:"assistant",content:re});
 }
-rt&&T.push({role:"user",content:rt});
+const userMsg=[kt?`以下是当前工作区的代码文件，请直接基于这些代码制定修改方案：\n${kt}\n\n---\n用户请求：`:"",gt].filter(Boolean).join("\n");
+userMsg&&T.push({role:"user",content:userMsg});
 let ie;
 try{
-ie=await fetch(ee+"/chat/completions",{
+ie=await ye("/chat/completions",{
 method:"POST",
-headers:{
-"Content-Type":"application/json",
-"X-Vibe-IDE-Token":ae
-},
 body:JSON.stringify({
 model:de,
 messages:T,
 stream:!1,
-max_tokens:8192
-}),
-signal:X?.isCancellationRequested?void 0:void 0
+max_tokens:8192,
+tool_choice:"none"
+})
 });
 }catch(oe){
 return{error:oe?.message||"Failed to connect to MiniMax API."};
@@ -382,38 +478,44 @@ const li=[{
 role:"system",
 content:[
 "你是一个集成在 VS Code 风格 IDE 里的中文编程助手。",
-"如果系统消息里附带了 WORKSPACE CONTEXT / FILE CONTENTS，就把它视为当前工作区的真实代码。",
+"用户消息中可能包含当前工作区的代码文件内容，直接基于这些代码回答或修改。",
 "如果系统消息里附带了 VIBE CODING CONTEXT，也把它视为当前这轮开发任务已经发生过的对话上下文，回答时要自然承接，不要重复从零开始。",
+"如果用户消息里包含 ATTACHED_IMAGE_CONTEXT / OCR_TEXT，请把它视为用户附带截图里真实可读的文字内容。",
+"如果用户消息里包含 OCR_DIAGNOSTICS，请优先按“截图诊断”结构回答：先列 1-3 条关键错误，再决定是否补充源码推断。",
+"如果 OCR_DIAGNOSTICS 同时出现 `Unexpected token '<'` 与 `undefined` / `zh-CN` / `default`，优先判断为静态资源或构建产物路径错误，HTML 被当成 JS 加载，其余多为连锁报错。",
+"当你引用截图内容时，请明确写出“根据截图 OCR 可见”或“根据截图可见报错”。",
+"不要把 OCR 文字直接当成源码事实；如果根因需要源码佐证，请先说截图里明确可见的报错，再补充“结合当前源码推断”。",
+"只要 ATTACHED_IMAGE_CONTEXT 存在，就不要再说“我看不到截图”或“我无法看到附件”。",
+"像“修复了吗”“好了没”“为什么报错”“看截图里的错误”这类请求，优先做诊断和状态说明，不要冒充已经改过代码。",
 "不要说你无法访问本地文件；如果上下文还不够，请明确指出还需要哪些文件路径或模块名。",
+"绝对不要输出任何伪工具调用，包括 {\"tool\":\"ReadFile\"} 之类的 JSON 对象。你没有工具可用，直接基于已提供的 FILE_LIST 和 FILE_EXCERPTS 里的代码来回答。",
+"如果用户提到某个文件名且该文件的内容已在 SELECTED_FILE_EXCERPTS 中，直接引用该内容作答，不要说需要读取。",
 "默认使用中文回答。",
-"不要输出 <think>、</think>、内部推理、TOOL_CALL 标记或伪造工具调用。",
+"不要输出 <think>、</think>、内部推理、TOOL_CALL 标记、minimax:tool_call、<invoke> 或任何伪造工具调用。直接用文字回答，不要模拟函数调用。",
 "回答优先基于提供的代码上下文，给出直接结论。",
-vibeContextState.context?`\n下面是从 aPaaS Builder / 睿鲸 Vibe Coding 页面带入的会话上下文，请先理解并衔接它：\nVIBE_WORKSPACE_ID: ${vibeContextState.workspaceId||"unknown"}\nVIBE_CONVERSATION_ID: ${vibeContextState.conversationId||"unknown"}\n${vibeContextState.context}`:"",
-kt?`\n下面是 IDE 自动提供的工作区上下文，请直接基于它回答：\n${kt}`:""
+vibeContextState.context?`\n下面是从 aPaaS Builder / 睿鲸 Vibe Coding 页面带入的会话上下文，请先理解并衔接它：\nVIBE_WORKSPACE_ID: ${vibeContextState.workspaceId||"unknown"}\nVIBE_CONVERSATION_ID: ${vibeContextState.conversationId||"unknown"}\n${vibeContextState.context}`:""
 ].join("\n")
 }];
 for(const T of Q||[]){
-const ie=fe(ue(T?.request?.message));
+const ie=fe(ue(T?.request?.message)||ue(T?.request?.prompt)||"");
 if(ie)li.push({role:"user",content:ie});
 const oe=fe(ue(T?.response));
 if(oe)li.push({role:"assistant",content:oe});
 }
-if(rt)li.push({role:"user",content:rt});
+const chatUserMsg=[kt?`以下是当前工作区的代码文件，你可以直接引用这些内容来回答：\n${kt}\n\n---\n用户问题：`:"",gt].filter(Boolean).join("\n");
+if(chatUserMsg)li.push({role:"user",content:chatUserMsg});
 const wi=new AbortController;
 X?.onCancellationRequested?.(()=>wi.abort());
 let yi;
 try{
-yi=await fetch(ee+"/chat/completions",{
+yi=await ye("/chat/completions",{
 method:"POST",
-headers:{
-"Content-Type":"application/json",
-"X-Vibe-IDE-Token":ae
-},
 body:JSON.stringify({
 model:de,
 messages:li,
 stream:!0,
-max_tokens:8192
+max_tokens:8192,
+tool_choice:"none"
 }),
 signal:wi.signal
 });
@@ -479,6 +581,7 @@ return Ci?{timings:{firstProgress:Ii,totalElapsed:Date.now()-te}}:{errorDetails:
 }
 };
 y.__apaasMiniMaxDynamicAgentDisposer=this.L.registerDynamicAgent(S,k);
+y.__apaasMiniMaxHandler=k;
 console.log("[PATCH] registered MiniMax dynamic agent fallback");
 };
 for(let o=0;o<50;o++){
