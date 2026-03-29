@@ -326,6 +326,47 @@ class APaaSClient:
     async def create_form_permissions(self, app_id: str, payload: list) -> dict:
         return await self._post_resource("/common/resource/formPermission", payload, app_id)
 
+    async def query_app_detail(self, app_id: str) -> dict:
+        """查询单个应用详情（从应用列表中按 appId 过滤）"""
+        apps = await self.query_app_list()
+        for app in apps:
+            if str(app.get("id", "")) == str(app_id) or str(app.get("appId", "")) == str(app_id):
+                return app
+        return {}
+
+    async def deploy_app(self, app_id: str, version: str, abstract: str = "") -> dict:
+        """发布应用
+
+        Args:
+            app_id: 应用 ID
+            version: 发布版本号（如 "1.0.1"）
+            abstract: 版本摘要
+        """
+        url = f"{self.base_url}/xdap-app/deploy/deployApplication"
+        params = {"timestamp": self._get_timestamp()}
+        payload = {
+            "appId": app_id,
+            "appVersion": version,
+            "appAbstract": abstract,
+        }
+        _log_request("POST", url, payload)
+        start = time.time()
+
+        async with httpx.AsyncClient(verify=False, timeout=120.0) as client:
+            response = await client.post(
+                url, headers=self._get_headers(app_id), json=payload, params=params
+            )
+            elapsed_ms = (time.time() - start) * 1000
+            response.raise_for_status()
+            data = response.json()
+
+            _log_response(url, response.status_code, data, elapsed_ms, request_body=_to_json(payload))
+
+            if data.get("code") not in ("ok", 200):
+                raise Exception(data.get("message", "发布应用失败"))
+            logger.info(f"应用发布成功: app_id={app_id}, version={version}")
+            return data
+
     async def query_app_list(self, page: int = 1, page_size: int = 200) -> list:
         """查询得帆云平台应用列表"""
         url = f"{self.base_url}/xdap-app/apaasApplications/queryAppList"

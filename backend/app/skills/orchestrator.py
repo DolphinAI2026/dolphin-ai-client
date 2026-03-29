@@ -1,6 +1,7 @@
 """aPaaS 完整构建编排器
 
 将所有原子 Skills 组合为端到端的构建流程。
+流程：创建应用 → 角色 → 字典 → 模型 → 表单 → 权限 → 发布
 """
 from __future__ import annotations
 import logging
@@ -13,6 +14,8 @@ from app.skills.platform import (
     create_dicts,
     create_roles,
     create_form,
+    create_permissions,
+    deploy_app,
 )
 
 logger = logging.getLogger(__name__)
@@ -25,11 +28,11 @@ async def run_full_build(
     app_code: Optional[str] = None,
     existing_app_id: Optional[str] = None,
 ) -> AsyncGenerator[Dict, None]:
-    """完整构建流程：创建应用 → 角色 → 字典 → 模型 → 表单。
+    """完整构建流程：创建应用 → 角色 → 字典 → 模型 → 表单 → 权限 → 发布。
 
     Args:
         client: 已登录的 APaaSClient
-        config: 预览格式配置 {"data": {"models", "roles", "dicts"}}
+        config: 预览格式配置 {"data": {"models", "roles", "dicts", "permissions"}}
         app_name: 应用名称（新建时必填）
         app_code: 应用编码（可选）
         existing_app_id: 已有应用 ID（复用时传入）
@@ -41,6 +44,7 @@ async def run_full_build(
     roles = data.get("roles", [])
     dicts = data.get("dicts", [])
     models = data.get("models", [])
+    permissions = data.get("permissions", [])
 
     # Stage 0: 解析
     yield {"stage": 0, "status": "running", "step": "解析需求配置..."}
@@ -64,11 +68,15 @@ async def run_full_build(
     # Stage 1: 公共资源（角色 + 字典）
     yield {"stage": 1, "status": "running", "step": "开始创建公共资源..."}
     dict_code_map = {}
+    role_codes = {}
     try:
         if roles:
             await create_roles(client, app_id, roles)
             names = '、'.join(r['name'] for r in roles)
             yield {"stage": 1, "status": "running", "step": f"创建角色: {names}"}
+            # 记录角色编码供权限配置使用
+            for r in roles:
+                role_codes[r.get("code", r["name"])] = r
 
         if dicts:
             try:
@@ -88,6 +96,7 @@ async def run_full_build(
 
     # Stage 2: 业务表单（模型 + 表单配置）
     yield {"stage": 2, "status": "running", "step": "开始创建业务表单..."}
+    form_results = []
     try:
         model_results, model_payload, code_map = await create_models(
             client, app_id, models
@@ -95,7 +104,7 @@ async def run_full_build(
         for m in models:
             yield {"stage": 2, "status": "running", "step": f"✅ {m['name']} 数据模型"}
 
-        await create_form(
+        form_results = await create_form(
             client, app_id, models, dicts,
             model_results, model_payload, code_map, dict_code_map,
         )
@@ -107,8 +116,56 @@ async def run_full_build(
         yield {"stage": 2, "status": "error", "step": f"业务表单创建失败: {e}"}
         return
 
-    # Stage 3: Dashboard (MVP 跳过)
-    yield {"stage": 3, "status": "running", "step": "Dashboard配置..."}
-    yield {"stage": 3, "status": "done", "step": "Dashboard配置完成（基础版）"}
+    # Stage 3: 权限配置
+    yield {"stage": 3, "status": "running", "step": "开始配置权限..."}
+    try:
+        # form_results 可能是 API 返回的原始数据，需要适配
+        adapted_form_results = _adapt_form_results(form_results, models, code_map)
+        perm_result = await create_permissions(
+            client, app_id, permissions, adapted_form_results, role_codes,
+        )
+        count = perm_result.get("permissions_count", 0)
+        yield {"stage": 3, "status": "done", "step": f"权限配置完成（{count} 个表单）"}
+    except Exception as e:
+        logger.error(f"权限配置失败: {e}", exc_info=True)
+        yield {"stage": 3, "status": "done", "step": f"权限配置跳过: {e}"}
+
+    # Stage 4: 发布应用
+    yield {"stage": 4, "status": "running", "step": "正在发布应用..."}
+    try:
+        deploy_result = await deploy_app(client, app_id)
+        version = deploy_result.get("version", "")
+        yield {"stage": 4, "status": "done", "step": f"应用发布成功 (v{version})"}
+    except Exception as e:
+        logger.error(f"应用发布失败: {e}", exc_info=True)
+        yield {"stage": 4, "status": "done", "step": f"应用发布跳过: {e}"}
 
     yield {"type": "complete", "message": "应用生成完成", "app_id": app_id}
+
+
+def _adapt_form_results(
+    form_results: list,
+    models: List[Dict],
+    code_map: Dict[str, str],
+) -> List[Dict]:
+    """将 create_form 返回的结果适配为权限配置所需的格式。
+
+    权限配置需要 formCode/formId/formName，但 create_form_config API
+    返回的格式可能不一致，这里做兼容处理。
+    """
+    if not form_results:
+        return []
+
+    adapted = []
+    if isinstance(form_results, list):
+        for i, fr in enumerate(form_results):
+            if isinstance(fr, dict) and fr.get("formId"):
+                adapted.append(fr)
+            elif isinstance(fr, dict):
+                # 尝试从返回数据中提取
+                adapted.append({
+                    "formId": fr.get("formId", fr.get("id", "")),
+                    "formCode": fr.get("formCode", ""),
+                    "formName": fr.get("formName", models[i]["name"] if i < len(models) else ""),
+                })
+    return adapted

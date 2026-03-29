@@ -625,7 +625,10 @@ async def _get_platform_client_for_app(
     user: User,
     db: AsyncSession,
 ) -> APaaSClient:
-    """优先按应用绑定/默认平台环境获取连接，回退到用户级连接。"""
+    """优先按应用绑定/默认平台环境获取连接，回退到用户级连接。
+
+    包含 token 自动刷新：如果已有 token 过期（401），自动用存储的凭证重新登录。
+    """
     env = None
 
     if getattr(app, "platform_env_id", None):
@@ -653,11 +656,25 @@ async def _get_platform_client_for_app(
         env = env_result.scalar_one_or_none()
 
     if env and env.token:
-        return APaaSClient(
+        client = APaaSClient(
             base_url=env.base_url,
             tenant_id=env.platform_tenant_id,
             token=env.token,
         )
+        # 验证 token 有效性，过期则自动刷新
+        try:
+            await client.query_app_list()
+            return client
+        except Exception:
+            logger.info(f"平台环境 {env.id} 的 token 已过期，尝试自动刷新")
+            refreshed = await _try_refresh_env_token(env, db)
+            if refreshed:
+                return APaaSClient(
+                    base_url=env.base_url,
+                    tenant_id=env.platform_tenant_id,
+                    token=env.token,
+                )
+            logger.warning("环境 token 刷新失败，尝试回退到用户级连接")
 
     if user.apaas_token and user.apaas_base_url and user.apaas_tenant_id:
         return APaaSClient(
@@ -666,7 +683,50 @@ async def _get_platform_client_for_app(
             token=user.apaas_token,
         )
 
+    # 最终回退：尝试从项目级凭证刷新
+    from app.models import Project
+    from app.routes.projects import ensure_platform_token
+    try:
+        project_result = await db.execute(
+            select(Project).where(Project.id == app.project_id)
+            if hasattr(app, 'project_id') and app.project_id
+            else select(Project).where(Project.user_id == user.id).order_by(Project.updated_at.desc()).limit(1)
+        )
+        project = project_result.scalar_one_or_none()
+        if project and project.platform_url:
+            token = await ensure_platform_token(project, db)
+            return APaaSClient(
+                base_url=project.platform_url,
+                tenant_id=project.platform_tenant_id,
+                token=token,
+            )
+    except Exception as e:
+        logger.warning(f"项目级 token 刷新失败: {e}")
+
     raise HTTPException(status_code=400, detail="未配置平台环境，请在环境管理中添加并连接")
+
+
+async def _try_refresh_env_token(env: PlatformEnv, db: AsyncSession) -> bool:
+    """尝试用平台环境存储的凭证刷新 token"""
+    import base64
+
+    if not getattr(env, 'username', None) or not getattr(env, 'password_enc', None):
+        return False
+
+    try:
+        password = base64.b64decode(env.password_enc).decode()
+        client = APaaSClient(base_url=env.base_url, tenant_id=env.platform_tenant_id)
+        result = await client.login(env.username, password)
+        new_token = result.get("token", "")
+        if new_token:
+            env.token = new_token
+            await db.commit()
+            logger.info(f"平台环境 {env.id} token 刷新成功")
+            return True
+    except Exception as e:
+        logger.warning(f"平台环境 {env.id} token 刷新失败: {e}")
+
+    return False
 
 def _build_execute_stream_response(
     app_id: int,

@@ -8,12 +8,14 @@
     - create_dicts: 创建数据字典
     - create_roles: 创建角色
     - create_form: 创建表单配置
+    - create_permissions: 配置权限
+    - deploy_app: 发布应用
 
 组件构建:
     - build_component: 通用组件构建器（支持所有 16 种组件类型）
 
 编排:
-    - run_full_build: 完整构建流程（登录 → 创建应用 → 模型 → 字典 → 角色 → 表单）
+    - run_full_build: 完整构建流程（创建应用 → 角色 → 字典 → 模型 → 表单 → 权限 → 发布）
 """
 from app.skills.components import build_component, COMPONENT_REGISTRY
 from app.skills.platform import (
@@ -22,6 +24,8 @@ from app.skills.platform import (
     create_dicts,
     create_roles,
     create_form,
+    create_permissions,
+    deploy_app,
     login,
 )
 from app.skills.orchestrator import run_full_build
@@ -34,6 +38,8 @@ __all__ = [
     "create_dicts",
     "create_roles",
     "create_form",
+    "create_permissions",
+    "deploy_app",
     "login",
     "run_full_build",
 ]

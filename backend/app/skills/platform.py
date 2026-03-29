@@ -378,3 +378,103 @@ async def create_form(
     result = await client.create_form_config(app_id, form_payload)
     logger.info(f"创建了 {len(form_payload)} 个表单")
     return result
+
+
+# ── Skill 7: 配置权限 ──
+
+async def create_permissions(
+    client: APaaSClient,
+    app_id: str,
+    permissions: List[Dict],
+    form_results: List[Dict],
+    role_codes: Optional[Dict[str, dict]] = None,
+) -> Dict:
+    """为所有表单配置权限。
+
+    基于角色和表单自动配置功能权限和数据权限。
+    如果用户配置了 permissions 规则，按规则生成；否则使用默认全员权限。
+
+    Args:
+        client: 已登录的 APaaSClient
+        app_id: 应用 ID
+        permissions: 权限配置列表，每项 {"form": "表单名", "rules": [...]}
+        form_results: 表单创建结果列表，每项含 formCode/formId/formName
+        role_codes: 角色编码映射
+
+    Returns:
+        {"permissions_count": N}
+    """
+    from app.step_executor import (
+        _build_form_permission_payload,
+        _default_form_permission_payload,
+    )
+
+    role_codes = role_codes or {}
+    perm_payloads = []
+
+    for fr in form_results:
+        form_code = fr.get("formCode", "")
+        form_id = fr.get("formId", "")
+        form_name = fr.get("formName", "")
+
+        user_perm = next((p for p in permissions if p.get("form") == form_name), None)
+
+        if user_perm and user_perm.get("rules"):
+            perm_payloads.append(
+                _build_form_permission_payload(
+                    app_id=app_id,
+                    form_code=form_code,
+                    form_id=form_id,
+                    rules=user_perm["rules"],
+                    role_codes=role_codes,
+                )
+            )
+        else:
+            perm_payloads.append(_default_form_permission_payload(app_id, form_code, form_id))
+
+    if perm_payloads:
+        await client.create_form_permissions(app_id, perm_payloads)
+        logger.info(f"配置了 {len(perm_payloads)} 个表单的权限")
+
+    return {"permissions_count": len(perm_payloads)}
+
+
+# ── Skill 8: 发布应用 ──
+
+async def deploy_app(
+    client: APaaSClient,
+    app_id: str,
+) -> Dict:
+    """查询当前版本号并递增发布应用。
+
+    流程：
+    1. 查询当前应用详情获取版本号
+    2. 递增 patch 版本号（如 1.0.0 → 1.0.1）
+    3. 调用发布 API
+
+    Args:
+        client: 已登录的 APaaSClient
+        app_id: 应用 ID
+
+    Returns:
+        {"version": "x.y.z", "app_id": "..."}
+    """
+    # 查询当前版本
+    app_detail = await client.query_app_detail(app_id)
+    current_version = app_detail.get("appVersion", app_detail.get("version", ""))
+
+    # 递增版本号
+    if current_version:
+        parts = current_version.split(".")
+        try:
+            parts = [int(p) for p in parts]
+            parts[-1] += 1
+            new_version = ".".join(str(p) for p in parts)
+        except (ValueError, IndexError):
+            new_version = "1.0.1"
+    else:
+        new_version = "1.0.0"
+
+    await client.deploy_app(app_id, new_version, abstract="智能搭建自动发布")
+    logger.info(f"应用发布成功: app_id={app_id}, version={new_version}")
+    return {"version": new_version, "app_id": app_id}

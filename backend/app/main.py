@@ -20,6 +20,13 @@ async def lifespan(app: FastAPI):
     async with AsyncSessionLocal() as session:
         await seed_initial_data(session)
 
+    # 预热平台代理状态（避免首次请求 503）
+    from app.routes.platform_proxy import _ensure_proxy_state
+    try:
+        await _ensure_proxy_state()
+    except Exception:
+        pass
+
     yield
     # 关闭时清理资源
     from app.coding.browser_service import BrowserService
@@ -72,6 +79,18 @@ app.include_router(llm_configs.router, prefix="/api")
 app.include_router(browser.router, prefix="/api")
 # 平台代理路由注册在根路径（/platform/... 和 /backend/... 需要直接匹配）
 app.include_router(platform_proxy.router)
+
+
+# 平台插件资源中间件：/{32位hex}/... → 代理到平台
+import re as _re
+_PLUGIN_HASH_RE = _re.compile(r'^/[0-9a-f]{32}/')
+
+@app.middleware("http")
+async def plugin_asset_middleware(request, call_next):
+    if _PLUGIN_HASH_RE.match(request.url.path):
+        from app.routes.platform_proxy import handle_plugin_asset_request
+        return await handle_plugin_asset_request(request)
+    return await call_next(request)
 
 
 # 静态文件（浏览器预览页面等）

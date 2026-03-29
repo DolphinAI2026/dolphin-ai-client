@@ -694,15 +694,27 @@ class IncrementalExecutor:
     # ==================== 模型变更 ====================
 
     async def _execute_model_changes(self, changes: List[ModelChange]):
-        """执行模型变更"""
+        """执行模型变更
+
+        按设计文档逻辑：
+        - ADDED: 创建模型及字段
+        - MODIFIED: 先判断 modelName 是否变化，变了才调 _update_model；
+          然后无论是否更新模型名称，都进入字段级处理
+        - DELETED: 不删除模型（避免数据丢失）
+        """
         for change in changes:
             try:
                 if change.change_type == ChangeType.ADDED:
                     await self._create_model(change)
                 elif change.change_type == ChangeType.MODIFIED:
-                    await self._update_model(change)
+                    # 仅当模型名称变化时才调用模型更新 API
+                    old_name = (change.old_value or {}).get("modelName", "")
+                    new_name = (change.new_value or {}).get("modelName", change.name)
+                    if old_name and new_name and old_name != new_name:
+                        await self._update_model(change)
+                    else:
+                        logger.info(f"模型「{change.name}」名称未变化，跳过模型更新，直接处理字段")
                 elif change.change_type == ChangeType.DELETED:
-                    # 模型删除不支持，记录警告
                     self.result.add_warning(f"模型「{change.name}」删除: 平台不支持删除模型，已忽略")
                     continue
 
@@ -758,13 +770,24 @@ class IncrementalExecutor:
                 return
 
         model_data = change.new_value or {}
+
+        # 从远端模型数据中获取 modelDataSource（平台必填字段）
+        remote_models = await self._load_remote_models_by_code()
+        remote_model = remote_models.get(change.code, {})
+        model_data_source = (
+            model_data.get("modelDataSource")
+            or remote_model.get("modelDataSource")
+            or remote_model.get("datasourceId")
+            or ""
+        )
+
         payload = {
             "id": change.remote_id,
             "appId": self.app_id,
             "modelCode": change.code,
             "modelName": change.name,
             "modelType": "DATABASE",
-            "modelDataSource": model_data.get("modelDataSource", ""),
+            "modelDataSource": model_data_source,
             "useScope": self.app_name,
             "internalResource": True,
             "interfaceType": "CUSTOM",
@@ -801,15 +824,28 @@ class IncrementalExecutor:
     async def _create_field(self, model_id: str, change: FieldChange):
         """创建模型字段"""
         field_data = change.new_value or {}
+
+        # 获取模型编码（平台 API 必填）
+        model_code = change.model_code or ""
+        if not model_code:
+            remote_models = await self._load_remote_models_by_code()
+            for code, m in remote_models.items():
+                mid = str(m.get("id", m.get("modelId", "")))
+                if mid == model_id:
+                    model_code = code
+                    break
+
         payload = {
+            "dataModelId": model_id,
             "modelId": model_id,
+            "modelCode": model_code,
             "appId": self.app_id,
             "fieldCode": change.code,
             "fieldName": change.name,
             "fieldType": field_data.get("fieldType", "STRING"),
             "databaseFieldType": field_data.get("databaseFieldType", "varchar"),
             "fieldStatus": "ENABLE",
-            "fieldComment": self._field_comment_value(field_data)
+            "fieldComment": self._field_comment_value(field_data),
         }
 
         await self._post("/xdap-app/modelField/add", payload)
@@ -817,23 +853,82 @@ class IncrementalExecutor:
         logger.info(f"创建字段成功: {change.name} ({change.code})")
 
     async def _update_field(self, model_id: str, change: FieldChange):
-        """更新模型字段"""
+        """更新模型字段
+
+        特殊处理：当 fieldType 发生变化时，按设计文档要求执行"禁用旧字段 + 创建新字段"，
+        而非直接更新类型（类型变更可能导致数据兼容性问题）。
+        """
         if not change.remote_id:
             # 平台上不存在，降级为创建
             logger.info(f"字段「{change.name}」缺少 remote_id，降级为创建操作")
             await self._create_field(model_id, change)
             return
 
-        field_data = change.new_value or {}
+        old_data = change.old_value or {}
+        new_data = change.new_value or {}
+        old_type = old_data.get("fieldType", old_data.get("type", ""))
+        new_type = new_data.get("fieldType", new_data.get("type", "STRING"))
+
+        # 检测 fieldType 是否变化 → 禁用旧字段 + 创建新字段
+        if old_type and new_type and old_type != new_type:
+            logger.warning(
+                f"字段「{change.name}」类型变更: {old_type} → {new_type}，"
+                f"执行禁用旧字段+创建新字段策略"
+            )
+
+            # 1. 禁用旧字段（保留原 fieldCode）
+            disable_payload = {
+                "id": change.remote_id,
+                "modelId": model_id,
+                "fieldCode": change.code,
+                "fieldName": change.name,
+                "fieldType": old_type,
+                "databaseFieldType": old_data.get("databaseFieldType", "varchar"),
+                "fieldStatus": "DISABLE",
+                "fieldComment": self._field_comment_value(old_data),
+            }
+            await self._post("/xdap-app/modelField/update/fromApp", disable_payload)
+            self.result.journal.record(
+                "model", "disable", change.name, change.code,
+                platform_id=change.remote_id, old_value=old_data,
+            )
+            logger.info(f"禁用旧字段: {change.name} ({change.code})")
+
+            # 2. 生成新 fieldCode 并创建新字段
+            new_code = f"{change.code}_v2"
+            new_field_change = FieldChange(
+                name=change.name,
+                code=new_code,
+                change_type=ChangeType.ADDED,
+                new_value={
+                    "fieldType": new_type,
+                    "databaseFieldType": new_data.get("databaseFieldType", "varchar"),
+                    "fieldComment": self._field_comment_value(new_data),
+                },
+            )
+            await self._create_field(model_id, new_field_change)
+
+            self.result.add_success(
+                "models",
+                f"模型字段类型变更: {change.name} ({old_type}→{new_type})，"
+                f"旧字段 {change.code} 已禁用，新字段 {new_code} 已创建"
+            )
+            self.result.add_warning(
+                f"字段「{change.name}」类型从 {old_type} 变更为 {new_type}，"
+                f"旧数据需手动迁移: {change.code} → {new_code}"
+            )
+            return
+
+        # 普通属性更新（fieldName/maxLength/fieldComment）
         payload = {
             "id": change.remote_id,
             "modelId": model_id,
             "fieldCode": change.code,
             "fieldName": change.name,
-            "fieldType": field_data.get("fieldType", "STRING"),
-            "databaseFieldType": field_data.get("databaseFieldType", "varchar"),
+            "fieldType": new_type,
+            "databaseFieldType": new_data.get("databaseFieldType", "varchar"),
             "fieldStatus": "ENABLE",
-            "fieldComment": self._field_comment_value(field_data)
+            "fieldComment": self._field_comment_value(new_data),
         }
 
         await self._post("/xdap-app/modelField/update/fromApp", payload)

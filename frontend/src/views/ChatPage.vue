@@ -32,8 +32,8 @@
           :class="{ active: activeView === 'platform' }"
           @click="switchToPlatform"
         >
-          <span>🖥️</span>
-          <span>平台配置</span>
+          <span>🛠️</span>
+          <span>辅助搭建</span>
           <span v-if="activeView === 'platform'" class="active-dot"></span>
         </button>
         <button
@@ -651,7 +651,7 @@ const messagesRef = ref<HTMLElement>()
 const inputText = ref('')
 const isTyping = ref(false)
 const currentAgent = ref('builder')
-const SHOW_PLATFORM_CONFIG = false
+const SHOW_PLATFORM_CONFIG = true
 
 // ── 应用计数（导航栏徽标） ──
 const appCount = ref(0)

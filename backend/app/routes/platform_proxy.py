@@ -200,14 +200,22 @@ async def proxy_entry(
         if not app or not app.apaas_app_id:
             return Response(content="<h3>应用未部署</h3>", media_type="text/html")
 
-        # 查环境
+        # 查环境：按优先级依次查 应用绑定 → 默认环境 → 任意已连接环境
         env = None
         if app.platform_env_id:
             r = await db.execute(select(PlatformEnv).where(PlatformEnv.id == app.platform_env_id))
             env = r.scalar_one_or_none()
-        if not env:
+        if not env or not env.token:
             r = await db.execute(
                 select(PlatformEnv).where(PlatformEnv.tenant_id == ctx.tenant_id, PlatformEnv.is_default == True)
+            )
+            env = r.scalar_one_or_none()
+        if not env or not env.token:
+            r = await db.execute(
+                select(PlatformEnv).where(
+                    PlatformEnv.tenant_id == ctx.tenant_id,
+                    PlatformEnv.status == "connected",
+                ).limit(1)
             )
             env = r.scalar_one_or_none()
         if not env or not env.token:
@@ -254,11 +262,38 @@ async def proxy_entry(
 # 全量代理：/platform/... 和 /backend/...
 # ============================================================
 
+async def _ensure_proxy_state():
+    """确保 proxy state 已初始化，如果为空则从数据库恢复"""
+    if _proxy_state.get("host"):
+        return True
+    try:
+        from sqlalchemy import select
+        from app.database import AsyncSessionLocal
+        from app.models import PlatformEnv
+        async with AsyncSessionLocal() as db:
+            r = await db.execute(
+                select(PlatformEnv).where(PlatformEnv.status == "connected").limit(1)
+            )
+            env = r.scalar_one_or_none()
+            if env and env.token:
+                _proxy_state["host"] = env.base_url.rstrip("/").replace("/backend", "")
+                _proxy_state["token"] = env.token
+                _proxy_state["tenant_id"] = env.platform_tenant_id
+                _proxy_state["username"] = env.username or ""
+                logger.info(f"Proxy state auto-recovered: host={_proxy_state['host']}")
+                return True
+    except Exception as e:
+        logger.warning(f"Failed to auto-recover proxy state: {e}")
+    return False
+
+
 async def _proxy_request(request: Request, path: str, inject_auth: bool = False) -> Response:
     """通用代理逻辑"""
     host = _proxy_state.get("host")
     if not host:
-        return Response(content="Proxy not initialized", status_code=503)
+        if not await _ensure_proxy_state():
+            return Response(content="Proxy not initialized", status_code=503)
+        host = _proxy_state.get("host")
 
     # 构建目标 URL
     qs = str(request.query_params)
@@ -269,17 +304,21 @@ async def _proxy_request(request: Request, path: str, inject_auth: bool = False)
     # 请求头
     headers = {}
     if inject_auth:
+        import time as _time
         headers["xdaptoken"] = _proxy_state.get("token", "")
         headers["xdaptenantid"] = _proxy_state.get("tenant_id", "")
-    for h in ("content-type", "accept", "accept-language"):
+        headers["xdaptimestamp"] = str(int(_time.time() * 1000))
+    # 透传前端发来的认证头（平台 JS 自己会带 xdaptoken/xdaptimestamp）
+    for h in ("content-type", "accept", "accept-language",
+              "xdaptoken", "xdaptenantid", "xdaptimestamp", "appid"):
         val = request.headers.get(h)
         if val:
             headers[h] = val
 
     # 静态资源缓存（/platform/static/、/platform/dll/ 等带哈希的文件）
     is_static = request.method == "GET" and any(
-        seg in path for seg in ("/static/", "/dll/", "/img/", "/fonts/", ".css", ".js", ".woff", ".ttf", ".png", ".ico")
-    )
+        seg in path for seg in ("/static/", "/dll/", "/img/", "/fonts/", ".css", ".woff", ".ttf", ".png", ".ico")
+    ) and "env.tmpl.js" not in path  # env.tmpl.js 需要每次改写，不能缓存
     if is_static and target in _static_cache:
         cached = _static_cache[target]
         return Response(content=cached[0], media_type=cached[1])
@@ -333,6 +372,18 @@ async def proxy_plugin(request: Request, path: str):
     return await _proxy_request(request, f"plugin/{path}", inject_auth=True)
 
 
+# 代理平台管理 API /xdap-admin/...（插件查询、帮助文档、租户管理等）
+@router.api_route("/xdap-admin/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
+async def proxy_xdap_admin(request: Request, path: str):
+    return await _proxy_request(request, f"backend/xdap-admin/{path}", inject_auth=True)
+
+
+# 代理平台插件 API /xdap-plugin/...
+@router.api_route("/xdap-plugin/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
+async def proxy_xdap_plugin(request: Request, path: str):
+    return await _proxy_request(request, f"backend/xdap-plugin/{path}", inject_auth=True)
+
+
 # 代理其他平台路径 /xdap-open/..., /smartbi/..., /apaas/...
 @router.api_route("/xdap-open/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
 async def proxy_xdap_open(request: Request, path: str):
@@ -347,3 +398,12 @@ async def proxy_smartbi(request: Request, path: str):
 @router.api_route("/apaas/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
 async def proxy_apaas(request: Request, path: str):
     return await _proxy_request(request, f"apaas/{path}", inject_auth=True)
+
+
+# 代理平台插件包资源 /{32位hex}/... （插件 JS/CSS/图片等）
+# FastAPI 不支持正则路由，用中间件方式在 main.py 中注册
+# 这里提供处理函数供中间件调用
+async def handle_plugin_asset_request(request: Request) -> Response:
+    """处理插件资源请求：/{32位hex}/admin/..."""
+    path = request.url.path.lstrip("/")
+    return await _proxy_request(request, path, inject_auth=False)
