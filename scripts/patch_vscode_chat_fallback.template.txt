@@ -729,11 +729,14 @@ _uploadBtn.addEventListener("click",()=>{
 const _fi=document.createElement("input");_fi.type="file";_fi.onchange=async(ev)=>{
 const _f=ev.target.files?.[0];if(!_f)return;
 const _fd=new FormData();_fd.append("file",_f);
-const _wsId=vibeContextState.workspaceId||"";
+const _vc=y.__vibeCtx||{};
+const _wsId=_vc.workspaceId||"";
+const _ideToken=_vc.ideToken||"";
 const _apiOrigin=(()=>{try{const u=new URL(globalThis.location?.href||"");const p=(u.pathname||"").replace(/\/+$/,"");const ap=p.endsWith("/ide")?p.slice(0,-4):"";return ap?u.origin+ap:u.origin;}catch{return"";}})();
-if(!_apiOrigin)return;
+if(!_apiOrigin){console.warn("[PATCH] upload: no API origin");return;}
 const _uploadUrl=_apiOrigin+"/api/coding/upload"+(_wsId?"?workspace_id="+encodeURIComponent(_wsId):"");
-try{const _r=await fetch(_uploadUrl,{method:"POST",body:_fd,headers:{...(ae?{"X-Vibe-IDE-Token":ae,"Authorization":"Bearer "+ae}:se?{"Authorization":"Bearer "+se}:{})}});
+const _authHdrs=_ideToken?{"X-Vibe-IDE-Token":_ideToken,"Authorization":"Bearer "+_ideToken}:{};
+try{const _r=await fetch(_uploadUrl,{method:"POST",body:_fd,headers:_authHdrs});
 if(_r.ok){const _j=await _r.json();console.log("[PATCH] uploaded file:",_j);
 const _ta=document.querySelector(".interactive-input-editor textarea");
 if(_ta){_ta.focus();document.execCommand("insertText",!1,`\n[\u5DF2\u4E0A\u4F20\u6587\u4EF6: ${_f.name}]`);}
