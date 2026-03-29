@@ -496,7 +496,11 @@ return{applied:[],skipped:[{path:"",reason:ie?.message||"Failed to apply edit pl
 };
 if(We(rt)){
 P([{kind:"markdownContent",content:new we("正在分析代码并生成修改方案...\n")}]);
-const T=await Et();
+let T=await Et();
+if(T?.error&&/invalid edit plan/i.test(T.error)){
+P([{kind:"markdownContent",content:new we("首次生成格式不符，正在重试...\n")}]);
+T=await Et();
+}
 if(!T?.error&&Array.isArray(T?.edits)&&T.edits.length>0){
 P([{kind:"markdownContent",content:new we(`**${T.summary||"代码修改方案"}**\n`)}]);
 let editGroupOk=!1;
