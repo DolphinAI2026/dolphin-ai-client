@@ -57,6 +57,16 @@ class Settings(BaseSettings):
     coding_model_qwen_base_url: str = ""
     coding_model_qwen_api_key: str = ""
     coding_model_qwen_model: str = "qwen-plus"
+    # 接口.ai 聚合平台（GPT-5.4 / Claude Sonnet 4.6 / Claude Opus 4.6）
+    coding_model_gpt54_base_url: str = ""
+    coding_model_gpt54_api_key: str = ""
+    coding_model_gpt54_model: str = "gpt-5.4"
+    coding_model_sonnet_base_url: str = ""
+    coding_model_sonnet_api_key: str = ""
+    coding_model_sonnet_model: str = "claude-sonnet-4-6"
+    coding_model_opus_base_url: str = ""
+    coding_model_opus_api_key: str = ""
+    coding_model_opus_model: str = "claude-opus-4-6"
 
 
 settings = Settings()

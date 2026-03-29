@@ -359,6 +359,39 @@ def _init_coding_model_routes():
             "model": settings.coding_model_qwen_model,
         }
 
+    # GPT-5.4 (via jiekou.ai)
+    if settings.coding_model_gpt54_base_url and settings.coding_model_gpt54_api_key:
+        base = settings.coding_model_gpt54_base_url.rstrip("/")
+        if not base.endswith("/v1"):
+            base = f"{base}/v1"
+        routes["gpt"] = {
+            "url": f"{base}/chat/completions",
+            "api_key": settings.coding_model_gpt54_api_key,
+            "model": settings.coding_model_gpt54_model,
+        }
+
+    # Claude Sonnet 4.6 (via jiekou.ai)
+    if settings.coding_model_sonnet_base_url and settings.coding_model_sonnet_api_key:
+        base = settings.coding_model_sonnet_base_url.rstrip("/")
+        if not base.endswith("/v1"):
+            base = f"{base}/v1"
+        routes["sonnet"] = {
+            "url": f"{base}/chat/completions",
+            "api_key": settings.coding_model_sonnet_api_key,
+            "model": settings.coding_model_sonnet_model,
+        }
+
+    # Claude Opus 4.6 (via jiekou.ai)
+    if settings.coding_model_opus_base_url and settings.coding_model_opus_api_key:
+        base = settings.coding_model_opus_base_url.rstrip("/")
+        if not base.endswith("/v1"):
+            base = f"{base}/v1"
+        routes["opus"] = {
+            "url": f"{base}/chat/completions",
+            "api_key": settings.coding_model_opus_api_key,
+            "model": settings.coding_model_opus_model,
+        }
+
     _CODING_MODEL_ROUTES = routes
 
 
