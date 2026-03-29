@@ -18,6 +18,8 @@ class SceneType(str, Enum):
     MOBILE_COMPONENT = "mobile_component"     # 移动端自开发组件
     MOBILE_PAGE = "mobile_page"               # 移动端自开发页面
     BACKEND_API = "backend_api"               # 后端自开发接口
+    BACKEND_FEIGN = "backend_feign"           # 后端外部调用（FeignClient）
+    BACKEND_SCHEDULED = "backend_scheduled"   # 后端定时任务
     SCRIPT_JS = "script_js"                   # JavaScript脚本扩展
     SCRIPT_PYTHON = "script_python"           # Python脚本扩展
     SCRIPT_GROOVY = "script_groovy"           # Groovy脚本扩展
@@ -157,6 +159,34 @@ SCENE_REGISTRY: Dict[SceneType, SceneInfo] = {
             "接口路径必须以/custom开头",
             "需实现AllowUrlManage接口注册白名单",
             "打包使用-P lib参数",
+        ],
+    ),
+    SceneType.BACKEND_FEIGN: SceneInfo(
+        type=SceneType.BACKEND_FEIGN,
+        name="后端外部调用（FeignClient）",
+        description="通过 FeignClient 调用外部 HTTP 接口，含接口定义、请求/响应 DTO、配置类",
+        category="backend",
+        platform="server",
+        file_patterns=["*FeignClient.java", "*DTO.java", "*FeignConfig.java", "pom.xml"],
+        required_conventions=[
+            "包名前缀必须是com.xdap",
+            "使用 @FeignClient 注解，url 从 application.yml 读取",
+            "DTO 字段与外部 API 保持一致",
+            "需配置 FeignConfig 处理认证头",
+        ],
+    ),
+    SceneType.BACKEND_SCHEDULED: SceneInfo(
+        type=SceneType.BACKEND_SCHEDULED,
+        name="后端定时任务",
+        description="基于 Spring @Scheduled 的定时任务，含 MpaaS 数据库操作",
+        category="backend",
+        platform="server",
+        file_patterns=["*ScheduledTask.java", "*Service.java", "*Dao.java", "pom.xml"],
+        required_conventions=[
+            "包名前缀必须是com.xdap",
+            "使用 @Scheduled(cron=...) 配置执行周期",
+            "MpaaS 数据库操作遵循 DatasourceUtil + MpaasQuery 规范",
+            "@EnableScheduling 标注在 Application 启动类",
         ],
     ),
     SceneType.SCRIPT_JS: SceneInfo(

@@ -4,225 +4,180 @@
 
 ```
 apaas-builder-ai/
-├── backend/                 # FastAPI后端
+├── backend/           # Python Flask 后端
 │   ├── app/
-│   │   ├── routes/         # API路由
-│   │   │   ├── auth.py     # 认证（注册/登录）
-│   │   │   ├── conversations.py  # 对话管理
-│   │   │   ├── chat.py     # 聊天（SSE流式）
-│   │   │   └── applications.py   # 应用管理
-│   │   ├── config.py       # 配置管理
-│   │   ├── database.py     # 数据库连接
-│   │   ├── models.py       # 数据模型
-│   │   ├── schemas.py      # Pydantic schemas
-│   │   ├── auth.py         # JWT认证
-│   │   ├── apaas_client.py # 得帆云API客户端
-│   │   └── llm_client.py   # LLM客户端
-│   ├── requirements.txt
-│   ├── .env               # 环境变量（已配置）
-│   └── run.py             # 启动脚本
-├── frontend/              # Vue 3前端
+│   │   ├── routes/    # API 路由
+│   │   ├── coding/    # AI Coding 核心（workspace、agent）
+│   │   ├── config.py  # 配置管理
+│   │   ├── models.py  # 数据模型
+│   │   └── ...
+│   ├── venv/          # Python 虚拟环境（gitignored）
+│   ├── run.py         # 启动入口
+│   └── requirements.txt
+├── frontend/          # Vue 3 + TypeScript 前端
 │   ├── src/
-│   │   ├── api/          # API客户端
-│   │   ├── stores/       # Pinia状态管理
-│   │   ├── router/       # Vue Router
-│   │   ├── views/        # 页面组件
-│   │   ├── types/        # TypeScript类型
-│   │   └── utils/        # 工具函数
-│   ├── vite.config.ts    # Vite配置（已配置代理）
+│   │   ├── api/       # API 客户端
+│   │   ├── stores/    # Pinia 状态管理
+│   │   ├── views/     # 页面组件
+│   │   ├── router/    # Vue Router
+│   │   └── utils/     # 工具函数
+│   ├── vite.config.ts
 │   └── package.json
-├── start.sh              # 一键启动脚本
-└── README.md
+├── scripts/           # 部署脚本（code-server patch 等）
+├── tests/             # 测试用例
+├── examples/          # 示例配置（YAML）
+├── docs/              # 文档
+│   ├── deploy/        # 部署指南
+│   ├── reference/     # 业务参考、开发指南、skill 文档
+│   └── internal/      # 内部规划文档
+├── workspaces/        # 运行时动态生成（gitignored）
+├── start.sh           # 一键启动
+└── test.sh            # 运行测试
+```
+
+## 目录规范
+
+### 根目录只放核心内容
+
+根目录**只允许**以下内容：
+
+| 类型 | 允许的文件/目录 |
+|------|---------------|
+| 核心代码 | `backend/`, `frontend/`, `scripts/`, `tests/` |
+| 配置 | `.env`, `.gitignore`, `start.sh`, `test.sh` |
+| 核心文档 | `README.md`, `CHANGELOG.md`, `DEVELOPMENT.md`, `QUICKSTART.md`, `TOOLCHAIN.md` |
+| 数据/示例 | `examples/` |
+| 文档归档 | `docs/` |
+| 运行时产物 | `workspaces/`（gitignored） |
+
+**禁止**在根目录放置：
+- 业务需求文档、数据模型设计 → 放 `docs/reference/`
+- 规划文档、改进计划、TODO → 放 `docs/internal/`
+- 临时测试文件、截图、payload → 不入库，或放 `tests/fixtures/`
+- 独立的组件/页面开发项目 → 放 `docs/reference/` 或独立仓库
+
+### 各目录职责
+
+| 目录 | 职责 | 注意事项 |
+|------|------|----------|
+| `backend/` | Python 后端代码 | `venv/`, `*.db` 已 gitignore |
+| `frontend/` | Vue 前端代码 | `node_modules/`, `dist/` 已 gitignore |
+| `scripts/` | 部署和运维脚本 | 仅放 **实际运行的** 脚本，一次性脚本执行后删除 |
+| `tests/` | 所有测试代码 | 包括 unit、e2e、集成测试 |
+| `examples/` | 示例配置和数据 | 用于文档演示或测试 |
+| `docs/deploy/` | 部署指南 | 面向运维 |
+| `docs/reference/` | 参考文档 | 业务文档、开发指南、skill 定义等 |
+| `docs/internal/` | 内部文档 | 规划、改进计划、架构笔记 |
+| `workspaces/` | 动态工作区 | **永远不要提交到 git** |
+
+### 新文件放哪里？
+
+```
+我写了一份需求文档          → docs/reference/
+我写了一份架构改进计划      → docs/internal/
+我写了一个部署脚本          → scripts/
+我写了一个测试脚本          → tests/
+我写了一个一次性数据迁移脚本 → 执行后删除，不入库
+我开发了一个示例组件        → docs/reference/ 或独立仓库
+我截了一些调试截图          → 不入库（加到 .gitignore）
 ```
 
 ## 快速开始
 
-### 方式1：使用启动脚本（推荐）
+### 一键启动
 
 ```bash
 ./start.sh
 ```
 
-### 方式2：手动启动
+### 手动启动
 
 **后端：**
 ```bash
 cd backend
-python3 -m venv venv
 source venv/bin/activate
-pip install -r requirements.txt
 python run.py
+# 默认端口 8001
 ```
 
 **前端：**
 ```bash
 cd frontend
-npm install  # 已完成
 npm run dev
+# 默认端口 5173
 ```
 
-## 访问地址
+### 访问地址
 
 - 前端：http://localhost:5173
-- 后端：http://localhost:8000
-- API文档：http://localhost:8000/docs
-
-## 数据库
-
-使用SQLite，数据库文件：`backend/apaas_builder.db`（首次运行自动创建）
-
-### 数据表
-
-- `users` - 用户表
-- `conversations` - 对话表
-- `messages` - 消息表
-- `applications` - 应用表
-
-## API端点
-
-### 认证
-- `POST /api/auth/register` - 注册
-- `POST /api/auth/login` - 登录
-- `GET /api/auth/me` - 获取当前用户
-
-### 对话
-- `POST /api/conversations` - 创建对话
-- `GET /api/conversations` - 对话列表
-- `GET /api/conversations/{id}` - 对话详情
-
-### 聊天
-- `POST /api/chat/send` - 发送消息（SSE流式响应）
-
-### 应用
-- `GET /api/applications` - 应用列表
-
-## 环境变量
-
-后端环境变量已配置在 `backend/.env`：
-
-```env
-# aPaaS Platform
-APAAS_BASE_URL=https://apaas-poc.definesys.cn/backend
-APAAS_TENANT_ID=743906758237356033
-
-# LLM Configuration
-LLM_API_BASE=https://api.jiekou.ai/openai
-LLM_API_KEY=sk_PRw1U5P4FO8Ep_P4aqCn231Uq2jXvB4YXzNccYwT6Jg
-LLM_MODEL=claude-haiku-4-5-20251001
-
-# Database
-DATABASE_URL=sqlite+aiosqlite:///./apaas_builder.db
-
-# JWT
-JWT_SECRET_KEY=STJNDwwzapqfloz3ccjpamqRXjeLJRhj3l-6-6rozGg
-JWT_ALGORITHM=HS256
-JWT_EXPIRE_MINUTES=1440
-```
+- 后端 API：http://localhost:8001
+- 远程环境：https://agent.dfy.definesys.cn/ai-builder/
 
 ## 技术栈
 
 ### 后端
-- FastAPI - Web框架
-- SQLAlchemy 2.0 - ORM（异步）
-- Pydantic v2 - 数据验证
-- JWT - 认证
-- SSE - 流式响应
-- httpx - HTTP客户端
+- Flask + SQLAlchemy（SQLite）
+- MiniMax / Claude — LLM 调用
+- SSE — 流式响应
+- JWT — 认证
 
 ### 前端
-- Vue 3 - 框架
-- TypeScript - 类型系统
-- Vite - 构建工具
-- Element Plus - UI组件库
-- Pinia - 状态管理
-- Vue Router - 路由
-- Axios - HTTP客户端
+- Vue 3 + TypeScript + Vite
+- Element Plus — UI 组件库
+- Pinia — 状态管理
 
-## 开发流程
+### 远程 IDE
+- code-server 4.112.0（VS Code Web）
+- MiniMax Chat Provider 扩展（替代 GitHub Copilot Chat）
+- 部署在阿里云 ECS
 
-### 1. 首次使用
+## Git 规范
 
-1. 启动服务：`./start.sh`
-2. 访问前端：http://localhost:5173
-3. 注册账号（首次使用）
-4. 登录系统
+### 提交前检查
 
-### 2. 创建对话
+1. **不要提交运行时产物**：`workspaces/`, `*.db`, `node_modules/`, `venv/`, `dist/`
+2. **不要提交敏感信息**：`.env` 中的 API Key（已 gitignore）
+3. **不要在根目录堆文件**：按上面的规范归类
 
-1. 点击"新建对话"
-2. 选择智能体类型：
-   - 搭建智能体：用于应用搭建
-   - 辅助开发：用于辅助开发
-   - 复杂开发：用于复杂开发
-3. 开始对话
+### .gitignore 覆盖范围
 
-### 3. 聊天交互
+```
+workspaces/         # 动态工作区
+*.db                # SQLite 数据库
+venv/ .venv/        # Python 虚拟环境
+node_modules/       # Node 依赖
+frontend/dist/      # 前端构建产物
+.env .env.local     # 环境变量
+.DS_Store           # macOS 系统文件
+__pycache__/        # Python 缓存
+.claude/            # Claude Code 配置
+```
 
-- 输入消息，按Enter或点击"发送"
-- AI回复采用流式输出
-- 对话历史自动保存
+## 部署
 
-## 下一步开发
+参考 `docs/deploy/deploy-aliyun.md`。
 
-### Week 1-2：核心功能
-- [x] 项目框架搭建
-- [x] 用户认证系统
-- [x] 对话管理
-- [x] 基础聊天功能
-- [ ] 得帆云登录集成（RSA加密）
-- [ ] 需求收集流程
-- [ ] 配置预览面板（5个tab）
-- [ ] 调用得帆云智能搭建API
-- [ ] 生成进度展示
+关键步骤：
+1. 后端部署到阿里云 ECS
+2. code-server 部署 + workbench.js patch（用 `scripts/patch_vscode_*.js`）
+3. 前端 `npm run build` → 静态文件部署
 
-### Week 3-4：辅助功能
-- [ ] 辅助开发智能体
-- [ ] 应用管理页面
-- [ ] 需求模板库
-- [ ] 错误处理与重试
+### code-server patch 策略
+
+> 在本地 code-server 验证 patch 有效后，直接 `scp` 整个 workbench.js 到远程服务器覆盖。不要在远程逐个增量 patch。
 
 ## 调试
 
 ### 后端日志
-后端使用uvicorn的日志输出，可以在终端查看请求日志。
+终端直接查看 Flask 日志输出。
 
 ### 前端调试
-使用浏览器开发者工具：
-- Network：查看API请求
-- Console：查看日志输出
-- Vue DevTools：查看组件状态
+- 浏览器 DevTools → Network / Console
+- Vue DevTools 查看组件状态
 
-### 数据库查看
+### 数据库
 ```bash
 cd backend
 sqlite3 apaas_builder.db
 .tables
-SELECT * FROM users;
-```
-
-## 常见问题
-
-### 1. 端口被占用
-修改配置：
-- 后端：`backend/.env` 中的 `PORT`
-- 前端：`frontend/vite.config.ts` 中的 `server.port`
-
-### 2. 依赖安装失败
-```bash
-# 后端
-cd backend
-pip install --upgrade pip
-pip install -r requirements.txt
-
-# 前端
-cd frontend
-rm -rf node_modules package-lock.json
-npm install
-```
-
-### 3. 数据库错误
-删除数据库文件重新初始化：
-```bash
-rm backend/apaas_builder.db
-# 重启后端服务
 ```

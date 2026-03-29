@@ -4,15 +4,16 @@ const i=new Ei(qi.defaultChatAgent?.extensionId??"apaas-builder.minimax-chat-pro
 const n=async()=>{
 const y=globalThis;
 if(y.__apaasMiniMaxDynamicAgentDisposer)return;
+if(!y.__apaasModelSelector){let _sm=null;try{_sm=localStorage.getItem("apaas-selected-model")}catch{}y.__apaasModelSelector={models:[],selected:_sm,loaded:!1,injected:!1};}
 const S={
-id:qi.defaultChatAgent?.provider?.default?.id??"minimax",
-name:"minimax",
-fullName:"MiniMax",
-description:"MiniMax AI assistant",
+id:qi.defaultChatAgent?.provider?.default?.id??"ai-coding",
+name:"ai-coding",
+fullName:"睿鲸AI",
+description:"睿鲸AI Coding Assistant",
 extensionId:i,
 extensionVersion:"0.6.0",
 publisherDisplayName:"aPaaS Builder",
-extensionDisplayName:"MiniMax Chat Provider",
+extensionDisplayName:"睿鲸AI Coding",
 isDefault:!0,
 isCore:!1,
 canAccessPreviousChatHistory:!0,
@@ -84,7 +85,7 @@ const ee=(vibeContextState.apiBase||this.M.getValue("minimax.apiBase")||"").repl
 const ae=vibeContextState.ideToken||"";
 const se=this.M.getValue("minimax.apiKey")||"";
 const Ae=(ae?[be,ee]:[ee]).map(T=>(T||"").replace(/\/$/,"")).filter(Boolean).filter((T,ie,oe)=>oe.indexOf(T)===ie);
-const de=vibeContextState.model||this.M.getValue("minimax.model")||"MiniMax-M2.7";
+const de=y.__apaasModelSelector?.selected||vibeContextState.model||this.M.getValue("minimax.model")||"MiniMax-M2.7";
 console.log("[PATCH] endpoints:",Ae,"hasToken:",!!ae,"hasKey:",!!se);
 const ye=async(T,ie)=>{
 let oe;
@@ -276,12 +277,20 @@ return Array.from(ie);
 };
 const VIBE_STATUS_QUERY=T=>/^(修复了吗|改好了吗|处理好了吗|好了没|搞定了吗|行了吗|还有问题吗|是不是好了|现在好了吗)[？?！!。.\s]*$/i.test((T||"").trim());
 const VIBE_DIAG_QUERY=T=>/(看(到|下|一下)?|分析|解释|排查|定位|诊断|说出|判断).*(截图|报错|错误|控制台|日志|console)|根据.*截图|最关键的报错|主报错|根因/i.test(T||"");
-const VIBE_EDIT_REQUEST=T=>/(修改|改成|改为|调整|修复|优化|新增|补充|完善|继续补|重构|实现(?!思路)|生成(?!思路)|创建(?!工作区)|删除|替换|补齐|改下|写入|写到|写个|写一个|帮我写|帮写|编写|加上|加一下|加个|添加|加入|加到|加注释|加注|fix|update|edit|change|modify|write|implement|add|refactor)/i.test(T||"");
-const We=T=>{
-const ie=(T||"").trim();
-if(!ie||VIBE_STATUS_QUERY(ie))return!1;
-if(VIBE_DIAG_QUERY(ie)&&!/请|直接|帮我|麻烦|顺手/i.test(ie))return!1;
-return VIBE_EDIT_REQUEST(ie);
+const VIBE_EDIT_REQUEST=T=>/(修改|改成|改为|改一下|改下|直接改|帮改|调整|修复|优化|新增|补充|完善|继续补|重构|实现(?!思路)|生成(?!思路)|创建(?!工作区)|删除|替换|补齐|写入|写到|写个|写一个|帮我写|帮写|编写|加上|加一下|加个|添加|加入|加到|加注释|加注|去改|去写|去加|做一下|搞一下|弄一下|fix|update|edit|change|modify|write|implement|add|refactor)/i.test(T||"");
+const _classifyIntent=async(userMsg,history)=>{
+const _cmsgs=[{role:"system",content:"你是意图分类器。判断用户是否需要修改/创建/删除代码文件。只回一个词 EDIT 或 CHAT，不要解释。\nEDIT：修改代码、写代码、加功能、修bug、重构、删除文件、应用之前建议的改动\nCHAT：提问、讨论、分析、看代码、解释代码、了解信息"}];
+const _lastQ=history&&history.length>0?history[history.length-1]:null;
+if(_lastQ){const _lq=fe(ue(_lastQ?.request?.message)||ue(_lastQ?.request?.prompt)||"");const _la=fe(ue(_lastQ?.response));if(_lq)_cmsgs.push({role:"user",content:_lq.slice(0,200)});if(_la)_cmsgs.push({role:"assistant",content:_la.slice(0,300)});}
+_cmsgs.push({role:"user",content:userMsg.slice(0,500)});
+try{
+const _cr=await ye("/chat/completions",{method:"POST",body:JSON.stringify({model:de,messages:_cmsgs,stream:!1,max_tokens:10})});
+if(!_cr||!_cr.ok)return!1;
+const _cj=await _cr.json();
+const _ct=(_cj?.choices?.[0]?.message?.content||"").trim().toUpperCase();
+console.log("[PATCH] intent classification:",_ct,"for:",userMsg.slice(0,60));
+return _ct.startsWith("EDIT");
+}catch(_ce){console.warn("[PATCH] classify intent failed",_ce);return!1;}
 };
 const Ee=T=>{
 let ie=fe(T||"");
@@ -494,7 +503,11 @@ console.warn("[PATCH] apply edit plan failed",ie);
 return{applied:[],skipped:[{path:"",reason:ie?.message||"Failed to apply edit plan"}]};
 }
 };
-if(We(rt)){
+let _isEdit=!1;
+if(!rt||VIBE_STATUS_QUERY(rt)||(VIBE_DIAG_QUERY(rt)&&!/请|直接|帮我|麻烦|顺手/i.test(rt))){_isEdit=!1;}
+else if(VIBE_EDIT_REQUEST(rt)){_isEdit=!0;}
+else{P([{kind:"markdownContent",content:new we("正在分析请求...\n")}]);_isEdit=await _classifyIntent(rt,Q);}
+if(_isEdit){
 P([{kind:"markdownContent",content:new we("正在分析代码并生成修改方案...\n")}]);
 let T=await Et();
 if(T?.error&&/invalid edit plan/i.test(T.error)){
@@ -651,6 +664,97 @@ return Ci?{timings:{firstProgress:Ii,totalElapsed:Date.now()-te}}:{errorDetails:
 y.__apaasMiniMaxDynamicAgentDisposer=this.L.registerDynamicAgent(S,k);
 y.__apaasMiniMaxHandler=k;
 console.log("[PATCH] registered MiniMax dynamic agent fallback");
+if(!y.__apaasModelSelectorInit){
+y.__apaasModelSelectorInit=!0;
+const _msCSS=`.apaas-model-bar{display:flex;align-items:center;padding:2px 8px 4px 8px;position:relative;}.apaas-model-btn{display:inline-flex;align-items:center;gap:4px;background:none;border:1px solid transparent;border-radius:4px;color:var(--vscode-descriptionForeground);font-size:11px;cursor:pointer;padding:2px 6px;font-family:inherit;}.apaas-model-btn:hover{background:var(--vscode-toolbar-hoverBackground);color:var(--vscode-foreground);}.apaas-model-btn .codicon{font-size:10px;}.apaas-model-dropdown{display:none;position:absolute;bottom:100%;left:4px;min-width:220px;max-height:320px;overflow-y:auto;background:var(--vscode-menu-background,var(--vscode-quickInput-background));border:1px solid var(--vscode-menu-border,var(--vscode-widget-border));border-radius:6px;box-shadow:0 2px 8px rgba(0,0,0,0.3);padding:4px 0;z-index:9999;margin-bottom:4px;}.apaas-model-dropdown.open{display:block;}.apaas-model-item{display:flex;align-items:center;padding:6px 12px;cursor:pointer;font-size:12px;color:var(--vscode-foreground);gap:8px;}.apaas-model-item:hover{background:var(--vscode-list-hoverBackground);}.apaas-model-item .check{width:16px;text-align:center;color:var(--vscode-terminal-ansiGreen,#89d185);font-size:13px;flex-shrink:0;}.apaas-model-item .mname{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}.apaas-model-item .mprov{font-size:10px;color:var(--vscode-descriptionForeground);flex-shrink:0;}`;
+const _msFetchModels=async()=>{
+if(y.__apaasModelSelector.loaded)return;
+try{
+const _loc=new URL(globalThis.location?.href||"http://localhost/");
+const _bp=(_loc.pathname||"").replace(/\/+$/,"");
+const _ap=_bp.endsWith("/ide")?_bp.slice(0,-4):"";
+const _wsId=_loc.searchParams.get("vibe_workspace_id")||"";
+const _ideToken=_loc.searchParams.get("vibe_ide_token")||"";
+const _apiBase=(_loc.searchParams.get("vibe_api_base")||"").replace(/\/$/,"");
+const _urls=[_wsId&&_ap?`${_loc.origin}${_ap}/api/coding/workspace/${_wsId}/ide/models`:null,_apiBase?`${_apiBase}/models`:null,_ap?`${_loc.origin}${_ap}/api/coding/models`:null,`${_loc.origin}/api/coding/models`].filter(Boolean);
+const _hdrs={"Content-Type":"application/json",...(_ideToken?{"X-Vibe-IDE-Token":_ideToken}:{})};
+let _mr=null;
+for(const _u of _urls){try{const _r=await fetch(_u,{headers:_hdrs});if(_r.ok){_mr=_r;break;}}catch{}}
+if(_mr){const _mj=await _mr.json();if(_mj&&Array.isArray(_mj.models)){y.__apaasModelSelector.models=_mj.models;}}
+y.__apaasModelSelector.loaded=!0;
+}catch(_e){console.warn("[PATCH] fetch models failed",_e);y.__apaasModelSelector.loaded=!0;}
+};
+const _msInject=()=>{
+if(y.__apaasModelSelector.injected&&document.querySelector(".apaas-model-bar"))return;
+y.__apaasModelSelector.injected=!1;
+const _ip=document.querySelector(".interactive-input-part");
+if(!_ip)return;
+const _old=_ip.querySelector(".apaas-model-bar");
+if(_old)_old.remove();
+if(!document.getElementById("apaas-model-selector-styles")){const _st=document.createElement("style");_st.id="apaas-model-selector-styles";_st.textContent=_msCSS;document.head.appendChild(_st);}
+const _bar=document.createElement("div");_bar.className="apaas-model-bar";
+const _btn=document.createElement("button");_btn.className="apaas-model-btn";_btn.type="button";
+const _dd=document.createElement("div");_dd.className="apaas-model-dropdown";
+const _urlModel=(()=>{try{return new URL(globalThis.location?.href||"").searchParams.get("vibe_model")||"";}catch{return"";}})();
+const _defModel=_urlModel||"MiniMax-M2.7";
+const _updateBtn=()=>{
+const _sel=y.__apaasModelSelector.selected||_defModel;
+const _m=y.__apaasModelSelector.models.find(m=>m.id===_sel);
+const _label=_m?_m.name:_sel;
+_btn.innerHTML=`<span class="codicon codicon-hubot"></span> ${_label.replace(/</g,"&lt;")} <span class="codicon codicon-chevron-up"></span>`;
+};
+const _renderDD=()=>{
+_dd.innerHTML="";
+const _sel=y.__apaasModelSelector.selected||_defModel;
+y.__apaasModelSelector.models.forEach(m=>{
+const _it=document.createElement("div");_it.className="apaas-model-item";
+_it.innerHTML=`<span class="check">${m.id===_sel?"&#10003;":""}</span><span class="mname">${(m.name||m.id).replace(/</g,"&lt;")}</span><span class="mprov">${(m.provider||"").replace(/</g,"&lt;")}</span>`;
+_it.addEventListener("click",ev=>{ev.stopPropagation();y.__apaasModelSelector.selected=m.id;try{localStorage.setItem("apaas-selected-model",m.id)}catch{}_dd.classList.remove("open");_updateBtn();_renderDD();});
+_dd.appendChild(_it);
+});
+};
+_btn.addEventListener("click",ev=>{ev.stopPropagation();if(_dd.classList.toggle("open"))_renderDD();});
+document.addEventListener("click",()=>{_dd.classList.remove("open");});
+_updateBtn();
+_bar.appendChild(_btn);_bar.appendChild(_dd);
+_ip.appendChild(_bar);
+y.__apaasModelSelector.injected=!0;
+y.__apaasModelSelector.updateLabel=_updateBtn;
+};
+_msFetchModels().then(()=>{
+const _tryInject=()=>{_msInject();if(!y.__apaasModelSelector.injected)setTimeout(_tryInject,500);};
+_tryInject();
+});
+const _msObs=new MutationObserver(()=>{if(y.__apaasModelSelector.injected&&!document.querySelector(".apaas-model-bar")){y.__apaasModelSelector.injected=!1;_msInject();}});
+_msObs.observe(document.body,{childList:!0,subtree:!0});
+// ---- Auto-send initial message from vibe_context ----
+if(vibeContextState.context&&!y.__apaasAutoSent){
+y.__apaasAutoSent=!0;
+let _msg=vibeContextState.context;
+const _um=_msg.match(/^用户[:：]\s*(.+)/s);
+if(_um)_msg=_um[1].trim();
+if(_msg){
+let _asTries=0;
+const _autoSend=()=>{
+_asTries++;
+// Wait until trust dialog is dismissed and chat input is interactive
+const _trustDlg=document.querySelector(".dialog-box,.monaco-dialog-box");
+if(_trustDlg){if(_asTries<60){setTimeout(_autoSend,1000);}return;}
+const _ta=document.querySelector(".interactive-input-editor .monaco-editor textarea,.interactive-input-editor textarea");
+if(!_ta||!_ta.offsetParent){if(_asTries<60){setTimeout(_autoSend,1000);}return;}
+_ta.focus();
+document.execCommand("insertText",!1,_msg);
+_ta.dispatchEvent(new Event("input",{bubbles:!0}));
+setTimeout(()=>{
+const _sb=document.querySelector(".interactive-input-part .codicon-send")||document.querySelector(".interactive-input-part [aria-label*='end']");
+if(_sb){_sb.click();console.log("[PATCH] auto-sent initial message");}
+else{_ta.dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",code:"Enter",keyCode:13,bubbles:!0}));console.log("[PATCH] auto-sent via Enter");}
+},500);
+};
+setTimeout(_autoSend,2000);
+}
+}
+}
 };
 for(let o=0;o<50;o++){
 const r=await this.G.getExtension(i),a=this.L.getContributedDefaultAgent(e)??this.L.getContributedDefaultAgent(At.Chat);
@@ -658,7 +762,7 @@ if(r||a)break;
 await new Promise(l=>setTimeout(l,100));
 }
 let t=this.L.getContributedDefaultAgent(e)??this.L.getContributedDefaultAgent(At.Chat);
-t||(t={id:qi.defaultChatAgent?.provider?.default?.id??"minimax",extensionId:i,isCore:!1,locations:[e],modes:[Si.Ask]});
+t||(t={id:qi.defaultChatAgent?.provider?.default?.id??"ai-coding",extensionId:i,isCore:!1,locations:[e],modes:[Si.Ask]});
 if(!t.isCore){
 try{
 await this.G.activateById(t.extensionId,{activationEvent:"onChatParticipant:"+t.id,extensionId:t.extensionId,startup:!1});

@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Optional, Annotated, AsyncIterator, Any
 from urllib.parse import urlencode, urlparse
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Request, Header
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Request, Header, Response
 from fastapi.responses import StreamingResponse, JSONResponse
 from jose import JWTError, jwt
 from pydantic import BaseModel
@@ -565,6 +565,7 @@ class AutoPipelineRequest(BaseModel):
     app_id: Optional[str] = None           # aPaaS 应用ID (deprecated, use project_id)
     project_id: Optional[int] = None       # 关联项目ID（优先使用项目的平台配置）
     project_type: Optional[str] = None     # 前端指定的项目类型（menu-page 等）
+    quick_create: bool = False             # 快速模式：只创建工作区+脚手架，跳过 agent/install/serve
 
 
 # ============================================================
@@ -1018,11 +1019,11 @@ async def get_workspace_ide_url(
         if conv:
             effective_conversation_id = conv.id
 
-    ide_workspace_file = _ensure_vibe_workspace_file(ws_path)
+    _ensure_vibe_workspace_file(ws_path)  # 仍然生成 workspace 文件（保留 exclude 配置）
     ide_token = _create_ide_access_token(ctx, ws_id)
     api_base = _build_ide_proxy_api_base(request, ws_id)
     query_params = {
-        "workspace": str(ide_workspace_file.resolve()),
+        "folder": str(ws_path.resolve()),  # 用 folder 替代 workspace，更可靠地打开目录
         "vibe_workspace_id": ws_id,
         "vibe_api_base": api_base,
         "vibe_ide_token": ide_token,
@@ -1047,6 +1048,20 @@ class IDEImageOCRItem(BaseModel):
 
 class IDEImageOCRRequest(BaseModel):
     images: list[IDEImageOCRItem] = []
+
+
+@router.get("/models")
+async def ide_available_models_simple():
+    """返回可用的 Coding 模型列表（无需 workspace 认证，供 Chat 面板模型选择器使用）"""
+    if not _CODING_MODEL_ROUTES:
+        _init_coding_model_routes()
+    models = []
+    for key, route in _CODING_MODEL_ROUTES.items():
+        if key == "default":
+            models.append({"id": settings.llm_model, "name": f"MiniMax ({settings.llm_model})", "provider": "minimax"})
+        else:
+            models.append({"id": route.get("model", key), "name": f"{key.title()} ({route.get('model', key)})", "provider": key})
+    return {"models": models}
 
 
 @router.get("/workspace/{ws_id}/ide/models")
@@ -1097,6 +1112,10 @@ async def ide_chat_completions_proxy(
         "Authorization": f"Bearer {api_key}",
     }
     stream = bool(payload.get("stream"))
+
+    # 清理不兼容参数：tool_choice 在没有 tools 时部分模型会报错
+    if "tool_choice" in payload and "tools" not in payload:
+        payload.pop("tool_choice", None)
 
     # Codex 模型走 /responses 端点（非 chat/completions），需要格式转换
     model_name = (payload.get("model") or "").lower()
@@ -1463,7 +1482,7 @@ def _build_workspace_context(ws_id: str) -> dict:
         elif project_type in {"menu-page", "form-page", "mobile-page"}:
             key_extensions = ('.vue', '.js')
             key_names = ('apaas.json', 'index.js')
-        elif project_type == "backend-api":
+        elif project_type in {"backend-api", "backend-feign", "backend-scheduled"}:
             key_extensions = ('.java', '.xml', '.yml', '.yaml', '.properties', '.md')
             key_names = ('pom.xml', 'application.yml', 'application.yaml', 'application.properties')
         else:
@@ -1639,6 +1658,7 @@ workspace_mgr = WorkspaceManager()
 @router.post("/auto-pipeline")
 async def auto_pipeline(
     req: AutoPipelineRequest,
+    request: Request,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
@@ -1860,6 +1880,49 @@ async def auto_pipeline(
                                 "project_name": meta["project_name"],
                                 "display_name": meta.get("display_name", meta["project_name"]),
                             }})
+
+            # ---- quick_create 快速模式：只创建工作区，跳过 agent/install/serve ----
+            if req.quick_create:
+                # 创建对话记录
+                if not conversation_id:
+                    conv = Conversation(
+                        title=req.message[:50],
+                        user_id=user.id,
+                        tenant_id=ctx.tenant_id,
+                        agent_type="coding",
+                        workspace_id=ws_id,
+                    )
+                    db.add(conv)
+                    await db.commit()
+                    await db.refresh(conv)
+                    conversation_id = conv.id
+                await _save_coding_message(db, conversation_id, "user", req.message)
+
+                # 生成 IDE URL
+                ide_url = None
+                try:
+                    ws_path = ws_mgr.get_workspace_path(ws_id)
+                    _ensure_vibe_workspace_file(ws_path)
+                    ide_token = _create_ide_access_token(ctx, ws_id)
+                    api_base = _build_ide_proxy_api_base(request, ws_id)
+                    query_params = {
+                        "folder": str(ws_path.resolve()),
+                        "vibe_workspace_id": ws_id,
+                        "vibe_api_base": api_base,
+                        "vibe_ide_token": ide_token,
+                        "vibe_model": settings.llm_model,
+                        "vibe_conversation_id": str(conversation_id),
+                        "vibe_context": f"用户: {req.message[:500]}",
+                    }
+                    base_url = settings.code_server_base_url
+                    if base_url:
+                        ide_url = f"{base_url.rstrip('/')}/?{urlencode(query_params)}"
+                except Exception as e:
+                    logger.warning(f"快速模式生成 IDE URL 失败: {e}")
+
+                yield _sse({"type": "done", "workspace_id": ws_id,
+                            "conversation_id": conversation_id, "ide_url": ide_url})
+                return
 
             # ---- Step 3: 生成代码（Agent 模式）----
             yield _sse({"type": "step", "step": "generate", "status": "running"})

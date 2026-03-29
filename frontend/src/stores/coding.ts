@@ -110,14 +110,26 @@ export const useCodingStore = defineStore('coding', () => {
     messages.value = nextMessages
   }
 
-  function initPipelineSteps(isNewWorkspace: boolean) {
+  // 后端/脚本类项目不需要 npm install 和 dev server
+  const NO_NPM_PROJECT_TYPES = new Set([
+    'backend-api', 'backend-feign', 'backend-scheduled',
+    'script', 'script-js', 'script-python', 'script-groovy',
+  ])
+
+  function initPipelineSteps(isNewWorkspace: boolean, projectType?: string | null) {
+    const needsNpm = !projectType || !NO_NPM_PROJECT_TYPES.has(projectType)
     if (isNewWorkspace) {
-      currentPipelineSteps.value = [
+      const steps: PipelineStep[] = [
         { name: 'create_workspace', label: '创建工作区', status: 'pending' },
         { name: 'generate', label: '生成代码', status: 'pending' },
-        { name: 'install', label: '安装依赖', status: 'pending' },
-        { name: 'serve', label: '启动服务', status: 'pending' },
       ]
+      if (needsNpm) {
+        steps.push(
+          { name: 'install', label: '安装依赖', status: 'pending' },
+          { name: 'serve', label: '启动服务', status: 'pending' },
+        )
+      }
+      currentPipelineSteps.value = steps
     } else {
       currentPipelineSteps.value = [
         { name: 'generate', label: '生成代码', status: 'pending' },

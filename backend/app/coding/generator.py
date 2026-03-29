@@ -149,6 +149,7 @@ class CodingGenerator:
             project_type = (workspace_context.get("project_type", "") or "").lower()
             if project_type in {"form-component", "mobile-component"}:
                 ws_str += "- **必须输出所有7个场景的 .vue 组件文件**（edit、read、ide、list、print、search、search-ide）和 setting.vue\n"
+                ws_str += "- **必须同时输出 widget.config.js**，根据组件用途设置正确的 componentModelField 和 frontBusinessObjectComponentType（日期类用 DATE，数字类用 NUMBER，文本类用 TEXT）\n"
                 ws_str += "- edit/read/ide.vue 与 setting.vue 的 customComponentConfig 读写路径必须一致\n"
             elif project_type == "layout":
                 ws_str += "- **布局项目通常只需要 Home.vue、index.js、apaas.json 以及必要的子组件**，不要套用表单组件的 7 场景规则\n"
@@ -163,8 +164,8 @@ class CodingGenerator:
             elif project_type == "plugin":
                 ws_str += "- 插件项目应遵循 `FRONTEND_PLUGIN` 协议，重点修改 admin.js/app.js/mobile.js、extension.js、tab-config.js\n"
                 ws_str += "- 默认导出对象必须包含 install、activate、staticComponents\n"
-            elif project_type == "backend-api":
-                ws_str += "- 后端项目输出接口、Service、DTO、配置等后端文件；不要输出 Vue 组件文件\n"
+            elif project_type in {"backend-api", "backend-feign", "backend-scheduled"}:
+                ws_str += "- 后端项目输出 Java 文件（Controller/Service/Dao/DTO/Task 等）；不要输出 Vue 组件文件\n"
             ws_str += "- .vue / .java / .py 文件中不要留 TODO 占位符，要实现完整的功能逻辑\n"
             ws_str += "- **禁止修改 package.json 添加私有包**（如 babel-preset-definesys、df-apaas-cli 等）。如需第三方库（如 echarts），只能添加 npm 公共 registry 上的包\n"
             ws_str += "- 先用简短的一段话说明实现方案，然后立即开始输出代码文件\n"
@@ -322,6 +323,8 @@ class CodingGenerator:
 - mobile_component: 移动端自开发组件
 - mobile_page: 移动端自开发页面
 - backend_api: 后端自开发接口（SpringBoot接口）
+- backend_feign: 后端外部调用（FeignClient 调用外部 HTTP 接口）
+- backend_scheduled: 后端定时任务（Spring @Scheduled 定时任务）
 - script_js: JavaScript脚本扩展（业务事件JS脚本）
 - script_python: Python脚本扩展（业务事件Python脚本）
 - script_groovy: Groovy脚本扩展（业务事件Groovy脚本）
