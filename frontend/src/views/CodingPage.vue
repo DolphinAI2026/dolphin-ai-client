@@ -1,7 +1,7 @@
 <template>
   <div class="coding-page">
-    <!-- Header -->
-    <header class="coding-header">
+    <!-- Header (嵌入模式隐藏) -->
+    <header v-if="!embeddedAppId" class="coding-header">
       <div class="header-left">
         <el-button text @click="$router.push('/chat')">
           <el-icon><ArrowLeft /></el-icon>
@@ -20,14 +20,15 @@
       <div class="header-right">
         <ThemeToggle />
         <template v-if="codingStore.workspace">
-          <el-button
+          <!-- 调试功能暂时隐藏 -->
+          <!-- <el-button
             size="small"
             class="header-btn"
             @click="showEnvPicker = true; loadPlatformEnvs()"
             title="浏览器预览"
           >
             <el-icon><Monitor /></el-icon>
-          </el-button>
+          </el-button> -->
           <el-button
             size="small"
             type="success"
@@ -288,7 +289,12 @@ const ideUrl = ref<string | null>(null)
 const ideLoaded = ref(false)
 const isCreating = ref(false)
 const creatingStatus = ref('正在创建工作区...')
-const existingWorkspaces = ref<WorkspaceInfo[]>([])
+const allWorkspaces = ref<WorkspaceInfo[]>([])
+const embeddedAppId = computed(() => (route.query.app_id as string) || '')
+const existingWorkspaces = computed(() => {
+  if (!embeddedAppId.value) return allWorkspaces.value
+  return allWorkspaces.value.filter((ws: any) => String(ws.project_id || '') === embeddedAppId.value)
+})
 const isDownloading = ref(false)
 const sidebarCollapsed = ref(false)
 
@@ -464,7 +470,7 @@ const sceneCategoryToProjectType: Record<string, string> = {
 
 onMounted(async () => {
   try {
-    existingWorkspaces.value = await codingApi.listWorkspaces()
+    allWorkspaces.value = await codingApi.listWorkspaces()
   } catch (e) {
     console.error('\u83B7\u53D6\u5DE5\u4F5C\u533A\u5217\u8868\u5931\u8D25:', e)
   }
@@ -522,7 +528,7 @@ function startNewWorkspace() {
 async function deleteWorkspace(ws: WorkspaceInfo) {
   try {
     await codingApi.deleteWorkspace(ws.id)
-    existingWorkspaces.value = existingWorkspaces.value.filter(w => w.id !== ws.id)
+    allWorkspaces.value = allWorkspaces.value.filter(w => w.id !== ws.id)
     if (codingStore.workspace?.id === ws.id) {
       codingStore.reset()
       ideUrl.value = null
@@ -636,6 +642,7 @@ async function sendMessage() {
       workspace_id: codingStore.workspace?.id || null,
       conversation_id: codingStore.conversationId || null,
       app_id: (route.query.app_id as string) || null,
+      project_id: embeddedAppId.value ? Number(embeddedAppId.value) : null,
       project_type: _projectType,
       quick_create: true,
     }
@@ -671,7 +678,7 @@ async function sendMessage() {
             codingStore.workspacePath = parsed.data.workspace_path || null
             localStorage.setItem('coding_last_workspace_id', wsData.id)
             creatingStatus.value = '\u5DE5\u4F5C\u533A\u5DF2\u521B\u5EFA\uFF0C\u6B63\u5728\u542F\u52A8 IDE...'
-            try { existingWorkspaces.value = await codingApi.listWorkspaces() } catch {}
+            try { allWorkspaces.value = await codingApi.listWorkspaces() } catch {}
           } else if (parsed.step === 'create_workspace' && parsed.status === 'running') {
             creatingStatus.value = '\u6B63\u5728\u521B\u5EFA\u5DE5\u4F5C\u533A...'
           }
@@ -707,7 +714,7 @@ async function sendMessage() {
 
     // Refresh workspace list
     if (codingStore.workspace) {
-      try { existingWorkspaces.value = await codingApi.listWorkspaces() } catch {}
+      try { allWorkspaces.value = await codingApi.listWorkspaces() } catch {}
     }
 
   } catch (error: any) {

@@ -4762,582 +4762,54 @@ export default {{
 """)
 
     def _scaffold_backend_api(self, ws_path: Path, name: str):
-        """后端接口脚手架（Java/SpringBoot）— 对齐 aPaaS 后端自开发标准模板（MpaaS/倚天框架）"""
-        # 模块名和类名
+        """后端接口脚手架 — 从 backend/templates/backend-api 模板目录生成"""
         module_name = name.replace("backend-api-", "")
         pkg_path = module_name.replace("-", "")
         class_prefix = "".join(p.capitalize() for p in module_name.split("-"))
+        replacements = {
+            "{basePackage}": pkg_path,
+            "{class_prefix}": class_prefix,
+            "{module_name}": module_name,
+        }
+        self._scaffold_from_template(ws_path, "backend-api", replacements)
+
+    def _scaffold_backend_feign(self, ws_path: Path, name: str):
+        """FeignClient 外部调用脚手架 — 复用 backend-api 模板 + 追加 Feign 特有文件"""
+        module_name = name.replace("backend-feign-", "")
+        pkg_path = module_name.replace("-", "")
+        class_prefix = "".join(p.capitalize() for p in module_name.split("-"))
         base_pkg = f"src/main/java/com/xdap/{pkg_path}"
+        field_name = module_name.replace("-", "")
 
-        # ======== pom.xml — 对齐标准模板（MpaaS 框架） ========
-        self._write(ws_path, "pom.xml", f"""<?xml version="1.0" encoding="UTF-8"?>
-<project xmlns="http://maven.apache.org/POM/4.0.0"
-         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
-    <modelVersion>4.0.0</modelVersion>
+        # 复用基础模板（.claude/rules, .claude/skills, examples, pom.xml, 基础类）
+        replacements = {
+            "{basePackage}": pkg_path,
+            "{class_prefix}": class_prefix,
+            "{module_name}": module_name,
+        }
+        self._scaffold_from_template(ws_path, "backend-api", replacements)
 
-    <parent>
-        <groupId>org.springframework.boot</groupId>
-        <artifactId>spring-boot-starter-parent</artifactId>
-        <version>2.2.7.RELEASE</version>
-        <relativePath/>
-    </parent>
-
-    <groupId>com.xdap</groupId>
-    <artifactId>{name}</artifactId>
-    <version>0.0.1</version>
-    <name>{name}</name>
-
-    <properties>
-        <java.version>1.8</java.version>
-        <spring-cloud-alibaba.version>2.2.1.RELEASE</spring-cloud-alibaba.version>
-        <spring-cloud.version>Hoxton.SR4</spring-cloud.version>
-        <papaas.version>4.1.1</papaas.version>
-    </properties>
-
-    <dependencies>
-        <dependency>
-            <groupId>com.xdap</groupId>
-            <artifactId>motor-spring-boot-starter</artifactId>
-            <version>1.2.8-RELEASE</version>
-            <exclusions>
-                <exclusion><artifactId>snakeyaml</artifactId><groupId>org.yaml</groupId></exclusion>
-                <exclusion><artifactId>spring-beans</artifactId><groupId>org.springframework</groupId></exclusion>
-                <exclusion><artifactId>spring-context</artifactId><groupId>org.springframework</groupId></exclusion>
-            </exclusions>
-        </dependency>
-        <dependency><groupId>org.yaml</groupId><artifactId>snakeyaml</artifactId><version>2.0</version></dependency>
-        <dependency>
-            <groupId>com.xdap</groupId>
-            <artifactId>app</artifactId>
-            <version>${{papaas.version}}</version>
-            <exclusions>
-                <exclusion><artifactId>azure-spring-boot-starter-storage</artifactId><groupId>com.azure.spring</groupId></exclusion>
-            </exclusions>
-        </dependency>
-        <dependency>
-            <groupId>com.xdap</groupId>
-            <artifactId>runtime</artifactId>
-            <version>${{papaas.version}}</version>
-            <exclusions>
-                <exclusion><artifactId>app</artifactId><groupId>com.xdap</groupId></exclusion>
-            </exclusions>
-        </dependency>
-    </dependencies>
-
-    <repositories>
-        <repository>
-            <id>dcloud-public</id>
-            <url>https://registry.dfy.definesys.cn/repository/maven-public/</url>
-        </repository>
-    </repositories>
-
-    <profiles>
-        <profile>
-            <id>single</id>
-            <build>
-                <plugins>
-                    <plugin><groupId>org.springframework.boot</groupId><artifactId>spring-boot-maven-plugin</artifactId></plugin>
-                </plugins>
-                <resources><resource><directory>src/main/resources</directory></resource></resources>
-            </build>
-        </profile>
-        <profile>
-            <id>lib</id>
-            <build>
-                <resources>
-                    <resource>
-                        <directory>src/main/resources</directory>
-                        <excludes><exclude>**/*.properties</exclude><exclude>**/*.yml</exclude></excludes>
-                    </resource>
-                </resources>
-            </build>
-        </profile>
-    </profiles>
-
-    <dependencyManagement>
-        <dependencies>
-            <dependency><groupId>org.springframework.cloud</groupId><artifactId>spring-cloud-dependencies</artifactId><version>${{spring-cloud.version}}</version><type>pom</type><scope>import</scope></dependency>
-            <dependency><groupId>com.alibaba.cloud</groupId><artifactId>spring-cloud-alibaba-dependencies</artifactId><version>${{spring-cloud-alibaba.version}}</version><type>pom</type><scope>import</scope></dependency>
-        </dependencies>
-    </dependencyManagement>
-</project>
-""")
-
-        # ======== application.properties ========
-        self._write(ws_path, "src/main/resources/application.properties", f"""# aPaaS 平台配置（根据实际环境修改）
-apaas.single.tenantId=your_tenant_id
-""")
-
-        # ======== 启动类 ========
-        self._write(ws_path, f"{base_pkg}/Application.java", f"""package com.xdap.{pkg_path};
+        # 覆写 Application.java — 加 @EnableFeignClients
+        self._write(ws_path, f"{base_pkg}/Application.java", f"""\
+package com.xdap.{pkg_path};
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.cloud.openfeign.EnableFeignClients;
 import org.springframework.context.annotation.ComponentScan;
 
 @SpringBootApplication
-@ComponentScan(basePackages = {{"com.definesys.mpaas", "com.xdap.*"}})
+@EnableFeignClients
+@ComponentScan({{"com.definesys.mpaas", "com.xdap.*"}})
 public class Application {{
+
     public static void main(String[] args) {{
         SpringApplication.run(Application.class, args);
     }}
 }}
 """)
 
-        # ======== DatasourceUtil — MpaasQuery 数据源工具 ========
-        self._write(ws_path, f"{base_pkg}/config/DatasourceUtil.java", f"""package com.xdap.{pkg_path}.config;
-
-import com.definesys.mpaas.query.MpaasQuery;
-import com.xdap.api.constant.ApplicationConstant;
-import com.xdap.api.constant.DataSourceName;
-import com.xdap.runtime.service.RuntimeDatasourceService;
-import lombok.RequiredArgsConstructor;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.stereotype.Component;
-
-@Component
-@RequiredArgsConstructor
-public class DatasourceUtil {{
-
-    private final RuntimeDatasourceService runtimeDatasourceService;
-
-    @Value("${{apaas.single.tenantId}}")
-    private String tenantSchema;
-
-    /** 业务数据源（租户库） */
-    public MpaasQuery buildDefaultMpaasQuery() {{
-        return runtimeDatasourceService.buildTenantMpaasQuery(DataSourceName.MYSQL_PREFIX + tenantSchema);
-    }}
-
-    /** 平台数据源（管理库） */
-    public MpaasQuery buildPlatformMpaasQuery() {{
-        return runtimeDatasourceService.buildTenantMpaasQuery(ApplicationConstant.AdminSourceName);
-    }}
-
-    /** Activiti 流程数据源 */
-    public MpaasQuery buildDefaultActivitiMpaasQuery() {{
-        return runtimeDatasourceService.buildTenantMpaasQuery("xdap_activiti_" + tenantSchema);
-    }}
-}}
-""")
-
-        # ======== MainCommonPo — 实体基类 ========
-        self._write(ws_path, f"{base_pkg}/pojo/MainCommonPo.java", f"""package com.xdap.{pkg_path}.pojo;
-
-import com.definesys.mpaas.query.annotation.Column;
-import com.xdap.api.moudle.base.entity.NoTenBasePojo;
-import com.xdap.motor.entity.SnowflakeIdWorker;
-import lombok.Data;
-import org.springframework.stereotype.Component;
-
-import java.util.Date;
-
-/**
- * 实体基类 — 所有业务 Pojo 继承此类
- * 继承 NoTenBasePojo 获得 owner, created_by, creation_date 等系统字段
- */
-@Component
-@Data
-public class MainCommonPo extends NoTenBasePojo {{
-
-    private String id;
-
-    @Column("document_id")
-    private String documentId;
-
-    @Column("tab_doc_id")
-    private String tabDocId;
-
-    private String status;
-
-    @Column("tenant_id")
-    private String tenantId;
-
-    @Column("form_id")
-    private String formId;
-
-    @Column("process_id")
-    private String processId;
-
-    @Column("approver_id")
-    private String approverId;
-
-    /**
-     * 初始化系统字段（新增记录时必须调用）
-     */
-    public void setBaseField(String owner, String formId, SnowflakeIdWorker snowflakeIdWorker, String tenantId) {{
-        this.setId(snowflakeIdWorker.nextId());
-        this.setOwner(owner);
-        this.setCreatedBy(owner);
-        this.setLastUpdatedBy(owner);
-        this.setCreationDate(new Date());
-        this.setLastUpdateDate(new Date());
-        this.setFormId(formId);
-        if (this.documentId == null) {{
-            this.setDocumentId(snowflakeIdWorker.nextId());
-        }}
-        this.setStatus("COMPLETED");
-        this.setTenantId(tenantId);
-        this.setObjectVersionNumber(1);
-    }}
-}}
-""")
-
-        # ======== AllowUrlManageConfig — 接口白名单 ========
-        self._write(ws_path, f"{base_pkg}/config/AllowUrlManageConfig.java", f"""package com.xdap.{pkg_path}.config;
-
-import com.xdap.api.moudle.custom.AllowUrlManage;
-import org.springframework.stereotype.Component;
-
-import java.util.HashSet;
-import java.util.Set;
-
-@Component
-public class AllowUrlManageConfig implements AllowUrlManage {{
-
-    @Override
-    public Set<String> getCustomAllowUrls() {{
-        Set<String> urlSet = new HashSet<>();
-        // 需要免认证的接口路径在此添加
-        return urlSet;
-    }}
-}}
-""")
-
-        # ======== PageRequest — 通用分页请求 ========
-        self._write(ws_path, f"{base_pkg}/dto/PageRequest.java", f"""package com.xdap.{pkg_path}.dto;
-
-import lombok.Data;
-
-@Data
-public class PageRequest<T> {{
-
-    private static final int MAX_PAGE_SIZE = 2000;
-    private int pageSize;
-    private int page;
-    private String[] ascs;
-    private String[] descs;
-    private T condition;
-
-    public int getPageSize() {{
-        if (pageSize > MAX_PAGE_SIZE) return MAX_PAGE_SIZE;
-        return pageSize;
-    }}
-}}
-""")
-
-        # ======== 示例 Dao（语义化方法名，直接用 MpaasQuery） ========
-        self._write(ws_path, f"{base_pkg}/dao/{class_prefix}Dao.java", f"""package com.xdap.{pkg_path}.dao;
-
-import com.definesys.mpaas.query.MpaasQuery;
-import com.definesys.mpaas.query.model.PageQueryResult;
-import com.xdap.{pkg_path}.config.DatasourceUtil;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Component;
-import org.springframework.util.StringUtils;
-
-@Component
-@RequiredArgsConstructor
-@Slf4j
-public class {class_prefix}Dao {{
-
-    private final DatasourceUtil datasourceUtil;
-
-    // TODO: 根据业务需要添加语义化的数据访问方法
-    // 示例：
-    // public Employee getByEmployeeCode(String code) {{
-    //     if (!StringUtils.hasText(code)) return null;
-    //     return datasourceUtil.buildDefaultMpaasQuery()
-    //             .eq("employee_code", code)
-    //             .doQueryFirst(Employee.class);
-    // }}
-}}
-""")
-
-        # ======== 示例 Service 接口 ========
-        self._write(ws_path, f"{base_pkg}/service/{class_prefix}Service.java", f"""package com.xdap.{pkg_path}.service;
-
-/**
- * {class_prefix} 业务接口
- */
-public interface {class_prefix}Service {{
-    // TODO: 根据业务需要定义方法
-}}
-""")
-
-        # ======== 示例 Service 实现 ========
-        self._write(ws_path, f"{base_pkg}/service/impl/{class_prefix}ServiceImpl.java", f"""package com.xdap.{pkg_path}.service.impl;
-
-import com.xdap.{pkg_path}.dao.{class_prefix}Dao;
-import com.xdap.{pkg_path}.service.{class_prefix}Service;
-import com.xdap.motor.entity.SnowflakeIdWorker;
-import com.xdap.runtime.service.RuntimeAppContextService;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.stereotype.Service;
-
-@Service
-@RequiredArgsConstructor
-@Slf4j
-public class {class_prefix}ServiceImpl implements {class_prefix}Service {{
-
-    private final {class_prefix}Dao {pkg_path}Dao;
-    private final SnowflakeIdWorker snowflakeIdWorker;
-    private final RuntimeAppContextService appContextService;
-
-    @Value("${{apaas.single.tenantId}}")
-    private String tenantId;
-
-    // TODO: 实现业务方法
-    // 新增记录时必须调用 entity.setBaseField(currentUserId, formId, snowflakeIdWorker, tenantId)
-}}
-""")
-
-        # ======== 示例 Controller ========
-        self._write(ws_path, f"{base_pkg}/controller/{class_prefix}Controller.java", f"""package com.xdap.{pkg_path}.controller;
-
-import com.definesys.mpaas.common.http.Response;
-import com.xdap.{pkg_path}.service.{class_prefix}Service;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.web.bind.annotation.*;
-
-@RestController
-@RequestMapping("/custom/{module_name}")
-@RequiredArgsConstructor
-@Slf4j
-public class {class_prefix}Controller {{
-
-    private final {class_prefix}Service {pkg_path}Service;
-
-    // TODO: 添加接口方法
-    // 示例：
-    // @PostMapping("/query")
-    // public Response query(@RequestBody PageRequest<XxxQueryRequest> request) {{
-    //     return {pkg_path}Service.pageQuery(request);
-    // }}
-}}
-""")
-
-        # ======== .cursor/rules 开发指南 — 对齐标准模板 ========
-        self._write(ws_path, ".cursor/rules/backend-dev-guide.mdc", f"""---
-description: aPaaS 后端自开发规范（MpaaS/倚天框架）
-globs: ["**/*.java"]
----
-
-# aPaaS 后端自开发规范
-
-## 技术栈
-Java 8 + Spring Boot 2.2.7 + MpaaS(倚天) 框架
-
-## 包结构
-```
-com.xdap.{pkg_path}/
-├── controller/    — 接口层，只收发请求，不写业务逻辑
-├── service/       — 业务接口
-│   └── impl/      — 业务实现（校验、编排、异常）
-├── dao/           — 数据访问（单类无接口，直接用 MpaasQuery）
-├── pojo/          — 实体类（extends MainCommonPo）
-├── dto/           — 请求 DTO（@NotNull + @Validated）
-├── vo/            — 响应 VO
-├── enums/         — 异常枚举（implements BaseExceptionEnumInterface）
-├── config/        — DatasourceUtil, AllowUrlManageConfig
-└── client/        — FeignClient 外部调用
-```
-
-## 核心规范
-
-### 依赖注入 — 只用构造器注入
-```java
-@Service
-@RequiredArgsConstructor  // Lombok 自动生成构造器
-public class XxxServiceImpl implements XxxService {{
-    private final XxxDao xxxDao;              // final 字段
-    private final SnowflakeIdWorker idWorker; // final 字段
-}}
-```
-**禁止 @Autowired 字段注入！**
-
-### 数据库操作 — 直接用 MpaasQuery
-```java
-// 通过 DatasourceUtil 获取 MpaasQuery
-MpaasQuery query = datasourceUtil.buildDefaultMpaasQuery();
-
-// 链式查询
-query.eq("status", "ACTIVE")
-     .like("name", keyword)
-     .orderBy("creation_date", "desc")
-     .doQuery(Employee.class);
-
-// 分页
-PageQueryResult result = query.doPageQuery(page, pageSize, Entity.class);
-
-// 插入
-datasourceUtil.buildDefaultMpaasQuery().doInsert(entity);
-
-// 更新
-datasourceUtil.buildDefaultMpaasQuery().eq("id", id).doUpdate(entity);
-
-// 动态 SQL（禁止字符串拼接，用 #paramName）
-MpaasQuery q = datasourceUtil.buildDefaultMpaasQuery();
-StringBuilder sql = new StringBuilder("SELECT * FROM t_xxx WHERE 1=1");
-if (StringUtils.hasText(name)) {{
-    sql.append(" AND name = #name");
-    q.setVar("name", name);
-}}
-List<Map<String, Object>> rows = q.sql(sql.toString()).doQuery();
-```
-**禁止封装 commonQuery/commonEqQuery 等通用包装方法！每个 Dao 方法必须语义化。**
-
-### Dao 方法入口必须做 null 检查
-```java
-public Employee getByCode(String code) {{
-    if (!StringUtils.hasText(code)) return null;
-    return datasourceUtil.buildDefaultMpaasQuery()
-            .eq("employee_code", code).doQueryFirst(Employee.class);
-}}
-```
-
-### 新增记录必须调用 setBaseField
-```java
-entity.setBaseField(
-    appContextService.getCurrentUserId(),  // owner
-    "YOUR_FORM_ID",                        // formId（固定业务值）
-    snowflakeIdWorker,                     // ID 生成器
-    tenantId                               // 租户 ID
-);
-xxxDao.insert(entity);
-```
-
-### 异常处理 — 用 XDapBizException + 枚举
-```java
-// 定义异常枚举
-public enum XxxExceptionEnum implements BaseExceptionEnumInterface {{
-    NOT_EXISTS("XXX-001", "RECORD({{0}})_NOT_EXISTS"),
-    DUPLICATE("XXX-002", "CODE({{0}})_ALREADY_EXISTS");
-    // ...
-}}
-
-// 抛出异常
-throw new XDapBizException(XxxExceptionEnum.NOT_EXISTS, id);
-```
-**禁止 throw new RuntimeException()！**
-
-### 响应 — 用平台 Response
-```java
-import com.definesys.mpaas.common.http.Response;
-
-return Response.ok().data(entity);
-return Response.ok().table(list).setTotal(count);
-```
-
-### Controller — 只收发请求
-```java
-@RestController
-@RequestMapping("/custom/{module_name}")
-@RequiredArgsConstructor
-@Slf4j
-public class XxxController {{
-    private final XxxService xxxService;
-
-    @PostMapping("/create")
-    public Response create(@Validated @RequestBody XxxCreateRequest request) {{
-        return xxxService.create(request);
-    }}
-}}
-```
-**Controller 不写 try-catch、不调 Dao、不做业务判断。**
-
-### 日志 — 用占位符
-```java
-log.info("Processing user: {{}}", userId);  // 正确
-log.info("Processing user: " + userId);     // 禁止
-```
-
-## 构建部署
-- 本地测试：`mvn clean package -P single`
-- 上传平台：`mvn clean package -P lib -DskipTests`
-- jar 上传到：平台后台 → 扩展管理 → 自开发管理
-- 关联应用 → 发布后生效
-
-## 白名单
-需要免认证的接口在 `AllowUrlManageConfig.getCustomAllowUrls()` 中注册。
-注意：白名单接口中 `getCurrentUserId()` 和 `getCurrentToken()` 不可用。
-""")
-
-    def _scaffold_backend_feign(self, ws_path: Path, name: str):
-        """FeignClient 外部调用脚手架（Java/SpringBoot）— MpaaS 规范"""
-        module_name = name.replace("backend-feign-", "")
-        pkg_path = module_name.replace("-", "")
-        class_prefix = "".join(p.capitalize() for p in module_name.split("-"))
-        base_pkg = f"src/main/java/com/xdap/{pkg_path}"
-
-        # pom.xml — 沿用标准 MpaaS 模板（含 OpenFeign）
-        self._write(ws_path, "pom.xml", f"""<?xml version="1.0" encoding="UTF-8"?>
-<project xmlns="http://maven.apache.org/POM/4.0.0"
-         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
-    <modelVersion>4.0.0</modelVersion>
-
-    <parent>
-        <groupId>org.springframework.boot</groupId>
-        <artifactId>spring-boot-starter-parent</artifactId>
-        <version>2.2.7.RELEASE</version>
-        <relativePath/>
-    </parent>
-
-    <groupId>com.xdap</groupId>
-    <artifactId>{name}</artifactId>
-    <version>0.0.1</version>
-    <name>{name}</name>
-
-    <properties>
-        <java.version>1.8</java.version>
-        <spring-cloud-alibaba.version>2.2.1.RELEASE</spring-cloud-alibaba.version>
-    </properties>
-
-    <dependencies>
-        <!-- MpaaS 核心 -->
-        <dependency>
-            <groupId>com.xdap.mpaas</groupId>
-            <artifactId>mpaas-core-starter</artifactId>
-        </dependency>
-        <!-- OpenFeign -->
-        <dependency>
-            <groupId>org.springframework.cloud</groupId>
-            <artifactId>spring-cloud-starter-openfeign</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.projectlombok</groupId>
-            <artifactId>lombok</artifactId>
-            <optional>true</optional>
-        </dependency>
-    </dependencies>
-</project>
-""")
-
-        # Application 启动类
-        self._write(ws_path, f"{base_pkg}/{class_prefix}Application.java", f"""\
-package com.xdap.{pkg_path};
-
-import org.springframework.boot.SpringApplication;
-import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.cloud.openfeign.EnableFeignClients;
-
-@SpringBootApplication
-@EnableFeignClients
-public class {class_prefix}Application {{
-
-    public static void main(String[] args) {{
-        SpringApplication.run({class_prefix}Application.class, args);
-    }}
-}}
-""")
-
-        # FeignClient 配置 — 注入认证 Header
+        # FeignClient 配置
         self._write(ws_path, f"{base_pkg}/config/{class_prefix}FeignConfig.java", f"""\
 package com.xdap.{pkg_path}.config;
 
@@ -5348,7 +4820,6 @@ import org.springframework.context.annotation.Configuration;
 
 /**
  * Feign 全局配置 — 为所有外部调用注入认证 Header
- * 如外部 API 使用其他认证方式，在此调整
  */
 @Configuration
 public class {class_prefix}FeignConfig {{
@@ -5367,7 +4838,7 @@ public class {class_prefix}FeignConfig {{
 }}
 """)
 
-        # FeignClient 接口 — 示例
+        # FeignClient 接口
         self._write(ws_path, f"{base_pkg}/client/{class_prefix}FeignClient.java", f"""\
 package com.xdap.{pkg_path}.client;
 
@@ -5384,54 +4855,38 @@ import org.springframework.web.bind.annotation.RequestBody;
 @FeignClient(name = "{module_name}-client", url = "${{external.api.base-url}}")
 public interface {class_prefix}FeignClient {{
 
-    /**
-     * 调用外部接口 — 根据实际 API 修改路径和参数
-     */
     @PostMapping("/api/v1/query")
     {class_prefix}ResponseDTO query(@RequestBody {class_prefix}RequestDTO request);
 }}
 """)
 
-        # 请求 DTO
+        # Request/Response DTO
         self._write(ws_path, f"{base_pkg}/dto/{class_prefix}RequestDTO.java", f"""\
 package com.xdap.{pkg_path}.dto;
 
 import lombok.Data;
 
-/**
- * 外部 API 请求体 — 根据实际接口文档调整字段
- */
 @Data
 public class {class_prefix}RequestDTO {{
-
     private String id;
-
     private String keyword;
 }}
 """)
 
-        # 响应 DTO
         self._write(ws_path, f"{base_pkg}/dto/{class_prefix}ResponseDTO.java", f"""\
 package com.xdap.{pkg_path}.dto;
 
 import lombok.Data;
-import java.util.List;
 
-/**
- * 外部 API 响应体 — 根据实际接口文档调整字段
- */
 @Data
 public class {class_prefix}ResponseDTO {{
-
     private Integer code;
-
     private String message;
-
     private Object data;
 }}
 """)
 
-        # Service 接口
+        # Service
         self._write(ws_path, f"{base_pkg}/service/{class_prefix}Service.java", f"""\
 package com.xdap.{pkg_path}.service;
 
@@ -5439,12 +4894,10 @@ import com.xdap.{pkg_path}.dto.{class_prefix}RequestDTO;
 import com.xdap.{pkg_path}.dto.{class_prefix}ResponseDTO;
 
 public interface {class_prefix}Service {{
-
     {class_prefix}ResponseDTO query({class_prefix}RequestDTO request);
 }}
 """)
 
-        # Service 实现
         self._write(ws_path, f"{base_pkg}/service/impl/{class_prefix}ServiceImpl.java", f"""\
 package com.xdap.{pkg_path}.service.impl;
 
@@ -5459,11 +4912,11 @@ import org.springframework.stereotype.Service;
 @RequiredArgsConstructor
 public class {class_prefix}ServiceImpl implements {class_prefix}Service {{
 
-    private final {class_prefix}FeignClient {module_name.replace('-', '')}FeignClient;
+    private final {class_prefix}FeignClient {field_name}FeignClient;
 
     @Override
     public {class_prefix}ResponseDTO query({class_prefix}RequestDTO request) {{
-        return {module_name.replace('-', '')}FeignClient.query(request);
+        return {field_name}FeignClient.query(request);
     }}
 }}
 """)
@@ -5475,48 +4928,26 @@ package com.xdap.{pkg_path}.controller;
 import com.xdap.{pkg_path}.dto.{class_prefix}RequestDTO;
 import com.xdap.{pkg_path}.dto.{class_prefix}ResponseDTO;
 import com.xdap.{pkg_path}.service.{class_prefix}Service;
-import com.xdap.mpaas.common.model.Response;
+import com.definesys.mpaas.common.http.Response;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 
-/**
- * {class_prefix} 对外接口 — 路径必须以 /custom/ 开头
- */
 @RestController
 @RequestMapping("/custom/{module_name}")
 @RequiredArgsConstructor
 public class {class_prefix}Controller {{
 
-    private final {class_prefix}Service {module_name.replace('-', '')}Service;
+    private final {class_prefix}Service {field_name}Service;
 
     @PostMapping("/query")
     public Response query(@RequestBody {class_prefix}RequestDTO request) {{
-        {class_prefix}ResponseDTO result = {module_name.replace('-', '')}Service.query(request);
+        {class_prefix}ResponseDTO result = {field_name}Service.query(request);
         return Response.ok().data(result);
     }}
 }}
 """)
 
-        # AllowUrlManageConfig
-        self._write(ws_path, f"{base_pkg}/config/AllowUrlManageConfig.java", f"""\
-package com.xdap.{pkg_path}.config;
-
-import com.xdap.mpaas.common.permission.AllowUrlManage;
-import org.springframework.stereotype.Component;
-import java.util.List;
-
-@Component
-public class AllowUrlManageConfig implements AllowUrlManage {{
-
-    @Override
-    public List<String> getCustomAllowUrls() {{
-        // 如有需要免认证的接口，在此注册
-        return List.of();
-    }}
-}}
-""")
-
-        # application.yml
+        # application.yml（覆写 properties）
         self._write(ws_path, "src/main/resources/application.yml", f"""\
 external:
   api:
@@ -5527,127 +4958,71 @@ server:
   port: 8080
 """)
 
-        # .workspace.json 额外 README
-        self._write(ws_path, "README.md", f"""\
-# {name}
-
-FeignClient 外部调用模块。
-
-## 使用步骤
-
-1. 修改 `application.yml` 配置外部 API 地址和认证 Token
-2. 修改 `{class_prefix}FeignClient` 中的接口路径和方法
-3. 按实际 API 文档调整 `{class_prefix}RequestDTO` 和 `{class_prefix}ResponseDTO`
-4. 如需自定义认证逻辑，修改 `{class_prefix}FeignConfig`
-
-## 构建部署
-
-- 本地测试：`mvn clean package -P single`
-- 上传平台：`mvn clean package -P lib -DskipTests`
-""")
-
     def _scaffold_backend_scheduled(self, ws_path: Path, name: str):
-        """定时任务脚手架（Java/SpringBoot）— MpaaS 规范"""
+        """定时任务脚手架 — 复用 backend-api 模板 + 追加定时任务特有文件"""
         module_name = name.replace("backend-scheduled-", "")
         pkg_path = module_name.replace("-", "")
         class_prefix = "".join(p.capitalize() for p in module_name.split("-"))
         base_pkg = f"src/main/java/com/xdap/{pkg_path}"
+        field_name = module_name.replace("-", "")
 
-        # pom.xml
-        self._write(ws_path, "pom.xml", f"""<?xml version="1.0" encoding="UTF-8"?>
-<project xmlns="http://maven.apache.org/POM/4.0.0"
-         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
-    <modelVersion>4.0.0</modelVersion>
+        # 复用基础模板
+        replacements = {
+            "{basePackage}": pkg_path,
+            "{class_prefix}": class_prefix,
+            "{module_name}": module_name,
+        }
+        self._scaffold_from_template(ws_path, "backend-api", replacements)
 
-    <parent>
-        <groupId>org.springframework.boot</groupId>
-        <artifactId>spring-boot-starter-parent</artifactId>
-        <version>2.2.7.RELEASE</version>
-        <relativePath/>
-    </parent>
-
-    <groupId>com.xdap</groupId>
-    <artifactId>{name}</artifactId>
-    <version>0.0.1</version>
-    <name>{name}</name>
-
-    <properties>
-        <java.version>1.8</java.version>
-    </properties>
-
-    <dependencies>
-        <!-- MpaaS 核心 -->
-        <dependency>
-            <groupId>com.xdap.mpaas</groupId>
-            <artifactId>mpaas-core-starter</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.projectlombok</groupId>
-            <artifactId>lombok</artifactId>
-            <optional>true</optional>
-        </dependency>
-    </dependencies>
-</project>
-""")
-
-        # Application 启动类（开启定时任务）
-        self._write(ws_path, f"{base_pkg}/{class_prefix}Application.java", f"""\
+        # 覆写 Application.java — 加 @EnableScheduling
+        self._write(ws_path, f"{base_pkg}/Application.java", f"""\
 package com.xdap.{pkg_path};
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.scheduling.annotation.EnableScheduling;
+import org.springframework.context.annotation.ComponentScan;
 
 @SpringBootApplication
 @EnableScheduling
-public class {class_prefix}Application {{
+@ComponentScan({{"com.definesys.mpaas", "com.xdap.*"}})
+public class Application {{
 
     public static void main(String[] args) {{
-        SpringApplication.run({class_prefix}Application.class, args);
+        SpringApplication.run(Application.class, args);
     }}
 }}
 """)
 
-        # Dao — 直接使用 MpaasQuery，语义化方法名
+        # Dao
         self._write(ws_path, f"{base_pkg}/dao/{class_prefix}Dao.java", f"""\
 package com.xdap.{pkg_path}.dao;
 
-import com.xdap.mpaas.common.datasource.DatasourceUtil;
-import com.xdap.mpaas.common.query.MpaasQuery;
-import org.springframework.stereotype.Repository;
+import com.xdap.{pkg_path}.config.DatasourceUtil;
+import com.definesys.mpaas.query.MpaasQuery;
+import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Component;
 import java.util.List;
 import java.util.Map;
 
-/**
- * {class_prefix} 数据操作 — 直接用 MpaasQuery，不封装 commonQuery
- */
-@Repository
+@Component
+@RequiredArgsConstructor
 public class {class_prefix}Dao {{
 
-    /**
-     * 查询待处理记录（示例：根据状态查询）
-     * @param status 处理状态，不能为 null
-     */
+    private final DatasourceUtil datasourceUtil;
+
     public List<Map<String, Object>> getPendingByStatus(String status) {{
-        if (status == null) {{
-            throw new IllegalArgumentException("status 不能为 null");
-        }}
-        MpaasQuery query = DatasourceUtil.buildDefaultMpaasQuery();
+        if (status == null) return java.util.Collections.emptyList();
+        MpaasQuery query = datasourceUtil.buildDefaultMpaasQuery();
         return query.from("your_table_name")
                 .eq("status", status)
                 .doQuery()
                 .getList();
     }}
 
-    /**
-     * 更新处理状态
-     */
     public int updateStatusById(String id, String newStatus) {{
-        if (id == null || newStatus == null) {{
-            throw new IllegalArgumentException("id 和 newStatus 不能为 null");
-        }}
-        MpaasQuery query = DatasourceUtil.buildDefaultMpaasQuery();
+        if (id == null || newStatus == null) return 0;
+        MpaasQuery query = datasourceUtil.buildDefaultMpaasQuery();
         return query.from("your_table_name")
                 .set("status", newStatus)
                 .eq("id", id)
@@ -5656,20 +5031,15 @@ public class {class_prefix}Dao {{
 }}
 """)
 
-        # Service 接口
+        # Service
         self._write(ws_path, f"{base_pkg}/service/{class_prefix}Service.java", f"""\
 package com.xdap.{pkg_path}.service;
 
 public interface {class_prefix}Service {{
-
-    /**
-     * 执行定时任务核心业务逻辑
-     */
     void execute();
 }}
 """)
 
-        # Service 实现
         self._write(ws_path, f"{base_pkg}/service/impl/{class_prefix}ServiceImpl.java", f"""\
 package com.xdap.{pkg_path}.service.impl;
 
@@ -5678,7 +5048,6 @@ import com.xdap.{pkg_path}.service.{class_prefix}Service;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-
 import java.util.List;
 import java.util.Map;
 
@@ -5687,25 +5056,23 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class {class_prefix}ServiceImpl implements {class_prefix}Service {{
 
-    private final {class_prefix}Dao {module_name.replace('-', '')}Dao;
+    private final {class_prefix}Dao {field_name}Dao;
 
     @Override
     public void execute() {{
         log.info("[{class_prefix}Task] 开始执行");
-        List<Map<String, Object>> pendingList = {module_name.replace('-', '')}Dao.getPendingByStatus("PENDING");
+        List<Map<String, Object>> pendingList = {field_name}Dao.getPendingByStatus("PENDING");
         log.info("[{class_prefix}Task] 待处理记录数: {{}}", pendingList.size());
-
         for (Map<String, Object> record : pendingList) {{
             try {{
                 String id = (String) record.get("id");
-                // TODO: 在此处添加具体业务处理逻辑
-                {module_name.replace('-', '')}Dao.updateStatusById(id, "PROCESSED");
+                // TODO: 添加业务处理逻辑
+                {field_name}Dao.updateStatusById(id, "PROCESSED");
                 log.info("[{class_prefix}Task] 处理成功, id={{}}", id);
             }} catch (Exception e) {{
                 log.error("[{class_prefix}Task] 处理失败, record={{}}", record, e);
             }}
         }}
-
         log.info("[{class_prefix}Task] 执行完成");
     }}
 }}
@@ -5721,43 +5088,17 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
-/**
- * {class_prefix} 定时任务
- * cron 表达式格式：秒 分 时 日 月 周
- */
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class {class_prefix}ScheduledTask {{
 
-    private final {class_prefix}Service {module_name.replace('-', '')}Service;
+    private final {class_prefix}Service {field_name}Service;
 
-    /**
-     * 每天凌晨 2 点执行
-     * 根据业务需求修改 cron 表达式
-     */
     @Scheduled(cron = "0 0 2 * * ?")
     public void run() {{
         log.info("[{class_prefix}ScheduledTask] 触发执行");
-        {module_name.replace('-', '')}Service.execute();
-    }}
-}}
-""")
-
-        # AllowUrlManageConfig（定时任务通常不暴露接口，但保留框架要求）
-        self._write(ws_path, f"{base_pkg}/config/AllowUrlManageConfig.java", f"""\
-package com.xdap.{pkg_path}.config;
-
-import com.xdap.mpaas.common.permission.AllowUrlManage;
-import org.springframework.stereotype.Component;
-import java.util.List;
-
-@Component
-public class AllowUrlManageConfig implements AllowUrlManage {{
-
-    @Override
-    public List<String> getCustomAllowUrls() {{
-        return List.of();
+        {field_name}Service.execute();
     }}
 }}
 """)
@@ -5767,35 +5108,9 @@ public class AllowUrlManageConfig implements AllowUrlManage {{
 server:
   port: 8080
 
-# 定时任务开关（可通过配置中心动态关闭）
 scheduled:
   {module_name}:
     enabled: true
-""")
-
-        self._write(ws_path, "README.md", f"""\
-# {name}
-
-基于 Spring @Scheduled 的定时任务模块。
-
-## 核心文件
-
-- `{class_prefix}ScheduledTask.java` — 定时触发入口，修改 cron 表达式
-- `{class_prefix}ServiceImpl.java` — 业务处理逻辑
-- `{class_prefix}Dao.java` — 数据库操作（MpaasQuery）
-
-## 修改 Cron 表达式
-
-在 `{class_prefix}ScheduledTask` 的 `@Scheduled(cron = "...")` 中修改：
-- 每分钟：`0 * * * * ?`
-- 每小时：`0 0 * * * ?`
-- 每天 2 点：`0 0 2 * * ?`
-- 每周一 9 点：`0 0 9 ? * MON`
-
-## 构建部署
-
-- 本地测试：`mvn clean package -P single`
-- 上传平台：`mvn clean package -P lib -DskipTests`
 """)
 
     # ======== 轻量级脚手架（脚本 & 业务弹窗）========
@@ -6111,3 +5426,28 @@ export default {{
         target = base_path / rel_path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
+
+    def _scaffold_from_template(self, ws_path: Path, template_dir: str, replacements: dict):
+        """从模板目录复制文件到 workspace，对文件路径和内容执行变量替换"""
+        tpl_root = Path(__file__).parent.parent.parent / "templates" / template_dir
+        if not tpl_root.exists():
+            logger.warning(f"Template directory not found: {tpl_root}")
+            return
+        for src_file in sorted(tpl_root.rglob("*")):
+            if src_file.is_dir():
+                continue
+            if src_file.name == ".DS_Store":
+                continue
+            rel = str(src_file.relative_to(tpl_root))
+            for k, v in replacements.items():
+                rel = rel.replace(k, v)
+            try:
+                content = src_file.read_text(encoding="utf-8")
+                for k, v in replacements.items():
+                    content = content.replace(k, v)
+                self._write(ws_path, rel, content)
+            except UnicodeDecodeError:
+                # 二进制文件直接复制
+                target = ws_path / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src_file, target)

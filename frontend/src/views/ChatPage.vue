@@ -23,7 +23,7 @@
       <div class="agent-tabs">
         <button class="agent-tab" :class="{ active: activeView === 'builder' }" @click="activeView = 'builder'">
           <span>🤖</span>
-          <span>搭建智能体</span>
+          <span>智能搭建</span>
           <span v-if="activeView === 'builder'" class="active-dot"></span>
         </button>
         <button
@@ -42,6 +42,16 @@
           @click="openPlatformNewTab"
           title="在新窗口打开"
         >↗</button>
+        <button
+          v-if="store.currentApp?.apaas_app_id"
+          class="agent-tab"
+          :class="{ active: activeView === 'coding' }"
+          @click="activeView = 'coding'"
+        >
+          <span>💻</span>
+          <span>智能开发</span>
+          <span v-if="activeView === 'coding'" class="active-dot"></span>
+        </button>
       </div>
 
       <!-- 平台配置 iframe（v-show 保持不销毁） -->
@@ -73,7 +83,17 @@
         </template>
       </div>
 
-      <!-- 搭建智能体内容区（横向布局） -->
+      <!-- 智能开发内容区 — iframe 嵌入 CodingPage -->
+      <div v-show="activeView === 'coding'" class="coding-content">
+        <iframe
+          v-if="codingIframeUrl"
+          :src="codingIframeUrl"
+          class="coding-embed-frame"
+          allow="clipboard-read; clipboard-write"
+        ></iframe>
+      </div>
+
+      <!-- 智能搭建内容区（横向布局） -->
       <div v-show="!SHOW_PLATFORM_CONFIG || activeView === 'builder'" class="builder-content">
       <!-- 左侧对话区 -->
       <div class="chat-side">
@@ -125,7 +145,7 @@
           <!-- 编码冲突修复输入 -->
           <div v-if="activeConflict" class="chat-bubble assistant">
             <div class="bubble-inner">
-              <div class="agent-label"><span>🤖</span><span>搭建智能体</span></div>
+              <div class="agent-label"><span>🤖</span><span>智能搭建</span></div>
               <div class="bubble-content assistant conflict-resolve-box">
                 <div class="conflict-label">请输入新编码替换 <code>{{ activeConflict.current_code }}</code>：</div>
                 <div class="conflict-input-row">
@@ -630,6 +650,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { usePreviewStore } from '@/stores/preview'
 import { useUserStore } from '@/stores/user'
 import { applicationApi } from '@/api/application'
+// codingApi / consumeSseResponse no longer needed — coding tab uses iframe
 import { incrementalApi, type DiffResponse, type ExecuteResponse } from '@/api/incremental'
 import { conversationApi, type ConversationWithApp } from '@/api/conversation'
 import { marked } from 'marked'
@@ -663,7 +684,15 @@ const fetchAppCount = async () => {
 }
 
 // ── 平台配置 iframe ──
-const activeView = ref<'builder' | 'platform'>('builder')
+const activeView = ref<'builder' | 'platform' | 'coding'>('builder')
+
+// ── 智能开发（iframe 嵌入 CodingPage） ──
+const codingIframeUrl = computed(() => {
+  const appId = existingAppId.value || route.query.app_id
+  return appId ? `/ai-builder/coding?app_id=${appId}` : ''
+})
+
+// ── 平台配置 iframe ──
 const platformIframeUrl = ref('')
 const platformAppUrl = ref('')  // 应用配置页 URL（登录后跳转用）
 const platformLoading = ref(false)
@@ -735,7 +764,7 @@ const getFieldIcon = (f: any) => {
 }
 
 const agents: Record<string, { name: string; icon: string }> = {
-  builder: { name: '搭建智能体', icon: '🤖' },
+  builder: { name: '智能搭建', icon: '🤖' },
   assistant: { name: '辅助开发智能体', icon: '🛠️' },
   developer: { name: '复杂开发智能体', icon: '💻' }
 }
@@ -751,7 +780,7 @@ if (store.previewTab === 'workflow') {
 }
 
 const messages = reactive<Message[]>([
-  { id: 0, role: 'assistant', agent: 'builder', content: '你好！我是 aPaaS 搭建智能体，可以帮你通过对话的方式在得帆云平台上快速搭建应用。\n\n你可以告诉我想要创建什么系统，我会帮你理清需求并自动生成。\n\n比如：\n• "我想做一个客户管理系统"\n• "帮我搭建一个项目管理应用"\n• "创建一个售后服务工单系统"', created_at: '' }
+  { id: 0, role: 'assistant', agent: 'builder', content: '你好！我是 aPaaS 智能搭建，可以帮你通过对话的方式在得帆云平台上快速搭建应用。\n\n你可以告诉我想要创建什么系统，我会帮你理清需求并自动生成。\n\n比如：\n• "我想做一个客户管理系统"\n• "帮我搭建一个项目管理应用"\n• "创建一个售后服务工单系统"', created_at: '' }
 ])
 
 const scrollToBottom = () => { nextTick(() => { if (messagesRef.value) messagesRef.value.scrollTop = messagesRef.value.scrollHeight }) }
@@ -1149,7 +1178,7 @@ const loadConversation = async (cid: number) => {
       scrollToBottom()
     } else {
       // 空对话，显示欢迎消息
-      messages.push({ id: 0, role: 'assistant', agent: 'builder', content: '你好！我是 aPaaS 搭建智能体，可以帮你通过对话的方式在得帆云平台上快速搭建应用。\n\n你可以告诉我想要创建什么系统，我会帮你理清需求并自动生成。', created_at: '' })
+      messages.push({ id: 0, role: 'assistant', agent: 'builder', content: '你好！我是 aPaaS 智能搭建，可以帮你通过对话的方式在得帆云平台上快速搭建应用。\n\n你可以告诉我想要创建什么系统，我会帮你理清需求并自动生成。', created_at: '' })
     }
 
     // 恢复关联的应用配置
@@ -1192,7 +1221,7 @@ const startNewConversation = () => {
   conversationId.value = null
   selectedConversationId.value = null
   messages.splice(0, messages.length)
-  messages.push({ id: 0, role: 'assistant', agent: 'builder', content: '你好！我是 aPaaS 搭建智能体，可以帮你通过对话的方式在得帆云平台上快速搭建应用。\n\n你可以告诉我想要创建什么系统，我会帮你理清需求并自动生成。\n\n比如：\n• "我想做一个客户管理系统"\n• "帮我搭建一个项目管理应用"\n• "创建一个售后服务工单系统"', created_at: '' })
+  messages.push({ id: 0, role: 'assistant', agent: 'builder', content: '你好！我是 aPaaS 智能搭建，可以帮你通过对话的方式在得帆云平台上快速搭建应用。\n\n你可以告诉我想要创建什么系统，我会帮你理清需求并自动生成。\n\n比如：\n• "我想做一个客户管理系统"\n• "帮我搭建一个项目管理应用"\n• "创建一个售后服务工单系统"', created_at: '' })
   router.replace('/chat')
 }
 
@@ -3005,7 +3034,7 @@ watch(conversationId, (id) => {
 
 .main-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
 
-/* ── 搭建智能体内容区（横向布局） ── */
+/* ── 智能搭建内容区（横向布局） ── */
 .builder-content { flex: 1; display: flex; overflow: hidden; min-height: 0; }
 
 /* ── 左侧对话 ── */
@@ -3914,4 +3943,13 @@ watch(conversationId, (id) => {
 .conflict-btn.cancel { background: var(--t-border-subtle); color: #94a3b8; }
 .conflict-btn.cancel:hover:not(:disabled) { background: var(--t-bg-subtle); }
 .conflict-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ── 智能开发 tab (iframe embed) ── */
+.coding-content {
+  flex: 1; display: flex; flex-direction: column; overflow: hidden;
+  min-height: 0; height: 100%;
+}
+.coding-embed-frame {
+  flex: 1; width: 100%; height: 100%; border: none;
+}
 </style>
