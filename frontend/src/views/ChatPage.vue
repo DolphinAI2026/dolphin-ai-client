@@ -676,11 +676,13 @@ const loadPlatformUrl = async () => {
   platformLoading.value = true
   platformError.value = ''
   try {
-    const authToken = localStorage.getItem('token') || ''
-    // 通过后端 SSO 入口加载：只代理 HTML（注入 token），JS/CSS/API 直接从平台加载
-    platformIframeUrl.value = `${API_PREFIX}/platform-proxy/entry?app_id=${existingAppId.value}&_auth=${authToken}`
-    platformAppUrl.value = platformIframeUrl.value
-    platformLoginHint.value = ''
+    // 直接获取平台真实 URL，iframe 直连平台（无需反向代理）
+    const data = await platformEnvApi.getEmbedUrl(existingAppId.value)
+    platformIframeUrl.value = data.url
+    platformAppUrl.value = data.url
+    if (data.username) {
+      platformLoginHint.value = data.username
+    }
   } catch (e: any) {
     platformError.value = e?.response?.data?.detail || e?.message || '获取平台链接失败'
   } finally {
