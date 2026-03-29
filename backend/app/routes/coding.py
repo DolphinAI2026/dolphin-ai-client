@@ -359,6 +359,17 @@ def _init_coding_model_routes():
             "model": settings.coding_model_qwen_model,
         }
 
+    # GPT-5.3-Codex (via jiekou.ai, /responses endpoint)
+    if settings.coding_model_codex_base_url and settings.coding_model_codex_api_key:
+        base = settings.coding_model_codex_base_url.rstrip("/")
+        if not base.endswith("/v1"):
+            base = f"{base}/v1"
+        routes["codex"] = {
+            "url": f"{base}/chat/completions",  # 会在代理中被转换为 /responses
+            "api_key": settings.coding_model_codex_api_key,
+            "model": settings.coding_model_codex_model,
+        }
+
     # GPT-5.4 (via jiekou.ai)
     if settings.coding_model_gpt54_base_url and settings.coding_model_gpt54_api_key:
         base = settings.coding_model_gpt54_base_url.rstrip("/")
@@ -410,6 +421,93 @@ def _resolve_coding_model(model_name: str) -> tuple:
     # 默认走 MiniMax
     default = _CODING_MODEL_ROUTES.get("default", {})
     return default.get("url", _build_openai_chat_completions_url()), default.get("api_key", settings.llm_api_key)
+
+
+async def _codex_responses_proxy(
+    upstream_url: str, headers: dict, payload: dict, api_key: str, stream: bool
+) -> Response:
+    """Codex 模型适配：chat/completions → /responses 格式转换
+
+    前端发 chat/completions 格式，后端转成 /responses 格式调用 Codex，
+    再把响应转回 chat/completions 格式返回给前端。
+    """
+    # 1. 构建 /responses 请求 URL
+    responses_url = upstream_url.replace("/chat/completions", "/responses")
+
+    # 2. 把 messages 转成 /responses 的 input 格式
+    messages = payload.get("messages", [])
+    # 合并所有消息为一个 input 字符串（Codex /responses 用 input 字段）
+    input_parts = []
+    for msg in messages:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        if role == "system":
+            input_parts.append(f"[System]: {content}")
+        elif role == "user":
+            input_parts.append(content)
+        elif role == "assistant":
+            input_parts.append(f"[Assistant]: {content}")
+    input_text = "\n\n".join(input_parts)
+
+    codex_payload = {
+        "model": payload.get("model", "gpt-5.3-codex"),
+        "input": input_text,
+    }
+
+    # 3. 调用 /responses 端点（Codex 不支持流式）
+    async with httpx.AsyncClient(timeout=300) as client:
+        try:
+            resp = await client.post(
+                responses_url, headers=headers, json=codex_payload
+            )
+        except httpx.HTTPError as exc:
+            raise HTTPException(status_code=502, detail=f"调用 Codex 失败: {exc}")
+
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text[:500])
+
+    # 4. 把 /responses 响应转成 chat/completions 格式
+    data = resp.json()
+    content = ""
+    for item in data.get("output", []):
+        if item.get("type") == "message":
+            for c in item.get("content", []):
+                content += c.get("text", "")
+
+    usage = data.get("usage", {})
+    openai_response = {
+        "id": data.get("id", ""),
+        "object": "chat.completion",
+        "model": data.get("model", payload.get("model")),
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": content},
+            "finish_reason": "stop",
+        }],
+        "usage": {
+            "prompt_tokens": usage.get("input_tokens", 0),
+            "completion_tokens": usage.get("output_tokens", 0),
+            "total_tokens": usage.get("total_tokens", usage.get("input_tokens", 0) + usage.get("output_tokens", 0)),
+        },
+    }
+
+    # 如果前端要求流式，模拟一个 SSE 流（Codex 不支持真流式）
+    if stream:
+        import json as _json
+
+        async def _fake_stream():
+            chunk = {
+                "id": openai_response["id"],
+                "object": "chat.completion.chunk",
+                "model": openai_response["model"],
+                "choices": [{"index": 0, "delta": {"content": content}, "finish_reason": "stop"}],
+            }
+            yield f"data: {_json.dumps(chunk, ensure_ascii=False)}\n\n".encode()
+            yield b"data: [DONE]\n\n"
+
+        return StreamingResponse(_fake_stream(), media_type="text/event-stream")
+
+    return JSONResponse(content=openai_response)
 
 
 # ============================================================
@@ -999,6 +1097,11 @@ async def ide_chat_completions_proxy(
         "Authorization": f"Bearer {api_key}",
     }
     stream = bool(payload.get("stream"))
+
+    # Codex 模型走 /responses 端点（非 chat/completions），需要格式转换
+    model_name = (payload.get("model") or "").lower()
+    if "codex" in model_name and "chat/completions" in upstream_url:
+        return await _codex_responses_proxy(upstream_url, upstream_headers, payload, api_key, stream)
 
     if stream:
         async def _stream() -> AsyncIterator[bytes]:
