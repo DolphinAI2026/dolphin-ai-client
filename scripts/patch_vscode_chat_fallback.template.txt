@@ -55,7 +55,7 @@ return"";
 }
 };
 const fe=T=>(T||"").replace(/<think>[\s\S]*?<\/think>/gi,"").replace(/\[\/?TOOL_CALL\]/gi,"").replace(/<minimax:tool_call>[\s\S]*?<\/minimax:tool_call>/gi,"").replace(/minimax:tool_call/gi,"").replace(/<\/?invoke[^>]*>/gi,"").replace(/\{"tool"\s*[=:>]+\s*"[^"]*"\s*,\s*"path"\s*[=:>]+\s*"[^"]*"\s*\}/g,"").replace(/^\s*[\r\n]+/gm,"").trim();
-const vibeContextState=(()=>{
+const vibeContextState=y.__vibeCtx||(y.__vibeCtx=(()=>{
 try{
 const T=new URL(globalThis.location?.href||"http://localhost/");
 return{
@@ -69,7 +69,7 @@ model:T.searchParams.get("vibe_model")||""
 }catch{
 return{workspaceId:"",conversationId:"",context:"",apiBase:"",ideToken:"",model:""};
 }
-})();
+})());
 const be=(()=>{
 try{
 const T=new URL(globalThis.location?.href||"http://localhost/");
@@ -730,10 +730,10 @@ const _fi=document.createElement("input");_fi.type="file";_fi.onchange=async(ev)
 const _f=ev.target.files?.[0];if(!_f)return;
 const _fd=new FormData();_fd.append("file",_f);
 const _wsId=vibeContextState.workspaceId||"";
-if(_wsId)_fd.append("workspace_id",_wsId);
 const _apiOrigin=(()=>{try{const u=new URL(globalThis.location?.href||"");const p=(u.pathname||"").replace(/\/+$/,"");const ap=p.endsWith("/ide")?p.slice(0,-4):"";return ap?u.origin+ap:u.origin;}catch{return"";}})();
 if(!_apiOrigin)return;
-try{const _r=await fetch(_apiOrigin+"/api/coding/upload",{method:"POST",body:_fd,headers:{...(ae?{"X-Vibe-IDE-Token":ae,"Authorization":"Bearer "+ae}:{})}});
+const _uploadUrl=_apiOrigin+"/api/coding/upload"+(_wsId?"?workspace_id="+encodeURIComponent(_wsId):"");
+try{const _r=await fetch(_uploadUrl,{method:"POST",body:_fd,headers:{...(ae?{"X-Vibe-IDE-Token":ae,"Authorization":"Bearer "+ae}:se?{"Authorization":"Bearer "+se}:{})}});
 if(_r.ok){const _j=await _r.json();console.log("[PATCH] uploaded file:",_j);
 const _ta=document.querySelector(".interactive-input-editor textarea");
 if(_ta){_ta.focus();document.execCommand("insertText",!1,`\n[\u5DF2\u4E0A\u4F20\u6587\u4EF6: ${_f.name}]`);}
@@ -749,7 +749,7 @@ const _updateBtn=()=>{
 if(_isAutoMode()){_btn.innerHTML=`Auto \u25BE`;return;}
 const _sel=y.__apaasModelSelector.selected||_defModel;
 const _m=y.__apaasModelSelector.models.find(m=>m.id===_sel);
-const _label=_m?_m.name:_sel;
+const _label=_m?(_m.name||_m.id).split(/[\s(]/)[0]:_sel.split(/[\s-]/)[0];
 _btn.innerHTML=`${_label.replace(/</g,"&lt;")} \u25BE`;
 };
 const _renderDD=()=>{
