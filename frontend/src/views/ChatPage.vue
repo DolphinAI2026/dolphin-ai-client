@@ -676,12 +676,14 @@ const loadPlatformUrl = async () => {
   platformLoading.value = true
   platformError.value = ''
   try {
-    // 直接获取平台真实 URL，iframe 直连平台（无需反向代理）
+    // 获取平台真实 URL，iframe 直连平台
     const data = await platformEnvApi.getEmbedUrl(existingAppId.value)
-    platformIframeUrl.value = data.url
-    platformAppUrl.value = data.url
-    if (data.username) {
-      platformLoginHint.value = data.username
+    const { url, username } = data as any
+    platformIframeUrl.value = url
+    platformAppUrl.value = url
+    // 首次使用需要在 iframe 中登录平台（登录一次后 cookie 保持）
+    if (username) {
+      platformLoginHint.value = `首次使用请在下方登录平台（账号: ${username}），登录后自动进入应用配置`
     }
   } catch (e: any) {
     platformError.value = e?.response?.data?.detail || e?.message || '获取平台链接失败'
