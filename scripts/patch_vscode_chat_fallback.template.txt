@@ -293,8 +293,7 @@ return JSON.parse(ie);
 };
 const ft=async T=>{
 if(!Ae.length||!vibeContextState.workspaceId)return"";
-const wsBase=Ae[0].replace(/\/ide\/?$/,"");
-const wsPfx=wsBase+"/workspace/"+vibeContextState.workspaceId;
+const wsPfx=Ae[0].replace(/\/ide\/?$/,"");
 const wsHdr={...(ae?{"X-Vibe-IDE-Token":ae,"Authorization":"Bearer "+ae}:se?{"Authorization":"Bearer "+se}:{})};
 try{
 const filesResp=await fetch(wsPfx+"/files",{headers:wsHdr});
@@ -340,13 +339,54 @@ return"";
 };
 if(!Ae.length)return{errorDetails:{message:"IDE 后端代理未配置，请重新从 Builder 打开 Web IDE 或在设置中配置 minimax.apiBase。"}};
 if(!ae&&!se)return{errorDetails:{message:"请在设置中配置 minimax.apiKey，或从 Builder 打开 Web IDE。"}};
+const pendingRt=globalThis.__pendingEdits;
+if(pendingRt&&/^(确认|应用|apply|yes|ok|接受|accept|好的|行|可以|没问题)/i.test((ue(M?.message)||ue(M?.prompt)||"").trim())){
+globalThis.__pendingEdits=null;
+P([{kind:"markdownContent",content:new we("正在应用修改...\n")}]);
+const pr=await Rt(pendingRt);
+const po=(pr?.applied||[]).map(r=>`- ✅ ${r.path} (${r.action})`).join("\n");
+const ps=(pr?.skipped||[]).map(r=>`- ❌ ${r.path}: ${r.reason}`).join("\n");
+const pm=[po?`已写入文件：\n${po}`:"",ps?`未写入：\n${ps}`:""].filter(Boolean).join("\n\n");
+P([{kind:"markdownContent",content:new we(pm||"操作完成。")}]);
+return{timings:{firstProgress:0,totalElapsed:Date.now()-te}};
+}
+if(pendingRt&&/^(取消|拒绝|cancel|no|reject|算了|不要)/i.test((ue(M?.message)||ue(M?.prompt)||"").trim())){
+globalThis.__pendingEdits=null;
+P([{kind:"markdownContent",content:new we("已取消修改，文件未变动。")}]);
+return{timings:{firstProgress:0,totalElapsed:Date.now()-te}};
+}
 const rt=fe(ue(M?.message)||ue(M?.prompt)||ue(M?.text)||"");
 console.log("[PATCH] rt=",JSON.stringify(rt?.slice(0,100)),"M keys=",M?Object.keys(M).join(","):"null");
+const refContent=await(async()=>{
+const refs=M?.references||M?.toolReferences||M?.attachments||[];
+if(!Array.isArray(refs)||!refs.length)return"";
+const parts=[];
+for(const ref of refs.slice(0,6)){
+try{
+const uri=ref?.value||ref?.uri||ref;
+if(!uri)continue;
+const fp=typeof uri==="string"?uri:uri?.path||uri?.fsPath||"";
+if(!fp)continue;
+const relPath=fp.replace(/^.*?\/src\//,"/src/").replace(/^\//,"").replace(/^.*workspaces\/[^/]+\//,"");
+if(!relPath||!/\.\w+$/.test(relPath))continue;
+const r=await fetch(wsPfx+`/file?file_path=${encodeURIComponent(relPath)}`,{headers:wsHdr});
+if(!r.ok)continue;
+const j=await r.json();
+if(j?.content){
+const trimmed=j.content.length>3200?j.content.slice(0,3200)+"\n/* ... truncated ... */":j.content;
+parts.push(`### ATTACHED FILE: ${relPath}\n\`\`\`\n${trimmed}\n\`\`\``);
+}
+}catch{}
+}
+return parts.join("\n\n");
+})();
 const pt=await ke();
 const mt=Te(pt);
-const gt=mt?`${rt}${rt?"\n\n":""}ATTACHED_IMAGE_CONTEXT:\n${mt}`:rt;
+let gt=rt;
+if(refContent)gt=`${rt}\n\n用户附加了以下文件，请基于这些文件内容进行操作：\n${refContent}`;
+if(mt)gt=`${gt}${gt?"\n\n":""}ATTACHED_IMAGE_CONTEXT:\n${mt}`;
 const kt=await ft(rt);
-console.log("[PATCH] kt length=",kt?.length||0,"Ce=",Ce(rt),"Be=",Be(rt));
+console.log("[PATCH] kt length=",kt?.length||0,"refContent length=",refContent?.length||0);
 const Et=async()=>{
 const T=[{
 role:"system",
@@ -455,22 +495,46 @@ return{applied:[],skipped:[{path:"",reason:ie?.message||"Failed to apply edit pl
 }
 };
 if(We(rt)){
-P([{kind:"markdownContent",content:new we("正在根据当前工作区生成并应用代码修改...\n")}]);
+P([{kind:"markdownContent",content:new we("正在分析代码并生成修改方案...\n")}]);
 const T=await Et();
-if(!T?.error){
-const ie=await Rt(T);
-const oe=(ie?.applied||[]).map(re=>`- ${re.path} (${re.action})`).join("\n");
-const re=(ie?.skipped||[]).map(pe=>`- ${pe.path}: ${pe.reason}`).join("\n");
-const pe=[
-typeof T?.summary=="string"&&T.summary?T.summary:"",
-oe?`已写入文件：\n${oe}`:"",
-re?`未写入项：\n${re}`:"",
-Array.isArray(T?.notes)&&T.notes.length?`备注：\n${T.notes.map(ve=>`- ${String(ve)}`).join("\n")}`:""
-].filter(Boolean).join("\n\n");
-if(pe){
-P([{kind:"markdownContent",content:new we(pe)}]);
-return{timings:{firstProgress:0,totalElapsed:Date.now()-te}};
+if(!T?.error&&Array.isArray(T?.edits)&&T.edits.length>0){
+P([{kind:"markdownContent",content:new we(`**${T.summary||"代码修改方案"}**\n`)}]);
+let editGroupOk=!1;
+try{
+await this.H.invokeFunction(async ie=>{
+const oe=ie.get(Qe).getWorkspace();
+const re=ie.get(Me);
+const pe=oe.folders[0];
+if(!pe)return;
+for(const ed of T.edits.slice(0,12)){
+const qt=(ed.path||"").trim().replace(/\\/g,"/").replace(/^\/+/,"");
+if(!qt||qt.includes("..")||ed.action==="delete"||!ed.content)continue;
+let Qt=pe.uri;
+for(const ni of qt.split("/").filter(Boolean))Qt=ze(Qt,ni);
+let existLines=1,lastCol=1;
+try{
+const ex=(await re.readFile(Qt)).value.toString();
+const lns=ex.split("\n");
+existLines=lns.length;
+lastCol=lns[lns.length-1].length+1;
+}catch{existLines=1;lastCol=1;}
+P([{kind:"textEditGroup",uri:Qt,edits:[[{range:{startLineNumber:1,startColumn:1,endLineNumber:existLines,endColumn:lastCol},text:ed.content}]],done:!0}]);
+editGroupOk=!0;
 }
+});
+}catch(eg){
+console.warn("[PATCH] textEditGroup failed, falling back",eg);
+}
+if(!editGroupOk){
+globalThis.__pendingEdits=T;
+for(const ed of T.edits.slice(0,6)){
+if(ed.action==="delete"||!ed.content)continue;
+const lang=ed.path?.match(/\.(\w+)$/)?.[1]||"text";
+P([{kind:"markdownContent",content:new we(`📝 \`${ed.path}\`\n\`\`\`${lang}\n${ed.content.slice(0,1500)}\n\`\`\`\n`)}]);
+}
+P([{kind:"markdownContent",content:new we(`\n---\n输入 **确认** 应用修改，或 **取消** 放弃。\n`)}]);
+}
+return{timings:{firstProgress:0,totalElapsed:Date.now()-te}};
 }
 T?.error&&P([{kind:"markdownContent",content:new we(`自动改代码未成功，已回退为普通对话模式：${T.error}\n`)}]);
 }
