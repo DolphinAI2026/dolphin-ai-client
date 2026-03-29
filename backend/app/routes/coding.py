@@ -1570,7 +1570,6 @@ async def _get_app_context(user: User, app_id: str) -> dict:
 async def upload_file(
     file: UploadFile = File(...),
     workspace_id: Optional[str] = Query(None),
-    ctx: Annotated[AuthContext, Depends(get_auth_context)] = None,
 ):
     """
     上传文件（图片/文档）用于对话附件。
