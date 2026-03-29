@@ -322,6 +322,63 @@ def _build_openai_chat_completions_url() -> str:
     return f"{base}/chat/completions"
 
 
+# IDE Coding 模型路由表
+_CODING_MODEL_ROUTES: dict = {}
+
+
+def _init_coding_model_routes():
+    """从 settings 构建模型路由表（启动时调用一次）"""
+    global _CODING_MODEL_ROUTES
+    routes = {}
+
+    # 默认模型（MiniMax）
+    routes["default"] = {
+        "url": _build_openai_chat_completions_url(),
+        "api_key": settings.llm_api_key,
+    }
+
+    # DeepSeek
+    if settings.coding_model_deepseek_base_url and settings.coding_model_deepseek_api_key:
+        base = settings.coding_model_deepseek_base_url.rstrip("/")
+        if not base.endswith("/v1"):
+            base = f"{base}/v1"
+        routes["deepseek"] = {
+            "url": f"{base}/chat/completions",
+            "api_key": settings.coding_model_deepseek_api_key,
+            "model": settings.coding_model_deepseek_model,
+        }
+
+    # Qwen
+    if settings.coding_model_qwen_base_url and settings.coding_model_qwen_api_key:
+        base = settings.coding_model_qwen_base_url.rstrip("/")
+        if not base.endswith("/v1"):
+            base = f"{base}/v1"
+        routes["qwen"] = {
+            "url": f"{base}/chat/completions",
+            "api_key": settings.coding_model_qwen_api_key,
+            "model": settings.coding_model_qwen_model,
+        }
+
+    _CODING_MODEL_ROUTES = routes
+
+
+def _resolve_coding_model(model_name: str) -> tuple:
+    """根据前端传入的 model 名称，返回 (upstream_url, api_key)"""
+    if not _CODING_MODEL_ROUTES:
+        _init_coding_model_routes()
+
+    model_lower = (model_name or "").lower()
+
+    # 按关键词匹配模型路由
+    for key, route in _CODING_MODEL_ROUTES.items():
+        if key != "default" and key in model_lower:
+            return route["url"], route["api_key"]
+
+    # 默认走 MiniMax
+    default = _CODING_MODEL_ROUTES.get("default", {})
+    return default.get("url", _build_openai_chat_completions_url()), default.get("api_key", settings.llm_api_key)
+
+
 # ============================================================
 # 请求/响应模型
 # ============================================================
@@ -861,6 +918,29 @@ class IDEImageOCRRequest(BaseModel):
     images: list[IDEImageOCRItem] = []
 
 
+@router.get("/workspace/{ws_id}/ide/models")
+async def ide_available_models(
+    ws_id: str,
+    x_vibe_ide_token: Annotated[Optional[str], Header(alias="X-Vibe-IDE-Token")] = None,
+    token: Optional[str] = Query(default=None),
+):
+    """返回可用的 Coding 模型列表（不暴露 API Key）"""
+    ide_token = x_vibe_ide_token or token
+    if ide_token:
+        _verify_ide_access_token(ide_token, ws_id)
+
+    if not _CODING_MODEL_ROUTES:
+        _init_coding_model_routes()
+
+    models = []
+    for key, route in _CODING_MODEL_ROUTES.items():
+        if key == "default":
+            models.append({"id": settings.llm_model, "name": f"MiniMax ({settings.llm_model})", "provider": "minimax"})
+        else:
+            models.append({"id": route.get("model", key), "name": f"{key.title()} ({route.get('model', key)})", "provider": key})
+    return {"models": models}
+
+
 @router.post("/workspace/{ws_id}/ide/chat/completions")
 async def ide_chat_completions_proxy(
     ws_id: str,
@@ -880,10 +960,10 @@ async def ide_chat_completions_proxy(
     except Exception:
         raise HTTPException(status_code=400, detail="无效的请求体")
 
-    upstream_url = _build_openai_chat_completions_url()
+    upstream_url, api_key = _resolve_coding_model(payload.get("model", ""))
     upstream_headers = {
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {settings.llm_api_key}",
+        "Authorization": f"Bearer {api_key}",
     }
     stream = bool(payload.get("stream"))
 

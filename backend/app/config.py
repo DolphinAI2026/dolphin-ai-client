@@ -48,5 +48,15 @@ class Settings(BaseSettings):
     # code-server 的外部访问基础 URL，留空则禁用 Web IDE 功能
     code_server_base_url: str = ""  # e.g. https://your-domain.com/ide/
 
+    # IDE Coding 模型配置（多模型支持）
+    # 格式：CODING_MODEL_{NAME}_BASE_URL / _API_KEY / _MODEL
+    # 前端通过 model 字段选择，后端路由到对应上游
+    coding_model_deepseek_base_url: str = ""
+    coding_model_deepseek_api_key: str = ""
+    coding_model_deepseek_model: str = "deepseek-chat"
+    coding_model_qwen_base_url: str = ""
+    coding_model_qwen_api_key: str = ""
+    coding_model_qwen_model: str = "qwen-plus"
+
 
 settings = Settings()
