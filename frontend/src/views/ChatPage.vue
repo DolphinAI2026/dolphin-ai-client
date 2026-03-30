@@ -37,12 +37,6 @@
           <span v-if="activeView === 'platform'" class="active-dot"></span>
         </button>
         <button
-          v-if="SHOW_PLATFORM_CONFIG && activeView === 'platform' && platformIframeUrl"
-          class="agent-tab-action"
-          @click="openPlatformNewTab"
-          title="在新窗口打开"
-        >↗</button>
-        <button
           v-if="store.currentApp?.apaas_app_id"
           class="agent-tab"
           :class="{ active: activeView === 'coding' }"
@@ -52,6 +46,12 @@
           <span>智能开发</span>
           <span v-if="activeView === 'coding'" class="active-dot"></span>
         </button>
+        <button
+          v-if="SHOW_PLATFORM_CONFIG && activeView === 'platform' && platformIframeUrl"
+          class="agent-tab-action"
+          @click="openPlatformNewTab"
+          title="在新窗口打开"
+        >↗</button>
       </div>
 
       <!-- 平台配置 iframe（v-show 保持不销毁） -->
@@ -3643,7 +3643,7 @@ watch(conversationId, (id) => {
 
 /* ── 平台配置 iframe ── */
 .platform-iframe-container {
-  flex: 1; position: relative; overflow: hidden; min-height: 0;
+  flex: 1; display: flex; flex-direction: column; min-height: 0;
 }
 .platform-tab-bar {
   display: flex; align-items: center; gap: 4px; padding: 4px 16px;
@@ -3672,7 +3672,7 @@ watch(conversationId, (id) => {
 }
 .hint-dismiss-btn:hover { color: var(--t-text-secondary); }
 .platform-iframe {
-  position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; background: #fff;
+  width: 100%; height: 100%; border: none; background: #fff; flex: 1;
 }
 .platform-loading {
   flex: 1; display: flex; align-items: center; justify-content: center;
