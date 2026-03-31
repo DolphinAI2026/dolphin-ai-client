@@ -4,12 +4,76 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
+import httpx
 from app.database import get_db
 from app.models import User, Conversation, Message
 from app.schemas import ChatRequest
 from app.deps import get_auth_context, AuthContext
 from app.llm_client import LLMClient
 from app.field_types import build_prompt_field_types_compact
+
+
+async def _get_tenant_llm_config(db: AsyncSession, tenant_id: int) -> dict | None:
+    from app.models import LLMConfig
+    from app.crypto import decrypt_password
+    result = await db.execute(
+        select(LLMConfig).where(
+            LLMConfig.tenant_id == tenant_id,
+            LLMConfig.is_default == True,
+            LLMConfig.status == "active",
+        )
+    )
+    config = result.scalar_one_or_none()
+    if not config:
+        result = await db.execute(
+            select(LLMConfig).where(
+                LLMConfig.tenant_id == tenant_id,
+                LLMConfig.status == "active",
+            ).limit(1)
+        )
+        config = result.scalar_one_or_none()
+    if not config:
+        return None
+    return {
+        "api_key": decrypt_password(config.api_key_enc),
+        "base_url": config.base_url.rstrip("/"),
+        "model": config.model,
+        "max_tokens": config.max_tokens or 8192,
+    }
+
+
+async def _stream_with_tenant_llm(cfg: dict | None, messages: list):
+    """使用租户 LLM 配置流式调用，yield OpenAI 格式 JSON 字符串"""
+    if cfg is None:
+        llm = LLMClient()
+        async for chunk in llm.chat_completion_stream(messages):
+            yield chunk
+        return
+    payload = {
+        "model": cfg["model"],
+        "messages": messages,
+        "max_tokens": cfg["max_tokens"],
+        "stream": True,
+    }
+    timeout = httpx.Timeout(connect=15.0, read=300.0, write=15.0, pool=15.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        async with client.stream(
+            "POST",
+            f"{cfg['base_url']}/chat/completions",
+            headers={"Authorization": f"Bearer {cfg['api_key']}", "Content-Type": "application/json"},
+            json=payload,
+        ) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if not line or not line.startswith("data:"):
+                    continue
+                raw = line[5:].strip()
+                if raw == "[DONE]":
+                    break
+                try:
+                    yield json.dumps(json.loads(raw), ensure_ascii=False)
+                except Exception:
+                    continue
 
 router = APIRouter(prefix="/chat", tags=["聊天"])
 
@@ -34,6 +98,14 @@ BUILDER_SYSTEM_PROMPT = """你是 aPaaS Builder AI，得帆云低代码平台的
 - 功能权限：查看、新增、编辑、删除、导入、导出等操作控制
 - 数据权限：控制可见数据范围（本人/本部门/全部等）
 - 数据范围类型：SELF(本人)、CURRENT_USER_DEPT(本部门)、CURRENT_USER_DEPT_LOW_LEVEL(本部门及下级)、ALL(全部)
+
+**表结构设计规范**：
+- 平台自动维护以下系统字段，**设计表结构时绝对不要添加**：id、创建时间、更新时间、创建人、更新人（以及任何同义变体如 create_time、update_by 等）
+- 只设计真正的业务字段
+
+**角色设计规范**：
+- "员工"、"全体员工"、"所有员工" 等通用性角色**不需要创建**，平台内置"全体成员"概念，在权限配置中用 role="all" 表达
+- "直属上级"、"部门经理"、"上级领导" 等层级关系角色**不需要创建**，平台直接读取组织架构，在审批流程节点中配置即可
 
 **重要限制**：
 - 应用编码和菜单编码创建后不可修改
@@ -104,57 +176,18 @@ BUILDER_SYSTEM_PROMPT = """你是 aPaaS Builder AI，得帆云低代码平台的
 
 **当同一个功能两种方式都能实现时**，优先推荐标准配置，并说明局限性。
 
-## 增量修改模式（非常重要）
-如果收到"当前应用配置"的system消息，说明右侧预览面板已有完整配置。此时**绝对禁止重新输出完整配置JSON**！
-
-**用户只是确认时**（"确认"、"可以"、"就这样"）：
-- 直接回复："配置已就绪！点击右上角的 **开始生成** 按钮即可创建应用。"
-
-**用户要求修改时**（"加个字段"、"补充字典"、"删除XX"）：
-- 先用文字说明修改内容
-- 然后输出 **patch 指令JSON**（不是完整配置！），格式如下：
-
-```json
-{"type":"patch","actions":[
-  {"op":"add_dict","value":{"name":"协议类型","code":"agreement_type","options":[{"name":"劳务派遣协议","code":"labor_dispatch"},{"name":"服务协议","code":"service_agreement"}]}},
-  {"op":"add_field","model":"客户信息","value":{"name":"邮箱","type":"电子邮箱","icon":"@","code":"customer_email","required":false}},
-  {"op":"update_dict","target":"客户类型","value":{"options":[{"name":"VIP","code":"vip"},{"name":"普通","code":"normal"},{"name":"新增选项","code":"new_opt"}]}},
-  {"op":"remove_field","model":"客户信息","target":"传真号"},
-  {"op":"remove_dict","target":"旧字典名"},
-  {"op":"add_model","value":{"name":"新表单","code":"new_form","fields":[...]}},
-  {"op":"remove_model","target":"要删除的表单名"},
-  {"op":"add_role","value":{"name":"审批员","code":"role_approver"}},
-  {"op":"update_field","model":"客户信息","target":"联系电话","value":{"type":"手机号码","icon":"P"}},
-  {"op":"add_workflow","value":{"name":"请假审批流程","form":"请假申请","nodes":[{"name":"发起申请","role":"","type":"start"},{"name":"部门经理审批","role":"dept_manager","type":"approve"},{"name":"结束","role":"","type":"end"}]}},
-  {"op":"remove_workflow","target":"旧流程名"}
-]}
-```
-
-**patch操作说明**：
-- `add_dict`: 新增字典，value 是完整字典对象
-- `update_dict`: 修改字典，target 是字典名，value 中只需包含要改的属性（如 options）
-- `remove_dict`: 删除字典，target 是字典名
-- `add_field`: 给模型加字段，model 是模型名，value 是字段对象
-- `update_field`: 修改字段，model+target 定位，value 是要改的属性
-- `remove_field`: 删除字段，model+target 定位
-- `add_model`: 新增模型，value 是完整模型对象
-- `remove_model`: 删除模型，target 是模型名
-- `add_role`/`remove_role`: 角色操作
-- `add_workflow`: 新增审批流程，value 包含 name/form/nodes
-- `update_workflow`: 修改流程，target 是流程名
-- `remove_workflow`: 删除流程，target 是流程名
-
-**关键**：只输出变更部分的 patch，不要输出完整配置！配置可能有几十个表单和字典，重新输出会浪费大量资源。
-
 ## 重要规则
 - 用中文回复，使用markdown格式
 - 主动引导用户补充信息（特别是：哪些字段需要枚举选项？哪些表单之间有关联？）
-- 有当前配置时，必须用 patch 格式；没有当前配置时，用完整的 preview 格式
 - 模型之间有关联时，使用"数据单选"字段类型并指定ref
 - 需要枚举选项的字段，**必须**先在dicts中定义字典，再在字段中用dict引用
 - 有明细行的表单（如订单明细），使用"子表"字段类型
 - 所有code字段只用英文、数字、下划线，以字母开头
 - code必须避免数据库保留字，如name/status/type/order/date/number/code/description/title/content/note/remark/contact/price/total/quantity/company/customer/product/service/region等。建议加业务前缀，如customer_name、order_status
+- **【禁止】** 在任何表单的 fields 中出现 id、创建时间、更新时间、创建人、更新人及其英文变体（create_time、update_time、created_by、updated_by、creator 等），这些由平台自动维护
+- **【禁止】** 创建"员工"、"全体员工"等通用性角色，需要表达全员时直接在 permissions 中使用 role="all"
+- **【禁止】** 创建"直属上级"、"部门经理"等层级角色，审批流程中的层级关系由平台组织架构自动处理
+- **【必须】** 每个表单的 permissions 中，**默认包含一条 role="all" 的全体人员规则**，再叠加其他角色的差异化权限
 
 ## 生成配置
 当需求明确后，在回复最后附上配置JSON，用 ```json 代码块包裹：
@@ -174,9 +207,10 @@ BUILDER_SYSTEM_PROMPT = """你是 aPaaS Builder AI，得帆云低代码平台的
 - sub_fields: 子表内的字段数组（格式同普通字段）
 
 ## 权限配置说明
-- role: 角色code，"all"表示全部人员
+- role: 角色code，"all" 表示全体人员（平台内置，**无需在 roles 中定义**）
 - op: 操作类型，"all"=全部操作, "add"=新增, "edit"=编辑, "delete"=删除
-- data: 数据范围，"ALL"=全部, "SELF"=本人, "dept"=本部门"""
+- data: 数据范围，"ALL"=全部, "SELF"=本人, "dept"=本部门
+- **每个表单权限必须包含全体人员兜底规则**，示例：`{"role":"all","op":"all","data":"ALL"}`，再按需叠加角色限制"""
 
 ASSISTANT_SYSTEM_PROMPT = """你是 aPaaS 辅助开发智能体，帮助用户完善已有应用的配置，包括：创建审批流程、配置业务规则、调整表单组件、配置数据权限。用中文回复，使用markdown格式。"""
 
@@ -229,33 +263,6 @@ async def send_message(
     system_prompt = SYSTEM_PROMPTS.get(conversation.agent_type, BUILDER_SYSTEM_PROMPT)
     llm_messages = [{"role": "system", "content": system_prompt}]
 
-    # 注入当前配置摘要（增量修改模式）
-    # 注意：不传完整 JSON（太大会导致 LLM 全量复制），只传摘要
-    if data.current_config:
-        cfg = data.current_config
-        models_info = []
-        for m in cfg.get("models", []):
-            fields = [f.get("name", "") for f in m.get("fields", [])]
-            models_info.append(f"  - {m.get('name')}({m.get('code','')}): {', '.join(fields)}")
-        dicts_info = []
-        for d in cfg.get("dicts", []):
-            opts = [o.get("name", "") if isinstance(o, dict) else str(o) for o in d.get("options", [])]
-            opts_str = ", ".join(opts) if opts else "⚠️空"
-            dicts_info.append(f"  - {d.get('name')}({d.get('code','')}): {opts_str}")
-        roles_info = [f"{r.get('name')}({r.get('code','')})" for r in cfg.get("roles", [])]
-
-        summary = f"⚠️ 增量修改模式 — 当前配置已有 {len(cfg.get('models',[]))} 个模型、{len(cfg.get('dicts',[]))} 个字典。\n"
-        summary += f"应用名: {cfg.get('appName','')}\n"
-        summary += f"角色: {', '.join(roles_info) if roles_info else '无'}\n"
-        summary += f"模型:\n" + "\n".join(models_info) + "\n" if models_info else ""
-        summary += f"字典:\n" + "\n".join(dicts_info) + "\n" if dicts_info else ""
-        summary += "\n请用 patch 格式输出变更，禁止输出完整配置JSON！"
-
-        llm_messages.append({
-            "role": "system",
-            "content": summary
-        })
-
     # 截断历史消息：只保留最近的消息，总字符数不超过 30000
     history_msgs = [{"role": msg.role, "content": msg.content} for msg in messages]
     truncated = []
@@ -268,14 +275,16 @@ async def send_message(
         total_chars += msg_len
     llm_messages.extend(truncated)
 
+    # 预取租户 LLM 配置
+    llm_cfg = await _get_tenant_llm_config(db, ctx.tenant_id)
+
     # 流式响应
     async def event_generator():
-        llm_client = LLMClient()
         assistant_content = ""
         thinking_sent = False
 
         try:
-            async for chunk in llm_client.chat_completion_stream(llm_messages):
+            async for chunk in _stream_with_tenant_llm(llm_cfg, llm_messages):
                 chunk_data = json.loads(chunk)
                 if "choices" in chunk_data and len(chunk_data["choices"]) > 0:
                     delta = chunk_data["choices"][0].get("delta", {})
@@ -360,10 +369,12 @@ async def generate_config_phased(
         if m.role in ("user", "assistant")
     )
 
+    llm_cfg = await _get_tenant_llm_config(db, ctx.tenant_id)
+
     async def event_generator():
         try:
             complete_config = None
-            async for event in assemble_config_streaming(data.message, context):
+            async for event in assemble_config_streaming(data.message, context, llm_cfg=llm_cfg):
                 yield {
                     "event": "progress",
                     "data": json.dumps(event, ensure_ascii=False)

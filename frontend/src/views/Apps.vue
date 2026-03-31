@@ -47,7 +47,7 @@
 
       <!-- Grid (card) view -->
       <template v-if="viewMode === 'grid'">
-        <div v-for="a in filteredApps" :key="a.id" class="grid-card" @click="router.push({ path: '/chat', query: { app_id: String(a.id) } })">
+        <div v-for="a in filteredApps" :key="a.id" class="grid-card" @click="router.push({ path: '/chat', query: { app_id: String(a.id), app_mode: 'parsed' } })">
           <div class="grid-card-top">
             <div class="grid-card-icon" :class="sourceIconClass(a)">{{ sourceIcon(a) }}</div>
             <div class="grid-card-badges">
@@ -83,7 +83,7 @@
 
       <!-- List view -->
       <template v-if="viewMode === 'list'">
-        <div v-for="a in filteredApps" :key="a.id" class="list-card" @click="router.push({ path: '/chat', query: { app_id: String(a.id) } })">
+        <div v-for="a in filteredApps" :key="a.id" class="list-card" @click="router.push({ path: '/chat', query: { app_id: String(a.id), app_mode: 'parsed' } })">
           <div class="card-header">
             <div class="card-left">
               <div class="card-icon" :class="sourceIconClass(a)">{{ sourceIcon(a) }}</div>

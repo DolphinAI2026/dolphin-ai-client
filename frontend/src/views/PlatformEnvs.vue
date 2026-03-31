@@ -646,8 +646,8 @@ async function handleLlmTest(cfg: LlmConfigWithUI) {
   cfg._testing = true
   try {
     const res = await llmConfigApi.test(cfg.id)
-    if (res.ok) {
-      ElMessage.success(res.message ? `连接成功: ${res.message}` : '连接成功')
+    if (res.success) {
+      ElMessage.success(res.reply ? `连接成功: ${res.reply}` : '连接成功')
       cfg.status = 'active'
     } else {
       ElMessage.error(res.error || '连接失败')

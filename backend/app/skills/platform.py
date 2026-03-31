@@ -12,6 +12,7 @@ from typing import Dict, List, Optional, Tuple
 
 from app.apaas_client import APaaSClient
 from app.config import settings
+from app.field_types import get_field_type_map
 
 logger = logging.getLogger(__name__)
 
@@ -62,14 +63,8 @@ def _safe_code(code: str) -> str:
 
 
 # 字段类型映射：预览类型 → 数据模型字段类型
-FIELD_TYPE_MAP = {
-    '单据号': 'STRING', '单行输入': 'STRING', '多行输入': 'BIG_TEXT',
-    '手机号码': 'STRING', '电子邮箱': 'STRING', '下拉单选': 'STRING',
-    '下拉多选': 'STRING', '数据单选': 'STRING', '日期时间': 'DATE',
-    '金额': 'NUM', '数字': 'NUM', '附件上传': 'STRING',
-    '开关': 'STRING', '布尔': 'STRING', '人员选择': 'STRING', '部门选择': 'STRING',
-    '地理位置': 'STRING',
-}
+# 统一从 field_types.py 获取，避免重复维护
+FIELD_TYPE_MAP: Dict[str, str] = get_field_type_map()
 
 
 # ── Skill 1: 登录 ──

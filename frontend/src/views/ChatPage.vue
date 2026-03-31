@@ -8,13 +8,36 @@
         <div class="logo-box">A</div>
         <span class="logo-text">aPaaS Builder AI</span>
       </div>
-      <div class="nav-right">
-        <ThemeToggle />
+      <div class="nav-center">
+        <el-dropdown v-if="!appParsedMode" @command="handleNewApp" trigger="click">
+          <button class="nav-link nav-link-primary">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            新建应用
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+          </button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="requirements">
+                <div class="new-app-item"><strong>从需求分析开始</strong><span>与 AI 对话梳理需求</span></div>
+              </el-dropdown-item>
+              <el-dropdown-item command="direct">
+                <div class="new-app-item"><strong>直接描述搭建</strong><span>跳过需求分析</span></div>
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
         <button class="nav-link" @click="router.push('/apps')">
-          📁 我的应用
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+          我的应用
           <span v-if="appCount > 0" class="project-count">{{ appCount }}</span>
         </button>
-        <button class="nav-link" @click="router.push('/')">+ 新建应用</button>
+        <button class="nav-link" @click="router.push('/platform-envs')">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          环境管理
+        </button>
+      </div>
+      <div class="nav-right">
+        <ThemeToggle />
       </div>
     </nav>
 
@@ -97,35 +120,17 @@
       <div v-show="!SHOW_PLATFORM_CONFIG || activeView === 'builder'" class="builder-content">
       <!-- 左侧对话区 -->
       <div class="chat-side">
-        <!-- 对话历史栏 -->
-        <div class="conversation-history-bar">
-          <div class="conv-history-left">
-            <span class="conv-history-label">对话历史</span>
-            <el-select
-              v-model="selectedConversationId"
-              placeholder="选择对话..."
-              class="conv-history-select"
-              :teleported="false"
-              @change="onConversationSwitch"
-              popper-class="conv-history-popper"
-            >
-              <el-option
-                v-for="conv in conversationList"
-                :key="conv.id"
-                :value="conv.id"
-                :label="getConversationLabel(conv)"
-              >
-                <div class="conv-option-row">
-                  <span class="conv-option-title">{{ getConversationLabel(conv) }}</span>
-                  <span class="conv-option-time">{{ formatConvTime(conv.created_at) }}</span>
-                </div>
-              </el-option>
-            </el-select>
+        <div v-if="appParsedMode" class="doc-view-wrap">
+          <div class="doc-view-head">
+            <div class="doc-view-title">功能设计文档</div>
+            <div class="doc-view-file">{{ lastParsedFilename || `${store.preview.appName || '未命名应用'}.md` }}</div>
           </div>
-          <button class="conv-new-btn" @click="startNewConversation">+ 新建对话</button>
+          <div class="doc-view-body" v-html="renderedLatestDocHtml"></div>
+          <div v-if="!latestDocContent.trim()" class="doc-view-empty">
+            暂无可展示的文档正文，可在需求分析中重新生成后查看。
+          </div>
         </div>
-
-        <div class="messages" ref="messagesRef">
+        <div v-else class="messages" ref="messagesRef">
           <div v-for="(msg, idx) in messages" :key="idx" class="chat-bubble" :class="msg.role">
             <div class="bubble-inner">
               <div v-if="msg.role === 'assistant'" class="agent-label">
@@ -166,7 +171,22 @@
           </div>
         </div>
 
-        <div class="input-bar">
+        <!-- 配置就绪后的操作栏 -->
+        <div v-if="readyForGenerate" class="gen-action-bar">
+          <button
+            v-if="deployAllDone || store.currentApp?.status === 'completed'"
+            class="gen-btn done"
+            @click="openDeployPanel"
+          >✅ 已部署 · 查看记录</button>
+          <button
+            v-else
+            class="gen-btn"
+            :disabled="generating"
+            @click="startGenerate"
+          >{{ generating ? '创建中...' : deployAppId ? '⚡ 重新部署' : '⚡ 开始生成' }}</button>
+        </div>
+
+        <div v-if="false" class="input-bar">
           <div class="input-wrap">
             <label class="upload-btn" title="上传功能设计文档(.md)">
               <input type="file" accept=".md" @change="handleDocUpload" style="display:none" />
@@ -180,350 +200,32 @@
         </div>
       </div>
 
-      <!-- 右侧预览面板 -->
-      <div class="preview-side">
-        <div v-if="store.currentApp" class="preview-tabs">
-          <button v-for="tab in tabs" :key="tab.k" class="ptab" :class="{ active: store.previewTab === tab.k }" @click="store.previewTab = tab.k">{{ tab.l }}</button>
-        </div>
-
-        <!-- 未开始 -->
-        <div v-if="!store.currentApp" class="preview-empty">
-          <div class="empty-icon">📋</div>
-          <div>开始对话后<br>这里会实时展示配置预览</div>
-        </div>
-
-        <div v-else class="preview-body">
-          <!-- 文档版本 -->
-          <div v-show="store.previewTab === 'docs'" class="tab-content doc-versions-tab">
-            <div class="doc-upload-bar">
-              <span class="doc-tab-title">文档版本</span>
-            </div>
-            <div v-if="docVersionsLoading" class="preview-empty small">加载中...</div>
-            <div v-else-if="docVersions.length === 0" class="preview-empty small">暂无文档版本</div>
-            <div v-else class="doc-version-list">
-              <div v-for="ver in docVersions" :key="ver.id" class="doc-version-card">
-                <div class="doc-ver-header">
-                  <span class="doc-ver-num">V{{ ver.version }}</span>
-                  <span class="doc-ver-filename">{{ ver.filename }}</span>
-                </div>
-                <div class="doc-ver-meta">
-                  <span class="doc-ver-time">{{ formatDocTime(ver.created_at) }}</span>
-                  <span v-if="ver.summary" class="doc-ver-summary">{{ ver.summary }}</span>
-                </div>
-                <div class="doc-ver-actions">
-                  <button class="doc-action-btn" @click="openDocPreview(ver)">预览</button>
-                  <button v-if="ver.version >= 2" class="doc-action-btn diff" @click="openDocDiff(ver)">与上一版本对比</button>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- 文档预览弹窗 -->
-          <el-dialog v-model="docPreviewVisible" :title="docPreviewTitle" width="70%" class="doc-preview-dialog" :append-to-body="true">
-            <div class="doc-preview-body markdown-body" v-html="renderMarkdown(docPreviewContent)"></div>
-          </el-dialog>
-
-          <!-- 文档对比弹窗 -->
-          <el-dialog v-model="docDiffVisible" title="版本对比" width="90%" class="doc-diff-dialog" :append-to-body="true">
-            <div class="diff-summary-bar">
-              <span class="diff-stat added">+ {{ docDiffResult.right.filter(l => l.type === 'added').length }} 行新增</span>
-              <span class="diff-stat removed">- {{ docDiffResult.left.filter(l => l.type === 'removed').length }} 行删除</span>
-              <span class="diff-stat unchanged">{{ docDiffResult.right.filter(l => l.type === 'same' && l.text).length }} 行未变</span>
-            </div>
-            <div class="doc-diff-container">
-              <div class="doc-diff-pane">
-                <div class="doc-diff-pane-title">{{ docDiffLeftTitle }}</div>
-                <div class="doc-diff-content">
-                  <div v-for="(line, idx) in docDiffResult.left" :key="'l'+idx" class="doc-diff-line" :class="{ removed: line.type === 'removed' }">
-                    <span class="doc-diff-lineno">{{ idx + 1 }}</span>
-                    <span class="doc-diff-text">{{ line.text }}</span>
-                  </div>
-                </div>
-              </div>
-              <div class="doc-diff-pane">
-                <div class="doc-diff-pane-title">{{ docDiffRightTitle }}</div>
-                <div class="doc-diff-content">
-                  <div v-for="(line, idx) in docDiffResult.right" :key="'r'+idx" class="doc-diff-line" :class="{ added: line.type === 'added' }">
-                    <span class="doc-diff-lineno">{{ idx + 1 }}</span>
-                    <span class="doc-diff-text">{{ line.text }}</span>
-                  </div>
-                </div>
-              </div>
-              <!-- 变更摘要面板 -->
-              <div class="diff-changes-panel">
-                <div class="dcp-title">变更摘要</div>
-                <div class="dcp-list">
-                  <div v-for="(change, idx) in diffChangeSummary" :key="idx" class="dcp-item" :class="change.type">
-                    <span class="dcp-icon">{{ change.type === 'added' ? '+' : change.type === 'removed' ? '-' : '~' }}</span>
-                    <span class="dcp-text">{{ change.text }}</span>
-                  </div>
-                  <div v-if="diffChangeSummary.length === 0" class="dcp-empty">无结构化变更</div>
-                </div>
-              </div>
-            </div>
-          </el-dialog>
-
-          <div v-show="store.previewTab === 'overview'" class="tab-content">
-            <div class="overview-header">
-              <h4>{{ store.preview.appName }}</h4>
-              <span class="status-tag" :class="appDisplayStatus">
-                {{ appDisplayStatusText }}
-              </span>
-            </div>
-            <div class="stat-grid">
-              <div class="stat-card indigo"><div class="stat-num">{{ store.preview.models.length }}</div><div class="stat-label">数据模型</div></div>
-              <div class="stat-card teal"><div class="stat-num">{{ store.preview.models.length }}</div><div class="stat-label">表单配置</div></div>
-              <div class="stat-card emerald"><div class="stat-num">{{ store.preview.roles.length }}</div><div class="stat-label">角色</div></div>
-              <div class="stat-card amber"><div class="stat-num">{{ store.preview.dicts.length }}</div><div class="stat-label">数据字典</div></div>
-            </div>
-            <div class="sub-section">
-              <div class="sub-title">角色 <button class="add-mini" @click="addRole">+</button></div>
-              <div class="tag-list">
-                <span v-for="(r, ri) in store.preview.roles" :key="r.code" class="tag editable" @click="removeRole(ri)" title="点击删除">{{ r.name }} ×</span>
-                <span v-if="store.preview.roles.length === 0" class="tag empty">暂无角色</span>
-              </div>
-            </div>
-            <div class="sub-section">
-              <div class="sub-title">数据字典 <button class="add-mini" @click="addDict">+</button></div>
-              <div class="dict-list">
-                <div v-for="(d, di) in store.preview.dicts" :key="d.code" class="dict-row">
-                  <span class="dict-name">{{ d.name }}</span>
-                  <span class="dict-opts" :class="{ empty: !d.options || d.options.length === 0 }">
-                    {{ d.options && d.options.length > 0 ? d.options.map((o: any) => typeof o === 'string' ? o : o.name).join('、') : '⚠️ 空字典' }}
-                  </span>
-                  <button class="edit-mini" @click="editDict(di)" title="编辑选项">✏️</button>
-                  <button class="del-mini" @click="removeDict(di)" title="删除字典">🗑</button>
-                </div>
-              </div>
-            </div>
-            <!-- 分阶段生成配置按钮 -->
-            <button v-if="store.currentApp && store.preview.models.length === 0 && !assembling" class="assemble-btn" @click="startAssembleConfig">
-              🧩 自动生成配置
-            </button>
-            <!-- 生成进度 -->
-            <div v-if="assembling" class="assemble-progress">
-              <div class="assemble-spinner">⟳</div>
-              <span>{{ assembleMessage }}</span>
-            </div>
-            <!-- 开始生成（部署到平台） -->
-            <!-- 开始生成 / 已部署状态 -->
-            <div v-if="(deployAllDone || store.currentApp?.status === 'completed') && !hasConfigChanged" class="deployed-banner">
-              <span>✅ 已部署到平台</span>
-              <button class="view-deploy-btn" @click="openDeployPanel">查看部署记录</button>
-            </div>
-            <button v-else-if="!assembling && store.preview.models.length > 0 && (store.currentApp?.status === 'draft' || store.currentApp?.status === 'generating' || store.currentApp?.status === 'failed' || hasConfigChanged)" class="gen-btn" :disabled="generating" @click="startGenerate">{{ generating ? '创建中...' : hasConfigChanged ? '⚡ 更新配置并部署' : deployAppId ? '⚡ 重新部署' : '⚡ 开始生成' }}</button>
-          </div>
-
-          <!-- 模型 -->
-          <div v-show="store.previewTab === 'models'" class="tab-content">
-            <div class="model-select-bar" v-if="store.preview.models.length > 3">
-              <label class="model-select-all">
-                <input type="checkbox" :checked="selectedModelIndices.length === 0" @change="toggleSelectAll" />
-                <span>全选 ({{ selectedModelIndices.length === 0 ? store.preview.models.length : selectedModelIndices.length }}/{{ store.preview.models.length }})</span>
-              </label>
-              <span class="model-select-tip">可勾选部分模型分批生成</span>
-            </div>
-            <div v-for="(m, mi) in store.preview.models" :key="mi" class="model-card" :class="{ 'model-deselected': selectedModelIndices.length > 0 && !selectedModelIndices.includes(mi) }">
-              <div class="model-header">
-                <label v-if="store.preview.models.length > 3" class="model-checkbox" @click.stop>
-                  <input type="checkbox" :checked="selectedModelIndices.length === 0 || selectedModelIndices.includes(mi)" @change="toggleModelSelect(mi)" />
-                </label>
-                <span>📊</span><span class="model-name">{{ m.name }}</span><span class="model-code">{{ m.code }}</span>
-              </div>
-              <div class="field-list">
-                <div v-for="(f, fi) in m.fields" :key="fi" class="field-row">
-                  <div class="field-left"><span class="field-icon" :title="f.type">{{ getFieldIcon(f) }}</span><span class="field-name">{{ f.name }}</span><span v-if="f.required" class="req">*</span></div>
-                  <div class="field-right"><span v-if="f.dict" class="ftag dict">{{ f.dict }}</span><span v-if="f.ref" class="ftag ref">→{{ typeof f.ref === 'object' ? f.ref.model : f.ref }}</span><span class="ftype">{{ f.type }}</span></div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- 表单 -->
-          <div v-show="store.previewTab === 'forms'" class="tab-content">
-            <div class="form-selector">
-              <button v-for="(m, mi) in store.preview.models" :key="mi" class="form-tab" :class="{ active: store.previewFormIdx === mi }" @click="store.previewFormIdx = mi">{{ m.name }}</button>
-            </div>
-            <div class="form-preview">
-              <div class="form-title">{{ store.preview.models[store.previewFormIdx]?.name }} 表单</div>
-              <div class="form-fields-grid">
-                <div v-for="(f, fi) in store.preview.models[store.previewFormIdx]?.fields" :key="fi" class="form-field" :class="{ 'full-width': ['多行输入','附件上传','子表'].includes(f.type) }">
-                  <template v-if="f.type === '子表'">
-                    <div class="form-label">{{ f.name }}<span v-if="f.required" class="req">*</span></div>
-                    <div class="subtable-wrapper">
-                      <table class="subtable">
-                        <thead>
-                          <tr>
-                            <th class="subtable-idx">#</th>
-                            <th v-for="sf in (f.sub_fields || [])" :key="sf.name">{{ sf.name }}</th>
-                            <th class="subtable-op">操作</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          <tr>
-                            <td class="subtable-idx">1</td>
-                            <td v-for="sf in (f.sub_fields || [])" :key="sf.name">
-                              <span v-if="sf.type === '数据单选'" class="subtable-data-selector"><span class="mock-link">选择{{ typeof sf.ref === 'object' ? sf.ref.model : (sf.ref || sf.name) }}</span> <span class="mock-arrow">🔗</span></span>
-                              <span v-else-if="sf.type === '下拉单选'" class="subtable-placeholder">请选择{{ sf.dict || sf.name }} <span class="mock-arrow">▼</span></span>
-                              <span v-else-if="sf.type === '下拉多选'" class="subtable-placeholder">请选择{{ sf.dict || sf.name }} <span class="mock-arrow">☰</span></span>
-                              <span v-else-if="sf.type === '日期时间'" class="subtable-placeholder">请选择日期 <span class="mock-arrow">📅</span></span>
-                              <span v-else-if="sf.type === '金额'" class="subtable-placeholder">¥ 0.00</span>
-                              <span v-else-if="sf.type === '数字'" class="subtable-placeholder">0</span>
-                              <span v-else-if="sf.type === '人员选择'" class="subtable-placeholder">请选择人员 <span class="mock-arrow">👤</span></span>
-                              <span v-else-if="sf.type === '部门选择'" class="subtable-placeholder">请选择部门 <span class="mock-arrow">🏢</span></span>
-                              <span v-else-if="sf.type === '开关'" class="subtable-placeholder"><span class="mock-switch">○───</span></span>
-                              <span v-else class="subtable-placeholder">请输入{{ sf.name }}</span>
-                            </td>
-                            <td class="subtable-op"><span class="subtable-del">删除</span></td>
-                          </tr>
-                        </tbody>
-                      </table>
-                      <div class="subtable-add">+ 添加一行</div>
-                    </div>
-                  </template>
-                  <template v-else>
-                    <div class="form-label">{{ f.name }}<span v-if="f.required" class="req">*</span></div>
-                    <div class="form-mock" :class="f.type === '多行输入' ? 'tall' : ''">
-                      <template v-if="f.type === '单据号'"><span class="mock-auto">AUTO-001</span></template>
-                      <template v-else-if="f.type === '金额'">¥ 0.00</template>
-                      <template v-else-if="f.type === '数字'">0</template>
-                      <template v-else-if="f.type === '下拉单选'">请选择{{ f.dict || '' }} <span class="mock-arrow">▼</span></template>
-                      <template v-else-if="f.type === '下拉多选'">请选择{{ f.dict || '' }} <span class="mock-arrow">☰</span></template>
-                      <template v-else-if="f.type === '数据单选'"><span class="mock-link">选择{{ typeof f.ref === 'object' ? f.ref.model : (f.ref || '') }}</span> <span class="mock-arrow">🔗</span></template>
-                      <template v-else-if="f.type === '日期时间'">请选择日期 <span class="mock-arrow">📅</span></template>
-                      <template v-else-if="f.type === '附件上传'">📎 点击上传附件</template>
-                      <template v-else-if="f.type === '开关'"><span class="mock-switch">○───</span></template>
-                      <template v-else-if="f.type === '人员选择'">请选择人员 <span class="mock-arrow">👤</span></template>
-                      <template v-else-if="f.type === '部门选择'">请选择部门 <span class="mock-arrow">🏢</span></template>
-                      <template v-else-if="f.type === '地理位置'">请选择位置 <span class="mock-arrow">📍</span></template>
-                      <template v-else>请输入{{ f.name }}</template>
-                    </div>
-                  </template>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- 权限 -->
-          <div v-show="store.previewTab === 'perms'" class="tab-content">
-            <div v-for="(p, pi) in store.preview.permissions" :key="pi" class="perm-card">
-              <div class="perm-header">{{ p.form }}</div>
-              <table class="perm-table">
-                <thead><tr><th>角色</th><th>操作权限</th><th>数据范围</th></tr></thead>
-                <tbody>
-                  <tr v-for="(rule, ri) in p.rules" :key="ri">
-                    <td>{{ rule.role }}</td>
-                    <td>{{ rule.op }}</td>
-                    <td><span class="data-tag" :class="rule.data === '全部数据' ? 'all' : rule.data.includes('部门') ? 'dept' : 'self'">{{ rule.data }}</span></td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-
-        <!-- 变更计划确认 overlay -->
-        <div v-if="store.showChangePlan && store.changePlan" class="change-plan-overlay">
-          <div class="change-plan-header">
-            <h3>变更计划（V{{ store.changePlan.fromVersion }} → V{{ store.changePlan.toVersion }}）</h3>
-            <button class="change-plan-close" @click="store.showChangePlan = false">✕</button>
-          </div>
-
-          <div class="change-plan-body">
-            <ConfigDiff
-              v-if="changePlanResourceDiff"
-              :has-changes="changePlanResourceDiff.has_changes"
-              :summary="changePlanResourceDiff.summary"
-              :role-changes="changePlanResourceDiff.role_changes"
-              :dict-changes="changePlanResourceDiff.dict_changes"
-              :model-changes="changePlanResourceDiff.model_changes"
-              :form-changes="changePlanResourceDiff.form_changes"
-              :process-changes="[]"
-              :warnings="changePlanResourceDiff.warnings"
-              :unsupported-changes="changePlanResourceDiff.unsupported_changes"
-              :show-actions="false"
-              class="change-plan-diff"
-            />
-
-            <!-- 新增 -->
-            <div class="change-group" v-if="addedActions.length">
-              <div class="group-title" @click="toggleChangePlanGroup('added')">
-                <span class="group-arrow" :class="{ expanded: expandedGroups.added }">▸</span>
-                新增 ({{ addedActions.length }})
-              </div>
-              <template v-if="expandedGroups.added">
-                <div v-for="action in addedActions" :key="action.id" class="change-item">
-                  <input type="checkbox" v-model="action.selected" class="change-checkbox" />
-                  <span class="change-icon add">+</span>
-                  <span class="change-desc">{{ action.description }}</span>
-                </div>
-              </template>
-            </div>
-
-            <!-- 修改 -->
-            <div class="change-group" v-if="modifiedActions.length">
-              <div class="group-title" @click="toggleChangePlanGroup('modified')">
-                <span class="group-arrow" :class="{ expanded: expandedGroups.modified }">▸</span>
-                修改 ({{ modifiedActions.length }})
-              </div>
-              <template v-if="expandedGroups.modified">
-                <div v-for="action in modifiedActions" :key="action.id" class="change-item">
-                  <input type="checkbox" v-model="action.selected" class="change-checkbox" />
-                  <span class="change-icon modify">~</span>
-                  <span class="change-desc">{{ action.description }}</span>
-                </div>
-              </template>
-            </div>
-
-            <!-- 删除 -->
-            <div class="change-group" v-if="removedActions.length">
-              <div class="group-title" @click="toggleChangePlanGroup('removed')">
-                <span class="group-arrow" :class="{ expanded: expandedGroups.removed }">▸</span>
-                删除 ({{ removedActions.length }})
-              </div>
-              <template v-if="expandedGroups.removed">
-                <div v-for="action in removedActions" :key="action.id" class="change-item">
-                  <input type="checkbox" v-model="action.selected" class="change-checkbox" />
-                  <span class="change-icon remove">-</span>
-                  <span class="change-desc">{{ action.description }}</span>
-                </div>
-              </template>
-            </div>
-          </div>
-
-          <div class="change-plan-footer">
-            <button class="cp-btn" @click="changePlanSelectAll(true)">全选</button>
-            <button class="cp-btn" @click="changePlanSelectAll(false)">取消全选</button>
-            <span class="cp-count">已选 {{ changePlanSelectedCount }}/{{ changePlanTotalCount }} 项</span>
-            <button class="cp-btn primary" @click="executeChangePlan" :disabled="changePlanSelectedCount === 0 || executingChangePlan">
-              {{ executingChangePlan ? '执行中...' : '确认执行' }}
-            </button>
-            <button class="cp-btn" @click="cancelChangePlan">取消</button>
-          </div>
-        </div>
-
-        <!-- 未连接提示 -->
-        <div v-if="!store.connected && store.currentApp" class="connect-warn">
-          <div class="warn-title">⚠ 未连接得帆云平台</div>
-          <p>请先连接平台才能生成应用。</p>
-          <button @click="store.showConnectModal = true" class="warn-link">连接平台</button>
-        </div>
-      </div>
 
       <!-- 第三栏：部署面板 -->
-      <div class="deploy-side" :class="{ open: deployOpen && activeView === 'builder' }">
+      <div class="deploy-side" :class="{ open: activeView === 'builder' }">
+        <div v-if="appParsedMode" class="parsed-side-card">
+          <div class="parsed-side-title">解析结果</div>
+          <div class="parsed-side-row">应用名称：{{ store.preview.appName || '未命名应用' }}</div>
+          <div class="parsed-side-row">应用编码：<code>{{ displayAppCode }}</code></div>
+          <div class="parsed-side-row">模型：{{ store.preview.models.length }} 个</div>
+          <div class="parsed-side-row">字典：{{ store.preview.dicts.length }} 个</div>
+          <div class="parsed-side-row">角色：{{ store.preview.roles.length }} 个</div>
+          <div class="parsed-side-brief">模型：{{ modelNamesText }}</div>
+          <div class="parsed-side-brief">字典：{{ dictNamesText }}</div>
+          <div class="parsed-side-brief">角色：{{ roleNamesText }}</div>
+        </div>
         <div class="deploy-header">
           <div>
             <div class="deploy-title">部署到平台</div>
             <div class="deploy-desc">{{ deploySteps.length }} 个步骤</div>
           </div>
-          <button class="deploy-close" @click="deployOpen = false">✕</button>
+          <button v-if="false" class="deploy-close" @click="deployOpen = false">✕</button>
         </div>
         <div class="deploy-progress">
           <div class="dp-track"><div class="dp-fill" :style="{ width: deployPercent + '%' }"></div></div>
           <span class="dp-meta">{{ deployDoneCount }}/{{ deploySteps.length }}</span>
         </div>
-        <div class="deploy-actions">
+        <div v-if="!appParsedMode" class="deploy-actions">
           <button class="dp-run-all" :disabled="deployRunningAll || deployExecuting !== null || deployAllDone" @click="deployRunAll">
             {{ deployAllDone ? '✓ 全部完成' : deployRunningAll ? '执行中...' : '▶ 一键执行' }}
           </button>
@@ -598,47 +300,8 @@
       </div>
     </el-dialog>
 
-    <!-- 增量更新弹窗 -->
-    <div v-if="showIncrementalUpdate" class="incremental-modal-overlay" @click.self="closeIncrementalUpdate">
-      <div class="incremental-modal">
-        <div class="incremental-header">
-          <h3>增量更新</h3>
-          <button class="incremental-close" @click="closeIncrementalUpdate">✕</button>
-        </div>
-
-        <!-- 配置差异预览 -->
-        <div v-if="incrementalDiff" class="incremental-diff">
-          <ConfigDiff
-            :has-changes="incrementalDiff.has_changes"
-            :summary="incrementalDiff.summary"
-            :role-changes="incrementalDiff.role_changes"
-            :dict-changes="incrementalDiff.dict_changes"
-            :model-changes="incrementalDiff.model_changes"
-            :form-changes="incrementalDiff.form_changes"
-            :process-changes="[]"
-            :warnings="incrementalDiff.warnings"
-            :unsupported-changes="incrementalDiff.unsupported_changes"
-            :show-actions="false"
-          />
-        </div>
-
-        <!-- 更新步骤 -->
-        <div v-if="incrementalSteps.length > 0" class="incremental-steps">
-          <UpdateSteps
-            :steps="incrementalSteps"
-            :executing="incrementalExecuting"
-            :results="incrementalResults?.results"
-            :errors="incrementalResults?.errors"
-            :warnings="incrementalResults?.warnings"
-            @execute="executeIncrementalUpdate"
-            @cancel="closeIncrementalUpdate"
-            @close="closeIncrementalUpdate"
-          />
-        </div>
-      </div>
       </div><!-- /builder-content -->
     </div>
-  </div>
 </template>
 
 <script setup lang="ts">
@@ -658,8 +321,6 @@ import ConnectModal from '@/components/ConnectModal.vue'
 import EnvSelectModal from '@/components/EnvSelectModal.vue'
 import { platformEnvApi } from '@/api/platformEnv'
 import request from '@/utils/request'
-import ConfigDiff from '@/components/ConfigDiff.vue'
-import UpdateSteps from '@/components/UpdateSteps.vue'
 import type { Message } from '@/types'
 import ThemeToggle from '@/components/ThemeToggle.vue'
 
@@ -667,6 +328,31 @@ const router = useRouter()
 const route = useRoute()
 const store = usePreviewStore()
 const userStore = useUserStore()
+const parsedAppCode = ref('')
+const loadedAppCode = ref('')
+const lastParsedFilename = ref('')
+const latestDocContent = ref('')
+const readyForGenerate = computed(() => !!store.currentApp && parseReady.value)
+const appParsedMode = computed(() => route.query.app_mode === 'parsed')
+const displayAppCode = computed(() => parsedAppCode.value || loadedAppCode.value || buildAppCode(store.preview.appName))
+const renderedLatestDocHtml = computed(() => renderMarkdown(latestDocContent.value || ''))
+const modelNamesText = computed(() => {
+  const names = store.preview.models.map((m: any) => m?.name).filter(Boolean)
+  return names.length ? names.slice(0, 8).join('、') + (names.length > 8 ? ` 等 ${names.length} 项` : '') : '暂无'
+})
+const dictNamesText = computed(() => {
+  const names = store.preview.dicts.map((d: any) => d?.name).filter(Boolean)
+  return names.length ? names.slice(0, 8).join('、') + (names.length > 8 ? ` 等 ${names.length} 项` : '') : '暂无'
+})
+const roleNamesText = computed(() => {
+  const names = store.preview.roles.map((r: any) => r?.name).filter(Boolean)
+  return names.length ? names.slice(0, 8).join('、') + (names.length > 8 ? ` 等 ${names.length} 项` : '') : '暂无'
+})
+
+const handleNewApp = (command: string) => {
+  if (command === 'requirements') router.push('/requirements')
+  else router.push('/chat')
+}
 
 const messagesRef = ref<HTMLElement>()
 const inputText = ref('')
@@ -769,12 +455,6 @@ const agents: Record<string, { name: string; icon: string }> = {
   developer: { name: '复杂开发智能体', icon: '💻' }
 }
 
-const tabs = [
-  { k: 'overview', l: '概览' }, { k: 'models', l: '模型' },
-  { k: 'forms', l: '表单' }, { k: 'perms', l: '权限' },
-  { k: 'docs', l: '文档' },
-]
-
 if (store.previewTab === 'workflow') {
   store.previewTab = 'overview'
 }
@@ -785,7 +465,7 @@ const messages = reactive<Message[]>([
 
 const scrollToBottom = () => { nextTick(() => { if (messagesRef.value) messagesRef.value.scrollTop = messagesRef.value.scrollHeight }) }
 
-// 从AI回复中提取JSON配置（支持 preview 完整配置和 patch 增量修改）
+// 从AI回复中提取JSON配置（只支持 preview 完整配置）
 const extractPreviewData = (content: string) => {
   // 提取所有 ```json 块
   const allMatches = [...content.matchAll(/```json\s*([\s\S]*?)```/g)]
@@ -824,56 +504,6 @@ const extractPreviewData = (content: string) => {
             console.error('Auto-create application failed:', e)
           })
         }
-        continue
-      }
-
-      // 增量 patch 模式
-      if (parsed.type === 'patch' && parsed.actions) {
-        const validActions = validateAndFixActions(parsed.actions)
-        console.log(`Applying patch: ${validActions.length}/${parsed.actions.length} valid actions`)
-        if (validActions.length > 0) {
-          applyPatch(validActions)
-        }
-        continue
-      }
-
-      // 兜底：如果 LLM 直接输出了字典/模型数组，尝试智能合并
-      if (Array.isArray(parsed)) {
-        // 猜测是字典数组还是模型数组
-        if (parsed.length > 0 && parsed[0].options !== undefined) {
-          // 看起来是字典数组
-          console.log('Auto-detect: dict array, merging', parsed.length, 'dicts')
-          for (const d of parsed) {
-            const existing = store.preview.dicts.find(x => x.name === d.name || x.code === d.code)
-            if (existing) {
-              Object.assign(existing, d)
-            } else {
-              store.preview.dicts.push(d)
-            }
-          }
-          continue
-        }
-        if (parsed.length > 0 && parsed[0].fields !== undefined) {
-          // 看起来是模型数组
-          console.log('Auto-detect: model array, merging', parsed.length, 'models')
-          for (const m of parsed) {
-            const existing = store.preview.models.find(x => x.name === m.name || x.code === m.code)
-            if (existing) {
-              Object.assign(existing, m)
-            } else {
-              store.preview.models.push(m)
-            }
-          }
-          continue
-        }
-      }
-
-      // 兜底：单个字典或模型对象
-      if (parsed.options !== undefined && parsed.name) {
-        console.log('Auto-detect: single dict, merging')
-        const existing = store.preview.dicts.find(x => x.name === parsed.name || x.code === parsed.code)
-        if (existing) Object.assign(existing, parsed)
-        else store.preview.dicts.push(parsed)
         continue
       }
 
@@ -1267,6 +897,22 @@ const fetchDocVersions = async () => {
   }
 }
 
+const loadLatestDocForApp = async (appId: number) => {
+  try {
+    const verRes: any = await applicationApi.getDocVersions(appId)
+    const versions = Array.isArray(verRes) ? verRes : (verRes?.versions || verRes?.data || [])
+    const latest = [...versions].sort((a: any, b: any) => (b.version || 0) - (a.version || 0))[0]
+    if (latest?.filename) lastParsedFilename.value = latest.filename
+    latestDocContent.value = latest?.raw_content || ''
+    if (!parsedAppCode.value && !loadedAppCode.value && latestDocContent.value) {
+      const codeFromDoc = extractAppCodeFromText(latestDocContent.value)
+      if (codeFromDoc) parsedAppCode.value = codeFromDoc
+    }
+  } catch {
+    // ignore
+  }
+}
+
 const formatDocTime = (dateStr: string) => {
   if (!dateStr) return ''
   const d = new Date(dateStr)
@@ -1408,46 +1054,64 @@ const activeConflict = ref<ConflictState | null>(null)
 const deployDoneCount = computed(() => deploySteps.value.filter(s => s.status === 'completed').length)
 const deployPercent = computed(() => deploySteps.value.length ? Math.round(deployDoneCount.value / deploySteps.value.length * 100) : 0)
 const deployAllDone = computed(() => deploySteps.value.length > 0 && deployDoneCount.value === deploySteps.value.length)
+const parseReady = ref(false)
 
-// 应用状态（综合 deployAllDone 和 app.status）
-const appDisplayStatus = computed(() => {
-  if (deployAllDone.value) return 'deployed'
-  const s = store.currentApp?.status
-  if (s === 'completed') return 'deployed'
-  return s || 'draft'
-})
-const appDisplayStatusText = computed(() => {
-  const s = appDisplayStatus.value
-  if (s === 'deployed' || s === 'completed') return '已部署'
-  if (s === 'draft') return '待生成'
-  if (s === 'generating') return '生成中'
-  if (s === 'failed') return '生成失败'
-  return '待生成'
-})
+function buildAppCode(name: string): string {
+  const ascii = (name || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  if (ascii) return ascii
+  return `app-${Date.now().toString(36)}`
+}
 
-// 检测配置是否有变更（对比当前 preview 和已部署的步骤）
-const hasConfigChanged = computed(() => {
-  if (!deploySteps.value.length) return false
-  // 当前部署链路暂时隐藏审批流程步骤：1(app) + 1(roles_dicts) + models + forms + 1(perms)
-  const expectedSteps = 1 + 1 + store.preview.models.length + store.preview.models.length + 1
-  return expectedSteps !== deploySteps.value.length
-})
+function pickAppCode(data: any): string {
+  return (
+    data?.appCode ||
+    data?.app_code ||
+    data?.app_info?.code ||
+    data?.appInfo?.code ||
+    ''
+  )
+}
 
-// ── 增量更新 ──
-const showIncrementalUpdate = ref(false)
-const incrementalDiff = ref<DiffResponse | null>(null)
-const incrementalExecuting = ref(false)
-const incrementalSteps = ref<{ key: string; label: string; status: 'pending' | 'running' | 'completed' | 'error'; details?: string; error?: string }[]>([])
-const incrementalResults = ref<ExecuteResponse | null>(null)
+function pickAppName(data: any): string {
+  return (
+    data?.appName ||
+    data?.app_name ||
+    data?.app_info?.name ||
+    data?.appInfo?.name ||
+    ''
+  )
+}
+
+function extractAppCodeFromText(text: string): string {
+  if (!text) return ''
+  const patterns = [
+    /应用编码[：:\s`]*([A-Za-z][A-Za-z0-9_-]{1,63})/i,
+    /app[_\s-]?code[：:\s`]*([A-Za-z][A-Za-z0-9_-]{1,63})/i,
+    /"code"\s*:\s*"([A-Za-z][A-Za-z0-9_-]{1,63})"/i,
+  ]
+  for (const p of patterns) {
+    const m = text.match(p)
+    if (m?.[1]) return m[1]
+  }
+  return ''
+}
 
 function resetConversationWorkspace() {
   store.reset()
   store.pendingFile = null
+  store.pendingMarkdown = null
   existingAppId.value = null
+  parsedAppCode.value = ''
+  loadedAppCode.value = ''
+  lastParsedFilename.value = ''
+  latestDocContent.value = ''
+  parseReady.value = false
   generating.value = false
   showEnvSelect.value = false
   selectedEnvId.value = null
-  selectedModelIndices.value = []
   activeConflict.value = null
   isTyping.value = false
   showApiLogs.value = false
@@ -1477,12 +1141,6 @@ function resetConversationWorkspace() {
   deploySteps.value = []
   deployExecuting.value = null
   deployRunningAll.value = false
-
-  showIncrementalUpdate.value = false
-  incrementalDiff.value = null
-  incrementalExecuting.value = false
-  incrementalSteps.value = []
-  incrementalResults.value = null
 }
 
 const deployGroups = computed(() => {
@@ -1683,37 +1341,6 @@ function cancelConflict() {
   scrollToBottom()
 }
 
-const selectedModelIndices = ref<number[]>([])  // 选中的模型索引，空=全选
-
-const toggleSelectAll = () => {
-  if (selectedModelIndices.value.length === 0) {
-    // 当前全选状态 → 不变（全选就是空数组）
-    // 实际上checkbox checked时取消全选没意义，保持全选
-  } else {
-    selectedModelIndices.value = []
-  }
-}
-const toggleModelSelect = (idx: number) => {
-  const total = store.preview.models.length
-  if (selectedModelIndices.value.length === 0) {
-    // 从全选变为取消一个：生成除了idx之外的所有索引
-    selectedModelIndices.value = Array.from({ length: total }, (_, i) => i).filter(i => i !== idx)
-  } else if (selectedModelIndices.value.includes(idx)) {
-    selectedModelIndices.value = selectedModelIndices.value.filter(i => i !== idx)
-    // 如果取消后为空，恢复全选
-    if (selectedModelIndices.value.length === 0) {
-      // 空 = 全选，但用户意图是全不选？不合理，至少选一个
-      selectedModelIndices.value = [0]
-    }
-  } else {
-    selectedModelIndices.value.push(idx)
-    // 如果全部选中，回到空数组（全选）
-    if (selectedModelIndices.value.length === total) {
-      selectedModelIndices.value = []
-    }
-  }
-}
-
 const startGenerate = async () => {
   // 检查是否已部署到平台（有 apaas_app_id）
   if (existingAppId.value) {
@@ -1731,9 +1358,11 @@ const startGenerate = async () => {
           await loadDeployStatus()
           return
         }
-      } catch { /* ignore, fall through to incremental */ }
-      // 所有步骤都完成了，走增量更新流程
-      await startIncrementalUpdate(existingAppId.value)
+      } catch { /* ignore */ }
+      // 已全部完成，打开部署面板查看
+      deployAppId.value = existingAppId.value
+      deployOpen.value = true
+      await loadDeployStatus()
       return
     }
     // 应用已绑定环境？直接继续
@@ -1755,13 +1384,13 @@ const startGenerate = async () => {
         return
       } else {
         // 没有任何已连接环境
-        ElMessage.warning('请先在环境管理中添加并连接平台环境')
-        router.push('/platform-envs')
+        ElMessage.warning('请先连接平台环境')
+        store.showConnectModal = true
         return
       }
     } catch {
-      ElMessage.warning('请先在环境管理中添加平台环境')
-      router.push('/platform-envs')
+      ElMessage.warning('请先连接平台环境')
+      store.showConnectModal = true
       return
     }
   }
@@ -1772,28 +1401,7 @@ const startGenerate = async () => {
 const startGenerateWithEnv = async (envId: number) => {
   generating.value = true
   try {
-
-    // 未部署，执行全量生成流程 — 让用户确认/修改应用编码
-    const defaultCode = 'app-' + Date.now().toString(36)
-    let appCode: string
-    try {
-      const { value } = await ElMessageBox.prompt(
-        '应用编码创建后不可修改，请确认或调整（如 asset-manage）：',
-        '确认应用编码',
-        {
-          inputValue: defaultCode,
-          inputPattern: /^[a-zA-Z][a-zA-Z0-9\-]*$/,
-          inputErrorMessage: '编码只能包含英文字母、数字和连字符(-)，且以字母开头',
-          confirmButtonText: '确认生成',
-          cancelButtonText: '取消',
-        }
-      )
-      appCode = value
-    } catch {
-      // 用户取消
-      generating.value = false
-      return
-    }
+    const appCode = parsedAppCode.value || buildAppCode(store.preview.appName)
 
     const payload = {
       conversation_id: conversationId.value || 0,
@@ -1803,8 +1411,7 @@ const startGenerateWithEnv = async (envId: number) => {
       platform_env_id: envId,
       config_preview: {
         type: 'preview',
-        data: { ...store.preview },
-        ...(selectedModelIndices.value.length > 0 ? { selected_model_indices: selectedModelIndices.value } : {})
+        data: { ...store.preview }
       }
     }
 
@@ -1812,11 +1419,14 @@ const startGenerateWithEnv = async (envId: number) => {
     if (existingAppId.value) {
       const app = await applicationApi.update(existingAppId.value, payload)
       newAppId = (app as any).id
+      loadedAppCode.value = (app as any).app_code || appCode
     } else {
       const app = await applicationApi.create(payload)
       newAppId = (app as any).id
       existingAppId.value = newAppId
+      loadedAppCode.value = (app as any).app_code || appCode
     }
+    parsedAppCode.value = parsedAppCode.value || loadedAppCode.value || appCode
     // 不跳转，在本页打开部署面板
     deployAppId.value = newAppId
     deployOpen.value = true
@@ -1828,171 +1438,11 @@ const startGenerateWithEnv = async (envId: number) => {
   }
 }
 
-// 开始增量更新流程
-const startIncrementalUpdate = async (appId: number) => {
-  try {
-    // 构建新配置
-    const newConfig = {
-      type: 'preview',
-      data: { ...store.preview },
-      ...(selectedModelIndices.value.length > 0 ? { selected_model_indices: selectedModelIndices.value } : {})
-    }
-
-    // 计算差异
-    const diff = await incrementalApi.computeDiff(appId, newConfig)
-    incrementalDiff.value = diff
-
-    if (!diff.has_changes) {
-      ElMessage.info('配置无变更，无需更新')
-      generating.value = false
-      return
-    }
-
-    // 显示增量更新面板
-    deployAppId.value = appId
-    showIncrementalUpdate.value = true
-    incrementalSteps.value = buildIncrementalSteps(diff)
-    incrementalResults.value = null
-    generating.value = false
-  } catch (e: any) {
-    ElMessage.error('计算配置差异失败: ' + (e.message || ''))
-    generating.value = false
-  }
-}
-
-// 构建增量更新步骤列表
-const buildIncrementalSteps = (diff: DiffResponse) => {
-  const steps: { key: string; label: string; status: 'pending' | 'running' | 'completed' | 'error'; details?: string; error?: string }[] = []
-
-  if (diff.role_changes.length > 0) {
-    steps.push({ key: 'roles', label: '更新角色', status: 'pending', details: `${diff.role_changes.length} 个变更` })
-  }
-  if (diff.dict_changes.length > 0) {
-    steps.push({ key: 'dicts', label: '更新字典', status: 'pending', details: `${diff.dict_changes.length} 个变更` })
-  }
-  if (diff.model_changes.length > 0) {
-    steps.push({ key: 'models', label: '更新模型', status: 'pending', details: `${diff.model_changes.length} 个变更` })
-  }
-  if (diff.form_changes.length > 0) {
-    steps.push({ key: 'forms', label: '更新表单', status: 'pending', details: `${diff.form_changes.length} 个变更` })
-  }
-
-  return steps
-}
-
-// 执行增量更新（流式）
-const executeIncrementalUpdate = async () => {
-  if (!deployAppId.value || !incrementalDiff.value) return
-
-  incrementalExecuting.value = true
-
-  // 重置所有步骤状态为 pending
-  for (const step of incrementalSteps.value) {
-    step.status = 'pending'
-    step.details = undefined
-    step.error = undefined
-  }
-
-  // 构建新配置
-  const newConfig = {
-    type: 'preview',
-    data: { ...store.preview },
-    ...(selectedModelIndices.value.length > 0 ? { selected_model_indices: selectedModelIndices.value } : {})
-  }
-
-  // 获取 token
-  const token = userStore.token
-  if (!token) {
-    ElMessage.error('未登录，请重新登录')
-    incrementalExecuting.value = false
-    return
-  }
-
-  // 使用流式接口执行增量更新
-  incrementalApi.executeUpdateStream(
-    deployAppId.value,
-    newConfig,
-    token,
-    // onProgress
-    (event) => {
-      // 更新对应阶段的步骤状态
-      if (event.stage && event.stage !== 'init') {
-        const stepKey = event.stage
-        const step = incrementalSteps.value.find(s => s.key === stepKey)
-        if (step) {
-          if (event.status === 'running') {
-            step.status = 'running'
-            step.details = event.step
-          } else if (event.status === 'done') {
-            step.status = 'completed'
-            step.details = event.step
-          }
-        }
-      }
-    },
-    // onComplete
-    (result) => {
-      incrementalResults.value = result
-      incrementalExecuting.value = false
-
-      // 确保所有步骤都标记为完成
-      for (const step of incrementalSteps.value) {
-        if (step.status === 'running' || step.status === 'pending') {
-          step.status = 'completed'
-        }
-        // 添加详细结果
-        const category = step.key as keyof typeof result.results
-        if (result.results[category] && result.results[category].length > 0) {
-          step.details = result.results[category].join(', ')
-        }
-      }
-
-      // 检查是否有错误
-      if (result.errors && result.errors.length > 0) {
-        for (const step of incrementalSteps.value) {
-          const matchedError = result.errors.find(e => e.toLowerCase().includes(step.key))
-          if (matchedError) {
-            step.status = 'error'
-            step.error = matchedError
-          }
-        }
-        ElMessage.warning('部分更新失败，请查看详情')
-      } else {
-        ElMessage.success('增量更新完成！')
-      }
-    },
-    // onError
-    (message) => {
-      incrementalExecuting.value = false
-      ElMessage.error('增量更新失败: ' + message)
-      for (const step of incrementalSteps.value) {
-        if (step.status === 'running') {
-          step.status = 'error'
-          step.error = message
-        }
-      }
-    }
-  )
-}
-
-// 关闭增量更新面板
-const closeIncrementalUpdate = () => {
-  showIncrementalUpdate.value = false
-  incrementalDiff.value = null
-  incrementalSteps.value = []
-  incrementalResults.value = null
-}
-
-const handleDocUpload = async (e: Event) => {
-  const target = e.target as HTMLInputElement
-  const file = target.files?.[0]
-  if (!file) return
-  target.value = '' // reset for re-upload
-
-  // 增量流程：已有关联应用时，走增量文档上传（不再依赖 preview 状态）
-  if (existingAppId.value) {
-    await handleIncrementalDocUpload(file)
-    return
+const uploadDocFile = async (file: File) => {
+  const fileText = await file.text()
+  const codeFromDoc = extractAppCodeFromText(fileText)
+  if (codeFromDoc) {
+    parsedAppCode.value = codeFromDoc
   }
 
   const userMsgId = Date.now()
@@ -2009,6 +1459,8 @@ const handleDocUpload = async (e: Event) => {
 
   const buildProgressContent = () => {
     const lines = [`**📄 解析文档：${file.name}**\n`]
+    const code = parsedAppCode.value || loadedAppCode.value
+    if (code) lines.push(`应用编码：\`${code}\``)
     for (const [, p] of Object.entries(phases)) {
       const icon = p.status === 'done' ? '✅' : p.status === 'running' ? '🔄' : '○'
       lines.push(`${icon} **${p.label}**　${p.detail}`)
@@ -2105,10 +1557,21 @@ const handleDocUpload = async (e: Event) => {
               }
 
               // 骨架完成时设置基础信息
-              if (data.data?.appName && !store.preview.appName) {
-                store.preview.appName = data.data.appName
-                store.preview.roles = data.data.roles || []
-                store.currentApp = { name: data.data.appName, status: 'draft' }
+              if (data.data) {
+                const skeletonName = pickAppName(data.data)
+                const skeletonCode = pickAppCode(data.data)
+                if (skeletonName && !store.preview.appName) {
+                  store.preview.appName = skeletonName
+                  store.currentApp = { name: skeletonName, status: 'draft' }
+                }
+                if (skeletonCode) {
+                  parsedAppCode.value = skeletonCode
+                } else if (!parsedAppCode.value && store.preview.appName) {
+                  parsedAppCode.value = buildAppCode(store.preview.appName)
+                }
+                if (!store.preview.roles.length && Array.isArray(data.data.roles)) {
+                  store.preview.roles = data.data.roles
+                }
               }
 
               // 更新进度消息
@@ -2136,12 +1599,17 @@ const handleDocUpload = async (e: Event) => {
     if (finalResult) {
       conversationId.value = finalResult.conversation_id
       router.replace(`/chat/${finalResult.conversation_id}`)
+      lastParsedFilename.value = file.name
+      latestDocContent.value = fileText
 
       // 最终更新 store
       const previewData = finalResult.preview?.data || finalResult.preview
-      if (previewData?.appName || previewData?.models) {
-        store.currentApp = { name: previewData.appName, status: 'draft' }
-        store.preview.appName = previewData.appName || ''
+      const appName = pickAppName(previewData)
+      const appCode = pickAppCode(previewData)
+      if (previewData?.appName || previewData?.models || appName || appCode) {
+        store.currentApp = { name: appName || store.preview.appName || '未命名应用', status: 'draft' }
+        store.preview.appName = appName || store.preview.appName || ''
+        parsedAppCode.value = appCode || parsedAppCode.value || buildAppCode(store.preview.appName)
         store.preview.roles = previewData.roles || []
         store.preview.dicts = previewData.dicts || []
         store.preview.models = previewData.models || []
@@ -2158,6 +1626,8 @@ const handleDocUpload = async (e: Event) => {
             conversation_id: conversationId.value || undefined,
           })
           existingAppId.value = result.app_id
+          loadedAppCode.value = result.app_code || ''
+          parsedAppCode.value = parsedAppCode.value || loadedAppCode.value
           router.replace({ query: { ...route.query, app_id: String(result.app_id) } })
           console.log(`Doc upload auto-created app: id=${result.app_id}, is_new=${result.is_new}`)
         } catch (e) {
@@ -2173,13 +1643,8 @@ const handleDocUpload = async (e: Event) => {
       if (pmsg && completePhase) {
         completePhase.status = 'done'
         completePhase.detail = `${store.preview.models.length} 模型, ${store.preview.dicts.length} 字典, ${store.preview.roles.length} 角色`
-        if (!store.connected) {
-          pmsg.content = buildProgressContent() + '\n\n配置已就绪！请先连接得帆云平台环境，然后点击"开始生成"部署。'
-          // 自动弹出连接弹窗
-          store.showConnectModal = true
-        } else {
-          pmsg.content = buildProgressContent() + '\n\n你可以调整配置，或点击"开始生成"部署到平台。'
-        }
+        parseReady.value = true
+        pmsg.content = buildProgressContent() + '\n\n配置已就绪，请点击下方「开始生成」。'
       }
     } else if (pmsg) {
       pmsg.content += '\n\n⚠️ 解析完成但未获取到配置数据'
@@ -2195,72 +1660,16 @@ const handleDocUpload = async (e: Event) => {
   scrollToBottom()
 }
 
-// ── 增量文档变更 ──
-const executingChangePlan = ref(false)
-const expandedGroups = reactive<Record<string, boolean>>({ added: true, modified: true, removed: true })
-
-const addedActions = computed(() =>
-  store.changePlan?.actions.filter(a => a.op?.startsWith('add')) || []
-)
-const modifiedActions = computed(() =>
-  store.changePlan?.actions.filter(a => a.op?.startsWith('modify') || a.op?.startsWith('update')) || []
-)
-const removedActions = computed(() =>
-  store.changePlan?.actions.filter(a => a.op?.startsWith('remove') || a.op?.startsWith('delete')) || []
-)
-const changePlanResourceDiff = computed<DiffResponse | null>(() => {
-  const diff = store.changePlan?.diffSummary as Partial<DiffResponse> | null | undefined
-  if (!diff) return null
-  if (!Array.isArray(diff.role_changes)) return null
-  if (!Array.isArray(diff.dict_changes)) return null
-  if (!Array.isArray(diff.model_changes)) return null
-  if (!Array.isArray(diff.form_changes)) return null
-  if (!Array.isArray(diff.process_changes)) return null
-  if (!Array.isArray(diff.warnings)) return null
-  if (!Array.isArray(diff.unsupported_changes)) return null
-  return {
-    has_changes: Boolean(diff.has_changes),
-    summary: diff.summary || '',
-    role_changes: diff.role_changes,
-    dict_changes: diff.dict_changes,
-    model_changes: diff.model_changes,
-    form_changes: diff.form_changes,
-    process_changes: diff.process_changes,
-    warnings: diff.warnings,
-    unsupported_changes: diff.unsupported_changes
-  }
-})
-const changePlanSelectedCount = computed(() =>
-  store.changePlan?.actions.filter(a => a.selected).length || 0
-)
-const changePlanTotalCount = computed(() =>
-  store.changePlan?.actions.length || 0
-)
-
-const toggleChangePlanGroup = (group: string) => {
-  expandedGroups[group] = !expandedGroups[group]
+const handleDocUpload = async (e: Event) => {
+  const target = e.target as HTMLInputElement
+  const file = target.files?.[0]
+  if (!file) return
+  target.value = '' // reset for re-upload
+  await uploadDocFile(file)
 }
 
-const changePlanSelectAll = (val: boolean) => {
-  if (!store.changePlan) return
-  store.changePlan.actions.forEach(a => { a.selected = val })
-}
-
-const cancelChangePlan = () => {
-  store.showChangePlan = false
-  store.changePlan = null
-  messages.push({
-    id: Date.now(),
-    role: 'assistant',
-    agent: 'builder',
-    content: '已取消变更计划。',
-    created_at: ''
-  })
-  scrollToBottom()
-}
-
-const handleIncrementalDocUpload = async (file: File) => {
-  const appId = existingAppId.value!
+// ── 上传文档新版本并分析变更（占位，保留以备将来使用）──
+const handleDocVersionUpload = async (file: File, appId: number) => {
   const userMsgId = Date.now()
   messages.push({ id: userMsgId, role: 'user', content: `📄 上传文档新版本: ${file.name}`, created_at: '' })
 
@@ -2823,20 +2232,26 @@ onMounted(async () => {
           store.preview.workflows = data.workflows || []
           store.preview.permissions = data.permissions || []
           store.currentApp = { name: store.preview.appName, status: app.status || 'ready', apaas_app_id: app.apaas_app_id }
+          parseReady.value = store.preview.models.length > 0
         }
+        loadedAppCode.value = app.app_code || ''
+        parsedAppCode.value = parsedAppCode.value || loadedAppCode.value
+        await loadLatestDocForApp(aid)
         console.log(`Loaded app ${aid}: ${app.app_name}, status=${app.status}, conv=${app.conversation_id}`)
         // 加载关联对话的历史消息
         if (app.conversation_id) {
           conversationId.value = app.conversation_id
           selectedConversationId.value = app.conversation_id
-          const historyMessages = await conversationApi.getMessages(app.conversation_id)
-          if (historyMessages?.length) {
-            messages.splice(0, messages.length)
-            for (const msg of historyMessages) {
-              if (msg.role === 'system') continue
-              messages.push({ id: msg.id, role: msg.role as any, agent: msg.role === 'assistant' ? 'builder' : undefined, content: msg.content, created_at: msg.created_at })
+          if (!appParsedMode.value) {
+            const historyMessages = await conversationApi.getMessages(app.conversation_id)
+            if (historyMessages?.length) {
+              messages.splice(0, messages.length)
+              for (const msg of historyMessages) {
+                if (msg.role === 'system') continue
+                messages.push({ id: msg.id, role: msg.role as any, agent: msg.role === 'assistant' ? 'builder' : undefined, content: msg.content, created_at: msg.created_at })
+              }
+              scrollToBottom()
             }
-            scrollToBottom()
           }
         }
         console.log(`Loaded app ${aid}: ${app.app_name}`)
@@ -2889,7 +2304,11 @@ onMounted(async () => {
                 store.preview.workflows = data.workflows || []
                 store.preview.permissions = data.permissions || []
                 store.currentApp = { name: store.preview.appName, status: 'draft' }
+                parseReady.value = store.preview.models.length > 0
                 existingAppId.value = linkedApp.id
+                loadedAppCode.value = linkedApp.app_code || ''
+                parsedAppCode.value = parsedAppCode.value || loadedAppCode.value
+                await loadLatestDocForApp(linkedApp.id)
                 // 更新 URL 为 app_id 模式
                 router.replace({ path: '/chat', query: { app_id: String(linkedApp.id) } })
                 console.log('Migrated to app-centric URL:', linkedApp.id)
@@ -2924,16 +2343,22 @@ onMounted(async () => {
           store.preview.dicts = data.dicts || []
           store.preview.roles = data.roles || []
           store.currentApp = { name: store.preview.appName, status: app.status || 'ready' }
+          parseReady.value = store.preview.models.length > 0
         }
+        loadedAppCode.value = app.app_code || ''
+        parsedAppCode.value = parsedAppCode.value || loadedAppCode.value
+        await loadLatestDocForApp(aid)
         // 加载关联的对话
         if (app.conversation_id) {
           conversationId.value = app.conversation_id
-          const historyMessages = await conversationApi.getMessages(app.conversation_id)
-          if (historyMessages?.length) {
-            messages.splice(0, messages.length)
-            for (const msg of historyMessages) {
-              if (msg.role === 'system') continue
-              messages.push({ id: msg.id, role: msg.role as any, agent: msg.role === 'assistant' ? 'builder' : undefined, content: msg.content, created_at: msg.created_at })
+          if (!appParsedMode.value) {
+            const historyMessages = await conversationApi.getMessages(app.conversation_id)
+            if (historyMessages?.length) {
+              messages.splice(0, messages.length)
+              for (const msg of historyMessages) {
+                if (msg.role === 'system') continue
+                messages.push({ id: msg.id, role: msg.role as any, agent: msg.role === 'assistant' ? 'builder' : undefined, content: msg.content, created_at: msg.created_at })
+              }
             }
           }
         }
@@ -2942,9 +2367,20 @@ onMounted(async () => {
   }
 
   const prompt = route.query.prompt as string
-  if (prompt) {
+  if (prompt && !appParsedMode.value) {
     inputText.value = prompt
     nextTick(() => sendMessage())
+  }
+
+  // 从需求分析页带过来的 markdown 文档
+  if (store.pendingMarkdown) {
+    const pending = store.pendingMarkdown
+    store.pendingMarkdown = null
+    resetConversationWorkspace()
+    messages.splice(0, messages.length)
+    const file = new File([pending.content], pending.filename, { type: 'text/markdown' })
+    await nextTick()
+    await uploadDocFile(file)
   }
 
   // 从 Landing 页带过来的待解析文件
@@ -2953,14 +2389,8 @@ onMounted(async () => {
     store.pendingFile = null
     resetConversationWorkspace()
     messages.splice(0, messages.length)
-    nextTick(() => {
-      const dt = new DataTransfer()
-      dt.items.add(file)
-      const fakeInput = document.createElement('input')
-      fakeInput.type = 'file'
-      fakeInput.files = dt.files
-      handleDocUpload({ target: fakeInput } as any)
-    })
+    await nextTick()
+    await uploadDocFile(file)
   }
 
   // 同步对话历史选中
@@ -3014,7 +2444,16 @@ watch(conversationId, (id) => {
   backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
   border-bottom: 1px solid var(--t-border-subtle);
 }
-.nav-left, .nav-right { display: flex; align-items: center; gap: 10px; }
+.nav-left, .nav-right, .nav-center { display: flex; align-items: center; gap: 10px; }
+.nav-link-primary {
+  background: var(--t-brand-gradient) !important;
+  color: #fff !important;
+  display: flex; align-items: center; gap: 5px;
+}
+.nav-link-primary:hover { opacity: 0.9; }
+.new-app-item { display: flex; flex-direction: column; gap: 2px; padding: 2px 0; }
+.new-app-item strong { font-size: 13px; }
+.new-app-item span { font-size: 11px; color: var(--t-text-muted); }
 .back-btn { background: none; border: none; color: var(--t-text-muted); cursor: pointer; padding: 4px; transition: color 0.2s; }
 .back-btn:hover { color: var(--t-text-primary); }
 .logo-box {
@@ -3039,6 +2478,115 @@ watch(conversationId, (id) => {
 
 /* ── 左侧对话 ── */
 .chat-side { flex: 1; display: flex; flex-direction: column; min-width: 0; min-width: 320px; }
+.app-mode-placeholder {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--t-text-secondary);
+  border: 1px dashed var(--t-border-subtle);
+  border-radius: 12px;
+  margin: 16px;
+}
+.doc-view-wrap {
+  flex: 1;
+  border: 1px dashed var(--t-border-subtle);
+  border-radius: 12px;
+  margin: 16px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: auto;
+}
+.doc-view-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--t-border-subtle);
+}
+.doc-view-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--t-text-primary);
+}
+.doc-view-file {
+  font-size: 12px;
+  color: var(--t-text-muted);
+  max-width: 58%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.doc-view-body {
+  flex: 1;
+  overflow: auto;
+  padding: 4px 2px;
+  color: var(--t-text-primary);
+  line-height: 1.65;
+  font-size: 14px;
+}
+.doc-view-body :deep(h1),
+.doc-view-body :deep(h2),
+.doc-view-body :deep(h3) {
+  margin: 10px 0 8px;
+  color: var(--t-text-primary);
+}
+.doc-view-body :deep(p),
+.doc-view-body :deep(li) {
+  color: var(--t-text-primary);
+}
+.doc-view-body :deep(code) {
+  color: #a5b4fc;
+  background: rgba(129, 140, 248, 0.12);
+  border: 1px solid rgba(129, 140, 248, 0.2);
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+.doc-view-empty {
+  margin-top: auto;
+  color: var(--t-text-muted);
+  font-size: 13px;
+}
+.parsed-side-card {
+  margin: 12px 12px 10px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(129, 140, 248, 0.22);
+  background: rgba(129, 140, 248, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.parsed-side-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--t-text-primary);
+  margin-bottom: 2px;
+}
+.parsed-side-row {
+  font-size: 13px;
+  color: var(--t-text-primary);
+}
+.parsed-side-row code {
+  color: #a5b4fc;
+  background: rgba(129, 140, 248, 0.12);
+  border: 1px solid rgba(129, 140, 248, 0.25);
+  border-radius: 6px;
+  padding: 1px 6px;
+}
+.parsed-side-brief {
+  font-size: 12px;
+  color: var(--t-text-muted);
+}
+@media (max-width: 1180px) {
+  .doc-view-head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
 
 /* Agent tabs */
 .agent-tabs {

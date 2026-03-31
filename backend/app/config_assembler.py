@@ -17,6 +17,7 @@ import logging
 import re
 from typing import AsyncGenerator, Dict, List, Optional, Tuple
 
+import httpx
 from app.llm_client import LLMClient
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,7 @@ SKELETON_PROMPT = """你是得帆云低代码平台的配置设计专家。
 ```json
 {
   "appName": "应用名称",
+  "appCode": "应用编码（英文小写+下划线或连字符）",
   "roles": [{"name": "角色名", "code": "role_code"}],
   "dict_names": [
     {"name": "字典名", "code": "dict_code", "hint": "简短描述用途"}
@@ -51,6 +53,7 @@ SKELETON_PROMPT = """你是得帆云低代码平台的配置设计专家。
 
 规则：
 - code 用英文小写+下划线，避免数据库保留字
+- appCode 必须从文档原文中提取（如“应用编码：xxx”），若文档未给出则根据 appName 生成
 - 识别所有需要字典的枚举字段（状态、类型、类别等），列入 dict_names
 - model_names 只列名称和简短描述，不要列字段详情
 - 识别需要审批流程的表单，列入 workflow_hints
@@ -258,13 +261,66 @@ def _extract_dict_section(text: str, dict_name: str, dict_code: str) -> str:
     return ""
 
 
+def _normalize_app_code(code: str) -> str:
+    c = (code or "").strip().lower().replace(" ", "_").replace("-", "_")
+    c = re.sub(r"[^a-z0-9_]", "", c)
+    c = re.sub(r"_+", "_", c).strip("_")
+    if not c:
+        return ""
+    if not re.match(r"^[a-z]", c):
+        c = f"app_{c}"
+    return c[:64]
+
+
+def _build_app_code_from_name(name: str) -> str:
+    base = _normalize_app_code(name)
+    if base:
+        return base
+    return "app_demo"
+
+
+def _extract_app_code_from_text(text: str) -> str:
+    if not text:
+        return ""
+    patterns = [
+        r"应用编码[：:\s`]*([A-Za-z][A-Za-z0-9_-]{1,63})",
+        r"app[_\s-]?code[：:\s`]*([A-Za-z][A-Za-z0-9_-]{1,63})",
+        r'"code"\s*:\s*"([A-Za-z][A-Za-z0-9_-]{1,63})"',
+    ]
+    for p in patterns:
+        m = re.search(p, text, re.IGNORECASE)
+        if m and m.group(1):
+            return _normalize_app_code(m.group(1))
+    return ""
+
+
 # ──────────────────────────────────────────────
 # 分阶段生成
 # ──────────────────────────────────────────────
 
+async def _tenant_llm_completion(cfg: dict, messages: list, max_tokens: int = 8192, timeout: float = 120.0) -> str:
+    """使用租户配置的 LLM 做非流式调用，返回文本内容"""
+    payload = {
+        "model": cfg["model"],
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "stream": False,
+    }
+    t = httpx.Timeout(connect=15.0, read=timeout, write=15.0, pool=15.0)
+    async with httpx.AsyncClient(timeout=t) as http:
+        resp = await http.post(
+            f"{cfg['base_url']}/chat/completions",
+            headers={"Authorization": f"Bearer {cfg['api_key']}", "Content-Type": "application/json"},
+            json=payload,
+        )
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"]
+
+
 async def assemble_config_streaming(
     user_prompt: str,
     context: str = "",
+    llm_cfg: dict | None = None,
 ) -> AsyncGenerator[Dict, None]:
     """分阶段生成配置，通过 yield 返回进度和结果。
 
@@ -289,8 +345,9 @@ async def assemble_config_streaming(
         {"role": "user", "content": f"{context}\n\n{user_prompt}" if context else user_prompt},
     ]
 
-    # 大文档用 Claude API（上下文窗口大，不截断）；小文档用 MiniMax
-    if is_large_doc:
+    if llm_cfg:
+        skeleton_text = await _tenant_llm_completion(llm_cfg, skeleton_messages, max_tokens=8192, timeout=120.0)
+    elif is_large_doc:
         logger.info(f"大文档（{len(context)} 字符），使用 Claude API 解析骨架")
         skeleton_text = await client.claude_completion(
             skeleton_messages, max_tokens=8192, timeout=300.0, temperature=0.2
@@ -307,6 +364,10 @@ async def assemble_config_streaming(
         return
 
     app_name = skeleton.get("appName", "应用")
+    doc_app_code = _extract_app_code_from_text(original_context or context or user_prompt or "")
+    skeleton_app_code = _normalize_app_code(str(skeleton.get("appCode") or ""))
+    app_code = doc_app_code or skeleton_app_code or _build_app_code_from_name(app_name)
+    skeleton["appCode"] = app_code
     roles = skeleton.get("roles") or []
     dict_names = skeleton.get("dict_names") or []
     model_names = skeleton.get("model_names") or []
@@ -345,10 +406,13 @@ async def assemble_config_streaming(
                 {"role": "user", "content": f"请为以下字典生成选项：\n\n{batch_desc}\n\n背景：{user_prompt[:500]}{dict_extra}"},
             ]
             try:
-                dict_result = await client.chat_completion(
-                    dict_messages, max_tokens=8192, timeout=120.0, temperature=0.2, model=client.doc_model
-                )
-                dict_text = dict_result["choices"][0]["message"]["content"]
+                if llm_cfg:
+                    dict_text = await _tenant_llm_completion(llm_cfg, dict_messages, max_tokens=8192, timeout=120.0)
+                else:
+                    dict_result = await client.chat_completion(
+                        dict_messages, max_tokens=8192, timeout=120.0, temperature=0.2, model=client.doc_model
+                    )
+                    dict_text = dict_result["choices"][0]["message"]["content"]
                 batch_dicts = _extract_json_array(dict_text)
                 if batch_dicts:
                     all_dicts.extend(batch_dicts)
@@ -414,7 +478,9 @@ async def assemble_config_streaming(
                 )},
             ]
             try:
-                if is_large_doc:
+                if llm_cfg:
+                    model_text = await _tenant_llm_completion(llm_cfg, model_messages, max_tokens=8192, timeout=180.0)
+                elif is_large_doc:
                     model_text = await client.claude_completion(
                         model_messages, max_tokens=8192, timeout=300.0, temperature=0.2
                     )
@@ -465,10 +531,13 @@ async def assemble_config_streaming(
             {"role": "user", "content": f"请为以下表单生成审批流程：\n\n{wf_desc}\n\n可用角色: {available_roles}\n\n背景：{user_prompt[:500]}"},
         ]
         try:
-            wf_result = await client.chat_completion(
-                wf_messages, max_tokens=4096, timeout=120.0, temperature=0.2, model=client.doc_model
-            )
-            wf_text = wf_result["choices"][0]["message"]["content"]
+            if llm_cfg:
+                wf_text = await _tenant_llm_completion(llm_cfg, wf_messages, max_tokens=4096, timeout=120.0)
+            else:
+                wf_result = await client.chat_completion(
+                    wf_messages, max_tokens=4096, timeout=120.0, temperature=0.2, model=client.doc_model
+                )
+                wf_text = wf_result["choices"][0]["message"]["content"]
             wf_data = _extract_json_array(wf_text)
             if wf_data:
                 all_workflows = wf_data
@@ -498,10 +567,13 @@ async def assemble_config_streaming(
             {"role": "user", "content": f"请为以下表单生成权限配置：\n\n表单列表: {model_names}\n可用角色: {available_roles}\n\n背景：{user_prompt[:800]}"},
         ]
         try:
-            perm_result = await client.chat_completion(
-                perm_messages, max_tokens=4096, timeout=120.0, temperature=0.2, model=client.doc_model
-            )
-            perm_text = perm_result["choices"][0]["message"]["content"]
+            if llm_cfg:
+                perm_text = await _tenant_llm_completion(llm_cfg, perm_messages, max_tokens=4096, timeout=120.0)
+            else:
+                perm_result = await client.chat_completion(
+                    perm_messages, max_tokens=4096, timeout=120.0, temperature=0.2, model=client.doc_model
+                )
+                perm_text = perm_result["choices"][0]["message"]["content"]
             perm_data = _extract_json_array(perm_text)
             if perm_data:
                 all_permissions = perm_data
@@ -524,6 +596,7 @@ async def assemble_config_streaming(
     # ── 组装完整配置 ──
     complete_config = {
         "appName": app_name,
+        "appCode": app_code,
         "roles": roles,
         "dicts": all_dicts,
         "models": all_models,

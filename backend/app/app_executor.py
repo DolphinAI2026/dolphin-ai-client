@@ -14,6 +14,7 @@ from typing import Dict, List, Optional
 from app.apaas_client import APaaSClient
 from app.app_config_schema import AppConfig, DictConfig, ModelConfig, FormConfig
 from app.config import settings
+from app.field_types import get_field_type_map, get_comp_type_map
 
 import logging
 
@@ -37,45 +38,11 @@ def _apply_suffix(code: str, suffix: str) -> str:
 class AppExecutor:
     """应用执行引擎"""
 
-    # 字段类型映射
-    FIELD_TYPE_MAP = {
-        "单行输入": "STRING",
-        "多行输入": "BIG_TEXT",
-        "数字输入": "NUM",
-        "金额": "NUM",
-        "手机号码": "STRING",
-        "电子邮箱": "STRING",
-        "日期时间": "DATE",
-        "单据号": "STRING",
-        "下拉单选": "STRING",
-        "下拉多选": "STRING",
-        "数据选择器": "STRING",
-        "人员选择": "STRING",
-        "部门选择": "STRING",
-        "附件上传": "STRING",
-        "开关": "STRING",
-        "地理位置": "STRING"
-    }
+    # 字段类型映射（统一从 field_types.py 获取，避免重复维护）
+    FIELD_TYPE_MAP: Dict[str, str] = get_field_type_map()
 
-    # 组件类型映射
-    COMPONENT_TYPE_MAP = {
-        "单行输入": "FORM_TEXT_INPUT",
-        "多行输入": "FORM_TEXTAREA_INPUT",
-        "数字输入": "FORM_NUMBER_INPUT",
-        "金额": "FORM_MONEY_INPUT",
-        "手机号码": "FORM_PHONE_INPUT",
-        "电子邮箱": "FORM_EMAIL_INPUT",
-        "日期时间": "FORM_DATEPICK_INPUT",
-        "单据号": "FORM_DOCUMENT_NUMBER",
-        "下拉单选": "FORM_SELECT_INPUT_SINGLE",
-        "下拉多选": "FORM_SELECT_INPUT",
-        "数据选择器": "FORM_DATA_SELECTOR_SINGLE",
-        "人员选择": "FORM_PEOPLE_SELECT",
-        "部门选择": "FORM_DEPARTMENT_SELECT",
-        "附件上传": "FORM_FILE_UPLOAD",
-        "开关": "FORM_SWITCH_SELECT",
-        "地理位置": "FORM_WIDGET_LOCATION"
-    }
+    # 组件类型映射（统一从 field_types.py 获取，避免重复维护）
+    COMPONENT_TYPE_MAP: Dict[str, str] = get_comp_type_map()
 
     # Reserved Words（数据库保留字）
     RESERVED_WORDS = {

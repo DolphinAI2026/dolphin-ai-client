@@ -1,7 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, reactive } from 'vue'
 import type { PreviewData, GenProgress } from '@/types'
-import type { DiffResponse } from '@/api/incremental'
 
 export const usePreviewStore = defineStore('preview', () => {
   const currentApp = ref<{ name: string; status: string; apaas_app_id?: string } | null>(null)
@@ -10,26 +9,7 @@ export const usePreviewStore = defineStore('preview', () => {
   const connected = ref(false)
   const showConnectModal = ref(false)
   const pendingFile = ref<File | null>(null)  // 从 Landing 页带过来的待解析文件
-
-  // 增量变更计划
-  const changePlan = ref<{
-    id: number
-    fromVersion: number
-    toVersion: number
-    diffSummary: DiffResponse | null
-    actions: Array<{
-      id: string
-      selected: boolean
-      op: string
-      target?: string
-      model?: string
-      value?: any
-      description: string
-    }>
-    status: string
-  } | null>(null)
-
-  const showChangePlan = ref(false)
+  const pendingMarkdown = ref<{ filename: string; content: string } | null>(null)  // 从需求分析页带到 Chat 的设计文档
 
   const preview = reactive<PreviewData>({
     appName: '',
@@ -62,8 +42,6 @@ export const usePreviewStore = defineStore('preview', () => {
     currentApp.value = null
     previewTab.value = 'overview'
     previewFormIdx.value = 0
-    changePlan.value = null
-    showChangePlan.value = false
     preview.appName = ''
     preview.roles = []
     preview.dicts = []
@@ -74,8 +52,8 @@ export const usePreviewStore = defineStore('preview', () => {
   }
 
   return {
-    currentApp, previewTab, previewFormIdx, connected, showConnectModal, pendingFile,
-    preview, genProgress, changePlan, showChangePlan,
+    currentApp, previewTab, previewFormIdx, connected, showConnectModal, pendingFile, pendingMarkdown,
+    preview, genProgress,
     resetGenProgress, reset
   }
 })

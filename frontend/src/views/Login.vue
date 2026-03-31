@@ -36,6 +36,7 @@
                   placeholder="请输入用户名"
                   size="large"
                   prefix-icon="User"
+                  autocomplete="username"
                   clearable
                 />
               </el-form-item>
@@ -47,6 +48,7 @@
                   placeholder="请输入密码"
                   size="large"
                   prefix-icon="Lock"
+                  autocomplete="current-password"
                   show-password
                   @keyup.enter="handleLogin"
                 />
@@ -74,6 +76,7 @@
                   placeholder="请输入用户名"
                   size="large"
                   prefix-icon="User"
+                  autocomplete="off"
                   clearable
                 />
               </el-form-item>
@@ -85,6 +88,7 @@
                   placeholder="请输入密码（至少6位）"
                   size="large"
                   prefix-icon="Lock"
+                  autocomplete="new-password"
                   show-password
                 />
               </el-form-item>
@@ -96,6 +100,7 @@
                   placeholder="请确认密码"
                   size="large"
                   prefix-icon="Lock"
+                  autocomplete="new-password"
                   show-password
                   @keyup.enter="handleRegister"
                 />
@@ -428,10 +433,21 @@ const handleRegister = async () => {
 
 /* ── Input fields (白色背景下) ── */
 :deep(.el-input__wrapper) {
-  background: #fff;
+  background: #fff !important;
   border-radius: 10px;
   box-shadow: 0 0 0 1px #d1d5db inset;
   transition: all 0.25s;
+}
+
+/* ── 覆盖浏览器 autofill 灰色/蓝色背景 ── */
+:deep(.el-input__inner:-webkit-autofill),
+:deep(.el-input__inner:-webkit-autofill:hover),
+:deep(.el-input__inner:-webkit-autofill:focus),
+:deep(.el-input__inner:-webkit-autofill:active) {
+  -webkit-box-shadow: 0 0 0 9999px #fff inset !important;
+  -webkit-text-fill-color: #1a1a1a !important;
+  transition: background-color 9999s ease-in-out 0s;
+  caret-color: #1a1a1a;
 }
 
 :deep(.el-input__wrapper:hover) {

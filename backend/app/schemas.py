@@ -137,7 +137,6 @@ class MergedAppResponse(BaseModel):
 class ChatRequest(BaseModel):
     conversation_id: int
     message: str
-    current_config: Optional[dict] = None  # 当前配置快照，用于增量修改
 
 
 class ChatStreamEvent(BaseModel):

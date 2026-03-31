@@ -7,6 +7,29 @@
         <span class="logo-text">aPaaS Builder AI</span>
       </div>
       <div class="nav-center">
+        <el-dropdown @command="handleNewApp" trigger="click">
+          <button class="nav-link nav-link-primary">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            新建应用
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+          </button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="requirements">
+                <div class="new-app-item">
+                  <strong>从需求分析开始</strong>
+                  <span>与 AI 对话梳理需求，生成设计文档</span>
+                </div>
+              </el-dropdown-item>
+              <el-dropdown-item command="direct">
+                <div class="new-app-item">
+                  <strong>直接描述搭建</strong>
+                  <span>跳过需求分析，直接进入搭建</span>
+                </div>
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
         <button class="nav-link" @click="router.push('/apps')">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
           我的应用
@@ -15,12 +38,6 @@
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
           AI Coding
         </button>
-        <!-- 组件市场 - 暂时隐藏
-        <button class="nav-link" @click="router.push('/marketplace')">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
-          组件市场
-        </button>
-        -->
         <button class="nav-link" @click="router.push('/platform-envs')">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
           环境管理
@@ -68,8 +85,8 @@
         <!-- Input box -->
         <div class="input-box">
           <div class="input-row">
-            <label class="upload-btn" title="上传设计文档 (.md)">
-              <input type="file" accept=".md" @change="handleDocUpload" hidden />
+            <label class="upload-btn" title="上传需求文档 (.md/.pdf/.docx/.txt)">
+              <input type="file" accept=".md,.pdf,.docx,.doc,.txt,.markdown" @change="handleDocUpload" hidden />
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
             </label>
             <input
@@ -83,26 +100,30 @@
           </div>
         </div>
 
-        <!-- Templates -->
-        <div class="section">
+        <!-- 历史对话 -->
+        <div v-if="recentSessions.length > 0" class="section">
           <div class="section-header">
-            <h3 class="section-title">从模板开始</h3>
-            <el-button size="small" text @click="showTemplateManager = true">管理模板</el-button>
+            <h3 class="section-title">最近对话</h3>
+            <button class="see-all-btn" @click="router.push('/requirements')">查看全部</button>
           </div>
-          <div class="templates">
-            <button v-for="t in templates" :key="t.code" class="tpl-card" :class="{ loading: templateLoading === t.code }" @click="startWithTemplate(t)">
-              <div class="tpl-icon">
-                <svg v-if="t.icon === 'users'" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-                <svg v-else-if="t.icon === 'wrench'" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
-                <svg v-else-if="t.icon === 'clipboard'" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#34d399" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/><line x1="8" y1="10" x2="16" y2="10"/><line x1="8" y1="14" x2="16" y2="14"/><line x1="8" y1="18" x2="12" y2="18"/></svg>
+          <div class="history-list">
+            <div
+              v-for="s in recentSessions"
+              :key="s.id"
+              class="history-item"
+              @click="router.push(`/requirements/${s.id}`)"
+            >
+              <div class="history-icon">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
               </div>
-              <div class="tpl-name">{{ t.name }}</div>
-              <div class="tpl-desc">{{ t.description }}</div>
-            </button>
+              <div class="history-info">
+                <span class="history-title">{{ s.title }}</span>
+                <span class="history-meta">{{ formatDate(s.updated_at) }}</span>
+              </div>
+              <el-tag v-if="s.has_doc" size="small" type="success" style="flex-shrink:0">已生成</el-tag>
+            </div>
           </div>
         </div>
-
-        <!-- 我的应用已移至导航栏 -->
       </div>
     </div>
 
@@ -128,6 +149,7 @@ import ConnectModal from '@/components/ConnectModal.vue'
 import ProjectSettingsModal from '@/components/ProjectSettingsModal.vue'
 import TemplateManager from '@/components/TemplateManager.vue'
 import ThemeToggle from '@/components/ThemeToggle.vue'
+import { requirementsApi, type RequirementsSession } from '@/api/requirements'
 
 const router = useRouter()
 const previewStore = usePreviewStore()
@@ -146,15 +168,29 @@ interface TemplateItem {
   category: string
 }
 const templates = ref<TemplateItem[]>([])
-const templateLoading = ref<string | null>(null) // 正在加载的模板 code
+const templateLoading = ref<string | null>(null)
+const recentSessions = ref<RequirementsSession[]>([])
+
+function formatDate(dateStr: string): string {
+  const d = new Date(dateStr)
+  const now = new Date()
+  const diff = now.getTime() - d.getTime()
+  if (diff < 60000) return '刚刚'
+  if (diff < 3600000) return `${Math.floor(diff / 60000)} 分钟前`
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)} 小时前`
+  return d.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
+}
 
 onMounted(async () => {
   try {
     projects.value = await projectsApi.list()
   } catch (e) { /* ignore */ }
-  // 加载模板列表
   try {
     templates.value = await request.get<any, TemplateItem[]>('/templates')
+  } catch (e) { /* ignore */ }
+  try {
+    const sessions = await requirementsApi.listSessions()
+    recentSessions.value = sessions.slice(0, 6)
   } catch (e) { /* ignore */ }
 })
 
@@ -172,7 +208,8 @@ const reloadTemplates = async () => {
 const startChat = () => {
   const text = inputText.value.trim()
   if (!text) return
-  router.push({ path: '/chat', query: { prompt: text } })
+  // 先经过需求分析页面确认
+  router.push({ path: '/requirements', query: { prompt: text } })
 }
 
 const startWithTemplate = async (tpl: TemplateItem) => {
@@ -180,11 +217,11 @@ const startWithTemplate = async (tpl: TemplateItem) => {
   try {
     // 获取模板完整 MD 内容
     const detail = await request.get<any, { content: string; name: string }>(`/templates/${tpl.code}`)
-    // 构造 File 对象，复用已有文档上传流程
+    // 构造 File 对象，先经过需求分析页面确认
     const blob = new Blob([detail.content], { type: 'text/markdown' })
     const file = new File([blob], `${tpl.code}.md`, { type: 'text/markdown' })
     previewStore.pendingFile = file
-    router.push('/chat')
+    router.push('/requirements')
   } catch (e) {
     ElMessage.error('加载模板失败')
   } finally {
@@ -198,14 +235,17 @@ const handleDocUpload = (e: Event) => {
   if (!file) return
   target.value = ''
 
-  if (!file.name.endsWith('.md')) {
-    ElMessage.warning('目前仅支持 .md 格式文件')
-    return
-  }
-
-  // 存文件到 store，跳转到 chat 页面，由 ChatPage 处理解析
+  // 先经过需求分析页面确认（支持所有格式）
   previewStore.pendingFile = file
-  router.push('/chat')
+  router.push('/requirements')
+}
+
+const handleNewApp = (command: string) => {
+  if (command === 'requirements') {
+    router.push('/requirements')
+  } else if (command === 'direct') {
+    router.push('/chat')
+  }
 }
 
 const handleUserCommand = (command: string) => {
@@ -305,6 +345,32 @@ const handleUserCommand = (command: string) => {
 .nav-link:hover {
   color: var(--t-text-primary);
   background: var(--t-border-subtle);
+}
+
+.nav-link-primary {
+  background: var(--t-brand-gradient);
+  color: #fff !important;
+  padding: 6px 14px;
+}
+.nav-link-primary:hover {
+  opacity: 0.9;
+  background: var(--t-brand-gradient) !important;
+  color: #fff !important;
+}
+
+.new-app-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 0;
+}
+.new-app-item strong {
+  font-size: 13px;
+  color: var(--t-text-primary);
+}
+.new-app-item span {
+  font-size: 11px;
+  color: var(--t-text-secondary);
 }
 
 .nav-right {
@@ -574,6 +640,68 @@ html[data-theme="light"] .hero-title {
 
 .section-header .section-title {
   margin: 0;
+}
+
+/* ── History ── */
+.see-all-btn {
+  font-size: 12px;
+  color: var(--t-brand-primary);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: background 0.15s;
+}
+.see-all-btn:hover { background: var(--t-brand-subtle); }
+
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.history-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--t-bg-panel);
+  border: 1px solid var(--t-border-subtle);
+  border-radius: var(--t-radius-md);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.history-item:hover {
+  background: var(--t-bg-panel-hover);
+  border-color: var(--t-brand-glow);
+}
+.history-icon {
+  width: 32px; height: 32px;
+  background: var(--t-brand-subtle);
+  border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--t-brand-primary);
+  flex-shrink: 0;
+}
+.history-info {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.history-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--t-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.history-meta {
+  font-size: 11px;
+  color: var(--t-text-muted);
 }
 
 /* ── Templates ── */

@@ -796,6 +796,10 @@ async def upload_doc_with_conversation(
     tenant_id = ctx.tenant_id
     existing_conversation_id = conversation_id
 
+    # 获取租户 LLM 配置（避免 applications.py 里调用 assemble_config_streaming 时用 Anthropic 默认 key）
+    from app.routes.chat import _get_tenant_llm_config as _get_llm_cfg
+    _tenant_llm_cfg = await _get_llm_cfg(db, tenant_id)
+
     # 如果传了 conversation_id，预先查找 V1 文档版本
     v1_doc_info: Optional[dict] = None
     if existing_conversation_id:
@@ -890,6 +894,7 @@ async def upload_doc_with_conversation(
                 async for event in assemble_config_streaming(
                     user_prompt=f"请根据以下设计文档生成完整的应用配置。文档名：{fname}",
                     context=text,
+                    llm_cfg=_tenant_llm_cfg,
                 ):
                     phase = event.get("phase", "")
                     message = event.get("message", "")

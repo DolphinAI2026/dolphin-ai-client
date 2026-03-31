@@ -28,6 +28,18 @@ COMPONENT_TYPE_MAP = {
     '部门选择': 'FORM_DEPARTMENT_SELECT',
     '地理位置': 'FORM_WIDGET_LOCATION',
     '子表': 'FORM_WIDGET_SON_TABLE',
+    # 新增组件类型（正确的平台组件编码）
+    '单选框': 'FORM_RADIO_INPUT',
+    '复选框': 'FORM_CHECKBOX_INPUT',
+    '多选框': 'FORM_CHECKBOX_INPUT',
+    '富文本': 'FORM_RICH_TEXT',
+    '超链接': 'FORM_HYPERLINK_INPUT',
+    '身份证号': 'FORM_IDCARD_INPUT',
+    '证件号': 'FORM_IDCARD_INPUT',
+    '地区地址': 'FORM_WIDGET_AREA',
+    '数据选择': 'FORM_DATA_SELECTOR',
+    '数据多选': 'FORM_DATA_SELECTOR',
+    '关联表单': 'FORM_ASSOCIATION',
 }
 
 # 组件注册表：componentType → builder function
@@ -68,12 +80,14 @@ def _build_simple(
     }
 
 
-# 注册所有简单组件
+# 注册所有简单组件（无需额外配置）
 for _type in (
     'FORM_TEXT_INPUT', 'FORM_TEXTAREA_INPUT', 'FORM_NUMBER_INPUT',
     'FORM_MONEY_INPUT', 'FORM_PHONE_INPUT', 'FORM_EMAIL_INPUT',
     'FORM_DATEPICK_INPUT', 'FORM_DOCUMENT_NUMBER', 'FORM_FILE_UPLOAD',
-    'FORM_SWITCH_SELECT', 'FORM_PEOPLE_SELECT', 'FORM_DEPARTMENT_SELECT', 'FORM_WIDGET_LOCATION',
+    'FORM_SWITCH_SELECT', 'FORM_PEOPLE_SELECT', 'FORM_DEPARTMENT_SELECT',
+    'FORM_WIDGET_LOCATION', 'FORM_WIDGET_AREA', 'FORM_HYPERLINK_INPUT',
+    'FORM_RICH_TEXT', 'FORM_IDCARD_INPUT',
 ):
     COMPONENT_REGISTRY[_type] = _build_simple
 
@@ -179,6 +193,134 @@ def _build_data_selector(
 
 
 COMPONENT_REGISTRY['FORM_DATA_SELECTOR_SINGLE'] = _build_data_selector
+
+
+# ── 单选框（字典绑定） ──
+
+def _build_radio(
+    field: Dict,
+    model_code: str,
+    field_code: str,
+    dicts: Optional[List[Dict]] = None,
+    dict_code_map: Optional[Dict] = None,
+    **_kwargs,
+) -> Dict:
+    """构建单选框组件，绑定数据字典。"""
+    component: Dict = {
+        "componentType": "FORM_RADIO_INPUT",
+        "label": field["name"],
+        "modelField": f"{model_code}.{field_code}",
+    }
+    if field.get("dict"):
+        raw_dict_code = field["dict"]
+        actual_dict_code = (dict_code_map or {}).get(raw_dict_code, raw_dict_code)
+        dict_def = next((d for d in (dicts or []) if d.get("code") == raw_dict_code), None)
+        options_list = _extract_dict_options(dict_def, raw_dict_code)
+        component["dictionarySelectConfig"] = {
+            "dictionaryCode": actual_dict_code,
+            "dictionarySelectOptions": options_list,
+        }
+    return component
+
+
+COMPONENT_REGISTRY['FORM_RADIO_INPUT'] = _build_radio
+
+
+# ── 复选框（字典绑定） ──
+
+def _build_checkbox(
+    field: Dict,
+    model_code: str,
+    field_code: str,
+    dicts: Optional[List[Dict]] = None,
+    dict_code_map: Optional[Dict] = None,
+    **_kwargs,
+) -> Dict:
+    """构建复选框组件，绑定数据字典。"""
+    component: Dict = {
+        "componentType": "FORM_CHECKBOX_INPUT",
+        "label": field["name"],
+        "modelField": f"{model_code}.{field_code}",
+    }
+    if field.get("dict"):
+        raw_dict_code = field["dict"]
+        actual_dict_code = (dict_code_map or {}).get(raw_dict_code, raw_dict_code)
+        dict_def = next((d for d in (dicts or []) if d.get("code") == raw_dict_code), None)
+        options_list = _extract_dict_options(dict_def, raw_dict_code)
+        component["dictionarySelectConfig"] = {
+            "dictionaryCode": actual_dict_code,
+            "dictionarySelectOptions": options_list,
+        }
+    return component
+
+
+COMPONENT_REGISTRY['FORM_CHECKBOX_INPUT'] = _build_checkbox
+
+
+# ── 数据选择（多选，关联模型） ──
+
+def _build_data_selector_multi(
+    field: Dict,
+    model_code: str,
+    field_code: str,
+    code_map: Optional[Dict] = None,
+    **_kwargs,
+) -> Dict:
+    """构建数据选择器组件（多选），关联其他模型。"""
+    component: Dict = {
+        "componentType": "FORM_DATA_SELECTOR",
+        "label": field["name"],
+        "modelField": f"{model_code}.{field_code}",
+    }
+    ref = field.get("ref")
+    if ref:
+        if isinstance(ref, dict):
+            ref_model = ref.get("model", "")
+            ref_field = ref.get("field", "")
+        else:
+            ref_model = str(ref)
+            ref_field = ""
+        resolved_model = (code_map or {}).get(ref_model, ref_model)
+        component["dataSelectorConfig"] = {
+            "type": "LOV_CHOOSE",
+            "otherModelCode": resolved_model,
+            "otherFieldCode": ref_field,
+        }
+    return component
+
+
+COMPONENT_REGISTRY['FORM_DATA_SELECTOR'] = _build_data_selector_multi
+
+
+# ── 关联表单 ──
+
+def _build_association(
+    field: Dict,
+    model_code: str,
+    field_code: str,
+    code_map: Optional[Dict] = None,
+    **_kwargs,
+) -> Dict:
+    """构建关联表单组件。"""
+    component: Dict = {
+        "componentType": "FORM_ASSOCIATION",
+        "label": field["name"],
+    }
+    ref = field.get("ref")
+    if ref and isinstance(ref, dict):
+        origin_field = ref.get("field", field_code)
+        target_model = ref.get("model", "")
+        target_field = ref.get("target_field", "")
+        resolved_model = (code_map or {}).get(target_model, target_model)
+        component["formAssociationConfig"] = {
+            "originFieldCode": origin_field,
+            "targetModelCode": resolved_model,
+            "targetFieldCode": target_field,
+        }
+    return component
+
+
+COMPONENT_REGISTRY['FORM_ASSOCIATION'] = _build_association
 
 
 # ── 子表 ──

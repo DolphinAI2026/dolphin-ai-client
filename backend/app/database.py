@@ -7,7 +7,9 @@ class Base(DeclarativeBase):
     pass
 
 
-_engine_kwargs = dict(echo=False, future=True, pool_size=10, max_overflow=20, pool_recycle=3600)
+_engine_kwargs = dict(echo=False, future=True)
+if not settings.database_url.startswith("sqlite"):
+    _engine_kwargs.update(pool_size=10, max_overflow=20, pool_recycle=3600)
 
 engine = create_async_engine(settings.database_url, **_engine_kwargs)
 
@@ -58,6 +60,8 @@ async def init_db():
             "ALTER TABLE applications ADD COLUMN platform_env_id INTEGER",
             # conversation_id 改为可空（MySQL ALTER COLUMN MODIFY）
             "ALTER TABLE applications MODIFY COLUMN conversation_id INTEGER NULL",
+            # 需求分析：为 conversations 表添加 doc_result 字段
+            "ALTER TABLE conversations ADD COLUMN doc_result JSON",
         ]:
             try:
                 await conn.execute(text(stmt))

@@ -1,7 +1,7 @@
 from __future__ import annotations
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import String, Text, DateTime, Integer, Boolean, ForeignKey, UniqueConstraint, func
+from sqlalchemy import String, Text, DateTime, Integer, Boolean, ForeignKey, UniqueConstraint, JSON, func
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
 
@@ -66,9 +66,10 @@ class Conversation(Base):
     user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
     title: Mapped[str] = mapped_column(String(200), nullable=False)
-    agent_type: Mapped[str] = mapped_column(String(20), nullable=False)  # builder/assistant/developer
+    agent_type: Mapped[str] = mapped_column(String(20), nullable=False)  # builder/assistant/developer/requirements
     workspace_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)  # coding工作区ID
     status: Mapped[str] = mapped_column(String(20), default="active", nullable=False)  # active/completed/failed
+    doc_result: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # 需求分析生成的设计文档 JSON
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 

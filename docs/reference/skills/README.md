@@ -2,26 +2,66 @@
 
 得帆云 aPaaS 平台原子能力 Skills 集合
 
-## 平台基础操作 (14个)
+## 应用生命周期 (3个)
 
 | Skill | 说明 | API 端点 |
 |-------|------|---------|
+| [apaas-query-app](./apaas-query-app.md) | 查询应用详情 | GET /xdap-app/apaasApplications/queryAppById |
 | [apaas-create-app](./apaas-create-app.md) | 创建应用 | POST /xdap-app/apaasApplications/addApp |
-| [apaas-update-app](./apaas-update-app.md) | 修改应用信息 | GET queryAppById → POST saveApp |
-| [apaas-create-model](./apaas-create-model.md) | 创建数据模型 | POST /xdap-app/common/resource/v2/appModel |
-| [apaas-query-model](./apaas-query-model.md) | 查询模型及字段 | POST /xdap-app/dataModel/query/modelWithField |
-| [apaas-add-field](./apaas-add-field.md) | 给已有模型追加字段 | POST /xdap-app/modelField/add |
-| [apaas-create-dict](./apaas-create-dict.md) | 创建数据字典 | POST /xdap-app/common/resource/appDict |
-| [apaas-query-dict](./apaas-query-dict.md) | 查询字典及选项 | POST /xdap-app/dataDictionary/query/dataDictionaryList |
-| [apaas-update-dict](./apaas-update-dict.md) | 编辑字典及选项 | POST /xdap-app/dataDictionary/edit/dataDictionary |
-| [apaas-create-role](./apaas-create-role.md) | 创建角色 | POST /xdap-app/common/resource/appRole |
-| [apaas-query-role](./apaas-query-role.md) | 查询角色列表 | GET /xdap-app/user/select/queryRoleList |
-| [apaas-update-role](./apaas-update-role.md) | 编辑/删除角色 | POST /xdap-app/roles/edit/role |
-| [apaas-create-form](./apaas-create-form.md) | 创建表单配置 | POST /xdap-app/common/resource/formConfig |
-| [apaas-query-form](./apaas-query-form.md) | 查询表单菜单及详情 | POST manageAppMenu → GET formContext |
-| [apaas-update-form](./apaas-update-form.md) | 编辑表单配置 | POST /xdap-app/formConfig/save/formConfigDetail |
+| [apaas-deploy-app](./apaas-deploy-app.md) | 发布/部署应用 | POST /xdap-app/deploy/deployApplication |
 
-## 表单组件 Skills (16个)
+## 角色管理 (4个)
+
+| Skill | 说明 | API 端点 |
+|-------|------|---------|
+| [apaas-create-role](./apaas-create-role.md) | 批量创建角色 | POST /xdap-app/common/resource/appRole |
+| [apaas-query-role](./apaas-query-role.md) | 查询角色列表 | POST /xdap-app/roles/query/rolesList |
+| [apaas-update-role](./apaas-update-role.md) | 编辑角色 | POST /xdap-app/roles/edit/role |
+| [apaas-delete-role](./apaas-delete-role.md) | 删除角色 | POST /xdap-app/roles/delete/role |
+
+## 数据字典管理 (8个)
+
+| Skill | 说明 | API 端点 |
+|-------|------|---------|
+| [apaas-create-dict](./apaas-create-dict.md) | 批量创建字典 | POST /xdap-app/common/resource/appDict |
+| [apaas-query-dict](./apaas-query-dict.md) | 查询字典列表 | POST /xdap-app/dataDictionary/query/dataDictionaryList |
+| [apaas-update-dict](./apaas-update-dict.md) | 编辑字典 | POST /xdap-app/dataDictionary/edit/dataDictionary/fromApp |
+| [apaas-enable-dict](./apaas-enable-dict.md) | 启用字典 | GET /xdap-app/dataDictionary/enable/dataDictionary |
+| [apaas-disable-dict](./apaas-disable-dict.md) | 禁用字典 | GET /xdap-app/dataDictionary/disable/dataDictionary |
+| [apaas-query-dict-value](./apaas-query-dict-value.md) | 查询字典选项 | POST /xdap-app/dataDictionary/query/dictionaryValueList |
+| [apaas-create-dict-value](./apaas-create-dict-value.md) | 新增字典选项 | POST /xdap-app/dataDictionary/add/dictionaryValue |
+| [apaas-update-dict-value](./apaas-update-dict-value.md) | 编辑字典选项 | POST /xdap-app/dataDictionary/edit/dictionaryValue/fromApp |
+| [apaas-enable-dict-value](./apaas-enable-dict-value.md) | 启用字典选项 | GET /xdap-app/dataDictionary/enable/dictionaryValue |
+| [apaas-disable-dict-value](./apaas-disable-dict-value.md) | 禁用字典选项 | GET /xdap-app/dataDictionary/disable/dictionaryValue |
+
+## 数据模型管理 (5个)
+
+| Skill | 说明 | API 端点 |
+|-------|------|---------|
+| [apaas-create-model](./apaas-create-model.md) | 批量创建数据模型 | POST /xdap-app/common/resource/v2/appModel |
+| [apaas-query-model](./apaas-query-model.md) | 查询模型及字段 | POST /xdap-app/dataModel/query/modelWithField |
+| [apaas-update-model](./apaas-update-model.md) | 更新模型名称 | POST /xdap-app/dataModel/update |
+| [apaas-create-model-field](./apaas-create-model-field.md) | 新增模型字段 | POST /xdap-app/modelField/add |
+| [apaas-update-model-field](./apaas-update-model-field.md) | 更新/禁用模型字段 | POST /xdap-app/modelField/update/fromApp |
+
+## 表单管理 (5个)
+
+| Skill | 说明 | API 端点 |
+|-------|------|---------|
+| [apaas-create-form](./apaas-create-form.md) | 批量创建表单配置 | POST /xdap-app/common/resource/formConfig |
+| [apaas-query-form](./apaas-query-form.md) | 查询表单菜单 | POST /xdap-app/menu/query/manageAppMenu |
+| [apaas-query-form-detail](./apaas-query-form-detail.md) | 查询表单详情 | GET /xdap-app/v2/form/query/formContext |
+| [apaas-page-query-form](./apaas-page-query-form.md) | 分页查询表单列表 | GET /xdap-app/formConfig/query/allFormConfigList |
+| [apaas-update-form](./apaas-update-form.md) | 更新表单配置 | POST /xdap-app/formConfig/save/formConfigDetail |
+| [apaas-delete-menu](./apaas-delete-menu.md) | 删除表单/菜单 | POST /xdap-app/menu/delete/menu |
+
+## 权限配置 (1个)
+
+| Skill | 说明 | API 端点 |
+|-------|------|---------|
+| [apaas-create-permission](./apaas-create-permission.md) | 配置表单权限 | POST /xdap-app/common/resource/formPermission |
+
+## 表单组件 Skills (25个)
 
 ### 基础输入组件
 
@@ -35,6 +75,10 @@
 | [apaas-comp-email](./apaas-comp-email.md) | FORM_EMAIL_INPUT | STRING | 电子邮箱 |
 | [apaas-comp-date](./apaas-comp-date.md) | FORM_DATEPICK_INPUT | DATE | 日期时间 |
 | [apaas-comp-doc-number](./apaas-comp-doc-number.md) | FORM_DOCUMENT_NUMBER | STRING | 单据号 |
+| [apaas-comp-rich](./apaas-comp-rich.md) | FORM_RICH_TEXT | BIG_TEXT | 富文本编辑器 |
+| [apaas-comp-hyperlink](./apaas-comp-hyperlink.md) | FORM_HYPERLINK_INPUT | STRING | 超链接 |
+| [apaas-comp-idcard](./apaas-comp-idcard.md) | FORM_IDCARD_INPUT | STRING | 身份证号 |
+| [apaas-comp-area](./apaas-comp-area.md) | FORM_WIDGET_AREA | STRING | 省市区地区选择 |
 
 ### 选择器组件
 
@@ -42,8 +86,12 @@
 |-------|---------|---------|------|
 | [apaas-comp-select-single](./apaas-comp-select-single.md) | FORM_SELECT_INPUT_SINGLE | STRING | 下拉单选（绑定字典） |
 | [apaas-comp-select-multi](./apaas-comp-select-multi.md) | FORM_SELECT_INPUT | STRING | 下拉多选（绑定字典） |
+| [apaas-comp-radio](./apaas-comp-radio.md) | FORM_RADIO_INPUT | STRING | 单选框（绑定字典） |
+| [apaas-comp-checkbox](./apaas-comp-checkbox.md) | FORM_CHECKBOX_INPUT | STRING | 复选框（绑定字典） |
 | [apaas-comp-data-selector](./apaas-comp-data-selector.md) | FORM_DATA_SELECTOR_SINGLE | STRING | 数据单选（关联模型） |
+| [apaas-comp-data-multi-selector](./apaas-comp-data-multi-selector.md) | FORM_DATA_SELECTOR | STRING | 数据多选（关联模型） |
 | [apaas-comp-people](./apaas-comp-people.md) | FORM_PEOPLE_SELECT | STRING | 人员选择 |
+| [apaas-comp-department](./apaas-comp-department.md) | FORM_DEPARTMENT_SELECT | STRING | 部门选择 |
 
 ### 其他组件
 

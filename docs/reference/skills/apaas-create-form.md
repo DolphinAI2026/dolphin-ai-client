@@ -85,6 +85,15 @@ POST /xdap-app/common/resource/formConfig
 | FORM_PEOPLE_SELECT | 人员选择 | apaas-comp-people |
 | FORM_WIDGET_LOCATION | 地理位置 | apaas-comp-location |
 | FORM_WIDGET_SON_TABLE | 子表 | apaas-comp-son-table |
+| FORM_DEPARTMENT_SELECT | 部门选择 | apaas-comp-department |
+| FORM_IDCARD_INPUT | 身份证号 | apaas-comp-idcard |
+| FORM_RADIO_INPUT | 单选框 | apaas-comp-radio |
+| FORM_CHECKBOX_INPUT | 复选框 | apaas-comp-checkbox |
+| FORM_RICH_TEXT | 富文本框 | apaas-comp-rich |
+| FORM_WIDGET_AREA | 区域选择 | apaas-comp-area |
+| FORM_HYPERLINK_INPUT | 超链接 | apaas-comp-hyperlink |
+| FORM_DATA_SELECTOR | 数据选择 | apaas-comp-data-multi-selector |
+| FORM_ASSOCIATION | 关联表单 | apaas-comp-association |
 
 ## 响应格式
 ```json
