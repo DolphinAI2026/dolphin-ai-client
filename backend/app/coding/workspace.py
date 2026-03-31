@@ -216,6 +216,22 @@ class WorkspaceStatus(str, Enum):
     ERROR = "error"
 
 
+# ── CLI 模板相关常量 ──────────────────────────────────────────
+CLI_TEMPLATE_DIR = Path(__file__).parent.parent.parent / "templates" / "cli-generated"
+
+CLI_TEMPLATE_MAP: dict[str, str] = {
+    ProjectType.FORM_COMPONENT: "form-component-web",
+    ProjectType.MENU_PAGE:      "form-page-web",
+    ProjectType.FORM_PAGE:      "form-page-web",
+    ProjectType.FORM_LIST:      "form-view-web",
+    ProjectType.LAYOUT:         "form-layout-web",
+    ProjectType.PLUGIN:         "frontend-plugin-web",
+}
+
+# 预生成模板中使用的占位名称
+_CLI_TPL_PLACEHOLDER = "demo"
+
+
 class WorkspaceManager:
     """工作区管理器"""
     _install_locks: dict[str, asyncio.Lock] = {}
@@ -631,32 +647,21 @@ class WorkspaceManager:
         )
         self._workspace_path_cache[ws_id] = ws_path
 
-        # 生成脚手架
-        if project_type == ProjectType.MOBILE_COMPONENT:
-            # 移动端组件复用 PC 组件脚手架（结构相同，只是 widgetConfigList 多 client.mobile 节点）
-            self._scaffold_form_component(ws_path, safe_name, mobile=True)
-        elif project_type == ProjectType.FORM_COMPONENT:
-            self._scaffold_form_component(ws_path, safe_name)
-        elif project_type == ProjectType.MOBILE_PAGE:
-            # 移动端页面复用 PC 页面脚手架（结构相同）
-            self._scaffold_form_page(ws_path, safe_name, mobile=True)
-        elif project_type in (ProjectType.FORM_PAGE, ProjectType.MENU_PAGE):
-            self._scaffold_form_page(ws_path, safe_name)
-        elif project_type == ProjectType.FORM_LIST:
-            self._scaffold_form_list(ws_path, safe_name)
+        # 生成脚手架 —— 优先使用 df-apaas-cli 预生成的标准模板
+        if project_type.value in CLI_TEMPLATE_MAP:
+            self._scaffold_via_cli_template(ws_path, safe_name, project_type)
         elif project_type == ProjectType.BACKEND_API:
             self._scaffold_backend_api(ws_path, safe_name)
         elif project_type == ProjectType.BACKEND_FEIGN:
             self._scaffold_backend_feign(ws_path, safe_name)
         elif project_type == ProjectType.BACKEND_SCHEDULED:
             self._scaffold_backend_scheduled(ws_path, safe_name)
-        elif project_type == ProjectType.LAYOUT:
-            self._scaffold_layout(ws_path, safe_name)
-        elif project_type == ProjectType.PLUGIN:
-            self._scaffold_plugin(ws_path, safe_name)
-        elif project_type == ProjectType.SCRIPT:
-            self._scaffold_script_js(ws_path, safe_name)  # generic script defaults to JS
-        elif project_type == ProjectType.SCRIPT_JS:
+        # ── 以下类型已从 UI 隐藏，保留 fallback 以兼容旧数据 ──
+        elif project_type == ProjectType.MOBILE_COMPONENT:
+            self._scaffold_form_component(ws_path, safe_name, mobile=True)
+        elif project_type == ProjectType.MOBILE_PAGE:
+            self._scaffold_form_page(ws_path, safe_name, mobile=True)
+        elif project_type in (ProjectType.SCRIPT, ProjectType.SCRIPT_JS):
             self._scaffold_script_js(ws_path, safe_name)
         elif project_type == ProjectType.SCRIPT_PYTHON:
             self._scaffold_script_python(ws_path, safe_name)
@@ -670,6 +675,8 @@ class WorkspaceManager:
             self._scaffold_list_custom_module(ws_path, safe_name)
         elif project_type == ProjectType.WEB_LOGIN:
             self._scaffold_web_login(ws_path, safe_name)
+        else:
+            logger.warning(f"Unsupported project type for scaffolding: {project_type}")
 
         self._seed_default_workspace_rules(ws_path, project_type)
 
@@ -2286,8 +2293,174 @@ export default { install, activate, staticComponents }
 
     # ========== 脚手架模板 ==========
 
+    # ── CLI 预生成模板脚手架 ─────────────────────────────────────
+
+    def _scaffold_via_cli_template(self, ws_path: Path, name: str, project_type: ProjectType):
+        """从 df-apaas-cli 预生成的标准模板复制并做变量替换。
+
+        模板目录位于 backend/templates/cli-generated/{template_key}/，
+        使用占位名 "demo" 生成，此方法将 "demo" 替换为用户实际的项目名。
+        """
+        template_key = CLI_TEMPLATE_MAP[project_type.value]
+        template_dir = CLI_TEMPLATE_DIR / template_key
+        if not template_dir.exists():
+            logger.error(f"CLI template not found: {template_dir}")
+            raise FileNotFoundError(f"CLI template directory missing: {template_dir}")
+
+        # 1. 递归复制模板到 ws_path
+        shutil.copytree(template_dir, ws_path, dirs_exist_ok=True)
+
+        # 2. 变量替换
+        self._replace_cli_template_vars(ws_path, name, project_type)
+
+        # 3. 清理不需要的文件
+        for fn in ("README.md",):
+            p = ws_path / fn
+            if p.exists():
+                p.unlink()
+
+        logger.info(f"Scaffolded {project_type.value} via CLI template: {ws_path.name}")
+
+    def _replace_cli_template_vars(self, ws_path: Path, name: str, project_type: ProjectType):
+        """将 CLI 模板中的 'demo' 占位替换为用户实际的项目名。
+
+        替换分两步：1) 文件内容中的字符串替换 2) 文件名中的字符串替换。
+        """
+        placeholder = _CLI_TPL_PLACEHOLDER  # "demo"
+
+        # 计算不含前缀的 kebab 短名（如 "rating-star"）
+        prefix_map = {
+            ProjectType.FORM_COMPONENT: "form-component-",
+            ProjectType.MENU_PAGE:      "form-page-",
+            ProjectType.FORM_PAGE:      "form-page-",
+            ProjectType.FORM_LIST:      "form-view-",
+            ProjectType.LAYOUT:         "form-layout-",
+            ProjectType.PLUGIN:         "frontend-plugin-",
+        }
+        full_prefix = prefix_map.get(project_type, "")
+        # name 可能已经包含前缀，也可能不包含
+        if name.startswith(full_prefix):
+            short_name = name[len(full_prefix):]
+        else:
+            short_name = name
+        if not short_name:
+            short_name = "custom"
+
+        # ── 构建替换对 ──────────────────────────
+        replacements: list[tuple[str, str]] = []
+
+        if project_type == ProjectType.FORM_COMPONENT:
+            # 占位值 => 目标值
+            old_kebab = f"form-component-{placeholder}"       # form-component-demo
+            new_kebab = f"form-component-{short_name}"
+
+            old_upper = f"FORM_CUSTOM_COMPONENT_{placeholder.upper()}"  # FORM_CUSTOM_COMPONENT_DEMO
+            new_upper = "FORM_CUSTOM_COMPONENT_" + short_name.replace("-", "_").upper()
+
+            old_no_custom_upper = old_upper.replace("_CUSTOM_", "_")   # FORM_COMPONENT_DEMO
+            new_no_custom_upper = new_upper.replace("_CUSTOM_", "_")
+
+            old_no_custom_kebab = old_no_custom_upper.replace("_", "-").lower()  # form-component-demo
+            new_no_custom_kebab = new_no_custom_upper.replace("_", "-").lower()
+
+            old_pascal = "FormComponentDemo"
+            parts = short_name.split("-")
+            new_pascal_suffix = "".join(p.capitalize() for p in parts)
+            new_pascal = f"FormComponent{new_pascal_suffix}"
+
+            replacements = [
+                # 长的先替换，避免子串冲突
+                (old_upper, new_upper),
+                (old_no_custom_upper, new_no_custom_upper),
+                (old_no_custom_kebab, new_no_custom_kebab),
+                (old_pascal, new_pascal),
+                (old_kebab, new_kebab),
+            ]
+        elif project_type in (ProjectType.MENU_PAGE, ProjectType.FORM_PAGE):
+            old_proj = f"form-page-{placeholder}"
+            new_proj = f"form-page-{short_name}"
+            old_route = f"apaas-custom-{placeholder}"
+            new_route = f"apaas-custom-{short_name}"
+            replacements = [
+                (old_proj, new_proj),
+                (old_route, new_route),
+            ]
+        elif project_type == ProjectType.FORM_LIST:
+            old_proj = f"form-view-{placeholder}"
+            new_proj = f"form-view-{short_name}"
+            old_route = f"apaas-custom-{placeholder}"
+            new_route = f"apaas-custom-{short_name}"
+            replacements = [
+                (old_proj, new_proj),
+                (old_route, new_route),
+            ]
+        elif project_type == ProjectType.LAYOUT:
+            old_proj = f"form-layout-{placeholder}"
+            new_proj = f"form-layout-{short_name}"
+            old_route = f"apaas-custom-{placeholder}"
+            new_route = f"apaas-custom-{short_name}"
+            replacements = [
+                (old_proj, new_proj),
+                (old_route, new_route),
+                # layout apaas.json 中 desc 字段
+                (f'"{placeholder} page layout"', f'"{short_name} page layout"'),
+            ]
+        elif project_type == ProjectType.PLUGIN:
+            old_proj = f"frontend-plugin-{placeholder}"
+            new_proj = f"frontend-plugin-{short_name}"
+            # plugin apaas.json 中有 "code": "PLUGIN_DEMO", "name": "demo", "description": "demo plugin"
+            old_plugin_code = f"PLUGIN_{placeholder.upper()}"
+            new_plugin_code = "PLUGIN_" + short_name.replace("-", "_").upper()
+            replacements = [
+                (old_proj, new_proj),
+                (old_plugin_code, new_plugin_code),
+                # 裸 demo 出现在 "name"/"description" 字段中，用短名替换
+                (f'"{placeholder} plugin"', f'"{short_name} plugin"'),
+                (f'"name": "{placeholder}"', f'"name": "{short_name}"'),
+            ]
+
+        if not replacements:
+            return
+
+        # 在 .cursor/rules 的 mdc 文件中也做替换
+        text_suffixes = {".js", ".json", ".vue", ".mdc", ".md", ".css", ".html", ".ts"}
+
+        # ── 步骤 1：替换文件内容 ──
+        for fpath in ws_path.rglob("*"):
+            if not fpath.is_file():
+                continue
+            if fpath.suffix.lower() not in text_suffixes:
+                continue
+            try:
+                content = fpath.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, PermissionError):
+                continue
+            new_content = content
+            for old, new in replacements:
+                new_content = new_content.replace(old, new)
+            if new_content != content:
+                fpath.write_text(new_content, encoding="utf-8")
+
+        # ── 步骤 2：重命名包含占位的文件和目录（从深到浅） ──
+        # 收集所有需要重命名的路径
+        for old, new in replacements:
+            # 每次替换后重新遍历，因为路径可能已经变了
+            paths_to_rename = sorted(
+                (p for p in ws_path.rglob("*") if old in p.name),
+                key=lambda p: len(p.parts),
+                reverse=True,  # 从最深层开始
+            )
+            for p in paths_to_rename:
+                new_name = p.name.replace(old, new)
+                if new_name != p.name:
+                    target = p.parent / new_name
+                    if not target.exists():
+                        p.rename(target)
+
+    # ── 以下为旧版 Python 手写脚手架方法（deprecated, 保留兼容） ──
+
     def _scaffold_form_component(self, ws_path: Path, name: str, mobile: bool = False):
-        """表单自开发组件脚手架 - 完整 FORM_COMPONENT 7场景架构"""
+        """[DEPRECATED] 表单自开发组件脚手架 - 完整 FORM_COMPONENT 7场景架构"""
         # 公共文件
         self._write_common_files(ws_path, name, "FORM_COMPONENT")
 

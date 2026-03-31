@@ -236,7 +236,10 @@ class VibeCodingAgent:
                                 except json.JSONDecodeError:
                                     continue
 
-                                delta = chunk.get("choices", [{}])[0].get("delta", {})
+                                choices = chunk.get("choices") or []
+                                if not choices:
+                                    continue
+                                delta = choices[0].get("delta", {})
 
                                 # Streaming text — surface concise user-facing progress notes live
                                 if delta.get("content"):
@@ -331,12 +334,29 @@ class VibeCodingAgent:
                                 continue
                             read_files_set.add(fpath)
 
-                        _emit({
+                        tool_event: dict = {
                             "type": "agent_tool",
                             "tool": func_name,
                             "tool_display": TOOL_ICONS.get(func_name, func_name),
                             "input_preview": self._format_tool_input(func_name, func_args),
-                        })
+                        }
+                        # 对 write_file/edit_file 传递内容供前端展示代码
+                        if func_name == "write_file":
+                            tool_event["args"] = {
+                                "file_path": func_args.get("file_path", ""),
+                                "content": func_args.get("content", "")[:5000],
+                            }
+                        elif func_name == "edit_file":
+                            tool_event["args"] = {
+                                "file_path": func_args.get("file_path", ""),
+                                "old_string": func_args.get("old_string", "")[:500],
+                                "new_string": func_args.get("new_string", "")[:2000],
+                            }
+                        elif func_name == "run_command":
+                            tool_event["args"] = {
+                                "command": func_args.get("command", "")[:300],
+                            }
+                        _emit(tool_event)
 
                         # Execute
                         async def _tool_progress(chunk: str):
@@ -478,16 +498,16 @@ class VibeCodingAgent:
         except Exception:
             pass
 
-        # Fallback to .env
+        # Fallback to .env — 优先使用 VIBE_AGENT_* 专用变量，再 fallback 到 ANTHROPIC_*
         env = self._load_agent_env()
-        base_url = env.get("ANTHROPIC_BASE_URL", "https://api.minimax.chat/v1")
+        base_url = env.get("VIBE_AGENT_BASE_URL") or env.get("ANTHROPIC_BASE_URL", "https://api.minimax.chat/v1")
         # Convert Anthropic URL format to OpenAI-compatible
         if "/anthropic" in base_url:
             base_url = base_url.replace("/anthropic", "/v1")
         if not base_url.endswith("/v1"):
             base_url = base_url.rstrip("/") + "/v1"
-        api_key = env.get("ANTHROPIC_API_KEY", "")
-        llm_model = model_override or env.get("ANTHROPIC_MODEL", "MiniMax-M2.7")
+        api_key = env.get("VIBE_AGENT_API_KEY") or env.get("ANTHROPIC_API_KEY", "")
+        llm_model = model_override or env.get("VIBE_AGENT_MODEL") or env.get("ANTHROPIC_MODEL", "MiniMax-M2.7")
         return base_url, api_key, llm_model
 
     def _build_prompt(self, requirement: str, conversation_summary: str) -> str:

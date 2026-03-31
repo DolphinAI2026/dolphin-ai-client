@@ -145,7 +145,7 @@
       <!-- Main Content: Welcome or IDE -->
       <div class="main-content">
         <!-- Welcome State -->
-        <div v-if="!ideUrl" class="welcome-pane">
+        <div v-if="!ideUrl && !isStreaming" class="welcome-pane">
           <div class="welcome-inner">
             <div class="welcome-icon">&#x2728;</div>
             <h2 class="welcome-title">描述你想开发的内容</h2>
@@ -234,10 +234,90 @@
               </button>
             </div>
 
-            <!-- Creating overlay -->
-            <div v-if="isCreating" class="creating-overlay">
-              <div class="creating-spinner"></div>
-              <p class="creating-text">{{ creatingStatus }}</p>
+          </div>
+        </div>
+
+        <!-- Stream Pane (对话流视图 - 类似 Claude Code Desktop) -->
+        <div v-else-if="isStreaming && !ideUrl" class="stream-pane">
+          <div class="stream-messages" ref="streamContainerRef">
+            <div
+              v-for="(msg, idx) in streamMessages"
+              :key="idx"
+              class="stream-msg"
+              :class="'msg-' + msg.type"
+            >
+              <!-- 用户消息 -->
+              <template v-if="msg.type === 'user'">
+                <div class="msg-user-bubble">{{ msg.content }}</div>
+              </template>
+
+              <!-- AI 思考 -->
+              <template v-else-if="msg.type === 'thinking'">
+                <div class="msg-thinking">
+                  <span class="msg-thinking-text">{{ msg.content }}</span>
+                  <span v-if="idx === streamMessages.length - 1 && isStreaming" class="thinking-cursor">|</span>
+                </div>
+              </template>
+
+              <!-- 状态消息 -->
+              <template v-else-if="msg.type === 'status'">
+                <div class="msg-status">{{ msg.content }}</div>
+              </template>
+
+              <!-- 文件写入 -->
+              <template v-else-if="msg.type === 'file_write'">
+                <div class="msg-file-write">
+                  <div class="file-header" @click="msg.collapsed = !msg.collapsed">
+                    <span class="file-icon">+</span>
+                    <span class="file-name">{{ msg.fileName }}</span>
+                    <span class="file-badge">新建</span>
+                    <span class="file-toggle">{{ msg.collapsed ? '&#9654;' : '&#9660;' }}</span>
+                  </div>
+                  <div v-if="!msg.collapsed && msg.fileContent" class="file-code-block">
+                    <pre><code>{{ msg.fileContent }}</code></pre>
+                  </div>
+                </div>
+              </template>
+
+              <!-- 文件编辑 -->
+              <template v-else-if="msg.type === 'file_edit'">
+                <div class="msg-file-edit">
+                  <div class="file-header" @click="msg.collapsed = !msg.collapsed">
+                    <span class="file-icon">~</span>
+                    <span class="file-name">{{ msg.fileName }}</span>
+                    <span class="file-badge edit-badge">修改</span>
+                    <span class="file-toggle">{{ msg.collapsed ? '&#9654;' : '&#9660;' }}</span>
+                  </div>
+                  <div v-if="!msg.collapsed && msg.fileContent" class="file-code-block">
+                    <pre><code>{{ msg.fileContent }}</code></pre>
+                  </div>
+                </div>
+              </template>
+
+              <!-- 工具调用 -->
+              <template v-else-if="msg.type === 'tool'">
+                <div class="msg-tool">{{ msg.content }}</div>
+              </template>
+
+              <!-- 命令执行 -->
+              <template v-else-if="msg.type === 'command'">
+                <div class="msg-command">
+                  <span class="cmd-icon">$</span>
+                  <span class="cmd-text">{{ msg.content }}</span>
+                </div>
+              </template>
+
+              <!-- 错误 -->
+              <template v-else-if="msg.type === 'error'">
+                <div class="msg-error">{{ msg.content }}</div>
+              </template>
+            </div>
+
+            <!-- 流式加载指示器 -->
+            <div v-if="isStreaming" class="stream-loading">
+              <span class="stream-dot"></span>
+              <span class="stream-dot"></span>
+              <span class="stream-dot"></span>
             </div>
           </div>
         </div>
@@ -267,7 +347,7 @@
 
 <script setup lang="ts">
 import { API_PREFIX } from '@/utils/request'
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { ArrowLeft, ArrowRight, Download, TopRight, Plus, Paperclip, Monitor, Delete, Fold, Expand } from '@element-plus/icons-vue'
@@ -288,7 +368,42 @@ const userInput = ref('')
 const ideUrl = ref<string | null>(null)
 const ideLoaded = ref(false)
 const isCreating = ref(false)
-const creatingStatus = ref('正在创建工作区...')
+const creatingStatus = ref('')
+
+// ============ Stream Messages (对话流) ============
+interface StreamMessage {
+  type: 'user' | 'thinking' | 'tool' | 'file_write' | 'file_edit' | 'command' | 'status' | 'error'
+  content: string
+  fileName?: string
+  fileContent?: string
+  collapsed?: boolean
+  timestamp: number
+}
+const streamMessages = ref<StreamMessage[]>([])
+const isStreaming = ref(false)
+const streamContainerRef = ref<HTMLElement>()
+
+function addStreamMsg(msg: Omit<StreamMessage, 'timestamp'>) {
+  streamMessages.value.push({ ...msg, timestamp: Date.now() })
+  // 自动滚动到底部
+  nextTick(() => {
+    const el = streamContainerRef.value
+    if (el) el.scrollTop = el.scrollHeight
+  })
+}
+
+function appendToLastThinking(text: string) {
+  const msgs = streamMessages.value
+  if (msgs.length > 0 && msgs[msgs.length - 1].type === 'thinking') {
+    msgs[msgs.length - 1].content += text
+  } else {
+    addStreamMsg({ type: 'thinking', content: text })
+  }
+  nextTick(() => {
+    const el = streamContainerRef.value
+    if (el) el.scrollTop = el.scrollHeight
+  })
+}
 const allWorkspaces = ref<WorkspaceInfo[]>([])
 const embeddedAppId = computed(() => (route.query.app_id as string) || '')
 const existingWorkspaces = computed(() => {
@@ -313,24 +428,14 @@ const collapsedGroups = ref(new Set<string>())
 
 const wsTypeGroupMap: Record<string, { key: string; icon: string; label: string; order: number }> = {
   'form-component':   { key: 'component-pc',     icon: '\uD83E\uDDE9', label: 'PC \u7EC4\u4EF6',     order: 1 },
-  'mobile-component': { key: 'component-mobile', icon: '\uD83D\uDCF1', label: '\u79FB\u52A8\u7AEF\u7EC4\u4EF6',  order: 2 },
-  'menu-page':        { key: 'page-pc',          icon: '\uD83D\uDDA5\uFE0F', label: 'PC \u9875\u9762',     order: 3 },
-  'form-page':        { key: 'page-pc',          icon: '\uD83D\uDDA5\uFE0F', label: 'PC \u9875\u9762',     order: 3 },
-  'mobile-page':      { key: 'page-mobile',      icon: '\uD83D\uDCF1', label: '\u79FB\u52A8\u7AEF\u9875\u9762',  order: 4 },
-  'form-list':        { key: 'list-view',         icon: '\uD83D\uDCCB', label: '\u5217\u8868\u89C6\u56FE',   order: 5 },
-  'layout':           { key: 'layout',            icon: '\uD83D\uDCD0', label: '\u5E94\u7528\u5E03\u5C40',   order: 6 },
-  'plugin':           { key: 'plugin',            icon: '\uD83D\uDD0C', label: '\u6269\u5C55\u63D2\u4EF6',   order: 7 },
-  'backend-api':      { key: 'backend',           icon: '\u2699\uFE0F', label: '\u540E\u7AEF\u63A5\u53E3',   order: 8 },
-  'script':           { key: 'script',            icon: '\u26A1', label: '\u811A\u672C/\u4E8B\u4EF6',  order: 9 },
-  'script-js':        { key: 'script',            icon: '\u26A1', label: '\u811A\u672C/\u4E8B\u4EF6',  order: 9 },
-  'script-python':    { key: 'script',            icon: '\u26A1', label: '\u811A\u672C/\u4E8B\u4EF6',  order: 9 },
-  'script-groovy':    { key: 'script',            icon: '\u26A1', label: '\u811A\u672C/\u4E8B\u4EF6',  order: 9 },
-  'business-dialog':  { key: 'dialog',            icon: '\uD83D\uDCAC', label: '\u4E1A\u52A1\u5F39\u7A97',   order: 10 },
-  'ui-style':         { key: 'style',             icon: '\uD83C\uDFA8', label: 'UI \u6837\u5F0F',   order: 11 },
-  'list-custom-module': { key: 'list-module',     icon: '\uD83D\uDCCA', label: '\u5217\u8868\u6A21\u5757',   order: 12 },
-  'web-login':        { key: 'login',             icon: '\uD83D\uDD11', label: '\u767B\u5F55\u9875',     order: 13 },
-  'backend-feign':    { key: 'backend',           icon: '\uD83D\uDD17', label: '\u5916\u90E8\u8C03\u7528',  order: 8 },
-  'backend-scheduled':{ key: 'backend',           icon: '\u23F0', label: '\u5B9A\u65F6\u4EFB\u52A1',  order: 8 },
+  'menu-page':        { key: 'page-pc',          icon: '\uD83D\uDDA5\uFE0F', label: 'PC \u9875\u9762',     order: 2 },
+  'form-page':        { key: 'page-pc',          icon: '\uD83D\uDDA5\uFE0F', label: 'PC \u9875\u9762',     order: 2 },
+  'form-list':        { key: 'list-view',         icon: '\uD83D\uDCCB', label: '\u5217\u8868\u89C6\u56FE',   order: 3 },
+  'layout':           { key: 'layout',            icon: '\uD83D\uDCD0', label: '\u5E94\u7528\u5E03\u5C40',   order: 4 },
+  'plugin':           { key: 'plugin',            icon: '\uD83D\uDD0C', label: '\u6269\u5C55\u63D2\u4EF6',   order: 5 },
+  'backend-api':      { key: 'backend',           icon: '\u2699\uFE0F', label: '\u540E\u7AEF\u63A5\u53E3',   order: 6 },
+  'backend-feign':    { key: 'backend',           icon: '\uD83D\uDD17', label: '\u5916\u90E8\u8C03\u7528',  order: 6 },
+  'backend-scheduled':{ key: 'backend',           icon: '\u23F0', label: '\u5B9A\u65F6\u4EFB\u52A1',  order: 6 },
 }
 
 const groupedWorkspaces = computed(() => {
@@ -377,12 +482,10 @@ function toggleGroup(key: string) {
 // ============ Scene Categories & Suggestions ============
 const sceneCategories = [
   { key: 'component-pc', icon: '\uD83E\uDDE9', label: 'PC\u7EC4\u4EF6' },
-  { key: 'component-mobile', icon: '\uD83D\uDCF1', label: '\u79FB\u52A8\u7AEF\u7EC4\u4EF6' },
   { key: 'page-pc', icon: '\uD83D\uDDA5\uFE0F', label: 'PC\u9875\u9762' },
-  { key: 'page-mobile', icon: '\uD83D\uDCF1', label: '\u79FB\u52A8\u7AEF\u9875\u9762' },
+  { key: 'list-view', icon: '\uD83D\uDCCB', label: '\u5217\u8868\u89C6\u56FE' },
   { key: 'layout', icon: '\uD83D\uDCD0', label: '\u5E94\u7528\u5E03\u5C40' },
   { key: 'plugin', icon: '\uD83D\uDD0C', label: '\u6269\u5C55\u63D2\u4EF6' },
-  { key: 'script', icon: '\u26A1', label: '\u811A\u672C/\u4E8B\u4EF6' },
   { key: 'backend', icon: '\u2699\uFE0F', label: '\u540E\u7AEF\u63A5\u53E3' },
   { key: 'backend-feign', icon: '\uD83D\uDD17', label: '\u5916\u90E8\u8C03\u7528' },
   { key: 'backend-scheduled', icon: '\u23F0', label: '\u5B9A\u65F6\u4EFB\u52A1' },
@@ -395,23 +498,17 @@ const sceneSuggestions: Record<string, string[]> = {
     '\u505A\u4E00\u4E2A\u8BC4\u5206\u7EC4\u4EF6\uFF0C\u652F\u6301\u534A\u661F\u548C\u81EA\u5B9A\u4E49\u989C\u8272',
     '\u521B\u5EFA\u4E00\u4E2A\u56FE\u8868\u5206\u6790\u7EC4\u4EF6\uFF0C\u652F\u6301\u67F1\u72B6\u56FE\u548C\u997C\u56FE',
   ],
-  'component-mobile': [
-    '\u505A\u4E00\u4E2A\u79FB\u52A8\u7AEF\u7B7E\u540D\u677F\u7EC4\u4EF6\uFF0C\u652F\u6301\u624B\u5199\u7B7E\u540D',
-    '\u5F00\u53D1\u4E00\u4E2A\u79FB\u52A8\u7AEF\u56FE\u7247\u9009\u62E9\u7EC4\u4EF6\uFF0C\u652F\u6301\u62CD\u7167\u548C\u76F8\u518C',
-    '\u5B9E\u73B0\u4E00\u4E2A\u79FB\u52A8\u7AEF\u5730\u7406\u4F4D\u7F6E\u9009\u62E9\u7EC4\u4EF6\uFF08Cube UI\uFF09',
-    '\u4E3A\u5DF2\u6709PC\u8BC4\u5206\u7EC4\u4EF6\u5F00\u53D1\u5BF9\u5E94\u7684\u79FB\u52A8\u7AEF\u7248\u672C',
-  ],
   'page-pc': [
     '\u505A\u4E00\u4E2A\u6570\u636E\u67E5\u8BE2\u8868\u683C\u9875\u9762\uFF0C\u5E26\u641C\u7D22\u548C\u5206\u9875',
     '\u5F00\u53D1\u4E00\u4E2A\u4F9B\u5E94\u5546\u7BA1\u7406\u5F39\u7A97\u9009\u62E9\u9875\u9762',
     '\u521B\u5EFA\u4E00\u4E2A\u9879\u76EE\u5206\u6790\u56FE\u8868\u9875\u9762',
     '\u505A\u4E00\u4E2A\u5BA1\u6279\u6D41\u7A0B\u9875\u9762\uFF0C\u652F\u6301\u591A\u7EA7\u5BA1\u6279',
   ],
-  'page-mobile': [
-    '\u505A\u4E00\u4E2A\u79FB\u52A8\u7AEF\u626B\u7801\u7B7E\u5230\u9875\u9762',
-    '\u5F00\u53D1\u4E00\u4E2A\u79FB\u52A8\u7AEF\u5DE1\u68C0\u8BB0\u5F55\u9875\u9762',
-    '\u521B\u5EFA\u4E00\u4E2A\u79FB\u52A8\u7AEF\u5BA1\u6279\u8BE6\u60C5\u9875\u9762',
-    '\u505A\u4E00\u4E2A\u79FB\u52A8\u7AEF\u6570\u636E\u91C7\u96C6\u8868\u5355\u9875\u9762',
+  'list-view': [
+    '\u81EA\u5B9A\u4E49\u4E00\u4E2A\u5361\u7247\u5F0F\u5217\u8868\u89C6\u56FE\uFF0C\u652F\u6301\u5207\u6362\u5361\u7247/\u8868\u683C\u6A21\u5F0F',
+    '\u5F00\u53D1\u4E00\u4E2A\u5E26\u6811\u5F62\u5BFC\u822A\u7684\u5217\u8868\u89C6\u56FE',
+    '\u505A\u4E00\u4E2A\u7518\u7279\u56FE\u5F0F\u7684\u9879\u76EE\u8FDB\u5EA6\u5217\u8868\u89C6\u56FE',
+    '\u521B\u5EFA\u4E00\u4E2A\u770B\u677F\u5F0F\u7684\u4EFB\u52A1\u5217\u8868\u89C6\u56FE',
   ],
   layout: [
     '\u505A\u4E00\u4E2A\u5E26\u9876\u90E8\u516C\u544A\u680F\u7684\u81EA\u5B9A\u4E49\u5E03\u5C40',
@@ -422,12 +519,6 @@ const sceneSuggestions: Record<string, string[]> = {
     '\u5F00\u53D1\u4E00\u4E2A\u5E94\u7528\u8BE6\u60C5\u9875\u7684\u81EA\u5B9A\u4E49Tab\u63D2\u4EF6',
     '\u505A\u4E00\u4E2A\u81EA\u5B9A\u4E49\u9762\u677F\u6269\u5C55\uFF0C\u663E\u793A\u7EDF\u8BA1\u6570\u636E',
     '\u521B\u5EFA\u4E00\u4E2A\u7CFB\u7EDF\u901A\u77E5\u7BA1\u7406\u6269\u5C55\u63D2\u4EF6',
-  ],
-  script: [
-    '\u5199\u4E00\u4E2AJavaScript\u524D\u7AEF\u811A\u672C\uFF0C\u8868\u5355\u63D0\u4EA4\u524D\u6821\u9A8C\u6570\u636E',
-    '\u505A\u4E00\u4E2A\u4E1A\u52A1\u4E8B\u4EF6\u81EA\u5B9A\u4E49\u5F39\u7A97\uFF0C\u91C7\u96C6\u5BA1\u6279\u610F\u89C1',
-    '\u5199\u4E00\u4E2A\u540E\u7AEFPython\u811A\u672C\u5904\u7406\u6570\u636E\u540C\u6B65',
-    '\u5F00\u53D1\u4E00\u4E2A\u81EA\u5B9A\u4E49CSS\u6837\u5F0F\uFF0C\u7F8E\u5316\u8868\u5355\u754C\u9762',
   ],
   backend: [
     '\u5F00\u53D1\u4E00\u4E2A\u81EA\u5B9A\u4E49\u6570\u636E\u67E5\u8BE2\u63A5\u53E3',
@@ -455,12 +546,10 @@ const activeSuggestions = computed(() => sceneSuggestions[activeSceneCategory.va
 
 const sceneCategoryToProjectType: Record<string, string> = {
   'component-pc': 'form-component',
-  'component-mobile': 'mobile-component',
   'page-pc': 'menu-page',
-  'page-mobile': 'mobile-page',
+  'list-view': 'form-list',
   layout: 'layout',
   plugin: 'plugin',
-  script: 'script',
   backend: 'backend-api',
   'backend-feign': 'backend-feign',
   'backend-scheduled': 'backend-scheduled',
@@ -604,8 +693,12 @@ async function sendMessage() {
   attachedPreviewUrl.value = null
 
   isCreating.value = true
-  creatingStatus.value = '\u6B63\u5728\u521B\u5EFA\u5DE5\u4F5C\u533A...'
+  isStreaming.value = true
+  streamMessages.value = []
+  addStreamMsg({ type: 'user', content: message })
+  addStreamMsg({ type: 'status', content: '\u6B63\u5728\u8BC6\u522B\u5F00\u53D1\u573A\u666F...' })
 
+  try {
   // Upload attachment if present
   let uploadResult: UploadResult | null = null
   if (currentAttachment) {
@@ -634,7 +727,6 @@ async function sendMessage() {
   const _projectType = sceneCategoryToProjectType[_sceneKey] || route.query.type as string || null
   pendingSceneCategory.value = null
 
-  try {
     const token = userStore.token
 
     const body: Record<string, any> = {
@@ -644,7 +736,7 @@ async function sendMessage() {
       app_id: (route.query.app_id as string) || null,
       project_id: embeddedAppId.value ? Number(embeddedAppId.value) : null,
       project_type: _projectType,
-      quick_create: true,
+      quick_create: false,
     }
 
     const response = await fetch(`${API_PREFIX}/coding/auto-pipeline`, {
@@ -669,22 +761,70 @@ async function sendMessage() {
         const parsed = JSON.parse(payload)
 
         if (parsed.type === 'step') {
-          if (parsed.step === 'create_workspace' && parsed.status === 'done' && parsed.data) {
-            const wsData = {
-              ...parsed.data,
-              id: parsed.data.workspace_id || parsed.data.id,
+          const stepKey = parsed.step as string
+          const stepStatus = parsed.status as string
+          if (stepKey === 'detect_scene' && stepStatus === 'done') {
+            addStreamMsg({ type: 'status', content: `\u2713 \u8BC6\u522B\u4E3A ${parsed.data?.scene_type || 'component'}` })
+          } else if (stepKey === 'create_workspace') {
+            if (stepStatus === 'running') {
+              addStreamMsg({ type: 'status', content: '\u6B63\u5728\u521D\u59CB\u5316\u5DE5\u7A0B\u811A\u624B\u67B6...' })
+            } else if (stepStatus === 'done' && parsed.data) {
+              addStreamMsg({ type: 'status', content: '\u2713 \u5DE5\u7A0B\u811A\u624B\u67B6\u5DF2\u521D\u59CB\u5316' })
+              const wsData = { ...parsed.data, id: parsed.data.workspace_id || parsed.data.id }
+              codingStore.setWorkspace(wsData)
+              codingStore.workspacePath = parsed.data.workspace_path || null
+              localStorage.setItem('coding_last_workspace_id', wsData.id)
+              try { allWorkspaces.value = await codingApi.listWorkspaces() } catch {}
             }
-            codingStore.setWorkspace(wsData)
-            codingStore.workspacePath = parsed.data.workspace_path || null
-            localStorage.setItem('coding_last_workspace_id', wsData.id)
-            creatingStatus.value = '\u5DE5\u4F5C\u533A\u5DF2\u521B\u5EFA\uFF0C\u6B63\u5728\u542F\u52A8 IDE...'
-            try { allWorkspaces.value = await codingApi.listWorkspaces() } catch {}
-          } else if (parsed.step === 'create_workspace' && parsed.status === 'running') {
-            creatingStatus.value = '\u6B63\u5728\u521B\u5EFA\u5DE5\u4F5C\u533A...'
+          } else if (stepKey === 'generate') {
+            if (stepStatus === 'running') {
+              addStreamMsg({ type: 'status', content: 'AI \u5F00\u59CB\u7F16\u5199\u4EE3\u7801...' })
+            } else if (stepStatus === 'done') {
+              addStreamMsg({ type: 'status', content: '\u2713 \u4EE3\u7801\u751F\u6210\u5B8C\u6210' })
+            }
           }
+        } else if (parsed.type === 'agent_tool') {
+          const toolName = parsed.tool as string
+          const toolArgs = parsed.args || {}
+          const preview = (parsed.input_preview || '') as string
+          if (toolName === 'write_file') {
+            const filePath = (toolArgs.file_path || '') as string
+            const fileName = filePath.split('/').pop() || preview
+            const content = (toolArgs.content || '') as string
+            addStreamMsg({
+              type: 'file_write', content: '', fileName,
+              fileContent: content || undefined, collapsed: true,
+            })
+          } else if (toolName === 'edit_file') {
+            const filePath = (toolArgs.file_path || '') as string
+            const fileName = filePath.split('/').pop() || preview
+            const newStr = (toolArgs.new_string || '') as string
+            addStreamMsg({
+              type: 'file_edit', content: '', fileName,
+              fileContent: newStr || undefined, collapsed: true,
+            })
+          } else if (toolName === 'run_command') {
+            const cmd = (toolArgs.command || preview || '') as string
+            addStreamMsg({ type: 'command', content: cmd })
+          } else if (toolName === 'read_file') {
+            addStreamMsg({ type: 'tool', content: `\uD83D\uDCC4 \u8BFB\u53D6 ${preview}` })
+          } else if (toolName === 'glob_files') {
+            addStreamMsg({ type: 'tool', content: `\uD83D\uDCC2 \u626B\u63CF ${preview || '\u9879\u76EE\u6587\u4EF6'}` })
+          } else if (toolName === 'grep_search') {
+            addStreamMsg({ type: 'tool', content: `\uD83D\uDD0D \u641C\u7D22 ${preview}` })
+          }
+        } else if (parsed.type === 'agent_thinking') {
+          const text = (parsed.content || '') as string
+          if (text.trim()) addStreamMsg({ type: 'thinking', content: text })
+        } else if (parsed.type === 'agent_thinking_delta') {
+          const delta = (parsed.content || '') as string
+          if (delta) appendToLastThinking(delta)
+        } else if (parsed.type === 'agent_done') {
+          addStreamMsg({ type: 'status', content: '\u2705 \u4EE3\u7801\u751F\u6210\u5B8C\u6210\uFF0C\u6B63\u5728\u6253\u5F00\u7F16\u8F91\u5668...' })
         } else if (parsed.type === 'scene_detected') {
           codingStore.conversationId = parsed.conversation_id
         } else if (parsed.type === 'done') {
+          isStreaming.value = false
           codingStore.conversationId = parsed.conversation_id
           if (parsed.workspace_id && !codingStore.workspace) {
             try {
@@ -694,8 +834,12 @@ async function sendMessage() {
             } catch { /* ignore */ }
           }
           if (parsed.ide_url) {
-            setIdeUrl(parsed.ide_url)
+            // 延迟 1s 让用户看到完成状态
+            setTimeout(() => setIdeUrl(parsed.ide_url), 1000)
           }
+        } else if (parsed.type === 'error') {
+          addStreamMsg({ type: 'error', content: parsed.message || '\u53D1\u751F\u9519\u8BEF' })
+          isStreaming.value = false
         }
       } catch {
         // skip unparseable events
@@ -718,7 +862,8 @@ async function sendMessage() {
     }
 
   } catch (error: any) {
-    ElMessage.error(`\u5904\u7406\u5931\u8D25: ${error.message}`)
+    addStreamMsg({ type: 'error', content: error.message || '\u53D1\u751F\u9519\u8BEF' })
+    isStreaming.value = false
   } finally {
     isCreating.value = false
   }
@@ -1396,32 +1541,206 @@ watch(() => route.path, () => {
   box-shadow: 0 8px 20px var(--t-brand-glow);
 }
 
-/* ============ Creating Overlay ============ */
-.creating-overlay {
-  position: absolute;
-  inset: 0;
+/* ============ Stream Pane (对话流视图) ============ */
+.stream-pane {
+  flex: 1;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+}
+
+.stream-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.stream-msg { animation: fadeInUp 0.2s ease-out; }
+
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* 用户消息 */
+.msg-user-bubble {
+  align-self: flex-end;
+  max-width: 80%;
+  padding: 10px 16px;
+  background: var(--t-brand);
+  color: #fff;
+  border-radius: 16px 16px 4px 16px;
+  font-size: 14px;
+  line-height: 1.5;
+  margin-bottom: 8px;
+}
+
+/* AI 思考 */
+.msg-thinking {
+  font-size: 14px;
+  color: var(--t-text);
+  line-height: 1.6;
+  padding: 4px 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.thinking-cursor {
+  animation: blink 1s step-end infinite;
+  color: var(--t-brand);
+}
+
+@keyframes blink {
+  50% { opacity: 0; }
+}
+
+/* 状态消息 */
+.msg-status {
+  font-size: 12px;
+  color: var(--t-text-muted);
+  padding: 4px 0;
+}
+
+/* 工具调用 */
+.msg-tool {
+  font-size: 12px;
+  color: var(--t-text-muted);
+  opacity: 0.7;
+  padding: 2px 0;
+}
+
+/* 文件写入/编辑 */
+.msg-file-write, .msg-file-edit {
+  border: 1px solid var(--t-border-subtle);
+  border-radius: 8px;
+  overflow: hidden;
+  margin: 4px 0;
+}
+
+.file-header {
+  display: flex;
   align-items: center;
-  justify-content: center;
-  background: var(--t-bg-overlay);
-  backdrop-filter: blur(8px);
-  border-radius: 16px;
-  z-index: 10;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace;
+  transition: background 0.15s;
 }
 
-.creating-spinner {
-  width: 40px;
-  height: 40px;
-  border: 3px solid var(--t-border-subtle);
-  border-top-color: var(--t-brand);
+.file-header:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.file-icon {
+  font-weight: 700;
+  color: #52c41a;
+  width: 16px;
+  text-align: center;
+}
+
+.msg-file-edit .file-icon {
+  color: #faad14;
+}
+
+.file-name {
+  flex: 1;
+  color: var(--t-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(82, 196, 26, 0.15);
+  color: #52c41a;
+}
+
+.file-badge.edit-badge {
+  background: rgba(250, 173, 20, 0.15);
+  color: #faad14;
+}
+
+.file-toggle {
+  font-size: 10px;
+  color: var(--t-text-muted);
+  opacity: 0.5;
+}
+
+.file-code-block {
+  border-top: 1px solid var(--t-border-subtle);
+  max-height: 300px;
+  overflow: auto;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.file-code-block pre {
+  margin: 0;
+  padding: 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace;
+  color: var(--t-text);
+  white-space: pre;
+  overflow-x: auto;
+}
+
+/* 命令执行 */
+.msg-command {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace;
+  color: var(--t-text-muted);
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 6px;
+  margin: 4px 0;
+}
+
+.cmd-icon {
+  color: #52c41a;
+  font-weight: 700;
+}
+
+/* 错误 */
+.msg-error {
+  padding: 8px 12px;
+  background: rgba(255, 77, 79, 0.1);
+  border: 1px solid rgba(255, 77, 79, 0.3);
+  border-radius: 6px;
+  color: #ff4d4f;
+  font-size: 13px;
+}
+
+/* 流式加载指示器 */
+.stream-loading {
+  display: flex;
+  gap: 4px;
+  padding: 8px 0;
+}
+
+.stream-dot {
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-  margin-bottom: 16px;
+  background: var(--t-brand);
+  animation: dotPulse 1.4s infinite ease-in-out both;
 }
 
-@keyframes spin {
-  to { transform: rotate(360deg); }
+.stream-dot:nth-child(1) { animation-delay: -0.32s; }
+.stream-dot:nth-child(2) { animation-delay: -0.16s; }
+
+@keyframes dotPulse {
+  0%, 80%, 100% { transform: scale(0.4); opacity: 0.4; }
+  40% { transform: scale(1); opacity: 1; }
 }
 
 .creating-text {

@@ -1,0 +1,885 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+
+# 自开发表单组件AI提示词
+
+## 项目说明
+
+这是一个得帆低代码自开发脚手架基于Vue2.7版本生成的自开发表单组件的工程，并遵循最佳实践进行目录组织和配置管理，开发者可以在此基础上快速开展业务开发。
+
+### 项目结构指南
+
+本项目是一个前端项目，使用了 Vue.js2.7 (基于 `vue.config.js` 和 `babel.config.js` 的存在)。
+
+### 详细目录结构
+
+```
+.
+├── .cursor/
+│   └── rules/  // 存放 Cursor AI 的自定义规则
+├── public/
+│   └── form-component/
+│       └── form-component-demo/ // 可能与特定的 "demo" 表单组件相关的前端资源
+├── https/      // 可能包含 HTTPS 相关的证书文件，用于本地开发服务器
+└── src/        // 项目的主要源代码目录
+    ├── api/    // 存放 API 请求相关代码
+    ├── form-ability/ // 存放表单能力/功能相关代码
+    │   ├── ability-field-convert.config.js
+    │   └── ability-field-map.config.js
+    ├── form-component/ // 核心表单组件代码
+    │   ├── index.js    // (@src/form-component/index.js) 表单组件模块入口
+    │   ├── form-editor/ // 表单编辑器相关组件
+    │   │   └── index.js
+    │   └── form-widget/ // 表单小部件 (实际渲染和交互的组件)
+    │       ├── index.js // (@src/form-component/form-widget/index.js)
+    │       ├── edit/    // "编辑"场景下的小部件
+    │       │   ├── form-component-demo-edit.vue
+    │       │   └── index.js
+    │       ├── ide/     // "IDE"或"设计时"场景下的小部件
+    │       │   ├── form-component-demo-ide.vue
+    │       │   └── index.js
+    │       ├── list/    // "列表"场景下的小部件
+    │       │   ├── form-component-demo-list.vue
+    │       │   └── index.js
+    │       ├── print/   // "打印"场景下的小部件
+    │       │   ├── form-component-demo-print.vue
+    │       │   └── index.js
+    │       ├── read/    // "只读"场景下的小部件
+    │       │   ├── form-component-demo-read.vue
+    │       │   └── index.js
+    │       ├── search/  // "搜索"场景下的小部件
+    │       │   ├── form-component-demo-search.vue
+    │       │   └── index.js
+    │       └── search-ide/ // "搜索IDE"场景下的小部件
+    │           ├── form-component-demo-search-ide.vue
+    │           └── index.js
+    ├── form-component-config/ // 表单组件的配置文件
+    │   ├── index.js           // (@src/form-component-config/index.js)
+    │   ├── form-editor/
+    │   │   └── index.js
+    │   └── form-widget/
+    │       ├── form-component-demo.widget.config.js // "demo" 小部件的配置
+    │       └── index.js
+    ├── form-component-local/ // 表单组件的本地化/国际化 (i18n) 文件
+    │   ├── index.js          // (@src/form-component-local/index.js)
+    │   ├── en-US/            // 英文资源
+    │   │   └── index.js
+    │   └── zh-CN/            // 中文资源
+    │       └── index.js
+    ├── mixin/      // Vue Mixins
+    │   ├── form-config.mixin.js
+    │   ├── form-widget.mixin.js
+    │   ├── print-widget.mixin.js
+    │   ├── search-ide-widget.mixin.js
+    │   └── search-widget.mixin.js
+    ├── validator/  // 数据校验器
+    │   ├── widget-area-validator.js
+    │   ├── widget-regex-validator.js
+    │   └── widget-required-validator.js
+    ├── apaas.json  // (@src/apaas.json) aPaaS 平台特定配置文件
+    └── index.js    // (@src/index.js) 项目的主要入口 JavaScript 文件
+```
+
+### 核心目录说明
+
+- src/api/：用于封装所有后端接口调用，推荐使用统一请求工具并按业务模块分类。
+- src/form-ability/：声明表单组件业务对象所支持的功能能力，如：公式规则取值自定义，业务事件禁用此组件的选择等。
+- src/form-component/form-editor/：负责表单设计器中，组件右侧的属性编辑面板的 UI 实现。
+- src/form-component/form-widget/：具体的表单控件组件，如输入框、下拉框等业务控件。
+- src/form-component-config/：描述各类组件的静态配置信息。
+    - form-editor/：设计器中使用的配置项描述。
+    - form-widget/：表单控件的属性配置。
+- src/form-component-local/：支持国际化的多语言文案定义。
+- src/mixin/：平台提供的通用 mixin，用于简化组件开发。
+- src/validator/：内置的表单字段校验器，可用于组件级或字段级校验。
+- src/apaas.json：该文件定义当前组件的元数据，是组件与平台对接的桥梁。
+- src/index.js：整个组件模块的入口文件，负责导出组件能力供平台使用。
+
+## 实现代码示例
+
+提供了自开发表单组件相关的代码示例，生成的代码可以参考示例中的代码结构和逻辑。
+
+### 自开发表单组件
+
+在低代码平台中，自开发表单组件是指开发者基于平台能力，自主实现的可拖拽、可配置、可复用的表单组件。平台提供了统一的组件声明机制、生命周期规范以及组件加载方式，确保组件可以无缝集成。
+
+#### 表单组件开发位置说明
+
+组件主要集中在以下目录：
+
+- `src/form-component/form-widget/`：用于存放具体的组件实现代码；
+- `src/form-component-config/form-widget/`：用于定义组件的静态配置信息；
+- `src/apaas.json`：用于注册组件的元信息（入口文件、资源文件、组件列表等）；
+- `src/index.js`：用于统一导出所有组件，供平台加载；
+
+#### 表单组件配置文件代码示例
+
+src/form-component-config/form-widget/form-component-rate.widget.config.js
+```js
+const FormComponentRateWidgetConfig = {
+  version: 2.0, // 组件版本
+  code: 'FORM_CUSTOM_COMPONENT_RATE', // 组件编码
+  desc: { // 组件描述信息
+    iconType: 'DEFAULT', // 组件icon类型
+    icon: `svg html代码`, // 组件svg图标名称
+    // 组件名称
+    text: '评分',
+    // 组件具体描述
+    description: '评分'
+  },
+  // 组件实例参数
+  instance: {
+    uuid: '$itemUuid',
+    inTable: false
+  },
+  // 在不同地方渲染的Vue组件的name
+  component: {
+    ide: 'FormComponentRateIde', // 在表单设计状态下使用的组件
+    edit: 'FormComponentRateEdit', // 在可编辑（弹窗）状态下使用的组件
+    read: 'FormComponentRateRead', // 在查看（抽屉）状态下使用的组件
+    list: 'FormComponentRateList', // 在前台列表的表格上显示的组件
+    association: 'FormComponentRateAssociation', // 在关联表单的表格上显示的组件
+    lov: 'FormComponentRateLov', // 在数据选择弹窗的表格上显示的组件
+    print: 'FormComponentRatePrint', // 在系统打印中显示的组件
+    search: 'FormComponentRateSearch', // 在前台列表查询面板上显示的组件
+    searchIde: 'FormComponentRateSearchIde' // 在后台列表设计中查询面板显示的组件
+  },
+  // 组件配置以及组件配置的默认值
+  widget: {
+    // 控制组件展示的这类配置的默认值
+    display: {
+      // 组件标题名称默认值
+      label: '评分',
+      width: 6, // 组件宽带默认值
+      mobileWidth: 12, // 组件移动端宽带默认值
+      height: 1, // 组件高度默认值
+      hidden: false, // 组件是否隐藏默认值
+      readOnly: false, // 组件是否只读默认值
+      required: false, // 组件是否必填默认值
+      onlyCreateEdit: false // 是否只仅新建可编辑默认值
+    },
+    // 控制组件是否被允许进行某些操作的这类配置的默认值
+    allow: {
+      // calcRule: false,
+      useInTableColumn: true // 组件是否允许在表格列中使用
+      // scanCode: false
+    },
+    // 控制组件的默认值的这类配置的默认值
+    default: {
+      customDefaultKey: 'defaultValue', // 默认值的key
+      value: 0 // 默认值
+    },
+    // 控制组件校验规则的这类配置的默认值
+    validator: {
+      uniqueCheck: false, // 唯一性校验默认值
+      numberMax: 5 // 数字最大值校验默认值
+    },
+    // 控制组件的特殊配置这类配置的默认值
+    special: {
+      frontBusinessObjectComponentType: 'BOF_NUMBER', // 前端业务对象组件类型默认值
+      saveWithHidden: false, // 隐藏时是否保存
+      customComponentConfig: {
+          allowHalf: false,
+          showText: false,
+          texts: [],
+          selfNum:5,
+      },
+    },
+    // 表单设计时组件的配置项
+    editor: {
+      // Web端表单设计，该组件所包含的所有配置code数组
+      config: [
+        'INFO', // 组件信息
+        'LABEL', // 标题名称
+        'FIELD_CODE', // 字段编码
+        'TITLE_DESCRIPTION', // 标题说明
+        'WIDTH', // 宽度
+        'FORM_CUSTOM_COMPONENT_RATE_SETTING', // 评分设置
+        // 'FORMULA_RULE', // 公式规则
+        'HIDDEN', // 是否隐藏
+        'READONLY', // 是否只读
+        'REQUIRED', // 是否必填
+        'EDITONNEW', // 仅新建可编辑
+        'UNIQUE', // 唯一性校验
+        'HIDDEN_SAVE', // 隐藏时提交
+        'HIDDEN_TRIGGER', // 隐藏时触发
+        'TRIGGER_BUSINESS_EVENTS' // 触发业务事件
+      ],
+      // 如果组件拖入到子表内，需要排除的配置code数组
+      excludeInTable: ['WIDTH'] // 将宽度排除
+    }
+  },
+  componentModelField: ['NUM'],
+  // 不同客户端的相关配置
+  client: {
+    // 移动端配置
+    mobile: {
+      // 组件配置
+      widget: {
+        // 表单设计时组件的配置项
+        editor: {
+          // 移动端表单设计，该组件所包含的所有配置code数组
+          config: [
+            'INFO', // 组件信息
+            'LABEL', // 标题名称
+            'FIELD_CODE', // 字段编码
+            'TITLE_DESCRIPTION', // 标题说明
+            'WIDTH', // 宽度
+            'FORM_CUSTOM_COMPONENT_RATE_SETTING', // 评分设置
+            // 'FORMULA_RULE', // 公式规则
+            'HIDDEN', // 是否隐藏
+            'READONLY', // 是否只读
+            'REQUIRED', // 是否必填
+            'EDITONNEW', // 仅新建可编辑
+            'UNIQUE', // 唯一性校验
+            'HIDDEN_SAVE', // 隐藏时提交
+            'HIDDEN_TRIGGER', // 隐藏时触发
+            'TRIGGER_BUSINESS_EVENTS' // 触发业务事件
+          ],
+          // 如果组件拖入到子表内，需要排除的配置code数组
+          excludeInTable: ['WIDTH']  // 将宽度排除
+        }
+      },
+      // 在不同地方渲染的Vue组件的name
+      component: {
+        ide: 'MobileFormComponentRateIde', // 在表单设计状态下使用的组件
+        edit: 'MobileFormComponentRateEdit', // 在可编辑（弹窗）状态下使用的组件
+        read: 'MobileFormComponentRateRead', // 在查看（抽屉）状态下使用的组件
+        list: 'MobileFormComponentRateList', // 在前台列表的表格上显示的组件
+        association: 'MobileFormComponentRateAssociation', // 在关联表单的表格上显示的组件
+        lov: 'MobileFormComponentRateLov', // 在数据选择弹窗的表格上显示的组件
+        tableColumn: 'MobileFormComponentRateTableColumn' // 在子表组件的卡片上和表格上显示的组件
+      }
+    }
+  },
+  methods: {
+
+  },
+  formatValueSchema: {
+    
+  }
+}
+
+export default FormComponentRateWidgetConfig
+```
+
+src/form-component-config/form-widget/index.js
+```js
+import FormComponentRateWidgetConfig from './form-component-rate.widget.config'
+
+const widgetConfigList = [
+  FormComponentRateWidgetConfig
+]
+
+export default widgetConfigList
+```
+
+#### 表单组件vue组件代码示例
+
+##### ide
+
+ide组件是在表单设计器中预览的组件
+
+src/form-component/form-widget/ide/form-component-rate-ide.vue
+```vue
+<template>
+  <div class="form-custom-rate form-widget">
+    <div class="widget-item">
+      <x-proxy-form-item
+        :isInTable="widget.isInTable"
+        :showRequired="showRequired"
+        :label="widget.label"
+        :titleDescription="widget.titleDescription"
+        :renderScene="renderScene"
+        :processTitle="widget.processTitle"
+        :validatorRules="validatorRules"
+        :validateKey="validateKey"
+        :validateInfo="validateInfo"
+        :webFormSettings="webFormSettings"
+      >
+        <el-rate
+          v-model="formValue"
+          :disabled="true"
+          :max="widget.customComponentConfig.selfNum"
+          :allow-half="widget.customComponentConfig.allowHalf"
+          :show-score="!widget.customComponentConfig.showText"
+          :show-text="widget.customComponentConfig.showText"
+          :texts="widget.customComponentConfig.texts"
+        />
+      </x-proxy-form-item>
+    </div>
+  </div>
+</template>
+<script>
+import FormWidgetMixin from '@/mixin/form-widget.mixin'
+
+export default {
+  name: 'FormComponentRateIde',
+  mixins: [FormWidgetMixin]
+}
+</script>
+```
+
+src/form-component/form-widget/ide/index.js
+```js
+import FormComponentRateIde from './form-component-rate-ide.vue';
+
+const ideFormComponentList = [
+    FormComponentRateIde
+] /* vue组件的集合 */
+
+export default ideFormComponentList
+```
+
+##### edit
+
+edit组件是在应用前台表单弹窗中看到可根据业务规则可编辑的组件
+
+src/form-component/form-widget/edit/form-component-rate-edit.vue
+```vue
+<template>
+  <div class="form-custom-rate form-widget">
+    <div class="widget-item">
+      <x-proxy-form-item
+        :isInTable="widget.isInTable"
+        :showRequired="showRequired"
+        :label="widget.label"
+        :titleDescription="widget.titleDescription"
+        :renderScene="renderScene"
+        :processTitle="widget.processTitle"
+        :validatorRules="validatorRules"
+        :validateKey="validateKey"
+        :validateInfo="validateInfo"
+        :webFormSettings="webFormSettings"
+      >
+        <el-rate
+          v-model="formValue"
+          :disabled="widget.readOnly"
+          :max="widget.customComponentConfig.selfNum"
+          :allow-half="widget.customComponentConfig.allowHalf"
+          :show-score="!widget.customComponentConfig.showText"
+          :show-text="widget.customComponentConfig.showText"
+          :texts="widget.customComponentConfig.texts"
+        />
+      </x-proxy-form-item>
+    </div>
+  </div>
+</template>
+<script>
+import FormWidgetMixin from '@/mixin/form-widget.mixin'
+
+export default {
+  name: 'FormComponentRateEdit',
+  mixins: [FormWidgetMixin]
+}
+</script>
+```
+
+src/form-component/form-widget/edit/index.js
+```js
+import FormComponentRateEdit from './form-component-rate-edit.vue';
+
+const editFormComponentList = [
+  FormComponentRateEdit
+] /* vue组件的集合 */
+
+export default editFormComponentList
+```
+
+##### read
+
+read组件是在应用前台表单抽屉中看到的只读组件
+
+src/form-component/form-widget/read/form-component-rate-read.vue
+```
+<template>
+  <div class="form-custom-rate form-widget">
+    <div class="widget-item">
+      <x-proxy-form-item
+        :isInTable="widget.isInTable"
+        :showRequired="showRequired"
+        :label="widget.label"
+        :titleDescription="widget.titleDescription"
+        :renderScene="renderScene"
+        :processTitle="widget.processTitle"
+        :validatorRules="validatorRules"
+        :validateKey="validateKey"
+        :validateInfo="validateInfo"
+        :webFormSettings="webFormSettings"
+      >
+        <el-rate
+          v-model="formValue"
+          :disabled="true"
+          :max="widget.customComponentConfig.selfNum"
+          :allow-half="widget.customComponentConfig.allowHalf"
+          :show-score="!widget.customComponentConfig.showText"
+          :show-text="widget.customComponentConfig.showText"
+          :texts="widget.customComponentConfig.texts"
+        />
+      </x-proxy-form-item>
+    </div>
+  </div>
+</template>
+<script>
+import FormWidgetMixin from '@/mixin/form-widget.mixin'
+
+export default {
+  name: 'FormComponentRateRead',
+  mixins: [FormWidgetMixin]
+}
+</script>
+```
+
+src/form-component/form-widget/read/index.js
+```
+import FormComponentRateRead from './form-component-rate-read.vue';
+
+const editFormComponentList = [
+  FormComponentRateRead
+] /* vue组件的集合 */
+
+export default editFormComponentList
+```
+
+##### list
+
+list组件是在应用前台列表中看到的只读组件
+
+src/form-component/form-widget/list/form-component-rate-list.vue
+```vue
+<template>
+    <div class="form-component-rate-list">
+        <el-rate
+            disabled
+            :value="formValue"
+            :max="max"
+            :allow-half="allowHalf"
+            :show-score="!showText"
+            :show-text="showText"
+            :texts="texts"
+        />
+    </div>
+</template>
+<script>
+export default {
+    inject: ["listEngine"],
+    name: "FormComponentRate",
+    props: ["componentConfig", "formValue", "propKey"],
+    computed: {
+        max() {
+            let max = (
+                this.componentConfig.customComponentConfig &&
+                this.componentConfig.customComponentConfig.selfNum
+            );
+            if (!max) {
+                return Math.max(this.formValue, 5);
+            }
+            return max;
+        },
+        allowHalf() {
+            const { componentConfig, formValue } = this;
+            if (componentConfig.customComponentConfig) {
+                return componentConfig.customComponentConfig.allowHalf;
+            } else {
+                return Math.floor(formValue) !== formValue
+            }
+        },
+        showText() {
+            return (
+                this.componentConfig.customComponentConfig &&
+                this.componentConfig.customComponentConfig.showText
+            ) || false
+        },
+        texts() {
+            return (
+                this.componentConfig.customComponentConfig &&
+                this.componentConfig.customComponentConfig.texts
+            ) || []
+        }
+    }
+}
+</script>
+```
+
+src/form-component/form-widget/list/index.js
+```js
+import FormComponentRateList from "./form-component-rate-list.vue";
+
+const listFormComponentList = [
+    FormComponentRateList
+] /* vue组件的集合 */
+
+export default listFormComponentList
+```
+
+##### print
+
+print组件是在应用前台系统打印中看到的只读组件
+不使用x-proxy-form-item组件
+
+src/form-component/form-widget/print/form-component-rate-print.vue
+```vue
+<template>
+  <div class="form-component-rate form-component-demo-print">
+      <el-rate
+        disabled
+        :value="formValue"
+        :max="widget.customComponentConfig.selfNum"
+        :allow-half="widget.customComponentConfig.allowHalf"
+        :show-score="!widget.customComponentConfig.showText"
+        :show-text="widget.customComponentConfig.showText"
+        :texts="widget.customComponentConfig.texts"
+      />
+    </div>
+</template>
+
+<script>
+import PrintWidgetMixin from '@/mixin/print-widget.mixin'
+
+export default {
+  name: 'FormComponentAiRatePrint',
+  mixins: [PrintWidgetMixin]
+}
+</script>
+
+<style lang="scss">
+.form-component-demo-print {
+}
+</style>
+```
+
+src/form-component/form-widget/print/index.js
+```js
+import FormComponentAiRatePrint from './form-component-demo-print.vue'
+
+const printFormComponentList = [
+  FormComponentAiRatePrint
+] /* vue组件的集合 */
+
+export default printFormComponentList
+```
+
+### 表单设计器右侧配置
+
+右侧属性面板的每一项配置，均由form-component-config/form-editor目录下的文件定义。
+
+🛠 配置项支持自定义组件作为编辑器，在设计器中以动态面板形式呈现。详见【表单设计器右侧配置开发】
+
+#### 配置项开发位置说明
+
+表单组件右侧属性面板的配置项，主要由两个文件组成：
+
+- `form-component-config/form-editor/`：用于定义每个配置项的元数据，例如 `code`、绑定的属性、渲染组件等；
+- `form-component/form-editor/`：定义配置项对应的 Vue 组件（配置面板）本身。
+
+#### 配置项配置文件代码示例
+
+**各字段说明：**
+
+| 字段名 | 含义 |
+| --- | --- |
+| code | 当前配置项的唯一标识，用于在组件配置中引用 |
+| editorConfigType | 配置项类型，通常与 code 保持一致 |
+| componentName | Vue组件名，用于渲染配置 UI |
+| configProperty | 绑定的数据字段，最终写入组件配置的 customComponentConfig 中 |
+
+**注意事项**
+
+- code 应唯一，且与配置组件保持一一对应；
+- configProperty 是实际绑定到组件配置中的字段；
+- 配置组件必须通过 name 注册，平台会动态加载；
+- 所有配置项都必须在 form-component-config/form-editor/ 中注册后，才能在右侧面板中正常显示。
+
+src/form-component-config/form-editor/form-component-rate.editor.config.js
+```js
+const FormComponentRateEditorConfig = {
+    code: 'FORM_CUSTOM_COMPONENT_RATE_SETTING', // 组件code
+    editorConfigType: 'FORM_CUSTOM_COMPONENT_RATE_SETTING',
+    componentName: 'FormComponentRateSetting', // 组件名
+    configProperty: 'customComponentConfig', // 默认
+}
+
+export default FormComponentRateEditorConfig;
+```
+
+src/form-component-config/form-editor/index.js
+```js
+import FormComponentRateEditorConfig from "./form-component-rate.editor.config";
+
+const editorConfigList = [
+    FormComponentRateEditorConfig
+]
+
+export default editorConfigList
+```
+
+#### 配置项vue组件代码示例
+
+src/form-component/form-editor/form-component-rate-setting.vue
+```vue
+<template>
+    <div class="form-config-item">
+        <div class="label-wrapper">
+            <el-form-item label="允许半选">
+                <el-select
+                    v-model="componentConfig.customComponentConfig.allowHalf"
+                    size="mini"
+                >
+                    <el-option
+                        v-for="item in options"
+                        :key="item.value"
+                        :label="item.label"
+                        :value="item.value"
+                    />
+                </el-select>
+            </el-form-item>
+            <el-form-item label="自定义数量">
+                <el-select
+                    v-model="componentConfig.customComponentConfig.selfNum"
+                    size="mini"
+                    @change="update($event, 'selfNum')"
+                >
+                    <el-option
+                        v-for="item in starOptions"
+                        :key="item.value"
+                        :label="item.label"
+                        :value="item.value"
+                    />
+                </el-select>
+            </el-form-item>
+            <el-form-item label="显示辅助文字">
+                <el-select
+                    v-model="componentConfig.customComponentConfig.showText"
+                    size="mini"
+                >
+                    <el-option
+                        v-for="item in options"
+                        :key="item.value"
+                        :label="item.label"
+                        :value="item.value"
+                    />
+                </el-select>
+            </el-form-item>
+            <el-form-item
+                v-if="componentConfig.customComponentConfig.showText"
+                label="设置辅助文字"
+            >
+                <texts-item
+                    v-for="i in componentConfig.customComponentConfig.selfNum"
+                    :key="i"
+                    :starNum="i"
+                    :customComponentConfig="componentConfig.customComponentConfig"
+                ></texts-item>
+            </el-form-item>
+        </div>
+    </div>
+</template>
+<script>
+import EditorFormConfigMixin from '@/mixin/form-config.mixin'
+import TextsItem from './texts-item.vue'
+
+export default {
+    name: 'FormComponentRateSetting',
+    mixins: [EditorFormConfigMixin],
+    components: { TextsItem },
+    data() {
+        return {
+            options: [
+                {
+                    label: '启用',
+                    value: true
+                },
+                {
+                    label: '禁用',
+                    value: false
+                }
+            ],
+            starOptions: [
+                {
+                    label: '三星',
+                    value: 3
+                },
+                {
+                    label: '四星',
+                    value: 4
+                },
+                {
+                    label: '五星',
+                    value: 5
+                },
+                {
+                    label: '六星',
+                    value: 6
+                },
+                {
+                    label: '七星',
+                    value: 7
+                },
+                {
+                    label: '八星',
+                    value: 8
+                },
+                {
+                    label: '九星',
+                    value: 9
+                },
+                {
+                    label: '十星',
+                    value: 10
+                }
+            ],
+            rateColor: '#ffd21e'
+        }
+    },
+    created() { },
+    methods: {
+        update(value, type) {
+            if (type == 'selfNum') {
+                this.componentConfig.customComponentConfig.texts = [...new Array(value)]
+            }
+        }
+    }
+}
+</script>
+```
+
+src/form-component/form-editor/index.js
+```js
+import FormComponentRateSetting from './form-component-rate-setting.vue'
+
+const customFormEditorList = [
+  /* vue组件的集合 */
+  FormComponentRateSetting
+]
+export default customFormEditorList
+```
+
+### 其他代码示例补充
+
+这里对于一些常用的需求代码进行示例补充
+
+#### 配置项组件中选择表单设计器中已有的组件
+
+##### 配置项组件的代码示例
+主要是allComponentsOptions，严格按照示例代码中的allComponentsOptions方法进行返回`this.formEngine.formDataControl.allTileFormItemList.filter(
+        (item) => item.uuid !== this.componentConfig.uuid
+      )` 处理示例中的过滤掉自身之外，不要增加任何其他过滤条件。可以选择到所有其他组件。
+```vue
+<template>
+  <div class="form-config-item form-config-custom-flv-player-source">
+    <div class="label-wrapper">
+      <el-form-item :label="$t('数据来源')" :rules="rules[configProperty]" :prop="configProperty">
+        <el-select v-model="customFlvPlayerSource" placeholder="请选择">
+          <el-option
+            v-for="item in allComponentsOptions()"
+            :key="item.uuid"
+            :label="item.label"
+            :value="item.uuid"
+          >
+          </el-option>
+        </el-select>
+      </el-form-item>
+    </div>
+  </div>
+</template>
+
+<script>
+import EditorFormConfigMixin from '@/mixin/form-config.mixin'
+
+const FlvPlayerSourceValidator = function() {
+  return (rule, data, callback) => {
+    if (data === '') {
+      callback(new Error('FLV数据源不能为空'))
+    } else {
+      callback()
+    }
+  }
+}
+export default {
+  name: 'FormCustomFlvPlayerSource',
+  mixins: [EditorFormConfigMixin],
+  data() {
+    return {
+      rules: {}
+    }
+  },
+  computed: {
+    customFlvPlayerSource: {
+      get() {
+        return (
+          this.componentConfig && this.componentConfig.customComponentConfig.customFlvPlayerSource
+        )
+      },
+      set(value) {
+        this.componentConfig.customComponentConfig.customFlvPlayerSource = value
+      }
+    }
+  },
+  created() {
+    this.rules[this.configProperty] = [this._validate(FlvPlayerSourceValidator())]
+  },
+  methods: {
+    allComponentsOptions() {
+      return this.formEngine.formDataControl.allTileFormItemList.filter(
+        (item) => item.uuid !== this.componentConfig.uuid
+      )
+    }
+  }
+}
+</script>
+
+<style lang="scss"></style>
+```
+
+如果是是配置子表组件，且需要选择子表的列。需要按照如下方式获取。子表列位于组件的children里，子表列在被选择时，不要增加任何其他过滤条件。可以选择到所有的列。
+```vue
+      const tableComponent = this.formEngine.formDataControl.componentMap.get(uuid);
+      if (!tableComponent) {
+        this.tableFields = [];
+        return;
+      }
+      
+      // 获取子表的列配置
+      const columns = tableComponent.children || [];
+      this.tableFields = columns.map(col => ({
+        uuid: col.uuid,
+        label: col.label,
+        componentType: col.componentType
+      }));
+```
+
+##### 组件实际获取选择的组件的值的代码示例
+
+```vue
+computed: {
+    progressSettings() {
+      return (this.widget.customComponentConfig && this.widget.customComponentConfig.progressSettings) || {
+        percentage: 0,
+        strokeWidth: 6,
+        textInside: false,
+        showText: true,
+        color: '',
+        status: ''
+      }
+    },
+    progressPercentage() {
+      // 如果设置了值来源组件，则从formData中获取该组件的值
+      if (this.progressSettings.sourceComponentUuid) {
+        const sourceValue = this.formData[this.progressSettings.sourceComponentUuid];
+        return sourceValue !== undefined && sourceValue !== null ? Number(sourceValue) : 0;
+      }
+      // 否则优先使用表单值，如果没有则使用配置中的默认值
+      return this.formValue || this.progressSettings.percentage || 0
+    }
+  }
+```
+
+### 其他要求补充
+1. 使用ElementUI作为UI库进行开发，但是不引入，宿主容器已经有Element UI的全部组件
+2. 组件自己的值使用formValue获取和绑定
+3. 尽可能遵守已有文件内容，补充相关代码。如果为空则根据规范编写
+4. 不要随意更改已有的配置内容和code
+5. 组件使用中的完整业务数据使用 this.formData 获取，结构是组件 uuid:值

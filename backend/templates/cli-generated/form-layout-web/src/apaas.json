@@ -1,0 +1,15 @@
+{
+  "entry": "index.js",
+  "templateType": "PAGE_LAYOUT",
+  "router": {},
+  "customWidgetList": [],
+  "layout": [
+    {
+      "name": "apaas-custom-demo",
+      "desc": "demo page layout",
+      "status": "ENABLE"
+    }
+  ],
+  "copyAssets": ["public/form-layout/form-layout-demo"],
+  "outputName": "form-layout-demo"
+}

@@ -6,6 +6,7 @@ import asyncio
 import base64
 import json
 import logging
+import os
 import re
 import tempfile
 from datetime import datetime, timedelta
@@ -93,6 +94,33 @@ def _ensure_vibe_workspace_file(ws_path: Path) -> Path:
     if not workspace_file.exists() or workspace_file.read_text(encoding="utf-8") != serialized:
         workspace_file.write_text(serialized, encoding="utf-8")
     return workspace_file
+
+
+def _ensure_cursor_rules(ws_path: Path):
+    """确保工作区包含 .cursor/rules 下的开发规范文件。"""
+    rules_dir = ws_path / ".cursor" / "rules"
+    rules_dir.mkdir(parents=True, exist_ok=True)
+    template_dir = Path(__file__).parent.parent.parent / "templates" / "cursor-rules"
+    if template_dir.exists():
+        import shutil
+        for rule_file in template_dir.glob("*.mdc"):
+            target = rules_dir / rule_file.name
+            if not target.exists() or target.stat().st_size < rule_file.stat().st_size:
+                shutil.copy2(rule_file, target)
+
+
+def _write_ruijing_extension_config(ws_path: Path, ws_id: str, ide_token: str, api_base: str, model: str):
+    """为睿鲸AI VS Code 扩展生成配置文件，替代 URL query params 传递配置。"""
+    vscode_dir = ws_path / ".vscode"
+    vscode_dir.mkdir(exist_ok=True)
+    config_file = vscode_dir / "ruijing-ai.json"
+    config_payload = {
+        "workspaceId": ws_id,
+        "ideToken": ide_token,
+        "apiBase": api_base.split(f"/workspace/{ws_id}")[0] if f"/workspace/{ws_id}" in api_base else api_base,
+        "model": model or "MiniMax-M2.7",
+    }
+    config_file.write_text(json.dumps(config_payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _build_public_api_base(request: Request) -> str:
@@ -1020,8 +1048,13 @@ async def get_workspace_ide_url(
             effective_conversation_id = conv.id
 
     _ensure_vibe_workspace_file(ws_path)  # 仍然生成 workspace 文件（保留 exclude 配置）
+    _ensure_cursor_rules(ws_path)  # 复制 .cursor/rules 开发规范到工作区
     ide_token = _create_ide_access_token(ctx, ws_id)
     api_base = _build_ide_proxy_api_base(request, ws_id)
+
+    # 为睿鲸AI VS Code 扩展写入配置文件
+    _write_ruijing_extension_config(ws_path, ws_id, ide_token, api_base, settings.llm_model)
+
     query_params = {
         "folder": str(ws_path.resolve()),  # 用 folder 替代 workspace，更可靠地打开目录
         "vibe_workspace_id": ws_id,
@@ -1124,7 +1157,7 @@ async def ide_chat_completions_proxy(
 
     if stream:
         async def _stream() -> AsyncIterator[bytes]:
-            async with httpx.AsyncClient(timeout=None) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=30.0)) as client:
                 async with client.stream(
                     "POST",
                     upstream_url,
@@ -1648,6 +1681,97 @@ async def upload_file(
 
 
 # ============================================================
+# 打包 & 下载接口
+# ============================================================
+
+@router.post("/workspace/{ws_id}/build")
+async def build_workspace(
+    ws_id: str,
+    x_vibe_ide_token: Annotated[Optional[str], Header(alias="X-Vibe-IDE-Token")] = None,
+):
+    """在工作区执行 mvn clean package 打包"""
+    import subprocess
+
+    ws_mgr_temp = WorkspaceManager()
+    try:
+        ws_info = ws_mgr_temp.get_workspace_info(ws_id)
+        ws_path = ws_info["path"]
+    except Exception:
+        raise HTTPException(status_code=404, detail="工作区不存在")
+
+    pom_path = os.path.join(ws_path, "pom.xml")
+    if not os.path.exists(pom_path):
+        raise HTTPException(status_code=400, detail="工作区没有 pom.xml，无法打包")
+
+    try:
+        result = subprocess.run(
+            ["mvn", "clean", "package", "-DskipTests", "-q"],
+            cwd=ws_path,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        if result.returncode != 0:
+            return {
+                "success": False,
+                "error": result.stderr[-2000:] if result.stderr else "Unknown build error",
+                "output": result.stdout[-1000:] if result.stdout else "",
+            }
+
+        # Find the built JAR/WAR
+        target_dir = os.path.join(ws_path, "target")
+        artifacts = []
+        if os.path.isdir(target_dir):
+            for f in os.listdir(target_dir):
+                if f.endswith((".jar", ".war")) and not f.endswith("-sources.jar"):
+                    fp = os.path.join(target_dir, f)
+                    artifacts.append({
+                        "filename": f,
+                        "path": fp,
+                        "size": os.path.getsize(fp),
+                    })
+
+        return {
+            "success": True,
+            "artifacts": artifacts,
+            "output": result.stdout[-500:] if result.stdout else "Build successful",
+        }
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="打包超时（5分钟），请检查项目配置")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"打包失败: {e}")
+
+
+@router.get("/workspace/{ws_id}/download")
+async def download_artifact(
+    ws_id: str,
+    filename: str = Query(..., description="要下载的文件名"),
+):
+    """下载工作区中的打包产物"""
+    from fastapi.responses import FileResponse
+
+    ws_mgr_temp = WorkspaceManager()
+    try:
+        ws_info = ws_mgr_temp.get_workspace_info(ws_id)
+        ws_path = ws_info["path"]
+    except Exception:
+        raise HTTPException(status_code=404, detail="工作区不存在")
+
+    # 安全检查：只允许下载 target/ 目录下的文件
+    safe_name = os.path.basename(filename)
+    file_path = os.path.join(ws_path, "target", safe_name)
+
+    if not os.path.isfile(file_path):
+        raise HTTPException(status_code=404, detail=f"文件不存在: {safe_name}")
+
+    return FileResponse(
+        path=file_path,
+        filename=safe_name,
+        media_type="application/octet-stream",
+    )
+
+
+# ============================================================
 # 自动化 Pipeline（对话式开发）
 # ============================================================
 
@@ -2024,42 +2148,36 @@ async def auto_pipeline(
                             "conversation_id": conversation_id})
                 return
 
-            # For first-time creation, agent should have run npm install + serve
-            # But check and do it as fallback if agent didn't
-            # 后端/脚本项目不需要 npm install 和 serve
-            meta = ws_mgr._read_meta(ws_mgr.get_workspace_path(ws_id))
-            needs_npm = ws_mgr._project_requires_npm_install(meta.get("project_type", ""))
+            # 代码生成完毕后直接打开工作区（跳过 install/serve）
+            # 用户后续可在 IDE 内手动 npm install / debug
+            ws_path = ws_mgr.get_workspace_path(ws_id)
+            ide_url = None
+            try:
+                _ensure_vibe_workspace_file(ws_path)
+                _ensure_cursor_rules(ws_path)
+                ide_token = _create_ide_access_token(ctx, ws_id)
+                api_base = _build_ide_proxy_api_base(request, ws_id)
+                _write_ruijing_extension_config(ws_path, ws_id, ide_token, api_base, settings.llm_model)
+                query_params = {
+                    "folder": str(ws_path.resolve()),
+                    "vibe_workspace_id": ws_id,
+                    "vibe_api_base": api_base,
+                    "vibe_ide_token": ide_token,
+                    "vibe_model": settings.llm_model,
+                }
+                from urllib.parse import urlencode as _urlencode
+                ide_url = f"{settings.code_server_base_url}/?{_urlencode(query_params)}"
+            except Exception as _ide_err:
+                logger.warning(f"生成 IDE URL 失败: {_ide_err}")
 
-            if needs_npm:
-                serve_status = ws_mgr.is_serve_running(ws_id)
-                if not serve_status["running"]:
-                    # ---- Step 4: 安装依赖（首次创建 fallback）----
-                    yield _sse({"type": "step", "step": "install", "status": "running"})
-                    install_result = await ws_mgr.install_deps(ws_id)
-                    if install_result["status"] == "error":
-                        yield _sse({"type": "step", "step": "install", "status": "error",
-                                    "data": {"message": install_result["message"]}})
-                    else:
-                        yield _sse({"type": "step", "step": "install", "status": "done"})
-
-                    # ---- Step 5: 启动 serve ----
-                    yield _sse({"type": "step", "step": "serve", "status": "running"})
-                    serve_result = await ws_mgr.start_serve(ws_id)
-                    yield _sse({"type": "step", "step": "serve", "status": "done" if serve_result["status"] == "ok" else "error",
-                                "data": {"port": serve_result.get("port"),
-                                         "url": f"https://localhost:{serve_result.get('port', 8080)}/"}})
-                else:
-                    yield _sse({"type": "step", "step": "install", "status": "done"})
-                    yield _sse({"type": "step", "step": "serve", "status": "done",
-                                "data": {"port": serve_status.get("port"),
-                                         "url": f"https://localhost:{serve_status.get('port', 8080)}/"}})
-            else:
-                # 后端/脚本项目跳过 npm 步骤
-                yield _sse({"type": "step", "step": "install", "status": "skipped"})
-                yield _sse({"type": "step", "step": "serve", "status": "skipped"})
-
-            yield _sse({"type": "done", "workspace_id": ws_id,
-                        "conversation_id": conversation_id})
+            done_payload: dict = {
+                "type": "done",
+                "workspace_id": ws_id,
+                "conversation_id": conversation_id,
+            }
+            if ide_url:
+                done_payload["ide_url"] = ide_url
+            yield _sse(done_payload)
 
         except Exception as e:
             logger.exception("auto-pipeline 错误")
