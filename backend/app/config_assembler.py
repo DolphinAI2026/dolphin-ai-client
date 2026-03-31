@@ -19,6 +19,7 @@ from typing import AsyncGenerator, Dict, List, Optional, Tuple
 
 import httpx
 from app.llm_client import LLMClient
+from app.routes.llm_configs import build_llm_chat_completions_url
 
 logger = logging.getLogger(__name__)
 
@@ -309,7 +310,7 @@ async def _tenant_llm_completion(cfg: dict, messages: list, max_tokens: int = 81
     t = httpx.Timeout(connect=15.0, read=timeout, write=15.0, pool=15.0)
     async with httpx.AsyncClient(timeout=t) as http:
         resp = await http.post(
-            f"{cfg['base_url']}/chat/completions",
+            build_llm_chat_completions_url(cfg["base_url"]),
             headers={"Authorization": f"Bearer {cfg['api_key']}", "Content-Type": "application/json"},
             json=payload,
         )

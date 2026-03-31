@@ -143,7 +143,18 @@
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
                 {{ cfg._testing ? '测试中...' : '测试' }}
               </button>
-              <button v-if="!cfg.is_default" class="env-action-btn" @click="handleLlmSetDefault(cfg)" title="设为默认">
+              <button
+                class="env-action-btn status-toggle"
+                :class="{ inactive: cfg.status === 'inactive' }"
+                @click="handleLlmToggleStatus(cfg)"
+                :disabled="cfg._toggling"
+                :title="cfg.status === 'inactive' ? '启用模型' : '禁用模型'"
+              >
+                <svg v-if="cfg.status === 'inactive'" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+                {{ cfg._toggling ? (cfg.status === 'inactive' ? '启用中...' : '禁用中...') : (cfg.status === 'inactive' ? '启用' : '禁用') }}
+              </button>
+              <button v-if="!cfg.is_default && cfg.status === 'active'" class="env-action-btn" @click="handleLlmSetDefault(cfg)" title="设为默认">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
                 默认
               </button>
@@ -464,6 +475,7 @@ async function handleDelete(env: PlatformEnv) {
 
 interface LlmConfigWithUI extends LlmConfig {
   _testing?: boolean
+  _toggling?: boolean
 }
 
 const llmConfigs = ref<LlmConfigWithUI[]>([])
@@ -495,6 +507,7 @@ const llmForm = reactive({
   max_tokens: 4096,
   temperature: 0.7,
   is_default: false,
+  status: 'active',
 })
 
 const currentModelOptions = computed(() => {
@@ -522,6 +535,7 @@ function resetLlmForm() {
   llmForm.max_tokens = 4096
   llmForm.temperature = 0.7
   llmForm.is_default = false
+  llmForm.status = 'active'
 }
 
 function onProviderChange(provider: string) {
@@ -554,6 +568,7 @@ function openLlmEdit(cfg: LlmConfig) {
   llmForm.max_tokens = cfg.max_tokens
   llmForm.temperature = cfg.temperature
   llmForm.is_default = cfg.is_default
+  llmForm.status = cfg.status
   loadPresets()
   llmDialogVisible.value = true
 }
@@ -622,6 +637,7 @@ async function handleLlmSave() {
       max_tokens: llmForm.max_tokens,
       temperature: llmForm.temperature,
       is_default: llmForm.is_default,
+      status: llmForm.status,
     }
     if (llmForm.api_key) {
       data.api_key = llmForm.api_key
@@ -644,19 +660,46 @@ async function handleLlmSave() {
 
 async function handleLlmTest(cfg: LlmConfigWithUI) {
   cfg._testing = true
+  const previousStatus = cfg.status
   try {
     const res = await llmConfigApi.test(cfg.id)
     if (res.success) {
       ElMessage.success(res.reply ? `连接成功: ${res.reply}` : '连接成功')
-      cfg.status = 'active'
+      cfg.status = previousStatus === 'inactive' ? 'inactive' : 'active'
     } else {
       ElMessage.error(res.error || '连接失败')
-      cfg.status = 'error'
+      cfg.status = previousStatus === 'inactive' ? 'inactive' : 'error'
     }
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.detail || '测试失败')
   }
   cfg._testing = false
+}
+
+async function handleLlmToggleStatus(cfg: LlmConfigWithUI) {
+  const targetStatus = cfg.status === 'inactive' ? 'active' : 'inactive'
+  const actionLabel = targetStatus === 'active' ? '启用' : '禁用'
+  try {
+    await ElMessageBox.confirm(
+      `确定${actionLabel}模型「${cfg.config_name}」？${targetStatus === 'inactive' ? '禁用后将不会在任何场景下被选用。' : ''}`,
+      `${actionLabel}模型`,
+      {
+        confirmButtonText: actionLabel,
+        cancelButtonText: '取消',
+        type: targetStatus === 'inactive' ? 'warning' : 'info',
+      }
+    )
+    cfg._toggling = true
+    await llmConfigApi.updateStatus(cfg.id, targetStatus as 'active' | 'inactive')
+    ElMessage.success(`已${actionLabel}`)
+    await reloadLlmConfigs()
+  } catch (e: any) {
+    if (e !== 'cancel' && e !== 'close') {
+      ElMessage.error(e?.response?.data?.detail || `${actionLabel}失败`)
+    }
+  } finally {
+    cfg._toggling = false
+  }
 }
 
 async function handleLlmSetDefault(cfg: LlmConfig) {
@@ -993,6 +1036,21 @@ onMounted(() => {
 .env-action-btn.danger:hover {
   background: rgba(239, 68, 68, 0.1);
   color: var(--t-danger);
+}
+.env-action-btn.status-toggle {
+  border-color: rgba(99, 102, 241, 0.18);
+  color: var(--t-brand-light);
+}
+.env-action-btn.status-toggle:hover {
+  background: rgba(99, 102, 241, 0.12);
+  color: #fff;
+}
+.env-action-btn.status-toggle.inactive {
+  border-color: rgba(52, 211, 153, 0.18);
+  color: var(--t-success);
+}
+.env-action-btn.status-toggle.inactive:hover {
+  background: rgba(52, 211, 153, 0.12);
 }
 
 /* Dialog styles moved to non-scoped block below */

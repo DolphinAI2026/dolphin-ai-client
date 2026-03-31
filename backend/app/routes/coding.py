@@ -22,18 +22,20 @@ from sse_starlette.sse import EventSourceResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
+from app.crypto import decrypt_password
 from app.database import get_db
-from app.models import User, Conversation, Message, Project
+from app.models import User, Conversation, Message, Project, LLMConfig
 from app.deps import get_auth_context, AuthContext
 from app.coding.scenes import SceneType, get_scene, get_all_scenes, get_scenes_by_category
 from app.coding.generator import CodingGenerator, parse_files_from_response, CodeGenerationResult
 from app.coding.templates import get_project_template
 from app.coding.prompts import get_scene_prompt, AGENT_SYSTEM_PROMPT
-from app.coding.workspace import WorkspaceManager, ProjectType, WORKSPACE_ROOT
+from app.coding.workspace import WorkspaceManager, ProjectType
 from app.llm_client import LLMClient
 from app.apaas_client import APaaSClient
 from app.config import settings
 from app.coding.verifier import ComponentVerifier
+from app.routes.llm_configs import list_llm_configs_for_purpose
 
 try:
     from app.coding.vibe_agent import VibeCodingAgent
@@ -63,6 +65,8 @@ IDE_EXCLUDED_GLOBS = (
     "**/.DS_Store",
     "**/*.zip",
 )
+
+CODING_LLM_CONFIG_PREFIX = "llmcfg:"
 
 
 def _event_stream_response(
@@ -350,6 +354,124 @@ def _build_openai_chat_completions_url() -> str:
     return f"{base}/chat/completions"
 
 
+def _build_chat_completions_url(base_url: str) -> str:
+    """Normalize a configured base_url into an OpenAI-compatible chat/completions endpoint."""
+    base = (base_url or "").rstrip("/")
+    if not base:
+        return _build_openai_chat_completions_url()
+    if base.endswith("/chat/completions"):
+        return base
+    if base.endswith("/responses"):
+        return f"{base[: -len('/responses')]}/chat/completions"
+    if not base.endswith("/v1"):
+        base = f"{base}/v1"
+    return f"{base}/chat/completions"
+
+
+def _llm_config_model_id(config: LLMConfig) -> str:
+    return f"{CODING_LLM_CONFIG_PREFIX}{config.id}"
+
+
+def _parse_coding_llm_config_id(model_name: str | None) -> Optional[int]:
+    needle = (model_name or "").strip()
+    if not needle.startswith(CODING_LLM_CONFIG_PREFIX):
+        return None
+    try:
+        return int(needle[len(CODING_LLM_CONFIG_PREFIX):])
+    except ValueError:
+        return None
+
+
+def _serialize_coding_llm_config(config: LLMConfig) -> dict[str, str]:
+    return {
+        "id": _llm_config_model_id(config),
+        "name": f"{config.config_name} ({config.model})",
+        "provider": config.provider,
+    }
+
+
+async def _list_tenant_coding_model_configs(db: AsyncSession, tenant_id: int | None) -> list[LLMConfig]:
+    if not tenant_id:
+        return []
+    try:
+        return await list_llm_configs_for_purpose(db, tenant_id, "coding")
+    except Exception as exc:
+        logger.warning("读取租户 coding 模型配置失败 tenant_id=%s: %s", tenant_id, exc)
+        return []
+
+
+async def _resolve_tenant_coding_model_config(
+    db: AsyncSession,
+    tenant_id: int | None,
+    selected_model: str | None,
+) -> Optional[LLMConfig]:
+    configs = await _list_tenant_coding_model_configs(db, tenant_id)
+    if not configs:
+        return None
+
+    needle = (selected_model or "").strip()
+    if needle:
+        if needle.startswith(CODING_LLM_CONFIG_PREFIX):
+            try:
+                config_id = int(needle[len(CODING_LLM_CONFIG_PREFIX):])
+            except ValueError:
+                config_id = None
+            if config_id is not None:
+                for config in configs:
+                    if config.id == config_id:
+                        return config
+
+        needle_lower = needle.lower()
+        for config in configs:
+            if (
+                needle_lower == _llm_config_model_id(config).lower()
+                or needle_lower == (config.model or "").lower()
+                or needle_lower == (config.config_name or "").lower()
+            ):
+                return config
+
+        for config in configs:
+            haystacks = [
+                (config.model or "").lower(),
+                (config.config_name or "").lower(),
+                f"{config.config_name} ({config.model})".lower(),
+            ]
+            if any(needle_lower in haystack for haystack in haystacks if haystack):
+                return config
+
+    return next((config for config in configs if config.is_default), configs[0])
+
+
+async def _get_default_coding_model_id(db: AsyncSession, tenant_id: int | None) -> str:
+    config = await _resolve_tenant_coding_model_config(db, tenant_id, None)
+    if config:
+        return _llm_config_model_id(config)
+    return settings.llm_model
+
+
+async def _resolve_effective_coding_model(
+    db: AsyncSession,
+    tenant_id: int | None,
+    *,
+    requested_model: str | None = None,
+    selected_llm_config_id: int | None = None,
+) -> tuple[str, Optional[int]]:
+    if requested_model:
+        requested_config = await _resolve_tenant_coding_model_config(db, tenant_id, requested_model)
+        if requested_config:
+            return _llm_config_model_id(requested_config), requested_config.id
+        return requested_model.strip(), None
+
+    if selected_llm_config_id:
+        selected_model = f"{CODING_LLM_CONFIG_PREFIX}{selected_llm_config_id}"
+        selected_config = await _resolve_tenant_coding_model_config(db, tenant_id, selected_model)
+        if selected_config:
+            return _llm_config_model_id(selected_config), selected_config.id
+
+    default_model = await _get_default_coding_model_id(db, tenant_id)
+    return default_model, _parse_coding_llm_config_id(default_model)
+
+
 # IDE Coding 模型路由表
 _CODING_MODEL_ROUTES: dict = {}
 
@@ -590,6 +712,7 @@ class AutoPipelineRequest(BaseModel):
     message: str                           # 用户需求描述
     workspace_id: Optional[str] = None     # 已有工作区（迭代修改）
     conversation_id: Optional[int] = None  # 已有对话
+    selected_model: Optional[str] = None   # 当前会话选中的 coding 模型（llmcfg:<id>）
     app_id: Optional[str] = None           # aPaaS 应用ID (deprecated, use project_id)
     project_id: Optional[int] = None       # 关联项目ID（优先使用项目的平台配置）
     project_type: Optional[str] = None     # 前端指定的项目类型（menu-page 等）
@@ -1030,37 +1153,60 @@ async def get_workspace_ide_url(
         raise HTTPException(status_code=404, detail="工作区不存在")
 
     effective_conversation_id = conversation_id
-    if effective_conversation_id is None and db is not None:
-        stmt = (
-            select(Conversation)
-            .where(
-                Conversation.user_id == ctx.user.id,
-                Conversation.tenant_id == ctx.tenant_id,
-                Conversation.workspace_id == ws_id,
-                Conversation.agent_type == "coding",
+    effective_conversation: Optional[Conversation] = None
+    if db is not None:
+        if effective_conversation_id is None:
+            stmt = (
+                select(Conversation)
+                .where(
+                    Conversation.user_id == ctx.user.id,
+                    Conversation.tenant_id == ctx.tenant_id,
+                    Conversation.workspace_id == ws_id,
+                    Conversation.agent_type == "coding",
+                )
+                .order_by(Conversation.updated_at.desc())
+                .limit(1)
             )
-            .order_by(Conversation.updated_at.desc())
-            .limit(1)
-        )
+        else:
+            stmt = (
+                select(Conversation)
+                .where(
+                    Conversation.id == effective_conversation_id,
+                    Conversation.user_id == ctx.user.id,
+                    Conversation.tenant_id == ctx.tenant_id,
+                    Conversation.workspace_id == ws_id,
+                    Conversation.agent_type == "coding",
+                )
+                .limit(1)
+            )
         result = await db.execute(stmt)
-        conv = result.scalar_one_or_none()
-        if conv:
-            effective_conversation_id = conv.id
+        effective_conversation = result.scalar_one_or_none()
+        if effective_conversation:
+            effective_conversation_id = effective_conversation.id
+        else:
+            effective_conversation_id = None
 
     _ensure_vibe_workspace_file(ws_path)  # 仍然生成 workspace 文件（保留 exclude 配置）
     _ensure_cursor_rules(ws_path)  # 复制 .cursor/rules 开发规范到工作区
     ide_token = _create_ide_access_token(ctx, ws_id)
     api_base = _build_ide_proxy_api_base(request, ws_id)
+    ide_model = settings.llm_model
+    if db is not None:
+        ide_model, _ = await _resolve_effective_coding_model(
+            db,
+            ctx.tenant_id,
+            selected_llm_config_id=effective_conversation.selected_llm_config_id if effective_conversation else None,
+        )
 
     # 为睿鲸AI VS Code 扩展写入配置文件
-    _write_ruijing_extension_config(ws_path, ws_id, ide_token, api_base, settings.llm_model)
+    _write_ruijing_extension_config(ws_path, ws_id, ide_token, api_base, ide_model)
 
     query_params = {
         "folder": str(ws_path.resolve()),  # 用 folder 替代 workspace，更可靠地打开目录
         "vibe_workspace_id": ws_id,
         "vibe_api_base": api_base,
         "vibe_ide_token": ide_token,
-        "vibe_model": settings.llm_model,
+        "vibe_model": ide_model,
     }
     if effective_conversation_id and db is not None:
         history = await _get_conversation_history(db, effective_conversation_id)
@@ -1102,11 +1248,19 @@ async def ide_available_models(
     ws_id: str,
     x_vibe_ide_token: Annotated[Optional[str], Header(alias="X-Vibe-IDE-Token")] = None,
     token: Optional[str] = Query(default=None),
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
 ):
     """返回可用的 Coding 模型列表（不暴露 API Key）"""
     ide_token = x_vibe_ide_token or token
+    token_payload: dict[str, Any] = {}
     if ide_token:
-        _verify_ide_access_token(ide_token, ws_id)
+        token_payload = _verify_ide_access_token(ide_token, ws_id)
+
+    tenant_id = token_payload.get("tid")
+    if db is not None and tenant_id:
+        tenant_configs = await _list_tenant_coding_model_configs(db, int(tenant_id))
+        if tenant_configs:
+            return {"models": [_serialize_coding_llm_config(config) for config in tenant_configs]}
 
     if not _CODING_MODEL_ROUTES:
         _init_coding_model_routes()
@@ -1126,20 +1280,34 @@ async def ide_chat_completions_proxy(
     request: Request,
     x_vibe_ide_token: Annotated[Optional[str], Header(alias="X-Vibe-IDE-Token")] = None,
     token: Optional[str] = Query(default=None),
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
 ):
     """Web IDE Chat 代理：由后端持有真实 LLM API key，浏览器只持有短时 IDE token。"""
     ide_token = x_vibe_ide_token or token
     if not ide_token:
         raise HTTPException(status_code=401, detail="缺少 IDE 访问令牌，请重新从 Builder 打开 Web IDE")
 
-    _verify_ide_access_token(ide_token, ws_id)
+    token_payload = _verify_ide_access_token(ide_token, ws_id)
 
     try:
         payload = await request.json()
     except Exception:
         raise HTTPException(status_code=400, detail="无效的请求体")
 
-    upstream_url, api_key = _resolve_coding_model(payload.get("model", ""))
+    tenant_config = None
+    if db is not None:
+        tenant_config = await _resolve_tenant_coding_model_config(
+            db,
+            token_payload.get("tid"),
+            payload.get("model", ""),
+        )
+
+    if tenant_config:
+        payload["model"] = tenant_config.model
+        upstream_url = _build_chat_completions_url(tenant_config.base_url)
+        api_key = decrypt_password(tenant_config.api_key_enc)
+    else:
+        upstream_url, api_key = _resolve_coding_model(payload.get("model", ""))
     upstream_headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}",
@@ -1358,7 +1526,9 @@ async def get_workspace_conversation(
         select(Conversation)
         .where(
             Conversation.user_id == ctx.user.id,
+            Conversation.tenant_id == ctx.tenant_id,
             Conversation.workspace_id == ws_id,
+            Conversation.agent_type == "coding",
         )
         .order_by(Conversation.updated_at.desc())
         .limit(10)
@@ -1367,7 +1537,7 @@ async def get_workspace_conversation(
     conversations = result.scalars().all()
 
     if not conversations:
-        return {"conversation_id": None, "messages": []}
+        return {"conversation_id": None, "selected_llm_config_id": None, "messages": []}
 
     selected_conv = conversations[0]
     selected_messages: list[Message] = []
@@ -1396,6 +1566,7 @@ async def get_workspace_conversation(
 
     return {
         "conversation_id": selected_conv.id,
+        "selected_llm_config_id": selected_conv.selected_llm_config_id,
         "messages": [
             {
                 "id": m.id,
@@ -1798,6 +1969,32 @@ async def auto_pipeline(
         ws_id = req.workspace_id
         conversation_id = req.conversation_id
         is_iteration = ws_id is not None
+        coding_conversation: Optional[Conversation] = None
+        effective_model, effective_model_config_id = await _resolve_effective_coding_model(
+            db,
+            ctx.tenant_id,
+            requested_model=req.selected_model,
+        )
+
+        if conversation_id:
+            conversation_result = await db.execute(
+                select(Conversation).where(
+                    Conversation.id == conversation_id,
+                    Conversation.user_id == user.id,
+                    Conversation.tenant_id == ctx.tenant_id,
+                    Conversation.agent_type == "coding",
+                )
+            )
+            coding_conversation = conversation_result.scalar_one_or_none()
+            if coding_conversation:
+                if req.selected_model is None:
+                    effective_model, effective_model_config_id = await _resolve_effective_coding_model(
+                        db,
+                        ctx.tenant_id,
+                        selected_llm_config_id=coding_conversation.selected_llm_config_id,
+                    )
+            else:
+                conversation_id = None
 
         # Load project config if project_id is provided
         project = None
@@ -2008,17 +2205,22 @@ async def auto_pipeline(
             if req.quick_create:
                 # 创建对话记录
                 if not conversation_id:
-                    conv = Conversation(
+                    coding_conversation = Conversation(
                         title=req.message[:50],
                         user_id=user.id,
                         tenant_id=ctx.tenant_id,
                         agent_type="coding",
                         workspace_id=ws_id,
+                        selected_llm_config_id=effective_model_config_id,
                     )
-                    db.add(conv)
+                    db.add(coding_conversation)
                     await db.commit()
-                    await db.refresh(conv)
-                    conversation_id = conv.id
+                    await db.refresh(coding_conversation)
+                    conversation_id = coding_conversation.id
+                elif coding_conversation and req.selected_model is not None:
+                    coding_conversation.selected_llm_config_id = effective_model_config_id
+                    await db.commit()
+                    await db.refresh(coding_conversation)
                 await _save_coding_message(db, conversation_id, "user", req.message)
 
                 # 生成 IDE URL
@@ -2026,14 +2228,16 @@ async def auto_pipeline(
                 try:
                     ws_path = ws_mgr.get_workspace_path(ws_id)
                     _ensure_vibe_workspace_file(ws_path)
+                    _ensure_cursor_rules(ws_path)
                     ide_token = _create_ide_access_token(ctx, ws_id)
                     api_base = _build_ide_proxy_api_base(request, ws_id)
+                    _write_ruijing_extension_config(ws_path, ws_id, ide_token, api_base, effective_model)
                     query_params = {
                         "folder": str(ws_path.resolve()),
                         "vibe_workspace_id": ws_id,
                         "vibe_api_base": api_base,
                         "vibe_ide_token": ide_token,
-                        "vibe_model": settings.llm_model,
+                        "vibe_model": effective_model,
                         "vibe_conversation_id": str(conversation_id),
                         "vibe_context": f"用户: {req.message[:500]}",
                     }
@@ -2052,17 +2256,22 @@ async def auto_pipeline(
 
             # 创建或获取对话
             if not conversation_id:
-                conv = Conversation(
+                coding_conversation = Conversation(
                     title=req.message[:50],
                     user_id=user.id,
                     tenant_id=ctx.tenant_id,
                     agent_type="coding",
                     workspace_id=ws_id,
+                    selected_llm_config_id=effective_model_config_id,
                 )
-                db.add(conv)
+                db.add(coding_conversation)
                 await db.commit()
-                await db.refresh(conv)
-                conversation_id = conv.id
+                await db.refresh(coding_conversation)
+                conversation_id = coding_conversation.id
+            elif coding_conversation and req.selected_model is not None:
+                coding_conversation.selected_llm_config_id = effective_model_config_id
+                await db.commit()
+                await db.refresh(coding_conversation)
 
             await _save_coding_message(db, conversation_id, "user", req.message)
 
@@ -2085,7 +2294,7 @@ async def auto_pipeline(
                         "请在 backend 虚拟环境中执行 `pip install -r requirements.txt`。"
                     ),
                 ) from _VIBE_AGENT_IMPORT_ERROR
-            agent = VibeCodingAgent(ws_id, system_prompt=AGENT_SYSTEM_PROMPT)
+            agent = VibeCodingAgent(ws_id, system_prompt=AGENT_SYSTEM_PROMPT, tenant_id=ctx.tenant_id)
             agent_result_text = ""
             persisted_agent_output: list[str] = []
             assistant_history_saved = False
@@ -2111,6 +2320,7 @@ async def auto_pipeline(
                 async for event in agent.run(
                     requirement=req.message,
                     conversation_summary=conversation_summary,
+                    model=effective_model,
                     max_turns=30,
                 ):
                     # Forward all agent events to frontend via SSE
@@ -2157,13 +2367,13 @@ async def auto_pipeline(
                 _ensure_cursor_rules(ws_path)
                 ide_token = _create_ide_access_token(ctx, ws_id)
                 api_base = _build_ide_proxy_api_base(request, ws_id)
-                _write_ruijing_extension_config(ws_path, ws_id, ide_token, api_base, settings.llm_model)
+                _write_ruijing_extension_config(ws_path, ws_id, ide_token, api_base, effective_model)
                 query_params = {
                     "folder": str(ws_path.resolve()),
                     "vibe_workspace_id": ws_id,
                     "vibe_api_base": api_base,
                     "vibe_ide_token": ide_token,
-                    "vibe_model": settings.llm_model,
+                    "vibe_model": effective_model,
                 }
                 from urllib.parse import urlencode as _urlencode
                 ide_url = f"{settings.code_server_base_url}/?{_urlencode(query_params)}"

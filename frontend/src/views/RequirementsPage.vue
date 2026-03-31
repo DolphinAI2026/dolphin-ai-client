@@ -116,6 +116,35 @@
 
           <!-- 输入区域 -->
           <div class="input-area">
+            <div class="model-picker-row">
+              <div class="model-picker-meta">
+                <span class="model-picker-label">当前模型</span>
+                <span class="model-picker-hint">{{ builderModelHint }}</span>
+              </div>
+              <el-select
+                v-model="selectedBuilderModelId"
+                class="model-picker-select"
+                popper-class="model-select-dropdown"
+                size="small"
+                placeholder="选择模型"
+                :loading="builderModelLoading"
+                :disabled="builderModelLoading || updatingBuilderModel || builderModelOptions.length === 0"
+                @change="handleBuilderModelChange"
+              >
+                <el-option
+                  v-for="option in builderModelOptions"
+                  :key="option.id"
+                  :label="formatBuilderModelOption(option)"
+                  :value="option.id"
+                >
+                  <div class="model-option-row">
+                    <span class="model-option-name">{{ option.config_name }}</span>
+                    <span class="model-option-meta">{{ option.provider }} / {{ option.model }}</span>
+                  </div>
+                </el-option>
+              </el-select>
+            </div>
+
             <!-- 已上传文件/图片提示 -->
             <div v-if="uploadedFile" class="file-badge">
               <template v-if="uploadedFilePreview">
@@ -635,6 +664,7 @@ import { useUserStore } from '@/stores/user'
 import { usePreviewStore } from '@/stores/preview'
 import ThemeToggle from '@/components/ThemeToggle.vue'
 import { requirementsApi, type RequirementsSession, type ChatMessage, type AnalysisResult } from '@/api/requirements'
+import { llmConfigApi, type BuilderModelOption } from '@/api/llmConfig'
 
 const router = useRouter()
 const route = useRoute()
@@ -661,15 +691,31 @@ const genStep = ref('')
 const genError = ref('')
 const docFullscreen = ref(false)
 const editMode = ref(false)
+const builderModelOptions = ref<BuilderModelOption[]>([])
+const builderModelLoading = ref(false)
+const updatingBuilderModel = ref(false)
+const selectedBuilderModelId = ref<number | null>(null)
+const persistedBuilderModelId = ref<number | null>(null)
 let genTimer: ReturnType<typeof setInterval> | null = null
 
 const userInitial = computed(() =>
-  (userStore.user?.username || 'U')[0].toUpperCase()
+  (userStore.user?.username || 'U').charAt(0).toUpperCase()
 )
 
 const docPanelVisible = computed(() =>
   generating.value || !!docResult.value || !!genError.value
 )
+const defaultBuilderModelId = computed(() =>
+  builderModelOptions.value.find(option => option.is_default)?.id
+  ?? builderModelOptions.value[0]?.id
+  ?? null
+)
+const builderModelHint = computed(() => {
+  if (builderModelLoading.value) return '正在加载可用模型...'
+  if (builderModelOptions.value.length === 0) return '未配置可用模型，请前往环境管理配置'
+  if (currentSessionId.value) return '切换后仅影响后续对话与文档生成'
+  return '首条消息会使用当前选择的模型'
+})
 
 function normalizeDocResult(raw: any): AnalysisResult | null {
   if (!raw || typeof raw !== 'object') return null
@@ -681,6 +727,67 @@ function normalizeDocResult(raw: any): AnalysisResult | null {
     Array.isArray(raw.role_table_mapping)
   if (!hasCore) return null
   return raw as AnalysisResult
+}
+
+function normalizeBuilderModelId(modelId?: number | null): number | null {
+  const ids = new Set(builderModelOptions.value.map(option => option.id))
+  if (modelId != null && ids.has(modelId)) return modelId
+  return defaultBuilderModelId.value
+}
+
+function applyBuilderModelSelection(modelId?: number | null) {
+  const normalized = normalizeBuilderModelId(modelId)
+  selectedBuilderModelId.value = normalized
+  persistedBuilderModelId.value = currentSessionId.value ? normalized : null
+}
+
+function formatBuilderModelOption(option: BuilderModelOption): string {
+  return option.config_name
+}
+
+async function loadBuilderModelOptions() {
+  builderModelLoading.value = true
+  try {
+    builderModelOptions.value = await llmConfigApi.listOptions('builder')
+    selectedBuilderModelId.value = normalizeBuilderModelId(selectedBuilderModelId.value)
+    if (currentSessionId.value) {
+      persistedBuilderModelId.value = normalizeBuilderModelId(persistedBuilderModelId.value)
+    }
+  } catch {
+    builderModelOptions.value = []
+    selectedBuilderModelId.value = null
+    persistedBuilderModelId.value = null
+  } finally {
+    builderModelLoading.value = false
+  }
+}
+
+async function handleBuilderModelChange(nextValue: number | null) {
+  selectedBuilderModelId.value = nextValue
+  if (!currentSessionId.value) return
+
+  const previousValue = persistedBuilderModelId.value
+  updatingBuilderModel.value = true
+  try {
+    const { conversationApi } = await import('@/api/conversation')
+    const updated = await conversationApi.updateModel(currentSessionId.value, nextValue)
+    const normalized = normalizeBuilderModelId(updated.selected_llm_config_id)
+    selectedBuilderModelId.value = normalized
+    persistedBuilderModelId.value = normalized
+
+    const sessionIdx = sessions.value.findIndex(session => session.id === currentSessionId.value)
+    if (sessionIdx >= 0) {
+      const session = sessions.value[sessionIdx]
+      if (session) {
+        session.selected_llm_config_id = updated.selected_llm_config_id ?? null
+      }
+    }
+  } catch (e: any) {
+    selectedBuilderModelId.value = normalizeBuilderModelId(previousValue)
+    ElMessage.error(e?.response?.data?.detail || '切换模型失败')
+  } finally {
+    updatingBuilderModel.value = false
+  }
 }
 
 // ── 权限矩阵 helpers ────────────────────────────────────────────────────────
@@ -803,11 +910,14 @@ async function loadSessions() {
 // ── Create new session ─────────────────────────────────────────────────────
 async function createSession() {
   try {
-    const session = await requirementsApi.createSession()
+    const session = await requirementsApi.createSession({
+      selected_llm_config_id: selectedBuilderModelId.value ?? undefined,
+    })
     sessions.value.unshift({ ...session, has_doc: false })
     currentSessionId.value = session.id
     messages.value = session.messages || []
     docResult.value = normalizeDocResult(session.doc_result)
+    applyBuilderModelSelection(session.selected_llm_config_id)
     genError.value = ''
     await scrollToBottom()
   } catch {
@@ -823,11 +933,15 @@ async function loadSession(id: number, force = false) {
     currentSessionId.value = id
     messages.value = session.messages || []
     docResult.value = normalizeDocResult(session.doc_result)
+    applyBuilderModelSelection(session.selected_llm_config_id)
     genError.value = ''
     if (session.doc_result && !docResult.value) {
       genError.value = '该会话的历史设计文档数据异常，请点击“生成设计文档”重新生成。'
       const idx = sessions.value.findIndex(s => s.id === id)
-      if (idx >= 0) sessions.value[idx].has_doc = false
+      if (idx >= 0) {
+        const session = sessions.value[idx]
+        if (session) session.has_doc = false
+      }
     }
     await scrollToBottom()
   } catch (e: any) {
@@ -846,6 +960,8 @@ async function deleteSession(id: number) {
       currentSessionId.value = null
       messages.value = []
       docResult.value = null
+      selectedBuilderModelId.value = defaultBuilderModelId.value
+      persistedBuilderModelId.value = null
     }
     ElMessage.success('已删除')
   } catch {
@@ -995,10 +1111,12 @@ async function sendMessage(): Promise<boolean> {
     // 更新会话列表的更新时间
     const idx = sessions.value.findIndex(s => s.id === currentSessionId.value)
     if (idx >= 0) {
-      sessions.value[idx].updated_at = new Date().toISOString()
+      const session = sessions.value[idx]
+      if (!session) return !!streamingText.value
+      session.updated_at = new Date().toISOString()
       // 更新标题（首条消息）
       if (messages.value.filter(m => m.role === 'user').length === 1) {
-        sessions.value[idx].title = displayText.slice(0, 30)
+        session.title = displayText.slice(0, 30)
       }
     }
     return !!streamingText.value  // true = AI responded successfully
@@ -1076,7 +1194,10 @@ async function handleGenerateDoc() {
             if (data.doc_result) {
               docResult.value = data.doc_result
               const idx = sessions.value.findIndex(s => s.id === currentSessionId.value)
-              if (idx >= 0) sessions.value[idx].has_doc = true
+              if (idx >= 0) {
+                const session = sessions.value[idx]
+                if (session) session.has_doc = true
+              }
             }
           } catch (parseErr: any) {
             if (parseErr.message !== 'Unexpected token') {
@@ -1139,6 +1260,7 @@ watch(chatStreaming, async (streaming) => {
 
 // ── Lifecycle ──────────────────────────────────────────────────────────────
 onMounted(async () => {
+  await loadBuilderModelOptions()
   await loadSessions()
 
   const prompt = route.query.prompt as string
@@ -1162,7 +1284,10 @@ onMounted(async () => {
     await sendMessage()
   } else if (sessions.value.length > 0) {
     // 加载最近的会话
-    await loadSession(sessions.value[0].id)
+    const latestSession = sessions.value[0]
+    if (latestSession) {
+      await loadSession(latestSession.id)
+    }
   }
 })
 </script>
@@ -1411,6 +1536,64 @@ onMounted(async () => {
   background: var(--bg-secondary, #fff);
   flex-shrink: 0;
 }
+.model-picker-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 12px;
+  background: var(--bg-primary, #f8f9fa);
+}
+.model-picker-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.model-picker-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary, #111);
+}
+.model-picker-hint {
+  font-size: 12px;
+  color: var(--text-muted, #9ca3af);
+}
+.model-picker-select {
+  width: min(460px, 60%);
+  flex-shrink: 0;
+}
+.model-picker-select :deep(.el-select__wrapper) {
+  min-height: 38px;
+  border-radius: 12px;
+  background: var(--bg-secondary, #fff);
+  box-shadow: inset 0 0 0 1px rgba(99, 102, 241, 0.12);
+}
+.model-picker-select :deep(.el-select__selected-item),
+.model-picker-select :deep(.el-select__placeholder) {
+  color: var(--t-text-primary, #111);
+}
+.model-picker-select :deep(.el-select__caret),
+.model-picker-select :deep(.el-select__suffix) {
+  color: var(--t-text-muted, #9ca3af);
+}
+.model-option-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 4px 0;
+}
+.model-option-name {
+  color: var(--text-primary, #111);
+}
+.model-option-meta {
+  font-size: 12px;
+  color: var(--text-muted, #9ca3af);
+}
 .file-badge-img {
   height: 40px;
   max-width: 80px;
@@ -1487,6 +1670,15 @@ onMounted(async () => {
   align-items: center;
   gap: 12px;
   margin-top: 8px;
+}
+@media (max-width: 900px) {
+  .model-picker-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .model-picker-select {
+    width: 100%;
+  }
 }
 .gen-doc-btn {
   display: flex;

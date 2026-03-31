@@ -1,6 +1,6 @@
 async activateDefaultAgent(e){
 await this.G.whenInstalledExtensionsRegistered();
-const i=new Ei(qi.defaultChatAgent?.extensionId??"apaas-builder.minimax-chat-provider");
+const i=new Ei(qi.defaultChatAgent?.extensionId??"apaas-builder.ruijing-ai");
 const n=async()=>{
 const y=globalThis;
 if(y.__apaasMiniMaxDynamicAgentDisposer)return;
@@ -85,8 +85,16 @@ const ee=(vibeContextState.apiBase||this.M.getValue("minimax.apiBase")||"").repl
 const ae=vibeContextState.ideToken||"";
 const se=this.M.getValue("minimax.apiKey")||"";
 const Ae=(ae?[be,ee]:[ee]).map(T=>(T||"").replace(/\/$/,"")).filter(Boolean).filter((T,ie,oe)=>oe.indexOf(T)===ie);
-const de=y.__apaasModelSelector?.selected||vibeContextState.model||this.M.getValue("minimax.model")||"MiniMax-M2.7";
-console.log("[PATCH] endpoints:",Ae,"hasToken:",!!ae,"hasKey:",!!se);
+const _isAutoMode2=()=>{try{return localStorage.getItem("apaas-auto-mode")!=="false";}catch{return!0;}};
+const _fallbackModel=vibeContextState.model||this.M.getValue("minimax.model")||"MiniMax-M2.7";
+const _manualModel=y.__apaasModelSelector?.selected||_fallbackModel;
+const _autoEditModel=(()=>{const ms=y.__apaasModelSelector?.models||[];const pref=["claude-sonnet-4-6","claude-sonnet-4","gpt-5.4","gpt-4o"];for(const p of pref){if(ms.find(m=>m.id===p))return p;}return _fallbackModel;})();
+const _hasIdeProxy=!!vibeContextState.workspaceId;
+const _autoChatModel=(()=>{if(!_hasIdeProxy)return _fallbackModel;const ms=y.__apaasModelSelector?.models||[];const pref=["qwen3-coder-next","qwen-plus","gpt-5.4","MiniMax-M2.7"];for(const p of pref){if(ms.find(m=>m.id===p))return p;}return _fallbackModel;})();
+const _autoEditModel2=_hasIdeProxy?_autoEditModel:_fallbackModel;
+const _resolveModel=(isEdit)=>{if(!_isAutoMode2())return _manualModel;return isEdit?_autoEditModel2:_autoChatModel;};
+const de=_resolveModel(!1);
+console.log("[PATCH] endpoints:",Ae,"hasToken:",!!ae,"hasKey:",!!se,"autoMode:",_isAutoMode2(),"editModel:",_autoEditModel,"chatModel:",_autoChatModel);
 const ye=async(T,ie)=>{
 let oe;
 for(let idx=0;idx<Ae.length;idx++){
@@ -277,7 +285,7 @@ return Array.from(ie);
 };
 const VIBE_STATUS_QUERY=T=>/^(修复了吗|改好了吗|处理好了吗|好了没|搞定了吗|行了吗|还有问题吗|是不是好了|现在好了吗)[？?！!。.\s]*$/i.test((T||"").trim());
 const VIBE_DIAG_QUERY=T=>/(看(到|下|一下)?|分析|解释|排查|定位|诊断|说出|判断).*(截图|报错|错误|控制台|日志|console)|根据.*截图|最关键的报错|主报错|根因/i.test(T||"");
-const VIBE_EDIT_REQUEST=T=>/(修改|改成|改为|改一下|改下|直接改|帮改|调整|修复|优化|新增|补充|完善|继续补|重构|实现(?!思路)|生成(?!思路)|创建(?!工作区)|删除|替换|补齐|写入|写到|写个|写一个|帮我写|帮写|编写|加上|加一下|加个|添加|加入|加到|加注释|加注|去改|去写|去加|做一下|搞一下|弄一下|fix|update|edit|change|modify|write|implement|add|refactor)/i.test(T||"");
+const VIBE_EDIT_REQUEST=T=>/(修改|改成|改为|改一下|改下|直接改|帮改|改代码|改掉|调整|修复|修一下|修bug|优化|新增|补充|完善|继续补|继续改|继续写|继续生成|重构|实现(?!思路)|生成(?!思路)|创建(?!工作区)|删除|替换|补齐|写入|写到|写个|写一个|帮我写|帮写|编写|加上|加一下|加个|添加|加入|加到|加注释|加注|去改|去写|去加|做一下|搞一下|弄一下|按方案|按计划|直接生成|直接开始|fix|update|edit|change|modify|write|implement|add|refactor|apply)/i.test(T||"");
 const _classifyIntent=async(userMsg,history)=>{
 const _cmsgs=[{role:"system",content:"你是意图分类器。判断用户是否需要修改/创建/删除代码文件。只回一个词 EDIT 或 CHAT，不要解释。\nEDIT：修改代码、写代码、加功能、修bug、重构、删除文件、应用之前建议的改动\nCHAT：提问、讨论、分析、看代码、解释代码、了解信息"}];
 const _lastQ=history&&history.length>0?history[history.length-1]:null;
@@ -294,14 +302,21 @@ return _ct.startsWith("EDIT");
 };
 const Ee=T=>{
 let ie=fe(T||"");
+ie=ie.replace(/<think>[\s\S]*?<\/think>/gi,"").replace(/<\/?think>/gi,"").trim();
 const oe=ie.match(/```(?:json)?\s*([\s\S]*?)```/i);
 oe&&(ie=oe[1].trim());
 const re=ie.indexOf("{"),pe=ie.lastIndexOf("}");
 if(re!==-1&&pe!==-1&&pe>re)ie=ie.slice(re,pe+1);
-return JSON.parse(ie);
+try{return JSON.parse(ie);}catch(e1){
+const fix=ie.replace(/,\s*([}\]])/g,"$1").replace(/\n/g,"");
+return JSON.parse(fix);}
 };
 const ft=async T=>{
 if(!Ae.length||!vibeContextState.workspaceId)return"";
+const _mentioned=Be(T||"");
+const _cacheKey=_mentioned.sort().join("|");
+const _ftC=y.__ftCache;
+if(_ftC&&_ftC.key===_cacheKey&&(Date.now()-_ftC.ts<120000)&&!y.__ftCacheDirty){console.log("[PATCH] ft() cache hit");return _ftC.text;}
 const wsPfx=Ae[0].replace(/\/ide\/?$/,"");
 const wsHdr={...(ae?{"X-Vibe-IDE-Token":ae,"Authorization":"Bearer "+ae}:se?{"Authorization":"Bearer "+se}:{})};
 try{
@@ -316,9 +331,8 @@ const p=typeof f==="string"?f:f?.path||f?.name||"";
 return/\.(java|vue|js|ts|jsx|tsx|json|md|mdc|css|html|yml|yaml|properties|xml)$/i.test(p)&&!SKIP_RE.test(p);
 }).slice(0,30);
 const fileListStr=srcFiles.map(f=>typeof f==="string"?`- ${f}`:`- ${f?.path||f?.name}`).join("\n");
-const mentioned=Be(T||"");
 const toRead=[];
-for(const m of mentioned){
+for(const m of _mentioned){
 const found=srcFiles.find(f=>{const n=typeof f==="string"?f:f?.path||"";return n.endsWith(m)||n.includes(m);});
 if(found){const p=typeof found==="string"?found:found?.path||found?.name;if(!toRead.includes(p))toRead.push(p);}
 }
@@ -350,39 +364,127 @@ totalLen+=trimmed.length;
 }catch{}
 }
 const skillFiles=srcFiles.filter(f=>{const p=typeof f==="string"?f:f?.path||"";return p.includes(".claude/skills/")&&p.endsWith(".skill.md");});
+const _userLow=(T||"").toLowerCase();
+const _SKILL_KW={"crud":["crud","增删改查","业务代码","生成代码","controller","service","dao","接口开发","新增","查询"],"project-init":["初始化","init","新项目","pom","basepackage","脚手架"],"feign":["feign","第三方","外部接口","client","远程调用","集成"],"exception":["异常","exception","错误码","error"],"scaffold":["脚手架","scaffold","纠错","规范","改善"]};
+let _selSkills=[];
+for(const sf of skillFiles){const sfp=typeof sf==="string"?sf:sf?.path||"";for(const[key,kws]of Object.entries(_SKILL_KW)){if(sfp.toLowerCase().includes(key)&&kws.some(kw=>_userLow.includes(kw))){_selSkills.push(sf);break;}}}
+if(!_selSkills.length&&skillFiles.length)_selSkills=skillFiles.slice(0,1);
+_selSkills=_selSkills.slice(0,2);
 const skillExcerpts=[];
-for(const sf of skillFiles.slice(0,3)){
+for(const sf of _selSkills){
 const sfp=typeof sf==="string"?sf:sf?.path||sf?.name;
 try{
 const sr=await fetch(wsPfx+`/file?file_path=${encodeURIComponent(sfp)}`,{headers:wsHdr});
 if(!sr.ok)continue;
 const sj=await sr.json();
 const stxt=sj?.content||"";
-skillExcerpts.push(`### SKILL: ${sfp}\n${stxt.slice(0,600)}`);
+skillExcerpts.push(`### SKILL: ${sfp}\n${stxt.slice(0,4000)}`);
 }catch{}
 }
 const skillSection=skillExcerpts.length?`\n\nSKILL_GUIDES:\n${skillExcerpts.join("\n\n")}`:"";
-console.log("[PATCH] ft() mentioned=",mentioned,"toRead=",toRead.length,"totalLen=",totalLen,"skills=",skillExcerpts.length);
-return`WORKSPACE FILES(${allFiles.length}):\n${fileListStr}\n\nCONTENTS:\n${excerpts.join("\n\n")}${skillSection}`;
+const _ftResult=`WORKSPACE FILES(${allFiles.length}):\n${fileListStr}\n\nCONTENTS:\n${excerpts.join("\n\n")}${skillSection}`;
+y.__ftCache={key:_cacheKey,text:_ftResult,ts:Date.now()};y.__ftCacheDirty=!1;
+console.log("[PATCH] ft() mentioned=",_mentioned,"toRead=",toRead.length,"totalLen=",totalLen,"skills=",skillExcerpts.length);
+return _ftResult;
 }catch(e){
 console.warn("[PATCH] buildWorkspaceContext via API failed",e);
 return"";
 }
 };
+const loadProjectGuides=async()=>{
+if(y.__projectGuidesCache&&(Date.now()-y.__projectGuidesCache.ts<300000))return y.__projectGuidesCache.text;
+if(!Ae.length||!vibeContextState.workspaceId)return"";
+const _gpfx=Ae[0].replace(/\/ide\/?$/,"");
+const _ghdr={...(ae?{"X-Vibe-IDE-Token":ae,"Authorization":"Bearer "+ae}:se?{"Authorization":"Bearer "+se}:{})};
+try{
+const _gparts=[];
+const _GUIDES=[["CLAUDE.md",5000,"PROJECT_GUIDE"],["memory.md",2000,"MEMORY"],[".claude/rules/coding-style.rule.md",6000,"RULE"],[".claude/rules/mpaas-query-reference.rule.md",5000,"RULE"],[".claude/rules/dev-workflow.rule.md",3000,"RULE"]];
+for(const[gp,lim,label]of _GUIDES){
+try{const _gr=await fetch(_gpfx+`/file?file_path=${encodeURIComponent(gp)}`,{headers:_ghdr});
+if(!_gr.ok)continue;const _gj=await _gr.json();if(!_gj?.content)continue;
+_gparts.push(`## ${label}: ${gp}\n${_gj.content.slice(0,lim)}`);
+}catch{}}
+try{const _flr=await fetch(_gpfx+"/files",{headers:_ghdr});
+if(_flr.ok){const _flj=await _flr.json();const _allFiles=(Array.isArray(_flj)?_flj:_flj?.files||[]).map(f=>typeof f==="string"?f:f?.path||f?.name||"");
+const _cursorRules=_allFiles.filter(f=>/^\.cursor\/rules\/.*\.(mdc|md)$/i.test(f)).slice(0,6);
+const _loadedPaths=new Set(_GUIDES.map(g=>g[0]));
+for(const cr of _cursorRules){if(_loadedPaths.has(cr)||_gparts.length>=8)break;
+try{const _crr=await fetch(_gpfx+`/file?file_path=${encodeURIComponent(cr)}`,{headers:_ghdr});
+if(!_crr.ok)continue;const _crj=await _crr.json();let _crc=_crj?.content||"";
+const _fm=_crc.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);const _fmMeta=_fm?_fm[1]:"";if(_fm)_crc=_fm[2];
+const _isAlwaysApply=/alwaysApply:\s*true/i.test(_fmMeta);const _ruleLimit=_isAlwaysApply?35000:6000;
+if(_crc.trim()){_gparts.push(`## RULE: ${cr}\n${_crc.slice(0,_ruleLimit)}`);_loadedPaths.add(cr);}
+}catch{}}}}catch(_fle){console.warn("[PATCH] cursor rules discovery failed",_fle);}
+let _gtext=_gparts.join("\n\n");
+if(_gtext.length>40000&&_gparts.length>1){while(_gtext.length>40000&&_gparts.length>1){const _last=_gparts[_gparts.length-1];if(_last.length<15000){_gparts.pop();}else break;_gtext=_gparts.join("\n\n");}if(_gtext.length>40000)_gtext=_gtext.slice(0,40000);}
+y.__projectGuidesCache={text:_gtext,ts:Date.now()};
+console.log("[PATCH] loadProjectGuides loaded",_gparts.length,"files, total",_gtext.length,"chars");
+return _gtext;
+}catch(_ge){console.warn("[PATCH] loadProjectGuides failed",_ge);return"";}
+};
+const Rt=async T=>{
+try{
+return await this.H.invokeFunction(async ie=>{
+const oe=ie.get(Qe).getWorkspace();
+const re=ie.get(Me);
+const pe=oe.folders[0];
+if(!pe)return{applied:[],skipped:[{path:"",reason:"No workspace folder available."}]};
+const ve=[],Le=[];
+const Je=Array.isArray(T?.edits)?T.edits.slice(0,12):[];
+for(const Mt of Je){
+const qt=((Mt?.path)||"").trim().replace(/\\/g,"/").replace(/^\/+/,"");
+if(!qt||qt.includes("..")){
+Le.push({path:qt||"(empty)",reason:"Invalid target path"});
+continue;
+}
+let Qt=pe.uri;
+for(const ni of qt.split("/").filter(Boolean))Qt=ze(Qt,ni);
+const Ot=String(Mt?.action||"write").toLowerCase();
+try{
+if(Ot==="delete"){
+await re.del(Qt,{recursive:!0,useTrash:!1});
+ve.push({path:qt,action:"delete"});
+continue;
+}
+if(typeof Mt?.content!="string"){
+Le.push({path:qt,reason:"Missing full file content"});
+continue;
+}
+try{await re.createFolder(Ai(Qt))}catch{}
+await re.writeFile(Qt,He.fromString(Mt.content));
+ve.push({path:qt,action:Ot==="create"?"create":"write"});y.__ftCacheDirty=!0;if(/CLAUDE\.md|\.claude\/rules|memory\.md/.test(qt))y.__projectGuidesCache=null;
+}catch(ni){
+Le.push({path:qt,reason:ni?.message||"Unknown write error"});
+}
+}
+return{applied:ve,skipped:Le};
+});
+}catch(ie){
+console.warn("[PATCH] apply edit plan failed",ie);
+return{applied:[],skipped:[{path:"",reason:ie?.message||"Failed to apply edit plan"}]};
+}
+};
 if(!Ae.length)return{errorDetails:{message:"IDE 后端代理未配置，请重新从 Builder 打开 Web IDE 或在设置中配置 minimax.apiBase。"}};
 if(!ae&&!se)return{errorDetails:{message:"请在设置中配置 minimax.apiKey，或从 Builder 打开 Web IDE。"}};
-const pendingRt=globalThis.__pendingEdits;
-if(pendingRt&&/^(确认|应用|apply|yes|ok|接受|accept|好的|行|可以|没问题)/i.test((ue(M?.message)||ue(M?.prompt)||"").trim())){
-globalThis.__pendingEdits=null;
-P([{kind:"markdownContent",content:new we("正在应用修改...\n")}]);
-const pr=await Rt(pendingRt);
-const po=(pr?.applied||[]).map(r=>`- ✅ ${r.path} (${r.action})`).join("\n");
-const ps=(pr?.skipped||[]).map(r=>`- ❌ ${r.path}: ${r.reason}`).join("\n");
-const pm=[po?`已写入文件：\n${po}`:"",ps?`未写入：\n${ps}`:""].filter(Boolean).join("\n\n");
-P([{kind:"markdownContent",content:new we(pm||"操作完成。")}]);
+const _userInput=(ue(M?.message)||ue(M?.prompt)||"").trim();
+const _pendingPlan=globalThis.__pendingPlan;
+let _doPlanExec=null;
+if(_pendingPlan&&/^(确认|应用|apply|yes|ok|接受|accept|好的|行|可以|没问题|开始|go|start|开始吧|开干|冲)/i.test(_userInput)){
+globalThis.__pendingPlan=null;
+_doPlanExec=_pendingPlan;
+}
+if(_pendingPlan&&!_doPlanExec&&/^(取消|拒绝|cancel|no|reject|算了|不要|不用了)/i.test(_userInput)){
+globalThis.__pendingPlan=null;
+P([{kind:"markdownContent",content:new we("已取消计划，文件未变动。")}]);
 return{timings:{firstProgress:0,totalElapsed:Date.now()-te}};
 }
-if(pendingRt&&/^(取消|拒绝|cancel|no|reject|算了|不要)/i.test((ue(M?.message)||ue(M?.prompt)||"").trim())){
+const pendingRt=globalThis.__pendingEdits;
+let _doEditApply=null;
+if(!_doPlanExec&&pendingRt&&/^(确认|应用|apply|yes|ok|接受|accept|好的|行|可以|没问题)/i.test(_userInput)){
+globalThis.__pendingEdits=null;
+_doEditApply=pendingRt;
+}
+if(!_doPlanExec&&!_doEditApply&&pendingRt&&/^(取消|拒绝|cancel|no|reject|算了|不要)/i.test(_userInput)){
 globalThis.__pendingEdits=null;
 P([{kind:"markdownContent",content:new we("已取消修改，文件未变动。")}]);
 return{timings:{firstProgress:0,totalElapsed:Date.now()-te}};
@@ -416,20 +518,194 @@ const pt=await ke();
 const mt=Te(pt);
 let gt=rt;
 if(refContent)gt=`${rt}\n\n用户附加了以下文件，请基于这些文件内容进行操作：\n${refContent}`;
+const _uf=y.__apaasUploadedFiles||[];
+if(_uf.length){const _ufParts=_uf.map(f=>{if(f.content)return`### UPLOADED FILE: ${f.name}\n\`\`\`\n${f.content.length>4000?f.content.slice(0,4000)+"\n/* ... truncated ... */":f.content}\n\`\`\``;return`### UPLOADED FILE: ${f.name}\n(binary file saved to workspace: ${f.path})`;});gt=`${gt}\n\n用户上传了以下文件：\n${_ufParts.join("\n\n")}`;y.__apaasUploadedFiles=[];const _ct=document.querySelector(".apaas-upload-tags");if(_ct)_ct.remove();}
 if(mt)gt=`${gt}${gt?"\n\n":""}ATTACHED_IMAGE_CONTEXT:\n${mt}`;
 const kt=await ft(rt);
-console.log("[PATCH] kt length=",kt?.length||0,"refContent length=",refContent?.length||0);
-const Et=async()=>{
+const projectGuides=await loadProjectGuides();
+console.log("[PATCH] kt length=",kt?.length||0,"refContent length=",refContent?.length||0,"guides length=",projectGuides?.length||0);
+const _isPlanMode=(userMsg)=>{
+const t=(userMsg||"").trim();
+if(t.length<15)return!1;
+const CREATE_KW=/(创建|新增|开发|实现|搭建|编写|生成|写一个|写个|帮我写|做一个|做个|build|create|implement|develop)/i;
+const MULTI_KW=/(模块|功能|接口|页面|CRUD|增删改查|管理|系统|组件|服务|前端|后端|全套|完整)/i;
+const SINGLE_KW=/(修改|修复|改一下|改下|调整|fix|改成|改为|替换|加上|加个|删除|去掉)/i;
+const HAS_FILE=/[A-Za-z0-9_-]+\.\w{1,6}/;
+if(CREATE_KW.test(t)&&MULTI_KW.test(t))return!0;
+if(SINGLE_KW.test(t)&&HAS_FILE.test(t))return!1;
+if(t.length>80)return!0;
+return!0;
+};
+const _parsePlan=(text)=>{
+const files=[];
+let summary="";
+const sumMatch=text.match(/##?\s*(?:计划|方案|Plan)[：:\s]*(.+)/i);
+if(sumMatch)summary=sumMatch[1].trim();
+const lineRegex=/^\s*\d+[\.\)]\s*`([^`]+)`\s*[—\-–:：]\s*(.+)/gm;
+let m;
+while((m=lineRegex.exec(text))!==null){
+const path=(m[1]||"").trim().replace(/^\/+/,"");
+const desc=(m[2]||"").trim();
+if(path)files.push({path,description:desc});
+}
+if(!files.length){
+const altRegex=/`([^`\s]+\.\w{1,6})`\s*[—\-–:：]\s*(.+)/gm;
+while((m=altRegex.exec(text))!==null){
+const path=(m[1]||"").trim().replace(/^\/+/,"");
+const desc=(m[2]||"").trim();
+if(path&&/^[\w./\-]+$/.test(path))files.push({path,description:desc});
+}
+}
+if(!summary&&files.length)summary=`生成${files.length}个文件的计划`;
+console.log("[PATCH] parsePlan: found",files.length,"files, summary=",summary);
+return{summary,files,fullText:text};
+};
+const _parseMarkdownEdits=(text)=>{
+const edits=[];
+let summary="";
+const sumMatch=text.match(/##?\s*(?:方案|总结|Summary)[：:\s]*(.+)/i);
+if(sumMatch)summary=sumMatch[1].trim();
+const fileRegex=/(?:^|\n)\s*(?:FILE|文件|EDIT)[：:]\s*`?([^\s`\n]+)`?\s*\n```[\w]*\n([\s\S]*?)```/gi;
+let m;
+while((m=fileRegex.exec(text))!==null){
+const path=(m[1]||"").trim().replace(/^\/+/,"");
+const content=m[2];
+if(path&&content!=null)edits.push({path,action:"write",content});
+}
+if(!edits.length){
+const altRegex=/`([^`\s]+\.\w{1,6})`\s*\n```[\w]*\n([\s\S]*?)```/gi;
+while((m=altRegex.exec(text))!==null){
+const path=(m[1]||"").trim().replace(/^\/+/,"");
+const content=m[2];
+if(path&&content!=null&&/^[\w./\-]+$/.test(path))edits.push({path,action:"write",content});
+}
+}
+if(!summary&&edits.length)summary=`生成${edits.length}个文件`;
+console.log("[PATCH] parseMarkdownEdits: found",edits.length,"files, summary=",summary);
+return{summary,edits};
+};
+const Et=async(_confirmMode)=>{
 const vibeCtx=vibeContextState.context?(vibeContextState.context.length>2000?vibeContextState.context.slice(0,2000)+"...":vibeContextState.context):"";
+const _confirmHint=_confirmMode?"重要：用户已经确认了之前的方案，请直接生成代码文件，不要再做计划、不要再列文件清单、不要再问确认。立即输出 FILE: 路径 + 完整代码块。":"";
 const T=[{
 role:"system",
 content:[
 "你是集成在 IDE 里的代码修改代理。用户消息中包含当前工作区的代码文件内容，直接基于这些代码修改。",
-"严格只返回 JSON，不要 Markdown/代码围栏/解释/tool_call/invoke。",
-'格式: {"summary":"一句中文总结","edits":[{"path":"相对路径","action":"write","content":"完整文件内容"}],"notes":["可选备注"]}',
-"action 仅允许 write、create、delete。content 必须是完整文件内容。不需要改文件时返回 edits:[]。",
-"如果用户消息含 ATTACHED_IMAGE_CONTEXT / OCR_DIAGNOSTICS，视为截图文字内容。",
-vibeCtx?`\nVIBE CODING CONTEXT (workspace=${vibeContextState.workspaceId||"?"}):\n${vibeCtx}`:""
+_confirmHint,
+"输出格式要求：",
+"1. 先用一行 ## 总结 说明你要做什么",
+"2. 对每个需要创建或修改的文件，输出 FILE: 相对路径 然后紧跟完整代码块",
+"3. 代码块必须包含文件的完整内容（不要省略、不要用注释代替）",
+"示例格式：",
+"## 总结：创建员工查询接口",
+"FILE: src/main/java/com/xdap/demo/controller/EmployeeController.java",
+"```java",
+"package com.xdap.demo.controller;",
+"// ... 完整代码 ...",
+"```",
+"FILE: src/main/java/com/xdap/demo/service/EmployeeService.java",
+"```java",
+"package com.xdap.demo.service;",
+"// ... 完整代码 ...",
+"```",
+"重要：不需要改的文件不要输出。如果只是回答问题不需要改代码，直接说明即可，不要输出 FILE 块。",
+vibeCtx?`\nVIBE CODING CONTEXT (workspace=${vibeContextState.workspaceId||"?"}):\n${vibeCtx}`:"",
+projectGuides?`\nPROJECT_RULES:\n${projectGuides}`:""
+].filter(Boolean).join("\n")
+}];
+const recentQ=(Q||[]).slice(_confirmMode?-4:-2);
+for(const ie of recentQ){
+const oe=fe(ue(ie?.request?.message)||ue(ie?.request?.prompt)||"");
+oe&&T.push({role:"user",content:oe.slice(0,_confirmMode?1500:800)});
+const re=fe(ue(ie?.response));
+re&&T.push({role:"assistant",content:re.slice(0,_confirmMode?3000:1200)});
+}
+const userMsg=[kt?`当前工作区代码：\n${kt}\n\n---\n请求：`:"",gt].filter(Boolean).join("\n");
+userMsg&&T.push({role:"user",content:userMsg});
+const _editModel=_resolveModel(!0);
+let _bodyStr=JSON.stringify({model:_editModel,messages:T,stream:!0,max_tokens:16384,tool_choice:"none"});
+if(_bodyStr.length>80000&&kt&&kt.length>2000){
+const trimKt=kt.slice(0,Math.max(2000,kt.length-(_bodyStr.length-80000)));
+const userMsg2=[trimKt?`当前工作区代码(已裁剪)：\n${trimKt}\n\n---\n请求：`:"",gt].filter(Boolean).join("\n");
+T[T.length-1]={role:"user",content:userMsg2};
+_bodyStr=JSON.stringify({model:_editModel,messages:T,stream:!0,max_tokens:16384,tool_choice:"none"});
+}
+console.log("[PATCH] edit plan request (markdown): model=",_editModel,"body size=",_bodyStr.length);
+let ie;
+try{
+ie=await ye("/chat/completions",{method:"POST",body:_bodyStr});
+}catch(oe){
+console.error("[PATCH] edit plan fetch error:",oe);
+return{error:`[${_editModel}] 请求失败: ${oe?.message||"网络错误"}`};
+}
+if(!ie.ok){
+let oe="";try{oe=(await ie.text()).slice(0,500)}catch{}
+return{error:`[${_editModel}] API ${ie.status}: ${oe||"无详情"}`};
+}
+const _eSi=ge();
+let _eText="";
+let _ePending="";
+let _eLastPaint=0;
+let _eChunksIn=0;
+let _eChunksOut=0;
+let _eThinkShown=!1;
+const _ePaintThrottle=150;
+const _eFlush=()=>{if(!_ePending)return;P([{kind:"markdownContent",content:new we(_ePending)}]);_ePending="";_eLastPaint=Date.now();};
+const _eBi=ie.body?.getReader();
+if(_eBi){
+const _eDec=new TextDecoder;let _eBuf="";
+let _eLastData=Date.now();
+for(;;){
+const _eTO=new Promise(r=>setTimeout(()=>r({done:!0,timeout:!0}),120000));
+const{done:_eD,value:_eV,timeout:_eT}=await Promise.race([_eBi.read(),_eTO]);
+if(_eT||_eD){if(!_eD)_eBuf+=_eDec.decode();break;}
+_eLastData=Date.now();
+_eBuf+=_eDec.decode(_eV,{stream:!0});
+const _eLines=_eBuf.split("\n");_eBuf=_eLines.pop()||"";
+for(const _eL of _eLines){
+if(!_eL.startsWith("data: "))continue;
+const _eP=_eL.slice(6).trim();
+if(!_eP||_eP==="[DONE]")continue;
+try{const _eJ=JSON.parse(_eP);const _eC=_eJ?.choices?.[0]?.delta?.content;if(_eC){
+_eChunksIn++;
+const _eF=_eSi.push(_eC);
+if(!_eF){if(!_eThinkShown&&_eChunksIn>3&&_eChunksOut===0){_eThinkShown=!0;P([{kind:"markdownContent",content:new we("*🧠 模型正在深度思考中...*\n\n")}]);}continue;}
+_eChunksOut++;
+_eText+=_eF;_ePending+=_eF;
+if(Date.now()-_eLastPaint>=_ePaintThrottle)_eFlush();
+}}catch{}
+}
+if(_eText&&Date.now()-_eLastData>30000)break;
+}
+const _eFl=_eSi.flush();if(_eFl){_eText+=_eFl;_ePending+=_eFl;}
+_eFlush();
+}else{
+try{const _eJ2=await ie.json();_eText=fe(_eJ2?.choices?.[0]?.message?.content||"");}catch{try{_eText=fe(await ie.text())}catch{}}
+}
+if(!_eText)return{error:"Model did not return content."};
+const _ePlan=_parseMarkdownEdits(_eText);
+if(!_ePlan.edits.length){
+try{const _eJ3=Ee(_eText);if(_eJ3?.edits?.length)return _eJ3;}catch{}
+return{error:"no_edits",fullText:_eText};
+}
+return _ePlan;
+};
+const PlanEt=async()=>{
+const vibeCtx=vibeContextState.context?(vibeContextState.context.length>2000?vibeContextState.context.slice(0,2000)+"...":vibeContextState.context):"";
+const T=[{
+role:"system",
+content:[
+"你是集成在 IDE 里的代码修改代理。用户描述需求后，你只需要输出实现计划，不要写任何代码。",
+"输出格式要求：",
+"## 计划：<一句话描述你要做什么>",
+"1. `src/main/java/.../XxxController.java` — REST 接口，包含 CRUD 方法",
+"2. `src/main/java/.../XxxService.java` — 业务逻辑层",
+"3. `src/main/java/.../XxxDao.java` — 数据访问层",
+"每个文件只写一行描述。不要写代码，不要写代码块。",
+"如果需要修改已有文件，也列出来并说明要改什么。",
+"如果只需要修改/创建1个文件，也按此格式列出。",
+vibeCtx?`\nVIBE CODING CONTEXT:\n${vibeCtx}`:"",
+projectGuides?`\nPROJECT_RULES:\n${projectGuides}`:""
 ].filter(Boolean).join("\n")
 }];
 const recentQ=(Q||[]).slice(-2);
@@ -441,102 +717,351 @@ re&&T.push({role:"assistant",content:re.slice(0,1200)});
 }
 const userMsg=[kt?`当前工作区代码：\n${kt}\n\n---\n请求：`:"",gt].filter(Boolean).join("\n");
 userMsg&&T.push({role:"user",content:userMsg});
-let _bodyStr=JSON.stringify({model:de,messages:T,stream:!1,max_tokens:8192,tool_choice:"none"});
-if(_bodyStr.length>60000&&kt&&kt.length>2000){
-const trimKt=kt.slice(0,Math.max(2000,kt.length-(_bodyStr.length-60000)));
+const _editModel=_resolveModel(!0);
+let _bodyStr=JSON.stringify({model:_editModel,messages:T,stream:!0,max_tokens:2048,tool_choice:"none"});
+if(_bodyStr.length>80000&&kt&&kt.length>2000){
+const trimKt=kt.slice(0,Math.max(2000,kt.length-(_bodyStr.length-80000)));
 const userMsg2=[trimKt?`当前工作区代码(已裁剪)：\n${trimKt}\n\n---\n请求：`:"",gt].filter(Boolean).join("\n");
 T[T.length-1]={role:"user",content:userMsg2};
-_bodyStr=JSON.stringify({model:de,messages:T,stream:!1,max_tokens:8192,tool_choice:"none"});
+_bodyStr=JSON.stringify({model:_editModel,messages:T,stream:!0,max_tokens:2048,tool_choice:"none"});
 }
-console.log("[PATCH] edit plan request: model=",de,"body size=",_bodyStr.length,"msgs=",T.length,"history=",recentQ.length);
+console.log("[PATCH] PlanEt request: model=",_editModel,"body size=",_bodyStr.length);
 let ie;
 try{
 ie=await ye("/chat/completions",{method:"POST",body:_bodyStr});
 }catch(oe){
-console.error("[PATCH] edit plan fetch error:",oe);
-return{error:`[${de}] 请求失败: ${oe?.message||"网络错误"} (body ${Math.round(_bodyStr.length/1024)}KB)`};
+console.error("[PATCH] PlanEt fetch error:",oe);
+return{error:`[${_editModel}] 请求失败: ${oe?.message||"网络错误"}`};
 }
 if(!ie.ok){
-let oe="";
-try{oe=(await ie.text()).slice(0,500)}catch{}
-console.error("[PATCH] edit plan API error:",ie.status,oe);
-return{error:`[${de}] API ${ie.status}: ${oe||"无详情"}`};
+let oe="";try{oe=(await ie.text()).slice(0,500)}catch{}
+return{error:`[${_editModel}] API ${ie.status}: ${oe||"无详情"}`};
 }
-let oe="";
-try{
-const re=await ie.json();
-oe=fe(re?.choices?.[0]?.message?.content||"");
-}catch{
-try{oe=fe(await ie.text())}catch{}
+const _pSi=ge();
+let _pText="";
+let _pPending="";
+let _pLastPaint=0;
+let _pChunksIn=0;
+let _pChunksOut=0;
+let _pThinkShown=!1;
+const _pFlush=()=>{if(!_pPending)return;P([{kind:"markdownContent",content:new we(_pPending)}]);_pPending="";_pLastPaint=Date.now();};
+const _pBi=ie.body?.getReader();
+if(_pBi){
+const _pDec=new TextDecoder;let _pBuf="";
+for(;;){
+const _pTO=new Promise(r=>setTimeout(()=>r({done:!0,timeout:!0}),60000));
+const{done:_pD,value:_pV,timeout:_pT}=await Promise.race([_pBi.read(),_pTO]);
+if(_pT||_pD){if(!_pD)_pBuf+=_pDec.decode();break;}
+_pBuf+=_pDec.decode(_pV,{stream:!0});
+const _pLines=_pBuf.split("\n");_pBuf=_pLines.pop()||"";
+for(const _pL of _pLines){
+if(!_pL.startsWith("data: "))continue;
+const _pP=_pL.slice(6).trim();
+if(!_pP||_pP==="[DONE]")continue;
+try{const _pJ=JSON.parse(_pP);const _pC=_pJ?.choices?.[0]?.delta?.content;if(_pC){
+_pChunksIn++;
+const _pF=_pSi.push(_pC);
+if(!_pF){if(!_pThinkShown&&_pChunksIn>3&&_pChunksOut===0){_pThinkShown=!0;P([{kind:"markdownContent",content:new we("*🧠 模型正在思考计划...*\n\n")}]);}continue;}
+_pChunksOut++;
+_pText+=_pF;_pPending+=_pF;
+if(Date.now()-_pLastPaint>=150)_pFlush();
+}}catch{}
 }
-if(!oe)return{error:"Model did not return an edit plan."};
-try{
-return Ee(oe);
-}catch(re){
-console.warn("[PATCH] parse edit plan failed",re,oe);
-return{error:"Model returned an invalid edit plan."};
 }
+const _pFl=_pSi.flush();if(_pFl){_pText+=_pFl;_pPending+=_pFl;}
+_pFlush();
+}else{
+try{const _pJ2=await ie.json();_pText=fe(_pJ2?.choices?.[0]?.message?.content||"");}catch{try{_pText=fe(await ie.text())}catch{}}
+}
+if(!_pText)return{error:"Model did not return plan."};
+const _plan=_parsePlan(_pText);
+if(!_plan.files.length)return{error:"no_plan",fullText:_pText};
+return _plan;
 };
-const Rt=async T=>{
+const ExecPlanEt=async(plan)=>{
+const results={applied:[],skipped:[]};
+const generatedSummaries=[];
+const _editModel=_resolveModel(!0);
+const _execGuides=await loadProjectGuides();
+const kt=await ft(plan.userMsg||"");
+const gt=plan.userMsg||"";
+for(let i=0;i<plan.files.length;i++){
+const file=plan.files[i];
+P([{kind:"markdownContent",content:new we(`\n⏳ **生成中 (${i+1}/${plan.files.length})** \`${file.path}\`...\n`)}]);
+const _otherFiles=plan.files.filter((_,idx)=>idx!==i).map(f=>`- \`${f.path}\` — ${f.description}`).join("\n");
+const _prevSummary=generatedSummaries.map(s=>`### ${s.path}\n\`\`\`\n${s.excerpt}\n\`\`\``).join("\n");
+const _fileRoleHint=(fp=>{if(fp.endsWith(".widget.config.js"))return"这是组件配置文件。严格遵循 PROJECT_RULES 中的 widget config 结构。";const _rm=fp.match(/form-widget\/(ide|edit|read|list|print|search|search-ide)\//);if(_rm){const _mm={ide:"FormWidgetMixin",edit:"FormWidgetMixin",read:"FormWidgetMixin",list:"无mixin，用inject+props",print:"PrintWidgetMixin",search:"SearchWidgetMixin","search-ide":"SearchIdeWidgetMixin"};return`这是 ${_rm[1]} 渲染模式组件。使用: ${_mm[_rm[1]]||"参考 PROJECT_RULES"}。`;}if(fp.endsWith(".editor.config.js"))return"编辑器配置，必须含 code, editorConfigType, componentName, configProperty。";if(/form-editor\/.*\.vue$/.test(fp))return"设计器属性面板组件，用 EditorFormConfigMixin。";if(fp==="src/apaas.json")return"平台元数据，type 要与 widget config 的 code 一致。";if(/\/index\.js$/.test(fp))return"聚合导出，保留已有导入。";return"";})(file.path);
+const sysContent=[
+"你是 IDE 代码修改代理。现在按照已确认的计划逐文件生成代码。",
+`当前任务：生成 FILE: ${file.path}`,
+`文件描述：${file.description}`,
+_fileRoleHint?`文件角色提示：${_fileRoleHint}`:"",
+`\n整体计划：${plan.summary}`,
+`其他文件：\n${_otherFiles}`,
+_prevSummary?`\n已生成的文件（供参考接口/类名）：\n${_prevSummary}`:"",
+"\n输出格式：只输出这一个文件。先写 FILE: 路径，然后紧跟完整代码块。代码必须完整，不要省略任何部分。",
+_execGuides?`\nPROJECT_RULES:\n${_execGuides}`:""
+].filter(Boolean).join("\n");
+const msgs=[{role:"system",content:sysContent}];
+if(kt)msgs.push({role:"user",content:`当前工作区代码：\n${kt}\n\n---\n请生成 ${file.path}`});
+else msgs.push({role:"user",content:`请生成 ${file.path}：${file.description}\n\n原始需求：${gt}`});
+let _bodyStr=JSON.stringify({model:_editModel,messages:msgs,stream:!0,max_tokens:8192,tool_choice:"none"});
+if(_bodyStr.length>60000&&kt){
+const trimKt=kt.slice(0,2000);
+msgs[msgs.length-1]={role:"user",content:`工作区代码(已裁剪)：\n${trimKt}\n\n---\n请生成 ${file.path}`};
+_bodyStr=JSON.stringify({model:_editModel,messages:msgs,stream:!0,max_tokens:8192,tool_choice:"none"});
+}
+console.log("[PATCH] ExecPlanEt file",i+1,"/",plan.files.length,file.path,"body size=",_bodyStr.length);
+let resp;
 try{
-return await this.H.invokeFunction(async ie=>{
+resp=await ye("/chat/completions",{method:"POST",body:_bodyStr});
+}catch(err){
+console.error("[PATCH] ExecPlanEt fetch error for",file.path,err);
+results.skipped.push({path:file.path,reason:err?.message||"网络错误"});
+continue;
+}
+if(!resp.ok){
+let errText="";try{errText=(await resp.text()).slice(0,300)}catch{}
+results.skipped.push({path:file.path,reason:`API ${resp.status}: ${errText}`});
+continue;
+}
+const _fSi=ge();
+let _fText="";
+let _fPending="";
+let _fLastPaint=0;
+const _fFlush=()=>{if(!_fPending)return;P([{kind:"markdownContent",content:new we(_fPending)}]);_fPending="";_fLastPaint=Date.now();};
+const _fBi=resp.body?.getReader();
+if(_fBi){
+const _fDec=new TextDecoder;let _fBuf="";
+for(;;){
+const _fTO=new Promise(r=>setTimeout(()=>r({done:!0,timeout:!0}),120000));
+const{done:_fD,value:_fV,timeout:_fT}=await Promise.race([_fBi.read(),_fTO]);
+if(_fT||_fD){if(!_fD)_fBuf+=_fDec.decode();break;}
+_fBuf+=_fDec.decode(_fV,{stream:!0});
+const _fLines=_fBuf.split("\n");_fBuf=_fLines.pop()||"";
+for(const _fL of _fLines){
+if(!_fL.startsWith("data: "))continue;
+const _fP=_fL.slice(6).trim();
+if(!_fP||_fP==="[DONE]")continue;
+try{const _fJ=JSON.parse(_fP);const _fC=_fJ?.choices?.[0]?.delta?.content;if(_fC){
+const _fF=_fSi.push(_fC);
+if(_fF){_fText+=_fF;_fPending+=_fF;if(Date.now()-_fLastPaint>=150)_fFlush();}
+}}catch{}
+}
+}
+const _fFl=_fSi.flush();if(_fFl){_fText+=_fFl;_fPending+=_fFl;}
+_fFlush();
+}else{
+try{const _fJ2=await resp.json();_fText=fe(_fJ2?.choices?.[0]?.message?.content||"");}catch{try{_fText=fe(await resp.text())}catch{}}
+}
+if(!_fText){
+results.skipped.push({path:file.path,reason:"模型未返回内容"});
+continue;
+}
+const _fParsed=_parseMarkdownEdits(_fText);
+if(_fParsed.edits.length>0){
+let _fWriteOk=!1;
+try{
+await this.H.invokeFunction(async ie=>{
 const oe=ie.get(Qe).getWorkspace();
 const re=ie.get(Me);
 const pe=oe.folders[0];
-if(!pe)return{applied:[],skipped:[{path:"",reason:"No workspace folder available."}]};
-const ve=[],Le=[];
-const Je=Array.isArray(T?.edits)?T.edits.slice(0,12):[];
-for(const Mt of Je){
-const qt=((Mt?.path)||"").trim().replace(/\\/g,"/").replace(/^\/+/,"");
-if(!qt||qt.includes("..")){
-Le.push({path:qt||"(empty)",reason:"Invalid target path"});
-continue;
-}
+if(!pe)return;
+for(const ed of _fParsed.edits){
+const qt=(ed.path||"").trim().replace(/\\/g,"/").replace(/^\/+/,"");
+if(!qt||qt.includes("..")||!ed.content)continue;
 let Qt=pe.uri;
 for(const ni of qt.split("/").filter(Boolean))Qt=ze(Qt,ni);
-const Ot=String(Mt?.action||"write").toLowerCase();
+let existLines=1,lastCol=1;
 try{
-if(Ot==="delete"){
-await re.del(Qt,{recursive:!0,useTrash:!1});
-ve.push({path:qt,action:"delete"});
-continue;
+const ex=(await re.readFile(Qt)).value.toString();
+const lns=ex.split("\n");
+existLines=lns.length;
+lastCol=lns[lns.length-1].length+1;
+}catch{existLines=1;lastCol=1;}
+P([{kind:"textEditGroup",uri:Qt,edits:[[{range:{startLineNumber:1,startColumn:1,endLineNumber:existLines,endColumn:lastCol},text:ed.content}]],done:!0}]);
+_fWriteOk=!0;
+results.applied.push({path:qt,action:"write"});
 }
-if(typeof Mt?.content!="string"){
-Le.push({path:qt,reason:"Missing full file content"});
-continue;
-}
-try{await re.createFolder(Ai(Qt))}catch{}
-await re.writeFile(Qt,He.fromString(Mt.content));
-ve.push({path:qt,action:Ot==="create"?"create":"write"});
-}catch(ni){
-Le.push({path:qt,reason:ni?.message||"Unknown write error"});
-}
-}
-return{applied:ve,skipped:Le};
 });
-}catch(ie){
-console.warn("[PATCH] apply edit plan failed",ie);
-return{applied:[],skipped:[{path:"",reason:ie?.message||"Failed to apply edit plan"}]};
+}catch(eg){
+console.warn("[PATCH] ExecPlanEt textEditGroup failed for",file.path,eg);
 }
+if(!_fWriteOk){
+try{
+const applyResult=await Rt({edits:_fParsed.edits});
+for(const a of(applyResult?.applied||[]))results.applied.push(a);
+for(const s of(applyResult?.skipped||[]))results.skipped.push(s);
+}catch(rtErr){
+console.warn("[PATCH] ExecPlanEt Rt fallback failed",rtErr);
+results.skipped.push({path:file.path,reason:"写入失败"});
+}
+}
+for(const ed of _fParsed.edits){
+const lines=(ed.content||"").split("\n");
+const excerpt=lines.slice(0,50).join("\n");
+generatedSummaries.push({path:ed.path,excerpt});
+}
+P([{kind:"markdownContent",content:new we(`✅ \`${file.path}\` 已写入\n`)}]);
+}else{
+results.skipped.push({path:file.path,reason:"未解析到文件内容"});
+P([{kind:"markdownContent",content:new we(`⚠️ \`${file.path}\` 生成失败，跳过\n`)}]);
+}
+}
+const po=results.applied.map(r=>`- ✅ ${r.path}`).join("\n");
+const ps=results.skipped.map(r=>`- ❌ ${r.path}: ${r.reason}`).join("\n");
+P([{kind:"markdownContent",content:new we(`\n---\n**全部完成 (${results.applied.length}/${plan.files.length})**\n${po?`\n已写入：\n${po}`:""}${ps?`\n未成功：\n${ps}`:""}\n`)}]);
+return results;
 };
-let _isEdit=!1;
-const CONFIRM_EXEC=/^(好的|开始|ok|确认|执行|按.{0,8}方案|按.{0,8}来|go|start|开始吧|就这样|没问题|可以|确定|do it|proceed|开干|搞吧|冲)\s*[。.！!]?\s*$/i;
-if(!rt||rt.length<6||VIBE_STATUS_QUERY(rt)||(VIBE_DIAG_QUERY(rt)&&!/请|直接|帮我|麻烦|顺手/i.test(rt))||!/[\u4e00-\u9fff]{4,}|[a-z]{6,}/i.test(rt)){_isEdit=!1;}
-else if(CONFIRM_EXEC.test(rt.trim())&&Q?.length>0){_isEdit=!0;console.log("[PATCH] user confirmed, entering edit mode");}
-else if(VIBE_EDIT_REQUEST(rt)){
-if(Q?.length>0){_isEdit=!0;}
-else{_isEdit=!1;console.log("[PATCH] first edit request, routing to chat for clarification");}
+if(_doPlanExec){
+P([{kind:"markdownContent",content:new we("📋 计划已确认，开始逐文件生成...\n")}]);
+await ExecPlanEt(_doPlanExec);
+return{timings:{firstProgress:0,totalElapsed:Date.now()-te}};
 }
-else{P([{kind:"markdownContent",content:new we("正在分析请求...\n")}]);_isEdit=await _classifyIntent(rt,Q);if(_isEdit&&(!Q||Q.length===0)){_isEdit=!1;console.log("[PATCH] classifier said EDIT but no history, routing to chat");}}
-if(_isEdit){
-P([{kind:"markdownContent",content:new we("正在分析代码并生成修改方案...\n")}]);
-let T=await Et();
-if(T?.error&&/invalid edit plan/i.test(T.error)){
-P([{kind:"markdownContent",content:new we("首次生成格式不符，正在重试...\n")}]);
-T=await Et();
+if(_doEditApply){
+P([{kind:"markdownContent",content:new we("正在应用修改...\n")}]);
+const pr=await Rt(_doEditApply);
+const po=(pr?.applied||[]).map(r=>`- ✅ ${r.path} (${r.action})`).join("\n");
+const ps=(pr?.skipped||[]).map(r=>`- ❌ ${r.path}: ${r.reason}`).join("\n");
+const pm=[po?`已写入文件：\n${po}`:"",ps?`未写入：\n${ps}`:""].filter(Boolean).join("\n\n");
+P([{kind:"markdownContent",content:new we(pm||"操作完成。")}]);
+return{timings:{firstProgress:0,totalElapsed:Date.now()-te}};
 }
-if(!T?.error&&Array.isArray(T?.edits)&&T.edits.length>0){
-P([{kind:"markdownContent",content:new we(`**${T.summary||"代码修改方案"}**\n`)}]);
+const _needsCodeModel=VIBE_EDIT_REQUEST(rt)||/确认|开始|直接|go|start|ok/i.test(rt);
+const _uniModel=_resolveModel(_needsCodeModel);
+const vibeCtx2=vibeContextState.context?(vibeContextState.context.length>2000?vibeContextState.context.slice(0,2000)+"...":vibeContextState.context):"";
+const _uniSys=[
+"你是集成在 VS Code 风格 IDE 里的中文编程助手。你可以回答问题，也可以直接修改代码文件。",
+"",
+"## 你的能力",
+"你能自主判断用户的意图并选择合适的响应方式：",
+"",
+"### 模式 A：对话（用户在提问/讨论/看代码/看报错）",
+"直接用 markdown 回答。不要输出 FILE 块。",
+"",
+"### 模式 B：代码生成（用户确认了方案，或明确要求改代码/写代码/修bug）",
+"按以下格式输出文件：",
+"## 总结：简短描述",
+"FILE: src/相对路径/Xxx.java",
+"```java",
+"// 文件完整内容",
+"```",
+"代码块必须包含文件完整内容，不要省略、不要用 // ... 代替。不需要改的文件不要输出。",
+"",
+"### 模式 C：方案规划（用户描述了一个新需求，需要创建多个文件）",
+"先输出实现方案（不写代码），让用户确认后再生成：",
+"## 实现方案：简短描述",
+"1. `文件路径` — 文件职责说明",
+"2. `文件路径` — 文件职责说明",
+"请用户确认后开始生成。",
+"",
+"## 重要规则",
+"- 如果上一轮你已经输出了方案，用户说「确认/开始/好的/ok」，直接进入模式 B 生成代码，不要再做方案",
+"- 如果用户说「改一下/修复/直接改」等，直接进入模式 B",
+"- 如果用户只是在看代码、问问题、看报错，用模式 A 回答",
+"- 你自己判断，不需要用户告诉你用哪个模式",
+"",
+"## 截图/附件处理",
+"如果用户消息包含 ATTACHED_IMAGE_CONTEXT / OCR_TEXT，视为用户附带截图的文字内容。",
+"如果包含 OCR_DIAGNOSTICS，优先按诊断结构回答：先列关键错误，再推断。",
+"只要 ATTACHED_IMAGE_CONTEXT 存在，不要说「我看不到截图」。",
+"",
+"## 其他",
+"- 默认中文回答",
+"- 不要输出 <think>、TOOL_CALL、minimax:tool_call 等标记",
+"- 不要输出伪工具调用 JSON",
+"- 不要说无法访问文件，基于已提供的代码上下文回答",
+"- 需求澄清时参考 SKILL_GUIDES 的前置条件，追问缺失信息，不要自己编造",
+vibeCtx2?`\nVIBE CODING CONTEXT (workspace=${vibeContextState.workspaceId||"?"}):\n${vibeCtx2}`:"",
+projectGuides?`\nPROJECT_RULES:\n${projectGuides}`:""
+].filter(Boolean).join("\n");
+const _uniMsgs=[{role:"system",content:_uniSys}];
+const _uniRecentQ=(Q||[]).slice(-6);
+for(const _uq of _uniRecentQ){
+const _uqm=fe(ue(_uq?.request?.message)||ue(_uq?.request?.prompt)||"");
+if(_uqm)_uniMsgs.push({role:"user",content:_uqm.slice(0,1500)});
+const _uqr=fe(ue(_uq?.response));
+if(_uqr)_uniMsgs.push({role:"assistant",content:_uqr.slice(0,2500)});
+}
+const _uniUserMsg=[kt?`当前工作区代码：\n${kt}\n\n---\n用户消息：`:"",gt].filter(Boolean).join("\n");
+if(_uniUserMsg)_uniMsgs.push({role:"user",content:_uniUserMsg});
+const _uniMaxTokens=_needsCodeModel?16384:8192;
+let _uniBody=JSON.stringify({model:_uniModel,messages:_uniMsgs,stream:!0,max_tokens:_uniMaxTokens,tool_choice:"none"});
+if(_uniBody.length>60000){
+console.warn("[PATCH] unified body too large:",_uniBody.length,"trimming");
+const _trimMsgs=[_uniMsgs[0],..._uniMsgs.slice(Math.max(1,_uniMsgs.length-7))];
+if(kt&&kt.length>2000){const _tk=kt.slice(0,2000);_trimMsgs[_trimMsgs.length-1]={role:"user",content:`工作区代码(已裁剪)：\n${_tk}\n\n---\n用户消息：\n${gt}`};}
+_uniBody=JSON.stringify({model:_uniModel,messages:_trimMsgs,stream:!0,max_tokens:_uniMaxTokens,tool_choice:"none"});
+}
+console.log("[PATCH] unified request: model=",_uniModel,"needsCode=",_needsCodeModel,"body=",_uniBody.length,"msgs=",_uniMsgs.length);
+const wi=new AbortController;
+X?.onCancellationRequested?.(()=>wi.abort());
+let yi;
+try{
+yi=await ye("/chat/completions",{method:"POST",body:_uniBody,signal:wi.signal});
+}catch(T){
+console.error("[PATCH] unified fetch error:",T);
+return{errorDetails:{message:`[${_uniModel}] 请求失败: ${T?.message||"网络错误"}`}};
+}
+if(!yi.ok){
+let T="";try{T=(await yi.text()).slice(0,500)}catch{}
+return{errorDetails:{message:`[${_uniModel}] API ${yi.status}: ${T||"无详情"}`}};
+}
+const Si=ge();
+let _uniText="";
+let _pendingChunks="";
+let _lastPaint=0;
+let _thinkHintShown=!1;
+let _totalChunksReceived=0;
+let _totalChunksOutput=0;
+const _paintThrottle=120;
+const _flushChunks=()=>{if(!_pendingChunks)return;P([{kind:"markdownContent",content:new we(_pendingChunks)}]);_pendingChunks="";_lastPaint=Date.now();};
+const bi=yi.body?.getReader();
+if(!bi){
+let T="";
+try{const ie=await yi.json();T=fe(ie?.choices?.[0]?.message?.content||"");}catch{}
+if(T){P([{kind:"markdownContent",content:new we(T)}]);return{timings:{firstProgress:0,totalElapsed:Date.now()-te}};}
+return{errorDetails:{message:"Model returned an empty response."}};
+}
+const vi=new TextDecoder;
+let xi="",Ii;
+let _lastDataAt=Date.now();
+const _STREAM_TIMEOUT=120000;
+for(;;){
+const _readPromise=bi.read();
+const _timeoutPromise=new Promise(r=>setTimeout(()=>r({done:!0,value:void 0,timeout:!0}),_STREAM_TIMEOUT));
+const{done:T,value:ie,timeout:_timedOut}=await Promise.race([_readPromise,_timeoutPromise]);
+if(_timedOut){console.warn("[PATCH] stream timeout");break;}
+if(T){xi+=vi.decode();break;}
+if(X?.isCancellationRequested){wi.abort();break;}
+_lastDataAt=Date.now();
+xi+=vi.decode(ie,{stream:!0});
+const oe=xi.split("\n");xi=oe.pop()||"";
+for(const re of oe){
+if(!re.startsWith("data: "))continue;
+const pe=re.slice(6).trim();
+if(!pe||pe==="[DONE]")continue;
+let ve;try{ve=JSON.parse(pe)}catch{continue}
+const Le=ve?.choices?.[0]?.delta?.content||ve?.choices?.[0]?.message?.content;
+if(!Le)continue;
+_totalChunksReceived++;
+const Je=Si.push(Le);
+if(!Je){if(!_thinkHintShown&&_totalChunksReceived>3&&_totalChunksOutput===0){_thinkHintShown=!0;P([{kind:"markdownContent",content:new we("*🧠 模型正在深度思考中...*\n\n")}]);}continue;}
+_totalChunksOutput++;
+_uniText+=Je;_pendingChunks+=Je;
+if(Date.now()-_lastPaint>=_paintThrottle)_flushChunks();
+if(Ii===void 0)Ii=Date.now()-te;
+_lastDataAt=Date.now();
+}
+if(_uniText&&Date.now()-_lastDataAt>30000)break;
+}
+const Di=Si.flush();
+if(Di){_uniText+=Di;_pendingChunks+=Di;}
+_flushChunks();
+if(!_uniText)return{errorDetails:{message:"Model did not return a response."}};
+const _uniEdits=_parseMarkdownEdits(_uniText);
+if(_uniEdits.edits.length>0){
+console.log("[PATCH] unified: detected",_uniEdits.edits.length,"FILE blocks, applying edits");
 let editGroupOk=!1;
 try{
 await this.H.invokeFunction(async ie=>{
@@ -544,7 +1069,7 @@ const oe=ie.get(Qe).getWorkspace();
 const re=ie.get(Me);
 const pe=oe.folders[0];
 if(!pe)return;
-for(const ed of T.edits.slice(0,12)){
+for(const ed of _uniEdits.edits.slice(0,12)){
 const qt=(ed.path||"").trim().replace(/\\/g,"/").replace(/^\/+/,"");
 if(!qt||qt.includes("..")||ed.action==="delete"||!ed.content)continue;
 let Qt=pe.uri;
@@ -564,131 +1089,21 @@ editGroupOk=!0;
 console.warn("[PATCH] textEditGroup failed, falling back",eg);
 }
 if(!editGroupOk){
-globalThis.__pendingEdits=T;
-for(const ed of T.edits.slice(0,6)){
-if(ed.action==="delete"||!ed.content)continue;
-const lang=ed.path?.match(/\.(\w+)$/)?.[1]||"text";
-P([{kind:"markdownContent",content:new we(`📝 \`${ed.path}\`\n\`\`\`${lang}\n${ed.content.slice(0,1500)}\n\`\`\`\n`)}]);
-}
+globalThis.__pendingEdits=_uniEdits;
 P([{kind:"markdownContent",content:new we(`\n---\n输入 **确认** 应用修改，或 **取消** 放弃。\n`)}]);
 }
-return{timings:{firstProgress:0,totalElapsed:Date.now()-te}};
+return{timings:{firstProgress:Ii,totalElapsed:Date.now()-te}};
 }
-T?.error&&P([{kind:"markdownContent",content:new we(`自动改代码未成功，已回退为普通对话模式：${T.error}\n`)}]);
+const _uniPlan=_parsePlan(_uniText);
+if(_uniPlan.files.length>0){
+console.log("[PATCH] unified: detected plan with",_uniPlan.files.length,"files");
+_uniPlan.userMsg=gt;
+globalThis.__pendingPlan=_uniPlan;
+P([{kind:"markdownContent",content:new we(`\n---\n输入 **确认** 开始逐文件生成代码，或 **取消** 放弃。也可以回复调整要求。\n`)}]);
+return{timings:{firstProgress:Ii,totalElapsed:Date.now()-te}};
 }
-const li=[{
-role:"system",
-content:[
-"你是一个集成在 VS Code 风格 IDE 里的中文编程助手。",
-"用户消息中可能包含当前工作区的代码文件内容，直接基于这些代码回答或修改。",
-"如果系统消息里附带了 VIBE CODING CONTEXT，也把它视为当前这轮开发任务已经发生过的对话上下文，回答时要自然承接，不要重复从零开始。",
-"如果用户消息里包含 ATTACHED_IMAGE_CONTEXT / OCR_TEXT，请把它视为用户附带截图里真实可读的文字内容。",
-"如果用户消息里包含 OCR_DIAGNOSTICS，请优先按「截图诊断」结构回答：先列 1-3 条关键错误，再决定是否补充源码推断。",
-"如果 OCR_DIAGNOSTICS 同时出现 `Unexpected token '<'` 与 `undefined` / `zh-CN` / `default`，优先判断为静态资源或构建产物路径错误，HTML 被当成 JS 加载，其余多为连锁报错。",
-"当你引用截图内容时，请明确写出「根据截图 OCR 可见」或「根据截图可见报错」。",
-"不要把 OCR 文字直接当成源码事实；如果根因需要源码佐证，请先说截图里明确可见的报错，再补充「结合当前源码推断」。",
-"只要 ATTACHED_IMAGE_CONTEXT 存在，就不要再说「我看不到截图」或「我无法看到附件」。",
-"像「修复了吗」「好了没」「为什么报错」「看截图里的错误」这类请求，优先做诊断和状态说明，不要冒充已经改过代码。",
-"不要说你无法访问本地文件；如果上下文还不够，请明确指出还需要哪些文件路径或模块名。",
-"绝对不要输出任何伪工具调用，包括 {\"tool\":\"ReadFile\"} 之类的 JSON 对象。你没有工具可用，直接基于已提供的 FILE_LIST 和 FILE_EXCERPTS 里的代码来回答。",
-"如果用户提到某个文件名且该文件的内容已在 SELECTED_FILE_EXCERPTS 中，直接引用该内容作答，不要说需要读取。",
-"默认使用中文回答。",
-"不要输出 <think>、</think>、内部推理、TOOL_CALL 标记、minimax:tool_call、<invoke> 或任何伪造工具调用。直接用文字回答，不要模拟函数调用。",
-"回答优先基于提供的代码上下文，给出直接结论。",
-"当用户描述一个新的开发需求（而非单纯提问或看代码）时，遵循以下工作流：",
-"1. 需求澄清：参考 SKILL_GUIDES 中的前置条件（如有），追问缺失的关键信息（模块名、表名、字段列表、basePackage 等），不要自己编造",
-"2. 方案确认：信息充足后，用 ## 实现方案 标题输出文件清单和每个文件的职责",
-"3. 等待确认：告诉用户「确认后我将开始生成代码」，不要自行跳过",
-"只有用户只是提问、看报错、讨论代码时，才直接回答，不走工作流。",
-vibeContextState.context?`\n下面是从 aPaaS Builder / 睿鲸 Vibe Coding 页面带入的会话上下文，请先理解并衔接它：\nVIBE_WORKSPACE_ID: ${vibeContextState.workspaceId||"unknown"}\nVIBE_CONVERSATION_ID: ${vibeContextState.conversationId||"unknown"}\n${vibeContextState.context}`:""
-].join("\n")
-}];
-for(const T of Q||[]){
-const ie=fe(ue(T?.request?.message)||ue(T?.request?.prompt)||"");
-if(ie)li.push({role:"user",content:ie});
-const oe=fe(ue(T?.response));
-if(oe)li.push({role:"assistant",content:oe});
-}
-const chatUserMsg=[kt?`以下是当前工作区的代码文件，你可以直接引用这些内容来回答：\n${kt}\n\n---\n用户问题：`:"",gt].filter(Boolean).join("\n");
-if(chatUserMsg)li.push({role:"user",content:chatUserMsg});
-const wi=new AbortController;
-X?.onCancellationRequested?.(()=>wi.abort());
-let yi;
-try{
-yi=await ye("/chat/completions",{
-method:"POST",
-body:JSON.stringify({
-model:de,
-messages:li,
-stream:!0,
-max_tokens:8192,
-tool_choice:"none"
-}),
-signal:wi.signal
-});
-}catch(T){
-console.error("[PATCH] chat fetch error:",T);
-return{errorDetails:{message:`[${de}] 请求失败: ${T?.message||"网络错误"}`}};
-}
-if(!yi.ok){
-let T="";
-try{T=(await yi.text()).slice(0,500)}catch{}
-console.error("[PATCH] chat API error:",yi.status,T);
-return{errorDetails:{message:`[${de}] API ${yi.status}: ${T||"无详情"}`}};
-}
-const Si=ge();
-let _pendingChunks="";
-let _lastPaint=0;
-const _paintThrottle=120;
-const _flushChunks=()=>{if(!_pendingChunks)return;P([{kind:"markdownContent",content:new we(_pendingChunks)}]);_pendingChunks="";_lastPaint=Date.now();};
-const bi=yi.body?.getReader();
-if(!bi){
-let T="";
-try{
-const ie=await yi.json();
-T=fe(ie?.choices?.[0]?.message?.content||"");
-}catch{}
-if(T){
-P([{kind:"markdownContent",content:new we(T)}]);
-return{timings:{firstProgress:0,totalElapsed:Date.now()-te}};
-}
-return{errorDetails:{message:"Model returned an empty response."}};
-}
-const vi=new TextDecoder;
-let xi="",Ci="",Ii;
-for(;;){
-const{done:T,value:ie}=await bi.read();
-if(T){
-xi+=vi.decode();
-break;
-}
-if(X?.isCancellationRequested){
-wi.abort();
-break;
-}
-xi+=vi.decode(ie,{stream:!0});
-const oe=xi.split("\n");
-xi=oe.pop()||"";
-for(const re of oe){
-if(!re.startsWith("data: "))continue;
-const pe=re.slice(6).trim();
-if(!pe||pe==="[DONE]")continue;
-let ve;
-try{ve=JSON.parse(pe)}catch{continue}
-const Le=ve?.choices?.[0]?.delta?.content||ve?.choices?.[0]?.message?.content;
-if(!Le)continue;
-const Je=Si.push(Le);
-if(!Je)continue;
-Ci+=Je;
-_pendingChunks+=Je;
-if(Date.now()-_lastPaint>=_paintThrottle)_flushChunks();
-if(Ii===void 0)Ii=Date.now()-te;
-}
-}
-const Di=Si.flush();
-if(Di){Ci+=Di;_pendingChunks+=Di;}
-_flushChunks();
-return Ci?{timings:{firstProgress:Ii,totalElapsed:Date.now()-te}}:{errorDetails:{message:"Model did not return a response."}};
+console.log("[PATCH] unified: plain chat response, len=",_uniText.length);
+return{timings:{firstProgress:Ii,totalElapsed:Date.now()-te}};
 }
 };
 y.__apaasMiniMaxDynamicAgentDisposer=this.L.registerDynamicAgent(S,k);
@@ -696,7 +1111,7 @@ y.__apaasMiniMaxHandler=k;
 console.log("[PATCH] registered MiniMax dynamic agent fallback");
 if(!y.__apaasModelSelectorInit){
 y.__apaasModelSelectorInit=!0;
-const _msCSS=`.chat-input-picker-item,.model-picker-badge,.copilot-chat-model-picker-widget,.chat-model-picker{display:none!important;}.apaas-inline-controls{display:inline-flex;align-items:center;gap:2px;margin-left:4px;position:relative;}.apaas-upload-btn{background:none;border:none;color:var(--vscode-descriptionForeground);cursor:pointer;font-size:13px;padding:2px 4px;border-radius:4px;line-height:1;}.apaas-upload-btn:hover{color:var(--vscode-foreground);}.apaas-model-btn{display:inline-flex;align-items:center;gap:3px;background:none;border:none;border-radius:4px;color:var(--vscode-descriptionForeground);font-size:11px;cursor:pointer;padding:2px 6px;font-family:inherit;}.apaas-model-btn:hover{background:var(--vscode-toolbar-hoverBackground);color:var(--vscode-foreground);}.apaas-model-dropdown{display:none;position:fixed;min-width:260px;max-height:400px;overflow-y:auto;background:var(--vscode-menu-background,var(--vscode-quickInput-background));border:1px solid var(--vscode-menu-border,var(--vscode-widget-border));border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,0.5);padding:4px 0;z-index:99999;}.apaas-model-dropdown.open{display:block;}.apaas-dd-section{padding:4px 12px;font-size:10px;color:var(--vscode-descriptionForeground);text-transform:uppercase;letter-spacing:0.5px;}.apaas-dd-auto{display:flex;align-items:center;justify-content:space-between;padding:6px 12px;cursor:pointer;font-size:12px;color:var(--vscode-foreground);}.apaas-dd-auto:hover{background:var(--vscode-list-hoverBackground);}.apaas-dd-auto-sw{width:28px;height:16px;border-radius:8px;background:var(--vscode-input-border,#555);position:relative;transition:background 0.2s;cursor:pointer;}.apaas-dd-auto-sw.on{background:var(--vscode-terminal-ansiGreen,#89d185);}.apaas-dd-auto-sw::after{content:"";position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:#fff;transition:transform 0.2s;}.apaas-dd-auto-sw.on::after{transform:translateX(12px);}.apaas-model-item{display:flex;align-items:center;padding:6px 12px;cursor:pointer;font-size:12px;color:var(--vscode-foreground);gap:8px;}.apaas-model-item:hover{background:var(--vscode-list-hoverBackground);}.apaas-model-item .check{width:16px;text-align:center;color:var(--vscode-terminal-ansiGreen,#89d185);font-size:13px;flex-shrink:0;}.apaas-model-item .mname{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}.apaas-model-item .mprov{font-size:10px;color:var(--vscode-descriptionForeground);flex-shrink:0;}`;
+const _msCSS=`.chat-input-picker-item,.model-picker-badge,.copilot-chat-model-picker-widget,.chat-model-picker{display:none!important;}.apaas-inline-controls{display:inline-flex;align-items:center;gap:2px;margin-left:4px;position:relative;}.apaas-upload-btn{background:none;border:none;color:var(--vscode-descriptionForeground);cursor:pointer;font-size:13px;padding:2px 4px;border-radius:4px;line-height:1;}.apaas-upload-btn:hover{color:var(--vscode-foreground);}.apaas-model-btn{display:inline-flex;align-items:center;gap:3px;background:none;border:none;border-radius:4px;color:var(--vscode-descriptionForeground);font-size:11px;cursor:pointer;padding:2px 6px;font-family:inherit;}.apaas-model-btn:hover{background:var(--vscode-toolbar-hoverBackground);color:var(--vscode-foreground);}.apaas-model-dropdown{display:none;position:fixed;min-width:260px;max-height:400px;overflow-y:auto;background:var(--vscode-menu-background,var(--vscode-quickInput-background));border:1px solid var(--vscode-menu-border,var(--vscode-widget-border));border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,0.5);padding:4px 0;z-index:99999;}.apaas-model-dropdown.open{display:block;}.apaas-dd-section{padding:4px 12px;font-size:10px;color:var(--vscode-descriptionForeground);text-transform:uppercase;letter-spacing:0.5px;}.apaas-dd-auto{display:flex;align-items:center;justify-content:space-between;padding:6px 12px;cursor:pointer;font-size:12px;color:var(--vscode-foreground);}.apaas-dd-auto:hover{background:var(--vscode-list-hoverBackground);}.apaas-dd-auto-sw{width:28px;height:16px;border-radius:8px;background:var(--vscode-input-border,#555);position:relative;transition:background 0.2s;cursor:pointer;}.apaas-dd-auto-sw.on{background:var(--vscode-terminal-ansiGreen,#89d185);}.apaas-dd-auto-sw::after{content:"";position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:#fff;transition:transform 0.2s;}.apaas-dd-auto-sw.on::after{transform:translateX(12px);}.apaas-model-item{display:flex;align-items:center;padding:6px 12px;cursor:pointer;font-size:12px;color:var(--vscode-foreground);gap:8px;}.apaas-model-item:hover{background:var(--vscode-list-hoverBackground);}.apaas-model-item .check{width:16px;text-align:center;color:var(--vscode-terminal-ansiGreen,#89d185);font-size:13px;flex-shrink:0;}.apaas-model-item .mname{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}.apaas-model-item .mprov{font-size:10px;color:var(--vscode-descriptionForeground);flex-shrink:0;}.apaas-upload-tags{display:flex;flex-wrap:wrap;gap:4px;padding:4px 8px;border-bottom:1px solid var(--vscode-widget-border,#333);}.apaas-upload-tag{display:inline-flex;align-items:center;gap:4px;background:var(--vscode-badge-background,#4d4d4d);color:var(--vscode-badge-foreground,#fff);font-size:11px;padding:2px 8px;border-radius:10px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}.apaas-upload-tag-x{cursor:pointer;font-size:13px;font-weight:bold;margin-left:2px;opacity:0.7;}.apaas-upload-tag-x:hover{opacity:1;}`;
 const _msFetchModels=async()=>{
 if(y.__apaasModelSelector.loaded)return;
 try{
@@ -725,23 +1140,39 @@ if(!document.getElementById("apaas-model-selector-styles")){const _st=document.c
 const _wrap=document.createElement("span");_wrap.className="apaas-inline-controls";
 const _isAutoMode=()=>{try{return localStorage.getItem("apaas-auto-mode")!=="false";}catch{return!0;}};
 const _uploadBtn=document.createElement("button");_uploadBtn.className="apaas-upload-btn";_uploadBtn.type="button";_uploadBtn.innerHTML="\uD83D\uDCCE";_uploadBtn.title="\u4e0a\u4f20\u6587\u4ef6\u5230\u5de5\u4f5c\u533a";
+if(!y.__apaasUploadedFiles)y.__apaasUploadedFiles=[];
+const _renderUploadTags=()=>{
+let _ct=document.querySelector(".apaas-upload-tags");
+if(!y.__apaasUploadedFiles.length){if(_ct)_ct.remove();return;}
+if(!_ct){_ct=document.createElement("div");_ct.className="apaas-upload-tags";
+const _inp=document.querySelector(".interactive-input-part")||document.querySelector(".interactive-input-editor");
+if(_inp)_inp.parentElement.insertBefore(_ct,_inp);else return;}
+_ct.innerHTML="";
+y.__apaasUploadedFiles.forEach((uf,idx)=>{
+const _tag=document.createElement("span");_tag.className="apaas-upload-tag";
+_tag.innerHTML=`\uD83D\uDCCE ${uf.name.replace(/</g,"&lt;")} <span class="apaas-upload-tag-x" data-idx="${idx}">\u00D7</span>`;
+_tag.querySelector(".apaas-upload-tag-x").addEventListener("click",ev=>{ev.stopPropagation();y.__apaasUploadedFiles.splice(idx,1);_renderUploadTags();});
+_ct.appendChild(_tag);});
+};
 _uploadBtn.addEventListener("click",()=>{
-const _fi=document.createElement("input");_fi.type="file";_fi.onchange=async(ev)=>{
-const _f=ev.target.files?.[0];if(!_f)return;
-const _fd=new FormData();_fd.append("file",_f);
+const _fi=document.createElement("input");_fi.type="file";_fi.multiple=!0;_fi.onchange=async(ev)=>{
+const _files=Array.from(ev.target.files||[]);if(!_files.length)return;
 const _vc=y.__vibeCtx||{};
 const _wsId=_vc.workspaceId||"";
 const _ideToken=_vc.ideToken||"";
 const _apiOrigin=(()=>{try{const u=new URL(globalThis.location?.href||"");const p=(u.pathname||"").replace(/\/+$/,"");const ap=p.endsWith("/ide")?p.slice(0,-4):"";return ap?u.origin+ap:u.origin;}catch{return"";}})();
 if(!_apiOrigin){console.warn("[PATCH] upload: no API origin");return;}
-const _uploadUrl=_apiOrigin+"/api/coding/upload"+(_wsId?"?workspace_id="+encodeURIComponent(_wsId):"");
 const _authHdrs=_ideToken?{"X-Vibe-IDE-Token":_ideToken,"Authorization":"Bearer "+_ideToken}:{};
+for(const _f of _files){
+const _fd=new FormData();_fd.append("file",_f);
+const _uploadUrl=_apiOrigin+"/api/coding/upload"+(_wsId?"?workspace_id="+encodeURIComponent(_wsId):"");
 try{const _r=await fetch(_uploadUrl,{method:"POST",body:_fd,headers:_authHdrs});
 if(_r.ok){const _j=await _r.json();console.log("[PATCH] uploaded file:",_j);
-const _ta=document.querySelector(".interactive-input-editor textarea");
-if(_ta){_ta.focus();document.execCommand("insertText",!1,`\n[\u5DF2\u4E0A\u4F20\u6587\u4EF6: ${_f.name}]`);}
+y.__apaasUploadedFiles.push({name:_f.name,path:_j.file_path||"",content:_j.content||""});
 }else{console.warn("[PATCH] upload failed:",_r.status);}
 }catch(_e){console.warn("[PATCH] upload error:",_e);}
+}
+_renderUploadTags();
 };_fi.click();
 });
 const _btn=document.createElement("button");_btn.className="apaas-model-btn";_btn.type="button";
@@ -786,9 +1217,10 @@ _tryInject();
 const _msObs=new MutationObserver(()=>{if(y.__apaasModelSelector.injected&&!document.querySelector(".apaas-inline-controls")){y.__apaasModelSelector.injected=!1;_msInject();}});
 _msObs.observe(document.body,{childList:!0,subtree:!0});
 // ---- Auto-send initial message from vibe_context ----
-if(vibeContextState.context&&!y.__apaasAutoSent){
+const _vc0=y.__vibeCtx||(()=>{try{const _u=new URL(globalThis.location?.href||"http://localhost/");return{context:(_u.searchParams.get("vibe_context")||"").trim(),workspaceId:_u.searchParams.get("vibe_workspace_id")||""};}catch{return{context:"",workspaceId:""};}})();
+if(_vc0.context&&!y.__apaasAutoSent){
 y.__apaasAutoSent=!0;
-let _msg=vibeContextState.context;
+let _msg=_vc0.context;
 const _um=_msg.match(/^用户[:：]\s*(.+)/s);
 if(_um)_msg=_um[1].trim();
 if(_msg){
@@ -828,8 +1260,8 @@ await this.G.activateById(t.extensionId,{activationEvent:"onChatParticipant:"+t.
 console.warn("[PATCH] activateById failed, will use dynamic fallback",o);
 }
 }
-if(!this.L.getActivatedAgents().find(o=>o.id===t.id)){
 await n();
+if(!this.L.getActivatedAgents().find(o=>o.id===t.id)){
 const o=this.L.getActivatedAgents().find(r=>r.id===t.id);
 if(!o)throw new sa("No default agent registered");
 }

@@ -1,0 +1,66 @@
+{
+  "name": "ruijing-ai",
+  "displayName": "睿鲸AI",
+  "description": "AI Coding Assistant for aPaaS Builder",
+  "publisher": "apaas-builder",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.93.0"
+  },
+  "categories": ["AI", "Chat"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "chatParticipants": [
+      {
+        "id": "ruijing-ai.chat",
+        "name": "ruijing",
+        "fullName": "睿鲸AI",
+        "description": "低代码平台 AI 编程助手",
+        "isDefault": true
+      }
+    ],
+    "commands": [
+      {
+        "command": "ruijing-ai.selectModel",
+        "title": "睿鲸AI: 选择模型"
+      }
+    ],
+    "configuration": {
+      "title": "睿鲸AI",
+      "properties": {
+        "ruijing-ai.apiBase": {
+          "type": "string",
+          "default": "",
+          "description": "后端 API 基础 URL"
+        },
+        "ruijing-ai.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "API Key（直连模式）"
+        },
+        "ruijing-ai.model": {
+          "type": "string",
+          "default": "MiniMax-M2.7",
+          "description": "默认模型"
+        },
+        "ruijing-ai.autoMode": {
+          "type": "boolean",
+          "default": true,
+          "description": "自动选择模型（Edit 用 Claude，Chat 用 Qwen）"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "package": "npx @vscode/vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.93.0",
+    "@types/node": "^20.0.0",
+    "esbuild": "^0.21.0",
+    "typescript": "^5.4.0"
+  }
+}

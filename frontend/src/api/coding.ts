@@ -36,6 +36,12 @@ export interface CodingMessage {
   created_at: string
 }
 
+export interface WorkspaceConversation {
+  conversation_id: number | null
+  selected_llm_config_id: number | null
+  messages: CodingMessage[]
+}
+
 export interface WorkspaceInfo {
   id: string
   project_id?: number
@@ -164,7 +170,7 @@ export const codingApi = {
 
   /** 获取工作区关联的对话 */
   getWorkspaceConversation(wsId: string) {
-    return request.get<any, { conversation_id: number | null; messages: CodingMessage[] }>(`/coding/workspace/${wsId}/conversation`)
+    return request.get<any, WorkspaceConversation>(`/coding/workspace/${wsId}/conversation`)
   },
 
   /** 删除工作区 */

@@ -2,7 +2,7 @@
 from __future__ import annotations
 import logging
 from typing import Annotated, Optional
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,7 +19,7 @@ router = APIRouter(prefix="/llm-configs", tags=["llm-configs"])
 # ── Provider presets ──
 PROVIDER_PRESETS = {
     "minimax": {"base_url": "https://api.minimax.chat/v1", "models": ["MiniMax-M2.7", "MiniMax-M1"]},
-    "qwen": {"base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "models": ["qwen-max", "qwen-plus", "qwen-turbo"]},
+    "qwen": {"base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "models": ["qwen3.5-plus", "qwen-max", "qwen-plus", "qwen-turbo", "qwen3-coder-next"]},
     "deepseek": {"base_url": "https://api.deepseek.com/v1", "models": ["deepseek-chat", "deepseek-coder"]},
     "zhipu": {"base_url": "https://open.bigmodel.cn/api/paas/v4", "models": ["glm-4-plus", "glm-4"]},
     "moonshot": {"base_url": "https://api.moonshot.cn/v1", "models": ["moonshot-v1-128k", "moonshot-v1-32k"]},
@@ -54,6 +54,10 @@ class LLMConfigUpdate(BaseModel):
     status: Optional[str] = None
 
 
+class LLMConfigStatusUpdate(BaseModel):
+    status: str
+
+
 class LLMConfigResponse(BaseModel):
     id: int
     config_name: str
@@ -86,6 +90,48 @@ class LLMConfigResponse(BaseModel):
         )
 
 
+class LLMConfigOptionResponse(BaseModel):
+    id: int
+    config_name: str
+    provider: str
+    model: str
+    purpose: str
+    is_default: bool
+
+    @staticmethod
+    def from_db(row: LLMConfig) -> "LLMConfigOptionResponse":
+        return LLMConfigOptionResponse(
+            id=row.id,
+            config_name=row.config_name,
+            provider=row.provider,
+            model=row.model,
+            purpose=row.purpose,
+            is_default=row.is_default,
+        )
+
+
+def build_llm_chat_completions_url(base_url: str) -> str:
+    base = (base_url or "").rstrip("/")
+    if base.endswith("/chat/completions"):
+        return base
+    if base.endswith("/responses"):
+        return f"{base[:-len('/responses')]}/chat/completions"
+    if not base.endswith("/v1"):
+        base = f"{base}/v1"
+    return f"{base}/chat/completions"
+
+
+def build_llm_responses_url(base_url: str) -> str:
+    base = (base_url or "").rstrip("/")
+    if base.endswith("/responses"):
+        return base
+    if base.endswith("/chat/completions"):
+        return f"{base[:-len('/chat/completions')]}/responses"
+    if not base.endswith("/v1"):
+        base = f"{base}/v1"
+    return f"{base}/responses"
+
+
 # ── Routes ──
 
 @router.get("/presets")
@@ -107,6 +153,17 @@ async def list_llm_configs(
     )
     rows = result.scalars().all()
     return [LLMConfigResponse.from_db(r) for r in rows]
+
+
+@router.get("/options")
+async def list_llm_config_options(
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    purpose: str = Query("builder"),
+):
+    """列出指定用途可用的模型选项（面向普通用户的只读列表）。"""
+    rows = await list_llm_configs_for_purpose(db, ctx.tenant_id, purpose)
+    return [LLMConfigOptionResponse.from_db(row) for row in rows]
 
 
 @router.post("")
@@ -170,12 +227,20 @@ async def update_llm_config(
     if req.temperature is not None:
         config.temperature = req.temperature
     if req.status is not None:
+        if req.status not in {"active", "inactive", "error"}:
+            raise HTTPException(status_code=400, detail="不支持的模型状态")
         config.status = req.status
     if req.is_default is True:
+        if config.status != "active":
+            raise HTTPException(status_code=400, detail="未启用模型不能设为默认")
         await _clear_defaults(db, ctx.tenant_id, config.purpose)
         config.is_default = True
     elif req.is_default is False:
         config.is_default = False
+
+    if config.status == "inactive" and config.is_default:
+        config.is_default = False
+        await _assign_replacement_default(db, ctx.tenant_id, config.purpose, exclude_id=config.id)
 
     await db.commit()
     await db.refresh(config)
@@ -218,23 +283,44 @@ async def test_llm_config(
     api_key = decrypt_password(config.api_key_enc)
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            # 用 OpenAI 兼容格式发送测试请求
-            resp = await client.post(
-                f"{config.base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": config.model,
-                    "messages": [{"role": "user", "content": "回复OK"}],
-                    "max_tokens": 10,
-                },
-            )
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            is_codex = config.provider == "codex" or "codex" in (config.model or "").lower()
+            if is_codex:
+                resp = await client.post(
+                    build_llm_responses_url(config.base_url),
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": config.model,
+                        "input": "回复OK",
+                    },
+                )
+            else:
+                resp = await client.post(
+                    build_llm_chat_completions_url(config.base_url),
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": config.model,
+                        "messages": [{"role": "user", "content": "回复OK"}],
+                        "max_tokens": 10,
+                    },
+                )
             if resp.status_code == 200:
                 data = resp.json()
-                reply = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                if is_codex:
+                    reply = ""
+                    for item in data.get("output", []):
+                        if item.get("type") != "message":
+                            continue
+                        for content in item.get("content", []):
+                            reply += content.get("text", "")
+                else:
+                    reply = data.get("choices", [{}])[0].get("message", {}).get("content", "")
                 return {"success": True, "reply": reply[:100]}
             else:
                 return {"success": False, "error": f"HTTP {resp.status_code}: {resp.text[:200]}"}
@@ -255,9 +341,39 @@ async def set_default_llm_config(
     config = result.scalar_one_or_none()
     if not config:
         raise HTTPException(status_code=404, detail="配置不存在")
+    if config.status != "active":
+        raise HTTPException(status_code=400, detail="请先启用模型后再设为默认")
 
     await _clear_defaults(db, ctx.tenant_id, config.purpose)
     config.is_default = True
+    await db.commit()
+    await db.refresh(config)
+    return LLMConfigResponse.from_db(config)
+
+
+@router.post("/{config_id}/status")
+async def update_llm_config_status(
+    config_id: int,
+    req: LLMConfigStatusUpdate,
+    ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """全局启用/禁用模型配置。"""
+    if req.status not in {"active", "inactive"}:
+        raise HTTPException(status_code=400, detail="状态只支持 active 或 inactive")
+
+    result = await db.execute(
+        select(LLMConfig).where(LLMConfig.id == config_id, LLMConfig.tenant_id == ctx.tenant_id)
+    )
+    config = result.scalar_one_or_none()
+    if not config:
+        raise HTTPException(status_code=404, detail="配置不存在")
+
+    config.status = req.status
+    if req.status == "inactive" and config.is_default:
+        config.is_default = False
+        await _assign_replacement_default(db, ctx.tenant_id, config.purpose, exclude_id=config.id)
+
     await db.commit()
     await db.refresh(config)
     return LLMConfigResponse.from_db(config)
@@ -276,6 +392,29 @@ async def _clear_defaults(db: AsyncSession, tenant_id: int, purpose: str):
         )
         .values(is_default=False)
     )
+
+
+async def _assign_replacement_default(
+    db: AsyncSession,
+    tenant_id: int,
+    purpose: str,
+    exclude_id: Optional[int] = None,
+):
+    """当默认模型被禁用时，尽量补一个同用途的可用默认。"""
+    stmt = (
+        select(LLMConfig)
+        .where(
+            LLMConfig.tenant_id == tenant_id,
+            LLMConfig.purpose == purpose,
+            LLMConfig.status == "active",
+        )
+        .order_by(LLMConfig.created_at.desc(), LLMConfig.id.desc())
+    )
+    if exclude_id is not None:
+        stmt = stmt.where(LLMConfig.id != exclude_id)
+    replacement = (await db.execute(stmt)).scalars().first()
+    if replacement:
+        replacement.is_default = True
 
 
 async def get_llm_config_for_purpose(db: AsyncSession, tenant_id: int, purpose: str) -> Optional[LLMConfig]:
@@ -303,3 +442,67 @@ async def get_llm_config_for_purpose(db: AsyncSession, tenant_id: int, purpose: 
         )
     )
     return result.scalar_one_or_none()
+
+
+async def get_default_llm_config_id_for_purpose(db: AsyncSession, tenant_id: int, purpose: str) -> Optional[int]:
+    config = await get_llm_config_for_purpose(db, tenant_id, purpose)
+    return config.id if config else None
+
+
+async def list_llm_configs_for_purpose(db: AsyncSession, tenant_id: int, purpose: str) -> list[LLMConfig]:
+    """列出指定用途可用的 LLM 配置，精确用途优先，其次 purpose=all。"""
+    result = await db.execute(
+        select(LLMConfig).where(
+            LLMConfig.tenant_id == tenant_id,
+            LLMConfig.status == "active",
+        )
+    )
+    rows = result.scalars().all()
+
+    exact = [row for row in rows if row.purpose == purpose]
+    shared = [row for row in rows if row.purpose == "all"]
+
+    sort_key = lambda row: (0 if row.is_default else 1, -(row.id or 0))
+    exact.sort(key=sort_key)
+    shared.sort(key=sort_key)
+
+    return exact + [row for row in shared if row.id not in {item.id for item in exact}]
+
+
+async def get_active_llm_config_by_id_for_purpose(
+    db: AsyncSession,
+    tenant_id: int,
+    config_id: int,
+    purpose: str,
+) -> Optional[LLMConfig]:
+    result = await db.execute(
+        select(LLMConfig).where(
+            LLMConfig.id == config_id,
+            LLMConfig.tenant_id == tenant_id,
+            LLMConfig.status == "active",
+        )
+    )
+    config = result.scalar_one_or_none()
+    if not config:
+        return None
+    if config.purpose not in {purpose, "all"}:
+        return None
+    return config
+
+
+async def resolve_llm_config_for_purpose(
+    db: AsyncSession,
+    tenant_id: int,
+    purpose: str,
+    selected_config_id: Optional[int] = None,
+) -> Optional[LLMConfig]:
+    if selected_config_id:
+        config = await get_active_llm_config_by_id_for_purpose(
+            db,
+            tenant_id,
+            selected_config_id,
+            purpose,
+        )
+        if config:
+            return config
+    return await get_llm_config_for_purpose(db, tenant_id, purpose)

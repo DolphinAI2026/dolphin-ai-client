@@ -11,35 +11,42 @@ from app.schemas import ChatRequest
 from app.deps import get_auth_context, AuthContext
 from app.llm_client import LLMClient
 from app.field_types import build_prompt_field_types_compact
+from app.routes.llm_configs import build_llm_chat_completions_url
 
 
 async def _get_tenant_llm_config(db: AsyncSession, tenant_id: int) -> dict | None:
-    from app.models import LLMConfig
     from app.crypto import decrypt_password
-    result = await db.execute(
-        select(LLMConfig).where(
-            LLMConfig.tenant_id == tenant_id,
-            LLMConfig.is_default == True,
-            LLMConfig.status == "active",
-        )
-    )
-    config = result.scalar_one_or_none()
-    if not config:
-        result = await db.execute(
-            select(LLMConfig).where(
-                LLMConfig.tenant_id == tenant_id,
-                LLMConfig.status == "active",
-            ).limit(1)
-        )
-        config = result.scalar_one_or_none()
+    from app.routes.llm_configs import resolve_llm_config_for_purpose
+
+    config = await resolve_llm_config_for_purpose(db, tenant_id, "builder")
     if not config:
         return None
+    return _serialize_llm_config(config)
+
+
+def _serialize_llm_config(config) -> dict:
+    from app.crypto import decrypt_password
+
     return {
         "api_key": decrypt_password(config.api_key_enc),
         "base_url": config.base_url.rstrip("/"),
         "model": config.model,
         "max_tokens": config.max_tokens or 8192,
     }
+
+
+async def _get_conversation_llm_config(db: AsyncSession, conversation: Conversation) -> dict | None:
+    from app.routes.llm_configs import resolve_llm_config_for_purpose
+
+    config = await resolve_llm_config_for_purpose(
+        db,
+        conversation.tenant_id,
+        "builder",
+        conversation.selected_llm_config_id,
+    )
+    if not config:
+        return None
+    return _serialize_llm_config(config)
 
 
 async def _stream_with_tenant_llm(cfg: dict | None, messages: list):
@@ -59,7 +66,7 @@ async def _stream_with_tenant_llm(cfg: dict | None, messages: list):
     async with httpx.AsyncClient(timeout=timeout) as client:
         async with client.stream(
             "POST",
-            f"{cfg['base_url']}/chat/completions",
+            build_llm_chat_completions_url(cfg["base_url"]),
             headers={"Authorization": f"Bearer {cfg['api_key']}", "Content-Type": "application/json"},
             json=payload,
         ) as response:
@@ -276,7 +283,7 @@ async def send_message(
     llm_messages.extend(truncated)
 
     # 预取租户 LLM 配置
-    llm_cfg = await _get_tenant_llm_config(db, ctx.tenant_id)
+    llm_cfg = await _get_conversation_llm_config(db, conversation)
 
     # 流式响应
     async def event_generator():
@@ -369,7 +376,7 @@ async def generate_config_phased(
         if m.role in ("user", "assistant")
     )
 
-    llm_cfg = await _get_tenant_llm_config(db, ctx.tenant_id)
+    llm_cfg = await _get_conversation_llm_config(db, conversation)
 
     async def event_generator():
         try:

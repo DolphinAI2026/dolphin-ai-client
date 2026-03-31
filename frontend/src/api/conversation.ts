@@ -6,6 +6,7 @@ export interface ConversationWithApp {
   title: string
   agent_type: string
   status: string
+  selected_llm_config_id?: number | null
   created_at: string
   updated_at: string
   app_id?: number
@@ -23,6 +24,10 @@ export const conversationApi = {
 
   get(id: number) {
     return request.get<any, Conversation>(`/conversations/${id}`)
+  },
+
+  updateModel(id: number, selected_llm_config_id: number | null) {
+    return request.patch<any, Conversation>(`/conversations/${id}/model`, { selected_llm_config_id })
   },
 
   getMessages(conversationId: number) {

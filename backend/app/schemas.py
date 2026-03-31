@@ -55,6 +55,7 @@ class TenantSelectRequest(BaseModel):
 # Conversation schemas
 class ConversationCreate(BaseModel):
     agent_type: str = Field(..., pattern="^(builder|assistant|developer)$")
+    selected_llm_config_id: Optional[int] = None
 
 
 class ConversationResponse(BaseModel):
@@ -62,6 +63,7 @@ class ConversationResponse(BaseModel):
     title: str
     agent_type: str
     status: str
+    selected_llm_config_id: Optional[int] = None
     created_at: datetime
     updated_at: datetime
 

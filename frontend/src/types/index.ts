@@ -46,8 +46,9 @@ export interface TenantSelectRequest {
 export interface Conversation {
   id: number
   title: string
-  agent_type: 'builder' | 'assistant' | 'developer' | 'coding'
+  agent_type: 'builder' | 'assistant' | 'developer' | 'coding' | 'requirements'
   status: string
+  selected_llm_config_id?: number | null
   created_at: string
   updated_at: string
 }
@@ -105,6 +106,7 @@ export interface ChatRequest {
 
 export interface ConversationCreate {
   agent_type: 'builder' | 'assistant' | 'developer' | 'coding'
+  selected_llm_config_id?: number | null
 }
 
 // Preview types

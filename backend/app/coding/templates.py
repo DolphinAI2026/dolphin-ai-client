@@ -7,6 +7,51 @@ from typing import Dict, List
 from app.coding.scenes import SceneType
 
 
+def _inject_copy_asset_placeholders(files: Dict[str, str]) -> Dict[str, str]:
+    apaas_content = files.get("src/apaas.json")
+    if not apaas_content:
+        return files
+
+    try:
+        apaas_config = json.loads(apaas_content)
+    except json.JSONDecodeError:
+        return files
+
+    patched_files = dict(files)
+    placeholder_content = (
+        "Placeholder asset file for df-apaas-cli copyAssets.\n"
+        "Delete this file after you add real assets.\n"
+    )
+
+    for copy_asset in apaas_config.get("copyAssets") or []:
+        if not isinstance(copy_asset, str):
+            continue
+
+        asset_root = copy_asset.strip().strip("/")
+        if not asset_root:
+            continue
+
+        has_visible_children = False
+        asset_prefix = f"{asset_root}/"
+        for path in patched_files:
+            if not path.startswith(asset_prefix):
+                continue
+            relative_path = path[len(asset_prefix):]
+            if not relative_path:
+                continue
+            first_segment = relative_path.split("/", 1)[0]
+            if first_segment and not first_segment.startswith("."):
+                has_visible_children = True
+                break
+
+        if has_visible_children:
+            continue
+
+        patched_files[f"{asset_root}/asset-placeholder.txt"] = placeholder_content
+
+    return patched_files
+
+
 def get_project_template(scene_type: SceneType, module_name: str) -> Dict[str, str]:
     """获取项目模板，返回 {文件路径: 文件内容} 字典"""
     generators = {
@@ -28,7 +73,7 @@ def get_project_template(scene_type: SceneType, module_name: str) -> Dict[str, s
     }
     generator = generators.get(scene_type)
     if generator:
-        return generator(module_name)
+        return _inject_copy_asset_placeholders(generator(module_name))
     return {}
 
 

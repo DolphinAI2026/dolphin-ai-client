@@ -9,7 +9,7 @@ Implements an autonomous agent loop:
 import json
 import logging
 from pathlib import Path
-from typing import AsyncIterator
+from typing import AsyncIterator, Optional
 
 import httpx
 
@@ -46,11 +46,12 @@ class VibeCodingAgent:
     # Global registry: {ws_id: {"task": Task, "queue": Queue, "events": list, "done": bool}}
     _running_agents: dict = {}
 
-    def __init__(self, ws_id: str, system_prompt: str | None = None):
+    def __init__(self, ws_id: str, system_prompt: str | None = None, tenant_id: Optional[int] = None):
         self.ws_id = ws_id
         self.ws_mgr = WorkspaceManager()
         self.ws_path = self.ws_mgr.get_workspace_path(ws_id)
         self._system_prompt = system_prompt
+        self.tenant_id = tenant_id
 
     async def start(
         self,
@@ -480,23 +481,58 @@ class VibeCodingAgent:
     async def _load_llm_config(self, model_override=None):
         """Load LLM config from DB (preferred) or .env (fallback)."""
         # Try DB first
-        try:
-            from app.database import AsyncSessionLocal
-            from app.routes.llm_configs import get_llm_config_for_purpose
+        if self.tenant_id:
+            try:
+                from app.database import AsyncSessionLocal
+                from app.routes.llm_configs import list_llm_configs_for_purpose
 
-            async with AsyncSessionLocal() as db:
-                # Use tenant_id=1 as default (workspace doesn't carry tenant context)
-                config = await get_llm_config_for_purpose(db, tenant_id=1, purpose="coding")
-                if config:
-                    from app.crypto import decrypt_password
+                async with AsyncSessionLocal() as db:
+                    configs = await list_llm_configs_for_purpose(db, tenant_id=self.tenant_id, purpose="coding")
+                    config = None
+                    model_override_str = (model_override or "").strip()
 
-                    return (
-                        config.base_url,
-                        decrypt_password(config.api_key_enc),
-                        model_override or config.model,
-                    )
-        except Exception:
-            pass
+                    if model_override_str.startswith("llmcfg:"):
+                        try:
+                            config_id = int(model_override_str.split(":", 1)[1])
+                        except ValueError:
+                            config_id = None
+                        if config_id is not None:
+                            config = next((item for item in configs if item.id == config_id), None)
+
+                    if config is None and model_override_str:
+                        model_override_lower = model_override_str.lower()
+                        config = next(
+                            (
+                                item for item in configs
+                                if model_override_lower in {
+                                    (item.model or "").lower(),
+                                    (item.config_name or "").lower(),
+                                }
+                            ),
+                            None,
+                        )
+
+                    if config is None:
+                        config = next((item for item in configs if item.is_default), None) or (configs[0] if configs else None)
+
+                    if config:
+                        from app.crypto import decrypt_password
+
+                        base_url = (config.base_url or "").rstrip("/")
+                        if "/anthropic" in base_url:
+                            base_url = base_url.replace("/anthropic", "/v1")
+                        if base_url.endswith("/chat/completions"):
+                            base_url = base_url[: -len("/chat/completions")]
+                        if not base_url.endswith("/v1"):
+                            base_url = base_url.rstrip("/") + "/v1"
+
+                        return (
+                            base_url,
+                            decrypt_password(config.api_key_enc),
+                            config.model,
+                        )
+            except Exception:
+                pass
 
         # Fallback to .env — 优先使用 VIBE_AGENT_* 专用变量，再 fallback 到 ANTHROPIC_*
         env = self._load_agent_env()

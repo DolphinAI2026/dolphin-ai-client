@@ -153,6 +153,40 @@
 
             <!-- Input Area (centered) -->
             <div class="welcome-input-area">
+              <div class="coding-model-bar">
+                <div class="coding-model-meta">
+                  <span class="coding-model-label">当前模型</span>
+                  <span class="coding-model-tip">{{ codingModelHint }}</span>
+                </div>
+                <el-select
+                  v-model="selectedCodingModelValue"
+                  class="coding-model-select"
+                  popper-class="model-select-dropdown coding-model-dropdown"
+                  size="large"
+                  placeholder="选择模型"
+                  :disabled="codingModelLoading || updatingCodingModel || codingModelOptions.length === 0"
+                  @change="handleCodingModelChange"
+                >
+                  <el-option
+                    v-for="option in codingModelOptions"
+                    :key="option.id"
+                    :label="formatCodingModelOption(option)"
+                    :value="toCodingModelValue(option.id)"
+                  >
+                    <div class="coding-model-option-row">
+                      <div class="coding-model-option-top">
+                        <span class="coding-model-option-name">{{ option.config_name }}</span>
+                        <div class="coding-model-option-tags">
+                          <span class="coding-model-option-provider">{{ formatCodingModelProvider(option.provider) }}</span>
+                          <span v-if="option.is_default" class="coding-model-option-default">默认</span>
+                        </div>
+                      </div>
+                      <span class="coding-model-option-meta">{{ option.model }}</span>
+                    </div>
+                  </el-option>
+                </el-select>
+              </div>
+
               <!-- Attachment Preview -->
               <div v-if="attachedFile" class="attachment-preview">
                 <div v-if="attachedPreviewUrl" class="attachment-thumb">
@@ -319,6 +353,15 @@
               <span class="stream-dot"></span>
               <span class="stream-dot"></span>
             </div>
+
+            <!-- 完成后的操作区域 -->
+            <div v-if="!isStreaming && pendingIdeUrl" class="stream-actions">
+              <button class="open-ide-btn" @click="setIdeUrl(pendingIdeUrl!); pendingIdeUrl = null">
+                <span class="ide-btn-icon">&#x1F4BB;</span>
+                打开代码编辑器
+              </button>
+              <span class="stream-actions-hint">在编辑器中查看和修改 AI 生成的代码</span>
+            </div>
           </div>
         </div>
 
@@ -356,6 +399,8 @@ import { platformEnvApi, type PlatformEnv } from '@/api/platformEnv'
 import { useUserStore } from '@/stores/user'
 import { codingApi } from '@/api/coding'
 import type { WorkspaceInfo, UploadResult } from '@/api/coding'
+import { conversationApi } from '@/api/conversation'
+import { llmConfigApi, type BuilderModelOption } from '@/api/llmConfig'
 import { consumeSseResponse } from '@/utils/sse'
 import ThemeToggle from '@/components/ThemeToggle.vue'
 
@@ -369,6 +414,101 @@ const ideUrl = ref<string | null>(null)
 const ideLoaded = ref(false)
 const isCreating = ref(false)
 const creatingStatus = ref('')
+const codingModelOptions = ref<BuilderModelOption[]>([])
+const codingModelLoading = ref(false)
+const updatingCodingModel = ref(false)
+const selectedCodingModelValue = ref<string | null>(null)
+const persistedCodingModelValue = ref<string | null>(null)
+
+const toCodingModelValue = (configId: number | null | undefined) =>
+  configId != null ? `llmcfg:${configId}` : null
+
+const parseCodingModelConfigId = (modelValue?: string | null): number | null => {
+  if (!modelValue?.startsWith('llmcfg:')) return null
+  const parsed = Number(modelValue.slice('llmcfg:'.length))
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+const defaultCodingModelValue = computed(() =>
+  toCodingModelValue(codingModelOptions.value.find(option => option.is_default)?.id)
+  ?? toCodingModelValue(codingModelOptions.value[0]?.id)
+  ?? null
+)
+
+const codingModelHint = computed(() => {
+  if (codingModelLoading.value) return '正在加载可用模型...'
+  if (codingModelOptions.value.length === 0) return '未配置可用模型，请前往环境管理配置'
+  if (codingStore.conversationId) return '切换后仅影响后续开发与打开 IDE 的默认模型'
+  return '首条消息会使用当前选择的模型'
+})
+
+const normalizeCodingModelValue = (modelValue?: string | null): string | null => {
+  const values = new Set(codingModelOptions.value.map(option => toCodingModelValue(option.id)).filter(Boolean) as string[])
+  if (modelValue && values.has(modelValue)) return modelValue
+  return defaultCodingModelValue.value
+}
+
+const applyCodingModelSelection = (configId?: number | null) => {
+  const normalized = normalizeCodingModelValue(toCodingModelValue(configId))
+  selectedCodingModelValue.value = normalized
+  persistedCodingModelValue.value = codingStore.conversationId ? normalized : null
+}
+
+const formatCodingModelOption = (option: BuilderModelOption): string => option.config_name
+
+const formatCodingModelProvider = (provider: string): string => {
+  const labels: Record<string, string> = {
+    minimax: 'MiniMax',
+    qwen: 'Qwen',
+    gpt: 'GPT',
+    codex: 'Codex',
+    sonnet: 'Sonnet',
+    opus: 'Opus',
+    openai: 'OpenAI',
+    anthropic: 'Anthropic',
+  }
+  return labels[provider] || provider
+}
+
+const loadCodingModelOptions = async () => {
+  codingModelLoading.value = true
+  try {
+    codingModelOptions.value = await llmConfigApi.listOptions('coding')
+    selectedCodingModelValue.value = normalizeCodingModelValue(selectedCodingModelValue.value)
+    if (codingStore.conversationId) {
+      persistedCodingModelValue.value = normalizeCodingModelValue(persistedCodingModelValue.value)
+    }
+  } catch (e) {
+    console.error('获取 coding 模型列表失败:', e)
+    codingModelOptions.value = []
+    selectedCodingModelValue.value = null
+    persistedCodingModelValue.value = null
+  } finally {
+    codingModelLoading.value = false
+  }
+}
+
+const handleCodingModelChange = async (nextValue: string | null) => {
+  selectedCodingModelValue.value = nextValue
+  if (!codingStore.conversationId) return
+
+  const previousValue = persistedCodingModelValue.value
+  updatingCodingModel.value = true
+  try {
+    const updated = await conversationApi.updateModel(
+      codingStore.conversationId,
+      parseCodingModelConfigId(nextValue),
+    )
+    const normalized = normalizeCodingModelValue(toCodingModelValue(updated.selected_llm_config_id))
+    selectedCodingModelValue.value = normalized
+    persistedCodingModelValue.value = normalized
+  } catch (e: any) {
+    selectedCodingModelValue.value = normalizeCodingModelValue(previousValue)
+    ElMessage.error(e?.response?.data?.detail || '切换模型失败')
+  } finally {
+    updatingCodingModel.value = false
+  }
+}
 
 // ============ Stream Messages (对话流) ============
 interface StreamMessage {
@@ -382,6 +522,7 @@ interface StreamMessage {
 const streamMessages = ref<StreamMessage[]>([])
 const isStreaming = ref(false)
 const streamContainerRef = ref<HTMLElement>()
+const pendingIdeUrl = ref<string | null>(null)
 
 function addStreamMsg(msg: Omit<StreamMessage, 'timestamp'>) {
   streamMessages.value.push({ ...msg, timestamp: Date.now() })
@@ -559,9 +700,13 @@ const sceneCategoryToProjectType: Record<string, string> = {
 
 onMounted(async () => {
   try {
-    allWorkspaces.value = await codingApi.listWorkspaces()
+    const [workspaces] = await Promise.all([
+      codingApi.listWorkspaces(),
+      loadCodingModelOptions(),
+    ])
+    allWorkspaces.value = workspaces
   } catch (e) {
-    console.error('\u83B7\u53D6\u5DE5\u4F5C\u533A\u5217\u8868\u5931\u8D25:', e)
+    console.error('\u521D\u59CB\u5316 AI Coding \u9875\u9762\u5931\u8D25:', e)
   }
 
   const wsId = (route.query.workspace_id || route.query.ws) as string
@@ -571,6 +716,8 @@ onMounted(async () => {
     const lastWsId = localStorage.getItem('coding_last_workspace_id')
     if (lastWsId && existingWorkspaces.value.some(w => w.id === lastWsId)) {
       await openWorkspaceById(lastWsId)
+    } else {
+      selectedCodingModelValue.value = normalizeCodingModelValue(selectedCodingModelValue.value)
     }
   }
 })
@@ -599,8 +746,11 @@ async function openWorkspaceById(wsId: string) {
     const ws = await codingApi.getWorkspace(wsId)
     codingStore.setWorkspace(ws)
     localStorage.setItem('coding_last_workspace_id', wsId)
+    const workspaceConversation = await codingApi.getWorkspaceConversation(ws.id)
+    codingStore.conversationId = workspaceConversation.conversation_id
+    applyCodingModelSelection(workspaceConversation.selected_llm_config_id)
 
-    const { ide_url } = await codingApi.getIdeUrl(ws.id)
+    const { ide_url } = await codingApi.getIdeUrl(ws.id, workspaceConversation.conversation_id)
     await setIdeUrl(ide_url)
   } catch (error: any) {
     ElMessage.error(`打开工作区失败: ${error.message}`)
@@ -609,6 +759,8 @@ async function openWorkspaceById(wsId: string) {
 
 function startNewWorkspace() {
   codingStore.reset()
+  persistedCodingModelValue.value = null
+  selectedCodingModelValue.value = normalizeCodingModelValue(selectedCodingModelValue.value)
   ideUrl.value = null
   ideLoaded.value = false
   localStorage.removeItem('coding_last_workspace_id')
@@ -729,10 +881,11 @@ async function sendMessage() {
 
     const token = userStore.token
 
-    const body: Record<string, any> = {
+  const body: Record<string, any> = {
       message: finalMessage,
       workspace_id: codingStore.workspace?.id || null,
       conversation_id: codingStore.conversationId || null,
+      selected_model: selectedCodingModelValue.value || null,
       app_id: (route.query.app_id as string) || null,
       project_id: embeddedAppId.value ? Number(embeddedAppId.value) : null,
       project_type: _projectType,
@@ -820,12 +973,15 @@ async function sendMessage() {
           const delta = (parsed.content || '') as string
           if (delta) appendToLastThinking(delta)
         } else if (parsed.type === 'agent_done') {
-          addStreamMsg({ type: 'status', content: '\u2705 \u4EE3\u7801\u751F\u6210\u5B8C\u6210\uFF0C\u6B63\u5728\u6253\u5F00\u7F16\u8F91\u5668...' })
+          addStreamMsg({ type: 'status', content: '\u2705 \u4EE3\u7801\u751F\u6210\u5B8C\u6210' })
         } else if (parsed.type === 'scene_detected') {
           codingStore.conversationId = parsed.conversation_id
         } else if (parsed.type === 'done') {
           isStreaming.value = false
           codingStore.conversationId = parsed.conversation_id
+          if (parsed.conversation_id) {
+            persistedCodingModelValue.value = normalizeCodingModelValue(selectedCodingModelValue.value)
+          }
           if (parsed.workspace_id && !codingStore.workspace) {
             try {
               const ws = await codingApi.getWorkspace(parsed.workspace_id)
@@ -834,8 +990,8 @@ async function sendMessage() {
             } catch { /* ignore */ }
           }
           if (parsed.ide_url) {
-            // 延迟 1s 让用户看到完成状态
-            setTimeout(() => setIdeUrl(parsed.ide_url), 1000)
+            // 不自动跳转 IDE，保存 URL 供用户手动打开
+            pendingIdeUrl.value = parsed.ide_url
           }
         } else if (parsed.type === 'error') {
           addStreamMsg({ type: 'error', content: parsed.message || '\u53D1\u751F\u9519\u8BEF' })
@@ -849,7 +1005,7 @@ async function sendMessage() {
     // If we got a workspace but no IDE URL from SSE, fetch it now
     if (!ideUrl.value && codingStore.workspace) {
       try {
-        const { ide_url } = await codingApi.getIdeUrl(codingStore.workspace.id)
+        const { ide_url } = await codingApi.getIdeUrl(codingStore.workspace.id, codingStore.conversationId)
         await setIdeUrl(ide_url)
       } catch (err: any) {
         ElMessage.warning(err?.message || 'IDE URL 获取失败')
@@ -881,7 +1037,7 @@ async function openBrowserPreviewWithEnv(env: PlatformEnv) {
   if (!codingStore.workspace) return
   showEnvPicker.value = false
   try {
-    const { ide_url } = await codingApi.getIdeUrl(codingStore.workspace.id)
+    const { ide_url } = await codingApi.getIdeUrl(codingStore.workspace.id, codingStore.conversationId)
     const urlParams = new URLSearchParams(new URL(ide_url).search)
     const token = urlParams.get('vibe_ide_token') || ''
     const wsId = codingStore.workspace.id
@@ -1333,6 +1489,120 @@ watch(() => route.path, () => {
   margin-bottom: 28px;
 }
 
+.coding-model-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--t-border-subtle);
+  border-radius: 14px;
+  background: var(--t-bg-elevated);
+  box-shadow: var(--t-shadow-sm);
+}
+
+.coding-model-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.coding-model-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--t-text-primary);
+}
+
+.coding-model-tip {
+  font-size: 11px;
+  color: var(--t-text-muted);
+}
+
+.coding-model-select {
+  width: min(460px, 60%);
+  flex-shrink: 0;
+}
+
+.coding-model-select :deep(.el-select__wrapper) {
+  min-height: 40px;
+  border-radius: 12px;
+  background: linear-gradient(180deg, var(--t-bg-panel), var(--t-bg-base));
+  box-shadow: inset 0 0 0 1px var(--t-border-subtle), 0 8px 20px rgba(15, 23, 42, 0.04);
+}
+.coding-model-select :deep(.el-select__selected-item),
+.coding-model-select :deep(.el-select__placeholder) {
+  color: var(--t-text-primary);
+}
+.coding-model-select :deep(.el-select__caret),
+.coding-model-select :deep(.el-select__suffix) {
+  color: var(--t-text-muted);
+}
+.coding-model-select :deep(.el-select__wrapper.is-focused) {
+  box-shadow: inset 0 0 0 1px var(--t-brand-glow), 0 0 0 4px rgba(99, 102, 241, 0.08);
+}
+
+.coding-model-option-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+}
+
+.coding-model-option-top {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.coding-model-option-name {
+  color: var(--t-text-primary);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.coding-model-option-tags {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.coding-model-option-provider,
+.coding-model-option-default {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.coding-model-option-provider {
+  background: var(--t-bg-subtle);
+  color: var(--t-text-secondary);
+  border: 1px solid var(--t-border-subtle);
+}
+
+.coding-model-option-default {
+  background: rgba(99, 102, 241, 0.12);
+  color: var(--t-brand-dark);
+  border: 1px solid rgba(99, 102, 241, 0.14);
+}
+
+.coding-model-option-meta {
+  font-size: 12px;
+  color: var(--t-text-secondary);
+  line-height: 1.35;
+}
+
 .input-wrapper {
   display: flex;
   align-items: flex-end;
@@ -1400,6 +1670,17 @@ watch(() => route.path, () => {
   color: var(--t-text-muted);
   margin-top: 8px;
   letter-spacing: 0.01em;
+}
+
+@media (max-width: 920px) {
+  .coding-model-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .coding-model-select {
+    width: 100%;
+  }
 }
 
 /* ============ Attachment Preview ============ */
@@ -1741,6 +2022,48 @@ watch(() => route.path, () => {
 @keyframes dotPulse {
   0%, 80%, 100% { transform: scale(0.4); opacity: 0.4; }
   40% { transform: scale(1); opacity: 1; }
+}
+
+/* 完成后操作区域 */
+.stream-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 24px 0 16px;
+  border-top: 1px solid var(--t-border-subtle);
+  margin-top: 16px;
+}
+
+.open-ide-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 28px;
+  background: var(--t-brand);
+  color: #fff;
+  border: none;
+  border-radius: 10px;
+  font-size: 15px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.open-ide-btn:hover {
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(124, 92, 252, 0.3);
+}
+
+.ide-btn-icon {
+  font-size: 18px;
+}
+
+.stream-actions-hint {
+  font-size: 12px;
+  color: var(--t-text-muted);
+  opacity: 0.6;
 }
 
 .creating-text {

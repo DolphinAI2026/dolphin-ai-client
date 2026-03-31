@@ -30,12 +30,15 @@ async def get_db():
 
 async def init_db():
     from sqlalchemy import text
+    # 确保 harness models 被 Base 注册（create_all 会创建新表）
+    import app.harness.models  # noqa: F401
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         # 迁移：确保新列存在（兼容 SQLite 和 MySQL）
         for stmt in [
             "ALTER TABLE applications ADD COLUMN generation_state TEXT",
             "ALTER TABLE conversations ADD COLUMN workspace_id VARCHAR(50)",
+            "ALTER TABLE conversations ADD COLUMN selected_llm_config_id INTEGER",
             "ALTER TABLE users ADD COLUMN apaas_base_url VARCHAR(255)",
             "ALTER TABLE users ADD COLUMN apaas_tenant_id VARCHAR(50)",
             # Projects table columns (in case table existed before new columns were added)

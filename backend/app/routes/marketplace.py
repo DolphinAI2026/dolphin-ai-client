@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models import User, MarketplaceComponent
 from app.deps import get_auth_context, AuthContext
-from app.coding.workspace import WORKSPACE_ROOT
+from app.coding.workspace import WorkspaceManager
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/marketplace", tags=["marketplace"])
@@ -186,8 +186,9 @@ async def publish_component(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """从工作区发布组件到市场"""
-    ws_path = WORKSPACE_ROOT / req.workspace_id
-    if not ws_path.exists():
+    try:
+        ws_path = WorkspaceManager().get_workspace_path(req.workspace_id)
+    except FileNotFoundError:
         raise HTTPException(status_code=404, detail="工作区不存在")
 
     # 检查 code 唯一性

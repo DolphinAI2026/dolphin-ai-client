@@ -5,6 +5,7 @@ export interface RequirementsSession {
   title: string
   created_at: string
   updated_at: string
+  selected_llm_config_id?: number | null
   has_doc?: boolean
   doc_result?: AnalysisResult | null
   messages?: ChatMessage[]
@@ -65,8 +66,8 @@ export interface AnalysisResult {
 const BASE = '/requirements'
 
 export const requirementsApi = {
-  createSession: (): Promise<RequirementsSession> =>
-    request.post(`${BASE}/sessions`),
+  createSession: (data?: { selected_llm_config_id?: number | null }): Promise<RequirementsSession> =>
+    request.post(`${BASE}/sessions`, data ?? {}),
 
   listSessions: (): Promise<RequirementsSession[]> =>
     request.get(`${BASE}/sessions`),

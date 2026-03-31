@@ -50,14 +50,14 @@ if (updated.includes(vsdaSnippet)) {
 
 // Patch 3: Extension-installed check — the setup flow checks if GitHub.copilot
 // and GitHub.copilot-chat extensions are installed to determine chat readiness.
-// Since we use apaas-builder.minimax-chat-provider instead, redirect these checks.
+// Since we use apaas-builder.ruijing-ai instead, redirect these checks.
 const extChecks = [
   // In the u() function that checks installed extensions set
-  { from: 'u("GitHub.copilot-chat",this.s)', to: 'u("apaas-builder.minimax-chat-provider",this.s)' },
-  { from: "u('GitHub.copilot-chat',this.s)", to: "u('apaas-builder.minimax-chat-provider',this.s)" },
+  { from: 'u("GitHub.copilot-chat",this.s)', to: 'u("apaas-builder.ruijing-ai",this.s)' },
+  { from: "u('GitHub.copilot-chat',this.s)", to: "u('apaas-builder.ruijing-ai',this.s)" },
   // Also redirect the non-chat copilot check so p = l||f||g becomes true
-  { from: 'u("GitHub.copilot",this.s)', to: 'u("apaas-builder.minimax-chat-provider",this.s)' },
-  { from: "u('GitHub.copilot',this.s)", to: "u('apaas-builder.minimax-chat-provider',this.s)" },
+  { from: 'u("GitHub.copilot",this.s)', to: 'u("apaas-builder.ruijing-ai",this.s)' },
+  { from: "u('GitHub.copilot',this.s)", to: "u('apaas-builder.ruijing-ai',this.s)" },
 ];
 for (const { from, to } of extChecks) {
   if (updated.includes(from)) {
@@ -72,7 +72,7 @@ for (const { from, to } of extChecks) {
 // to become ready, causing a timeout. Replace all remaining references.
 const copilotChatCount = updated.split('GitHub.copilot-chat').length - 1;
 if (copilotChatCount > 0) {
-  updated = updated.split('GitHub.copilot-chat').join('apaas-builder.minimax-chat-provider');
+  updated = updated.split('GitHub.copilot-chat').join('apaas-builder.ruijing-ai');
   console.log(`  Replaced ${copilotChatCount} remaining GitHub.copilot-chat references globally`);
   changed = true;
 }
@@ -102,15 +102,11 @@ if (signInMatch && updated.includes(setupCallPattern)) {
 }
 
 // Patch 6: Bypass the ENTIRE D0 core agent invoke path.
-// D0 is a "setup wrapper" agent that intercepts messages, checks auth/setup status,
-// and tries to forward to the real agent via a complex M→N→O chain with timeouts.
-// Since we use our own MiniMax dynamic agent, bypass D0 entirely by making its
-// invoke() return {} immediately. The chat service then uses our MiniMax agent.
 const invokePattern = 'return this.L(e,d=>t([d]),n,o,r,a,l,c)';
 if (updated.includes(invokePattern)) {
   updated = updated.replace(
     invokePattern,
-    'return(globalThis.__apaasMiniMaxHandler?.invoke?globalThis.__apaasMiniMaxHandler.invoke(e,t,n,l):{}/*patched:delegate-to-minimax*/)'
+    'return(globalThis.__apaasMiniMaxHandler?.invoke?globalThis.__apaasMiniMaxHandler.invoke(e,t,[],null):{}/*patched:delegate-to-minimax*/)'
   );
   console.log('  Patched D0 invoke to delegate to MiniMax handler');
   changed = true;

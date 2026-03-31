@@ -11,18 +11,48 @@ from app.deps import get_auth_context, AuthContext
 router = APIRouter(prefix="/conversations", tags=["对话"])
 
 
+class ConversationModelUpdateRequest(BaseModel):
+    selected_llm_config_id: Optional[int] = None
+
+
 @router.post("", response_model=ConversationResponse)
 async def create_conversation(
     data: ConversationCreate,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)]
 ):
+    selected_llm_config_id: Optional[int] = None
+    model_purpose = "coding" if data.agent_type == "coding" else ("builder" if data.agent_type in {"builder", "requirements"} else None)
+    if model_purpose:
+        from app.routes.llm_configs import (
+            get_active_llm_config_by_id_for_purpose,
+            get_default_llm_config_id_for_purpose,
+        )
+
+        if data.selected_llm_config_id is not None:
+            config = await get_active_llm_config_by_id_for_purpose(
+                db,
+                ctx.tenant_id,
+                data.selected_llm_config_id,
+                model_purpose,
+            )
+            if not config:
+                raise HTTPException(status_code=400, detail="所选模型不可用")
+            selected_llm_config_id = config.id
+        else:
+            selected_llm_config_id = await get_default_llm_config_id_for_purpose(
+                db,
+                ctx.tenant_id,
+                model_purpose,
+            )
+
     # 创建新对话（租户隔离）
     conversation = Conversation(
         user_id=ctx.user.id,
         tenant_id=ctx.tenant_id,
         title=f"新对话 - {data.agent_type}",
         agent_type=data.agent_type,
+        selected_llm_config_id=selected_llm_config_id,
         status="active"
     )
     db.add(conversation)
@@ -34,6 +64,7 @@ async def create_conversation(
         title=conversation.title,
         agent_type=conversation.agent_type,
         status=conversation.status,
+        selected_llm_config_id=conversation.selected_llm_config_id,
         created_at=conversation.created_at,
         updated_at=conversation.updated_at
     )
@@ -60,6 +91,7 @@ async def list_conversations(
             title=conv.title,
             agent_type=conv.agent_type,
             status=conv.status,
+            selected_llm_config_id=conv.selected_llm_config_id,
             created_at=conv.created_at,
             updated_at=conv.updated_at
         )
@@ -90,8 +122,61 @@ async def get_conversation(
         title=conversation.title,
         agent_type=conversation.agent_type,
         status=conversation.status,
+        selected_llm_config_id=conversation.selected_llm_config_id,
         created_at=conversation.created_at,
         updated_at=conversation.updated_at
+    )
+
+
+@router.patch("/{conversation_id}/model", response_model=ConversationResponse)
+async def update_conversation_model(
+    conversation_id: int,
+    data: ConversationModelUpdateRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    result = await db.execute(
+        select(Conversation).where(
+            Conversation.id == conversation_id,
+            Conversation.user_id == ctx.user.id,
+            Conversation.tenant_id == ctx.tenant_id,
+        )
+    )
+    conversation = result.scalar_one_or_none()
+    if not conversation:
+        raise HTTPException(status_code=404, detail="对话不存在")
+
+    if conversation.agent_type not in {"builder", "requirements", "coding"}:
+        raise HTTPException(status_code=400, detail="当前对话不支持切换模型")
+
+    model_purpose = "coding" if conversation.agent_type == "coding" else "builder"
+
+    if data.selected_llm_config_id is None:
+        conversation.selected_llm_config_id = None
+    else:
+        from app.routes.llm_configs import get_active_llm_config_by_id_for_purpose
+
+        config = await get_active_llm_config_by_id_for_purpose(
+            db,
+            ctx.tenant_id,
+            data.selected_llm_config_id,
+            model_purpose,
+        )
+        if not config:
+            raise HTTPException(status_code=400, detail="所选模型不可用")
+        conversation.selected_llm_config_id = config.id
+
+    await db.commit()
+    await db.refresh(conversation)
+
+    return ConversationResponse(
+        id=conversation.id,
+        title=conversation.title,
+        agent_type=conversation.agent_type,
+        status=conversation.status,
+        selected_llm_config_id=conversation.selected_llm_config_id,
+        created_at=conversation.created_at,
+        updated_at=conversation.updated_at,
     )
 
 
@@ -135,6 +220,7 @@ class ConversationWithAppResponse(BaseModel):
     title: str
     agent_type: str
     status: str
+    selected_llm_config_id: Optional[int] = None
     created_at: str
     updated_at: str
     app_id: Optional[int] = None
@@ -182,6 +268,7 @@ async def list_conversations_with_apps(
             title=conv.title,
             agent_type=conv.agent_type,
             status=conv.status,
+            selected_llm_config_id=conv.selected_llm_config_id,
             created_at=str(conv.created_at),
             updated_at=str(conv.updated_at),
             app_id=app.id if app else None,

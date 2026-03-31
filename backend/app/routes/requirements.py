@@ -9,7 +9,7 @@ import re
 import tempfile
 from typing import Annotated, Optional, Any
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +20,7 @@ from app.database import get_db
 from app.deps import get_auth_context, AuthContext
 from app.llm_client import LLMClient
 from app.models import Conversation, Message
+from app.routes.llm_configs import build_llm_chat_completions_url
 
 logger = logging.getLogger(__name__)
 
@@ -267,29 +268,17 @@ GENERATE_DOC_PROMPT = """请根据上面的对话内容，按照以下6个需求
 
 async def _get_tenant_llm_config(db: AsyncSession, tenant_id: int) -> dict | None:
     """查询租户默认 LLM 配置，返回解密后的 dict（api_key, base_url, model, max_tokens）"""
-    from app.models import LLMConfig
-    from app.crypto import decrypt_password
+    from app.routes.llm_configs import resolve_llm_config_for_purpose
 
-    result = await db.execute(
-        select(LLMConfig).where(
-            LLMConfig.tenant_id == tenant_id,
-            LLMConfig.is_default == True,
-            LLMConfig.status == "active",
-        )
-    )
-    config = result.scalar_one_or_none()
-
-    if not config:
-        result = await db.execute(
-            select(LLMConfig).where(
-                LLMConfig.tenant_id == tenant_id,
-                LLMConfig.status == "active",
-            ).limit(1)
-        )
-        config = result.scalar_one_or_none()
+    config = await resolve_llm_config_for_purpose(db, tenant_id, "builder")
 
     if not config:
         return None
+    return _serialize_llm_config(config)
+
+
+def _serialize_llm_config(config) -> dict:
+    from app.crypto import decrypt_password
 
     return {
         "api_key": decrypt_password(config.api_key_enc),
@@ -297,6 +286,20 @@ async def _get_tenant_llm_config(db: AsyncSession, tenant_id: int) -> dict | Non
         "model": config.model,
         "max_tokens": config.max_tokens or 8192,
     }
+
+
+async def _get_conversation_llm_config(db: AsyncSession, conversation: Conversation) -> dict | None:
+    from app.routes.llm_configs import resolve_llm_config_for_purpose
+
+    config = await resolve_llm_config_for_purpose(
+        db,
+        conversation.tenant_id,
+        "builder",
+        conversation.selected_llm_config_id,
+    )
+    if not config:
+        return None
+    return _serialize_llm_config(config)
 
 
 async def _stream_with_config(cfg: dict | None, messages: list):
@@ -318,7 +321,7 @@ async def _stream_with_config(cfg: dict | None, messages: list):
     async with httpx.AsyncClient(timeout=stream_timeout) as client:
         async with client.stream(
             "POST",
-            f"{cfg['base_url']}/chat/completions",
+            build_llm_chat_completions_url(cfg["base_url"]),
             headers={
                 "Authorization": f"Bearer {cfg['api_key']}",
                 "Content-Type": "application/json",
@@ -366,7 +369,7 @@ async def _complete_with_config(
     timeout = httpx.Timeout(connect=15.0, read=120.0, write=15.0, pool=15.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
         response = await client.post(
-            f"{cfg['base_url']}/chat/completions",
+            build_llm_chat_completions_url(cfg["base_url"]),
             headers={
                 "Authorization": f"Bearer {cfg['api_key']}",
                 "Content-Type": "application/json",
@@ -711,6 +714,10 @@ class ChatMessageRequest(BaseModel):
     message: str
 
 
+class RequirementsSessionCreateRequest(BaseModel):
+    selected_llm_config_id: Optional[int] = None
+
+
 class ExportMdRequest(BaseModel):
     doc_result: dict
 
@@ -720,14 +727,40 @@ class ExportMdRequest(BaseModel):
 @router.post("/sessions")
 async def create_session(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
-    db: Annotated[AsyncSession, Depends(get_db)]
+    db: Annotated[AsyncSession, Depends(get_db)],
+    data: Optional[RequirementsSessionCreateRequest] = Body(default=None),
 ):
     """创建新的需求分析会话"""
+    from app.routes.llm_configs import (
+        get_active_llm_config_by_id_for_purpose,
+        get_default_llm_config_id_for_purpose,
+    )
+
+    selected_llm_config_id: Optional[int] = None
+    requested_model_id = data.selected_llm_config_id if data else None
+    if requested_model_id is not None:
+        config = await get_active_llm_config_by_id_for_purpose(
+            db,
+            ctx.tenant_id,
+            requested_model_id,
+            "builder",
+        )
+        if not config:
+            raise HTTPException(status_code=400, detail="所选模型不可用")
+        selected_llm_config_id = config.id
+    else:
+        selected_llm_config_id = await get_default_llm_config_id_for_purpose(
+            db,
+            ctx.tenant_id,
+            "builder",
+        )
+
     conv = Conversation(
         user_id=ctx.user.id,
         tenant_id=ctx.tenant_id,
         title="新需求分析",
         agent_type="requirements",
+        selected_llm_config_id=selected_llm_config_id,
         status="active",
     )
     db.add(conv)
@@ -747,6 +780,7 @@ async def create_session(
         "title": conv.title,
         "created_at": conv.created_at.isoformat(),
         "updated_at": conv.updated_at.isoformat(),
+        "selected_llm_config_id": conv.selected_llm_config_id,
         "doc_result": None,
         "messages": [
             {"id": greeting.id, "role": "assistant", "content": greeting.content,
@@ -777,6 +811,7 @@ async def list_sessions(
             "title": c.title,
             "created_at": c.created_at.isoformat(),
             "updated_at": c.updated_at.isoformat(),
+            "selected_llm_config_id": c.selected_llm_config_id,
             "has_doc": c.doc_result is not None,
         }
         for c in convs
@@ -814,6 +849,7 @@ async def get_session(
         "title": conv.title,
         "created_at": conv.created_at.isoformat(),
         "updated_at": conv.updated_at.isoformat(),
+        "selected_llm_config_id": conv.selected_llm_config_id,
         "doc_result": conv.doc_result,
         "messages": [
             {"id": m.id, "role": m.role, "content": m.content,
@@ -912,7 +948,7 @@ async def chat(
     llm_messages.extend(truncated)
 
     # 预取租户 LLM 配置（在 db session 有效时）
-    llm_cfg = await _get_tenant_llm_config(db, ctx.tenant_id)
+    llm_cfg = await _get_conversation_llm_config(db, conv)
 
     async def event_generator():
         assistant_content = ""
@@ -1074,7 +1110,7 @@ async def chat_with_file(
         total += length
     llm_messages.extend(truncated)
 
-    llm_cfg = await _get_tenant_llm_config(db, ctx.tenant_id)
+    llm_cfg = await _get_conversation_llm_config(db, conv)
 
     async def event_generator():
         assistant_content = ""
@@ -1177,7 +1213,7 @@ async def generate_doc(
     # 附加生成文档的指令
     llm_messages.append({"role": "user", "content": GENERATE_DOC_PROMPT})
 
-    llm_cfg = await _get_tenant_llm_config(db, ctx.tenant_id)
+    llm_cfg = await _get_conversation_llm_config(db, conv)
     # generate-doc 输出可能较大，但 qwen-max 最多支持 8192 输出 token，强制不超过此值
     if llm_cfg:
         llm_cfg = {**llm_cfg, "max_tokens": 8000}

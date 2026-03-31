@@ -186,7 +186,35 @@
           >{{ generating ? '创建中...' : deployAppId ? '⚡ 重新部署' : '⚡ 开始生成' }}</button>
         </div>
 
-        <div v-if="false" class="input-bar">
+        <div v-if="!appParsedMode" class="input-bar">
+          <div class="model-select-bar builder-model-bar">
+            <div class="builder-model-meta">
+              <span class="builder-model-label">当前模型</span>
+              <span class="model-select-tip">{{ builderModelHint }}</span>
+            </div>
+            <el-select
+              v-model="selectedBuilderModelId"
+              class="builder-model-select"
+              popper-class="model-select-dropdown"
+              size="small"
+              placeholder="选择模型"
+              :loading="builderModelLoading"
+              :disabled="builderModelLoading || updatingBuilderModel || builderModelOptions.length === 0"
+              @change="handleBuilderModelChange"
+            >
+              <el-option
+                v-for="option in builderModelOptions"
+                :key="option.id"
+                :label="formatBuilderModelOption(option)"
+                :value="option.id"
+              >
+                <div class="builder-model-option-row">
+                  <span class="builder-model-option-name">{{ option.config_name }}</span>
+                  <span class="builder-model-option-meta">{{ option.provider }} / {{ option.model }}</span>
+                </div>
+              </el-option>
+            </el-select>
+          </div>
           <div class="input-wrap">
             <label class="upload-btn" title="上传功能设计文档(.md)">
               <input type="file" accept=".md" @change="handleDocUpload" style="display:none" />
@@ -323,6 +351,7 @@ import { platformEnvApi } from '@/api/platformEnv'
 import request from '@/utils/request'
 import type { Message } from '@/types'
 import ThemeToggle from '@/components/ThemeToggle.vue'
+import { llmConfigApi, type BuilderModelOption } from '@/api/llmConfig'
 
 const router = useRouter()
 const route = useRoute()
@@ -359,6 +388,99 @@ const inputText = ref('')
 const isTyping = ref(false)
 const currentAgent = ref('builder')
 const SHOW_PLATFORM_CONFIG = true
+const builderModelOptions = ref<BuilderModelOption[]>([])
+const builderModelLoading = ref(false)
+const updatingBuilderModel = ref(false)
+const selectedBuilderModelId = ref<number | null>(null)
+const persistedBuilderModelId = ref<number | null>(null)
+const defaultBuilderModelId = computed(() =>
+  builderModelOptions.value.find(option => option.is_default)?.id
+  ?? builderModelOptions.value[0]?.id
+  ?? null
+)
+const builderModelHint = computed(() => {
+  if (builderModelLoading.value) return '正在加载可用模型...'
+  if (builderModelOptions.value.length === 0) return '未配置可用模型，请前往环境管理配置'
+  if (conversationId.value) return '切换后仅影响后续对话与生成配置'
+  return '首条消息会使用当前选择的模型'
+})
+
+const normalizeBuilderModelId = (modelId?: number | null): number | null => {
+  const ids = new Set(builderModelOptions.value.map(option => option.id))
+  if (modelId != null && ids.has(modelId)) return modelId
+  return defaultBuilderModelId.value
+}
+
+const applyBuilderModelSelection = (modelId?: number | null) => {
+  const normalized = normalizeBuilderModelId(modelId)
+  selectedBuilderModelId.value = normalized
+  persistedBuilderModelId.value = conversationId.value ? normalized : null
+}
+
+const formatBuilderModelOption = (option: BuilderModelOption): string => option.config_name
+
+const loadBuilderModelOptions = async () => {
+  builderModelLoading.value = true
+  try {
+    builderModelOptions.value = await llmConfigApi.listOptions('builder')
+    selectedBuilderModelId.value = normalizeBuilderModelId(selectedBuilderModelId.value)
+    if (conversationId.value) {
+      persistedBuilderModelId.value = normalizeBuilderModelId(persistedBuilderModelId.value)
+    }
+  } catch (e) {
+    console.error('获取 builder 模型列表失败:', e)
+    builderModelOptions.value = []
+    selectedBuilderModelId.value = null
+    persistedBuilderModelId.value = null
+  } finally {
+    builderModelLoading.value = false
+  }
+}
+
+const syncBuilderModelFromConversation = async (cid: number) => {
+  try {
+    const conversation = await conversationApi.get(cid)
+    applyBuilderModelSelection(conversation.selected_llm_config_id)
+
+    const convIdx = conversationList.value.findIndex(item => item.id === cid)
+    if (convIdx >= 0) {
+      const currentConversation = conversationList.value[convIdx]
+      if (currentConversation) {
+        currentConversation.selected_llm_config_id = conversation.selected_llm_config_id ?? null
+      }
+    }
+  } catch (e) {
+    console.warn('恢复会话模型失败:', e)
+    applyBuilderModelSelection(null)
+  }
+}
+
+const handleBuilderModelChange = async (nextValue: number | null) => {
+  selectedBuilderModelId.value = nextValue
+  if (!conversationId.value) return
+
+  const previousValue = persistedBuilderModelId.value
+  updatingBuilderModel.value = true
+  try {
+    const updated = await conversationApi.updateModel(conversationId.value, nextValue)
+    const normalized = normalizeBuilderModelId(updated.selected_llm_config_id)
+    selectedBuilderModelId.value = normalized
+    persistedBuilderModelId.value = normalized
+
+    const convIdx = conversationList.value.findIndex(item => item.id === conversationId.value)
+    if (convIdx >= 0) {
+      const currentConversation = conversationList.value[convIdx]
+      if (currentConversation) {
+        currentConversation.selected_llm_config_id = updated.selected_llm_config_id ?? null
+      }
+    }
+  } catch (e: any) {
+    selectedBuilderModelId.value = normalizeBuilderModelId(previousValue)
+    ElMessage.error(e?.response?.data?.detail || '切换模型失败')
+  } finally {
+    updatingBuilderModel.value = false
+  }
+}
 
 // ── 应用计数（导航栏徽标） ──
 const appCount = ref(0)
@@ -783,6 +905,7 @@ const loadConversation = async (cid: number) => {
   resetConversationWorkspace()
   conversationId.value = cid
   selectedConversationId.value = cid
+  await syncBuilderModelFromConversation(cid)
 
   messages.splice(0, messages.length)
 
@@ -850,6 +973,8 @@ const startNewConversation = () => {
   resetConversationWorkspace()
   conversationId.value = null
   selectedConversationId.value = null
+  persistedBuilderModelId.value = null
+  selectedBuilderModelId.value = defaultBuilderModelId.value
   messages.splice(0, messages.length)
   messages.push({ id: 0, role: 'assistant', agent: 'builder', content: '你好！我是 aPaaS 智能搭建，可以帮你通过对话的方式在得帆云平台上快速搭建应用。\n\n你可以告诉我想要创建什么系统，我会帮你理清需求并自动生成。\n\n比如：\n• "我想做一个客户管理系统"\n• "帮我搭建一个项目管理应用"\n• "创建一个售后服务工单系统"', created_at: '' })
   router.replace('/chat')
@@ -1687,9 +1812,13 @@ const handleDocVersionUpload = async (file: File, appId: number) => {
     // 如果没有会话ID，自动创建一个关联到当前应用
     if (!conversationId.value) {
       try {
-        const newConv = await conversationApi.create({ agent_type: 'builder' })
+        const newConv = await conversationApi.create({
+          agent_type: 'builder',
+          ...(selectedBuilderModelId.value != null ? { selected_llm_config_id: selectedBuilderModelId.value } : {}),
+        })
         conversationId.value = newConv.id
         selectedConversationId.value = newConv.id
+        applyBuilderModelSelection(newConv.selected_llm_config_id)
       } catch {
         throw new Error('创建会话失败')
       }
@@ -2081,12 +2210,16 @@ const createConversation = async () => {
   const res = await fetch(`${API_PREFIX}/conversations`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-    body: JSON.stringify({ agent_type: currentAgent.value })
+    body: JSON.stringify({
+      agent_type: currentAgent.value,
+      ...(selectedBuilderModelId.value != null ? { selected_llm_config_id: selectedBuilderModelId.value } : {}),
+    })
   })
   if (res.ok) {
     const data = await res.json()
     conversationId.value = data.id
     selectedConversationId.value = data.id
+    applyBuilderModelSelection(data.selected_llm_config_id)
     // 更新 URL，刷新后能恢复对话
     router.replace(`/chat/${data.id}`)
     // 刷新对话列表
@@ -2214,6 +2347,8 @@ onMounted(async () => {
     }
   } catch (e) { /* ignore */ }
 
+  await loadBuilderModelOptions()
+
   // ── 优先通过 app_id 加载应用（应用为锚点）──
   const appIdParam = route.query.app_id as string
   if (appIdParam) {
@@ -2242,6 +2377,7 @@ onMounted(async () => {
         if (app.conversation_id) {
           conversationId.value = app.conversation_id
           selectedConversationId.value = app.conversation_id
+          await syncBuilderModelFromConversation(app.conversation_id)
           if (!appParsedMode.value) {
             const historyMessages = await conversationApi.getMessages(app.conversation_id)
             if (historyMessages?.length) {
@@ -2268,6 +2404,7 @@ onMounted(async () => {
       if (!isNaN(cid)) {
         conversationId.value = cid
         try {
+          await syncBuilderModelFromConversation(cid)
           // 加载历史消息
           const historyMessages = await conversationApi.getMessages(cid)
           if (historyMessages && historyMessages.length > 0) {
@@ -2351,6 +2488,7 @@ onMounted(async () => {
         // 加载关联的对话
         if (app.conversation_id) {
           conversationId.value = app.conversation_id
+          await syncBuilderModelFromConversation(app.conversation_id)
           if (!appParsedMode.value) {
             const historyMessages = await conversationApi.getMessages(app.conversation_id)
             if (historyMessages?.length) {
@@ -2396,6 +2534,8 @@ onMounted(async () => {
   // 同步对话历史选中
   if (conversationId.value) {
     selectedConversationId.value = conversationId.value
+  } else {
+    selectedBuilderModelId.value = defaultBuilderModelId.value
   }
 
   // 加载对话历史列表
@@ -2774,6 +2914,16 @@ watch(conversationId, (id) => {
 .send-btn.disabled { opacity: 0.3; cursor: not-allowed; }
 .send-btn:hover:not(.disabled) { transform: translateY(-1px); box-shadow: 0 4px 12px var(--t-brand-glow); }
 
+@media (max-width: 960px) {
+  .builder-model-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .builder-model-select {
+    width: 100%;
+  }
+}
+
 /* ── 右侧预览面板 ── */
 .preview-side {
   flex: 1; background: var(--t-bg-base); border-left: 1px solid var(--t-border-subtle);
@@ -3008,6 +3158,27 @@ watch(conversationId, (id) => {
 
 /* 模型选择 */
 .model-select-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; padding: 8px 12px; background: var(--t-border-subtle); border-radius: 8px; }
+.builder-model-bar { gap: 14px; border: 1px solid var(--t-border-subtle); background: var(--t-bg-elevated); border-radius: 12px; padding: 10px 14px; }
+.builder-model-meta { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.builder-model-label { font-size: 12px; font-weight: 600; color: var(--t-text-primary); }
+.builder-model-select { width: min(460px, 60%); flex-shrink: 0; }
+.builder-model-select :deep(.el-select__wrapper) {
+  min-height: 38px;
+  border-radius: 12px;
+  background: var(--t-bg-base);
+  box-shadow: inset 0 0 0 1px var(--t-border-subtle);
+}
+.builder-model-select :deep(.el-select__selected-item),
+.builder-model-select :deep(.el-select__placeholder) {
+  color: var(--t-text-primary);
+}
+.builder-model-select :deep(.el-select__caret),
+.builder-model-select :deep(.el-select__suffix) {
+  color: var(--t-text-muted);
+}
+.builder-model-option-row { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 4px 0; }
+.builder-model-option-name { color: var(--t-text-primary); }
+.builder-model-option-meta { font-size: 12px; color: var(--t-text-muted); }
 .model-select-all { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--t-text-primary); cursor: pointer; }
 .model-select-all input { accent-color: var(--t-brand); }
 .model-select-tip { font-size: 11px; color: var(--t-text-muted); }

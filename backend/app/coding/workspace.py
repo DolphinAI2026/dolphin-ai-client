@@ -22,7 +22,28 @@ from enum import Enum
 logger = logging.getLogger(__name__)
 
 # 工作区根目录
-WORKSPACE_ROOT = Path(__file__).parent.parent.parent.parent / "workspaces"
+REPO_ROOT = Path(__file__).resolve().parents[3]
+LEGACY_WORKSPACE_ROOT = REPO_ROOT / "workspaces"
+
+
+def _resolve_workspace_root() -> Path:
+    explicit_root = (os.environ.get("APAAS_WORKSPACE_ROOT") or "").strip()
+    if explicit_root:
+        return Path(explicit_root).expanduser()
+
+    # df-apaas-cli build 会把 entry 直接拼进 shell 命令里，路径里如果包含空格，
+    # vue-cli-service 会把 entry 拆坏，最终在 code-server 内触发 EISDIR。
+    if " " in str(LEGACY_WORKSPACE_ROOT):
+        return Path.home() / ".apaas-builder-ai" / "workspaces"
+
+    return LEGACY_WORKSPACE_ROOT
+
+
+WORKSPACE_ROOT = _resolve_workspace_root()
+WORKSPACE_SEARCH_ROOTS = tuple(
+    root for idx, root in enumerate((WORKSPACE_ROOT, LEGACY_WORKSPACE_ROOT))
+    if root not in (WORKSPACE_ROOT, LEGACY_WORKSPACE_ROOT)[:idx]
+)
 DEPENDENCY_CACHE_ROOT = WORKSPACE_ROOT / ".dependency-cache"
 NPM_CACHE_ROOT = WORKSPACE_ROOT / ".npm-cache"
 DEFAULT_RULES_ROOT = Path(__file__).parent / "default_rules"
@@ -253,26 +274,56 @@ class WorkspaceManager:
         return folder_name
 
     def _iter_workspace_dirs(self):
-        if not WORKSPACE_ROOT.exists():
-            return
-        for candidate in WORKSPACE_ROOT.iterdir():
-            if not candidate.is_dir():
+        seen: set[Path] = set()
+        for root in WORKSPACE_SEARCH_ROOTS:
+            if not root.exists():
                 continue
-            if candidate.name.startswith("."):
-                continue
-            if not (candidate / ".workspace.json").exists():
-                continue
-            yield candidate
+            for candidate in root.iterdir():
+                if not candidate.is_dir():
+                    continue
+                if candidate.name.startswith("."):
+                    continue
+                if not (candidate / ".workspace.json").exists():
+                    continue
+                resolved_candidate = candidate.resolve()
+                if resolved_candidate in seen:
+                    continue
+                seen.add(resolved_candidate)
+                yield candidate
+
+    def _workspace_root_priority(self, ws_path: Path) -> int:
+        return 0 if ws_path.parent == WORKSPACE_ROOT else 1
+
+    def _migrate_workspace_if_needed(self, ws_path: Path) -> Path:
+        if ws_path.parent == WORKSPACE_ROOT or WORKSPACE_ROOT == LEGACY_WORKSPACE_ROOT:
+            self._ensure_copy_asset_placeholders(ws_path)
+            return ws_path
+
+        target_path = WORKSPACE_ROOT / ws_path.name
+        if target_path.exists():
+            self._ensure_copy_asset_placeholders(target_path)
+            return target_path
+
+        try:
+            shutil.copytree(ws_path, target_path, symlinks=True)
+            self._ensure_copy_asset_placeholders(target_path)
+            logger.info("Migrated legacy workspace to primary root: %s -> %s", ws_path, target_path)
+            return target_path
+        except Exception as exc:
+            logger.warning("Failed to migrate legacy workspace %s: %s", ws_path, exc)
+            return ws_path
 
     def get_workspace_path(self, ws_id: str) -> Path:
         cached = self._workspace_path_cache.get(ws_id)
         if cached and cached.exists():
             return cached
 
-        direct = WORKSPACE_ROOT / ws_id
-        if direct.exists():
-            self._workspace_path_cache[ws_id] = direct
-            return direct
+        for root in WORKSPACE_SEARCH_ROOTS:
+            direct = root / ws_id
+            if direct.exists():
+                resolved_path = self._migrate_workspace_if_needed(direct)
+                self._workspace_path_cache[ws_id] = resolved_path
+                return resolved_path
 
         for candidate in self._iter_workspace_dirs():
             try:
@@ -280,8 +331,9 @@ class WorkspaceManager:
             except Exception:
                 continue
             if meta.get("id") == ws_id:
-                self._workspace_path_cache[ws_id] = candidate
-                return candidate
+                resolved_path = self._migrate_workspace_if_needed(candidate)
+                self._workspace_path_cache[ws_id] = resolved_path
+                return resolved_path
 
         raise FileNotFoundError(f"Workspace {ws_id} not found")
 
@@ -358,6 +410,36 @@ class WorkspaceManager:
             if target.exists():
                 continue
             shutil.copy2(source, target)
+
+    def _ensure_copy_asset_placeholders(self, ws_path: Path):
+        """为 copyAssets 目录补可见占位文件，避免 df-apaas-cli 的 cp path/* 在空目录时报错。"""
+        apaas_config = self._read_apaas_config(ws_path)
+        copy_assets = apaas_config.get("copyAssets") or []
+        placeholder_content = (
+            "Placeholder asset file for df-apaas-cli copyAssets.\n"
+            "Delete this file after you add real assets.\n"
+        )
+
+        for copy_asset in copy_assets:
+            if not isinstance(copy_asset, str):
+                continue
+            normalized_asset = copy_asset.strip().strip("/")
+            if not normalized_asset:
+                continue
+
+            asset_dir = ws_path / normalized_asset
+            asset_dir.mkdir(parents=True, exist_ok=True)
+
+            has_visible_entries = any(
+                child.name != ".DS_Store" and not child.name.startswith(".")
+                for child in asset_dir.iterdir()
+            )
+            if has_visible_entries:
+                continue
+
+            placeholder_path = asset_dir / "asset-placeholder.txt"
+            if not placeholder_path.exists():
+                placeholder_path.write_text(placeholder_content, encoding="utf-8")
 
     def _strip_project_prefix(self, project_type: str, project_name: str) -> str:
         base_name = (project_name or "").strip()
@@ -679,6 +761,7 @@ class WorkspaceManager:
             logger.warning(f"Unsupported project type for scaffolding: {project_type}")
 
         self._seed_default_workspace_rules(ws_path, project_type)
+        self._ensure_copy_asset_placeholders(ws_path)
 
         # 生成 VS Code AI Chat 配置（接入 LLM）
         try:
@@ -1616,24 +1699,45 @@ const resultPath = '{str(result_json_path)}'
 
     def list_user_workspaces(self, user_id: int) -> list:
         """列出用户的所有工作区"""
-        results = []
-        if not WORKSPACE_ROOT.exists():
-            return results
+        results_by_id: dict[str, dict] = {}
+        if not any(root.exists() for root in WORKSPACE_SEARCH_ROOTS):
+            return []
         for d in self._iter_workspace_dirs():
             try:
                 meta = self._decorate_workspace_meta(d, self._read_meta(d))
                 if meta.get("user_id") != user_id:
                     continue
-                results.append(meta)
+                ws_id = str(meta.get("id") or d.name)
+                existing = results_by_id.get(ws_id)
+                if not existing:
+                    results_by_id[ws_id] = meta
+                    continue
+
+                existing_path = Path(existing.get("disk_path") or d)
+                if self._workspace_root_priority(d) < self._workspace_root_priority(existing_path):
+                    results_by_id[ws_id] = meta
             except Exception:
                 pass
-        return results
+        return list(results_by_id.values())
 
     def delete_workspace(self, ws_id: str):
         """删除工作区"""
-        ws_path = self.get_workspace_path(ws_id)
-        if ws_path.exists():
-            shutil.rmtree(ws_path)
+        matched_paths: list[Path] = []
+        try:
+            matched_paths.append(self.get_workspace_path(ws_id))
+        except FileNotFoundError:
+            pass
+
+        for candidate in self._iter_workspace_dirs():
+            try:
+                if self._read_meta(candidate).get("id") == ws_id:
+                    matched_paths.append(candidate)
+            except Exception:
+                continue
+
+        for ws_path in {path.resolve(): path for path in matched_paths}.values():
+            if ws_path.exists():
+                shutil.rmtree(ws_path)
         self._workspace_path_cache.pop(ws_id, None)
 
     # ========== 内部方法 ==========

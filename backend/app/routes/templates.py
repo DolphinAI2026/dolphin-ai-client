@@ -43,7 +43,10 @@ def _scan_templates() -> list[dict]:
 
     templates = []
     for md_file in sorted(TEMPLATES_DIR.glob("*.md")):
-        content = md_file.read_text(encoding="utf-8")
+        try:
+            content = md_file.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
         meta, _ = _parse_frontmatter(content)
 
         if not meta.get("name") or not meta.get("code"):

@@ -68,6 +68,7 @@ class Conversation(Base):
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     agent_type: Mapped[str] = mapped_column(String(20), nullable=False)  # builder/assistant/developer/requirements
     workspace_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)  # coding工作区ID
+    selected_llm_config_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(20), default="active", nullable=False)  # active/completed/failed
     doc_result: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # 需求分析生成的设计文档 JSON
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
