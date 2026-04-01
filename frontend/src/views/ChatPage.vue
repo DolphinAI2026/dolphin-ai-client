@@ -119,7 +119,7 @@
                 :doc-result="docResultForCard"
                 :confirming="confirmingDoc"
                 @confirm="confirmDocAndBuild"
-                @edit="ElMessage.info('编辑功能即将推出')"
+                @edit="(updated: any) => { docResultForCard = updated }"
               />
             </div>
           </div>
@@ -3121,8 +3121,16 @@ const generateDocInBackground = async () => {
   if (!conversationId.value || generatingDoc.value) return
   generatingDoc.value = true
 
+  // 添加进度提示消息
+  const progressMsgId = Date.now()
+  messages.push({
+    id: progressMsgId, role: 'assistant', agent: 'builder',
+    content: '⏳ 正在根据需求生成应用配置，请稍候...',
+    created_at: ''
+  })
+  scrollToBottom()
+
   const token = localStorage.getItem('token') || ''
-  // 使用 requirements 的 generate-doc 端点（从对话历史生成 JSON）
   const url = requirementsApi.generateDocUrl(conversationId.value)
 
   try {
@@ -3150,6 +3158,12 @@ const generateDocInBackground = async () => {
           if (!dataStr) continue
           try {
             const data = JSON.parse(dataStr)
+            if (data.content) {
+              // 实时更新进度消息内容
+              const progressMsg = messages.find(m => m.id === progressMsgId)
+              if (progressMsg) progressMsg.content = '⏳ ' + data.content
+              scrollToBottom()
+            }
             if (data.doc_result) {
               docResultForCard.value = data.doc_result
             }
@@ -3158,12 +3172,17 @@ const generateDocInBackground = async () => {
       }
     }
 
+    // 移除进度消息，DesignDocCard 会显示结果
+    const idx = messages.findIndex(m => m.id === progressMsgId)
+    if (idx >= 0) messages.splice(idx, 1)
+
     if (docResultForCard.value) {
       scrollToBottom()
     }
   } catch (e: any) {
     console.error('Background doc generation failed:', e)
-    // 静默失败，不打断用户
+    const progressMsg = messages.find(m => m.id === progressMsgId)
+    if (progressMsg) progressMsg.content = '⚠️ 配置生成失败，请重新描述需求后重试。'
   } finally {
     generatingDoc.value = false
   }
@@ -3289,17 +3308,20 @@ const confirmDocAndBuild = async () => {
       id: Date.now(),
       role: 'assistant',
       agent: 'builder',
-      content: `配置已就绪！已提取 ${appConfig.models?.length || 0} 个模型、${appConfig.dicts?.length || 0} 个字典、${appConfig.roles?.length || 0} 个角色。\n\n请点击下方「开始生成」将应用部署到平台。`,
+      content: `配置已就绪！已提取 ${appConfig.models?.length || 0} 个模型、${appConfig.dicts?.length || 0} 个字典、${appConfig.roles?.length || 0} 个角色。正在开始生成...`,
       created_at: '',
     })
 
     docResultForCard.value = null  // Clear card
     scrollToBottom()
-    ElMessage.success('设计文档已确认，进入搭建模式')
 
     // Update URL
     router.replace(`/chat/${conversationId.value}?app_id=${created.id}`)
     fetchConversationList()
+
+    // 自动触发生成流程（合并为一步）
+    await nextTick()
+    startGenerate()
   } catch (e: any) {
     ElMessage.error('转换失败: ' + (e.message || '未知错误'))
   } finally {
@@ -4378,6 +4400,12 @@ watch(conversationId, (id) => {
   align-items: center;
   padding: 4px 12px 8px;
   border-top: 1px solid var(--t-border-subtle);
+}
+.kbd-hint {
+  font-size: 11px;
+  color: var(--t-text-muted);
+  opacity: 0.6;
+  white-space: nowrap;
 }
 .input-card-spacer { flex: 1; }
 .input-model-select {

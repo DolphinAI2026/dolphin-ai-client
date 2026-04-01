@@ -91,11 +91,29 @@
       </div>
     </div>
 
+    <!-- JSON 编辑区域 -->
+    <div v-if="editMode" class="ddc-edit-area">
+      <div class="ddc-edit-header">
+        <span>编辑设计文档 (JSON)</span>
+        <div class="ddc-edit-btns">
+          <button class="ddc-btn secondary" @click="cancelEdit">取消</button>
+          <button class="ddc-btn primary" @click="saveEdit">保存修改</button>
+        </div>
+      </div>
+      <textarea
+        v-model="editJson"
+        class="ddc-json-editor"
+        spellcheck="false"
+        rows="20"
+      ></textarea>
+      <p v-if="editError" class="ddc-edit-error">{{ editError }}</p>
+    </div>
+
     <!-- 操作按钮 -->
-    <div v-if="showActions !== false" class="ddc-actions">
-      <button class="ddc-btn secondary" @click="$emit('edit')">编辑详情</button>
+    <div v-if="!editMode && showActions !== false" class="ddc-actions">
+      <button class="ddc-btn secondary" @click="startEdit">编辑详情</button>
       <button class="ddc-btn primary" @click="$emit('confirm')" :disabled="confirming">
-        {{ confirming ? '正在转换...' : '确认并开始搭建 →' }}
+        {{ confirming ? '正在生成...' : '确认并开始生成 →' }}
       </button>
     </div>
   </div>
@@ -104,24 +122,49 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 
-defineProps<{
+const props = defineProps<{
   docResult: any
   confirming?: boolean
   showActions?: boolean
 }>()
 
-defineEmits<{
-  edit: []
+const emit = defineEmits<{
+  edit: [updatedDoc: any]
   confirm: []
 }>()
 
 const openSections = ref(new Set<string>())
+const editMode = ref(false)
+const editJson = ref('')
+const editError = ref('')
 
 function toggleSection(key: string) {
   if (openSections.value.has(key)) {
     openSections.value.delete(key)
   } else {
     openSections.value.add(key)
+  }
+}
+
+function startEdit() {
+  editJson.value = JSON.stringify(props.docResult, null, 2)
+  editError.value = ''
+  editMode.value = true
+}
+
+function cancelEdit() {
+  editMode.value = false
+  editError.value = ''
+}
+
+function saveEdit() {
+  try {
+    const parsed = JSON.parse(editJson.value)
+    emit('edit', parsed)
+    editMode.value = false
+    editError.value = ''
+  } catch (e: any) {
+    editError.value = 'JSON 格式错误: ' + e.message
   }
 }
 </script>
@@ -376,5 +419,45 @@ function toggleSection(key: string) {
 .ddc-btn.primary:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* Edit mode */
+.ddc-edit-area {
+  padding: 10px 14px;
+  border-top: 1px solid var(--t-border-subtle);
+}
+.ddc-edit-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--t-text-primary);
+}
+.ddc-edit-btns {
+  display: flex;
+  gap: 6px;
+}
+.ddc-json-editor {
+  width: 100%;
+  font-family: 'SF Mono', 'Consolas', monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  padding: 10px;
+  border: 1px solid var(--t-border-subtle);
+  border-radius: 8px;
+  background: var(--t-bg-input);
+  color: var(--t-text-primary);
+  resize: vertical;
+  outline: none;
+}
+.ddc-json-editor:focus {
+  border-color: var(--t-brand);
+}
+.ddc-edit-error {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--t-danger, #ef4444);
 }
 </style>

@@ -17,7 +17,7 @@
         </ul>
       </div>
       <div class="brand-footer">
-        <span>&copy; 2024 aPaaS Builder AI</span>
+        <span>&copy; {{ new Date().getFullYear() }} aPaaS Builder AI</span>
       </div>
     </div>
 
@@ -375,10 +375,10 @@ const handleRegister = async () => {
   color: rgba(255, 255, 255, 0.4);
 }
 
-/* ── Right form panel (白色背景，参考 MarsAgent) ── */
+/* ── Right form panel ── */
 .form-panel {
   flex: 1;
-  background: #fff;
+  background: var(--t-bg-main, #fff);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -395,13 +395,13 @@ const handleRegister = async () => {
   margin: 0 0 8px 0;
   font-size: 28px;
   font-weight: 700;
-  color: #1a1a1a;
+  color: var(--t-text-primary, #1a1a1a);
 }
 
 .form-subtitle {
   margin: 0 0 32px 0;
   font-size: 14px;
-  color: #888;
+  color: var(--t-text-muted, #888);
 }
 
 /* ── Tabs ── */
@@ -420,16 +420,16 @@ const handleRegister = async () => {
 .login-tabs :deep(.el-tabs__item) {
   font-size: 16px;
   font-weight: 500;
-  color: #999;
+  color: var(--t-text-muted, #999);
   transition: color 0.2s;
 }
 
 .login-tabs :deep(.el-tabs__item:hover) {
-  color: #555;
+  color: var(--t-text-secondary, #555);
 }
 
 .login-tabs :deep(.el-tabs__item.is-active) {
-  color: #1a1a1a;
+  color: var(--t-text-primary, #1a1a1a);
   font-weight: 600;
 }
 
@@ -438,14 +438,14 @@ const handleRegister = async () => {
 }
 
 .login-tabs :deep(.el-tabs__nav-wrap::after) {
-  background-color: #e5e7eb;
+  background-color: var(--t-border-subtle, #e5e7eb);
 }
 
-/* ── Input fields (白色背景下) ── */
+/* ── Input fields ── */
 :deep(.el-input__wrapper) {
-  background: #fff !important;
+  background: var(--t-bg-main, #fff) !important;
   border-radius: 10px;
-  box-shadow: 0 0 0 1px #d1d5db inset;
+  box-shadow: 0 0 0 1px var(--t-border-subtle, #d1d5db) inset;
   transition: all 0.25s;
 }
 
@@ -454,14 +454,14 @@ const handleRegister = async () => {
 :deep(.el-input__inner:-webkit-autofill:hover),
 :deep(.el-input__inner:-webkit-autofill:focus),
 :deep(.el-input__inner:-webkit-autofill:active) {
-  -webkit-box-shadow: 0 0 0 9999px #fff inset !important;
-  -webkit-text-fill-color: #1a1a1a !important;
+  -webkit-box-shadow: 0 0 0 9999px var(--t-bg-main, #fff) inset !important;
+  -webkit-text-fill-color: var(--t-text-primary, #1a1a1a) !important;
   transition: background-color 9999s ease-in-out 0s;
-  caret-color: #1a1a1a;
+  caret-color: var(--t-text-primary, #1a1a1a);
 }
 
 :deep(.el-input__wrapper:hover) {
-  box-shadow: 0 0 0 1px #9ca3af inset;
+  box-shadow: 0 0 0 1px var(--t-text-muted, #9ca3af) inset;
 }
 
 :deep(.el-input__wrapper.is-focus) {
@@ -469,24 +469,24 @@ const handleRegister = async () => {
 }
 
 :deep(.el-input__inner) {
-  color: #1a1a1a;
+  color: var(--t-text-primary, #1a1a1a);
 }
 
 :deep(.el-input__inner::placeholder) {
-  color: #9ca3af;
+  color: var(--t-text-muted, #9ca3af);
 }
 
 :deep(.el-input__prefix .el-icon) {
-  color: #9ca3af;
+  color: var(--t-text-muted, #9ca3af);
 }
 
 :deep(.el-input__suffix .el-icon) {
-  color: #9ca3af;
+  color: var(--t-text-muted, #9ca3af);
 }
 
 /* ── Form labels ── */
 :deep(.el-form-item__label) {
-  color: #374151;
+  color: var(--t-text-secondary, #374151);
   font-weight: 500;
 }
 

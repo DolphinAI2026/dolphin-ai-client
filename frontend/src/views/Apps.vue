@@ -460,6 +460,7 @@ onMounted(async () => {
   transition: opacity 0.2s;
 }
 .grid-card:hover .grid-card-actions { opacity: 1; }
+@media (hover: none) { .grid-card-actions { opacity: 1; } }
 
 /* ── List Card ── */
 .list-card {

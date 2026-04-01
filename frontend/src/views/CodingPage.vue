@@ -36,6 +36,15 @@
 
               <!-- Input Area (centered) -->
               <div class="welcome-input-area">
+                <div class="coding-model-bar">
+                  <div class="coding-model-meta">
+                    <span class="coding-model-label">当前模型</span>
+                    <span v-if="codingModelOptions.length === 0" class="coding-model-tip">
+                      未配置可用模型，<router-link to="/platform-envs" style="color:var(--t-brand);text-decoration:underline">前往环境管理配置</router-link>
+                    </span>
+                    <span v-else class="coding-model-tip">{{ codingModelHint }}</span>
+                  </div>
+                </div>
                 <!-- Attachment Preview -->
                 <div v-if="attachedFile" class="attachment-preview">
                   <div v-if="attachedPreviewUrl" class="attachment-thumb">
