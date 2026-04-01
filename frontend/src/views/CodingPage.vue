@@ -75,6 +75,61 @@
       </div>
     </header>
 
+    <!-- 嵌入模式浮动工具栏（智能开发 tab 内使用） -->
+    <div v-if="embeddedAppId" class="embedded-toolbar">
+      <div v-if="ideUrl || streamMessages.length > 0" class="view-toggle">
+        <button
+          class="view-toggle-btn"
+          :class="{ active: activeView === 'chat' }"
+          @click="activeView = 'chat'"
+          title="对话记录"
+        >
+          <el-icon :size="14"><ChatDotRound /></el-icon>
+          <span class="view-toggle-label">Chat</span>
+        </button>
+        <button
+          class="view-toggle-btn"
+          :class="{ active: activeView === 'ide', disabled: !ideUrl }"
+          :disabled="!ideUrl"
+          @click="ideUrl && (activeView = 'ide')"
+          title="代码编辑器"
+        >
+          <el-icon :size="14"><Monitor /></el-icon>
+          <span class="view-toggle-label">IDE</span>
+        </button>
+      </div>
+      <el-tag
+        v-if="codingStore.workspace"
+        size="small"
+        type="info"
+        class="embedded-ws-tag"
+      >
+        {{ workspaceDisplayName(codingStore.workspace) }}
+      </el-tag>
+      <template v-if="codingStore.workspace">
+        <el-button
+          size="small"
+          type="success"
+          :loading="isDownloading"
+          @click="downloadCode"
+          title="下载代码"
+          circle
+        >
+          <el-icon><Download /></el-icon>
+        </el-button>
+        <el-button
+          size="small"
+          type="danger"
+          text
+          @click="deleteCurrentWorkspace"
+          title="删除当前工作区"
+          circle
+        >
+          <el-icon><Delete /></el-icon>
+        </el-button>
+      </template>
+    </div>
+
     <!-- Env Picker Dialog -->
     <el-dialog v-model="showEnvPicker" title="选择调试平台环境" width="500px" :append-to-body="true">
       <div v-if="platformEnvs.length === 0" style="text-align:center;color:#999;padding:20px;">
@@ -1437,6 +1492,28 @@ watch(() => route.path, () => {
 }
 .view-toggle-label {
   line-height: 1;
+}
+
+/* ============ Embedded Toolbar (嵌入模式浮动工具栏) ============ */
+.embedded-toolbar {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  background: var(--t-bg-nav);
+  border: 1px solid var(--t-border-subtle);
+  border-radius: 10px;
+  backdrop-filter: blur(12px);
+  box-shadow: var(--t-shadow-sm);
+}
+.embedded-ws-tag {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ============ Body Layout ============ */
