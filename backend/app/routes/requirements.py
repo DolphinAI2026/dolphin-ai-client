@@ -283,13 +283,10 @@ async def _get_conversation_llm_config(db: AsyncSession, conversation: Conversat
     return {"api_key": resolved.api_key, "base_url": resolved.base_url, "model": resolved.model, "max_tokens": resolved.max_tokens}
 
 
-async def _stream_with_config(cfg: dict | None, messages: list):
-    """使用 cfg 指定的 OpenAI 兼容接口流式调用；cfg 为 None 时 fallback 到 LLMClient"""
+async def _stream_with_config(cfg: dict | None, messages: list, max_retries: int = 2):
+    """使用 cfg 指定的 OpenAI 兼容接口流式调用；cfg 为 None 时 fallback 到 LLMClient。支持重试。"""
     if cfg is None:
-        llm = LLMClient()
-        async for chunk in llm.chat_completion_stream(messages):
-            yield chunk
-        return
+        raise ValueError("未配置可用的 LLM 模型，请在环境管理 → 模型配置中添加并启用模型")
 
     payload = {
         "model": cfg["model"],
@@ -297,30 +294,42 @@ async def _stream_with_config(cfg: dict | None, messages: list):
         "max_tokens": cfg["max_tokens"],
         "stream": True,
     }
+    url = build_llm_chat_completions_url(cfg["base_url"])
+    headers = {"Authorization": f"Bearer {cfg['api_key']}", "Content-Type": "application/json"}
     stream_timeout = httpx.Timeout(connect=15.0, read=300.0, write=15.0, pool=15.0)
 
-    async with httpx.AsyncClient(timeout=stream_timeout) as client:
-        async with client.stream(
-            "POST",
-            build_llm_chat_completions_url(cfg["base_url"]),
-            headers={
-                "Authorization": f"Bearer {cfg['api_key']}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-        ) as response:
-            response.raise_for_status()
-            async for line in response.aiter_lines():
-                if not line or not line.startswith("data:"):
-                    continue
-                raw = line[5:].strip()
-                if raw == "[DONE]":
-                    break
-                try:
-                    data = json.loads(raw)
-                    yield json.dumps(data, ensure_ascii=False)
-                except Exception:
-                    continue
+    last_err = None
+    for attempt in range(max_retries + 1):
+        if attempt > 0:
+            import asyncio
+            await asyncio.sleep(1)
+            logger.info("LLM stream retry %d/%d for %s", attempt, max_retries, url)
+        try:
+            async with httpx.AsyncClient(timeout=stream_timeout) as client:
+                async with client.stream("POST", url, headers=headers, json=payload) as response:
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if not line or not line.startswith("data:"):
+                            continue
+                        raw = line[5:].strip()
+                        if raw == "[DONE]":
+                            break
+                        try:
+                            data = json.loads(raw)
+                            yield json.dumps(data, ensure_ascii=False)
+                        except Exception:
+                            continue
+                    return  # 成功，不再重试
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as e:
+            last_err = e
+            logger.warning("LLM stream attempt %d failed: %s", attempt + 1, e)
+            continue
+        except Exception:
+            raise  # 非网络错误直接抛出
+
+    # 所有重试都失败
+    if last_err:
+        raise last_err
 
 
 async def _complete_with_config(
@@ -332,13 +341,7 @@ async def _complete_with_config(
 ) -> str:
     """非流式调用，用于兜底修复 JSON。"""
     if cfg is None:
-        llm = LLMClient()
-        data = await llm.chat_completion(
-            messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
-        return ((data.get("choices") or [{}])[0].get("message") or {}).get("content", "")
+        raise ValueError("未配置可用的 LLM 模型")
 
     payload = {
         "model": cfg["model"],
@@ -930,6 +933,9 @@ async def chat(
 
     # 预取租户 LLM 配置（在 db session 有效时）
     llm_cfg = await _get_conversation_llm_config(db, conv)
+    logger.info("requirements chat: conv=%s, selected_llm=%s, cfg=%s",
+                session_id, conv.selected_llm_config_id,
+                {k: v for k, v in (llm_cfg or {}).items() if k != 'api_key'})
 
     async def event_generator():
         assistant_content = ""
@@ -944,8 +950,9 @@ async def chat(
                         assistant_content += text
                         yield {"event": "chunk", "data": json.dumps({"content": text}, ensure_ascii=False)}
         except Exception as e:
-            logger.error("requirements chat error: %s", e)
-            yield {"event": "error", "data": json.dumps({"message": str(e)}, ensure_ascii=False)}
+            import traceback
+            logger.error("requirements chat error: %s\n%s", e, traceback.format_exc())
+            yield {"event": "error", "data": json.dumps({"message": str(e) or repr(e)}, ensure_ascii=False)}
             return
 
         # 保存 AI 消息

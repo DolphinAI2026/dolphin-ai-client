@@ -65,6 +65,8 @@ async def init_db():
             "ALTER TABLE applications MODIFY COLUMN conversation_id INTEGER NULL",
             # 需求分析：为 conversations 表添加 doc_result 字段
             "ALTER TABLE conversations ADD COLUMN doc_result JSON",
+            # 上下文压缩：对话摘要字段
+            "ALTER TABLE conversations ADD COLUMN context_summary TEXT",
         ]:
             try:
                 await conn.execute(text(stmt))

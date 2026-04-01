@@ -430,22 +430,23 @@ class VibeCodingAgent:
     @staticmethod
     def _compress_context(messages: list):
         """
-        Smart context compression — inspired by Claude SDK patterns.
-        Aggressively compress old tool results while keeping recent ones intact.
+        Smart context compression — inspired by Claude Code patterns.
+        Uses ContextCompactor for tool result cleanup + aggressive old message compression.
         """
+        from app.context_compact import ContextCompactor
+
         if len(messages) <= 10:
             return
 
-        # Keep the last 8 messages untouched
+        # 1. 用 ContextCompactor 清理旧 tool 结果
+        compressed = ContextCompactor.clean_tool_results(messages, keep_recent=4)
+        messages[:] = compressed
+
+        # 2. 进一步压缩旧 assistant 消息
         cutoff = len(messages) - 8
         for i in range(cutoff):
             msg = messages[i]
-            if msg.get("role") == "tool":
-                content = msg.get("content", "")
-                if len(content) > 300:
-                    # Compress to first 200 chars + hint
-                    msg["content"] = content[:200] + "\n... [earlier result compressed]"
-            elif msg.get("role") == "assistant" and msg.get("content"):
+            if msg.get("role") == "assistant" and msg.get("content"):
                 content = msg["content"]
                 if len(content) > 500:
                     msg["content"] = content[:300] + "..."

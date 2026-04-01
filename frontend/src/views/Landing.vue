@@ -1,67 +1,41 @@
 <template>
   <div class="landing">
-    <!-- Nav -->
-    <nav class="nav-bar">
-      <div class="nav-left">
-        <div class="logo-box">A</div>
-        <span class="logo-text">aPaaS Builder AI</span>
+    <!-- 精简顶栏 -->
+    <nav class="top-bar">
+      <div class="top-bar-left">
+        <button class="sidebar-hamburger" @click="sidebarCollapsed = !sidebarCollapsed" title="切换侧栏">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+        </button>
+        <span class="top-bar-title">aPaaS Builder AI</span>
       </div>
-      <div class="nav-center">
-        <el-dropdown @command="handleNewApp" trigger="click">
-          <button class="nav-link nav-link-primary">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-            新建应用
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
-          </button>
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item command="requirements">
-                <div class="new-app-item">
-                  <strong>从需求分析开始</strong>
-                  <span>与 AI 对话梳理需求，生成设计文档</span>
-                </div>
-              </el-dropdown-item>
-              <el-dropdown-item command="direct">
-                <div class="new-app-item">
-                  <strong>直接描述搭建</strong>
-                  <span>跳过需求分析，直接进入搭建</span>
-                </div>
-              </el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
-        <button class="nav-link" @click="router.push('/apps')">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
-          我的应用
-        </button>
-        <button class="nav-link" @click="router.push('/coding')">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
-          AI Coding
-        </button>
-        <button class="nav-link" @click="router.push('/platform-envs')">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-          环境管理
-        </button>
-      </div>
-      <div class="nav-right">
+      <div class="top-bar-right">
         <ThemeToggle />
-        <el-dropdown @command="handleUserCommand">
-          <button class="user-btn">
-            <div class="user-avatar">{{ userStore.user?.username?.charAt(0).toUpperCase() || 'U' }}</div>
+        <el-dropdown @command="handleUserCommand" trigger="click">
+          <button class="user-avatar-btn">
+            {{ userStore.user?.username?.charAt(0).toUpperCase() || 'U' }}
           </button>
           <template #dropdown>
             <el-dropdown-menu>
               <el-dropdown-item disabled>
-                <div class="user-info">
-                  <div class="info-label">用户</div>
-                  <div class="info-value">{{ userStore.user?.username }}</div>
+                <div class="user-menu-info">
+                  <div class="user-menu-label">用户</div>
+                  <div class="user-menu-value">{{ userStore.user?.username }}</div>
                 </div>
               </el-dropdown-item>
               <el-dropdown-item disabled v-if="userStore.tenantName">
-                <div class="user-info">
-                  <div class="info-label">租户</div>
-                  <div class="info-value">{{ userStore.tenantName }}</div>
+                <div class="user-menu-info">
+                  <div class="user-menu-label">租户</div>
+                  <div class="user-menu-value">{{ userStore.tenantName }}</div>
                 </div>
+              </el-dropdown-item>
+              <el-dropdown-item divided command="apps">
+                <span>📱 我的应用</span>
+              </el-dropdown-item>
+              <el-dropdown-item command="coding">
+                <span>💻 AI Coding</span>
+              </el-dropdown-item>
+              <el-dropdown-item command="envs">
+                <span>⚙️ 环境管理</span>
               </el-dropdown-item>
               <el-dropdown-item divided command="logout">
                 <span style="color: #ef4444;">退出登录</span>
@@ -72,8 +46,19 @@
       </div>
     </nav>
 
-    <!-- Main content -->
-    <div class="main-scroll">
+    <div class="main-body">
+      <!-- 左侧应用侧栏 -->
+      <AppSidebar
+        :collapsed="sidebarCollapsed"
+        :items="sidebarAppItems"
+        :current-app-id="null"
+        @toggle="sidebarCollapsed = !sidebarCollapsed"
+        @select="onSidebarAppSelect"
+        @new-app="handleNewApp"
+      />
+
+      <!-- 内容区 -->
+      <div class="main-scroll">
       <div class="center-area">
         <!-- Hero -->
         <div class="hero">
@@ -125,7 +110,8 @@
           </div>
         </div>
       </div>
-    </div>
+    </div><!-- /main-scroll -->
+    </div><!-- /main-body -->
 
     <TemplateManager v-model="showTemplateManager" @updated="reloadTemplates" />
     <ConnectModal v-model="previewStore.showConnectModal" />
@@ -149,7 +135,10 @@ import ConnectModal from '@/components/ConnectModal.vue'
 import ProjectSettingsModal from '@/components/ProjectSettingsModal.vue'
 import TemplateManager from '@/components/TemplateManager.vue'
 import ThemeToggle from '@/components/ThemeToggle.vue'
+import AppSidebar from '@/components/AppSidebar.vue'
+import type { AppItem } from '@/components/AppSidebar.vue'
 import { requirementsApi, type RequirementsSession } from '@/api/requirements'
+import { conversationApi, type ConversationWithApp } from '@/api/conversation'
 
 const router = useRouter()
 const previewStore = usePreviewStore()
@@ -182,6 +171,7 @@ function formatDate(dateStr: string): string {
 }
 
 onMounted(async () => {
+  loadSidebarApps()
   try {
     projects.value = await projectsApi.list()
   } catch (e) { /* ignore */ }
@@ -253,6 +243,57 @@ const handleUserCommand = (command: string) => {
     userStore.logout()
     ElMessage.success('已退出登录')
     router.push('/login')
+  } else if (command === 'apps') {
+    router.push('/apps')
+  } else if (command === 'coding') {
+    router.push('/coding')
+  } else if (command === 'envs') {
+    router.push('/platform-envs')
+  }
+}
+
+// ── 左侧应用侧栏 ──
+const sidebarCollapsed = ref(localStorage.getItem('chat-sidebar-collapsed') === 'true')
+const conversationList = ref<ConversationWithApp[]>([])
+
+const formatConvTime = (dateStr: string) => {
+  if (!dateStr) return ''
+  const d = new Date(dateStr)
+  const now = new Date()
+  const diff = now.getTime() - d.getTime()
+  if (diff < 60000) return '刚刚'
+  if (diff < 3600000) return `${Math.floor(diff / 60000)} 分钟前`
+  if (diff < 86400000) return '今天'
+  if (diff < 172800000) return '昨天'
+  return `${d.getMonth() + 1}/${d.getDate()}`
+}
+
+const sidebarAppItems = ref<AppItem[]>([])
+
+const loadSidebarApps = async () => {
+  try {
+    conversationList.value = await conversationApi.listWithApps({ agent_type: 'builder' })
+    sidebarAppItems.value = conversationList.value
+      .filter(conv => conv.app_id && conv.app_name)
+      .map(conv => ({
+        id: conv.app_id!,
+        label: conv.app_name!,
+        status: conv.local_status,
+        timeLabel: formatConvTime(conv.created_at),
+        appId: conv.app_id,
+        conversationId: conv.id,
+        apaasAppId: conv.apaas_app_id,
+      }))
+  } catch (e) {
+    console.error('加载应用列表失败:', e)
+  }
+}
+
+const onSidebarAppSelect = (app: AppItem) => {
+  if (app.appId) {
+    router.push({ path: '/chat', query: { app_id: String(app.appId), app_mode: 'parsed' } })
+  } else if (app.conversationId) {
+    router.push({ path: '/chat', query: { conv_id: String(app.conversationId) } })
   }
 }
 </script>
@@ -267,6 +308,14 @@ const handleUserCommand = (command: string) => {
   color: var(--t-text-primary);
 }
 
+/* ── Main Body (sidebar + content) ── */
+.main-body {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  overflow: hidden;
+}
+
 .main-scroll {
   flex: 1;
   overflow-y: auto;
@@ -279,137 +328,39 @@ const handleUserCommand = (command: string) => {
   margin: 0 auto;
 }
 
-/* ── Nav ── */
-.nav-bar {
+/* ── Top Bar ── */
+.top-bar {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 12px 24px;
+  padding: 6px 12px;
+  flex-shrink: 0;
   background: var(--t-bg-nav);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
   border-bottom: 1px solid var(--t-border-subtle);
-  position: sticky;
-  top: 0;
-  z-index: 100;
+  min-height: 42px;
 }
-
-.nav-left {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+.top-bar-left, .top-bar-right { display: flex; align-items: center; gap: 8px; }
+.sidebar-hamburger {
+  width: 32px; height: 32px; border: none; border-radius: 6px;
+  background: transparent; color: var(--t-text-secondary); cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: all 0.15s ease;
 }
-
-.logo-box {
-  width: 30px;
-  height: 30px;
-  background: var(--t-brand-gradient);
-  border-radius: var(--t-radius-sm);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #fff;
-  font-weight: 700;
-  font-size: 13px;
+.sidebar-hamburger:hover { background: var(--t-bg-elevated); color: var(--t-text-primary); }
+.top-bar-title {
+  font-size: 14px; font-weight: 600; color: var(--t-text-primary);
 }
-
-.logo-text {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--t-text-primary);
-  letter-spacing: -0.01em;
+.user-avatar-btn {
+  width: 30px; height: 30px; border-radius: 50%;
+  background: var(--t-brand-gradient); color: #fff; border: none;
+  font-weight: 700; font-size: 12px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: opacity 0.15s;
 }
-
-/* ── Nav Center Links ── */
-.nav-center {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.nav-link {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 14px;
-  border: none;
-  background: none;
-  color: var(--t-text-secondary);
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  border-radius: var(--t-radius-sm);
-  transition: all 0.2s;
-}
-
-.nav-link:hover {
-  color: var(--t-text-primary);
-  background: var(--t-border-subtle);
-}
-
-.nav-link-primary {
-  background: var(--t-brand-gradient);
-  color: #fff !important;
-  padding: 6px 14px;
-}
-.nav-link-primary:hover {
-  opacity: 0.9;
-  background: var(--t-brand-gradient) !important;
-  color: #fff !important;
-}
-
-.new-app-item {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 2px 0;
-}
-.new-app-item strong {
-  font-size: 13px;
-  color: var(--t-text-primary);
-}
-.new-app-item span {
-  font-size: 11px;
-  color: var(--t-text-secondary);
-}
-
-.nav-right {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.user-btn {
-  display: flex;
-  align-items: center;
-  background: none;
-  border: none;
-  cursor: pointer;
-  padding: 4px;
-  border-radius: 50%;
-  transition: box-shadow 0.2s;
-}
-
-.user-btn:hover {
-  box-shadow: 0 0 0 2px var(--t-border-strong);
-}
-
-.user-avatar {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  background: var(--t-brand-gradient);
-  color: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.user-info { padding: 4px 0; }
-.info-label { font-size: 11px; color: var(--t-text-muted); margin-bottom: 2px; }
-.info-value { font-size: 13px; color: var(--t-text-primary); font-weight: 500; }
+.user-avatar-btn:hover { opacity: 0.85; }
+.user-menu-info { display: flex; flex-direction: column; gap: 1px; }
+.user-menu-label { font-size: 10px; color: var(--t-text-muted); }
+.user-menu-value { font-size: 13px; color: var(--t-text-primary); }
 
 /* ── Hero ── */
 .hero {

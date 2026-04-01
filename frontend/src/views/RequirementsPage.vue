@@ -80,7 +80,7 @@
         <template v-else>
           <div class="messages-container" ref="messagesContainer">
             <div
-              v-for="(msg, idx) in messages"
+              v-for="(msg, idx) in displayMessages"
               :key="idx"
               class="message"
               :class="msg.role"
@@ -95,18 +95,18 @@
                   <span>{{ extractFileName(msg.content) }}</span>
                   <span v-if="extractUserText(msg.content)" class="file-msg-text">{{ extractUserText(msg.content) }}</span>
                 </div>
-                <div v-else class="message-content" v-html="renderMarkdown(msg.content)"></div>
+                <div v-else class="message-content" v-html="renderMarkdown(msg.content || '')"></div>
               </div>
             </div>
             <!-- 流式打字中 -->
-            <div v-if="chatStreaming && streamingText" class="message assistant">
+            <div v-if="chatStreaming && displayStreamingText" class="message assistant">
               <div class="message-avatar"><span>AI</span></div>
               <div class="message-bubble">
-                <div class="message-content" v-html="renderMarkdown(streamingText)"></div>
+                <div class="message-content" v-html="renderMarkdown(displayStreamingText)"></div>
                 <span class="typing-cursor">▋</span>
               </div>
             </div>
-            <div v-if="chatStreaming && !streamingText" class="message assistant">
+            <div v-if="chatStreaming && !displayStreamingText" class="message assistant">
               <div class="message-avatar"><span>AI</span></div>
               <div class="message-bubble thinking">
                 <span class="dot"></span><span class="dot"></span><span class="dot"></span>
@@ -680,6 +680,28 @@ const uploadedFile = ref<File | null>(null)
 const uploadedFilePreview = ref<string>('')  // 图片预览 data URL
 const chatStreaming = ref(false)
 const streamingText = ref('')
+
+// 过滤空消息和纯 think 消息
+const displayMessages = computed(() =>
+  messages.value.filter(msg => {
+    if (msg.role !== 'assistant') return true
+    const content = msg.content || ''
+    // 过滤掉空消息和纯 think 内容
+    const cleaned = stripThink(content)
+    return cleaned.length > 0
+  })
+)
+
+// 过滤掉 <think>...</think> 思考内容，只显示实际回答
+const displayStreamingText = computed(() => {
+  let text = streamingText.value
+  // 移除完整的 <think>...</think> 块
+  text = text.replace(/<think>[\s\S]*?<\/think>/g, '')
+  // 如果还有未闭合的 <think>（流式中间态），隐藏它后面的所有内容
+  const openIdx = text.indexOf('<think>')
+  if (openIdx >= 0) text = text.slice(0, openIdx)
+  return text.trim()
+})
 const generating = ref(false)
 const confirming = ref(false)
 const docResult = ref<AnalysisResult | null>(null)
@@ -858,9 +880,21 @@ function extractUserText(content: string): string {
 }
 
 // ── Markdown 渲染（简单版）──────────────────────────────────────────────────
+function stripThink(text: string): string {
+  // 移除完整的 <think>...</think>
+  let t = text.replace(/<think>[\s\S]*?<\/think>/g, '')
+  // 移除未闭合的 <think>（流式中间态或截断）
+  const idx = t.indexOf('<think>')
+  if (idx >= 0) t = t.slice(0, idx)
+  return t.trim()
+}
+
 function renderMarkdown(text: string): string {
   if (!text) return ''
-  return text
+  // 先过滤 think 内容再渲染
+  const cleaned = stripThink(text)
+  if (!cleaned) return '<span style="color:var(--t-text-muted);font-style:italic">（思考中未产生回复）</span>'
+  return cleaned
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
@@ -1103,8 +1137,12 @@ async function sendMessage(): Promise<boolean> {
       }
     }
 
-    // 保存 AI 消息到本地
-    if (streamingText.value) {
+    // 保存 AI 消息到本地（去掉 think 标签）
+    const cleanedText = stripThink(streamingText.value)
+    if (cleanedText) {
+      messages.value.push({ role: 'assistant', content: cleanedText })
+    } else if (streamingText.value) {
+      // 只有思考内容没有实际回复，仍然保存原始内容（renderMarkdown 会处理显示）
       messages.value.push({ role: 'assistant', content: streamingText.value })
     }
 

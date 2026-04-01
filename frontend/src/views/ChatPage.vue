@@ -1,81 +1,92 @@
 <template>
   <div class="chat-page">
-    <nav class="nav-bar">
-      <div class="nav-left">
-        <button class="back-btn" @click="router.push('/')">
-          <el-icon><ArrowLeft /></el-icon>
+    <!-- 精简顶栏 -->
+    <nav class="top-bar">
+      <div class="top-bar-left">
+        <button class="sidebar-hamburger" @click="chatSidebarCollapsed = !chatSidebarCollapsed" title="切换侧栏">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
         </button>
-        <div class="logo-box">A</div>
-        <span class="logo-text">aPaaS Builder AI</span>
+        <button class="top-bar-home" @click="router.push('/')" title="返回首页">
+          <div class="top-bar-logo">A</div>
+        </button>
+        <span v-if="store.currentApp?.app_name" class="top-bar-app-name">{{ store.currentApp.app_name }}</span>
+        <div class="mode-switcher">
+          <button class="mode-btn" :class="{ active: activeView === 'builder' }" @click="activeView = 'builder'">
+            <span>🤖</span> 智能搭建
+          </button>
+          <button
+            v-if="SHOW_PLATFORM_CONFIG && store.currentApp?.apaas_app_id"
+            class="mode-btn"
+            :class="{ active: activeView === 'platform' }"
+            @click="switchToPlatform"
+          >
+            <span>🛠️</span> 辅助搭建
+          </button>
+          <button
+            v-if="store.currentApp?.apaas_app_id"
+            class="mode-btn"
+            :class="{ active: activeView === 'coding' }"
+            @click="activeView = 'coding'"
+          >
+            <span>💻</span> 智能开发
+          </button>
+        </div>
       </div>
-      <div class="nav-center">
-        <el-dropdown v-if="!appParsedMode" @command="handleNewApp" trigger="click">
-          <button class="nav-link nav-link-primary">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-            新建应用
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+      <div class="top-bar-right">
+        <button
+          v-if="SHOW_PLATFORM_CONFIG && activeView === 'platform' && platformIframeUrl"
+          class="top-bar-icon-btn"
+          @click="openPlatformNewTab"
+          title="在新窗口打开"
+        >↗</button>
+        <ThemeToggle />
+        <el-dropdown @command="handleUserCommand" trigger="click">
+          <button class="user-avatar-btn">
+            {{ userStore.user?.username?.charAt(0).toUpperCase() || 'U' }}
           </button>
           <template #dropdown>
             <el-dropdown-menu>
-              <el-dropdown-item command="requirements">
-                <div class="new-app-item"><strong>从需求分析开始</strong><span>与 AI 对话梳理需求</span></div>
+              <el-dropdown-item disabled>
+                <div class="user-menu-info">
+                  <div class="user-menu-label">用户</div>
+                  <div class="user-menu-value">{{ userStore.user?.username }}</div>
+                </div>
               </el-dropdown-item>
-              <el-dropdown-item command="direct">
-                <div class="new-app-item"><strong>直接描述搭建</strong><span>跳过需求分析</span></div>
+              <el-dropdown-item disabled v-if="userStore.tenantName">
+                <div class="user-menu-info">
+                  <div class="user-menu-label">租户</div>
+                  <div class="user-menu-value">{{ userStore.tenantName }}</div>
+                </div>
+              </el-dropdown-item>
+              <el-dropdown-item divided command="apps">
+                <span>📱 我的应用</span>
+                <span v-if="appCount > 0" style="margin-left:6px;font-size:11px;color:var(--t-text-muted)">({{ appCount }})</span>
+              </el-dropdown-item>
+              <el-dropdown-item command="envs">
+                <span>⚙️ 环境管理</span>
+              </el-dropdown-item>
+              <el-dropdown-item divided command="logout">
+                <span style="color: #ef4444;">退出登录</span>
               </el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
-        <button class="nav-link" @click="router.push('/apps')">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
-          我的应用
-          <span v-if="appCount > 0" class="project-count">{{ appCount }}</span>
-        </button>
-        <button class="nav-link" @click="router.push('/platform-envs')">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-          环境管理
-        </button>
-      </div>
-      <div class="nav-right">
-        <ThemeToggle />
       </div>
     </nav>
 
     <div class="main-area">
-      <!-- 顶部 Tab 切换（始终可见） -->
-      <div class="agent-tabs">
-        <button class="agent-tab" :class="{ active: activeView === 'builder' }" @click="activeView = 'builder'">
-          <span>🤖</span>
-          <span>智能搭建</span>
-          <span v-if="activeView === 'builder'" class="active-dot"></span>
-        </button>
-        <button
-          v-if="SHOW_PLATFORM_CONFIG && store.currentApp?.apaas_app_id"
-          class="agent-tab"
-          :class="{ active: activeView === 'platform' }"
-          @click="switchToPlatform"
-        >
-          <span>🛠️</span>
-          <span>辅助搭建</span>
-          <span v-if="activeView === 'platform'" class="active-dot"></span>
-        </button>
-        <button
-          v-if="store.currentApp?.apaas_app_id"
-          class="agent-tab"
-          :class="{ active: activeView === 'coding' }"
-          @click="activeView = 'coding'"
-        >
-          <span>💻</span>
-          <span>智能开发</span>
-          <span v-if="activeView === 'coding'" class="active-dot"></span>
-        </button>
-        <button
-          v-if="SHOW_PLATFORM_CONFIG && activeView === 'platform' && platformIframeUrl"
-          class="agent-tab-action"
-          @click="openPlatformNewTab"
-          title="在新窗口打开"
-        >↗</button>
-      </div>
+      <!-- 左侧应用列表侧栏 -->
+      <AppSidebar
+        :collapsed="chatSidebarCollapsed"
+        :items="sidebarAppItems"
+        :current-app-id="existingAppId"
+        @toggle="chatSidebarCollapsed = !chatSidebarCollapsed"
+        @select="onSidebarAppSelect"
+        @new-app="handleNewApp"
+      />
+
+      <!-- 内容区域 -->
+      <div class="content-area">
 
       <!-- 平台配置 iframe（v-show 保持不销毁） -->
       <div v-show="SHOW_PLATFORM_CONFIG && activeView === 'platform'" class="platform-iframe-container">
@@ -292,14 +303,14 @@
           🎉 部署完成！<button class="deploy-done-btn" @click="openInPlatform">查看应用 →</button>
           <button class="deploy-log-btn" @click="showApiLogs = true">📋 API日志</button>
         </div>
-      </div>
-    </div>
+      </div><!-- /deploy-side -->
+    </div><!-- /builder-content -->
+      </div><!-- /content-area -->
+    </div><!-- /main-area -->
 
-
+    <!-- Modals (在 chat-page 根元素下) -->
     <ConnectModal v-model="store.showConnectModal" />
     <EnvSelectModal v-model="showEnvSelect" @selected="onEnvSelected" />
-
-    <!-- API 调用日志弹窗 -->
     <el-dialog v-model="showApiLogs" title="API 调用日志" width="80%" :append-to-body="true">
       <div class="api-logs-header">
         <el-select v-model="apiLogFilter" placeholder="筛选步骤" clearable size="small" style="width:200px">
@@ -327,9 +338,7 @@
         <div v-if="apiLogs.length === 0" class="api-logs-empty">暂无日志</div>
       </div>
     </el-dialog>
-
-      </div><!-- /builder-content -->
-    </div>
+  </div><!-- /chat-page -->
 </template>
 
 <script setup lang="ts">
@@ -347,6 +356,8 @@ import { conversationApi, type ConversationWithApp } from '@/api/conversation'
 import { marked } from 'marked'
 import ConnectModal from '@/components/ConnectModal.vue'
 import EnvSelectModal from '@/components/EnvSelectModal.vue'
+import AppSidebar from '@/components/AppSidebar.vue'
+import type { AppItem } from '@/components/AppSidebar.vue'
 import { platformEnvApi } from '@/api/platformEnv'
 import request from '@/utils/request'
 import type { Message } from '@/types'
@@ -381,6 +392,47 @@ const roleNamesText = computed(() => {
 const handleNewApp = (command: string) => {
   if (command === 'requirements') router.push('/requirements')
   else router.push('/chat')
+}
+
+// ── 用户头像菜单 ──
+const handleUserCommand = (command: string) => {
+  if (command === 'logout') {
+    userStore.logout()
+    router.push('/login')
+  } else if (command === 'apps') {
+    router.push('/apps')
+  } else if (command === 'envs') {
+    router.push('/platform-envs')
+  }
+}
+
+// ── 左侧应用侧栏 ──
+const chatSidebarCollapsed = ref(localStorage.getItem('chat-sidebar-collapsed') === 'true')
+watch(() => chatSidebarCollapsed.value, (v) => {
+  localStorage.setItem('chat-sidebar-collapsed', String(v))
+})
+
+const sidebarAppItems = computed<AppItem[]>(() => {
+  // 只显示有关联应用的会话（过滤空对话）
+  return conversationList.value
+    .filter(conv => conv.app_id && conv.app_name)
+    .map(conv => ({
+      id: conv.app_id!,
+      label: conv.app_name!,
+      status: conv.local_status,
+      timeLabel: formatConvTime(conv.created_at),
+      appId: conv.app_id,
+      conversationId: conv.id,
+      apaasAppId: conv.apaas_app_id,
+    }))
+})
+
+const onSidebarAppSelect = (app: AppItem) => {
+  if (app.appId) {
+    router.push({ path: '/chat', query: { app_id: String(app.appId), app_mode: 'parsed' } })
+  } else if (app.conversationId) {
+    loadConversation(app.conversationId)
+  }
 }
 
 const messagesRef = ref<HTMLElement>()
@@ -497,7 +549,8 @@ const activeView = ref<'builder' | 'platform' | 'coding'>('builder')
 // ── 智能开发（iframe 嵌入 CodingPage） ──
 const codingIframeUrl = computed(() => {
   const appId = existingAppId.value || route.query.app_id
-  return appId ? `/ai-builder/coding?app_id=${appId}` : ''
+  const base = import.meta.env.BASE_URL.replace(/\/$/, '')
+  return appId ? `${base}/coding?app_id=${appId}` : `${base}/coding`
 })
 
 // ── 平台配置 iframe ──
@@ -2325,8 +2378,10 @@ const renderMarkdown = (t: string) => {
 }
 
 const formatContent = (t: string) => {
+  // 过滤 <think> 思考内容
+  let text = t.replace(/<think>[\s\S]*?<\/think>/g, '')
   // 隐藏JSON代码块，只显示文字部分
-  let text = t.replace(/```json[\s\S]*?```/g, '')
+  text = text.replace(/```json[\s\S]*?```/g, '')
   // 清理多余空行
   text = text.replace(/\n{3,}/g, '\n\n').trim()
   return text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>').replace(/• /g, '<span style="color:#818cf8;margin-right:4px">•</span> ')
@@ -2545,6 +2600,58 @@ onMounted(async () => {
   fetchAppCount()
 })
 
+// ── 监听 route.query.app_id 变化，实现侧栏点击切换应用 ──
+watch(() => route.query.app_id, async (newAppId, oldAppId) => {
+  if (!newAppId || newAppId === oldAppId) return
+  const aid = Number(newAppId)
+  if (!aid || aid === existingAppId.value) return
+
+  // 重置当前状态
+  existingAppId.value = aid
+  messages.splice(0, messages.length)
+  store.preview.models = []
+  store.preview.dicts = []
+  store.preview.roles = []
+  store.currentApp = null
+  latestDocContent.value = ''
+  conversationId.value = null
+  activeView.value = 'builder'
+
+  try {
+    const app = await applicationApi.get(aid) as any
+    if (app.config_preview) {
+      const data = app.config_preview.data || app.config_preview
+      store.preview.appName = data.appName || app.app_name || ''
+      store.preview.models = data.models || []
+      store.preview.dicts = data.dicts || []
+      store.preview.roles = data.roles || []
+      store.preview.workflows = data.workflows || []
+      store.preview.permissions = data.permissions || []
+      store.currentApp = { name: store.preview.appName, status: app.status || 'ready', apaas_app_id: app.apaas_app_id }
+      parseReady.value = store.preview.models.length > 0
+    }
+    loadedAppCode.value = app.app_code || ''
+    parsedAppCode.value = loadedAppCode.value
+    await loadLatestDocForApp(aid)
+    if (app.conversation_id) {
+      conversationId.value = app.conversation_id
+      selectedConversationId.value = app.conversation_id
+      if (!appParsedMode.value) {
+        const historyMessages = await conversationApi.getMessages(app.conversation_id)
+        if (historyMessages?.length) {
+          for (const msg of historyMessages) {
+            if (msg.role === 'system') continue
+            messages.push({ id: msg.id, role: msg.role as any, agent: msg.role === 'assistant' ? 'builder' : undefined, content: msg.content, created_at: msg.created_at })
+          }
+          scrollToBottom()
+        }
+      }
+    }
+  } catch (e) {
+    console.error('Failed to switch app:', e)
+  }
+})
+
 // 切换到文档 tab 时自动加载版本列表
 watch(() => store.previewTab, (tab) => {
   if (tab === 'workflow') {
@@ -2577,41 +2684,70 @@ watch(conversationId, (id) => {
 .chat-page { height: 100vh; display: flex; flex-direction: column; background: var(--t-bg-base); color: var(--t-text-primary); }
 
 /* ── 导航栏 ── */
-.nav-bar {
-  display: flex; justify-content: space-between; align-items: center;
-  padding: 8px 16px; flex-shrink: 0;
-  background: rgba(17,17,17,0.75);
-  backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+/* ── 精简顶栏 ── */
+.top-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 12px;
+  flex-shrink: 0;
+  background: var(--t-bg-nav);
   border-bottom: 1px solid var(--t-border-subtle);
+  min-height: 42px;
 }
-.nav-left, .nav-right, .nav-center { display: flex; align-items: center; gap: 10px; }
-.nav-link-primary {
-  background: var(--t-brand-gradient) !important;
-  color: #fff !important;
-  display: flex; align-items: center; gap: 5px;
+.top-bar-left, .top-bar-right { display: flex; align-items: center; gap: 8px; }
+.sidebar-hamburger {
+  width: 32px; height: 32px; border: none; border-radius: 6px;
+  background: transparent; color: var(--t-text-secondary); cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: all 0.15s ease;
 }
-.nav-link-primary:hover { opacity: 0.9; }
-.new-app-item { display: flex; flex-direction: column; gap: 2px; padding: 2px 0; }
-.new-app-item strong { font-size: 13px; }
-.new-app-item span { font-size: 11px; color: var(--t-text-muted); }
-.back-btn { background: none; border: none; color: var(--t-text-muted); cursor: pointer; padding: 4px; transition: color 0.2s; }
-.back-btn:hover { color: var(--t-text-primary); }
-.logo-box {
-  width: 28px; height: 28px;
-  background: var(--t-brand-gradient);
-  border-radius: 8px; display: flex; align-items: center; justify-content: center;
-  color: #fff; font-weight: 700; font-size: 12px;
+.sidebar-hamburger:hover { background: var(--t-bg-elevated); color: var(--t-text-primary); }
+.top-bar-home {
+  background: none; border: none; cursor: pointer; padding: 0;
+  display: flex; align-items: center; transition: opacity 0.15s;
 }
-.logo-text { font-size: 14px; font-weight: 600; color: var(--t-text-primary); }
-.nav-link {
-  font-size: 12px; color: var(--t-text-secondary); background: none; border: none;
-  cursor: pointer; padding: 6px 12px; border-radius: 8px; transition: all 0.2s;
+.top-bar-home:hover { opacity: 0.8; }
+.top-bar-logo {
+  width: 26px; height: 26px; border-radius: 6px;
+  background: var(--t-brand-gradient); color: #fff;
+  font-weight: 700; font-size: 11px;
+  display: flex; align-items: center; justify-content: center;
 }
-.nav-link:hover { background: var(--t-bg-subtle); color: var(--t-text-primary); transform: translateY(-1px); }
-.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--t-border-strong); }
-.dot.active { background: var(--t-success); }
+.top-bar-app-name {
+  font-size: 13px; font-weight: 500; color: var(--t-text-secondary);
+  max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.mode-switcher { display: flex; gap: 2px; background: var(--t-bg-elevated); border-radius: 8px; padding: 2px; }
+.mode-btn {
+  display: flex; align-items: center; gap: 5px; padding: 5px 12px; border-radius: 6px;
+  font-size: 12px; font-weight: 500; background: none; border: none;
+  color: var(--t-text-muted); cursor: pointer; transition: all 0.2s;
+}
+.mode-btn:hover { color: var(--t-text-primary); }
+.mode-btn.active { background: var(--t-brand-subtle); color: var(--t-brand-light); font-weight: 600; }
+.top-bar-icon-btn {
+  width: 28px; height: 28px; border: none; border-radius: 6px;
+  background: transparent; color: var(--t-text-muted); cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px; transition: all 0.15s;
+}
+.top-bar-icon-btn:hover { background: var(--t-bg-elevated); color: var(--t-text-primary); }
+.user-avatar-btn {
+  width: 30px; height: 30px; border-radius: 50%;
+  background: var(--t-brand-gradient); color: #fff; border: none;
+  font-weight: 700; font-size: 12px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: opacity 0.15s;
+}
+.user-avatar-btn:hover { opacity: 0.85; }
+.user-menu-info { display: flex; flex-direction: column; gap: 1px; }
+.user-menu-label { font-size: 10px; color: var(--t-text-muted); }
+.user-menu-value { font-size: 13px; color: var(--t-text-primary); }
 
-.main-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
+/* ── 主区域 ── */
+.main-area { flex: 1; display: flex; flex-direction: row; overflow: hidden; position: relative; }
+.content-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
 
 /* ── 智能搭建内容区（横向布局） ── */
 .builder-content { flex: 1; display: flex; overflow: hidden; min-height: 0; }
@@ -2728,32 +2864,7 @@ watch(conversationId, (id) => {
   }
 }
 
-/* Agent tabs */
-.agent-tabs {
-  display: flex; gap: 4px; padding: 8px 16px; flex-shrink: 0;
-  background: var(--t-bg-base); border-bottom: 1px solid var(--t-border-subtle);
-}
-.agent-tab {
-  display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 8px;
-  font-size: 12px; font-weight: 500; background: none; border: none;
-  color: var(--t-text-muted); cursor: pointer; transition: all 0.2s;
-  position: relative;
-}
-.agent-tab:hover { background: var(--t-bg-subtle); color: var(--t-text-primary); }
-.agent-tab.active {
-  background: var(--t-brand-subtle); color: var(--t-brand-light);
-}
-.agent-tab.active::after {
-  content: ''; position: absolute; bottom: -8px; left: 12px; right: 12px; height: 2px;
-  background: var(--t-brand-gradient); border-radius: 1px;
-}
-.active-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--t-success); }
-.agent-tab-action {
-  margin-left: auto; padding: 4px 8px; border-radius: 6px;
-  font-size: 14px; background: none; border: none;
-  color: var(--t-text-muted); cursor: pointer; transition: all 0.2s;
-}
-.agent-tab-action:hover { background: var(--t-border-subtle); color: var(--t-text-primary); }
+/* (agent-tabs removed — replaced by mode-switcher in top-bar) */
 
 /* 消息区 */
 /* ── 对话历史栏 ── */

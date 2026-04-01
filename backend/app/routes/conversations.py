@@ -1,7 +1,7 @@
 from typing import Annotated, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select, desc, asc
+from sqlalchemy import select, desc, asc, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models import User, Conversation, Message, Application
@@ -225,6 +225,9 @@ class ConversationWithAppResponse(BaseModel):
     updated_at: str
     app_id: Optional[int] = None
     app_name: Optional[str] = None
+    apaas_app_id: Optional[str] = None
+    local_status: Optional[str] = None
+    message_count: int = 0
 
 
 @router.get("/with-apps/list", response_model=list[ConversationWithAppResponse])
@@ -260,9 +263,21 @@ async def list_conversations_with_apps(
     for app in app_result.scalars().all():
         apps_by_conv[app.conversation_id] = app
 
+    # 批量查询消息数量
+    msg_counts_result = await db.execute(
+        select(Message.conversation_id, func.count(Message.id))
+        .where(Message.conversation_id.in_(conv_ids))
+        .group_by(Message.conversation_id)
+    )
+    msg_counts: dict[int, int] = dict(msg_counts_result.all())
+
     items = []
     for conv in conversations:
         app = apps_by_conv.get(conv.id)
+        mc = msg_counts.get(conv.id, 0)
+        # 跳过没有关联应用且没有消息的空对话
+        if not app and mc <= 1:
+            continue
         items.append(ConversationWithAppResponse(
             id=conv.id,
             title=conv.title,
@@ -273,6 +288,9 @@ async def list_conversations_with_apps(
             updated_at=str(conv.updated_at),
             app_id=app.id if app else None,
             app_name=app.app_name if app else None,
+            apaas_app_id=getattr(app, 'apaas_app_id', None) if app else None,
+            local_status=getattr(app, 'status', None) if app else None,
+            message_count=mc,
         ))
 
     return items

@@ -75,60 +75,7 @@
       </div>
     </header>
 
-    <!-- 嵌入模式浮动工具栏（智能开发 tab 内使用） -->
-    <div v-if="embeddedAppId" class="embedded-toolbar">
-      <div v-if="ideUrl || streamMessages.length > 0" class="view-toggle">
-        <button
-          class="view-toggle-btn"
-          :class="{ active: activeView === 'chat' }"
-          @click="activeView = 'chat'"
-          title="对话记录"
-        >
-          <el-icon :size="14"><ChatDotRound /></el-icon>
-          <span class="view-toggle-label">Chat</span>
-        </button>
-        <button
-          class="view-toggle-btn"
-          :class="{ active: activeView === 'ide', disabled: !ideUrl }"
-          :disabled="!ideUrl"
-          @click="ideUrl && (activeView = 'ide')"
-          title="代码编辑器"
-        >
-          <el-icon :size="14"><Monitor /></el-icon>
-          <span class="view-toggle-label">IDE</span>
-        </button>
-      </div>
-      <el-tag
-        v-if="codingStore.workspace"
-        size="small"
-        type="info"
-        class="embedded-ws-tag"
-      >
-        {{ workspaceDisplayName(codingStore.workspace) }}
-      </el-tag>
-      <template v-if="codingStore.workspace">
-        <el-button
-          size="small"
-          type="success"
-          :loading="isDownloading"
-          @click="downloadCode"
-          title="下载代码"
-          circle
-        >
-          <el-icon><Download /></el-icon>
-        </el-button>
-        <el-button
-          size="small"
-          type="danger"
-          text
-          @click="deleteCurrentWorkspace"
-          title="删除当前工作区"
-          circle
-        >
-          <el-icon><Delete /></el-icon>
-        </el-button>
-      </template>
-    </div>
+    <!-- 嵌入模式右侧工具栏已移至 coding-body 内 -->
 
     <!-- Env Picker Dialog -->
     <el-dialog v-model="showEnvPicker" title="选择调试平台环境" width="500px" :append-to-body="true">
@@ -518,6 +465,44 @@
           </div>
         </div>
       </div>
+
+      <!-- 嵌入模式：右侧可收起工具面板 -->
+      <aside v-if="embeddedAppId" class="embedded-panel" :class="{ collapsed: embeddedPanelCollapsed }">
+        <!-- 收起态：只显示展开按钮 -->
+        <button class="embedded-panel-toggle" @click="embeddedPanelCollapsed = !embeddedPanelCollapsed" :title="embeddedPanelCollapsed ? '展开工具栏' : '收起工具栏'">
+          <el-icon :size="14"><Expand v-if="embeddedPanelCollapsed" /><Fold v-else /></el-icon>
+        </button>
+        <!-- 展开态：工具按钮 -->
+        <template v-if="!embeddedPanelCollapsed">
+          <div v-if="ideUrl || streamMessages.length > 0" class="embedded-panel-group">
+            <button
+              class="embedded-panel-btn"
+              :class="{ active: activeView === 'chat' }"
+              @click="activeView = 'chat'"
+              title="对话记录"
+            >
+              <el-icon :size="16"><ChatDotRound /></el-icon>
+            </button>
+            <button
+              class="embedded-panel-btn"
+              :class="{ active: activeView === 'ide', disabled: !ideUrl }"
+              :disabled="!ideUrl"
+              @click="ideUrl && (activeView = 'ide')"
+              title="代码编辑器"
+            >
+              <el-icon :size="16"><Monitor /></el-icon>
+            </button>
+          </div>
+          <div v-if="codingStore.workspace" class="embedded-panel-group">
+            <button class="embedded-panel-btn" :disabled="isDownloading" @click="downloadCode" title="下载代码">
+              <el-icon :size="16"><Download /></el-icon>
+            </button>
+            <button class="embedded-panel-btn danger" @click="deleteCurrentWorkspace" title="删除工作区">
+              <el-icon :size="16"><Delete /></el-icon>
+            </button>
+          </div>
+        </template>
+      </aside>
     </div>
   </div>
 </template>
@@ -735,6 +720,7 @@ const existingWorkspaces = computed(() => {
 })
 const isDownloading = ref(false)
 const sidebarCollapsed = ref(false)
+const embeddedPanelCollapsed = ref(false)
 
 // ============ Attachment State ============
 const attachedFile = ref<File | null>(null)
@@ -1494,26 +1480,76 @@ watch(() => route.path, () => {
   line-height: 1;
 }
 
-/* ============ Embedded Toolbar (嵌入模式浮动工具栏) ============ */
-.embedded-toolbar {
-  position: absolute;
-  top: 8px;
-  right: 12px;
-  z-index: 100;
+/* ============ Embedded Panel (嵌入模式右侧可收起面板) ============ */
+.embedded-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 4px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--t-border-subtle);
+  background: var(--t-bg-panel);
+  transition: width 0.2s ease;
+  width: 40px;
+}
+.embedded-panel.collapsed {
+  width: 32px;
+  padding: 6px 2px;
+}
+.embedded-panel-toggle {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--t-radius-sm);
+  background: transparent;
+  color: var(--t-text-secondary);
+  cursor: pointer;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 4px 10px;
-  background: var(--t-bg-nav);
-  border: 1px solid var(--t-border-subtle);
-  border-radius: 10px;
-  backdrop-filter: blur(12px);
-  box-shadow: var(--t-shadow-sm);
+  justify-content: center;
+  transition: all 0.15s ease;
 }
-.embedded-ws-tag {
-  max-width: 120px;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.embedded-panel-toggle:hover {
+  background: var(--t-bg-elevated);
+  color: var(--t-text-primary);
+}
+.embedded-panel-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 0;
+  border-top: 1px solid var(--t-border-subtle);
+  width: 100%;
+}
+.embedded-panel-btn {
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: var(--t-radius-sm);
+  background: transparent;
+  color: var(--t-text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+.embedded-panel-btn:hover {
+  background: var(--t-bg-elevated);
+  color: var(--t-text-primary);
+}
+.embedded-panel-btn.active {
+  background: var(--t-brand-primary);
+  color: #fff;
+}
+.embedded-panel-btn.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.embedded-panel-btn.danger:hover {
+  color: var(--el-color-danger);
 }
 
 /* ============ Body Layout ============ */

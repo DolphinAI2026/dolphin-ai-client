@@ -12,6 +12,7 @@ from app.deps import get_auth_context, AuthContext
 from app.llm_client import LLMClient
 from app.field_types import build_prompt_field_types_compact
 from app.routes.llm_configs import build_llm_chat_completions_url
+from app.context_compact import ContextCompactor
 
 
 async def _get_tenant_llm_config(db: AsyncSession, tenant_id: int) -> dict | None:
@@ -30,38 +31,54 @@ async def _get_conversation_llm_config(db: AsyncSession, conversation: Conversat
     return {"api_key": resolved.api_key, "base_url": resolved.base_url, "model": resolved.model, "max_tokens": resolved.max_tokens}
 
 
-async def _stream_with_tenant_llm(cfg: dict | None, messages: list):
-    """使用租户 LLM 配置流式调用，yield OpenAI 格式 JSON 字符串"""
+async def _stream_with_tenant_llm(cfg: dict | None, messages: list, max_retries: int = 2):
+    """使用租户 LLM 配置流式调用，yield OpenAI 格式 JSON 字符串。网络错误自动重试。"""
+    import logging as _logging
+    _logger = _logging.getLogger(__name__)
+
     if cfg is None:
-        llm = LLMClient()
-        async for chunk in llm.chat_completion_stream(messages):
-            yield chunk
-        return
+        raise ValueError("未配置可用的 LLM 模型，请在环境管理 → 模型配置中添加并启用模型")
+
     payload = {
         "model": cfg["model"],
         "messages": messages,
         "max_tokens": cfg["max_tokens"],
         "stream": True,
     }
+    url = build_llm_chat_completions_url(cfg["base_url"])
+    headers = {"Authorization": f"Bearer {cfg['api_key']}", "Content-Type": "application/json"}
     timeout = httpx.Timeout(connect=15.0, read=300.0, write=15.0, pool=15.0)
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        async with client.stream(
-            "POST",
-            build_llm_chat_completions_url(cfg["base_url"]),
-            headers={"Authorization": f"Bearer {cfg['api_key']}", "Content-Type": "application/json"},
-            json=payload,
-        ) as response:
-            response.raise_for_status()
-            async for line in response.aiter_lines():
-                if not line or not line.startswith("data:"):
-                    continue
-                raw = line[5:].strip()
-                if raw == "[DONE]":
-                    break
-                try:
-                    yield json.dumps(json.loads(raw), ensure_ascii=False)
-                except Exception:
-                    continue
+
+    import asyncio
+    last_err = None
+    for attempt in range(max_retries + 1):
+        if attempt > 0:
+            await asyncio.sleep(1)
+            _logger.info("LLM stream retry %d/%d", attempt, max_retries)
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                async with client.stream("POST", url, headers=headers, json=payload) as response:
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if not line or not line.startswith("data:"):
+                            continue
+                        raw = line[5:].strip()
+                        if raw == "[DONE]":
+                            break
+                        try:
+                            yield json.dumps(json.loads(raw), ensure_ascii=False)
+                        except Exception:
+                            continue
+                    return
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as e:
+            last_err = e
+            _logger.warning("LLM stream attempt %d failed: %s", attempt + 1, e)
+            continue
+        except Exception:
+            raise
+
+    if last_err:
+        raise last_err
 
 router = APIRouter(prefix="/chat", tags=["聊天"])
 
@@ -251,20 +268,25 @@ async def send_message(
     system_prompt = SYSTEM_PROMPTS.get(conversation.agent_type, BUILDER_SYSTEM_PROMPT)
     llm_messages = [{"role": "system", "content": system_prompt}]
 
-    # 截断历史消息：只保留最近的消息，总字符数不超过 30000
-    history_msgs = [{"role": msg.role, "content": msg.content} for msg in messages]
-    truncated = []
-    total_chars = 0
-    for msg in reversed(history_msgs):
-        msg_len = len(msg["content"] or "")
-        if total_chars + msg_len > 30000 and truncated:
-            break
-        truncated.insert(0, msg)
-        total_chars += msg_len
-    llm_messages.extend(truncated)
-
-    # 预取租户 LLM 配置
+    # 预取租户 LLM 配置（必须在 compactor 之前）
     llm_cfg = await _get_conversation_llm_config(db, conversation)
+
+    # 智能上下文压缩（借鉴 Claude Code 的分层压缩策略）
+    history_msgs = [{"role": msg.role, "content": msg.content} for msg in messages]
+    compactor = ContextCompactor(llm_cfg)
+    compacted, new_summary = await compactor.compact_with_summary(
+        history_msgs,
+        mode="chat",
+        existing_summary=getattr(conversation, 'context_summary', None),
+    )
+    # 如果产生了新摘要，异步存到 conversation 记录
+    if new_summary and new_summary != getattr(conversation, 'context_summary', None):
+        try:
+            conversation.context_summary = new_summary
+            await db.commit()
+        except Exception:
+            pass  # context_summary 列可能还未创建
+    llm_messages.extend(compacted)
 
     # 流式响应
     async def event_generator():

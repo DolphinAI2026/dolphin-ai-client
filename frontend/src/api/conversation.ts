@@ -11,6 +11,9 @@ export interface ConversationWithApp {
   updated_at: string
   app_id?: number
   app_name?: string
+  apaas_app_id?: string
+  local_status?: string
+  message_count?: number
 }
 
 export const conversationApi = {

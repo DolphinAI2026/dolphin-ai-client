@@ -11,6 +11,7 @@ from app.coding.scenes import SceneType, get_scene
 from app.coding.prompts import get_scene_prompt, CODE_GENERATION_INSTRUCTION
 from app.coding.validator import validate_generated_code
 from app.llm_client import LLMClient
+from app.context_compact import ContextCompactor
 
 logger = logging.getLogger(__name__)
 
@@ -186,59 +187,16 @@ class CodingGenerator:
         self,
         history: List[Dict[str, str]],
         has_workspace: bool = False,
-        max_rounds: int = 6,
-        max_assistant_chars: int = 500,
     ) -> List[Dict[str, str]]:
         """
         智能截断历史对话，防止上下文爆炸。
-
-        策略：
-        - 有工作区时：AI 的代码回复不需要保留（最新代码在 workspace_context 里），
-          只保留用户消息 + AI 回复的摘要（去掉代码块）
-        - 无工作区时：保留最近 max_rounds 轮完整对话
-        - 每条 AI 回复最多 max_assistant_chars 字符
+        委托给 ContextCompactor 统一处理。
         """
         if not history:
             return []
-
-        truncated = []
-
-        if has_workspace:
-            # 有工作区：只保留最近 max_rounds 轮，AI 回复去掉代码只留摘要
-            import re
-            # 按轮次配对 (user, assistant)
-            rounds = []
-            current_round = []
-            for msg in history:
-                current_round.append(msg)
-                if msg["role"] == "assistant":
-                    rounds.append(current_round)
-                    current_round = []
-            if current_round:
-                rounds.append(current_round)
-
-            # 只取最近 max_rounds 轮
-            recent_rounds = rounds[-max_rounds:]
-
-            for round_msgs in recent_rounds:
-                for msg in round_msgs:
-                    if msg["role"] == "user":
-                        truncated.append(msg)
-                    elif msg["role"] == "assistant":
-                        content = msg["content"]
-                        # 去掉代码块（```file:... ``` 和 ```lang ... ```）
-                        summary = re.sub(r'```[\s\S]*?```', '[代码已省略，见工作区文件]', content)
-                        # 截断过长的摘要
-                        if len(summary) > max_assistant_chars:
-                            summary = summary[:max_assistant_chars] + "...[截断]"
-                        truncated.append({"role": "assistant", "content": summary})
-                    else:
-                        truncated.append(msg)
-        else:
-            # 无工作区：保留最近 max_rounds * 2 条消息
-            truncated = history[-(max_rounds * 2):]
-
-        return truncated
+        mode = "coding_with_workspace" if has_workspace else "coding"
+        compactor = ContextCompactor()
+        return compactor.compact(history, mode=mode)
 
     async def generate(
         self,
