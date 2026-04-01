@@ -3,10 +3,10 @@
     <!-- 收起态 -->
     <div v-if="collapsed" class="sidebar-collapsed-content">
       <button class="sidebar-toggle-btn" @click="$emit('toggle')" title="展开侧栏">
-        <el-icon :size="16"><Expand /></el-icon>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="7" y1="3" x2="7" y2="21"/><polyline points="13 6 18 12 13 18"/></svg>
       </button>
-      <button class="sidebar-icon-btn" @click="$emit('new-app', 'direct')" title="新建应用">
-        <el-icon :size="16"><Plus /></el-icon>
+      <button class="sidebar-icon-btn" @click="$emit('new-app', 'requirements')" title="新建应用">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
       </button>
       <div class="sidebar-collapsed-divider"></div>
       <button
@@ -24,29 +24,11 @@
       <div class="sidebar-section-header">
         <span class="sidebar-title">应用</span>
         <div class="sidebar-header-actions">
-          <el-dropdown trigger="click" @command="(cmd: string) => $emit('new-app', cmd)">
-            <button class="sidebar-action-btn sidebar-add-btn" title="新建应用">
-              <el-icon :size="14"><Plus /></el-icon>
-            </button>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item command="requirements">
-                  <div style="display:flex;flex-direction:column;gap:2px;padding:2px 0">
-                    <strong style="font-size:13px">从需求分析开始</strong>
-                    <span style="font-size:11px;color:var(--t-text-muted)">上传文档或描述需求</span>
-                  </div>
-                </el-dropdown-item>
-                <el-dropdown-item command="direct">
-                  <div style="display:flex;flex-direction:column;gap:2px;padding:2px 0">
-                    <strong style="font-size:13px">直接开始搭建</strong>
-                    <span style="font-size:11px;color:var(--t-text-muted)">通过对话描述应用</span>
-                  </div>
-                </el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
+          <button class="sidebar-action-btn sidebar-add-btn" title="新建应用" @click="$emit('new-app', 'requirements')">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          </button>
           <button class="sidebar-action-btn" @click="$emit('toggle')" title="收起侧栏">
-            <el-icon :size="14"><Fold /></el-icon>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="17" y1="3" x2="17" y2="21"/><polyline points="11 18 6 12 11 6"/></svg>
           </button>
         </div>
       </div>
@@ -84,7 +66,7 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { Plus, Fold, Expand } from '@element-plus/icons-vue'
+// Icons replaced with inline SVGs
 
 export interface AppItem {
   id: number | string
@@ -225,11 +207,9 @@ const groupedApps = computed(() => {
   flex-shrink: 0;
 }
 .sidebar-title {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--t-text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
 }
 .sidebar-header-actions {
   display: flex;

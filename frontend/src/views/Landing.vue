@@ -1,50 +1,6 @@
 <template>
   <div class="landing">
-    <!-- 精简顶栏 -->
-    <nav class="top-bar">
-      <div class="top-bar-left">
-        <button class="sidebar-hamburger" @click="sidebarCollapsed = !sidebarCollapsed" title="切换侧栏">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
-        </button>
-        <span class="top-bar-title">aPaaS Builder AI</span>
-      </div>
-      <div class="top-bar-right">
-        <ThemeToggle />
-        <el-dropdown @command="handleUserCommand" trigger="click">
-          <button class="user-avatar-btn">
-            {{ userStore.user?.username?.charAt(0).toUpperCase() || 'U' }}
-          </button>
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item disabled>
-                <div class="user-menu-info">
-                  <div class="user-menu-label">用户</div>
-                  <div class="user-menu-value">{{ userStore.user?.username }}</div>
-                </div>
-              </el-dropdown-item>
-              <el-dropdown-item disabled v-if="userStore.tenantName">
-                <div class="user-menu-info">
-                  <div class="user-menu-label">租户</div>
-                  <div class="user-menu-value">{{ userStore.tenantName }}</div>
-                </div>
-              </el-dropdown-item>
-              <el-dropdown-item divided command="apps">
-                <span>📱 我的应用</span>
-              </el-dropdown-item>
-              <el-dropdown-item command="coding">
-                <span>💻 AI Coding</span>
-              </el-dropdown-item>
-              <el-dropdown-item command="envs">
-                <span>⚙️ 环境管理</span>
-              </el-dropdown-item>
-              <el-dropdown-item divided command="logout">
-                <span style="color: #ef4444;">退出登录</span>
-              </el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
-      </div>
-    </nav>
+    <TopBar show-hamburger @toggle-sidebar="sidebarCollapsed = !sidebarCollapsed" />
 
     <div class="main-body">
       <!-- 左侧应用侧栏 -->
@@ -89,14 +45,14 @@
         <div v-if="recentSessions.length > 0" class="section">
           <div class="section-header">
             <h3 class="section-title">最近对话</h3>
-            <button class="see-all-btn" @click="router.push('/requirements')">查看全部</button>
+            <button class="see-all-btn" @click="router.push('/chat?mode=requirements')">查看全部</button>
           </div>
           <div class="history-list">
             <div
               v-for="s in recentSessions"
               :key="s.id"
               class="history-item"
-              @click="router.push(`/requirements/${s.id}`)"
+              @click="router.push(`/chat/${s.id}`)"
             >
               <div class="history-icon">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
@@ -135,6 +91,7 @@ import ConnectModal from '@/components/ConnectModal.vue'
 import ProjectSettingsModal from '@/components/ProjectSettingsModal.vue'
 import TemplateManager from '@/components/TemplateManager.vue'
 import ThemeToggle from '@/components/ThemeToggle.vue'
+import TopBar from '@/components/TopBar.vue'
 import AppSidebar from '@/components/AppSidebar.vue'
 import type { AppItem } from '@/components/AppSidebar.vue'
 import { requirementsApi, type RequirementsSession } from '@/api/requirements'
@@ -198,8 +155,8 @@ const reloadTemplates = async () => {
 const startChat = () => {
   const text = inputText.value.trim()
   if (!text) return
-  // 先经过需求分析页面确认
-  router.push({ path: '/requirements', query: { prompt: text } })
+  // 进入需求分析模式
+  router.push({ path: '/chat', query: { mode: 'requirements', prompt: text } })
 }
 
 const startWithTemplate = async (tpl: TemplateItem) => {
@@ -207,11 +164,11 @@ const startWithTemplate = async (tpl: TemplateItem) => {
   try {
     // 获取模板完整 MD 内容
     const detail = await request.get<any, { content: string; name: string }>(`/templates/${tpl.code}`)
-    // 构造 File 对象，先经过需求分析页面确认
+    // 构造 File 对象，直接带到搭建页
     const blob = new Blob([detail.content], { type: 'text/markdown' })
     const file = new File([blob], `${tpl.code}.md`, { type: 'text/markdown' })
     previewStore.pendingFile = file
-    router.push('/requirements')
+    router.push('/chat')
   } catch (e) {
     ElMessage.error('加载模板失败')
   } finally {
@@ -225,17 +182,13 @@ const handleDocUpload = (e: Event) => {
   if (!file) return
   target.value = ''
 
-  // 先经过需求分析页面确认（支持所有格式）
+  // 直接带到搭建页处理文件
   previewStore.pendingFile = file
-  router.push('/requirements')
+  router.push('/chat')
 }
 
-const handleNewApp = (command: string) => {
-  if (command === 'requirements') {
-    router.push('/requirements')
-  } else if (command === 'direct') {
-    router.push('/chat')
-  }
+const handleNewApp = () => {
+  router.push('/chat?mode=requirements')
 }
 
 const handleUserCommand = (command: string) => {

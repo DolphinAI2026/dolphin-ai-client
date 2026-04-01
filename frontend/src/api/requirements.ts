@@ -92,4 +92,8 @@ export const requirementsApi = {
   /** SSE URL for generate-doc */
   generateDocUrl: (sessionId: number) =>
     `${API_PREFIX}${BASE}/sessions/${sessionId}/generate-doc`,
+
+  /** SSE URL for generate-doc-chat (streaming conversation + JSON) */
+  generateDocChatUrl: (sessionId: number) =>
+    `${API_PREFIX}${BASE}/sessions/${sessionId}/generate-doc-chat`,
 }

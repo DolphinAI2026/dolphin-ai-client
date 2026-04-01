@@ -61,7 +61,8 @@ const router = createRouter({
     {
       path: '/requirements/:id?',
       name: 'Requirements',
-      component: () => import('@/views/RequirementsPage.vue'),
+      // 重定向到 ChatPage 的 requirements 模式
+      redirect: () => ({ path: '/chat', query: { mode: 'requirements' } }),
       meta: { requiresAuth: true }
     },
     {

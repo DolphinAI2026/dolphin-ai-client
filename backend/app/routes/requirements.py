@@ -1276,6 +1276,185 @@ async def generate_doc(
     return EventSourceResponse(event_generator())
 
 
+GENERATE_DOC_SUMMARY_PROMPT = """根据我们之前的对话，请帮我整理一份完整的功能设计文档摘要。
+
+请按以下格式输出（使用 Markdown）：
+
+## 功能设计文档
+
+### 应用概述
+简要描述应用名称、用途和核心目标。
+
+### 角色定义
+列出所有角色及其职责。
+
+### 数据字典
+列出所有枚举值/下拉选项。
+
+### 数据模型
+列出每张表的名称、用途和关键字段。
+
+### 业务流程
+描述主要的审批/业务流程。
+
+### 权限设计
+简述各角色的数据范围和操作权限。
+
+请简洁清晰地输出，不要输出 JSON，只输出可读的 Markdown 文档。"""
+
+
+@router.post("/sessions/{session_id}/generate-doc-chat")
+async def generate_doc_chat(
+    session_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)]
+):
+    """
+    两步流式生成设计文档:
+    1. 先流式输出人类可读的设计摘要（作为对话消息）
+    2. 再在后台生成结构化 JSON（作为 doc_result 事件）
+
+    SSE 事件:
+    - event: content  → 流式文字（给对话气泡显示）
+    - event: doc_result → 结构化 JSON（给前端解析为卡片）
+    - event: error → 错误信息
+    - event: done → 完成
+    """
+    result = await db.execute(
+        select(Conversation).where(
+            Conversation.id == session_id,
+            Conversation.user_id == ctx.user.id,
+            Conversation.tenant_id == ctx.tenant_id,
+            Conversation.agent_type == "requirements"
+        )
+    )
+    conv = result.scalar_one_or_none()
+    if not conv:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    msgs_result = await db.execute(
+        select(Message)
+        .where(Message.conversation_id == session_id)
+        .order_by(Message.created_at)
+    )
+    all_msgs = msgs_result.scalars().all()
+    if not all_msgs:
+        raise HTTPException(status_code=400, detail="对话内容为空")
+
+    history = [{"role": m.role, "content": m.content} for m in all_msgs]
+    while history and history[0]["role"] == "assistant":
+        history = history[1:]
+
+    # Truncate history to 25000 chars
+    file_msg = next(
+        (m for m in history if m["role"] == "user" and "[上传文件：" in (m.get("content") or "")),
+        None
+    )
+    truncated = []
+    total = 0
+    for msg in reversed(history):
+        length = len(msg["content"] or "")
+        if total + length > 25000 and truncated:
+            break
+        truncated.insert(0, msg)
+        total += length
+    if file_msg and file_msg not in truncated:
+        truncated.insert(0, file_msg)
+
+    llm_cfg = await _get_conversation_llm_config(db, conv)
+    if llm_cfg:
+        llm_cfg = {**llm_cfg, "max_tokens": 8000}
+
+    async def event_generator():
+        # ── Phase 1: Stream human-readable summary ──
+        summary_messages = [
+            {"role": "system", "content": "你是一位经验丰富的产品分析师。请根据对话历史整理出结构化的功能设计文档。"}
+        ]
+        summary_messages.extend(truncated)
+        summary_messages.append({"role": "user", "content": GENERATE_DOC_SUMMARY_PROMPT})
+
+        summary_text = ""
+        try:
+            async for chunk in _stream_with_config(llm_cfg, summary_messages):
+                chunk_data = json.loads(chunk)
+                choices = chunk_data.get("choices", [])
+                if choices:
+                    delta = choices[0].get("delta", {})
+                    text = delta.get("content", "")
+                    if text:
+                        summary_text += text
+                        yield {"event": "content", "data": json.dumps({"content": text}, ensure_ascii=False)}
+        except Exception as e:
+            logger.error("generate-doc-chat summary error: %s", e, exc_info=True)
+            yield {"event": "error", "data": json.dumps({"message": str(e)}, ensure_ascii=False)}
+            return
+
+        # Save summary as assistant message
+        from app.database import AsyncSessionLocal
+        async with AsyncSessionLocal() as save_db:
+            save_db.add(Message(
+                conversation_id=session_id,
+                role="assistant",
+                content=summary_text,
+            ))
+            await save_db.commit()
+
+        # Signal that streaming text is done
+        yield {"event": "content_done", "data": "{}"}
+
+        # ── Phase 2: Generate structured JSON ──
+        json_messages = [
+            {"role": "system", "content": "你是一位经验丰富的产品分析师，擅长从需求对话中提取结构化信息。请严格按用户指令输出 JSON，不要添加任何解释文字或 Markdown 代码块标记。"}
+        ]
+        json_messages.extend(truncated)
+        json_messages.append({"role": "user", "content": GENERATE_DOC_PROMPT})
+
+        full_text = ""
+        try:
+            async for chunk in _stream_with_config(llm_cfg, json_messages):
+                chunk_data = json.loads(chunk)
+                choices = chunk_data.get("choices", [])
+                if choices:
+                    delta = choices[0].get("delta", {})
+                    text = delta.get("content", "")
+                    if text:
+                        full_text += text
+        except Exception as e:
+            logger.error("generate-doc-chat json error: %s", e, exc_info=True)
+            yield {"event": "error", "data": json.dumps({"message": str(e)}, ensure_ascii=False)}
+            return
+
+        # Extract and validate JSON
+        try:
+            doc_result = extract_json(full_text)
+        except Exception:
+            try:
+                doc_result = await _repair_doc_json(llm_cfg, full_text)
+            except Exception:
+                try:
+                    doc_result = await _regenerate_doc_json(llm_cfg, json_messages)
+                except Exception:
+                    doc_result = _build_fallback_doc_result(truncated)
+
+        if not is_valid_doc_result(doc_result):
+            doc_result = _build_fallback_doc_result(truncated)
+
+        # Save to database
+        async with AsyncSessionLocal() as save_db:
+            save_result = await save_db.execute(
+                select(Conversation).where(Conversation.id == session_id)
+            )
+            save_conv = save_result.scalar_one_or_none()
+            if save_conv:
+                save_conv.doc_result = doc_result
+                await save_db.commit()
+
+        yield {"event": "doc_result", "data": json.dumps({"doc_result": doc_result}, ensure_ascii=False)}
+        yield {"event": "done", "data": "{}"}
+
+    return EventSourceResponse(event_generator())
+
+
 @router.post("/export-md")
 async def export_md(
     data: ExportMdRequest,

@@ -1,15 +1,11 @@
 <template>
   <div class="chat-page">
-    <!-- 精简顶栏 -->
-    <nav class="top-bar">
-      <div class="top-bar-left">
-        <button class="sidebar-hamburger" @click="chatSidebarCollapsed = !chatSidebarCollapsed" title="切换侧栏">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
-        </button>
-        <button class="top-bar-home" @click="router.push('/')" title="返回首页">
-          <div class="top-bar-logo">A</div>
-        </button>
-        <span v-if="store.currentApp?.app_name" class="top-bar-app-name">{{ store.currentApp.app_name }}</span>
+    <TopBar
+      :title="store.currentApp?.app_name || 'aPaaS Builder AI'"
+      show-hamburger
+      @toggle-sidebar="chatSidebarCollapsed = !chatSidebarCollapsed"
+    >
+      <template #center>
         <div class="mode-switcher">
           <button class="mode-btn" :class="{ active: activeView === 'builder' }" @click="activeView = 'builder'">
             <span>🤖</span> 智能搭建
@@ -31,48 +27,16 @@
             <span>💻</span> 智能开发
           </button>
         </div>
-      </div>
-      <div class="top-bar-right">
+      </template>
+      <template #actions>
         <button
           v-if="SHOW_PLATFORM_CONFIG && activeView === 'platform' && platformIframeUrl"
           class="top-bar-icon-btn"
           @click="openPlatformNewTab"
           title="在新窗口打开"
         >↗</button>
-        <ThemeToggle />
-        <el-dropdown @command="handleUserCommand" trigger="click">
-          <button class="user-avatar-btn">
-            {{ userStore.user?.username?.charAt(0).toUpperCase() || 'U' }}
-          </button>
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item disabled>
-                <div class="user-menu-info">
-                  <div class="user-menu-label">用户</div>
-                  <div class="user-menu-value">{{ userStore.user?.username }}</div>
-                </div>
-              </el-dropdown-item>
-              <el-dropdown-item disabled v-if="userStore.tenantName">
-                <div class="user-menu-info">
-                  <div class="user-menu-label">租户</div>
-                  <div class="user-menu-value">{{ userStore.tenantName }}</div>
-                </div>
-              </el-dropdown-item>
-              <el-dropdown-item divided command="apps">
-                <span>📱 我的应用</span>
-                <span v-if="appCount > 0" style="margin-left:6px;font-size:11px;color:var(--t-text-muted)">({{ appCount }})</span>
-              </el-dropdown-item>
-              <el-dropdown-item command="envs">
-                <span>⚙️ 环境管理</span>
-              </el-dropdown-item>
-              <el-dropdown-item divided command="logout">
-                <span style="color: #ef4444;">退出登录</span>
-              </el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
-      </div>
-    </nav>
+      </template>
+    </TopBar>
 
     <div class="main-area">
       <!-- 左侧应用列表侧栏 -->
@@ -158,6 +122,17 @@
               </div>
             </div>
           </div>
+          <!-- 设计文档结构化卡片（requirements 模式生成完成后显示） -->
+          <div v-if="docResultForCard" class="chat-bubble assistant">
+            <div class="bubble-inner" style="max-width:90%">
+              <DesignDocCard
+                :doc-result="docResultForCard"
+                :confirming="confirmingDoc"
+                @confirm="confirmDocAndBuild"
+                @edit="ElMessage.info('编辑功能即将推出')"
+              />
+            </div>
+          </div>
           <!-- 编码冲突修复输入 -->
           <div v-if="activeConflict" class="chat-bubble assistant">
             <div class="bubble-inner">
@@ -198,50 +173,57 @@
         </div>
 
         <div v-if="!appParsedMode" class="input-bar">
-          <div class="model-select-bar builder-model-bar">
-            <div class="builder-model-meta">
-              <span class="builder-model-label">当前模型</span>
-              <span class="model-select-tip">{{ builderModelHint }}</span>
+          <div class="input-card">
+            <div class="input-card-top">
+              <label v-if="!isRequirementsMode" class="upload-btn" title="上传功能设计文档(.md)">
+                <input type="file" accept=".md" @change="handleDocUpload" style="display:none" />
+                <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M15.5 8.5l-6.4 6.4a3.5 3.5 0 01-5-5l6.4-6.4a2.2 2.2 0 013.1 3.1L7.2 13a.9.9 0 01-1.3-1.3l5.5-5.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </label>
+              <textarea
+                v-model="inputText"
+                @keydown.enter.exact.prevent="sendMessage"
+                @keydown.enter.shift.exact="inputText += '\n'"
+                :placeholder="isRequirementsMode ? '描述您的业务需求...' : '输入消息，或上传设计文档...'"
+                rows="1"
+                ref="inputRef"
+                @input="autoResizeTextarea"
+              ></textarea>
+              <button class="send-btn" :class="{ disabled: !inputText.trim() }" @click="sendMessage">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M14 2L7 9M14 2l-4.5 12-2-5.5L2 6.5 14 2z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+              </button>
             </div>
-            <el-select
-              v-model="selectedBuilderModelId"
-              class="builder-model-select"
-              popper-class="model-select-dropdown"
-              size="small"
-              placeholder="选择模型"
-              :loading="builderModelLoading"
-              :disabled="builderModelLoading || updatingBuilderModel || builderModelOptions.length === 0"
-              @change="handleBuilderModelChange"
-            >
-              <el-option
-                v-for="option in builderModelOptions"
-                :key="option.id"
-                :label="formatBuilderModelOption(option)"
-                :value="option.id"
+            <div class="input-card-bottom">
+              <div class="input-card-spacer"></div>
+              <el-select
+                v-model="selectedBuilderModelId"
+                class="input-model-select"
+                popper-class="model-select-dropdown"
+                size="small"
+                placeholder="模型"
+                :loading="builderModelLoading"
+                :disabled="builderModelLoading || updatingBuilderModel || builderModelOptions.length === 0"
+                @change="handleBuilderModelChange"
               >
-                <div class="builder-model-option-row">
-                  <span class="builder-model-option-name">{{ option.config_name }}</span>
-                  <span class="builder-model-option-meta">{{ option.provider }} / {{ option.model }}</span>
-                </div>
-              </el-option>
-            </el-select>
-          </div>
-          <div class="input-wrap">
-            <label class="upload-btn" title="上传功能设计文档(.md)">
-              <input type="file" accept=".md" @change="handleDocUpload" style="display:none" />
-              📄
-            </label>
-            <input v-model="inputText" @keydown.enter="sendMessage" placeholder="输入消息，或上传设计文档..." />
-            <button class="send-btn" :class="{ disabled: !inputText.trim() }" @click="sendMessage">
-              <el-icon><Promotion /></el-icon>
-            </button>
+                <el-option
+                  v-for="option in builderModelOptions"
+                  :key="option.id"
+                  :label="formatBuilderModelOption(option)"
+                  :value="option.id"
+                >
+                  <div class="builder-model-option-row">
+                    <span class="builder-model-option-name">{{ option.config_name }}</span>
+                    <span class="builder-model-option-meta">{{ option.provider }} / {{ option.model }}</span>
+                  </div>
+                </el-option>
+              </el-select>
+            </div>
           </div>
         </div>
       </div>
 
 
-      <!-- 第三栏：部署面板 -->
-      <div class="deploy-side" :class="{ open: activeView === 'builder' }">
+      <!-- 第三栏：部署面板（requirements 模式下隐藏，builder 模式或配置就绪后显示） -->
+      <div class="deploy-side" :class="{ open: activeView === 'builder' && (!isRequirementsMode || parseReady) }">
         <div v-if="appParsedMode" class="parsed-side-card">
           <div class="parsed-side-title">解析结果</div>
           <div class="parsed-side-row">应用名称：{{ store.preview.appName || '未命名应用' }}</div>
@@ -362,7 +344,11 @@ import { platformEnvApi } from '@/api/platformEnv'
 import request from '@/utils/request'
 import type { Message } from '@/types'
 import ThemeToggle from '@/components/ThemeToggle.vue'
+import TopBar from '@/components/TopBar.vue'
 import { llmConfigApi, type BuilderModelOption } from '@/api/llmConfig'
+import DesignDocCard from '@/components/DesignDocCard.vue'
+import { requirementsApi } from '@/api/requirements'
+import { convertConfig } from '@/api/conversation'
 
 const router = useRouter()
 const route = useRoute()
@@ -389,9 +375,8 @@ const roleNamesText = computed(() => {
   return names.length ? names.slice(0, 8).join('、') + (names.length > 8 ? ` 等 ${names.length} 项` : '') : '暂无'
 })
 
-const handleNewApp = (command: string) => {
-  if (command === 'requirements') router.push('/requirements')
-  else router.push('/chat')
+const handleNewApp = () => {
+  router.push('/chat?mode=requirements')
 }
 
 // ── 用户头像菜单 ──
@@ -436,9 +421,17 @@ const onSidebarAppSelect = (app: AppItem) => {
 }
 
 const messagesRef = ref<HTMLElement>()
+const inputRef = ref<HTMLTextAreaElement>()
 const inputText = ref('')
 const isTyping = ref(false)
-const currentAgent = ref('builder')
+
+function autoResizeTextarea() {
+  const el = inputRef.value
+  if (!el) return
+  el.style.height = 'auto'
+  el.style.height = Math.min(el.scrollHeight, 160) + 'px'
+}
+const currentAgent = ref('requirements')
 const SHOW_PLATFORM_CONFIG = true
 const builderModelOptions = ref<BuilderModelOption[]>([])
 const builderModelLoading = ref(false)
@@ -493,6 +486,10 @@ const syncBuilderModelFromConversation = async (cid: number) => {
   try {
     const conversation = await conversationApi.get(cid)
     applyBuilderModelSelection(conversation.selected_llm_config_id)
+    // Sync agent_type for requirements mode detection
+    if (conversation.agent_type) {
+      currentAgent.value = conversation.agent_type
+    }
 
     const convIdx = conversationList.value.findIndex(item => item.id === cid)
     if (convIdx >= 0) {
@@ -626,6 +623,7 @@ const getFieldIcon = (f: any) => {
 
 const agents: Record<string, { name: string; icon: string }> = {
   builder: { name: '智能搭建', icon: '🤖' },
+  requirements: { name: '需求分析', icon: '📋' },
   assistant: { name: '辅助开发智能体', icon: '🛠️' },
   developer: { name: '复杂开发智能体', icon: '💻' }
 }
@@ -896,6 +894,12 @@ const removeDict = (idx: number) => {
 const conversationId = ref<number | null>(null)
 const existingAppId = ref<number | null>(null)  // 从"继续完善"进来时，关联的已有应用ID
 const generating = ref(false)
+
+// ── Requirements mode ──
+const isRequirementsMode = computed(() => currentAgent.value === 'requirements')
+const docResultForCard = ref<any>(null)       // doc_result JSON for DesignDocCard
+const generatingDoc = ref(false)               // 正在生成设计文档
+const confirmingDoc = ref(false)               // 正在确认转换配置
 const showEnvSelect = ref(false)
 const selectedEnvId = ref<number | null>(null)
 const showApiLogs = ref(false)
@@ -2303,14 +2307,17 @@ const sendMessage = async () => {
   // 调用后端API
   try {
     const token = localStorage.getItem('token')
-    const response = await fetch(`${API_PREFIX}/chat/send`, {
+    // 统一使用 /chat/send，后端根据 conversation.agent_type 选择 system prompt
+    const chatUrl = `${API_PREFIX}/chat/send`
+    const chatBody = JSON.stringify({
+      conversation_id: conversationId.value,
+      message: text,
+      ...(isRequirementsMode.value ? {} : (store.preview.appName ? { current_config: { ...store.preview } } : {}))
+    })
+    const response = await fetch(chatUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-      body: JSON.stringify({
-        conversation_id: conversationId.value,
-        message: text,
-        ...(store.preview.appName ? { current_config: { ...store.preview } } : {})
-      })
+      body: chatBody
     })
 
     if (!response.ok) throw new Error('发送失败')
@@ -2329,15 +2336,18 @@ const sendMessage = async () => {
       const lines = chunk.split('\n')
 
       for (const line of lines) {
-        if (line.startsWith('data: ')) {
+        if (line.startsWith('data: ') || line.startsWith('data:')) {
+          const dataStr = line.startsWith('data: ') ? line.slice(6) : line.slice(5)
+          if (!dataStr.trim()) continue
           try {
-            const parsed = JSON.parse(line.slice(6))
+            const parsed = JSON.parse(dataStr)
+
+            // 统一 SSE 格式: {"type": "message|thinking|done", "data": "..."}
             if (parsed.type === 'thinking') {
-              // AI 正在思考，保持 isTyping 状态
+              // AI 正在思考
             } else if (parsed.type === 'message') {
               isTyping.value = false
               assistantContent += parsed.data
-              // 更新最后一条消息或创建新消息
               const lastMsg = messages[messages.length - 1]
               if (lastMsg && lastMsg.role === 'assistant' && lastMsg.agent === currentAgent.value && lastMsg.id === -1) {
                 lastMsg.content = assistantContent
@@ -2347,16 +2357,35 @@ const sendMessage = async () => {
               scrollToBottom()
             } else if (parsed.type === 'done') {
               isTyping.value = false
-              // 标记完成，设置正式id
               const lastMsg = messages[messages.length - 1]
               if (lastMsg && lastMsg.id === -1) lastMsg.id = Date.now()
-              // 提取配置JSON
-              extractPreviewData(assistantContent)
-              // 如果提到了应用名但还没设置currentApp
-              if (!store.currentApp && assistantContent.length > 50) {
-                const appNameMatch = assistantContent.match(/搭建.*?[**](.+?)[**]/)
-                if (appNameMatch) {
-                  store.currentApp = { name: appNameMatch[1] || '', status: 'talking' }
+              if (isRequirementsMode.value) {
+                // 检测 AI 回复标记
+                const hasBuildTrigger = assistantContent.includes('<!-- TRIGGER_BUILD -->')
+                const hasDesignComplete = assistantContent.includes('<!-- DESIGN_COMPLETE -->')
+                if (hasBuildTrigger || hasDesignComplete) {
+                  // 清理标记
+                  if (lastMsg) {
+                    lastMsg.content = assistantContent
+                      .replace('<!-- TRIGGER_BUILD -->', '')
+                      .replace('<!-- DESIGN_COMPLETE -->', '')
+                      .trim()
+                  }
+                  if (hasBuildTrigger) {
+                    // 用户确认了，触发完整的生成流程
+                    triggerFullBuildPipeline()
+                  } else {
+                    // 设计文档完成，后台生成 JSON 等用户确认
+                    generateDocInBackground()
+                  }
+                }
+              } else {
+                extractPreviewData(assistantContent)
+                if (!store.currentApp && assistantContent.length > 50) {
+                  const appNameMatch = assistantContent.match(/搭建.*?[**](.+?)[**]/)
+                  if (appNameMatch) {
+                    store.currentApp = { name: appNameMatch[1] || '', status: 'talking' }
+                  }
                 }
               }
             }
@@ -2369,6 +2398,306 @@ const sendMessage = async () => {
     isTyping.value = false
     messages.push({ id: Date.now(), role: 'assistant', agent: currentAgent.value, content: '发送失败，请重试。', created_at: '' })
     scrollToBottom()
+  }
+}
+
+// ── Requirements: 完整生成流程（用户确认后触发） ──
+// generate-doc → convert-config → create app → show deploy panel
+const triggerFullBuildPipeline = async () => {
+  if (!conversationId.value || generatingDoc.value) return
+  generatingDoc.value = true
+
+  // 添加进度消息
+  const progressMsgId = Date.now()
+  messages.push({
+    id: progressMsgId,
+    role: 'assistant',
+    agent: 'requirements',
+    content: '⏳ 正在解析需求，生成应用配置...',
+    created_at: '',
+  })
+  scrollToBottom()
+
+  try {
+    // Step 1: Generate structured JSON from conversation
+    const token = localStorage.getItem('token') || ''
+    const url = requirementsApi.generateDocUrl(conversationId.value)
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    })
+    if (!response.ok) throw new Error(`生成文档失败: HTTP ${response.status}`)
+
+    const reader = response.body?.getReader()
+    if (!reader) throw new Error('无法读取响应流')
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let docResult: any = null
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+      for (const line of lines) {
+        if (line.startsWith('data:')) {
+          try {
+            const data = JSON.parse(line.slice(5).trim())
+            if (data.doc_result) docResult = data.doc_result
+          } catch { /* ignore */ }
+        }
+      }
+    }
+
+    if (!docResult) throw new Error('未能生成设计文档')
+
+    // Update progress
+    const pMsg = messages.find(m => m.id === progressMsgId)
+    if (pMsg) pMsg.content = '⏳ 正在转换为应用配置...'
+    scrollToBottom()
+
+    // Step 2: Convert AnalysisResult → AppConfig
+    const appConfig = await convertConfig(docResult)
+
+    // Step 3: Switch to builder mode
+    await conversationApi.updateAgentType(conversationId.value, 'builder')
+    currentAgent.value = 'builder'
+
+    // Step 4: Populate preview store
+    store.preview = {
+      appName: appConfig.appName || '',
+      roles: appConfig.roles || [],
+      dicts: appConfig.dicts || [],
+      models: appConfig.models || [],
+      workflows: appConfig.workflows || [],
+      permissions: appConfig.permissions || [],
+    }
+    parsedAppCode.value = appConfig.appCode || ''
+    parseReady.value = true
+
+    // Step 5: Create application
+    const appCode = appConfig.appCode || buildAppCode(appConfig.appName || '新应用')
+    const payload = {
+      conversation_id: conversationId.value,
+      app_name: appConfig.appName || '新应用',
+      app_code: appCode,
+      config_preview: { type: 'preview', data: { ...store.preview } },
+    }
+    const created = await applicationApi.create(payload)
+    existingAppId.value = created.id
+    store.currentApp = { name: appConfig.appName || '', status: 'ready' }
+
+    // Step 6: Update progress message
+    if (pMsg) {
+      pMsg.content = `✅ 应用配置已生成！\n\n已提取 **${appConfig.models?.length || 0}** 个数据模型、**${appConfig.dicts?.length || 0}** 个字典、**${appConfig.roles?.length || 0}** 个角色。\n\n点击右侧「▶ 一键执行」将应用部署到平台。`
+      pMsg.agent = 'builder'
+    }
+
+    // Step 7: Update URL and show deploy panel
+    router.replace(`/chat/${conversationId.value}?app_id=${created.id}`)
+    fetchConversationList()
+    scrollToBottom()
+
+    ElMessage.success('应用配置生成完成！')
+  } catch (e: any) {
+    const pMsg = messages.find(m => m.id === progressMsgId)
+    if (pMsg) pMsg.content = `❌ 生成失败: ${e.message || '未知错误'}。请重试。`
+    ElMessage.error('生成失败: ' + (e.message || '未知错误'))
+  } finally {
+    generatingDoc.value = false
+    scrollToBottom()
+  }
+}
+
+// ── Requirements: 后台生成结构化 JSON（AI 输出可读文档后自动触发） ──
+const generateDocInBackground = async () => {
+  if (!conversationId.value || generatingDoc.value) return
+  generatingDoc.value = true
+
+  const token = localStorage.getItem('token') || ''
+  // 使用 requirements 的 generate-doc 端点（从对话历史生成 JSON）
+  const url = requirementsApi.generateDocUrl(conversationId.value)
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    })
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+
+    const reader = response.body?.getReader()
+    if (!reader) throw new Error('无法读取响应流')
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+
+      for (const line of lines) {
+        if (line.startsWith('data:')) {
+          const dataStr = line.slice(5).trim()
+          if (!dataStr) continue
+          try {
+            const data = JSON.parse(dataStr)
+            if (data.doc_result) {
+              docResultForCard.value = data.doc_result
+            }
+          } catch { /* ignore */ }
+        }
+      }
+    }
+
+    if (docResultForCard.value) {
+      scrollToBottom()
+    }
+  } catch (e: any) {
+    console.error('Background doc generation failed:', e)
+    // 静默失败，不打断用户
+  } finally {
+    generatingDoc.value = false
+  }
+}
+
+// ── Requirements: 流式生成设计文档（作为对话消息） ──
+const generateDocInChat = async () => {
+  if (!conversationId.value || generatingDoc.value) return
+  generatingDoc.value = true
+  docResultForCard.value = null
+  isTyping.value = true
+  scrollToBottom()
+
+  const token = localStorage.getItem('token') || ''
+  const url = requirementsApi.generateDocChatUrl(conversationId.value)
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    })
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+
+    const reader = response.body?.getReader()
+    if (!reader) throw new Error('无法读取响应流')
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let assistantContent = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+
+      for (const line of lines) {
+        if (line.startsWith('event:')) {
+          // event line handled below via data
+        } else if (line.startsWith('data:')) {
+          const dataStr = line.slice(5).trim()
+          if (!dataStr) continue
+          try {
+            const data = JSON.parse(dataStr)
+            // Phase 1: streaming text content
+            if (data.content) {
+              isTyping.value = false
+              assistantContent += data.content
+              const lastMsg = messages[messages.length - 1]
+              if (lastMsg && lastMsg.role === 'assistant' && lastMsg.id === -1) {
+                lastMsg.content = assistantContent
+              } else {
+                messages.push({ id: -1, role: 'assistant', agent: 'requirements', content: assistantContent, created_at: '' })
+              }
+              scrollToBottom()
+            }
+            // Phase 2: structured JSON result
+            if (data.doc_result) {
+              docResultForCard.value = data.doc_result
+              // Finalize the streaming message
+              const lastMsg = messages[messages.length - 1]
+              if (lastMsg && lastMsg.id === -1) lastMsg.id = Date.now()
+            }
+          } catch { /* ignore */ }
+        }
+      }
+    }
+
+    isTyping.value = false
+    if (!docResultForCard.value) {
+      messages.push({ id: Date.now(), role: 'assistant', agent: 'requirements', content: '设计文档生成失败，请重试。', created_at: '' })
+    }
+    scrollToBottom()
+  } catch (e: any) {
+    isTyping.value = false
+    ElMessage.error('生成失败: ' + (e.message || '未知错误'))
+    messages.push({ id: Date.now(), role: 'assistant', agent: 'requirements', content: '生成失败，请重试。', created_at: '' })
+  } finally {
+    generatingDoc.value = false
+    scrollToBottom()
+  }
+}
+
+// ── Requirements: 确认设计文档 → 转换为 AppConfig → 切换到 builder 模式 ──
+const confirmDocAndBuild = async () => {
+  if (!docResultForCard.value || !conversationId.value) return
+  confirmingDoc.value = true
+
+  try {
+    // Step 1: Convert AnalysisResult → AppConfig (no LLM)
+    const appConfig = await convertConfig(docResultForCard.value)
+
+    // Step 2: Switch conversation to builder mode
+    await conversationApi.updateAgentType(conversationId.value, 'builder')
+    currentAgent.value = 'builder'
+
+    // Step 3: Populate preview store
+    store.preview = {
+      appName: appConfig.appName || '',
+      roles: appConfig.roles || [],
+      dicts: appConfig.dicts || [],
+      models: appConfig.models || [],
+      workflows: appConfig.workflows || [],
+      permissions: appConfig.permissions || [],
+    }
+    parsedAppCode.value = appConfig.appCode || ''
+    parseReady.value = true
+
+    // Step 4: Create/update application record
+    const appCode = appConfig.appCode || buildAppCode(appConfig.appName || '新应用')
+    const payload = {
+      conversation_id: conversationId.value,
+      app_name: appConfig.appName || '新应用',
+      app_code: appCode,
+      config_preview: { type: 'preview', data: { ...store.preview } },
+    }
+    const created = await applicationApi.create(payload)
+    existingAppId.value = created.id
+    store.currentApp = { name: appConfig.appName || '', status: 'ready' }
+
+    // Step 5: Add confirmation message
+    messages.push({
+      id: Date.now(),
+      role: 'assistant',
+      agent: 'builder',
+      content: `配置已就绪！已提取 ${appConfig.models?.length || 0} 个模型、${appConfig.dicts?.length || 0} 个字典、${appConfig.roles?.length || 0} 个角色。\n\n请点击下方「开始生成」将应用部署到平台。`,
+      created_at: '',
+    })
+
+    docResultForCard.value = null  // Clear card
+    scrollToBottom()
+    ElMessage.success('设计文档已确认，进入搭建模式')
+
+    // Update URL
+    router.replace(`/chat/${conversationId.value}?app_id=${created.id}`)
+    fetchConversationList()
+  } catch (e: any) {
+    ElMessage.error('转换失败: ' + (e.message || '未知错误'))
+  } finally {
+    confirmingDoc.value = false
   }
 }
 
@@ -2559,6 +2888,34 @@ onMounted(async () => {
     }
   }
 
+  // ── 新对话：自动进入 requirements 模式 ──
+  // 如果没有加载到已有对话（无 app_id, 无 conversation_id），创建 requirements 对话
+  if (!conversationId.value && !store.pendingMarkdown && !store.pendingFile) {
+    const token = localStorage.getItem('token')
+    const res = await fetch(`${API_PREFIX}/conversations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({
+        agent_type: 'requirements',
+        ...(selectedBuilderModelId.value != null ? { selected_llm_config_id: selectedBuilderModelId.value } : {}),
+      })
+    })
+    if (res.ok) {
+      const data = await res.json()
+      conversationId.value = data.id
+      selectedConversationId.value = data.id
+      currentAgent.value = 'requirements'
+      router.replace(`/chat/${data.id}`)
+      messages.push({
+        id: Date.now(),
+        role: 'assistant',
+        agent: 'requirements',
+        content: '您好！请描述一下您想要搭建的应用。\n\n比如："我想做一个客户管理系统"、"帮我搭建一个项目管理应用"',
+        created_at: '',
+      })
+    }
+  }
+
   const prompt = route.query.prompt as string
   if (prompt && !appParsedMode.value) {
     inputText.value = prompt
@@ -2718,14 +3075,14 @@ watch(conversationId, (id) => {
   font-size: 13px; font-weight: 500; color: var(--t-text-secondary);
   max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.mode-switcher { display: flex; gap: 2px; background: var(--t-bg-elevated); border-radius: 8px; padding: 2px; }
+.mode-switcher { display: flex; gap: 2px; background: var(--t-bg-input); border-radius: 10px; padding: 3px; border: 1px solid var(--t-border-subtle); }
 .mode-btn {
-  display: flex; align-items: center; gap: 5px; padding: 5px 12px; border-radius: 6px;
+  display: flex; align-items: center; gap: 5px; padding: 5px 14px; border-radius: 8px;
   font-size: 12px; font-weight: 500; background: none; border: none;
   color: var(--t-text-muted); cursor: pointer; transition: all 0.2s;
 }
 .mode-btn:hover { color: var(--t-text-primary); }
-.mode-btn.active { background: var(--t-brand-subtle); color: var(--t-brand-light); font-weight: 600; }
+.mode-btn.active { background: var(--t-bg-panel); color: var(--t-brand-text); font-weight: 600; box-shadow: var(--t-shadow-sm); }
 .top-bar-icon-btn {
   width: 28px; height: 28px; border: none; border-radius: 6px;
   background: transparent; color: var(--t-text-muted); cursor: pointer;
@@ -2766,14 +3123,16 @@ watch(conversationId, (id) => {
 }
 .doc-view-wrap {
   flex: 1;
-  border: 1px dashed var(--t-border-subtle);
+  border: 1px solid var(--t-border-subtle);
   border-radius: 12px;
-  margin: 16px;
-  padding: 14px;
+  margin: 12px;
+  padding: 20px 24px;
   display: flex;
   flex-direction: column;
   gap: 10px;
   overflow: auto;
+  background: var(--t-bg-panel);
+  box-shadow: var(--t-shadow-sm);
 }
 .doc-view-head {
   display: flex;
@@ -2815,9 +3174,9 @@ watch(conversationId, (id) => {
   color: var(--t-text-primary);
 }
 .doc-view-body :deep(code) {
-  color: #a5b4fc;
-  background: rgba(129, 140, 248, 0.12);
-  border: 1px solid rgba(129, 140, 248, 0.2);
+  color: var(--t-brand-text);
+  background: var(--t-brand-subtle);
+  border: 1px solid var(--t-border-subtle);
   border-radius: 4px;
   padding: 1px 4px;
 }
@@ -2828,10 +3187,11 @@ watch(conversationId, (id) => {
 }
 .parsed-side-card {
   margin: 12px 12px 10px;
-  padding: 12px;
+  padding: 14px 16px;
   border-radius: 12px;
-  border: 1px solid rgba(129, 140, 248, 0.22);
-  background: rgba(129, 140, 248, 0.08);
+  border: 1px solid var(--t-border-subtle);
+  background: var(--t-bg-panel);
+  box-shadow: var(--t-shadow-sm);
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -2847,9 +3207,9 @@ watch(conversationId, (id) => {
   color: var(--t-text-primary);
 }
 .parsed-side-row code {
-  color: #a5b4fc;
-  background: rgba(129, 140, 248, 0.12);
-  border: 1px solid rgba(129, 140, 248, 0.25);
+  color: var(--t-brand-text);
+  background: var(--t-brand-subtle);
+  border: 1px solid var(--t-border-subtle);
   border-radius: 6px;
   padding: 1px 6px;
 }
@@ -2978,7 +3338,7 @@ watch(conversationId, (id) => {
   color: var(--t-brand-light); background: var(--t-brand-subtle); border-color: rgba(167,139,250,0.2);
 }
 
-.messages { flex: 1; overflow-y: auto; padding: 16px; background: var(--t-bg-base); }
+.messages { flex: 1; overflow-y: auto; padding: 16px 20px; background: var(--t-bg-base); }
 .chat-bubble { margin-bottom: 16px; animation: fadeUp 0.3s ease-out; }
 .chat-bubble.user { display: flex; justify-content: flex-end; }
 .chat-bubble.assistant { display: flex; justify-content: flex-start; }
@@ -2990,8 +3350,9 @@ watch(conversationId, (id) => {
   color: #fff; border-bottom-right-radius: 4px;
 }
 .bubble-content.assistant {
-  background: var(--t-bg-elevated); border: 1px solid var(--t-border-subtle);
+  background: var(--t-bg-panel); border: 1px solid var(--t-border-subtle);
   color: var(--t-text-primary); border-bottom-left-radius: 4px;
+  box-shadow: var(--t-shadow-sm);
 }
 @keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 
@@ -3001,29 +3362,92 @@ watch(conversationId, (id) => {
 @keyframes pulseDot { 0%,80%,100% { transform: scale(0); } 40% { transform: scale(1); } }
 
 /* 底部输入框 */
-.input-bar { padding: 12px 16px; background: var(--t-bg-base); border-top: 1px solid var(--t-border-subtle); flex-shrink: 0; }
-.input-wrap {
-  display: flex; align-items: center; gap: 8px;
-  background: var(--t-bg-elevated); border-radius: 12px; padding: 8px 8px 8px 12px;
-  border: 1px solid var(--t-border-subtle); transition: border-color 0.3s, box-shadow 0.3s;
+/* ── Input bar (Claude-style card) ── */
+.input-bar {
+  padding: 0 16px 16px;
+  background: var(--t-bg-base);
+  flex-shrink: 0;
+  display: flex;
+  justify-content: center;
 }
-.input-wrap:focus-within {
+.input-card {
+  width: 100%;
+  background: var(--t-bg-panel);
+  border: 1px solid var(--t-border-subtle);
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: var(--t-shadow-sm);
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.input-card:focus-within {
   border-color: var(--t-brand);
-  box-shadow: 0 0 0 3px var(--t-brand-subtle), inset 0 0 0 1px var(--t-brand-glow);
+  box-shadow: 0 0 0 3px var(--t-brand-subtle);
 }
-.upload-btn { cursor: pointer; font-size: 18px; padding: 2px 4px; border-radius: 6px; opacity: 0.5; transition: opacity 0.2s; }
-.upload-btn:hover { opacity: 1; background: var(--t-bg-subtle); }
-.input-wrap input { flex: 1; background: transparent; border: none; outline: none; font-size: 13px; color: var(--t-text-primary); }
-.input-wrap input::placeholder { color: var(--t-text-muted); }
+.input-card-top {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 10px 12px;
+}
+.upload-btn {
+  cursor: pointer;
+  color: var(--t-text-muted);
+  display: flex;
+  align-items: center;
+  padding: 4px;
+  border-radius: 6px;
+  transition: color 0.15s;
+  flex-shrink: 0;
+}
+.upload-btn:hover { color: var(--t-text-primary); }
+.input-card-top textarea {
+  flex: 1;
+  border: none;
+  background: transparent;
+  resize: none;
+  outline: none;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--t-text-primary);
+  min-height: 22px;
+  max-height: 160px;
+  overflow-y: auto;
+  padding: 2px 0;
+  font-family: inherit;
+}
+.input-card-top textarea::placeholder { color: var(--t-text-muted); }
 .send-btn {
   width: 32px; height: 32px; border-radius: 8px;
-  background: var(--t-brand-gradient);
-  color: #fff; border: none; cursor: pointer;
+  background: var(--t-text-primary);
+  color: var(--t-bg-base);
+  border: none; cursor: pointer;
   display: flex; align-items: center; justify-content: center;
-  transition: transform 0.2s, box-shadow 0.2s;
+  flex-shrink: 0;
+  transition: opacity 0.15s;
 }
-.send-btn.disabled { opacity: 0.3; cursor: not-allowed; }
-.send-btn:hover:not(.disabled) { transform: translateY(-1px); box-shadow: 0 4px 12px var(--t-brand-glow); }
+.send-btn.disabled { opacity: 0.2; cursor: not-allowed; }
+.send-btn:hover:not(.disabled) { opacity: 0.8; }
+.input-card-bottom {
+  display: flex;
+  align-items: center;
+  padding: 4px 12px 8px;
+  border-top: 1px solid var(--t-border-subtle);
+}
+.input-card-spacer { flex: 1; }
+.input-model-select {
+  width: 160px;
+}
+.input-model-select :deep(.el-select__wrapper) {
+  min-height: 26px;
+  border-radius: 8px;
+  background: transparent;
+  border: 1px solid var(--t-border-subtle);
+  box-shadow: none;
+  font-size: 12px;
+}
+.input-model-select :deep(.el-select__wrapper:hover) {
+  border-color: var(--t-border-strong);
+}
 
 @media (max-width: 960px) {
   .builder-model-bar {
@@ -3037,7 +3461,7 @@ watch(conversationId, (id) => {
 
 /* ── 右侧预览面板 ── */
 .preview-side {
-  flex: 1; background: var(--t-bg-base); border-left: 1px solid var(--t-border-subtle);
+  flex: 1; background: var(--t-bg-panel); border-left: 1px solid var(--t-border-subtle);
   display: flex; flex-direction: column; min-width: 0; position: relative;
 }
 .preview-tabs { display: flex; border-bottom: 1px solid var(--t-border-subtle); padding: 0 8px; flex-shrink: 0; }
@@ -3105,7 +3529,7 @@ watch(conversationId, (id) => {
   font-size: 13px; line-height: 1.7; color: var(--t-text-primary);
   background: var(--t-bg-base); border-radius: 8px;
 }
-.doc-preview-body :deep(h1) { font-size: 20px; color: #fff; margin: 20px 0 12px; padding-bottom: 8px; border-bottom: 1px solid var(--t-border-subtle); }
+.doc-preview-body :deep(h1) { font-size: 20px; color: var(--t-text-primary); margin: 20px 0 12px; padding-bottom: 8px; border-bottom: 1px solid var(--t-border-subtle); }
 .doc-preview-body :deep(h2) { font-size: 17px; color: var(--t-text-primary); margin: 18px 0 10px; }
 .doc-preview-body :deep(h3) { font-size: 15px; color: var(--t-text-primary); margin: 14px 0 8px; }
 .doc-preview-body :deep(h4) { font-size: 13px; color: var(--t-text-primary); margin: 10px 0 6px; }
@@ -3118,7 +3542,7 @@ watch(conversationId, (id) => {
 .doc-preview-body :deep(th) { background: var(--t-brand-subtle); color: var(--t-brand-light); text-align: left; padding: 8px 12px; border: 1px solid var(--t-border-subtle); font-weight: 600; }
 .doc-preview-body :deep(td) { padding: 6px 12px; border: 1px solid var(--t-border-subtle); }
 .doc-preview-body :deep(tr:hover td) { background: var(--t-bg-subtle); }
-.doc-preview-body :deep(strong) { color: var(--t-brand-light); }
+.doc-preview-body :deep(strong) { color: var(--t-text-primary); font-weight: 600; }
 .doc-preview-body :deep(hr) { border: none; border-top: 1px solid var(--t-border-subtle); margin: 16px 0; }
 
 /* 文档对比弹窗 */
@@ -3781,5 +4205,39 @@ watch(conversationId, (id) => {
 }
 .coding-embed-frame {
   flex: 1; width: 100%; height: 100%; border: none;
+}
+
+/* ── Requirements mode ── */
+.req-action-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 16px 0;
+}
+.req-gen-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 14px;
+  background: var(--t-brand-gradient);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.req-gen-btn:hover:not(:disabled) {
+  opacity: 0.9;
+  transform: translateY(-1px);
+}
+.req-gen-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.req-hint {
+  font-size: 11px;
+  color: var(--t-text-muted);
 }
 </style>

@@ -17,6 +17,8 @@ from app.permissions import has_org_permission, check_resource_permission, batch
 from jose import JWTError, jwt
 from app.config import settings
 
+from app.services.config_converter import convert_analysis_to_app_config
+
 router = APIRouter(prefix="/applications", tags=["应用"])
 logger = logging.getLogger(__name__)
 
@@ -1860,3 +1862,27 @@ async def list_api_logs(
             for log in logs
         ],
     }
+
+
+# ── AnalysisResult → AppConfig 直接转换（无 LLM） ──────────────────────────
+
+
+class ConvertConfigRequest(BaseModel):
+    doc_result: dict
+
+
+@router.post("/convert-config")
+async def convert_config(
+    body: ConvertConfigRequest,
+    auth: AuthContext = Depends(get_auth_context),
+):
+    """
+    Convert a requirements AnalysisResult JSON directly to AppConfig format.
+    Pure Python transformation — no LLM calls, no markdown roundtrip.
+    """
+    try:
+        config = convert_analysis_to_app_config(body.doc_result)
+        return {"config": config}
+    except Exception as e:
+        logger.error(f"Config conversion failed: {e}", exc_info=True)
+        raise HTTPException(status_code=400, detail=f"配置转换失败: {str(e)}")

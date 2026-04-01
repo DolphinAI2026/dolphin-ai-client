@@ -1,12 +1,8 @@
 <template>
   <div class="coding-page">
     <!-- Header (嵌入模式隐藏) -->
-    <header v-if="!embeddedAppId" class="coding-header">
-      <div class="header-left">
-        <el-button text @click="$router.push('/chat')">
-          <el-icon><ArrowLeft /></el-icon>
-        </el-button>
-        <h3 class="header-title">AI Coding</h3>
+    <TopBar v-if="!embeddedAppId" title="AI Coding" show-back back-to="/chat">
+      <template #center>
         <el-tag
           v-if="codingStore.workspace"
           size="small"
@@ -16,9 +12,8 @@
         >
           {{ workspaceDisplayName(codingStore.workspace) }}
         </el-tag>
-      </div>
-      <div class="header-right">
-        <!-- Chat / IDE 切换按钮（有 IDE URL 时显示） -->
+      </template>
+      <template #actions>
         <div v-if="ideUrl || streamMessages.length > 0" class="view-toggle">
           <button
             class="view-toggle-btn"
@@ -40,17 +35,7 @@
             <span class="view-toggle-label">IDE</span>
           </button>
         </div>
-        <ThemeToggle />
         <template v-if="codingStore.workspace">
-          <!-- 调试功能暂时隐藏 -->
-          <!-- <el-button
-            size="small"
-            class="header-btn"
-            @click="showEnvPicker = true; loadPlatformEnvs()"
-            title="浏览器预览"
-          >
-            <el-icon><Monitor /></el-icon>
-          </el-button> -->
           <el-button
             size="small"
             type="success"
@@ -72,8 +57,8 @@
             <el-icon><Delete /></el-icon>
           </el-button>
         </template>
-      </div>
-    </header>
+      </template>
+    </TopBar>
 
     <!-- 嵌入模式右侧工具栏已移至 coding-body 内 -->
 
@@ -523,6 +508,7 @@ import { conversationApi } from '@/api/conversation'
 import { llmConfigApi, type BuilderModelOption } from '@/api/llmConfig'
 import { consumeSseResponse } from '@/utils/sse'
 import ThemeToggle from '@/components/ThemeToggle.vue'
+import TopBar from '@/components/TopBar.vue'
 
 const route = useRoute()
 const codingStore = useCodingStore()

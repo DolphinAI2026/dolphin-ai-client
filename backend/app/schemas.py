@@ -54,7 +54,7 @@ class TenantSelectRequest(BaseModel):
 
 # Conversation schemas
 class ConversationCreate(BaseModel):
-    agent_type: str = Field(..., pattern="^(builder|assistant|developer)$")
+    agent_type: str = Field(..., pattern="^(builder|assistant|developer|requirements)$")
     selected_llm_config_id: Optional[int] = None
 
 

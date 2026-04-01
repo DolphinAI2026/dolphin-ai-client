@@ -180,6 +180,47 @@ async def update_conversation_model(
     )
 
 
+class AgentTypeUpdateRequest(BaseModel):
+    agent_type: str  # "requirements" → "builder"
+
+
+@router.patch("/{conversation_id}/agent-type", response_model=ConversationResponse)
+async def update_agent_type(
+    conversation_id: int,
+    data: AgentTypeUpdateRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Switch conversation agent_type (e.g., requirements → builder)."""
+    if data.agent_type not in {"builder", "requirements", "coding"}:
+        raise HTTPException(status_code=400, detail="不支持的 agent_type")
+
+    result = await db.execute(
+        select(Conversation).where(
+            Conversation.id == conversation_id,
+            Conversation.user_id == ctx.user.id,
+            Conversation.tenant_id == ctx.tenant_id,
+        )
+    )
+    conversation = result.scalar_one_or_none()
+    if not conversation:
+        raise HTTPException(status_code=404, detail="对话不存在")
+
+    conversation.agent_type = data.agent_type
+    await db.commit()
+    await db.refresh(conversation)
+
+    return ConversationResponse(
+        id=conversation.id,
+        title=conversation.title,
+        agent_type=conversation.agent_type,
+        status=conversation.status,
+        selected_llm_config_id=conversation.selected_llm_config_id,
+        created_at=conversation.created_at,
+        updated_at=conversation.updated_at,
+    )
+
+
 @router.get("/{conversation_id}/messages", response_model=list[MessageResponse])
 async def list_messages(
     conversation_id: int,

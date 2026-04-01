@@ -37,8 +37,19 @@ export const conversationApi = {
     return request.get<any, Message[]>(`/conversations/${conversationId}/messages`)
   },
 
+  /** 切换对话的 agent_type（如 requirements → builder） */
+  updateAgentType(id: number, agent_type: string) {
+    return request.patch<any, Conversation>(`/conversations/${id}/agent-type`, { agent_type })
+  },
+
   /** 获取带应用信息的对话列表（用于对话历史） */
   listWithApps(params?: { agent_type?: string }) {
     return request.get<any, ConversationWithApp[]>('/conversations/with-apps/list', { params })
   }
+}
+
+/** AnalysisResult → AppConfig 直接转换（无 LLM） */
+export async function convertConfig(docResult: any): Promise<any> {
+  const resp = await request.post<any, { config: any }>('/applications/convert-config', { doc_result: docResult })
+  return resp.config
 }

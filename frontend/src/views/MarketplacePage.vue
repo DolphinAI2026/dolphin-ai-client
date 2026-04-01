@@ -1,24 +1,18 @@
 <template>
   <div class="marketplace-page">
-    <!-- Header -->
-    <header class="mp-header">
-      <div class="mp-header-left">
-        <el-button text @click="$router.back()">
-          <el-icon><ArrowLeft /></el-icon>
-        </el-button>
-        <h3 class="mp-title">组件市场</h3>
+    <TopBar title="组件市场" show-back>
+      <template #center>
         <el-tag size="small" type="warning">Beta</el-tag>
-      </div>
-      <div class="mp-header-right">
-        <ThemeToggle />
+      </template>
+      <template #actions>
         <el-button size="small" @click="showMyComponents = !showMyComponents" class="mp-btn">
           {{ showMyComponents ? '浏览市场' : '我的发布' }}
         </el-button>
         <el-button size="small" @click="$router.push('/coding')" class="mp-btn">
           <el-icon><Monitor /></el-icon> Vibe Coding
         </el-button>
-      </div>
-    </header>
+      </template>
+    </TopBar>
 
     <!-- Search & Filters -->
     <div class="mp-toolbar">
@@ -144,6 +138,7 @@ import { ArrowLeft, Monitor, Search, Download } from '@element-plus/icons-vue'
 import { marketplaceApi, type MarketplaceComponent } from '@/api/marketplace'
 import { useUserStore } from '@/stores/user'
 import ThemeToggle from '@/components/ThemeToggle.vue'
+import TopBar from '@/components/TopBar.vue'
 
 const userStore = useUserStore()
 const currentUserId = computed(() => userStore.user?.id)
