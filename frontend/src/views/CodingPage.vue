@@ -18,6 +18,28 @@
         </el-tag>
       </div>
       <div class="header-right">
+        <!-- Chat / IDE 切换按钮（有 IDE URL 时显示） -->
+        <div v-if="ideUrl || streamMessages.length > 0" class="view-toggle">
+          <button
+            class="view-toggle-btn"
+            :class="{ active: activeView === 'chat' }"
+            @click="activeView = 'chat'"
+            title="对话记录"
+          >
+            <el-icon :size="16"><ChatDotRound /></el-icon>
+            <span class="view-toggle-label">Chat</span>
+          </button>
+          <button
+            class="view-toggle-btn"
+            :class="{ active: activeView === 'ide', disabled: !ideUrl }"
+            :disabled="!ideUrl"
+            @click="ideUrl && (activeView = 'ide')"
+            title="代码编辑器"
+          >
+            <el-icon :size="16"><Monitor /></el-icon>
+            <span class="view-toggle-label">IDE</span>
+          </button>
+        </div>
         <ThemeToggle />
         <template v-if="codingStore.workspace">
           <!-- 调试功能暂时隐藏 -->
@@ -145,7 +167,7 @@
       <!-- Main Content: Welcome or IDE -->
       <div class="main-content">
         <!-- Welcome State -->
-        <div v-if="!ideUrl && !isStreaming" class="welcome-pane">
+        <div v-if="!ideUrl && !isStreaming && streamMessages.length === 0" class="welcome-pane">
           <div class="welcome-inner">
             <div class="welcome-icon">&#x2728;</div>
             <h2 class="welcome-title">描述你想开发的内容</h2>
@@ -271,8 +293,8 @@
           </div>
         </div>
 
-        <!-- Stream Pane (对话流视图 - 类似 Claude Code Desktop) -->
-        <div v-else-if="isStreaming && !ideUrl" class="stream-pane">
+        <!-- Stream Pane (对话流视图 - Chat 模式) -->
+        <div v-else-if="activeView === 'chat'" class="stream-pane">
           <div class="stream-messages" ref="streamContainerRef">
             <div
               v-for="(msg, idx) in streamMessages"
@@ -356,11 +378,68 @@
 
             <!-- 完成后的操作区域 -->
             <div v-if="!isStreaming && pendingIdeUrl" class="stream-actions">
-              <button class="open-ide-btn" @click="setIdeUrl(pendingIdeUrl!); pendingIdeUrl = null">
+              <button class="open-ide-btn" @click="openPendingIde">
                 <span class="ide-btn-icon">&#x1F4BB;</span>
                 打开代码编辑器
               </button>
               <span class="stream-actions-hint">在编辑器中查看和修改 AI 生成的代码</span>
+            </div>
+          </div>
+
+          <!-- Chat 底部输入框（非流式时可用） -->
+          <div v-if="!isStreaming" class="chat-input-bar">
+            <!-- 附件预览 -->
+            <div v-if="attachedFile" class="chat-attachment-preview">
+              <div v-if="attachedPreviewUrl" class="attachment-thumb">
+                <img :src="attachedPreviewUrl" alt="preview" />
+                <button class="attachment-remove" @click="removeAttachment">&times;</button>
+              </div>
+              <div v-else class="attachment-file">
+                <span class="attachment-file-icon">&#128196;</span>
+                <span class="attachment-file-name">{{ attachedFile.name }}</span>
+                <button class="attachment-remove" @click="removeAttachment">&times;</button>
+              </div>
+            </div>
+            <div class="chat-input-wrapper" @paste="handlePaste">
+              <input
+                ref="chatFileInputRef"
+                type="file"
+                accept=".md,.pdf,.docx,.txt,.png,.jpg,.jpeg"
+                style="display: none"
+                @change="handleFileSelect"
+              />
+              <el-button
+                text
+                class="attach-btn"
+                @click="chatFileInputRef?.click()"
+                :disabled="isCreating"
+                title="上传附件"
+              >
+                <el-icon :size="16"><Paperclip /></el-icon>
+              </el-button>
+              <el-input
+                v-model="userInput"
+                type="textarea"
+                :rows="1"
+                :autosize="{ minRows: 1, maxRows: 4 }"
+                placeholder="继续描述修改需求... (Ctrl+Enter 发送)"
+                @keydown.ctrl.enter="sendMessage"
+                @keydown.meta.enter="sendMessage"
+                :disabled="isCreating"
+                resize="none"
+                class="chat-input"
+              />
+              <el-button
+                type="primary"
+                class="send-btn"
+                :loading="isCreating"
+                @click="sendMessage"
+                :disabled="!userInput.trim() || isCreating"
+                circle
+                size="small"
+              >
+                <el-icon v-if="!isCreating"><TopRight /></el-icon>
+              </el-button>
             </div>
           </div>
         </div>
@@ -393,12 +472,13 @@ import { API_PREFIX } from '@/utils/request'
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ArrowLeft, ArrowRight, Download, TopRight, Plus, Paperclip, Monitor, Delete, Fold, Expand } from '@element-plus/icons-vue'
+import { ArrowLeft, ArrowRight, Download, TopRight, Plus, Paperclip, Monitor, Delete, Fold, Expand, ChatDotRound } from '@element-plus/icons-vue'
 import { useCodingStore } from '@/stores/coding'
 import { platformEnvApi, type PlatformEnv } from '@/api/platformEnv'
 import { useUserStore } from '@/stores/user'
 import { codingApi } from '@/api/coding'
-import type { WorkspaceInfo, UploadResult } from '@/api/coding'
+import type { WorkspaceInfo, UploadResult, ReplayStreamMessage } from '@/api/coding'
+import { harnessApi } from '@/api/harness'
 import { conversationApi } from '@/api/conversation'
 import { llmConfigApi, type BuilderModelOption } from '@/api/llmConfig'
 import { consumeSseResponse } from '@/utils/sse'
@@ -523,9 +603,24 @@ const streamMessages = ref<StreamMessage[]>([])
 const isStreaming = ref(false)
 const streamContainerRef = ref<HTMLElement>()
 const pendingIdeUrl = ref<string | null>(null)
+const activeView = ref<'chat' | 'ide'>('chat')
+
+/** 清理模型输出中的 think 标签和多余空行 */
+function cleanThinkTags(text: string): string {
+  return text
+    .replace(/<\/?think>/gi, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
 
 function addStreamMsg(msg: Omit<StreamMessage, 'timestamp'>) {
-  streamMessages.value.push({ ...msg, timestamp: Date.now() })
+  // 过滤 thinking 类型中的 <think> 标签
+  const cleaned = { ...msg }
+  if (cleaned.type === 'thinking' && cleaned.content) {
+    cleaned.content = cleanThinkTags(cleaned.content)
+    if (!cleaned.content) return // 过滤后为空则不添加
+  }
+  streamMessages.value.push({ ...cleaned, timestamp: Date.now() })
   // 自动滚动到底部
   nextTick(() => {
     const el = streamContainerRef.value
@@ -534,12 +629,44 @@ function addStreamMsg(msg: Omit<StreamMessage, 'timestamp'>) {
 }
 
 function appendToLastThinking(text: string) {
+  // delta 中也可能包含 <think> 标签片段，先追加再定期清理
   const msgs = streamMessages.value
   if (msgs.length > 0 && msgs[msgs.length - 1].type === 'thinking') {
     msgs[msgs.length - 1].content += text
+    // 每次追加后清理标签（标签可能跨多个 delta 到达）
+    msgs[msgs.length - 1].content = msgs[msgs.length - 1].content
+      .replace(/<\/?think>/gi, '')
   } else {
     addStreamMsg({ type: 'thinking', content: text })
   }
+  nextTick(() => {
+    const el = streamContainerRef.value
+    if (el) el.scrollTop = el.scrollHeight
+  })
+}
+
+function appendToLastCommand(text: string) {
+  const msgs = streamMessages.value
+  if (msgs.length > 0 && msgs[msgs.length - 1].type === 'command') {
+    msgs[msgs.length - 1].content += text
+  } else {
+    addStreamMsg({ type: 'command', content: text })
+  }
+  nextTick(() => {
+    const el = streamContainerRef.value
+    if (el) el.scrollTop = el.scrollHeight
+  })
+}
+
+function restoreReplayStreamMessages(messages: ReplayStreamMessage[]) {
+  streamMessages.value = messages.map((msg, index) => ({
+    type: msg.type,
+    content: msg.content || '',
+    fileName: msg.fileName,
+    fileContent: msg.fileContent,
+    collapsed: msg.collapsed,
+    timestamp: msg.timestamp || Date.now() + index,
+  }))
   nextTick(() => {
     const el = streamContainerRef.value
     if (el) el.scrollTop = el.scrollHeight
@@ -559,6 +686,7 @@ const attachedFile = ref<File | null>(null)
 const attachedPreviewUrl = ref<string | null>(null)
 const isUploading = ref(false)
 const fileInputRef = ref<HTMLInputElement>()
+const chatFileInputRef = ref<HTMLInputElement>()
 
 // ============ Env Picker ============
 const showEnvPicker = ref(false)
@@ -734,11 +862,27 @@ async function openExistingWorkspace(ws: WorkspaceInfo) {
 
 // 设置 IDE URL — 先销毁旧 iframe 再创建新的，避免 code-server session 缓存
 async function setIdeUrl(url: string) {
+  // 提取不含 cache-busting 参数的 base URL 做比较
+  const baseUrl = url.replace(/[&?]_t=\d+$/, '')
+  const currentBase = (ideUrl.value || '').replace(/[&?]_t=\d+$/, '')
+
+  if (currentBase && currentBase === baseUrl) {
+    // 同一个 URL — 不重建 iframe，保留 IDE 状态（Chat 历史、编辑器状态等）
+    return
+  }
+
   ideLoaded.value = false  // 显示 loading overlay
   ideUrl.value = null  // 销毁旧 iframe
   await new Promise(r => setTimeout(r, 100))  // 等 DOM 更新
-  ideUrl.value = url + (url.includes('?') ? '&' : '?') + '_t=' + Date.now()
+  ideUrl.value = baseUrl + (baseUrl.includes('?') ? '&' : '?') + '_t=' + Date.now()
   // ideLoaded 会在 iframe @load 事件触发时置 true
+}
+
+async function openPendingIde() {
+  if (!pendingIdeUrl.value) return
+  await setIdeUrl(pendingIdeUrl.value)
+  pendingIdeUrl.value = null
+  activeView.value = 'ide'
 }
 
 async function openWorkspaceById(wsId: string) {
@@ -750,11 +894,92 @@ async function openWorkspaceById(wsId: string) {
     codingStore.conversationId = workspaceConversation.conversation_id
     applyCodingModelSelection(workspaceConversation.selected_llm_config_id)
 
+    // 从后端加载历史消息填充到 streamMessages
+    loadConversationHistory(
+      workspaceConversation.messages,
+      workspaceConversation.stream_messages || [],
+    )
+
     const { ide_url } = await codingApi.getIdeUrl(ws.id, workspaceConversation.conversation_id)
     await setIdeUrl(ide_url)
+    activeView.value = 'ide'
   } catch (error: any) {
     ElMessage.error(`打开工作区失败: ${error.message}`)
   }
+}
+
+/** 把后端保存的对话消息转换成 streamMessages 格式 */
+function loadConversationHistory(
+  messages: Array<{ role: string; content: string }>,
+  replayStreamMessages: ReplayStreamMessage[] = [],
+) {
+  if (replayStreamMessages.length > 0) {
+    restoreReplayStreamMessages(replayStreamMessages)
+    return
+  }
+  streamMessages.value = []
+  for (const msg of messages) {
+    if (msg.role === 'user') {
+      addStreamMsg({ type: 'user', content: msg.content })
+    } else if (msg.role === 'assistant') {
+      parseAssistantHistory(msg.content || '')
+    }
+  }
+}
+
+/** 解析后端保存的 assistant 历史文本，还原成对应的 stream message 类型 */
+function parseAssistantHistory(text: string) {
+  if (!text.trim()) return
+  const lines = text.split('\n')
+  let thinkingBuf = ''
+
+  const flushThinking = () => {
+    const t = thinkingBuf.trim()
+    if (t) addStreamMsg({ type: 'thinking', content: t })
+    thinkingBuf = ''
+  }
+
+  for (const line of lines) {
+    // 工具调用: 🔧 **工具名** `preview`
+    if (line.startsWith('🔧 **')) {
+      flushThinking()
+      const match = line.match(/🔧 \*\*(.+?)\*\*\s*`?(.+?)?`?$/)
+      if (match) {
+        addStreamMsg({ type: 'tool', content: `${match[1]} ${match[2] || ''}`.trim() })
+      } else {
+        addStreamMsg({ type: 'tool', content: line.replace(/🔧\s*/, '').replace(/\*\*/g, '') })
+      }
+    }
+    // 工具结果成功: > ✅ ...
+    else if (line.startsWith('> ✅')) {
+      flushThinking()
+      addStreamMsg({ type: 'status', content: '✅ ' + line.replace(/^>\s*✅\s*/, '') })
+    }
+    // 工具结果失败: > ❌ ...
+    else if (line.startsWith('> ❌')) {
+      flushThinking()
+      addStreamMsg({ type: 'error', content: line.replace(/^>\s*❌\s*/, '') })
+    }
+    // Agent 完成: ✨ **Agent 完成** (N 轮对话)
+    else if (line.includes('✨') && line.includes('Agent 完成')) {
+      flushThinking()
+      addStreamMsg({ type: 'status', content: '✅ 代码生成完成' })
+    }
+    // Agent 错误: ❌ **Agent 错误**: ...
+    else if (line.startsWith('❌ **Agent')) {
+      flushThinking()
+      addStreamMsg({ type: 'error', content: line.replace(/❌\s*\*\*Agent 错误\*\*:\s*/, '') })
+    }
+    // 分隔线
+    else if (line.trim() === '---') {
+      flushThinking()
+    }
+    // 普通文本 → 思考内容
+    else {
+      thinkingBuf += line + '\n'
+    }
+  }
+  flushThinking()
 }
 
 function startNewWorkspace() {
@@ -763,6 +988,8 @@ function startNewWorkspace() {
   selectedCodingModelValue.value = normalizeCodingModelValue(selectedCodingModelValue.value)
   ideUrl.value = null
   ideLoaded.value = false
+  streamMessages.value = []
+  activeView.value = 'chat'
   localStorage.removeItem('coding_last_workspace_id')
 }
 
@@ -846,9 +1073,13 @@ async function sendMessage() {
 
   isCreating.value = true
   isStreaming.value = true
-  streamMessages.value = []
+  activeView.value = 'chat'
+  // 保留历史消息，多轮之间加分隔
+  if (streamMessages.value.length > 0) {
+    addStreamMsg({ type: 'status', content: '───' })
+  }
   addStreamMsg({ type: 'user', content: message })
-  addStreamMsg({ type: 'status', content: '\u6B63\u5728\u8BC6\u522B\u5F00\u53D1\u573A\u666F...' })
+  addStreamMsg({ type: 'status', content: codingStore.workspace ? '正在处理...' : '正在识别开发场景...' })
 
   try {
   // Upload attachment if present
@@ -892,7 +1123,7 @@ async function sendMessage() {
       quick_create: false,
     }
 
-    const response = await fetch(`${API_PREFIX}/coding/auto-pipeline`, {
+    const response = await fetch(harnessApi.codingPipelineUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -936,6 +1167,15 @@ async function sendMessage() {
               addStreamMsg({ type: 'status', content: '\u2713 \u4EE3\u7801\u751F\u6210\u5B8C\u6210' })
             }
           }
+        } else if (parsed.type === 'content') {
+          // content 事件：如果最后一条 thinking 已经包含了相同内容（agent_thinking_delta 先到），跳过
+          const text = (parsed.content || '') as string
+          if (text.trim()) {
+            const last = streamMessages.value[streamMessages.value.length - 1]
+            if (!(last?.type === 'thinking' && last.content.includes(text.slice(0, 50)))) {
+              addStreamMsg({ type: 'thinking', content: text })
+            }
+          }
         } else if (parsed.type === 'agent_tool') {
           const toolName = parsed.tool as string
           const toolArgs = parsed.args || {}
@@ -966,9 +1206,19 @@ async function sendMessage() {
           } else if (toolName === 'grep_search') {
             addStreamMsg({ type: 'tool', content: `\uD83D\uDD0D \u641C\u7D22 ${preview}` })
           }
+        } else if (parsed.type === 'agent_command_output') {
+          const chunk = (parsed.chunk || '') as string
+          if (chunk) appendToLastCommand(chunk)
         } else if (parsed.type === 'agent_thinking') {
+          // agent_thinking 是完整思考块，但 agent_thinking_delta 已经流式展示了同样内容
+          // 只在没有活跃的 thinking 消息时才新增（避免重复）
           const text = (parsed.content || '') as string
-          if (text.trim()) addStreamMsg({ type: 'thinking', content: text })
+          if (text.trim()) {
+            const last = streamMessages.value[streamMessages.value.length - 1]
+            if (!(last?.type === 'thinking' && last.content.includes(text.slice(0, 50)))) {
+              addStreamMsg({ type: 'thinking', content: text })
+            }
+          }
         } else if (parsed.type === 'agent_thinking_delta') {
           const delta = (parsed.content || '') as string
           if (delta) appendToLastThinking(delta)
@@ -990,8 +1240,10 @@ async function sendMessage() {
             } catch { /* ignore */ }
           }
           if (parsed.ide_url) {
-            // 不自动跳转 IDE，保存 URL 供用户手动打开
+            // 不自动跳转，保存 URL 让用户手动选择进入 IDE
             pendingIdeUrl.value = parsed.ide_url
+            // 后台预加载 iframe（不切换视图）
+            setIdeUrl(parsed.ide_url)
           }
         } else if (parsed.type === 'error') {
           addStreamMsg({ type: 'error', content: parsed.message || '\u53D1\u751F\u9519\u8BEF' })
@@ -1002,10 +1254,11 @@ async function sendMessage() {
       }
     }, { yieldEvery: 6 })
 
-    // If we got a workspace but no IDE URL from SSE, fetch it now
+    // If we got a workspace but no IDE URL from SSE, fetch it and preload (don't auto-switch)
     if (!ideUrl.value && codingStore.workspace) {
       try {
         const { ide_url } = await codingApi.getIdeUrl(codingStore.workspace.id, codingStore.conversationId)
+        pendingIdeUrl.value = ide_url
         await setIdeUrl(ide_url)
       } catch (err: any) {
         ElMessage.warning(err?.message || 'IDE URL 获取失败')
@@ -1144,6 +1397,46 @@ watch(() => route.path, () => {
   border-color: var(--t-brand-glow);
   background: var(--t-brand-subtle);
   color: var(--t-text-primary);
+}
+
+/* ============ View Toggle (Chat / IDE) ============ */
+.view-toggle {
+  display: flex;
+  align-items: center;
+  background: var(--t-bg-elevated);
+  border: 1px solid var(--t-border-subtle);
+  border-radius: 8px;
+  padding: 2px;
+  gap: 0;
+}
+.view-toggle-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--t-text-tertiary);
+  cursor: pointer;
+  font-size: 12px;
+  transition: all 0.2s ease;
+}
+.view-toggle-btn:hover:not(.disabled) {
+  color: var(--t-text-secondary);
+  background: var(--t-bg-subtle);
+}
+.view-toggle-btn.active {
+  background: var(--t-brand-subtle);
+  color: var(--t-brand-primary, #646cff);
+  font-weight: 500;
+}
+.view-toggle-btn.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.view-toggle-label {
+  line-height: 1;
 }
 
 /* ============ Body Layout ============ */
@@ -1991,6 +2284,11 @@ watch(() => route.path, () => {
   font-weight: 700;
 }
 
+.cmd-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* 错误 */
 .msg-error {
   padding: 8px 12px;
@@ -2070,6 +2368,50 @@ watch(() => route.path, () => {
   color: var(--t-text-secondary);
   font-size: 14px;
   margin: 0;
+}
+
+/* ============ Chat Input Bar (stream-pane 底部) ============ */
+.chat-input-bar {
+  flex-shrink: 0;
+  padding: 12px 24px 16px;
+  border-top: 1px solid var(--t-border-subtle);
+  background: var(--t-bg-base);
+}
+.chat-input-wrapper {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  max-width: 800px;
+  margin: 0 auto;
+  background: var(--t-bg-elevated);
+  border: 1px solid var(--t-border-subtle);
+  border-radius: 12px;
+  padding: 6px 8px;
+  transition: border-color 0.2s;
+}
+.chat-input-wrapper:focus-within {
+  border-color: var(--t-brand-primary, #646cff);
+}
+.chat-input-wrapper .attach-btn {
+  flex-shrink: 0;
+  color: var(--t-text-tertiary);
+}
+.chat-input-wrapper .chat-input {
+  flex: 1;
+}
+.chat-input-wrapper .chat-input :deep(.el-textarea__inner) {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 4px 0;
+  font-size: 14px;
+  color: var(--t-text-primary);
+  resize: none;
+}
+.chat-input-wrapper .send-btn {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
 }
 
 /* ============ IDE Pane ============ */

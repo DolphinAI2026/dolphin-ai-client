@@ -141,8 +141,10 @@ class VibeCodingAgent:
         4. Parallel tool execution
         5. Adaptive tool result sizing based on remaining context budget
         """
-        from app.coding.tools import TOOL_DEFINITIONS, execute_tool
+        from app.harness.tool_registry import ToolRegistry
         import asyncio
+
+        tool_registry = ToolRegistry(profile="coding")
 
         print(f"[Agent] Started for ws={self.ws_id}", flush=True)
         prompt = self._build_prompt(requirement, conversation_summary)
@@ -167,6 +169,7 @@ class VibeCodingAgent:
                 pass
 
         turn = 0
+        final_result = "completed"
         try:
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(connect=10, read=300, write=10, pool=10)
@@ -195,7 +198,7 @@ class VibeCodingAgent:
                     payload = {
                         "model": llm_model,
                         "messages": [sys_msg] + messages,
-                        "tools": TOOL_DEFINITIONS,
+                        "tools": tool_registry.definitions,
                         "max_tokens": 8192,
                         "temperature": 0.2,
                         "stream": True,
@@ -296,6 +299,8 @@ class VibeCodingAgent:
                     print(f"[Agent] Turn {turn+1} done: text={len(full_content)}, tools={tool_names}", flush=True)
 
                     if not assembled_tool_calls:
+                        if full_content.strip():
+                            final_result = full_content.strip()
                         print(f"[Agent] Finished after {turn+1} turns", flush=True)
                         break
 
@@ -357,6 +362,10 @@ class VibeCodingAgent:
                             tool_event["args"] = {
                                 "command": func_args.get("command", "")[:300],
                             }
+                        elif func_name == "read_file":
+                            tool_event["args"] = {
+                                "file_path": func_args.get("file_path", ""),
+                            }
                         _emit(tool_event)
 
                         # Execute
@@ -369,7 +378,7 @@ class VibeCodingAgent:
                                 "chunk": chunk,
                             })
 
-                        result = await execute_tool(
+                        result = await tool_registry.execute(
                             func_name,
                             func_args,
                             self.ws_path,
@@ -405,7 +414,7 @@ class VibeCodingAgent:
             # ── Done ──
             _emit({
                 "type": "agent_done",
-                "result": "completed",
+                "result": final_result,
                 "num_turns": min(turn + 1, max_turns),
                 "is_error": False,
             })
@@ -479,72 +488,57 @@ class VibeCodingAgent:
         return env
 
     async def _load_llm_config(self, model_override=None):
-        """Load LLM config from DB (preferred) or .env (fallback)."""
-        # Try DB first
+        """Load LLM config from DB (preferred) or .env (fallback).
+
+        Uses the shared Harness LLM resolver for DB lookup, with coding-specific
+        URL normalization and env fallback.
+        """
+        # Try DB via shared resolver
         if self.tenant_id:
             try:
                 from app.database import AsyncSessionLocal
-                from app.routes.llm_configs import list_llm_configs_for_purpose
+                from app.harness.llm_resolver import resolve_llm_config
+
+                # 解析 llmcfg: 前缀
+                selected_config_id = None
+                model_override_str = (model_override or "").strip()
+                if model_override_str.startswith("llmcfg:"):
+                    try:
+                        selected_config_id = int(model_override_str.split(":", 1)[1])
+                    except ValueError:
+                        pass
 
                 async with AsyncSessionLocal() as db:
-                    configs = await list_llm_configs_for_purpose(db, tenant_id=self.tenant_id, purpose="coding")
-                    config = None
-                    model_override_str = (model_override or "").strip()
-
-                    if model_override_str.startswith("llmcfg:"):
-                        try:
-                            config_id = int(model_override_str.split(":", 1)[1])
-                        except ValueError:
-                            config_id = None
-                        if config_id is not None:
-                            config = next((item for item in configs if item.id == config_id), None)
-
-                    if config is None and model_override_str:
-                        model_override_lower = model_override_str.lower()
-                        config = next(
-                            (
-                                item for item in configs
-                                if model_override_lower in {
-                                    (item.model or "").lower(),
-                                    (item.config_name or "").lower(),
-                                }
-                            ),
-                            None,
-                        )
-
-                    if config is None:
-                        config = next((item for item in configs if item.is_default), None) or (configs[0] if configs else None)
-
-                    if config:
-                        from app.crypto import decrypt_password
-
-                        base_url = (config.base_url or "").rstrip("/")
-                        if "/anthropic" in base_url:
-                            base_url = base_url.replace("/anthropic", "/v1")
-                        if base_url.endswith("/chat/completions"):
-                            base_url = base_url[: -len("/chat/completions")]
-                        if not base_url.endswith("/v1"):
-                            base_url = base_url.rstrip("/") + "/v1"
-
-                        return (
-                            base_url,
-                            decrypt_password(config.api_key_enc),
-                            config.model,
-                        )
+                    resolved = await resolve_llm_config(
+                        db, self.tenant_id,
+                        purpose="coding",
+                        selected_config_id=selected_config_id,
+                    )
+                    if resolved:
+                        base_url = self._normalize_base_url(resolved.base_url)
+                        return base_url, resolved.api_key, resolved.model
             except Exception:
                 pass
 
         # Fallback to .env — 优先使用 VIBE_AGENT_* 专用变量，再 fallback 到 ANTHROPIC_*
         env = self._load_agent_env()
         base_url = env.get("VIBE_AGENT_BASE_URL") or env.get("ANTHROPIC_BASE_URL", "https://api.minimax.chat/v1")
-        # Convert Anthropic URL format to OpenAI-compatible
-        if "/anthropic" in base_url:
-            base_url = base_url.replace("/anthropic", "/v1")
-        if not base_url.endswith("/v1"):
-            base_url = base_url.rstrip("/") + "/v1"
+        base_url = self._normalize_base_url(base_url)
         api_key = env.get("VIBE_AGENT_API_KEY") or env.get("ANTHROPIC_API_KEY", "")
         llm_model = model_override or env.get("VIBE_AGENT_MODEL") or env.get("ANTHROPIC_MODEL", "MiniMax-M2.7")
         return base_url, api_key, llm_model
+
+    @staticmethod
+    def _normalize_base_url(base_url: str) -> str:
+        """Normalize LLM base URL to OpenAI-compatible format (ending with /v1)."""
+        base_url = (base_url or "").rstrip("/")
+        if "/anthropic" in base_url:
+            base_url = base_url.replace("/anthropic", "/v1")
+        if base_url.endswith("/chat/completions"):
+            base_url = base_url[: -len("/chat/completions")]
+        if not base_url.endswith("/v1"):
+            base_url = base_url.rstrip("/") + "/v1"
+        return base_url
 
     def _build_prompt(self, requirement: str, conversation_summary: str) -> str:
         """Build the user prompt that tells the agent what to do."""

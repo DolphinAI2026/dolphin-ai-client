@@ -14,6 +14,16 @@ export interface StreamOptions {
   token?: vscode.CancellationToken;
 }
 
+export interface CodingPipelineOptions {
+  message: string;
+  selectedModel?: string | null;
+  conversationId?: number | null;
+  projectId?: number | null;
+  projectType?: string | null;
+  quickCreate?: boolean;
+  token?: vscode.CancellationToken;
+}
+
 export class LLMClient {
   constructor(private config: Config) {}
 
@@ -149,6 +159,99 @@ export class LLMClient {
       fullText += chunk;
     }
     return fullText;
+  }
+
+  /**
+   * Stream coding pipeline events from the backend runtime.
+   * This is the preferred path inside IDE workspaces because it shares
+   * the same coding runtime as the web Chat mode.
+   */
+  async *streamCodingPipeline(options: CodingPipelineOptions): AsyncGenerator<any, void> {
+    const { message, selectedModel, conversationId, projectId, projectType, quickCreate = false, token } = options;
+
+    const url = this.config.getHarnessEndpoint('/pipeline');
+    const headers = this.config.getHeaders();
+    const body = JSON.stringify({
+      message,
+      selected_model: selectedModel || undefined,
+      conversation_id: conversationId ?? this.config.get().conversationId ?? undefined,
+      project_id: projectId ?? undefined,
+      project_type: projectType ?? undefined,
+      quick_create: quickCreate,
+    });
+
+    const controller = new AbortController();
+    token?.onCancellationRequested(() => controller.abort());
+    const timeoutId = setTimeout(() => controller.abort(), 300_000);
+
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body,
+        signal: controller.signal,
+      });
+    } catch (err: any) {
+      clearTimeout(timeoutId);
+      if (err.name === 'AbortError') return;
+      throw new Error(`Coding pipeline request failed: ${err.message}`);
+    }
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      let errText = '';
+      try { errText = (await response.text()).slice(0, 500); } catch {}
+      throw new Error(`Coding pipeline ${response.status}: ${errText}`);
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) {
+      return;
+    }
+
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    try {
+      while (true) {
+        if (token?.isCancellationRequested) break;
+        const result = await reader.read();
+        if (result.done) break;
+
+        buffer += decoder.decode(result.value, { stream: true });
+        const chunks = buffer.split('\n\n');
+        buffer = chunks.pop() || '';
+
+        for (const chunk of chunks) {
+          const lines = chunk.split('\n');
+          let eventName = 'message';
+          const dataLines: string[] = [];
+
+          for (const line of lines) {
+            if (line.startsWith('event:')) {
+              eventName = line.slice(6).trim();
+            } else if (line.startsWith('data:')) {
+              dataLines.push(line.slice(5).trim());
+            }
+          }
+
+          if (eventName === 'ping') continue;
+
+          const raw = dataLines.join('\n').trim();
+          if (!raw || raw === '[DONE]') continue;
+
+          try {
+            yield JSON.parse(raw);
+          } catch {
+            // Ignore malformed event frames
+          }
+        }
+      }
+    } finally {
+      try { reader.cancel(); } catch {}
+    }
   }
 
   /**

@@ -112,18 +112,103 @@ def _ensure_cursor_rules(ws_path: Path):
             if not target.exists() or target.stat().st_size < rule_file.stat().st_size:
                 shutil.copy2(rule_file, target)
 
+    canonical_rule = rules_dir / "apaas-form-component-dev.mdc"
+    duplicate_rule = rules_dir / "form-component-dev-guide.mdc"
+    try:
+        if canonical_rule.exists() and duplicate_rule.exists():
+            duplicate_rule.unlink()
+        elif duplicate_rule.exists() and not canonical_rule.exists():
+            duplicate_rule.rename(canonical_rule)
+    except OSError:
+        logger.warning("Failed to reconcile duplicate form-component rule files in %s", rules_dir, exc_info=True)
 
-def _write_ruijing_extension_config(ws_path: Path, ws_id: str, ide_token: str, api_base: str, model: str):
+
+def _load_workspace_chat_payload(
+    ws_id: str,
+    *,
+    filename: str,
+    conversation_id: Optional[int] = None,
+) -> dict[str, list[dict[str, Any]]]:
+    try:
+        ws_path = workspace_mgr.get_workspace_path(ws_id)
+    except FileNotFoundError:
+        return {"messages": [], "stream_messages": []}
+
+    history_file = ws_path / ".vscode" / filename
+    if not history_file.exists():
+        return {"messages": [], "stream_messages": []}
+
+    try:
+        data = json.loads(history_file.read_text(encoding="utf-8"))
+    except Exception:
+        return {"messages": [], "stream_messages": []}
+
+    file_conversation_id = data.get("conversation_id")
+    if conversation_id and file_conversation_id not in (None, conversation_id):
+        return {"messages": [], "stream_messages": []}
+
+    messages = data.get("messages") or []
+    if not isinstance(messages, list):
+        messages = []
+
+    stream_messages = data.get("stream_messages") or []
+    if not isinstance(stream_messages, list):
+        stream_messages = []
+
+    normalized: list[dict[str, Any]] = []
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role") or "").strip()
+        content = message.get("content")
+        if role not in {"user", "assistant"} or not isinstance(content, str):
+            continue
+        normalized.append({"role": role, "content": content})
+
+    normalized_stream_messages: list[dict[str, Any]] = []
+    for message in stream_messages:
+        if not isinstance(message, dict):
+            continue
+        msg_type = str(message.get("type") or "").strip()
+        content = message.get("content")
+        if msg_type not in {"user", "thinking", "tool", "file_write", "file_edit", "command", "status", "error"}:
+            continue
+        if not isinstance(content, str):
+            content = ""
+        normalized_item: dict[str, Any] = {
+            "type": msg_type,
+            "content": content,
+        }
+        for field in ("fileName", "fileContent", "collapsed", "timestamp"):
+            if field in message:
+                normalized_item[field] = message[field]
+        normalized_stream_messages.append(normalized_item)
+
+    return {"messages": normalized, "stream_messages": normalized_stream_messages}
+
+
+def _write_ruijing_extension_config(
+    ws_path: Path,
+    ws_id: str,
+    ide_token: str,
+    api_base: str,
+    model: str,
+    conversation_id: Optional[int] = None,
+):
     """为睿鲸AI VS Code 扩展生成配置文件，替代 URL query params 传递配置。"""
     vscode_dir = ws_path / ".vscode"
     vscode_dir.mkdir(exist_ok=True)
     config_file = vscode_dir / "ruijing-ai.json"
+    harness_api_base = _derive_harness_api_base(api_base)
     config_payload = {
         "workspaceId": ws_id,
         "ideToken": ide_token,
         "apiBase": api_base.split(f"/workspace/{ws_id}")[0] if f"/workspace/{ws_id}" in api_base else api_base,
+        "harnessApiBase": harness_api_base.split(f"/workspace/{ws_id}")[0] if f"/workspace/{ws_id}" in harness_api_base else harness_api_base,
         "model": model or "MiniMax-M2.7",
     }
+    if conversation_id:
+        config_payload["conversationId"] = conversation_id
     config_file.write_text(json.dumps(config_payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -131,6 +216,11 @@ def _build_public_api_base(request: Request) -> str:
     proto = request.headers.get("x-forwarded-proto") or request.url.scheme
     host = request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc
     return f"{proto}://{host}".rstrip("/")
+
+
+def _derive_harness_api_base(api_base: str) -> str:
+    """把 coding IDE API base 映射成 harness IDE API base。"""
+    return (api_base or "").replace("/api/coding/", "/api/harness/coding/")
 
 
 def _infer_public_builder_prefix(request: Request) -> str:
@@ -1190,6 +1280,7 @@ async def get_workspace_ide_url(
     _ensure_cursor_rules(ws_path)  # 复制 .cursor/rules 开发规范到工作区
     ide_token = _create_ide_access_token(ctx, ws_id)
     api_base = _build_ide_proxy_api_base(request, ws_id)
+    harness_api_base = _derive_harness_api_base(api_base)
     ide_model = settings.llm_model
     if db is not None:
         ide_model, _ = await _resolve_effective_coding_model(
@@ -1199,12 +1290,20 @@ async def get_workspace_ide_url(
         )
 
     # 为睿鲸AI VS Code 扩展写入配置文件
-    _write_ruijing_extension_config(ws_path, ws_id, ide_token, api_base, ide_model)
+    _write_ruijing_extension_config(
+        ws_path,
+        ws_id,
+        ide_token,
+        api_base,
+        ide_model,
+        conversation_id=conversation_id,
+    )
 
     query_params = {
         "folder": str(ws_path.resolve()),  # 用 folder 替代 workspace，更可靠地打开目录
         "vibe_workspace_id": ws_id,
         "vibe_api_base": api_base,
+        "vibe_harness_api_base": harness_api_base,
         "vibe_ide_token": ide_token,
         "vibe_model": ide_model,
     }
@@ -1227,6 +1326,15 @@ class IDEImageOCRItem(BaseModel):
 
 class IDEImageOCRRequest(BaseModel):
     images: list[IDEImageOCRItem] = []
+
+
+class IDEPipelineRequest(BaseModel):
+    message: str
+    conversation_id: Optional[int] = None
+    selected_model: Optional[str] = None
+    project_id: Optional[int] = None
+    project_type: Optional[str] = None
+    quick_create: bool = False
 
 
 @router.get("/models")
@@ -1272,6 +1380,54 @@ async def ide_available_models(
         else:
             models.append({"id": route.get("model", key), "name": f"{key.title()} ({route.get('model', key)})", "provider": key})
     return {"models": models}
+
+
+@router.post("/workspace/{ws_id}/ide/pipeline")
+async def ide_coding_pipeline(
+    ws_id: str,
+    req: IDEPipelineRequest,
+    request: Request,
+    x_vibe_ide_token: Annotated[Optional[str], Header(alias="X-Vibe-IDE-Token")] = None,
+    token: Optional[str] = Query(default=None),
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+):
+    """IDE 内聊天统一走 Coding Pipeline，而不是直接调 chat/completions。"""
+    from app.coding.pipeline import PipelineParams, run_coding_pipeline
+
+    ide_token = x_vibe_ide_token or token
+    if not ide_token:
+        raise HTTPException(status_code=401, detail="缺少 IDE 访问令牌，请重新从 Builder 打开 Web IDE")
+
+    token_payload = _verify_ide_access_token(ide_token, ws_id)
+    try:
+        user_id = int(token_payload.get("sub"))
+        tenant_id = int(token_payload.get("tid"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=401, detail="无效的 IDE 访问令牌")
+
+    api_base = _build_ide_proxy_api_base(request, ws_id)
+    api_base_pattern = api_base.replace(ws_id, "{ws_id}") if ws_id in api_base else api_base
+
+    params = PipelineParams(
+        message=req.message,
+        user_id=user_id,
+        tenant_id=tenant_id,
+        workspace_id=ws_id,
+        conversation_id=req.conversation_id,
+        selected_model=req.selected_model,
+        project_id=req.project_id,
+        project_type=req.project_type,
+        quick_create=req.quick_create,
+        code_server_base_url=settings.code_server_base_url or "",
+        api_base_builder=api_base_pattern,
+        ide_token=ide_token,
+    )
+
+    async def pipeline_events():
+        async for event in run_coding_pipeline(params, db):
+            yield _sse(event)
+
+    return _event_stream_response(pipeline_events(), ping=15)
 
 
 @router.post("/workspace/{ws_id}/ide/chat/completions")
@@ -1564,18 +1720,33 @@ async def get_workspace_conversation(
             selected_messages = messages
             break
 
+    replay_payload = _load_workspace_chat_payload(
+        ws_id,
+        filename="chat-replay.json",
+        conversation_id=selected_conv.id,
+    )
+    if not replay_payload["messages"] and not replay_payload["stream_messages"]:
+        replay_payload = _load_workspace_chat_payload(
+            ws_id,
+            filename="chat-history.json",
+            conversation_id=selected_conv.id,
+        )
+
+    response_messages = replay_payload["messages"] or [
+        {
+            "id": m.id,
+            "role": m.role,
+            "content": m.content,
+            "created_at": m.created_at.isoformat() if m.created_at else None,
+        }
+        for m in selected_messages
+    ]
+
     return {
         "conversation_id": selected_conv.id,
         "selected_llm_config_id": selected_conv.selected_llm_config_id,
-        "messages": [
-            {
-                "id": m.id,
-                "role": m.role,
-                "content": m.content,
-                "created_at": m.created_at.isoformat() if m.created_at else None,
-            }
-            for m in selected_messages
-        ],
+        "messages": response_messages,
+        "stream_messages": replay_payload["stream_messages"],
     }
 
 
@@ -1957,441 +2128,34 @@ async def auto_pipeline(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """
-    自动化 Pipeline（对话式组件开发）
-    串联：检测场景 → 创建工作区 → 生成代码 → 安装依赖 → 启动serve
-    迭代模式（有workspace_id）：生成代码 → 写入文件（热更新自动生效）
+    自动化 Pipeline（对话式组件开发）— 兼容入口。
+
+    内部委托给 app.coding.pipeline.run_coding_pipeline，
+    新前端应直接调用 /api/harness/coding/pipeline。
     """
-    user = ctx.user
-    generator = CodingGenerator()
-    ws_mgr = WorkspaceManager()
+    from app.coding.pipeline import PipelineParams, run_coding_pipeline
+
+    # 预计算 request-scoped 值
+    api_base = _build_ide_proxy_api_base(request, req.workspace_id or "__placeholder__")
+    api_base_pattern = api_base.replace(req.workspace_id or "__placeholder__", "{ws_id}")
+
+    params = PipelineParams(
+        message=req.message,
+        user_id=ctx.user.id,
+        tenant_id=ctx.tenant_id,
+        workspace_id=req.workspace_id,
+        conversation_id=req.conversation_id,
+        selected_model=req.selected_model,
+        project_id=req.project_id,
+        project_type=req.project_type,
+        quick_create=req.quick_create,
+        code_server_base_url=settings.code_server_base_url or "",
+        api_base_builder=api_base_pattern,
+    )
 
     async def pipeline_events():
-        ws_id = req.workspace_id
-        conversation_id = req.conversation_id
-        is_iteration = ws_id is not None
-        coding_conversation: Optional[Conversation] = None
-        effective_model, effective_model_config_id = await _resolve_effective_coding_model(
-            db,
-            ctx.tenant_id,
-            requested_model=req.selected_model,
-        )
-
-        if conversation_id:
-            conversation_result = await db.execute(
-                select(Conversation).where(
-                    Conversation.id == conversation_id,
-                    Conversation.user_id == user.id,
-                    Conversation.tenant_id == ctx.tenant_id,
-                    Conversation.agent_type == "coding",
-                )
-            )
-            coding_conversation = conversation_result.scalar_one_or_none()
-            if coding_conversation:
-                if req.selected_model is None:
-                    effective_model, effective_model_config_id = await _resolve_effective_coding_model(
-                        db,
-                        ctx.tenant_id,
-                        selected_llm_config_id=coding_conversation.selected_llm_config_id,
-                    )
-            else:
-                conversation_id = None
-
-        # Load project config if project_id is provided
-        project = None
-        project_id = req.project_id
-        if project_id:
-            result = await db.execute(
-                select(Project).where(Project.id == project_id, Project.user_id == user.id)
-            )
-            project = result.scalar_one_or_none()
-        elif ws_id:
-            # Try to get project_id from workspace metadata
-            try:
-                ws_info = ws_mgr.get_workspace_info(ws_id)
-                _ws_project_id = ws_info.get("project_id")
-                if _ws_project_id:
-                    project_id = _ws_project_id
-                    result = await db.execute(
-                        select(Project).where(Project.id == project_id, Project.user_id == user.id)
-                    )
-                    project = result.scalar_one_or_none()
-            except Exception:
-                pass
-
-        try:
-            # ---- 意图检测：debug/调试/预览/发布 ----
-            msg_lower = req.message.strip().lower()
-            is_debug_intent = any(kw in msg_lower for kw in ['debug', '调试', '预览', '帮我debug', '启动debug', '启动调试'])
-            is_publish_intent = any(kw in msg_lower for kw in ['发布', '打包', '上传', 'publish', 'build'])
-
-            # 检测 debug 模式：用户明确指定了类型就直接执行，否则先问
-            _is_platform_debug = any(kw in msg_lower for kw in ['平台调试', '设计器调试', '配置调试', '平台debug', 'platform debug', '设计器'])
-            _is_app_debug = any(kw in msg_lower for kw in ['应用调试', '前台调试', '看效果', '应用debug', 'app debug', '前台'])
-            _debug_mode = "platform" if _is_platform_debug else ("app" if _is_app_debug else None)
-
-            if is_debug_intent and ws_id and _debug_mode is None:
-                # 用户只说了"debug"，没指定类型 → 先问
-                yield _sse({"type": "content", "content": "请选择调试模式：\n\n**1. 平台调试（设计态）** — 在平台后台的表单设计器中拖入组件、配置属性\n\n**2. 应用调试（运行态）** — 在应用前台查看组件/页面的实际效果\n\n请回复 **平台调试** 或 **应用调试**"})
-                yield _sse({"type": "done", "workspace_id": ws_id, "conversation_id": conversation_id})
-                return
-
-            if is_debug_intent and ws_id:
-                _mode_label = "平台" if _debug_mode == "platform" else "应用"
-                yield _sse({"type": "step", "step": "debug", "status": "running", "data": {"message": f"正在启动{_mode_label}调试..."}})
-
-                ws_path = ws_mgr.get_workspace_path(ws_id)
-                apaas_json_path = ws_path / "src" / "apaas.json"
-                import json as _json
-                apaas_config = _json.loads(apaas_json_path.read_text()) if apaas_json_path.exists() else {}
-                output_name = apaas_config.get("outputName", "")
-                custom_widget_list = apaas_config.get("customWidgetList", [])
-
-                # 确保 serve 在运行
-                serve_info = ws_mgr.is_serve_running(ws_id)
-                if not serve_info["running"]:
-                    yield _sse({"type": "step", "step": "serve", "status": "running"})
-                    serve_result = await ws_mgr.start_serve(ws_id)
-                    serve_port = serve_result.get("port", 8080)
-                    yield _sse({"type": "step", "step": "serve", "status": "done"})
-                else:
-                    serve_port = serve_info["port"]
-
-                # 从项目配置获取平台参数
-                if project and project.platform_url:
-                    _platform_url = _get_platform_frontend_url(project.platform_url)
-                    _tenant_id = project.platform_tenant_id or settings.apaas_tenant_id
-                    _app_id = project.platform_app_id or ""
-                else:
-                    _platform_url = _get_user_platform_url(user)
-                    _tenant_id = user.apaas_tenant_id or settings.apaas_tenant_id
-                    _app_id = ""
-
-                _app_code = getattr(project, 'platform_app_code', '') if project else ''
-
-                # 简单 debug：打开浏览器 + 注入组件，用户手动导航
-                debug_result = await ws_mgr.start_debug(
-                    ws_id=ws_id, serve_port=serve_port,
-                    platform_url=_platform_url,
-                    tenant_id=_tenant_id, app_id=_app_id,
-                    output_name=output_name, custom_widget_list=custom_widget_list,
-                    debug_mode=_debug_mode, app_code=_app_code,
-                )
-
-                if debug_result.get("status") == "ok":
-                    yield _sse({"type": "step", "step": "debug", "status": "done"})
-                    yield _sse({"type": "content", "content": f"✅ Debug 浏览器已打开！\n\n请在 Chromium 中：\n1. **登录平台**\n2. **导航到目标表单/页面**\n3. **F5 刷新**页面，组件会自动注入\n\n修改代码后刷新浏览器即可看到更新。"})
-                else:
-                    yield _sse({"type": "step", "step": "debug", "status": "error"})
-                    yield _sse({"type": "content", "content": f"Debug 启动失败: {debug_result.get('message', '')}"})
-
-                yield _sse({"type": "done", "workspace_id": ws_id, "conversation_id": conversation_id})
-                return
-
-            if is_publish_intent and ws_id:
-                yield _sse({"type": "step", "step": "build", "status": "running", "data": {"message": "正在构建打包..."}})
-                try:
-                    zip_path = await ws_mgr.build_and_package(ws_id)
-                    yield _sse({"type": "step", "step": "build", "status": "done"})
-                    yield _sse({"type": "content", "content": f"✅ 构建完成！\n\n请点击顶部的「打包发布」按钮下载 zip 文件，然后上传到 aPaaS 平台。"})
-                except Exception as e:
-                    yield _sse({"type": "step", "step": "build", "status": "error"})
-                    yield _sse({"type": "content", "content": f"❌ 构建失败: {str(e)}"})
-                yield _sse({"type": "done", "workspace_id": ws_id, "conversation_id": conversation_id})
-                return
-
-            # ---- 意图判断：修改当前组件 vs 做新组件 ----
-            if is_iteration:
-                # 有工作区时，判断用户是想修改当前组件还是做一个全新的组件
-                is_new_component = await _is_new_component_intent(generator, req.message, ws_id, ws_mgr)
-                if is_new_component:
-                    # 用户想做新组件 → 自动创建新工作区
-                    is_iteration = False
-                    ws_id = None
-                    yield _sse({"type": "content", "content": "💡 检测到你想做一个新组件，正在为你创建新的工作区...\n\n"})
-
-            # ---- Step 1: 检测场景 ----
-            if not is_iteration:
-                yield _sse({"type": "step", "step": "detect_scene", "status": "running"})
-                # 前端指定了 project_type 时直接使用，不调 LLM 检测
-                if req.project_type:
-                    type_to_scene = {
-                        "form-component": SceneType.WEB_COMPONENT,
-                        "menu-page": SceneType.WEB_PAGE,
-                        "form-page": SceneType.WEB_PAGE,
-                        "form-list": SceneType.WEB_LIST_VIEW,
-                        "backend-api": SceneType.BACKEND_API,
-                        "layout": SceneType.WEB_LAYOUT,
-                        "plugin": SceneType.WEB_PLUGIN,
-                        "mobile-component": SceneType.MOBILE_COMPONENT,
-                        "mobile-page": SceneType.MOBILE_PAGE,
-                        "script-js": SceneType.SCRIPT_JS,
-                        "script-python": SceneType.SCRIPT_PYTHON,
-                        "script-groovy": SceneType.SCRIPT_GROOVY,
-                        "business-dialog": SceneType.BUSINESS_DIALOG,
-                        "ui-style": SceneType.UI_STYLE,
-                        "list-custom-module": SceneType.LIST_CUSTOM_MODULE,
-                        "web-login": SceneType.WEB_LOGIN,
-                    }
-                    # "script" 类型需要 LLM 自动识别子类型
-                    if req.project_type in ("script",):
-                        try:
-                            scene_type = await generator.detect_scene(req.message)
-                        except Exception as e:
-                            logger.warning(f"脚本场景检测失败，默认 SCRIPT_JS: {e}")
-                            scene_type = SceneType.SCRIPT_JS
-                    else:
-                        scene_type = type_to_scene.get(req.project_type, SceneType.WEB_COMPONENT)
-                else:
-                    try:
-                        scene_type = await generator.detect_scene(req.message)
-                    except Exception as e:
-                        logger.warning(f"场景检测失败，默认使用 WEB_COMPONENT: {e}")
-                        scene_type = SceneType.WEB_COMPONENT
-                yield _sse({"type": "step", "step": "detect_scene", "status": "done",
-                            "data": {"scene_type": scene_type.value}})
-            else:
-                # 迭代模式：从工作区元数据推断场景类型
-                info = ws_mgr.get_workspace_info(ws_id)
-                pt = info.get("project_type", "form-component")
-                scene_map = {
-                    "form-component": SceneType.WEB_COMPONENT,
-                    "form-page": SceneType.WEB_PAGE,
-                    "menu-page": SceneType.WEB_PAGE,
-                    "form-list": SceneType.WEB_LIST_VIEW,
-                    "backend-api": SceneType.BACKEND_API,
-                    "layout": SceneType.WEB_LAYOUT,
-                    "plugin": SceneType.WEB_PLUGIN,
-                    "mobile-component": SceneType.MOBILE_COMPONENT,
-                    "mobile-page": SceneType.MOBILE_PAGE,
-                    "script-js": SceneType.SCRIPT_JS,
-                    "script-python": SceneType.SCRIPT_PYTHON,
-                    "script-groovy": SceneType.SCRIPT_GROOVY,
-                    "business-dialog": SceneType.BUSINESS_DIALOG,
-                    "ui-style": SceneType.UI_STYLE,
-                    "list-custom-module": SceneType.LIST_CUSTOM_MODULE,
-                    "web-login": SceneType.WEB_LOGIN,
-                }
-                scene_type = scene_map.get(pt, SceneType.WEB_COMPONENT)
-
-            # ---- Step 2: 创建工作区 ----
-            if not is_iteration:
-                yield _sse({"type": "step", "step": "create_workspace", "status": "running"})
-                # 从需求中提取项目名（LLM 失败时用关键词提取）
-                try:
-                    project_name = await _extract_project_name(generator, req.message)
-                except Exception as e:
-                    logger.warning(f"项目名提取失败，使用 fallback: {e}")
-                    project_name = "custom-dev"
-                # 前端指定的 project_type 优先（如从"页面开发"入口进来）
-                project_type_str = req.project_type or _scene_to_project_type(scene_type)
-                project_type_enum = ProjectType(project_type_str)
-                display_name = _extract_display_name(req.message, project_type_str, project_name)
-                meta = ws_mgr.create_workspace(
-                    project_type_enum,
-                    project_name,
-                    user.id,
-                    project_id=project_id,
-                    display_name=display_name,
-                )
-                ws_id = meta["id"]
-                yield _sse({"type": "step", "step": "create_workspace", "status": "done",
-                            "data": {
-                                "workspace_id": ws_id,
-                                "project_name": meta["project_name"],
-                                "display_name": meta.get("display_name", meta["project_name"]),
-                            }})
-
-            # ---- quick_create 快速模式：只创建工作区，跳过 agent/install/serve ----
-            if req.quick_create:
-                # 创建对话记录
-                if not conversation_id:
-                    coding_conversation = Conversation(
-                        title=req.message[:50],
-                        user_id=user.id,
-                        tenant_id=ctx.tenant_id,
-                        agent_type="coding",
-                        workspace_id=ws_id,
-                        selected_llm_config_id=effective_model_config_id,
-                    )
-                    db.add(coding_conversation)
-                    await db.commit()
-                    await db.refresh(coding_conversation)
-                    conversation_id = coding_conversation.id
-                elif coding_conversation and req.selected_model is not None:
-                    coding_conversation.selected_llm_config_id = effective_model_config_id
-                    await db.commit()
-                    await db.refresh(coding_conversation)
-                await _save_coding_message(db, conversation_id, "user", req.message)
-
-                # 生成 IDE URL
-                ide_url = None
-                try:
-                    ws_path = ws_mgr.get_workspace_path(ws_id)
-                    _ensure_vibe_workspace_file(ws_path)
-                    _ensure_cursor_rules(ws_path)
-                    ide_token = _create_ide_access_token(ctx, ws_id)
-                    api_base = _build_ide_proxy_api_base(request, ws_id)
-                    _write_ruijing_extension_config(ws_path, ws_id, ide_token, api_base, effective_model)
-                    query_params = {
-                        "folder": str(ws_path.resolve()),
-                        "vibe_workspace_id": ws_id,
-                        "vibe_api_base": api_base,
-                        "vibe_ide_token": ide_token,
-                        "vibe_model": effective_model,
-                        "vibe_conversation_id": str(conversation_id),
-                        "vibe_context": f"用户: {req.message[:500]}",
-                    }
-                    base_url = settings.code_server_base_url
-                    if base_url:
-                        ide_url = f"{base_url.rstrip('/')}/?{urlencode(query_params)}"
-                except Exception as e:
-                    logger.warning(f"快速模式生成 IDE URL 失败: {e}")
-
-                yield _sse({"type": "done", "workspace_id": ws_id,
-                            "conversation_id": conversation_id, "ide_url": ide_url})
-                return
-
-            # ---- Step 3: 生成代码（Agent 模式）----
-            yield _sse({"type": "step", "step": "generate", "status": "running"})
-
-            # 创建或获取对话
-            if not conversation_id:
-                coding_conversation = Conversation(
-                    title=req.message[:50],
-                    user_id=user.id,
-                    tenant_id=ctx.tenant_id,
-                    agent_type="coding",
-                    workspace_id=ws_id,
-                    selected_llm_config_id=effective_model_config_id,
-                )
-                db.add(coding_conversation)
-                await db.commit()
-                await db.refresh(coding_conversation)
-                conversation_id = coding_conversation.id
-            elif coding_conversation and req.selected_model is not None:
-                coding_conversation.selected_llm_config_id = effective_model_config_id
-                await db.commit()
-                await db.refresh(coding_conversation)
-
-            await _save_coding_message(db, conversation_id, "user", req.message)
-
-            # 获取对话历史摘要
-            conversation_summary = ""
-            if conversation_id:
-                history = await _get_conversation_history(db, conversation_id)
-                if history:
-                    conversation_summary = "\n".join(
-                        f"{'User' if m.get('role') == 'user' else 'Assistant'}: {m.get('content', '')[:200]}"
-                        for m in history[-6:]  # Last 3 rounds
-                    )
-
-            # Use VibeCodingAgent for autonomous coding
-            if VibeCodingAgent is None:
-                raise HTTPException(
-                    status_code=503,
-                    detail=(
-                        "Vibe Coding Agent 依赖未安装：缺少 claude_agent_sdk。"
-                        "请在 backend 虚拟环境中执行 `pip install -r requirements.txt`。"
-                    ),
-                ) from _VIBE_AGENT_IMPORT_ERROR
-            agent = VibeCodingAgent(ws_id, system_prompt=AGENT_SYSTEM_PROMPT, tenant_id=ctx.tenant_id)
-            agent_result_text = ""
-            persisted_agent_output: list[str] = []
-            assistant_history_saved = False
-
-            async def _persist_agent_output_if_needed():
-                nonlocal assistant_history_saved
-                if assistant_history_saved:
-                    return
-
-                saved_assistant_output = "".join(persisted_agent_output).strip()
-                if not saved_assistant_output:
-                    saved_assistant_output = agent_result_text.strip()
-                if not saved_assistant_output:
-                    return
-
-                try:
-                    await _save_coding_message(db, conversation_id, "assistant", saved_assistant_output)
-                    assistant_history_saved = True
-                except Exception:
-                    logger.exception("保存 Agent 历史失败")
-
-            try:
-                async for event in agent.run(
-                    requirement=req.message,
-                    conversation_summary=conversation_summary,
-                    model=effective_model,
-                    max_turns=30,
-                ):
-                    # Forward all agent events to frontend via SSE
-                    yield _sse(event)
-
-                    _append_agent_event_to_history(persisted_agent_output, event)
-
-                    # Collect agent thinking for conversation history
-                    if event.get("type") == "agent_thinking":
-                        agent_result_text += event.get("content", "") + "\n"
-                    elif event.get("type") == "agent_done":
-                        if event.get("result"):
-                            agent_result_text += "\n" + event["result"]
-            except asyncio.CancelledError:
-                await _persist_agent_output_if_needed()
-                raise
-            except Exception:
-                await _persist_agent_output_if_needed()
-                raise
-
-            await _persist_agent_output_if_needed()
-
-            # Agent handles file writes, npm install, and serve internally
-            # Just report generation step as done
-            yield _sse({"type": "step", "step": "generate", "status": "done",
-                        "data": {"files": [], "file_count": 0, "agent_mode": True}})
-
-            # For iteration mode, agent already handles everything
-            if is_iteration:
-                serve_status = ws_mgr.is_serve_running(ws_id)
-                yield _sse({"type": "step", "step": "hot_reload", "status": "done",
-                            "data": {"serve_running": serve_status["running"],
-                                     "port": serve_status.get("port")}})
-                yield _sse({"type": "done", "workspace_id": ws_id,
-                            "conversation_id": conversation_id})
-                return
-
-            # 代码生成完毕后直接打开工作区（跳过 install/serve）
-            # 用户后续可在 IDE 内手动 npm install / debug
-            ws_path = ws_mgr.get_workspace_path(ws_id)
-            ide_url = None
-            try:
-                _ensure_vibe_workspace_file(ws_path)
-                _ensure_cursor_rules(ws_path)
-                ide_token = _create_ide_access_token(ctx, ws_id)
-                api_base = _build_ide_proxy_api_base(request, ws_id)
-                _write_ruijing_extension_config(ws_path, ws_id, ide_token, api_base, effective_model)
-                query_params = {
-                    "folder": str(ws_path.resolve()),
-                    "vibe_workspace_id": ws_id,
-                    "vibe_api_base": api_base,
-                    "vibe_ide_token": ide_token,
-                    "vibe_model": effective_model,
-                }
-                from urllib.parse import urlencode as _urlencode
-                ide_url = f"{settings.code_server_base_url}/?{_urlencode(query_params)}"
-            except Exception as _ide_err:
-                logger.warning(f"生成 IDE URL 失败: {_ide_err}")
-
-            done_payload: dict = {
-                "type": "done",
-                "workspace_id": ws_id,
-                "conversation_id": conversation_id,
-            }
-            if ide_url:
-                done_payload["ide_url"] = ide_url
-            yield _sse(done_payload)
-
-        except Exception as e:
-            logger.exception("auto-pipeline 错误")
-            yield _sse({"type": "error", "message": str(e)})
+        async for event in run_coding_pipeline(params, db):
+            yield _sse(event)
 
     return _event_stream_response(pipeline_events(), ping=15)
 

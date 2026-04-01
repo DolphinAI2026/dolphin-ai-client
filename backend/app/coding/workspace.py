@@ -14,6 +14,7 @@ import tempfile
 import re
 import uuid
 import hashlib
+from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Awaitable, Callable, Optional, Union
@@ -294,6 +295,40 @@ class WorkspaceManager:
     def _workspace_root_priority(self, ws_path: Path) -> int:
         return 0 if ws_path.parent == WORKSPACE_ROOT else 1
 
+    def _workspace_activity_ts(self, ws_path: Path) -> float:
+        candidates = [
+            ws_path,
+            ws_path / ".workspace.json",
+            ws_path / ".vscode" / "chat-history.json",
+            ws_path / ".vscode" / "chat-replay.json",
+            ws_path / ".vscode" / "ruijing-ai.json",
+        ]
+        latest = 0.0
+        for candidate in candidates:
+            try:
+                if candidate.exists():
+                    latest = max(latest, candidate.stat().st_mtime)
+            except OSError:
+                continue
+        return latest
+
+    def _reconcile_workspace_rule_files(self, ws_path: Path, project_type: Optional[str] = None):
+        project_type_value = project_type or str(self._read_meta(ws_path).get("project_type") or "")
+        if project_type_value != ProjectType.FORM_COMPONENT.value:
+            return
+
+        rules_dir = ws_path / ".cursor" / "rules"
+        canonical_rule = rules_dir / "apaas-form-component-dev.mdc"
+        duplicate_rule = rules_dir / "form-component-dev-guide.mdc"
+
+        try:
+            if canonical_rule.exists() and duplicate_rule.exists():
+                duplicate_rule.unlink()
+            elif duplicate_rule.exists() and not canonical_rule.exists():
+                duplicate_rule.rename(canonical_rule)
+        except OSError:
+            logger.warning("Failed to reconcile duplicate rule files under %s", rules_dir, exc_info=True)
+
     def _migrate_workspace_if_needed(self, ws_path: Path) -> Path:
         if ws_path.parent == WORKSPACE_ROOT or WORKSPACE_ROOT == LEGACY_WORKSPACE_ROOT:
             self._ensure_copy_asset_placeholders(ws_path)
@@ -316,12 +351,20 @@ class WorkspaceManager:
     def get_workspace_path(self, ws_id: str) -> Path:
         cached = self._workspace_path_cache.get(ws_id)
         if cached and cached.exists():
+            try:
+                self._reconcile_workspace_rule_files(cached)
+            except Exception:
+                pass
             return cached
 
         for root in WORKSPACE_SEARCH_ROOTS:
             direct = root / ws_id
             if direct.exists():
                 resolved_path = self._migrate_workspace_if_needed(direct)
+                try:
+                    self._reconcile_workspace_rule_files(resolved_path)
+                except Exception:
+                    pass
                 self._workspace_path_cache[ws_id] = resolved_path
                 return resolved_path
 
@@ -332,6 +375,13 @@ class WorkspaceManager:
                 continue
             if meta.get("id") == ws_id:
                 resolved_path = self._migrate_workspace_if_needed(candidate)
+                try:
+                    self._reconcile_workspace_rule_files(
+                        resolved_path,
+                        str(meta.get("project_type") or ""),
+                    )
+                except Exception:
+                    pass
                 self._workspace_path_cache[ws_id] = resolved_path
                 return resolved_path
 
@@ -339,8 +389,19 @@ class WorkspaceManager:
 
     def _decorate_workspace_meta(self, ws_path: Path, meta: dict) -> dict:
         hydrated = self._ensure_display_name(ws_path, meta)
+        try:
+            self._reconcile_workspace_rule_files(
+                ws_path,
+                str(hydrated.get("project_type") or ""),
+            )
+        except Exception:
+            pass
         hydrated["folder_name"] = ws_path.name
         hydrated["disk_path"] = str(ws_path.resolve())
+        activity_ts = self._workspace_activity_ts(ws_path)
+        hydrated["activity_ts"] = activity_ts
+        if activity_ts:
+            hydrated["updated_at"] = datetime.fromtimestamp(activity_ts).isoformat()
         return hydrated
 
     def _read_apaas_config(self, ws_path: Path) -> dict:
@@ -400,6 +461,10 @@ class WorkspaceManager:
     def _seed_default_workspace_rules(self, ws_path: Path, project_type: Union[ProjectType, str]):
         rule_files = self._get_default_rule_files(project_type)
         if not rule_files:
+            self._reconcile_workspace_rule_files(
+                ws_path,
+                project_type.value if isinstance(project_type, ProjectType) else str(project_type),
+            )
             return
 
         rules_dir = ws_path / ".cursor" / "rules"
@@ -410,6 +475,11 @@ class WorkspaceManager:
             if target.exists():
                 continue
             shutil.copy2(source, target)
+
+        self._reconcile_workspace_rule_files(
+            ws_path,
+            project_type.value if isinstance(project_type, ProjectType) else str(project_type),
+        )
 
     def _ensure_copy_asset_placeholders(self, ws_path: Path):
         """为 copyAssets 目录补可见占位文件，避免 df-apaas-cli 的 cp path/* 在空目录时报错。"""
@@ -522,6 +592,8 @@ class WorkspaceManager:
             apaas_config,
             meta.get("project_name") or self._fallback_project_name_from_path(ws_path),
         )
+        if template_type == "FORM_COMPONENT":
+            return ws_path / output_name
         if template_type in {"MENU_PAGE", "FORM_PAGE", "PAGE_LAYOUT", "LIST_VIEW"}:
             return ws_path / output_name
         if template_type in {"FRONTEND_PLUGIN", "PLUGIN"}:
@@ -1718,7 +1790,14 @@ const resultPath = '{str(result_json_path)}'
                     results_by_id[ws_id] = meta
             except Exception:
                 pass
-        return list(results_by_id.values())
+        return sorted(
+            results_by_id.values(),
+            key=lambda meta: (
+                -(float(meta.get("activity_ts") or 0)),
+                self._workspace_root_priority(Path(meta.get("disk_path") or WORKSPACE_ROOT)),
+                str(meta.get("display_name") or meta.get("project_name") or meta.get("id") or ""),
+            ),
+        )
 
     def delete_workspace(self, ws_id: str):
         """删除工作区"""
@@ -3191,93 +3270,6 @@ if (platformI18n?.mergeLocaleMessage) {
   // 在这里定义接口
 }
 export default Api
-""")
-
-        # ======== .cursor/rules 前端开发指南 ========
-        self._write(ws_path, ".cursor/rules/form-component-dev-guide.mdc", f"""---
-description: aPaaS 表单自开发组件规范
-globs: ["**/*.vue", "**/*.js"]
----
-
-# aPaaS 表单自开发组件规范
-
-## 项目结构
-本项目是 aPaaS 平台的表单自开发组件，基于 Vue 2.7，包含 7 个场景：
-- **IDE**（设计态预览）、**Edit**（编辑态）、**Read**（只读态）
-- **List**（列表列）、**Print**（打印）、**Search**（搜索）、**SearchIde**（搜索设计态）
-
-## 核心文件
-- `src/form-component/form-widget/edit/{full_kebab}-edit.vue` — 编辑态（最重要）
-- `src/form-component/form-widget/ide/{full_kebab}-ide.vue` — 设计器预览
-- `src/form-component/form-widget/read/{full_kebab}-read.vue` — 只读展示
-- `src/form-component/form-editor/{full_kebab}-setting.vue` — 设计器配置面板
-- `src/form-component-config/form-widget/{full_kebab}.widget.config.js` — 组件注册配置
-- `src/mixin/form-widget.mixin.js` — 核心 mixin（提供 formValue 读写）
-
-## FormWidgetMixin 使用
-所有 Edit/IDE/Read 场景的 Vue 组件都必须混入 `FormWidgetMixin`：
-```javascript
-import FormWidgetMixin from '@/mixin/form-widget.mixin'
-export default {{
-  name: '{prefix}Edit',
-  mixins: [FormWidgetMixin],
-  // ...
-}}
-```
-
-### 关键 API
-- `this.formValue` — 读写组件值（getter/setter），**这是与平台数据绑定的唯一方式**
-- `this.widget` — 组件配置对象（label, required, readOnly, hidden 等）
-- `this.showRequired` — 是否显示必填标记
-- `this.validatorRules` — 校验规则数组
-- `this.validateKey` — 校验 key
-- `this.validateInfo` — 校验信息
-- `this.renderScene` — 当前渲染场景（'ide'/'edit'/'read'）
-- `this.$formEventEmit(eventName, event)` — 触发表单事件
-
-## x-proxy-form-item 用法
-Edit/IDE/Read 场景必须用 `x-proxy-form-item` 包裹内容：
-```html
-<x-proxy-form-item
-  :isInTable="widget.isInTable"
-  :showRequired="showRequired"
-  :label="widget.label"
-  :validatorRules="validatorRules"
-  :validateKey="validateKey"
-  :validateInfo="validateInfo"
->
-  <!-- 你的组件内容 -->
-</x-proxy-form-item>
-```
-
-## List/Print 场景
-- List 不使用 mixin，通过 props 接收 `formValue`、`componentConfig`、`propKey`
-- Print 使用 `PrintWidgetMixin`，通过 `this.formValue` 读取值
-
-## Search 场景
-- 使用 `SearchWidgetMixin`
-- 通过 `this.computeValue`（getter/setter）读写搜索值
-- 使用 `this.$emit('change', value)` 通知搜索变更
-
-## Setting 面板（设计器配置）
-- 在 `{full_kebab}-setting.vue` 中添加配置项
-- 通过 `this.widgetObj.customComponentConfig` 读写自定义配置
-- 调用 `this.saveConfig()` 保存配置
-
-## 样式注意
-- 使用 `<style lang="scss">` 写样式
-- 避免使用 SVG 内联（平台可能不渲染），用 Unicode 字符或 Element UI 图标
-- 可以使用 Element UI 组件（el-input, el-select, el-button 等），平台已全局注册
-
-## 数据存储格式
-- `componentModelField` 在 widget.config.js 中定义存储类型
-- TEXT → 存字符串，NUMBER → 存数字，DATE → 存日期
-- 复杂数据建议序列化为 JSON 字符串存储
-
-## 构建部署
-1. `npm run build`（或 `df-apaas-cli build`）生成 zip
-2. 在平台后台 → 应用 → 自开发资源管理 → 上传 zip
-3. 发布应用后组件生效
 """)
 
     def _get_form_widget_mixin(self):

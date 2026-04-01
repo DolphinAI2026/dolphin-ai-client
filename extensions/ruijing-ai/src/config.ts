@@ -5,8 +5,10 @@ export interface RuijingConfig {
   workspaceId: string;
   ideToken: string;
   apiBase: string;
+  harnessApiBase: string;
   apiKey: string;
   model: string;
+  conversationId: number | null;
   autoMode: boolean;
 }
 
@@ -51,10 +53,52 @@ export class Config {
       workspaceId: fileConfig.workspaceId || '',
       ideToken: fileConfig.ideToken || '',
       apiBase: fileConfig.apiBase || vsConfig.get<string>('apiBase') || '',
+      harnessApiBase: fileConfig.harnessApiBase || this._deriveHarnessApiBase(fileConfig.apiBase || vsConfig.get<string>('apiBase') || ''),
       apiKey: fileConfig.apiKey || vsConfig.get<string>('apiKey') || '',
       model: fileConfig.model || vsConfig.get<string>('model') || 'MiniMax-M2.7',
+      conversationId: this._parseConversationId(fileConfig.conversationId),
       autoMode: vsConfig.get<boolean>('autoMode') ?? true,
     };
+  }
+
+  async updateWorkspaceConfig(patch: Partial<RuijingConfig>): Promise<void> {
+    const folders = vscode.workspace.workspaceFolders;
+    if (!folders?.length) return;
+
+    const fs = require('fs');
+    const configPath = path.join(folders[0].uri.fsPath, '.vscode', 'ruijing-ai.json');
+    let current: Record<string, any> = {};
+    try {
+      if (fs.existsSync(configPath)) {
+        current = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+      }
+    } catch {
+      current = {};
+    }
+
+    const next = {
+      ...current,
+      ...patch,
+    };
+
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, JSON.stringify(next, null, 2), 'utf-8');
+    this.invalidate();
+  }
+
+  private _parseConversationId(value: unknown): number | null {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value === 'string' && value.trim()) {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+    return null;
+  }
+
+  private _deriveHarnessApiBase(apiBase: string): string {
+    return (apiBase || '').replace('/api/coding/', '/api/harness/coding/');
   }
 
   /** Build the IDE proxy URL for a given workspace */
@@ -65,6 +109,18 @@ export class Config {
     }
     if (cfg.apiBase) {
       return `${cfg.apiBase}${path}`;
+    }
+    return path;
+  }
+
+  getHarnessEndpoint(path: string): string {
+    const cfg = this.get();
+    const base = cfg.harnessApiBase || this._deriveHarnessApiBase(cfg.apiBase);
+    if (cfg.workspaceId && base) {
+      return `${base}/workspace/${cfg.workspaceId}/ide${path}`;
+    }
+    if (base) {
+      return `${base}${path}`;
     }
     return path;
   }

@@ -56,6 +56,7 @@ export class ChatHandler {
   private fileWriter: FileWriter;
   private planMode: PlanMode;
   private modelsLoaded = false;
+  private externalHistoryNoticeShown = new Set<string>();
 
   constructor(
     private config: Config,
@@ -87,6 +88,21 @@ export class ChatHandler {
     if (!userMsg) {
       stream.markdown('请输入您的问题或需求。');
       return {};
+    }
+
+    if (this._canUseCodingPipeline()) {
+      if (this.planMode.hasPending()) {
+        this.planMode.clear();
+      }
+
+      try {
+        this._announceExternalHistoryContext(context, stream);
+        await this._handleViaCodingPipeline(userMsg, stream, token);
+        return {};
+      } catch (err: any) {
+        console.warn('[RuijingAI] coding pipeline fallback to legacy mode', err);
+        stream.markdown(`\n\n⚠️ 统一 Coding Runtime 暂时不可用，已回退到本地兼容模式。\n`);
+      }
     }
 
     try {
@@ -211,6 +227,172 @@ export class ChatHandler {
     };
   }
 
+  private _canUseCodingPipeline(): boolean {
+    const cfg = this.config.get();
+    return !!(cfg.workspaceId && cfg.ideToken && (cfg.harnessApiBase || cfg.apiBase));
+  }
+
+  private _buildPipelineMessage(userMsg: string): string {
+    const activeEditor = vscode.window.activeTextEditor;
+    const activeFilePath = activeEditor
+      ? vscode.workspace.asRelativePath(activeEditor.document.uri, false)
+      : '';
+
+    if (!activeFilePath) return userMsg;
+
+    if (this._isGeneratedArtifact(activeFilePath)) {
+      return `${userMsg}\n\n补充上下文：当前激活文件是构建产物 ${activeFilePath}，请优先检查 src/ 下源码、配置文件和入口文件，不要围绕构建产物修改。`;
+    }
+
+    return `${userMsg}\n\n补充上下文：当前打开文件为 ${activeFilePath}。如果本次需求与它相关，请优先检查它以及相邻的源码、配置和入口文件。`;
+  }
+
+  private async _handleViaCodingPipeline(
+    userMsg: string,
+    stream: vscode.ChatResponseStream,
+    token: vscode.CancellationToken,
+  ): Promise<void> {
+    const needsCodeModel = isEditIntent(userMsg);
+    const model = this.modelSelector.resolve(needsCodeModel);
+    const effectiveMsg = this._buildPipelineMessage(userMsg);
+    let sawThinkingDelta = false;
+    let sawVisibleOutput = false;
+    let sawNarrativeOutput = false;
+
+    for await (const event of this.llmClient.streamCodingPipeline({
+      message: effectiveMsg,
+      selectedModel: model,
+      conversationId: this.config.get().conversationId,
+      token,
+    })) {
+      const eventType = event?.type || '';
+
+      if (eventType === 'step') {
+        const step = event.step || '';
+        const status = event.status || '';
+        const text = this._formatPipelineStep(step, status, event.data || {});
+        if (text) {
+          sawVisibleOutput = true;
+          stream.markdown(text);
+        }
+        continue;
+      }
+
+      if (eventType === 'content') {
+        const content = cleanResponse(String(event.content || ''));
+        if (content.trim()) {
+          sawVisibleOutput = true;
+          sawNarrativeOutput = true;
+          stream.markdown(content);
+        }
+        continue;
+      }
+
+      if (eventType === 'agent_thinking_delta') {
+        const delta = cleanResponse(String(event.content || ''));
+        if (delta) {
+          sawThinkingDelta = true;
+          sawVisibleOutput = true;
+          sawNarrativeOutput = true;
+          stream.markdown(delta);
+        }
+        continue;
+      }
+
+      if (eventType === 'agent_thinking') {
+        if (sawThinkingDelta) continue;
+        const content = cleanResponse(String(event.content || ''));
+        if (content.trim()) {
+          sawVisibleOutput = true;
+          sawNarrativeOutput = true;
+          stream.markdown(content);
+        }
+        continue;
+      }
+
+      if (eventType === 'agent_tool') {
+        const toolLabel = event.tool_display || event.tool || '工具';
+        const preview = String(event.input_preview || '').trim();
+        sawVisibleOutput = true;
+        stream.markdown(preview
+          ? `\n\n🔧 **${toolLabel}** \`${preview}\`\n`
+          : `\n\n🔧 **${toolLabel}**\n`);
+        continue;
+      }
+
+      if (eventType === 'agent_result') {
+        const preview = String(event.output_preview || '').trim();
+        if (preview) {
+          sawVisibleOutput = true;
+          stream.markdown(event.is_error
+            ? `\n> ❌ ${preview}\n\n`
+            : `\n> ✅ ${preview}\n\n`);
+        }
+        continue;
+      }
+
+      if (eventType === 'agent_done') {
+        const result = cleanResponse(String(event.result || ''));
+        if (result.trim() && result.trim().toLowerCase() !== 'completed' && !sawNarrativeOutput) {
+          sawVisibleOutput = true;
+          sawNarrativeOutput = true;
+          stream.markdown(`\n\n${result}\n`);
+        }
+        continue;
+      }
+
+      if (eventType === 'agent_error' || eventType === 'error') {
+        throw new Error(event.message || 'Coding pipeline failed');
+      }
+
+      if (eventType === 'scene_detected' || eventType === 'done') {
+        if (event.conversation_id) {
+          await this.config.updateWorkspaceConfig({ conversationId: Number(event.conversation_id) });
+        }
+        continue;
+      }
+    }
+
+    if (!sawVisibleOutput) {
+      stream.markdown('已处理完成。');
+    }
+  }
+
+  private _formatPipelineStep(step: string, status: string, data: Record<string, any>): string {
+    if (step === 'detect_scene' && status === 'running') {
+      return '\n\n🔍 正在识别开发场景...\n';
+    }
+    if (step === 'detect_scene' && status === 'done') {
+      return `\n\n✅ 已识别场景：${data.scene_type || 'coding'}\n`;
+    }
+    if (step === 'create_workspace' && status === 'running') {
+      return '\n\n📁 正在创建工作区与初始化脚手架...\n';
+    }
+    if (step === 'create_workspace' && status === 'done') {
+      const name = data.display_name || data.project_name || data.workspace_id || '工作区';
+      return `\n\n✅ 工作区已就绪：**${name}**\n`;
+    }
+    if (step === 'generate' && status === 'running') {
+      return '\n\n🤖 正在分析代码并执行修改...\n';
+    }
+    if (step === 'generate' && status === 'done') {
+      return '\n\n✅ 本轮编码已完成\n';
+    }
+    if (step === 'build' && status === 'running') {
+      return '\n\n🏗️ 正在构建打包...\n';
+    }
+    if (step === 'build' && status === 'done') {
+      return '\n\n✅ 构建完成\n';
+    }
+    if (step === 'debug' && status === 'running') {
+      return '\n\n🧪 正在启动调试环境...\n';
+    }
+    if (step === 'debug' && status === 'done') {
+      return '\n\n✅ 调试环境已启动\n';
+    }
+    return '';
+  }
+
   private _buildMessages(
     userMsg: string,
     workspaceCtx: string,
@@ -228,20 +410,36 @@ export class ChatHandler {
       { role: 'system', content: sysContent },
     ];
 
-    // Add conversation history from ChatContext
-    for (const turn of context.history.slice(-6)) {
-      if (turn instanceof vscode.ChatRequestTurn) {
-        messages.push({ role: 'user', content: turn.prompt.slice(0, 1500) });
-      } else if (turn instanceof vscode.ChatResponseTurn) {
-        // Extract text from response parts
-        let text = '';
-        for (const part of turn.response) {
-          if (part instanceof vscode.ChatResponseMarkdownPart) {
-            text += part.value.value;
+    // Add conversation history: prefer in-IDE history, fall back to external chat-history.json
+    const hasIdeHistory = context.history.length > 0;
+
+    if (hasIdeHistory) {
+      // Use code-server's own Chat history
+      for (const turn of context.history.slice(-6)) {
+        if (turn instanceof vscode.ChatRequestTurn) {
+          messages.push({ role: 'user', content: turn.prompt.slice(0, 1500) });
+        } else if (turn instanceof vscode.ChatResponseTurn) {
+          let text = '';
+          for (const part of turn.response) {
+            if (part instanceof vscode.ChatResponseMarkdownPart) {
+              text += part.value.value;
+            }
+          }
+          if (text) {
+            messages.push({ role: 'assistant', content: text.slice(0, 2000) });
           }
         }
-        if (text) {
-          messages.push({ role: 'assistant', content: text.slice(0, 2000) });
+      }
+    } else {
+      // No in-IDE history — inject external history from .vscode/chat-history.json
+      const externalHistoryPayload = this._loadExternalChatHistoryPayload();
+      if (externalHistoryPayload.messages.length > 0) {
+        messages.push({
+          role: 'system',
+          content: `以下是用户在 AI Coding 对话中的历史记录（来自 Web 端），请结合这些上下文回答：`,
+        });
+        for (const msg of externalHistoryPayload.messages.slice(-8)) {
+          messages.push({ role: msg.role as 'user' | 'assistant', content: msg.content.slice(0, 2000) });
         }
       }
     }
@@ -266,6 +464,52 @@ export class ChatHandler {
     }
 
     return messages;
+  }
+
+  private _announceExternalHistoryContext(
+    context: vscode.ChatContext,
+    stream: vscode.ChatResponseStream,
+  ) {
+    if (context.history.length > 0) return;
+    const payload = this._loadExternalChatHistoryPayload();
+    if (!payload.messages.length) return;
+
+    const key = this._getExternalHistoryNoticeKey();
+    if (this.externalHistoryNoticeShown.has(key)) return;
+    this.externalHistoryNoticeShown.add(key);
+
+    stream.markdown(
+      `\n\nℹ️ 已加载当前工作区最近 ${payload.messages.length} 条 AI Coding 历史作为上下文。受 IDE 原生聊天面板限制，旧消息不会自动回放显示在这里。\n\n`,
+    );
+  }
+
+  private _getExternalHistoryNoticeKey(): string {
+    const cfg = this.config.get();
+    if (cfg.workspaceId) return cfg.workspaceId;
+    const folders = vscode.workspace.workspaceFolders;
+    return folders?.[0]?.uri.fsPath || 'default';
+  }
+
+  /** Load external chat history from .vscode/chat-history.json (written by backend pipeline) */
+  private _loadExternalChatHistoryPayload(): { conversationId: number | null; messages: Array<{ role: string; content: string }> } {
+    try {
+      const folders = vscode.workspace.workspaceFolders;
+      if (!folders?.length) return { conversationId: null, messages: [] };
+      const path = require('path');
+      const fs = require('fs');
+      const historyPath = path.join(folders[0].uri.fsPath, '.vscode', 'chat-history.json');
+      if (!fs.existsSync(historyPath)) return { conversationId: null, messages: [] };
+      const data = JSON.parse(fs.readFileSync(historyPath, 'utf-8'));
+      if (Array.isArray(data?.messages)) {
+        return {
+          conversationId: Number.isFinite(Number(data.conversation_id)) ? Number(data.conversation_id) : null,
+          messages: data.messages.filter((m: any) => m.role && m.content),
+        };
+      }
+    } catch {
+      // ignore
+    }
+    return { conversationId: null, messages: [] };
   }
 
   /** Check if user message mentions a specific file path */

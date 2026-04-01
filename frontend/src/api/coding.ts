@@ -36,10 +36,20 @@ export interface CodingMessage {
   created_at: string
 }
 
+export interface ReplayStreamMessage {
+  type: 'user' | 'thinking' | 'tool' | 'file_write' | 'file_edit' | 'command' | 'status' | 'error'
+  content: string
+  fileName?: string
+  fileContent?: string
+  collapsed?: boolean
+  timestamp?: number
+}
+
 export interface WorkspaceConversation {
   conversation_id: number | null
   selected_llm_config_id: number | null
   messages: CodingMessage[]
+  stream_messages?: ReplayStreamMessage[]
 }
 
 export interface WorkspaceInfo {

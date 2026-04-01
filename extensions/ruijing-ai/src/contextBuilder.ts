@@ -12,6 +12,7 @@ const SOURCE_FILE_RE = /\.(vue|js|jsx|ts|tsx|json|java|xml|yml|yaml|properties|s
 const I18N_TASK_RE = /(国际化|i18n|多语言|语言包|locale|翻译|文案)/i;
 const FORM_COMPONENT_TASK_RE = /(组件|widget|表单组件|form-component|render|渲染|upload|avatar|date|picker)/i;
 const CONFIG_TASK_RE = /(componentModelField|配置文件|配置项|config|widget\.config|editor\.config|字段类型|数据模型|STRING|DATE|字段绑定)/i;
+const INSPECT_TASK_RE = /(检查|排查|看看|看一下|看一看|存不存在|缺失|缺少|不存在|有没有|是否存在|注册|入口|导入|导出|import|export|index\.js)/i;
 const STOP_WORDS = new Set([
   'src', 'form', 'component', 'widget', 'config', 'file', 'path', 'this', 'that',
   'date', 'range', 'string', 'model', 'field', 'type', 'please', 'help', 'code',
@@ -65,6 +66,7 @@ export class ContextBuilder {
     const isI18nTask = I18N_TASK_RE.test(userMessage);
     const isFormComponentTask = FORM_COMPONENT_TASK_RE.test(userMessage);
     const isConfigTask = CONFIG_TASK_RE.test(userMessage);
+    const isInspectTask = INSPECT_TASK_RE.test(userMessage);
     const activeSourceFiles = vscode.window.visibleTextEditors
       .map(editor => vscode.workspace.asRelativePath(editor.document.uri, false))
       .filter(rel =>
@@ -146,6 +148,15 @@ export class ContextBuilder {
         for (const file of i18nFiles) if (relativePaths.includes(file)) pushUnique(file);
       }
 
+      // Inspect task: force-read all entry/index files to let model check registrations
+      if (isInspectTask) {
+        const entryFiles = relativePaths.filter(p =>
+          (p.endsWith('/index.js') || p.endsWith('/index.ts')) &&
+          (p.includes('form-component') || p.includes('form-ability') || p === 'src/index.js')
+        );
+        for (const ef of entryFiles) pushUnique(ef);
+      }
+
       if (isFormComponentTask || isI18nTask) {
         const componentFiles = relativePaths.filter(p =>
           /^src\/form-component\/form-widget\/(edit|ide|read|list|print|search|search-ide)\/.+\.vue$/.test(p) ||
@@ -179,7 +190,8 @@ export class ContextBuilder {
           rel.endsWith('.widget.config.js') ||
           rel.endsWith('.editor.config.js') ||
           rel.endsWith('apaas.json') ||
-          rel.includes('/form-component-local/');
+          rel.includes('/form-component-local/') ||
+          (isInspectTask && (rel.endsWith('/index.js') || rel.endsWith('/index.ts')));
         const maxContent = isStructuralFile ? MAX_SCAFFOLD_FILE_CONTENT : MAX_FILE_CONTENT;
         if (content.length > maxContent) {
           content = content.slice(0, maxContent) + '\n/* ... truncated ... */';

@@ -267,39 +267,20 @@ GENERATE_DOC_PROMPT = """请根据上面的对话内容，按照以下6个需求
 # ─── Tenant LLM Helpers ──────────────────────────────────────────────────────
 
 async def _get_tenant_llm_config(db: AsyncSession, tenant_id: int) -> dict | None:
-    """查询租户默认 LLM 配置，返回解密后的 dict（api_key, base_url, model, max_tokens）"""
-    from app.routes.llm_configs import resolve_llm_config_for_purpose
-
-    config = await resolve_llm_config_for_purpose(db, tenant_id, "builder")
-
-    if not config:
+    """查询租户默认 LLM 配置，返回解密后的 dict"""
+    from app.harness.llm_resolver import resolve_llm_config
+    resolved = await resolve_llm_config(db, tenant_id, purpose="builder")
+    if not resolved:
         return None
-    return _serialize_llm_config(config)
-
-
-def _serialize_llm_config(config) -> dict:
-    from app.crypto import decrypt_password
-
-    return {
-        "api_key": decrypt_password(config.api_key_enc),
-        "base_url": config.base_url.rstrip("/"),
-        "model": config.model,
-        "max_tokens": config.max_tokens or 8192,
-    }
+    return {"api_key": resolved.api_key, "base_url": resolved.base_url, "model": resolved.model, "max_tokens": resolved.max_tokens}
 
 
 async def _get_conversation_llm_config(db: AsyncSession, conversation: Conversation) -> dict | None:
-    from app.routes.llm_configs import resolve_llm_config_for_purpose
-
-    config = await resolve_llm_config_for_purpose(
-        db,
-        conversation.tenant_id,
-        "builder",
-        conversation.selected_llm_config_id,
-    )
-    if not config:
+    from app.harness.llm_resolver import resolve_llm_config
+    resolved = await resolve_llm_config(db, conversation.tenant_id, purpose="builder", selected_config_id=conversation.selected_llm_config_id)
+    if not resolved:
         return None
-    return _serialize_llm_config(config)
+    return {"api_key": resolved.api_key, "base_url": resolved.base_url, "model": resolved.model, "max_tokens": resolved.max_tokens}
 
 
 async def _stream_with_config(cfg: dict | None, messages: list):
