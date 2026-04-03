@@ -111,7 +111,7 @@ async def get_auth_context(
         if role:
             org_permissions = role.permissions or {}
             # Tenant admin has special role
-            if role.role_code == "R_tenant_admin":
+            if role.role_code in ("R_tenant_admin", "admin"):
                 tenant_role = "tenant_admin"
 
     return AuthContext(

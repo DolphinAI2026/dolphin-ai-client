@@ -116,6 +116,9 @@ def build_llm_chat_completions_url(base_url: str) -> str:
         return base
     if base.endswith("/responses"):
         return f"{base[:-len('/responses')]}/chat/completions"
+    # /anthropic 是 Anthropic SDK 专用路径，OpenAI compat 不需要，去掉
+    if "/anthropic" in base:
+        base = base[:base.index("/anthropic")]
     if not base.endswith("/v1"):
         base = f"{base}/v1"
     return f"{base}/chat/completions"
