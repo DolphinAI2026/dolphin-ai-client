@@ -82,7 +82,10 @@ def _builtin_llm_specs() -> list[dict]:
             return base
         if base.endswith(("/chat/completions", "/responses", "/v1")):
             return base
+        # /anthropic 是 Anthropic SDK 专用路径，OpenAI compat 不需要，去掉
         if "/anthropic" in base:
+            base = base[:base.index("/anthropic")]
+        if not base or base.endswith("/v1"):
             return base
         return f"{base}/v1"
 
