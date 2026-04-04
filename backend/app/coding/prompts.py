@@ -487,6 +487,88 @@ export default FormComponentXxxEditorConfig
 //   webFormSettings - 表单样式设置
 ```
 
+### formValue 存储规范 ★ 必读
+
+`formValue` 是组件与平台表单引擎之间的数据桥梁，写入 `formValue` 的值最终会被持久化到数据库。
+
+**规则一：组件值变化时必须同步更新 formValue**
+组件本身不一定要绑定 `formValue`（可以用内部 data 维护 UI 状态），但只要组件的业务值发生变化，**必须**将最新值写入 `formValue`，否则数据不会保存到数据库。
+
+```javascript
+// ✅ 正确：用户操作后同步写入
+methods: {
+  handleChange(val) {
+    this.innerValue = val          // 更新本地 UI 状态
+    this.formValue = val           // 同步写入表单引擎 → 持久化到数据库
+  }
+}
+```
+
+**规则二：formValue 只能存储基本数据类型**
+数据库字段为文本类型，`formValue` 只接受以下基本类型：
+- `string`（字符串）
+- `number`（数字）
+- `boolean`（布尔，平台会自动转为 `'true'`/`'false'`）
+- `null` / `undefined`（清空值）
+
+**规则三：对象和数组必须 JSON 序列化后存储**
+复杂数据类型（对象、数组）**不能直接赋值**给 `formValue`，必须先用 `JSON.stringify` 序列化：
+
+```javascript
+// ❌ 错误：直接赋值对象/数组，数据库无法正确存储
+this.formValue = { color: '#ff0000', size: 5 }
+this.formValue = [1, 2, 3]
+
+// ✅ 正确：序列化后存储，读取时反序列化
+// 写入
+this.formValue = JSON.stringify({ color: '#ff0000', size: 5 })
+
+// 读取（在 mounted 或 computed 中解析）
+mounted() {
+  if (this.formValue) {
+    try {
+      const config = JSON.parse(this.formValue)
+      this.innerColor = config.color
+      this.innerSize = config.size
+    } catch (e) {
+      // 兼容旧数据或空值
+    }
+  }
+}
+```
+
+**规则四：推荐的完整数据流模式**
+
+```javascript
+export default {
+  mixins: [FormWidgetMixin],
+  data() {
+    return {
+      // 用 data 维护组件内部 UI 状态，与 formValue 分离
+      innerValue: null
+    }
+  },
+  mounted() {
+    // 初始化时从 formValue 反序列化
+    if (this.formValue) {
+      try {
+        // 简单值直接用
+        this.innerValue = this.formValue
+        // 复杂值需要解析
+        // this.innerValue = JSON.parse(this.formValue)
+      } catch (e) {}
+    }
+  },
+  methods: {
+    handleChange(val) {
+      this.innerValue = val
+      // 基本类型直接赋值，复杂类型 JSON.stringify
+      this.formValue = val  // 或 JSON.stringify(val)
+    }
+  }
+}
+```
+
 ### Setting.vue（设计器右侧配置面板）★ 重要
 
 **setting.vue 不使用 FormWidgetMixin**。平台通过 EditorFormConfigMixin 传入 props。
