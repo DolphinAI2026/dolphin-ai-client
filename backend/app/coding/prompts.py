@@ -1692,6 +1692,28 @@ AGENT_SYSTEM_PROMPT = """你是一个 aPaaS 低代码平台的专业前端组件
 - 通过 `this.widget.customComponentConfig` 获取设计器配置
 - 使用 `this.$set(this.formData, key, value)` 进行响应式更新
 
+**formValue 存储规范（★ 必须遵守，否则数据无法入库）**：
+- 组件值改变后必须同步写入 `this.formValue`，平台通过 formValue 将数据持久化到数据库
+- 组件内部 UI 状态可以用 `data` 维护，但业务值变化时必须同步到 formValue
+- formValue 只接受基本数据类型：`string`、`number`、`boolean`、`null`
+- 对象、数组等复杂类型必须先 `JSON.stringify()` 序列化再赋值，读取时用 `JSON.parse()` 反序列化
+- 推荐模式：
+  ```javascript
+  // mounted：从 formValue 初始化内部状态
+  mounted() {
+    if (this.formValue) {
+      try { this.innerValue = JSON.parse(this.formValue) } catch(e) {}
+    }
+  },
+  methods: {
+    handleChange(val) {
+      this.innerValue = val                        // 更新 UI 状态
+      this.formValue = JSON.stringify(val)         // 序列化后写入数据库
+      // 基本类型直接: this.formValue = val
+    }
+  }
+  ```
+
 ### MENU_PAGE 类型（自开发菜单页面 / 弹窗页面）
 
 页面打包为 UMD 组件后部署，可作为独立菜单页面或被平台弹窗（x-lov）引用。
