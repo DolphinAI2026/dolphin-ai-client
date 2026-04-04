@@ -32,7 +32,8 @@ alwaysApply: true
     ├── form-component/ // 核心表单组件代码
     │   ├── index.js    // (@src/form-component/index.js) 表单组件模块入口
     │   ├── form-editor/ // 表单编辑器相关组件
-    │   │   └── index.js
+    │   │   ├── index.js
+    │   │   └── form-component-demo-setting.vue
     │   └── form-widget/ // 表单小部件 (实际渲染和交互的组件)
     │       ├── index.js // (@src/form-component/form-widget/index.js)
     │       ├── edit/    // "编辑"场景下的小部件
@@ -124,7 +125,7 @@ const FormComponentRateWidgetConfig = {
   code: 'FORM_CUSTOM_COMPONENT_RATE', // 组件编码
   desc: { // 组件描述信息
     iconType: 'DEFAULT', // 组件icon类型
-    icon: `svg html代码`, // 组件svg图标名称
+    icon: `svg html代码`, // 必须是符合组件功能的内联 SVG 字符串，禁止使用 form-custom-widget 或空字符串
     // 组件名称
     text: '评分',
     // 组件具体描述
@@ -591,6 +592,7 @@ export default printFormComponentList
 - code 应唯一，且与配置组件保持一一对应；
 - configProperty 是实际绑定到组件配置中的字段；
 - 配置组件必须通过 name 注册，平台会动态加载；
+- `setting.vue` 固定路径为 `src/form-component/form-editor/{name}-setting.vue`，不要放到 `src/form-component-config/form-editor/`；
 - 所有配置项都必须在 form-component-config/form-editor/ 中注册后，才能在右侧面板中正常显示。
 
 src/form-component-config/form-editor/form-component-rate.editor.config.js
@@ -756,6 +758,8 @@ const customFormEditorList = [
 ]
 export default customFormEditorList
 ```
+ 
+并且 `FormComponentRateSetting` 的 `name` 必须与 `form-component-rate.editor.config.js` 中的 `componentName` 保持一致。
 
 ### 其他代码示例补充
 

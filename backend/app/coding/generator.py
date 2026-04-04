@@ -152,6 +152,8 @@ class CodingGenerator:
                 ws_str += "- **必须输出所有7个场景的 .vue 组件文件**（edit、read、ide、list、print、search、search-ide）和 setting.vue\n"
                 ws_str += "- **必须同时输出 widget.config.js**，根据组件用途设置正确的 componentModelField 和 frontBusinessObjectComponentType（日期类用 DATE，数字类用 NUMBER，文本类用 TEXT）\n"
                 ws_str += "- edit/read/ide.vue 与 setting.vue 的 customComponentConfig 读写路径必须一致\n"
+                ws_str += "- `setting.vue` 固定路径为 `src/form-component/form-editor/{name}-setting.vue`，不要放到 `src/form-component-config/form-editor/`\n"
+                ws_str += "- `editorConfigList` 必须来自 `src/form-component-config/form-editor/{name}.editor.config.js`，并在同级 `index.js` 中导入聚合；`src/form-component/form-editor/index.js` 也必须导入 `./{name}-setting.vue`\n"
             elif project_type == "layout":
                 ws_str += "- **布局项目通常只需要 Home.vue、index.js、apaas.json 以及必要的子组件**，不要套用表单组件的 7 场景规则\n"
                 ws_str += "- **不要擅自新增 widget.config.js / editor.config.js / setting.vue**，除非用户明确要求且平台确有这套接入方式\n"

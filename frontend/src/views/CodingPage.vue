@@ -868,12 +868,7 @@ onMounted(async () => {
   if (wsId) {
     await openWorkspaceById(wsId)
   } else {
-    const lastWsId = localStorage.getItem('coding_last_workspace_id')
-    if (lastWsId && existingWorkspaces.value.some(w => w.id === lastWsId)) {
-      await openWorkspaceById(lastWsId)
-    } else {
-      selectedCodingModelValue.value = normalizeCodingModelValue(selectedCodingModelValue.value)
-    }
+    selectedCodingModelValue.value = normalizeCodingModelValue(selectedCodingModelValue.value)
   }
 })
 

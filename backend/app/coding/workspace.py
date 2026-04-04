@@ -20,6 +20,8 @@ from pathlib import Path
 from typing import Awaitable, Callable, Optional, Union
 from enum import Enum
 
+from app.coding.form_component_editor import normalize_form_component_editor_artifacts
+
 logger = logging.getLogger(__name__)
 
 # 工作区根目录
@@ -804,6 +806,8 @@ class WorkspaceManager:
         # 生成脚手架 —— 优先使用 df-apaas-cli 预生成的标准模板
         if project_type.value in CLI_TEMPLATE_MAP:
             self._scaffold_via_cli_template(ws_path, safe_name, project_type)
+            if project_type == ProjectType.FORM_COMPONENT:
+                normalize_form_component_editor_artifacts(ws_path)
         elif project_type == ProjectType.BACKEND_API:
             self._scaffold_backend_api(ws_path, safe_name)
         elif project_type == ProjectType.BACKEND_FEIGN:
@@ -873,6 +877,10 @@ class WorkspaceManager:
 
     def _build_npm_env(self) -> dict[str, str]:
         env = {**os.environ}
+        # 确保 /usr/local/bin 在 PATH 中，node/npm/df-apaas-cli 都安装在此
+        path = env.get("PATH", "")
+        if "/usr/local/bin" not in path:
+            env["PATH"] = f"/usr/local/bin:{path}"
         env.setdefault("npm_config_registry", DEFAULT_NPM_REGISTRY)
         env.setdefault("NPM_CONFIG_REGISTRY", DEFAULT_NPM_REGISTRY)
         env.setdefault("npm_config_cache", str(NPM_CACHE_ROOT))
@@ -2965,7 +2973,7 @@ export default {{ name: '{prefix}SearchIde', mixins: [SearchIdeWidgetMixin] }}
 
         # ======== form-editor（设计器配置面板）========
         self._write(ws_path, "src/form-component/form-editor/index.js",
-                     f"import Comp from './{full_kebab}-setting.vue'\nexport default [Comp]\n")
+                     f"import {prefix}Setting from './{full_kebab}-setting.vue'\n\nconst customFormEditorList = [{prefix}Setting]\n\nexport default customFormEditorList\n")
         self._write(ws_path, f"src/form-component/form-editor/{full_kebab}-setting.vue", f"""<template>
   <div class="form-config-item form-config-{kebab}-setting">
     <div class="setting-panel">
@@ -3117,15 +3125,15 @@ export default config
 """)
 
         self._write(ws_path, "src/form-component-config/form-editor/index.js",
-                     f"import config from './{full_kebab}.editor.config'\nexport default [config]\n")
-        self._write(ws_path, f"src/form-component-config/form-editor/{full_kebab}.editor.config.js", f"""const config = {{
+                     f"import {prefix}EditorConfig from './{full_kebab}.editor.config'\n\nconst editorConfigList = [{prefix}EditorConfig]\n\nexport default editorConfigList\n")
+        self._write(ws_path, f"src/form-component-config/form-editor/{full_kebab}.editor.config.js", f"""const {prefix}EditorConfig = {{
   code: '{setting_code}',
   editorConfigType: '{setting_code}',
   componentName: '{prefix}Setting',
   configProperty: 'customComponentConfig'
 }}
 
-export default config
+export default {prefix}EditorConfig
 """)
 
         # ======== Mixin（完整版，非 mock）========

@@ -377,7 +377,7 @@ const FormComponentXxxWidgetConfig = {
   code: 'FORM_CUSTOM_COMPONENT_XXX',  // 必须与 apaas.json 中一致
   desc: {
     iconType: 'DEFAULT',
-    icon: '<svg>...</svg>',  // 组件图标SVG
+    icon: '<svg>...</svg>',  // 组件图标SVG，必须是符合组件功能的内联 SVG 字符串，禁止使用 form-custom-widget 或空字符串
     text: '组件名称',
     description: '组件描述'
   },
@@ -427,15 +427,33 @@ const FormComponentXxxWidgetConfig = {
 export default FormComponentXxxWidgetConfig
 ```
 
-### editor.config.js（编辑器配置映射）
+### editor.config.js（编辑器配置映射 - 核心文件之一）
 ```javascript
 const FormComponentXxxEditorConfig = {
   code: 'FORM_CUSTOM_COMPONENT_XXX_SETTING',
   editorConfigType: 'FORM_CUSTOM_COMPONENT_XXX_SETTING',
-  componentName: 'FormComponentXxxSetting',  // 对应 form-editor 中的组件 name
+  componentName: 'FormComponentXxxSetting',  // 对应 src/form-component/form-editor/{name}-setting.vue 中的组件 name
   configProperty: 'customComponentConfig'
 }
 export default FormComponentXxxEditorConfig
+```
+
+### form-component-config/form-editor/index.js（editorConfigList 聚合）
+```javascript
+import FormComponentXxxEditorConfig from './{name}.editor.config'
+
+const editorConfigList = [FormComponentXxxEditorConfig]
+
+export default editorConfigList
+```
+
+### form-component/form-editor/index.js（配置面板组件聚合）
+```javascript
+import FormComponentXxxSetting from './{name}-setting.vue'
+
+const customFormEditorList = [FormComponentXxxSetting]
+
+export default customFormEditorList
 ```
 
 ### 各场景组件要点
@@ -486,6 +504,91 @@ export default FormComponentXxxEditorConfig
 //   showRequired  - 是否显示必填星号
 //   webFormSettings - 表单样式设置
 ```
+
+### formValue 存储规范 ★ 必读
+
+`formValue` 是组件与平台表单引擎之间的数据桥梁，写入 `formValue` 的值最终会被持久化到数据库。
+
+**规则一：组件值变化时必须同步更新 formValue**
+组件本身不一定要绑定 `formValue`（可以用内部 data 维护 UI 状态），但只要组件的业务值发生变化，**必须**将最新值写入 `formValue`，否则数据不会保存到数据库。
+
+```javascript
+// ✅ 正确：用户操作后同步写入
+methods: {
+  handleChange(val) {
+    this.innerValue = val          // 更新本地 UI 状态
+    this.formValue = val           // 同步写入表单引擎 → 持久化到数据库
+  }
+}
+```
+
+**规则二：formValue 只能存储基本数据类型**
+数据库字段为文本类型，`formValue` 只接受以下基本类型：
+- `string`（字符串）
+- `number`（数字）
+- `boolean`（布尔，平台会自动转为 `'true'`/`'false'`）
+- `null` / `undefined`（清空值）
+
+**规则三：对象和数组必须 JSON 序列化后存储**
+复杂数据类型（对象、数组）**不能直接赋值**给 `formValue`，必须先用 `JSON.stringify` 序列化：
+
+```javascript
+// ❌ 错误：直接赋值对象/数组，数据库无法正确存储
+this.formValue = { color: '#ff0000', size: 5 }
+this.formValue = [1, 2, 3]
+
+// ✅ 正确：序列化后存储，读取时反序列化
+// 写入
+this.formValue = JSON.stringify({ color: '#ff0000', size: 5 })
+
+// 读取（在 mounted 或 computed 中解析）
+mounted() {
+  if (this.formValue) {
+    try {
+      const config = JSON.parse(this.formValue)
+      this.innerColor = config.color
+      this.innerSize = config.size
+    } catch (e) {
+      // 兼容旧数据或空值
+    }
+  }
+}
+```
+
+**规则四：推荐的完整数据流模式**
+
+```javascript
+export default {
+  mixins: [FormWidgetMixin],
+  data() {
+    return {
+      // 用 data 维护组件内部 UI 状态，与 formValue 分离
+      innerValue: null
+    }
+  },
+  mounted() {
+    // 初始化时从 formValue 反序列化
+    if (this.formValue) {
+      try {
+        // 简单值直接用
+        this.innerValue = this.formValue
+        // 复杂值需要解析
+        // this.innerValue = JSON.parse(this.formValue)
+      } catch (e) {}
+    }
+  },
+  methods: {
+    handleChange(val) {
+      this.innerValue = val
+      // 基本类型直接赋值，复杂类型 JSON.stringify
+      this.formValue = val  // 或 JSON.stringify(val)
+    }
+  }
+}
+```
+
+**规则五：组件配置的widget.editor.config中必须包含 editor.config.js中的code**
+**规则六：组件配置的desc.icon 必须是一个符合当前组件的svg图标
 
 ### Setting.vue（设计器右侧配置面板）★ 重要
 
@@ -605,7 +708,7 @@ widget: {
     config: [
       // ★ 不能删除任何标准编辑器配置项！否则平台校验会报错
       'INFO', 'LABEL', 'FIELD_CODE', 'TITLE_DESCRIPTION', 'WIDTH',
-      'FORM_CUSTOM_COMPONENT_XXX_SETTING',
+      'FORM_CUSTOM_COMPONENT_XXX_SETTING', // 必须包含editor.config.js（编辑器配置映射) 中的code字段
       'FORMULA_RULE', 'HIDDEN', 'READONLY', 'REQUIRED', 'EDITONNEW',
       'UNIQUE', 'HIDDEN_SAVE', 'HIDDEN_TRIGGER', 'TRIGGER_BUSINESS_EVENTS'
     ],
@@ -684,14 +787,38 @@ methods: {
 
 **editorConfigList 注册方式：**
 ```javascript
-// 每个编辑器配置项必须包含以下字段
-const editorConfigList = [{
+// src/form-component-config/form-editor/{name}.editor.config.js
+const FormComponentXxxEditorConfig = {
   code: 'FORM_CUSTOM_XXX_SETTING',           // 与 widget.editor.config 中的配置项名一致
   editorConfigType: 'FORM_CUSTOM_XXX_SETTING', // 通常与 code 相同
   componentName: 'FormComponentXxxSetting',    // 必须与 Setting.vue 的 name 一致
   configProperty: 'customComponentConfig'      // 固定值，告诉平台把 customComponentConfig 传给设置组件
-}]
+}
+export default FormComponentXxxEditorConfig
 ```
+
+```javascript
+// src/form-component-config/form-editor/index.js
+import FormComponentXxxEditorConfig from './{name}.editor.config'
+
+const editorConfigList = [FormComponentXxxEditorConfig]
+
+export default editorConfigList
+```
+
+```javascript
+// src/form-component/form-editor/index.js
+import FormComponentXxxSetting from './{name}-setting.vue'
+
+const customFormEditorList = [FormComponentXxxSetting]
+
+export default customFormEditorList
+```
+
+**⚠️ 路径约束：**
+- `setting.vue` 固定放在 `src/form-component/form-editor/{name}-setting.vue`
+- 不要把 `setting.vue` 放到 `src/form-component-config/form-editor/`
+- `editorConfigList` 只能在 `src/form-component-config/form-editor/index.js` 中通过导入 `./{name}.editor.config.js` 聚合，不能在别处内联写死
 
 ### widgetConfigList 完整字段说明
 
@@ -1561,9 +1688,10 @@ AGENT_SYSTEM_PROMPT = """你是一个 aPaaS 低代码平台的专业前端组件
 ## 你的工作方式
 1. 先用 Glob 和 Read 了解现有脚手架文件结构
 2. 根据需求编写完整的组件代码（使用 Write 或 Edit 工具）
-3. 运行 `npm run serve` 检查编译是否通过
-4. 如果有编译错误，阅读错误信息并自主修复
-5. 反复迭代直到代码能正确编译
+3. 所有文件写完后，用 run_command 执行 `npm install && npm run build`
+4. 如果构建报错，阅读错误信息修复代码后再次执行
+
+> **注意**：`npm install && npm run build` 由服务端托管，不依赖本地环境，直接调用即可。
 
 ## 核心开发规范
 
@@ -1609,6 +1737,28 @@ AGENT_SYSTEM_PROMPT = """你是一个 aPaaS 低代码平台的专业前端组件
 - 只负责渲染，不要显示配置界面（配置 UI 只放 setting.vue）
 - 通过 `this.widget.customComponentConfig` 获取设计器配置
 - 使用 `this.$set(this.formData, key, value)` 进行响应式更新
+
+**formValue 存储规范（★ 必须遵守，否则数据无法入库）**：
+- 组件值改变后必须同步写入 `this.formValue`，平台通过 formValue 将数据持久化到数据库
+- 组件内部 UI 状态可以用 `data` 维护，但业务值变化时必须同步到 formValue
+- formValue 只接受基本数据类型：`string`、`number`、`boolean`、`null`
+- 对象、数组等复杂类型必须先 `JSON.stringify()` 序列化再赋值，读取时用 `JSON.parse()` 反序列化
+- 推荐模式：
+  ```javascript
+  // mounted：从 formValue 初始化内部状态
+  mounted() {
+    if (this.formValue) {
+      try { this.innerValue = JSON.parse(this.formValue) } catch(e) {}
+    }
+  },
+  methods: {
+    handleChange(val) {
+      this.innerValue = val                        // 更新 UI 状态
+      this.formValue = JSON.stringify(val)         // 序列化后写入数据库
+      // 基本类型直接: this.formValue = val
+    }
+  }
+  ```
 
 ### MENU_PAGE 类型（自开发菜单页面 / 弹窗页面）
 
@@ -1728,7 +1878,6 @@ export default {
 
 ## 输出要求
 - 完成后给出简要总结，列出修改了哪些文件
-- 如果编译有 warning 但没有 error，可以认为成功
 """
 
 # ============================================================
@@ -2147,10 +2296,14 @@ CODE_GENERATION_INSTRUCTION = """
 {完整的组件配置，包含 code、component 场景映射、editor config}
 ```
 
-6. **editor.config.js + setting.vue**（设计器配置面板）：
+6. **editor.config.js + form-editor 注册文件 + setting.vue**（设计器配置面板）：
 ```file:src/form-component-config/form-editor/{name}.editor.config.js
 ```
+```file:src/form-component-config/form-editor/index.js
+```
 ```file:src/form-component/form-editor/{name}-setting.vue
+```
+```file:src/form-component/form-editor/index.js
 ```
 
 7. **其他场景**（print/search/search-ide）
@@ -2162,7 +2315,7 @@ CODE_GENERATION_INSTRUCTION = """
 4. 文件路径使用相对于项目根目录的路径
 5. Vue 组件必须生成 .vue 单文件组件格式（包含 <template>、<script>、<style>）
 6. Element UI 不需要 import，宿主已全局注册
-7. **mixin、validator、form-ability、index.js 聚合文件、i18n 等不需要输出**（脚手架已包含）
+7. **mixin、validator、form-ability、i18n 等不需要输出**（脚手架已包含）；但涉及 `setting.vue` / `editor.config.js` 时，**必须同步更新** `src/form-component/form-editor/index.js` 和 `src/form-component-config/form-editor/index.js`
 8. **直接生成代码**，不要尝试调用任何工具，不要读取文件，直接输出完整的代码文件
 9. 编辑态组件中使用 `this.formValue` 读写值，值存储为 JSON 字符串（复杂数据）
 10. **edit.vue 只渲染内容，不要显示配置界面**。配置 UI 只放在 setting.vue 中
@@ -2173,4 +2326,5 @@ CODE_GENERATION_INSTRUCTION = """
 15. **widget.config.js 的 editor.config 不能删除标准项**（INFO, LABEL, FIELD_CODE, TITLE_DESCRIPTION, WIDTH, FORMULA_RULE, HIDDEN, READONLY, REQUIRED, EDITONNEW, UNIQUE, HIDDEN_SAVE, HIDDEN_TRIGGER, TRIGGER_BUSINESS_EVENTS），否则平台校验报错
 16. 如需在 setting.vue 中访问子表列表，使用 `this.formEngine.formDataControl.allTileFormItemList` 并按 `componentType === 'FORM_WIDGET_SON_TABLE'` 过滤
 17. **获取子表真实数据时**，formData 中子表数据的 key 是子表的 `code`（不是 uuid），需要先通过 uuid 找到子表再取其 code
+18. **setting.vue 的固定路径是 `src/form-component/form-editor/{name}-setting.vue`**；`editorConfigList` 的固定聚合路径是 `src/form-component-config/form-editor/index.js`
 """
