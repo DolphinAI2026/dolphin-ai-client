@@ -80,12 +80,10 @@ def _builtin_llm_specs() -> list[dict]:
         base = (base_url or "").rstrip("/")
         if not base:
             return base
-        if base.endswith(("/chat/completions", "/responses", "/v1")):
-            return base
-        # /anthropic 是 Anthropic SDK 专用路径，OpenAI compat 不需要，去掉
+        # Anthropic SDK 路径原样保存，vibe_agent 调用时自己会转换为 /v1
         if "/anthropic" in base:
-            base = base[:base.index("/anthropic")]
-        if not base or base.endswith("/v1"):
+            return base
+        if base.endswith(("/chat/completions", "/responses", "/v1")):
             return base
         return f"{base}/v1"
 

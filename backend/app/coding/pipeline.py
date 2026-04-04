@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models import User, Conversation, Message, Project
+from app.coding.form_component_editor import normalize_form_component_editor_artifacts
 from app.coding.scenes import SceneType, get_scene
 from app.coding.generator import CodingGenerator
 from app.coding.workspace import WorkspaceManager, ProjectType
@@ -994,10 +995,14 @@ async def run_coding_pipeline(
             if not streamed_narration:
                 yield _record_event({"type": "content", "content": synthesized_summary})
 
+        normalized_files = normalize_form_component_editor_artifacts(ws_mgr.get_workspace_path(ws_id))
+        if normalized_files:
+            logger.info("Normalized form-component editor artifacts for %s: %s", ws_id, normalized_files)
+
         await _persist_output()
 
         yield _record_event({"type": "step", "step": "generate", "status": "done",
-               "data": {"files": [], "file_count": 0, "agent_mode": True}})
+               "data": {"files": normalized_files, "file_count": len(normalized_files), "agent_mode": True}})
 
         # 写对话历史到工作区供 IDE 扩展读取
         await _write_history_for_ide(

@@ -580,15 +580,18 @@ class VibeCodingAgent:
 - **Progress notes are visible to the user**: keep them brief, concrete, and friendly. Do NOT dump hidden reasoning or long analysis.
 - **DO NOT loop**: Never read the same file twice. Never read more than 3 files before writing code.
 - **Write ALL files at once**: In a single turn, call write_file for edit.vue, read.vue, ide.vue, setting.vue etc. Do NOT write one file per turn.
+- **When generating designer config**: update `src/form-component/form-editor/index.js` and `src/form-component-config/form-editor/index.js` in the same batch as `setting.vue` / `{name}.editor.config.js`.
 - **Be decisive**: You are an expert. After reading the scaffold structure and 1-2 example files, you have enough context to write the component.
 - **Maximum 8 turns total**: If you haven't written code by turn 4, something is wrong. Write the code NOW.
 
 ## Technical Constraints
 - aPaaS form component with 7 render scenes (edit/read/ide/list/print/search/search-ide)
-- Scaffold files already exist. Do NOT modify package.json, vue.config.js, babel.config.js, or index.js
+- Scaffold files already exist. Do NOT modify package.json, vue.config.js, or babel.config.js. Avoid unrelated index.js changes, but you may update `src/form-component/form-editor/index.js` and `src/form-component-config/form-editor/index.js` when adding `setting.vue` / `editor.config.js`.
 - Vue 2.7 + Element UI (globally registered, do NOT import Element UI)
 - Use FormWidgetMixin (provides formValue, widget, updatePropValue, etc.)
 - setting.vue uses componentConfig prop + formEngine prop
+- `setting.vue` must be written to `src/form-component/form-editor/{name}-setting.vue`
+- `editorConfigList` must be aggregated by `src/form-component-config/form-editor/index.js` from `./{name}.editor.config.js`
 - The edit.vue is the primary file. read.vue shows readonly view. ide.vue shows placeholder. Others can be minimal.
 """
         if project_type == "layout":

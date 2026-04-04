@@ -81,6 +81,61 @@ def _validate_frontend(files: List["GeneratedFile"], scene: "SceneInfo") -> List
         if "install" not in f.content:
             errors.append(f"入口文件 '{f.path}' 缺少 install 方法（Vue插件格式）")
 
+    errors.extend(_validate_form_component_editor_registration(file_map))
+
+    return errors
+
+
+def _validate_form_component_editor_registration(file_map: dict[str, "GeneratedFile"]) -> List[str]:
+    errors = []
+    widget_config_paths = [
+        path for path in file_map
+        if path.startswith("src/form-component-config/form-widget/") and path.endswith(".widget.config.js")
+    ]
+    if not widget_config_paths:
+        return errors
+
+    for widget_config_path in widget_config_paths:
+        widget_name = widget_config_path.rsplit("/", 1)[-1].replace(".widget.config.js", "")
+        editor_config_path = f"src/form-component-config/form-editor/{widget_name}.editor.config.js"
+        editor_index_path = "src/form-component-config/form-editor/index.js"
+        setting_path = f"src/form-component/form-editor/{widget_name}-setting.vue"
+        form_editor_index_path = "src/form-component/form-editor/index.js"
+
+        editor_config = file_map.get(editor_config_path)
+        if not editor_config:
+            errors.append(f"缺少编辑器配置文件 '{editor_config_path}'")
+            continue
+
+        setting_file = file_map.get(setting_path)
+        if not setting_file:
+            errors.append(f"缺少设置面板文件 '{setting_path}'")
+            continue
+
+        editor_index = file_map.get(editor_index_path)
+        if not editor_index:
+            errors.append(f"缺少编辑器配置聚合文件 '{editor_index_path}'")
+        elif f"./{widget_name}.editor.config" not in editor_index.content:
+            errors.append(f"'{editor_index_path}' 未导入 './{widget_name}.editor.config'")
+
+        form_editor_index = file_map.get(form_editor_index_path)
+        if not form_editor_index:
+            errors.append(f"缺少配置面板聚合文件 '{form_editor_index_path}'")
+        elif f"./{widget_name}-setting.vue" not in form_editor_index.content:
+            errors.append(f"'{form_editor_index_path}' 未导入 './{widget_name}-setting.vue'")
+
+        component_name_match = re.search(r"componentName:\s*['\"]([^'\"]+)['\"]", editor_config.content)
+        setting_name_match = re.search(r"name:\s*['\"]([^'\"]+)['\"]", setting_file.content)
+        if not component_name_match:
+            errors.append(f"'{editor_config_path}' 缺少 componentName")
+        if not setting_name_match:
+            errors.append(f"'{setting_path}' 缺少组件 name")
+        if component_name_match and setting_name_match:
+            if component_name_match.group(1) != setting_name_match.group(1):
+                errors.append(
+                    f"'{editor_config_path}' 的 componentName 与 '{setting_path}' 的 name 不一致"
+                )
+
     return errors
 
 

@@ -18,6 +18,11 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
+from app.coding.form_component_editor import (
+    normalize_form_component_editor_artifacts,
+    normalize_form_component_generated_file,
+)
+
 FALLBACK_NPM_REGISTRY = "https://registry.npmmirror.com"
 DEFAULT_NPM_CACHE_DIR = os.environ.get(
     "APAAS_NPM_CACHE_DIR",
@@ -200,9 +205,11 @@ async def _write_file(args: dict, workspace_path: Path) -> str:
     if not file_path:
         return "Error: file_path is required"
     try:
+        file_path, content = normalize_form_component_generated_file(file_path, content, workspace_path)
         resolved = _resolve_safe(file_path, workspace_path)
         resolved.parent.mkdir(parents=True, exist_ok=True)
         resolved.write_text(content, encoding="utf-8")
+        normalize_form_component_editor_artifacts(workspace_path)
         lines = content.count("\n") + 1
         return f"Successfully wrote {len(content)} chars ({lines} lines) to {file_path}"
     except ValueError as e:
@@ -230,8 +237,18 @@ async def _edit_file(args: dict, workspace_path: Path) -> str:
         if count > 1:
             return f"Error: old_string found {count} times in {file_path}. Provide a more unique string."
         new_content = content.replace(old_string, new_string, 1)
-        resolved.write_text(new_content, encoding="utf-8")
-        return f"Successfully edited {file_path}"
+        target_file_path, normalized_content = normalize_form_component_generated_file(
+            file_path,
+            new_content,
+            workspace_path,
+        )
+        target_resolved = _resolve_safe(target_file_path, workspace_path)
+        target_resolved.parent.mkdir(parents=True, exist_ok=True)
+        target_resolved.write_text(normalized_content, encoding="utf-8")
+        if target_resolved != resolved and resolved.exists():
+            resolved.unlink()
+        normalize_form_component_editor_artifacts(workspace_path)
+        return f"Successfully edited {target_file_path}"
     except ValueError as e:
         return f"Error: {e}"
     except Exception as e:
@@ -283,6 +300,10 @@ def _resolve_default_npm_registry() -> str:
 
 def _build_command_env() -> dict[str, str]:
     env = {**os.environ}
+    # 确保 /usr/local/bin 在 PATH 中，node/npm/df-apaas-cli 都安装在此
+    path = env.get("PATH", "")
+    if "/usr/local/bin" not in path:
+        env["PATH"] = f"/usr/local/bin:{path}"
     default_registry = _resolve_default_npm_registry()
     env.setdefault("npm_config_registry", default_registry)
     env.setdefault("NPM_CONFIG_REGISTRY", default_registry)
@@ -296,10 +317,11 @@ def _build_command_env() -> dict[str, str]:
 
 def _is_plain_npm_install(command: str) -> bool:
     tokens = _extract_primary_shell_tokens(command)
-    if len(tokens) < 2 or tokens[0] != "npm" or tokens[1] not in {"install", "i"}:
-        return False
-
-    return all(token.startswith("-") for token in tokens[2:])
+    if tokens and tokens[0] == "npm" and len(tokens) >= 2 and tokens[1] in {"install", "i"}:
+        return all(token.startswith("-") for token in tokens[2:])
+    # 复合命令中包含 npm install
+    import re
+    return bool(re.search(r'\bnpm\s+(?:install|i)\b', command))
 
 
 def _extract_primary_shell_tokens(command: str) -> list[str]:
@@ -325,9 +347,20 @@ def _extract_primary_shell_tokens(command: str) -> list[str]:
     return primary_tokens
 
 
+def _is_npm_install_and_build(command: str) -> bool:
+    """匹配 npm install && npm run build 复合命令（顺序必须是 install 在前，build 在后）"""
+    import re
+    return bool(re.search(r'\bnpm\s+(?:install|i)\b.*&&.*\bnpm\s+run\s+build\b', command))
+
+
 def _is_plain_npm_build(command: str) -> bool:
+    # 精确匹配，或者是包含 npm run build 的复合命令（如 export PATH=... && npm run build）
     tokens = _extract_primary_shell_tokens(command)
-    return tokens == ["npm", "run", "build"]
+    if tokens == ["npm", "run", "build"]:
+        return True
+    # 复合命令：只要最终执行的是 npm run build（不含其他 npm 子命令）
+    import re
+    return bool(re.search(r'\bnpm\s+run\s+build\b', command)) and "vue-cli-service" not in command
 
 
 async def _stream_process_output(
@@ -363,6 +396,22 @@ async def _run_command(
     if not command:
         return "Error: command is required"
     try:
+        if _is_npm_install_and_build(command):
+            from app.coding.workspace import WorkspaceManager
+            ws_mgr = WorkspaceManager()
+            install_result = await ws_mgr.install_deps(
+                workspace_path.name,
+                progress_callback=progress_callback,
+            )
+            if install_result["status"] != "ok":
+                return f"Error: {install_result['message']}"
+            await _emit_progress(progress_callback, "[build] 依赖安装完成，开始构建...\n")
+            build_result = await ws_mgr.build_project(workspace_path.name)
+            await _emit_progress(progress_callback, f"[build] {build_result['message']}\n")
+            if build_result["status"] == "ok":
+                return build_result["message"]
+            return f"Error: {build_result['message']}"
+
         if _is_plain_npm_install(command):
             from app.coding.workspace import WorkspaceManager
 

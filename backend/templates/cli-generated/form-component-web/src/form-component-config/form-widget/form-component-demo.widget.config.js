@@ -70,6 +70,7 @@ const FormComponentDemoWidgetConfig = {
         'FIELD_CODE', // 字段编码
         'TITLE_DESCRIPTION', // 标题说明
         'WIDTH', // 宽度
+        'FORM_CUSTOM_COMPONENT_DEMO_SETTING', // 自定义组件设置
         'FORMULA_RULE', // 公式规则
         'HIDDEN', // 是否隐藏
         'READONLY', // 是否只读
@@ -98,6 +99,7 @@ const FormComponentDemoWidgetConfig = {
             'LABEL', // 标题名称
             'FIELD_CODE', // 字段编码
             'WIDTH', // 宽度
+            'FORM_CUSTOM_COMPONENT_DEMO_SETTING', // 自定义组件设置
             'FORMULA_RULE', // 公式规则
             'HIDDEN', // 是否隐藏
             'READONLY', // 是否只读
