@@ -212,21 +212,31 @@
                         title="进入开发"
                         @click.stop="openExistingWorkspace(ws)"
                       >
-                        <el-icon><TopRight /></el-icon>
+                        <svg class="workspace-card-action-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                          <path d="M5.25 3.5L11 8L5.25 12.5V3.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" />
+                        </svg>
                       </button>
                       <button
                         class="workspace-card-action"
                         title="上传组件包"
                         @click.stop
                       >
-                        <el-icon><Plus /></el-icon>
+                        <svg class="workspace-card-action-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                          <path d="M8 10V4.25" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+                          <path d="M5.75 6.5L8 4.25L10.25 6.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+                          <path d="M4 10.25V11.25C4 11.9404 4.55964 12.5 5.25 12.5H10.75C11.4404 12.5 12 11.9404 12 11.25V10.25" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+                        </svg>
                       </button>
                       <button
                         class="workspace-card-action"
                         title="下载源码"
                         @click.stop="downloadWorkspaceArtifact(ws, 'src')"
                       >
-                        <el-icon><Download /></el-icon>
+                        <svg class="workspace-card-action-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                          <path d="M8 4V9.75" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+                          <path d="M10.25 7.5L8 9.75L5.75 7.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+                          <path d="M4 10.25V11.25C4 11.9404 4.55964 12.5 5.25 12.5H10.75C11.4404 12.5 12 11.9404 12 11.25V10.25" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+                        </svg>
                       </button>
                     </div>
                   </div>
@@ -457,7 +467,7 @@ import { API_PREFIX } from '@/utils/request'
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ArrowDown, ArrowLeft, Download, TopRight, Plus, Paperclip, Monitor, Delete, Fold, Expand, ChatDotRound } from '@element-plus/icons-vue'
+import { ArrowDown, ArrowLeft, Download, TopRight, Paperclip, Monitor, Delete, Fold, Expand, ChatDotRound } from '@element-plus/icons-vue'
 import { useCodingStore } from '@/stores/coding'
 import { platformEnvApi, type PlatformEnv } from '@/api/platformEnv'
 import { useUserStore } from '@/stores/user'
@@ -2514,6 +2524,12 @@ watch(() => route.path, () => {
   border-radius: 10px;
   cursor: pointer;
   transition: all 0.2s ease;
+}
+
+.workspace-card-action-icon {
+  width: 16px;
+  height: 16px;
+  display: block;
 }
 
 .workspace-card-action-primary {
