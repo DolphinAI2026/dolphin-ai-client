@@ -488,6 +488,121 @@ async def auto_create_application(
     )
 
 
+# ============================================================
+# 从平台导入已有应用
+# ============================================================
+
+class ImportFromPlatformRequest(BaseModel):
+    env_id: int
+    apaas_app_id: str
+
+
+@router.post("/import-from-platform", response_model=ApplicationResponse)
+async def import_from_platform(
+    body: ImportFromPlatformRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """从平台导入已有应用：拉取结构 → 生成 config_preview + markdown 需求文档"""
+    from app.platform_sync import sync_from_platform_full
+    from app.services.config_to_spec import config_to_markdown
+
+    # 1. 获取环境
+    env_result = await db.execute(
+        select(PlatformEnv).where(
+            PlatformEnv.id == body.env_id,
+            PlatformEnv.tenant_id == ctx.tenant_id,
+        )
+    )
+    env = env_result.scalar_one_or_none()
+    if not env:
+        raise HTTPException(status_code=404, detail="环境不存在")
+    if not env.token:
+        raise HTTPException(status_code=400, detail="环境未连接，请先登录")
+
+    # 2. 检查是否已导入
+    existing = await db.execute(
+        select(Application).where(
+            Application.tenant_id == ctx.tenant_id,
+            Application.apaas_app_id == body.apaas_app_id,
+        )
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=409, detail="该应用已导入")
+
+    # 3. 创建 client，获取应用信息
+    client = APaaSClient(
+        base_url=env.base_url,
+        tenant_id=env.platform_tenant_id,
+        token=env.token,
+    )
+
+    try:
+        app_detail = await client.query_app_detail(body.apaas_app_id)
+    except Exception:
+        # token 可能过期，尝试刷新
+        if env.username and env.password_enc:
+            try:
+                password = decrypt_password(env.password_enc)
+                login_result = await client.login(env.username, password)
+                env.token = login_result.get("token", "")
+                env.status = "connected"
+                await db.commit()
+                client = APaaSClient(
+                    base_url=env.base_url,
+                    tenant_id=env.platform_tenant_id,
+                    token=env.token,
+                )
+                app_detail = await client.query_app_detail(body.apaas_app_id)
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"获取应用信息失败: {e}")
+        else:
+            raise HTTPException(status_code=400, detail="token 过期且无登录凭据")
+
+    if not app_detail:
+        raise HTTPException(status_code=404, detail="平台上未找到该应用")
+
+    app_name = app_detail.get("appName", app_detail.get("name", "未命名"))
+    app_code = app_detail.get("appCode", app_detail.get("code", ""))
+    app_desc = app_detail.get("description", app_detail.get("appDescription", ""))
+
+    # 4. 完整反向解析
+    try:
+        config = await sync_from_platform_full(client, body.apaas_app_id, app_name)
+    except Exception as e:
+        logger.error(f"反向解析失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"反向解析应用结构失败: {e}")
+
+    # 5. 生成 markdown 需求文档
+    try:
+        markdown_spec = config_to_markdown(config, app_description=app_desc)
+    except Exception as e:
+        logger.warning(f"生成 markdown 失败: {e}")
+        markdown_spec = ""
+
+    # 6. 创建本地 Application 记录
+    config_str = json.dumps(config, ensure_ascii=False)
+    new_app = Application(
+        user_id=ctx.user.id,
+        tenant_id=ctx.tenant_id,
+        created_by=ctx.user.id,
+        app_name=app_name,
+        app_code=app_code or app_name.lower().replace(" ", "_"),
+        description=app_desc,
+        config_preview=config_str,
+        requirement_doc=markdown_spec,
+        apaas_app_id=body.apaas_app_id,
+        platform_env_id=body.env_id,
+        status="completed",
+    )
+    db.add(new_app)
+    await db.commit()
+    await db.refresh(new_app)
+
+    logger.info(f"应用导入成功: {app_name} (apaas_id={body.apaas_app_id})")
+    return _enrich(new_app)
+
+
 @router.put("/{app_id}", response_model=ApplicationResponse)
 async def update_application(
     app_id: int,

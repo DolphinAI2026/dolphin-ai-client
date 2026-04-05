@@ -101,8 +101,8 @@ const userStore = useUserStore()
 const expanded = ref(true)
 
 const primaryNavItems = [
-  { key: 'home', label: '应用', path: '/' },
-  { key: 'coding', label: 'AI Coding', path: '/coding' },
+  { key: 'home', label: '智能搭建', path: '/' },
+  { key: 'coding', label: '智能开发', path: '/coding' },
 ]
 
 const secondaryNavItems = [

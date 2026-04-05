@@ -294,6 +294,80 @@ async def set_default(
 
 
 # ============================================================
+# 平台应用列表（供导入使用）
+# ============================================================
+
+@router.get("/{env_id}/remote-apps")
+async def list_remote_apps(
+    env_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """列出平台上可导入的应用列表（排除已导入的）"""
+    from app.models import Application
+
+    result = await db.execute(
+        select(PlatformEnv).where(
+            PlatformEnv.id == env_id,
+            PlatformEnv.tenant_id == ctx.tenant_id,
+        )
+    )
+    env = result.scalar_one_or_none()
+    if not env:
+        raise HTTPException(status_code=404, detail="环境不存在")
+
+    if not env.token:
+        raise HTTPException(status_code=400, detail="环境未连接，请先登录")
+
+    # 自动刷新 token
+    client = APaaSClient(base_url=env.base_url, tenant_id=env.platform_tenant_id, token=env.token)
+    try:
+        remote_apps = await client.query_app_list()
+    except Exception:
+        if env.username and env.password_enc:
+            try:
+                password = decrypt_password(env.password_enc)
+                login_result = await client.login(env.username, password)
+                env.token = login_result.get("token", "")
+                env.status = "connected"
+                await db.commit()
+                client = APaaSClient(
+                    base_url=env.base_url,
+                    tenant_id=env.platform_tenant_id,
+                    token=env.token,
+                )
+                remote_apps = await client.query_app_list()
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"查询平台应用失败: {e}")
+        else:
+            raise HTTPException(status_code=400, detail="token 过期且无登录凭据")
+
+    # 查询已导入的 apaas_app_id
+    imported_result = await db.execute(
+        select(Application.apaas_app_id).where(
+            Application.tenant_id == ctx.tenant_id,
+            Application.apaas_app_id.isnot(None),
+        )
+    )
+    imported_ids = {row[0] for row in imported_result.all() if row[0]}
+
+    # 过滤并格式化
+    apps = []
+    for a in remote_apps:
+        app_id = str(a.get("id", a.get("appId", "")))
+        apps.append({
+            "apaas_app_id": app_id,
+            "app_name": a.get("appName", a.get("name", "")),
+            "app_code": a.get("appCode", a.get("code", "")),
+            "description": a.get("description", a.get("appDescription", "")),
+            "status": a.get("status", ""),
+            "already_imported": app_id in imported_ids,
+        })
+
+    return apps
+
+
+# ============================================================
 # iframe 嵌入 URL
 # ============================================================
 

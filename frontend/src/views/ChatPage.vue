@@ -2411,10 +2411,26 @@ const handleDocUpload = async (e: Event) => {
   const file = target.files?.[0]
   if (!file) return
   target.value = '' // reset for re-upload
+
+  // 已有应用 → 走增量更新流程
+  if (existingAppId.value) {
+    try {
+      await ElMessageBox.confirm(
+        `当前已关联应用，上传新文档将与现有配置对比并生成变更计划。`,
+        '更新设计文档',
+        { confirmButtonText: '增量更新', cancelButtonText: '取消', type: 'info' }
+      )
+      await handleDocVersionUpload(file, existingAppId.value)
+    } catch {
+      // 用户取消
+    }
+    return
+  }
+
   await uploadDocFile(file)
 }
 
-// ── 上传文档新版本并分析变更（占位，保留以备将来使用）──
+// ── 上传文档新版本并分析变更 ──
 const handleDocVersionUpload = async (file: File, appId: number) => {
   const userMsgId = Date.now()
   messages.push({ id: userMsgId, role: 'user', content: `📄 上传文档新版本: ${file.name}`, created_at: '' })

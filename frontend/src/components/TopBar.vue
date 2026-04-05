@@ -61,7 +61,13 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useRouter } from 'vue-router'
+import { useUserStore } from '@/stores/user'
+import ThemeToggle from '@/components/ThemeToggle.vue'
+
+const userStore = useUserStore()
+const userInitial = computed(() => (userStore.user?.username || 'A').slice(0, 1))
 
 const props = withDefaults(defineProps<{
   title?: string

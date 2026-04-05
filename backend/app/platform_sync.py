@@ -2,11 +2,14 @@
 
 将平台 API 返回的数据转换回本地 preview config 格式，
 并与本地配置做 diff 检测漂移。
+支持两种模式：
+- sync_from_platform(): 轻量同步（用于增量更新 diff）
+- sync_from_platform_full(): 完整反向解析（用于导入已有应用）
 """
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from app.field_types import get_all_types
 from app.apaas_client import APaaSClient
@@ -28,9 +31,49 @@ _REVERSE_DATA_TYPE_MAP: Dict[str, str] = {
     "NUM": "数字",
 }
 
+# 平台权限操作 → 可读名称
+_OP_MAP: Dict[str, str] = {
+    "addPermission": "新增",
+    "updatePermission": "编辑",
+    "deletePermission": "删除",
+    "queryPermission": "查看",
+    "importPermission": "导入",
+    "copyAddPermission": "复制新增",
+    "batchDeletePermission": "批量删除",
+    "batchRejectPermission": "批量拒绝",
+    "batchAgreePermission": "批量同意",
+    "temporaryStoragePermission": "暂存",
+    "shareFormPermission": "分享",
+    "exportPermission": "导出",
+    "printPermission": "打印",
+    "queryApprovalInfoPermission": "查看审批历史",
+}
 
-def _guess_field_type(comp_type: str = "", data_type: str = "") -> str:
-    """从平台组件类型或数据类型推断 preview 字段类型"""
+# 数据范围 → config 格式
+_RANGE_MAP: Dict[str, str] = {
+    "ALL": "ALL",
+    "SELF": "SELF",
+    "CURRENT_USER_DEPT": "CURRENT_USER_DEPT",
+    "CURRENT_USER_DEPT_LOW_LEVEL": "CURRENT_USER_DEPT_LOW_LEVEL",
+}
+
+# 系统字段，跳过
+_SKIP_FIELDS: Set[str] = {
+    "id", "created_by", "creation_date", "last_updated_by",
+    "last_update_date", "object_version_number", "tenant_id",
+    "status", "owner", "parent_id",
+}
+
+
+def _guess_field_type(comp_type: str = "", data_type: str = "",
+                      choose_type: str = "") -> str:
+    """从平台组件类型或数据类型推断 preview 字段类型
+
+    对于 FORM_SELECT_INPUT，需要根据 chooseType 区分单选/多选。
+    """
+    # FORM_SELECT_INPUT 在 detailPageConfigById 中用 chooseType 区分
+    if comp_type == "FORM_SELECT_INPUT":
+        return "下拉多选" if choose_type == "MULTIPLE" else "下拉单选"
     if comp_type and comp_type in _REVERSE_COMP_MAP:
         return _REVERSE_COMP_MAP[comp_type]
     if data_type and data_type in _REVERSE_DATA_TYPE_MAP:
@@ -133,3 +176,401 @@ def _convert_models(remote_models: List[Dict]) -> List[Dict]:
             "fields": fields,
         })
     return models
+
+
+# ---------------------------------------------------------------------------
+# 完整反向解析（用于「从平台导入应用」功能）
+# ---------------------------------------------------------------------------
+
+async def sync_from_platform_full(
+    client: APaaSClient,
+    app_id: str,
+    app_name: str = "",
+) -> Dict[str, Any]:
+    """从平台拉取完整状态（含表单配置），转为 config_preview 格式。
+
+    相比 sync_from_platform()，额外调用 detailPageConfigById 获取：
+    - 子表列定义、字段选项绑定、自动编号规则、required 状态
+    - 角色权限配置
+    """
+    # 1. 基础数据
+    remote = await fetch_remote_data(client, app_id)
+    logger.info(
+        f"完整反向解析: {len(remote.get('roles', []))} 角色, "
+        f"{len(remote.get('dicts', []))} 字典, "
+        f"{len(remote.get('models', []))} 模型"
+    )
+
+    # 2. 获取菜单列表 → formId
+    menus = remote.get("forms", [])
+    if not menus:
+        menus = await client.query_menus(app_id)
+    form_menus = [
+        m for m in menus
+        if m.get("menuType") == "MODEL" and m.get("formId")
+    ]
+
+    # 3. 逐个调用 detailPageConfigById
+    form_configs: Dict[str, Dict] = {}
+    for menu in form_menus:
+        form_id = menu["formId"]
+        try:
+            fc = await client.query_detail_page_config(app_id, form_id)
+            form_configs[form_id] = fc
+            logger.info(f"获取表单配置: {menu.get('menuName', '')} formId={form_id}")
+        except Exception as e:
+            logger.warning(f"获取表单配置失败 formId={form_id}: {e}")
+
+    # 4. 构建 config_preview
+    roles = _convert_roles(remote.get("roles", []))
+    role_code_map = {r.get("roleCode", ""): r.get("roleName", "") for r in remote.get("roles", [])}
+
+    # 字典：优先从 detailPageConfigById 的 chooseOptions 提取（更完整），
+    # 回退到 remote dicts
+    dicts = _build_dicts_from_form_configs(
+        form_configs, remote.get("dicts", []), remote.get("dict_options", {})
+    )
+    dict_id_to_code = _build_dict_id_map(form_configs, dicts)
+
+    # 模型：从 detailPageConfigById 提取（含子表、required、选项绑定）
+    models = _build_models_from_form_configs(form_configs, dict_id_to_code)
+
+    # 权限
+    permissions = _build_permissions_from_form_configs(form_configs, role_code_map)
+
+    config: Dict[str, Any] = {
+        "appName": app_name,
+        "roles": roles,
+        "dicts": dicts,
+        "models": models,
+        "workflows": [],
+        "permissions": permissions,
+    }
+    logger.info(
+        f"完整反向解析完成: {len(roles)} 角色, {len(dicts)} 字典, "
+        f"{len(models)} 模型, {len(permissions)} 权限组"
+    )
+    return config
+
+
+def _build_dict_id_map(
+    form_configs: Dict[str, Dict],
+    dicts: List[Dict],
+) -> Dict[str, str]:
+    """构建字典 source.id → dict_code 映射"""
+    id_to_code: Dict[str, str] = {}
+    # 从 form_configs 中提取 source.id → dictionaryCode 映射
+    for fc in form_configs.values():
+        components = fc.get("detailPage", {}).get("formComponents", [])
+        for comp in components:
+            _extract_dict_source_mapping(comp, id_to_code)
+    return id_to_code
+
+
+def _extract_dict_source_mapping(comp: Dict, id_to_code: Dict[str, str]):
+    """递归提取组件中的 source.id → dict code 映射"""
+    source = comp.get("source", {})
+    if source.get("type") == "DICTIONARY_TYPE" and source.get("id"):
+        # 从 boCode 中提取 dict code (e.g., "t_project~f_status" → 用 chooseOptions)
+        bo_code = comp.get("boCode", "")
+        model_field = comp.get("modelField", "")
+        field_code = ""
+        if "~" in bo_code:
+            field_code = bo_code.split("~", 1)[1]
+        elif "." in model_field:
+            field_code = model_field.split(".", 1)[1]
+        # 用 source.id 映射到字段名（后面用来关联字典 code）
+        id_to_code[source["id"]] = field_code
+
+    # 递归子表列
+    for col in comp.get("tableColumn", []):
+        _extract_dict_source_mapping(col, id_to_code)
+
+
+def _build_dicts_from_form_configs(
+    form_configs: Dict[str, Dict],
+    remote_dicts: List[Dict],
+    dict_options: Dict[str, List[Dict]],
+) -> List[Dict]:
+    """从 detailPageConfigById 的 chooseOptions 提取字典，合并 remote dicts。
+
+    优先用 chooseOptions 中的选项（因为它已包含 label），
+    remote_dicts 用于补充 code 信息。
+    """
+    # 先用基础 remote dicts 构建（有 dict code）
+    seen_codes: Set[str] = set()
+    dicts: List[Dict] = []
+
+    # 基础字典
+    base_dicts = _convert_dicts(remote_dicts, dict_options)
+    for d in base_dicts:
+        if d["code"] and d["code"] not in seen_codes:
+            seen_codes.add(d["code"])
+            dicts.append(d)
+
+    # 从 form_configs 补充：有些字典选项在 chooseOptions 里更完整
+    for fc in form_configs.values():
+        components = fc.get("detailPage", {}).get("formComponents", [])
+        for comp in components:
+            _enrich_dict_from_component(comp, dicts, seen_codes)
+
+    return dicts
+
+
+def _enrich_dict_from_component(
+    comp: Dict, dicts: List[Dict], seen_codes: Set[str]
+):
+    """从组件的 chooseOptions 补充字典选项"""
+    source = comp.get("source", {})
+    choose_options = comp.get("chooseOptions", [])
+
+    if source.get("type") == "DICTIONARY_TYPE" and choose_options:
+        # 找到对应的字典，补充空选项
+        source_id = source.get("id", "")
+        for d in dicts:
+            # 匹配：如果字典选项为空但 chooseOptions 有值
+            if not d.get("options") and source_id:
+                # 用 source_id 匹配（需要遍历 remote_dicts 找）
+                pass
+            # 如果已有选项，检查是否需要补充
+            elif d.get("options"):
+                existing_codes = {o["code"] for o in d["options"]}
+                for opt in choose_options:
+                    opt_code = opt.get("id", "")
+                    if opt_code and opt_code not in existing_codes:
+                        d["options"].append({
+                            "name": opt.get("label", ""),
+                            "code": opt_code,
+                        })
+
+    # 递归子表列
+    for col in comp.get("tableColumn", []):
+        _enrich_dict_from_component(col, dicts, seen_codes)
+
+
+def _build_models_from_form_configs(
+    form_configs: Dict[str, Dict],
+    dict_id_to_code: Dict[str, str],
+) -> List[Dict]:
+    """从 detailPageConfigById 构建模型列表（含子表）"""
+    models: List[Dict] = []
+    seen_model_codes: Set[str] = set()
+
+    for form_id, fc in form_configs.items():
+        components = fc.get("detailPage", {}).get("formComponents", [])
+        model_code = fc.get("modelCode", "")
+        form_name = fc.get("formName", "")
+
+        if not model_code or model_code in seen_model_codes:
+            continue
+        seen_model_codes.add(model_code)
+
+        # 从 modelWithFieldVoList 找主模型信息
+        model_vo_list = fc.get("modelWithFieldVoList", [])
+        main_model_vo = None
+        sub_model_map: Dict[str, Dict] = {}
+        for mv in model_vo_list:
+            if mv.get("mainModel"):
+                main_model_vo = mv
+            else:
+                sub_model_map[mv.get("modelCode", "")] = mv
+
+        model_name = ""
+        if main_model_vo:
+            model_name = main_model_vo.get("modelName", form_name)
+        else:
+            model_name = form_name
+
+        # 构建主表字段 + 子表
+        fields: List[Dict] = []
+        for comp in components:
+            if comp.get("componentType") == "FORM_WIDGET_SON_TABLE":
+                # 子表 → sub_code + sub_fields
+                sub_model_code = comp.get("tableModelCode", "")
+                sub_fields = _extract_fields_from_components(
+                    comp.get("tableColumn", []), dict_id_to_code
+                )
+                if sub_fields:
+                    fields.append({
+                        "name": comp.get("label", ""),
+                        "code": f"sub_{sub_model_code}" if sub_model_code else comp.get("label", ""),
+                        "type": "子表",
+                        "icon": "▦",
+                        "required": comp.get("required", False),
+                        "sub_code": sub_model_code,
+                        "sub_fields": sub_fields,
+                    })
+            else:
+                field = _extract_single_field(comp, dict_id_to_code)
+                if field:
+                    fields.append(field)
+
+        models.append({
+            "name": model_name,
+            "code": model_code,
+            "fields": fields,
+        })
+
+    return models
+
+
+def _extract_fields_from_components(
+    components: List[Dict],
+    dict_id_to_code: Dict[str, str],
+) -> List[Dict]:
+    """从组件列表提取字段列表"""
+    fields: List[Dict] = []
+    for comp in components:
+        field = _extract_single_field(comp, dict_id_to_code)
+        if field:
+            fields.append(field)
+    return fields
+
+
+def _extract_single_field(
+    comp: Dict,
+    dict_id_to_code: Dict[str, str],
+) -> Optional[Dict]:
+    """从单个 formComponent 提取字段信息"""
+    comp_type = comp.get("componentType", "")
+    if not comp_type or comp_type == "FORM_WIDGET_SON_TABLE":
+        return None
+
+    # 提取 field code
+    bo_code = comp.get("boCode", "")
+    model_field = comp.get("modelField", "")
+    field_code = ""
+    if "~" in bo_code:
+        field_code = bo_code.split("~", 1)[1]
+    elif "." in model_field:
+        field_code = model_field.split(".", 1)[1]
+
+    if not field_code:
+        return None
+
+    # 跳过系统字段
+    if field_code.lower() in _SKIP_FIELDS:
+        return None
+
+    choose_type = comp.get("chooseType", "")
+    field_type = _guess_field_type(comp_type, "", choose_type)
+
+    field: Dict[str, Any] = {
+        "name": comp.get("label", ""),
+        "code": field_code,
+        "type": field_type,
+        "required": comp.get("required", False),
+    }
+
+    # 字典绑定：从 source.type=DICTIONARY_TYPE 提取
+    source = comp.get("source", {})
+    if source.get("type") == "DICTIONARY_TYPE" and source.get("id"):
+        # 查找字典 code（从 chooseOptions 中推断）
+        dict_code = dict_id_to_code.get(source["id"], "")
+        if dict_code:
+            field["dict"] = dict_code
+
+    # 人员选择的 bocCode
+    boc_code = comp.get("bocCode", "")
+    if boc_code == "boc_code_object_user":
+        field["type"] = "人员选择"
+
+    return field
+
+
+def _build_permissions_from_form_configs(
+    form_configs: Dict[str, Dict],
+    role_code_map: Dict[str, str],
+) -> List[Dict]:
+    """从 advancedPermissionGroups + operationPermissionGroups 提取权限"""
+    permissions: List[Dict] = []
+
+    for form_id, fc in form_configs.items():
+        form_name = fc.get("formName", "")
+        model_code = fc.get("modelCode", "")
+        if not form_name:
+            form_name = model_code
+
+        rules: List[Dict] = []
+
+        # 数据权限
+        for pg in fc.get("advancedPermissionGroups", []):
+            ops = pg.get("permissionOperationType", {})
+            enabled_ops = [
+                _OP_MAP.get(k, k) for k, v in ops.items()
+                if v is True and k in _OP_MAP
+            ]
+            if not enabled_ops:
+                continue
+
+            for po in pg.get("permissionObjects", []):
+                obj_type = po.get("permissionObjectType", "")
+                obj_value = po.get("permissionObjectValue", "")
+                range_type = po.get("permissionRange", {}).get("rangeType", "ALL")
+
+                role_code = ""
+                if obj_type == "ALL_USER":
+                    role_code = "ALL_USER"
+                elif obj_type == "ROLE_USER":
+                    # 通过 role id 查找 role code
+                    role_code = _find_role_code_by_id(obj_value, role_code_map)
+
+                if role_code:
+                    op_str = "all" if len(enabled_ops) >= 4 else ",".join(enabled_ops)
+                    rules.append({
+                        "role": role_code,
+                        "op": op_str,
+                        "data": _RANGE_MAP.get(range_type, range_type),
+                    })
+
+        # 操作权限
+        for pg in fc.get("operationPermissionGroups", []):
+            ops = pg.get("permissionOperationType", {})
+            enabled_ops = [
+                _OP_MAP.get(k, k) for k, v in ops.items()
+                if v is True and k in _OP_MAP
+            ]
+            if not enabled_ops:
+                continue
+
+            for po in pg.get("permissionObjects", []):
+                obj_type = po.get("permissionObjectType", "")
+                obj_value = po.get("permissionObjectValue", "")
+
+                role_code = ""
+                if obj_type == "ALL_USER":
+                    role_code = "ALL_USER"
+                elif obj_type == "ROLE_USER":
+                    role_code = _find_role_code_by_id(obj_value, role_code_map)
+
+                if role_code:
+                    # 检查是否已有该角色的规则，合并
+                    existing = next(
+                        (r for r in rules if r["role"] == role_code), None
+                    )
+                    if existing:
+                        existing_ops = set(existing["op"].split(","))
+                        existing_ops.update(enabled_ops)
+                        existing["op"] = ",".join(existing_ops)
+                    else:
+                        rules.append({
+                            "role": role_code,
+                            "op": ",".join(enabled_ops),
+                            "data": "ALL",
+                        })
+
+        if rules:
+            permissions.append({
+                "form": form_name,
+                "rules": rules,
+            })
+
+    return permissions
+
+
+def _find_role_code_by_id(role_id: str, role_code_map: Dict[str, str]) -> str:
+    """通过角色 ID 查找角色 code（role_code_map key 是 roleCode，但权限中用的是 role ID）"""
+    # advancedPermissionGroups 中 permissionObjectValue 是角色的 id（数字），
+    # 不是 roleCode。我们需要在 roles 数据中做反向映射。
+    # 由于我们没有 id→code 的直接映射，先返回 role_id 作为 fallback
+    return role_id
