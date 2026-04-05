@@ -599,8 +599,9 @@ class VibeCodingAgent:
 
 ## Third-party Dependencies
 - Element UI is globally registered by the platform — do NOT import it.
-- For any other library NOT pre-installed (e.g. echarts, d3, lodash): run `npm install <pkg>` first, then `import` it at the top of the file. NEVER use `this.$echarts` or any `this.$xxx` shortcut for libraries that are not globally registered.
+- For any other library NOT pre-installed (e.g. echarts, d3, lodash): run `npm install <pkg>` via run_command first, then `import` it at the top of the file. NEVER use `this.$echarts` or any `this.$xxx` shortcut for libraries that are not globally registered.
 - Check `package.json` dependencies before assuming a library is available.
+- Do NOT manually edit or write `package.json` — only use `npm install <pkg>` to add dependencies.
 
 ## Technical Constraints
 - aPaaS form component with 7 render scenes (edit/read/ide/list/print/search/search-ide)
@@ -633,7 +634,7 @@ class VibeCodingAgent:
 - **Focus on layout structure**: `x-app-layout`, `header`, `menu`, `appPage`, and any optional layout-only subcomponents.
 - `templateType` must remain `PAGE_LAYOUT`
 - `appPage` must forward platform content with `<slot name="appPage">`
-- Element UI is globally registered — do NOT import it. For any other library not pre-installed, run `npm install <pkg>` and `import` it explicitly. NEVER use `this.$xxx` for libraries not globally registered.
+- Element UI is globally registered — do NOT import it. For any other library not pre-installed, run `npm install <pkg>` via run_command and `import` it explicitly. Do NOT manually edit `package.json`. NEVER use `this.$xxx` for libraries not globally registered.
 """
         elif project_type == "form-list":
             workflow = """
@@ -649,7 +650,7 @@ class VibeCodingAgent:
 - `templateType` must remain `LIST_VIEW`
 - Do NOT apply the 7-scene form-component pattern
 - Focus on `index.js`, `apaas.json`, `form-view/*.vue`, and i18n files
-- Element UI is globally registered — do NOT import it. For any other library not pre-installed, run `npm install <pkg>` and `import` it explicitly. NEVER use `this.$xxx` for libraries not globally registered.
+- Element UI is globally registered — do NOT import it. For any other library not pre-installed, run `npm install <pkg>` via run_command and `import` it explicitly. Do NOT manually edit `package.json`. NEVER use `this.$xxx` for libraries not globally registered.
 """
         elif project_type == "plugin":
             workflow = """
@@ -665,7 +666,7 @@ class VibeCodingAgent:
 - `templateType` must remain `FRONTEND_PLUGIN`
 - Every entry file must default-export `{ install, activate, staticComponents }`
 - Do NOT generate form-component files like edit.vue/read.vue/setting.vue
-- Element UI is globally registered — do NOT import it. For any other library not pre-installed, run `npm install <pkg>` and `import` it explicitly. NEVER use `this.$xxx` for libraries not globally registered.
+- Element UI is globally registered — do NOT import it. For any other library not pre-installed, run `npm install <pkg>` via run_command and `import` it explicitly. Do NOT manually edit `package.json`. NEVER use `this.$xxx` for libraries not globally registered.
 """
         elif project_type == "backend-api":
             workflow = """
