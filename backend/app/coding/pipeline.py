@@ -760,58 +760,9 @@ async def run_coding_pipeline(
     try:
         # ---- 意图检测 ----
         msg_lower = params.message.strip().lower()
-        is_debug_intent = any(kw in msg_lower for kw in ['debug', '调试', '帮我debug', '启动debug', '启动调试', '帮我预览', '启动预览', '预览一下', '看一下效果'])
+        # 调试功能已禁用，所有请求直接进入代码生成流程
+        is_debug_intent = False
         is_publish_intent = any(kw in msg_lower for kw in ['发布', '打包', '上传', 'publish', 'build'])
-
-        # Debug 模式处理
-        if is_debug_intent and ws_id:
-            _is_platform_debug = any(kw in msg_lower for kw in ['平台调试', '设计器调试', '配置调试', '平台debug', 'platform debug', '设计器'])
-            _is_app_debug = any(kw in msg_lower for kw in ['应用调试', '前台调试', '看效果', '应用debug', 'app debug', '前台'])
-            _debug_mode = "platform" if _is_platform_debug else ("app" if _is_app_debug else None)
-            _push_replay_message(replay_stream_messages, "user", params.message)
-
-            if _debug_mode is None:
-                yield _record_event({"type": "content", "content": "请选择调试模式：\n\n**1. 平台调试（设计态）** — 在平台后台的表单设计器中拖入组件、配置属性\n\n**2. 应用调试（运行态）** — 在应用前台查看组件/页面的实际效果\n\n请回复 **平台调试** 或 **应用调试**"})
-                yield _record_event({"type": "done", "workspace_id": ws_id, "conversation_id": conversation_id})
-                return
-
-            yield _record_event({"type": "step", "step": "debug", "status": "running", "data": {"message": f"正在启动{'平台' if _debug_mode == 'platform' else '应用'}调试..."}})
-            ws_path = ws_mgr.get_workspace_path(ws_id)
-            apaas_json_path = ws_path / "src" / "apaas.json"
-            apaas_config = json.loads(apaas_json_path.read_text()) if apaas_json_path.exists() else {}
-            output_name = apaas_config.get("outputName", "")
-            custom_widget_list = apaas_config.get("customWidgetList", [])
-
-            serve_info = ws_mgr.is_serve_running(ws_id)
-            if not serve_info["running"]:
-                yield {"type": "step", "step": "serve", "status": "running"}
-                serve_result = await ws_mgr.start_serve(ws_id)
-                serve_port = serve_result.get("port", 8080)
-                yield {"type": "step", "step": "serve", "status": "done"}
-            else:
-                serve_port = serve_info["port"]
-
-            _platform_url = _get_platform_url(project)
-            _tenant_id_str = (project.platform_tenant_id if project and project.platform_tenant_id else settings.apaas_tenant_id) or ""
-            _app_id = (project.platform_app_id if project else "") or ""
-            _app_code = (getattr(project, 'platform_app_code', '') if project else '') or ''
-
-            debug_result = await ws_mgr.start_debug(
-                ws_id=ws_id, serve_port=serve_port,
-                platform_url=_platform_url, tenant_id=_tenant_id_str,
-                app_id=_app_id, output_name=output_name,
-                custom_widget_list=custom_widget_list,
-                debug_mode=_debug_mode, app_code=_app_code,
-            )
-
-            if debug_result.get("status") == "ok":
-                yield _record_event({"type": "step", "step": "debug", "status": "done"})
-                yield _record_event({"type": "content", "content": "✅ Debug 浏览器已打开！\n\n请在 Chromium 中：\n1. **登录平台**\n2. **导航到目标表单/页面**\n3. **F5 刷新**页面，组件会自动注入\n\n修改代码后刷新浏览器即可看到更新。"})
-            else:
-                yield _record_event({"type": "step", "step": "debug", "status": "error"})
-                yield _record_event({"type": "content", "content": f"Debug 启动失败: {debug_result.get('message', '')}"})
-
-            yield _record_event({"type": "done", "workspace_id": ws_id, "conversation_id": conversation_id})
             return
 
         # Publish 模式处理
