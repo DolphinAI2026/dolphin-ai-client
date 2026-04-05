@@ -520,15 +520,14 @@ async def import_from_platform(
     if not env.token:
         raise HTTPException(status_code=400, detail="环境未连接，请先登录")
 
-    # 2. 检查是否已导入
-    existing = await db.execute(
+    # 2. 检查是否已导入（允许重新导入刷新配置）
+    existing_result = await db.execute(
         select(Application).where(
             Application.tenant_id == ctx.tenant_id,
             Application.apaas_app_id == body.apaas_app_id,
         )
     )
-    if existing.scalar_one_or_none():
-        raise HTTPException(status_code=409, detail="该应用已导入")
+    existing_app = existing_result.scalar_one_or_none()
 
     # 3. 创建 client，获取应用信息
     client = APaaSClient(
@@ -580,22 +579,32 @@ async def import_from_platform(
         logger.warning(f"生成 markdown 失败: {e}")
         markdown_spec = ""
 
-    # 6. 创建本地 Application 记录
+    # 6. 创建或更新本地 Application 记录
     config_str = json.dumps(config, ensure_ascii=False)
-    new_app = Application(
-        user_id=ctx.user.id,
-        tenant_id=ctx.tenant_id,
-        created_by=ctx.user.id,
-        app_name=app_name,
-        app_code=app_code or app_name.lower().replace(" ", "_"),
-        description=app_desc,
-        config_preview=config_str,
-        requirement_doc=markdown_spec,
-        apaas_app_id=body.apaas_app_id,
-        platform_env_id=body.env_id,
-        status="completed",
-    )
-    db.add(new_app)
+    if existing_app:
+        # 重新导入：更新已有记录
+        existing_app.app_name = app_name
+        existing_app.description = app_desc
+        existing_app.config_preview = config_str
+        existing_app.requirement_doc = markdown_spec
+        existing_app.platform_env_id = body.env_id
+        existing_app.status = "completed"
+        new_app = existing_app
+    else:
+        new_app = Application(
+            user_id=ctx.user.id,
+            tenant_id=ctx.tenant_id,
+            created_by=ctx.user.id,
+            app_name=app_name,
+            app_code=app_code or app_name.lower().replace(" ", "_"),
+            description=app_desc,
+            config_preview=config_str,
+            requirement_doc=markdown_spec,
+            apaas_app_id=body.apaas_app_id,
+            platform_env_id=body.env_id,
+            status="completed",
+        )
+        db.add(new_app)
     await db.commit()
     await db.refresh(new_app)
 
