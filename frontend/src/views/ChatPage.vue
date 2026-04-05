@@ -1565,6 +1565,15 @@ const loadLatestDocForApp = async (appId: number) => {
     const latest = [...versions].sort((a: any, b: any) => (b.version || 0) - (a.version || 0))[0]
     if (latest?.filename) lastParsedFilename.value = latest.filename
     latestDocContent.value = latest?.raw_content || ''
+    // 没有 document_version 记录时，fallback 到应用的 requirement_doc
+    if (!latestDocContent.value) {
+      try {
+        const app = await applicationApi.get(appId) as any
+        if (app?.requirement_doc) {
+          latestDocContent.value = app.requirement_doc
+        }
+      } catch { /* ignore */ }
+    }
     if (!parsedAppCode.value && latestDocContent.value) {
       const codeFromDoc = extractAppCodeFromText(latestDocContent.value)
       if (codeFromDoc) parsedAppCode.value = codeFromDoc

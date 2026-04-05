@@ -42,6 +42,7 @@ def _enrich(app: Application) -> ApplicationResponse:
         id=app.id, app_name=app.app_name, app_code=app.app_code,
         description=app.description, status=app.status,
         apaas_app_id=app.apaas_app_id, config_preview=config,
+        requirement_doc=app.requirement_doc or "",
         models=models, forms=forms, roles=roles, dicts=dicts,
         created_at=app.created_at, updated_at=app.updated_at
     )

@@ -101,6 +101,7 @@ class ApplicationResponse(BaseModel):
     apaas_app_id: Optional[str] = None
     apaas_url: Optional[str] = None
     config_preview: Optional[dict] = None
+    requirement_doc: Optional[str] = None
     models: int = 0
     forms: int = 0
     roles: int = 0
