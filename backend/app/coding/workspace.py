@@ -877,10 +877,17 @@ class WorkspaceManager:
 
     def _build_npm_env(self) -> dict[str, str]:
         env = {**os.environ}
-        # 确保 /usr/local/bin 在 PATH 中，node/npm/df-apaas-cli 都安装在此
+        # 确保 /usr/local/bin 和 ~/.npm-global/bin 在 PATH 中
+        # node/npm 在 /usr/local/bin，df-apaas-cli 在 ~/.npm-global/bin
         path = env.get("PATH", "")
+        npm_global_bin = os.path.expanduser("~/.npm-global/bin")
+        extra = []
         if "/usr/local/bin" not in path:
-            env["PATH"] = f"/usr/local/bin:{path}"
+            extra.append("/usr/local/bin")
+        if npm_global_bin not in path:
+            extra.append(npm_global_bin)
+        if extra:
+            env["PATH"] = ":".join(extra) + ":" + path
         env.setdefault("npm_config_registry", DEFAULT_NPM_REGISTRY)
         env.setdefault("NPM_CONFIG_REGISTRY", DEFAULT_NPM_REGISTRY)
         env.setdefault("npm_config_cache", str(NPM_CACHE_ROOT))
@@ -976,6 +983,10 @@ class WorkspaceManager:
         temp_dir = Path(tempfile.mkdtemp(prefix="apaas-npm-install.", dir=str(DEPENDENCY_CACHE_ROOT)))
         try:
             shutil.copy2(ws_path / "package.json", temp_dir / "package.json")
+            # 拷贝 .npmrc（包含私有 registry 配置），确保 @x-apaas scope 可以正确解析
+            npmrc_src = ws_path / ".npmrc"
+            if npmrc_src.exists():
+                shutil.copy2(npmrc_src, temp_dir / ".npmrc")
 
             proc = await asyncio.create_subprocess_exec(
                 "npm",
