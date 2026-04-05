@@ -890,3 +890,19 @@ computed: {
 3. 尽可能遵守已有文件内容，补充相关代码。如果为空则根据规范编写
 4. 不要随意更改已有的配置内容和code
 5. 组件使用中的完整业务数据使用 this.formData 获取，结构是组件 uuid:值
+
+### ⚠️ setting.vue 配置保存规范（严禁违反）
+
+**唯一正确方式：模板控件直接 v-model 双向绑定**：
+```html
+<!-- ✅ 正确 -->
+<el-select v-model="componentConfig.customComponentConfig.chartType" size="mini" />
+<el-input v-model="componentConfig.customComponentConfig.dataSource" size="mini" />
+```
+平台自动感知 `componentConfig.customComponentConfig` 属性变化并持久化，**不需要任何保存方法**。
+
+**严禁使用以下方式**（方法不存在，或不会触发平台持久化）：
+- ❌ `saveConfig()` — 不要封装此方法
+- ❌ `data.localConfig` + `created()` 初始化的模式 — 不需要本地副本
+- ❌ `updateCustomConfig(config)` / `updateCustomComponentConfig(config)` — 不存在
+- ❌ `this.formEngine.setWidgetInfo(...)` — formEngine 上没有此方法

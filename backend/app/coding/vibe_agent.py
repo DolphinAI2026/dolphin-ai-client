@@ -285,10 +285,22 @@ class VibeCodingAgent:
                     for idx in sorted(tool_calls_map.keys()):
                         entry = tool_calls_map[idx]
                         if entry["name"]:  # Skip empty entries
+                            # Ensure arguments is valid JSON string before adding to history
+                            # Invalid JSON in tool_calls history will cause LLM API 400 errors
+                            raw_args = entry["arguments"]
+                            if isinstance(raw_args, str):
+                                try:
+                                    json.loads(raw_args)
+                                    valid_args = raw_args
+                                except json.JSONDecodeError:
+                                    print(f"[Agent] Warning: invalid JSON arguments for tool '{entry['name']}', replacing with {{}}", flush=True)
+                                    valid_args = "{}"
+                            else:
+                                valid_args = json.dumps(raw_args) if raw_args else "{}"
                             assembled_tool_calls.append({
                                 "id": entry["id"] or f"call_{turn}_{idx}",
                                 "type": "function",
-                                "function": {"name": entry["name"], "arguments": entry["arguments"]},
+                                "function": {"name": entry["name"], "arguments": valid_args},
                             })
                     if assembled_tool_calls:
                         assistant_msg["tool_calls"] = assembled_tool_calls
