@@ -357,6 +357,26 @@ const install = function(Vue) {
 export default { install }
 ```
 
+### 国际化入口 (src/form-component-local/index.js)
+```javascript
+import zhLocaleModule from './zh-CN/index.js'
+import enLocaleModule from './en-US/index.js'
+
+const platformI18n =
+  window.df?.getI18n?.() ||
+  window.APaaSSDK?.context?.globalVueI18n
+
+if (platformI18n?.mergeLocaleMessage) {
+  platformI18n.mergeLocaleMessage('zh-CN', zhLocaleModule)
+  platformI18n.mergeLocaleMessage('en-US', enLocaleModule)
+}
+```
+
+**不要改成下面这些变体**：
+- 不要写成直接调用 `window.df.getI18n().mergeLocaleMessage(...)`
+- 不要额外包一层 `const mergeLocaleMessage = ...bind(...)`
+- 优先使用 `platformI18n` 变量，兼容 `window.df` 和 `window.APaaSSDK.context.globalVueI18n`
+
 ### apaas.json
 ```json
 {
@@ -404,7 +424,6 @@ const FormComponentXxxWidgetConfig = {
     validator: { uniqueCheck: false },
     validatorList: [{ validatorConfig: [], validatorMessage: '' }],
     special: { frontBusinessObjectComponentType: 'BOF_TEXT', saveWithHidden: false },
-    componentModelField: ['TEXT'],
     editor: {
       config: [
         'INFO', 'LABEL', 'FIELD_CODE', 'TITLE_DESCRIPTION', 'WIDTH',
@@ -415,6 +434,7 @@ const FormComponentXxxWidgetConfig = {
       excludeInTable: ['WIDTH']
     }
   },
+  componentModelField: ['STRING'],
   client: {
     mobile: {
       widget: { editor: { config: [...], excludeInTable: ['WIDTH'] } },
@@ -461,11 +481,13 @@ export default customFormEditorList
 **IDE 场景（设计态预览）**：
 - 使用 `<x-proxy-form-item>` 包裹
 - 混入 `FormWidgetMixin`
+- mixin 一律使用默认导入：`import FormWidgetMixin from '@/mixin/form-widget.mixin'`
 - 只显示静态占位预览，不需要交互逻辑
 
 **Edit 场景（编辑态）**：★ 最重要的组件
 - 使用 `<x-proxy-form-item>` 包裹
 - 混入 `FormWidgetMixin`
+- mixin 一律使用默认导入：`import FormWidgetMixin from '@/mixin/form-widget.mixin'`
 - 通过 `this.formValue` 读写表单值（JSON 字符串或普通值）
 - 通过 `this.widget.customComponentConfig` 获取设计器配置
 - 使用 `this.$set(this.formData, key, value)` 进行响应式数据更新
@@ -473,6 +495,7 @@ export default customFormEditorList
 **Read 场景（只读态）**：
 - 使用 `<x-proxy-form-item>` 包裹
 - 混入 `FormWidgetMixin`
+- mixin 一律使用默认导入：`import FormWidgetMixin from '@/mixin/form-widget.mixin'`
 - 只做数据展示，不允许编辑
 
 **List 场景（列表态）**：
@@ -481,10 +504,12 @@ export default customFormEditorList
 
 **Print 场景（打印态）**：
 - 混入 `PrintWidgetMixin`
+- 使用默认导入：`import PrintWidgetMixin from '@/mixin/print-widget.mixin'`
 - 纯文本展示
 
 **Search / Search-IDE 场景**：
 - 混入 `SearchWidgetMixin` / `SearchIdeWidgetMixin`
+- 使用默认导入：`import SearchWidgetMixin from '@/mixin/search-widget.mixin'`、`import SearchIdeWidgetMixin from '@/mixin/search-ide-widget.mixin'`
 - 搜索面板中的筛选控件
 
 ### FormWidgetMixin 提供的核心能力
@@ -594,7 +619,7 @@ export default {
 
 **setting.vue 不使用 FormWidgetMixin**。平台通过 EditorFormConfigMixin 传入 props。
 
-**正确模式**：接收 `componentConfig`（widget对象）作为 prop，模板中所有控件直接 `v-model="componentConfig.customComponentConfig.xxx"` 双向绑定，平台自动感知并持久化，**不需要 saveConfig、localConfig 等任何保存逻辑**。
+**正确模式**：接收 `componentConfig`（widget对象）作为 prop，为了规避 `vue/no-mutating-props`，在 `computed` 中提供 `customComponentConfig` 别名；模板中所有控件统一 `v-model="customComponentConfig.xxx"` 双向绑定，底层仍然写回 `componentConfig.customComponentConfig`。**重点不是方法名，而是配置写入路径必须正确**：不要使用 `localConfig`、`formData`、`config` 这类镜像状态，不要通过 `$emit('update:componentConfig', ...)` 或 formEngine 写入 API 回写。
 
 ```javascript
 export default {
@@ -620,6 +645,10 @@ export default {
     filterTableFromNodeFields: { default: null }
   },
   computed: {
+    customComponentConfig() {
+      const target = this.componentConfig || this.widget || null
+      return (target && target.customComponentConfig) || {}
+    },
     // ★ formEngine 优先从 prop 获取（设计器传入），其次 inject
     engine() {
       if (this.formEngine) return this.formEngine
@@ -633,21 +662,27 @@ export default {
         .filter(item => item.componentType === 'FORM_WIDGET_SON_TABLE')
     }
   }
-  // ★ 不需要 data.localConfig，不需要 created 初始化，不需要 saveConfig 方法
+  created() {
+    const target = this.componentConfig || this.widget || null
+    if (target && !target.customComponentConfig) {
+      this.$set(target, 'customComponentConfig', {})
+    }
+  }
+  // ★ 是否有 saveConfig / handleChange 方法不重要；关键是不要搞 data.localConfig / data.formData / data.config 镜像，不要通过 formEngine / $emit 回写
 }
 ```
 
-**模板示例 — 直接 v-model 绑定 customComponentConfig 属性**：
+**模板示例 — 使用 computed 别名，避免 lint 报 `vue/no-mutating-props`**：
 ```html
 <template>
   <div>
     <el-form-item label="数据来源">
-      <el-select v-model="componentConfig.customComponentConfig.dataSource" size="mini">
+      <el-select v-model="customComponentConfig.dataSource" size="mini">
         <el-option v-for="item in subTableList" :key="item.uuid" :label="item.label" :value="item.uuid" />
       </el-select>
     </el-form-item>
     <el-form-item label="图表类型">
-      <el-select v-model="componentConfig.customComponentConfig.chartType" size="mini">
+      <el-select v-model="customComponentConfig.chartType" size="mini">
         <el-option label="折线图" value="line" />
         <el-option label="柱状图" value="bar" />
       </el-select>
@@ -657,15 +692,18 @@ export default {
 ```
 
 **⚠️ Setting.vue 开发必须遵守的规则**：
-1. **控件直接 `v-model="componentConfig.customComponentConfig.xxx"`**，平台自动持久化，不需要任何保存方法
+1. **控件统一 `v-model="customComponentConfig.xxx"`**，底层仍对应 `componentConfig.customComponentConfig`，这样可以避开 `vue/no-mutating-props`
 2. **inject 声明必须带 `{ default: null }`**，不能用数组形式 `inject: ['xxx']`，否则找不到 provide 时组件会静默崩溃
 3. **配置直接存在 `customComponentConfig` 根级别**，如 `{ dataSource, xField, chartType }`，不要多嵌套一层如 `{ chartConfig: { ... } }`
 4. **edit/read/ide.vue 读取配置的路径必须和 setting.vue 存储路径一致**
-5. **严禁封装任何保存方法，严禁调用任何 formEngine 方法来保存配置**
+5. **是否封装 `saveConfig` / `handleChange` 之类的方法不是重点，重点是不能通过这些方法去操作镜像状态或调用 formEngine 写入配置**
+6. **严禁使用 `$emit('update:componentConfig', ...)`**，设计器不会监听这个事件
+7. **严禁用 `data.formData` / `data.localConfig` / `data.config` 或对应 watch 镜像一份配置再同步回去**，直接通过 `customComponentConfig` 别名操作
 
 **🚫 formEngine 上根本不存在以下方法，绝对不能调用（会直接报错）**：
 - ❌ `formEngine.updateWidgetConfig(...)` — 不存在
 - ❌ `formEngine.updateCustomComponentConfig(...)` — 不存在
+- ❌ `formEngine.updateWidgetCustomConfig(...)` — 不存在
 - ❌ `formEngine.setWidgetInfo(...)` — 不存在
 - ❌ `formEngine.saveConfig(...)` — 不存在
 - ❌ 任何通过 formEngine 写入配置的方法均不存在
@@ -692,7 +730,6 @@ widget: {
   // ... display, allow, default, validator 等标准配置 ...
   special: { frontBusinessObjectComponentType: 'BOF_TEXT', saveWithHidden: false },
   customComponentConfig: {},  // ★ 必须声明空对象！否则平台保存时不序列化它
-  componentModelField: ['TEXT'],
   editor: {
     config: [
       // ★ 不能删除任何标准编辑器配置项！否则平台校验会报错
@@ -743,11 +780,16 @@ computed: {
 - **网络请求用 `this.$request({...})` 配合 `.asyncThen()` / `.asyncErrorCatch()`**
 - **formValue 存储为 JSON 字符串（复杂数据）或普通字符串（简单值）**
 - **必须根据组件的值存储格式设置 widget.config.js 中的 componentModelField 和 frontBusinessObjectComponentType**：
-  - 存储单个字符串 → `componentModelField: ['TEXT']`, `frontBusinessObjectComponentType: 'BOF_TEXT'`
+  - `componentModelField` 必须与 `widget` 同级，不能写在 `widget` 内部
+  - `componentModelField` 只能是单选数组，且只支持 `['STRING']` / `['NUM']` / `['DATE']` / `['BIG_TEXT']`
+  - 存储单个字符串且值长度 < 500 → `componentModelField: ['STRING']`, `frontBusinessObjectComponentType: 'BOF_TEXT'`
+  - 存储单个字符串且值长度 ≥ 500（或长度不确定/可能较大）→ `componentModelField: ['BIG_TEXT']`, `frontBusinessObjectComponentType: 'BOF_TEXT'`
   - 存储单个日期值 → `componentModelField: ['DATE']`, `frontBusinessObjectComponentType: 'BOF_DATE'`
-  - 存储单个数字 → `componentModelField: ['NUMBER']`, `frontBusinessObjectComponentType: 'BOF_NUMBER'`
-  - 存储数组/JSON/复合值（如日期范围、多选、地址等） → `componentModelField: ['TEXT', 'LARGE_TEXT']`, `frontBusinessObjectComponentType: 'BOF_TEXT'`
-  - 判断依据是 formValue 的实际存储格式，不是组件的外观。例如"日期范围"存两个日期的数组，应该用 TEXT 而不是 DATE
+  - 存储单个数字 → `componentModelField: ['NUM']`, `frontBusinessObjectComponentType: 'BOF_NUMBER'`
+  - 存储数组/JSON/复合值（如日期范围、多选、地址等） → `componentModelField: ['BIG_TEXT']`, `frontBusinessObjectComponentType: 'BOF_TEXT'`
+  - 存储 base64、富文本、大容量内容 → `componentModelField: ['BIG_TEXT']`
+  - 判断依据是 formValue 的实际存储格式，不是组件的外观。例如”日期范围”存两个日期的数组，应该用 `BIG_TEXT` 而不是 `DATE`
+  - **字符串长度阈值：< 500 用 `STRING`，≥ 500 用 `BIG_TEXT`**
 - **如果 scaffold 模板的 componentModelField 与组件实际需求不匹配，必须在生成代码时同时修改 widget.config.js**
 - **编辑态组件中修改其他字段：使用 `this.$set(this.formData, key, value)`**
 - **edit.vue 只渲染内容，配置界面只放 setting.vue**
@@ -762,8 +804,8 @@ computed: {
 直接在模板中 v-model 绑定，无需任何初始化或保存方法：
 ```html
 <!-- ✅ 正确：直接双向绑定，平台自动持久化 -->
-<el-input v-model="componentConfig.customComponentConfig.myField" size="mini" />
-<el-select v-model="componentConfig.customComponentConfig.chartType" size="mini">
+<el-input v-model="customComponentConfig.myField" size="mini" />
+<el-select v-model="customComponentConfig.chartType" size="mini">
   <el-option label="折线图" value="line" />
 </el-select>
 ```
@@ -837,7 +879,7 @@ export default customFormEditorList
       excludeInTable: ['WIDTH']    // 子表中排除的配置项
     }
   },
-  componentModelField: ['TEXT'],   // ★ 必须匹配组件用途：['TEXT'] / ['DATE'] / ['NUMBER'] / ['TEXT','LARGE_TEXT']
+  componentModelField: ['STRING'], // ★ 与 widget 同级，且只能单选：['STRING'] / ['NUM'] / ['DATE'] / ['BIG_TEXT']
   client: {                        // 移动端配置覆盖
     mobile: {
       widget: {
@@ -2303,7 +2345,7 @@ CODE_GENERATION_INSTRUCTION = """
 9. 编辑态组件中使用 `this.formValue` 读写值，值存储为 JSON 字符串（复杂数据）
 10. **edit.vue 只渲染内容，不要显示配置界面**。配置 UI 只放在 setting.vue 中
 11. **setting.vue 的 props 必须包含 `componentConfig`（widget对象）**，由平台 EditorFormConfigMixin 传入。`inject` 只作为兜底，且必须带 `{ default: null }`
-12. **setting.vue 中控件直接 `v-model="componentConfig.customComponentConfig.xxx"` 双向绑定**，平台自动持久化。严禁调用 formEngine 上任何写入配置的方法（formEngine.updateWidgetConfig、formEngine.updateCustomComponentConfig、formEngine.setWidgetInfo 等方法根本不存在，调用会直接报错）
+12. **setting.vue 中控件统一 `v-model="customComponentConfig.xxx"` 双向绑定**，并在 `computed` 中把它映射到 `componentConfig.customComponentConfig`。这样既符合平台运行时，也不会触发 `vue/no-mutating-props`。严禁调用 formEngine 上任何写入配置的方法（formEngine.updateWidgetConfig、formEngine.updateCustomComponentConfig、formEngine.updateWidgetCustomConfig、formEngine.setWidgetInfo 等方法根本不存在，调用会直接报错）；如果你封装了 `saveConfig` / `handleChange` 一类方法，它们也必须只操作 `customComponentConfig.xxx`，不能走镜像状态或 formEngine 回写
 13. **setting.vue 中不要再包一层 `<el-form>`**。平台外层已经提供了表单容器，内部直接使用 `el-form-item`、`el-input`、`el-select` 等组件即可
 14. **setting.vue 最外层容器不要设置 padding**。平台区域已经做好布局，额外 padding 会导致可用空间变小
 15. **setting.vue 和 edit/read/ide.vue 的 customComponentConfig 读写路径必须一致**。配置直接存在 `customComponentConfig` 根级别（如 `{ dataSource, xField }`），不要多嵌套一层（如 `{ chartConfig: { dataSource } }`）
