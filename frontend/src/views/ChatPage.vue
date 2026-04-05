@@ -418,7 +418,7 @@
                     <span>下载</span>
                   </button>
                 </div>
-                <pre class="doc-preview-content">{{ docPreviewContent || '暂无文档内容' }}</pre>
+                <div class="doc-preview-content doc-rendered" v-html="renderedDocHtml"></div>
               </div>
             </template>
           </div>
@@ -552,6 +552,7 @@ import WorkbenchShell from '@/components/WorkbenchShell.vue'
 import { llmConfigApi, type BuilderModelOption } from '@/api/llmConfig'
 import DesignDocCard from '@/components/DesignDocCard.vue'
 import { requirementsApi } from '@/api/requirements'
+import { marked } from 'marked'
 import { convertConfig } from '@/api/conversation'
 
 const router = useRouter()
@@ -708,6 +709,15 @@ const showBuilderPreview = computed(() =>
   )
 )
 const docPreviewContent = computed(() => ((latestDocContent.value || '').trim() || buildDocMarkdownFromPreview()).trim())
+const renderedDocHtml = computed(() => {
+  const md = docPreviewContent.value
+  if (!md) return '<p style="color:#9aa;text-align:center;padding:40px 0;">暂无文档内容</p>'
+  try {
+    return marked.parse(md) as string
+  } catch {
+    return `<pre>${md}</pre>`
+  }
+})
 const docPreviewAvailable = computed(() => !!docPreviewContent.value)
 const publishingApp = ref(false)
 
@@ -4628,16 +4638,26 @@ watch(conversationId, (id) => {
   min-height: 360px;
   max-height: calc(100vh - 340px);
   overflow: auto;
-  padding: 18px;
+  padding: 24px 28px;
   border-radius: 16px;
-  background: #f8faff;
+  background: #fff;
   border: 1px solid rgba(128, 145, 255, 0.1);
-  color: #4e5f7d;
-  font-size: 12px;
+  color: #2c3e50;
+  font-size: 13px;
   line-height: 1.7;
-  white-space: pre-wrap;
   word-break: break-word;
 }
+.doc-rendered :deep(h1) { font-size: 22px; font-weight: 600; color: #1a1a2e; margin: 0 0 16px; padding-bottom: 8px; border-bottom: 2px solid #eef0f8; }
+.doc-rendered :deep(h2) { font-size: 16px; font-weight: 600; color: #26215C; margin: 24px 0 12px; padding-bottom: 6px; border-bottom: 1px solid #eef0f8; }
+.doc-rendered :deep(h3) { font-size: 14px; font-weight: 600; color: #333; margin: 18px 0 8px; }
+.doc-rendered :deep(h4) { font-size: 13px; font-weight: 600; color: #555; margin: 14px 0 6px; }
+.doc-rendered :deep(hr) { border: none; border-top: 1px solid #e8ecf4; margin: 16px 0; }
+.doc-rendered :deep(p) { margin: 6px 0; }
+.doc-rendered :deep(table) { width: 100%; border-collapse: collapse; margin: 8px 0 16px; font-size: 12px; }
+.doc-rendered :deep(th) { background: #f5f6fa; color: #333; font-weight: 600; text-align: left; padding: 8px 10px; border: 1px solid #e2e5ef; white-space: nowrap; }
+.doc-rendered :deep(td) { padding: 6px 10px; border: 1px solid #e8ecf0; color: #444; vertical-align: top; }
+.doc-rendered :deep(tr:hover td) { background: #fafbff; }
+.doc-rendered :deep(code) { background: #f0f2f8; padding: 1px 5px; border-radius: 3px; font-size: 12px; color: #534AB7; }
 .preview-side-status {
   display: flex;
   align-items: flex-start;
