@@ -1,26 +1,25 @@
 <template>
-  <div class="envs-page">
-    <TopBar title="环境管理" show-back>
-      <template #actions>
-        <button v-if="activeTab === 'envs'" class="new-btn" @click="openCreate">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-          添加环境
-        </button>
-        <button v-if="activeTab === 'llm'" class="new-btn" @click="openLlmCreate">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-          新增模型
-        </button>
-      </template>
-    </TopBar>
+  <WorkbenchShell>
+    <div class="envs-main">
+      <div class="tabs-bar">
+        <div class="tabs-group">
+          <button :class="['tab-item', { active: activeTab === 'envs' }]" @click="activeTab = 'envs'">平台环境</button>
+          <button :class="['tab-item', { active: activeTab === 'llm' }]" @click="activeTab = 'llm'; loadLlmConfigs()">模型配置</button>
+        </div>
+        <div class="tabs-actions">
+          <button v-if="activeTab === 'envs'" class="new-btn" @click="openCreate">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            添加环境
+          </button>
+          <button v-if="activeTab === 'llm'" class="new-btn" @click="openLlmCreate">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            新增模型
+          </button>
+        </div>
+      </div>
 
-    <!-- Tabs -->
-    <div class="tabs-bar">
-      <button :class="['tab-item', { active: activeTab === 'envs' }]" @click="activeTab = 'envs'">平台环境</button>
-      <button :class="['tab-item', { active: activeTab === 'llm' }]" @click="activeTab = 'llm'; loadLlmConfigs()">模型配置</button>
-    </div>
-
-    <!-- ==================== Tab 1: 平台环境 ==================== -->
-    <div v-show="activeTab === 'envs'" class="env-content">
+      <!-- ==================== Tab 1: 平台环境 ==================== -->
+      <div v-show="activeTab === 'envs'" class="env-content">
       <div v-if="loading" class="empty-state">加载中...</div>
       <div v-else-if="envs.length === 0" class="empty-state">
         <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.3"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
@@ -84,10 +83,10 @@
           </div>
         </div>
       </template>
-    </div>
+      </div>
 
-    <!-- ==================== Tab 2: 模型配置 ==================== -->
-    <div v-show="activeTab === 'llm'" class="env-content">
+      <!-- ==================== Tab 2: 模型配置 ==================== -->
+      <div v-show="activeTab === 'llm'" class="env-content">
       <div v-if="llmLoading" class="empty-state">加载中...</div>
       <div v-else-if="llmConfigs.length === 0" class="empty-state">
         <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.3"><path d="M12 2a4 4 0 0 0-4 4v2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2h-2V6a4 4 0 0 0-4-4z"/><circle cx="12" cy="15" r="2"/></svg>
@@ -162,10 +161,10 @@
           </div>
         </div>
       </template>
-    </div>
+      </div>
 
-    <!-- ==================== 平台环境 Dialog ==================== -->
-    <el-dialog
+      <!-- ==================== 平台环境 Dialog ==================== -->
+      <el-dialog
       v-model="dialogVisible"
       :title="editingEnv ? '编辑环境' : '添加环境'"
       width="520px"
@@ -221,17 +220,17 @@
           {{ editingEnv ? '保存' : '添加' }}
         </el-button>
       </template>
-    </el-dialog>
+      </el-dialog>
 
-    <!-- ==================== 模型配置 Dialog ==================== -->
-    <el-dialog
+      <!-- ==================== 模型配置 Dialog ==================== -->
+      <el-dialog
       v-model="llmDialogVisible"
       :title="editingLlm ? '编辑模型配置' : '新增模型配置'"
       width="560px"
       :close-on-click-modal="false"
       class="env-dialog"
       :append-to-body="true"
-    >
+      >
       <el-form :model="llmForm" label-position="top" class="env-form">
         <el-form-item label="配置名称" required>
           <el-input v-model="llmForm.config_name" placeholder="如：MiniMax 主力模型" />
@@ -298,20 +297,18 @@
           {{ editingLlm ? '保存' : '添加' }}
         </el-button>
       </template>
-    </el-dialog>
-  </div>
+      </el-dialog>
+    </div>
+  </WorkbenchShell>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, onMounted, computed } from 'vue'
-import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { platformEnvApi, type PlatformEnv } from '@/api/platformEnv'
 import { llmConfigApi, type LlmConfig, type ProviderPreset } from '@/api/llmConfig'
-import ThemeToggle from '@/components/ThemeToggle.vue'
-import TopBar from '@/components/TopBar.vue'
+import WorkbenchShell from '@/components/WorkbenchShell.vue'
 
-const router = useRouter()
 const activeTab = ref<'envs' | 'llm'>('envs')
 
 // ==================== 平台环境相关 ====================
@@ -726,12 +723,11 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.envs-page {
-  height: 100vh;
+.envs-main {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  background: var(--t-bg-base);
-  color: var(--t-text-primary);
 }
 
 /* ── Nav ── */
@@ -809,36 +805,66 @@ onMounted(() => {
 /* ── Tabs Bar ── */
 .tabs-bar {
   display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  max-width: 1200px;
+  margin: 0 auto;
+  width: 100%;
+  padding: 18px 24px 10px;
+  background: transparent;
+  border-bottom: none;
+  flex-shrink: 0;
+  box-sizing: border-box;
+}
+
+.tabs-group {
+  display: flex;
+  align-items: center;
   gap: 0;
-  padding: 0 24px;
-  background: var(--t-bg-panel);
-  border-bottom: 1px solid var(--t-border-subtle);
+  min-width: 0;
+  padding: 4px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(123, 138, 178, 0.12);
+  border-radius: 18px;
+  box-shadow: 0 10px 24px rgba(104, 116, 160, 0.08);
+  backdrop-filter: blur(10px);
+}
+
+.tabs-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
   flex-shrink: 0;
 }
 
 .tab-item {
-  padding: 10px 20px;
+  padding: 10px 18px;
   border: none;
   background: none;
   color: var(--t-text-muted);
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 600;
   cursor: pointer;
   position: relative;
+  border-radius: 14px;
   transition: all 0.2s;
 }
 .tab-item:hover {
   color: var(--t-text-secondary);
+  background: rgba(99, 102, 241, 0.06);
 }
 .tab-item.active {
-  color: var(--t-text-primary);
+  color: #334166;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 6px 18px rgba(117, 129, 170, 0.12);
 }
 .tab-item.active::after {
   content: '';
   position: absolute;
-  bottom: -1px;
-  left: 8px;
-  right: 8px;
+  bottom: 3px;
+  left: 14px;
+  right: 14px;
   height: 2px;
   background: var(--t-brand-gradient);
   border-radius: 2px;
@@ -851,7 +877,7 @@ onMounted(() => {
   max-width: 1200px;
   margin: 0 auto;
   width: 100%;
-  padding: 24px 24px 60px;
+  padding: 8px 24px 60px;
 }
 
 .empty-state {

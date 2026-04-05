@@ -53,6 +53,9 @@ export const applicationApi = {
   resetStep(appId: number, step?: string) {
     return request.post<any, any>(`/applications/${appId}/steps/reset`, { step: step || null })
   },
+  publish(appId: number) {
+    return request.post<any, { ok: boolean; version?: string; remote_status?: string }>(`/applications/${appId}/publish`)
+  },
 
   // 增量文档变更
   /** 上传文档新版本（SSE） */

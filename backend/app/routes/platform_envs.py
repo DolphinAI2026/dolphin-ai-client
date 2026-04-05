@@ -359,7 +359,7 @@ async def get_embed_url(
     # 构建 URL（不传 token — 平台不支持 URL token 免登）
     host = env.base_url.rstrip("/").replace("/backend", "")
     tid = env.platform_tenant_id
-    embed_url = f"{host}/platform/{tid}/admin/app-store/edit-app?appId={app.apaas_app_id}&currentStepIndex=2"
+    embed_url = f"{host}/platform/{tid}/admin/app-store/edit-app?appId={app.apaas_app_id}&currentStepIndex=0"
 
     return {
         "url": embed_url,

@@ -956,7 +956,7 @@ const activeView = ref<'builder' | 'platform' | 'coding'>('builder')
 const codingIframeUrl = computed(() => {
   const appId = existingAppId.value || route.query.app_id
   const base = import.meta.env.BASE_URL.replace(/\/$/, '')
-  return appId ? `${base}/coding?app_id=${appId}` : `${base}/coding`
+  return appId ? `${base}/coding?app_id=${appId}&embed_nav=0` : `${base}/coding?embed_nav=0`
 })
 
 // ── 平台配置 iframe ──

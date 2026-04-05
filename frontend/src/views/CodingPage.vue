@@ -29,98 +29,118 @@
         <!-- Welcome State -->
         <div v-if="!ideUrl && !isStreaming && streamMessages.length === 0" class="welcome-pane">
           <div class="welcome-inner">
-            <div class="welcome-icon">&#x2728;</div>
-            <h2 class="welcome-title">AI Coding</h2>
-            <p class="welcome-desc">描述你想开发的内容，告诉我你想开发什么，我会自动创建项目并打开 AI 代码编辑器。</p>
+            <div class="welcome-hero">
+              <div class="welcome-icon">&#x2728;</div>
+              <h2 class="welcome-title">AI Coding</h2>
+              <p class="welcome-desc">用AI快速开发</p>
 
-            <!-- Input Area (centered) -->
-            <div class="welcome-input-area">
-              <!-- Attachment Preview -->
-              <div v-if="attachedFile" class="attachment-preview">
-                <div v-if="attachedPreviewUrl" class="attachment-thumb">
-                  <img :src="attachedPreviewUrl" alt="preview" />
-                  <button class="attachment-remove" @click="removeAttachment">&times;</button>
+              <!-- Input Area (centered) -->
+              <div class="welcome-input-area">
+                <!-- Attachment Preview -->
+                <div v-if="attachedFile" class="attachment-preview">
+                  <div v-if="attachedPreviewUrl" class="attachment-thumb">
+                    <img :src="attachedPreviewUrl" alt="preview" />
+                    <button class="attachment-remove" @click="removeAttachment">&times;</button>
+                  </div>
+                  <div v-else class="attachment-file">
+                    <span class="attachment-file-icon">&#128196;</span>
+                    <span class="attachment-file-name">{{ attachedFile.name }}</span>
+                    <button class="attachment-remove" @click="removeAttachment">&times;</button>
+                  </div>
                 </div>
-                <div v-else class="attachment-file">
-                  <span class="attachment-file-icon">&#128196;</span>
-                  <span class="attachment-file-name">{{ attachedFile.name }}</span>
-                  <button class="attachment-remove" @click="removeAttachment">&times;</button>
-                </div>
-              </div>
 
-              <div class="input-wrapper" @paste="handlePaste">
-                <input
-                  ref="fileInputRef"
-                  type="file"
-                  accept=".md,.pdf,.docx,.txt,.png,.jpg,.jpeg"
-                  style="display: none"
-                  @change="handleFileSelect"
-                />
-                <div class="composer-topline">
-                  <div class="coding-model-inline">
-                    <span class="coding-model-label">模型</span>
-                    <el-select
-                      v-model="selectedCodingModelValue"
-                      class="coding-model-select"
-                      popper-class="model-select-dropdown coding-model-dropdown"
-                      placeholder="选择模型"
-                      :disabled="codingModelLoading || updatingCodingModel || codingModelOptions.length === 0"
-                      @change="handleCodingModelChange"
-                    >
-                      <el-option
-                        v-for="option in codingModelOptions"
-                        :key="option.id"
-                        :label="formatCodingModelOption(option)"
-                        :value="toCodingModelValue(option.id)"
+                <div class="input-wrapper" @paste="handlePaste">
+                  <input
+                    ref="fileInputRef"
+                    type="file"
+                    accept=".md,.pdf,.docx,.txt,.png,.jpg,.jpeg"
+                    style="display: none"
+                    @change="handleFileSelect"
+                  />
+                  <div class="composer-topline">
+                    <div class="coding-model-inline">
+                      <el-popover
+                        v-model:visible="codingModelPopoverVisible"
+                        placement="bottom-start"
+                        trigger="click"
+                        :width="360"
+                        popper-class="coding-model-popover"
+                        :disabled="codingModelLoading || updatingCodingModel || codingModelOptions.length === 0"
                       >
-                        <div class="coding-model-option-row">
-                          <div class="coding-model-option-top">
-                            <span class="coding-model-option-name">{{ option.config_name }}</span>
-                            <div class="coding-model-option-tags">
-                              <span class="coding-model-option-provider">{{ formatCodingModelProvider(option.provider) }}</span>
-                              <span v-if="option.is_default" class="coding-model-option-default">默认</span>
+                        <template #reference>
+                          <button
+                            type="button"
+                            class="coding-model-trigger"
+                            :class="{ 'is-open': codingModelPopoverVisible, 'is-disabled': codingModelLoading || updatingCodingModel || codingModelOptions.length === 0 }"
+                            :disabled="codingModelLoading || updatingCodingModel || codingModelOptions.length === 0"
+                            aria-label="选择模型"
+                          >
+                            <div class="coding-model-trigger-content">
+                              <div class="coding-model-trigger-main">
+                                <span class="coding-model-trigger-name">{{ selectedCodingModelOption?.config_name || '选择模型' }}</span>
+                              </div>
+                              <el-icon class="coding-model-trigger-icon">
+                                <ArrowDown />
+                              </el-icon>
                             </div>
-                          </div>
-                          <span class="coding-model-option-meta">{{ option.model }}</span>
+                          </button>
+                        </template>
+                        <div class="coding-model-panel">
+                          <button
+                            v-for="option in codingModelOptions"
+                            :key="option.id"
+                            type="button"
+                            class="coding-model-panel-option"
+                            :class="{ 'is-active': selectedCodingModelValue === toCodingModelValue(option.id) }"
+                            @click="selectCodingModel(option)"
+                          >
+                            <div class="coding-model-panel-option-head">
+                              <span class="coding-model-panel-option-name">{{ option.config_name }}</span>
+                              <span v-if="option.is_default" class="coding-model-panel-option-default">默认</span>
+                            </div>
+                            <span class="coding-model-panel-option-meta">
+                              {{ formatCodingModelProvider(option.provider) }} / {{ option.model }}
+                            </span>
+                          </button>
                         </div>
-                      </el-option>
-                    </el-select>
+                      </el-popover>
+                      <span class="coding-model-tip">{{ codingModelHint }}</span>
+                    </div>
                   </div>
-                  <span class="coding-model-tip">{{ codingModelHint }}</span>
-                </div>
-                <div class="input-mainline">
-                  <el-button
-                    text
-                    class="attach-btn"
-                    @click="fileInputRef?.click()"
-                    :disabled="isCreating"
-                    title="上传附件"
-                  >
-                    <el-icon :size="18"><Paperclip /></el-icon>
-                  </el-button>
-                  <div class="composer-text-zone">
-                    <el-input
-                      v-model="userInput"
-                      type="textarea"
-                      :rows="2"
-                      :autosize="{ minRows: 2, maxRows: 6 }"
-                      placeholder="描述你想开发的内容，告诉我你想开发什么，我会自动创建项目并打开 AI 代码编辑器"
-                      @keydown.ctrl.enter="sendMessage"
-                      @keydown.meta.enter="sendMessage"
+                  <div class="input-mainline">
+                    <el-button
+                      text
+                      class="attach-btn"
+                      @click="fileInputRef?.click()"
                       :disabled="isCreating"
-                      resize="none"
-                    />
+                      title="上传附件"
+                    >
+                      <el-icon :size="18"><Paperclip /></el-icon>
+                    </el-button>
+                    <div class="composer-text-zone">
+                      <el-input
+                        v-model="userInput"
+                        type="textarea"
+                        :rows="1"
+                        :autosize="{ minRows: 1, maxRows: 5 }"
+                        placeholder="描述你想开发的内容，告诉我你想开发什么，我会自动创建项目并打开 AI 代码编辑器"
+                        @keydown.ctrl.enter="sendMessage"
+                        @keydown.meta.enter="sendMessage"
+                        :disabled="isCreating"
+                        resize="none"
+                      />
+                    </div>
+                    <el-button
+                      type="primary"
+                      class="send-btn"
+                      :loading="isCreating || isUploading"
+                      @click="sendMessage"
+                      :disabled="(!userInput.trim() && !attachedFile) || isCreating"
+                      circle
+                    >
+                      <el-icon v-if="!isCreating && !isUploading"><TopRight /></el-icon>
+                    </el-button>
                   </div>
-                  <el-button
-                    type="primary"
-                    class="send-btn"
-                    :loading="isCreating || isUploading"
-                    @click="sendMessage"
-                    :disabled="(!userInput.trim() && !attachedFile) || isCreating"
-                    circle
-                  >
-                    <el-icon v-if="!isCreating && !isUploading"><TopRight /></el-icon>
-                  </el-button>
                 </div>
               </div>
             </div>
@@ -139,19 +159,29 @@
               </button>
             </div>
 
+            <div v-if="sceneSuggestions[activeSceneCategory]?.length" class="scene-suggestion-grid">
+              <button
+                v-for="suggestion in sceneSuggestions[activeSceneCategory]"
+                :key="suggestion"
+                class="scene-suggestion-card"
+                @click="sendSuggestion(suggestion)"
+              >
+                {{ suggestion }}
+              </button>
+            </div>
+
             <div class="workspace-showcase">
               <div class="workspace-showcase-header">
                 <div>
                   <h3 class="workspace-showcase-title">我的自开发文件</h3>
-                  <p class="workspace-showcase-subtitle">默认展示最近创建的 6 个开发文件，可直接进入或下载源码与包文件。</p>
                 </div>
                 <button
                   v-if="existingWorkspaces.length > 0"
                   class="workspace-showcase-more"
-                  @click="workspaceShowcaseExpanded = !workspaceShowcaseExpanded"
+                  @click="openWorkspaceCatalogPage"
                 >
-                  <span>{{ workspaceShowcaseExpanded ? '收起' : '查看全部' }}</span>
-                  <span class="workspace-showcase-more-count">{{ existingWorkspaces.length }}</span>
+                  <span>查看全部</span>
+                  <span aria-hidden="true">→</span>
                 </button>
               </div>
 
@@ -163,33 +193,42 @@
                   @click="openExistingWorkspace(ws)"
                 >
                   <div class="workspace-card-head">
-                    <div>
+                    <div class="workspace-card-copy">
                       <div class="workspace-card-name">{{ workspaceDisplayName(ws) }}</div>
-                      <div class="workspace-card-package">{{ workspaceCodeName(ws) || ws.project_name }}</div>
+                      <div class="workspace-card-meta-row">
+                        <span v-if="workspaceCodeName(ws)" class="workspace-card-code">{{ workspaceCodeName(ws) }}</span>
+                      </div>
                     </div>
                     <span class="workspace-card-type">{{ workspaceTypeLabel(ws.project_type) }}</span>
                   </div>
-                  <div class="workspace-card-meta">
-                    <span>文件类型：{{ workspaceTypeLabel(ws.project_type) }}</span>
-                    <span>包名：{{ workspaceCodeName(ws) || ws.project_name }}</span>
-                  </div>
-                  <div class="workspace-card-actions">
-                    <button
-                      class="workspace-card-action"
-                      title="下载源码"
-                      @click.stop="downloadWorkspaceArtifact(ws, 'src')"
-                    >
-                      <el-icon><Download /></el-icon>
-                      <span>源码</span>
-                    </button>
-                    <button
-                      class="workspace-card-action"
-                      title="下载包文件"
-                      @click.stop="downloadWorkspaceArtifact(ws, 'dist')"
-                    >
-                      <el-icon><Download /></el-icon>
-                      <span>包下载</span>
-                    </button>
+                  <div class="workspace-card-footer">
+                    <div class="workspace-card-meta">
+                      <span>文件类型：{{ workspaceTypeLabel(ws.project_type) }}</span>
+                      <span>包名：{{ workspaceCodeName(ws) || ws.project_name }}</span>
+                    </div>
+                    <div class="workspace-card-actions">
+                      <button
+                        class="workspace-card-action workspace-card-action-primary"
+                        title="进入开发"
+                        @click.stop="openExistingWorkspace(ws)"
+                      >
+                        <el-icon><TopRight /></el-icon>
+                      </button>
+                      <button
+                        class="workspace-card-action"
+                        title="上传组件包"
+                        @click.stop
+                      >
+                        <el-icon><Plus /></el-icon>
+                      </button>
+                      <button
+                        class="workspace-card-action"
+                        title="下载源码"
+                        @click.stop="downloadWorkspaceArtifact(ws, 'src')"
+                      >
+                        <el-icon><Download /></el-icon>
+                      </button>
+                    </div>
                   </div>
                 </article>
               </div>
@@ -416,9 +455,9 @@
 <script setup lang="ts">
 import { API_PREFIX } from '@/utils/request'
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ArrowLeft, Download, TopRight, Plus, Paperclip, Monitor, Delete, Fold, Expand, ChatDotRound } from '@element-plus/icons-vue'
+import { ArrowDown, ArrowLeft, Download, TopRight, Plus, Paperclip, Monitor, Delete, Fold, Expand, ChatDotRound } from '@element-plus/icons-vue'
 import { useCodingStore } from '@/stores/coding'
 import { platformEnvApi, type PlatformEnv } from '@/api/platformEnv'
 import { useUserStore } from '@/stores/user'
@@ -432,6 +471,7 @@ import ThemeToggle from '@/components/ThemeToggle.vue'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
 
 const route = useRoute()
+const router = useRouter()
 const codingStore = useCodingStore()
 const userStore = useUserStore()
 
@@ -446,6 +486,7 @@ const codingModelLoading = ref(false)
 const updatingCodingModel = ref(false)
 const selectedCodingModelValue = ref<string | null>(null)
 const persistedCodingModelValue = ref<string | null>(null)
+const codingModelPopoverVisible = ref(false)
 
 const toCodingModelValue = (configId: number | null | undefined) =>
   configId != null ? `llmcfg:${configId}` : null
@@ -460,6 +501,10 @@ const defaultCodingModelValue = computed(() =>
   toCodingModelValue(codingModelOptions.value.find(option => option.is_default)?.id)
   ?? toCodingModelValue(codingModelOptions.value[0]?.id)
   ?? null
+)
+
+const selectedCodingModelOption = computed(() =>
+  codingModelOptions.value.find(option => toCodingModelValue(option.id) === selectedCodingModelValue.value) ?? null
 )
 
 const codingModelHint = computed(() => {
@@ -481,8 +526,6 @@ const applyCodingModelSelection = (configId?: number | null) => {
   persistedCodingModelValue.value = codingStore.conversationId ? normalized : null
 }
 
-const formatCodingModelOption = (option: BuilderModelOption): string => option.config_name
-
 const formatCodingModelProvider = (provider: string): string => {
   const labels: Record<string, string> = {
     minimax: 'MiniMax',
@@ -496,6 +539,12 @@ const formatCodingModelProvider = (provider: string): string => {
   }
   return labels[provider] || provider
 }
+
+const codingModelSummary = computed(() => {
+  if (codingModelLoading.value) return '正在加载可用模型...'
+  if (!selectedCodingModelOption.value) return '请选择开发模型'
+  return `${formatCodingModelProvider(selectedCodingModelOption.value.provider)} / ${selectedCodingModelOption.value.model}`
+})
 
 const loadCodingModelOptions = async () => {
   codingModelLoading.value = true
@@ -535,6 +584,13 @@ const handleCodingModelChange = async (nextValue: string | null) => {
   } finally {
     updatingCodingModel.value = false
   }
+}
+
+const selectCodingModel = async (option: BuilderModelOption) => {
+  codingModelPopoverVisible.value = false
+  const nextValue = toCodingModelValue(option.id)
+  if (nextValue === selectedCodingModelValue.value) return
+  await handleCodingModelChange(nextValue)
 }
 
 // ============ Stream Messages (对话流) ============
@@ -625,10 +681,7 @@ const existingWorkspaces = computed(() => {
   if (!embeddedAppId.value) return allWorkspaces.value
   return allWorkspaces.value.filter((ws: any) => String(ws.project_id || '') === embeddedAppId.value)
 })
-const workspaceShowcaseExpanded = ref(false)
-const workspaceShowcaseItems = computed(() =>
-  workspaceShowcaseExpanded.value ? existingWorkspaces.value : existingWorkspaces.value.slice(0, 6),
-)
+const workspaceShowcaseItems = computed(() => existingWorkspaces.value.slice(0, 6))
 const isDownloading = ref(false)
 const embeddedPanelCollapsed = ref(false)
 
@@ -788,6 +841,15 @@ onUnmounted(() => {
 
 async function openExistingWorkspace(ws: WorkspaceInfo) {
   await openWorkspaceById(ws.id)
+}
+
+async function openWorkspaceCatalogPage() {
+  await router.push({
+    path: '/workspace-catalog',
+    query: {
+      ...(embeddedAppId.value ? { app_id: embeddedAppId.value } : {}),
+    },
+  })
 }
 
 // 设置 IDE URL — 先销毁旧 iframe 再创建新的，避免 code-server session 缓存
@@ -1736,7 +1798,7 @@ watch(() => route.path, () => {
 .welcome-pane {
   flex: 1;
   display: flex;
-  align-items: flex-start;
+  align-items: stretch;
   justify-content: center;
   overflow-y: auto;
   background:
@@ -1751,20 +1813,30 @@ watch(() => route.path, () => {
   text-align: center;
   max-width: 1160px;
   width: 100%;
-  padding: 54px 42px 46px;
+  min-height: 100%;
+  padding: 6px 36px 28px;
   position: relative;
 }
 
+.welcome-hero {
+  width: 100%;
+  min-height: clamp(328px, 46vh, 468px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
 .welcome-icon {
-  font-size: 36px;
-  margin-bottom: 16px;
+  font-size: 26px;
+  margin-bottom: 8px;
   filter: drop-shadow(0 0 24px var(--t-brand-glow));
 }
 
 .welcome-title {
-  font-size: 44px;
+  font-size: 34px;
   font-weight: 800;
-  margin: 0 0 14px;
+  margin: 0 0 10px;
   background: var(--t-brand-gradient);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
@@ -1774,71 +1846,144 @@ watch(() => route.path, () => {
 
 .welcome-desc {
   color: var(--t-text-secondary);
-  font-size: 16px;
-  margin: 0 0 34px;
+  font-size: 14px;
+  margin: 0 0 16px;
   line-height: 1.6;
-  max-width: 760px;
+  max-width: 680px;
 }
 
 /* ============ Welcome Input Area ============ */
 .welcome-input-area {
   width: min(100%, 1280px);
-  margin-bottom: 28px;
-}
-
-.coding-model-label {
-  font-size: 12px;
-  font-weight: 700;
-  color: #50607f;
-  letter-spacing: 0.02em;
+  margin-bottom: 12px;
 }
 
 .coding-model-tip {
-  display: inline-flex;
-  align-items: center;
-  min-height: 34px;
-  padding: 0 14px;
-  border-radius: 999px;
-  font-size: 12px;
+  display: block;
+  font-size: 10px;
   color: #8b98b3;
-  background: rgba(255, 255, 255, 0.72);
-  border: 1px solid rgba(116, 131, 174, 0.14);
-  white-space: nowrap;
+  line-height: 1.4;
 }
 
-.coding-model-select {
-  width: min(320px, 48%);
-  flex-shrink: 0;
-}
-
-.coding-model-select :deep(.el-select__wrapper) {
-  min-height: 42px;
-  border-radius: 14px;
-  padding-inline: 14px;
-  background: rgba(255, 255, 255, 0.9);
-  box-shadow: inset 0 0 0 1px rgba(112, 126, 170, 0.16), 0 10px 24px rgba(120, 130, 168, 0.08);
-}
-.coding-model-select :deep(.el-select__selected-item),
-.coding-model-select :deep(.el-select__placeholder) {
-  color: #3a4762;
-}
-.coding-model-select :deep(.el-select__caret),
-.coding-model-select :deep(.el-select__suffix) {
-  color: #90a0bd;
-}
-.coding-model-select :deep(.el-select__wrapper.is-focused) {
-  box-shadow: inset 0 0 0 1px rgba(99, 102, 241, 0.24), 0 0 0 4px rgba(99, 102, 241, 0.08);
-}
-
-.coding-model-option-row {
+.coding-model-trigger {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
+  align-items: center;
+  gap: 10px;
+  min-width: 212px;
+  width: 258px;
+  max-width: 100%;
+  padding: 0 10px;
+  min-height: 36px;
+  border-radius: 12px;
+  border: 2px solid rgba(97, 112, 238, 0.78);
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow:
+    0 8px 20px rgba(102, 115, 201, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.86);
+  cursor: pointer;
+  text-align: left;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.coding-model-trigger:hover:not(:disabled),
+.coding-model-trigger.is-open {
+  border-color: rgba(97, 112, 238, 0.96);
+  box-shadow:
+    0 12px 26px rgba(99, 102, 241, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.82);
+}
+
+.coding-model-trigger:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.coding-model-trigger.is-disabled {
+  opacity: 0.62;
+  cursor: not-allowed;
+}
+
+.coding-model-trigger-content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 8px;
+  min-width: 0;
   width: 100%;
 }
 
-.coding-model-option-top {
+.coding-model-trigger-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.coding-model-trigger-name {
+  color: #26314f;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.coding-model-trigger-meta {
+  color: #7f8fae;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.coding-model-trigger-icon {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 7px;
+  color: #8a9abd;
+  background: transparent;
+  box-shadow: none;
+  transition: transform 0.2s ease, color 0.2s ease;
+}
+
+.coding-model-trigger.is-open .coding-model-trigger-icon {
+  transform: rotate(180deg);
+  color: #6070d9;
+}
+
+.coding-model-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 8px;
+}
+
+.coding-model-panel-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  padding: 13px 14px;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.2s ease, transform 0.2s ease;
+}
+
+.coding-model-panel-option:hover {
+  background: rgba(241, 244, 255, 0.88);
+}
+
+.coding-model-panel-option.is-active {
+  background: linear-gradient(180deg, rgba(239, 243, 255, 0.96), rgba(232, 238, 252, 0.96));
+  border-radius: 16px;
+}
+
+.coding-model-panel-option + .coding-model-panel-option {
+  border-top: 1px solid rgba(122, 136, 178, 0.12);
+}
+
+.coding-model-panel-option-head {
   width: 100%;
   display: flex;
   align-items: center;
@@ -1846,61 +1991,55 @@ watch(() => route.path, () => {
   gap: 12px;
 }
 
-.coding-model-option-name {
-  color: var(--t-text-primary);
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 1.2;
+.coding-model-panel-option-name {
+  color: #26314f;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.3;
 }
 
-.coding-model-option-tags {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-}
-
-.coding-model-option-provider,
-.coding-model-option-default {
+.coding-model-panel-option-default {
   display: inline-flex;
   align-items: center;
-  height: 22px;
+  justify-content: center;
+  height: 20px;
   padding: 0 8px;
   border-radius: 999px;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-}
-
-.coding-model-option-provider {
-  background: var(--t-bg-subtle);
-  color: var(--t-text-secondary);
-  border: 1px solid var(--t-border-subtle);
-}
-
-.coding-model-option-default {
   background: rgba(99, 102, 241, 0.12);
-  color: var(--t-brand-dark);
-  border: 1px solid rgba(99, 102, 241, 0.14);
+  color: #5668da;
+  font-size: 10px;
+  font-weight: 700;
 }
 
-.coding-model-option-meta {
-  font-size: 11px;
-  color: var(--t-text-secondary);
+.coding-model-panel-option-meta {
+  width: 100%;
+  margin-top: 4px;
+  color: #8190ab;
+  font-size: 10px;
+  font-weight: 600;
   line-height: 1.35;
+}
+
+:global(.coding-model-popover.el-popover.el-popper) {
+  padding: 0;
+  border-radius: 24px;
+  border: 1px solid rgba(122, 136, 178, 0.16);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 24px 52px rgba(95, 107, 153, 0.18);
+  overflow: hidden;
 }
 
 .input-wrapper {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 14px;
+  gap: 8px;
   width: 100%;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(247, 249, 255, 0.9));
   border: 1px solid rgba(124, 138, 182, 0.14);
-  border-radius: 30px;
-  padding: 18px 20px 20px;
+  border-radius: 24px;
+  padding: 10px 14px 10px;
   transition: all 0.28s ease;
   box-shadow:
     0 24px 48px rgba(101, 113, 161, 0.1),
@@ -1910,24 +2049,26 @@ watch(() => route.path, () => {
 
 .composer-topline {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding-bottom: 14px;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 8px;
+  padding-bottom: 6px;
   border-bottom: 1px solid rgba(123, 138, 178, 0.12);
 }
 
 .coding-model-inline {
   display: flex;
-  align-items: center;
-  gap: 12px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
   min-width: 0;
 }
 
 .input-mainline {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
+  min-height: 56px;
 }
 
 .input-wrapper:focus-within {
@@ -1941,7 +2082,7 @@ watch(() => route.path, () => {
 .composer-text-zone {
   flex: 1;
   min-width: 0;
-  padding: 2px 2px 2px 0;
+  padding: 0;
 }
 
 .composer-text-zone :deep(.el-textarea) {
@@ -1953,9 +2094,10 @@ watch(() => route.path, () => {
   border: none !important;
   box-shadow: none !important;
   color: #42506b;
-  font-size: 15px;
-  line-height: 1.7;
-  padding: 4px 0 6px;
+  font-size: 13px;
+  line-height: 1.45;
+  padding: 0;
+  min-height: 22px !important;
   resize: none;
   font-weight: 500;
 }
@@ -1967,8 +2109,8 @@ watch(() => route.path, () => {
 
 .send-btn {
   flex-shrink: 0;
-  width: 48px;
-  height: 48px;
+  width: 36px;
+  height: 36px;
   background: var(--t-brand-gradient) !important;
   border: none !important;
   box-shadow: 0 14px 24px rgba(99, 102, 241, 0.24);
@@ -1988,10 +2130,10 @@ watch(() => route.path, () => {
 
 .attach-btn {
   flex-shrink: 0;
-  width: 46px;
-  height: 46px;
+  width: 34px;
+  height: 34px;
   padding: 0;
-  border-radius: 16px;
+  border-radius: 11px;
   color: #7f8fb0;
   background: rgba(255, 255, 255, 0.8);
   border: 1px solid rgba(123, 138, 178, 0.14);
@@ -2007,8 +2149,15 @@ watch(() => route.path, () => {
 }
 
 @media (max-width: 920px) {
-  .coding-model-select {
+  .coding-model-trigger {
     width: 100%;
+    min-width: 0;
+    max-width: none;
+  }
+
+  .welcome-hero {
+    min-height: auto;
+    justify-content: flex-start;
   }
 
   .composer-topline,
@@ -2019,17 +2168,16 @@ watch(() => route.path, () => {
 
   .coding-model-tip {
     white-space: normal;
-    min-height: auto;
-    padding: 10px 12px;
   }
 
   .input-wrapper {
     border-radius: 24px;
-    padding: 16px;
+    padding: 12px;
   }
 
   .input-mainline {
     align-items: flex-end;
+    min-height: 0;
   }
 }
 
@@ -2110,10 +2258,10 @@ watch(() => route.path, () => {
   display: flex;
   flex-wrap: nowrap;
   overflow-x: auto;
-  gap: 10px;
+  gap: 8px;
   justify-content: flex-start;
   width: 100%;
-  margin-bottom: 34px;
+  margin-bottom: 26px;
   padding-bottom: 4px;
   scrollbar-width: none;
 }
@@ -2125,13 +2273,13 @@ watch(() => route.path, () => {
 .scene-tab {
   display: flex;
   align-items: center;
-  gap: 5px;
-  padding: 10px 16px;
+  gap: 4px;
+  padding: 8px 14px;
   border-radius: 999px;
   border: 1px solid var(--t-border-subtle);
   background: transparent;
   color: var(--t-text-secondary);
-  font-size: 14px;
+  font-size: 13px;
   cursor: pointer;
   transition: all 0.2s ease;
   flex: 0 0 auto;
@@ -2149,165 +2297,228 @@ watch(() => route.path, () => {
 }
 
 .scene-tab-icon {
-  font-size: 14px;
+  font-size: 13px;
 }
 
-/* ============ Suggestion Cards ============ */
+.scene-suggestion-grid {
+  width: min(100%, 1280px);
+  display: flex;
+  gap: 10px;
+  margin: -12px 0 14px;
+  padding-bottom: 2px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.scene-suggestion-grid::-webkit-scrollbar {
+  display: none;
+}
+
+.scene-suggestion-card {
+  flex: 0 0 auto;
+  min-height: 40px;
+  max-width: 360px;
+  padding: 0 18px;
+  border-radius: 999px;
+  border: 1px solid rgba(227, 232, 246, 0.72);
+  background: rgba(255, 255, 255, 0.78);
+  color: #73819d;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+  white-space: nowrap;
+  text-align: left;
+  cursor: pointer;
+  box-shadow:
+    0 6px 16px rgba(107, 118, 172, 0.04),
+    inset 0 1px 0 rgba(255, 255, 255, 0.82);
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+.scene-suggestion-card:hover {
+  transform: translateY(-1px);
+  border-color: rgba(112, 126, 238, 0.16);
+  color: #55637f;
+  box-shadow:
+    0 10px 20px rgba(99, 102, 241, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.88);
+}
+
+/* ============ Workspace Showcase ============ */
 .workspace-showcase {
   width: min(100%, 1280px);
-  margin-top: 2px;
+  margin-top: 0;
 }
 
 .workspace-showcase-header {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 14px;
+  gap: 12px;
+  margin-bottom: 8px;
   width: 100%;
 }
 
 .workspace-showcase-title {
   margin: 0;
   color: var(--t-text-primary);
-  font-size: 22px;
-  font-weight: 700;
-  text-align: left;
-}
-
-.workspace-showcase-subtitle {
-  margin: 6px 0 0;
-  color: var(--t-text-muted);
-  font-size: 14px;
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.2;
   text-align: left;
 }
 
 .workspace-showcase-more {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  border: 1px solid rgba(99, 102, 241, 0.14);
-  background: rgba(255, 255, 255, 0.82);
+  gap: 6px;
+  border: none;
+  background: transparent;
   color: var(--t-brand);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   cursor: pointer;
   flex-shrink: 0;
-  border-radius: 999px;
-  height: 36px;
-  padding: 0 14px;
-  box-shadow: 0 8px 24px rgba(99, 102, 241, 0.08);
-  transition: all 0.2s ease;
+  padding: 0;
+  transition: color 0.2s ease, transform 0.2s ease;
 }
 
 .workspace-showcase-more:hover {
   transform: translateY(-1px);
-  background: rgba(245, 247, 255, 0.95);
-  border-color: rgba(99, 102, 241, 0.24);
-}
-
-.workspace-showcase-more-count {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 22px;
-  height: 22px;
-  padding: 0 6px;
-  border-radius: 999px;
-  background: rgba(99, 102, 241, 0.1);
-  color: var(--t-brand);
-  font-size: 11px;
+  color: #5165ea;
 }
 
 .workspace-cards-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 18px;
+  gap: 10px;
   width: 100%;
   align-items: stretch;
 }
 
 .workspace-card {
   border: 1px solid var(--t-border-subtle);
-  border-radius: 22px;
-  background: rgba(255, 255, 255, 0.92);
-  padding: 20px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.9);
+  padding: 13px;
   text-align: left;
   cursor: pointer;
   transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
-  min-height: 188px;
+  min-height: 134px;
   display: flex;
   flex-direction: column;
 }
 
 .workspace-card:hover {
-  transform: translateY(-2px);
+  transform: translateY(-1px);
   border-color: var(--t-brand-glow);
-  box-shadow: 0 10px 22px rgba(99, 102, 241, 0.12);
+  box-shadow: 0 8px 18px rgba(99, 102, 241, 0.1);
+}
+
+.workspace-catalog-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.workspace-card-catalog {
+  min-height: 154px;
+}
+
+.workspace-catalog-empty {
+  margin-top: 6px;
 }
 
 .workspace-card-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.workspace-card-copy {
+  min-width: 0;
+  flex: 1;
 }
 
 .workspace-card-name {
   color: var(--t-text-primary);
-  font-size: 15px;
-  font-weight: 700;
+  font-size: 12px;
+  font-weight: 650;
   line-height: 1.35;
 }
 
-.workspace-card-package {
-  color: var(--t-text-secondary);
-  font-size: 12px;
+.workspace-card-meta-row {
   margin-top: 4px;
+}
+
+.workspace-card-code {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 10px;
+  background: rgba(241, 243, 252, 0.95);
+  color: #95a2bf;
+  font-size: 10px;
 }
 
 .workspace-card-type {
   display: inline-flex;
   align-items: center;
-  padding: 0 10px;
-  height: 24px;
+  padding: 0 7px;
+  height: 20px;
   border-radius: 999px;
   background: var(--t-brand-subtle);
   color: var(--t-brand-light);
-  font-size: 11px;
+  font-size: 9px;
   font-weight: 600;
   white-space: nowrap;
+}
+
+.workspace-card-footer {
+  margin-top: auto;
+  padding-top: 8px;
+  border-top: 1px solid rgba(229, 233, 247, 0.9);
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .workspace-card-meta {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
   color: var(--t-text-muted);
-  font-size: 12px;
-  line-height: 1.45;
+  font-size: 10px;
+  line-height: 1.35;
 }
 
 .workspace-card-actions {
   display: flex;
-  gap: 8px;
-  margin-top: auto;
-  padding-top: 14px;
+  gap: 4px;
 }
 
 .workspace-card-action {
-  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  display: flex;
   align-items: center;
-  gap: 6px;
+  justify-content: center;
   border: 1px solid var(--t-border-subtle);
   background: #fff;
   color: var(--t-text-secondary);
   border-radius: 10px;
-  height: 32px;
-  padding: 0 10px;
   cursor: pointer;
   transition: all 0.2s ease;
+}
+
+.workspace-card-action-primary {
+  color: var(--t-brand);
+  border-color: rgba(99, 102, 241, 0.2);
 }
 
 .workspace-card-action:hover {
@@ -2318,21 +2529,46 @@ watch(() => route.path, () => {
 
 .workspace-showcase-empty {
   width: 100%;
-  padding: 18px;
+  padding: 16px;
   border: 1px dashed var(--t-border-subtle);
   border-radius: 16px;
   color: var(--t-text-muted);
-  font-size: 13px;
+  font-size: 12px;
   text-align: center;
 }
 
 @media (max-width: 1280px) {
+  .workspace-catalog-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .scene-suggestion-grid {
+    gap: 8px;
+  }
+
   .workspace-cards-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
 @media (max-width: 900px) {
+  .workspace-catalog-grid {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .scene-suggestion-grid {
+    gap: 8px;
+    margin: -10px 0 12px;
+  }
+
+  .scene-suggestion-card {
+    min-height: 36px;
+    max-width: 280px;
+    padding: 0 14px;
+    font-size: 11px;
+  }
+
   .workspace-showcase-header {
     align-items: flex-start;
     flex-direction: column;
@@ -2340,6 +2576,11 @@ watch(() => route.path, () => {
 
   .workspace-cards-grid {
     grid-template-columns: 1fr;
+  }
+
+  .workspace-card-footer {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 

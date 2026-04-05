@@ -206,7 +206,12 @@ const handleLogin = async () => {
         router.push('/')
       }
     } catch (error: any) {
-      ElMessage.error(error.response?.data?.detail || '登录失败，请检查用户名和密码')
+      const detail =
+        error?.response?.data?.detail ||
+        error?.response?.data?.message ||
+        error?.message ||
+        '登录失败，请检查用户名和密码'
+      ElMessage.error(detail)
     } finally {
       loginLoading.value = false
     }
@@ -231,7 +236,12 @@ const handleRegister = async () => {
       ElMessage.success('注册成功')
       router.push('/')
     } catch (error: any) {
-      ElMessage.error(error.response?.data?.detail || '注册失败')
+      const detail =
+        error?.response?.data?.detail ||
+        error?.response?.data?.message ||
+        error?.message ||
+        '注册失败'
+      ElMessage.error(detail)
     } finally {
       registerLoading.value = false
     }

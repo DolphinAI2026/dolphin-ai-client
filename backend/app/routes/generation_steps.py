@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.crypto import decrypt_password
 from app.database import get_db
 from app.deps import get_auth_context, AuthContext
 from app.models import Application, User, ApiCallLog
@@ -458,14 +459,52 @@ async def execute_step(
             error_msg = str(e)
             logger.error(f"步骤 {step_key} 执行失败: {error_msg}", exc_info=True)
 
-            # Token 过期时清除无效 token，让前端知道需要重新连接
+            # Token 过期时，优先尝试使用环境里保存的账号密码自动重登并重试当前步骤
             if "Token已过期" in error_msg or "401" in error_msg:
-                # 清除环境级 token
-                if env:
-                    env.token = None
-                    env.status = "disconnected"
-                await db.commit()
-                step_exception = HTTPException(status_code=401, detail="APaaS平台Token已过期，请在环境管理中重新登录")
+                relogin_success = False
+                if env and env.username and getattr(env, "password_enc", None):
+                    try:
+                        password = decrypt_password(env.password_enc)
+                        refresh_client = APaaSClient(
+                            base_url=env.base_url,
+                            tenant_id=env.platform_tenant_id,
+                        )
+                        login_result = await refresh_client.login(env.username, password)
+                        new_token = login_result.get("token") if isinstance(login_result, dict) else None
+                        if new_token:
+                            env.token = new_token
+                            env.status = "connected"
+                            await db.commit()
+                            client = APaaSClient(
+                                base_url=env.base_url,
+                                tenant_id=env.platform_tenant_id,
+                                token=new_token,
+                            )
+                            result = await _execute_step_impl(client, app, config, state, step_key, data, models)
+                            state.setdefault("steps_completed", [])
+                            if step_key not in state["steps_completed"]:
+                                state["steps_completed"].append(step_key)
+                            state.get("step_errors", {}).pop(step_key, None)
+                            _save_state(app, state)
+
+                            all_steps = _build_steps(config, state, state.get("apaas_app_id") or app.apaas_app_id)
+                            if all(s.status == "completed" for s in all_steps):
+                                app.status = "completed"
+                                _sync_platform_codes_to_config(app, state, data)
+                                logger.info(f"应用 {app.id} 所有步骤完成，状态更新为 completed")
+
+                            step_response = StepExecuteResponse(step=step_key, status="completed", result=result)
+                            relogin_success = True
+                            logger.info(f"步骤 {step_key} 在自动刷新平台 token 后执行成功")
+                    except Exception as relogin_err:
+                        logger.warning(f"步骤 {step_key} 自动刷新平台 token 失败: {relogin_err}")
+
+                if not relogin_success:
+                    if env:
+                        env.token = None
+                        env.status = "disconnected"
+                    await db.commit()
+                    step_exception = HTTPException(status_code=401, detail="APaaS平台Token已过期，请在环境管理中重新登录")
             else:
                 # 编码冲突时自动处理
                 is_dict_or_role_step = step_key.startswith("create_dict:") or step_key.startswith("create_role:") or step_key == "create_roles_dicts"

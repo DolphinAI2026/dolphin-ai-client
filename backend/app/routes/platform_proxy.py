@@ -17,6 +17,12 @@ from typing import Optional
 import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import Response
+from sqlalchemy import select
+
+from app.apaas_client import APaaSClient
+from app.crypto import decrypt_password
+from app.database import AsyncSessionLocal
+from app.models import PlatformEnv
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["platform-proxy"])
@@ -32,6 +38,50 @@ _proxy_state: dict = {
 
 _http_client: Optional[httpx.AsyncClient] = None
 _static_cache: dict = {}  # 静态资源缓存 {url: (content, content_type)}
+
+
+async def _refresh_env_token(env: PlatformEnv) -> bool:
+    """使用环境中保存的账号密码刷新平台 token。"""
+    if not env.username or not env.password_enc:
+        return False
+    try:
+        password = decrypt_password(env.password_enc)
+        client = APaaSClient(base_url=env.base_url, tenant_id=env.platform_tenant_id)
+        login_result = await client.login(env.username, password)
+        token = login_result.get("token", "")
+        if not token:
+            return False
+        env.token = token
+        env.status = "connected"
+        _proxy_state["host"] = env.base_url.rstrip("/").replace("/backend", "")
+        _proxy_state["token"] = token
+        _proxy_state["tenant_id"] = env.platform_tenant_id
+        _proxy_state["username"] = env.username or ""
+        return True
+    except Exception as e:
+        logger.warning(f"Failed to refresh platform token: {e}")
+        return False
+
+
+async def _find_proxy_env() -> Optional[PlatformEnv]:
+    """按当前代理状态定位环境，供 token 续期使用。"""
+    host = _proxy_state.get("host", "").rstrip("/")
+    tenant_id = _proxy_state.get("tenant_id", "")
+    async with AsyncSessionLocal() as db:
+        if host and tenant_id:
+            result = await db.execute(
+                select(PlatformEnv).where(
+                    PlatformEnv.base_url.like(f"{host}%"),
+                    PlatformEnv.platform_tenant_id == tenant_id,
+                ).limit(1)
+            )
+            env = result.scalar_one_or_none()
+            if env:
+                return env
+        result = await db.execute(
+            select(PlatformEnv).where(PlatformEnv.status == "connected").limit(1)
+        )
+        return result.scalar_one_or_none()
 
 
 def _get_client() -> httpx.AsyncClient:
@@ -171,9 +221,7 @@ async def proxy_entry(
     request: Request,
 ):
     """iframe SSO 入口 — 获取平台信息、代理 HTML、注入 token"""
-    from sqlalchemy import select
-    from app.database import AsyncSessionLocal
-    from app.models import Application, PlatformEnv
+    from app.models import Application
     from app.deps import get_auth_context_from_token
 
     # 从 query 或 header 获取 auth token
@@ -218,8 +266,19 @@ async def proxy_entry(
                 ).limit(1)
             )
             env = r.scalar_one_or_none()
-        if not env or not env.token:
+        if not env:
             return Response(content="<h3>平台环境未配置</h3>", media_type="text/html")
+
+        refreshed = False
+        if env.username and env.password_enc:
+            refreshed = await _refresh_env_token(env)
+        elif not env.token:
+            refreshed = await _refresh_env_token(env)
+
+        if refreshed:
+            await db.commit()
+        elif not env.token:
+            return Response(content="<h3>平台环境未登录</h3>", media_type="text/html")
 
         host = env.base_url.rstrip("/").replace("/backend", "")
         tid = env.platform_tenant_id
@@ -233,7 +292,7 @@ async def proxy_entry(
     # 生成 SSO 注入页面：先写 localStorage，再重定向到代理路径
     vuex = _build_vuex_state(env.token, tid, env.username or "")
     escaped_vuex = json.dumps(vuex)
-    redirect_path = f"/platform/{tid}/admin/app-store/edit-app?appId={app.apaas_app_id}&currentStepIndex=2"
+    redirect_path = f"/platform/{tid}/admin/app-store/edit-app?appId={app.apaas_app_id}&currentStepIndex=0"
     redirect_json = json.dumps(redirect_path)
 
     html = (
@@ -267,21 +326,18 @@ async def _ensure_proxy_state():
     if _proxy_state.get("host"):
         return True
     try:
-        from sqlalchemy import select
-        from app.database import AsyncSessionLocal
-        from app.models import PlatformEnv
         async with AsyncSessionLocal() as db:
             r = await db.execute(
                 select(PlatformEnv).where(PlatformEnv.status == "connected").limit(1)
             )
             env = r.scalar_one_or_none()
-            if env and env.token:
-                _proxy_state["host"] = env.base_url.rstrip("/").replace("/backend", "")
-                _proxy_state["token"] = env.token
-                _proxy_state["tenant_id"] = env.platform_tenant_id
-                _proxy_state["username"] = env.username or ""
-                logger.info(f"Proxy state auto-recovered: host={_proxy_state['host']}")
-                return True
+            if env:
+                if not env.token and not await _refresh_env_token(env):
+                    return False
+                if env.token:
+                    await db.commit()
+                    logger.info(f"Proxy state auto-recovered: host={_proxy_state['host']}")
+                    return True
     except Exception as e:
         logger.warning(f"Failed to auto-recover proxy state: {e}")
     return False
@@ -328,6 +384,19 @@ async def _proxy_request(request: Request, path: str, inject_auth: bool = False)
         body = await request.body() if request.method in ("POST", "PUT", "PATCH") else None
         resp = await client.request(method=request.method, url=target, headers=headers, content=body)
 
+        if resp.status_code == 401 and _proxy_state.get("username"):
+            env = await _find_proxy_env()
+            if env and await _refresh_env_token(env):
+                async with AsyncSessionLocal() as db:
+                    await db.merge(env)
+                    await db.commit()
+                if inject_auth:
+                    import time as _time
+                    headers["xdaptoken"] = _proxy_state.get("token", "")
+                    headers["xdaptenantid"] = _proxy_state.get("tenant_id", "")
+                    headers["xdaptimestamp"] = str(int(_time.time() * 1000))
+                resp = await client.request(method=request.method, url=target, headers=headers, content=body)
+
         resp_headers = {}
         for k, v in resp.headers.items():
             kl = k.lower()
@@ -357,7 +426,7 @@ async def _proxy_request(request: Request, path: str, inject_auth: bool = False)
 # 代理平台前端资源 /platform/...
 @router.api_route("/platform/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
 async def proxy_platform(request: Request, path: str):
-    return await _proxy_request(request, f"platform/{path}", inject_auth=False)
+    return await _proxy_request(request, f"platform/{path}", inject_auth=True)
 
 
 # 代理平台 API /backend/...（注入认证头）

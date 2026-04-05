@@ -35,6 +35,12 @@ const router = createRouter({
       meta: { requiresAuth: true }
     },
     {
+      path: '/workspace-catalog',
+      name: 'WorkspaceCatalog',
+      component: () => import('@/views/WorkspaceCatalogPage.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
       path: '/project/:id',
       name: 'ProjectOverview',
       component: () => import('@/views/ProjectOverview.vue'),

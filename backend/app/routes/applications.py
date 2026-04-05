@@ -16,6 +16,8 @@ from app.deps import get_auth_context, AuthContext
 from app.permissions import has_org_permission, check_resource_permission, batch_get_permissions, Action
 from jose import JWTError, jwt
 from app.config import settings
+from app.apaas_client import APaaSClient
+from app.crypto import decrypt_password
 
 from app.services.config_converter import convert_analysis_to_app_config
 
@@ -65,7 +67,7 @@ def _build_apaas_url(apaas_app_id: str, base_url: str | None = None, tenant_id: 
     """得帆云平台应用直达链接（从环境配置取地址）"""
     host = base_url.rstrip("/").replace("/backend", "") if base_url else "https://apaas-poc.definesys.cn"
     tid = tenant_id or settings.apaas_tenant_id
-    return f"{host}/platform/{tid}/admin/app-store/edit-app?appId={apaas_app_id}&currentStepIndex=2"
+    return f"{host}/platform/{tid}/admin/app-store/edit-app?appId={apaas_app_id}&currentStepIndex=0"
 
 
 def _build_local(app: Application, perms: dict | None = None, env_name: str | None = None, env_status: str | None = None) -> MergedAppResponse:
@@ -542,6 +544,112 @@ async def update_app_code(
     app.app_code = new_code
     await db.commit()
     return {"ok": True, "app_code": new_code}
+
+
+@router.post("/{app_id}/publish")
+async def publish_application(
+    app_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)]
+):
+    """上线应用（发布到平台）。"""
+    result = await db.execute(
+        select(Application).where(Application.id == app_id, Application.tenant_id == ctx.tenant_id)
+    )
+    app = result.scalar_one_or_none()
+    if not app:
+        raise HTTPException(status_code=404, detail="应用不存在")
+    if not app.apaas_app_id:
+        raise HTTPException(status_code=400, detail="应用尚未部署，不能上线")
+
+    await check_resource_permission(ctx, db, app, "application", Action.EDIT)
+
+    env = None
+    if app.platform_env_id:
+        env_result = await db.execute(select(PlatformEnv).where(PlatformEnv.id == app.platform_env_id))
+        env = env_result.scalar_one_or_none()
+    if not env:
+        env_result = await db.execute(
+            select(PlatformEnv).where(PlatformEnv.tenant_id == ctx.tenant_id, PlatformEnv.is_default == True)
+        )
+        env = env_result.scalar_one_or_none()
+    if not env:
+        env_result = await db.execute(
+            select(PlatformEnv).where(
+                PlatformEnv.tenant_id == ctx.tenant_id,
+                PlatformEnv.status == "connected",
+            ).limit(1)
+        )
+        env = env_result.scalar_one_or_none()
+    if not env:
+        raise HTTPException(status_code=400, detail="未找到可用的平台环境")
+
+    token = env.token
+    if not token and env.username and env.password_enc:
+        try:
+            password = decrypt_password(env.password_enc)
+            login_client = APaaSClient(base_url=env.base_url, tenant_id=env.platform_tenant_id)
+            login_result = await login_client.login(env.username, password)
+            token = login_result.get("token", "")
+            if token:
+                env.token = token
+                env.status = "connected"
+                await db.commit()
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"平台登录失败: {e}")
+    if not token:
+        raise HTTPException(status_code=400, detail="平台 token 不可用，请先在环境管理中登录")
+
+    try:
+        client = APaaSClient(base_url=env.base_url, tenant_id=env.platform_tenant_id, token=token)
+        app_detail = await client.query_app_detail(str(app.apaas_app_id))
+        current_version = app_detail.get("appVersion", app_detail.get("version", ""))
+        if current_version:
+          parts = current_version.split(".")
+          try:
+              nums = [int(p) for p in parts]
+              nums[-1] += 1
+              next_version = ".".join(str(p) for p in nums)
+          except Exception:
+              next_version = "1.0.1"
+        else:
+          next_version = "1.0.0"
+        await client.deploy_app(str(app.apaas_app_id), next_version, abstract="aPaaS Builder 应用上线")
+        app.status = "completed"
+        await db.commit()
+        return {"ok": True, "version": next_version, "remote_status": "ENABLE"}
+    except Exception as e:
+        detail = str(e)
+        if ("Token已过期或无效" in detail or "401" in detail) and env.username and env.password_enc:
+            try:
+                password = decrypt_password(env.password_enc)
+                refresh_client = APaaSClient(base_url=env.base_url, tenant_id=env.platform_tenant_id)
+                login_result = await refresh_client.login(env.username, password)
+                token = login_result.get("token", "")
+                if token:
+                    env.token = token
+                    env.status = "connected"
+                    await db.commit()
+                    client = APaaSClient(base_url=env.base_url, tenant_id=env.platform_tenant_id, token=token)
+                    app_detail = await client.query_app_detail(str(app.apaas_app_id))
+                    current_version = app_detail.get("appVersion", app_detail.get("version", ""))
+                    if current_version:
+                        parts = current_version.split(".")
+                        try:
+                            nums = [int(p) for p in parts]
+                            nums[-1] += 1
+                            next_version = ".".join(str(p) for p in nums)
+                        except Exception:
+                            next_version = "1.0.1"
+                    else:
+                        next_version = "1.0.0"
+                    await client.deploy_app(str(app.apaas_app_id), next_version, abstract="aPaaS Builder 应用上线")
+                    app.status = "completed"
+                    await db.commit()
+                    return {"ok": True, "version": next_version, "remote_status": "ENABLE"}
+            except Exception as retry_error:
+                raise HTTPException(status_code=401, detail=f"平台登录失效，请重新连接APaaS平台：{retry_error}")
+        raise HTTPException(status_code=400, detail=f"上线失败: {detail}")
 
 
 class PlatformConfigUpdate(BaseModel):

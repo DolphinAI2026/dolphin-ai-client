@@ -92,7 +92,7 @@
     </div>
 
     <!-- 操作按钮 -->
-    <div class="ddc-actions">
+    <div v-if="showActions !== false" class="ddc-actions">
       <button class="ddc-btn secondary" @click="$emit('edit')">编辑详情</button>
       <button class="ddc-btn primary" @click="$emit('confirm')" :disabled="confirming">
         {{ confirming ? '正在转换...' : '确认并开始搭建 →' }}
@@ -107,6 +107,7 @@ import { ref } from 'vue'
 defineProps<{
   docResult: any
   confirming?: boolean
+  showActions?: boolean
 }>()
 
 defineEmits<{

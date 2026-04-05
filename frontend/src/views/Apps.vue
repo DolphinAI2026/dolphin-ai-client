@@ -1,36 +1,28 @@
 <template>
-  <div class="apps-page">
-    <TopBar title="我的应用" show-back>
-      <template #actions>
-        <button class="new-btn" @click="router.push('/chat')">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-          新建应用
-        </button>
-      </template>
-    </TopBar>
-
-    <!-- Filter tabs + view toggle -->
-    <div class="filter-bar">
-      <div class="filter-tabs">
-        <button v-for="tab in tabs" :key="tab.value"
-          :class="['filter-tab', { active: activeTab === tab.value }]"
-          @click="activeTab = tab.value">
-          {{ tab.label }}
-          <span class="tab-count" v-if="tabCounts[tab.value]">{{ tabCounts[tab.value] }}</span>
-        </button>
+  <WorkbenchShell>
+    <div class="apps-main">
+      <!-- Filter tabs + view toggle -->
+      <div class="filter-bar">
+        <div class="filter-tabs">
+          <button v-for="tab in tabs" :key="tab.value"
+            :class="['filter-tab', { active: activeTab === tab.value }]"
+            @click="activeTab = tab.value">
+            {{ tab.label }}
+            <span class="tab-count" v-if="tabCounts[tab.value]">{{ tabCounts[tab.value] }}</span>
+          </button>
+        </div>
+        <div class="view-toggle">
+          <button :class="['toggle-btn', { active: viewMode === 'grid' }]" @click="viewMode = 'grid'" title="卡片视图">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+          </button>
+          <button :class="['toggle-btn', { active: viewMode === 'list' }]" @click="viewMode = 'list'" title="列表视图">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+          </button>
+        </div>
       </div>
-      <div class="view-toggle">
-        <button :class="['toggle-btn', { active: viewMode === 'grid' }]" @click="viewMode = 'grid'" title="卡片视图">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
-        </button>
-        <button :class="['toggle-btn', { active: viewMode === 'list' }]" @click="viewMode = 'list'" title="列表视图">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
-        </button>
-      </div>
-    </div>
 
-    <!-- Content area -->
-    <div class="app-content" :class="viewMode">
+      <!-- Content area -->
+      <div class="app-content" :class="viewMode">
       <div v-if="loading" class="empty-state">加载中...</div>
       <div v-else-if="filteredApps.length === 0" class="empty-state">
         <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.3"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
@@ -39,7 +31,7 @@
 
       <!-- Grid (card) view -->
       <template v-if="viewMode === 'grid'">
-        <div v-for="a in filteredApps" :key="a.id" class="grid-card" @click="router.push({ path: '/chat', query: { app_id: String(a.id), app_mode: 'parsed' } })">
+        <div v-for="a in filteredApps" :key="a.id" class="grid-card" @click="router.push({ path: '/chat', query: { app_id: String(a.id) } })">
           <div class="grid-card-top">
             <div class="grid-card-icon" :class="sourceIconClass(a)">{{ sourceIcon(a) }}</div>
             <div class="grid-card-badges">
@@ -75,7 +67,7 @@
 
       <!-- List view -->
       <template v-if="viewMode === 'list'">
-        <div v-for="a in filteredApps" :key="a.id" class="list-card" @click="router.push({ path: '/chat', query: { app_id: String(a.id), app_mode: 'parsed' } })">
+        <div v-for="a in filteredApps" :key="a.id" class="list-card" @click="router.push({ path: '/chat', query: { app_id: String(a.id) } })">
           <div class="card-header">
             <div class="card-left">
               <div class="card-icon" :class="sourceIconClass(a)">{{ sourceIcon(a) }}</div>
@@ -113,8 +105,9 @@
           </div>
         </div>
       </template>
+      </div>
     </div>
-  </div>
+  </WorkbenchShell>
 </template>
 
 <script setup lang="ts">
@@ -123,8 +116,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { applicationApi } from '@/api/application'
 import type { MergedApplication } from '@/types'
-import ThemeToggle from '@/components/ThemeToggle.vue'
-import TopBar from '@/components/TopBar.vue'
+import WorkbenchShell from '@/components/WorkbenchShell.vue'
 
 const router = useRouter()
 const apps = ref<MergedApplication[]>([])
@@ -205,12 +197,11 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.apps-page {
-  height: 100vh;
+.apps-main {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  background: var(--t-bg-base);
-  color: var(--t-text-primary);
 }
 
 /* ── Nav ── */
