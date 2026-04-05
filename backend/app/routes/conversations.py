@@ -50,7 +50,7 @@ async def create_conversation(
     conversation = Conversation(
         user_id=ctx.user.id,
         tenant_id=ctx.tenant_id,
-        title=f"新对话 - {data.agent_type}",
+        title={"builder": "新对话", "requirements": "需求分析", "coding": "智能开发"}.get(data.agent_type, "新对话"),
         agent_type=data.agent_type,
         selected_llm_config_id=selected_llm_config_id,
         status="active"

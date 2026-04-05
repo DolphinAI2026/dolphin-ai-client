@@ -19,12 +19,55 @@
     </div>
     <div v-if="$slots.actions" class="top-bar-right">
       <slot name="actions" />
+      <ThemeToggle />
+      <el-dropdown @command="handleCommand" trigger="click">
+        <button class="user-avatar-btn">
+          {{ userInitial }}
+        </button>
+        <template #dropdown>
+          <el-dropdown-menu>
+            <el-dropdown-item disabled>
+              <div class="user-menu-info">
+                <div class="user-menu-label">用户</div>
+                <div class="user-menu-value">{{ userStore.user?.username }}</div>
+              </div>
+            </el-dropdown-item>
+            <el-dropdown-item disabled v-if="userStore.tenantName">
+              <div class="user-menu-info">
+                <div class="user-menu-label">租户</div>
+                <div class="user-menu-value">{{ userStore.tenantName }}</div>
+              </div>
+            </el-dropdown-item>
+            <el-dropdown-item divided command="home">
+              <span class="menu-row"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg> 首页</span>
+            </el-dropdown-item>
+            <el-dropdown-item command="apps">
+              <span class="menu-row"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> 我的应用</span>
+            </el-dropdown-item>
+            <el-dropdown-item command="coding">
+              <span class="menu-row"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg> AI Coding</span>
+            </el-dropdown-item>
+            <el-dropdown-item command="envs">
+              <span class="menu-row"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg> 环境管理</span>
+            </el-dropdown-item>
+            <el-dropdown-item divided command="logout">
+              <span class="menu-row" style="color: var(--t-danger, #ef4444);"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg> 退出登录</span>
+            </el-dropdown-item>
+          </el-dropdown-menu>
+        </template>
+      </el-dropdown>
     </div>
   </nav>
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useRouter } from 'vue-router'
+import { useUserStore } from '@/stores/user'
+import ThemeToggle from '@/components/ThemeToggle.vue'
+
+const userStore = useUserStore()
+const userInitial = computed(() => (userStore.user?.username || 'A').slice(0, 1))
 
 const props = withDefaults(defineProps<{
   title?: string
@@ -124,5 +167,53 @@ function handleBack() {
   overflow: hidden;
   text-overflow: ellipsis;
   margin-left: 2px;
+}
+
+/* User avatar */
+.user-avatar-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: none;
+  background: var(--t-brand-gradient);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 0.15s;
+  flex-shrink: 0;
+}
+.user-avatar-btn:hover {
+  opacity: 0.85;
+}
+
+/* User menu */
+.user-menu-info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 2px 0;
+}
+.user-menu-label {
+  font-size: 10px;
+  color: var(--t-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.user-menu-value {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--t-text-primary);
+}
+.menu-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.menu-row svg {
+  flex-shrink: 0;
 }
 </style>

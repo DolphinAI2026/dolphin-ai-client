@@ -20,4 +20,14 @@ export const platformEnvApi = {
   login: (id: number) => request.post<any, { ok: boolean; status: string }>(`/platform-envs/${id}/login`),
   setDefault: (id: number) => request.post(`/platform-envs/${id}/set-default`),
   getEmbedUrl: (appId: number) => request.get<any, { url: string; env_name: string }>(`/platform-envs/embed-url?app_id=${appId}`),
+  listRemoteApps: (envId: number) => request.get<any, RemoteApp[]>(`/platform-envs/${envId}/remote-apps`),
+}
+
+export interface RemoteApp {
+  apaas_app_id: string
+  app_name: string
+  app_code: string
+  description: string
+  status: string
+  already_imported: boolean
 }

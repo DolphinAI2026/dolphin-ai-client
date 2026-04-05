@@ -559,6 +559,40 @@ class APaaSClient:
                 return form_config
             raise Exception(data.get("message", "查询表单配置失败"))
 
+    async def query_detail_page_config(self, app_id: str, form_id: str) -> dict:
+        """查询表单详情页完整配置（含组件、子表列、选项、权限）
+
+        调用 detailPageConfigById 接口，返回比 formContext 更丰富的数据：
+        - detailPage.formComponents: 完整组件列表（含 chooseOptions、documentNumRules 等）
+        - modelWithFieldVoList: 所有关联模型及字段的 DB 定义
+        - advancedPermissionGroups: 数据权限配置
+        - operationPermissionGroups: 操作权限配置
+        """
+        ts = self._get_timestamp()
+        url = (
+            f"{self.base_url}/xdap-app/formConfig/query/"
+            f"detailPageConfigById?timestamp={ts}&formId={form_id}&appId={app_id}"
+        )
+        _log_request("GET", url)
+        start = time.time()
+
+        async with httpx.AsyncClient(verify=False, timeout=60.0) as client:
+            response = await client.get(url, headers=self._get_headers(app_id))
+            elapsed_ms = (time.time() - start) * 1000
+            response.raise_for_status()
+            data = response.json()
+
+            _log_response(url, response.status_code, data, elapsed_ms, method="GET")
+
+            if data.get("code") == "ok":
+                result = data.get("data", {})
+                logger.info(
+                    f"查询详情页配置成功: formId={form_id}, "
+                    f"models={len(result.get('modelWithFieldVoList', []))}"
+                )
+                return result
+            raise Exception(data.get("message", "查询详情页配置失败"))
+
     async def save_form_config(self, app_id: str, form_config: dict) -> dict:
         """保存表单配置（全量更新）"""
         url = f"{self.base_url}/xdap-app/formConfig/save/formConfigDetail"

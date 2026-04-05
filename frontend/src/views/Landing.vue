@@ -36,7 +36,7 @@
             <input class="input-text" v-model="inputText" :placeholder="inputPlaceholder" @keydown.enter="goChat(inputText.trim())" />
             <div class="input-bottom">
               <label class="upload-btn">
-                <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1v7M2.5 4.5L6 8l3.5-3.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M1 10.5h10" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 11V4M2.5 7.5L6 4l3.5 3.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M1 1.5h10" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
                 上传文档
                 <input type="file" accept=".md,.pdf,.docx,.doc,.txt,.markdown" @change="handleDocUpload" hidden />
               </label>
@@ -70,7 +70,13 @@
           <div>
             <div class="section-header">
               <span class="section-title">已搭建应用</span>
-              <button class="view-all-link" @click="navigateTo('/apps')">查看全部 →</button>
+              <div class="section-actions">
+                <button class="import-link" @click="showImportDialog = true">
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1v8M2.5 5.5L6 9l3.5-3.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M1 11h10" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+                  从平台导入
+                </button>
+                <button class="view-all-link" @click="navigateTo('/apps')">查看全部 →</button>
+              </div>
             </div>
             <div class="app-grid">
               <button v-for="(app,idx) in recentApps.slice(0,6)" :key="app.id" class="app-card" @click="openApp(app)">
@@ -89,6 +95,8 @@
       </div>
     </main>
   </WorkbenchShell>
+
+  <ImportAppDialog v-model="showImportDialog" @imported="loadApps" />
 
   <el-dialog v-model="profileDialogVisible" title="我的信息" width="460px" destroy-on-close>
     <div class="profile-block">
@@ -134,6 +142,7 @@ import { conversationApi, type ConversationWithApp } from '@/api/conversation'
 import { applicationApi } from '@/api/application'
 import type { AppItem } from '@/components/AppSidebar.vue'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
+import ImportAppDialog from '@/components/ImportAppDialog.vue'
 
 const router = useRouter()
 const previewStore = usePreviewStore()
@@ -145,6 +154,7 @@ const recentSessions = ref<ConversationWithApp[]>([])
 const recentApps = ref<AppItem[]>([])
 const generatedModules = ref(0)
 const profileDialogVisible = ref(false)
+const showImportDialog = ref(false)
 const changingPassword = ref(false)
 const passwordForm = ref({ oldPassword: '', newPassword: '', confirmPassword: '' })
 
@@ -278,7 +288,7 @@ async function submitChangePassword() {
   }
 }
 
-onMounted(async () => {
+async function loadApps() {
   const [list, apps] = await Promise.all([
     conversationApi.listWithApps({ agent_type: 'builder' }).catch(() => []),
     applicationApi.list({ include_remote: true }).catch(() => []),
@@ -317,7 +327,9 @@ onMounted(async () => {
     const data = item.config_preview?.data || item.config_preview || {}
     return sum + (Array.isArray(data.models) ? data.models.length : 0)
   }, 0)
-})
+}
+
+onMounted(loadApps)
 </script>
 
 <style scoped>
@@ -361,6 +373,9 @@ onMounted(async () => {
 
 .section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
 .section-title { font-size: 13px; font-weight: 500; color: #26215C; }
+.section-actions { display: flex; align-items: center; gap: 12px; }
+.import-link { border: none; background: transparent; color: #6d73d5; font-size: 12px; font-weight: 500; cursor: pointer; padding: 0; display: flex; align-items: center; gap: 4px; }
+.import-link:hover { color: #534AB7; }
 .view-all-link { border: none; background: transparent; color: #6d73d5; font-size: 12px; font-weight: 500; cursor: pointer; padding: 0; }
 .view-all-link:hover { color: #534AB7; }
 .app-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }

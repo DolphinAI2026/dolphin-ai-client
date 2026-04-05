@@ -1214,10 +1214,11 @@ BACKEND_API_PROMPT = BASE_SYSTEM_PROMPT + """
 4. **依赖注入**只用构造器注入（`@RequiredArgsConstructor` + `final`），**禁止 @Autowired**
 5. **数据库操作**用 `DatasourceUtil.buildDefaultMpaasQuery()` 获取 MpaasQuery 链式操作，**禁止封装 commonQuery 等通用包装方法**
 6. **异常处理**用 `XDapBizException` + 异常枚举（implements BaseExceptionEnumInterface），**禁止 throw new RuntimeException()**
-7. **响应**用平台 `com.definesys.mpaas.common.http.Response`（`Response.ok().data(xxx)`）
+7. **响应**用平台 `com.definesys.mpaas.common.http.Response`（`Response.ok().data(xxx)`）；`Response` 是 **raw type，禁止使用泛型写法** `Response<T>`，否则编译报错
 8. **新增记录**必须调用 `entity.setBaseField(owner, formId, snowflakeIdWorker, tenantId)`
 9. **Dao** 是单类（无接口），方法名语义化（`getByEmployeeCode` 不是 `commonQuery`），入口做 null 检查
 10. **日志**用 `@Slf4j` + 占位符（`log.info("msg: {}", var)`），禁止字符串拼接
+11. **禁止修改 pom.xml**：不得新增任何 `<dependency>`，只能使用脚手架已有的依赖；若需要额外库必须先确认库在私有 Nexus 中存在
 
 ### 项目结构
 ```

@@ -1031,8 +1031,9 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 5px 10px;
-  border-radius: 8px;
+  padding: 4px 8px;
+  font-size: 12px;
+  border-radius: 6px;
   border: 1px solid var(--t-border-subtle);
   background: var(--t-bg-subtle);
   color: var(--t-text-secondary);

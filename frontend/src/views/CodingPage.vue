@@ -26,6 +26,42 @@
     <div class="coding-body">
       <!-- Main Content: Welcome or IDE -->
       <div class="main-content">
+        <!-- 非嵌入模式顶部工具栏：返回 + Chat/IDE 切换 -->
+        <div
+          v-if="!embeddedAppId && (ideUrl || streamMessages.length > 0)"
+          class="content-view-toggle-bar"
+        >
+          <!-- 左：返回首页 -->
+          <button class="toggle-bar-back-btn" @click="startNewWorkspace" title="返回首页">
+            <el-icon :size="14"><ArrowLeft /></el-icon>
+            <span>返回</span>
+          </button>
+
+          <!-- 中：Chat / IDE 切换 -->
+          <div class="view-toggle">
+            <button
+              class="view-toggle-btn"
+              :class="{ active: activeView === 'chat' }"
+              @click="activeView = 'chat'"
+            >
+              <el-icon :size="13"><ChatDotRound /></el-icon>
+              <span class="view-toggle-label">对话</span>
+            </button>
+            <button
+              class="view-toggle-btn"
+              :class="{ active: activeView === 'ide', disabled: !ideUrl }"
+              :disabled="!ideUrl"
+              @click="ideUrl && (activeView = 'ide')"
+            >
+              <el-icon :size="13"><Monitor /></el-icon>
+              <span class="view-toggle-label">IDE</span>
+            </button>
+          </div>
+
+          <!-- 右：占位，保持切换居中 -->
+          <div class="toggle-bar-placeholder"></div>
+        </div>
+
         <!-- Welcome State -->
         <div v-if="!ideUrl && !isStreaming && streamMessages.length === 0" class="welcome-pane">
           <div class="welcome-inner">
@@ -36,6 +72,15 @@
 
               <!-- Input Area (centered) -->
               <div class="welcome-input-area">
+                <div class="coding-model-bar">
+                  <div class="coding-model-meta">
+                    <span class="coding-model-label">当前模型</span>
+                    <span v-if="codingModelOptions.length === 0" class="coding-model-tip">
+                      未配置可用模型，<router-link to="/platform-envs" style="color:var(--t-brand);text-decoration:underline">前往环境管理配置</router-link>
+                    </span>
+                    <span v-else class="coding-model-tip">{{ codingModelHint }}</span>
+                  </div>
+                </div>
                 <!-- Attachment Preview -->
                 <div v-if="attachedFile" class="attachment-preview">
                   <div v-if="attachedPreviewUrl" class="attachment-thumb">
@@ -1461,6 +1506,37 @@ watch(() => route.path, () => {
 }
 
 /* ============ View Toggle (Chat / IDE) ============ */
+.content-view-toggle-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px 4px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--t-border-subtle);
+}
+
+.toggle-bar-back-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border: 1px solid var(--t-border-subtle);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--t-text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.toggle-bar-back-btn:hover {
+  background: var(--t-bg-elevated);
+  color: var(--t-text-primary);
+}
+
+.toggle-bar-placeholder {
+  width: 70px; /* 与返回按钮等宽，保持切换居中 */
+}
+
 .view-toggle {
   display: flex;
   align-items: center;

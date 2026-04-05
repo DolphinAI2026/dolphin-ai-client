@@ -333,6 +333,13 @@ async def send_message(
     db.add(user_message)
     await db.commit()
 
+    # 自动更新对话标题（首条用户消息时）
+    if conversation.title in ("新对话", "需求分析", "智能开发") or conversation.title.startswith("新对话"):
+        short_title = data.message.strip().replace("\n", " ")[:30]
+        if short_title:
+            conversation.title = short_title
+            await db.commit()
+
     # 获取历史消息
     result = await db.execute(
         select(Message)

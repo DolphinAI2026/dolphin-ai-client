@@ -19,6 +19,13 @@ export const applicationApi = {
   autoCreate(data: { app_name: string; config_preview: any; conversation_id?: number }) {
     return request.post<any, { app_id: number; app_name: string; app_code: string; is_new: boolean }>('/applications/auto-create', data)
   },
+  /** 从平台导入已有应用 */
+  importFromPlatform(envId: number, apaasAppId: string) {
+    return request.post<any, Application>('/applications/import-from-platform', {
+      env_id: envId,
+      apaas_app_id: apaasAppId,
+    })
+  },
   /** 更新应用的平台环境配置 */
   updatePlatformConfig(appId: number, data: { platform_url?: string; platform_tenant_id?: string; platform_username?: string; platform_password_enc?: string }) {
     return request.patch<any, { success: boolean }>(`/applications/${appId}/platform-config`, data)
