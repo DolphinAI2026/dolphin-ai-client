@@ -78,17 +78,29 @@
                 <button class="view-all-link" @click="navigateTo('/apps')">查看全部 →</button>
               </div>
             </div>
-            <div class="app-grid">
-              <button v-for="(app,idx) in recentApps.slice(0,6)" :key="app.id" class="app-card" @click="openApp(app)">
+            <div v-if="recentApps.length === 0" class="empty-apps">
+              <div class="empty-text">还没有搭建过应用，上传设计文档或描述需求开始创建吧</div>
+            </div>
+            <div v-else class="app-grid">
+              <div v-for="(app,idx) in recentApps.slice(0,6)" :key="app.id" class="app-card">
                 <div class="app-card-header">
-                  <div class="app-dot" :class="idx===1 ? 'teal' : idx===2 ? 'amber' : 'purple'">{{ idx===1 ? '💰' : idx===2 ? '⚙️' : '📋' }}</div>
-                  <div>
+                  <div class="app-dot" :class="['purple','teal','amber'][idx % 3]">{{ ['📋','💼','⚙️'][idx % 3] }}</div>
+                  <div class="app-card-info">
                     <div class="app-name">{{ app.label }}</div>
                     <div class="app-time">{{ app.timeLabel }}更新</div>
                   </div>
+                  <span class="app-status" :class="app.status==='processing' ? 'building' : 'done'">{{ app.status==='processing' ? '构建中' : '已生成' }}</span>
                 </div>
-                <span class="app-status" :class="app.status==='processing' ? 'building' : 'done'">{{ app.status==='processing' ? '构建中' : '已生成' }}</span>
-              </button>
+                <div class="app-card-actions">
+                  <button class="app-action-btn primary" @click="openAppUpdate(app)" title="上传更新文档或对话迭代">
+                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1v8M2.5 5.5L6 9l3.5-3.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    继续迭代
+                  </button>
+                  <button class="app-action-btn" @click="openApp(app)" title="查看应用详情">
+                    查看
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -203,6 +215,10 @@ function handleDocUpload(e: Event) {
 
 function openApp(app: AppItem) {
   router.push({ path: '/chat', query: { app_id: String(app.id) } })
+}
+
+function openAppUpdate(app: AppItem) {
+  router.push({ path: '/chat', query: { app_id: String(app.id), mode: 'update' } })
 }
 
 function openConversation(sessionId: number | string) {
@@ -379,17 +395,26 @@ onMounted(loadApps)
 .view-all-link { border: none; background: transparent; color: #6d73d5; font-size: 12px; font-weight: 500; cursor: pointer; padding: 0; }
 .view-all-link:hover { color: #534AB7; }
 .app-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-.app-card { background: rgba(255,255,255,0.75); border: 0.5px solid rgba(255,255,255,0.9); border-radius: var(--border-radius-lg); padding: 12px; cursor: pointer; text-align: left; }
-.app-card-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.app-card { background: rgba(255,255,255,0.75); border: 0.5px solid rgba(255,255,255,0.9); border-radius: var(--border-radius-lg); padding: 12px; text-align: left; transition: border-color 0.15s, box-shadow 0.15s; }
+.app-card:hover { border-color: rgba(83,74,183,0.25); box-shadow: 0 2px 8px rgba(83,74,183,0.08); }
+.app-card-header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.app-card-info { flex: 1; min-width: 0; }
 .app-dot { width: 28px; height: 28px; border-radius: 7px; display: flex; align-items: center; justify-content: center; font-size: 13px; flex-shrink: 0; }
 .app-dot.purple { background: #EEEDFE; }
 .app-dot.teal { background: #E1F5EE; }
 .app-dot.amber { background: #FAEEDA; }
-.app-name { font-size: 12px; font-weight: 500; color: #26215C; }
+.app-name { font-size: 12px; font-weight: 500; color: #26215C; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .app-time { font-size: 11px; color: #534AB7; opacity: 0.6; margin-top: 1px; }
-.app-status { display: inline-flex; font-size: 11px; padding: 2px 7px; border-radius: 20px; }
+.app-status { display: inline-flex; font-size: 10px; padding: 2px 7px; border-radius: 20px; flex-shrink: 0; }
 .app-status.done { background: #EAF3DE; color: #3B6D11; }
 .app-status.building { background: #EEEDFE; color: #534AB7; }
+.app-card-actions { display: flex; gap: 6px; }
+.app-action-btn { flex: 1; display: flex; align-items: center; justify-content: center; gap: 4px; padding: 6px 0; border-radius: 7px; font-size: 11px; font-weight: 500; cursor: pointer; border: 0.5px solid rgba(83,74,183,0.2); background: rgba(255,255,255,0.6); color: #534AB7; transition: all 0.15s; }
+.app-action-btn:hover { background: rgba(83,74,183,0.06); border-color: rgba(83,74,183,0.35); }
+.app-action-btn.primary { background: #3C3489; color: #EEEDFE; border-color: #3C3489; }
+.app-action-btn.primary:hover { background: #2E2870; }
+.empty-apps { background: rgba(255,255,255,0.5); border: 1px dashed rgba(83,74,183,0.2); border-radius: var(--border-radius-lg); padding: 32px; text-align: center; }
+.empty-text { font-size: 12px; color: #9490C4; }
 
 .profile-block { padding: 4px 2px 12px; }
 .profile-hero { display: flex; align-items: center; gap: 14px; padding: 8px 0 16px; }

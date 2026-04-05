@@ -122,14 +122,21 @@ def _convert_roles(remote_roles: List[Dict]) -> List[Dict]:
 
 
 def _convert_dicts(remote_dicts: List[Dict], dict_options: Dict[str, List[Dict]]) -> List[Dict]:
-    """平台字典 → preview 字典"""
+    """平台字典 → preview 字典
+
+    dict_options 的 key 可能是 dict_code 或 dict_id，两个都尝试匹配。
+    """
     dicts = []
     for d in remote_dicts:
         dict_id = str(d.get("id", d.get("dictionaryId", "")))
         dict_code = d.get("dictionaryCode", d.get("code", ""))
         options = []
-        # 从 dict_options 中取选项
-        raw_options = dict_options.get(dict_id, [])
+        # dict_options 的 key 可能是 code（fetch_remote_data 用 code 存）
+        # 也可能是 id，两个都尝试
+        raw_options = (
+            dict_options.get(dict_code, [])
+            or dict_options.get(dict_id, [])
+        )
         for opt in raw_options:
             options.append({
                 "name": opt.get("dictionaryValue", opt.get("name", "")),
@@ -294,58 +301,87 @@ def _build_dicts_from_form_configs(
 ) -> List[Dict]:
     """从 detailPageConfigById 的 chooseOptions 提取字典，合并 remote dicts。
 
-    优先用 chooseOptions 中的选项（因为它已包含 label），
-    remote_dicts 用于补充 code 信息。
+    策略：
+    1. 先从 remote_dicts + dict_options 构建基础字典列表
+    2. 建立 source_id → dict_code 映射
+    3. 遍历 form_configs 的组件，用 chooseOptions 补充空选项
     """
-    # 先用基础 remote dicts 构建（有 dict code）
+    # 1. 基础字典
     seen_codes: Set[str] = set()
     dicts: List[Dict] = []
-
-    # 基础字典
     base_dicts = _convert_dicts(remote_dicts, dict_options)
     for d in base_dicts:
         if d["code"] and d["code"] not in seen_codes:
             seen_codes.add(d["code"])
             dicts.append(d)
 
-    # 从 form_configs 补充：有些字典选项在 chooseOptions 里更完整
+    # 2. 建立 source_id → dict_code 映射（用于精准匹配 chooseOptions）
+    source_id_to_dict: Dict[str, str] = {}
+    for rd in remote_dicts:
+        rid = str(rd.get("id", rd.get("dictionaryId", "")))
+        rcode = rd.get("dictionaryCode", rd.get("code", ""))
+        if rid and rcode:
+            source_id_to_dict[rid] = rcode
+
+    # 3. 遍历 form_configs 组件，用 chooseOptions 补充选项
     for fc in form_configs.values():
         components = fc.get("detailPage", {}).get("formComponents", [])
         for comp in components:
-            _enrich_dict_from_component(comp, dicts, seen_codes)
+            _enrich_dict_from_component(comp, dicts, seen_codes, source_id_to_dict)
 
     return dicts
 
 
 def _enrich_dict_from_component(
-    comp: Dict, dicts: List[Dict], seen_codes: Set[str]
+    comp: Dict, dicts: List[Dict], seen_codes: Set[str],
+    source_id_to_dict: Dict[str, str],
 ):
-    """从组件的 chooseOptions 补充字典选项"""
+    """从组件的 chooseOptions 补充字典选项。
+
+    通过 source.id → dict_code 精准匹配到字典，再用 chooseOptions 填充选项。
+    """
     source = comp.get("source", {})
     choose_options = comp.get("chooseOptions", [])
 
     if source.get("type") == "DICTIONARY_TYPE" and choose_options:
-        # 找到对应的字典，补充空选项
-        source_id = source.get("id", "")
-        for d in dicts:
-            # 匹配：如果字典选项为空但 chooseOptions 有值
-            if not d.get("options") and source_id:
-                # 用 source_id 匹配（需要遍历 remote_dicts 找）
-                pass
-            # 如果已有选项，检查是否需要补充
-            elif d.get("options"):
-                existing_codes = {o["code"] for o in d["options"]}
-                for opt in choose_options:
-                    opt_code = opt.get("id", "")
-                    if opt_code and opt_code not in existing_codes:
-                        d["options"].append({
-                            "name": opt.get("label", ""),
-                            "code": opt_code,
-                        })
+        source_id = str(source.get("id", ""))
+        # 从 chooseOptions 提取选项列表
+        new_options = [
+            {"name": opt.get("label", ""), "code": opt.get("id", "")}
+            for opt in choose_options
+            if opt.get("id") and opt.get("label")
+        ]
+        if new_options:
+            # 通过 source_id 精准匹配到 dict_code
+            target_code = source_id_to_dict.get(source_id, "")
+            matched = False
+            for d in dicts:
+                if target_code and d["code"] == target_code:
+                    # 精准匹配 → 补充选项
+                    if not d.get("options"):
+                        d["options"] = new_options
+                    else:
+                        existing = {o["code"] for o in d["options"]}
+                        for opt in new_options:
+                            if opt["code"] not in existing:
+                                d["options"].append(opt)
+                                existing.add(opt["code"])
+                    matched = True
+                    break
+
+            if not matched and target_code:
+                # 字典列表里没有这个 code（不该发生），创建新的
+                if target_code not in seen_codes:
+                    seen_codes.add(target_code)
+                    dicts.append({
+                        "name": comp.get("label", target_code),
+                        "code": target_code,
+                        "options": new_options,
+                    })
 
     # 递归子表列
     for col in comp.get("tableColumn", []):
-        _enrich_dict_from_component(col, dicts, seen_codes)
+        _enrich_dict_from_component(col, dicts, seen_codes, source_id_to_dict)
 
 
 def _build_models_from_form_configs(
