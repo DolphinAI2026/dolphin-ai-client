@@ -119,7 +119,7 @@ const activeKey = computed(() => {
 const userInitial = computed(() => (userStore.user?.username || 'A').slice(0, 1).toLowerCase())
 
 function syncExpandedWithRoute() {
-  expanded.value = route.meta.navExpanded !== false
+  expanded.value = route.meta.navExpanded === true
 }
 
 watch(() => route.fullPath, syncExpandedWithRoute, { immediate: true })
@@ -151,7 +151,7 @@ async function handleUserCommand(command: string | number | object) {
 
 <style scoped>
 .global-nav-rail {
-  width: 220px;
+  width: 194px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -167,7 +167,7 @@ async function handleUserCommand(command: string | number | object) {
 }
 
 .sidebar-logo {
-  padding: 13px 12px 13px 16px;
+  padding: 13px 10px 13px 12px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -179,17 +179,20 @@ async function handleUserCommand(command: string | number | object) {
 .logo-main {
   display: flex;
   align-items: center;
-  gap: 14px;
+  justify-content: flex-start;
+  gap: 4px;
+  flex: 1;
   min-width: 0;
   cursor: pointer;
   border: none;
   background: transparent;
   padding: 0;
+  text-align: left;
 }
 
 .logo-icon {
-  width: 34px;
-  height: 34px;
+  width: 30px;
+  height: 30px;
   border-radius: 10px;
   display: flex;
   align-items: center;
@@ -202,6 +205,7 @@ async function handleUserCommand(command: string | number | object) {
   font-weight: 600;
   color: #20253f;
   white-space: nowrap;
+  text-align: left;
 }
 
 .collapse-btn-top {
@@ -239,7 +243,7 @@ async function handleUserCommand(command: string | number | object) {
 }
 
 .sidebar-nav {
-  padding: 6px var(--sidebar-gutter);
+  padding: 6px 10px;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -291,12 +295,12 @@ async function handleUserCommand(command: string | number | object) {
 .sidebar-divider {
   height: 1px;
   background: rgba(125, 132, 181, 0.16);
-  margin: 4px var(--sidebar-gutter);
+  margin: 4px 10px;
 }
 
 .sidebar-bottom {
   margin-top: auto;
-  padding: 10px var(--sidebar-gutter);
+  padding: 10px 10px;
   border-top: 1px solid rgba(125, 132, 181, 0.16);
 }
 
