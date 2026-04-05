@@ -431,9 +431,14 @@ async def auto_create_application(
         )
         existing = result.scalar_one_or_none()
         if existing:
-            # 更新配置
+            # 更新配置 + 生成 requirement_doc
             existing.config_preview = json.dumps(data.config_preview, ensure_ascii=False)
             existing.app_name = data.app_name
+            try:
+                from app.services.config_to_spec import config_to_markdown
+                existing.requirement_doc = config_to_markdown(data.config_preview)
+            except Exception:
+                pass
             await db.commit()
             return AutoCreateResponse(
                 app_id=existing.id,
@@ -451,6 +456,13 @@ async def auto_create_application(
         ascii_code = "app-" + hashlib.md5(data.app_name.encode()).hexdigest()[:6]
 
     config_str = json.dumps(data.config_preview, ensure_ascii=False)
+    # 生成 requirement_doc
+    req_doc = ""
+    try:
+        from app.services.config_to_spec import config_to_markdown
+        req_doc = config_to_markdown(data.config_preview)
+    except Exception:
+        pass
     app = Application(
         user_id=ctx.user.id,
         tenant_id=ctx.tenant_id,
@@ -459,6 +471,7 @@ async def auto_create_application(
         app_name=data.app_name,
         app_code=ascii_code,
         config_preview=config_str,
+        requirement_doc=req_doc,
         status="draft",
     )
     db.add(app)
