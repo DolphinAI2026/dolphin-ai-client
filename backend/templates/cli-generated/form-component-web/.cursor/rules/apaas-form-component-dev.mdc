@@ -901,8 +901,11 @@ computed: {
 ```
 平台自动感知 `componentConfig.customComponentConfig` 属性变化并持久化，**不需要任何保存方法**。
 
-**严禁使用以下方式**（方法不存在，或不会触发平台持久化）：
+**严禁使用以下方式**（方法根本不存在，调用会直接报错）：
 - ❌ `saveConfig()` — 不要封装此方法
 - ❌ `data.localConfig` + `created()` 初始化的模式 — 不需要本地副本
-- ❌ `updateCustomConfig(config)` / `updateCustomComponentConfig(config)` — 不存在
-- ❌ `this.formEngine.setWidgetInfo(...)` — formEngine 上没有此方法
+- ❌ `formEngine.updateWidgetConfig(...)` — formEngine 上根本没有此方法
+- ❌ `formEngine.updateCustomComponentConfig(...)` — 不存在
+- ❌ `formEngine.setWidgetInfo(...)` — 不存在
+- ❌ `formEngine.saveConfig(...)` — 不存在
+- ❌ 任何通过 formEngine 写入配置的方法均不存在，只能用 v-model 直接绑定

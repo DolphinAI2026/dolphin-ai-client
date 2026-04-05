@@ -661,7 +661,17 @@ export default {
 2. **inject 声明必须带 `{ default: null }`**，不能用数组形式 `inject: ['xxx']`，否则找不到 provide 时组件会静默崩溃
 3. **配置直接存在 `customComponentConfig` 根级别**，如 `{ dataSource, xField, chartType }`，不要多嵌套一层如 `{ chartConfig: { ... } }`
 4. **edit/read/ide.vue 读取配置的路径必须和 setting.vue 存储路径一致**
-5. **严禁封装任何保存方法**：不要写 saveConfig、updateCustomConfig、updateCustomComponentConfig、setWidgetInfo 等，这些方法不存在或不会触发平台持久化
+5. **严禁封装任何保存方法，严禁调用任何 formEngine 方法来保存配置**
+
+**🚫 formEngine 上根本不存在以下方法，绝对不能调用（会直接报错）**：
+- ❌ `formEngine.updateWidgetConfig(...)` — 不存在
+- ❌ `formEngine.updateCustomComponentConfig(...)` — 不存在
+- ❌ `formEngine.setWidgetInfo(...)` — 不存在
+- ❌ `formEngine.saveConfig(...)` — 不存在
+- ❌ 任何通过 formEngine 写入配置的方法均不存在
+
+**formEngine 上实际可用的方法只有**：
+- `formEngine.formDataControl.allTileFormItemList` — 获取所有表单组件列表（只读）
 
 **⚠️ 禁止在 setting.vue 中使用以下方式获取 FormEngine（这些是错误的！）**：
 - ❌ `this.$utils?.formEngine`
@@ -2293,7 +2303,7 @@ CODE_GENERATION_INSTRUCTION = """
 9. 编辑态组件中使用 `this.formValue` 读写值，值存储为 JSON 字符串（复杂数据）
 10. **edit.vue 只渲染内容，不要显示配置界面**。配置 UI 只放在 setting.vue 中
 11. **setting.vue 的 props 必须包含 `componentConfig`（widget对象）**，由平台 EditorFormConfigMixin 传入。`inject` 只作为兜底，且必须带 `{ default: null }`
-12. **setting.vue 中控件直接 `v-model="componentConfig.customComponentConfig.xxx"` 双向绑定**，平台自动持久化。严禁封装 saveConfig、updateCustomConfig、updateCustomComponentConfig、setWidgetInfo 等任何保存方法，这些方法不存在或不触发持久化
+12. **setting.vue 中控件直接 `v-model="componentConfig.customComponentConfig.xxx"` 双向绑定**，平台自动持久化。严禁调用 formEngine 上任何写入配置的方法（formEngine.updateWidgetConfig、formEngine.updateCustomComponentConfig、formEngine.setWidgetInfo 等方法根本不存在，调用会直接报错）
 13. **setting.vue 中不要再包一层 `<el-form>`**。平台外层已经提供了表单容器，内部直接使用 `el-form-item`、`el-input`、`el-select` 等组件即可
 14. **setting.vue 最外层容器不要设置 padding**。平台区域已经做好布局，额外 padding 会导致可用空间变小
 15. **setting.vue 和 edit/read/ide.vue 的 customComponentConfig 读写路径必须一致**。配置直接存在 `customComponentConfig` 根级别（如 `{ dataSource, xField }`），不要多嵌套一层（如 `{ chartConfig: { dataSource } }`）
