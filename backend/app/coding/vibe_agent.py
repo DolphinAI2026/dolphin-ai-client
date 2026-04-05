@@ -617,6 +617,7 @@ class VibeCodingAgent:
 - `setting.vue` must be written to `src/form-component/form-editor/{name}-setting.vue`
 - `editorConfigList` must be aggregated by `src/form-component-config/form-editor/index.js` from `./{name}.editor.config.js`
 - The edit.vue is the primary file. read.vue shows readonly view. ide.vue shows placeholder. Others can be minimal.
+- **widget.config.js metadata MUST match the actual component**: `desc.text`、`desc.description`、`desc.icon`、`widget.display.label` 必须根据当前组件的实际功能填写，严禁从参考文件复制后遗留其他组件的名称或描述（例如生成进度条组件时不能出现"富文本"、"上传"等无关字样）。
 """
         if project_type == "layout":
             workflow = """
