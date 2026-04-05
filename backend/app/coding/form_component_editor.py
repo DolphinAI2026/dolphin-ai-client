@@ -7,6 +7,59 @@ from pathlib import Path
 
 
 FORM_COMPONENT_PREFIX = "form-component-"
+STRING_COMPONENT_MODEL_FIELD_MAX_LENGTH = 500
+SUPPORTED_COMPONENT_MODEL_FIELDS = {"STRING", "NUM", "DATE", "BIG_TEXT"}
+LEGACY_COMPONENT_MODEL_FIELD_MAP = {
+    "TEXT": "STRING",
+    "STRING": "STRING",
+    "NUMBER": "NUM",
+    "NUM": "NUM",
+    "DATE": "DATE",
+    "BIG_TEXT": "BIG_TEXT",
+    "LARGE_TEXT": "BIG_TEXT",
+}
+COMPONENT_MODEL_FIELD_TO_BOF_TYPE = {
+    "STRING": "BOF_TEXT",
+    "NUM": "BOF_NUMBER",
+    "DATE": "BOF_DATE",
+    "BIG_TEXT": "BOF_TEXT",
+}
+
+FORBIDDEN_SETTING_API_MARKERS = (
+    "updateCustomComponentConfig",
+    "updateWidgetConfig",
+    "updateWidgetCustomConfig",
+    "updateSpecialConfig",
+    "setWidgetInfo",
+    "update:componentConfig",
+)
+FORBIDDEN_SETTING_HANDLER_NAMES: tuple[str, ...] = ()
+FORBIDDEN_SETTING_METHOD_NAMES: tuple[str, ...] = ()
+RESERVED_SETTING_COMPUTED_NAMES = {"widgetObj", "engine", "customComponentConfig"}
+RESERVED_SETTING_WATCH_NAMES = {"localConfig", "componentConfig", "customComponentConfig", "formData", "config"}
+SETTING_CONTRACT_RULES: tuple[tuple[str, str], ...] = (
+    ("forbidden_form_engine_api", r"updateCustomComponentConfig|updateWidgetConfig|updateWidgetCustomConfig|updateSpecialConfig|setWidgetInfo"),
+    ("forbidden_emit_update", r"\$emit\(\s*['\"]update:componentConfig['\"]"),
+    ("forbidden_local_mirror", r"\b(?:localConfig|formData)\b"),
+    ("forbidden_config_mirror", r"(?m)^[ \t]*config\s*:\s*{"),
+    ("forbidden_config_binding", r"v-model\s*=\s*['\"]config\."),
+    ("forbidden_widget_obj_binding", r"widgetObj\.customComponentConfig|this\.widgetObj\.customComponentConfig"),
+    ("forbidden_direct_prop_binding", r"componentConfig\.customComponentConfig|this\.componentConfig\.customComponentConfig"),
+    ("forbidden_custom_component_config_assignment", r"\b(?:this|self|vm|ctx)\.customComponentConfig\s*="),
+)
+SETTING_CONTRACT_ERROR_MESSAGES = {
+    "forbidden_form_engine_api": "禁止调用不存在的 formEngine 配置更新方法",
+    "forbidden_emit_update": "禁止通过 $emit('update:componentConfig') 回写配置",
+    "forbidden_local_mirror": "禁止使用 localConfig 或 formData 镜像配置",
+    "forbidden_config_mirror": "禁止在 data/watch 中声明 config 镜像配置",
+    "forbidden_config_binding": "模板中禁止绑定 config.xxx，应直接绑定 customComponentConfig.xxx",
+    "forbidden_widget_obj_binding": "禁止依赖 widgetObj.customComponentConfig",
+    "forbidden_direct_prop_binding": "模板中禁止直接绑定 componentConfig.customComponentConfig",
+    "forbidden_custom_component_config_assignment": "禁止整体重设 customComponentConfig，只能直接修改其字段",
+    "forbidden_custom_component_config_mirror": "禁止在 data 中声明 customComponentConfig 镜像对象",
+    "missing_custom_component_config_computed": "缺少 customComponentConfig 计算属性",
+    "missing_custom_component_config_init": "缺少 created 中的 customComponentConfig 初始化逻辑",
+}
 
 
 @dataclass(frozen=True)
@@ -43,8 +96,26 @@ class FormComponentEditorSpec:
         return "src/form-component/form-editor/setting.vue"
 
     @property
+    def legacy_editor_setting_file_path(self) -> str:
+        return "src/form-component-config/form-editor/setting.vue"
+
+    @property
     def misplaced_setting_file_path(self) -> str:
         return f"src/form-component-config/form-widget/setting/{self.full_kebab}-setting.vue"
+
+    @property
+    def legacy_widget_setting_file_path(self) -> str:
+        return f"src/form-component/form-widget/setting/{self.full_kebab}-setting.vue"
+
+    @property
+    def candidate_setting_file_paths(self) -> tuple[str, ...]:
+        return (
+            self.setting_file_path,
+            self.legacy_setting_file_path,
+            self.legacy_editor_setting_file_path,
+            self.misplaced_setting_file_path,
+            self.legacy_widget_setting_file_path,
+        )
 
 
 def discover_form_component_editor_spec(workspace_path: Path) -> FormComponentEditorSpec | None:
@@ -79,9 +150,15 @@ def normalize_form_component_generated_file(
 
     if normalized_path == spec.legacy_setting_file_path:
         normalized_path = spec.setting_file_path
+    elif normalized_path == spec.legacy_editor_setting_file_path:
+        normalized_path = spec.setting_file_path
     elif normalized_path == spec.misplaced_setting_file_path:
         normalized_path = spec.setting_file_path
+    elif normalized_path == spec.legacy_widget_setting_file_path:
+        normalized_path = spec.setting_file_path
     elif normalized_path.startswith("src/form-component/form-editor/") and normalized_path.endswith("-setting.vue"):
+        normalized_path = spec.setting_file_path
+    elif normalized_path.startswith("src/form-component/form-widget/setting/") and normalized_path.endswith("-setting.vue"):
         normalized_path = spec.setting_file_path
     elif normalized_path.startswith("src/form-component-config/form-editor/") and normalized_path.endswith(".editor.config.js"):
         normalized_path = spec.editor_config_file_path
@@ -111,11 +188,8 @@ def normalize_form_component_editor_artifacts(workspace_path: Path) -> list[str]
 
     setting_content = None
     best_score = None
-    for candidate in (
-        target_setting_path,
-        workspace_path / spec.legacy_setting_file_path,
-        workspace_path / spec.misplaced_setting_file_path,
-    ):
+    for candidate_path in spec.candidate_setting_file_paths:
+        candidate = workspace_path / candidate_path
         if candidate.exists() and candidate.is_file():
             candidate_content = candidate.read_text(encoding="utf-8")
             candidate_score = _setting_content_score(candidate_content)
@@ -144,10 +218,8 @@ def normalize_form_component_editor_artifacts(workspace_path: Path) -> list[str]
         if _write_if_changed(widget_config_path, normalized_widget_config_content):
             changed_files.append(spec.widget_config_file_path)
 
-    for extra in (
-        workspace_path / spec.legacy_setting_file_path,
-        workspace_path / spec.misplaced_setting_file_path,
-    ):
+    for extra_path in spec.candidate_setting_file_paths[1:]:
+        extra = workspace_path / extra_path
         if extra.exists() and extra != target_setting_path:
             extra.unlink()
             changed_files.append(str(extra.relative_to(workspace_path)))
@@ -199,7 +271,7 @@ def render_form_component_setting_stub(spec: FormComponentEditorSpec) -> str:
   <div class="form-config-item form-config-{spec.short_kebab}-setting">
     <div class="setting-panel">
       <!-- 直接放置 el-form-item，平台外层已提供 el-form -->
-      <!-- 在此添加配置项，使用 v-model + @change=\"saveConfig\" -->
+      <!-- 在此添加配置项，统一使用 v-model=\"customComponentConfig.xxx\" -->
     </div>
   </div>
 </template>
@@ -225,14 +297,10 @@ export default {{
     getI18nShowStatus: {{ default: null }},
     filterTableFromNodeFields: {{ default: null }}
   }},
-  data() {{
-    return {{
-      localConfig: {{}}
-    }}
-  }},
   computed: {{
-    widgetObj() {{
-      return this.componentConfig || this.widget || {{}}
+    customComponentConfig() {{
+      const target = this.componentConfig || this.widget || null
+      return (target && target.customComponentConfig) || {{}}
     }},
     engine() {{
       if (this.formEngine) return this.formEngine
@@ -241,14 +309,9 @@ export default {{
     }}
   }},
   created() {{
-    const saved = this.widgetObj.customComponentConfig || {{}}
-    Object.keys(this.localConfig).forEach(key => {{
-      if (saved[key] !== undefined) this.localConfig[key] = saved[key]
-    }})
-  }},
-  methods: {{
-    saveConfig() {{
-      this.$set(this.widgetObj, 'customComponentConfig', {{ ...this.localConfig }})
+    const target = this.componentConfig || this.widget || null
+    if (target && !target.customComponentConfig) {{
+      this.$set(target, 'customComponentConfig', {{}})
     }}
   }}
 }}
@@ -263,7 +326,12 @@ export default {{
 def normalize_setting_component_content(spec: FormComponentEditorSpec, content: str) -> str:
     normalized = normalize_setting_component_name(content, spec.setting_component_name)
     normalized = strip_setting_el_form_wrapper(normalized)
-    return strip_setting_outer_padding(normalized)
+    normalized = sanitize_setting_component_behavior(spec, normalized)
+    normalized = strip_setting_outer_padding(normalized)
+    if validate_setting_component_contract(normalized):
+        normalized = _force_setting_component_contract(spec, normalized)
+        normalized = strip_setting_outer_padding(normalized)
+    return normalized
 
 
 def normalize_setting_component_name(content: str, component_name: str) -> str:
@@ -282,6 +350,656 @@ def normalize_setting_component_name(content: str, component_name: str) -> str:
         return normalized[:insert_at] + f"\n  name: '{component_name}'," + normalized[insert_at:]
 
     return normalized
+
+
+def sanitize_setting_component_behavior(spec: FormComponentEditorSpec, content: str) -> str:
+    if not _contains_invalid_setting_patterns(content):
+        return content
+
+    return _force_setting_component_contract(spec, content)
+
+
+def _force_setting_component_contract(spec: FormComponentEditorSpec, content: str) -> str:
+    normalized = content
+    sanitized_script = _build_sanitized_setting_script(spec, normalized)
+    template_block = _extract_single_file_block(normalized, "template")
+    if template_block:
+        normalized = normalized.replace(
+            template_block,
+            _sanitize_setting_template_block(
+                template_block,
+                allowed_methods=_extract_setting_method_names_from_script(sanitized_script),
+            ),
+            1,
+        )
+
+    script_block = _extract_single_file_block(normalized, "script")
+    if script_block:
+        normalized = normalized.replace(script_block, sanitized_script, 1)
+    else:
+        style_block = _extract_single_file_block(normalized, "style")
+        insert_at = normalized.find(style_block) if style_block else len(normalized)
+        normalized = f"{normalized[:insert_at].rstrip()}\n\n{sanitized_script}\n\n{normalized[insert_at:].lstrip()}"
+
+    return normalized
+
+
+def _contains_invalid_setting_patterns(content: str) -> bool:
+    return bool(validate_setting_component_contract(content))
+
+
+def _collect_setting_component_violations(content: str) -> list[str]:
+    normalized = content or ""
+    violations: list[str] = []
+    for rule_name, pattern in SETTING_CONTRACT_RULES:
+        if re.search(pattern, normalized):
+            violations.append(rule_name)
+    if re.search(r"(?m)^[ \t]*customComponentConfig\s*:\s*{", normalized):
+        violations.append("forbidden_custom_component_config_mirror")
+    for handler in FORBIDDEN_SETTING_HANDLER_NAMES:
+        if f"{handler}(" in normalized:
+            violations.append(f"forbidden_handler_{handler}")
+    return list(dict.fromkeys(violations))
+
+
+def validate_setting_component_contract(content: str) -> list[str]:
+    violations = _collect_setting_component_violations(content)
+    if not re.search(r"\bcustomComponentConfig\s*\(\)\s*{", content or ""):
+        violations.append("missing_custom_component_config_computed")
+    if not re.search(r"this\.\$set\(\s*target\s*,\s*['\"]customComponentConfig['\"]\s*,", content or ""):
+        violations.append("missing_custom_component_config_init")
+    template_block = _extract_single_file_block(content or "", "template") or ""
+    script_block = _extract_single_file_block(content or "", "script") or ""
+    allowed_methods = _extract_setting_method_names_from_script(script_block)
+    for handler_name in _find_undefined_setting_template_handlers(template_block, allowed_methods):
+        violations.append(f"undefined_template_handler:{handler_name}")
+    messages: list[str] = []
+    for code in list(dict.fromkeys(violations)):
+        if code in SETTING_CONTRACT_ERROR_MESSAGES:
+            messages.append(SETTING_CONTRACT_ERROR_MESSAGES[code])
+            continue
+        if code.startswith("forbidden_handler_"):
+            handler_name = code.removeprefix("forbidden_handler_")
+            messages.append(f"禁止保留旧的配置同步方法：{handler_name}")
+            continue
+        if code.startswith("undefined_template_handler:"):
+            handler_name = code.removeprefix("undefined_template_handler:")
+            messages.append(f"模板绑定了未定义的方法：{handler_name}")
+            continue
+        messages.append(code)
+    return messages
+
+
+def validate_form_component_editor_workspace(workspace_path: Path) -> list[str]:
+    spec = discover_form_component_editor_spec(workspace_path)
+    if not spec:
+        return []
+
+    target_setting_path = workspace_path / spec.setting_file_path
+    if not target_setting_path.exists():
+        return [f"缺少 setting.vue：{spec.setting_file_path}"]
+
+    errors = [
+        f"{spec.setting_file_path}: {message}"
+        for message in validate_setting_component_contract(
+            target_setting_path.read_text(encoding="utf-8")
+        )
+    ]
+
+    for extra_path in spec.candidate_setting_file_paths[1:]:
+        extra = workspace_path / extra_path
+        if extra.exists():
+            errors.append(f"发现遗留 setting.vue 路径：{extra_path}，应统一落到 {spec.setting_file_path}")
+
+    return list(dict.fromkeys(errors))
+
+
+def _extract_single_file_block(content: str, tag_name: str) -> str | None:
+    match = re.search(rf"<{tag_name}\b[^>]*>.*?</{tag_name}>", content, re.DOTALL)
+    if not match:
+        return None
+    return match.group(0)
+
+
+def _extract_setting_method_names_from_script(script_block: str) -> set[str]:
+    export_body = _extract_export_default_body(script_block or "")
+    if export_body is None:
+        return set()
+
+    for entry in _split_top_level_entries(export_body):
+        if _get_object_entry_name(entry) != "methods":
+            continue
+        methods_body = _extract_object_body_from_entry(entry) or ""
+        return {
+            method_name
+            for method_entry in _split_top_level_entries(methods_body)
+            if (method_name := _get_object_entry_name(method_entry))
+        }
+    return set()
+
+
+def _extract_setting_template_handler_names(expression: str) -> set[str]:
+    expr = (expression or "").strip()
+    if not expr:
+        return set()
+
+    handler_names = {
+        name
+        for name in re.findall(r"\bthis\.([A-Za-z_$][\w$]*)\s*\(", expr)
+        if not name.startswith("$")
+    }
+    handler_names.update(
+        name
+        for name in re.findall(r"(?<![\w$.])([A-Za-z_$][\w$]*)\s*\(", expr)
+        if not name.startswith("$")
+    )
+    if re.fullmatch(r"[A-Za-z_$][\w$]*", expr) and not expr.startswith("$"):
+        handler_names.add(expr)
+    return handler_names
+
+
+def _find_undefined_setting_template_handlers(template_block: str, allowed_methods: set[str]) -> list[str]:
+    if not template_block:
+        return []
+
+    undefined_handlers: list[str] = []
+    for match in re.finditer(r"@[A-Za-z0-9:_-]+=(['\"])(?P<expr>[^'\"]*)\1", template_block):
+        handler_names = _extract_setting_template_handler_names(match.group("expr"))
+        for handler_name in handler_names:
+            if handler_name not in allowed_methods:
+                undefined_handlers.append(handler_name)
+    return list(dict.fromkeys(undefined_handlers))
+
+
+def _sanitize_setting_template_block(template_block: str, allowed_methods: set[str] | None = None) -> str:
+    normalized = template_block
+    event_pattern = re.compile(r"\s+@[A-Za-z0-9:_-]+=(['\"])(?P<expr>[^'\"]*)\1")
+
+    def _replace_event_binding(match: re.Match[str]) -> str:
+        expr = match.group("expr")
+        handler_names = _extract_setting_template_handler_names(expr)
+        if not handler_names:
+            return match.group(0)
+        if allowed_methods is not None and any(name not in allowed_methods for name in handler_names):
+            return ""
+        return match.group(0)
+
+    normalized = event_pattern.sub(_replace_event_binding, normalized)
+    normalized = re.sub(r"(?<![\w$.])config\.", "customComponentConfig.", normalized)
+    normalized = _normalize_setting_custom_config_refs(normalized)
+    return normalized
+
+
+def _build_sanitized_setting_script(spec: FormComponentEditorSpec, content: str) -> str:
+    export_body = _extract_export_default_body(content)
+    if export_body is None:
+        return _extract_single_file_block(render_form_component_setting_stub(spec), "script") or "<script>\nexport default {}\n</script>"
+
+    top_level_entries = _split_top_level_entries(export_body)
+    extra_option_entries: list[str] = []
+    extra_data_entries: list[str] = []
+    extra_computed_entries: list[str] = []
+    extra_watch_entries: list[str] = []
+    extra_method_entries: list[str] = []
+    default_config_literal = "{}"
+    original_created_body = ""
+
+    for entry in top_level_entries:
+        entry_name = _get_object_entry_name(entry)
+        if entry_name == "data":
+            data_entries, local_config_literal = _extract_setting_data_entries(entry)
+            extra_data_entries.extend(data_entries)
+            if local_config_literal:
+                default_config_literal = local_config_literal
+            continue
+        if entry_name == "computed":
+            for computed_entry in _split_top_level_entries(_extract_object_body_from_entry(entry) or ""):
+                computed_name = _get_object_entry_name(computed_entry)
+                if not computed_name or computed_name in RESERVED_SETTING_COMPUTED_NAMES:
+                    continue
+                sanitized_entry = _sanitize_setting_js_entry(computed_entry)
+                if sanitized_entry:
+                    extra_computed_entries.append(sanitized_entry)
+            continue
+        if entry_name == "watch":
+            for watch_entry in _split_top_level_entries(_extract_object_body_from_entry(entry) or ""):
+                watch_name = _get_object_entry_name(watch_entry)
+                if not watch_name or watch_name in RESERVED_SETTING_WATCH_NAMES:
+                    continue
+                sanitized_entry = _sanitize_setting_js_entry(watch_entry)
+                if sanitized_entry:
+                    extra_watch_entries.append(sanitized_entry)
+            continue
+        if entry_name == "methods":
+            for method_entry in _split_top_level_entries(_extract_object_body_from_entry(entry) or ""):
+                method_name = _get_object_entry_name(method_entry)
+                if not method_name or method_name in FORBIDDEN_SETTING_METHOD_NAMES:
+                    continue
+                if any(marker in method_entry for marker in FORBIDDEN_SETTING_API_MARKERS):
+                    continue
+                sanitized_entry = _sanitize_setting_js_entry(method_entry)
+                if sanitized_entry:
+                    extra_method_entries.append(sanitized_entry)
+            continue
+        if entry_name == "created":
+            original_created_body = _sanitize_created_entry_body(entry)
+            continue
+        if entry_name in {"name", "props", "inject"}:
+            continue
+
+        sanitized_entry = _sanitize_setting_js_entry(entry)
+        if sanitized_entry:
+            extra_option_entries.append(sanitized_entry)
+
+    created_body_parts = [
+        "const target = this.componentConfig || this.widget || null",
+        "if (!target) return",
+        f"const defaultConfig = {default_config_literal}",
+        (
+            "const currentConfig = target.customComponentConfig && typeof target.customComponentConfig === 'object'\n"
+            "  ? target.customComponentConfig\n"
+            "  : {}"
+        ),
+        "this.$set(target, 'customComponentConfig', { ...defaultConfig, ...currentConfig })",
+    ]
+    if original_created_body:
+        created_body_parts.append(original_created_body)
+
+    option_entries = [
+        f"name: '{spec.setting_component_name}'",
+        """props: {
+  componentConfig: { default: null },
+  formEngine: { default: null },
+  widget: { default: null },
+  editConfig: { default: null },
+  configProperty: { default: null },
+  formItemList: { default: null },
+  formRule: { default: null },
+  globalData: { default: null },
+  widgetConfig: { default: null },
+  disabled: { default: false }
+}""",
+        """inject: {
+  renderGlobal: { default: null },
+  getPreviewLanguage: { default: null },
+  getI18nShowStatus: { default: null },
+  filterTableFromNodeFields: { default: null }
+}""",
+    ]
+    option_entries.extend(extra_option_entries)
+    if extra_data_entries:
+        option_entries.append(
+            "data() {\n"
+            "  return {\n"
+            f"{_indent_block(_join_object_entries(extra_data_entries), '    ')}\n"
+            "  }\n"
+            "}"
+        )
+    computed_entries = [
+        """customComponentConfig() {
+  const target = this.componentConfig || this.widget || null
+  return (target && target.customComponentConfig) || {}
+}""",
+        """engine() {
+  if (this.formEngine) return this.formEngine
+  if (this.renderGlobal) return this.renderGlobal
+  return null
+}""",
+    ]
+    computed_entries.extend(extra_computed_entries)
+    option_entries.append(
+        "computed: {\n"
+        f"{_indent_block(_join_object_entries(computed_entries), '  ')}\n"
+        "}"
+    )
+    if extra_watch_entries:
+        option_entries.append(
+            "watch: {\n"
+            f"{_indent_block(_join_object_entries(extra_watch_entries), '  ')}\n"
+            "}"
+        )
+    option_entries.append(
+        "created() {\n"
+        f"{_indent_block('\n'.join(part for part in created_body_parts if part.strip()), '  ')}\n"
+        "}"
+    )
+    if extra_method_entries:
+        option_entries.append(
+            "methods: {\n"
+            f"{_indent_block(_join_object_entries(extra_method_entries), '  ')}\n"
+            "}"
+        )
+
+    return (
+        "<script>\n"
+        "export default {\n"
+        f"{_indent_block(_join_object_entries(option_entries), '  ')}\n"
+        "}\n"
+        "</script>"
+    )
+
+
+def _extract_export_default_body(content: str) -> str | None:
+    match = re.search(r"export\s+default\s*{", content)
+    if not match:
+        return None
+    open_index = match.end() - 1
+    close_index = _find_matching_delimiter(content, open_index, "{", "}")
+    if close_index < 0:
+        return None
+    return content[open_index + 1:close_index]
+
+
+def _extract_object_body_from_entry(entry: str) -> str | None:
+    stripped = entry.strip()
+    colon_index = stripped.find(":")
+    if colon_index >= 0:
+        open_index = stripped.find("{", colon_index)
+    else:
+        open_index = stripped.find("{")
+    if open_index < 0:
+        return None
+    close_index = _find_matching_delimiter(stripped, open_index, "{", "}")
+    if close_index < 0:
+        return None
+    return stripped[open_index + 1:close_index]
+
+
+def _extract_setting_data_entries(entry: str) -> tuple[list[str], str | None]:
+    return_match = re.search(r"return\s*{", entry)
+    if not return_match:
+        return [], None
+
+    open_index = return_match.end() - 1
+    close_index = _find_matching_delimiter(entry, open_index, "{", "}")
+    if close_index < 0:
+        return [], None
+
+    return_body = entry[open_index + 1:close_index]
+    extra_entries: list[str] = []
+    local_config_literal = None
+    for data_entry in _split_top_level_entries(return_body):
+        data_name = _get_object_entry_name(data_entry)
+        if data_name in {"localConfig", "customComponentConfig", "formData", "config"}:
+            local_config_literal = _normalize_js_literal_indentation(_extract_entry_value_literal(data_entry))
+            continue
+        sanitized_entry = _sanitize_setting_js_entry(data_entry)
+        if sanitized_entry:
+            extra_entries.append(sanitized_entry)
+    return extra_entries, local_config_literal
+
+
+def _extract_entry_value_literal(entry: str) -> str | None:
+    colon_index = entry.find(":")
+    if colon_index < 0:
+        return None
+    value = entry[colon_index + 1:].strip().rstrip(",")
+    return value or None
+
+
+def _normalize_js_literal_indentation(value: str | None) -> str | None:
+    if not value:
+        return value
+    lines = value.strip().splitlines()
+    if len(lines) <= 1:
+        return lines[0]
+
+    indents = [
+        len(line) - len(line.lstrip())
+        for line in lines[1:]
+        if line.strip()
+    ]
+    trim = min(indents) if indents else 0
+    normalized_lines = [lines[0].lstrip()]
+    for line in lines[1:]:
+        if not line.strip():
+            normalized_lines.append("")
+            continue
+        normalized_lines.append(line[trim:])
+    return "\n".join(normalized_lines)
+
+
+def _sanitize_created_entry_body(entry: str) -> str:
+    open_index = entry.find("{")
+    if open_index < 0:
+        return ""
+    close_index = _find_matching_delimiter(entry, open_index, "{", "}")
+    if close_index < 0:
+        return ""
+    body = entry[open_index + 1:close_index]
+    if (
+        "localConfig" in body
+        or "formData" in body
+        or "componentConfig" in body
+        or "widgetObj" in body
+        or any(marker in body for marker in FORBIDDEN_SETTING_API_MARKERS)
+    ):
+        return ""
+    sanitized = _sanitize_setting_js_entry(body)
+    lines = []
+    for line in sanitized.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if "localConfig" in stripped or "formData" in stripped or "componentConfig" in stripped or "widgetObj" in stripped:
+            continue
+        lines.append(line.rstrip())
+    return "\n".join(lines).strip()
+
+
+def _sanitize_setting_js_entry(entry: str) -> str:
+    normalized = entry.rstrip().rstrip(",")
+    normalized = _normalize_setting_custom_config_refs(normalized)
+    normalized = normalized.replace("val?.special?.customComponentConfig", "val?.customComponentConfig")
+    normalized = normalized.replace("val.special.customComponentConfig", "val.customComponentConfig")
+
+    filtered_lines: list[str] = []
+    for line in normalized.splitlines():
+        stripped = line.strip()
+        if any(marker in stripped for marker in FORBIDDEN_SETTING_API_MARKERS):
+            continue
+        if re.search(r"\bthis\.(?:saveConfig|handleChange|updateCustomComponentConfig|updateComponentConfig)\s*\(", stripped):
+            continue
+        filtered_lines.append(line.rstrip())
+
+    sanitized = "\n".join(filtered_lines).strip()
+    if not sanitized:
+        return ""
+    if re.search(r"\b(?:this|self|vm|ctx)\.(?:localConfig|formData)\b", sanitized):
+        return ""
+    if re.search(r"(?<![\w$.])(?:localConfig|formData)\b", sanitized):
+        return ""
+    if re.search(r"\b(?:this|self|vm|ctx)\.componentConfig\.customComponentConfig\b", sanitized):
+        return ""
+    if re.search(r"\b(?:this|self|vm|ctx)\.widgetObj(?:\.customComponentConfig)?\b", sanitized):
+        return ""
+    if re.search(r"\b(?:this|self|vm|ctx)\.customComponentConfig\s*=", sanitized):
+        return ""
+    return sanitized
+
+
+def _normalize_setting_custom_config_refs(content: str) -> str:
+    normalized = content
+    replacements = (
+        (r"\bthis\.widgetObj\.customComponentConfig\b", "this.customComponentConfig"),
+        (r"\bself\.widgetObj\.customComponentConfig\b", "self.customComponentConfig"),
+        (r"\bvm\.widgetObj\.customComponentConfig\b", "vm.customComponentConfig"),
+        (r"\bctx\.widgetObj\.customComponentConfig\b", "ctx.customComponentConfig"),
+        (r"(?<![\w$.])widgetObj\.customComponentConfig\b", "customComponentConfig"),
+        (r"\bthis\.componentConfig\.customComponentConfig\b", "this.customComponentConfig"),
+        (r"\bself\.componentConfig\.customComponentConfig\b", "self.customComponentConfig"),
+        (r"\bvm\.componentConfig\.customComponentConfig\b", "vm.customComponentConfig"),
+        (r"\bctx\.componentConfig\.customComponentConfig\b", "ctx.customComponentConfig"),
+        (r"(?<![\w$.])componentConfig\.customComponentConfig\b", "customComponentConfig"),
+        (r"\bthis\.localConfig\b", "this.customComponentConfig"),
+        (r"\bself\.localConfig\b", "self.customComponentConfig"),
+        (r"\bvm\.localConfig\b", "vm.customComponentConfig"),
+        (r"\bctx\.localConfig\b", "ctx.customComponentConfig"),
+        (r"(?<![\w$.])localConfig\b", "customComponentConfig"),
+        (r"\bthis\.formData\b", "this.customComponentConfig"),
+        (r"\bself\.formData\b", "self.customComponentConfig"),
+        (r"\bvm\.formData\b", "vm.customComponentConfig"),
+        (r"\bctx\.formData\b", "ctx.customComponentConfig"),
+        (r"(?<![\w$.])formData\b", "customComponentConfig"),
+        (r"\bthis\.config\b", "this.customComponentConfig"),
+        (r"\bself\.config\b", "self.customComponentConfig"),
+        (r"\bvm\.config\b", "vm.customComponentConfig"),
+        (r"\bctx\.config\b", "ctx.customComponentConfig"),
+    )
+    for pattern, replacement in replacements:
+        normalized = re.sub(pattern, replacement, normalized)
+    return normalized
+
+
+def _split_top_level_entries(content: str) -> list[str]:
+    entries: list[str] = []
+    start = 0
+    brace_depth = 0
+    bracket_depth = 0
+    paren_depth = 0
+    in_string = False
+    string_char = ""
+    in_line_comment = False
+    in_block_comment = False
+    escape = False
+
+    for index, char in enumerate(content):
+        next_char = content[index + 1] if index + 1 < len(content) else ""
+
+        if in_line_comment:
+            if char == "\n":
+                in_line_comment = False
+            continue
+        if in_block_comment:
+            if char == "*" and next_char == "/":
+                in_block_comment = False
+            continue
+        if in_string:
+            if escape:
+                escape = False
+                continue
+            if char == "\\":
+                escape = True
+                continue
+            if char == string_char:
+                in_string = False
+            continue
+
+        if char == "/" and next_char == "/":
+            in_line_comment = True
+            continue
+        if char == "/" and next_char == "*":
+            in_block_comment = True
+            continue
+        if char in {"'", '"', "`"}:
+            in_string = True
+            string_char = char
+            continue
+        if char == "{":
+            brace_depth += 1
+            continue
+        if char == "}":
+            brace_depth -= 1
+            continue
+        if char == "[":
+            bracket_depth += 1
+            continue
+        if char == "]":
+            bracket_depth -= 1
+            continue
+        if char == "(":
+            paren_depth += 1
+            continue
+        if char == ")":
+            paren_depth -= 1
+            continue
+        if char == "," and brace_depth == 0 and bracket_depth == 0 and paren_depth == 0:
+            entry = content[start:index].strip()
+            if entry:
+                entries.append(entry)
+            start = index + 1
+
+    tail = content[start:].strip()
+    if tail:
+        entries.append(tail)
+    return entries
+
+
+def _get_object_entry_name(entry: str) -> str | None:
+    stripped = entry.strip()
+    if not stripped:
+        return None
+
+    match = re.match(r"(?:async\s+)?([A-Za-z_$][\w$]*)\s*\(", stripped)
+    if match:
+        return match.group(1)
+    match = re.match(r"([A-Za-z_$][\w$]*)\s*:", stripped)
+    if match:
+        return match.group(1)
+    match = re.match(r"['\"]([^'\"]+)['\"]\s*:", stripped)
+    if match:
+        return match.group(1)
+    return None
+
+
+def _find_matching_delimiter(content: str, open_index: int, open_char: str, close_char: str) -> int:
+    depth = 0
+    in_string = False
+    string_char = ""
+    in_line_comment = False
+    in_block_comment = False
+    escape = False
+
+    for index in range(open_index, len(content)):
+        char = content[index]
+        next_char = content[index + 1] if index + 1 < len(content) else ""
+
+        if in_line_comment:
+            if char == "\n":
+                in_line_comment = False
+            continue
+        if in_block_comment:
+            if char == "*" and next_char == "/":
+                in_block_comment = False
+            continue
+        if in_string:
+            if escape:
+                escape = False
+                continue
+            if char == "\\":
+                escape = True
+                continue
+            if char == string_char:
+                in_string = False
+            continue
+
+        if char == "/" and next_char == "/":
+            in_line_comment = True
+            continue
+        if char == "/" and next_char == "*":
+            in_block_comment = True
+            continue
+        if char in {"'", '"', "`"}:
+            in_string = True
+            string_char = char
+            continue
+        if char == open_char:
+            depth += 1
+            continue
+        if char == close_char:
+            depth -= 1
+            if depth == 0:
+                return index
+
+    return -1
+
+
+def _join_object_entries(entries: list[str]) -> str:
+    return ",\n".join(entry.rstrip().rstrip(",") for entry in entries if entry.strip())
+
+
+def _indent_block(content: str, indent: str) -> str:
+    return "\n".join(f"{indent}{line}" if line else line for line in content.splitlines())
 
 
 def strip_setting_el_form_wrapper(content: str) -> str:
@@ -358,7 +1076,8 @@ def _is_setting_selector(selector: str) -> bool:
 def normalize_widget_config_content(spec: FormComponentEditorSpec, content: str) -> str:
     normalized = normalize_widget_config_setting_code(content, spec.setting_code)
     normalized = normalize_widget_config_icon(spec, normalized)
-    return normalize_widget_config_labels(spec, normalized)
+    normalized = normalize_widget_config_labels(spec, normalized)
+    return normalize_widget_config_component_model_field(spec, normalized)
 
 
 def normalize_widget_config_setting_code(content: str, setting_code: str) -> str:
@@ -424,6 +1143,97 @@ def normalize_widget_config_labels(spec: FormComponentEditorSpec, content: str) 
         normalized = label_pattern.sub(f"label: '{_escape_js_single_quoted(title)}'", normalized, count=1)
 
     return normalized
+
+
+def normalize_widget_config_component_model_field(spec: FormComponentEditorSpec, content: str) -> str:
+    model_field = _infer_component_model_field(spec, content)
+    bof_type = COMPONENT_MODEL_FIELD_TO_BOF_TYPE[model_field]
+
+    normalized = re.sub(
+        r"(?ms)^[ \t]*componentModelField\s*:\s*\[[^\]]*\],?\n?",
+        "",
+        content,
+    )
+    normalized = re.sub(
+        r"frontBusinessObjectComponentType\s*:\s*'[^']*'",
+        f"frontBusinessObjectComponentType: '{bof_type}'",
+        normalized,
+        count=1,
+    )
+
+    anchor = re.search(r"(?m)^(?P<indent>\s*)(client|methods|formatValueSchema)\s*:", normalized)
+    component_model_field_entry = f"  componentModelField: ['{model_field}'],\n"
+    if anchor:
+        normalized = normalized[:anchor.start()] + component_model_field_entry + normalized[anchor.start():]
+    elif re.search(r"(?m)^}\s*$", normalized):
+        normalized = re.sub(
+            r"(?m)^}\s*$",
+            component_model_field_entry + "}",
+            normalized,
+            count=1,
+        )
+    else:
+        normalized = normalized.rstrip() + "\n" + component_model_field_entry
+
+    return normalized
+
+
+def _infer_component_model_field(spec: FormComponentEditorSpec, content: str) -> str:
+    metadata = " ".join(
+        part
+        for part in (
+            spec.short_kebab,
+            _extract_named_single_quoted_value(content, "text"),
+            _extract_named_single_quoted_value(content, "description"),
+        )
+        if part
+    ).lower()
+
+    current_model_field = _extract_component_model_field(content)
+    max_length_values = [
+        int(value)
+        for value in re.findall(r"(?:maxLength|maxlength|lengthLimit|textLimit)\s*:\s*(\d+)", content)
+    ]
+    if max_length_values and max(max_length_values) > STRING_COMPONENT_MODEL_FIELD_MAX_LENGTH:
+        return "BIG_TEXT"
+
+    big_text_keywords = (
+        # 明确会产生大量字符的类型（序列化后通常 ≥ 500）
+        "base64", "textarea", "rich-text", "富文本", "richtext", "html",
+        "remark", "memo", "comment", "描述", "大文本",
+        "upload", "文件", "file", "attachment", "附件",
+        "signature", "签名",
+        "chart", "图表",
+    )
+    # 注意：date-range / daterange / range / 多选 / address 等
+    # 序列化后通常远低于 500 字符，应使用 STRING，不在此列表中
+    if any(keyword in metadata for keyword in big_text_keywords):
+        return "BIG_TEXT"
+
+    num_keywords = (
+        "star", "rating", "rate", "score", "number", "amount", "price",
+        "count", "percent", "progress", "slider", "stepper", "digit", "num", "评分",
+    )
+    if any(keyword in metadata for keyword in num_keywords):
+        return "NUM"
+
+    date_keywords = (
+        "date-picker", "datepicker", "calendar", "日期", "date", "month", "year", "time",
+    )
+    if any(keyword in metadata for keyword in date_keywords):
+        return "DATE"
+
+    if current_model_field in SUPPORTED_COMPONENT_MODEL_FIELDS:
+        return current_model_field
+
+    return "STRING"
+
+
+def _extract_component_model_field(content: str) -> str | None:
+    match = re.search(r"componentModelField\s*:\s*\[\s*'([^']+)'\s*\]", content)
+    if not match:
+        return None
+    return LEGACY_COMPONENT_MODEL_FIELD_MAP.get(match.group(1).strip().upper())
 def render_widget_svg_icon(spec: FormComponentEditorSpec, content: str) -> str:
     keywords = f"{spec.short_kebab} {content}".lower()
 
@@ -727,6 +1537,8 @@ def _setting_content_score(content: str) -> int:
         score -= 1000
     if "name:" in content:
         score += 100
+    if validate_setting_component_contract(content):
+        score -= 50000
     return score
 
 
