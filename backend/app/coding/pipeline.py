@@ -760,7 +760,7 @@ async def run_coding_pipeline(
     try:
         # ---- 意图检测 ----
         msg_lower = params.message.strip().lower()
-        is_debug_intent = any(kw in msg_lower for kw in ['debug', '调试', '预览', '帮我debug', '启动debug', '启动调试'])
+        is_debug_intent = any(kw in msg_lower for kw in ['debug', '调试', '帮我debug', '启动debug', '启动调试', '帮我预览', '启动预览', '预览一下', '看一下效果'])
         is_publish_intent = any(kw in msg_lower for kw in ['发布', '打包', '上传', 'publish', 'build'])
 
         # Debug 模式处理
