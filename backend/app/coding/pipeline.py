@@ -758,26 +758,6 @@ async def run_coding_pipeline(
             pass
 
     try:
-        # ---- 意图检测 ----
-        msg_lower = params.message.strip().lower()
-        # 调试功能已禁用，所有请求直接进入代码生成流程
-        is_debug_intent = False
-        is_publish_intent = any(kw in msg_lower for kw in ['帮我发布', '立即发布', '打包发布', '打包上传', '帮我打包', '发布到平台', 'publish', '帮我build', '帮我构建'])
-
-        # Publish 模式处理
-        if is_publish_intent and ws_id:
-            _push_replay_message(replay_stream_messages, "user", params.message)
-            yield _record_event({"type": "step", "step": "build", "status": "running", "data": {"message": "正在构建打包..."}})
-            try:
-                await ws_mgr.build_and_package(ws_id)
-                yield _record_event({"type": "step", "step": "build", "status": "done"})
-                yield _record_event({"type": "content", "content": "✅ 构建完成！\n\n请点击顶部的「打包发布」按钮下载 zip 文件，然后上传到 aPaaS 平台。"})
-            except Exception as e:
-                yield _record_event({"type": "step", "step": "build", "status": "error"})
-                yield _record_event({"type": "content", "content": f"❌ 构建失败: {str(e)}"})
-            yield _record_event({"type": "done", "workspace_id": ws_id, "conversation_id": conversation_id})
-            return
-
         # ---- 迭代意图判断 ----
         if is_iteration:
             if await is_new_component_intent(generator, params.message, ws_id, ws_mgr):
