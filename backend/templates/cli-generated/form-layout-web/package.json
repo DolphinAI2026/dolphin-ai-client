@@ -2,7 +2,7 @@
   "name": "form-layout-demo",
   "version": "1.0.0",
   "engines": {
-    "node": "16.x"
+    "node": ">=16"
   },
   "templateType": "PAGE_LAYOUT",
   "private": true,

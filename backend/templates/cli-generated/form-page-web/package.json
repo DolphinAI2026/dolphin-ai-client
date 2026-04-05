@@ -2,7 +2,7 @@
   "name": "form-page-demo",
   "version": "1.0.0",
   "engines": {
-    "node": "16.x"
+    "node": ">=16"
   },
   "templateType": "MENU_PAGE",
   "private": true,
