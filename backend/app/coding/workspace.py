@@ -897,6 +897,38 @@ class WorkspaceManager:
         env.setdefault("FORCE_COLOR", "0")
         return env
 
+    async def _ensure_df_apaas_cli(self) -> None:
+        """确保 df-apaas-cli 全局可用；若不存在则自动全局安装。"""
+        env = self._build_npm_env()
+        # 先检查 PATH 中是否存在 df-apaas-cli
+        check = await asyncio.create_subprocess_exec(
+            "which", "df-apaas-cli",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+        await check.communicate()
+        if check.returncode == 0:
+            # 已全局安装，无需操作
+            return
+
+        logger.info("[workspace] df-apaas-cli not found globally, installing …")
+        proc = await asyncio.create_subprocess_exec(
+            "npm", "install", "-g",
+            "@x-apaas/df-apaas-cli",
+            "--registry", DEFAULT_NPM_REGISTRY,
+            "--prefer-offline",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            env=env,
+        )
+        stdout, _ = await proc.communicate()
+        output = stdout.decode("utf-8", errors="replace").strip()
+        if proc.returncode != 0:
+            logger.warning(f"[workspace] df-apaas-cli global install failed:\n{output}")
+        else:
+            logger.info("[workspace] df-apaas-cli installed globally successfully")
+
     def _build_dependency_signature(self, ws_path: Path) -> str:
         package_json_path = ws_path / "package.json"
         package_json = json.loads(package_json_path.read_text(encoding="utf-8"))
@@ -1142,6 +1174,10 @@ class WorkspaceManager:
 
         meta["status"] = WorkspaceStatus.BUILDING.value
         self._write_meta(ws_path, meta)
+
+        # 若本次构建需要 df-apaas-cli，确保其全局可用
+        if self._uses_df_apaas_cli_build(ws_path):
+            await self._ensure_df_apaas_cli()
 
         try:
             build_result = None
