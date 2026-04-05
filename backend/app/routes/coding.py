@@ -2251,6 +2251,26 @@ async def upload_workspace_to_platform(
     if not env.token:
         raise HTTPException(status_code=400, detail="平台环境未登录，请先在环境管理中连接")
 
+    # 1b. 确保 token 有效，过期则用保存的账号密码自动重新登录
+    async def _refresh_env_token(env, db) -> str:
+        if not env.username or not env.password_enc:
+            raise HTTPException(status_code=400, detail="平台 token 已过期且未保存登录凭证，请在环境管理中重新连接")
+        try:
+            password = decrypt_password(env.password_enc)
+            apaas = APaaSClient(base_url=env.base_url, tenant_id=env.platform_tenant_id)
+            login_result = await apaas.login(env.username, password)
+            new_token = login_result.get("token") if isinstance(login_result, dict) else None
+            if not new_token:
+                raise Exception("登录返回中未包含 token")
+            env.token = new_token
+            env.status = "connected"
+            await db.commit()
+            return new_token
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"平台 token 已过期，自动重新登录失败: {e}")
+
     # 2. 构建 + 打包
     ws_mgr = WorkspaceManager()
     try:
@@ -2267,21 +2287,20 @@ async def upload_workspace_to_platform(
     if not file_type:
         raise HTTPException(status_code=400, detail=f"不支持上传的项目类型: {project_type}")
 
-    # 4. 上传到平台
+    # 4. 上传到平台（token 过期时自动刷新后重试一次）
     upload_url = f"{env.base_url.rstrip('/')}/xdap-app/selfdevelopment/add/developmentKit"
     zip_path_obj = Path(zip_path)
     zip_filename = zip_path_obj.name
 
-    try:
-        async with httpx.AsyncClient(verify=False, timeout=120.0) as client:
-            with open(zip_path_obj, "rb") as f:
-                zip_bytes = f.read()
-
-            response = await client.post(
+    async def _do_upload(token: str):
+        with open(zip_path_obj, "rb") as f:
+            zip_bytes = f.read()
+        async with httpx.AsyncClient(verify=False, timeout=120.0) as http:
+            return await http.post(
                 upload_url,
                 headers={
                     "xdaptenantid": env.platform_tenant_id,
-                    "xdaptoken": env.token,
+                    "xdaptoken": token,
                     "xdaptimestamp": str(int(time.time() * 1000)),
                 },
                 files={"file": (zip_filename, zip_bytes, "application/zip")},
@@ -2295,14 +2314,32 @@ async def upload_workspace_to_platform(
                     "effectiveScope": "ALL_APPLICATION",
                 },
             )
+
+    try:
+        response = await _do_upload(env.token)
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail=f"上传请求失败: {e}")
 
-    # 5. 解析响应
+    # 5. 解析响应；若 token 过期则刷新后重试一次
     try:
         resp_data = response.json()
     except Exception:
         raise HTTPException(status_code=502, detail=f"平台响应非JSON，状态码: {response.status_code}")
+
+    def _is_unauthorized(data: dict) -> bool:
+        msg = (data.get("message") or data.get("msg") or "").lower()
+        code = data.get("code")
+        return response.status_code == 401 or code == 401 or "unauthorized" in msg
+
+    if _is_unauthorized(resp_data):
+        new_token = await _refresh_env_token(env, db)
+        try:
+            response = await _do_upload(new_token)
+            resp_data = response.json()
+        except httpx.RequestError as e:
+            raise HTTPException(status_code=502, detail=f"上传请求失败: {e}")
+        except Exception:
+            raise HTTPException(status_code=502, detail=f"平台响应非JSON，状态码: {response.status_code}")
 
     code = resp_data.get("code")
     if code == "ok" or code == 200:
