@@ -178,9 +178,10 @@
                   </el-select>
                   <button
                     class="builder-generate-btn compact"
-                    :disabled="assembling || generating"
+                    :class="{ 'btn-ready': parseReady && hasPreviewContent }"
+                    :disabled="assembling || generating || (parseReady && hasPreviewContent)"
                     @click="generatePreviewFromConversation"
-                  >{{ assembling ? '解析中...' : '一键生成' }}</button>
+                  >{{ assembling ? '解析中...' : (parseReady && hasPreviewContent) ? '✓ 配置已就绪' : '一键生成' }}</button>
                 </div>
                 <div class="builder-control-hint inside-card">{{ builderModelHint }}</div>
               <div class="input-card-top">
@@ -4026,6 +4027,11 @@ watch(conversationId, (id) => {
   opacity: 0.45;
   cursor: not-allowed;
   box-shadow: none;
+}
+.builder-generate-btn.btn-ready {
+  background: linear-gradient(135deg, #34a853 0%, #1d8e3e 100%);
+  opacity: 0.85;
+  cursor: default;
 }
 .quick-edit-bar {
   padding: 0;
