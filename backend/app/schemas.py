@@ -98,6 +98,8 @@ class ApplicationResponse(BaseModel):
     app_code: str
     description: Optional[str]
     status: str
+    conversation_id: Optional[int] = None
+    platform_env_id: Optional[int] = None
     apaas_app_id: Optional[str] = None
     apaas_url: Optional[str] = None
     config_preview: Optional[dict] = None

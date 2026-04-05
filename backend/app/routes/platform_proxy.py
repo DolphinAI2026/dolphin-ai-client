@@ -161,39 +161,78 @@ def _build_vuex_state(token: str, tenant_id: str, username: str) -> str:
 
 
 def _inject_sso_script(html: str, vuex_state: str) -> str:
-    """在 HTML <head> 中注入 SSO 脚本"""
+    """在 HTML <head> 中注入 SSO 脚本。
+
+    这里只做登录态注入，不再额外隐藏顶部 header。
+    平台编辑页会复用多层 header / toolbar 容器，粗暴隐藏会把
+    “应用详情 / 访问权限 / 菜单功能”等上方信息一起误伤，导致
+    iframe 中出现空白占位。
+    """
     escaped = json.dumps(vuex_state)
-    # CSS: 隐藏平台顶部导航栏 + JS: 延迟隐藏兜底
-    style = (
-        "\n<style id='iframe-overrides'>\n"
-        "  .header-wrap, .layout-header, .main-header, .platform-header,\n"
-        "  .x-header, #header, header.el-header, .el-header,\n"
-        "  .tenant-header, .app-top-header { display: none !important; }\n"
-        "</style>\n"
-    )
     script = (
         "\n<script>\n"
         "(function(){\n"
+        "  var selectors = [\n"
+        "    '.app-top-header',\n"
+        "    '.header-wrap',\n"
+        "    '.layout-header',\n"
+        "    '.main-header',\n"
+        "    '.tenant-header',\n"
+        "    '.platform-header',\n"
+        "    '.x-header',\n"
+        "    '#header',\n"
+        "    'header.el-header',\n"
+        "    '.el-header',\n"
+        "    '.page-header',\n"
+        "    '.edit-header',\n"
+        "    '.app-detail-header',\n"
+        "    '.app-edit-header',\n"
+        "    '.step-tabs',\n"
+        "    '.tab-header'\n"
+        "  ];\n"
+        "  function repairHeaders(){\n"
+        "    try {\n"
+        "      var override = document.querySelector('#iframe-overrides');\n"
+        "      if (override && override.parentNode) override.parentNode.removeChild(override);\n"
+        "      selectors.forEach(function(selector){\n"
+        "        document.querySelectorAll(selector).forEach(function(el){\n"
+        "          if (el && el.style) {\n"
+        "            if (el.style.display === 'none') el.style.removeProperty('display');\n"
+        "            if (el.style.visibility === 'hidden') el.style.removeProperty('visibility');\n"
+        "            if (el.style.opacity === '0') el.style.removeProperty('opacity');\n"
+        "            if (el.style.height === '0px') el.style.removeProperty('height');\n"
+        "            if (el.style.maxHeight === '0px') el.style.removeProperty('max-height');\n"
+        "          }\n"
+        "          if (typeof el.hidden !== 'undefined' && el.hidden) el.hidden = false;\n"
+        "        });\n"
+        "      });\n"
+        "    } catch (repairErr) {\n"
+        "      console.warn('[SSO repair]', repairErr);\n"
+        "    }\n"
+        "  }\n"
         "  try {\n"
         "    var k='__vuex__local', v=" + escaped + ";\n"
         "    localStorage.setItem(k,v);\n"
         "    console.log('[SSO] token injected');\n"
         "  }catch(ex){console.error('[SSO]',ex)}\n"
-        "  // 延迟隐藏顶部导航（兜底，等 Vue 渲染完成）\n"
-        "  setTimeout(function(){\n"
-        "    var h=document.querySelector('.header-wrap,.layout-header,.main-header,.x-header,.el-header,header');\n"
-        "    if(h&&h.offsetHeight<80){h.style.display='none';}\n"
-        "    // 通用：隐藏第一个 header 高度 < 80px 的元素\n"
-        "    document.querySelectorAll('header,[class*=header]').forEach(function(el){\n"
-        "      if(el.offsetHeight>0&&el.offsetHeight<80&&el.offsetWidth>window.innerWidth*0.8){\n"
-        "        el.style.display='none';\n"
-        "      }\n"
-        "    });\n"
-        "  }, 3000);\n"
+        "  repairHeaders();\n"
+        "  var attempts = 0;\n"
+        "  var timer = setInterval(function(){\n"
+        "    attempts += 1;\n"
+        "    repairHeaders();\n"
+        "    if (attempts >= 40) clearInterval(timer);\n"
+        "  }, 500);\n"
+        "  try {\n"
+        "    var observer = new MutationObserver(function(){ repairHeaders(); });\n"
+        "    observer.observe(document.documentElement || document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class', 'hidden'] });\n"
+        "    setTimeout(function(){ observer.disconnect(); }, 20000);\n"
+        "  } catch (obsErr) {\n"
+        "    console.warn('[SSO observer]', obsErr);\n"
+        "  }\n"
         "})();\n"
         "</script>\n"
     )
-    inject = style + script
+    inject = script
     if "<head>" in html:
         return html.replace("<head>", "<head>" + inject, 1)
     return inject + html
@@ -314,7 +353,15 @@ async def proxy_entry(
         "window.location.replace(" + redirect_json + ");\n"
         "</script></body></html>"
     )
-    return Response(content=html, media_type="text/html")
+    return Response(
+        content=html,
+        media_type="text/html",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 # ============================================================
@@ -412,6 +459,9 @@ async def _proxy_request(request: Request, path: str, inject_auth: bool = False)
             html_text = content.decode("utf-8", errors="replace")
             vuex = _build_vuex_state(token, _proxy_state.get("tenant_id", ""), _proxy_state.get("username", ""))
             content = _inject_sso_script(html_text, vuex).encode("utf-8")
+            resp_headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+            resp_headers["Pragma"] = "no-cache"
+            resp_headers["Expires"] = "0"
 
         # 缓存静态资源
         if is_static and resp.status_code == 200:

@@ -53,6 +53,7 @@
             class="platform-iframe"
             frameborder="0"
             allow="clipboard-read; clipboard-write"
+            @load="onPlatformIframeLoad"
             @error="onIframeError"
           ></iframe>
         </template>
@@ -533,7 +534,7 @@
 
 <script setup lang="ts">
 import { API_PREFIX } from '@/utils/request'
-import { ref, reactive, computed, nextTick, onMounted, watch } from 'vue'
+import { ref, reactive, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { usePreviewStore } from '@/stores/preview'
@@ -546,6 +547,7 @@ import ConnectModal from '@/components/ConnectModal.vue'
 import EnvSelectModal from '@/components/EnvSelectModal.vue'
 import { platformEnvApi } from '@/api/platformEnv'
 import request from '@/utils/request'
+import { buildPlatformProxyEntryUrl, repairPlatformIframe } from '@/utils/platformIframe'
 import type { Message } from '@/types'
 import TopBar from '@/components/TopBar.vue'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
@@ -962,16 +964,44 @@ const codingIframeUrl = computed(() => {
 // ── 平台配置 iframe ──
 const platformIframeUrl = ref('')
 const platformAppUrl = ref('')  // 应用配置页 URL（登录后跳转用）
+const platformDirectUrl = ref('')
 const platformLoading = ref(false)
 const platformError = ref('')
 const platformLoginHint = ref('')
 const platformIframeRef = ref<HTMLIFrameElement | null>(null)
 const platformIframeAppId = ref<number | null>(null)
+const platformIframeRepairTimer = ref<number | null>(null)
 
 const buildPlatformProxyUrl = (appId: number) => {
-  const token = userStore.token || localStorage.getItem('token') || ''
-  const authQuery = token ? `&_auth=${encodeURIComponent(token)}` : ''
-  return `${API_PREFIX}/platform-proxy/entry?app_id=${appId}${authQuery}`
+  return buildPlatformProxyEntryUrl(appId, userStore.token || localStorage.getItem('token') || '')
+}
+
+const clearPlatformIframeRepairTimer = () => {
+  if (platformIframeRepairTimer.value !== null) {
+    window.clearInterval(platformIframeRepairTimer.value)
+    platformIframeRepairTimer.value = null
+  }
+}
+
+const restorePlatformIframeHeader = () => {
+  const restored = repairPlatformIframe(platformIframeRef.value)
+  if (!restored && platformIframeRef.value) {
+    clearPlatformIframeRepairTimer()
+  }
+}
+
+const onPlatformIframeLoad = () => {
+  clearPlatformIframeRepairTimer()
+  restorePlatformIframeHeader()
+
+  let attempts = 0
+  platformIframeRepairTimer.value = window.setInterval(() => {
+    attempts += 1
+    restorePlatformIframeHeader()
+    if (attempts >= 24) {
+      clearPlatformIframeRepairTimer()
+    }
+  }, 500)
 }
 
 const refreshCurrentAppRemoteMeta = async (appId: number) => {
@@ -979,6 +1009,7 @@ const refreshCurrentAppRemoteMeta = async (appId: number) => {
     const apps = await applicationApi.list({ include_remote: true }) as any[]
     const current = apps.find((item: any) => String(item.id) === String(appId))
     currentRemoteStatus.value = current?.remote_status || ''
+    platformDirectUrl.value = current?.apaas_url || platformDirectUrl.value || ''
     if (current?.apaas_app_id && store.currentApp) {
       store.currentApp = { ...store.currentApp, apaas_app_id: current.apaas_app_id, status: current.local_status || store.currentApp.status, remote_status: current.remote_status }
     }
@@ -1019,8 +1050,16 @@ const navigateIframeToApp = () => {
 }
 
 const openPlatformNewTab = () => {
+  const appId = existingAppId.value || platformIframeAppId.value
+  if (appId) {
+    const proxyUrl = buildPlatformProxyUrl(Number(appId))
+    platformAppUrl.value = proxyUrl
+    window.open(proxyUrl, '_blank', 'noopener,noreferrer')
+    return
+  }
+
   if (platformAppUrl.value || platformIframeUrl.value) {
-    window.open(platformAppUrl.value || platformIframeUrl.value, '_blank')
+    window.open(platformAppUrl.value || platformIframeUrl.value, '_blank', 'noopener,noreferrer')
   }
 }
 
@@ -1045,6 +1084,7 @@ const publishCurrentApp = async () => {
 }
 
 const onIframeError = () => {
+  clearPlatformIframeRepairTimer()
   platformError.value = '平台页面加载失败，可能不支持 iframe 嵌入'
 }
 
@@ -1848,6 +1888,7 @@ function resetConversationWorkspace() {
   activeView.value = 'builder'
   platformIframeUrl.value = ''
   platformAppUrl.value = ''
+  platformDirectUrl.value = ''
   platformIframeAppId.value = null
   platformLoading.value = false
   platformError.value = ''
@@ -3398,6 +3439,7 @@ onMounted(async () => {
       existingAppId.value = aid
       try {
         const app = await applicationApi.get(aid) as any
+        platformDirectUrl.value = app.apaas_url || ''
         // 恢复配置
         let configData: any = null
         if (app.config_preview) {
@@ -3410,6 +3452,7 @@ onMounted(async () => {
           store.preview.workflows = data.workflows || []
           store.preview.permissions = data.permissions || []
           store.currentApp = { name: store.preview.appName, status: app.status || 'ready', apaas_app_id: app.apaas_app_id }
+          platformDirectUrl.value = app.apaas_url || ''
           parseReady.value = store.preview.models.length > 0
           currentAgent.value = 'builder'
         }
@@ -3524,6 +3567,7 @@ onMounted(async () => {
       // 加载应用信息到预览
       try {
         const app = await applicationApi.get(aid) as any
+        platformDirectUrl.value = app.apaas_url || ''
         let configData: any = null
         if (app.config_preview) {
           const data = app.config_preview.data || app.config_preview
@@ -3649,6 +3693,7 @@ watch(() => route.query.app_id, async (newAppId, oldAppId) => {
   activeView.value = 'builder'
   platformIframeUrl.value = ''
   platformAppUrl.value = ''
+  platformDirectUrl.value = ''
   platformIframeAppId.value = null
   platformLoading.value = false
   platformError.value = ''
@@ -3667,6 +3712,7 @@ watch(() => route.query.app_id, async (newAppId, oldAppId) => {
       store.preview.workflows = data.workflows || []
       store.preview.permissions = data.permissions || []
       store.currentApp = { name: store.preview.appName, status: app.status || 'ready', apaas_app_id: app.apaas_app_id }
+      platformDirectUrl.value = app.apaas_url || ''
       parseReady.value = store.preview.models.length > 0
       currentAgent.value = 'builder'
     }
@@ -3691,6 +3737,10 @@ watch(() => route.query.app_id, async (newAppId, oldAppId) => {
   } catch (e) {
     console.error('Failed to switch app:', e)
   }
+})
+
+onBeforeUnmount(() => {
+  clearPlatformIframeRepairTimer()
 })
 
 watch(activeView, (view) => {
