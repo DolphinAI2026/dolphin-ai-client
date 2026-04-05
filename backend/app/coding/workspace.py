@@ -2977,9 +2977,8 @@ export default {{ name: '{prefix}SearchIde', mixins: [SearchIdeWidgetMixin] }}
         self._write(ws_path, f"src/form-component/form-editor/{full_kebab}-setting.vue", f"""<template>
   <div class="form-config-item form-config-{kebab}-setting">
     <div class="setting-panel">
-      <el-form size="mini" label-width="100px">
-        <!-- 在此添加配置项，使用 v-model + @change="saveConfig" -->
-      </el-form>
+      <!-- 直接放置 el-form-item，平台外层已提供 el-form -->
+      <!-- 在此添加配置项，使用 v-model + @change="saveConfig" -->
     </div>
   </div>
 </template>
@@ -3038,11 +3037,7 @@ export default {{
 }}
 </script>
 <style lang="scss">
-.form-config-{kebab}-setting {{
-  .setting-panel {{
-    padding: 12px;
-  }}
-}}
+.form-config-{kebab}-setting {{}}
 </style>
 """)
 

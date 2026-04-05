@@ -87,7 +87,7 @@ def normalize_form_component_generated_file(
         normalized_path = spec.editor_config_file_path
 
     if normalized_path == spec.setting_file_path:
-        normalized_content = normalize_setting_component_name(normalized_content, spec.setting_component_name)
+        normalized_content = normalize_setting_component_content(spec, normalized_content)
     elif normalized_path == spec.editor_index_path:
         normalized_content = render_form_component_editor_index(spec)
     elif normalized_path == spec.editor_config_file_path:
@@ -125,7 +125,7 @@ def normalize_form_component_editor_artifacts(workspace_path: Path) -> list[str]
 
     if setting_content is None:
         setting_content = render_form_component_setting_stub(spec)
-    setting_content = normalize_setting_component_name(setting_content, spec.setting_component_name)
+    setting_content = normalize_setting_component_content(spec, setting_content)
     if _write_if_changed(target_setting_path, setting_content):
         changed_files.append(spec.setting_file_path)
 
@@ -198,9 +198,8 @@ def render_form_component_setting_stub(spec: FormComponentEditorSpec) -> str:
     return f"""<template>
   <div class="form-config-item form-config-{spec.short_kebab}-setting">
     <div class="setting-panel">
-      <el-form size="mini" label-width="100px">
-        <!-- 在此添加配置项，使用 v-model + @change=\"saveConfig\" -->
-      </el-form>
+      <!-- 直接放置 el-form-item，平台外层已提供 el-form -->
+      <!-- 在此添加配置项，使用 v-model + @change=\"saveConfig\" -->
     </div>
   </div>
 </template>
@@ -256,13 +255,15 @@ export default {{
 </script>
 
 <style lang="scss">
-.form-config-{spec.short_kebab}-setting {{
-  .setting-panel {{
-    padding: 12px;
-  }}
-}}
+.form-config-{spec.short_kebab}-setting {{}}
 </style>
 """
+
+
+def normalize_setting_component_content(spec: FormComponentEditorSpec, content: str) -> str:
+    normalized = normalize_setting_component_name(content, spec.setting_component_name)
+    normalized = strip_setting_el_form_wrapper(normalized)
+    return strip_setting_outer_padding(normalized)
 
 
 def normalize_setting_component_name(content: str, component_name: str) -> str:
@@ -283,9 +284,81 @@ def normalize_setting_component_name(content: str, component_name: str) -> str:
     return normalized
 
 
+def strip_setting_el_form_wrapper(content: str) -> str:
+    pattern = re.compile(
+        r"(?P<indent>^[ \t]*)<el-form\b[^>]*>\n(?P<body>.*?)(?P=indent)</el-form>",
+        re.MULTILINE | re.DOTALL,
+    )
+
+    def _replace(match: re.Match[str]) -> str:
+        indent = match.group("indent")
+        body = match.group("body")
+        normalized_lines: list[str] = []
+        for line in body.splitlines():
+            if not line.strip():
+                normalized_lines.append(line)
+                continue
+            if line.startswith(f"{indent}  "):
+                normalized_lines.append(f"{indent}{line[len(indent) + 2:]}")
+            else:
+                normalized_lines.append(line)
+        return "\n".join(normalized_lines)
+
+    return pattern.sub(_replace, content)
+
+
+def strip_setting_outer_padding(content: str) -> str:
+    style_pattern = re.compile(r"(<style\b[^>]*>)(?P<body>.*?)(</style>)", re.DOTALL)
+
+    def _replace_style(match: re.Match[str]) -> str:
+        body = match.group("body")
+        return f"{match.group(1)}{_strip_setting_padding_from_style_body(body)}{match.group(3)}"
+
+    return style_pattern.sub(_replace_style, content)
+
+
+def _strip_setting_padding_from_style_body(style_body: str) -> str:
+    lines = style_body.splitlines()
+    result: list[str] = []
+    selector_stack: list[str] = []
+
+    for line in lines:
+        stripped = line.strip()
+        current_selector = selector_stack[-1] if selector_stack else ""
+        parent_selectors = selector_stack[:-1]
+        is_root_setting_selector = len(selector_stack) == 1 and _is_setting_selector(current_selector)
+        is_setting_panel_selector = (
+            current_selector == ".setting-panel"
+            and any(_is_setting_selector(selector) for selector in parent_selectors)
+        )
+        should_remove_padding = stripped.startswith("padding:") and (is_root_setting_selector or is_setting_panel_selector)
+
+        if not should_remove_padding:
+            result.append(line)
+
+        if stripped.endswith("{"):
+            selector_stack.append(stripped[:-1].strip())
+
+        close_count = stripped.count("}")
+        for _ in range(close_count):
+            if selector_stack:
+                selector_stack.pop()
+
+    return "\n".join(result)
+
+
+def _is_setting_selector(selector: str) -> bool:
+    normalized = (selector or "").strip()
+    return normalized.startswith(".form-config-") and normalized.endswith("-setting") or (
+        normalized.startswith(".form-component-") and normalized.endswith("-setting")
+    ) or (
+        normalized.startswith(".form-editor-") and normalized.endswith("-setting")
+    )
+
 def normalize_widget_config_content(spec: FormComponentEditorSpec, content: str) -> str:
     normalized = normalize_widget_config_setting_code(content, spec.setting_code)
-    return normalize_widget_config_icon(spec, normalized)
+    normalized = normalize_widget_config_icon(spec, normalized)
+    return normalize_widget_config_labels(spec, normalized)
 
 
 def normalize_widget_config_setting_code(content: str, setting_code: str) -> str:
@@ -330,6 +403,27 @@ def normalize_widget_config_icon(spec: FormComponentEditorSpec, content: str) ->
     return content
 
 
+def normalize_widget_config_labels(spec: FormComponentEditorSpec, content: str) -> str:
+    title = _resolve_widget_title(spec, content)
+    description = _resolve_widget_description(spec, content, title)
+
+    normalized = content
+    text_pattern = re.compile(r"text:\s*'[^']*'")
+    description_pattern = re.compile(r"description:\s*'[^']*'")
+    label_pattern = re.compile(r"label:\s*'[^']*'")
+
+    if text_pattern.search(normalized):
+        normalized = text_pattern.sub(f"text: '{_escape_js_single_quoted(title)}'", normalized, count=1)
+    if description_pattern.search(normalized):
+        normalized = description_pattern.sub(
+            f"description: '{_escape_js_single_quoted(description)}'",
+            normalized,
+            count=1,
+        )
+    if label_pattern.search(normalized):
+        normalized = label_pattern.sub(f"label: '{_escape_js_single_quoted(title)}'", normalized, count=1)
+
+    return normalized
 def render_widget_svg_icon(spec: FormComponentEditorSpec, content: str) -> str:
     keywords = f"{spec.short_kebab} {content}".lower()
 
@@ -454,11 +548,80 @@ def render_widget_svg_icon(spec: FormComponentEditorSpec, content: str) -> str:
     )
 
 
+def _resolve_widget_title(spec: FormComponentEditorSpec, content: str) -> str:
+    desc_text = _extract_named_single_quoted_value(content, "text")
+    display_label = _extract_widget_display_label(content)
+
+    if _is_meaningful_widget_meta(desc_text, spec):
+        return desc_text
+    if _is_meaningful_widget_meta(display_label, spec):
+        return display_label
+
+    title, _ = _infer_widget_title_and_description(spec, content)
+    return title
+
+
+def _resolve_widget_description(spec: FormComponentEditorSpec, content: str, title: str) -> str:
+    current_description = _extract_named_single_quoted_value(content, "description")
+    if _is_meaningful_widget_description(current_description, spec, title):
+        return current_description
+
+    _, description = _infer_widget_title_and_description(spec, content)
+    return description
+
+
+def _infer_widget_title_and_description(spec: FormComponentEditorSpec, content: str) -> tuple[str, str]:
+    keywords = f"{spec.short_kebab} {content}".lower()
+
+    if any(keyword in keywords for keyword in ("date-range", "日期范围", "daterange")):
+        return "日期范围选择", "支持日期范围选择与快捷区间配置"
+    if any(keyword in keywords for keyword in ("chart", "analysis", "统计", "报表", "图表")):
+        return "图表分析", "支持图表数据分析与可视化展示"
+    if any(keyword in keywords for keyword in ("upload", "上传", "file")):
+        return "文件上传", "支持文件上传、预览与删除"
+    if any(keyword in keywords for keyword in ("date-picker", "日期", "calendar")):
+        return "日期选择", "支持日期选择与格式配置"
+    if any(keyword in keywords for keyword in ("qrcode", "二维码", "qr")):
+        return "二维码", "支持二维码内容展示"
+    if any(keyword in keywords for keyword in ("map", "地图", "location")):
+        return "地图选点", "支持地图选点与定位展示"
+    if any(keyword in keywords for keyword in ("rate", "rating", "评分", "star")):
+        return "评分", "支持评分选择与展示"
+    if any(keyword in keywords for keyword in ("color", "颜色")):
+        return "颜色选择", "支持颜色选择与结果展示"
+    if any(keyword in keywords for keyword in ("rich-text", "富文本", "editor")):
+        return "富文本", "支持富文本编辑与内容展示"
+    if any(keyword in keywords for keyword in ("tree", "组织", "级联", "cascader")):
+        return "树形选择", "支持树形数据选择与展示"
+    if any(keyword in keywords for keyword in ("table", "表格", "grid", "list")):
+        return "数据表格", "支持表格数据展示"
+    if any(keyword in keywords for keyword in ("camera", "拍照", "image", "截图")):
+        return "拍照上传", "支持拍照采集与图片上传"
+    if any(keyword in keywords for keyword in ("user", "person", "人员", "avatar")):
+        return "人员选择", "支持人员选择与信息展示"
+    if any(keyword in keywords for keyword in ("countdown", "time", "时间", "clock")):
+        return "倒计时", "支持倒计时展示与时间配置"
+
+    title = _humanize_short_kebab(spec.short_kebab)
+    return title, f"支持{title}配置与展示"
+
+
 def _extract_widget_icon(content: str) -> str:
     match = re.search(r"icon:\s*'(?P<icon>[^']*)'", content)
     if not match:
         return ""
     return match.group("icon").strip()
+
+
+def _extract_widget_display_label(content: str) -> str:
+    return _extract_named_single_quoted_value(content, "label")
+
+
+def _extract_named_single_quoted_value(content: str, field_name: str) -> str:
+    match = re.search(rf"{field_name}:\s*'(?P<value>[^']*)'", content)
+    if not match:
+        return ""
+    return match.group("value").strip()
 
 
 def _is_feature_svg_icon(icon: str) -> bool:
@@ -472,6 +635,54 @@ def _is_feature_svg_icon(icon: str) -> bool:
     if 'font-size="10">C<' in normalized:
         return False
     return True
+
+
+def _is_meaningful_widget_meta(value: str, spec: FormComponentEditorSpec) -> bool:
+    normalized = (value or "").strip()
+    if not normalized:
+        return False
+
+    invalid_values = {
+        "demo",
+        "demo component",
+        "组件名称",
+        "组件描述",
+        "custom",
+        "component",
+        spec.short_kebab,
+        spec.short_kebab.replace("-", " "),
+    }
+    if normalized.lower() in {item.lower() for item in invalid_values}:
+        return False
+    return True
+
+
+def _is_meaningful_widget_description(value: str, spec: FormComponentEditorSpec, title: str) -> bool:
+    normalized = (value or "").strip()
+    if not normalized:
+        return False
+    invalid_values = {
+        "demo component",
+        "组件描述",
+        title,
+        f"{title}组件",
+        spec.short_kebab,
+        spec.short_kebab.replace("-", " "),
+    }
+    if normalized.lower() in {item.lower() for item in invalid_values}:
+        return False
+    return True
+
+
+def _humanize_short_kebab(short_kebab: str) -> str:
+    parts = [part for part in short_kebab.split("-") if part]
+    if not parts:
+        return "自定义组件"
+    return "".join(part.capitalize() for part in parts)
+
+
+def _escape_js_single_quoted(value: str) -> str:
+    return (value or "").replace("\\", "\\\\").replace("'", "\\'")
 
 
 def _discover_form_component_name(workspace_path: Path) -> str | None:

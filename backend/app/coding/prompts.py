@@ -378,8 +378,8 @@ const FormComponentXxxWidgetConfig = {
   desc: {
     iconType: 'DEFAULT',
     icon: '<svg>...</svg>',  // 组件图标SVG，必须是符合组件功能的内联 SVG 字符串，禁止使用 form-custom-widget 或空字符串
-    text: '组件名称',
-    description: '组件描述'
+    text: '组件名称',         // 必须是符合当前组件语义的标题，例如“文件上传”“日期范围选择”
+    description: '组件描述'   // 必须是符合当前组件语义的描述，禁止使用 demo component 之类占位
   },
   instance: { uuid: '$itemUuid', inTable: false },
   // ★ 7种渲染场景对应的 Vue 组件 name
@@ -396,7 +396,7 @@ const FormComponentXxxWidgetConfig = {
   },
   widget: {
     display: {
-      label: '组件名称', width: 6, mobileWidth: 12, height: 1,
+      label: '组件名称', width: 6, mobileWidth: 12, height: 1,  // 必须与 desc.text 保持一致
       hidden: false, readOnly: false, required: false, onlyCreateEdit: false
     },
     allow: { useInTableColumn: true },
@@ -728,7 +728,7 @@ widget: {
 
 ```javascript
 computed: {
-  // ★ 直接读取 customComponentConfig（和 setting.vue 存储路径一致）
+  // ★ 运行态统一从 widget.customComponentConfig 读取
   chartConfig() {
     return this.widget.customComponentConfig || {}
   },
@@ -2320,11 +2320,13 @@ CODE_GENERATION_INSTRUCTION = """
 9. 编辑态组件中使用 `this.formValue` 读写值，值存储为 JSON 字符串（复杂数据）
 10. **edit.vue 只渲染内容，不要显示配置界面**。配置 UI 只放在 setting.vue 中
 11. **setting.vue 的 props 必须包含 `componentConfig`（widget对象）和 `formEngine`（表单引擎）**，这两个由平台 EditorFormConfigMixin 传入。`inject` 只作为兜底，且必须带 `{ default: null }`
-12. **setting.vue 中不要在 computed 里用 `$set`**（会导致无限循环），用 data + methods 代替
-13. **setting.vue 和 edit/read/ide.vue 的 customComponentConfig 读写路径必须一致**。配置直接存在 `customComponentConfig` 根级别（如 `{ dataSource, xField }`），不要多嵌套一层（如 `{ chartConfig: { dataSource } }`）
-14. **widget.config.js 中必须声明 `customComponentConfig: {}`**（空对象），否则平台保存时不会序列化它。不能包含空字符串默认值
-15. **widget.config.js 的 editor.config 不能删除标准项**（INFO, LABEL, FIELD_CODE, TITLE_DESCRIPTION, WIDTH, FORMULA_RULE, HIDDEN, READONLY, REQUIRED, EDITONNEW, UNIQUE, HIDDEN_SAVE, HIDDEN_TRIGGER, TRIGGER_BUSINESS_EVENTS），否则平台校验报错
-16. 如需在 setting.vue 中访问子表列表，使用 `this.formEngine.formDataControl.allTileFormItemList` 并按 `componentType === 'FORM_WIDGET_SON_TABLE'` 过滤
-17. **获取子表真实数据时**，formData 中子表数据的 key 是子表的 `code`（不是 uuid），需要先通过 uuid 找到子表再取其 code
-18. **setting.vue 的固定路径是 `src/form-component/form-editor/{name}-setting.vue`**；`editorConfigList` 的固定聚合路径是 `src/form-component-config/form-editor/index.js`
+12. **setting.vue 中不要再包一层 `<el-form>`**。平台外层已经提供了表单容器，内部直接使用 `el-form-item`、`el-input`、`el-select` 等组件即可
+13. **setting.vue 最外层容器和 `.setting-panel` 不要设置 padding**。平台区域已经做好布局，额外 padding 会导致可用空间变小
+14. **setting.vue 中不要在 computed 里用 `$set`**（会导致无限循环），用 data + methods 代替
+15. **setting.vue 和 edit/read/ide.vue 的 customComponentConfig 读写路径必须一致**。配置直接存在 `customComponentConfig` 根级别（如 `{ dataSource, xField }`），不要多嵌套一层（如 `{ chartConfig: { dataSource } }`）
+16. **widget.config.js 中必须声明 `customComponentConfig: {}`**（空对象），否则平台保存时不会序列化它。不能包含空字符串默认值
+17. **widget.config.js 的 editor.config 不能删除标准项**（INFO, LABEL, FIELD_CODE, TITLE_DESCRIPTION, WIDTH, FORMULA_RULE, HIDDEN, READONLY, REQUIRED, EDITONNEW, UNIQUE, HIDDEN_SAVE, HIDDEN_TRIGGER, TRIGGER_BUSINESS_EVENTS），否则平台校验报错
+18. 如需在 setting.vue 中访问子表列表，使用 `this.formEngine.formDataControl.allTileFormItemList` 并按 `componentType === 'FORM_WIDGET_SON_TABLE'` 过滤
+19. **获取子表真实数据时**，formData 中子表数据的 key 是子表的 `code`（不是 uuid），需要先通过 uuid 找到子表再取其 code
+20. **setting.vue 的固定路径是 `src/form-component/form-editor/{name}-setting.vue`**；`editorConfigList` 的固定聚合路径是 `src/form-component-config/form-editor/index.js`
 """

@@ -162,9 +162,8 @@ export default {{
   <div class="form-config-item {full_kebab}-setting">
     <div class="setting-panel">
       <el-divider>组件配置</el-divider>
-      <el-form size="mini" label-width="100px">
-        <!-- 在此添加配置项，使用 v-model + @change="saveConfig" -->
-      </el-form>
+      <!-- 直接放置 el-form-item，平台外层已提供 el-form -->
+      <!-- 在此添加配置项，使用 v-model + @change="saveConfig" -->
     </div>
   </div>
 </template>
@@ -225,7 +224,6 @@ export default {{
 <style lang="scss">
 .{full_kebab}-setting {{
   .setting-panel {{
-    padding: 12px;
     .el-divider {{ margin: 0 0 16px 0; }}
   }}
 }}
