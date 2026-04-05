@@ -890,16 +890,17 @@ computed: {
 
 ### ⚠️ setting.vue 配置保存规范（严禁违反）
 
-**唯一正确的保存方式**：
-```javascript
-saveConfig() {
-  this.$set(this.widgetObj, 'customComponentConfig', { ...this.localConfig })
-}
+**唯一正确方式：模板控件直接 v-model 双向绑定**：
+```html
+<el-select v-model="componentConfig.customComponentConfig.myField" size="mini">
+  <el-option label="选项1" value="1" />
+</el-select>
+<el-input v-model="componentConfig.customComponentConfig.otherField" size="mini" />
 ```
+平台自动感知 `componentConfig.customComponentConfig` 的属性变化并持久化，**不需要任何保存方法**。
 
-**严禁使用以下方式**（会导致配置无法写入数据库）：
-- ❌ `this.formEngine.setWidgetInfo({ customComponentConfig: { ... } })`
-- ❌ `updateCustomConfig(data) { ... }` 此类封装方法
-- ❌ 任何通过 `formEngine` 方法间接写入配置的方式
-
-**原因**：平台通过监听 `widgetObj.customComponentConfig` 的变化触发持久化，只有 `$set` 直接写入 `widgetObj` 才会被平台感知并写入数据库。`setWidgetInfo` 等方法不会触发平台监听。
+**严禁使用以下方式**（会导致配置无法写入数据库，或方法根本不存在）：
+- ❌ `saveConfig()` / `this.$set(this.widgetObj, 'customComponentConfig', ...)` — 不要封装保存方法
+- ❌ `this.formEngine.setWidgetInfo(...)` — formEngine 上没有此方法
+- ❌ `updateCustomConfig(config)` / `updateCustomComponentConfig(config)` — 此类封装方法均不存在
+- ❌ 任何通过方法间接写入配置的方式
