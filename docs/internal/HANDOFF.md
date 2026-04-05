@@ -17,6 +17,10 @@
    - 默认语言已切到中文。
    - Welcome 页已开始品牌化为“睿鲸AI Coding”。
 
+3. AI Coding 托管构建排障文档
+   - 已新增 `docs/internal/AI_CODING_BUILD_TROUBLESHOOTING_2026-04-05.md`
+   - 线上若出现 “`npm install && npm run build` 没有产物” 或 `npm: command not found`，优先按该文档排查
+
 ## 当前状态
 
 ### 1. 低代码前端自开发

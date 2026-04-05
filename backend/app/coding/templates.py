@@ -131,9 +131,9 @@ const config = {{
     validatorList: [{{ validatorConfig: [], validatorMessage: '' }}],
     special: {{ frontBusinessObjectComponentType: 'BOF_TEXT', saveWithHidden: false }},
     customComponentConfig: {{}},
-    componentModelField: ['TEXT'],
     editor: {{ config: ['INFO','LABEL','FIELD_CODE','TITLE_DESCRIPTION','WIDTH','{code}_SETTING','FORMULA_RULE','HIDDEN','READONLY','REQUIRED','EDITONNEW','UNIQUE','HIDDEN_SAVE','HIDDEN_TRIGGER','TRIGGER_BUSINESS_EVENTS'], excludeInTable: ['WIDTH'] }}
   }},
+  componentModelField: ['STRING'],
   methods: {{}}, formatValueSchema: {{}}
 }}
 export default config
@@ -163,7 +163,7 @@ export default {{
     <div class="setting-panel">
       <el-divider>组件配置</el-divider>
       <!-- 直接放置 el-form-item，平台外层已提供 el-form -->
-      <!-- 在此添加配置项，使用 v-model + @change="saveConfig" -->
+      <!-- 在此添加配置项，统一使用 v-model="customComponentConfig.xxx" -->
     </div>
   </div>
 </template>
@@ -188,14 +188,10 @@ export default {{
     getI18nShowStatus: {{ default: null }},
     filterTableFromNodeFields: {{ default: null }}
   }},
-  data() {{
-    return {{
-      localConfig: {{}}
-    }}
-  }},
   computed: {{
-    widgetObj() {{
-      return this.componentConfig || this.widget || {{}}
+    customComponentConfig() {{
+      const target = this.componentConfig || this.widget || null
+      return (target && target.customComponentConfig) || {{}}
     }},
     engine() {{
       if (this.formEngine) return this.formEngine
@@ -209,14 +205,9 @@ export default {{
     }}
   }},
   created() {{
-    const saved = this.widgetObj.customComponentConfig || {{}}
-    Object.keys(this.localConfig).forEach(key => {{
-      if (saved[key] !== undefined) this.localConfig[key] = saved[key]
-    }})
-  }},
-  methods: {{
-    saveConfig() {{
-      this.$set(this.widgetObj, 'customComponentConfig', {{ ...this.localConfig }})
+    const target = this.componentConfig || this.widget || null
+    if (target && !target.customComponentConfig) {{
+      this.$set(target, 'customComponentConfig', {{}})
     }}
   }}
 }}
@@ -527,11 +518,11 @@ const widgetConfigList = [{{
     validator: {{ uniqueCheck: false }},
     special: {{ frontBusinessObjectComponentType: 'BOF_TEXT', saveWithHidden: false }},
     customComponentConfig: {{}},
-    componentModelField: ['TEXT'],
     editor: {{
       config: ['INFO', 'LABEL', 'WIDTH', '{code}_SETTING', 'HIDDEN', 'READONLY', 'REQUIRED', 'EDITONNEW']
     }}
   }},
+  componentModelField: ['STRING'],
   client: {{
     mobile: {{
       widget: {{
@@ -624,18 +615,15 @@ export default {{
     configProperty: {{ default: null }}
   }},
   computed: {{
-    widgetObj() {{ return this.componentConfig || this.widget || {{}} }}
+    customComponentConfig() {{
+      const target = this.componentConfig || this.widget || null
+      return (target && target.customComponentConfig) || {{}}
+    }}
   }},
-  data() {{ return {{ localConfig: {{}} }} }},
   created() {{
-    const saved = this.widgetObj.customComponentConfig || {{}}
-    Object.keys(this.localConfig).forEach(key => {{
-      if (saved[key] !== undefined) this.localConfig[key] = saved[key]
-    }})
-  }},
-  methods: {{
-    saveConfig() {{
-      this.$set(this.widgetObj, 'customComponentConfig', {{ ...this.localConfig }})
+    const target = this.componentConfig || this.widget || null
+    if (target && !target.customComponentConfig) {{
+      this.$set(target, 'customComponentConfig', {{}})
     }}
   }}
 }}

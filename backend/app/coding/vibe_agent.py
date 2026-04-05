@@ -601,7 +601,12 @@ class VibeCodingAgent:
 - Scaffold files already exist. Do NOT modify package.json, vue.config.js, or babel.config.js. Avoid unrelated index.js changes, but you may update `src/form-component/form-editor/index.js` and `src/form-component-config/form-editor/index.js` when adding `setting.vue` / `editor.config.js`.
 - Vue 2.7 + Element UI (globally registered, do NOT import Element UI)
 - Use FormWidgetMixin (provides formValue, widget, updatePropValue, etc.)
+- 所有 mixin 都使用默认导入，不要写命名导入；例如 `import FormWidgetMixin from '@/mixin/form-widget.mixin'`
 - setting.vue uses componentConfig prop + formEngine prop
+- setting.vue 必须通过 `componentConfig` prop 读取平台配置，但模板中统一绑定 `customComponentConfig.xxx`（computed 别名），不要直接写 `componentConfig.customComponentConfig.xxx`
+- 方法名不是关键，关键是配置写入路径必须正确：严禁在 setting.vue 中使用 `localConfig`、`formData`、`config` 这类镜像配置
+- 如果存在 `saveConfig()` / `handleChange()` / `updateComponentConfig()` 等方法，它们也只能直接操作 `customComponentConfig.xxx`，不能通过 `$emit('update:componentConfig', ...)` 或镜像状态回写
+- 严禁调用不存在的配置写入 API：`formEngine.updateWidgetConfig(...)`、`formEngine.updateCustomComponentConfig(...)`、`formEngine.updateWidgetCustomConfig(...)`、`formEngine.updateSpecialConfig(...)`、`formEngine.setWidgetInfo(...)`
 - `setting.vue` must be written to `src/form-component/form-editor/{name}-setting.vue`
 - `editorConfigList` must be aggregated by `src/form-component-config/form-editor/index.js` from `./{name}.editor.config.js`
 - The edit.vue is the primary file. read.vue shows readonly view. ide.vue shows placeholder. Others can be minimal.

@@ -21,6 +21,7 @@ from typing import Awaitable, Callable, Optional, Union
 from enum import Enum
 
 from app.coding.form_component_editor import normalize_form_component_editor_artifacts
+from app.coding.runtime_env import ensure_node_tool_env, resolve_executable
 
 logger = logging.getLogger(__name__)
 
@@ -65,12 +66,17 @@ def _resolve_default_npm_registry() -> str:
         return explicit_registry
 
     try:
+        env = ensure_node_tool_env()
+        npm_exec = resolve_executable("npm", env)
+        if not npm_exec:
+            return FALLBACK_NPM_REGISTRY
         result = subprocess.run(
-            ["npm", "config", "get", "registry"],
+            [npm_exec, "config", "get", "registry"],
             check=False,
             capture_output=True,
             text=True,
             timeout=5,
+            env=env,
         )
         resolved_registry = (result.stdout or "").strip()
         if result.returncode == 0 and resolved_registry and resolved_registry != "undefined":
@@ -717,12 +723,17 @@ class WorkspaceManager:
             if meta.get("project_type") == ProjectType.BACKEND_API.value:
                 return await self._run_backend_build_process(cwd)
 
+        env = self._build_npm_env()
+        npm_exec = resolve_executable("npm", env)
+        if not npm_exec:
+            return 127, b"", "未检测到 npm，请检查 Node.js 安装或后端服务 PATH 配置".encode("utf-8")
+
         proc = await asyncio.create_subprocess_exec(
-            "npm", "run", "build",
+            npm_exec, "run", "build",
             cwd=str(cwd),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env=self._build_npm_env(),
+            env=env,
         )
         stdout, stderr = await proc.communicate()
         return proc.returncode, stdout, stderr
@@ -808,6 +819,7 @@ class WorkspaceManager:
             self._scaffold_via_cli_template(ws_path, safe_name, project_type)
             if project_type == ProjectType.FORM_COMPONENT:
                 normalize_form_component_editor_artifacts(ws_path)
+                self._ensure_form_component_workspace_compat(ws_path)
         elif project_type == ProjectType.BACKEND_API:
             self._scaffold_backend_api(ws_path, safe_name)
         elif project_type == ProjectType.BACKEND_FEIGN:
@@ -876,18 +888,7 @@ class WorkspaceManager:
             await maybe_awaitable
 
     def _build_npm_env(self) -> dict[str, str]:
-        env = {**os.environ}
-        # 确保 /usr/local/bin 和 ~/.npm-global/bin 在 PATH 中
-        # node/npm 在 /usr/local/bin，df-apaas-cli 在 ~/.npm-global/bin
-        path = env.get("PATH", "")
-        npm_global_bin = os.path.expanduser("~/.npm-global/bin")
-        extra = []
-        if "/usr/local/bin" not in path:
-            extra.append("/usr/local/bin")
-        if npm_global_bin not in path:
-            extra.append(npm_global_bin)
-        if extra:
-            env["PATH"] = ":".join(extra) + ":" + path
+        env = ensure_node_tool_env()
         env.setdefault("npm_config_registry", DEFAULT_NPM_REGISTRY)
         env.setdefault("NPM_CONFIG_REGISTRY", DEFAULT_NPM_REGISTRY)
         env.setdefault("npm_config_cache", str(NPM_CACHE_ROOT))
@@ -897,24 +898,35 @@ class WorkspaceManager:
         env.setdefault("FORCE_COLOR", "0")
         return env
 
+    def _ensure_workspace_npmrc(self, ws_path: Path) -> None:
+        """确保 workspace 根目录有 .npmrc，指向私有 registry，避免 df-apaas-cli 内部 npm 调用使用公开源。"""
+        npmrc_path = ws_path / ".npmrc"
+        registry = DEFAULT_NPM_REGISTRY
+        content = f"registry={registry}\n"
+        # 如果已有同内容则跳过写入
+        if npmrc_path.exists():
+            try:
+                existing = npmrc_path.read_text(encoding="utf-8")
+                if registry in existing:
+                    return
+            except Exception:
+                pass
+        npmrc_path.write_text(content, encoding="utf-8")
+        logger.info(f"[workspace] wrote .npmrc with registry={registry} to {ws_path}")
+
     async def _ensure_df_apaas_cli(self) -> None:
         """确保 df-apaas-cli 全局可用；若不存在则自动全局安装。"""
         env = self._build_npm_env()
-        # 先检查 PATH 中是否存在 df-apaas-cli
-        check = await asyncio.create_subprocess_exec(
-            "which", "df-apaas-cli",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env,
-        )
-        await check.communicate()
-        if check.returncode == 0:
-            # 已全局安装，无需操作
+        if resolve_executable("df-apaas-cli", env):
             return
+
+        npm_exec = resolve_executable("npm", env)
+        if not npm_exec:
+            raise RuntimeError("未检测到 npm，无法安装 df-apaas-cli，请检查 Node.js 安装或后端服务 PATH 配置")
 
         logger.info("[workspace] df-apaas-cli not found globally, installing …")
         proc = await asyncio.create_subprocess_exec(
-            "npm", "install", "-g",
+            npm_exec, "install", "-g",
             "@x-apaas/df-apaas-cli",
             "--registry", DEFAULT_NPM_REGISTRY,
             "--prefer-offline",
@@ -1020,8 +1032,13 @@ class WorkspaceManager:
             if npmrc_src.exists():
                 shutil.copy2(npmrc_src, temp_dir / ".npmrc")
 
+            env = self._build_npm_env()
+            npm_exec = resolve_executable("npm", env)
+            if not npm_exec:
+                return False, "未检测到 npm，请检查 Node.js 安装或后端服务 PATH 配置"
+
             proc = await asyncio.create_subprocess_exec(
-                "npm",
+                npm_exec,
                 "install",
                 "--registry",
                 DEFAULT_NPM_REGISTRY,
@@ -1031,7 +1048,7 @@ class WorkspaceManager:
                 cwd=str(temp_dir),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
-                env=self._build_npm_env(),
+                env=env,
             )
 
             output_chunks: list[str] = []
@@ -1077,6 +1094,9 @@ class WorkspaceManager:
 
         meta["status"] = WorkspaceStatus.INSTALLING.value
         self._write_meta(ws_path, meta)
+
+        # 确保 .npmrc 存在（install 期间 npm 和 df-apaas-cli 内部 npm 都需要）
+        self._ensure_workspace_npmrc(ws_path)
 
         try:
             signature = self._build_dependency_signature(ws_path)
@@ -1175,9 +1195,10 @@ class WorkspaceManager:
         meta["status"] = WorkspaceStatus.BUILDING.value
         self._write_meta(ws_path, meta)
 
-        # 若本次构建需要 df-apaas-cli，确保其全局可用
+        # 若本次构建需要 df-apaas-cli，确保其全局可用，并写入 .npmrc（私有源）
         if self._uses_df_apaas_cli_build(ws_path):
             await self._ensure_df_apaas_cli()
+            self._ensure_workspace_npmrc(ws_path)
 
         try:
             build_result = None
@@ -2102,7 +2123,14 @@ dist/
             return
 
         locale_index_content = locale_index_path.read_text(encoding="utf-8")
-        if "window.df.getI18n().mergeLocaleMessage" not in locale_index_content:
+        if "const platformI18n =" in locale_index_content and "window.APaaSSDK?.context?.globalVueI18n" in locale_index_content:
+            return
+
+        legacy_markers = (
+            "window.df.getI18n().mergeLocaleMessage",
+            "const mergeLocaleMessage =",
+        )
+        if not any(marker in locale_index_content for marker in legacy_markers):
             return
 
         locale_index_path.write_text(
@@ -3025,7 +3053,7 @@ export default {{ name: '{prefix}SearchIde', mixins: [SearchIdeWidgetMixin] }}
   <div class="form-config-item form-config-{kebab}-setting">
     <div class="setting-panel">
       <!-- 直接放置 el-form-item，平台外层已提供 el-form -->
-      <!-- 在此添加配置项，使用 v-model + @change="saveConfig" -->
+      <!-- 在此添加配置项，统一使用 v-model="customComponentConfig.xxx" -->
     </div>
   </div>
 </template>
@@ -3050,14 +3078,10 @@ export default {{
     getI18nShowStatus: {{ default: null }},
     filterTableFromNodeFields: {{ default: null }}
   }},
-  data() {{
-    return {{
-      localConfig: {{}}
-    }}
-  }},
   computed: {{
-    widgetObj() {{
-      return this.componentConfig || this.widget || {{}}
+    customComponentConfig() {{
+      const target = this.componentConfig || this.widget || null
+      return (target && target.customComponentConfig) || {{}}
     }},
     engine() {{
       if (this.formEngine) return this.formEngine
@@ -3071,14 +3095,9 @@ export default {{
     }}
   }},
   created() {{
-    const saved = this.widgetObj.customComponentConfig || {{}}
-    Object.keys(this.localConfig).forEach(key => {{
-      if (saved[key] !== undefined) this.localConfig[key] = saved[key]
-    }})
-  }},
-  methods: {{
-    saveConfig() {{
-      this.$set(this.widgetObj, 'customComponentConfig', {{ ...this.localConfig }})
+    const target = this.componentConfig || this.widget || null
+    if (target && !target.customComponentConfig) {{
+      this.$set(target, 'customComponentConfig', {{}})
     }}
   }}
 }}
@@ -3128,7 +3147,6 @@ export { widgetConfigList, editorConfigList }
     validatorList: [{{ validatorConfig: [], validatorMessage: '' }}],
     special: {{ frontBusinessObjectComponentType: 'BOF_TEXT', saveWithHidden: false }},
     customComponentConfig: {{}},
-    componentModelField: ['TEXT'],
     editor: {{
       config: [
         'INFO', 'LABEL', 'FIELD_CODE', 'TITLE_DESCRIPTION', 'WIDTH',
@@ -3139,6 +3157,7 @@ export { widgetConfigList, editorConfigList }
       excludeInTable: ['WIDTH']
     }}
   }},
+  componentModelField: ['STRING'],
   client: {{
     mobile: {{
       widget: {{

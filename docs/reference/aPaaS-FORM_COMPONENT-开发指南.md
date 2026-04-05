@@ -139,6 +139,24 @@ component-name.zip
 
 > **坑：** `apaas.json` 和 `static/` 目录必须在 zip 根目录，否则平台不识别组件。
 
+### 2.5 国际化入口（src/form-component-local/index.js）
+
+```javascript
+import zhLocaleModule from './zh-CN/index.js'
+import enLocaleModule from './en-US/index.js'
+
+const platformI18n =
+  window.df?.getI18n?.() ||
+  window.APaaSSDK?.context?.globalVueI18n
+
+if (platformI18n?.mergeLocaleMessage) {
+  platformI18n.mergeLocaleMessage('zh-CN', zhLocaleModule)
+  platformI18n.mergeLocaleMessage('en-US', enLocaleModule)
+}
+```
+
+> **坑：** 不要直接写 `window.df.getI18n().mergeLocaleMessage(...)`，也不要额外封装 `const mergeLocaleMessage = ...bind(...)`。统一使用 `platformI18n`，兼容 `window.df` 和 `window.APaaSSDK.context.globalVueI18n`。
+
 ---
 
 ## 三、组件配置（widget.config.js）
@@ -173,7 +191,6 @@ const config = {
     validatorList: [{ validatorConfig: [], validatorMessage: '' }],
     special: { frontBusinessObjectComponentType: 'BOF_TEXT', saveWithHidden: false },
     customComponentConfig: {},   // 自定义配置存储（设计器配置持久化用）
-    componentModelField: ['TEXT'],
     editor: {
       config: [
         'INFO', 'LABEL', 'FIELD_CODE', 'TITLE_DESCRIPTION', 'WIDTH',
@@ -184,6 +201,7 @@ const config = {
       excludeInTable: ['WIDTH']
     }
   },
+  componentModelField: ['STRING'],
   methods: {},
   formatValueSchema: {}
 }
@@ -192,7 +210,8 @@ export default config
 
 > **坑1：** `customComponentConfig` 必须在 widget 配置中声明（即使是空对象 `{}`），否则平台保存时不会序列化它。
 > **坑2：** `customComponentConfig` 的值不能包含空字符串（如 `{ dataSource: '' }`），否则平台校验会认为"配置不完整"阻止保存。
-> **坑3：** 不能删除标准 editor config 项（如 TITLE_DESCRIPTION, FORMULA_RULE 等），否则平台绑定模型字段时会报 `Cannot read properties of undefined (reading 'includes')` 错误。
+> **坑3：** `componentModelField` 必须和 `widget` 同级，且只能是 `['STRING']` / `['NUM']` / `['DATE']` / `['BIG_TEXT']` 中的一个；字符串值如果长度明显偏大，应使用 `BIG_TEXT` 而不是 `STRING`。
+> **坑4：** 不能删除标准 editor config 项（如 TITLE_DESCRIPTION, FORMULA_RULE 等），否则平台绑定模型字段时会报 `Cannot read properties of undefined (reading 'includes')` 错误。
 
 ### 3.2 editor.config.js
 
@@ -217,7 +236,7 @@ export default {
   name: 'FormComponentXxxSetting',
   props: {
     // 平台通过 EditorFormConfigMixin 传入这些 props
-    componentConfig: { default: null },   // widget 对象
+    componentConfig: { default: null },   // widget 对象，真实配置入口
     formEngine: { default: null },         // 表单引擎实例
     widget: { default: null },             // 兼容旧方式
     editConfig: { default: null },
@@ -234,14 +253,10 @@ export default {
     getI18nShowStatus: { default: null },
     filterTableFromNodeFields: { default: null }
   },
-  data() {
-    return {
-      localConfig: { /* 本地配置状态 */ }
-    }
-  },
   computed: {
-    widgetObj() {
-      return this.componentConfig || this.widget || {}
+    customComponentConfig() {
+      const target = this.componentConfig || this.widget || null
+      return (target && target.customComponentConfig) || {}
     },
     engine() {
       // formEngine 作为 prop 传入（优先级最高）
@@ -251,25 +266,19 @@ export default {
     }
   },
   created() {
-    this.loadConfig()  // 从 widget 读取已保存的配置
-  },
-  methods: {
-    loadConfig() {
-      const saved = this.widgetObj.customComponentConfig || {}
-      // 合并到 localConfig
-    },
-    saveConfig() {
-      // 用 $set 写回 widget.customComponentConfig
-      this.$set(this.widgetObj, 'customComponentConfig', { ...this.localConfig })
+    const target = this.componentConfig || this.widget || null
+    if (target && !target.customComponentConfig) {
+      this.$set(target, 'customComponentConfig', {})
     }
   }
 }
 ```
 
-> **坑1：** 不要在 computed 里用 `$set`（副作用），会导致无限循环甚至页面崩溃。用 data + methods 代替。
+> **坑1：** 不要在模板里直接写 `componentConfig.customComponentConfig.xxx`，否则 `vue/no-mutating-props` 会在构建时失败。统一通过 `computed customComponentConfig` 别名绑定。
 > **坑2：** `formEngine` 在 setting.vue 中是通过 **prop** 传入的（不是 inject），inject `renderGlobal` 在设计器右侧面板不一定有。
 > **坑3：** 配置直接存在 `customComponentConfig` 根级别（如 `{ dataSource, xField, yField }`），不要嵌套 `{ chartConfig: { ... } }`，否则 edit/read/ide.vue 读取路径要一致。
 > **坑4：** inject 声明必须带 `{ default: null }`，不能用数组形式 `inject: ['xxx']`，否则找不到 provide 时组件静默崩溃不渲染。
+> **坑5：** 不要写 `saveConfig()`，更不要调用 `formEngine.updateCustomComponentConfig()`、`formEngine.updateWidgetConfig()` 之类的方法，这些方法不存在。
 
 ### 4.2 获取子表列表和字段
 
@@ -284,7 +293,7 @@ subTableList() {
 // 获取子表下的字段
 availableFields() {
   const allItems = this.engine.formDataControl.allTileFormItemList || []
-  const tableUuid = this.localConfig.dataSource
+  const tableUuid = this.componentConfig?.customComponentConfig?.dataSource
   // 方式1：通过 isInTable + tableUuid 关联
   const fields = allItems.filter(item =>
     item.isInTable && item.tableUuid === tableUuid &&

@@ -20,7 +20,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models import User, Conversation, Message, Project
-from app.coding.form_component_editor import normalize_form_component_editor_artifacts
+from app.coding.form_component_editor import (
+    normalize_form_component_editor_artifacts,
+    validate_form_component_editor_workspace,
+)
 from app.coding.scenes import SceneType, get_scene
 from app.coding.generator import CodingGenerator
 from app.coding.workspace import WorkspaceManager, ProjectType
@@ -995,9 +998,13 @@ async def run_coding_pipeline(
             if not streamed_narration:
                 yield _record_event({"type": "content", "content": synthesized_summary})
 
-        normalized_files = normalize_form_component_editor_artifacts(ws_mgr.get_workspace_path(ws_id))
+        workspace_path = ws_mgr.get_workspace_path(ws_id)
+        normalized_files = normalize_form_component_editor_artifacts(workspace_path)
         if normalized_files:
             logger.info("Normalized form-component editor artifacts for %s: %s", ws_id, normalized_files)
+        contract_errors = validate_form_component_editor_workspace(workspace_path)
+        if contract_errors:
+            raise RuntimeError("；".join(contract_errors))
 
         await _persist_output()
 

@@ -6,9 +6,20 @@ import re
 import json
 from typing import List, TYPE_CHECKING
 
+from app.coding.form_component_editor import validate_setting_component_contract
+
 if TYPE_CHECKING:
     from app.coding.generator import GeneratedFile
     from app.coding.scenes import SceneInfo
+
+
+SUPPORTED_COMPONENT_MODEL_FIELDS = {"STRING", "NUM", "DATE", "BIG_TEXT"}
+COMPONENT_MODEL_FIELD_TO_BOF_TYPE = {
+    "STRING": "BOF_TEXT",
+    "NUM": "BOF_NUMBER",
+    "DATE": "BOF_DATE",
+    "BIG_TEXT": "BOF_TEXT",
+}
 
 
 def validate_generated_code(files: List["GeneratedFile"], scene: "SceneInfo") -> List[str]:
@@ -82,6 +93,7 @@ def _validate_frontend(files: List["GeneratedFile"], scene: "SceneInfo") -> List
             errors.append(f"入口文件 '{f.path}' 缺少 install 方法（Vue插件格式）")
 
     errors.extend(_validate_form_component_editor_registration(file_map))
+    errors.extend(_validate_widget_config_contract(files))
 
     return errors
 
@@ -109,8 +121,22 @@ def _validate_form_component_editor_registration(file_map: dict[str, "GeneratedF
 
         setting_file = file_map.get(setting_path)
         if not setting_file:
-            errors.append(f"缺少设置面板文件 '{setting_path}'")
+            legacy_paths = [
+                "src/form-component/form-editor/setting.vue",
+                "src/form-component-config/form-editor/setting.vue",
+                f"src/form-component/form-widget/setting/{widget_name}-setting.vue",
+                f"src/form-component-config/form-widget/setting/{widget_name}-setting.vue",
+            ]
+            matched_legacy_path = next((path for path in legacy_paths if path in file_map), None)
+            if matched_legacy_path:
+                errors.append(
+                    f"设置面板文件路径错误，发现 '{matched_legacy_path}'，应为 '{setting_path}'"
+                )
+            else:
+                errors.append(f"缺少设置面板文件 '{setting_path}'")
             continue
+        for contract_error in validate_setting_component_contract(setting_file.content):
+            errors.append(f"'{setting_path}' 不符合平台约束：{contract_error}")
 
         editor_index = file_map.get(editor_index_path)
         if not editor_index:
@@ -135,6 +161,34 @@ def _validate_form_component_editor_registration(file_map: dict[str, "GeneratedF
                 errors.append(
                     f"'{editor_config_path}' 的 componentName 与 '{setting_path}' 的 name 不一致"
                 )
+
+    return errors
+
+
+def _validate_widget_config_contract(files: List["GeneratedFile"]) -> List[str]:
+    errors = []
+    widget_config_files = [f for f in files if f.path.endswith(".widget.config.js")]
+    for f in widget_config_files:
+        root_match = re.search(r"(?m)^  componentModelField\s*:\s*\[\s*'([^']+)'\s*\]", f.content)
+        if not root_match:
+            errors.append(f"'{f.path}' 的 componentModelField 必须与 widget 同级")
+            continue
+
+        component_model_field = root_match.group(1)
+        if component_model_field not in SUPPORTED_COMPONENT_MODEL_FIELDS:
+            errors.append(
+                f"'{f.path}' 的 componentModelField 只能是 STRING / NUM / DATE / BIG_TEXT，当前为 '{component_model_field}'"
+            )
+
+        if re.search(r"(?m)^[ \t]{4,}componentModelField\s*:", f.content):
+            errors.append(f"'{f.path}' 的 componentModelField 不能写在 widget 内部")
+
+        bof_match = re.search(r"frontBusinessObjectComponentType\s*:\s*'([^']+)'", f.content)
+        expected_bof_type = COMPONENT_MODEL_FIELD_TO_BOF_TYPE.get(component_model_field)
+        if bof_match and expected_bof_type and bof_match.group(1) != expected_bof_type:
+            errors.append(
+                f"'{f.path}' 的 frontBusinessObjectComponentType 应为 '{expected_bof_type}'，与 componentModelField 不匹配"
+            )
 
     return errors
 
