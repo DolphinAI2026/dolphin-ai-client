@@ -690,6 +690,19 @@ export default {
 - ❌ `this.$root.formEngine`
 - ❌ 任何全局变量或 window 上的对象
 
+**⚠️ 禁止在 setting.vue 中使用以下方式保存配置（这些会导致配置无法写入数据库！）**：
+- ❌ `this.formEngine.setWidgetInfo({ customComponentConfig: { ... } })` — setWidgetInfo 不会持久化
+- ❌ `updateCustomConfig(data) { ... }` 此类封装方法
+- ❌ 任何通过 formEngine 方法间接写入配置的方式
+
+**✅ 唯一正确的保存方式（必须用 $set 直接写 widgetObj）**：
+```javascript
+saveConfig() {
+  this.$set(this.widgetObj, 'customComponentConfig', { ...this.localConfig })
+}
+```
+原因：平台监听 `widgetObj.customComponentConfig` 的变化来触发保存，只有通过 `$set` 直接修改 `widgetObj` 才能被平台感知并写入数据库。
+
 **子表相关 API**：
 - 所有表单组件列表：`formEngine.formDataControl.allTileFormItemList`（数组）
 - 子表判断：`item.componentType === 'FORM_WIDGET_SON_TABLE'`
@@ -2327,4 +2340,5 @@ CODE_GENERATION_INSTRUCTION = """
 16. 如需在 setting.vue 中访问子表列表，使用 `this.formEngine.formDataControl.allTileFormItemList` 并按 `componentType === 'FORM_WIDGET_SON_TABLE'` 过滤
 17. **获取子表真实数据时**，formData 中子表数据的 key 是子表的 `code`（不是 uuid），需要先通过 uuid 找到子表再取其 code
 18. **setting.vue 的固定路径是 `src/form-component/form-editor/{name}-setting.vue`**；`editorConfigList` 的固定聚合路径是 `src/form-component-config/form-editor/index.js`
+19. **⚠️ setting.vue 保存配置必须且只能用 `this.$set(this.widgetObj, 'customComponentConfig', { ...this.localConfig })`**。严禁使用 `this.formEngine.setWidgetInfo()`、`updateCustomConfig()` 或任何通过 formEngine 方法间接写入配置的方式——这些方式不会触发平台监听，配置无法写入数据库。
 """
