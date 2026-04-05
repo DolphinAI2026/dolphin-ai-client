@@ -1210,6 +1210,16 @@ def _infer_component_model_field(spec: FormComponentEditorSpec, content: str) ->
     if any(keyword in metadata for keyword in big_text_keywords):
         return "BIG_TEXT"
 
+    # 范围类（存储 JSON 数组，序列化后 < 500 字符）→ STRING
+    # 必须在 date_keywords 之前判断，防止 date-range 被误判为 DATE
+    string_range_keywords = (
+        "date-range", "daterange", "datetimerange", "monthrange", "yearrange",
+        "timerange", "time-range", "numberrange", "number-range",
+        "range-picker", "rangepicker",
+    )
+    if any(keyword in metadata for keyword in string_range_keywords):
+        return "STRING"
+
     num_keywords = (
         "star", "rating", "rate", "score", "number", "amount", "price",
         "count", "percent", "progress", "slider", "stepper", "digit", "num", "评分",
