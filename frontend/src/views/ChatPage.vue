@@ -1907,7 +1907,13 @@ async function loadDeployStatus() {
   try {
     const resp = await applicationApi.getStepStatus(deployAppId.value)
     deploySteps.value = resp.steps || []
-    deployOpen.value = deploySteps.value.length > 0
+    // 已在平台上的应用（导入或已部署），不自动弹出部署面板
+    const alreadyOnPlatform = !!store.currentApp?.apaas_app_id
+    if (alreadyOnPlatform) {
+      deployOpen.value = false
+    } else {
+      deployOpen.value = deploySteps.value.length > 0
+    }
     if (deploySteps.value.length && deploySteps.value.every(step => step.status === 'completed')) {
       await refreshCurrentAppRemoteMeta(deployAppId.value)
     }
