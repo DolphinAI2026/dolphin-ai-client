@@ -20,7 +20,7 @@ const router = createRouter({
       path: '/',
       name: 'Home',
       component: () => import('@/views/Landing.vue'),
-      meta: { requiresAuth: true }
+      meta: { requiresAuth: true, navExpanded: true }
     },
     {
       path: '/chat/:id?',
@@ -44,7 +44,7 @@ const router = createRouter({
       path: '/coding',
       name: 'Coding',
       component: () => import('@/views/CodingPage.vue'),
-      meta: { requiresAuth: true }
+      meta: { requiresAuth: true, navExpanded: true }
     },
     {
       path: '/marketplace',
@@ -56,7 +56,7 @@ const router = createRouter({
       path: '/platform-envs',
       name: 'PlatformEnvs',
       component: () => import('@/views/PlatformEnvs.vue'),
-      meta: { requiresAuth: true }
+      meta: { requiresAuth: true, navExpanded: true }
     },
     {
       path: '/requirements/:id?',

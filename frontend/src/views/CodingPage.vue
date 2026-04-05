@@ -1,67 +1,5 @@
 <template>
-  <div class="coding-page">
-    <!-- Header (嵌入模式隐藏) -->
-    <TopBar v-if="!embeddedAppId" title="AI Coding" show-back back-to="/chat">
-      <template #center>
-        <el-tag
-          v-if="codingStore.workspace"
-          size="small"
-          type="info"
-          :title="workspaceTooltip(codingStore.workspace)"
-          class="header-ws-tag"
-        >
-          {{ workspaceDisplayName(codingStore.workspace) }}
-        </el-tag>
-      </template>
-      <template #actions>
-        <div v-if="ideUrl || streamMessages.length > 0" class="view-toggle">
-          <button
-            class="view-toggle-btn"
-            :class="{ active: activeView === 'chat' }"
-            @click="activeView = 'chat'"
-            title="对话记录"
-          >
-            <el-icon :size="16"><ChatDotRound /></el-icon>
-            <span class="view-toggle-label">Chat</span>
-          </button>
-          <button
-            class="view-toggle-btn"
-            :class="{ active: activeView === 'ide', disabled: !ideUrl }"
-            :disabled="!ideUrl"
-            @click="ideUrl && (activeView = 'ide')"
-            title="代码编辑器"
-          >
-            <el-icon :size="16"><Monitor /></el-icon>
-            <span class="view-toggle-label">IDE</span>
-          </button>
-        </div>
-        <template v-if="codingStore.workspace">
-          <el-button
-            size="small"
-            type="success"
-            :loading="isDownloading"
-            class="header-btn"
-            @click="downloadCode"
-            title="下载代码"
-          >
-            <el-icon><Download /></el-icon>
-          </el-button>
-          <el-button
-            size="small"
-            type="danger"
-            text
-            class="header-btn"
-            @click="deleteCurrentWorkspace"
-            title="删除当前工作区"
-          >
-            <el-icon><Delete /></el-icon>
-          </el-button>
-        </template>
-      </template>
-    </TopBar>
-
-    <!-- 嵌入模式右侧工具栏已移至 coding-body 内 -->
-
+  <WorkbenchShell>
     <!-- Env Picker Dialog -->
     <el-dialog v-model="showEnvPicker" title="选择调试平台环境" width="500px" :append-to-body="true">
       <div v-if="platformEnvs.length === 0" style="text-align:center;color:#999;padding:20px;">
@@ -86,116 +24,17 @@
     </el-dialog>
 
     <div class="coding-body">
-      <!-- Left Sidebar: Workspace List -->
-      <aside class="workspace-sidebar" :class="{ collapsed: sidebarCollapsed }">
-        <!-- Collapsed: only icons -->
-        <div v-if="sidebarCollapsed" class="sidebar-collapsed-content">
-          <button class="sidebar-toggle-btn" @click="sidebarCollapsed = false" title="展开侧栏">
-            <el-icon :size="16"><Expand /></el-icon>
-          </button>
-          <button class="sidebar-icon-btn" @click="startNewWorkspace" title="新建工作区">
-            <el-icon :size="16"><Plus /></el-icon>
-          </button>
-          <div class="sidebar-collapsed-divider"></div>
-          <button
-            v-for="ws in existingWorkspaces.slice(0, 8)"
-            :key="ws.id"
-            class="sidebar-icon-ws"
-            :class="{ active: codingStore.workspace?.id === ws.id }"
-            :title="workspaceDisplayName(ws)"
-            @click="openExistingWorkspace(ws)"
-          >{{ (workspaceDisplayName(ws) || '?')[0] }}</button>
-        </div>
-
-        <!-- Expanded: full list -->
-        <template v-else>
-          <div class="sidebar-section-header">
-            <span class="sidebar-title">工作区</span>
-            <div class="sidebar-header-actions">
-              <button class="sidebar-action-btn sidebar-add-btn" @click="startNewWorkspace" title="新建工作区">
-                <el-icon :size="14"><Plus /></el-icon>
-              </button>
-              <button class="sidebar-action-btn" @click="sidebarCollapsed = true" title="收起侧栏">
-                <el-icon :size="14"><Fold /></el-icon>
-              </button>
-            </div>
-          </div>
-          <div class="sidebar-list">
-            <template v-for="group in groupedWorkspaces" :key="group.key">
-              <div class="sidebar-group-header" @click="toggleGroup(group.key)">
-                <span class="sidebar-group-icon">{{ group.icon }}</span>
-                <span class="sidebar-group-label">{{ group.label }}</span>
-                <span class="sidebar-group-count">{{ group.items.length }}</span>
-                <span class="sidebar-group-arrow" :class="{ collapsed: collapsedGroups.has(group.key) }">
-                  <el-icon :size="10"><ArrowRight /></el-icon>
-                </span>
-              </div>
-              <template v-if="!collapsedGroups.has(group.key)">
-                <div
-                  v-for="ws in group.items"
-                  :key="ws.id"
-                  class="sidebar-ws-item"
-                  :class="{ active: codingStore.workspace?.id === ws.id }"
-                  @click="openExistingWorkspace(ws)"
-                >
-                  <div class="sidebar-ws-name" :title="workspaceTooltip(ws)">{{ workspaceDisplayName(ws) }}</div>
-                  <div v-if="workspaceCodeName(ws)" class="sidebar-ws-code">{{ workspaceCodeName(ws) }}</div>
-                  <button class="sidebar-ws-del" @click.stop="deleteWorkspace(ws)" title="删除">&#215;</button>
-                </div>
-              </template>
-            </template>
-            <div v-if="existingWorkspaces.length === 0" class="sidebar-empty">
-              暂无工作区
-            </div>
-          </div>
-        </template>
-      </aside>
-
       <!-- Main Content: Welcome or IDE -->
       <div class="main-content">
         <!-- Welcome State -->
         <div v-if="!ideUrl && !isStreaming && streamMessages.length === 0" class="welcome-pane">
           <div class="welcome-inner">
             <div class="welcome-icon">&#x2728;</div>
-            <h2 class="welcome-title">描述你想开发的内容</h2>
-            <p class="welcome-desc">告诉我你想开发什么，我会自动创建项目并打开 AI 代码编辑器。</p>
+            <h2 class="welcome-title">AI Coding</h2>
+            <p class="welcome-desc">描述你想开发的内容，告诉我你想开发什么，我会自动创建项目并打开 AI 代码编辑器。</p>
 
             <!-- Input Area (centered) -->
             <div class="welcome-input-area">
-              <div class="coding-model-bar">
-                <div class="coding-model-meta">
-                  <span class="coding-model-label">当前模型</span>
-                  <span class="coding-model-tip">{{ codingModelHint }}</span>
-                </div>
-                <el-select
-                  v-model="selectedCodingModelValue"
-                  class="coding-model-select"
-                  popper-class="model-select-dropdown coding-model-dropdown"
-                  size="large"
-                  placeholder="选择模型"
-                  :disabled="codingModelLoading || updatingCodingModel || codingModelOptions.length === 0"
-                  @change="handleCodingModelChange"
-                >
-                  <el-option
-                    v-for="option in codingModelOptions"
-                    :key="option.id"
-                    :label="formatCodingModelOption(option)"
-                    :value="toCodingModelValue(option.id)"
-                  >
-                    <div class="coding-model-option-row">
-                      <div class="coding-model-option-top">
-                        <span class="coding-model-option-name">{{ option.config_name }}</span>
-                        <div class="coding-model-option-tags">
-                          <span class="coding-model-option-provider">{{ formatCodingModelProvider(option.provider) }}</span>
-                          <span v-if="option.is_default" class="coding-model-option-default">默认</span>
-                        </div>
-                      </div>
-                      <span class="coding-model-option-meta">{{ option.model }}</span>
-                    </div>
-                  </el-option>
-                </el-select>
-              </div>
-
               <!-- Attachment Preview -->
               <div v-if="attachedFile" class="attachment-preview">
                 <div v-if="attachedPreviewUrl" class="attachment-thumb">
@@ -217,38 +56,73 @@
                   style="display: none"
                   @change="handleFileSelect"
                 />
-                <el-button
-                  text
-                  class="attach-btn"
-                  @click="fileInputRef?.click()"
-                  :disabled="isCreating"
-                  title="上传附件"
-                >
-                  <el-icon :size="18"><Paperclip /></el-icon>
-                </el-button>
-                <el-input
-                  v-model="userInput"
-                  type="textarea"
-                  :rows="2"
-                  :autosize="{ minRows: 2, maxRows: 6 }"
-                  placeholder="描述你想开发的组件或页面... (Ctrl+Enter 发送)"
-                  @keydown.ctrl.enter="sendMessage"
-                  @keydown.meta.enter="sendMessage"
-                  :disabled="isCreating"
-                  resize="none"
-                />
-                <el-button
-                  type="primary"
-                  class="send-btn"
-                  :loading="isCreating || isUploading"
-                  @click="sendMessage"
-                  :disabled="(!userInput.trim() && !attachedFile) || isCreating"
-                  circle
-                >
-                  <el-icon v-if="!isCreating && !isUploading"><TopRight /></el-icon>
-                </el-button>
+                <div class="composer-topline">
+                  <div class="coding-model-inline">
+                    <span class="coding-model-label">模型</span>
+                    <el-select
+                      v-model="selectedCodingModelValue"
+                      class="coding-model-select"
+                      popper-class="model-select-dropdown coding-model-dropdown"
+                      placeholder="选择模型"
+                      :disabled="codingModelLoading || updatingCodingModel || codingModelOptions.length === 0"
+                      @change="handleCodingModelChange"
+                    >
+                      <el-option
+                        v-for="option in codingModelOptions"
+                        :key="option.id"
+                        :label="formatCodingModelOption(option)"
+                        :value="toCodingModelValue(option.id)"
+                      >
+                        <div class="coding-model-option-row">
+                          <div class="coding-model-option-top">
+                            <span class="coding-model-option-name">{{ option.config_name }}</span>
+                            <div class="coding-model-option-tags">
+                              <span class="coding-model-option-provider">{{ formatCodingModelProvider(option.provider) }}</span>
+                              <span v-if="option.is_default" class="coding-model-option-default">默认</span>
+                            </div>
+                          </div>
+                          <span class="coding-model-option-meta">{{ option.model }}</span>
+                        </div>
+                      </el-option>
+                    </el-select>
+                  </div>
+                  <span class="coding-model-tip">{{ codingModelHint }}</span>
+                </div>
+                <div class="input-mainline">
+                  <el-button
+                    text
+                    class="attach-btn"
+                    @click="fileInputRef?.click()"
+                    :disabled="isCreating"
+                    title="上传附件"
+                  >
+                    <el-icon :size="18"><Paperclip /></el-icon>
+                  </el-button>
+                  <div class="composer-text-zone">
+                    <el-input
+                      v-model="userInput"
+                      type="textarea"
+                      :rows="2"
+                      :autosize="{ minRows: 2, maxRows: 6 }"
+                      placeholder="描述你想开发的内容，告诉我你想开发什么，我会自动创建项目并打开 AI 代码编辑器"
+                      @keydown.ctrl.enter="sendMessage"
+                      @keydown.meta.enter="sendMessage"
+                      :disabled="isCreating"
+                      resize="none"
+                    />
+                  </div>
+                  <el-button
+                    type="primary"
+                    class="send-btn"
+                    :loading="isCreating || isUploading"
+                    @click="sendMessage"
+                    :disabled="(!userInput.trim() && !attachedFile) || isCreating"
+                    circle
+                  >
+                    <el-icon v-if="!isCreating && !isUploading"><TopRight /></el-icon>
+                  </el-button>
+                </div>
               </div>
-              <div class="input-hint">Ctrl + Enter 发送 | 粘贴截图或点击回形针添加附件</div>
             </div>
 
             <!-- Scene Category Chips -->
@@ -265,18 +139,65 @@
               </button>
             </div>
 
-            <!-- Suggestion Cards -->
-            <div class="suggestions-grid">
-              <button
-                v-for="s in activeSuggestions"
-                :key="s"
-                class="suggestion-card"
-                @click="sendSuggestion(s)"
-              >
-                {{ s }}
-              </button>
-            </div>
+            <div class="workspace-showcase">
+              <div class="workspace-showcase-header">
+                <div>
+                  <h3 class="workspace-showcase-title">我的自开发文件</h3>
+                  <p class="workspace-showcase-subtitle">默认展示最近创建的 6 个开发文件，可直接进入或下载源码与包文件。</p>
+                </div>
+                <button
+                  v-if="existingWorkspaces.length > 0"
+                  class="workspace-showcase-more"
+                  @click="workspaceShowcaseExpanded = !workspaceShowcaseExpanded"
+                >
+                  <span>{{ workspaceShowcaseExpanded ? '收起' : '查看全部' }}</span>
+                  <span class="workspace-showcase-more-count">{{ existingWorkspaces.length }}</span>
+                </button>
+              </div>
 
+              <div v-if="workspaceShowcaseItems.length > 0" class="workspace-cards-grid">
+                <article
+                  v-for="ws in workspaceShowcaseItems"
+                  :key="ws.id"
+                  class="workspace-card"
+                  @click="openExistingWorkspace(ws)"
+                >
+                  <div class="workspace-card-head">
+                    <div>
+                      <div class="workspace-card-name">{{ workspaceDisplayName(ws) }}</div>
+                      <div class="workspace-card-package">{{ workspaceCodeName(ws) || ws.project_name }}</div>
+                    </div>
+                    <span class="workspace-card-type">{{ workspaceTypeLabel(ws.project_type) }}</span>
+                  </div>
+                  <div class="workspace-card-meta">
+                    <span>文件类型：{{ workspaceTypeLabel(ws.project_type) }}</span>
+                    <span>包名：{{ workspaceCodeName(ws) || ws.project_name }}</span>
+                  </div>
+                  <div class="workspace-card-actions">
+                    <button
+                      class="workspace-card-action"
+                      title="下载源码"
+                      @click.stop="downloadWorkspaceArtifact(ws, 'src')"
+                    >
+                      <el-icon><Download /></el-icon>
+                      <span>源码</span>
+                    </button>
+                    <button
+                      class="workspace-card-action"
+                      title="下载包文件"
+                      @click.stop="downloadWorkspaceArtifact(ws, 'dist')"
+                    >
+                      <el-icon><Download /></el-icon>
+                      <span>包下载</span>
+                    </button>
+                  </div>
+                </article>
+              </div>
+
+              <div v-else class="workspace-showcase-empty">
+                暂无自开发文件，先描述一个需求，我们会自动创建项目。
+              </div>
+            </div>
           </div>
         </div>
 
@@ -489,7 +410,7 @@
         </template>
       </aside>
     </div>
-  </div>
+  </WorkbenchShell>
 </template>
 
 <script setup lang="ts">
@@ -497,7 +418,7 @@ import { API_PREFIX } from '@/utils/request'
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ArrowLeft, ArrowRight, Download, TopRight, Plus, Paperclip, Monitor, Delete, Fold, Expand, ChatDotRound } from '@element-plus/icons-vue'
+import { ArrowLeft, Download, TopRight, Plus, Paperclip, Monitor, Delete, Fold, Expand, ChatDotRound } from '@element-plus/icons-vue'
 import { useCodingStore } from '@/stores/coding'
 import { platformEnvApi, type PlatformEnv } from '@/api/platformEnv'
 import { useUserStore } from '@/stores/user'
@@ -508,7 +429,7 @@ import { conversationApi } from '@/api/conversation'
 import { llmConfigApi, type BuilderModelOption } from '@/api/llmConfig'
 import { consumeSseResponse } from '@/utils/sse'
 import ThemeToggle from '@/components/ThemeToggle.vue'
-import TopBar from '@/components/TopBar.vue'
+import WorkbenchShell from '@/components/WorkbenchShell.vue'
 
 const route = useRoute()
 const codingStore = useCodingStore()
@@ -704,8 +625,11 @@ const existingWorkspaces = computed(() => {
   if (!embeddedAppId.value) return allWorkspaces.value
   return allWorkspaces.value.filter((ws: any) => String(ws.project_id || '') === embeddedAppId.value)
 })
+const workspaceShowcaseExpanded = ref(false)
+const workspaceShowcaseItems = computed(() =>
+  workspaceShowcaseExpanded.value ? existingWorkspaces.value : existingWorkspaces.value.slice(0, 6),
+)
 const isDownloading = ref(false)
-const sidebarCollapsed = ref(false)
 const embeddedPanelCollapsed = ref(false)
 
 // ============ Attachment State ============
@@ -719,9 +643,6 @@ const chatFileInputRef = ref<HTMLInputElement>()
 const showEnvPicker = ref(false)
 const platformEnvs = ref<PlatformEnv[]>([])
 
-// ============ Workspace Grouping ============
-const collapsedGroups = ref(new Set<string>())
-
 const wsTypeGroupMap: Record<string, { key: string; icon: string; label: string; order: number }> = {
   'form-component':   { key: 'component-pc',     icon: '\uD83E\uDDE9', label: 'PC \u7EC4\u4EF6',     order: 1 },
   'menu-page':        { key: 'page-pc',          icon: '\uD83D\uDDA5\uFE0F', label: 'PC \u9875\u9762',     order: 2 },
@@ -733,21 +654,6 @@ const wsTypeGroupMap: Record<string, { key: string; icon: string; label: string;
   'backend-feign':    { key: 'backend',           icon: '\uD83D\uDD17', label: '\u5916\u90E8\u8C03\u7528',  order: 6 },
   'backend-scheduled':{ key: 'backend',           icon: '\u23F0', label: '\u5B9A\u65F6\u4EFB\u52A1',  order: 6 },
 }
-
-const groupedWorkspaces = computed(() => {
-  const groups: Record<string, { key: string; icon: string; label: string; order: number; items: WorkspaceInfo[] }> = {}
-  for (const ws of existingWorkspaces.value) {
-    const mapping = wsTypeGroupMap[ws.project_type] || { key: 'other', icon: '\uD83D\uDCE6', label: '\u5176\u4ED6', order: 99 }
-    if (!groups[mapping.key]) {
-      groups[mapping.key] = { ...mapping, items: [] }
-    }
-    const group = groups[mapping.key]
-    if (group) {
-      group.items.push(ws)
-    }
-  }
-  return Object.values(groups).sort((a, b) => a.order - b.order)
-})
 
 function workspaceDisplayName(ws: WorkspaceInfo | null | undefined) {
   if (!ws) return ''
@@ -767,11 +673,15 @@ function workspaceTooltip(ws: WorkspaceInfo | null | undefined) {
   return codeName ? `${displayName}\n${codeName}` : displayName
 }
 
-function toggleGroup(key: string) {
-  if (collapsedGroups.value.has(key)) {
-    collapsedGroups.value.delete(key)
-  } else {
-    collapsedGroups.value.add(key)
+function workspaceTypeLabel(projectType: string) {
+  return wsTypeGroupMap[projectType]?.label || '其他'
+}
+
+async function downloadWorkspaceArtifact(ws: WorkspaceInfo, type: 'dist' | 'src') {
+  try {
+    await codingApi.downloadZip(ws.id, type)
+  } catch (e: any) {
+    ElMessage.error(e?.message || '下载失败')
   }
 }
 
@@ -837,8 +747,6 @@ const sceneSuggestions: Record<string, string[]> = {
 
 const activeSceneCategory = ref('component-pc')
 const pendingSceneCategory = ref<string | null>(null)
-
-const activeSuggestions = computed(() => sceneSuggestions[activeSceneCategory.value] || [])
 
 const sceneCategoryToProjectType: Record<string, string> = {
   'component-pc': 'form-component',
@@ -1828,10 +1736,12 @@ watch(() => route.path, () => {
 .welcome-pane {
   flex: 1;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
   overflow-y: auto;
-  background: radial-gradient(circle at top, var(--t-brand-subtle), transparent 40%);
+  background:
+    radial-gradient(circle at top, rgba(101, 120, 255, 0.11), transparent 34%),
+    linear-gradient(180deg, #f5f7ff 0%, #f7fbff 100%);
 }
 
 .welcome-inner {
@@ -1839,22 +1749,22 @@ watch(() => route.path, () => {
   flex-direction: column;
   align-items: center;
   text-align: center;
-  max-width: 700px;
+  max-width: 1160px;
   width: 100%;
-  padding: 40px 24px;
+  padding: 54px 42px 46px;
   position: relative;
 }
 
 .welcome-icon {
-  font-size: 48px;
+  font-size: 36px;
   margin-bottom: 16px;
   filter: drop-shadow(0 0 24px var(--t-brand-glow));
 }
 
 .welcome-title {
-  font-size: 32px;
+  font-size: 44px;
   font-weight: 800;
-  margin: 0 0 12px;
+  margin: 0 0 14px;
   background: var(--t-brand-gradient);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
@@ -1864,70 +1774,60 @@ watch(() => route.path, () => {
 
 .welcome-desc {
   color: var(--t-text-secondary);
-  font-size: 15px;
-  margin: 0 0 28px;
-  line-height: 1.7;
-  max-width: 460px;
+  font-size: 16px;
+  margin: 0 0 34px;
+  line-height: 1.6;
+  max-width: 760px;
 }
 
 /* ============ Welcome Input Area ============ */
 .welcome-input-area {
-  width: 100%;
+  width: min(100%, 1280px);
   margin-bottom: 28px;
-}
-
-.coding-model-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 10px;
-  padding: 12px 14px;
-  border: 1px solid var(--t-border-subtle);
-  border-radius: 14px;
-  background: var(--t-bg-elevated);
-  box-shadow: var(--t-shadow-sm);
-}
-
-.coding-model-meta {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
 }
 
 .coding-model-label {
   font-size: 12px;
-  font-weight: 600;
-  color: var(--t-text-primary);
+  font-weight: 700;
+  color: #50607f;
+  letter-spacing: 0.02em;
 }
 
 .coding-model-tip {
-  font-size: 11px;
-  color: var(--t-text-muted);
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 14px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: #8b98b3;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(116, 131, 174, 0.14);
+  white-space: nowrap;
 }
 
 .coding-model-select {
-  width: min(460px, 60%);
+  width: min(320px, 48%);
   flex-shrink: 0;
 }
 
 .coding-model-select :deep(.el-select__wrapper) {
-  min-height: 40px;
-  border-radius: 12px;
-  background: linear-gradient(180deg, var(--t-bg-panel), var(--t-bg-base));
-  box-shadow: inset 0 0 0 1px var(--t-border-subtle), 0 8px 20px rgba(15, 23, 42, 0.04);
+  min-height: 42px;
+  border-radius: 14px;
+  padding-inline: 14px;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: inset 0 0 0 1px rgba(112, 126, 170, 0.16), 0 10px 24px rgba(120, 130, 168, 0.08);
 }
 .coding-model-select :deep(.el-select__selected-item),
 .coding-model-select :deep(.el-select__placeholder) {
-  color: var(--t-text-primary);
+  color: #3a4762;
 }
 .coding-model-select :deep(.el-select__caret),
 .coding-model-select :deep(.el-select__suffix) {
-  color: var(--t-text-muted);
+  color: #90a0bd;
 }
 .coding-model-select :deep(.el-select__wrapper.is-focused) {
-  box-shadow: inset 0 0 0 1px var(--t-brand-glow), 0 0 0 4px rgba(99, 102, 241, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(99, 102, 241, 0.24), 0 0 0 4px rgba(99, 102, 241, 0.08);
 }
 
 .coding-model-option-row {
@@ -1948,7 +1848,7 @@ watch(() => route.path, () => {
 
 .coding-model-option-name {
   color: var(--t-text-primary);
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 600;
   line-height: 1.2;
 }
@@ -1985,88 +1885,151 @@ watch(() => route.path, () => {
 }
 
 .coding-model-option-meta {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--t-text-secondary);
   line-height: 1.35;
 }
 
 .input-wrapper {
   display: flex;
-  align-items: flex-end;
-  gap: 8px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 14px;
   width: 100%;
-  background: var(--t-bg-input);
-  border: 1px solid var(--t-border-subtle);
-  border-radius: 22px;
-  padding: 12px 14px;
-  transition: all 0.3s ease;
-  box-shadow: var(--t-shadow-md);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(247, 249, 255, 0.9));
+  border: 1px solid rgba(124, 138, 182, 0.14);
+  border-radius: 30px;
+  padding: 18px 20px 20px;
+  transition: all 0.28s ease;
+  box-shadow:
+    0 24px 48px rgba(101, 113, 161, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(14px);
+}
+
+.composer-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgba(123, 138, 178, 0.12);
+}
+
+.coding-model-inline {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.input-mainline {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .input-wrapper:focus-within {
-  border-color: transparent;
-  background: linear-gradient(var(--t-bg-elevated), var(--t-bg-elevated)) padding-box,
-              var(--t-brand-gradient) border-box;
-  border: 1px solid transparent;
-  box-shadow: 0 0 16px var(--t-brand-subtle);
+  border-color: rgba(112, 119, 233, 0.2);
+  box-shadow:
+    0 28px 60px rgba(89, 99, 158, 0.14),
+    0 0 0 4px rgba(99, 102, 241, 0.07),
+    inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+.composer-text-zone {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 2px 2px 0;
+}
+
+.composer-text-zone :deep(.el-textarea) {
+  width: 100%;
 }
 
 .input-wrapper :deep(.el-textarea__inner) {
   background: transparent !important;
   border: none !important;
   box-shadow: none !important;
-  color: var(--t-text-primary);
-  font-size: 14px;
-  line-height: 1.55;
-  padding: 4px 0;
+  color: #42506b;
+  font-size: 15px;
+  line-height: 1.7;
+  padding: 4px 0 6px;
   resize: none;
+  font-weight: 500;
+}
+
+.input-wrapper :deep(.el-textarea__inner::placeholder) {
+  color: #a6b2ca;
+  font-weight: 500;
 }
 
 .send-btn {
   flex-shrink: 0;
-  width: 36px;
-  height: 36px;
+  width: 48px;
+  height: 48px;
   background: var(--t-brand-gradient) !important;
   border: none !important;
+  box-shadow: 0 14px 24px rgba(99, 102, 241, 0.24);
   transition: all 0.2s ease;
 }
 
 .send-btn:hover:not(:disabled) {
-  transform: scale(1.05);
-  box-shadow: 0 2px 10px var(--t-brand-glow);
+  transform: translateY(-1px) scale(1.03);
+  box-shadow: 0 18px 30px rgba(99, 102, 241, 0.28);
 }
 
 .send-btn:disabled {
-  opacity: 0.4;
-  background: var(--t-border-subtle) !important;
+  opacity: 0.55;
+  background: linear-gradient(180deg, #e8ebf5, #d9deeb) !important;
+  box-shadow: none;
 }
 
 .attach-btn {
   flex-shrink: 0;
-  color: var(--t-text-muted);
-  padding: 4px;
-  transition: color 0.2s ease;
+  width: 46px;
+  height: 46px;
+  padding: 0;
+  border-radius: 16px;
+  color: #7f8fb0;
+  background: rgba(255, 255, 255, 0.8);
+  border: 1px solid rgba(123, 138, 178, 0.14);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  transition: all 0.2s ease;
 }
 
 .attach-btn:hover {
-  color: var(--t-text-primary);
-}
-
-.input-hint {
-  font-size: 11px;
-  color: var(--t-text-muted);
-  margin-top: 8px;
-  letter-spacing: 0.01em;
+  color: #4f5f89;
+  background: rgba(255, 255, 255, 0.95);
+  border-color: rgba(102, 114, 220, 0.16);
+  transform: translateY(-1px);
 }
 
 @media (max-width: 920px) {
-  .coding-model-bar {
+  .coding-model-select {
+    width: 100%;
+  }
+
+  .composer-topline,
+  .coding-model-inline {
     flex-direction: column;
     align-items: stretch;
   }
 
-  .coding-model-select {
-    width: 100%;
+  .coding-model-tip {
+    white-space: normal;
+    min-height: auto;
+    padding: 10px 12px;
+  }
+
+  .input-wrapper {
+    border-radius: 24px;
+    padding: 16px;
+  }
+
+  .input-mainline {
+    align-items: flex-end;
   }
 }
 
@@ -2145,24 +2108,33 @@ watch(() => route.path, () => {
 /* ============ Scene Tabs ============ */
 .scene-tabs {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  justify-content: center;
-  margin-bottom: 20px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  gap: 10px;
+  justify-content: flex-start;
+  width: 100%;
+  margin-bottom: 34px;
+  padding-bottom: 4px;
+  scrollbar-width: none;
+}
+
+.scene-tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .scene-tab {
   display: flex;
   align-items: center;
   gap: 5px;
-  padding: 7px 14px;
-  border-radius: 20px;
+  padding: 10px 16px;
+  border-radius: 999px;
   border: 1px solid var(--t-border-subtle);
   background: transparent;
   color: var(--t-text-secondary);
-  font-size: 13px;
+  font-size: 14px;
   cursor: pointer;
   transition: all 0.2s ease;
+  flex: 0 0 auto;
 }
 
 .scene-tab:hover {
@@ -2181,32 +2153,194 @@ watch(() => route.path, () => {
 }
 
 /* ============ Suggestion Cards ============ */
-.suggestions-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 12px;
+.workspace-showcase {
+  width: min(100%, 1280px);
+  margin-top: 2px;
+}
+
+.workspace-showcase-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
   width: 100%;
 }
 
-.suggestion-card {
-  padding: 16px 18px;
-  border-radius: 14px;
-  border: 1px solid var(--t-border-subtle);
-  background: var(--t-bg-elevated);
-  color: var(--t-text-secondary);
-  font-size: 13px;
-  cursor: pointer;
-  transition: all 0.25s ease;
-  line-height: 1.5;
+.workspace-showcase-title {
+  margin: 0;
+  color: var(--t-text-primary);
+  font-size: 22px;
+  font-weight: 700;
   text-align: left;
 }
 
-.suggestion-card:hover {
+.workspace-showcase-subtitle {
+  margin: 6px 0 0;
+  color: var(--t-text-muted);
+  font-size: 14px;
+  text-align: left;
+}
+
+.workspace-showcase-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(99, 102, 241, 0.14);
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--t-brand);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+  border-radius: 999px;
+  height: 36px;
+  padding: 0 14px;
+  box-shadow: 0 8px 24px rgba(99, 102, 241, 0.08);
+  transition: all 0.2s ease;
+}
+
+.workspace-showcase-more:hover {
+  transform: translateY(-1px);
+  background: rgba(245, 247, 255, 0.95);
+  border-color: rgba(99, 102, 241, 0.24);
+}
+
+.workspace-showcase-more-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(99, 102, 241, 0.1);
+  color: var(--t-brand);
+  font-size: 11px;
+}
+
+.workspace-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+  width: 100%;
+  align-items: stretch;
+}
+
+.workspace-card {
+  border: 1px solid var(--t-border-subtle);
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.92);
+  padding: 20px;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+  min-height: 188px;
+  display: flex;
+  flex-direction: column;
+}
+
+.workspace-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--t-brand-glow);
+  box-shadow: 0 10px 22px rgba(99, 102, 241, 0.12);
+}
+
+.workspace-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.workspace-card-name {
+  color: var(--t-text-primary);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.workspace-card-package {
+  color: var(--t-text-secondary);
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.workspace-card-type {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 10px;
+  height: 24px;
+  border-radius: 999px;
+  background: var(--t-brand-subtle);
+  color: var(--t-brand-light);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.workspace-card-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--t-text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.workspace-card-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 14px;
+}
+
+.workspace-card-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--t-border-subtle);
+  background: #fff;
+  color: var(--t-text-secondary);
+  border-radius: 10px;
+  height: 32px;
+  padding: 0 10px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.workspace-card-action:hover {
+  color: var(--t-brand);
   border-color: var(--t-brand-glow);
   background: var(--t-brand-subtle);
-  color: var(--t-text-primary);
-  transform: translateY(-2px);
-  box-shadow: 0 8px 20px var(--t-brand-glow);
+}
+
+.workspace-showcase-empty {
+  width: 100%;
+  padding: 18px;
+  border: 1px dashed var(--t-border-subtle);
+  border-radius: 16px;
+  color: var(--t-text-muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+@media (max-width: 1280px) {
+  .workspace-cards-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .workspace-showcase-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .workspace-cards-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* ============ Stream Pane (对话流视图) ============ */
