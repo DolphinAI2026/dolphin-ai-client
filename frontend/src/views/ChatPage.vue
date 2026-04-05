@@ -1,7 +1,7 @@
 <template>
   <WorkbenchShell>
   <div class="chat-page">
-    <TopBar title="aPaaS Builder">
+    <TopBar title="" show-back :show-home="false" back-to="/apps">
       <template #center>
         <div v-if="showViewSwitcher" class="mode-switcher">
           <button class="mode-btn" :class="{ active: activeView === 'builder' }" @click="setActiveView('builder')">
@@ -73,10 +73,10 @@
       <div
         v-show="!SHOW_PLATFORM_CONFIG || activeView === 'builder'"
         class="builder-content"
-        :class="{ 'single-pane': isPlatformDeployed }"
+        :class="{ 'single-pane': isPlatformDeployed && !isUpdateReviewMode }"
       >
       <!-- 左侧对话区 -->
-      <div v-if="!isPlatformDeployed" class="chat-side">
+      <div v-if="!isPlatformDeployed || isUpdateReviewMode" class="chat-side">
         <div v-if="appParsedMode" class="doc-view-wrap">
           <div class="doc-view-head">
             <div class="doc-view-title">功能设计文档</div>
@@ -130,17 +130,17 @@
               <div class="assistant-avatar" aria-hidden="true">AI</div>
               <div class="bubble-inner">
                 <div class="bubble-content assistant conflict-resolve-box">
-                  <div class="conflict-label">请输入新编码替换 <code>{{ activeConflict.current_code }}</code>：</div>
+                  <div class="conflict-label">检测到编码冲突，请确认最新编码（默认已补上 <code>V1</code>）</div>
                   <div class="conflict-input-row">
                     <input
                       v-model="activeConflict.newCode"
                       class="conflict-input"
-                      placeholder="输入新编码，如 xxx_v2"
+                      placeholder="输入新编码，如 codeV1"
                       @keydown.enter="resolveConflictAndRetry"
                       :disabled="activeConflict.resolving"
                     />
                     <button class="conflict-btn confirm" @click="resolveConflictAndRetry" :disabled="activeConflict.resolving">
-                      {{ activeConflict.resolving ? '修复中...' : '确认修复' }}
+                      {{ activeConflict.resolving ? '修复中...' : '修复' }}
                     </button>
                     <button class="conflict-btn cancel" @click="cancelConflict" :disabled="activeConflict.resolving">取消</button>
                   </div>
@@ -178,18 +178,19 @@
                       </div>
                     </el-option>
                   </el-select>
-                  <button
-                    class="builder-generate-btn compact"
-                    :disabled="assembling || generating"
-                    @click="generatePreviewFromConversation"
-                  >{{ assembling ? '解析中...' : '一键生成' }}</button>
                 </div>
-                <div class="builder-control-hint inside-card">{{ builderModelHint }}</div>
+              <div class="builder-control-hint inside-card">{{ builderModelHint }}</div>
               <div class="input-card-top">
                 <label v-if="!isRequirementsMode" class="upload-btn" title="上传功能设计文档(.md)">
                   <input type="file" accept=".md" @change="handleDocUpload" style="display:none" />
                   <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M15.5 8.5l-6.4 6.4a3.5 3.5 0 01-5-5l6.4-6.4a2.2 2.2 0 013.1 3.1L7.2 13a.9.9 0 01-1.3-1.3l5.5-5.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
                 </label>
+                <button class="upload-btn screenshot" type="button" title="上传文件" @click="triggerChatImageUpload">
+                  <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+                    <path d="M7 4.5v7a2.5 2.5 0 0 0 5 0V5.2a1.7 1.7 0 1 0-3.4 0v5.8a.9.9 0 0 0 1.8 0V6.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </button>
+                <input ref="chatImageInputRef" type="file" accept=".md,image/png,image/jpeg,image/jpg,image/gif,image/webp" hidden @change="handleChatImageChange" />
                 <textarea
                   v-model="inputText"
                   @keydown.enter.exact.prevent="sendMessage"
@@ -198,10 +199,19 @@
                   rows="1"
                   ref="inputRef"
                   @input="autoResizeTextarea"
+                  @paste="handleComposerPaste"
                 ></textarea>
-                <button class="send-btn" :class="{ disabled: !inputText.trim() }" @click="sendMessage">
+                <button class="send-btn" :class="{ disabled: !canSendMessage }" @click="sendMessage">
                   <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M14 2L7 9M14 2l-4.5 12-2-5.5L2 6.5 14 2z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
                 </button>
+              </div>
+              <div v-if="pendingChatImage" class="chat-attachment-preview">
+                <img class="chat-attachment-preview-image" :src="pendingChatImage.previewUrl" :alt="pendingChatImage.file.name" />
+                <div class="chat-attachment-preview-meta">
+                  <div class="chat-attachment-preview-name">{{ pendingChatImage.file.name }}</div>
+                  <div class="chat-attachment-preview-tip">发送后会带着这张图片一起参与对话</div>
+                </div>
+                <button class="chat-attachment-remove" type="button" @click="clearPendingChatImage" aria-label="移除图片">×</button>
               </div>
             </div>
           </div>
@@ -220,7 +230,7 @@
                   <code class="preview-app-code-chip inline">{{ displayAppCode }}</code>
                 </div>
                 <button
-                  v-if="showBuilderPreview && !isPlatformDeployed"
+                  v-if="showBuilderPreview && !isPlatformDeployed && !isUpdateReviewMode"
                   class="preview-app-edit-btn"
                   @click="editAppMeta"
                   aria-label="修改应用名称和编码"
@@ -233,22 +243,42 @@
               </div>
             </div>
           </div>
-          <button
-            v-if="showStartDeployButton"
-            class="preview-side-cta"
-            @click="startDeployFlow()"
-            :disabled="generating || assembling || !hasPreviewContent"
-          >{{ generating ? '部署中...' : '开始部署' }}</button>
-          <button
-            v-else-if="showPublishButton"
-            class="preview-side-cta success"
-            @click="publishCurrentApp"
-            :disabled="publishingApp"
-          >{{ publishingApp ? '上线中...' : '上线应用' }}</button>
+          <div class="preview-side-actions">
+            <button
+              v-if="showUpdateButton"
+              class="preview-side-cta secondary"
+              @click="triggerDocVersionUpload"
+              :disabled="updatingDocVersion || executingChangePlan"
+            >
+              <svg class="cta-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M13.2 5.6A5.5 5.5 0 1 0 14 8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                <path d="M10.8 3.6h2.5v2.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+              <span>{{ updatingDocVersion ? '分析更新中...' : '更新应用' }}</span>
+            </button>
+            <button
+              v-if="showExecuteUpdateButton"
+              class="preview-side-cta"
+              @click="executeChangePlan"
+              :disabled="executingChangePlan || !changePlanSelectedCount"
+            >{{ executingChangePlan ? '更新中...' : '执行更新' }}</button>
+            <button
+              v-if="showStartDeployButton"
+              class="preview-side-cta"
+              @click="startDeployFlow()"
+              :disabled="assembling || generating || deployRunningAll || deployExecuting !== null || !hasPreviewContent"
+            >{{ generating || deployRunningAll || deployExecuting !== null ? '构建中...' : '开始构建' }}</button>
+            <button
+              v-if="showPublishButton"
+              class="preview-side-cta success"
+              @click="publishCurrentApp"
+              :disabled="publishingApp || isAppOnline"
+            >{{ publishingApp ? '上线中...' : isAppOnline ? '已上线' : '上线应用' }}</button>
+          </div>
         </div>
         <div v-if="showBuilderPreview" class="builder-step-bar">
           <button
-            v-for="(tab, index) in builderPreviewTabs"
+            v-for="(tab, index) in visibleBuilderPreviewTabs"
             :key="tab.key"
             class="builder-step-item"
             :class="{ active: builderPreviewTab === tab.key, done: index < activeBuilderStepIndex }"
@@ -264,115 +294,349 @@
         <div class="preview-body">
           <div v-if="showBuilderPreview" class="tab-content">
             <template v-if="builderPreviewTab === 'roles'">
-              <div v-if="store.preview.roles.length === 0" class="preview-empty small">暂无角色数据</div>
-              <div v-for="(role, idx) in store.preview.roles" :key="role.code || idx" class="preview-item-card">
-                <div class="preview-item-head">
-                  <div>
-                    <div class="preview-item-title">{{ idx + 1 }}. {{ role.name || role.code }}</div>
-                    <div class="preview-item-code">{{ role.code || '未设置编码' }}</div>
+              <template v-if="isUpdateReviewMode">
+                <div v-if="updateRoleDiffItems.length === 0" class="preview-empty small">本次更新没有角色变更</div>
+                <div v-for="(role, idx) in updateRoleDiffItems" :key="role.key" class="preview-item-card diff-preview-card">
+                  <div class="preview-item-head">
+                    <div>
+                      <div class="preview-item-title-row">
+                        <div class="preview-item-title">{{ idx + 1 }}. {{ role.name }}</div>
+                        <span class="change-badge" :class="role.badge.tone">{{ role.badge.label }}</span>
+                      </div>
+                      <div class="preview-item-code">{{ role.code }}</div>
+                    </div>
                   </div>
-                  <button class="builder-edit-link" @click="startSingleEdit('roles', role)" aria-label="修改角色">
-                    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                      <path d="M3 11.75V13h1.25l7.18-7.18-1.25-1.25L3 11.75Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
-                      <path d="M9.85 3.73 11.1 2.5a.88.88 0 0 1 1.25 1.25L11.1 5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
-                    </svg>
-                  </button>
+                  <div class="preview-item-desc">{{ role.description }}</div>
                 </div>
-                <div class="preview-item-desc">{{ getRoleDescription(role) }}</div>
-              </div>
+              </template>
+              <template v-else-if="showDeployedVersionedView">
+                <div v-if="deployedRoleItems.length === 0" class="preview-empty small">暂无角色数据</div>
+                <div
+                  v-for="(role, idx) in deployedRoleItems"
+                  :key="role.key"
+                  class="preview-item-card versioned-card"
+                  :class="{ 'history-muted-card': role.versionBadge.muted }"
+                >
+                  <div class="preview-item-head">
+                    <div>
+                      <div class="preview-item-title-row">
+                        <div class="preview-item-title">{{ idx + 1 }}. {{ role.name }}</div>
+                        <span class="version-badge" :class="role.versionBadge.tone">{{ role.versionBadge.label }}</span>
+                      </div>
+                      <div class="preview-item-code">{{ role.code || '未设置编码' }}</div>
+                    </div>
+                  </div>
+                  <div class="preview-item-desc">{{ role.description }}</div>
+                </div>
+              </template>
+              <template v-else>
+                <div v-if="store.preview.roles.length === 0" class="preview-empty small">暂无角色数据</div>
+                <div v-for="(role, idx) in store.preview.roles" :key="role.code || idx" class="preview-item-card">
+                  <div class="preview-item-head">
+                    <div>
+                      <div class="preview-item-title">{{ idx + 1 }}. {{ role.name || role.code }}</div>
+                      <div class="preview-item-code">{{ role.code || '未设置编码' }}</div>
+                    </div>
+                    <button class="builder-edit-link" @click="startSingleEdit('roles', role)" aria-label="修改角色">
+                      <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                        <path d="M3 11.75V13h1.25l7.18-7.18-1.25-1.25L3 11.75Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+                        <path d="M9.85 3.73 11.1 2.5a.88.88 0 0 1 1.25 1.25L11.1 5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                      </svg>
+                    </button>
+                  </div>
+                  <div class="preview-item-desc">{{ getRoleDescription(role) }}</div>
+                </div>
+              </template>
             </template>
 
             <template v-else-if="builderPreviewTab === 'dicts'">
-              <div v-if="store.preview.dicts.length === 0" class="preview-empty small">暂无数据字典</div>
-              <div v-for="(dict, idx) in store.preview.dicts" :key="dict.code || idx" class="preview-item-card">
-                <div class="preview-item-head">
-                  <div>
-                    <div class="preview-item-title">{{ idx + 1 }}. {{ dict.name || dict.code }}</div>
-                    <div class="preview-item-code">{{ dict.code || '未设置编码' }}</div>
+              <template v-if="isUpdateReviewMode">
+                <div v-if="updateDictDiffItems.length === 0" class="preview-empty small">本次更新没有数据字典变更</div>
+                <div v-for="(dict, idx) in updateDictDiffItems" :key="dict.key" class="preview-item-card diff-preview-card">
+                  <div class="preview-item-head">
+                    <div>
+                      <div class="preview-item-title-row">
+                        <div class="preview-item-title">{{ idx + 1 }}. {{ dict.name }}</div>
+                        <span class="change-badge" :class="dict.badge.tone">{{ dict.badge.label }}</span>
+                      </div>
+                      <div class="preview-item-code">{{ dict.code }}</div>
+                    </div>
                   </div>
-                  <button class="builder-edit-link" @click="startSingleEdit('dicts', dict)" aria-label="修改字典">
-                    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                      <path d="M3 11.75V13h1.25l7.18-7.18-1.25-1.25L3 11.75Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
-                      <path d="M9.85 3.73 11.1 2.5a.88.88 0 0 1 1.25 1.25L11.1 5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
-                    </svg>
-                  </button>
-                </div>
-                <div class="dict-option-list">
-                  <div v-for="(opt, optIdx) in normalizeDictOptions(dict)" :key="opt.code || optIdx" class="dict-option-row">
-                    <code class="dict-option-code">{{ opt.code }}</code>
-                    <span class="dict-option-name">{{ opt.name }}</span>
+                  <div class="dict-option-list">
+                    <div v-for="option in dict.optionChanges" :key="option.key" class="dict-option-row diff">
+                      <code class="dict-option-code">{{ option.code }}</code>
+                      <span class="dict-option-name">{{ option.name }}</span>
+                      <span class="change-badge mini" :class="option.badge.tone">{{ option.badge.label }}</span>
+                    </div>
                   </div>
                 </div>
-              </div>
+              </template>
+              <template v-else-if="showDeployedVersionedView">
+                <div v-if="deployedDictItems.length === 0" class="preview-empty small">暂无数据字典</div>
+                <div
+                  v-for="(dict, idx) in deployedDictItems"
+                  :key="dict.key"
+                  class="preview-item-card versioned-card"
+                  :class="{ 'history-muted-card': dict.versionBadge.muted }"
+                >
+                  <div class="preview-item-head">
+                    <div>
+                      <div class="preview-item-title-row">
+                        <div class="preview-item-title">{{ idx + 1 }}. {{ dict.name }}</div>
+                        <span class="version-badge" :class="dict.versionBadge.tone">{{ dict.versionBadge.label }}</span>
+                      </div>
+                      <div class="preview-item-code">{{ dict.code || '未设置编码' }}</div>
+                    </div>
+                  </div>
+                  <div class="form-meta-row resource-meta-row">
+                    <span class="form-meta-chip">{{ dict.optionCount }} 个选项</span>
+                    <span class="form-meta-chip subtle">{{ dict.summary }}</span>
+                  </div>
+                  <div class="dict-option-list">
+                    <div
+                      v-for="option in dict.options"
+                      :key="option.key"
+                      class="dict-option-row versioned"
+                      :class="{ 'history-muted-row': option.versionBadge.muted }"
+                    >
+                      <code class="dict-option-code">{{ option.code }}</code>
+                      <span class="dict-option-name">{{ option.name }}</span>
+                      <span class="version-badge mini" :class="option.versionBadge.tone">{{ option.versionBadge.label }}</span>
+                    </div>
+                  </div>
+                </div>
+              </template>
+              <template v-else>
+                <div v-if="store.preview.dicts.length === 0" class="preview-empty small">暂无数据字典</div>
+                <div v-for="(dict, idx) in store.preview.dicts" :key="dict.code || idx" class="preview-item-card">
+                  <div class="preview-item-head">
+                    <div>
+                      <div class="preview-item-title">{{ idx + 1 }}. {{ dict.name || dict.code }}</div>
+                      <div class="preview-item-code">{{ dict.code || '未设置编码' }}</div>
+                    </div>
+                    <button class="builder-edit-link" @click="startSingleEdit('dicts', dict)" aria-label="修改字典">
+                      <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                        <path d="M3 11.75V13h1.25l7.18-7.18-1.25-1.25L3 11.75Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+                        <path d="M9.85 3.73 11.1 2.5a.88.88 0 0 1 1.25 1.25L11.1 5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                      </svg>
+                    </button>
+                  </div>
+                  <div class="dict-option-list">
+                    <div v-for="(opt, optIdx) in normalizeDictOptions(dict)" :key="opt.code || optIdx" class="dict-option-row">
+                      <code class="dict-option-code">{{ opt.code }}</code>
+                      <span class="dict-option-name">{{ opt.name }}</span>
+                    </div>
+                  </div>
+                </div>
+              </template>
             </template>
 
             <template v-else-if="builderPreviewTab === 'models'">
-              <div v-if="store.preview.models.length === 0" class="preview-empty small">暂无数据模型</div>
-              <div v-for="(model, idx) in store.preview.models" :key="model.code || idx" class="model-card">
-                <div class="model-header">
-                  <span class="model-name">{{ idx + 1 }}. {{ model.name || model.code }}</span>
-                  <span class="model-code">{{ model.code || '未设置编码' }}</span>
-                  <button class="builder-edit-link inline" @click="startSingleEdit('models', model)" aria-label="修改模型">
-                    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                      <path d="M3 11.75V13h1.25l7.18-7.18-1.25-1.25L3 11.75Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
-                      <path d="M9.85 3.73 11.1 2.5a.88.88 0 0 1 1.25 1.25L11.1 5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
-                    </svg>
-                  </button>
-                </div>
-                <div class="field-list">
-                  <div v-for="(field, fieldIdx) in model.fields || []" :key="getFieldKey(field, fieldIdx)" class="field-row">
-                    <div class="field-left">
-                      <div class="field-icon">{{ getFieldIcon(field) }}</div>
-                      <div class="field-text">
-                        <span class="field-name">{{ getFieldLabel(field) }}</span>
-                        <span class="field-code">{{ field.code || `field_${fieldIdx + 1}` }}</span>
-                      </div>
+              <template v-if="isUpdateReviewMode">
+                <div v-if="updateModelDiffItems.length === 0" class="preview-empty small">本次更新没有数据模型变更</div>
+                <div v-for="(model, idx) in updateModelDiffItems" :key="model.key" class="model-card diff-model-card">
+                  <div class="model-header">
+                    <div class="model-title-stack">
+                      <span class="model-name">{{ idx + 1 }}. {{ model.name }}</span>
+                      <span class="model-summary">{{ model.summary }}</span>
                     </div>
-                    <div class="field-right">
-                      <span class="ftype">{{ field.type || '文本' }}</span>
+                    <span class="model-code">{{ model.code }}</span>
+                    <span class="change-badge" :class="model.badge.tone">{{ model.badge.label }}</span>
+                  </div>
+                  <div class="field-list">
+                    <div v-for="field in model.fields" :key="field.key" class="field-row diff">
+                      <div class="field-left">
+                        <div class="field-icon">{{ getFieldIcon(field) }}</div>
+                        <div class="field-text">
+                          <span class="field-name">{{ field.name }}</span>
+                          <span class="field-code">{{ field.code }}</span>
+                        </div>
+                      </div>
+                      <div class="field-right">
+                        <span class="ftype">{{ field.type }}</span>
+                        <span class="change-badge mini" :class="field.badge.tone">{{ field.badge.label }}</span>
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
+              </template>
+              <template v-else-if="showDeployedVersionedView">
+                <div v-if="deployedModelItems.length === 0" class="preview-empty small">暂无数据模型</div>
+                <div
+                  v-for="(model, idx) in deployedModelItems"
+                  :key="model.key"
+                  class="model-card versioned-card"
+                  :class="{ 'history-muted-card': model.versionBadge.muted }"
+                >
+                  <div class="model-header">
+                    <div class="model-title-stack">
+                      <div class="preview-item-title-row">
+                        <span class="model-name">{{ idx + 1 }}. {{ model.name }}</span>
+                        <span class="version-badge" :class="model.versionBadge.tone">{{ model.versionBadge.label }}</span>
+                      </div>
+                      <span class="model-summary">{{ model.summary }}</span>
+                    </div>
+                    <span class="form-meta-chip subtle">{{ model.tableTypeLabel }}</span>
+                    <span class="model-code">{{ model.code || '未设置编码' }}</span>
+                  </div>
+                  <div class="field-list">
+                    <div
+                      v-for="field in model.fields"
+                      :key="field.key"
+                      class="field-row versioned"
+                      :class="{ 'history-muted-row': field.versionBadge.muted }"
+                    >
+                      <div class="field-left">
+                        <div class="field-icon">{{ getFieldIcon(field) }}</div>
+                        <div class="field-text">
+                          <span class="field-name">{{ field.name }}</span>
+                          <span class="field-code">{{ field.code }}</span>
+                        </div>
+                      </div>
+                      <div class="field-right">
+                        <span class="ftype">{{ field.type }}</span>
+                        <span class="version-badge mini" :class="field.versionBadge.tone">{{ field.versionBadge.label }}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </template>
+              <template v-else>
+                <div v-if="store.preview.models.length === 0" class="preview-empty small">暂无数据模型</div>
+                <div v-for="(model, idx) in store.preview.models" :key="model.code || idx" class="model-card">
+                  <div class="model-header">
+                    <span class="model-name">{{ idx + 1 }}. {{ model.name || model.code }}</span>
+                    <span class="model-code">{{ model.code || '未设置编码' }}</span>
+                    <button class="builder-edit-link inline" @click="startSingleEdit('models', model)" aria-label="修改模型">
+                      <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                        <path d="M3 11.75V13h1.25l7.18-7.18-1.25-1.25L3 11.75Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+                        <path d="M9.85 3.73 11.1 2.5a.88.88 0 0 1 1.25 1.25L11.1 5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                      </svg>
+                    </button>
+                  </div>
+                  <div class="field-list">
+                    <div v-for="(field, fieldIdx) in model.fields || []" :key="getFieldKey(field, fieldIdx)" class="field-row">
+                      <div class="field-left">
+                        <div class="field-icon">{{ getFieldIcon(field) }}</div>
+                        <div class="field-text">
+                          <span class="field-name">{{ getFieldLabel(field) }}</span>
+                          <span class="field-code">{{ field.code || `field_${fieldIdx + 1}` }}</span>
+                        </div>
+                      </div>
+                      <div class="field-right">
+                        <span class="ftype">{{ field.type || '文本' }}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </template>
             </template>
 
             <template v-else-if="builderPreviewTab === 'forms'">
-              <div v-if="formPreviewItems.length === 0" class="preview-empty small">暂无表单配置</div>
-              <div v-for="(form, idx) in formPreviewItems" :key="form.code || idx" class="preview-item-card form-preview-card">
-                <div class="preview-item-head">
-                  <div>
-                    <div class="preview-item-title">{{ idx + 1 }}. {{ form.name }}</div>
-                    <div class="preview-item-code">{{ form.code }}</div>
+              <template v-if="isUpdateReviewMode">
+                <div v-if="updateFormDiffItems.length === 0" class="preview-empty small">本次更新没有表单变更</div>
+                <div v-for="(form, idx) in updateFormDiffItems" :key="form.key" class="preview-item-card form-preview-card diff-preview-card">
+                  <div class="preview-item-head">
+                    <div>
+                      <div class="preview-item-title-row">
+                        <div class="preview-item-title">{{ idx + 1 }}. {{ form.name }}</div>
+                        <span class="change-badge" :class="form.badge.tone">{{ form.badge.label }}</span>
+                      </div>
+                      <div class="preview-item-code">{{ form.code }}</div>
+                    </div>
                   </div>
-                  <button class="builder-edit-link" @click="startSingleEdit('forms', form)" aria-label="修改表单">
-                    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                      <path d="M3 11.75V13h1.25l7.18-7.18-1.25-1.25L3 11.75Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
-                      <path d="M9.85 3.73 11.1 2.5a.88.88 0 0 1 1.25 1.25L11.1 5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
-                    </svg>
-                  </button>
+                  <div class="form-meta-row">
+                    <span v-if="form.modelCode" class="form-meta-chip">{{ form.modelCode }}</span>
+                    <span class="form-meta-chip subtle">本次对比 {{ form.componentChanges.length }} 个组件变化</span>
+                  </div>
+                  <div class="form-change-list">
+                    <div v-for="component in form.componentChanges" :key="component.key" class="form-change-row">
+                      <div class="form-change-main">
+                        <span class="form-change-name">{{ component.name }}</span>
+                        <span class="form-change-detail">{{ component.detail }}</span>
+                      </div>
+                      <span class="change-badge mini" :class="component.badge.tone">{{ component.badge.label }}</span>
+                    </div>
+                  </div>
                 </div>
-                <div class="form-meta-row">
-                  <span class="form-meta-chip">{{ form.modelName }}</span>
-                  <span class="form-meta-chip subtle">{{ form.tableTypeLabel }}</span>
-                </div>
-                <div class="form-preview">
-                  <div class="form-title">{{ form.name }} 预览</div>
-                  <div class="form-fields-grid">
+              </template>
+              <template v-else-if="showDeployedVersionedView">
+                <div v-if="deployedFormItems.length === 0" class="preview-empty small">暂无表单配置</div>
+                <div
+                  v-for="(form, idx) in deployedFormItems"
+                  :key="form.key"
+                  class="preview-item-card form-preview-card versioned-card"
+                  :class="{ 'history-muted-card': form.versionBadge.muted }"
+                >
+                  <div class="preview-item-head">
+                    <div>
+                      <div class="preview-item-title-row">
+                        <div class="preview-item-title">{{ idx + 1 }}. {{ form.name }}</div>
+                        <span class="version-badge" :class="form.versionBadge.tone">{{ form.versionBadge.label }}</span>
+                      </div>
+                      <div class="preview-item-code">{{ form.code || '未设置编码' }}</div>
+                    </div>
+                  </div>
+                  <div class="form-meta-row resource-meta-row">
+                    <span v-if="form.modelName" class="form-meta-chip">{{ form.modelName }}</span>
+                    <span v-if="form.modelCode" class="form-meta-chip subtle">{{ form.modelCode }}</span>
+                    <span class="form-meta-chip subtle">{{ form.tableTypeLabel }}</span>
+                    <span class="form-meta-chip subtle">{{ form.componentCount }} 个组件</span>
+                  </div>
+                  <div class="form-change-list">
                     <div
-                      v-for="(field, fieldIdx) in form.previewFields"
-                      :key="field.code || fieldIdx"
-                      class="form-field"
-                      :class="{ 'full-width': field.fullWidth }"
+                      v-for="component in form.components"
+                      :key="component.key"
+                      class="form-change-row versioned"
+                      :class="{ 'history-muted-row': component.versionBadge.muted }"
                     >
-                      <div class="form-label">{{ field.name }}</div>
-                      <div class="form-mock" :class="{ tall: field.fullWidth }">
-                        <span>{{ field.mockText }}</span>
-                        <span class="mock-arrow">{{ field.mockIcon }}</span>
+                      <div class="form-change-main">
+                        <span class="form-change-name">{{ component.name }}</span>
+                        <span class="form-change-detail">{{ component.detail }}</span>
+                      </div>
+                      <span class="version-badge mini" :class="component.versionBadge.tone">{{ component.versionBadge.label }}</span>
+                    </div>
+                  </div>
+                </div>
+              </template>
+              <template v-else>
+                <div v-if="formPreviewItems.length === 0" class="preview-empty small">暂无表单配置</div>
+                <div v-for="(form, idx) in formPreviewItems" :key="form.code || idx" class="preview-item-card form-preview-card">
+                  <div class="preview-item-head">
+                    <div>
+                      <div class="preview-item-title">{{ idx + 1 }}. {{ form.name }}</div>
+                      <div class="preview-item-code">{{ form.code }}</div>
+                    </div>
+                    <button class="builder-edit-link" @click="startSingleEdit('forms', form)" aria-label="修改表单">
+                      <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                        <path d="M3 11.75V13h1.25l7.18-7.18-1.25-1.25L3 11.75Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+                        <path d="M9.85 3.73 11.1 2.5a.88.88 0 0 1 1.25 1.25L11.1 5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                      </svg>
+                    </button>
+                  </div>
+                  <div class="form-meta-row">
+                    <span class="form-meta-chip">{{ form.modelName }}</span>
+                    <span class="form-meta-chip subtle">{{ form.tableTypeLabel }}</span>
+                  </div>
+                  <div class="form-preview">
+                    <div class="form-title">{{ form.name }} 预览</div>
+                    <div class="form-fields-grid">
+                      <div
+                        v-for="(field, fieldIdx) in form.previewFields"
+                        :key="field.code || fieldIdx"
+                        class="form-field"
+                        :class="{ 'full-width': field.fullWidth }"
+                      >
+                        <div class="form-label">{{ field.name }}</div>
+                        <div class="form-mock" :class="{ tall: field.fullWidth }">
+                          <span>{{ field.mockText }}</span>
+                          <span class="mock-arrow">{{ field.mockIcon }}</span>
+                        </div>
                       </div>
                     </div>
                   </div>
                 </div>
-              </div>
+              </template>
             </template>
 
             <template v-else-if="builderPreviewTab === 'permissions'">
@@ -406,20 +670,94 @@
             </template>
 
             <template v-else>
-              <div class="doc-preview-card">
-                <div class="doc-preview-head">
-                  <div>
-                    <div class="doc-preview-title">功能文档</div>
-                    <div class="doc-preview-subtitle">整体功能说明的 Markdown 文档</div>
+              <div class="doc-versions-tab">
+                <div class="doc-version-panel list-only">
+                  <div class="doc-upload-bar">
+                    <div>
+                      <div class="doc-tab-title with-icon">
+                        <span class="doc-title-icon" aria-hidden="true">
+                          <svg viewBox="0 0 16 16" fill="none">
+                            <path d="M5 2.5h4l2.5 2.5v7a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-8a1 1 0 0 1 1-1Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+                            <path d="M9 2.5V5h2.5" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+                          </svg>
+                        </span>
+                        <span>设计文档版本记录</span>
+                      </div>
+                      <div v-if="selectedDocVersionItem" class="doc-tab-subtitle">
+                        {{ selectedDocVersionItem.filename || '未命名文档' }}
+                        <span class="doc-tab-meta-sep">·</span>
+                        {{ formatDocTime(selectedDocVersionItem.created_at) || '当前解析结果' }}
+                      </div>
+                      <div v-else class="doc-tab-subtitle">可查看当前版本和历史版本记录。</div>
+                    </div>
+                    <div class="doc-top-actions">
+                      <button
+                        v-if="selectedDocVersionItem"
+                        class="doc-action-btn primary"
+                        type="button"
+                        @click="downloadDocVersion(selectedDocVersionItem)"
+                      >下载</button>
+                    </div>
                   </div>
-                  <button class="doc-preview-download" @click="downloadCurrentDoc" aria-label="下载文档" title="下载文档">
-                    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                      <path d="M8 2.5v6m0 0 2.4-2.4M8 8.5 5.6 6.1M3 10.5v1.3c0 .66.54 1.2 1.2 1.2h7.6c.66 0 1.2-.54 1.2-1.2v-1.3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
-                    </svg>
-                    <span>下载</span>
-                  </button>
+
+                  <div v-if="docVersionsLoading" class="doc-version-empty">正在加载版本记录...</div>
+                  <div v-else-if="!displayDocVersions.length" class="doc-version-empty">暂无可展示的设计文档</div>
+                  <div v-else class="doc-current-panel">
+                    <div class="doc-version-list compact">
+                      <div
+                        v-for="ver in displayDocVersions"
+                        :key="ver.key"
+                        class="doc-version-row"
+                        :class="{ current: ver.version === currentDocVersion, expanded: selectedDocVersionKey === ver.key }"
+                      >
+                        <div class="doc-version-summary">
+                          <button class="doc-version-toggle" type="button" @click="selectDocVersion(ver)">
+                            <div class="doc-version-main">
+                              <div class="doc-ver-header">
+                                <span class="doc-ver-icon" aria-hidden="true">
+                                  <svg viewBox="0 0 16 16" fill="none">
+                                    <path d="M5 2.5h4l2.5 2.5v7a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-8a1 1 0 0 1 1-1Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+                                    <path d="M9 2.5V5h2.5" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+                                  </svg>
+                                </span>
+                                <span class="doc-ver-num">V{{ ver.version }}</span>
+                                <span class="doc-ver-filename">{{ ver.filename }}</span>
+                                <span v-if="ver.version === currentDocVersion" class="doc-ver-current">当前文档</span>
+                              </div>
+                              <div class="doc-ver-meta">
+                                <span class="doc-ver-time">{{ formatDocTime(ver.created_at) || '当前解析结果' }}</span>
+                                <span class="doc-ver-summary">{{ ver.summary || '点击展开查看设计文档' }}</span>
+                              </div>
+                            </div>
+                          </button>
+                          <div class="doc-ver-actions">
+                            <button class="doc-action-btn" type="button" @click="selectDocVersion(ver)">查看</button>
+                            <button class="doc-action-btn" type="button" @click="downloadDocVersion(ver)">下载</button>
+                            <button
+                              v-if="canCompareDocVersion(ver)"
+                              class="doc-action-btn diff"
+                              type="button"
+                              @click="openDocDiff(ver)"
+                            >对比</button>
+                            <button
+                              v-if="!ver.isVirtual"
+                              class="doc-action-btn danger"
+                              type="button"
+                              :disabled="deletingDocVersionId === ver.id"
+                              @click="deleteDocVersion(ver)"
+                            >{{ deletingDocVersionId === ver.id ? '删除中...' : '删除' }}</button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="doc-current-head">
+                      <div class="doc-current-badge">
+                        {{ selectedDocVersionItem?.version === currentDocVersion ? '当前文档' : `历史版本 V${selectedDocVersionItem?.version || ''}` }}
+                      </div>
+                    </div>
+                    <pre class="doc-version-content expanded">{{ selectedDocVersionItem?.raw_content || '暂无文档内容' }}</pre>
+                  </div>
                 </div>
-                <pre class="doc-preview-content">{{ docPreviewContent || '暂无文档内容' }}</pre>
               </div>
             </template>
           </div>
@@ -428,44 +766,112 @@
             <div class="preview-empty-copy">先告诉我你想搭什么，我会根据你的需求生成右侧解析结果。</div>
           </div>
         </div>
+        <div v-if="store.showChangePlan && store.changePlan && !isUpdateReviewMode" class="change-plan-overlay">
+          <div class="change-plan-header">
+            <h3>变更计划</h3>
+            <button class="change-plan-close" type="button" @click="closeChangePlan" :disabled="executingChangePlan">×</button>
+          </div>
+          <div class="change-plan-body">
+            <div class="change-plan-diff">
+              {{ store.changePlan.diffSummary || `检测到 ${changePlanTotalCount} 项待更新内容` }}
+            </div>
+            <div v-for="group in changePlanGroups" :key="group.key" class="change-group">
+              <div class="group-title">
+                <span class="group-arrow expanded">▸</span>
+                <span>{{ group.title }}</span>
+                <span class="dg-badge">{{ group.actions.length }}</span>
+              </div>
+              <label v-for="action in group.actions" :key="action.id" class="change-item">
+                <input v-model="action.selected" type="checkbox" class="change-checkbox" />
+                <span class="change-icon" :class="changePlanActionTone(action)">{{ changePlanActionSymbol(action) }}</span>
+                <span class="change-desc">{{ describeChangePlanAction(action) }}</span>
+              </label>
+            </div>
+          </div>
+          <div class="change-plan-footer">
+            <button class="cp-btn" type="button" @click="toggleChangePlanSelection(true)" :disabled="executingChangePlan">全选</button>
+            <button class="cp-btn" type="button" @click="toggleChangePlanSelection(false)" :disabled="executingChangePlan">清空</button>
+            <span class="cp-count">已选 {{ changePlanSelectedCount }}/{{ changePlanTotalCount }}</span>
+            <button class="cp-btn primary" type="button" @click="executeChangePlan" :disabled="executingChangePlan || changePlanSelectedCount === 0">
+              {{ executingChangePlan ? '执行中...' : '执行更新' }}
+            </button>
+          </div>
+        </div>
       </div>
 
-      <aside class="deploy-side" :class="{ open: deployOpen }">
+      <aside class="deploy-side" :class="{ open: deployOpen || isUpdateReviewMode || isUpdateExecutionMode }">
         <div class="deploy-header">
           <div>
             <div class="deploy-title-row">
-              <div class="deploy-title">部署进度</div>
-              <span v-if="currentDeployStep" class="deploy-live-badge">执行中</span>
+              <div class="deploy-title">{{ isUpdateExecutionMode ? '更新进度' : isUpdateReviewMode ? '更新概览' : '部署进度' }}</div>
+              <span v-if="isUpdateExecutionMode || currentDeployStep" class="deploy-live-badge">执行中</span>
             </div>
-            <div class="deploy-desc">{{ deployAllDone ? '已完成全部部署步骤' : deployOpen ? '确认解析后执行右侧部署步骤' : '点击开始部署后在这里执行' }}</div>
-            <div v-if="currentDeployStep" class="deploy-current-step">{{ currentDeployStep.label }}</div>
+            <div class="deploy-desc">
+              {{ isUpdateExecutionMode
+                ? (updateExecutionAllDone ? '本次更新已执行完成' : '仅展示本次增量更新涉及的步骤')
+                : isUpdateReviewMode
+                ? (store.changePlan?.diffSummary || '本次仅展示与上一版设计文档对比出的更新项')
+                : (deployAllDone ? '已完成全部部署步骤' : deployRunningAll || deployExecuting ? '正在自动执行部署步骤' : deployOpen ? '确认环境后会自动执行部署步骤' : '点击开始构建后在这里查看进度')
+              }}
+            </div>
+            <div v-if="isUpdateExecutionMode && currentUpdateExecutionLabel" class="deploy-current-step">{{ currentUpdateExecutionLabel }}</div>
+            <div v-else-if="currentDeployStep" class="deploy-current-step">{{ currentDeployStep.label }}</div>
           </div>
-          <button class="deploy-close" @click="deployOpen = false" aria-label="关闭部署面板">×</button>
+          <button v-if="!isUpdateReviewMode && !isUpdateExecutionMode" class="deploy-close" @click="deployOpen = false" aria-label="关闭部署面板">×</button>
         </div>
-        <div v-if="deployOpen" class="deploy-progress">
+        <div v-if="isUpdateExecutionMode" class="deploy-progress">
+          <div class="dp-track"><div class="dp-fill" :style="{ width: `${updateExecutionPercent}%` }"></div></div>
+          <span class="dp-meta">{{ updateExecutionDoneCount }}/{{ updateExecutionTotalCount || 0 }}</span>
+        </div>
+        <div v-if="deployOpen && !isUpdateReviewMode && !isUpdateExecutionMode" class="deploy-progress">
           <div class="dp-track"><div class="dp-fill" :style="{ width: `${deployPercent}%` }"></div></div>
           <span class="dp-meta">{{ deployDoneCount }}/{{ deploySteps.length || 0 }}</span>
         </div>
-        <div v-if="deployOpen && !deployAllDone" class="deploy-actions">
-          <button class="dp-run-all" @click="deployRunAll" :disabled="deployRunningAll || deployExecuting !== null || deployAllDone || deploySteps.length === 0">
-            {{ deployRunningAll ? '部署中...' : deployAllDone ? '部署完成' : '一键部署' }}
-          </button>
-        </div>
-        <div v-if="deployOpen && activeConflict" class="deploy-conflict-card">
+        <div v-if="deployOpen && activeConflict && !isUpdateReviewMode && !isUpdateExecutionMode" class="deploy-conflict-card">
           <div class="deploy-conflict-title">检测到编码冲突</div>
-          <div class="deploy-conflict-copy">{{ activeConflict.model_name }} 的编码 <code>{{ activeConflict.current_code }}</code> 已存在，请修改后继续。</div>
-          <div class="deploy-conflict-input-row">
-            <input
-              v-model="activeConflict.newCode"
-              class="deploy-conflict-input"
-              placeholder="输入新的编码"
-              @keydown.enter="resolveConflictAndRetry"
-              :disabled="activeConflict.resolving"
-            />
-            <button class="deploy-conflict-btn primary" @click="resolveConflictAndRetry" :disabled="activeConflict.resolving">{{ activeConflict.resolving ? '处理中...' : '确认' }}</button>
+          <div class="deploy-conflict-copy">{{ activeConflict.model_name }} 的编码 <code>{{ activeConflict.current_code }}</code> 已存在，已切回左侧对话区等待你确认最新编码。</div>
+        </div>
+        <div v-if="deployOpen && deployLastError && !isUpdateReviewMode && !isUpdateExecutionMode" class="deploy-conflict-card error-card">
+          <div class="deploy-conflict-title">构建失败</div>
+          <div class="deploy-conflict-copy">{{ deployLastError }}</div>
+        </div>
+        <div v-if="isUpdateExecutionMode" class="deploy-groups">
+          <div v-for="group in updateExecutionGroups" :key="group.key" class="dg" :class="{ done: group.allDone, current: group.hasCurrent, err: group.hasError }">
+            <div class="dg-hd">
+              <span class="dg-icon">{{ group.icon }}</span>
+              <span class="dg-name">{{ group.title }}</span>
+              <span class="dg-badge" :class="group.allDone ? 'done' : group.hasError ? 'err' : ''">{{ group.doneCount }}/{{ group.items.length }}</span>
+            </div>
+            <div v-for="item in group.items" :key="item.id" class="ds" :class="{ [item.status]: true, current: item.status === 'current' }">
+              <div class="ds-dot" :class="item.status === 'current' ? 'pulse' : item.status">
+                <span v-if="item.status === 'completed'">✓</span>
+                <span v-else-if="item.status === 'error'">!</span>
+              </div>
+              <div class="ds-body">
+                <div class="ds-name">{{ item.label }}</div>
+                <div v-if="item.detail" class="ds-err">{{ item.detail }}</div>
+              </div>
+            </div>
           </div>
         </div>
-        <div v-if="deployOpen" class="deploy-groups">
+        <div v-else-if="isUpdateReviewMode" class="deploy-groups update-review-groups">
+          <div v-for="group in updateReviewGroups" :key="group.title" class="dg update">
+            <div class="dg-hd">
+              <span class="dg-icon">{{ group.icon }}</span>
+              <span class="dg-name">{{ group.title }}</span>
+              <span class="dg-badge">{{ group.items.length }}</span>
+            </div>
+            <div v-for="item in group.items" :key="item.key" class="update-change-row">
+              <div class="update-change-copy">
+                <div class="update-change-title">{{ item.name }}</div>
+                <div class="update-change-meta">{{ item.code }}</div>
+              </div>
+              <span class="change-badge mini" :class="item.badge.tone">{{ item.badge.label }}</span>
+            </div>
+          </div>
+          <div v-if="updateReviewGroups.length === 0" class="doc-version-empty">本次更新未检测到可执行变更</div>
+        </div>
+        <div v-else-if="deployOpen && !isUpdateExecutionMode" class="deploy-groups">
           <div v-for="group in deployGroups" :key="group.title" class="dg" :class="{ done: group.allDone, err: group.hasError, current: group.steps.some(step => step.key === deployExecuting) }">
             <div class="dg-hd">
               <span class="dg-icon">{{ group.icon }}</span>
@@ -494,6 +900,32 @@
             <button class="deploy-done-btn" @click="openInPlatform">查看应用</button>
           </div>
         </div>
+        <div v-if="executionLogs.length" class="deploy-log-card compact" :class="{ expanded: deployLogExpanded }">
+          <button class="deploy-log-header toggle" type="button" @click="deployLogExpanded = !deployLogExpanded">
+            <div class="deploy-log-title-wrap">
+              <span>执行日志</span>
+              <span class="deploy-log-count">{{ executionLogs.length }} 条</span>
+            </div>
+            <div class="deploy-log-summary">
+              <span class="deploy-log-summary-text">{{ latestExecutionLog?.message || '暂无日志' }}</span>
+              <span class="deploy-log-toggle">{{ deployLogExpanded ? '收起' : '展开' }}</span>
+            </div>
+          </button>
+          <div v-if="deployLogExpanded" class="deploy-log-list">
+            <div
+              v-for="log in executionLogs"
+              :key="log.id"
+              class="deploy-log-item"
+              :class="log.level"
+            >
+              <div class="deploy-log-meta">
+                <span class="deploy-log-level">{{ log.levelLabel }}</span>
+                <span class="deploy-log-time">{{ log.time }}</span>
+              </div>
+              <div class="deploy-log-text">{{ log.message }}</div>
+            </div>
+          </div>
+        </div>
       </aside>
     </div><!-- /builder-content -->
     </div><!-- /content-area -->
@@ -501,6 +933,58 @@
     <!-- Modals (在 chat-page 根元素下) -->
     <ConnectModal v-model="store.showConnectModal" />
     <EnvSelectModal v-model="showEnvSelect" @selected="onEnvSelected" />
+    <input ref="docVersionInputRef" type="file" accept=".md,text/markdown" hidden @change="handleDocVersionInputChange" />
+    <input ref="reparseInputRef" type="file" accept=".md,.pdf,.docx,.doc,.txt,.markdown" hidden @change="handleReparseInputChange" />
+    <el-dialog v-model="docVersionPreviewVisible" :title="docVersionPreviewTitle" width="860px" class="doc-preview-dialog" destroy-on-close>
+      <pre class="doc-preview-body">{{ docVersionPreviewContent }}</pre>
+    </el-dialog>
+    <el-dialog v-model="docVersionDiffVisible" title="文档版本对比" width="1220px" class="doc-diff-dialog" destroy-on-close>
+      <div class="diff-summary-bar">
+        <span class="diff-stat added">新增 {{ docDiffStats.added }}</span>
+        <span class="diff-stat removed">删除 {{ docDiffStats.removed }}</span>
+        <span class="diff-stat unchanged">未变更 {{ docDiffStats.same }}</span>
+      </div>
+      <div class="doc-diff-container">
+        <div class="diff-changes-panel">
+          <div class="dcp-title">变更摘要</div>
+          <div class="dcp-list">
+            <div v-if="diffChangeSummary.length === 0" class="dcp-empty">暂无结构化摘要</div>
+            <div v-for="(item, idx) in diffChangeSummary" :key="`${item.type}-${idx}`" class="dcp-item" :class="item.type">
+              <span class="dcp-icon">{{ item.type === 'added' ? '+' : item.type === 'removed' ? '-' : '~' }}</span>
+              <span class="dcp-text">{{ item.text }}</span>
+            </div>
+          </div>
+        </div>
+        <div class="doc-diff-pane">
+          <div class="doc-diff-pane-title">{{ docVersionDiffLeftTitle }}</div>
+          <div class="doc-diff-content">
+            <div
+              v-for="(line, idx) in docDiffResult.left"
+              :key="`left-${idx}`"
+              class="doc-diff-line"
+              :class="line.type"
+            >
+              <span class="doc-diff-lineno">{{ idx + 1 }}</span>
+              <span class="doc-diff-text">{{ line.text || ' ' }}</span>
+            </div>
+          </div>
+        </div>
+        <div class="doc-diff-pane">
+          <div class="doc-diff-pane-title">{{ docVersionDiffRightTitle }}</div>
+          <div class="doc-diff-content">
+            <div
+              v-for="(line, idx) in docDiffResult.right"
+              :key="`right-${idx}`"
+              class="doc-diff-line"
+              :class="line.type"
+            >
+              <span class="doc-diff-lineno">{{ idx + 1 }}</span>
+              <span class="doc-diff-text">{{ line.text || ' ' }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </el-dialog>
     <el-dialog v-model="showApiLogs" title="API 调用日志" width="80%" :append-to-body="true">
       <div class="api-logs-header">
         <el-select v-model="apiLogFilter" placeholder="筛选步骤" clearable size="small" style="width:200px">
@@ -561,7 +1045,7 @@ const route = useRoute()
 const store = usePreviewStore()
 const userStore = useUserStore()
 const builderPreviewTab = ref<'roles' | 'dicts' | 'models' | 'forms' | 'permissions' | 'docs'>('roles')
-const builderPreviewTabs = [
+const allBuilderPreviewTabs = [
   { key: 'roles', label: '角色' },
   { key: 'dicts', label: '数据字典' },
   { key: 'models', label: '数据模型' },
@@ -635,9 +1119,30 @@ const roleNamesText = computed(() => {
   const names = store.preview.roles.map((r: any) => r?.name).filter(Boolean)
   return names.length ? names.slice(0, 8).join('、') + (names.length > 8 ? ` 等 ${names.length} 项` : '') : '暂无'
 })
-const activeBuilderTabLabel = computed(() => builderPreviewTabs.find(tab => tab.key === builderPreviewTab.value)?.label || '角色')
-const activeBuilderStepIndex = computed(() => Math.max(0, builderPreviewTabs.findIndex(tab => tab.key === builderPreviewTab.value)))
+const visibleBuilderPreviewTabs = computed(() =>
+  isUpdateReviewMode.value
+    ? allBuilderPreviewTabs.filter(tab => tab.key !== 'permissions')
+    : allBuilderPreviewTabs
+)
+const activeBuilderTabLabel = computed(() => visibleBuilderPreviewTabs.value.find(tab => tab.key === builderPreviewTab.value)?.label || '角色')
+const activeBuilderStepIndex = computed(() => Math.max(0, visibleBuilderPreviewTabs.value.findIndex(tab => tab.key === builderPreviewTab.value)))
 const getBuilderTabCount = (tabKey: typeof builderPreviewTab.value) => {
+  if (isUpdateReviewMode.value) {
+    if (tabKey === 'roles') return updateRoleDiffItems.value.length
+    if (tabKey === 'dicts') return updateDictDiffItems.value.length
+    if (tabKey === 'models') return updateModelDiffItems.value.length
+    if (tabKey === 'forms') return updateFormDiffItems.value.length
+    if (tabKey === 'permissions') return 0
+    return docPreviewAvailable.value ? 1 : 0
+  }
+  if (showDeployedVersionedView.value) {
+    if (tabKey === 'roles') return deployedRoleItems.value.length
+    if (tabKey === 'dicts') return deployedDictItems.value.length
+    if (tabKey === 'models') return deployedModelItems.value.length
+    if (tabKey === 'forms') return deployedFormItems.value.length
+    if (tabKey === 'permissions') return permissionPreviewItems.value.length
+    return docPreviewAvailable.value ? 1 : 0
+  }
   if (tabKey === 'roles') return store.preview.roles.length
   if (tabKey === 'dicts') return store.preview.dicts.length
   if (tabKey === 'models') return store.preview.models.length
@@ -674,12 +1179,14 @@ const isAppPublishing = computed(() => {
 const showStartDeployButton = computed(() => !deployAllDone.value && !isPlatformDeployed.value)
 const showPublishButton = computed(() =>
   isPlatformDeployed.value &&
-  !isAppOnline.value &&
-  !isAppPublishing.value &&
-  !publishingApp.value
+  !isUpdateReviewMode.value &&
+  !isAppPublishing.value
 )
-const showBuilderComposer = computed(() => !isPlatformDeployed.value)
+const showUpdateButton = computed(() => !!existingAppId.value && isPlatformDeployed.value && !isUpdateReviewMode.value)
+const showExecuteUpdateButton = computed(() => isUpdateReviewMode.value && !!store.changePlan?.actions?.length)
+const showBuilderComposer = computed(() => !isPlatformDeployed.value || isUpdateReviewMode.value)
 const showDeployProgressInline = computed(() => deploySteps.value.length > 0 || deployOpen.value || isPlatformDeployed.value)
+const showDeployedVersionedView = computed(() => isPlatformDeployed.value && !isUpdateReviewMode.value)
 const showViewSwitcher = computed(() =>
   !!existingAppId.value && (
     builderLifecycleStatus.value.key === 'deployed' ||
@@ -722,6 +1229,10 @@ const getDataScopeLabel = (scope: string) => {
 }
 
 const editAppMeta = () => {
+  if (isUpdateReviewMode.value) {
+    ElMessage.info('更新页面不支持修改应用名称和应用编码，请通过上传新设计文档触发变更。')
+    return
+  }
   builderPreviewTab.value = 'roles'
   inputText.value = `请帮我修改应用名称和应用编码：\n当前应用名称：${builderAppDisplayName.value}\n当前应用编码：${displayAppCode.value}\n目标名称：\n目标编码：`
   ElMessage.info('已切换到左侧对话区，你可以直接描述新的应用名称和编码。')
@@ -729,7 +1240,9 @@ const editAppMeta = () => {
 }
 
 const formPreviewItems = computed(() =>
-  (store.preview.models || []).map((model: any, idx: number) => ({
+  (store.preview.models || [])
+    .filter((model: any) => !/sub|child|子表/.test(String(model?.table_type || model?.type || '').toLowerCase()))
+    .map((model: any, idx: number) => ({
     name: model?.form_name || model?.name || `表单${idx + 1}`,
     code: model?.form_code || model?.code || `form_${idx + 1}`,
     modelName: model?.name || model?.code || `数据模型${idx + 1}`,
@@ -759,37 +1272,587 @@ const formPreviewItems = computed(() =>
   }))
 )
 const permissionPreviewItems = computed(() =>
-  (store.preview.permissions || []).map((perm: any, idx: number) => ({
-    name: perm?.form || perm?.table || perm?.name || `权限对象${idx + 1}`,
-    code: perm?.form_code || perm?.table_code || perm?.code || `perm_${idx + 1}`,
-    raw: perm,
-    rows: Array.isArray(perm?.roles) && perm.roles.length
-      ? perm.roles.map((role: any, roleIdx: number) => {
-          const actions = role?.actions || role?.operations || role?.permissions || []
-          const scopeInfo = getDataScopeLabel(role?.data_scope || role?.scope || role?.dataScope || '')
-          return {
-            roleCode: role?.role_code || role?.code || `role_${roleIdx + 1}`,
-            roleName: role?.role_name || role?.name || `角色${roleIdx + 1}`,
-            actionsText: Array.isArray(actions) && actions.length ? actions.join('、') : '未配置',
-            scopeText: scopeInfo.text,
-            scopeClass: scopeInfo.className,
-          }
-        })
-      : []
-  }))
+  (store.preview.permissions || []).map((perm: any, idx: number) => {
+    const rules = Array.isArray(perm?.roles) && perm.roles.length
+      ? perm.roles
+      : Array.isArray(perm?.rules) && perm.rules.length
+        ? perm.rules
+        : Array.isArray(perm?.permissions) && perm.permissions.length
+          ? perm.permissions
+          : []
+
+    return {
+      name: perm?.form || perm?.table || perm?.name || `权限对象${idx + 1}`,
+      code: perm?.form_code || perm?.table_code || perm?.code || `perm_${idx + 1}`,
+      raw: perm,
+      rows: rules.map((role: any, roleIdx: number) => {
+        const rawActions = role?.actions || role?.operations || role?.permissions || role?.op || []
+        const actions = Array.isArray(rawActions)
+          ? rawActions
+          : typeof rawActions === 'string' && rawActions
+            ? [rawActions]
+            : []
+        const scopeInfo = getDataScopeLabel(role?.data_scope || role?.scope || role?.dataScope || role?.data || '')
+        return {
+          roleCode: role?.role_code || role?.code || role?.role || `role_${roleIdx + 1}`,
+          roleName: role?.role_name || role?.name || role?.role || `角色${roleIdx + 1}`,
+          actionsText: actions.length ? actions.join('、') : '未配置',
+          scopeText: scopeInfo.text,
+          scopeClass: scopeInfo.className,
+        }
+      })
+    }
+  })
 )
 
 const normalizeDictOptions = (dict: any) =>
-  (dict?.options || []).map((item: any, idx: number) => (
+  (dict?.options || dict?.values || []).map((item: any, idx: number) => (
     typeof item === 'string'
       ? { name: item, code: `opt_${idx + 1}` }
-      : { name: item?.name || item?.item_name || `选项${idx + 1}`, code: item?.code || item?.item_code || `opt_${idx + 1}` }
+      : { name: item?.name || item?.item_name || item?.valueName || `选项${idx + 1}`, code: item?.code || item?.item_code || item?.valueCode || `opt_${idx + 1}` }
   ))
 
 const summarizeDictOptions = (dict: any) => {
   const options = normalizeDictOptions(dict)
   if (!options.length) return '暂无选项'
   return options.slice(0, 6).map(option => option.name).join('、') + (options.length > 6 ? ` 等 ${options.length} 项` : '')
+}
+
+const getChangeBadgeMeta = (
+  changeType: string,
+  scope: 'role' | 'dict' | 'dict_option' | 'model' | 'field' | 'form' | 'component'
+): ChangeBadgeMeta => {
+  const normalized = String(changeType || '').toLowerCase()
+  if (normalized === 'added') return { label: '创建', tone: 'create' }
+  if (normalized === 'modified') return { label: '更新', tone: 'update' }
+  if (normalized === 'deleted') {
+    if (scope === 'dict' || scope === 'dict_option' || scope === 'field') {
+      return { label: '禁用', tone: 'disable' }
+    }
+    return { label: '删除', tone: 'delete' }
+  }
+  return { label: '更新', tone: 'update' }
+}
+
+const buildFieldLikeItems = (change: any) => {
+  const fieldChanges = Array.isArray(change?.field_changes) ? change.field_changes : []
+  if (fieldChanges.length > 0) {
+    return fieldChanges.map((field: any, idx: number) => ({
+      key: `${change.code || change.name}-field-${field.code || idx}`,
+      name: field.name || field.code || `字段${idx + 1}`,
+      code: field.code || `field_${idx + 1}`,
+      type: field.field_type || field.new_value?.fieldType || field.new_value?.type || field.old_value?.fieldType || field.old_value?.type || '文本',
+      badge: getChangeBadgeMeta(field.change_type, 'field'),
+    }))
+  }
+  const sourceFields = (change?.new_value?.fields || change?.new_value?.dataModelFields || change?.old_value?.fields || change?.old_value?.dataModelFields || [])
+  return sourceFields.map((field: any, idx: number) => ({
+    key: `${change.code || change.name}-field-source-${field.code || field.fieldCode || idx}`,
+    name: field?.name || field?.fieldName || field?.code || field?.fieldCode || `字段${idx + 1}`,
+    code: field?.code || field?.fieldCode || `field_${idx + 1}`,
+    type: field?.type || field?.fieldType || '文本',
+    badge: getChangeBadgeMeta(change.change_type, 'field'),
+  }))
+}
+
+const updateRoleDiffItems = computed(() =>
+  (updateResourceDiff.value?.role_changes || []).map((change: any, idx: number) => ({
+    key: `role-${change.code || idx}`,
+    name: change.name || change.code || `角色${idx + 1}`,
+    code: change.code || `role_${idx + 1}`,
+    badge: getChangeBadgeMeta(change.change_type, 'role'),
+    description: getRoleDescription(change.new_value || change.old_value || {}),
+  }))
+)
+
+const updateDictDiffItems = computed(() =>
+  (updateResourceDiff.value?.dict_changes || []).map((change: any, idx: number) => {
+    const optionChanges = Array.isArray(change.option_changes) && change.option_changes.length > 0
+      ? change.option_changes.map((option: any, optionIdx: number) => ({
+          key: `${change.code || idx}-opt-${option.code || optionIdx}`,
+          name: option.name || option.code || `选项${optionIdx + 1}`,
+          code: option.code || `opt_${optionIdx + 1}`,
+          badge: getChangeBadgeMeta(option.change_type, 'dict_option'),
+        }))
+      : normalizeDictOptions(change.new_value || change.old_value).map((option: any, optionIdx: number) => ({
+          key: `${change.code || idx}-source-opt-${option.code || optionIdx}`,
+          name: option.name,
+          code: option.code,
+          badge: getChangeBadgeMeta(change.change_type, 'dict_option'),
+        }))
+
+    return {
+      key: `dict-${change.code || idx}`,
+      name: change.name || change.code || `字典${idx + 1}`,
+      code: change.code || `dict_${idx + 1}`,
+      badge: getChangeBadgeMeta(change.change_type, 'dict'),
+      optionChanges,
+    }
+  })
+)
+
+const updateModelDiffItems = computed(() =>
+  (updateResourceDiff.value?.model_changes || []).map((change: any, idx: number) => {
+    const fields = buildFieldLikeItems(change)
+    const summaryParts = [
+      fields.filter((field: any) => field.badge.tone === 'create').length ? `创建 ${fields.filter((field: any) => field.badge.tone === 'create').length} 个字段` : '',
+      fields.filter((field: any) => field.badge.tone === 'update').length ? `更新 ${fields.filter((field: any) => field.badge.tone === 'update').length} 个字段` : '',
+      fields.filter((field: any) => field.badge.tone === 'disable').length ? `禁用 ${fields.filter((field: any) => field.badge.tone === 'disable').length} 个字段` : '',
+    ].filter(Boolean)
+
+    return {
+      key: `model-${change.code || idx}`,
+      name: change.name || change.code || `模型${idx + 1}`,
+      code: change.code || `model_${idx + 1}`,
+      badge: getChangeBadgeMeta(change.change_type, 'model'),
+      fields,
+      summary: summaryParts.join('，') || '本次模型结构发生变化',
+    }
+  })
+)
+
+const updateFormDiffItems = computed(() =>
+  (updateResourceDiff.value?.form_changes || []).map((change: any, idx: number) => {
+    const componentChanges = Array.isArray(change.component_changes) && change.component_changes.length > 0
+      ? change.component_changes.map((component: any, compIdx: number) => ({
+          key: `${change.code || idx}-comp-${component.code || compIdx}`,
+          name: component.name || component.code || `组件${compIdx + 1}`,
+          code: component.code || `component_${compIdx + 1}`,
+          badge: getChangeBadgeMeta(component.change_type, 'component'),
+          detail: component.model_field || component.table_model_code || component.component_type || '表单组件',
+        }))
+      : []
+
+    return {
+      key: `form-${change.code || idx}`,
+      name: change.name || change.code || `表单${idx + 1}`,
+      code: change.code || `form_${idx + 1}`,
+      badge: getChangeBadgeMeta(change.change_type, 'form'),
+      modelCode: change.model_code || change.new_value?.modelCode || '',
+      componentChanges,
+    }
+  })
+)
+
+const deployedRoleItems = computed<VersionedRoleItem[]>(() => {
+  const roleMap = new Map<string, VersionedRoleItem>()
+  const latestVersion = normalizeVersionNumber(currentDocVersion.value, 1)
+  const ensureRoleItem = (source: any, fallbackCode: string, version: number, tone: VersionBadgeMeta['tone']) => {
+    const code = getRoleCodeValue(source, fallbackCode)
+    const existing = roleMap.get(code)
+    const nextItem: VersionedRoleItem = {
+      key: existing?.key || `deployed-role-${code}`,
+      name: getRoleNameValue(source, existing?.name || code || '未命名角色'),
+      code,
+      description: getRoleDescription(source || existing || {}),
+      versionBadge: buildVersionBadge(tone, version),
+    }
+    roleMap.set(code, nextItem)
+    return nextItem
+  }
+
+  completedChangePlans.value.forEach((plan: any) => {
+    const version = normalizeVersionNumber(plan?.toVersion, 1)
+    const roleChanges = Array.isArray(plan?.resourceDiff?.role_changes) ? plan.resourceDiff.role_changes : []
+    roleChanges.forEach((change: any, idx: number) => {
+      const source = change?.new_value || change?.old_value || {}
+      const code = getRoleCodeValue(source, change?.code || `role_${version}_${idx + 1}`)
+      const tone = getVersionToneForChange(change?.change_type, 'role')
+      ensureRoleItem({
+        ...source,
+        code,
+        name: getPrimaryText(change?.name, source?.name, source?.roleName),
+        description: getRoleDescription(source || change?.old_value || {}),
+      }, code, version, tone)
+    })
+  })
+
+  store.preview.roles.forEach((role: any, idx: number) => {
+    ensureRoleItem(role, `role_${idx + 1}`, latestVersion, 'active')
+  })
+
+  return sortVersionedItems(Array.from(roleMap.values()))
+})
+
+const deployedDictItems = computed<VersionedDictItem[]>(() => {
+  const dictMap = new Map<string, {
+    key: string
+    name: string
+    code: string
+    versionBadge: VersionBadgeMeta
+    optionsMap: Map<string, VersionedDictOptionItem>
+  }>()
+  const latestVersion = normalizeVersionNumber(currentDocVersion.value, 1)
+
+  const ensureDictItem = (source: any, fallbackCode: string, version: number, tone: VersionBadgeMeta['tone']) => {
+    const code = getDictCodeValue(source, fallbackCode)
+    const existing = dictMap.get(code)
+    const item = existing || {
+      key: `deployed-dict-${code}`,
+      name: getDictNameValue(source, code || '未命名字典'),
+      code,
+      versionBadge: buildVersionBadge(tone, version),
+      optionsMap: new Map<string, VersionedDictOptionItem>(),
+    }
+    item.name = getDictNameValue(source, item.name || code || '未命名字典')
+    item.code = code
+    item.versionBadge = buildVersionBadge(tone, version)
+    dictMap.set(code, item)
+    return item
+  }
+  const ensureDictOptionItem = (
+    dictItem: { optionsMap: Map<string, VersionedDictOptionItem>; versionBadge: VersionBadgeMeta },
+    source: any,
+    fallbackCode: string,
+    version: number,
+    tone: VersionBadgeMeta['tone'],
+  ) => {
+    const code = getDictOptionCodeValue(source, fallbackCode)
+    const existing = dictItem.optionsMap.get(code)
+    dictItem.optionsMap.set(code, {
+      key: existing?.key || `${code}-${version}`,
+      name: getDictOptionNameValue(source, existing?.name || code || '未命名选项'),
+      code,
+      versionBadge: buildVersionBadge(tone, version),
+    })
+    if (tone === 'active' && !dictItem.versionBadge.muted) {
+      dictItem.versionBadge = buildVersionBadge('active', version)
+    }
+  }
+
+  completedChangePlans.value.forEach((plan: any) => {
+    const version = normalizeVersionNumber(plan?.toVersion, 1)
+    const dictChanges = Array.isArray(plan?.resourceDiff?.dict_changes) ? plan.resourceDiff.dict_changes : []
+    dictChanges.forEach((change: any, idx: number) => {
+      const tone = getVersionToneForChange(change?.change_type, 'dict')
+      const source = change?.new_value || change?.old_value || {}
+      const code = getDictCodeValue(source, change?.code || `dict_${version}_${idx + 1}`)
+      const dictItem = ensureDictItem({
+        ...source,
+        code,
+        name: getPrimaryText(change?.name, source?.name, source?.dictionaryName),
+      }, code, version, tone)
+
+      if (String(change?.change_type || '').toLowerCase() === 'added') {
+        normalizeDictOptions(change?.new_value || source).forEach((option: any, optionIdx: number) => {
+          ensureDictOptionItem(dictItem, option, `opt_${optionIdx + 1}`, version, 'active')
+        })
+      }
+
+      if (String(change?.change_type || '').toLowerCase() === 'deleted') {
+        const deletedOptions = normalizeDictOptions(change?.old_value || source)
+        if (!dictItem.optionsMap.size) {
+          deletedOptions.forEach((option: any, optionIdx: number) => {
+            ensureDictOptionItem(dictItem, option, `opt_${optionIdx + 1}`, version, 'disabled')
+          })
+        }
+        markNestedItemsAsMuted(dictItem.optionsMap, 'disabled', version)
+        return
+      }
+
+      const optionChanges = Array.isArray(change?.option_changes) ? change.option_changes : []
+      optionChanges.forEach((optionChange: any, optionIdx: number) => {
+        const optionTone = getVersionToneForChange(optionChange?.change_type, 'dict_option')
+        const optionSource = optionChange?.new_value || optionChange?.old_value || {}
+        ensureDictOptionItem(dictItem, {
+          ...optionSource,
+          code: getPrimaryText(optionChange?.code, optionSource?.code, optionSource?.item_code),
+          name: getPrimaryText(optionChange?.name, optionSource?.name, optionSource?.item_name),
+        }, optionChange?.code || `opt_${version}_${optionIdx + 1}`, version, optionTone)
+      })
+    })
+  })
+
+  store.preview.dicts.forEach((dict: any, idx: number) => {
+    const dictItem = ensureDictItem(dict, `dict_${idx + 1}`, latestVersion, 'active')
+    normalizeDictOptions(dict).forEach((option: any, optionIdx: number) => {
+      ensureDictOptionItem(dictItem, option, `opt_${optionIdx + 1}`, latestVersion, 'active')
+    })
+  })
+
+  return sortVersionedItems(Array.from(dictMap.values()).map((item) => {
+    const options = sortVersionedItems(Array.from(item.optionsMap.values()))
+    return {
+      key: item.key,
+      name: item.name,
+      code: item.code,
+      versionBadge: item.versionBadge,
+      options,
+      optionCount: options.length,
+      summary: options.length ? options.map(option => option.name).slice(0, 6).join('、') + (options.length > 6 ? ` 等 ${options.length} 项` : '') : '暂无选项',
+    }
+  }))
+})
+
+const deployedModelItems = computed<VersionedModelItem[]>(() => {
+  const modelMap = new Map<string, {
+    key: string
+    name: string
+    code: string
+    tableTypeLabel: string
+    versionBadge: VersionBadgeMeta
+    fieldsMap: Map<string, VersionedModelFieldItem>
+  }>()
+  const latestVersion = normalizeVersionNumber(currentDocVersion.value, 1)
+
+  const ensureModelItem = (source: any, fallbackCode: string, version: number, tone: VersionBadgeMeta['tone']) => {
+    const code = getModelCodeValue(source, fallbackCode)
+    const existing = modelMap.get(code)
+    const item = existing || {
+      key: `deployed-model-${code}`,
+      name: getModelNameValue(source, code || '未命名模型'),
+      code,
+      tableTypeLabel: getTableTypeLabel(source?.table_type || source?.tableType || source?.type),
+      versionBadge: buildVersionBadge(tone, version),
+      fieldsMap: new Map<string, VersionedModelFieldItem>(),
+    }
+    item.name = getModelNameValue(source, item.name || code || '未命名模型')
+    item.code = code
+    item.tableTypeLabel = getTableTypeLabel(source?.table_type || source?.tableType || source?.type)
+    item.versionBadge = buildVersionBadge(tone, version)
+    modelMap.set(code, item)
+    return item
+  }
+  const ensureModelFieldItem = (
+    modelItem: { fieldsMap: Map<string, VersionedModelFieldItem>; versionBadge: VersionBadgeMeta },
+    source: any,
+    fallbackCode: string,
+    version: number,
+    tone: VersionBadgeMeta['tone'],
+  ) => {
+    const code = getFieldCodeValue(source, fallbackCode)
+    const existing = modelItem.fieldsMap.get(code)
+    modelItem.fieldsMap.set(code, {
+      key: existing?.key || `${code}-${version}`,
+      name: getFieldNameValue(source, existing?.name || code || '未命名字段'),
+      code,
+      type: getFieldTypeValue(source),
+      versionBadge: buildVersionBadge(tone, version),
+    })
+    if (tone === 'active' && !modelItem.versionBadge.muted) {
+      modelItem.versionBadge = buildVersionBadge('active', version)
+    }
+  }
+
+  completedChangePlans.value.forEach((plan: any) => {
+    const version = normalizeVersionNumber(plan?.toVersion, 1)
+    const modelChanges = Array.isArray(plan?.resourceDiff?.model_changes) ? plan.resourceDiff.model_changes : []
+    modelChanges.forEach((change: any, idx: number) => {
+      const tone = getVersionToneForChange(change?.change_type, 'model')
+      const source = change?.new_value || change?.old_value || {}
+      const code = getModelCodeValue(source, change?.code || `model_${version}_${idx + 1}`)
+      const modelItem = ensureModelItem({
+        ...source,
+        code,
+        name: getPrimaryText(change?.name, source?.name, source?.modelName),
+      }, code, version, tone)
+
+      if (String(change?.change_type || '').toLowerCase() === 'added') {
+        getModelFieldSource(change?.new_value || source).forEach((field: any, fieldIdx: number) => {
+          ensureModelFieldItem(modelItem, field, `field_${fieldIdx + 1}`, version, 'active')
+        })
+      }
+
+      if (String(change?.change_type || '').toLowerCase() === 'deleted') {
+        const deletedFields = getModelFieldSource(change?.old_value || source)
+        if (!modelItem.fieldsMap.size) {
+          deletedFields.forEach((field: any, fieldIdx: number) => {
+            ensureModelFieldItem(modelItem, field, `field_${fieldIdx + 1}`, version, 'disabled')
+          })
+        }
+        markNestedItemsAsMuted(modelItem.fieldsMap, 'disabled', version)
+        return
+      }
+
+      const fieldChanges = Array.isArray(change?.field_changes) ? change.field_changes : []
+      fieldChanges.forEach((fieldChange: any, fieldIdx: number) => {
+        const fieldTone = getVersionToneForChange(fieldChange?.change_type, 'field')
+        const fieldSource = fieldChange?.new_value || fieldChange?.old_value || {}
+        ensureModelFieldItem(modelItem, {
+          ...fieldSource,
+          code: getPrimaryText(fieldChange?.code, fieldSource?.code, fieldSource?.fieldCode),
+          name: getPrimaryText(fieldChange?.name, fieldSource?.name, fieldSource?.fieldName),
+          type: getPrimaryText(fieldChange?.field_type, fieldSource?.fieldType, fieldSource?.type),
+        }, fieldChange?.code || `field_${version}_${fieldIdx + 1}`, version, fieldTone)
+      })
+    })
+  })
+
+  store.preview.models.forEach((model: any, idx: number) => {
+    const modelItem = ensureModelItem(model, `model_${idx + 1}`, latestVersion, 'active')
+    getModelFieldSource(model).forEach((field: any, fieldIdx: number) => {
+      ensureModelFieldItem(modelItem, field, `field_${fieldIdx + 1}`, latestVersion, 'active')
+    })
+  })
+
+  return sortVersionedItems(Array.from(modelMap.values()).map((item) => {
+    const fields = sortVersionedItems(Array.from(item.fieldsMap.values()))
+    return {
+      key: item.key,
+      name: item.name,
+      code: item.code,
+      tableTypeLabel: item.tableTypeLabel,
+      versionBadge: item.versionBadge,
+      fields,
+      summary: `${item.tableTypeLabel} · ${fields.length} 个字段`,
+    }
+  }))
+})
+
+const deployedFormItems = computed<VersionedFormItem[]>(() => {
+  const formMap = new Map<string, {
+    key: string
+    name: string
+    code: string
+    modelName: string
+    modelCode: string
+    tableTypeLabel: string
+    versionBadge: VersionBadgeMeta
+    componentsMap: Map<string, VersionedFormComponentItem>
+  }>()
+  const latestVersion = normalizeVersionNumber(currentDocVersion.value, 1)
+
+  const ensureFormItem = (source: any, fallbackCode: string, version: number, tone: VersionBadgeMeta['tone']) => {
+    const code = getFormCodeValue(source, fallbackCode)
+    const existing = formMap.get(code)
+    const item = existing || {
+      key: `deployed-form-${code}`,
+      name: getFormNameValue(source, code || '未命名表单'),
+      code,
+      modelName: getPrimaryText(source?.modelName, source?.model_name),
+      modelCode: getFormModelCodeValue(source),
+      tableTypeLabel: getTableTypeLabel(source?.table_type || source?.tableType || source?.type),
+      versionBadge: buildVersionBadge(tone, version),
+      componentsMap: new Map<string, VersionedFormComponentItem>(),
+    }
+    item.name = getFormNameValue(source, item.name || code || '未命名表单')
+    item.code = code
+    item.modelName = getPrimaryText(source?.modelName, source?.model_name, item.modelName)
+    item.modelCode = getFormModelCodeValue(source, item.modelCode)
+    item.tableTypeLabel = getTableTypeLabel(source?.table_type || source?.tableType || source?.type)
+    item.versionBadge = buildVersionBadge(tone, version)
+    formMap.set(code, item)
+    return item
+  }
+  const ensureFormComponentItem = (
+    formItem: { componentsMap: Map<string, VersionedFormComponentItem>; versionBadge: VersionBadgeMeta },
+    source: any,
+    fallbackCode: string,
+    version: number,
+    tone: VersionBadgeMeta['tone'],
+  ) => {
+    const code = getFormComponentCodeValue(source, fallbackCode)
+    const existing = formItem.componentsMap.get(code)
+    formItem.componentsMap.set(code, {
+      key: existing?.key || `${code}-${version}`,
+      name: getFormComponentNameValue(source, existing?.name || code || '未命名组件'),
+      code,
+      detail: getFormComponentDetailValue(source),
+      versionBadge: buildVersionBadge(tone, version),
+    })
+    if (tone === 'active' && !formItem.versionBadge.muted) {
+      formItem.versionBadge = buildVersionBadge('active', version)
+    }
+  }
+
+  completedChangePlans.value.forEach((plan: any) => {
+    const version = normalizeVersionNumber(plan?.toVersion, 1)
+    const formChanges = Array.isArray(plan?.resourceDiff?.form_changes) ? plan.resourceDiff.form_changes : []
+    formChanges.forEach((change: any, idx: number) => {
+      const tone = getVersionToneForChange(change?.change_type, 'form')
+      const source = change?.new_value || change?.old_value || {}
+      const code = getFormCodeValue(source, change?.code || `form_${version}_${idx + 1}`)
+      const formItem = ensureFormItem({
+        ...source,
+        code,
+        name: getPrimaryText(change?.name, source?.name, source?.formName),
+        modelCode: getPrimaryText(change?.model_code, source?.modelCode, source?.model_code),
+      }, code, version, tone)
+
+      if (String(change?.change_type || '').toLowerCase() === 'added') {
+        getFormComponentSource(change?.new_value || source).forEach((component: any, componentIdx: number) => {
+          ensureFormComponentItem(formItem, component, `component_${componentIdx + 1}`, version, 'active')
+        })
+      }
+
+      if (String(change?.change_type || '').toLowerCase() === 'deleted') {
+        const deletedComponents = getFormComponentSource(change?.old_value || source)
+        if (!formItem.componentsMap.size) {
+          deletedComponents.forEach((component: any, componentIdx: number) => {
+            ensureFormComponentItem(formItem, component, `component_${componentIdx + 1}`, version, 'deleted')
+          })
+        }
+        markNestedItemsAsMuted(formItem.componentsMap, 'deleted', version)
+        return
+      }
+
+      const componentChanges = Array.isArray(change?.component_changes) ? change.component_changes : []
+      componentChanges.forEach((componentChange: any, componentIdx: number) => {
+        const componentTone = getVersionToneForChange(componentChange?.change_type, 'component')
+        const componentSource = componentChange?.new_value || componentChange?.old_value || {}
+        ensureFormComponentItem(formItem, {
+          ...componentSource,
+          code: getPrimaryText(componentChange?.code, componentSource?.code, componentSource?.model_field),
+          name: getPrimaryText(componentChange?.name, componentSource?.name, componentSource?.label),
+          model_field: getPrimaryText(componentChange?.model_field, componentSource?.model_field),
+          table_model_code: getPrimaryText(componentChange?.table_model_code, componentSource?.table_model_code),
+          component_type: getPrimaryText(componentChange?.component_type, componentSource?.component_type),
+          changed_properties: componentChange?.changed_properties,
+        }, componentChange?.code || `component_${version}_${componentIdx + 1}`, version, componentTone)
+      })
+    })
+  })
+
+  store.preview.models
+    .filter((model: any) => !/sub|child|子表/.test(String(model?.table_type || model?.type || '').toLowerCase()))
+    .forEach((model: any, idx: number) => {
+    const modelCode = getModelCodeValue(model, `model_${idx + 1}`)
+    const formItem = ensureFormItem({
+      name: getPrimaryText(model?.form_name, model?.name),
+      code: getPrimaryText(model?.form_code, model?.code, `form_${idx + 1}`),
+      modelName: getPrimaryText(model?.name, model?.form_name),
+      modelCode,
+      table_type: model?.table_type || model?.type,
+    }, `form_${idx + 1}`, latestVersion, 'active')
+    getModelFieldSource(model).forEach((field: any, fieldIdx: number) => {
+      ensureFormComponentItem(formItem, {
+        code: getFieldCodeValue(field, `component_${fieldIdx + 1}`),
+        name: getFieldNameValue(field, `组件${fieldIdx + 1}`),
+        model_field: `${modelCode}.${getFieldCodeValue(field, `field_${fieldIdx + 1}`)}`,
+        component_type: getFieldTypeValue(field),
+      }, `component_${fieldIdx + 1}`, latestVersion, 'active')
+    })
+  })
+
+  return sortVersionedItems(Array.from(formMap.values()).map((item) => {
+    const components = sortVersionedItems(Array.from(item.componentsMap.values()))
+    return {
+      key: item.key,
+      name: item.name,
+      code: item.code,
+      modelName: item.modelName,
+      modelCode: item.modelCode,
+      tableTypeLabel: item.tableTypeLabel,
+      versionBadge: item.versionBadge,
+      components,
+      componentCount: components.length,
+    }
+  }))
+})
+
+const updateReviewGroups = computed(() => [
+  { title: '角色', icon: '👥', items: updateRoleDiffItems.value },
+  { title: '数据字典', icon: '📖', items: updateDictDiffItems.value },
+  { title: '数据模型', icon: '🗃', items: updateModelDiffItems.value },
+  { title: '表单配置', icon: '📋', items: updateFormDiffItems.value },
+].filter(group => group.items.length > 0))
+
+const getPreferredUpdateTab = () => {
+  if (updateModelDiffItems.value.length) return 'models'
+  if (updateRoleDiffItems.value.length) return 'roles'
+  if (updateDictDiffItems.value.length) return 'dicts'
+  if (updateFormDiffItems.value.length) return 'forms'
+  return 'docs'
 }
 
 const BUILDER_WELCOME_MESSAGE = '告诉我你想搭什么，我来帮你生成。\n\n可以直接描述需求，也可以上传原型图或设计稿。'
@@ -804,10 +1867,10 @@ function createWelcomeMessage(): Message {
 }
 
 function resetMessagesToWelcome() {
-  messages.splice(0, messages.length, createWelcomeMessage())
+  messages.splice(0, messages.length)
 }
 
-const visibleMessages = computed(() => (messages.length ? messages : [createWelcomeMessage()]))
+const visibleMessages = computed(() => messages)
 
 const focusQuickInput = () => {
   nextTick(() => {
@@ -816,6 +1879,10 @@ const focusQuickInput = () => {
 }
 
 const startSingleEdit = (tab: typeof builderPreviewTab.value, payload: any) => {
+  if (isUpdateReviewMode.value) {
+    ElMessage.info('更新页面当前为变更对比视图，不支持直接编辑，请重新上传设计文档。')
+    return
+  }
   builderPreviewTab.value = tab
   const targetName = payload?.name || payload?.form || payload?.table || payload?.code || activeBuilderTabLabel.value
   inputText.value = `请帮我修改${activeBuilderTabLabel.value}「${targetName}」：`
@@ -832,8 +1899,83 @@ const submitRightQuickEdit = () => {
 
 const messagesRef = ref<HTMLElement>()
 const inputRef = ref<HTMLTextAreaElement>()
+const chatImageInputRef = ref<HTMLInputElement>()
 const inputText = ref('')
 const isTyping = ref(false)
+const pendingChatImage = ref<{ file: File; previewUrl: string } | null>(null)
+const canSendMessage = computed(() => !!inputText.value.trim() || !!pendingChatImage.value)
+
+const escapeHtml = (value: string) => String(value || '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;')
+
+const buildUserChatImageContent = (text: string, previewUrl: string, fileName: string) => {
+  const parts: string[] = []
+  if (text.trim()) parts.push(escapeHtml(text.trim()))
+  parts.push(
+    `<div class="chat-inline-upload"><div class="chat-inline-upload-label">已上传图片：${escapeHtml(fileName)}</div><img class="chat-inline-upload-image" src="${previewUrl}" alt="${escapeHtml(fileName)}" /></div>`
+  )
+  return parts.join('\n\n')
+}
+
+const triggerChatImageUpload = () => {
+  chatImageInputRef.value?.click()
+}
+
+const clearPendingChatImage = () => {
+  if (pendingChatImage.value?.previewUrl) {
+    URL.revokeObjectURL(pendingChatImage.value.previewUrl)
+  }
+  pendingChatImage.value = null
+  if (chatImageInputRef.value) chatImageInputRef.value.value = ''
+}
+
+const attachPendingImageFile = (file: File) => {
+  if (!file.type.startsWith('image/')) {
+    ElMessage.warning('请上传 png、jpg、gif、webp 等图片')
+    return false
+  }
+  if (file.size > 10 * 1024 * 1024) {
+    ElMessage.warning('图片大小请控制在 10MB 以内')
+    return false
+  }
+  clearPendingChatImage()
+  pendingChatImage.value = {
+    file,
+    previewUrl: URL.createObjectURL(file),
+  }
+  return true
+}
+
+const handleChatImageChange = (event: Event) => {
+  const target = event.target as HTMLInputElement
+  const file = target.files?.[0]
+  if (!file) return
+  const lowerName = file.name.toLowerCase()
+
+  if (lowerName.endsWith('.md') || lowerName.endsWith('.markdown')) {
+    handleDocUpload(event)
+    return
+  }
+
+  attachPendingImageFile(file)
+  target.value = ''
+}
+
+const handleComposerPaste = (event: ClipboardEvent) => {
+  const items = Array.from(event.clipboardData?.items || [])
+  const imageItem = items.find(item => item.type.startsWith('image/'))
+  if (!imageItem) return
+  const file = imageItem.getAsFile()
+  if (!file) return
+  event.preventDefault()
+  const ext = (file.type.split('/')[1] || 'png').replace('jpeg', 'jpg')
+  const pastedFile = new File([file], `pasted-image-${Date.now()}.${ext}`, { type: file.type })
+  attachPendingImageFile(pastedFile)
+}
 
 function autoResizeTextarea() {
   const el = inputRef.value
@@ -1139,6 +2281,141 @@ const getFieldIcon = (f: any) => {
 const getFieldKey = (field: any, idx: number) => field?.code || field?.name || `field_${idx + 1}`
 const getFieldLabel = (field: any) => field?.name || field?.code || '未命名字段'
 const getRoleDescription = (role: any) => role?.description || role?.summary || '暂无职责描述'
+const getPrimaryText = (...values: any[]) => {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return ''
+}
+const normalizeVersionNumber = (value: any, fallback = 1) => {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+}
+const buildVersionBadge = (tone: VersionBadgeMeta['tone'], version: any): VersionBadgeMeta => {
+  const normalizedVersion = normalizeVersionNumber(version, 1)
+  if (tone === 'active') {
+    return {
+      label: `最新 V${normalizedVersion}`,
+      tone,
+      version: normalizedVersion,
+      muted: false,
+    }
+  }
+  return {
+    label: `${tone === 'deleted' ? '删除' : '禁用'} V${normalizedVersion}`,
+    tone,
+    version: normalizedVersion,
+    muted: true,
+  }
+}
+const getVersionToneForChange = (
+  changeType: string,
+  scope: Parameters<typeof getChangeBadgeMeta>[1],
+): VersionBadgeMeta['tone'] => {
+  const badge = getChangeBadgeMeta(changeType, scope)
+  if (badge.tone === 'delete') return 'deleted'
+  if (badge.tone === 'disable') return 'disabled'
+  return 'active'
+}
+const sortVersionedItems = <T extends { name?: string; code?: string; versionBadge: VersionBadgeMeta }>(items: T[]) =>
+  [...items].sort((a, b) => {
+    if (a.versionBadge.muted !== b.versionBadge.muted) {
+      return a.versionBadge.muted ? 1 : -1
+    }
+    if (a.versionBadge.version !== b.versionBadge.version) {
+      return b.versionBadge.version - a.versionBadge.version
+    }
+    return String(a.name || a.code || '').localeCompare(String(b.name || b.code || ''), 'zh-Hans-CN', { numeric: true })
+  })
+const getRoleCodeValue = (role: any, fallback = '') =>
+  getPrimaryText(role?.code, role?.roleCode, role?.role_code, fallback)
+const getRoleNameValue = (role: any, fallback = '') =>
+  getPrimaryText(role?.name, role?.roleName, role?.role_name, fallback)
+const getDictCodeValue = (dict: any, fallback = '') =>
+  getPrimaryText(dict?.code, dict?.dictionaryCode, dict?.dictionary_code, fallback)
+const getDictNameValue = (dict: any, fallback = '') =>
+  getPrimaryText(dict?.name, dict?.dictionaryName, dict?.dictionary_name, fallback)
+const getDictOptionCodeValue = (option: any, fallback = '') =>
+  getPrimaryText(option?.code, option?.item_code, option?.itemCode, option?.valueCode, fallback)
+const getDictOptionNameValue = (option: any, fallback = '') =>
+  getPrimaryText(option?.name, option?.item_name, option?.itemName, option?.valueName, fallback)
+const getModelCodeValue = (model: any, fallback = '') =>
+  getPrimaryText(model?.code, model?.modelCode, model?.model_code, fallback)
+const getModelNameValue = (model: any, fallback = '') =>
+  getPrimaryText(model?.name, model?.modelName, model?.model_name, fallback)
+const getFieldCodeValue = (field: any, fallback = '') =>
+  getPrimaryText(field?.code, field?.fieldCode, field?.field_code, fallback)
+const getFieldNameValue = (field: any, fallback = '') =>
+  getPrimaryText(field?.name, field?.fieldName, field?.field_name, fallback)
+const getFieldTypeValue = (field: any) =>
+  getPrimaryText(field?.type, field?.fieldType, field?.field_type, '文本')
+const getTableTypeLabel = (value: any) =>
+  /sub|child|子表/.test(String(value || '').toLowerCase()) ? '子表' : '主表'
+const getFormCodeValue = (form: any, fallback = '') =>
+  getPrimaryText(form?.code, form?.formCode, form?.form_code, form?.menuCode, fallback)
+const getFormNameValue = (form: any, fallback = '') =>
+  getPrimaryText(form?.name, form?.formName, form?.form_name, fallback)
+const getFormModelCodeValue = (form: any, fallback = '') =>
+  getPrimaryText(form?.modelCode, form?.model_code, form?.tableModelCode, form?.table_model_code, fallback)
+const getFormComponentCodeValue = (component: any, fallback = '') =>
+  getPrimaryText(component?.model_field, component?.modelField, component?.code, component?.componentCode, component?.component_code, fallback)
+const getFormComponentNameValue = (component: any, fallback = '') =>
+  getPrimaryText(component?.name, component?.label, component?.fieldName, component?.field_name, fallback)
+const getFormComponentDetailValue = (component: any) => {
+  const binding = getPrimaryText(component?.model_field, component?.modelField)
+  const tableModel = getPrimaryText(component?.table_model_code, component?.tableModelCode)
+  const componentType = getPrimaryText(component?.component_type, component?.componentType)
+  const changedProps = Array.isArray(component?.changed_properties)
+    ? component.changed_properties.filter(Boolean).join('、')
+    : ''
+  return getPrimaryText(
+    binding ? `绑定 ${binding}` : '',
+    tableModel ? `子表 ${tableModel}` : '',
+    componentType ? `组件类型 ${componentType}` : '',
+    changedProps ? `变更属性 ${changedProps}` : '',
+    '表单组件',
+  )
+}
+const getModelFieldSource = (model: any) =>
+  Array.isArray(model?.fields)
+    ? model.fields
+    : Array.isArray(model?.dataModelFields)
+      ? model.dataModelFields
+      : []
+const getFormComponentSource = (form: any) =>
+  Array.isArray(form?.components)
+    ? form.components
+    : Array.isArray(form?.fields)
+      ? form.fields
+      : []
+const markNestedItemsAsMuted = (
+  items: Map<string, { versionBadge: VersionBadgeMeta }>,
+  tone: VersionBadgeMeta['tone'],
+  version: number,
+) => {
+  items.forEach((item) => {
+    item.versionBadge = buildVersionBadge(tone, version)
+  })
+}
+const completedPlanRefsFromVersions = (versions: any[]) => {
+  const refs: Array<{ id: number; fromVersion: number; toVersion: number }> = []
+  const seen = new Set<number>()
+  versions.forEach((versionItem: any) => {
+    const plans = Array.isArray(versionItem?.change_plans) ? versionItem.change_plans : []
+    plans.forEach((plan: any) => {
+      const planId = Number(plan?.id)
+      if (!planId || seen.has(planId)) return
+      if (String(plan?.status || '').toLowerCase() !== 'completed') return
+      seen.add(planId)
+      refs.push({
+        id: planId,
+        fromVersion: normalizeVersionNumber(plan?.from_version, 0),
+        toVersion: normalizeVersionNumber(plan?.to_version, 1),
+      })
+    })
+  })
+  return refs.sort((a, b) => (a.toVersion - b.toVersion) || (a.fromVersion - b.fromVersion) || (a.id - b.id))
+}
 
 const agents: Record<string, { name: string; icon: string }> = {
   builder: { name: 'aPaaS Builder AI', icon: '🤖' },
@@ -1155,6 +2432,20 @@ const messages = reactive<Message[]>([])
 resetMessagesToWelcome()
 
 const scrollToBottom = () => { nextTick(() => { if (messagesRef.value) messagesRef.value.scrollTop = messagesRef.value.scrollHeight }) }
+
+const clearChangePlanExecutionMessages = () => {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const content = String(messages[i]?.content || '')
+    if (
+      content === '正在执行变更计划...'
+      || content.startsWith('⏳ ')
+      || content.startsWith('✅ 变更计划执行完成！')
+      || content.startsWith('❌ 变更执行失败:')
+    ) {
+      messages.splice(i, 1)
+    }
+  }
+}
 
 // 从AI回复中提取JSON配置（只支持 preview 完整配置）
 const extractPreviewData = (content: string) => {
@@ -1565,8 +2856,81 @@ interface DocVersion {
   raw_content: string
   created_at: string
 }
+interface DocVersionListItem extends DocVersion {
+  key: string
+  isVirtual?: boolean
+}
+interface ChangeBadgeMeta {
+  label: string
+  tone: 'create' | 'update' | 'delete' | 'disable'
+}
+interface VersionBadgeMeta {
+  label: string
+  tone: 'active' | 'deleted' | 'disabled'
+  version: number
+  muted: boolean
+}
+interface VersionedRoleItem {
+  key: string
+  name: string
+  code: string
+  description: string
+  versionBadge: VersionBadgeMeta
+}
+interface VersionedDictOptionItem {
+  key: string
+  name: string
+  code: string
+  versionBadge: VersionBadgeMeta
+}
+interface VersionedDictItem {
+  key: string
+  name: string
+  code: string
+  summary: string
+  optionCount: number
+  options: VersionedDictOptionItem[]
+  versionBadge: VersionBadgeMeta
+}
+interface VersionedModelFieldItem {
+  key: string
+  name: string
+  code: string
+  type: string
+  versionBadge: VersionBadgeMeta
+}
+interface VersionedModelItem {
+  key: string
+  name: string
+  code: string
+  tableTypeLabel: string
+  summary: string
+  fields: VersionedModelFieldItem[]
+  versionBadge: VersionBadgeMeta
+}
+interface VersionedFormComponentItem {
+  key: string
+  name: string
+  code: string
+  detail: string
+  versionBadge: VersionBadgeMeta
+}
+interface VersionedFormItem {
+  key: string
+  name: string
+  code: string
+  modelName: string
+  modelCode: string
+  tableTypeLabel: string
+  componentCount: number
+  components: VersionedFormComponentItem[]
+  versionBadge: VersionBadgeMeta
+}
 const docVersions = ref<DocVersion[]>([])
 const docVersionsLoading = ref(false)
+const updatingDocVersion = ref(false)
+const executingChangePlan = ref(false)
+const completedChangePlans = ref<any[]>([])
 const docVersionPreviewVisible = ref(false)
 const docVersionPreviewContent = ref('')
 const docVersionPreviewTitle = ref('')
@@ -1575,7 +2939,266 @@ const docVersionDiffLeft = ref('')
 const docVersionDiffRight = ref('')
 const docVersionDiffLeftTitle = ref('')
 const docVersionDiffRightTitle = ref('')
+const expandedDocVersionKey = ref<string | null>(null)
+const selectedDocVersionKey = ref<string | null>(null)
+const deletingDocVersionId = ref<number | null>(null)
+const currentDocVersionNumber = ref(1)
+const docVersionInputRef = ref<HTMLInputElement>()
+const reparseInputRef = ref<HTMLInputElement>()
+const reparsing = ref(false)
+const currentDocPreviewOverride = ref<DocVersionListItem | null>(null)
 // docUploadInputRef removed — upload is via chat input only
+
+const sortedDocVersions = computed(() =>
+  [...docVersions.value].sort((a, b) => (b.version || 0) - (a.version || 0))
+)
+const displayDocVersions = computed<DocVersionListItem[]>(() => {
+  const versions = sortedDocVersions.value.map((ver, index, list) => {
+    const normalizedVersion = Number(ver.version) > 0 ? Number(ver.version) : Math.max(1, list.length - index)
+    const fallbackFilename = lastParsedFilename.value || `${store.preview.appName || '功能设计文档'}-V${normalizedVersion}.md`
+    return {
+      ...ver,
+      version: normalizedVersion,
+      filename: ver.filename || fallbackFilename,
+      summary: ver.summary || '点击展开查看设计文档',
+      raw_content: (ver.raw_content || '').trim() || (index === 0 ? docPreviewContent.value : ''),
+      key: `doc-version-${ver.id || normalizedVersion}-${index}`,
+    }
+  })
+
+  if (versions.length > 0) return versions
+
+  const fallbackContent = docPreviewContent.value.trim()
+  if (!fallbackContent) return []
+
+  return [{
+    id: -1,
+    version: 1,
+    filename: lastParsedFilename.value || `${store.preview.appName || '功能设计文档'}-V1.md`,
+    summary: '初始版本，点击展开查看设计文档',
+    raw_content: fallbackContent,
+    created_at: '',
+    key: 'doc-version-v1',
+    isVirtual: true,
+  }]
+})
+const currentDocVersionItem = computed<DocVersionListItem | null>(() => currentDocPreviewOverride.value || displayDocVersions.value[0] || null)
+const currentDocVersion = computed(() => currentDocVersionNumber.value || currentDocVersionItem.value?.version || 1)
+const selectedDocVersionItem = computed<DocVersionListItem | null>(() => {
+  if (currentDocPreviewOverride.value) return currentDocPreviewOverride.value
+  if (selectedDocVersionKey.value) {
+    const matched = displayDocVersions.value.find(item => item.key === selectedDocVersionKey.value)
+    if (matched) return matched
+  }
+  return displayDocVersions.value[0] || null
+})
+const showVersionManager = computed(() => !!existingAppId.value)
+const getDocVersionsPayload = (raw: any) => {
+  const versions = Array.isArray(raw) ? raw : (raw?.versions || raw?.data || [])
+  const currentVersion = Number(raw?.current_version ?? raw?.currentVersion ?? versions?.[0]?.version ?? 0) || 0
+  return { versions, currentVersion }
+}
+
+const findRestorableChangePlanId = (versions: any[], currentVersion?: number) => {
+  const sortedVersions = [...versions].sort((a: any, b: any) => (Number(b?.version) || 0) - (Number(a?.version) || 0))
+  const currentVersionItem = currentVersion
+    ? sortedVersions.find((item: any) => Number(item?.version) === Number(currentVersion))
+    : null
+  const scanList = currentVersionItem
+    ? [currentVersionItem, ...sortedVersions.filter(item => item !== currentVersionItem)]
+    : sortedVersions
+
+  for (const version of scanList) {
+    const plans = Array.isArray(version?.change_plans) ? version.change_plans : []
+    const matchedPlan = plans.find((plan: any) => {
+      const status = String(plan?.status || '').toLowerCase()
+      return Number(plan?.from_version || 0) > 0 && (status === 'pending' || status === 'confirmed')
+    })
+    if (matchedPlan?.id) return Number(matchedPlan.id)
+  }
+  return null
+}
+
+const normalizeChangePlanState = (raw: any) => {
+  if (!raw) return null
+  const toVersion = Number(raw.to_version ?? raw.toVersion ?? raw.version ?? 1) || 1
+  const fromVersion = Number(raw.from_version ?? raw.fromVersion ?? (raw.is_first_version ? 0 : Math.max(0, toVersion - 1))) || 0
+  const diffSummary = raw.diff_summary ?? raw.diffSummary ?? raw.diff ?? null
+  const resourceDiff = raw.resourceDiff ?? (diffSummary && typeof diffSummary === 'object' ? diffSummary : null)
+  const diffSummaryText = typeof diffSummary === 'string' ? diffSummary : (resourceDiff?.summary || raw.summary || '')
+  const actions = Array.isArray(raw.actions)
+    ? raw.actions.map((action: any) => ({
+        ...action,
+        selected: action.selected !== undefined ? action.selected : true,
+      }))
+    : []
+
+  return {
+    ...raw,
+    id: raw.change_plan_id || raw.id,
+    fromVersion,
+    toVersion,
+    resourceDiff,
+    diffSummary: diffSummaryText,
+    actions,
+    status: raw.status || 'pending',
+  }
+}
+
+const loadCompletedChangePlans = async (appId: number, docVersionResponse?: any) => {
+  if (!appId) {
+    completedChangePlans.value = []
+    return []
+  }
+  try {
+    const payload = docVersionResponse || await applicationApi.getDocVersions(appId)
+    const { versions } = getDocVersionsPayload(payload)
+    const planRefs = completedPlanRefsFromVersions(versions)
+    if (!planRefs.length) {
+      completedChangePlans.value = []
+      return []
+    }
+
+    const details = await Promise.all(planRefs.map(async (planRef) => {
+      try {
+        const detail = await applicationApi.getChangePlan(appId, planRef.id)
+        const normalized = normalizeChangePlanState(detail)
+        if (!normalized) return null
+        return {
+          ...normalized,
+          fromVersion: planRef.fromVersion || normalized.fromVersion,
+          toVersion: planRef.toVersion || normalized.toVersion,
+        }
+      } catch (error) {
+        console.error(`Failed to fetch completed change plan ${planRef.id}`, error)
+        return null
+      }
+    }))
+
+    completedChangePlans.value = details
+      .filter(Boolean)
+      .sort((a: any, b: any) => (normalizeVersionNumber(a?.toVersion, 1) - normalizeVersionNumber(b?.toVersion, 1)))
+    return completedChangePlans.value
+  } catch (error) {
+    console.error('Failed to load completed change plans', error)
+    completedChangePlans.value = []
+    return []
+  }
+}
+
+const applyChangePlanState = (raw: any) => {
+  const normalized = normalizeChangePlanState(raw)
+  store.changePlan = normalized
+  store.showChangePlan = !!normalized
+}
+
+const clearChangePlanState = () => {
+  store.showChangePlan = false
+  store.changePlan = null
+}
+
+const isUpdateReviewMode = computed(() =>
+  !!existingAppId.value && !!store.changePlan
+)
+const updateResourceDiff = computed<any | null>(() => {
+  const diff = store.changePlan?.resourceDiff
+  return diff && typeof diff === 'object' ? diff : null
+})
+const docDiffStats = computed(() => ({
+  added: docDiffResult.value.right.filter(line => line.type === 'added').length,
+  removed: docDiffResult.value.left.filter(line => line.type === 'removed').length,
+  same: docDiffResult.value.right.filter(line => line.type === 'same').length,
+}))
+const changePlanSelectedCount = computed(() =>
+  Array.isArray(store.changePlan?.actions)
+    ? store.changePlan.actions.filter((action: any) => action.selected !== false).length
+    : 0
+)
+const changePlanTotalCount = computed(() =>
+  Array.isArray(store.changePlan?.actions) ? store.changePlan.actions.length : 0
+)
+const changePlanGroups = computed(() => {
+  const actions = Array.isArray(store.changePlan?.actions) ? store.changePlan.actions : []
+  const groupDefs = [
+    { key: 'roles', title: '角色', matcher: (op: string) => op.includes('role') },
+    { key: 'dicts', title: '数据字典', matcher: (op: string) => op.includes('dict') },
+    { key: 'models', title: '数据模型', matcher: (op: string) => op.includes('model') || op.includes('field') },
+    { key: 'forms', title: '表单', matcher: (op: string) => op.includes('form') || op.includes('menu') },
+    { key: 'permissions', title: '权限', matcher: (op: string) => op.includes('permission') },
+    { key: 'other', title: '其他', matcher: (_op: string) => true },
+  ]
+  const groupMap = new Map(groupDefs.map(group => [group.key, { key: group.key, title: group.title, actions: [] as any[] }]))
+
+  actions.forEach((action: any) => {
+    const op = String(action.op || '').toLowerCase()
+    const matchedGroup = groupDefs.find(group => group.key !== 'other' && group.matcher(op)) || groupDefs[groupDefs.length - 1]
+    groupMap.get(matchedGroup.key)?.actions.push(action)
+  })
+
+  return Array.from(groupMap.values()).filter(group => group.actions.length > 0)
+})
+
+const getActionGroupKey = (action: any) => {
+  const op = String(action?.op || '').toLowerCase()
+  if (op.includes('role')) return 'roles'
+  if (op.includes('dict')) return 'dicts'
+  if (op.includes('model') || op.includes('field')) return 'models'
+  if (op.includes('form') || op.includes('menu')) return 'forms'
+  if (op.includes('permission')) return 'permissions'
+  return 'other'
+}
+
+const buildUpdateExecutionItems = (actions: any[]) =>
+  actions
+    .filter((action: any) => action?.selected !== false)
+    .map((action: any, index: number) => ({
+      id: String(action.id || `update-action-${index}`),
+      groupKey: getActionGroupKey(action),
+      label: String(action.description || action.name || action.target || action.code || `步骤 ${index + 1}`),
+      code: String(action.code || action.target || action.model || ''),
+      op: String(action.op || ''),
+      status: 'pending' as const,
+      detail: '',
+    }))
+
+const completeCurrentUpdateExecutionItems = () => {
+  updateExecutionItems.value = updateExecutionItems.value.map((item) =>
+    item.status === 'current' ? { ...item, status: 'completed' } : item
+  )
+}
+
+const markUpdateExecutionStage = (stage: string, stepText: string) => {
+  const normalizedStage = String(stage || '').toLowerCase()
+  const normalizedStepText = String(stepText || '')
+  updateExecutionStage.value = normalizedStage
+  updateExecutionStepText.value = normalizedStepText
+
+  if (!updateExecutionItems.value.length) return
+
+  let targetGroupKey = ''
+  if (normalizedStage.includes('role')) targetGroupKey = 'roles'
+  else if (normalizedStage.includes('dict')) targetGroupKey = 'dicts'
+  else if (normalizedStage.includes('model')) targetGroupKey = 'models'
+  else if (normalizedStage.includes('form')) targetGroupKey = 'forms'
+  else if (normalizedStage.includes('permission') || normalizedStage.includes('process')) targetGroupKey = 'permissions'
+
+  const matchName = normalizedStepText.split(':').slice(1).join(':').trim()
+  let matched = false
+
+  updateExecutionItems.value = updateExecutionItems.value.map((item) => {
+    if (item.status === 'completed' || item.status === 'error') return item
+    const sameGroup = !targetGroupKey || item.groupKey === targetGroupKey
+    const textMatched = matchName && (item.label.includes(matchName) || item.code.includes(matchName))
+
+    if (!matched && sameGroup && (textMatched || (!matchName && item.status === 'pending'))) {
+      matched = true
+      return { ...item, status: 'current', detail: normalizedStepText }
+    }
+
+    if (item.status === 'current') return { ...item, status: 'completed', detail: item.detail }
+    return item
+  })
+}
 
 const fetchDocVersions = async () => {
   docVersionsLoading.value = true
@@ -1589,8 +3212,13 @@ const fetchDocVersions = async () => {
       docVersionsLoading.value = false
       return
     }
-    const versions = Array.isArray(res) ? res : (res?.versions || res?.data || [])
+    const { versions, currentVersion } = getDocVersionsPayload(res)
     docVersions.value = versions
+    currentDocVersionNumber.value = currentVersion || Number(versions?.[0]?.version || 1)
+    currentDocPreviewOverride.value = null
+    if (!selectedDocVersionKey.value || !displayDocVersions.value.some(item => item.key === selectedDocVersionKey.value)) {
+      selectedDocVersionKey.value = displayDocVersions.value[0]?.key || null
+    }
   } catch (e) {
     console.error('Failed to fetch doc versions', e)
   } finally {
@@ -1601,16 +3229,56 @@ const fetchDocVersions = async () => {
 const loadLatestDocForApp = async (appId: number) => {
   try {
     const verRes: any = await applicationApi.getDocVersions(appId)
-    const versions = Array.isArray(verRes) ? verRes : (verRes?.versions || verRes?.data || [])
-    const latest = [...versions].sort((a: any, b: any) => (b.version || 0) - (a.version || 0))[0]
+    const { versions, currentVersion } = getDocVersionsPayload(verRes)
+    docVersions.value = versions
+    currentDocVersionNumber.value = currentVersion || Number(versions?.[0]?.version || 1)
+    await loadCompletedChangePlans(appId, verRes)
+    const sortedVersions = [...versions].sort((a: any, b: any) => (Number(b?.version) || 0) - (Number(a?.version) || 0))
+    const latest = sortedVersions.find((item: any) => Number(item?.version) === currentVersion) || sortedVersions[0]
     if (latest?.filename) lastParsedFilename.value = latest.filename
     latestDocContent.value = latest?.raw_content || ''
+    currentDocPreviewOverride.value = null
+    const selectedVersion = latest
+      ? displayDocVersions.value.find(item => Number(item.id) === Number(latest.id) || item.version === Number(latest.version))
+      : null
+    selectedDocVersionKey.value = selectedVersion?.key || displayDocVersions.value[0]?.key || null
     if (!parsedAppCode.value && latestDocContent.value) {
       const codeFromDoc = extractAppCodeFromText(latestDocContent.value)
       if (codeFromDoc) parsedAppCode.value = codeFromDoc
     }
+    return { versions, currentVersion }
   } catch {
     // ignore
+  }
+  completedChangePlans.value = []
+  return null
+}
+
+const restorePendingChangePlan = async (appId: number, docVersionResponse?: any) => {
+  try {
+    const payload = docVersionResponse || await applicationApi.getDocVersions(appId)
+    const { versions, currentVersion } = getDocVersionsPayload(payload)
+    const planId = findRestorableChangePlanId(versions, currentVersion)
+    if (!planId) {
+      clearChangePlanState()
+      return false
+    }
+
+    const changePlanDetail = await applicationApi.getChangePlan(appId, planId)
+    const normalized = normalizeChangePlanState(changePlanDetail)
+    if (!normalized || normalized.fromVersion <= 0) {
+      clearChangePlanState()
+      return false
+    }
+
+    applyChangePlanState(changePlanDetail)
+    builderPreviewTab.value = getPreferredUpdateTab()
+    deployOpen.value = true
+    return true
+  } catch (error) {
+    console.error('Failed to restore pending change plan', error)
+    clearChangePlanState()
+    return false
   }
 }
 
@@ -1635,6 +3303,140 @@ const openDocDiff = (ver: DocVersion) => {
   docVersionDiffLeft.value = prevVer.raw_content || ''
   docVersionDiffRight.value = ver.raw_content || ''
   docVersionDiffVisible.value = true
+}
+
+const canCompareDocVersion = (ver: DocVersion) =>
+  !('isVirtual' in ver && ver.isVirtual) && displayDocVersions.value.some(item => item.version === ver.version - 1 && !!item.raw_content)
+
+const isDocVersionExpanded = (ver: DocVersionListItem) => expandedDocVersionKey.value === ver.key
+
+const toggleDocVersion = (ver: DocVersionListItem) => {
+  expandedDocVersionKey.value = expandedDocVersionKey.value === ver.key ? null : ver.key
+}
+
+const selectDocVersion = (ver: DocVersionListItem) => {
+  selectedDocVersionKey.value = ver.key
+  expandedDocVersionKey.value = ver.key
+}
+
+const deleteDocVersion = async (ver: DocVersionListItem) => {
+  if (!existingAppId.value || ver.isVirtual) return
+  try {
+    await ElMessageBox.confirm(
+      `确认删除文档版本 V${ver.version} 吗？删除后版本记录和关联变更计划将一并移除。`,
+      '删除版本记录',
+      { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' }
+    )
+  } catch {
+    return
+  }
+
+  deletingDocVersionId.value = ver.id
+  try {
+    await applicationApi.deleteDocVersion(existingAppId.value, ver.id)
+    await loadLatestDocForApp(existingAppId.value)
+    await fetchDocVersions()
+    ElMessage.success(`已删除版本 V${ver.version}`)
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || e?.message || '删除版本失败')
+  } finally {
+    deletingDocVersionId.value = null
+  }
+}
+
+const triggerDocVersionUpload = () => {
+  if (!existingAppId.value) return
+  docVersionInputRef.value?.click()
+}
+
+const triggerReparse = () => {
+  reparseInputRef.value?.click()
+}
+
+const handleReparseInputChange = async (e: Event) => {
+  const target = e.target as HTMLInputElement
+  const file = target.files?.[0]
+  if (!file) return
+  target.value = ''
+  reparsing.value = true
+  // 重置解析和部署状态，回到初始解析页面
+  parseReady.value = false
+  deploySteps.value = []
+  deployOpen.value = false
+  clearChangePlanState()
+  try {
+    await uploadDocFile(file)
+  } finally {
+    reparsing.value = false
+  }
+}
+
+const handleDocVersionInputChange = async (e: Event) => {
+  const target = e.target as HTMLInputElement
+  const file = target.files?.[0]
+  target.value = ''
+  if (!file || !existingAppId.value) return
+  if (!/\.md$/i.test(file.name)) {
+    ElMessage.warning('当前仅支持上传 .md 格式的功能设计文档')
+    return
+  }
+  // 清空旧对话，进入版本更新的独立对话
+  messages.splice(0, messages.length)
+  // 立即打开更新面板（先展示加载态，SSE 完成后替换真实数据）
+  store.changePlan = { id: null, actions: [], resourceDiff: null, diffSummary: '正在分析文档变更...', fromVersion: 0, toVersion: 0, status: 'pending' } as any
+  store.showChangePlan = true
+  updatingDocVersion.value = true
+  try {
+    await handleDocVersionUpload(file, existingAppId.value)
+  } finally {
+    updatingDocVersion.value = false
+  }
+}
+
+const closeChangePlan = () => {
+  if (executingChangePlan.value) return
+  clearChangePlanState()
+}
+
+const toggleChangePlanSelection = (checked: boolean) => {
+  if (!Array.isArray(store.changePlan?.actions)) return
+  store.changePlan.actions.forEach((action: any) => {
+    action.selected = checked
+  })
+}
+
+const changePlanActionTone = (action: any) => {
+  const op = String(action?.op || '').toLowerCase()
+  if (op.startsWith('add')) return 'add'
+  if (op.startsWith('remove') || op.startsWith('delete')) return 'remove'
+  return 'modify'
+}
+
+const changePlanActionSymbol = (action: any) => {
+  const tone = changePlanActionTone(action)
+  if (tone === 'add') return '+'
+  if (tone === 'remove') return '-'
+  return '~'
+}
+
+const describeChangePlanAction = (action: any) => {
+  if (action?.summary) return action.summary
+  const op = String(action?.op || '').toLowerCase()
+  const verb = op.startsWith('add')
+    ? '新增'
+    : op.startsWith('remove') || op.startsWith('delete')
+      ? '删除'
+      : '更新'
+  const name =
+    action?.label ||
+    action?.name ||
+    action?.target ||
+    action?.model ||
+    action?.value?.name ||
+    action?.value?.code ||
+    action?.code ||
+    '未命名项'
+  return `${verb} ${name}`
 }
 
 const computeLineDiff = (oldText: string, newText: string) => {
@@ -1735,11 +3537,33 @@ const diffChangeSummary = computed(() => {
 
 // ── 部署面板 ──
 interface DeployStep { key: string; label: string; status: 'pending' | 'completed' | 'error'; deps_met: boolean; error?: string; result?: any }
+interface UpdateExecutionItem {
+  id: string
+  groupKey: string
+  label: string
+  code: string
+  op: string
+  status: 'pending' | 'current' | 'completed' | 'error'
+  detail?: string
+}
+interface ExecutionLogItem {
+  id: string
+  level: 'info' | 'success' | 'error'
+  levelLabel: string
+  time: string
+  message: string
+}
 const deployOpen = ref(false)
 const deployAppId = ref<number | null>(null)
 const deploySteps = ref<DeployStep[]>([])
 const deployExecuting = ref<string | null>(null)
 const deployRunningAll = ref(false)
+const deployLastError = ref('')
+const executionLogs = ref<ExecutionLogItem[]>([])
+const deployLogExpanded = ref(false)
+const updateExecutionItems = ref<UpdateExecutionItem[]>([])
+const updateExecutionStage = ref('')
+const updateExecutionStepText = ref('')
 
 // ── 编码冲突修复 ──
 interface ConflictState {
@@ -1747,6 +3571,8 @@ interface ConflictState {
   model_name: string
   current_code: string
   message: string
+  kind: 'entity' | 'app'
+  resumeAll: boolean
   newCode: string
   resolving: boolean
 }
@@ -1758,7 +3584,110 @@ const deployAllDone = computed(() => deploySteps.value.length > 0 && deployDoneC
 const currentDeployStep = computed(() =>
   deploySteps.value.find(step => step.key === deployExecuting.value) || null
 )
+const isUpdateExecutionMode = computed(() => executingChangePlan.value && updateExecutionItems.value.length > 0)
+const updateExecutionDoneCount = computed(() => updateExecutionItems.value.filter(item => item.status === 'completed').length)
+const updateExecutionTotalCount = computed(() => updateExecutionItems.value.length)
+const updateExecutionPercent = computed(() => updateExecutionTotalCount.value ? Math.round(updateExecutionDoneCount.value / updateExecutionTotalCount.value * 100) : 0)
+const updateExecutionAllDone = computed(() => updateExecutionTotalCount.value > 0 && updateExecutionDoneCount.value === updateExecutionTotalCount.value)
+const latestExecutionLog = computed(() => executionLogs.value[0] || null)
+const currentUpdateExecutionLabel = computed(() => {
+  const current = updateExecutionItems.value.find(item => item.status === 'current')
+  return current?.label || updateExecutionStepText.value || ''
+})
 const parseReady = ref(false)
+
+function suggestNextConflictCode(code: string) {
+  const source = String(code || '').trim()
+  if (!source) return 'codeV1'
+  const matched = source.match(/^(.*?)(?:V(\d+))$/i)
+  if (matched) {
+    const prefix = matched[1] || source
+    const version = Number(matched[2] || '0')
+    return `${prefix}V${version + 1}`
+  }
+  return `${source}V1`
+}
+
+function syncCurrentDocFromPreview(summary = '当前构建后的最新文档') {
+  const content = buildDocMarkdownFromPreview().trim()
+  if (!content) return
+  latestDocContent.value = content
+  currentDocPreviewOverride.value = {
+    id: currentDocVersion.value || -1,
+    version: currentDocVersion.value || 1,
+    filename: lastParsedFilename.value || `${store.preview.appName || '功能设计文档'}.md`,
+    summary,
+    raw_content: content,
+    created_at: new Date().toISOString(),
+    key: `doc-preview-sync-${Date.now()}`,
+    isVirtual: true,
+  }
+}
+
+function focusConflictInput() {
+  nextTick(() => {
+    const el = document.querySelector<HTMLInputElement>('.conflict-input')
+    if (!el) return
+    el.focus()
+    el.select()
+  })
+}
+
+function appendExecutionLog(level: ExecutionLogItem['level'], message: string) {
+  const now = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  if (level === 'error' || level === 'success') {
+    deployLogExpanded.value = true
+  }
+  executionLogs.value = [
+    {
+      id: `${now.getTime()}-${Math.random().toString(36).slice(2, 8)}`,
+      level,
+      levelLabel: level === 'error' ? '失败' : level === 'success' ? '完成' : '进行中',
+      time: `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`,
+      message,
+    },
+    ...executionLogs.value,
+  ].slice(0, 20)
+}
+
+function resetExecutionLogs(expanded = false) {
+  executionLogs.value = []
+  deployLogExpanded.value = expanded
+}
+
+function openConflictInConversation(payload: {
+  step: string
+  modelName: string
+  currentCode: string
+  message: string
+  kind?: 'entity' | 'app'
+  resumeAll?: boolean
+}) {
+  const kind = payload.kind || 'entity'
+  const suggestedCode = suggestNextConflictCode(payload.currentCode)
+  activeView.value = 'builder'
+  deployOpen.value = true
+  messages.push({
+    id: Date.now(),
+    role: 'assistant',
+    agent: 'builder',
+    content: `⚠️ 检测到${payload.modelName}编码冲突：\`${payload.currentCode}\` 已存在。\n\n我先暂停当前构建。你可以确认建议编码 \`${suggestedCode}\`，也可以改成你想要的新编码，确认后我会继续构建。`,
+    created_at: new Date().toISOString(),
+  })
+  scrollToBottom()
+  activeConflict.value = {
+    step: payload.step,
+    model_name: payload.modelName,
+    current_code: payload.currentCode,
+    message: payload.message,
+    kind,
+    resumeAll: !!payload.resumeAll,
+    newCode: suggestedCode,
+    resolving: false,
+  }
+  focusConflictInput()
+}
 
 function buildAppCode(name: string): string {
   const source = (name || '').trim()
@@ -1904,12 +3833,35 @@ function resetConversationWorkspace() {
   docVersionDiffRight.value = ''
   docVersionDiffLeftTitle.value = ''
   docVersionDiffRightTitle.value = ''
+  expandedDocVersionKey.value = null
+  selectedDocVersionKey.value = null
+  deletingDocVersionId.value = null
+  currentDocVersionNumber.value = 1
+  completedChangePlans.value = []
 
   deployOpen.value = false
   deployAppId.value = null
   deploySteps.value = []
   deployExecuting.value = null
   deployRunningAll.value = false
+  deployLastError.value = ''
+  resetExecutionLogs()
+  updateExecutionItems.value = []
+  updateExecutionStage.value = ''
+  updateExecutionStepText.value = ''
+}
+
+function resetPreviewForNewParse() {
+  store.preview.models = []
+  store.preview.dicts = []
+  store.preview.roles = []
+  store.preview.workflows = []
+  store.preview.permissions = []
+  store.preview.appName = ''
+  store.currentApp = null
+  latestDocContent.value = ''
+  lastParsedFilename.value = ''
+  parseReady.value = false
 }
 
 const deployGroups = computed(() => {
@@ -1925,6 +3877,28 @@ const deployGroups = computed(() => {
     const ss = deploySteps.value.filter(d.test)
     return { ...d, steps: ss, allDone: ss.length > 0 && ss.every(s => s.status === 'completed'), hasError: ss.some(s => s.status === 'error'), doneCount: ss.filter(s => s.status === 'completed').length }
   }).filter(d => d.steps.length > 0)
+})
+
+const updateExecutionGroups = computed(() => {
+  const defs = [
+    { key: 'roles', title: '角色', icon: '👥' },
+    { key: 'dicts', title: '数据字典', icon: '📖' },
+    { key: 'models', title: '数据模型', icon: '🗃' },
+    { key: 'forms', title: '表单', icon: '📋' },
+    { key: 'permissions', title: '权限', icon: '🔐' },
+    { key: 'other', title: '其他', icon: '🧩' },
+  ]
+  return defs.map((def) => {
+    const items = updateExecutionItems.value.filter(item => item.groupKey === def.key)
+    return {
+      ...def,
+      items,
+      doneCount: items.filter(item => item.status === 'completed').length,
+      allDone: items.length > 0 && items.every(item => item.status === 'completed'),
+      hasCurrent: items.some(item => item.status === 'current'),
+      hasError: items.some(item => item.status === 'error'),
+    }
+  }).filter(group => group.items.length > 0)
 })
 
 async function openDeployPanel() {
@@ -1948,47 +3922,55 @@ async function loadDeployStatus() {
   try {
     const resp = await applicationApi.getStepStatus(deployAppId.value)
     deploySteps.value = resp.steps || []
-    deployOpen.value = deploySteps.value.length > 0
+    if (deploySteps.value.length > 0) {
+      deployOpen.value = true
+    }
     if (deploySteps.value.length && deploySteps.value.every(step => step.status === 'completed')) {
+      deployLastError.value = ''
       await refreshCurrentAppRemoteMeta(deployAppId.value)
     }
   } catch { /* ignore */ }
 }
 
+function persistDeployError(stepLabel: string, detail: string) {
+  const message = `${stepLabel} 失败：${detail}`
+  deployLastError.value = message
+  deployOpen.value = true
+  appendExecutionLog('error', message)
+  messages.push({
+    id: Date.now(),
+    role: 'assistant',
+    agent: 'builder',
+    content: `❌ 构建失败\n\n步骤：${stepLabel}\n原因：${detail}`,
+    created_at: new Date().toISOString(),
+  })
+  scrollToBottom()
+}
+
 async function deployExec(key: string) {
   if (!deployAppId.value) return
+  resetExecutionLogs()
   deployExecuting.value = key
+  deployLastError.value = ''
+  appendExecutionLog('info', `开始执行：${deploySteps.value.find(step => step.key === key)?.label || key}`)
   try {
     const resp = await applicationApi.executeStep(deployAppId.value, key)
     if (resp.status === 'conflict' && resp.conflict) {
       handleConflict(resp, key)
     } else if (resp.status === 'error') {
-      // create_app 失败且涉及编码问题，弹出编码修改框
+      // create_app 失败且涉及编码问题，回到对话区确认最新编码
       if (key === 'create_app' && resp.error && (resp.error.includes('编码') || resp.error.includes('code') || resp.error.includes('Code'))) {
-        try {
-          const { value: newCode } = await ElMessageBox.prompt(
-            `创建失败：${resp.error}\n\n请输入新的应用编码（如 asset-manage）：`,
-            '修改应用编码',
-            {
-              inputValue: 'app-' + Date.now().toString(36),
-              inputPattern: /^[a-zA-Z][a-zA-Z0-9\-]*$/,
-              inputErrorMessage: '编码只能包含英文字母、数字和连字符(-)，且以字母开头',
-              confirmButtonText: '重试',
-              cancelButtonText: '取消'
-            }
-          )
-          if (newCode) {
-            // 更新后端应用编码
-            await request.patch(`/applications/${deployAppId.value}/code`, { app_code: newCode })
-            // 重置步骤并重试
-            await applicationApi.resetStep(deployAppId.value, key)
-            await loadDeployStatus()
-            deployExecuting.value = null
-            await deployExec(key)
-            return
-          }
-        } catch { /* cancelled */ }
+        openConflictInConversation({
+          step: key,
+          modelName: '应用',
+          currentCode: displayAppCode.value,
+          message: resp.error,
+          kind: 'app',
+          resumeAll: false,
+        })
+        return
       } else {
+        persistDeployError(deploySteps.value.find(step => step.key === key)?.label || key, resp.error || '失败')
         ElMessage.error(resp.error || '失败')
       }
     }
@@ -1998,6 +3980,7 @@ async function deployExec(key: string) {
       ElMessage.warning('平台登录已失效，请先重新连接平台环境')
       store.showConnectModal = true
     } else {
+      persistDeployError(deploySteps.value.find(step => step.key === key)?.label || key, detail)
       ElMessage.error(detail)
     }
   }
@@ -2014,7 +3997,10 @@ async function deployRedo(key: string) {
 async function deployRunAll() {
   if (!deployAppId.value || deployRunningAll.value || deployExecuting.value !== null || deployAllDone.value) return
 
+  resetExecutionLogs()
   deployRunningAll.value = true
+  deployLastError.value = ''
+  appendExecutionLog('info', '开始自动构建')
   try {
     for (const s of deploySteps.value) {
       if (s.status === 'completed') continue
@@ -2030,12 +4016,26 @@ async function deployRunAll() {
         return  // 暂停，等用户修复冲突后可再次一键执行
       }
       if (resp.status === 'error') {
+        if (s.key === 'create_app' && resp.error && (resp.error.includes('编码') || resp.error.includes('code') || resp.error.includes('Code'))) {
+          openConflictInConversation({
+            step: s.key,
+            modelName: '应用',
+            currentCode: displayAppCode.value,
+            message: resp.error,
+            kind: 'app',
+            resumeAll: true,
+          })
+          deployExecuting.value = null
+          return
+        }
+        persistDeployError(s.label, resp.error || '失败')
         ElMessage.error(resp.error + '，已暂停')
         deployExecuting.value = null
         return
       }
     }
     deployExecuting.value = null
+    appendExecutionLog('success', '全部部署步骤已完成')
     ElMessage.success('全部完成！')
   } catch (e: any) {
     const detail = e?.response?.data?.detail || e?.message || '失败'
@@ -2043,6 +4043,7 @@ async function deployRunAll() {
       ElMessage.warning('平台登录已失效，请先重新连接平台环境')
       store.showConnectModal = true
     } else {
+      persistDeployError(currentDeployStep.value?.label || '自动构建', detail)
       ElMessage.error(detail)
     }
   } finally {
@@ -2051,48 +4052,73 @@ async function deployRunAll() {
     await loadDeployStatus()
   }
 }
+
+async function loadDeployStatusAndRunAll() {
+  await loadDeployStatus()
+  if (!deploySteps.value.length || deployAllDone.value) return
+  await deployRunAll()
+}
+
 function handleConflict(resp: any, stepKey: string) {
   const c = resp.conflict
-  // 在对话区显示冲突信息
-  messages.push({
-    id: Date.now(),
-    role: 'assistant',
-    agent: 'builder',
-    content: `\u26a0\ufe0f **编码冲突**：${c.model_name}的编码 \`${c.current_code}\` 在平台上已存在。\n\n请在下方输入一个新的编码来替换它：`,
-    created_at: new Date().toISOString(),
-  })
-  scrollToBottom()
-  // 设置冲突状态
-  activeConflict.value = {
-    step: stepKey,
-    model_name: c.model_name,
-    current_code: c.current_code,
-    message: c.message,
-    newCode: c.current_code + '_v2',
-    resolving: false,
+  if (stepKey === 'create_app') {
+    openConflictInConversation({
+      step: stepKey,
+      modelName: '应用',
+      currentCode: displayAppCode.value || c.current_code || 'app_builder',
+      message: c.message,
+      kind: 'app',
+      resumeAll: deployRunningAll.value,
+    })
+    return
   }
+  openConflictInConversation({
+    step: stepKey,
+    modelName: c.model_name,
+    currentCode: c.current_code,
+    message: c.message,
+    kind: 'entity',
+    resumeAll: deployRunningAll.value,
+  })
 }
 
 async function resolveConflictAndRetry() {
-  if (!activeConflict.value || !deployAppId.value) return
+  const appId = deployAppId.value || existingAppId.value
+  if (!activeConflict.value || !appId) return
   const c = activeConflict.value
   if (!c.newCode.trim()) { ElMessage.warning('请输入新编码'); return }
   if (c.newCode === c.current_code) { ElMessage.warning('新编码不能和旧编码相同'); return }
+  if (c.kind === 'app' && !/^[a-zA-Z][a-zA-Z0-9\-]*$/.test(c.newCode.trim())) {
+    ElMessage.warning('应用编码只能包含英文字母、数字和连字符(-)，且以字母开头')
+    return
+  }
 
   c.resolving = true
   try {
-    await applicationApi.resolveConflict(deployAppId.value, {
-      step: c.step,
-      model_name: c.model_name,
-      old_code: c.current_code,
-      new_code: c.newCode,
-    })
+    let syncSummary = `构建冲突已修复，最新编码：${c.newCode}`
+    if (c.kind === 'app') {
+      await request.patch(`/applications/${appId}/code`, { app_code: c.newCode })
+      await applicationApi.resetStep(appId, c.step)
+      loadedAppCode.value = c.newCode
+      parsedAppCode.value = c.newCode
+      syncSummary = `应用编码已更新为 ${c.newCode}`
+    } else {
+      const resolveResp = await applicationApi.resolveConflict(appId, {
+        step: c.step,
+        model_name: c.model_name,
+        old_code: c.current_code,
+        new_code: c.newCode,
+      })
+      if (resolveResp?.doc_version) {
+        await loadLatestDocForApp(deployAppId.value)
+      }
+    }
     // 在对话区显示修复成功
     messages.push({
       id: Date.now(),
       role: 'assistant',
       agent: 'builder',
-      content: `\u2705 编码已更新：\`${c.current_code}\` \u2192 \`${c.newCode}\`\n\n正在重试该步骤...`,
+      content: `\u2705 编码已更新：\`${c.current_code}\` \u2192 \`${c.newCode}\`\n\n我会用这个最新编码继续重试当前构建步骤。`,
       created_at: new Date().toISOString(),
     })
     scrollToBottom()
@@ -2100,17 +4126,24 @@ async function resolveConflictAndRetry() {
     activeConflict.value = null
     // 重新加载配置预览（编码已变）
     try {
-      const appData = await applicationApi.get(deployAppId.value) as any
-      if (appData.config_preview) {
-        const cfg = typeof appData.config_preview === 'string' ? JSON.parse(appData.config_preview) : appData.config_preview
-        const d = cfg.data || cfg
-        store.preview = { appName: appData.app_name, models: d.models || [], roles: d.roles || [], dicts: d.dicts || [], workflows: d.workflows || [], permissions: d.permissions || [] }
-      }
-    } catch { /* ignore */ }
+        const appData = await applicationApi.get(appId) as any
+        if (appData.config_preview) {
+          const cfg = typeof appData.config_preview === 'string' ? JSON.parse(appData.config_preview) : appData.config_preview
+          const d = cfg.data || cfg
+          store.preview = { appName: appData.app_name, models: d.models || [], roles: d.roles || [], dicts: d.dicts || [], workflows: d.workflows || [], permissions: d.permissions || [] }
+        }
+      } catch { /* ignore */ }
+    syncCurrentDocFromPreview(syncSummary)
     // 自动重试
     await deployExec(conflictStep)
+    if (c.resumeAll) {
+      await deployRunAll()
+    }
   } catch (e: any) {
-    ElMessage.error(e.message || '修复失败')
+    const detail = e?.response?.data?.detail || e?.message || '修复失败'
+    deployLastError.value = `编码修复失败：${detail}`
+    appendExecutionLog('error', `编码修复失败：${detail}`)
+    ElMessage.error(detail)
   } finally {
     if (activeConflict.value) activeConflict.value.resolving = false
   }
@@ -2142,7 +4175,7 @@ const startDeployFlow = async () => {
           // 有未完成步骤，直接打开部署面板继续
           deployAppId.value = existingAppId.value
           deployOpen.value = true
-          await loadDeployStatus()
+          await loadDeployStatusAndRunAll()
           return
         }
       } catch { /* ignore */ }
@@ -2217,7 +4250,7 @@ const startGenerateWithEnv = async (envId: number) => {
     // 不跳转，在本页打开部署面板
     deployAppId.value = newAppId
     deployOpen.value = true
-    await loadDeployStatus()
+    await loadDeployStatusAndRunAll()
   } catch (e: any) {
     ElMessage.error('创建应用失败: ' + (e.message || ''))
   } finally {
@@ -2227,6 +4260,7 @@ const startGenerateWithEnv = async (envId: number) => {
 
 const uploadDocFile = async (file: File) => {
   const fileText = await file.text()
+  resetPreviewForNewParse()
   const codeFromDoc = extractAppCodeFromText(fileText)
   if (codeFromDoc) {
     parsedAppCode.value = codeFromDoc
@@ -2235,23 +4269,54 @@ const uploadDocFile = async (file: File) => {
   const userMsgId = Date.now()
   messages.push({ id: userMsgId, role: 'user', content: `📄 上传设计文档: ${file.name}`, created_at: '' })
 
-  // 结构化进度状态
   const progressMsgId = userMsgId + 1
-  const phases = reactive<Record<string, { icon: string, label: string, status: string, detail: string }>>({
-    skeleton: { icon: '📋', label: '提取骨架', status: 'pending', detail: '' },
-    dicts: { icon: '📖', label: '字典选项', status: 'pending', detail: '' },
-    models: { icon: '🗃', label: '模型字段', status: 'pending', detail: '' },
-    complete: { icon: '✨', label: '拼装配置', status: 'pending', detail: '' },
-  })
+  const parseTracker = reactive({
+    currentStep: '正在读取文档...',
+    docs: 'done',
+    roles: 'pending',
+    dicts: 'pending',
+    models: 'pending',
+    forms: 'pending',
+    permissions: 'pending',
+  } as Record<string, string>)
 
-  const buildProgressContent = () => {
-    const lines = [`**📄 解析文档：${file.name}**\n`]
-    const code = parsedAppCode.value || loadedAppCode.value
-    if (code) lines.push(`应用编码：\`${code}\``)
-    for (const [, p] of Object.entries(phases)) {
-      const icon = p.status === 'done' ? '✅' : p.status === 'running' ? '🔄' : '○'
-      lines.push(`${icon} **${p.label}**　${p.detail}`)
+  const syncParseTrackerFromPreview = (markDone = false) => {
+    if (store.preview.roles.length > 0 || markDone) parseTracker.roles = 'done'
+    if (store.preview.dicts.length > 0 || markDone) parseTracker.dicts = 'done'
+    if (store.preview.models.length > 0 || markDone) parseTracker.models = 'done'
+    if (formPreviewItems.value.length > 0 || markDone) parseTracker.forms = 'done'
+    if (permissionPreviewItems.value.length > 0 || markDone) parseTracker.permissions = 'done'
+  }
+
+  const buildProgressContent = (done = false) => {
+    const lines = [`**📄 解析文档：${file.name}**`, '']
+    const summaryItems = [
+      { key: 'roles', label: '角色', count: store.preview.roles.length },
+      { key: 'dicts', label: '数据字典', count: store.preview.dicts.length },
+      { key: 'models', label: '数据模型', count: store.preview.models.length },
+      { key: 'forms', label: '表单', count: formPreviewItems.value.length },
+      { key: 'permissions', label: '权限', count: permissionPreviewItems.value.length },
+      { key: 'docs', label: '文档', count: (latestDocContent.value.trim() || fileText.trim()) ? 1 : 0 },
+    ]
+    syncParseTrackerFromPreview(done)
+    const doneCount = summaryItems.filter(item => item.key === 'docs' ? true : (done || parseTracker[item.key] === 'done')).length
+    const percent = Math.round(doneCount / summaryItems.length * 100)
+
+    lines.push(`**解析进度** ${percent}%`)
+    lines.push(`当前步骤：${done ? '解析完成' : parseTracker.currentStep}`)
+    lines.push('')
+    for (const item of summaryItems) {
+      const status = done ? 'done' : parseTracker[item.key]
+      const icon = status === 'done' ? '✅' : status === 'running' ? '🔄' : '○'
+      const suffix = status === 'running' && item.count === 0 ? '解析中...' : `${item.count} 项`
+      lines.push(`${icon} **${item.label}** ${suffix}`)
     }
+
+    if (done) {
+      lines.push('')
+      lines.push('请检查右侧预览内容，点击右上方「开始构建」即可开始在低代码上搭建。')
+    }
+
     return lines.join('\n')
   }
 
@@ -2299,19 +4364,25 @@ const uploadDocFile = async (file: File) => {
 
             if (currentEvent === 'progress') {
               const msg = data.message || ''
-              // 解析 [phase] message 格式
               const phaseMatch = msg.match(/^\[(\w+)\]\s*(.*)/)
-              if (phaseMatch) {
-                const [, phase, detail] = phaseMatch
-                if (phases[phase]) {
-                  phases[phase].status = 'running'
-                  phases[phase].detail = detail
+              parseTracker.currentStep = phaseMatch?.[2] || msg || '正在解析中...'
 
-                  // 如果当前 phase 完成了
-                  if (detail.includes('完成')) {
-                    phases[phase].status = 'done'
-                  }
-                }
+              if (phaseMatch?.[1] === 'skeleton') {
+                parseTracker.roles = 'running'
+                parseTracker.forms = 'running'
+              } else if (phaseMatch?.[1] === 'dicts') {
+                parseTracker.dicts = 'running'
+              } else if (phaseMatch?.[1] === 'models') {
+                parseTracker.models = 'running'
+                parseTracker.forms = 'running'
+              } else if (phaseMatch?.[1] === 'permissions') {
+                parseTracker.permissions = 'running'
+              } else if (phaseMatch?.[1] === 'complete') {
+                parseTracker.roles = parseTracker.roles === 'done' ? 'done' : 'running'
+                parseTracker.dicts = parseTracker.dicts === 'done' ? 'done' : 'running'
+                parseTracker.models = parseTracker.models === 'done' ? 'done' : 'running'
+                parseTracker.forms = parseTracker.forms === 'done' ? 'done' : 'running'
+                parseTracker.permissions = parseTracker.permissions === 'done' ? 'done' : 'running'
               }
 
               // 实时更新预览：字典批次
@@ -2359,6 +4430,7 @@ const uploadDocFile = async (file: File) => {
                 if (!store.preview.roles.length && Array.isArray(data.data.roles)) {
                   store.preview.roles = data.data.roles
                 }
+                syncParseTrackerFromPreview()
               }
 
               // 更新进度消息
@@ -2426,12 +4498,10 @@ const uploadDocFile = async (file: File) => {
       fetchDocVersions()
 
       // 替换进度消息为完成总结
-      const completePhase = phases.complete
-      if (pmsg && completePhase) {
-        completePhase.status = 'done'
-        completePhase.detail = `${store.preview.models.length} 模型, ${store.preview.dicts.length} 字典, ${store.preview.roles.length} 角色`
+      if (pmsg) {
+        parseTracker.currentStep = '解析完成'
         parseReady.value = true
-        pmsg.content = buildProgressContent() + '\n\n配置已就绪，请点击下方「开始生成」。'
+        pmsg.content = buildProgressContent(true)
       }
     } else if (pmsg) {
       pmsg.content += '\n\n⚠️ 解析完成但未获取到配置数据'
@@ -2473,22 +4543,81 @@ const handleDocUpload = async (e: Event) => {
 
 // ── 上传文档新版本并分析变更 ──
 const handleDocVersionUpload = async (file: File, appId: number) => {
+  const fileText = await file.text()
+  lastParsedFilename.value = file.name
+  latestDocContent.value = fileText
+  currentDocPreviewOverride.value = {
+    id: -1,
+    version: currentDocVersion.value,
+    filename: file.name,
+    summary: '当前解析出的最新文档',
+    raw_content: fileText,
+    created_at: new Date().toISOString(),
+    key: `doc-preview-override-${Date.now()}`,
+    isVirtual: true,
+  }
+
   const userMsgId = Date.now()
   messages.push({ id: userMsgId, role: 'user', content: `📄 上传文档新版本: ${file.name}`, created_at: '' })
 
   const progressMsgId = userMsgId + 1
+  const updateParseTracker = reactive({
+    currentStep: '准备开始...',
+    compare: 'pending',
+    parse: 'pending',
+    merge: 'pending',
+    diff: 'pending',
+    save: 'pending',
+  } as Record<string, string>)
+
+  const buildUpdateProgressContent = (done = false, extraMessage = '') => {
+    const phases = [
+      { key: 'compare', label: '文档对比' },
+      { key: 'parse', label: '章节解析' },
+      { key: 'merge', label: '结果合并' },
+      { key: 'diff', label: '资源对比' },
+      { key: 'save', label: '保存结果' },
+    ]
+    const completed = done
+      ? phases.length
+      : phases.filter(item => updateParseTracker[item.key] === 'done').length
+    const percent = Math.round(completed / phases.length * 100)
+    const lines = [
+      `**📄 上传文档新版本：${file.name}**`,
+      '',
+      `**解析进度** ${percent}%`,
+      `当前步骤：${done ? '处理完成' : updateParseTracker.currentStep}`,
+      '',
+    ]
+
+    for (const phase of phases) {
+      const status = done ? 'done' : updateParseTracker[phase.key]
+      const icon = status === 'done' ? '✅' : status === 'running' ? '🔄' : '○'
+      const suffix = status === 'running' ? '进行中...' : status === 'done' ? '已完成' : '等待中'
+      lines.push(`${icon} **${phase.label}** ${suffix}`)
+    }
+
+    if (extraMessage) {
+      lines.push('')
+      lines.push(extraMessage)
+    }
+
+    return lines.join('\n')
+  }
+
   messages.push({
     id: progressMsgId,
     role: 'assistant',
     agent: 'builder',
-    content: '正在分析文档变更...',
+    content: buildUpdateProgressContent(),
     created_at: ''
   })
   scrollToBottom()
 
   try {
-    // 如果没有会话ID，自动创建一个关联到当前应用
-    if (!conversationId.value) {
+    // 已部署应用更新时强制新建会话，保持每个版本对应独立对话；未部署时复用已有会话
+    if (!conversationId.value || isPlatformDeployed.value) {
+      conversationId.value = null
       try {
         const newConv = await conversationApi.create({
           agent_type: 'builder',
@@ -2546,13 +4675,41 @@ const handleDocVersionUpload = async (file: File, appId: number) => {
               if (pmsg) {
                 const step = data.step || data.phase || ''
                 const msg = data.message || ''
-                const icon = step === 'indexing' ? '📑' : step === 'parsing' ? '🔍' : step === 'diffing' ? '📊' : '⏳'
-                pmsg.content = `${icon} ${msg}`
+                updateParseTracker.currentStep = msg || step || '处理中...'
+                if (step === 'text_diff') {
+                  updateParseTracker.compare = 'done'
+                  updateParseTracker.parse = 'running'
+                } else if (step === 'parse_changes' || step === 'AI 解析文档配置...') {
+                  updateParseTracker.parse = 'running'
+                } else if (step === 'merge') {
+                  updateParseTracker.parse = 'done'
+                  updateParseTracker.merge = 'running'
+                } else if (step === '对比资源差异...') {
+                  updateParseTracker.merge = 'done'
+                  updateParseTracker.diff = 'running'
+                } else if (step === '保存版本记录...') {
+                  updateParseTracker.diff = 'done'
+                  updateParseTracker.save = 'running'
+                } else if (msg.includes('正在对比文档章节')) {
+                  updateParseTracker.compare = 'running'
+                }
+
+                if (data.data && typeof data.data === 'object' && step === 'text_diff') {
+                  const stats = data.data
+                  pmsg.content = buildUpdateProgressContent(false, `章节统计：新增 ${stats.added || 0}、修改 ${stats.modified || 0}、删除 ${stats.removed || 0}、未变更 ${stats.unchanged || 0}`)
+                } else {
+                  pmsg.content = buildUpdateProgressContent()
+                }
               }
               scrollToBottom()
             } else if (currentEvent === 'done') {
+              updateParseTracker.compare = 'done'
+              updateParseTracker.parse = 'done'
+              updateParseTracker.merge = 'done'
+              updateParseTracker.diff = 'done'
+              updateParseTracker.save = 'done'
+              updateParseTracker.currentStep = '处理完成'
               changePlanData = data.change_plan || data
-              // P0: 用 V2 配置更新 preview store
               if (data.parsed_config) {
                 const pc = data.parsed_config.data || data.parsed_config
                 store.preview.appName = pc.appName || store.preview.appName
@@ -2561,7 +4718,12 @@ const handleDocVersionUpload = async (file: File, appId: number) => {
                 store.preview.roles = pc.roles || []
                 store.preview.workflows = pc.workflows || []
                 store.preview.permissions = pc.permissions || []
-                store.currentApp = { name: store.preview.appName, status: 'draft' }
+                store.currentApp = {
+                  ...(store.currentApp || {}),
+                  name: store.preview.appName || store.currentApp?.name || '',
+                  status: 'draft',
+                  apaas_app_id: store.currentApp?.apaas_app_id,
+                }
               }
             } else if (currentEvent === 'error') {
               throw new Error(data.message || '文档分析失败')
@@ -2573,44 +4735,46 @@ const handleDocVersionUpload = async (file: File, appId: number) => {
       }
     }
 
-    // 处理变更计划
+    // 处理变更计划 —— 启用对比视图，右侧展示变更详情
     if (changePlanData) {
-      // 确保 actions 有 selected 属性
-      if (changePlanData.actions) {
-        changePlanData.actions = changePlanData.actions.map((a: any) => ({
-          ...a,
-          selected: a.selected !== undefined ? a.selected : true
-        }))
+      const normalizedChangePlan = normalizeChangePlanState(changePlanData)
+      const hasHistory = normalizedChangePlan && normalizedChangePlan.fromVersion > 0
+
+      // 将最新解析结果更新到 store
+      const pc = changePlanData.parsed_config?.data || changePlanData.parsed_config
+      if (pc) {
+        store.preview.appName = pc.appName || store.preview.appName
+        store.preview.roles = pc.roles || []
+        store.preview.dicts = pc.dicts || []
+        store.preview.models = pc.models || []
+        store.preview.workflows = pc.workflows || []
+        store.preview.permissions = pc.permissions || []
       }
-      // 映射后端字段名到前端期望的字段名
-      const toVersion = changePlanData.version || 1
-      store.changePlan = {
-        ...changePlanData,
-        id: changePlanData.change_plan_id || changePlanData.id,
-        fromVersion: changePlanData.is_first_version ? 0 : (toVersion - 1),
-        toVersion: toVersion,
-        diffSummary: changePlanData.diff || changePlanData.diffSummary,
-      }
-      store.showChangePlan = true
+
+      // 启用 update review 模式，右侧面板展示变更对比
+      applyChangePlanState(changePlanData)
+      builderPreviewTab.value = getPreferredUpdateTab()
 
       const pmsg = messages.find(m => m.id === progressMsgId)
       if (pmsg) {
-        // op 格式为 add_model, add_dict, modify_field, remove_role 等
         const addCount = changePlanData.actions?.filter((a: any) => a.op?.startsWith('add')).length || 0
         const modCount = changePlanData.actions?.filter((a: any) => a.op?.startsWith('modify') || a.op?.startsWith('update')).length || 0
         const delCount = changePlanData.actions?.filter((a: any) => a.op?.startsWith('remove') || a.op?.startsWith('delete')).length || 0
-        pmsg.content = `📊 文档变更分析完成：新增 ${addCount} 项，修改 ${modCount} 项，删除 ${delCount} 项。\n\n请在右侧面板确认要执行的变更。`
+        pmsg.content = hasHistory
+          ? buildUpdateProgressContent(true, `文档更新解析完成：与上一版对比，新增 ${addCount} 项，修改 ${modCount} 项，删除 ${delCount} 项。右侧已展示变更对比详情，确认后可点击「执行更新」。`)
+          : buildUpdateProgressContent(true, `文档解析完成，识别到 ${store.preview.models.length} 个模型、${store.preview.dicts.length} 个字典、${store.preview.roles.length} 个角色。右侧已展示配置详情。`)
       }
+
     } else {
       const pmsg = messages.find(m => m.id === progressMsgId)
       if (pmsg) {
-        pmsg.content = '文档分析完成，未发现配置变更。'
+        pmsg.content = buildUpdateProgressContent(true, '文档分析完成，未发现配置变更。')
       }
     }
   } catch (err: any) {
     const pmsg = messages.find(m => m.id === progressMsgId)
     if (pmsg) {
-      pmsg.content = `❌ 文档变更分析失败: ${err?.message || '未知错误'}`
+      pmsg.content = `❌ ${buildUpdateProgressContent(false, `文档变更分析失败：${err?.message || '未知错误'}`)}`
     } else {
       messages.push({
         id: Date.now(),
@@ -2628,8 +4792,18 @@ const executeChangePlan = async () => {
   if (!store.changePlan || !existingAppId.value) return
   const appId = existingAppId.value
   const planId = store.changePlan.id
+  const selectedActions = Array.isArray(store.changePlan.actions)
+    ? store.changePlan.actions.filter((action: any) => action.selected !== false)
+    : []
 
   executingChangePlan.value = true
+  deployOpen.value = true
+  deployLastError.value = ''
+  resetExecutionLogs()
+  appendExecutionLog('info', '开始执行文档增量更新')
+  updateExecutionItems.value = buildUpdateExecutionItems(selectedActions)
+  updateExecutionStage.value = 'prepare'
+  updateExecutionStepText.value = '准备执行本次更新...'
 
   // 构建 selections
   const selections: Record<string, boolean> = {}
@@ -2637,6 +4811,7 @@ const executeChangePlan = async () => {
     selections[a.id] = a.selected
   })
 
+  clearChangePlanExecutionMessages()
   const execMsgId = Date.now()
   messages.push({
     id: execMsgId,
@@ -2688,6 +4863,9 @@ const executeChangePlan = async () => {
             const data = JSON.parse(dataStr)
 
             if (currentEvent === 'progress') {
+              completeCurrentUpdateExecutionItems()
+              markUpdateExecutionStage(data.stage || '', data.step || data.message || '')
+              appendExecutionLog('info', data.message || data.step || '正在执行更新步骤')
               const emsg = messages.find(m => m.id === execMsgId)
               if (emsg) {
                 const msg = data.message || ''
@@ -2697,6 +4875,12 @@ const executeChangePlan = async () => {
               }
               scrollToBottom()
             } else if (currentEvent === 'done') {
+              if (data?.platform_synced === false || (Array.isArray(data?.sync_errors) && data.sync_errors.length > 0)) {
+                const detail = Array.isArray(data?.sync_errors) && data.sync_errors.length
+                  ? data.sync_errors.join('；')
+                  : '平台同步未完成'
+                throw new Error(detail)
+              }
               updatedConfig = data.updated_config || data.config || data
             } else if (currentEvent === 'error') {
               throw new Error(data.message || '执行失败')
@@ -2725,15 +4909,30 @@ const executeChangePlan = async () => {
     if (emsg) {
       emsg.content = `✅ 变更计划执行完成！已选 ${changePlanSelectedCount.value} 项变更已应用。`
     }
+    appendExecutionLog('success', `变更计划执行完成，已应用 ${changePlanSelectedCount.value} 项变更`)
+    updateExecutionItems.value = updateExecutionItems.value.map((item) => ({ ...item, status: 'completed', detail: item.detail || '已完成' }))
+    updateExecutionStepText.value = '本次更新执行完成'
 
-    // 关闭面板
-    store.showChangePlan = false
-    store.changePlan = null
+    if (existingAppId.value) {
+      await fetchDocVersions()
+      await loadLatestDocForApp(existingAppId.value)
+      await refreshCurrentAppRemoteMeta(existingAppId.value)
+    }
+
+    clearChangePlanState()
   } catch (err: any) {
+    const detail = err?.message || '未知错误'
+    updateExecutionItems.value = updateExecutionItems.value.map((item, index) => {
+      const isFirstPending = item.status === 'current' || (item.status === 'pending' && !updateExecutionItems.value.slice(0, index).some(prev => prev.status === 'pending' || prev.status === 'current'))
+      return isFirstPending ? { ...item, status: 'error', detail } : item
+    })
     const emsg = messages.find(m => m.id === execMsgId)
     if (emsg) {
-      emsg.content = `❌ 变更执行失败: ${err?.message || '未知错误'}`
+      emsg.content = `❌ 变更执行失败: ${detail}`
     }
+    deployLastError.value = `更新执行失败：${detail}`
+    deployOpen.value = true
+    appendExecutionLog('error', `更新执行失败：${detail}`)
   } finally {
     executingChangePlan.value = false
   }
@@ -2879,7 +5078,7 @@ const startAssembleConfig = async () => {
     }
     messages.push({
       id: Date.now(), role: 'assistant', agent: 'builder',
-      content: `解析信息已生成！${store.preview.models.length} 个模型、${store.preview.dicts.length} 个字典、${store.preview.roles.length} 个角色。\n\n你可以继续补充右侧解析内容，确认无误后再点击 **开始部署**。`,
+      content: `解析信息已生成！${store.preview.models.length} 个模型、${store.preview.dicts.length} 个字典、${store.preview.roles.length} 个角色。\n\n你可以继续补充右侧解析内容，确认无误后再点击 **开始构建**。`,
       created_at: ''
     })
     scrollToBottom()
@@ -2925,10 +5124,20 @@ const createConversation = async () => {
 }
 
 const sendMessage = async () => {
-  if (!inputText.value.trim()) return
+  if (!canSendMessage.value) return
   const text = inputText.value.trim()
+  const imagePayload = pendingChatImage.value
+  const shouldUseBuilderConversation = (parseReady.value || !!existingAppId.value || hasPreviewContent.value) && currentAgent.value === 'requirements'
   inputText.value = ''
-  messages.push({ id: Date.now(), role: 'user', content: text, created_at: '' })
+  pendingChatImage.value = null
+  messages.push({
+    id: Date.now(),
+    role: 'user',
+    content: imagePayload
+      ? buildUserChatImageContent(text, imagePayload.previewUrl, imagePayload.file.name)
+      : text,
+    created_at: ''
+  })
   scrollToBottom()
   isTyping.value = true
 
@@ -2944,21 +5153,46 @@ const sendMessage = async () => {
     return
   }
 
+  if (shouldUseBuilderConversation && conversationId.value) {
+    try {
+      await conversationApi.updateAgentType(conversationId.value, 'builder')
+      currentAgent.value = 'builder'
+    } catch (e) {
+      console.warn('Failed to switch conversation to builder mode before sending message', e)
+    }
+  }
+
+  const incrementalConfigPayload = (parseReady.value || !!existingAppId.value || hasPreviewContent.value)
+    ? { type: 'preview', data: { ...store.preview } }
+    : null
+
   // 调用后端API
   try {
     const token = localStorage.getItem('token')
-    // 统一使用 /chat/send，后端根据 conversation.agent_type 选择 system prompt
-    const chatUrl = `${API_PREFIX}/chat/send`
-    const chatBody = JSON.stringify({
-      conversation_id: conversationId.value,
-      message: text,
-      ...(isRequirementsMode.value ? {} : (store.preview.appName ? { current_config: { ...store.preview } } : {}))
-    })
-    const response = await fetch(chatUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-      body: chatBody
-    })
+    const response = imagePayload
+      ? await (() => {
+          const formData = new FormData()
+          formData.append('conversation_id', String(conversationId.value))
+          formData.append('message', text)
+          formData.append('file', imagePayload.file)
+          if (incrementalConfigPayload) {
+            formData.append('current_config', JSON.stringify(incrementalConfigPayload))
+          }
+          return fetch(`${API_PREFIX}/chat/send-with-file`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}` },
+            body: formData
+          })
+        })()
+      : await fetch(`${API_PREFIX}/chat/send`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({
+            conversation_id: conversationId.value,
+            message: text,
+            ...(incrementalConfigPayload ? { current_config: incrementalConfigPayload } : {})
+          })
+        })
 
     if (!response.ok) throw new Error('发送失败')
 
@@ -3061,6 +5295,10 @@ const sendMessage = async () => {
     isTyping.value = false
     messages.push({ id: Date.now(), role: 'assistant', agent: currentAgent.value, content: '发送失败，请重试。', created_at: '' })
     scrollToBottom()
+  } finally {
+    if (!pendingChatImage.value && chatImageInputRef.value) {
+      chatImageInputRef.value.value = ''
+    }
   }
 }
 
@@ -3429,16 +5667,38 @@ const buildDocMarkdownFromPreview = () => {
 
 const downloadCurrentDoc = () => {
   const content = (latestDocContent.value || '').trim() || buildDocMarkdownFromPreview()
-  const filename = lastParsedFilename.value || `${store.preview.appName || '功能设计文档'}.md`
+  const filename = buildDocFilename(displayDocVersions.value[0])
+  downloadMarkdownContent(content, filename)
+}
+
+const buildDocFilename = (ver?: Pick<DocVersion, 'filename' | 'version'> | null) => {
+  const baseName = ver?.filename || lastParsedFilename.value || `${store.preview.appName || '功能设计文档'}`
+  const normalized = baseName.endsWith('.md') ? baseName.slice(0, -3) : baseName
+  if (ver?.version && !/[-_ ]v\d+$/i.test(normalized)) {
+    return `${normalized}-V${ver.version}.md`
+  }
+  return baseName.endsWith('.md') ? baseName : `${baseName}.md`
+}
+
+const downloadMarkdownContent = (content: string, filename: string) => {
   const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = filename.endsWith('.md') ? filename : `${filename}.md`
+  a.download = filename
   document.body.appendChild(a)
   a.click()
   a.remove()
   URL.revokeObjectURL(url)
+}
+
+const downloadDocVersion = (ver: DocVersionListItem) => {
+  const content = (ver.raw_content || '').trim() || docPreviewContent.value
+  if (!content) {
+    ElMessage.warning('暂无可下载的设计文档内容')
+    return
+  }
+  downloadMarkdownContent(content, buildDocFilename(ver))
 }
 
 const formatContent = (t: string) => {
@@ -3468,6 +5728,10 @@ onMounted(async () => {
   } catch (e) { /* ignore */ }
 
   await loadBuilderModelOptions()
+  if (store.pendingBuilderModelId != null) {
+    applyBuilderModelSelection(store.pendingBuilderModelId)
+    store.pendingBuilderModelId = null
+  }
 
   // ── 优先通过 app_id 加载应用（应用为锚点）──
   const appIdParam = route.query.app_id as string
@@ -3500,7 +5764,8 @@ onMounted(async () => {
         await loadDeployStatus()
         await refreshCurrentAppRemoteMeta(aid)
         await restoreActiveViewForApp(app)
-        await loadLatestDocForApp(aid)
+        const docVersionPayload = await loadLatestDocForApp(aid)
+        await restorePendingChangePlan(aid, docVersionPayload)
         console.log(`Loaded app ${aid}: ${app.app_name}, status=${app.status}, conv=${app.conversation_id}`)
         // 加载关联对话的历史消息
         if (app.conversation_id) {
@@ -3569,7 +5834,7 @@ onMounted(async () => {
                 store.preview.roles = data.roles || []
                 store.preview.workflows = data.workflows || []
                 store.preview.permissions = data.permissions || []
-                store.currentApp = { name: store.preview.appName, status: 'draft' }
+                store.currentApp = { name: store.preview.appName, status: 'draft', apaas_app_id: linkedApp.apaas_app_id }
                 parseReady.value = store.preview.models.length > 0
                 existingAppId.value = linkedApp.id
                 loadedAppCode.value = linkedApp.app_code || ''
@@ -3577,7 +5842,8 @@ onMounted(async () => {
                 deployAppId.value = linkedApp.id
                 await loadDeployStatus()
                 await refreshCurrentAppRemoteMeta(linkedApp.id)
-                await loadLatestDocForApp(linkedApp.id)
+                const docVersionPayload = await loadLatestDocForApp(linkedApp.id)
+                await restorePendingChangePlan(linkedApp.id, docVersionPayload)
                 // 更新 URL 为 app_id 模式
                 router.replace({ path: '/chat', query: { app_id: String(linkedApp.id) } })
                 console.log('Migrated to app-centric URL:', linkedApp.id)
@@ -3614,7 +5880,7 @@ onMounted(async () => {
           store.preview.models = data.models || []
           store.preview.dicts = data.dicts || []
           store.preview.roles = data.roles || []
-          store.currentApp = { name: store.preview.appName, status: app.status || 'ready' }
+          store.currentApp = { name: store.preview.appName, status: app.status || 'ready', apaas_app_id: app.apaas_app_id }
           parseReady.value = store.preview.models.length > 0
           currentAgent.value = 'builder'
         }
@@ -3624,7 +5890,8 @@ onMounted(async () => {
         await loadDeployStatus()
         await refreshCurrentAppRemoteMeta(aid)
         await restoreActiveViewForApp(app)
-        await loadLatestDocForApp(aid)
+        const docVersionPayload = await loadLatestDocForApp(aid)
+        await restorePendingChangePlan(aid, docVersionPayload)
         // 加载关联的对话
         if (app.conversation_id) {
           conversationId.value = app.conversation_id
@@ -3728,6 +5995,7 @@ watch(() => route.query.app_id, async (newAppId, oldAppId) => {
   store.currentApp = null
   latestDocContent.value = ''
   conversationId.value = null
+  completedChangePlans.value = []
   activeView.value = 'builder'
   platformIframeUrl.value = ''
   platformAppUrl.value = ''
@@ -3736,8 +6004,10 @@ watch(() => route.query.app_id, async (newAppId, oldAppId) => {
   platformLoading.value = false
   platformError.value = ''
   platformLoginHint.value = ''
+  deployOpen.value = false
 
   try {
+    clearChangePlanState()
     const app = await applicationApi.get(aid) as any
     let configData: any = null
     if (app.config_preview) {
@@ -3757,7 +6027,8 @@ watch(() => route.query.app_id, async (newAppId, oldAppId) => {
     loadedAppCode.value = app.app_code || pickAppCode(configData) || ''
     parsedAppCode.value = loadedAppCode.value || parsedAppCode.value
     await restoreActiveViewForApp(app)
-    await loadLatestDocForApp(aid)
+    const docVersionPayload = await loadLatestDocForApp(aid)
+    await restorePendingChangePlan(aid, docVersionPayload)
     if (app.conversation_id) {
       conversationId.value = app.conversation_id
       selectedConversationId.value = app.conversation_id
@@ -3778,6 +6049,7 @@ watch(() => route.query.app_id, async (newAppId, oldAppId) => {
 })
 
 onBeforeUnmount(() => {
+  clearPendingChatImage()
   clearPlatformIframeRepairTimer()
 })
 
@@ -3787,23 +6059,37 @@ watch(activeView, (view) => {
   }
 })
 
-// 切换到文档 tab 时自动加载版本列表
-watch(() => store.previewTab, (tab) => {
-  if (tab === 'workflow') {
-    store.previewTab = 'overview'
-    return
+watch(isUpdateReviewMode, (enabled) => {
+  if (!enabled) return
+  deployOpen.value = true
+  const currentTabVisible = visibleBuilderPreviewTabs.value.some(tab => tab.key === builderPreviewTab.value)
+  if (!currentTabVisible || getBuilderTabCount(builderPreviewTab.value) === 0) {
+    builderPreviewTab.value = getPreferredUpdateTab()
   }
+}, { immediate: true })
+
+watch(displayDocVersions, (versions) => {
+  if (expandedDocVersionKey.value && !versions.some(ver => ver.key === expandedDocVersionKey.value)) {
+    expandedDocVersionKey.value = null
+  }
+  if (selectedDocVersionKey.value && !versions.some(ver => ver.key === selectedDocVersionKey.value)) {
+    selectedDocVersionKey.value = versions[0]?.key || null
+  }
+}, { immediate: true })
+
+// 切换到文档 tab 时自动加载版本列表
+watch(builderPreviewTab, (tab) => {
   if (tab === 'docs' && (existingAppId.value || conversationId.value) && docVersions.value.length === 0) {
     fetchDocVersions()
   }
 })
 watch(existingAppId, (id) => {
-  if (id && store.previewTab === 'docs') {
+  if (id && builderPreviewTab.value === 'docs') {
     fetchDocVersions()
   }
 })
 watch(conversationId, (id) => {
-  if (id && store.previewTab === 'docs' && !existingAppId.value) {
+  if (id && builderPreviewTab.value === 'docs' && !existingAppId.value) {
     fetchDocVersions()
   }
 })
@@ -4377,6 +6663,27 @@ watch(conversationId, (id) => {
   color: var(--t-text-primary); border-bottom-left-radius: 4px;
   box-shadow: var(--t-shadow-sm);
 }
+.chat-inline-upload {
+  margin-top: 8px;
+  padding: 10px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.14);
+}
+.bubble-content.assistant .chat-inline-upload {
+  background: rgba(99, 102, 241, 0.08);
+}
+.chat-inline-upload-label {
+  margin-bottom: 8px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.chat-inline-upload-image {
+  display: block;
+  max-width: min(280px, 100%);
+  max-height: 220px;
+  border-radius: 10px;
+  object-fit: cover;
+}
 @keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes aiPulse {
   0%, 100% { opacity: 0.55; transform: scale(1); }
@@ -4427,12 +6734,16 @@ watch(conversationId, (id) => {
   color: var(--t-text-muted);
   display: flex;
   align-items: center;
+  justify-content: center;
   padding: 4px;
   border-radius: 6px;
-  transition: color 0.15s;
+  border: none;
+  background: transparent;
+  transition: color 0.15s, background-color 0.15s;
   flex-shrink: 0;
 }
-.upload-btn:hover { color: var(--t-text-primary); }
+.upload-btn:hover { color: var(--t-text-primary); background: rgba(129, 140, 248, 0.08); }
+.upload-btn.screenshot { margin-left: 2px; }
 .input-card-top textarea {
   flex: 1;
   border: none;
@@ -4461,6 +6772,57 @@ watch(conversationId, (id) => {
 }
 .send-btn.disabled { opacity: 0.2; cursor: not-allowed; }
 .send-btn:hover:not(.disabled) { opacity: 0.92; transform: translateY(-1px); box-shadow: 0 14px 24px rgba(92, 115, 255, 0.28); }
+.chat-attachment-preview {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 2px 8px 8px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: rgba(99, 102, 241, 0.08);
+  border: 1px solid rgba(129, 140, 248, 0.18);
+}
+.chat-attachment-preview-image {
+  width: 48px;
+  height: 48px;
+  border-radius: 10px;
+  object-fit: cover;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.12);
+  flex-shrink: 0;
+}
+.chat-attachment-preview-meta {
+  min-width: 0;
+  flex: 1;
+}
+.chat-attachment-preview-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--t-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-attachment-preview-tip {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--t-text-muted);
+}
+.chat-attachment-remove {
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  border: none;
+  background: rgba(148, 163, 184, 0.16);
+  color: var(--t-text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.chat-attachment-remove:hover {
+  background: rgba(239, 68, 68, 0.14);
+  color: #ef4444;
+}
 .input-card-bottom {
   display: flex;
   align-items: center;
@@ -4526,6 +6888,10 @@ watch(conversationId, (id) => {
     flex-direction: column;
     align-items: flex-start;
   }
+  .preview-side-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
   .builder-model-bar {
     flex-direction: column;
     align-items: stretch;
@@ -4560,6 +6926,13 @@ watch(conversationId, (id) => {
   justify-content: space-between;
   gap: 12px;
   padding: 18px 20px 8px;
+}
+.preview-side-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 .preview-side-heading {
   display: flex;
@@ -4653,6 +7026,12 @@ watch(conversationId, (id) => {
   width: 14px;
   height: 14px;
 }
+.doc-preview-download.compact {
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 8px;
+  font-size: 11px;
+}
 .doc-preview-content {
   margin: 0;
   min-height: 360px;
@@ -4711,8 +7090,18 @@ watch(conversationId, (id) => {
   font-weight: 600;
   cursor: pointer;
 }
+.preview-side-cta .cta-icon {
+  width: 14px;
+  height: 14px;
+  margin-right: 6px;
+}
 .preview-side-cta.success {
   background: linear-gradient(135deg, #16a34a 0%, #22c55e 100%);
+}
+.preview-side-cta.secondary {
+  border: 1px solid rgba(92, 115, 255, 0.16);
+  background: rgba(247, 249, 255, 0.96);
+  color: var(--t-brand-text);
 }
 .preview-side-cta:disabled {
   opacity: 0.45;
@@ -4856,40 +7245,407 @@ watch(conversationId, (id) => {
 .tab-content { padding: 16px; }
 /* ── 文档版本 ── */
 .doc-versions-tab { display: flex; flex-direction: column; gap: 12px; }
+.doc-version-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 20px;
+  border: 1px solid rgba(128, 145, 255, 0.12);
+  background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(247, 249, 255, 0.94));
+  box-shadow: 0 10px 28px rgba(31, 41, 85, 0.05);
+}
+.doc-version-panel.list-only {
+  width: 100%;
+}
 .doc-upload-bar { display: flex; align-items: center; justify-content: space-between; }
+.doc-top-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
 .doc-tab-title { font-size: 14px; font-weight: 600; color: var(--t-text-primary); }
+.doc-tab-title.with-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.doc-title-icon {
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: rgba(92, 115, 255, 0.08);
+  color: var(--t-brand-text);
+}
+.doc-title-icon svg {
+  width: 14px;
+  height: 14px;
+}
+.doc-tab-subtitle {
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--t-text-muted);
+}
+.doc-tab-meta-sep {
+  margin: 0 4px;
+}
 .doc-upload-btn {
   padding: 6px 14px; font-size: 12px; font-weight: 500; border: none; border-radius: 8px;
   background: var(--t-brand-gradient); color: #fff; cursor: pointer;
   transition: opacity 0.2s;
 }
 .doc-upload-btn:hover { opacity: 0.85; }
-.doc-version-list { display: flex; flex-direction: column; gap: 10px; }
-.doc-version-card {
-  border: 1px solid var(--t-border-subtle); border-radius: 12px; padding: 12px 14px;
-  background: var(--t-bg-elevated); transition: border-color 0.2s;
+.doc-upload-btn.subtle {
+  background: rgba(247, 249, 255, 0.96);
+  border: 1px solid rgba(92, 115, 255, 0.14);
+  color: var(--t-brand-text);
 }
-.doc-version-card:hover { border-color: var(--t-brand-glow); }
-.doc-ver-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.doc-upload-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.doc-version-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 120px;
+  padding: 16px;
+  border-radius: 14px;
+  border: 1px dashed rgba(128, 145, 255, 0.18);
+  background: rgba(248, 250, 255, 0.82);
+  color: var(--t-text-muted);
+  font-size: 12px;
+}
+.doc-current-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.doc-current-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.doc-current-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(92, 115, 255, 0.08);
+  color: var(--t-brand-text);
+  font-size: 11px;
+  font-weight: 700;
+}
+.doc-current-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.doc-version-list { display: flex; flex-direction: column; gap: 10px; }
+.doc-version-list.compact {
+  gap: 12px;
+}
+.doc-version-row {
+  border: 1px solid var(--t-border-subtle);
+  border-radius: 16px;
+  background: var(--t-bg-elevated);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+.doc-version-row:hover {
+  border-color: var(--t-brand-glow);
+  box-shadow: 0 8px 20px rgba(31, 41, 85, 0.06);
+}
+.doc-version-row.current {
+  border-color: rgba(92, 115, 255, 0.22);
+  background: rgba(242, 246, 255, 0.96);
+}
+.doc-version-row.expanded {
+  background: rgba(245, 248, 255, 0.98);
+}
+.doc-version-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+}
+.doc-version-toggle {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+}
+.doc-version-main {
+  min-width: 0;
+  flex: 1;
+}
+.doc-ver-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; min-width: 0; }
+.doc-ver-icon {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: rgba(92, 115, 255, 0.08);
+  color: var(--t-brand-text);
+  flex-shrink: 0;
+}
+.doc-ver-icon svg {
+  width: 14px;
+  height: 14px;
+}
 .doc-ver-num {
+  flex-shrink: 0;
   font-size: 13px; font-weight: 700;
   background: var(--t-brand-gradient);
   -webkit-background-clip: text; -webkit-text-fill-color: transparent;
   background-clip: text;
 }
-.doc-ver-filename { font-size: 13px; color: var(--t-text-primary); font-weight: 500; }
-.doc-ver-meta { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.doc-ver-filename {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--t-text-primary);
+  font-weight: 600;
+}
+.doc-ver-current {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(92, 115, 255, 0.1);
+  color: var(--t-brand-text);
+  font-size: 10px;
+  font-weight: 600;
+}
+.doc-ver-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+}
 .doc-ver-time { font-size: 11px; color: var(--t-text-muted); }
 .doc-ver-summary { font-size: 11px; color: var(--t-text-secondary); }
-.doc-ver-actions { display: flex; gap: 8px; }
-.doc-action-btn {
-  padding: 4px 10px; font-size: 11px; border-radius: 6px; cursor: pointer;
-  border: 1px solid var(--t-border-subtle); background: var(--t-border-subtle);
-  color: var(--t-text-secondary); transition: all 0.2s;
+.doc-ver-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
 }
-.doc-action-btn:hover { background: var(--t-border-subtle); color: #fff; }
+.doc-action-btn {
+  padding: 6px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 8px;
+  cursor: pointer;
+  border: 1px solid rgba(128, 145, 255, 0.14);
+  background: rgba(247, 249, 255, 0.96);
+  color: var(--t-brand-text);
+  transition: all 0.2s;
+}
+.doc-action-btn:hover {
+  background: rgba(92, 115, 255, 0.08);
+  border-color: rgba(92, 115, 255, 0.22);
+}
+.doc-action-btn.primary {
+  background: var(--t-brand-gradient);
+  border-color: transparent;
+  color: #fff;
+}
+.doc-action-btn.primary:hover { opacity: 0.9; }
 .doc-action-btn.diff { border-color: var(--t-brand-glow); color: var(--t-brand-light); }
 .doc-action-btn.diff:hover { background: var(--t-brand-subtle); }
+.doc-action-btn.danger {
+  border-color: rgba(225, 90, 90, 0.18);
+  color: #cf4343;
+  background: rgba(255, 247, 247, 0.96);
+}
+.doc-action-btn.danger:hover {
+  background: rgba(225, 90, 90, 0.08);
+  border-color: rgba(225, 90, 90, 0.28);
+}
+.deploy-log-card {
+  margin: 0 12px 12px;
+  padding: 10px 12px;
+  border-radius: 18px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(255, 255, 255, 0.9);
+}
+.deploy-log-card.compact {
+  margin-top: 8px;
+}
+.deploy-log-card.expanded {
+  padding-bottom: 12px;
+}
+.deploy-log-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--t-text-primary);
+  font-size: 13px;
+  font-weight: 700;
+}
+.deploy-log-header.toggle {
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+.deploy-log-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.deploy-log-summary {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex: 1;
+}
+.deploy-log-summary-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--t-text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+}
+.deploy-log-toggle {
+  color: var(--t-brand-text);
+  font-size: 12px;
+  font-weight: 700;
+}
+.deploy-log-count {
+  color: var(--t-text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+.deploy-log-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 180px;
+  overflow-y: auto;
+  margin-top: 10px;
+}
+.deploy-log-item {
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  background: rgba(248, 250, 252, 0.96);
+}
+.deploy-log-item.info {
+  border-color: rgba(92, 115, 255, 0.14);
+  background: rgba(244, 247, 255, 0.96);
+}
+.deploy-log-item.success {
+  border-color: rgba(34, 197, 94, 0.16);
+  background: rgba(240, 253, 244, 0.96);
+}
+.deploy-log-item.error {
+  border-color: rgba(225, 90, 90, 0.18);
+  background: rgba(255, 245, 245, 0.96);
+}
+.deploy-log-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+.deploy-log-level {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--t-text-secondary);
+}
+.deploy-log-time {
+  font-size: 10px;
+  color: var(--t-text-muted);
+}
+.deploy-log-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--t-text-primary);
+  font-size: 11px;
+  line-height: 1.45;
+}
+.doc-expand-icon {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgba(92, 115, 255, 0.08);
+  color: var(--t-brand-text);
+  flex-shrink: 0;
+  transition: transform 0.2s ease, background 0.2s ease;
+}
+.doc-expand-icon svg {
+  width: 14px;
+  height: 14px;
+}
+.doc-expand-icon.expanded {
+  transform: rotate(180deg);
+  background: rgba(92, 115, 255, 0.14);
+}
+.doc-version-body {
+  padding: 0 16px 16px;
+}
+.doc-version-body-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  padding-top: 2px;
+}
+.doc-version-body-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--t-text-primary);
+}
+.doc-version-content {
+  margin: 0;
+  min-height: 160px;
+  max-height: 460px;
+  overflow: auto;
+  padding: 16px;
+  border-radius: 14px;
+  background: #f8faff;
+  border: 1px solid rgba(128, 145, 255, 0.1);
+  color: #4e5f7d;
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.doc-version-content.expanded {
+  min-height: 320px;
+}
 
 /* 文档预览弹窗 */
 :deep(.doc-preview-dialog) .el-dialog { background: var(--t-bg-panel); color: var(--t-text-primary); }
@@ -5030,6 +7786,14 @@ watch(conversationId, (id) => {
   border-radius: 8px;
   padding: 6px 8px;
 }
+.dict-option-row.diff {
+  justify-content: space-between;
+  background: rgba(255,255,255,0.88);
+}
+.dict-option-row.versioned {
+  justify-content: space-between;
+  background: rgba(255,255,255,0.88);
+}
 .dict-option-code {
   min-width: 88px;
   font-size: 10px;
@@ -5072,7 +7836,22 @@ watch(conversationId, (id) => {
 /* ── 模型 ── */
 .model-card { border: 1px solid var(--t-border-subtle); border-radius: 12px; overflow: hidden; margin-bottom: 12px; background: var(--t-bg-panel); }
 .model-header { display: flex; align-items: center; gap: 8px; padding: 10px 12px; background: var(--t-bg-subtle); font-size: 12px; }
+.diff-model-card {
+  border-color: rgba(92, 115, 255, 0.14);
+  box-shadow: 0 10px 24px rgba(31, 41, 85, 0.04);
+}
 .model-name { font-weight: 600; color: var(--t-text-primary); }
+.model-title-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.model-summary {
+  font-size: 11px;
+  color: var(--t-text-secondary);
+  line-height: 1.45;
+}
 .model-code { margin-left: auto; font-size: 10px; color: var(--t-text-muted); font-family: monospace; }
 .preview-item-card {
   border: 1px solid rgba(128, 145, 255, 0.1);
@@ -5088,10 +7867,105 @@ watch(conversationId, (id) => {
   gap: 10px;
   margin-bottom: 6px;
 }
+.preview-item-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
 .preview-item-title {
   font-size: 13px;
   font-weight: 700;
   color: var(--t-text-primary);
+}
+.versioned-card {
+  background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(246, 248, 255, 0.92));
+  box-shadow: 0 10px 24px rgba(31, 41, 85, 0.04);
+}
+.history-muted-card {
+  border-color: rgba(148, 163, 184, 0.2);
+  background: linear-gradient(180deg, rgba(248, 250, 252, 0.98), rgba(241, 245, 249, 0.94));
+}
+.history-muted-card .preview-item-title,
+.history-muted-card .model-name,
+.history-muted-card .form-change-name,
+.history-muted-card .field-name {
+  color: #667085;
+}
+.history-muted-card .preview-item-code,
+.history-muted-card .preview-item-desc,
+.history-muted-card .model-summary,
+.history-muted-card .field-code,
+.history-muted-card .form-change-detail {
+  color: #94a3b8;
+}
+.history-muted-card .form-meta-chip {
+  background: rgba(148, 163, 184, 0.12);
+  color: #94a3b8;
+  border-color: rgba(148, 163, 184, 0.16);
+}
+.diff-preview-card {
+  border-color: rgba(92, 115, 255, 0.14);
+  background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(246, 248, 255, 0.92));
+  box-shadow: 0 10px 24px rgba(31, 41, 85, 0.04);
+}
+.change-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.change-badge.create {
+  background: rgba(16, 185, 129, 0.12);
+  color: #047857;
+}
+.change-badge.update {
+  background: rgba(92, 115, 255, 0.12);
+  color: var(--t-brand-text);
+}
+.change-badge.delete {
+  background: rgba(239, 68, 68, 0.12);
+  color: #b91c1c;
+}
+.change-badge.disable {
+  background: rgba(245, 158, 11, 0.14);
+  color: #b45309;
+}
+.change-badge.mini {
+  height: 20px;
+  padding: 0 7px;
+}
+.version-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  border: 1px solid transparent;
+}
+.version-badge.active {
+  background: rgba(92, 115, 255, 0.1);
+  color: var(--t-brand-text);
+  border-color: rgba(92, 115, 255, 0.16);
+}
+.version-badge.deleted,
+.version-badge.disabled {
+  background: rgba(148, 163, 184, 0.14);
+  color: #64748b;
+  border-color: rgba(148, 163, 184, 0.2);
+}
+.version-badge.mini {
+  min-height: 20px;
+  padding: 0 7px;
 }
 .preview-item-code {
   margin-top: 2px;
@@ -5133,6 +8007,30 @@ watch(conversationId, (id) => {
 .field-list { }
 .field-row { display: flex; justify-content: space-between; align-items: center; padding: 0 12px; height: 44px; min-height: 44px; border-top: 1px solid var(--t-border-subtle); transition: background 0.15s; }
 .field-row:hover { background: var(--t-bg-subtle); }
+.field-row.diff {
+  min-height: 52px;
+  height: auto;
+  padding: 10px 12px;
+}
+.field-row.versioned {
+  min-height: 52px;
+  height: auto;
+  padding: 10px 12px;
+}
+.history-muted-row {
+  background: rgba(241, 245, 249, 0.72) !important;
+  border-color: rgba(148, 163, 184, 0.16) !important;
+}
+.history-muted-row .dict-option-code,
+.history-muted-row .dict-option-name,
+.history-muted-row .field-icon,
+.history-muted-row .field-name,
+.history-muted-row .field-code,
+.history-muted-row .ftype,
+.history-muted-row .form-change-name,
+.history-muted-row .form-change-detail {
+  color: #94a3b8;
+}
 .field-left { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
 .field-text { display: flex; flex-direction: column; min-width: 0; }
 .field-icon { width: 24px; min-width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-size: 12px; background: var(--t-border-subtle); border-radius: 6px; color: var(--t-text-muted); flex-shrink: 0; }
@@ -5148,6 +8046,37 @@ watch(conversationId, (id) => {
 /* 模型选择 */
 .model-select-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; padding: 8px 12px; background: var(--t-border-subtle); border-radius: 8px; }
 .builder-model-bar { gap: 14px; border: 1px solid var(--t-border-subtle); background: var(--t-bg-elevated); border-radius: 12px; padding: 10px 14px; }
+
+@media (max-width: 980px) {
+  .doc-upload-bar,
+  .doc-version-summary,
+  .doc-version-body-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .doc-current-head,
+  .doc-top-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .doc-version-toggle {
+    width: 100%;
+  }
+
+  .doc-ver-actions {
+    width: 100%;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .form-change-row,
+  .update-change-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
 .builder-model-meta { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .builder-model-label { font-size: 12px; font-weight: 600; color: var(--t-text-primary); }
 .builder-model-select { width: min(460px, 60%); flex-shrink: 0; }
@@ -5204,6 +8133,9 @@ watch(conversationId, (id) => {
   gap: 8px;
   margin-bottom: 10px;
 }
+.resource-meta-row {
+  margin-top: 2px;
+}
 .form-meta-chip {
   display: inline-flex;
   align-items: center;
@@ -5218,6 +8150,39 @@ watch(conversationId, (id) => {
   background: rgba(15, 23, 42, 0.04);
   color: var(--t-text-secondary);
   border-color: rgba(15, 23, 42, 0.08);
+}
+.form-change-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.form-change-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(128, 145, 255, 0.1);
+  border-radius: 10px;
+  background: rgba(255,255,255,0.88);
+}
+.form-change-row.versioned {
+  align-items: flex-start;
+}
+.form-change-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.form-change-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--t-text-primary);
+}
+.form-change-detail {
+  font-size: 11px;
+  color: var(--t-text-secondary);
 }
 .form-preview { border: 1px solid var(--t-border-subtle); border-radius: 12px; overflow: hidden; background: var(--t-bg-elevated); }
 .form-title { background: var(--t-brand-subtle); padding: 8px 16px; font-size: 12px; font-weight: 600; color: var(--t-brand-light); border-bottom: 1px solid var(--t-brand-subtle); }
@@ -5397,11 +8362,42 @@ watch(conversationId, (id) => {
 .dg.current .dg-hd {
   background: linear-gradient(180deg, rgba(242, 246, 255, 0.96), rgba(247, 249, 255, 0.9));
 }
+.update-review-groups {
+  padding-top: 4px;
+}
+.dg.update .dg-hd {
+  background: linear-gradient(180deg, rgba(242, 246, 255, 0.96), rgba(247, 249, 255, 0.9));
+}
 .dg-icon { font-size: 13px; }
 .dg-name { font-weight: 600; color: var(--t-text-primary); flex: 1; }
 .dg-badge { font-size: 9px; padding: 1px 6px; border-radius: 99px; font-weight: 600; background: var(--t-border-subtle); color: var(--t-text-muted); }
 .dg-badge.done { background: rgba(16,185,129,0.12); color: var(--t-success); }
 .dg-badge.err { background: rgba(239,68,68,0.12); color: var(--t-danger); }
+.update-change-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px;
+}
+.update-change-row + .update-change-row {
+  border-top: 1px solid var(--t-border-subtle);
+}
+.update-change-copy {
+  min-width: 0;
+  flex: 1;
+}
+.update-change-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--t-text-primary);
+}
+.update-change-meta {
+  margin-top: 3px;
+  font-size: 10px;
+  color: var(--t-text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
 
 .ds { display: flex; align-items: center; padding: 7px 14px; gap: 10px; font-size: 12px; }
 .ds + .ds { border-top: 1px solid var(--t-border-subtle); }
@@ -5778,17 +8774,80 @@ watch(conversationId, (id) => {
 .projects-list::-webkit-scrollbar-thumb:hover { background: var(--t-border-strong); }
 
 /* 编码冲突修复 */
-.conflict-resolve-box { padding: 4px 0; }
-.conflict-label { margin-bottom: 8px; font-size: 13px; }
-.conflict-label code { background: rgba(139, 92, 246, 0.2); color: var(--t-brand-light); padding: 1px 6px; border-radius: 4px; font-family: monospace; font-size: 12px; }
-.conflict-input-row { display: flex; gap: 8px; align-items: center; }
-.conflict-input { flex: 1; padding: 6px 10px; border: 1px solid var(--t-border-strong); border-radius: 6px; background: var(--t-border-subtle); color: #e2e8f0; font-size: 13px; font-family: monospace; outline: none; transition: border-color 0.2s; }
-.conflict-input:focus { border-color: var(--t-brand); }
+.conflict-resolve-box {
+  padding: 0;
+  min-width: 0;
+}
+.chat-bubble.assistant:has(.conflict-resolve-box) .assistant-avatar {
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  border-radius: 10px;
+  font-size: 12px;
+}
+.chat-bubble.assistant:has(.conflict-resolve-box) .bubble-inner {
+  max-width: 380px;
+}
+.chat-bubble.assistant:has(.conflict-resolve-box) .bubble-content.assistant {
+  padding: 10px 12px;
+  border-radius: 14px;
+}
+.conflict-label {
+  margin-bottom: 5px;
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--t-text-primary);
+  white-space: nowrap;
+}
+.conflict-label code {
+  background: rgba(92, 115, 255, 0.12);
+  color: var(--t-brand-text);
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-family: monospace;
+  font-size: 11px;
+}
+.conflict-input-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.conflict-input {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 9px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.95);
+  color: #0f172a;
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  outline: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.conflict-input::placeholder {
+  color: #94a3b8;
+}
+.conflict-input:focus {
+  border-color: rgba(92, 115, 255, 0.42);
+  box-shadow: 0 0 0 3px rgba(92, 115, 255, 0.08);
+}
 .conflict-input:disabled { opacity: 0.5; }
-.conflict-btn { border: none; cursor: pointer; border-radius: 6px; font-size: 12px; font-weight: 500; padding: 6px 14px; transition: all 0.2s; }
+.conflict-btn {
+  min-width: 48px;
+  height: 32px;
+  border: none;
+  cursor: pointer;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 0 10px;
+  transition: all 0.2s;
+}
 .conflict-btn.confirm { background: var(--t-brand-gradient); color: #fff; }
 .conflict-btn.confirm:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 2px 8px var(--t-brand-glow); }
-.conflict-btn.cancel { background: var(--t-border-subtle); color: #94a3b8; }
+.conflict-btn.cancel { background: rgba(241, 245, 249, 0.95); color: #64748b; }
 .conflict-btn.cancel:hover:not(:disabled) { background: var(--t-bg-subtle); }
 .conflict-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 

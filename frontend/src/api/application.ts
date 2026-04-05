@@ -91,6 +91,9 @@ export const applicationApi = {
   getDocVersions(appId: number) {
     return request.get<any, any>(`/applications/${appId}/doc-versions`)
   },
+  deleteDocVersion(appId: number, versionId: number) {
+    return request.delete<any, any>(`/applications/${appId}/doc-versions/${versionId}`)
+  },
 
   /** 获取文档版本列表（通过 conversationId，Application 创建前使用） */
   getDocVersionsByConversation(conversationId: number) {

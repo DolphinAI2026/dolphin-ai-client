@@ -1,7 +1,7 @@
 <template>
   <aside class="global-nav-rail" :class="{ collapsed: !expanded }">
     <div class="sidebar-logo">
-      <button class="logo-main" @click="navigateTo('/')" title="返回主页">
+      <button class="logo-main" @click="navigateTo('/')" title="返回首页">
         <div class="logo-icon">
           <svg width="22" height="22" viewBox="0 0 22 22" fill="none" aria-hidden="true">
             <rect x="1" y="1" width="20" height="20" rx="6" fill="url(#railLogoBg)" />
@@ -179,20 +179,17 @@ async function handleUserCommand(command: string | number | object) {
 .logo-main {
   display: flex;
   align-items: center;
-  justify-content: flex-start;
-  gap: 4px;
-  flex: 1;
+  gap: 14px;
   min-width: 0;
   cursor: pointer;
   border: none;
   background: transparent;
   padding: 0;
-  text-align: left;
 }
 
 .logo-icon {
-  width: 30px;
-  height: 30px;
+  width: 34px;
+  height: 34px;
   border-radius: 10px;
   display: flex;
   align-items: center;

@@ -230,7 +230,8 @@ async def execute_update(
         executor = IncrementalExecutor(
             client=client,
             app_id=app.apaas_app_id,
-            app_name=app.app_name
+            app_name=app.app_name,
+            target_config=diff.normalized_new_config or request.new_config,
         )
 
         try:
@@ -815,6 +816,7 @@ def _build_execute_stream_response(
                         client=client,
                         app_id=apaas_app_id,
                         app_name=app_name,
+                        target_config=diff.normalized_new_config or request.new_config,
                     )
                     save_config = diff.normalized_new_config or request.new_config
 

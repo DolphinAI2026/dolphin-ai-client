@@ -13,8 +13,9 @@ import asyncio
 import json
 import logging
 import re
-from typing import Callable, Coroutine, Dict, List, Optional
+from typing import Any, Callable, Coroutine, Dict, List, Optional
 
+import httpx
 # 进度回调类型：async def callback(message: str) -> None
 ProgressCallback = Optional[Callable[[str], Coroutine]]
 
@@ -73,7 +74,7 @@ _OUTPUT_SPEC = """\
     {
       "form": "表单名（中文，对应 models 中的 name）",
       "rules": [
-        {"role": "角色code 或 all", "op": "all 或 add/edit/delete", "data": "ALL/SELF/CURRENT_USER_DEPT"}
+        {"role": "角色code 或 all", "op": "all 或 draft/add/import/view/edit/delete/export", "data": "ALL/SELF/CURRENT_USER_DEPT"}
       ]
     }
   ]
@@ -81,6 +82,25 @@ _OUTPUT_SPEC = """\
 ```"""
 
 _FIELD_TYPES = build_prompt_field_types_table()
+
+_STRICT_DOC_PARSING_RULES = """\
+## 严格解析约束（最高优先级）
+
+1. **只能解析文档中明确出现的内容**，禁止依据常识、行业经验或默认模板自行新增：
+   - 角色
+   - 数据字典
+   - 字典选项
+   - 数据模型 / 表单
+   - 字段
+   - 子表
+   - 表单组件
+   - 权限规则
+2. **禁止删除文档中已明确写出的内容**。如果文档里写了某个对象，即使你觉得不合理，也必须保留。
+3. **禁止自动补全缺失信息**。如果文档没有写清楚，宁可留空/不输出，也不能猜。
+4. **禁止把常见默认项加入结果**，例如默认管理员角色、默认状态字典、默认权限、默认流程等。
+5. **编码、名称、类型、组件类型、权限都必须以文档原文为准**，不能自行修正、重命名或扩展。
+6. 如果文档中显式声明“未定义的不生成 / 不新增 / 不删除 / 严格按文档解析”，必须无条件遵守。
+"""
 
 _RULES = """\
 ## 核心规则
@@ -98,7 +118,7 @@ _RULES = """\
 6. **下拉单选/多选字段必须设 dict**，数据单选字段必须设 ref
 7. **权限配置**：根据文档中的角色和权限描述，为每个表单生成权限规则：
    - role: 角色code（对应 roles 中的 code），"all" 表示全部人员
-   - op: 操作类型，"all"=全部操作, "add"=新增, "edit"=编辑, "delete"=删除
+   - op: 操作类型，"all"=全部操作, "draft"=暂存, "add"=新增, "import"=导入, "view"=查看, "edit"=编辑, "delete"=删除, "export"=导出
    - data: 数据范围，"ALL"=全部数据, "SELF"=仅本人数据, "CURRENT_USER_DEPT"=本部门数据
    - 如果文档未明确权限，默认为每个表单生成 {"role":"all","op":"all","data":"ALL"}"""
 
@@ -123,6 +143,7 @@ OVERVIEW_SYSTEM_PROMPT = f"""你是得帆云低代码平台的功能设计专家
 - 识别所有角色
 - model_names 只列名称，不需要字段详情
 - code 必须是英文小写+下划线
+- 只能提取文档中明确出现的对象，禁止脑补未出现的模型、角色、字典
 """
 
 # ── Step 2: 分段详细解析 ──
@@ -132,6 +153,8 @@ DETAIL_SYSTEM_PROMPT = f"""你是得帆云低代码平台的功能设计专家�
 {_OUTPUT_SPEC}
 
 {_FIELD_TYPES}
+
+{_STRICT_DOC_PARSING_RULES}
 
 {_RULES}
 
@@ -149,11 +172,15 @@ SINGLE_SYSTEM_PROMPT = f"""你是得帆云低代码平台的功能设计专家�
 
 {_FIELD_TYPES}
 
+{_STRICT_DOC_PARSING_RULES}
+
 {_RULES}
 
 ## 自检清单
 
 输出前请确认：
+- 没有新增文档中未明确出现的角色 / 字典 / 模型 / 字段 / 权限
+- 没有删除文档中明确写出的内容
 - 所有 code 都是纯英文小写+下划线
 - 所有字典都有 ≥2 个选项
 - 下拉单选/多选字段都设了 dict
@@ -161,6 +188,106 @@ SINGLE_SYSTEM_PROMPT = f"""你是得帆云低代码平台的功能设计专家�
 - 子表字段都设了 sub_code 和 sub_fields
 - 每个表单都有对应的 permissions 规则
 """
+
+
+def _uses_anthropic_messages_api(llm_cfg: Optional[Dict[str, Any]]) -> bool:
+    if not llm_cfg:
+        return False
+    provider = str(llm_cfg.get("provider") or "").lower()
+    base_url = str(llm_cfg.get("base_url") or "").lower()
+    return provider == "anthropic" or "/anthropic" in base_url or "api.anthropic.com" in base_url
+
+
+def _build_anthropic_messages_url(base_url: str) -> str:
+    base = (base_url or "").rstrip("/")
+    if base.endswith("/v1/messages"):
+        return base
+    if base.endswith("/v1"):
+        return f"{base}/messages"
+    return f"{base}/v1/messages"
+
+
+def _build_anthropic_headers(base_url: str, api_key: str) -> Dict[str, str]:
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
+    }
+    if "api.anthropic.com" not in (base_url or "").lower():
+        headers["Authorization"] = api_key
+    return headers
+
+
+def _build_openai_chat_completions_url(base_url: str) -> str:
+    base = (base_url or "").rstrip("/")
+    if base.endswith("/chat/completions"):
+        return base
+    if base.endswith("/responses"):
+        return f"{base[:-len('/responses')]}/chat/completions"
+    if "/anthropic" in base:
+        base = base[:base.index("/anthropic")]
+    if not base.endswith("/v1"):
+        base = f"{base}/v1"
+    return f"{base}/chat/completions"
+
+
+async def _chat_completion(
+    messages: List[Dict[str, Any]],
+    *,
+    llm_cfg: Optional[Dict[str, Any]] = None,
+    max_tokens: int = 8192,
+    timeout: float = 120.0,
+    temperature: float = 0.3,
+    model: Optional[str] = None,
+) -> Dict[str, Any]:
+    client = LLMClient()
+    if not llm_cfg:
+        return await client.chat_completion(
+            messages,
+            max_tokens=max_tokens,
+            timeout=timeout,
+            temperature=temperature,
+            model=model,
+        )
+
+    effective_model = model or llm_cfg["model"]
+    request_timeout = httpx.Timeout(connect=15.0, read=timeout, write=15.0, pool=15.0)
+
+    if _uses_anthropic_messages_api(llm_cfg):
+        system_text, api_messages = client._prepare_messages(messages)
+        payload: Dict[str, Any] = {
+            "model": effective_model,
+            "messages": api_messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
+        if system_text:
+            payload["system"] = system_text
+
+        async with httpx.AsyncClient(timeout=request_timeout) as http:
+            response = await http.post(
+                _build_anthropic_messages_url(llm_cfg["base_url"]),
+                headers=_build_anthropic_headers(llm_cfg["base_url"], llm_cfg["api_key"]),
+                json=payload,
+            )
+            response.raise_for_status()
+            return client._normalize_to_openai(response.json(), model=effective_model)
+
+    payload = {
+        "model": effective_model,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "stream": False,
+    }
+    async with httpx.AsyncClient(timeout=request_timeout) as http:
+        response = await http.post(
+            _build_openai_chat_completions_url(llm_cfg["base_url"]),
+            headers={"Authorization": f"Bearer {llm_cfg['api_key']}", "Content-Type": "application/json"},
+            json=payload,
+        )
+        response.raise_for_status()
+        return response.json()
 
 
 # ================================================================
@@ -171,6 +298,7 @@ async def parse_doc_with_ai(
     text: str, filename: str = "", on_progress: ProgressCallback = None,
     existing_codes: Optional[Dict] = None,
     existing_config: Optional[Dict] = None,
+    llm_cfg: Optional[Dict[str, Any]] = None,
 ) -> Dict:
     """用 AI 解析任意格式的需求文档，返回标准 preview JSON。
 
@@ -201,9 +329,22 @@ async def parse_doc_with_ai(
 
     if len(text) <= CHUNK_CHAR_LIMIT:
         await _progress("小文档，单次 AI 解析...")
-        data = await _parse_single(text, filename, existing_codes=existing_codes, config_constraint=config_constraint)
+        data = await _parse_single(
+            text,
+            filename,
+            existing_codes=existing_codes,
+            config_constraint=config_constraint,
+            llm_cfg=llm_cfg,
+        )
     else:
-        data = await _parse_chunked(text, filename, _progress, existing_codes=existing_codes, config_constraint=config_constraint)
+        data = await _parse_chunked(
+            text,
+            filename,
+            _progress,
+            existing_codes=existing_codes,
+            config_constraint=config_constraint,
+            llm_cfg=llm_cfg,
+        )
 
     # 对 Markdown 中显式定义的字典做规则兜底，避免 LLM 漏掉未引用字典或漏掉选项
     extracted_dicts = _extract_markdown_dicts(text)
@@ -396,7 +537,13 @@ def _build_existing_config_constraint(config: Dict) -> str:
 # 小文档：单次调用
 # ================================================================
 
-async def _parse_single(text: str, filename: str, existing_codes: Optional[Dict] = None, config_constraint: str = "") -> Dict:
+async def _parse_single(
+    text: str,
+    filename: str,
+    existing_codes: Optional[Dict] = None,
+    config_constraint: str = "",
+    llm_cfg: Optional[Dict[str, Any]] = None,
+) -> Dict:
     client = LLMClient()
     # 智能截断：优先保留 ER 图和业务具体方案（含子表/字段定义）
     if len(text) > 40000:
@@ -428,9 +575,10 @@ async def _parse_single(text: str, filename: str, existing_codes: Optional[Dict]
     user_msg += f"---\n\n{truncated}"
 
     # 文档解析用配置中的文档模型，避免业务代码写死模型名
-    result = await client.chat_completion(
+    result = await _chat_completion(
         [{"role": "system", "content": SINGLE_SYSTEM_PROMPT},
          {"role": "user", "content": user_msg}],
+        llm_cfg=llm_cfg,
         max_tokens=16384, timeout=300.0, temperature=0.2,
         model=client.doc_model
     )
@@ -445,7 +593,14 @@ async def _parse_single(text: str, filename: str, existing_codes: Optional[Dict]
 # 大文档：分段解析
 # ================================================================
 
-async def _parse_chunked(text: str, filename: str, progress=None, existing_codes: Optional[Dict] = None, config_constraint: str = "") -> Dict:
+async def _parse_chunked(
+    text: str,
+    filename: str,
+    progress=None,
+    existing_codes: Optional[Dict] = None,
+    config_constraint: str = "",
+    llm_cfg: Optional[Dict[str, Any]] = None,
+) -> Dict:
     """大文档分段解析流程：
     1. 用 AI 快速提取概览（应用名、角色、表单清单）
     2. 按章节拆分文档
@@ -469,9 +624,10 @@ async def _parse_chunked(text: str, filename: str, progress=None, existing_codes
         overview_user_msg += config_constraint
     overview_user_msg += f"---\n\n{overview_text}"
 
-    overview_result = await client.chat_completion(
+    overview_result = await _chat_completion(
         [{"role": "system", "content": OVERVIEW_SYSTEM_PROMPT},
          {"role": "user", "content": overview_user_msg}],
+        llm_cfg=llm_cfg,
         max_tokens=4096, timeout=60.0, temperature=0.1
     )
     overview_content = overview_result["choices"][0]["message"]["content"]
@@ -507,9 +663,10 @@ async def _parse_chunked(text: str, filename: str, progress=None, existing_codes
                 elif existing_codes:
                     chunk_user_msg += _build_existing_codes_prompt(existing_codes)
                 chunk_user_msg += f"---\n\n{chunk}"
-                r = await client.chat_completion(
+                r = await _chat_completion(
                     [{"role": "system", "content": DETAIL_SYSTEM_PROMPT},
                      {"role": "user", "content": chunk_user_msg}],
+                    llm_cfg=llm_cfg,
                     max_tokens=16384, timeout=180.0, temperature=0.2
                 )
                 c = r["choices"][0]["message"]["content"]

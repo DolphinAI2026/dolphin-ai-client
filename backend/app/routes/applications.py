@@ -5,11 +5,11 @@ from datetime import datetime
 from typing import Annotated, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
 from pydantic import BaseModel
-from sqlalchemy import select, desc, func as sa_func
+from sqlalchemy import select, desc, func as sa_func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 from app.database import get_db
-from app.models import User, Application, DocumentVersion, ChangePlan, ApiCallLog, PlatformEnv
+from app.models import User, Application, DocumentVersion, ChangePlan, ApiCallLog, PlatformEnv, Conversation
 from app.auth import get_current_user
 from app.schemas import ApplicationCreate, ApplicationResponse, MergedAppResponse
 from app.deps import get_auth_context, AuthContext
@@ -23,6 +23,43 @@ from app.services.config_converter import convert_analysis_to_app_config
 
 router = APIRouter(prefix="/applications", tags=["应用"])
 logger = logging.getLogger(__name__)
+
+
+async def _resolve_builder_llm_cfg(
+    db: AsyncSession,
+    tenant_id: int,
+    *,
+    conversation_id: Optional[int] = None,
+) -> dict | None:
+    from app.harness.llm_resolver import resolve_llm_config
+
+    selected_config_id: Optional[int] = None
+    if conversation_id is not None:
+        conv_result = await db.execute(
+            select(Conversation).where(
+                Conversation.id == conversation_id,
+                Conversation.tenant_id == tenant_id,
+            )
+        )
+        conversation = conv_result.scalar_one_or_none()
+        if conversation:
+            selected_config_id = conversation.selected_llm_config_id
+
+    resolved = await resolve_llm_config(
+        db,
+        tenant_id,
+        purpose="builder",
+        selected_config_id=selected_config_id,
+    )
+    if not resolved:
+        return None
+    return {
+        "api_key": resolved.api_key,
+        "base_url": resolved.base_url,
+        "model": resolved.model,
+        "max_tokens": resolved.max_tokens,
+        "provider": resolved.provider,
+    }
 
 
 def _enrich(app: Application) -> ApplicationResponse:
@@ -659,6 +696,32 @@ async def update_app_code(
     if not new_code:
         raise HTTPException(status_code=400, detail="app_code 不能为空")
     app.app_code = new_code
+    if app.config_preview:
+        try:
+            config = json.loads(app.config_preview) if isinstance(app.config_preview, str) else app.config_preview
+            data = config.get("data", config)
+            data["app_code"] = new_code
+            app.config_preview = json.dumps(config, ensure_ascii=False)
+
+            if app.current_doc_version:
+                import hashlib
+                from app.routes.generation_steps import _render_design_doc_markdown
+
+                new_version = app.current_doc_version + 1
+                config_json = json.dumps(config, ensure_ascii=False)
+                doc_ver = DocumentVersion(
+                    application_id=app.id,
+                    version=new_version,
+                    filename=f"app-code-fix-v{new_version}",
+                    content_hash=hashlib.sha256(config_json.encode()).hexdigest(),
+                    raw_content=_render_design_doc_markdown(app.app_name, new_code, data),
+                    parsed_config=config_json,
+                    summary=f"应用编码修复: {new_code}",
+                )
+                db.add(doc_ver)
+                app.current_doc_version = new_version
+        except Exception as e:
+            logger.warning(f"同步应用编码到文档版本失败: {e}")
     await db.commit()
     return {"ok": True, "app_code": new_code}
 
@@ -1023,9 +1086,12 @@ async def upload_doc_with_conversation(
     tenant_id = ctx.tenant_id
     existing_conversation_id = conversation_id
 
-    # 获取租户 LLM 配置（避免 applications.py 里调用 assemble_config_streaming 时用 Anthropic 默认 key）
-    from app.routes.chat import _get_tenant_llm_config as _get_llm_cfg
-    _tenant_llm_cfg = await _get_llm_cfg(db, tenant_id)
+    # 获取当前对话/租户绑定的 Builder 模型，避免文档解析回退到 .env 默认模型
+    _tenant_llm_cfg = await _resolve_builder_llm_cfg(
+        db,
+        tenant_id,
+        conversation_id=existing_conversation_id,
+    )
 
     # 如果传了 conversation_id，预先查找 V1 文档版本
     v1_doc_info: Optional[dict] = None
@@ -1099,7 +1165,8 @@ async def upload_doc_with_conversation(
                     # 只对变化部分调 AI 解析（传入 V1 完整配置约束）
                     partial_config = await parse_doc_with_ai(
                         changed_text, filename=fname, existing_codes=existing_codes,
-                        existing_config=v1_parsed_config
+                        existing_config=v1_parsed_config,
+                        llm_cfg=_tenant_llm_cfg,
                     )
 
                     # Step 3: 合并配置
@@ -1395,6 +1462,11 @@ async def upload_doc_version(
     app_id_val = app.id
     tenant_id_val = ctx.tenant_id
     current_config_str = app.config_preview
+    doc_llm_cfg = await _resolve_builder_llm_cfg(
+        db,
+        tenant_id_val,
+        conversation_id=conversation_id,
+    )
 
     async def event_generator():
         from app.database import AsyncSessionLocal
@@ -1402,7 +1474,10 @@ async def upload_doc_version(
         from app.config_diff import compute_config_diff
         from app.doc_text_differ import diff_sections, build_changed_text, get_diff_stats
 
+        current_step = "初始化"
+
         try:
+            current_step = "读取文档内容"
             yield {"event": "progress", "data": json.dumps({"step": "读取文档内容..."}, ensure_ascii=False)}
 
             # 1. 计算 hash
@@ -1447,6 +1522,7 @@ async def upload_doc_version(
                             "version": v1_doc_obj.version,
                         }
 
+            current_step = "解析文档结构"
             yield {"event": "progress", "data": json.dumps({"step": "解析文档结构..."}, ensure_ascii=False)}
 
             # 4. 构建章节索引
@@ -1457,6 +1533,7 @@ async def upload_doc_version(
 
             if v1_doc and v1_doc.get("raw_content"):
                 # ===== 增量模式：文档对比优先 =====
+                current_step = "对比文档章节"
                 yield {"event": "progress", "data": json.dumps({"step": "text_diff", "message": "正在对比文档章节..."}, ensure_ascii=False)}
 
                 # Step A: 纯文本章节对比
@@ -1482,6 +1559,7 @@ async def upload_doc_version(
                 if changed_count > 0:
                     # Step C: 只对变更章节调 AI 解析（传入 V1 已有编码让 AI 复用）
                     changed_text = build_changed_text(text_diff)
+                    current_step = "解析变更章节"
                     yield {"event": "progress", "data": json.dumps({
                         "step": "parse_changes",
                         "message": f"正在解析 {changed_count} 个变更章节...",
@@ -1490,14 +1568,17 @@ async def upload_doc_version(
                     existing_codes = extract_existing_codes(v1_parsed_config) if v1_parsed_config else None
                     partial_config = await parse_doc_with_ai(
                         changed_text, filename=fname, existing_codes=existing_codes,
-                        existing_config=v1_parsed_config
+                        existing_config=v1_parsed_config,
+                        llm_cfg=doc_llm_cfg,
                     )
 
                     # Step D: 合并 — V1 未变更部分 + V2 变更部分
+                    current_step = "合并变更结果"
                     yield {"event": "progress", "data": json.dumps({"step": "merge", "message": "合并未变更部分与变更结果..."}, ensure_ascii=False)}
                     v2_config = _merge_configs(v1_parsed_config, partial_config, text_diff)
                 else:
                     # 所有章节未变更（只有删除），直接用 V1 config 减去删除的部分
+                    current_step = "复用已有解析结果"
                     yield {"event": "progress", "data": json.dumps({
                         "step": "parse_changes",
                         "message": "无新增或修改章节，复用已有解析结果",
@@ -1505,9 +1586,11 @@ async def upload_doc_version(
                     v2_config = _remove_deleted_from_config(v1_parsed_config, text_diff)
             else:
                 # ===== 首次上传：全量解析 =====
+                current_step = "全量 AI 解析"
                 yield {"event": "progress", "data": json.dumps({"step": "AI 解析文档配置..."}, ensure_ascii=False)}
-                v2_config = await parse_doc_with_ai(text, filename=fname)
+                v2_config = await parse_doc_with_ai(text, filename=fname, llm_cfg=doc_llm_cfg)
 
+            current_step = "对比资源差异"
             yield {"event": "progress", "data": json.dumps({"step": "对比资源差异..."}, ensure_ascii=False)}
 
             # 6. 加载 V1 配置（从应用当前 config_preview）
@@ -1535,6 +1618,7 @@ async def upload_doc_version(
             # 10. 生成摘要
             summary = resource_diff.summary or f"文档 V{new_version} 资源变更分析完成"
 
+            current_step = "保存版本记录"
             yield {"event": "progress", "data": json.dumps({"step": "保存版本记录..."}, ensure_ascii=False)}
 
             # 11. 创建 DocumentVersion + ChangePlan
@@ -1595,6 +1679,8 @@ async def upload_doc_version(
                     "event": "done",
                     "data": json.dumps({
                         "version": new_version,
+                        "from_version": max_ver,
+                        "to_version": new_version,
                         "summary": summary,
                         "diff": resource_diff_dict,
                         "semantic_diff": diff,
@@ -1607,7 +1693,15 @@ async def upload_doc_version(
 
         except Exception as e:
             logger.error(f"文档版本上传失败: {e}", exc_info=True)
-            yield {"event": "error", "data": json.dumps({"message": f"处理失败: {str(e)}"}, ensure_ascii=False)}
+            detail = str(e).strip() or repr(e).strip() or e.__class__.__name__
+            yield {
+                "event": "error",
+                "data": json.dumps({
+                    "message": f"处理失败（步骤：{current_step}）：{detail}",
+                    "step": current_step,
+                    "error_type": e.__class__.__name__,
+                }, ensure_ascii=False)
+            }
 
     return EventSourceResponse(event_generator())
 
@@ -1712,12 +1806,22 @@ async def execute_change_plan(
     if plan.status not in ("pending", "confirmed"):
         raise HTTPException(status_code=400, detail=f"变更计划状态为 {plan.status}，不能执行")
 
-    # 保存用户 APaaS 凭证（在 event_generator 前）
-    apaas_token = ctx.user.apaas_token
-    apaas_base_url = ctx.user.apaas_base_url
-    apaas_tenant_id = ctx.user.apaas_tenant_id
     apaas_app_id = app.apaas_app_id
     app_name = app.app_name
+    apaas_token = None
+    apaas_base_url = None
+    apaas_tenant_id = None
+    platform_client_error = None
+
+    try:
+        from app.routes.incremental_update import _get_platform_client_for_app
+        platform_client = await _get_platform_client_for_app(app, ctx.user, db)
+        apaas_token = getattr(platform_client, "token", None)
+        apaas_base_url = getattr(platform_client, "base_url", None)
+        apaas_tenant_id = getattr(platform_client, "tenant_id", None)
+    except Exception as e:
+        platform_client_error = str(e)
+        logger.warning(f"执行变更计划时获取平台连接失败: {e}")
 
     app_id_val = app.id
     current_config_str = app.config_preview
@@ -1796,12 +1900,19 @@ async def execute_change_plan(
 
                     if diff.has_changes:
                         # 创建执行器并执行
-                        executor = IncrementalExecutor(client, apaas_app_id, app_name)
+                        executor = IncrementalExecutor(
+                            client,
+                            apaas_app_id,
+                            app_name,
+                            target_config=new_config,
+                        )
 
                         # 流式执行差异
                         async for progress in executor.execute_diff_stream(diff):
                             if progress.get("type") == "complete":
                                 sync_result = progress.get("result", {})
+                                if not sync_result.get("success", True):
+                                    sync_errors.extend(sync_result.get("errors", []) or ["平台同步失败"])
                             elif progress.get("type") == "error":
                                 sync_errors.append(progress.get("message", "未知错误"))
                             else:
@@ -1813,13 +1924,33 @@ async def execute_change_plan(
                         sync_result = {"message": "无变更需要同步"}
 
                 except Exception as e:
-                    logger.warning(f"平台同步失败（将继续保存本地配置）: {e}", exc_info=True)
+                    logger.warning(f"平台同步失败: {e}", exc_info=True)
                     sync_errors.append(str(e))
             else:
-                if not apaas_token:
-                    logger.info("用户未连接平台，跳过同步")
+                if apaas_app_id and (not apaas_token or not apaas_base_url):
+                    missing_parts = []
+                    if not apaas_token:
+                        missing_parts.append("平台登录凭证")
+                    if not apaas_base_url:
+                        missing_parts.append("平台地址")
+                    detail = f"缺少{ '、'.join(missing_parts) }，无法同步到平台"
+                    if platform_client_error:
+                        detail = f"{detail}（{platform_client_error}）"
+                    sync_errors.append(detail)
                 elif not apaas_app_id:
-                    logger.info("应用未创建到平台，跳过同步")
+                    sync_errors.append("应用尚未关联平台应用，无法执行平台更新")
+
+            if sync_errors:
+                detail = "；".join([str(err) for err in sync_errors if err]) or "平台同步失败"
+                yield {
+                    "event": "error",
+                    "data": json.dumps({
+                        "message": f"平台执行失败：{detail}",
+                        "sync_errors": sync_errors,
+                        "sync_result": sync_result,
+                    }, ensure_ascii=False),
+                }
+                return
 
             yield {"event": "progress", "data": json.dumps({"step": "保存本地配置..."}, ensure_ascii=False)}
 
@@ -1931,6 +2062,70 @@ async def list_doc_versions(
     return {
         "current_version": app.current_doc_version,
         "versions": items,
+    }
+
+
+@router.delete("/{app_id}/doc-versions/{version_id}")
+async def delete_doc_version(
+    app_id: int,
+    version_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """删除指定文档版本，并同步应用当前版本指针。"""
+    result = await db.execute(
+        select(Application).where(Application.id == app_id, Application.tenant_id == ctx.tenant_id)
+    )
+    app = result.scalar_one_or_none()
+    if not app:
+        raise HTTPException(status_code=404, detail="应用不存在")
+    await check_resource_permission(ctx, db, app, "application", Action.EDIT)
+
+    result = await db.execute(
+        select(DocumentVersion).where(
+            DocumentVersion.id == version_id,
+            DocumentVersion.application_id == app_id,
+        )
+    )
+    doc_version = result.scalar_one_or_none()
+    if not doc_version:
+        raise HTTPException(status_code=404, detail="文档版本不存在")
+
+    deleted_version_no = doc_version.version
+
+    await db.execute(
+        delete(ChangePlan).where(
+            ChangePlan.application_id == app_id,
+            (ChangePlan.to_version == deleted_version_no) | (ChangePlan.from_version == deleted_version_no),
+        )
+    )
+    await db.delete(doc_version)
+    await db.flush()
+
+    result = await db.execute(
+        select(DocumentVersion)
+        .where(DocumentVersion.application_id == app_id)
+        .order_by(desc(DocumentVersion.version))
+    )
+    remaining_versions = result.scalars().all()
+
+    latest = remaining_versions[0] if remaining_versions else None
+    app.current_doc_version = latest.version if latest else None
+    if latest and latest.parsed_config:
+        try:
+            parsed = json.loads(latest.parsed_config) if isinstance(latest.parsed_config, str) else latest.parsed_config
+            app.config_preview = json.dumps({"type": "preview", "data": parsed}, ensure_ascii=False)
+        except Exception:
+            logger.warning("删除文档版本后同步 config_preview 失败", exc_info=True)
+            app.config_preview = None
+    else:
+        app.config_preview = None
+
+    await db.commit()
+    return {
+        "ok": True,
+        "deleted_version": deleted_version_no,
+        "current_version": app.current_doc_version,
     }
 
 

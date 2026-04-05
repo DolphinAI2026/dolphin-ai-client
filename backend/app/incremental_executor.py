@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import time
 import logging
-from typing import Optional, Dict, Any, List, AsyncGenerator
+from typing import Optional, Dict, Any, List, AsyncGenerator, Tuple
 from dataclasses import dataclass, field
 
 from app.config_diff import (
@@ -24,6 +24,8 @@ from app.config_diff import (
     ModelChange, FieldChange, FormChange, ProcessChange
 )
 from app.apaas_client import APaaSClient, _extract_query_params, _log_request, _log_response
+from app.generator_v2 import _extract_fields
+from app.step_executor import execute_create_form
 
 logger = logging.getLogger(__name__)
 
@@ -126,7 +128,13 @@ class ExecutionResult:
 class IncrementalExecutor:
     """增量执行器"""
 
-    def __init__(self, client: APaaSClient, app_id: str, app_name: str = ""):
+    def __init__(
+        self,
+        client: APaaSClient,
+        app_id: str,
+        app_name: str = "",
+        target_config: Optional[Dict[str, Any]] = None,
+    ):
         """
         初始化执行器
 
@@ -138,8 +146,127 @@ class IncrementalExecutor:
         self.client = client
         self.app_id = app_id
         self.app_name = app_name
+        self.target_config = target_config or {}
         self.result = ExecutionResult()
         self._remote_models_by_code: Optional[Dict[str, Dict[str, Any]]] = None
+        self._remote_forms_cache: Optional[List[Dict[str, Any]]] = None
+        self._remote_dict_code_map: Optional[Dict[str, str]] = None
+
+    @staticmethod
+    def _unwrap_config(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        if not isinstance(config, dict):
+            return {}
+        data = config.get("data")
+        if isinstance(data, dict):
+            return data
+        return config
+
+    def _get_target_models(self) -> List[Dict[str, Any]]:
+        data = self._unwrap_config(self.target_config)
+        models = data.get("models", [])
+        return models if isinstance(models, list) else []
+
+    def _find_target_model(self, model_code: str, form_name: str = "") -> Tuple[Optional[int], Optional[Dict[str, Any]]]:
+        models = self._get_target_models()
+        normalized_code = str(model_code or "").strip()
+        normalized_name = str(form_name or "").strip()
+        for idx, model in enumerate(models):
+            code = str(model.get("modelCode", model.get("model_code", model.get("code", "")))).strip()
+            name = str(model.get("modelName", model.get("name", ""))).strip()
+            if normalized_code and code == normalized_code:
+                return idx, model
+            if normalized_name and name == normalized_name:
+                return idx, model
+        return None, None
+
+    async def _build_target_dict_codes(self) -> Dict[str, str]:
+        if self._remote_dict_code_map is not None:
+            return self._remote_dict_code_map
+
+        mapping: Dict[str, str] = {}
+        data = self._unwrap_config(self.target_config)
+        for item in data.get("dicts", []) or []:
+            dict_code = str(item.get("dictionaryCode", item.get("code", ""))).strip()
+            dict_name = str(item.get("dictionaryName", item.get("name", ""))).strip()
+            if dict_code:
+                mapping[dict_code] = dict_code
+            if dict_name and dict_code:
+                mapping[dict_name] = dict_code
+
+        if not mapping:
+            remote_dicts = await self.client.query_dicts(self.app_id)
+            for item in remote_dicts:
+                dict_code = str(item.get("dictionaryCode", item.get("code", ""))).strip()
+                dict_name = str(item.get("dictionaryName", item.get("name", ""))).strip()
+                if dict_code:
+                    mapping[dict_code] = dict_code
+                if dict_name and dict_code:
+                    mapping[dict_name] = dict_code
+
+        self._remote_dict_code_map = mapping
+        return mapping
+
+    async def _build_target_model_info(self) -> Dict[str, Dict[str, Any]]:
+        target_models = self._get_target_models()
+        remote_models = await self._load_remote_models_by_code()
+        model_info: Dict[str, Dict[str, Any]] = {}
+
+        for idx, model in enumerate(target_models):
+            model_code = str(model.get("modelCode", model.get("model_code", model.get("code", "")))).strip()
+            if not model_code:
+                continue
+
+            remote_model = remote_models.get(model_code)
+            if not remote_model:
+                continue
+
+            model_info[str(idx)] = {
+                "name": model.get("modelName", model.get("name", model_code)),
+                "code": model_code,
+                "fields": _extract_fields(remote_model),
+            }
+
+        return model_info
+
+    async def _create_form_via_initial_flow(self, change: FormChange):
+        form_data = change.new_value or {}
+        model_code = str(form_data.get("modelCode", change.model_code or "")).strip()
+        model_index, target_model = self._find_target_model(model_code, change.name)
+        if target_model is None or model_index is None:
+            raise Exception(
+                f"文档配置中找不到模型编码 {model_code or 'unknown'}，不生成表单「{change.name}」"
+            )
+
+        remote_models = await self._load_remote_models_by_code()
+        if not model_code or model_code not in remote_models:
+            raise Exception(f"找不到模型编码 {model_code or 'unknown'}，不生成表单「{change.name}」")
+
+        target_models = self._get_target_models()
+        model_info = await self._build_target_model_info()
+        if str(model_index) not in model_info:
+            raise Exception(f"模型编码 {model_code} 尚未在平台创建成功，不生成表单「{change.name}」")
+
+        dict_codes = await self._build_target_dict_codes()
+        form_result = await execute_create_form(
+            client=self.client,
+            app_id=self.app_id,
+            model=target_model,
+            model_index=model_index,
+            dict_codes=dict_codes,
+            model_info=model_info,
+            all_models=target_models,
+        )
+
+        change.remote_id = str(form_result.get("formId") or change.remote_id or "") or None
+        change.menu_id = str(form_result.get("menuId") or change.menu_id or "") or None
+        self._remote_forms_cache = None
+        self.result.add_success("forms", f"新增表单: {change.name}")
+        logger.info(
+            "按首次创建逻辑创建/复用表单成功: %s (%s), reused=%s",
+            change.name,
+            change.code,
+            form_result.get("reused"),
+        )
 
     @staticmethod
     def _field_comment_value(field_data: Optional[Dict[str, Any]]) -> str:
@@ -203,6 +330,45 @@ class IncrementalExecutor:
             return field_change.remote_id
 
         return None
+
+    async def _load_remote_forms(self) -> List[Dict[str, Any]]:
+        if self._remote_forms_cache is not None:
+            return self._remote_forms_cache
+        self._remote_forms_cache = await self.client.query_menus(self.app_id)
+        return self._remote_forms_cache
+
+    async def _resolve_form_remote_refs(self, change: FormChange) -> tuple[Optional[str], Optional[str]]:
+        remote_forms = await self._load_remote_forms()
+        target_code = str(change.code or "").strip()
+        target_name = str(change.name or "").strip()
+
+        matched = None
+        for item in remote_forms:
+            if target_code and str(item.get("formCode", "")).strip() == target_code:
+                matched = item
+                break
+        if not matched and target_name:
+            for item in remote_forms:
+                menu_name = str(item.get("menuName", "")).strip()
+                form_name = str(item.get("formName", "")).strip()
+                if target_name == menu_name or target_name == form_name:
+                    matched = item
+                    break
+
+        if not matched:
+            return None, None
+
+        remote_id = matched.get("formId") or matched.get("id")
+        menu_id = matched.get("menuId") or matched.get("id")
+        if remote_id:
+            change.remote_id = str(remote_id)
+        if menu_id:
+            change.menu_id = str(menu_id)
+        logger.info(
+            f"表单「{change.name}」动态补全远端引用成功: "
+            f"formCode={target_code}, remote_id={change.remote_id}, menu_id={change.menu_id}"
+        )
+        return change.remote_id, change.menu_id
 
     async def execute_diff(self, diff: ConfigDiff) -> ExecutionResult:
         """
@@ -976,25 +1142,20 @@ class IncrementalExecutor:
 
     async def _create_form(self, change: FormChange):
         """创建表单"""
-        form_data = change.new_value or {}
+        await self._resolve_form_remote_refs(change)
+        if change.remote_id:
+            logger.info(f"表单「{change.name}」已存在于平台，转为更新而不是重复创建")
+            await self._update_form(change)
+            return
 
-        payload = [{
-            "formCode": change.code,
-            "formName": change.name,
-            "modelCode": form_data.get("modelCode", change.model_code or ""),
-            "formType": form_data.get("formType", "NORMAL"),
-            "components": form_data.get("components", [])
-        }]
-
-        await self.client.create_form_config(self.app_id, payload)
-        self.result.add_success("forms", f"新增表单: {change.name}")
-        logger.info(f"创建表单成功: {change.name} ({change.code})")
+        await self._create_form_via_initial_flow(change)
 
     async def _update_form(self, change: FormChange):
         """更新表单"""
         if not change.remote_id:
-            # 平台上不存在，降级为创建
-            logger.info(f"表单「{change.name}」缺少 remote_id，降级为创建操作")
+            await self._resolve_form_remote_refs(change)
+        if not change.remote_id:
+            logger.info(f"表单「{change.name}」未找到远端表单，尝试按文档模型编码创建")
             await self._create_form(change)
             return
 
@@ -1012,6 +1173,7 @@ class IncrementalExecutor:
             current_config["detailPage"]["formComponents"] = form_data["components"]
 
         await self.client.save_form_config(self.app_id, current_config)
+        self._remote_forms_cache = None
         self.result.add_success("forms", f"更新表单: {change.name}")
         logger.info(f"更新表单成功: {change.name} ({change.code})")
 
@@ -1029,6 +1191,7 @@ class IncrementalExecutor:
         }
 
         await self._post("/xdap-app/menu/delete/menu", payload)
+        self._remote_forms_cache = None
         self.result.add_success("forms", f"删除表单: {change.name}")
         logger.info(f"删除表单成功: {change.name} ({change.code})")
 

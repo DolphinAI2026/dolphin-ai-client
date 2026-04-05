@@ -65,6 +65,163 @@ def _load_config(app: Application) -> dict:
     return json.loads(app.config_preview) if isinstance(app.config_preview, str) else app.config_preview
 
 
+def _render_design_doc_markdown(app_name: str, app_code: str, data: dict) -> str:
+    roles = data.get("roles", []) or []
+    dicts = data.get("dicts", []) or []
+    models = data.get("models", []) or []
+    permissions = data.get("permissions", []) or []
+
+    lines: list[str] = [
+        "# 应用设计文档",
+        "",
+        "## 1. 应用信息",
+        "",
+        "| 项目 | 值 |",
+        "|---|---|",
+        f"| 应用编码 | {app_code or ''} |",
+        f"| 应用名称 | {app_name or ''} |",
+        "",
+        "---",
+        "",
+        "## 2. 角色列表",
+        "",
+        "| 角色编码 | 角色名称 | 职责说明 |",
+        "|---|---|---|",
+    ]
+    if roles:
+        lines.extend([f"| {r.get('code', '')} | {r.get('name', '')} | {r.get('description', '')} |" for r in roles])
+    else:
+        lines.append("|  |  |  |")
+
+    lines.extend(["", "---", "", "## 3. 数据字典", ""])
+    if dicts:
+        for idx, item in enumerate(dicts, start=1):
+            lines.extend([
+                f"### 3.{idx} {item.get('name') or item.get('code') or f'字典{idx}'}",
+                "",
+                "| 字典编码 | 字典名称 |",
+                "|---|---|",
+                f"| {item.get('code', '')} | {item.get('name', '')} |",
+                "",
+                "| 选项编码 | 选项名称 |",
+                "|---|---|",
+            ])
+            options = item.get("options") or item.get("values") or []
+            if options:
+                for option in options:
+                    if isinstance(option, str):
+                        lines.append(f"|  | {option} |")
+                    else:
+                        lines.append(f"| {option.get('code') or option.get('item_code') or ''} | {option.get('name') or option.get('item_name') or ''} |")
+            else:
+                lines.append("|  |  |")
+            lines.append("")
+    else:
+        lines.append("暂无")
+        lines.append("")
+
+    lines.extend(["---", "", "## 4. 数据模型", ""])
+    if models:
+        for idx, model in enumerate(models, start=1):
+            parent_code = model.get("parent_code") or model.get("parentCode") or model.get("parent_model_code") or ""
+            table_type = model.get("table_type") or model.get("type") or ("子表" if parent_code else "主表")
+            lines.extend([
+                f"### 4.{idx} {'子表' if parent_code else '主表'}：{model.get('name') or model.get('code') or f'模型{idx}'}",
+                "",
+            ])
+            if parent_code:
+                lines.extend([
+                    "| 模型编码 | 模型名称 | 类型 | 所属主表模型编码 |",
+                    "|---|---|---|---|",
+                    f"| {model.get('code', '')} | {model.get('name', '')} | {table_type} | {parent_code} |",
+                ])
+            else:
+                lines.extend([
+                    "| 模型编码 | 模型名称 | 类型 |",
+                    "|---|---|---|",
+                    f"| {model.get('code', '')} | {model.get('name', '')} | {table_type} |",
+                ])
+            lines.extend([
+                "",
+                "| 字段编码 | 字段名称 | 数据库字段类型 | 长度/精度 | 必填 | 字典编码 | 关联模型编码 | 关联显示字段编码 | 说明 |",
+                "|---|---|---|---|---|---|---|---|---|",
+            ])
+            fields = model.get("fields") or []
+            if fields:
+                for field in fields:
+                    ref = field.get("ref") or {}
+                    ref_model = ref.get("model") if isinstance(ref, dict) else ""
+                    ref_display = ref.get("display_field") if isinstance(ref, dict) else ""
+                    lines.append(
+                        f"| {field.get('code', '')} | {field.get('name', '')} | {field.get('db_type') or field.get('field_type') or field.get('type') or ''} | "
+                        f"{field.get('length') or field.get('precision') or ''} | {field.get('required', False) and '是' or '否'} | "
+                        f"{field.get('dict_code') or field.get('dict') or ''} | {ref_model} | {ref_display} | {field.get('description', '')} |"
+                    )
+            else:
+                lines.append("|  |  |  |  | 否 |  |  |  |  |")
+            lines.append("")
+    else:
+        lines.append("暂无")
+        lines.append("")
+
+    lines.extend(["---", "", "## 5. 表单配置", ""])
+    form_models = [model for model in models if (model.get("form_name") or model.get("form_code") or model.get("components"))]
+    if form_models:
+        for idx, model in enumerate(form_models, start=1):
+            lines.extend([
+                f"### 5.{idx} 表单：{model.get('form_name') or model.get('name') or model.get('form_code') or f'表单{idx}'}",
+                "",
+                "| 表单编码 | 表单名称 | 绑定主表模型编码 |",
+                "|---|---|---|",
+                f"| {model.get('form_code') or model.get('code') or ''} | {model.get('form_name') or model.get('name') or ''} | {model.get('code') or ''} |",
+                "",
+                f"#### 5.{idx}.1 主表字段组件",
+                "",
+                "| 字段编码 | 字段名称 | 组件类型 | 是否只读 | 是否列表展示 | 是否查询条件 | 说明 |",
+                "|---|---|---|---|---|---|---|",
+            ])
+            fields = model.get("fields") or []
+            if fields:
+                for field in fields:
+                    lines.append(
+                        f"| {field.get('code', '')} | {field.get('name', '')} | {field.get('component') or field.get('component_type') or field.get('ui_type') or field.get('type') or ''} | "
+                        f"{field.get('readonly', False) and '是' or '否'} | {field.get('list_visible', False) and '是' or '否'} | "
+                        f"{field.get('queryable', False) and '是' or '否'} | {field.get('description', '')} |"
+                    )
+            else:
+                lines.append("|  |  |  | 否 | 否 | 否 |  |")
+            lines.extend(["", f"#### 5.{idx}.2 子表区域", "", "无", ""])
+    else:
+        lines.append("暂无")
+        lines.append("")
+
+    lines.extend(["---", "", "## 6. 权限配置", "", "### 6.1 表单权限", "", "| 表单编码 | 角色编码 | 可暂存 | 可新增 | 可导入 | 可查看 | 可编辑 | 可删除 | 可导出 | 数据范围 |", "|---|---|---|---|---|---|---|---|---|---|"])
+    if permissions:
+        for perm in permissions:
+            form_code = perm.get("form_code") or perm.get("table_code") or perm.get("code") or perm.get("form") or ""
+            role_rows = perm.get("roles") or []
+            if not role_rows:
+                lines.append(f"| {form_code} |  | 否 | 否 | 否 | 否 | 否 | 否 | 否 |  |")
+                continue
+            for role in role_rows:
+                actions = {str(action).strip() for action in (role.get("actions") or role.get("operations") or role.get("permissions") or [])}
+                lines.append(
+                    f"| {form_code} | {role.get('role_code') or role.get('code') or ''} | "
+                    f"{'是' if 'draft' in actions or '暂存' in actions else '否'} | "
+                    f"{'是' if 'add' in actions or '新增' in actions or 'create' in actions else '否'} | "
+                    f"{'是' if 'import' in actions or '导入' in actions else '否'} | "
+                    f"{'是' if 'view' in actions or '查看' in actions or 'read' in actions else '否'} | "
+                    f"{'是' if 'edit' in actions or '编辑' in actions or 'update' in actions else '否'} | "
+                    f"{'是' if 'delete' in actions or '删除' in actions else '否'} | "
+                    f"{'是' if 'export' in actions or '导出' in actions else '否'} | "
+                    f"{role.get('data_scope') or role.get('scope') or role.get('dataScope') or ''} |"
+                )
+    else:
+        lines.append("|  |  | 否 | 否 | 否 | 否 | 否 | 否 | 否 |  |")
+
+    return "\n".join(lines).strip() + "\n"
+
+
 def _build_steps(config: dict, state: dict, apaas_app_id: str = None) -> list[StepStatus]:
     """根据 config 和 state 构建完整步骤列表。"""
     data = config.get("data", config)
@@ -520,36 +677,17 @@ async def execute_step(
                     _save_state(app, state)
                     step_response = StepExecuteResponse(step=step_key, status="ok", error=None)
                 elif (is_model_step or is_form_step) and is_duplicate:
-                    # 模型/表单：自动加后缀并立即重试
-                    logger.info(f"步骤 {step_key} 编码冲突，自动加后缀重试: {error_msg}")
-                    import random, string
-                    suffix = ''.join(random.choices(string.ascii_lowercase, k=4))
-                    retry_ok = False
-                    if is_model_step:
-                        idx = int(step_key.split(":")[1])
-                        if idx < len(models):
-                            old_code = models[idx].get("code", "")
-                            new_code = f"{old_code}_{suffix}"
-                            models[idx]["code"] = new_code
-                            logger.info(f"模型编码自动重命名: {old_code} -> {new_code}")
-                            app.config_preview = json.dumps(data, ensure_ascii=False)
-                            # 立即用新编码重试
-                            try:
-                                result = await execute_step(client, app_id, step_key, data, state)
-                                # 回填 model_info（重试成功时 execute_step 已经更新了 state）
-                                state.setdefault("steps_completed", []).append(step_key)
-                                state.get("step_errors", {}).pop(step_key, None)
-                                _save_state(app, state)
-                                step_response = StepExecuteResponse(step=step_key, status="completed", result=result)
-                                retry_ok = True
-                            except Exception as retry_err:
-                                logger.warning(f"自动重试也失败: {retry_err}")
-                    if not retry_ok:
-                        # 重试也失败，正常报错让用户知道
-                        logger.warning(f"步骤 {step_key} 自动重命名重试也失败")
-                        state.setdefault("step_errors", {})[step_key] = error_msg
-                        _save_state(app, state)
-                        step_response = StepExecuteResponse(step=step_key, status="error", error=f"编码冲突且自动重命名失败: {error_msg}")
+                    # 模型/表单：不要自动改名，直接回到左侧对话区等待用户确认
+                    logger.info(f"步骤 {step_key} 编码冲突，等待用户确认新编码: {error_msg}")
+                    conflict = _detect_code_conflict(error_msg, step_key, data, models)
+                    state.setdefault("step_errors", {})[step_key] = error_msg
+                    _save_state(app, state)
+                    step_response = StepExecuteResponse(
+                        step=step_key,
+                        status="conflict",
+                        error=error_msg,
+                        conflict=conflict,
+                    )
                 else:
                     # 其他错误：原样报错
                     conflict = _detect_code_conflict(error_msg, step_key, data, models)
@@ -907,7 +1045,7 @@ async def resolve_conflict(
             version=new_version,
             filename=f"conflict-fix-v{new_version}",
             content_hash=hashlib.sha256(config_json.encode()).hexdigest(),
-            raw_content="",  # 编码修复不涉及原始文档变更
+            raw_content=_render_design_doc_markdown(app.app_name, app.app_code, data),
             parsed_config=config_json,
             summary=f"编码冲突修复: {old_code} → {new_code}",
         )
