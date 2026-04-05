@@ -583,7 +583,7 @@ class VibeCodingAgent:
 ## Workflow — IMPORTANT: Be efficient! Minimize tool calls.
 0. **Before tool calls**: First write a short, user-facing progress note in Chinese (1-3 sentences) explaining what you understood and what you will do next.
 1. **FIRST** (1 call): Use glob_files to see the project structure
-2. **THEN** (1-3 calls max): If `.cursor/rules/*.mdc` exists, read those rule files first, then read ONLY the key implementation files you need (edit.vue and mixin). Do NOT read every file.
+2. **THEN** (1-3 calls max): If `.cursor/rules/*.mdc` exists, read those rule files first, then read ONLY the scaffold demo files (`form-component-demo-*.vue`) and mixin as structural reference. Do NOT read every file.
 3. **IMMEDIATELY write code**: Use write_file to create/update ALL component files in one batch. Call write_file multiple times in a SINGLE turn (parallel tool calls).
 4. **THEN** run `npm run build` to check compilation
 5. If errors, fix and rebuild. If success, report completion.
@@ -594,6 +594,7 @@ class VibeCodingAgent:
 - **Write ALL files at once**: In a single turn, call write_file for edit.vue, read.vue, ide.vue, setting.vue etc. Do NOT write one file per turn.
 - **When generating designer config**: update `src/form-component/form-editor/index.js` and `src/form-component-config/form-editor/index.js` in the same batch as `setting.vue` / `{name}.editor.config.js`.
 - **Be decisive**: You are an expert. After reading the scaffold structure and 1-2 example files, you have enough context to write the component.
+- **ONLY use demo scaffold files as examples**: Do NOT read other generated components in the workspace (e.g. `form-component-upload`, `form-component-xxx`) as implementation references — they were generated for different requirements and will bias your output. Use ONLY `form-component-demo-*.vue` files as structural reference.
 - **Maximum 8 turns total**: If you haven't written code by turn 4, something is wrong. Write the code NOW.
 
 ## Technical Constraints

@@ -1864,12 +1864,21 @@ def _build_workspace_context(ws_id: str) -> dict:
             key_extensions = ('.vue', '.js')
             key_names = ('apaas.json', 'index.js')
 
+        # 对于表单/移动组件项目，只保留 demo 脚手架组件文件，不把其他已生成组件塞入上下文
+        # 避免 AI 把已生成的 form-component-upload 等当成参考模板去模仿
+        is_form_component_project = project_type in {"form-component", "mobile-component"}
+
         key_file_paths = list(rule_files)
         for fp in files:
             basename = fp.split('/')[-1] if '/' in fp else fp
             if fp in key_file_paths:
                 continue
             if any(fp.endswith(ext) for ext in key_extensions):
+                # 对于表单组件项目，跳过 form-component 目录下的非 demo 组件文件
+                if is_form_component_project and (
+                    '/form-component/' in fp or '/form-component-config/' in fp
+                ) and 'form-component-demo' not in fp and 'form-widget.mixin' not in fp:
+                    continue
                 key_file_paths.append(fp)
             elif basename in key_names:
                 key_file_paths.append(fp)
