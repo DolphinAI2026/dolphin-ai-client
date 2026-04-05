@@ -782,14 +782,19 @@ computed: {
 - **必须根据组件的值存储格式设置 widget.config.js 中的 componentModelField 和 frontBusinessObjectComponentType**：
   - `componentModelField` 必须与 `widget` 同级，不能写在 `widget` 内部
   - `componentModelField` 只能是单选数组，且只支持 `['STRING']` / `['NUM']` / `['DATE']` / `['BIG_TEXT']`
-  - 存储单个字符串且值长度 < 500 → `componentModelField: ['STRING']`, `frontBusinessObjectComponentType: 'BOF_TEXT'`
-  - 存储单个字符串且值长度 ≥ 500（或长度不确定/可能较大）→ `componentModelField: ['BIG_TEXT']`, `frontBusinessObjectComponentType: 'BOF_TEXT'`
   - 存储单个日期值 → `componentModelField: ['DATE']`, `frontBusinessObjectComponentType: 'BOF_DATE'`
   - 存储单个数字 → `componentModelField: ['NUM']`, `frontBusinessObjectComponentType: 'BOF_NUMBER'`
-  - 存储数组/JSON/复合值（如日期范围、多选、地址等） → `componentModelField: ['BIG_TEXT']`, `frontBusinessObjectComponentType: 'BOF_TEXT'`
-  - 存储 base64、富文本、大容量内容 → `componentModelField: ['BIG_TEXT']`
-  - 判断依据是 formValue 的实际存储格式，不是组件的外观。例如”日期范围”存两个日期的数组，应该用 `BIG_TEXT` 而不是 `DATE`
-  - **字符串长度阈值：< 500 用 `STRING`，≥ 500 用 `BIG_TEXT`**
+  - 其余所有类型（字符串、JSON 数组、JSON 对象等）**统一按预期最大值长度判断**：
+    - 预期值长度 < 500 → `componentModelField: ['STRING']`, `frontBusinessObjectComponentType: 'BOF_TEXT'`
+    - 预期值长度 ≥ 500 → `componentModelField: ['BIG_TEXT']`, `frontBusinessObjectComponentType: 'BOF_TEXT'`
+  - 典型示例：
+    - 日期范围 `[“2024-01-01”,”2024-01-31”]` ≈ 30 字符 → `['STRING']`
+    - 两三个短选项的多选 `[“a”,”b”,”c”]` ≈ 15 字符 → `['STRING']`
+    - 省市区地址对象 `{“province”:”广东”,”city”:”深圳”,”district”:”南山”}` ≈ 60 字符 → `['STRING']`
+    - 富文本/大段描述 → 可能上千字符 → `['BIG_TEXT']`
+    - base64 图片 → 远超 500 → `['BIG_TEXT']`
+    - 不确定长度（用户可随意输入大量内容）→ 保守选 `['BIG_TEXT']`
+  - 判断依据是 formValue 序列化后的实际字符数，不是组件外观；日期范围虽然是数组，序列化后很短，用 `STRING` 而非 `DATE`
 - **如果 scaffold 模板的 componentModelField 与组件实际需求不匹配，必须在生成代码时同时修改 widget.config.js**
 - **编辑态组件中修改其他字段：使用 `this.$set(this.formData, key, value)`**
 - **edit.vue 只渲染内容，配置界面只放 setting.vue**
