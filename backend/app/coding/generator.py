@@ -150,7 +150,7 @@ class CodingGenerator:
             project_type = (workspace_context.get("project_type", "") or "").lower()
             if project_type in {"form-component", "mobile-component"}:
                 ws_str += "- **必须输出所有7个场景的 .vue 组件文件**（edit、read、ide、list、print、search、search-ide）和 setting.vue\n"
-                ws_str += "- **必须同时输出 widget.config.js**，并把 `componentModelField` 放在与 `widget` 同级的位置；它只能是 `['STRING']` / `['NUM']` / `['DATE']` / `['BIG_TEXT']` 之一。日期类用 `DATE`，数字类用 `NUM`，数组/JSON/大文本用 `BIG_TEXT`；**字符串按长度阈值选择：值长度 < 500 用 `STRING`，≥ 500 用 `BIG_TEXT`**\n"
+                ws_str += "- **必须同时输出 widget.config.js**，并把 `componentModelField` 放在与 `widget` 同级的位置；只支持 `['STRING']` / `['NUM']` / `['DATE']` / `['BIG_TEXT']`。日期单值用 `DATE`，数字用 `NUM`；其余（字符串、JSON数组/对象等）**统一按预期值长度判断**：预期序列化长度 < 500 用 `STRING`（如日期范围数组约30字符），≥ 500 用 `BIG_TEXT`（如富文本、base64）\n"
                 ws_str += "- edit/read/ide.vue 与 setting.vue 的 customComponentConfig 读写路径必须一致\n"
                 ws_str += "- `setting.vue` 固定路径为 `src/form-component/form-editor/{name}-setting.vue`，不要放到 `src/form-component-config/form-editor/`\n"
                 ws_str += "- `editorConfigList` 必须来自 `src/form-component-config/form-editor/{name}.editor.config.js`，并在同级 `index.js` 中导入聚合；`src/form-component/form-editor/index.js` 也必须导入 `./{name}-setting.vue`\n"
