@@ -594,16 +594,16 @@ export default {
 
 **setting.vue 不使用 FormWidgetMixin**。平台通过 EditorFormConfigMixin 传入 props。
 
-**正确模式**：接收 `componentConfig`（widget对象）作为 prop，模板中控件直接 `v-model="componentConfig.customComponentConfig.xxx"` 双向绑定，平台自动感知变化并持久化，**不需要任何 saveConfig 方法**。
+**正确模式**：接收 `componentConfig`（widget对象）和 `formEngine`（表单引擎）作为 props，通过 `$set` 写入 `customComponentConfig` 持久化配置。
 
 ```javascript
 export default {
   name: 'FormComponentXxxSetting',
   props: {
     // ★ 平台通过 EditorFormConfigMixin 传入这些 props
-    componentConfig: { default: null },  // widget 对象（最重要，直接读写 customComponentConfig）
-    formEngine: { default: null },       // 表单引擎实例
-    widget: { default: null },
+    componentConfig: { default: null },  // widget 对象（最重要）
+    formEngine: { default: null },       // 表单引擎实例（通过 prop 传入！不是 inject）
+    widget: { default: null },           // 兼容旧方式
     editConfig: { default: null },
     configProperty: { default: null },
     formItemList: { default: null },
@@ -619,61 +619,76 @@ export default {
     getI18nShowStatus: { default: null },
     filterTableFromNodeFields: { default: null }
   },
+  data() {
+    return {
+      // ★ 用 data 存本地状态，不要用 computed 的 $set 副作用（会导致无限循环）
+      localConfig: {
+        // 在这里定义组件的自定义配置字段
+      }
+    }
+  },
   computed: {
+    // 兼容两种传参方式
+    widgetObj() {
+      return this.componentConfig || this.widget || {}
+    },
     // ★ formEngine 优先从 prop 获取（设计器传入），其次 inject
     engine() {
       if (this.formEngine) return this.formEngine
       if (this.renderGlobal) return this.renderGlobal
       return null
     },
-    // 获取所有子表（需要时使用）
+    // 获取所有子表
     subTableList() {
       if (!this.engine || !this.engine.formDataControl) return []
       return (this.engine.formDataControl.allTileFormItemList || [])
         .filter(item => item.componentType === 'FORM_WIDGET_SON_TABLE')
+    },
+    // 获取子表字段（两种方式兜底）
+    availableFields() {
+      if (!localConfig.dataSource || !this.engine) return []
+      const allItems = this.engine.formDataControl.allTileFormItemList || []
+      const tableUuid = this.localConfig.dataSource
+      // 方式1：通过 isInTable + tableUuid 关联
+      const fields = allItems.filter(item =>
+        item.isInTable && item.tableUuid === tableUuid &&
+        item.componentType !== 'FORM_WIDGET_SON_TABLE'
+      )
+      if (fields.length > 0) return fields.filter(f => f.label)
+      // 方式2：从子表的 sonTableColumns 获取
+      const table = this.subTableList.find(t => t.uuid === tableUuid)
+      if (table && table.sonTableColumns) return table.sonTableColumns.filter(col => col.label)
+      return []
+    }
+  },
+  created() {
+    // ★ 从 widget 读取已保存的配置，初始化本地状态
+    const saved = this.widgetObj.customComponentConfig || {}
+    Object.keys(this.localConfig).forEach(key => {
+      if (saved[key] !== undefined) this.localConfig[key] = saved[key]
+    })
+  },
+  methods: {
+    // ★ 保存配置到 widget.customComponentConfig（用 $set 确保响应式 + 平台持久化）
+    saveConfig() {
+      this.$set(this.widgetObj, 'customComponentConfig', { ...this.localConfig })
     }
   }
 }
 ```
 
-**模板中直接 v-model 绑定 customComponentConfig 的属性**：
-```html
-<template>
-  <div>
-    <el-form-item label="配置项A">
-      <el-select v-model="componentConfig.customComponentConfig.fieldA" size="mini">
-        <el-option label="选项1" value="1" />
-      </el-select>
-    </el-form-item>
-    <el-form-item label="配置项B">
-      <el-input v-model="componentConfig.customComponentConfig.fieldB" size="mini" />
-    </el-form-item>
-  </div>
-</template>
-```
-
 **⚠️ Setting.vue 开发必须遵守的规则**：
-1. **控件直接 `v-model="componentConfig.customComponentConfig.xxx"`**，平台自动持久化，不需要 saveConfig 方法
+1. **formEngine 通过 prop 传入**（不是 inject `renderGlobal`），inject 只作为兜底
 2. **inject 声明必须带 `{ default: null }`**，不能用数组形式 `inject: ['xxx']`，否则找不到 provide 时组件会静默崩溃
-3. **配置直接存在 `customComponentConfig` 根级别**，如 `{ dataSource, xField, chartType }`，不要多嵌套一层如 `{ chartConfig: { ... } }`
-4. **edit/read/ide.vue 读取配置的路径必须和 setting.vue 存储路径一致**
+3. **不要在 computed 里用 `$set`（副作用）**，会导致无限循环甚至页面崩溃
+4. **配置直接存在 `customComponentConfig` 根级别**，如 `{ dataSource, xField, chartType }`，不要多嵌套一层如 `{ chartConfig: { ... } }`
+5. **edit/read/ide.vue 读取配置的路径必须和 setting.vue 存储路径一致**
 
 **⚠️ 禁止在 setting.vue 中使用以下方式获取 FormEngine（这些是错误的！）**：
 - ❌ `this.$utils?.formEngine`
 - ❌ `window.Vue?.FormEngine?.instances`
 - ❌ `this.$root.formEngine`
 - ❌ 任何全局变量或 window 上的对象
-
-**⚠️ 严禁在 setting.vue 中使用任何保存方法（配置无法写入数据库！）**：
-- ❌ `saveConfig()` / `this.$set(this.widgetObj, 'customComponentConfig', ...)` — 不要封装保存方法
-- ❌ `this.formEngine.setWidgetInfo(...)` — formEngine 上没有此方法
-- ❌ `updateCustomConfig(config)` / `updateCustomComponentConfig(config)` — 此类封装方法均不存在
-- ❌ 任何通过方法间接写入配置的方式
-
-**✅ 唯一正确方式：模板直接双向绑定**
-```html
-<el-input v-model="componentConfig.customComponentConfig.myField" />
-```
 
 **子表相关 API**：
 - 所有表单组件列表：`formEngine.formDataControl.allTileFormItemList`（数组）
@@ -751,18 +766,23 @@ computed: {
 
 ### customComponentConfig 完整存储规范
 
-自开发组件的自定义配置数据存放在 `widget.customComponentConfig` 中。这是平台为自开发组件预留的专用存储位置。
+自开发组件的自定义配置数据存放在 `widget.special.customComponentConfig` 中。这是平台为自开发组件预留的专用存储位置。
 
 **Setting.vue 中读写 customComponentConfig：**
-
-直接在模板中 v-model 绑定，无需任何 created 初始化或 saveConfig 方法：
-```html
-<!-- 模板直接双向绑定，平台自动持久化 -->
-<el-select v-model="componentConfig.customComponentConfig.chartType" size="mini">
-  <el-option label="折线图" value="line" />
-  <el-option label="柱状图" value="bar" />
-</el-select>
-<el-input v-model="componentConfig.customComponentConfig.dataSource" size="mini" />
+```javascript
+// 读取
+created() {
+  const saved = this.widgetObj.customComponentConfig || {}
+  Object.keys(this.localConfig).forEach(key => {
+    if (saved[key] !== undefined) this.localConfig[key] = saved[key]
+  })
+},
+// 写入（必须用 $set 保证响应式）
+methods: {
+  saveConfig() {
+    this.$set(this.widgetObj, 'customComponentConfig', { ...this.localConfig })
+  }
+}
 ```
 
 **editorConfigList 注册方式：**
@@ -2299,13 +2319,12 @@ CODE_GENERATION_INSTRUCTION = """
 8. **直接生成代码**，不要尝试调用任何工具，不要读取文件，直接输出完整的代码文件
 9. 编辑态组件中使用 `this.formValue` 读写值，值存储为 JSON 字符串（复杂数据）
 10. **edit.vue 只渲染内容，不要显示配置界面**。配置 UI 只放在 setting.vue 中
-11. **setting.vue 的 props 必须包含 `componentConfig`（widget对象）**，由平台 EditorFormConfigMixin 传入。`inject` 只作为兜底，且必须带 `{ default: null }`
-12. **setting.vue 中控件直接 `v-model="componentConfig.customComponentConfig.xxx"` 双向绑定**，平台自动感知变化并持久化，不需要任何 saveConfig、updateCustomConfig 等保存方法
+11. **setting.vue 的 props 必须包含 `componentConfig`（widget对象）和 `formEngine`（表单引擎）**，这两个由平台 EditorFormConfigMixin 传入。`inject` 只作为兜底，且必须带 `{ default: null }`
+12. **setting.vue 中不要在 computed 里用 `$set`**（会导致无限循环），用 data + methods 代替
 13. **setting.vue 和 edit/read/ide.vue 的 customComponentConfig 读写路径必须一致**。配置直接存在 `customComponentConfig` 根级别（如 `{ dataSource, xField }`），不要多嵌套一层（如 `{ chartConfig: { dataSource } }`）
 14. **widget.config.js 中必须声明 `customComponentConfig: {}`**（空对象），否则平台保存时不会序列化它。不能包含空字符串默认值
 15. **widget.config.js 的 editor.config 不能删除标准项**（INFO, LABEL, FIELD_CODE, TITLE_DESCRIPTION, WIDTH, FORMULA_RULE, HIDDEN, READONLY, REQUIRED, EDITONNEW, UNIQUE, HIDDEN_SAVE, HIDDEN_TRIGGER, TRIGGER_BUSINESS_EVENTS），否则平台校验报错
 16. 如需在 setting.vue 中访问子表列表，使用 `this.formEngine.formDataControl.allTileFormItemList` 并按 `componentType === 'FORM_WIDGET_SON_TABLE'` 过滤
 17. **获取子表真实数据时**，formData 中子表数据的 key 是子表的 `code`（不是 uuid），需要先通过 uuid 找到子表再取其 code
 18. **setting.vue 的固定路径是 `src/form-component/form-editor/{name}-setting.vue`**；`editorConfigList` 的固定聚合路径是 `src/form-component-config/form-editor/index.js`
-19. **⚠️ 严禁在 setting.vue 中封装任何保存方法**（saveConfig、updateCustomConfig、updateCustomComponentConfig、setWidgetInfo 等），这些方法不存在或不会触发平台持久化，只用 v-model 直接绑定。
 """
