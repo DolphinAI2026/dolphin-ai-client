@@ -21,7 +21,9 @@ from typing import Awaitable, Callable, Optional
 from app.coding.form_component_editor import (
     normalize_form_component_editor_artifacts,
     normalize_form_component_generated_file,
+    validate_form_component_editor_workspace,
 )
+from app.coding.runtime_env import ensure_node_tool_env, resolve_executable
 
 FALLBACK_NPM_REGISTRY = "https://registry.npmmirror.com"
 DEFAULT_NPM_CACHE_DIR = os.environ.get(
@@ -210,6 +212,9 @@ async def _write_file(args: dict, workspace_path: Path) -> str:
         resolved.parent.mkdir(parents=True, exist_ok=True)
         resolved.write_text(content, encoding="utf-8")
         normalize_form_component_editor_artifacts(workspace_path)
+        contract_errors = validate_form_component_editor_workspace(workspace_path)
+        if contract_errors:
+            return "Error: " + "; ".join(contract_errors)
         lines = content.count("\n") + 1
         return f"Successfully wrote {len(content)} chars ({lines} lines) to {file_path}"
     except ValueError as e:
@@ -248,6 +253,9 @@ async def _edit_file(args: dict, workspace_path: Path) -> str:
         if target_resolved != resolved and resolved.exists():
             resolved.unlink()
         normalize_form_component_editor_artifacts(workspace_path)
+        contract_errors = validate_form_component_editor_workspace(workspace_path)
+        if contract_errors:
+            return "Error: " + "; ".join(contract_errors)
         return f"Successfully edited {target_file_path}"
     except ValueError as e:
         return f"Error: {e}"
@@ -282,12 +290,17 @@ def _resolve_default_npm_registry() -> str:
         return explicit_registry
 
     try:
+        env = ensure_node_tool_env()
+        npm_exec = resolve_executable("npm", env)
+        if not npm_exec:
+            return FALLBACK_NPM_REGISTRY
         result = subprocess.run(
-            ["npm", "config", "get", "registry"],
+            [npm_exec, "config", "get", "registry"],
             check=False,
             capture_output=True,
             text=True,
             timeout=5,
+            env=env,
         )
         resolved_registry = (result.stdout or "").strip()
         if result.returncode == 0 and resolved_registry and resolved_registry != "undefined":
@@ -299,18 +312,7 @@ def _resolve_default_npm_registry() -> str:
 
 
 def _build_command_env() -> dict[str, str]:
-    env = {**os.environ}
-    # 确保 /usr/local/bin 和 ~/.npm-global/bin 在 PATH 中
-    # node/npm 在 /usr/local/bin，df-apaas-cli 在 ~/.npm-global/bin
-    path = env.get("PATH", "")
-    npm_global_bin = os.path.expanduser("~/.npm-global/bin")
-    extra = []
-    if "/usr/local/bin" not in path:
-        extra.append("/usr/local/bin")
-    if npm_global_bin not in path:
-        extra.append(npm_global_bin)
-    if extra:
-        env["PATH"] = ":".join(extra) + ":" + path
+    env = ensure_node_tool_env()
     default_registry = _resolve_default_npm_registry()
     env.setdefault("npm_config_registry", default_registry)
     env.setdefault("NPM_CONFIG_REGISTRY", default_registry)

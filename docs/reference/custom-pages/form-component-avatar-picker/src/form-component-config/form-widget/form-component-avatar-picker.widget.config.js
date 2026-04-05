@@ -54,7 +54,6 @@ const FormComponentAvatarPickerWidgetConfig = {
       frontBusinessObjectComponentType: 'BOF_TEXT',
       saveWithHidden: false
     },
-    componentModelField: ['TEXT'],
     editor: {
       config: [
         'INFO',
@@ -76,6 +75,7 @@ const FormComponentAvatarPickerWidgetConfig = {
       excludeInTable: ['WIDTH']
     }
   },
+  componentModelField: ['STRING'],
   client: {
     mobile: {
       widget: {
