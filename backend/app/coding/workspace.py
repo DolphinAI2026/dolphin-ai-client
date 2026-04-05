@@ -697,6 +697,8 @@ class WorkspaceManager:
     async def _run_backend_build_process(self, cwd: Path) -> tuple[int, bytes, bytes]:
         mvnw = cwd / "mvnw"
         if mvnw.exists():
+            # scaffold 出的文件可能没有执行权限，统一补上
+            mvnw.chmod(mvnw.stat().st_mode | 0o111)
             cmd = [str(mvnw), "-q", "-DskipTests", "package", "-P", "lib"]
         else:
             mvn_exec = shutil.which("mvn")
@@ -1799,6 +1801,12 @@ const resultPath = '{str(result_json_path)}'
 
         return {"status": "error", "message": "Auto debug 超时（60秒），未生成结果"}
 
+    # 各项目类型允许写入的文件扩展名白名单
+    _BACKEND_EXTENSIONS = {".java", ".xml", ".properties", ".yml", ".yaml", ".md", ".txt", ".json"}
+    _FRONTEND_EXTENSIONS = {".vue", ".js", ".ts", ".jsx", ".tsx", ".css", ".scss", ".less",
+                             ".html", ".json", ".md", ".txt"}
+    _BACKEND_PROJECT_TYPES = {"backend-api", "backend-feign", "backend-scheduled"}
+
     def write_file(self, ws_id: str, file_path: str, content: str):
         """写入文件到工作区"""
         ws_path = self.get_workspace_path(ws_id)
@@ -1807,6 +1815,18 @@ const resultPath = '{str(result_json_path)}'
         target = (ws_path / file_path).resolve()
         if not str(target).startswith(str(ws_path.resolve())):
             raise ValueError("File path escapes workspace")
+
+        # 项目类型与文件扩展名一致性检查：后端项目拒绝写入 Vue/JS 等前端文件
+        meta = self._read_meta(ws_path)
+        project_type = meta.get("project_type", "")
+        if project_type in self._BACKEND_PROJECT_TYPES:
+            suffix = Path(file_path).suffix.lower()
+            if suffix and suffix not in self._BACKEND_EXTENSIONS:
+                logger.warning(
+                    "write_file blocked: backend project '%s' cannot write '%s' (%s)",
+                    project_type, file_path, suffix
+                )
+                return  # 静默丢弃，不报错，避免中断整体生成流程
 
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")

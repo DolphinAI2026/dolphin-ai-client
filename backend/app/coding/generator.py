@@ -273,16 +273,26 @@ class CodingGenerator:
 
     async def detect_scene(self, user_input: str) -> SceneType:
         """根据用户输入自动识别开发场景"""
-        detect_prompt = """根据用户的需求描述，判断属于以下哪种aPaaS自开发场景，只返回场景代码，不要其他内容：
+        detect_prompt = """根据用户的需求描述，判断属于以下哪种aPaaS自开发场景，只返回场景代码，不要其他内容。
 
-- web_component: Web端自开发组件（表单组件、输入控件等）
-- web_page: Web端自开发页面（菜单页面、弹窗页面、数据查询页面、完整页面、图表页面等，用户说"做一个XX页面"属于此类）
+判断规则（优先级从高到低）：
+1. 含有"Spring Boot / Java / Maven / Controller / Service / REST API / HTTP接口 / 后端服务"等明确后端关键词 → backend_api
+2. 含有"定时任务 / cron / @Scheduled"→ backend_scheduled
+3. 含有"FeignClient / 调用外部接口 / HTTP调用"→ backend_feign
+4. 含有"页面 / Page / 菜单 / 路由"且不是组件 → web_page
+5. 含有"组件 / 控件 / Widget / 选择器 / 输入框 / 下拉 / 表格组件 / 选取 / 选择"等前端UI词汇 → web_component
+6. "接口"一词本身**不能**作为判断后端的依据，需结合上下文
+7. 默认倾向前端：含义模糊时优先选 web_component 而不是 backend_api
+
+场景列表：
+- web_component: Web端自开发组件（表单组件、输入控件、选择器、数据选择组件等前端UI组件）
+- web_page: Web端自开发页面（菜单页面、弹窗页面、数据查询页面、完整页面、图表页面等）
 - web_list_view: Web端自开发列表视图（自定义列表展示）
 - web_layout: Web端自定义布局
 - web_login: Web端自定义登录页
 - mobile_component: 移动端自开发组件
 - mobile_page: 移动端自开发页面
-- backend_api: 后端自开发接口（SpringBoot接口）
+- backend_api: 后端自开发接口（必须明确要求开发 Java/SpringBoot 后端服务，而非前端调用接口的组件）
 - backend_feign: 后端外部调用（FeignClient 调用外部 HTTP 接口）
 - backend_scheduled: 后端定时任务（Spring @Scheduled 定时任务）
 - script_js: JavaScript脚本扩展（业务事件JS脚本）
