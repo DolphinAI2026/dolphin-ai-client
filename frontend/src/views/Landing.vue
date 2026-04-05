@@ -1,836 +1,399 @@
 <template>
-  <div class="landing">
-    <TopBar show-hamburger @toggle-sidebar="sidebarCollapsed = !sidebarCollapsed" />
-
-    <div class="main-body">
-      <!-- 左侧应用侧栏 -->
-      <AppSidebar
-        :collapsed="sidebarCollapsed"
-        :items="sidebarAppItems"
-        :current-app-id="null"
-        @toggle="sidebarCollapsed = !sidebarCollapsed"
-        @select="onSidebarAppSelect"
-        @new-app="handleNewApp"
-      />
-
-      <!-- 内容区 -->
-      <div class="main-scroll">
-      <div class="center-area">
-        <!-- Hero -->
+  <WorkbenchShell>
+    <main class="main">
+      <div class="bg"></div>
+      <div class="content">
         <div class="hero">
-          <div class="hero-sparkle"><svg width="48" height="48" viewBox="0 0 24 24" fill="none"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" fill="url(#starGrad)" stroke="none"/><defs><linearGradient id="starGrad" x1="2" y1="2" x2="22" y2="22"><stop offset="0%" stop-color="#c7d2fe"/><stop offset="100%" stop-color="#6366f1"/></linearGradient></defs></svg></div>
-          <h1 class="hero-title">aPaaS Builder AI</h1>
-          <p class="hero-desc">用 AI 构建企业级低代码应用</p>
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none">
+            <path d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 17l-6.2 4.3 2.4-7.4L2 9.4h7.6L12 2z" fill="#8A82E8" opacity="0.92"/>
+          </svg>
+          <div class="hero-title">aPaaS Builder AI</div>
+          <div class="hero-sub">用 AI 构建企业级低代码应用</div>
         </div>
 
-        <!-- Input box -->
-        <div class="input-box">
-          <div class="input-row">
-            <label class="upload-btn" title="上传需求文档 (.md/.pdf/.docx/.txt)">
-              <input type="file" accept=".md,.pdf,.docx,.doc,.txt,.markdown" @change="handleDocUpload" hidden />
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
-            </label>
-            <input
-              v-model="inputText"
-              @keydown.enter="startChat"
-              placeholder="描述你想要的应用，或上传设计文档..."
-            />
-            <button class="send-btn" @click="startChat" :disabled="!inputText.trim()">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
-            </button>
+        <div class="dual-entry">
+          <button class="mode-card" :class="{ active: mode==='strict' }" @click="mode='strict'">
+            <div class="mode-icon strict">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="3" y="2" width="10" height="12" rx="1.5" stroke="#534AB7" stroke-width="1.3"/><path d="M5 6h6M5 8.5h4" stroke="#534AB7" stroke-width="1.2" stroke-linecap="round"/></svg>
+            </div>
+            <div class="mode-title">文档解析生成</div>
+            <div class="mode-desc">上传设计文档，严格按内容生成，不补充字段或角色</div>
+            <div class="mode-badge badge-strict">精准还原</div>
+          </button>
+
+          <button class="mode-card" :class="{ active: mode==='ai' }" @click="mode='ai'">
+            <div class="mode-icon ai">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2a6 6 0 100 12A6 6 0 008 2z" stroke="#1D9E75" stroke-width="1.3"/><path d="M5.5 9c.5.8 1.4 1.3 2.5 1.3s2-.5 2.5-1.3M6 6.5h.01M10 6.5h.01" stroke="#1D9E75" stroke-width="1.4" stroke-linecap="round"/></svg>
+            </div>
+            <div class="mode-title">AI 智能生成</div>
+            <div class="mode-desc">描述需求或上传文档，AI 进一步分析补全，可对话完善</div>
+            <div class="mode-badge badge-ai">AI 增强</div>
+          </button>
+        </div>
+
+        <div class="input-zone">
+          <div class="input-box">
+            <input class="input-text" v-model="inputText" :placeholder="inputPlaceholder" @keydown.enter="goChat(inputText.trim())" />
+            <div class="input-bottom">
+              <label class="upload-btn">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1v7M2.5 4.5L6 8l3.5-3.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M1 10.5h10" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+                上传文档
+                <input type="file" accept=".md,.pdf,.docx,.doc,.txt,.markdown" @change="handleDocUpload" hidden />
+              </label>
+              <button class="send-btn" @click="goChat(inputText.trim())">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M1 6h10M6 1l5 5-5 5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                {{ sendLabel }}
+              </button>
+            </div>
           </div>
         </div>
 
-        <!-- 历史对话 -->
-        <div v-if="recentSessions.length > 0" class="section">
-          <div class="section-header">
-            <h3 class="section-title">最近对话</h3>
-            <button class="see-all-btn" @click="router.push('/chat?mode=requirements')">查看全部</button>
+        <div class="body-content">
+          <div class="stats-row">
+            <div class="stat-card">
+              <div class="stat-label">已搭建应用</div>
+              <div class="stat-num">{{ recentApps.length }}</div>
+              <div class="stat-sub">最近 +{{ Math.min(3, recentApps.length) }}</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">AI 对话次数</div>
+              <div class="stat-num">{{ recentSessions.length }}</div>
+              <div class="stat-sub">本周 +{{ Math.min(24, recentSessions.length) }}</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">已生成模块数</div>
+              <div class="stat-num">{{ generatedModules }}</div>
+              <div class="stat-sub">昨日 +{{ Math.min(8, generatedModules) }}</div>
+            </div>
           </div>
-          <div class="history-list">
-            <div
-              v-for="s in recentSessions"
-              :key="s.id"
-              class="history-item"
-              @click="router.push(`/chat/${s.id}`)"
-            >
-              <div class="history-icon">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-              </div>
-              <div class="history-info">
-                <span class="history-title">{{ s.title }}</span>
-                <span class="history-meta">{{ formatDate(s.updated_at) }}</span>
-              </div>
-              <el-tag v-if="s.has_doc" size="small" type="success" style="flex-shrink:0">已生成</el-tag>
+
+          <div>
+            <div class="section-header">
+              <span class="section-title">已搭建应用</span>
+              <button class="view-all-link" @click="navigateTo('/apps')">查看全部 →</button>
+            </div>
+            <div class="app-grid">
+              <button v-for="(app,idx) in recentApps.slice(0,6)" :key="app.id" class="app-card" @click="openApp(app)">
+                <div class="app-card-header">
+                  <div class="app-dot" :class="idx===1 ? 'teal' : idx===2 ? 'amber' : 'purple'">{{ idx===1 ? '💰' : idx===2 ? '⚙️' : '📋' }}</div>
+                  <div>
+                    <div class="app-name">{{ app.label }}</div>
+                    <div class="app-time">{{ app.timeLabel }}更新</div>
+                  </div>
+                </div>
+                <span class="app-status" :class="app.status==='processing' ? 'building' : 'done'">{{ app.status==='processing' ? '构建中' : '已生成' }}</span>
+              </button>
             </div>
           </div>
         </div>
       </div>
-    </div><!-- /main-scroll -->
-    </div><!-- /main-body -->
+    </main>
+  </WorkbenchShell>
 
-    <TemplateManager v-model="showTemplateManager" @updated="reloadTemplates" />
-    <ConnectModal v-model="previewStore.showConnectModal" />
-    <ProjectSettingsModal
-      v-model="showProjectModal"
-      :project="editingProject"
-      @saved="onProjectSaved"
-    />
-  </div>
+  <el-dialog v-model="profileDialogVisible" title="我的信息" width="460px" destroy-on-close>
+    <div class="profile-block">
+      <div class="profile-hero">
+        <div class="profile-avatar">{{ userInitial }}</div>
+        <div class="profile-identity">
+          <div class="profile-name">{{ userDisplayName }}</div>
+          <div class="profile-subtitle">aPaaS Builder AI 用户</div>
+        </div>
+      </div>
+      <div class="profile-row">
+        <span class="profile-label">账号</span>
+        <span class="profile-value">{{ userStore.user?.username || '-' }}</span>
+      </div>
+      <div class="profile-row">
+        <span class="profile-label">密码</span>
+        <span class="profile-value">••••••••</span>
+      </div>
+    </div>
+
+    <div class="password-form">
+      <div class="profile-title">修改密码</div>
+      <el-input v-model="passwordForm.oldPassword" type="password" show-password placeholder="当前密码" class="pwd-input" />
+      <el-input v-model="passwordForm.newPassword" type="password" show-password placeholder="新密码（至少6位）" class="pwd-input" />
+      <el-input v-model="passwordForm.confirmPassword" type="password" show-password placeholder="确认新密码" class="pwd-input" />
+    </div>
+
+    <template #footer>
+      <el-button @click="profileDialogVisible = false">关闭</el-button>
+      <el-button type="primary" :loading="changingPassword" @click="submitChangePassword">保存修改</el-button>
+    </template>
+  </el-dialog>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import request from '@/utils/request'
 import { usePreviewStore } from '@/stores/preview'
 import { useUserStore } from '@/stores/user'
-import request from '@/utils/request'
-import { projectsApi, type Project } from '@/api/projects'
-import ConnectModal from '@/components/ConnectModal.vue'
-import ProjectSettingsModal from '@/components/ProjectSettingsModal.vue'
-import TemplateManager from '@/components/TemplateManager.vue'
-import ThemeToggle from '@/components/ThemeToggle.vue'
-import TopBar from '@/components/TopBar.vue'
-import AppSidebar from '@/components/AppSidebar.vue'
-import type { AppItem } from '@/components/AppSidebar.vue'
-import { requirementsApi, type RequirementsSession } from '@/api/requirements'
 import { conversationApi, type ConversationWithApp } from '@/api/conversation'
+import { applicationApi } from '@/api/application'
+import type { AppItem } from '@/components/AppSidebar.vue'
+import WorkbenchShell from '@/components/WorkbenchShell.vue'
 
 const router = useRouter()
 const previewStore = usePreviewStore()
 const userStore = useUserStore()
+
+const mode = ref<'strict' | 'ai'>('strict')
 const inputText = ref('')
-const projects = ref<Project[]>([])
-const showProjectModal = ref(false)
-const showTemplateManager = ref(false)
-const editingProject = ref<Project | null>(null)
+const recentSessions = ref<ConversationWithApp[]>([])
+const recentApps = ref<AppItem[]>([])
+const generatedModules = ref(0)
+const profileDialogVisible = ref(false)
+const changingPassword = ref(false)
+const passwordForm = ref({ oldPassword: '', newPassword: '', confirmPassword: '' })
 
-interface TemplateItem {
-  code: string
-  name: string
-  icon: string
-  description: string
-  category: string
+const userInitial = computed(() => (userStore.user?.username || 'A').slice(0, 1))
+const userDisplayName = computed(() => (userStore.user as any)?.nickname || userStore.user?.username || 'admin')
+const inputPlaceholder = computed(() =>
+  mode.value === 'strict'
+    ? '上传设计文档，我将严格按照文档结构生成，不做额外补充...'
+    : '描述你的需求，或上传文档让 AI 进一步分析完善...'
+)
+const sendLabel = computed(() => (mode.value === 'strict' ? '解析生成' : 'AI 生成'))
+
+function normalizeSessionTitle(title?: string) {
+  const raw = String(title || '').trim()
+  if (!raw) return 'aPaaS Builder AI 会话'
+  return raw.length > 24 ? `${raw.slice(0, 24)}...` : raw
 }
-const templates = ref<TemplateItem[]>([])
-const templateLoading = ref<string | null>(null)
-const recentSessions = ref<RequirementsSession[]>([])
 
-function formatDate(dateStr: string): string {
+function formatDate(dateStr: string) {
+  if (!dateStr) return '今天'
   const d = new Date(dateStr)
-  const now = new Date()
-  const diff = now.getTime() - d.getTime()
-  if (diff < 60000) return '刚刚'
-  if (diff < 3600000) return `${Math.floor(diff / 60000)} 分钟前`
-  if (diff < 86400000) return `${Math.floor(diff / 3600000)} 小时前`
-  return d.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
+  return `${d.getMonth() + 1}月${d.getDate()}日`
 }
 
-onMounted(async () => {
-  loadSidebarApps()
-  try {
-    projects.value = await projectsApi.list()
-  } catch (e) { /* ignore */ }
-  try {
-    templates.value = await request.get<any, TemplateItem[]>('/templates')
-  } catch (e) { /* ignore */ }
-  try {
-    const sessions = await requirementsApi.listSessions()
-    recentSessions.value = sessions.slice(0, 6)
-  } catch (e) { /* ignore */ }
-})
-
-const onProjectSaved = async () => {
-  showProjectModal.value = false
-  projects.value = await projectsApi.list()
+function navigateTo(path: string) {
+  router.push(path)
 }
 
-const reloadTemplates = async () => {
-  try {
-    templates.value = await request.get<any, TemplateItem[]>('/templates')
-  } catch (e) { /* ignore */ }
-}
-
-const startChat = () => {
-  const text = inputText.value.trim()
-  if (!text) return
-  // 进入需求分析模式
-  router.push({ path: '/chat', query: { mode: 'requirements', prompt: text } })
-}
-
-const startWithTemplate = async (tpl: TemplateItem) => {
-  templateLoading.value = tpl.code
-  try {
-    // 获取模板完整 MD 内容
-    const detail = await request.get<any, { content: string; name: string }>(`/templates/${tpl.code}`)
-    // 构造 File 对象，直接带到搭建页
-    const blob = new Blob([detail.content], { type: 'text/markdown' })
-    const file = new File([blob], `${tpl.code}.md`, { type: 'text/markdown' })
-    previewStore.pendingFile = file
+function goChat(prompt = '') {
+  const trimmed = prompt.trim()
+  if (trimmed) {
+    router.push({ path: '/chat', query: { prompt: trimmed } })
+  } else {
     router.push('/chat')
-  } catch (e) {
-    ElMessage.error('加载模板失败')
-  } finally {
-    templateLoading.value = null
   }
 }
 
-const handleDocUpload = (e: Event) => {
+function handleDocUpload(e: Event) {
   const target = e.target as HTMLInputElement
   const file = target.files?.[0]
   if (!file) return
   target.value = ''
-
-  // 直接带到搭建页处理文件
   previewStore.pendingFile = file
   router.push('/chat')
 }
 
-const handleNewApp = () => {
-  router.push('/chat?mode=requirements')
+function openApp(app: AppItem) {
+  router.push({ path: '/chat', query: { app_id: String(app.id) } })
 }
 
-const handleUserCommand = (command: string) => {
-  if (command === 'logout') {
-    userStore.logout()
-    ElMessage.success('已退出登录')
-    router.push('/login')
-  } else if (command === 'apps') {
-    router.push('/apps')
-  } else if (command === 'coding') {
-    router.push('/coding')
-  } else if (command === 'envs') {
-    router.push('/platform-envs')
+function openConversation(sessionId: number | string) {
+  router.push(`/chat/${sessionId}`)
+}
+
+function mapApplicationToCard(app: any): AppItem {
+  return {
+    id: app.id,
+    label: app.app_name || app.appName || '未命名应用',
+    status: app.local_status || app.status || 'draft',
+    timeLabel: formatDate(app.updated_at || app.created_at || ''),
+    appId: typeof app.id === 'number' ? app.id : Number(app.id),
+    conversationId: app.conversation_id,
+    apaasAppId: app.apaas_app_id,
   }
 }
 
-// ── 左侧应用侧栏 ──
-const sidebarCollapsed = ref(localStorage.getItem('chat-sidebar-collapsed') === 'true')
-const conversationList = ref<ConversationWithApp[]>([])
-
-const formatConvTime = (dateStr: string) => {
-  if (!dateStr) return ''
-  const d = new Date(dateStr)
-  const now = new Date()
-  const diff = now.getTime() - d.getTime()
-  if (diff < 60000) return '刚刚'
-  if (diff < 3600000) return `${Math.floor(diff / 60000)} 分钟前`
-  if (diff < 86400000) return '今天'
-  if (diff < 172800000) return '昨天'
-  return `${d.getMonth() + 1}/${d.getDate()}`
+function resetPasswordForm() {
+  passwordForm.value = { oldPassword: '', newPassword: '', confirmPassword: '' }
 }
 
-const sidebarAppItems = ref<AppItem[]>([])
-
-const loadSidebarApps = async () => {
+async function logoutWithConfirm() {
   try {
-    conversationList.value = await conversationApi.listWithApps({ agent_type: 'builder' })
-    sidebarAppItems.value = conversationList.value
-      .filter(conv => conv.app_id && conv.app_name)
-      .map(conv => ({
-        id: conv.app_id!,
-        label: conv.app_name!,
-        status: conv.local_status,
-        timeLabel: formatConvTime(conv.created_at),
-        appId: conv.app_id,
-        conversationId: conv.id,
-        apaasAppId: conv.apaas_app_id,
-      }))
-  } catch (e) {
-    console.error('加载应用列表失败:', e)
+    await ElMessageBox.confirm('确认退出当前账号吗？', '退出登录', {
+      confirmButtonText: '退出登录',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
+    userStore.logout()
+    router.push('/login')
+  } catch {
+    // 用户取消
   }
 }
 
-const onSidebarAppSelect = (app: AppItem) => {
-  if (app.appId) {
-    router.push({ path: '/chat', query: { app_id: String(app.appId), app_mode: 'parsed' } })
-  } else if (app.conversationId) {
-    router.push({ path: '/chat', query: { conv_id: String(app.conversationId) } })
+function handleUserCommand(command: string | number | object) {
+  if (command === 'profile') {
+    profileDialogVisible.value = true
+    return
+  }
+  if (command === 'logout') {
+    logoutWithConfirm()
   }
 }
+
+async function submitChangePassword() {
+  const { oldPassword, newPassword, confirmPassword } = passwordForm.value
+  if (!oldPassword || !newPassword || !confirmPassword) {
+    ElMessage.warning('请完整填写修改密码信息')
+    return
+  }
+  if (newPassword.length < 6) {
+    ElMessage.warning('新密码长度不能少于 6 位')
+    return
+  }
+  if (newPassword !== confirmPassword) {
+    ElMessage.warning('两次输入的新密码不一致')
+    return
+  }
+
+  try {
+    changingPassword.value = true
+    await request.post('/auth/change-password', {
+      old_password: oldPassword,
+      new_password: newPassword
+    })
+    ElMessage.success('密码修改成功，请重新登录')
+    profileDialogVisible.value = false
+    resetPasswordForm()
+    userStore.logout()
+    router.push('/login')
+  } catch (error: any) {
+    const status = error?.response?.status
+    const detail = error?.response?.data?.detail
+    if (status === 404 || status === 405) {
+      ElMessage.warning('当前环境暂未开放修改密码接口，请联系管理员')
+      return
+    }
+    ElMessage.error(detail || '修改密码失败，请稍后重试')
+  } finally {
+    changingPassword.value = false
+  }
+}
+
+onMounted(async () => {
+  const [list, apps] = await Promise.all([
+    conversationApi.listWithApps({ agent_type: 'builder' }).catch(() => []),
+    applicationApi.list({ include_remote: true }).catch(() => []),
+  ])
+
+  recentSessions.value = list.slice(0, 8)
+
+  const appCards = Array.isArray(apps)
+    ? apps
+        .filter((app: any) => app?.id && app?.app_name)
+        .sort((a: any, b: any) => {
+          const ta = new Date(a.updated_at || a.created_at || 0).getTime()
+          const tb = new Date(b.updated_at || b.created_at || 0).getTime()
+          return tb - ta
+        })
+        .slice(0, 6)
+        .map(mapApplicationToCard)
+    : []
+
+  recentApps.value = appCards.length
+    ? appCards
+    : list
+        .filter((conv: any) => conv.app_id && conv.app_name)
+        .slice(0, 6)
+        .map((conv: any) => ({
+          id: conv.app_id,
+          label: conv.app_name,
+          status: conv.local_status || 'completed',
+          timeLabel: formatDate(conv.updated_at || conv.created_at),
+          appId: conv.app_id,
+          conversationId: conv.id,
+          apaasAppId: conv.apaas_app_id,
+        }))
+
+  generatedModules.value = (Array.isArray(apps) && apps.length ? apps : list).reduce((sum: number, item: any) => {
+    const data = item.config_preview?.data || item.config_preview || {}
+    return sum + (Array.isArray(data.models) ? data.models.length : 0)
+  }, 0)
+})
 </script>
 
 <style scoped>
-/* ── Layout ── */
-.landing {
-  height: 100vh;
-  display: flex;
-  flex-direction: column;
-  background: var(--t-bg-base);
-  color: var(--t-text-primary);
-}
-
-/* ── Main Body (sidebar + content) ── */
-.main-body {
-  flex: 1;
-  display: flex;
-  flex-direction: row;
-  overflow: hidden;
-}
-
-.main-scroll {
-  flex: 1;
-  overflow-y: auto;
-  padding: 0 24px 60px;
-}
-
-.center-area {
-  max-width: 800px;
-  width: 100%;
-  margin: 0 auto;
-}
-
-/* ── Top Bar ── */
-.top-bar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 6px 12px;
-  flex-shrink: 0;
-  background: var(--t-bg-nav);
-  border-bottom: 1px solid var(--t-border-subtle);
-  min-height: 42px;
-}
-.top-bar-left, .top-bar-right { display: flex; align-items: center; gap: 8px; }
-.sidebar-hamburger {
-  width: 32px; height: 32px; border: none; border-radius: 6px;
-  background: transparent; color: var(--t-text-secondary); cursor: pointer;
-  display: flex; align-items: center; justify-content: center;
-  transition: all 0.15s ease;
-}
-.sidebar-hamburger:hover { background: var(--t-bg-elevated); color: var(--t-text-primary); }
-.top-bar-title {
-  font-size: 14px; font-weight: 600; color: var(--t-text-primary);
-}
-.user-avatar-btn {
-  width: 30px; height: 30px; border-radius: 50%;
-  background: var(--t-brand-gradient); color: #fff; border: none;
-  font-weight: 700; font-size: 12px; cursor: pointer;
-  display: flex; align-items: center; justify-content: center;
-  transition: opacity 0.15s;
-}
-.user-avatar-btn:hover { opacity: 0.85; }
-.user-menu-info { display: flex; flex-direction: column; gap: 1px; }
-.user-menu-label { font-size: 10px; color: var(--t-text-muted); }
-.user-menu-value { font-size: 13px; color: var(--t-text-primary); }
-
-/* ── Hero ── */
-.hero {
-  text-align: center;
-  padding: 56px 0 40px;
-  position: relative;
-}
-
-/* Purple ambient glow behind hero */
-.hero::before {
-  content: '';
-  position: absolute;
-  top: 10%;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 480px;
-  height: 260px;
-  background: radial-gradient(ellipse at center, var(--t-brand-subtle) 0%, var(--t-brand-subtle) 40%, transparent 70%);
-  pointer-events: none;
-  z-index: 0;
-}
-
-.hero-sparkle {
-  font-size: 40px;
-  margin-bottom: 16px;
-  filter: saturate(1.2);
-  position: relative;
-  z-index: 1;
-}
-
-.hero-title {
-  font-size: 36px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  margin: 0 0 10px;
-  position: relative;
-  z-index: 1;
-}
-html[data-theme="dark"] .hero-title {
-  background: linear-gradient(135deg, #e0e0e0 0%, #ffffff 40%, var(--t-brand-light) 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-}
-html[data-theme="light"] .hero-title {
-  background: linear-gradient(135deg, #1e293b 0%, #334155 40%, var(--t-brand) 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-}
-
-.hero-desc {
-  font-size: 16px;
-  color: var(--t-text-secondary);
-  margin: 0;
-  font-weight: 400;
-  position: relative;
-  z-index: 1;
-}
-
-/* ── Input Box ── */
-.input-box {
-  margin-bottom: 48px;
-}
-
-.input-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  background: var(--t-bg-input);
-  border: 1px solid var(--t-border-subtle);
-  border-radius: var(--t-radius-xl);
-  padding: 10px 10px 10px 20px;
-  transition: border-color 0.2s, box-shadow 0.2s;
-  min-height: 56px;
-}
-
-.input-row:focus-within {
-  border-color: var(--t-brand-glow);
-  box-shadow: 0 0 0 3px var(--t-brand-glow);
-}
-
-.input-row input {
-  flex: 1;
-  border: none;
-  outline: none;
-  font-size: 15px;
-  color: var(--t-text-primary);
-  background: transparent;
-  min-width: 0;
-}
-
-.input-row input::placeholder {
-  color: var(--t-text-muted);
-}
-
-.upload-btn {
-  cursor: pointer;
-  padding: 6px;
-  border-radius: var(--t-radius-sm);
-  transition: background 0.2s;
-  color: var(--t-text-muted);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.upload-btn:hover {
-  background: var(--t-bg-panel-hover);
-  color: var(--t-text-secondary);
-}
-
-.send-btn {
-  width: 40px;
-  height: 40px;
-  border-radius: var(--t-radius-md);
-  border: none;
-  background: var(--t-brand-gradient);
-  color: #fff;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  transition: opacity 0.2s, transform 0.15s;
-}
-
-.send-btn:hover:not(:disabled) {
-  opacity: 0.9;
-  transform: scale(1.04);
-}
-
-.send-btn:disabled {
-  opacity: 0.3;
-  cursor: not-allowed;
-}
-
-/* ── Entry Cards ── */
-.entry-cards {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 14px;
-  margin-bottom: 48px;
-}
-
-.entry-card {
-  background: var(--t-bg-panel);
-  border: 1px solid var(--t-border-subtle);
-  border-radius: var(--t-radius-lg);
-  padding: 20px;
-  cursor: pointer;
-  transition: transform 0.2s, border-color 0.2s, box-shadow 0.2s, background 0.2s;
-  display: flex;
-  align-items: center;
-  gap: 14px;
-}
-
-.entry-card:hover {
-  transform: translateY(-2px);
-  background: var(--t-bg-panel-hover);
-  border-color: var(--t-border-strong);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
-}
-
-.entry-icon {
-  width: 44px;
-  height: 44px;
-  border-radius: var(--t-radius-md);
-  background: var(--t-bg-panel-hover);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 22px;
-  flex-shrink: 0;
-}
-
-.entry-body {
-  flex: 1;
-  min-width: 0;
-}
-
-.entry-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--t-text-primary);
-  margin-bottom: 3px;
-}
-
-.entry-desc {
-  font-size: 12px;
-  color: var(--t-text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.entry-arrow {
-  color: var(--t-text-muted);
-  flex-shrink: 0;
-  transition: transform 0.2s;
-}
-
-.entry-card:hover .entry-arrow {
-  transform: translateX(2px);
-  color: var(--t-text-secondary);
-}
-
-/* ── Sections ── */
-.section {
-  margin-bottom: 48px;
-}
-
-.section-title {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--t-text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  margin: 0 0 16px;
-}
-
-.section-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-}
-
-.section-header .section-title {
-  margin: 0;
-}
-
-/* ── History ── */
-.see-all-btn {
-  font-size: 12px;
-  color: var(--t-brand-primary);
-  background: none;
-  border: none;
-  cursor: pointer;
-  padding: 2px 6px;
-  border-radius: 4px;
-  transition: background 0.15s;
-}
-.see-all-btn:hover { background: var(--t-brand-subtle); }
-
-.history-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.history-item {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 14px;
-  background: var(--t-bg-panel);
-  border: 1px solid var(--t-border-subtle);
-  border-radius: var(--t-radius-md);
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
-}
-.history-item:hover {
-  background: var(--t-bg-panel-hover);
-  border-color: var(--t-brand-glow);
-}
-.history-icon {
-  width: 32px; height: 32px;
-  background: var(--t-brand-subtle);
-  border-radius: 8px;
-  display: flex; align-items: center; justify-content: center;
-  color: var(--t-brand-primary);
-  flex-shrink: 0;
-}
-.history-info {
-  flex: 1;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.history-title {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--t-text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.history-meta {
-  font-size: 11px;
-  color: var(--t-text-muted);
-}
-
-/* ── Templates ── */
-.templates {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 12px;
-}
-
-.tpl-card {
-  background: var(--t-bg-panel);
-  border: 1px solid var(--t-border-subtle);
-  border-radius: var(--t-radius-md);
-  padding: 18px;
-  text-align: left;
-  cursor: pointer;
-  transition: transform 0.2s, border-color 0.3s, box-shadow 0.3s, background 0.2s;
-  color: inherit;
-}
-
-.tpl-card:hover {
-  transform: translateY(-2px);
-  background: var(--t-bg-panel-hover);
-  border-color: var(--t-brand-glow);
-  box-shadow: 0 6px 24px var(--t-brand-subtle), 0 4px 16px rgba(0, 0, 0, 0.2);
-}
-
-.tpl-icon {
-  font-size: 26px;
-  margin-bottom: 10px;
-}
-
-.tpl-name {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--t-text-primary);
-}
-
-.tpl-desc {
-  font-size: 11px;
-  color: var(--t-text-muted);
-  margin-top: 4px;
-  line-height: 1.5;
-}
-
-/* ── Create Button ── */
-.create-btn {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--t-brand);
-  background: none;
-  border: 1px solid var(--t-brand-subtle);
-  border-radius: var(--t-radius-sm);
-  padding: 6px 14px;
-  cursor: pointer;
-  transition: background 0.2s, border-color 0.2s;
-}
-
-.create-btn:hover {
-  background: var(--t-brand-subtle);
-  border-color: var(--t-brand-glow);
-}
-
-/* ── Project List ── */
-.app-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.app-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  background: var(--t-bg-panel);
-  border: 1px solid var(--t-border-subtle);
-  border-radius: var(--t-radius-md);
-  padding: 14px 18px;
-  cursor: pointer;
-  transition: transform 0.2s, border-color 0.2s, box-shadow 0.2s, background 0.2s;
-}
-
-.app-row:hover {
-  transform: translateY(-1px);
-  background: var(--t-bg-panel-hover);
-  border-color: var(--t-border-strong);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
-}
-
-.app-row-left {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  min-width: 0;
-}
-
-.app-status-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.app-status-dot.connected {
-  background: var(--t-success);
-  box-shadow: 0 0 8px rgba(16, 185, 129, 0.4);
-}
-
-.app-status-dot.disconnected {
-  background: var(--t-border-strong);
-}
-
-.app-info {
-  min-width: 0;
-}
-
-.app-name-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.app-name {
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--t-text-primary);
-}
-
-.conn-tag {
-  font-size: 10px;
-  padding: 1px 8px;
-  border-radius: 10px;
-  font-weight: 500;
-  line-height: 1.6;
-}
-
-.conn-tag.linked {
-  background: rgba(16, 185, 129, 0.12);
-  color: #34d399;
-}
-
-.conn-tag.unlinked {
-  background: var(--t-border-subtle);
-  color: var(--t-text-muted);
-}
-
-.app-meta {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 3px;
-}
-
-.app-platform {
-  font-size: 12px;
-  color: var(--t-text-secondary);
-}
-
-.app-date {
-  font-size: 11px;
-  color: var(--t-text-muted);
-}
-
-.settings-btn {
-  background: none;
-  border: none;
-  color: var(--t-text-muted);
-  cursor: pointer;
-  padding: 6px;
-  border-radius: var(--t-radius-sm);
-  transition: background 0.2s, color 0.2s;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.settings-btn:hover {
-  background: var(--t-bg-panel-hover);
-  color: var(--t-text-secondary);
-}
-.app-row-actions {
-  display: flex;
-  gap: 4px;
-  flex-shrink: 0;
-}
-.delete-btn:hover {
-  color: #f56c6c !important;
-  background: rgba(245, 108, 108, 0.1) !important;
-}
-
-/* ── Empty State ── */
-.empty-hint {
-  text-align: center;
-  color: var(--t-text-muted);
-  font-size: 13px;
-  padding: 40px 20px;
-  background: var(--t-bg-panel);
-  border: 1px dashed var(--t-border-subtle);
-  border-radius: var(--t-radius-md);
-}
-
-.empty-icon {
-  font-size: 32px;
-  margin-bottom: 10px;
-  opacity: 0.5;
-}
-
-/* ── Scrollbar ── */
-.main-scroll::-webkit-scrollbar {
-  width: 6px;
-}
-
-.main-scroll::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.main-scroll::-webkit-scrollbar-thumb {
-  background: var(--t-border-subtle);
-  border-radius: 3px;
-}
-
-.main-scroll::-webkit-scrollbar-thumb:hover {
-  background: var(--t-border-strong);
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+.main { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
+.bg { position: absolute; inset: 0; background: linear-gradient(160deg, #EEEDFE 0%, #E6F1FB 45%, #E1F5EE 100%); z-index: 0; }
+.content { flex: 1; overflow-y: auto; position: relative; z-index: 1; }
+
+.hero { padding: 32px 28px 16px; text-align: center; }
+.hero-title { font-size: 24px; font-weight: 500; color: #26215C; letter-spacing: -0.02em; margin-top: 8px; }
+.hero-sub { font-size: 13px; color: #534AB7; margin-top: 5px; opacity: 0.85; }
+
+.dual-entry { padding: 0 28px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.mode-card { background: rgba(255,255,255,0.82); border: 0.5px solid rgba(255,255,255,0.95); border-radius: 14px; padding: 16px; cursor: pointer; transition: border-color 0.15s, box-shadow 0.15s; display: flex; flex-direction: column; text-align: left; }
+.mode-card:hover { border-color: rgba(83,74,183,0.3); }
+.mode-card.active { border-color: rgba(83,74,183,0.42); background: rgba(255,255,255,0.95); box-shadow: 0 0 0 1px rgba(83,74,183,0.12); }
+.mode-icon { width: 34px; height: 34px; border-radius: 9px; display: flex; align-items: center; justify-content: center; margin-bottom: 10px; flex-shrink: 0; }
+.mode-icon.strict { background: #EEEDFE; }
+.mode-icon.ai { background: #E1F5EE; }
+.mode-title { font-size: 13px; font-weight: 500; color: #26215C; margin-bottom: 4px; }
+.mode-desc { font-size: 11px; color: #534AB7; opacity: 0.7; line-height: 1.55; flex: 1; }
+.mode-badge { display: inline-flex; margin-top: 10px; font-size: 11px; padding: 3px 8px; border-radius: 20px; align-self: flex-start; }
+.badge-strict { background: #EEEDFE; color: #534AB7; }
+.badge-ai { background: #E1F5EE; color: #0F6E56; }
+
+.input-zone { padding: 10px 28px 0; }
+.input-box { background: rgba(255,255,255,0.88); border: 0.5px solid rgba(83,74,183,0.2); border-radius: 14px; padding: 14px 16px; }
+.input-text { width: 100%; border: none; outline: none; background: transparent; font-size: 13px; color: #26215C; line-height: 1.5; min-height: 20px; }
+.input-text::placeholder { color: #9490C4; }
+.input-bottom { display: flex; align-items: center; justify-content: space-between; margin-top: 20px; }
+.upload-btn { display: flex; align-items: center; gap: 5px; padding: 6px 12px; border-radius: 8px; border: 0.5px solid rgba(83,74,183,0.25); font-size: 12px; color: #534AB7; cursor: pointer; background: rgba(255,255,255,0.7); }
+.send-btn { display: flex; align-items: center; gap: 6px; padding: 7px 16px; background: #3C3489; color: #EEEDFE; border-radius: 8px; font-size: 12px; font-weight: 500; cursor: pointer; border: none; }
+
+.body-content { padding: 16px 28px 24px; display: flex; flex-direction: column; gap: 18px; }
+.stats-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.stat-card { background: rgba(255,255,255,0.75); border: 0.5px solid rgba(255,255,255,0.9); border-radius: var(--border-radius-lg); padding: 12px 14px; }
+.stat-label { font-size: 11px; color: #534AB7; margin-bottom: 5px; opacity: 0.8; }
+.stat-num { font-size: 20px; font-weight: 500; color: #26215C; }
+.stat-sub { font-size: 11px; color: #3B6D11; margin-top: 2px; }
+
+.section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.section-title { font-size: 13px; font-weight: 500; color: #26215C; }
+.view-all-link { border: none; background: transparent; color: #6d73d5; font-size: 12px; font-weight: 500; cursor: pointer; padding: 0; }
+.view-all-link:hover { color: #534AB7; }
+.app-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.app-card { background: rgba(255,255,255,0.75); border: 0.5px solid rgba(255,255,255,0.9); border-radius: var(--border-radius-lg); padding: 12px; cursor: pointer; text-align: left; }
+.app-card-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.app-dot { width: 28px; height: 28px; border-radius: 7px; display: flex; align-items: center; justify-content: center; font-size: 13px; flex-shrink: 0; }
+.app-dot.purple { background: #EEEDFE; }
+.app-dot.teal { background: #E1F5EE; }
+.app-dot.amber { background: #FAEEDA; }
+.app-name { font-size: 12px; font-weight: 500; color: #26215C; }
+.app-time { font-size: 11px; color: #534AB7; opacity: 0.6; margin-top: 1px; }
+.app-status { display: inline-flex; font-size: 11px; padding: 2px 7px; border-radius: 20px; }
+.app-status.done { background: #EAF3DE; color: #3B6D11; }
+.app-status.building { background: #EEEDFE; color: #534AB7; }
+
+.profile-block { padding: 4px 2px 12px; }
+.profile-hero { display: flex; align-items: center; gap: 14px; padding: 8px 0 16px; }
+.profile-avatar { width: 52px; height: 52px; border-radius: 50%; background: linear-gradient(135deg, #534AB7 0%, #7E76E6 100%); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 20px; font-weight: 600; flex-shrink: 0; }
+.profile-identity { min-width: 0; }
+.profile-name { font-size: 18px; font-weight: 600; color: var(--color-text-primary); line-height: 1.2; }
+.profile-subtitle { font-size: 12px; color: var(--color-text-tertiary); margin-top: 4px; }
+.profile-row { display: flex; align-items: center; justify-content: space-between; border: 0.5px solid var(--color-border-tertiary); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; }
+.profile-label { font-size: 13px; color: var(--color-text-secondary); }
+.profile-value { font-size: 13px; color: var(--color-text-primary); font-weight: 500; }
+.password-form { margin-top: 4px; }
+.profile-title { font-size: 13px; font-weight: 500; color: var(--color-text-primary); margin-bottom: 10px; }
+.pwd-input { margin-bottom: 10px; }
+
+@media (max-width: 1080px) {
+  .dual-entry,
+  .stats-row,
+  .app-grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

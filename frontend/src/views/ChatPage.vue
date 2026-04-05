@@ -1,30 +1,20 @@
 <template>
+  <WorkbenchShell>
   <div class="chat-page">
-    <TopBar
-      :title="store.currentApp?.app_name || 'aPaaS Builder AI'"
-      show-hamburger
-      @toggle-sidebar="chatSidebarCollapsed = !chatSidebarCollapsed"
-    >
+    <TopBar title="aPaaS Builder">
       <template #center>
-        <div class="mode-switcher">
-          <button class="mode-btn" :class="{ active: activeView === 'builder' }" @click="activeView = 'builder'">
-            <span>🤖</span> 智能搭建
+        <div v-if="showViewSwitcher" class="mode-switcher">
+          <button class="mode-btn" :class="{ active: activeView === 'builder' }" @click="setActiveView('builder')">
+            <span class="mode-btn-dot" aria-hidden="true"></span>
+            <span>智能搭建</span>
           </button>
-          <button
-            v-if="SHOW_PLATFORM_CONFIG && store.currentApp?.apaas_app_id"
-            class="mode-btn"
-            :class="{ active: activeView === 'platform' }"
-            @click="switchToPlatform"
-          >
-            <span>🛠️</span> 辅助搭建
+          <button v-if="SHOW_PLATFORM_CONFIG" class="mode-btn" :class="{ active: activeView === 'platform' }" @click="setActiveView('platform')">
+            <span class="mode-btn-dot" aria-hidden="true"></span>
+            <span>辅助搭建</span>
           </button>
-          <button
-            v-if="store.currentApp?.apaas_app_id"
-            class="mode-btn"
-            :class="{ active: activeView === 'coding' }"
-            @click="activeView = 'coding'"
-          >
-            <span>💻</span> 智能开发
+          <button class="mode-btn" :class="{ active: activeView === 'coding' }" @click="setActiveView('coding')">
+            <span class="mode-btn-dot" aria-hidden="true"></span>
+            <span>智能开发</span>
           </button>
         </div>
       </template>
@@ -37,20 +27,7 @@
         >↗</button>
       </template>
     </TopBar>
-
-    <div class="main-area">
-      <!-- 左侧应用列表侧栏 -->
-      <AppSidebar
-        :collapsed="chatSidebarCollapsed"
-        :items="sidebarAppItems"
-        :current-app-id="existingAppId"
-        @toggle="chatSidebarCollapsed = !chatSidebarCollapsed"
-        @select="onSidebarAppSelect"
-        @new-app="handleNewApp"
-      />
-
-      <!-- 内容区域 -->
-      <div class="content-area">
+    <div class="content-area">
 
       <!-- 平台配置 iframe（v-show 保持不销毁） -->
       <div v-show="SHOW_PLATFORM_CONFIG && activeView === 'platform'" class="platform-iframe-container">
@@ -92,33 +69,46 @@
       </div>
 
       <!-- 智能搭建内容区（横向布局） -->
-      <div v-show="!SHOW_PLATFORM_CONFIG || activeView === 'builder'" class="builder-content">
+      <div
+        v-show="!SHOW_PLATFORM_CONFIG || activeView === 'builder'"
+        class="builder-content"
+        :class="{ 'single-pane': isPlatformDeployed }"
+      >
       <!-- 左侧对话区 -->
-      <div class="chat-side">
+      <div v-if="!isPlatformDeployed" class="chat-side">
         <div v-if="appParsedMode" class="doc-view-wrap">
           <div class="doc-view-head">
             <div class="doc-view-title">功能设计文档</div>
-            <div class="doc-view-file">{{ lastParsedFilename || `${store.preview.appName || '未命名应用'}.md` }}</div>
+            <div class="doc-view-meta">
+              <div class="doc-view-file">{{ lastParsedFilename || `${store.preview.appName || '未命名应用'}.md` }}</div>
+              <button class="doc-download-btn" @click="downloadCurrentDoc">下载 .md</button>
+            </div>
           </div>
-          <div class="doc-view-body" v-html="renderedLatestDocHtml"></div>
-          <div v-if="!latestDocContent.trim()" class="doc-view-empty">
-            暂无可展示的文档正文，可在需求分析中重新生成后查看。
+          <DesignDocCard
+            v-if="parsedDocResultForCard"
+            :doc-result="parsedDocResultForCard"
+            :show-actions="false"
+          />
+          <div v-else class="doc-view-empty">
+            暂无可展示的文档内容，可重新上传文档后查看。
           </div>
         </div>
         <div v-else class="messages" ref="messagesRef">
-          <div v-for="(msg, idx) in messages" :key="idx" class="chat-bubble" :class="msg.role">
-            <div class="bubble-inner">
-              <div v-if="msg.role === 'assistant'" class="agent-label">
-                <span>{{ agents[msg.agent || 'builder']?.icon }}</span>
-                <span>{{ agents[msg.agent || 'builder']?.name }}</span>
+          <div v-for="(msg, idx) in visibleMessages" :key="idx" class="chat-bubble" :class="msg.role">
+            <div class="bubble-row" :class="msg.role">
+              <div v-if="msg.role === 'assistant'" class="assistant-avatar" aria-hidden="true">AI</div>
+              <div class="bubble-inner" :class="{ 'welcome-bubble': msg.role === 'assistant' && msg.content === BUILDER_WELCOME_MESSAGE }">
+                <div class="bubble-content" :class="msg.role" v-html="formatContent(msg.content)"></div>
               </div>
-              <div class="bubble-content" :class="msg.role" v-html="formatContent(msg.content)"></div>
             </div>
           </div>
           <div v-if="isTyping" class="chat-bubble assistant">
-            <div class="bubble-inner">
-              <div class="bubble-content assistant">
-                <span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span>
+            <div class="bubble-row assistant">
+              <div class="assistant-avatar" aria-hidden="true">AI</div>
+              <div class="bubble-inner">
+                <div class="bubble-content assistant">
+                  <span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span>
+                </div>
               </div>
             </div>
           </div>
@@ -135,160 +125,377 @@
           </div>
           <!-- 编码冲突修复输入 -->
           <div v-if="activeConflict" class="chat-bubble assistant">
-            <div class="bubble-inner">
-              <div class="agent-label"><span>🤖</span><span>智能搭建</span></div>
-              <div class="bubble-content assistant conflict-resolve-box">
-                <div class="conflict-label">请输入新编码替换 <code>{{ activeConflict.current_code }}</code>：</div>
-                <div class="conflict-input-row">
-                  <input
-                    v-model="activeConflict.newCode"
-                    class="conflict-input"
-                    placeholder="输入新编码，如 xxx_v2"
-                    @keydown.enter="resolveConflictAndRetry"
-                    :disabled="activeConflict.resolving"
-                  />
-                  <button class="conflict-btn confirm" @click="resolveConflictAndRetry" :disabled="activeConflict.resolving">
-                    {{ activeConflict.resolving ? '修复中...' : '确认修复' }}
-                  </button>
-                  <button class="conflict-btn cancel" @click="cancelConflict" :disabled="activeConflict.resolving">取消</button>
+            <div class="bubble-row assistant">
+              <div class="assistant-avatar" aria-hidden="true">AI</div>
+              <div class="bubble-inner">
+                <div class="bubble-content assistant conflict-resolve-box">
+                  <div class="conflict-label">请输入新编码替换 <code>{{ activeConflict.current_code }}</code>：</div>
+                  <div class="conflict-input-row">
+                    <input
+                      v-model="activeConflict.newCode"
+                      class="conflict-input"
+                      placeholder="输入新编码，如 xxx_v2"
+                      @keydown.enter="resolveConflictAndRetry"
+                      :disabled="activeConflict.resolving"
+                    />
+                    <button class="conflict-btn confirm" @click="resolveConflictAndRetry" :disabled="activeConflict.resolving">
+                      {{ activeConflict.resolving ? '修复中...' : '确认修复' }}
+                    </button>
+                    <button class="conflict-btn cancel" @click="cancelConflict" :disabled="activeConflict.resolving">取消</button>
+                  </div>
                 </div>
               </div>
             </div>
           </div>
         </div>
 
-        <!-- 配置就绪后的操作栏 -->
-        <div v-if="readyForGenerate" class="gen-action-bar">
-          <button
-            v-if="deployAllDone || store.currentApp?.status === 'completed'"
-            class="gen-btn done"
-            @click="openDeployPanel"
-          >✅ 已部署 · 查看记录</button>
-          <button
-            v-else
-            class="gen-btn"
-            :disabled="generating"
-            @click="startGenerate"
-          >{{ generating ? '创建中...' : deployAppId ? '⚡ 重新部署' : '⚡ 开始生成' }}</button>
-        </div>
+        <div v-if="showBuilderComposer" class="builder-workbench">
+          <div class="builder-composer-shell">
+            <div v-if="!appParsedMode" class="input-bar quick-edit-bar">
+              <div class="input-card quick-edit-card">
+                <div class="quick-edit-glow" aria-hidden="true"></div>
+                <div class="composer-toolbar">
+                  <el-select
+                    v-model="selectedBuilderModelId"
+                    class="builder-inline-model-select in-card"
+                    popper-class="model-select-dropdown"
+                    size="small"
+                    placeholder="选择对话模型"
+                    :loading="builderModelLoading"
+                    :disabled="builderModelLoading || updatingBuilderModel || builderModelOptions.length === 0"
+                    @change="handleBuilderModelChange"
+                  >
+                    <el-option
+                      v-for="option in builderModelOptions"
+                      :key="option.id"
+                      :label="formatBuilderModelOption(option)"
+                      :value="option.id"
+                    >
+                      <div class="builder-model-option-row">
+                        <span class="builder-model-option-name">{{ option.config_name }}</span>
+                        <span class="builder-model-option-meta">{{ option.provider }} / {{ option.model }}</span>
+                      </div>
+                    </el-option>
+                  </el-select>
+                  <button
+                    class="builder-generate-btn compact"
+                    :disabled="assembling || generating"
+                    @click="generatePreviewFromConversation"
+                  >{{ assembling ? '解析中...' : '一键生成' }}</button>
+                </div>
+                <div class="builder-control-hint inside-card">{{ builderModelHint }}</div>
+              <div class="input-card-top">
+                <label v-if="!isRequirementsMode" class="upload-btn" title="上传功能设计文档(.md)">
+                  <input type="file" accept=".md" @change="handleDocUpload" style="display:none" />
+                  <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M15.5 8.5l-6.4 6.4a3.5 3.5 0 01-5-5l6.4-6.4a2.2 2.2 0 013.1 3.1L7.2 13a.9.9 0 01-1.3-1.3l5.5-5.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </label>
+                <textarea
+                  v-model="inputText"
+                  @keydown.enter.exact.prevent="sendMessage"
+                  @keydown.enter.shift.exact="inputText += '\n'"
+                  :placeholder="builderQuickPlaceholder"
+                  rows="1"
+                  ref="inputRef"
+                  @input="autoResizeTextarea"
+                ></textarea>
+                <button class="send-btn" :class="{ disabled: !inputText.trim() }" @click="sendMessage">
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M14 2L7 9M14 2l-4.5 12-2-5.5L2 6.5 14 2z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+          </div>
 
-        <div v-if="!appParsedMode" class="input-bar">
-          <div class="input-card">
-            <div class="input-card-top">
-              <label v-if="!isRequirementsMode" class="upload-btn" title="上传功能设计文档(.md)">
-                <input type="file" accept=".md" @change="handleDocUpload" style="display:none" />
-                <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M15.5 8.5l-6.4 6.4a3.5 3.5 0 01-5-5l6.4-6.4a2.2 2.2 0 013.1 3.1L7.2 13a.9.9 0 01-1.3-1.3l5.5-5.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              </label>
-              <textarea
-                v-model="inputText"
-                @keydown.enter.exact.prevent="sendMessage"
-                @keydown.enter.shift.exact="inputText += '\n'"
-                :placeholder="isRequirementsMode ? '描述您的业务需求...' : '输入消息，或上传设计文档...'"
-                rows="1"
-                ref="inputRef"
-                @input="autoResizeTextarea"
-              ></textarea>
-              <button class="send-btn" :class="{ disabled: !inputText.trim() }" @click="sendMessage">
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M14 2L7 9M14 2l-4.5 12-2-5.5L2 6.5 14 2z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
-              </button>
-            </div>
-            <div class="input-card-bottom">
-              <div class="input-card-spacer"></div>
-              <el-select
-                v-model="selectedBuilderModelId"
-                class="input-model-select"
-                popper-class="model-select-dropdown"
-                size="small"
-                placeholder="模型"
-                :loading="builderModelLoading"
-                :disabled="builderModelLoading || updatingBuilderModel || builderModelOptions.length === 0"
-                @change="handleBuilderModelChange"
-              >
-                <el-option
-                  v-for="option in builderModelOptions"
-                  :key="option.id"
-                  :label="formatBuilderModelOption(option)"
-                  :value="option.id"
+        </div>
+      </div>
+
+      <div class="preview-side builder-result-side">
+        <div class="preview-side-header">
+          <div class="preview-side-heading">
+            <div class="preview-side-heading-main">
+              <div class="preview-side-title-row">
+                <div class="preview-side-title">{{ builderAppDisplayName }}</div>
+                <div class="preview-side-status inline-meta">
+                  <code class="preview-app-code-chip inline">{{ displayAppCode }}</code>
+                </div>
+                <button
+                  v-if="showBuilderPreview && !isPlatformDeployed"
+                  class="preview-app-edit-btn"
+                  @click="editAppMeta"
+                  aria-label="修改应用名称和编码"
+                  title="修改应用名称和编码"
                 >
-                  <div class="builder-model-option-row">
-                    <span class="builder-model-option-name">{{ option.config_name }}</span>
-                    <span class="builder-model-option-meta">{{ option.provider }} / {{ option.model }}</span>
-                  </div>
-                </el-option>
-              </el-select>
+                  <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <path d="M10.9 2.1a1.5 1.5 0 112.1 2.1l-7.2 7.2-3 .8.8-3 7.3-7.1z" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </button>
+              </div>
             </div>
+          </div>
+          <button
+            v-if="showStartDeployButton"
+            class="preview-side-cta"
+            @click="startDeployFlow()"
+            :disabled="generating || assembling || !hasPreviewContent"
+          >{{ generating ? '部署中...' : '开始部署' }}</button>
+          <button
+            v-else-if="showPublishButton"
+            class="preview-side-cta success"
+            @click="publishCurrentApp"
+            :disabled="publishingApp"
+          >{{ publishingApp ? '上线中...' : '上线应用' }}</button>
+        </div>
+        <div v-if="showBuilderPreview" class="builder-step-bar">
+          <button
+            v-for="(tab, index) in builderPreviewTabs"
+            :key="tab.key"
+            class="builder-step-item"
+            :class="{ active: builderPreviewTab === tab.key, done: index < activeBuilderStepIndex }"
+            @click="builderPreviewTab = tab.key"
+          >
+            <span class="builder-step-index">{{ index + 1 }}</span>
+            <span class="builder-step-copy">
+              <span class="builder-step-label">{{ tab.label }}</span>
+              <span class="builder-step-meta">{{ getBuilderTabMeta(tab.key) }}</span>
+            </span>
+          </button>
+        </div>
+        <div class="preview-body">
+          <div v-if="showBuilderPreview" class="tab-content">
+            <template v-if="builderPreviewTab === 'roles'">
+              <div v-if="store.preview.roles.length === 0" class="preview-empty small">暂无角色数据</div>
+              <div v-for="(role, idx) in store.preview.roles" :key="role.code || idx" class="preview-item-card">
+                <div class="preview-item-head">
+                  <div>
+                    <div class="preview-item-title">{{ idx + 1 }}. {{ role.name || role.code }}</div>
+                    <div class="preview-item-code">{{ role.code || '未设置编码' }}</div>
+                  </div>
+                  <button class="builder-edit-link" @click="startSingleEdit('roles', role)" aria-label="修改角色">
+                    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                      <path d="M3 11.75V13h1.25l7.18-7.18-1.25-1.25L3 11.75Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+                      <path d="M9.85 3.73 11.1 2.5a.88.88 0 0 1 1.25 1.25L11.1 5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                    </svg>
+                  </button>
+                </div>
+                <div class="preview-item-desc">{{ getRoleDescription(role) }}</div>
+              </div>
+            </template>
+
+            <template v-else-if="builderPreviewTab === 'dicts'">
+              <div v-if="store.preview.dicts.length === 0" class="preview-empty small">暂无数据字典</div>
+              <div v-for="(dict, idx) in store.preview.dicts" :key="dict.code || idx" class="preview-item-card">
+                <div class="preview-item-head">
+                  <div>
+                    <div class="preview-item-title">{{ idx + 1 }}. {{ dict.name || dict.code }}</div>
+                    <div class="preview-item-code">{{ dict.code || '未设置编码' }}</div>
+                  </div>
+                  <button class="builder-edit-link" @click="startSingleEdit('dicts', dict)" aria-label="修改字典">
+                    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                      <path d="M3 11.75V13h1.25l7.18-7.18-1.25-1.25L3 11.75Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+                      <path d="M9.85 3.73 11.1 2.5a.88.88 0 0 1 1.25 1.25L11.1 5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                    </svg>
+                  </button>
+                </div>
+                <div class="dict-option-list">
+                  <div v-for="(opt, optIdx) in normalizeDictOptions(dict)" :key="opt.code || optIdx" class="dict-option-row">
+                    <code class="dict-option-code">{{ opt.code }}</code>
+                    <span class="dict-option-name">{{ opt.name }}</span>
+                  </div>
+                </div>
+              </div>
+            </template>
+
+            <template v-else-if="builderPreviewTab === 'models'">
+              <div v-if="store.preview.models.length === 0" class="preview-empty small">暂无数据模型</div>
+              <div v-for="(model, idx) in store.preview.models" :key="model.code || idx" class="model-card">
+                <div class="model-header">
+                  <span class="model-name">{{ idx + 1 }}. {{ model.name || model.code }}</span>
+                  <span class="model-code">{{ model.code || '未设置编码' }}</span>
+                  <button class="builder-edit-link inline" @click="startSingleEdit('models', model)" aria-label="修改模型">
+                    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                      <path d="M3 11.75V13h1.25l7.18-7.18-1.25-1.25L3 11.75Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+                      <path d="M9.85 3.73 11.1 2.5a.88.88 0 0 1 1.25 1.25L11.1 5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                    </svg>
+                  </button>
+                </div>
+                <div class="field-list">
+                  <div v-for="(field, fieldIdx) in model.fields || []" :key="getFieldKey(field, fieldIdx)" class="field-row">
+                    <div class="field-left">
+                      <div class="field-icon">{{ getFieldIcon(field) }}</div>
+                      <div class="field-text">
+                        <span class="field-name">{{ getFieldLabel(field) }}</span>
+                        <span class="field-code">{{ field.code || `field_${fieldIdx + 1}` }}</span>
+                      </div>
+                    </div>
+                    <div class="field-right">
+                      <span class="ftype">{{ field.type || '文本' }}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </template>
+
+            <template v-else-if="builderPreviewTab === 'forms'">
+              <div v-if="formPreviewItems.length === 0" class="preview-empty small">暂无表单配置</div>
+              <div v-for="(form, idx) in formPreviewItems" :key="form.code || idx" class="preview-item-card form-preview-card">
+                <div class="preview-item-head">
+                  <div>
+                    <div class="preview-item-title">{{ idx + 1 }}. {{ form.name }}</div>
+                    <div class="preview-item-code">{{ form.code }}</div>
+                  </div>
+                  <button class="builder-edit-link" @click="startSingleEdit('forms', form)" aria-label="修改表单">
+                    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                      <path d="M3 11.75V13h1.25l7.18-7.18-1.25-1.25L3 11.75Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+                      <path d="M9.85 3.73 11.1 2.5a.88.88 0 0 1 1.25 1.25L11.1 5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                    </svg>
+                  </button>
+                </div>
+                <div class="form-meta-row">
+                  <span class="form-meta-chip">{{ form.modelName }}</span>
+                  <span class="form-meta-chip subtle">{{ form.tableTypeLabel }}</span>
+                </div>
+                <div class="form-preview">
+                  <div class="form-title">{{ form.name }} 预览</div>
+                  <div class="form-fields-grid">
+                    <div
+                      v-for="(field, fieldIdx) in form.previewFields"
+                      :key="field.code || fieldIdx"
+                      class="form-field"
+                      :class="{ 'full-width': field.fullWidth }"
+                    >
+                      <div class="form-label">{{ field.name }}</div>
+                      <div class="form-mock" :class="{ tall: field.fullWidth }">
+                        <span>{{ field.mockText }}</span>
+                        <span class="mock-arrow">{{ field.mockIcon }}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </template>
+
+            <template v-else-if="builderPreviewTab === 'permissions'">
+              <div v-if="permissionPreviewItems.length === 0" class="preview-empty small">暂无权限配置</div>
+              <div v-for="(perm, idx) in permissionPreviewItems" :key="perm.code || idx" class="perm-card">
+                <div class="perm-header">
+                  <div class="perm-heading-block">
+                    <span>{{ idx + 1 }}. {{ perm.name }}</span>
+                    <span class="perm-code-text">{{ perm.code }}</span>
+                  </div>
+                  <button class="builder-edit-link inline" @click="startSingleEdit('permissions', perm.raw)" aria-label="修改权限">
+                    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                      <path d="M3 11.75V13h1.25l7.18-7.18-1.25-1.25L3 11.75Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+                      <path d="M9.85 3.73 11.1 2.5a.88.88 0 0 1 1.25 1.25L11.1 5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                    </svg>
+                  </button>
+                </div>
+                <table class="perm-table">
+                  <thead>
+                    <tr><th>角色</th><th>表单权限</th><th>可操作数据</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="(row, rowIdx) in perm.rows" :key="`${perm.code}-${row.roleCode}-${rowIdx}`">
+                      <td>{{ row.roleName }}</td>
+                      <td>{{ row.actionsText }}</td>
+                      <td><span class="data-tag" :class="row.scopeClass">{{ row.scopeText }}</span></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </template>
+
+            <template v-else>
+              <div class="doc-preview-card">
+                <div class="doc-preview-head">
+                  <div>
+                    <div class="doc-preview-title">功能文档</div>
+                    <div class="doc-preview-subtitle">整体功能说明的 Markdown 文档</div>
+                  </div>
+                  <button class="doc-preview-download" @click="downloadCurrentDoc" aria-label="下载文档" title="下载文档">
+                    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                      <path d="M8 2.5v6m0 0 2.4-2.4M8 8.5 5.6 6.1M3 10.5v1.3c0 .66.54 1.2 1.2 1.2h7.6c.66 0 1.2-.54 1.2-1.2v-1.3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    <span>下载</span>
+                  </button>
+                </div>
+                <pre class="doc-preview-content">{{ docPreviewContent || '暂无文档内容' }}</pre>
+              </div>
+            </template>
+          </div>
+          <div v-else class="preview-empty preview-empty-stage">
+            <div class="preview-empty-title">还没有解析内容</div>
+            <div class="preview-empty-copy">先告诉我你想搭什么，我会根据你的需求生成右侧解析结果。</div>
           </div>
         </div>
       </div>
 
-
-      <!-- 第三栏：部署面板（requirements 模式下隐藏，builder 模式或配置就绪后显示） -->
-      <div class="deploy-side" :class="{ open: activeView === 'builder' && (!isRequirementsMode || parseReady) }">
-        <div v-if="appParsedMode" class="parsed-side-card">
-          <div class="parsed-side-title">解析结果</div>
-          <div class="parsed-side-row">应用名称：{{ store.preview.appName || '未命名应用' }}</div>
-          <div class="parsed-side-row">应用编码：<code>{{ displayAppCode }}</code></div>
-          <div class="parsed-side-row">模型：{{ store.preview.models.length }} 个</div>
-          <div class="parsed-side-row">字典：{{ store.preview.dicts.length }} 个</div>
-          <div class="parsed-side-row">角色：{{ store.preview.roles.length }} 个</div>
-          <div class="parsed-side-brief">模型：{{ modelNamesText }}</div>
-          <div class="parsed-side-brief">字典：{{ dictNamesText }}</div>
-          <div class="parsed-side-brief">角色：{{ roleNamesText }}</div>
-        </div>
+      <aside class="deploy-side" :class="{ open: deployOpen }">
         <div class="deploy-header">
           <div>
-            <div class="deploy-title">部署到平台</div>
-            <div class="deploy-desc">{{ deploySteps.length }} 个步骤</div>
+            <div class="deploy-title-row">
+              <div class="deploy-title">部署进度</div>
+              <span v-if="currentDeployStep" class="deploy-live-badge">执行中</span>
+            </div>
+            <div class="deploy-desc">{{ deployAllDone ? '已完成全部部署步骤' : deployOpen ? '确认解析后执行右侧部署步骤' : '点击开始部署后在这里执行' }}</div>
+            <div v-if="currentDeployStep" class="deploy-current-step">{{ currentDeployStep.label }}</div>
           </div>
-          <button v-if="false" class="deploy-close" @click="deployOpen = false">✕</button>
+          <button class="deploy-close" @click="deployOpen = false" aria-label="关闭部署面板">×</button>
         </div>
-        <div class="deploy-progress">
-          <div class="dp-track"><div class="dp-fill" :style="{ width: deployPercent + '%' }"></div></div>
-          <span class="dp-meta">{{ deployDoneCount }}/{{ deploySteps.length }}</span>
+        <div v-if="deployOpen" class="deploy-progress">
+          <div class="dp-track"><div class="dp-fill" :style="{ width: `${deployPercent}%` }"></div></div>
+          <span class="dp-meta">{{ deployDoneCount }}/{{ deploySteps.length || 0 }}</span>
         </div>
-        <div v-if="!appParsedMode" class="deploy-actions">
-          <button class="dp-run-all" :disabled="deployRunningAll || deployExecuting !== null || deployAllDone" @click="deployRunAll">
-            {{ deployAllDone ? '✓ 全部完成' : deployRunningAll ? '执行中...' : '▶ 一键执行' }}
+        <div v-if="deployOpen && !deployAllDone" class="deploy-actions">
+          <button class="dp-run-all" @click="deployRunAll" :disabled="deployRunningAll || deployExecuting !== null || deployAllDone || deploySteps.length === 0">
+            {{ deployRunningAll ? '部署中...' : deployAllDone ? '部署完成' : '一键部署' }}
           </button>
         </div>
-        <div class="deploy-groups">
-          <template v-for="(group, gi) in deployGroups" :key="gi">
-            <div class="dg" :class="{ done: group.allDone, err: group.hasError }">
-              <div class="dg-hd">
-                <span class="dg-icon">{{ group.icon }}</span>
-                <span class="dg-name">{{ group.title }}</span>
-                <span class="dg-badge" :class="group.allDone ? 'done' : group.hasError ? 'err' : ''">
-                  {{ group.allDone ? '完成' : group.hasError ? '失败' : group.doneCount + '/' + group.steps.length }}
-                </span>
+        <div v-if="deployOpen && activeConflict" class="deploy-conflict-card">
+          <div class="deploy-conflict-title">检测到编码冲突</div>
+          <div class="deploy-conflict-copy">{{ activeConflict.model_name }} 的编码 <code>{{ activeConflict.current_code }}</code> 已存在，请修改后继续。</div>
+          <div class="deploy-conflict-input-row">
+            <input
+              v-model="activeConflict.newCode"
+              class="deploy-conflict-input"
+              placeholder="输入新的编码"
+              @keydown.enter="resolveConflictAndRetry"
+              :disabled="activeConflict.resolving"
+            />
+            <button class="deploy-conflict-btn primary" @click="resolveConflictAndRetry" :disabled="activeConflict.resolving">{{ activeConflict.resolving ? '处理中...' : '确认' }}</button>
+          </div>
+        </div>
+        <div v-if="deployOpen" class="deploy-groups">
+          <div v-for="group in deployGroups" :key="group.title" class="dg" :class="{ done: group.allDone, err: group.hasError, current: group.steps.some(step => step.key === deployExecuting) }">
+            <div class="dg-hd">
+              <span class="dg-icon">{{ group.icon }}</span>
+              <span class="dg-name">{{ group.title }}</span>
+              <span class="dg-badge" :class="group.allDone ? 'done' : group.hasError ? 'err' : ''">{{ group.doneCount }}/{{ group.steps.length }}</span>
+            </div>
+            <div v-for="step in group.steps" :key="step.key" class="ds" :class="{ [step.status]: true, current: deployExecuting === step.key }">
+              <div class="ds-dot" :class="deployExecuting === step.key ? 'pulse' : step.status">
+                <span v-if="step.status === 'completed'">✓</span>
+                <span v-else-if="step.status === 'error'">!</span>
               </div>
-              <div v-for="s in group.steps" :key="s.key" class="ds" :class="[s.status, { running: deployExecuting === s.key }]">
-                <div class="ds-dot" :class="[s.status, { pulse: deployExecuting === s.key }]">
-                  <template v-if="s.status === 'completed'">✓</template>
-                  <template v-else-if="s.status === 'error'">!</template>
-                </div>
-                <div class="ds-body">
-                  <div class="ds-name">{{ s.label.replace(/^创建(模型|表单): /, '') }}</div>
-                  <div v-if="s.error" class="ds-err">{{ s.error }}</div>
-                </div>
-                <div class="ds-act">
-                  <span v-if="deployExecuting === s.key" class="ds-spin"></span>
-                  <button v-else-if="s.status === 'completed'" class="ds-btn redo" :disabled="deployRunningAll" @click="deployRedo(s.key)">↻</button>
-                  <button v-else-if="s.status === 'error'" class="ds-btn retry" :disabled="deployRunningAll" @click="deployExec(s.key)">重试</button>
-                  <button v-else-if="s.deps_met" class="ds-btn run" :disabled="deployRunningAll" @click="deployExec(s.key)">执行</button>
-                  <span v-else class="ds-lock">🔒</span>
-                </div>
+              <div class="ds-body">
+                <div class="ds-name">{{ step.label }}</div>
+                <div v-if="step.error" class="ds-err">{{ step.error }}</div>
+              </div>
+              <div class="ds-act">
+                <span v-if="deployExecuting === step.key" class="ds-spin"></span>
+                <button v-else-if="step.status === 'error'" class="ds-btn retry" @click="deployRedo(step.key)">重试</button>
+                <button v-else-if="step.status !== 'completed' && step.deps_met" class="ds-btn run" @click="deployExec(step.key)">执行</button>
+                <span v-else-if="!step.deps_met && step.status !== 'completed'" class="ds-lock">🔒</span>
               </div>
             </div>
-          </template>
+          </div>
+          <div v-if="deployAllDone" class="deploy-done">
+            部署已完成
+            <button class="deploy-done-btn" @click="openInPlatform">查看应用</button>
+          </div>
         </div>
-        <div v-if="deployAllDone" class="deploy-done">
-          🎉 部署完成！<button class="deploy-done-btn" @click="openInPlatform">查看应用 →</button>
-          <button class="deploy-log-btn" @click="showApiLogs = true">📋 API日志</button>
-        </div>
-      </div><!-- /deploy-side -->
+      </aside>
     </div><!-- /builder-content -->
-      </div><!-- /content-area -->
-    </div><!-- /main-area -->
+    </div><!-- /content-area -->
 
     <!-- Modals (在 chat-page 根元素下) -->
     <ConnectModal v-model="store.showConnectModal" />
@@ -321,13 +528,13 @@
       </div>
     </el-dialog>
   </div><!-- /chat-page -->
+  </WorkbenchShell>
 </template>
 
 <script setup lang="ts">
 import { API_PREFIX } from '@/utils/request'
 import { ref, reactive, computed, nextTick, onMounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { ArrowLeft, Promotion } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { usePreviewStore } from '@/stores/preview'
 import { useUserStore } from '@/stores/user'
@@ -335,16 +542,13 @@ import { applicationApi } from '@/api/application'
 // codingApi / consumeSseResponse no longer needed — coding tab uses iframe
 import { incrementalApi, type DiffResponse, type ExecuteResponse } from '@/api/incremental'
 import { conversationApi, type ConversationWithApp } from '@/api/conversation'
-import { marked } from 'marked'
 import ConnectModal from '@/components/ConnectModal.vue'
 import EnvSelectModal from '@/components/EnvSelectModal.vue'
-import AppSidebar from '@/components/AppSidebar.vue'
-import type { AppItem } from '@/components/AppSidebar.vue'
 import { platformEnvApi } from '@/api/platformEnv'
 import request from '@/utils/request'
 import type { Message } from '@/types'
-import ThemeToggle from '@/components/ThemeToggle.vue'
 import TopBar from '@/components/TopBar.vue'
+import WorkbenchShell from '@/components/WorkbenchShell.vue'
 import { llmConfigApi, type BuilderModelOption } from '@/api/llmConfig'
 import DesignDocCard from '@/components/DesignDocCard.vue'
 import { requirementsApi } from '@/api/requirements'
@@ -354,14 +558,69 @@ const router = useRouter()
 const route = useRoute()
 const store = usePreviewStore()
 const userStore = useUserStore()
+const builderPreviewTab = ref<'roles' | 'dicts' | 'models' | 'forms' | 'permissions' | 'docs'>('roles')
+const builderPreviewTabs = [
+  { key: 'roles', label: '角色' },
+  { key: 'dicts', label: '数据字典' },
+  { key: 'models', label: '数据模型' },
+  { key: 'forms', label: '表单' },
+  { key: 'permissions', label: '权限' },
+  { key: 'docs', label: '文档' },
+] as const
+const rightQuickInput = ref('')
 const parsedAppCode = ref('')
 const loadedAppCode = ref('')
+const currentRemoteStatus = ref('')
 const lastParsedFilename = ref('')
 const latestDocContent = ref('')
 const readyForGenerate = computed(() => !!store.currentApp && parseReady.value)
 const appParsedMode = computed(() => route.query.app_mode === 'parsed')
+const builderAppDisplayName = computed(() => store.preview.appName || store.currentApp?.name || '未命名应用')
 const displayAppCode = computed(() => parsedAppCode.value || loadedAppCode.value || buildAppCode(store.preview.appName))
-const renderedLatestDocHtml = computed(() => renderMarkdown(latestDocContent.value || ''))
+const parsedDocResultForCard = computed(() => {
+  if (!store.preview.appName && !store.preview.models.length && !store.preview.dicts.length && !store.preview.roles.length) {
+    return null
+  }
+  const roleTableMapping = (store.preview.permissions || []).map((perm: any, idx: number) => ({
+    table_name: perm?.form || perm?.table || `表${idx + 1}`,
+    table_code: perm?.form_code || perm?.table_code || `table_${idx + 1}`,
+    permissions: (perm?.roles || []).map((r: any, rIdx: number) => ({
+      role_code: r?.role_code || r?.code || `role_${rIdx + 1}`,
+      role_name: r?.role_name || r?.name || `角色${rIdx + 1}`,
+      operations: r?.actions || r?.operations || []
+    }))
+  }))
+  return {
+    app_info: {
+      name: store.preview.appName || '未命名应用',
+      code: displayAppCode.value,
+      description: `由 aPaaS Builder AI 解析生成，包含 ${store.preview.models.length} 个模型、${store.preview.dicts.length} 个字典、${store.preview.roles.length} 个角色。`
+    },
+    roles: (store.preview.roles || []).map((role: any, idx: number) => ({
+      role_code: role?.code || `role_${idx + 1}`,
+      role_name: role?.name || role?.code || `角色${idx + 1}`,
+      description: role?.description || ''
+    })),
+    data_dictionary: (store.preview.dicts || []).map((dict: any, idx: number) => ({
+      dict_code: dict?.code || `dict_${idx + 1}`,
+      dict_name: dict?.name || dict?.code || `字典${idx + 1}`,
+      items: (dict?.options || []).map((item: any, itemIdx: number) => ({
+        item_code: typeof item === 'string' ? `item_${itemIdx + 1}` : (item?.code || item?.item_code || `item_${itemIdx + 1}`),
+        item_name: typeof item === 'string' ? item : (item?.name || item?.item_name || `选项${itemIdx + 1}`)
+      }))
+    })),
+    tables: (store.preview.models || []).map((model: any, idx: number) => ({
+      table_code: model?.code || `table_${idx + 1}`,
+      table_name: model?.name || model?.code || `数据表${idx + 1}`,
+      table_type: model?.table_type || '主表',
+      fields: (model?.fields || []).map((field: any, fIdx: number) => ({
+        field_code: field?.code || `field_${fIdx + 1}`,
+        field_name: field?.name || field?.code || `字段${fIdx + 1}`
+      }))
+    })),
+    role_table_mapping: roleTableMapping
+  }
+})
 const modelNamesText = computed(() => {
   const names = store.preview.models.map((m: any) => m?.name).filter(Boolean)
   return names.length ? names.slice(0, 8).join('、') + (names.length > 8 ? ` 等 ${names.length} 项` : '') : '暂无'
@@ -374,50 +633,199 @@ const roleNamesText = computed(() => {
   const names = store.preview.roles.map((r: any) => r?.name).filter(Boolean)
   return names.length ? names.slice(0, 8).join('、') + (names.length > 8 ? ` 等 ${names.length} 项` : '') : '暂无'
 })
+const activeBuilderTabLabel = computed(() => builderPreviewTabs.find(tab => tab.key === builderPreviewTab.value)?.label || '角色')
+const activeBuilderStepIndex = computed(() => Math.max(0, builderPreviewTabs.findIndex(tab => tab.key === builderPreviewTab.value)))
+const getBuilderTabCount = (tabKey: typeof builderPreviewTab.value) => {
+  if (tabKey === 'roles') return store.preview.roles.length
+  if (tabKey === 'dicts') return store.preview.dicts.length
+  if (tabKey === 'models') return store.preview.models.length
+  if (tabKey === 'forms') return formPreviewItems.value.length
+  if (tabKey === 'permissions') return permissionPreviewItems.value.length
+  return docPreviewAvailable.value ? 1 : 0
+}
+const getBuilderTabMeta = (tabKey: typeof builderPreviewTab.value) => {
+  const count = getBuilderTabCount(tabKey)
+  return count > 0 ? `${count} 项` : '待补充'
+}
+const builderLifecycleStatus = computed(() => {
+  if (deployAllDone.value || store.currentApp?.status === 'completed') {
+    return { key: 'deployed', label: '已部署' as const }
+  }
+  if (parseReady.value || store.currentApp?.status === 'ready') {
+    return { key: 'generated', label: '已生成' as const }
+  }
+  return { key: 'draft', label: '草稿' as const }
+})
+const isPlatformDeployed = computed(() =>
+  builderLifecycleStatus.value.key === 'deployed' ||
+  !!store.currentApp?.apaas_app_id ||
+  store.currentApp?.status === 'completed'
+)
+const isAppOnline = computed(() =>
+  currentRemoteStatus.value === 'ENABLE' ||
+  currentRemoteStatus.value === '已上线'
+)
+const isAppPublishing = computed(() => {
+  const status = String(currentRemoteStatus.value || '').toLowerCase()
+  return status.includes('publish') || status.includes('上线中') || status.includes('publishing')
+})
+const showStartDeployButton = computed(() => !deployAllDone.value && !isPlatformDeployed.value)
+const showPublishButton = computed(() =>
+  isPlatformDeployed.value &&
+  !isAppOnline.value &&
+  !isAppPublishing.value &&
+  !publishingApp.value
+)
+const showBuilderComposer = computed(() => !isPlatformDeployed.value)
+const showDeployProgressInline = computed(() => deploySteps.value.length > 0 || deployOpen.value || isPlatformDeployed.value)
+const showViewSwitcher = computed(() =>
+  !!existingAppId.value && (
+    builderLifecycleStatus.value.key === 'deployed' ||
+    !!store.currentApp?.apaas_app_id ||
+    store.currentApp?.status === 'completed'
+  )
+)
+const builderStatusText = computed(() => {
+  if (deployAllDone.value) return '已完成'
+  if (generating.value) return '生成中'
+  if (parseReady.value) return '准备就绪'
+  return '待完善'
+})
+const builderQuickPlaceholder = computed(() => `补充或修改${activeBuilderTabLabel.value}内容，例如：把${activeBuilderTabLabel.value}再细化一下...`)
+const hasPreviewContent = computed(() =>
+  !!store.preview.appName
+  || store.preview.roles.length > 0
+  || store.preview.dicts.length > 0
+  || store.preview.models.length > 0
+  || formPreviewItems.value.length > 0
+  || permissionPreviewItems.value.length > 0
+)
+const showBuilderPreview = computed(() =>
+  hasPreviewContent.value && (
+    !isRequirementsMode.value ||
+    !!existingAppId.value ||
+    parseReady.value
+  )
+)
+const docPreviewContent = computed(() => ((latestDocContent.value || '').trim() || buildDocMarkdownFromPreview()).trim())
+const docPreviewAvailable = computed(() => !!docPreviewContent.value)
+const publishingApp = ref(false)
 
-const handleNewApp = () => {
-  router.push('/chat?mode=requirements')
+const getDataScopeLabel = (scope: string) => {
+  const normalized = (scope || '').toLowerCase()
+  if (normalized.includes('all') || normalized.includes('全部')) return { text: '全部数据', className: 'all' }
+  if (normalized.includes('dept') || normalized.includes('部门')) return { text: '部门数据', className: 'dept' }
+  if (normalized.includes('self') || normalized.includes('本人') || normalized.includes('自己')) return { text: '本人数据', className: 'self' }
+  return { text: scope || '未配置', className: '' }
 }
 
-// ── 用户头像菜单 ──
-const handleUserCommand = (command: string) => {
-  if (command === 'logout') {
-    userStore.logout()
-    router.push('/login')
-  } else if (command === 'apps') {
-    router.push('/apps')
-  } else if (command === 'envs') {
-    router.push('/platform-envs')
+const editAppMeta = () => {
+  builderPreviewTab.value = 'roles'
+  inputText.value = `请帮我修改应用名称和应用编码：\n当前应用名称：${builderAppDisplayName.value}\n当前应用编码：${displayAppCode.value}\n目标名称：\n目标编码：`
+  ElMessage.info('已切换到左侧对话区，你可以直接描述新的应用名称和编码。')
+  focusQuickInput()
+}
+
+const formPreviewItems = computed(() =>
+  (store.preview.models || []).map((model: any, idx: number) => ({
+    name: model?.form_name || model?.name || `表单${idx + 1}`,
+    code: model?.form_code || model?.code || `form_${idx + 1}`,
+    modelName: model?.name || model?.code || `数据模型${idx + 1}`,
+    modelCode: model?.code || `model_${idx + 1}`,
+    tableType: String(model?.table_type || model?.type || '').toLowerCase(),
+    tableTypeLabel: /sub|child|子表/.test(String(model?.table_type || model?.type || '').toLowerCase()) ? '子表' : '主表',
+    fieldCount: Array.isArray(model?.fields) ? model.fields.length : 0,
+    fieldsText: Array.isArray(model?.fields) && model.fields.length
+      ? model.fields.map((field: any) => field?.name || field?.code || '未命名字段').slice(0, 8).join('、')
+      : '暂无字段配置'
+    ,
+    previewFields: Array.isArray(model?.fields)
+      ? model.fields.slice(0, 6).map((field: any, fieldIdx: number) => ({
+          name: field?.name || field?.code || `字段${fieldIdx + 1}`,
+          code: field?.code || `field_${fieldIdx + 1}`,
+          fullWidth: ['textarea', '文本域', '描述', '备注'].some((keyword) => String(field?.type || field?.name || '').toLowerCase().includes(String(keyword).toLowerCase())),
+          mockText: ['date', '日期', 'time', '时间'].some((keyword) => String(field?.type || '').toLowerCase().includes(String(keyword).toLowerCase()))
+            ? '请选择'
+            : ['select', 'enum', '字典', '下拉'].some((keyword) => String(field?.type || '').toLowerCase().includes(String(keyword).toLowerCase()))
+              ? '请选择选项'
+              : ['number', '金额', '数值'].some((keyword) => String(field?.type || '').toLowerCase().includes(String(keyword).toLowerCase()))
+                ? '请输入数值'
+                : '请输入内容',
+          mockIcon: ['date', '日期', 'time', '时间', 'select', 'enum', '字典', '下拉'].some((keyword) => String(field?.type || '').toLowerCase().includes(String(keyword).toLowerCase())) ? '▾' : ''
+        }))
+      : []
+  }))
+)
+const permissionPreviewItems = computed(() =>
+  (store.preview.permissions || []).map((perm: any, idx: number) => ({
+    name: perm?.form || perm?.table || perm?.name || `权限对象${idx + 1}`,
+    code: perm?.form_code || perm?.table_code || perm?.code || `perm_${idx + 1}`,
+    raw: perm,
+    rows: Array.isArray(perm?.roles) && perm.roles.length
+      ? perm.roles.map((role: any, roleIdx: number) => {
+          const actions = role?.actions || role?.operations || role?.permissions || []
+          const scopeInfo = getDataScopeLabel(role?.data_scope || role?.scope || role?.dataScope || '')
+          return {
+            roleCode: role?.role_code || role?.code || `role_${roleIdx + 1}`,
+            roleName: role?.role_name || role?.name || `角色${roleIdx + 1}`,
+            actionsText: Array.isArray(actions) && actions.length ? actions.join('、') : '未配置',
+            scopeText: scopeInfo.text,
+            scopeClass: scopeInfo.className,
+          }
+        })
+      : []
+  }))
+)
+
+const normalizeDictOptions = (dict: any) =>
+  (dict?.options || []).map((item: any, idx: number) => (
+    typeof item === 'string'
+      ? { name: item, code: `opt_${idx + 1}` }
+      : { name: item?.name || item?.item_name || `选项${idx + 1}`, code: item?.code || item?.item_code || `opt_${idx + 1}` }
+  ))
+
+const summarizeDictOptions = (dict: any) => {
+  const options = normalizeDictOptions(dict)
+  if (!options.length) return '暂无选项'
+  return options.slice(0, 6).map(option => option.name).join('、') + (options.length > 6 ? ` 等 ${options.length} 项` : '')
+}
+
+const BUILDER_WELCOME_MESSAGE = '告诉我你想搭什么，我来帮你生成。\n\n可以直接描述需求，也可以上传原型图或设计稿。'
+function createWelcomeMessage(): Message {
+  return {
+    id: Date.now(),
+    role: 'assistant',
+    agent: 'requirements',
+    content: BUILDER_WELCOME_MESSAGE,
+    created_at: ''
   }
 }
 
-// ── 左侧应用侧栏 ──
-const chatSidebarCollapsed = ref(localStorage.getItem('chat-sidebar-collapsed') === 'true')
-watch(() => chatSidebarCollapsed.value, (v) => {
-  localStorage.setItem('chat-sidebar-collapsed', String(v))
-})
+function resetMessagesToWelcome() {
+  messages.splice(0, messages.length, createWelcomeMessage())
+}
 
-const sidebarAppItems = computed<AppItem[]>(() => {
-  // 只显示有关联应用的会话（过滤空对话）
-  return conversationList.value
-    .filter(conv => conv.app_id && conv.app_name)
-    .map(conv => ({
-      id: conv.app_id!,
-      label: conv.app_name!,
-      status: conv.local_status,
-      timeLabel: formatConvTime(conv.created_at),
-      appId: conv.app_id,
-      conversationId: conv.id,
-      apaasAppId: conv.apaas_app_id,
-    }))
-})
+const visibleMessages = computed(() => (messages.length ? messages : [createWelcomeMessage()]))
 
-const onSidebarAppSelect = (app: AppItem) => {
-  if (app.appId) {
-    router.push({ path: '/chat', query: { app_id: String(app.appId), app_mode: 'parsed' } })
-  } else if (app.conversationId) {
-    loadConversation(app.conversationId)
-  }
+const focusQuickInput = () => {
+  nextTick(() => {
+    inputRef.value?.focus()
+  })
+}
+
+const startSingleEdit = (tab: typeof builderPreviewTab.value, payload: any) => {
+  builderPreviewTab.value = tab
+  const targetName = payload?.name || payload?.form || payload?.table || payload?.code || activeBuilderTabLabel.value
+  inputText.value = `请帮我修改${activeBuilderTabLabel.value}「${targetName}」：`
+  focusQuickInput()
+}
+
+const submitRightQuickEdit = () => {
+  const prompt = rightQuickInput.value.trim()
+  if (!prompt) return
+  inputText.value = prompt
+  rightQuickInput.value = ''
+  sendMessage()
 }
 
 const messagesRef = ref<HTMLElement>()
@@ -433,6 +841,7 @@ function autoResizeTextarea() {
 }
 const currentAgent = ref('requirements')
 const SHOW_PLATFORM_CONFIG = true
+const getAppViewStorageKey = (appId?: number | null) => appId ? `builder:last-active-view:${appId}` : ''
 const builderModelOptions = ref<BuilderModelOption[]>([])
 const builderModelLoading = ref(false)
 const updatingBuilderModel = ref(false)
@@ -557,21 +966,37 @@ const platformLoading = ref(false)
 const platformError = ref('')
 const platformLoginHint = ref('')
 const platformIframeRef = ref<HTMLIFrameElement | null>(null)
+const platformIframeAppId = ref<number | null>(null)
+
+const buildPlatformProxyUrl = (appId: number) => {
+  const token = userStore.token || localStorage.getItem('token') || ''
+  const authQuery = token ? `&_auth=${encodeURIComponent(token)}` : ''
+  return `${API_PREFIX}/platform-proxy/entry?app_id=${appId}${authQuery}`
+}
+
+const refreshCurrentAppRemoteMeta = async (appId: number) => {
+  try {
+    const apps = await applicationApi.list({ include_remote: true }) as any[]
+    const current = apps.find((item: any) => String(item.id) === String(appId))
+    currentRemoteStatus.value = current?.remote_status || ''
+    if (current?.apaas_app_id && store.currentApp) {
+      store.currentApp = { ...store.currentApp, apaas_app_id: current.apaas_app_id, status: current.local_status || store.currentApp.status, remote_status: current.remote_status }
+    }
+  } catch {
+    currentRemoteStatus.value = ''
+  }
+}
 
 const loadPlatformUrl = async () => {
   if (!existingAppId.value) return
   platformLoading.value = true
   platformError.value = ''
   try {
-    // 获取平台真实 URL，iframe 直连平台
-    const data = await platformEnvApi.getEmbedUrl(existingAppId.value)
-    const { url, username } = data as any
-    platformIframeUrl.value = url
-    platformAppUrl.value = url
-    // 首次使用需要在 iframe 中登录平台（登录一次后 cookie 保持）
-    if (username) {
-      platformLoginHint.value = `首次使用请在下方登录平台（账号: ${username}），登录后自动进入应用配置`
-    }
+    const proxyUrl = buildPlatformProxyUrl(existingAppId.value)
+    platformIframeUrl.value = proxyUrl
+    platformAppUrl.value = proxyUrl
+    platformIframeAppId.value = existingAppId.value
+    platformLoginHint.value = ''
   } catch (e: any) {
     platformError.value = e?.response?.data?.detail || e?.message || '获取平台链接失败'
   } finally {
@@ -581,7 +1006,7 @@ const loadPlatformUrl = async () => {
 
 const switchToPlatform = () => {
   activeView.value = 'platform'
-  if (!platformIframeUrl.value) {
+  if (!platformIframeUrl.value || platformIframeAppId.value !== existingAppId.value) {
     loadPlatformUrl()
   }
 }
@@ -599,8 +1024,59 @@ const openPlatformNewTab = () => {
   }
 }
 
+const publishCurrentApp = async () => {
+  if (!existingAppId.value || publishingApp.value) return
+  publishingApp.value = true
+  try {
+    await applicationApi.publish(existingAppId.value)
+    await refreshCurrentAppRemoteMeta(existingAppId.value)
+    ElMessage.success('应用已上线')
+  } catch (e: any) {
+    const detail = e?.response?.data?.detail || e?.message || '上线失败'
+    if (String(detail).includes('重新连接APaaS平台') || String(detail).includes('Token已过期或无效')) {
+      ElMessage.warning('平台登录已失效，请先重新连接平台环境')
+      store.showConnectModal = true
+    } else {
+      ElMessage.error(detail)
+    }
+  } finally {
+    publishingApp.value = false
+  }
+}
+
 const onIframeError = () => {
   platformError.value = '平台页面加载失败，可能不支持 iframe 嵌入'
+}
+
+const setActiveView = (view: 'builder' | 'platform' | 'coding') => {
+  if (view === 'platform') {
+    switchToPlatform()
+  } else {
+    activeView.value = view
+  }
+  if (existingAppId.value) {
+    localStorage.setItem(getAppViewStorageKey(existingAppId.value), view)
+  }
+}
+
+const restoreActiveViewForApp = async (app: any) => {
+  if (!app?.id) {
+    activeView.value = 'builder'
+    return
+  }
+
+  const isDeployed = !!app.apaas_app_id || app.status === 'completed'
+  if (!isDeployed) {
+    activeView.value = 'builder'
+    return
+  }
+
+  const savedView = (route.query.view as string) || localStorage.getItem(getAppViewStorageKey(app.id)) || 'builder'
+  if (savedView === 'platform' && SHOW_PLATFORM_CONFIG) {
+    switchToPlatform()
+    return
+  }
+  activeView.value = savedView === 'coding' ? 'coding' : 'builder'
 }
 
 // 字段类型图标映射（兜底，防止后端返回中文导致竖排）
@@ -620,10 +1096,13 @@ const getFieldIcon = (f: any) => {
   // 否则从 type 映射
   return FIELD_ICON_MAP[f.type] || FIELD_ICON_MAP[f.icon] || 'T'
 }
+const getFieldKey = (field: any, idx: number) => field?.code || field?.name || `field_${idx + 1}`
+const getFieldLabel = (field: any) => field?.name || field?.code || '未命名字段'
+const getRoleDescription = (role: any) => role?.description || role?.summary || '暂无职责描述'
 
 const agents: Record<string, { name: string; icon: string }> = {
-  builder: { name: '智能搭建', icon: '🤖' },
-  requirements: { name: '需求分析', icon: '📋' },
+  builder: { name: 'aPaaS Builder AI', icon: '🤖' },
+  requirements: { name: 'aPaaS Builder AI', icon: '🤖' },
   assistant: { name: '辅助开发智能体', icon: '🛠️' },
   developer: { name: '复杂开发智能体', icon: '💻' }
 }
@@ -632,9 +1111,8 @@ if (store.previewTab === 'workflow') {
   store.previewTab = 'overview'
 }
 
-const messages = reactive<Message[]>([
-  { id: 0, role: 'assistant', agent: 'builder', content: '你好！我是 aPaaS 智能搭建，可以帮你通过对话的方式在得帆云平台上快速搭建应用。\n\n你可以告诉我想要创建什么系统，我会帮你理清需求并自动生成。\n\n比如：\n• "我想做一个客户管理系统"\n• "帮我搭建一个项目管理应用"\n• "创建一个售后服务工单系统"', created_at: '' }
-])
+const messages = reactive<Message[]>([])
+resetMessagesToWelcome()
 
 const scrollToBottom = () => { nextTick(() => { if (messagesRef.value) messagesRef.value.scrollTop = messagesRef.value.scrollHeight }) }
 
@@ -988,7 +1466,8 @@ const loadConversation = async (cid: number) => {
       scrollToBottom()
     } else {
       // 空对话，显示欢迎消息
-      messages.push({ id: 0, role: 'assistant', agent: 'builder', content: '你好！我是 aPaaS 智能搭建，可以帮你通过对话的方式在得帆云平台上快速搭建应用。\n\n你可以告诉我想要创建什么系统，我会帮你理清需求并自动生成。', created_at: '' })
+      currentAgent.value = 'requirements'
+      resetMessagesToWelcome()
     }
 
     // 恢复关联的应用配置
@@ -1032,8 +1511,8 @@ const startNewConversation = () => {
   selectedConversationId.value = null
   persistedBuilderModelId.value = null
   selectedBuilderModelId.value = defaultBuilderModelId.value
-  messages.splice(0, messages.length)
-  messages.push({ id: 0, role: 'assistant', agent: 'builder', content: '你好！我是 aPaaS 智能搭建，可以帮你通过对话的方式在得帆云平台上快速搭建应用。\n\n你可以告诉我想要创建什么系统，我会帮你理清需求并自动生成。\n\n比如：\n• "我想做一个客户管理系统"\n• "帮我搭建一个项目管理应用"\n• "创建一个售后服务工单系统"', created_at: '' })
+  currentAgent.value = 'requirements'
+  resetMessagesToWelcome()
   router.replace('/chat')
 }
 
@@ -1048,14 +1527,14 @@ interface DocVersion {
 }
 const docVersions = ref<DocVersion[]>([])
 const docVersionsLoading = ref(false)
-const docPreviewVisible = ref(false)
-const docPreviewContent = ref('')
-const docPreviewTitle = ref('')
-const docDiffVisible = ref(false)
-const docDiffLeft = ref('')
-const docDiffRight = ref('')
-const docDiffLeftTitle = ref('')
-const docDiffRightTitle = ref('')
+const docVersionPreviewVisible = ref(false)
+const docVersionPreviewContent = ref('')
+const docVersionPreviewTitle = ref('')
+const docVersionDiffVisible = ref(false)
+const docVersionDiffLeft = ref('')
+const docVersionDiffRight = ref('')
+const docVersionDiffLeftTitle = ref('')
+const docVersionDiffRightTitle = ref('')
 // docUploadInputRef removed — upload is via chat input only
 
 const fetchDocVersions = async () => {
@@ -1086,7 +1565,7 @@ const loadLatestDocForApp = async (appId: number) => {
     const latest = [...versions].sort((a: any, b: any) => (b.version || 0) - (a.version || 0))[0]
     if (latest?.filename) lastParsedFilename.value = latest.filename
     latestDocContent.value = latest?.raw_content || ''
-    if (!parsedAppCode.value && !loadedAppCode.value && latestDocContent.value) {
+    if (!parsedAppCode.value && latestDocContent.value) {
       const codeFromDoc = extractAppCodeFromText(latestDocContent.value)
       if (codeFromDoc) parsedAppCode.value = codeFromDoc
     }
@@ -1103,19 +1582,19 @@ const formatDocTime = (dateStr: string) => {
 }
 
 const openDocPreview = (ver: DocVersion) => {
-  docPreviewTitle.value = `V${ver.version} — ${ver.filename}`
-  docPreviewContent.value = ver.raw_content || '（无内容）'
-  docPreviewVisible.value = true
+  docVersionPreviewTitle.value = `V${ver.version} — ${ver.filename}`
+  docVersionPreviewContent.value = ver.raw_content || '（无内容）'
+  docVersionPreviewVisible.value = true
 }
 
 const openDocDiff = (ver: DocVersion) => {
   const prevVer = docVersions.value.find(v => v.version === ver.version - 1)
   if (!prevVer) return
-  docDiffLeftTitle.value = `V${prevVer.version} — ${prevVer.filename}`
-  docDiffRightTitle.value = `V${ver.version} — ${ver.filename}`
-  docDiffLeft.value = prevVer.raw_content || ''
-  docDiffRight.value = ver.raw_content || ''
-  docDiffVisible.value = true
+  docVersionDiffLeftTitle.value = `V${prevVer.version} — ${prevVer.filename}`
+  docVersionDiffRightTitle.value = `V${ver.version} — ${ver.filename}`
+  docVersionDiffLeft.value = prevVer.raw_content || ''
+  docVersionDiffRight.value = ver.raw_content || ''
+  docVersionDiffVisible.value = true
 }
 
 const computeLineDiff = (oldText: string, newText: string) => {
@@ -1162,8 +1641,8 @@ const computeLineDiff = (oldText: string, newText: string) => {
 }
 
 const docDiffResult = computed(() => {
-  if (!docDiffLeft.value && !docDiffRight.value) return { left: [], right: [] }
-  return computeLineDiff(docDiffLeft.value, docDiffRight.value)
+  if (!docVersionDiffLeft.value && !docVersionDiffRight.value) return { left: [], right: [] }
+  return computeLineDiff(docVersionDiffLeft.value, docVersionDiffRight.value)
 })
 
 // 变更摘要：从 diff 的新增行中提取结构化变更（章节标题、表单、字典、角色等）
@@ -1236,15 +1715,77 @@ const activeConflict = ref<ConflictState | null>(null)
 const deployDoneCount = computed(() => deploySteps.value.filter(s => s.status === 'completed').length)
 const deployPercent = computed(() => deploySteps.value.length ? Math.round(deployDoneCount.value / deploySteps.value.length * 100) : 0)
 const deployAllDone = computed(() => deploySteps.value.length > 0 && deployDoneCount.value === deploySteps.value.length)
+const currentDeployStep = computed(() =>
+  deploySteps.value.find(step => step.key === deployExecuting.value) || null
+)
 const parseReady = ref(false)
 
 function buildAppCode(name: string): string {
-  const ascii = (name || '')
+  const source = (name || '').trim()
+  if (!source) return 'app_builder'
+
+  const phraseMap: Array<[RegExp, string]> = [
+    [/档案管理系统|档案管理平台/g, 'archive_mgmt'],
+    [/客户管理系统|客户管理平台/g, 'customer_mgmt'],
+    [/报销管理系统|报销管理平台/g, 'expense_mgmt'],
+    [/请假管理系统|请假管理平台/g, 'leave_mgmt'],
+    [/合同管理系统|合同管理平台/g, 'contract_mgmt'],
+    [/项目管理系统|项目管理平台/g, 'project_mgmt'],
+    [/采购管理系统|采购管理平台/g, 'purchase_mgmt'],
+    [/库存管理系统|库存管理平台/g, 'inventory_mgmt'],
+    [/员工管理系统|人事管理系统/g, 'employee_mgmt'],
+    [/工单管理系统|售后工单系统/g, 'ticket_mgmt'],
+  ]
+  for (const [pattern, code] of phraseMap) {
+    if (pattern.test(source)) return code
+  }
+
+  const tokenMap: Array<[RegExp, string]> = [
+    [/档案/g, 'archive'],
+    [/文档/g, 'document'],
+    [/知识库/g, 'knowledge'],
+    [/客户/g, 'customer'],
+    [/用户/g, 'user'],
+    [/会员/g, 'member'],
+    [/员工|人事/g, 'employee'],
+    [/部门/g, 'department'],
+    [/报销|费用/g, 'expense'],
+    [/请假|休假/g, 'leave'],
+    [/考勤/g, 'attendance'],
+    [/合同/g, 'contract'],
+    [/采购/g, 'purchase'],
+    [/库存/g, 'inventory'],
+    [/商品/g, 'product'],
+    [/订单/g, 'order'],
+    [/销售/g, 'sales'],
+    [/项目/g, 'project'],
+    [/任务/g, 'task'],
+    [/审批/g, 'approval'],
+    [/流程/g, 'workflow'],
+    [/工单|售后/g, 'ticket'],
+    [/设备|资产/g, 'asset'],
+    [/财务/g, 'finance'],
+    [/管理|平台|系统/g, 'mgmt'],
+  ]
+
+  const parts: string[] = []
+  for (const [pattern, token] of tokenMap) {
+    if (pattern.test(source) && !parts.includes(token)) {
+      parts.push(token)
+    }
+  }
+
+  if (parts.length > 0) {
+    const code = parts.slice(0, 3).join('_').replace(/_mgmt_mgmt$/, '_mgmt')
+    return code.startsWith('mgmt') ? `app_${code}` : code
+  }
+
+  const ascii = source
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
   if (ascii) return ascii
-  return `app-${Date.now().toString(36)}`
+  return 'app_builder'
 }
 
 function pickAppCode(data: any): string {
@@ -1272,6 +1813,8 @@ function extractAppCodeFromText(text: string): string {
   const patterns = [
     /应用编码[：:\s`]*([A-Za-z][A-Za-z0-9_-]{1,63})/i,
     /app[_\s-]?code[：:\s`]*([A-Za-z][A-Za-z0-9_-]{1,63})/i,
+    /\|\s*应用编码\s*\|\s*`?([A-Za-z][A-Za-z0-9_-]{1,63})`?\s*\|/i,
+    /\|\s*App\s*Code\s*\|\s*`?([A-Za-z][A-Za-z0-9_-]{1,63})`?\s*\|/i,
     /"code"\s*:\s*"([A-Za-z][A-Za-z0-9_-]{1,63})"/i,
   ]
   for (const p of patterns) {
@@ -1283,11 +1826,13 @@ function extractAppCodeFromText(text: string): string {
 
 function resetConversationWorkspace() {
   store.reset()
+  store.showConnectModal = false
   store.pendingFile = null
   store.pendingMarkdown = null
   existingAppId.value = null
   parsedAppCode.value = ''
   loadedAppCode.value = ''
+  currentRemoteStatus.value = ''
   lastParsedFilename.value = ''
   latestDocContent.value = ''
   parseReady.value = false
@@ -1303,20 +1848,21 @@ function resetConversationWorkspace() {
   activeView.value = 'builder'
   platformIframeUrl.value = ''
   platformAppUrl.value = ''
+  platformIframeAppId.value = null
   platformLoading.value = false
   platformError.value = ''
   platformLoginHint.value = ''
 
   docVersions.value = []
   docVersionsLoading.value = false
-  docPreviewVisible.value = false
-  docPreviewContent.value = ''
-  docPreviewTitle.value = ''
-  docDiffVisible.value = false
-  docDiffLeft.value = ''
-  docDiffRight.value = ''
-  docDiffLeftTitle.value = ''
-  docDiffRightTitle.value = ''
+  docVersionPreviewVisible.value = false
+  docVersionPreviewContent.value = ''
+  docVersionPreviewTitle.value = ''
+  docVersionDiffVisible.value = false
+  docVersionDiffLeft.value = ''
+  docVersionDiffRight.value = ''
+  docVersionDiffLeftTitle.value = ''
+  docVersionDiffRightTitle.value = ''
 
   deployOpen.value = false
   deployAppId.value = null
@@ -1361,6 +1907,10 @@ async function loadDeployStatus() {
   try {
     const resp = await applicationApi.getStepStatus(deployAppId.value)
     deploySteps.value = resp.steps || []
+    deployOpen.value = deploySteps.value.length > 0
+    if (deploySteps.value.length && deploySteps.value.every(step => step.status === 'completed')) {
+      await refreshCurrentAppRemoteMeta(deployAppId.value)
+    }
   } catch { /* ignore */ }
 }
 
@@ -1401,7 +1951,15 @@ async function deployExec(key: string) {
         ElMessage.error(resp.error || '失败')
       }
     }
-  } catch (e: any) { ElMessage.error(e.message || '失败') }
+  } catch (e: any) {
+    const detail = e?.response?.data?.detail || e?.message || '失败'
+    if (String(detail).includes('重新连接APaaS平台') || String(detail).includes('Token已过期或无效')) {
+      ElMessage.warning('平台登录已失效，请先重新连接平台环境')
+      store.showConnectModal = true
+    } else {
+      ElMessage.error(detail)
+    }
+  }
   finally { deployExecuting.value = null; await loadDeployStatus() }
 }
 
@@ -1439,7 +1997,13 @@ async function deployRunAll() {
     deployExecuting.value = null
     ElMessage.success('全部完成！')
   } catch (e: any) {
-    ElMessage.error(e.message || '失败')
+    const detail = e?.response?.data?.detail || e?.message || '失败'
+    if (String(detail).includes('重新连接APaaS平台') || String(detail).includes('Token已过期或无效')) {
+      ElMessage.warning('平台登录已失效，请先重新连接平台环境')
+      store.showConnectModal = true
+    } else {
+      ElMessage.error(detail)
+    }
   } finally {
     deployExecuting.value = null
     deployRunningAll.value = false
@@ -1523,7 +2087,7 @@ function cancelConflict() {
   scrollToBottom()
 }
 
-const startGenerate = async () => {
+const startDeployFlow = async () => {
   // 检查是否已部署到平台（有 apaas_app_id）
   if (existingAppId.value) {
     const existingApp = await applicationApi.get(existingAppId.value)
@@ -2237,7 +2801,8 @@ const startAssembleConfig = async () => {
             store.preview.models = d.models || store.preview.models
             store.preview.workflows = d.workflows || []
             store.preview.permissions = d.permissions || []
-            store.currentApp = { name: store.preview.appName, status: 'draft' }
+            store.currentApp = { name: store.preview.appName, status: 'ready' }
+            parseReady.value = true
           }
 
           if (evt.type === 'done') break
@@ -2247,9 +2812,17 @@ const startAssembleConfig = async () => {
     }
 
     // 添加完成消息到对话
+    if (conversationId.value && currentAgent.value === 'requirements') {
+      try {
+        await conversationApi.updateAgentType(conversationId.value, 'builder')
+        currentAgent.value = 'builder'
+      } catch {
+        // 忽略切换失败，不影响右侧解析结果展示
+      }
+    }
     messages.push({
       id: Date.now(), role: 'assistant', agent: 'builder',
-      content: `配置生成完成！${store.preview.models.length} 个模型、${store.preview.dicts.length} 个字典、${store.preview.roles.length} 个角色。\n\n可以直接编辑右侧预览，或点击 **开始生成** 部署到平台。`,
+      content: `解析信息已生成！${store.preview.models.length} 个模型、${store.preview.dicts.length} 个字典、${store.preview.roles.length} 个角色。\n\n你可以继续补充右侧解析内容，确认无误后再点击 **开始部署**。`,
       created_at: ''
     })
     scrollToBottom()
@@ -2260,6 +2833,16 @@ const startAssembleConfig = async () => {
     assembling.value = false
     assembleMessage.value = ''
   }
+}
+
+const generatePreviewFromConversation = async () => {
+  if (assembling.value || generating.value) return
+  const hasUserInput = messages.some(msg => msg.role === 'user' && msg.content.trim())
+  if (!hasUserInput) {
+    ElMessage.warning('先告诉我你想搭什么，再生成右侧解析信息')
+    return
+  }
+  await startAssembleConfig()
 }
 
 const createConversation = async () => {
@@ -2355,6 +2938,18 @@ const sendMessage = async () => {
                 messages.push({ id: -1, role: 'assistant', agent: currentAgent.value, content: assistantContent, created_at: '' })
               }
               scrollToBottom()
+            } else if (parsed.type === 'error') {
+              isTyping.value = false
+              const detail = parsed.data || '模型返回异常，请切换模型后重试。'
+              messages.push({
+                id: Date.now(),
+                role: 'assistant',
+                agent: currentAgent.value,
+                content: `当前模型暂时不可用：${detail}`,
+                created_at: ''
+              })
+              scrollToBottom()
+              return
             } else if (parsed.type === 'done') {
               isTyping.value = false
               const lastMsg = messages[messages.length - 1]
@@ -2392,6 +2987,17 @@ const sendMessage = async () => {
           } catch (e) { /* ignore parse errors */ }
         }
       }
+    }
+    if (!assistantContent) {
+      isTyping.value = false
+      messages.push({
+        id: Date.now(),
+        role: 'assistant',
+        agent: currentAgent.value,
+        content: '当前模型没有返回内容，请切换模型后再试一次。',
+        created_at: ''
+      })
+      scrollToBottom()
     }
   } catch (error) {
     console.error('Send error:', error)
@@ -2701,9 +3307,59 @@ const confirmDocAndBuild = async () => {
   }
 }
 
-const renderMarkdown = (t: string) => {
-  if (!t) return '<p>（无内容）</p>'
-  return marked.parse(t, { breaks: true, gfm: true }) as string
+const buildDocMarkdownFromPreview = () => {
+  const appName = store.preview.appName || '未命名应用'
+  const appCode = displayAppCode.value
+  const roleLines = (store.preview.roles || []).map((role: any) => `| ${role?.code || ''} | ${role?.name || ''} | ${role?.description || ''} |`)
+  const dictBlocks = (store.preview.dicts || []).map((dict: any) => {
+    const options = (dict?.options || []).map((item: any) => {
+      const name = typeof item === 'string' ? item : (item?.name || item?.item_name || '')
+      const code = typeof item === 'string' ? '' : (item?.code || item?.item_code || '')
+      return `| ${code} | ${name} |`
+    })
+    return `### ${dict?.name || dict?.code || '未命名字典'} (${dict?.code || ''})\n\n| 编码 | 名称 |\n|---|---|\n${options.join('\n') || '| - | - |'}`
+  })
+  const tableBlocks = (store.preview.models || []).map((model: any) => {
+    const fields = (model?.fields || []).map((field: any) => `| ${field?.code || ''} | ${field?.name || ''} | ${field?.type || ''} |`)
+    return `### ${model?.name || model?.code || '未命名模型'} (${model?.code || ''})\n\n| 字段编码 | 字段名称 | 字段类型 |\n|---|---|---|\n${fields.join('\n') || '| - | - | - |'}`
+  })
+  return [
+    `# ${appName}`,
+    '',
+    '## 一、应用信息',
+    '',
+    `应用编码：${appCode}`,
+    `应用名称：${appName}`,
+    '',
+    '## 二、角色清单',
+    '',
+    '| 角色编码 | 角色名称 | 职责描述 |',
+    '|---|---|---|',
+    roleLines.join('\n') || '| - | - | - |',
+    '',
+    '## 三、数据字典',
+    '',
+    dictBlocks.join('\n\n') || '暂无',
+    '',
+    '## 四、数据模型',
+    '',
+    tableBlocks.join('\n\n') || '暂无',
+    '',
+  ].join('\n')
+}
+
+const downloadCurrentDoc = () => {
+  const content = (latestDocContent.value || '').trim() || buildDocMarkdownFromPreview()
+  const filename = lastParsedFilename.value || `${store.preview.appName || '功能设计文档'}.md`
+  const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename.endsWith('.md') ? filename : `${filename}.md`
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
 }
 
 const formatContent = (t: string) => {
@@ -2717,6 +3373,7 @@ const formatContent = (t: string) => {
 }
 
 onMounted(async () => {
+  store.showConnectModal = false
   // 检查平台连接状态
   try {
     const token = localStorage.getItem('token')
@@ -2742,8 +3399,10 @@ onMounted(async () => {
       try {
         const app = await applicationApi.get(aid) as any
         // 恢复配置
+        let configData: any = null
         if (app.config_preview) {
           const data = app.config_preview.data || app.config_preview
+          configData = data
           store.preview.appName = data.appName || app.app_name || ''
           store.preview.models = data.models || []
           store.preview.dicts = data.dicts || []
@@ -2752,9 +3411,14 @@ onMounted(async () => {
           store.preview.permissions = data.permissions || []
           store.currentApp = { name: store.preview.appName, status: app.status || 'ready', apaas_app_id: app.apaas_app_id }
           parseReady.value = store.preview.models.length > 0
+          currentAgent.value = 'builder'
         }
-        loadedAppCode.value = app.app_code || ''
+        loadedAppCode.value = app.app_code || pickAppCode(configData) || ''
         parsedAppCode.value = parsedAppCode.value || loadedAppCode.value
+        deployAppId.value = aid
+        await loadDeployStatus()
+        await refreshCurrentAppRemoteMeta(aid)
+        await restoreActiveViewForApp(app)
         await loadLatestDocForApp(aid)
         console.log(`Loaded app ${aid}: ${app.app_name}, status=${app.status}, conv=${app.conversation_id}`)
         // 加载关联对话的历史消息
@@ -2829,6 +3493,9 @@ onMounted(async () => {
                 existingAppId.value = linkedApp.id
                 loadedAppCode.value = linkedApp.app_code || ''
                 parsedAppCode.value = parsedAppCode.value || loadedAppCode.value
+                deployAppId.value = linkedApp.id
+                await loadDeployStatus()
+                await refreshCurrentAppRemoteMeta(linkedApp.id)
                 await loadLatestDocForApp(linkedApp.id)
                 // 更新 URL 为 app_id 模式
                 router.replace({ path: '/chat', query: { app_id: String(linkedApp.id) } })
@@ -2857,17 +3524,24 @@ onMounted(async () => {
       // 加载应用信息到预览
       try {
         const app = await applicationApi.get(aid) as any
+        let configData: any = null
         if (app.config_preview) {
           const data = app.config_preview.data || app.config_preview
+          configData = data
           store.preview.appName = data.appName || app.app_name || ''
           store.preview.models = data.models || []
           store.preview.dicts = data.dicts || []
           store.preview.roles = data.roles || []
           store.currentApp = { name: store.preview.appName, status: app.status || 'ready' }
           parseReady.value = store.preview.models.length > 0
+          currentAgent.value = 'builder'
         }
-        loadedAppCode.value = app.app_code || ''
+        loadedAppCode.value = app.app_code || pickAppCode(configData) || ''
         parsedAppCode.value = parsedAppCode.value || loadedAppCode.value
+        deployAppId.value = aid
+        await loadDeployStatus()
+        await refreshCurrentAppRemoteMeta(aid)
+        await restoreActiveViewForApp(app)
         await loadLatestDocForApp(aid)
         // 加载关联的对话
         if (app.conversation_id) {
@@ -2889,8 +3563,11 @@ onMounted(async () => {
   }
 
   // ── 新对话：自动进入 requirements 模式 ──
-  // 如果没有加载到已有对话（无 app_id, 无 conversation_id），创建 requirements 对话
-  if (!conversationId.value && !store.pendingMarkdown && !store.pendingFile) {
+  // 只有真正“新建会话”时才创建 requirements，对已有 app 不要覆盖恢复结果
+  if (!conversationId.value && !existingAppId.value && !store.pendingMarkdown && !store.pendingFile) {
+    resetConversationWorkspace()
+    currentAgent.value = 'requirements'
+    resetMessagesToWelcome()
     const token = localStorage.getItem('token')
     const res = await fetch(`${API_PREFIX}/conversations`, {
       method: 'POST',
@@ -2906,13 +3583,7 @@ onMounted(async () => {
       selectedConversationId.value = data.id
       currentAgent.value = 'requirements'
       router.replace(`/chat/${data.id}`)
-      messages.push({
-        id: Date.now(),
-        role: 'assistant',
-        agent: 'requirements',
-        content: '您好！请描述一下您想要搭建的应用。\n\n比如："我想做一个客户管理系统"、"帮我搭建一个项目管理应用"',
-        created_at: '',
-      })
+      resetMessagesToWelcome()
     }
   }
 
@@ -2927,7 +3598,7 @@ onMounted(async () => {
     const pending = store.pendingMarkdown
     store.pendingMarkdown = null
     resetConversationWorkspace()
-    messages.splice(0, messages.length)
+    resetMessagesToWelcome()
     const file = new File([pending.content], pending.filename, { type: 'text/markdown' })
     await nextTick()
     await uploadDocFile(file)
@@ -2938,7 +3609,7 @@ onMounted(async () => {
     const file = store.pendingFile
     store.pendingFile = null
     resetConversationWorkspace()
-    messages.splice(0, messages.length)
+    resetMessagesToWelcome()
     await nextTick()
     await uploadDocFile(file)
   }
@@ -2969,15 +3640,26 @@ watch(() => route.query.app_id, async (newAppId, oldAppId) => {
   store.preview.models = []
   store.preview.dicts = []
   store.preview.roles = []
+  store.preview.workflows = []
+  store.preview.permissions = []
+  store.preview.appName = ''
   store.currentApp = null
   latestDocContent.value = ''
   conversationId.value = null
   activeView.value = 'builder'
+  platformIframeUrl.value = ''
+  platformAppUrl.value = ''
+  platformIframeAppId.value = null
+  platformLoading.value = false
+  platformError.value = ''
+  platformLoginHint.value = ''
 
   try {
     const app = await applicationApi.get(aid) as any
+    let configData: any = null
     if (app.config_preview) {
       const data = app.config_preview.data || app.config_preview
+      configData = data
       store.preview.appName = data.appName || app.app_name || ''
       store.preview.models = data.models || []
       store.preview.dicts = data.dicts || []
@@ -2986,9 +3668,11 @@ watch(() => route.query.app_id, async (newAppId, oldAppId) => {
       store.preview.permissions = data.permissions || []
       store.currentApp = { name: store.preview.appName, status: app.status || 'ready', apaas_app_id: app.apaas_app_id }
       parseReady.value = store.preview.models.length > 0
+      currentAgent.value = 'builder'
     }
-    loadedAppCode.value = app.app_code || ''
-    parsedAppCode.value = loadedAppCode.value
+    loadedAppCode.value = app.app_code || pickAppCode(configData) || ''
+    parsedAppCode.value = loadedAppCode.value || parsedAppCode.value
+    await restoreActiveViewForApp(app)
     await loadLatestDocForApp(aid)
     if (app.conversation_id) {
       conversationId.value = app.conversation_id
@@ -3006,6 +3690,12 @@ watch(() => route.query.app_id, async (newAppId, oldAppId) => {
     }
   } catch (e) {
     console.error('Failed to switch app:', e)
+  }
+})
+
+watch(activeView, (view) => {
+  if (existingAppId.value) {
+    localStorage.setItem(getAppViewStorageKey(existingAppId.value), view)
   }
 })
 
@@ -3075,14 +3765,79 @@ watch(conversationId, (id) => {
   font-size: 13px; font-weight: 500; color: var(--t-text-secondary);
   max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.mode-switcher { display: flex; gap: 2px; background: var(--t-bg-input); border-radius: 10px; padding: 3px; border: 1px solid var(--t-border-subtle); }
-.mode-btn {
-  display: flex; align-items: center; gap: 5px; padding: 5px 14px; border-radius: 8px;
-  font-size: 12px; font-weight: 500; background: none; border: none;
-  color: var(--t-text-muted); cursor: pointer; transition: all 0.2s;
+.mode-switcher {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: rgba(245, 247, 255, 0.92);
+  border: 1px solid rgba(128, 145, 255, 0.14);
+  border-radius: 14px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.65);
 }
-.mode-btn:hover { color: var(--t-text-primary); }
-.mode-btn.active { background: var(--t-bg-panel); color: var(--t-brand-text); font-weight: 600; box-shadow: var(--t-shadow-sm); }
+.mode-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 14px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  background: transparent;
+  border: none;
+  color: var(--t-text-muted);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.mode-btn:hover { color: var(--t-text-primary); background: rgba(93, 114, 255, 0.06); }
+.mode-btn.active {
+  background: linear-gradient(135deg, rgba(255,255,255,0.98), rgba(242, 246, 255, 0.94));
+  color: var(--t-brand-text);
+  box-shadow: 0 8px 18px rgba(92, 115, 255, 0.1);
+}
+.mode-btn-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.42;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+.mode-btn.active .mode-btn-dot { opacity: 1; transform: scale(1.1); }
+.top-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(128, 145, 255, 0.14);
+  background: rgba(248, 250, 255, 0.92);
+  color: #60708d;
+  font-size: 12px;
+  font-weight: 700;
+}
+.top-status-badge.inline {
+  margin-left: 12px;
+}
+.top-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.top-status-badge.draft {
+  color: #94a3b8;
+  background: rgba(248, 250, 252, 0.96);
+}
+.top-status-badge.generated {
+  color: #4f78ff;
+  background: rgba(239, 244, 255, 0.96);
+}
+.top-status-badge.deployed {
+  color: #10b981;
+  background: rgba(236, 253, 245, 0.98);
+}
 .top-bar-icon-btn {
   width: 28px; height: 28px; border: none; border-radius: 6px;
   background: transparent; color: var(--t-text-muted); cursor: pointer;
@@ -3103,14 +3858,152 @@ watch(conversationId, (id) => {
 .user-menu-value { font-size: 13px; color: var(--t-text-primary); }
 
 /* ── 主区域 ── */
-.main-area { flex: 1; display: flex; flex-direction: row; overflow: hidden; position: relative; }
+.main-area {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  overflow: hidden;
+  position: relative;
+  background:
+    radial-gradient(circle at top left, rgba(114, 135, 255, 0.08), transparent 26%),
+    linear-gradient(180deg, #f6f8ff 0%, #f9fbff 100%);
+}
 .content-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
 
 /* ── 智能搭建内容区（横向布局） ── */
-.builder-content { flex: 1; display: flex; overflow: hidden; min-height: 0; }
+.builder-content {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  min-height: 0;
+  margin: 12px;
+  border-radius: 28px;
+  border: 1px solid rgba(128, 145, 255, 0.12);
+  background: linear-gradient(180deg, rgba(255,255,255,0.8), rgba(245, 248, 255, 0.86));
+  box-shadow: 0 20px 50px rgba(31, 41, 85, 0.06), inset 0 1px 0 rgba(255,255,255,0.75);
+}
+.builder-content.single-pane .preview-side {
+  flex: 1;
+  max-width: none;
+  width: auto;
+}
 
 /* ── 左侧对话 ── */
-.chat-side { flex: 1; display: flex; flex-direction: column; min-width: 0; min-width: 320px; }
+.chat-side {
+  flex: 1.08;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-width: 320px;
+  background: linear-gradient(180deg, rgba(242, 246, 255, 0.55), rgba(239, 244, 255, 0.68));
+}
+.builder-workbench {
+  padding: 0 14px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  background: transparent;
+}
+.builder-composer-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 6px;
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(248, 249, 255, 0.94), rgba(240, 244, 255, 0.9));
+  border: 1px solid rgba(128, 145, 255, 0.12);
+  box-shadow: 0 12px 26px rgba(31, 41, 85, 0.05);
+}
+.builder-inline-model-select {
+  width: min(240px, 100%);
+}
+.builder-inline-model-select.in-card {
+  width: min(176px, 100%);
+}
+.builder-inline-model-select :deep(.el-select__wrapper) {
+  min-height: 28px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: inset 0 0 0 1px rgba(128, 145, 255, 0.16);
+}
+.builder-inline-model-select :deep(.el-select__selected-item),
+.builder-inline-model-select :deep(.el-select__placeholder) {
+  font-size: 12px;
+}
+.builder-inline-model-select :deep(.el-select__wrapper.is-focused) {
+  box-shadow: inset 0 0 0 1px var(--t-brand), 0 0 0 4px rgba(110, 131, 255, 0.12);
+}
+.builder-control-hint {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--t-text-muted);
+}
+.builder-control-hint.inside-card {
+  padding: 0 6px 2px;
+  font-size: 9px;
+}
+.builder-generate-btn {
+  height: 36px;
+  min-width: 96px;
+  padding: 0 16px;
+  border: none;
+  border-radius: 10px;
+  background: var(--t-brand-gradient);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  box-shadow: 0 10px 20px rgba(92, 115, 255, 0.18);
+  transition: transform 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
+}
+.builder-generate-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 16px 30px rgba(92, 115, 255, 0.28);
+}
+.builder-generate-btn.compact {
+  height: 28px;
+  min-width: 68px;
+  padding: 0 9px;
+  border-radius: 9px;
+  font-size: 10px;
+  align-self: flex-end;
+  margin-top: 4px;
+}
+.builder-generate-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+.quick-edit-bar {
+  padding: 0;
+  justify-content: stretch;
+}
+.quick-edit-card {
+  position: relative;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.88);
+  border-color: rgba(128, 145, 255, 0.14);
+  box-shadow: 0 8px 18px rgba(31, 41, 85, 0.04);
+}
+.quick-edit-glow {
+  position: absolute;
+  inset: 0 auto auto 0;
+  width: 120px;
+  height: 52px;
+  background: radial-gradient(circle, rgba(104, 127, 255, 0.18), rgba(104, 127, 255, 0));
+  pointer-events: none;
+  animation: aiPulse 3.2s ease-in-out infinite;
+}
+.composer-toolbar {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 2px 6px 1px;
+}
 .app-mode-placeholder {
   flex: 1;
   display: flex;
@@ -3154,6 +4047,25 @@ watch(conversationId, (id) => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.doc-view-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.doc-download-btn {
+  border: 1px solid var(--t-border-subtle);
+  background: var(--t-bg-panel);
+  color: var(--t-text-secondary);
+  border-radius: 8px;
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.doc-download-btn:hover {
+  border-color: var(--t-border-strong);
+  color: var(--t-text-primary);
 }
 .doc-view-body {
   flex: 1;
@@ -3338,11 +4250,34 @@ watch(conversationId, (id) => {
   color: var(--t-brand-light); background: var(--t-brand-subtle); border-color: rgba(167,139,250,0.2);
 }
 
-.messages { flex: 1; overflow-y: auto; padding: 16px 20px; background: var(--t-bg-base); }
-.chat-bubble { margin-bottom: 16px; animation: fadeUp 0.3s ease-out; }
+.messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px 22px 14px;
+  background: transparent;
+}
+.chat-bubble { margin-bottom: 14px; animation: fadeUp 0.3s ease-out; }
 .chat-bubble.user { display: flex; justify-content: flex-end; }
 .chat-bubble.assistant { display: flex; justify-content: flex-start; }
+.bubble-row { display: flex; align-items: flex-start; gap: 10px; }
+.bubble-row.user { justify-content: flex-end; width: 100%; }
 .bubble-inner { max-width: 80%; }
+.bubble-inner.welcome-bubble { max-width: min(620px, 92%); }
+.assistant-avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #6c82ff, #4d68ff);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  box-shadow: 0 6px 16px rgba(92, 115, 255, 0.18);
+  animation: avatarBlink 2.8s ease-in-out infinite;
+}
 .agent-label { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--t-text-muted); margin-bottom: 4px; }
 .bubble-content { padding: 10px 14px; border-radius: 14px; font-size: 13px; line-height: 1.6; }
 .bubble-content.user {
@@ -3355,6 +4290,14 @@ watch(conversationId, (id) => {
   box-shadow: var(--t-shadow-sm);
 }
 @keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes aiPulse {
+  0%, 100% { opacity: 0.55; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.04); }
+}
+@keyframes avatarBlink {
+  0%, 100% { box-shadow: 0 6px 16px rgba(92, 115, 255, 0.18); filter: brightness(1); }
+  50% { box-shadow: 0 8px 22px rgba(92, 115, 255, 0.32); filter: brightness(1.12); }
+}
 
 .typing-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--t-text-muted); display: inline-block; animation: pulseDot 1.4s infinite ease-in-out both; margin-right: 3px; }
 .typing-dot:nth-child(1) { animation-delay: -0.32s; }
@@ -3364,30 +4307,32 @@ watch(conversationId, (id) => {
 /* 底部输入框 */
 /* ── Input bar (Claude-style card) ── */
 .input-bar {
-  padding: 0 16px 16px;
-  background: var(--t-bg-base);
+  padding: 0;
+  background: transparent;
   flex-shrink: 0;
   display: flex;
   justify-content: center;
 }
 .input-card {
   width: 100%;
-  background: var(--t-bg-panel);
-  border: 1px solid var(--t-border-subtle);
-  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid rgba(128, 145, 255, 0.14);
+  border-radius: 9px;
   overflow: hidden;
-  box-shadow: var(--t-shadow-sm);
+  box-shadow: 0 8px 18px rgba(31, 41, 85, 0.04);
   transition: border-color 0.2s, box-shadow 0.2s;
 }
 .input-card:focus-within {
   border-color: var(--t-brand);
-  box-shadow: 0 0 0 3px var(--t-brand-subtle);
+  box-shadow: 0 0 0 4px rgba(110, 131, 255, 0.12), 0 16px 36px rgba(31, 41, 85, 0.08);
 }
 .input-card-top {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: flex-end;
-  gap: 8px;
-  padding: 10px 12px;
+  gap: 6px;
+  padding: 3px 5px 5px;
 }
 .upload-btn {
   cursor: pointer;
@@ -3406,7 +4351,7 @@ watch(conversationId, (id) => {
   background: transparent;
   resize: none;
   outline: none;
-  font-size: 14px;
+  font-size: 11px;
   line-height: 1.5;
   color: var(--t-text-primary);
   min-height: 22px;
@@ -3417,16 +4362,17 @@ watch(conversationId, (id) => {
 }
 .input-card-top textarea::placeholder { color: var(--t-text-muted); }
 .send-btn {
-  width: 32px; height: 32px; border-radius: 8px;
-  background: var(--t-text-primary);
-  color: var(--t-bg-base);
+  width: 30px; height: 30px; border-radius: 9px;
+  background: var(--t-brand-gradient);
+  color: #fff;
   border: none; cursor: pointer;
   display: flex; align-items: center; justify-content: center;
   flex-shrink: 0;
-  transition: opacity 0.15s;
+  box-shadow: 0 6px 14px rgba(92, 115, 255, 0.16);
+  transition: transform 0.15s, box-shadow 0.15s, opacity 0.15s;
 }
 .send-btn.disabled { opacity: 0.2; cursor: not-allowed; }
-.send-btn:hover:not(.disabled) { opacity: 0.8; }
+.send-btn:hover:not(.disabled) { opacity: 0.92; transform: translateY(-1px); box-shadow: 0 14px 24px rgba(92, 115, 255, 0.28); }
 .input-card-bottom {
   display: flex;
   align-items: center;
@@ -3450,6 +4396,42 @@ watch(conversationId, (id) => {
 }
 
 @media (max-width: 960px) {
+  .mode-switcher {
+    width: 100%;
+    justify-content: flex-start;
+    overflow-x: auto;
+  }
+  .builder-composer-shell {
+    padding: 12px;
+    border-radius: 18px;
+  }
+  .builder-content {
+    margin: 8px;
+    border-radius: 22px;
+    flex-direction: column;
+  }
+  .chat-side,
+  .preview-side {
+    flex: none;
+  }
+  .preview-side::before {
+    display: none;
+  }
+  .builder-inline-model-select {
+    width: 100%;
+  }
+  .composer-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .builder-generate-btn {
+    width: 100%;
+  }
+  .preview-side-header,
+  .preview-side-heading {
+    flex-direction: column;
+    align-items: flex-start;
+  }
   .builder-model-bar {
     flex-direction: column;
     align-items: stretch;
@@ -3461,8 +4443,289 @@ watch(conversationId, (id) => {
 
 /* ── 右侧预览面板 ── */
 .preview-side {
-  flex: 1; background: var(--t-bg-panel); border-left: 1px solid var(--t-border-subtle);
-  display: flex; flex-direction: column; min-width: 0; position: relative;
+  flex: 0.92;
+  background: rgba(255,255,255,0.78);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  position: relative;
+  backdrop-filter: blur(6px);
+}
+.preview-side::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 22px;
+  bottom: 22px;
+  width: 1px;
+  background: linear-gradient(180deg, transparent, rgba(128, 145, 255, 0.28), transparent);
+}
+.preview-side-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 20px 8px;
+}
+.preview-side-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+.preview-side-heading-main {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.preview-side-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.preview-side-title {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--t-text-primary);
+  letter-spacing: 0.01em;
+}
+.preview-app-edit-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 9px;
+  border: 1px solid rgba(92, 115, 255, 0.14);
+  background: rgba(247, 249, 255, 0.96);
+  color: #7b89ab;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all .18s ease;
+}
+.preview-app-edit-btn svg {
+  width: 14px;
+  height: 14px;
+}
+.preview-app-edit-btn:hover {
+  color: var(--t-brand-text);
+  border-color: rgba(92, 115, 255, 0.22);
+  background: rgba(92, 115, 255, 0.08);
+}
+.doc-preview-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px;
+  border-radius: 22px;
+  border: 1px solid rgba(128, 145, 255, 0.12);
+  background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(247, 249, 255, 0.94));
+  box-shadow: 0 10px 28px rgba(31, 41, 85, 0.05);
+}
+.doc-preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.doc-preview-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--t-text-primary);
+}
+.doc-preview-subtitle {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--t-text-muted);
+}
+.doc-preview-download {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(92, 115, 255, 0.14);
+  background: rgba(247, 249, 255, 0.96);
+  color: var(--t-brand-text);
+  cursor: pointer;
+  transition: all .18s ease;
+}
+.doc-preview-download:hover {
+  background: rgba(92, 115, 255, 0.08);
+  border-color: rgba(92, 115, 255, 0.22);
+}
+.doc-preview-download svg {
+  width: 14px;
+  height: 14px;
+}
+.doc-preview-content {
+  margin: 0;
+  min-height: 360px;
+  max-height: calc(100vh - 340px);
+  overflow: auto;
+  padding: 18px;
+  border-radius: 16px;
+  background: #f8faff;
+  border: 1px solid rgba(128, 145, 255, 0.1);
+  color: #4e5f7d;
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.preview-side-status {
+  display: flex;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12px;
+  color: #7c8ba8;
+}
+.preview-side-status.inline-meta {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+.preview-side-app-code-label {
+  color: var(--t-text-muted);
+  line-height: 1;
+}
+.preview-app-code-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(92, 115, 255, 0.08);
+  color: var(--t-brand-text);
+  border: 1px solid rgba(92, 115, 255, 0.14);
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.preview-app-code-chip.inline {
+  padding: 3px 8px;
+  font-size: 10px;
+}
+.preview-side-cta {
+  border: none;
+  background: var(--t-brand-gradient);
+  color: #fff;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.preview-side-cta.success {
+  background: linear-gradient(135deg, #16a34a 0%, #22c55e 100%);
+}
+.preview-side-cta:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.deploy-inline-card {
+  margin: 0 14px 12px;
+  padding: 12px 14px;
+  border: 1px solid rgba(128, 145, 255, 0.12);
+  border-radius: 12px;
+  background: rgba(248, 250, 255, 0.9);
+}
+.deploy-inline-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.deploy-inline-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--t-text-primary);
+}
+.deploy-inline-meta,
+.deploy-inline-copy {
+  font-size: 11px;
+  color: var(--t-text-muted);
+}
+.deploy-progress.inline {
+  margin: 0 0 8px;
+}
+.builder-step-bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 20px 12px;
+  border-bottom: 1px solid rgba(128, 145, 255, 0.1);
+  overflow-x: auto;
+}
+.builder-step-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: #8694af;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.builder-step-item:hover {
+  background: transparent;
+  color: var(--t-text-primary);
+}
+.builder-step-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+.builder-step-index {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: rgba(128, 145, 255, 0.08);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+}
+.builder-step-label {
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+.builder-step-meta {
+  font-size: 10px;
+  color: #9aa7bf;
+  line-height: 1.2;
+}
+.builder-step-item.active {
+  color: var(--t-brand-text);
+  background: transparent;
+  box-shadow: none;
+}
+.builder-step-item.active .builder-step-index {
+  background: var(--t-brand-gradient);
+  color: #fff;
+}
+.builder-step-item.active .builder-step-meta {
+  color: var(--t-brand-text);
+}
+.preview-body {
+  flex: 1;
+  overflow-y: auto;
+  background: transparent;
+}
+.tab-content {
+  padding: 20px;
+}
+.builder-step-item.done .builder-step-index {
+  background: rgba(16, 185, 129, 0.14);
+  color: var(--t-success);
 }
 .preview-tabs { display: flex; border-bottom: 1px solid var(--t-border-subtle); padding: 0 8px; flex-shrink: 0; }
 .ptab {
@@ -3479,9 +4742,24 @@ watch(conversationId, (id) => {
 .preview-empty { padding: 24px; text-align: center; color: var(--t-text-muted); font-size: 13px; margin-top: 80px; }
 .preview-empty .empty-icon { font-size: 40px; opacity: 0.3; margin-bottom: 12px; }
 .preview-empty.small { margin-top: 0; padding: 32px; }
+.preview-empty-stage {
+  max-width: 320px;
+  margin: 72px auto 0;
+  padding: 0;
+  color: #8b97ae;
+}
+.preview-empty-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #31405e;
+  margin-bottom: 8px;
+}
+.preview-empty-copy {
+  font-size: 13px;
+  line-height: 1.7;
+}
 .preview-body { flex: 1; overflow-y: auto; }
 .tab-content { padding: 16px; }
-
 /* ── 文档版本 ── */
 .doc-versions-tab { display: flex; flex-direction: column; gap: 12px; }
 .doc-upload-bar { display: flex; align-items: center; justify-content: space-between; }
@@ -3644,6 +4922,30 @@ watch(conversationId, (id) => {
 .dict-name { color: var(--t-text-primary); white-space: nowrap; }
 .dict-opts { flex: 1; color: var(--t-text-muted); }
 .dict-opts.empty { color: var(--t-danger); }
+.dict-option-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.dict-option-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(128, 145, 255, 0.08);
+  background: rgba(247, 249, 255, 0.72);
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+.dict-option-code {
+  min-width: 88px;
+  font-size: 10px;
+  color: var(--t-brand-text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.dict-option-name {
+  font-size: 12px;
+  color: var(--t-text-primary);
+}
 .edit-mini, .del-mini { background: none; border: none; cursor: pointer; font-size: 11px; padding: 2px; opacity: 0.3; transition: opacity 0.2s; flex-shrink: 0; color: var(--t-text-secondary); }
 .dict-row:hover .edit-mini, .dict-row:hover .del-mini { opacity: 1; }
 .add-mini { background: none; border: 1px dashed var(--t-border-strong); color: var(--t-text-muted); font-size: 11px; padding: 0 6px; border-radius: 4px; cursor: pointer; margin-left: 8px; transition: all 0.2s; }
@@ -3678,12 +4980,70 @@ watch(conversationId, (id) => {
 .model-header { display: flex; align-items: center; gap: 8px; padding: 10px 12px; background: var(--t-bg-subtle); font-size: 12px; }
 .model-name { font-weight: 600; color: var(--t-text-primary); }
 .model-code { margin-left: auto; font-size: 10px; color: var(--t-text-muted); font-family: monospace; }
+.preview-item-card {
+  border: 1px solid rgba(128, 145, 255, 0.1);
+  border-radius: 12px;
+  padding: 12px 12px 10px;
+  margin-bottom: 10px;
+  background: rgba(255,255,255,0.56);
+}
+.preview-item-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.preview-item-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--t-text-primary);
+}
+.preview-item-code {
+  margin-top: 2px;
+  font-size: 11px;
+  color: #7f8ca5;
+  font-family: monospace;
+}
+.preview-item-desc {
+  font-size: 12px;
+  line-height: 1.55;
+  color: #53627d;
+}
+.builder-edit-link {
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  border: 1px solid rgba(128, 145, 255, 0.14);
+  border-radius: 8px;
+  background: rgba(255,255,255,0.86);
+  color: #7d8aac;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+.builder-edit-link svg {
+  width: 13px;
+  height: 13px;
+}
+.builder-edit-link:hover {
+  color: var(--t-brand-text);
+  border-color: rgba(93, 114, 255, 0.22);
+  background: rgba(93, 114, 255, 0.08);
+}
+.builder-edit-link.inline {
+  margin-left: 6px;
+}
 .field-list { }
 .field-row { display: flex; justify-content: space-between; align-items: center; padding: 0 12px; height: 44px; min-height: 44px; border-top: 1px solid var(--t-border-subtle); transition: background 0.15s; }
 .field-row:hover { background: var(--t-bg-subtle); }
 .field-left { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
+.field-text { display: flex; flex-direction: column; min-width: 0; }
 .field-icon { width: 24px; min-width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-size: 12px; background: var(--t-border-subtle); border-radius: 6px; color: var(--t-text-muted); flex-shrink: 0; }
 .field-name { font-size: 13px; color: var(--t-text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.field-code { font-size: 10px; color: var(--t-text-muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .req { color: var(--t-danger); font-size: 10px; margin-left: 2px; flex-shrink: 0; }
 .field-right { display: flex; align-items: center; gap: 6px; flex-shrink: 0; margin-left: 12px; }
 .ftag { font-size: 10px; padding: 2px 8px; border-radius: 4px; white-space: nowrap; line-height: 1.4; }
@@ -3711,9 +5071,24 @@ watch(conversationId, (id) => {
 .builder-model-select :deep(.el-select__suffix) {
   color: var(--t-text-muted);
 }
-.builder-model-option-row { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 4px 0; }
-.builder-model-option-name { color: var(--t-text-primary); }
-.builder-model-option-meta { font-size: 12px; color: var(--t-text-muted); }
+.builder-model-option-row { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 2px 0; }
+.builder-model-option-name { color: var(--t-text-primary); font-size: 12px; line-height: 1.35; }
+.builder-model-option-meta { font-size: 10px; color: var(--t-text-muted); line-height: 1.3; }
+
+:deep(.model-select-dropdown) {
+  border-radius: 10px;
+  padding: 4px;
+}
+
+:deep(.model-select-dropdown .el-select-dropdown__item) {
+  min-height: 40px;
+  padding: 7px 10px;
+  border-radius: 8px;
+}
+
+:deep(.model-select-dropdown .el-select-dropdown__item.is-selected) {
+  font-weight: 600;
+}
 .model-select-all { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--t-text-primary); cursor: pointer; }
 .model-select-all input { accent-color: var(--t-brand); }
 .model-select-tip { font-size: 11px; color: var(--t-text-muted); }
@@ -3726,6 +5101,30 @@ watch(conversationId, (id) => {
 .form-selector { display: flex; gap: 4px; margin-bottom: 12px; overflow-x: auto; padding-bottom: 4px; }
 .form-tab { font-size: 12px; padding: 4px 10px; border-radius: 8px; border: none; background: none; color: var(--t-text-muted); cursor: pointer; white-space: nowrap; transition: all 0.2s; }
 .form-tab.active { background: var(--t-brand-subtle); color: var(--t-brand-light); font-weight: 500; }
+.form-preview-card {
+  padding-bottom: 12px;
+}
+.form-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.form-meta-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  font-size: 11px;
+  border-radius: 999px;
+  background: rgba(92, 115, 255, 0.08);
+  color: var(--t-brand-text);
+  border: 1px solid rgba(92, 115, 255, 0.12);
+}
+.form-meta-chip.subtle {
+  background: rgba(15, 23, 42, 0.04);
+  color: var(--t-text-secondary);
+  border-color: rgba(15, 23, 42, 0.08);
+}
 .form-preview { border: 1px solid var(--t-border-subtle); border-radius: 12px; overflow: hidden; background: var(--t-bg-elevated); }
 .form-title { background: var(--t-brand-subtle); padding: 8px 16px; font-size: 12px; font-weight: 600; color: var(--t-brand-light); border-bottom: 1px solid var(--t-brand-subtle); }
 .form-fields-grid { padding: 16px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -3768,7 +5167,9 @@ watch(conversationId, (id) => {
 
 /* ── 权限 ── */
 .perm-card { border: 1px solid var(--t-border-subtle); border-radius: 12px; overflow: hidden; margin-bottom: 12px; background: var(--t-bg-elevated); }
-.perm-header { padding: 8px 12px; background: var(--t-bg-subtle); font-size: 12px; font-weight: 600; color: var(--t-text-primary); }
+.perm-header { padding: 8px 12px; background: var(--t-bg-subtle); font-size: 12px; font-weight: 600; color: var(--t-text-primary); display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.perm-heading-block { display: flex; flex-direction: column; gap: 2px; }
+.perm-code-text { font-size: 10px; color: var(--t-text-muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .perm-table { width: 100%; border-collapse: collapse; }
 .perm-table th { font-size: 10px; color: var(--t-text-muted); font-weight: 500; text-align: left; padding: 6px 12px; border-bottom: 1px solid var(--t-border-subtle); }
 .perm-table td { font-size: 12px; color: var(--t-text-secondary); padding: 6px 12px; border-bottom: 1px solid var(--t-border-subtle); }
@@ -3795,8 +5196,27 @@ watch(conversationId, (id) => {
 }
 
 .deploy-header { display: flex; justify-content: space-between; align-items: center; padding: 16px 16px 8px; }
+.deploy-title-row { display: flex; align-items: center; gap: 8px; }
 .deploy-title { font-size: 14px; font-weight: 700; color: var(--t-text-primary); }
 .deploy-desc { font-size: 11px; color: var(--t-text-muted); margin-top: 2px; }
+.deploy-live-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: rgba(92, 115, 255, 0.1);
+  color: var(--t-brand-text);
+  font-size: 10px;
+  font-weight: 700;
+  box-shadow: 0 0 0 1px rgba(92, 115, 255, 0.08);
+}
+.deploy-current-step {
+  margin-top: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--t-text-primary);
+}
 .deploy-close { all: unset; cursor: pointer; color: var(--t-text-muted); font-size: 16px; padding: 4px; transition: color 0.2s; }
 .deploy-close:hover { color: var(--t-text-secondary); }
 
@@ -3806,6 +5226,62 @@ watch(conversationId, (id) => {
 .dp-meta { font-size: 10px; color: var(--t-text-muted); white-space: nowrap; }
 
 .deploy-actions { padding: 0 16px 12px; }
+.deploy-conflict-card {
+  margin: 0 16px 12px;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(255, 248, 246, 0.96);
+  border: 1px solid rgba(239, 68, 68, 0.16);
+}
+.deploy-conflict-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #b45309;
+  margin-bottom: 6px;
+}
+.deploy-conflict-copy {
+  font-size: 12px;
+  color: var(--t-text-secondary);
+  line-height: 1.6;
+}
+.deploy-conflict-copy code {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(239, 68, 68, 0.08);
+  color: #b91c1c;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.deploy-conflict-input-row {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+}
+.deploy-conflict-input {
+  flex: 1;
+  height: 34px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(239, 68, 68, 0.18);
+  background: #fff;
+  font-size: 12px;
+  outline: none;
+}
+.deploy-conflict-input:focus {
+  border-color: var(--t-brand);
+}
+.deploy-conflict-btn {
+  border: none;
+  border-radius: 8px;
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.deploy-conflict-btn.primary {
+  background: var(--t-brand-gradient);
+  color: #fff;
+}
+.deploy-conflict-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .dp-run-all {
   width: 100%; padding: 8px;
   background: var(--t-brand-gradient);
@@ -3819,7 +5295,14 @@ watch(conversationId, (id) => {
 .dg { background: var(--t-bg-elevated); border: 1px solid var(--t-border-subtle); border-radius: 12px; margin-bottom: 8px; overflow: hidden; }
 .dg.done { border-color: rgba(16,185,129,0.25); }
 .dg.err { border-color: rgba(239,68,68,0.25); }
+.dg.current {
+  border-color: rgba(92, 115, 255, 0.22);
+  box-shadow: 0 10px 24px rgba(92, 115, 255, 0.08);
+}
 .dg-hd { display: flex; align-items: center; gap: 6px; padding: 10px 14px; background: var(--t-bg-subtle); font-size: 12px; }
+.dg.current .dg-hd {
+  background: linear-gradient(180deg, rgba(242, 246, 255, 0.96), rgba(247, 249, 255, 0.9));
+}
 .dg-icon { font-size: 13px; }
 .dg-name { font-weight: 600; color: var(--t-text-primary); flex: 1; }
 .dg-badge { font-size: 9px; padding: 1px 6px; border-radius: 99px; font-weight: 600; background: var(--t-border-subtle); color: var(--t-text-muted); }
@@ -3829,6 +5312,9 @@ watch(conversationId, (id) => {
 .ds { display: flex; align-items: center; padding: 7px 14px; gap: 10px; font-size: 12px; }
 .ds + .ds { border-top: 1px solid var(--t-border-subtle); }
 .ds:hover { background: var(--t-bg-subtle); }
+.ds.current {
+  background: linear-gradient(90deg, rgba(92, 115, 255, 0.08), rgba(92, 115, 255, 0.02));
+}
 .ds-dot { width: 18px; height: 18px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 700; color: #fff; flex-shrink: 0; }
 .ds-dot.completed { background: var(--t-success); }
 .ds-dot.error { background: var(--t-danger); }
@@ -3838,6 +5324,10 @@ watch(conversationId, (id) => {
 
 .ds-body { flex: 1; min-width: 0; }
 .ds-name { color: var(--t-text-primary); }
+.ds.current .ds-name {
+  color: var(--t-brand-text);
+  font-weight: 700;
+}
 .ds.completed .ds-name { color: var(--t-text-muted); }
 .ds.pending .ds-name { color: var(--t-text-muted); }
 .ds-err { font-size: 10px; color: var(--t-danger); margin-top: 1px; }
@@ -3854,7 +5344,17 @@ watch(conversationId, (id) => {
 @keyframes spin { to { transform: rotate(360deg); } }
 .ds-lock { font-size: 11px; opacity: 0.15; }
 
-.deploy-done { padding: 12px 16px; text-align: center; font-size: 13px; color: var(--t-success); font-weight: 500; }
+.deploy-done {
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  text-align: left;
+  font-size: 13px;
+  color: var(--t-success);
+  font-weight: 500;
+}
 .deploy-done-btn {
   background: var(--t-brand-gradient); color: #fff; border: none;
   border-radius: 6px; padding: 5px 12px; font-size: 12px; cursor: pointer; margin-left: 8px;
