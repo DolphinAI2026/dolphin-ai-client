@@ -217,6 +217,11 @@ export const codingApi = {
     return request.get<any, { running: boolean; url?: string }>(`/coding/workspace/${wsId}/serve-status`)
   },
 
+  /** 构建 + 上传到平台环境 */
+  uploadToPlatform(wsId: string, envId: number): Promise<{ status: string; message: string }> {
+    return request.post(`/coding/workspace/${wsId}/upload-to-platform`, { env_id: envId }, { timeout: 300000 })
+  },
+
   /** 打包发布（返回 zip blob） */
   async publish(wsId: string): Promise<Blob> {
     const token = localStorage.getItem('token') || ''

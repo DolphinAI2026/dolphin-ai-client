@@ -57,8 +57,9 @@
                 <button class="action-btn primary" @click.stop="openWorkspace(ws)" title="进入开发">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
                 </button>
-                <button class="action-btn" @click.stop title="上传组件包">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                <button :class="['action-btn', { 'is-loading': uploadingWsId === ws.id }]" @click.stop="uploadWorkspace(ws)" :disabled="uploadingWsId === ws.id" :title="uploadingWsId === ws.id ? '上传中...' : '上传组件包'">
+                  <svg v-if="uploadingWsId !== ws.id" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                  <svg v-else width="13" height="13" class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9" stroke-dasharray="42 15"/></svg>
                 </button>
                 <button class="action-btn" @click.stop="downloadWorkspace(ws, 'src')" title="下载源码">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
@@ -92,8 +93,9 @@
                 <button class="action-btn primary" @click.stop="openWorkspace(ws)" title="进入开发">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
                 </button>
-                <button class="action-btn" @click.stop title="上传组件包">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                <button :class="['action-btn', { 'is-loading': uploadingWsId === ws.id }]" @click.stop="uploadWorkspace(ws)" :disabled="uploadingWsId === ws.id" :title="uploadingWsId === ws.id ? '上传中...' : '上传组件包'">
+                  <svg v-if="uploadingWsId !== ws.id" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                  <svg v-else width="14" height="14" class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9" stroke-dasharray="42 15"/></svg>
                 </button>
                 <button class="action-btn" @click.stop="downloadWorkspace(ws, 'src')" title="下载源码">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
@@ -109,6 +111,8 @@
       </div>
     </div>
   </WorkbenchShell>
+
+  <EnvSelectModal v-model="showEnvModal" @selected="onEnvSelected" />
 </template>
 
 <script setup lang="ts">
@@ -116,7 +120,9 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
+import EnvSelectModal from '@/components/EnvSelectModal.vue'
 import { codingApi, type WorkspaceInfo } from '@/api/coding'
+import { platformEnvApi } from '@/api/platformEnv'
 
 const router = useRouter()
 const route = useRoute()
@@ -125,6 +131,11 @@ const workspaces = ref<WorkspaceInfo[]>([])
 const activeTab = ref('all')
 const viewMode = ref<'grid' | 'list'>('grid')
 const appId = computed(() => String(route.query.app_id || ''))
+
+// 上传组件包相关状态
+const uploadingWsId = ref<string | null>(null)
+const showEnvModal = ref(false)
+const pendingUploadWs = ref<WorkspaceInfo | null>(null)
 
 const groupMap: Record<string, { key: string; label: string }> = {
   'form-component': { key: 'component-pc', label: 'PC组件' },
@@ -200,6 +211,54 @@ async function downloadWorkspace(ws: WorkspaceInfo, type: 'src' | 'dist') {
     await codingApi.downloadZip(ws.id, type)
   } catch (e: any) {
     ElMessage.error(e?.message || '下载失败')
+  }
+}
+
+async function uploadWorkspace(ws: WorkspaceInfo) {
+  uploadingWsId.value = ws.id
+
+  let envs: Awaited<ReturnType<typeof platformEnvApi.list>>
+  try {
+    envs = await platformEnvApi.list()
+  } catch {
+    ElMessage.error('获取平台环境失败')
+    uploadingWsId.value = null
+    return
+  }
+  const connectedEnvs = envs.filter(e => e.status === 'connected')
+
+  if (connectedEnvs.length === 0) {
+    ElMessage.warning('没有可用的平台环境，请先在环境管理中配置并连接平台')
+    uploadingWsId.value = null
+    return
+  }
+
+  if (connectedEnvs.length === 1) {
+    await doUpload(ws, connectedEnvs[0].id)
+  } else {
+    // 弹窗选择时先清 loading，由 doUpload 重新接管
+    uploadingWsId.value = null
+    pendingUploadWs.value = ws
+    showEnvModal.value = true
+  }
+}
+
+async function doUpload(ws: WorkspaceInfo, envId: number) {
+  uploadingWsId.value = ws.id
+  try {
+    await codingApi.uploadToPlatform(ws.id, envId)
+    ElMessage.success('上传成功')
+  } catch (e: any) {
+    ElMessage.error(e?.message || '上传失败')
+  } finally {
+    uploadingWsId.value = null
+  }
+}
+
+function onEnvSelected(envId: number) {
+  if (pendingUploadWs.value) {
+    doUpload(pendingUploadWs.value, envId)
+    pendingUploadWs.value = null
   }
 }
 
@@ -463,6 +522,22 @@ onMounted(async () => {
 .action-btn.primary {
   color: #5b6ef3;
   border-color: rgba(99, 102, 241, 0.2);
+}
+
+.action-btn:disabled,
+.action-btn.is-loading {
+  opacity: 0.6;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 .catalog-content.list {
