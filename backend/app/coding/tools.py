@@ -300,10 +300,17 @@ def _resolve_default_npm_registry() -> str:
 
 def _build_command_env() -> dict[str, str]:
     env = {**os.environ}
-    # 确保 /usr/local/bin 在 PATH 中，node/npm/df-apaas-cli 都安装在此
+    # 确保 /usr/local/bin 和 ~/.npm-global/bin 在 PATH 中
+    # node/npm 在 /usr/local/bin，df-apaas-cli 在 ~/.npm-global/bin
     path = env.get("PATH", "")
+    npm_global_bin = os.path.expanduser("~/.npm-global/bin")
+    extra = []
     if "/usr/local/bin" not in path:
-        env["PATH"] = f"/usr/local/bin:{path}"
+        extra.append("/usr/local/bin")
+    if npm_global_bin not in path:
+        extra.append(npm_global_bin)
+    if extra:
+        env["PATH"] = ":".join(extra) + ":" + path
     default_registry = _resolve_default_npm_registry()
     env.setdefault("npm_config_registry", default_registry)
     env.setdefault("NPM_CONFIG_REGISTRY", default_registry)
