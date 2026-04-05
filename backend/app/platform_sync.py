@@ -138,10 +138,19 @@ def _convert_dicts(remote_dicts: List[Dict], dict_options: Dict[str, List[Dict]]
             or dict_options.get(dict_id, [])
         )
         for opt in raw_options:
-            options.append({
-                "name": opt.get("dictionaryValue", opt.get("name", "")),
-                "code": opt.get("dictionaryValueCode", opt.get("code", "")),
-            })
+            # API 返回字段名可能是 valueName/valueCode 或 dictionaryValue/dictionaryValueCode
+            opt_name = (
+                opt.get("valueName")
+                or opt.get("dictionaryValue")
+                or opt.get("name", "")
+            )
+            opt_code = (
+                opt.get("valueCode")
+                or opt.get("dictionaryValueCode")
+                or opt.get("code", "")
+            )
+            if opt_name or opt_code:
+                options.append({"name": opt_name, "code": opt_code})
         dicts.append({
             "name": d.get("dictionaryName", d.get("name", "")),
             "code": dict_code,
@@ -338,39 +347,41 @@ def _enrich_dict_from_component(
 ):
     """从组件的 chooseOptions 补充字典选项。
 
-    通过 source.id → dict_code 精准匹配到字典，再用 chooseOptions 填充选项。
+    注意：只在字典选项完全为空时才用 chooseOptions 填充。
+    如果 remote dict API 已返回选项（更可靠），不用 chooseOptions 覆盖，
+    因为 chooseOptions 可能包含 AI 创建时的默认占位值（opt_1/选项1 等）。
     """
     source = comp.get("source", {})
     choose_options = comp.get("chooseOptions", [])
 
     if source.get("type") == "DICTIONARY_TYPE" and choose_options:
         source_id = str(source.get("id", ""))
-        # 从 chooseOptions 提取选项列表
+        target_code = source_id_to_dict.get(source_id, "")
+
+        # 过滤掉空选项（id 或 label 为空的）
         new_options = [
             {"name": opt.get("label", ""), "code": opt.get("id", "")}
             for opt in choose_options
             if opt.get("id") and opt.get("label")
         ]
-        if new_options:
-            # 通过 source_id 精准匹配到 dict_code
-            target_code = source_id_to_dict.get(source_id, "")
-            matched = False
-            for d in dicts:
-                if target_code and d["code"] == target_code:
-                    # 精准匹配 → 补充选项
-                    if not d.get("options"):
-                        d["options"] = new_options
-                    else:
-                        existing = {o["code"] for o in d["options"]}
-                        for opt in new_options:
-                            if opt["code"] not in existing:
-                                d["options"].append(opt)
-                                existing.add(opt["code"])
-                    matched = True
-                    break
+        if not new_options:
+            # chooseOptions 全是空的，跳过
+            for col in comp.get("tableColumn", []):
+                _enrich_dict_from_component(col, dicts, seen_codes, source_id_to_dict)
+            return
 
-            if not matched and target_code:
-                # 字典列表里没有这个 code（不该发生），创建新的
+        if target_code:
+            for d in dicts:
+                if d["code"] == target_code:
+                    # 字典已有选项（从 remote API 获取的）→ 不覆盖
+                    if d.get("options"):
+                        pass
+                    else:
+                        # 字典选项为空 → 用 chooseOptions 填充
+                        d["options"] = new_options
+                    break
+            else:
+                # 字典列表里没有 → 新建
                 if target_code not in seen_codes:
                     seen_codes.add(target_code)
                     dicts.append({
