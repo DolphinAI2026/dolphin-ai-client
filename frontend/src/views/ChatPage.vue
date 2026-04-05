@@ -72,10 +72,9 @@
       <div
         v-show="!SHOW_PLATFORM_CONFIG || activeView === 'builder'"
         class="builder-content"
-        :class="{ 'single-pane': isPlatformDeployed }"
       >
       <!-- 左侧对话区 -->
-      <div v-if="!isPlatformDeployed" class="chat-side">
+      <div class="chat-side">
         <div v-if="appParsedMode" class="doc-view-wrap">
           <div class="doc-view-head">
             <div class="doc-view-title">功能设计文档</div>
@@ -676,7 +675,7 @@ const showPublishButton = computed(() =>
   !isAppPublishing.value &&
   !publishingApp.value
 )
-const showBuilderComposer = computed(() => !isPlatformDeployed.value)
+const showBuilderComposer = computed(() => true)  // 始终显示输入区，已部署应用也需要对话迭代和上传更新文档
 const showDeployProgressInline = computed(() => deploySteps.value.length > 0 || deployOpen.value || isPlatformDeployed.value)
 const showViewSwitcher = computed(() =>
   !!existingAppId.value && (
