@@ -2207,6 +2207,111 @@ async def publish_workspace(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# project_type → 平台 fileType 映射
+_PROJECT_TYPE_TO_FILE_TYPE = {
+    "form-component": "FRONTCOMPONENT",
+    "menu-page": "FRONTENGINE",
+    "form-page": "FRONTENGINE",
+    "form-list": "FRONTLISTVIEW",
+    "layout": "FRONTLAYOUT",
+    "mobile-page": "MFRONTENGINE",
+    "mobile-component": "MFRONTCOMPONENT",
+    "plugin": "FRONTTENANTCOMPONENT",
+    "backend-api": "BACKENDENGINEPKG",
+    "backend-feign": "BACKENDENGINEPKG",
+    "backend-scheduled": "BACKENDENGINEPKG",
+}
+
+
+class UploadToPlatformRequest(BaseModel):
+    env_id: int
+
+
+@router.post("/workspace/{ws_id}/upload-to-platform")
+async def upload_workspace_to_platform(
+    ws_id: str,
+    body: UploadToPlatformRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """构建 + 打包 zip，然后上传到指定的平台环境"""
+    import time
+    import uuid
+    from app.models import PlatformEnv
+
+    # 1. 查询平台环境（验证属于当前 tenant）
+    result = await db.execute(
+        select(PlatformEnv).where(PlatformEnv.id == body.env_id)
+    )
+    env = result.scalar_one_or_none()
+    if not env:
+        raise HTTPException(status_code=404, detail="平台环境不存在")
+    if ctx.tenant_id and env.tenant_id != ctx.tenant_id:
+        raise HTTPException(status_code=403, detail="无权访问该平台环境")
+    if not env.token:
+        raise HTTPException(status_code=400, detail="平台环境未登录，请先在环境管理中连接")
+
+    # 2. 构建 + 打包
+    ws_mgr = WorkspaceManager()
+    try:
+        zip_path = await ws_mgr.build_and_package(ws_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"构建失败: {e}")
+
+    # 3. 读取 workspace 元信息（project_type、display_name）
+    ws_path = ws_mgr.get_workspace_path(ws_id)
+    meta = ws_mgr._read_meta(ws_path)
+    project_type = meta.get("project_type", "")
+    display_name = meta.get("display_name") or meta.get("project_name", ws_id)
+    file_type = _PROJECT_TYPE_TO_FILE_TYPE.get(project_type)
+    if not file_type:
+        raise HTTPException(status_code=400, detail=f"不支持上传的项目类型: {project_type}")
+
+    # 4. 上传到平台
+    upload_url = f"{env.base_url.rstrip('/')}/xdap-app/selfdevelopment/add/developmentKit"
+    zip_path_obj = Path(zip_path)
+    zip_filename = zip_path_obj.name
+
+    try:
+        async with httpx.AsyncClient(verify=False, timeout=120.0) as client:
+            with open(zip_path_obj, "rb") as f:
+                zip_bytes = f.read()
+
+            response = await client.post(
+                upload_url,
+                headers={
+                    "xdaptenantid": env.platform_tenant_id,
+                    "xdaptoken": env.token,
+                    "xdaptimestamp": str(int(time.time() * 1000)),
+                },
+                files={"file": (zip_filename, zip_bytes, "application/zip")},
+                data={
+                    "fileType": file_type,
+                    "description": f"{display_name} - 由 apaas-builder 上传",
+                    "uploadId": str(int(time.time() * 1000)),
+                    "versionCode": uuid.uuid4().hex,
+                    "useScope": "全部应用",
+                    "internalResource": "false",
+                    "effectiveScope": "ALL_APPLICATION",
+                },
+            )
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"上传请求失败: {e}")
+
+    # 5. 解析响应
+    try:
+        resp_data = response.json()
+    except Exception:
+        raise HTTPException(status_code=502, detail=f"平台响应非JSON，状态码: {response.status_code}")
+
+    code = resp_data.get("code")
+    if code == "ok" or code == 200:
+        return {"status": "ok", "message": "上传成功"}
+    else:
+        msg = resp_data.get("message") or resp_data.get("msg") or "上传失败"
+        raise HTTPException(status_code=500, detail=msg)
+
+
 @router.get("/workspace/{ws_id}/debug/screenshot/{filename}")
 async def get_debug_screenshot(ws_id: str, filename: str):
     """Serve debug screenshot image"""

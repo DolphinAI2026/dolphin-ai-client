@@ -14,7 +14,7 @@ export default defineConfig({
         server.middlewares.use((req, res, next) => {
           if (req.url && /^\/[0-9a-f]{32}\//.test(req.url)) {
             const proxyReq = http.request(
-              `http://localhost:8000${req.url}`,
+              `http://localhost:8001${req.url}`,
               { method: req.method, headers: req.headers },
               (proxyRes) => {
                 res.writeHead(proxyRes.statusCode || 200, proxyRes.headers)
@@ -46,39 +46,39 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:8000',
+        target: 'http://localhost:8001',
         changeOrigin: true
       },
       '^/platform(/|$)': {
-        target: 'http://localhost:8000',
+        target: 'http://localhost:8001',
         changeOrigin: true
       },
       '/backend': {
-        target: 'http://localhost:8000',
+        target: 'http://localhost:8001',
         changeOrigin: true
       },
       '/plugin': {
-        target: 'http://localhost:8000',
+        target: 'http://localhost:8001',
         changeOrigin: true
       },
       '/xdap-admin': {
-        target: 'http://localhost:8000',
+        target: 'http://localhost:8001',
         changeOrigin: true
       },
       '/xdap-plugin': {
-        target: 'http://localhost:8000',
+        target: 'http://localhost:8001',
         changeOrigin: true
       },
       '/xdap-open': {
-        target: 'http://localhost:8000',
+        target: 'http://localhost:8001',
         changeOrigin: true
       },
       '/smartbi': {
-        target: 'http://localhost:8000',
+        target: 'http://localhost:8001',
         changeOrigin: true
       },
       '/apaas': {
-        target: 'http://localhost:8000',
+        target: 'http://localhost:8001',
         changeOrigin: true
       }
     }

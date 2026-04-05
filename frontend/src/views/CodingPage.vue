@@ -217,14 +217,18 @@
                         </svg>
                       </button>
                       <button
-                        class="workspace-card-action"
-                        title="上传组件包"
-                        @click.stop
+                        :class="['workspace-card-action', { 'is-loading': uploadingWsId === ws.id }]"
+                        :title="uploadingWsId === ws.id ? '上传中...' : '上传组件包'"
+                        :disabled="uploadingWsId === ws.id"
+                        @click.stop="uploadWorkspaceCard(ws)"
                       >
-                        <svg class="workspace-card-action-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                        <svg v-if="uploadingWsId !== ws.id" class="workspace-card-action-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                           <path d="M8 10V4.25" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
                           <path d="M5.75 6.5L8 4.25L10.25 6.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
                           <path d="M4 10.25V11.25C4 11.9404 4.55964 12.5 5.25 12.5H10.75C11.4404 12.5 12 11.9404 12 11.25V10.25" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+                        </svg>
+                        <svg v-else class="workspace-card-action-icon spin" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                          <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5" stroke-dasharray="28 10" stroke-linecap="round" />
                         </svg>
                       </button>
                       <button
@@ -460,6 +464,8 @@
       </aside>
     </div>
   </WorkbenchShell>
+
+  <EnvSelectModal v-model="showUploadEnvModal" @selected="onUploadEnvSelected" />
 </template>
 
 <script setup lang="ts">
@@ -479,6 +485,7 @@ import { llmConfigApi, type BuilderModelOption } from '@/api/llmConfig'
 import { consumeSseResponse } from '@/utils/sse'
 import ThemeToggle from '@/components/ThemeToggle.vue'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
+import EnvSelectModal from '@/components/EnvSelectModal.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -745,6 +752,58 @@ async function downloadWorkspaceArtifact(ws: WorkspaceInfo, type: 'dist' | 'src'
     await codingApi.downloadZip(ws.id, type)
   } catch (e: any) {
     ElMessage.error(e?.message || '下载失败')
+  }
+}
+
+// ============ Upload to Platform ============
+const uploadingWsId = ref<string | null>(null)
+const showUploadEnvModal = ref(false)
+const pendingUploadWs = ref<WorkspaceInfo | null>(null)
+
+async function uploadWorkspaceCard(ws: WorkspaceInfo) {
+  uploadingWsId.value = ws.id
+
+  let envs: Awaited<ReturnType<typeof platformEnvApi.list>>
+  try {
+    envs = await platformEnvApi.list()
+  } catch {
+    ElMessage.error('获取平台环境失败')
+    uploadingWsId.value = null
+    return
+  }
+  const connectedEnvs = envs.filter(e => e.status === 'connected')
+
+  if (connectedEnvs.length === 0) {
+    ElMessage.warning('没有可用的平台环境，请先在环境管理中配置并连接平台')
+    uploadingWsId.value = null
+    return
+  }
+
+  if (connectedEnvs.length === 1) {
+    await doUploadWorkspace(ws, connectedEnvs[0].id)
+  } else {
+    uploadingWsId.value = null
+    pendingUploadWs.value = ws
+    showUploadEnvModal.value = true
+  }
+}
+
+async function doUploadWorkspace(ws: WorkspaceInfo, envId: number) {
+  uploadingWsId.value = ws.id
+  try {
+    await codingApi.uploadToPlatform(ws.id, envId)
+    ElMessage.success('上传成功')
+  } catch (e: any) {
+    ElMessage.error(e?.message || '上传失败')
+  } finally {
+    uploadingWsId.value = null
+  }
+}
+
+function onUploadEnvSelected(envId: number) {
+  if (pendingUploadWs.value) {
+    doUploadWorkspace(pendingUploadWs.value, envId)
+    pendingUploadWs.value = null
   }
 }
 
@@ -2541,6 +2600,22 @@ watch(() => route.path, () => {
   color: var(--t-brand);
   border-color: var(--t-brand-glow);
   background: var(--t-brand-subtle);
+}
+
+.workspace-card-action:disabled,
+.workspace-card-action.is-loading {
+  opacity: 0.6;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 .workspace-showcase-empty {
