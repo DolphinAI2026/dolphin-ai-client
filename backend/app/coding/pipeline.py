@@ -762,7 +762,7 @@ async def run_coding_pipeline(
         msg_lower = params.message.strip().lower()
         # 调试功能已禁用，所有请求直接进入代码生成流程
         is_debug_intent = False
-        is_publish_intent = any(kw in msg_lower for kw in ['发布', '打包', '上传', 'publish', 'build'])
+        is_publish_intent = any(kw in msg_lower for kw in ['帮我发布', '立即发布', '打包发布', '打包上传', '帮我打包', '发布到平台', 'publish', '帮我build', '帮我构建'])
 
         # Publish 模式处理
         if is_publish_intent and ws_id:
