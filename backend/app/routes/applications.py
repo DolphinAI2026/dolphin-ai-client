@@ -1192,6 +1192,11 @@ async def upload_doc_with_conversation(
                     }, ensure_ascii=False)}
 
                     # 分别发送各类型的 batch 事件，体积小不易丢失
+                    if data.get("roles"):
+                        yield {"event": "progress", "data": json.dumps({
+                            "message": f"[roles] 角色生成完成：{roles_count} 个",
+                            "batch": data["roles"],
+                        }, ensure_ascii=False)}
                     if data.get("dicts"):
                         yield {"event": "progress", "data": json.dumps({
                             "message": f"[dicts] 字典生成完成：{dicts_count} 个",
@@ -1488,16 +1493,17 @@ async def upload_doc_version(
             # 1. 计算 hash
             content_hash = compute_hash(text)
 
-            # 2. 检查是否重复 & 获取 V1 文档版本
+            # 2. 检查是否与最新版本重复 & 获取 V1 文档版本
             v1_doc: Optional[dict] = None
             async with AsyncSessionLocal() as session:
-                dup_result = await session.execute(
+                # 只和最新版本比较 hash（允许回退到旧版本）
+                latest_result = await session.execute(
                     select(DocumentVersion).where(
                         DocumentVersion.application_id == app_id_val,
-                        DocumentVersion.content_hash == content_hash,
-                    )
+                    ).order_by(DocumentVersion.version.desc()).limit(1)
                 )
-                if dup_result.scalar_one_or_none():
+                latest_ver = latest_result.scalar_one_or_none()
+                if latest_ver and latest_ver.content_hash == content_hash:
                     yield {"event": "error", "data": json.dumps({"message": "文档内容未变化，无需上传"}, ensure_ascii=False)}
                     return
 

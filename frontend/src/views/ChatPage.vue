@@ -2409,7 +2409,13 @@ const uploadDocFile = async (file: File) => {
               // 实时更新预览：字典批次
               if (data.batch && Array.isArray(data.batch)) {
                 const phaseKey = phaseMatch?.[1] || ''
-                if (phaseKey === 'dicts') {
+                if (phaseKey === 'roles') {
+                  for (const r of data.batch) {
+                    if (!store.preview.roles.find((x: any) => x.code === r.code)) {
+                      store.preview.roles.push(r)
+                    }
+                  }
+                } else if (phaseKey === 'dicts') {
                   for (const d of data.batch) {
                     if (!store.preview.dicts.find((x: any) => x.code === d.code)) {
                       store.preview.dicts.push(d)
