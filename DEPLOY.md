@@ -96,6 +96,7 @@ def should_exclude(path_str):
     for part in Path(path_str).parts:
         if part in BACKEND_EXCLUDES: return True
         if part.endswith((".pyc",".log",".db")): return True
+        if part.startswith("._") or part == ".DS_Store": return True  # macOS 元数据
     return False
 
 def make_tar(local_dir):

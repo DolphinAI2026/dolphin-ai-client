@@ -5812,6 +5812,9 @@ export default {{
                 continue
             if src_file.name == ".DS_Store":
                 continue
+            # 过滤 macOS AppleDouble 元数据文件（._xxx）
+            if src_file.name.startswith("._"):
+                continue
             rel = str(src_file.relative_to(tpl_root))
             for k, v in replacements.items():
                 rel = rel.replace(k, v)
