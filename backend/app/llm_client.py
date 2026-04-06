@@ -29,13 +29,22 @@ def encode_image_base64(image_path: str) -> str:
 
 
 class LLMClient:
-    def __init__(self):
-        self.api_key = settings.llm_api_key
-        self.model = settings.llm_model
+    def __init__(self, api_key: str = None, base_url: str = None, model: str = None):
+        self.api_key = api_key or settings.llm_api_key
+        self.model = model or settings.llm_model
         self.doc_model = settings.llm_doc_model or self.model
-        self.anthropic_base_url = settings.anthropic_base_url.rstrip("/")
-        self.anthropic_api_key = settings.anthropic_api_key or self.api_key
-        self.anthropic_model = settings.anthropic_model
+        if base_url:
+            _raw = base_url.rstrip("/")
+            # 只接受包含 /anthropic 的 URL 作为 Anthropic base_url，否则忽略传入值
+            if "/anthropic" in _raw:
+                self.anthropic_base_url = _raw.removesuffix("/v1")
+            else:
+                # OpenAI 格式 URL 无法用于 Anthropic Messages API，使用默认值
+                self.anthropic_base_url = settings.anthropic_base_url.rstrip("/")
+        else:
+            self.anthropic_base_url = settings.anthropic_base_url.rstrip("/")
+        self.anthropic_api_key = api_key or settings.anthropic_api_key or self.api_key
+        self.anthropic_model = model or settings.anthropic_model
         self.vision_model = settings.llm_vision_model or self.anthropic_model
 
     def _anthropic_messages_url(self) -> str:

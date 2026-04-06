@@ -171,6 +171,7 @@ async def parse_doc_with_ai(
     text: str, filename: str = "", on_progress: ProgressCallback = None,
     existing_codes: Optional[Dict] = None,
     existing_config: Optional[Dict] = None,
+    llm_cfg: Optional[Dict] = None,
 ) -> Dict:
     """用 AI 解析任意格式的需求文档，返回标准 preview JSON。
 
@@ -201,9 +202,9 @@ async def parse_doc_with_ai(
 
     if len(text) <= CHUNK_CHAR_LIMIT:
         await _progress("小文档，单次 AI 解析...")
-        data = await _parse_single(text, filename, existing_codes=existing_codes, config_constraint=config_constraint)
+        data = await _parse_single(text, filename, existing_codes=existing_codes, config_constraint=config_constraint, llm_cfg=llm_cfg)
     else:
-        data = await _parse_chunked(text, filename, _progress, existing_codes=existing_codes, config_constraint=config_constraint)
+        data = await _parse_chunked(text, filename, _progress, existing_codes=existing_codes, config_constraint=config_constraint, llm_cfg=llm_cfg)
 
     # 对 Markdown 中显式定义的字典做规则兜底，避免 LLM 漏掉未引用字典或漏掉选项
     extracted_dicts = _extract_markdown_dicts(text)
@@ -405,8 +406,11 @@ def _build_existing_config_constraint(config: Dict) -> str:
 # 小文档：单次调用
 # ================================================================
 
-async def _parse_single(text: str, filename: str, existing_codes: Optional[Dict] = None, config_constraint: str = "") -> Dict:
-    client = LLMClient()
+async def _parse_single(text: str, filename: str, existing_codes: Optional[Dict] = None, config_constraint: str = "", llm_cfg: Optional[Dict] = None) -> Dict:
+    if llm_cfg:
+        client = LLMClient(api_key=llm_cfg.get("api_key"), base_url=llm_cfg.get("base_url"), model=llm_cfg.get("model"))
+    else:
+        client = LLMClient()
     # 智能截断：优先保留 ER 图和业务具体方案（含子表/字段定义）
     if len(text) > 40000:
         import re
@@ -454,7 +458,7 @@ async def _parse_single(text: str, filename: str, existing_codes: Optional[Dict]
 # 大文档：分段解析
 # ================================================================
 
-async def _parse_chunked(text: str, filename: str, progress=None, existing_codes: Optional[Dict] = None, config_constraint: str = "") -> Dict:
+async def _parse_chunked(text: str, filename: str, progress=None, existing_codes: Optional[Dict] = None, config_constraint: str = "", llm_cfg: Optional[Dict] = None) -> Dict:
     """大文档分段解析流程：
     1. 用 AI 快速提取概览（应用名、角色、表单清单）
     2. 按章节拆分文档
@@ -465,7 +469,10 @@ async def _parse_chunked(text: str, filename: str, progress=None, existing_codes
         if progress:
             await progress(msg)
 
-    client = LLMClient()
+    if llm_cfg:
+        client = LLMClient(api_key=llm_cfg.get("api_key"), base_url=llm_cfg.get("base_url"), model=llm_cfg.get("model"))
+    else:
+        client = LLMClient()
 
     # ── Step 1: 概览 ──
     await _p("Step 1/3: 提取文档概览...")

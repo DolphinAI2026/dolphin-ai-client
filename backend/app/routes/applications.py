@@ -1425,6 +1425,10 @@ async def upload_doc_version(
     text = content_bytes.decode('utf-8')
     fname = file.filename or ""
 
+    # 获取租户 LLM 配置（供 AI 解析使用）
+    from app.routes.chat import _get_tenant_llm_config as _get_llm_cfg
+    _tenant_llm_cfg = await _get_llm_cfg(db, ctx.tenant_id)
+
     # 提前获取需要的值（SSE generator 不能用原始 db session）
     app_id_val = app.id
     tenant_id_val = ctx.tenant_id
@@ -1524,7 +1528,7 @@ async def upload_doc_version(
                     existing_codes = extract_existing_codes(v1_parsed_config) if v1_parsed_config else None
                     partial_config = await parse_doc_with_ai(
                         changed_text, filename=fname, existing_codes=existing_codes,
-                        existing_config=v1_parsed_config
+                        existing_config=v1_parsed_config, llm_cfg=_tenant_llm_cfg
                     )
 
                     # Step D: 合并 — V1 未变更部分 + V2 变更部分
@@ -1540,7 +1544,7 @@ async def upload_doc_version(
             else:
                 # ===== 首次上传：全量解析 =====
                 yield {"event": "progress", "data": json.dumps({"step": "AI 解析文档配置..."}, ensure_ascii=False)}
-                v2_config = await parse_doc_with_ai(text, filename=fname)
+                v2_config = await parse_doc_with_ai(text, filename=fname, llm_cfg=_tenant_llm_cfg)
 
             yield {"event": "progress", "data": json.dumps({"step": "对比资源差异..."}, ensure_ascii=False)}
 
