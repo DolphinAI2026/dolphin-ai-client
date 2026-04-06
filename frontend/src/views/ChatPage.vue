@@ -2535,7 +2535,7 @@ const uploadDocFile = async (file: File) => {
         parseReady.value = true
         pmsg.content = buildProgressContent() + '\n\n配置已就绪，请点击下方「开始生成」。'
       }
-    } else if (store.preview.models.length > 0 || store.preview.dicts.length > 0) {
+    } else if (store.preview.models.length > 0 || store.preview.dicts.length > 0 || store.preview.roles.length > 0) {
       // done 事件未收到（大 payload SSE 丢失），但 progress 已逐步推送了数据到 store
       console.warn('done 事件丢失，使用 store 中已累积的数据兜底')
       if (!store.currentApp) {

@@ -1180,12 +1180,18 @@ async def upload_doc_with_conversation(
                     dicts_count = len(data.get("dicts", []))
                     models_count = len(data.get("models", []))
 
+                    # skeleton 事件只发基础信息（appName/appCode/roles），不发全量配置避免 SSE 丢失
+                    skeleton_data = {
+                        "appName": data.get("appName", ""),
+                        "appCode": data.get("appCode", ""),
+                        "roles": data.get("roles", []),
+                    }
                     yield {"event": "progress", "data": json.dumps({
                         "message": f"[skeleton] 骨架完成：{models_count} 个模型、{dicts_count} 个字典、{roles_count} 个角色",
-                        "data": data,
+                        "data": skeleton_data,
                     }, ensure_ascii=False)}
 
-                    # 发送字典和模型的 batch 事件，让前端实时更新预览面板
+                    # 分别发送各类型的 batch 事件，体积小不易丢失
                     if data.get("dicts"):
                         yield {"event": "progress", "data": json.dumps({
                             "message": f"[dicts] 字典生成完成：{dicts_count} 个",
