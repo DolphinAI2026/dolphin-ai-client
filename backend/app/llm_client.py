@@ -132,7 +132,9 @@ class LLMClient:
         max_tokens: int,
         timeout: httpx.Timeout | float,
         temperature: float,
+        max_retries: int = 2,
     ) -> Dict[str, Any]:
+        import asyncio
         system_text, api_messages = self._prepare_messages(messages)
         payload: Dict[str, Any] = {
             "model": model,
@@ -143,14 +145,31 @@ class LLMClient:
         if system_text:
             payload["system"] = system_text
 
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                self._anthropic_messages_url(),
-                headers=self._anthropic_headers(),
-                json=payload,
-            )
-            response.raise_for_status()
-            return response.json()
+        last_err = None
+        for attempt in range(max_retries + 1):
+            if attempt > 0:
+                wait = min(2 ** attempt, 10)
+                logger.warning(f"LLM 调用重试 {attempt}/{max_retries}，等待 {wait}s...")
+                await asyncio.sleep(wait)
+            try:
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    response = await client.post(
+                        self._anthropic_messages_url(),
+                        headers=self._anthropic_headers(),
+                        json=payload,
+                    )
+                    response.raise_for_status()
+                    return response.json()
+            except (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.NetworkError, httpx.RemoteProtocolError) as e:
+                last_err = e
+                logger.warning(f"LLM 调用网络错误 (attempt {attempt+1}): {e}")
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code >= 500:
+                    last_err = e
+                    logger.warning(f"LLM 服务端错误 {e.response.status_code} (attempt {attempt+1})")
+                else:
+                    raise  # 4xx 错误不重试
+        raise last_err  # 所有重试都失败
 
     @staticmethod
     def _collect_text_from_response(data: Dict[str, Any]) -> Tuple[str, List[Dict[str, str]]]:
