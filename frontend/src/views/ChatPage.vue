@@ -2451,6 +2451,16 @@ const uploadDocFile = async (file: File) => {
                 if (!store.preview.roles.length && Array.isArray(data.data.roles)) {
                   store.preview.roles = data.data.roles
                 }
+                // 从 data.data 同步模型和字典（纯规则提取时 batch 事件可能未被接收）
+                if (!store.preview.models.length && Array.isArray(data.data.models) && data.data.models.length) {
+                  store.preview.models = data.data.models
+                }
+                if (!store.preview.dicts.length && Array.isArray(data.data.dicts) && data.data.dicts.length) {
+                  store.preview.dicts = data.data.dicts
+                }
+                if (!store.preview.permissions?.length && Array.isArray(data.data.permissions) && data.data.permissions.length) {
+                  store.preview.permissions = data.data.permissions
+                }
               }
 
               // 更新进度消息
