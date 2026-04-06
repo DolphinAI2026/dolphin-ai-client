@@ -211,16 +211,19 @@ async def parse_doc_with_ai(
     if extracted_dicts:
         _merge_explicit_dicts(data, extracted_dicts)
 
-    # 标准模板编码校正：从 markdown 表格直接提取编码，覆盖 AI 生成的
-    template_codes = _extract_template_codes(text)
-    if template_codes.get("roles") or template_codes.get("models"):
-        _apply_template_codes(data, template_codes)
-
     # 后处理
     await _progress("正在整理结果...")
     _sanitize_codes(data)
     _fill_icons(data)
     _dedup_dicts(data)
+
+    # 标准模板编码校正：最后执行，确保文档中的编码不被任何后处理覆盖
+    template_codes = _extract_template_codes(text)
+    has_template = any(template_codes.get(k) for k in ("roles", "dicts", "models"))
+    if has_template:
+        logger.info(f"检测到标准模板编码: roles={len(template_codes.get('roles',[]))}, "
+                    f"dicts={len(template_codes.get('dicts',[]))}, models={len(template_codes.get('models',[]))}")
+        _apply_template_codes(data, template_codes)
 
     # Schema 校验 & 自动修复
     try:
@@ -961,11 +964,20 @@ def _apply_template_codes(data: Dict, template: Dict):
             if not tpl:
                 continue
             model["code"] = tpl["code"]
-            # 字段编码校正：按名称匹配
+            # 字段编码校正：精确匹配 → 包含匹配 → code 前缀匹配
             if tpl.get("fields"):
                 tpl_fields_by_name = {f["name"]: f for f in tpl["fields"]}
+                tpl_fields_list = tpl["fields"]
                 for field in model.get("fields", []):
-                    tpl_f = tpl_fields_by_name.get(field.get("name"))
+                    fname = field.get("name", "")
+                    # 1. 精确匹配
+                    tpl_f = tpl_fields_by_name.get(fname)
+                    # 2. 包含匹配（AI 缩短名称：如"开始日期"匹配"计划开始日期"）
+                    if not tpl_f and fname:
+                        for tf in tpl_fields_list:
+                            if fname in tf["name"] or tf["name"] in fname:
+                                tpl_f = tf
+                                break
                     if tpl_f:
                         field["code"] = tpl_f["code"]
                         if tpl_f.get("required") is not None:

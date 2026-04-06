@@ -1163,6 +1163,14 @@ async def upload_doc_with_conversation(
 
                 data = await _parse_ai(text, filename=fname, llm_cfg=_tenant_llm_cfg)
 
+                # 显式模板编码校正（确保文档中的编码不被 AI 覆盖）
+                if data:
+                    from app.ai_doc_parser import _extract_template_codes, _apply_template_codes
+                    tpl = _extract_template_codes(text)
+                    if any(tpl.get(k) for k in ("roles", "dicts", "models")):
+                        _apply_template_codes(data, tpl)
+                        logger.info(f"路由层模板编码校正: roles={len(tpl.get('roles',[]))}, dicts={len(tpl.get('dicts',[]))}, models={len(tpl.get('models',[]))}")
+
                 if data:
                     roles_count = len(data.get("roles", []))
                     dicts_count = len(data.get("dicts", []))
