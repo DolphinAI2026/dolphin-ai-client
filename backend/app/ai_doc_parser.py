@@ -193,23 +193,31 @@ async def parse_doc_with_ai(
 
     await _progress(f"文档长度 {len(text)} 字符，开始解析...")
 
-    # 构建已有配置约束文本（仅增量模式）
-    config_constraint = ""
-    if existing_config:
-        config_constraint = _build_existing_config_constraint(existing_config)
-        if config_constraint:
-            logger.info(f"增量解析：注入已有配置约束（{len(config_constraint)} 字符）")
-
-    if len(text) <= CHUNK_CHAR_LIMIT:
-        await _progress("小文档，单次 AI 解析...")
-        data = await _parse_single(text, filename, existing_codes=existing_codes, config_constraint=config_constraint, llm_cfg=llm_cfg)
+    # 检测标准模板：如果文档包含完整的编码表格，直接规则提取，跳过 AI
+    template_codes = _extract_template_codes(text)
+    if _is_standard_template(template_codes):
+        await _progress("检测到标准模板格式，直接提取编码（不调用 AI）...")
+        logger.info(f"标准模板直接提取: {len(template_codes['models'])} 模型, "
+                    f"{len(template_codes['dicts'])} 字典, {len(template_codes['roles'])} 角色")
+        data = _template_to_preview(template_codes)
     else:
-        data = await _parse_chunked(text, filename, _progress, existing_codes=existing_codes, config_constraint=config_constraint, llm_cfg=llm_cfg)
+        # 非标准模板：走 AI 解析
+        config_constraint = ""
+        if existing_config:
+            config_constraint = _build_existing_config_constraint(existing_config)
+            if config_constraint:
+                logger.info(f"增量解析：注入已有配置约束（{len(config_constraint)} 字符）")
 
-    # 对 Markdown 中显式定义的字典做规则兜底，避免 LLM 漏掉未引用字典或漏掉选项
-    extracted_dicts = _extract_markdown_dicts(text)
-    if extracted_dicts:
-        _merge_explicit_dicts(data, extracted_dicts)
+        if len(text) <= CHUNK_CHAR_LIMIT:
+            await _progress("小文档，单次 AI 解析...")
+            data = await _parse_single(text, filename, existing_codes=existing_codes, config_constraint=config_constraint, llm_cfg=llm_cfg)
+        else:
+            data = await _parse_chunked(text, filename, _progress, existing_codes=existing_codes, config_constraint=config_constraint, llm_cfg=llm_cfg)
+
+        # 对 Markdown 中显式定义的字典做规则兜底
+        extracted_dicts = _extract_markdown_dicts(text)
+        if extracted_dicts:
+            _merge_explicit_dicts(data, extracted_dicts)
 
     # 后处理
     await _progress("正在整理结果...")
@@ -910,6 +918,108 @@ def _extract_template_codes(text: str) -> Dict:
     _flush_dict()
     _flush_model()
     return result
+
+
+def _is_standard_template(template: Dict) -> bool:
+    """判断提取结果是否足够完整，可以跳过 AI 直接使用。"""
+    has_models = len(template.get("models", [])) > 0
+    has_fields = any(len(m.get("fields", [])) >= 2 for m in template.get("models", []))
+    has_dicts = len(template.get("dicts", [])) > 0
+    return has_models and has_fields and has_dicts
+
+
+# 数据库字段类型 → 平台字段类型 + 图标
+_DB_TYPE_TO_FIELD = {
+    "VARCHAR": ("单行输入", "T"),
+    "TEXT": ("多行输入", "¶"),
+    "DATE": ("日期时间", "D"),
+    "DATETIME": ("日期时间", "D"),
+    "DOUBLE": ("数字", "N"),
+    "DECIMAL": ("金额", "¥"),
+    "BIGINT": ("数据单选", "⇢"),
+    "INT": ("数字", "N"),
+    "INTEGER": ("数字", "N"),
+    "BOOLEAN": ("开关", "⊘"),
+}
+
+
+def _template_to_preview(template: Dict) -> Dict:
+    """将 _extract_template_codes 提取的模板数据转为完整的 preview 配置。
+
+    纯规则转换，不调用 AI。根据数据库字段类型、字典引用、关联引用
+    自动推断平台字段类型和图标。
+    """
+    data: Dict = {
+        "appName": template.get("appName", ""),
+        "appCode": template.get("appCode", ""),
+        "roles": template.get("roles", []),
+        "dicts": template.get("dicts", []),
+        "models": [],
+        "workflows": [],
+        "permissions": [],
+    }
+
+    icon_map = get_icon_map()
+    dict_codes = {d.get("code") for d in template.get("dicts", [])}
+
+    for tpl_model in template.get("models", []):
+        model: Dict = {
+            "name": tpl_model["name"],
+            "code": tpl_model["code"],
+            "fields": [],
+        }
+        for tpl_f in tpl_model.get("fields", []):
+            db_type = tpl_f.get("_db_type", "VARCHAR").upper()
+            field_type = "单行输入"
+            field_icon = "T"
+
+            # 1. 字典引用 → 下拉单选
+            if tpl_f.get("dict") and tpl_f["dict"] in dict_codes:
+                field_type = "下拉单选"
+                field_icon = "▼"
+            # 2. 关联引用 → 数据单选
+            elif tpl_f.get("ref"):
+                field_type = "数据单选"
+                field_icon = "⇢"
+            # 3. 名称推断
+            elif "人员" in tpl_f["name"] or "经理" in tpl_f["name"] or "负责人" in tpl_f["name"]:
+                field_type = "人员选择"
+                field_icon = "⊙"
+            elif "部门" in tpl_f["name"]:
+                field_type = "部门选择"
+                field_icon = "⊙"
+            elif "编号" in tpl_f["name"]:
+                field_type = "单据号"
+                field_icon = "#"
+            elif "附件" in tpl_f["name"]:
+                field_type = "附件上传"
+                field_icon = "⊕"
+            elif "描述" in tpl_f["name"] or "说明" in tpl_f["name"] or "备注" in tpl_f["name"]:
+                field_type = "多行输入"
+                field_icon = "¶"
+            # 4. 数据库类型推断
+            else:
+                ft, fi = _DB_TYPE_TO_FIELD.get(db_type, ("单行输入", "T"))
+                field_type = ft
+                field_icon = fi
+
+            field: Dict = {
+                "name": tpl_f["name"],
+                "code": tpl_f["code"],
+                "type": field_type,
+                "icon": icon_map.get(field_type, field_icon),
+                "required": tpl_f.get("required", False),
+            }
+            if tpl_f.get("dict"):
+                field["dict"] = tpl_f["dict"]
+            if tpl_f.get("ref"):
+                field["ref"] = tpl_f["ref"]
+            model["fields"].append(field)
+
+        data["models"].append(model)
+
+    logger.info(f"纯规则模板转换完成: {len(data['models'])} 模型, {len(data['dicts'])} 字典, {len(data['roles'])} 角色")
+    return data
 
 
 def _apply_template_codes(data: Dict, template: Dict):
