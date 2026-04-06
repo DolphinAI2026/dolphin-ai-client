@@ -506,61 +506,97 @@ async def execute_step(
                     await db.commit()
                     step_exception = HTTPException(status_code=401, detail="APaaS平台Token已过期，请在环境管理中重新登录")
             else:
-                # 编码冲突时自动处理
-                is_dict_or_role_step = step_key.startswith("create_dict:") or step_key.startswith("create_role:") or step_key == "create_roles_dicts"
-                is_model_step = step_key.startswith("create_model:")
-                is_form_step = step_key.startswith("create_form:")
-                is_duplicate = any(kw in error_msg for kw in ["编码重复", "已存在", "duplicate"])
-
-                if is_dict_or_role_step and is_duplicate:
-                    # 字典/角色：直接复用
-                    logger.info(f"步骤 {step_key} 编码已存在，自动跳过: {error_msg}")
-                    state.setdefault("steps_completed", []).append(step_key)
-                    state.get("step_errors", {}).pop(step_key, None)
-                    _save_state(app, state)
-                    step_response = StepExecuteResponse(step=step_key, status="ok", error=None)
-                elif (is_model_step or is_form_step) and is_duplicate:
-                    # 模型/表单：自动加后缀并立即重试
-                    logger.info(f"步骤 {step_key} 编码冲突，自动加后缀重试: {error_msg}")
-                    import random, string
-                    suffix = ''.join(random.choices(string.ascii_lowercase, k=4))
-                    retry_ok = False
-                    if is_model_step:
-                        idx = int(step_key.split(":")[1])
-                        if idx < len(models):
-                            old_code = models[idx].get("code", "")
-                            new_code = f"{old_code}_{suffix}"
-                            models[idx]["code"] = new_code
-                            logger.info(f"模型编码自动重命名: {old_code} -> {new_code}")
-                            app.config_preview = json.dumps(data, ensure_ascii=False)
-                            # 立即用新编码重试
-                            try:
-                                result = await execute_step(client, app_id, step_key, data, state)
-                                # 回填 model_info（重试成功时 execute_step 已经更新了 state）
-                                state.setdefault("steps_completed", []).append(step_key)
-                                state.get("step_errors", {}).pop(step_key, None)
-                                _save_state(app, state)
-                                step_response = StepExecuteResponse(step=step_key, status="completed", result=result)
-                                retry_ok = True
-                            except Exception as retry_err:
-                                logger.warning(f"自动重试也失败: {retry_err}")
-                    if not retry_ok:
-                        # 重试也失败，正常报错让用户知道
-                        logger.warning(f"步骤 {step_key} 自动重命名重试也失败")
-                        state.setdefault("step_errors", {})[step_key] = error_msg
-                        _save_state(app, state)
-                        step_response = StepExecuteResponse(step=step_key, status="error", error=f"编码冲突且自动重命名失败: {error_msg}")
-                else:
-                    # 其他错误：原样报错
-                    conflict = _detect_code_conflict(error_msg, step_key, data, models)
-                    if conflict:
-                        state.setdefault("step_errors", {})[step_key] = error_msg
-                        _save_state(app, state)
-                        step_response = StepExecuteResponse(step=step_key, status="conflict", error=error_msg, conflict=conflict)
-                    else:
+                # create_app 编码重复时，自动查找已有应用并复用
+                is_create_app = step_key == "create_app"
+                is_app_duplicate = is_create_app and any(kw in error_msg for kw in ["编码重复", "已存在", "duplicate", "编码"])
+                if is_app_duplicate:
+                    logger.info(f"应用编码已存在，尝试查找并复用: {error_msg}")
+                    try:
+                        app_code_val = app.app_code or ""
+                        existing_apps = await client.query_app_list()
+                        matched = next(
+                            (a for a in existing_apps
+                             if a.get("appCode") == app_code_val or a.get("appName") == app.app_name),
+                            None
+                        )
+                        if matched:
+                            found_id = str(matched.get("id", ""))
+                            logger.info(f"找到已有平台应用: id={found_id}, code={matched.get('appCode')}")
+                            state["apaas_app_id"] = found_id
+                            state.setdefault("steps_completed", []).append("create_app")
+                            state.get("step_errors", {}).pop("create_app", None)
+                            app.apaas_app_id = found_id
+                            _save_state(app, state)
+                            await db.commit()
+                            step_response = StepExecuteResponse(
+                                step=step_key, status="completed",
+                                result={"message": f"复用已有平台应用 (id={found_id})", "apaas_app_id": found_id}
+                            )
+                        else:
+                            logger.warning("未能匹配到已有应用，回退到冲突处理")
+                            conflict = _detect_code_conflict(error_msg, step_key, data, models)
+                            state.setdefault("step_errors", {})[step_key] = error_msg
+                            _save_state(app, state)
+                            step_response = StepExecuteResponse(step=step_key, status="conflict" if conflict else "error", error=error_msg, conflict=conflict)
+                    except Exception as lookup_err:
+                        logger.warning(f"查找已有应用失败: {lookup_err}")
                         state.setdefault("step_errors", {})[step_key] = error_msg
                         _save_state(app, state)
                         step_response = StepExecuteResponse(step=step_key, status="error", error=error_msg)
+
+                # 编码冲突时自动处理（非 create_app 的步骤）
+                elif not is_create_app:
+                    is_dict_or_role_step = step_key.startswith("create_dict:") or step_key.startswith("create_role:") or step_key == "create_roles_dicts"
+                    is_model_step = step_key.startswith("create_model:")
+                    is_form_step = step_key.startswith("create_form:")
+                    is_duplicate = any(kw in error_msg for kw in ["编码重复", "已存在", "duplicate"])
+
+                    if is_dict_or_role_step and is_duplicate:
+                        # 字典/角色：直接复用
+                        logger.info(f"步骤 {step_key} 编码已存在，自动跳过: {error_msg}")
+                        state.setdefault("steps_completed", []).append(step_key)
+                        state.get("step_errors", {}).pop(step_key, None)
+                        _save_state(app, state)
+                        step_response = StepExecuteResponse(step=step_key, status="ok", error=None)
+                    elif (is_model_step or is_form_step) and is_duplicate:
+                        # 模型/表单：自动加后缀并立即重试
+                        logger.info(f"步骤 {step_key} 编码冲突，自动加后缀重试: {error_msg}")
+                        import random, string
+                        suffix = ''.join(random.choices(string.ascii_lowercase, k=4))
+                        retry_ok = False
+                        if is_model_step:
+                            idx = int(step_key.split(":")[1])
+                            if idx < len(models):
+                                old_code = models[idx].get("code", "")
+                                new_code = f"{old_code}_{suffix}"
+                                models[idx]["code"] = new_code
+                                logger.info(f"模型编码自动重命名: {old_code} -> {new_code}")
+                                app.config_preview = json.dumps(data, ensure_ascii=False)
+                                try:
+                                    result = await _execute_step_impl(client, app, config, state, step_key, data, models)
+                                    state.setdefault("steps_completed", []).append(step_key)
+                                    state.get("step_errors", {}).pop(step_key, None)
+                                    _save_state(app, state)
+                                    step_response = StepExecuteResponse(step=step_key, status="completed", result=result)
+                                    retry_ok = True
+                                except Exception as retry_err:
+                                    logger.warning(f"自动重试也失败: {retry_err}")
+                        if not retry_ok:
+                            logger.warning(f"步骤 {step_key} 自动重命名重试也失败")
+                            state.setdefault("step_errors", {})[step_key] = error_msg
+                            _save_state(app, state)
+                            step_response = StepExecuteResponse(step=step_key, status="error", error=f"编码冲突且自动重命名失败: {error_msg}")
+                    else:
+                        # 其他错误：原样报错
+                        conflict = _detect_code_conflict(error_msg, step_key, data, models)
+                        if conflict:
+                            state.setdefault("step_errors", {})[step_key] = error_msg
+                            _save_state(app, state)
+                            step_response = StepExecuteResponse(step=step_key, status="conflict", error=error_msg, conflict=conflict)
+                        else:
+                            state.setdefault("step_errors", {})[step_key] = error_msg
+                            _save_state(app, state)
+                            step_response = StepExecuteResponse(step=step_key, status="error", error=error_msg)
 
         finally:
             # 持久化 API 调用日志

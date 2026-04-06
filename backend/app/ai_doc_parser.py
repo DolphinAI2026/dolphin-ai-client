@@ -312,13 +312,14 @@ def _build_existing_config_constraint(config: Dict) -> str:
 
     与 _build_existing_codes_prompt 不同，此函数输出名称+编码的完整映射，
     让 AI 能准确匹配语义相同但措辞不同的实体，从而保持一致性。
+    输出 **全部** 字段和选项编码，确保 AI 精准复用。
     """
     if not config:
         return ""
 
     parts = []
 
-    # 角色
+    # 角色（完整列出）
     roles = config.get("roles", [])
     if roles:
         role_lines = []
@@ -326,11 +327,11 @@ def _build_existing_config_constraint(config: Dict) -> str:
             name = r.get("name", "")
             code = r.get("code", "")
             if name and code:
-                role_lines.append(f"- {name} ({code})")
+                role_lines.append(f"- {name} → code=`{code}`")
         if role_lines:
             parts.append("### 已有角色\n" + "\n".join(role_lines))
 
-    # 字典
+    # 字典（包含所有选项的 name→code 映射）
     dicts = config.get("dicts", [])
     if dicts:
         dict_lines = []
@@ -339,15 +340,20 @@ def _build_existing_config_constraint(config: Dict) -> str:
             code = d.get("code", "")
             if name and code:
                 options = d.get("options", [])
-                opt_names = [o.get("name", "") for o in options[:6] if o.get("name")]
-                opt_str = ", ".join(opt_names)
-                if len(options) > 6:
-                    opt_str += f" 等共{len(options)}项"
-                dict_lines.append(f"- {name} ({code}): {opt_str}" if opt_str else f"- {name} ({code})")
+                opt_strs = []
+                for o in options:
+                    on = o.get("name", "")
+                    oc = o.get("code", "")
+                    if on and oc:
+                        opt_strs.append(f"{on}(`{oc}`)")
+                    elif on:
+                        opt_strs.append(on)
+                opt_str = ", ".join(opt_strs) if opt_strs else "无选项"
+                dict_lines.append(f"- {name} → code=`{code}` | 选项: {opt_str}")
         if dict_lines:
             parts.append("### 已有字典\n" + "\n".join(dict_lines))
 
-    # 模型及字段
+    # 模型及字段（列出全部字段，不截断）
     models = config.get("models", [])
     if models:
         model_lines = []
@@ -357,22 +363,24 @@ def _build_existing_config_constraint(config: Dict) -> str:
             if name and code:
                 fields = m.get("fields", [])
                 field_strs = []
-                for f in fields[:10]:
+                for f in fields:
                     fn = f.get("name", "")
                     fc = f.get("code", "")
                     ft = f.get("type", "")
-                    freq = f.get("required", False)
                     if fn and fc:
-                        desc = f"{fn}({fc})"
+                        desc = f"{fn}→`{fc}`"
                         if ft:
                             desc += f"[{ft}]"
-                        if freq:
-                            desc += "[必填]"
+                        # 包含 dict / ref / sub_code 等关键属性
+                        if f.get("dict"):
+                            desc += f"{{dict:{f['dict']}}}"
+                        if f.get("ref"):
+                            ref = f["ref"]
+                            desc += f"{{ref:{ref.get('model','')}.{ref.get('field','')}}}"
+                        if f.get("sub_code"):
+                            desc += f"{{子表:{f['sub_code']}}}"
                         field_strs.append(desc)
-                suffix = ""
-                if len(fields) > 10:
-                    suffix = f" ...等共{len(fields)}个字段"
-                model_lines.append(f"- {name} ({code}): {', '.join(field_strs)}{suffix}")
+                model_lines.append(f"- **{name}** → code=`{code}`\n  字段: {', '.join(field_strs)}")
         if model_lines:
             parts.append("### 已有模型及字段\n" + "\n".join(model_lines))
 
@@ -380,13 +388,14 @@ def _build_existing_config_constraint(config: Dict) -> str:
         return ""
 
     header = (
-        "## 已有配置约束（重要！必须严格遵守）\n\n"
-        "当前应用已有以下配置，请在解析新文档时严格遵守：\n\n"
-        "1. **已有实体必须保持原名称和编码**，不得擅自改名或改编码\n"
-        "2. 如果新文档中的实体与已有实体功能相同（即使措辞略有不同），必须使用已有的名称和编码\n"
-        "3. 已有字段的 required 等属性如果文档未明确变更，保持原值不变\n"
-        "4. 只有新文档中明确新增的实体才使用新的名称和编码\n"
-        "5. **字典选项以新文档为准**：如果新文档的字典选项与已有不同（新增或删除了选项），按新文档输出。编码保持已有的不变\n\n"
+        "## 已有配置约束（最高优先级！必须严格遵守）\n\n"
+        "当前应用已有以下配置。解析新文档时 **必须** 遵守以下规则：\n\n"
+        "1. **编码必须精确复用**：如果新文档中的实体与已有实体是同一概念（即使名称措辞略有不同），**必须**使用已有的 code，绝不能生成新编码\n"
+        "2. **名称保持一致**：已有实体的名称不要改动，除非新文档明确修改了名称\n"
+        "3. **字段编码一一对应**：模型中已有字段的 code 必须原样保留，新增字段才使用新编码\n"
+        "4. **字典选项编码保持**：已有字典选项的 code 原样保留，新增选项用新编码\n"
+        "5. **属性保持稳定**：字段的 required / dict / ref / sub_code 等属性如果文档未明确变更，保持原值\n"
+        "6. **只有文档中明确新增的内容**才使用新的名称和编码\n\n"
     )
 
     return header + "\n\n".join(parts) + "\n\n"

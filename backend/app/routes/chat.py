@@ -81,6 +81,62 @@ async def _stream_with_tenant_llm(cfg: dict | None, messages: list, max_retries:
     if last_err:
         raise last_err
 
+def _inject_current_config_context(system_prompt: str, current_config: dict) -> str:
+    """在 system prompt 末尾注入当前应用配置摘要，让 AI 感知已有配置。
+    用于增量对话场景：用户在已有应用基础上描述变更。"""
+    config = current_config
+    # 如果是 { type: "preview", data: {...} } 格式，取 data
+    if isinstance(config.get("data"), dict):
+        config = config["data"]
+
+    parts = []
+    app_name = config.get("appName", "未知应用")
+    parts.append(f"**当前应用**: {app_name}")
+
+    roles = config.get("roles", [])
+    if roles:
+        role_strs = [f"{r.get('name', '')}(`{r.get('code', '')}`)" for r in roles if r.get("code")]
+        parts.append(f"**已有角色** ({len(roles)}): {', '.join(role_strs)}")
+
+    dicts = config.get("dicts", [])
+    if dicts:
+        dict_strs = []
+        for d in dicts:
+            opts = d.get("options", [])
+            opt_names = [o.get("name", "") for o in opts[:5] if o.get("name")]
+            opt_str = f"[{','.join(opt_names)}{'...' if len(opts) > 5 else ''}]" if opt_names else ""
+            dict_strs.append(f"{d.get('name', '')}(`{d.get('code', '')}`){opt_str}")
+        parts.append(f"**已有字典** ({len(dicts)}): {'; '.join(dict_strs)}")
+
+    models = config.get("models", [])
+    if models:
+        model_strs = []
+        for m in models:
+            fields = m.get("fields", [])
+            field_names = [f.get("name", "") for f in fields[:8] if f.get("name")]
+            fstr = f"[{','.join(field_names)}{'...' if len(fields) > 8 else ''}]" if field_names else ""
+            model_strs.append(f"{m.get('name', '')}(`{m.get('code', '')}`){fstr}")
+        parts.append(f"**已有模型** ({len(models)}): {'; '.join(model_strs)}")
+
+    config_context = "\n".join(parts)
+
+    incremental_instruction = f"""
+
+## 当前应用配置（增量对话模式）
+
+{config_context}
+
+**增量模式规则（必须遵守）**：
+1. 用户描述的是对现有应用的**变更**，不是重新创建
+2. 输出配置 JSON 时，**必须包含所有已有实体**（未变更的原样保留），在此基础上新增/修改/删除
+3. 已有实体的 code **绝不能改变**，必须精确复用
+4. 新增的实体使用新的 code，风格与已有编码保持一致
+5. 如果用户说"加一个字段"、"新增一个角色"等，在已有配置基础上新增，保留所有已有内容
+6. 当用户需求明确时，**直接生成配置 JSON**（不需要反复确认模型编码等已知信息），你已经拥有完整的配置上下文
+"""
+    return system_prompt + incremental_instruction
+
+
 router = APIRouter(prefix="/chat", tags=["聊天"])
 
 BUILDER_SYSTEM_PROMPT = """你是 aPaaS Builder AI，得帆云低代码平台的智能搭建助手。你的任务是通过多轮对话帮用户理清应用需求，然后生成结构化的应用配置。
@@ -350,6 +406,11 @@ async def send_message(
 
     # 构建LLM消息列表（加入system prompt）
     system_prompt = SYSTEM_PROMPTS.get(conversation.agent_type, BUILDER_SYSTEM_PROMPT)
+
+    # 增量对话：如果前端传入了 current_config，注入到 system prompt 让 AI 感知已有配置
+    if data.current_config and conversation.agent_type in ("builder", "requirements"):
+        system_prompt = _inject_current_config_context(system_prompt, data.current_config)
+
     llm_messages = [{"role": "system", "content": system_prompt}]
 
     # 预取租户 LLM 配置（必须在 compactor 之前）

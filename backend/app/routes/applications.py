@@ -397,10 +397,11 @@ async def create_application(
 
 
 class AutoCreateRequest(BaseModel):
-    """前端首次生成配置时自动创建应用"""
+    """前端首次生成配置时自动创建应用，或增量更新已有应用配置"""
     app_name: str
     config_preview: dict
     conversation_id: Optional[int] = None
+    app_id: Optional[int] = None  # 增量更新时传入已有应用ID
 
 
 class AutoCreateResponse(BaseModel):
@@ -421,8 +422,19 @@ async def auto_create_application(
     如果 conversation_id 已有关联应用，返回已有应用（不重复创建）。
     否则创建新的 draft 应用。
     """
+    # 优先按 app_id 查找（增量更新场景）
+    existing = None
+    if data.app_id:
+        result = await db.execute(
+            select(Application).where(
+                Application.id == data.app_id,
+                Application.tenant_id == ctx.tenant_id,
+            )
+        )
+        existing = result.scalar_one_or_none()
+
     # 如果有 conversation_id，检查是否已有关联应用
-    if data.conversation_id:
+    if not existing and data.conversation_id:
         result = await db.execute(
             select(Application).where(
                 Application.conversation_id == data.conversation_id,
@@ -430,7 +442,8 @@ async def auto_create_application(
             ).order_by(Application.id.desc()).limit(1)
         )
         existing = result.scalar_one_or_none()
-        if existing:
+
+    if existing:
             # 更新配置 + 生成 requirement_doc
             existing.config_preview = json.dumps(data.config_preview, ensure_ascii=False)
             existing.app_name = data.app_name

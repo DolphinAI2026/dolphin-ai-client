@@ -238,12 +238,20 @@
             @click="startDeployFlow()"
             :disabled="generating || assembling || !hasPreviewContent"
           >{{ generating ? '部署中...' : '开始部署' }}</button>
-          <button
-            v-else-if="showPublishButton"
-            class="preview-side-cta success"
-            @click="publishCurrentApp"
-            :disabled="publishingApp"
-          >{{ publishingApp ? '上线中...' : '上线应用' }}</button>
+          <template v-else-if="isPlatformDeployed">
+            <button
+              class="preview-side-cta"
+              @click="openDeployPanel()"
+              :disabled="generating"
+            >更新部署</button>
+            <button
+              v-if="showPublishButton"
+              class="preview-side-cta success"
+              style="margin-left:6px"
+              @click="publishCurrentApp"
+              :disabled="publishingApp"
+            >{{ publishingApp ? '上线中...' : '上线应用' }}</button>
+          </template>
         </div>
         <div v-if="showBuilderPreview" class="builder-step-bar">
           <button
@@ -497,6 +505,47 @@
     </div><!-- /builder-content -->
     </div><!-- /content-area -->
 
+    <!-- ChangePlan 变更计划浮层 -->
+    <Teleport to="body">
+      <div v-if="store.showChangePlan && store.changePlan" class="change-plan-overlay" @click.self="store.showChangePlan = false">
+        <div class="change-plan-panel">
+          <div class="change-plan-header">
+            <h3>变更计划 (V{{ store.changePlan.fromVersion }} → V{{ store.changePlan.toVersion }})</h3>
+            <button class="change-plan-close" @click="store.showChangePlan = false">&times;</button>
+          </div>
+          <div class="change-plan-body">
+            <ConfigDiff
+              v-if="changePlanDiff"
+              :has-changes="changePlanDiff.has_changes !== false"
+              :summary="changePlanDiff.summary || ''"
+              :role-changes="changePlanDiff.role_changes || []"
+              :dict-changes="changePlanDiff.dict_changes || []"
+              :model-changes="changePlanDiff.model_changes || []"
+              :form-changes="changePlanDiff.form_changes || []"
+              :process-changes="changePlanDiff.process_changes || []"
+              :warnings="changePlanDiff.warnings || []"
+              :unsupported-changes="changePlanDiff.unsupported_changes || []"
+              :selectable="true"
+              :executing="executingChangePlan"
+              :show-actions="false"
+            />
+            <div v-else class="change-plan-diff">
+              <pre style="white-space:pre-wrap;">{{ JSON.stringify(store.changePlan, null, 2) }}</pre>
+            </div>
+          </div>
+          <div class="change-plan-footer">
+            <span class="change-plan-count">已选 {{ changePlanSelectedCount }}/{{ store.changePlan.actions?.length || 0 }} 项变更</span>
+            <div class="change-plan-actions">
+              <button class="btn-cancel" @click="store.showChangePlan = false; store.changePlan = null">取消</button>
+              <button class="btn-execute" :disabled="executingChangePlan || changePlanSelectedCount === 0" @click="executeChangePlan">
+                {{ executingChangePlan ? '执行中...' : '执行变更' }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
     <!-- Modals (在 chat-page 根元素下) -->
     <ConnectModal v-model="store.showConnectModal" />
     <EnvSelectModal v-model="showEnvSelect" @selected="onEnvSelected" />
@@ -551,6 +600,7 @@ import TopBar from '@/components/TopBar.vue'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
 import { llmConfigApi, type BuilderModelOption } from '@/api/llmConfig'
 import DesignDocCard from '@/components/DesignDocCard.vue'
+import ConfigDiff from '@/components/ConfigDiff.vue'
 import { requirementsApi } from '@/api/requirements'
 import { marked } from 'marked'
 import { convertConfig } from '@/api/conversation'
@@ -670,6 +720,14 @@ const isAppPublishing = computed(() => {
   const status = String(currentRemoteStatus.value || '').toLowerCase()
   return status.includes('publish') || status.includes('上线中') || status.includes('publishing')
 })
+// ── ChangePlan (增量更新) ──
+const executingChangePlan = ref(false)
+const changePlanDiff = computed(() => store.changePlan?.diffSummary || null)
+const changePlanSelectedCount = computed(() => {
+  if (!store.changePlan?.actions) return 0
+  return store.changePlan.actions.filter((a: any) => a.selected).length
+})
+
 const showStartDeployButton = computed(() => !deployAllDone.value && !isPlatformDeployed.value)
 const showPublishButton = computed(() =>
   isPlatformDeployed.value &&
@@ -1126,7 +1184,17 @@ resetMessagesToWelcome()
 
 const scrollToBottom = () => { nextTick(() => { if (messagesRef.value) messagesRef.value.scrollTop = messagesRef.value.scrollHeight }) }
 
-// 从AI回复中提取JSON配置（只支持 preview 完整配置）
+// 按 code 合并两个数组（保留已有 + 更新/新增）
+const mergeByCode = (existing: any[], incoming: any[]): any[] => {
+  if (!incoming || incoming.length === 0) return existing
+  if (!existing || existing.length === 0) return incoming
+  const map = new Map<string, any>()
+  for (const item of existing) map.set(item.code || item.name, item)
+  for (const item of incoming) map.set(item.code || item.name, item)
+  return Array.from(map.values())
+}
+
+// 从AI回复中提取JSON配置（支持 preview 完整配置 + 增量合并）
 const extractPreviewData = (content: string) => {
   // 提取所有 ```json 块
   const allMatches = [...content.matchAll(/```json\s*([\s\S]*?)```/g)]
@@ -1139,31 +1207,68 @@ const extractPreviewData = (content: string) => {
 
       // 完整配置模式
       if (parsed.type === 'preview' && parsed.data) {
-        if (store.preview.models.length > 0) {
-          console.warn('已有配置，忽略 LLM 重复输出的完整 JSON')
+        const isIncremental = !!existingAppId.value && store.preview.models.length > 0
+        if (store.preview.models.length > 0 && !existingAppId.value) {
+          console.warn('已有配置且无关联应用，忽略 LLM 重复输出的完整 JSON')
           continue
         }
-        store.currentApp = { name: parsed.data.appName, status: 'draft' }
-        store.preview.appName = parsed.data.appName || ''
-        store.preview.roles = parsed.data.roles || []
-        store.preview.dicts = parsed.data.dicts || []
-        store.preview.models = parsed.data.models || []
-        store.preview.workflows = parsed.data.workflows || []
-        store.preview.permissions = parsed.data.permissions || []
 
-        // 自动创建 Application（如果还没有）
-        if (!existingAppId.value && parsed.data.appName) {
-          applicationApi.autoCreate({
-            app_name: parsed.data.appName,
-            config_preview: parsed.data,
-            conversation_id: conversationId.value || undefined,
-          }).then(result => {
-            existingAppId.value = result.app_id
-            router.replace({ query: { ...route.query, app_id: String(result.app_id) } })
-            console.log(`Auto-created app: id=${result.app_id}, is_new=${result.is_new}`)
-          }).catch(e => {
-            console.error('Auto-create application failed:', e)
+        if (isIncremental) {
+          // 增量模式：保留原有应用名称，不让 AI 覆盖
+          store.currentApp = { name: store.preview.appName, status: 'draft' }
+        } else {
+          store.currentApp = { name: parsed.data.appName || store.preview.appName, status: 'draft' }
+          store.preview.appName = parsed.data.appName || store.preview.appName
+        }
+
+        if (isIncremental) {
+          // 增量模式：按 code 合并，不丢失已有数据
+          store.preview.roles = mergeByCode(store.preview.roles, parsed.data.roles)
+          store.preview.dicts = mergeByCode(store.preview.dicts, parsed.data.dicts)
+          store.preview.models = mergeByCode(store.preview.models, parsed.data.models)
+          store.preview.workflows = mergeByCode(store.preview.workflows, parsed.data.workflows)
+          store.preview.permissions = parsed.data.permissions || store.preview.permissions
+          console.log('Incremental merge complete:', {
+            roles: store.preview.roles.length, dicts: store.preview.dicts.length,
+            models: store.preview.models.length
           })
+
+          // 同步到后端（会自动重新生成 requirement_doc）
+          applicationApi.autoCreate({
+            app_name: store.preview.appName,
+            config_preview: { ...store.preview },
+            conversation_id: conversationId.value || undefined,
+            app_id: existingAppId.value || undefined,
+          }).then(() => {
+            console.log('Incremental config saved to backend')
+            // 重新加载文档内容（后端已根据最新 config 重新生成）
+            if (existingAppId.value) {
+              loadLatestDocForApp(existingAppId.value)
+            }
+          }).catch(e => {
+            console.error('Failed to save incremental config:', e)
+          })
+        } else {
+          // 新建模式：直接赋值
+          store.preview.roles = parsed.data.roles || []
+          store.preview.dicts = parsed.data.dicts || []
+          store.preview.models = parsed.data.models || []
+          store.preview.workflows = parsed.data.workflows || []
+          store.preview.permissions = parsed.data.permissions || []
+
+          if (!existingAppId.value && parsed.data.appName) {
+            applicationApi.autoCreate({
+              app_name: parsed.data.appName,
+              config_preview: parsed.data,
+              conversation_id: conversationId.value || undefined,
+            }).then(result => {
+              existingAppId.value = result.app_id
+              router.replace({ query: { ...route.query, app_id: String(result.app_id) } })
+              console.log(`Auto-created app: id=${result.app_id}, is_new=${result.is_new}`)
+            }).catch(e => {
+              console.error('Auto-create application failed:', e)
+            })
+          }
         }
         continue
       }
@@ -1927,11 +2032,12 @@ async function loadDeployStatus() {
     const resp = await applicationApi.getStepStatus(deployAppId.value)
     deploySteps.value = resp.steps || []
     // 已在平台上的应用（导入或已部署），不自动弹出部署面板
-    const alreadyOnPlatform = !!store.currentApp?.apaas_app_id
-    if (alreadyOnPlatform) {
-      deployOpen.value = false
-    } else {
-      deployOpen.value = deploySteps.value.length > 0
+    // 但如果用户已经手动打开了面板（如点了"更新部署"），保持打开
+    if (!deployOpen.value) {
+      const alreadyOnPlatform = !!store.currentApp?.apaas_app_id
+      if (!alreadyOnPlatform) {
+        deployOpen.value = deploySteps.value.length > 0
+      }
     }
     if (deploySteps.value.length && deploySteps.value.every(step => step.status === 'completed')) {
       await refreshCurrentAppRemoteMeta(deployAppId.value)
@@ -2936,7 +3042,7 @@ const sendMessage = async () => {
     const chatBody = JSON.stringify({
       conversation_id: conversationId.value,
       message: text,
-      ...(isRequirementsMode.value ? {} : (store.preview.appName ? { current_config: { ...store.preview } } : {}))
+      ...(existingAppId.value && store.preview.appName ? { current_config: { ...store.preview } } : {})
     })
     const response = await fetch(chatUrl, {
       method: 'POST',
@@ -5540,13 +5646,24 @@ watch(conversationId, (id) => {
 
 /* ── 变更计划 overlay ── */
 .change-plan-overlay {
-  position: absolute;
+  position: fixed;
   inset: 0;
-  z-index: 20;
-  background: var(--t-bg-base);
+  z-index: 2000;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.change-plan-panel {
+  background: var(--t-bg-base, #1a1a2e);
+  border-radius: 12px;
+  border: 1px solid var(--t-border-subtle, #333);
+  width: 720px;
+  max-width: 90vw;
+  max-height: 80vh;
   display: flex;
   flex-direction: column;
-  border-left: 1px solid var(--t-border-subtle);
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.4);
 }
 .change-plan-header {
   display: flex;
@@ -5646,11 +5763,23 @@ watch(conversationId, (id) => {
 .change-plan-footer {
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: space-between;
   padding: 12px 20px;
   border-top: 1px solid var(--t-border-subtle);
-  flex-wrap: wrap;
 }
+.change-plan-count { font-size: 12px; color: var(--t-text-secondary); }
+.change-plan-actions { display: flex; gap: 8px; }
+.change-plan-actions .btn-cancel {
+  padding: 6px 16px; border-radius: 6px; border: 1px solid var(--t-border-strong);
+  background: var(--t-bg-subtle); color: var(--t-text-secondary); font-size: 13px; cursor: pointer;
+}
+.change-plan-actions .btn-cancel:hover { background: var(--t-border-subtle); color: #fff; }
+.change-plan-actions .btn-execute {
+  padding: 6px 16px; border-radius: 6px; border: none;
+  background: var(--t-brand, #7c3aed); color: #fff; font-size: 13px; cursor: pointer;
+}
+.change-plan-actions .btn-execute:hover { background: #6d28d9; }
+.change-plan-actions .btn-execute:disabled { opacity: 0.4; cursor: not-allowed; }
 .cp-btn {
   padding: 6px 14px;
   border-radius: 6px;
