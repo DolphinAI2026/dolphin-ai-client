@@ -14,6 +14,8 @@ method: `POST`
 headers:
     - xdaptenantid: 租户id
     - xdaptoken: token
+    - xdaptimestamp: 毫秒级时间戳
+    
 body: `multipart/form-data`
 
 ```
