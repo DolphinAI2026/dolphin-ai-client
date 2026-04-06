@@ -180,8 +180,8 @@
                 </div>
                 <div class="builder-control-hint inside-card">{{ builderModelHint }}</div>
               <div class="input-card-top">
-                <label v-if="!isRequirementsMode" class="upload-btn" title="上传功能设计文档(.md)">
-                  <input type="file" accept=".md" @change="handleDocUpload" style="display:none" />
+                <label class="upload-btn" title="上传功能设计文档(.md) 或粘贴截图(Cmd+V)">
+                  <input type="file" accept=".md,.png,.jpg,.jpeg,.gif,.webp" @change="handleDocUpload" style="display:none" />
                   <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M15.5 8.5l-6.4 6.4a3.5 3.5 0 01-5-5l6.4-6.4a2.2 2.2 0 013.1 3.1L7.2 13a.9.9 0 01-1.3-1.3l5.5-5.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
                 </label>
                 <div v-if="attachedImage" class="attached-image-preview">
@@ -2544,6 +2544,14 @@ const handleDocUpload = async (e: Event) => {
   const file = target.files?.[0]
   if (!file) return
   target.value = '' // reset for re-upload
+
+  // 图片文件 → 作为附件附加到输入框
+  if (file.type.startsWith('image/')) {
+    attachedImage.value = file
+    if (attachedImageUrl.value) URL.revokeObjectURL(attachedImageUrl.value)
+    attachedImageUrl.value = URL.createObjectURL(file)
+    return
+  }
 
   // 已有应用 → 走增量更新流程
   if (existingAppId.value) {
