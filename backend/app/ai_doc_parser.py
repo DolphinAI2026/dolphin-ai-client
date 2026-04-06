@@ -754,7 +754,7 @@ def _extract_template_codes(text: str) -> Dict:
     返回格式与 preview JSON 兼容，可直接用于校正 AI 生成的编码。
     """
     lines = text.splitlines()
-    result: Dict = {"appName": "", "appCode": "", "roles": [], "dicts": [], "models": []}
+    result: Dict = {"appName": "", "appCode": "", "roles": [], "dicts": [], "models": [], "permissions": []}
 
     section = ""  # 当前大章节: app_info / roles / dicts / models / forms / permissions
     current_dict: Optional[Dict] = None
@@ -915,6 +915,58 @@ def _extract_template_codes(text: str) -> Dict:
                 current_model["fields"].append(field)
                 continue
 
+        # 权限表
+        if section == "permissions":
+            if "表单编码" in col0:
+                table_type = "perm_list"
+                header_cols = [c.strip() for c in cols]
+                continue
+            if table_type == "perm_list" and col0 and not set(col0) <= {"-", ":"}:
+                # | 表单编码 | 角色编码 | 可暂存 | 可新增 | 可导入 | 可查看 | 可编辑 | 可删除 | 可导出 | 数据范围 |
+                form_code = col0
+                role_code = col1
+                # 从表单编码提取表单名称（去掉 form_ 前缀找模型名）
+                form_name = form_code.replace("form_", "")
+                # 在模型中查找对应名称
+                for m in result.get("models", []):
+                    if m.get("code") == form_name:
+                        form_name = m.get("name", form_name)
+                        break
+
+                # 解析操作权限
+                ops = []
+                _yn = lambda v: v.strip() in ("是", "Yes", "TRUE", "true", "Y")
+                if len(cols) > 2 and _yn(cols[2]): ops.append("save")
+                if len(cols) > 3 and _yn(cols[3]): ops.append("add")
+                if len(cols) > 4 and _yn(cols[4]): ops.append("import")
+                if len(cols) > 5 and _yn(cols[5]): ops.append("view")
+                if len(cols) > 6 and _yn(cols[6]): ops.append("edit")
+                if len(cols) > 7 and _yn(cols[7]): ops.append("delete")
+                if len(cols) > 8 and _yn(cols[8]): ops.append("export")
+
+                # 数据范围
+                data_scope = "ALL"
+                if len(cols) > 9:
+                    scope_text = cols[9].strip()
+                    if "全" in scope_text: data_scope = "ALL"
+                    elif "本人" in scope_text or "个人" in scope_text: data_scope = "SELF"
+                    elif "部门" in scope_text: data_scope = "CURRENT_USER_DEPT"
+                    else: data_scope = scope_text
+
+                # 合并到 permissions（按表单分组）
+                op_str = "all" if len(ops) >= 6 else ",".join(ops) if ops else "view"
+                # 查找已有的表单权限
+                perm_entry = None
+                for p in result["permissions"]:
+                    if p.get("form") == form_name:
+                        perm_entry = p
+                        break
+                if not perm_entry:
+                    perm_entry = {"form": form_name, "rules": []}
+                    result["permissions"].append(perm_entry)
+                perm_entry["rules"].append({"role": role_code, "op": op_str, "data": data_scope})
+                continue
+
     _flush_dict()
     _flush_model()
     return result
@@ -956,7 +1008,7 @@ def _template_to_preview(template: Dict) -> Dict:
         "dicts": template.get("dicts", []),
         "models": [],
         "workflows": [],
-        "permissions": [],
+        "permissions": template.get("permissions", []),
     }
 
     icon_map = get_icon_map()
