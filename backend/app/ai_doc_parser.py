@@ -211,6 +211,11 @@ async def parse_doc_with_ai(
     if extracted_dicts:
         _merge_explicit_dicts(data, extracted_dicts)
 
+    # 标准模板编码校正：从 markdown 表格直接提取编码，覆盖 AI 生成的
+    template_codes = _extract_template_codes(text)
+    if template_codes.get("roles") or template_codes.get("models"):
+        _apply_template_codes(data, template_codes)
+
     # 后处理
     await _progress("正在整理结果...")
     _sanitize_codes(data)
@@ -725,6 +730,253 @@ def _merge_explicit_dicts(data: Dict, extracted_dicts: List[Dict]):
             by_name[extracted["name"]] = extracted
 
     data["dicts"] = dicts
+
+
+# ================================================================
+# 标准模板文档：完整编码提取（角色 + 字典 + 模型 + 字段）
+# ================================================================
+
+def _extract_template_codes(text: str) -> Dict:
+    """从标准模板格式的 Markdown 文档中直接提取所有编码。
+
+    支持提取：应用信息、角色、字典（含选项）、模型、字段。
+    返回格式与 preview JSON 兼容，可直接用于校正 AI 生成的编码。
+    """
+    lines = text.splitlines()
+    result: Dict = {"appName": "", "appCode": "", "roles": [], "dicts": [], "models": []}
+
+    section = ""  # 当前大章节: app_info / roles / dicts / models / forms / permissions
+    current_dict: Optional[Dict] = None
+    current_model: Optional[Dict] = None
+    table_type = ""  # 当前表格类型: dict_meta / dict_options / model_meta / field_list / role_list / app_info
+    header_cols: List[str] = []
+
+    _CODE_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
+
+    def _flush_dict():
+        nonlocal current_dict
+        if current_dict and current_dict.get("code"):
+            result["dicts"].append(current_dict)
+        current_dict = None
+
+    def _flush_model():
+        nonlocal current_model
+        if current_model and current_model.get("code"):
+            result["models"].append(current_model)
+        current_model = None
+
+    for line in lines:
+        stripped = line.strip()
+
+        # 检测大章节
+        if stripped.startswith("## "):
+            _flush_dict()
+            _flush_model()
+            table_type = ""
+            low = stripped.lower()
+            if "应用信息" in stripped:
+                section = "app_info"
+            elif "角色" in stripped:
+                section = "roles"
+            elif "数据字典" in stripped or "字典" in stripped:
+                section = "dicts"
+            elif "数据模型" in stripped or "模型" in stripped:
+                section = "models"
+            elif "表单" in stripped:
+                section = "forms"
+            elif "权限" in stripped:
+                section = "permissions"
+            else:
+                section = ""
+            continue
+
+        # 子标题（字典/模型的具体条目）
+        if stripped.startswith("### "):
+            if section == "dicts":
+                _flush_dict()
+                # 尝试从标题中提取字典名称
+                m = re.match(r'^###\s+(?:\d+(?:\.\d+)?\s+)?(.+)', stripped)
+                if m:
+                    name = m.group(1).strip()
+                    # 去掉 (code) 后缀
+                    code_m = re.match(r'(.+?)\s*\(`?([^`\)]+)`?\)', name)
+                    if code_m:
+                        current_dict = {"name": code_m.group(1).strip(), "code": code_m.group(2).strip(), "options": []}
+                    else:
+                        current_dict = {"name": name, "code": "", "options": []}
+            elif section == "models":
+                _flush_model()
+                current_model = {"name": "", "code": "", "fields": []}
+            table_type = ""
+            continue
+
+        # 表格行
+        if not stripped.startswith("|"):
+            continue
+        cols = [c.strip().strip("`") for c in stripped.strip("|").split("|")]
+        if len(cols) < 2:
+            continue
+
+        # 分隔线跳过
+        if all(set(c) <= {"-", ":", " "} for c in cols):
+            continue
+
+        # 检测表头
+        col0 = cols[0].strip()
+        col1 = cols[1].strip() if len(cols) > 1 else ""
+
+        # 应用信息表
+        if section == "app_info":
+            if col0 in ("项目", "项") and col1 in ("值",):
+                table_type = "app_info"
+                continue
+            if table_type == "app_info" or not table_type:
+                if "应用编码" in col0 or "编码" in col0:
+                    result["appCode"] = col1
+                elif "应用名称" in col0 or "名称" in col0:
+                    result["appName"] = col1
+            continue
+
+        # 角色表
+        if section == "roles":
+            if "角色编码" in col0:
+                table_type = "role_list"
+                header_cols = [c.strip() for c in cols]
+                continue
+            if table_type == "role_list" and _CODE_RE.match(col0):
+                role = {"code": col0, "name": col1}
+                if len(cols) > 2:
+                    role["description"] = cols[2].strip()
+                result["roles"].append(role)
+            continue
+
+        # 字典表
+        if section == "dicts" and current_dict is not None:
+            if "字典编码" in col0:
+                table_type = "dict_meta"
+                continue
+            if "选项编码" in col0:
+                table_type = "dict_options"
+                continue
+            if table_type == "dict_meta" and _CODE_RE.match(col0):
+                current_dict["code"] = col0
+                current_dict["name"] = col1
+                continue
+            if table_type == "dict_options" and col0 and not set(col0) <= {"-", ":"}:
+                current_dict["options"].append({"code": col0, "name": col1})
+                continue
+            continue
+
+        # 模型表
+        if section == "models" and current_model is not None:
+            if "模型编码" in col0:
+                table_type = "model_meta"
+                continue
+            if "字段编码" in col0:
+                table_type = "field_list"
+                header_cols = [c.strip() for c in cols]
+                continue
+            if table_type == "model_meta" and _CODE_RE.match(col0):
+                current_model["code"] = col0
+                current_model["name"] = col1
+                if len(cols) > 2:
+                    current_model["table_type"] = cols[2].strip()
+                continue
+            if table_type == "field_list" and _CODE_RE.match(col0):
+                field: Dict = {"code": col0, "name": col1}
+                # 解析更多列（数据库字段类型、长度、必填、字典编码、关联模型编码、关联显示字段编码、说明）
+                if len(cols) > 2:
+                    db_type = cols[2].strip()
+                    if db_type:
+                        field["_db_type"] = db_type
+                if len(cols) > 4:
+                    req = cols[4].strip()
+                    field["required"] = req in ("是", "Yes", "true", "TRUE")
+                if len(cols) > 5:
+                    dict_code = cols[5].strip()
+                    if dict_code and _CODE_RE.match(dict_code):
+                        field["dict"] = dict_code
+                if len(cols) > 6:
+                    ref_model = cols[6].strip()
+                    if ref_model and _CODE_RE.match(ref_model):
+                        ref_field = cols[7].strip() if len(cols) > 7 and cols[7].strip() else ""
+                        field["ref"] = {"model": ref_model, "field": ref_field}
+                current_model["fields"].append(field)
+                continue
+
+    _flush_dict()
+    _flush_model()
+    return result
+
+
+def _apply_template_codes(data: Dict, template: Dict):
+    """用从 markdown 模板直接提取的编码校正 AI 生成的配置。
+
+    原则：如果模板中有明确定义的编码，以模板为准；
+    AI 额外推断的内容保留（如字段类型、图标等模板中没有的属性）。
+    """
+    # 应用信息
+    if template.get("appCode"):
+        data["appCode"] = template["appCode"]
+    if template.get("appName"):
+        data["appName"] = template["appName"]
+
+    # 角色：按名称匹配，校正编码
+    if template.get("roles"):
+        tpl_roles_by_name = {r["name"]: r for r in template["roles"]}
+        for role in data.get("roles", []):
+            tpl = tpl_roles_by_name.get(role.get("name"))
+            if tpl:
+                role["code"] = tpl["code"]
+                if tpl.get("description"):
+                    role["description"] = tpl["description"]
+        # 补全模板中有但 AI 遗漏的角色
+        ai_role_names = {r.get("name") for r in data.get("roles", [])}
+        for tpl_role in template["roles"]:
+            if tpl_role["name"] not in ai_role_names:
+                data.setdefault("roles", []).append(tpl_role)
+
+    # 字典：按名称匹配，校正编码和选项
+    if template.get("dicts"):
+        tpl_dicts_by_name = {d["name"]: d for d in template["dicts"]}
+        tpl_dicts_by_code = {d["code"]: d for d in template["dicts"] if d.get("code")}
+        for d in data.get("dicts", []):
+            tpl = tpl_dicts_by_name.get(d.get("name")) or tpl_dicts_by_code.get(d.get("code"))
+            if tpl:
+                d["code"] = tpl["code"]
+                d["name"] = tpl["name"]
+                if tpl.get("options"):
+                    d["options"] = tpl["options"]
+        # 补全
+        ai_dict_names = {d.get("name") for d in data.get("dicts", [])}
+        for tpl_dict in template["dicts"]:
+            if tpl_dict["name"] not in ai_dict_names:
+                data.setdefault("dicts", []).append(tpl_dict)
+
+    # 模型：按名称匹配，校正模型编码和字段编码
+    if template.get("models"):
+        tpl_models_by_name = {m["name"]: m for m in template["models"]}
+        for model in data.get("models", []):
+            tpl = tpl_models_by_name.get(model.get("name"))
+            if not tpl:
+                continue
+            model["code"] = tpl["code"]
+            # 字段编码校正：按名称匹配
+            if tpl.get("fields"):
+                tpl_fields_by_name = {f["name"]: f for f in tpl["fields"]}
+                for field in model.get("fields", []):
+                    tpl_f = tpl_fields_by_name.get(field.get("name"))
+                    if tpl_f:
+                        field["code"] = tpl_f["code"]
+                        if tpl_f.get("required") is not None:
+                            field["required"] = tpl_f["required"]
+                        if tpl_f.get("dict"):
+                            field["dict"] = tpl_f["dict"]
+                        if tpl_f.get("ref"):
+                            field["ref"] = tpl_f["ref"]
+
+    logger.info(f"模板编码校正完成: roles={len(template.get('roles', []))}, "
+                f"dicts={len(template.get('dicts', []))}, models={len(template.get('models', []))}")
 
 
 # ================================================================

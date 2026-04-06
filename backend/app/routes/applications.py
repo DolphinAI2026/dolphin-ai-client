@@ -1150,25 +1150,49 @@ async def upload_doc_with_conversation(
                     # V1 没有 parsed_config，回退全量解析
                     is_incremental = False
 
-            # ── V1 首次上传：全量解析 ──
+            # ── V1 首次上传：使用 parse_doc_with_ai（精准提取文档中的编码） ──
             if not is_incremental:
-                async for event in assemble_config_streaming(
-                    user_prompt=f"请根据以下设计文档生成完整的应用配置。文档名：{fname}",
-                    context=text,
-                    llm_cfg=_tenant_llm_cfg,
-                ):
-                    phase = event.get("phase", "")
-                    message = event.get("message", "")
+                from app.ai_doc_parser import parse_doc_with_ai as _parse_ai
 
-                    progress_data: dict = {"message": f"[{phase}] {message}"}
-                    if event.get("batch"):
-                        progress_data["batch"] = event["batch"]
-                    if event.get("data"):
-                        progress_data["data"] = event["data"]
-                    yield {"event": "progress", "data": json.dumps(progress_data, ensure_ascii=False)}
+                yield {"event": "progress", "data": json.dumps({
+                    "message": "[skeleton] 正在解析文档，提取配置..."
+                }, ensure_ascii=False)}
 
-                    if phase == "complete" and event.get("data"):
-                        data = event["data"]
+                async def _on_progress(msg: str):
+                    pass  # parse_doc_with_ai 的进度回调，SSE 已在外层处理
+
+                data = await _parse_ai(text, filename=fname, llm_cfg=_tenant_llm_cfg)
+
+                if data:
+                    roles_count = len(data.get("roles", []))
+                    dicts_count = len(data.get("dicts", []))
+                    models_count = len(data.get("models", []))
+
+                    yield {"event": "progress", "data": json.dumps({
+                        "message": f"[skeleton] 骨架完成：{models_count} 个模型、{dicts_count} 个字典、{roles_count} 个角色",
+                        "data": data,
+                    }, ensure_ascii=False)}
+
+                    # 发送字典和模型的 batch 事件，让前端实时更新预览面板
+                    if data.get("dicts"):
+                        yield {"event": "progress", "data": json.dumps({
+                            "message": f"[dicts] 字典生成完成：{dicts_count} 个",
+                            "batch": data["dicts"],
+                        }, ensure_ascii=False)}
+                    if data.get("models"):
+                        yield {"event": "progress", "data": json.dumps({
+                            "message": f"[models] 模型生成完成：{models_count} 个",
+                            "batch": data["models"],
+                        }, ensure_ascii=False)}
+                    if data.get("permissions"):
+                        yield {"event": "progress", "data": json.dumps({
+                            "message": f"[permissions] 权限生成完成",
+                            "batch": data["permissions"],
+                        }, ensure_ascii=False)}
+                    yield {"event": "progress", "data": json.dumps({
+                        "message": f"[complete] 配置组装完成！{models_count} 个模型、{dicts_count} 个字典、{roles_count} 个角色",
+                        "data": data,
+                    }, ensure_ascii=False)}
 
         except Exception as e:
             err_msg = str(e) or repr(e) or type(e).__name__
