@@ -176,12 +176,7 @@
                       </div>
                     </el-option>
                   </el-select>
-                  <button
-                    class="builder-generate-btn compact"
-                    :class="{ 'btn-ready': parseReady && hasPreviewContent }"
-                    :disabled="assembling || generating || (parseReady && hasPreviewContent)"
-                    @click="generatePreviewFromConversation"
-                  >{{ assembling ? '解析中...' : (parseReady && hasPreviewContent) ? '✓ 配置已就绪' : '一键生成' }}</button>
+                  <!-- 一键生成按钮已移除：文档上传后自动解析生成配置 -->
                 </div>
                 <div class="builder-control-hint inside-card">{{ builderModelHint }}</div>
               <div class="input-card-top">
@@ -189,16 +184,21 @@
                   <input type="file" accept=".md" @change="handleDocUpload" style="display:none" />
                   <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M15.5 8.5l-6.4 6.4a3.5 3.5 0 01-5-5l6.4-6.4a2.2 2.2 0 013.1 3.1L7.2 13a.9.9 0 01-1.3-1.3l5.5-5.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
                 </label>
+                <div v-if="attachedImage" class="attached-image-preview">
+                  <img :src="attachedImageUrl" alt="截图预览" />
+                  <button class="attached-image-remove" @click="removeAttachedImage" title="移除图片">&times;</button>
+                </div>
                 <textarea
                   v-model="inputText"
                   @keydown.enter.exact.prevent="sendMessage"
                   @keydown.enter.shift.exact="inputText += '\n'"
+                  @paste="handleImagePaste"
                   :placeholder="builderQuickPlaceholder"
                   rows="1"
                   ref="inputRef"
                   @input="autoResizeTextarea"
                 ></textarea>
-                <button class="send-btn" :class="{ disabled: !inputText.trim() }" @click="sendMessage">
+                <button class="send-btn" :class="{ disabled: !inputText.trim() && !attachedImage }" @click="sendMessage">
                   <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M14 2L7 9M14 2l-4.5 12-2-5.5L2 6.5 14 2z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
                 </button>
               </div>
@@ -619,6 +619,8 @@ const builderPreviewTabs = [
   { key: 'docs', label: '文档' },
 ] as const
 const rightQuickInput = ref('')
+const attachedImage = ref<File | null>(null)
+const attachedImageUrl = ref('')
 const parsedAppCode = ref('')
 const loadedAppCode = ref('')
 const currentRemoteStatus = ref('')
@@ -3014,11 +3016,43 @@ const createConversation = async () => {
   }
 }
 
+// ── 截图粘贴 ──
+const handleImagePaste = (e: ClipboardEvent) => {
+  const items = e.clipboardData?.items
+  if (!items) return
+  for (const item of Array.from(items)) {
+    if (item.kind === 'file' && item.type.startsWith('image/')) {
+      e.preventDefault()
+      const file = item.getAsFile()
+      if (file) {
+        const ext = item.type.split('/')[1] || 'png'
+        attachedImage.value = new File([file], `screenshot-${Date.now()}.${ext}`, { type: item.type })
+        if (attachedImageUrl.value) URL.revokeObjectURL(attachedImageUrl.value)
+        attachedImageUrl.value = URL.createObjectURL(attachedImage.value)
+      }
+      break
+    }
+  }
+}
+
+const removeAttachedImage = () => {
+  attachedImage.value = null
+  if (attachedImageUrl.value) {
+    URL.revokeObjectURL(attachedImageUrl.value)
+    attachedImageUrl.value = ''
+  }
+}
+
 const sendMessage = async () => {
-  if (!inputText.value.trim()) return
+  const hasImage = !!attachedImage.value
+  if (!inputText.value.trim() && !hasImage) return
   const text = inputText.value.trim()
+  const imageFile = attachedImage.value
   inputText.value = ''
-  messages.push({ id: Date.now(), role: 'user', content: text, created_at: '' })
+  removeAttachedImage()
+
+  const displayContent = hasImage ? (text || '已上传截图') + (imageFile ? ` 📷${imageFile.name}` : '') : text
+  messages.push({ id: Date.now(), role: 'user', content: displayContent, created_at: '' })
   scrollToBottom()
   isTyping.value = true
 
@@ -3037,16 +3071,36 @@ const sendMessage = async () => {
   // 调用后端API
   try {
     const token = localStorage.getItem('token')
-    // 统一使用 /chat/send，后端根据 conversation.agent_type 选择 system prompt
-    const chatUrl = `${API_PREFIX}/chat/send`
-    const chatBody = JSON.stringify({
-      conversation_id: conversationId.value,
-      message: text,
-      ...(existingAppId.value && store.preview.appName ? { current_config: { ...store.preview } } : {})
-    })
+
+    let chatUrl: string
+    let chatBody: BodyInit
+    let headers: Record<string, string> = { 'Authorization': `Bearer ${token}` }
+
+    if (imageFile) {
+      // 有图片：用 FormData 走 /chat/send-with-file
+      chatUrl = `${API_PREFIX}/chat/send-with-file`
+      const fd = new FormData()
+      fd.append('conversation_id', String(conversationId.value))
+      fd.append('message', text)
+      fd.append('file', imageFile)
+      if (existingAppId.value && store.preview.appName) {
+        fd.append('current_config', JSON.stringify({ ...store.preview }))
+      }
+      chatBody = fd
+    } else {
+      // 纯文本：JSON 走 /chat/send
+      chatUrl = `${API_PREFIX}/chat/send`
+      chatBody = JSON.stringify({
+        conversation_id: conversationId.value,
+        message: text,
+        ...(existingAppId.value && store.preview.appName ? { current_config: { ...store.preview } } : {})
+      })
+      headers['Content-Type'] = 'application/json'
+    }
+
     const response = await fetch(chatUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      headers,
       body: chatBody
     })
 
@@ -3532,8 +3586,9 @@ const downloadCurrentDoc = () => {
 }
 
 const formatContent = (t: string) => {
-  // 过滤 <think> 思考内容
+  // 过滤 <think> 思考内容（包括流式传输中未闭合的 <think> 标签）
   let text = t.replace(/<think>[\s\S]*?<\/think>/g, '')
+  text = text.replace(/<think>[\s\S]*$/g, '')  // 未闭合的 <think> 也隐藏
   // 隐藏JSON代码块，只显示文字部分
   text = text.replace(/```json[\s\S]*?```/g, '')
   // 清理多余空行
@@ -4546,6 +4601,21 @@ watch(conversationId, (id) => {
   transition: transform 0.15s, box-shadow 0.15s, opacity 0.15s;
 }
 .send-btn.disabled { opacity: 0.2; cursor: not-allowed; }
+/* 截图粘贴预览 */
+.attached-image-preview {
+  position: relative; display: inline-block; margin-bottom: 6px;
+}
+.attached-image-preview img {
+  max-height: 80px; max-width: 200px; border-radius: 8px;
+  border: 1px solid var(--t-border-subtle); object-fit: cover;
+}
+.attached-image-remove {
+  position: absolute; top: -6px; right: -6px;
+  width: 18px; height: 18px; border-radius: 50%;
+  background: var(--t-danger, #ef4444); color: #fff;
+  border: none; font-size: 12px; line-height: 1;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+}
 .send-btn:hover:not(.disabled) { opacity: 0.92; transform: translateY(-1px); box-shadow: 0 14px 24px rgba(92, 115, 255, 0.28); }
 .input-card-bottom {
   display: flex;

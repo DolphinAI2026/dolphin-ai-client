@@ -1,6 +1,9 @@
 import json
-from typing import Annotated
-from fastapi import APIRouter, Depends, HTTPException
+import base64
+import os
+import logging
+from typing import Annotated, Optional
+from fastapi import APIRouter, Depends, HTTPException, File, Form, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
@@ -481,6 +484,130 @@ async def send_message(
                 "event": "error",
                 "data": json.dumps({"type": "error", "data": str(e)})
             }
+
+    return EventSourceResponse(event_generator())
+
+
+@router.post("/send-with-file")
+async def send_message_with_file(
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    conversation_id: int = Form(...),
+    message: str = Form(default=""),
+    current_config: Optional[str] = Form(default=None),
+    file: Optional[UploadFile] = File(default=None),
+):
+    """发送含文件（图片/文档）的消息，图片走 Vision 多模态。"""
+    _IMAGE_EXTS = {'.png', '.jpg', '.jpeg', '.gif', '.webp'}
+    _MIME_MAP = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+                 '.gif': 'image/gif', '.webp': 'image/webp'}
+    logger = logging.getLogger(__name__)
+
+    result = await db.execute(
+        select(Conversation).where(
+            Conversation.id == conversation_id,
+            Conversation.user_id == ctx.user.id,
+            Conversation.tenant_id == ctx.tenant_id
+        )
+    )
+    conversation = result.scalar_one_or_none()
+    if not conversation:
+        raise HTTPException(status_code=404, detail="对话不存在")
+
+    # 解析文件
+    image_data_url = ""
+    file_name = ""
+    if file and file.filename:
+        file_name = file.filename
+        ext = os.path.splitext(file_name)[1].lower()
+        if ext in _IMAGE_EXTS:
+            raw = await file.read()
+            mime = _MIME_MAP.get(ext, 'image/png')
+            b64 = base64.b64encode(raw).decode()
+            image_data_url = f"data:{mime};base64,{b64}"
+
+    if not message.strip() and not image_data_url:
+        raise HTTPException(status_code=400, detail="消息不能为空")
+
+    # 保存用户消息
+    db_content = message.strip() or f"已上传图片：{file_name}"
+    user_message = Message(conversation_id=conversation.id, role="user", content=db_content)
+    db.add(user_message)
+    await db.commit()
+
+    # 更新标题
+    if conversation.title in ("新对话", "需求分析", "智能开发") or conversation.title.startswith("新对话"):
+        short_title = (message.strip() or file_name).replace("\n", " ")[:30]
+        if short_title:
+            conversation.title = short_title
+            await db.commit()
+
+    # 获取历史消息
+    result = await db.execute(
+        select(Message).where(Message.conversation_id == conversation.id).order_by(Message.created_at)
+    )
+    messages_list = result.scalars().all()
+
+    # 构建 system prompt
+    system_prompt = SYSTEM_PROMPTS.get(conversation.agent_type, BUILDER_SYSTEM_PROMPT)
+    if current_config:
+        try:
+            config_dict = json.loads(current_config)
+            if conversation.agent_type in ("builder", "requirements"):
+                system_prompt = _inject_current_config_context(system_prompt, config_dict)
+        except Exception:
+            pass
+
+    llm_cfg = await _get_conversation_llm_config(db, conversation)
+    llm_messages = [{"role": "system", "content": system_prompt}]
+
+    # 历史消息（压缩）
+    history_msgs = [{"role": msg.role, "content": msg.content} for msg in messages_list]
+    compactor = ContextCompactor(llm_cfg)
+    compacted, new_summary = await compactor.compact_with_summary(
+        history_msgs, mode="chat",
+        existing_summary=getattr(conversation, 'context_summary', None),
+    )
+    if new_summary and new_summary != getattr(conversation, 'context_summary', None):
+        try:
+            conversation.context_summary = new_summary
+            await db.commit()
+        except Exception:
+            pass
+
+    # 替换最后一条消息为多模态内容
+    if image_data_url and compacted:
+        last_content: list = []
+        if message.strip():
+            last_content.append({"type": "text", "text": message.strip()})
+        last_content.append({"type": "image_url", "image_url": {"url": image_data_url}})
+        compacted[-1]["content"] = last_content
+
+    llm_messages.extend(compacted)
+
+    async def event_generator():
+        assistant_content = ""
+        thinking_sent = False
+        try:
+            async for chunk in _stream_with_tenant_llm(llm_cfg, llm_messages):
+                chunk_data = json.loads(chunk)
+                if "choices" in chunk_data and len(chunk_data["choices"]) > 0:
+                    delta = chunk_data["choices"][0].get("delta", {})
+                    content = delta.get("content") or ""
+                    has_reasoning = bool(delta.get("reasoning_details") or delta.get("reasoning_content"))
+                    if has_reasoning and not thinking_sent:
+                        thinking_sent = True
+                        yield {"event": "thinking", "data": json.dumps({"type": "thinking", "data": "思考中..."})}
+                    if content:
+                        assistant_content += content
+                        yield {"event": "message", "data": json.dumps({"type": "message", "data": content})}
+
+            assistant_message = Message(conversation_id=conversation.id, role="assistant", content=assistant_content)
+            db.add(assistant_message)
+            await db.commit()
+            yield {"event": "done", "data": json.dumps({"type": "done", "data": "completed"})}
+        except Exception as e:
+            yield {"event": "error", "data": json.dumps({"type": "error", "data": str(e)})}
 
     return EventSourceResponse(event_generator())
 
