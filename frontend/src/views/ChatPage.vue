@@ -2525,6 +2525,36 @@ const uploadDocFile = async (file: File) => {
         parseReady.value = true
         pmsg.content = buildProgressContent() + '\n\n配置已就绪，请点击下方「开始生成」。'
       }
+    } else if (store.preview.models.length > 0 || store.preview.dicts.length > 0) {
+      // done 事件未收到（大 payload SSE 丢失），但 progress 已逐步推送了数据到 store
+      console.warn('done 事件丢失，使用 store 中已累积的数据兜底')
+      if (!store.currentApp) {
+        store.currentApp = { name: store.preview.appName || '未命名应用', status: 'draft' }
+      }
+      parseReady.value = true
+      lastParsedFilename.value = file.name
+      latestDocContent.value = fileText
+
+      // 自动创建 Application
+      if (!existingAppId.value && store.preview.appName) {
+        try {
+          const result = await applicationApi.autoCreate({
+            app_name: store.preview.appName,
+            config_preview: { ...store.preview },
+          })
+          existingAppId.value = result.app_id
+          loadedAppCode.value = result.app_code || ''
+          router.replace({ query: { ...route.query, app_id: String(result.app_id) } })
+        } catch (e) {
+          console.warn('兜底模式创建应用失败:', e)
+        }
+      }
+
+      if (pmsg) {
+        phases.complete.status = 'done'
+        phases.complete.detail = `${store.preview.models.length} 模型, ${store.preview.dicts.length} 字典, ${store.preview.roles.length} 角色`
+        pmsg.content = buildProgressContent() + '\n\n配置已就绪（流式累积模式）。'
+      }
     } else if (pmsg) {
       pmsg.content += '\n\n⚠️ 解析完成但未获取到配置数据'
     }
