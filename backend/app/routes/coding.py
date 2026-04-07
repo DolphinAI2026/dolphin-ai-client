@@ -101,16 +101,23 @@ def _ensure_vibe_workspace_file(ws_path: Path) -> Path:
 
 
 def _ensure_cursor_rules(ws_path: Path):
-    """确保工作区包含 .cursor/rules 下的开发规范文件。"""
+    """确保工作区包含 .cursor/rules 下的开发规范文件（hash 缓存避免重复 IO）。"""
     rules_dir = ws_path / ".cursor" / "rules"
     rules_dir.mkdir(parents=True, exist_ok=True)
     template_dir = Path(__file__).parent.parent.parent / "templates" / "cursor-rules"
     if template_dir.exists():
         import shutil
+        import hashlib
         for rule_file in template_dir.glob("*.mdc"):
             target = rules_dir / rule_file.name
-            if not target.exists() or target.stat().st_size < rule_file.stat().st_size:
+            if not target.exists():
                 shutil.copy2(rule_file, target)
+            elif target.stat().st_mtime < rule_file.stat().st_mtime:
+                # 仅当源文件更新时才比较内容 hash
+                src_hash = hashlib.md5(rule_file.read_bytes()).hexdigest()
+                tgt_hash = hashlib.md5(target.read_bytes()).hexdigest()
+                if src_hash != tgt_hash:
+                    shutil.copy2(rule_file, target)
 
     canonical_rule = rules_dir / "apaas-form-component-dev.mdc"
     duplicate_rule = rules_dir / "form-component-dev-guide.mdc"
@@ -1382,6 +1389,91 @@ async def ide_available_models(
     return {"models": models}
 
 
+@router.get("/workspace/{ws_id}/ide/symbols")
+async def ide_symbol_search(
+    ws_id: str,
+    q: str = Query(default="", description="Symbol name to search for"),
+    limit: int = Query(default=20, ge=1, le=100),
+    x_vibe_ide_token: Annotated[Optional[str], Header(alias="X-Vibe-IDE-Token")] = None,
+    token: Optional[str] = Query(default=None),
+):
+    """搜索工作区代码符号（函数、类、组件定义）。"""
+    ide_token = x_vibe_ide_token or token
+    if not ide_token:
+        raise HTTPException(status_code=401, detail="缺少 IDE 访问令牌")
+    _verify_ide_access_token(ide_token, ws_id)
+
+    if not q.strip():
+        return {"symbols": []}
+
+    from app.coding.indexer import SymbolIndexer
+
+    try:
+        ws_path = workspace_mgr.get_workspace_path(ws_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Workspace {ws_id} not found")
+
+    indexer = SymbolIndexer.get_or_create(ws_id, ws_path)
+    matches = indexer.query(q.strip(), limit=limit)
+    return {"symbols": [s.to_dict() for s in matches]}
+
+
+@router.get("/skills")
+async def list_skills(
+    keyword: str = Query(default=""),
+    skill_type: Optional[str] = Query(default=None),
+):
+    """列出可用技能（Skills 2.0）。"""
+    from app.coding.skills_v2 import SkillRegistry, SkillType
+
+    registry = SkillRegistry.get_instance()
+    st = SkillType(skill_type) if skill_type else None
+    results = registry.query(keyword=keyword, skill_type=st)
+    return {"skills": [s.model_dump() for s in results]}
+
+
+@router.post("/skills/{skill_name}/execute")
+async def execute_skill(
+    skill_name: str,
+    request: Request,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)] = None,
+):
+    """执行一个 Skill 的 action。"""
+    from app.coding.skills_v2 import SkillRegistry
+
+    registry = SkillRegistry.get_instance()
+    skill = registry.get(skill_name)
+    if not skill:
+        raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
+
+    if not skill.actions:
+        raise HTTPException(status_code=400, detail=f"Skill '{skill_name}' has no executable actions")
+
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+
+    action_name = payload.get("action", skill.actions[0].name)
+    action = next((a for a in skill.actions if a.name == action_name), None)
+    if not action:
+        raise HTTPException(status_code=400, detail=f"Action '{action_name}' not found in skill '{skill_name}'")
+
+    # Dynamic import and call
+    try:
+        module_path, func_name = action.entry.rsplit(".", 1)
+        import importlib
+        module = importlib.import_module(module_path)
+        func = getattr(module, func_name)
+
+        args = payload.get("args", {})
+        result = await func(**args) if args else await func()
+        return {"status": "ok", "result": result}
+    except Exception as e:
+        logger.error(f"Skill execution failed: {skill_name}.{action_name}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/workspace/{ws_id}/ide/pipeline")
 async def ide_coding_pipeline(
     ws_id: str,
@@ -1516,6 +1608,119 @@ async def ide_chat_completions_proxy(
     if "application/json" in content_type.lower():
         return JSONResponse(status_code=resp.status_code, content=resp.json())
     return JSONResponse(status_code=resp.status_code, content={"detail": resp.text})
+
+
+@router.post("/workspace/{ws_id}/ide/completions")
+async def ide_inline_completions(
+    ws_id: str,
+    request: Request,
+    x_vibe_ide_token: Annotated[Optional[str], Header(alias="X-Vibe-IDE-Token")] = None,
+    token: Optional[str] = Query(default=None),
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+):
+    """行内代码补全端点：接收 prefix/suffix，返回补全建议。"""
+    ide_token = x_vibe_ide_token or token
+    if not ide_token:
+        raise HTTPException(status_code=401, detail="缺少 IDE 访问令牌")
+    token_payload = _verify_ide_access_token(ide_token, ws_id)
+
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="无效的请求体")
+
+    prefix = payload.get("prefix", "")
+    suffix = payload.get("suffix", "")
+    language = payload.get("language", "")
+    file_path = payload.get("file_path", "")
+    max_tokens = min(payload.get("max_tokens", 256), 512)
+    apaas_context = payload.get("apaas_context", "")
+
+    if not prefix.strip():
+        return JSONResponse(content={"completions": []})
+
+    # Resolve model — prefer fast models for completion
+    request_model = payload.get("model", "")
+    tenant_config = None
+    if db is not None:
+        tenant_config = await _resolve_tenant_coding_model_config(
+            db, token_payload.get("tid"), request_model,
+        )
+
+    if tenant_config:
+        upstream_url = _build_chat_completions_url(tenant_config.base_url)
+        api_key = decrypt_password(tenant_config.api_key_enc)
+        model_name = tenant_config.model
+    else:
+        # Prefer DeepSeek/Qwen for low-latency completions
+        fast_model = request_model
+        if not fast_model:
+            for candidate in ["deepseek", "qwen"]:
+                if candidate in _CODING_MODEL_ROUTES:
+                    route = _CODING_MODEL_ROUTES[candidate]
+                    fast_model = route.get("model", "")
+                    break
+        upstream_url, api_key = _resolve_coding_model(fast_model or "")
+        model_name = fast_model or _CODING_MODEL_ROUTES.get("default", {}).get("model", "MiniMax-M2.7")
+
+    # Build FIM-style or standard completion prompt
+    system_msg = f"You are a code completion assistant for {language} files on aPaaS low-code platform. " \
+                 f"Complete the code at the cursor position. Output ONLY the completion text, nothing else. " \
+                 f"Do not repeat existing code. Do not add explanations or markdown."
+    if apaas_context:
+        system_msg += f"\n\n{apaas_context}"
+
+    user_msg = f"File: {file_path}\nLanguage: {language}\n\n" \
+               f"Code before cursor:\n```\n{prefix[-3000:]}\n```\n\n"
+    if suffix.strip():
+        user_msg += f"Code after cursor:\n```\n{suffix[:1000]}\n```\n\n"
+    user_msg += "Complete the code at the cursor position:"
+
+    llm_payload = {
+        "model": model_name,
+        "messages": [
+            {"role": "system", "content": system_msg},
+            {"role": "user", "content": user_msg},
+        ],
+        "max_tokens": max_tokens,
+        "temperature": 0.2,
+        "stream": False,
+    }
+    # Clean incompatible params
+    if "tool_choice" in llm_payload:
+        llm_payload.pop("tool_choice", None)
+
+    upstream_headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(upstream_url, headers=upstream_headers, json=llm_payload)
+    except (httpx.HTTPError, Exception) as exc:
+        logger.warning(f"Inline completion LLM error: {exc}")
+        return JSONResponse(content={"completions": []})
+
+    if resp.status_code != 200:
+        return JSONResponse(content={"completions": []})
+
+    try:
+        data = resp.json()
+        content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        # Strip markdown code fences if model wrapped it
+        content = content.strip()
+        if content.startswith("```"):
+            lines = content.split("\n")
+            lines = lines[1:]  # remove opening fence
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            content = "\n".join(lines)
+
+        completions = [{"text": content}] if content.strip() else []
+        return JSONResponse(content={"completions": completions})
+    except Exception:
+        return JSONResponse(content={"completions": []})
 
 
 @router.post("/workspace/{ws_id}/ide/image-context")
