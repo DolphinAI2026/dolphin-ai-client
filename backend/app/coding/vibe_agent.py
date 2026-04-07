@@ -596,6 +596,7 @@ class VibeCodingAgent:
 - **Be decisive**: You are an expert. After reading the scaffold structure and 1-2 example files, you have enough context to write the component.
 - **ONLY use demo scaffold files as examples**: Do NOT read other generated components in the workspace (e.g. `form-component-upload`, `form-component-xxx`) as implementation references — they were generated for different requirements and will bias your output. Use ONLY `form-component-demo-*.vue` files as structural reference.
 - **Maximum 8 turns total**: If you haven't written code by turn 4, something is wrong. Write the code NOW.
+- **NEVER use `<el-dialog>` inside form widgets** — it breaks FormEngine component resolution and crashes the platform with `Cannot read properties of undefined (reading 'edit')`. Use `<el-popover :append-to-body="true">` instead for any preview/popup interaction.
 
 ## Third-party Dependencies
 - Element UI is globally registered by the platform — do NOT import it.
@@ -607,8 +608,33 @@ class VibeCodingAgent:
 - aPaaS form component with 7 render scenes (edit/read/ide/list/print/search/search-ide)
 - Scaffold files already exist. Do NOT modify vue.config.js or babel.config.js. Avoid unrelated index.js changes, but you may update `src/form-component/form-editor/index.js` and `src/form-component-config/form-editor/index.js` when adding `setting.vue` / `editor.config.js`.
 - Vue 2.7 + Element UI (globally registered, do NOT import Element UI)
-- Use FormWidgetMixin (provides formValue, widget, updatePropValue, etc.)
-- 所有 mixin 都使用默认导入，不要写命名导入；例如 `import FormWidgetMixin from '@/mixin/form-widget.mixin'`
+- **console.log is stripped in production — use `console.info` for ALL debug output in every mode.**
+- **formEngine is NOT available in `beforeCreate()` — only access `this.formEngine` from `created()` or later.**
+
+## Mixin Per Mode (always use default import, never named import)
+- edit / ide / read → `import FormWidgetMixin from '@/mixin/form-widget.mixin'`
+- list            → `import ListWidgetMixin from '@/mixin/list-widget.mixin'`
+- print           → `import PrintWidgetMixin from '@/mixin/print-widget.mixin'`
+- search          → `import SearchWidgetMixin from '@/mixin/search-widget.mixin'`
+- search-ide      → `import SearchIdeWidgetMixin from '@/mixin/search-ide-widget.mixin'`
+- editor (setting.vue) → `import EditorFormConfigMixin from '@/mixin/form-config.mixin'`
+
+## Mode-specific Rules
+- **List mode**: config = `this.componentConfig` (NOT `this.widget`); `this.formValue` is the concrete value prop directly (no propKey indexing); NO `<x-proxy-form-item>` wrapper.
+- **Print mode**: NO `<el-xxx>` tags — Element UI does not render in print context; NO `<x-proxy-form-item>`; pure HTML/CSS only; use structure `div.print-item > div.print-item-title + div.print-item-value`; when `widget.isInTable` is true, omit the title.
+- **Search mode**: NO `<x-proxy-form-item>`; submit via `this.$emit('change', [value])` — value MUST be wrapped in an array; do NOT use formValue setter.
+- **Search-IDE mode**: NO `<x-proxy-form-item>`; all inputs `disabled`; only implement when Search mode is also implemented.
+- **IDE mode**: all inputs must be `disabled` — IDE renders in the form designer canvas where user interaction is not allowed.
+- **Edit mode**: check `this.widget.readOnly`; guard formValue undefined with fallback; never use both `v-model` and `@input` on the same element (causes infinite loop).
+
+## BOF Type & formValue
+- BOF_NUMBER caveat: `formValue` may arrive as a string from the platform. Always guard: `const n = Number(this.formValue); if (isNaN(n)) { /* fallback */ }`.
+
+## widget.config.js Requirements
+- `widget.config.js` MUST include a `client.mobile` block and `methods: {}` and `formatValueSchema: {}` at the top level — platform crashes silently without them.
+- `desc.text`、`desc.description`、`desc.icon`、`widget.display.label` 必须根据当前组件的实际功能填写，严禁从参考文件复制后遗留其他组件的名称或描述。
+
+## setting.vue Rules
 - setting.vue uses componentConfig prop + formEngine prop
 - setting.vue 必须通过 `componentConfig` prop 读取平台配置，但模板中统一绑定 `customComponentConfig.xxx`（computed 别名），不要直接写 `componentConfig.customComponentConfig.xxx`
 - 方法名不是关键，关键是配置写入路径必须正确：严禁在 setting.vue 中使用 `localConfig`、`formData`、`config` 这类镜像配置
@@ -617,7 +643,6 @@ class VibeCodingAgent:
 - `setting.vue` must be written to `src/form-component/form-editor/{name}-setting.vue`
 - `editorConfigList` must be aggregated by `src/form-component-config/form-editor/index.js` from `./{name}.editor.config.js`
 - The edit.vue is the primary file. read.vue shows readonly view. ide.vue shows placeholder. Others can be minimal.
-- **widget.config.js metadata MUST match the actual component**: `desc.text`、`desc.description`、`desc.icon`、`widget.display.label` 必须根据当前组件的实际功能填写，严禁从参考文件复制后遗留其他组件的名称或描述（例如生成进度条组件时不能出现"富文本"、"上传"等无关字样）。
 """
         if project_type == "layout":
             workflow = """
