@@ -1,0 +1,153 @@
+---
+description: widget.config.json 生成规则
+globs:
+  - "src/form-component-config/form-widget/*.widget.config.json"
+alwaysApply: true
+---
+
+# widget.config.json 生成规则
+
+## 文件格式
+
+- 必须生成 **JSON 文件**，路径为 `src/form-component-config/form-widget/{name}.widget.config.json`
+- 不要生成 `.widget.config.js`
+- `index.js` 中导入必须带 `.json` 后缀：`import XxxWidgetConfig from './{name}.widget.config.json'`
+
+## 顶层必填字段
+
+以下字段缺一不可，否则平台崩溃：
+
+```
+version / code / desc / instance / component / widget / client / componentModelField / methods / formatValueSchema
+```
+
+## code
+
+- 必须以 `FORM_CUSTOM_` 开头，后接语义化大写英文，例如 `FORM_CUSTOM_INTL_PHONE`
+- 必须与 `src/apaas.json` 中的 `code` 字段保持一致
+
+## desc
+
+```json
+{
+  "iconType": "DEFAULT",
+  "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\">...</svg>",
+  "text": "国际手机号",
+  "description": "支持输入国际区号的手机号组件"
+}
+```
+
+- `iconType`：固定值 `"DEFAULT"`，不可修改
+- `icon`：**必须是与当前组件语义匹配的 SVG 字符串**（以 `<svg` 开头），禁止使用图标类名字符串（如 `"form-custom-widget"`）
+- `text`：**必须填写当前组件的真实中文名称**，禁止出现 `"Demo"` `"demo"` `"Demo组件"` 等占位文字
+- `description`：**必须填写当前组件的真实描述**，禁止出现占位文字
+
+## instance
+
+固定值，不可修改：
+
+```json
+{ "uuid": "$itemUuid", "inTable": false }
+```
+
+## component（PC 端）
+
+- 必填：`ide` / `edit` / `read`
+- 可选：`list` / `association` / `lov` / `print` / `search` / `searchIde`
+
+## widget.display
+
+```json
+{
+  "label": "国际手机号",
+  "width": 6,
+  "mobileWidth": 12,
+  "height": 1,
+  "hidden": false,
+  "readOnly": false,
+  "required": false,
+  "onlyCreateEdit": false
+}
+```
+
+- `label`：**必须填写当前组件的真实中文名称**，与 `desc.text` 保持一致，禁止出现占位文字
+- `width`：只能是 `3`（1/4行）、`6`（1/2行）、`12`（整行）
+- `mobileWidth`：只能是 `6` 或 `12`
+
+## widget.allow
+
+四个字段必须全部显式写出：
+
+```json
+{
+  "calcRule": false,
+  "useInTableColumn": true,
+  "scanCode": false,
+  "copy": false
+}
+```
+
+- `useInTableColumn`：默认 `true`，仅在明确不需要子表使用时设为 `false`
+
+## widget.default
+
+```json
+{ "customDefaultKey": "defaultValue", "value": null }
+```
+
+- `value` 必须是 `null`，**不能是 `""` 或其他值**
+
+## widget.validator
+
+```json
+{ "uniqueCheck": false }
+```
+
+## widget.special
+
+- `frontBusinessObjectComponentType` 与 `componentModelField` 必须对应：
+  - `STRING` / `BIG_TEXT` → `"BOF_TEXT"`
+  - `NUM` → `"BOF_NUMBER"`
+  - `DATE` → `"BOF_DATE"`
+
+## widget.editor.config
+
+标准顺序（不可随意调整），自定义配置项插入在 `WIDTH` 之后：
+
+```json
+[
+  "INFO", "LABEL", "FIELD_CODE", "TITLE_DESCRIPTION", "WIDTH",
+  "HIDDEN", "READONLY", "REQUIRED", "EDITONNEW",
+  "UNIQUE", "HIDDEN_SAVE", "HIDDEN_TRIGGER", "TRIGGER_BUSINESS_EVENTS",
+  "FORM_CUSTOM_RATE_SETTING"
+]
+```
+
+- **如果生成了 `editor.config.json`，其 `code` 字段的值必须出现在 `widget.editor.config` 数组的最后**
+- `client.mobile.widget.editor.config` 中同样需要包含该 `code`，也放在最后
+- `FORMULA_RULE` 仅在需要公式规则时才加入，默认不加
+- `excludeInTable` 必须包含 `"WIDTH"`
+
+## componentModelField（顶层字段，不在 widget 内）
+
+| 场景 | 值 |
+|------|-----|
+| 字符串 < 500字符 | `["STRING"]` |
+| 字符串 ≥ 500字符 | `["BIG_TEXT"]` |
+| 数字 | `["NUM"]` |
+| 单个日期 | `["DATE"]` |
+
+## client.mobile.component
+
+- 必填：`ide` / `edit` / `read`
+- 可选：`list` / `association` / `lov` / `tableColumn`
+- 命名规则：`Mobile` + PC 端组件名，例如 `"MobileIntlPhoneEdit"`
+
+## methods / formatValueSchema
+
+固定为空对象：
+
+```json
+"methods": {},
+"formatValueSchema": {}
+```
