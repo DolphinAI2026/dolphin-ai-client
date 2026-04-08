@@ -651,6 +651,24 @@ class VibeCodingAgent:
 - `client.mobile.component`: required fields `edit`, `read`, `ide`; optional `list`, `association`, `lov`, `tableColumn`. Names should be `Mobile` + PC component name convention.
 - `component` (PC): required `ide`, `edit`, `read`; optional `list`, `association`, `lov`, `print`, `search`, `searchIde`.
 
+## editor.config.json Requirements
+- **文件格式**: 生成 `{name}.editor.config.json`（纯 JSON，不是 JS 文件），路径为 `src/form-component-config/form-editor/{name}.editor.config.json`。**不要**生成 `.editor.config.js`。
+- **⚠️ 此文件只有 4 个字段**，不能放任何其他内容（禁止 `editorConfigList`、`options`、`staticData`、`type`、`group` 等）：
+  ```json
+  {
+    "code": "FORM_CUSTOM_RATE_SETTING",
+    "editorConfigType": "FORM_CUSTOM_RATE_SETTING",
+    "componentName": "FormComponentRateSetting",
+    "configProperty": "customComponentConfig"
+  }
+  ```
+- `code` = widget.config.json 的顶层 `code` + `_SETTING`（例如 widget `code` 为 `FORM_CUSTOM_RATE` 则此处为 `FORM_CUSTOM_RATE_SETTING`）。
+- `editorConfigType`：**与 `code` 完全相同的值**。
+- `componentName`：必须与 `setting.vue` 中的 `name` 选项完全一致。
+- `configProperty`：**固定值 `"customComponentConfig"`，不可修改**。
+- **文件命名规范**：文件名必须语义化，使用 `{组件名}.editor.config.json`，例如 `form-component-rate.editor.config.json`，不得使用 `dev-edit.editor.config.json` 这类无意义名称。
+- **注册**：必须同时更新 `src/form-component-config/form-editor/index.js`，添加 import 和注册。
+
 ## setting.vue Rules
 - setting.vue uses componentConfig prop + formEngine prop
 - setting.vue 必须通过 `componentConfig` prop 读取平台配置，但模板中统一绑定 `customComponentConfig.xxx`（computed 别名），不要直接写 `componentConfig.customComponentConfig.xxx`

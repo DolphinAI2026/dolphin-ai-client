@@ -2656,11 +2656,13 @@ export default { install, activate, staticComponents }
             old_kebab = f"form-component-{placeholder}"       # form-component-demo
             new_kebab = f"form-component-{short_name}"
 
-            old_upper = f"FORM_CUSTOM_COMPONENT_{placeholder.upper()}"  # FORM_CUSTOM_COMPONENT_DEMO
-            new_upper = "FORM_CUSTOM_COMPONENT_" + short_name.replace("-", "_").upper()
+            # FORM_CUSTOM_DEMO → FORM_CUSTOM_{SHORT_NAME}
+            old_upper = f"FORM_CUSTOM_{placeholder.upper()}"  # FORM_CUSTOM_DEMO
+            new_upper = "FORM_CUSTOM_" + short_name.replace("-", "_").upper()
 
-            old_no_custom_upper = old_upper.replace("_CUSTOM_", "_")   # FORM_COMPONENT_DEMO
-            new_no_custom_upper = new_upper.replace("_CUSTOM_", "_")
+            # FORM_COMPONENT_DEMO (no _CUSTOM_) → FORM_COMPONENT_{SHORT_NAME}
+            old_no_custom_upper = f"FORM_COMPONENT_{placeholder.upper()}"  # FORM_COMPONENT_DEMO
+            new_no_custom_upper = "FORM_COMPONENT_" + short_name.replace("-", "_").upper()
 
             old_no_custom_kebab = old_no_custom_upper.replace("_", "-").lower()  # form-component-demo
             new_no_custom_kebab = new_no_custom_upper.replace("_", "-").lower()
