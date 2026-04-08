@@ -2776,60 +2776,48 @@ def _scene_to_project_type(scene_type: SceneType) -> str:
 
 
 async def _extract_project_name(generator: CodingGenerator, message: str) -> str:
-    """从用户需求中提取项目名称"""
+    """从用户需求中提取项目名称，优先使用 LLM 翻译，关键字表仅作快速缓存"""
     import re
+    import uuid
 
-    keyword_map = {
-        # 组件类
+    # 快速缓存：高频词直接命中，避免不必要的 LLM 调用
+    _KEYWORD_CACHE = {
         "甘特图": "gantt-chart", "审批流程": "approval-flow", "审批": "approval",
-        "进度条": "progress-bar", "评分": "star-rating", "颜色选择": "color-picker",
-        "颜色选择器": "color-picker", "标签": "tag-input", "图表分析": "chart-analysis",
-        "图表": "chart", "日期选择": "date-picker", "日期范围": "date-range",
-        "文件上传": "file-upload", "上传": "upload", "头像": "avatar",
-        "签名": "signature", "二维码": "qrcode", "地图": "map-view",
-        "富文本": "rich-text", "树形": "tree-select", "组织树": "org-tree",
-        "组织架构树": "org-tree", "组织架构": "org-tree", "部门树": "dept-tree",
-        "级联": "cascader", "数据表格": "data-table", "表格": "data-table",
-        "看板": "kanban", "数据查询": "data-query", "弹窗选择": "popup-select",
-        "人员选择": "person-select", "图片识别": "image-recognition",
-        "截图": "screenshot", "AI分析": "ai-analysis", "拍照": "camera",
-        "水印": "watermark", "倒计时": "countdown", "步骤条": "steps",
-        "时间轴": "timeline", "轮播": "carousel", "抽屉": "drawer",
-        "物料选择": "material-select", "地图选点": "map-picker",
-        # 页面类
-        "供应商管理": "supplier-mgmt", "供应商": "supplier",
-        "采购管理": "purchase-mgmt", "采购": "purchase",
-        "客户管理": "customer-mgmt", "客户": "customer",
-        "工单管理": "work-order-mgmt", "工单": "work-order",
-        "派工管理": "dispatch-mgmt", "派工": "dispatch", "智能派工": "smart-dispatch",
-        "订单管理": "order-mgmt", "订单": "order",
-        "库存管理": "inventory-mgmt", "库存": "inventory",
-        "考勤管理": "attendance-mgmt", "考勤": "attendance",
-        "报表": "report", "仪表盘": "dashboard", "数据分析": "data-analysis",
-        "设备管理": "device-mgmt", "设备": "device",
+        "进度条": "progress-bar", "评分": "star-rating", "颜色选择器": "color-picker",
+        "颜色选择": "color-picker", "标签输入": "tag-input", "图表分析": "chart-analysis",
+        "图表": "chart", "日期范围": "date-range", "日期选择": "date-picker",
+        "文件上传": "file-upload", "上传": "file-upload", "头像": "avatar",
+        "签名": "signature", "二维码": "qrcode", "富文本": "rich-text",
+        "组织架构树": "org-tree", "组织架构": "org-tree", "组织树": "org-tree",
+        "部门树": "dept-tree", "树形选择": "tree-select", "级联": "cascader",
+        "数据表格": "data-table", "看板": "kanban", "弹窗选择": "popup-select",
+        "人员选择": "person-select", "水印": "watermark", "倒计时": "countdown",
+        "步骤条": "steps", "时间轴": "timeline", "轮播": "carousel",
+        "地图选点": "map-picker", "地图": "map-view",
+        "供应商管理": "supplier-mgmt", "采购管理": "purchase-mgmt",
+        "客户管理": "customer-mgmt", "工单管理": "work-order-mgmt",
+        "派工管理": "dispatch-mgmt", "智能派工": "smart-dispatch",
+        "订单管理": "order-mgmt", "库存管理": "inventory-mgmt",
+        "考勤管理": "attendance-mgmt", "设备管理": "device-mgmt",
         "项目管理": "project-mgmt", "任务管理": "task-mgmt",
-        "合同管理": "contract-mgmt", "合同": "contract",
-        "费用管理": "expense-mgmt", "费用": "expense",
-        "预算管理": "budget-mgmt", "预算": "budget",
-        # 其他前端类型
-        "布局": "app-layout", "插件": "frontend-plugin", "登录页": "login-page",
+        "合同管理": "contract-mgmt", "费用管理": "expense-mgmt",
+        "预算管理": "budget-mgmt", "报表": "report", "仪表盘": "dashboard",
+        "布局": "app-layout", "登录页": "login-page",
     }
 
-    def _slugify(candidate: str) -> str:
-        text = (candidate or "").strip().lower()
-        if not text:
-            return ""
-        text = text.replace("&", " and ")
-        text = re.sub(r"[^a-z0-9\\s-]", "-", text)
-        text = text.replace("_", "-")
-        text = re.sub(r"\s+", "-", text)
-        text = re.sub(r"-+", "-", text).strip("-")
-        text = re.sub(r"^[^a-z]+", "", text)
-        return text[:48].strip("-")
+    def _slugify(text: str) -> str:
+        s = (text or "").strip().lower()
+        s = s.replace("&", "and")
+        s = re.sub(r"[^a-z0-9\s-]", "-", s)
+        s = re.sub(r"[\s_]+", "-", s)
+        s = re.sub(r"-+", "-", s).strip("-")
+        s = re.sub(r"^[^a-z]+", "", s)
+        return s[:48].strip("-")
 
-    async def _translate_to_slug(text: str) -> str:
-        candidate = (text or "").strip()
-        if not candidate:
+    _INVALID = {"custom", "custom-dev", "component", "page", "module", "widget", ""}
+
+    async def _llm_to_slug(text: str) -> str:
+        if not text or not text.strip():
             return ""
         try:
             llm = LLMClient()
@@ -2837,64 +2825,41 @@ async def _extract_project_name(generator: CodingGenerator, message: str) -> str
                 {
                     "role": "system",
                     "content": (
-                        "把用户给出的功能或模块名称转换成简短、可读的英文 kebab-case 项目名。"
-                        "优先输出语义明确、2-4 段的名字，例如 `date-range`、`org-tree`、`smart-dispatch`。"
-                        "只返回名称本身，不要解释。"
+                        "根据用户描述，提取核心功能名称并转换为简短的英文 kebab-case 项目名（2-4段）。"
+                        "例如：'国际手机号输入' → 'intl-phone-input'，'评分组件' → 'star-rating'，'供应商管理页面' → 'supplier-mgmt'。"
+                        "只返回 kebab-case 名称本身，不要任何解释或标点。"
                     ),
                 },
-                {"role": "user", "content": candidate},
-            ], max_tokens=80)
-            content = resp.get("choices", [{}])[0].get("message", {}).get("content", "")
+                {"role": "user", "content": text.strip()},
+            ], max_tokens=40)
+            content = resp.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
             match = re.search(r"\b([a-z][a-z0-9]*(?:-[a-z0-9]+)*)\b", content.lower())
-            return _slugify(match.group(1)) if match else ""
+            slug = _slugify(match.group(1)) if match else ""
+            return slug if slug not in _INVALID else ""
         except Exception as e:
             logger.warning(f"LLM 提取项目名失败: {e}")
             return ""
 
-    msg_lower = (message or "").lower()
+    msg = (message or "").strip()
+    msg_lower = msg.lower()
 
-    explicit_slug = re.search(r"\b([a-z][a-z0-9]*(?:-[a-z0-9]+)+)\b", msg_lower)
-    if explicit_slug:
-        return explicit_slug.group(1)
+    # 1. 消息中已经包含英文 kebab-case（用户直接写了名字）
+    explicit = re.search(r"\b([a-z][a-z0-9]*(?:-[a-z0-9]+)+)\b", msg_lower)
+    if explicit and explicit.group(1) not in _INVALID:
+        return explicit.group(1)
 
-    for cn, en in sorted(keyword_map.items(), key=lambda item: len(item[0]), reverse=True):
-        if cn in message:
-            return en
+    # 2. 关键字缓存快速命中（按长度降序，优先匹配更长的词）
+    for kw, slug in sorted(_KEYWORD_CACHE.items(), key=lambda x: len(x[0]), reverse=True):
+        if kw in msg:
+            return slug
 
-    patterns = [
-        r"(?:叫做|命名为|名称为|项目名为|工作区名为)\s*[`\"']?([A-Za-z][A-Za-z0-9 _-]{2,40})[`\"']?",
-        r"(?:做|开发|创建|实现|搭建|写|生成|补一个|新增|增加|搞一个|做个)\s*(?:一|1)?个?\s*(.{2,24}?)(?:的?\s*(?:组件|页面|模块|系统|功能|弹窗|选择器|面板|布局|插件|登录页))",
-        r"(.{2,24}?)(?:组件|页面|模块|系统|弹窗|选择器|面板|布局|插件|登录页)(?:的?\s*(?:开发|设计|需求))",
-        r"(?:做|开发|创建|实现)\s*(.{2,24}?)$",
-    ]
+    # 3. LLM 直接从完整消息提取（主要路径）
+    slug = await _llm_to_slug(msg)
+    if slug:
+        return slug
 
-    candidates: list[str] = []
-    for pattern in patterns:
-        match = re.search(pattern, message, flags=re.IGNORECASE)
-        if not match:
-            continue
-        candidate = match.group(1).strip("，。,.!！?？：: `\"'")
-        if candidate and candidate not in candidates:
-            candidates.append(candidate)
-
-    for candidate in candidates:
-        for cn, en in sorted(keyword_map.items(), key=lambda item: len(item[0]), reverse=True):
-            if cn in candidate:
-                return en
-        ascii_slug = _slugify(candidate)
-        if ascii_slug and ascii_slug not in {"custom", "custom-dev", "component", "page"}:
-            return ascii_slug
-
-    for candidate in candidates:
-        translated = await _translate_to_slug(candidate)
-        if translated and translated not in {"custom", "custom-dev", "component", "page"}:
-            return translated
-
-    translated = await _translate_to_slug(message)
-    if translated and translated not in {"custom", "custom-dev", "component", "page"}:
-        return translated
-
-    return "custom-dev"
+    # 4. 兜底：随机短码，保证唯一性，不使用有误导性的固定名称
+    return f"component-{uuid.uuid4().hex[:6]}"
 
 
 def _extract_display_name(message: str, project_type: str, fallback_name: str) -> str:
