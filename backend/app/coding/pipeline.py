@@ -288,7 +288,10 @@ PROJECT_TYPE_TO_SCENE = {
 
 
 async def extract_project_name(generator: CodingGenerator, message: str) -> str:
-    """从用户需求中提取项目名称。"""
+    """从用户需求中提取项目语义名称（kebab-case 英文）。
+
+    优先使用关键词快速匹配；未命中时用 LLM 提取，确保返回有语义的名称而非 custom-dev。
+    """
     keyword_map = {
         "甘特图": "gantt-chart", "审批流程": "approval-flow", "审批": "approval",
         "进度条": "progress-bar", "评分": "star-rating", "颜色选择": "color-picker",
@@ -311,12 +314,50 @@ async def extract_project_name(generator: CodingGenerator, message: str) -> str:
         "订单管理": "order-mgmt", "订单": "order",
         "库存管理": "inventory-mgmt", "库存": "inventory",
         "登录": "login", "注册": "register",
+        "手机号": "phone-number", "国际手机": "intl-phone", "电话号码": "phone-number",
+        "国际区号": "intl-phone", "区号": "area-code",
+        "评价": "rating", "好评": "rating", "打分": "rating",
+        "滑块": "slider", "开关": "switch", "单选": "radio", "多选": "checkbox",
+        "数字输入": "number-input", "金额": "amount-input", "价格": "price-input",
+        "身份证": "id-card", "银行卡": "bank-card", "邮编": "postal-code",
+        "邮箱": "email-input", "网址": "url-input", "密码": "password-input",
+        "图片上传": "image-upload", "视频上传": "video-upload",
+        "附件": "attachment", "文件": "file-upload",
+        "人员": "person-select", "部门": "dept-select", "用户": "user-select",
+        "时间选择": "time-picker", "时间范围": "time-range",
+        "周期": "period-picker", "季度": "quarter-picker", "年份": "year-picker",
+        "字典": "dict-select", "数据字典": "dict-select",
+        "关联": "relation-select", "关联数据": "relation-select",
     }
     msg_lower = message.lower()
     for keyword, name in keyword_map.items():
         if keyword in msg_lower:
             return name
-    return "custom-dev"
+
+    # 关键词未命中 → 用 LLM 提取语义名
+    try:
+        prompt = (
+            "根据以下需求描述，提取一个简短的英文组件名（kebab-case，2~4个单词，只返回名称本身，不要解释）。\n"
+            "例如：国际手机号码 → intl-phone-number，进度环 → progress-ring，文件预览 → file-preview\n\n"
+            f"需求：{message[:200]}"
+        )
+        resp = await generator.llm_client.chat_completion(
+            [{"role": "user", "content": prompt}],
+            max_tokens=20,
+            temperature=0.1,
+        )
+        result = resp.get("choices", [{}])[0].get("message", {}).get("content", "")
+        name = result.strip().lower()
+        # 只保留合法的 kebab-case 字符
+        import re as _re
+        name = _re.sub(r"[^a-z0-9-]", "-", name).strip("-")
+        name = _re.sub(r"-{2,}", "-", name)
+        if name and len(name) >= 3:
+            return name
+    except Exception:
+        pass
+
+    return "custom"
 
 
 def extract_display_name(message: str, project_type: str, fallback_name: str) -> str:

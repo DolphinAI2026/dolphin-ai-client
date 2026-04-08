@@ -270,7 +270,13 @@ def _normalize_form_component_apaas_json(workspace_path: Path, spec: FormCompone
     # 从 widget.config.json 读取 code / text / description
     widget_code, widget_text, widget_description = _read_widget_config_identity(workspace_path, spec)
 
-    output_name = f"form-component-custom-{spec.short_kebab}"
+    # short_kebab 可能已包含 custom-（如 "custom-dev"），避免生成 form-component-custom-custom-dev
+    semantic = spec.short_kebab
+    if semantic.startswith("custom-"):
+        semantic = semantic[len("custom-"):]
+    if not semantic or semantic == "dev":
+        semantic = "component"
+    output_name = f"form-component-custom-{semantic}"
     custom_widget_entry: dict = {
         "code": widget_code or f"FORM_CUSTOM_{spec.short_kebab.replace('-', '_').upper()}",
         "text": widget_text or spec.short_kebab,
