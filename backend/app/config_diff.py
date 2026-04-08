@@ -207,135 +207,13 @@ def _normalize_config(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     else:
         data = config
 
-    models = data.get("models", [])
-    forms = data.get("forms", [])
-    if not forms and models:
-        forms = _derive_forms_from_models(models)
-
     return {
         "roles": data.get("roles", []),
         "dicts": data.get("dicts", []),
-        "models": models,
-        "forms": forms,
+        "models": data.get("models", []),
+        "forms": data.get("forms", []),
         "processes": data.get("processes", []),
     }
-
-
-def _field_type_to_component_type(field_type: str) -> str:
-    mapping = {
-        "单行输入": "FORM_TEXT_INPUT",
-        "多行输入": "FORM_TEXTAREA",
-        "富文本": "FORM_RICH_TEXT",
-        "日期时间": "FORM_DATE_PICKER",
-        "金额": "FORM_NUMBER_INPUT",
-        "数字": "FORM_NUMBER_INPUT",
-        "下拉单选": "FORM_SELECT",
-        "下拉多选": "FORM_SELECT_MULTI",
-        "单选框": "FORM_RADIO",
-        "复选框": "FORM_CHECKBOX",
-        "人员选择": "FORM_USER_SELECT",
-        "部门选择": "FORM_DEPT_SELECT",
-        "附件上传": "FORM_UPLOAD",
-        "开关": "FORM_SWITCH",
-        "单据号": "FORM_SERIAL",
-        "数据选择": "FORM_DATA_SELECT",
-        "关联表单": "FORM_DATA_SELECT",
-        "地理位置": "FORM_LOCATION",
-        "地区地址": "FORM_ADDRESS",
-        "手机号码": "FORM_PHONE",
-        "电子邮箱": "FORM_EMAIL",
-        "超链接": "FORM_LINK",
-        "身份证号": "FORM_ID_CARD",
-        "子表": "FORM_WIDGET_SON_TABLE",
-    }
-    return mapping.get(str(field_type or "").strip(), "FORM_TEXT_INPUT")
-
-
-def _build_form_component_changes_from_model_change(
-    form_code: str,
-    model_code: str,
-    model_change: ModelChange,
-) -> List[FormComponentChange]:
-    component_changes: List[FormComponentChange] = []
-    for field_change in model_change.field_changes or []:
-        field_source = field_change.new_value or field_change.old_value or {}
-        component_changes.append(FormComponentChange(
-            name=field_change.name,
-            code=f"{model_code}.{field_change.code}",
-            change_type=field_change.change_type,
-            form_code=form_code,
-            component_type=_field_type_to_component_type(
-                field_change.field_type
-                or field_source.get("fieldType")
-                or field_source.get("field_type")
-                or field_source.get("type")
-                or "单行输入"
-            ),
-            model_field=f"{model_code}.{field_change.code}",
-            old_value=field_change.old_value,
-            new_value=field_change.new_value,
-        ))
-    return component_changes
-
-
-def _derive_forms_from_models(models: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    forms: List[Dict[str, Any]] = []
-
-    for idx, model in enumerate(models):
-        if str(model.get("table_type", model.get("type", ""))).strip().lower() in {"子表", "sub", "child"}:
-            continue
-        model_code = model.get("modelCode", model.get("model_code", model.get("code", f"model_{idx + 1}")))
-        model_name = model.get("modelName", model.get("name", model_code))
-        form_code = model.get("formCode", model.get("form_code", model.get("code", f"form_{idx + 1}")))
-        form_name = model.get("formName", model.get("form_name", model.get("name", form_code)))
-
-        components: List[Dict[str, Any]] = []
-        for field_idx, field in enumerate(model.get("fields", []) or model.get("dataModelFields", []) or []):
-            field_code = field.get("fieldCode", field.get("field_code", field.get("code", f"field_{field_idx + 1}")))
-            field_name = field.get("fieldName", field.get("field_name", field.get("name", field_code)))
-            field_type = field.get("fieldType", field.get("field_type", field.get("type", "单行输入")))
-            component_type = _field_type_to_component_type(field_type)
-
-            if component_type == "FORM_WIDGET_SON_TABLE":
-                sub_code = field.get("sub_code", field.get("subCode", field_code))
-                sub_columns = []
-                for sub_idx, sub_field in enumerate(field.get("sub_fields", []) or field.get("subFields", []) or []):
-                    sub_field_code = sub_field.get("fieldCode", sub_field.get("field_code", sub_field.get("code", f"sub_field_{sub_idx + 1}")))
-                    sub_field_name = sub_field.get("fieldName", sub_field.get("field_name", sub_field.get("name", sub_field_code)))
-                    sub_field_type = sub_field.get("fieldType", sub_field.get("field_type", sub_field.get("type", "单行输入")))
-                    sub_columns.append({
-                        "label": sub_field_name,
-                        "componentType": _field_type_to_component_type(sub_field_type),
-                        "modelField": f"{sub_code}.{sub_field_code}",
-                        "required": bool(sub_field.get("required", False)),
-                    })
-                components.append({
-                    "label": field_name,
-                    "componentType": component_type,
-                    "tableModelCode": sub_code,
-                    "tableColumn": sub_columns,
-                    "required": bool(field.get("required", False)),
-                })
-                continue
-
-            components.append({
-                "label": field_name,
-                "componentType": component_type,
-                "modelField": f"{model_code}.{field_code}",
-                "required": bool(field.get("required", False)),
-            })
-
-        forms.append({
-            "name": form_name,
-            "code": form_code,
-            "formName": form_name,
-            "formCode": form_code,
-            "modelCode": model_code,
-            "_auto_generated_from_model": True,
-            "components": components,
-        })
-
-    return forms
 
 
 # ---------------------------------------------------------------------------
@@ -1093,14 +971,8 @@ def _compare_forms(
                 code=code,
                 change_type=ChangeType.ADDED,
                 new_value=new_form,
-                remote_id=(
-                    str(remote_form.get("formId") or remote_form.get("id"))
-                    if remote_form and (remote_form.get("formId") or remote_form.get("id")) else None
-                ),
-                menu_id=(
-                    str(remote_form.get("menuId") or remote_form.get("id"))
-                    if remote_form and (remote_form.get("menuId") or remote_form.get("id")) else None
-                ),
+                remote_id=remote_form.get("id") if remote_form else None,
+                menu_id=remote_form.get("menuId") if remote_form else None,
                 model_code=model_code,
                 component_changes=component_changes
             ))
@@ -1110,14 +982,8 @@ def _compare_forms(
                 code=code,
                 change_type=ChangeType.DELETED,
                 old_value=old_form,
-                remote_id=(
-                    str(remote_form.get("formId") or remote_form.get("id"))
-                    if remote_form and (remote_form.get("formId") or remote_form.get("id")) else None
-                ),
-                menu_id=(
-                    str(remote_form.get("menuId") or remote_form.get("id"))
-                    if remote_form and (remote_form.get("menuId") or remote_form.get("id")) else None
-                ),
+                remote_id=remote_form.get("id") if remote_form else None,
+                menu_id=remote_form.get("menuId") if remote_form else None,
                 model_code=model_code,
                 component_changes=component_changes
             ))
@@ -1136,14 +1002,8 @@ def _compare_forms(
                     change_type=ChangeType.MODIFIED,
                     old_value=old_form,
                     new_value=new_form,
-                    remote_id=(
-                        str(remote_form.get("formId") or remote_form.get("id"))
-                        if remote_form and (remote_form.get("formId") or remote_form.get("id")) else None
-                    ),
-                    menu_id=(
-                        str(remote_form.get("menuId") or remote_form.get("id"))
-                        if remote_form and (remote_form.get("menuId") or remote_form.get("id")) else None
-                    ),
+                    remote_id=remote_form.get("id") if remote_form else None,
+                    menu_id=remote_form.get("menuId") if remote_form else None,
                     model_code=model_code,
                     component_changes=component_changes
                 ))
@@ -1400,52 +1260,6 @@ def compute_config_diff(
     diff.model_changes = _compare_models(old["models"], new["models"], remote_models)
     diff.form_changes = _compare_forms(old["forms"], new["forms"], remote_forms)
     diff.process_changes = _compare_processes(old["processes"], new["processes"], remote_processes)
-
-    model_change_by_code = {c.code: c for c in diff.model_changes if getattr(c, "code", None)}
-    filtered_form_changes: List[FormChange] = []
-    for change in diff.form_changes:
-        old_value = change.old_value or {}
-        new_value = change.new_value or {}
-        is_generated_form = bool(
-            old_value.get("_auto_generated_from_model")
-            or new_value.get("_auto_generated_from_model")
-        )
-        if not is_generated_form:
-            filtered_form_changes.append(change)
-            continue
-
-        model_code = (
-            change.model_code
-            or new_value.get("modelCode")
-            or old_value.get("modelCode")
-            or new_value.get("model_code")
-            or old_value.get("model_code")
-        )
-        model_change = model_change_by_code.get(model_code)
-        if not model_change:
-            continue
-
-        form_change_type = model_change.change_type
-        if form_change_type == ChangeType.MODIFIED and not model_change.field_changes:
-            continue
-
-        normalized_change = FormChange(
-            name=change.name,
-            code=change.code,
-            change_type=form_change_type,
-            old_value=change.old_value,
-            new_value=change.new_value,
-            remote_id=change.remote_id,
-            menu_id=change.menu_id,
-            model_code=model_code,
-            component_changes=_build_form_component_changes_from_model_change(
-                change.code,
-                model_code,
-                model_change,
-            ),
-        )
-        filtered_form_changes.append(normalized_change)
-    diff.form_changes = filtered_form_changes
 
     # 判断是否有变更
     diff.has_changes = bool(

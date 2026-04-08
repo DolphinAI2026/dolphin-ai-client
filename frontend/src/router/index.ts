@@ -53,12 +53,6 @@ const router = createRouter({
       meta: { requiresAuth: true, navExpanded: true }
     },
     {
-      path: '/platform-shell',
-      name: 'PlatformShell',
-      component: () => import('@/views/PlatformShellPage.vue'),
-      meta: { requiresAuth: true }
-    },
-    {
       path: '/marketplace',
       name: 'Marketplace',
       component: () => import('@/views/MarketplacePage.vue'),

@@ -486,11 +486,60 @@ class APaaSClient:
                 raise Exception(data.get("message", "添加字典选项失败"))
             return data
 
-    async def create_menu(self, app_id: str, menu_name: str, form_id: str, menu_order: int = 0, menu_id: str = "") -> dict:
+    async def query_all_app_menus(self, app_id: str) -> list:
+        """查询应用所有菜单详情（字段比 manageAppMenu 更完整）"""
+        return await self._post_resource("/menu/query/allAppMenu", {"appId": app_id}, app_id)
+
+    async def resolve_default_menu_datasource(self, app_id: str, form_id: str = "") -> tuple[str, str]:
+        """解析应用菜单默认数据源绑定信息"""
+        resolved_form_id = str(form_id or "").strip()
+        if resolved_form_id:
+            try:
+                detail = await self.query_detail_page_config(app_id, resolved_form_id)
+                model_list = detail.get("modelWithFieldVoList") or []
+                for model in model_list:
+                    datasource_id = str(
+                        model.get("modelDataSource")
+                        or model.get("datasourceId")
+                        or ""
+                    ).strip()
+                    if datasource_id:
+                        return datasource_id, "DEFAULT_DATASOURCE"
+            except Exception as exc:
+                logger.warning(f"查询表单详情失败，无法从 formId={resolved_form_id} 解析数据源绑定: {exc}")
+
+        try:
+            menus = await self.query_all_app_menus(app_id)
+        except Exception as exc:
+            logger.warning(f"查询应用完整菜单失败，无法自动补齐数据源绑定: {exc}")
+            return "", ""
+
+        for menu in menus if isinstance(menus, list) else []:
+            datasource_id = str(menu.get("datasourceId") or "").strip()
+            datasource_code = str(menu.get("datasourceCode") or "").strip()
+            if datasource_id:
+                return datasource_id, datasource_code
+        return "", ""
+
+    async def create_menu(
+        self,
+        app_id: str,
+        menu_name: str,
+        form_id: str,
+        menu_order: int = 0,
+        menu_id: str = "",
+        datasource_id: str = "",
+        datasource_code: str = "",
+    ) -> dict:
         """创建或更新表单菜单 — /menu/save/menu
         如果传了 menu_id，则更新已有菜单（改名）；否则创建新菜单。
         """
         url = f"{self.base_url}/xdap-app/menu/save/menu"
+        resolved_datasource_id = str(datasource_id or "").strip()
+        resolved_datasource_code = str(datasource_code or "").strip()
+        if not resolved_datasource_id:
+            resolved_datasource_id, resolved_datasource_code = await self.resolve_default_menu_datasource(app_id, form_id=form_id)
+
         payload = {
             "appId": app_id,
             "menuName": menu_name,
@@ -499,7 +548,17 @@ class APaaSClient:
             "menuDisplay": "ALL",
             "formId": form_id,
             "menuIcon": "userInfo",
+            "cusIconStatus": "DISABLE",
+            "newWindowStatus": "DISABLE",
+            "cusModelPageStatus": "DISABLE",
+            "menuNameI18nAssociated": False,
+            "iconColor": "#027AFF",
         }
+        if resolved_datasource_id:
+            payload["menuModelType"] = "DATABASE"
+            payload["datasourceId"] = resolved_datasource_id
+            if resolved_datasource_code:
+                payload["datasourceCode"] = resolved_datasource_code
         if menu_id:
             payload["id"] = menu_id
         _log_request("POST", url, payload)
