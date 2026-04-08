@@ -458,7 +458,7 @@ if (platformI18n?.mergeLocaleMessage) {
 - **desc.icon** 必须是内联 SVG 字符串，不能为空
 - **widget.allow** 必须包含全部 4 个字段：`calcRule`、`useInTableColumn`、`scanCode`、`copy`
 - **widget.default.value** 必须是 `null`，不能是 `””`
-- **widget.special.customComponentConfig** 必须声明为 `{}`，否则平台保存时不序列化
+- **widget.special.customComponentConfig** 必须包含 `setting.vue` 中所有配置项的**默认值**（不能是空 `{}`），例如 setting.vue 有 `defaultCountryCode`、`placeholder`、`clearable` 三个配置项，则写成 `{"defaultCountryCode": "CN", "placeholder": "", "clearable": true}`。如无 setting.vue 则保持 `{}`
 - **widget.editor.config** 中如有自定义配置面板，必须将 `{code}_SETTING` 追加到数组**末尾**
 - **widget.editor.excludeInTable** 只能是 `[“WIDTH”]`，不得添加其他值
 
@@ -767,7 +767,8 @@ export default {
 ```
 
 **⚠️ customComponentConfig 规则**：
-- 必须在 `widget.special` 内声明 `"customComponentConfig": {}`（空对象），**不是** widget 根级别
+- 必须在 `widget.special` 内声明 `"customComponentConfig"`，**不是** widget 根级别
+- **必须包含 setting.vue 所有配置项的默认值**（非空字符串，布尔/数字/null 均可），如无 setting.vue 则为 `{}`
 - 不能包含空字符串默认值如 `{ "dataSource": "" }`，否则平台校验认为"配置不完整"阻止保存
 - 编辑器配置项（TITLE_DESCRIPTION 等）不能删除，否则平台绑定模型字段时报错
 - 自定义 setting code（`FORM_CUSTOM_XXX_SETTING`）追加到 config 数组**末尾**，不插入中间
@@ -2383,7 +2384,7 @@ CODE_GENERATION_INSTRUCTION = """
 13. **setting.vue 中不要再包一层 `<el-form>`**。平台外层已经提供了表单容器，内部直接使用 `el-form-item`、`el-input`、`el-select` 等组件即可
 14. **setting.vue 最外层容器不要设置 padding**。平台区域已经做好布局，额外 padding 会导致可用空间变小
 15. **setting.vue 和 edit/read/ide.vue 的 customComponentConfig 读写路径必须一致**。配置直接存在 `customComponentConfig` 根级别（如 `{ dataSource, xField }`），不要多嵌套一层（如 `{ chartConfig: { dataSource } }`）
-16. **widget.config.json 中 `widget.special.customComponentConfig` 必须声明为 `{}`**（空对象），否则平台保存时不会序列化它。不能包含空字符串默认值
+16. **widget.config.json 中 `widget.special.customComponentConfig` 必须包含 setting.vue 所有配置项的默认值**，如 `{"defaultCountryCode": "CN", "placeholder": "", "clearable": true}`；如无 setting.vue 则为 `{}`。不能全部留空字符串默认值
 17. **widget.config.json 的 editor.config 不能删除标准项**（INFO, LABEL, FIELD_CODE, TITLE_DESCRIPTION, WIDTH, HIDDEN, READONLY, REQUIRED, EDITONNEW, UNIQUE, HIDDEN_SAVE, HIDDEN_TRIGGER, TRIGGER_BUSINESS_EVENTS），否则平台校验报错。自定义 setting code 追加到末尾
 18. 如需在 setting.vue 中访问子表列表，使用 `this.formEngine.formDataControl.allTileFormItemList` 并按 `componentType === 'FORM_WIDGET_SON_TABLE'` 过滤
 19. **获取子表真实数据时**，formData 中子表数据的 key 是子表的 `code`（不是 uuid），需要先通过 uuid 找到子表再取其 code
