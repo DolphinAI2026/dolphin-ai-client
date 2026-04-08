@@ -932,6 +932,10 @@ async def run_coding_pipeline(
         normalized_files = normalize_form_component_editor_artifacts(workspace_path)
         if normalized_files:
             logger.info("Normalized form-component editor artifacts for %s: %s", ws_id, normalized_files)
+        # 将工作区文件夹重命名为与 apaas.json outputName 一致（form-component-custom-xxx__id）
+        if ws_mgr.try_rename_workspace_to_output_name(ws_id):
+            workspace_path = ws_mgr.get_workspace_path(ws_id)
+            logger.info("Renamed workspace folder to match outputName for %s", ws_id)
         contract_errors = validate_form_component_editor_workspace(workspace_path)
         if contract_errors:
             raise RuntimeError("；".join(contract_errors))
