@@ -201,6 +201,40 @@ async def _read_file(args: dict, workspace_path: Path) -> str:
         return f"Error reading file: {e}"
 
 
+def _validate_json_config_file(file_path: str, content: str) -> list[str]:
+    """对 widget.config.json / editor.config.json 做 Pydantic 结构校验，返回错误列表"""
+    import json as _json
+    errors: list[str] = []
+
+    if file_path.endswith(".widget.config.json"):
+        try:
+            from app.coding.validator import WidgetComponentConfig
+            data = _json.loads(content)
+            WidgetComponentConfig.model_validate(data)
+        except _json.JSONDecodeError as e:
+            errors.append(f"{file_path} 不是合法的 JSON：{e}")
+        except Exception as e:
+            for err in getattr(e, "errors", lambda: [{"msg": str(e)}])():
+                loc = " -> ".join(str(x) for x in err.get("loc", []))
+                msg = err.get("msg", str(err))
+                errors.append(f"{file_path}: {loc} — {msg}" if loc else f"{file_path}: {msg}")
+
+    elif file_path.endswith(".editor.config.json"):
+        try:
+            data = _json.loads(content)
+            for field in ("code", "editorConfigType", "componentName", "configProperty"):
+                if field not in data:
+                    errors.append(f"{file_path} 缺少必填字段 \"{field}\"")
+            if data.get("configProperty") != "customComponentConfig":
+                errors.append(f"{file_path} 的 configProperty 必须为 \"customComponentConfig\"")
+            if data.get("code") != data.get("editorConfigType"):
+                errors.append(f"{file_path} 的 code 与 editorConfigType 必须保持一致")
+        except _json.JSONDecodeError as e:
+            errors.append(f"{file_path} 不是合法的 JSON：{e}")
+
+    return errors
+
+
 async def _write_file(args: dict, workspace_path: Path) -> str:
     file_path = args.get("file_path", "")
     content = args.get("content", "")
@@ -215,6 +249,10 @@ async def _write_file(args: dict, workspace_path: Path) -> str:
         contract_errors = validate_form_component_editor_workspace(workspace_path)
         if contract_errors:
             return "Error: " + "; ".join(contract_errors)
+        # JSON config 结构校验
+        json_errors = _validate_json_config_file(file_path, content)
+        if json_errors:
+            return "Error: " + "; ".join(json_errors)
         lines = content.count("\n") + 1
         return f"Successfully wrote {len(content)} chars ({lines} lines) to {file_path}"
     except ValueError as e:

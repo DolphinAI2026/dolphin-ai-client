@@ -583,7 +583,7 @@ class VibeCodingAgent:
 ## Workflow — IMPORTANT: Be efficient! Minimize tool calls.
 0. **Before tool calls**: First write a short, user-facing progress note in Chinese (1-3 sentences) explaining what you understood and what you will do next.
 1. **FIRST** (1 call): Use glob_files to see the project structure
-2. **THEN** (1-3 calls max): If `.cursor/rules/*.mdc` exists, read those rule files first, then read ONLY the key implementation files you need (edit.vue and mixin). Do NOT read every file.
+2. **THEN** (1-3 calls max): If `.cursor/rules/*.mdc` exists, read those rule files first, then read ONLY the scaffold demo files (`form-component-demo-*.vue`) and mixin as structural reference. Do NOT read every file.
 3. **IMMEDIATELY write code**: Use write_file to create/update ALL component files in one batch. Call write_file multiple times in a SINGLE turn (parallel tool calls).
 4. **THEN** run `npm run build` to check compilation
 5. If errors, fix and rebuild. If success, report completion.
@@ -592,23 +592,72 @@ class VibeCodingAgent:
 - **Progress notes are visible to the user**: keep them brief, concrete, and friendly. Do NOT dump hidden reasoning or long analysis.
 - **DO NOT loop**: Never read the same file twice. Never read more than 3 files before writing code.
 - **Write ALL files at once**: In a single turn, call write_file for edit.vue, read.vue, ide.vue, setting.vue etc. Do NOT write one file per turn.
-- **When generating designer config**: update `src/form-component/form-editor/index.js` and `src/form-component-config/form-editor/index.js` in the same batch as `setting.vue` / `{name}.editor.config.js`.
+- **When generating designer config**: update `src/form-component/form-editor/index.js` and `src/form-component-config/form-editor/index.js` in the same batch as `setting.vue` / `{name}.editor.config.json`.
 - **Be decisive**: You are an expert. After reading the scaffold structure and 1-2 example files, you have enough context to write the component.
+- **ONLY use demo scaffold files as examples**: Do NOT read other generated components in the workspace (e.g. `form-component-upload`, `form-component-xxx`) as implementation references — they were generated for different requirements and will bias your output. Use ONLY `form-component-demo-*.vue` files as structural reference.
 - **Maximum 8 turns total**: If you haven't written code by turn 4, something is wrong. Write the code NOW.
+- **NEVER use `<el-dialog>` inside form widgets** — it breaks FormEngine component resolution and crashes the platform with `Cannot read properties of undefined (reading 'edit')`. Use `<el-popover :append-to-body="true">` instead for any preview/popup interaction.
+
+## Third-party Dependencies
+- Element UI is globally registered by the platform — do NOT import it.
+- For any other library NOT pre-installed (e.g. echarts, d3, lodash): run `npm install <pkg>` via run_command first, then `import` it at the top of the file. NEVER use `this.$echarts` or any `this.$xxx` shortcut for libraries that are not globally registered.
+- Check `package.json` dependencies before assuming a library is available.
+- Do NOT manually edit or write `package.json` — only use `npm install <pkg>` to add dependencies.
 
 ## Technical Constraints
 - aPaaS form component with 7 render scenes (edit/read/ide/list/print/search/search-ide)
-- Scaffold files already exist. Do NOT modify package.json, vue.config.js, or babel.config.js. Avoid unrelated index.js changes, but you may update `src/form-component/form-editor/index.js` and `src/form-component-config/form-editor/index.js` when adding `setting.vue` / `editor.config.js`.
+- Scaffold files already exist. Do NOT modify vue.config.js or babel.config.js. Avoid unrelated index.js changes, but you may update `src/form-component/form-editor/index.js` and `src/form-component-config/form-editor/index.js` when adding `setting.vue` / `editor.config.json`.
 - Vue 2.7 + Element UI (globally registered, do NOT import Element UI)
-- Use FormWidgetMixin (provides formValue, widget, updatePropValue, etc.)
-- 所有 mixin 都使用默认导入，不要写命名导入；例如 `import FormWidgetMixin from '@/mixin/form-widget.mixin'`
+- **console.log is stripped in production — use `console.info` for ALL debug output in every mode.**
+- **formEngine is NOT available in `beforeCreate()` — only access `this.formEngine` from `created()` or later.**
+
+## Mixin Per Mode (always use default import, never named import)
+- edit / ide / read → `import FormWidgetMixin from '@/mixin/form-widget.mixin'`
+- list            → `import ListWidgetMixin from '@/mixin/list-widget.mixin'`
+- print           → `import PrintWidgetMixin from '@/mixin/print-widget.mixin'`
+- search          → `import SearchWidgetMixin from '@/mixin/search-widget.mixin'`
+- search-ide      → `import SearchIdeWidgetMixin from '@/mixin/search-ide-widget.mixin'`
+- editor (setting.vue) → `import EditorFormConfigMixin from '@/mixin/form-config.mixin'`
+
+## Mode-specific Rules
+- **List mode**: config = `this.componentConfig` (NOT `this.widget`); `this.formValue` is the concrete value prop directly (no propKey indexing); NO `<x-proxy-form-item>` wrapper.
+- **Print mode**: NO `<el-xxx>` tags — Element UI does not render in print context; NO `<x-proxy-form-item>`; pure HTML/CSS only; use structure `div.print-item > div.print-item-title + div.print-item-value`; when `widget.isInTable` is true, omit the title.
+- **Search mode**: NO `<x-proxy-form-item>`; submit via `this.$emit('change', [value])` — value MUST be wrapped in an array; do NOT use formValue setter.
+- **Search-IDE mode**: NO `<x-proxy-form-item>`; all inputs `disabled`; only implement when Search mode is also implemented.
+- **IDE mode**: all inputs must be `disabled` — IDE renders in the form designer canvas where user interaction is not allowed.
+- **Edit mode**: check `this.widget.readOnly`; guard formValue undefined with fallback; never use both `v-model` and `@input` on the same element (causes infinite loop).
+
+## BOF Type & formValue
+- BOF_NUMBER caveat: `formValue` may arrive as a string from the platform. Always guard: `const n = Number(this.formValue); if (isNaN(n)) { /* fallback */ }`.
+
+## widget.config.json Requirements
+- **文件格式**: 生成 `{name}.widget.config.json`（纯 JSON，不是 JS 文件），路径为 `src/form-component-config/form-widget/{name}.widget.config.json`。
+- **导入方式**: `index.js` 中使用 `import XxxWidgetConfig from './{name}.widget.config.json'`（必须带 `.json` 后缀）。
+- Top-level structure MUST include: `version`, `code`, `desc`, `instance`, `component`, `widget`, `client`, `componentModelField`, `methods`, `formatValueSchema` — 缺少任何一个平台会崩溃。
+- `code`: MUST start with `FORM_CUSTOM_` followed by a semantic uppercase string (e.g. `FORM_CUSTOM_DATA_SELECT`). Must match `apaas.json` `code` field.
+- `desc.iconType`: fixed value `"DEFAULT"`.
+- `desc.icon`: MUST be a real SVG string semantically matching the component (e.g. `"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\">...</svg>"`). Never use an icon class string.
+- **CRITICAL**: `desc.text`、`desc.description`、`widget.display.label` 必须根据**当前需求**填写真实的中文名称和描述，绝对禁止出现 "Demo"、"demo"、"Demo组件"、"Demo组件描述" 等占位文字。例如国际手机号组件应填写 `"text": "国际手机号"`。
+- `instance`: fixed `{ "uuid": "$itemUuid", "inTable": false }`.
+- `widget.display.width`: `3 | 6 | 12` (1/4 / 1/2 / full row). `mobileWidth`: `6 | 12`. `height: 1`. `hidden/readOnly/required/onlyCreateEdit`: all `false`.
+- `widget.allow`: MUST include all 4 fields: `"calcRule": false`, `"useInTableColumn": <boolean>`, `"scanCode": false`, `"copy": false`. `useInTableColumn` should be `true` by default unless sub-table usage is explicitly not needed.
+- `widget.default`: `{ "customDefaultKey": "defaultValue", "value": null }` — value is `null`, NOT `""`.
+- `widget.validator`: `{ "uniqueCheck": false }`.
+- `widget.special.frontBusinessObjectComponentType`: `"BOF_TEXT"` for string/json values, `"BOF_NUMBER"` for numbers, `"BOF_DATE"` for single date values.
+- `componentModelField` (top-level, NOT inside widget.special): `["STRING"]` for <500 chars, `["BIG_TEXT"]` for ≥500 chars, `["NUM"]` for numbers, `["DATE"]` for single dates.
+- `widget.editor.config`: array starting with `["INFO","LABEL","FIELD_CODE","TITLE_DESCRIPTION","WIDTH","HIDDEN","READONLY","REQUIRED","EDITONNEW","UNIQUE","HIDDEN_SAVE","HIDDEN_TRIGGER","TRIGGER_BUSINESS_EVENTS"]` then any custom config codes. `FORMULA_RULE` only if needed. `excludeInTable` must include `"WIDTH"` plus any other non-applicable configs.
+- `client.mobile.widget.editor.config`: same structure as `widget.editor.config`.
+- `client.mobile.component`: required fields `edit`, `read`, `ide`; optional `list`, `association`, `lov`, `tableColumn`. Names should be `Mobile` + PC component name convention.
+- `component` (PC): required `ide`, `edit`, `read`; optional `list`, `association`, `lov`, `print`, `search`, `searchIde`.
+
+## setting.vue Rules
 - setting.vue uses componentConfig prop + formEngine prop
 - setting.vue 必须通过 `componentConfig` prop 读取平台配置，但模板中统一绑定 `customComponentConfig.xxx`（computed 别名），不要直接写 `componentConfig.customComponentConfig.xxx`
 - 方法名不是关键，关键是配置写入路径必须正确：严禁在 setting.vue 中使用 `localConfig`、`formData`、`config` 这类镜像配置
 - 如果存在 `saveConfig()` / `handleChange()` / `updateComponentConfig()` 等方法，它们也只能直接操作 `customComponentConfig.xxx`，不能通过 `$emit('update:componentConfig', ...)` 或镜像状态回写
 - 严禁调用不存在的配置写入 API：`formEngine.updateWidgetConfig(...)`、`formEngine.updateCustomComponentConfig(...)`、`formEngine.updateWidgetCustomConfig(...)`、`formEngine.updateSpecialConfig(...)`、`formEngine.setWidgetInfo(...)`
 - `setting.vue` must be written to `src/form-component/form-editor/{name}-setting.vue`
-- `editorConfigList` must be aggregated by `src/form-component-config/form-editor/index.js` from `./{name}.editor.config.js`
+- `editorConfigList` must be aggregated by `src/form-component-config/form-editor/index.js` from `./{name}.editor.config.json`
 - The edit.vue is the primary file. read.vue shows readonly view. ide.vue shows placeholder. Others can be minimal.
 """
         if project_type == "layout":
@@ -623,11 +672,11 @@ class VibeCodingAgent:
 
 ## CRITICAL Rules
 - **Progress notes are visible to the user**: keep them brief, concrete, and friendly. Do NOT dump hidden reasoning or long analysis.
-- **Do NOT generate `widget.config.js`, `editor.config.js`, or `setting.vue` by default**.
+- **Do NOT generate `widget.config.json`, `editor.config.json`, or `setting.vue` by default**.
 - **Focus on layout structure**: `x-app-layout`, `header`, `menu`, `appPage`, and any optional layout-only subcomponents.
 - `templateType` must remain `PAGE_LAYOUT`
 - `appPage` must forward platform content with `<slot name="appPage">`
-- Do NOT modify package.json unless the task explicitly requires it.
+- Element UI is globally registered — do NOT import it. For any other library not pre-installed, run `npm install <pkg>` via run_command and `import` it explicitly. Do NOT manually edit `package.json`. NEVER use `this.$xxx` for libraries not globally registered.
 """
         elif project_type == "form-list":
             workflow = """
@@ -643,6 +692,7 @@ class VibeCodingAgent:
 - `templateType` must remain `LIST_VIEW`
 - Do NOT apply the 7-scene form-component pattern
 - Focus on `index.js`, `apaas.json`, `form-view/*.vue`, and i18n files
+- Element UI is globally registered — do NOT import it. For any other library not pre-installed, run `npm install <pkg>` via run_command and `import` it explicitly. Do NOT manually edit `package.json`. NEVER use `this.$xxx` for libraries not globally registered.
 """
         elif project_type == "plugin":
             workflow = """
@@ -658,6 +708,7 @@ class VibeCodingAgent:
 - `templateType` must remain `FRONTEND_PLUGIN`
 - Every entry file must default-export `{ install, activate, staticComponents }`
 - Do NOT generate form-component files like edit.vue/read.vue/setting.vue
+- Element UI is globally registered — do NOT import it. For any other library not pre-installed, run `npm install <pkg>` via run_command and `import` it explicitly. Do NOT manually edit `package.json`. NEVER use `this.$xxx` for libraries not globally registered.
 """
         elif project_type == "backend-api":
             workflow = """

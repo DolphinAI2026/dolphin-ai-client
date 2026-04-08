@@ -4,9 +4,201 @@
 
 import re
 import json
-from typing import List, TYPE_CHECKING
+from typing import List, Optional, Any, TYPE_CHECKING
 
+from pydantic import BaseModel, field_validator, model_validator
 from app.coding.form_component_editor import validate_setting_component_contract
+
+
+# ---------------------------------------------------------------------------
+# Pydantic models for widget.config.json validation
+# ---------------------------------------------------------------------------
+
+class _WidgetDesc(BaseModel):
+    iconType: str
+    icon: str
+    text: str
+    description: str
+
+    @field_validator("text")
+    @classmethod
+    def text_must_not_be_placeholder(cls, v: str) -> str:
+        if "demo" in v.lower():
+            raise ValueError(f"desc.text 不能使用占位值（含 demo），请填写真实组件名称，当前为 \"{v}\"")
+        return v
+
+    @field_validator("iconType")
+    @classmethod
+    def icon_type_must_be_default(cls, v: str) -> str:
+        if v != "DEFAULT":
+            raise ValueError("desc.iconType 必须为 \"DEFAULT\"")
+        return v
+
+    @field_validator("icon")
+    @classmethod
+    def icon_must_be_svg(cls, v: str) -> str:
+        if not v.strip().startswith("<svg"):
+            raise ValueError("desc.icon 必须是 SVG 字符串（以 <svg 开头），不能使用图标类名")
+        return v
+
+
+class _WidgetInstance(BaseModel):
+    uuid: str
+    inTable: bool
+
+
+class _WidgetDisplay(BaseModel):
+    label: str
+    width: int
+    mobileWidth: int
+    height: int
+    hidden: bool
+    readOnly: bool
+    required: bool
+    onlyCreateEdit: bool
+
+    @field_validator("width")
+    @classmethod
+    def width_must_be_valid(cls, v: int) -> int:
+        if v not in (3, 6, 12):
+            raise ValueError(f"widget.display.width 只能是 3/6/12，当前为 {v}")
+        return v
+
+    @field_validator("mobileWidth")
+    @classmethod
+    def mobile_width_must_be_valid(cls, v: int) -> int:
+        if v not in (6, 12):
+            raise ValueError(f"widget.display.mobileWidth 只能是 6/12，当前为 {v}")
+        return v
+
+
+class _WidgetAllow(BaseModel):
+    calcRule: bool
+    useInTableColumn: bool
+    scanCode: bool
+    copy: bool
+
+
+class _WidgetDefault(BaseModel):
+    customDefaultKey: str
+    value: Any
+
+    @field_validator("value", mode="before")
+    @classmethod
+    def value_must_be_null(cls, v: Any) -> Any:
+        if v is not None:
+            raise ValueError(f"widget.default.value 必须为 null，当前为 {repr(v)}")
+        return v
+
+
+class _WidgetValidator(BaseModel):
+    uniqueCheck: bool
+
+
+class _WidgetSpecial(BaseModel):
+    frontBusinessObjectComponentType: str
+
+    @field_validator("frontBusinessObjectComponentType")
+    @classmethod
+    def bof_type_must_be_valid(cls, v: str) -> str:
+        if v not in ("BOF_TEXT", "BOF_NUMBER", "BOF_DATE"):
+            raise ValueError(f"frontBusinessObjectComponentType 只能是 BOF_TEXT/BOF_NUMBER/BOF_DATE，当前为 {v}")
+        return v
+
+
+class _WidgetEditor(BaseModel):
+    config: List[str]
+    excludeInTable: List[str]
+
+
+class _Widget(BaseModel):
+    display: _WidgetDisplay
+    allow: _WidgetAllow
+    default: _WidgetDefault
+    validator: _WidgetValidator
+    special: _WidgetSpecial
+    editor: _WidgetEditor
+
+
+class _PCComponent(BaseModel):
+    ide: str
+    edit: str
+    read: str
+    list: Optional[str] = None
+    association: Optional[str] = None
+    lov: Optional[str] = None
+    print: Optional[str] = None
+    search: Optional[str] = None
+    searchIde: Optional[str] = None
+
+
+class _MobileComponent(BaseModel):
+    ide: str
+    edit: str
+    read: str
+    list: Optional[str] = None
+    association: Optional[str] = None
+    lov: Optional[str] = None
+    tableColumn: Optional[str] = None
+
+
+class _MobileEditor(BaseModel):
+    config: List[str]
+    excludeInTable: List[str]
+
+
+class _MobileWidget(BaseModel):
+    editor: _MobileEditor
+
+
+class _MobileClient(BaseModel):
+    widget: _MobileWidget
+    component: _MobileComponent
+
+
+class _ClientConfig(BaseModel):
+    mobile: _MobileClient
+
+
+class WidgetComponentConfig(BaseModel):
+    version: float
+    code: str
+    desc: _WidgetDesc
+    instance: _WidgetInstance
+    component: _PCComponent
+    widget: _Widget
+    client: _ClientConfig
+    componentModelField: List[str]
+    methods: dict
+    formatValueSchema: dict
+
+    @field_validator("code")
+    @classmethod
+    def code_must_start_with_form_custom(cls, v: str) -> str:
+        if not v.startswith("FORM_CUSTOM_"):
+            raise ValueError(f"code 必须以 FORM_CUSTOM_ 开头，当前为 \"{v}\"")
+        return v
+
+    @field_validator("componentModelField")
+    @classmethod
+    def component_model_field_must_be_valid(cls, v: List[str]) -> List[str]:
+        valid = {"STRING", "NUM", "DATE", "BIG_TEXT"}
+        for field in v:
+            if field not in valid:
+                raise ValueError(f"componentModelField 只能是 STRING/NUM/DATE/BIG_TEXT，当前含 \"{field}\"")
+        return v
+
+    @model_validator(mode="after")
+    def bof_type_matches_component_model_field(self) -> "WidgetComponentConfig":
+        mapping = {"STRING": "BOF_TEXT", "BIG_TEXT": "BOF_TEXT", "NUM": "BOF_NUMBER", "DATE": "BOF_DATE"}
+        for cmf in self.componentModelField:
+            expected = mapping.get(cmf)
+            actual = self.widget.special.frontBusinessObjectComponentType
+            if expected and actual != expected:
+                raise ValueError(
+                    f"componentModelField={cmf} 时 frontBusinessObjectComponentType 应为 {expected}，当前为 {actual}"
+                )
+        return self
 
 if TYPE_CHECKING:
     from app.coding.generator import GeneratedFile
@@ -102,14 +294,14 @@ def _validate_form_component_editor_registration(file_map: dict[str, "GeneratedF
     errors = []
     widget_config_paths = [
         path for path in file_map
-        if path.startswith("src/form-component-config/form-widget/") and path.endswith(".widget.config.js")
+        if path.startswith("src/form-component-config/form-widget/") and path.endswith(".widget.config.json")
     ]
     if not widget_config_paths:
         return errors
 
     for widget_config_path in widget_config_paths:
-        widget_name = widget_config_path.rsplit("/", 1)[-1].replace(".widget.config.js", "")
-        editor_config_path = f"src/form-component-config/form-editor/{widget_name}.editor.config.js"
+        widget_name = widget_config_path.rsplit("/", 1)[-1].replace(".widget.config.json", "")
+        editor_config_path = f"src/form-component-config/form-editor/{widget_name}.editor.config.json"
         editor_index_path = "src/form-component-config/form-editor/index.js"
         setting_path = f"src/form-component/form-editor/{widget_name}-setting.vue"
         form_editor_index_path = "src/form-component/form-editor/index.js"
@@ -141,8 +333,8 @@ def _validate_form_component_editor_registration(file_map: dict[str, "GeneratedF
         editor_index = file_map.get(editor_index_path)
         if not editor_index:
             errors.append(f"缺少编辑器配置聚合文件 '{editor_index_path}'")
-        elif f"./{widget_name}.editor.config" not in editor_index.content:
-            errors.append(f"'{editor_index_path}' 未导入 './{widget_name}.editor.config'")
+        elif f"./{widget_name}.editor.config.json" not in editor_index.content:
+            errors.append(f"'{editor_index_path}' 未导入 './{widget_name}.editor.config.json'")
 
         form_editor_index = file_map.get(form_editor_index_path)
         if not form_editor_index:
@@ -150,14 +342,21 @@ def _validate_form_component_editor_registration(file_map: dict[str, "GeneratedF
         elif f"./{widget_name}-setting.vue" not in form_editor_index.content:
             errors.append(f"'{form_editor_index_path}' 未导入 './{widget_name}-setting.vue'")
 
-        component_name_match = re.search(r"componentName:\s*['\"]([^'\"]+)['\"]", editor_config.content)
+        # editor.config.json 用 JSON 解析获取 componentName
+        editor_component_name = None
+        try:
+            editor_data = json.loads(editor_config.content)
+            editor_component_name = editor_data.get("componentName")
+        except json.JSONDecodeError:
+            errors.append(f"'{editor_config_path}' 不是合法的 JSON 格式")
+
         setting_name_match = re.search(r"name:\s*['\"]([^'\"]+)['\"]", setting_file.content)
-        if not component_name_match:
+        if not editor_component_name:
             errors.append(f"'{editor_config_path}' 缺少 componentName")
         if not setting_name_match:
             errors.append(f"'{setting_path}' 缺少组件 name")
-        if component_name_match and setting_name_match:
-            if component_name_match.group(1) != setting_name_match.group(1):
+        if editor_component_name and setting_name_match:
+            if editor_component_name != setting_name_match.group(1):
                 errors.append(
                     f"'{editor_config_path}' 的 componentName 与 '{setting_path}' 的 name 不一致"
                 )
@@ -166,6 +365,29 @@ def _validate_form_component_editor_registration(file_map: dict[str, "GeneratedF
 
 
 def _validate_widget_config_contract(files: List["GeneratedFile"]) -> List[str]:
+    """使用 Pydantic 校验 .widget.config.json 文件结构"""
+    errors = []
+    widget_config_files = [f for f in files if f.path.endswith(".widget.config.json")]
+    for f in widget_config_files:
+        try:
+            data = json.loads(f.content)
+        except json.JSONDecodeError as e:
+            errors.append(f"'{f.path}' 不是合法的 JSON 格式：{e}")
+            continue
+
+        try:
+            WidgetComponentConfig.model_validate(data)
+        except Exception as e:
+            for err in getattr(e, "errors", lambda: [{"msg": str(e)}])():
+                loc = " -> ".join(str(x) for x in err.get("loc", []))
+                msg = err.get("msg", str(err))
+                errors.append(f"'{f.path}' 校验失败：{loc} — {msg}" if loc else f"'{f.path}' 校验失败：{msg}")
+
+    return errors
+
+
+def _validate_widget_config_contract_legacy_regex(files: List["GeneratedFile"]) -> List[str]:
+    """旧正则校验逻辑（已停用，保留备用）"""
     errors = []
     widget_config_files = [f for f in files if f.path.endswith(".widget.config.js")]
     for f in widget_config_files:
