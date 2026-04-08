@@ -19,6 +19,7 @@ export const usePreviewStore = defineStore('preview', () => {
     roles: [],
     dicts: [],
     models: [],
+    forms: [],
     workflows: [],
     permissions: []
   })
@@ -52,6 +53,7 @@ export const usePreviewStore = defineStore('preview', () => {
     preview.roles = []
     preview.dicts = []
     preview.models = []
+    preview.forms = []
     preview.workflows = []
     preview.permissions = []
     resetGenProgress()

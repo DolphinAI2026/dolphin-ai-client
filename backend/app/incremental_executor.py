@@ -273,7 +273,30 @@ class IncrementalExecutor:
         """兼容 preview 的 description 与平台字段的 fieldComment。"""
         if not field_data:
             return ""
-        return field_data.get("fieldComment", field_data.get("description", ""))
+        return field_data.get("fieldComment", field_data.get("comment", field_data.get("description", "")))
+
+    @staticmethod
+    def _field_database_type_value(field_data: Optional[Dict[str, Any]]) -> str:
+        if not field_data:
+            return "varchar"
+        value = (
+            field_data.get("databaseFieldType")
+            or field_data.get("database_field_type")
+            or field_data.get("db_type")
+            or "varchar"
+        )
+        return str(value).strip().lower()
+
+    @staticmethod
+    def _field_max_length_value(field_data: Optional[Dict[str, Any]]):
+        if not field_data:
+            return None
+        return (
+            field_data.get("maxLength")
+            or field_data.get("max_length")
+            or field_data.get("length")
+            or None
+        )
 
     async def _load_remote_models_by_code(self) -> Dict[str, Dict[str, Any]]:
         """按 modelCode 建立远端模型索引，供执行阶段补 remote_id。"""
@@ -912,9 +935,10 @@ class IncrementalExecutor:
                         "fieldCode": f.get("fieldCode", f.get("code", "")),
                         "fieldName": f.get("fieldName", f.get("name", "")),
                         "fieldType": f.get("fieldType", "STRING"),
-                        "databaseFieldType": f.get("databaseFieldType", "varchar"),
+                        "databaseFieldType": self._field_database_type_value(f),
                         "fieldStatus": "ENABLE",
-                        "fieldComment": self._field_comment_value(f)
+                        "fieldComment": self._field_comment_value(f),
+                        **({"maxLength": self._field_max_length_value(f)} if self._field_max_length_value(f) else {})
                     }
                     for f in fields
                 ]
@@ -1009,9 +1033,10 @@ class IncrementalExecutor:
             "fieldCode": change.code,
             "fieldName": change.name,
             "fieldType": field_data.get("fieldType", "STRING"),
-            "databaseFieldType": field_data.get("databaseFieldType", "varchar"),
+            "databaseFieldType": self._field_database_type_value(field_data),
             "fieldStatus": "ENABLE",
             "fieldComment": self._field_comment_value(field_data),
+            **({"maxLength": self._field_max_length_value(field_data)} if self._field_max_length_value(field_data) else {})
         }
 
         await self._post("/xdap-app/modelField/add", payload)
@@ -1049,9 +1074,10 @@ class IncrementalExecutor:
                 "fieldCode": change.code,
                 "fieldName": change.name,
                 "fieldType": old_type,
-                "databaseFieldType": old_data.get("databaseFieldType", "varchar"),
+                "databaseFieldType": self._field_database_type_value(old_data),
                 "fieldStatus": "DISABLE",
                 "fieldComment": self._field_comment_value(old_data),
+                **({"maxLength": self._field_max_length_value(old_data)} if self._field_max_length_value(old_data) else {})
             }
             await self._post("/xdap-app/modelField/update/fromApp", disable_payload)
             self.result.journal.record(
@@ -1068,8 +1094,9 @@ class IncrementalExecutor:
                 change_type=ChangeType.ADDED,
                 new_value={
                     "fieldType": new_type,
-                    "databaseFieldType": new_data.get("databaseFieldType", "varchar"),
+                    "databaseFieldType": self._field_database_type_value(new_data),
                     "fieldComment": self._field_comment_value(new_data),
+                    **({"maxLength": self._field_max_length_value(new_data)} if self._field_max_length_value(new_data) else {})
                 },
             )
             await self._create_field(model_id, new_field_change)
@@ -1092,9 +1119,10 @@ class IncrementalExecutor:
             "fieldCode": change.code,
             "fieldName": change.name,
             "fieldType": new_type,
-            "databaseFieldType": new_data.get("databaseFieldType", "varchar"),
+            "databaseFieldType": self._field_database_type_value(new_data),
             "fieldStatus": "ENABLE",
             "fieldComment": self._field_comment_value(new_data),
+            **({"maxLength": self._field_max_length_value(new_data)} if self._field_max_length_value(new_data) else {})
         }
 
         await self._post("/xdap-app/modelField/update/fromApp", payload)
@@ -1115,9 +1143,10 @@ class IncrementalExecutor:
             "fieldCode": change.code,
             "fieldName": change.name,
             "fieldType": field_data.get("fieldType", "STRING"),
-            "databaseFieldType": field_data.get("databaseFieldType", "varchar"),
+            "databaseFieldType": self._field_database_type_value(field_data),
             "fieldStatus": "DISABLE",  # 设置为禁用
-            "fieldComment": self._field_comment_value(field_data)
+            "fieldComment": self._field_comment_value(field_data),
+            **({"maxLength": self._field_max_length_value(field_data)} if self._field_max_length_value(field_data) else {})
         }
 
         await self._post("/xdap-app/modelField/update/fromApp", payload)

@@ -170,6 +170,7 @@ export interface PreviewData {
   roles: RoleDef[]
   dicts: DictDef[]
   models: ModelDef[]
+  forms: any[]
   workflows: WorkflowDef[]
   permissions: PermissionDef[]
 }

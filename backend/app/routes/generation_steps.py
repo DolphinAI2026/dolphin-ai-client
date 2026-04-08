@@ -19,6 +19,7 @@ from app.crypto import decrypt_password
 from app.database import get_db
 from app.deps import get_auth_context, AuthContext
 from app.models import Application, User, ApiCallLog
+from app.routes.applications import _dump_preview_config
 from app.schemas import (
     StepExecuteRequest, StepResetRequest,
     StepStatus, GenerationStatusResponse, StepExecuteResponse,
@@ -295,19 +296,22 @@ def _build_steps(config: dict, state: dict, apaas_app_id: str = None) -> list[St
         ))
 
     # 5. 表单（每个独立）
-    for idx, m in enumerate(models):
+    forms = data.get("forms", []) or []
+    for idx, form in enumerate(forms):
         key = f"create_form:{idx}"
-        model_key = f"create_model:{idx}"
-        deps_ok = all_roles_done and all_dicts_done and model_key in completed
+        form_model_code = str(form.get("modelCode", form.get("model_code", ""))).strip()
+        model_idx = next((i for i, m in enumerate(models) if str(m.get("code", "")).strip() == form_model_code), None)
+        model_key = f"create_model:{model_idx}" if model_idx is not None else None
+        deps_ok = all_roles_done and all_dicts_done and (model_key in completed if model_key else app_created)
         steps.append(StepStatus(
-            key=key, label=f"创建表单: {m['name']}",
+            key=key, label=f"创建表单: {form.get('name', form.get('formName', f'表单{idx}'))}",
             status="completed" if key in completed else ("error" if key in errors else "pending"),
             deps_met=deps_ok,
-            model_index=idx,
+            model_index=model_idx if model_idx is not None else idx,
             error=errors.get(key),
         ))
 
-    all_forms_done = all(f"create_form:{i}" in completed for i in range(len(models)))
+    all_forms_done = all(f"create_form:{i}" in completed for i in range(len(forms)))
     workflows = data.get("workflows", [])
     if WORKFLOW_STEPS_ENABLED:
         for idx, wf in enumerate(workflows):
@@ -368,7 +372,7 @@ def _sync_platform_codes_to_config(app: Application, state: dict, data: dict):
         # 回写 apaas_app_id
         cfg_data["apaas_app_id"] = state.get("apaas_app_id") or app.apaas_app_id
 
-        app.config_preview = json.dumps(config, ensure_ascii=False)
+        app.config_preview = _dump_preview_config(config)
         logger.info(f"平台编码已回写到 config_preview (app_id={app.id})")
     except Exception as e:
         logger.warning(f"回写平台编码失败: {e}")
@@ -860,12 +864,14 @@ async def _execute_step_impl(
 
     elif step_key.startswith("create_form:"):
         idx = int(step_key.split(":")[1])
-        if idx >= len(models):
+        forms = data.get("forms", []) or []
+        if idx >= len(forms):
             raise ValueError(f"表单索引 {idx} 超出范围")
         dict_codes = state.get("dict_codes", {})
         model_info = state.get("model_info", {})
+        form_def = forms[idx]
         result = await execute_create_form(
-            client, apaas_app_id, models[idx], idx,
+            client, apaas_app_id, form_def, idx,
             dict_codes, model_info, models,
         )
         state.setdefault("form_results", [])
@@ -1026,7 +1032,7 @@ async def resolve_conflict(
     code_remaps[old_code] = new_code
 
     # 7. 保存更新后的 config_preview
-    app.config_preview = json.dumps(config, ensure_ascii=False)
+    app.config_preview = _dump_preview_config(config)
 
     # 8. 清除该步骤的错误状态，让重试可以执行
     state = _load_state(app)

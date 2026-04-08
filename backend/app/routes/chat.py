@@ -322,6 +322,18 @@ def _build_incremental_config_prompt(current_config: dict | None) -> str:
         f"\n当前应用：{app_name}"
         f"\n当前配置概况：{len(roles)} 个角色，{len(dicts)} 个字典，{len(models)} 个模型，{len(forms)} 个表单，{len(permissions)} 个权限组。"
         "\n请只围绕用户本次补充的内容进行修改、补充、解释或给出增量配置建议。"
+        "\n如果用户是在修改配置，请不要返回完整 preview JSON。"
+        "\n必须只输出一个 ```json 代码块，格式为："
+        '\n{"type":"patch","actions":[...]}'
+        "\n只允许使用这些 patch op："
+        "\nadd_dict, update_dict, remove_dict,"
+        "\nadd_field, update_field, remove_field,"
+        "\nadd_model, remove_model,"
+        "\nadd_role, remove_role,"
+        "\nadd_workflow, update_workflow, remove_workflow,"
+        "\nadd_permission, update_permission, remove_permission, set_permissions。"
+        "\n禁止输出完整 preview，禁止整份重写当前 JSON。"
+        "\n如果只是解释，不需要修改配置，则不要输出 JSON。"
     )
 
 

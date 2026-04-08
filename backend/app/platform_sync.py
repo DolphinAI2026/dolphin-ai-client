@@ -397,6 +397,8 @@ def _build_models_from_form_configs(
                         "type": "子表",
                         "icon": "▦",
                         "required": comp.get("required", False),
+                        "hidden": comp.get("hidden", False),
+                        "readonly": comp.get("readOnly", False),
                         "sub_code": sub_model_code,
                         "sub_fields": sub_fields,
                     })
@@ -460,6 +462,8 @@ def _extract_single_field(
         "code": field_code,
         "type": field_type,
         "required": comp.get("required", False),
+        "hidden": comp.get("hidden", False),
+        "readonly": comp.get("readOnly", False),
     }
 
     # 字典绑定：从 source.type=DICTIONARY_TYPE 提取

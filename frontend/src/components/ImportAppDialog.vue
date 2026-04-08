@@ -55,11 +55,10 @@
               selected: selectedAppId === app.apaas_app_id,
               imported: app.already_imported,
             }"
-            @click="!app.already_imported && (selectedAppId = app.apaas_app_id)"
+            @click="selectedAppId = app.apaas_app_id"
           >
             <div class="app-item-left">
-              <el-icon v-if="app.already_imported" class="check-icon"><Check /></el-icon>
-              <div v-else class="radio-dot" :class="{ active: selectedAppId === app.apaas_app_id }" />
+              <div class="radio-dot" :class="{ active: selectedAppId === app.apaas_app_id }" />
               <div>
                 <div class="app-item-name">{{ app.app_name }}</div>
                 <div v-if="app.app_code" class="app-item-code">{{ app.app_code }}</div>
@@ -81,7 +80,7 @@
         :disabled="!selectedAppId"
         @click="doImport"
       >
-        导入选中应用
+        {{ selectedIsImported ? '重新导入' : '导入选中应用' }}
       </el-button>
     </template>
   </el-dialog>
@@ -89,7 +88,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import { Search, Loading, Check } from '@element-plus/icons-vue'
+import { Search, Loading } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { platformEnvApi, type PlatformEnv, type RemoteApp } from '@/api/platformEnv'
 import { applicationApi } from '@/api/application'
@@ -115,6 +114,10 @@ const importing = ref(false)
 
 const connectedEnvs = computed(() =>
   envs.value.filter((e) => e.status === 'connected')
+)
+
+const selectedIsImported = computed(() =>
+  remoteApps.value.find((a) => a.apaas_app_id === selectedAppId.value)?.already_imported ?? false
 )
 
 const filteredApps = computed(() => {
