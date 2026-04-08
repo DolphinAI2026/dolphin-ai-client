@@ -307,10 +307,10 @@ src/
 │   ├── index.js
 │   ├── form-widget/
 │   │   ├── index.js
-│   │   └── {name}.widget.config.js     # ★ 核心：组件定义（code、场景映射、编辑器配置）
+│   │   └── {name}.widget.config.json   # ★ 核心：组件定义（code、场景映射、编辑器配置）
 │   └── form-editor/
 │       ├── index.js
-│       └── {name}.editor.config.js     # 编辑器配置映射
+│       └── {name}.editor.config.json   # 编辑器配置映射（纯注册，只有4个字段）
 ├── mixin/
 │   ├── form-widget.mixin.js            # ★ 核心 Mixin（提供 formValue、widget、validatorRules 等）
 │   ├── print-widget.mixin.js           # 打印场景 Mixin
@@ -390,77 +390,99 @@ if (platformI18n?.mergeLocaleMessage) {
 }
 ```
 
-### widget.config.js（组件配置 - 最核心的文件之一）
-```javascript
-const FormComponentXxxWidgetConfig = {
-  version: 2.0,
-  code: 'FORM_CUSTOM_COMPONENT_XXX',  // 必须与 apaas.json 中一致
-  desc: {
-    iconType: 'DEFAULT',
-    icon: '<svg>...</svg>',  // 组件图标SVG，必须是符合组件功能的内联 SVG 字符串，禁止使用 form-custom-widget 或空字符串
-    text: '组件名称',         // 必须是符合当前组件语义的标题，例如“文件上传”“日期范围选择”
-    description: '组件描述'   // 必须是符合当前组件语义的描述，禁止使用 demo component 之类占位
+### widget.config.json（组件配置 - 最核心的文件之一）
+路径：`src/form-component-config/form-widget/{name}.widget.config.json`（纯 JSON，不是 JS 文件）
+
+```json
+{
+  “version”: 2.0,
+  “code”: “FORM_CUSTOM_XXX”,
+  “desc”: {
+    “iconType”: “DEFAULT”,
+    “icon”: “<svg xmlns=\”http://www.w3.org/2000/svg\” viewBox=\”0 0 24 24\”>...</svg>”,
+    “text”: “组件名称”,
+    “description”: “组件描述”
   },
-  instance: { uuid: '$itemUuid', inTable: false },
-  // ★ 7种渲染场景对应的 Vue 组件 name
-  component: {
-    ide: 'FormComponentXxxIde',
-    edit: 'FormComponentXxxEdit',
-    read: 'FormComponentXxxRead',
-    list: 'FormComponentXxxList',
-    association: 'FormComponentXxxList',  // 关联表单复用 list
-    lov: 'FormComponentXxxList',          // 数据选择复用 list
-    print: 'FormComponentXxxPrint',
-    search: 'FormComponentXxxSearch',
-    searchIde: 'FormComponentXxxSearchIde'
+  “instance”: { “uuid”: “$itemUuid”, “inTable”: false },
+  “component”: {
+    “ide”: “FormComponentXxxIde”,
+    “edit”: “FormComponentXxxEdit”,
+    “read”: “FormComponentXxxRead”,
+    “list”: “FormComponentXxxList”,
+    “print”: “FormComponentXxxPrint”,
+    “search”: “FormComponentXxxSearch”,
+    “searchIde”: “FormComponentXxxSearchIde”
   },
-  widget: {
-    display: {
-      label: '组件名称', width: 6, mobileWidth: 12, height: 1,  // 必须与 desc.text 保持一致
-      hidden: false, readOnly: false, required: false, onlyCreateEdit: false
+  “widget”: {
+    “display”: {
+      “label”: “组件名称”, “width”: 6, “mobileWidth”: 12, “height”: 1,
+      “hidden”: false, “readOnly”: false, “required”: false, “onlyCreateEdit”: false
     },
-    allow: { useInTableColumn: true },
-    default: { customDefaultKey: 'defaultValue', value: '' },
-    validator: { uniqueCheck: false },
-    validatorList: [{ validatorConfig: [], validatorMessage: '' }],
-    special: { frontBusinessObjectComponentType: 'BOF_TEXT', saveWithHidden: false },
-    editor: {
-      config: [
-        'INFO', 'LABEL', 'FIELD_CODE', 'TITLE_DESCRIPTION', 'WIDTH',
-        'FORM_CUSTOM_COMPONENT_XXX_SETTING',  // 自定义配置面板
-        'FORMULA_RULE', 'HIDDEN', 'READONLY', 'REQUIRED', 'EDITONNEW',
-        'UNIQUE', 'HIDDEN_SAVE', 'HIDDEN_TRIGGER', 'TRIGGER_BUSINESS_EVENTS'
+    “allow”: { “calcRule”: false, “useInTableColumn”: true, “scanCode”: false, “copy”: false },
+    “default”: { “customDefaultKey”: “defaultValue”, “value”: null },
+    “validator”: { “uniqueCheck”: false },
+    “special”: {
+      “frontBusinessObjectComponentType”: “BOF_TEXT”,
+      “saveWithHidden”: false,
+      “customComponentConfig”: {}
+    },
+    “editor”: {
+      “config”: [
+        “INFO”, “LABEL”, “FIELD_CODE”, “TITLE_DESCRIPTION”, “WIDTH”,
+        “HIDDEN”, “READONLY”, “REQUIRED”, “EDITONNEW”,
+        “UNIQUE”, “HIDDEN_SAVE”, “HIDDEN_TRIGGER”, “TRIGGER_BUSINESS_EVENTS”,
+        “FORM_CUSTOM_XXX_SETTING”
       ],
-      excludeInTable: ['WIDTH']
+      “excludeInTable”: [“WIDTH”]
     }
   },
-  componentModelField: ['STRING'],
-  client: {
-    mobile: {
-      widget: { editor: { config: [...], excludeInTable: ['WIDTH'] } },
-      component: { ide: 'MobileXxxIde', edit: 'MobileXxxEdit', ... }
+  “componentModelField”: [“STRING”],
+  “client”: {
+    “mobile”: {
+      “widget”: {
+        “editor”: {
+          “config”: [“INFO”, “LABEL”, “FIELD_CODE”, “TITLE_DESCRIPTION”, “WIDTH”, “HIDDEN”, “READONLY”, “REQUIRED”, “EDITONNEW”, “UNIQUE”, “HIDDEN_SAVE”, “HIDDEN_TRIGGER”, “TRIGGER_BUSINESS_EVENTS”, “FORM_CUSTOM_XXX_SETTING”],
+          “excludeInTable”: [“WIDTH”]
+        }
+      },
+      “component”: { “ide”: “MobileFormComponentXxxIde”, “edit”: “MobileFormComponentXxxEdit”, “read”: “MobileFormComponentXxxRead” }
     }
   },
-  methods: {},
-  formatValueSchema: {}
+  “methods”: {},
+  “formatValueSchema”: {}
 }
-export default FormComponentXxxWidgetConfig
 ```
 
-### editor.config.js（编辑器配置映射 - 核心文件之一）
-```javascript
-const FormComponentXxxEditorConfig = {
-  code: 'FORM_CUSTOM_COMPONENT_XXX_SETTING',
-  editorConfigType: 'FORM_CUSTOM_COMPONENT_XXX_SETTING',
-  componentName: 'FormComponentXxxSetting',  // 对应 src/form-component/form-editor/{name}-setting.vue 中的组件 name
-  configProperty: 'customComponentConfig'
+- **code** 必须以 `FORM_CUSTOM_` 开头，后跟语义化大写字符串（如 `FORM_CUSTOM_RATE`），必须与 `apaas.json` 中 `code` 字段一致
+- **desc.text / desc.description / widget.display.label** 必须填写真实的中文名称，禁止出现 “Demo”、”demo”、”组件名称” 等占位文字
+- **desc.icon** 必须是内联 SVG 字符串，不能为空
+- **widget.allow** 必须包含全部 4 个字段：`calcRule`、`useInTableColumn`、`scanCode`、`copy`
+- **widget.default.value** 必须是 `null`，不能是 `””`
+- **widget.special.customComponentConfig** 必须声明为 `{}`，否则平台保存时不序列化
+- **widget.editor.config** 中如有自定义配置面板，必须将 `{code}_SETTING` 追加到数组**末尾**
+- **widget.editor.excludeInTable** 只能是 `[“WIDTH”]`，不得添加其他值
+
+### editor.config.json（编辑器配置注册 - 只有4个字段）
+路径：`src/form-component-config/form-editor/{name}.editor.config.json`（纯 JSON，不是 JS 文件）
+
+```json
+{
+  “code”: “FORM_CUSTOM_XXX_SETTING”,
+  “editorConfigType”: “FORM_CUSTOM_XXX_SETTING”,
+  “componentName”: “FormComponentXxxSetting”,
+  “configProperty”: “customComponentConfig”
 }
-export default FormComponentXxxEditorConfig
 ```
+
+- `code` = widget.config.json 顶层 `code` + `_SETTING`
+- `editorConfigType` 与 `code` 完全相同
+- `componentName` 必须与 `{name}-setting.vue` 中的 `name` 选项完全一致
+- `configProperty` 固定为 `”customComponentConfig”`，不可修改
+- **⚠️ 此文件严禁出现其他任何字段**（禁止 `editorConfigList`、`options`、`staticData`、`type`、`group` 等）
 
 ### form-component-config/form-editor/index.js（editorConfigList 聚合）
 ```javascript
-import FormComponentXxxEditorConfig from './{name}.editor.config'
+import FormComponentXxxEditorConfig from './{name}.editor.config.json'
 
 const editorConfigList = [FormComponentXxxEditorConfig]
 
@@ -612,7 +634,7 @@ export default {
 }
 ```
 
-**规则五：组件配置的widget.editor.config中必须包含 editor.config.js中的code**
+**规则五：组件配置的widget.editor.config中必须包含 editor.config.json中的code（追加到数组末尾）**
 **规则六：组件配置的desc.icon 必须是一个符合当前组件的svg图标
 
 ### Setting.vue（设计器右侧配置面板）★ 重要
@@ -723,30 +745,33 @@ export default {
 - 子表字段：`item.isInTable && item.tableUuid === '子表uuid'` 或 `subTableItem.sonTableColumns`
 - 子表标识：`subTableItem.uuid`、`subTableItem.label`
 
-### widget.config.js 中的 customComponentConfig ★ 关键
+### widget.config.json 中的 customComponentConfig ★ 关键
 
-```javascript
-widget: {
-  // ... display, allow, default, validator 等标准配置 ...
-  special: { frontBusinessObjectComponentType: 'BOF_TEXT', saveWithHidden: false },
-  customComponentConfig: {},  // ★ 必须声明空对象！否则平台保存时不序列化它
-  editor: {
-    config: [
-      // ★ 不能删除任何标准编辑器配置项！否则平台校验会报错
-      'INFO', 'LABEL', 'FIELD_CODE', 'TITLE_DESCRIPTION', 'WIDTH',
-      'FORM_CUSTOM_COMPONENT_XXX_SETTING', // 必须包含editor.config.js（编辑器配置映射) 中的code字段
-      'FORMULA_RULE', 'HIDDEN', 'READONLY', 'REQUIRED', 'EDITONNEW',
-      'UNIQUE', 'HIDDEN_SAVE', 'HIDDEN_TRIGGER', 'TRIGGER_BUSINESS_EVENTS'
+```json
+"widget": {
+  "special": {
+    "frontBusinessObjectComponentType": "BOF_TEXT",
+    "saveWithHidden": false,
+    "customComponentConfig": {}
+  },
+  "editor": {
+    "config": [
+      "INFO", "LABEL", "FIELD_CODE", "TITLE_DESCRIPTION", "WIDTH",
+      "HIDDEN", "READONLY", "REQUIRED", "EDITONNEW",
+      "UNIQUE", "HIDDEN_SAVE", "HIDDEN_TRIGGER", "TRIGGER_BUSINESS_EVENTS",
+      "FORM_CUSTOM_XXX_SETTING"
     ],
-    excludeInTable: ['WIDTH']
+    "excludeInTable": ["WIDTH"]
   }
 }
 ```
 
 **⚠️ customComponentConfig 规则**：
-- 必须在 widget 级别声明 `customComponentConfig: {}`（空对象）
-- 不能包含空字符串默认值如 `{ dataSource: '' }`，否则平台校验认为"配置不完整"阻止保存
-- 编辑器配置项（TITLE_DESCRIPTION、FORMULA_RULE 等）不能删除，否则平台绑定模型字段时报错
+- 必须在 `widget.special` 内声明 `"customComponentConfig": {}`（空对象），**不是** widget 根级别
+- 不能包含空字符串默认值如 `{ "dataSource": "" }`，否则平台校验认为"配置不完整"阻止保存
+- 编辑器配置项（TITLE_DESCRIPTION 等）不能删除，否则平台绑定模型字段时报错
+- 自定义 setting code（`FORM_CUSTOM_XXX_SETTING`）追加到 config 数组**末尾**，不插入中间
+- `excludeInTable` 只能是 `["WIDTH"]`，不得添加其他值
 
 ### 编辑态组件（edit.vue）★ 核心渲染规则
 
@@ -779,7 +804,7 @@ computed: {
 - **Element UI 已全局注册，不要 import**
 - **网络请求用 `this.$request({...})` 配合 `.asyncThen()` / `.asyncErrorCatch()`**
 - **formValue 存储为 JSON 字符串（复杂数据）或普通字符串（简单值）**
-- **必须根据组件的值存储格式设置 widget.config.js 中的 componentModelField 和 frontBusinessObjectComponentType**：
+- **必须根据组件的值存储格式设置 widget.config.json 中的 componentModelField 和 frontBusinessObjectComponentType**：
   - `componentModelField` 必须与 `widget` 同级，不能写在 `widget` 内部
   - `componentModelField` 只能是单选数组，且只支持 `['STRING']` / `['NUM']` / `['DATE']` / `['BIG_TEXT']`
   - 存储单个日期值 → `componentModelField: ['DATE']`, `frontBusinessObjectComponentType: 'BOF_DATE'`
@@ -795,7 +820,7 @@ computed: {
     - base64 图片 → 远超 500 → `['BIG_TEXT']`
     - 不确定长度（用户可随意输入大量内容）→ 保守选 `['BIG_TEXT']`
   - 判断依据是 formValue 序列化后的实际字符数，不是组件外观；日期范围虽然是数组，序列化后很短，用 `STRING` 而非 `DATE`
-- **如果 scaffold 模板的 componentModelField 与组件实际需求不匹配，必须在生成代码时同时修改 widget.config.js**
+- **如果 scaffold 模板的 componentModelField 与组件实际需求不匹配，必须在生成代码时同时修改 widget.config.json**
 - **编辑态组件中修改其他字段：使用 `this.$set(this.formData, key, value)`**
 - **edit.vue 只渲染内容，配置界面只放 setting.vue**
 - **setting.vue 与 edit/read/ide.vue 的配置读写路径必须一致**（直接用 `customComponentConfig.xxx`，不要多嵌套）
@@ -816,20 +841,19 @@ computed: {
 ```
 
 **editorConfigList 注册方式：**
-```javascript
-// src/form-component-config/form-editor/{name}.editor.config.js
-const FormComponentXxxEditorConfig = {
-  code: 'FORM_CUSTOM_XXX_SETTING',           // 与 widget.editor.config 中的配置项名一致
-  editorConfigType: 'FORM_CUSTOM_XXX_SETTING', // 通常与 code 相同
-  componentName: 'FormComponentXxxSetting',    // 必须与 Setting.vue 的 name 一致
-  configProperty: 'customComponentConfig'      // 固定值，告诉平台把 customComponentConfig 传给设置组件
+```json
+// src/form-component-config/form-editor/{name}.editor.config.json（纯 JSON，只有4个字段）
+{
+  "code": "FORM_CUSTOM_XXX_SETTING",
+  "editorConfigType": "FORM_CUSTOM_XXX_SETTING",
+  "componentName": "FormComponentXxxSetting",
+  "configProperty": "customComponentConfig"
 }
-export default FormComponentXxxEditorConfig
 ```
 
 ```javascript
 // src/form-component-config/form-editor/index.js
-import FormComponentXxxEditorConfig from './{name}.editor.config'
+import FormComponentXxxEditorConfig from './{name}.editor.config.json'
 
 const editorConfigList = [FormComponentXxxEditorConfig]
 
@@ -848,65 +872,69 @@ export default customFormEditorList
 **⚠️ 路径约束：**
 - `setting.vue` 固定放在 `src/form-component/form-editor/{name}-setting.vue`
 - 不要把 `setting.vue` 放到 `src/form-component-config/form-editor/`
-- `editorConfigList` 只能在 `src/form-component-config/form-editor/index.js` 中通过导入 `./{name}.editor.config.js` 聚合，不能在别处内联写死
+- `editorConfigList` 只能在 `src/form-component-config/form-editor/index.js` 中通过导入 `./{name}.editor.config.json` 聚合，不能在别处内联写死
 
-### widgetConfigList 完整字段说明
+### widgetConfigList 完整字段说明（JSON 格式）
 
-```javascript
+```json
 {
-  version: 2.0,                    // 配置版本号，固定 2.0
-  code: 'FORM_CUSTOM_XXX',        // 组件唯一标识，必须 FORM_CUSTOM_ 前缀
-  desc: {                          // 设计面板中的展示信息
-    iconType: 'DEFAULT',           // 图标类型
-    icon: '',                      // SVG 图标或图片文件名
-    text: '组件名称',              // 显示名
-    description: '组件描述'
+  "version": 2.0,
+  "code": "FORM_CUSTOM_XXX",
+  "desc": {
+    "iconType": "DEFAULT",
+    "icon": "<svg>...</svg>",
+    "text": "组件名称",
+    "description": "组件描述"
   },
-  instance: { uuid: '$itemUuid', inTable: false },
-  component: {                     // 各场景对应的 Vue 组件 name
-    ide: '', edit: '', read: '',   // 必须的 3 种
-    list: '', association: '', lov: '', print: '', search: '', searchIde: ''  // 可选
+  "instance": { "uuid": "$itemUuid", "inTable": false },
+  "component": {
+    "ide": "", "edit": "", "read": "",
+    "list": "", "print": "", "search": "", "searchIde": ""
   },
-  widget: {
-    display: { label: '', width: 6, mobileWidth: 12, height: 1, hidden: false, readOnly: false, required: false },
-    allow: { useInTableColumn: true, calcRule: false, scanCode: false, copy: false },
-    default: { customDefaultKey: 'defaultValue', value: null, width: 6 },
-    validator: { uniqueCheck: false },
-    special: { frontBusinessObjectComponentType: 'BOF_TEXT', saveWithHidden: false },  // ★ 必须根据组件类型设置：BOF_TEXT/BOF_DATE/BOF_NUMBER
-    customComponentConfig: {},     // ★ 必须声明为空对象，否则平台不会序列化
-    editor: {
-      config: [                    // 设计器右侧面板的配置项列表
-        'INFO', 'LABEL', 'FIELD_CODE', 'TITLE_DESCRIPTION', 'WIDTH',
-        'FORM_CUSTOM_XXX_SETTING', // 自定义配置项（与 editorConfigList.code 对应）
-        'FORMULA_RULE', 'HIDDEN', 'READONLY', 'REQUIRED', 'EDITONNEW',
-        'UNIQUE', 'HIDDEN_SAVE', 'HIDDEN_TRIGGER', 'TRIGGER_BUSINESS_EVENTS'
+  "widget": {
+    "display": { "label": "", "width": 6, "mobileWidth": 12, "height": 1, "hidden": false, "readOnly": false, "required": false, "onlyCreateEdit": false },
+    "allow": { "calcRule": false, "useInTableColumn": true, "scanCode": false, "copy": false },
+    "default": { "customDefaultKey": "defaultValue", "value": null },
+    "validator": { "uniqueCheck": false },
+    "special": {
+      "frontBusinessObjectComponentType": "BOF_TEXT",
+      "saveWithHidden": false,
+      "customComponentConfig": {}
+    },
+    "editor": {
+      "config": [
+        "INFO", "LABEL", "FIELD_CODE", "TITLE_DESCRIPTION", "WIDTH",
+        "HIDDEN", "READONLY", "REQUIRED", "EDITONNEW",
+        "UNIQUE", "HIDDEN_SAVE", "HIDDEN_TRIGGER", "TRIGGER_BUSINESS_EVENTS",
+        "FORM_CUSTOM_XXX_SETTING"
       ],
-      excludeInTable: ['WIDTH']    // 子表中排除的配置项
+      "excludeInTable": ["WIDTH"]
     }
   },
-  componentModelField: ['STRING'], // ★ 与 widget 同级，且只能单选：['STRING'] / ['NUM'] / ['DATE'] / ['BIG_TEXT']
-  client: {                        // 移动端配置覆盖
-    mobile: {
-      widget: {
-        editor: {
-          config: ['INFO', 'LABEL', 'HIDDEN', 'READONLY', 'REQUIRED']  // 移动端编辑器更精简
+  "componentModelField": ["STRING"],
+  "client": {
+    "mobile": {
+      "widget": {
+        "editor": {
+          "config": ["INFO", "LABEL", "HIDDEN", "READONLY", "REQUIRED"],
+          "excludeInTable": ["WIDTH"]
         }
       },
-      component: {                 // 移动端场景映射（仅 ide/edit/read）
-        ide: 'FormComponentXxxEdit',
-        edit: 'FormComponentXxxEdit',
-        read: 'FormComponentXxxRead'
+      "component": {
+        "ide": "MobileFormComponentXxxIde",
+        "edit": "MobileFormComponentXxxEdit",
+        "read": "MobileFormComponentXxxRead"
       }
     }
   },
-  methods: {},                     // 组件方法注册
-  formatValueSchema: {}            // 值格式转换规则
+  "methods": {},
+  "formatValueSchema": {}
 }
 ```
 
 ### PC 与移动端双端兼容
 - PC 端组件和移动端组件是**独立的两个包**（如 `form-rate` 和 `form-rate-mobile`）
-- 移动端包的 widget.config.js 中 `component` 只需 ide/edit/read 三种场景
+- 移动端包的 widget.config.json 中 `component` 只需 ide/edit/read 三种场景
 - 移动端包的 `editor.config` 更精简，不含 FIELD_CODE、FORMULA_RULE 等高级配置
 - 移动端基础组件库用原生 HTML 或 cube-ui，不用 Element UI
 - 通过 `client.mobile` 段可在同一个 widgetConfig 中声明移动端覆盖配置
@@ -1760,8 +1788,8 @@ AGENT_SYSTEM_PROMPT = """你是一个 aPaaS 低代码平台的专业前端组件
 - 不要在 computed 里用 `$set`（会导致无限循环）
 - formEngine 通过 prop 传入（不是 inject）
 
-**widget.config.js**：
-- `customComponentConfig: {}` 必须声明空对象
+**widget.config.json**：
+- `widget.special.customComponentConfig: {}` 必须声明空对象
 - editor.config 不能删除标准配置项（INFO, LABEL, FIELD_CODE 等）
 
 **edit.vue 规则**：
@@ -1904,7 +1932,7 @@ export default {
 - 只有需要新增 npm 依赖时才可以修改 package.json（修改后要运行 npm install）
 - Element UI 已全局注册，不要 import
 - 组件代码必须是完整的 .vue 单文件组件
-- FORM_COMPONENT: 所有场景组件的 name 必须与 widget.config.js 中 component 映射一致
+- FORM_COMPONENT: 所有场景组件的 name 必须与 widget.config.json 中 component 映射一致
 - MENU_PAGE: 组件名必须是 apaas-custom-{kebab-name} 格式，与 apaas.json router 一致
 
 ## 输出要求
@@ -2021,7 +2049,7 @@ export default { install }
 - 不要硬编码菜单数据，从 `menuConfig` 动态获取
 - 组件名必须以 `apaas-custom-` 开头
 - **不要套用 FORM_COMPONENT 的 7 个渲染场景**
-- **不要默认生成 `widget.config.js` / `editor.config.js` / `setting.vue`**
+- **不要默认生成 `widget.config.json` / `editor.config.json` / `setting.vue`**
 - 优先修改 `src/form-layout/*.vue`、`src/index.js`、`src/apaas.json`
 """
 
@@ -2322,13 +2350,13 @@ CODE_GENERATION_INSTRUCTION = """
 {表格列中的紧凑展示}
 ```
 
-5. **widget.config.js**：
-```file:src/form-component-config/form-widget/{name}.widget.config.js
-{完整的组件配置，包含 code、component 场景映射、editor config}
+5. **widget.config.json**：
+```file:src/form-component-config/form-widget/{name}.widget.config.json
+{完整的组件配置，包含 code、component 场景映射、editor config，纯 JSON 格式}
 ```
 
-6. **editor.config.js + form-editor 注册文件 + setting.vue**（设计器配置面板）：
-```file:src/form-component-config/form-editor/{name}.editor.config.js
+6. **editor.config.json + form-editor 注册文件 + setting.vue**（设计器配置面板）：
+```file:src/form-component-config/form-editor/{name}.editor.config.json
 ```
 ```file:src/form-component-config/form-editor/index.js
 ```
@@ -2340,13 +2368,13 @@ CODE_GENERATION_INSTRUCTION = """
 7. **其他场景**（print/search/search-ide）
 
 ### 重要规则
-1. **必须输出 7 种场景的 .vue 组件文件 + widget.config.js + editor.config.js**，这是 FORM_COMPONENT 的完整产出
+1. **必须输出 7 种场景的 .vue 组件文件 + widget.config.json + editor.config.json**，这是 FORM_COMPONENT 的完整产出
 2. 每个文件都必须是完整的、可以直接使用的代码，不要留 TODO 占位符
 3. 如果有工作区上下文，使用工作区中已有的文件路径，不要创建新的目录结构
 4. 文件路径使用相对于项目根目录的路径
 5. Vue 组件必须生成 .vue 单文件组件格式（包含 <template>、<script>、<style>）
 6. Element UI 不需要 import，宿主已全局注册
-7. **mixin、validator、form-ability、i18n 等不需要输出**（脚手架已包含）；但涉及 `setting.vue` / `editor.config.js` 时，**必须同步更新** `src/form-component/form-editor/index.js` 和 `src/form-component-config/form-editor/index.js`
+7. **mixin、validator、form-ability、i18n 等不需要输出**（脚手架已包含）；但涉及 `setting.vue` / `editor.config.json` 时，**必须同步更新** `src/form-component/form-editor/index.js` 和 `src/form-component-config/form-editor/index.js`
 8. **直接生成代码**，不要尝试调用任何工具，不要读取文件，直接输出完整的代码文件
 9. 编辑态组件中使用 `this.formValue` 读写值，值存储为 JSON 字符串（复杂数据）
 10. **edit.vue 只渲染内容，不要显示配置界面**。配置 UI 只放在 setting.vue 中
@@ -2355,8 +2383,8 @@ CODE_GENERATION_INSTRUCTION = """
 13. **setting.vue 中不要再包一层 `<el-form>`**。平台外层已经提供了表单容器，内部直接使用 `el-form-item`、`el-input`、`el-select` 等组件即可
 14. **setting.vue 最外层容器不要设置 padding**。平台区域已经做好布局，额外 padding 会导致可用空间变小
 15. **setting.vue 和 edit/read/ide.vue 的 customComponentConfig 读写路径必须一致**。配置直接存在 `customComponentConfig` 根级别（如 `{ dataSource, xField }`），不要多嵌套一层（如 `{ chartConfig: { dataSource } }`）
-16. **widget.config.js 中必须声明 `customComponentConfig: {}`**（空对象），否则平台保存时不会序列化它。不能包含空字符串默认值
-17. **widget.config.js 的 editor.config 不能删除标准项**（INFO, LABEL, FIELD_CODE, TITLE_DESCRIPTION, WIDTH, FORMULA_RULE, HIDDEN, READONLY, REQUIRED, EDITONNEW, UNIQUE, HIDDEN_SAVE, HIDDEN_TRIGGER, TRIGGER_BUSINESS_EVENTS），否则平台校验报错
+16. **widget.config.json 中 `widget.special.customComponentConfig` 必须声明为 `{}`**（空对象），否则平台保存时不会序列化它。不能包含空字符串默认值
+17. **widget.config.json 的 editor.config 不能删除标准项**（INFO, LABEL, FIELD_CODE, TITLE_DESCRIPTION, WIDTH, HIDDEN, READONLY, REQUIRED, EDITONNEW, UNIQUE, HIDDEN_SAVE, HIDDEN_TRIGGER, TRIGGER_BUSINESS_EVENTS），否则平台校验报错。自定义 setting code 追加到末尾
 18. 如需在 setting.vue 中访问子表列表，使用 `this.formEngine.formDataControl.allTileFormItemList` 并按 `componentType === 'FORM_WIDGET_SON_TABLE'` 过滤
 19. **获取子表真实数据时**，formData 中子表数据的 key 是子表的 `code`（不是 uuid），需要先通过 uuid 找到子表再取其 code
 20. **setting.vue 的固定路径是 `src/form-component/form-editor/{name}-setting.vue`**；`editorConfigList` 的固定聚合路径是 `src/form-component-config/form-editor/index.js`
