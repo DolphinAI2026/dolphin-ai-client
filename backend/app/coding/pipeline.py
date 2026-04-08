@@ -349,9 +349,8 @@ async def extract_project_name(generator: CodingGenerator, message: str) -> str:
         result = resp.get("choices", [{}])[0].get("message", {}).get("content", "")
         name = result.strip().lower()
         # 只保留合法的 kebab-case 字符
-        import re as _re
-        name = _re.sub(r"[^a-z0-9-]", "-", name).strip("-")
-        name = _re.sub(r"-{2,}", "-", name)
+        name = re.sub(r"[^a-z0-9-]", "-", name).strip("-")
+        name = re.sub(r"-{2,}", "-", name)
         if name and len(name) >= 3:
             return name
     except Exception:
