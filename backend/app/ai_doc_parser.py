@@ -171,6 +171,7 @@ async def parse_doc_with_ai(
     text: str, filename: str = "", on_progress: ProgressCallback = None,
     existing_codes: Optional[Dict] = None,
     existing_config: Optional[Dict] = None,
+    llm_cfg: Optional[Dict] = None,
 ) -> Dict:
     """用 AI 解析任意格式的需求文档，返回标准 preview JSON。
 
@@ -192,29 +193,45 @@ async def parse_doc_with_ai(
 
     await _progress(f"文档长度 {len(text)} 字符，开始解析...")
 
-    # 构建已有配置约束文本（仅增量模式）
-    config_constraint = ""
-    if existing_config:
-        config_constraint = _build_existing_config_constraint(existing_config)
-        if config_constraint:
-            logger.info(f"增量解析：注入已有配置约束（{len(config_constraint)} 字符）")
-
-    if len(text) <= CHUNK_CHAR_LIMIT:
-        await _progress("小文档，单次 AI 解析...")
-        data = await _parse_single(text, filename, existing_codes=existing_codes, config_constraint=config_constraint)
+    # 检测标准模板：如果文档包含完整的编码表格，直接规则提取，跳过 AI
+    template_codes = _extract_template_codes(text)
+    if _is_standard_template(template_codes):
+        await _progress("检测到标准模板格式，直接提取编码（不调用 AI）...")
+        logger.info(f"标准模板直接提取: {len(template_codes['models'])} 模型, "
+                    f"{len(template_codes['dicts'])} 字典, {len(template_codes['roles'])} 角色")
+        data = _template_to_preview(template_codes)
     else:
-        data = await _parse_chunked(text, filename, _progress, existing_codes=existing_codes, config_constraint=config_constraint)
+        # 非标准模板：走 AI 解析
+        config_constraint = ""
+        if existing_config:
+            config_constraint = _build_existing_config_constraint(existing_config)
+            if config_constraint:
+                logger.info(f"增量解析：注入已有配置约束（{len(config_constraint)} 字符）")
 
-    # 对 Markdown 中显式定义的字典做规则兜底，避免 LLM 漏掉未引用字典或漏掉选项
-    extracted_dicts = _extract_markdown_dicts(text)
-    if extracted_dicts:
-        _merge_explicit_dicts(data, extracted_dicts)
+        if len(text) <= CHUNK_CHAR_LIMIT:
+            await _progress("小文档，单次 AI 解析...")
+            data = await _parse_single(text, filename, existing_codes=existing_codes, config_constraint=config_constraint, llm_cfg=llm_cfg)
+        else:
+            data = await _parse_chunked(text, filename, _progress, existing_codes=existing_codes, config_constraint=config_constraint, llm_cfg=llm_cfg)
+
+        # 对 Markdown 中显式定义的字典做规则兜底
+        extracted_dicts = _extract_markdown_dicts(text)
+        if extracted_dicts:
+            _merge_explicit_dicts(data, extracted_dicts)
 
     # 后处理
     await _progress("正在整理结果...")
     _sanitize_codes(data)
     _fill_icons(data)
     _dedup_dicts(data)
+
+    # 标准模板编码校正：最后执行，确保文档中的编码不被任何后处理覆盖
+    template_codes = _extract_template_codes(text)
+    has_template = any(template_codes.get(k) for k in ("roles", "dicts", "models"))
+    if has_template:
+        logger.info(f"检测到标准模板编码: roles={len(template_codes.get('roles',[]))}, "
+                    f"dicts={len(template_codes.get('dicts',[]))}, models={len(template_codes.get('models',[]))}")
+        _apply_template_codes(data, template_codes)
 
     # Schema 校验 & 自动修复
     try:
@@ -405,8 +422,11 @@ def _build_existing_config_constraint(config: Dict) -> str:
 # 小文档：单次调用
 # ================================================================
 
-async def _parse_single(text: str, filename: str, existing_codes: Optional[Dict] = None, config_constraint: str = "") -> Dict:
-    client = LLMClient()
+async def _parse_single(text: str, filename: str, existing_codes: Optional[Dict] = None, config_constraint: str = "", llm_cfg: Optional[Dict] = None) -> Dict:
+    if llm_cfg:
+        client = LLMClient(api_key=llm_cfg.get("api_key"), base_url=llm_cfg.get("base_url"), model=llm_cfg.get("model"))
+    else:
+        client = LLMClient()
     # 智能截断：优先保留 ER 图和业务具体方案（含子表/字段定义）
     if len(text) > 40000:
         import re
@@ -454,7 +474,7 @@ async def _parse_single(text: str, filename: str, existing_codes: Optional[Dict]
 # 大文档：分段解析
 # ================================================================
 
-async def _parse_chunked(text: str, filename: str, progress=None, existing_codes: Optional[Dict] = None, config_constraint: str = "") -> Dict:
+async def _parse_chunked(text: str, filename: str, progress=None, existing_codes: Optional[Dict] = None, config_constraint: str = "", llm_cfg: Optional[Dict] = None) -> Dict:
     """大文档分段解析流程：
     1. 用 AI 快速提取概览（应用名、角色、表单清单）
     2. 按章节拆分文档
@@ -465,7 +485,10 @@ async def _parse_chunked(text: str, filename: str, progress=None, existing_codes
         if progress:
             await progress(msg)
 
-    client = LLMClient()
+    if llm_cfg:
+        client = LLMClient(api_key=llm_cfg.get("api_key"), base_url=llm_cfg.get("base_url"), model=llm_cfg.get("model"))
+    else:
+        client = LLMClient()
 
     # ── Step 1: 概览 ──
     await _p("Step 1/3: 提取文档概览...")
@@ -718,6 +741,416 @@ def _merge_explicit_dicts(data: Dict, extracted_dicts: List[Dict]):
             by_name[extracted["name"]] = extracted
 
     data["dicts"] = dicts
+
+
+# ================================================================
+# 标准模板文档：完整编码提取（角色 + 字典 + 模型 + 字段）
+# ================================================================
+
+def _extract_template_codes(text: str) -> Dict:
+    """从标准模板格式的 Markdown 文档中直接提取所有编码。
+
+    支持提取：应用信息、角色、字典（含选项）、模型、字段。
+    返回格式与 preview JSON 兼容，可直接用于校正 AI 生成的编码。
+    """
+    lines = text.splitlines()
+    result: Dict = {"appName": "", "appCode": "", "roles": [], "dicts": [], "models": [], "permissions": []}
+
+    section = ""  # 当前大章节: app_info / roles / dicts / models / forms / permissions
+    current_dict: Optional[Dict] = None
+    current_model: Optional[Dict] = None
+    table_type = ""  # 当前表格类型: dict_meta / dict_options / model_meta / field_list / role_list / app_info
+    header_cols: List[str] = []
+
+    _CODE_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
+
+    def _flush_dict():
+        nonlocal current_dict
+        if current_dict and current_dict.get("code"):
+            result["dicts"].append(current_dict)
+        current_dict = None
+
+    def _flush_model():
+        nonlocal current_model
+        if current_model and current_model.get("code"):
+            result["models"].append(current_model)
+        current_model = None
+
+    for line in lines:
+        stripped = line.strip()
+
+        # 检测大章节
+        if stripped.startswith("## "):
+            _flush_dict()
+            _flush_model()
+            table_type = ""
+            low = stripped.lower()
+            if "应用信息" in stripped:
+                section = "app_info"
+            elif "角色" in stripped:
+                section = "roles"
+            elif "数据字典" in stripped or "字典" in stripped:
+                section = "dicts"
+            elif "数据模型" in stripped or "模型" in stripped:
+                section = "models"
+            elif "表单" in stripped:
+                section = "forms"
+            elif "权限" in stripped:
+                section = "permissions"
+            else:
+                section = ""
+            continue
+
+        # 子标题（字典/模型的具体条目）
+        if stripped.startswith("### "):
+            if section == "dicts":
+                _flush_dict()
+                # 尝试从标题中提取字典名称
+                m = re.match(r'^###\s+(?:\d+(?:\.\d+)?\s+)?(.+)', stripped)
+                if m:
+                    name = m.group(1).strip()
+                    # 去掉 (code) 后缀
+                    code_m = re.match(r'(.+?)\s*\(`?([^`\)]+)`?\)', name)
+                    if code_m:
+                        current_dict = {"name": code_m.group(1).strip(), "code": code_m.group(2).strip(), "options": []}
+                    else:
+                        current_dict = {"name": name, "code": "", "options": []}
+            elif section == "models":
+                _flush_model()
+                current_model = {"name": "", "code": "", "fields": []}
+            table_type = ""
+            continue
+
+        # 表格行
+        if not stripped.startswith("|"):
+            continue
+        cols = [c.strip().strip("`") for c in stripped.strip("|").split("|")]
+        if len(cols) < 2:
+            continue
+
+        # 分隔线跳过
+        if all(set(c) <= {"-", ":", " "} for c in cols):
+            continue
+
+        # 检测表头
+        col0 = cols[0].strip()
+        col1 = cols[1].strip() if len(cols) > 1 else ""
+
+        # 应用信息表
+        if section == "app_info":
+            if col0 in ("项目", "项") and col1 in ("值",):
+                table_type = "app_info"
+                continue
+            if table_type == "app_info" or not table_type:
+                if "应用编码" in col0 or "编码" in col0:
+                    result["appCode"] = col1
+                elif "应用名称" in col0 or "名称" in col0:
+                    result["appName"] = col1
+            continue
+
+        # 角色表
+        if section == "roles":
+            if "角色编码" in col0:
+                table_type = "role_list"
+                header_cols = [c.strip() for c in cols]
+                continue
+            if table_type == "role_list" and _CODE_RE.match(col0):
+                role = {"code": col0, "name": col1}
+                if len(cols) > 2:
+                    role["description"] = cols[2].strip()
+                result["roles"].append(role)
+            continue
+
+        # 字典表
+        if section == "dicts" and current_dict is not None:
+            if "字典编码" in col0:
+                table_type = "dict_meta"
+                continue
+            if "选项编码" in col0:
+                table_type = "dict_options"
+                continue
+            if table_type == "dict_meta" and _CODE_RE.match(col0):
+                current_dict["code"] = col0
+                current_dict["name"] = col1
+                continue
+            if table_type == "dict_options" and col0 and not set(col0) <= {"-", ":"}:
+                current_dict["options"].append({"code": col0, "name": col1})
+                continue
+            continue
+
+        # 模型表
+        if section == "models" and current_model is not None:
+            if "模型编码" in col0:
+                table_type = "model_meta"
+                continue
+            if "字段编码" in col0:
+                table_type = "field_list"
+                header_cols = [c.strip() for c in cols]
+                continue
+            if table_type == "model_meta" and _CODE_RE.match(col0):
+                current_model["code"] = col0
+                current_model["name"] = col1
+                if len(cols) > 2:
+                    current_model["table_type"] = cols[2].strip()
+                continue
+            if table_type == "field_list" and _CODE_RE.match(col0):
+                field: Dict = {"code": col0, "name": col1}
+                # 解析更多列（数据库字段类型、长度、必填、字典编码、关联模型编码、关联显示字段编码、说明）
+                if len(cols) > 2:
+                    db_type = cols[2].strip()
+                    if db_type:
+                        field["_db_type"] = db_type
+                if len(cols) > 4:
+                    req = cols[4].strip()
+                    field["required"] = req in ("是", "Yes", "true", "TRUE")
+                if len(cols) > 5:
+                    dict_code = cols[5].strip()
+                    if dict_code and _CODE_RE.match(dict_code):
+                        field["dict"] = dict_code
+                if len(cols) > 6:
+                    ref_model = cols[6].strip()
+                    if ref_model and _CODE_RE.match(ref_model):
+                        ref_field = cols[7].strip() if len(cols) > 7 and cols[7].strip() else ""
+                        field["ref"] = {"model": ref_model, "field": ref_field}
+                current_model["fields"].append(field)
+                continue
+
+        # 权限表
+        if section == "permissions":
+            if "表单编码" in col0:
+                table_type = "perm_list"
+                header_cols = [c.strip() for c in cols]
+                continue
+            if table_type == "perm_list" and col0 and not set(col0) <= {"-", ":"}:
+                # | 表单编码 | 角色编码 | 可暂存 | 可新增 | 可导入 | 可查看 | 可编辑 | 可删除 | 可导出 | 数据范围 |
+                form_code = col0
+                role_code = col1
+                # 从表单编码提取表单名称（去掉 form_ 前缀找模型名）
+                form_name = form_code.replace("form_", "")
+                # 在模型中查找对应名称
+                for m in result.get("models", []):
+                    if m.get("code") == form_name:
+                        form_name = m.get("name", form_name)
+                        break
+
+                # 解析操作权限
+                ops = []
+                _yn = lambda v: v.strip() in ("是", "Yes", "TRUE", "true", "Y")
+                if len(cols) > 2 and _yn(cols[2]): ops.append("save")
+                if len(cols) > 3 and _yn(cols[3]): ops.append("add")
+                if len(cols) > 4 and _yn(cols[4]): ops.append("import")
+                if len(cols) > 5 and _yn(cols[5]): ops.append("view")
+                if len(cols) > 6 and _yn(cols[6]): ops.append("edit")
+                if len(cols) > 7 and _yn(cols[7]): ops.append("delete")
+                if len(cols) > 8 and _yn(cols[8]): ops.append("export")
+
+                # 数据范围
+                data_scope = "ALL"
+                if len(cols) > 9:
+                    scope_text = cols[9].strip()
+                    if "全" in scope_text: data_scope = "ALL"
+                    elif "本人" in scope_text or "个人" in scope_text: data_scope = "SELF"
+                    elif "部门" in scope_text: data_scope = "CURRENT_USER_DEPT"
+                    else: data_scope = scope_text
+
+                # 合并到 permissions（按表单分组）
+                op_str = "all" if len(ops) >= 6 else ",".join(ops) if ops else "view"
+                # 查找已有的表单权限
+                perm_entry = None
+                for p in result["permissions"]:
+                    if p.get("form") == form_name:
+                        perm_entry = p
+                        break
+                if not perm_entry:
+                    perm_entry = {"form": form_name, "rules": []}
+                    result["permissions"].append(perm_entry)
+                perm_entry["rules"].append({"role": role_code, "op": op_str, "data": data_scope})
+                continue
+
+    _flush_dict()
+    _flush_model()
+    return result
+
+
+def _is_standard_template(template: Dict) -> bool:
+    """判断提取结果是否足够完整，可以跳过 AI 直接使用。"""
+    has_models = len(template.get("models", [])) > 0
+    has_fields = any(len(m.get("fields", [])) >= 2 for m in template.get("models", []))
+    has_dicts = len(template.get("dicts", [])) > 0
+    return has_models and has_fields and has_dicts
+
+
+# 数据库字段类型 → 平台字段类型 + 图标
+_DB_TYPE_TO_FIELD = {
+    "VARCHAR": ("单行输入", "T"),
+    "TEXT": ("多行输入", "¶"),
+    "DATE": ("日期时间", "D"),
+    "DATETIME": ("日期时间", "D"),
+    "DOUBLE": ("数字", "N"),
+    "DECIMAL": ("金额", "¥"),
+    "BIGINT": ("数据单选", "⇢"),
+    "INT": ("数字", "N"),
+    "INTEGER": ("数字", "N"),
+    "BOOLEAN": ("开关", "⊘"),
+}
+
+
+def _template_to_preview(template: Dict) -> Dict:
+    """将 _extract_template_codes 提取的模板数据转为完整的 preview 配置。
+
+    纯规则转换，不调用 AI。根据数据库字段类型、字典引用、关联引用
+    自动推断平台字段类型和图标。
+    """
+    data: Dict = {
+        "appName": template.get("appName", ""),
+        "appCode": template.get("appCode", ""),
+        "roles": template.get("roles", []),
+        "dicts": template.get("dicts", []),
+        "models": [],
+        "workflows": [],
+        "permissions": template.get("permissions", []),
+    }
+
+    icon_map = get_icon_map()
+    dict_codes = {d.get("code") for d in template.get("dicts", [])}
+
+    for tpl_model in template.get("models", []):
+        model: Dict = {
+            "name": tpl_model["name"],
+            "code": tpl_model["code"],
+            "fields": [],
+        }
+        for tpl_f in tpl_model.get("fields", []):
+            db_type = tpl_f.get("_db_type", "VARCHAR").upper()
+            field_type = "单行输入"
+            field_icon = "T"
+
+            # 1. 字典引用 → 下拉单选
+            if tpl_f.get("dict") and tpl_f["dict"] in dict_codes:
+                field_type = "下拉单选"
+                field_icon = "▼"
+            # 2. 关联引用 → 数据单选
+            elif tpl_f.get("ref"):
+                field_type = "数据单选"
+                field_icon = "⇢"
+            # 3. 名称推断
+            elif "人员" in tpl_f["name"] or "经理" in tpl_f["name"] or "负责人" in tpl_f["name"]:
+                field_type = "人员选择"
+                field_icon = "⊙"
+            elif "部门" in tpl_f["name"]:
+                field_type = "部门选择"
+                field_icon = "⊙"
+            elif "编号" in tpl_f["name"]:
+                field_type = "单据号"
+                field_icon = "#"
+            elif "附件" in tpl_f["name"]:
+                field_type = "附件上传"
+                field_icon = "⊕"
+            elif "描述" in tpl_f["name"] or "说明" in tpl_f["name"] or "备注" in tpl_f["name"]:
+                field_type = "多行输入"
+                field_icon = "¶"
+            # 4. 数据库类型推断
+            else:
+                ft, fi = _DB_TYPE_TO_FIELD.get(db_type, ("单行输入", "T"))
+                field_type = ft
+                field_icon = fi
+
+            field: Dict = {
+                "name": tpl_f["name"],
+                "code": tpl_f["code"],
+                "type": field_type,
+                "icon": icon_map.get(field_type, field_icon),
+                "required": tpl_f.get("required", False),
+            }
+            if tpl_f.get("dict"):
+                field["dict"] = tpl_f["dict"]
+            if tpl_f.get("ref"):
+                field["ref"] = tpl_f["ref"]
+            model["fields"].append(field)
+
+        data["models"].append(model)
+
+    logger.info(f"纯规则模板转换完成: {len(data['models'])} 模型, {len(data['dicts'])} 字典, {len(data['roles'])} 角色")
+    return data
+
+
+def _apply_template_codes(data: Dict, template: Dict):
+    """用从 markdown 模板直接提取的编码校正 AI 生成的配置。
+
+    原则：如果模板中有明确定义的编码，以模板为准；
+    AI 额外推断的内容保留（如字段类型、图标等模板中没有的属性）。
+    """
+    # 应用信息
+    if template.get("appCode"):
+        data["appCode"] = template["appCode"]
+    if template.get("appName"):
+        data["appName"] = template["appName"]
+
+    # 角色：按名称匹配，校正编码
+    if template.get("roles"):
+        tpl_roles_by_name = {r["name"]: r for r in template["roles"]}
+        for role in data.get("roles", []):
+            tpl = tpl_roles_by_name.get(role.get("name"))
+            if tpl:
+                role["code"] = tpl["code"]
+                if tpl.get("description"):
+                    role["description"] = tpl["description"]
+        # 补全模板中有但 AI 遗漏的角色
+        ai_role_names = {r.get("name") for r in data.get("roles", [])}
+        for tpl_role in template["roles"]:
+            if tpl_role["name"] not in ai_role_names:
+                data.setdefault("roles", []).append(tpl_role)
+
+    # 字典：按名称匹配，校正编码和选项
+    if template.get("dicts"):
+        tpl_dicts_by_name = {d["name"]: d for d in template["dicts"]}
+        tpl_dicts_by_code = {d["code"]: d for d in template["dicts"] if d.get("code")}
+        for d in data.get("dicts", []):
+            tpl = tpl_dicts_by_name.get(d.get("name")) or tpl_dicts_by_code.get(d.get("code"))
+            if tpl:
+                d["code"] = tpl["code"]
+                d["name"] = tpl["name"]
+                if tpl.get("options"):
+                    d["options"] = tpl["options"]
+        # 补全
+        ai_dict_names = {d.get("name") for d in data.get("dicts", [])}
+        for tpl_dict in template["dicts"]:
+            if tpl_dict["name"] not in ai_dict_names:
+                data.setdefault("dicts", []).append(tpl_dict)
+
+    # 模型：按名称匹配，校正模型编码和字段编码
+    if template.get("models"):
+        tpl_models_by_name = {m["name"]: m for m in template["models"]}
+        for model in data.get("models", []):
+            tpl = tpl_models_by_name.get(model.get("name"))
+            if not tpl:
+                continue
+            model["code"] = tpl["code"]
+            # 字段编码校正：精确匹配 → 包含匹配 → code 前缀匹配
+            if tpl.get("fields"):
+                tpl_fields_by_name = {f["name"]: f for f in tpl["fields"]}
+                tpl_fields_list = tpl["fields"]
+                for field in model.get("fields", []):
+                    fname = field.get("name", "")
+                    # 1. 精确匹配
+                    tpl_f = tpl_fields_by_name.get(fname)
+                    # 2. 包含匹配（AI 缩短名称：如"开始日期"匹配"计划开始日期"）
+                    if not tpl_f and fname:
+                        for tf in tpl_fields_list:
+                            if fname in tf["name"] or tf["name"] in fname:
+                                tpl_f = tf
+                                break
+                    if tpl_f:
+                        field["code"] = tpl_f["code"]
+                        if tpl_f.get("required") is not None:
+                            field["required"] = tpl_f["required"]
+                        if tpl_f.get("dict"):
+                            field["dict"] = tpl_f["dict"]
+                        if tpl_f.get("ref"):
+                            field["ref"] = tpl_f["ref"]
+
+    logger.info(f"模板编码校正完成: roles={len(template.get('roles', []))}, "
+                f"dicts={len(template.get('dicts', []))}, models={len(template.get('models', []))}")
 
 
 # ================================================================

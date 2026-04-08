@@ -1387,6 +1387,46 @@ async def upload_doc_with_conversation(
                 except Exception as e:
                     logger.warning(f"增量 diff 失败，使用全量解析结果: {e}")
 
+            if data:
+                roles_count = len(data.get("roles", []))
+                dicts_count = len(data.get("dicts", []))
+                models_count = len(data.get("models", []))
+
+                skeleton_data = {
+                    "appName": data.get("appName", ""),
+                    "appCode": data.get("appCode", ""),
+                    "roles": data.get("roles", []),
+                }
+                yield {"event": "progress", "data": json.dumps({
+                    "message": f"[skeleton] 骨架完成：{models_count} 个模型、{dicts_count} 个字典、{roles_count} 个角色",
+                    "data": skeleton_data,
+                }, ensure_ascii=False)}
+
+                if data.get("roles"):
+                    yield {"event": "progress", "data": json.dumps({
+                        "message": f"[roles] 角色生成完成：{roles_count} 个",
+                        "batch": data["roles"],
+                    }, ensure_ascii=False)}
+                if data.get("dicts"):
+                    yield {"event": "progress", "data": json.dumps({
+                        "message": f"[dicts] 字典生成完成：{dicts_count} 个",
+                        "batch": data["dicts"],
+                    }, ensure_ascii=False)}
+                if data.get("models"):
+                    yield {"event": "progress", "data": json.dumps({
+                        "message": f"[models] 模型生成完成：{models_count} 个",
+                        "batch": data["models"],
+                    }, ensure_ascii=False)}
+                if data.get("permissions"):
+                    yield {"event": "progress", "data": json.dumps({
+                        "message": "[permissions] 权限生成完成",
+                        "batch": data["permissions"],
+                    }, ensure_ascii=False)}
+                yield {"event": "progress", "data": json.dumps({
+                    "message": f"[complete] 配置组装完成！{models_count} 个模型、{dicts_count} 个字典、{roles_count} 个角色",
+                    "data": data,
+                }, ensure_ascii=False)}
+
         except Exception as e:
             err_msg = str(e) or repr(e) or type(e).__name__
             logger.error(f"文档解析失败: {err_msg}", exc_info=True)
@@ -1650,6 +1690,10 @@ async def upload_doc_version(
     text = content_bytes.decode('utf-8')
     fname = file.filename or ""
 
+    # 获取租户 LLM 配置（供 AI 解析使用）
+    from app.routes.chat import _get_tenant_llm_config as _get_llm_cfg
+    _tenant_llm_cfg = await _get_llm_cfg(db, ctx.tenant_id)
+
     # 提前获取需要的值（SSE generator 不能用原始 db session）
     app_id_val = app.id
     tenant_id_val = ctx.tenant_id
@@ -1675,16 +1719,17 @@ async def upload_doc_version(
             # 1. 计算 hash
             content_hash = compute_hash(text)
 
-            # 2. 检查是否重复 & 获取 V1 文档版本
+            # 2. 检查是否与最新版本重复 & 获取 V1 文档版本
             v1_doc: Optional[dict] = None
             async with AsyncSessionLocal() as session:
-                dup_result = await session.execute(
+                # 只和最新版本比较 hash（允许回退到旧版本）
+                latest_result = await session.execute(
                     select(DocumentVersion).where(
                         DocumentVersion.application_id == app_id_val,
-                        DocumentVersion.content_hash == content_hash,
-                    )
+                    ).order_by(DocumentVersion.version.desc()).limit(1)
                 )
-                if dup_result.scalar_one_or_none():
+                latest_ver = latest_result.scalar_one_or_none()
+                if latest_ver and latest_ver.content_hash == content_hash:
                     yield {"event": "error", "data": json.dumps({"message": "文档内容未变化，无需上传"}, ensure_ascii=False)}
                     return
 

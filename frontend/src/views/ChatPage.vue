@@ -180,8 +180,8 @@
                 </div>
               <div class="builder-control-hint inside-card">{{ builderModelHint }}</div>
               <div class="input-card-top">
-                <label v-if="!isRequirementsMode" class="upload-btn" title="上传功能设计文档(.md)">
-                  <input type="file" accept=".md" @change="handleDocUpload" style="display:none" />
+                <label class="upload-btn" title="上传功能设计文档(.md) 或粘贴截图(Cmd+V)">
+                  <input type="file" accept=".md,.png,.jpg,.jpeg,.gif,.webp" @change="handleDocUpload" style="display:none" />
                   <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M15.5 8.5l-6.4 6.4a3.5 3.5 0 01-5-5l6.4-6.4a2.2 2.2 0 013.1 3.1L7.2 13a.9.9 0 01-1.3-1.3l5.5-5.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
                 </label>
                 <button class="upload-btn screenshot" type="button" title="上传文件" @click="triggerChatImageUpload">
@@ -4486,7 +4486,13 @@ const uploadDocFile = async (file: File) => {
 
               if (data.batch && Array.isArray(data.batch)) {
                 const phaseKey = phaseMatch?.[1] || ''
-                if (phaseKey === 'dicts') {
+                if (phaseKey === 'roles') {
+                  for (const r of data.batch) {
+                    if (!store.preview.roles.find((x: any) => x.code === r.code)) {
+                      store.preview.roles.push(r)
+                    }
+                  }
+                } else if (phaseKey === 'dicts') {
                   for (const d of data.batch) {
                     if (!store.preview.dicts.find((x: any) => x.code === d.code)) {
                       store.preview.dicts.push(d)
@@ -4526,6 +4532,16 @@ const uploadDocFile = async (file: File) => {
                 }
                 if (!store.preview.roles.length && Array.isArray(data.data.roles)) {
                   store.preview.roles = data.data.roles
+                }
+                syncParseTrackerFromPreview()
+                if (!store.preview.models.length && Array.isArray(data.data.models) && data.data.models.length) {
+                  store.preview.models = data.data.models
+                }
+                if (!store.preview.dicts.length && Array.isArray(data.data.dicts) && data.data.dicts.length) {
+                  store.preview.dicts = data.data.dicts
+                }
+                if (!store.preview.permissions?.length && Array.isArray(data.data.permissions) && data.data.permissions.length) {
+                  store.preview.permissions = data.data.permissions
                 }
                 syncParseTrackerFromPreview()
               }
@@ -4612,6 +4628,36 @@ const uploadDocFile = async (file: File) => {
         parseReady.value = true
         pmsg.content = buildProgressContent(true)
       }
+    } else if (store.preview.models.length > 0 || store.preview.dicts.length > 0 || store.preview.roles.length > 0) {
+      // done 事件未收到（大 payload SSE 丢失），但 progress 已逐步推送了数据到 store
+      console.warn('done 事件丢失，使用 store 中已累积的数据兜底')
+      if (!store.currentApp) {
+        store.currentApp = { name: store.preview.appName || '未命名应用', status: 'draft' }
+      }
+      parseReady.value = true
+      lastParsedFilename.value = file.name
+      latestDocContent.value = fileText
+
+      // 自动创建 Application
+      if (!existingAppId.value && store.preview.appName) {
+        try {
+          const result = await applicationApi.autoCreate({
+            app_name: store.preview.appName,
+            config_preview: { ...store.preview },
+          })
+          existingAppId.value = result.app_id
+          loadedAppCode.value = result.app_code || ''
+          router.replace({ query: { ...route.query, app_id: String(result.app_id) } })
+        } catch (e) {
+          console.warn('兜底模式创建应用失败:', e)
+        }
+      }
+
+      if (pmsg) {
+        phases.complete.status = 'done'
+        phases.complete.detail = `${store.preview.models.length} 模型, ${store.preview.dicts.length} 字典, ${store.preview.roles.length} 角色`
+        pmsg.content = buildProgressContent() + '\n\n配置已就绪（流式累积模式）。'
+      }
     } else if (pmsg) {
       pmsg.content += '\n\n⚠️ 解析完成但未获取到配置数据'
     }
@@ -4631,6 +4677,14 @@ const handleDocUpload = async (e: Event) => {
   const file = target.files?.[0]
   if (!file) return
   target.value = '' // reset for re-upload
+
+  // 图片文件 → 作为附件附加到输入框
+  if (file.type.startsWith('image/')) {
+    attachedImage.value = file
+    if (attachedImageUrl.value) URL.revokeObjectURL(attachedImageUrl.value)
+    attachedImageUrl.value = URL.createObjectURL(file)
+    return
+  }
 
   // 已有应用 → 走增量更新流程
   if (existingAppId.value) {

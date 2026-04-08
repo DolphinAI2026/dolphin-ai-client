@@ -103,7 +103,7 @@ export function parseFileBlocks(text: string): { edits: FileEdit[]; summary: str
   let summary = '';
 
   // Extract summary
-  const summaryMatch = text.match(/^##\s*(?:总结|Summary|概要)[：:]\s*(.+)/m);
+  const summaryMatch = text.match(/^##\s*(?:总结|Summary|概要|Result|Changes|修改总结)[：:]\s*(.+)/m);
   if (summaryMatch) {
     summary = summaryMatch[1].trim();
   }
@@ -140,7 +140,7 @@ export function parsePlan(text: string): Plan {
 
   // Extract summary
   let summary = '';
-  const summaryMatch = text.match(/^##\s*(?:实现方案|计划|Plan)[：:]\s*(.+)/m);
+  const summaryMatch = text.match(/^##\s*(?:实现方案|计划|Plan|Implementation|Steps|Proposal|Approach|方案)[：:]\s*(.+)/m);
   if (summaryMatch) {
     summary = summaryMatch[1].trim();
   }

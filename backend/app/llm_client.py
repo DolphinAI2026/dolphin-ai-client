@@ -29,13 +29,22 @@ def encode_image_base64(image_path: str) -> str:
 
 
 class LLMClient:
-    def __init__(self):
-        self.api_key = settings.llm_api_key
-        self.model = settings.llm_model
+    def __init__(self, api_key: str = None, base_url: str = None, model: str = None):
+        self.api_key = api_key or settings.llm_api_key
+        self.model = model or settings.llm_model
         self.doc_model = settings.llm_doc_model or self.model
-        self.anthropic_base_url = settings.anthropic_base_url.rstrip("/")
-        self.anthropic_api_key = settings.anthropic_api_key or self.api_key
-        self.anthropic_model = settings.anthropic_model
+        if base_url:
+            _raw = base_url.rstrip("/")
+            # 只接受包含 /anthropic 的 URL 作为 Anthropic base_url，否则忽略传入值
+            if "/anthropic" in _raw:
+                self.anthropic_base_url = _raw.removesuffix("/v1")
+            else:
+                # OpenAI 格式 URL 无法用于 Anthropic Messages API，使用默认值
+                self.anthropic_base_url = settings.anthropic_base_url.rstrip("/")
+        else:
+            self.anthropic_base_url = settings.anthropic_base_url.rstrip("/")
+        self.anthropic_api_key = api_key or settings.anthropic_api_key or self.api_key
+        self.anthropic_model = model or settings.anthropic_model
         self.vision_model = settings.llm_vision_model or self.anthropic_model
 
     def _anthropic_messages_url(self) -> str:
@@ -134,7 +143,9 @@ class LLMClient:
         max_tokens: int,
         timeout: httpx.Timeout | float,
         temperature: float,
+        max_retries: int = 2,
     ) -> Dict[str, Any]:
+        import asyncio
         system_text, api_messages = self._prepare_messages(messages)
         payload: Dict[str, Any] = {
             "model": model,
@@ -145,14 +156,31 @@ class LLMClient:
         if system_text:
             payload["system"] = system_text
 
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                self._anthropic_messages_url(),
-                headers=self._anthropic_headers(),
-                json=payload,
-            )
-            response.raise_for_status()
-            return response.json()
+        last_err = None
+        for attempt in range(max_retries + 1):
+            if attempt > 0:
+                wait = min(2 ** attempt, 10)
+                logger.warning(f"LLM 调用重试 {attempt}/{max_retries}，等待 {wait}s...")
+                await asyncio.sleep(wait)
+            try:
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    response = await client.post(
+                        self._anthropic_messages_url(),
+                        headers=self._anthropic_headers(),
+                        json=payload,
+                    )
+                    response.raise_for_status()
+                    return response.json()
+            except (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.NetworkError, httpx.RemoteProtocolError) as e:
+                last_err = e
+                logger.warning(f"LLM 调用网络错误 (attempt {attempt+1}): {e}")
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code >= 500:
+                    last_err = e
+                    logger.warning(f"LLM 服务端错误 {e.response.status_code} (attempt {attempt+1})")
+                else:
+                    raise  # 4xx 错误不重试
+        raise last_err  # 所有重试都失败
 
     @staticmethod
     def _collect_text_from_response(data: Dict[str, Any]) -> Tuple[str, List[Dict[str, str]]]:

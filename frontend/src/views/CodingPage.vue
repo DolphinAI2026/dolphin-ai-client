@@ -458,13 +458,21 @@
             :src="ideUrl"
             class="ide-frame"
             allow="clipboard-read; clipboard-write"
-            @load="ideLoaded = true"
+            @load="onIdeFrameLoad"
+            @error="onIdeFrameError"
           ></iframe>
           <!-- Loading overlay — stays until iframe fires load event -->
           <div v-if="!ideLoaded" class="ide-loading-overlay">
             <div class="ide-loading-content">
-              <div class="ide-loading-spinner"></div>
-              <span>正在加载 IDE...</span>
+              <template v-if="ideLoadError">
+                <div class="ide-error-icon">⚠️</div>
+                <span>{{ ideLoadError }}</span>
+                <button class="ide-retry-btn" @click="retryIdeLoad">重新加载</button>
+              </template>
+              <template v-else>
+                <div class="ide-loading-spinner"></div>
+                <span>{{ ideLoadingText }}</span>
+              </template>
             </div>
           </div>
         </div>
@@ -541,6 +549,9 @@ const userStore = useUserStore()
 const userInput = ref('')
 const ideUrl = ref<string | null>(null)
 const ideLoaded = ref(false)
+const ideLoadError = ref('')
+const ideLoadingText = ref('正在连接 IDE...')
+let ideLoadTimer: ReturnType<typeof setTimeout> | null = null
 const isCreating = ref(false)
 const creatingStatus = ref('')
 const codingModelOptions = ref<BuilderModelOption[]>([])
@@ -929,6 +940,14 @@ const sceneCategoryToProjectType: Record<string, string> = {
 // ============ Lifecycle ============
 
 onMounted(async () => {
+  // preconnect to code-server，减少 iframe 首次连接延迟
+  try {
+    const link = document.createElement('link')
+    link.rel = 'preconnect'
+    link.href = 'http://localhost:8080'
+    document.head.appendChild(link)
+  } catch {}
+
   try {
     const [workspaces] = await Promise.all([
       codingApi.listWorkspaces(),
@@ -978,10 +997,53 @@ async function setIdeUrl(url: string) {
   }
 
   ideLoaded.value = false  // 显示 loading overlay
+  ideLoadError.value = ''
+  ideLoadingText.value = '正在连接 IDE...'
   ideUrl.value = null  // 销毁旧 iframe
-  await new Promise(r => setTimeout(r, 100))  // 等 DOM 更新
+  await nextTick()  // 等 DOM 更新（替代硬编码 100ms 延迟）
   ideUrl.value = baseUrl + (baseUrl.includes('?') ? '&' : '?') + '_t=' + Date.now()
-  // ideLoaded 会在 iframe @load 事件触发时置 true
+  // 启动 30 秒加载超时
+  if (ideLoadTimer) clearTimeout(ideLoadTimer)
+  ideLoadTimer = setTimeout(() => {
+    if (!ideLoaded.value) {
+      ideLoadError.value = 'IDE 加载超时，请检查 code-server 是否运行'
+    }
+  }, 30_000)
+  // 2秒后更新提示文字
+  setTimeout(() => {
+    if (!ideLoaded.value && !ideLoadError.value) {
+      ideLoadingText.value = '正在加载编辑器...'
+    }
+  }, 2000)
+}
+
+function onIdeFrameLoad() {
+  ideLoaded.value = true
+  ideLoadError.value = ''
+  if (ideLoadTimer) { clearTimeout(ideLoadTimer); ideLoadTimer = null }
+}
+
+function onIdeFrameError() {
+  ideLoadError.value = 'IDE 加载失败，code-server 可能未启动'
+  if (ideLoadTimer) { clearTimeout(ideLoadTimer); ideLoadTimer = null }
+}
+
+function retryIdeLoad() {
+  if (!ideUrl.value) return
+  const base = ideUrl.value.replace(/[&?]_t=\d+$/, '')
+  ideLoaded.value = false
+  ideLoadError.value = ''
+  ideLoadingText.value = '正在重新连接...'
+  ideUrl.value = null
+  nextTick(() => {
+    ideUrl.value = base + (base.includes('?') ? '&' : '?') + '_t=' + Date.now()
+    if (ideLoadTimer) clearTimeout(ideLoadTimer)
+    ideLoadTimer = setTimeout(() => {
+      if (!ideLoaded.value) {
+        ideLoadError.value = '重试超时，请检查 code-server 状态'
+      }
+    }, 30_000)
+  })
 }
 
 async function openPendingIde() {
@@ -993,10 +1055,13 @@ async function openPendingIde() {
 
 async function openWorkspaceById(wsId: string) {
   try {
-    const ws = await codingApi.getWorkspace(wsId)
+    // 并行加载 workspace 信息和会话（减少 1 个 RTT）
+    const [ws, workspaceConversation] = await Promise.all([
+      codingApi.getWorkspace(wsId),
+      codingApi.getWorkspaceConversation(wsId),
+    ])
     codingStore.setWorkspace(ws)
     localStorage.setItem('coding_last_workspace_id', wsId)
-    const workspaceConversation = await codingApi.getWorkspaceConversation(ws.id)
     codingStore.conversationId = workspaceConversation.conversation_id
     applyCodingModelSelection(workspaceConversation.selected_llm_config_id)
 
@@ -1180,6 +1245,7 @@ async function sendMessage() {
   isCreating.value = true
   isStreaming.value = true
   activeView.value = 'chat'
+  let sseParseErrors = 0  // SSE 解析错误计数
   // 保留历史消息，多轮之间加分隔
   if (streamMessages.value.length > 0) {
     addStreamMsg({ type: 'status', content: '───' })
@@ -1355,8 +1421,14 @@ async function sendMessage() {
           addStreamMsg({ type: 'error', content: parsed.message || '\u53D1\u751F\u9519\u8BEF' })
           isStreaming.value = false
         }
-      } catch {
-        // skip unparseable events
+      } catch (parseErr) {
+        sseParseErrors++
+        if (sseParseErrors <= 3) {
+          console.warn(`[CodingPage] SSE parse error #${sseParseErrors}:`, parseErr)
+        }
+        if (sseParseErrors === 5) {
+          ElMessage.warning('部分 SSE 事件解析失败，结果可能不完整')
+        }
       }
     }, { yieldEvery: 6 })
 
@@ -3088,6 +3160,25 @@ watch(() => route.path, () => {
   width: 100%;
   height: 100%;
   border: none;
+}
+.ide-error-icon {
+  font-size: 32px;
+  margin-bottom: 4px;
+}
+.ide-retry-btn {
+  margin-top: 12px;
+  padding: 8px 24px;
+  border: 1px solid var(--t-brand, #646cff);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--t-brand, #646cff);
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.ide-retry-btn:hover {
+  background: var(--t-brand, #646cff);
+  color: #fff;
 }
 
 /* ============ Scrollbar ============ */
