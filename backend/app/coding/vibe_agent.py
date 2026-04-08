@@ -643,12 +643,31 @@ class VibeCodingAgent:
 - `widget.allow`: MUST include all 4 fields: `"calcRule": false`, `"useInTableColumn": <boolean>`, `"scanCode": false`, `"copy": false`. `useInTableColumn` should be `true` by default unless sub-table usage is explicitly not needed.
 - `widget.default`: `{ "customDefaultKey": "defaultValue", "value": null }` — value is `null`, NOT `""`.
 - `widget.validator`: `{ "uniqueCheck": false }`.
+- `widget.special`: MUST include 3 fields: `frontBusinessObjectComponentType`, `saveWithHidden: false`, `customComponentConfig: {}` (required even if no setting panel — the platform reads from this key).
 - `widget.special.frontBusinessObjectComponentType`: `"BOF_TEXT"` for string/json values, `"BOF_NUMBER"` for numbers, `"BOF_DATE"` for single date values.
 - `componentModelField` (top-level, NOT inside widget.special): `["STRING"]` for <500 chars, `["BIG_TEXT"]` for ≥500 chars, `["NUM"]` for numbers, `["DATE"]` for single dates.
-- `widget.editor.config`: array starting with `["INFO","LABEL","FIELD_CODE","TITLE_DESCRIPTION","WIDTH","HIDDEN","READONLY","REQUIRED","EDITONNEW","UNIQUE","HIDDEN_SAVE","HIDDEN_TRIGGER","TRIGGER_BUSINESS_EVENTS"]` then any custom config codes. `FORMULA_RULE` only if needed. `excludeInTable` must include `"WIDTH"` plus any other non-applicable configs.
+- `widget.editor.config`: array starting with `["INFO","LABEL","FIELD_CODE","TITLE_DESCRIPTION","WIDTH","HIDDEN","READONLY","REQUIRED","EDITONNEW","UNIQUE","HIDDEN_SAVE","HIDDEN_TRIGGER","TRIGGER_BUSINESS_EVENTS"]`. **CRITICAL**: if a custom setting panel exists, the editor.config.json `code` (= widget code + `_SETTING`) MUST be appended at the **end** of this array. `FORMULA_RULE` only if needed. `excludeInTable` must be `["WIDTH"]` ONLY — do not add other values.
 - `client.mobile.widget.editor.config`: same structure as `widget.editor.config`.
 - `client.mobile.component`: required fields `edit`, `read`, `ide`; optional `list`, `association`, `lov`, `tableColumn`. Names should be `Mobile` + PC component name convention.
 - `component` (PC): required `ide`, `edit`, `read`; optional `list`, `association`, `lov`, `print`, `search`, `searchIde`.
+
+## editor.config.json Requirements
+- **文件格式**: 生成 `{name}.editor.config.json`（纯 JSON，不是 JS 文件），路径为 `src/form-component-config/form-editor/{name}.editor.config.json`。**不要**生成 `.editor.config.js`。
+- **⚠️ 此文件只有 4 个字段**，不能放任何其他内容（禁止 `editorConfigList`、`options`、`staticData`、`type`、`group` 等）：
+  ```json
+  {
+    "code": "FORM_CUSTOM_RATE_SETTING",
+    "editorConfigType": "FORM_CUSTOM_RATE_SETTING",
+    "componentName": "FormComponentRateSetting",
+    "configProperty": "customComponentConfig"
+  }
+  ```
+- `code` = widget.config.json 的顶层 `code` + `_SETTING`（例如 widget `code` 为 `FORM_CUSTOM_RATE` 则此处为 `FORM_CUSTOM_RATE_SETTING`）。
+- `editorConfigType`：**与 `code` 完全相同的值**。
+- `componentName`：必须与 `setting.vue` 中的 `name` 选项完全一致。
+- `configProperty`：**固定值 `"customComponentConfig"`，不可修改**。
+- **文件命名规范**：文件名必须语义化，使用 `{组件名}.editor.config.json`，例如 `form-component-rate.editor.config.json`，不得使用 `dev-edit.editor.config.json` 这类无意义名称。
+- **注册**：必须同时更新 `src/form-component-config/form-editor/index.js`，添加 import 和注册。
 
 ## setting.vue Rules
 - setting.vue uses componentConfig prop + formEngine prop
