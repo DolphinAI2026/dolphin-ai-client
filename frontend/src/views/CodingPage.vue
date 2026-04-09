@@ -342,8 +342,15 @@
               </template>
 
               <!-- 状态消息 -->
-              <template v-else-if="msg.type === 'status'">
-                <div class="msg-status">
+              <template v-else-if="msg.type === 'status' && !msg.hidden">
+                <div v-if="msg.stepDone" class="msg-step-badge">
+                  <svg class="step-badge-icon" viewBox="0 0 16 16" fill="none">
+                    <circle cx="8" cy="8" r="7" fill="currentColor" opacity="0.15"/>
+                    <path d="M5 8l2 2 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                  {{ msg.content }}
+                </div>
+                <div v-else class="msg-status">
                   <span class="status-dot"></span>
                   {{ msg.content }}
                 </div>
@@ -709,7 +716,23 @@ interface StreamMessage {
   fileName?: string
   fileContent?: string
   collapsed?: boolean
+  stepKey?: string    // pipeline step this msg belongs to
+  stepDone?: boolean  // true = render as badge chip
+  hidden?: boolean    // true = don't render
   timestamp: number
+}
+
+const SCENE_TYPE_LABEL: Record<string, string> = {
+  web_component: '自开发组件', form_component: '自开发组件', component: '自开发组件',
+  web_page: '自开发页面', page: '自开发页面',
+  backend_api: '后端接口', api: '后端接口', backend: '后端接口',
+  service: '后端服务',
+}
+function formatSceneType(raw: string): string { return SCENE_TYPE_LABEL[raw] || raw }
+
+function completeStepMsg(stepKey: string, badgeText: string) {
+  const msg = streamMessages.value.find(m => m.stepKey === stepKey && !m.stepDone)
+  if (msg) { msg.content = badgeText; msg.stepDone = true }
 }
 const streamMessages = ref<StreamMessage[]>([])
 const isStreaming = ref(false)
@@ -790,6 +813,9 @@ function restoreReplayStreamMessages(messages: ReplayStreamMessage[]) {
     fileName: msg.fileName,
     fileContent: msg.fileContent,
     collapsed: msg.collapsed,
+    stepKey: msg.stepKey,
+    stepDone: msg.stepDone,
+    hidden: msg.hidden,
     timestamp: msg.timestamp || Date.now() + index,
   }))
   nextTick(() => {
@@ -1368,13 +1394,18 @@ async function sendMessage() {
         if (parsed.type === 'step') {
           const stepKey = parsed.step as string
           const stepStatus = parsed.status as string
-          if (stepKey === 'detect_scene' && stepStatus === 'done') {
-            addStreamMsg({ type: 'status', content: `\u2713 \u8BC6\u522B\u4E3A ${parsed.data?.scene_type || 'component'}` })
+          if (stepKey === 'detect_scene') {
+            if (stepStatus === 'running') {
+              addStreamMsg({ type: 'status', content: '正在识别开发场景...', stepKey: 'detect_scene' })
+            } else if (stepStatus === 'done') {
+              const label = formatSceneType(parsed.data?.scene_type || 'component')
+              completeStepMsg('detect_scene', `识别为 ${label}`)
+            }
           } else if (stepKey === 'create_workspace') {
             if (stepStatus === 'running') {
-              addStreamMsg({ type: 'status', content: '\u6B63\u5728\u521D\u59CB\u5316\u5DE5\u7A0B\u811A\u624B\u67B6...' })
+              addStreamMsg({ type: 'status', content: '正在初始化工程脚手架...', stepKey: 'create_workspace' })
             } else if (stepStatus === 'done' && parsed.data) {
-              addStreamMsg({ type: 'status', content: '\u2713 \u5DE5\u7A0B\u811A\u624B\u67B6\u5DF2\u521D\u59CB\u5316' })
+              completeStepMsg('create_workspace', '工程脚手架已初始化')
               const wsData = { ...parsed.data, id: parsed.data.workspace_id || parsed.data.id }
               codingStore.setWorkspace(wsData)
               codingStore.workspacePath = parsed.data.workspace_path || null
@@ -1383,9 +1414,9 @@ async function sendMessage() {
             }
           } else if (stepKey === 'generate') {
             if (stepStatus === 'running') {
-              addStreamMsg({ type: 'status', content: 'AI \u5F00\u59CB\u7F16\u5199\u4EE3\u7801...' })
+              addStreamMsg({ type: 'status', content: 'AI 开始编写代码...', stepKey: 'generate' })
             } else if (stepStatus === 'done') {
-              addStreamMsg({ type: 'status', content: '\u2713 \u4EE3\u7801\u751F\u6210\u5B8C\u6210' })
+              completeStepMsg('generate', '代码生成完成')
             }
           }
         } else if (parsed.type === 'content') {
@@ -3089,6 +3120,25 @@ watch(() => route.path, () => {
   background: var(--t-text-muted);
   flex-shrink: 0;
   opacity: 0.5;
+}
+
+/* 步骤完成 badge 芯片 */
+.msg-step-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px 3px 6px;
+  border-radius: 20px;
+  background: var(--t-success-subtle);
+  color: var(--t-success);
+  font-size: 12px;
+  font-weight: 500;
+  margin: 1px 0;
+}
+.step-badge-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
 }
 
 /* ---- 工具调用行 ---- */
