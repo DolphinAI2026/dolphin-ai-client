@@ -855,27 +855,69 @@ _BRAINSTORM_PROMPTS = {
 }
 
 
+async def _brainstorm_llm_call(
+    tenant_id: Optional[int],
+    model: str,
+    messages: list,
+    *,
+    max_tokens: int = 1000,
+    temperature: float = 0.3,
+) -> str:
+    """
+    使用与 VibeCodingAgent 相同的租户 LLM 配置发起调用。
+    避免 brainstorm 使用默认 settings LLM 而非租户配置的 coding LLM。
+    """
+    from app.coding.vibe_agent import VibeCodingAgent
+    import httpx
+
+    # 借用 VibeCodingAgent 的 LLM 配置解析
+    agent = VibeCodingAgent.__new__(VibeCodingAgent)
+    agent.tenant_id = tenant_id
+    base_url, api_key, llm_model = await agent._load_llm_config(model)
+
+    async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=120, write=10, pool=10)) as client:
+        resp = await client.post(
+            f"{base_url}/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={
+                "model": llm_model,
+                "messages": messages,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "stream": False,
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+
+
 async def _generate_brainstorm_proposal(
-    generator: CodingGenerator,
+    tenant_id: Optional[int],
+    model: str,
     message: str,
     scene_type: SceneType,
 ) -> str:
-    """LLM 生成结构化设计确认单。"""
+    """LLM 生成结构化设计确认单（使用租户 coding LLM 配置）。"""
     prompt_tpl = _BRAINSTORM_PROMPTS.get(scene_type, _BRAINSTORM_PROMPT_PAGE)
     prompt = prompt_tpl.format(message=message[:1000])
     try:
-        resp = await generator.llm_client.chat_completion(
+        return await _brainstorm_llm_call(
+            tenant_id, model,
             [{"role": "user", "content": prompt}],
             max_tokens=1000,
             temperature=0.3,
         )
-        return resp.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
     except Exception as e:
         logger.warning(f"Brainstorm generation failed: {e}")
         return ""
 
 
-async def _classify_brainstorm_response(generator: CodingGenerator, user_message: str) -> str:
+async def _classify_brainstorm_response(
+    tenant_id: Optional[int],
+    model: str,
+    user_message: str,
+) -> str:
     """
     LLM 分类用户对设计方案的回复意图。
     Returns: 'confirm' | 'revise' | 'abort'
@@ -888,12 +930,13 @@ async def _classify_brainstorm_response(generator: CodingGenerator, user_message
         f"用户回复：{user_message}"
     )
     try:
-        resp = await generator.llm_client.chat_completion(
+        answer = await _brainstorm_llm_call(
+            tenant_id, model,
             [{"role": "user", "content": prompt}],
             max_tokens=10,
             temperature=0.0,
         )
-        answer = resp.get("choices", [{}])[0].get("message", {}).get("content", "").strip().upper()
+        answer = answer.upper()
         if "ABORT" in answer:
             return "abort"
         if "CONFIRM" in answer:
@@ -1086,10 +1129,9 @@ async def run_coding_pipeline(
             yield _record_event({"type": "done", "workspace_id": ws_id, "conversation_id": conversation_id, "ide_url": ide_url})
             return
 
-        # ---- Step 3: Agent 代码生成 ----
-        yield _record_event({"type": "step", "step": "generate", "status": "running"})
+        # ---- Step 3: 创建对话 & Brainstorm 需求澄清 ----
 
-        # 创建或更新对话
+        # 创建或更新对话（brainstorm 也需要 conversation_id 来持久化提案）
         if not conversation_id:
             coding_conversation = Conversation(
                 title=params.message[:50], user_id=params.user_id,
@@ -1119,15 +1161,14 @@ async def run_coding_pipeline(
                 )
 
         # ── Brainstorm 需求澄清 ──────────────────────────
-        effective_requirement = params.message  # 默认用当前消息
+        effective_requirement = params.message
         brainstorm_proposal, original_requirement, revision_count = _get_brainstorm_state(history)
 
         if brainstorm_proposal:
             # 当前处于等待 brainstorm 确认状态
             if revision_count < BRAINSTORM_MAX_REVISIONS:
-                intent = await _classify_brainstorm_response(generator, params.message)
+                intent = await _classify_brainstorm_response(params.tenant_id, effective_model, params.message)
             else:
-                # 超过最大修改次数，强制确认
                 intent = "confirm"
                 logger.info(f"Brainstorm max revisions reached ({revision_count}), forcing confirm")
 
@@ -1139,9 +1180,10 @@ async def run_coding_pipeline(
                 return
 
             elif intent == "revise":
-                # 用户要修改方案：合并原始需求 + 用户反馈，重新生成
                 revised_message = f"{original_requirement}\n\n用户反馈（请据此修改方案）：{params.message}"
-                new_proposal = await _generate_brainstorm_proposal(generator, revised_message, scene_type)
+                new_proposal = await _generate_brainstorm_proposal(
+                    params.tenant_id, effective_model, revised_message, scene_type
+                )
                 if new_proposal:
                     await save_coding_message(db, conversation_id, "assistant",
                                               BRAINSTORM_PROPOSAL_MARKER + new_proposal)
@@ -1163,8 +1205,10 @@ async def run_coding_pipeline(
                 )
 
         elif not is_iteration and scene_type in BRAINSTORM_SCENES:
-            # 新建工作区且是支持 brainstorm 的场景类型：先生成设计方案
-            proposal = await _generate_brainstorm_proposal(generator, params.message, scene_type)
+            # 新建工作区：先生成设计方案，等用户确认后再生成代码
+            proposal = await _generate_brainstorm_proposal(
+                params.tenant_id, effective_model, params.message, scene_type
+            )
             if proposal:
                 await save_coding_message(db, conversation_id, "assistant",
                                           BRAINSTORM_PROPOSAL_MARKER + proposal)
@@ -1177,6 +1221,10 @@ async def run_coding_pipeline(
                 })
                 return
             # proposal 生成失败时降级：直接走代码生成
+            logger.warning("Brainstorm proposal generation failed, falling back to direct codegen")
+
+        # ---- Agent 代码生成 ----
+        yield _record_event({"type": "step", "step": "generate", "status": "running"})
 
         # 运行 Agent
         agent = VibeCodingAgent(ws_id, system_prompt=AGENT_SYSTEM_PROMPT, tenant_id=params.tenant_id)
