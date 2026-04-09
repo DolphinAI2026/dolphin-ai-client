@@ -342,12 +342,17 @@
               </template>
 
               <!-- 状态消息 -->
-              <template v-else-if="msg.type === 'status'">
-                <div class="msg-status" :class="{
-                  'status-done': msg.content.startsWith('\u2713') || msg.content.startsWith('\u2705'),
-                  'status-progress': msg.content.endsWith('...')
-                }">
-                  <span class="status-dot"></span>
+              <template v-else-if="msg.type === 'status' && !msg.hidden">
+                <!-- 步骤完成 badge 芯片 -->
+                <div v-if="msg.stepDone" class="msg-step-badge">
+                  <svg class="step-badge-icon" viewBox="0 0 16 16" fill="none">
+                    <circle cx="8" cy="8" r="7" fill="currentColor" opacity="0.15"/>
+                    <path d="M5 8l2.5 2.5L11 5.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                  <span>{{ msg.content }}</span>
+                </div>
+                <!-- 普通状态文字 -->
+                <div v-else class="msg-status" :class="{ 'status-progress': msg.content.endsWith('...') }">
                   <span class="status-content">{{ msg.content }}</span>
                 </div>
               </template>
@@ -722,7 +727,36 @@ interface StreamMessage {
   collapsed?: boolean
   result?: string
   resultCollapsed?: boolean
+  /** pipeline step 归属，用于原地更新 */
+  stepKey?: string
+  /** true = 显示为完成 badge 芯片 */
+  stepDone?: boolean
+  /** true = 隐藏（被后续完成消息替代） */
+  hidden?: boolean
   timestamp: number
+}
+
+const SCENE_TYPE_LABEL: Record<string, string> = {
+  web_component: '自开发组件',
+  form_component: '自开发组件',
+  component: '自开发组件',
+  web_page: '自开发页面',
+  page: '自开发页面',
+  backend_api: '后端接口',
+  api: '后端接口',
+  backend: '后端接口',
+  service: '后端服务',
+}
+function formatSceneType(raw: string): string {
+  return SCENE_TYPE_LABEL[raw] || raw
+}
+/** 找到匹配 stepKey 且未完成的 status 消息，原地更新为 badge */
+function completeStepMsg(stepKey: string, badgeText: string) {
+  const msg = streamMessages.value.find(m => m.stepKey === stepKey && !m.stepDone)
+  if (msg) {
+    msg.content = badgeText
+    msg.stepDone = true
+  }
 }
 const streamMessages = ref<StreamMessage[]>([])
 const isStreaming = ref(false)
@@ -796,29 +830,78 @@ function appendToLastCommand(text: string) {
   })
 }
 
+/** replay 时识别步骤进行中消息（已有对应完成消息则跳过） */
+const STEP_RUNNING_PATTERNS = [
+  '正在识别开发场景',
+  '正在初始化工程脚手架',
+  'AI 开始编写代码',
+  '正在处理',
+]
+/** replay 时把完成消息还原为 badge */
+const STEP_DONE_PATTERNS: [RegExp, string | null][] = [
+  [/^✓\s*识别为\s+(.+)$/, null],          // 保留原文，转 badge
+  [/^✓\s*工程脚手架已初始化$/, '工程脚手架已初始化'],
+  [/^✓\s*代码生成完成$/, '代码生成完成'],
+  [/^✅\s*代码生成完成$/, '代码生成完成'],
+]
+function replayIsRunning(content: string) {
+  return STEP_RUNNING_PATTERNS.some(p => content.includes(p))
+}
+function replayAsBadge(content: string): string | null {
+  for (const [re, label] of STEP_DONE_PATTERNS) {
+    const m = content.match(re)
+    if (m) {
+      if (label) return label
+      // 动态内容：取匹配组 1（如"识别为 自开发组件"中的 sceneType）
+      const raw = m[1]?.trim() || ''
+      return `识别为 ${formatSceneType(raw)}`
+    }
+  }
+  return null
+}
+
 function restoreReplayStreamMessages(messages: ReplayStreamMessage[]) {
   const restored: StreamMessage[] = []
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i]
     const next = messages[i + 1]
+    const content = msg.content || ''
+
+    // 跳过已有完成消息覆盖的进行中步骤
+    if (msg.type === 'status' && replayIsRunning(content)) continue
+
     // 将紧跟在 tool 消息后的 ✅ 状态结果合并到 tool 消息中
     if (msg.type === 'tool' && next?.type === 'status' && (next.content?.startsWith('✅') || next.content?.startsWith('\u2705'))) {
       restored.push({
         type: 'tool',
-        content: msg.content || '',
+        content,
         result: next.content.replace(/^✅\s*/, ''),
         resultCollapsed: true,
         timestamp: msg.timestamp || Date.now() + i,
       })
-      i++ // 跳过已合并的 status 消息
-    } else {
+      i++
+      continue
+    }
+
+    // 步骤完成消息 → 还原为 badge
+    const badgeText = msg.type === 'status' ? replayAsBadge(content) : null
+    if (badgeText) {
       restored.push({
-        type: msg.type as StreamMessage['type'],
-        content: msg.content || '',
-        fileName: msg.fileName,
-        fileContent: msg.fileContent,
-        collapsed: msg.collapsed,
+        type: 'status',
+        content: badgeText,
+        stepDone: true,
         timestamp: msg.timestamp || Date.now() + i,
+      })
+      continue
+    }
+
+    restored.push({
+      type: msg.type as StreamMessage['type'],
+      content,
+      fileName: msg.fileName,
+      fileContent: msg.fileContent,
+      collapsed: msg.collapsed,
+      timestamp: msg.timestamp || Date.now() + i,
       })
     }
   }
@@ -1331,7 +1414,7 @@ async function sendMessage() {
     addStreamMsg({ type: 'status', content: '───' })
   }
   addStreamMsg({ type: 'user', content: message })
-  addStreamMsg({ type: 'status', content: codingStore.workspace ? '正在处理...' : '正在识别开发场景...' })
+  addStreamMsg({ type: 'status', content: codingStore.workspace ? '正在处理...' : '正在识别开发场景...', stepKey: codingStore.workspace ? undefined : 'detect_scene' })
 
   try {
   // Upload attachment if present
@@ -1400,12 +1483,13 @@ async function sendMessage() {
           const stepKey = parsed.step as string
           const stepStatus = parsed.status as string
           if (stepKey === 'detect_scene' && stepStatus === 'done') {
-            addStreamMsg({ type: 'status', content: `\u2713 \u8BC6\u522B\u4E3A ${parsed.data?.scene_type || 'component'}` })
+            const label = formatSceneType(parsed.data?.scene_type || 'component')
+            completeStepMsg('detect_scene', `识别为 ${label}`)
           } else if (stepKey === 'create_workspace') {
             if (stepStatus === 'running') {
-              addStreamMsg({ type: 'status', content: '\u6B63\u5728\u521D\u59CB\u5316\u5DE5\u7A0B\u811A\u624B\u67B6...' })
+              addStreamMsg({ type: 'status', content: '正在初始化工程脚手架...', stepKey: 'create_workspace' })
             } else if (stepStatus === 'done' && parsed.data) {
-              addStreamMsg({ type: 'status', content: '\u2713 \u5DE5\u7A0B\u811A\u624B\u67B6\u5DF2\u521D\u59CB\u5316' })
+              completeStepMsg('create_workspace', '工程脚手架已初始化')
               const wsData = { ...parsed.data, id: parsed.data.workspace_id || parsed.data.id }
               codingStore.setWorkspace(wsData)
               codingStore.workspacePath = parsed.data.workspace_path || null
@@ -1414,9 +1498,9 @@ async function sendMessage() {
             }
           } else if (stepKey === 'generate') {
             if (stepStatus === 'running') {
-              addStreamMsg({ type: 'status', content: 'AI \u5F00\u59CB\u7F16\u5199\u4EE3\u7801...' })
+              addStreamMsg({ type: 'status', content: 'AI 开始编写代码...', stepKey: 'generate' })
             } else if (stepStatus === 'done') {
-              addStreamMsg({ type: 'status', content: '\u2713 \u4EE3\u7801\u751F\u6210\u5B8C\u6210' })
+              completeStepMsg('generate', '代码生成完成')
             }
           }
         } else if (parsed.type === 'content') {
@@ -3134,6 +3218,7 @@ watch(() => route.path, () => {
 @keyframes blink { 50% { opacity: 0; } }
 
 /* ---- 状态消息 ---- */
+/* 进行中状态文字 */
 .msg-status {
   font-size: 12px;
   color: var(--t-text-muted);
@@ -3147,6 +3232,25 @@ watch(() => route.path, () => {
   -webkit-box-orient: vertical;
   overflow: hidden;
   word-break: break-all;
+}
+
+/* 步骤完成 badge 芯片 */
+.msg-step-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px 3px 6px;
+  border-radius: 20px;
+  background: var(--t-success-subtle);
+  color: var(--t-success);
+  font-size: 12px;
+  font-weight: 500;
+  margin: 1px 0;
+}
+.step-badge-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
 }
 
 /* ---- 工具调用行（含可折叠结果） ---- */
