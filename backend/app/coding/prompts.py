@@ -2391,10 +2391,9 @@ CODE_GENERATION_INSTRUCTION = """
 20. **setting.vue 的固定路径是 `src/form-component/form-editor/{name}-setting.vue`**；`editorConfigList` 的固定聚合路径是 `src/form-component-config/form-editor/index.js`
 21. **不要生成任何国际化文案**。Vue 模板和脚本中所有文本直接写中文硬编码字符串，不使用 `$t()`、`this.$i18n`、`df.getI18n()`、`df.mergeI18n()` 等任何 i18n API，也不生成 `form-component-local/` 目录及其下的任何文件
 22. **widget.config.json 中 `methods` 和 `formatValueSchema` 必须是空对象 `{}`**，不要写成数组 `[]`，也不要填充任何内容
-23. **`componentModelField` 和 `frontBusinessObjectComponentType` 必须根据组件实际存储的值类型来决定，而不是组件名称**：
-    - 存储纯数字（整数/浮点数）→ `componentModelField: ["NUM"]`，`frontBusinessObjectComponentType: "BOF_NUMBER"`
-    - 存储日期时间戳或 ISO 字符串，且仅表示单个时间点 → `componentModelField: ["DATE"]`，`frontBusinessObjectComponentType: "BOF_DATE"`
-    - 存储 JSON 对象/数组、手机号、编号、富文本等较长字符串（序列化后可能超过 500 字符）→ `componentModelField: ["BIG_TEXT"]`，`frontBusinessObjectComponentType: "BOF_TEXT"`
-    - 其余情况（短字符串、枚举值、日期范围 JSON 等）→ `componentModelField: ["STRING"]`，`frontBusinessObjectComponentType: "BOF_TEXT"`
-    - **举例**：国际手机号组件存储 `{"countryCode":"CN","phone":"138..."}` → `STRING`（JSON 序列化后短）；富文本存储 HTML → `BIG_TEXT`；评分存储 `4.5` → `NUM`；日期选择器存储 `"2024-01-01"` → `DATE`
+23. **`componentModelField` 按 formValue 序列化后的预期最大字符数判断，`frontBusinessObjectComponentType` 与之对应**：
+    - 存储单个数字（整数/浮点）→ `["NUM"]` / `"BOF_NUMBER"`
+    - 存储单个日期/时间点 → `["DATE"]` / `"BOF_DATE"`
+    - 存储字符串或 JSON，序列化后 **< 500 字符** → `["STRING"]` / `"BOF_TEXT"`（如手机号对象 `{"countryCode":"CN","phone":"138..."}` ~40字符、日期范围 `["2024-01-01","2024-01-31"]` ~30字符、省市区对象 ~60字符）
+    - 存储字符串或 JSON，序列化后 **≥ 500 字符**，或长度不确定（富文本、base64、用户可随意输入大量内容）→ `["BIG_TEXT"]` / `"BOF_TEXT"`
 """
