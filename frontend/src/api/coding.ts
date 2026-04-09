@@ -42,6 +42,9 @@ export interface ReplayStreamMessage {
   fileName?: string
   fileContent?: string
   collapsed?: boolean
+  stepKey?: string
+  stepDone?: boolean
+  hidden?: boolean
   timestamp?: number
 }
 

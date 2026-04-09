@@ -883,7 +883,19 @@ function restoreReplayStreamMessages(messages: ReplayStreamMessage[]) {
       continue
     }
 
-    // 步骤完成消息 → 还原为 badge
+    // 步骤完成消息 → 还原为 badge（优先使用已存储的 stepDone 标记）
+    if (msg.stepDone) {
+      restored.push({
+        type: 'status',
+        content,
+        stepDone: true,
+        stepKey: msg.stepKey,
+        timestamp: msg.timestamp || Date.now() + i,
+      })
+      continue
+    }
+
+    // 步骤完成消息 → 还原为 badge（兼容旧数据）
     const badgeText = msg.type === 'status' ? replayAsBadge(content) : null
     if (badgeText) {
       restored.push({
@@ -901,9 +913,9 @@ function restoreReplayStreamMessages(messages: ReplayStreamMessage[]) {
       fileName: msg.fileName,
       fileContent: msg.fileContent,
       collapsed: msg.collapsed,
+      hidden: msg.hidden,
       timestamp: msg.timestamp || Date.now() + i,
-      })
-    }
+    })
   }
   streamMessages.value = restored
   nextTick(() => {
@@ -1482,9 +1494,13 @@ async function sendMessage() {
         if (parsed.type === 'step') {
           const stepKey = parsed.step as string
           const stepStatus = parsed.status as string
-          if (stepKey === 'detect_scene' && stepStatus === 'done') {
-            const label = formatSceneType(parsed.data?.scene_type || 'component')
-            completeStepMsg('detect_scene', `识别为 ${label}`)
+          if (stepKey === 'detect_scene') {
+            if (stepStatus === 'running') {
+              addStreamMsg({ type: 'status', content: '正在识别开发场景...', stepKey: 'detect_scene' })
+            } else if (stepStatus === 'done') {
+              const label = formatSceneType(parsed.data?.scene_type || 'component')
+              completeStepMsg('detect_scene', `识别为 ${label}`)
+            }
           } else if (stepKey === 'create_workspace') {
             if (stepStatus === 'running') {
               addStreamMsg({ type: 'status', content: '正在初始化工程脚手架...', stepKey: 'create_workspace' })
