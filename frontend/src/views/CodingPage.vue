@@ -1495,9 +1495,8 @@ async function sendMessage() {
           const stepKey = parsed.step as string
           const stepStatus = parsed.status as string
           if (stepKey === 'detect_scene') {
-            if (stepStatus === 'running') {
-              addStreamMsg({ type: 'status', content: '正在识别开发场景...', stepKey: 'detect_scene' })
-            } else if (stepStatus === 'done') {
+            // running 状态已在发送消息时预先添加，此处只处理完成
+            if (stepStatus === 'done') {
               const label = formatSceneType(parsed.data?.scene_type || 'component')
               completeStepMsg('detect_scene', `识别为 ${label}`)
             }
