@@ -2883,7 +2883,7 @@ watch(() => route.path, () => {
   padding: 24px 40px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 4px;
 }
 
 .stream-msg { animation: fadeInUp 0.2s ease-out; }
@@ -2904,239 +2904,354 @@ watch(() => route.path, () => {
   font-size: 14px;
   line-height: 1.5;
   margin-bottom: 8px;
+  box-shadow: 0 2px 8px var(--t-brand-glow);
 }
 
-/* AI 思考 */
-.msg-thinking {
+/* ---- AI 显式消息（设计方案等 Markdown 块） ---- */
+.msg-ai-message {
+  background: var(--t-bg-panel);
+  border: 1px solid var(--t-border-strong);
+  border-radius: var(--t-radius-sm);
+  padding: 16px 20px;
+  margin: 6px 0;
+  box-shadow: var(--t-shadow-sm);
+}
+
+.ai-message-body.markdown-body {
   font-size: 14px;
-  color: var(--t-text);
-  line-height: 1.6;
-  padding: 4px 0;
-  word-break: break-word;
+  line-height: 1.7;
+  color: var(--t-text-primary);
 }
 
-.msg-thinking-text.markdown-body {
-  display: block;
-  white-space: normal;
-}
-
-.msg-thinking-text.markdown-body :deep(h1),
-.msg-thinking-text.markdown-body :deep(h2),
-.msg-thinking-text.markdown-body :deep(h3) {
+/* ---- Markdown 通用样式（复用于 ai-message 和 thinking） ---- */
+.markdown-body :deep(h1),
+.markdown-body :deep(h2),
+.markdown-body :deep(h3) {
   font-weight: 600;
-  margin: 12px 0 6px;
-  color: var(--t-text);
+  color: var(--t-text-primary);
+  margin: 14px 0 6px;
+  line-height: 1.4;
 }
-.msg-thinking-text.markdown-body :deep(h2) { font-size: 15px; }
-.msg-thinking-text.markdown-body :deep(h3) { font-size: 14px; }
+.markdown-body :deep(h1) { font-size: 17px; }
+.markdown-body :deep(h2) { font-size: 15px; }
+.markdown-body :deep(h3) { font-size: 14px; }
 
-.msg-thinking-text.markdown-body :deep(p) {
-  margin: 4px 0;
-}
+.markdown-body :deep(p) { margin: 6px 0; }
 
-.msg-thinking-text.markdown-body :deep(strong) {
+.markdown-body :deep(strong) {
   font-weight: 600;
-  color: var(--t-text);
+  color: var(--t-text-primary);
 }
 
-.msg-thinking-text.markdown-body :deep(ul),
-.msg-thinking-text.markdown-body :deep(ol) {
-  padding-left: 20px;
-  margin: 4px 0;
+.markdown-body :deep(ul),
+.markdown-body :deep(ol) {
+  padding-left: 22px;
+  margin: 6px 0;
 }
+.markdown-body :deep(li) { margin: 3px 0; }
 
-.msg-thinking-text.markdown-body :deep(li) {
-  margin: 2px 0;
-}
-
-.msg-thinking-text.markdown-body :deep(table) {
+.markdown-body :deep(table) {
   border-collapse: collapse;
-  margin: 8px 0;
-  font-size: 13px;
   width: 100%;
+  margin: 10px 0;
+  font-size: 13px;
 }
-
-.msg-thinking-text.markdown-body :deep(th),
-.msg-thinking-text.markdown-body :deep(td) {
-  border: 1px solid var(--t-border, #e4e7ed);
-  padding: 6px 10px;
+.markdown-body :deep(th),
+.markdown-body :deep(td) {
+  border: 1px solid var(--t-border-strong);
+  padding: 6px 12px;
   text-align: left;
 }
-
-.msg-thinking-text.markdown-body :deep(th) {
-  background: var(--t-bg-secondary, #f5f7fa);
+.markdown-body :deep(th) {
+  background: var(--t-bg-input);
   font-weight: 600;
+  color: var(--t-text-primary);
 }
 
-.msg-thinking-text.markdown-body :deep(code) {
-  background: var(--t-bg-secondary, #f5f7fa);
-  border-radius: 3px;
+.markdown-body :deep(code) {
+  background: var(--t-bg-code);
+  border-radius: 4px;
   padding: 1px 5px;
-  font-family: monospace;
+  font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
   font-size: 12px;
+  color: var(--t-brand);
 }
-
-.msg-thinking-text.markdown-body :deep(pre) {
-  background: var(--t-bg-secondary, #f5f7fa);
+.markdown-body :deep(pre) {
+  background: var(--t-bg-code);
   border-radius: 6px;
-  padding: 10px 14px;
+  padding: 12px 14px;
   overflow-x: auto;
   margin: 8px 0;
+  border: 1px solid var(--t-border-subtle);
 }
-
-.msg-thinking-text.markdown-body :deep(pre code) {
+.markdown-body :deep(pre code) {
   background: none;
   padding: 0;
+  color: var(--t-text-primary);
 }
-
-.msg-thinking-text.markdown-body :deep(hr) {
+.markdown-body :deep(hr) {
   border: none;
-  border-top: 1px solid var(--t-border, #e4e7ed);
-  margin: 10px 0;
+  border-top: 1px solid var(--t-border-subtle);
+  margin: 12px 0;
 }
-
-.msg-thinking-text.markdown-body :deep(blockquote) {
-  border-left: 3px solid var(--t-brand, #5b6af0);
+.markdown-body :deep(blockquote) {
+  border-left: 3px solid var(--t-brand);
   padding-left: 12px;
   margin: 6px 0;
-  color: var(--t-text-secondary, #888);
+  color: var(--t-text-secondary);
+}
+
+/* ---- 思考过程卡片（可折叠） ---- */
+.msg-thinking-card {
+  border: 1px solid var(--t-border-subtle);
+  border-radius: var(--t-radius-sm);
+  overflow: hidden;
+  margin: 4px 0;
+  background: var(--t-bg-panel);
+}
+
+.thinking-card-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 12px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s;
+}
+.thinking-card-header:hover {
+  background: var(--t-bg-panel-hover);
+}
+
+.thinking-card-icon {
+  width: 14px;
+  height: 14px;
+  color: var(--t-text-muted);
+  flex-shrink: 0;
+}
+
+.thinking-card-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--t-text-secondary);
+}
+
+.thinking-card-chars {
+  font-size: 11px;
+  color: var(--t-text-muted);
+  margin-left: 2px;
+}
+
+.thinking-card-chevron {
+  width: 14px;
+  height: 14px;
+  color: var(--t-text-muted);
+  margin-left: auto;
+  transition: transform 0.2s;
+  flex-shrink: 0;
+}
+.thinking-card-chevron.rotated {
+  transform: rotate(180deg);
+}
+
+.thinking-card-body {
+  padding: 10px 14px 12px;
+  border-top: 1px solid var(--t-border-subtle);
+  background: var(--t-bg-subtle);
+}
+
+.thinking-text {
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--t-text-secondary);
+  display: block;
 }
 
 .thinking-cursor {
   animation: blink 1s step-end infinite;
   color: var(--t-brand);
 }
+@keyframes blink { 50% { opacity: 0; } }
 
-@keyframes blink {
-  50% { opacity: 0; }
-}
-
-/* 状态消息 */
+/* ---- 状态消息 ---- */
 .msg-status {
-  font-size: 12px;
-  color: var(--t-text-muted);
-  padding: 4px 0;
-}
-
-/* 工具调用 */
-.msg-tool {
-  font-size: 12px;
-  color: var(--t-text-muted);
-  opacity: 0.7;
-  padding: 2px 0;
-}
-
-/* 文件写入/编辑 */
-.msg-file-write, .msg-file-edit {
-  border: 1px solid var(--t-border-subtle);
-  border-radius: 8px;
-  overflow: hidden;
-  margin: 4px 0;
-}
-
-.file-header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  cursor: pointer;
-  font-size: 13px;
-  font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace;
-  transition: background 0.15s;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--t-text-muted);
+  padding: 2px 0;
+}
+.status-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--t-text-muted);
+  flex-shrink: 0;
+  opacity: 0.5;
 }
 
-.file-header:hover {
-  background: rgba(255, 255, 255, 0.04);
+/* ---- 工具调用行 ---- */
+.msg-tool-row {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 20px;
+  background: var(--t-bg-input);
+  border: 1px solid var(--t-border-subtle);
+  margin: 1px 0;
+  max-width: 100%;
 }
-
-.file-icon {
-  font-weight: 700;
-  color: #52c41a;
-  width: 16px;
-  text-align: center;
-}
-
-.msg-file-edit .file-icon {
-  color: #faad14;
-}
-
-.file-name {
-  flex: 1;
-  color: var(--t-text);
+.tool-row-text {
+  font-size: 12px;
+  color: var(--t-text-secondary);
+  font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.file-badge {
-  font-size: 10px;
-  padding: 1px 6px;
-  border-radius: 3px;
-  background: rgba(82, 196, 26, 0.15);
-  color: #52c41a;
+/* ---- 文件卡片（写入 / 编辑） ---- */
+.msg-file-card {
+  border: 1px solid var(--t-border-subtle);
+  border-radius: var(--t-radius-sm);
+  overflow: hidden;
+  margin: 4px 0;
+  background: var(--t-bg-panel);
+  box-shadow: var(--t-shadow-sm);
 }
 
-.file-badge.edit-badge {
-  background: rgba(250, 173, 20, 0.15);
-  color: #faad14;
+.file-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
+  transition: background 0.15s;
+  background: var(--t-bg-panel);
+}
+.file-card-header:hover {
+  background: var(--t-bg-panel-hover);
 }
 
-.file-toggle {
+.file-card-op {
+  font-weight: 700;
+  font-size: 13px;
+  width: 14px;
+  text-align: center;
+  flex-shrink: 0;
+}
+.file-card-op--new { color: var(--t-success); }
+.file-card-op--edit { color: var(--t-warning); }
+
+.file-card-name {
+  flex: 1;
+  color: var(--t-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-card-badge {
   font-size: 10px;
+  font-weight: 500;
+  padding: 2px 7px;
+  border-radius: 10px;
+  flex-shrink: 0;
+}
+.file-card-badge--new {
+  background: var(--t-success-subtle);
+  color: var(--t-success);
+}
+.file-card-badge--edit {
+  background: var(--t-warning-subtle);
+  color: var(--t-warning);
+}
+
+.file-card-chevron {
+  width: 14px;
+  height: 14px;
   color: var(--t-text-muted);
-  opacity: 0.5;
+  flex-shrink: 0;
+  transition: transform 0.2s;
+}
+.file-card-chevron.rotated {
+  transform: rotate(180deg);
 }
 
-.file-code-block {
+.file-card-code {
   border-top: 1px solid var(--t-border-subtle);
   max-height: 300px;
   overflow: auto;
-  background: rgba(0, 0, 0, 0.2);
+  background: var(--t-bg-code);
 }
-
-.file-code-block pre {
+.file-card-code pre {
   margin: 0;
   padding: 12px;
   font-size: 12px;
   line-height: 1.5;
-  font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace;
-  color: var(--t-text);
+  font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
+  color: var(--t-text-primary);
   white-space: pre;
   overflow-x: auto;
 }
 
-/* 命令执行 */
-.msg-command {
+/* ---- 命令执行卡片 ---- */
+.msg-command-card {
+  border: 1px solid var(--t-border-subtle);
+  border-radius: 6px;
+  overflow: hidden;
+  margin: 2px 0;
+  background: var(--t-bg-code);
+}
+.command-card-header {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 12px;
+  padding: 5px 12px;
   font-size: 12px;
-  font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace;
-  color: var(--t-text-muted);
-  background: rgba(0, 0, 0, 0.15);
-  border-radius: 6px;
-  margin: 4px 0;
+  font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
 }
-
-.cmd-icon {
-  color: #52c41a;
+.command-prompt {
+  color: var(--t-success);
   font-weight: 700;
+  flex-shrink: 0;
 }
-
-.cmd-text {
+.command-text {
+  color: var(--t-text-secondary);
+  word-break: break-all;
+}
+.command-output {
+  margin: 0;
+  padding: 6px 12px 8px 28px;
+  font-size: 11px;
+  line-height: 1.5;
+  font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
+  color: var(--t-text-muted);
+  border-top: 1px solid var(--t-border-subtle);
   white-space: pre-wrap;
   word-break: break-word;
+  overflow-x: auto;
 }
 
-/* 错误 */
-.msg-error {
+/* ---- 错误卡片 ---- */
+.msg-error-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
   padding: 8px 12px;
-  background: rgba(255, 77, 79, 0.1);
-  border: 1px solid rgba(255, 77, 79, 0.3);
+  background: var(--t-danger-subtle);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  border-left: 3px solid var(--t-danger);
   border-radius: 6px;
-  color: #ff4d4f;
+  color: var(--t-danger);
   font-size: 13px;
+}
+.error-icon {
+  flex-shrink: 0;
+  font-size: 14px;
 }
 
 /* 流式加载指示器 */
