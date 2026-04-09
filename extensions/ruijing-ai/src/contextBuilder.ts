@@ -1,13 +1,16 @@
 import * as vscode from 'vscode';
 import { extractMentionedPaths } from './utils';
+import { Config } from './config';
 
 const EXCLUDE_PATTERN = '**/node_modules/**,**/dist/**,**/.git/**,**/*.zip,**/*.jar,**/*.war,**/target/**,**/build/**,**/.idea/**';
 const MAX_FILE_CONTENT = 2600;
 const MAX_SCAFFOLD_FILE_CONTENT = 9000; // Higher limit for structurally critical files
+const MAX_SYMBOL_CONTEXT = 6000; // Context budget for symbol-indexed code blocks
 const MAX_FILES_TO_READ = 24;
-const MAX_TOTAL_CONTENT = 36000;
+const MAX_TOTAL_CONTENT = 48000; // Increased from 36K to utilize larger context windows
+const ESTIMATED_CHARS_PER_TOKEN = 3.5; // 粗略估算：1 token ≈ 3.5 chars（中英混合）
 const MAX_WORKSPACE_FILE_INDEX = 60;
-const CACHE_TTL = 120_000; // 2 min
+const CACHE_TTL = 300_000; // 5 min（文件保存时通过 dirty 标志清除）
 const SOURCE_FILE_RE = /\.(vue|js|jsx|ts|tsx|json|java|xml|yml|yaml|properties|scss|css|less|html)$/i;
 const I18N_TASK_RE = /(国际化|i18n|多语言|语言包|locale|翻译|文案)/i;
 const FORM_COMPONENT_TASK_RE = /(组件|widget|表单组件|form-component|render|渲染|upload|avatar|date|picker)/i;
@@ -27,6 +30,11 @@ interface CacheEntry {
 export class ContextBuilder {
   private cache: CacheEntry | null = null;
   private dirty = false;
+  private config: Config | null = null;
+
+  setConfig(config: Config): void {
+    this.config = config;
+  }
 
   markDirty(): void {
     this.dirty = true;
@@ -203,12 +211,22 @@ export class ContextBuilder {
       }
     }
 
+    // Symbol index: query backend for precise code context
+    const symbolSection = await this._querySymbolIndex(searchTerms, folder);
+
     // Load skill guides if available
     const skillSection = await this._loadSkills(folder, userMessage);
 
     const fileListStr = relativePaths.slice(0, MAX_WORKSPACE_FILE_INDEX).join('\n');
     const searchSummary = searchTerms.length ? `SEARCH_TERMS:\n${searchTerms.join(', ')}\n\n` : '';
-    return `${searchSummary}RELEVANT_FILE_CONTENTS:\n${excerpts.join('\n\n')}\n\nWORKSPACE_FILE_INDEX(${relativePaths.length}):\n${fileListStr}${skillSection}`;
+    const contextStr = `${searchSummary}RELEVANT_FILE_CONTENTS:\n${excerpts.join('\n\n')}${symbolSection}\n\nWORKSPACE_FILE_INDEX(${relativePaths.length}):\n${fileListStr}${skillSection}`;
+
+    // 粗略 token budget 估算 + 警告
+    const estimatedTokens = Math.ceil(contextStr.length / ESTIMATED_CHARS_PER_TOKEN);
+    if (estimatedTokens > 20_000) {
+      console.warn(`[ContextBuilder] Large context: ~${estimatedTokens} tokens (${contextStr.length} chars). Consider reducing file count.`);
+    }
+    return contextStr;
   }
 
   private _buildCacheKey(mentioned: string[], userMessage: string): string {
@@ -298,6 +316,64 @@ export class ContextBuilder {
     }
 
     return score;
+  }
+
+  /**
+   * Query the backend symbol index for precise code context.
+   * For each search term that looks like an identifier, fetch matching symbols
+   * and read surrounding code blocks (±50 lines) for the top matches.
+   */
+  private async _querySymbolIndex(searchTerms: string[], folder: vscode.WorkspaceFolder): Promise<string> {
+    if (!this.config || !searchTerms.length) return '';
+
+    const cfg = this.config.get();
+    if (!cfg.workspaceId || !cfg.apiBase) return ''; // Only works in remote workspace mode
+
+    // Filter terms that look like identifiers (not generic words)
+    const identifiers = searchTerms.filter(t => /^[a-zA-Z]\w{2,}$/.test(t)).slice(0, 5);
+    if (!identifiers.length) return '';
+
+    const parts: string[] = [];
+    let totalLen = 0;
+
+    // 并行查询所有 symbol terms（替代串行 for loop，减少 ~70% 等待时间）
+    const headers = this.config.getHeaders();
+    const symbolResults = await Promise.allSettled(
+      identifiers.map(async (term) => {
+        const url = this.config.getEndpoint(`/symbols?q=${encodeURIComponent(term)}&limit=5`);
+        const resp = await fetch(url, { headers, signal: AbortSignal.timeout(5000) });
+        if (!resp.ok) return [];
+        const data = await resp.json() as any;
+        return (data?.symbols || []).slice(0, 3);
+      })
+    );
+
+    for (const result of symbolResults) {
+      if (totalLen >= MAX_SYMBOL_CONTEXT) break;
+      if (result.status !== 'fulfilled' || !result.value.length) continue;
+
+      for (const sym of result.value) {
+        if (totalLen >= MAX_SYMBOL_CONTEXT) break;
+        try {
+          const uri = vscode.Uri.joinPath(folder.uri, sym.file);
+          const bytes = await vscode.workspace.fs.readFile(uri);
+          const lines = Buffer.from(bytes).toString('utf-8').split('\n');
+          const start = Math.max(0, sym.line - 51);
+          const end = Math.min(lines.length, sym.line + 50);
+          const block = lines.slice(start, end).join('\n');
+
+          if (block.length > 0) {
+            const entry = `### SYMBOL: ${sym.name} @ ${sym.file}:${sym.line}\n\`\`\`\n${block.slice(0, 2000)}\n\`\`\``;
+            parts.push(entry);
+            totalLen += entry.length;
+          }
+        } catch {
+          // File not readable locally, skip
+        }
+      }
+    }
+
+    return parts.length ? `\n\nSYMBOL_INDEXED_CONTEXT:\n${parts.join('\n\n')}` : '';
   }
 
   private async _loadSkills(folder: vscode.WorkspaceFolder, userMessage: string): Promise<string> {

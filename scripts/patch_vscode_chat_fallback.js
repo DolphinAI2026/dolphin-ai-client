@@ -1,20 +1,39 @@
 const fs = require('fs');
 const path = require('path');
 
-const candidatePaths = [
-  process.argv[2], // allow explicit path as first argument
-  '/usr/local/lib/code-server/lib/vscode/out/vs/code/browser/workbench/workbench.js',
-  '/usr/lib/code-server/lib/vscode/out/vs/code/browser/workbench/workbench.js',
-  `${process.env.HOME}/.local/lib/code-server/lib/vscode/out/vs/code/browser/workbench/workbench.js`,
-  `${process.env.HOME}/.local/lib/code-server-4.112.0/lib/vscode/out/vs/code/browser/workbench/workbench.js`,
-].filter(Boolean);
-
-const workbenchPath = candidatePaths.find(p => {
-  try { fs.accessSync(p); return true; } catch { return false; }
-});
-if (!workbenchPath) {
-  console.error('Could not find workbench.js. Searched:\n' + candidatePaths.join('\n'));
-  process.exit(1);
+// 支持两种调用方式：
+// 1. node patch_vscode_chat_fallback.js /explicit/path/to/workbench.js
+// 2. 自动检测（通过 codeServerResolver）
+let workbenchPath = process.argv[2];
+if (!workbenchPath || !fs.existsSync(workbenchPath)) {
+  try {
+    const { resolve } = require('./lib/codeServerResolver');
+    const csInfo = resolve(workbenchPath && !fs.existsSync(workbenchPath) ? null : workbenchPath);
+    workbenchPath = csInfo.workbenchPath;
+    console.log(`Auto-detected code-server ${csInfo.version}: ${workbenchPath}`);
+  } catch {
+    // Fallback: 兼容旧的候选路径方式
+    const HOME = process.env.HOME || '';
+    const candidatePaths = [
+      '/usr/local/lib/code-server/lib/vscode/out/vs/code/browser/workbench/workbench.js',
+      '/usr/lib/code-server/lib/vscode/out/vs/code/browser/workbench/workbench.js',
+      `${HOME}/.local/lib/code-server/lib/vscode/out/vs/code/browser/workbench/workbench.js`,
+    ].filter(Boolean);
+    // 扫描所有 code-server-* 版本目录
+    const libDir = path.join(HOME, '.local', 'lib');
+    if (fs.existsSync(libDir)) {
+      for (const entry of fs.readdirSync(libDir).sort().reverse()) {
+        if (entry.startsWith('code-server')) {
+          candidatePaths.push(path.join(libDir, entry, 'lib/vscode/out/vs/code/browser/workbench/workbench.js'));
+        }
+      }
+    }
+    workbenchPath = candidatePaths.find(p => { try { fs.accessSync(p); return true; } catch { return false; } });
+    if (!workbenchPath) {
+      console.error('Could not find workbench.js. Searched:\n' + candidatePaths.join('\n'));
+      process.exit(1);
+    }
+  }
 }
 const templatePath = path.join(__dirname, 'patch_vscode_chat_fallback.template.txt');
 

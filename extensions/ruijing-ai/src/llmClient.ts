@@ -91,14 +91,20 @@ export class LLMClient {
     let fullText = '';
     let buffer = '';
     let lastDataAt = Date.now();
+    // 自适应超时：代码生成 45s，问答 15s，默认 30s
+    const baseTimeout = (options.maxTokens ?? 0) > 4000 ? 45_000
+      : (options.maxTokens ?? 0) < 500 ? 15_000
+      : 30_000;
 
     try {
       while (true) {
         if (token?.isCancellationRequested) break;
 
-        // 30s inactivity timeout
+        // 自适应 inactivity timeout（收到数据后重置）
+        const elapsed = Date.now() - lastDataAt;
+        const remainingTimeout = Math.max(5_000, baseTimeout - elapsed);
         const inactivityTimeout = new Promise<{ done: true; timeout: true }>(resolve =>
-          setTimeout(() => resolve({ done: true, timeout: true }), 30_000)
+          setTimeout(() => resolve({ done: true, timeout: true }), remainingTimeout)
         );
         const readResult = reader.read();
         const result = await Promise.race([readResult, inactivityTimeout]) as any;
