@@ -724,115 +724,6 @@ async def save_coding_message(db: AsyncSession, conversation_id: int, role: str,
     await db.commit()
 
 
-# ── Brainstorm 需求澄清 ────────────────────────────
-
-BRAINSTORM_PROPOSAL_MARKER = "<!-- BRAINSTORM_PROPOSAL -->"
-BRAINSTORM_SCENES = {SceneType.WEB_COMPONENT, SceneType.WEB_PAGE, SceneType.WEB_LIST_VIEW}
-
-
-async def _generate_brainstorm_proposal(
-    generator: CodingGenerator,
-    message: str,
-    scene_type: SceneType,
-) -> str:
-    """Generate a structured design proposal for user to confirm before code generation."""
-    if scene_type == SceneType.WEB_COMPONENT:
-        scene_hint = "aPaaS 自定义表单组件（需要 widget.config.json 及 edit/read/ide/list/print/search/search-ide 场景）"
-        extra_fields = """
-**表单存储**
-- formValue 格式：（说明 JSON 结构或基础类型，给出一行示例）
-- 数据类型：`componentModelField: ["STRING"/"BIG_TEXT"/"NUM"/"DATE"]`，BOF 类型：`BOF_TEXT/BOF_NUMBER/BOF_DATE`
-
-**配置项**（setting.vue 面板，如无需配置填"无"）
-- `propName`（默认值）：说明
-
-**各场景交互**
-- 编辑态（edit）：
-- 只读态（read）：
-- 列表列（list）：
-- 搜索态（search）："""
-    elif scene_type == SceneType.WEB_PAGE:
-        scene_hint = "aPaaS 自定义菜单页面（Vue 2.7 + Element UI）"
-        extra_fields = """
-**页面结构**：（主要区域/组件布局）
-
-**主要功能**：（核心交互点列表）
-
-**数据来源**：（如何获取/展示数据）"""
-    else:
-        scene_hint = "aPaaS 自定义列表视图"
-        extra_fields = """
-**列表结构**：（列定义、操作按钮等）
-
-**主要功能**：（搜索、排序、导出等）"""
-
-    prompt = (
-        f"你是一位资深 aPaaS 前端架构师，请分析用户需求并输出简洁的设计确认单（不超过 600 字，用中文）。\n\n"
-        f"开发类型：{scene_hint}\n"
-        f"用户需求：{message}\n\n"
-        f"请按以下格式输出：\n\n"
-        f"## 📋 设计方案确认\n\n"
-        f"**组件名称**：[中文名]（`[kebab-case英文名]`）\n\n"
-        f"**功能概述**：[一句话描述核心功能]\n"
-        f"{extra_fields}\n\n"
-        f"---\n"
-        f"以上是我对你需求的理解，请确认是否准确？如有需要调整的地方请告知，确认后将立即开始生成代码。"
-    )
-    try:
-        resp = await generator.llm_client.chat_completion(
-            [{"role": "user", "content": prompt}],
-            max_tokens=800,
-            temperature=0.3,
-        )
-        return resp.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-    except Exception as e:
-        logger.warning(f"Brainstorm generation failed: {e}")
-        return ""
-
-
-async def _classify_brainstorm_response(generator: CodingGenerator, user_message: str) -> str:
-    """
-    Classify user response to a brainstorm proposal.
-    Returns: 'confirm' | 'revise'
-    """
-    prompt = (
-        f'判断用户对设计方案的回复是【确认/同意/开始生成】还是【要求修改/有问题/不对】。\n\n'
-        f'用户回复："{user_message}"\n\n'
-        f'只回复 CONFIRM 或 REVISE，不要其他内容。'
-    )
-    try:
-        resp = await generator.llm_client.chat_completion(
-            [{"role": "user", "content": prompt}],
-            max_tokens=10,
-            temperature=0.0,
-        )
-        answer = resp.get("choices", [{}])[0].get("message", {}).get("content", "").strip().upper()
-        return "confirm" if "CONFIRM" in answer else "revise"
-    except Exception:
-        return "confirm"  # Default to confirm on failure
-
-
-def _get_brainstorm_state(history: list) -> tuple:
-    """
-    Check if conversation is in brainstorm confirmation state.
-    Returns: (proposal_text, original_requirement) or (None, None)
-    """
-    for i in range(len(history) - 1, -1, -1):
-        msg = history[i]
-        if msg["role"] == "assistant":
-            content = msg.get("content", "")
-            if content.startswith(BRAINSTORM_PROPOSAL_MARKER):
-                proposal = content[len(BRAINSTORM_PROPOSAL_MARKER):].strip()
-                original_req = ""
-                for j in range(i - 1, -1, -1):
-                    if history[j]["role"] == "user":
-                        original_req = history[j].get("content", "")
-                        break
-                return proposal, original_req
-            break  # Last assistant message is not a proposal
-    return None, None
-
-
 # ── Pipeline 核心 ──────────────────────────────────
 
 async def run_coding_pipeline(
@@ -1005,7 +896,6 @@ async def run_coding_pipeline(
         await save_coding_message(db, conversation_id, "user", params.message)
 
         # 对话历史
-        history: list = []
         conversation_summary = ""
         if conversation_id:
             history = await get_conversation_history(db, conversation_id)
@@ -1014,49 +904,6 @@ async def run_coding_pipeline(
                     f"{'User' if m.get('role') == 'user' else 'Assistant'}: {m.get('content', '')[:200]}"
                     for m in history[-6:]
                 )
-
-        # ---- Brainstorm 需求澄清 ----
-        effective_requirement = params.message
-        brainstorm_proposal, original_requirement = _get_brainstorm_state(history)
-
-        if brainstorm_proposal:
-            # 在等待 brainstorm 确认中：判断用户意图
-            intent = await _classify_brainstorm_response(generator, params.message)
-            if intent == "revise":
-                # 用户要修改方案：根据用户反馈重新生成
-                revised_prompt = f"{original_requirement}\n\n用户反馈：{params.message}"
-                new_proposal = await _generate_brainstorm_proposal(generator, revised_prompt, scene_type)
-                if new_proposal:
-                    yield _record_event({"type": "content", "content": new_proposal})
-                    await save_coding_message(db, conversation_id, "assistant",
-                                              BRAINSTORM_PROPOSAL_MARKER + new_proposal)
-                ide_url = _build_ide_url_for_pipeline(params, ws_id, conversation_id, effective_model)
-                yield _record_event({
-                    "type": "done", "workspace_id": ws_id,
-                    "conversation_id": conversation_id, "ide_url": ide_url,
-                    "waiting_confirmation": True,
-                })
-                return
-            else:
-                # 用户确认：用原始需求 + 已确认的设计方案作为 Agent 上下文
-                effective_requirement = (
-                    f"{original_requirement}\n\n"
-                    f"[设计方案已确认，请直接按以下方案生成代码]\n{brainstorm_proposal}"
-                )
-        elif not is_iteration and scene_type in BRAINSTORM_SCENES:
-            # 新建工作区：先触发 brainstorm 而不是直接生成代码
-            proposal = await _generate_brainstorm_proposal(generator, params.message, scene_type)
-            if proposal:
-                yield _record_event({"type": "content", "content": proposal})
-                await save_coding_message(db, conversation_id, "assistant",
-                                          BRAINSTORM_PROPOSAL_MARKER + proposal)
-                ide_url = _build_ide_url_for_pipeline(params, ws_id, conversation_id, effective_model)
-                yield _record_event({
-                    "type": "done", "workspace_id": ws_id,
-                    "conversation_id": conversation_id, "ide_url": ide_url,
-                    "waiting_confirmation": True,
-                })
-                return
 
         # 运行 Agent
         agent = VibeCodingAgent(ws_id, system_prompt=AGENT_SYSTEM_PROMPT, tenant_id=params.tenant_id)
@@ -1086,7 +933,7 @@ async def run_coding_pipeline(
 
         try:
             async for event in agent.run(
-                requirement=effective_requirement,
+                requirement=params.message,
                 conversation_summary=conversation_summary,
                 model=effective_model,
                 max_turns=30,
