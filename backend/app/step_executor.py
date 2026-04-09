@@ -369,6 +369,7 @@ async def execute_create_model(
     # 构建新模型
     raw_model_code = str(model.get("code") or "").strip()
     mc = raw_model_code or _apply_suffix(_sanitize_code(model.get('code', 'model')), suffix)
+    keyword_retry_applied = False
     fields_map = {}
     data_models = []
 
