@@ -847,8 +847,16 @@ const STEP_DONE_PATTERNS: [RegExp, string | null][] = [
   [/^✓\s*代码生成完成$/, '代码生成完成'],
   [/^✅\s*代码生成完成$/, '代码生成完成'],
 ]
+/** 工具执行结果 pattern — 在旧数据中以 status 消息保存，现在应跳过（文件卡片已表达同等信息） */
+const TOOL_RESULT_PATTERNS = [
+  /^✅\s+Successfully\s/i,
+  /^Successfully\s+(wrote|read|ran|created|deleted|moved)\s/i,
+]
 function replayIsRunning(content: string) {
   return STEP_RUNNING_PATTERNS.some(p => content.includes(p))
+}
+function isToolResultMsg(content: string) {
+  return TOOL_RESULT_PATTERNS.some(p => p.test(content))
 }
 function replayAsBadge(content: string): string | null {
   for (const [re, label] of STEP_DONE_PATTERNS) {
@@ -872,6 +880,8 @@ function restoreReplayStreamMessages(messages: ReplayStreamMessage[]) {
 
     // 跳过已有完成消息覆盖的进行中步骤
     if (msg.type === 'status' && replayIsRunning(content)) continue
+    // 旧数据中的工具执行结果（如 "✅ Successfully wrote..."）— 跳过，文件卡片已表达
+    if (msg.type === 'status' && isToolResultMsg(content)) continue
 
     // 将紧跟在 tool 消息后的 ✅ 状态结果合并到 tool 消息中
     if (msg.type === 'tool' && next?.type === 'status' && (next.content?.startsWith('✅') || next.content?.startsWith('\u2705'))) {
@@ -1299,10 +1309,10 @@ function parseAssistantHistory(text: string) {
         addStreamMsg({ type: 'tool', content: line.replace(/🔧\s*/, '').replace(/\*\*/g, '') })
       }
     }
-    // 工具结果成功: > ✅ ...
+    // 工具结果成功: > ✅ ... — 文件写入/读取结果冗余，跳过不渲染
     else if (line.startsWith('> ✅')) {
       flushThinking()
-      addStreamMsg({ type: 'status', content: '✅ ' + line.replace(/^>\s*✅\s*/, '') })
+      // 跳过: 文件卡片已经展示了写入/编辑信息，工具结果行不需要单独显示
     }
     // 工具结果失败: > ❌ ...
     else if (line.startsWith('> ❌')) {
@@ -3454,9 +3464,6 @@ watch(() => route.path, () => {
   word-break: break-word;
   overflow-x: auto;
 }
-
-/* ---- 错误卡片 ---- */
-.msg-status.status-done { color: var(--t-success); }
 
 /* ---- 错误卡片 ---- */
 .msg-error-card {
