@@ -313,29 +313,54 @@
                 <div class="msg-user-bubble">{{ msg.content }}</div>
               </template>
 
-              <!-- AI 思考 -->
+              <!-- AI 显式消息（brainstorm 提案等，始终展开，Markdown 渲染） -->
+              <template v-else-if="msg.type === 'message'">
+                <div class="msg-ai-message">
+                  <div class="ai-message-body markdown-body" v-html="renderMarkdown(msg.content)"></div>
+                </div>
+              </template>
+
+              <!-- AI 思考过程（可折叠） -->
               <template v-else-if="msg.type === 'thinking'">
-                <div class="msg-thinking">
-                  <span class="msg-thinking-text">{{ msg.content }}</span>
-                  <span v-if="idx === streamMessages.length - 1 && isStreaming" class="thinking-cursor">|</span>
+                <div class="msg-thinking-card" :class="{ 'is-collapsed': msg.collapsed }">
+                  <div class="thinking-card-header" @click="msg.collapsed = !msg.collapsed">
+                    <svg class="thinking-card-icon" viewBox="0 0 16 16" fill="none">
+                      <circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.2"/>
+                      <path d="M8 5v3.5l2 1.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                    </svg>
+                    <span class="thinking-card-label">思考过程</span>
+                    <span class="thinking-card-chars">{{ msg.content.length }} 字</span>
+                    <svg class="thinking-card-chevron" :class="{ rotated: !msg.collapsed }" viewBox="0 0 16 16" fill="none">
+                      <path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                  </div>
+                  <div v-show="!msg.collapsed" class="thinking-card-body">
+                    <span class="thinking-text markdown-body" v-html="renderMarkdown(msg.content)"></span>
+                    <span v-if="idx === streamMessages.length - 1 && isStreaming" class="thinking-cursor">|</span>
+                  </div>
                 </div>
               </template>
 
               <!-- 状态消息 -->
               <template v-else-if="msg.type === 'status'">
-                <div class="msg-status">{{ msg.content }}</div>
+                <div class="msg-status">
+                  <span class="status-dot"></span>
+                  {{ msg.content }}
+                </div>
               </template>
 
               <!-- 文件写入 -->
               <template v-else-if="msg.type === 'file_write'">
-                <div class="msg-file-write">
-                  <div class="file-header" @click="msg.collapsed = !msg.collapsed">
-                    <span class="file-icon">+</span>
-                    <span class="file-name">{{ msg.fileName }}</span>
-                    <span class="file-badge">新建</span>
-                    <span class="file-toggle">{{ msg.collapsed ? '&#9654;' : '&#9660;' }}</span>
+                <div class="msg-file-card">
+                  <div class="file-card-header" @click="msg.collapsed = !msg.collapsed">
+                    <span class="file-card-op file-card-op--new">+</span>
+                    <span class="file-card-name">{{ msg.fileName }}</span>
+                    <span class="file-card-badge file-card-badge--new">新建</span>
+                    <svg class="file-card-chevron" :class="{ rotated: !msg.collapsed }" viewBox="0 0 16 16" fill="none">
+                      <path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
                   </div>
-                  <div v-if="!msg.collapsed && msg.fileContent" class="file-code-block">
+                  <div v-if="!msg.collapsed && msg.fileContent" class="file-card-code">
                     <pre><code>{{ msg.fileContent }}</code></pre>
                   </div>
                 </div>
@@ -343,35 +368,45 @@
 
               <!-- 文件编辑 -->
               <template v-else-if="msg.type === 'file_edit'">
-                <div class="msg-file-edit">
-                  <div class="file-header" @click="msg.collapsed = !msg.collapsed">
-                    <span class="file-icon">~</span>
-                    <span class="file-name">{{ msg.fileName }}</span>
-                    <span class="file-badge edit-badge">修改</span>
-                    <span class="file-toggle">{{ msg.collapsed ? '&#9654;' : '&#9660;' }}</span>
+                <div class="msg-file-card">
+                  <div class="file-card-header" @click="msg.collapsed = !msg.collapsed">
+                    <span class="file-card-op file-card-op--edit">~</span>
+                    <span class="file-card-name">{{ msg.fileName }}</span>
+                    <span class="file-card-badge file-card-badge--edit">修改</span>
+                    <svg class="file-card-chevron" :class="{ rotated: !msg.collapsed }" viewBox="0 0 16 16" fill="none">
+                      <path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
                   </div>
-                  <div v-if="!msg.collapsed && msg.fileContent" class="file-code-block">
+                  <div v-if="!msg.collapsed && msg.fileContent" class="file-card-code">
                     <pre><code>{{ msg.fileContent }}</code></pre>
                   </div>
                 </div>
               </template>
 
-              <!-- 工具调用 -->
+              <!-- 工具调用（读文件/扫描/搜索等） -->
               <template v-else-if="msg.type === 'tool'">
-                <div class="msg-tool">{{ msg.content }}</div>
+                <div class="msg-tool-row">
+                  <span class="tool-row-text">{{ msg.content }}</span>
+                </div>
               </template>
 
               <!-- 命令执行 -->
               <template v-else-if="msg.type === 'command'">
-                <div class="msg-command">
-                  <span class="cmd-icon">$</span>
-                  <span class="cmd-text">{{ msg.content }}</span>
+                <div class="msg-command-card">
+                  <div class="command-card-header">
+                    <span class="command-prompt">$</span>
+                    <span class="command-text">{{ msg.content.split('\n')[0] }}</span>
+                  </div>
+                  <pre v-if="msg.content.includes('\n')" class="command-output">{{ msg.content.split('\n').slice(1).join('\n') }}</pre>
                 </div>
               </template>
 
               <!-- 错误 -->
               <template v-else-if="msg.type === 'error'">
-                <div class="msg-error">{{ msg.content }}</div>
+                <div class="msg-error-card">
+                  <span class="error-icon">⚠</span>
+                  {{ msg.content }}
+                </div>
               </template>
             </div>
 
@@ -536,6 +571,7 @@ import { harnessApi } from '@/api/harness'
 import { conversationApi } from '@/api/conversation'
 import { llmConfigApi, type BuilderModelOption } from '@/api/llmConfig'
 import { consumeSseResponse } from '@/utils/sse'
+import { marked } from 'marked'
 import ThemeToggle from '@/components/ThemeToggle.vue'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
 import EnvSelectModal from '@/components/EnvSelectModal.vue'
@@ -689,12 +725,25 @@ function cleanThinkTags(text: string): string {
     .trim()
 }
 
+function renderMarkdown(content: string): string {
+  if (!content) return ''
+  try {
+    return marked.parse(content) as string
+  } catch {
+    return content
+  }
+}
+
 function addStreamMsg(msg: Omit<StreamMessage, 'timestamp'>) {
   // 过滤 thinking 类型中的 <think> 标签
   const cleaned = { ...msg }
   if (cleaned.type === 'thinking' && cleaned.content) {
     cleaned.content = cleanThinkTags(cleaned.content)
     if (!cleaned.content) return // 过滤后为空则不添加
+  }
+  // thinking 消息默认展开（collapsed 未设置时初始化为 false）
+  if (cleaned.type === 'thinking' && cleaned.collapsed === undefined) {
+    cleaned.collapsed = false
   }
   streamMessages.value.push({ ...cleaned, timestamp: Date.now() })
   // 自动滚动到底部
@@ -1340,13 +1389,10 @@ async function sendMessage() {
             }
           }
         } else if (parsed.type === 'content') {
-          // content 事件：如果最后一条 thinking 已经包含了相同内容（agent_thinking_delta 先到），跳过
+          // content 事件：来自 pipeline 的显式消息（如 brainstorm 提案），用 message 类型展示
           const text = (parsed.content || '') as string
           if (text.trim()) {
-            const last = streamMessages.value[streamMessages.value.length - 1]
-            if (!(last?.type === 'thinking' && last.content.includes(text.slice(0, 50)))) {
-              addStreamMsg({ type: 'thinking', content: text })
-            }
+            addStreamMsg({ type: 'message', content: text })
           }
         } else if (parsed.type === 'agent_tool') {
           const toolName = parsed.tool as string
@@ -2875,11 +2921,96 @@ watch(() => route.path, () => {
 .msg-thinking {
   font-size: 14px;
   color: var(--t-text-primary);
-  line-height: 1.7;
-  padding: 6px 0 6px 12px;
-  border-left: 2px solid var(--t-border-strong);
-  white-space: pre-wrap;
+  line-height: 1.6;
+  padding: 4px 0;
   word-break: break-word;
+}
+
+.msg-thinking-text.markdown-body {
+  display: block;
+  white-space: normal;
+}
+
+.msg-thinking-text.markdown-body :deep(h1),
+.msg-thinking-text.markdown-body :deep(h2),
+.msg-thinking-text.markdown-body :deep(h3) {
+  font-weight: 600;
+  margin: 12px 0 6px;
+  color: var(--t-text);
+}
+.msg-thinking-text.markdown-body :deep(h2) { font-size: 15px; }
+.msg-thinking-text.markdown-body :deep(h3) { font-size: 14px; }
+
+.msg-thinking-text.markdown-body :deep(p) {
+  margin: 4px 0;
+}
+
+.msg-thinking-text.markdown-body :deep(strong) {
+  font-weight: 600;
+  color: var(--t-text);
+}
+
+.msg-thinking-text.markdown-body :deep(ul),
+.msg-thinking-text.markdown-body :deep(ol) {
+  padding-left: 20px;
+  margin: 4px 0;
+}
+
+.msg-thinking-text.markdown-body :deep(li) {
+  margin: 2px 0;
+}
+
+.msg-thinking-text.markdown-body :deep(table) {
+  border-collapse: collapse;
+  margin: 8px 0;
+  font-size: 13px;
+  width: 100%;
+}
+
+.msg-thinking-text.markdown-body :deep(th),
+.msg-thinking-text.markdown-body :deep(td) {
+  border: 1px solid var(--t-border, #e4e7ed);
+  padding: 6px 10px;
+  text-align: left;
+}
+
+.msg-thinking-text.markdown-body :deep(th) {
+  background: var(--t-bg-secondary, #f5f7fa);
+  font-weight: 600;
+}
+
+.msg-thinking-text.markdown-body :deep(code) {
+  background: var(--t-bg-secondary, #f5f7fa);
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-family: monospace;
+  font-size: 12px;
+}
+
+.msg-thinking-text.markdown-body :deep(pre) {
+  background: var(--t-bg-secondary, #f5f7fa);
+  border-radius: 6px;
+  padding: 10px 14px;
+  overflow-x: auto;
+  margin: 8px 0;
+}
+
+.msg-thinking-text.markdown-body :deep(pre code) {
+  background: none;
+  padding: 0;
+}
+
+.msg-thinking-text.markdown-body :deep(hr) {
+  border: none;
+  border-top: 1px solid var(--t-border, #e4e7ed);
+  margin: 10px 0;
+}
+
+.msg-thinking-text.markdown-body :deep(blockquote) {
+  border-left: 3px solid var(--t-brand, #5b6af0);
+  padding-left: 12px;
+  margin: 6px 0;
+  color: var(--t-text-secondary, #888);
 }
 
 .thinking-cursor {
