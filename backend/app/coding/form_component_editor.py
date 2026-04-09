@@ -92,6 +92,14 @@ class FormComponentEditorSpec:
         return f"src/form-component-config/form-widget/{self.full_kebab}.widget.config.json"
 
     @property
+    def widget_index_path(self) -> str:
+        return "src/form-component/form-widget/index.js"
+
+    @property
+    def widget_config_index_path(self) -> str:
+        return "src/form-component-config/form-widget/index.js"
+
+    @property
     def legacy_setting_file_path(self) -> str:
         return "src/form-component/form-editor/setting.vue"
 
@@ -209,6 +217,8 @@ def normalize_form_component_editor_artifacts(workspace_path: Path) -> list[str]
         (spec.editor_index_path, render_form_component_editor_index(spec)),
         (spec.editor_config_file_path, render_form_component_editor_config(spec)),
         (spec.editor_config_index_path, render_form_component_editor_config_index(spec)),
+        (spec.widget_index_path, render_form_component_widget_index(spec)),
+        (spec.widget_config_index_path, render_form_component_widget_config_index(spec)),
     ):
         if _write_if_changed(workspace_path / file_path, content):
             changed_files.append(file_path)
@@ -320,6 +330,41 @@ def render_form_component_editor_index(spec: FormComponentEditorSpec) -> str:
         f"  {spec.setting_component_name}\n"
         "]\n\n"
         "export default customFormEditorList\n"
+    )
+
+
+def render_form_component_widget_index(spec: FormComponentEditorSpec) -> str:
+    """生成 src/form-component/form-widget/index.js — 聚合所有场景组件为数组。"""
+    return (
+        "import ideFormComponentList from './ide'\n"
+        "import editFormComponentList from './edit'\n"
+        "import readFormComponentList from './read'\n"
+        "import listFormComponentList from './list'\n"
+        "import printFormComponentList from './print'\n"
+        "import searchFormComponentList from './search'\n"
+        "import searchIdeFormComponentList from './search-ide'\n\n"
+        "const customFormComponentList = [\n"
+        "  ...ideFormComponentList,\n"
+        "  ...editFormComponentList,\n"
+        "  ...readFormComponentList,\n"
+        "  ...listFormComponentList,\n"
+        "  ...printFormComponentList,\n"
+        "  ...searchFormComponentList,\n"
+        "  ...searchIdeFormComponentList,\n"
+        "]\n\n"
+        "export default customFormComponentList\n"
+    )
+
+
+def render_form_component_widget_config_index(spec: FormComponentEditorSpec) -> str:
+    """生成 src/form-component-config/form-widget/index.js — 聚合 widget config 为数组。"""
+    return (
+        f"import {spec.editor_config_name.replace('EditorConfig', 'WidgetConfig')} "
+        f"from './{spec.full_kebab}.widget.config.json'\n\n"
+        f"const widgetConfigList = [\n"
+        f"  {spec.editor_config_name.replace('EditorConfig', 'WidgetConfig')}\n"
+        "]\n\n"
+        "export default widgetConfigList\n"
     )
 
 
