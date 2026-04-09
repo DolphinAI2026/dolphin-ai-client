@@ -2926,7 +2926,17 @@ watch(() => route.path, () => {
   padding: 24px 40px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 3px;
+}
+
+/* 卡片类消息上下留一点额外间距，与状态行视觉分组 */
+.msg-ai-message,
+.msg-thinking-card,
+.msg-file-card,
+.msg-command-card,
+.msg-error-card {
+  margin-top: 6px;
+  margin-bottom: 2px;
 }
 
 .stream-msg {
@@ -3127,26 +3137,20 @@ watch(() => route.path, () => {
 .msg-status {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  color: var(--t-text-secondary);
-  padding: 3px 0;
+  gap: 0;
+  font-size: 12px;
+  color: var(--t-text-muted);
+  padding: 2px 0 2px 10px;
+  border-left: 2px solid var(--t-border-subtle);
+  line-height: 1.5;
 }
-.status-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--t-text-muted);
-  flex-shrink: 0;
-  opacity: 0.4;
-}
+.status-dot { display: none; }
 .status-content {
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
   word-break: break-all;
-  line-height: 1.5;
 }
 
 /* ---- 工具调用行（含可折叠结果） ---- */
@@ -3335,38 +3339,16 @@ watch(() => route.path, () => {
 
 /* ---- 错误卡片 ---- */
 /* ---- 状态完成/进行中变体 ---- */
-/* 进行中：蓝点脉冲动画 */
-.msg-status.status-progress .status-dot {
-  background: var(--t-brand);
-  opacity: 1;
-  animation: statusPulse 1.2s ease-in-out infinite;
-}
-@keyframes statusPulse {
-  0%, 100% { opacity: 0.3; transform: scale(0.7); }
-  50%       { opacity: 1;   transform: scale(1.1); }
+/* 进行中：品牌色左边框 */
+.msg-status.status-progress {
+  border-left-color: var(--t-brand);
+  color: var(--t-text-secondary);
 }
 
-/* 完成：绿圆 + 勾 */
+/* 完成：绿色左边框 + 绿色文字 */
 .msg-status.status-done {
+  border-left-color: var(--t-success);
   color: var(--t-success);
-}
-.msg-status.status-done .status-dot {
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: var(--t-success-subtle);
-  opacity: 1;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-.msg-status.status-done .status-dot::after {
-  content: '✓';
-  font-size: 9px;
-  font-weight: 700;
-  color: var(--t-success);
-  line-height: 1;
 }
 
 /* ---- 错误卡片 ---- */
