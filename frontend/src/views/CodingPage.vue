@@ -2837,7 +2837,7 @@ watch(() => route.path, () => {
   padding: 24px 40px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 4px;
 }
 
 .stream-msg { animation: fadeInUp 0.2s ease-out; }
@@ -2858,14 +2858,26 @@ watch(() => route.path, () => {
   font-size: 14px;
   line-height: 1.5;
   margin-bottom: 8px;
+  box-shadow: 0 2px 8px var(--t-brand-glow);
+}
+
+.msg-thinking + .msg-user,
+.msg-file_write + .msg-user,
+.msg-file_edit + .msg-user {
+  margin-top: 12px;
+}
+
+.msg-user + .msg-thinking {
+  margin-top: 8px;
 }
 
 /* AI 思考 */
 .msg-thinking {
   font-size: 14px;
-  color: var(--t-text);
-  line-height: 1.6;
-  padding: 4px 0;
+  color: var(--t-text-primary);
+  line-height: 1.7;
+  padding: 6px 0 6px 12px;
+  border-left: 2px solid var(--t-border-strong);
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -2881,25 +2893,59 @@ watch(() => route.path, () => {
 
 /* 状态消息 */
 .msg-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 12px;
   color: var(--t-text-muted);
-  padding: 4px 0;
+  padding: 2px 0;
+}
+.msg-status::before {
+  content: '';
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--t-text-muted);
+  flex-shrink: 0;
+  opacity: 0.5;
 }
 
 /* 工具调用 */
 .msg-tool {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px 3px 8px;
+  border-radius: 20px;
+  background: var(--t-bg-input);
+  border: 1px solid var(--t-border-subtle);
   font-size: 12px;
-  color: var(--t-text-muted);
-  opacity: 0.7;
-  padding: 2px 0;
+  color: var(--t-text-secondary);
+  font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin: 1px 0;
 }
 
 /* 文件写入/编辑 */
 .msg-file-write, .msg-file-edit {
   border: 1px solid var(--t-border-subtle);
-  border-radius: 8px;
+  border-radius: var(--t-radius-sm);
   overflow: hidden;
   margin: 4px 0;
+  background: var(--t-bg-panel);
+  box-shadow: var(--t-shadow-sm);
+}
+
+.msg-file-write {
+  border-left: 3px solid var(--t-success);
+}
+
+.msg-file-edit {
+  border-left: 3px solid var(--t-warning);
 }
 
 .file-header {
@@ -2908,58 +2954,65 @@ watch(() => route.path, () => {
   gap: 8px;
   padding: 8px 12px;
   cursor: pointer;
-  font-size: 13px;
+  font-size: 12px;
   font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace;
   transition: background 0.15s;
+  background: var(--t-bg-panel);
 }
 
 .file-header:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--t-bg-panel-hover);
 }
 
 .file-icon {
+  font-size: 11px;
   font-weight: 700;
-  color: #52c41a;
-  width: 16px;
+  color: var(--t-success);
+  width: 14px;
   text-align: center;
+  flex-shrink: 0;
 }
 
 .msg-file-edit .file-icon {
-  color: #faad14;
+  color: var(--t-warning);
 }
 
 .file-name {
   flex: 1;
-  color: var(--t-text);
+  color: var(--t-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 12px;
 }
 
 .file-badge {
   font-size: 10px;
-  padding: 1px 6px;
-  border-radius: 3px;
-  background: rgba(82, 196, 26, 0.15);
-  color: #52c41a;
+  font-weight: 500;
+  padding: 2px 7px;
+  border-radius: 10px;
+  background: var(--t-success-subtle);
+  color: var(--t-success);
+  flex-shrink: 0;
 }
 
 .file-badge.edit-badge {
-  background: rgba(250, 173, 20, 0.15);
-  color: #faad14;
+  background: var(--t-warning-subtle);
+  color: var(--t-warning);
 }
 
 .file-toggle {
   font-size: 10px;
   color: var(--t-text-muted);
-  opacity: 0.5;
+  flex-shrink: 0;
+  transition: transform 0.15s;
 }
 
 .file-code-block {
   border-top: 1px solid var(--t-border-subtle);
   max-height: 300px;
   overflow: auto;
-  background: rgba(0, 0, 0, 0.2);
+  background: var(--t-bg-code);
 }
 
 .file-code-block pre {
@@ -2968,7 +3021,7 @@ watch(() => route.path, () => {
   font-size: 12px;
   line-height: 1.5;
   font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace;
-  color: var(--t-text);
+  color: var(--t-text-primary);
   white-space: pre;
   overflow-x: auto;
 }
@@ -2978,18 +3031,20 @@ watch(() => route.path, () => {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 12px;
+  padding: 5px 12px;
   font-size: 12px;
   font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace;
-  color: var(--t-text-muted);
-  background: rgba(0, 0, 0, 0.15);
+  color: var(--t-text-secondary);
+  background: var(--t-bg-code);
+  border: 1px solid var(--t-border-subtle);
   border-radius: 6px;
-  margin: 4px 0;
+  margin: 2px 0;
 }
 
 .cmd-icon {
-  color: #52c41a;
+  color: var(--t-success);
   font-weight: 700;
+  flex-shrink: 0;
 }
 
 .cmd-text {
@@ -3000,10 +3055,11 @@ watch(() => route.path, () => {
 /* 错误 */
 .msg-error {
   padding: 8px 12px;
-  background: rgba(255, 77, 79, 0.1);
-  border: 1px solid rgba(255, 77, 79, 0.3);
+  background: var(--t-danger-subtle);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  border-left: 3px solid var(--t-danger);
   border-radius: 6px;
-  color: #ff4d4f;
+  color: var(--t-danger);
   font-size: 13px;
 }
 
