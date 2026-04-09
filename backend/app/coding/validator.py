@@ -207,9 +207,11 @@ def normalize_widget_config_with_pydantic(data: dict) -> dict:
     """
     result = dict(data)
 
-    # methods: list → dict
+    # methods / formatValueSchema: list → dict
     if isinstance(result.get("methods"), list):
         result["methods"] = {}
+    if isinstance(result.get("formatValueSchema"), list):
+        result["formatValueSchema"] = {}
 
     # desc.iconType 强制为 "DEFAULT"
     if isinstance(result.get("desc"), dict):

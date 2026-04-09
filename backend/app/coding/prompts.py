@@ -2389,4 +2389,6 @@ CODE_GENERATION_INSTRUCTION = """
 18. 如需在 setting.vue 中访问子表列表，使用 `this.formEngine.formDataControl.allTileFormItemList` 并按 `componentType === 'FORM_WIDGET_SON_TABLE'` 过滤
 19. **获取子表真实数据时**，formData 中子表数据的 key 是子表的 `code`（不是 uuid），需要先通过 uuid 找到子表再取其 code
 20. **setting.vue 的固定路径是 `src/form-component/form-editor/{name}-setting.vue`**；`editorConfigList` 的固定聚合路径是 `src/form-component-config/form-editor/index.js`
+21. **不要生成任何国际化文案**。Vue 模板和脚本中所有文本直接写中文硬编码字符串，不使用 `$t()`、`this.$i18n`、`df.getI18n()`、`df.mergeI18n()` 等任何 i18n API，也不生成 `form-component-local/` 目录及其下的任何文件
+22. **widget.config.json 中 `methods` 和 `formatValueSchema` 必须是空对象 `{}`**，不要写成数组 `[]`，也不要填充任何内容
 """
