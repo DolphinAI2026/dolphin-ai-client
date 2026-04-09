@@ -750,13 +750,16 @@ const SCENE_TYPE_LABEL: Record<string, string> = {
 function formatSceneType(raw: string): string {
   return SCENE_TYPE_LABEL[raw] || raw
 }
-/** 找到匹配 stepKey 且未完成的 status 消息，原地更新为 badge */
+/** 将所有匹配 stepKey 且未完成的 status 消息更新为 badge（防止 SSE 重复事件导致残留） */
 function completeStepMsg(stepKey: string, badgeText: string) {
-  const msg = streamMessages.value.find(m => m.stepKey === stepKey && !m.stepDone)
-  if (msg) {
-    msg.content = badgeText
-    msg.stepDone = true
-  }
+  streamMessages.value
+    .filter(m => m.stepKey === stepKey && !m.stepDone)
+    .forEach(m => { m.content = badgeText; m.stepDone = true })
+}
+/** 添加步骤进行中消息，若已存在相同 stepKey 的未完成消息则跳过 */
+function addStepRunningMsg(content: string, stepKey: string) {
+  const exists = streamMessages.value.some(m => m.stepKey === stepKey && !m.stepDone)
+  if (!exists) addStreamMsg({ type: 'status', content, stepKey })
 }
 const streamMessages = ref<StreamMessage[]>([])
 const isStreaming = ref(false)
@@ -1502,7 +1505,7 @@ async function sendMessage() {
             }
           } else if (stepKey === 'create_workspace') {
             if (stepStatus === 'running') {
-              addStreamMsg({ type: 'status', content: '正在初始化工程脚手架...', stepKey: 'create_workspace' })
+              addStepRunningMsg('正在初始化工程脚手架...', 'create_workspace')
             } else if (stepStatus === 'done' && parsed.data) {
               completeStepMsg('create_workspace', '工程脚手架已初始化')
               const wsData = { ...parsed.data, id: parsed.data.workspace_id || parsed.data.id }
@@ -1513,7 +1516,7 @@ async function sendMessage() {
             }
           } else if (stepKey === 'generate') {
             if (stepStatus === 'running') {
-              addStreamMsg({ type: 'status', content: 'AI 开始编写代码...', stepKey: 'generate' })
+              addStepRunningMsg('AI 开始编写代码...', 'generate')
             } else if (stepStatus === 'done') {
               completeStepMsg('generate', '代码生成完成')
             }
