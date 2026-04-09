@@ -3135,13 +3135,9 @@ watch(() => route.path, () => {
 
 /* ---- 状态消息 ---- */
 .msg-status {
-  display: flex;
-  align-items: center;
-  gap: 0;
   font-size: 12px;
   color: var(--t-text-muted);
-  padding: 2px 0 2px 10px;
-  border-left: 2px solid var(--t-border-subtle);
+  padding: 1px 0;
   line-height: 1.5;
 }
 .status-dot { display: none; }
@@ -3338,18 +3334,7 @@ watch(() => route.path, () => {
 }
 
 /* ---- 错误卡片 ---- */
-/* ---- 状态完成/进行中变体 ---- */
-/* 进行中：品牌色左边框 */
-.msg-status.status-progress {
-  border-left-color: var(--t-brand);
-  color: var(--t-text-secondary);
-}
-
-/* 完成：绿色左边框 + 绿色文字 */
-.msg-status.status-done {
-  border-left-color: var(--t-success);
-  color: var(--t-success);
-}
+.msg-status.status-done { color: var(--t-success); }
 
 /* ---- 错误卡片 ---- */
 .msg-error-card {
