@@ -88,7 +88,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import { Search, Loading, Check } from '@element-plus/icons-vue'
+import { Search, Loading } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { platformEnvApi, type PlatformEnv, type RemoteApp } from '@/api/platformEnv'
 import { applicationApi } from '@/api/application'

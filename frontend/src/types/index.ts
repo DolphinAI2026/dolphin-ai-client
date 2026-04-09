@@ -67,6 +67,10 @@ export interface Application {
   app_code: string
   description: string | null
   status: string
+  conversation_id?: number | null
+  platform_env_id?: number | null
+  apaas_app_id?: string | null
+  apaas_url?: string | null
   models?: number
   forms?: number
   roles?: number
@@ -166,6 +170,7 @@ export interface PreviewData {
   roles: RoleDef[]
   dicts: DictDef[]
   models: ModelDef[]
+  forms: any[]
   workflows: WorkflowDef[]
   permissions: PermissionDef[]
 }

@@ -11,11 +11,11 @@ export default defineConfig({
     {
       name: 'platform-plugin-proxy',
       configureServer(server) {
-        // 平台插件资源：/{32位hex}/... → 代理到后端 8000（本地后端）
+        // 平台插件资源：/{32位hex}/... → 代理到本地后端 8000
         server.middlewares.use((req, res, next) => {
           if (req.url && /^\/[0-9a-f]{32}\//.test(req.url)) {
             const proxyReq = http.request(
-              `http://localhost:8001${req.url}`,
+              `http://localhost:8000${req.url}`,
               { method: req.method, headers: req.headers },
               (proxyRes) => {
                 res.writeHead(proxyRes.statusCode || 200, proxyRes.headers)
@@ -47,39 +47,39 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:8001',
+        target: 'http://localhost:8000',
         changeOrigin: true
       },
       '^/platform(/|$)': {
-        target: 'http://localhost:8001',
+        target: 'http://localhost:8000',
         changeOrigin: true
       },
       '/backend': {
-        target: 'http://localhost:8001',
+        target: 'http://localhost:8000',
         changeOrigin: true
       },
       '/plugin': {
-        target: 'http://localhost:8001',
+        target: 'http://localhost:8000',
         changeOrigin: true
       },
       '/xdap-admin': {
-        target: 'http://localhost:8001',
+        target: 'http://localhost:8000',
         changeOrigin: true
       },
       '/xdap-plugin': {
-        target: 'http://localhost:8001',
+        target: 'http://localhost:8000',
         changeOrigin: true
       },
       '/xdap-open': {
-        target: 'http://localhost:8001',
+        target: 'http://localhost:8000',
         changeOrigin: true
       },
       '/smartbi': {
-        target: 'http://localhost:8001',
+        target: 'http://localhost:8000',
         changeOrigin: true
       },
       '/apaas': {
-        target: 'http://localhost:8001',
+        target: 'http://localhost:8000',
         changeOrigin: true
       }
     }

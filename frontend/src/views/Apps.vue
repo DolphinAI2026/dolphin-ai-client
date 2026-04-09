@@ -58,7 +58,7 @@
             <button v-if="a.source === 'local' && (a.local_status === 'draft' || a.local_status === 'failed')" class="action-btn primary" @click.stop="router.push({ path: '/chat', query: { deploy_app_id: String(a.id) } })" title="生成到平台">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
             </button>
-            <button class="action-btn danger" @click.stop="confirmDelete(a)" title="删除">
+            <button v-if="canDeleteApp(a)" class="action-btn danger" @click.stop="confirmDelete(a)" title="删除">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
             </button>
           </div>
@@ -92,7 +92,7 @@
               <button v-if="a.source === 'local' && (a.local_status === 'draft' || a.local_status === 'failed')" class="action-btn primary" @click.stop="router.push({ path: '/chat', query: { deploy_app_id: String(a.id) } })" title="生成到平台">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
               </button>
-              <button class="action-btn danger" @click.stop="confirmDelete(a)" title="删除">
+              <button v-if="canDeleteApp(a)" class="action-btn danger" @click.stop="confirmDelete(a)" title="删除">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
               </button>
             </div>
@@ -174,7 +174,24 @@ function statusClass(a: MergedApplication) {
   return 'draft'
 }
 
+function canDeleteApp(a: MergedApplication) {
+  if (a.source !== 'local') return false
+  if (a.apaas_app_id) return false
+  return a.local_status === 'draft' || a.local_status === 'failed'
+}
+
+function deleteTooltip(a: MergedApplication) {
+  if (canDeleteApp(a)) return '删除'
+  if (a.source !== 'local') return '平台应用或已同步应用不允许删除'
+  if (a.apaas_app_id || a.local_status === 'completed' || a.local_status === 'generating') return '已构建应用不允许删除'
+  return '当前状态不允许删除'
+}
+
 async function confirmDelete(a: MergedApplication) {
+  if (!canDeleteApp(a)) {
+    ElMessage.warning(deleteTooltip(a))
+    return
+  }
   try {
     await ElMessageBox.confirm(`确定删除「${a.app_name}」？此操作不可恢复。`, '删除应用', {
       confirmButtonText: '删除',
@@ -184,7 +201,10 @@ async function confirmDelete(a: MergedApplication) {
     await applicationApi.delete(Number(a.id))
     apps.value = apps.value.filter(x => x.id !== a.id)
     ElMessage.success('已删除')
-  } catch { /* cancelled */ }
+  } catch (error: any) {
+    if (error === 'cancel' || error === 'close' || error?.action === 'cancel' || error?.action === 'close') return
+    ElMessage.error(error?.response?.data?.detail || error?.message || '删除失败')
+  }
 }
 
 onMounted(async () => {
@@ -590,6 +610,11 @@ onMounted(async () => {
 .action-btn.primary:hover { background: var(--t-brand-subtle); color: var(--t-brand-light); }
 .action-btn.danger { border-color: rgba(239, 68, 68, 0.15); color: rgba(239, 68, 68, 0.5); }
 .action-btn.danger:hover { background: rgba(239, 68, 68, 0.1); color: var(--t-danger); }
+.action-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  pointer-events: none;
+}
 
 /* ── Stats ── */
 .card-stats {

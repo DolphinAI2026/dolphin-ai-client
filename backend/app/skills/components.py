@@ -53,7 +53,7 @@ def _rand(n: int = 4) -> str:
 def _safe_code(code: str) -> str:
     from app.skills.platform import _RESERVED_WORDS
     c = re.sub(r'[^a-zA-Z0-9_]', '_', code)
-    if c.lower() in _RESERVED_WORDS:
+    if c.lower() in _RESERVED_WORDS and not c.startswith("f_"):
         c = f"f_{c}"
     return c
 

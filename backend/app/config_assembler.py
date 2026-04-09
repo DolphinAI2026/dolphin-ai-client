@@ -30,6 +30,15 @@ LARGE_DOC_THRESHOLD = 60_000
 # Prompts
 # ──────────────────────────────────────────────
 
+STRICT_DOC_PROMPT_RULES = """
+严格约束（最高优先级）：
+- 只能根据文档中明确写出的内容生成，禁止脑补、禁止默认补齐
+- 未定义的内容一律不要新增
+- 文档已定义的内容一律不要删除
+- 如果信息缺失，宁可留空或报不完整，也不要猜测
+- 不允许自动增加默认角色、默认字典、默认字段、默认权限、默认流程
+"""
+
 SKELETON_PROMPT = """你是得帆云低代码平台的配置设计专家。
 
 请根据用户的需求描述，输出应用的**骨架配置**（不需要字段详情，不需要字典选项）。
@@ -58,7 +67,9 @@ SKELETON_PROMPT = """你是得帆云低代码平台的配置设计专家。
 - 识别所有需要字典的枚举字段（状态、类型、类别等），列入 dict_names
 - model_names 只列名称和简短描述，不要列字段详情
 - 识别需要审批流程的表单，列入 workflow_hints
-- 如果是文档解析结果，完全基于文档内容，不要编造"""
+- 如果是文档解析结果，完全基于文档内容，不要编造
+
+""" + STRICT_DOC_PROMPT_RULES
 
 DICTS_PROMPT = """你是得帆云低代码平台的配置设计专家。
 
@@ -78,7 +89,9 @@ DICTS_PROMPT = """你是得帆云低代码平台的配置设计专家。
 规则：
 - 选项 code 用英文小写+下划线
 - 选项要合理、符合业务场景
-- 如果文档/需求中明确列出了选项，严格按原文"""
+- 如果文档/需求中明确列出了选项，严格按原文
+
+""" + STRICT_DOC_PROMPT_RULES
 
 MODEL_PROMPT = """你是得帆云低代码平台的配置设计专家。
 
@@ -114,7 +127,9 @@ MODEL_PROMPT = """你是得帆云低代码平台的配置设计专家。
 - 固定枚举选项 → 下拉单选/多选 + 设 dict
 - 关联其他表 → 数据单选 + 设 ref
 - 明细行 → 子表 + sub_code + sub_fields
-- 唯一编号 → 单据号"""
+- 唯一编号 → 单据号
+
+""" + STRICT_DOC_PROMPT_RULES
 
 PERMISSION_PROMPT = """你是得帆云低代码平台的权限配置专家。
 
@@ -126,7 +141,7 @@ PERMISSION_PROMPT = """你是得帆云低代码平台的权限配置专家。
   {
     "form": "表单名（中文）",
     "rules": [
-      {"role": "角色code 或 all", "op": "all 或 add/edit/delete/view", "data": "ALL/SELF/CURRENT_USER_DEPT/CURRENT_USER_DEPT_LOW_LEVEL"}
+      {"role": "角色code 或 all", "op": "all 或 draft/add/import/view/edit/delete/export", "data": "ALL/SELF/CURRENT_USER_DEPT/CURRENT_USER_DEPT_LOW_LEVEL"}
     ]
   }
 ]
@@ -135,14 +150,17 @@ PERMISSION_PROMPT = """你是得帆云低代码平台的权限配置专家。
 字段说明：
 - form: 表单名称（中文），必须匹配表单列表中的名称
 - role: 角色code（对应可用角色列表），"all" 表示全部人员
-- op: 操作权限，"all"=全部操作, "view"=仅查看, "add"=新增, "edit"=编辑, "delete"=删除
+- op: 操作权限，"all"=全部操作, "draft"=暂存, "add"=新增, "import"=导入, "view"=查看, "edit"=编辑, "delete"=删除, "export"=导出
 - data: 数据范围，"ALL"=全部数据, "SELF"=仅本人创建的数据, "CURRENT_USER_DEPT"=本部门数据, "CURRENT_USER_DEPT_LOW_LEVEL"=本部门及下级
 
 规则：
 - 管理员角色通常拥有全部操作权限和全部数据范围
 - 普通角色通常只能看到自己或本部门的数据
 - 每个表单至少要有一条权限规则
-- 根据业务场景合理分配权限（如：工程师只能编辑自己的工单）"""
+- 根据业务场景合理分配权限（如：工程师只能编辑自己的工单）
+- 如果文档没有写某个表单或某个角色的权限，不要自动补权限
+
+""" + STRICT_DOC_PROMPT_RULES
 
 WORKFLOW_PROMPT = """你是得帆云低代码平台的流程设计专家。
 

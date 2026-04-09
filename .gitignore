@@ -28,9 +28,6 @@ dist/
 .DS_Store
 Thumbs.db
 
-# Maven credentials (contains passwords, do not commit)
-scripts/docker-maven-settings.xml
-
 # Logs
 *.log
 /tmp/

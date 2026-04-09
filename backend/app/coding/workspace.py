@@ -694,20 +694,6 @@ class WorkspaceManager:
                 return candidate[:limit]
         return "构建失败"
 
-    def _build_java_env(self) -> dict[str, str]:
-        """构建 Java/Maven 构建环境变量，确保 JAVA_HOME 和 PATH 正确传递"""
-        env = dict(os.environ)
-        # 如果当前进程有 JAVA_HOME，确保它传给子进程
-        java_home = os.environ.get("JAVA_HOME", "")
-        if java_home:
-            env["JAVA_HOME"] = java_home
-            # 确保 JAVA_HOME/bin 在 PATH 中
-            java_bin = os.path.join(java_home, "bin")
-            path = env.get("PATH", "")
-            if java_bin not in path:
-                env["PATH"] = f"{java_bin}:{path}"
-        return env
-
     async def _run_backend_build_process(self, cwd: Path) -> tuple[int, bytes, bytes]:
         mvnw = cwd / "mvnw"
         if mvnw.exists():
@@ -720,13 +706,11 @@ class WorkspaceManager:
                 return 127, b"", "未检测到 Maven，请先安装 Maven/JDK 再构建后端项目".encode("utf-8")
             cmd = [mvn_exec, "-q", "-DskipTests", "package", "-P", "lib"]
 
-        env = self._build_java_env()
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             cwd=str(cwd),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env=env,
         )
         stdout, stderr = await proc.communicate()
         return proc.returncode, stdout, stderr

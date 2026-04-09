@@ -51,13 +51,15 @@ class LLMClient:
         return f"{self.anthropic_base_url}/v1/messages"
 
     def _anthropic_headers(self) -> Dict[str, str]:
-        return {
-            # 兼容不同 Anthropic 兼容网关：有的要求 Authorization，有的要求 x-api-key
-            "Authorization": f"Bearer {self.anthropic_api_key}",
+        base_url = (self.anthropic_base_url or "").lower()
+        headers = {
             "x-api-key": self.anthropic_api_key,
             "anthropic-version": "2023-06-01",
             "Content-Type": "application/json",
         }
+        if "api.anthropic.com" not in base_url:
+            headers["Authorization"] = self.anthropic_api_key
+        return headers
 
     @staticmethod
     def _parse_data_url(url: str) -> Tuple[str, str]:

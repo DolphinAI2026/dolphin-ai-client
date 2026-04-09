@@ -5,11 +5,11 @@ from datetime import datetime
 from typing import Annotated, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
 from pydantic import BaseModel
-from sqlalchemy import select, desc, func as sa_func
+from sqlalchemy import select, desc, func as sa_func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 from app.database import get_db
-from app.models import User, Application, DocumentVersion, ChangePlan, ApiCallLog, PlatformEnv
+from app.models import User, Application, DocumentVersion, ChangePlan, ApiCallLog, PlatformEnv, Conversation, ConfigSnapshot
 from app.auth import get_current_user
 from app.schemas import ApplicationCreate, ApplicationResponse, MergedAppResponse
 from app.deps import get_auth_context, AuthContext
@@ -23,6 +23,221 @@ from app.services.config_converter import convert_analysis_to_app_config
 
 router = APIRouter(prefix="/applications", tags=["应用"])
 logger = logging.getLogger(__name__)
+
+
+def _compact_preview_payload(config: dict | None) -> dict:
+    if not isinstance(config, dict):
+        return {}
+
+    data = config.get("data", config)
+    if not isinstance(data, dict):
+        return {}
+
+    compact_models = []
+    for model in data.get("models", []) or []:
+        if not isinstance(model, dict):
+            continue
+        compact_fields = []
+        for field in model.get("fields", []) or []:
+            if not isinstance(field, dict):
+                continue
+            compact_field = {
+                "code": field.get("code"),
+                "name": field.get("name"),
+                "type": field.get("type"),
+            }
+            if field.get("database_field_type") or field.get("databaseFieldType"):
+                compact_field["database_field_type"] = field.get("database_field_type") or field.get("databaseFieldType")
+            if field.get("max_length") or field.get("maxLength") or field.get("length"):
+                compact_field["max_length"] = field.get("max_length") or field.get("maxLength") or field.get("length")
+                compact_field["length"] = field.get("length") or field.get("max_length") or field.get("maxLength")
+            if field.get("dict"):
+                compact_field["dict"] = field.get("dict")
+            if field.get("ref"):
+                compact_field["ref"] = field.get("ref")
+            if field.get("required") is True:
+                compact_field["required"] = True
+            if field.get("comment"):
+                compact_field["comment"] = field.get("comment")
+            compact_fields.append(compact_field)
+
+        compact_model = {
+            "code": model.get("code"),
+            "name": model.get("name"),
+            "fields": compact_fields,
+        }
+        if model.get("table_type"):
+            compact_model["table_type"] = model.get("table_type")
+        if model.get("parent_model_code"):
+            compact_model["parent_model_code"] = model.get("parent_model_code")
+        compact_models.append(compact_model)
+
+    compact_forms = []
+    for form in data.get("forms", []) or []:
+        if not isinstance(form, dict):
+            continue
+        compact_components = []
+        for comp in form.get("components", []) or []:
+            if not isinstance(comp, dict):
+                continue
+            compact_comp = {
+                "code": comp.get("code"),
+                "label": comp.get("label"),
+                "componentType": comp.get("componentType"),
+            }
+            for key in ("modelCode", "tableModelCode", "sectionType", "modelField"):
+                if comp.get(key):
+                    compact_comp[key] = comp.get(key)
+            for key in ("hidden", "readonly", "required", "showInList", "searchable"):
+                if key in comp and comp.get(key) is not None:
+                    compact_comp[key] = bool(comp.get(key))
+            compact_components.append(compact_comp)
+
+        compact_form = {
+            "name": form.get("name") or form.get("formName"),
+            "modelCode": form.get("modelCode"),
+            "components": compact_components,
+        }
+        if form.get("allModelCodes"):
+            compact_form["allModelCodes"] = form.get("allModelCodes")
+        compact_forms.append(compact_form)
+
+    compact_permissions = []
+    for perm in data.get("permissions", []) or []:
+        if not isinstance(perm, dict):
+            continue
+        compact_perm = {
+            "formName": perm.get("formName"),
+            "formCode": perm.get("formCode"),
+        }
+        rules = []
+        for rule in perm.get("rules", []) or []:
+            if not isinstance(rule, dict):
+                continue
+            rules.append({
+                "roleCode": rule.get("roleCode"),
+                "roleName": rule.get("roleName"),
+                "actions": rule.get("actions", []),
+                "dataScope": rule.get("dataScope"),
+            })
+        if rules:
+            compact_perm["rules"] = rules
+        compact_permissions.append(compact_perm)
+
+    return {
+        "appName": data.get("appName"),
+        "appCode": data.get("appCode"),
+        "roles": data.get("roles", []),
+        "dicts": data.get("dicts", []),
+        "models": compact_models,
+        "forms": compact_forms,
+        "workflows": data.get("workflows", []),
+        "permissions": compact_permissions or data.get("permissions", []),
+    }
+
+
+def _dump_preview_config(config: dict | None) -> str:
+    compact = _compact_preview_payload(config)
+    return json.dumps({"type": "preview", "data": compact}, ensure_ascii=False, separators=(",", ":"))
+
+
+def _dump_parsed_config(config: dict | None) -> str:
+    compact = _compact_preview_payload(config)
+    return json.dumps(compact, ensure_ascii=False, separators=(",", ":"))
+
+
+def _parsed_config_is_stale(parsed_config: dict | None) -> bool:
+    if not isinstance(parsed_config, dict):
+        return True
+    data = parsed_config.get("data", parsed_config)
+    models = data.get("models", []) if isinstance(data, dict) else []
+    if not isinstance(models, list) or not models:
+        return True
+    has_table_meta = any(m.get("table_type") or m.get("parent_model_code") for m in models if isinstance(m, dict))
+    has_field_meta = False
+    for model in models:
+        if not isinstance(model, dict):
+            continue
+        for field in model.get("fields", []) or []:
+            if not isinstance(field, dict):
+                continue
+            if (
+                field.get("database_field_type") or field.get("databaseFieldType")
+                or field.get("max_length") or field.get("maxLength") or field.get("length")
+            ):
+                has_field_meta = True
+                break
+        if has_field_meta:
+            break
+    return not (has_table_meta and has_field_meta)
+
+
+async def _ensure_doc_version_parsed_config(
+    db: AsyncSession,
+    version: DocumentVersion,
+) -> dict | None:
+    parsed = None
+    if version.parsed_config:
+        try:
+            parsed = json.loads(version.parsed_config) if isinstance(version.parsed_config, str) else version.parsed_config
+        except Exception:
+            parsed = None
+
+    if not _parsed_config_is_stale(parsed):
+        return parsed
+
+    if not version.raw_content:
+        return parsed
+
+    try:
+        from app.doc_pipeline import parse_document
+
+        reparsed = await parse_document(version.raw_content)
+        if reparsed:
+            version.parsed_config = _dump_parsed_config(reparsed)
+            await db.flush()
+            return _compact_preview_payload(reparsed)
+    except Exception:
+        logger.warning("文档版本重解析失败 id=%s", version.id, exc_info=True)
+
+    return parsed
+
+
+async def _resolve_builder_llm_cfg(
+    db: AsyncSession,
+    tenant_id: int,
+    *,
+    conversation_id: Optional[int] = None,
+) -> dict | None:
+    from app.harness.llm_resolver import resolve_llm_config
+
+    selected_config_id: Optional[int] = None
+    if conversation_id is not None:
+        conv_result = await db.execute(
+            select(Conversation).where(
+                Conversation.id == conversation_id,
+                Conversation.tenant_id == tenant_id,
+            )
+        )
+        conversation = conv_result.scalar_one_or_none()
+        if conversation:
+            selected_config_id = conversation.selected_llm_config_id
+
+    resolved = await resolve_llm_config(
+        db,
+        tenant_id,
+        purpose="builder",
+        selected_config_id=selected_config_id,
+    )
+    if not resolved:
+        return None
+    return {
+        "api_key": resolved.api_key,
+        "base_url": resolved.base_url,
+        "model": resolved.model,
+        "max_tokens": resolved.max_tokens,
+        "provider": resolved.provider,
+    }
 
 
 def _enrich(app: Application) -> ApplicationResponse:
@@ -41,8 +256,9 @@ def _enrich(app: Application) -> ApplicationResponse:
     return ApplicationResponse(
         id=app.id, app_name=app.app_name, app_code=app.app_code,
         description=app.description, status=app.status,
+        conversation_id=app.conversation_id,
+        platform_env_id=app.platform_env_id,
         apaas_app_id=app.apaas_app_id, config_preview=config,
-        requirement_doc=app.requirement_doc or "",
         models=models, forms=forms, roles=roles, dicts=dicts,
         created_at=app.created_at, updated_at=app.updated_at
     )
@@ -299,7 +515,7 @@ async def create_application(
         )
         raise HTTPException(status_code=403, detail="你的角色没有创建应用的权限")
 
-    config_str = json.dumps(data.config_preview, ensure_ascii=False) if data.config_preview else None
+    config_str = _dump_preview_config(data.config_preview) if data.config_preview else None
     app = Application(
         user_id=ctx.user.id,
         tenant_id=ctx.tenant_id,
@@ -380,7 +596,7 @@ async def create_application(
                         filename=doc_filename,
                         content_hash=hashlib.sha256(doc_content.encode()).hexdigest(),
                         raw_content=doc_content,
-                        parsed_config=config_str,
+                        parsed_config=_dump_parsed_config(data.config_preview),
                         summary=f"{models_count} 模型, {dicts_count} 字典, {roles_count} 角色",
                     )
                     db.add(doc_ver)
@@ -397,11 +613,10 @@ async def create_application(
 
 
 class AutoCreateRequest(BaseModel):
-    """前端首次生成配置时自动创建应用，或增量更新已有应用配置"""
+    """前端首次生成配置时自动创建应用"""
     app_name: str
     config_preview: dict
     conversation_id: Optional[int] = None
-    app_id: Optional[int] = None  # 增量更新时传入已有应用ID
 
 
 class AutoCreateResponse(BaseModel):
@@ -422,19 +637,8 @@ async def auto_create_application(
     如果 conversation_id 已有关联应用，返回已有应用（不重复创建）。
     否则创建新的 draft 应用。
     """
-    # 优先按 app_id 查找（增量更新场景）
-    existing = None
-    if data.app_id:
-        result = await db.execute(
-            select(Application).where(
-                Application.id == data.app_id,
-                Application.tenant_id == ctx.tenant_id,
-            )
-        )
-        existing = result.scalar_one_or_none()
-
     # 如果有 conversation_id，检查是否已有关联应用
-    if not existing and data.conversation_id:
+    if data.conversation_id:
         result = await db.execute(
             select(Application).where(
                 Application.conversation_id == data.conversation_id,
@@ -442,16 +646,10 @@ async def auto_create_application(
             ).order_by(Application.id.desc()).limit(1)
         )
         existing = result.scalar_one_or_none()
-
-    if existing:
-            # 更新配置 + 生成 requirement_doc
-            existing.config_preview = json.dumps(data.config_preview, ensure_ascii=False)
+        if existing:
+            # 更新配置
+            existing.config_preview = _dump_preview_config(data.config_preview)
             existing.app_name = data.app_name
-            try:
-                from app.services.config_to_spec import config_to_markdown
-                existing.requirement_doc = config_to_markdown(data.config_preview)
-            except Exception:
-                pass
             await db.commit()
             return AutoCreateResponse(
                 app_id=existing.id,
@@ -468,14 +666,7 @@ async def auto_create_application(
     if len(ascii_code) < 2:
         ascii_code = "app-" + hashlib.md5(data.app_name.encode()).hexdigest()[:6]
 
-    config_str = json.dumps(data.config_preview, ensure_ascii=False)
-    # 生成 requirement_doc
-    req_doc = ""
-    try:
-        from app.services.config_to_spec import config_to_markdown
-        req_doc = config_to_markdown(data.config_preview)
-    except Exception:
-        pass
+    config_str = _dump_preview_config(data.config_preview)
     app = Application(
         user_id=ctx.user.id,
         tenant_id=ctx.tenant_id,
@@ -484,7 +675,6 @@ async def auto_create_application(
         app_name=data.app_name,
         app_code=ascii_code,
         config_preview=config_str,
-        requirement_doc=req_doc,
         status="draft",
     )
     db.add(app)
@@ -547,14 +737,15 @@ async def import_from_platform(
     if not env.token:
         raise HTTPException(status_code=400, detail="环境未连接，请先登录")
 
-    # 2. 检查是否已导入（允许重新导入刷新配置）
-    existing_result = await db.execute(
+    # 2. 检查是否已导入
+    existing = await db.execute(
         select(Application).where(
             Application.tenant_id == ctx.tenant_id,
             Application.apaas_app_id == body.apaas_app_id,
         )
     )
-    existing_app = existing_result.scalar_one_or_none()
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=409, detail="该应用已导入")
 
     # 3. 创建 client，获取应用信息
     client = APaaSClient(
@@ -606,32 +797,22 @@ async def import_from_platform(
         logger.warning(f"生成 markdown 失败: {e}")
         markdown_spec = ""
 
-    # 6. 创建或更新本地 Application 记录
+    # 6. 创建本地 Application 记录
     config_str = json.dumps(config, ensure_ascii=False)
-    if existing_app:
-        # 重新导入：更新已有记录
-        existing_app.app_name = app_name
-        existing_app.description = app_desc
-        existing_app.config_preview = config_str
-        existing_app.requirement_doc = markdown_spec
-        existing_app.platform_env_id = body.env_id
-        existing_app.status = "completed"
-        new_app = existing_app
-    else:
-        new_app = Application(
-            user_id=ctx.user.id,
-            tenant_id=ctx.tenant_id,
-            created_by=ctx.user.id,
-            app_name=app_name,
-            app_code=app_code or app_name.lower().replace(" ", "_"),
-            description=app_desc,
-            config_preview=config_str,
-            requirement_doc=markdown_spec,
-            apaas_app_id=body.apaas_app_id,
-            platform_env_id=body.env_id,
-            status="completed",
-        )
-        db.add(new_app)
+    new_app = Application(
+        user_id=ctx.user.id,
+        tenant_id=ctx.tenant_id,
+        created_by=ctx.user.id,
+        app_name=app_name,
+        app_code=app_code or app_name.lower().replace(" ", "_"),
+        description=app_desc,
+        config_preview=config_str,
+        requirement_doc=markdown_spec,
+        apaas_app_id=body.apaas_app_id,
+        platform_env_id=body.env_id,
+        status="completed",
+    )
+    db.add(new_app)
     await db.commit()
     await db.refresh(new_app)
 
@@ -666,7 +847,7 @@ async def update_application(
     if hasattr(data, 'platform_env_id') and data.platform_env_id:
         app.platform_env_id = data.platform_env_id
     if data.config_preview:
-        app.config_preview = json.dumps(data.config_preview, ensure_ascii=False)
+        app.config_preview = _dump_preview_config(data.config_preview)
     # 重置状态为 draft，允许重新生成
     if app.status in ("failed", "completed"):
         app.status = "draft"
@@ -693,6 +874,32 @@ async def update_app_code(
     if not new_code:
         raise HTTPException(status_code=400, detail="app_code 不能为空")
     app.app_code = new_code
+    if app.config_preview:
+        try:
+            config = json.loads(app.config_preview) if isinstance(app.config_preview, str) else app.config_preview
+            data = config.get("data", config)
+            data["app_code"] = new_code
+            app.config_preview = _dump_preview_config(config)
+
+            if app.current_doc_version:
+                import hashlib
+                from app.routes.generation_steps import _render_design_doc_markdown
+
+                new_version = app.current_doc_version + 1
+                config_json = _dump_parsed_config(config)
+                doc_ver = DocumentVersion(
+                    application_id=app.id,
+                    version=new_version,
+                    filename=f"app-code-fix-v{new_version}",
+                    content_hash=hashlib.sha256(config_json.encode()).hexdigest(),
+                    raw_content=_render_design_doc_markdown(app.app_name, new_code, data),
+                    parsed_config=config_json,
+                    summary=f"应用编码修复: {new_code}",
+                )
+                db.add(doc_ver)
+                app.current_doc_version = new_version
+        except Exception as e:
+            logger.warning(f"同步应用编码到文档版本失败: {e}")
     await db.commit()
     return {"ok": True, "app_code": new_code}
 
@@ -850,22 +1057,52 @@ async def delete_application(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)]
 ):
-    """删除本地应用记录"""
-    result = await db.execute(
-        select(Application).where(
-            Application.id == app_id,
-            Application.tenant_id == ctx.tenant_id
+    """删除本地应用记录及其关联数据"""
+    try:
+        result = await db.execute(
+            select(Application).where(
+                Application.id == app_id,
+                Application.tenant_id == ctx.tenant_id
+            )
         )
-    )
-    app = result.scalar_one_or_none()
-    if not app:
-        raise HTTPException(status_code=404, detail="应用不存在")
+        app = result.scalar_one_or_none()
+        if not app:
+            raise HTTPException(status_code=404, detail="应用不存在")
 
-    await check_resource_permission(ctx, db, app, "application", Action.DELETE)
+        await check_resource_permission(ctx, db, app, "application", Action.DELETE)
 
-    await db.delete(app)
-    await db.commit()
-    return {"ok": True}
+        if app.status in {"completed", "generating"} or app.apaas_app_id:
+            raise HTTPException(status_code=400, detail="已构建或已同步到平台的应用不允许删除")
+
+        # 先清理依赖当前 application_id 的关联数据，避免外键约束导致主记录删除失败。
+        await db.execute(
+            delete(DocumentVersion).where(DocumentVersion.application_id == app.id)
+        )
+        await db.execute(
+            delete(ChangePlan).where(ChangePlan.application_id == app.id)
+        )
+        await db.execute(
+            delete(ConfigSnapshot).where(ConfigSnapshot.application_id == app.id)
+        )
+        await db.execute(
+            delete(ApiCallLog).where(ApiCallLog.application_id == app.id)
+        )
+        await db.execute(
+            delete(Application).where(
+                Application.id == app.id,
+                Application.tenant_id == ctx.tenant_id,
+            )
+        )
+
+        await db.commit()
+        return {"ok": True}
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception as exc:
+        await db.rollback()
+        logger.exception("delete application failed: app_id=%s tenant_id=%s", app_id, ctx.tenant_id)
+        raise HTTPException(status_code=500, detail=f"删除失败: {exc}")
 
 
 @router.get("/{app_id}/generate")
@@ -977,11 +1214,12 @@ async def upload_design_doc(
     content = await file.read()
     text = content.decode('utf-8')
 
-    from app.ai_doc_parser import parse_doc_with_ai
+    from app.doc_pipeline import parse_document
     try:
-        data = await parse_doc_with_ai(text, filename=file.filename or "")
+        result = await parse_document(text)
+        data = result.get("data", result)
     except Exception as e:
-        logger.error(f"AI 文档解析失败: {e}", exc_info=True)
+        logger.error(f"文档解析失败: {e}", exc_info=True)
         raise HTTPException(status_code=400, detail=f"文档解析失败: {e}")
 
     # 如果解析出的 appName 是默认值，用文件名推断
@@ -1057,9 +1295,12 @@ async def upload_doc_with_conversation(
     tenant_id = ctx.tenant_id
     existing_conversation_id = conversation_id
 
-    # 获取租户 LLM 配置（避免 applications.py 里调用 assemble_config_streaming 时用 Anthropic 默认 key）
-    from app.routes.chat import _get_tenant_llm_config as _get_llm_cfg
-    _tenant_llm_cfg = await _get_llm_cfg(db, tenant_id)
+    # 获取当前对话/租户绑定的 Builder 模型，避免文档解析回退到 .env 默认模型
+    _tenant_llm_cfg = await _resolve_builder_llm_cfg(
+        db,
+        tenant_id,
+        conversation_id=existing_conversation_id,
+    )
 
     # 如果传了 conversation_id，预先查找 V1 文档版本
     v1_doc_info: Optional[dict] = None
@@ -1079,147 +1320,116 @@ async def upload_doc_with_conversation(
             }
 
     async def event_generator():
-        from app.config_assembler import assemble_config_streaming
+        import asyncio
         from app.database import AsyncSessionLocal
-        from app.doc_text_differ import diff_sections, build_changed_text, get_diff_stats
-        from app.ai_doc_parser import parse_doc_with_ai, extract_existing_codes
+        from app.doc_text_differ import diff_sections, get_diff_stats
+        from app.doc_pipeline import parse_document
         from app.config_diff import compute_config_diff
 
         data = None
-        is_incremental = False
-        v1_parsed_config = None
         diff_result = None
+        is_incremental = bool(v1_doc_info)
+        v1_parsed_config = None
 
         try:
-            # ── 判断是否走增量模式 ──
+            # ── 增量模式：有 V1 文档时先检查是否有变化 ──
             if v1_doc_info and v1_doc_info.get("raw_content"):
-                is_incremental = True
-
-                # Step 1: 文本级章节对比
                 yield {"event": "progress", "data": json.dumps({"message": "正在对比文档..."}, ensure_ascii=False)}
                 diff_result = diff_sections(v1_doc_info["raw_content"], text)
                 diff_stats = get_diff_stats(diff_result)
-
                 total_changes = diff_stats["added"] + diff_stats["modified"] + diff_stats["removed"]
+
+                if total_changes == 0:
+                    yield {"event": "error", "data": json.dumps({"message": "文档内容无变化，无需重新上传"}, ensure_ascii=False)}
+                    return
+
                 yield {"event": "progress", "data": json.dumps({
                     "message": f"发现 {total_changes} 个章节变化（新增 {diff_stats['added']} 个，修改 {diff_stats['modified']} 个，删除 {diff_stats['removed']} 个）",
                     "diff_stats": diff_stats,
                 }, ensure_ascii=False)}
 
-                # 加载 V1 parsed_config
-                if v1_doc_info.get("parsed_config"):
-                    try:
-                        v1_parsed_config = json.loads(v1_doc_info["parsed_config"]) if isinstance(v1_doc_info["parsed_config"], str) else v1_doc_info["parsed_config"]
-                    except Exception:
-                        v1_parsed_config = None
+            # ── 全量解析：用 asyncio.Queue 实时把进度推给前端 ──
+            progress_queue: asyncio.Queue = asyncio.Queue()
 
-                changed_count = diff_stats["added"] + diff_stats["modified"]
+            async def _on_progress(msg: str):
+                await progress_queue.put(msg)
 
-                if changed_count == 0 and diff_stats["removed"] == 0:
-                    # 文档完全无变化
-                    yield {"event": "error", "data": json.dumps({"message": "文档内容无变化，无需重新上传"}, ensure_ascii=False)}
-                    return
+            # 启动解析任务（与 SSE 流并发）
+            parse_task = asyncio.create_task(
+                parse_document(text, llm_cfg=_tenant_llm_cfg, on_progress=_on_progress)
+            )
 
-                if changed_count > 0 and v1_parsed_config:
-                    # Step 2: 只解析变化部分
-                    changed_text = build_changed_text(diff_result)
-                    yield {"event": "progress", "data": json.dumps({
-                        "message": f"正在解析变化部分（{changed_count} 个章节）...",
-                    }, ensure_ascii=False)}
+            # 实时转发进度消息，直到解析完成
+            while not parse_task.done():
+                try:
+                    msg = await asyncio.wait_for(progress_queue.get(), timeout=0.2)
+                    yield {"event": "progress", "data": json.dumps({"message": msg}, ensure_ascii=False)}
+                except asyncio.TimeoutError:
+                    pass
 
-                    # 提取 V1 已有编码作为上下文
-                    existing_codes = extract_existing_codes(v1_parsed_config)
+            # 排干队列中剩余消息
+            while not progress_queue.empty():
+                msg = progress_queue.get_nowait()
+                yield {"event": "progress", "data": json.dumps({"message": msg}, ensure_ascii=False)}
 
-                    # 只对变化部分调 AI 解析（传入 V1 完整配置约束）
-                    partial_config = await parse_doc_with_ai(
-                        changed_text, filename=fname, existing_codes=existing_codes,
-                        existing_config=v1_parsed_config
-                    )
+            # 取解析结果（若抛异常会在此处重新抛出）
+            parse_result = parse_task.result()
+            data = parse_result.get("data", parse_result)
 
-                    # Step 3: 合并配置
-                    yield {"event": "progress", "data": json.dumps({"message": "合并配置..."}, ensure_ascii=False)}
-                    data = _merge_configs(v1_parsed_config, partial_config, diff_result)
+            # ── 增量模式：用纯代码 diff 与 V1 config 对比，继承编码 ──
+            if v1_doc_info and v1_doc_info.get("parsed_config"):
+                try:
+                    v1_parsed_config = json.loads(v1_doc_info["parsed_config"]) if isinstance(v1_doc_info["parsed_config"], str) else v1_doc_info["parsed_config"]
+                    yield {"event": "progress", "data": json.dumps({"message": "对比配置差异..."}, ensure_ascii=False)}
+                    resource_diff = compute_config_diff(v1_parsed_config, data)
+                    if resource_diff.normalized_new_config:
+                        data = resource_diff.normalized_new_config
+                except Exception as e:
+                    logger.warning(f"增量 diff 失败，使用全量解析结果: {e}")
 
-                elif v1_parsed_config:
-                    # 只有删除，无新增/修改
-                    yield {"event": "progress", "data": json.dumps({
-                        "message": "无新增或修改章节，复用已有解析结果",
-                    }, ensure_ascii=False)}
-                    data = _remove_deleted_from_config(v1_parsed_config, diff_result)
-                else:
-                    # V1 没有 parsed_config，回退全量解析
-                    is_incremental = False
+            if data:
+                roles_count = len(data.get("roles", []))
+                dicts_count = len(data.get("dicts", []))
+                models_count = len(data.get("models", []))
 
-            # ── V1 首次上传：使用 parse_doc_with_ai（精准提取文档中的编码） ──
-            if not is_incremental:
-                from app.ai_doc_parser import parse_doc_with_ai as _parse_ai
-
+                skeleton_data = {
+                    "appName": data.get("appName", ""),
+                    "appCode": data.get("appCode", ""),
+                    "roles": data.get("roles", []),
+                }
                 yield {"event": "progress", "data": json.dumps({
-                    "message": "[skeleton] 正在解析文档（v2026-0406-PURE）..."
+                    "message": f"[skeleton] 骨架完成：{models_count} 个模型、{dicts_count} 个字典、{roles_count} 个角色",
+                    "data": skeleton_data,
                 }, ensure_ascii=False)}
 
-                async def _on_progress(msg: str):
-                    pass  # parse_doc_with_ai 的进度回调，SSE 已在外层处理
-
-                data = await _parse_ai(text, filename=fname, llm_cfg=_tenant_llm_cfg)
-
-                # 标准模板检测：如果文档有完整编码表格，直接用纯规则提取替换 AI 结果
-                if data:
-                    from app.ai_doc_parser import _extract_template_codes, _is_standard_template, _template_to_preview, _apply_template_codes
-                    tpl = _extract_template_codes(text)
-                    if _is_standard_template(tpl):
-                        # 纯规则提取，100% 编码一致
-                        data = _template_to_preview(tpl)
-                        logger.info(f"路由层纯规则提取: models={len(data.get('models',[]))}, dicts={len(data.get('dicts',[]))}, roles={len(data.get('roles',[]))}")
-                    elif any(tpl.get(k) for k in ("roles", "dicts", "models")):
-                        _apply_template_codes(data, tpl)
-                        logger.info(f"路由层模板编码校正: roles={len(tpl.get('roles',[]))}, dicts={len(tpl.get('dicts',[]))}, models={len(tpl.get('models',[]))}")
-
-                if data:
-                    roles_count = len(data.get("roles", []))
-                    dicts_count = len(data.get("dicts", []))
-                    models_count = len(data.get("models", []))
-
-                    # skeleton 事件只发基础信息（appName/appCode/roles），不发全量配置避免 SSE 丢失
-                    skeleton_data = {
-                        "appName": data.get("appName", ""),
-                        "appCode": data.get("appCode", ""),
-                        "roles": data.get("roles", []),
-                    }
+                if data.get("roles"):
                     yield {"event": "progress", "data": json.dumps({
-                        "message": f"[skeleton] 骨架完成：{models_count} 个模型、{dicts_count} 个字典、{roles_count} 个角色",
-                        "data": skeleton_data,
+                        "message": f"[roles] 角色生成完成：{roles_count} 个",
+                        "batch": data["roles"],
                     }, ensure_ascii=False)}
-
-                    # 分别发送各类型的 batch 事件，体积小不易丢失
-                    if data.get("roles"):
-                        yield {"event": "progress", "data": json.dumps({
-                            "message": f"[roles] 角色生成完成：{roles_count} 个",
-                            "batch": data["roles"],
-                        }, ensure_ascii=False)}
-                    if data.get("dicts"):
-                        yield {"event": "progress", "data": json.dumps({
-                            "message": f"[dicts] 字典生成完成：{dicts_count} 个",
-                            "batch": data["dicts"],
-                        }, ensure_ascii=False)}
-                    if data.get("models"):
-                        yield {"event": "progress", "data": json.dumps({
-                            "message": f"[models] 模型生成完成：{models_count} 个",
-                            "batch": data["models"],
-                        }, ensure_ascii=False)}
-                    if data.get("permissions"):
-                        yield {"event": "progress", "data": json.dumps({
-                            "message": f"[permissions] 权限生成完成",
-                            "batch": data["permissions"],
-                        }, ensure_ascii=False)}
+                if data.get("dicts"):
                     yield {"event": "progress", "data": json.dumps({
-                        "message": f"[complete] 配置组装完成！{models_count} 个模型、{dicts_count} 个字典、{roles_count} 个角色",
-                        "data": data,
+                        "message": f"[dicts] 字典生成完成：{dicts_count} 个",
+                        "batch": data["dicts"],
                     }, ensure_ascii=False)}
+                if data.get("models"):
+                    yield {"event": "progress", "data": json.dumps({
+                        "message": f"[models] 模型生成完成：{models_count} 个",
+                        "batch": data["models"],
+                    }, ensure_ascii=False)}
+                if data.get("permissions"):
+                    yield {"event": "progress", "data": json.dumps({
+                        "message": "[permissions] 权限生成完成",
+                        "batch": data["permissions"],
+                    }, ensure_ascii=False)}
+                yield {"event": "progress", "data": json.dumps({
+                    "message": f"[complete] 配置组装完成！{models_count} 个模型、{dicts_count} 个字典、{roles_count} 个角色",
+                    "data": data,
+                }, ensure_ascii=False)}
 
         except Exception as e:
             err_msg = str(e) or repr(e) or type(e).__name__
-            logger.error(f"AI 文档解析失败: {err_msg}", exc_info=True)
+            logger.error(f"文档解析失败: {err_msg}", exc_info=True)
             yield {"event": "error", "data": json.dumps({"message": f"文档解析失败: {err_msg}"}, ensure_ascii=False)}
             return
 
@@ -1307,7 +1517,7 @@ async def upload_doc_with_conversation(
             session.add(Message(conversation_id=conv_id, role="assistant", content=summary))
 
             # 保存完整配置 JSON 作为 system 消息（刷新页面时可恢复）
-            config_msg = '```json\n' + json.dumps({"type": "preview", "data": data}, ensure_ascii=False) + '\n```'
+            config_msg = '```json\n' + _dump_preview_config(data) + '\n```'
             session.add(Message(conversation_id=conv_id, role="system", content=config_msg))
 
             # 保存原始文档内容（用于后续创建 DocumentVersion）
@@ -1324,14 +1534,22 @@ async def upload_doc_with_conversation(
             max_ver = existing_ver_result.scalar() or 0
             new_version = max_ver + 1
 
-            config_json_str = json.dumps(data, ensure_ascii=False)
+            config_json_str = _dump_parsed_config(data)
+            from app.routes.generation_steps import _render_design_doc_markdown
+
+            rendered_markdown = _render_design_doc_markdown(
+                data.get("appName", ""),
+                data.get("appCode", ""),
+                data,
+            )
+
             doc_ver = DocumentVersion(
                 application_id=None,
                 conversation_id=conv_id,
                 version=new_version,
                 filename=fname,
                 content_hash=hashlib.sha256(text.encode()).hexdigest(),
-                raw_content=text,
+                raw_content=rendered_markdown,
                 parsed_config=config_json_str,
                 parent_version=max_ver if max_ver > 0 else None,
                 summary=f"{models_count} 模型, {dicts_count} 字典, {roles_count} 角色",
@@ -1480,14 +1698,22 @@ async def upload_doc_version(
     app_id_val = app.id
     tenant_id_val = ctx.tenant_id
     current_config_str = app.config_preview
+    doc_llm_cfg = await _resolve_builder_llm_cfg(
+        db,
+        tenant_id_val,
+        conversation_id=conversation_id,
+    )
 
     async def event_generator():
         from app.database import AsyncSessionLocal
         from app.doc_differ import build_structure_index, semantic_diff, diff_to_actions, compute_hash
         from app.config_diff import compute_config_diff
-        from app.doc_text_differ import diff_sections, build_changed_text, get_diff_stats
+        from app.doc_text_differ import diff_sections, get_diff_stats
+
+        current_step = "初始化"
 
         try:
+            current_step = "读取文档内容"
             yield {"event": "progress", "data": json.dumps({"step": "读取文档内容..."}, ensure_ascii=False)}
 
             # 1. 计算 hash
@@ -1533,67 +1759,42 @@ async def upload_doc_version(
                             "version": v1_doc_obj.version,
                         }
 
+            current_step = "解析文档结构"
             yield {"event": "progress", "data": json.dumps({"step": "解析文档结构..."}, ensure_ascii=False)}
 
             # 4. 构建章节索引
             structure_index = build_structure_index(text)
 
-            # ── 分支：有 V1 文档时走「文档对比优先」，否则走全量解析 ──
-            from app.ai_doc_parser import parse_doc_with_ai, extract_existing_codes
+            # ── 全量解析新文档（纯代码优先，失败模块 LLM 修复）──
+            from app.doc_pipeline import parse_document
 
             if v1_doc and v1_doc.get("raw_content"):
-                # ===== 增量模式：文档对比优先 =====
+                # 有旧文档时先做文本对比，告知变化情况
+                current_step = "对比文档章节"
                 yield {"event": "progress", "data": json.dumps({"step": "text_diff", "message": "正在对比文档章节..."}, ensure_ascii=False)}
-
-                # Step A: 纯文本章节对比
                 text_diff = diff_sections(v1_doc["raw_content"], text)
                 diff_stats = get_diff_stats(text_diff)
-
                 yield {"event": "progress", "data": json.dumps({
                     "step": "text_diff",
                     "data": diff_stats,
                     "message": f"章节对比完成：新增 {diff_stats['added']}、修改 {diff_stats['modified']}、删除 {diff_stats['removed']}、未变更 {diff_stats['unchanged']}",
                 }, ensure_ascii=False)}
 
-                # Step B: 加载 V1 的 parsed_config
-                v1_parsed_config: dict = {}
-                if v1_doc.get("parsed_config"):
-                    try:
-                        v1_parsed_config = json.loads(v1_doc["parsed_config"]) if isinstance(v1_doc["parsed_config"], str) else v1_doc["parsed_config"]
-                    except Exception:
-                        pass
+            current_step = "解析文档"
+            progress_messages = []
 
-                changed_count = diff_stats["added"] + diff_stats["modified"]
+            async def _on_progress(msg: str):
+                progress_messages.append(msg)
 
-                if changed_count > 0:
-                    # Step C: 只对变更章节调 AI 解析（传入 V1 已有编码让 AI 复用）
-                    changed_text = build_changed_text(text_diff)
-                    yield {"event": "progress", "data": json.dumps({
-                        "step": "parse_changes",
-                        "message": f"正在解析 {changed_count} 个变更章节...",
-                    }, ensure_ascii=False)}
+            yield {"event": "progress", "data": json.dumps({"step": "parse", "message": "检查文档标准度..."}, ensure_ascii=False)}
+            parse_result = await parse_document(text, llm_cfg=doc_llm_cfg, on_progress=_on_progress)
 
-                    existing_codes = extract_existing_codes(v1_parsed_config) if v1_parsed_config else None
-                    partial_config = await parse_doc_with_ai(
-                        changed_text, filename=fname, existing_codes=existing_codes,
-                        existing_config=v1_parsed_config, llm_cfg=_tenant_llm_cfg
-                    )
+            for msg in progress_messages:
+                yield {"event": "progress", "data": json.dumps({"step": "parse", "message": msg}, ensure_ascii=False)}
 
-                    # Step D: 合并 — V1 未变更部分 + V2 变更部分
-                    yield {"event": "progress", "data": json.dumps({"step": "merge", "message": "合并未变更部分与变更结果..."}, ensure_ascii=False)}
-                    v2_config = _merge_configs(v1_parsed_config, partial_config, text_diff)
-                else:
-                    # 所有章节未变更（只有删除），直接用 V1 config 减去删除的部分
-                    yield {"event": "progress", "data": json.dumps({
-                        "step": "parse_changes",
-                        "message": "无新增或修改章节，复用已有解析结果",
-                    }, ensure_ascii=False)}
-                    v2_config = _remove_deleted_from_config(v1_parsed_config, text_diff)
-            else:
-                # ===== 首次上传：全量解析 =====
-                yield {"event": "progress", "data": json.dumps({"step": "AI 解析文档配置..."}, ensure_ascii=False)}
-                v2_config = await parse_doc_with_ai(text, filename=fname, llm_cfg=_tenant_llm_cfg)
+            v2_config = parse_result.get("data", parse_result)
 
+            current_step = "对比资源差异"
             yield {"event": "progress", "data": json.dumps({"step": "对比资源差异..."}, ensure_ascii=False)}
 
             # 6. 加载 V1 配置（从应用当前 config_preview）
@@ -1621,18 +1822,31 @@ async def upload_doc_version(
             # 10. 生成摘要
             summary = resource_diff.summary or f"文档 V{new_version} 资源变更分析完成"
 
+            current_step = "保存版本记录"
             yield {"event": "progress", "data": json.dumps({"step": "保存版本记录..."}, ensure_ascii=False)}
 
             # 11. 创建 DocumentVersion + ChangePlan
             async with AsyncSessionLocal() as session:
+                app_result = await session.execute(
+                    select(Application).where(Application.id == app_id_val)
+                )
+                app_obj = app_result.scalar_one()
+                from app.routes.generation_steps import _render_design_doc_markdown
+
+                rendered_markdown = _render_design_doc_markdown(
+                    app_obj.app_name or v2_config.get("appName", ""),
+                    app_obj.app_code or v2_config.get("appCode", ""),
+                    v2_config,
+                )
+
                 doc_ver = DocumentVersion(
                     application_id=app_id_val,
                     version=new_version,
                     filename=fname,
                     content_hash=content_hash,
-                    raw_content=text,
+                    raw_content=rendered_markdown,
                     structure_index=json.dumps(structure_index, ensure_ascii=False),
-                    parsed_config=json.dumps(v2_config, ensure_ascii=False),
+                    parsed_config=_dump_parsed_config(v2_config),
                     parent_version=max_ver if max_ver > 0 else None,
                     summary=summary,
                 )
@@ -1651,15 +1865,11 @@ async def upload_doc_version(
                 session.add(change_plan)
 
                 # 更新应用：文档版本 + 配置 + 状态
-                app_result = await session.execute(
-                    select(Application).where(Application.id == app_id_val)
-                )
-                app_obj = app_result.scalar_one()
                 app_obj.current_doc_version = new_version
                 # 关键：用 V2 配置更新 config_preview（保留原始 appName）
                 if app_obj.app_name:
                     v2_config["appName"] = app_obj.app_name
-                app_obj.config_preview = json.dumps({"type": "preview", "data": v2_config}, ensure_ascii=False)
+                app_obj.config_preview = _dump_preview_config(v2_config)
                 # 标记需要重新部署
                 if app_obj.status == "completed":
                     app_obj.status = "draft"
@@ -1681,6 +1891,8 @@ async def upload_doc_version(
                     "event": "done",
                     "data": json.dumps({
                         "version": new_version,
+                        "from_version": max_ver,
+                        "to_version": new_version,
                         "summary": summary,
                         "diff": resource_diff_dict,
                         "semantic_diff": diff,
@@ -1693,7 +1905,15 @@ async def upload_doc_version(
 
         except Exception as e:
             logger.error(f"文档版本上传失败: {e}", exc_info=True)
-            yield {"event": "error", "data": json.dumps({"message": f"处理失败: {str(e)}"}, ensure_ascii=False)}
+            detail = str(e).strip() or repr(e).strip() or e.__class__.__name__
+            yield {
+                "event": "error",
+                "data": json.dumps({
+                    "message": f"处理失败（步骤：{current_step}）：{detail}",
+                    "step": current_step,
+                    "error_type": e.__class__.__name__,
+                }, ensure_ascii=False)
+            }
 
     return EventSourceResponse(event_generator())
 
@@ -1798,12 +2018,22 @@ async def execute_change_plan(
     if plan.status not in ("pending", "confirmed"):
         raise HTTPException(status_code=400, detail=f"变更计划状态为 {plan.status}，不能执行")
 
-    # 保存用户 APaaS 凭证（在 event_generator 前）
-    apaas_token = ctx.user.apaas_token
-    apaas_base_url = ctx.user.apaas_base_url
-    apaas_tenant_id = ctx.user.apaas_tenant_id
     apaas_app_id = app.apaas_app_id
     app_name = app.app_name
+    apaas_token = None
+    apaas_base_url = None
+    apaas_tenant_id = None
+    platform_client_error = None
+
+    try:
+        from app.routes.incremental_update import _get_platform_client_for_app
+        platform_client = await _get_platform_client_for_app(app, ctx.user, db)
+        apaas_token = getattr(platform_client, "token", None)
+        apaas_base_url = getattr(platform_client, "base_url", None)
+        apaas_tenant_id = getattr(platform_client, "tenant_id", None)
+    except Exception as e:
+        platform_client_error = str(e)
+        logger.warning(f"执行变更计划时获取平台连接失败: {e}")
 
     app_id_val = app.id
     current_config_str = app.config_preview
@@ -1882,12 +2112,19 @@ async def execute_change_plan(
 
                     if diff.has_changes:
                         # 创建执行器并执行
-                        executor = IncrementalExecutor(client, apaas_app_id, app_name)
+                        executor = IncrementalExecutor(
+                            client,
+                            apaas_app_id,
+                            app_name,
+                            target_config=new_config,
+                        )
 
                         # 流式执行差异
                         async for progress in executor.execute_diff_stream(diff):
                             if progress.get("type") == "complete":
                                 sync_result = progress.get("result", {})
+                                if not sync_result.get("success", True):
+                                    sync_errors.extend(sync_result.get("errors", []) or ["平台同步失败"])
                             elif progress.get("type") == "error":
                                 sync_errors.append(progress.get("message", "未知错误"))
                             else:
@@ -1899,13 +2136,33 @@ async def execute_change_plan(
                         sync_result = {"message": "无变更需要同步"}
 
                 except Exception as e:
-                    logger.warning(f"平台同步失败（将继续保存本地配置）: {e}", exc_info=True)
+                    logger.warning(f"平台同步失败: {e}", exc_info=True)
                     sync_errors.append(str(e))
             else:
-                if not apaas_token:
-                    logger.info("用户未连接平台，跳过同步")
+                if apaas_app_id and (not apaas_token or not apaas_base_url):
+                    missing_parts = []
+                    if not apaas_token:
+                        missing_parts.append("平台登录凭证")
+                    if not apaas_base_url:
+                        missing_parts.append("平台地址")
+                    detail = f"缺少{ '、'.join(missing_parts) }，无法同步到平台"
+                    if platform_client_error:
+                        detail = f"{detail}（{platform_client_error}）"
+                    sync_errors.append(detail)
                 elif not apaas_app_id:
-                    logger.info("应用未创建到平台，跳过同步")
+                    sync_errors.append("应用尚未关联平台应用，无法执行平台更新")
+
+            if sync_errors:
+                detail = "；".join([str(err) for err in sync_errors if err]) or "平台同步失败"
+                yield {
+                    "event": "error",
+                    "data": json.dumps({
+                        "message": f"平台执行失败：{detail}",
+                        "sync_errors": sync_errors,
+                        "sync_result": sync_result,
+                    }, ensure_ascii=False),
+                }
+                return
 
             yield {"event": "progress", "data": json.dumps({"step": "保存本地配置..."}, ensure_ascii=False)}
 
@@ -1915,7 +2172,7 @@ async def execute_change_plan(
                     select(Application).where(Application.id == app_id_val)
                 )
                 app_obj = app_result.scalar_one()
-                app_obj.config_preview = json.dumps(new_config, ensure_ascii=False)
+                app_obj.config_preview = _dump_preview_config(new_config)
 
                 plan_result = await session.execute(
                     select(ChangePlan).where(ChangePlan.id == plan_id_val)
@@ -1992,6 +2249,7 @@ async def list_doc_versions(
 
     items = []
     for v in versions:
+        parsed_config = await _ensure_doc_version_parsed_config(db, v)
         related_plans = plans_by_to_version.get(v.version, [])
         items.append({
             "id": v.id,
@@ -1999,6 +2257,7 @@ async def list_doc_versions(
             "filename": v.filename,
             "content_hash": v.content_hash,
             "raw_content": v.raw_content,
+            "parsed_config": parsed_config,
             "summary": v.summary,
             "structure_index": json.loads(v.structure_index) if v.structure_index else None,
             "created_at": str(v.created_at) if v.created_at else None,
@@ -2014,9 +2273,75 @@ async def list_doc_versions(
             ],
         })
 
+    await db.commit()
+
     return {
         "current_version": app.current_doc_version,
         "versions": items,
+    }
+
+
+@router.delete("/{app_id}/doc-versions/{version_id}")
+async def delete_doc_version(
+    app_id: int,
+    version_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """删除指定文档版本，并同步应用当前版本指针。"""
+    result = await db.execute(
+        select(Application).where(Application.id == app_id, Application.tenant_id == ctx.tenant_id)
+    )
+    app = result.scalar_one_or_none()
+    if not app:
+        raise HTTPException(status_code=404, detail="应用不存在")
+    await check_resource_permission(ctx, db, app, "application", Action.EDIT)
+
+    result = await db.execute(
+        select(DocumentVersion).where(
+            DocumentVersion.id == version_id,
+            DocumentVersion.application_id == app_id,
+        )
+    )
+    doc_version = result.scalar_one_or_none()
+    if not doc_version:
+        raise HTTPException(status_code=404, detail="文档版本不存在")
+
+    deleted_version_no = doc_version.version
+
+    await db.execute(
+        delete(ChangePlan).where(
+            ChangePlan.application_id == app_id,
+            (ChangePlan.to_version == deleted_version_no) | (ChangePlan.from_version == deleted_version_no),
+        )
+    )
+    await db.delete(doc_version)
+    await db.flush()
+
+    result = await db.execute(
+        select(DocumentVersion)
+        .where(DocumentVersion.application_id == app_id)
+        .order_by(desc(DocumentVersion.version))
+    )
+    remaining_versions = result.scalars().all()
+
+    latest = remaining_versions[0] if remaining_versions else None
+    app.current_doc_version = latest.version if latest else None
+    if latest and latest.parsed_config:
+        try:
+            parsed = json.loads(latest.parsed_config) if isinstance(latest.parsed_config, str) else latest.parsed_config
+            app.config_preview = _dump_preview_config(parsed)
+        except Exception:
+            logger.warning("删除文档版本后同步 config_preview 失败", exc_info=True)
+            app.config_preview = None
+    else:
+        app.config_preview = None
+
+    await db.commit()
+    return {
+        "ok": True,
+        "deleted_version": deleted_version_no,
+        "current_version": app.current_doc_version,
     }
 
 
@@ -2048,16 +2373,20 @@ async def list_doc_versions_by_conversation(
 
     items = []
     for v in versions:
+        parsed_config = await _ensure_doc_version_parsed_config(db, v)
         items.append({
             "id": v.id,
             "version": v.version,
             "filename": v.filename,
             "content_hash": v.content_hash,
             "raw_content": v.raw_content,
+            "parsed_config": parsed_config,
             "summary": v.summary,
             "structure_index": json.loads(v.structure_index) if v.structure_index else None,
             "created_at": str(v.created_at) if v.created_at else None,
         })
+
+    await db.commit()
 
     return {
         "versions": items,

@@ -9,17 +9,17 @@ export const usePreviewStore = defineStore('preview', () => {
   const connected = ref(false)
   const showConnectModal = ref(false)
   const pendingFile = ref<File | null>(null)  // 从 Landing 页带过来的待解析文件
+  const pendingBuilderModelId = ref<number | null>(null)  // 从 Landing 页带到 Chat 的 builder 模型
   const pendingMarkdown = ref<{ filename: string; content: string } | null>(null)  // 从需求分析页带到 Chat 的设计文档
-
-  // ChangePlan（增量更新时的变更计划面板）
   const showChangePlan = ref(false)
-  const changePlan = ref<any>(null)
+  const changePlan = ref<any | null>(null)
 
   const preview = reactive<PreviewData>({
     appName: '',
     roles: [],
     dicts: [],
     models: [],
+    forms: [],
     workflows: [],
     permissions: []
   })
@@ -46,20 +46,21 @@ export const usePreviewStore = defineStore('preview', () => {
     currentApp.value = null
     previewTab.value = 'overview'
     previewFormIdx.value = 0
+    pendingBuilderModelId.value = null
+    showChangePlan.value = false
+    changePlan.value = null
     preview.appName = ''
     preview.roles = []
     preview.dicts = []
     preview.models = []
+    preview.forms = []
     preview.workflows = []
     preview.permissions = []
-    showChangePlan.value = false
-    changePlan.value = null
     resetGenProgress()
   }
 
   return {
-    currentApp, previewTab, previewFormIdx, connected, showConnectModal, pendingFile, pendingMarkdown,
-    showChangePlan, changePlan,
+    currentApp, previewTab, previewFormIdx, connected, showConnectModal, pendingFile, pendingBuilderModelId, pendingMarkdown, showChangePlan, changePlan,
     preview, genProgress,
     resetGenProgress, reset
   }

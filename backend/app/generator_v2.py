@@ -125,13 +125,12 @@ _RESERVED = {
 def _safe_field_code(code: str) -> str:
     """确保字段编码不与数据库关键字冲突。
 
-    策略：统一加 f_ 前缀，彻底避免与任何保留字冲突。
-    平台可能有比我们列表更多的保留字，最安全的做法是全部加前缀。
+    策略：优先保留原始编码，仅在没有编码时再兜底生成。
     """
-    c = _sanitize_code(code)
-    if c.startswith("f_"):
-        return c
-    return f"f_{c}"
+    raw = str(code or "").strip()
+    if raw:
+        return raw
+    return _sanitize_code(code)
 
 
 # ---------------------------------------------------------------------------

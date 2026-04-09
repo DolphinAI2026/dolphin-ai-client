@@ -98,10 +98,11 @@ class ApplicationResponse(BaseModel):
     app_code: str
     description: Optional[str]
     status: str
+    conversation_id: Optional[int] = None
+    platform_env_id: Optional[int] = None
     apaas_app_id: Optional[str] = None
     apaas_url: Optional[str] = None
     config_preview: Optional[dict] = None
-    requirement_doc: Optional[str] = None
     models: int = 0
     forms: int = 0
     roles: int = 0
@@ -140,7 +141,7 @@ class MergedAppResponse(BaseModel):
 class ChatRequest(BaseModel):
     conversation_id: int
     message: str
-    current_config: Optional[dict] = None  # 已有应用的当前配置，用于增量对话
+    current_config: Optional[dict] = None
 
 
 class ChatStreamEvent(BaseModel):

@@ -16,7 +16,7 @@ export const applicationApi = {
     return request.put<any, Application>(`/applications/${id}`, data)
   },
   /** 首次生成配置时自动创建应用（不重复创建） */
-  autoCreate(data: { app_name: string; config_preview: any; conversation_id?: number; app_id?: number }) {
+  autoCreate(data: { app_name: string; config_preview: any; conversation_id?: number }) {
     return request.post<any, { app_id: number; app_name: string; app_code: string; is_new: boolean }>('/applications/auto-create', data)
   },
   /** 从平台导入已有应用 */
@@ -90,6 +90,9 @@ export const applicationApi = {
   /** 获取文档版本列表（通过 appId） */
   getDocVersions(appId: number) {
     return request.get<any, any>(`/applications/${appId}/doc-versions`)
+  },
+  deleteDocVersion(appId: number, versionId: number) {
+    return request.delete<any, any>(`/applications/${appId}/doc-versions/${versionId}`)
   },
 
   /** 获取文档版本列表（通过 conversationId，Application 创建前使用） */

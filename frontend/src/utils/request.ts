@@ -51,10 +51,6 @@ request.interceptors.response.use(
       localStorage.removeItem('token')
       window.location.href = `${import.meta.env.BASE_URL}login`
     }
-    // 把后端 detail 挂到 error.message，让业务层 catch 时能直接用 e?.message 拿到
-    if (errorDetail) {
-      error.message = errorDetail
-    }
     return Promise.reject(error)
   }
 )
