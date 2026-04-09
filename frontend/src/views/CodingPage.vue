@@ -383,10 +383,18 @@
                 </div>
               </template>
 
-              <!-- 工具调用（读文件/扫描/搜索等） -->
+              <!-- 工具调用（读文件/扫描/搜索等，含可折叠结果） -->
               <template v-else-if="msg.type === 'tool'">
-                <div class="msg-tool-row">
-                  <span class="tool-row-text">{{ msg.content }}</span>
+                <div class="msg-tool-row" :class="{ 'has-result': msg.result }">
+                  <div class="tool-row-header" @click="msg.result && (msg.resultCollapsed = !msg.resultCollapsed)">
+                    <span class="tool-row-text">{{ msg.content }}</span>
+                    <svg v-if="msg.result" class="tool-row-chevron" :class="{ rotated: !msg.resultCollapsed }" viewBox="0 0 16 16" fill="none">
+                      <path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                  </div>
+                  <div v-if="msg.result && !msg.resultCollapsed" class="tool-row-result">
+                    <pre>{{ msg.result }}</pre>
+                  </div>
                 </div>
               </template>
 
@@ -704,11 +712,13 @@ const selectCodingModel = async (option: BuilderModelOption) => {
 
 // ============ Stream Messages (对话流) ============
 interface StreamMessage {
-  type: 'user' | 'thinking' | 'tool' | 'file_write' | 'file_edit' | 'command' | 'status' | 'error'
+  type: 'user' | 'thinking' | 'tool' | 'file_write' | 'file_edit' | 'command' | 'status' | 'error' | 'message'
   content: string
   fileName?: string
   fileContent?: string
   collapsed?: boolean
+  result?: string
+  resultCollapsed?: boolean
   timestamp: number
 }
 const streamMessages = ref<StreamMessage[]>([])
@@ -784,14 +794,32 @@ function appendToLastCommand(text: string) {
 }
 
 function restoreReplayStreamMessages(messages: ReplayStreamMessage[]) {
-  streamMessages.value = messages.map((msg, index) => ({
-    type: msg.type,
-    content: msg.content || '',
-    fileName: msg.fileName,
-    fileContent: msg.fileContent,
-    collapsed: msg.collapsed,
-    timestamp: msg.timestamp || Date.now() + index,
-  }))
+  const restored: StreamMessage[] = []
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i]
+    const next = messages[i + 1]
+    // 将紧跟在 tool 消息后的 ✅ 状态结果合并到 tool 消息中
+    if (msg.type === 'tool' && next?.type === 'status' && (next.content?.startsWith('✅') || next.content?.startsWith('\u2705'))) {
+      restored.push({
+        type: 'tool',
+        content: msg.content || '',
+        result: next.content.replace(/^✅\s*/, ''),
+        resultCollapsed: true,
+        timestamp: msg.timestamp || Date.now() + i,
+      })
+      i++ // 跳过已合并的 status 消息
+    } else {
+      restored.push({
+        type: msg.type as StreamMessage['type'],
+        content: msg.content || '',
+        fileName: msg.fileName,
+        fileContent: msg.fileContent,
+        collapsed: msg.collapsed,
+        timestamp: msg.timestamp || Date.now() + i,
+      })
+    }
+  }
+  streamMessages.value = restored
   nextTick(() => {
     const el = streamContainerRef.value
     if (el) el.scrollTop = el.scrollHeight
@@ -1427,6 +1455,18 @@ async function sendMessage() {
         } else if (parsed.type === 'agent_command_output') {
           const chunk = (parsed.chunk || '') as string
           if (chunk) appendToLastCommand(chunk)
+        } else if (parsed.type === 'agent_result') {
+          const preview = (parsed.output_preview || '') as string
+          if (parsed.is_error) {
+            addStreamMsg({ type: 'error', content: preview || '执行失败' })
+          } else if (preview) {
+            // 将结果挂到上一条 tool 消息，使其变为可折叠卡片
+            const last = streamMessages.value[streamMessages.value.length - 1]
+            if (last?.type === 'tool') {
+              last.result = preview
+              last.resultCollapsed = true
+            }
+          }
         } else if (parsed.type === 'agent_thinking') {
           // agent_thinking 是完整思考块，但 agent_thinking_delta 已经流式展示了同样内容
           // 只在没有活跃的 thinking 消息时才新增（避免重复）
@@ -3107,16 +3147,28 @@ watch(() => route.path, () => {
   line-height: 1.5;
 }
 
-/* ---- 工具调用行 ---- */
+/* ---- 工具调用行（含可折叠结果） ---- */
 .msg-tool-row {
-  display: inline-flex;
-  align-items: center;
-  padding: 3px 10px;
-  border-radius: 20px;
-  background: var(--t-bg-input);
   border: 1px solid var(--t-border-subtle);
+  border-radius: 6px;
+  background: var(--t-bg-input);
+  overflow: hidden;
   margin: 1px 0;
+  display: inline-flex;
+  flex-direction: column;
   max-width: 100%;
+}
+.tool-row-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+}
+.msg-tool-row.has-result .tool-row-header {
+  cursor: pointer;
+}
+.msg-tool-row.has-result .tool-row-header:hover {
+  background: var(--t-bg-panel-hover);
 }
 .tool-row-text {
   font-size: 12px;
@@ -3125,6 +3177,33 @@ watch(() => route.path, () => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex: 1;
+}
+.tool-row-chevron {
+  width: 13px;
+  height: 13px;
+  color: var(--t-text-muted);
+  flex-shrink: 0;
+  transition: transform 0.2s;
+}
+.tool-row-chevron.rotated {
+  transform: rotate(180deg);
+}
+.tool-row-result {
+  border-top: 1px solid var(--t-border-subtle);
+  background: var(--t-bg-code);
+  padding: 8px 12px;
+  max-height: 200px;
+  overflow: auto;
+}
+.tool-row-result pre {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.55;
+  font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
+  color: var(--t-text-secondary);
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 
 /* ---- 文件卡片（写入 / 编辑） ---- */
