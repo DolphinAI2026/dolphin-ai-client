@@ -795,6 +795,14 @@ function addStreamMsg(msg: Omit<StreamMessage, 'timestamp'>) {
   if (cleaned.type === 'thinking' && cleaned.collapsed === undefined) {
     cleaned.collapsed = false
   }
+  // 思考过程出现时，隐藏所有还在进行中的步骤状态消息（未完成的 stepKey 消息 + 正在处理...）
+  if (cleaned.type === 'thinking') {
+    streamMessages.value.forEach(m => {
+      if (m.type === 'status' && !m.stepDone && !m.hidden) {
+        m.hidden = true
+      }
+    })
+  }
   streamMessages.value.push({ ...cleaned, timestamp: Date.now() })
   // 自动滚动到底部
   nextTick(() => {
