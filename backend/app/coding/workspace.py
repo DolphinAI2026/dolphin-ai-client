@@ -1931,6 +1931,58 @@ const resultPath = '{str(result_json_path)}'
                 shutil.rmtree(ws_path)
         self._workspace_path_cache.pop(ws_id, None)
 
+    def try_rename_workspace_to_output_name(self, ws_id: str) -> bool:
+        """读取 apaas.json outputName，将工作区文件夹重命名为 {outputName}__{ws_id}。
+
+        仅对 FORM_COMPONENT 类型执行，且只在文件夹名与 outputName 不一致时才 rename。
+        返回 True 表示重命名成功，False 表示未做更改。
+        """
+        ws_path = self.get_workspace_path(ws_id)
+        if not ws_path:
+            return False
+
+        apaas_json_path = ws_path / "src" / "apaas.json"
+        if not apaas_json_path.exists():
+            return False
+
+        try:
+            apaas = json.loads(apaas_json_path.read_text(encoding="utf-8"))
+        except Exception:
+            return False
+
+        output_name = apaas.get("outputName", "")
+        if not output_name or not isinstance(output_name, str):
+            return False
+
+        new_folder_name = f"{output_name}__{ws_id}"
+        if ws_path.name == new_folder_name:
+            return False  # 已经是正确的名字
+
+        new_ws_path = ws_path.parent / new_folder_name
+        if new_ws_path.exists():
+            return False  # 目标目录已存在，跳过
+
+        try:
+            ws_path.rename(new_ws_path)
+        except Exception as e:
+            logger.warning("Failed to rename workspace %s → %s: %s", ws_path.name, new_folder_name, e)
+            return False
+
+        # 更新 .workspace.json 中的 folder_name 和 project_name
+        try:
+            meta = self._read_meta(new_ws_path)
+            meta["folder_name"] = new_folder_name
+            meta["project_name"] = output_name
+            self._write_meta(new_ws_path, meta)
+        except Exception as e:
+            logger.warning("Failed to update workspace meta after rename: %s", e)
+
+        # 刷新缓存
+        self._workspace_path_cache.pop(ws_id, None)
+        self._workspace_path_cache[ws_id] = new_ws_path
+        logger.info("Renamed workspace %s → %s", ws_path.name, new_folder_name)
+        return True
+
     # ========== 内部方法 ==========
 
     def _read_meta(self, ws_path: Path) -> dict:

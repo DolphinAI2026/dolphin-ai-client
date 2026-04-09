@@ -81,7 +81,7 @@ class FormComponentEditorSpec:
 
     @property
     def editor_config_file_path(self) -> str:
-        return f"src/form-component-config/form-editor/{self.full_kebab}.editor.config.js"
+        return f"src/form-component-config/form-editor/{self.full_kebab}.editor.config.json"
 
     @property
     def editor_config_index_path(self) -> str:
@@ -89,7 +89,7 @@ class FormComponentEditorSpec:
 
     @property
     def widget_config_file_path(self) -> str:
-        return f"src/form-component-config/form-widget/{self.full_kebab}.widget.config.js"
+        return f"src/form-component-config/form-widget/{self.full_kebab}.widget.config.json"
 
     @property
     def legacy_setting_file_path(self) -> str:
@@ -160,7 +160,9 @@ def normalize_form_component_generated_file(
         normalized_path = spec.setting_file_path
     elif normalized_path.startswith("src/form-component/form-widget/setting/") and normalized_path.endswith("-setting.vue"):
         normalized_path = spec.setting_file_path
-    elif normalized_path.startswith("src/form-component-config/form-editor/") and normalized_path.endswith(".editor.config.js"):
+    elif normalized_path.startswith("src/form-component-config/form-editor/") and (
+        normalized_path.endswith(".editor.config.js") or normalized_path.endswith(".editor.config.json")
+    ):
         normalized_path = spec.editor_config_file_path
 
     if normalized_path == spec.setting_file_path:
@@ -226,12 +228,89 @@ def normalize_form_component_editor_artifacts(workspace_path: Path) -> list[str]
 
     editor_config_dir = workspace_path / "src/form-component-config/form-editor"
     if editor_config_dir.exists():
-        for extra in editor_config_dir.glob("*.editor.config.js"):
-            if extra.name != Path(spec.editor_config_file_path).name:
-                extra.unlink()
-                changed_files.append(str(extra.relative_to(workspace_path)))
+        target_editor_config_name = Path(spec.editor_config_file_path).name
+        for pattern in ("*.editor.config.js", "*.editor.config.json"):
+            for extra in editor_config_dir.glob(pattern):
+                if extra.name != target_editor_config_name:
+                    extra.unlink()
+                    changed_files.append(str(extra.relative_to(workspace_path)))
+
+    widget_config_dir = workspace_path / "src/form-component-config/form-widget"
+    if widget_config_dir.exists():
+        target_widget_config_name = Path(spec.widget_config_file_path).name
+        for pattern in ("*.widget.config.js", "*.widget.config.json"):
+            for extra in widget_config_dir.glob(pattern):
+                if extra.name != target_widget_config_name:
+                    extra.unlink()
+                    changed_files.append(str(extra.relative_to(workspace_path)))
+
+    # 同步 apaas.json：从 widget.config.json 读取权威的 code/text/description
+    apaas_changed = _normalize_form_component_apaas_json(workspace_path, spec)
+    changed_files.extend(apaas_changed)
 
     return list(dict.fromkeys(changed_files))
+
+
+def _normalize_form_component_apaas_json(workspace_path: Path, spec: FormComponentEditorSpec) -> list[str]:
+    """同步 apaas.json 的 customWidgetList / copyAssets / outputName，使其与 widget.config.json 保持一致。
+
+    - outputName = form-component-custom-{spec.short_kebab}
+    - copyAssets = []  （FORM_COMPONENT 不需要 copyAssets，平台自行处理）
+    - customWidgetList[0].code/text/description 来自 widget.config.json 的 code/desc.text/desc.description
+    """
+    apaas_json_path = workspace_path / "src" / "apaas.json"
+    if not apaas_json_path.exists():
+        return []
+
+    try:
+        apaas = json.loads(apaas_json_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+    # 从 widget.config.json 读取 code / text / description
+    widget_code, widget_text, widget_description = _read_widget_config_identity(workspace_path, spec)
+
+    # short_kebab 可能已包含 custom-（如 "custom-dev"），避免生成 form-component-custom-custom-dev
+    semantic = spec.short_kebab
+    if semantic.startswith("custom-"):
+        semantic = semantic[len("custom-"):]
+    if not semantic or semantic == "dev":
+        semantic = "component"
+    output_name = f"form-component-custom-{semantic}"
+    custom_widget_entry: dict = {
+        "code": widget_code or f"FORM_CUSTOM_{spec.short_kebab.replace('-', '_').upper()}",
+        "text": widget_text or spec.short_kebab,
+        "description": widget_description or spec.short_kebab,
+    }
+
+    repaired = dict(apaas)
+    repaired["entry"] = "index.js"
+    repaired["templateType"] = "FORM_COMPONENT"
+    repaired["customWidgetList"] = [custom_widget_entry]
+    repaired["copyAssets"] = []
+    repaired["outputName"] = output_name
+
+    new_content = json.dumps(repaired, indent=2, ensure_ascii=False) + "\n"
+    if _write_if_changed(apaas_json_path, new_content):
+        return ["src/apaas.json"]
+    return []
+
+
+def _read_widget_config_identity(workspace_path: Path, spec: FormComponentEditorSpec) -> tuple[str, str, str]:
+    """从 widget.config.json 读取 code、desc.text、desc.description。"""
+    widget_config_path = workspace_path / spec.widget_config_file_path
+    if not widget_config_path.exists():
+        return "", "", ""
+    try:
+        raw = widget_config_path.read_text(encoding="utf-8")
+        cfg = json.loads(raw)
+        code = cfg.get("code", "")
+        desc = cfg.get("desc") or {}
+        text = desc.get("text", "")
+        description = desc.get("description", "")
+        return code, text, description
+    except Exception:
+        return "", "", ""
 
 
 def render_form_component_editor_index(spec: FormComponentEditorSpec) -> str:
@@ -245,20 +324,17 @@ def render_form_component_editor_index(spec: FormComponentEditorSpec) -> str:
 
 
 def render_form_component_editor_config(spec: FormComponentEditorSpec) -> str:
-    return (
-        f"const {spec.editor_config_name} = {{\n"
-        f"  code: '{spec.setting_code}',\n"
-        f"  editorConfigType: '{spec.setting_code}',\n"
-        f"  componentName: '{spec.setting_component_name}',\n"
-        "  configProperty: 'customComponentConfig'\n"
-        "}\n\n"
-        f"export default {spec.editor_config_name}\n"
-    )
+    return json.dumps({
+        "code": spec.setting_code,
+        "editorConfigType": spec.setting_code,
+        "componentName": spec.setting_component_name,
+        "configProperty": "customComponentConfig",
+    }, indent=2, ensure_ascii=False) + "\n"
 
 
 def render_form_component_editor_config_index(spec: FormComponentEditorSpec) -> str:
     return (
-        f"import {spec.editor_config_name} from './{spec.full_kebab}.editor.config'\n\n"
+        f"import {spec.editor_config_name} from './{spec.full_kebab}.editor.config.json'\n\n"
         "const editorConfigList = [\n"
         f"  {spec.editor_config_name}\n"
         "]\n\n"
@@ -584,7 +660,7 @@ def _build_sanitized_setting_script(spec: FormComponentEditorSpec, content: str)
         if entry_name == "created":
             original_created_body = _sanitize_created_entry_body(entry)
             continue
-        if entry_name in {"name", "props", "inject"}:
+        if entry_name in {"name", "props", "inject", "mixins"}:
             continue
 
         sanitized_entry = _sanitize_setting_js_entry(entry)
@@ -1505,19 +1581,47 @@ def _escape_js_single_quoted(value: str) -> str:
     return (value or "").replace("\\", "\\\\").replace("'", "\\'")
 
 
+_SCAFFOLD_PLACEHOLDER_NAMES = {"form-component-custom-dev", "form-component-demo"}
+
+
+def _is_scaffold_placeholder(full_kebab: str) -> bool:
+    return full_kebab in _SCAFFOLD_PLACEHOLDER_NAMES
+
+
+def _pick_best_widget_file(files: list, suffix: str) -> str | None:
+    """从多个 widget config 文件中选出最合适的（非脚手架占位名）。"""
+    if not files:
+        return None
+    non_scaffold = [f for f in files if not _is_scaffold_placeholder(f.name.removesuffix(suffix))]
+    target = non_scaffold[0] if non_scaffold else files[0]
+    return target.name.removesuffix(suffix)
+
+
 def _discover_form_component_name(workspace_path: Path) -> str | None:
+    # Widget config 文件是最直接的来源（由 AI 生成，命名即语义名）
     widget_dir = workspace_path / "src" / "form-component-config" / "form-widget"
     if widget_dir.exists():
-        widget_files = sorted(widget_dir.glob("form-component-*.widget.config.js"))
-        if widget_files:
-            return widget_files[0].name.removesuffix(".widget.config.js")
+        for suffix, glob_pattern in (
+            (".widget.config.json", "form-component-*.widget.config.json"),
+            (".widget.config.js", "form-component-*.widget.config.js"),
+        ):
+            widget_files = sorted(widget_dir.glob(glob_pattern))
+            if widget_files:
+                name = _pick_best_widget_file(widget_files, suffix)
+                if name:
+                    return name
 
+    # Setting.vue 次之
     setting_dir = workspace_path / "src" / "form-component" / "form-editor"
     if setting_dir.exists():
         setting_files = sorted(setting_dir.glob("form-component-*-setting.vue"))
-        if setting_files:
-            return setting_files[0].name.removesuffix("-setting.vue")
+        non_scaffold = [f for f in setting_files if not _is_scaffold_placeholder(f.name.removesuffix("-setting.vue"))]
+        target_files = non_scaffold or setting_files
+        if target_files:
+            return target_files[0].name.removesuffix("-setting.vue")
 
+    # 最后回退到 apaas.json outputName
+    # outputName 格式为 form-component-custom-{semantic}，需去掉 custom- 得到组件命名用的 full_kebab
     apaas_json_path = workspace_path / "src" / "apaas.json"
     if apaas_json_path.exists():
         try:
@@ -1525,6 +1629,10 @@ def _discover_form_component_name(workspace_path: Path) -> str | None:
         except Exception:
             output_name = None
         if isinstance(output_name, str) and output_name.startswith(FORM_COMPONENT_PREFIX):
+            short = output_name[len(FORM_COMPONENT_PREFIX):]
+            # form-component-custom-xxx → form-component-xxx（剥离 custom- 包装前缀）
+            if short.startswith("custom-"):
+                return f"{FORM_COMPONENT_PREFIX}{short[len('custom-'):]}"
             return output_name
 
     return None
