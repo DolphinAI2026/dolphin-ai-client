@@ -419,9 +419,13 @@
 
               <!-- 错误 -->
               <template v-else-if="msg.type === 'error'">
-                <div class="msg-error-card">
-                  <span class="error-icon">⚠</span>
-                  {{ msg.content }}
+                <div class="msg-error-row">
+                  <svg class="error-row-icon" viewBox="0 0 16 16" fill="none">
+                    <circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.4"/>
+                    <path d="M8 5v3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+                    <circle cx="8" cy="11" r="0.75" fill="currentColor"/>
+                  </svg>
+                  <span class="error-row-text">{{ msg.content }}</span>
                 </div>
               </template>
             </div>
@@ -3054,7 +3058,7 @@ watch(() => route.path, () => {
 .msg-thinking-card,
 .msg-file-card,
 .msg-command-card,
-.msg-error-card {
+.msg-error-row {
   margin-top: 6px;
   margin-bottom: 2px;
 }
@@ -3473,25 +3477,25 @@ watch(() => route.path, () => {
   overflow-x: auto;
 }
 
-/* ---- 错误卡片 ---- */
-.msg-error-card {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 9px 12px;
-  background: rgba(239, 68, 68, 0.05);
-  border: 1px solid rgba(239, 68, 68, 0.15);
-  border-left: 2px solid var(--t-danger);
-  border-radius: var(--t-radius-sm);
-  color: var(--t-text-primary);
-  font-size: 13px;
-  line-height: 1.55;
-}
-.error-icon {
-  flex-shrink: 0;
-  font-size: 13px;
+/* ---- 错误行 ---- */
+.msg-error-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px 3px 7px;
+  border-radius: 20px;
+  background: rgba(239, 68, 68, 0.07);
   color: var(--t-danger);
-  margin-top: 1px;
+  font-size: 12px;
+  margin: 1px 0;
+}
+.error-row-icon {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+}
+.error-row-text {
+  line-height: 1.5;
 }
 
 /* ---- 流式加载指示器 ---- */
