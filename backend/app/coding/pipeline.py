@@ -724,6 +724,218 @@ async def save_coding_message(db: AsyncSession, conversation_id: int, role: str,
     await db.commit()
 
 
+# ── Brainstorm 需求澄清 ────────────────────────────
+
+BRAINSTORM_PROPOSAL_MARKER = "<!-- BRAINSTORM_PROPOSAL -->"
+BRAINSTORM_MAX_REVISIONS = 3  # 最多修改 3 轮，超出自动生成代码
+BRAINSTORM_SCENES = {SceneType.WEB_COMPONENT, SceneType.WEB_PAGE, SceneType.WEB_LIST_VIEW}
+
+_BRAINSTORM_PROMPT_FORM_COMPONENT = """\
+你是一位资深 aPaaS 表单组件架构师。请分析用户需求，输出一份简洁的设计确认单（不超过 600 字，中文）。
+
+开发类型：aPaaS 自定义表单组件（需生成 widget.config.json 及 edit/read/ide/list/print/search/search-ide 7 个场景文件）
+
+用户需求：{message}
+
+请严格按以下 Markdown 格式输出，每个字段都必须给出具体值，禁止出现"视需求而定"：
+
+## 📋 设计方案确认
+
+**组件名称**：[中文名]（`[kebab-case英文名]`）
+**代码标识**：`FORM_CUSTOM_[大写下划线]`
+
+**功能概述**：[一句话描述核心功能]
+
+---
+
+### 数据存储
+| 字段 | 值 |
+|------|----|
+| formValue 格式 | `[具体JSON示例或基础类型示例]` |
+| componentModelField | `["STRING" / "BIG_TEXT" / "NUM" / "DATE"]`（选一个并说明理由） |
+| BOF 类型 | `BOF_TEXT / BOF_NUMBER / BOF_DATE`（与上行对应） |
+
+### 配置项（setting.vue 面板，如无需配置则填"无"）
+| 属性 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `propName` | String/Boolean/Number | `默认值` | 说明 |
+
+### 各场景交互
+- **编辑（edit）**：
+- **只读（read）**：
+- **列表列（list）**：
+- **搜索（search）**：
+- **打印（print）**：
+
+### 第三方依赖
+- [列出需要额外安装的 npm 包，若无则填"无"]
+
+---
+以上是我对需求的理解，请确认是否准确？如有需要调整的地方请告知，确认后将立即开始生成代码。\
+"""
+
+_BRAINSTORM_PROMPT_PAGE = """\
+你是一位资深 aPaaS 前端页面架构师。请分析用户需求，输出一份简洁的设计确认单（不超过 600 字，中文）。
+
+开发类型：aPaaS 自定义菜单页面（Vue 2.7 + Element UI，不可使用 Vue Router）
+
+用户需求：{message}
+
+请严格按以下 Markdown 格式输出，每个字段都必须给出具体值：
+
+## 📋 设计方案确认
+
+**页面名称**：[中文名]（`[kebab-case英文名]`）
+
+**功能概述**：[一句话描述核心功能]
+
+---
+
+### 页面结构
+```
+[用 ASCII 画出主要区域布局，如搜索栏/表格/弹窗等]
+```
+
+### 数据接口
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/...` | 列表查询 |
+
+### 主要交互流程
+1. [步骤 1]
+2. [步骤 2]
+
+### 第三方依赖
+- [列出需要额外安装的 npm 包，若无则填"无"]
+
+---
+以上是我对需求的理解，请确认是否准确？如有需要调整的地方请告知，确认后将立即开始生成代码。\
+"""
+
+_BRAINSTORM_PROMPT_LIST = """\
+你是一位资深 aPaaS 前端架构师。请分析用户需求，输出一份简洁的设计确认单（不超过 500 字，中文）。
+
+开发类型：aPaaS 自定义列表视图（Vue 2.7 + Element UI）
+
+用户需求：{message}
+
+请严格按以下 Markdown 格式输出，每个字段都必须给出具体值：
+
+## 📋 设计方案确认
+
+**列表名称**：[中文名]（`[kebab-case英文名]`）
+
+**功能概述**：[一句话描述]
+
+---
+
+### 列表结构
+| 列名 | 字段 | 说明 |
+|------|------|------|
+| 名称 | `name` | ... |
+
+### 操作与功能
+- **行操作**：[查看/编辑/删除等]
+- **批量操作**：[如有]
+- **搜索/筛选**：[支持哪些条件]
+
+### 数据接口
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/...` | 列表查询 |
+
+---
+以上是我对需求的理解，请确认是否准确？如有需要调整的地方请告知，确认后将立即开始生成代码。\
+"""
+
+_BRAINSTORM_PROMPTS = {
+    SceneType.WEB_COMPONENT: _BRAINSTORM_PROMPT_FORM_COMPONENT,
+    SceneType.WEB_PAGE: _BRAINSTORM_PROMPT_PAGE,
+    SceneType.WEB_LIST_VIEW: _BRAINSTORM_PROMPT_LIST,
+}
+
+
+async def _generate_brainstorm_proposal(
+    generator: CodingGenerator,
+    message: str,
+    scene_type: SceneType,
+) -> str:
+    """LLM 生成结构化设计确认单。"""
+    prompt_tpl = _BRAINSTORM_PROMPTS.get(scene_type, _BRAINSTORM_PROMPT_PAGE)
+    prompt = prompt_tpl.format(message=message[:1000])
+    try:
+        resp = await generator.llm_client.chat_completion(
+            [{"role": "user", "content": prompt}],
+            max_tokens=1000,
+            temperature=0.3,
+        )
+        return resp.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+    except Exception as e:
+        logger.warning(f"Brainstorm generation failed: {e}")
+        return ""
+
+
+async def _classify_brainstorm_response(generator: CodingGenerator, user_message: str) -> str:
+    """
+    LLM 分类用户对设计方案的回复意图。
+    Returns: 'confirm' | 'revise' | 'abort'
+    """
+    prompt = (
+        "判断用户对设计方案的回复意图，只回复 CONFIRM、REVISE 或 ABORT，不要其他内容。\n\n"
+        "- CONFIRM：确认方案、同意、开始生成（如：好的、没问题、可以、开始、ok、对）\n"
+        "- REVISE：要求修改（如：不对、改一下、应该是...、加个...）\n"
+        "- ABORT：取消、不做了\n\n"
+        f"用户回复：{user_message}"
+    )
+    try:
+        resp = await generator.llm_client.chat_completion(
+            [{"role": "user", "content": prompt}],
+            max_tokens=10,
+            temperature=0.0,
+        )
+        answer = resp.get("choices", [{}])[0].get("message", {}).get("content", "").strip().upper()
+        if "ABORT" in answer:
+            return "abort"
+        if "CONFIRM" in answer:
+            return "confirm"
+        return "revise"
+    except Exception:
+        return "confirm"  # 分类失败时默认确认，避免死循环
+
+
+def _get_brainstorm_state(history: list) -> tuple:
+    """
+    检查对话是否处于等待 brainstorm 确认状态。
+    Returns: (proposal_text, original_requirement, revision_count) or (None, None, 0)
+
+    revision_count = 历史中 brainstorm 提案的总数（用于限制最大修改次数）
+    """
+    revision_count = 0
+    last_proposal: Optional[str] = None
+    original_req = ""
+
+    for i, msg in enumerate(history):
+        if msg["role"] == "assistant":
+            content = msg.get("content", "")
+            if content.startswith(BRAINSTORM_PROPOSAL_MARKER):
+                revision_count += 1
+                last_proposal = content[len(BRAINSTORM_PROPOSAL_MARKER):].strip()
+                # 找此提案前最近的用户消息作为"原始需求"
+                for j in range(i - 1, -1, -1):
+                    if history[j]["role"] == "user":
+                        original_req = history[j].get("content", "")
+                        break
+
+    # 只有最后一条 assistant 消息是 brainstorm 提案时才算"等待确认"
+    for msg in reversed(history):
+        if msg["role"] == "assistant":
+            if msg.get("content", "").startswith(BRAINSTORM_PROPOSAL_MARKER):
+                return last_proposal, original_req, revision_count
+            break
+
+    return None, None, 0
+
+
 # ── Pipeline 核心 ──────────────────────────────────
 
 async def run_coding_pipeline(
@@ -896,6 +1108,7 @@ async def run_coding_pipeline(
         await save_coding_message(db, conversation_id, "user", params.message)
 
         # 对话历史
+        history: list = []
         conversation_summary = ""
         if conversation_id:
             history = await get_conversation_history(db, conversation_id)
@@ -904,6 +1117,66 @@ async def run_coding_pipeline(
                     f"{'User' if m.get('role') == 'user' else 'Assistant'}: {m.get('content', '')[:200]}"
                     for m in history[-6:]
                 )
+
+        # ── Brainstorm 需求澄清 ──────────────────────────
+        effective_requirement = params.message  # 默认用当前消息
+        brainstorm_proposal, original_requirement, revision_count = _get_brainstorm_state(history)
+
+        if brainstorm_proposal:
+            # 当前处于等待 brainstorm 确认状态
+            if revision_count < BRAINSTORM_MAX_REVISIONS:
+                intent = await _classify_brainstorm_response(generator, params.message)
+            else:
+                # 超过最大修改次数，强制确认
+                intent = "confirm"
+                logger.info(f"Brainstorm max revisions reached ({revision_count}), forcing confirm")
+
+            if intent == "abort":
+                yield _record_event({"type": "content", "content": "已取消，工作区保留但不生成代码。如需重新开始请描述新需求。"})
+                ide_url = _build_ide_url_for_pipeline(params, ws_id, conversation_id, effective_model)
+                yield _record_event({"type": "done", "workspace_id": ws_id,
+                                     "conversation_id": conversation_id, "ide_url": ide_url})
+                return
+
+            elif intent == "revise":
+                # 用户要修改方案：合并原始需求 + 用户反馈，重新生成
+                revised_message = f"{original_requirement}\n\n用户反馈（请据此修改方案）：{params.message}"
+                new_proposal = await _generate_brainstorm_proposal(generator, revised_message, scene_type)
+                if new_proposal:
+                    await save_coding_message(db, conversation_id, "assistant",
+                                              BRAINSTORM_PROPOSAL_MARKER + new_proposal)
+                    yield _record_event({"type": "content", "content": new_proposal})
+                ide_url = _build_ide_url_for_pipeline(params, ws_id, conversation_id, effective_model)
+                yield _record_event({
+                    "type": "done", "workspace_id": ws_id,
+                    "conversation_id": conversation_id, "ide_url": ide_url,
+                    "waiting_confirmation": True,
+                })
+                return
+
+            else:
+                # 用户确认：用原始需求 + 确认的设计方案作为 Agent 完整上下文
+                effective_requirement = (
+                    f"{original_requirement}\n\n"
+                    f"[设计方案已确认，请严格按以下方案生成代码，无需再向用户确认]\n"
+                    f"{brainstorm_proposal}"
+                )
+
+        elif not is_iteration and scene_type in BRAINSTORM_SCENES:
+            # 新建工作区且是支持 brainstorm 的场景类型：先生成设计方案
+            proposal = await _generate_brainstorm_proposal(generator, params.message, scene_type)
+            if proposal:
+                await save_coding_message(db, conversation_id, "assistant",
+                                          BRAINSTORM_PROPOSAL_MARKER + proposal)
+                yield _record_event({"type": "content", "content": proposal})
+                ide_url = _build_ide_url_for_pipeline(params, ws_id, conversation_id, effective_model)
+                yield _record_event({
+                    "type": "done", "workspace_id": ws_id,
+                    "conversation_id": conversation_id, "ide_url": ide_url,
+                    "waiting_confirmation": True,
+                })
+                return
+            # proposal 生成失败时降级：直接走代码生成
 
         # 运行 Agent
         agent = VibeCodingAgent(ws_id, system_prompt=AGENT_SYSTEM_PROMPT, tenant_id=params.tenant_id)
@@ -933,7 +1206,7 @@ async def run_coding_pipeline(
 
         try:
             async for event in agent.run(
-                requirement=params.message,
+                requirement=effective_requirement,
                 conversation_summary=conversation_summary,
                 model=effective_model,
                 max_turns=30,
