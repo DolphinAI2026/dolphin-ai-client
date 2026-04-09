@@ -345,7 +345,7 @@
               <template v-else-if="msg.type === 'status'">
                 <div class="msg-status">
                   <span class="status-dot"></span>
-                  {{ msg.content }}
+                  <span class="status-content">{{ msg.content }}</span>
                 </div>
               </template>
 
@@ -2886,7 +2886,14 @@ watch(() => route.path, () => {
   gap: 4px;
 }
 
-.stream-msg { animation: fadeInUp 0.2s ease-out; }
+.stream-msg {
+  display: flex;
+  flex-direction: column;
+  animation: fadeInUp 0.2s ease-out;
+}
+
+/* 用户消息行右对齐 */
+.msg-user { align-items: flex-end; }
 
 @keyframes fadeInUp {
   from { opacity: 0; transform: translateY(8px); }
@@ -2895,16 +2902,16 @@ watch(() => route.path, () => {
 
 /* 用户消息 */
 .msg-user-bubble {
-  align-self: flex-end;
-  max-width: 80%;
+  max-width: 75%;
   padding: 10px 16px;
   background: var(--t-brand);
   color: #fff;
   border-radius: 16px 16px 4px 16px;
   font-size: 14px;
   line-height: 1.5;
-  margin-bottom: 8px;
+  margin-bottom: 4px;
   box-shadow: 0 2px 8px var(--t-brand-glow);
+  word-break: break-word;
 }
 
 /* ---- AI 显式消息（设计方案等 Markdown 块） ---- */
@@ -3076,7 +3083,7 @@ watch(() => route.path, () => {
 /* ---- 状态消息 ---- */
 .msg-status {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 7px;
   font-size: 12px;
   color: var(--t-text-muted);
@@ -3089,6 +3096,15 @@ watch(() => route.path, () => {
   background: var(--t-text-muted);
   flex-shrink: 0;
   opacity: 0.5;
+  margin-top: 4px;
+}
+.status-content {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-all;
+  line-height: 1.5;
 }
 
 /* ---- 工具调用行 ---- */
@@ -3328,7 +3344,7 @@ watch(() => route.path, () => {
 /* ============ Chat Input Bar (stream-pane 底部) ============ */
 .chat-input-bar {
   flex-shrink: 0;
-  padding: 12px 24px 16px;
+  padding: 10px 24px 14px;
   border-top: 1px solid var(--t-border-subtle);
   background: var(--t-bg-base);
 }
@@ -3338,14 +3354,16 @@ watch(() => route.path, () => {
   gap: 8px;
   max-width: 800px;
   margin: 0 auto;
-  background: var(--t-bg-elevated);
-  border: 1px solid var(--t-border-subtle);
-  border-radius: 12px;
+  background: var(--t-bg-panel);
+  border: 1px solid var(--t-border-strong);
+  border-radius: 14px;
   padding: 6px 8px;
-  transition: border-color 0.2s;
+  transition: border-color 0.2s, box-shadow 0.2s;
+  box-shadow: var(--t-shadow-sm);
 }
 .chat-input-wrapper:focus-within {
-  border-color: var(--t-brand-primary, #646cff);
+  border-color: var(--t-brand);
+  box-shadow: 0 0 0 3px var(--t-brand-subtle);
 }
 .chat-input-wrapper .attach-btn {
   flex-shrink: 0;
