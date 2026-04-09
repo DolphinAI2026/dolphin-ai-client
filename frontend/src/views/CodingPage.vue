@@ -3494,7 +3494,7 @@ watch(() => route.path, () => {
   width: 14px;
   height: 14px;
   flex-shrink: 0;
-  margin-top: 2px;
+  align-self: center;
 }
 .error-row-text {
   line-height: 1.6;
