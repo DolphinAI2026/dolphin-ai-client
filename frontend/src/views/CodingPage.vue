@@ -3480,22 +3480,25 @@ watch(() => route.path, () => {
 /* ---- 错误行 ---- */
 .msg-error-row {
   display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 10px 3px 7px;
-  border-radius: 20px;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 14px 8px 10px;
+  border-radius: 10px;
   background: rgba(239, 68, 68, 0.07);
   color: var(--t-danger);
-  font-size: 12px;
-  margin: 1px 0;
+  font-size: 12.5px;
+  margin: 2px 0;
+  max-width: 100%;
 }
 .error-row-icon {
-  width: 13px;
-  height: 13px;
+  width: 14px;
+  height: 14px;
   flex-shrink: 0;
+  margin-top: 2px;
 }
 .error-row-text {
-  line-height: 1.5;
+  line-height: 1.6;
+  word-break: break-word;
 }
 
 /* ---- 流式加载指示器 ---- */
