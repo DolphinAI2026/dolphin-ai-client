@@ -3126,20 +3126,19 @@ watch(() => route.path, () => {
 /* ---- 状态消息 ---- */
 .msg-status {
   display: flex;
-  align-items: flex-start;
-  gap: 7px;
-  font-size: 12px;
-  color: var(--t-text-muted);
-  padding: 2px 0;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--t-text-secondary);
+  padding: 3px 0;
 }
 .status-dot {
-  width: 5px;
-  height: 5px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: var(--t-text-muted);
   flex-shrink: 0;
-  opacity: 0.5;
-  margin-top: 4px;
+  opacity: 0.4;
 }
 .status-content {
   display: -webkit-box;
@@ -3336,15 +3335,38 @@ watch(() => route.path, () => {
 
 /* ---- 错误卡片 ---- */
 /* ---- 状态完成/进行中变体 ---- */
+/* 进行中：蓝点脉冲动画 */
+.msg-status.status-progress .status-dot {
+  background: var(--t-brand);
+  opacity: 1;
+  animation: statusPulse 1.2s ease-in-out infinite;
+}
+@keyframes statusPulse {
+  0%, 100% { opacity: 0.3; transform: scale(0.7); }
+  50%       { opacity: 1;   transform: scale(1.1); }
+}
+
+/* 完成：绿圆 + 勾 */
 .msg-status.status-done {
   color: var(--t-success);
 }
 .msg-status.status-done .status-dot {
-  background: var(--t-success);
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--t-success-subtle);
   opacity: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
 }
-.msg-status.status-progress {
-  color: var(--t-text-secondary);
+.msg-status.status-done .status-dot::after {
+  content: '✓';
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--t-success);
+  line-height: 1;
 }
 
 /* ---- 错误卡片 ---- */
