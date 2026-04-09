@@ -200,6 +200,37 @@ class WidgetComponentConfig(BaseModel):
                 )
         return self
 
+def normalize_widget_config_with_pydantic(data: dict) -> dict:
+    """对 widget.config.json 结构进行 coerce 归一化（类型修正、默认值填充）。
+
+    不抛出异常，始终返回修正后的 dict。
+    """
+    result = dict(data)
+
+    # methods: list → dict
+    if isinstance(result.get("methods"), list):
+        result["methods"] = {}
+
+    # desc.iconType 强制为 "DEFAULT"
+    if isinstance(result.get("desc"), dict):
+        result["desc"] = dict(result["desc"])
+        result["desc"]["iconType"] = "DEFAULT"
+
+    # widget.editor 确保存在且 excludeInTable 为 list
+    widget = result.get("widget")
+    if isinstance(widget, dict):
+        result["widget"] = dict(widget)
+        editor = result["widget"].get("editor")
+        if not isinstance(editor, dict):
+            result["widget"]["editor"] = {"config": [], "excludeInTable": ["WIDTH"]}
+        else:
+            result["widget"]["editor"] = dict(editor)
+            if not isinstance(result["widget"]["editor"].get("excludeInTable"), list):
+                result["widget"]["editor"]["excludeInTable"] = ["WIDTH"]
+
+    return result
+
+
 if TYPE_CHECKING:
     from app.coding.generator import GeneratedFile
     from app.coding.scenes import SceneInfo

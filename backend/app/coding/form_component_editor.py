@@ -132,7 +132,7 @@ def discover_form_component_editor_spec(workspace_path: Path) -> FormComponentEd
         prefix=prefix,
         setting_component_name=f"{prefix}Setting",
         editor_config_name=f"{prefix}EditorConfig",
-        setting_code=f"FORM_CUSTOM_COMPONENT_{short_kebab.replace('-', '_').upper()}_SETTING",
+        setting_code=f"FORM_CUSTOM_{short_kebab.replace('-', '_').upper()}_SETTING",
     )
 
 
@@ -1150,10 +1150,218 @@ def _is_setting_selector(selector: str) -> bool:
     )
 
 def normalize_widget_config_content(spec: FormComponentEditorSpec, content: str) -> str:
-    normalized = normalize_widget_config_setting_code(content, spec.setting_code)
-    normalized = normalize_widget_config_icon(spec, normalized)
-    normalized = normalize_widget_config_labels(spec, normalized)
-    return normalize_widget_config_component_model_field(spec, normalized)
+    """三层归一化：文本修复 → JSON 解析 → dict 标准化 → 序列化。"""
+    # 层1：修复无法 json.loads 的原始文本
+    fixed_text = _attempt_fix_invalid_widget_json(content)
+
+    # 层2：JSON 解析
+    try:
+        data = json.loads(fixed_text)
+    except json.JSONDecodeError:
+        return content  # 无法解析则不改动
+
+    if not isinstance(data, dict):
+        return content
+
+    # 层3：dict 级标准化
+    _normalize_widget_component_names(spec, data)
+    _normalize_widget_setting_code_in_dict(spec, data)
+    _normalize_widget_icon_in_dict(spec, data)
+    _normalize_widget_labels_in_dict(spec, data)
+    _normalize_widget_model_field_in_dict(spec, data)
+    _normalize_widget_methods(data)
+
+    # Pydantic 结构归一化（兜底 coerce）
+    from app.coding.validator import normalize_widget_config_with_pydantic
+    data = normalize_widget_config_with_pydantic(data)
+
+    return json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+
+
+def _attempt_fix_invalid_widget_json(content: str) -> str:
+    """修复 AI 生成的 widget.config.json 中无法 json.loads 的文本层问题。
+
+    只做文本层面的修复，不改变数据结构：
+    - 去除 JS 语法行（未加引号的 key，如 `key: value,`）
+    - 修复尾部逗号（在 ] 或 } 前的逗号）
+    """
+    lines = content.splitlines()
+    cleaned: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        # JS 语法行：key 未加引号（如 `  key: value,`）
+        if re.match(r'^[A-Za-z_]\w*\s*:', stripped):
+            continue
+        cleaned.append(line)
+    fixed = "\n".join(cleaned)
+    # 修复尾部逗号
+    fixed = re.sub(r',(\s*[}\]])', r'\1', fixed)
+    return fixed
+
+
+def _kebab_to_pascal(s: str) -> str:
+    return "".join(p.capitalize() for p in s.split("-") if p)
+
+
+def _normalize_widget_component_names(spec: FormComponentEditorSpec, data: dict) -> None:
+    """将 component.* 字段从 kebab-case 替换为 PascalCase 类名。
+
+    例：`form-component-phone-edit` → `FormComponentPhoneEdit`
+    """
+    component = data.get("component")
+    if isinstance(component, dict):
+        for key in list(component):
+            val = component[key]
+            if isinstance(val, str) and val.startswith("form-component-"):
+                component[key] = _kebab_to_pascal(val)
+
+    mobile_component = ((data.get("client") or {}).get("mobile") or {}).get("component")
+    if isinstance(mobile_component, dict):
+        for key in list(mobile_component):
+            val = mobile_component[key]
+            if isinstance(val, str) and val.startswith("form-component-"):
+                mobile_component[key] = _kebab_to_pascal(val)
+
+
+def _normalize_widget_setting_code_in_dict(spec: FormComponentEditorSpec, data: dict) -> None:
+    """确保 widget.editor.config（和 mobile 对应字段）包含正确的 setting_code。"""
+    sc = spec.setting_code
+
+    def _inject(editor: dict) -> None:
+        config = editor.get("config")
+        if not isinstance(config, list):
+            editor["config"] = [sc]
+            return
+        if sc in config:
+            return
+        try:
+            idx = config.index("FORMULA_RULE")
+            config.insert(idx, sc)
+        except ValueError:
+            config.append(sc)
+
+    widget = data.get("widget")
+    if isinstance(widget, dict):
+        editor = widget.get("editor")
+        if not isinstance(editor, dict):
+            widget["editor"] = {"config": [sc], "excludeInTable": ["WIDTH"]}
+        else:
+            _inject(editor)
+
+    mobile_widget = ((data.get("client") or {}).get("mobile") or {}).get("widget")
+    if isinstance(mobile_widget, dict):
+        mobile_editor = mobile_widget.get("editor")
+        if isinstance(mobile_editor, dict):
+            _inject(mobile_editor)
+
+
+def _normalize_widget_icon_in_dict(spec: FormComponentEditorSpec, data: dict) -> None:
+    """若图标不是有效的功能性 SVG，替换为根据组件类型生成的图标。"""
+    desc = data.get("desc")
+    if not isinstance(desc, dict):
+        return
+    current_icon = desc.get("icon", "")
+    if current_icon and _is_feature_svg_icon(current_icon):
+        return
+    metadata = f"{spec.short_kebab} {desc.get('text', '')} {desc.get('description', '')}".lower()
+    desc["icon"] = render_widget_svg_icon(spec, metadata)
+    desc["iconType"] = "DEFAULT"
+
+
+def _normalize_widget_labels_in_dict(spec: FormComponentEditorSpec, data: dict) -> None:
+    """修正 desc.text / desc.description / widget.display.label 中的占位值。"""
+    desc = data.get("desc") or {}
+    current_text = (desc.get("text") or "").strip()
+    current_desc = (desc.get("description") or "").strip()
+
+    if _is_meaningful_widget_meta(current_text, spec):
+        title = current_text
+    else:
+        title, _ = _infer_widget_title_and_description(spec, spec.short_kebab)
+
+    if _is_meaningful_widget_description(current_desc, spec, title):
+        description = current_desc
+    else:
+        _, description = _infer_widget_title_and_description(spec, spec.short_kebab)
+
+    if isinstance(data.get("desc"), dict):
+        data["desc"]["text"] = title
+        data["desc"]["description"] = description
+
+    widget_display = (data.get("widget") or {}).get("display")
+    if isinstance(widget_display, dict):
+        current_label = (widget_display.get("label") or "").strip()
+        if not _is_meaningful_widget_meta(current_label, spec):
+            widget_display["label"] = title
+
+
+def _normalize_widget_model_field_in_dict(spec: FormComponentEditorSpec, data: dict) -> None:
+    """推断并设置 componentModelField 和 frontBusinessObjectComponentType。"""
+    desc = data.get("desc") or {}
+    metadata = f"{spec.short_kebab} {desc.get('text', '')} {desc.get('description', '')}".lower()
+
+    # 从 json.dumps 中提取 maxLength 等信息（兼容深层嵌套）
+    content_str = json.dumps(data)
+    max_length_values = [
+        int(v) for v in re.findall(
+            r'"(?:maxLength|maxlength|lengthLimit|textLimit)"\s*:\s*(\d+)', content_str
+        )
+    ]
+    if max_length_values and max(max_length_values) > STRING_COMPONENT_MODEL_FIELD_MAX_LENGTH:
+        model_field = "BIG_TEXT"
+    else:
+        big_text_keywords = (
+            "base64", "textarea", "rich-text", "富文本", "richtext", "html",
+            "remark", "memo", "comment", "描述", "大文本",
+            "upload", "文件", "file", "attachment", "附件",
+            "signature", "签名", "chart", "图表",
+        )
+        string_range_keywords = (
+            "date-range", "daterange", "datetimerange", "monthrange", "yearrange",
+            "timerange", "time-range", "numberrange", "number-range",
+            "range-picker", "rangepicker",
+        )
+        num_keywords = (
+            "star", "rating", "rate", "score", "number", "amount", "price",
+            "count", "percent", "progress", "slider", "stepper", "digit", "num", "评分",
+        )
+        date_keywords = (
+            "date-picker", "datepicker", "calendar", "日期", "date", "month", "year", "time",
+        )
+        if any(k in metadata for k in big_text_keywords):
+            model_field = "BIG_TEXT"
+        elif any(k in metadata for k in string_range_keywords):
+            model_field = "STRING"
+        elif any(k in metadata for k in num_keywords):
+            model_field = "NUM"
+        elif any(k in metadata for k in date_keywords):
+            model_field = "DATE"
+        else:
+            # 尊重现有值（如果合法）
+            existing = data.get("componentModelField")
+            if isinstance(existing, list) and existing:
+                mapped = LEGACY_COMPONENT_MODEL_FIELD_MAP.get(str(existing[0]).upper())
+                model_field = mapped if mapped else "STRING"
+            else:
+                model_field = "STRING"
+
+    bof_type = COMPONENT_MODEL_FIELD_TO_BOF_TYPE[model_field]
+    data["componentModelField"] = [model_field]
+
+    widget = data.get("widget")
+    if isinstance(widget, dict):
+        special = widget.get("special")
+        if isinstance(special, dict):
+            special["frontBusinessObjectComponentType"] = bof_type
+        else:
+            widget["special"] = {"frontBusinessObjectComponentType": bof_type}
+
+
+def _normalize_widget_methods(data: dict) -> None:
+    """将 methods: [] 强制转换为 methods: {}。"""
+    if isinstance(data.get("methods"), list):
+        data["methods"] = {}
+
 
 
 def normalize_widget_config_setting_code(content: str, setting_code: str) -> str:
