@@ -51,6 +51,18 @@
             <span><i class="dot amber"></i>{{ a.roles || 0 }} 角色</span>
             <span><i class="dot purple"></i>{{ a.dicts || 0 }} 字典</span>
           </div>
+          <div v-if="appHistory(a).length" class="conversation-history">
+            <div class="conversation-history-title">历史对话</div>
+            <button
+              v-for="item in appHistory(a)"
+              :key="item.id"
+              class="conversation-history-item"
+              @click.stop="router.push(`/chat/${item.id}?app_id=${a.id}`)"
+            >
+              <span class="conversation-history-name">{{ historyTitle(item) }}</span>
+              <span class="conversation-history-meta">{{ historySummary(item) }} · {{ historyTime(item) }}</span>
+            </button>
+          </div>
           <div class="grid-card-actions" @click.stop>
             <a v-if="a.apaas_url" :href="a.apaas_url" target="_blank" class="action-btn primary" title="在平台中打开">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
@@ -103,6 +115,18 @@
             <span><i class="dot amber"></i>{{ a.roles || 0 }} 角色</span>
             <span><i class="dot purple"></i>{{ a.dicts || 0 }} 字典</span>
           </div>
+          <div v-if="appHistory(a).length" class="conversation-history list">
+            <div class="conversation-history-title">历史对话</div>
+            <button
+              v-for="item in appHistory(a)"
+              :key="item.id"
+              class="conversation-history-item"
+              @click.stop="router.push(`/chat/${item.id}?app_id=${a.id}`)"
+            >
+              <span class="conversation-history-name">{{ historyTitle(item) }}</span>
+              <span class="conversation-history-meta">{{ historySummary(item) }} · {{ historyTime(item) }}</span>
+            </button>
+          </div>
         </div>
       </template>
       </div>
@@ -115,11 +139,13 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { applicationApi } from '@/api/application'
+import { conversationApi, type ConversationWithApp } from '@/api/conversation'
 import type { MergedApplication } from '@/types'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
 
 const router = useRouter()
 const apps = ref<MergedApplication[]>([])
+const appHistoryMap = ref<Record<number, ConversationWithApp[]>>({})
 const loading = ref(true)
 const activeTab = ref('all')
 const viewMode = ref<'grid' | 'list'>('grid')
@@ -145,6 +171,47 @@ const filteredApps = computed(() => {
   if (activeTab.value === 'all') return apps.value
   return apps.value.filter(a => a.source === activeTab.value)
 })
+
+function appNumericId(a: MergedApplication) {
+  const raw = Number(a.id)
+  return Number.isFinite(raw) ? raw : null
+}
+
+function appHistory(a: MergedApplication) {
+  const id = appNumericId(a)
+  if (id == null) return []
+  return appHistoryMap.value[id] || []
+}
+
+function historyTitle(item: ConversationWithApp) {
+  return item.title || item.app_name || '历史对话'
+}
+
+function historyTime(item: ConversationWithApp) {
+  return (item.updated_at || item.created_at || '').slice(0, 16)
+}
+
+function historySummary(item: ConversationWithApp) {
+  const count = Number(item.message_count || 0)
+  return count > 0 ? `${count} 条消息` : '无消息详情'
+}
+
+function buildAppHistoryMap(list: ConversationWithApp[]) {
+  const next: Record<number, ConversationWithApp[]> = {}
+  for (const item of list) {
+    const appId = Number(item.app_id)
+    if (!Number.isFinite(appId)) continue
+    if (!next[appId]) next[appId] = []
+    next[appId].push(item)
+  }
+  for (const key of Object.keys(next)) {
+    const items = next[Number(key)] || []
+    next[Number(key)] = items
+      .sort((a, b) => new Date(b.updated_at || b.created_at || 0).getTime() - new Date(a.updated_at || a.created_at || 0).getTime())
+      .slice(0, 3)
+  }
+  return next
+}
 
 function sourceIcon(a: MergedApplication) {
   if (a.source === 'remote') return '☁️'
@@ -209,8 +276,12 @@ async function confirmDelete(a: MergedApplication) {
 
 onMounted(async () => {
   try {
-    const list = await applicationApi.list()
+    const [list, conversations] = await Promise.all([
+      applicationApi.list(),
+      conversationApi.listWithApps({ agent_type: 'builder' }).catch(() => []),
+    ])
     apps.value = Array.isArray(list) ? list : []
+    appHistoryMap.value = buildAppHistoryMap(Array.isArray(conversations) ? conversations : [])
   } catch (e) { /* ignore */ }
   loading.value = false
 })
@@ -466,6 +537,55 @@ onMounted(async () => {
   gap: 12px;
   padding-top: 10px;
   border-top: 1px solid var(--t-bg-subtle);
+  font-size: 11px;
+  color: var(--t-text-muted);
+}
+
+.conversation-history {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--t-bg-subtle);
+}
+
+.conversation-history.list {
+  margin-top: 14px;
+}
+
+.conversation-history-title {
+  font-size: 11px;
+  color: var(--t-text-muted);
+}
+
+.conversation-history-item {
+  width: 100%;
+  border: 1px solid var(--t-border-subtle);
+  background: var(--t-bg-subtle);
+  border-radius: 10px;
+  padding: 9px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.conversation-history-item:hover {
+  border-color: var(--t-brand-subtle);
+  background: var(--t-bg-input);
+}
+
+.conversation-history-name {
+  font-size: 12px;
+  color: var(--t-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.conversation-history-meta {
   font-size: 11px;
   color: var(--t-text-muted);
 }

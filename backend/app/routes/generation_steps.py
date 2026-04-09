@@ -39,6 +39,49 @@ router = APIRouter(tags=["生成步骤"])
 # 临时关闭审批流程创建步骤，避免部署链路被当前流程配置问题阻塞。
 WORKFLOW_STEPS_ENABLED = False
 
+_COMPONENT_TYPE_LABELS = {
+    "FORM_DOCUMENT_NUMBER": "单据号",
+    "FORM_TEXT_INPUT": "单行输入",
+    "FORM_TEXTAREA_INPUT": "多行输入",
+    "FORM_TEXTAREA": "多行输入",
+    "FORM_PHONE_INPUT": "手机号码",
+    "FORM_EMAIL_INPUT": "电子邮箱",
+    "FORM_SELECT_INPUT_SINGLE": "下拉单选",
+    "FORM_SELECT_INPUT": "下拉多选",
+    "FORM_SELECT": "下拉单选",
+    "FORM_SELECT_MULTI": "下拉多选",
+    "FORM_DATA_SELECTOR_SINGLE": "数据单选",
+    "FORM_DATA_SELECTOR": "数据选择",
+    "FORM_DATEPICK_INPUT": "日期时间",
+    "FORM_DATE_PICKER": "日期时间",
+    "FORM_MONEY_INPUT": "金额",
+    "FORM_NUMBER_INPUT": "数字",
+    "FORM_FILE_UPLOAD": "附件上传",
+    "FORM_UPLOAD": "附件上传",
+    "FORM_SWITCH_SELECT": "开关",
+    "FORM_SWITCH": "开关",
+    "FORM_PEOPLE_SELECT": "人员选择",
+    "FORM_USER_SELECT": "人员选择",
+    "FORM_DEPARTMENT_SELECT": "部门选择",
+    "FORM_DEPT_SELECT": "部门选择",
+    "FORM_WIDGET_LOCATION": "地理位置",
+    "FORM_WIDGET_SON_TABLE": "子表",
+    "FORM_RADIO_INPUT": "单选框",
+    "FORM_RADIO": "单选框",
+    "FORM_CHECKBOX_INPUT": "复选框",
+    "FORM_CHECKBOX": "复选框",
+    "FORM_RICH_TEXT": "富文本",
+    "FORM_HYPERLINK_INPUT": "超链接",
+    "FORM_LINK": "超链接",
+    "FORM_IDCARD_INPUT": "身份证号",
+    "FORM_ID_CARD": "身份证号",
+    "FORM_WIDGET_AREA": "地区地址",
+    "FORM_LOCATION": "地理位置",
+    "FORM_ADDRESS": "地区地址",
+    "FORM_ASSOCIATION": "关联表单",
+    "FORM_SERIAL": "单据号",
+}
+
 
 # ------------------------------------------------------------------
 # helpers
@@ -66,11 +109,63 @@ def _load_config(app: Application) -> dict:
     return json.loads(app.config_preview) if isinstance(app.config_preview, str) else app.config_preview
 
 
+def _component_type_label(value: str, model_type: str = "") -> str:
+    raw = str(value or "").strip()
+    model_label = str(model_type or "").strip()
+    label = _COMPONENT_TYPE_LABELS.get(raw, raw)
+    if not label:
+        return model_label or ""
+    if label == "单行输入" and model_label and model_label != "单行输入":
+        return model_label
+    return label
+
+
+def _field_code_from_model_field(model_field: str) -> str:
+    raw = str(model_field or "").strip()
+    return raw.split(".")[-1] if "." in raw else raw
+
+
+def _build_model_maps(models: list[dict]) -> tuple[dict[str, dict], dict[str, dict]]:
+    models_by_code: dict[str, dict] = {}
+    fields_by_model: dict[str, dict] = {}
+    for model in models:
+        code = str(model.get("code", "")).strip()
+        if not code:
+            continue
+        models_by_code[code] = model
+        fields_by_model[code] = {
+            str(field.get("code", "")).strip(): field
+            for field in (model.get("fields") or [])
+            if str(field.get("code", "")).strip()
+        }
+    return models_by_code, fields_by_model
+
+
+def _iter_form_definitions(data: dict, models: list[dict]) -> list[dict]:
+    forms = data.get("forms", []) or []
+    if forms:
+        return forms
+    return [
+        model for model in models
+        if model.get("form_name") or model.get("form_code") or model.get("components")
+    ]
+
+
+def _bool_label(value: object) -> str:
+    return "是" if bool(value) else "否"
+
+
+def _is_sub_table_component(component: dict) -> bool:
+    component_type = str(component.get("componentType") or component.get("component_type") or "").strip()
+    return component_type == "FORM_WIDGET_SON_TABLE"
+
+
 def _render_design_doc_markdown(app_name: str, app_code: str, data: dict) -> str:
     roles = data.get("roles", []) or []
     dicts = data.get("dicts", []) or []
     models = data.get("models", []) or []
     permissions = data.get("permissions", []) or []
+    models_by_code, fields_by_model = _build_model_maps(models)
 
     lines: list[str] = [
         "# 应用设计文档",
@@ -166,32 +261,77 @@ def _render_design_doc_markdown(app_name: str, app_code: str, data: dict) -> str
         lines.append("")
 
     lines.extend(["---", "", "## 5. 表单配置", ""])
-    form_models = [model for model in models if (model.get("form_name") or model.get("form_code") or model.get("components"))]
-    if form_models:
-        for idx, model in enumerate(form_models, start=1):
+    form_defs = _iter_form_definitions(data, models)
+    if form_defs:
+        for idx, form in enumerate(form_defs, start=1):
+            form_name = form.get("formName") or form.get("form_name") or form.get("name") or form.get("code") or f"表单{idx}"
+            form_code = form.get("formCode") or form.get("form_code") or form.get("code") or ""
+            model_code = form.get("modelCode") or form.get("model_code") or form.get("bindModelCode") or form.get("code") or ""
+            components = form.get("components") or form.get("formComponents") or form.get("fields") or []
+            main_components = [comp for comp in components if not _is_sub_table_component(comp)]
+            sub_tables = [comp for comp in components if _is_sub_table_component(comp)]
             lines.extend([
-                f"### 5.{idx} 表单：{model.get('form_name') or model.get('name') or model.get('form_code') or f'表单{idx}'}",
+                f"### 5.{idx} 表单：{form_name}",
                 "",
                 "| 表单编码 | 表单名称 | 绑定主表模型编码 |",
                 "|---|---|---|",
-                f"| {model.get('form_code') or model.get('code') or ''} | {model.get('form_name') or model.get('name') or ''} | {model.get('code') or ''} |",
+                f"| {form_code} | {form_name} | {model_code} |",
                 "",
                 f"#### 5.{idx}.1 主表字段组件",
                 "",
-                "| 字段编码 | 字段名称 | 组件类型 | 是否只读 | 是否列表展示 | 是否查询条件 | 说明 |",
-                "|---|---|---|---|---|---|---|",
+                "| 字段编码 | 字段名称 | 组件类型 | 必填 | 隐藏 | 只读 | 列表展示 | 查询条件 | 说明 |",
+                "|---|---|---|---|---|---|---|---|---|",
             ])
-            fields = model.get("fields") or []
-            if fields:
-                for field in fields:
+            if main_components:
+                for component in main_components:
+                    field_code = str(component.get("code") or _field_code_from_model_field(component.get("modelField", ""))).strip()
+                    field_meta = fields_by_model.get(str(model_code).strip(), {}).get(field_code, {})
                     lines.append(
-                        f"| {field.get('code', '')} | {field.get('name', '')} | {field.get('component') or field.get('component_type') or field.get('ui_type') or field.get('type') or ''} | "
-                        f"{field.get('readonly', False) and '是' or '否'} | {field.get('list_visible', False) and '是' or '否'} | "
-                        f"{field.get('queryable', False) and '是' or '否'} | {field.get('description', '')} |"
+                        f"| {field_code} | {component.get('label') or component.get('name') or field_meta.get('name', '')} | "
+                        f"{_component_type_label(component.get('componentType') or component.get('component_type'), field_meta.get('type', ''))} | "
+                        f"{_bool_label(component.get('required'))} | {_bool_label(component.get('hidden'))} | {_bool_label(component.get('readonly') or component.get('readOnly'))} | "
+                        f"{_bool_label(component.get('showInList') or component.get('list_visible'))} | {_bool_label(component.get('searchable') or component.get('queryable'))} | "
+                        f"{component.get('description') or field_meta.get('description', '')} |"
                     )
             else:
-                lines.append("|  |  |  | 否 | 否 | 否 |  |")
-            lines.extend(["", f"#### 5.{idx}.2 子表区域", "", "无", ""])
+                lines.append("|  |  |  | 否 | 否 | 否 | 否 | 否 |  |")
+            lines.extend(["", f"#### 5.{idx}.2 子表区域", ""])
+            if sub_tables:
+                lines.extend([
+                    "| 子表模型编码 | 子表模型名称 | 子表显示名称 |",
+                    "|---|---|---|",
+                ])
+                for sub_idx, sub_table in enumerate(sub_tables, start=1):
+                    table_model_code = str(sub_table.get("tableModelCode") or sub_table.get("table_model_code") or "").strip()
+                    sub_model = models_by_code.get(table_model_code, {})
+                    sub_model_name = sub_model.get("name", "")
+                    sub_label = sub_table.get("label") or sub_table.get("name") or sub_model_name or table_model_code
+                    lines.append(f"| {table_model_code} | {sub_model_name} | {sub_label} |")
+                    lines.extend([
+                        "",
+                        f"##### 5.{idx}.2.{sub_idx} 子表：{sub_label}",
+                        "",
+                        "| 子表字段编码 | 子表字段名称 | 组件类型 | 必填 | 隐藏 | 只读 | 列表展示 | 查询条件 | 说明 |",
+                        "|---|---|---|---|---|---|---|---|---|",
+                    ])
+                    table_columns = sub_table.get("tableColumn") or sub_table.get("table_column") or []
+                    if table_columns:
+                        sub_fields = fields_by_model.get(table_model_code, {})
+                        for column in table_columns:
+                            column_code = str(column.get("code") or _field_code_from_model_field(column.get("modelField", ""))).strip()
+                            field_meta = sub_fields.get(column_code, {})
+                            lines.append(
+                                f"| {column_code} | {column.get('label') or column.get('name') or field_meta.get('name', '')} | "
+                                f"{_component_type_label(column.get('componentType') or column.get('component_type'), field_meta.get('type', ''))} | "
+                                f"{_bool_label(column.get('required'))} | {_bool_label(column.get('hidden'))} | {_bool_label(column.get('readonly') or column.get('readOnly'))} | "
+                                f"{_bool_label(column.get('showInList') or column.get('list_visible'))} | {_bool_label(column.get('searchable') or column.get('queryable'))} | "
+                                f"{column.get('description') or field_meta.get('description', '')} |"
+                            )
+                    else:
+                        lines.append("|  |  |  | 否 | 否 | 否 | 否 | 否 |  |")
+                    lines.append("")
+            else:
+                lines.extend(["无", ""])
     else:
         lines.append("暂无")
         lines.append("")
@@ -221,7 +361,6 @@ def _render_design_doc_markdown(app_name: str, app_code: str, data: dict) -> str
         lines.append("|  |  | 否 | 否 | 否 | 否 | 否 | 否 | 否 |  |")
 
     return "\n".join(lines).strip() + "\n"
-
 
 def _build_steps(config: dict, state: dict, apaas_app_id: str = None) -> list[StepStatus]:
     """根据 config 和 state 构建完整步骤列表。"""

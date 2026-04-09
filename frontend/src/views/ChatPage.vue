@@ -1014,10 +1014,103 @@ const loadedAppCode = ref('')
 const currentRemoteStatus = ref('')
 const lastParsedFilename = ref('')
 const latestDocContent = ref('')
+const latestParseMeta = ref<any | null>(null)
 const readyForGenerate = computed(() => !!store.currentApp && parseReady.value)
 const appParsedMode = computed(() => route.query.app_mode === 'parsed')
 const builderAppDisplayName = computed(() => store.preview.appName || store.currentApp?.name || '未命名应用')
 const displayAppCode = computed(() => parsedAppCode.value || loadedAppCode.value || buildAppCode(store.preview.appName))
+function formatParseMetaSummary(meta: any) {
+  const score = Number(meta?.standard_score)
+  if (!Number.isFinite(score)) return ''
+  const decisionMap: Record<string, string> = {
+    direct_parse: '直接解析',
+    rewrite_first: '先标准化再解析',
+    hybrid_fallback: '混合兜底解析',
+  }
+  const decision = decisionMap[String(meta?.decision || '').trim()] || String(meta?.decision || '').trim()
+  return decision ? `文档标准度：${score} 分（${decision}）` : `文档标准度：${score} 分`
+}
+
+function docExportComponentTypeLabel(value: any, modelType?: any) {
+  const labels: Record<string, string> = {
+    FORM_DOCUMENT_NUMBER: '单据号',
+    FORM_TEXT_INPUT: '单行输入',
+    FORM_TEXTAREA_INPUT: '多行输入',
+    FORM_TEXTAREA: '多行输入',
+    FORM_PHONE_INPUT: '手机号码',
+    FORM_EMAIL_INPUT: '电子邮箱',
+    FORM_SELECT_INPUT_SINGLE: '下拉单选',
+    FORM_SELECT_INPUT: '下拉多选',
+    FORM_SELECT: '下拉单选',
+    FORM_SELECT_MULTI: '下拉多选',
+    FORM_DATA_SELECTOR_SINGLE: '数据单选',
+    FORM_DATA_SELECTOR: '数据选择',
+    FORM_DATEPICK_INPUT: '日期时间',
+    FORM_DATE_PICKER: '日期时间',
+    FORM_MONEY_INPUT: '金额',
+    FORM_NUMBER_INPUT: '数字',
+    FORM_FILE_UPLOAD: '附件上传',
+    FORM_UPLOAD: '附件上传',
+    FORM_SWITCH_SELECT: '开关',
+    FORM_SWITCH: '开关',
+    FORM_PEOPLE_SELECT: '人员选择',
+    FORM_USER_SELECT: '人员选择',
+    FORM_DEPARTMENT_SELECT: '部门选择',
+    FORM_DEPT_SELECT: '部门选择',
+    FORM_WIDGET_LOCATION: '地理位置',
+    FORM_WIDGET_SON_TABLE: '子表',
+    FORM_RADIO_INPUT: '单选框',
+    FORM_RADIO: '单选框',
+    FORM_CHECKBOX_INPUT: '复选框',
+    FORM_CHECKBOX: '复选框',
+    FORM_RICH_TEXT: '富文本',
+    FORM_HYPERLINK_INPUT: '超链接',
+    FORM_LINK: '超链接',
+    FORM_IDCARD_INPUT: '身份证号',
+    FORM_ID_CARD: '身份证号',
+    FORM_WIDGET_AREA: '地区地址',
+    FORM_LOCATION: '地理位置',
+    FORM_ADDRESS: '地区地址',
+    FORM_ASSOCIATION: '关联表单',
+    FORM_SERIAL: '单据号',
+  }
+  const raw = String(value || '').trim()
+  const modelLabel = String(modelType || '').trim()
+  const label = labels[raw] || raw || modelLabel || '-'
+  if (label === '单行输入' && modelLabel && modelLabel !== '单行输入') return modelLabel
+  return label
+}
+
+function docExportFieldCode(modelField: any) {
+  const raw = String(modelField || '').trim()
+  return raw.includes('.') ? raw.split('.').pop() || '' : raw
+}
+
+function docExportBool(value: any) {
+  return value ? '是' : '否'
+}
+
+function isSubTableComponent(component: any) {
+  return String(component?.componentType || component?.component_type || '').trim() === 'FORM_WIDGET_SON_TABLE'
+}
+
+function docExportModelMaps(models: any[]) {
+  const modelsByCode = new Map<string, any>()
+  const fieldsByModel = new Map<string, Map<string, any>>()
+  ;(models || []).forEach((model: any) => {
+    const modelCode = String(model?.code || '')
+    if (!modelCode) return
+    modelsByCode.set(modelCode, model)
+    const fieldMap = new Map<string, any>()
+    ;(model?.fields || []).forEach((field: any) => {
+      const fieldCode = String(field?.code || '')
+      if (fieldCode) fieldMap.set(fieldCode, field)
+    })
+    fieldsByModel.set(modelCode, fieldMap)
+  })
+  return { modelsByCode, fieldsByModel }
+}
+
 const parsedDocResultForCard = computed(() => {
   if (!store.preview.appName && !store.preview.models.length && !store.preview.dicts.length && !store.preview.roles.length) {
     return null
@@ -3909,6 +4002,7 @@ function resetConversationWorkspace() {
   currentRemoteStatus.value = ''
   lastParsedFilename.value = ''
   latestDocContent.value = ''
+  latestParseMeta.value = null
   parseReady.value = false
   generating.value = false
   showEnvSelect.value = false
@@ -3967,6 +4061,7 @@ function resetPreviewForNewParse() {
   store.currentApp = null
   latestDocContent.value = ''
   lastParsedFilename.value = ''
+  latestParseMeta.value = null
   parseReady.value = false
 }
 
@@ -4410,7 +4505,11 @@ const uploadDocFile = async (file: File) => {
 
     lines.push(`**解析进度** ${percent}%`)
     lines.push(`当前步骤：${done ? '解析完成' : parseTracker.currentStep}`)
-    lines.push('')
+    const parseMetaSummary = formatParseMetaSummary(latestParseMeta.value)
+    if (parseMetaSummary) {
+      lines.push(parseMetaSummary)
+      lines.push('')
+    }
     for (const item of summaryItems) {
       const status = done ? 'done' : parseTracker[item.key]
       const icon = status === 'done' ? '✅' : status === 'running' ? '🔄' : '○'
@@ -4580,6 +4679,7 @@ const uploadDocFile = async (file: File) => {
     const pmsg = messages.find(m => m.id === progressMsgId)
 
     if (finalResult) {
+      latestParseMeta.value = finalResult.parse_meta || null
       conversationId.value = finalResult.conversation_id
       router.replace(`/chat/${finalResult.conversation_id}`)
       lastParsedFilename.value = file.name
@@ -4709,6 +4809,7 @@ const handleDocVersionUpload = async (file: File, appId: number) => {
   const fileText = await file.text()
   lastParsedFilename.value = file.name
   latestDocContent.value = fileText
+  latestParseMeta.value = null
   currentDocPreviewOverride.value = {
     id: -1,
     version: currentDocVersion.value,
@@ -4752,6 +4853,11 @@ const handleDocVersionUpload = async (file: File, appId: number) => {
       `当前步骤：${done ? '处理完成' : updateParseTracker.currentStep}`,
       '',
     ]
+    const parseMetaSummary = formatParseMetaSummary(latestParseMeta.value)
+    if (parseMetaSummary) {
+      lines.push(parseMetaSummary)
+      lines.push('')
+    }
 
     for (const phase of phases) {
       const status = done ? 'done' : updateParseTracker[phase.key]
@@ -4873,7 +4979,8 @@ const handleDocVersionUpload = async (file: File, appId: number) => {
               updateParseTracker.save = 'done'
               updateParseTracker.currentStep = '处理完成'
               changePlanData = data.change_plan || data
-              if (data.parsed_config) {
+              latestParseMeta.value = data.parse_meta || null
+      if (data.parsed_config) {
                 const pc = data.parsed_config.data || data.parsed_config
                 store.preview.appName = pc.appName || store.preview.appName
                 store.preview.models = pc.models || []
@@ -5798,13 +5905,14 @@ const buildDocMarkdownFromPreview = () => {
   const appName = store.preview.appName || '未命名应用'
   const appCode = displayAppCode.value
   const lines: string[] = []
+  const models = store.preview.models || []
+  const forms = store.preview.forms || []
+  const { modelsByCode, fieldsByModel } = docExportModelMaps(models)
 
-  // ── 一、应用信息 ────────────────────────────
   lines.push(`# ${appName}`, '', '## 一、应用信息', '')
   lines.push('| 应用编码 | 应用名称 |', '|---------|---------|')
   lines.push(`| ${appCode} | ${appName} |`, '', '---', '')
 
-  // ── 二、角色列表 ────────────────────────────
   lines.push('## 二、角色列表', '')
   const roles = store.preview.roles || []
   if (roles.length) {
@@ -5815,7 +5923,6 @@ const buildDocMarkdownFromPreview = () => {
   }
   lines.push('', '---', '')
 
-  // ── 三、数据字典 ────────────────────────────
   lines.push('## 三、数据字典', '')
   const dicts = store.preview.dicts || []
   if (dicts.length) {
@@ -5839,12 +5946,10 @@ const buildDocMarkdownFromPreview = () => {
   }
   lines.push('---', '')
 
-  // ── 四、数据模型 ────────────────────────────
   lines.push('## 四、数据模型', '')
-  const models = store.preview.models || []
   if (models.length) {
     models.forEach((model: any) => {
-      const tag = model?.table_type === '子表' ? '【子表】' : '【主表】'
+      const tag = model?.table_type === '子表' || model?.parent_code ? '【子表】' : '【主表】'
       lines.push(`### ${model?.name || model?.code || '未命名模型'}（${model?.code || ''}）${tag}`, '')
       lines.push('| 字段编码 | 字段名称 | 字段类型 | 字典编码 | 关联模型编码 | 关联显示字段编码 |')
       lines.push('|---------|---------|---------|---------|------------|----------------|')
@@ -5866,31 +5971,65 @@ const buildDocMarkdownFromPreview = () => {
   }
   lines.push('---', '')
 
-  // ── 五、表单配置 ────────────────────────────
   lines.push('## 五、表单配置', '')
-  const forms = store.preview.forms || []
   if (forms.length) {
-    forms.forEach((form: any) => {
-      lines.push(`### ${form?.formName || form?.name || form?.formCode || '未命名表单'}（${form?.formCode || form?.code || ''}）`, '')
-      lines.push(`绑定模型：${form?.modelCode || '-'}`, '')
-      lines.push('| 字段编码 | 字段名称 | 组件类型 | 是否只读 | 是否列表展示 | 是否查询条件 |')
-      lines.push('|---------|---------|---------|---------|------------|------------|')
+    forms.forEach((form: any, formIndex: number) => {
+      const formName = form?.formName || form?.name || form?.formCode || '未命名表单'
+      const formCode = form?.formCode || form?.code || ''
+      const modelCode = form?.modelCode || form?.bindModelCode || ''
+      const fieldMap = fieldsByModel.get(String(modelCode || '')) || new Map<string, any>()
       const components = form?.components || []
-      if (components.length) {
-        components.forEach((component: any) => {
-          lines.push(`| ${component?.code || ''} | ${component?.label || component?.name || ''} | ${component?.componentType || ''} | ${component?.readonly ? '是' : '否'} | ${component?.showInList ? '是' : '否'} | ${component?.searchable ? '是' : '否'} |`)
+      const mainComponents = components.filter((component: any) => !isSubTableComponent(component))
+      const subTables = components.filter((component: any) => isSubTableComponent(component))
+
+      lines.push(`### ${formName}（${formCode}）`, '')
+      lines.push(`绑定模型：${modelCode || '-'}`, '')
+      lines.push(`#### 5.${formIndex + 1}.1 主表字段组件`, '')
+      lines.push('| 字段编码 | 字段名称 | 组件类型 | 必填 | 隐藏 | 只读 | 列表展示 | 查询条件 | 说明 |')
+      lines.push('|---------|---------|---------|------|------|------|----------|----------|------|')
+      if (mainComponents.length) {
+        mainComponents.forEach((component: any) => {
+          const fieldCode = String(component?.code || docExportFieldCode(component?.modelField || ''))
+          const fieldMeta = fieldMap.get(fieldCode) || {}
+          lines.push(`| ${fieldCode} | ${component?.label || component?.name || fieldMeta?.name || ''} | ${docExportComponentTypeLabel(component?.componentType || component?.component_type, fieldMeta?.type)} | ${docExportBool(component?.required)} | ${docExportBool(component?.hidden)} | ${docExportBool(component?.readonly || component?.readOnly)} | ${docExportBool(component?.showInList || component?.list_visible)} | ${docExportBool(component?.searchable || component?.queryable)} | ${component?.description || fieldMeta?.description || ''} |`)
         })
       } else {
-        lines.push('| - | - | - | 否 | 否 | 否 |')
+        lines.push('| - | - | - | 否 | 否 | 否 | 否 | 否 | |')
       }
-      lines.push('')
+      lines.push('', `#### 5.${formIndex + 1}.2 子表区域`, '')
+      if (subTables.length) {
+        lines.push('| 子表模型编码 | 子表模型名称 | 子表显示名称 |')
+        lines.push('|---------------|--------------|--------------|')
+        subTables.forEach((subTable: any, subIndex: number) => {
+          const subModelCode = String(subTable?.tableModelCode || subTable?.table_model_code || '')
+          const subModel = modelsByCode.get(subModelCode) || {}
+          const subFields = fieldsByModel.get(subModelCode) || new Map<string, any>()
+          const subLabel = subTable?.label || subTable?.name || subModel?.name || subModelCode
+          lines.push(`| ${subModelCode} | ${subModel?.name || ''} | ${subLabel} |`)
+          lines.push('', `##### 5.${formIndex + 1}.2.${subIndex + 1} 子表：${subLabel}`, '')
+          lines.push('| 子表字段编码 | 子表字段名称 | 组件类型 | 必填 | 隐藏 | 只读 | 列表展示 | 查询条件 | 说明 |')
+          lines.push('|-------------|-------------|---------|------|------|------|----------|----------|------|')
+          const columns = subTable?.tableColumn || subTable?.table_column || []
+          if (columns.length) {
+            columns.forEach((column: any) => {
+              const fieldCode = String(column?.code || docExportFieldCode(column?.modelField || ''))
+              const fieldMeta = subFields.get(fieldCode) || {}
+              lines.push(`| ${fieldCode} | ${column?.label || column?.name || fieldMeta?.name || ''} | ${docExportComponentTypeLabel(column?.componentType || column?.component_type, fieldMeta?.type)} | ${docExportBool(column?.required)} | ${docExportBool(column?.hidden)} | ${docExportBool(column?.readonly || column?.readOnly)} | ${docExportBool(column?.showInList || column?.list_visible)} | ${docExportBool(column?.searchable || column?.queryable)} | ${column?.description || fieldMeta?.description || ''} |`)
+            })
+          } else {
+            lines.push('| - | - | - | 否 | 否 | 否 | 否 | 否 | |')
+          }
+          lines.push('')
+        })
+      } else {
+        lines.push('无', '')
+      }
     })
   } else {
     lines.push('暂无表单配置')
   }
   lines.push('---', '')
 
-  // ── 六、权限配置 ────────────────────────────
   lines.push('## 六、权限配置', '')
   const perms = store.preview.permissions || []
   if (perms.length) {

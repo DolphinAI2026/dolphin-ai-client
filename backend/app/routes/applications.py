@@ -1374,6 +1374,7 @@ async def upload_doc_with_conversation(
 
             # 取解析结果（若抛异常会在此处重新抛出）
             parse_result = parse_task.result()
+            parse_meta = parse_result.get("parse_meta", {}) if isinstance(parse_result, dict) else {}
             data = parse_result.get("data", parse_result)
 
             # ── 增量模式：用纯代码 diff 与 V1 config 对比，继承编码 ──
@@ -1535,13 +1536,6 @@ async def upload_doc_with_conversation(
             new_version = max_ver + 1
 
             config_json_str = _dump_parsed_config(data)
-            from app.routes.generation_steps import _render_design_doc_markdown
-
-            rendered_markdown = _render_design_doc_markdown(
-                data.get("appName", ""),
-                data.get("appCode", ""),
-                data,
-            )
 
             doc_ver = DocumentVersion(
                 application_id=None,
@@ -1549,7 +1543,7 @@ async def upload_doc_with_conversation(
                 version=new_version,
                 filename=fname,
                 content_hash=hashlib.sha256(text.encode()).hexdigest(),
-                raw_content=rendered_markdown,
+                raw_content=text,
                 parsed_config=config_json_str,
                 parent_version=max_ver if max_ver > 0 else None,
                 summary=f"{models_count} 模型, {dicts_count} 字典, {roles_count} 角色",
@@ -1562,6 +1556,7 @@ async def upload_doc_with_conversation(
                 "conversation_id": conv_id,
                 "summary": summary,
                 "preview": data,
+                "parse_meta": parse_meta,
                 "version": new_version,
                 "is_incremental": is_incremental,
             }
@@ -1788,6 +1783,7 @@ async def upload_doc_version(
 
             yield {"event": "progress", "data": json.dumps({"step": "parse", "message": "检查文档标准度..."}, ensure_ascii=False)}
             parse_result = await parse_document(text, llm_cfg=doc_llm_cfg, on_progress=_on_progress)
+            parse_meta = parse_result.get("parse_meta", {}) if isinstance(parse_result, dict) else {}
 
             for msg in progress_messages:
                 yield {"event": "progress", "data": json.dumps({"step": "parse", "message": msg}, ensure_ascii=False)}
@@ -1831,20 +1827,12 @@ async def upload_doc_version(
                     select(Application).where(Application.id == app_id_val)
                 )
                 app_obj = app_result.scalar_one()
-                from app.routes.generation_steps import _render_design_doc_markdown
-
-                rendered_markdown = _render_design_doc_markdown(
-                    app_obj.app_name or v2_config.get("appName", ""),
-                    app_obj.app_code or v2_config.get("appCode", ""),
-                    v2_config,
-                )
-
                 doc_ver = DocumentVersion(
                     application_id=app_id_val,
                     version=new_version,
                     filename=fname,
                     content_hash=content_hash,
-                    raw_content=rendered_markdown,
+                    raw_content=text,
                     structure_index=json.dumps(structure_index, ensure_ascii=False),
                     parsed_config=_dump_parsed_config(v2_config),
                     parent_version=max_ver if max_ver > 0 else None,
@@ -1900,6 +1888,7 @@ async def upload_doc_version(
                         "change_plan_id": change_plan.id,
                         "is_first_version": max_ver == 0,
                         "parsed_config": v2_config,
+                        "parse_meta": parse_meta,
                     }, ensure_ascii=False),
                 }
 
