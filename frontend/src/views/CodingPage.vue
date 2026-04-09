@@ -343,7 +343,10 @@
 
               <!-- 状态消息 -->
               <template v-else-if="msg.type === 'status'">
-                <div class="msg-status">
+                <div class="msg-status" :class="{
+                  'status-done': msg.content.startsWith('\u2713') || msg.content.startsWith('\u2705'),
+                  'status-progress': msg.content.endsWith('...')
+                }">
                   <span class="status-dot"></span>
                   <span class="status-content">{{ msg.content }}</span>
                 </div>
@@ -3332,44 +3335,65 @@ watch(() => route.path, () => {
 }
 
 /* ---- 错误卡片 ---- */
+/* ---- 状态完成/进行中变体 ---- */
+.msg-status.status-done {
+  color: var(--t-success);
+}
+.msg-status.status-done .status-dot {
+  background: var(--t-success);
+  opacity: 1;
+}
+.msg-status.status-progress {
+  color: var(--t-text-secondary);
+}
+
+/* ---- 错误卡片 ---- */
 .msg-error-card {
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  padding: 8px 12px;
-  background: var(--t-danger-subtle);
-  border: 1px solid rgba(239, 68, 68, 0.2);
-  border-left: 3px solid var(--t-danger);
-  border-radius: 6px;
-  color: var(--t-danger);
+  padding: 9px 12px;
+  background: rgba(239, 68, 68, 0.05);
+  border: 1px solid rgba(239, 68, 68, 0.15);
+  border-left: 2px solid var(--t-danger);
+  border-radius: var(--t-radius-sm);
+  color: var(--t-text-primary);
   font-size: 13px;
+  line-height: 1.55;
 }
 .error-icon {
   flex-shrink: 0;
-  font-size: 14px;
+  font-size: 13px;
+  color: var(--t-danger);
+  margin-top: 1px;
 }
 
-/* 流式加载指示器 */
+/* ---- 流式加载指示器 ---- */
 .stream-loading {
-  display: flex;
-  gap: 4px;
-  padding: 8px 0;
+  height: 2px;
+  background: var(--t-border-subtle);
+  border-radius: 2px;
+  overflow: hidden;
+  margin: 10px 4px 4px;
+  position: relative;
 }
-
 .stream-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--t-brand);
-  animation: dotPulse 1.4s infinite ease-in-out both;
+  display: none;
 }
-
-.stream-dot:nth-child(1) { animation-delay: -0.32s; }
-.stream-dot:nth-child(2) { animation-delay: -0.16s; }
-
-@keyframes dotPulse {
-  0%, 80%, 100% { transform: scale(0.4); opacity: 0.4; }
-  40% { transform: scale(1); opacity: 1; }
+.stream-loading::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: 35%;
+  background: var(--t-brand);
+  border-radius: 2px;
+  animation: loadingSlide 1.6s infinite ease-in-out;
+}
+@keyframes loadingSlide {
+  0%   { left: -35%; }
+  100% { left: 100%; }
 }
 
 /* 完成后操作区域 */
