@@ -1296,54 +1296,21 @@ def _normalize_widget_labels_in_dict(spec: FormComponentEditorSpec, data: dict) 
 
 
 def _normalize_widget_model_field_in_dict(spec: FormComponentEditorSpec, data: dict) -> None:
-    """推断并设置 componentModelField 和 frontBusinessObjectComponentType。"""
-    desc = data.get("desc") or {}
-    metadata = f"{spec.short_kebab} {desc.get('text', '')} {desc.get('description', '')}".lower()
+    """校正 componentModelField 和 frontBusinessObjectComponentType。
 
-    # 从 json.dumps 中提取 maxLength 等信息（兼容深层嵌套）
-    content_str = json.dumps(data)
-    max_length_values = [
-        int(v) for v in re.findall(
-            r'"(?:maxLength|maxlength|lengthLimit|textLimit)"\s*:\s*(\d+)', content_str
-        )
-    ]
-    if max_length_values and max(max_length_values) > STRING_COMPONENT_MODEL_FIELD_MAX_LENGTH:
-        model_field = "BIG_TEXT"
+    优先尊重 LLM 生成的值，只做：
+    1. 旧格式映射（TEXT→STRING、NUMBER→NUM 等）
+    2. 非法值兜底为 STRING
+    3. frontBusinessObjectComponentType 与 componentModelField 保持一致
+    """
+    existing = data.get("componentModelField")
+    if isinstance(existing, list) and existing:
+        raw = str(existing[0]).upper()
+        model_field = LEGACY_COMPONENT_MODEL_FIELD_MAP.get(raw)
+        if not model_field:
+            model_field = "STRING"  # 非法值兜底
     else:
-        big_text_keywords = (
-            "base64", "textarea", "rich-text", "富文本", "richtext", "html",
-            "remark", "memo", "comment", "描述", "大文本",
-            "upload", "文件", "file", "attachment", "附件",
-            "signature", "签名", "chart", "图表",
-        )
-        string_range_keywords = (
-            "date-range", "daterange", "datetimerange", "monthrange", "yearrange",
-            "timerange", "time-range", "numberrange", "number-range",
-            "range-picker", "rangepicker",
-        )
-        num_keywords = (
-            "star", "rating", "rate", "score", "number", "amount", "price",
-            "count", "percent", "progress", "slider", "stepper", "digit", "num", "评分",
-        )
-        date_keywords = (
-            "date-picker", "datepicker", "calendar", "日期", "date", "month", "year", "time",
-        )
-        if any(k in metadata for k in big_text_keywords):
-            model_field = "BIG_TEXT"
-        elif any(k in metadata for k in string_range_keywords):
-            model_field = "STRING"
-        elif any(k in metadata for k in num_keywords):
-            model_field = "NUM"
-        elif any(k in metadata for k in date_keywords):
-            model_field = "DATE"
-        else:
-            # 尊重现有值（如果合法）
-            existing = data.get("componentModelField")
-            if isinstance(existing, list) and existing:
-                mapped = LEGACY_COMPONENT_MODEL_FIELD_MAP.get(str(existing[0]).upper())
-                model_field = mapped if mapped else "STRING"
-            else:
-                model_field = "STRING"
+        model_field = "STRING"
 
     bof_type = COMPONENT_MODEL_FIELD_TO_BOF_TYPE[model_field]
     data["componentModelField"] = [model_field]
