@@ -19,7 +19,7 @@ router = APIRouter(prefix="/llm-configs", tags=["llm-configs"])
 # ── Provider presets ──
 PROVIDER_PRESETS = {
     "minimax": {"base_url": "https://api.minimax.chat/v1", "models": ["MiniMax-M2.7", "MiniMax-M1"]},
-    "qwen": {"base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "models": ["qwen3.5-plus", "qwen-max", "qwen-plus", "qwen-turbo", "qwen3-coder-next"]},
+    "qwen": {"base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "models": ["qwen3.5-plus", "qwen3.6-plus", "qwen-max", "qwen-plus", "qwen-turbo", "qwen3-coder-next"]},
     "deepseek": {"base_url": "https://api.deepseek.com/v1", "models": ["deepseek-chat", "deepseek-coder"]},
     "zhipu": {"base_url": "https://open.bigmodel.cn/api/paas/v4", "models": ["glm-4-plus", "glm-4"]},
     "moonshot": {"base_url": "https://api.moonshot.cn/v1", "models": ["moonshot-v1-128k", "moonshot-v1-32k"]},
