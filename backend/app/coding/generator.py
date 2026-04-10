@@ -275,14 +275,16 @@ class CodingGenerator:
         """根据用户输入自动识别开发场景"""
         detect_prompt = """根据用户的需求描述，判断属于以下哪种aPaaS自开发场景，只返回场景代码，不要其他内容。
 
+**重要**：用户消息可能附带 API 文档等背景资料，请只根据用户**明确表达的开发意图**（通常在消息开头）来判断场景，忽略附带文档中的干扰词汇。
+
 判断规则（优先级从高到低）：
-1. 含有"Spring Boot / Java / Maven / Controller / Service / REST API / HTTP接口 / 后端服务"等明确后端关键词 → backend_api
+1. 含有"Spring Boot / Java / Maven / Controller / Service / REST API / 后端服务"等明确后端关键词（用户自己要开发的，不是调用的）→ backend_api
 2. 含有"定时任务 / cron / @Scheduled"→ backend_scheduled
 3. 含有"FeignClient / 调用外部接口 / HTTP调用"→ backend_feign
-4. 含有"页面 / Page / 菜单 / 路由"且不是组件 → web_page
-5. 含有"组件 / 控件 / Widget / 选择器 / 输入框 / 下拉 / 表格组件 / 选取 / 选择"等前端UI词汇 → web_component
-6. "接口"一词本身**不能**作为判断后端的依据，需结合上下文
-7. 默认倾向前端：含义模糊时优先选 web_component 而不是 backend_api
+4. 含有"页面 / Page / 菜单 / 路由 / 看板 / 仪表盘 / 大屏"且描述的是一个完整页面 → web_page
+5. 含有"组件 / 控件 / Widget / 选择器 / 输入框 / 下拉"且描述的是一个可复用UI组件 → web_component
+6. "接口"一词**不能**单独作为判断后端的依据（前端页面也会调用接口）
+7. 含义模糊时优先选 web_component
 
 场景列表：
 - web_component: Web端自开发组件（表单组件、输入控件、选择器、数据选择组件等前端UI组件）
