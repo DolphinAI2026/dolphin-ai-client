@@ -1297,12 +1297,14 @@ async def run_coding_pipeline(
 
         elif not is_iteration and scene_type in BRAINSTORM_SCENES:
             # 新建工作区：先生成设计方案，等用户确认后再生成代码
+            yield _record_event({"type": "step", "step": "brainstorm", "status": "running"})
             proposal = await _generate_brainstorm_proposal(
                 params.tenant_id, effective_model, params.message, scene_type
             )
             if proposal:
                 await save_coding_message(db, conversation_id, "assistant",
                                           BRAINSTORM_PROPOSAL_MARKER + proposal)
+                yield _record_event({"type": "step", "step": "brainstorm", "status": "done"})
                 yield _record_event({"type": "content", "content": proposal})
                 ide_url = _build_ide_url_for_pipeline(params, ws_id, conversation_id, effective_model)
                 yield _record_event({
@@ -1312,6 +1314,7 @@ async def run_coding_pipeline(
                 })
                 return
             # proposal 生成失败时降级：直接走代码生成
+            yield _record_event({"type": "step", "step": "brainstorm", "status": "done"})
             logger.warning("Brainstorm proposal generation failed, falling back to direct codegen")
 
         # ---- Agent 代码生成 ----

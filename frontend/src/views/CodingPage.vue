@@ -1536,6 +1536,12 @@ async function sendMessage() {
               localStorage.setItem('coding_last_workspace_id', wsData.id)
               try { allWorkspaces.value = await codingApi.listWorkspaces() } catch {}
             }
+          } else if (stepKey === 'brainstorm') {
+            if (stepStatus === 'running') {
+              addStepRunningMsg('正在生成需求确认...', 'brainstorm')
+            } else if (stepStatus === 'done') {
+              completeStepMsg('brainstorm', '需求确认已生成')
+            }
           } else if (stepKey === 'generate') {
             if (stepStatus === 'running') {
               addStepRunningMsg('AI 开始编写代码...', 'generate')
