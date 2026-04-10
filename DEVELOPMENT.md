@@ -97,21 +97,28 @@ apaas-builder-ai/
 cd backend
 source venv/bin/activate
 python run.py
-# 默认端口 8001
+# 端口由 backend/.env 中 PORT 决定，默认 8000
 ```
 
 **前端：**
 ```bash
 cd frontend
 npm run dev
-# 默认端口 5173
+# 默认端口 5173（代理到后端 8000）
+```
+
+**code-server（本地 IDE）：**
+```bash
+~/code-server/bin/code-server
+# 配置文件：~/.config/code-server/config.yaml（bind-addr: 127.0.0.1:8080, auth: none）
 ```
 
 ### 访问地址
 
 - 前端：http://localhost:5173
-- 后端 API：http://localhost:8001
-- 远程环境：https://agent.dfy.definesys.cn/ai-builder/
+- 后端 API：http://localhost:8000
+- code-server：http://localhost:8080
+- 线上环境：https://agent.dfy.definesys.cn/ai-builder/
 
 ## 技术栈
 
