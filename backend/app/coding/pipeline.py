@@ -1073,8 +1073,8 @@ async def run_coding_pipeline(
                     scene_type = SceneType.SCRIPT_JS
             else:
                 # 始终用 AI 从 message 识别场景，project_type 仅作降级兜底
-                # 只取前500字，避免附带的 API 文档等长内容干扰识别
-                intent_snippet = params.message[:500]
+                # 只取第一行（用户的直接意图），避免后面附带的 API 文档等内容干扰识别
+                intent_snippet = params.message.split("\n")[0][:300]
                 fallback = PROJECT_TYPE_TO_SCENE.get(params.project_type or "", SceneType.WEB_COMPONENT)
                 try:
                     scene_type = await generator.detect_scene(intent_snippet)

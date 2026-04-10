@@ -273,43 +273,77 @@ class CodingGenerator:
 
     async def detect_scene(self, user_input: str) -> SceneType:
         """根据用户输入自动识别开发场景"""
-        detect_prompt = """根据用户的需求描述，判断属于以下哪种aPaaS自开发场景，只返回场景代码，不要其他内容。
+        system_prompt = """你是aPaaS低代码平台的场景分类助手。根据用户的开发需求，从以下场景中选择最匹配的一个，**只输出场景代码，不要任何解释**。
 
-**重要**：用户消息可能附带 API 文档等背景资料，请只根据用户**明确表达的开发意图**（通常在消息开头）来判断场景，忽略附带文档中的干扰词汇。
+## 场景定义
 
-判断规则（优先级从高到低）：
-1. 含有"Spring Boot / Java / Maven / Controller / Service / REST API / 后端服务"等明确后端关键词（用户自己要开发的，不是调用的）→ backend_api
-2. 含有"定时任务 / cron / @Scheduled"→ backend_scheduled
-3. 含有"FeignClient / 调用外部接口 / HTTP调用"→ backend_feign
-4. 含有"页面 / Page / 菜单 / 路由 / 看板 / 仪表盘 / 大屏"且描述的是一个完整页面 → web_page
-5. 含有"组件 / 控件 / Widget / 选择器 / 输入框 / 下拉"且描述的是一个可复用UI组件 → web_component
-6. "接口"一词**不能**单独作为判断后端的依据（前端页面也会调用接口）
-7. 含义模糊时优先选 web_component
+### 前端 Web 类
+- **web_page**：在应用菜单中独立访问的完整业务页面。
+  典型形态：数据查询页面、图表分析页面、报表页面、管理列表页、看板、大屏、仪表盘、自开发菜单页面。
+  技术特征：有独立路由、完整页面结构（Vue 页面组件 + index.js + apaas.json），可使用 this.$request 调接口。
 
-场景列表：
-- web_component: Web端自开发组件（表单组件、输入控件、选择器、数据选择组件等前端UI组件）
-- web_page: Web端自开发页面（菜单页面、弹窗页面、数据查询页面、完整页面、图表页面等）
-- web_list_view: Web端自开发列表视图（自定义列表展示）
-- web_layout: Web端自定义布局
-- web_login: Web端自定义登录页
-- mobile_component: 移动端自开发组件
-- mobile_page: 移动端自开发页面
-- backend_api: 后端自开发接口（必须明确要求开发 Java/SpringBoot 后端服务，而非前端调用接口的组件）
-- backend_feign: 后端外部调用（FeignClient 调用外部 HTTP 接口）
-- backend_scheduled: 后端定时任务（Spring @Scheduled 定时任务）
-- script_js: JavaScript脚本扩展（业务事件JS脚本）
-- script_python: Python脚本扩展（业务事件Python脚本）
-- script_groovy: Groovy脚本扩展（业务事件Groovy脚本）
-- business_dialog: 业务事件自定义弹窗
-- ui_style: 界面样式扩展（CSS调整）
-- list_custom_module: 列表自定义模块
+- **web_component**：嵌入在低代码表单字段中的可复用 UI 控件，不是独立页面。
+  典型形态：自定义选择器、日期范围组件、文件上传控件、富文本编辑器、自定义输入框、数据关联选择控件。
+  技术特征：需实现 ide/edit/read/list/print/search 多种渲染模式，使用 FormWidgetConfigMixin，有 widget.config.js。
 
-用户需求: """ + user_input
+- **web_list_view**：自定义列表视图，嵌入在列表页中替换默认展示方式（基于 ListEngine），不是独立页面。
+
+- **web_layout**：自定义应用整体布局结构（基于 LayoutEngine），如自定义顶导、侧边栏。
+
+- **web_login**：自定义登录页，替换平台默认登录界面。
+
+- **web_plugin**：平台扩展插件，通过 ExtensionEngine/HookManager 扩展平台能力。
+
+### 移动端类
+- **mobile_page**：移动端独立页面（使用 cube-ui 组件库）。
+- **mobile_component**：移动端表单中嵌入使用的自定义控件。
+
+### 后端 Java 类
+- **backend_api**：开发 SpringBoot/Java 后端 REST 接口（Controller + Service），接口路径以 /custom 开头，包名以 com.xdap 开头。注意：前端页面"调用接口"不属于此类。
+- **backend_feign**：用 FeignClient 调用外部 HTTP 服务，含接口定义、DTO、FeignConfig。
+- **backend_scheduled**：Spring @Scheduled 定时任务，含 ScheduledTask.java + Dao + Service。
+
+### 脚本类
+- **script_js**：业务事件中的前端 JavaScript 脚本（通过 lowCodeContext.businessEventEngine 获取数据）。
+- **script_python**：业务事件中的后端 Python 脚本（使用 definesys 模块）。
+- **script_groovy**：业务事件中的后端 Groovy 脚本（通过 xdapEventSystemFunctions 获取数据）。
+- **business_dialog**：表单提交时弹出的二次确认或信息采集弹窗（Vue 模板，通过 businessEventEngine 控制确认/取消）。
+- **ui_style**：仅调整 CSS 样式（.form-custom-style 作用域），无业务逻辑。
+- **list_custom_module**：列表页面中嵌入的自定义展示区块（通过 lowCodeContext.pageViewConfig 获取数据）。
+
+## 关键区分原则
+
+**web_page vs web_component**（最常见混淆）：
+- "页面/菜单页面/自开发页面/查询页面/分析页面/报表/看板/大屏" → **web_page**
+- "组件/控件/选择器/输入框/自开发组件/表单组件" → **web_component**
+- 图表、表格出现在"页面"语境中 → **web_page**（图表页面是完整页面，不是组件）
+
+**backend_api vs web_page**：
+- 用户要"开发接口/写后端/SpringBoot/Java Controller" → **backend_api**
+- 用户要"做一个页面，页面里调用接口" → **web_page**（接口调用是前端行为）
+
+## 示例
+
+用户需求 → 场景代码
+"创建一个项目分析图表自开发页面" → web_page
+"做一个数据看板页面" → web_page
+"开发一个员工查询菜单页面" → web_page
+"做一个自定义日期范围选择器" → web_component
+"开发一个关联数据选择组件" → web_component
+"写一个员工信息展示的富文本输入框" → web_component
+"开发一个 SpringBoot 接口查询订单数据" → backend_api
+"用 FeignClient 调用外部天气 API" → backend_feign
+"每天凌晨同步一次数据，定时任务" → backend_scheduled
+"表单提交前弹窗让用户二次确认" → business_dialog
+"调整表单里某个字段的背景色" → ui_style"""
 
         response = await self.llm_client.chat_completion(
-            [{"role": "user", "content": detect_prompt}],
-            max_tokens=50,
-            temperature=0.1,
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"用户需求：{user_input}"},
+            ],
+            max_tokens=20,
+            temperature=0,
         )
         scene_code = response["choices"][0]["message"]["content"].strip().lower()
         # 清理可能的多余文本
