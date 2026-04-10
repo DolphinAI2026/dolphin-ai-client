@@ -430,8 +430,8 @@
               </template>
             </div>
 
-            <!-- 流式加载指示器 -->
-            <div v-if="isStreaming" class="stream-loading">
+            <!-- 流式加载指示器：仅在没有活跃的进行中步骤消息时显示（避免和 status-progress 重复） -->
+            <div v-if="isStreaming && !streamMessages.some(m => m.type === 'status' && !m.stepDone && !m.hidden && m.content.endsWith('...'))" class="stream-loading">
               <span class="stream-dot"></span>
               <span class="stream-dot"></span>
               <span class="stream-dot"></span>
