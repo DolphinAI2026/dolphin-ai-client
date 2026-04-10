@@ -3090,24 +3090,33 @@ watch(() => route.path, () => {
   box-shadow: 0 2px 8px var(--t-brand-glow);
   word-break: break-word;
 }
-/* 用户消息内的 Markdown 覆盖白色主题 */
+/* 用户消息内的 Markdown — 全部强制白色系 */
+.user-markdown,
+.user-markdown * { color: #fff !important; }
 .user-markdown p { margin: 0 0 6px; }
 .user-markdown p:last-child { margin-bottom: 0; }
-.user-markdown ul, .user-markdown ol { margin: 4px 0 6px 16px; padding: 0; }
+.user-markdown ul, .user-markdown ol { margin: 4px 0 6px 18px; padding: 0; }
 .user-markdown li { margin: 2px 0; }
-.user-markdown strong { color: #fff; font-weight: 600; }
+.user-markdown strong { font-weight: 600; }
+.user-markdown a { text-decoration: underline; opacity: 0.9; }
 .user-markdown code {
-  background: rgba(255,255,255,0.2);
-  color: #fff;
+  background: rgba(255,255,255,0.2) !important;
   padding: 1px 5px;
   border-radius: 4px;
   font-size: 12.5px;
 }
-.user-markdown h1, .user-markdown h2, .user-markdown h3 {
-  color: #fff;
+.user-markdown pre {
+  background: rgba(0,0,0,0.2) !important;
+  padding: 8px 12px;
+  border-radius: 6px;
+  overflow-x: auto;
+}
+.user-markdown h1, .user-markdown h2, .user-markdown h3,
+.user-markdown h4, .user-markdown h5, .user-markdown h6 {
   margin: 6px 0 4px;
   font-size: 14px;
   font-weight: 600;
+  border-bottom: none !important;
 }
 
 /* ---- AI 显式消息（设计方案等 Markdown 块） ---- */
