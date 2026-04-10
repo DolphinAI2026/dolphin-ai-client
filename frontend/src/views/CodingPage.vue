@@ -3098,7 +3098,7 @@ watch(() => route.path, () => {
 .user-markdown li { margin: 2px 0; color: #fff; }
 .user-markdown strong { color: #fff; font-weight: 600; }
 .user-markdown em { color: rgba(255,255,255,0.9); }
-.user-markdown a { color: rgba(255,255,255,0.85); text-decoration: underline; }
+.user-markdown a { color: rgba(255,255,255,0.85) !important; text-decoration: underline; }
 .user-markdown h1, .user-markdown h2, .user-markdown h3,
 .user-markdown h4, .user-markdown h5, .user-markdown h6 {
   color: #fff;
