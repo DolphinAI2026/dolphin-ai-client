@@ -310,7 +310,7 @@
             >
               <!-- 用户消息 -->
               <template v-if="msg.type === 'user'">
-                <div class="msg-user-bubble">{{ msg.content }}</div>
+                <div class="msg-user-bubble user-markdown markdown-body" v-html="renderMarkdown(msg.content)"></div>
               </template>
 
               <!-- AI 显式消息（brainstorm 提案等，始终展开，Markdown 渲染） -->
@@ -3089,6 +3089,29 @@ watch(() => route.path, () => {
   margin-bottom: 4px;
   box-shadow: 0 2px 8px var(--t-brand-glow);
   word-break: break-word;
+}
+/* 用户消息 Markdown 元素样式 */
+.user-markdown p { margin: 0 0 6px; }
+.user-markdown p:last-child { margin-bottom: 0; }
+.user-markdown ul, .user-markdown ol { margin: 4px 0 6px 18px; padding: 0; }
+.user-markdown li { margin: 2px 0; }
+.user-markdown strong { color: #fff; font-weight: 600; }
+.user-markdown em { color: rgba(255,255,255,0.9); }
+.user-markdown a { color: rgba(255,255,255,0.85); text-decoration: underline; }
+.user-markdown h1, .user-markdown h2, .user-markdown h3,
+.user-markdown h4, .user-markdown h5, .user-markdown h6 {
+  color: #fff;
+  margin: 6px 0 4px;
+  font-size: 14px;
+  font-weight: 600;
+  border-bottom: none;
+}
+.user-markdown code {
+  background: rgba(255,255,255,0.2);
+  color: #fff;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 12.5px;
 }
 
 /* ---- AI 显式消息（设计方案等 Markdown 块） ---- */
