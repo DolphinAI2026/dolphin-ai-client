@@ -33,7 +33,7 @@
         >
           <!-- 左：返回首页 -->
           <button class="toggle-bar-back-btn" @click="startNewWorkspace" title="返回首页">
-            <el-icon :size="14"><ArrowLeft /></el-icon>
+            <el-icon :size="16"><ArrowLeft /></el-icon>
             <span>返回</span>
           </button>
 
@@ -1778,7 +1778,7 @@ watch(() => route.path, () => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 12px 4px;
+  padding: 10px 16px 8px;
   flex-shrink: 0;
   border-bottom: 1px solid var(--t-border-subtle);
 }
@@ -1786,13 +1786,13 @@ watch(() => route.path, () => {
 .toggle-bar-back-btn {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px 10px;
+  gap: 6px;
+  padding: 7px 16px;
   border: 1px solid var(--t-border-subtle);
-  border-radius: 6px;
+  border-radius: 8px;
   background: transparent;
   color: var(--t-text-secondary);
-  font-size: 12px;
+  font-size: 14px;
   cursor: pointer;
   transition: all 0.15s ease;
 }
@@ -1802,7 +1802,7 @@ watch(() => route.path, () => {
 }
 
 .toggle-bar-placeholder {
-  width: 70px; /* 与返回按钮等宽，保持切换居中 */
+  width: 88px; /* 与返回按钮等宽，保持切换居中 */
 }
 
 .view-toggle {
@@ -1818,13 +1818,13 @@ watch(() => route.path, () => {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 4px 10px;
+  padding: 6px 14px;
   border: none;
   border-radius: 6px;
   background: transparent;
   color: var(--t-text-tertiary);
   cursor: pointer;
-  font-size: 12px;
+  font-size: 13px;
   transition: all 0.2s ease;
 }
 .view-toggle-btn:hover:not(.disabled) {
@@ -3586,7 +3586,7 @@ watch(() => route.path, () => {
 /* ============ Chat Input Bar (stream-pane 底部) ============ */
 .chat-input-bar {
   flex-shrink: 0;
-  padding: 10px 24px 14px;
+  padding: 10px 16px 14px;
   border-top: 1px solid var(--t-border-subtle);
   background: var(--t-bg-base);
 }
@@ -3594,8 +3594,6 @@ watch(() => route.path, () => {
   display: flex;
   align-items: flex-end;
   gap: 8px;
-  max-width: 800px;
-  margin: 0 auto;
   background: var(--t-bg-panel);
   border: 1px solid var(--t-border-strong);
   border-radius: 14px;
