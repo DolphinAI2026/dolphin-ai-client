@@ -3302,6 +3302,27 @@ watch(() => route.path, () => {
   overflow: hidden;
   word-break: break-all;
 }
+/* 进行中状态：底部扫光进度条 */
+.status-progress {
+  position: relative;
+  padding-bottom: 5px;
+}
+.status-progress::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, transparent 0%, var(--t-brand, #4f6ef7) 50%, transparent 100%);
+  background-size: 200% 100%;
+  animation: progress-sweep 1.4s ease-in-out infinite;
+}
+@keyframes progress-sweep {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
 
 /* 步骤完成 badge 芯片 */
 .msg-step-badge {
