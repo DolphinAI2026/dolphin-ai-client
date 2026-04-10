@@ -970,15 +970,14 @@ const showEnvPicker = ref(false)
 const platformEnvs = ref<PlatformEnv[]>([])
 
 const wsTypeGroupMap: Record<string, { key: string; icon: string; label: string; order: number }> = {
-  'form-component':   { key: 'component-pc',     icon: '\uD83E\uDDE9', label: 'PC \u7EC4\u4EF6',     order: 1 },
-  'menu-page':        { key: 'page-pc',          icon: '\uD83D\uDDA5\uFE0F', label: 'PC \u9875\u9762',     order: 2 },
-  'form-page':        { key: 'page-pc',          icon: '\uD83D\uDDA5\uFE0F', label: 'PC \u9875\u9762',     order: 2 },
-  'form-list':        { key: 'list-view',         icon: '\uD83D\uDCCB', label: '\u5217\u8868\u89C6\u56FE',   order: 3 },
-  'layout':           { key: 'layout',            icon: '\uD83D\uDCD0', label: '\u5E94\u7528\u5E03\u5C40',   order: 4 },
-  'plugin':           { key: 'plugin',            icon: '\uD83D\uDD0C', label: '\u6269\u5C55\u63D2\u4EF6',   order: 5 },
-  'backend-api':      { key: 'backend',           icon: '\u2699\uFE0F', label: '\u540E\u7AEF\u63A5\u53E3',   order: 6 },
-  'backend-feign':    { key: 'backend',           icon: '\uD83D\uDD17', label: '\u5916\u90E8\u8C03\u7528',  order: 6 },
-  'backend-scheduled':{ key: 'backend',           icon: '\u23F0', label: '\u5B9A\u65F6\u4EFB\u52A1',  order: 6 },
+  'form-component':    { key: 'component-pc',     icon: '🧩', label: 'PC 组件',       order: 1 },
+  'menu-page':         { key: 'page-pc',          icon: '🖥️', label: 'PC 页面',       order: 2 },
+  'form-page':         { key: 'page-pc',          icon: '🖥️', label: 'PC 页面',       order: 2 },
+  'mobile-component':  { key: 'component-mobile', icon: '📱', label: 'Mobile 组件',   order: 3 },
+  'mobile-page':       { key: 'page-mobile',      icon: '📱', label: 'Mobile 页面',   order: 4 },
+  'backend-api':       { key: 'backend',          icon: '⚙️', label: '后端接口',      order: 5 },
+  'backend-feign':     { key: 'backend',          icon: '⚙️', label: '后端接口',      order: 5 },
+  'backend-scheduled': { key: 'backend',          icon: '⚙️', label: '后端接口',      order: 5 },
 }
 
 function workspaceDisplayName(ws: WorkspaceInfo | null | undefined) {
@@ -1067,59 +1066,40 @@ function onUploadEnvSelected(envId: number) {
 const sceneCategories = [
   { key: 'component-pc', icon: '\uD83E\uDDE9', label: 'PC\u7EC4\u4EF6' },
   { key: 'page-pc', icon: '\uD83D\uDDA5\uFE0F', label: 'PC\u9875\u9762' },
-  { key: 'list-view', icon: '\uD83D\uDCCB', label: '\u5217\u8868\u89C6\u56FE' },
-  { key: 'layout', icon: '\uD83D\uDCD0', label: '\u5E94\u7528\u5E03\u5C40' },
-  { key: 'plugin', icon: '\uD83D\uDD0C', label: '\u6269\u5C55\u63D2\u4EF6' },
+  { key: 'component-mobile', icon: '\uD83D\uDCF1', label: 'Mobile\u7EC4\u4EF6' },
+  { key: 'page-mobile', icon: '\uD83D\uDCF1', label: 'Mobile\u9875\u9762' },
   { key: 'backend', icon: '\u2699\uFE0F', label: '\u540E\u7AEF\u63A5\u53E3' },
-  { key: 'backend-feign', icon: '\uD83D\uDD17', label: '\u5916\u90E8\u8C03\u7528' },
-  { key: 'backend-scheduled', icon: '\u23F0', label: '\u5B9A\u65F6\u4EFB\u52A1' },
 ]
 
 const sceneSuggestions: Record<string, string[]> = {
   'component-pc': [
-    '\u5F00\u53D1\u4E00\u4E2A\u5934\u50CF\u4E0A\u4F20\u7EC4\u4EF6\uFF0C\u652F\u6301\u88C1\u526A\u548C\u9884\u89C8',
-    '\u5B9E\u73B0\u4E00\u4E2A\u65E5\u671F\u8303\u56F4\u9009\u62E9\u5668\u7EC4\u4EF6',
-    '\u505A\u4E00\u4E2A\u8BC4\u5206\u7EC4\u4EF6\uFF0C\u652F\u6301\u534A\u661F\u548C\u81EA\u5B9A\u4E49\u989C\u8272',
-    '\u521B\u5EFA\u4E00\u4E2A\u56FE\u8868\u5206\u6790\u7EC4\u4EF6\uFF0C\u652F\u6301\u67F1\u72B6\u56FE\u548C\u997C\u56FE',
+    '开发一个头像上传组件，支持裁剪和预览',
+    '实现一个日期范围选择器组件',
+    '做一个评分组件，支持半星和自定义颜色',
+    '创建一个图表分析组件，支持柱状图和饼图',
   ],
   'page-pc': [
-    '\u505A\u4E00\u4E2A\u6570\u636E\u67E5\u8BE2\u8868\u683C\u9875\u9762\uFF0C\u5E26\u641C\u7D22\u548C\u5206\u9875',
-    '\u5F00\u53D1\u4E00\u4E2A\u4F9B\u5E94\u5546\u7BA1\u7406\u5F39\u7A97\u9009\u62E9\u9875\u9762',
-    '\u521B\u5EFA\u4E00\u4E2A\u9879\u76EE\u5206\u6790\u56FE\u8868\u9875\u9762',
-    '\u505A\u4E00\u4E2A\u5BA1\u6279\u6D41\u7A0B\u9875\u9762\uFF0C\u652F\u6301\u591A\u7EA7\u5BA1\u6279',
+    '做一个数据查询表格页面，带搜索和分页',
+    '开发一个供应商管理弹窗选择页面',
+    '创建一个项目分析图表页面',
+    '做一个审批流程页面，支持多级审批',
   ],
-  'list-view': [
-    '\u81EA\u5B9A\u4E49\u4E00\u4E2A\u5361\u7247\u5F0F\u5217\u8868\u89C6\u56FE\uFF0C\u652F\u6301\u5207\u6362\u5361\u7247/\u8868\u683C\u6A21\u5F0F',
-    '\u5F00\u53D1\u4E00\u4E2A\u5E26\u6811\u5F62\u5BFC\u822A\u7684\u5217\u8868\u89C6\u56FE',
-    '\u505A\u4E00\u4E2A\u7518\u7279\u56FE\u5F0F\u7684\u9879\u76EE\u8FDB\u5EA6\u5217\u8868\u89C6\u56FE',
-    '\u521B\u5EFA\u4E00\u4E2A\u770B\u677F\u5F0F\u7684\u4EFB\u52A1\u5217\u8868\u89C6\u56FE',
+  'component-mobile': [
+    '开发一个移动端签名板组件',
+    '做一个移动端图片选择上传组件',
+    '实现一个移动端级联选择器组件',
+    '创建一个移动端评分组件',
   ],
-  layout: [
-    '\u505A\u4E00\u4E2A\u5E26\u9876\u90E8\u516C\u544A\u680F\u7684\u81EA\u5B9A\u4E49\u5E03\u5C40',
-    '\u521B\u5EFA\u4E00\u4E2A\u53CC\u680F\u5E03\u5C40\uFF0C\u5DE6\u4FA7\u83DC\u5355\u53EF\u6298\u53E0',
-    '\u5F00\u53D1\u4E00\u4E2A\u6697\u8272\u4E3B\u9898\u7684\u81EA\u5B9A\u4E49\u5E94\u7528\u5E03\u5C40',
-  ],
-  plugin: [
-    '\u5F00\u53D1\u4E00\u4E2A\u5E94\u7528\u8BE6\u60C5\u9875\u7684\u81EA\u5B9A\u4E49Tab\u63D2\u4EF6',
-    '\u505A\u4E00\u4E2A\u81EA\u5B9A\u4E49\u9762\u677F\u6269\u5C55\uFF0C\u663E\u793A\u7EDF\u8BA1\u6570\u636E',
-    '\u521B\u5EFA\u4E00\u4E2A\u7CFB\u7EDF\u901A\u77E5\u7BA1\u7406\u6269\u5C55\u63D2\u4EF6',
+  'page-mobile': [
+    '做一个移动端数据查询列表页面',
+    '开发一个移动端审批详情页面',
+    '创建一个移动端任务看板页面',
+    '做一个移动端个人信息编辑页面',
   ],
   backend: [
-    '\u5F00\u53D1\u4E00\u4E2A\u81EA\u5B9A\u4E49\u6570\u636E\u67E5\u8BE2\u63A5\u53E3',
-    '\u505A\u4E00\u4E2A\u6279\u91CF\u5BFC\u5165\u7684\u540E\u7AEF\u63A5\u53E3',
-    '\u521B\u5EFA\u4E00\u4E2A\u62A5\u8868\u7EDF\u8BA1\u7684\u540E\u7AEFAPI',
-  ],
-  'backend-feign': [
-    '\u8C03\u7528\u5916\u90E8 ERP \u7CFB\u7EDF\u7684\u5E93\u5B58\u67E5\u8BE2\u63A5\u53E3',
-    '\u96C6\u6210\u7B2C\u4E09\u65B9\u77ED\u4FE1\u670D\u52A1\u53D1\u9001\u901A\u77E5',
-    '\u5BF9\u63A5\u5916\u90E8 OA \u7CFB\u7EDF\u83B7\u53D6\u4EBA\u5458\u4FE1\u606F',
-    '\u8C03\u7528\u5916\u90E8\u5929\u6C14 API \u83B7\u53D6\u5B9E\u65F6\u6570\u636E',
-  ],
-  'backend-scheduled': [
-    '\u6BCF\u5929\u51CC\u6668\u540C\u6B65\u5916\u90E8\u7CFB\u7EDF\u6570\u636E\u5230\u672C\u5730',
-    '\u6BCF\u5C0F\u65F6\u68C0\u67E5\u5E76\u5904\u7406\u8D85\u65F6\u672A\u5B8C\u6210\u7684\u4EFB\u52A1',
-    '\u6BCF\u5468\u751F\u6210\u5E76\u53D1\u9001\u4E1A\u52A1\u6C47\u603B\u62A5\u8868',
-    '\u5B9A\u65F6\u6E05\u7406\u8FC7\u671F\u65E5\u5FD7\u548C\u4E34\u65F6\u6570\u636E',
+    '开发一个自定义数据查询接口',
+    '做一个批量导入的后端接口',
+    '创建一个报表统计的后端API',
   ],
 }
 
@@ -1129,12 +1109,9 @@ const pendingSceneCategory = ref<string | null>(null)
 const sceneCategoryToProjectType: Record<string, string> = {
   'component-pc': 'form-component',
   'page-pc': 'menu-page',
-  'list-view': 'form-list',
-  layout: 'layout',
-  plugin: 'plugin',
+  'component-mobile': 'mobile-component',
+  'page-mobile': 'mobile-page',
   backend: 'backend-api',
-  'backend-feign': 'backend-feign',
-  'backend-scheduled': 'backend-scheduled',
 }
 
 // ============ Lifecycle ============
