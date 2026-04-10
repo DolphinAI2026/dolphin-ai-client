@@ -1073,9 +1073,11 @@ async def run_coding_pipeline(
                     scene_type = SceneType.SCRIPT_JS
             else:
                 # 始终用 AI 从 message 识别场景，project_type 仅作降级兜底
+                # 只取前500字，避免附带的 API 文档等长内容干扰识别
+                intent_snippet = params.message[:500]
                 fallback = PROJECT_TYPE_TO_SCENE.get(params.project_type or "", SceneType.WEB_COMPONENT)
                 try:
-                    scene_type = await generator.detect_scene(params.message)
+                    scene_type = await generator.detect_scene(intent_snippet)
                 except Exception:
                     scene_type = fallback
             yield _record_event({"type": "step", "step": "detect_scene", "status": "done", "data": {"scene_type": scene_type.value}})
