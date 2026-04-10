@@ -3091,14 +3091,13 @@ watch(() => route.path, () => {
   word-break: break-word;
 }
 /* 用户消息 Markdown 元素样式 */
-.user-markdown { color: #fff; }
-.user-markdown p { margin: 0 0 6px; color: #fff; }
+.user-markdown p { margin: 0 0 6px; }
 .user-markdown p:last-child { margin-bottom: 0; }
 .user-markdown ul, .user-markdown ol { margin: 4px 0 6px 18px; padding: 0; }
-.user-markdown li { margin: 2px 0; color: #fff; }
+.user-markdown li { margin: 2px 0; }
 .user-markdown strong { color: #fff; font-weight: 600; }
 .user-markdown em { color: rgba(255,255,255,0.9); }
-.user-markdown a { color: rgba(255,255,255,0.85) !important; text-decoration: underline; }
+.user-markdown a { color: rgba(255,255,255,0.85); text-decoration: underline; }
 .user-markdown h1, .user-markdown h2, .user-markdown h3,
 .user-markdown h4, .user-markdown h5, .user-markdown h6 {
   color: #fff;
@@ -3107,29 +3106,13 @@ watch(() => route.path, () => {
   font-weight: 600;
   border-bottom: none;
 }
-/* 行内 code 背景半透明，不改颜色 */
-.user-markdown :not(pre) > code {
-  background: rgba(255,255,255,0.15);
+.user-markdown code {
+  background: rgba(255,255,255,0.2);
+  color: #fff;
   padding: 1px 5px;
   border-radius: 4px;
   font-size: 12.5px;
 }
-/* pre 代码块：保留原色，背景加深 */
-.user-markdown pre {
-  background: rgba(0,0,0,0.25);
-  border-radius: 6px;
-  padding: 10px 14px;
-  overflow-x: auto;
-}
-/* 表格：边框改为半透明白色 */
-.user-markdown table { border-collapse: collapse; width: 100%; margin: 6px 0; }
-.user-markdown th, .user-markdown td {
-  border: 1px solid rgba(255,255,255,0.35);
-  padding: 5px 10px;
-  color: #fff;
-}
-.user-markdown th { background: rgba(255,255,255,0.15); font-weight: 600; }
-.user-markdown tr:nth-child(even) { background: rgba(255,255,255,0.06); }
 
 /* ---- AI 显式消息（设计方案等 Markdown 块） ---- */
 .msg-ai-message {
