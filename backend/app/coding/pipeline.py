@@ -1066,19 +1066,18 @@ async def run_coding_pipeline(
 
         if not is_iteration:
             yield _record_event({"type": "step", "step": "detect_scene", "status": "running"})
-            if params.project_type:
-                if params.project_type in ("script",):
-                    try:
-                        scene_type = await generator.detect_scene(params.message)
-                    except Exception:
-                        scene_type = SceneType.SCRIPT_JS
-                else:
-                    scene_type = PROJECT_TYPE_TO_SCENE.get(params.project_type, SceneType.WEB_COMPONENT)
-            else:
+            if params.project_type in ("script",):
                 try:
                     scene_type = await generator.detect_scene(params.message)
                 except Exception:
-                    scene_type = SceneType.WEB_COMPONENT
+                    scene_type = SceneType.SCRIPT_JS
+            else:
+                # 始终用 AI 从 message 识别场景，project_type 仅作降级兜底
+                fallback = PROJECT_TYPE_TO_SCENE.get(params.project_type or "", SceneType.WEB_COMPONENT)
+                try:
+                    scene_type = await generator.detect_scene(params.message)
+                except Exception:
+                    scene_type = fallback
             yield _record_event({"type": "step", "step": "detect_scene", "status": "done", "data": {"scene_type": scene_type.value}})
             # 通知前端 scene_detected + conversation_id（如果已有）
             yield _record_event({"type": "scene_detected", "conversation_id": conversation_id})
