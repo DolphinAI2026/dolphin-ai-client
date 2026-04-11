@@ -1,9 +1,6 @@
 name: 部署到线上环境
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
 jobs:
@@ -53,8 +50,11 @@ jobs:
       - name: 配置 SSH
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.SERVER_SSH_KEY }}" > ~/.ssh/deploy_key
+          # 用 printf 写入，避免 echo 丢失换行导致密钥格式损坏
+          printf '%s' "${{ secrets.SERVER_SSH_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
+          # 验证密钥格式
+          ssh-keygen -l -f ~/.ssh/deploy_key
           ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
 
       - name: 上传后端
