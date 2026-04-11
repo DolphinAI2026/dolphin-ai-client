@@ -62,7 +62,7 @@ alwaysApply: true
     │   ├── form-editor/
     │   │   └── index.js
     │   └── form-widget/
-    │       ├── form-component-demo.widget.config.js // "demo" 小部件的配置
+    │       ├── form-component-demo.widget.config.json // "demo" 小部件的配置
     │       └── index.js
     ├── form-component-local/ // 表单组件的本地化/国际化 (i18n) 文件
     │   ├── index.js          // (@src/form-component-local/index.js)
@@ -118,7 +118,7 @@ alwaysApply: true
 
 #### 表单组件配置文件代码示例
 
-src/form-component-config/form-widget/form-component-rate.widget.config.js
+src/form-component-config/form-widget/form-component-rate.widget.config.json
 ```js
 const FormComponentRateWidgetConfig = {
   version: 2.0, // 组件版本
@@ -269,7 +269,7 @@ export default FormComponentRateWidgetConfig
 
 src/form-component-config/form-widget/index.js
 ```js
-import FormComponentRateWidgetConfig from './form-component-rate.widget.config'
+import FormComponentRateWidgetConfig from './form-component-rate.widget.config.json'
 
 const widgetConfigList = [
   FormComponentRateWidgetConfig
