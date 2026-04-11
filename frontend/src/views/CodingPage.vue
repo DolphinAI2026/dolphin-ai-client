@@ -1601,6 +1601,7 @@ async function sendMessage() {
           codingStore.conversationId = parsed.conversation_id
         } else if (parsed.type === 'done') {
           isStreaming.value = false
+          isCreating.value = false  // 立即解除输入框禁用，后续 API 在后台继续
           codingStore.conversationId = parsed.conversation_id
           if (parsed.conversation_id) {
             persistedCodingModelValue.value = normalizeCodingModelValue(selectedCodingModelValue.value)
