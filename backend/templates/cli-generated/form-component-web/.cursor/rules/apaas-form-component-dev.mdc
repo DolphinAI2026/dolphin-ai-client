@@ -60,9 +60,10 @@ alwaysApply: true
     ├── form-component-config/ // 表单组件的配置文件
     │   ├── index.js           // (@src/form-component-config/index.js)
     │   ├── form-editor/
+    │   │   ├── form-component-demo.editor.config.json // "demo" 设计器的配置（JSON 格式）
     │   │   └── index.js
     │   └── form-widget/
-    │       ├── form-component-demo.widget.config.json // "demo" 小部件的配置
+    │       ├── form-component-demo.widget.config.json // "demo" 小部件的配置（JSON 格式）
     │       └── index.js
     ├── form-component-local/ // 表单组件的本地化/国际化 (i18n) 文件
     │   ├── index.js          // (@src/form-component-local/index.js)
@@ -119,152 +120,117 @@ alwaysApply: true
 #### 表单组件配置文件代码示例
 
 src/form-component-config/form-widget/form-component-rate.widget.config.json
-```js
-const FormComponentRateWidgetConfig = {
-  version: 2.0, // 组件版本
-  code: 'FORM_CUSTOM_COMPONENT_RATE', // 组件编码
-  desc: { // 组件描述信息
-    iconType: 'DEFAULT', // 组件icon类型
-    icon: `svg html代码`, // 必须是符合组件功能的内联 SVG 字符串，禁止使用 form-custom-widget 或空字符串
-    // 组件名称
-    text: '评分', // 必须是符合当前组件语义的标题
-    // 组件具体描述
-    description: '评分' // 必须是符合当前组件语义的描述，禁止使用 demo component 之类占位
+```json
+{
+  "version": 2.0,
+  "code": "FORM_CUSTOM_RATE",
+  "desc": {
+    "iconType": "DEFAULT",
+    "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\"><path d=\"M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z\" fill=\"#F5A623\"/></svg>",
+    "text": "评分",
+    "description": "星级评分组件，支持自定义星数和半星"
   },
-  // 组件实例参数
-  instance: {
-    uuid: '$itemUuid',
-    inTable: false
+  "instance": {
+    "uuid": "$itemUuid",
+    "inTable": false
   },
-  // 在不同地方渲染的Vue组件的name
-  component: {
-    ide: 'FormComponentRateIde', // 在表单设计状态下使用的组件
-    edit: 'FormComponentRateEdit', // 在可编辑（弹窗）状态下使用的组件
-    read: 'FormComponentRateRead', // 在查看（抽屉）状态下使用的组件
-    list: 'FormComponentRateList', // 在前台列表的表格上显示的组件
-    association: 'FormComponentRateAssociation', // 在关联表单的表格上显示的组件
-    lov: 'FormComponentRateLov', // 在数据选择弹窗的表格上显示的组件
-    print: 'FormComponentRatePrint', // 在系统打印中显示的组件
-    search: 'FormComponentRateSearch', // 在前台列表查询面板上显示的组件
-    searchIde: 'FormComponentRateSearchIde' // 在后台列表设计中查询面板显示的组件
+  "component": {
+    "ide": "FormComponentRateIde",
+    "edit": "FormComponentRateEdit",
+    "read": "FormComponentRateRead",
+    "list": "FormComponentRateList",
+    "print": "FormComponentRatePrint",
+    "search": "FormComponentRateSearch",
+    "searchIde": "FormComponentRateSearchIde"
   },
-  // 组件配置以及组件配置的默认值
-  widget: {
-    // 控制组件展示的这类配置的默认值
-    display: {
-      // 组件标题名称默认值
-      label: '评分', // 必须与 desc.text 保持一致
-      width: 6, // 组件宽带默认值
-      mobileWidth: 12, // 组件移动端宽带默认值
-      height: 1, // 组件高度默认值
-      hidden: false, // 组件是否隐藏默认值
-      readOnly: false, // 组件是否只读默认值
-      required: false, // 组件是否必填默认值
-      onlyCreateEdit: false // 是否只仅新建可编辑默认值
+  "widget": {
+    "display": {
+      "label": "评分",
+      "width": 6,
+      "mobileWidth": 12,
+      "height": 1,
+      "hidden": false,
+      "readOnly": false,
+      "required": false,
+      "onlyCreateEdit": false
     },
-    // 控制组件是否被允许进行某些操作的这类配置的默认值
-    allow: {
-      // calcRule: false,
-      useInTableColumn: true // 组件是否允许在表格列中使用
-      // scanCode: false
+    "allow": {
+      "calcRule": false,
+      "useInTableColumn": true,
+      "scanCode": false,
+      "copy": false
     },
-    // 控制组件的默认值的这类配置的默认值
-    default: {
-      customDefaultKey: 'defaultValue', // 默认值的key
-      value: 0 // 默认值
+    "default": {
+      "customDefaultKey": "defaultValue",
+      "value": null
     },
-    // 控制组件校验规则的这类配置的默认值
-    validator: {
-      uniqueCheck: false, // 唯一性校验默认值
-      numberMax: 5 // 数字最大值校验默认值
+    "validator": {
+      "uniqueCheck": false
     },
-    // 控制组件的特殊配置这类配置的默认值
-    special: {
-      frontBusinessObjectComponentType: 'BOF_NUMBER', // 前端业务对象组件类型默认值
-      saveWithHidden: false, // 隐藏时是否保存
-      customComponentConfig: {
-          allowHalf: false,
-          showText: false,
-          texts: [],
-          selfNum:5,
-      },
+    "special": {
+      "frontBusinessObjectComponentType": "BOF_NUMBER",
+      "saveWithHidden": false,
+      "customComponentConfig": {
+        "allowHalf": false,
+        "showText": false,
+        "texts": [],
+        "selfNum": 5
+      }
     },
-    // 表单设计时组件的配置项
-    editor: {
-      // Web端表单设计，该组件所包含的所有配置code数组
-      config: [
-        'INFO', // 组件信息
-        'LABEL', // 标题名称
-        'FIELD_CODE', // 字段编码
-        'TITLE_DESCRIPTION', // 标题说明
-        'WIDTH', // 宽度
-        'FORM_CUSTOM_COMPONENT_RATE_SETTING', // 评分设置
-        // 'FORMULA_RULE', // 公式规则
-        'HIDDEN', // 是否隐藏
-        'READONLY', // 是否只读
-        'REQUIRED', // 是否必填
-        'EDITONNEW', // 仅新建可编辑
-        'UNIQUE', // 唯一性校验
-        'HIDDEN_SAVE', // 隐藏时提交
-        'HIDDEN_TRIGGER', // 隐藏时触发
-        'TRIGGER_BUSINESS_EVENTS' // 触发业务事件
+    "editor": {
+      "config": [
+        "INFO",
+        "LABEL",
+        "FIELD_CODE",
+        "TITLE_DESCRIPTION",
+        "WIDTH",
+        "FORM_CUSTOM_RATE_SETTING",
+        "HIDDEN",
+        "READONLY",
+        "REQUIRED",
+        "EDITONNEW",
+        "UNIQUE",
+        "HIDDEN_SAVE",
+        "HIDDEN_TRIGGER",
+        "TRIGGER_BUSINESS_EVENTS"
       ],
-      // 如果组件拖入到子表内，需要排除的配置code数组
-      excludeInTable: ['WIDTH'] // 将宽度排除
+      "excludeInTable": ["WIDTH"]
     }
   },
-  componentModelField: ['NUM'],
-  // 不同客户端的相关配置
-  client: {
-    // 移动端配置
-    mobile: {
-      // 组件配置
-      widget: {
-        // 表单设计时组件的配置项
-        editor: {
-          // 移动端表单设计，该组件所包含的所有配置code数组
-          config: [
-            'INFO', // 组件信息
-            'LABEL', // 标题名称
-            'FIELD_CODE', // 字段编码
-            'TITLE_DESCRIPTION', // 标题说明
-            'WIDTH', // 宽度
-            'FORM_CUSTOM_COMPONENT_RATE_SETTING', // 评分设置
-            // 'FORMULA_RULE', // 公式规则
-            'HIDDEN', // 是否隐藏
-            'READONLY', // 是否只读
-            'REQUIRED', // 是否必填
-            'EDITONNEW', // 仅新建可编辑
-            'UNIQUE', // 唯一性校验
-            'HIDDEN_SAVE', // 隐藏时提交
-            'HIDDEN_TRIGGER', // 隐藏时触发
-            'TRIGGER_BUSINESS_EVENTS' // 触发业务事件
+  "client": {
+    "mobile": {
+      "widget": {
+        "editor": {
+          "config": [
+            "INFO",
+            "LABEL",
+            "FIELD_CODE",
+            "TITLE_DESCRIPTION",
+            "WIDTH",
+            "FORM_CUSTOM_RATE_SETTING",
+            "HIDDEN",
+            "READONLY",
+            "REQUIRED",
+            "EDITONNEW",
+            "UNIQUE",
+            "HIDDEN_SAVE",
+            "HIDDEN_TRIGGER",
+            "TRIGGER_BUSINESS_EVENTS"
           ],
-          // 如果组件拖入到子表内，需要排除的配置code数组
-          excludeInTable: ['WIDTH']  // 将宽度排除
+          "excludeInTable": ["WIDTH"]
         }
       },
-      // 在不同地方渲染的Vue组件的name
-      component: {
-        ide: 'MobileFormComponentRateIde', // 在表单设计状态下使用的组件
-        edit: 'MobileFormComponentRateEdit', // 在可编辑（弹窗）状态下使用的组件
-        read: 'MobileFormComponentRateRead', // 在查看（抽屉）状态下使用的组件
-        list: 'MobileFormComponentRateList', // 在前台列表的表格上显示的组件
-        association: 'MobileFormComponentRateAssociation', // 在关联表单的表格上显示的组件
-        lov: 'MobileFormComponentRateLov', // 在数据选择弹窗的表格上显示的组件
-        tableColumn: 'MobileFormComponentRateTableColumn' // 在子表组件的卡片上和表格上显示的组件
+      "component": {
+        "ide": "MobileFormComponentRateIde",
+        "edit": "MobileFormComponentRateEdit",
+        "read": "MobileFormComponentRateRead"
       }
     }
   },
-  methods: {
-
-  },
-  formatValueSchema: {
-    
-  }
+  "componentModelField": ["NUM"],
+  "methods": {},
+  "formatValueSchema": {}
 }
-
-export default FormComponentRateWidgetConfig
 ```
 
 src/form-component-config/form-widget/index.js
@@ -595,21 +561,19 @@ export default printFormComponentList
 - `setting.vue` 固定路径为 `src/form-component/form-editor/{name}-setting.vue`，不要放到 `src/form-component-config/form-editor/`；
 - 所有配置项都必须在 form-component-config/form-editor/ 中注册后，才能在右侧面板中正常显示。
 
-src/form-component-config/form-editor/form-component-rate.editor.config.js
-```js
-const FormComponentRateEditorConfig = {
-    code: 'FORM_CUSTOM_COMPONENT_RATE_SETTING', // 组件code
-    editorConfigType: 'FORM_CUSTOM_COMPONENT_RATE_SETTING',
-    componentName: 'FormComponentRateSetting', // 组件名
-    configProperty: 'customComponentConfig', // 默认
+src/form-component-config/form-editor/form-component-rate.editor.config.json
+```json
+{
+  "code": "FORM_CUSTOM_RATE_SETTING",
+  "editorConfigType": "FORM_CUSTOM_RATE_SETTING",
+  "componentName": "FormComponentRateSetting",
+  "configProperty": "customComponentConfig"
 }
-
-export default FormComponentRateEditorConfig;
 ```
 
 src/form-component-config/form-editor/index.js
 ```js
-import FormComponentRateEditorConfig from "./form-component-rate.editor.config";
+import FormComponentRateEditorConfig from "./form-component-rate.editor.config.json"
 
 const editorConfigList = [
     FormComponentRateEditorConfig
