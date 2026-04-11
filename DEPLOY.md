@@ -186,6 +186,43 @@ PYEOF
 
 ---
 
+## 容器化部署注意事项（未来规划）
+
+> 当前线上为**主机部署**（进程直接跑在云主机上），以下为未来容器化时需要关注的差异点。
+
+### 差异对比
+
+| 项目 | 主机部署（当前） | 容器部署 |
+|---|---|---|
+| 工作区数据 | 本地磁盘 `/root/apaas-builder/workspaces/` | 必须挂载持久化 volume，否则重启丢失 |
+| code-server 路径 | 与后端共享本地文件系统 | 需通过共享 volume 挂载到两个容器 |
+| Node.js 环境 | 主机已安装 | 镜像内需预装 Node.js |
+| dev server 端口 | 直接可被 nginx 访问 | 需用 `--network=host` 或显式 expose 端口 |
+| nginx 转发 | `proxy_pass http://127.0.0.1:8003` | 改为容器服务名，如 `proxy_pass http://apaas-backend:8003` |
+| 配置文件 | `.env` 文件放在服务器上 | 改用 Docker secrets 或 `env_file` 挂载，不打入镜像 |
+
+### 关键注意点
+
+**1. 工作区 volume 挂载**
+```yaml
+volumes:
+  - /data/workspaces:/root/apaas-builder/workspaces
+```
+
+**2. code-server 与后端共享工作区**
+
+code-server 和后端需挂载同一个 volume，且路径必须一致，因为后端传给 code-server 的 `folder=` 参数是绝对路径。
+
+**3. dev server 端口访问**
+
+最小改动方案：后端容器使用 `--network=host`，nginx 仍可用 `127.0.0.1:{port}` 访问 dev server，行为与主机部署一致。
+
+**4. 最小迁移路径**
+
+先用单容器 + `--network=host` 模式，把后端和 code-server 打进同一镜像，改动最小，验证稳定后再拆分。
+
+---
+
 ## 线上目录结构
 
 ```
