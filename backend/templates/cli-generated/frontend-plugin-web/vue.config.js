@@ -1,5 +1,4 @@
 const { defineConfig } = require('@vue/cli-service')
-const fs = require('fs')
 const md5 = require('md5')
 const apaasJson = require('./src/apaas.json')
 
@@ -11,7 +10,6 @@ module.exports = defineConfig({
     port: '8080',
     hot: true,
     allowedHosts: 'all',
-    https: {  key: fs.readFileSync('./https/server.key'),  cert: fs.readFileSync('./https/server.crt')},
     headers: {  'Access-Control-Allow-Origin': '*'},
     client: {
       overlay: false

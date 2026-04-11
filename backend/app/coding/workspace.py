@@ -2859,17 +2859,7 @@ export default { install, activate, staticComponents }
 
         # vue.config.js
         self._write(ws_path, "vue.config.js", """const { defineConfig } = require('@vue/cli-service')
-const fs = require('fs')
 const apaasJson = require('./src/apaas.json')
-
-function loadHttps() {
-  const keyPath = './https/server.key'
-  const certPath = './https/server.crt'
-  if (fs.existsSync(keyPath) && fs.existsSync(certPath)) {
-    return { key: fs.readFileSync(keyPath), cert: fs.readFileSync(certPath) }
-  }
-  return false
-}
 
 module.exports = defineConfig({
   transpileDependencies: true,
@@ -2879,7 +2869,6 @@ module.exports = defineConfig({
     port: '8080',
     hot: true,
     allowedHosts: 'all',
-    https: loadHttps(),
     headers: { 'Access-Control-Allow-Origin': '*' },
     client: { overlay: false }
   },
@@ -3672,7 +3661,6 @@ export default EditorFormConfigMixin
 
         # ======== vue.config.js ========
         self._write(ws_path, "vue.config.js", """const { defineConfig } = require('@vue/cli-service')
-const fs = require('fs')
 const path = require('path')
 const apaasJson = require('./src/apaas.json')
 
@@ -3686,16 +3674,6 @@ module.exports = defineConfig({
     port: isPreview ? 8090 : 8080,
     hot: true,
     allowedHosts: 'all',
-    ...(isPreview ? {} : {
-      https: (() => {
-        const keyPath = './https/server.key'
-        const certPath = './https/server.crt'
-        if (fs.existsSync(keyPath) && fs.existsSync(certPath)) {
-          return { key: fs.readFileSync(keyPath), cert: fs.readFileSync(certPath) }
-        }
-        return false
-      })()
-    }),
     headers: { 'Access-Control-Allow-Origin': '*' },
     client: { overlay: false }
   },
@@ -3929,7 +3907,6 @@ export default {{
         }, indent=2, ensure_ascii=False))
 
         self._write(ws_path, "vue.config.js", """const { defineConfig } = require('@vue/cli-service')
-const fs = require('fs')
 const md5 = require('md5')
 const apaasJson = require('./src/apaas.json')
 
@@ -3941,7 +3918,6 @@ module.exports = defineConfig({
     port: '8080',
     hot: true,
     allowedHosts: 'all',
-    https: { key: fs.readFileSync('./https/server.key'), cert: fs.readFileSync('./https/server.crt') },
     headers: { 'Access-Control-Allow-Origin': '*' },
     client: { overlay: false }
   },
@@ -4123,7 +4099,6 @@ export default {{
 
         # ======== vue.config.js ========
         self._write(ws_path, "vue.config.js", """const { defineConfig } = require('@vue/cli-service')
-const fs = require('fs')
 const path = require('path')
 const apaasJson = require('./src/apaas.json')
 
@@ -4137,16 +4112,6 @@ module.exports = defineConfig({
     port: isPreview ? 8090 : 8080,
     hot: true,
     allowedHosts: 'all',
-    ...(isPreview ? {} : {
-      https: (() => {
-        const keyPath = './https/server.key'
-        const certPath = './https/server.crt'
-        if (fs.existsSync(keyPath) && fs.existsSync(certPath)) {
-          return { key: fs.readFileSync(keyPath), cert: fs.readFileSync(certPath) }
-        }
-        return false
-      })()
-    }),
     headers: { 'Access-Control-Allow-Origin': '*' },
     client: { overlay: false },
     proxy: {
@@ -5059,7 +5024,6 @@ new Vue({{
         }, indent=2, ensure_ascii=False))
 
         self._write(ws_path, "vue.config.js", """const { defineConfig } = require('@vue/cli-service')
-const fs = require('fs')
 const apaasJson = require('./src/apaas.json')
 
 module.exports = defineConfig({
@@ -5070,7 +5034,6 @@ module.exports = defineConfig({
     port: '8080',
     hot: true,
     allowedHosts: 'all',
-    https: { key: fs.readFileSync('./https/server.key'), cert: fs.readFileSync('./https/server.crt') },
     headers: { 'Access-Control-Allow-Origin': '*' },
     client: { overlay: false }
   },
