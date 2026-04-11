@@ -1616,7 +1616,11 @@ async function sendMessage() {
             // 只在代码生成完成后（非 brainstorm 等待阶段）才设置 IDE URL
             // 避免 brainstorm 阶段用重命名前的旧路径预加载 iframe
             pendingIdeUrl.value = parsed.ide_url
-            setIdeUrl(parsed.ide_url)
+            // IDE 未打开时才主动加载；已打开时只更新 pendingIdeUrl
+            // 避免迭代完成后因路径变化重建 iframe 导致闪屏，用户点按钮时再加载
+            if (!ideUrl.value) {
+              setIdeUrl(parsed.ide_url)
+            }
           }
           if ('Notification' in window && Notification.permission === 'granted') {
             if (parsed.waiting_confirmation) {
