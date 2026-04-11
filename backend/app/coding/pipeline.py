@@ -1011,6 +1011,16 @@ async def _classify_brainstorm_response(
     LLM 分类用户对设计方案的回复意图。
     Returns: 'confirm' | 'revise' | 'abort'
     """
+    # 快速关键词判断，避免 LLM 分类不稳定
+    msg_lower = user_message.strip().lower()
+    _CONFIRM_KEYWORDS = {"好的", "可以", "没问题", "确认", "开始", "生成", "同意", "ok", "yes", "对", "行", "好"}
+    _ABORT_KEYWORDS = {"取消", "不做了", "算了", "放弃", "abort"}
+    _REVISE_KEYWORDS = {"改", "修改", "不对", "应该", "加", "删", "换", "调整", "需要", "要"}
+    if any(kw in msg_lower for kw in _ABORT_KEYWORDS):
+        return "abort"
+    if any(kw in msg_lower for kw in _CONFIRM_KEYWORDS) and not any(kw in msg_lower for kw in _REVISE_KEYWORDS):
+        return "confirm"
+
     prompt = (
         "判断用户对设计方案的回复意图，只回复 CONFIRM、REVISE 或 ABORT，不要其他内容。\n\n"
         "- CONFIRM：确认方案、同意、开始生成（如：好的、没问题、可以、开始、ok、对）\n"
@@ -1028,9 +1038,9 @@ async def _classify_brainstorm_response(
         answer = answer.upper()
         if "ABORT" in answer:
             return "abort"
-        if "CONFIRM" in answer:
-            return "confirm"
-        return "revise"
+        if "REVISE" in answer:
+            return "revise"
+        return "confirm"  # 兜底确认，避免死循环
     except Exception:
         return "confirm"  # 分类失败时默认确认，避免死循环
 
