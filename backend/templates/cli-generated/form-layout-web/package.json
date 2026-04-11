@@ -9,7 +9,7 @@
   "author": "AI Coding",
   "scripts": {
     "lint": "vue-cli-service lint",
-    "serve": "vue-cli-service serve src/index.js",
+    "serve": "node .vibe-serve.js src/index.js",
     "debug": "df-apaas-cli debug",
     "build": "df-apaas-cli build"
   },

@@ -44,6 +44,46 @@ def _resolve_workspace_root() -> Path:
 
 
 WORKSPACE_ROOT = _resolve_workspace_root()
+
+# .vibe-serve.js — 包装 vue-cli-service serve，完成后打印公网 proxy 地址
+_VIBE_SERVE_JS = """\
+'use strict'
+const { spawn } = require('child_process')
+const fs = require('fs')
+const path = require('path')
+
+let proxyBase = ''
+try {
+  const cfg = fs.readFileSync(path.join(__dirname, '.vibe-serve-config'), 'utf8')
+  const m = cfg.match(/^PROXY_BASE=(.+)$/m)
+  if (m) proxyBase = m[1].trim()
+} catch (_) {}
+
+const args = ['vue-cli-service', 'serve', ...process.argv.slice(2)]
+const proc = spawn('npx', args, { cwd: __dirname, stdio: ['inherit', 'pipe', 'pipe'], env: process.env })
+
+let announced = false
+function handleLine(line) {
+  process.stdout.write(line + '\\n')
+  if (!announced) {
+    const m = line.match(/Local:\\s+https?:\\/\\/localhost:(\\d+)/)
+    if (m) {
+      if (proxyBase) process.stdout.write('\\n  Public:  ' + proxyBase + '/proxy/' + m[1] + '/\\n\\n')
+      announced = true
+    }
+  }
+}
+function pipeStream(s) {
+  let buf = ''
+  s.setEncoding('utf8')
+  s.on('data', c => { buf += c; const lines = buf.split('\\n'); buf = lines.pop(); lines.forEach(handleLine) })
+  s.on('end', () => { if (buf) handleLine(buf) })
+}
+pipeStream(proc.stdout)
+pipeStream(proc.stderr)
+proc.on('exit', code => process.exit(code ?? 0))
+"""
+
 WORKSPACE_SEARCH_ROOTS = tuple(
     root for idx, root in enumerate((WORKSPACE_ROOT, LEGACY_WORKSPACE_ROOT))
     if root not in (WORKSPACE_ROOT, LEGACY_WORKSPACE_ROOT)[:idx]
@@ -2125,7 +2165,7 @@ dist/
             "private": True,
             "scripts": {
                 "lint": "vue-cli-service lint",
-                "serve": "vue-cli-service serve src/index.js",
+                "serve": "node .vibe-serve.js src/index.js",
                 "debug": "df-apaas-cli debug",
                 "build": "df-apaas-cli build",
             },
@@ -2158,6 +2198,9 @@ dist/
         }
         package_json["browserslist"] = ["> 1%", "last 2 versions", "not dead", "Chrome 40.0", "ie >= 11"]
         package_json_path.write_text(json.dumps(package_json, ensure_ascii=False, indent=2), encoding="utf-8")
+        (ws_path / ".vibe-serve.js").write_text(_VIBE_SERVE_JS, encoding="utf-8")
+        from app.config import settings
+        (ws_path / ".vibe-serve-config").write_text(f"PROXY_BASE={(settings.code_server_base_url or '').rstrip('/')}\n", encoding="utf-8")
 
         if apaas_json_path.exists():
             try:
@@ -2268,7 +2311,7 @@ if (platformI18n?.mergeLocaleMessage) {
             "scripts": {
                 "lint": "vue-cli-service lint",
                 "preview": "VUE_APP_PREVIEW=true vue-cli-service serve preview/main.js",
-                "serve": "vue-cli-service serve src/index.js",
+                "serve": "node .vibe-serve.js src/index.js",
                 "debug": "df-apaas-cli debug",
                 "build": "df-apaas-cli build",
             },
@@ -2302,6 +2345,9 @@ if (platformI18n?.mergeLocaleMessage) {
         }
         package_json["browserslist"] = ["> 1%", "last 2 versions", "not dead", "Chrome 40.0", "ie >= 11"]
         package_json_path.write_text(json.dumps(package_json, ensure_ascii=False, indent=2), encoding="utf-8")
+        (ws_path / ".vibe-serve.js").write_text(_VIBE_SERVE_JS, encoding="utf-8")
+        from app.config import settings
+        (ws_path / ".vibe-serve-config").write_text(f"PROXY_BASE={(settings.code_server_base_url or '').rstrip('/')}\n", encoding="utf-8")
 
         if apaas_json_path.exists():
             try:
@@ -2400,9 +2446,9 @@ export default {{ install }};
             "private": True,
             "scripts": {
                 "lint": "vue-cli-service lint",
-                "serve-admin": "vue-cli-service serve src/admin.js",
-                "serve-app": "vue-cli-service serve src/app.js",
-                "serve-mobile": "vue-cli-service serve src/mobile.js",
+                "serve-admin": "node .vibe-serve.js src/admin.js",
+                "serve-app": "node .vibe-serve.js src/app.js",
+                "serve-mobile": "node .vibe-serve.js src/mobile.js",
                 "debug": "df-apaas-cli debug",
                 "build": "df-apaas-cli build",
             },
@@ -2436,6 +2482,9 @@ export default {{ install }};
         }
         package_json["browserslist"] = ["> 1%", "last 2 versions", "not dead", "Chrome 40.0", "ie >= 11"]
         package_json_path.write_text(json.dumps(package_json, ensure_ascii=False, indent=2), encoding="utf-8")
+        (ws_path / ".vibe-serve.js").write_text(_VIBE_SERVE_JS, encoding="utf-8")
+        from app.config import settings
+        (ws_path / ".vibe-serve-config").write_text(f"PROXY_BASE={(settings.code_server_base_url or '').rstrip('/')}\n", encoding="utf-8")
 
         if apaas_json_path.exists():
             try:
@@ -2826,7 +2875,7 @@ export default { install, activate, staticComponents }
             "private": True,
             "scripts": {
                 "lint": "vue-cli-service lint",
-                "serve": "vue-cli-service serve src/index.js",
+                "serve": "node .vibe-serve.js src/index.js",
                 "debug": "df-apaas-cli debug",
                 "build": "df-apaas-cli build"
             },
@@ -2856,6 +2905,9 @@ export default { install, activate, staticComponents }
             },
             "browserslist": ["> 1%", "last 2 versions", "not dead", "Chrome 40.0", "ie >= 11"]
         }, indent=2, ensure_ascii=False))
+        self._write(ws_path, ".vibe-serve.js", _VIBE_SERVE_JS)
+        from app.config import settings
+        self._write(ws_path, ".vibe-serve-config", f"PROXY_BASE={(settings.code_server_base_url or '').rstrip('/')}\n")
 
         # vue.config.js
         self._write(ws_path, "vue.config.js", """const { defineConfig } = require('@vue/cli-service')
@@ -3627,7 +3679,7 @@ export default EditorFormConfigMixin
             "private": True,
             "scripts": {
                 "lint": "vue-cli-service lint",
-                "serve": "vue-cli-service serve src/index.js",
+                "serve": "node .vibe-serve.js src/index.js",
                 "debug": "df-apaas-cli debug",
                 "build": "df-apaas-cli build"
             },
@@ -3658,6 +3710,9 @@ export default EditorFormConfigMixin
             },
             "browserslist": ["> 1%", "last 2 versions", "not dead", "Chrome 40.0", "ie >= 11"]
         }, indent=2, ensure_ascii=False))
+        self._write(ws_path, ".vibe-serve.js", _VIBE_SERVE_JS)
+        from app.config import settings
+        self._write(ws_path, ".vibe-serve-config", f"PROXY_BASE={(settings.code_server_base_url or '').rstrip('/')}\n")
 
         # ======== vue.config.js ========
         self._write(ws_path, "vue.config.js", """const { defineConfig } = require('@vue/cli-service')
@@ -3872,9 +3927,9 @@ export default {{
             "private": True,
             "scripts": {
                 "lint": "vue-cli-service lint",
-                "serve-admin": "vue-cli-service serve src/admin.js",
-                "serve-app": "vue-cli-service serve src/app.js",
-                "serve-mobile": "vue-cli-service serve src/mobile.js",
+                "serve-admin": "node .vibe-serve.js src/admin.js",
+                "serve-app": "node .vibe-serve.js src/app.js",
+                "serve-mobile": "node .vibe-serve.js src/mobile.js",
                 "debug": "df-apaas-cli debug",
                 "build": "df-apaas-cli build",
             },
@@ -3905,6 +3960,9 @@ export default {{
             },
             "browserslist": ["> 1%", "last 2 versions", "not dead", "Chrome 40.0", "ie >= 11"],
         }, indent=2, ensure_ascii=False))
+        self._write(ws_path, ".vibe-serve.js", _VIBE_SERVE_JS)
+        from app.config import settings
+        self._write(ws_path, ".vibe-serve-config", f"PROXY_BASE={(settings.code_server_base_url or '').rstrip('/')}\n")
 
         self._write(ws_path, "vue.config.js", """const { defineConfig } = require('@vue/cli-service')
 const md5 = require('md5')
@@ -4065,7 +4123,7 @@ export default {{
             "scripts": {
                 "lint": "vue-cli-service lint",
                 "preview": "VUE_APP_PREVIEW=true vue-cli-service serve preview/main.js",
-                "serve": "vue-cli-service serve src/index.js",
+                "serve": "node .vibe-serve.js src/index.js",
                 "debug": "df-apaas-cli debug",
                 "build": "df-apaas-cli build"
             },
@@ -4096,6 +4154,9 @@ export default {{
             },
             "browserslist": ["> 1%", "last 2 versions", "not dead", "Chrome 40.0", "ie >= 11"]
         }, indent=2, ensure_ascii=False))
+        self._write(ws_path, ".vibe-serve.js", _VIBE_SERVE_JS)
+        from app.config import settings
+        self._write(ws_path, ".vibe-serve-config", f"PROXY_BASE={(settings.code_server_base_url or '').rstrip('/')}\n")
 
         # ======== vue.config.js ========
         self._write(ws_path, "vue.config.js", """const { defineConfig } = require('@vue/cli-service')
@@ -4992,7 +5053,7 @@ new Vue({{
             "private": True,
             "scripts": {
                 "lint": "vue-cli-service lint",
-                "serve": "vue-cli-service serve src/index.js",
+                "serve": "node .vibe-serve.js src/index.js",
                 "debug": "df-apaas-cli debug",
                 "build": "df-apaas-cli build",
             },
@@ -5022,6 +5083,9 @@ new Vue({{
             },
             "browserslist": ["> 1%", "last 2 versions", "not dead", "Chrome 40.0", "ie >= 11"],
         }, indent=2, ensure_ascii=False))
+        self._write(ws_path, ".vibe-serve.js", _VIBE_SERVE_JS)
+        from app.config import settings
+        self._write(ws_path, ".vibe-serve-config", f"PROXY_BASE={(settings.code_server_base_url or '').rstrip('/')}\n")
 
         self._write(ws_path, "vue.config.js", """const { defineConfig } = require('@vue/cli-service')
 const apaasJson = require('./src/apaas.json')
@@ -5668,7 +5732,7 @@ export default {{
             "version": "1.0.0",
             "private": True,
             "scripts": {{
-                "serve": "vue-cli-service serve src/index.js",
+                "serve": "node .vibe-serve.js src/index.js",
                 "build": "vue-cli-service build",
             }},
             "dependencies": {{
@@ -5680,6 +5744,9 @@ export default {{
                 "sass": "^1.32.7", "sass-loader": "^12.0.0",
             }},
         }}, indent=2))
+        self._write(ws_path, ".vibe-serve.js", _VIBE_SERVE_JS)
+        from app.config import settings
+        self._write(ws_path, ".vibe-serve-config", f"PROXY_BASE={{(settings.code_server_base_url or '').rstrip('/')}}\n")
 
         # vue.config.js
         self._write(ws_path, "vue.config.js", f"""const path = require('path')
@@ -5689,7 +5756,7 @@ module.exports = {{
     output: {{ library: '{full_name}', libraryTarget: 'umd', jsonpFunction: 'webpackJsonp_{full_name.replace("-","_")}' }},
     resolve: {{ alias: {{ '@': path.resolve(__dirname, 'src') }} }},
   }},
-  devServer: {{ port: 8080, https: true, headers: {{ 'Access-Control-Allow-Origin': '*' }} }},
+  devServer: {{ port: 8080, headers: {{ 'Access-Control-Allow-Origin': '*' }} }},
 }}
 """)
 
