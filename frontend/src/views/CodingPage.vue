@@ -1117,6 +1117,11 @@ const sceneCategoryToProjectType: Record<string, string> = {
 // ============ Lifecycle ============
 
 onMounted(async () => {
+  // 申请浏览器通知权限（用于设计方案生成后提醒用户）
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission()
+  }
+
   // preconnect to code-server，减少 iframe 首次连接延迟
   try {
     const link = document.createElement('link')
@@ -1612,6 +1617,12 @@ async function sendMessage() {
             pendingIdeUrl.value = parsed.ide_url
             // 后台预加载 iframe（不切换视图）
             setIdeUrl(parsed.ide_url)
+          }
+          if (parsed.waiting_confirmation && 'Notification' in window && Notification.permission === 'granted') {
+            new Notification('aPaaS Builder', {
+              body: '设计方案已生成，请确认后开始生成代码',
+              icon: '/ai-builder/favicon.ico',
+            })
           }
         } else if (parsed.type === 'error') {
           addStreamMsg({ type: 'error', content: parsed.message || '\u53D1\u751F\u9519\u8BEF' })
