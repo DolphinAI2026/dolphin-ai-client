@@ -179,6 +179,10 @@ PYEOF
 | 仅部署后端 | 跳过第二步（构建前端），第三步脚本仍会上传后端并重启 |
 | 仅部署前端 | 只执行第二步构建 + 第三步脚本（脚本会同时上传前端并跳过后端重启如无需要） |
 | 依赖有变化 | 脚本会自动执行 `pip install -r requirements.txt`，无需手动操作 |
+| 工作区模板改动 | 改动 `backend/templates/` 或 `workspace.py` 后，已存在的旧工作区不会自动更新；需要重新创建工作区才能生效 |
+| deploy.py 卡在"重启后端" | paramiko 执行 `nohup ... &` 时 SSH 通道不会自动关闭，属正常现象。观察到"=== 安装依赖..."已完成即可手动 kill deploy.py 进程，然后执行健康检查确认服务正常 |
+| dev server HTTPS 已移除 | workspace 模板的 `vue.config.js` 不再配置 HTTPS，dev server 跑纯 HTTP，通过 code-server `/proxy/{port}/` 访问。旧工作区若仍有 `https: {...}` 配置需手动删除 |
+| 公网预览地址 | 在 code-server 终端执行 `npm run serve` 后，终端会自动打印公网访问地址：`https://agent.dfy.definesys.cn/ai-builder/ide/proxy/{port}/` |
 
 ---
 
