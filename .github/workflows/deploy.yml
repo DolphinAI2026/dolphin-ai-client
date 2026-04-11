@@ -54,31 +54,34 @@ jobs:
           tar -czf /tmp/frontend.tar.gz .
           echo "前端包大小: $(du -sh /tmp/frontend.tar.gz | cut -f1)"
 
-      - name: 配置 SSH
+      - name: 安装 sshpass
+        run: sudo apt-get install -y sshpass
+
+      - name: 配置 SSH known_hosts
         run: |
           mkdir -p ~/.ssh
-          # 用 printf 写入，避免 echo 丢失换行导致密钥格式损坏
-          printf '%s' "${{ secrets.SERVER_SSH_KEY }}" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          # 验证密钥格式
-          ssh-keygen -l -f ~/.ssh/deploy_key
           ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
 
       - name: 上传后端
         run: |
-          scp -i ~/.ssh/deploy_key /tmp/backend.tar.gz ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/tmp/backend.tar.gz
-          ssh -i ~/.ssh/deploy_key ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
+          sshpass -p "${{ secrets.SERVER_PASSWORD }}" scp \
+            /tmp/backend.tar.gz ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/tmp/backend.tar.gz
+          sshpass -p "${{ secrets.SERVER_PASSWORD }}" ssh \
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
             "tar -xzf /tmp/backend.tar.gz -C /root/apaas-builder/backend/ && rm -f /tmp/backend.tar.gz && echo '后端解压完成'"
 
       - name: 上传前端
         run: |
-          scp -i ~/.ssh/deploy_key /tmp/frontend.tar.gz ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/tmp/frontend.tar.gz
-          ssh -i ~/.ssh/deploy_key ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
+          sshpass -p "${{ secrets.SERVER_PASSWORD }}" scp \
+            /tmp/frontend.tar.gz ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/tmp/frontend.tar.gz
+          sshpass -p "${{ secrets.SERVER_PASSWORD }}" ssh \
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
             "rm -rf /root/apaas-builder/frontend/dist && mkdir -p /root/apaas-builder/frontend/dist && tar -xzf /tmp/frontend.tar.gz -C /root/apaas-builder/frontend/dist/ && rm -f /tmp/frontend.tar.gz && echo '前端解压完成'"
 
       - name: 安装依赖并重启后端
         run: |
-          ssh -i ~/.ssh/deploy_key ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} bash << 'EOF'
+          sshpass -p "${{ secrets.SERVER_PASSWORD }}" ssh \
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} bash << 'EOF'
             set -e
 
             echo "=== 安装 Python 依赖 ==="
