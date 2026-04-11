@@ -399,19 +399,6 @@ def extract_display_name(message: str, project_type: str, fallback_name: str) ->
 
 async def is_new_component_intent(generator: CodingGenerator, message: str, ws_id: str, ws_mgr: WorkspaceManager) -> bool:
     """判断用户消息是要修改当前组件还是做一个全新的组件。"""
-    msg_lower = message.lower()
-    new_keywords = ["做一个新", "创建一个新", "新建一个", "开发一个新", "新组件", "新工作区", "另一个组件"]
-    modify_keywords = ["修改", "改一下", "调整", "优化", "加个", "删掉", "改成", "换个", "bug", "fix",
-                       "空白", "渲染", "不对", "报错", "完善", "补充", "实现", "请用", "改为", "更新"]
-
-    has_new = any(kw in msg_lower for kw in new_keywords)
-    has_modify = any(kw in msg_lower for kw in modify_keywords)
-
-    if has_new and not has_modify:
-        return True
-    if has_modify and not has_new:
-        return False
-
     try:
         from app.llm_client import LLMClient
         info = ws_mgr.get_workspace_info(ws_id)

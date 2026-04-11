@@ -68,7 +68,7 @@ function handleLine(line) {
   if (!announced) {
     const m = line.match(/Local:\\s+https?:\\/\\/localhost:(\\d+)/)
     if (m) {
-      if (proxyBase) process.stdout.write('\\n  Public:  ' + proxyBase + '/proxy/' + m[1] + '/\\n\\n')
+      if (proxyBase) process.stdout.write('  - Public:  ' + proxyBase + '/proxy/' + m[1] + '/\\n')
       announced = true
     }
   }
@@ -2705,6 +2705,14 @@ export default { install, activate, staticComponents }
             p = ws_path / fn
             if p.exists():
                 p.unlink()
+
+        # 4. 写入 vibe-serve.js 和 vibe-serve-config
+        from app.config import settings
+        (ws_path / "vibe-serve.js").write_text(_VIBE_SERVE_JS, encoding="utf-8")
+        (ws_path / "vibe-serve-config").write_text(
+            f"PROXY_BASE={(settings.code_server_base_url or '').rstrip('/')}\n",
+            encoding="utf-8",
+        )
 
         logger.info(f"Scaffolded {project_type.value} via CLI template: {ws_path.name}")
 

@@ -1612,18 +1612,35 @@ async function sendMessage() {
               localStorage.setItem('coding_last_workspace_id', ws.id)
             } catch { /* ignore */ }
           }
-          if (parsed.ide_url) {
-            // 不自动跳转，保存 URL 让用户手动选择进入 IDE
+          if (parsed.ide_url && !parsed.waiting_confirmation) {
+            // 只在代码生成完成后（非 brainstorm 等待阶段）才设置 IDE URL
+            // 避免 brainstorm 阶段用重命名前的旧路径预加载 iframe
             pendingIdeUrl.value = parsed.ide_url
-            // 后台预加载 iframe（不切换视图）
             setIdeUrl(parsed.ide_url)
           }
-          if (parsed.waiting_confirmation && 'Notification' in window && Notification.permission === 'granted') {
-            new Notification('aPaaS Builder', {
-              body: '设计方案已生成，请确认后开始生成代码',
-              icon: '/ai-builder/favicon.ico',
-            })
+          if ('Notification' in window && Notification.permission === 'granted') {
+            if (parsed.waiting_confirmation) {
+              new Notification('aPaaS Builder', { body: '设计方案已生成，请确认后开始生成代码' })
+            } else {
+              new Notification('aPaaS Builder', { body: '代码已生成完成，快来看看吧' })
+            }
           }
+          try {
+            const ctx = new AudioContext()
+            const gain = ctx.createGain()
+            gain.connect(ctx.destination)
+            gain.gain.setValueAtTime(0, ctx.currentTime)
+            gain.gain.linearRampToValueAtTime(0.4, ctx.currentTime + 0.01)
+            gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4)
+            const osc = ctx.createOscillator()
+            osc.type = 'sine'
+            osc.frequency.setValueAtTime(880, ctx.currentTime)
+            osc.frequency.exponentialRampToValueAtTime(660, ctx.currentTime + 0.4)
+            osc.connect(gain)
+            osc.start(ctx.currentTime)
+            osc.stop(ctx.currentTime + 0.4)
+            osc.onended = () => ctx.close()
+          } catch (_) {}
         } else if (parsed.type === 'error') {
           addStreamMsg({ type: 'error', content: parsed.message || '\u53D1\u751F\u9519\u8BEF' })
           isStreaming.value = false
