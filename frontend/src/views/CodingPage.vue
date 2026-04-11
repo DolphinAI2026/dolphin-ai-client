@@ -1631,19 +1631,23 @@ async function sendMessage() {
           }
           try {
             const ctx = new AudioContext()
-            const gain = ctx.createGain()
-            gain.connect(ctx.destination)
-            gain.gain.setValueAtTime(0, ctx.currentTime)
-            gain.gain.linearRampToValueAtTime(0.4, ctx.currentTime + 0.01)
-            gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4)
-            const osc = ctx.createOscillator()
-            osc.type = 'sine'
-            osc.frequency.setValueAtTime(880, ctx.currentTime)
-            osc.frequency.exponentialRampToValueAtTime(660, ctx.currentTime + 0.4)
-            osc.connect(gain)
-            osc.start(ctx.currentTime)
-            osc.stop(ctx.currentTime + 0.4)
-            osc.onended = () => ctx.close()
+            const playTone = (freq: number, startTime: number, duration: number) => {
+              const gain = ctx.createGain()
+              gain.connect(ctx.destination)
+              gain.gain.setValueAtTime(0, startTime)
+              gain.gain.linearRampToValueAtTime(0.3, startTime + 0.01)
+              gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration)
+              const osc = ctx.createOscillator()
+              osc.type = 'sine'
+              osc.frequency.setValueAtTime(freq, startTime)
+              osc.connect(gain)
+              osc.start(startTime)
+              osc.stop(startTime + duration)
+            }
+            // 双音「叮咚」：低音 → 高音，上升感
+            playTone(784, ctx.currentTime, 0.25)        // G5
+            playTone(1046, ctx.currentTime + 0.18, 0.35) // C6
+            setTimeout(() => ctx.close(), 700)
           } catch (_) {}
         } else if (parsed.type === 'error') {
           addStreamMsg({ type: 'error', content: parsed.message || '\u53D1\u751F\u9519\u8BEF' })
