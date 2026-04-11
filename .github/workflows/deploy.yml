@@ -34,91 +34,96 @@ jobs:
         working-directory: frontend
         run: VITE_BASE_URL=/ai-builder/ npx vite build
 
-      - name: 打包后端
+      - name: 安装 paramiko
+        run: pip install paramiko
+
+      - name: 部署到服务器
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_PASSWORD: ${{ secrets.SERVER_PASSWORD }}
         run: |
-          cd backend
-          tar --exclude='.env' \
-              --exclude='venv' \
-              --exclude='.venv' \
-              --exclude='__pycache__' \
-              --exclude='*.pyc' \
-              --exclude='*.db' \
-              --exclude='*.log' \
-              --exclude='.DS_Store' \
-              -czf /tmp/backend.tar.gz .
-          echo "后端包大小: $(du -sh /tmp/backend.tar.gz | cut -f1)"
+          python3 << 'PYEOF'
+          import os, io, tarfile, time
+          import paramiko
+          from pathlib import Path
 
-      - name: 打包前端
-        run: |
-          cd frontend/dist
-          tar -czf /tmp/frontend.tar.gz .
-          echo "前端包大小: $(du -sh /tmp/frontend.tar.gz | cut -f1)"
+          HOST     = os.environ['SERVER_HOST']
+          USER     = os.environ['SERVER_USER']
+          PASSWORD = os.environ['SERVER_PASSWORD']
 
-      - name: 安装 sshpass
-        run: sudo apt-get install -y sshpass
+          BACKEND_DIR      = Path('backend')
+          FRONTEND_DIST    = Path('frontend/dist')
+          REMOTE_BACKEND   = '/root/apaas-builder/backend'
+          REMOTE_FRONTEND  = '/root/apaas-builder/frontend/dist'
 
-      - name: 配置 SSH known_hosts
-        run: |
-          mkdir -p ~/.ssh
-          ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
-          # 强制只用密码认证，禁用 key 认证避免触发阿里云 ECS Instance Connect
-          cat >> ~/.ssh/config << 'SSHCONF'
-          Host *
-            PubkeyAuthentication no
-            PreferredAuthentications password
-            IdentitiesOnly yes
-          SSHCONF
+          BACKEND_EXCLUDES = {'.env', 'venv', '.venv', '__pycache__', '.DS_Store'}
 
-      - name: 上传后端
-        run: |
-          sshpass -p "${{ secrets.SERVER_PASSWORD }}" scp \
-            -o PubkeyAuthentication=no -o PreferredAuthentications=password \
-            /tmp/backend.tar.gz ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/tmp/backend.tar.gz
-          sshpass -p "${{ secrets.SERVER_PASSWORD }}" ssh \
-            -o PubkeyAuthentication=no -o PreferredAuthentications=password \
-            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
-            "tar -xzf /tmp/backend.tar.gz -C /root/apaas-builder/backend/ && rm -f /tmp/backend.tar.gz && echo '后端解压完成'"
+          def should_exclude(rel):
+              for part in Path(rel).parts:
+                  if part in BACKEND_EXCLUDES: return True
+                  if part.endswith(('.pyc', '.log', '.db')): return True
+              return False
 
-      - name: 上传前端
-        run: |
-          sshpass -p "${{ secrets.SERVER_PASSWORD }}" scp \
-            -o PubkeyAuthentication=no -o PreferredAuthentications=password \
-            /tmp/frontend.tar.gz ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/tmp/frontend.tar.gz
-          sshpass -p "${{ secrets.SERVER_PASSWORD }}" ssh \
-            -o PubkeyAuthentication=no -o PreferredAuthentications=password \
-            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
-            "rm -rf /root/apaas-builder/frontend/dist && mkdir -p /root/apaas-builder/frontend/dist && tar -xzf /tmp/frontend.tar.gz -C /root/apaas-builder/frontend/dist/ && rm -f /tmp/frontend.tar.gz && echo '前端解压完成'"
+          def make_tar(base_dir, exclude_fn=None):
+              buf = io.BytesIO()
+              with tarfile.open(fileobj=buf, mode='w:gz') as tar:
+                  for path in Path(base_dir).rglob('*'):
+                      if path.is_file():
+                          rel = str(path.relative_to(base_dir))
+                          if exclude_fn and exclude_fn(rel): continue
+                          tar.add(str(path), arcname=rel)
+              buf.seek(0)
+              return buf.read()
 
-      - name: 安装依赖并重启后端
-        run: |
-          sshpass -p "${{ secrets.SERVER_PASSWORD }}" ssh \
-            -o PubkeyAuthentication=no -o PreferredAuthentications=password \
-            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} bash << 'EOF'
-            set -e
+          print('=== 连接服务器 ===')
+          client = paramiko.SSHClient()
+          client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+          client.connect(HOST, username=USER, password=PASSWORD,
+                         timeout=30, allow_agent=False, look_for_keys=False)
+          sftp = client.open_sftp()
 
-            echo "=== 安装 Python 依赖 ==="
-            cd /root/apaas-builder/backend
-            .venv/bin/pip install -q -r requirements.txt
+          def run(cmd):
+              _, stdout, stderr = client.exec_command(cmd)
+              out = stdout.read().decode().strip()
+              err = stderr.read().decode().strip()
+              if out: print(f'  > {out}')
+              if err: print(f'  ! {err}')
 
-            echo "=== 重启后端 ==="
-            pkill -f 'uvicorn app.main:app.*8003' || true
-            sleep 2
-            cd /root/apaas-builder
-            nohup backend/.venv/bin/python -m uvicorn app.main:app \
-              --host 0.0.0.0 --port 8003 --workers 2 >> backend.log 2>&1 &
-            disown
+          print('=== 打包并上传后端 ===')
+          data = make_tar(BACKEND_DIR, should_exclude)
+          print(f'  大小: {len(data)//1024} KB')
+          with sftp.open('/tmp/backend_deploy.tar.gz', 'wb') as f: f.write(data)
+          run(f'tar -xzf /tmp/backend_deploy.tar.gz -C {REMOTE_BACKEND}/ && rm -f /tmp/backend_deploy.tar.gz')
+          print('  后端上传完成')
 
-            echo "=== 等待启动 ==="
-            sleep 5
+          print('=== 打包并上传前端 ===')
+          data = make_tar(FRONTEND_DIST)
+          print(f'  大小: {len(data)//1024} KB')
+          with sftp.open('/tmp/frontend_deploy.tar.gz', 'wb') as f: f.write(data)
+          run(f'rm -rf {REMOTE_FRONTEND} && mkdir -p {REMOTE_FRONTEND}')
+          run(f'tar -xzf /tmp/frontend_deploy.tar.gz -C {REMOTE_FRONTEND}/ && rm -f /tmp/frontend_deploy.tar.gz')
+          print('  前端上传完成')
 
-            echo "=== 健康检查 ==="
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8003/api/health)
-            echo "健康检查状态码: $STATUS"
-            if [ "$STATUS" != "200" ]; then
-              echo "健康检查失败！最近日志："
-              tail -20 /root/apaas-builder/backend.log
-              exit 1
-            fi
+          print('=== 安装依赖 ===')
+          run(f'cd {REMOTE_BACKEND} && .venv/bin/pip install -q -r requirements.txt')
 
-            echo "=== 部署成功 ==="
-          EOF
+          print('=== 重启后端 ===')
+          run("pkill -f 'uvicorn app.main:app.*8003' || true")
+          time.sleep(2)
+          run("cd /root/apaas-builder && nohup backend/.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8003 --workers 2 >> backend.log 2>&1 &")
+          time.sleep(5)
+
+          print('=== 健康检查 ===')
+          _, stdout, _ = client.exec_command("curl -s -o /dev/null -w '%{http_code}' http://localhost:8003/api/health")
+          code = stdout.read().decode().strip()
+          print(f'  状态码: {code}')
+          if code != '200':
+              _, stdout, _ = client.exec_command('tail -20 /root/apaas-builder/backend.log')
+              print(stdout.read().decode())
+              raise Exception('健康检查失败')
+
+          sftp.close()
+          client.close()
+          print('=== 部署成功 ===')
+          PYEOF
