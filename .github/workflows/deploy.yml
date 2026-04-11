@@ -109,21 +109,34 @@ jobs:
           run(f'cd {REMOTE_BACKEND} && .venv/bin/pip install -q -r requirements.txt')
 
           print('=== 重启后端 ===')
-          run("pkill -f 'uvicorn app.main:app.*8003' || true")
-          time.sleep(2)
-          run("cd /root/apaas-builder && nohup backend/.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8003 --workers 2 >> backend.log 2>&1 &")
-          time.sleep(5)
+          try:
+              run("pkill -f 'uvicorn app.main:app.*8003' || true")
+              time.sleep(2)
+              run("cd /root/apaas-builder && nohup backend/.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8003 --workers 2 >> backend.log 2>&1 &")
+          except Exception:
+              pass  # pkill 后连接可能断开，属正常现象
+          try:
+              sftp.close()
+              client.close()
+          except Exception:
+              pass
 
+          # 重启后重新建立连接做健康检查
+          time.sleep(6)
           print('=== 健康检查 ===')
-          _, stdout, _ = client.exec_command("curl -s -o /dev/null -w '%{http_code}' http://localhost:8003/api/health")
+          client2 = paramiko.SSHClient()
+          client2.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+          client2.connect(HOST, username=USER, password=PASSWORD,
+                          timeout=30, allow_agent=False, look_for_keys=False)
+          _, stdout, _ = client2.exec_command("curl -s -o /dev/null -w '%{http_code}' http://localhost:8003/api/health")
           code = stdout.read().decode().strip()
           print(f'  状态码: {code}')
           if code != '200':
-              _, stdout, _ = client.exec_command('tail -20 /root/apaas-builder/backend.log')
+              _, stdout, _ = client2.exec_command('tail -20 /root/apaas-builder/backend.log')
               print(stdout.read().decode())
+              client2.close()
               raise Exception('健康检查失败')
 
-          sftp.close()
-          client.close()
+          client2.close()
           print('=== 部署成功 ===')
           PYEOF
