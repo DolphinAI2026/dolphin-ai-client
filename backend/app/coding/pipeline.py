@@ -1412,7 +1412,10 @@ async def run_coding_pipeline(
             serve_status = ws_mgr.is_serve_running(ws_id)
             yield _record_event({"type": "step", "step": "hot_reload", "status": "done",
                    "data": {"serve_running": serve_status["running"], "port": serve_status.get("port")}})
-            yield _record_event({"type": "done", "workspace_id": ws_id, "conversation_id": conversation_id})
+            # 迭代时也带上 ide_url，防止 outputName 变化导致文件夹改名后前端路径失效
+            iter_ide_url = _build_ide_url_for_pipeline(params, ws_id, conversation_id, effective_model)
+            yield _record_event({"type": "done", "workspace_id": ws_id, "conversation_id": conversation_id,
+                                  "ide_url": iter_ide_url})
             return
 
         # 新建模式：生成 IDE URL
