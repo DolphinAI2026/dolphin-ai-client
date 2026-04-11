@@ -112,9 +112,16 @@ jobs:
           try:
               run("pkill -f 'uvicorn app.main:app.*8003' || true")
               time.sleep(2)
-              run("cd /root/apaas-builder && nohup backend/.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8003 --workers 2 >> backend.log 2>&1 &")
           except Exception:
-              pass  # pkill 后连接可能断开，属正常现象
+              pass
+          # 用 timeout=5 避免 paramiko 阻塞等待常驻进程退出
+          try:
+              transport = client.get_transport()
+              chan = transport.open_session()
+              chan.exec_command("cd /root/apaas-builder && nohup backend/.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8003 --workers 2 >> backend.log 2>&1 &")
+              chan.close()
+          except Exception:
+              pass
           try:
               sftp.close()
               client.close()
