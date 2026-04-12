@@ -50,7 +50,7 @@ async def _stream_with_tenant_llm(cfg: dict | None, messages: list, max_retries:
             await asyncio.sleep(1)
             _logger.info("LLM stream retry %d/%d", attempt, max_retries)
         try:
-            async for chunk in llm.chat_completion_stream(messages):
+            async for chunk in llm.chat_completion_stream(messages, max_tokens=cfg.get("max_tokens", 8192)):
                 yield chunk
             return
         except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as e:
@@ -328,10 +328,10 @@ async def send_message(
 
     # 构建LLM消息列表（加入system prompt）
     system_prompt = SYSTEM_PROMPTS.get(conversation.agent_type, BUILDER_SYSTEM_PROMPT)
-    llm_messages = [{"role": "system", "content": system_prompt}]
     incremental_prompt = _build_incremental_config_prompt(data.current_config)
     if incremental_prompt:
-        llm_messages.append({"role": "system", "content": incremental_prompt})
+        system_prompt = system_prompt + "\n\n" + incremental_prompt
+    llm_messages = [{"role": "system", "content": system_prompt}]
 
     # 预取租户 LLM 配置（必须在 compactor 之前）
     llm_cfg = await _get_conversation_llm_config(db, conversation)
@@ -475,7 +475,6 @@ async def send_message_with_file(
     history_messages = result.scalars().all()
 
     system_prompt = SYSTEM_PROMPTS.get(conversation.agent_type, BUILDER_SYSTEM_PROMPT)
-    llm_messages = [{"role": "system", "content": system_prompt}]
     current_config_obj = None
     if current_config.strip():
         try:
@@ -484,7 +483,8 @@ async def send_message_with_file(
             current_config_obj = None
     incremental_prompt = _build_incremental_config_prompt(current_config_obj)
     if incremental_prompt:
-        llm_messages.append({"role": "system", "content": incremental_prompt})
+        system_prompt = system_prompt + "\n\n" + incremental_prompt
+    llm_messages = [{"role": "system", "content": system_prompt}]
     llm_cfg = await _get_conversation_llm_config(db, conversation)
 
     history = [{"role": msg.role, "content": msg.content} for msg in history_messages[:-1]]

@@ -232,7 +232,7 @@ class LLMClient:
             "_raw_anthropic": data,
         }
 
-    async def chat_completion_stream(self, messages: List[Dict[str, Any]]) -> AsyncGenerator[str, None]:
+    async def chat_completion_stream(self, messages: List[Dict[str, Any]], *, max_tokens: int = 8192) -> AsyncGenerator[str, None]:
         """
         调用 Anthropic Messages API，并转成现有调用方可消费的 OpenAI 风格 chunk。
         """
@@ -246,7 +246,7 @@ class LLMClient:
             payload: Dict[str, Any] = {
                 "model": self.model,
                 "messages": messages,
-                "max_tokens": 16384,
+                "max_tokens": max_tokens,
                 "stream": True,
             }
             stream_timeout = httpx.Timeout(connect=10.0, read=300.0, write=10.0, pool=10.0)
@@ -261,6 +261,9 @@ class LLMClient:
                     },
                     json=payload,
                 ) as response:
+                    if response.status_code != 200:
+                        body = await response.aread()
+                        logger.error("OpenAI stream error %s: %s", response.status_code, body.decode()[:500])
                     response.raise_for_status()
                     async for line in response.aiter_lines():
                         if not line or not line.startswith("data:"):
@@ -278,7 +281,7 @@ class LLMClient:
         payload: Dict[str, Any] = {
             "model": self.model,
             "messages": api_messages,
-            "max_tokens": 16384,
+            "max_tokens": max_tokens,
             "stream": True,
         }
         if system_text:

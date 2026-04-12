@@ -6581,7 +6581,11 @@ watch(existingAppId, (id) => {
   }
 })
 watch(conversationId, (id) => {
-  if (id && builderPreviewTab.value === 'docs' && !existingAppId.value) {
+  store.reset()
+  existingAppId.value = null
+  docVersions.value = []
+  currentDocPreviewOverride.value = null
+  if (id && builderPreviewTab.value === 'docs') {
     fetchDocVersions()
   }
 })

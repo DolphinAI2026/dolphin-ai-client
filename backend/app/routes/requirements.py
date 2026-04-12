@@ -296,7 +296,7 @@ async def _stream_with_config(cfg: dict | None, messages: list, max_retries: int
             await asyncio.sleep(1)
             logger.info("LLM stream retry %d/%d for %s", attempt, max_retries, cfg["base_url"])
         try:
-            async for chunk in llm.chat_completion_stream(messages):
+            async for chunk in llm.chat_completion_stream(messages, max_tokens=cfg.get("max_tokens", 8192)):
                 yield chunk
             return  # 成功，不再重试
         except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as e:

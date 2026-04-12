@@ -287,7 +287,7 @@ async def test_llm_config(
     api_key = decrypt_password(config.api_key_enc)
 
     try:
-        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
             is_codex = config.provider == "codex" or "codex" in (config.model or "").lower()
             is_anthropic_compat = "/anthropic" in (config.base_url or "")
 
@@ -318,17 +318,21 @@ async def test_llm_config(
                     },
                 )
             else:
+                test_body: dict = {
+                    "model": config.model,
+                    "messages": [{"role": "user", "content": "回复OK"}],
+                    "max_tokens": 50,
+                }
+                # 思考模型（如 Qwen3.x）禁用思考以加快测试速度
+                if config.provider == "qwen" or "qwen3" in (config.model or "").lower():
+                    test_body["enable_thinking"] = False
                 resp = await client.post(
                     build_llm_chat_completions_url(config.base_url),
                     headers={
                         "Authorization": f"Bearer {api_key}",
                         "Content-Type": "application/json",
                     },
-                    json={
-                        "model": config.model,
-                        "messages": [{"role": "user", "content": "回复OK"}],
-                        "max_tokens": 10,
-                    },
+                    json=test_body,
                 )
             if resp.status_code == 200:
                 data = resp.json()
