@@ -26,6 +26,7 @@ TOOL_ICONS = {
     "run_command": "\u26a1 Command",
     "glob_files": "\U0001f50d Glob",
     "grep_search": "\U0001f50e Grep",
+    "start_serve": "\U0001f680 Serve",
 }
 
 
@@ -394,7 +395,7 @@ class VibeCodingAgent:
                             func_name,
                             func_args,
                             self.ws_path,
-                            progress_callback=_tool_progress if func_name == "run_command" else None,
+                            progress_callback=_tool_progress if func_name in ("run_command", "start_serve") else None,
                         )
 
                         # Adaptive result truncation based on remaining context budget
@@ -416,6 +417,16 @@ class VibeCodingAgent:
                             "output_preview": _truncate(result_str, 500),
                             "is_error": is_error,
                         })
+
+                        # start_serve 成功 → 发出 serve_started 事件供前端注入调试扩展
+                        if func_name == "start_serve" and not is_error:
+                            try:
+                                serve_data = json.loads(result_str)
+                                serve_url = serve_data.get("url", "")
+                                if serve_url:
+                                    _emit({"type": "serve_started", "url": serve_url})
+                            except (json.JSONDecodeError, Exception):
+                                pass
 
                         messages.append({
                             "role": "tool",

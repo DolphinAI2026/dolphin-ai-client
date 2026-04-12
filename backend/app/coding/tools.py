@@ -159,6 +159,18 @@ TOOL_DEFINITIONS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "start_serve",
+            "description": "Start the development server for local preview and hot-reload debugging. Use this when the user wants to preview the component, run it locally, enable debugging, or start the dev server. Automatically reuses an already-running server for the same workspace instead of starting a duplicate.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
 ]
 
 # ---------------------------------------------------------------------------
@@ -506,6 +518,93 @@ async def _run_command(
         return f"Error running command: {e}"
 
 
+async def _start_serve(
+    args: dict,
+    workspace_path: Path,
+    progress_callback: Optional[Callable[[str], Awaitable[None] | None]] = None,
+) -> str:
+    """启动 dev server，复用已有进程，流式输出启动日志，返回 JSON 含公网 URL。"""
+    import json as _json
+
+    from app.coding.workspace import WorkspaceManager
+    from app.config import settings
+
+    ws_id = workspace_path.name
+    ws_mgr = WorkspaceManager()
+
+    # 已在运行 → 直接复用
+    status = ws_mgr.is_serve_running(ws_id)
+    if status["running"]:
+        port = status["port"]
+        proxy_base = (settings.code_server_base_url or "").rstrip("/")
+        url = f"{proxy_base}/proxy/{port}/"
+        await _emit_progress(progress_callback, f"调试服务已在运行（端口 {port}），复用现有进程。\n")
+        return _json.dumps({"status": "already_running", "url": url, "port": port})
+
+    # 读取 PROXY_BASE
+    proxy_base = (settings.code_server_base_url or "").rstrip("/")
+    vibe_cfg = workspace_path / "vibe-serve-config"
+    if vibe_cfg.exists():
+        for line in vibe_cfg.read_text(encoding="utf-8").splitlines():
+            m = re.match(r"^PROXY_BASE=(.+)$", line)
+            if m:
+                proxy_base = m.group(1).strip()
+                break
+
+    # 启动命令：优先 vibe-serve.js，回退到 npx vue-cli-service
+    vibe_js = workspace_path / "vibe-serve.js"
+    if vibe_js.exists():
+        cmd = ["node", "vibe-serve.js", "src/index.js"]
+    else:
+        cmd = ["npx", "vue-cli-service", "serve", "src/index.js"]
+
+    env = _build_command_env()
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            cwd=str(workspace_path),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            env=env,
+        )
+    except Exception as e:
+        return _json.dumps({"status": "error", "message": f"启动失败: {e}"})
+
+    detected_port: Optional[int] = None
+    deadline = asyncio.get_event_loop().time() + 90  # 90 秒超时
+
+    while asyncio.get_event_loop().time() < deadline:
+        try:
+            raw = await asyncio.wait_for(proc.stdout.readline(), timeout=5.0)  # type: ignore[union-attr]
+        except asyncio.TimeoutError:
+            if proc.returncode is not None:
+                break
+            continue
+        if not raw:
+            break
+
+        text = _strip_ansi(raw.decode("utf-8", errors="replace")).rstrip("\n")
+        await _emit_progress(progress_callback, text + "\n")
+
+        # 检测端口
+        m = re.search(r"Local:\s+https?://localhost:(\d+)", text)
+        if m and detected_port is None:
+            detected_port = int(m.group(1))
+
+        # 出现 Public URL 说明启动完成，停止阻塞
+        if "Public:" in text or ("App running at" in text and detected_port):
+            await asyncio.sleep(0.3)
+            break
+
+    if proc.returncode is not None:
+        return _json.dumps({"status": "error", "message": "serve 进程意外退出"})
+
+    port = detected_port or 8082
+    ws_mgr._serve_processes[ws_id] = {"process": proc, "port": port}
+    url = f"{proxy_base}/proxy/{port}/"
+    return _json.dumps({"status": "ok", "url": url, "port": port})
+
+
 async def _glob_files(args: dict, workspace_path: Path) -> str:
     pattern = args.get("pattern", "")
     sub_path = args.get("path", "")
@@ -606,6 +705,7 @@ _EXECUTORS = {
     "run_command": _run_command,
     "glob_files": _glob_files,
     "grep_search": _grep_search,
+    "start_serve": _start_serve,
 }
 
 
@@ -619,6 +719,6 @@ async def execute_tool(
     executor = _EXECUTORS.get(tool_name)
     if not executor:
         return f"Error: unknown tool '{tool_name}'"
-    if tool_name == "run_command":
+    if tool_name in ("run_command", "start_serve"):
         return await executor(arguments, workspace_path, progress_callback)
     return await executor(arguments, workspace_path)

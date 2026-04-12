@@ -1595,6 +1595,12 @@ async function sendMessage() {
         } else if (parsed.type === 'agent_thinking_delta') {
           const delta = (parsed.content || '') as string
           if (delta) appendToLastThinking(delta)
+        } else if (parsed.type === 'serve_started') {
+          const url = (parsed.url || '') as string
+          if (url) {
+            try { (window as any).__apaasDebug?.addRecord(url) } catch (_) {}
+            addStreamMsg({ type: 'message', content: `调试服务已启动：${url}` })
+          }
         } else if (parsed.type === 'agent_done') {
           addStreamMsg({ type: 'status', content: '\u2705 \u4EE3\u7801\u751F\u6210\u5B8C\u6210' })
         } else if (parsed.type === 'scene_detected') {
