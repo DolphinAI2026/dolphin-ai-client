@@ -172,6 +172,13 @@ class CodingProfile(HarnessProfile):
                         item_kind="system", persist=False,
                     )
 
+                elif event_type == "serve_started":
+                    await event_bus.publish(
+                        ITEM_DELTA, turn_ctx.turn_id,
+                        {"kind": "system", **event},
+                        item_kind="system", persist=False,
+                    )
+
                 elif event_type == "agent_done":
                     result_text = event.get("result", "")
 
