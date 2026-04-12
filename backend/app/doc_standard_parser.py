@@ -169,4 +169,4 @@ def _parse_app_info(section_text: str, result: ParseResult) -> tuple[str, str]:
     if not app_code:
         result.errors.append("应用信息：缺少应用编码")
 
-    return app_name, app_code.lower()
+    return app_name, app_code

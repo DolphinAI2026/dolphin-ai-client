@@ -738,8 +738,32 @@
               <div class="preview-empty-copy">{{ docParsingStep || 'AI 正在分析文档内容，请稍候' }}</div>
             </template>
             <template v-else>
+              <div class="preview-empty-icon" aria-hidden="true">
+                <svg width="36" height="36" viewBox="0 0 24 24" fill="none">
+                  <rect x="3" y="3" width="18" height="18" rx="4" stroke="currentColor" stroke-width="1.4"/>
+                  <path d="M7 8h10M7 12h7M7 16h5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+                </svg>
+              </div>
               <div class="preview-empty-title">还没有解析内容</div>
-              <div class="preview-empty-copy">先告诉我你想搭什么，我会根据你的需求生成右侧解析结果。</div>
+              <div class="preview-empty-copy single-line" style="display:inline-block;width:max-content;max-width:none;white-space:nowrap;">左侧输入需求后，AI 自动生成的设计文档将出现在这里，包含：</div>
+              <div class="preview-empty-features">
+                <div class="preview-empty-feature">
+                  <span class="preview-empty-feature-dot"></span>
+                  <span>业务目标与角色定义</span>
+                </div>
+                <div class="preview-empty-feature">
+                  <span class="preview-empty-feature-dot"></span>
+                  <span>功能模块清单</span>
+                </div>
+                <div class="preview-empty-feature">
+                  <span class="preview-empty-feature-dot"></span>
+                  <span>数据模型与字段</span>
+                </div>
+                <div class="preview-empty-feature">
+                  <span class="preview-empty-feature-dot"></span>
+                  <span>权限矩阵</span>
+                </div>
+              </div>
             </template>
           </div>
         </div>
@@ -1929,7 +1953,7 @@ const getPreferredUpdateTab = () => {
   return 'docs'
 }
 
-const BUILDER_WELCOME_MESSAGE = '告诉我你想搭什么，我来帮你生成。\n\n可以直接描述需求，也可以上传原型图或设计稿。'
+const BUILDER_WELCOME_MESSAGE = '你好！我是你的智能搭建助手。\n告诉我你想搭建什么，我会帮你梳理需求、生成设计文档，并引导你完成完整搭建流程。\n可以直接描述业务需求，也可以上传原型图或设计稿开始。'
 function createWelcomeMessage(): Message {
   return {
     id: Date.now(),
@@ -1942,6 +1966,7 @@ function createWelcomeMessage(): Message {
 
 function resetMessagesToWelcome() {
   messages.splice(0, messages.length)
+  messages.push(createWelcomeMessage())
 }
 
 const visibleMessages = computed(() => messages)
@@ -4567,6 +4592,9 @@ const uploadDocFile = async (file: File) => {
     const token = localStorage.getItem('token')
     const formData = new FormData()
     formData.append('file', file)
+    if (conversationId.value) {
+      formData.append('conversation_id', String(conversationId.value))
+    }
 
     const response = await fetch(`${API_PREFIX}/applications/upload-doc-with-conversation`, {
       method: 'POST',
@@ -4729,6 +4757,15 @@ const uploadDocFile = async (file: File) => {
     if (finalResult) {
       latestParseMeta.value = finalResult.parse_meta || null
       conversationId.value = finalResult.conversation_id
+      selectedConversationId.value = finalResult.conversation_id
+      if (conversationId.value && currentAgent.value === 'requirements') {
+        try {
+          await conversationApi.updateAgentType(conversationId.value, 'builder')
+        } catch (e) {
+          console.warn('Failed to switch uploaded-doc conversation to builder mode', e)
+        }
+        currentAgent.value = 'builder'
+      }
       router.replace(`/chat/${finalResult.conversation_id}`)
       lastParsedFilename.value = file.name
       latestDocContent.value = ''
@@ -5753,15 +5790,6 @@ const generateDocInBackground = async () => {
   if (!conversationId.value || generatingDoc.value) return
   generatingDoc.value = true
 
-  // 添加进度提示消息
-  const progressMsgId = Date.now()
-  messages.push({
-    id: progressMsgId, role: 'assistant', agent: 'builder',
-    content: '⏳ 正在根据需求生成应用配置，请稍候...',
-    created_at: ''
-  })
-  scrollToBottom()
-
   const token = localStorage.getItem('token') || ''
   const url = requirementsApi.generateDocUrl(conversationId.value)
 
@@ -5790,12 +5818,6 @@ const generateDocInBackground = async () => {
           if (!dataStr) continue
           try {
             const data = JSON.parse(dataStr)
-            if (data.content) {
-              // 实时更新进度消息内容
-              const progressMsg = messages.find(m => m.id === progressMsgId)
-              if (progressMsg) progressMsg.content = '⏳ ' + data.content
-              scrollToBottom()
-            }
             if (data.doc_result) {
               docResultForCard.value = data.doc_result
             }
@@ -5804,17 +5826,12 @@ const generateDocInBackground = async () => {
       }
     }
 
-    // 移除进度消息，DesignDocCard 会显示结果
-    const idx = messages.findIndex(m => m.id === progressMsgId)
-    if (idx >= 0) messages.splice(idx, 1)
-
     if (docResultForCard.value) {
       scrollToBottom()
     }
   } catch (e: any) {
     console.error('Background doc generation failed:', e)
-    const progressMsg = messages.find(m => m.id === progressMsgId)
-    if (progressMsg) progressMsg.content = '⚠️ 配置生成失败，请重新描述需求后重试。'
+    ElMessage.error('配置生成失败，请重新描述需求后重试。')
   } finally {
     generatingDoc.value = false
   }
@@ -6581,6 +6598,18 @@ watch(existingAppId, (id) => {
   }
 })
 watch(conversationId, (id) => {
+  if (isDocParsing.value) {
+    if (id && builderPreviewTab.value === 'docs' && docVersions.value.length === 0) {
+      fetchDocVersions()
+    }
+    return
+  }
+  if (route.query.app_id || existingAppId.value) {
+    if (id && builderPreviewTab.value === 'docs' && docVersions.value.length === 0) {
+      fetchDocVersions()
+    }
+    return
+  }
   store.reset()
   existingAppId.value = null
   docVersions.value = []
@@ -7156,7 +7185,9 @@ watch(conversationId, (id) => {
 .bubble-row { display: flex; align-items: flex-start; gap: 10px; }
 .bubble-row.user { justify-content: flex-end; width: 100%; }
 .bubble-inner { max-width: 80%; }
-.bubble-inner.welcome-bubble { max-width: min(620px, 92%); }
+.bubble-inner.welcome-bubble {
+  max-width: min(920px, 96%);
+}
 .assistant-avatar {
   width: 26px;
   height: 26px;
@@ -7746,11 +7777,48 @@ watch(conversationId, (id) => {
 .preview-empty .empty-icon { font-size: 40px; opacity: 0.3; margin-bottom: 12px; }
 .preview-empty.small { margin-top: 0; padding: 32px; }
 .preview-empty-stage {
-  max-width: 320px;
+  max-width: 560px;
   margin: 72px auto 0;
   padding: 0;
   color: #8b97ae;
   text-align: center;
+}
+.preview-empty-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.92), rgba(238,237,254,0.88));
+  box-shadow: inset 0 0 0 1px rgba(125,114,246,0.14), 0 12px 28px rgba(103,96,180,0.10);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #7D72F6;
+  margin-bottom: 16px;
+}
+.preview-empty-features {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  text-align: left;
+  background: rgba(255,255,255,0.72);
+  border: 1px solid rgba(83,74,183,0.12);
+  border-radius: 16px;
+  padding: 16px 18px;
+}
+.preview-empty-feature {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: #534AB7;
+}
+.preview-empty-feature-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #7D72F6;
+  flex-shrink: 0;
 }
 .preview-empty-stage.parsing {
   margin-top: 120px;
@@ -7764,6 +7832,12 @@ watch(conversationId, (id) => {
 .preview-empty-copy {
   font-size: 13px;
   line-height: 1.7;
+}
+.preview-empty-copy.single-line {
+  display: inline-block;
+  width: max-content;
+  max-width: none;
+  white-space: nowrap;
 }
 .parsing-spinner {
   width: 36px; height: 36px;

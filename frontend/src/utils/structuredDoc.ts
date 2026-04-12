@@ -332,6 +332,7 @@ export function buildStructuredDocFromPreviewConfig(
       components: (form?.components || []).map((component: any, compIdx: number) => {
         const rawComponentType = component?.componentType || component?.component_type || component?.type || ''
         const refMeta = resolveRefMeta(component)
+        const associationConfig = component?.formAssociationConfig || component?.form_association_config || {}
         return {
           field_code: component?.code || `field_${compIdx + 1}`,
           field_name: component?.label || component?.name || component?.code || `字段${compIdx + 1}`,
@@ -347,8 +348,33 @@ export function buildStructuredDocFromPreviewConfig(
           required: !!component?.required,
           show_in_list: !!(component?.showInList ?? component?.show_in_list),
           searchable: !!(component?.searchable ?? component?.is_searchable),
-          dict_code: component?.dict_code || component?.dict || '',
+          dict_code: component?.dict_code || component?.dictCode || component?.dict || '',
           dictCode: component?.dictCode || '',
+          selector_form_code:
+            component?.selector_form_code
+            || component?.selectorFormCode
+            || refMeta.model
+            || '',
+          selector_field_code:
+            component?.selector_field_code
+            || component?.selectorFieldCode
+            || refMeta.field
+            || '',
+          association_form_code:
+            component?.association_form_code
+            || component?.associationFormCode
+            || associationConfig?.targetModelCode
+            || '',
+          association_origin_field_code:
+            component?.association_origin_field_code
+            || component?.associationOriginFieldCode
+            || associationConfig?.originFieldCode
+            || '',
+          association_target_field_code:
+            component?.association_target_field_code
+            || component?.associationTargetFieldCode
+            || associationConfig?.targetFieldCode
+            || '',
           ref_model_code: refMeta.model || component?.ref_model_code || component?.refModelCode || '',
           ref_display_field_code: refMeta.field || component?.ref_display_field_code || component?.refDisplayFieldCode || '',
           description: component?.description || component?.comment || '',

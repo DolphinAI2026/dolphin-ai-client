@@ -279,12 +279,12 @@ def _extract_dict_section(text: str, dict_name: str, dict_code: str) -> str:
 
 
 def _normalize_app_code(code: str) -> str:
-    c = (code or "").strip().lower().replace(" ", "_").replace("-", "_")
-    c = re.sub(r"[^a-z0-9_]", "", c)
+    c = (code or "").strip().replace(" ", "_").replace("-", "_")
+    c = re.sub(r"[^A-Za-z0-9_]", "", c)
     c = re.sub(r"_+", "_", c).strip("_")
     if not c:
         return ""
-    if not re.match(r"^[a-z]", c):
+    if not re.match(r"^[A-Za-z]", c):
         c = f"app_{c}"
     return c[:64]
 

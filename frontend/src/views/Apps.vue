@@ -35,7 +35,6 @@
           <div class="grid-card-top">
             <div class="grid-card-icon" :class="sourceIconClass(a)">{{ sourceIcon(a) }}</div>
             <div class="grid-card-badges">
-              <span class="source-badge" :class="a.source">{{ sourceBadgeText(a) }}</span>
               <span class="card-status" :class="statusClass(a)">{{ a.status }}</span>
               <span v-if="a.env_name" class="env-badge">{{ a.env_name }}</span>
             </div>
@@ -86,7 +85,6 @@
               <div class="card-info">
                 <div class="card-name-row">
                   <h3>{{ a.app_name }}</h3>
-                  <span class="source-badge" :class="a.source">{{ sourceBadgeText(a) }}</span>
                   <span class="card-status" :class="statusClass(a)">{{ a.status }}</span>
                   <span v-if="a.env_name" class="env-badge">{{ a.env_name }}</span>
                 </div>
@@ -147,29 +145,33 @@ const router = useRouter()
 const apps = ref<MergedApplication[]>([])
 const appHistoryMap = ref<Record<number, ConversationWithApp[]>>({})
 const loading = ref(true)
-const activeTab = ref('all')
+const activeTab = ref<'all' | 'draft' | 'generating' | 'updating' | 'completed'>('all')
 const viewMode = ref<'grid' | 'list'>('grid')
 
 const tabs = [
   { label: '全部', value: 'all' },
-  { label: '本地', value: 'local' },
-  { label: '平台', value: 'remote' },
-  { label: '已同步', value: 'linked' },
+  { label: '草稿', value: 'draft' },
+  { label: '生成中', value: 'generating' },
+  { label: '更新中', value: 'updating' },
+  { label: '已生成', value: 'completed' },
 ]
+
+function matchesTab(a: MergedApplication, tab: typeof activeTab.value) {
+  if (tab === 'all') return true
+  if (tab === 'completed') return a.local_status === 'completed' || !!a.apaas_app_id
+  return a.local_status === tab
+}
 
 const tabCounts = computed(() => {
   const counts: Record<string, number> = {}
   for (const t of tabs) {
-    counts[t.value] = t.value === 'all'
-      ? apps.value.length
-      : apps.value.filter(a => a.source === t.value).length
+    counts[t.value] = apps.value.filter(a => matchesTab(a, t.value as typeof activeTab.value)).length
   }
   return counts
 })
 
 const filteredApps = computed(() => {
-  if (activeTab.value === 'all') return apps.value
-  return apps.value.filter(a => a.source === activeTab.value)
+  return apps.value.filter(a => matchesTab(a, activeTab.value))
 })
 
 function appNumericId(a: MergedApplication) {
@@ -214,29 +216,23 @@ function buildAppHistoryMap(list: ConversationWithApp[]) {
 }
 
 function sourceIcon(a: MergedApplication) {
-  if (a.source === 'remote') return '☁️'
-  if (a.source === 'linked') return '🔗'
-  if (a.local_status === 'completed') return '📊'
+  if (a.local_status === 'updating') return '↺'
+  if (a.local_status === 'completed' || a.apaas_app_id) return '📊'
   if (a.local_status === 'generating') return '⟳'
   return '📝'
 }
 
 function sourceIconClass(a: MergedApplication) {
-  if (a.source === 'remote') return 'remote'
-  if (a.source === 'linked') return 'linked'
-  return a.local_status === 'completed' ? 'success' : 'draft'
-}
-
-function sourceBadgeText(a: MergedApplication) {
-  if (a.source === 'local') return '本地'
-  if (a.source === 'remote') return '平台'
-  return '已同步'
+  if (a.local_status === 'updating') return 'updating'
+  if (a.local_status === 'completed' || a.apaas_app_id) return 'success'
+  if (a.local_status === 'generating') return 'generating'
+  return 'draft'
 }
 
 function statusClass(a: MergedApplication) {
-  if (a.source === 'linked') return 'linked'
-  if (a.source === 'remote') return 'remote'
-  if (a.local_status === 'completed') return 'success'
+  if (a.local_status === 'updating') return 'updating'
+  if (a.local_status === 'completed' || a.apaas_app_id) return 'success'
+  if (a.local_status === 'generating') return 'generating'
   if (a.local_status === 'failed') return 'failed'
   return 'draft'
 }
@@ -249,8 +245,8 @@ function canDeleteApp(a: MergedApplication) {
 
 function deleteTooltip(a: MergedApplication) {
   if (canDeleteApp(a)) return '删除'
-  if (a.source !== 'local') return '平台应用或已同步应用不允许删除'
-  if (a.apaas_app_id || a.local_status === 'completed' || a.local_status === 'generating') return '已构建应用不允许删除'
+  if (a.source !== 'local') return '平台应用不允许删除'
+  if (a.apaas_app_id || a.local_status === 'completed' || a.local_status === 'generating' || a.local_status === 'updating') return '已构建应用不允许删除'
   return '当前状态不允许删除'
 }
 
@@ -277,7 +273,7 @@ async function confirmDelete(a: MergedApplication) {
 onMounted(async () => {
   try {
     const [list, conversations] = await Promise.all([
-      applicationApi.list(),
+      applicationApi.list({ include_remote: false }),
       conversationApi.listWithApps({ agent_type: 'builder' }).catch(() => []),
     ])
     apps.value = Array.isArray(list) ? list : []
@@ -504,9 +500,9 @@ onMounted(async () => {
   font-size: 20px;
 }
 .grid-card-icon.success { background: var(--t-brand-subtle); }
+.grid-card-icon.generating { background: rgba(96, 165, 250, 0.16); }
 .grid-card-icon.draft { background: var(--t-border-subtle); }
-.grid-card-icon.remote { background: rgba(59, 130, 246, 0.12); }
-.grid-card-icon.linked { background: rgba(52, 211, 153, 0.12); }
+.grid-card-icon.updating { background: rgba(251, 191, 36, 0.16); }
 
 .grid-card-badges {
   display: flex;
@@ -641,9 +637,9 @@ onMounted(async () => {
   flex-shrink: 0;
 }
 .card-icon.success { background: var(--t-brand-subtle); }
+.card-icon.generating { background: rgba(96, 165, 250, 0.16); }
 .card-icon.draft { background: var(--t-border-subtle); }
-.card-icon.remote { background: rgba(59, 130, 246, 0.12); }
-.card-icon.linked { background: rgba(52, 211, 153, 0.12); }
+.card-icon.updating { background: rgba(251, 191, 36, 0.16); }
 
 .card-info { min-width: 0; }
 
@@ -662,17 +658,6 @@ onMounted(async () => {
   white-space: nowrap;
 }
 
-.source-badge {
-  font-size: 10px;
-  padding: 1px 8px;
-  border-radius: 10px;
-  font-weight: 500;
-  white-space: nowrap;
-}
-.source-badge.local { background: var(--t-border-subtle); color: var(--t-text-secondary); }
-.source-badge.remote { background: rgba(59, 130, 246, 0.15); color: var(--t-info); }
-.source-badge.linked { background: rgba(52, 211, 153, 0.15); color: #34d399; }
-
 .card-status {
   padding: 1px 8px;
   border-radius: 10px;
@@ -681,8 +666,8 @@ onMounted(async () => {
 }
 .card-status.success { background: rgba(52, 211, 153, 0.15); color: #34d399; }
 .card-status.draft { background: var(--t-border-subtle); color: var(--t-text-muted); }
-.card-status.linked { background: rgba(52, 211, 153, 0.15); color: #34d399; }
-.card-status.remote { background: rgba(59, 130, 246, 0.15); color: var(--t-info); }
+.card-status.generating { background: rgba(96, 165, 250, 0.16); color: #2563eb; }
+.card-status.updating { background: rgba(251, 191, 36, 0.16); color: #b7791f; }
 .card-status.failed { background: rgba(239, 68, 68, 0.15); color: var(--t-danger); }
 
 .card-meta {

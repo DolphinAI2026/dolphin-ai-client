@@ -352,6 +352,8 @@ const forms = computed(() => {
           modelFieldTypeMap.value.get(`${modelCode}::${fieldCode}`)
           || modelFieldTypeMap.value.get(`${modelCode}::${fieldName}`)
           || ''
+        const ref = component.ref || {}
+        const associationConfig = component.formAssociationConfig || component.form_association_config || {}
         return {
           field_code: fieldCode,
           field_name: fieldName,
@@ -367,18 +369,54 @@ const forms = computed(() => {
           show_in_list: !!(component.show_in_list ?? component.showInList),
           searchable: !!component.searchable,
           dict_code: component.dict_code || component.dictCode || '',
-          selector_form_code: component.selector_form_code || component.selectorFormCode || '',
+          selector_form_code:
+            component.selector_form_code
+            || component.selectorFormCode
+            || component.ref_model_code
+            || component.refModelCode
+            || ref.model
+            || '',
           selector_form_name: component.selector_form_name || component.selectorFormName || '',
-          selector_field_code: component.selector_field_code || component.selectorFieldCode || '',
+          selector_field_code:
+            component.selector_field_code
+            || component.selectorFieldCode
+            || component.ref_display_field_code
+            || component.refDisplayFieldCode
+            || ref.display_field
+            || ref.target_field
+            || ref.field
+            || '',
           selector_field_name: component.selector_field_name || component.selectorFieldName || '',
-          association_form_code: component.association_form_code || component.associationFormCode || '',
+          association_form_code:
+            component.association_form_code
+            || component.associationFormCode
+            || associationConfig.targetModelCode
+            || '',
           association_form_name: component.association_form_name || component.associationFormName || '',
-          association_origin_field_code: component.association_origin_field_code || component.associationOriginFieldCode || '',
+          association_origin_field_code:
+            component.association_origin_field_code
+            || component.associationOriginFieldCode
+            || associationConfig.originFieldCode
+            || '',
           association_origin_field_name: component.association_origin_field_name || component.associationOriginFieldName || '',
-          association_target_field_code: component.association_target_field_code || component.associationTargetFieldCode || '',
+          association_target_field_code:
+            component.association_target_field_code
+            || component.associationTargetFieldCode
+            || associationConfig.targetFieldCode
+            || '',
           association_target_field_name: component.association_target_field_name || component.associationTargetFieldName || '',
-          ref_model_code: component.ref_model_code || component.refModelCode || '',
-          ref_display_field_code: component.ref_display_field_code || component.refDisplayFieldCode || '',
+          ref_model_code:
+            component.ref_model_code
+            || component.refModelCode
+            || ref.model
+            || '',
+          ref_display_field_code:
+            component.ref_display_field_code
+            || component.refDisplayFieldCode
+            || ref.display_field
+            || ref.target_field
+            || ref.field
+            || '',
           description: component.description || component.comment || '',
         }
       })

@@ -3,7 +3,7 @@
     <div class="sidebar-logo">
       <button class="logo-main" @click="navigateTo('/')" title="返回首页">
         <div class="logo-icon">
-          <svg width="22" height="22" viewBox="0 0 22 22" fill="none" aria-hidden="true">
+          <svg width="26" height="26" viewBox="0 0 22 22" fill="none" aria-hidden="true">
             <rect x="1" y="1" width="20" height="20" rx="6" fill="url(#railLogoBg)" />
             <rect x="8.6" y="5.8" width="4.8" height="4.8" rx="1.2" fill="#F5F4FF" />
             <rect x="5.4" y="9.8" width="4.8" height="4.8" rx="1.2" fill="#F5F4FF" />
@@ -178,7 +178,7 @@ async function handleUserCommand(command: string | number | object) {
 .logo-main {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 6px;
   min-width: 0;
   cursor: pointer;
   border: none;
@@ -187,9 +187,9 @@ async function handleUserCommand(command: string | number | object) {
 }
 
 .logo-icon {
-  width: 34px;
-  height: 34px;
-  border-radius: 10px;
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
   display: flex;
   align-items: center;
   justify-content: center;

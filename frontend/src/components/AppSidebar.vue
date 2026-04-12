@@ -49,9 +49,9 @@
             >
               <div class="sidebar-app-name">{{ app.label }}</div>
               <div class="sidebar-app-meta">
-                <span v-if="app.apaasAppId" class="sidebar-app-badge done">已部署</span>
-                <span v-else-if="app.status === 'completed'" class="sidebar-app-badge done">已完成</span>
+                <span v-if="app.status === 'updating'" class="sidebar-app-badge gen">更新中</span>
                 <span v-else-if="app.status === 'generating'" class="sidebar-app-badge gen">生成中</span>
+                <span v-else-if="app.status === 'completed' || app.apaasAppId" class="sidebar-app-badge done">已生成</span>
                 <span v-else-if="app.appId" class="sidebar-app-badge draft">草稿</span>
                 <span class="sidebar-app-time">{{ app.timeLabel }}</span>
               </div>

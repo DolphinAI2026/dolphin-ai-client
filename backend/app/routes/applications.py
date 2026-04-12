@@ -28,8 +28,8 @@ logger = logging.getLogger(__name__)
 def _normalize_app_code(candidate: str | None) -> str:
     import re
 
-    raw = str(candidate or "").strip().lower().replace("_", "-")
-    raw = re.sub(r"[^a-z0-9-]", "", raw)
+    raw = str(candidate or "").strip().replace("_", "-")
+    raw = re.sub(r"[^A-Za-z0-9-]", "", raw)
     raw = re.sub(r"-{2,}", "-", raw).strip("-")
     if raw and raw[0].isalpha():
         return raw
@@ -493,9 +493,31 @@ _REMOTE_STATUS_MAP = {
 _LOCAL_STATUS_MAP = {
     "draft": "草稿",
     "generating": "生成中",
+    "updating": "更新中",
     "completed": "已生成",
     "failed": "失败",
 }
+
+
+def _resolve_display_status(app: Application, remote_status: str | None = None) -> str:
+    normalized_remote = str(remote_status or "").strip().upper()
+
+    if app.status == "updating":
+        return _LOCAL_STATUS_MAP["updating"]
+
+    if app.status == "generating":
+        return _LOCAL_STATUS_MAP["generating"]
+
+    if app.status == "failed":
+        return _LOCAL_STATUS_MAP["failed"]
+
+    if app.apaas_app_id:
+        return _LOCAL_STATUS_MAP["completed"]
+
+    if normalized_remote:
+        return _REMOTE_STATUS_MAP.get(normalized_remote, _LOCAL_STATUS_MAP["completed"])
+
+    return _LOCAL_STATUS_MAP.get(app.status, app.status)
 
 
 def _build_apaas_url(apaas_app_id: str, base_url: str | None = None, tenant_id: str | None = None) -> str:
@@ -513,7 +535,7 @@ def _build_local(app: Application, perms: dict | None = None, env_name: str | No
         app_code=enriched.app_code,
         description=enriched.description,
         source="local",
-        status=_LOCAL_STATUS_MAP.get(app.status, app.status),
+        status=_resolve_display_status(app),
         local_status=app.status,
         apaas_app_id=app.apaas_app_id,
         conversation_id=app.conversation_id,
@@ -538,7 +560,7 @@ def _build_linked(app: Application, remote: dict, perms: dict | None = None, env
         app_code=enriched.app_code,
         description=enriched.description or remote.get("appDesc"),
         source="linked",
-        status=_REMOTE_STATUS_MAP.get(remote_status, "已同步"),
+        status=_resolve_display_status(app, remote_status),
         local_status=app.status,
         remote_status=remote_status,
         apaas_app_id=apaas_id,
@@ -638,11 +660,22 @@ async def list_applications(
         app_env_name = app_env["env_name"] if app_env else None
         app_env_status = app_env["status"] if app_env else None
 
-        if app.apaas_app_id and app.apaas_app_id in remote_map:
-            matched_remote_ids.add(app.apaas_app_id)
+        if app.apaas_app_id:
+            if app.apaas_app_id in remote_map:
+                matched_remote_ids.add(app.apaas_app_id)
             if source_filter and source_filter != "linked":
                 continue
-            merged.append(_build_linked(app, remote_map[app.apaas_app_id], perms, env_base_url, env_tenant_id, app_env_name, app_env_status))
+            merged.append(
+                _build_linked(
+                    app,
+                    remote_map.get(app.apaas_app_id, {}),
+                    perms,
+                    env_base_url,
+                    env_tenant_id,
+                    app_env_name,
+                    app_env_status,
+                )
+            )
         else:
             if source_filter and source_filter != "local":
                 continue
@@ -1039,6 +1072,11 @@ async def import_from_platform(
         logger.error(f"反向解析失败: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"反向解析应用结构失败: {e}")
 
+    config = dict(config or {})
+    config["appName"] = app_name
+    if app_code:
+        config["appCode"] = app_code
+
     # 5. 生成 markdown 需求文档
     try:
         markdown_spec = config_to_markdown(config, app_description=app_desc)
@@ -1047,13 +1085,14 @@ async def import_from_platform(
         markdown_spec = ""
 
     # 6. 创建本地 Application 记录
-    config_str = json.dumps(config, ensure_ascii=False)
+    resolved_app_code = app_code or _normalize_app_code(config.get("appCode")) or app_name.lower().replace(" ", "_")
+    config_str = _dump_preview_config(config)
     new_app = Application(
         user_id=ctx.user.id,
         tenant_id=ctx.tenant_id,
         created_by=ctx.user.id,
         app_name=app_name,
-        app_code=app_code or app_name.lower().replace(" ", "_"),
+        app_code=resolved_app_code,
         description=app_desc,
         config_preview=config_str,
         requirement_doc=markdown_spec,
@@ -1062,6 +1101,15 @@ async def import_from_platform(
         status="completed",
     )
     db.add(new_app)
+    await db.flush()
+    await _sync_canonical_config_to_current_doc_version(
+        db,
+        new_app,
+        config,
+        filename=f"{app_name or '设计文档'}-V1.md",
+        summary="从平台导入自动生成",
+        create_if_missing=True,
+    )
     await db.commit()
     await db.refresh(new_app)
 
@@ -1103,8 +1151,10 @@ async def update_application(
             data.config_preview,
             create_if_missing=not bool(app.current_doc_version),
         )
-    # 重置状态为 draft，允许重新生成
-    if app.status in ("failed", "completed"):
+    # 已上平台的应用再次修改时进入“更新中”，未完成的应用才回到草稿。
+    if app.apaas_app_id or app.status in ("completed", "updating"):
+        app.status = "updating"
+    elif app.status == "failed":
         app.status = "draft"
     await db.commit()
     await db.refresh(app)
@@ -2147,8 +2197,10 @@ async def upload_doc_version(
                 if app_obj.app_name:
                     v2_config["appName"] = app_obj.app_name
                 app_obj.config_preview = _dump_preview_config(v2_config)
-                # 标记需要重新部署
-                if app_obj.status == "completed":
+                # 上传了更新文档且生成了变更计划，但还未执行更新，进入“更新中”状态。
+                if app_obj.apaas_app_id or app_obj.status in ("completed", "updating"):
+                    app_obj.status = "updating"
+                else:
                     app_obj.status = "draft"
                 # 在 generation_state 中记录配置版本变更
                 if app_obj.generation_state:
