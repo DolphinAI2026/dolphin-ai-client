@@ -1,5 +1,6 @@
 """模板管理 API — 基于文件系统的 MD 设计文档模板"""
 
+from datetime import datetime
 import re
 from pathlib import Path
 from typing import Optional
@@ -42,7 +43,7 @@ def _scan_templates() -> list[dict]:
         return []
 
     templates = []
-    for md_file in sorted(TEMPLATES_DIR.glob("*.md")):
+    for md_file in TEMPLATES_DIR.glob("*.md"):
         try:
             content = md_file.read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError):
@@ -59,9 +60,14 @@ def _scan_templates() -> list[dict]:
             "description": meta.get("description", ""),
             "category": meta.get("category", ""),
             "filename": md_file.name,
+            "updated_at": datetime.fromtimestamp(md_file.stat().st_mtime).isoformat(),
         })
 
-    return templates
+    return sorted(
+        templates,
+        key=lambda item: item.get("updated_at", ""),
+        reverse=True,
+    )
 
 
 @router.get("")
@@ -88,6 +94,7 @@ async def get_template(code: str):
                 "description": meta.get("description", ""),
                 "category": meta.get("category", ""),
                 "filename": md_file.name,
+                "updated_at": datetime.fromtimestamp(md_file.stat().st_mtime).isoformat(),
                 "content": body,  # 不含 frontmatter 的 MD 正文
             }
 

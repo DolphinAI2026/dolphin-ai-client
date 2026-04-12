@@ -193,8 +193,7 @@ def _build_data_selector(
 
 
 COMPONENT_REGISTRY['FORM_DATA_SELECTOR_SINGLE'] = _build_data_selector
-
-
+COMPONENT_REGISTRY['FORM_DATA_SELECTOR'] = _build_data_selector
 # ── 单选框（字典绑定） ──
 
 def _build_radio(
@@ -259,39 +258,6 @@ COMPONENT_REGISTRY['FORM_CHECKBOX_INPUT'] = _build_checkbox
 
 # ── 数据选择（多选，关联模型） ──
 
-def _build_data_selector_multi(
-    field: Dict,
-    model_code: str,
-    field_code: str,
-    code_map: Optional[Dict] = None,
-    **_kwargs,
-) -> Dict:
-    """构建数据选择器组件（多选），关联其他模型。"""
-    component: Dict = {
-        "componentType": "FORM_DATA_SELECTOR",
-        "label": field["name"],
-        "modelField": f"{model_code}.{field_code}",
-    }
-    ref = field.get("ref")
-    if ref:
-        if isinstance(ref, dict):
-            ref_model = ref.get("model", "")
-            ref_field = ref.get("field", "")
-        else:
-            ref_model = str(ref)
-            ref_field = ""
-        resolved_model = (code_map or {}).get(ref_model, ref_model)
-        component["dataSelectorConfig"] = {
-            "type": "LOV_CHOOSE",
-            "otherModelCode": resolved_model,
-            "otherFieldCode": ref_field,
-        }
-    return component
-
-
-COMPONENT_REGISTRY['FORM_DATA_SELECTOR'] = _build_data_selector_multi
-
-
 # ── 关联表单 ──
 
 def _build_association(
@@ -306,11 +272,20 @@ def _build_association(
         "componentType": "FORM_ASSOCIATION",
         "label": field["name"],
     }
+    assoc = field.get("formAssociationConfig")
     ref = field.get("ref")
-    if ref and isinstance(ref, dict):
+    if assoc and isinstance(assoc, dict):
+        origin_field = assoc.get("originFieldCode", field_code)
+        target_model = assoc.get("targetModelCode", "")
+        target_field = assoc.get("targetFieldCode", "")
+    elif ref and isinstance(ref, dict):
         origin_field = ref.get("field", field_code)
         target_model = ref.get("model", "")
-        target_field = ref.get("target_field", "")
+        target_field = ref.get("target_field", "") or ref.get("display_field", "") or ref.get("field", "")
+    else:
+        origin_field = target_model = target_field = ""
+
+    if target_model:
         resolved_model = (code_map or {}).get(target_model, target_model)
         component["formAssociationConfig"] = {
             "originFieldCode": origin_field,

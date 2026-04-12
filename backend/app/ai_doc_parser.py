@@ -210,7 +210,7 @@ async def parse_doc_with_ai(
 
         if len(text) <= CHUNK_CHAR_LIMIT:
             await _progress("小文档，单次 AI 解析...")
-            data = await _parse_single(text, filename, existing_codes=existing_codes, config_constraint=config_constraint, llm_cfg=llm_cfg)
+            data = await _parse_single(text, filename, existing_codes=existing_codes, config_constraint=config_constraint, llm_cfg=llm_cfg, on_progress=on_progress)
         else:
             data = await _parse_chunked(text, filename, _progress, existing_codes=existing_codes, config_constraint=config_constraint, llm_cfg=llm_cfg)
 
@@ -422,7 +422,7 @@ def _build_existing_config_constraint(config: Dict) -> str:
 # 小文档：单次调用
 # ================================================================
 
-async def _parse_single(text: str, filename: str, existing_codes: Optional[Dict] = None, config_constraint: str = "", llm_cfg: Optional[Dict] = None) -> Dict:
+async def _parse_single(text: str, filename: str, existing_codes: Optional[Dict] = None, config_constraint: str = "", llm_cfg: Optional[Dict] = None, on_progress: ProgressCallback = None) -> Dict:
     if llm_cfg:
         client = LLMClient(api_key=llm_cfg.get("api_key"), base_url=llm_cfg.get("base_url"), model=llm_cfg.get("model"))
     else:
@@ -456,14 +456,85 @@ async def _parse_single(text: str, filename: str, existing_codes: Optional[Dict]
         user_msg += f"文档名：{filename}\n\n"
     user_msg += f"---\n\n{truncated}"
 
-    # 文档解析用配置中的文档模型，避免业务代码写死模型名
-    result = await client.chat_completion(
-        [{"role": "system", "content": SINGLE_SYSTEM_PROMPT},
-         {"role": "user", "content": user_msg}],
-        max_tokens=16384, timeout=300.0, temperature=0.2,
-        model=client.doc_model
-    )
-    content = result["choices"][0]["message"]["content"]
+    messages = [{"role": "system", "content": SINGLE_SYSTEM_PROMPT},
+                {"role": "user", "content": user_msg}]
+
+    # 使用流式调用：让前端实时看到 AI 正在工作
+    async def _progress(msg: str):
+        if on_progress:
+            await on_progress(msg)
+
+    if llm_cfg and llm_cfg.get("base_url") and llm_cfg.get("api_key"):
+        # 租户配置：用 httpx 流式请求
+        from app.routes.llm_configs import build_llm_chat_completions_url
+        import httpx as _httpx
+        payload = {
+            "model": llm_cfg.get("model", client.model),
+            "messages": messages,
+            "max_tokens": 16384,
+            "temperature": 0.2,
+            "stream": True,
+        }
+        # read=300s：首 token 延迟可能很长（千问对大文档需要较长思考时间）
+        # 流式模式下 read timeout 是两次 chunk 之间的最大间隔，不是总时间
+        stream_timeout = _httpx.Timeout(connect=15.0, read=300.0, write=15.0, pool=15.0)
+        await _progress("[skeleton] AI 正在分析文档，等待模型响应...")
+        full_text = ""
+        last_report = 0
+        async with _httpx.AsyncClient(timeout=stream_timeout) as http:
+            async with http.stream(
+                "POST",
+                build_llm_chat_completions_url(llm_cfg["base_url"]),
+                headers={"Authorization": f"Bearer {llm_cfg['api_key']}", "Content-Type": "application/json"},
+                json=payload,
+            ) as response:
+                response.raise_for_status()
+                first_token = True
+                async for line in response.aiter_lines():
+                    if not line or not line.startswith("data:"):
+                        continue
+                    raw = line[5:].strip()
+                    if raw == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(raw)
+                        delta = chunk.get("choices", [{}])[0].get("delta", {})
+                        text_piece = delta.get("content", "")
+                        if text_piece:
+                            if first_token:
+                                first_token = False
+                                await _progress("[skeleton] AI 开始输出...")
+                            full_text += text_piece
+                            if len(full_text) - last_report >= 500:
+                                last_report = len(full_text)
+                                await _progress(f"[skeleton] AI 生成中... {len(full_text)} 字符")
+                    except Exception:
+                        continue
+        content = full_text
+    else:
+        # 全局配置：用 LLMClient 流式
+        await _progress("[skeleton] AI 正在分析文档，等待模型响应...")
+        full_text = ""
+        last_report = 0
+        first_token = True
+        async for chunk_str in client.chat_completion_stream(messages):
+            try:
+                chunk = json.loads(chunk_str)
+                delta = chunk.get("choices", [{}])[0].get("delta", {})
+                text_piece = delta.get("content", "")
+                if text_piece:
+                    if first_token:
+                        first_token = False
+                        await _progress("[skeleton] AI 开始输出...")
+                    full_text += text_piece
+                    if len(full_text) - last_report >= 500:
+                        last_report = len(full_text)
+                        await _progress(f"[skeleton] AI 生成中... {len(full_text)} 字符")
+            except Exception:
+                continue
+        content = full_text
+
+    await _progress(f"[skeleton] AI 生成完成，共 {len(content)} 字符，正在解析结果...")
     data = _extract_json(content)
     if not data or not data.get("models"):
         raise ValueError("AI 未能识别出业务表单")

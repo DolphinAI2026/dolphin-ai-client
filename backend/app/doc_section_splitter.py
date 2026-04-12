@@ -20,7 +20,9 @@ _SECTION_KEYWORDS: Dict[str, str] = {
     "角色清单": "roles",
     "数据字典": "dicts",
     "数据模型": "models",
+    "表单定义": "forms",
     "表单配置": "forms",
+    "权限定义": "permissions",
     "权限配置": "permissions",
     "审批流程": "workflows",
 }

@@ -326,6 +326,29 @@ class APaaSClient:
     async def create_form_permissions(self, app_id: str, payload: list) -> dict:
         return await self._post_resource("/common/resource/formPermission", payload, app_id)
 
+    async def query_roles(self, app_id: str, keyword: str = "") -> list:
+        """查询应用角色列表"""
+        url = f"{self.base_url}/xdap-app/roles/query/rolesList"
+        payload = {
+            "keyWord": keyword,
+            "appId": app_id,
+            "appQueryFlag": True,
+        }
+        _log_request("POST", url, payload)
+        start = time.time()
+
+        async with httpx.AsyncClient(verify=False, timeout=60.0) as client:
+            response = await client.post(url, headers=self._get_headers(app_id), json=payload)
+            elapsed_ms = (time.time() - start) * 1000
+            response.raise_for_status()
+            data = response.json()
+
+            _log_response(url, response.status_code, data, elapsed_ms)
+
+            if data.get("code") == "ok":
+                return data.get("data", [])
+            return []
+
     async def query_app_detail(self, app_id: str) -> dict:
         """查询单个应用详情（从应用列表中按 appId 过滤）"""
         apps = await self.query_app_list()

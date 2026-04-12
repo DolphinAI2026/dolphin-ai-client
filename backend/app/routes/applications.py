@@ -25,6 +25,39 @@ router = APIRouter(prefix="/applications", tags=["应用"])
 logger = logging.getLogger(__name__)
 
 
+def _normalize_app_code(candidate: str | None) -> str:
+    import re
+
+    raw = str(candidate or "").strip().lower().replace("_", "-")
+    raw = re.sub(r"[^a-z0-9-]", "", raw)
+    raw = re.sub(r"-{2,}", "-", raw).strip("-")
+    if raw and raw[0].isalpha():
+        return raw
+    return ""
+
+
+def _compact_permission_rule(rule: dict) -> dict:
+    compact_rule = {
+        "role": rule.get("role") or rule.get("roleCode") or rule.get("role_code"),
+        "roleCode": rule.get("roleCode") or rule.get("role_code") or rule.get("role"),
+        "roleName": rule.get("roleName") or rule.get("role_name") or rule.get("role"),
+        "op": rule.get("op"),
+        "data": rule.get("data") or rule.get("dataScope") or rule.get("data_scope"),
+    }
+    if "canDraft" in rule:
+        compact_rule["canDraft"] = bool(rule.get("canDraft"))
+    if "canImport" in rule:
+        compact_rule["canImport"] = bool(rule.get("canImport"))
+    if "canExport" in rule:
+        compact_rule["canExport"] = bool(rule.get("canExport"))
+
+    actions = rule.get("actions")
+    if isinstance(actions, list) and actions:
+        compact_rule["actions"] = actions
+
+    return {k: v for k, v in compact_rule.items() if v not in (None, "", [])}
+
+
 def _compact_preview_payload(config: dict | None) -> dict:
     if not isinstance(config, dict):
         return {}
@@ -32,6 +65,35 @@ def _compact_preview_payload(config: dict | None) -> dict:
     data = config.get("data", config)
     if not isinstance(data, dict):
         return {}
+
+    def _compact_model_field(field: dict) -> dict:
+        compact_field = {
+            "code": field.get("code"),
+            "name": field.get("name"),
+            "type": field.get("type"),
+        }
+        if field.get("database_field_type") or field.get("databaseFieldType"):
+            compact_field["database_field_type"] = field.get("database_field_type") or field.get("databaseFieldType")
+        if field.get("max_length") or field.get("maxLength") or field.get("length"):
+            compact_field["max_length"] = field.get("max_length") or field.get("maxLength") or field.get("length")
+            compact_field["length"] = field.get("length") or field.get("max_length") or field.get("maxLength")
+        if field.get("dict") or field.get("dictCode"):
+            compact_field["dict"] = field.get("dict") or field.get("dictCode")
+        if field.get("ref"):
+            compact_field["ref"] = field.get("ref")
+        if field.get("required") is True:
+            compact_field["required"] = True
+        if field.get("comment") or field.get("description"):
+            compact_field["comment"] = field.get("comment") or field.get("description")
+        if field.get("sub_code"):
+            compact_field["sub_code"] = field.get("sub_code")
+        if field.get("sub_fields"):
+            compact_field["sub_fields"] = [
+                _compact_model_field(sub_field)
+                for sub_field in (field.get("sub_fields") or [])
+                if isinstance(sub_field, dict)
+            ]
+        return compact_field
 
     compact_models = []
     for model in data.get("models", []) or []:
@@ -41,25 +103,7 @@ def _compact_preview_payload(config: dict | None) -> dict:
         for field in model.get("fields", []) or []:
             if not isinstance(field, dict):
                 continue
-            compact_field = {
-                "code": field.get("code"),
-                "name": field.get("name"),
-                "type": field.get("type"),
-            }
-            if field.get("database_field_type") or field.get("databaseFieldType"):
-                compact_field["database_field_type"] = field.get("database_field_type") or field.get("databaseFieldType")
-            if field.get("max_length") or field.get("maxLength") or field.get("length"):
-                compact_field["max_length"] = field.get("max_length") or field.get("maxLength") or field.get("length")
-                compact_field["length"] = field.get("length") or field.get("max_length") or field.get("maxLength")
-            if field.get("dict"):
-                compact_field["dict"] = field.get("dict")
-            if field.get("ref"):
-                compact_field["ref"] = field.get("ref")
-            if field.get("required") is True:
-                compact_field["required"] = True
-            if field.get("comment"):
-                compact_field["comment"] = field.get("comment")
-            compact_fields.append(compact_field)
+            compact_fields.append(_compact_model_field(field))
 
         compact_model = {
             "code": model.get("code"),
@@ -85,16 +129,57 @@ def _compact_preview_payload(config: dict | None) -> dict:
                 "label": comp.get("label"),
                 "componentType": comp.get("componentType"),
             }
-            for key in ("modelCode", "tableModelCode", "sectionType", "modelField"):
+            for key in ("name", "modelCode", "tableModelCode", "sectionType", "modelField", "subTableLabel"):
                 if comp.get(key):
                     compact_comp[key] = comp.get(key)
             for key in ("hidden", "readonly", "required", "showInList", "searchable"):
                 if key in comp and comp.get(key) is not None:
                     compact_comp[key] = bool(comp.get(key))
+            for key in ("dict", "dictCode", "dict_code", "description"):
+                if comp.get(key):
+                    compact_comp[key] = comp.get(key)
+            if comp.get("ref"):
+                compact_comp["ref"] = comp.get("ref")
+            for key in ("selector_form_code", "association_form_code", "ref_model_code"):
+                if comp.get(key):
+                    compact_comp[key] = comp.get(key)
+            if comp.get("formAssociationConfig") or comp.get("form_association_config"):
+                compact_comp["formAssociationConfig"] = comp.get("formAssociationConfig") or comp.get("form_association_config")
+            if comp.get("tableColumn") or comp.get("table_column"):
+                compact_columns = []
+                for column in (comp.get("tableColumn") or comp.get("table_column") or []):
+                    if not isinstance(column, dict):
+                        continue
+                    compact_col = {
+                        "code": column.get("code"),
+                        "label": column.get("label"),
+                        "componentType": column.get("componentType"),
+                    }
+                    for key in ("name", "modelCode", "tableModelCode", "sectionType", "modelField"):
+                        if column.get(key):
+                            compact_col[key] = column.get(key)
+                    for key in ("hidden", "readonly", "required", "showInList", "searchable"):
+                        if key in column and column.get(key) is not None:
+                            compact_col[key] = bool(column.get(key))
+                    for key in ("dict", "dictCode", "dict_code", "description"):
+                        if column.get(key):
+                            compact_col[key] = column.get(key)
+                    if column.get("ref"):
+                        compact_col["ref"] = column.get("ref")
+                    for key in ("selector_form_code", "association_form_code", "ref_model_code"):
+                        if column.get(key):
+                            compact_col[key] = column.get(key)
+                    if column.get("formAssociationConfig") or column.get("form_association_config"):
+                        compact_col["formAssociationConfig"] = column.get("formAssociationConfig") or column.get("form_association_config")
+                    compact_columns.append(compact_col)
+                if compact_columns:
+                    compact_comp["tableColumn"] = compact_columns
             compact_components.append(compact_comp)
 
         compact_form = {
+            "code": form.get("code") or form.get("formCode"),
             "name": form.get("name") or form.get("formName"),
+            "formCode": form.get("formCode") or form.get("code"),
             "modelCode": form.get("modelCode"),
             "components": compact_components,
         }
@@ -107,22 +192,22 @@ def _compact_preview_payload(config: dict | None) -> dict:
         if not isinstance(perm, dict):
             continue
         compact_perm = {
-            "formName": perm.get("formName"),
-            "formCode": perm.get("formCode"),
+            "form": perm.get("form") or perm.get("formName") or perm.get("table_name"),
+            "formName": perm.get("formName") or perm.get("form") or perm.get("table_name"),
+            "formCode": perm.get("formCode") or perm.get("form_code") or perm.get("table_code"),
         }
         rules = []
-        for rule in perm.get("rules", []) or []:
+        raw_rules = perm.get("rules") or perm.get("roles") or perm.get("permissions") or []
+        for rule in raw_rules:
             if not isinstance(rule, dict):
                 continue
-            rules.append({
-                "roleCode": rule.get("roleCode"),
-                "roleName": rule.get("roleName"),
-                "actions": rule.get("actions", []),
-                "dataScope": rule.get("dataScope"),
-            })
+            compact_rule = _compact_permission_rule(rule)
+            if compact_rule:
+                rules.append(compact_rule)
         if rules:
             compact_perm["rules"] = rules
-        compact_permissions.append(compact_perm)
+        if compact_perm.get("form") or compact_perm.get("formName") or compact_perm.get("formCode") or rules:
+            compact_permissions.append(compact_perm)
 
     return {
         "appName": data.get("appName"),
@@ -149,27 +234,7 @@ def _dump_parsed_config(config: dict | None) -> str:
 def _parsed_config_is_stale(parsed_config: dict | None) -> bool:
     if not isinstance(parsed_config, dict):
         return True
-    data = parsed_config.get("data", parsed_config)
-    models = data.get("models", []) if isinstance(data, dict) else []
-    if not isinstance(models, list) or not models:
-        return True
-    has_table_meta = any(m.get("table_type") or m.get("parent_model_code") for m in models if isinstance(m, dict))
-    has_field_meta = False
-    for model in models:
-        if not isinstance(model, dict):
-            continue
-        for field in model.get("fields", []) or []:
-            if not isinstance(field, dict):
-                continue
-            if (
-                field.get("database_field_type") or field.get("databaseFieldType")
-                or field.get("max_length") or field.get("maxLength") or field.get("length")
-            ):
-                has_field_meta = True
-                break
-        if has_field_meta:
-            break
-    return not (has_table_meta and has_field_meta)
+    return False
 
 
 async def _ensure_doc_version_parsed_config(
@@ -183,7 +248,7 @@ async def _ensure_doc_version_parsed_config(
         except Exception:
             parsed = None
 
-    if not _parsed_config_is_stale(parsed):
+    if parsed is not None and not _parsed_config_is_stale(parsed):
         return parsed
 
     if not version.raw_content:
@@ -201,6 +266,159 @@ async def _ensure_doc_version_parsed_config(
         logger.warning("文档版本重解析失败 id=%s", version.id, exc_info=True)
 
     return parsed
+
+
+def _preview_data(config: dict | None) -> dict:
+    if not isinstance(config, dict):
+        return {}
+    return config.get("data", config)
+
+
+def _doc_content_looks_like_template(content: str | None) -> bool:
+    text = str(content or "").strip()
+    if not text:
+        return False
+    head = "\n".join(text.splitlines()[:20])
+    return (
+        "标准设计文档模板" in head
+        or "使用说明" in head
+        or "用户注意事项" in head
+    )
+
+
+def _render_doc_content_from_config(
+    app_name: str,
+    app_code: str,
+    config: dict | None,
+) -> str:
+    from app.routes.generation_steps import _render_design_doc_markdown
+
+    data = dict(_preview_data(config))
+    if app_name and not data.get("appName"):
+        data["appName"] = app_name
+    if app_code and not data.get("appCode"):
+        data["appCode"] = app_code
+    return _render_design_doc_markdown(app_name or data.get("appName", ""), app_code or data.get("appCode", ""), data)
+
+
+async def _ensure_doc_version_rendered_content(
+    db: AsyncSession,
+    app: Optional[Application],
+    version: DocumentVersion,
+) -> str:
+    raw_content = str(version.raw_content or "").strip()
+
+    parsed = await _ensure_doc_version_parsed_config(db, version)
+    if isinstance(parsed, dict):
+        app_name = ""
+        app_code = ""
+        if app is not None:
+            app_name = app.app_name or ""
+            app_code = app.app_code or ""
+        data = _preview_data(parsed)
+        rendered = _render_doc_content_from_config(
+            app_name or data.get("appName", ""),
+            app_code or data.get("appCode", ""),
+            parsed,
+        ).strip()
+        if rendered and rendered != raw_content:
+            version.raw_content = rendered
+            await db.flush()
+            return rendered
+        if rendered:
+            return rendered
+
+    if raw_content and not _doc_content_looks_like_template(raw_content):
+        return raw_content
+    return raw_content
+
+
+async def _sync_canonical_config_to_current_doc_version(
+    db: AsyncSession,
+    app: Application,
+    config: dict | None,
+    *,
+    filename: str | None = None,
+    summary: str | None = None,
+    create_if_missing: bool = False,
+) -> Optional[DocumentVersion]:
+    if not isinstance(config, dict):
+        return None
+
+    import hashlib
+
+    config_json = _dump_parsed_config(config)
+    rendered_doc = _render_doc_content_from_config(app.app_name or "", app.app_code or "", config)
+    data = _preview_data(config)
+    fallback_summary = (
+        summary
+        or f"{len(data.get('models', []) or [])} 模型, "
+           f"{len(data.get('dicts', []) or [])} 字典, "
+           f"{len(data.get('roles', []) or [])} 角色"
+    )
+
+    current_version_obj = None
+    if app.current_doc_version:
+        result = await db.execute(
+            select(DocumentVersion).where(
+                DocumentVersion.application_id == app.id,
+                DocumentVersion.version == app.current_doc_version,
+            )
+        )
+        current_version_obj = result.scalar_one_or_none()
+
+    if current_version_obj:
+        current_version_obj.parsed_config = config_json
+        current_version_obj.raw_content = rendered_doc
+        current_version_obj.content_hash = hashlib.sha256(config_json.encode()).hexdigest()
+        if filename:
+            current_version_obj.filename = filename
+        if fallback_summary:
+            current_version_obj.summary = fallback_summary
+        return current_version_obj
+
+    if not create_if_missing:
+        return None
+
+    new_version = int(app.current_doc_version or 0) or 1
+    doc_ver = DocumentVersion(
+        application_id=app.id,
+        conversation_id=app.conversation_id,
+        version=new_version,
+        filename=filename or f"{app.app_name or '设计文档'}-V{new_version}.md",
+        content_hash=hashlib.sha256(config_json.encode()).hexdigest(),
+        raw_content=rendered_doc,
+        parsed_config=config_json,
+        summary=fallback_summary,
+    )
+    db.add(doc_ver)
+    app.current_doc_version = new_version
+    return doc_ver
+
+
+async def _bind_pending_doc_versions_to_app(
+    db: AsyncSession,
+    app: Application,
+    versions: list[DocumentVersion],
+) -> int:
+    max_ver = 0
+    for version in versions:
+        version.application_id = app.id
+        max_ver = max(max_ver, int(version.version or 0))
+        parsed = await _ensure_doc_version_parsed_config(db, version)
+        if isinstance(parsed, dict):
+            rendered = _render_doc_content_from_config(
+                app.app_name or _preview_data(parsed).get("appName", ""),
+                app.app_code or _preview_data(parsed).get("appCode", ""),
+                parsed,
+            ).strip()
+            if rendered:
+                import hashlib
+                version.raw_content = rendered
+                version.content_hash = hashlib.sha256(version.parsed_config.encode() if isinstance(version.parsed_config, str) else _dump_parsed_config(parsed).encode()).hexdigest()
+    if max_ver:
+        app.current_doc_version = max_ver
+    return max_ver
 
 
 async def _resolve_builder_llm_cfg(
@@ -552,17 +770,17 @@ async def create_application(
             )
             conv_versions = result.scalars().all()
             if conv_versions:
-                for v in conv_versions:
-                    v.application_id = app.id
-                max_ver = max(v.version for v in conv_versions)
+                max_ver = await _bind_pending_doc_versions_to_app(db, app, conv_versions)
                 app.current_doc_version = max_ver
                 await db.commit()
                 await db.refresh(app)
                 logger.info(f"Linked {len(conv_versions)} DocumentVersion(s) to app {app.id}")
             else:
-                # 兼容旧流程：如果对话中没有 DocumentVersion，尝试从 doc_raw 消息创建
-                import hashlib
+                # 兼容旧流程：对话里没有挂起版本时，也只允许从 canonical config 创建版本，
+                # 绝不再把上传原文直接回灌到 DocumentVersion.raw_content。
                 from app.models import Message
+
+                doc_filename = f"{data.app_name or 'design-doc'}.md"
                 msg_result = await db.execute(
                     select(Message).where(
                         Message.conversation_id == data.conversation_id,
@@ -571,8 +789,6 @@ async def create_application(
                     ).order_by(Message.id.desc()).limit(1)
                 )
                 doc_msg = msg_result.scalar_one_or_none()
-                doc_content = ""
-                doc_filename = f"{data.app_name or 'design-doc'}.md"
                 if doc_msg and doc_msg.content:
                     try:
                         raw = doc_msg.content
@@ -581,31 +797,34 @@ async def create_application(
                         else:
                             json_str = raw
                         doc_data = json.loads(json_str)
-                        doc_content = doc_data.get("raw_content", "")
-                        doc_filename = doc_data.get("filename", doc_filename)
+                        doc_filename = doc_data.get("filename", doc_filename) or doc_filename
                     except (json.JSONDecodeError, IndexError, ValueError):
                         pass
-                if doc_content:
-                    models_count = len(data.config_preview.get('models', [])) if isinstance(data.config_preview, dict) else 0
-                    dicts_count = len(data.config_preview.get('dicts', [])) if isinstance(data.config_preview, dict) else 0
-                    roles_count = len(data.config_preview.get('roles', [])) if isinstance(data.config_preview, dict) else 0
-                    doc_ver = DocumentVersion(
-                        application_id=app.id,
-                        conversation_id=data.conversation_id,
-                        version=1,
+
+                if data.config_preview:
+                    await _sync_canonical_config_to_current_doc_version(
+                        db,
+                        app,
+                        data.config_preview,
                         filename=doc_filename,
-                        content_hash=hashlib.sha256(doc_content.encode()).hexdigest(),
-                        raw_content=doc_content,
-                        parsed_config=_dump_parsed_config(data.config_preview),
-                        summary=f"{models_count} 模型, {dicts_count} 字典, {roles_count} 角色",
+                        create_if_missing=True,
                     )
-                    db.add(doc_ver)
-                    app.current_doc_version = 1
                     await db.commit()
                     await db.refresh(app)
-                    logger.info(f"Fallback: created DocumentVersion V1 for app {app.id}")
+                    logger.info("Fallback: created canonical DocumentVersion V1 for app %s", app.id)
         except Exception as e:
             logger.warning(f"Failed to link/create DocumentVersion: {e}")
+
+    if data.config_preview:
+        await _sync_canonical_config_to_current_doc_version(
+            db,
+            app,
+            data.config_preview,
+            create_if_missing=not bool(app.current_doc_version),
+        )
+        app.config_preview = _dump_preview_config(data.config_preview)
+        await db.commit()
+        await db.refresh(app)
 
     resp = _enrich(app)
     resp.permissions = {Action.EDIT: True, Action.DELETE: True, Action.CLONE: True}  # 创建者全部权限
@@ -647,9 +866,28 @@ async def auto_create_application(
         )
         existing = result.scalar_one_or_none()
         if existing:
-            # 更新配置
+            # 更新配置，并把本次对话里尚未绑定的最新文档版本挂到当前应用
             existing.config_preview = _dump_preview_config(data.config_preview)
             existing.app_name = data.app_name
+            try:
+                doc_ver_result = await db.execute(
+                    select(DocumentVersion).where(
+                        DocumentVersion.conversation_id == data.conversation_id,
+                        DocumentVersion.application_id.is_(None),
+                    ).order_by(DocumentVersion.version.desc())
+                )
+                pending_versions = doc_ver_result.scalars().all()
+                if pending_versions:
+                    latest_version = await _bind_pending_doc_versions_to_app(db, existing, pending_versions)
+                    existing.current_doc_version = latest_version or existing.current_doc_version
+            except Exception as e:
+                logger.warning(f"auto-create(existing): link DocumentVersions failed: {e}")
+            await _sync_canonical_config_to_current_doc_version(
+                db,
+                existing,
+                data.config_preview,
+                create_if_missing=not bool(existing.current_doc_version),
+            )
             await db.commit()
             return AutoCreateResponse(
                 app_id=existing.id,
@@ -658,11 +896,14 @@ async def auto_create_application(
                 is_new=False,
             )
 
-    # 生成 app_code
+    # 生成 app_code：优先使用解析文档中的 appCode
     import hashlib
-    code_base = data.app_name.lower().replace(" ", "-").replace("_", "-")
-    ascii_code = ''.join(c for c in code_base if c.isascii() and (c.isalnum() or c == '-'))
-    ascii_code = ascii_code.strip('-')
+    preview_data = data.config_preview.get("data", data.config_preview) if isinstance(data.config_preview, dict) else {}
+    ascii_code = _normalize_app_code(preview_data.get("appCode") if isinstance(preview_data, dict) else "")
+    if not ascii_code:
+        code_base = data.app_name.lower().replace(" ", "-").replace("_", "-")
+        ascii_code = ''.join(c for c in code_base if c.isascii() and (c.isalnum() or c == '-'))
+        ascii_code = ascii_code.strip('-')
     if len(ascii_code) < 2:
         ascii_code = "app-" + hashlib.md5(data.app_name.encode()).hexdigest()[:6]
 
@@ -690,8 +931,16 @@ async def auto_create_application(
                     DocumentVersion.application_id.is_(None),
                 )
             )
-            for v in result.scalars().all():
-                v.application_id = app.id
+            linked_versions = result.scalars().all()
+            max_ver = await _bind_pending_doc_versions_to_app(db, app, linked_versions)
+            if max_ver:
+                app.current_doc_version = max_ver
+            await _sync_canonical_config_to_current_doc_version(
+                db,
+                app,
+                data.config_preview,
+                create_if_missing=not bool(max_ver),
+            )
             await db.commit()
         except Exception as e:
             logger.warning(f"auto-create: link DocumentVersions failed: {e}")
@@ -848,6 +1097,12 @@ async def update_application(
         app.platform_env_id = data.platform_env_id
     if data.config_preview:
         app.config_preview = _dump_preview_config(data.config_preview)
+        await _sync_canonical_config_to_current_doc_version(
+            db,
+            app,
+            data.config_preview,
+            create_if_missing=not bool(app.current_doc_version),
+        )
     # 重置状态为 draft，允许重新生成
     if app.status in ("failed", "completed"):
         app.status = "draft"
@@ -1349,10 +1604,11 @@ async def upload_doc_with_conversation(
                 }, ensure_ascii=False)}
 
             # ── 全量解析：用 asyncio.Queue 实时把进度推给前端 ──
+            # 队列中的元素为 (msg, batch) 元组，batch 为可选的已解析模块数据
             progress_queue: asyncio.Queue = asyncio.Queue()
 
-            async def _on_progress(msg: str):
-                await progress_queue.put(msg)
+            async def _on_progress(msg: str, *, batch=None):
+                await progress_queue.put((msg, batch))
 
             # 启动解析任务（与 SSE 流并发）
             parse_task = asyncio.create_task(
@@ -1362,15 +1618,23 @@ async def upload_doc_with_conversation(
             # 实时转发进度消息，直到解析完成
             while not parse_task.done():
                 try:
-                    msg = await asyncio.wait_for(progress_queue.get(), timeout=0.2)
-                    yield {"event": "progress", "data": json.dumps({"message": msg}, ensure_ascii=False)}
+                    item = await asyncio.wait_for(progress_queue.get(), timeout=0.2)
+                    msg, batch = item if isinstance(item, tuple) else (item, None)
+                    payload = {"message": msg}
+                    if batch is not None:
+                        payload["batch"] = batch
+                    yield {"event": "progress", "data": json.dumps(payload, ensure_ascii=False)}
                 except asyncio.TimeoutError:
                     pass
 
             # 排干队列中剩余消息
             while not progress_queue.empty():
-                msg = progress_queue.get_nowait()
-                yield {"event": "progress", "data": json.dumps({"message": msg}, ensure_ascii=False)}
+                item = progress_queue.get_nowait()
+                msg, batch = item if isinstance(item, tuple) else (item, None)
+                payload = {"message": msg}
+                if batch is not None:
+                    payload["batch"] = batch
+                yield {"event": "progress", "data": json.dumps(payload, ensure_ascii=False)}
 
             # 取解析结果（若抛异常会在此处重新抛出）
             parse_result = parse_task.result()
@@ -1418,14 +1682,21 @@ async def upload_doc_with_conversation(
                         "message": f"[models] 模型生成完成：{models_count} 个",
                         "batch": data["models"],
                     }, ensure_ascii=False)}
+                if data.get("forms"):
+                    forms_count = len(data.get("forms", []))
+                    yield {"event": "progress", "data": json.dumps({
+                        "message": f"[forms] 表单生成完成：{forms_count} 个",
+                        "batch": data["forms"],
+                    }, ensure_ascii=False)}
                 if data.get("permissions"):
                     yield {"event": "progress", "data": json.dumps({
                         "message": "[permissions] 权限生成完成",
                         "batch": data["permissions"],
                     }, ensure_ascii=False)}
                 yield {"event": "progress", "data": json.dumps({
-                    "message": f"[complete] 配置组装完成！{models_count} 个模型、{dicts_count} 个字典、{roles_count} 个角色",
+                    "message": "[complete] 配置组装完成",
                     "data": data,
+                    "parse_meta": parse_meta,
                 }, ensure_ascii=False)}
 
         except Exception as e:
@@ -1536,14 +1807,19 @@ async def upload_doc_with_conversation(
             new_version = max_ver + 1
 
             config_json_str = _dump_parsed_config(data)
+            rendered_doc = _render_doc_content_from_config(
+                data.get("appName", ""),
+                data.get("appCode", ""),
+                data,
+            )
 
             doc_ver = DocumentVersion(
                 application_id=None,
                 conversation_id=conv_id,
                 version=new_version,
                 filename=fname,
-                content_hash=hashlib.sha256(text.encode()).hexdigest(),
-                raw_content=text,
+                content_hash=hashlib.sha256(config_json_str.encode()).hexdigest(),
+                raw_content=rendered_doc,
                 parsed_config=config_json_str,
                 parent_version=max_ver if max_ver > 0 else None,
                 summary=f"{models_count} 模型, {dicts_count} 字典, {roles_count} 角色",
@@ -1556,6 +1832,7 @@ async def upload_doc_with_conversation(
                 "conversation_id": conv_id,
                 "summary": summary,
                 "preview": data,
+                "rendered_doc": rendered_doc,
                 "parse_meta": parse_meta,
                 "version": new_version,
                 "is_incremental": is_incremental,
@@ -1704,6 +1981,7 @@ async def upload_doc_version(
         from app.doc_differ import build_structure_index, semantic_diff, diff_to_actions, compute_hash
         from app.config_diff import compute_config_diff
         from app.doc_text_differ import diff_sections, get_diff_stats
+        import hashlib
 
         current_step = "初始化"
 
@@ -1778,15 +2056,19 @@ async def upload_doc_version(
             current_step = "解析文档"
             progress_messages = []
 
-            async def _on_progress(msg: str):
-                progress_messages.append(msg)
+            async def _on_progress(msg: str, *, batch=None):
+                progress_messages.append((msg, batch))
 
             yield {"event": "progress", "data": json.dumps({"step": "parse", "message": "检查文档标准度..."}, ensure_ascii=False)}
             parse_result = await parse_document(text, llm_cfg=doc_llm_cfg, on_progress=_on_progress)
             parse_meta = parse_result.get("parse_meta", {}) if isinstance(parse_result, dict) else {}
 
-            for msg in progress_messages:
-                yield {"event": "progress", "data": json.dumps({"step": "parse", "message": msg}, ensure_ascii=False)}
+            for item in progress_messages:
+                msg, batch = item if isinstance(item, tuple) else (item, None)
+                payload = {"step": "parse", "message": msg}
+                if batch is not None:
+                    payload["batch"] = batch
+                yield {"event": "progress", "data": json.dumps(payload, ensure_ascii=False)}
 
             v2_config = parse_result.get("data", parse_result)
 
@@ -1827,14 +2109,21 @@ async def upload_doc_version(
                     select(Application).where(Application.id == app_id_val)
                 )
                 app_obj = app_result.scalar_one()
+                rendered_doc = _render_doc_content_from_config(
+                    app_obj.app_name or v2_config.get("appName", ""),
+                    app_obj.app_code or v2_config.get("appCode", ""),
+                    v2_config,
+                )
+                config_json = _dump_parsed_config(v2_config)
+
                 doc_ver = DocumentVersion(
                     application_id=app_id_val,
                     version=new_version,
                     filename=fname,
-                    content_hash=content_hash,
-                    raw_content=text,
+                    content_hash=hashlib.sha256(config_json.encode()).hexdigest(),
+                    raw_content=rendered_doc,
                     structure_index=json.dumps(structure_index, ensure_ascii=False),
-                    parsed_config=_dump_parsed_config(v2_config),
+                    parsed_config=config_json,
                     parent_version=max_ver if max_ver > 0 else None,
                     summary=summary,
                 )
@@ -1888,6 +2177,7 @@ async def upload_doc_version(
                         "change_plan_id": change_plan.id,
                         "is_first_version": max_ver == 0,
                         "parsed_config": v2_config,
+                        "rendered_doc": rendered_doc,
                         "parse_meta": parse_meta,
                     }, ensure_ascii=False),
                 }
@@ -2239,13 +2529,14 @@ async def list_doc_versions(
     items = []
     for v in versions:
         parsed_config = await _ensure_doc_version_parsed_config(db, v)
+        rendered_content = await _ensure_doc_version_rendered_content(db, app, v)
         related_plans = plans_by_to_version.get(v.version, [])
         items.append({
             "id": v.id,
             "version": v.version,
             "filename": v.filename,
             "content_hash": v.content_hash,
-            "raw_content": v.raw_content,
+            "raw_content": rendered_content,
             "parsed_config": parsed_config,
             "summary": v.summary,
             "structure_index": json.loads(v.structure_index) if v.structure_index else None,
@@ -2363,12 +2654,13 @@ async def list_doc_versions_by_conversation(
     items = []
     for v in versions:
         parsed_config = await _ensure_doc_version_parsed_config(db, v)
+        rendered_content = await _ensure_doc_version_rendered_content(db, None, v)
         items.append({
             "id": v.id,
             "version": v.version,
             "filename": v.filename,
             "content_hash": v.content_hash,
-            "raw_content": v.raw_content,
+            "raw_content": rendered_content,
             "parsed_config": parsed_config,
             "summary": v.summary,
             "structure_index": json.loads(v.structure_index) if v.structure_index else None,

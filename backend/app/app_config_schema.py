@@ -32,6 +32,10 @@ class FieldConfig(BaseModel):
     ] = Field(..., description="字段类型")
     dict: Optional[str] = Field(None, description="关联字典编码（下拉选择类型必填）")
     ref_model: Optional[str] = Field(None, description="关联模型编码（数据选择器必填）")
+    formAssociationConfig: Optional[Dict[str, str]] = Field(
+        None,
+        description="关联表单配置：originFieldCode/targetModelCode/targetFieldCode",
+    )
     required: bool = Field(False, description="是否必填")
     description: Optional[str] = Field(None, description="字段描述")
 

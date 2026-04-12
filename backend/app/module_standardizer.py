@@ -223,6 +223,7 @@ async def standardize_module(
             llm_cfg=llm_cfg,
             temperature=0.1,
             max_tokens=4096,
+            timeout=45.0,  # 从默认120s降到45s，大多数模块30s内完成
         )
         standardized = _extract_markdown(raw)
         logger.info(f"module_standardizer: {module} 标准化完成，输出 {len(standardized)} 字符")

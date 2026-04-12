@@ -97,16 +97,7 @@ def parse(text: str) -> ParseResult:
         result.errors.extend(errs)
         if not forms:
             result.failed_modules.add("forms")
-            logger.warning("表单配置解析失败，将从模型推导默认值")
-            forms = forms_parser.derive_default_forms(models)
-        else:
-            # 文档有写的用文档的，没写的自动推导补全
-            explicit_model_codes = {f["modelCode"] for f in forms}
-            derived = forms_parser.derive_default_forms([
-                m for m in models
-                if m["code"] not in explicit_model_codes and m.get("table_type") != "子表"
-            ])
-            forms = forms + derived
+            logger.warning("表单配置解析失败，保留失败状态，等待后续修复")
     else:
         # 没有表单章节，全部从模型推导
         forms = forms_parser.derive_default_forms(models)

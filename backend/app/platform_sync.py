@@ -38,15 +38,15 @@ _OP_MAP: Dict[str, str] = {
     "deletePermission": "删除",
     "queryPermission": "查看",
     "importPermission": "导入",
-    "copyAddPermission": "复制新增",
-    "batchDeletePermission": "批量删除",
-    "batchRejectPermission": "批量拒绝",
-    "batchAgreePermission": "批量同意",
+    "copyAddPermission": "查看",
     "temporaryStoragePermission": "暂存",
-    "shareFormPermission": "分享",
+    "shareFormPermission": "查看",
     "exportPermission": "导出",
-    "printPermission": "打印",
-    "queryApprovalInfoPermission": "查看审批历史",
+    "commentPermission": "查看",
+    "dataSharePermission": "查看",
+    "logPermission": "查看",
+    "printPermission": "查看",
+    "queryApprovalInfoPermission": "查看",
 }
 
 # 数据范围 → config 格式
@@ -119,6 +119,26 @@ def _convert_roles(remote_roles: List[Dict]) -> List[Dict]:
             "code": r.get("roleCode", ""),
         })
     return roles
+
+
+def _build_role_lookup(remote_roles: List[Dict]) -> Dict[str, Dict[str, str]]:
+    """构建角色 id/code/name 的统一索引，便于权限回读时反查。"""
+    lookup: Dict[str, Dict[str, str]] = {}
+    for role in remote_roles:
+        role_id = str(role.get("id", role.get("roleId", "")) or "").strip()
+        role_code = str(role.get("roleCode", role.get("code", "")) or "").strip()
+        role_name = str(role.get("roleName", role.get("name", "")) or "").strip()
+        if not (role_id or role_code or role_name):
+            continue
+        entry = {
+            "id": role_id,
+            "code": role_code or role_id or role_name,
+            "name": role_name or role_code or role_id,
+        }
+        for key in (role_id, role_code, role_name):
+            if key:
+                lookup[key] = entry
+    return lookup
 
 
 def _convert_dicts(remote_dicts: List[Dict], dict_options: Dict[str, List[Dict]]) -> List[Dict]:
@@ -223,7 +243,7 @@ async def sync_from_platform_full(
 
     # 4. 构建 config_preview
     roles = _convert_roles(remote.get("roles", []))
-    role_code_map = {r.get("roleCode", ""): r.get("roleName", "") for r in remote.get("roles", [])}
+    role_lookup = _build_role_lookup(remote.get("roles", []))
 
     # 字典：优先从 detailPageConfigById 的 chooseOptions 提取（更完整），
     # 回退到 remote dicts
@@ -236,7 +256,7 @@ async def sync_from_platform_full(
     models = _build_models_from_form_configs(form_configs, dict_id_to_code)
 
     # 权限
-    permissions = _build_permissions_from_form_configs(form_configs, role_code_map)
+    permissions = _build_permissions_from_form_configs(form_configs, role_lookup)
 
     config: Dict[str, Any] = {
         "appName": app_name,
@@ -479,12 +499,30 @@ def _extract_single_field(
     if boc_code == "boc_code_object_user":
         field["type"] = "人员选择"
 
+    association = comp.get("formAssociationConfig", {})
+    if comp_type == "FORM_ASSOCIATION" and isinstance(association, dict):
+        target_model = association.get("targetModelCode", "")
+        target_field = association.get("targetFieldCode", "")
+        origin_field = association.get("originFieldCode", field_code)
+        if target_model:
+            field["formAssociationConfig"] = {
+                "originFieldCode": origin_field,
+                "targetModelCode": target_model,
+                "targetFieldCode": target_field,
+            }
+            field["ref"] = {
+                "model": target_model,
+                "field": origin_field,
+                "display_field": target_field,
+                "target_field": target_field,
+            }
+
     return field
 
 
 def _build_permissions_from_form_configs(
     form_configs: Dict[str, Dict],
-    role_code_map: Dict[str, str],
+    role_lookup: Dict[str, Dict[str, str]],
 ) -> List[Dict]:
     """从 advancedPermissionGroups + operationPermissionGroups 提取权限"""
     permissions: List[Dict] = []
@@ -513,16 +551,21 @@ def _build_permissions_from_form_configs(
                 range_type = po.get("permissionRange", {}).get("rangeType", "ALL")
 
                 role_code = ""
+                role_name = ""
                 if obj_type == "ALL_USER":
                     role_code = "ALL_USER"
-                elif obj_type == "ROLE_USER":
-                    # 通过 role id 查找 role code
-                    role_code = _find_role_code_by_id(obj_value, role_code_map)
+                    role_name = "全部人员"
+                elif obj_type in {"ROLE_USER", "ROLE"}:
+                    role_info = _find_role_info(obj_value, role_lookup)
+                    role_code = role_info.get("code", "")
+                    role_name = role_info.get("name", role_code)
 
                 if role_code:
                     op_str = "all" if len(enabled_ops) >= 4 else ",".join(enabled_ops)
                     rules.append({
                         "role": role_code,
+                        "role_code": role_code,
+                        "role_name": role_name or role_code,
                         "op": op_str,
                         "data": _RANGE_MAP.get(range_type, range_type),
                     })
@@ -542,23 +585,31 @@ def _build_permissions_from_form_configs(
                 obj_value = po.get("permissionObjectValue", "")
 
                 role_code = ""
+                role_name = ""
                 if obj_type == "ALL_USER":
                     role_code = "ALL_USER"
-                elif obj_type == "ROLE_USER":
-                    role_code = _find_role_code_by_id(obj_value, role_code_map)
+                    role_name = "全部人员"
+                elif obj_type in {"ROLE_USER", "ROLE"}:
+                    role_info = _find_role_info(obj_value, role_lookup)
+                    role_code = role_info.get("code", "")
+                    role_name = role_info.get("name", role_code)
 
                 if role_code:
                     # 检查是否已有该角色的规则，合并
                     existing = next(
-                        (r for r in rules if r["role"] == role_code), None
+                        (r for r in rules if (r.get("role_code") or r.get("role")) == role_code), None
                     )
                     if existing:
                         existing_ops = set(existing["op"].split(","))
                         existing_ops.update(enabled_ops)
                         existing["op"] = ",".join(existing_ops)
+                        if role_name and not existing.get("role_name"):
+                            existing["role_name"] = role_name
                     else:
                         rules.append({
                             "role": role_code,
+                            "role_code": role_code,
+                            "role_name": role_name or role_code,
                             "op": ",".join(enabled_ops),
                             "data": "ALL",
                         })
@@ -572,9 +623,13 @@ def _build_permissions_from_form_configs(
     return permissions
 
 
-def _find_role_code_by_id(role_id: str, role_code_map: Dict[str, str]) -> str:
-    """通过角色 ID 查找角色 code（role_code_map key 是 roleCode，但权限中用的是 role ID）"""
-    # advancedPermissionGroups 中 permissionObjectValue 是角色的 id（数字），
-    # 不是 roleCode。我们需要在 roles 数据中做反向映射。
-    # 由于我们没有 id→code 的直接映射，先返回 role_id 作为 fallback
-    return role_id
+def _find_role_info(role_ref: str, role_lookup: Dict[str, Dict[str, str]]) -> Dict[str, str]:
+    """通过角色 id/code/name 查找角色信息，尽量还原为稳定的 code/name。"""
+    normalized = str(role_ref or "").strip()
+    if not normalized:
+        return {}
+    return role_lookup.get(normalized, {
+        "id": normalized,
+        "code": normalized,
+        "name": normalized,
+    })

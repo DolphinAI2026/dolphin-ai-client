@@ -117,7 +117,6 @@ const activeKey = computed(() => {
 })
 
 const userInitial = computed(() => (userStore.user?.username || 'A').slice(0, 1).toLowerCase())
-
 function syncExpandedWithRoute() {
   expanded.value = route.meta.navExpanded === true
 }

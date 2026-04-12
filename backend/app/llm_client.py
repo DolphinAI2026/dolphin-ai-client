@@ -32,17 +32,23 @@ class LLMClient:
     def __init__(self, api_key: str = None, base_url: str = None, model: str = None):
         self.api_key = api_key or settings.llm_api_key
         self.model = model or settings.llm_model
-        self.doc_model = settings.llm_doc_model or self.model
+        self._openai_base_url: str | None = None  # 非 Anthropic 兼容 URL
         if base_url:
             _raw = base_url.rstrip("/")
-            # 只接受包含 /anthropic 的 URL 作为 Anthropic base_url，否则忽略传入值
             if "/anthropic" in _raw:
+                # Anthropic-compatible proxy（如 MiniMax）
                 self.anthropic_base_url = _raw.removesuffix("/v1")
+                self._openai_base_url = None
+                self.doc_model = settings.llm_doc_model or self.model
             else:
-                # OpenAI 格式 URL 无法用于 Anthropic Messages API，使用默认值
+                # OpenAI-compatible provider（如 千问/qwen）
+                self._openai_base_url = _raw
                 self.anthropic_base_url = settings.anthropic_base_url.rstrip("/")
+                # OpenAI provider 用自己的 model，不用 MiniMax 专属的 doc_model
+                self.doc_model = self.model
         else:
             self.anthropic_base_url = settings.anthropic_base_url.rstrip("/")
+            self.doc_model = settings.llm_doc_model or self.model
         self.anthropic_api_key = api_key or settings.anthropic_api_key or self.api_key
         self.anthropic_model = model or settings.anthropic_model
         self.vision_model = settings.llm_vision_model or self.anthropic_model
@@ -230,6 +236,44 @@ class LLMClient:
         """
         调用 Anthropic Messages API，并转成现有调用方可消费的 OpenAI 风格 chunk。
         """
+        if self._openai_base_url:
+            base = self._openai_base_url.rstrip("/")
+            if base.endswith("/v1"):
+                url = f"{base}/chat/completions"
+            else:
+                url = f"{base}/v1/chat/completions"
+
+            payload: Dict[str, Any] = {
+                "model": self.model,
+                "messages": messages,
+                "max_tokens": 16384,
+                "stream": True,
+            }
+            stream_timeout = httpx.Timeout(connect=10.0, read=300.0, write=10.0, pool=10.0)
+
+            async with httpx.AsyncClient(timeout=stream_timeout) as client:
+                async with client.stream(
+                    "POST",
+                    url,
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                ) as response:
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if not line or not line.startswith("data:"):
+                            continue
+                        raw = line[5:].strip()
+                        if raw == "[DONE]":
+                            break
+                        try:
+                            yield json.dumps(json.loads(raw), ensure_ascii=False)
+                        except Exception:
+                            continue
+            return
+
         system_text, api_messages = self._prepare_messages(messages)
         payload: Dict[str, Any] = {
             "model": self.model,
@@ -293,6 +337,41 @@ class LLMClient:
                                 ensure_ascii=False,
                             )
 
+    async def _openai_completion(
+        self,
+        messages: List[Dict[str, Any]],
+        *,
+        model: str,
+        max_tokens: int,
+        timeout: float,
+        temperature: float,
+    ) -> Dict[str, Any]:
+        """OpenAI-compatible chat/completions 调用（用于千问等非 Anthropic proxy）。"""
+        base = self._openai_base_url.rstrip("/")
+        if base.endswith("/v1"):
+            url = f"{base}/chat/completions"
+        else:
+            url = f"{base}/v1/chat/completions"
+
+        # 将 system 消息合并到 messages（OpenAI 原生支持 system role，无需额外处理）
+        payload: Dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+            response.raise_for_status()
+            return response.json()
+
     async def chat_completion(
         self,
         messages: List[Dict[str, Any]],
@@ -303,9 +382,18 @@ class LLMClient:
         model: str = None,
     ) -> Dict[str, Any]:
         """
-        调用 Anthropic Messages API，并返回 OpenAI 风格结构给现有调用方。
+        调用 LLM 并返回 OpenAI 风格结构。
+        自动根据 base_url 类型选择 Anthropic Messages API 或 OpenAI chat/completions。
         """
         effective_model = model or self.model
+        if self._openai_base_url:
+            return await self._openai_completion(
+                messages,
+                model=effective_model,
+                max_tokens=max_tokens,
+                timeout=timeout,
+                temperature=temperature,
+            )
         data = await self._anthropic_completion(
             messages,
             model=effective_model,

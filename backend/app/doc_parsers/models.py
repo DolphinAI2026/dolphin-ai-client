@@ -6,7 +6,7 @@ from typing import List, Optional, Tuple
 
 from app.doc_section_splitter import split_subsections
 from app.doc_table_parser import parse_table, parse_all_tables
-from app.config_validator import _normalize_field_type
+from app.config_validator import _normalize_field_type, RESERVED_FIELD_CODES
 
 
 # 数据库字段类型 → aPaaS 字段类型（兜底映射）
@@ -40,6 +40,10 @@ _SUB_TABLE_TYPE = "子表"
 
 def parse(section_text: str) -> Tuple[List[dict], List[str]]:
     errors: List[str] = []
+    aggregate_models, aggregate_errors = _parse_aggregate_tables(section_text)
+    if aggregate_models:
+        return aggregate_models, aggregate_errors
+
     models: List[dict] = []
     seen_codes: set = set()
 
@@ -84,6 +88,78 @@ def parse(section_text: str) -> Tuple[List[dict], List[str]]:
         models.append(model)
 
     _inline_sub_tables(models, errors)
+    return models, errors
+
+
+def _parse_aggregate_tables(section_text: str) -> Tuple[List[dict], List[str]]:
+    """兼容标准模版的总表结构：
+    - 模型定义：模型编码 / 模型名称
+    - 模型字段：模型编码 / 字段编码 / 字段名称 / 数据库字段类型 / 长度
+    """
+    errors: List[str] = []
+    all_tables = parse_all_tables(section_text)
+    if not all_tables:
+        return [], errors
+
+    model_rows = None
+    field_rows = None
+    for table in all_tables:
+        if not table:
+            continue
+        first_row = table[0]
+        if (
+            model_rows is None
+            and "模型编码" in first_row
+            and "模型名称" in first_row
+            and "字段编码" not in first_row
+        ):
+            model_rows = table
+        elif (
+            field_rows is None
+            and "模型编码" in first_row
+            and "字段编码" in first_row
+            and "字段名称" in first_row
+        ):
+            field_rows = table
+
+    if not model_rows:
+        return [], errors
+
+    field_rows_by_model: dict[str, list[dict]] = {}
+    for row in field_rows or []:
+        model_code = (row.get("模型编码") or "").strip().lower()
+        if not model_code:
+            continue
+        field_rows_by_model.setdefault(model_code, []).append(row)
+
+    seen_codes: set[str] = set()
+    models: List[dict] = []
+    for row in model_rows:
+        code = (row.get("模型编码") or "").strip().lower()
+        name = (row.get("模型名称") or code).strip()
+        if not code:
+            continue
+        if not re.match(r'^[a-zA-Z][a-zA-Z0-9_]*$', code):
+            errors.append(f"模型 '{name}'：编码 '{code}' 不合规")
+            continue
+        if code in seen_codes:
+            errors.append(f"模型编码 '{code}' 重复，已跳过")
+            continue
+        seen_codes.add(code)
+        fields, field_errors = _parse_fields(
+            "",
+            code,
+            name,
+            preloaded_rows=field_rows_by_model.get(code, []),
+        )
+        errors.extend(field_errors)
+        models.append({
+            "code": code,
+            "name": name,
+            "fields": fields,
+            "table_type": "主表",
+        })
+
     return models, errors
 
 
@@ -163,6 +239,9 @@ def _parse_fields(content: str, model_code: str, model_name: str,
             continue
         if code in seen_codes:
             errors.append(f"模型 '{model_name}' 字段编码 '{code}' 重复，已跳过")
+            continue
+        if code in RESERVED_FIELD_CODES:
+            errors.append(f"模型 '{model_name}' 字段 '{name}'：编码 '{code}' 是平台系统字段，已自动跳过")
             continue
 
         field_type, type_warn = _resolve_field_type(raw_type)

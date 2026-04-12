@@ -3,19 +3,38 @@
   <div class="chat-page">
     <TopBar title="" show-back :show-home="false" back-to="/apps">
       <template #center>
-        <div v-if="showViewSwitcher" class="mode-switcher">
-          <button class="mode-btn" :class="{ active: activeView === 'builder' }" @click="setActiveView('builder')">
-            <span class="mode-btn-dot" aria-hidden="true"></span>
-            <span>智能搭建</span>
-          </button>
-          <button v-if="SHOW_PLATFORM_CONFIG" class="mode-btn" :class="{ active: activeView === 'platform' }" @click="setActiveView('platform')">
-            <span class="mode-btn-dot" aria-hidden="true"></span>
-            <span>辅助搭建</span>
-          </button>
-          <button class="mode-btn" :class="{ active: activeView === 'coding' }" @click="setActiveView('coding')">
-            <span class="mode-btn-dot" aria-hidden="true"></span>
-            <span>智能开发</span>
-          </button>
+        <div class="top-bar-center">
+          <div v-if="builderAppDisplayName" class="top-bar-app-name" :title="builderAppDisplayName">
+            {{ builderAppDisplayName }}
+          </div>
+          <div v-if="showViewSwitcher" class="mode-switcher">
+            <button class="mode-btn" :class="{ active: activeView === 'builder' }" @click="setActiveView('builder')">
+              <span class="mode-btn-icon" aria-hidden="true">
+                <svg viewBox="0 0 16 16" fill="none">
+                  <path d="M3.5 5.2h9M3.5 8h9M3.5 10.8h6.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
+                  <circle cx="12.2" cy="10.8" r="1.2" fill="currentColor" />
+                </svg>
+              </span>
+              <span>智能搭建</span>
+            </button>
+            <button v-if="SHOW_PLATFORM_CONFIG" class="mode-btn" :class="{ active: activeView === 'platform' }" @click="setActiveView('platform')">
+              <span class="mode-btn-icon" aria-hidden="true">
+                <svg viewBox="0 0 16 16" fill="none">
+                  <rect x="2.3" y="3" width="11.4" height="8.4" rx="1.8" stroke="currentColor" stroke-width="1.3" />
+                  <path d="M5.2 13h5.6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
+                </svg>
+              </span>
+              <span>辅助搭建</span>
+            </button>
+            <button class="mode-btn" :class="{ active: activeView === 'coding' }" @click="setActiveView('coding')">
+              <span class="mode-btn-icon" aria-hidden="true">
+                <svg viewBox="0 0 16 16" fill="none">
+                  <path d="M5.2 4.4L2.6 8l2.6 3.6M10.8 4.4L13.4 8l-2.6 3.6M9 3l-2 10" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+              </span>
+              <span>智能开发</span>
+            </button>
+          </div>
         </div>
       </template>
       <template #actions>
@@ -85,10 +104,10 @@
               <button class="doc-download-btn" @click="downloadCurrentDoc">下载 .md</button>
             </div>
           </div>
-          <StructuredDocRenderer
-            v-if="parsedDocResultForCard"
-            :doc-result="parsedDocResultForCard"
-          />
+          <div v-if="selectedDocStructuredResult" class="doc-preview-body structured-doc-host">
+            <StructuredDocRenderer :doc-result="selectedDocStructuredResult" />
+          </div>
+          <pre v-else-if="selectedDocDisplayContent" class="doc-preview-body plain-doc-fallback">{{ selectedDocDisplayContent }}</pre>
           <div v-else class="doc-view-empty">
             暂无可展示的文档内容，可重新上传文档后查看。
           </div>
@@ -180,16 +199,10 @@
                 </div>
               <div class="builder-control-hint inside-card">{{ builderModelHint }}</div>
               <div class="input-card-top">
-                <label class="upload-btn" title="上传功能设计文档(.md) 或粘贴截图(Cmd+V)">
+                <label class="upload-btn" title="上传设计文档(.md)或图片">
                   <input type="file" accept=".md,.png,.jpg,.jpeg,.gif,.webp" @change="handleDocUpload" style="display:none" />
                   <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M15.5 8.5l-6.4 6.4a3.5 3.5 0 01-5-5l6.4-6.4a2.2 2.2 0 013.1 3.1L7.2 13a.9.9 0 01-1.3-1.3l5.5-5.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
                 </label>
-                <button class="upload-btn screenshot" type="button" title="上传文件" @click="triggerChatImageUpload">
-                  <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
-                    <path d="M7 4.5v7a2.5 2.5 0 0 0 5 0V5.2a1.7 1.7 0 1 0-3.4 0v5.8a.9.9 0 0 0 1.8 0V6.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
-                  </svg>
-                </button>
-                <input ref="chatImageInputRef" type="file" accept=".md,image/png,image/jpeg,image/jpg,image/gif,image/webp" hidden @change="handleChatImageChange" />
                 <textarea
                   v-model="inputText"
                   @keydown.enter.exact.prevent="sendMessage"
@@ -228,21 +241,15 @@
                 <div class="preview-side-status inline-meta">
                   <code class="preview-app-code-chip inline">{{ displayAppCode }}</code>
                 </div>
-                <button
-                  v-if="showBuilderPreview && !isPlatformDeployed && !isUpdateReviewMode"
-                  class="preview-app-edit-btn"
-                  @click="editAppMeta"
-                  aria-label="修改应用名称和编码"
-                  title="修改应用名称和编码"
-                >
-                  <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                    <path d="M10.9 2.1a1.5 1.5 0 112.1 2.1l-7.2 7.2-3 .8.8-3 7.3-7.1z" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
-                  </svg>
-                </button>
               </div>
             </div>
           </div>
           <div class="preview-side-actions">
+            <button
+              v-if="selectedDocDisplayContent"
+              class="preview-side-cta secondary"
+              @click="openCurrentDocFullscreen"
+            >全屏查看</button>
             <button
               v-if="showUpdateButton"
               class="preview-side-cta secondary"
@@ -292,7 +299,16 @@
         </div>
         <div class="preview-body">
           <div v-if="showBuilderPreview" class="tab-content">
-            <template v-if="builderPreviewTab === 'roles'">
+            <!-- 正常模式：统一用标准文档结构渲染 -->
+            <template v-if="!isUpdateReviewMode && !showDeployedVersionedView">
+              <div v-if="selectedDocStructuredResult" class="doc-version-content expanded doc-preview-body structured-doc-host">
+                <StructuredDocRenderer :doc-result="selectedDocStructuredResult" />
+              </div>
+              <pre v-else-if="selectedDocDisplayContent" class="doc-version-content expanded doc-preview-body plain-doc-fallback">{{ selectedDocDisplayContent }}</pre>
+              <div v-else class="preview-empty small">暂无可展示的文档内容</div>
+            </template>
+            <!-- 更新审查/已部署版本模式：保留原有 tab 视图 -->
+            <template v-else-if="builderPreviewTab === 'roles'">
               <template v-if="isUpdateReviewMode">
                 <div v-if="updateRoleDiffItems.length === 0" class="preview-empty small">本次更新没有角色变更</div>
                 <div v-for="(role, idx) in updateRoleDiffItems" :key="role.key" class="preview-item-card diff-preview-card">
@@ -705,18 +721,26 @@
                     <div class="doc-current-head">
                       <div class="doc-current-badge">当前文档</div>
                     </div>
-                    <div v-if="parsedDocResultForCard" class="doc-version-content expanded structured-doc-panel">
-                      <StructuredDocRenderer :doc-result="parsedDocResultForCard" />
+                    <div v-if="selectedDocStructuredResult" class="doc-version-content expanded doc-preview-body structured-doc-host">
+                      <StructuredDocRenderer :doc-result="selectedDocStructuredResult" />
                     </div>
-                    <div v-else class="doc-version-empty">暂无可展示的结构化文档内容</div>
+                    <pre v-else-if="selectedDocDisplayContent" class="doc-version-content expanded doc-preview-body plain-doc-fallback">{{ selectedDocDisplayContent }}</pre>
+                    <div v-else class="doc-version-empty">暂无可展示的设计文档内容</div>
                   </div>
                 </div>
               </div>
             </template>
           </div>
-          <div v-else class="preview-empty preview-empty-stage">
-            <div class="preview-empty-title">还没有解析内容</div>
-            <div class="preview-empty-copy">先告诉我你想搭什么，我会根据你的需求生成右侧解析结果。</div>
+          <div v-else class="preview-empty preview-empty-stage" :class="{ parsing: isDocParsing }">
+            <template v-if="isDocParsing">
+              <div class="parsing-spinner"></div>
+              <div class="preview-empty-title">正在解析文档...</div>
+              <div class="preview-empty-copy">{{ docParsingStep || 'AI 正在分析文档内容，请稍候' }}</div>
+            </template>
+            <template v-else>
+              <div class="preview-empty-title">还没有解析内容</div>
+              <div class="preview-empty-copy">先告诉我你想搭什么，我会根据你的需求生成右侧解析结果。</div>
+            </template>
           </div>
         </div>
         <div v-if="store.showChangePlan && store.changePlan && !isUpdateReviewMode" class="change-plan-overlay">
@@ -752,7 +776,7 @@
         </div>
       </div>
 
-      <aside class="deploy-side" :class="{ open: deployOpen || isUpdateReviewMode || isUpdateExecutionMode }">
+      <aside v-if="showDeploySidebar" class="deploy-side" :class="{ open: deployOpen || isUpdateReviewMode || isUpdateExecutionMode }">
         <div class="deploy-header">
           <div>
             <div class="deploy-title-row">
@@ -889,7 +913,23 @@
     <input ref="docVersionInputRef" type="file" accept=".md,text/markdown" hidden @change="handleDocVersionInputChange" />
     <input ref="reparseInputRef" type="file" accept=".md,.pdf,.docx,.doc,.txt,.markdown" hidden @change="handleReparseInputChange" />
     <el-dialog v-model="docVersionPreviewVisible" :title="docVersionPreviewTitle" width="860px" class="doc-preview-dialog" destroy-on-close>
-      <pre class="doc-preview-body">{{ docVersionPreviewContent }}</pre>
+      <div v-if="docVersionPreviewStructuredResult" class="doc-preview-body structured-doc-host">
+        <StructuredDocRenderer :doc-result="docVersionPreviewStructuredResult" />
+      </div>
+      <pre v-else class="doc-preview-body plain-doc-fallback">{{ docVersionPreviewContent }}</pre>
+    </el-dialog>
+    <el-dialog
+      v-model="docFullscreenVisible"
+      :title="docFullscreenTitle"
+      width="96vw"
+      top="2vh"
+      class="doc-preview-dialog doc-preview-dialog-fullscreen"
+      destroy-on-close
+    >
+      <div v-if="docFullscreenStructuredResult" class="doc-preview-body fullscreen structured-doc-host">
+        <StructuredDocRenderer :doc-result="docFullscreenStructuredResult" />
+      </div>
+      <pre v-else class="doc-preview-body fullscreen plain-doc-fallback">{{ docFullscreenContent }}</pre>
     </el-dialog>
     <el-dialog v-model="docVersionDiffVisible" title="文档版本对比" width="1220px" class="doc-diff-dialog" destroy-on-close>
       <div class="diff-summary-bar">
@@ -988,12 +1028,12 @@ import { buildPlatformProxyEntryUrl, repairPlatformIframe } from '@/utils/platfo
 import type { Message } from '@/types'
 import TopBar from '@/components/TopBar.vue'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
+import StructuredDocRenderer from '@/components/StructuredDocRenderer.vue'
 import { llmConfigApi, type BuilderModelOption } from '@/api/llmConfig'
 import DesignDocCard from '@/components/DesignDocCard.vue'
-import StructuredDocRenderer from '@/components/StructuredDocRenderer.vue'
 import { requirementsApi } from '@/api/requirements'
 import { convertConfig } from '@/api/conversation'
-import { marked } from 'marked'
+import { buildStructuredDocFromPreviewConfig } from '@/utils/structuredDoc'
 
 const router = useRouter()
 const route = useRoute()
@@ -1014,21 +1054,26 @@ const loadedAppCode = ref('')
 const currentRemoteStatus = ref('')
 const lastParsedFilename = ref('')
 const latestDocContent = ref('')
+const latestDocAppId = ref<number | null>(null)
+const latestDocConversationId = ref<number | null>(null)
 const latestParseMeta = ref<any | null>(null)
 const readyForGenerate = computed(() => !!store.currentApp && parseReady.value)
 const appParsedMode = computed(() => route.query.app_mode === 'parsed')
 const builderAppDisplayName = computed(() => store.preview.appName || store.currentApp?.name || '未命名应用')
-const displayAppCode = computed(() => parsedAppCode.value || loadedAppCode.value || buildAppCode(store.preview.appName))
+const currentDocAppCode = computed(() => {
+  const content = String(selectedDocDisplayContent.value || latestDocContent.value || '').trim()
+  return content ? extractAppCodeFromText(content) : ''
+})
+const displayAppCode = computed(() => currentDocAppCode.value || parsedAppCode.value || loadedAppCode.value || buildAppCode(store.preview.appName))
+const currentPreviewConfigPayload = computed(() => ({
+  ...store.preview,
+  appName: store.preview.appName || builderAppDisplayName.value || '',
+  appCode: parsedAppCode.value || loadedAppCode.value || currentDocAppCode.value || buildAppCode(store.preview.appName),
+}))
 function formatParseMetaSummary(meta: any) {
-  const score = Number(meta?.standard_score)
+  const score = Number(meta?.standard_score ?? meta?.score)
   if (!Number.isFinite(score)) return ''
-  const decisionMap: Record<string, string> = {
-    direct_parse: '直接解析',
-    rewrite_first: '先标准化再解析',
-    hybrid_fallback: '混合兜底解析',
-  }
-  const decision = decisionMap[String(meta?.decision || '').trim()] || String(meta?.decision || '').trim()
-  return decision ? `文档标准度：${score} 分（${decision}）` : `文档标准度：${score} 分`
+  return `文档标准度：${score} 分`
 }
 
 function docExportComponentTypeLabel(value: any, modelType?: any) {
@@ -1111,89 +1156,6 @@ function docExportModelMaps(models: any[]) {
   return { modelsByCode, fieldsByModel }
 }
 
-const parsedDocResultForCard = computed(() => {
-  if (!store.preview.appName && !store.preview.models.length && !store.preview.dicts.length && !store.preview.roles.length) {
-    return null
-  }
-  const formNameMap = new Map<string, string>()
-  ;(store.preview.forms || []).forEach((form: any, idx: number) => {
-    const formName = form?.formName || form?.name || `表单${idx + 1}`
-    const formCode = form?.formCode || form?.code
-    const modelCode = form?.modelCode || form?.bindModelCode
-    if (formCode) formNameMap.set(String(formCode), formName)
-    if (modelCode) formNameMap.set(String(modelCode), formName)
-  })
-  const roleTableMapping = (store.preview.permissions || []).map((perm: any, idx: number) => ({
-    table_name: formNameMap.get(String(perm?.form || perm?.form_code || perm?.table || perm?.table_code || ''))
-      || perm?.form_name
-      || perm?.form
-      || perm?.table
-      || `表${idx + 1}`,
-    table_code: perm?.form_code || perm?.table_code || `table_${idx + 1}`,
-    permissions: (perm?.rules || perm?.roles || []).map((r: any, rIdx: number) => ({
-      role_code: r?.role_code || r?.code || r?.role || `role_${rIdx + 1}`,
-      role_name: r?.role_name || r?.name || r?.role || `角色${rIdx + 1}`,
-      operations: r?.actions || r?.operations || (typeof r?.op === 'string' ? r.op.split(',').map((item: string) => item.trim()).filter(Boolean) : []),
-      data_scope: r?.data_scope || r?.data || ''
-    }))
-  }))
-  return {
-    app_info: {
-      name: store.preview.appName || '未命名应用',
-      code: displayAppCode.value,
-      description: `由 aPaaS Builder AI 解析生成，包含 ${store.preview.models.length} 个模型、${store.preview.dicts.length} 个字典、${store.preview.roles.length} 个角色。`
-    },
-    roles: (store.preview.roles || []).map((role: any, idx: number) => ({
-      role_code: role?.code || `role_${idx + 1}`,
-      role_name: role?.name || role?.code || `角色${idx + 1}`,
-      description: role?.description || ''
-    })),
-    data_dictionary: (store.preview.dicts || []).map((dict: any, idx: number) => ({
-      dict_code: dict?.code || `dict_${idx + 1}`,
-      dict_name: dict?.name || dict?.code || `字典${idx + 1}`,
-      items: (dict?.options || []).map((item: any, itemIdx: number) => ({
-        item_code: typeof item === 'string' ? `item_${itemIdx + 1}` : (item?.code || item?.item_code || `item_${itemIdx + 1}`),
-        item_name: typeof item === 'string' ? item : (item?.name || item?.item_name || `选项${itemIdx + 1}`)
-      }))
-    })),
-    tables: (store.preview.models || []).map((model: any, idx: number) => ({
-      table_code: model?.code || `table_${idx + 1}`,
-      table_name: model?.name || model?.code || `数据表${idx + 1}`,
-      table_type: model?.table_type || '主表',
-      parent_model_code: model?.parent_model_code || model?.parentModelCode || '',
-      fields: (model?.fields || []).map((field: any, fIdx: number) => ({
-        field_code: field?.code || `field_${fIdx + 1}`,
-        field_name: field?.name || field?.code || `字段${fIdx + 1}`,
-        type: field?.type || field?.data_type || '',
-        database_field_type: field?.database_field_type || field?.databaseFieldType || field?.db_type || field?.type || '',
-        max_length: field?.max_length || field?.maxLength || field?.length || '',
-        length: field?.length || field?.max_length || field?.maxLength || '',
-        comment: field?.comment || ''
-      }))
-    })),
-    forms: (store.preview.forms || []).map((form: any, idx: number) => ({
-      form_code: form?.formCode || form?.code || `form_${idx + 1}`,
-      form_name: form?.formName || form?.name || `表单${idx + 1}`,
-      model_code: form?.modelCode || form?.bindModelCode || `model_${idx + 1}`,
-      all_model_codes: form?.allModelCodes || form?.all_model_codes || [],
-      components: (form?.components || []).map((component: any, compIdx: number) => ({
-        field_code: component?.code || `field_${compIdx + 1}`,
-        field_name: component?.label || component?.name || component?.code || `字段${compIdx + 1}`,
-        component_type: component?.componentType || component?.type || '',
-        raw_component_type: component?.componentType || component?.type || '',
-        section_type: component?.sectionType || component?.section_type || (component?.componentType === 'FORM_WIDGET_SON_TABLE' ? 'sub' : 'main'),
-        model_code: component?.modelCode || component?.model_code || component?.tableModelCode || component?.table_model_code || '',
-        table_model_code: component?.tableModelCode || component?.table_model_code || component?.modelCode || component?.model_code || '',
-        readonly: !!component?.readonly,
-        hidden: !!component?.hidden,
-        required: !!component?.required,
-        show_in_list: !!component?.showInList,
-        searchable: !!component?.searchable,
-      }))
-    })),
-    role_table_mapping: roleTableMapping
-  }
-})
 const modelNamesText = computed(() => {
   const names = store.preview.models.map((m: any) => m?.name).filter(Boolean)
   return names.length ? names.slice(0, 8).join('、') + (names.length > 8 ? ` 等 ${names.length} 项` : '') : '暂无'
@@ -1274,6 +1236,11 @@ const showExecuteUpdateButton = computed(() => isUpdateReviewMode.value && !!sto
 const showBuilderComposer = computed(() => !isPlatformDeployed.value || isUpdateReviewMode.value)
 const showDeployProgressInline = computed(() => deploySteps.value.length > 0 || deployOpen.value || isPlatformDeployed.value)
 const showDeployedVersionedView = computed(() => isPlatformDeployed.value && !isUpdateReviewMode.value)
+const showDeploySidebar = computed(() =>
+  isUpdateReviewMode.value ||
+  isUpdateExecutionMode.value ||
+  !showDeployedVersionedView.value
+)
 const showViewSwitcher = computed(() =>
   !!existingAppId.value && (
     builderLifecycleStatus.value.key === 'deployed' ||
@@ -1300,10 +1267,11 @@ const showBuilderPreview = computed(() =>
   hasPreviewContent.value && (
     !isRequirementsMode.value ||
     !!existingAppId.value ||
-    parseReady.value
+    parseReady.value ||
+    isDocParsing.value   // 解析中也显示已有的部分数据
   )
 )
-const docPreviewContent = computed(() => ((latestDocContent.value || '').trim() || buildDocMarkdownFromPreview()).trim())
+const docPreviewContent = computed(() => String(selectedDocDisplayContent.value || '').trim())
 const docPreviewAvailable = computed(() => !!docPreviewContent.value)
 const publishingApp = ref(false)
 
@@ -1313,17 +1281,6 @@ const getDataScopeLabel = (scope: string) => {
   if (normalized.includes('dept') || normalized.includes('部门')) return { text: '部门数据', className: 'dept' }
   if (normalized.includes('self') || normalized.includes('本人') || normalized.includes('自己')) return { text: '本人数据', className: 'self' }
   return { text: scope || '未配置', className: '' }
-}
-
-const editAppMeta = () => {
-  if (isUpdateReviewMode.value) {
-    ElMessage.info('更新页面不支持修改应用名称和应用编码，请通过上传新设计文档触发变更。')
-    return
-  }
-  builderPreviewTab.value = 'roles'
-  inputText.value = `请帮我修改应用名称和应用编码：\n当前应用名称：${builderAppDisplayName.value}\n当前应用编码：${displayAppCode.value}\n目标名称：\n目标编码：`
-  ElMessage.info('已切换到左侧对话区，你可以直接描述新的应用名称和编码。')
-  focusQuickInput()
 }
 
 const formPreviewItems = computed(() => {
@@ -1399,8 +1356,8 @@ const permissionPreviewItems = computed(() =>
           : []
 
     return {
-      name: perm?.form || perm?.table || perm?.name || `权限对象${idx + 1}`,
-      code: perm?.form_code || perm?.table_code || perm?.code || `perm_${idx + 1}`,
+      name: perm?.formName || perm?.form || perm?.table || perm?.name || `权限对象${idx + 1}`,
+      code: perm?.formCode || perm?.form_code || perm?.table_code || perm?.code || `perm_${idx + 1}`,
       raw: perm,
       rows: rules.map((role: any, roleIdx: number) => {
         const rawActions = role?.actions || role?.operations || role?.permissions || role?.op || []
@@ -1409,10 +1366,10 @@ const permissionPreviewItems = computed(() =>
           : typeof rawActions === 'string' && rawActions
             ? [rawActions]
             : []
-        const scopeInfo = getDataScopeLabel(role?.data_scope || role?.scope || role?.dataScope || role?.data || '')
+        const scopeInfo = getDataScopeLabel(role?.data_scope || role?.dataScope || role?.scope || role?.data || '')
         return {
-          roleCode: role?.role_code || role?.code || role?.role || `role_${roleIdx + 1}`,
-          roleName: role?.role_name || role?.name || role?.role || `角色${roleIdx + 1}`,
+          roleCode: role?.role_code || role?.roleCode || role?.code || role?.role || `role_${roleIdx + 1}`,
+          roleName: role?.role_name || role?.roleName || role?.name || role?.role || `角色${roleIdx + 1}`,
           actionsText: actions.length ? actions.join('、') : '未配置',
           scopeText: scopeInfo.text,
           scopeClass: scopeInfo.className,
@@ -2473,7 +2430,15 @@ const getFormCodeValue = (form: any, fallback = '') =>
 const getFormNameValue = (form: any, fallback = '') =>
   getPrimaryText(form?.name, form?.formName, form?.form_name, fallback)
 const getFormModelCodeValue = (form: any, fallback = '') =>
-  getPrimaryText(form?.modelCode, form?.model_code, form?.tableModelCode, form?.table_model_code, fallback)
+  getPrimaryText(
+    form?.modelCode,
+    form?.model_code,
+    form?.tableModelCode,
+    form?.table_model_code,
+    Array.isArray(form?.allModelCodes) ? form.allModelCodes[0] : '',
+    Array.isArray(form?.all_model_codes) ? form.all_model_codes[0] : '',
+    fallback,
+  )
 const getFormComponentCodeValue = (component: any, fallback = '') =>
   getPrimaryText(component?.model_field, component?.modelField, component?.code, component?.componentCode, component?.component_code, fallback)
 const getFormComponentNameValue = (component: any, fallback = '') =>
@@ -2622,7 +2587,7 @@ const persistCurrentPreview = async () => {
       app_name: store.preview.appName,
       app_code: appCode,
       description: store.preview.appName,
-      config_preview: { type: 'preview', data: { ...store.preview } }
+      config_preview: { type: 'preview', data: currentPreviewConfigPayload.value }
     })
     loadedAppCode.value = (updated as any)?.app_code || appCode
   } catch (e) {
@@ -3094,7 +3059,12 @@ const executingChangePlan = ref(false)
 const completedChangePlans = ref<any[]>([])
 const docVersionPreviewVisible = ref(false)
 const docVersionPreviewContent = ref('')
+const docVersionPreviewItem = ref<DocVersionListItem | null>(null)
 const docVersionPreviewTitle = ref('')
+const docFullscreenVisible = ref(false)
+const docFullscreenContent = ref('')
+const docFullscreenItem = ref<DocVersionListItem | null>(null)
+const docFullscreenTitle = ref('')
 const docVersionDiffVisible = ref(false)
 const docVersionDiffLeft = ref('')
 const docVersionDiffRight = ref('')
@@ -3122,14 +3092,14 @@ const displayDocVersions = computed<DocVersionListItem[]>(() => {
       version: normalizedVersion,
       filename: ver.filename || fallbackFilename,
       summary: ver.summary || '点击展开查看设计文档',
-      raw_content: (ver.raw_content || '').trim() || (index === 0 ? docPreviewContent.value : ''),
+      raw_content: (ver.raw_content || '').trim(),
       key: `doc-version-${ver.id || normalizedVersion}-${index}`,
     }
   })
 
   if (versions.length > 0) return versions
 
-  const fallbackContent = docPreviewContent.value.trim()
+  const fallbackContent = String(latestDocContent.value || '').trim()
   if (!fallbackContent) return []
 
   return [{
@@ -3153,22 +3123,34 @@ const selectedDocVersionItem = computed<DocVersionListItem | null>(() => {
   }
   return displayDocVersions.value[0] || null
 })
+const docVersionStructuredResult = (item?: Pick<DocVersion, 'parsed_config' | 'raw_content'> | null, fallbackConfig?: any) => {
+  const parsed = item?.parsed_config?.data || item?.parsed_config
+  if (parsed && typeof parsed === 'object') {
+    return buildStructuredDocFromPreviewConfig(parsed, {
+      appCode: parsed.appCode || extractAppCodeFromText(String(item?.raw_content || '')),
+    })
+  }
+  if (fallbackConfig && typeof fallbackConfig === 'object') {
+    return buildStructuredDocFromPreviewConfig(fallbackConfig, {
+      appCode: fallbackConfig.appCode || displayAppCode.value,
+    })
+  }
+  return null
+}
 const selectedDocStructuredResult = computed(() => {
-  const item = selectedDocVersionItem.value
-  if (!item) return null
-  const isCurrent = item.version === currentDocVersion.value || !!currentDocPreviewOverride.value
-  return isCurrent ? parsedDocResultForCard.value : null
+  return docVersionStructuredResult(selectedDocVersionItem.value, hasPreviewContent.value ? currentPreviewConfigPayload.value : null)
 })
-// 当前选中版本展示的文档内容：当前版本展示解析后重建的 markdown，历史版本展示原始内容
+// 当前选中版本展示的文档内容：只展示后端固化后的最终文档，避免前端二次拼装污染平台对接结果
 const selectedDocDisplayContent = computed(() => {
   const item = selectedDocVersionItem.value
-  if (!item) return ''
-  const isCurrent = item.version === currentDocVersion.value || !!currentDocPreviewOverride.value
-  if (isCurrent) {
-    const built = buildDocMarkdownFromPreview().trim()
-    return built || item.raw_content || ''
-  }
-  return item.raw_content || ''
+  if (item) return String(item.raw_content || '').trim()
+  return String(latestDocContent.value || '').trim()
+})
+const docVersionPreviewStructuredResult = computed(() => {
+  return docVersionStructuredResult(docVersionPreviewItem.value)
+})
+const docFullscreenStructuredResult = computed(() => {
+  return docVersionStructuredResult(docFullscreenItem.value, hasPreviewContent.value ? currentPreviewConfigPayload.value : null)
 })
 const showVersionManager = computed(() => !!existingAppId.value)
 const getDocVersionsPayload = (raw: any) => {
@@ -3415,6 +3397,8 @@ const loadLatestDocForApp = async (appId: number) => {
     const latest = sortedVersions.find((item: any) => Number(item?.version) === currentVersion) || sortedVersions[0]
     if (latest?.filename) lastParsedFilename.value = latest.filename
     latestDocContent.value = latest?.raw_content || ''
+    latestDocAppId.value = appId
+    latestDocConversationId.value = null
     if (latest?.parsed_config) {
       const parsed = latest.parsed_config?.data || latest.parsed_config
       store.preview.appName = parsed?.appName || store.preview.appName || ''
@@ -3431,8 +3415,8 @@ const loadLatestDocForApp = async (appId: number) => {
       ? displayDocVersions.value.find(item => Number(item.id) === Number(latest.id) || item.version === Number(latest.version))
       : null
     selectedDocVersionKey.value = selectedVersion?.key || displayDocVersions.value[0]?.key || null
-    if (!parsedAppCode.value && latestDocContent.value) {
-      const codeFromDoc = extractAppCodeFromText(latestDocContent.value)
+    if (!parsedAppCode.value && latest?.raw_content) {
+      const codeFromDoc = extractAppCodeFromText(String(latest.raw_content || ''))
       if (codeFromDoc) parsedAppCode.value = codeFromDoc
     }
     return { versions, currentVersion }
@@ -3481,7 +3465,18 @@ const formatDocTime = (dateStr: string) => {
 const openDocPreview = (ver: DocVersion) => {
   docVersionPreviewTitle.value = `V${ver.version} — ${ver.filename}`
   docVersionPreviewContent.value = ver.raw_content || '（无内容）'
+  docVersionPreviewItem.value = (ver as DocVersionListItem) || null
   docVersionPreviewVisible.value = true
+}
+
+const openCurrentDocFullscreen = () => {
+  const item = selectedDocVersionItem.value
+  docFullscreenTitle.value = item
+    ? `V${item.version} — ${item.filename || `${store.preview.appName || '功能设计文档'}.md`}`
+    : `${store.preview.appName || '功能设计文档'}`
+  docFullscreenContent.value = selectedDocDisplayContent.value || '（无内容）'
+  docFullscreenItem.value = item || null
+  docFullscreenVisible.value = true
 }
 
 const openDocDiff = (ver: DocVersion) => {
@@ -3784,6 +3779,8 @@ const currentUpdateExecutionLabel = computed(() => {
   return current?.label || updateExecutionStepText.value || ''
 })
 const parseReady = ref(false)
+const isDocParsing = ref(false)         // 文档解析进行中（右侧显示 loading）
+const docParsingStep = ref('')          // 当前解析步骤描述
 
 function suggestNextConflictCode(code: string) {
   const source = String(code || '').trim()
@@ -3797,16 +3794,22 @@ function suggestNextConflictCode(code: string) {
   return `${source}V1`
 }
 
-function syncCurrentDocFromPreview(summary = '当前构建后的最新文档') {
-  const content = buildDocMarkdownFromPreview().trim()
+function syncCurrentDocFromPreview(summary = '当前构建后的最新文档', contentOverride = '') {
+  const content = String(contentOverride || latestDocContent.value || '').trim()
   if (!content) return
   latestDocContent.value = content
+  latestDocAppId.value = existingAppId.value
+  latestDocConversationId.value = conversationId.value
   currentDocPreviewOverride.value = {
     id: currentDocVersion.value || -1,
     version: currentDocVersion.value || 1,
     filename: lastParsedFilename.value || `${store.preview.appName || '功能设计文档'}.md`,
     summary,
     raw_content: content,
+    parsed_config: {
+      ...currentPreviewConfigPayload.value,
+      appName: currentPreviewConfigPayload.value.appName || store.preview.appName || '',
+    },
     created_at: new Date().toISOString(),
     key: `doc-preview-sync-${Date.now()}`,
     isVirtual: true,
@@ -3838,6 +3841,19 @@ function appendExecutionLog(level: ExecutionLogItem['level'], message: string) {
     },
     ...executionLogs.value,
   ].slice(0, 20)
+}
+
+function settleExecutionLogs(level: ExecutionLogItem['level']) {
+  const levelLabel = level === 'error' ? '失败' : level === 'success' ? '完成' : '进行中'
+  executionLogs.value = executionLogs.value.map((log) => {
+    if (log.level !== 'info') return log
+    if (!/^开始自动构建$|^开始执行：/u.test(log.message)) return log
+    return {
+      ...log,
+      level,
+      levelLabel,
+    }
+  })
 }
 
 function resetExecutionLogs(expanded = false) {
@@ -3956,15 +3972,6 @@ function pickAppCode(data: any): string {
   )
 }
 
-function renderDocMarkdown(text: string): string {
-  if (!text) return ''
-  try {
-    return marked.parse(text, { async: false }) as string
-  } catch {
-    return `<pre>${text.replace(/</g, '&lt;')}</pre>`
-  }
-}
-
 function pickAppName(data: any): string {
   return (
     data?.appName ||
@@ -4002,6 +4009,8 @@ function resetConversationWorkspace() {
   currentRemoteStatus.value = ''
   lastParsedFilename.value = ''
   latestDocContent.value = ''
+  latestDocAppId.value = null
+  latestDocConversationId.value = null
   latestParseMeta.value = null
   parseReady.value = false
   generating.value = false
@@ -4026,7 +4035,12 @@ function resetConversationWorkspace() {
   docVersionsLoading.value = false
   docVersionPreviewVisible.value = false
   docVersionPreviewContent.value = ''
+  docVersionPreviewItem.value = null
   docVersionPreviewTitle.value = ''
+  docFullscreenVisible.value = false
+  docFullscreenContent.value = ''
+  docFullscreenItem.value = null
+  docFullscreenTitle.value = ''
   docVersionDiffVisible.value = false
   docVersionDiffLeft.value = ''
   docVersionDiffRight.value = ''
@@ -4060,6 +4074,8 @@ function resetPreviewForNewParse() {
   store.preview.appName = ''
   store.currentApp = null
   latestDocContent.value = ''
+  latestDocAppId.value = null
+  latestDocConversationId.value = null
   lastParsedFilename.value = ''
   latestParseMeta.value = null
   parseReady.value = false
@@ -4137,6 +4153,7 @@ function persistDeployError(stepLabel: string, detail: string) {
   const message = `${stepLabel} 失败：${detail}`
   deployLastError.value = message
   deployOpen.value = true
+  settleExecutionLogs('error')
   appendExecutionLog('error', message)
   messages.push({
     id: Date.now(),
@@ -4236,6 +4253,7 @@ async function deployRunAll() {
       }
     }
     deployExecuting.value = null
+    settleExecutionLogs('success')
     appendExecutionLog('success', '全部部署步骤已完成')
     ElMessage.success('全部完成！')
   } catch (e: any) {
@@ -4310,6 +4328,23 @@ async function resolveConflictAndRetry() {
         old_code: c.current_code,
         new_code: c.newCode,
       })
+      const resolvedPreview = resolveResp?.config_preview?.data || resolveResp?.config_preview
+      if (resolvedPreview && typeof resolvedPreview === 'object') {
+        store.preview = {
+          appName: resolvedPreview.appName || resolveResp?.app_name || store.preview.appName || '',
+          models: resolvedPreview.models || [],
+          forms: resolvedPreview.forms || [],
+          roles: resolvedPreview.roles || [],
+          dicts: resolvedPreview.dicts || [],
+          workflows: resolvedPreview.workflows || [],
+          permissions: resolvedPreview.permissions || [],
+        }
+        if (resolveResp?.app_code) {
+          loadedAppCode.value = resolveResp.app_code
+          parsedAppCode.value = resolveResp.app_code
+        }
+        parseReady.value = store.preview.models.length > 0
+      }
       if (resolveResp?.doc_version) {
         await loadLatestDocForApp(deployAppId.value)
       }
@@ -4325,16 +4360,7 @@ async function resolveConflictAndRetry() {
     scrollToBottom()
     const conflictStep = c.step
     activeConflict.value = null
-    // 重新加载配置预览（编码已变）
-    try {
-        const appData = await applicationApi.get(appId) as any
-        if (appData.config_preview) {
-          const cfg = typeof appData.config_preview === 'string' ? JSON.parse(appData.config_preview) : appData.config_preview
-          const d = cfg.data || cfg
-          store.preview = { appName: appData.app_name, models: d.models || [], forms: d.forms || [], roles: d.roles || [], dicts: d.dicts || [], workflows: d.workflows || [], permissions: d.permissions || [] }
-        }
-      } catch { /* ignore */ }
-    syncCurrentDocFromPreview(syncSummary)
+    currentDocPreviewOverride.value = null
     // 自动重试
     await deployExec(conflictStep)
     if (c.resumeAll) {
@@ -4432,7 +4458,7 @@ const startGenerateWithEnv = async (envId: number) => {
       platform_env_id: envId,
       config_preview: {
         type: 'preview',
-        data: { ...store.preview }
+        data: currentPreviewConfigPayload.value
       }
     }
 
@@ -4447,7 +4473,7 @@ const startGenerateWithEnv = async (envId: number) => {
       existingAppId.value = newAppId
       loadedAppCode.value = (app as any).app_code || appCode
     }
-    parsedAppCode.value = parsedAppCode.value || loadedAppCode.value || appCode
+    parsedAppCode.value = loadedAppCode.value || appCode
     // 不跳转，在本页打开部署面板
     deployAppId.value = newAppId
     deployOpen.value = true
@@ -4469,6 +4495,9 @@ const uploadDocFile = async (file: File) => {
 
   const userMsgId = Date.now()
   messages.push({ id: userMsgId, role: 'user', content: `📄 上传设计文档: ${file.name}`, created_at: '' })
+
+  isDocParsing.value = true
+  docParsingStep.value = '正在读取文档...'
 
   const progressMsgId = userMsgId + 1
   const parseTracker = reactive({
@@ -4502,22 +4531,28 @@ const uploadDocFile = async (file: File) => {
     syncParseTrackerFromPreview(done)
     const doneCount = summaryItems.filter(item => item.key === 'docs' ? true : (done || parseTracker[item.key] === 'done')).length
     const percent = Math.round(doneCount / summaryItems.length * 100)
+    const effectiveDone = done || percent >= 100
+    const currentStepText = effectiveDone
+      ? '解析完成'
+      : String(parseTracker.currentStep || '')
+          .replace(/^配置组装完成[！!：:].*$/u, '配置组装完成')
+          .replace(/^配置组装完成$/u, '配置组装完成')
 
     lines.push(`**解析进度** ${percent}%`)
-    lines.push(`当前步骤：${done ? '解析完成' : parseTracker.currentStep}`)
+    lines.push(`当前步骤：${currentStepText || '正在解析中...'}`)
     const parseMetaSummary = formatParseMetaSummary(latestParseMeta.value)
     if (parseMetaSummary) {
       lines.push(parseMetaSummary)
       lines.push('')
     }
     for (const item of summaryItems) {
-      const status = done ? 'done' : parseTracker[item.key]
+      const status = effectiveDone ? 'done' : parseTracker[item.key]
       const icon = status === 'done' ? '✅' : status === 'running' ? '🔄' : '○'
       const suffix = status === 'running' && item.count === 0 ? '解析中...' : `${item.count} 项`
       lines.push(`${icon} **${item.label}** ${suffix}`)
     }
 
-    if (done) {
+    if (effectiveDone) {
       lines.push('')
       lines.push('请检查右侧预览内容，点击右上方「开始构建」即可开始在低代码上搭建。')
     }
@@ -4562,25 +4597,30 @@ const uploadDocFile = async (file: File) => {
 
             if (currentEvent === 'progress') {
               const msg = data.message || ''
+              if (data.parse_meta) latestParseMeta.value = data.parse_meta || null
               const phaseMatch = msg.match(/^\[(\w+)\]\s*(.*)/)
               parseTracker.currentStep = phaseMatch?.[2] || msg || '正在解析中...'
+              docParsingStep.value = String(parseTracker.currentStep || '')
 
-              if (phaseMatch?.[1] === 'skeleton') {
+              // skeleton 阶段不改各模块状态，只在收到具体模块进度时才更新
+              const phase = phaseMatch?.[1] || ''
+              if (phase === 'roles') {
                 parseTracker.roles = 'running'
-                parseTracker.forms = 'running'
-              } else if (phaseMatch?.[1] === 'dicts') {
+              } else if (phase === 'dicts') {
                 parseTracker.dicts = 'running'
-              } else if (phaseMatch?.[1] === 'models') {
+              } else if (phase === 'models') {
                 parseTracker.models = 'running'
+              } else if (phase === 'forms') {
                 parseTracker.forms = 'running'
-              } else if (phaseMatch?.[1] === 'permissions') {
+              } else if (phase === 'permissions') {
                 parseTracker.permissions = 'running'
-              } else if (phaseMatch?.[1] === 'complete') {
-                parseTracker.roles = parseTracker.roles === 'done' ? 'done' : 'running'
-                parseTracker.dicts = parseTracker.dicts === 'done' ? 'done' : 'running'
-                parseTracker.models = parseTracker.models === 'done' ? 'done' : 'running'
-                parseTracker.forms = parseTracker.forms === 'done' ? 'done' : 'running'
-                parseTracker.permissions = parseTracker.permissions === 'done' ? 'done' : 'running'
+              } else if (phase === 'complete') {
+                // 全部完成：未 done 的标记为 running（即将由 syncParseTrackerFromPreview 更新为 done）
+                for (const k of ['roles', 'dicts', 'models', 'forms', 'permissions']) {
+                  if (parseTracker[k] !== 'done') parseTracker[k] = 'running'
+                }
+              } else if (phase === 'skeleton') {
+                // skeleton 只表示整体进度，不改各模块状态
               }
 
               if (data.batch && Array.isArray(data.batch)) {
@@ -4606,6 +4646,14 @@ const uploadDocFile = async (file: File) => {
                 } else if (phaseKey === 'workflows') {
                   for (const w of data.batch) {
                     store.preview.workflows.push(w)
+                  }
+                } else if (phaseKey === 'forms') {
+                  if (!store.preview.forms) store.preview.forms = []
+                  for (const f of data.batch) {
+                    const key = f.formCode || f.code || f.modelCode
+                    const existing = store.preview.forms.find((x: any) => (x.formCode || x.code || x.modelCode) === key)
+                    if (existing) Object.assign(existing, f)
+                    else store.preview.forms.push(f)
                   }
                 } else if (phaseKey === 'permissions') {
                   if (!store.preview.permissions) store.preview.permissions = []
@@ -4683,7 +4731,9 @@ const uploadDocFile = async (file: File) => {
       conversationId.value = finalResult.conversation_id
       router.replace(`/chat/${finalResult.conversation_id}`)
       lastParsedFilename.value = file.name
-      latestDocContent.value = fileText
+      latestDocContent.value = ''
+      latestDocAppId.value = null
+      latestDocConversationId.value = finalResult.conversation_id || null
 
       // 最终更新 store
       const previewData = finalResult.preview?.data || finalResult.preview
@@ -4692,13 +4742,14 @@ const uploadDocFile = async (file: File) => {
       if (previewData?.appName || previewData?.models || appName || appCode) {
         store.currentApp = { name: appName || store.preview.appName || '未命名应用', status: 'draft' }
         store.preview.appName = appName || store.preview.appName || ''
-        parsedAppCode.value = appCode || parsedAppCode.value || buildAppCode(store.preview.appName)
+        parsedAppCode.value = appCode || buildAppCode(store.preview.appName)
         store.preview.roles = previewData.roles || []
         store.preview.dicts = previewData.dicts || []
         store.preview.models = previewData.models || []
         store.preview.forms = previewData.forms || []
         store.preview.workflows = previewData.workflows || []
         store.preview.permissions = previewData.permissions || []
+        syncCurrentDocFromPreview('当前解析出的最新文档', finalResult.rendered_doc || '')
       }
 
       // 文档上传完成后自动创建 Application（如果还没有）
@@ -4706,12 +4757,13 @@ const uploadDocFile = async (file: File) => {
         try {
           const result = await applicationApi.autoCreate({
             app_name: store.preview.appName,
-            config_preview: { ...store.preview },
+            config_preview: currentPreviewConfigPayload.value,
             conversation_id: conversationId.value || undefined,
           })
           existingAppId.value = result.app_id
           loadedAppCode.value = result.app_code || ''
-          parsedAppCode.value = parsedAppCode.value || loadedAppCode.value
+          parsedAppCode.value = result.app_code || ''
+          parsedAppCode.value = result.app_code || loadedAppCode.value || ''
           router.replace({ query: { ...route.query, app_id: String(result.app_id) } })
           console.log(`Doc upload auto-created app: id=${result.app_id}, is_new=${result.is_new}`)
         } catch (e) {
@@ -4720,11 +4772,12 @@ const uploadDocFile = async (file: File) => {
       }
 
       // 文档上传完成后自动刷新文档版本列表
-      fetchDocVersions()
+      await fetchDocVersions()
 
       // 替换进度消息为完成总结
       if (pmsg) {
         parseTracker.currentStep = '解析完成'
+        isDocParsing.value = false
         parseReady.value = true
         pmsg.content = buildProgressContent(true)
       }
@@ -4736,30 +4789,37 @@ const uploadDocFile = async (file: File) => {
       }
       parseReady.value = true
       lastParsedFilename.value = file.name
-      latestDocContent.value = fileText
-
+      latestDocContent.value = ''
+      latestDocAppId.value = null
+      latestDocConversationId.value = conversationId.value
       // 自动创建 Application
       if (!existingAppId.value && store.preview.appName) {
         try {
           const result = await applicationApi.autoCreate({
             app_name: store.preview.appName,
-            config_preview: { ...store.preview },
+            config_preview: currentPreviewConfigPayload.value,
           })
           existingAppId.value = result.app_id
           loadedAppCode.value = result.app_code || ''
+          parsedAppCode.value = result.app_code || ''
           router.replace({ query: { ...route.query, app_id: String(result.app_id) } })
         } catch (e) {
           console.warn('兜底模式创建应用失败:', e)
         }
       }
 
+      await fetchDocVersions()
+
       if (pmsg) {
-        phases.complete.status = 'done'
-        phases.complete.detail = `${store.preview.models.length} 模型, ${store.preview.dicts.length} 字典, ${store.preview.roles.length} 角色`
-        pmsg.content = buildProgressContent() + '\n\n配置已就绪（流式累积模式）。'
+        parseTracker.currentStep = '解析完成'
+        isDocParsing.value = false
+        pmsg.content = buildProgressContent(true)
       }
     } else if (pmsg) {
-      pmsg.content += '\n\n⚠️ 解析完成但未获取到配置数据'
+      isDocParsing.value = false
+      parseReady.value = false
+      docParsingStep.value = ''
+      pmsg.content += '\n\n❌ 解析中断：未收到后端完成结果，请重试。'
     }
   } catch (err: any) {
     const pmsg = messages.find(m => m.id === progressMsgId)
@@ -4768,6 +4828,7 @@ const uploadDocFile = async (file: File) => {
     } else {
       messages.push({ id: Date.now(), role: 'assistant', agent: 'builder', content: `文档解析失败: ${err?.message || '未知错误'}`, created_at: '' })
     }
+    isDocParsing.value = false
   }
   scrollToBottom()
 }
@@ -4806,20 +4867,10 @@ const handleDocUpload = async (e: Event) => {
 
 // ── 上传文档新版本并分析变更 ──
 const handleDocVersionUpload = async (file: File, appId: number) => {
-  const fileText = await file.text()
   lastParsedFilename.value = file.name
-  latestDocContent.value = fileText
+  latestDocContent.value = ''
   latestParseMeta.value = null
-  currentDocPreviewOverride.value = {
-    id: -1,
-    version: currentDocVersion.value,
-    filename: file.name,
-    summary: '当前解析出的最新文档',
-    raw_content: fileText,
-    created_at: new Date().toISOString(),
-    key: `doc-preview-override-${Date.now()}`,
-    isVirtual: true,
-  }
+  currentDocPreviewOverride.value = null
 
   const userMsgId = Date.now()
   messages.push({ id: userMsgId, role: 'user', content: `📄 上传文档新版本: ${file.name}`, created_at: '' })
@@ -4963,12 +5014,20 @@ const handleDocVersionUpload = async (file: File, appId: number) => {
                   updateParseTracker.compare = 'running'
                 }
 
-                if (data.data && typeof data.data === 'object' && step === 'text_diff') {
-                  const stats = data.data
-                  pmsg.content = buildUpdateProgressContent(false, `章节统计：新增 ${stats.added || 0}、修改 ${stats.modified || 0}、删除 ${stats.removed || 0}、未变更 ${stats.unchanged || 0}`)
-                } else {
-                  pmsg.content = buildUpdateProgressContent()
-                }
+	                if (data.data && typeof data.data === 'object' && step === 'text_diff') {
+	                  const stats = data.data
+	                  pmsg.content = buildUpdateProgressContent(false, `章节统计：新增 ${stats.added || 0}、修改 ${stats.modified || 0}、删除 ${stats.removed || 0}、未变更 ${stats.unchanged || 0}`)
+	                } else {
+                    const phase = String((msg.match(/^\[(\w+)\]/)?.[1]) || '')
+                    if (data.batch && Array.isArray(data.batch)) {
+                      if (phase === 'roles') store.preview.roles = data.batch
+                      else if (phase === 'dicts') store.preview.dicts = data.batch
+                      else if (phase === 'models') store.preview.models = data.batch
+                      else if (phase === 'forms') store.preview.forms = data.batch
+                      else if (phase === 'permissions') store.preview.permissions = data.batch
+                    }
+	                  pmsg.content = buildUpdateProgressContent()
+	                }
               }
               scrollToBottom()
             } else if (currentEvent === 'done') {
@@ -4980,7 +5039,7 @@ const handleDocVersionUpload = async (file: File, appId: number) => {
               updateParseTracker.currentStep = '处理完成'
               changePlanData = data.change_plan || data
               latestParseMeta.value = data.parse_meta || null
-      if (data.parsed_config) {
+              if (data.parsed_config) {
                 const pc = data.parsed_config.data || data.parsed_config
                 store.preview.appName = pc.appName || store.preview.appName
                 store.preview.models = pc.models || []
@@ -4995,6 +5054,7 @@ const handleDocVersionUpload = async (file: File, appId: number) => {
                   status: 'draft',
                   apaas_app_id: store.currentApp?.apaas_app_id,
                 }
+                syncCurrentDocFromPreview('当前解析出的最新文档', data.rendered_doc || '')
               }
             } else if (currentEvent === 'error') {
               throw new Error(data.message || '文档分析失败')
@@ -5021,6 +5081,7 @@ const handleDocVersionUpload = async (file: File, appId: number) => {
         store.preview.forms = pc.forms || []
         store.preview.workflows = pc.workflows || []
         store.preview.permissions = pc.permissions || []
+        syncCurrentDocFromPreview('当前解析出的最新文档', changePlanData.rendered_doc || '')
       }
 
       // 启用 update review 模式，右侧面板展示变更对比
@@ -5437,7 +5498,7 @@ const sendMessage = async () => {
   }
 
   const incrementalConfigPayload = (parseReady.value || !!existingAppId.value || hasPreviewContent.value)
-    ? { type: 'preview', data: { ...store.preview } }
+    ? { type: 'preview', data: currentPreviewConfigPayload.value }
     : null
 
   // 调用后端API
@@ -5659,7 +5720,7 @@ const triggerFullBuildPipeline = async () => {
       conversation_id: conversationId.value,
       app_name: appConfig.appName || '新应用',
       app_code: appCode,
-      config_preview: { type: 'preview', data: { ...store.preview } },
+      config_preview: { type: 'preview', data: currentPreviewConfigPayload.value },
     }
     const created = await applicationApi.create(payload)
     existingAppId.value = created.id
@@ -5869,7 +5930,7 @@ const confirmDocAndBuild = async () => {
       conversation_id: conversationId.value,
       app_name: appConfig.appName || '新应用',
       app_code: appCode,
-      config_preview: { type: 'preview', data: { ...store.preview } },
+      config_preview: { type: 'preview', data: currentPreviewConfigPayload.value },
     }
     const created = await applicationApi.create(payload)
     existingAppId.value = created.id
@@ -5901,12 +5962,13 @@ const confirmDocAndBuild = async () => {
   }
 }
 
-const buildDocMarkdownFromPreview = () => {
-  const appName = store.preview.appName || '未命名应用'
-  const appCode = displayAppCode.value
+const buildDocMarkdownFromPreview = (previewOverride?: any) => {
+  const preview = previewOverride || store.preview
+  const appName = preview?.appName || '未命名应用'
+  const appCode = previewOverride ? (preview?.appCode || '') : displayAppCode.value
   const lines: string[] = []
-  const models = store.preview.models || []
-  const forms = store.preview.forms || []
+  const models = preview?.models || []
+  const forms = preview?.forms || []
   const { modelsByCode, fieldsByModel } = docExportModelMaps(models)
 
   lines.push(`# ${appName}`, '', '## 一、应用信息', '')
@@ -5914,7 +5976,7 @@ const buildDocMarkdownFromPreview = () => {
   lines.push(`| ${appCode} | ${appName} |`, '', '---', '')
 
   lines.push('## 二、角色列表', '')
-  const roles = store.preview.roles || []
+  const roles = preview?.roles || []
   if (roles.length) {
     lines.push('| 角色编码 | 角色名称 | 职责说明 |', '|---------|---------|---------|')
     roles.forEach((r: any) => lines.push(`| ${r?.code || ''} | ${r?.name || ''} | ${r?.description || ''} |`))
@@ -5924,7 +5986,7 @@ const buildDocMarkdownFromPreview = () => {
   lines.push('', '---', '')
 
   lines.push('## 三、数据字典', '')
-  const dicts = store.preview.dicts || []
+  const dicts = preview?.dicts || []
   if (dicts.length) {
     dicts.forEach((dict: any) => {
       lines.push(`### ${dict?.name || dict?.code || '未命名字典'}（${dict?.code || ''}）`, '')
@@ -6031,7 +6093,7 @@ const buildDocMarkdownFromPreview = () => {
   lines.push('---', '')
 
   lines.push('## 六、权限配置', '')
-  const perms = store.preview.permissions || []
+  const perms = preview?.permissions || []
   if (perms.length) {
     lines.push('| 表单名称 | 角色编码 | 可暂存 | 可新增 | 可导入 | 可查看 | 可编辑 | 可删除 | 可导出 | 数据范围 |')
     lines.push('|---------|---------|------|------|------|------|------|------|------|---------|')
@@ -6057,6 +6119,14 @@ const buildDocMarkdownFromPreview = () => {
   lines.push('')
 
   return lines.join('\n')
+}
+
+const buildDocMarkdownFromVersion = (item?: DocVersionListItem | null) => {
+  const parsed = item?.parsed_config?.data || item?.parsed_config
+  if (parsed && typeof parsed === 'object') {
+    return buildDocMarkdownFromPreview(parsed).trim()
+  }
+  return ''
 }
 
 const downloadCurrentDoc = () => {
@@ -6091,10 +6161,8 @@ const downloadMarkdownContent = (content: string, filename: string) => {
 }
 
 const downloadDocVersion = (ver: DocVersionListItem) => {
-  const isCurrent = ver.version === currentDocVersion.value || !!currentDocPreviewOverride.value
-  const content = isCurrent
-    ? (buildDocMarkdownFromPreview().trim() || ver.raw_content || '').trim()
-    : (ver.raw_content || '').trim()
+  const rebuilt = buildDocMarkdownFromVersion(ver)
+  const content = (ver.raw_content || rebuilt || '').trim()
   if (!content) {
     ElMessage.warning('暂无可下载的设计文档内容')
     return
@@ -6140,6 +6208,8 @@ onMounted(async () => {
     const aid = Number(appIdParam)
     if (aid) {
       existingAppId.value = aid
+      parsedAppCode.value = ''
+      loadedAppCode.value = ''
       try {
         const app = await applicationApi.get(aid) as any
         platformDirectUrl.value = app.apaas_url || ''
@@ -6161,7 +6231,7 @@ onMounted(async () => {
           currentAgent.value = 'builder'
         }
         loadedAppCode.value = app.app_code || pickAppCode(configData) || ''
-        parsedAppCode.value = parsedAppCode.value || loadedAppCode.value
+        parsedAppCode.value = loadedAppCode.value
         deployAppId.value = aid
         await loadDeployStatus()
         await refreshCurrentAppRemoteMeta(aid)
@@ -6241,7 +6311,7 @@ onMounted(async () => {
                 parseReady.value = store.preview.models.length > 0
                 existingAppId.value = linkedApp.id
                 loadedAppCode.value = linkedApp.app_code || ''
-                parsedAppCode.value = parsedAppCode.value || loadedAppCode.value
+                parsedAppCode.value = loadedAppCode.value
                 deployAppId.value = linkedApp.id
                 await loadDeployStatus()
                 await refreshCurrentAppRemoteMeta(linkedApp.id)
@@ -6269,6 +6339,8 @@ onMounted(async () => {
     if (aid) {
       deployAppId.value = aid
       existingAppId.value = aid
+      parsedAppCode.value = ''
+      loadedAppCode.value = ''
       deployOpen.value = true
       loadDeployStatus()
       // 加载应用信息到预览
@@ -6289,7 +6361,7 @@ onMounted(async () => {
           currentAgent.value = 'builder'
         }
         loadedAppCode.value = app.app_code || pickAppCode(configData) || ''
-        parsedAppCode.value = parsedAppCode.value || loadedAppCode.value
+        parsedAppCode.value = loadedAppCode.value
         deployAppId.value = aid
         await loadDeployStatus()
         await refreshCurrentAppRemoteMeta(aid)
@@ -6398,7 +6470,11 @@ watch(() => route.query.app_id, async (newAppId, oldAppId) => {
   store.preview.permissions = []
   store.preview.appName = ''
   store.currentApp = null
+  parsedAppCode.value = ''
+  loadedAppCode.value = ''
   latestDocContent.value = ''
+  latestDocAppId.value = null
+  latestDocConversationId.value = null
   conversationId.value = null
   completedChangePlans.value = []
   activeView.value = 'builder'
@@ -6431,7 +6507,7 @@ watch(() => route.query.app_id, async (newAppId, oldAppId) => {
       currentAgent.value = 'builder'
     }
     loadedAppCode.value = app.app_code || pickAppCode(configData) || ''
-    parsedAppCode.value = loadedAppCode.value || parsedAppCode.value
+    parsedAppCode.value = loadedAppCode.value
     await restoreActiveViewForApp(app)
     const docVersionPayload = await loadLatestDocForApp(aid)
     await restorePendingChangePlan(aid, docVersionPayload)
@@ -6452,6 +6528,16 @@ watch(() => route.query.app_id, async (newAppId, oldAppId) => {
   } catch (e) {
     console.error('Failed to switch app:', e)
   }
+})
+
+watch(() => route.params.id, (newConversationId, oldConversationId) => {
+  if (!newConversationId || newConversationId === oldConversationId) return
+  if (route.query.app_id) return
+  parsedAppCode.value = ''
+  loadedAppCode.value = ''
+  latestDocContent.value = ''
+  latestDocAppId.value = null
+  latestDocConversationId.value = null
 })
 
 onBeforeUnmount(() => {
@@ -6541,27 +6627,45 @@ watch(conversationId, (id) => {
   font-weight: 700; font-size: 11px;
   display: flex; align-items: center; justify-content: center;
 }
+.top-bar-center {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
 .top-bar-app-name {
-  font-size: 13px; font-weight: 500; color: var(--t-text-secondary);
-  max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(247, 249, 255, 0.94);
+  border: 1px solid rgba(128, 145, 255, 0.14);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--t-text-secondary);
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .mode-switcher {
   display: flex;
-  gap: 4px;
-  padding: 4px;
+  gap: 3px;
+  padding: 3px;
   background: rgba(245, 247, 255, 0.92);
   border: 1px solid rgba(128, 145, 255, 0.14);
-  border-radius: 14px;
+  border-radius: 12px;
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.65);
 }
 .mode-btn {
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-height: 34px;
-  padding: 0 14px;
-  border-radius: 10px;
-  font-size: 12px;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 11px;
+  border-radius: 9px;
+  font-size: 11px;
   font-weight: 600;
   background: transparent;
   border: none;
@@ -6573,17 +6677,23 @@ watch(conversationId, (id) => {
 .mode-btn.active {
   background: linear-gradient(135deg, rgba(255,255,255,0.98), rgba(242, 246, 255, 0.94));
   color: var(--t-brand-text);
-  box-shadow: 0 8px 18px rgba(92, 115, 255, 0.1);
+  box-shadow: 0 8px 14px rgba(92, 115, 255, 0.08);
 }
-.mode-btn-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: currentColor;
-  opacity: 0.42;
+.mode-btn-icon {
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: currentColor;
+  opacity: 0.72;
   transition: opacity 0.2s ease, transform 0.2s ease;
 }
-.mode-btn.active .mode-btn-dot { opacity: 1; transform: scale(1.1); }
+.mode-btn-icon svg {
+  width: 14px;
+  height: 14px;
+}
+.mode-btn.active .mode-btn-icon { opacity: 1; transform: scale(1.04); }
 .top-status-badge {
   display: inline-flex;
   align-items: center;
@@ -7059,7 +7169,7 @@ watch(conversationId, (id) => {
   animation: avatarBlink 2.8s ease-in-out infinite;
 }
 .agent-label { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--t-text-muted); margin-bottom: 4px; }
-.bubble-content { padding: 10px 14px; border-radius: 14px; font-size: 13px; line-height: 1.6; }
+.bubble-content { padding: 12px 16px; border-radius: 14px; font-size: 13px; line-height: 1.65; }
 .bubble-content.user {
   background: var(--t-brand-gradient);
   color: #fff; border-bottom-right-radius: 4px;
@@ -7131,9 +7241,9 @@ watch(conversationId, (id) => {
   position: relative;
   z-index: 1;
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   gap: 6px;
-  padding: 3px 5px 5px;
+  padding: 6px 8px;
 }
 .upload-btn {
   cursor: pointer;
@@ -7156,13 +7266,13 @@ watch(conversationId, (id) => {
   background: transparent;
   resize: none;
   outline: none;
-  font-size: 11px;
-  line-height: 1.5;
+  font-size: 15px;
+  line-height: 1.65;
   color: var(--t-text-primary);
-  min-height: 22px;
-  max-height: 160px;
+  min-height: 42px;
+  max-height: 200px;
   overflow-y: auto;
-  padding: 2px 0;
+  padding: 8px 0;
   font-family: inherit;
 }
 .input-card-top textarea::placeholder { color: var(--t-text-muted); }
@@ -7636,6 +7746,10 @@ watch(conversationId, (id) => {
   margin: 72px auto 0;
   padding: 0;
   color: #8b97ae;
+  text-align: center;
+}
+.preview-empty-stage.parsing {
+  margin-top: 120px;
 }
 .preview-empty-title {
   font-size: 16px;
@@ -7647,6 +7761,15 @@ watch(conversationId, (id) => {
   font-size: 13px;
   line-height: 1.7;
 }
+.parsing-spinner {
+  width: 36px; height: 36px;
+  border: 3px solid #e8ecf4;
+  border-top-color: #6366f1;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin: 0 auto 16px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
 .preview-body { flex: 1; overflow-y: auto; }
 .tab-content { padding: 16px; }
 /* ── 文档版本 ── */
@@ -8057,66 +8180,31 @@ watch(conversationId, (id) => {
   padding: 14px 16px;
   background: rgba(247, 249, 255, 0.96);
 }
-/* Markdown 渲染样式 — v-html 内容须用 :deep() 穿透 scoped */
-.doc-md-render { white-space: normal; }
-.doc-md-render :deep(h1) {
-  font-size: 18px; color: var(--t-text-primary, #2d3a56); font-weight: 700;
-  margin: 20px 0 12px; padding-bottom: 8px;
-  border-bottom: 1px solid var(--t-border-subtle, rgba(128,145,255,0.2));
-}
-.doc-md-render :deep(h2) {
-  font-size: 15px; color: var(--t-text-primary, #2d3a56); font-weight: 600;
-  margin: 18px 0 10px;
-}
-.doc-md-render :deep(h3) {
-  font-size: 13px; color: var(--t-text-primary, #2d3a56); font-weight: 600;
-  margin: 14px 0 8px;
-}
-.doc-md-render :deep(h4) {
-  font-size: 12px; color: var(--t-text-secondary, #5a6a85); font-weight: 600;
-  margin: 10px 0 6px;
-}
-.doc-md-render :deep(table) {
-  width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 12px;
-}
-.doc-md-render :deep(th) {
-  background: var(--t-brand-subtle, rgba(128,145,255,0.08));
-  color: var(--t-brand-light, #5c73ff);
-  text-align: left; padding: 8px 12px;
-  border: 1px solid var(--t-border-subtle, rgba(128,145,255,0.2));
-  font-weight: 600;
-}
-.doc-md-render :deep(td) {
-  padding: 6px 12px;
-  border: 1px solid var(--t-border-subtle, rgba(128,145,255,0.15));
-  color: var(--t-text-primary, #2d3a56);
-}
-.doc-md-render :deep(tr:hover td) { background: var(--t-bg-subtle, rgba(128,145,255,0.03)); }
-.doc-md-render :deep(hr) { border: none; border-top: 1px solid var(--t-border-subtle, rgba(128,145,255,0.15)); margin: 16px 0; }
-.doc-md-render :deep(p) { margin: 6px 0; color: var(--t-text-primary, #2d3a56); }
-.doc-md-render :deep(blockquote) {
-  border-left: 3px solid var(--t-brand-light, rgba(92,115,255,0.5));
-  margin: 8px 0; padding: 6px 12px;
-  color: var(--t-text-secondary, #8091b0); font-style: italic;
-  background: rgba(92,115,255,0.04); border-radius: 0 6px 6px 0;
-}
-.doc-md-render :deep(code) {
-  background: var(--t-border-subtle, rgba(128,145,255,0.1));
-  padding: 2px 6px; border-radius: 4px; font-size: 12px;
-}
-.doc-md-render :deep(strong) { color: var(--t-text-primary, #2d3a56); font-weight: 600; }
-.doc-md-render :deep(ul), .doc-md-render :deep(ol) { padding-left: 20px; margin: 6px 0; }
-.doc-md-render :deep(li) { margin: 3px 0; }
-
 /* 文档预览弹窗 */
 :deep(.doc-preview-dialog) .el-dialog { background: var(--t-bg-panel); color: var(--t-text-primary); }
 :deep(.doc-preview-dialog) .el-dialog__header { border-bottom: 1px solid var(--t-border-subtle); }
 :deep(.doc-preview-dialog) .el-dialog__title { color: var(--t-text-primary); }
 :deep(.doc-preview-dialog) .el-dialog__headerbtn .el-dialog__close { color: var(--t-text-secondary); }
+:deep(.doc-preview-dialog-fullscreen) .el-dialog {
+  height: 96vh;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+}
+:deep(.doc-preview-dialog-fullscreen) .el-dialog__body {
+  flex: 1;
+  min-height: 0;
+  padding: 16px 20px 20px;
+}
 .doc-preview-body {
   max-height: 70vh; overflow-y: auto; padding: 16px;
   font-size: 13px; line-height: 1.7; color: var(--t-text-primary);
   background: var(--t-bg-base); border-radius: 8px;
+}
+.doc-preview-body.fullscreen {
+  max-height: none;
+  height: 100%;
+  min-height: 0;
 }
 .doc-preview-body :deep(h1) { font-size: 20px; color: var(--t-text-primary); margin: 20px 0 12px; padding-bottom: 8px; border-bottom: 1px solid var(--t-border-subtle); }
 .doc-preview-body :deep(h2) { font-size: 17px; color: var(--t-text-primary); margin: 18px 0 10px; }
@@ -8127,9 +8215,32 @@ watch(conversationId, (id) => {
 .doc-preview-body :deep(li) { margin: 3px 0; }
 .doc-preview-body :deep(code) { background: var(--t-border-subtle); padding: 2px 6px; border-radius: 4px; font-size: 12px; }
 .doc-preview-body :deep(pre) { background: var(--t-border-subtle); padding: 12px; border-radius: 8px; overflow-x: auto; }
-.doc-preview-body :deep(table) { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 12px; }
-.doc-preview-body :deep(th) { background: var(--t-brand-subtle); color: var(--t-brand-light); text-align: left; padding: 8px 12px; border: 1px solid var(--t-border-subtle); font-weight: 600; }
-.doc-preview-body :deep(td) { padding: 6px 12px; border: 1px solid var(--t-border-subtle); }
+.doc-preview-body :deep(.doc-table-scroll) { width: 100%; overflow-x: auto; margin: 10px 0; }
+.doc-preview-body :deep(table) {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  margin: 0;
+  font-size: 12px;
+  table-layout: auto;
+}
+.doc-preview-body :deep(th) {
+  background: var(--t-brand-subtle);
+  color: var(--t-brand-light);
+  text-align: left;
+  padding: 8px 12px;
+  border: 1px solid var(--t-border-subtle);
+  font-weight: 600;
+  white-space: nowrap;
+  word-break: keep-all;
+}
+.doc-preview-body :deep(td) {
+  padding: 6px 12px;
+  border: 1px solid var(--t-border-subtle);
+  white-space: nowrap;
+  word-break: keep-all;
+  overflow-wrap: normal;
+}
 .doc-preview-body :deep(tr:hover td) { background: var(--t-bg-subtle); }
 .doc-preview-body :deep(strong) { color: var(--t-text-primary); font-weight: 600; }
 .doc-preview-body :deep(hr) { border: none; border-top: 1px solid var(--t-border-subtle); margin: 16px 0; }

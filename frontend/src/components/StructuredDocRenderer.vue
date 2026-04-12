@@ -99,7 +99,7 @@
               <tr v-for="field in (table.fields || [])" :key="field.field_code || field.field_name">
                 <td>{{ field.field_code || '-' }}</td>
                 <td>{{ field.field_name || '-' }}</td>
-                <td>{{ field.database_field_type || field.data_type || '-' }}</td>
+                <td>{{ field.database_field_type || field.data_type || field.type || '-' }}</td>
                 <td>{{ field.max_length || field.length || '-' }}</td>
               </tr>
             </tbody>
@@ -109,8 +109,8 @@
     </section>
 
     <section class="doc-section">
-      <h2 class="doc-section-title">五、表单配置</h2>
-      <div v-if="!forms.length" class="doc-empty-block">暂无表单配置</div>
+      <h2 class="doc-section-title">五、表单定义</h2>
+      <div v-if="!forms.length" class="doc-empty-block">暂无表单定义</div>
       <div v-for="form in forms" :key="form.form_name" class="doc-subsection">
         <h3 class="doc-subsection-title">{{ form.form_name || '未命名表单' }}</h3>
         <div class="doc-sub-meta">
@@ -122,6 +122,7 @@
             <table class="doc-table">
               <thead>
                 <tr>
+                  <th>字段编码</th>
                   <th>字段名称</th>
                   <th>组件类型</th>
                   <th>必填</th>
@@ -129,13 +130,19 @@
                   <th>只读</th>
                   <th>列表展示</th>
                   <th>查询条件</th>
+                  <th>字典编码</th>
+                  <th>目标模型编码</th>
+                  <th>目标字段编码</th>
+                  <th>本表关联字段编码</th>
+                  <th>说明</th>
                 </tr>
               </thead>
               <tbody>
                 <tr v-if="!(form.main_components || []).length">
-                  <td colspan="7" class="empty-cell">暂无主表字段</td>
+                  <td colspan="13" class="empty-cell">暂无主表字段</td>
                 </tr>
-                <tr v-for="component in (form.main_components || [])" :key="`${form.form_name}-main-${component.field_name}-${component.component_type}`">
+                <tr v-for="component in (form.main_components || [])" :key="`${form.form_name}-main-${component.field_code}-${component.component_type}`">
+                  <td>{{ component.field_code || '-' }}</td>
                   <td>{{ component.field_name || '-' }}</td>
                   <td>{{ displayComponentType(component) }}</td>
                   <td>{{ formatBool(component.required) }}</td>
@@ -143,20 +150,26 @@
                   <td>{{ formatBool(component.readonly) }}</td>
                   <td>{{ formatBool(component.show_in_list) }}</td>
                   <td>{{ formatBool(component.searchable) }}</td>
+                  <td>{{ component.dict_code || '-' }}</td>
+                  <td>{{ component.ref_model_code || component.selector_form_code || component.association_form_code || '-' }}</td>
+                  <td>{{ component.ref_display_field_code || component.selector_field_code || component.association_target_field_code || '-' }}</td>
+                  <td>{{ component.association_origin_field_code || '-' }}</td>
+                  <td>{{ component.description || '-' }}</td>
                 </tr>
               </tbody>
             </table>
           </div>
         </div>
 
-        <div v-for="subGroup in (form.sub_groups || [])" :key="`${form.form_name}-${subGroup.model_code}`" class="doc-form-group">
+        <div v-for="subGroup in (form.sub_groups || [])" :key="`${form.form_name}-${subGroup.model_code}-${subGroup.group_name}`" class="doc-form-group">
           <div class="doc-form-group-title">
-            子表：{{ subGroup.model_name || subGroup.model_code || '-' }}
+            子表：{{ subGroup.group_name || subGroup.model_name || subGroup.model_code || '-' }}
             <span class="doc-form-group-code">（{{ subGroup.model_code || '-' }}）</span>
           </div>
           <table class="doc-table">
             <thead>
               <tr>
+                <th>字段编码</th>
                 <th>字段名称</th>
                 <th>组件类型</th>
                 <th>必填</th>
@@ -164,13 +177,19 @@
                 <th>只读</th>
                 <th>列表展示</th>
                 <th>查询条件</th>
+                <th>字典编码</th>
+                <th>目标模型编码</th>
+                <th>目标字段编码</th>
+                <th>本表关联字段编码</th>
+                <th>说明</th>
               </tr>
             </thead>
             <tbody>
               <tr v-if="!(subGroup.components || []).length">
-                <td colspan="7" class="empty-cell">暂无子表字段</td>
+                <td colspan="13" class="empty-cell">暂无子表字段</td>
               </tr>
-              <tr v-for="component in (subGroup.components || [])" :key="`${form.form_name}-${subGroup.model_code}-${component.field_name}-${component.component_type}`">
+              <tr v-for="component in (subGroup.components || [])" :key="`${form.form_name}-${subGroup.model_code}-${component.field_code}-${component.component_type}`">
+                <td>{{ component.field_code || '-' }}</td>
                 <td>{{ component.field_name || '-' }}</td>
                 <td>{{ displayComponentType(component) }}</td>
                 <td>{{ formatBool(component.required) }}</td>
@@ -178,6 +197,11 @@
                 <td>{{ formatBool(component.readonly) }}</td>
                 <td>{{ formatBool(component.show_in_list) }}</td>
                 <td>{{ formatBool(component.searchable) }}</td>
+                <td>{{ component.dict_code || '-' }}</td>
+                <td>{{ component.ref_model_code || component.selector_form_code || component.association_form_code || '-' }}</td>
+                <td>{{ component.ref_display_field_code || component.selector_field_code || component.association_target_field_code || '-' }}</td>
+                <td>{{ component.association_origin_field_code || '-' }}</td>
+                <td>{{ component.description || '-' }}</td>
               </tr>
             </tbody>
           </table>
@@ -187,8 +211,8 @@
     </section>
 
     <section class="doc-section">
-      <h2 class="doc-section-title">六、权限配置</h2>
-      <div v-if="!roleTableMapping.length" class="doc-empty-block">暂无权限配置</div>
+      <h2 class="doc-section-title">六、权限定义</h2>
+      <div v-if="!roleTableMapping.length" class="doc-empty-block">暂无权限定义</div>
       <div v-for="mapping in roleTableMapping" :key="mapping.table_code || mapping.table_name" class="doc-subsection">
         <h3 class="doc-subsection-title">{{ mapping.table_name || mapping.table_code || '未命名对象' }}</h3>
         <div class="doc-table-wrap">
@@ -196,19 +220,29 @@
             <thead>
               <tr>
                 <th>角色编码</th>
-                <th>角色名称</th>
-                <th>操作权限</th>
+                <th>可暂存</th>
+                <th>可新增</th>
+                <th>可导入</th>
+                <th>可查看</th>
+                <th>可编辑</th>
+                <th>可删除</th>
+                <th>可导出</th>
                 <th>数据范围</th>
               </tr>
             </thead>
             <tbody>
               <tr v-if="!(mapping.permissions || []).length">
-                <td colspan="4" class="empty-cell">暂无权限项</td>
+                <td colspan="9" class="empty-cell">暂无权限项</td>
               </tr>
               <tr v-for="perm in (mapping.permissions || [])" :key="`${mapping.table_code || mapping.table_name}-${perm.role_code || perm.role_name}`">
                 <td>{{ perm.role_code || '-' }}</td>
-                <td>{{ perm.role_name || '-' }}</td>
-                <td>{{ formatOperations(perm.operations) }}</td>
+                <td>{{ formatPermissionFlag(perm, ['stash', 'save', 'draft'], 'can_draft') }}</td>
+                <td>{{ formatPermissionFlag(perm.operations, ['add']) }}</td>
+                <td>{{ formatPermissionFlag(perm, ['import'], 'can_import') }}</td>
+                <td>{{ formatPermissionFlag(perm.operations, ['view']) }}</td>
+                <td>{{ formatPermissionFlag(perm.operations, ['edit']) }}</td>
+                <td>{{ formatPermissionFlag(perm.operations, ['delete']) }}</td>
+                <td>{{ formatPermissionFlag(perm, ['export'], 'can_export') }}</td>
                 <td>{{ formatDataScope(perm.data_scope) }}</td>
               </tr>
             </tbody>
@@ -300,41 +334,79 @@ const forms = computed(() => {
   const source = props.docResult?.forms || []
   return source
     .map((form: any) => {
-      const mainModelCode = form.model_code || form.modelCode || ''
+      const mainModelCode = form.main_model_code || form.model_code || form.modelCode || form.bindModelCode || ''
       const components = (form.components || form.formComponents || []).map((component: any) => {
+        const modelField = String(component.model_field || component.modelField || '')
+        const [modelFieldModelCode, modelFieldCode] = modelField.includes('.') ? modelField.split('.', 2) : ['', '']
         const sectionType = component.section_type || (component.componentType === 'FORM_WIDGET_SON_TABLE' ? 'sub' : 'main')
-        const modelCode = component.model_code || component.modelCode || component.table_model_code || component.tableModelCode || (sectionType === 'sub' ? '' : mainModelCode)
-        const fieldCode = component.field_code || component.fieldCode || component.code || ''
-        const fieldName = component.field_name || component.fieldName || component.label || ''
+        const modelCode =
+          component.model_code
+          || component.modelCode
+          || component.table_model_code
+          || component.tableModelCode
+          || modelFieldModelCode
+          || (sectionType === 'sub' ? '' : mainModelCode)
+        const fieldCode = component.field_code || component.fieldCode || component.code || modelFieldCode || ''
+        const fieldName = component.field_name || component.fieldName || component.label || fieldCode || ''
         const modelType =
           modelFieldTypeMap.value.get(`${modelCode}::${fieldCode}`)
           || modelFieldTypeMap.value.get(`${modelCode}::${fieldName}`)
           || ''
         return {
+          field_code: fieldCode,
           field_name: fieldName,
           component_type: component.component_type || component.componentType || component.type || '',
           raw_component_type: component.raw_component_type || component.componentType || component.type || '',
           model_type: modelType,
           section_type: sectionType,
           model_code: modelCode,
+          sub_group_name: component.sub_group_name || component.subGroupName || '',
           required: !!component.required,
           hidden: !!component.hidden,
           readonly: !!(component.readonly ?? component.readOnly),
           show_in_list: !!(component.show_in_list ?? component.showInList),
           searchable: !!component.searchable,
+          dict_code: component.dict_code || component.dictCode || '',
+          selector_form_code: component.selector_form_code || component.selectorFormCode || '',
+          selector_form_name: component.selector_form_name || component.selectorFormName || '',
+          selector_field_code: component.selector_field_code || component.selectorFieldCode || '',
+          selector_field_name: component.selector_field_name || component.selectorFieldName || '',
+          association_form_code: component.association_form_code || component.associationFormCode || '',
+          association_form_name: component.association_form_name || component.associationFormName || '',
+          association_origin_field_code: component.association_origin_field_code || component.associationOriginFieldCode || '',
+          association_origin_field_name: component.association_origin_field_name || component.associationOriginFieldName || '',
+          association_target_field_code: component.association_target_field_code || component.associationTargetFieldCode || '',
+          association_target_field_name: component.association_target_field_name || component.associationTargetFieldName || '',
+          ref_model_code: component.ref_model_code || component.refModelCode || '',
+          ref_display_field_code: component.ref_display_field_code || component.refDisplayFieldCode || '',
+          description: component.description || component.comment || '',
         }
       })
-      const subModelCodes = Array.from(new Set(
+      const subModelCodes: string[] = Array.from(new Set<string>(
         components
           .filter((component: any) => component.section_type === 'sub' && component.model_code)
           .map((component: any) => component.model_code)
       ))
       const mainComponents = components.filter((component: any) => component.section_type !== 'sub')
-      const subGroups = subModelCodes.map((modelCode: string) => ({
-        model_code: modelCode,
-        model_name: modelNameMap.value.get(modelCode) || modelCode,
-        components: components.filter((component: any) => component.section_type === 'sub' && component.model_code === modelCode),
-      }))
+      const subGroups = Array.from(new Set<string>(
+        components
+          .filter((component: any) => component.section_type === 'sub')
+          .map((component: any) => `${component.model_code || ''}::${component.sub_group_name || ''}`)
+      ))
+        .filter(Boolean)
+        .map((groupKey: string) => {
+          const [modelCode = '', groupName = ''] = groupKey.split('::')
+          return {
+            model_code: modelCode,
+            model_name: modelNameMap.value.get(modelCode) || modelCode,
+            group_name: groupName || '',
+            components: components.filter((component: any) =>
+              component.section_type === 'sub'
+              && component.model_code === modelCode
+              && (component.sub_group_name || '') === (groupName || '')
+            ),
+          }
+        })
       return {
         form_name: form.form_name || form.formName || form.name || '',
         main_model_code: mainModelCode || '-',
@@ -371,6 +443,9 @@ const roleTableMapping = computed(() => {
               .map((item: string) => item.trim())
               .filter(Boolean),
         data_scope: perm.data_scope || perm.data || '',
+        can_draft: !!(perm.can_draft ?? perm.canDraft),
+        can_import: !!(perm.can_import ?? perm.canImport),
+        can_export: !!(perm.can_export ?? perm.canExport),
       })),
     }))
   }
@@ -378,38 +453,36 @@ const roleTableMapping = computed(() => {
   return permissions.map((mapping: any) => ({
     table_code: mapping.form || mapping.form_code || '',
     table_name: formNameMap.get(String(mapping.form || mapping.form_code || '')) || mapping.form_name || mapping.form || '',
-    permissions: (mapping.rules || []).map((rule: any) => ({
-      role_code: rule.role || rule.role_code || '',
-      role_name: rule.role_name || rule.role || '',
-      operations: Array.isArray(rule.operations)
-        ? rule.operations
+      permissions: (mapping.rules || []).map((rule: any) => ({
+        role_code: rule.role || rule.role_code || '',
+        role_name: rule.role_name || rule.role || '',
+        operations: Array.isArray(rule.operations)
+          ? rule.operations
         : String(rule.op || '')
-            .split(',')
-            .map((item: string) => item.trim())
-            .filter(Boolean),
-      data_scope: rule.data_scope || rule.data || '',
-    })),
+              .split(',')
+              .map((item: string) => item.trim())
+              .filter(Boolean),
+        data_scope: rule.data_scope || rule.data || '',
+        can_draft: !!(rule.can_draft ?? rule.canDraft),
+        can_import: !!(rule.can_import ?? rule.canImport),
+        can_export: !!(rule.can_export ?? rule.canExport),
+      })),
   }))
 })
-
-function formatOperations(operations: any) {
-  if (!Array.isArray(operations) || operations.length === 0) return '-'
-  const opMap: Record<string, string> = {
-    all: '全部',
-    view: '查看',
-    add: '新增',
-    edit: '编辑',
-    delete: '删除',
-    import: '导入',
-    export: '导出',
-    print: '打印',
-  }
-  return operations.map((item: any) => opMap[String(item).trim()] || item).join('、')
-}
 
 function formatBool(value: any) {
   return value ? '是' : '否'
 }
+
+function formatPermissionFlag(source: any, expectedOps: string[], boolKey?: string) {
+  if (boolKey && source && source[boolKey]) return '是'
+  const operations = Array.isArray(source) ? source : source?.operations
+  if (!Array.isArray(operations)) return '否'
+  const normalized = operations.map((item: any) => String(item).trim().toLowerCase())
+  if (normalized.includes('all')) return '是'
+  return expectedOps.some(op => normalized.includes(op.toLowerCase())) ? '是' : '否'
+}
+
 
 function formatDataScope(value: any) {
   const key = String(value || '').trim()
@@ -459,12 +532,7 @@ function formatComponentType(value: any) {
 }
 
 function displayComponentType(component: any) {
-  const raw = formatComponentType(component?.component_type || component?.raw_component_type)
-  const modelType = String(component?.model_type || '').trim()
-  if (!modelType) return raw
-  if (!raw || raw === '-') return modelType
-  if (raw === '单行输入' && modelType !== '单行输入') return modelType
-  return raw
+  return formatComponentType(component?.component_type || component?.raw_component_type)
 }
 </script>
 
