@@ -573,7 +573,7 @@ async def run_complete_generation(
             roles_payload = []
             for r in roles:
                 original_code = str(r.get("code", r["name"]))
-                platform_code = _apply_suffix(f"R_{_sanitize_code(original_code)}", suffix)
+                platform_code = _apply_suffix(_sanitize_code(original_code), suffix)
                 role_code_map[original_code] = {"roleCode": platform_code, "roleName": r["name"]}
                 roles_payload.append({
                     "appId": app_id,

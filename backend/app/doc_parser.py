@@ -379,7 +379,7 @@ def _parse_generic_md(content: str) -> dict:
         for rn in role_names:
             rn = rn.strip()
             if rn:
-                role_code = f"R_{re.sub(r'[^a-zA-Z0-9]', '_', rn)}"
+                role_code = re.sub(r'[^a-zA-Z0-9]', '_', rn)
                 roles.append({"name": rn, "code": role_code})
 
     # 推断应用名

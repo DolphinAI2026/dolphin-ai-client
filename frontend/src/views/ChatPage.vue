@@ -76,6 +76,12 @@
             @error="onIframeError"
           ></iframe>
         </template>
+        <div v-else class="platform-error">
+          <p>应用尚未部署到平台，无法打开辅助搭建</p>
+          <div class="platform-error-actions">
+            <button class="platform-retry-btn" @click="loadPlatformUrl">重试</button>
+          </div>
+        </div>
       </div>
 
       <!-- 智能开发内容区 — iframe 嵌入 CodingPage -->
@@ -233,7 +239,7 @@
       </div>
 
       <div class="preview-side builder-result-side">
-        <div class="preview-side-header">
+        <div v-if="!showDeployedVersionedView || isUpdateReviewMode" class="preview-side-header">
           <div class="preview-side-heading">
             <div class="preview-side-heading-main">
               <div class="preview-side-title-row">
@@ -707,19 +713,88 @@
                     </div>
                     <div class="doc-top-actions">
                       <button
-                        v-if="currentDocVersionItem"
+                        v-if="showUpdateButton"
+                        class="doc-action-btn"
+                        type="button"
+                        @click="triggerDocVersionUpload"
+                        :disabled="updatingDocVersion || executingChangePlan"
+                      >{{ updatingDocVersion ? '分析更新中...' : '更新应用' }}</button>
+                      <button
+                        v-if="showPublishButton"
                         class="doc-action-btn primary"
                         type="button"
-                        @click="downloadCurrentDoc"
-                      >下载</button>
+                        @click="publishCurrentApp"
+                        :disabled="publishingApp || isAppOnline"
+                      >{{ publishingApp ? '上线中...' : isAppOnline ? '已上线' : '上线应用' }}</button>
                     </div>
                   </div>
 
                   <div v-if="docVersionsLoading" class="doc-version-empty">正在加载版本记录...</div>
-                  <div v-else-if="!currentDocVersionItem" class="doc-version-empty">暂无可展示的设计文档</div>
+                  <div v-else-if="displayDocVersions.length > 1" class="doc-version-history">
+                    <div class="doc-version-list compact">
+                      <div
+                        v-for="ver in displayDocVersions"
+                        :key="ver.key"
+                        class="doc-version-row"
+                        :class="{ current: ver.version === currentDocVersion, expanded: isDocVersionExpanded(ver) }"
+                      >
+                        <div class="doc-version-summary">
+                          <button class="doc-version-toggle" type="button" @click="toggleDocVersion(ver)">
+                            <span class="doc-ver-icon" aria-hidden="true">
+                              <svg viewBox="0 0 16 16" fill="none">
+                                <path d="M5 2.5h4l2.5 2.5v7a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-8a1 1 0 0 1 1-1Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+                                <path d="M9 2.5V5h2.5" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+                              </svg>
+                            </span>
+                            <div class="doc-version-main">
+                              <div class="doc-ver-header">
+                                <span class="doc-ver-num">V{{ ver.version }}</span>
+                                <span class="doc-ver-filename">{{ ver.filename || `设计文档-V${ver.version}.md` }}</span>
+                                <span v-if="ver.version === currentDocVersion" class="doc-ver-current">当前</span>
+                              </div>
+                              <div class="doc-ver-meta">
+                                <span class="doc-ver-time">{{ formatDocTime(ver.created_at) || '刚刚更新' }}</span>
+                                <span class="doc-ver-summary">{{ ver.summary || '点击查看版本内容' }}</span>
+                              </div>
+                            </div>
+                          </button>
+                          <div class="doc-ver-actions">
+                            <button
+                              class="doc-action-btn"
+                              type="button"
+                              @click.stop="selectDocVersion(ver)"
+                            >查看</button>
+                            <button
+                              v-if="canCompareDocVersion(ver)"
+                              class="doc-action-btn diff"
+                              type="button"
+                              @click.stop="openDocDiff(ver)"
+                            >对比</button>
+                            <button
+                              v-if="showVersionManager && !ver.isVirtual"
+                              class="doc-action-btn danger"
+                              type="button"
+                              :disabled="deletingDocVersionId === ver.id"
+                              @click.stop="deleteDocVersion(ver)"
+                            >{{ deletingDocVersionId === ver.id ? '删除中...' : '删除' }}</button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div v-if="!currentDocVersionItem" class="doc-version-empty">暂无可展示的设计文档</div>
                   <div v-else class="doc-current-panel">
                     <div class="doc-current-head">
                       <div class="doc-current-badge">当前文档</div>
+                      <div class="doc-current-tools">
+                        <button
+                          v-if="selectedDocDisplayContent"
+                          class="doc-action-btn"
+                          type="button"
+                          @click="openCurrentDocFullscreen"
+                        >全屏</button>
+                      </div>
                     </div>
                     <div v-if="selectedDocStructuredResult" class="doc-version-content expanded doc-preview-body structured-doc-host">
                       <StructuredDocRenderer :doc-result="selectedDocStructuredResult" />
@@ -959,6 +1034,7 @@
       <div class="diff-summary-bar">
         <span class="diff-stat added">新增 {{ docDiffStats.added }}</span>
         <span class="diff-stat removed">删除 {{ docDiffStats.removed }}</span>
+        <span class="diff-stat modified">修改 {{ docDiffStats.modified }}</span>
         <span class="diff-stat unchanged">未变更 {{ docDiffStats.same }}</span>
       </div>
       <div class="doc-diff-container">
@@ -975,29 +1051,39 @@
         <div class="doc-diff-pane">
           <div class="doc-diff-pane-title">{{ docVersionDiffLeftTitle }}</div>
           <div class="doc-diff-content">
-            <div
-              v-for="(line, idx) in docDiffResult.left"
-              :key="`left-${idx}`"
-              class="doc-diff-line"
-              :class="line.type"
-            >
-              <span class="doc-diff-lineno">{{ idx + 1 }}</span>
-              <span class="doc-diff-text">{{ line.text || ' ' }}</span>
+            <div v-if="docVersionDiffLeftStructuredResult" class="doc-diff-structured structured-doc-host">
+              <StructuredDocDiffRenderer :doc-result="docVersionDiffLeftStructuredResult" :diff-meta="structuredDocDiffMeta.left" />
             </div>
+            <template v-else>
+              <div
+                v-for="(line, idx) in docDiffResult.left"
+                :key="`left-${idx}`"
+                class="doc-diff-line"
+                :class="line.type"
+              >
+                <span class="doc-diff-lineno">{{ idx + 1 }}</span>
+                <span class="doc-diff-text">{{ line.text || ' ' }}</span>
+              </div>
+            </template>
           </div>
         </div>
         <div class="doc-diff-pane">
           <div class="doc-diff-pane-title">{{ docVersionDiffRightTitle }}</div>
           <div class="doc-diff-content">
-            <div
-              v-for="(line, idx) in docDiffResult.right"
-              :key="`right-${idx}`"
-              class="doc-diff-line"
-              :class="line.type"
-            >
-              <span class="doc-diff-lineno">{{ idx + 1 }}</span>
-              <span class="doc-diff-text">{{ line.text || ' ' }}</span>
+            <div v-if="docVersionDiffRightStructuredResult" class="doc-diff-structured structured-doc-host">
+              <StructuredDocDiffRenderer :doc-result="docVersionDiffRightStructuredResult" :diff-meta="structuredDocDiffMeta.right" />
             </div>
+            <template v-else>
+              <div
+                v-for="(line, idx) in docDiffResult.right"
+                :key="`right-${idx}`"
+                class="doc-diff-line"
+                :class="line.type"
+              >
+                <span class="doc-diff-lineno">{{ idx + 1 }}</span>
+                <span class="doc-diff-text">{{ line.text || ' ' }}</span>
+              </div>
+            </template>
           </div>
         </div>
       </div>
@@ -1053,11 +1139,13 @@ import type { Message } from '@/types'
 import TopBar from '@/components/TopBar.vue'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
 import StructuredDocRenderer from '@/components/StructuredDocRenderer.vue'
+import StructuredDocDiffRenderer from '@/components/StructuredDocDiffRenderer.vue'
 import { llmConfigApi, type BuilderModelOption } from '@/api/llmConfig'
 import DesignDocCard from '@/components/DesignDocCard.vue'
 import { requirementsApi } from '@/api/requirements'
 import { convertConfig } from '@/api/conversation'
 import { buildStructuredDocFromPreviewConfig } from '@/utils/structuredDoc'
+import { computeStructuredDocDiff } from '@/utils/structuredDocDiff'
 
 const router = useRouter()
 const route = useRoute()
@@ -2224,25 +2312,18 @@ const clearPlatformIframeRepairTimer = () => {
   }
 }
 
-const restorePlatformIframeHeader = () => {
-  const restored = repairPlatformIframe(platformIframeRef.value)
-  if (!restored && platformIframeRef.value) {
-    clearPlatformIframeRepairTimer()
-  }
-}
-
 const onPlatformIframeLoad = () => {
   clearPlatformIframeRepairTimer()
-  restorePlatformIframeHeader()
 
-  let attempts = 0
-  platformIframeRepairTimer.value = window.setInterval(() => {
-    attempts += 1
-    restorePlatformIframeHeader()
-    if (attempts >= 24) {
-      clearPlatformIframeRepairTimer()
+  // 检测后端返回的错误页（通过 body 上的标记 data 属性）
+  try {
+    const doc = platformIframeRef.value?.contentDocument
+    if (doc?.body?.dataset?.proxyError) {
+      const text = doc.querySelector('h3')?.textContent || '平台页面加载失败'
+      platformIframeUrl.value = ''
+      platformError.value = text
     }
-  }, 500)
+  } catch { /* 跨域页面无法访问 contentDocument，忽略 */ }
 }
 
 const refreshCurrentAppRemoteMeta = async (appId: number) => {
@@ -2260,9 +2341,13 @@ const refreshCurrentAppRemoteMeta = async (appId: number) => {
 }
 
 const loadPlatformUrl = async () => {
-  if (!existingAppId.value) return
+  if (!existingAppId.value) {
+    platformError.value = '当前应用未关联，无法打开辅助搭建'
+    return
+  }
   platformLoading.value = true
   platformError.value = ''
+  await Promise.resolve()  // 让 Vue 渲染一帧，显示 loading 旋转器
   try {
     const proxyUrl = buildPlatformProxyUrl(existingAppId.value)
     platformIframeUrl.value = proxyUrl
@@ -2353,10 +2438,7 @@ const restoreActiveViewForApp = async (app: any) => {
   }
 
   const savedView = (route.query.view as string) || localStorage.getItem(getAppViewStorageKey(app.id)) || 'builder'
-  if (savedView === 'platform' && SHOW_PLATFORM_CONFIG) {
-    switchToPlatform()
-    return
-  }
+  // platform 不作为默认恢复视图，进来始终先展示智能搭建
   activeView.value = savedView === 'coding' ? 'coding' : 'builder'
 }
 
@@ -3006,6 +3088,7 @@ interface DocVersion {
   raw_content: string
   parsed_config?: any
   created_at: string
+  change_plans?: any[]
 }
 interface DocVersionListItem extends DocVersion {
   key: string
@@ -3095,6 +3178,8 @@ const docVersionDiffLeft = ref('')
 const docVersionDiffRight = ref('')
 const docVersionDiffLeftTitle = ref('')
 const docVersionDiffRightTitle = ref('')
+const docVersionDiffLeftItem = ref<DocVersionListItem | null>(null)
+const docVersionDiffRightItem = ref<DocVersionListItem | null>(null)
 const expandedDocVersionKey = ref<string | null>(null)
 const selectedDocVersionKey = ref<string | null>(null)
 const deletingDocVersionId = ref<number | null>(null)
@@ -3165,23 +3250,102 @@ const docVersionStructuredResult = (item?: Pick<DocVersion, 'parsed_config' | 'r
 const selectedDocStructuredResult = computed(() => {
   return docVersionStructuredResult(selectedDocVersionItem.value, hasPreviewContent.value ? currentPreviewConfigPayload.value : null)
 })
-// 当前选中版本展示的文档内容：只展示后端固化后的最终文档，避免前端二次拼装污染平台对接结果
-const selectedDocDisplayContent = computed(() => {
-  const item = selectedDocVersionItem.value
-  if (item) return String(item.raw_content || '').trim()
-  return String(latestDocContent.value || '').trim()
-})
+
+const resolveDocDisplayContent = (item?: Pick<DocVersion, 'version' | 'raw_content' | 'parsed_config'> | null) => {
+  const isCurrentVersion = !!item && Number(item.version || 0) === Number(currentDocVersion.value || 0)
+  if (isCurrentVersion && hasPreviewContent.value) {
+    const latestMarkdown = buildDocMarkdownFromPreview(currentPreviewConfigPayload.value).trim()
+    if (latestMarkdown) return latestMarkdown
+  }
+
+  const rebuilt = item?.parsed_config ? buildDocMarkdownFromVersion(item as DocVersionListItem) : ''
+  const raw = String(item?.raw_content || '').trim()
+  return raw || rebuilt || String(latestDocContent.value || '').trim()
+}
+
+const selectedDocDisplayContent = computed(() => resolveDocDisplayContent(selectedDocVersionItem.value))
 const docVersionPreviewStructuredResult = computed(() => {
   return docVersionStructuredResult(docVersionPreviewItem.value)
 })
 const docFullscreenStructuredResult = computed(() => {
   return docVersionStructuredResult(docFullscreenItem.value, hasPreviewContent.value ? currentPreviewConfigPayload.value : null)
 })
+const docVersionDiffLeftStructuredResult = computed(() => {
+  return docVersionStructuredResult(docVersionDiffLeftItem.value)
+})
+const docVersionDiffRightStructuredResult = computed(() => {
+  return docVersionStructuredResult(docVersionDiffRightItem.value)
+})
+const structuredDocDiffMeta = computed(() => {
+  return computeStructuredDocDiff(docVersionDiffLeftStructuredResult.value, docVersionDiffRightStructuredResult.value)
+})
 const showVersionManager = computed(() => !!existingAppId.value)
+const isDocVersionTransientFix = (version: any) => {
+  const filename = String(version?.filename || '').toLowerCase()
+  const summary = String(version?.summary || '')
+  return filename.includes('conflict-fix-v')
+    || filename.includes('app-code-fix-v')
+    || summary.includes('编码冲突修复')
+    || summary.includes('应用编码修复')
+}
+
+const buildNormalizedDocVersionFilename = (filename: string, version: number) => {
+  const raw = String(filename || '').trim()
+  const fallbackBase = store.preview.appName || '功能设计文档'
+  const withoutExt = raw.replace(/\.md$/i, '')
+  const stripped = withoutExt
+    .replace(/[-_ ]v\d+$/i, '')
+    .replace(/v\d+$/i, '')
+    .trim()
+  const base = stripped || fallbackBase
+  return `${base}-V${version}.md`
+}
+
+const normalizeDocVersionsForDisplay = (rawVersions: any[], rawCurrentVersion: number) => {
+  const sortedAsc = [...rawVersions].sort((a: any, b: any) => (Number(a?.version) || 0) - (Number(b?.version) || 0))
+  if (sortedAsc.length <= 1) {
+    return {
+      versions: sortedAsc,
+      currentVersion: rawCurrentVersion || Number(sortedAsc[0]?.version || 0) || 0,
+    }
+  }
+
+  let transientTailIndex = 0
+  while (transientTailIndex + 1 < sortedAsc.length) {
+    const next = sortedAsc[transientTailIndex + 1]
+    const hasChangePlans = Array.isArray(next?.change_plans) && next.change_plans.length > 0
+    if (hasChangePlans || !isDocVersionTransientFix(next)) break
+    transientTailIndex += 1
+  }
+
+  const collapsedInitialChain = transientTailIndex > 0
+    ? [sortedAsc[transientTailIndex], ...sortedAsc.slice(transientTailIndex + 1)]
+    : sortedAsc
+
+  const normalizedVersions = collapsedInitialChain.map((version: any, index: number) => ({
+    ...version,
+    version: index + 1,
+    filename: buildNormalizedDocVersionFilename(String(version?.filename || ''), index + 1),
+  }))
+
+  let currentVersion = rawCurrentVersion
+  if (currentVersion > 0) {
+    const actualCurrent = collapsedInitialChain.findIndex((item: any) => Number(item?.version) === currentVersion)
+    currentVersion = actualCurrent >= 0 ? actualCurrent + 1 : Number(normalizedVersions[0]?.version || 0)
+  } else {
+    currentVersion = Number(normalizedVersions[normalizedVersions.length - 1]?.version || normalizedVersions[0]?.version || 0)
+  }
+
+  return {
+    versions: normalizedVersions.sort((a: any, b: any) => (Number(b?.version) || 0) - (Number(a?.version) || 0)),
+    currentVersion,
+  }
+}
+
 const getDocVersionsPayload = (raw: any) => {
-  const versions = Array.isArray(raw) ? raw : (raw?.versions || raw?.data || [])
-  const currentVersion = Number(raw?.current_version ?? raw?.currentVersion ?? versions?.[0]?.version ?? 0) || 0
-  return { versions, currentVersion }
+  const rawVersions = Array.isArray(raw) ? raw : (raw?.versions || raw?.data || [])
+  const rawCurrentVersion = Number(raw?.current_version ?? raw?.currentVersion ?? rawVersions?.[0]?.version ?? 0) || 0
+  return normalizeDocVersionsForDisplay(rawVersions, rawCurrentVersion)
 }
 
 const findRestorableChangePlanId = (versions: any[], currentVersion?: number) => {
@@ -3290,9 +3454,18 @@ const updateResourceDiff = computed<any | null>(() => {
   return diff && typeof diff === 'object' ? diff : null
 })
 const docDiffStats = computed(() => ({
-  added: docDiffResult.value.right.filter(line => line.type === 'added').length,
-  removed: docDiffResult.value.left.filter(line => line.type === 'removed').length,
-  same: docDiffResult.value.right.filter(line => line.type === 'same').length,
+  added: docVersionDiffLeftStructuredResult.value || docVersionDiffRightStructuredResult.value
+    ? structuredDocDiffMeta.value.stats.added
+    : docDiffResult.value.right.filter(line => line.type === 'added').length,
+  removed: docVersionDiffLeftStructuredResult.value || docVersionDiffRightStructuredResult.value
+    ? structuredDocDiffMeta.value.stats.removed
+    : docDiffResult.value.left.filter(line => line.type === 'removed').length,
+  modified: docVersionDiffLeftStructuredResult.value || docVersionDiffRightStructuredResult.value
+    ? structuredDocDiffMeta.value.stats.modified
+    : 0,
+  same: docVersionDiffLeftStructuredResult.value || docVersionDiffRightStructuredResult.value
+    ? structuredDocDiffMeta.value.stats.same
+    : docDiffResult.value.right.filter(line => line.type === 'same').length,
 }))
 const changePlanSelectedCount = computed(() =>
   Array.isArray(store.changePlan?.actions)
@@ -3489,7 +3662,7 @@ const formatDocTime = (dateStr: string) => {
 
 const openDocPreview = (ver: DocVersion) => {
   docVersionPreviewTitle.value = `V${ver.version} — ${ver.filename}`
-  docVersionPreviewContent.value = ver.raw_content || '（无内容）'
+  docVersionPreviewContent.value = resolveDocDisplayContent(ver) || '（无内容）'
   docVersionPreviewItem.value = (ver as DocVersionListItem) || null
   docVersionPreviewVisible.value = true
 }
@@ -3499,7 +3672,7 @@ const openCurrentDocFullscreen = () => {
   docFullscreenTitle.value = item
     ? `V${item.version} — ${item.filename || `${store.preview.appName || '功能设计文档'}.md`}`
     : `${store.preview.appName || '功能设计文档'}`
-  docFullscreenContent.value = selectedDocDisplayContent.value || '（无内容）'
+  docFullscreenContent.value = resolveDocDisplayContent(item) || '（无内容）'
   docFullscreenItem.value = item || null
   docFullscreenVisible.value = true
 }
@@ -3511,6 +3684,8 @@ const openDocDiff = (ver: DocVersion) => {
   docVersionDiffRightTitle.value = `V${ver.version} — ${ver.filename}`
   docVersionDiffLeft.value = prevVer.raw_content || ''
   docVersionDiffRight.value = ver.raw_content || ''
+  docVersionDiffLeftItem.value = prevVer as DocVersionListItem
+  docVersionDiffRightItem.value = ver as DocVersionListItem
   docVersionDiffVisible.value = true
 }
 
@@ -4071,6 +4246,8 @@ function resetConversationWorkspace() {
   docVersionDiffRight.value = ''
   docVersionDiffLeftTitle.value = ''
   docVersionDiffRightTitle.value = ''
+  docVersionDiffLeftItem.value = null
+  docVersionDiffRightItem.value = null
   expandedDocVersionKey.value = null
   selectedDocVersionKey.value = null
   deletingDocVersionId.value = null
@@ -6178,8 +6355,7 @@ const downloadMarkdownContent = (content: string, filename: string) => {
 }
 
 const downloadDocVersion = (ver: DocVersionListItem) => {
-  const rebuilt = buildDocMarkdownFromVersion(ver)
-  const content = (ver.raw_content || rebuilt || '').trim()
+  const content = resolveDocDisplayContent(ver).trim()
   if (!content) {
     ElMessage.warning('暂无可下载的设计文档内容')
     return
@@ -6575,6 +6751,11 @@ watch(isUpdateReviewMode, (enabled) => {
   if (!currentTabVisible || getBuilderTabCount(builderPreviewTab.value) === 0) {
     builderPreviewTab.value = getPreferredUpdateTab()
   }
+}, { immediate: true })
+
+watch(showDeployedVersionedView, (enabled) => {
+  if (!enabled) return
+  builderPreviewTab.value = 'docs'
 }, { immediate: true })
 
 watch(displayDocVersions, (versions) => {
@@ -8335,6 +8516,7 @@ watch(conversationId, (id) => {
 .diff-stat { font-size: 13px; font-weight: 500; }
 .diff-stat.added { color: var(--t-success); }
 .diff-stat.removed { color: var(--t-danger); }
+.diff-stat.modified { color: var(--t-warning); }
 .diff-stat.unchanged { color: var(--t-text-muted); }
 .doc-diff-container { display: flex; gap: 8px; max-height: 70vh; }
 
@@ -8370,6 +8552,34 @@ watch(conversationId, (id) => {
 .doc-diff-content {
   flex: 1; overflow-y: auto; background: var(--t-bg-base); border-radius: 0 0 8px 8px;
   border: 1px solid var(--t-border-subtle); font-size: 12px; font-family: 'Menlo', 'Monaco', monospace;
+}
+.doc-diff-structured {
+  padding: 14px 16px 18px;
+  font-family: inherit;
+}
+.doc-diff-structured :deep(.structured-doc) {
+  font-size: 13px;
+}
+.doc-diff-structured :deep(.doc-app-name) {
+  font-size: 28px;
+  margin-bottom: 10px;
+}
+.doc-diff-structured :deep(.doc-section) {
+  margin-bottom: 18px;
+}
+.doc-diff-structured :deep(.doc-section-title) {
+  font-size: 18px;
+  margin-bottom: 10px;
+}
+.doc-diff-structured :deep(.doc-subsection-title) {
+  font-size: 15px;
+}
+.doc-diff-structured :deep(.doc-table) {
+  font-size: 12px;
+}
+.doc-diff-structured :deep(th),
+.doc-diff-structured :deep(td) {
+  padding: 6px 10px;
 }
 .doc-diff-line { display: flex; min-height: 20px; line-height: 20px; }
 .doc-diff-lineno {

@@ -21,6 +21,8 @@ ProgressCallback = Optional[Callable[[str], Coroutine]]
 from app.llm_client import LLMClient
 from app.config_validator import validate_full_config
 from app.field_types import get_icon_map, build_prompt_field_types_table
+from app.doc_parsers.forms import derive_default_forms
+from app.doc_table_parser import parse_all_tables
 
 logger = logging.getLogger(__name__)
 
@@ -218,6 +220,7 @@ async def parse_doc_with_ai(
         extracted_dicts = _extract_markdown_dicts(text)
         if extracted_dicts:
             _merge_explicit_dicts(data, extracted_dicts)
+        _infer_inline_dicts_from_markdown(data, text)
 
     # 后处理
     await _progress("正在整理结果...")
@@ -245,8 +248,17 @@ async def parse_doc_with_ai(
         # 不阻断流程，返回原始数据
         pass
 
+    # AI 解析结果以 models 为主，非标准文档常缺少显式 forms。
+    # 这里统一复用标准解析链路中的默认派生逻辑，避免出现“有模型没表单”。
+    if isinstance(data, dict):
+        forms = data.get("forms")
+        models = data.get("models") or []
+        if (not isinstance(forms, list) or len(forms) == 0) and isinstance(models, list) and models:
+            data["forms"] = derive_default_forms(models)
+            logger.info("AI 解析结果未提供 forms，已根据 %s 个模型自动派生 %s 个默认表单", len(models), len(data["forms"]))
+
     summary = (
-        f"解析完成！{len(data.get('models', []))} 个表单、"
+        f"解析完成！{len(data.get('forms', []))} 个表单、"
         f"{len(data.get('dicts', []))} 个字典、"
         f"{len(data.get('roles', []))} 个角色"
     )
@@ -810,6 +822,90 @@ def _merge_explicit_dicts(data: Dict, extracted_dicts: List[Dict]):
             dicts.append(extracted)
             by_code[extracted["code"]] = extracted
             by_name[extracted["name"]] = extracted
+
+    data["dicts"] = dicts
+
+
+_INLINE_DICT_FIELD_TYPES = {"下拉单选", "下拉多选", "单选", "单选框", "多选", "复选框", "复选"}
+_INLINE_DICT_SPLIT_RE = re.compile(r"\s*(?:/|／|、|\||;|；|\n)\s*")
+
+
+def _extract_inline_options(raw: str) -> List[str]:
+    text = str(raw or "").strip()
+    if not text:
+        return []
+    text = re.sub(r"[*_`]+", "", text)
+    text = re.sub(r"（[^）]*）|\([^\)]*\)", "", text).strip()
+    parts = [part.strip(" -•·:：") for part in _INLINE_DICT_SPLIT_RE.split(text)]
+    options = [part for part in parts if part and len(part) <= 30 and not re.search(r"[<>={}]", part)]
+    if len(options) < 2:
+        return []
+    return options
+
+
+def _build_inline_dict_candidates(text: str) -> Dict[str, List[str]]:
+    candidates: Dict[str, List[str]] = {}
+    for table in parse_all_tables(text):
+        if not table:
+            continue
+        for row in table:
+            field_name = re.sub(r"[*_`]+", "", str(row.get("字段名称") or row.get("子表字段名称") or row.get("字段") or "")).strip()
+            field_type = re.sub(r"[*_`]+", "", str(row.get("字段类型") or row.get("组件类型") or row.get("类型") or "")).strip()
+            if field_type not in _INLINE_DICT_FIELD_TYPES:
+                continue
+            options = _extract_inline_options(row.get("说明") or row.get("备注") or row.get("描述") or "")
+            if len(options) < 2 or not field_name:
+                continue
+            if field_name not in candidates or len(options) > len(candidates[field_name]):
+                candidates[field_name] = options
+    return candidates
+
+
+def _infer_inline_dicts_from_markdown(data: Dict, text: str):
+    candidates = _build_inline_dict_candidates(text)
+    if not candidates:
+        return
+
+    dicts = list(data.get("dicts", []) or [])
+    dicts_by_code = {str(d.get("code") or ""): d for d in dicts if d.get("code")}
+    dicts_by_name = {str(d.get("name") or ""): d for d in dicts if d.get("name")}
+
+    def bind_field(field: Dict, model_code: str):
+        field_name = str(field.get("name") or "").strip()
+        field_type = str(field.get("type") or "").strip()
+        if field_type not in {"下拉单选", "下拉多选", "单选框", "复选框"}:
+            return
+        options = candidates.get(field_name)
+        if len(options or []) < 2:
+            return
+
+        dict_code = str(field.get("dict") or "").strip()
+        if not dict_code:
+            base_code = str(field.get("code") or field_name).strip()
+            dict_code = f"{model_code}_{base_code}_dict" if model_code and base_code else f"{field_name}_dict"
+            field["dict"] = dict_code
+        dict_name = f"{field_name}选项"
+        existing = dicts_by_code.get(dict_code) or dicts_by_name.get(dict_name)
+        option_items = [{"name": opt, "code": opt} for opt in options]
+        if existing:
+            if len(option_items) > len(existing.get("options", []) or []):
+                existing["options"] = option_items
+            if not existing.get("name"):
+                existing["name"] = dict_name
+            if not existing.get("code"):
+                existing["code"] = dict_code
+        else:
+            new_dict = {"name": dict_name, "code": dict_code, "options": option_items}
+            dicts.append(new_dict)
+            dicts_by_code[dict_code] = new_dict
+            dicts_by_name[dict_name] = new_dict
+
+    for model in data.get("models", []) or []:
+        model_code = str(model.get("code") or "").strip()
+        for field in model.get("fields", []) or []:
+            bind_field(field, model_code)
+            for sub_field in field.get("sub_fields", []) or []:
+                bind_field(sub_field, model_code)
 
     data["dicts"] = dicts
 

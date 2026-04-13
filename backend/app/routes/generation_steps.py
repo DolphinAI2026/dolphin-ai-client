@@ -152,12 +152,20 @@ def _field_ref_meta_from_component(
     association_form_code = str(component.get("association_form_code") or "").strip()
     target_model_code = str(
         association.get("targetModelCode")
+        or selector_form_code
+        or association_form_code
         or component.get("ref_model_code")
         or (ref.get("model") if isinstance(ref, dict) else "")
         or ""
     ).strip()
     target_field_code = str(
         association.get("targetFieldCode")
+        or component.get("selector_field_code")
+        or component.get("selectorFieldCode")
+        or component.get("association_target_field_code")
+        or component.get("associationTargetFieldCode")
+        or component.get("ref_display_field_code")
+        or component.get("refDisplayFieldCode")
         or (ref.get("display_field") if isinstance(ref, dict) else "")
         or (ref.get("target_field") if isinstance(ref, dict) else "")
         or (ref.get("field") if isinstance(ref, dict) else "")
@@ -377,7 +385,6 @@ def _render_design_doc_markdown(app_name: str, app_code: str, data: dict) -> str
                     or field.get("databaseFieldType")
                     or field.get("db_type")
                     or field.get("field_type")
-                    or field.get("type")
                     or ""
                 )
                 length_or_precision = (
@@ -664,6 +671,19 @@ def _sync_platform_codes_to_config(app: Application, state: dict, data: dict):
         config = json.loads(app.config_preview) if isinstance(app.config_preview, str) else app.config_preview
         cfg_data = config.get("data", config)
 
+        # 回写平台最终应用编码
+        platform_app_code = str(
+            state.get("platform_app_code")
+            or cfg_data.get("appCode")
+            or cfg_data.get("app_code")
+            or app.app_code
+            or ""
+        ).strip()
+        if platform_app_code:
+            cfg_data["appCode"] = platform_app_code
+            cfg_data["app_code"] = platform_app_code
+            app.app_code = platform_app_code
+
         # 回写角色编码
         role_codes = state.get("role_codes", {})
         for r in cfg_data.get("roles", []):
@@ -719,7 +739,13 @@ async def _sync_current_doc_version_content(db: AsyncSession, app: Application):
         if not doc_version:
             return
         doc_version.parsed_config = json.dumps(config, ensure_ascii=False)
-        doc_version.raw_content = _render_design_doc_markdown(app.app_name or data.get("appName", ""), app.app_code or data.get("appCode", ""), data)
+        final_app_code = (
+            data.get("appCode")
+            or data.get("app_code")
+            or app.app_code
+            or ""
+        )
+        doc_version.raw_content = _render_design_doc_markdown(app.app_name or data.get("appName", ""), final_app_code, data)
         doc_version.content_hash = hashlib.sha256(doc_version.parsed_config.encode()).hexdigest()
     except Exception:
         logger.warning("同步当前文档版本正文失败 app_id=%s", app.id, exc_info=True)
@@ -1087,8 +1113,11 @@ async def _execute_step_impl(
     if step_key == "create_app":
         result = await execute_create_app(client, app.app_name, app.app_code, app.description or "")
         state["apaas_app_id"] = result["apaas_app_id"]
+        state["platform_app_code"] = result.get("platform_app_code") or app.app_code
         state["suffix"] = result["suffix"]
         app.apaas_app_id = result["apaas_app_id"]
+        if result.get("platform_app_code"):
+            app.app_code = result["platform_app_code"]
         return result
 
     elif step_key == "create_roles_dicts":
@@ -1109,7 +1138,7 @@ async def _execute_step_impl(
         r = roles[idx]
         from app.step_executor import _apply_suffix, _sanitize_code
         original_code = r.get("code", r["name"])
-        platform_code = _apply_suffix(f"R_{_sanitize_code(original_code)}", suffix)
+        platform_code = _apply_suffix(_sanitize_code(original_code), suffix)
         try:
             await client.create_roles(apaas_app_id, [{
                 "appId": apaas_app_id,
@@ -1406,25 +1435,27 @@ async def resolve_conflict(
     state.get("step_errors", {}).pop(body.step, None)
     _save_state(app, state)
 
-    # 10. 如果有文档版本，保存新版本
+    # 10. 如果有文档版本，覆盖当前版本，避免一次创建过程产生多条中间版
     doc_version_id = None
     if app.current_doc_version:
         from app.models import DocumentVersion
         import hashlib
-        new_version = app.current_doc_version + 1
         config_json = json.dumps(config, ensure_ascii=False)
-        dv = DocumentVersion(
-            application_id=app.id,
-            version=new_version,
-            filename=f"conflict-fix-v{new_version}",
-            content_hash=hashlib.sha256(config_json.encode()).hexdigest(),
-            raw_content=_render_design_doc_markdown(app.app_name, app.app_code, data),
-            parsed_config=config_json,
-            summary=f"编码冲突修复: {old_code} → {new_code}",
+        rendered_doc = _render_design_doc_markdown(app.app_name, app.app_code, data)
+        version_result = await db.execute(
+            select(DocumentVersion).where(
+                DocumentVersion.application_id == app.id,
+                DocumentVersion.version == app.current_doc_version,
+            )
         )
-        db.add(dv)
-        app.current_doc_version = new_version
-        doc_version_id = new_version
+        dv = version_result.scalar_one_or_none()
+        if dv:
+            dv.filename = f"{app.app_name or '设计文档'}-V{app.current_doc_version}.md"
+            dv.content_hash = hashlib.sha256(config_json.encode()).hexdigest()
+            dv.raw_content = rendered_doc
+            dv.parsed_config = config_json
+            dv.summary = f"初始版本（已完成编码冲突修复：{old_code} → {new_code}）"
+            doc_version_id = dv.id
 
     await db.commit()
 

@@ -148,12 +148,24 @@ def _convert_dicts(remote_dicts: List[Dict], dict_options: Dict[str, List[Dict]]
         dict_id = str(d.get("id", d.get("dictionaryId", "")))
         dict_code = d.get("dictionaryCode", d.get("code", ""))
         options = []
-        # 从 dict_options 中取选项
-        raw_options = dict_options.get(dict_id, [])
+        # 从 dict_options 中取选项。
+        # fetch_remote_data() 目前按 dictionaryCode 存储；这里兼容 code/id 两种 key。
+        raw_options = (
+            dict_options.get(dict_code, [])
+            or dict_options.get(dict_id, [])
+        )
         for opt in raw_options:
             options.append({
-                "name": opt.get("dictionaryValue", opt.get("name", "")),
-                "code": opt.get("dictionaryValueCode", opt.get("code", "")),
+                "name": (
+                    opt.get("valueName")
+                    or opt.get("dictionaryValue")
+                    or opt.get("name", "")
+                ),
+                "code": (
+                    opt.get("valueCode")
+                    or opt.get("dictionaryValueCode")
+                    or opt.get("code", "")
+                ),
             })
         dicts.append({
             "name": d.get("dictionaryName", d.get("name", "")),
@@ -254,6 +266,7 @@ async def sync_from_platform_full(
 
     # 模型：从 detailPageConfigById 提取（含子表、required、选项绑定）
     models = _build_models_from_form_configs(form_configs, dict_id_to_code)
+    forms = _build_forms_from_form_configs(form_configs, dict_id_to_code)
 
     # 权限
     permissions = _build_permissions_from_form_configs(form_configs, role_lookup)
@@ -263,12 +276,13 @@ async def sync_from_platform_full(
         "roles": roles,
         "dicts": dicts,
         "models": models,
+        "forms": forms,
         "workflows": [],
         "permissions": permissions,
     }
     logger.info(
         f"完整反向解析完成: {len(roles)} 角色, {len(dicts)} 字典, "
-        f"{len(models)} 模型, {len(permissions)} 权限组"
+        f"{len(models)} 模型, {len(forms)} 表单, {len(permissions)} 权限组"
     )
     return config
 
@@ -320,52 +334,84 @@ def _build_dicts_from_form_configs(
     # 先用基础 remote dicts 构建（有 dict code）
     seen_codes: Set[str] = set()
     dicts: List[Dict] = []
+    remote_dict_id_to_code: Dict[str, str] = {}
 
     # 基础字典
     base_dicts = _convert_dicts(remote_dicts, dict_options)
+    for raw in remote_dicts:
+        raw_id = str(raw.get("id", raw.get("dictionaryId", ""))).strip()
+        raw_code = str(raw.get("dictionaryCode", raw.get("code", ""))).strip()
+        if raw_id and raw_code:
+            remote_dict_id_to_code[raw_id] = raw_code
     for d in base_dicts:
         if d["code"] and d["code"] not in seen_codes:
             seen_codes.add(d["code"])
             dicts.append(d)
+    dicts_by_code = {str(d.get("code", "")).strip(): d for d in dicts if str(d.get("code", "")).strip()}
 
     # 从 form_configs 补充：有些字典选项在 chooseOptions 里更完整
     for fc in form_configs.values():
         components = fc.get("detailPage", {}).get("formComponents", [])
         for comp in components:
-            _enrich_dict_from_component(comp, dicts, seen_codes)
+            _enrich_dict_from_component(comp, dicts, dicts_by_code, remote_dict_id_to_code, seen_codes)
 
     return dicts
 
 
 def _enrich_dict_from_component(
-    comp: Dict, dicts: List[Dict], seen_codes: Set[str]
+    comp: Dict,
+    dicts: List[Dict],
+    dicts_by_code: Dict[str, Dict],
+    remote_dict_id_to_code: Dict[str, str],
+    seen_codes: Set[str],
 ):
     """从组件的 chooseOptions 补充字典选项"""
     source = comp.get("source", {})
     choose_options = comp.get("chooseOptions", [])
 
     if source.get("type") == "DICTIONARY_TYPE" and choose_options:
-        # 找到对应的字典，补充空选项
         source_id = source.get("id", "")
-        for d in dicts:
-            # 匹配：如果字典选项为空但 chooseOptions 有值
-            if not d.get("options") and source_id:
-                # 用 source_id 匹配（需要遍历 remote_dicts 找）
-                pass
-            # 如果已有选项，检查是否需要补充
-            elif d.get("options"):
-                existing_codes = {o["code"] for o in d["options"]}
-                for opt in choose_options:
-                    opt_code = opt.get("id", "")
-                    if opt_code and opt_code not in existing_codes:
-                        d["options"].append({
-                            "name": opt.get("label", ""),
-                            "code": opt_code,
-                        })
+        dict_code = remote_dict_id_to_code.get(str(source_id).strip(), "")
+        if dict_code:
+            target_dict = dicts_by_code.get(dict_code)
+            if target_dict is None:
+                target_dict = {
+                    "name": comp.get("label", "") or dict_code,
+                    "code": dict_code,
+                    "options": [],
+                }
+                dicts.append(target_dict)
+                dicts_by_code[dict_code] = target_dict
+                seen_codes.add(dict_code)
+
+            existing_codes = {str(o.get("code", "")).strip() for o in target_dict.get("options", [])}
+            existing_names = {str(o.get("name", "")).strip() for o in target_dict.get("options", [])}
+            for opt in choose_options:
+                opt_code = str(
+                    opt.get("valueCode")
+                    or opt.get("code")
+                    or opt.get("id")
+                    or ""
+                ).strip()
+                opt_name = str(
+                    opt.get("valueName")
+                    or opt.get("label")
+                    or opt.get("name")
+                    or ""
+                ).strip()
+                if (opt_code and opt_code not in existing_codes) and (not opt_name or opt_name not in existing_names):
+                    target_dict.setdefault("options", []).append({
+                        "name": opt_name,
+                        "code": opt_code,
+                    })
+                    if opt_code:
+                        existing_codes.add(opt_code)
+                    if opt_name:
+                        existing_names.add(opt_name)
 
     # 递归子表列
     for col in comp.get("tableColumn", []):
-        _enrich_dict_from_component(col, dicts, seen_codes)
+        _enrich_dict_from_component(col, dicts, dicts_by_code, remote_dict_id_to_code, seen_codes)
 
 
 def _build_models_from_form_configs(
@@ -375,6 +421,7 @@ def _build_models_from_form_configs(
     """从 detailPageConfigById 构建模型列表（含子表）"""
     models: List[Dict] = []
     seen_model_codes: Set[str] = set()
+    platform_field_meta = _build_platform_field_meta(form_configs)
 
     for form_id, fc in form_configs.items():
         components = fc.get("detailPage", {}).get("formComponents", [])
@@ -408,7 +455,10 @@ def _build_models_from_form_configs(
                 # 子表 → sub_code + sub_fields
                 sub_model_code = comp.get("tableModelCode", "")
                 sub_fields = _extract_fields_from_components(
-                    comp.get("tableColumn", []), dict_id_to_code
+                    comp.get("tableColumn", []),
+                    dict_id_to_code,
+                    platform_field_meta=platform_field_meta,
+                    model_code_override=sub_model_code,
                 )
                 if sub_fields:
                     fields.append({
@@ -423,7 +473,12 @@ def _build_models_from_form_configs(
                         "sub_fields": sub_fields,
                     })
             else:
-                field = _extract_single_field(comp, dict_id_to_code)
+                field = _extract_single_field(
+                    comp,
+                    dict_id_to_code,
+                    platform_field_meta=platform_field_meta,
+                    model_code_override=model_code,
+                )
                 if field:
                     fields.append(field)
 
@@ -439,33 +494,123 @@ def _build_models_from_form_configs(
 def _extract_fields_from_components(
     components: List[Dict],
     dict_id_to_code: Dict[str, str],
+    platform_field_meta: Optional[Dict[str, Dict[str, Dict[str, Any]]]] = None,
+    model_code_override: str = "",
 ) -> List[Dict]:
     """从组件列表提取字段列表"""
     fields: List[Dict] = []
     for comp in components:
-        field = _extract_single_field(comp, dict_id_to_code)
+        field = _extract_single_field(
+            comp,
+            dict_id_to_code,
+            platform_field_meta=platform_field_meta,
+            model_code_override=model_code_override,
+        )
         if field:
             fields.append(field)
     return fields
 
 
+def _build_platform_field_meta(
+    form_configs: Dict[str, Dict],
+) -> Dict[str, Dict[str, Dict[str, Any]]]:
+    """汇总平台 detailPageConfigById 中的字段元数据。
+
+    平台实际字段定义在 modelWithFieldVoList[].dataModelFields 里，
+    其中包含 databaseFieldType / maxLength 等数据库信息。
+    """
+    meta_map: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    for fc in form_configs.values():
+        for model_vo in fc.get("modelWithFieldVoList", []) or []:
+            model_code = str(model_vo.get("modelCode", "")).strip()
+            if not model_code:
+                continue
+            fields = (
+                model_vo.get("dataModelFields")
+                or model_vo.get("fieldVoList")
+                or model_vo.get("fields")
+                or []
+            )
+            model_meta = meta_map.setdefault(model_code, {})
+            for field in fields:
+                if not isinstance(field, dict):
+                    continue
+                field_code = str(field.get("fieldCode", field.get("code", ""))).strip()
+                if not field_code:
+                    continue
+                model_meta[field_code] = field
+    return meta_map
+
+
+def _resolve_component_model_code(comp: Dict, default_model_code: str = "") -> str:
+    model_code = str(comp.get("modelCode", "")).strip()
+    if model_code:
+        return model_code
+    model_field = str(comp.get("modelField", "")).strip()
+    if "." in model_field:
+        return model_field.split(".", 1)[0].strip()
+    bo_code = str(comp.get("boCode", "")).strip()
+    if "~" in bo_code:
+        return bo_code.split("~", 1)[0].strip()
+    return str(default_model_code or "").strip()
+
+
+def _extract_field_code(comp: Dict) -> str:
+    bo_code = str(comp.get("boCode", "")).strip()
+    model_field = str(comp.get("modelField", "")).strip()
+    if "~" in bo_code:
+        return bo_code.split("~", 1)[1].strip()
+    if "." in model_field:
+        return model_field.split(".", 1)[1].strip()
+    return ""
+
+
+def _extract_field_length(
+    comp: Dict,
+    field_meta: Optional[Dict[str, Any]],
+) -> Optional[str]:
+    candidates = [
+        field_meta.get("maxLength") if isinstance(field_meta, dict) else None,
+        field_meta.get("length") if isinstance(field_meta, dict) else None,
+        field_meta.get("dataLength") if isinstance(field_meta, dict) else None,
+        comp.get("maxLength"),
+        comp.get("length"),
+        comp.get("lengthLimit"),
+    ]
+    for candidate in candidates:
+        if candidate in (None, "", "-", "null"):
+            continue
+        return str(candidate)
+    return None
+
+
+def _extract_database_field_type(
+    field_meta: Optional[Dict[str, Any]],
+) -> str:
+    if not isinstance(field_meta, dict):
+        return ""
+    return str(
+        field_meta.get("databaseFieldType")
+        or field_meta.get("database_field_type")
+        or field_meta.get("dbType")
+        or field_meta.get("fieldType")
+        or ""
+    ).strip()
+
+
 def _extract_single_field(
     comp: Dict,
     dict_id_to_code: Dict[str, str],
+    platform_field_meta: Optional[Dict[str, Dict[str, Dict[str, Any]]]] = None,
+    model_code_override: str = "",
 ) -> Optional[Dict]:
     """从单个 formComponent 提取字段信息"""
     comp_type = comp.get("componentType", "")
     if not comp_type or comp_type == "FORM_WIDGET_SON_TABLE":
         return None
 
-    # 提取 field code
-    bo_code = comp.get("boCode", "")
-    model_field = comp.get("modelField", "")
-    field_code = ""
-    if "~" in bo_code:
-        field_code = bo_code.split("~", 1)[1]
-    elif "." in model_field:
-        field_code = model_field.split(".", 1)[1]
+    field_code = _extract_field_code(comp)
+    model_code = _resolve_component_model_code(comp, model_code_override)
 
     if not field_code:
         return None
@@ -476,6 +621,11 @@ def _extract_single_field(
 
     choose_type = comp.get("chooseType", "")
     field_type = _guess_field_type(comp_type, "", choose_type)
+    field_meta = (
+        (platform_field_meta or {}).get(model_code, {}).get(field_code, {})
+        if model_code
+        else {}
+    )
 
     field: Dict[str, Any] = {
         "name": comp.get("label", ""),
@@ -485,6 +635,15 @@ def _extract_single_field(
         "hidden": comp.get("hidden", False),
         "readonly": comp.get("readOnly", False),
     }
+    database_field_type = _extract_database_field_type(field_meta)
+    if database_field_type:
+        field["databaseFieldType"] = database_field_type
+        field["database_field_type"] = database_field_type
+    field_length = _extract_field_length(comp, field_meta)
+    if field_length:
+        field["maxLength"] = field_length
+        field["max_length"] = field_length
+        field["length"] = field_length
 
     # 字典绑定：从 source.type=DICTIONARY_TYPE 提取
     source = comp.get("source", {})
@@ -518,6 +677,159 @@ def _extract_single_field(
             }
 
     return field
+
+
+def _build_form_component(
+    comp: Dict,
+    dict_id_to_code: Dict[str, str],
+    model_code_override: str = "",
+    section_type: str = "main",
+    sub_table_label: str = "",
+) -> Optional[Dict[str, Any]]:
+    comp_type = str(comp.get("componentType", "")).strip()
+    if not comp_type or comp_type == "FORM_WIDGET_SON_TABLE":
+        return None
+
+    field_code = _extract_field_code(comp)
+    model_code = _resolve_component_model_code(comp, model_code_override)
+    if not field_code or not model_code:
+        return None
+
+    component: Dict[str, Any] = {
+        "code": field_code,
+        "label": comp.get("label", "") or field_code,
+        "componentType": comp_type,
+        "modelField": f"{model_code}.{field_code}",
+        "modelCode": model_code,
+        "sectionType": section_type,
+        "hidden": bool(comp.get("hidden", False)),
+        "readonly": bool(comp.get("readOnly", False)),
+        "required": bool(comp.get("required", False)),
+        "showInList": bool(comp.get("showInList", False)),
+        "searchable": bool(comp.get("queryable", comp.get("searchable", False))),
+    }
+    if section_type == "sub":
+        component["tableModelCode"] = model_code
+        if sub_table_label:
+            component["subTableLabel"] = sub_table_label
+
+    source = comp.get("source", {})
+    if source.get("type") == "DICTIONARY_TYPE" and source.get("id"):
+        dict_code = dict_id_to_code.get(str(source.get("id")), "")
+        if dict_code:
+            component["dict"] = dict_code
+            component["dictCode"] = dict_code
+
+    extracted = _extract_single_field(
+        comp,
+        dict_id_to_code,
+        model_code_override=model_code,
+    )
+    if extracted and extracted.get("ref"):
+        component["ref"] = extracted["ref"]
+        ref = extracted["ref"]
+        if ref.get("model"):
+            component["ref_model_code"] = ref.get("model")
+        display_field = ref.get("display_field") or ref.get("target_field") or ref.get("field")
+        if display_field:
+            component["ref_display_field_code"] = display_field
+            component["selector_field_code"] = display_field
+    if extracted and extracted.get("formAssociationConfig"):
+        association = extracted["formAssociationConfig"]
+        component["formAssociationConfig"] = association
+        component["association_form_code"] = association.get("targetModelCode", "")
+        component["association_origin_field_code"] = association.get("originFieldCode", "")
+        component["association_target_field_code"] = association.get("targetFieldCode", "")
+
+    if comp_type in {"FORM_DATA_SELECTOR", "FORM_DATA_SELECTOR_SINGLE"} and component.get("ref_model_code"):
+        component["selector_form_code"] = component.get("ref_model_code")
+
+    description = str(comp.get("titleDescription", "") or "").strip()
+    if description:
+        component["description"] = description
+
+    return component
+
+
+def _build_forms_from_form_configs(
+    form_configs: Dict[str, Dict],
+    dict_id_to_code: Dict[str, str],
+) -> List[Dict]:
+    forms: List[Dict] = []
+    seen_form_codes: Set[str] = set()
+
+    for fc in form_configs.values():
+        form_name = str(fc.get("formName", "")).strip()
+        form_code = str(fc.get("formCode", "") or fc.get("code", "") or fc.get("id", "")).strip()
+        model_code = str(fc.get("modelCode", "")).strip()
+        components = fc.get("detailPage", {}).get("formComponents", []) or []
+        if not form_name or not model_code:
+            continue
+
+        resolved_form_code = form_code or model_code
+        if resolved_form_code in seen_form_codes:
+            continue
+        seen_form_codes.add(resolved_form_code)
+
+        built_components: List[Dict[str, Any]] = []
+        for comp in components:
+            if comp.get("componentType") == "FORM_WIDGET_SON_TABLE":
+                sub_model_code = str(comp.get("tableModelCode", "")).strip()
+                sub_table_label = str(comp.get("label", "")).strip()
+                table_columns: List[Dict[str, Any]] = []
+                for col in comp.get("tableColumn", []) or []:
+                    built_col = _build_form_component(
+                        col,
+                        dict_id_to_code,
+                        model_code_override=sub_model_code,
+                        section_type="sub",
+                        sub_table_label=sub_table_label,
+                    )
+                    if built_col:
+                        table_columns.append(built_col)
+                built_components.append({
+                    "code": f"sub_{sub_model_code}" if sub_model_code else sub_table_label,
+                    "label": sub_table_label or sub_model_code,
+                    "componentType": "FORM_WIDGET_SON_TABLE",
+                    "tableModelCode": sub_model_code,
+                    "sectionType": "sub",
+                    "required": bool(comp.get("required", False)),
+                    "hidden": bool(comp.get("hidden", False)),
+                    "readonly": bool(comp.get("readOnly", False)),
+                    "showInList": False,
+                    "searchable": False,
+                    "subTableLabel": sub_table_label or sub_model_code,
+                    "tableColumn": table_columns,
+                })
+                continue
+
+            built = _build_form_component(
+                comp,
+                dict_id_to_code,
+                model_code_override=model_code,
+                section_type="main",
+            )
+            if built:
+                built_components.append(built)
+
+        forms.append({
+            "name": form_name,
+            "code": resolved_form_code,
+            "formName": form_name,
+            "formCode": resolved_form_code,
+            "modelCode": model_code,
+            "allModelCodes": list({
+                model_code,
+                *[
+                    str(component.get("tableModelCode", "")).strip()
+                    for component in built_components
+                    if str(component.get("componentType", "")).strip() == "FORM_WIDGET_SON_TABLE"
+                ],
+            } - {""}),
+            "components": built_components,
+        })
+
+    return forms
 
 
 def _build_permissions_from_form_configs(

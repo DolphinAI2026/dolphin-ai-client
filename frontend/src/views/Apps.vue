@@ -33,7 +33,7 @@
       <template v-if="viewMode === 'grid'">
         <div v-for="a in filteredApps" :key="a.id" class="grid-card" @click="router.push({ path: '/chat', query: { app_id: String(a.id) } })">
           <div class="grid-card-top">
-            <div class="grid-card-icon" :class="sourceIconClass(a)">{{ sourceIcon(a) }}</div>
+            <div class="grid-card-icon" :class="sourceIconClass(a)" v-html="appIconSvg(a)"></div>
             <div class="grid-card-badges">
               <span class="card-status" :class="statusClass(a)">{{ a.status }}</span>
               <span v-if="a.env_name" class="env-badge">{{ a.env_name }}</span>
@@ -63,9 +63,9 @@
             </button>
           </div>
           <div class="grid-card-actions" @click.stop>
-            <a v-if="a.apaas_url" :href="a.apaas_url" target="_blank" class="action-btn primary" title="在平台中打开">
+            <button v-if="a.apaas_app_id" class="action-btn primary" @click.stop="openInPlatform(a)" title="在平台中打开">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-            </a>
+            </button>
             <button v-if="a.source === 'local' && (a.local_status === 'draft' || a.local_status === 'failed')" class="action-btn primary" @click.stop="router.push({ path: '/chat', query: { deploy_app_id: String(a.id) } })" title="生成到平台">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
             </button>
@@ -81,7 +81,7 @@
         <div v-for="a in filteredApps" :key="a.id" class="list-card" @click="router.push({ path: '/chat', query: { app_id: String(a.id) } })">
           <div class="card-header">
             <div class="card-left">
-              <div class="card-icon" :class="sourceIconClass(a)">{{ sourceIcon(a) }}</div>
+              <div class="card-icon" :class="sourceIconClass(a)" v-html="appIconSvg(a)"></div>
               <div class="card-info">
                 <div class="card-name-row">
                   <h3>{{ a.app_name }}</h3>
@@ -140,6 +140,8 @@ import { applicationApi } from '@/api/application'
 import { conversationApi, type ConversationWithApp } from '@/api/conversation'
 import type { MergedApplication } from '@/types'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
+import { buildPlatformProxyEntryUrl } from '@/utils/platformIframe'
+import { useUserStore } from '@/stores/user'
 
 const router = useRouter()
 const apps = ref<MergedApplication[]>([])
@@ -174,9 +176,19 @@ const filteredApps = computed(() => {
   return apps.value.filter(a => matchesTab(a, activeTab.value))
 })
 
+const userStore = useUserStore()
+
 function appNumericId(a: MergedApplication) {
   const raw = Number(a.id)
   return Number.isFinite(raw) ? raw : null
+}
+
+function openInPlatform(a: MergedApplication) {
+  const appId = appNumericId(a)
+  if (!appId) return
+  const token = userStore.token || localStorage.getItem('token') || ''
+  const url = buildPlatformProxyEntryUrl(appId, token)
+  window.open(url, '_blank', 'noopener,noreferrer')
 }
 
 function appHistory(a: MergedApplication) {
@@ -215,11 +227,54 @@ function buildAppHistoryMap(list: ConversationWithApp[]) {
   return next
 }
 
-function sourceIcon(a: MergedApplication) {
-  if (a.local_status === 'updating') return '↺'
-  if (a.local_status === 'completed' || a.apaas_app_id) return '📊'
-  if (a.local_status === 'generating') return '⟳'
-  return '📝'
+function nameHash(name: string): number {
+  let h = 0
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0
+  return h
+}
+
+// 根据应用名称生成配色（固定色盘，视觉友好）
+const ICON_PALETTES = [
+  ['#6366f1', '#818cf8'],  // indigo
+  ['#0ea5e9', '#38bdf8'],  // sky
+  ['#10b981', '#34d399'],  // emerald
+  ['#f59e0b', '#fbbf24'],  // amber
+  ['#ef4444', '#f87171'],  // red
+  ['#8b5cf6', '#a78bfa'],  // violet
+  ['#06b6d4', '#22d3ee'],  // cyan
+  ['#f97316', '#fb923c'],  // orange
+  ['#ec4899', '#f472b6'],  // pink
+  ['#14b8a6', '#2dd4bf'],  // teal
+]
+
+function appIconSvg(a: MergedApplication): string {
+  const name = a.app_name || '应'
+  const label = name.slice(0, 1)  // 取第一个字
+  const [c1, c2] = ICON_PALETTES[nameHash(name) % ICON_PALETTES.length]
+  const gradId = `g${nameHash(name) % 9999}`
+
+  // 特殊状态覆盖颜色
+  const isUpdating = a.local_status === 'updating'
+  const isDraft = !a.apaas_app_id && a.local_status !== 'completed'
+
+  const [bg1, bg2] = isUpdating
+    ? ['#f59e0b', '#fbbf24']
+    : isDraft
+      ? ['#94a3b8', '#cbd5e1']
+      : [c1, c2]
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" viewBox="0 0 48 48">
+  <defs>
+    <linearGradient id="${gradId}" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="${bg1}"/>
+      <stop offset="100%" stop-color="${bg2}"/>
+    </linearGradient>
+  </defs>
+  <rect width="48" height="48" rx="12" fill="url(#${gradId})"/>
+  <text x="24" y="32" text-anchor="middle" font-size="22" font-weight="600"
+    font-family="-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif"
+    fill="rgba(255,255,255,0.95)">${label}</text>
+</svg>`
 }
 
 function sourceIconClass(a: MergedApplication) {
@@ -494,15 +549,9 @@ onMounted(async () => {
   width: 44px;
   height: 44px;
   border-radius: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 20px;
+  overflow: hidden;
+  flex-shrink: 0;
 }
-.grid-card-icon.success { background: var(--t-brand-subtle); }
-.grid-card-icon.generating { background: rgba(96, 165, 250, 0.16); }
-.grid-card-icon.draft { background: var(--t-border-subtle); }
-.grid-card-icon.updating { background: rgba(251, 191, 36, 0.16); }
 
 .grid-card-badges {
   display: flex;
@@ -630,16 +679,9 @@ onMounted(async () => {
   width: 42px;
   height: 42px;
   border-radius: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 18px;
+  overflow: hidden;
   flex-shrink: 0;
 }
-.card-icon.success { background: var(--t-brand-subtle); }
-.card-icon.generating { background: rgba(96, 165, 250, 0.16); }
-.card-icon.draft { background: var(--t-border-subtle); }
-.card-icon.updating { background: rgba(251, 191, 36, 0.16); }
 
 .card-info { min-width: 0; }
 

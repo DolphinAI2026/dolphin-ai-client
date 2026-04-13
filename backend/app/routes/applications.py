@@ -140,7 +140,20 @@ def _compact_preview_payload(config: dict | None) -> dict:
                     compact_comp[key] = comp.get(key)
             if comp.get("ref"):
                 compact_comp["ref"] = comp.get("ref")
-            for key in ("selector_form_code", "association_form_code", "ref_model_code"):
+            for key in (
+                "selector_form_code",
+                "selector_form_name",
+                "selector_field_code",
+                "selector_field_name",
+                "association_form_code",
+                "association_form_name",
+                "association_origin_field_code",
+                "association_origin_field_name",
+                "association_target_field_code",
+                "association_target_field_name",
+                "ref_model_code",
+                "ref_display_field_code",
+            ):
                 if comp.get(key):
                     compact_comp[key] = comp.get(key)
             if comp.get("formAssociationConfig") or comp.get("form_association_config"):
@@ -166,7 +179,20 @@ def _compact_preview_payload(config: dict | None) -> dict:
                             compact_col[key] = column.get(key)
                     if column.get("ref"):
                         compact_col["ref"] = column.get("ref")
-                    for key in ("selector_form_code", "association_form_code", "ref_model_code"):
+                    for key in (
+                        "selector_form_code",
+                        "selector_form_name",
+                        "selector_field_code",
+                        "selector_field_name",
+                        "association_form_code",
+                        "association_form_name",
+                        "association_origin_field_code",
+                        "association_origin_field_name",
+                        "association_target_field_code",
+                        "association_target_field_name",
+                        "ref_model_code",
+                        "ref_display_field_code",
+                    ):
                         if column.get(key):
                             compact_col[key] = column.get(key)
                     if column.get("formAssociationConfig") or column.get("form_association_config"):
@@ -231,9 +257,48 @@ def _dump_parsed_config(config: dict | None) -> str:
     return json.dumps(compact, ensure_ascii=False, separators=(",", ":"))
 
 
+def _component_data_selection_meta_is_stale(component: dict | None) -> bool:
+    if not isinstance(component, dict):
+        return False
+
+    has_selector = bool(component.get("selector_form_code"))
+    if has_selector and not component.get("selector_field_code"):
+        return True
+
+    has_association = bool(
+        component.get("association_form_code")
+        or component.get("formAssociationConfig")
+        or component.get("form_association_config")
+    )
+    if has_association and (
+        not component.get("association_origin_field_code")
+        or not component.get("association_target_field_code")
+    ):
+        return True
+
+    has_ref = bool(component.get("ref_model_code") or component.get("ref"))
+    if has_ref and not (
+        component.get("ref_display_field_code")
+        or component.get("selector_field_code")
+        or component.get("association_target_field_code")
+    ):
+        return True
+
+    return False
+
+
 def _parsed_config_is_stale(parsed_config: dict | None) -> bool:
     if not isinstance(parsed_config, dict):
         return True
+    for form in parsed_config.get("forms", []) or []:
+        if not isinstance(form, dict):
+            continue
+        for component in form.get("components", []) or []:
+            if _component_data_selection_meta_is_stale(component):
+                return True
+            for column in component.get("tableColumn", []) or component.get("table_column", []) or []:
+                if _component_data_selection_meta_is_stale(column):
+                    return True
     return False
 
 
@@ -296,9 +361,10 @@ def _render_doc_content_from_config(
     data = dict(_preview_data(config))
     if app_name and not data.get("appName"):
         data["appName"] = app_name
-    if app_code and not data.get("appCode"):
-        data["appCode"] = app_code
-    return _render_design_doc_markdown(app_name or data.get("appName", ""), app_code or data.get("appCode", ""), data)
+    final_app_code = data.get("appCode") or data.get("app_code") or app_code or ""
+    if final_app_code and not data.get("appCode"):
+        data["appCode"] = final_app_code
+    return _render_design_doc_markdown(app_name or data.get("appName", ""), final_app_code, data)
 
 
 async def _ensure_doc_version_rendered_content(
@@ -316,9 +382,10 @@ async def _ensure_doc_version_rendered_content(
             app_name = app.app_name or ""
             app_code = app.app_code or ""
         data = _preview_data(parsed)
+        final_app_code = data.get("appCode") or data.get("app_code") or app_code or ""
         rendered = _render_doc_content_from_config(
             app_name or data.get("appName", ""),
-            app_code or data.get("appCode", ""),
+            final_app_code,
             parsed,
         ).strip()
         if rendered and rendered != raw_content:
@@ -347,9 +414,10 @@ async def _sync_canonical_config_to_current_doc_version(
 
     import hashlib
 
-    config_json = _dump_parsed_config(config)
-    rendered_doc = _render_doc_content_from_config(app.app_name or "", app.app_code or "", config)
     data = _preview_data(config)
+    config_json = _dump_parsed_config(config)
+    preview_app_code = data.get("appCode") or data.get("app_code") or app.app_code or ""
+    rendered_doc = _render_doc_content_from_config(app.app_name or "", preview_app_code, config)
     fallback_summary = (
         summary
         or f"{len(data.get('models', []) or [])} 模型, "
@@ -461,10 +529,12 @@ async def _resolve_builder_llm_cfg(
 def _enrich(app: Application) -> ApplicationResponse:
     config = None
     models = forms = roles = dicts = 0
+    resolved_app_code = app.app_code
     if app.config_preview:
         try:
             config = json.loads(app.config_preview) if isinstance(app.config_preview, str) else app.config_preview
             data = config.get("data", config)
+            resolved_app_code = data.get("appCode") or data.get("app_code") or resolved_app_code
             models = len(data.get("models", []))
             forms = models
             roles = len(data.get("roles", []))
@@ -472,7 +542,7 @@ def _enrich(app: Application) -> ApplicationResponse:
         except Exception:
             pass
     return ApplicationResponse(
-        id=app.id, app_name=app.app_name, app_code=app.app_code,
+        id=app.id, app_name=app.app_name, app_code=resolved_app_code,
         description=app.description, status=app.status,
         conversation_id=app.conversation_id,
         platform_env_id=app.platform_env_id,
@@ -554,10 +624,11 @@ def _build_linked(app: Application, remote: dict, perms: dict | None = None, env
     enriched = _enrich(app)
     remote_status = remote.get("status") or remote.get("appStatus") or ""
     apaas_id = str(remote.get("id", app.apaas_app_id or ""))
+    display_app_code = remote.get("appCode") or enriched.app_code
     return MergedAppResponse(
         id=str(app.id),
         app_name=enriched.app_name,
-        app_code=enriched.app_code,
+        app_code=display_app_code,
         description=enriched.description or remote.get("appDesc"),
         source="linked",
         status=_resolve_display_status(app, remote_status),
@@ -1026,8 +1097,7 @@ async def import_from_platform(
             Application.apaas_app_id == body.apaas_app_id,
         )
     )
-    if existing.scalar_one_or_none():
-        raise HTTPException(status_code=409, detail="该应用已导入")
+    existing_app = existing.scalar_one_or_none()
 
     # 3. 创建 client，获取应用信息
     client = APaaSClient(
@@ -1084,8 +1154,60 @@ async def import_from_platform(
         logger.warning(f"生成 markdown 失败: {e}")
         markdown_spec = ""
 
-    # 6. 创建本地 Application 记录
     resolved_app_code = app_code or _normalize_app_code(config.get("appCode")) or app_name.lower().replace(" ", "_")
+
+    # 6. 已存在同平台应用：作为新版本重新导入
+    if existing_app:
+        import hashlib
+
+        max_ver_result = await db.execute(
+            select(sa_func.max(DocumentVersion.version)).where(
+                DocumentVersion.application_id == existing_app.id
+            )
+        )
+        max_ver = int(max_ver_result.scalar() or 0)
+        new_version = max_ver + 1
+        config_json = _dump_parsed_config(config)
+        rendered_doc = _render_doc_content_from_config(
+            app_name or existing_app.app_name or "",
+            resolved_app_code or existing_app.app_code or "",
+            config,
+        )
+
+        doc_ver = DocumentVersion(
+            application_id=existing_app.id,
+            conversation_id=existing_app.conversation_id,
+            version=new_version,
+            filename=f"{app_name or existing_app.app_name or '设计文档'}-V{new_version}.md",
+            content_hash=hashlib.sha256(config_json.encode()).hexdigest(),
+            raw_content=rendered_doc,
+            parsed_config=config_json,
+            parent_version=max_ver if max_ver > 0 else None,
+            summary="从平台重新导入生成",
+        )
+        db.add(doc_ver)
+
+        existing_app.app_name = app_name or existing_app.app_name
+        existing_app.app_code = resolved_app_code or existing_app.app_code
+        existing_app.description = app_desc
+        existing_app.config_preview = _dump_preview_config(config)
+        existing_app.requirement_doc = markdown_spec
+        existing_app.platform_env_id = body.env_id
+        existing_app.current_doc_version = new_version
+        existing_app.status = "completed"
+
+        await db.commit()
+        await db.refresh(existing_app)
+
+        logger.info(
+            "应用重新导入成功: %s (apaas_id=%s, version=%s)",
+            app_name,
+            body.apaas_app_id,
+            new_version,
+        )
+        return _enrich(existing_app)
+
+    # 7. 创建本地 Application 记录
     config_str = _dump_preview_config(config)
     new_app = Application(
         user_id=ctx.user.id,
@@ -1190,19 +1312,21 @@ async def update_app_code(
                 import hashlib
                 from app.routes.generation_steps import _render_design_doc_markdown
 
-                new_version = app.current_doc_version + 1
                 config_json = _dump_parsed_config(config)
-                doc_ver = DocumentVersion(
-                    application_id=app.id,
-                    version=new_version,
-                    filename=f"app-code-fix-v{new_version}",
-                    content_hash=hashlib.sha256(config_json.encode()).hexdigest(),
-                    raw_content=_render_design_doc_markdown(app.app_name, new_code, data),
-                    parsed_config=config_json,
-                    summary=f"应用编码修复: {new_code}",
+                rendered_doc = _render_design_doc_markdown(app.app_name, new_code, data)
+                version_result = await db.execute(
+                    select(DocumentVersion).where(
+                        DocumentVersion.application_id == app.id,
+                        DocumentVersion.version == app.current_doc_version,
+                    )
                 )
-                db.add(doc_ver)
-                app.current_doc_version = new_version
+                current_doc_ver = version_result.scalar_one_or_none()
+                if current_doc_ver:
+                    current_doc_ver.filename = f"{app.app_name or '设计文档'}-V{app.current_doc_version}.md"
+                    current_doc_ver.content_hash = hashlib.sha256(config_json.encode()).hexdigest()
+                    current_doc_ver.raw_content = rendered_doc
+                    current_doc_ver.parsed_config = config_json
+                    current_doc_ver.summary = f"初始版本（已完成应用编码修复：{new_code}）"
         except Exception as e:
             logger.warning(f"同步应用编码到文档版本失败: {e}")
     await db.commit()

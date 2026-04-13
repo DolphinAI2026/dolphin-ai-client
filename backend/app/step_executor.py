@@ -98,9 +98,13 @@ async def execute_create_app(
     apaas_app_id = str(apaas_result) if isinstance(apaas_result, str) else str(
         apaas_result.get("id", apaas_result.get("appId", ""))
     )
+    platform_app_code = ""
+    if isinstance(apaas_result, dict):
+        platform_app_code = str(apaas_result.get("appCode") or apaas_result.get("code") or "").strip()
     suffix = _rand()
     return {
         "apaas_app_id": apaas_app_id,
+        "platform_app_code": platform_app_code,
         "suffix": suffix,
     }
 
@@ -128,7 +132,7 @@ async def execute_create_roles_dicts(
     if roles:
         for r in roles:
             original_code = r.get("code", r["name"])
-            platform_code = _apply_suffix(f"R_{_sanitize_code(original_code)}", suffix)
+            platform_code = _apply_suffix(_sanitize_code(original_code), suffix)
             role_codes[original_code] = {"roleCode": platform_code, "roleName": r["name"]}
             try:
                 await client.create_roles(app_id, [{

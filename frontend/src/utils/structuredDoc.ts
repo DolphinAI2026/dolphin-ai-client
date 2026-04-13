@@ -315,7 +315,7 @@ export function buildStructuredDocFromPreviewConfig(
         field_code: field?.code || `field_${fIdx + 1}`,
         field_name: field?.name || field?.code || `字段${fIdx + 1}`,
         type: field?.type || field?.data_type || '',
-        database_field_type: field?.database_field_type || field?.databaseFieldType || field?.db_type || field?.type || '',
+        database_field_type: field?.database_field_type || field?.databaseFieldType || field?.db_type || '',
         max_length: field?.max_length || field?.maxLength || field?.length || '',
         length: field?.length || field?.max_length || field?.maxLength || '',
         comment: field?.comment || '',

@@ -11,6 +11,14 @@ from app.field_types import get_comp_type_map
 
 _COMP_TYPE_MAP = get_comp_type_map()
 _DEFAULT_LIST_SHOW_COUNT = 5
+_REFERENCE_COMPONENT_TYPES = {
+    "数据单选",
+    "数据选择",
+    "关联表单",
+    "FORM_DATA_SELECTOR_SINGLE",
+    "FORM_DATA_SELECTOR",
+    "FORM_ASSOCIATION",
+}
 
 
 def _normalize_subtable_name(name: str) -> str:
@@ -44,6 +52,14 @@ def _apply_model_field_defaults(component: dict, model_field: dict, field_code: 
                 "target_field": display_field,
                 "field": display_field,
             }
+            if not component.get("selector_form_code"):
+                component["selector_form_code"] = ref.get("model", "")
+            if display_field and not component.get("selector_field_code"):
+                component["selector_field_code"] = display_field
+            if not component.get("ref_model_code"):
+                component["ref_model_code"] = ref.get("model", "")
+            if display_field and not component.get("ref_display_field_code"):
+                component["ref_display_field_code"] = display_field
 
     if not component.get("formAssociationConfig"):
         association = model_field.get("formAssociationConfig") or {}
@@ -53,8 +69,167 @@ def _apply_model_field_defaults(component: dict, model_field: dict, field_code: 
                 "targetModelCode": association.get("targetModelCode", ""),
                 "targetFieldCode": association.get("targetFieldCode", ""),
             }
+    association = component.get("formAssociationConfig") or {}
+    if isinstance(association, dict) and association.get("targetModelCode"):
+        if not component.get("association_form_code"):
+            component["association_form_code"] = association.get("targetModelCode", "")
+        if not component.get("association_origin_field_code"):
+            component["association_origin_field_code"] = association.get("originFieldCode") or field_code
+        if not component.get("association_target_field_code"):
+            component["association_target_field_code"] = association.get("targetFieldCode", "")
 
     return component
+
+
+def _is_reference_component(comp_type_raw: str, field_type: str) -> bool:
+    return bool((comp_type_raw or "").strip() in _REFERENCE_COMPONENT_TYPES or (field_type or "").strip() in _REFERENCE_COMPONENT_TYPES)
+
+
+def _infer_target_model_code(
+    field_code: str,
+    field_label: str,
+    description: str,
+    current_model_code: str,
+    models: List[dict],
+) -> str:
+    models_by_code = {
+        str(model.get("code") or "").strip().lower(): model
+        for model in models
+        if str(model.get("code") or "").strip()
+    }
+    if not models_by_code:
+        return ""
+
+    suffix_candidates: list[str] = []
+    label_candidates: list[str] = []
+    desc_candidates: list[str] = []
+
+    def add_candidate(bucket: list[str], code: str):
+        normalized = str(code or "").strip().lower()
+        if normalized and normalized in models_by_code and normalized != current_model_code and normalized not in bucket:
+            bucket.append(normalized)
+
+    for suffix in ("_ref", "_id"):
+        if field_code.endswith(suffix):
+            add_candidate(suffix_candidates, field_code[: -len(suffix)])
+
+    normalized_label = str(field_label or "").strip()
+    normalized_desc = str(description or "").strip()
+    for code, model in models_by_code.items():
+        model_name = str(model.get("name") or "").strip()
+        if normalized_label and model_name and (
+            normalized_label == model_name
+            or normalized_label in model_name
+            or model_name in normalized_label
+        ):
+            add_candidate(label_candidates, code)
+        if normalized_desc and model_name and (
+            model_name in normalized_desc
+            or f"选择{model_name}" in normalized_desc
+            or f"关联{model_name}" in normalized_desc
+            or f"{model_name}主数据" in normalized_desc
+        ):
+            add_candidate(desc_candidates, code)
+
+    for bucket in (suffix_candidates, label_candidates, desc_candidates):
+        if len(bucket) == 1:
+            return bucket[0]
+    return ""
+
+
+def _infer_target_field_code(target_model_code: str, field_label: str, model_field_index: dict) -> str:
+    fields_map = model_field_index.get(target_model_code, {}) or {}
+    if not fields_map:
+        return ""
+
+    preferred_codes = [f"{target_model_code}_name", "name"]
+    preferred_names = [f"{field_label}名称", "名称", "名字"]
+
+    for code in preferred_codes:
+        if code in fields_map:
+            return code
+
+    for field in fields_map.values():
+        if str(field.get("name") or "").strip() in preferred_names:
+            return str(field.get("code") or "").strip()
+
+    for field in fields_map.values():
+        code = str(field.get("code") or "").strip()
+        if code.endswith("_name"):
+            return code
+
+    for field in fields_map.values():
+        if str(field.get("name") or "").strip().endswith("名称"):
+            return str(field.get("code") or "").strip()
+
+    return ""
+
+
+def _field_code_from_model_field(model_field: str) -> str:
+    raw = str(model_field or "").strip()
+    return raw.split(".")[-1] if "." in raw else raw
+
+
+def _infer_association_origin_field_code(
+    explicit_origin_field_code: str,
+    current_model_fields: dict,
+    target_model_code: str,
+    model_field_index: dict,
+) -> str:
+    explicit = str(explicit_origin_field_code or "").strip()
+    if explicit:
+        return explicit
+
+    target_fields = model_field_index.get(target_model_code, {}) or {}
+    if not current_model_fields or not target_fields:
+        return ""
+
+    shared_ref_codes = [
+        code for code in current_model_fields.keys()
+        if code in target_fields and str(code).endswith("_ref")
+    ]
+    if len(shared_ref_codes) == 1:
+        return shared_ref_codes[0]
+
+    shared_codes = [code for code in current_model_fields.keys() if code in target_fields]
+    if len(shared_codes) == 1:
+        return shared_codes[0]
+
+    return ""
+
+
+def _infer_association_target_field_code(
+    explicit_target_field_code: str,
+    origin_field_code: str,
+    target_model_code: str,
+    current_model_fields: dict,
+    model_field_index: dict,
+) -> str:
+    explicit = str(explicit_target_field_code or "").strip()
+    if explicit:
+        return explicit
+
+    target_fields = model_field_index.get(target_model_code, {}) or {}
+    if not target_fields:
+        return ""
+
+    if origin_field_code and origin_field_code in target_fields:
+        return origin_field_code
+
+    origin_field = current_model_fields.get(origin_field_code or "", {}) if isinstance(current_model_fields, dict) else {}
+    origin_ref = origin_field.get("ref") if isinstance(origin_field, dict) else {}
+    origin_ref_model = str(origin_ref.get("model") or "").strip()
+
+    if origin_ref_model:
+        matched = [
+            str(code)
+            for code, field in target_fields.items()
+            if isinstance(field, dict) and str((field.get("ref") or {}).get("model") or "").strip() == origin_ref_model
+        ]
+        if len(matched) == 1:
+            return matched[0]
+
+    return ""
 
 
 def parse(section_text: str, models: List[dict]) -> Tuple[List[dict], List[str]]:
@@ -98,7 +273,16 @@ def parse(section_text: str, models: List[dict]) -> Tuple[List[dict], List[str]]
             continue
 
         field_rows = meta["main_rows"] or _extract_field_rows(content)
-        components = _build_components(field_rows, form_name, model_code, model_fields, errors, section_type="main")
+        components = _build_components(
+            field_rows,
+            form_name,
+            model_code,
+            model_fields,
+            errors,
+            section_type="main",
+            all_models=models,
+            model_field_index=model_field_index,
+        )
 
         subtable_defs = meta["subtable_defs"]
         subtable_components = _build_subtable_components(content, subtable_defs, model_field_index, errors)
@@ -220,7 +404,17 @@ def _parse_aggregate_tables(section_text: str, models: List[dict]) -> Tuple[List
             continue
 
         form_main_rows = [r for r in (main_field_rows or []) if (r.get("表单名称") or "").strip() == form_name]
-        components = _build_components(form_main_rows, form_name, model_code, model_fields, errors, section_type="main", form_model_map=form_model_map)
+        components = _build_components(
+            form_main_rows,
+            form_name,
+            model_code,
+            model_fields,
+            errors,
+            section_type="main",
+            form_model_map=form_model_map,
+            all_models=models,
+            model_field_index=model_field_index,
+        )
 
         current_sub_defs = []
         for sub_idx, sub_row in enumerate(subtable_def_rows or []):
@@ -277,8 +471,13 @@ def _parse_aggregate_tables(section_text: str, models: List[dict]) -> Tuple[List
                 if target_model_code:
                     if comp_type_raw in ("关联表单", "FORM_ASSOCIATION"):
                         component["association_form_code"] = target_form_code or target_model_code
+                        component["association_origin_field_code"] = (sub_row.get("本表关联字段编码") or field_code).strip()
+                        component["association_target_field_code"] = target_field_code
                     else:
                         component["selector_form_code"] = target_form_code or target_model_code
+                        component["selector_field_code"] = target_field_code
+                    component["ref_model_code"] = target_model_code
+                    component["ref_display_field_code"] = target_field_code
                     component["ref"] = {
                         "model": target_model_code,
                         "display_field": target_field_code,
@@ -470,14 +669,19 @@ def _build_subtable_components(
 
 def _build_components(rows: List[dict], form_name: str, model_code: str,
                       model_fields: dict, errors: List[str], section_type: str = "main",
-                      form_model_map: dict | None = None) -> List[dict]:
+                      form_model_map: dict | None = None,
+                      all_models: List[dict] | None = None,
+                      model_field_index: dict | None = None) -> List[dict]:
     components: List[dict] = []
     seen: set = set()
     form_model_map = form_model_map or {}
+    all_models = all_models or []
+    model_field_index = model_field_index or {}
 
     for row in rows:
         field_code = row.get("字段编码", "").strip()
         field_label = row.get("字段名称", "").strip()
+        description = row.get("说明", "").strip()
         hidden = bool_cell(row.get("隐藏", row.get("是否隐藏", "否")))
         readonly = bool_cell(row.get("只读", row.get("是否只读", "否")))
         required = bool_cell(row.get("必填", row.get("是否必填", "否")))
@@ -493,6 +697,35 @@ def _build_components(rows: List[dict], form_name: str, model_code: str,
         ref_model_code = (row.get("目标模型编码") or "").strip()
         ref_display_field_code = (row.get("目标字段编码") or "").strip()
         resolved_ref_model_code = form_model_map.get(ref_model_code.lower(), ref_model_code) if ref_model_code else ""
+        is_reference_component = _is_reference_component(comp_type_raw, model_field.get("type", "") if model_field else "")
+        if not resolved_ref_model_code and is_reference_component:
+            resolved_ref_model_code = _infer_target_model_code(
+                field_code=field_code,
+                field_label=field_label,
+                description=description,
+                current_model_code=model_code,
+                models=all_models,
+            )
+        origin_field_code = _infer_association_origin_field_code(
+            explicit_origin_field_code=(row.get("本表关联字段编码") or "").strip(),
+            current_model_fields=model_fields,
+            target_model_code=resolved_ref_model_code,
+            model_field_index=model_field_index,
+        ) if comp_type_raw in ("关联表单", "FORM_ASSOCIATION") else ""
+        if resolved_ref_model_code and not ref_display_field_code and comp_type_raw in ("关联表单", "FORM_ASSOCIATION"):
+            ref_display_field_code = _infer_association_target_field_code(
+                explicit_target_field_code=ref_display_field_code,
+                origin_field_code=origin_field_code,
+                target_model_code=resolved_ref_model_code,
+                current_model_fields=model_fields,
+                model_field_index=model_field_index,
+            )
+        if resolved_ref_model_code and not ref_display_field_code and comp_type_raw not in ("关联表单", "FORM_ASSOCIATION"):
+            ref_display_field_code = _infer_target_field_code(
+                target_model_code=resolved_ref_model_code,
+                field_label=field_label or (model_field.get("name", "") if model_field else ""),
+                model_field_index=model_field_index,
+            )
         if model_field is None:
             # 关联表单允许组件编码不在数据模型中，仍保留组件定义
             if resolved_ref_model_code or comp_type_raw in ("关联表单", "FORM_ASSOCIATION"):
@@ -502,7 +735,7 @@ def _build_components(rows: List[dict], form_name: str, model_code: str,
                     "code": field_code,
                     "label": label,
                     "componentType": _COMP_TYPE_MAP.get("关联表单", "FORM_ASSOCIATION"),
-                    "modelField": f"{model_code}.{(row.get('本表关联字段编码') or field_code).strip()}",
+                    "modelField": f"{model_code}.{origin_field_code or field_code}",
                     "modelCode": model_code,
                     "sectionType": section_type,
                     "hidden": hidden,
@@ -516,13 +749,18 @@ def _build_components(rows: List[dict], form_name: str, model_code: str,
                 if resolved_ref_model_code:
                     if comp_type_raw in ("关联表单", "FORM_ASSOCIATION"):
                         component["association_form_code"] = ref_model_code or resolved_ref_model_code
+                        component["association_origin_field_code"] = origin_field_code or field_code
+                        component["association_target_field_code"] = ref_display_field_code
                         component["formAssociationConfig"] = {
-                            "originFieldCode": (row.get("本表关联字段编码") or field_code).strip(),
+                            "originFieldCode": origin_field_code or field_code,
                             "targetModelCode": resolved_ref_model_code,
                             "targetFieldCode": ref_display_field_code,
                         }
                     else:
                         component["selector_form_code"] = ref_model_code or resolved_ref_model_code
+                        component["selector_field_code"] = ref_display_field_code
+                    component["ref_model_code"] = resolved_ref_model_code
+                    component["ref_display_field_code"] = ref_display_field_code
                     component["ref"] = {
                         "model": resolved_ref_model_code,
                         "display_field": ref_display_field_code,
@@ -556,19 +794,24 @@ def _build_components(rows: List[dict], form_name: str, model_code: str,
             "showInList": show_in_list,
             "searchable": searchable,
             "dictCode": row.get("字典编码", "").strip(),
-            "description": row.get("说明", "").strip(),
+            "description": description,
         })
 
         if resolved_ref_model_code:
             if comp_type_raw in ("关联表单", "FORM_ASSOCIATION"):
                 components[-1]["association_form_code"] = ref_model_code or resolved_ref_model_code
+                components[-1]["association_origin_field_code"] = origin_field_code or field_code
+                components[-1]["association_target_field_code"] = ref_display_field_code
                 components[-1]["formAssociationConfig"] = {
-                    "originFieldCode": (row.get("本表关联字段编码") or field_code).strip(),
+                    "originFieldCode": origin_field_code or field_code,
                     "targetModelCode": resolved_ref_model_code,
                     "targetFieldCode": ref_display_field_code,
                 }
             else:
                 components[-1]["selector_form_code"] = ref_model_code or resolved_ref_model_code
+                components[-1]["selector_field_code"] = ref_display_field_code
+            components[-1]["ref_model_code"] = resolved_ref_model_code
+            components[-1]["ref_display_field_code"] = ref_display_field_code
             components[-1]["ref"] = {
                 "model": resolved_ref_model_code,
                 "display_field": ref_display_field_code,
