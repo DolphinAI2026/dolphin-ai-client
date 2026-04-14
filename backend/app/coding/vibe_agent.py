@@ -318,7 +318,9 @@ class VibeCodingAgent:
                         break
 
                     if not full_content.strip():
-                        progress_note = self._describe_tool_plan(tool_names)
+                        info = self.ws_mgr.get_workspace_info(self.ws_id)
+                        _pt = (info.get("project_type", "") or "").lower()
+                        progress_note = self._describe_tool_plan(tool_names, _pt)
                         if progress_note:
                             _emit({"type": "agent_thinking_delta", "content": progress_note})
 
@@ -380,6 +382,27 @@ class VibeCodingAgent:
                                 "file_path": func_args.get("file_path", ""),
                             }
                         _emit(tool_event)
+
+                        # 写 Java 文件时，把 AI 可能生成的非标准空格（\u00a0 等）替换为普通空格，
+                        # 避免 javac "非法字符" 编译错误。仅在 write_file 写 .java 时处理。
+                        if func_name == "write_file":
+                            _fp = func_args.get("file_path", "")
+                            if isinstance(_fp, str) and _fp.endswith(".java"):
+                                _raw = func_args.get("content", "")
+                                _NONSTANDARD_SPACES = (
+                                    "\u00a0",  # NO-BREAK SPACE
+                                    "\u2002",  # EN SPACE
+                                    "\u2003",  # EM SPACE
+                                    "\u2009",  # THIN SPACE
+                                    "\u200b",  # ZERO WIDTH SPACE
+                                    "\u3000",  # IDEOGRAPHIC SPACE
+                                    "\ufeff",  # BOM
+                                )
+                                _cleaned = _raw
+                                for _ch in _NONSTANDARD_SPACES:
+                                    _cleaned = _cleaned.replace(_ch, " " if _ch != "\u200b" and _ch != "\ufeff" else "")
+                                if _cleaned != _raw:
+                                    func_args = {**func_args, "content": _cleaned}
 
                         # Execute
                         async def _tool_progress(chunk: str):
@@ -777,22 +800,32 @@ class VibeCodingAgent:
             return _truncate(json.dumps(tool_input, ensure_ascii=False), 200)
 
     @staticmethod
-    def _describe_tool_plan(tool_names: list[str]) -> str:
+    def _describe_tool_plan(tool_names: list[str], project_type: str = "") -> str:
         """Generate a short user-facing progress note when the model omits one."""
         if not tool_names:
             return ""
 
         unique_names = list(dict.fromkeys(tool_names))
+        is_backend = project_type.startswith("backend")
         parts: list[str] = []
 
         if "glob_files" in unique_names:
-            parts.append("我先快速扫一遍项目结构，确认组件骨架和可复用文件。")
+            if is_backend:
+                parts.append("我先快速扫一遍项目结构，确认脚手架文件布局。")
+            else:
+                parts.append("我先快速扫一遍项目结构，确认组件骨架和可复用文件。")
         if "grep_search" in unique_names:
             parts.append("我会顺手搜索关键实现，避免漏掉现有约定。")
         if "read_file" in unique_names:
-            parts.append("接着读取少量关键文件，确认当前组件写法和 mixin 用法。")
+            if is_backend:
+                parts.append("接着读取少量关键文件，确认当前接口写法和示例代码风格。")
+            else:
+                parts.append("接着读取少量关键文件，确认当前组件写法和 mixin 用法。")
         if "write_file" in unique_names:
-            parts.append("上下文已经够了，下一步开始批量写入组件文件。")
+            if is_backend:
+                parts.append("上下文已经够了，下一步开始批量写入 Java 文件。")
+            else:
+                parts.append("上下文已经够了，下一步开始批量写入组件文件。")
         if "edit_file" in unique_names:
             parts.append("我会在现有文件上做定向修改，尽量减少无关变动。")
         if "run_command" in unique_names:

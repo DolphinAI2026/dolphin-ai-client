@@ -716,7 +716,7 @@ async def save_coding_message(db: AsyncSession, conversation_id: int, role: str,
 
 BRAINSTORM_PROPOSAL_MARKER = "<!-- BRAINSTORM_PROPOSAL -->"
 BRAINSTORM_MAX_REVISIONS = 3  # 最多修改 3 轮，超出自动生成代码
-BRAINSTORM_SCENES = {SceneType.WEB_COMPONENT, SceneType.WEB_PAGE, SceneType.WEB_LIST_VIEW}
+BRAINSTORM_SCENES = {SceneType.WEB_COMPONENT, SceneType.WEB_PAGE, SceneType.WEB_LIST_VIEW, SceneType.BACKEND_API}
 
 _BRAINSTORM_PROMPT_FORM_COMPONENT = """\
 你是一位资深 aPaaS 表单组件架构师。请分析用户需求，输出一份简洁的设计确认单（不超过 600 字，中文）。
@@ -836,10 +836,60 @@ _BRAINSTORM_PROMPT_LIST = """\
 以上是我对需求的理解，请确认是否准确？如有需要调整的地方请告知，确认后将立即开始生成代码。\
 """
 
+_BRAINSTORM_PROMPT_BACKEND_API = """\
+你是一位资深 aPaaS 后端架构师。请分析用户需求，输出一份简洁的设计确认单（不超过 600 字，中文）。
+
+开发类型：aPaaS 后端自开发接口（SpringBoot Java，接口路径以 /custom 开头，包名 com.xdap）
+
+用户需求：{message}
+
+请严格按以下 Markdown 格式输出，每个字段都必须给出具体值，禁止出现"视需求而定"：
+
+## 📋 设计方案确认
+
+**接口名称**：[中文名]（`[camelCase英文名]`）
+**接口路径**：`/custom/[资源路径]`
+**请求方式**：`GET / POST`
+
+**功能概述**：[一句话描述核心功能]
+
+---
+
+### 数据表
+| 表名 | 说明 |
+|------|------|
+| `t_xxx` | ... |
+
+### 请求参数
+| 参数名 | 类型 | 必填 | 说明 |
+|--------|------|------|------|
+| `keyword` | String | 否 | 模糊搜索关键词 |
+| `pageNum` | Integer | 是 | 页码，从 1 开始 |
+| `pageSize` | Integer | 是 | 每页条数 |
+
+### 响应结构
+```json
+{{
+  "total": 100,
+  "list": [
+    {{ "id": 1, "fieldA": "...", "fieldB": "..." }}
+  ]
+}}
+```
+
+### 业务逻辑要点
+1. [数据查询逻辑、关联表处理、字段转换等]
+2. [如有状态映射、JSON解析等特殊处理，逐条说明]
+
+---
+以上是我对需求的理解，请确认是否准确？如有需要调整的地方请告知，确认后将立即开始生成代码。\
+"""
+
 _BRAINSTORM_PROMPTS = {
     SceneType.WEB_COMPONENT: _BRAINSTORM_PROMPT_FORM_COMPONENT,
     SceneType.WEB_PAGE: _BRAINSTORM_PROMPT_PAGE,
     SceneType.WEB_LIST_VIEW: _BRAINSTORM_PROMPT_LIST,
+    SceneType.BACKEND_API: _BRAINSTORM_PROMPT_BACKEND_API,
 }
 
 
@@ -912,7 +962,7 @@ async def _detect_scene_llm_call(
 - **mobile_component**：移动端表单中嵌入使用的自定义控件。
 
 ### 后端 Java 类
-- **backend_api**：开发 SpringBoot/Java 后端 REST 接口（Controller + Service），接口路径以 /custom 开头，包名以 com.xdap 开头。注意：前端页面"调用接口"不属于此类。
+- **backend_api**：开发后端 REST 接口服务（SpringBoot/Java Controller + Service），接口路径以 /custom 开头，包名以 com.xdap 开头。只要主体是"开发接口/API/数据接口"，无论是否提及 SpringBoot，都属于此类。注意：前端页面"调用接口"不属于此类。
 - **backend_feign**：用 FeignClient 调用外部 HTTP 服务，含接口定义、DTO、FeignConfig。
 - **backend_scheduled**：Spring @Scheduled 定时任务，含 ScheduledTask.java + Dao + Service。
 
@@ -935,6 +985,10 @@ async def _detect_scene_llm_call(
 - 用户要"开发接口/写后端/SpringBoot/Java Controller" → **backend_api**
 - 用户要"做一个页面，页面里调用接口" → **web_page**（接口调用是前端行为）
 
+**backend_api vs web_component**（"自定义接口"易混淆）：
+- 主体是"接口/API/数据接口/查询接口/REST接口" → **backend_api**（"自定义数据查询接口"是后端接口）
+- 主体是"组件/控件/选择器/输入框" → **web_component**
+
 ## 示例
 
 用户需求 → 场景代码
@@ -945,6 +999,8 @@ async def _detect_scene_llm_call(
 "开发一个关联数据选择组件" → web_component
 "写一个员工信息展示的富文本输入框" → web_component
 "开发一个 SpringBoot 接口查询订单数据" → backend_api
+"开发一个自定义数据查询接口" → backend_api
+"写一个查询用户信息的后端接口" → backend_api
 "用 FeignClient 调用外部天气 API" → backend_feign
 "每天凌晨同步一次数据，定时任务" → backend_scheduled
 "表单提交前弹窗让用户二次确认" → business_dialog
@@ -1182,7 +1238,8 @@ async def run_coding_pipeline(
                 project_name = await extract_project_name(generator, params.message)
             except Exception:
                 project_name = "custom-dev"
-            project_type_str = params.project_type or scene_to_project_type(scene_type)
+            # 新对话：AI 已完成场景检测，以检测结果为准；params.project_type 仅作兜底
+            project_type_str = scene_to_project_type(scene_type) or params.project_type or "form-component"
             project_type_enum = ProjectType(project_type_str)
             display_name = extract_display_name(params.message, project_type_str, project_name)
             meta = ws_mgr.create_workspace(

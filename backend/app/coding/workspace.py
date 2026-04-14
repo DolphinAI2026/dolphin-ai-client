@@ -1361,6 +1361,7 @@ class WorkspaceManager:
         ws_path = self.get_workspace_path(ws_id)
         meta = self._read_meta(ws_path)
         project_name = meta.get("project_name") or self._fallback_project_name_from_path(ws_path)
+        project_type = meta.get("project_type", "")
         output_dir = self._get_build_output_dir(ws_path)
         if not self._has_build_artifacts(output_dir):
             raise FileNotFoundError("构建产物目录不存在，构建可能失败")
@@ -1368,22 +1369,30 @@ class WorkspaceManager:
         import zipfile, io
         zip_path = ws_path / f"{project_name}.zip"
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
-            for f in output_dir.rglob("*"):
-                if f.is_file():
-                    zf.write(f, f.relative_to(output_dir))
-            # 加入 apaas.json
-            apaas_json = ws_path / "src" / "apaas.json"
-            if apaas_json.exists() and not (output_dir / "apaas.json").exists():
-                zf.write(apaas_json, "apaas.json")
-                try:
-                    cfg = json.loads(apaas_json.read_text())
-                    for asset in cfg.get("copyAssets", []):
-                        static_dir = asset.replace("public/", "static/", 1)
-                        zf.writestr(f"{static_dir}/", "")
-                except Exception:
-                    zf.writestr(f"static/custom/{project_name}/", "")
+            # 后端项目：只打包 target/ 下的 JAR，不含中间产物和前端目录结构
+            if project_type in (ProjectType.BACKEND_API.value, ProjectType.BACKEND_FEIGN.value, ProjectType.BACKEND_SCHEDULED.value):
+                jar_files = list(output_dir.glob("*.jar"))
+                final_jars = [j for j in jar_files if not j.name.endswith(".original")]
+                for jar in (final_jars or jar_files):
+                    zf.write(jar, jar.name)
             else:
-                zf.writestr(f"static/custom/{project_name}/", "")
+                # 前端项目：打包全部构建产物
+                for f in output_dir.rglob("*"):
+                    if f.is_file():
+                        zf.write(f, f.relative_to(output_dir))
+                # 加入 apaas.json
+                apaas_json = ws_path / "src" / "apaas.json"
+                if apaas_json.exists() and not (output_dir / "apaas.json").exists():
+                    zf.write(apaas_json, "apaas.json")
+                    try:
+                        cfg = json.loads(apaas_json.read_text())
+                        for asset in cfg.get("copyAssets", []):
+                            static_dir = asset.replace("public/", "static/", 1)
+                            zf.writestr(f"{static_dir}/", "")
+                    except Exception:
+                        zf.writestr(f"static/custom/{project_name}/", "")
+                else:
+                    zf.writestr(f"static/custom/{project_name}/", "")
 
         return str(zip_path)
 
@@ -2621,17 +2630,16 @@ export default { install, activate, staticComponents }
             return
 
         pom_text = pom_path.read_text(encoding="utf-8")
-        if "query-mongodb" not in pom_text:
-            pom_text = pom_text.replace(
-                "</dependencies>",
-                """        <dependency>
-            <groupId>com.definesys</groupId>
-            <artifactId>query-mongodb</artifactId>
-            <version>apaas-1.1.11.bigdata.2</version>
-            <scope>provided</scope>
-        </dependency>
-    </dependencies>""",
-            )
+        # com.definesys.mpaas.* 已通过 com.xdap:app 传递依赖引入，无需单独声明
+        # 清理历史遗留的 query-mongodb 显式依赖（旧版错误 groupId 或冗余声明）
+        import re as _re
+        pom_text = _re.sub(
+            r'\s*<dependency>\s*<groupId>com\.definesys(?:\.mpaas)?</groupId>\s*'
+            r'<artifactId>query-mongodb</artifactId>.*?</dependency>',
+            '',
+            pom_text,
+            flags=_re.DOTALL,
+        )
         if "<build>" not in pom_text:
             pom_text = pom_text.replace(
                 "</profiles>",

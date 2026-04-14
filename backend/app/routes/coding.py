@@ -2422,9 +2422,9 @@ _PROJECT_TYPE_TO_FILE_TYPE = {
     "mobile-page": "MFRONTENGINE",
     "mobile-component": "MFRONTCOMPONENT",
     "plugin": "FRONTTENANTCOMPONENT",
-    "backend-api": "BACKENDENGINEPKG",
-    "backend-feign": "BACKENDENGINEPKG",
-    "backend-scheduled": "BACKENDENGINEPKG",
+    "backend-api": "BACKENDENGINE",
+    "backend-feign": "BACKENDENGINE",
+    "backend-scheduled": "BACKENDENGINE",
 }
 
 
@@ -2494,12 +2494,23 @@ async def upload_workspace_to_platform(
 
     # 4. 上传到平台（token 过期时自动刷新后重试一次）
     upload_url = f"{env.base_url.rstrip('/')}/xdap-app/selfdevelopment/add/developmentKit"
-    zip_path_obj = Path(zip_path)
-    zip_filename = zip_path_obj.name
+
+    # 后端项目：直接上传 JAR 文件（平台要求 application/java-archive）
+    _backend_project_types = {"backend-api", "backend-feign", "backend-scheduled"}
+    if project_type in _backend_project_types:
+        output_dir = ws_mgr._get_build_output_dir(ws_path)
+        jar_files = [j for j in output_dir.glob("*.jar") if not j.name.endswith(".original")]
+        if not jar_files:
+            raise HTTPException(status_code=500, detail="未找到编译产物 JAR，请先在 IDE 中构建项目")
+        upload_file_path = jar_files[0]
+        upload_content_type = "application/java-archive"
+    else:
+        upload_file_path = Path(zip_path)
+        upload_content_type = "application/zip"
 
     async def _do_upload(token: str):
-        with open(zip_path_obj, "rb") as f:
-            zip_bytes = f.read()
+        with open(upload_file_path, "rb") as f:
+            file_bytes = f.read()
         async with httpx.AsyncClient(verify=False, timeout=120.0) as http:
             return await http.post(
                 upload_url,
@@ -2508,7 +2519,7 @@ async def upload_workspace_to_platform(
                     "xdaptoken": token,
                     "xdaptimestamp": str(int(time.time() * 1000)),
                 },
-                files={"file": (zip_filename, zip_bytes, "application/zip")},
+                files={"file": (upload_file_path.name, file_bytes, upload_content_type)},
                 data={
                     "fileType": file_type,
                     "description": f"{display_name} - 由 apaas-builder 上传",
@@ -2516,7 +2527,7 @@ async def upload_workspace_to_platform(
                     "versionCode": uuid.uuid4().hex,
                     "useScope": "全部应用",
                     "internalResource": "false",
-                    "effectiveScope": "ALL_APPLICATION",
+                    "effectiveScope": "SINGLE_APPLICATION",
                 },
             )
 
