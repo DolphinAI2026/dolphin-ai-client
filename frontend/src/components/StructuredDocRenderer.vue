@@ -289,22 +289,58 @@ const dicts = computed(() => {
 
 const tables = computed(() => {
   const source = props.docResult?.tables || props.docResult?.models || []
-  return source.map((table: any) => ({
-    table_code: table.table_code || table.code || '',
-    table_name: table.table_name || table.name || '',
-    table_type: table.table_type || table.tableType || '',
-    fields: (table.fields || []).map((field: any) => ({
-      field_code: field.field_code || field.code || '',
-      field_name: field.field_name || field.name || '',
-      database_field_type: field.database_field_type || field.databaseFieldType || field.db_type || 'varchar',
-      max_length: field.max_length || field.maxLength || field.length || '',
-      length: field.length || field.max_length || field.maxLength || '',
-      type: field.type || field.field_type || '',
-      required: !!field.required,
-      hidden: !!field.hidden,
-      readonly: !!(field.readonly ?? field.readOnly),
-    })),
-  }))
+  const normalizeField = (field: any) => ({
+    field_code: field.field_code || field.code || '',
+    field_name: field.field_name || field.name || '',
+    database_field_type: field.database_field_type || field.databaseFieldType || field.db_type || 'varchar',
+    max_length: field.max_length || field.maxLength || field.length || '',
+    length: field.length || field.max_length || field.maxLength || '',
+    type: field.type || field.field_type || '',
+    required: !!field.required,
+    hidden: !!field.hidden,
+    readonly: !!(field.readonly ?? field.readOnly),
+  })
+
+  const normalizedTables: any[] = []
+  const seenTableCodes = new Set<string>()
+
+  for (const table of source) {
+    const tableCode = table.table_code || table.code || ''
+    const tableName = table.table_name || table.name || ''
+    const tableType = table.table_type || table.tableType || ''
+    const rawFields = Array.isArray(table.fields) ? table.fields : []
+
+    const regularFields = rawFields.filter((field: any) => String(field?.type || field?.field_type || '') !== '子表')
+    const subTableFields = rawFields.filter((field: any) => String(field?.type || field?.field_type || '') === '子表')
+
+    if (!seenTableCodes.has(tableCode || tableName)) {
+      normalizedTables.push({
+        table_code: tableCode,
+        table_name: tableName,
+        table_type: tableType,
+        parent_model_code: table.parent_model_code || table.parentModelCode || '',
+        fields: regularFields.map(normalizeField),
+      })
+      seenTableCodes.add(tableCode || tableName)
+    }
+
+    for (const subField of subTableFields) {
+      const subCode = subField.sub_code || subField.subCode || subField.field_code || subField.code || ''
+      const subName = subField.name || subField.field_name || subField.fieldName || subCode
+      const dedupeKey = subCode || `${tableCode}::${subName}`
+      if (seenTableCodes.has(dedupeKey)) continue
+      normalizedTables.push({
+        table_code: subCode,
+        table_name: subName,
+        table_type: '子表',
+        parent_model_code: tableCode,
+        fields: (subField.sub_fields || subField.subFields || []).map(normalizeField),
+      })
+      seenTableCodes.add(dedupeKey)
+    }
+  }
+
+  return normalizedTables
 })
 
 const modelNameMap = computed(() => {

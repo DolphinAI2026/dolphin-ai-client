@@ -164,8 +164,18 @@ export function repairPlatformIframe(iframe: HTMLIFrameElement | null, appInfo?:
   if (!iframe) return false
 
   try {
-    const doc = iframe.contentDocument || iframe.contentWindow?.document
+    const win = iframe.contentWindow || null
+    const doc = iframe.contentDocument || win?.document
     if (!doc) return false
+    try {
+      const localAuth = win?.localStorage?.getItem('__vuex__local') || ''
+      const sessionAuth = win?.sessionStorage?.getItem('__vuex__session') || ''
+      if (localAuth && localAuth !== sessionAuth) {
+        win?.sessionStorage?.setItem('__vuex__session', localAuth)
+      }
+    } catch (error) {
+      console.warn('sync platform auth storage failed:', error)
+    }
     repairPlatformDocument(doc)
     injectPlatformAppInfo(doc, appInfo)
     return true

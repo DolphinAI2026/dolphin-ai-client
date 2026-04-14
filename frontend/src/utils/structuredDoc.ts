@@ -493,9 +493,15 @@ export function standardDocMdToStructuredDoc(markdown: string) {
   const formsSection = getSection(sections, ['表单定义', '表单配置'])
   const formTables = parseAllTables(formsSection)
   const formListRows = formTables.find(table => table[0] && '表单名称' in table[0] && '绑定主表模型' in table[0]) || []
-  const mainFieldRows = formTables.find(table => table[0] && '表单名称' in table[0] && '字段编码' in table[0] && !('子表区域名称' in table[0])) || []
-  const subRegionRows = formTables.find(table => table[0] && '表单名称' in table[0] && '子表区域名称' in table[0] && '绑定模型' in table[0]) || []
-  const subFieldRows = formTables.find(table => table[0] && '表单名称' in table[0] && '子表区域名称' in table[0] && '字段编码' in table[0]) || []
+  const mainFieldRows = formTables
+    .filter(table => table[0] && '表单名称' in table[0] && '字段编码' in table[0] && !('子表区域名称' in table[0]))
+    .flat()
+  const subRegionRows = formTables
+    .filter(table => table[0] && '表单名称' in table[0] && '子表区域名称' in table[0] && '绑定模型' in table[0])
+    .flat()
+  const subFieldRows = formTables
+    .filter(table => table[0] && '表单名称' in table[0] && '子表区域名称' in table[0] && '字段编码' in table[0])
+    .flat()
   const formCodeByName = new Map(formListRows.map(row => [row['表单名称'] || '', row['表单编码'] || '']))
 
   let forms = formListRows.map((row, idx) => {

@@ -67,6 +67,7 @@
             <button class="hint-dismiss-btn" @click="platformLoginHint = ''">✕</button>
           </div>
           <iframe
+            :key="platformIframeKey"
             ref="platformIframeRef"
             :src="platformIframeUrl"
             class="platform-iframe"
@@ -119,7 +120,7 @@
           </div>
         </div>
         <div v-else class="messages" ref="messagesRef">
-          <div v-for="(msg, idx) in visibleMessages" :key="idx" class="chat-bubble" :class="msg.role">
+          <div v-for="(msg, idx) in visibleMessages" :key="msg.id ?? `msg-${idx}`" class="chat-bubble" :class="msg.role">
             <div class="bubble-row" :class="msg.role">
               <div v-if="msg.role === 'assistant'" class="assistant-avatar" aria-hidden="true">AI</div>
               <div class="bubble-inner" :class="{ 'welcome-bubble': msg.role === 'assistant' && msg.content === BUILDER_WELCOME_MESSAGE }">
@@ -204,9 +205,14 @@
                   </el-select>
                 </div>
               <div class="builder-control-hint inside-card">{{ builderModelHint }}</div>
-              <div class="input-card-top">
-                <label class="upload-btn" title="上传设计文档(.md)或图片">
-                  <input type="file" accept=".md,.png,.jpg,.jpeg,.gif,.webp" @change="handleDocUpload" style="display:none" />
+                <div class="input-card-top">
+                <label class="upload-btn" title="上传对话附件（支持各类文档和图片）">
+                  <input
+                    ref="chatImageInputRef"
+                    type="file"
+                    @change="handleChatImageChange"
+                    style="display:none"
+                  />
                   <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M15.5 8.5l-6.4 6.4a3.5 3.5 0 01-5-5l6.4-6.4a2.2 2.2 0 013.1 3.1L7.2 13a.9.9 0 01-1.3-1.3l5.5-5.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
                 </label>
                 <textarea
@@ -223,13 +229,14 @@
                   <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M14 2L7 9M14 2l-4.5 12-2-5.5L2 6.5 14 2z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
                 </button>
               </div>
-              <div v-if="pendingChatImage" class="chat-attachment-preview">
-                <img class="chat-attachment-preview-image" :src="pendingChatImage.previewUrl" :alt="pendingChatImage.file.name" />
+              <div v-if="pendingChatAttachment" class="chat-attachment-preview">
+                <img v-if="pendingChatAttachment.kind === 'image'" class="chat-attachment-preview-image" :src="pendingChatAttachment.previewUrl" :alt="pendingChatAttachment.file.name" />
+                <div v-else class="chat-attachment-preview-file">📄</div>
                 <div class="chat-attachment-preview-meta">
-                  <div class="chat-attachment-preview-name">{{ pendingChatImage.file.name }}</div>
-                  <div class="chat-attachment-preview-tip">发送后会带着这张图片一起参与对话</div>
+                  <div class="chat-attachment-preview-name">{{ pendingChatAttachment.file.name }}</div>
+                  <div class="chat-attachment-preview-tip">{{ pendingChatAttachment.kind === 'image' ? '发送后会带着这张图片一起参与对话' : '发送后会带着这个附件一起参与对话' }}</div>
                 </div>
-                <button class="chat-attachment-remove" type="button" @click="clearPendingChatImage" aria-label="移除图片">×</button>
+                <button class="chat-attachment-remove" type="button" @click="clearPendingChatAttachment" aria-label="移除附件">×</button>
               </div>
             </div>
           </div>
@@ -736,7 +743,7 @@
                         v-for="ver in displayDocVersions"
                         :key="ver.key"
                         class="doc-version-row"
-                        :class="{ current: ver.version === currentDocVersion, expanded: isDocVersionExpanded(ver) }"
+                        :class="{ current: getDocDisplayVersion(ver) === currentDocVersion, expanded: isDocVersionExpanded(ver) }"
                       >
                         <div class="doc-version-summary">
                           <button class="doc-version-toggle" type="button" @click="toggleDocVersion(ver)">
@@ -748,9 +755,9 @@
                             </span>
                             <div class="doc-version-main">
                               <div class="doc-ver-header">
-                                <span class="doc-ver-num">V{{ ver.version }}</span>
-                                <span class="doc-ver-filename">{{ ver.filename || `设计文档-V${ver.version}.md` }}</span>
-                                <span v-if="ver.version === currentDocVersion" class="doc-ver-current">当前</span>
+                                <span class="doc-ver-num">V{{ getDocDisplayVersion(ver) }}</span>
+                                <span class="doc-ver-filename">{{ getDocDisplayFilename(ver) || `设计文档-V${getDocDisplayVersion(ver)}.md` }}</span>
+                                <span v-if="getDocDisplayVersion(ver) === currentDocVersion" class="doc-ver-current">当前</span>
                               </div>
                               <div class="doc-ver-meta">
                                 <span class="doc-ver-time">{{ formatDocTime(ver.created_at) || '刚刚更新' }}</span>
@@ -2057,6 +2064,16 @@ function resetMessagesToWelcome() {
   messages.push(createWelcomeMessage())
 }
 
+function isAutoDocSummaryMessage(content: string) {
+  const text = String(content || '').trim()
+  if (!text) return false
+  if (!text.startsWith('我已经理解了设计文档《')) return false
+  return text.includes('识别出：')
+    && (text.includes('你可以告诉我需要调整的地方')
+      || text.includes('或者直接说"开始生成"')
+      || text.includes('或者直接点击"开始生成"'))
+}
+
 const visibleMessages = computed(() => messages)
 
 const focusQuickInput = () => {
@@ -2089,8 +2106,9 @@ const inputRef = ref<HTMLTextAreaElement>()
 const chatImageInputRef = ref<HTMLInputElement>()
 const inputText = ref('')
 const isTyping = ref(false)
-const pendingChatImage = ref<{ file: File; previewUrl: string } | null>(null)
-const canSendMessage = computed(() => !!inputText.value.trim() || !!pendingChatImage.value)
+const sendingMessage = ref(false)
+const pendingChatAttachment = ref<{ file: File; kind: 'image' | 'file'; previewUrl: string } | null>(null)
+const canSendMessage = computed(() => (!!inputText.value.trim() || !!pendingChatAttachment.value) && !sendingMessage.value)
 
 const escapeHtml = (value: string) => String(value || '')
   .replace(/&/g, '&amp;')
@@ -2099,12 +2117,37 @@ const escapeHtml = (value: string) => String(value || '')
   .replace(/"/g, '&quot;')
   .replace(/'/g, '&#39;')
 
-const buildUserChatImageContent = (text: string, previewUrl: string, fileName: string) => {
+const buildUserChatAttachmentContent = (
+  text: string,
+  attachment: { file: File; kind: 'image' | 'file'; previewUrl: string }
+) => {
   const parts: string[] = []
   if (text.trim()) parts.push(escapeHtml(text.trim()))
-  parts.push(
-    `<div class="chat-inline-upload"><div class="chat-inline-upload-label">已上传图片：${escapeHtml(fileName)}</div><img class="chat-inline-upload-image" src="${previewUrl}" alt="${escapeHtml(fileName)}" /></div>`
-  )
+  if (attachment.kind === 'image') {
+    parts.push(
+      `<div class="chat-inline-upload">
+      <div class="chat-inline-upload-head">
+        <span class="chat-inline-upload-badge">截图</span>
+        <span class="chat-inline-upload-name">${escapeHtml(attachment.file.name)}</span>
+      </div>
+      <img class="chat-inline-upload-image" src="${attachment.previewUrl}" alt="${escapeHtml(attachment.file.name)}" />
+      <div class="chat-inline-upload-foot">发送后会带着这张图片一起参与对话</div>
+    </div>`
+    )
+  } else {
+    parts.push(
+      `<div class="chat-inline-upload file">
+        <div class="chat-inline-upload-head">
+          <span class="chat-inline-upload-badge">附件</span>
+          <span class="chat-inline-upload-name">${escapeHtml(attachment.file.name)}</span>
+        </div>
+        <div class="chat-inline-upload-file-row">
+          <span class="chat-inline-upload-file-icon">📄</span>
+          <span class="chat-inline-upload-file-tip">发送后会带着这个附件一起参与对话</span>
+        </div>
+      </div>`
+    )
+  }
   return parts.join('\n\n')
 }
 
@@ -2112,27 +2155,25 @@ const triggerChatImageUpload = () => {
   chatImageInputRef.value?.click()
 }
 
-const clearPendingChatImage = () => {
-  if (pendingChatImage.value?.previewUrl) {
-    URL.revokeObjectURL(pendingChatImage.value.previewUrl)
+const clearPendingChatAttachment = () => {
+  if (pendingChatAttachment.value?.previewUrl) {
+    URL.revokeObjectURL(pendingChatAttachment.value.previewUrl)
   }
-  pendingChatImage.value = null
+  pendingChatAttachment.value = null
   if (chatImageInputRef.value) chatImageInputRef.value.value = ''
 }
 
-const attachPendingImageFile = (file: File) => {
-  if (!file.type.startsWith('image/')) {
-    ElMessage.warning('请上传 png、jpg、gif、webp 等图片')
+const attachPendingAttachmentFile = (file: File, kind: 'image' | 'file') => {
+  const maxSize = kind === 'image' ? 10 * 1024 * 1024 : 20 * 1024 * 1024
+  if (file.size > maxSize) {
+    ElMessage.warning(kind === 'image' ? '图片大小请控制在 10MB 以内' : '附件大小请控制在 20MB 以内')
     return false
   }
-  if (file.size > 10 * 1024 * 1024) {
-    ElMessage.warning('图片大小请控制在 10MB 以内')
-    return false
-  }
-  clearPendingChatImage()
-  pendingChatImage.value = {
+  clearPendingChatAttachment()
+  pendingChatAttachment.value = {
     file,
-    previewUrl: URL.createObjectURL(file),
+    kind,
+    previewUrl: kind === 'image' ? URL.createObjectURL(file) : '',
   }
   return true
 }
@@ -2148,7 +2189,13 @@ const handleChatImageChange = (event: Event) => {
     return
   }
 
-  attachPendingImageFile(file)
+  if (file.type.startsWith('image/')) {
+    attachPendingAttachmentFile(file, 'image')
+    target.value = ''
+    return
+  }
+
+  attachPendingAttachmentFile(file, 'file')
   target.value = ''
 }
 
@@ -2161,7 +2208,7 @@ const handleComposerPaste = (event: ClipboardEvent) => {
   event.preventDefault()
   const ext = (file.type.split('/')[1] || 'png').replace('jpeg', 'jpg')
   const pastedFile = new File([file], `pasted-image-${Date.now()}.${ext}`, { type: file.type })
-  attachPendingImageFile(pastedFile)
+  attachPendingAttachmentFile(pastedFile, 'image')
 }
 
 function autoResizeTextarea() {
@@ -2292,6 +2339,7 @@ const codingIframeUrl = computed(() => {
 
 // ── 平台配置 iframe ──
 const platformIframeUrl = ref('')
+const platformIframeKey = ref(0)
 const platformAppUrl = ref('')  // 应用配置页 URL（登录后跳转用）
 const platformDirectUrl = ref('')
 const platformLoading = ref(false)
@@ -2317,11 +2365,23 @@ const onPlatformIframeLoad = () => {
 
   // 检测后端返回的错误页（通过 body 上的标记 data 属性）
   try {
-    const doc = platformIframeRef.value?.contentDocument
+    const iframe = platformIframeRef.value
+    const doc = iframe?.contentDocument
     if (doc?.body?.dataset?.proxyError) {
       const text = doc.querySelector('h3')?.textContent || '平台页面加载失败'
       platformIframeUrl.value = ''
       platformError.value = text
+      return
+    }
+    const repaired = repairPlatformIframe(iframe)
+    const hasPasswordInput = !!doc?.querySelector('input[type="password"]')
+    if (repaired && hasPasswordInput && iframe?.contentWindow) {
+      const localAuth = iframe.contentWindow.localStorage.getItem('__vuex__local') || ''
+      const sessionAuth = iframe.contentWindow.sessionStorage.getItem('__vuex__session') || ''
+      if (localAuth && localAuth !== sessionAuth) {
+        iframe.contentWindow.sessionStorage.setItem('__vuex__session', localAuth)
+        iframe.contentWindow.location.reload()
+      }
     }
   } catch { /* 跨域页面无法访问 contentDocument，忽略 */ }
 }
@@ -2347,6 +2407,8 @@ const loadPlatformUrl = async () => {
   }
   platformLoading.value = true
   platformError.value = ''
+  platformIframeUrl.value = ''
+  platformIframeKey.value += 1
   await Promise.resolve()  // 让 Vue 渲染一帧，显示 loading 旋转器
   try {
     const proxyUrl = buildPlatformProxyUrl(existingAppId.value)
@@ -2363,9 +2425,7 @@ const loadPlatformUrl = async () => {
 
 const switchToPlatform = () => {
   activeView.value = 'platform'
-  if (!platformIframeUrl.value || platformIframeAppId.value !== existingAppId.value) {
-    loadPlatformUrl()
-  }
+  loadPlatformUrl()
 }
 
 const navigateIframeToApp = () => {
@@ -3089,6 +3149,8 @@ interface DocVersion {
   parsed_config?: any
   created_at: string
   change_plans?: any[]
+  display_version?: number
+  display_filename?: string
 }
 interface DocVersionListItem extends DocVersion {
   key: string
@@ -3190,16 +3252,23 @@ const reparsing = ref(false)
 const currentDocPreviewOverride = ref<DocVersionListItem | null>(null)
 // docUploadInputRef removed — upload is via chat input only
 
+const getDocDisplayVersion = (ver?: Pick<DocVersion, 'version' | 'display_version'> | null) =>
+  Number(ver?.display_version || ver?.version || 0)
+
+const getDocDisplayFilename = (ver?: Pick<DocVersion, 'filename' | 'display_filename'> | null) =>
+  String(ver?.display_filename || ver?.filename || '').trim()
+
 const sortedDocVersions = computed(() =>
   [...docVersions.value].sort((a, b) => (b.version || 0) - (a.version || 0))
 )
 const displayDocVersions = computed<DocVersionListItem[]>(() => {
   const versions = sortedDocVersions.value.map((ver, index, list) => {
-    const normalizedVersion = Number(ver.version) > 0 ? Number(ver.version) : Math.max(1, list.length - index)
+    const normalizedVersion = getDocDisplayVersion(ver) || Math.max(1, list.length - index)
     const fallbackFilename = lastParsedFilename.value || `${store.preview.appName || '功能设计文档'}-V${normalizedVersion}.md`
     return {
       ...ver,
-      version: normalizedVersion,
+      display_version: normalizedVersion,
+      display_filename: getDocDisplayFilename(ver) || fallbackFilename,
       filename: ver.filename || fallbackFilename,
       summary: ver.summary || '点击展开查看设计文档',
       raw_content: (ver.raw_content || '').trim(),
@@ -3224,7 +3293,7 @@ const displayDocVersions = computed<DocVersionListItem[]>(() => {
   }]
 })
 const currentDocVersionItem = computed<DocVersionListItem | null>(() => currentDocPreviewOverride.value || displayDocVersions.value[0] || null)
-const currentDocVersion = computed(() => currentDocVersionNumber.value || currentDocVersionItem.value?.version || 1)
+const currentDocVersion = computed(() => currentDocVersionNumber.value || getDocDisplayVersion(currentDocVersionItem.value) || 1)
 const selectedDocVersionItem = computed<DocVersionListItem | null>(() => {
   if (currentDocPreviewOverride.value) return currentDocPreviewOverride.value
   if (selectedDocVersionKey.value) {
@@ -3252,7 +3321,7 @@ const selectedDocStructuredResult = computed(() => {
 })
 
 const resolveDocDisplayContent = (item?: Pick<DocVersion, 'version' | 'raw_content' | 'parsed_config'> | null) => {
-  const isCurrentVersion = !!item && Number(item.version || 0) === Number(currentDocVersion.value || 0)
+  const isCurrentVersion = !!item && getDocDisplayVersion(item) === Number(currentDocVersion.value || 0)
   if (isCurrentVersion && hasPreviewContent.value) {
     const latestMarkdown = buildDocMarkdownFromPreview(currentPreviewConfigPayload.value).trim()
     if (latestMarkdown) return latestMarkdown
@@ -3324,16 +3393,16 @@ const normalizeDocVersionsForDisplay = (rawVersions: any[], rawCurrentVersion: n
 
   const normalizedVersions = collapsedInitialChain.map((version: any, index: number) => ({
     ...version,
-    version: index + 1,
-    filename: buildNormalizedDocVersionFilename(String(version?.filename || ''), index + 1),
+    display_version: index + 1,
+    display_filename: buildNormalizedDocVersionFilename(String(version?.filename || ''), index + 1),
   }))
 
   let currentVersion = rawCurrentVersion
   if (currentVersion > 0) {
     const actualCurrent = collapsedInitialChain.findIndex((item: any) => Number(item?.version) === currentVersion)
-    currentVersion = actualCurrent >= 0 ? actualCurrent + 1 : Number(normalizedVersions[0]?.version || 0)
+    currentVersion = actualCurrent >= 0 ? actualCurrent + 1 : Number(normalizedVersions[0]?.display_version || 0)
   } else {
-    currentVersion = Number(normalizedVersions[normalizedVersions.length - 1]?.version || normalizedVersions[0]?.version || 0)
+    currentVersion = Number(normalizedVersions[normalizedVersions.length - 1]?.display_version || normalizedVersions[0]?.display_version || 0)
   }
 
   return {
@@ -3351,7 +3420,7 @@ const getDocVersionsPayload = (raw: any) => {
 const findRestorableChangePlanId = (versions: any[], currentVersion?: number) => {
   const sortedVersions = [...versions].sort((a: any, b: any) => (Number(b?.version) || 0) - (Number(a?.version) || 0))
   const currentVersionItem = currentVersion
-    ? sortedVersions.find((item: any) => Number(item?.version) === Number(currentVersion))
+    ? sortedVersions.find((item: any) => getDocDisplayVersion(item) === Number(currentVersion))
     : null
   const scanList = currentVersionItem
     ? [currentVersionItem, ...sortedVersions.filter(item => item !== currentVersionItem)]
@@ -3592,8 +3661,8 @@ const loadLatestDocForApp = async (appId: number) => {
     currentDocVersionNumber.value = currentVersion || Number(versions?.[0]?.version || 1)
     await loadCompletedChangePlans(appId, verRes)
     const sortedVersions = [...versions].sort((a: any, b: any) => (Number(b?.version) || 0) - (Number(a?.version) || 0))
-    const latest = sortedVersions.find((item: any) => Number(item?.version) === currentVersion) || sortedVersions[0]
-    if (latest?.filename) lastParsedFilename.value = latest.filename
+    const latest = sortedVersions.find((item: any) => getDocDisplayVersion(item) === currentVersion) || sortedVersions[0]
+    if (latest?.filename || latest?.display_filename) lastParsedFilename.value = getDocDisplayFilename(latest)
     latestDocContent.value = latest?.raw_content || ''
     latestDocAppId.value = appId
     latestDocConversationId.value = null
@@ -3610,7 +3679,7 @@ const loadLatestDocForApp = async (appId: number) => {
     }
     currentDocPreviewOverride.value = null
     const selectedVersion = latest
-      ? displayDocVersions.value.find(item => Number(item.id) === Number(latest.id) || item.version === Number(latest.version))
+      ? displayDocVersions.value.find(item => Number(item.id) === Number(latest.id) || getDocDisplayVersion(item) === getDocDisplayVersion(latest))
       : null
     selectedDocVersionKey.value = selectedVersion?.key || displayDocVersions.value[0]?.key || null
     if (!parsedAppCode.value && latest?.raw_content) {
@@ -3661,7 +3730,7 @@ const formatDocTime = (dateStr: string) => {
 }
 
 const openDocPreview = (ver: DocVersion) => {
-  docVersionPreviewTitle.value = `V${ver.version} — ${ver.filename}`
+  docVersionPreviewTitle.value = `V${getDocDisplayVersion(ver)} — ${getDocDisplayFilename(ver)}`
   docVersionPreviewContent.value = resolveDocDisplayContent(ver) || '（无内容）'
   docVersionPreviewItem.value = (ver as DocVersionListItem) || null
   docVersionPreviewVisible.value = true
@@ -3670,7 +3739,7 @@ const openDocPreview = (ver: DocVersion) => {
 const openCurrentDocFullscreen = () => {
   const item = selectedDocVersionItem.value
   docFullscreenTitle.value = item
-    ? `V${item.version} — ${item.filename || `${store.preview.appName || '功能设计文档'}.md`}`
+    ? `V${getDocDisplayVersion(item)} — ${getDocDisplayFilename(item) || `${store.preview.appName || '功能设计文档'}.md`}`
     : `${store.preview.appName || '功能设计文档'}`
   docFullscreenContent.value = resolveDocDisplayContent(item) || '（无内容）'
   docFullscreenItem.value = item || null
@@ -3678,10 +3747,10 @@ const openCurrentDocFullscreen = () => {
 }
 
 const openDocDiff = (ver: DocVersion) => {
-  const prevVer = docVersions.value.find(v => v.version === ver.version - 1)
+  const prevVer = displayDocVersions.value.find(item => getDocDisplayVersion(item) === getDocDisplayVersion(ver) - 1)
   if (!prevVer) return
-  docVersionDiffLeftTitle.value = `V${prevVer.version} — ${prevVer.filename}`
-  docVersionDiffRightTitle.value = `V${ver.version} — ${ver.filename}`
+  docVersionDiffLeftTitle.value = `V${getDocDisplayVersion(prevVer)} — ${getDocDisplayFilename(prevVer)}`
+  docVersionDiffRightTitle.value = `V${getDocDisplayVersion(ver)} — ${getDocDisplayFilename(ver)}`
   docVersionDiffLeft.value = prevVer.raw_content || ''
   docVersionDiffRight.value = ver.raw_content || ''
   docVersionDiffLeftItem.value = prevVer as DocVersionListItem
@@ -3690,7 +3759,7 @@ const openDocDiff = (ver: DocVersion) => {
 }
 
 const canCompareDocVersion = (ver: DocVersion) =>
-  !('isVirtual' in ver && ver.isVirtual) && displayDocVersions.value.some(item => item.version === ver.version - 1 && !!item.raw_content)
+  !('isVirtual' in ver && ver.isVirtual) && displayDocVersions.value.some(item => getDocDisplayVersion(item) === getDocDisplayVersion(ver) - 1 && !!item.raw_content)
 
 const isDocVersionExpanded = (ver: DocVersionListItem) => expandedDocVersionKey.value === ver.key
 
@@ -3707,7 +3776,7 @@ const deleteDocVersion = async (ver: DocVersionListItem) => {
   if (!existingAppId.value || ver.isVirtual) return
   try {
     await ElMessageBox.confirm(
-      `确认删除文档版本 V${ver.version} 吗？删除后版本记录和关联变更计划将一并移除。`,
+      `确认删除文档版本 V${getDocDisplayVersion(ver)} 吗？删除后版本记录和关联变更计划将一并移除。`,
       '删除版本记录',
       { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' }
     )
@@ -3720,7 +3789,7 @@ const deleteDocVersion = async (ver: DocVersionListItem) => {
     await applicationApi.deleteDocVersion(existingAppId.value, ver.id)
     await loadLatestDocForApp(existingAppId.value)
     await fetchDocVersions()
-    ElMessage.success(`已删除版本 V${ver.version}`)
+    ElMessage.success(`已删除版本 V${getDocDisplayVersion(ver)}`)
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.detail || e?.message || '删除版本失败')
   } finally {
@@ -4224,6 +4293,7 @@ function resetConversationWorkspace() {
 
   activeView.value = 'builder'
   platformIframeUrl.value = ''
+  platformIframeKey.value = 0
   platformAppUrl.value = ''
   platformDirectUrl.value = ''
   platformIframeAppId.value = null
@@ -5055,9 +5125,7 @@ const handleDocUpload = async (e: Event) => {
 
   // 图片文件 → 作为附件附加到输入框
   if (file.type.startsWith('image/')) {
-    attachedImage.value = file
-    if (attachedImageUrl.value) URL.revokeObjectURL(attachedImageUrl.value)
-    attachedImageUrl.value = URL.createObjectURL(file)
+    attachPendingAttachmentFile(file, 'image')
     return
   }
 
@@ -5673,22 +5741,27 @@ const createConversation = async () => {
 }
 
 const sendMessage = async () => {
-  if (!canSendMessage.value) return
+  if (!canSendMessage.value || sendingMessage.value) return
+  sendingMessage.value = true
   const text = inputText.value.trim()
-  const imagePayload = pendingChatImage.value
-  const shouldUseBuilderConversation = (parseReady.value || !!existingAppId.value || hasPreviewContent.value) && currentAgent.value === 'requirements'
+  const attachmentPayload = pendingChatAttachment.value
+  const shouldUseBuilderConversation = !(attachmentPayload?.kind === 'image') && (parseReady.value || !!existingAppId.value || hasPreviewContent.value) && currentAgent.value === 'requirements'
   inputText.value = ''
-  pendingChatImage.value = null
+  pendingChatAttachment.value = null
   messages.push({
     id: Date.now(),
     role: 'user',
-    content: imagePayload
-      ? buildUserChatImageContent(text, imagePayload.previewUrl, imagePayload.file.name)
+    content: attachmentPayload
+      ? buildUserChatAttachmentContent(text, attachmentPayload)
       : text,
     created_at: ''
   })
   scrollToBottom()
   isTyping.value = true
+
+  if (!conversationId.value && pendingInitialConversationPromise) {
+    await pendingInitialConversationPromise
+  }
 
   // 如果还没有对话，先创建
   if (!conversationId.value) {
@@ -5697,6 +5770,7 @@ const sendMessage = async () => {
 
   if (!conversationId.value) {
     isTyping.value = false
+    sendingMessage.value = false
     messages.push({ id: Date.now(), role: 'assistant', agent: currentAgent.value, content: '创建对话失败，请重试。', created_at: '' })
     scrollToBottom()
     return
@@ -5718,115 +5792,155 @@ const sendMessage = async () => {
   // 调用后端API
   try {
     const token = localStorage.getItem('token')
-    const response = imagePayload
+    const useRequirementsApi = currentAgent.value === 'requirements' && !shouldUseBuilderConversation
+    const response = attachmentPayload
       ? await (() => {
           const formData = new FormData()
-          formData.append('conversation_id', String(conversationId.value))
           formData.append('message', text)
-          formData.append('file', imagePayload.file)
-          if (incrementalConfigPayload) {
+          formData.append('file', attachmentPayload.file)
+          if (!useRequirementsApi) {
+            formData.append('conversation_id', String(conversationId.value))
+          }
+          if (!useRequirementsApi && incrementalConfigPayload) {
             formData.append('current_config', JSON.stringify(incrementalConfigPayload))
           }
-          return fetch(`${API_PREFIX}/chat/send-with-file`, {
+          const url = useRequirementsApi
+            ? requirementsApi.chatWithFileUrl(conversationId.value)
+            : `${API_PREFIX}/chat/send-with-file`
+          return fetch(url, {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${token}` },
             body: formData
           })
         })()
-      : await fetch(`${API_PREFIX}/chat/send`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-          body: JSON.stringify({
-            conversation_id: conversationId.value,
-            message: text,
-            ...(incrementalConfigPayload ? { current_config: incrementalConfigPayload } : {})
+      : await (() => {
+          const url = useRequirementsApi
+            ? requirementsApi.chatUrl(conversationId.value)
+            : `${API_PREFIX}/chat/send`
+          const body = useRequirementsApi
+            ? { message: text }
+            : {
+                conversation_id: conversationId.value,
+                message: text,
+                ...(incrementalConfigPayload ? { current_config: incrementalConfigPayload } : {})
+              }
+          return fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+            body: JSON.stringify(body)
           })
-        })
+        })()
 
     if (!response.ok) throw new Error('发送失败')
 
     const reader = response.body?.getReader()
     const decoder = new TextDecoder()
     let assistantContent = ''
+    let sseBuffer = ''
+    let currentEvent = ''
 
     if (!reader) throw new Error('无法读取响应')
 
     while (true) {
       const { done, value } = await reader.read()
-      if (done) break
+      if (value) sseBuffer += decoder.decode(value, { stream: !done })
 
-      const chunk = decoder.decode(value, { stream: true })
-      const lines = chunk.split('\n')
+      const lines = sseBuffer.split('\n')
+      sseBuffer = done ? '' : (lines.pop() || '')
 
-      for (const line of lines) {
-        if (line.startsWith('data: ') || line.startsWith('data:')) {
-          const dataStr = line.startsWith('data: ') ? line.slice(6) : line.slice(5)
-          if (!dataStr.trim()) continue
-          try {
-            const parsed = JSON.parse(dataStr)
+      for (const rawLine of lines) {
+        const line = rawLine.trimEnd()
+        if (!line) {
+          currentEvent = ''
+          continue
+        }
+        if (line.startsWith('event:')) {
+          currentEvent = line.slice(6).trim()
+          continue
+        }
+        if (!line.startsWith('data:')) continue
 
-            // 统一 SSE 格式: {"type": "message|thinking|done", "data": "..."}
-            if (parsed.type === 'thinking') {
-              // AI 正在思考
-            } else if (parsed.type === 'message') {
-              isTyping.value = false
-              assistantContent += parsed.data
-              const lastMsg = messages[messages.length - 1]
-              if (lastMsg && lastMsg.role === 'assistant' && lastMsg.agent === currentAgent.value && lastMsg.id === -1) {
-                lastMsg.content = assistantContent
-              } else {
-                messages.push({ id: -1, role: 'assistant', agent: currentAgent.value, content: assistantContent, created_at: '' })
-              }
-              scrollToBottom()
-            } else if (parsed.type === 'error') {
-              isTyping.value = false
-              const detail = parsed.data || '模型返回异常，请切换模型后重试。'
-              messages.push({
-                id: Date.now(),
-                role: 'assistant',
-                agent: currentAgent.value,
-                content: `当前模型暂时不可用：${detail}`,
-                created_at: ''
-              })
-              scrollToBottom()
-              return
-            } else if (parsed.type === 'done') {
-              isTyping.value = false
-              const lastMsg = messages[messages.length - 1]
-              if (lastMsg && lastMsg.id === -1) lastMsg.id = Date.now()
-              if (isRequirementsMode.value) {
-                // 检测 AI 回复标记
-                const hasBuildTrigger = assistantContent.includes('<!-- TRIGGER_BUILD -->')
-                const hasDesignComplete = assistantContent.includes('<!-- DESIGN_COMPLETE -->')
-                if (hasBuildTrigger || hasDesignComplete) {
-                  // 清理标记
-                  if (lastMsg) {
-                    lastMsg.content = assistantContent
-                      .replace('<!-- TRIGGER_BUILD -->', '')
-                      .replace('<!-- DESIGN_COMPLETE -->', '')
-                      .trim()
-                  }
-                  if (hasBuildTrigger) {
-                    // 用户确认了，触发完整的生成流程
-                    triggerFullBuildPipeline()
-                  } else {
-                    // 设计文档完成，后台生成 JSON 等用户确认
-                    generateDocInBackground()
-                  }
+        const dataStr = line.startsWith('data: ') ? line.slice(6) : line.slice(5)
+        if (!dataStr.trim()) continue
+        try {
+          const parsed = JSON.parse(dataStr)
+          const normalizedType = parsed.type || currentEvent
+
+          if (normalizedType === 'thinking') {
+            continue
+          }
+
+          if (normalizedType === 'message' || normalizedType === 'chunk') {
+            const content = parsed.data ?? parsed.content ?? ''
+            if (!content) continue
+            assistantContent += content
+            const renderableAssistantContent = getRenderableContentText(assistantContent)
+            if (!renderableAssistantContent) {
+              isTyping.value = true
+              continue
+            }
+            isTyping.value = false
+            const lastMsg = messages[messages.length - 1]
+            if (lastMsg && lastMsg.role === 'assistant' && lastMsg.agent === currentAgent.value && lastMsg.id === -1) {
+              lastMsg.content = assistantContent
+            } else {
+              messages.push({ id: -1, role: 'assistant', agent: currentAgent.value, content: assistantContent, created_at: '' })
+            }
+            scrollToBottom()
+            continue
+          }
+
+          if (normalizedType === 'error') {
+            isTyping.value = false
+            const detail = parsed.data || parsed.message || '模型返回异常，请切换模型后重试。'
+            messages.push({
+              id: Date.now(),
+              role: 'assistant',
+              agent: currentAgent.value,
+              content: `当前模型暂时不可用：${detail}`,
+              created_at: ''
+            })
+            scrollToBottom()
+            sendingMessage.value = false
+            return
+          }
+
+          if (normalizedType === 'done') {
+            isTyping.value = false
+            const lastMsg = messages[messages.length - 1]
+            if (lastMsg && lastMsg.id === -1) lastMsg.id = Date.now()
+            if (isRequirementsMode.value) {
+              const hasBuildTrigger = assistantContent.includes('<!-- TRIGGER_BUILD -->')
+              const hasDesignComplete = assistantContent.includes('<!-- DESIGN_COMPLETE -->')
+              if (hasBuildTrigger || hasDesignComplete) {
+                if (lastMsg) {
+                  lastMsg.content = assistantContent
+                    .replace('<!-- TRIGGER_BUILD -->', '')
+                    .replace('<!-- DESIGN_COMPLETE -->', '')
+                    .trim()
                 }
-              } else {
-                const patchApplied = await extractPatchData(assistantContent)
-                if (!patchApplied) extractPreviewData(assistantContent)
-                if (!store.currentApp && assistantContent.length > 50) {
-                  const appNameMatch = assistantContent.match(/搭建.*?[**](.+?)[**]/)
-                  if (appNameMatch) {
-                    store.currentApp = { name: appNameMatch[1] || '', status: 'talking' }
-                  }
+                if (hasBuildTrigger) {
+                  triggerFullBuildPipeline()
+                } else {
+                  generateDocInBackground()
+                }
+              }
+            } else {
+              const patchApplied = await extractPatchData(assistantContent)
+              if (!patchApplied) extractPreviewData(assistantContent)
+              if (!store.currentApp && assistantContent.length > 50) {
+                const appNameMatch = assistantContent.match(/搭建.*?[**](.+?)[**]/)
+                if (appNameMatch) {
+                  store.currentApp = { name: appNameMatch[1] || '', status: 'talking' }
                 }
               }
             }
-          } catch (e) { /* ignore parse errors */ }
-        }
+          }
+        } catch (e) { /* ignore parse errors */ }
+      }
+
+      if (done) {
+        break
       }
     }
     if (!assistantContent) {
@@ -5846,7 +5960,8 @@ const sendMessage = async () => {
     messages.push({ id: Date.now(), role: 'assistant', agent: currentAgent.value, content: '发送失败，请重试。', created_at: '' })
     scrollToBottom()
   } finally {
-    if (!pendingChatImage.value && chatImageInputRef.value) {
+    sendingMessage.value = false
+    if (!pendingChatAttachment.value && chatImageInputRef.value) {
       chatImageInputRef.value.value = ''
     }
   }
@@ -6004,6 +6119,26 @@ const generateDocInBackground = async () => {
     }
 
     if (docResultForCard.value) {
+      const appConfig = await convertConfig(docResultForCard.value)
+      store.preview = {
+        appName: appConfig.appName || '',
+        roles: appConfig.roles || [],
+        dicts: appConfig.dicts || [],
+        models: appConfig.models || [],
+        forms: appConfig.forms || [],
+        workflows: appConfig.workflows || [],
+        permissions: appConfig.permissions || [],
+      }
+      if (appConfig.appCode) {
+        parsedAppCode.value = appConfig.appCode
+      }
+      if (!store.currentApp && appConfig.appName) {
+        store.currentApp = { name: appConfig.appName, status: 'draft' }
+      } else if (store.currentApp && appConfig.appName) {
+        store.currentApp = { ...store.currentApp, name: appConfig.appName }
+      }
+      parseReady.value = true
+      syncCurrentDocFromPreview('当前生成的设计文档', buildDocMarkdownFromPreview(appConfig))
       scrollToBottom()
     }
   } catch (e: any) {
@@ -6117,6 +6252,7 @@ const confirmDocAndBuild = async () => {
     }
     parsedAppCode.value = appConfig.appCode || ''
     parseReady.value = true
+    syncCurrentDocFromPreview('当前生成的设计文档', buildDocMarkdownFromPreview(appConfig))
 
     // Step 4: Create/update application record
     const appCode = appConfig.appCode || buildAppCode(appConfig.appName || '新应用')
@@ -6334,10 +6470,11 @@ const downloadCurrentDoc = () => {
 }
 
 const buildDocFilename = (ver?: Pick<DocVersion, 'filename' | 'version'> | null) => {
-  const baseName = ver?.filename || lastParsedFilename.value || `${store.preview.appName || '功能设计文档'}`
+  const baseName = getDocDisplayFilename(ver) || lastParsedFilename.value || `${store.preview.appName || '功能设计文档'}`
   const normalized = baseName.endsWith('.md') ? baseName.slice(0, -3) : baseName
-  if (ver?.version && !/[-_ ]v\d+$/i.test(normalized)) {
-    return `${normalized}-V${ver.version}.md`
+  const displayVersion = getDocDisplayVersion(ver)
+  if (displayVersion && !/[-_ ]v\d+$/i.test(normalized)) {
+    return `${normalized}-V${displayVersion}.md`
   }
   return baseName.endsWith('.md') ? baseName : `${baseName}.md`
 }
@@ -6363,14 +6500,73 @@ const downloadDocVersion = (ver: DocVersionListItem) => {
   downloadMarkdownContent(content, buildDocFilename(ver))
 }
 
-const formatContent = (t: string) => {
-  // 过滤 <think> 思考内容
-  let text = t.replace(/<think>[\s\S]*?<\/think>/g, '')
+const stripHiddenAssistantBlocks = (input: string) => {
+  let text = String(input || '')
+
+  while (true) {
+    const thinkStart = text.indexOf('<think>')
+    if (thinkStart === -1) break
+    const thinkEnd = text.indexOf('</think>', thinkStart + 7)
+    if (thinkEnd === -1) {
+      text = text.slice(0, thinkStart)
+      break
+    }
+    text = `${text.slice(0, thinkStart)}${text.slice(thinkEnd + 8)}`
+  }
+
+  return text
+}
+
+const getRenderableContentText = (input: string) => {
+  let text = stripHiddenAssistantBlocks(input)
   // 隐藏JSON代码块，只显示文字部分
   text = text.replace(/```json[\s\S]*?```/g, '')
   // 清理多余空行
-  text = text.replace(/\n{3,}/g, '\n\n').trim()
+  return text.replace(/\n{3,}/g, '\n\n').trim()
+}
+
+const formatContent = (t: string) => {
+  const text = getRenderableContentText(t)
   return text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>').replace(/• /g, '<span style="color:#818cf8;margin-right:4px">•</span> ')
+}
+
+let pendingInitialConversationPromise: Promise<void> | null = null
+
+const ensureFreshRequirementsConversation = async () => {
+  if (conversationId.value || existingAppId.value || store.pendingMarkdown || store.pendingFile) return
+
+  if (pendingInitialConversationPromise) {
+    await pendingInitialConversationPromise
+    return
+  }
+
+  resetConversationWorkspace()
+  currentAgent.value = 'requirements'
+  resetMessagesToWelcome()
+
+  pendingInitialConversationPromise = (async () => {
+    const token = localStorage.getItem('token')
+    const res = await fetch(`${API_PREFIX}/conversations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({
+        agent_type: 'requirements',
+        ...(selectedBuilderModelId.value != null ? { selected_llm_config_id: selectedBuilderModelId.value } : {}),
+      })
+    })
+    if (!res.ok) return
+
+    const data = await res.json()
+    conversationId.value = data.id
+    selectedConversationId.value = data.id
+    currentAgent.value = 'requirements'
+    router.replace(`/chat/${data.id}`)
+    resetMessagesToWelcome()
+  })().finally(() => {
+    pendingInitialConversationPromise = null
+  })
+
+  await pendingInitialConversationPromise
 }
 
 onMounted(async () => {
@@ -6443,6 +6639,7 @@ onMounted(async () => {
               messages.splice(0, messages.length)
               for (const msg of historyMessages) {
                 if (msg.role === 'system') continue
+                if (msg.role === 'assistant' && isAutoDocSummaryMessage(msg.content)) continue
                 messages.push({ id: msg.id, role: msg.role as any, agent: msg.role === 'assistant' ? 'builder' : undefined, content: msg.content, created_at: msg.created_at })
               }
               scrollToBottom()
@@ -6471,6 +6668,9 @@ onMounted(async () => {
             for (const msg of historyMessages) {
               if (msg.role === 'system') {
                 extractPreviewData(msg.content)
+                continue
+              }
+              if (msg.role === 'assistant' && isAutoDocSummaryMessage(msg.content)) {
                 continue
               }
               messages.push({
@@ -6571,6 +6771,7 @@ onMounted(async () => {
               messages.splice(0, messages.length)
               for (const msg of historyMessages) {
                 if (msg.role === 'system') continue
+                if (msg.role === 'assistant' && isAutoDocSummaryMessage(msg.content)) continue
                 messages.push({ id: msg.id, role: msg.role as any, agent: msg.role === 'assistant' ? 'builder' : undefined, content: msg.content, created_at: msg.created_at })
               }
             }
@@ -6583,26 +6784,7 @@ onMounted(async () => {
   // ── 新对话：自动进入 requirements 模式 ──
   // 只有真正“新建会话”时才创建 requirements，对已有 app 不要覆盖恢复结果
   if (!conversationId.value && !existingAppId.value && !store.pendingMarkdown && !store.pendingFile) {
-    resetConversationWorkspace()
-    currentAgent.value = 'requirements'
-    resetMessagesToWelcome()
-    const token = localStorage.getItem('token')
-    const res = await fetch(`${API_PREFIX}/conversations`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-      body: JSON.stringify({
-        agent_type: 'requirements',
-        ...(selectedBuilderModelId.value != null ? { selected_llm_config_id: selectedBuilderModelId.value } : {}),
-      })
-    })
-    if (res.ok) {
-      const data = await res.json()
-      conversationId.value = data.id
-      selectedConversationId.value = data.id
-      currentAgent.value = 'requirements'
-      router.replace(`/chat/${data.id}`)
-      resetMessagesToWelcome()
-    }
+    await ensureFreshRequirementsConversation()
   }
 
   const prompt = route.query.prompt as string
@@ -6672,6 +6854,7 @@ watch(() => route.query.app_id, async (newAppId, oldAppId) => {
   completedChangePlans.value = []
   activeView.value = 'builder'
   platformIframeUrl.value = ''
+  platformIframeKey.value = 0
   platformAppUrl.value = ''
   platformDirectUrl.value = ''
   platformIframeAppId.value = null
@@ -6712,6 +6895,7 @@ watch(() => route.query.app_id, async (newAppId, oldAppId) => {
         if (historyMessages?.length) {
           for (const msg of historyMessages) {
             if (msg.role === 'system') continue
+            if (msg.role === 'assistant' && isAutoDocSummaryMessage(msg.content)) continue
             messages.push({ id: msg.id, role: msg.role as any, agent: msg.role === 'assistant' ? 'builder' : undefined, content: msg.content, created_at: msg.created_at })
           }
           scrollToBottom()
@@ -6734,7 +6918,7 @@ watch(() => route.params.id, (newConversationId, oldConversationId) => {
 })
 
 onBeforeUnmount(() => {
-  clearPendingChatImage()
+  clearPendingChatAttachment()
   clearPlatformIframeRepairTimer()
 })
 
@@ -7398,23 +7582,87 @@ watch(conversationId, (id) => {
 .chat-inline-upload {
   margin-top: 8px;
   padding: 10px;
-  border-radius: 12px;
+  border-radius: 14px;
   background: rgba(255, 255, 255, 0.14);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  max-width: min(320px, 100%);
+}
+.chat-inline-upload.file {
+  padding: 12px;
 }
 .bubble-content.assistant .chat-inline-upload {
   background: rgba(99, 102, 241, 0.08);
+  border-color: rgba(129, 140, 248, 0.16);
 }
-.chat-inline-upload-label {
+.chat-inline-upload-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
   margin-bottom: 8px;
+}
+.chat-inline-upload-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  background: rgba(255, 255, 255, 0.18);
+  color: inherit;
+  flex-shrink: 0;
+}
+.bubble-content.assistant .chat-inline-upload-badge {
+  background: rgba(99, 102, 241, 0.12);
+  color: var(--t-brand-light);
+}
+.chat-inline-upload-name {
+  min-width: 0;
   font-size: 12px;
   font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .chat-inline-upload-image {
   display: block;
-  max-width: min(280px, 100%);
-  max-height: 220px;
-  border-radius: 10px;
+  width: 100%;
+  max-width: min(300px, 100%);
+  max-height: 240px;
+  border-radius: 12px;
   object-fit: cover;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.14);
+}
+.bubble-content.assistant .chat-inline-upload-image {
+  border-color: rgba(129, 140, 248, 0.14);
+}
+.chat-inline-upload-foot {
+  margin-top: 8px;
+  font-size: 11px;
+  line-height: 1.5;
+  opacity: 0.82;
+}
+.chat-inline-upload-file-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.08);
+}
+.bubble-content.assistant .chat-inline-upload-file-row {
+  background: rgba(99, 102, 241, 0.06);
+}
+.chat-inline-upload-file-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+.chat-inline-upload-file-tip {
+  min-width: 0;
+  font-size: 12px;
+  opacity: 0.88;
 }
 @keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes aiPulse {
@@ -7522,6 +7770,18 @@ watch(conversationId, (id) => {
   border-radius: 10px;
   object-fit: cover;
   box-shadow: 0 8px 20px rgba(15, 23, 42, 0.12);
+  flex-shrink: 0;
+}
+.chat-attachment-preview-file {
+  width: 48px;
+  height: 48px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  background: rgba(99, 102, 241, 0.12);
+  border: 1px solid rgba(129, 140, 248, 0.18);
   flex-shrink: 0;
 }
 .chat-attachment-preview-meta {

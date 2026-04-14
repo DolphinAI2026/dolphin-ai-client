@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+import tempfile
 from typing import Annotated, Optional
 from fastapi import APIRouter, Depends, HTTPException, File, Form, UploadFile
 from sqlalchemy import select
@@ -64,6 +65,93 @@ async def _stream_with_tenant_llm(cfg: dict | None, messages: list, max_retries:
         raise last_err
 
 router = APIRouter(prefix="/chat", tags=["聊天"])
+
+
+async def _parse_uploaded_document(file: UploadFile) -> str:
+    """尽量从常见文档中提取可读文本，提取失败时返回空串。"""
+    filename = file.filename or ""
+    ext = os.path.splitext(filename)[1].lower()
+    content_type = (file.content_type or "").lower()
+    content = await file.read()
+
+    text_like_exts = {
+        ".md", ".markdown", ".txt", ".csv", ".json", ".yaml", ".yml", ".xml", ".html", ".htm"
+    }
+    if ext in text_like_exts or content_type.startswith("text/"):
+        return content.decode("utf-8", errors="ignore")
+
+    suffix = ext or ".tmp"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp.write(content)
+        tmp_path = tmp.name
+
+    try:
+        if ext == ".pdf":
+            try:
+                import pdfplumber
+                parts: list[str] = []
+                with pdfplumber.open(tmp_path) as pdf:
+                    for page in pdf.pages:
+                        text = page.extract_text()
+                        if text:
+                            parts.append(text)
+                return "\n".join(parts)
+            except Exception:
+                return ""
+
+        if ext in {".docx", ".doc"}:
+            try:
+                from docx import Document
+                doc = Document(tmp_path)
+                parts: list[str] = []
+                for para in doc.paragraphs:
+                    if para.text.strip():
+                        parts.append(para.text.strip())
+                for table in doc.tables:
+                    for row in table.rows:
+                        row_text = " | ".join(cell.text.strip() for cell in row.cells if cell.text.strip())
+                        if row_text:
+                            parts.append(row_text)
+                return "\n".join(parts)
+            except Exception:
+                return ""
+
+        if ext in {".xlsx", ".xls"}:
+            try:
+                from openpyxl import load_workbook
+                wb = load_workbook(tmp_path, data_only=True)
+                parts: list[str] = []
+                for ws in wb.worksheets:
+                    parts.append(f"## Sheet: {ws.title}")
+                    for row in ws.iter_rows(values_only=True):
+                        values = [str(v).strip() for v in row if v is not None and str(v).strip()]
+                        if values:
+                            parts.append(" | ".join(values))
+                return "\n".join(parts)
+            except Exception:
+                return ""
+
+        if ext in {".pptx", ".ppt"}:
+            try:
+                from pptx import Presentation
+                prs = Presentation(tmp_path)
+                parts: list[str] = []
+                for idx, slide in enumerate(prs.slides, start=1):
+                    slide_texts: list[str] = []
+                    for shape in slide.shapes:
+                        text = getattr(shape, "text", "")
+                        if text and text.strip():
+                            slide_texts.append(text.strip())
+                    if slide_texts:
+                        parts.append(f"## Slide {idx}")
+                        parts.extend(slide_texts)
+                return "\n".join(parts)
+            except Exception:
+                return ""
+
+        return ""
+    finally:
+        os.unlink(tmp_path)
 
 BUILDER_SYSTEM_PROMPT = """你是 aPaaS Builder AI，得帆云低代码平台的智能搭建助手。你的任务是通过多轮对话帮用户理清应用需求，然后生成结构化的应用配置。
 
@@ -435,23 +523,28 @@ async def send_message_with_file(
         raise HTTPException(status_code=404, detail="对话不存在")
 
     image_data_url = ""
+    file_content = ""
     file_name = ""
     if file and file.filename:
         file_name = file.filename
         ext = os.path.splitext(file_name)[1].lower()
-        if ext not in _IMAGE_EXTS:
-            raise HTTPException(status_code=400, detail="当前仅支持上传 png/jpg/jpeg/gif/webp 图片")
-        raw = await file.read()
-        mime = _MIME_MAP.get(ext, "image/png")
-        b64 = base64.b64encode(raw).decode()
-        image_data_url = f"data:{mime};base64,{b64}"
+        if ext in _IMAGE_EXTS:
+            raw = await file.read()
+            mime = _MIME_MAP.get(ext, "image/png")
+            b64 = base64.b64encode(raw).decode()
+            image_data_url = f"data:{mime};base64,{b64}"
+        else:
+            file_content = await _parse_uploaded_document(file)
 
-    if not message.strip() and not image_data_url:
+    if not message.strip() and not image_data_url and not file_name:
         raise HTTPException(status_code=400, detail="消息不能为空")
 
     db_content = message.strip()
-    if file_name:
-        db_content = f"{db_content}\n\n[上传截图：{file_name}]".strip()
+    if file_content:
+        db_content = f"{db_content}\n\n[上传文件：{file_name}]\n\n{file_content}".strip()
+    elif file_name:
+        tag = "上传截图" if image_data_url else "上传文件"
+        db_content = f"{db_content}\n\n[{tag}：{file_name}]".strip()
 
     user_message = Message(
         conversation_id=conversation.id,
@@ -462,7 +555,7 @@ async def send_message_with_file(
     await db.commit()
 
     if conversation.title in ("新对话", "需求分析", "智能开发") or conversation.title.startswith("新对话"):
-        short_title = (message.strip() or f"截图：{file_name}").replace("\n", " ")[:30]
+        short_title = (message.strip() or f"文件：{file_name}").replace("\n", " ")[:30]
         if short_title:
             conversation.title = short_title
             await db.commit()
@@ -509,6 +602,8 @@ async def send_message_with_file(
         if file_name:
             last_content.append({"type": "text", "text": f"请结合这张截图一起分析，截图文件名：{file_name}"})
         last_content.append({"type": "image_url", "image_url": {"url": image_data_url}})
+    elif file_content:
+        last_content = db_content
     else:
         last_content = db_content
     llm_messages.append({"role": "user", "content": last_content})

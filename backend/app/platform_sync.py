@@ -182,29 +182,77 @@ def _convert_models(remote_models: List[Dict]) -> List[Dict]:
         fields = []
         raw_fields = m.get("fields", m.get("dataModelFields", []))
         for f in raw_fields:
+            field_name = (
+                f.get("fieldName")
+                or f.get("name")
+                or f.get("columnName")
+                or f.get("displayName")
+                or ""
+            )
+            field_code = (
+                f.get("fieldCode")
+                or f.get("code")
+                or f.get("columnCode")
+                or field_name
+            )
+            database_field_type = (
+                f.get("databaseFieldType")
+                or f.get("database_field_type")
+                or f.get("dbType")
+                or ""
+            )
+            field_length = (
+                f.get("maxLength")
+                or f.get("length")
+                or f.get("columnLength")
+                or ""
+            )
             field = {
-                "name": f.get("fieldName", ""),
-                "code": f.get("fieldCode", f.get("code", "")),
+                "name": field_name,
+                "code": field_code,
                 "type": _guess_field_type(
                     f.get("componentType", ""),
                     f.get("fieldType", ""),
+                    f.get("chooseType", ""),
                 ),
-                "required": f.get("required", False),
+                "required": bool(f.get("required", False)),
+                "hidden": bool(f.get("hidden", False)),
+                "readonly": bool(f.get("readonly", f.get("readOnly", False))),
             }
+            if database_field_type:
+                field["databaseFieldType"] = str(database_field_type)
+                field["database_field_type"] = str(database_field_type)
+            if field_length not in (None, ""):
+                field["maxLength"] = str(field_length)
+                field["max_length"] = str(field_length)
+                field["length"] = str(field_length)
             # 字典绑定
             if f.get("dictionaryCode"):
                 field["dict"] = f["dictionaryCode"]
+                field["dictCode"] = f["dictionaryCode"]
             # 关联模型
             if f.get("refModelCode"):
                 field["ref"] = {
                     "model": f["refModelCode"],
                     "field": f.get("refFieldCode", ""),
                 }
+                field["refModelCode"] = f["refModelCode"]
+                if f.get("refFieldCode"):
+                    field["refFieldCode"] = f.get("refFieldCode", "")
+                    field["refDisplayFieldCode"] = f.get("refFieldCode", "")
+            if f.get("fieldComment") or f.get("comment") or f.get("description"):
+                field["comment"] = f.get("fieldComment") or f.get("comment") or f.get("description")
+                field["description"] = field["comment"]
             fields.append(field)
 
         models.append({
             "name": m.get("modelName", m.get("name", "")),
             "code": m.get("modelCode", m.get("code", "")),
+            "description": m.get("modelDescription", m.get("description", "")),
+            "table_type": m.get("tableType", m.get("table_type", "主表")),
+            "tableType": m.get("tableType", m.get("table_type", "主表")),
+            "parent_model_code": m.get("parentModelCode", m.get("parent_model_code", "")),
+            "parentModelCode": m.get("parentModelCode", m.get("parent_model_code", "")),
             "fields": fields,
         })
     return models
@@ -264,8 +312,8 @@ async def sync_from_platform_full(
     )
     dict_id_to_code = _build_dict_id_map(form_configs, dicts)
 
-    # 模型：从 detailPageConfigById 提取（含子表、required、选项绑定）
-    models = _build_models_from_form_configs(form_configs, dict_id_to_code)
+    # 模型：直接走平台数据模型/字段接口，避免把表单结构误读成模型结构
+    models = _convert_models(remote.get("models", []))
     forms = _build_forms_from_form_configs(form_configs, dict_id_to_code)
 
     # 权限

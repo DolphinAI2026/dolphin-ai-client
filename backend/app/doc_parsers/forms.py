@@ -338,9 +338,9 @@ def _parse_aggregate_tables(section_text: str, models: List[dict]) -> Tuple[List
         return [], errors
 
     form_list_rows = None
-    main_field_rows = None
-    subtable_def_rows = None
-    subfield_rows = None
+    main_field_rows: list[dict] = []
+    subtable_def_rows: list[dict] = []
+    subfield_rows: list[dict] = []
 
     for table in all_tables:
         if not table:
@@ -349,26 +349,23 @@ def _parse_aggregate_tables(section_text: str, models: List[dict]) -> Tuple[List
         if form_list_rows is None and "表单名称" in first_row and "绑定主表模型" in first_row:
             form_list_rows = table
         elif (
-            main_field_rows is None
-            and "表单名称" in first_row
+            "表单名称" in first_row
             and "字段编码" in first_row
             and "子表区域名称" not in first_row
         ):
-            main_field_rows = table
+            main_field_rows.extend(table)
         elif (
-            subtable_def_rows is None
-            and "表单名称" in first_row
+            "表单名称" in first_row
             and "子表区域名称" in first_row
             and "绑定模型" in first_row
         ):
-            subtable_def_rows = table
+            subtable_def_rows.extend(table)
         elif (
-            subfield_rows is None
-            and "表单名称" in first_row
+            "表单名称" in first_row
             and "子表区域名称" in first_row
             and "字段编码" in first_row
         ):
-            subfield_rows = table
+            subfield_rows.extend(table)
 
     if not form_list_rows:
         return [], errors
@@ -403,7 +400,7 @@ def _parse_aggregate_tables(section_text: str, models: List[dict]) -> Tuple[List
             errors.append(f"表单 '{form_name}'：模型编码 '{model_code}' 未在数据模型中定义")
             continue
 
-        form_main_rows = [r for r in (main_field_rows or []) if (r.get("表单名称") or "").strip() == form_name]
+        form_main_rows = [r for r in main_field_rows if (r.get("表单名称") or "").strip() == form_name]
         components = _build_components(
             form_main_rows,
             form_name,
@@ -417,7 +414,7 @@ def _parse_aggregate_tables(section_text: str, models: List[dict]) -> Tuple[List
         )
 
         current_sub_defs = []
-        for sub_idx, sub_row in enumerate(subtable_def_rows or []):
+        for sub_idx, sub_row in enumerate(subtable_def_rows):
             if (sub_row.get("表单名称") or "").strip() != form_name:
                 continue
             sub_model_code = (sub_row.get("绑定模型") or sub_row.get("子表模型编码") or "").strip().lower()
@@ -435,7 +432,7 @@ def _parse_aggregate_tables(section_text: str, models: List[dict]) -> Tuple[List
             if not fields_map:
                 continue
             current_sub_rows = [
-                r for r in (subfield_rows or [])
+                r for r in subfield_rows
                 if (r.get("表单名称") or "").strip() == form_name
                 and (r.get("子表区域名称") or "").strip() == sub["display_name"]
             ]

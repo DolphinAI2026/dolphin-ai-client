@@ -293,8 +293,62 @@ def _component_data_selection_meta_is_stale(component: dict | None) -> bool:
     return False
 
 
+def _component_type_mismatch_is_stale(parsed_config: dict | None) -> bool:
+    if not isinstance(parsed_config, dict):
+        return False
+
+    model_field_map: dict[tuple[str, str], dict] = {}
+    for model in parsed_config.get("models", []) or []:
+        if not isinstance(model, dict):
+            continue
+        model_code = str(model.get("code") or "").strip()
+        if not model_code:
+            continue
+        for field in model.get("fields", []) or []:
+            if not isinstance(field, dict):
+                continue
+            field_code = str(field.get("code") or "").strip()
+            if field_code:
+                model_field_map[(model_code, field_code)] = field
+
+    for form in parsed_config.get("forms", []) or []:
+        if not isinstance(form, dict):
+            continue
+        for component in form.get("components", []) or []:
+            if not isinstance(component, dict):
+                continue
+
+            model_field = str(component.get("modelField") or component.get("model_field") or "").strip()
+            model_code = str(component.get("modelCode") or component.get("model_code") or "").strip()
+            field_code = str(component.get("code") or component.get("field_code") or "").strip()
+            if "." in model_field:
+                model_code, field_code = model_field.split(".", 1)
+            if not model_code or not field_code:
+                continue
+
+            field_meta = model_field_map.get((model_code, field_code))
+            if not isinstance(field_meta, dict):
+                continue
+
+            field_type = str(field_meta.get("type") or "").strip()
+            has_dict = bool(field_meta.get("dict"))
+            has_ref = bool(field_meta.get("ref") or field_meta.get("sub_code"))
+            expected_selector = field_type in {"数据单选", "数据选择", "关联表单"} or has_ref
+            expected_option = field_type in {"下拉单选", "下拉多选", "单选框", "复选框"} or has_dict
+            if not (expected_selector or expected_option):
+                continue
+
+            component_type = str(component.get("componentType") or component.get("component_type") or "").strip()
+            if component_type in {"", "FORM_TEXT_INPUT", "FORM_TEXTAREA_INPUT", "FORM_TEXTAREA"}:
+                return True
+
+    return False
+
+
 def _parsed_config_is_stale(parsed_config: dict | None) -> bool:
     if not isinstance(parsed_config, dict):
+        return True
+    if _component_type_mismatch_is_stale(parsed_config):
         return True
     for form in parsed_config.get("forms", []) or []:
         if not isinstance(form, dict):
@@ -319,22 +373,40 @@ async def _ensure_doc_version_parsed_config(
         except Exception:
             parsed = None
 
-    if parsed is not None and not _parsed_config_is_stale(parsed):
+    raw_content = str(version.raw_content or "").strip()
+
+    if raw_content and not _doc_content_looks_like_template(raw_content):
+        try:
+            from app.doc_pipeline import parse_document
+
+            reparsed = await parse_document(raw_content)
+            if reparsed:
+                version.parsed_config = _dump_parsed_config(reparsed)
+                await db.flush()
+                return _compact_preview_payload(reparsed)
+        except Exception:
+            logger.warning("文档版本重解析失败 id=%s", version.id, exc_info=True)
+
+    parsed_is_stale = parsed is None or _parsed_config_is_stale(parsed)
+    raw_needs_reparse = False
+
+    if parsed is not None and not parsed_is_stale and raw_content and not _doc_content_looks_like_template(raw_content):
+        try:
+            data = _preview_data(parsed)
+            rendered = _render_doc_content_from_config(
+                data.get("appName", ""),
+                data.get("appCode") or data.get("app_code") or "",
+                parsed,
+            )
+            raw_needs_reparse = _normalize_doc_compare_text(rendered) != _normalize_doc_compare_text(raw_content)
+        except Exception:
+            raw_needs_reparse = False
+
+    if parsed is not None and not parsed_is_stale and not raw_needs_reparse:
         return parsed
 
-    if not version.raw_content:
+    if not raw_content:
         return parsed
-
-    try:
-        from app.doc_pipeline import parse_document
-
-        reparsed = await parse_document(version.raw_content)
-        if reparsed:
-            version.parsed_config = _dump_parsed_config(reparsed)
-            await db.flush()
-            return _compact_preview_payload(reparsed)
-    except Exception:
-        logger.warning("文档版本重解析失败 id=%s", version.id, exc_info=True)
 
     return parsed
 
@@ -343,6 +415,10 @@ def _preview_data(config: dict | None) -> dict:
     if not isinstance(config, dict):
         return {}
     return config.get("data", config)
+
+
+def _normalize_doc_compare_text(content: str | None) -> str:
+    return "\n".join(str(content or "").strip().splitlines()).strip()
 
 
 def _doc_content_looks_like_template(content: str | None) -> bool:
@@ -380,6 +456,10 @@ async def _ensure_doc_version_rendered_content(
 ) -> str:
     raw_content = str(version.raw_content or "").strip()
 
+    if raw_content and not _doc_content_looks_like_template(raw_content):
+        await _ensure_doc_version_parsed_config(db, version)
+        return raw_content
+
     parsed = await _ensure_doc_version_parsed_config(db, version)
     if isinstance(parsed, dict):
         app_name = ""
@@ -401,8 +481,6 @@ async def _ensure_doc_version_rendered_content(
         if rendered:
             return rendered
 
-    if raw_content and not _doc_content_looks_like_template(raw_content):
-        return raw_content
     return raw_content
 
 
@@ -1715,37 +1793,9 @@ async def upload_design_doc(
             name = name.replace(suffix, '')
         data["appName"] = name.strip() or data["appName"]
 
-    # 生成AI理解摘要
-    models_count = len(data.get("models", []))
-    roles_count = len(data.get("roles", []))
-    dicts_count = len(data.get("dicts", []))
-    workflows_count = len(data.get("workflows", []))
-
-    # 列出所有字典
-    dicts_list = []
-    for d in data.get("dicts", []):
-        dict_name = d.get("name", "")
-        dict_code = d.get("code", "")
-        options_count = len(d.get("options", []))
-        if options_count > 0:
-            dicts_list.append(f"  - {dict_name}（{dict_code}）：{options_count}个选项")
-        else:
-            dicts_list.append(f"  - {dict_name}（{dict_code}）：⚠️ 空字典，需要补充选项")
-
-    summary = f"我已经理解了你的设计文档《{file.filename}》，识别出：\n\n"
-    summary += f"- **{models_count} 个业务表单**\n"
-    summary += f"- **{roles_count} 个角色**\n"
-    summary += f"- **{dicts_count} 个数据字典**\n"
-    if dicts_list:
-        summary += "\n数据字典详情：\n" + "\n".join(dicts_list) + "\n"
-    if workflows_count > 0:
-        summary += f"- **{workflows_count} 个流程**\n"
-    summary += f"\n全部设计里面是不是有缺少了？好像不太完整少了一些数据字典？你可以告诉我需要调整的地方，或者直接点击\"开始生成\"。"
-
     return {
         "type": "preview",
         "data": data,
-        "summary": summary,
         "document_content": text
     }
 
@@ -1766,7 +1816,7 @@ async def upload_doc_with_conversation(
 
     事件格式：
     - event: progress / data: {"message": "..."} — 解析进度
-    - event: done / data: {"conversation_id":N, "summary":"...", "preview":{...}} — 完成
+    - event: done / data: {"conversation_id":N, "preview":{...}} — 完成
     - event: error / data: {"message": "..."} — 失败
     """
     if not file.filename or not file.filename.endswith('.md'):
@@ -1984,17 +2034,9 @@ async def upload_doc_with_conversation(
             doc_raw_msg = json.dumps({"type": "doc_raw", "filename": fname, "content": text}, ensure_ascii=False)
             session.add(Message(conversation_id=conv_id, role="system", content=doc_raw_msg))
 
-            # 生成摘要
             models_count = len(data.get("models", []))
             roles_count = len(data.get("roles", []))
             dicts_count = len(data.get("dicts", []))
-
-            dicts_list = []
-            for d in data.get("dicts", []):
-                opts_count = len(d.get("options", []))
-                tag = f"{opts_count}个选项" if opts_count > 0 else "⚠️ 空字典"
-                dicts_list.append(f"  - {d.get('name', '')}（{d.get('code', '')}）：{tag}")
-
             if is_incremental and v1_parsed_config:
                 # 增量模式：用 config_diff 展示差异（会自动完成编码继承）
                 v1_for_diff = v1_parsed_config
@@ -2002,22 +2044,6 @@ async def upload_doc_with_conversation(
                 # 使用编码继承后的配置，确保 V1 的 code 被保留
                 if resource_diff.normalized_new_config:
                     data = resource_diff.normalized_new_config
-                diff_summary_text = resource_diff.summary or "文档更新解析完成"
-
-                summary = f"文档《{fname}》已更新（V{v1_doc_info['version'] + 1}），增量解析完成：\n\n"
-                summary += diff_summary_text + "\n\n"
-                summary += f"当前配置：**{models_count} 个表单**、**{roles_count} 个角色**、**{dicts_count} 个字典**\n"
-                summary += "\n你可以告诉我需要调整的地方，或者直接说\"开始生成\"。"
-            else:
-                summary = f"我已经理解了设计文档《{fname}》，识别出：\n\n"
-                summary += f"- **{models_count} 个业务表单**\n"
-                summary += f"- **{roles_count} 个角色**\n"
-                summary += f"- **{dicts_count} 个数据字典**\n"
-                if dicts_list:
-                    summary += "\n数据字典详情：\n" + "\n".join(dicts_list) + "\n"
-                summary += "\n你可以告诉我需要调整的地方，或者直接说\"开始生成\"。"
-
-            session.add(Message(conversation_id=conv_id, role="assistant", content=summary))
 
             # 保存完整配置 JSON 作为 system 消息（刷新页面时可恢复）
             config_msg = '```json\n' + _dump_preview_config(data) + '\n```'
@@ -2061,7 +2087,6 @@ async def upload_doc_with_conversation(
 
             done_data = {
                 "conversation_id": conv_id,
-                "summary": summary,
                 "preview": data,
                 "rendered_doc": rendered_doc,
                 "parse_meta": parse_meta,

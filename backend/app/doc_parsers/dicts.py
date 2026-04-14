@@ -69,7 +69,7 @@ def parse(section_text: str) -> Tuple[List[dict], List[str]]:
             if not opt_code:
                 errors.append(f"字典 '{name}' 选项 '{opt_name}'：缺少选项编码")
                 continue
-            if not re.match(r'^[a-zA-Z][a-zA-Z0-9_]*$', opt_code):
+            if not re.match(r'^[a-zA-Z0-9_]+$', opt_code):
                 errors.append(f"字典 '{name}' 选项 '{opt_name}'：编码 '{opt_code}' 不合规")
                 continue
             if opt_code in seen_opt_codes:

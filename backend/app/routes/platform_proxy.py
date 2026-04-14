@@ -34,6 +34,7 @@ _proxy_state: dict = {
     "token": "",
     "tenant_id": "",
     "username": "",
+    "password": "",
 }
 
 _http_client: Optional[httpx.AsyncClient] = None
@@ -57,6 +58,7 @@ async def _refresh_env_token(env: PlatformEnv) -> bool:
         _proxy_state["token"] = token
         _proxy_state["tenant_id"] = env.platform_tenant_id
         _proxy_state["username"] = env.username or ""
+        _proxy_state["password"] = password
         return True
     except Exception as e:
         logger.warning(f"Failed to refresh platform token: {type(e).__name__}: {e}")
@@ -179,10 +181,10 @@ _HEADER_SELECTORS = (
 )
 
 def _inject_sso_script(html: str, vuex_state: str) -> str:
-    """在 </head> 前注入 SSO + 强制显示导航的脚本和样式"""
+    """在 </head> 前注入 SSO token + 强制显示导航栏"""
     escaped = json.dumps(vuex_state)
 
-    # CSS 注入在 </head> 前，确保比平台自身样式优先级更高（后声明的 !important 胜出）
+    # CSS：比平台自身样式晚声明，!important 确保覆盖平台的 iframe 隐藏规则
     style = (
         "\n<style id='apaas-builder-overrides'>\n"
         + ",\n".join(s.strip() for s in _HEADER_SELECTORS.split(",")) + " {\n"
@@ -194,11 +196,10 @@ def _inject_sso_script(html: str, vuex_state: str) -> str:
         "</style>\n"
     )
 
-    # JS：覆盖 iframe 检测属性 + SSO token + MutationObserver 防止被 JS 再次隐藏
     script = (
         "\n<script>\n"
         "(function(){\n"
-        # 覆盖所有 iframe 检测属性
+        # 伪装成非 iframe，阻止平台触发隐藏导航逻辑
         "  ['top','parent','frameElement'].forEach(function(k){\n"
         "    try{\n"
         "      Object.defineProperty(window,k,{\n"
@@ -207,12 +208,13 @@ def _inject_sso_script(html: str, vuex_state: str) -> str:
         "      });\n"
         "    }catch(e){}\n"
         "  });\n"
-        # SSO token
+        # SSO：写入 Vuex token，平台初始化时自动读取，无需手动登录
         "  try{\n"
         "    localStorage.setItem('__vuex__local'," + escaped + ");\n"
+        "    sessionStorage.setItem('__vuex__session'," + escaped + ");\n"
         "    console.log('[SSO] token injected');\n"
         "  }catch(ex){console.error('[SSO]',ex)}\n"
-        # MutationObserver：监听 style + class 变化，防止平台 JS 再次隐藏
+        # MutationObserver：防止平台 JS 动态隐藏导航栏
         "  var SEL='" + _HEADER_SELECTORS + "';\n"
         "  function forceShow(el){\n"
         "    el.style.removeProperty('display');\n"
@@ -269,6 +271,7 @@ async def proxy_init(request: Request):
     _proxy_state["token"] = body.get("token", "")
     _proxy_state["tenant_id"] = body.get("tenant_id", "")
     _proxy_state["username"] = body.get("username", "")
+    _proxy_state["password"] = body.get("password", "")
     logger.info(f"Proxy initialized: host={_proxy_state['host']}, tenant={_proxy_state['tenant_id']}")
     return {"ok": True}
 
@@ -311,30 +314,29 @@ async def proxy_entry(
                 headers={"X-Proxy-Error": "not-deployed"},
             )
 
-        # 查环境：按优先级依次查 应用绑定 → 默认环境 → 任意已连接环境
+        # 辅助搭建必须严格使用应用绑定的平台环境，避免串到默认环境/其他已连接环境
         env = None
         if app.platform_env_id:
-            r = await db.execute(select(PlatformEnv).where(PlatformEnv.id == app.platform_env_id))
-            env = r.scalar_one_or_none()
-        if not env or not env.token:
-            r = await db.execute(
-                select(PlatformEnv).where(PlatformEnv.tenant_id == ctx.tenant_id, PlatformEnv.is_default == True)
-            )
-            env = r.scalar_one_or_none()
-        if not env or not env.token:
             r = await db.execute(
                 select(PlatformEnv).where(
+                    PlatformEnv.id == app.platform_env_id,
                     PlatformEnv.tenant_id == ctx.tenant_id,
-                    PlatformEnv.status == "connected",
-                ).limit(1)
+                )
             )
             env = r.scalar_one_or_none()
-        if not env:
+            if not env:
+                return Response(
+                    content=_error_html("应用绑定环境不存在", "当前应用绑定的平台环境不存在，请重新选择环境后再进入辅助搭建"),
+                    media_type="text/html",
+                    status_code=404,
+                    headers={"X-Proxy-Error": "bound-env-not-found"},
+                )
+        else:
             return Response(
-                content=_error_html("平台环境未配置", "请先在「连接平台」中添加并连接一个平台环境"),
+                content=_error_html("应用未绑定环境", "当前应用还没有绑定平台环境，请先重新选择环境并完成一次生成"),
                 media_type="text/html",
-                status_code=503,
-                headers={"X-Proxy-Error": "env-not-configured"},
+                status_code=409,
+                headers={"X-Proxy-Error": "env-not-bound"},
             )
 
         # 有账号密码的环境每次都刷新 token，确保不用过期 token
@@ -344,7 +346,7 @@ async def proxy_entry(
 
         if not refreshed and not env.token:
             return Response(
-                content=_error_html("平台环境未登录", "平台 Token 已失效，请重新连接平台环境"),
+                content=_error_html("平台环境未登录", f"绑定环境「{env.env_name}」的登录态已失效，请在环境管理中重新登录该环境"),
                 media_type="text/html",
                 status_code=401,
                 headers={"X-Proxy-Error": "env-not-logged-in"},
@@ -355,12 +357,19 @@ async def proxy_entry(
 
         host = env.base_url.rstrip("/").replace("/backend", "")
         tid = env.platform_tenant_id
+        password = ""
+        if env.password_enc:
+            try:
+                password = decrypt_password(env.password_enc)
+            except Exception:
+                password = ""
 
     # 保存代理状态（后续 /platform/ 和 /backend/ 请求用）
     _proxy_state["host"] = host
     _proxy_state["token"] = env.token
     _proxy_state["tenant_id"] = tid
     _proxy_state["username"] = env.username or ""
+    _proxy_state["password"] = password
 
     # 生成 SSO 注入页面：先写 localStorage，再重定向到代理路径
     vuex = _build_vuex_state(env.token, tid, env.username or "")
@@ -382,6 +391,7 @@ async def proxy_entry(
         "<script>\n"
         "try{\n"
         "  localStorage.setItem('__vuex__local'," + escaped_vuex + ");\n"
+        "  sessionStorage.setItem('__vuex__session'," + escaped_vuex + ");\n"
         "  console.log('[SSO] token set');\n"
         "}catch(e){console.error(e)}\n"
         "window.location.replace(" + redirect_json + ");\n"
