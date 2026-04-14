@@ -5754,7 +5754,7 @@ export default {{
         }}, indent=2))
         self._write(ws_path, "vibe-serve.js", _VIBE_SERVE_JS)
         from app.config import settings
-        self._write(ws_path, "vibe-serve-config", f"PROXY_BASE={{(settings.code_server_base_url or '').rstrip('/')}}\n")
+        self._write(ws_path, "vibe-serve-config", f"PROXY_BASE={(settings.code_server_base_url or '').rstrip('/')}\n")
 
         # vue.config.js
         self._write(ws_path, "vue.config.js", f"""const path = require('path')

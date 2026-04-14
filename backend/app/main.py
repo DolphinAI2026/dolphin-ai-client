@@ -1,3 +1,4 @@
+import subprocess
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlparse
@@ -11,6 +12,9 @@ from app.routes import auth, conversations, chat, applications, apaas, generatio
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 启动时杀掉所有残留的 vibe-serve.js 进程（清理上次后端退出留下的孤儿进程）
+    subprocess.run(["pkill", "-f", "vibe-serve.js"], capture_output=True)
+
     # 启动时初始化数据库
     await init_db()
 
