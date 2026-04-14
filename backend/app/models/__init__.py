@@ -197,12 +197,13 @@ class Application(Base):
     apaas_app_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     app_name: Mapped[str] = mapped_column(String(100), nullable=False)
     app_code: Mapped[str] = mapped_column(String(50), nullable=False)
+    icon_svg: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     requirement_doc: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON
     config_preview: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON
     generation_state: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON - copilot 中间状态
     current_doc_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 当前文档版本号
-    status: Mapped[str] = mapped_column(String(20), default="draft", nullable=False)  # draft/generating/completed/failed
+    status: Mapped[str] = mapped_column(String(20), default="draft", nullable=False)  # draft/generating/updating/completed/failed
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 

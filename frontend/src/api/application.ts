@@ -9,10 +9,10 @@ export const applicationApi = {
   get(id: number) {
     return request.get<any, Application>(`/applications/${id}`)
   },
-  create(data: { conversation_id?: number; app_name: string; app_code: string; description?: string; config_preview?: any }) {
+  create(data: { conversation_id?: number; app_name: string; app_code: string; description?: string; config_preview?: any; platform_env_id?: number | null }) {
     return request.post<any, Application>('/applications', data)
   },
-  update(id: number, data: { conversation_id?: number; app_name: string; app_code: string; description?: string; config_preview?: any }) {
+  update(id: number, data: { conversation_id?: number; app_name: string; app_code: string; description?: string; config_preview?: any; platform_env_id?: number | null }) {
     return request.put<any, Application>(`/applications/${id}`, data)
   },
   /** 首次生成配置时自动创建应用（不重复创建） */

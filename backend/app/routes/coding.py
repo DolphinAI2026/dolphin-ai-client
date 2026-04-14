@@ -2392,6 +2392,7 @@ async def get_serve_status(
     return ws_mgr.is_serve_running(ws_id)
 
 
+
 @router.post("/workspace/{ws_id}/publish")
 async def publish_workspace(
     ws_id: str,

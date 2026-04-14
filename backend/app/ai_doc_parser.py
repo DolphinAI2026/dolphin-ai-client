@@ -21,6 +21,8 @@ ProgressCallback = Optional[Callable[[str], Coroutine]]
 from app.llm_client import LLMClient
 from app.config_validator import validate_full_config
 from app.field_types import get_icon_map, build_prompt_field_types_table
+from app.doc_parsers.forms import derive_default_forms
+from app.doc_table_parser import parse_all_tables
 
 logger = logging.getLogger(__name__)
 
@@ -210,7 +212,7 @@ async def parse_doc_with_ai(
 
         if len(text) <= CHUNK_CHAR_LIMIT:
             await _progress("小文档，单次 AI 解析...")
-            data = await _parse_single(text, filename, existing_codes=existing_codes, config_constraint=config_constraint, llm_cfg=llm_cfg)
+            data = await _parse_single(text, filename, existing_codes=existing_codes, config_constraint=config_constraint, llm_cfg=llm_cfg, on_progress=on_progress)
         else:
             data = await _parse_chunked(text, filename, _progress, existing_codes=existing_codes, config_constraint=config_constraint, llm_cfg=llm_cfg)
 
@@ -218,6 +220,7 @@ async def parse_doc_with_ai(
         extracted_dicts = _extract_markdown_dicts(text)
         if extracted_dicts:
             _merge_explicit_dicts(data, extracted_dicts)
+        _infer_inline_dicts_from_markdown(data, text)
 
     # 后处理
     await _progress("正在整理结果...")
@@ -245,8 +248,17 @@ async def parse_doc_with_ai(
         # 不阻断流程，返回原始数据
         pass
 
+    # AI 解析结果以 models 为主，非标准文档常缺少显式 forms。
+    # 这里统一复用标准解析链路中的默认派生逻辑，避免出现“有模型没表单”。
+    if isinstance(data, dict):
+        forms = data.get("forms")
+        models = data.get("models") or []
+        if (not isinstance(forms, list) or len(forms) == 0) and isinstance(models, list) and models:
+            data["forms"] = derive_default_forms(models)
+            logger.info("AI 解析结果未提供 forms，已根据 %s 个模型自动派生 %s 个默认表单", len(models), len(data["forms"]))
+
     summary = (
-        f"解析完成！{len(data.get('models', []))} 个表单、"
+        f"解析完成！{len(data.get('forms', []))} 个表单、"
         f"{len(data.get('dicts', []))} 个字典、"
         f"{len(data.get('roles', []))} 个角色"
     )
@@ -422,7 +434,7 @@ def _build_existing_config_constraint(config: Dict) -> str:
 # 小文档：单次调用
 # ================================================================
 
-async def _parse_single(text: str, filename: str, existing_codes: Optional[Dict] = None, config_constraint: str = "", llm_cfg: Optional[Dict] = None) -> Dict:
+async def _parse_single(text: str, filename: str, existing_codes: Optional[Dict] = None, config_constraint: str = "", llm_cfg: Optional[Dict] = None, on_progress: ProgressCallback = None) -> Dict:
     if llm_cfg:
         client = LLMClient(api_key=llm_cfg.get("api_key"), base_url=llm_cfg.get("base_url"), model=llm_cfg.get("model"))
     else:
@@ -456,14 +468,85 @@ async def _parse_single(text: str, filename: str, existing_codes: Optional[Dict]
         user_msg += f"文档名：{filename}\n\n"
     user_msg += f"---\n\n{truncated}"
 
-    # 文档解析用配置中的文档模型，避免业务代码写死模型名
-    result = await client.chat_completion(
-        [{"role": "system", "content": SINGLE_SYSTEM_PROMPT},
-         {"role": "user", "content": user_msg}],
-        max_tokens=16384, timeout=300.0, temperature=0.2,
-        model=client.doc_model
-    )
-    content = result["choices"][0]["message"]["content"]
+    messages = [{"role": "system", "content": SINGLE_SYSTEM_PROMPT},
+                {"role": "user", "content": user_msg}]
+
+    # 使用流式调用：让前端实时看到 AI 正在工作
+    async def _progress(msg: str):
+        if on_progress:
+            await on_progress(msg)
+
+    if llm_cfg and llm_cfg.get("base_url") and llm_cfg.get("api_key"):
+        # 租户配置：用 httpx 流式请求
+        from app.routes.llm_configs import build_llm_chat_completions_url
+        import httpx as _httpx
+        payload = {
+            "model": llm_cfg.get("model", client.model),
+            "messages": messages,
+            "max_tokens": 16384,
+            "temperature": 0.2,
+            "stream": True,
+        }
+        # read=300s：首 token 延迟可能很长（千问对大文档需要较长思考时间）
+        # 流式模式下 read timeout 是两次 chunk 之间的最大间隔，不是总时间
+        stream_timeout = _httpx.Timeout(connect=15.0, read=300.0, write=15.0, pool=15.0)
+        await _progress("[skeleton] AI 正在分析文档，等待模型响应...")
+        full_text = ""
+        last_report = 0
+        async with _httpx.AsyncClient(timeout=stream_timeout) as http:
+            async with http.stream(
+                "POST",
+                build_llm_chat_completions_url(llm_cfg["base_url"]),
+                headers={"Authorization": f"Bearer {llm_cfg['api_key']}", "Content-Type": "application/json"},
+                json=payload,
+            ) as response:
+                response.raise_for_status()
+                first_token = True
+                async for line in response.aiter_lines():
+                    if not line or not line.startswith("data:"):
+                        continue
+                    raw = line[5:].strip()
+                    if raw == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(raw)
+                        delta = chunk.get("choices", [{}])[0].get("delta", {})
+                        text_piece = delta.get("content", "")
+                        if text_piece:
+                            if first_token:
+                                first_token = False
+                                await _progress("[skeleton] AI 开始输出...")
+                            full_text += text_piece
+                            if len(full_text) - last_report >= 500:
+                                last_report = len(full_text)
+                                await _progress(f"[skeleton] AI 生成中... {len(full_text)} 字符")
+                    except Exception:
+                        continue
+        content = full_text
+    else:
+        # 全局配置：用 LLMClient 流式
+        await _progress("[skeleton] AI 正在分析文档，等待模型响应...")
+        full_text = ""
+        last_report = 0
+        first_token = True
+        async for chunk_str in client.chat_completion_stream(messages):
+            try:
+                chunk = json.loads(chunk_str)
+                delta = chunk.get("choices", [{}])[0].get("delta", {})
+                text_piece = delta.get("content", "")
+                if text_piece:
+                    if first_token:
+                        first_token = False
+                        await _progress("[skeleton] AI 开始输出...")
+                    full_text += text_piece
+                    if len(full_text) - last_report >= 500:
+                        last_report = len(full_text)
+                        await _progress(f"[skeleton] AI 生成中... {len(full_text)} 字符")
+            except Exception:
+                continue
+        content = full_text
+
+    await _progress(f"[skeleton] AI 生成完成，共 {len(content)} 字符，正在解析结果...")
     data = _extract_json(content)
     if not data or not data.get("models"):
         raise ValueError("AI 未能识别出业务表单")
@@ -739,6 +822,90 @@ def _merge_explicit_dicts(data: Dict, extracted_dicts: List[Dict]):
             dicts.append(extracted)
             by_code[extracted["code"]] = extracted
             by_name[extracted["name"]] = extracted
+
+    data["dicts"] = dicts
+
+
+_INLINE_DICT_FIELD_TYPES = {"下拉单选", "下拉多选", "单选", "单选框", "多选", "复选框", "复选"}
+_INLINE_DICT_SPLIT_RE = re.compile(r"\s*(?:/|／|、|\||;|；|\n)\s*")
+
+
+def _extract_inline_options(raw: str) -> List[str]:
+    text = str(raw or "").strip()
+    if not text:
+        return []
+    text = re.sub(r"[*_`]+", "", text)
+    text = re.sub(r"（[^）]*）|\([^\)]*\)", "", text).strip()
+    parts = [part.strip(" -•·:：") for part in _INLINE_DICT_SPLIT_RE.split(text)]
+    options = [part for part in parts if part and len(part) <= 30 and not re.search(r"[<>={}]", part)]
+    if len(options) < 2:
+        return []
+    return options
+
+
+def _build_inline_dict_candidates(text: str) -> Dict[str, List[str]]:
+    candidates: Dict[str, List[str]] = {}
+    for table in parse_all_tables(text):
+        if not table:
+            continue
+        for row in table:
+            field_name = re.sub(r"[*_`]+", "", str(row.get("字段名称") or row.get("子表字段名称") or row.get("字段") or "")).strip()
+            field_type = re.sub(r"[*_`]+", "", str(row.get("字段类型") or row.get("组件类型") or row.get("类型") or "")).strip()
+            if field_type not in _INLINE_DICT_FIELD_TYPES:
+                continue
+            options = _extract_inline_options(row.get("说明") or row.get("备注") or row.get("描述") or "")
+            if len(options) < 2 or not field_name:
+                continue
+            if field_name not in candidates or len(options) > len(candidates[field_name]):
+                candidates[field_name] = options
+    return candidates
+
+
+def _infer_inline_dicts_from_markdown(data: Dict, text: str):
+    candidates = _build_inline_dict_candidates(text)
+    if not candidates:
+        return
+
+    dicts = list(data.get("dicts", []) or [])
+    dicts_by_code = {str(d.get("code") or ""): d for d in dicts if d.get("code")}
+    dicts_by_name = {str(d.get("name") or ""): d for d in dicts if d.get("name")}
+
+    def bind_field(field: Dict, model_code: str):
+        field_name = str(field.get("name") or "").strip()
+        field_type = str(field.get("type") or "").strip()
+        if field_type not in {"下拉单选", "下拉多选", "单选框", "复选框"}:
+            return
+        options = candidates.get(field_name)
+        if len(options or []) < 2:
+            return
+
+        dict_code = str(field.get("dict") or "").strip()
+        if not dict_code:
+            base_code = str(field.get("code") or field_name).strip()
+            dict_code = f"{model_code}_{base_code}_dict" if model_code and base_code else f"{field_name}_dict"
+            field["dict"] = dict_code
+        dict_name = f"{field_name}选项"
+        existing = dicts_by_code.get(dict_code) or dicts_by_name.get(dict_name)
+        option_items = [{"name": opt, "code": opt} for opt in options]
+        if existing:
+            if len(option_items) > len(existing.get("options", []) or []):
+                existing["options"] = option_items
+            if not existing.get("name"):
+                existing["name"] = dict_name
+            if not existing.get("code"):
+                existing["code"] = dict_code
+        else:
+            new_dict = {"name": dict_name, "code": dict_code, "options": option_items}
+            dicts.append(new_dict)
+            dicts_by_code[dict_code] = new_dict
+            dicts_by_name[dict_name] = new_dict
+
+    for model in data.get("models", []) or []:
+        model_code = str(model.get("code") or "").strip()
+        for field in model.get("fields", []) or []:
+            bind_field(field, model_code)
+            for sub_field in field.get("sub_fields", []) or []:
+                bind_field(sub_field, model_code)
 
     data["dicts"] = dicts
 

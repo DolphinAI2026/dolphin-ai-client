@@ -17,9 +17,7 @@ import logging
 import re
 from typing import AsyncGenerator, Dict, List, Optional, Tuple
 
-import httpx
 from app.llm_client import LLMClient
-from app.routes.llm_configs import build_llm_chat_completions_url
 
 logger = logging.getLogger(__name__)
 
@@ -281,12 +279,12 @@ def _extract_dict_section(text: str, dict_name: str, dict_code: str) -> str:
 
 
 def _normalize_app_code(code: str) -> str:
-    c = (code or "").strip().lower().replace(" ", "_").replace("-", "_")
-    c = re.sub(r"[^a-z0-9_]", "", c)
+    c = (code or "").strip().replace(" ", "_").replace("-", "_")
+    c = re.sub(r"[^A-Za-z0-9_]", "", c)
     c = re.sub(r"_+", "_", c).strip("_")
     if not c:
         return ""
-    if not re.match(r"^[a-z]", c):
+    if not re.match(r"^[A-Za-z]", c):
         c = f"app_{c}"
     return c[:64]
 
@@ -319,21 +317,9 @@ def _extract_app_code_from_text(text: str) -> str:
 
 async def _tenant_llm_completion(cfg: dict, messages: list, max_tokens: int = 8192, timeout: float = 120.0) -> str:
     """使用租户配置的 LLM 做非流式调用，返回文本内容"""
-    payload = {
-        "model": cfg["model"],
-        "messages": messages,
-        "max_tokens": max_tokens,
-        "stream": False,
-    }
-    t = httpx.Timeout(connect=15.0, read=timeout, write=15.0, pool=15.0)
-    async with httpx.AsyncClient(timeout=t) as http:
-        resp = await http.post(
-            build_llm_chat_completions_url(cfg["base_url"]),
-            headers={"Authorization": f"Bearer {cfg['api_key']}", "Content-Type": "application/json"},
-            json=payload,
-        )
-        resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"]
+    client = LLMClient(api_key=cfg["api_key"], base_url=cfg["base_url"], model=cfg["model"])
+    resp = await client.chat_completion(messages, max_tokens=max_tokens, timeout=timeout, temperature=0.2)
+    return resp["choices"][0]["message"]["content"]
 
 
 async def assemble_config_streaming(
@@ -635,7 +621,7 @@ async def assemble_config_streaming(
 
     yield {
         "phase": "complete", "status": "done",
-        "message": f"配置组装完成！{len(all_models)} 个模型、{len(all_dicts)} 个字典、{len(roles)} 个角色",
+        "message": "配置组装完成",
         "data": complete_config,
     }
 

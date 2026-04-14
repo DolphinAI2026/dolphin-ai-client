@@ -4,17 +4,27 @@
       <div class="bg"></div>
       <div class="content">
         <div class="hero">
-          <svg width="32" height="32" viewBox="0 0 24 24" fill="none">
-            <path d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 17l-6.2 4.3 2.4-7.4L2 9.4h7.6L12 2z" fill="#8A82E8" opacity="0.92"/>
-          </svg>
+          <div class="hero-mark" aria-hidden="true">
+            <svg width="34" height="34" viewBox="0 0 24 24" fill="none">
+              <path d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 17l-6.2 4.3 2.4-7.4L2 9.4h7.6L12 2z" fill="#7D72F6"/>
+            </svg>
+          </div>
           <div class="hero-title">aPaaS Builder AI</div>
-          <div class="hero-sub">用 AI 构建企业级低代码应用</div>
+          <div class="hero-sub">两种搭建路径，覆盖从标准文档导入到 AI 对话生成的完整应用设计流程</div>
         </div>
 
-        <div class="upload-workbench">
+        <div class="upload-workbench upload-entry-grid">
           <section class="upload-feature-card">
-            <div class="card-tag">文档上传</div>
-            <div class="upload-title">上传 Markdown 设计文档</div>
+            <div class="entry-head">
+              <div class="entry-copy">
+                <div class="card-tag">设计文档</div>
+                <div class="upload-title">上传 Markdown 设计文档</div>
+                <div class="entry-subtitle">
+                  已有标准设计文档时，从这里直接进入解析和搭建流程。
+                </div>
+              </div>
+              <div class="entry-side-note">模板预览 / 拖拽上传 / 直接解析</div>
+            </div>
 
             <div
               v-if="templateFiles.length"
@@ -71,6 +81,7 @@
                   <div class="template-meta">
                     <span>{{ template.filename }}</span>
                     <span>Markdown</span>
+                    <span>{{ formatTemplateUpdatedAt(template.updated_at) }}</span>
                   </div>
                 </div>
 
@@ -91,6 +102,57 @@
 
             <div class="upload-footnote">
               <span>仅支持 Markdown 功能设计文档，上传后会自动跳转到解析页面。</span>
+            </div>
+          </section>
+
+          <section class="upload-feature-card ai-entry-card">
+            <div class="entry-head entry-head-compact">
+              <div class="entry-copy">
+                <div class="card-tag">AI生成</div>
+                <div class="upload-title">通过 AI 对话生成设计文档</div>
+              </div>
+              <div class="entry-side-note">从模糊需求到标准文档</div>
+            </div>
+            <div class="ai-entry-body">
+              <div class="ai-entry-visual" aria-hidden="true">
+                <div class="ai-orbit ai-orbit-large"></div>
+                <div class="ai-orbit ai-orbit-small"></div>
+                <div class="ai-entry-core">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+                    <path d="M12 3 14.4 9.6 21 12l-6.6 2.4L12 21l-2.4-6.6L3 12l6.6-2.4L12 3Z" fill="currentColor"/>
+                  </svg>
+                </div>
+              </div>
+              <div class="ai-entry-copy">
+                <div class="ai-entry-heading">从需求对话开始</div>
+                <div class="ai-entry-desc">
+                  用对话先把业务目标、角色、模型和表单梳理清楚，再由系统自动生成标准设计文档并进入搭建流程。
+                </div>
+              </div>
+              <div class="ai-entry-steps">
+                <div class="ai-entry-step">
+                  <span class="ai-entry-step-index">01</span>
+                  <span class="ai-entry-step-text">逐步补充需求，不用一次写全</span>
+                </div>
+                <div class="ai-entry-step">
+                  <span class="ai-entry-step-index">02</span>
+                  <span class="ai-entry-step-text">自动生成标准设计文档</span>
+                </div>
+                <div class="ai-entry-step">
+                  <span class="ai-entry-step-index">03</span>
+                  <span class="ai-entry-step-text">确认后继续进入应用搭建</span>
+                </div>
+              </div>
+              <div class="ai-entry-actions">
+                <button class="ai-entry-cta" type="button" @click="startAIGenerate">
+                  <span>进入 AI 生成</span>
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <path d="M3 8h9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+                    <path d="m8.5 3.5 4 4-4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </button>
+                <div class="ai-entry-note">进入对话模式后，可边聊边生成设计文档。</div>
+              </div>
             </div>
           </section>
         </div>
@@ -125,7 +187,7 @@
             <div class="app-grid">
               <button v-for="(app,idx) in recentApps.slice(0,6)" :key="app.id" class="app-card" @click="openApp(app)">
                 <div class="app-card-header">
-                  <div class="app-dot" :class="idx===1 ? 'teal' : idx===2 ? 'amber' : 'purple'">{{ idx===1 ? '💰' : idx===2 ? '⚙️' : '📋' }}</div>
+                  <div class="app-dot" :class="idx===1 ? 'teal' : idx===2 ? 'amber' : 'purple'">{{ (app.label || 'A').slice(0, 1).toUpperCase() }}</div>
                   <div>
                     <div class="app-name">{{ app.label }}</div>
                     <div class="app-time">{{ app.timeLabel }}更新</div>
@@ -174,7 +236,13 @@
     </template>
   </el-dialog>
 
-  <el-dialog v-model="templatePreviewVisible" :title="templatePreview?.name || '模板预览'" width="760px" destroy-on-close>
+  <el-dialog
+    v-model="templatePreviewVisible"
+    :title="templatePreview?.name || '模板预览'"
+    width="1120px"
+    class="template-preview-dialog"
+    destroy-on-close
+  >
     <div class="template-preview-head">
       <div class="template-preview-meta">
         <span>{{ templatePreview?.filename || '-' }}</span>
@@ -185,6 +253,10 @@
 
     <div v-if="templatePreviewLoading" class="template-preview-empty">
       正在加载模板内容...
+    </div>
+    <div v-else-if="templatePreviewParsedDoc" class="template-preview-structured">
+      <pre v-if="templatePreviewIntro" class="template-preview-body template-preview-intro">{{ templatePreviewIntro }}</pre>
+      <StructuredDocRenderer :doc-result="templatePreviewParsedDoc" />
     </div>
     <pre v-else class="template-preview-body">{{ templatePreview?.content || '' }}</pre>
 
@@ -210,6 +282,8 @@ import { llmConfigApi, type BuilderModelOption } from '@/api/llmConfig'
 import type { AppItem } from '@/components/AppSidebar.vue'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
 import ImportAppDialog from '@/components/ImportAppDialog.vue'
+import StructuredDocRenderer from '@/components/StructuredDocRenderer.vue'
+import { standardDocMdToStructuredDoc } from '@/utils/structuredDoc'
 
 const router = useRouter()
 const previewStore = usePreviewStore()
@@ -222,6 +296,7 @@ interface TemplateFile {
   description?: string
   category?: string
   filename: string
+  updated_at?: string
 }
 
 interface TemplateDetail extends TemplateFile {
@@ -241,12 +316,20 @@ const templateFiles = ref<TemplateFile[]>([])
 const templatePreviewVisible = ref(false)
 const templatePreviewLoading = ref(false)
 const templatePreview = ref<TemplateDetail | null>(null)
+const templatePreviewParsedDoc = ref<any | null>(null)
 const uploadDragging = ref(false)
 const templateCache = new Map<string, TemplateDetail>()
-const LANDING_TEMPLATE_CODE = 'design-doc-template'
 const builderModelOptions = ref<BuilderModelOption[]>([])
 const builderModelLoading = ref(false)
 const selectedLandingModelId = ref<number | null>(null)
+const templatePreviewIntro = computed(() => {
+  const content = templatePreview.value?.content || ''
+  if (!content) return ''
+  const normalized = content.replace(/\r\n/g, '\n')
+  const marker = normalized.search(/^##\s+[一二三四五六七八九十]+、/m)
+  if (marker <= 0) return ''
+  return normalized.slice(0, marker).trim()
+})
 
 const userInitial = computed(() => (userStore.user?.username || 'A').slice(0, 1))
 const userDisplayName = computed(() => (userStore.user as any)?.nickname || userStore.user?.username || 'admin')
@@ -310,6 +393,11 @@ function startDocUpload(file: File) {
   router.push('/chat')
 }
 
+function startAIGenerate() {
+  previewStore.pendingBuilderModelId = selectedLandingModelId.value
+  router.push({ path: '/chat', query: { mode: 'requirements' } })
+}
+
 function handleDocUpload(e: Event) {
   const target = e.target as HTMLInputElement
   const file = target.files?.[0]
@@ -331,23 +419,30 @@ function openApp(app: AppItem) {
 
 function sortTemplateFiles(list: TemplateFile[]) {
   return [...list].sort((a, b) => {
-    const priority = (item: TemplateFile) => {
-      if (item.code === 'design-doc-template') return 0
-      if ((item.category || '').includes('设计')) return 1
-      return 2
-    }
-    const diff = priority(a) - priority(b)
-    if (diff !== 0) return diff
+    const timeDiff = new Date(b.updated_at || 0).getTime() - new Date(a.updated_at || 0).getTime()
+    if (timeDiff !== 0) return timeDiff
     return a.name.localeCompare(b.name, 'zh-CN')
   })
+}
+
+function formatTemplateUpdatedAt(value?: string) {
+  if (!value) return '最近更新未知'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '最近更新未知'
+  const yyyy = date.getFullYear()
+  const mm = `${date.getMonth() + 1}`.padStart(2, '0')
+  const dd = `${date.getDate()}`.padStart(2, '0')
+  const hh = `${date.getHours()}`.padStart(2, '0')
+  const mi = `${date.getMinutes()}`.padStart(2, '0')
+  return `最近更新 ${yyyy}-${mm}-${dd} ${hh}:${mi}`
 }
 
 async function loadTemplateFiles() {
   try {
     const templates = await request.get<any, TemplateFile[]>('/templates')
     const sortedTemplates = sortTemplateFiles(Array.isArray(templates) ? templates : [])
-    const preferredTemplate = sortedTemplates.find((item) => item.code === LANDING_TEMPLATE_CODE) || sortedTemplates[0]
-    templateFiles.value = preferredTemplate ? [preferredTemplate] : []
+    const latestTemplate = sortedTemplates[0]
+    templateFiles.value = latestTemplate ? [latestTemplate] : []
   } catch {
     templateFiles.value = []
   }
@@ -370,10 +465,15 @@ async function previewTemplate(template: TemplateFile) {
   try {
     templatePreviewVisible.value = true
     templatePreviewLoading.value = true
+    templatePreviewParsedDoc.value = null
     templatePreview.value = await getTemplateDetail(template)
+    templatePreviewParsedDoc.value = standardDocMdToStructuredDoc(templatePreview.value.content)
   } catch (error: any) {
-    templatePreviewVisible.value = false
-    ElMessage.error(error?.response?.data?.detail || '加载模板失败')
+    if (!templatePreview.value) {
+      templatePreviewVisible.value = false
+      ElMessage.error(error?.response?.data?.detail || '加载模板失败')
+      return
+    }
   } finally {
     templatePreviewLoading.value = false
   }
@@ -559,50 +659,263 @@ onMounted(loadApps)
 .bg { position: absolute; inset: 0; background: linear-gradient(160deg, #EEEDFE 0%, #E6F1FB 45%, #E1F5EE 100%); z-index: 0; }
 .content { flex: 1; overflow-y: auto; position: relative; z-index: 1; }
 
-.hero { padding: 32px 28px 16px; text-align: center; }
-.hero-title { font-size: 24px; font-weight: 500; color: var(--text-strong); letter-spacing: -0.02em; margin-top: 8px; }
-.hero-sub { font-size: 13px; color: var(--text-secondary); margin-top: 5px; opacity: 0.85; }
+.hero {
+  padding: 28px 24px 18px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.hero-mark {
+  width: 58px;
+  height: 58px;
+  border-radius: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(238, 237, 254, 0.88));
+  box-shadow:
+    inset 0 0 0 1px rgba(125, 114, 246, 0.12),
+    0 18px 36px rgba(103, 96, 180, 0.10);
+}
+.hero-title {
+  font-size: 25px;
+  font-weight: 700;
+  color: var(--text-strong);
+  letter-spacing: -0.04em;
+}
+.hero-sub {
+  max-width: 680px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+  opacity: 0.88;
+}
 
 .upload-workbench {
-  padding: 0 28px;
+  padding: 0 24px;
   display: block;
+}
+.upload-entry-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(320px, 0.9fr);
+  gap: 12px;
+  align-items: stretch;
 }
 .upload-feature-card {
   background: var(--surface-strong);
   border: 1px solid rgba(255, 255, 255, 0.92);
-  border-radius: 20px;
-  box-shadow: var(--shadow-soft);
+  border-radius: 24px;
+  box-shadow: 0 24px 60px rgba(78, 71, 147, 0.10);
   backdrop-filter: blur(12px);
   padding: 20px 22px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 16px;
+}
+.entry-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.entry-head-compact {
+  margin-bottom: 2px;
+}
+.entry-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.entry-subtitle {
+  max-width: 500px;
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--text-muted);
+}
+.entry-side-note {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 11px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.78);
+  box-shadow: inset 0 0 0 1px rgba(83, 74, 183, 0.10);
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 600;
+}
+.ai-entry-card {
+  justify-content: space-between;
+  position: relative;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at top right, rgba(107, 125, 255, 0.18), transparent 34%),
+    radial-gradient(circle at bottom left, rgba(88, 201, 165, 0.10), transparent 32%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(246, 248, 255, 0.92));
+}
+.ai-entry-body {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  flex: 1;
+  min-height: 0;
+}
+.ai-entry-visual {
+  position: relative;
+  width: 82px;
+  height: 82px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.ai-orbit {
+  position: absolute;
+  border-radius: 999px;
+  border: 1px solid rgba(90, 98, 203, 0.14);
+  background: rgba(255, 255, 255, 0.42);
+}
+.ai-orbit-large {
+  inset: 0;
+  box-shadow: inset 0 0 20px rgba(115, 113, 255, 0.08);
+}
+.ai-orbit-small {
+  inset: 12px;
+}
+.ai-entry-core {
+  position: relative;
+  z-index: 1;
+  width: 44px;
+  height: 44px;
+  border-radius: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+  background: linear-gradient(135deg, #5950c7 0%, #7b6eff 100%);
+  box-shadow: 0 14px 28px rgba(91, 80, 199, 0.24);
+}
+.ai-entry-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ai-entry-heading {
+  font-size: 20px;
+  line-height: 1.2;
+  font-weight: 700;
+  color: var(--text-strong);
+  letter-spacing: -0.03em;
+}
+.ai-entry-desc {
+  font-size: 13px;
+  line-height: 1.68;
+  color: var(--text-muted);
+}
+.ai-entry-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ai-entry-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 0 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow:
+    inset 0 0 0 1px rgba(83, 74, 183, 0.08),
+    0 10px 24px rgba(90, 98, 203, 0.06);
+}
+.ai-entry-step-index {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(81, 71, 189, 0.10);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+.ai-entry-step-text {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+.ai-entry-actions {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding-top: 4px;
+  width: 100%;
+}
+.ai-entry-cta {
+  min-height: 50px;
+  width: 100%;
+  justify-content: center;
+  padding: 0 18px;
+  border: none;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #5147bd 0%, #6f63ef 100%);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  box-shadow: 0 16px 30px rgba(81, 71, 189, 0.24);
+  transition: transform 180ms ease, box-shadow 180ms ease, opacity 180ms ease;
+}
+.ai-entry-cta:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 18px 34px rgba(81, 71, 189, 0.28);
+}
+.ai-entry-note {
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  opacity: 0.82;
+  max-width: 320px;
 }
 .card-tag {
   display: inline-flex;
   align-items: center;
   align-self: flex-start;
-  padding: 5px 10px;
+  padding: 4px 9px;
   border-radius: 999px;
   background: var(--accent-soft);
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.02em;
 }
 .upload-title {
-  font-size: 18px;
+  font-size: 17px;
   line-height: 1.25;
-  font-weight: 600;
+  font-weight: 700;
   color: var(--text-strong);
   max-width: none;
+  letter-spacing: -0.02em;
 }
 .template-inline-section {
   display: flex;
   flex-direction: column;
   gap: 10px;
   padding: 14px 16px;
-  border-radius: 18px;
+  border-radius: 20px;
   background: linear-gradient(180deg, rgba(245, 247, 255, 0.92), rgba(255, 255, 255, 0.9));
   border: 1px solid rgba(83, 74, 183, 0.10);
 }
@@ -614,11 +927,11 @@ onMounted(loadApps)
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 10px;
   flex-wrap: wrap;
 }
 .template-inline-label {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--text-secondary);
 }
@@ -626,30 +939,30 @@ onMounted(loadApps)
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
 }
 .landing-model-label {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--text-secondary);
 }
 .landing-model-select {
-  width: 240px;
+  width: 220px;
   max-width: 100%;
 }
 .landing-model-select :deep(.el-select__wrapper) {
-  min-height: 38px;
-  border-radius: 12px;
+  min-height: 36px;
+  border-radius: 11px;
   background: rgba(255, 255, 255, 0.94);
   box-shadow: inset 0 0 0 1px rgba(83, 74, 183, 0.12);
 }
 .landing-model-select :deep(.el-select__selected-item) {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-strong);
 }
 .landing-model-hint {
-  font-size: 11px;
+  font-size: 10px;
   line-height: 1.4;
   color: var(--text-muted);
 }
@@ -659,27 +972,27 @@ onMounted(loadApps)
   line-height: 1.35;
 }
 .builder-model-option-name {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--text-strong);
 }
 .builder-model-option-meta {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--text-muted);
 }
 .upload-footnote {
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 12px;
-  font-size: 12px;
+  gap: 10px;
+  font-size: 11px;
   line-height: 1.6;
   color: var(--text-muted);
 }
 .template-item {
   background: var(--surface-muted);
   border: 1px solid var(--stroke-soft);
-  border-radius: 16px;
+  border-radius: 18px;
   padding: 14px 16px;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
@@ -693,9 +1006,9 @@ onMounted(loadApps)
   gap: 14px;
 }
 .template-icon {
-  width: 42px;
-  height: 42px;
-  border-radius: 14px;
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -709,54 +1022,54 @@ onMounted(loadApps)
 .template-topline {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   flex-wrap: wrap;
 }
 .template-name {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--text-strong);
 }
 .template-category {
   display: inline-flex;
   align-items: center;
-  padding: 3px 8px;
+  padding: 2px 7px;
   border-radius: 999px;
   background: rgba(225, 245, 238, 0.9);
   color: #16654E;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
 }
 .template-summary {
   margin-top: 4px;
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1.6;
   color: var(--text-muted);
 }
 .template-meta {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
-  margin-top: 8px;
-  font-size: 11px;
+  margin-top: 6px;
+  font-size: 10px;
   color: var(--text-secondary);
   opacity: 0.82;
 }
 .template-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   flex-wrap: wrap;
   justify-content: flex-end;
 }
 .template-action {
-  min-width: 76px;
-  height: 40px;
-  padding: 0 14px;
+  min-width: 72px;
+  height: 38px;
+  padding: 0 12px;
   border-radius: 12px;
   border: 1px solid transparent;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   cursor: pointer;
   transition: opacity 0.16s ease, transform 0.16s ease;
@@ -781,26 +1094,26 @@ onMounted(loadApps)
   overflow: hidden;
 }
 .template-empty {
-  min-height: 140px;
-  border-radius: 16px;
+  min-height: 124px;
+  border-radius: 14px;
   border: 1px dashed var(--stroke-soft);
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px;
-  font-size: 13px;
+  padding: 20px;
+  font-size: 12px;
   line-height: 1.7;
   text-align: center;
   color: var(--text-muted);
 }
 .template-empty-inline {
-  min-height: 92px;
+  min-height: 84px;
   background: rgba(255, 255, 255, 0.7);
 }
 
-.body-content { padding: 16px 28px 24px; display: flex; flex-direction: column; gap: 18px; }
+.body-content { padding: 14px 24px 22px; display: flex; flex-direction: column; gap: 16px; }
 .stats-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
-.stat-card { background: rgba(255,255,255,0.75); border: 0.5px solid rgba(255,255,255,0.9); border-radius: var(--border-radius-lg); padding: 12px 14px; }
+.stat-card { background: rgba(255,255,255,0.78); border: 0.5px solid rgba(255,255,255,0.92); border-radius: 20px; padding: 14px 16px; box-shadow: 0 14px 34px rgba(78, 71, 147, 0.05); }
 .stat-label { font-size: 11px; color: #534AB7; margin-bottom: 5px; opacity: 0.8; }
 .stat-num { font-size: 20px; font-weight: 500; color: #26215C; }
 .stat-sub { font-size: 11px; color: #3B6D11; margin-top: 2px; }
@@ -813,9 +1126,10 @@ onMounted(loadApps)
 .view-all-link { border: none; background: transparent; color: #6d73d5; font-size: 12px; font-weight: 500; cursor: pointer; padding: 0; }
 .view-all-link:hover { color: #534AB7; }
 .app-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-.app-card { background: rgba(255,255,255,0.75); border: 0.5px solid rgba(255,255,255,0.9); border-radius: var(--border-radius-lg); padding: 12px; cursor: pointer; text-align: left; }
+.app-card { background: rgba(255,255,255,0.78); border: 0.5px solid rgba(255,255,255,0.92); border-radius: 20px; padding: 14px; cursor: pointer; text-align: left; box-shadow: 0 14px 34px rgba(78, 71, 147, 0.04); }
 .app-card-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .app-dot { width: 28px; height: 28px; border-radius: 7px; display: flex; align-items: center; justify-content: center; font-size: 13px; flex-shrink: 0; }
+.app-dot { font-weight: 700; color: #4c419f; }
 .app-dot.purple { background: #EEEDFE; }
 .app-dot.teal { background: #E1F5EE; }
 .app-dot.amber { background: #FAEEDA; }
@@ -869,6 +1183,51 @@ onMounted(loadApps)
   word-break: break-word;
   font-family: "SFMono-Regular", "Menlo", "Consolas", monospace;
 }
+.template-preview-structured {
+  max-height: 68vh;
+  overflow: auto;
+  padding: 16px;
+  border-radius: 14px;
+  background: #F7F8FF;
+  border: 1px solid rgba(83, 74, 183, 0.10);
+}
+.template-preview-dialog :deep(.el-dialog) {
+  max-width: calc(100vw - 64px);
+}
+.template-preview-dialog :deep(.el-dialog__body) {
+  padding-top: 12px;
+}
+.template-preview-structured :deep(.doc-table-wrap) {
+  overflow-x: auto;
+}
+.template-preview-structured :deep(.doc-table) {
+  width: max-content;
+  min-width: 980px;
+}
+.template-preview-structured :deep(.doc-table th),
+.template-preview-structured :deep(.doc-table td) {
+  padding: 6px 8px;
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: nowrap;
+}
+.template-preview-structured :deep(.doc-table th) {
+  font-size: 11px;
+}
+.template-preview-structured :deep(.doc-table th:last-child),
+.template-preview-structured :deep(.doc-table td:last-child) {
+  min-width: 180px;
+  white-space: normal;
+}
+.template-preview-structured :deep(.doc-section-title) {
+  font-size: 15px;
+}
+.template-preview-structured :deep(.doc-card-title) {
+  font-size: 14px;
+}
+.template-preview-structured :deep(.doc-meta) {
+  font-size: 12px;
+}
 .template-preview-empty {
   min-height: 180px;
   display: flex;
@@ -879,6 +1238,7 @@ onMounted(loadApps)
 }
 
 @media (max-width: 1180px) {
+  .upload-entry-grid,
   .stats-row,
   .app-grid {
     grid-template-columns: 1fr;
@@ -907,6 +1267,44 @@ onMounted(loadApps)
   .template-inline-head {
     flex-direction: column;
     align-items: flex-start;
+  }
+  .entry-head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .entry-side-note {
+    width: 100%;
+    justify-content: center;
+  }
+  .hero {
+    padding-top: 26px;
+    gap: 8px;
+  }
+  .hero-mark {
+    width: 54px;
+    height: 54px;
+    border-radius: 20px;
+  }
+  .hero-title {
+    font-size: 22px;
+  }
+  .hero-sub {
+    font-size: 13px;
+    line-height: 1.65;
+  }
+  .ai-entry-heading {
+    font-size: 18px;
+  }
+  .ai-entry-visual {
+    width: 76px;
+    height: 76px;
+  }
+  .ai-entry-step {
+    min-height: 40px;
+  }
+  .ai-entry-cta {
+    min-height: 50px;
+    font-size: 14px;
   }
   .landing-model-picker {
     width: 100%;

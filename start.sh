@@ -2,12 +2,17 @@
 
 echo "启动 aPaaS Builder AI..."
 
+ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
+BACKEND_DIR="$ROOT_DIR/backend"
+FRONTEND_DIR="$ROOT_DIR/frontend"
+MAIN_DB_URL="sqlite+aiosqlite:///$BACKEND_DIR/apaas_builder.db"
+
 # 启动后端
 echo "启动后端服务..."
-cd backend
+cd "$BACKEND_DIR"
 source venv/bin/activate 2>/dev/null || python3 -m venv venv && source venv/bin/activate
-pip install -q -r requirements.txt
-python run.py &
+python3 -m pip install -q -r requirements.txt
+DATABASE_URL="$MAIN_DB_URL" python3 run.py &
 BACKEND_PID=$!
 
 # 等待后端启动
@@ -15,7 +20,7 @@ sleep 3
 
 # 启动前端
 echo "启动前端服务..."
-cd ../frontend
+cd "$FRONTEND_DIR"
 npm run dev &
 FRONTEND_PID=$!
 

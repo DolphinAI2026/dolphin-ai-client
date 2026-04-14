@@ -6,7 +6,6 @@
 from dataclasses import dataclass
 from typing import Optional, AsyncIterator
 
-import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -83,36 +82,11 @@ async def stream_with_config(
     使用解析后的配置流式调用 LLM。yield OpenAI 格式 JSON 字符串。
     config 为 None 时回退到 LLMClient（环境变量）。
     """
+    from app.llm_client import LLMClient
+
     if config is None:
-        from app.llm_client import LLMClient
         llm = LLMClient()
-        async for chunk in llm.chat_completion_stream(messages):
-            yield chunk
-        return
-
-    payload = {
-        "model": config.model,
-        "messages": messages,
-        "max_tokens": max_tokens or config.max_tokens,
-        "stream": True,
-        "temperature": temperature,
-    }
-    timeout = httpx.Timeout(connect=15.0, read=300.0, write=15.0, pool=15.0)
-
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        url = build_chat_completions_url(config.base_url)
-        async with client.stream(
-            "POST", url,
-            headers={
-                "Authorization": f"Bearer {config.api_key}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-        ) as response:
-            async for line in response.aiter_lines():
-                line = line.strip()
-                if line.startswith("data: "):
-                    data = line[6:]
-                    if data == "[DONE]":
-                        break
-                    yield data
+    else:
+        llm = LLMClient(api_key=config.api_key, base_url=config.base_url, model=config.model)
+    async for chunk in llm.chat_completion_stream(messages):
+        yield chunk

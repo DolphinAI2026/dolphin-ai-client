@@ -23,13 +23,20 @@ _ALL_OPS = set(_PERM_COLUMNS.values()) - {"draft", "import", "export"}
 # 数据范围文字 → 内部编码
 _DATA_SCOPE_MAP = {
     "全公司": "ALL",
+    "全公司数据": "ALL",
     "全部": "ALL",
+    "全部数据": "ALL",
     "all": "ALL",
     "本部门": "CURRENT_USER_DEPT",
+    "本部门数据": "CURRENT_USER_DEPT",
     "本部门及下属部门": "CURRENT_USER_DEPT_LOW_LEVEL",
     "本部门及下级部门": "CURRENT_USER_DEPT_LOW_LEVEL",
+    "本部门及下属部门数据": "CURRENT_USER_DEPT_LOW_LEVEL",
+    "本部门及下级部门数据": "CURRENT_USER_DEPT_LOW_LEVEL",
     "仅本人": "SELF",
     "本人": "SELF",
+    "本人数据": "SELF",
+    "仅本人数据": "SELF",
     "自己": "SELF",
     # 自定义数据范围（无法映射到标准枚举，统一转为 ALL，保留原文到备注）
     "本人负责项目": "ALL",

@@ -20,7 +20,6 @@ from app.database import get_db
 from app.deps import get_auth_context, AuthContext
 from app.llm_client import LLMClient
 from app.models import Conversation, Message
-from app.routes.llm_configs import build_llm_chat_completions_url
 
 logger = logging.getLogger(__name__)
 
@@ -284,42 +283,22 @@ async def _get_conversation_llm_config(db: AsyncSession, conversation: Conversat
 
 
 async def _stream_with_config(cfg: dict | None, messages: list, max_retries: int = 2):
-    """使用 cfg 指定的 OpenAI 兼容接口流式调用；cfg 为 None 时 fallback 到 LLMClient。支持重试。"""
+    """使用租户配置流式调用；Anthropic 兼容代理和 OpenAI 兼容接口都支持。"""
     if cfg is None:
         raise ValueError("未配置可用的 LLM 模型，请在环境管理 → 模型配置中添加并启用模型")
 
-    payload = {
-        "model": cfg["model"],
-        "messages": messages,
-        "max_tokens": cfg["max_tokens"],
-        "stream": True,
-    }
-    url = build_llm_chat_completions_url(cfg["base_url"])
-    headers = {"Authorization": f"Bearer {cfg['api_key']}", "Content-Type": "application/json"}
-    stream_timeout = httpx.Timeout(connect=15.0, read=300.0, write=15.0, pool=15.0)
+    llm = LLMClient(api_key=cfg["api_key"], base_url=cfg["base_url"], model=cfg["model"])
 
     last_err = None
     for attempt in range(max_retries + 1):
         if attempt > 0:
             import asyncio
             await asyncio.sleep(1)
-            logger.info("LLM stream retry %d/%d for %s", attempt, max_retries, url)
+            logger.info("LLM stream retry %d/%d for %s", attempt, max_retries, cfg["base_url"])
         try:
-            async with httpx.AsyncClient(timeout=stream_timeout) as client:
-                async with client.stream("POST", url, headers=headers, json=payload) as response:
-                    response.raise_for_status()
-                    async for line in response.aiter_lines():
-                        if not line or not line.startswith("data:"):
-                            continue
-                        raw = line[5:].strip()
-                        if raw == "[DONE]":
-                            break
-                        try:
-                            data = json.loads(raw)
-                            yield json.dumps(data, ensure_ascii=False)
-                        except Exception:
-                            continue
-                    return  # 成功，不再重试
+            async for chunk in llm.chat_completion_stream(messages, max_tokens=cfg.get("max_tokens", 8192)):
+                yield chunk
+            return  # 成功，不再重试
         except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as e:
             last_err = e
             logger.warning("LLM stream attempt %d failed: %s", attempt + 1, e)
@@ -343,26 +322,14 @@ async def _complete_with_config(
     if cfg is None:
         raise ValueError("未配置可用的 LLM 模型")
 
-    payload = {
-        "model": cfg["model"],
-        "messages": messages,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        "stream": False,
-    }
-    timeout = httpx.Timeout(connect=15.0, read=120.0, write=15.0, pool=15.0)
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        response = await client.post(
-            build_llm_chat_completions_url(cfg["base_url"]),
-            headers={
-                "Authorization": f"Bearer {cfg['api_key']}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-        )
-        response.raise_for_status()
-        data = response.json()
-        return ((data.get("choices") or [{}])[0].get("message") or {}).get("content", "")
+    llm = LLMClient(api_key=cfg["api_key"], base_url=cfg["base_url"], model=cfg["model"])
+    data = await llm.chat_completion(
+        messages,
+        max_tokens=max_tokens,
+        timeout=120.0,
+        temperature=temperature,
+    )
+    return ((data.get("choices") or [{}])[0].get("message") or {}).get("content", "")
 
 
 async def _repair_doc_json(cfg: dict | None, raw_text: str) -> dict:

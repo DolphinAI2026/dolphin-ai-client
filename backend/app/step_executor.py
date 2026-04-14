@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import httpx
 
@@ -98,9 +98,13 @@ async def execute_create_app(
     apaas_app_id = str(apaas_result) if isinstance(apaas_result, str) else str(
         apaas_result.get("id", apaas_result.get("appId", ""))
     )
+    platform_app_code = ""
+    if isinstance(apaas_result, dict):
+        platform_app_code = str(apaas_result.get("appCode") or apaas_result.get("code") or "").strip()
     suffix = _rand()
     return {
         "apaas_app_id": apaas_app_id,
+        "platform_app_code": platform_app_code,
         "suffix": suffix,
     }
 
@@ -128,7 +132,7 @@ async def execute_create_roles_dicts(
     if roles:
         for r in roles:
             original_code = r.get("code", r["name"])
-            platform_code = _apply_suffix(f"R_{_sanitize_code(original_code)}", suffix)
+            platform_code = _apply_suffix(_sanitize_code(original_code), suffix)
             role_codes[original_code] = {"roleCode": platform_code, "roleName": r["name"]}
             try:
                 await client.create_roles(app_id, [{
@@ -142,6 +146,23 @@ async def execute_create_roles_dicts(
                     messages.append(f"角色已存在: {r['name']}")
                 else:
                     messages.append(f"角色创建失败 {r['name']}: {e}")
+        try:
+            remote_roles = await client.query_roles(app_id)
+            for r in roles:
+                original_code = r.get("code", r["name"])
+                local_info = role_codes.setdefault(original_code, {})
+                platform_code = local_info.get("roleCode")
+                matched = next((
+                    item for item in remote_roles
+                    if item.get("roleCode") == platform_code
+                    or item.get("roleName") == r.get("name")
+                ), None)
+                if matched:
+                    local_info["id"] = matched.get("id", "")
+                    local_info["roleCode"] = matched.get("roleCode", platform_code)
+                    local_info["roleName"] = matched.get("roleName", r.get("name", original_code))
+        except Exception as exc:
+            logger.warning("查询平台角色ID失败，权限下发将退回角色编码: %s", exc)
         if roles_created:
             messages.append(f"新建角色: {roles_created} 个")
 
@@ -570,6 +591,8 @@ async def execute_create_form(
     dict_codes: Dict[str, str],
     model_info: Dict[str, dict],
     all_models: List[dict],
+    all_forms: Optional[List[dict]] = None,
+    form_results: Optional[List[dict]] = None,
 ) -> dict:
     """创建单个表单 + 绑定字典，返回 form 结果。"""
     form_name = form.get("name") or form.get("formName") or "未命名表单"
@@ -638,6 +661,23 @@ async def execute_create_form(
         for key in ("hidden", "readonly", "required", "showInList", "searchable"):
             if key in comp:
                 built[key] = bool(comp.get(key))
+
+        desired_component_type = str(component_type).strip()
+        target_model_code, target_field, origin_field = _resolve_component_reference(comp, _form_identity_map(all_forms or []))
+        if desired_component_type in ("FORM_DATA_SELECTOR_SINGLE", "FORM_DATA_SELECTOR") and target_model_code:
+            built["componentType"] = desired_component_type
+            built["dataSelectorConfig"] = {
+                "type": "LOV_CHOOSE",
+                "otherModelCode": target_model_code,
+                "otherFieldCode": target_field,
+            }
+        elif desired_component_type == "FORM_ASSOCIATION" and target_model_code:
+            built["componentType"] = "FORM_ASSOCIATION"
+            built["formAssociationConfig"] = {
+                "originFieldCode": origin_field or field_code,
+                "targetModelCode": target_model_code,
+                "targetFieldCode": target_field,
+            }
 
         if section_type == "sub":
             group = sub_groups.setdefault(table_model_code, {
@@ -799,7 +839,476 @@ async def execute_create_form(
         except Exception as e:
             logger.warning(f"字典绑定失败（不阻断）: {e}")
 
+    # --- 回写数据选择 / 关联表单引用 ---
+    if form_result["formId"]:
+        try:
+            await _sync_form_component_references(
+                client=client,
+                app_id=app_id,
+                form_id=form_result["formId"],
+                form_def=form,
+                all_forms=all_forms or [],
+                form_results=form_results or [],
+            )
+        except Exception as e:
+            logger.warning(f"表单引用回写失败（不阻断）: {e}")
+
     return form_result
+
+
+def _form_identity_map(forms: List[dict]) -> Dict[str, dict]:
+    mapping: Dict[str, dict] = {}
+    for form in forms:
+        for key in (
+            form.get("formCode"), form.get("form_code"), form.get("code"),
+            form.get("formName"), form.get("name"),
+            form.get("modelCode"), form.get("model_code"),
+        ):
+            value = str(key or "").strip()
+            if value:
+                mapping.setdefault(value, form)
+    return mapping
+
+
+def _form_result_identity_map(form_results: List[dict]) -> Dict[str, dict]:
+    mapping: Dict[str, dict] = {}
+    for result in form_results:
+        for key in (result.get("formCode"), result.get("formName"), result.get("modelCode")):
+            value = str(key or "").strip()
+            if value:
+                mapping.setdefault(value, result)
+    return mapping
+
+
+def _component_definition_map(components: List[dict]) -> Dict[str, dict]:
+    mapping: Dict[str, dict] = {}
+    for comp in components or []:
+        code = str(comp.get("code", "")).strip()
+        if code and code not in mapping:
+            mapping[code] = comp
+        model_field = str(comp.get("modelField", comp.get("model_field", ""))).strip()
+        if model_field and model_field not in mapping:
+            mapping[model_field] = comp
+        label = str(comp.get("label", "")).strip()
+        if label and label not in mapping:
+            mapping[label] = comp
+    return mapping
+
+
+def _resolve_component_reference(comp_def: dict, form_map: Dict[str, dict]) -> tuple[str, str, str]:
+    association = comp_def.get("formAssociationConfig") or comp_def.get("form_association_config") or {}
+    ref = comp_def.get("ref") or {}
+    target = (
+        str(association.get("targetModelCode") or "").strip()
+        or str(comp_def.get("selector_form_code") or "").strip()
+        or str(comp_def.get("association_form_code") or "").strip()
+        or str(comp_def.get("ref_model_code") or "").strip()
+        or (str(ref.get("model") or "").strip() if isinstance(ref, dict) else str(ref or "").strip())
+    )
+    target_field = (
+        str(association.get("targetFieldCode") or "").strip()
+        or str(comp_def.get("selector_field_code") or "").strip()
+        or str(comp_def.get("association_target_field_code") or "").strip()
+        or str(comp_def.get("ref_display_field_code") or "").strip()
+        or (str(ref.get("target_field") or ref.get("display_field") or ref.get("field") or "").strip() if isinstance(ref, dict) else "")
+    )
+    origin_field = str(association.get("originFieldCode") or comp_def.get("association_origin_field_code") or "").strip()
+
+    resolved_form = form_map.get(target)
+    if resolved_form:
+        target_model_code = str(resolved_form.get("modelCode", resolved_form.get("model_code", target))).strip() or target
+        return target_model_code, target_field, origin_field
+    return target, target_field, origin_field
+
+
+def _resolve_target_form_result(
+    comp_def: dict,
+    form_map: Dict[str, dict],
+    form_results: List[dict],
+    target_model_code: str,
+) -> Optional[dict]:
+    ref = comp_def.get("ref") or {}
+    for value in (
+        comp_def.get("selector_form_code"),
+        comp_def.get("association_form_code"),
+        comp_def.get("formCode"),
+        comp_def.get("form_code"),
+        comp_def.get("code"),
+        ref.get("formCode") if isinstance(ref, dict) else "",
+    ):
+        candidate = str(value or "").strip()
+        if not candidate:
+            continue
+        form_def = form_map.get(candidate)
+        if not form_def:
+            continue
+        for form_result in form_results:
+            if (
+                form_result.get("formCode") == form_def.get("formCode")
+                or form_result.get("formCode") == form_def.get("code")
+                or form_result.get("formName") == form_def.get("formName")
+                or form_result.get("formName") == form_def.get("name")
+                or form_result.get("modelCode") == form_def.get("modelCode")
+            ):
+                return form_result
+
+    for form_result in form_results:
+        if str(form_result.get("modelCode", "")).strip() == target_model_code:
+            return form_result
+    return None
+
+
+def _iter_form_components(form_components: List[dict]) -> List[dict]:
+    items: List[dict] = []
+    for component in form_components or []:
+        items.append(component)
+        if component.get("componentType") == "FORM_WIDGET_SON_TABLE":
+            items.extend(component.get("tableColumn", []) or [])
+    return items
+
+
+def _component_field_code(component: dict) -> str:
+    model_field = str(component.get("modelField", "")).strip()
+    if "." in model_field:
+        return model_field.split(".", 1)[1]
+    return str(component.get("code", "")).strip()
+
+
+def _find_component_by_field(
+    form_components: List[dict],
+    field_code: str,
+    *,
+    label: str = "",
+) -> Optional[dict]:
+    normalized_field = str(field_code or "").strip()
+    normalized_label = str(label or "").strip()
+    for component in _iter_form_components(form_components):
+        if normalized_field and _component_field_code(component) == normalized_field:
+            return component
+        if normalized_label and str(component.get("label", "")).strip() == normalized_label:
+            return component
+    return None
+
+
+def _build_display_component_refs(form_components: List[dict], field_codes: List[str]) -> List[dict]:
+    refs: List[dict] = []
+    seen: set[str] = set()
+    for field_code in field_codes:
+        component = _find_component_by_field(form_components, field_code)
+        component_uuid = str(component.get("uuid", "")).strip() if component else ""
+        if not component_uuid or component_uuid in seen:
+            continue
+        seen.add(component_uuid)
+        item = {
+            "id": component_uuid,
+            "componentType": component.get("componentType", "FORM_TEXT_INPUT"),
+            "name": component.get("label", "") or component.get("modelFieldName", "") or field_code,
+        }
+        if component.get("chooseOptions"):
+            item["chooseOptions"] = component.get("chooseOptions")
+        if "multicolor" in component:
+            item["multicolor"] = bool(component.get("multicolor"))
+        refs.append(item)
+    return refs
+
+
+def _build_form_assignment(current_component: dict, target_component: dict, target_form_id: str) -> dict:
+    return {
+        "currentFormComponent": current_component.get("uuid", ""),
+        "currentFormComponentType": current_component.get("componentType", "FORM_TEXT_INPUT"),
+        "otherFormComponent": target_component.get("uuid", ""),
+        "otherFormComponentType": target_component.get("componentType", "FORM_TEXT_INPUT"),
+        "otherFormId": target_form_id,
+    }
+
+
+def _build_permission_groups_for_form_config(
+    rules: List[dict],
+    role_codes: Dict[str, dict],
+) -> tuple[List[dict], List[dict], List[dict]]:
+    permission_groups: List[dict] = []
+    advanced_groups: List[dict] = []
+    operation_groups: List[dict] = []
+
+    for index, rule in enumerate(rules, start=1):
+        role_code = str(rule.get("roleCode") or rule.get("role") or "").strip()
+        role_info = role_codes.get(role_code, {}) if role_code else {}
+        perm_obj = _resolve_permission_object(rule, role_codes)
+        resolved_role_name = str(role_info.get("roleName") or "").strip()
+        raw_role_name = str(rule.get("roleName") or "").strip()
+        role_name = (
+            resolved_role_name
+            or (raw_role_name if raw_role_name and raw_role_name != role_code else "")
+            or str(perm_obj["permissionObjectDisplayName"] or role_code).strip()
+        )
+        range_type = _normalize_permission_range(rule.get("data", "ALL"))
+        ops = _parse_permission_ops(rule.get("op", "all"))
+        can_view = "all" in ops or "view" in ops
+        can_add = "all" in ops or "add" in ops
+        can_edit = "all" in ops or "edit" in ops
+        can_delete = "all" in ops or "delete" in ops
+        can_import = bool(rule.get("canImport"))
+        can_draft = bool(rule.get("canDraft"))
+        can_export = bool(rule.get("canExport"))
+
+        if perm_obj["permissionObjectType"] == "ROLE":
+            role_id = str(role_info.get("id") or "").strip()
+            role_code_value = (
+                str(role_info.get("roleCode") or "").strip()
+                or role_code
+                or perm_obj["permissionObjectValue"]
+            )
+            object_type = "ROLE"
+            object_value = role_id or role_code_value
+            object_name = role_name
+        else:
+            object_type = "ALL_USER"
+            object_value = "ALL_USER"
+            object_name = "全部人员"
+
+        permission_groups.append({
+            "groupConditions": [],
+            "selectorFilterConditionList": [],
+            "dataPermissions": [{
+                "permissionType": object_type,
+                "permissionValue": object_value,
+                "queryPermission": can_view,
+                "updatePermission": can_edit,
+                "deletePermission": can_delete,
+                "addPermission": can_add,
+            }],
+        })
+
+        advanced_groups.append({
+            "permissionName": f"{object_name}权限",
+            "permissionDescribe": "",
+            "permissionOperationType": {
+                "queryPermission": can_view,
+                "updatePermission": can_edit,
+                "deletePermission": can_delete,
+                "commentPermission": can_view,
+                "dataSharePermission": can_view,
+                "exportPermission": can_export,
+                "logPermission": can_view,
+                "printPermission": can_view,
+                "queryApprovalInfoPermission": can_view,
+            },
+            "filterConditionGroups": [],
+            "permissionObjects": [{
+                "permissionObjectType": object_type,
+                "permissionObjectValue": object_value,
+                "permissionObjectDisplayName": object_name,
+                "permissionRange": {"rangeType": range_type},
+            }],
+        })
+
+        if any((can_add, can_import, can_draft)):
+            operation_groups.append({
+                "uuid": f"perm-op-{index}",
+                "permissionName": f"{object_name}操作权限",
+                "permissionDescribe": "",
+                "permissionOperationType": {
+                    "temporaryStoragePermission": can_draft,
+                    "addPermission": can_add,
+                    "importPermission": can_import,
+                    "copyAddPermission": False,
+                    "batchDeletePermission": False,
+                    "batchRejectPermission": False,
+                    "batchAgreePermission": False,
+                    "shareFormPermission": False,
+                    "processAnalysisPermission": False,
+                },
+                "permissionObjects": [{
+                    "permissionObjectType": object_type,
+                    "permissionObjectValue": object_value,
+                    "permissionObjectDisplayName": object_name,
+                }],
+            })
+
+    return permission_groups, advanced_groups, operation_groups
+
+
+async def _sync_form_component_references(
+    client: APaaSClient,
+    app_id: str,
+    form_id: str,
+    form_def: dict,
+    all_forms: List[dict],
+    form_results: List[dict],
+) -> None:
+    if not form_id:
+        return
+
+    form_map = _form_identity_map(all_forms)
+    comp_def_map = _component_definition_map(form_def.get("components", []) or [])
+    form_config = await client.query_detail_page_config(app_id, form_id)
+    components = form_config.get("detailPage", {}).get("formComponents", [])
+    updated = False
+
+    def _match_comp_def(component: dict) -> Optional[dict]:
+        label = str(component.get("label", "")).strip()
+        if label and label in comp_def_map:
+            return comp_def_map[label]
+        field_code = _component_field_code(component)
+        if field_code and field_code in comp_def_map:
+            return comp_def_map[field_code]
+        model_field = str(component.get("modelField", "")).strip()
+        if model_field and model_field in comp_def_map:
+            return comp_def_map[model_field]
+        return None
+
+    target_form_cache: Dict[str, dict] = {}
+
+    async def _get_target_form_payload(target_form_result: dict) -> dict:
+        target_form_id = str(target_form_result.get("formId", "")).strip()
+        if not target_form_id:
+            return {}
+        if target_form_id not in target_form_cache:
+            target_form_cache[target_form_id] = await client.query_detail_page_config(app_id, target_form_id)
+        return target_form_cache[target_form_id]
+
+    async def _apply_reference(component: dict, comp_def: dict) -> bool:
+        desired_component_type = str(
+            comp_def.get("componentType") or comp_def.get("component_type") or ""
+        ).strip()
+        target_model_code, target_field, origin_field = _resolve_component_reference(comp_def, form_map)
+        if not target_model_code:
+            return False
+
+        target_form_result = _resolve_target_form_result(comp_def, form_map, form_results, target_model_code)
+        if not target_form_result:
+            return False
+
+        target_form_payload = await _get_target_form_payload(target_form_result)
+        target_components = target_form_payload.get("detailPage", {}).get("formComponents", [])
+        target_component = _find_component_by_field(target_components, target_field)
+        if not target_component:
+            return False
+
+        changed = False
+        if desired_component_type in ("FORM_DATA_SELECTOR_SINGLE", "FORM_DATA_SELECTOR"):
+            if component.get("componentType") != desired_component_type:
+                component["componentType"] = desired_component_type
+                changed = True
+            display_field_codes: List[str] = []
+            target_form_def = _form_identity_map(all_forms).get(
+                str(target_form_result.get("formCode") or target_form_result.get("formName") or target_form_result.get("modelCode") or "")
+            )
+            if target_form_def:
+                for target_comp_def in target_form_def.get("components", []) or []:
+                    if bool(target_comp_def.get("showInList")):
+                        model_field = str(target_comp_def.get("modelField", target_comp_def.get("model_field", ""))).strip()
+                        display_code = model_field.split(".", 1)[1] if "." in model_field else str(target_comp_def.get("code", "")).strip()
+                        if display_code:
+                            display_field_codes.append(display_code)
+            if target_field and target_field not in display_field_codes:
+                display_field_codes.append(target_field)
+            display_components = _build_display_component_refs(target_components, display_field_codes) or [{
+                "id": target_component.get("uuid", ""),
+                "name": target_component.get("label", "") or target_field,
+                "componentType": target_component.get("componentType", "FORM_TEXT_INPUT"),
+            }]
+            desired_selector = {
+                "type": "LOV_CHOOSE",
+                "otherFormId": str(target_form_result.get("formId", "")).strip(),
+                "otherFormName": target_form_result.get("formName", ""),
+                "otherComponent": target_component.get("uuid", ""),
+                "otherComponentName": target_component.get("label", "") or target_field,
+                "otherComponentType": target_component.get("componentType", "FORM_TEXT_INPUT"),
+                "displayComponents": display_components,
+            }
+            if component.get("dataSelector") != desired_selector:
+                component["dataSelector"] = desired_selector
+                changed = True
+            desired_bof_type = "BOF_SINGLE_DATA_SELECTOR" if desired_component_type == "FORM_DATA_SELECTOR_SINGLE" else "BOF_DATA_SELECTOR"
+            if component.get("businessObjectComponentType") != desired_bof_type:
+                component["businessObjectComponentType"] = desired_bof_type
+                changed = True
+            if component.get("placeholder") != "请选择":
+                component["placeholder"] = "请选择"
+                changed = True
+            for key in ("associationFormId", "associationField", "displayFields", "displayStyle", "quoteViewType", "assocAllowNew", "assocTabId", "tableOrders", "formAssociationConfig"):
+                if key in component:
+                    component.pop(key, None)
+                    changed = True
+        elif desired_component_type == "FORM_ASSOCIATION":
+            if component.get("componentType") != "FORM_ASSOCIATION":
+                component["componentType"] = "FORM_ASSOCIATION"
+                changed = True
+            desired_origin = origin_field or str(component.get("modelField", "")).split(".", 1)[-1]
+            origin_component = _find_component_by_field(components, desired_origin)
+            if not origin_component:
+                return False
+            target_form_def = _form_identity_map(all_forms).get(
+                str(target_form_result.get("formCode") or target_form_result.get("formName") or target_form_result.get("modelCode") or "")
+            )
+            display_field_codes: List[str] = []
+            if target_form_def:
+                for target_comp_def in target_form_def.get("components", []) or []:
+                    if bool(target_comp_def.get("showInList")):
+                        model_field = str(target_comp_def.get("modelField", target_comp_def.get("model_field", ""))).strip()
+                        display_code = model_field.split(".", 1)[1] if "." in model_field else str(target_comp_def.get("code", "")).strip()
+                        if display_code:
+                            display_field_codes.append(display_code)
+            if target_field and target_field not in display_field_codes:
+                display_field_codes.append(target_field)
+            display_refs = _build_display_component_refs(target_components, display_field_codes) or [{
+                "id": target_component.get("uuid", ""),
+                "componentType": target_component.get("componentType", "FORM_TEXT_INPUT"),
+            }]
+            desired_association_field = {
+                "originUuid": origin_component.get("uuid", ""),
+                "targetUuid": target_component.get("uuid", ""),
+            }
+            if component.get("associationField") != desired_association_field:
+                component["associationField"] = desired_association_field
+                changed = True
+            if component.get("associationFormId") != target_form_result.get("formId", ""):
+                component["associationFormId"] = target_form_result.get("formId", "")
+                changed = True
+            display_field_ids = [item["id"] for item in display_refs if item.get("id")]
+            if component.get("displayFields") != display_field_ids:
+                component["displayFields"] = display_field_ids
+                changed = True
+            if component.get("displayStyle") != "PAGE_TABLE":
+                component["displayStyle"] = "PAGE_TABLE"
+                changed = True
+            if component.get("quoteViewType") != "LIST_VIEW":
+                component["quoteViewType"] = "LIST_VIEW"
+                changed = True
+            if component.get("assocAllowNew") is not False:
+                component["assocAllowNew"] = False
+                changed = True
+            if component.get("assocTabId") != "":
+                component["assocTabId"] = ""
+                changed = True
+            if component.get("tableOrders") != []:
+                component["tableOrders"] = []
+                changed = True
+            if component.get("businessObjectComponentType") != "BOF_ASSOCIATION":
+                component["businessObjectComponentType"] = "BOF_ASSOCIATION"
+                changed = True
+        return changed
+
+    for component in components:
+        if component.get("componentType") == "FORM_WIDGET_SON_TABLE":
+            for column in component.get("tableColumn", []) or []:
+                comp_def = _match_comp_def(column)
+                if comp_def and await _apply_reference(column, comp_def):
+                    updated = True
+            continue
+
+        comp_def = _match_comp_def(component)
+        if comp_def and await _apply_reference(component, comp_def):
+            updated = True
+
+    if updated:
+        logger.info(
+            "save_form_config reason: 回写表单引用 (form=%s, formId=%s)",
+            form_def.get("name") or form_def.get("formName") or form_id,
+            form_id,
+        )
+        await client.save_form_config(app_id, form_config)
 
 
 # ------------------------------------------------------------------
@@ -940,10 +1449,12 @@ def _resolve_permission_object(rule: dict, role_codes: Dict[str, dict]) -> dict:
     role_code = rule.get("role", "")
     if role_code and role_code != "all":
         role_info = role_codes.get(role_code, {})
+        role_name = role_info.get("roleName") or rule.get("roleName") or role_code
+        role_value = role_info.get("id") or role_info.get("roleCode", role_code)
         return {
             "permissionObjectType": "ROLE",
-            "permissionObjectValue": role_info.get("roleCode", role_code),
-            "permissionObjectDisplayName": role_info.get("roleName", role_code),
+            "permissionObjectValue": role_value,
+            "permissionObjectDisplayName": role_name,
         }
     return {
         "permissionObjectType": "ALL_USER",
@@ -1003,6 +1514,12 @@ def _default_form_permission_payload(app_id: str, form_code: str, form_id: str) 
                 "queryPermission": True,
                 "deletePermission": False,
                 "updatePermission": False,
+                "commentPermission": True,
+                "dataSharePermission": True,
+                "exportPermission": False,
+                "logPermission": True,
+                "printPermission": True,
+                "queryApprovalInfoPermission": True,
             },
         }],
     }
@@ -1025,9 +1542,16 @@ def _build_form_permission_payload(
         perm_obj_name = perm_obj["permissionObjectDisplayName"]
         ops = _parse_permission_ops(rule.get("op", "all"))
         range_type = _normalize_permission_range(rule.get("data", "ALL"))
+        can_view = "all" in ops or "view" in ops
+        can_add = "all" in ops or "add" in ops
+        can_edit = "all" in ops or "edit" in ops
+        can_delete = "all" in ops or "delete" in ops
+        can_import = bool(rule.get("canImport"))
+        can_draft = bool(rule.get("canDraft"))
+        can_export = bool(rule.get("canExport"))
 
-        has_write = "all" in ops or bool(ops - {"view"})
-        if has_write:
+        has_operation = any((can_add, can_import, can_draft))
+        if has_operation:
             op_key = (perm_obj_type, perm_obj_value)
             if op_key not in operation_groups:
                 operation_groups[op_key] = {
@@ -1052,13 +1576,9 @@ def _build_form_permission_payload(
                 }
 
             perm_op = operation_groups[op_key]["permissionOperationType"]
-            perm_op["addPermission"] = perm_op["addPermission"] or ("all" in ops or "add" in ops or "edit" in ops)
-            perm_op["batchAgreePermission"] = perm_op["batchAgreePermission"] or ("all" in ops or "approve" in ops)
-            perm_op["batchDeletePermission"] = perm_op["batchDeletePermission"] or ("all" in ops or "delete" in ops)
-            perm_op["batchRejectPermission"] = perm_op["batchRejectPermission"] or ("all" in ops or "approve" in ops)
-            perm_op["copyAddPermission"] = perm_op["copyAddPermission"] or ("all" in ops)
-            perm_op["importPermission"] = perm_op["importPermission"] or ("all" in ops or "import" in ops)
-            perm_op["temporaryStoragePermission"] = perm_op["temporaryStoragePermission"] or ("all" in ops or "add" in ops)
+            perm_op["addPermission"] = perm_op["addPermission"] or can_add
+            perm_op["importPermission"] = perm_op["importPermission"] or can_import
+            perm_op["temporaryStoragePermission"] = perm_op["temporaryStoragePermission"] or can_draft
 
         data_key = (perm_obj_type, perm_obj_value, range_type)
         if data_key not in data_groups:
@@ -1072,15 +1592,28 @@ def _build_form_permission_payload(
                     "permissionRange": {"rangeType": range_type},
                 }],
                 "permissionOperationType": {
-                    "queryPermission": True,
+                    "queryPermission": False,
                     "deletePermission": False,
                     "updatePermission": False,
+                    "commentPermission": False,
+                    "dataSharePermission": False,
+                    "exportPermission": False,
+                    "logPermission": False,
+                    "printPermission": False,
+                    "queryApprovalInfoPermission": False,
                 },
             }
 
         data_perm = data_groups[data_key]["permissionOperationType"]
-        data_perm["deletePermission"] = data_perm["deletePermission"] or ("all" in ops or "delete" in ops)
-        data_perm["updatePermission"] = data_perm["updatePermission"] or ("all" in ops or "edit" in ops)
+        data_perm["queryPermission"] = data_perm["queryPermission"] or can_view
+        data_perm["deletePermission"] = data_perm["deletePermission"] or can_delete
+        data_perm["updatePermission"] = data_perm["updatePermission"] or can_edit
+        data_perm["commentPermission"] = data_perm["commentPermission"] or can_view
+        data_perm["dataSharePermission"] = data_perm["dataSharePermission"] or can_view
+        data_perm["exportPermission"] = data_perm["exportPermission"] or can_export
+        data_perm["logPermission"] = data_perm["logPermission"] or can_view
+        data_perm["printPermission"] = data_perm["printPermission"] or can_view
+        data_perm["queryApprovalInfoPermission"] = data_perm["queryApprovalInfoPermission"] or can_view
 
     return {
         "formCode": form_code,
@@ -1092,36 +1625,101 @@ def _build_form_permission_payload(
     }
 
 
+async def _sync_form_permissions_to_form_config(
+    client: APaaSClient,
+    app_id: str,
+    form_id: str,
+    rules: List[dict],
+    role_codes: Dict[str, dict],
+) -> None:
+    """将权限同步回表单详情配置，确保平台页面权限设置能读到业务权限组。"""
+    form_config = await client.query_detail_page_config(app_id, form_id)
+    permission_groups, advanced_groups, operation_groups = _build_permission_groups_for_form_config(
+        rules,
+        role_codes,
+    )
+    form_config["permissionGroups"] = permission_groups
+    form_config["advancedPermissionGroups"] = advanced_groups
+    form_config["operationPermissionGroups"] = operation_groups
+
+    logger.info(
+        "save_form_config reason: 回写表单权限 (formId=%s, permissionGroups=%s, advanced=%s, operation=%s)",
+        form_id,
+        len(permission_groups),
+        len(advanced_groups),
+        len(operation_groups),
+    )
+    await client.save_form_config(app_id, form_config)
+
+
 async def execute_configure_permissions(
     client: APaaSClient,
     app_id: str,
     permissions: List[dict],
     form_results: List[dict],
     role_codes: Optional[Dict[str, dict]] = None,
+    all_forms: Optional[List[dict]] = None,
 ) -> dict:
     """为所有表单配置权限。"""
     role_codes = role_codes or {}
     perm_payloads = []
+    permission_sync_jobs: List[dict] = []
+    form_defs_by_identity = _form_identity_map(all_forms or [])
     for fr in form_results:
         form_code = fr.get("formCode", "")
         form_id = fr.get("formId", "")
+        form_name = fr.get("formName", "")
+        model_code = fr.get("modelCode", "")
+        form_def = (
+            form_defs_by_identity.get(form_code)
+            or form_defs_by_identity.get(form_name)
+            or form_defs_by_identity.get(model_code)
+        )
 
-        user_perm = next((p for p in permissions if p.get("form") == fr.get("formName")), None)
+        if form_def:
+            try:
+                await _sync_form_component_references(
+                    client=client,
+                    app_id=app_id,
+                    form_id=form_id,
+                    form_def=form_def,
+                    all_forms=all_forms or [],
+                    form_results=form_results,
+                )
+            except Exception as exc:
+                logger.warning("最终表单引用回写失败（%s）: %s", form_name or form_id, exc)
+
+        user_perm = next((
+            p for p in permissions
+            if p.get("form") == form_name
+            or p.get("formName") == form_name
+            or p.get("formCode") == form_code
+            or p.get("form_code") == form_code
+        ), None)
 
         if user_perm and user_perm.get("rules"):
+            rules = user_perm["rules"]
             perm_payloads.append(
                 _build_form_permission_payload(
                     app_id=app_id,
                     form_code=form_code,
                     form_id=form_id,
-                    rules=user_perm["rules"],
+                    rules=rules,
                     role_codes=role_codes,
                 )
             )
-        else:
-            perm_payloads.append(_default_form_permission_payload(app_id, form_code, form_id))
-
+            permission_sync_jobs.append({
+                "form_id": form_id,
+                "rules": rules,
+            })
     if perm_payloads:
         await client.create_form_permissions(app_id, perm_payloads)
-
+        for job in permission_sync_jobs:
+            await _sync_form_permissions_to_form_config(
+                client=client,
+                app_id=app_id,
+                form_id=job["form_id"],
+                rules=job["rules"],
+                role_codes=role_codes,
+            )
     return {"permissions_count": len(perm_payloads)}

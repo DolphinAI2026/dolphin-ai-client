@@ -56,6 +56,49 @@ def _to_json(obj: Any) -> str:
     return json.dumps(obj, ensure_ascii=False, indent=2)
 
 
+def _encode_security_info(app_id: str) -> str:
+    payload = json.dumps({"appId": str(app_id)}, ensure_ascii=False, separators=(",", ":"))
+    return base64.b64encode(payload.encode("utf-8")).decode("utf-8")
+
+
+def _first_non_empty(data: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = data.get(key)
+        if value is None:
+            continue
+        if isinstance(value, str):
+            if value.strip():
+                return value
+            continue
+        return value
+    return ""
+
+
+def _normalize_model_field(raw_field: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(raw_field)
+
+    field_id = _first_non_empty(raw_field, "id", "fieldId", "modelFieldId")
+    field_code = _first_non_empty(raw_field, "fieldCode", "code", "columnCode", "name")
+    field_name = _first_non_empty(raw_field, "fieldName", "name", "columnName", "displayName", "fieldLabel")
+    field_type = _first_non_empty(raw_field, "fieldType", "dataType", "databaseFieldType", "dbType")
+    dict_code = _first_non_empty(raw_field, "dictionaryCode", "dictCode", "dictionary_code")
+    ref_model_code = _first_non_empty(raw_field, "refModelCode", "referenceModelCode", "targetModelCode")
+    ref_field_code = _first_non_empty(raw_field, "refFieldCode", "referenceFieldCode", "targetFieldCode")
+    max_length = _first_non_empty(raw_field, "maxLength", "length", "columnLength")
+
+    normalized["id"] = field_id
+    normalized["fieldCode"] = field_code
+    normalized["fieldName"] = field_name or field_code
+    normalized["fieldType"] = field_type or "STRING"
+    normalized["dictionaryCode"] = dict_code
+    normalized["refModelCode"] = ref_model_code
+    normalized["refFieldCode"] = ref_field_code
+    if max_length != "":
+        normalized["maxLength"] = max_length
+
+    return normalized
+
+
 def _log_request(method: str, url: str, payload: Any = None, params: Any = None):
     """记录请求日志"""
     logger.info(f">>> APaaS API 请求: {method} {url}")
@@ -326,6 +369,29 @@ class APaaSClient:
     async def create_form_permissions(self, app_id: str, payload: list) -> dict:
         return await self._post_resource("/common/resource/formPermission", payload, app_id)
 
+    async def query_roles(self, app_id: str, keyword: str = "") -> list:
+        """查询应用角色列表"""
+        url = f"{self.base_url}/xdap-app/roles/query/rolesList"
+        payload = {
+            "keyWord": keyword,
+            "appId": app_id,
+            "appQueryFlag": True,
+        }
+        _log_request("POST", url, payload)
+        start = time.time()
+
+        async with httpx.AsyncClient(verify=False, timeout=60.0) as client:
+            response = await client.post(url, headers=self._get_headers(app_id), json=payload)
+            elapsed_ms = (time.time() - start) * 1000
+            response.raise_for_status()
+            data = response.json()
+
+            _log_response(url, response.status_code, data, elapsed_ms)
+
+            if data.get("code") == "ok":
+                return data.get("data", [])
+            return []
+
     async def query_app_detail(self, app_id: str) -> dict:
         """查询单个应用详情（从应用列表中按 appId 过滤）"""
         apps = await self.query_app_list()
@@ -390,28 +456,89 @@ class APaaSClient:
 
     async def query_models(self, app_id: str) -> list:
         """查询应用下的所有数据模型（含字段）"""
-        url = f"{self.base_url}/xdap-app/dataModel/query/modelWithField"
-        payload = {"appId": app_id}
-        _log_request("POST", url, payload)
+        ts = self._get_timestamp()
+        url = f"{self.base_url}/xdap-app/dataModel/query/list"
+        params = {
+            "SECURITY_INFO": _encode_security_info(app_id),
+            "timestamp": ts,
+        }
+        payload = {
+            "page": 1,
+            "pageSize": 1000,
+            "keyWord": "",
+            "modelType": "",
+            "appId": app_id,
+        }
+        _log_request("POST", url, payload, params=params)
         start = time.time()
 
         async with httpx.AsyncClient(verify=False, timeout=60.0) as client:
-            response = await client.post(url, headers=self._get_headers(app_id), json=payload)
+            response = await client.post(url, headers=self._get_headers(app_id), params=params, json=payload)
             elapsed_ms = (time.time() - start) * 1000
             response.raise_for_status()
             data = response.json()
 
             _log_response(url, response.status_code, data, elapsed_ms, request_body=_to_json(payload))
 
-            if data.get("code") == "ok":
-                models = data.get("table", [])
-                # 平台返回的字段在 dataModelFields 中，统一转换为 fields
-                for m in models:
-                    if 'dataModelFields' in m and 'fields' not in m:
-                        m['fields'] = m['dataModelFields']
-                logger.info(f"查询到 {len(models)} 个模型: {[m.get('modelCode') for m in models]}")
-                return models
+            if data.get("code") != "ok":
+                return []
+
+            payload_data = data.get("data") or {}
+            models = payload_data.get("list") or data.get("table") or []
+            if not isinstance(models, list):
+                return []
+
+            normalized_models = []
+            for model in models:
+                model_id = str(model.get("id", model.get("dataModelId", "")) or "").strip()
+                fields = await self.query_model_fields(app_id, model_id) if model_id else []
+                normalized = dict(model)
+                normalized["id"] = model_id or model.get("id")
+                normalized["modelCode"] = model.get("modelCode", model.get("code", ""))
+                normalized["modelName"] = model.get("modelName", model.get("name", ""))
+                normalized["fields"] = fields
+                normalized["dataModelFields"] = fields
+                normalized_models.append(normalized)
+
+            logger.info(f"查询到 {len(normalized_models)} 个模型: {[m.get('modelCode') for m in normalized_models]}")
+            return normalized_models
+
+    async def query_model_fields(self, app_id: str, data_model_id: str) -> list:
+        """查询单个模型下的字段列表"""
+        resolved_id = str(data_model_id or "").strip()
+        if not resolved_id:
             return []
+
+        ts = self._get_timestamp()
+        url = f"{self.base_url}/xdap-app/modelField/query"
+        params = {
+            "SECURITY_INFO": _encode_security_info(app_id),
+            "timestamp": ts,
+        }
+        payload = {
+            "dataModelId": resolved_id,
+            "page": 1,
+            "pageSize": 1000,
+        }
+        _log_request("POST", url, payload, params=params)
+        start = time.time()
+
+        async with httpx.AsyncClient(verify=False, timeout=60.0) as client:
+            response = await client.post(url, headers=self._get_headers(app_id), params=params, json=payload)
+            elapsed_ms = (time.time() - start) * 1000
+            response.raise_for_status()
+            data = response.json()
+
+            _log_response(url, response.status_code, data, elapsed_ms, request_body=_to_json(payload))
+
+            if data.get("code") != "ok":
+                return []
+
+            payload_data = data.get("data") or {}
+            fields = payload_data.get("list") or data.get("table") or []
+            normalized_fields = [_normalize_model_field(field) for field in fields] if isinstance(fields, list) else []
+            logger.debug("查询模型字段成功: dataModelId=%s, count=%s", resolved_id, len(normalized_fields))
+            return normalized_fields
 
     async def query_dicts(self, app_id: str) -> list:
         """查询应用下的所有数据字典"""

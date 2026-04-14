@@ -12,6 +12,7 @@ from app.database import get_db
 from app.deps import AuthContext, get_auth_context, require_tenant_admin
 from app.models import LLMConfig
 from app.crypto import encrypt_password, decrypt_password
+from app.llm_client import LLMClient
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/llm-configs", tags=["llm-configs"])
@@ -286,8 +287,10 @@ async def test_llm_config(
     api_key = decrypt_password(config.api_key_enc)
 
     try:
-        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
             is_codex = config.provider == "codex" or "codex" in (config.model or "").lower()
+            is_anthropic_compat = "/anthropic" in (config.base_url or "")
+
             if is_codex:
                 resp = await client.post(
                     build_llm_responses_url(config.base_url),
@@ -300,18 +303,36 @@ async def test_llm_config(
                         "input": "回复OK",
                     },
                 )
+            elif is_anthropic_compat:
+                # Anthropic-compatible proxy（如 MiniMax），使用 Messages API
+                base = config.base_url.rstrip("/").removesuffix("/v1")
+                url = f"{base}/v1/messages"
+                llm = LLMClient(api_key=api_key, base_url=config.base_url, model=config.model)
+                resp = await client.post(
+                    url,
+                    headers=llm._anthropic_headers(),
+                    json={
+                        "model": config.model,
+                        "messages": [{"role": "user", "content": "回复OK"}],
+                        "max_tokens": 10,
+                    },
+                )
             else:
+                test_body: dict = {
+                    "model": config.model,
+                    "messages": [{"role": "user", "content": "回复OK"}],
+                    "max_tokens": 50,
+                }
+                # 思考模型（如 Qwen3.x）禁用思考以加快测试速度
+                if config.provider == "qwen" or "qwen3" in (config.model or "").lower():
+                    test_body["enable_thinking"] = False
                 resp = await client.post(
                     build_llm_chat_completions_url(config.base_url),
                     headers={
                         "Authorization": f"Bearer {api_key}",
                         "Content-Type": "application/json",
                     },
-                    json={
-                        "model": config.model,
-                        "messages": [{"role": "user", "content": "回复OK"}],
-                        "max_tokens": 10,
-                    },
+                    json=test_body,
                 )
             if resp.status_code == 200:
                 data = resp.json()
@@ -322,13 +343,18 @@ async def test_llm_config(
                             continue
                         for content in item.get("content", []):
                             reply += content.get("text", "")
+                elif is_anthropic_compat:
+                    reply = ""
+                    for block in data.get("content", []):
+                        if block.get("type") == "text":
+                            reply += block.get("text", "")
                 else:
                     reply = data.get("choices", [{}])[0].get("message", {}).get("content", "")
                 return {"success": True, "reply": reply[:100]}
             else:
-                return {"success": False, "error": f"HTTP {resp.status_code}: {resp.text[:200]}"}
+                return {"success": False, "error": f"HTTP {resp.status_code}: {resp.text[:300]}"}
     except Exception as e:
-        return {"success": False, "error": str(e)[:200]}
+        return {"success": False, "error": str(e)[:300]}
 
 
 @router.post("/{config_id}/set-default")

@@ -34,6 +34,7 @@ _proxy_state: dict = {
     "token": "",
     "tenant_id": "",
     "username": "",
+    "password": "",
 }
 
 _http_client: Optional[httpx.AsyncClient] = None
@@ -57,9 +58,10 @@ async def _refresh_env_token(env: PlatformEnv) -> bool:
         _proxy_state["token"] = token
         _proxy_state["tenant_id"] = env.platform_tenant_id
         _proxy_state["username"] = env.username or ""
+        _proxy_state["password"] = password
         return True
     except Exception as e:
-        logger.warning(f"Failed to refresh platform token: {e}")
+        logger.warning(f"Failed to refresh platform token: {type(e).__name__}: {e}")
         return False
 
 
@@ -93,6 +95,19 @@ def _get_client() -> httpx.AsyncClient:
             verify=False,
         )
     return _http_client
+
+
+def _error_html(title: str, detail: str) -> str:
+    """生成带样式的错误页 HTML，在 iframe 内清晰可读，body 上带 data-proxy-error 供前端检测"""
+    return (
+        "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+        "<style>body{margin:0;display:flex;align-items:center;justify-content:center;"
+        "height:100vh;font-family:-apple-system,sans-serif;background:#f8f8fc;}"
+        ".box{text-align:center;color:#555;padding:32px}"
+        "h3{font-size:16px;font-weight:600;color:#333;margin:0 0 8px}"
+        "p{font-size:13px;margin:0;color:#888}</style></head>"
+        f"<body data-proxy-error='1'><div class='box'><h3>{title}</h3><p>{detail}</p></div></body></html>"
+    )
 
 
 def _extract_user_id_from_token(token: str) -> str:
@@ -160,42 +175,87 @@ def _build_vuex_state(token: str, tenant_id: str, username: str) -> str:
     return json.dumps(state, ensure_ascii=False)
 
 
+_HEADER_SELECTORS = (
+    ".header-wrap,.layout-header,.main-header,.platform-header,"
+    ".x-header,#header,header.el-header,.el-header,.tenant-header,.app-top-header"
+)
+
 def _inject_sso_script(html: str, vuex_state: str) -> str:
-    """在 HTML <head> 中注入 SSO 脚本"""
+    """在 </head> 前注入 SSO token + 强制显示导航栏"""
     escaped = json.dumps(vuex_state)
-    # CSS: 隐藏平台顶部导航栏 + JS: 延迟隐藏兜底
+
+    # CSS：比平台自身样式晚声明，!important 确保覆盖平台的 iframe 隐藏规则
     style = (
-        "\n<style id='iframe-overrides'>\n"
-        "  .header-wrap, .layout-header, .main-header, .platform-header,\n"
-        "  .x-header, #header, header.el-header, .el-header,\n"
-        "  .tenant-header, .app-top-header { display: none !important; }\n"
+        "\n<style id='apaas-builder-overrides'>\n"
+        + ",\n".join(s.strip() for s in _HEADER_SELECTORS.split(",")) + " {\n"
+        "  display: revert !important;\n"
+        "  visibility: visible !important;\n"
+        "  opacity: 1 !important;\n"
+        "  pointer-events: auto !important;\n"
+        "}\n"
         "</style>\n"
     )
+
     script = (
         "\n<script>\n"
         "(function(){\n"
-        "  try {\n"
-        "    var k='__vuex__local', v=" + escaped + ";\n"
-        "    localStorage.setItem(k,v);\n"
+        # 伪装成非 iframe，阻止平台触发隐藏导航逻辑
+        "  ['top','parent','frameElement'].forEach(function(k){\n"
+        "    try{\n"
+        "      Object.defineProperty(window,k,{\n"
+        "        get:function(){return k==='frameElement'?null:window;},\n"
+        "        configurable:true\n"
+        "      });\n"
+        "    }catch(e){}\n"
+        "  });\n"
+        # SSO：写入 Vuex token，平台初始化时自动读取，无需手动登录
+        "  try{\n"
+        "    localStorage.setItem('__vuex__local'," + escaped + ");\n"
+        "    sessionStorage.setItem('__vuex__session'," + escaped + ");\n"
         "    console.log('[SSO] token injected');\n"
         "  }catch(ex){console.error('[SSO]',ex)}\n"
-        "  // 延迟隐藏顶部导航（兜底，等 Vue 渲染完成）\n"
-        "  setTimeout(function(){\n"
-        "    var h=document.querySelector('.header-wrap,.layout-header,.main-header,.x-header,.el-header,header');\n"
-        "    if(h&&h.offsetHeight<80){h.style.display='none';}\n"
-        "    // 通用：隐藏第一个 header 高度 < 80px 的元素\n"
-        "    document.querySelectorAll('header,[class*=header]').forEach(function(el){\n"
-        "      if(el.offsetHeight>0&&el.offsetHeight<80&&el.offsetWidth>window.innerWidth*0.8){\n"
-        "        el.style.display='none';\n"
-        "      }\n"
+        # MutationObserver：防止平台 JS 动态隐藏导航栏
+        "  var SEL='" + _HEADER_SELECTORS + "';\n"
+        "  function forceShow(el){\n"
+        "    el.style.removeProperty('display');\n"
+        "    el.style.removeProperty('visibility');\n"
+        "    el.style.removeProperty('opacity');\n"
+        "  }\n"
+        "  function observe(){\n"
+        "    var obs=new MutationObserver(function(muts){\n"
+        "      muts.forEach(function(m){\n"
+        "        var el=m.target;\n"
+        "        if(el.nodeType===1){\n"
+        "          var cs=window.getComputedStyle(el);\n"
+        "          if(cs.display==='none'||cs.visibility==='hidden'||parseFloat(cs.opacity)<0.1){\n"
+        "            forceShow(el);\n"
+        "          }\n"
+        "        }\n"
+        "      });\n"
         "    });\n"
-        "  }, 3000);\n"
+        "    document.querySelectorAll(SEL).forEach(function(el){\n"
+        "      obs.observe(el,{attributes:true,attributeFilter:['style','class']});\n"
+        "    });\n"
+        "  }\n"
+        "  if(document.readyState==='loading'){\n"
+        "    document.addEventListener('DOMContentLoaded',observe);\n"
+        "  }else{\n"
+        "    observe();\n"
+        "  }\n"
+        "  setTimeout(observe,1500);\n"
+        "  setTimeout(observe,3500);\n"
         "})();\n"
         "</script>\n"
     )
+
     inject = style + script
-    if "<head>" in html:
-        return html.replace("<head>", "<head>" + inject, 1)
+    html_lower = html.lower()
+    if "</head>" in html_lower:
+        idx = html_lower.index("</head>")
+        return html[:idx] + inject + html[idx:]
+    if "<head>" in html_lower:
+        idx = html_lower.index("<head>") + len("<head>")
+        return html[:idx] + inject + html[idx:]
     return inject + html
 
 
@@ -211,6 +271,7 @@ async def proxy_init(request: Request):
     _proxy_state["token"] = body.get("token", "")
     _proxy_state["tenant_id"] = body.get("tenant_id", "")
     _proxy_state["username"] = body.get("username", "")
+    _proxy_state["password"] = body.get("password", "")
     logger.info(f"Proxy initialized: host={_proxy_state['host']}, tenant={_proxy_state['tenant_id']}")
     return {"ok": True}
 
@@ -246,48 +307,69 @@ async def proxy_entry(
         )
         app = result.scalar_one_or_none()
         if not app or not app.apaas_app_id:
-            return Response(content="<h3>应用未部署</h3>", media_type="text/html")
+            return Response(
+                content=_error_html("应用未部署到平台", "请先完成部署流程后再使用辅助搭建"),
+                media_type="text/html",
+                status_code=404,
+                headers={"X-Proxy-Error": "not-deployed"},
+            )
 
-        # 查环境：按优先级依次查 应用绑定 → 默认环境 → 任意已连接环境
+        # 辅助搭建必须严格使用应用绑定的平台环境，避免串到默认环境/其他已连接环境
         env = None
         if app.platform_env_id:
-            r = await db.execute(select(PlatformEnv).where(PlatformEnv.id == app.platform_env_id))
-            env = r.scalar_one_or_none()
-        if not env or not env.token:
-            r = await db.execute(
-                select(PlatformEnv).where(PlatformEnv.tenant_id == ctx.tenant_id, PlatformEnv.is_default == True)
-            )
-            env = r.scalar_one_or_none()
-        if not env or not env.token:
             r = await db.execute(
                 select(PlatformEnv).where(
+                    PlatformEnv.id == app.platform_env_id,
                     PlatformEnv.tenant_id == ctx.tenant_id,
-                    PlatformEnv.status == "connected",
-                ).limit(1)
+                )
             )
             env = r.scalar_one_or_none()
-        if not env:
-            return Response(content="<h3>平台环境未配置</h3>", media_type="text/html")
+            if not env:
+                return Response(
+                    content=_error_html("应用绑定环境不存在", "当前应用绑定的平台环境不存在，请重新选择环境后再进入辅助搭建"),
+                    media_type="text/html",
+                    status_code=404,
+                    headers={"X-Proxy-Error": "bound-env-not-found"},
+                )
+        else:
+            return Response(
+                content=_error_html("应用未绑定环境", "当前应用还没有绑定平台环境，请先重新选择环境并完成一次生成"),
+                media_type="text/html",
+                status_code=409,
+                headers={"X-Proxy-Error": "env-not-bound"},
+            )
 
+        # 有账号密码的环境每次都刷新 token，确保不用过期 token
         refreshed = False
         if env.username and env.password_enc:
             refreshed = await _refresh_env_token(env)
-        elif not env.token:
-            refreshed = await _refresh_env_token(env)
+
+        if not refreshed and not env.token:
+            return Response(
+                content=_error_html("平台环境未登录", f"绑定环境「{env.env_name}」的登录态已失效，请在环境管理中重新登录该环境"),
+                media_type="text/html",
+                status_code=401,
+                headers={"X-Proxy-Error": "env-not-logged-in"},
+            )
 
         if refreshed:
             await db.commit()
-        elif not env.token:
-            return Response(content="<h3>平台环境未登录</h3>", media_type="text/html")
 
         host = env.base_url.rstrip("/").replace("/backend", "")
         tid = env.platform_tenant_id
+        password = ""
+        if env.password_enc:
+            try:
+                password = decrypt_password(env.password_enc)
+            except Exception:
+                password = ""
 
     # 保存代理状态（后续 /platform/ 和 /backend/ 请求用）
     _proxy_state["host"] = host
     _proxy_state["token"] = env.token
     _proxy_state["tenant_id"] = tid
     _proxy_state["username"] = env.username or ""
+    _proxy_state["password"] = password
 
     # 生成 SSO 注入页面：先写 localStorage，再重定向到代理路径
     vuex = _build_vuex_state(env.token, tid, env.username or "")
@@ -309,6 +391,7 @@ async def proxy_entry(
         "<script>\n"
         "try{\n"
         "  localStorage.setItem('__vuex__local'," + escaped_vuex + ");\n"
+        "  sessionStorage.setItem('__vuex__session'," + escaped_vuex + ");\n"
         "  console.log('[SSO] token set');\n"
         "}catch(e){console.error(e)}\n"
         "window.location.replace(" + redirect_json + ");\n"
@@ -419,8 +502,14 @@ async def _proxy_request(request: Request, path: str, inject_auth: bool = False)
 
         return Response(content=content, status_code=resp.status_code, headers=resp_headers)
     except Exception as e:
-        logger.error(f"Proxy error [{path}]: {e}")
-        return Response(content=str(e), status_code=502)
+        detail = str(e) or type(e).__name__
+        logger.error(f"Proxy error [{path}]: {detail}")
+        return Response(
+            content=_error_html("连接平台失败", f"无法访问平台：{detail}"),
+            media_type="text/html",
+            status_code=502,
+            headers={"X-Proxy-Error": "connection-failed"},
+        )
 
 
 # 代理平台前端资源 /platform/...

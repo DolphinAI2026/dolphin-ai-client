@@ -308,7 +308,7 @@ def _build_role_payload(app_id: str, roles: List[Dict]) -> List[Dict]:
     suffix = _generate_suffix()
     result = []
     for r in roles:
-        base_code = f"R_{r.get('code', r['name'])}"
+        base_code = str(r.get('code', r['name']))
         role_code = _apply_suffix(base_code, suffix)
         result.append({
             "appId": app_id,

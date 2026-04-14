@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+import tempfile
 from typing import Annotated, Optional
 from fastapi import APIRouter, Depends, HTTPException, File, Form, UploadFile
 from sqlalchemy import select
@@ -13,7 +14,6 @@ from app.schemas import ChatRequest
 from app.deps import get_auth_context, AuthContext
 from app.llm_client import LLMClient
 from app.field_types import build_prompt_field_types_compact
-from app.routes.llm_configs import build_llm_chat_completions_url
 from app.context_compact import ContextCompactor
 
 
@@ -41,16 +41,8 @@ async def _stream_with_tenant_llm(cfg: dict | None, messages: list, max_retries:
     if cfg is None:
         raise ValueError("未配置可用的 LLM 模型，请在环境管理 → 模型配置中添加并启用模型")
 
-    payload = {
-        "model": cfg["model"],
-        "messages": messages,
-        "max_tokens": cfg["max_tokens"],
-        "stream": True,
-    }
-    url = build_llm_chat_completions_url(cfg["base_url"])
-    headers = {"Authorization": f"Bearer {cfg['api_key']}", "Content-Type": "application/json"}
-    timeout = httpx.Timeout(connect=15.0, read=300.0, write=15.0, pool=15.0)
-    _logger.info("LLM call: url=%s model=%s base_url=%s", url, cfg["model"], cfg["base_url"])
+    llm = LLMClient(api_key=cfg["api_key"], base_url=cfg["base_url"], model=cfg["model"])
+    _logger.info("LLM stream call: model=%s base_url=%s", cfg["model"], cfg["base_url"])
 
     import asyncio
     last_err = None
@@ -59,20 +51,9 @@ async def _stream_with_tenant_llm(cfg: dict | None, messages: list, max_retries:
             await asyncio.sleep(1)
             _logger.info("LLM stream retry %d/%d", attempt, max_retries)
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                async with client.stream("POST", url, headers=headers, json=payload) as response:
-                    response.raise_for_status()
-                    async for line in response.aiter_lines():
-                        if not line or not line.startswith("data:"):
-                            continue
-                        raw = line[5:].strip()
-                        if raw == "[DONE]":
-                            break
-                        try:
-                            yield json.dumps(json.loads(raw), ensure_ascii=False)
-                        except Exception:
-                            continue
-                    return
+            async for chunk in llm.chat_completion_stream(messages, max_tokens=cfg.get("max_tokens", 8192)):
+                yield chunk
+            return
         except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as e:
             last_err = e
             _logger.warning("LLM stream attempt %d failed: %r (type=%s)", attempt + 1, e, type(e).__name__)
@@ -84,6 +65,93 @@ async def _stream_with_tenant_llm(cfg: dict | None, messages: list, max_retries:
         raise last_err
 
 router = APIRouter(prefix="/chat", tags=["聊天"])
+
+
+async def _parse_uploaded_document(file: UploadFile) -> str:
+    """尽量从常见文档中提取可读文本，提取失败时返回空串。"""
+    filename = file.filename or ""
+    ext = os.path.splitext(filename)[1].lower()
+    content_type = (file.content_type or "").lower()
+    content = await file.read()
+
+    text_like_exts = {
+        ".md", ".markdown", ".txt", ".csv", ".json", ".yaml", ".yml", ".xml", ".html", ".htm"
+    }
+    if ext in text_like_exts or content_type.startswith("text/"):
+        return content.decode("utf-8", errors="ignore")
+
+    suffix = ext or ".tmp"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp.write(content)
+        tmp_path = tmp.name
+
+    try:
+        if ext == ".pdf":
+            try:
+                import pdfplumber
+                parts: list[str] = []
+                with pdfplumber.open(tmp_path) as pdf:
+                    for page in pdf.pages:
+                        text = page.extract_text()
+                        if text:
+                            parts.append(text)
+                return "\n".join(parts)
+            except Exception:
+                return ""
+
+        if ext in {".docx", ".doc"}:
+            try:
+                from docx import Document
+                doc = Document(tmp_path)
+                parts: list[str] = []
+                for para in doc.paragraphs:
+                    if para.text.strip():
+                        parts.append(para.text.strip())
+                for table in doc.tables:
+                    for row in table.rows:
+                        row_text = " | ".join(cell.text.strip() for cell in row.cells if cell.text.strip())
+                        if row_text:
+                            parts.append(row_text)
+                return "\n".join(parts)
+            except Exception:
+                return ""
+
+        if ext in {".xlsx", ".xls"}:
+            try:
+                from openpyxl import load_workbook
+                wb = load_workbook(tmp_path, data_only=True)
+                parts: list[str] = []
+                for ws in wb.worksheets:
+                    parts.append(f"## Sheet: {ws.title}")
+                    for row in ws.iter_rows(values_only=True):
+                        values = [str(v).strip() for v in row if v is not None and str(v).strip()]
+                        if values:
+                            parts.append(" | ".join(values))
+                return "\n".join(parts)
+            except Exception:
+                return ""
+
+        if ext in {".pptx", ".ppt"}:
+            try:
+                from pptx import Presentation
+                prs = Presentation(tmp_path)
+                parts: list[str] = []
+                for idx, slide in enumerate(prs.slides, start=1):
+                    slide_texts: list[str] = []
+                    for shape in slide.shapes:
+                        text = getattr(shape, "text", "")
+                        if text and text.strip():
+                            slide_texts.append(text.strip())
+                    if slide_texts:
+                        parts.append(f"## Slide {idx}")
+                        parts.extend(slide_texts)
+                return "\n".join(parts)
+            except Exception:
+                return ""
+
+        return ""
+    finally:
+        os.unlink(tmp_path)
 
 BUILDER_SYSTEM_PROMPT = """你是 aPaaS Builder AI，得帆云低代码平台的智能搭建助手。你的任务是通过多轮对话帮用户理清应用需求，然后生成结构化的应用配置。
 
@@ -128,21 +196,15 @@ BUILDER_SYSTEM_PROMPT = """你是 aPaaS Builder AI，得帆云低代码平台的
 1. **识别业务实体**：从业务描述中提取核心对象（如：工单、客户、工程师）
 2. **推导字段和字典**：为每个实体推导关键字段及其类型、枚举选项（如：工单状态 = 待派工/维修中/已完成）
 3. **推导表间关系**：实体之间如何关联（如：工单关联客户、工单关联工程师）
-4. **识别流程**：哪些环节需要审批/流转
-5. **判断实现方式**：明确告知用户哪些可以通过标准配置实现、哪些需要自开发（见下方"实现方式判断"）
 
 **输出格式**：用 2-3 轮对话完成拆解，每轮给出你的分析并请用户确认/补充：
 ```
 基于你的描述，我分析出以下核心功能：
 
-**可通过标准配置实现：**
-- ✅ 工单管理（表单+审批流程）
-- ✅ 客户档案（表单）
-- ✅ 工程师信息（表单）
-
-**需要自开发实现：**
-- 🔧 工程师绩效统计看板（自开发菜单页面）
-- 🔧 地图选址组件（自开发表单组件）
+**核心模块：**
+- 工单管理
+- 客户档案
+- 工程师信息
 
 **需要你确认：**
 1. 派工方式是手动选人还是需要智能派单？
@@ -151,38 +213,10 @@ BUILDER_SYSTEM_PROMPT = """你是 aPaaS Builder AI，得帆云低代码平台的
 ```
 
 ### 阶段二：需求细化（对话引导）
-通过提问理清需求细节：数据模型、字段、角色、字典、权限、审批流程。
+通过提问理清需求细节：数据模型、字段、角色、字典、权限。
 
 ### 阶段三：配置生成
 需求明确后，生成完整的配置JSON。
-
-## 实现方式判断指南
-
-你必须准确判断每个功能适合哪种实现方式，并在需求分析阶段就告知用户：
-
-**✅ 标准配置可实现（搭建智能体处理）：**
-- 基础表单（增删改查 + 列表）
-- 数据字典（下拉选项管理）
-- 表间关联（数据单选/关联表单）
-- 子表明细（订单行、配件清单）
-- 审批流程（提交→审批→通过/驳回）
-- 基础权限（按角色控制操作和数据范围）
-- 单据编号（自动编号）
-- 人员/部门选择
-- 数据统计字段（求和、计数等简单计算）
-
-**🔧 需要自开发实现（开发智能体处理）：**
-- 复杂数据可视化（图表看板、统计报表、趋势分析）
-- 地图类功能（地图选点、轨迹展示、区域围栏）
-- 复杂业务计算逻辑（智能派单算法、绩效考核公式）
-- 对接外部系统（ERP/CRM/钉钉/微信等API集成）
-- 自定义UI交互（拖拽排序、甘特图、看板视图）
-- 文件处理（批量导入、模板生成、合同签章）
-- 实时通知（WebSocket推送、短信/邮件触发）
-- 自定义打印模板
-- AI能力集成（OCR识别、智能分类、内容审核）
-
-**当同一个功能两种方式都能实现时**，优先推荐标准配置，并说明局限性。
 
 ## 重要规则
 - 用中文回复，使用markdown格式
@@ -194,7 +228,7 @@ BUILDER_SYSTEM_PROMPT = """你是 aPaaS Builder AI，得帆云低代码平台的
 - code必须避免数据库保留字，如name/status/type/order/date/number/code/description/title/content/note/remark/contact/price/total/quantity/company/customer/product/service/region等。建议加业务前缀，如customer_name、order_status
 - **【禁止】** 在任何表单的 fields 中出现 id、创建时间、更新时间、创建人、更新人及其英文变体（create_time、update_time、created_by、updated_by、creator 等），这些由平台自动维护
 - **【禁止】** 创建"员工"、"全体员工"等通用性角色，需要表达全员时直接在 permissions 中使用 role="all"
-- **【禁止】** 创建"直属上级"、"部门经理"等层级角色，审批流程中的层级关系由平台组织架构自动处理
+- **【禁止】** 创建"直属上级"、"部门经理"等层级角色，层级关系由平台组织架构自动处理
 - **【必须】** 每个表单的 permissions 中，**默认包含一条 role="all" 的全体人员规则**，再叠加其他角色的差异化权限
 
 ## 生成配置
@@ -382,10 +416,10 @@ async def send_message(
 
     # 构建LLM消息列表（加入system prompt）
     system_prompt = SYSTEM_PROMPTS.get(conversation.agent_type, BUILDER_SYSTEM_PROMPT)
-    llm_messages = [{"role": "system", "content": system_prompt}]
     incremental_prompt = _build_incremental_config_prompt(data.current_config)
     if incremental_prompt:
-        llm_messages.append({"role": "system", "content": incremental_prompt})
+        system_prompt = system_prompt + "\n\n" + incremental_prompt
+    llm_messages = [{"role": "system", "content": system_prompt}]
 
     # 预取租户 LLM 配置（必须在 compactor 之前）
     llm_cfg = await _get_conversation_llm_config(db, conversation)
@@ -489,23 +523,28 @@ async def send_message_with_file(
         raise HTTPException(status_code=404, detail="对话不存在")
 
     image_data_url = ""
+    file_content = ""
     file_name = ""
     if file and file.filename:
         file_name = file.filename
         ext = os.path.splitext(file_name)[1].lower()
-        if ext not in _IMAGE_EXTS:
-            raise HTTPException(status_code=400, detail="当前仅支持上传 png/jpg/jpeg/gif/webp 图片")
-        raw = await file.read()
-        mime = _MIME_MAP.get(ext, "image/png")
-        b64 = base64.b64encode(raw).decode()
-        image_data_url = f"data:{mime};base64,{b64}"
+        if ext in _IMAGE_EXTS:
+            raw = await file.read()
+            mime = _MIME_MAP.get(ext, "image/png")
+            b64 = base64.b64encode(raw).decode()
+            image_data_url = f"data:{mime};base64,{b64}"
+        else:
+            file_content = await _parse_uploaded_document(file)
 
-    if not message.strip() and not image_data_url:
+    if not message.strip() and not image_data_url and not file_name:
         raise HTTPException(status_code=400, detail="消息不能为空")
 
     db_content = message.strip()
-    if file_name:
-        db_content = f"{db_content}\n\n[上传截图：{file_name}]".strip()
+    if file_content:
+        db_content = f"{db_content}\n\n[上传文件：{file_name}]\n\n{file_content}".strip()
+    elif file_name:
+        tag = "上传截图" if image_data_url else "上传文件"
+        db_content = f"{db_content}\n\n[{tag}：{file_name}]".strip()
 
     user_message = Message(
         conversation_id=conversation.id,
@@ -516,7 +555,7 @@ async def send_message_with_file(
     await db.commit()
 
     if conversation.title in ("新对话", "需求分析", "智能开发") or conversation.title.startswith("新对话"):
-        short_title = (message.strip() or f"截图：{file_name}").replace("\n", " ")[:30]
+        short_title = (message.strip() or f"文件：{file_name}").replace("\n", " ")[:30]
         if short_title:
             conversation.title = short_title
             await db.commit()
@@ -529,7 +568,6 @@ async def send_message_with_file(
     history_messages = result.scalars().all()
 
     system_prompt = SYSTEM_PROMPTS.get(conversation.agent_type, BUILDER_SYSTEM_PROMPT)
-    llm_messages = [{"role": "system", "content": system_prompt}]
     current_config_obj = None
     if current_config.strip():
         try:
@@ -538,7 +576,8 @@ async def send_message_with_file(
             current_config_obj = None
     incremental_prompt = _build_incremental_config_prompt(current_config_obj)
     if incremental_prompt:
-        llm_messages.append({"role": "system", "content": incremental_prompt})
+        system_prompt = system_prompt + "\n\n" + incremental_prompt
+    llm_messages = [{"role": "system", "content": system_prompt}]
     llm_cfg = await _get_conversation_llm_config(db, conversation)
 
     history = [{"role": msg.role, "content": msg.content} for msg in history_messages[:-1]]
@@ -563,6 +602,8 @@ async def send_message_with_file(
         if file_name:
             last_content.append({"type": "text", "text": f"请结合这张截图一起分析，截图文件名：{file_name}"})
         last_content.append({"type": "image_url", "image_url": {"url": image_data_url}})
+    elif file_content:
+        last_content = db_content
     else:
         last_content = db_content
     llm_messages.append({"role": "user", "content": last_content})

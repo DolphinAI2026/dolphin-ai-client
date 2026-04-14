@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -72,4 +74,24 @@ class Settings(BaseSettings):
     coding_model_opus_model: str = "claude-opus-4-6"
 
 
+def _normalize_database_url(url: str) -> str:
+    """将相对 SQLite 路径固定到 backend 目录下，避免随 cwd 漂移。"""
+    if not isinstance(url, str) or not url.startswith("sqlite"):
+        return url
+
+    prefixes = ("sqlite+aiosqlite:///", "sqlite:///")
+    matched_prefix = next((prefix for prefix in prefixes if url.startswith(prefix)), "")
+    if not matched_prefix:
+        return url
+
+    path_part = url[len(matched_prefix):]
+    if not path_part or path_part.startswith("/"):
+        return url
+
+    backend_dir = Path(__file__).resolve().parent.parent
+    normalized_path = (backend_dir / path_part).resolve()
+    return f"{matched_prefix}{normalized_path}"
+
+
 settings = Settings()
+settings.database_url = _normalize_database_url(settings.database_url)

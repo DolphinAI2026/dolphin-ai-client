@@ -1,5 +1,6 @@
 """模板管理 API — 基于文件系统的 MD 设计文档模板"""
 
+from datetime import datetime
 import re
 from pathlib import Path
 from typing import Optional
@@ -36,18 +37,51 @@ def _parse_frontmatter(content: str) -> tuple[dict, str]:
     return meta, body
 
 
+def _safe_read_template(md_file: Path) -> tuple[dict, str] | None:
+    """安全读取模板文件，遇到坏文件时返回 None，避免整个接口 500。"""
+    try:
+        content = md_file.read_text(encoding="utf-8")
+    except (UnicodeDecodeError, OSError):
+        return None
+    meta, body = _parse_frontmatter(content)
+    return meta, body
+
+
+def _find_template_file(code: str) -> tuple[Path, dict, str] | None:
+    """按 code 查找模板文件，优先命中文件名，再回退扫描 frontmatter。"""
+    if not TEMPLATES_DIR.exists():
+        return None
+
+    direct_file = TEMPLATES_DIR / f"{code}.md"
+    if direct_file.exists():
+        loaded = _safe_read_template(direct_file)
+        if loaded:
+            meta, body = loaded
+            if not meta.get("code") or meta.get("code") == code:
+                return direct_file, meta, body
+
+    for md_file in TEMPLATES_DIR.glob("*.md"):
+        loaded = _safe_read_template(md_file)
+        if not loaded:
+            continue
+        meta, body = loaded
+        if meta.get("code") == code:
+            return md_file, meta, body
+
+    return None
+
+
 def _scan_templates() -> list[dict]:
     """扫描模板目录，返回模板列表"""
     if not TEMPLATES_DIR.exists():
         return []
 
     templates = []
-    for md_file in sorted(TEMPLATES_DIR.glob("*.md")):
-        try:
-            content = md_file.read_text(encoding="utf-8")
-        except (UnicodeDecodeError, OSError):
+    for md_file in TEMPLATES_DIR.glob("*.md"):
+        loaded = _safe_read_template(md_file)
+        if not loaded:
             continue
-        meta, _ = _parse_frontmatter(content)
+        meta, _ = loaded
 
         if not meta.get("name") or not meta.get("code"):
             continue
@@ -59,9 +93,14 @@ def _scan_templates() -> list[dict]:
             "description": meta.get("description", ""),
             "category": meta.get("category", ""),
             "filename": md_file.name,
+            "updated_at": datetime.fromtimestamp(md_file.stat().st_mtime).isoformat(),
         })
 
-    return templates
+    return sorted(
+        templates,
+        key=lambda item: item.get("updated_at", ""),
+        reverse=True,
+    )
 
 
 @router.get("")
@@ -76,20 +115,19 @@ async def get_template(code: str):
     if not TEMPLATES_DIR.exists():
         raise HTTPException(status_code=404, detail="模板目录不存在")
 
-    for md_file in TEMPLATES_DIR.glob("*.md"):
-        content = md_file.read_text(encoding="utf-8")
-        meta, body = _parse_frontmatter(content)
-
-        if meta.get("code") == code:
-            return {
-                "code": meta["code"],
-                "name": meta["name"],
-                "icon": meta.get("icon", "clipboard"),
-                "description": meta.get("description", ""),
-                "category": meta.get("category", ""),
-                "filename": md_file.name,
-                "content": body,  # 不含 frontmatter 的 MD 正文
-            }
+    found = _find_template_file(code)
+    if found:
+        md_file, meta, body = found
+        return {
+            "code": meta.get("code", code),
+            "name": meta.get("name", md_file.stem),
+            "icon": meta.get("icon", "clipboard"),
+            "description": meta.get("description", ""),
+            "category": meta.get("category", ""),
+            "filename": md_file.name,
+            "updated_at": datetime.fromtimestamp(md_file.stat().st_mtime).isoformat(),
+            "content": body,
+        }
 
     raise HTTPException(status_code=404, detail=f"模板 '{code}' 不存在")
 
@@ -153,21 +191,10 @@ async def update_template(code: str, req: TemplateUpdateRequest):
     if not TEMPLATES_DIR.exists():
         raise HTTPException(status_code=404, detail="模板目录不存在")
 
-    filepath = TEMPLATES_DIR / f"{code}.md"
-    if not filepath.exists():
-        # 也查找 code 匹配的文件
-        filepath = None
-        for md_file in TEMPLATES_DIR.glob("*.md"):
-            content = md_file.read_text(encoding="utf-8")
-            meta, _ = _parse_frontmatter(content)
-            if meta.get("code") == code:
-                filepath = md_file
-                break
-        if not filepath:
-            raise HTTPException(status_code=404, detail=f"模板 '{code}' 不存在")
-
-    content = filepath.read_text(encoding="utf-8")
-    meta, body = _parse_frontmatter(content)
+    found = _find_template_file(code)
+    if not found:
+        raise HTTPException(status_code=404, detail=f"模板 '{code}' 不存在")
+    filepath, meta, body = found
 
     # 更新元数据
     if req.name is not None:
@@ -193,17 +220,10 @@ async def delete_template(code: str):
     if not TEMPLATES_DIR.exists():
         raise HTTPException(status_code=404, detail="模板目录不存在")
 
-    filepath = TEMPLATES_DIR / f"{code}.md"
-    if not filepath.exists():
-        # 也查找 code 匹配的文件
-        for md_file in TEMPLATES_DIR.glob("*.md"):
-            content = md_file.read_text(encoding="utf-8")
-            meta, _ = _parse_frontmatter(content)
-            if meta.get("code") == code:
-                filepath = md_file
-                break
-        else:
-            raise HTTPException(status_code=404, detail=f"模板 '{code}' 不存在")
+    found = _find_template_file(code)
+    if not found:
+        raise HTTPException(status_code=404, detail=f"模板 '{code}' 不存在")
+    filepath, _, _ = found
 
     filepath.unlink()
     return {"code": code, "message": "删除成功"}

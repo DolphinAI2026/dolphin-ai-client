@@ -17,6 +17,22 @@ logger = logging.getLogger(__name__)
 # ── 已知字段类型（从注册表派生）──
 VALID_FIELD_TYPES = get_valid_type_names()
 
+# ── 平台系统字段（自动维护，业务字段不得使用）──
+# 来源：platform_sync._SKIP_FIELDS + 平台常见内置字段变体
+RESERVED_FIELD_CODES: set = {
+    "id",
+    "created_by", "creation_date", "create_by", "create_date", "create_time",
+    "created_at", "created_time",
+    "last_updated_by", "last_update_by", "updated_by", "update_by",
+    "last_update_date", "last_updated_at", "updated_at", "update_time",
+    "object_version_number", "version", "version_number",
+    "tenant_id", "tenant",
+    "status",
+    "owner", "owner_id",
+    "parent_id", "parent",
+    "deleted", "is_deleted", "del_flag",
+}
+
 # 近似映射：AI 可能输出的非标准名称 → 标准名称
 _TYPE_ALIAS = {
     "文本": "单行输入", "文本输入": "单行输入", "文本框": "单行输入",
@@ -286,6 +302,14 @@ def _validate_fields(
         if w:
             warnings.append(f"模型 '{model_name}' 字段 '{f['name']}': {w}")
         f["code"] = code
+
+        # 系统保留字段：平台自动维护，业务字段不得使用
+        if code in RESERVED_FIELD_CODES:
+            warnings.append(
+                f"模型 '{model_name}' 字段 '{f['name']}' 编码 '{code}' 是平台系统字段，已自动移除"
+            )
+            continue
+
         if code in seen_codes:
             warnings.append(f"模型 '{model_name}' 字段 code '{code}' 重复，已跳过")
             continue

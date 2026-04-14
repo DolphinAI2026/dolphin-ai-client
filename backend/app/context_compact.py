@@ -15,9 +15,7 @@ import logging
 import re
 from typing import Any, Dict, List, Optional
 
-import httpx
-
-from app.routes.llm_configs import build_llm_chat_completions_url
+from app.llm_client import LLMClient
 
 logger = logging.getLogger(__name__)
 
@@ -237,26 +235,18 @@ class ContextCompactor:
         prompt = COMPACT_SUMMARY_PROMPT + dialogue
 
         try:
-            payload = {
-                "model": self.llm_cfg["model"],
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 1024,
-                "temperature": 0.3,
-                "stream": False,
-            }
-            timeout = httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=10.0)
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                resp = await client.post(
-                    build_llm_chat_completions_url(self.llm_cfg["base_url"]),
-                    headers={
-                        "Authorization": f"Bearer {self.llm_cfg['api_key']}",
-                        "Content-Type": "application/json",
-                    },
-                    json=payload,
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                return data["choices"][0]["message"]["content"].strip()
+            client = LLMClient(
+                api_key=self.llm_cfg["api_key"],
+                base_url=self.llm_cfg["base_url"],
+                model=self.llm_cfg["model"],
+            )
+            data = await client.chat_completion(
+                [{"role": "user", "content": prompt}],
+                max_tokens=1024,
+                temperature=0.3,
+                timeout=30.0,
+            )
+            return data["choices"][0]["message"]["content"].strip()
         except Exception as e:
             logger.warning(f"对话摘要生成失败: {e}")
             return None

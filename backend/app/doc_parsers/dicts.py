@@ -40,7 +40,12 @@ def parse(section_text: str) -> Tuple[List[dict], List[str]]:
             name = dict_name or name
         else:
             # 格式A：选项直接在 content 里
-            option_rows = parse_table(content)
+            # 若第一张表是元数据表（字典编码/字典名称），则找含"选项编码"的表
+            all_tables = parse_all_tables(content)
+            option_rows = next(
+                (t for t in all_tables if t and "选项编码" in t[0]),
+                all_tables[0] if all_tables else []
+            )
             dict_name = name
 
         if not re.match(r'^[a-zA-Z][a-zA-Z0-9_]*$', code):
@@ -64,7 +69,7 @@ def parse(section_text: str) -> Tuple[List[dict], List[str]]:
             if not opt_code:
                 errors.append(f"字典 '{name}' 选项 '{opt_name}'：缺少选项编码")
                 continue
-            if not re.match(r'^[a-zA-Z][a-zA-Z0-9_]*$', opt_code):
+            if not re.match(r'^[a-zA-Z0-9_]+$', opt_code):
                 errors.append(f"字典 '{name}' 选项 '{opt_name}'：编码 '{opt_code}' 不合规")
                 continue
             if opt_code in seen_opt_codes:

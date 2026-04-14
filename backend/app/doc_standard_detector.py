@@ -33,13 +33,15 @@ _STANDARD_HEADERS: Dict[str, List[str]] = {
     "app_info": ["应用编码", "应用名称"],
     "roles": ["角色编码", "角色名称"],
     "dicts_option": ["选项编码", "选项名称"],
-    "models": ["字段编码", "字段名称", "字段类型", "字典编码", "关联模型编码", "关联显示字段编码"],
-    "forms": ["字段编码", "字段名称", "是否隐藏", "是否只读", "是否必填", "是否列表展示", "是否查询条件"],
-    "permissions": ["表单名称", "角色编码", "可暂存", "可新增", "可导入", "可查看", "可编辑", "可删除", "可导出", "数据范围"],
+    # 模型表头：存储类型/字段类型 均可，只检核必有列
+    "models": ["字段编码", "字段名称"],
+    # 表单表头：支持简写（隐藏/必填）与全写（是否隐藏/是否必填）
+    "forms": ["字段编码", "字段名称"],
+    "permissions": ["表单名称", "角色编码", "可查看", "可编辑", "可删除", "数据范围"],
 }
 
 # 编码字段：需要符合英文小写+下划线规则
-_CODE_RE = re.compile(r'^[a-zA-Z][a-zA-Z0-9_]*$')
+_CODE_RE = re.compile(r'^[a-zA-Z][a-zA-Z0-9_-]*$')
 
 
 def detect(text: str) -> Dict[str, Any]:
@@ -126,27 +128,24 @@ def _score_table_headers(text: str, sections: Dict[str, str]) -> float:
     scores: List[float] = []
 
     # 应用信息、角色
-    for key, expected in [("app_info", "app_info"), ("roles", "roles")]:
-        if key in sections:
-            scores.append(_match_headers(sections[key], _STANDARD_HEADERS[expected]))
+    if "app_info" in sections:
+        scores.append(_match_app_info_headers(sections["app_info"]))
+    if "roles" in sections:
+        scores.append(_match_headers(sections["roles"], _STANDARD_HEADERS["roles"]))
 
-    # 数据字典（每个子章节的选项表）
+    # 数据字典（每个子章节找含"选项编码"的表，而不是直接取第一张）
     if "dicts" in sections:
         subsections = split_subsections(sections["dicts"])
         for _, _, _, content in subsections:
-            scores.append(_match_headers(content, _STANDARD_HEADERS["dicts_option"]))
+            scores.append(_match_headers_any(content, _STANDARD_HEADERS["dicts_option"]))
 
-    # 数据模型（每个子章节的字段表）
+    # 数据模型（每个子章节找字段表，第一张可能是元数据表）
     if "models" in sections:
-        subsections = split_subsections(sections["models"])
-        for _, _, _, content in subsections:
-            scores.append(_match_headers(content, _STANDARD_HEADERS["models"]))
+        scores.append(_match_headers_any(sections["models"], _STANDARD_HEADERS["models"]))
 
-    # 表单配置
+    # 表单配置（每个子章节找字段表，第一张可能是元数据表）
     if "forms" in sections:
-        subsections = split_subsections(sections["forms"])
-        for _, _, _, content in subsections:
-            scores.append(_match_headers(content, _STANDARD_HEADERS["forms"]))
+        scores.append(_match_headers_any(sections["forms"], _STANDARD_HEADERS["forms"]))
 
     # 权限配置
     if "permissions" in sections:
@@ -155,6 +154,38 @@ def _score_table_headers(text: str, sections: Dict[str, str]) -> float:
     if not scores:
         return 0.0
     return sum(scores) / len(scores)
+
+
+def _match_app_info_headers(text: str) -> float:
+    """兼容两种应用信息模板：
+    1. 直接表头为 应用编码 / 应用名称
+    2. 键值表结构为 项目 / 内容，行内包含 应用编码 / 应用名称
+    """
+    tables = find_tables(text)
+    if not tables:
+        return 0.0
+
+    best = 0.0
+    for table in tables:
+        lines = [line for line in table.splitlines() if line.strip()]
+        if len(lines) < 2:
+            continue
+        headers = [c.strip() for c in _split_row(lines[0])]
+        actual_set = {h for h in headers if h}
+        direct_score = sum(1 for h in _STANDARD_HEADERS["app_info"] if h in actual_set) / len(_STANDARD_HEADERS["app_info"])
+        best = max(best, direct_score)
+
+        if {"项目", "内容"}.issubset(actual_set):
+            key_idx = headers.index("项目")
+            keys = []
+            for dline in lines[2:]:
+                cells = _split_row(dline)
+                if key_idx < len(cells):
+                    keys.append(cells[key_idx].strip())
+            if {"应用名称", "应用编码"}.issubset(set(keys)):
+                best = max(best, 1.0)
+
+    return best
 
 
 def _match_headers(text: str, expected: List[str]) -> float:
@@ -173,6 +204,25 @@ def _match_headers(text: str, expected: List[str]) -> float:
 
     matched = sum(1 for h in expected if h in actual_set)
     return matched / len(expected)
+
+
+def _match_headers_any(text: str, expected: List[str]) -> float:
+    """在文本所有表格中找与期望表头匹配率最高的那张"""
+    tables = find_tables(text)
+    if not tables:
+        return 0.0
+
+    best = 0.0
+    for table in tables:
+        lines = table.splitlines()
+        if not lines:
+            continue
+        actual_set = {c.strip() for c in _split_row(lines[0]) if c.strip()}
+        matched = sum(1 for h in expected if h in actual_set)
+        score = matched / len(expected)
+        if score > best:
+            best = score
+    return best
 
 
 def _score_code_compliance(sections: Dict[str, str]) -> float:
@@ -260,7 +310,7 @@ def _find_missing_sections(sections: Dict[str, str]) -> List[str]:
         "app_info": "应用信息",
         "roles": "角色列表",
         "models": "数据模型",
-        "permissions": "权限配置",
+        "permissions": "权限定义",
     }
     return [name for key, name in key_to_name.items() if key not in sections]
 
@@ -273,21 +323,28 @@ def _find_weak_sections(sections: Dict[str, str], table_score: float) -> List[st
         "roles": "角色列表",
         "dicts": "数据字典",
         "models": "数据模型",
-        "forms": "表单配置",
-        "permissions": "权限配置",
+        "forms": "表单定义",
+        "permissions": "权限定义",
     }
     for key, name in key_to_name.items():
         if key not in sections:
             continue
-        if key in ("dicts", "models", "forms"):
+        if key == "app_info":
+            if _match_app_info_headers(sections[key]) < 0.7:
+                weak.append(name)
+        elif key in ("dicts",):
             subs = split_subsections(sections[key])
             for _, _, _, content in subs:
                 expected = _STANDARD_HEADERS.get(
                     "dicts_option" if key == "dicts" else key, []
                 )
-                if expected and _match_headers(content, expected) < 0.7:
+                if expected and _match_headers_any(content, expected) < 0.7:
                     weak.append(name)
                     break
+        elif key in ("models", "forms"):
+            expected = _STANDARD_HEADERS.get(key, [])
+            if expected and _match_headers_any(sections[key], expected) < 0.7:
+                weak.append(name)
         else:
             expected = _STANDARD_HEADERS.get(key, [])
             if expected and _match_headers(sections[key], expected) < 0.7:

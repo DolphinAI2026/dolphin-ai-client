@@ -87,6 +87,7 @@ class ApplicationCreate(BaseModel):
     app_code: str
     description: Optional[str] = None
     config_preview: Optional[dict] = None
+    platform_env_id: Optional[int] = None
     # 平台环境配置（可选）
     platform_url: Optional[str] = None
     platform_tenant_id: Optional[str] = None
@@ -96,6 +97,7 @@ class ApplicationResponse(BaseModel):
     id: int
     app_name: str
     app_code: str
+    icon_svg: Optional[str] = None
     description: Optional[str]
     status: str
     conversation_id: Optional[int] = None
@@ -117,6 +119,7 @@ class MergedAppResponse(BaseModel):
     id: str                                # 本地 id 或 "remote_{apaas_id}"
     app_name: str
     app_code: Optional[str] = None
+    icon_svg: Optional[str] = None
     description: Optional[str] = None
     source: str                            # "local" | "remote" | "linked"
     status: str                            # 统一展示状态
