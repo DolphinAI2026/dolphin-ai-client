@@ -252,16 +252,19 @@ def _extract_form_dependencies(forms: list[dict]) -> dict[int, set[int]]:
         for value in _form_identity_values(form):
             identity_to_idx.setdefault(value, idx)
 
+    # 关联表单（FORM_ASSOCIATION）只是展示组件，创建表单时不需要目标先存在
+    _ASSOCIATION_TYPES = {"FORM_ASSOCIATION", "关联表单"}
+
     deps_by_idx: dict[int, set[int]] = {}
     for idx, form in enumerate(forms):
         deps: set[int] = set()
         for component in form.get("components") or []:
-            association = component.get("formAssociationConfig") or component.get("form_association_config") or {}
+            comp_type = str(component.get("componentType") or component.get("component_type") or "").strip()
+            if comp_type in _ASSOCIATION_TYPES:
+                continue  # 关联表单不产生创建顺序依赖
             ref = component.get("ref") or {}
             targets = [
-                str(association.get("targetModelCode") or "").strip(),
                 str(component.get("selector_form_code") or "").strip(),
-                str(component.get("association_form_code") or "").strip(),
                 str(component.get("ref_model_code") or "").strip(),
                 str(ref.get("model") or "").strip() if isinstance(ref, dict) else str(ref or "").strip(),
             ]
