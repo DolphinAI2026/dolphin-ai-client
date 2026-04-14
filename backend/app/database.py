@@ -61,6 +61,7 @@ async def init_db():
             "ALTER TABLE applications ADD COLUMN platform_username VARCHAR(100)",
             "ALTER TABLE applications ADD COLUMN platform_password_enc TEXT",
             "ALTER TABLE applications ADD COLUMN platform_env_id INTEGER",
+            "ALTER TABLE applications ADD COLUMN icon_svg TEXT",
             # conversation_id 改为可空（MySQL ALTER COLUMN MODIFY）
             "ALTER TABLE applications MODIFY COLUMN conversation_id INTEGER NULL",
             # 需求分析：为 conversations 表添加 doc_result 字段

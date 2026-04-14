@@ -197,6 +197,7 @@ class Application(Base):
     apaas_app_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     app_name: Mapped[str] = mapped_column(String(100), nullable=False)
     app_code: Mapped[str] = mapped_column(String(50), nullable=False)
+    icon_svg: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     requirement_doc: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON
     config_preview: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON

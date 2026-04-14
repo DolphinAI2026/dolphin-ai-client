@@ -233,7 +233,15 @@ function nameHash(name: string): number {
   return h
 }
 
-// 根据应用名称生成配色（固定色盘，视觉友好）
+function escapeSvgText(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
 const ICON_PALETTES = [
   ['#6366f1', '#818cf8'],  // indigo
   ['#0ea5e9', '#38bdf8'],  // sky
@@ -247,11 +255,26 @@ const ICON_PALETTES = [
   ['#14b8a6', '#2dd4bf'],  // teal
 ]
 
+function appIconInitial(a: MergedApplication): string {
+  const appName = String(a.app_name || '').trim()
+  const appCode = String(a.app_code || '').trim()
+  const source = appName || appCode || 'A'
+  const chars = Array.from(source)
+  const first = chars.find(char => char.trim()) || 'A'
+  return /[a-z]/.test(first) ? first.toUpperCase() : first
+}
+
+function appIconBody(a: MergedApplication): string {
+  const initial = escapeSvgText(appIconInitial(a))
+  return `<text x="24" y="31" text-anchor="middle" font-size="22" font-weight="700"
+    font-family="-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif"
+    fill="rgba(255,255,255,0.96)">${initial}</text>`
+}
+
 function appIconSvg(a: MergedApplication): string {
-  const name = a.app_name || '应'
-  const label = name.slice(0, 1)  // 取第一个字
-  const [c1, c2] = ICON_PALETTES[nameHash(name) % ICON_PALETTES.length]
-  const gradId = `g${nameHash(name) % 9999}`
+  const iconSeed = a.app_name || a.app_code || 'app'
+  const [c1, c2] = ICON_PALETTES[nameHash(iconSeed) % ICON_PALETTES.length]
+  const gradId = `g${nameHash(`${iconSeed}-${a.id}`) % 9999}`
 
   // 特殊状态覆盖颜色
   const isUpdating = a.local_status === 'updating'
@@ -271,9 +294,7 @@ function appIconSvg(a: MergedApplication): string {
     </linearGradient>
   </defs>
   <rect width="48" height="48" rx="12" fill="url(#${gradId})"/>
-  <text x="24" y="32" text-anchor="middle" font-size="22" font-weight="600"
-    font-family="-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif"
-    fill="rgba(255,255,255,0.95)">${label}</text>
+  ${appIconBody(a)}
 </svg>`
 }
 

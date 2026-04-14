@@ -65,6 +65,7 @@ export interface Application {
   id: number
   app_name: string
   app_code: string
+  icon_svg?: string | null
   description: string | null
   status: string
   conversation_id?: number | null
@@ -83,6 +84,7 @@ export interface MergedApplication {
   id: string
   app_name: string
   app_code?: string
+  icon_svg?: string
   description?: string
   source: 'local' | 'remote' | 'linked'
   status: string

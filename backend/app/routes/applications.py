@@ -25,6 +25,12 @@ router = APIRouter(prefix="/applications", tags=["应用"])
 logger = logging.getLogger(__name__)
 
 
+class GenerateAppIconResponse(BaseModel):
+    ok: bool
+    app_id: int
+    icon_svg: str
+
+
 def _normalize_app_code(candidate: str | None) -> str:
     import re
 
@@ -526,6 +532,26 @@ async def _resolve_builder_llm_cfg(
     }
 
 
+def _fallback_generated_icon(app: Application) -> str:
+    label = (app.app_name or app.app_code or "A").strip()[:1] or "A"
+    label = (
+        label.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&#39;")
+    )
+    return (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" viewBox="0 0 48 48">'
+        '<defs><linearGradient id="appIconFallback" x1="0" y1="0" x2="1" y2="1">'
+        '<stop offset="0%" stop-color="#14b8a6"/><stop offset="100%" stop-color="#2dd4bf"/>'
+        "</linearGradient></defs>"
+        '<rect width="48" height="48" rx="12" fill="url(#appIconFallback)"/>'
+        f'<text x="24" y="31" text-anchor="middle" font-size="22" font-weight="700" fill="#ffffff">{label}</text>'
+        "</svg>"
+    )
+
+
 def _enrich(app: Application) -> ApplicationResponse:
     config = None
     models = forms = roles = dicts = 0
@@ -543,6 +569,7 @@ def _enrich(app: Application) -> ApplicationResponse:
             pass
     return ApplicationResponse(
         id=app.id, app_name=app.app_name, app_code=resolved_app_code,
+        icon_svg=app.icon_svg,
         description=app.description, status=app.status,
         conversation_id=app.conversation_id,
         platform_env_id=app.platform_env_id,
@@ -603,6 +630,7 @@ def _build_local(app: Application, perms: dict | None = None, env_name: str | No
         id=str(app.id),
         app_name=enriched.app_name,
         app_code=enriched.app_code,
+        icon_svg=app.icon_svg,
         description=enriched.description,
         source="local",
         status=_resolve_display_status(app),
@@ -629,6 +657,7 @@ def _build_linked(app: Application, remote: dict, perms: dict | None = None, env
         id=str(app.id),
         app_name=enriched.app_name,
         app_code=display_app_code,
+        icon_svg=app.icon_svg,
         description=enriched.description or remote.get("appDesc"),
         source="linked",
         status=_resolve_display_status(app, remote_status),
@@ -655,6 +684,7 @@ def _build_remote(remote: dict, env_base_url: str | None = None, env_tenant_id: 
         id=f"remote_{apaas_id}",
         app_name=remote.get("appName", "未命名应用"),
         app_code=remote.get("appCode"),
+        icon_svg=None,
         description=remote.get("remarks") or remote.get("appDesc"),
         source="remote",
         status=_REMOTE_STATUS_MAP.get(remote_status, "平台应用"),
@@ -816,12 +846,13 @@ async def create_application(
         code for code, allowed in (ctx.org_permissions or {}).items() if allowed
     )
     logger.info(
-        "create_application request user_id=%s tenant_id=%s tenant_role=%s conversation_id=%s app_code=%s granted_permissions=%s",
+        "create_application request user_id=%s tenant_id=%s tenant_role=%s conversation_id=%s app_code=%s platform_env_id=%s granted_permissions=%s",
         ctx.user.id,
         ctx.tenant_id,
         ctx.tenant_role,
         data.conversation_id,
         data.app_code,
+        data.platform_env_id,
         granted_permissions,
     )
 
@@ -847,6 +878,7 @@ async def create_application(
         app_name=data.app_name,
         app_code=data.app_code,
         description=data.description,
+        platform_env_id=data.platform_env_id,
         config_preview=config_str,
         status="draft"
     )
@@ -1263,7 +1295,7 @@ async def update_application(
     app.description = data.description
     if hasattr(data, 'app_code') and data.app_code:
         app.app_code = data.app_code
-    if hasattr(data, 'platform_env_id') and data.platform_env_id:
+    if hasattr(data, 'platform_env_id') and data.platform_env_id is not None:
         app.platform_env_id = data.platform_env_id
     if data.config_preview:
         app.config_preview = _dump_preview_config(data.config_preview)
@@ -1331,6 +1363,31 @@ async def update_app_code(
             logger.warning(f"同步应用编码到文档版本失败: {e}")
     await db.commit()
     return {"ok": True, "app_code": new_code}
+
+
+@router.post("/{app_id}/generate-icon", response_model=GenerateAppIconResponse)
+async def generate_application_icon(
+    app_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    result = await db.execute(
+        select(Application).where(
+            Application.id == app_id,
+            Application.tenant_id == ctx.tenant_id,
+        )
+    )
+    app = result.scalar_one_or_none()
+    if not app:
+        raise HTTPException(status_code=404, detail="应用不存在")
+
+    await check_resource_permission(ctx, db, app, "application", Action.EDIT)
+
+    icon_svg = _fallback_generated_icon(app)
+    app.icon_svg = icon_svg
+    await db.commit()
+
+    return GenerateAppIconResponse(ok=True, app_id=app.id, icon_svg=icon_svg)
 
 
 @router.post("/{app_id}/publish")
