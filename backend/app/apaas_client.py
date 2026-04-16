@@ -1,4 +1,5 @@
 from __future__ import annotations
+import asyncio
 import httpx
 import time
 import base64
@@ -16,6 +17,11 @@ import threading
 
 logger = logging.getLogger(__name__)
 DESKTOP_API_DEBUG_LOG = Path.home() / "Desktop" / "apaas_api_debug.log"
+
+# 查询所有模型的字段时，同时在飞的 query_model_fields 请求上限。
+# 10 是经验值：既能把串行的等待时间压下来，又不会触发 APaaS 平台限流。
+# 如果未来平台端扩容/收紧了速率限制，调整这个常量即可。
+QUERY_MODEL_FIELDS_CONCURRENCY = 10
 
 # ---------------------------------------------------------------------------
 # API 调用日志收集器（线程安全）
@@ -566,10 +572,30 @@ class APaaSClient:
             if not isinstance(models, list):
                 return []
 
+            # 并发查询每个模型的字段，避免原先串行 await 导致的 N * RTT 累计等待。
+            # 用 Semaphore 限流防止触发平台端速率限制；单个查询失败不影响整批。
+            semaphore = asyncio.Semaphore(QUERY_MODEL_FIELDS_CONCURRENCY)
+
+            async def _fetch_fields(model_id: str) -> list:
+                if not model_id:
+                    return []
+                async with semaphore:
+                    try:
+                        return await self.query_model_fields(app_id, model_id)
+                    except Exception as exc:
+                        logger.warning("query_model_fields 失败 (dataModelId=%s): %s", model_id, exc)
+                        return []
+
+            model_ids = [
+                str(model.get("id", model.get("dataModelId", "")) or "").strip()
+                for model in models
+            ]
+            fields_by_index = await asyncio.gather(
+                *[_fetch_fields(mid) for mid in model_ids]
+            )
+
             normalized_models = []
-            for model in models:
-                model_id = str(model.get("id", model.get("dataModelId", "")) or "").strip()
-                fields = await self.query_model_fields(app_id, model_id) if model_id else []
+            for model, model_id, fields in zip(models, model_ids, fields_by_index):
                 normalized = dict(model)
                 normalized["id"] = model_id or model.get("id")
                 normalized["modelCode"] = model.get("modelCode", model.get("code", ""))

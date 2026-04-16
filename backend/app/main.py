@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from app.config import settings
+from app.config import settings, APP_TITLE, APP_DESCRIPTION, APP_VERSION
 from app.database import init_db
 from app.routes import auth, conversations, chat, applications, apaas, generation_steps, coding, incremental_update, projects, marketplace, templates, platform_envs, platform_proxy, llm_configs, browser, requirements, harness
 
@@ -38,9 +38,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="aPaaS Builder AI",
-    description="得帆云低代码平台智能搭建 & Vibe Coding 助手",
-    version="1.0.0",
+    title=APP_TITLE,
+    description=APP_DESCRIPTION,
+    version=APP_VERSION,
     lifespan=lifespan
 )
 

@@ -42,7 +42,14 @@ def _normalize_database_field_type(field: dict) -> str:
     return "varchar"
 
 
-def _normalize_field_type(field: dict) -> str:
+def _resolve_platform_field_type(field: dict) -> str:
+    """把字段定义映射到 APaaS 平台字段类型（STRING / NUM / DATE）。
+
+    ⚠️ 与 app.config_validator._normalize_field_type 不要混淆：
+        - 这里：input=dict，output=平台字段类型（发给 APaaS 的 fieldType）
+        - config_validator：input=中文语义类型字符串，output=校验过的 schema 类型
+    两者功能完全不同，历史上同名导致 import 时容易踩坑，已改名消歧义。
+    """
     semantic = str(_field_value(field, "type", default="")).strip()
     mapped = FIELD_TYPE_MAP.get(semantic)
     if mapped:
@@ -72,7 +79,7 @@ def _build_model_field_payload(field: dict) -> dict:
     payload = {
         "fieldName": field["name"],
         "fieldCode": raw_field_code or _safe_field_code(field["name"]),
-        "fieldType": _normalize_field_type(field),
+        "fieldType": _resolve_platform_field_type(field),
         "databaseFieldType": _normalize_database_field_type(field),
         "fieldDescription": _normalize_field_comment(field),
         "fieldComment": _normalize_field_comment(field),

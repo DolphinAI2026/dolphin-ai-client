@@ -15,7 +15,7 @@ from app.schemas import ApplicationCreate, ApplicationResponse, MergedAppRespons
 from app.deps import get_auth_context, AuthContext
 from app.permissions import has_org_permission, check_resource_permission, batch_get_permissions, Action
 from jose import JWTError, jwt
-from app.config import settings
+from app.config import settings, APP_DEPLOY_ABSTRACT
 from app.apaas_client import APaaSClient
 from app.crypto import decrypt_password
 
@@ -1538,7 +1538,7 @@ async def publish_application(
               next_version = "1.0.1"
         else:
           next_version = "1.0.0"
-        await client.deploy_app(str(app.apaas_app_id), next_version, abstract="aPaaS Builder 应用上线")
+        await client.deploy_app(str(app.apaas_app_id), next_version, abstract=APP_DEPLOY_ABSTRACT)
         app.status = "completed"
         await db.commit()
         return {"ok": True, "version": next_version, "remote_status": "ENABLE"}
@@ -1567,7 +1567,7 @@ async def publish_application(
                             next_version = "1.0.1"
                     else:
                         next_version = "1.0.0"
-                    await client.deploy_app(str(app.apaas_app_id), next_version, abstract="aPaaS Builder 应用上线")
+                    await client.deploy_app(str(app.apaas_app_id), next_version, abstract=APP_DEPLOY_ABSTRACT)
                     app.status = "completed"
                     await db.commit()
                     return {"ok": True, "version": next_version, "remote_status": "ENABLE"}
