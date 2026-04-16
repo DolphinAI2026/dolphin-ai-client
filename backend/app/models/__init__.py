@@ -72,6 +72,8 @@ class Conversation(Base):
     status: Mapped[str] = mapped_column(String(20), default="active", nullable=False)  # active/completed/failed
     doc_result: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # 需求分析生成的设计文档 JSON
     context_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # 对话摘要（上下文压缩用）
+    phase: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # gathering | refining
+    current_config: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # 服务端权威 config 状态
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 

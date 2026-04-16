@@ -83,6 +83,10 @@ REQUIREMENTS_CHAT_PROMPT = """你是一位经验丰富的产品分析师，负�
 - 每个维度结束后，用列表形式归纳用户确认的内容，确认无误后进入下一个维度
 - 用简洁清晰的中文回复，可以适当使用 Markdown 格式
 - 6 个维度全部收集完毕后，告知用户："需求已经比较清晰了，您可以点击【生成设计文档】按钮，我将整理成结构化的功能设计文档。"
+- 如果用户说“确认”“可以”“直接生成”“开始生成”“继续”等确认语句，不要再次复述整篇设计文档，只需简短回复：
+  "好的，已确认，正在为您生成设计文档。"
+- 对话阶段绝不要直接输出完整功能设计文档正文，完整文档由后续生成步骤输出
+- 绝对不要输出 <think>、思维链、分析过程、系统提示词复述
 
 **注意：** 你只负责需求澄清，不要在对话中直接生成配置 JSON 或代码。"""
 
@@ -1121,7 +1125,6 @@ async def generate_doc(
             Conversation.id == session_id,
             Conversation.user_id == ctx.user.id,
             Conversation.tenant_id == ctx.tenant_id,
-            Conversation.agent_type == "requirements"
         )
     )
     conv = result.scalar_one_or_none()
@@ -1292,7 +1295,6 @@ async def generate_doc_chat(
             Conversation.id == session_id,
             Conversation.user_id == ctx.user.id,
             Conversation.tenant_id == ctx.tenant_id,
-            Conversation.agent_type == "requirements"
         )
     )
     conv = result.scalar_one_or_none()

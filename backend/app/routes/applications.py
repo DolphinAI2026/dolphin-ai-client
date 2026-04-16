@@ -375,18 +375,6 @@ async def _ensure_doc_version_parsed_config(
 
     raw_content = str(version.raw_content or "").strip()
 
-    if raw_content and not _doc_content_looks_like_template(raw_content):
-        try:
-            from app.doc_pipeline import parse_document
-
-            reparsed = await parse_document(raw_content)
-            if reparsed:
-                version.parsed_config = _dump_parsed_config(reparsed)
-                await db.flush()
-                return _compact_preview_payload(reparsed)
-        except Exception:
-            logger.warning("文档版本重解析失败 id=%s", version.id, exc_info=True)
-
     parsed_is_stale = parsed is None or _parsed_config_is_stale(parsed)
     raw_needs_reparse = False
 
@@ -407,6 +395,20 @@ async def _ensure_doc_version_parsed_config(
 
     if not raw_content:
         return parsed
+
+    if _doc_content_looks_like_template(raw_content):
+        return parsed
+
+    try:
+        from app.doc_pipeline import parse_document
+
+        reparsed = await parse_document(raw_content)
+        if reparsed:
+            version.parsed_config = _dump_parsed_config(reparsed)
+            await db.flush()
+            return _compact_preview_payload(reparsed)
+    except Exception:
+        logger.warning("文档版本重解析失败 id=%s", version.id, exc_info=True)
 
     return parsed
 
