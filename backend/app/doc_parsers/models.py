@@ -92,9 +92,15 @@ def parse(section_text: str) -> Tuple[List[dict], List[str]]:
 
 
 def _parse_aggregate_tables(section_text: str) -> Tuple[List[dict], List[str]]:
-    """兼容标准模版的总表结构：
-    - 模型定义：模型编码 / 模型名称
-    - 模型字段：模型编码 / 字段编码 / 字段名称 / 数据库字段类型 / 长度
+    """兼容两种"总表"结构：
+
+    A. 聚合字段表：一张模型定义表 + 一张字段汇总表（字段表含"模型编码"列）
+    B. 分块字段表：一张模型定义表 + 若干 ``#### `` 子节，每个子节用
+       ``> 模型编码：`xxx` `` 声明归属，内部是单纯的
+       ``字段编码 | 字段名称 | 数据库字段类型 | 长度/精度`` 表格
+       （字段表本身不含"模型编码"列，归属靠子节元数据）
+
+    两种格式都能让 28 个模型定义表 + 各自字段被正确关联。
     """
     errors: List[str] = []
     all_tables = parse_all_tables(section_text)
@@ -126,11 +132,36 @@ def _parse_aggregate_tables(section_text: str) -> Tuple[List[dict], List[str]]:
         return [], errors
 
     field_rows_by_model: dict[str, list[dict]] = {}
-    for row in field_rows or []:
-        model_code = (row.get("模型编码") or "").strip().lower()
-        if not model_code:
-            continue
-        field_rows_by_model.setdefault(model_code, []).append(row)
+
+    if field_rows:
+        # 格式 A：聚合字段表
+        for row in field_rows:
+            model_code = (row.get("模型编码") or "").strip().lower()
+            if not model_code:
+                continue
+            field_rows_by_model.setdefault(model_code, []).append(row)
+    else:
+        # 格式 B：按 #### 子节分块，字段归属来自子节内的 "模型编码：xxx" 元数据
+        block_pattern = re.compile(r"^####\s+.+$", re.MULTILINE)
+        matches = list(block_pattern.finditer(section_text))
+        for idx, m in enumerate(matches):
+            block_start = m.start()
+            block_end = matches[idx + 1].start() if idx + 1 < len(matches) else len(section_text)
+            block = section_text[block_start:block_end]
+
+            # 从引用块或普通文本里提取 "模型编码：xxx"（兼容反引号包裹）
+            code_match = re.search(
+                r"模型编码[：:]\s*`?([a-zA-Z][a-zA-Z0-9_]*)`?",
+                block,
+            )
+            if not code_match:
+                continue
+            block_code = code_match.group(1).strip().lower()
+
+            block_field_rows = parse_table(block)
+            if not block_field_rows:
+                continue
+            field_rows_by_model.setdefault(block_code, []).extend(block_field_rows)
 
     seen_codes: set[str] = set()
     models: List[dict] = []
