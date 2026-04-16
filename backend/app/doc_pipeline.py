@@ -96,9 +96,12 @@ def _detect_incomplete_modules(text: str, result: ParseResult) -> set[str]:
     elif _section_len("models") > 1200 and main_model_count <= 1:
         incomplete.add("models")
 
+    # forms 只检测"整段有内容但一个都没解析出"这种真失败场景。
+    # 不再用 len(forms) < main_model_count 判定不完整——该判据基于"每个 model 都有 form"
+    # 的业务假设，对"主表+子表/明细"的典型文档会产生误判：parser 其实已经正确解析，
+    # 但会被误拖进 _fallback_ai_parse（3-5 分钟），反而被 AI 搞乱（例如把 5.1 表单清单
+    # 也塞进 models）。保留 AI 兜底只用于 parser 真正失败的情况。
     if _section_len("forms") > 200 and len(forms) == 0:
-        incomplete.add("forms")
-    elif _section_len("forms") > 400 and main_model_count > 0 and len(forms) < main_model_count:
         incomplete.add("forms")
 
     if _section_len("permissions") > 180 and len(permissions) == 0:
