@@ -9,7 +9,8 @@ from pydantic import BaseModel
 
 class SceneType(str, Enum):
     """自开发场景类型"""
-    WEB_COMPONENT = "web_component"           # Web端自开发组件
+    WEB_COMPONENT = "web_component"           # Web端自开发组件（仅PC端，需明确指定）
+    WEB_COMPONENT_DUAL = "web_component_dual" # 双端自开发组件（PC + 移动端，默认）
     WEB_PAGE = "web_page"                     # Web端自开发页面
     WEB_LIST_VIEW = "web_list_view"           # Web端自开发列表视图
     WEB_LAYOUT = "web_layout"                 # Web端自定义布局
@@ -43,8 +44,8 @@ class SceneInfo(BaseModel):
 SCENE_REGISTRY: Dict[SceneType, SceneInfo] = {
     SceneType.WEB_COMPONENT: SceneInfo(
         type=SceneType.WEB_COMPONENT,
-        name="Web端自开发组件",
-        description="在表单中使用的自定义Vue组件，包含编辑态和只读态",
+        name="Web端自开发组件（仅PC端）",
+        description="仅在PC端表单中使用的自定义Vue组件，用户明确指定只需PC端时使用",
         category="frontend",
         platform="web",
         file_patterns=["*.config.js", "edit/*.vue", "read/*.vue", "index.js", "apaas.json"],
@@ -53,6 +54,25 @@ SCENE_REGISTRY: Dict[SceneType, SceneInfo] = {
             "组件名必须以apaas-custom-开头",
             "config中需声明version/code/component",
             "建议使用x-proxy-form-item包裹",
+        ],
+    ),
+    SceneType.WEB_COMPONENT_DUAL: SceneInfo(
+        type=SceneType.WEB_COMPONENT_DUAL,
+        name="双端自开发组件（PC + 移动端）",
+        description="同时支持PC端和移动端的自定义表单组件，PC使用element-ui，移动端使用cube-ui，共享widget.config和业务逻辑",
+        category="frontend",
+        platform="both",
+        file_patterns=[
+            "shared/widget.config.json",
+            "shared/mixin/*.js",
+            "web/src/form-component/**/*.vue",
+            "mobile/src/form-component/**/*.vue",
+        ],
+        required_conventions=[
+            "shared/widget.config.json 为双端唯一配置来源",
+            "PC端组件名 FormComponentXxxEdit，移动端 MobileFormComponentXxxEdit",
+            "web/ 使用 element-ui（el-*），mobile/ 使用 cube-ui",
+            "shared/ 内部引用使用相对路径，不使用 @/",
         ],
     ),
     SceneType.WEB_PAGE: SceneInfo(

@@ -31,6 +31,11 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
 
+    # 后台预热模板依赖缓存（不阻塞启动）
+    import asyncio as _asyncio
+    from app.coding.workspace import WorkspaceManager as _WM
+    _asyncio.create_task(_WM().prewarm_template_deps())
+
     yield
     # 关闭时清理资源
     from app.coding.browser_service import BrowserService

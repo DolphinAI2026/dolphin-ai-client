@@ -1,0 +1,105 @@
+---
+description: editor.config.json 生成规则（双端模板专用）
+globs:
+  - "web/src/form-component-config/form-editor/*.editor.config.json"
+  - "mobile/src/form-component-config/form-editor/*.editor.config.json"
+alwaysApply: true
+---
+
+# editor.config.json 生成规则（双端模板）
+
+## 文件位置
+
+editor.config.json 属于 **PC 端设计器配置**，只存在于 `web/` 包中：
+
+```
+web/src/form-component-config/form-editor/{name}.editor.config.json
+```
+
+移动端（`mobile/`）**不需要** editor.config.json，移动端没有独立的设计器配置面板。
+
+## 文件格式
+
+此文件是**纯注册文件**，只有 4 个字段：
+
+```json
+{
+  "code": "FORM_CUSTOM_COMPONENT_XXX_SETTING",
+  "editorConfigType": "FORM_CUSTOM_COMPONENT_XXX_SETTING",
+  "componentName": "FormComponentXxxSetting",
+  "configProperty": "customComponentConfig"
+}
+```
+
+- `code`：等于 `shared/widget.config.js` 中顶层 `code` 字段 + `_SETTING`
+- `editorConfigType`：与 `code` 完全相同
+- `componentName`：必须与 `web/src/form-component/form-editor/{name}-setting.vue` 中的 `name` 选项完全一致
+- `configProperty`：**固定值 `"customComponentConfig"`，不可修改**
+
+此文件**不允许**出现任何其他字段。
+
+## 注册到 index.js
+
+```js
+// web/src/form-component-config/form-editor/index.js
+import FormComponentXxxEditorConfig from "./form-component-xxx.editor.config.json"
+
+const editorConfigList = [
+  FormComponentXxxEditorConfig
+]
+
+export default editorConfigList
+```
+
+## setting.vue 位置
+
+```
+web/src/form-component/form-editor/form-component-xxx-setting.vue
+```
+
+- setting.vue 中使用 `@shared/mixin/form-config.mixin` 引入 mixin（不是 `@/mixin/`）
+- 不要在内部包 `<el-form>`，平台已提供外层表单容器
+- v-model 直接绑定 `componentConfig.customComponentConfig.xxx`，无需任何保存方法
+
+```vue
+<script>
+import EditorFormConfigMixin from '@shared/mixin/form-config.mixin'
+
+export default {
+  name: 'FormComponentXxxSetting',
+  mixins: [EditorFormConfigMixin]
+}
+</script>
+```
+
+同时需注册到：
+```js
+// web/src/form-component/form-editor/index.js
+import FormComponentXxxSetting from './form-component-xxx-setting.vue'
+
+const customFormEditorList = [
+  FormComponentXxxSetting
+]
+export default customFormEditorList
+```
+
+## shared/widget.config.js 中同步添加
+
+editor.config 的 code 必须出现在 `shared/widget.config.js` 的 `widget.editor.config` 数组中（PC 端和移动端都需要更新）：
+
+```js
+widget: {
+  editor: {
+    config: ['INFO', 'LABEL', ..., 'WIDTH', 'FORM_CUSTOM_COMPONENT_XXX_SETTING', 'HIDDEN', ...]
+  }
+},
+client: {
+  mobile: {
+    widget: {
+      editor: {
+        config: ['INFO', 'LABEL', ..., 'WIDTH', 'FORM_CUSTOM_COMPONENT_XXX_SETTING', 'HIDDEN', ...]
+      }
+    }
+  }
+}
+```

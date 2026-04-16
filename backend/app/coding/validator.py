@@ -110,6 +110,20 @@ class _WidgetEditor(BaseModel):
     config: List[str]
     excludeInTable: List[str]
 
+    @field_validator("config", mode="before")
+    @classmethod
+    def _flatten_config(cls, v: object) -> list[str]:
+        """将二维数组展平为一维字符串数组，过滤非字符串元素。"""
+        if not isinstance(v, list):
+            return []
+        flat: list[str] = []
+        for item in v:
+            if isinstance(item, list):
+                flat.extend(x for x in item if isinstance(x, str))
+            elif isinstance(item, str):
+                flat.append(item)
+        return flat
+
 
 class _Widget(BaseModel):
     display: _WidgetDisplay
@@ -145,6 +159,20 @@ class _MobileComponent(BaseModel):
 class _MobileEditor(BaseModel):
     config: List[str]
     excludeInTable: List[str]
+
+    @field_validator("config", mode="before")
+    @classmethod
+    def _flatten_config(cls, v: object) -> list[str]:
+        """将二维数组展平为一维字符串数组，过滤非字符串元素。"""
+        if not isinstance(v, list):
+            return []
+        flat: list[str] = []
+        for item in v:
+            if isinstance(item, list):
+                flat.extend(x for x in item if isinstance(x, str))
+            elif isinstance(item, str):
+                flat.append(item)
+        return flat
 
 
 class _MobileWidget(BaseModel):
@@ -200,6 +228,19 @@ class WidgetComponentConfig(BaseModel):
                 )
         return self
 
+def _flatten_str_list(v: object) -> list[str]:
+    """将可能的二维字符串数组展平为一维，过滤非字符串元素。"""
+    if not isinstance(v, list):
+        return []
+    flat: list[str] = []
+    for item in v:
+        if isinstance(item, list):
+            flat.extend(x for x in item if isinstance(x, str))
+        elif isinstance(item, str):
+            flat.append(item)
+    return flat
+
+
 def normalize_widget_config_with_pydantic(data: dict) -> dict:
     """对 widget.config.json 结构进行 coerce 归一化（类型修正、默认值填充）。
 
@@ -218,7 +259,7 @@ def normalize_widget_config_with_pydantic(data: dict) -> dict:
         result["desc"] = dict(result["desc"])
         result["desc"]["iconType"] = "DEFAULT"
 
-    # widget.editor 确保存在且 excludeInTable 为 list
+    # widget.editor 确保存在且 excludeInTable 为 list，config 展平为一维字符串数组
     widget = result.get("widget")
     if isinstance(widget, dict):
         result["widget"] = dict(widget)
@@ -229,6 +270,20 @@ def normalize_widget_config_with_pydantic(data: dict) -> dict:
             result["widget"]["editor"] = dict(editor)
             if not isinstance(result["widget"]["editor"].get("excludeInTable"), list):
                 result["widget"]["editor"]["excludeInTable"] = ["WIDTH"]
+            # 展平 config 二维数组
+            result["widget"]["editor"]["config"] = _flatten_str_list(
+                result["widget"]["editor"].get("config")
+            )
+
+    # client.mobile.widget.editor.config 同样展平
+    try:
+        mobile_widget = result.get("client", {}).get("mobile", {}).get("widget")
+        if isinstance(mobile_widget, dict):
+            mobile_editor = mobile_widget.get("editor")
+            if isinstance(mobile_editor, dict):
+                mobile_editor["config"] = _flatten_str_list(mobile_editor.get("config"))
+    except Exception:
+        pass
 
     return result
 

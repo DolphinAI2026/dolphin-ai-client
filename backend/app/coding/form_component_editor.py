@@ -1277,6 +1277,16 @@ def _normalize_widget_setting_code_in_dict(spec: FormComponentEditorSpec, data: 
         if not isinstance(config, list):
             editor["config"] = [sc]
             return
+        # 展平二维数组：将内层 list 元素逐个提取为字符串，过滤非字符串元素
+        flat: list[str] = []
+        for item in config:
+            if isinstance(item, list):
+                flat.extend(x for x in item if isinstance(x, str))
+            elif isinstance(item, str):
+                flat.append(item)
+        if flat != config:
+            editor["config"] = flat
+            config = flat
         if sc in config:
             return
         try:
@@ -1907,3 +1917,293 @@ def _remove_setting_code_lines(content: str, setting_code: str) -> str:
         if setting_code not in line
     ]
     return "\n".join(filtered_lines)
+
+
+_DUAL_SCENE_DIRS = ("edit", "ide", "list", "print", "read", "search", "search-ide")
+
+# scene 目录 → index.js 导出的 list 变量名（与双端模板保持一致）
+_DUAL_SCENE_LIST_NAMES = {
+    "edit": "editFormComponentList",
+    "ide": "ideFormComponentList",
+    "list": "listFormComponentList",
+    "print": "printFormComponentList",
+    "read": "readFormComponentList",
+    "search": "searchFormComponentList",
+    "search-ide": "searchIdeFormComponentList",
+}
+
+
+def _kebab_to_pascal_simple(s: str) -> str:
+    return "".join(p.capitalize() for p in s.split("-") if p)
+
+
+_SCAFFOLD_SEMANTIC_TOKENS = ("custom", "demo", "dev", "component")
+
+
+def _extract_vue_semantic(vue_name: str, file_prefix: str, scene: str) -> str | None:
+    """从 vue 文件名反推 semantic：
+    {file_prefix}-{semantic}-{scene}.vue → semantic
+    不匹配格式返回 None。
+    """
+    expected_suffix = f"-{scene}.vue"
+    if not vue_name.endswith(expected_suffix):
+        return None
+    prefix = f"{file_prefix}-"
+    if not vue_name.startswith(prefix):
+        return None
+    mid = vue_name[len(prefix): -len(expected_suffix)]
+    return mid or None
+
+
+def _normalize_dual_scene_dirs(workspace_path: Path, semantics: "str | list[str]") -> list[str]:
+    """双端工程 form-widget/<scene>/ 场景目录归一化。
+
+    规则："一个组件 = 一套文件"。对每个 scene 目录：
+    - 对每个权威 semantic（来自 widget.config.json 推出的 code 集合），保留一个
+      `{file_prefix}-{semantic}-{scene}.vue`，多余副本删除。
+    - 若权威 vue 不在目录里，但存在唯一一个非 scaffold 的 vue（且其 semantic 不在
+      权威集合中），将其视为"该组件的文件被 LLM 误命名"，当作同一组件的权威
+      文件保留（不强行重命名，避免破坏内容；用户可后续按 prompt 要求自行修正）。
+    - 其他所有 vue（脚手架 `*-custom-*`、旧 demo、多余副本）全部删除。
+    - 重建 scene/index.js，把保留下来的每个 vue 按 `{ClassSide}{Pascal(semantic)}{Scene}`
+      命名变量并放入 `{scene}FormComponentList`。
+    - 如果清理后 scene 目录里一个 vue 都没保留下来，index.js 不动（避免空导入导致
+      构建挂掉；通常意味着 LLM 还没生成这一 scene 的 vue）。
+
+    `semantics` 兼容旧签名：传 str 时视为单 semantic 列表。
+    """
+    changed: list[str] = []
+    if isinstance(semantics, str):
+        authoritative = [semantics] if semantics else []
+    else:
+        authoritative = [s for s in semantics if s]
+    if not authoritative:
+        return changed
+    authoritative_set = set(authoritative)
+
+    for side, file_prefix, class_side_prefix in (
+        ("web", "form-component", "FormComponent"),
+        ("mobile", "mobile-form-component", "MobileFormComponent"),
+    ):
+        widget_root = workspace_path / side / "src" / "form-component" / "form-widget"
+        if not widget_root.is_dir():
+            continue
+
+        for scene in _DUAL_SCENE_DIRS:
+            scene_dir = widget_root / scene
+            if not scene_dir.is_dir():
+                continue
+
+            scene_pascal = _kebab_to_pascal_simple(scene)
+            vue_files = sorted(scene_dir.glob("*.vue"))
+            if not vue_files:
+                continue
+
+            # 分桶：每个 semantic 对应的 vue 文件（可能有 0/1/多 个）
+            bucket: dict[str, list[str]] = {sem: [] for sem in authoritative}
+            stray_non_scaffold: list[tuple[str, str]] = []  # (name, semantic) 不在权威集
+            scaffold_or_other: list[str] = []
+
+            for vf in vue_files:
+                sem = _extract_vue_semantic(vf.name, file_prefix, scene)
+                if sem is None:
+                    scaffold_or_other.append(vf.name)
+                elif sem in authoritative_set:
+                    bucket[sem].append(vf.name)
+                elif sem in _SCAFFOLD_SEMANTIC_TOKENS:
+                    scaffold_or_other.append(vf.name)
+                else:
+                    stray_non_scaffold.append((vf.name, sem))
+
+            # 为每个权威 semantic 选定唯一保留文件；若权威桶为空且恰有一个 stray
+            # 非脚手架文件（命名语义与 widget_code 不一致），把它视作"唯一缺失
+            # semantic 对应的文件"。仅在权威 semantic 只有一个 && stray 恰好一个
+            # 的情形退化处理。
+            kept: list[tuple[str, str]] = []  # (semantic, vue_name)
+            for sem in authoritative:
+                if bucket[sem]:
+                    # 多个副本保第一个（名字一致时按字典序都相同；不同后缀按字典序稳定）
+                    kept.append((sem, bucket[sem][0]))
+            if (
+                not kept
+                and len(authoritative) == 1
+                and len(stray_non_scaffold) == 1
+            ):
+                stray_name, _stray_sem = stray_non_scaffold[0]
+                # semantic 仍按权威 semantic 登记，index.js 变量名用权威 Pascal，
+                # 但 import 路径用实际存在的文件名——尊重用户内容，语义错配交由
+                # prompt 指引用户后续修正文件名。
+                kept.append((authoritative[0], stray_name))
+                # 标记 stray 为已保留，避免被删
+                stray_non_scaffold = []
+
+            # 安全阀：kept 为空意味着目录里只有 scaffold / stray / 其他杂项，没有任何
+            # 匹配权威 semantic 的文件。此时不做任何删除——避免在 LLM 还没开始实际
+            # 写业务代码前就把模板脚手架 *-demo-* / *-custom-* 误删，导致 build 失败。
+            if not kept:
+                continue
+
+            keep_names = {name for _sem, name in kept}
+
+            # 删除：所有 scaffold + 未保留的 stray + 同 semantic 的多余副本
+            for name in scaffold_or_other:
+                if name not in keep_names:
+                    try:
+                        (scene_dir / name).unlink()
+                        changed.append(f"{side}/src/form-component/form-widget/{scene}/{name}")
+                    except Exception:
+                        pass
+            for name, _sem in stray_non_scaffold:
+                if name not in keep_names:
+                    try:
+                        (scene_dir / name).unlink()
+                        changed.append(f"{side}/src/form-component/form-widget/{scene}/{name}")
+                    except Exception:
+                        pass
+            for sem, names in bucket.items():
+                for extra in names[1:]:
+                    if extra in keep_names:
+                        continue
+                    try:
+                        (scene_dir / extra).unlink()
+                        changed.append(f"{side}/src/form-component/form-widget/{scene}/{extra}")
+                    except Exception:
+                        pass
+
+            # 重建 index.js：多组件时每个 vue 一个 import，按 authoritative 顺序
+            imports_lines: list[str] = []
+            var_names: list[str] = []
+            for sem, vue_name in kept:
+                pascal_comp = _kebab_to_pascal_simple(sem)
+                var_name = f"{class_side_prefix}{pascal_comp}{scene_pascal}"
+                imports_lines.append(f"import {var_name} from './{vue_name}'")
+                var_names.append(var_name)
+
+            list_name = _DUAL_SCENE_LIST_NAMES[scene]
+            joined_vars = ",\n  ".join(var_names)
+            new_index = (
+                "\n".join(imports_lines) + "\n\n"
+                f"const {list_name} = [\n  {joined_vars}\n]\n\n"
+                f"export default {list_name}\n"
+            )
+            index_path = scene_dir / "index.js"
+            if _write_if_changed(index_path, new_index):
+                changed.append(f"{side}/src/form-component/form-widget/{scene}/index.js")
+
+    return changed
+
+
+def _flatten_editor_config_in_place(editor: object) -> bool:
+    """将 editor.config 的二维数组展平为一维字符串数组。返回是否发生修改。"""
+    if not isinstance(editor, dict):
+        return False
+    config = editor.get("config")
+    if not isinstance(config, list):
+        return False
+    flat: list[str] = []
+    for item in config:
+        if isinstance(item, list):
+            flat.extend(x for x in item if isinstance(x, str))
+        elif isinstance(item, str):
+            flat.append(item)
+    if flat != config:
+        editor["config"] = flat
+        return True
+    return False
+
+
+def normalize_form_component_dual_apaas_json(workspace_path: Path) -> list[str]:
+    """双端工程（form-component-dual）专用：
+
+    1. 从 shared/widget.config.json 读取权威的 code/text/description，
+       同步写入 web/src/apaas.json 和 mobile/src/apaas.json 的 customWidgetList，
+       确保三个文件中的 code 字段始终保持一致。
+    2. 展平 shared/widget.config.json 里 widget.editor.config 和
+       client.mobile.widget.editor.config 的二维数组（LLM 常见错误格式）。
+
+    通过检测 shared/widget.config.json 是否存在来自动判断是否为双端工程，
+    调用方无需关心工程类型。
+    """
+    shared_widget_path = workspace_path / "shared" / "widget.config.json"
+    if not shared_widget_path.exists():
+        return []
+
+    try:
+        widget_config = json.loads(shared_widget_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+    changed_files: list[str] = []
+
+    # 步骤 1：展平 widget.editor.config 和 client.mobile.widget.editor.config 的二维数组
+    widget_dict = widget_config.get("widget")
+    mutated_widget = False
+    if isinstance(widget_dict, dict):
+        if _flatten_editor_config_in_place(widget_dict.get("editor")):
+            mutated_widget = True
+    mobile_widget_dict = ((widget_config.get("client") or {}).get("mobile") or {}).get("widget")
+    if isinstance(mobile_widget_dict, dict):
+        if _flatten_editor_config_in_place(mobile_widget_dict.get("editor")):
+            mutated_widget = True
+
+    if mutated_widget:
+        new_widget_content = json.dumps(widget_config, indent=2, ensure_ascii=False) + "\n"
+        if _write_if_changed(shared_widget_path, new_widget_content):
+            changed_files.append("shared/widget.config.json")
+
+    # 步骤 2：同步 code/text/description 到 web/src/apaas.json 和 mobile/src/apaas.json
+    widget_code = widget_config.get("code", "")
+    desc = widget_config.get("desc", {})
+    widget_text = desc.get("text", "")
+    widget_description = desc.get("description", "")
+
+    if not widget_code:
+        return changed_files
+
+    # 从 widget_code 反推 semantic：FORM_CUSTOM_TIME_PICKER → time-picker
+    semantic = ""
+    if widget_code.startswith("FORM_CUSTOM_"):
+        semantic = widget_code[len("FORM_CUSTOM_"):].lower().replace("_", "-")
+    # 脚手架占位名 custom / 空值 → 用 component 兜底，避免 form-component-custom-custom 这种
+    if not semantic or semantic in ("custom", "demo", "dev"):
+        semantic = "component"
+    web_output_name = f"form-component-custom-{semantic}"
+    mobile_output_name = f"{web_output_name}-m"
+
+    # 步骤 1.5：归一化 form-widget 场景子目录（以 semantic 为准删占位 .vue、重建 index.js）
+    changed_files.extend(_normalize_dual_scene_dirs(workspace_path, semantic))
+
+    for sub, output_name in (("web", web_output_name), ("mobile", mobile_output_name)):
+        apaas_path = workspace_path / sub / "src" / "apaas.json"
+        if not apaas_path.exists():
+            continue
+        try:
+            apaas = json.loads(apaas_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+
+        existing_list = apaas.get("customWidgetList") or [{}]
+        existing_widget = existing_list[0] if existing_list else {}
+        new_widget = {
+            "code": widget_code,
+            "text": widget_text or existing_widget.get("text", ""),
+            "description": widget_description or existing_widget.get("description", ""),
+        }
+
+        repaired = dict(apaas)
+        # df-apaas-cli 从 apaas.json 读 entry / templateType 等字段，LLM 常漏写导致 build 炸
+        repaired["entry"] = "index.js"
+        repaired["templateType"] = "FORM_COMPONENT"
+        repaired["customWidgetList"] = [new_widget]
+        repaired["copyAssets"] = apaas.get("copyAssets") if isinstance(apaas.get("copyAssets"), list) else []
+        repaired["outputName"] = output_name
+        # LLM 自己造的非法字段（如 router）清理掉
+        for k in list(repaired.keys()):
+            if k not in {"entry", "templateType", "customWidgetList", "copyAssets", "outputName"}:
+                repaired.pop(k, None)
+
+        new_content = json.dumps(repaired, indent=2, ensure_ascii=False) + "\n"
+        if _write_if_changed(apaas_path, new_content):
+            changed_files.append(f"{sub}/src/apaas.json")
+
+    return changed_files

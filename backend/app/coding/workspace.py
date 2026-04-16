@@ -201,6 +201,7 @@ DISPLAY_NAME_HINTS = {
 
 PROJECT_TYPE_PREFIXES = {
     "form-component": "form-component-",
+    "form-component-dual": "form-component-",
     "mobile-component": "",
     "form-page": "form-page-",
     "menu-page": "form-page-",
@@ -213,6 +214,7 @@ PROJECT_TYPE_PREFIXES = {
 
 PROJECT_TYPE_SUFFIXES = {
     "form-component": "组件",
+    "form-component-dual": "组件",
     "mobile-component": "组件",
     "form-page": "页面",
     "menu-page": "页面",
@@ -235,6 +237,7 @@ PROJECT_TYPE_SUFFIXES = {
 
 FRONTEND_RULE_WORKSPACE_TYPES = {
     "form-component",
+    "form-component-dual",
     "mobile-component",
     "form-page",
     "menu-page",
@@ -258,6 +261,7 @@ PAGE_RULE_WORKSPACE_TYPES = {
 class ProjectType(str, Enum):
     """项目类型"""
     FORM_COMPONENT = "form-component"           # 表单自开发组件（PC）
+    FORM_COMPONENT_DUAL = "form-component-dual" # 表单自开发组件（双端：PC + 移动端）
     MOBILE_COMPONENT = "mobile-component"       # 移动端自开发组件
     FORM_PAGE = "form-page"                     # 自开发菜单页面（PC）
     MENU_PAGE = "menu-page"                     # 自开发菜单页面（PC，别名）
@@ -290,8 +294,9 @@ class WorkspaceStatus(str, Enum):
 CLI_TEMPLATE_DIR = Path(__file__).parent.parent.parent / "templates" / "cli-generated"
 
 CLI_TEMPLATE_MAP: dict[str, str] = {
-    ProjectType.FORM_COMPONENT: "form-component-web",
-    ProjectType.MENU_PAGE:      "form-page-web",
+    ProjectType.FORM_COMPONENT:      "form-component-web",
+    ProjectType.FORM_COMPONENT_DUAL: "form-component-dual",
+    ProjectType.MENU_PAGE:           "form-page-web",
     ProjectType.FORM_PAGE:      "form-page-web",
     ProjectType.FORM_LIST:      "form-view-web",
     ProjectType.LAYOUT:         "form-layout-web",
@@ -453,7 +458,12 @@ class WorkspaceManager:
         return hydrated
 
     def _read_apaas_config(self, ws_path: Path) -> dict:
-        apaas_json_path = ws_path / "src" / "apaas.json"
+        # 双端工程（form-component-dual）的 apaas.json 在 web/src/ 下
+        meta = self._read_meta(ws_path) if (ws_path / ".workspace.json").exists() else {}
+        if meta.get("project_type") == "form-component-dual":
+            apaas_json_path = ws_path / "web" / "src" / "apaas.json"
+        else:
+            apaas_json_path = ws_path / "src" / "apaas.json"
         if not apaas_json_path.exists():
             return {}
         try:
@@ -631,9 +641,23 @@ class WorkspaceManager:
         return fallback
 
     def _get_build_output_dir(self, ws_path: Path, apaas_config: Optional[dict] = None) -> Path:
+        meta = self._read_meta(ws_path) if (ws_path / ".workspace.json").exists() else {}
+        # 双端模板：从 web/src/apaas.json 读取 PC 端输出目录
+        if meta.get("project_type") == ProjectType.FORM_COMPONENT_DUAL.value:
+            web_apaas = ws_path / "web" / "src" / "apaas.json"
+            web_config = {}
+            if web_apaas.exists():
+                try:
+                    web_config = json.loads(web_apaas.read_text(encoding="utf-8"))
+                except Exception:
+                    pass
+            output_name = self._resolve_output_name(
+                web_config,
+                meta.get("project_name") or self._fallback_project_name_from_path(ws_path),
+            )
+            return ws_path / "web" / output_name
         apaas_config = apaas_config or self._read_apaas_config(ws_path)
         template_type = (apaas_config.get("templateType") or "").upper()
-        meta = self._read_meta(ws_path) if (ws_path / ".workspace.json").exists() else {}
         if meta.get("project_type") == ProjectType.BACKEND_API.value:
             return ws_path / "target"
         output_name = self._resolve_output_name(
@@ -662,6 +686,9 @@ class WorkspaceManager:
 
     def _uses_df_apaas_cli_build(self, ws_path: Path) -> bool:
         package_json_path = ws_path / "package.json"
+        # 双端模板没有根目录 package.json，用 web/ 子目录判断
+        if not package_json_path.exists():
+            package_json_path = ws_path / "web" / "package.json"
         if not package_json_path.exists():
             return False
         try:
@@ -858,7 +885,7 @@ class WorkspaceManager:
 
         # 生成脚手架 —— 优先使用 df-apaas-cli 预生成的标准模板
         if project_type.value in CLI_TEMPLATE_MAP:
-            self._scaffold_via_cli_template(ws_path, safe_name, project_type)
+            self._scaffold_via_cli_template(ws_path, safe_name, project_type, display_name=resolved_display_name)
             if project_type == ProjectType.FORM_COMPONENT:
                 normalize_form_component_editor_artifacts(ws_path)
                 self._ensure_form_component_workspace_compat(ws_path)
@@ -983,8 +1010,8 @@ class WorkspaceManager:
         else:
             logger.info("[workspace] df-apaas-cli installed globally successfully")
 
-    def _build_dependency_signature(self, ws_path: Path) -> str:
-        package_json_path = ws_path / "package.json"
+    def _build_dependency_signature(self, ws_path: Path, install_dir: Optional[Path] = None) -> str:
+        package_json_path = (install_dir or ws_path) / "package.json"
         package_json = json.loads(package_json_path.read_text(encoding="utf-8"))
         signature_payload = {
             "templateType": package_json.get("templateType"),
@@ -1007,8 +1034,8 @@ class WorkspaceManager:
             encoding="utf-8",
         )
 
-    def _workspace_install_ready(self, ws_path: Path, signature: str) -> bool:
-        node_modules_path = ws_path / "node_modules"
+    def _workspace_install_ready(self, ws_path: Path, signature: str, install_dir: Optional[Path] = None) -> bool:
+        node_modules_path = (install_dir or ws_path) / "node_modules"
         if not node_modules_path.exists():
             return False
 
@@ -1030,6 +1057,127 @@ class WorkspaceManager:
     def _cache_ready(self, cache_dir: Path) -> bool:
         node_modules_path = cache_dir / "node_modules"
         return node_modules_path.exists() and any(node_modules_path.iterdir())
+
+    # ======== 源码 Hash（构建缓存判断） ========
+
+    def _compute_src_hash(self, ws_path: Path) -> str:
+        """对工作区源码文件内容计算 SHA-256，用于判断是否需要重新构建。
+        双端模板：覆盖 web/src、mobile/src、shared 三个目录。
+        单端模板：覆盖 src/ 目录。
+        """
+        meta = self._read_meta(ws_path) if (ws_path / ".workspace.json").exists() else {}
+        if meta.get("project_type") == ProjectType.FORM_COMPONENT_DUAL.value:
+            src_dirs = [ws_path / "web" / "src", ws_path / "mobile" / "src", ws_path / "shared"]
+        else:
+            src_dirs = [ws_path / "src"]
+
+        hasher = hashlib.sha256()
+        for src_dir in src_dirs:
+            if not src_dir.exists():
+                continue
+            for f in sorted(src_dir.rglob("*")):
+                if f.is_file() and not f.name.startswith("."):
+                    hasher.update(str(f.relative_to(ws_path)).encode("utf-8"))
+                    try:
+                        hasher.update(f.read_bytes())
+                    except Exception:
+                        pass
+        return hasher.hexdigest()[:16]
+
+    # ======== 模板依赖预热 ========
+
+    async def prewarm_template_deps(self) -> None:
+        """服务启动时在后台预热所有模板的 npm 依赖缓存。
+        后续新建工作区时可直接命中缓存，跳过 npm install。
+        """
+        templates_root = REPO_ROOT / "templates" / "cli-generated"
+        if not templates_root.exists():
+            return
+
+        pkg_dirs: list[Path] = []
+        for template_dir in sorted(templates_root.iterdir()):
+            if not template_dir.is_dir():
+                continue
+            # 单端模板：根目录有 package.json
+            if (template_dir / "package.json").exists():
+                pkg_dirs.append(template_dir)
+            # 双端模板：web/ 和 mobile/ 各有 package.json
+            for subdir in ("web", "mobile"):
+                sub_pkg = template_dir / subdir / "package.json"
+                if sub_pkg.exists():
+                    pkg_dirs.append(template_dir / subdir)
+
+        for pkg_dir in pkg_dirs:
+            try:
+                await self._prewarm_pkg_dir(pkg_dir)
+            except Exception as e:
+                logger.warning(f"[prewarm] {pkg_dir} 预热失败: {e}")
+
+    async def _prewarm_pkg_dir(self, pkg_dir: Path) -> None:
+        """预热单个 package.json 目录的依赖缓存。"""
+        pkg_json_path = pkg_dir / "package.json"
+        if not pkg_json_path.exists():
+            return
+
+        # 用 package.json 内容计算 signature（与工作区一致）
+        try:
+            pkg_json = json.loads(pkg_json_path.read_text(encoding="utf-8"))
+        except Exception:
+            return
+        signature_payload = {
+            "templateType": pkg_json.get("templateType"),
+            "engines": pkg_json.get("engines") or {},
+            "dependencies": pkg_json.get("dependencies") or {},
+            "devDependencies": pkg_json.get("devDependencies") or {},
+            "optionalDependencies": pkg_json.get("optionalDependencies") or {},
+            "peerDependencies": pkg_json.get("peerDependencies") or {},
+            "registry": DEFAULT_NPM_REGISTRY,
+        }
+        serialized = json.dumps(signature_payload, ensure_ascii=False, sort_keys=True)
+        signature = hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:16]
+        cache_dir = self._dependency_cache_dir(signature)
+
+        if self._cache_ready(cache_dir):
+            logger.debug(f"[prewarm] {pkg_dir.name} 依赖缓存已就绪，跳过")
+            return
+
+        logger.info(f"[prewarm] 开始预热模板依赖: {pkg_dir.name} (sig={signature})")
+        env = self._build_npm_env()
+        npm_exec = resolve_executable("npm", env)
+        if not npm_exec:
+            logger.warning("[prewarm] 未检测到 npm，跳过预热")
+            return
+
+        temp_dir = Path(tempfile.mkdtemp(prefix="apaas-prewarm.", dir=str(DEPENDENCY_CACHE_ROOT)))
+        try:
+            shutil.copy2(pkg_json_path, temp_dir / "package.json")
+            # 写入 .npmrc
+            npmrc_content = f"registry={DEFAULT_NPM_REGISTRY}\n"
+            (temp_dir / ".npmrc").write_text(npmrc_content, encoding="utf-8")
+
+            proc = await asyncio.create_subprocess_exec(
+                npm_exec, "install",
+                "--registry", DEFAULT_NPM_REGISTRY,
+                "--prefer-offline", "--no-audit", "--no-fund",
+                cwd=str(temp_dir),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                env=env,
+            )
+            await proc.communicate()
+            if proc.returncode != 0:
+                logger.warning(f"[prewarm] {pkg_dir.name} npm install 失败 (code={proc.returncode})")
+                return
+
+            self._remove_path(cache_dir)
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(temp_dir / "node_modules"), str(cache_dir / "node_modules"))
+            lock_src = temp_dir / "package-lock.json"
+            if lock_src.exists():
+                shutil.move(str(lock_src), str(cache_dir / "package-lock.json"))
+            logger.info(f"[prewarm] {pkg_dir.name} 依赖预热完成")
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
     def _link_cached_install(self, ws_path: Path, cache_dir: Path, signature: str):
         cache_node_modules = cache_dir / "node_modules"
@@ -1122,6 +1270,130 @@ class WorkspaceManager:
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
+    async def _install_at(
+        self,
+        install_dir: Path,
+        ws_path: Path,
+        progress_callback: Optional[Callable[[str], Optional[Awaitable[None]]]] = None,
+    ) -> dict:
+        """在指定子目录安装 npm 依赖（双端模板的 web/ 或 mobile/ 子目录）。
+        install_dir: 含 package.json 的目录；ws_path: 工作区根目录（用于 .npmrc 和 install-state）。
+        """
+        # 确保 .npmrc 存在（从工作区根目录复制/生成）
+        self._ensure_workspace_npmrc(ws_path)
+        npmrc_src = ws_path / ".npmrc"
+        npmrc_dst = install_dir / ".npmrc"
+        if npmrc_src.exists() and not npmrc_dst.exists():
+            try:
+                shutil.copy2(npmrc_src, npmrc_dst)
+            except Exception:
+                pass
+
+        try:
+            signature = self._build_dependency_signature(ws_path, install_dir)
+            cache_dir = self._dependency_cache_dir(signature)
+            state_path = install_dir / ".install-state.json"
+
+            # 已安装且签名匹配
+            node_modules = install_dir / "node_modules"
+            if node_modules.exists() and state_path.exists():
+                try:
+                    state = json.loads(state_path.read_text(encoding="utf-8"))
+                    if state.get("signature") == signature:
+                        return {"status": "ok", "message": "依赖已就绪"}
+                except Exception:
+                    pass
+
+            install_lock = self._install_locks.setdefault(f"subdir:{signature}", asyncio.Lock())
+            async with install_lock:
+                # 双重检查
+                if node_modules.exists() and state_path.exists():
+                    try:
+                        state = json.loads(state_path.read_text(encoding="utf-8"))
+                        if state.get("signature") == signature:
+                            return {"status": "ok", "message": "依赖已就绪"}
+                    except Exception:
+                        pass
+
+                def _write_state(src: str):
+                    state_path.write_text(
+                        json.dumps({"signature": signature, "source": src}, ensure_ascii=False),
+                        encoding="utf-8",
+                    )
+
+                def _link_cache():
+                    cache_nm = cache_dir / "node_modules"
+                    self._remove_path(node_modules)
+                    try:
+                        os.symlink(cache_nm, node_modules, target_is_directory=True)
+                    except OSError:
+                        shutil.copytree(cache_nm, node_modules)
+                    lock = cache_dir / "package-lock.json"
+                    if lock.exists():
+                        shutil.copy2(lock, install_dir / "package-lock.json")
+
+                if self._cache_ready(cache_dir):
+                    _link_cache()
+                    _write_state("shared-cache")
+                    await self._emit_install_progress(
+                        progress_callback,
+                        f"[cache] {install_dir.name}/ 已复用共享依赖缓存。\n",
+                    )
+                    return {"status": "ok", "message": "依赖已从共享缓存复用"}
+
+                # 临时目录安装，复用 _install_cache_miss 的核心逻辑
+                temp_dir = Path(tempfile.mkdtemp(prefix="apaas-npm-install.", dir=str(DEPENDENCY_CACHE_ROOT)))
+                try:
+                    shutil.copy2(install_dir / "package.json", temp_dir / "package.json")
+                    if npmrc_dst.exists():
+                        shutil.copy2(npmrc_dst, temp_dir / ".npmrc")
+
+                    env = self._build_npm_env()
+                    npm_exec = resolve_executable("npm", env)
+                    if not npm_exec:
+                        return {"status": "error", "message": "未检测到 npm，请检查 Node.js 安装"}
+
+                    await self._emit_install_progress(
+                        progress_callback,
+                        f"[install] 开始安装 {install_dir.name}/ 依赖...\n",
+                    )
+                    proc = await asyncio.create_subprocess_exec(
+                        npm_exec, "install",
+                        "--registry", DEFAULT_NPM_REGISTRY,
+                        "--prefer-offline", "--no-audit", "--no-fund",
+                        cwd=str(temp_dir),
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.STDOUT,
+                        env=env,
+                    )
+                    output_chunks: list[str] = []
+                    while True:
+                        chunk = await proc.stdout.read(1024) if proc.stdout else b""
+                        if not chunk:
+                            break
+                        text = chunk.decode("utf-8", errors="replace")
+                        output_chunks.append(text)
+                        await self._emit_install_progress(progress_callback, text)
+                    await proc.wait()
+                    output = "".join(output_chunks)
+                    if proc.returncode != 0:
+                        return {"status": "error", "message": output[:1200] or "npm install 失败"}
+
+                    self._remove_path(cache_dir)
+                    cache_dir.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(temp_dir / "node_modules"), str(cache_dir / "node_modules"))
+                    lock_src = temp_dir / "package-lock.json"
+                    if lock_src.exists():
+                        shutil.move(str(lock_src), str(cache_dir / "package-lock.json"))
+
+                    _link_cache()
+                    _write_state("shared-cache")
+                    return {"status": "ok", "message": f"{install_dir.name}/ 依赖安装完成"}
+                finally:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
     async def install_deps(
         self,
         ws_id: str,
@@ -1136,6 +1408,26 @@ class WorkspaceManager:
 
         meta["status"] = WorkspaceStatus.INSTALLING.value
         self._write_meta(ws_path, meta)
+
+        # 双端模板：分别在 web/ 和 mobile/ 安装依赖
+        if meta.get("project_type") == ProjectType.FORM_COMPONENT_DUAL.value:
+            try:
+                for subdir in ("web", "mobile"):
+                    sub_path = ws_path / subdir
+                    if not (sub_path / "package.json").exists():
+                        continue
+                    result = await self._install_at(sub_path, ws_path, progress_callback)
+                    if result["status"] == "error":
+                        meta["status"] = WorkspaceStatus.ERROR.value
+                        self._write_meta(ws_path, meta)
+                        return result
+                meta["status"] = WorkspaceStatus.READY.value
+                self._write_meta(ws_path, meta)
+                return {"status": "ok", "message": "双端依赖安装完成"}
+            except Exception as e:
+                meta["status"] = WorkspaceStatus.ERROR.value
+                self._write_meta(ws_path, meta)
+                return {"status": "error", "message": str(e)}
 
         # 确保 .npmrc 存在（install 期间 npm 和 df-apaas-cli 内部 npm 都需要）
         self._ensure_workspace_npmrc(ws_path)
@@ -1188,17 +1480,41 @@ class WorkspaceManager:
     async def build_if_needed(self, ws_id: str) -> dict:
         """按需构建 - 仅在源码比构建产物更新时重新构建"""
         ws_path = self.get_workspace_path(ws_id)
+        meta = self._read_meta(ws_path)
 
         output_dir = self._get_build_output_dir(ws_path)
-        src_path = ws_path / "src"
 
-        # 如果构建产物不存在，必须构建
-        if not self._has_build_artifacts(output_dir):
-            return await self.build_project(ws_id)
+        # 双端模板：src 路径取 web/src 和 mobile/src 两者最新时间
+        if meta.get("project_type") == ProjectType.FORM_COMPONENT_DUAL.value:
+            mobile_output_dir = None
+            mobile_apaas = ws_path / "mobile" / "src" / "apaas.json"
+            if mobile_apaas.exists():
+                try:
+                    mobile_cfg = json.loads(mobile_apaas.read_text(encoding="utf-8"))
+                    mobile_output_name = self._resolve_output_name(
+                        mobile_cfg,
+                        meta.get("project_name") or self._fallback_project_name_from_path(ws_path),
+                    )
+                    mobile_output_dir = ws_path / "mobile" / mobile_output_name
+                except Exception:
+                    pass
+            # 任意一端产物不存在都需重新构建
+            if not self._has_build_artifacts(output_dir) or (
+                mobile_output_dir and not self._has_build_artifacts(mobile_output_dir)
+            ):
+                return await self.build_project(ws_id)
+            src_paths = [ws_path / "web" / "src", ws_path / "mobile" / "src", ws_path / "shared"]
+        else:
+            src_paths = [ws_path / "src"]
+            # 如果构建产物不存在，必须构建
+            if not self._has_build_artifacts(output_dir):
+                return await self.build_project(ws_id)
 
         # 比较 src 和 dist 的最新修改时间
         def _latest_mtime(directory: Path) -> float:
             latest = 0
+            if not directory.exists():
+                return latest
             for f in directory.rglob("*"):
                 if f.is_file() and not f.name.startswith("."):
                     mtime = f.stat().st_mtime
@@ -1206,7 +1522,7 @@ class WorkspaceManager:
                         latest = mtime
             return latest
 
-        src_mtime = _latest_mtime(src_path) if src_path.exists() else 0
+        src_mtime = max((_latest_mtime(p) for p in src_paths), default=0)
         output_mtime = _latest_mtime(output_dir)
 
         if src_mtime > output_mtime:
@@ -1241,6 +1557,60 @@ class WorkspaceManager:
         if self._uses_df_apaas_cli_build(ws_path):
             await self._ensure_df_apaas_cli()
             self._ensure_workspace_npmrc(ws_path)
+
+        # 双端模板：分别构建 web/ 和 mobile/
+        if meta.get("project_type") == ProjectType.FORM_COMPONENT_DUAL.value:
+            try:
+                all_stdout, all_stderr = b"", b""
+                for subdir in ("web", "mobile"):
+                    sub_path = ws_path / subdir
+                    if not sub_path.is_dir():
+                        continue
+                    returncode, stdout, stderr = await self._run_build_process(sub_path)
+                    all_stdout += stdout
+                    all_stderr += stderr
+                    if returncode != 0:
+                        build_result = {
+                            "status": "error",
+                            "message": f"{subdir}/ 构建失败: " + self._summarize_build_failure(stdout, stderr),
+                        }
+                        meta["status"] = WorkspaceStatus.ERROR.value
+                        self._write_meta(ws_path, meta)
+                        return build_result
+                # 验证两端产物
+                web_ok = self._has_build_artifacts(self._get_build_output_dir(ws_path))
+                if not web_ok:
+                    build_result = {"status": "error", "message": "双端构建完成但未找到 web/ 产物，请检查 web/src 代码"}
+                    meta["status"] = WorkspaceStatus.ERROR.value
+                    self._write_meta(ws_path, meta)
+                    return build_result
+                # 检查 mobile 端产物
+                mobile_apaas = ws_path / "mobile" / "src" / "apaas.json"
+                if mobile_apaas.exists():
+                    try:
+                        mobile_cfg = json.loads(mobile_apaas.read_text(encoding="utf-8"))
+                        mobile_output_name = self._resolve_output_name(
+                            mobile_cfg,
+                            meta.get("project_name") or self._fallback_project_name_from_path(ws_path),
+                        )
+                        mobile_output_dir = ws_path / "mobile" / mobile_output_name
+                        if not self._has_build_artifacts(mobile_output_dir):
+                            build_result = {
+                                "status": "error",
+                                "message": f"双端构建完成但未找到 mobile/ 产物（{mobile_output_dir.name}/），请检查 mobile/src 代码",
+                            }
+                            meta["status"] = WorkspaceStatus.ERROR.value
+                            self._write_meta(ws_path, meta)
+                            return build_result
+                    except Exception as e:
+                        logger.warning(f"[build_project] 校验 mobile 产物时出错: {e}")
+                meta["status"] = WorkspaceStatus.READY.value
+                self._write_meta(ws_path, meta)
+                return {"status": "ok", "message": "双端构建成功"}
+            except Exception as e:
+                meta["status"] = WorkspaceStatus.ERROR.value
+                self._write_meta(ws_path, meta)
+                return {"status": "error", "message": str(e)}
 
         try:
             build_result = None
@@ -1341,60 +1711,218 @@ class WorkspaceManager:
         return {"status": "ok", "message": "serve 已停止"}
 
     def is_serve_running(self, ws_id: str) -> dict:
-        """查询 serve 状态"""
+        """查询 serve 状态。
+
+        单端格式：{"process": proc, "port": int}
+        双端格式：{"web": {"process": proc, "port": int}, "mobile": {"process": proc, "port": int}}
+        """
         if ws_id not in self._serve_processes:
             return {"running": False}
         info = self._serve_processes[ws_id]
+
+        # 双端格式
+        if "web" in info or "mobile" in info:
+            web_info = info.get("web")
+            mobile_info = info.get("mobile")
+            web_running = bool(web_info and web_info["process"].returncode is None)
+            mobile_running = bool(mobile_info and mobile_info["process"].returncode is None)
+            if not web_running and not mobile_running:
+                self._serve_processes.pop(ws_id, None)
+                return {"running": False}
+            return {
+                "running": True,
+                "dual": True,
+                "web": {"port": web_info["port"]} if web_running else None,
+                "mobile": {"port": mobile_info["port"]} if mobile_running else None,
+            }
+
+        # 单端格式（原逻辑不变）
         running = info["process"].returncode is None
         if not running:
             self._serve_processes.pop(ws_id, None)
         return {"running": running, "port": info["port"] if running else None}
 
     async def build_and_package(self, ws_id: str) -> str:
-        """构建 + 打包 zip，返回 zip 文件路径"""
-        # 先构建
+        """构建 + 打包 zip，返回 zip 文件路径。
+        上传前先比对源码 hash：未变化且 zip 已存在则跳过构建直接返回。
+        """
+        ws_path = self.get_workspace_path(ws_id)
+        meta = self._read_meta(ws_path)
+        project_name = meta.get("project_name") or self._fallback_project_name_from_path(ws_path)
+        project_type = meta.get("project_type", "")
+
+        _backend_types = (ProjectType.BACKEND_API.value, ProjectType.BACKEND_FEIGN.value, ProjectType.BACKEND_SCHEDULED.value)
+        is_backend = project_type in _backend_types
+
+        if not is_backend:
+            output_dir = self._get_build_output_dir(ws_path)
+            cli_zip = output_dir.parent / f"{output_dir.name}.zip"
+            current_hash = self._compute_src_hash(ws_path)
+            if (meta.get("src_hash") == current_hash
+                    and cli_zip.exists()
+                    and self._has_build_artifacts(output_dir)):
+                logger.info(f"[build_and_package] 源码未变化，跳过构建: {ws_id}")
+                return str(cli_zip)
+
+        # 需要重新构建
         result = await self.build_project(ws_id)
         if result["status"] == "error":
             raise RuntimeError(f"构建失败: {result['message']}")
 
-        # 打包 zip
-        ws_path = self.get_workspace_path(ws_id)
+        # 构建成功后记录 hash
+        if not is_backend:
+            meta = self._read_meta(ws_path)
+            meta["src_hash"] = self._compute_src_hash(ws_path)
+            self._write_meta(ws_path, meta)
+
         meta = self._read_meta(ws_path)
-        project_name = meta.get("project_name") or self._fallback_project_name_from_path(ws_path)
         project_type = meta.get("project_type", "")
         output_dir = self._get_build_output_dir(ws_path)
         if not self._has_build_artifacts(output_dir):
             raise FileNotFoundError("构建产物目录不存在，构建可能失败")
 
-        import zipfile, io
-        zip_path = ws_path / f"{project_name}.zip"
-        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
-            # 后端项目：只打包 target/ 下的 JAR，不含中间产物和前端目录结构
-            if project_type in (ProjectType.BACKEND_API.value, ProjectType.BACKEND_FEIGN.value, ProjectType.BACKEND_SCHEDULED.value):
+        # 后端项目：手动打包 target/ 下的 JAR
+        if project_type in (ProjectType.BACKEND_API.value, ProjectType.BACKEND_FEIGN.value, ProjectType.BACKEND_SCHEDULED.value):
+            import zipfile
+            zip_path = ws_path / f"{project_name}.zip"
+            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
                 jar_files = list(output_dir.glob("*.jar"))
                 final_jars = [j for j in jar_files if not j.name.endswith(".original")]
                 for jar in (final_jars or jar_files):
                     zf.write(jar, jar.name)
+            return str(zip_path)
+
+        # 前端项目：优先使用 df-apaas-cli build 生成的 zip 包
+        # df-apaas-cli 将 zip 输出到与产物目录同级，命名为 {outputName}.zip
+        # _build_with_staging 在暂存构建后也会将该 zip 拷回工作区根目录
+        cli_zip = output_dir.parent / f"{output_dir.name}.zip"
+        if cli_zip.exists():
+            logger.info(f"[build_and_package] 使用 df-apaas-cli 生成的 zip: {cli_zip}")
+            return str(cli_zip)
+
+        # 兜底：df-apaas-cli zip 不存在时手动压缩（极端情况）
+        logger.warning(f"[build_and_package] 未找到 df-apaas-cli zip（{cli_zip}），降级为手动压缩")
+        import zipfile
+        zip_path = ws_path / f"{output_dir.name}.zip"
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for f in output_dir.rglob("*"):
+                if f.is_file():
+                    zf.write(f, f.relative_to(output_dir))
+            apaas_json = ws_path / "src" / "apaas.json"
+            if apaas_json.exists() and not (output_dir / "apaas.json").exists():
+                zf.write(apaas_json, "apaas.json")
+                try:
+                    cfg = json.loads(apaas_json.read_text())
+                    for asset in cfg.get("copyAssets", []):
+                        static_dir = asset.replace("public/", "static/", 1)
+                        zf.writestr(f"{static_dir}/", "")
+                except Exception:
+                    zf.writestr(f"static/custom/{output_dir.name}/", "")
             else:
-                # 前端项目：打包全部构建产物
+                zf.writestr(f"static/custom/{output_dir.name}/", "")
+        return str(zip_path)
+
+    def _collect_dual_zips(self, ws_path: Path, project_name: str) -> list[tuple[str, str]]:
+        """收集双端已有 zip 路径，两端都存在且有产物才返回，否则返回空列表。"""
+        outputs: list[tuple[str, str]] = []
+        for subdir, file_type in (("web", "FRONTCOMPONENT"), ("mobile", "MFRONTCOMPONENT")):
+            sub_path = ws_path / subdir
+            if not sub_path.is_dir():
+                continue
+            apaas_json_path = sub_path / "src" / "apaas.json"
+            apaas_cfg: dict = {}
+            if apaas_json_path.exists():
+                try:
+                    apaas_cfg = json.loads(apaas_json_path.read_text(encoding="utf-8"))
+                except Exception:
+                    pass
+            output_name = self._resolve_output_name(apaas_cfg, project_name)
+            output_dir = sub_path / output_name
+            cli_zip = sub_path / f"{output_name}.zip"
+            if not (cli_zip.exists() and self._has_build_artifacts(output_dir)):
+                return []
+            outputs.append((str(cli_zip), file_type))
+        return outputs
+
+    async def build_and_package_dual(self, ws_id: str) -> list[tuple[str, str]]:
+        """双端模板专用：构建 web/ 和 mobile/，分别打包，返回 [(zip_path, file_type), ...]。
+        PC 端 → FRONTCOMPONENT，移动端 → MFRONTCOMPONENT。
+        上传前先比对源码 hash：未变化且 zip 已存在则跳过构建直接返回。
+        优先使用 df-apaas-cli build 在各子目录生成的 zip 包。
+        """
+        ws_path = self.get_workspace_path(ws_id)
+        meta = self._read_meta(ws_path)
+        project_name = meta.get("project_name") or self._fallback_project_name_from_path(ws_path)
+
+        # hash 检查：源码未变化且两端 zip 都存在则跳过构建
+        current_hash = self._compute_src_hash(ws_path)
+        if meta.get("src_hash") == current_hash:
+            cached = self._collect_dual_zips(ws_path, project_name)
+            if cached:
+                logger.info(f"[build_and_package_dual] 源码未变化，跳过构建: {ws_id}")
+                return cached
+
+        # 需要重新构建
+        result = await self.build_project(ws_id)
+        if result["status"] == "error":
+            raise RuntimeError(f"构建失败: {result['message']}")
+
+        # 构建成功后记录 hash
+        meta = self._read_meta(ws_path)
+        meta["src_hash"] = self._compute_src_hash(ws_path)
+        self._write_meta(ws_path, meta)
+
+        outputs: list[tuple[str, str]] = []
+
+        for subdir, file_type in (("web", "FRONTCOMPONENT"), ("mobile", "MFRONTCOMPONENT")):
+            sub_path = ws_path / subdir
+            if not sub_path.is_dir():
+                continue
+
+            # 读 sub/src/apaas.json 获取 outputName
+            apaas_json_path = sub_path / "src" / "apaas.json"
+            apaas_cfg: dict = {}
+            if apaas_json_path.exists():
+                try:
+                    apaas_cfg = json.loads(apaas_json_path.read_text(encoding="utf-8"))
+                except Exception:
+                    pass
+            output_name = self._resolve_output_name(apaas_cfg, project_name)
+            output_dir = sub_path / output_name
+
+            # 验证产物（必须含 umd.js 等文件，不能只有 apaas.json）
+            if not self._has_build_artifacts(output_dir):
+                raise FileNotFoundError(f"{subdir}/ 构建产物不存在或不完整（{output_dir.name}/），请检查 {subdir}/src 代码")
+
+            # 优先使用 df-apaas-cli 在子目录生成的 zip，直接用原路径上传
+            # df-apaas-cli 将 zip 输出到与产物目录同级：sub_path/{outputName}.zip
+            cli_zip = sub_path / f"{output_name}.zip"
+            if cli_zip.exists():
+                logger.info(f"[build_and_package_dual] {subdir}/ 使用 df-apaas-cli zip: {cli_zip}")
+                outputs.append((str(cli_zip), file_type))
+                continue
+
+            # 兜底：df-apaas-cli zip 不存在时手动压缩（极端情况）
+            logger.warning(f"[build_and_package_dual] {subdir}/ 未找到 df-apaas-cli zip（{cli_zip}），降级为手动压缩")
+            import zipfile as _zipfile
+            dest_zip = ws_path / f"{output_name}.zip"
+            with _zipfile.ZipFile(dest_zip, 'w', _zipfile.ZIP_DEFLATED) as zf:
                 for f in output_dir.rglob("*"):
                     if f.is_file():
                         zf.write(f, f.relative_to(output_dir))
-                # 加入 apaas.json
-                apaas_json = ws_path / "src" / "apaas.json"
-                if apaas_json.exists() and not (output_dir / "apaas.json").exists():
-                    zf.write(apaas_json, "apaas.json")
+                if apaas_json_path.exists() and not (output_dir / "apaas.json").exists():
+                    zf.write(apaas_json_path, "apaas.json")
                     try:
-                        cfg = json.loads(apaas_json.read_text())
-                        for asset in cfg.get("copyAssets", []):
+                        for asset in apaas_cfg.get("copyAssets", []):
                             static_dir = asset.replace("public/", "static/", 1)
                             zf.writestr(f"{static_dir}/", "")
                     except Exception:
-                        zf.writestr(f"static/custom/{project_name}/", "")
+                        zf.writestr(f"static/custom/{output_name}/", "")
                 else:
-                    zf.writestr(f"static/custom/{project_name}/", "")
+                    zf.writestr(f"static/custom/{output_name}/", "")
+            outputs.append((str(dest_zip), file_type))
 
-        return str(zip_path)
+        return outputs
 
     async def start_debug(self, ws_id: str, serve_port: int,
                           platform_url: str, tenant_id: str, app_id: str,
@@ -1974,7 +2502,12 @@ const resultPath = '{str(result_json_path)}'
         if not ws_path:
             return False
 
-        apaas_json_path = ws_path / "src" / "apaas.json"
+        # 双端工程：apaas.json 在 web/src/ 下（web 的 outputName 作为工程名，mobile 的多一个 -m 后缀不用）
+        meta = self._read_meta(ws_path) if (ws_path / ".workspace.json").exists() else {}
+        if meta.get("project_type") == ProjectType.FORM_COMPONENT_DUAL.value:
+            apaas_json_path = ws_path / "web" / "src" / "apaas.json"
+        else:
+            apaas_json_path = ws_path / "src" / "apaas.json"
         if not apaas_json_path.exists():
             return False
 
@@ -2690,7 +3223,7 @@ export default { install, activate, staticComponents }
 
     # ── CLI 预生成模板脚手架 ─────────────────────────────────────
 
-    def _scaffold_via_cli_template(self, ws_path: Path, name: str, project_type: ProjectType):
+    def _scaffold_via_cli_template(self, ws_path: Path, name: str, project_type: ProjectType, display_name: str | None = None):
         """从 df-apaas-cli 预生成的标准模板复制并做变量替换。
 
         模板目录位于 backend/templates/cli-generated/{template_key}/，
@@ -2706,7 +3239,7 @@ export default { install, activate, staticComponents }
         shutil.copytree(template_dir, ws_path, dirs_exist_ok=True)
 
         # 2. 变量替换
-        self._replace_cli_template_vars(ws_path, name, project_type)
+        self._replace_cli_template_vars(ws_path, name, project_type, display_name=display_name)
 
         # 3. 清理不需要的文件
         for fn in ("README.md",):
@@ -2716,29 +3249,40 @@ export default { install, activate, staticComponents }
 
         # 4. 写入 vibe-serve.js 和 vibe-serve-config
         from app.config import settings
-        (ws_path / "vibe-serve.js").write_text(_VIBE_SERVE_JS, encoding="utf-8")
-        (ws_path / "vibe-serve-config").write_text(
-            f"PROXY_BASE={(settings.code_server_base_url or '').rstrip('/')}\n",
-            encoding="utf-8",
-        )
+        _proxy_base = (settings.code_server_base_url or "").rstrip("/")
+        if project_type == ProjectType.FORM_COMPONENT_DUAL:
+            # 双端工程：web/ 和 mobile/ 各是独立的 Vue CLI 项目，
+            # vibe-serve.js 需分别写入各子目录（根目录无 package.json，无法执行）
+            for _sub in ("web", "mobile"):
+                (ws_path / _sub / "vibe-serve.js").write_text(_VIBE_SERVE_JS, encoding="utf-8")
+                (ws_path / _sub / "vibe-serve-config").write_text(
+                    f"PROXY_BASE={_proxy_base}\n", encoding="utf-8"
+                )
+        else:
+            (ws_path / "vibe-serve.js").write_text(_VIBE_SERVE_JS, encoding="utf-8")
+            (ws_path / "vibe-serve-config").write_text(
+                f"PROXY_BASE={_proxy_base}\n", encoding="utf-8"
+            )
 
         logger.info(f"Scaffolded {project_type.value} via CLI template: {ws_path.name}")
 
-    def _replace_cli_template_vars(self, ws_path: Path, name: str, project_type: ProjectType):
+    def _replace_cli_template_vars(self, ws_path: Path, name: str, project_type: ProjectType, display_name: str | None = None):
         """将 CLI 模板中的 'demo' 占位替换为用户实际的项目名。
 
         替换分两步：1) 文件内容中的字符串替换 2) 文件名中的字符串替换。
+        display_name 用于替换模板中的中文占位文字（"Demo组件" / "Demo组件描述"）。
         """
         placeholder = _CLI_TPL_PLACEHOLDER  # "demo"
 
         # 计算不含前缀的 kebab 短名（如 "rating-star"）
         prefix_map = {
-            ProjectType.FORM_COMPONENT: "form-component-",
-            ProjectType.MENU_PAGE:      "form-page-",
-            ProjectType.FORM_PAGE:      "form-page-",
-            ProjectType.FORM_LIST:      "form-view-",
-            ProjectType.LAYOUT:         "form-layout-",
-            ProjectType.PLUGIN:         "frontend-plugin-",
+            ProjectType.FORM_COMPONENT:      "form-component-",
+            ProjectType.FORM_COMPONENT_DUAL: "form-component-",
+            ProjectType.MENU_PAGE:           "form-page-",
+            ProjectType.FORM_PAGE:           "form-page-",
+            ProjectType.FORM_LIST:           "form-view-",
+            ProjectType.LAYOUT:              "form-layout-",
+            ProjectType.PLUGIN:              "frontend-plugin-",
         }
         full_prefix = prefix_map.get(project_type, "")
         # name 可能已经包含前缀，也可能不包含
@@ -2779,6 +3323,40 @@ export default { install, activate, staticComponents }
                 (old_no_custom_upper, new_no_custom_upper),
                 (old_no_custom_kebab, new_no_custom_kebab),
                 (old_pascal, new_pascal),
+                (old_kebab, new_kebab),
+            ]
+        elif project_type == ProjectType.FORM_COMPONENT_DUAL:
+            # 双端模板：web/ 和 mobile/ 各有独立包
+            old_kebab = f"form-component-{placeholder}"           # form-component-demo
+            new_kebab = f"form-component-{short_name}"
+
+            old_kebab_m = f"form-component-{placeholder}-m"      # form-component-demo-m（移动端 outputName）
+            new_kebab_m = f"form-component-{short_name}-m"
+
+            old_upper = f"FORM_CUSTOM_{placeholder.upper()}"      # FORM_CUSTOM_DEMO
+            new_upper = "FORM_CUSTOM_" + short_name.replace("-", "_").upper()
+
+            old_no_custom_upper = f"FORM_COMPONENT_{placeholder.upper()}"  # FORM_COMPONENT_DEMO
+            new_no_custom_upper = "FORM_COMPONENT_" + short_name.replace("-", "_").upper()
+
+            old_no_custom_kebab = old_no_custom_upper.replace("_", "-").lower()
+            new_no_custom_kebab = new_no_custom_upper.replace("_", "-").lower()
+
+            parts = short_name.split("-")
+            pascal_suffix = "".join(p.capitalize() for p in parts)
+            old_mobile_pascal = "MobileFormComponentDemo"          # 移动端组件名前缀（先替换，避免子串冲突）
+            new_mobile_pascal = f"MobileFormComponent{pascal_suffix}"
+            old_pascal = "FormComponentDemo"
+            new_pascal = f"FormComponent{pascal_suffix}"
+
+            replacements = [
+                # 长串先替换，避免子串冲突
+                (old_upper, new_upper),
+                (old_no_custom_upper, new_no_custom_upper),
+                (old_no_custom_kebab, new_no_custom_kebab),
+                (old_mobile_pascal, new_mobile_pascal),            # Mobile 前缀先替换
+                (old_pascal, new_pascal),
+                (old_kebab_m, new_kebab_m),                       # -m 后缀先替换
                 (old_kebab, new_kebab),
             ]
         elif project_type in (ProjectType.MENU_PAGE, ProjectType.FORM_PAGE):
@@ -2826,6 +3404,13 @@ export default { install, activate, staticComponents }
 
         if not replacements:
             return
+
+        # 如果提供了 display_name，追加中文占位文字的替换（desc.text / desc.description / widget.display.label 等）
+        if display_name:
+            replacements = list(replacements) + [
+                ("Demo组件描述", display_name),  # 先替换较长的，避免子串冲突
+                ("Demo组件", display_name),
+            ]
 
         # 在 .cursor/rules 的 mdc 文件中也做替换
         text_suffixes = {".js", ".json", ".vue", ".mdc", ".md", ".css", ".html", ".ts"}

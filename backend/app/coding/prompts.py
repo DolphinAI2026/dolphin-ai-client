@@ -383,7 +383,7 @@ if (platformI18n?.mergeLocaleMessage) {
   "entry": "index.js",
   "templateType": "FORM_COMPONENT",
   "customWidgetList": [
-    { "code": "FORM_CUSTOM_COMPONENT_XXX", "text": "组件名称", "description": "组件描述" }
+    { "code": "FORM_CUSTOM_XXX", "text": "组件名称", "description": "组件描述" }
   ],
   "copyAssets": [],
   "outputName": "form-component-xxx"
@@ -721,6 +721,8 @@ export default {
 5. **是否封装 `saveConfig` / `handleChange` 之类的方法不是重点，重点是不能通过这些方法去操作镜像状态或调用 formEngine 写入配置**
 6. **严禁使用 `$emit('update:componentConfig', ...)`**，设计器不会监听这个事件
 7. **严禁用 `data.formData` / `data.localConfig` / `data.config` 或对应 watch 镜像一份配置再同步回去**，直接通过 `customComponentConfig` 别名操作
+8. **最外层不要包一层 `<el-form>`**，平台外层已提供表单容器，内部直接用 `<el-form-item>`、`<el-input>`、`<el-select>` 等即可
+9. **最外层容器不要设置 padding**，平台区域已做好布局，额外 padding 会压缩可用空间
 
 **🚫 formEngine 上根本不存在以下方法，绝对不能调用（会直接报错）**：
 - ❌ `formEngine.updateWidgetConfig(...)` — 不存在
@@ -1769,7 +1771,75 @@ AGENT_SYSTEM_PROMPT = """你是一个 aPaaS 低代码平台的专业前端组件
 - 打开弹窗用 `df.page.openFormModal()`
 - Toast用 `df.showToast()`
 
-### FORM_COMPONENT 类型（表单自开发组件）
+### FORM_COMPONENT_DUAL 类型（双端自开发表单组件，PC + 移动端）
+
+项目采用三层目录结构，**不是** `src/` 平铺结构：
+- `shared/` — 共享层：`widget.config.json`（JSON 格式）、`mixin/`、`validator/`、`api/`、`local/`、`form-ability/`
+- `web/src/` — PC 端 Vue 组件（element-ui），打包为 `form-component-xxx.zip`
+- `mobile/src/` — 移动端 Vue 组件（cube-ui），打包为 `form-component-xxx-m.zip`
+
+**关键差异（与 FORM_COMPONENT 的区别）**：
+- widget.config.json 在 `shared/widget.config.json`，两端通过 `@shared/widget.config.json` 共同引用
+- **所有 Mixin 引用路径均以 `@shared/mixin/` 开头**，覆盖 "Mixin Per Mode" 节中的 `@/mixin/` 规则：
+  - edit / ide / read → `import FormWidgetMixin from '@shared/mixin/form-widget.mixin'`
+  - list             → `import ListWidgetMixin from '@shared/mixin/list-widget.mixin'`
+  - print            → `import PrintWidgetMixin from '@shared/mixin/print-widget.mixin'`
+  - search           → `import SearchWidgetMixin from '@shared/mixin/search-widget.mixin'`
+  - search-ide       → `import SearchIdeWidgetMixin from '@shared/mixin/search-ide-widget.mixin'`
+  - setting.vue      → `import EditorFormConfigMixin from '@shared/mixin/form-config.mixin'`
+- shared/ 内部文件互相引用必须用**相对路径**，不能用 `@/` 或 `@shared/`
+- PC 组件 name：`FormComponentXxxEdit`；移动端 name：`MobileFormComponentXxxEdit`
+- 移动端文件名：`mobile-{name}-edit.vue`（加 `mobile-` 前缀）
+- Setting.vue 和 editor.config.json **只在 web/ 中**，移动端没有
+- 两端都使用 `@shared/mixin/form-widget.mixin`，mixin 规范完全相同
+
+**构建命令**：两个子包分别 `npm run build`：
+- `web/` → `npm run build` → 输出 `web/form-component-xxx/`
+- `mobile/` → `npm run build` → 输出 `mobile/form-component-xxx-m/`
+
+**widget.config.json 中必须同时声明 PC 和移动端组件**：
+```json
+{
+  "component": { "ide": "FormComponentXxxIde", "edit": "FormComponentXxxEdit", ... },
+  "client": {
+    "mobile": {
+      "component": { "ide": "MobileFormComponentXxxIde", "edit": "MobileFormComponentXxxEdit", ... }
+    }
+  }
+}
+```
+
+**⚠️ apaas.json 三文件必须同步**：`shared/widget.config.json` 中的 `code`、`web/src/apaas.json` 中的 `customWidgetList[0].code`、`mobile/src/apaas.json` 中的 `customWidgetList[0].code` 三者必须完全一致。如果你选择了语义化 code（如 `FORM_CUSTOM_TIME_PICKER`），必须同时更新这三个文件的 `code` 字段。
+
+所有 formValue 存储规范、setting.vue 规范、componentModelField 选择规则均与 FORM_COMPONENT 相同。
+
+**⚠️ 移动端 edit.vue 必须使用 `<x-proxy-form-item>` 包裹**（与 PC 端一致）：
+- `mobile/src/form-component/form-widget/edit/mobile-{name}-edit.vue` 模板最外层必须是 `<x-proxy-form-item>`
+- 即使移动端使用 cube-ui，x-proxy-form-item 仍由 shared/平台注入，用于标题/校验提示/只读态等统一行为
+- 示例：`<template><x-proxy-form-item><cube-input ... /></x-proxy-form-item></template>`
+- 这一规则仅对 edit 场景生效，list/print/search/search-ide 场景仍按 FORM_COMPONENT 规则不要包裹 x-proxy-form-item
+
+**⚠️ 组件文件命名必须与 widget.config.json.code 的语义一致**：
+- 假设 `shared/widget.config.json.code = FORM_CUSTOM_TIME_PICKER`，则 semantic = `time-picker`
+- 各 scene 下文件名必须为 `form-component-time-picker-{scene}.vue`（PC）/ `mobile-form-component-time-picker-{scene}.vue`（移动）
+- 禁止出现 `form-component-time-only-picker-edit.vue` 之类与 code 语义不一致的文件名
+
+**⚠️ "一个组件 = 一套文件"**：
+- 每个自开发组件对应 7 个 scene 各一个 vue 文件（共 14 个：PC 7 个 + 移动 7 个），这 14 个文件构成"一套"
+- 如果同一工程中存在多个组件（`customWidgetList` 有多项），则每个组件一套，互不覆盖，`index.js` 里按 code 聚合导出
+- 当前工程里只有 1 个组件时，场景目录里就应**只保留这个组件的那一套文件**，其他一律视为多余（脚手架占位 `form-component-custom-*.vue` / LLM 先前误写的旧文件 / 语义不一致的同位副本等）必须通过 delete 显式清理
+- 换句话说，每个 scene 目录里每个 `code` 只能对应一个 vue；多出来的都是冗余
+
+**⚠️ FORM_COMPONENT_DUAL 路径覆盖（覆盖下方 CRITICAL Rules 中的 src/ 路径）**：
+- setting.vue 路径：`web/src/form-component/form-editor/{name}-setting.vue`
+- editor.config.json 路径：`web/src/form-component-config/form-editor/{name}.editor.config.json`
+- **配置面板聚合文件**：`web/src/form-component/form-editor/index.js`（必须 import setting.vue 并放入数组）
+- **editorConfigList 聚合文件**：`web/src/form-component-config/form-editor/index.js`（必须 import editor.config.json）
+- 以上4个文件必须在**同一批次**一起写入，不可分开
+
+---
+
+### FORM_COMPONENT 类型（表单自开发组件，仅 PC 端）
 
 项目有 7 种渲染场景：ide/edit/read/list/print/search/search-ide
 
@@ -1782,16 +1852,29 @@ AGENT_SYSTEM_PROMPT = """你是一个 aPaaS 低代码平台的专业前端组件
 - **search.vue / search-ide.vue** — 搜索场景
 - **setting.vue** — 设计器配置面板
 
+**各场景关键约束（★ 必须遵守）**：
+
+- **Edit 场景**：检查 `this.widget.readOnly`；`this.formValue` 可能为 undefined，必须做兜底处理；同一元素不能同时用 `v-model` 和 `@input`（会无限循环）
+- **IDE 场景**：所有输入控件必须加 `disabled`，设计态画布不允许用户交互
+- **Read 场景**：只做展示，不允许编辑
+- **List 场景**：配置用 `this.componentConfig`（**不是** `this.widget`）；`this.formValue` 是直接传入的具体值（不用 propKey 索引）；**不要用** `<x-proxy-form-item>` 包裹
+- **Print 场景**：**禁止出现任何 `<el-xxx>` 标签**（Element UI 在打印上下文不渲染）；**不要用** `<x-proxy-form-item>`；纯 HTML/CSS，使用 `div.print-item > div.print-item-title + div.print-item-value` 结构；当 `widget.isInTable` 为 true 时省略标题
+- **Search 场景**：**不要用** `<x-proxy-form-item>`；通过 `this.$emit('change', [value])` 提交——value **必须包裹在数组中**；不要用 formValue setter
+- **Search-IDE 场景**：所有输入 `disabled`；只有在同时实现 Search 场景时才需要实现
+
 **setting.vue 规则**：
 - 不使用 FormWidgetMixin！接收 componentConfig + formEngine 作为 props
 - inject 声明必须带 `{ default: null }`
 - 配置直接存 `customComponentConfig` 根级别，不要多嵌套
 - 不要在 computed 里用 `$set`（会导致无限循环）
 - formEngine 通过 prop 传入（不是 inject）
+- **最外层不要包一层 `<el-form>`**，平台外层已提供表单容器，内部直接用 `<el-form-item>` 等即可
+- **最外层容器不要设置 padding**，平台区域已做好布局，额外 padding 会压缩可用空间
 
 **widget.config.json**：
 - `widget.special.customComponentConfig: {}` 必须声明空对象
 - editor.config 不能删除标准配置项（INFO, LABEL, FIELD_CODE 等）
+- **`widget.config.json` 中的 `code` 必须与 `src/apaas.json` 中 `customWidgetList[0].code` 完全一致**。如果你选择了语义化 code（如 `FORM_CUSTOM_TIME_PICKER`），必须同步修改 `src/apaas.json` 的 `code` 字段，两个文件必须保持相同值
 
 **edit.vue 规则**：
 - 只负责渲染，不要显示配置界面（配置 UI 只放 setting.vue）
@@ -1933,6 +2016,7 @@ export default {
 - 只有需要新增 npm 依赖时才可以修改 package.json（修改后要运行 npm install）
 - Element UI 已全局注册，不要 import
 - 组件代码必须是完整的 .vue 单文件组件
+- FORM_COMPONENT_DUAL: PC 端组件 name = FormComponentXxxEdit，移动端 = MobileFormComponentXxxEdit；两端都通过 `@shared/widget.config.json` 共享配置
 - FORM_COMPONENT: 所有场景组件的 name 必须与 widget.config.json 中 component 映射一致
 - MENU_PAGE: 组件名必须是 apaas-custom-{kebab-name} 格式，与 apaas.json router 一致
 
@@ -2293,16 +2377,426 @@ if (mergeLocaleMessage) {
 """
 
 # ============================================================
+# 双端自开发表单组件（PC + 移动端）
+# ============================================================
+WEB_COMPONENT_DUAL_PROMPT = BASE_SYSTEM_PROMPT + """
+
+## 当前场景：双端自开发表单组件（FORM_COMPONENT_DUAL）
+
+你正在生成一个同时支持 **PC 端和移动端** 的自开发表单组件。该工程采用三层目录结构：`shared/`（共享层）、`web/`（PC 包）、`mobile/`（移动端包），分别打包为两个独立的 zip 产物。
+
+**⚠️ 与单端 FORM_COMPONENT 的最大区别：**
+- 没有 `src/` 根目录，取而代之是 `web/src/` 和 `mobile/src/`
+- `widget.config.json` 在 `shared/` 层，路径为 `shared/widget.config.json`
+- **所有 Mixin 引用路径均以 `@shared/mixin/` 开头**，覆盖上方 `@/mixin/` 规则：
+  - edit / ide / read → `import FormWidgetMixin from '@shared/mixin/form-widget.mixin'`
+  - list             → `import ListWidgetMixin from '@shared/mixin/list-widget.mixin'`
+  - print            → `import PrintWidgetMixin from '@shared/mixin/print-widget.mixin'`
+  - search           → `import SearchWidgetMixin from '@shared/mixin/search-widget.mixin'`
+  - search-ide       → `import SearchIdeWidgetMixin from '@shared/mixin/search-ide-widget.mixin'`
+  - setting.vue      → `import EditorFormConfigMixin from '@shared/mixin/form-config.mixin'`
+- 共享层内部互相引用必须用**相对路径**（如 `../validator/`），不能用 `@/` 或 `@shared/`
+
+---
+
+### 目录结构
+
+```
+shared/                              ← 唯一真相来源，两端共用
+├── widget.config.json               ★ 组件配置（JSON 格式，非 JS）
+├── mixin/
+│   └── form-widget.mixin.js         ★ 核心 Mixin（内部 import 用相对路径）
+├── validator/
+│   ├── widget-required-validator.js
+│   └── widget-regex-validator.js
+├── api/                             ← 接口请求封装
+├── local/                           ← i18n 国际化
+│   ├── index.js
+│   ├── zh-CN/index.js
+│   └── en-US/index.js
+└── form-ability/                    ← 能力映射
+    ├── index.js
+    ├── ability-field-map.config.js
+    └── ability-field-convert.config.js
+
+web/                                 ← PC 端包（打包产物: form-component-xxx.zip）
+├── vue.config.js                    ← @shared 别名指向 ../shared
+├── jsconfig.json
+└── src/
+    ├── apaas.json                   ← outputName: "form-component-xxx", templateType: "FORM_COMPONENT"
+    ├── index.js                     ← Vue 插件入口
+    ├── form-component-config/
+    │   ├── index.js
+    │   ├── form-widget/
+    │   │   └── index.js             ← import from '@shared/widget.config.json'
+    │   └── form-editor/
+    │       ├── index.js
+    │       └── {name}.editor.config.json
+    └── form-component/
+        ├── index.js
+        └── form-widget/             ← PC 端 Vue 组件（element-ui）
+            ├── index.js
+            ├── ide/   → {name}-ide.vue          → FormComponentXxxIde
+            ├── edit/  → {name}-edit.vue          → FormComponentXxxEdit   ★ 核心
+            ├── read/  → {name}-read.vue          → FormComponentXxxRead
+            ├── list/  → {name}-list.vue          → FormComponentXxxList
+            ├── print/ → {name}-print.vue         → FormComponentXxxPrint
+            ├── search/ → {name}-search.vue       → FormComponentXxxSearch
+            ├── search-ide/ → {name}-search-ide.vue → FormComponentXxxSearchIde
+            └── (form-editor/  → {name}-setting.vue → FormComponentXxxSetting，可选)
+
+mobile/                              ← 移动端包（打包产物: form-component-xxx-m.zip）
+├── vue.config.js                    ← @shared 别名指向 ../shared
+├── jsconfig.json
+└── src/
+    ├── apaas.json                   ← outputName: "form-component-xxx-m", templateType: "FORM_COMPONENT"
+    ├── index.js
+    ├── form-component-config/
+    │   └── form-widget/
+    │       └── index.js             ← import from '@shared/widget.config.json'
+    └── form-component/
+        └── form-widget/             ← 移动端 Vue 组件（cube-ui）
+            ├── ide/   → mobile-{name}-ide.vue   → MobileFormComponentXxxIde
+            ├── edit/  → mobile-{name}-edit.vue  → MobileFormComponentXxxEdit  ★ 核心
+            ├── read/  → mobile-{name}-read.vue  → MobileFormComponentXxxRead
+            ├── list/  → mobile-{name}-list.vue  → MobileFormComponentXxxList
+            ├── print/ → mobile-{name}-print.vue → MobileFormComponentXxxPrint
+            ├── search/ → mobile-{name}-search.vue → MobileFormComponentXxxSearch
+            └── search-ide/ → mobile-{name}-search-ide.vue → MobileFormComponentXxxSearchIde
+```
+
+---
+
+### shared/widget.config.json ★ 最核心文件
+
+此文件是 PC 和移动端的唯一配置来源，**JSON 格式，不是 JS**。
+
+```json
+{
+  "version": 2.0,
+  "code": "FORM_CUSTOM_COMPONENT_XXX",
+  "desc": {
+    "iconType": "DEFAULT",
+    "icon": "<svg xmlns=\\"http://www.w3.org/2000/svg\\" viewBox=\\"0 0 24 24\\">...</svg>",
+    "text": "组件名称",
+    "description": "组件描述"
+  },
+  "instance": { "uuid": "$itemUuid", "inTable": false },
+  "component": {
+    "ide": "FormComponentXxxIde",
+    "edit": "FormComponentXxxEdit",
+    "read": "FormComponentXxxRead",
+    "list": "FormComponentXxxList",
+    "print": "FormComponentXxxPrint",
+    "search": "FormComponentXxxSearch",
+    "searchIde": "FormComponentXxxSearchIde"
+  },
+  "widget": {
+    "display": {
+      "label": "组件名称", "width": 6, "mobileWidth": 12, "height": 1,
+      "hidden": false, "readOnly": false, "required": false, "onlyCreateEdit": false
+    },
+    "allow": { "calcRule": false, "useInTableColumn": true, "scanCode": false, "copy": false },
+    "default": { "customDefaultKey": "defaultValue", "value": null },
+    "validator": { "uniqueCheck": false },
+    "special": {
+      "frontBusinessObjectComponentType": "BOF_TEXT",
+      "saveWithHidden": false,
+      "customComponentConfig": {}
+    },
+    "editor": {
+      "config": [
+        "INFO", "LABEL", "FIELD_CODE", "TITLE_DESCRIPTION", "WIDTH",
+        "HIDDEN", "READONLY", "REQUIRED", "EDITONNEW",
+        "UNIQUE", "HIDDEN_SAVE", "HIDDEN_TRIGGER", "TRIGGER_BUSINESS_EVENTS"
+      ],
+      "excludeInTable": ["WIDTH"]
+    }
+  },
+  "client": {
+    "mobile": {
+      "component": {
+        "ide": "MobileFormComponentXxxIde",
+        "edit": "MobileFormComponentXxxEdit",
+        "read": "MobileFormComponentXxxRead",
+        "list": "MobileFormComponentXxxList",
+        "print": "MobileFormComponentXxxPrint",
+        "search": "MobileFormComponentXxxSearch",
+        "searchIde": "MobileFormComponentXxxSearchIde"
+      },
+      "widget": {
+        "editor": {
+          "config": [
+            "INFO", "LABEL", "FIELD_CODE", "TITLE_DESCRIPTION", "WIDTH",
+            "HIDDEN", "READONLY", "REQUIRED", "EDITONNEW",
+            "UNIQUE", "HIDDEN_SAVE", "HIDDEN_TRIGGER", "TRIGGER_BUSINESS_EVENTS"
+          ],
+          "excludeInTable": ["WIDTH"]
+        }
+      }
+    }
+  },
+  "componentModelField": ["STRING"],
+  "methods": {},
+  "formatValueSchema": {}
+}
+```
+
+**字段规则（与单端相同）：**
+- `code` 必须以 `FORM_CUSTOM_COMPONENT_` 开头，如 `FORM_CUSTOM_COMPONENT_INTL_PHONE`
+- `desc.text / desc.description / widget.display.label` 必须是真实中文名称，禁止出现 Demo、demo、组件名称 等占位文字
+- `desc.icon` 必须是内联 SVG 字符串，与组件语义匹配，不能为空
+- `widget.allow` 必须包含全部 4 个字段：`calcRule / useInTableColumn / scanCode / copy`
+- `widget.default.value` 必须是 `null`，不能是 `""`
+- `client.mobile.component` 中移动端组件名 = `"Mobile"` + 对应 PC 端组件名
+- 有自定义配置面板时，`widget.editor.config` 中追加 `{CODE}_SETTING` 到末尾；同时 `client.mobile.widget.editor.config` 也需同步追加
+
+---
+
+### PC 端 Vue 组件（web/src/form-component/form-widget/）
+
+**命名规则**：文件名 `{name}-edit.vue`，组件 `name: 'FormComponentXxxEdit'`
+
+```vue
+<!-- web/src/form-component/form-widget/edit/{name}-edit.vue -->
+<template>
+  <div class="form-widget {name}-edit">
+    <x-proxy-form-item
+      :isInTable="widget.isInTable"
+      :showRequired="showRequired"
+      :label="widget.label"
+      :validatorRules="validatorRules"
+      :validateKey="validateKey"
+      :validateInfo="validateInfo"
+      :webFormSettings="webFormSettings"
+    >
+      <!-- element-ui 组件，平台全局注册，无需 import -->
+      <el-input v-model="formValue" :disabled="widget.readOnly" />
+    </x-proxy-form-item>
+  </div>
+</template>
+<script>
+import FormWidgetMixin from '@shared/mixin/form-widget.mixin'
+
+export default {
+  name: 'FormComponentXxxEdit',
+  mixins: [FormWidgetMixin]
+}
+</script>
+<style lang="scss">
+.{name}-edit {}
+</style>
+```
+
+**所有 PC 端场景都用 `@shared/mixin/form-widget.mixin`，不是 `@/mixin/form-widget.mixin`。**
+
+---
+
+### 移动端 Vue 组件（mobile/src/form-component/form-widget/）
+
+**命名规则**：文件名 `mobile-{name}-edit.vue`，组件 `name: 'MobileFormComponentXxxEdit'`
+
+```vue
+<!-- mobile/src/form-component/form-widget/edit/mobile-{name}-edit.vue -->
+<template>
+  <div class="form-widget mobile-{name}-edit">
+    <!-- cube-ui 组件，平台全局注册，无需 import -->
+    <cube-input v-model="formValue" :disabled="widget.readOnly" />
+  </div>
+</template>
+<script>
+import FormWidgetMixin from '@shared/mixin/form-widget.mixin'
+
+export default {
+  name: 'MobileFormComponentXxxEdit',
+  mixins: [FormWidgetMixin]
+}
+</script>
+<style lang="scss">
+.mobile-{name}-edit {}
+</style>
+```
+
+- **cube-ui** 由平台全局注册，无需 import（`cube-input`、`cube-select`、`cube-picker` 等）
+- 移动端无 setting.vue，配置面板只在 PC 端的 `web/` 中
+- 移动端的 `mixin` 引用路径与 PC 端完全相同：`@shared/mixin/form-widget.mixin`
+
+---
+
+### shared/mixin/form-widget.mixin.js ★
+
+**内部 import 必须使用相对路径，不能用 `@/` 或 `@shared/`**：
+
+```javascript
+import WidgetRequiredValidator from '../validator/widget-required-validator'
+import WidgetRegexValidator from '../validator/widget-regex-validator'
+
+export default {
+  props: {
+    widget: { type: Object, default: () => ({}) },
+    renderScene: { type: String, default: 'edit' },
+    propKey: { type: String, default: '' },
+    validateKey: { type: String, default: '' },
+    validateInfo: { type: Object, default: () => ({}) },
+    formData: { type: Object, default: () => ({}) },
+    formItemList: { type: Array, default: () => [] }
+  },
+  computed: {
+    formValue: {
+      get() { return this.formData[this.propKey] },
+      set(val) { this.$set(this.formData, this.propKey, val) }
+    },
+    validatorRules() { /* ... */ },
+    showRequired() { return this.widget.required && !this.widget.readOnly },
+    webFormSettings() { return this.widget.webFormSettings || {} }
+  }
+}
+```
+
+---
+
+### web/src/apaas.json
+
+```json
+{
+  "entry": "index.js",
+  "templateType": "FORM_COMPONENT",
+  "customWidgetList": [
+    { "code": "FORM_CUSTOM_COMPONENT_XXX", "text": "时间选择器", "description": "支持时、分、秒精度的时间选择控件" }
+  ],
+  "copyAssets": [],
+  "outputName": "form-component-xxx"
+}
+```
+
+### mobile/src/apaas.json
+
+```json
+{
+  "entry": "index.js",
+  "templateType": "FORM_COMPONENT",
+  "customWidgetList": [
+    { "code": "FORM_CUSTOM_COMPONENT_XXX", "text": "时间选择器", "description": "支持时、分、秒精度的时间选择控件" }
+  ],
+  "copyAssets": [],
+  "outputName": "form-component-xxx-m"
+}
+```
+
+**apaas.json 字段规则（web 和 mobile 完全相同）：**
+- `customWidgetList[0].code` 必须与 `shared/widget.config.json` 顶层 `code` 字段**完全一致**
+- `customWidgetList[0].text` 必须填写真实的中文组件名称，**禁止出现 "Demo组件"、"组件名称" 等占位文字**
+- `customWidgetList[0].description` 必须填写真实的中文描述，**禁止出现 "Demo组件描述"、"组件描述" 等占位文字**
+- `outputName`：PC 端为 `form-component-xxx`，移动端必须以 `-m` 结尾（`form-component-xxx-m`）
+
+---
+
+### web/src/form-component-config/form-widget/index.js
+
+```javascript
+import FormComponentXxxWidgetConfig from '@shared/widget.config.json'
+
+const widgetConfigList = [FormComponentXxxWidgetConfig]
+
+export default widgetConfigList
+```
+
+mobile 端的同名文件内容完全相同。
+
+---
+
+### Setting.vue（仅 PC 端，在 web/ 中）
+
+Setting.vue 规则与单端完全相同（props / inject / customComponentConfig computed 别名等）。
+路径：`web/src/form-component/form-editor/{name}-setting.vue`
+
+移动端**不需要 setting.vue**，设计器配置面板只有 PC 端有。
+
+---
+
+### web/src/form-component/form-editor/index.js（配置面板组件聚合）
+
+有 setting.vue 时，**必须**在此文件中 import 并导出，否则配置面板不会生效：
+
+```javascript
+import FormComponentXxxSetting from './{name}-setting.vue'
+
+const customFormEditorList = [FormComponentXxxSetting]
+
+export default customFormEditorList
+```
+
+没有 setting.vue 时保持空数组：
+
+```javascript
+const customFormEditorList = []
+export default customFormEditorList
+```
+
+**⚠️ 注意：有 setting.vue 时此文件不能为空，必须 import 组件并放入数组。**
+
+---
+
+### editor.config.json（仅 PC 端，在 web/ 中）
+
+```json
+{
+  "code": "FORM_CUSTOM_COMPONENT_XXX_SETTING",
+  "editorConfigType": "FORM_CUSTOM_COMPONENT_XXX_SETTING",
+  "componentName": "FormComponentXxxSetting",
+  "configProperty": "customComponentConfig"
+}
+```
+
+路径：`web/src/form-component-config/form-editor/{name}.editor.config.json`
+移动端**不需要此文件**。
+
+---
+
+### formValue 存储规范（与单端完全相同）
+
+- `formValue` 只能存储基本数据类型（string / number / boolean / null）
+- 对象和数组必须 `JSON.stringify` 后存储，读取时 `JSON.parse`
+- PC 端和移动端的 `formValue` 存储格式必须完全一致（共享同一数据库字段）
+
+---
+
+### componentModelField 选择规则
+
+| 存储内容 | componentModelField | frontBusinessObjectComponentType |
+|---|---|---|
+| 单个日期 | `['DATE']` | `BOF_DATE` |
+| 单个数字 | `['NUM']` | `BOF_NUMBER` |
+| 序列化 < 500 字符 | `['STRING']` | `BOF_TEXT` |
+| 序列化 ≥ 500 字符 | `['BIG_TEXT']` | `BOF_TEXT` |
+
+---
+
+### 关键约束
+
+1. **`shared/` 内部文件互相引用必须用相对路径**，不能用 `@/` 或 `@shared/`
+2. **不要在 `shared/` 中引入任何 UI 组件库代码**（el-*、cube-*）
+3. **PC 端用 element-ui**（`el-*`），**移动端用 cube-ui**（`cube-*`），平台全局注册，均无需 import
+4. **组件 name 命名**：PC = `FormComponentXxxEdit`，移动端 = `MobileFormComponentXxxEdit`
+5. **文件名命名**：PC = `{name}-edit.vue`，移动端 = `mobile-{name}-edit.vue`
+6. **widget.config.json 只有一份**，在 `shared/` 中，通过 `@shared/widget.config.json` 两端共用
+7. **移动端没有 setting.vue 和 editor.config.json**，配置面板只在 `web/` 中
+8. **Element UI 已全局注册，不要 import**；cube-ui 同理
+9. **网络请求用 `this.$request({...})` 配合 `.asyncThen()` / `.asyncErrorCatch()`**
+"""
+
+# ============================================================
 # Prompt选择器
 # ============================================================
 SCENE_PROMPTS = {
     SceneType.WEB_COMPONENT: WEB_COMPONENT_PROMPT,
+    SceneType.WEB_COMPONENT_DUAL: WEB_COMPONENT_DUAL_PROMPT,
     SceneType.WEB_PAGE: WEB_PAGE_PROMPT,
     SceneType.WEB_LIST_VIEW: WEB_LIST_VIEW_PROMPT,
     SceneType.WEB_LAYOUT: WEB_LAYOUT_PROMPT,
     SceneType.WEB_LOGIN: WEB_PAGE_PROMPT,   # 登录页与页面类似
     SceneType.WEB_PLUGIN: WEB_PLUGIN_PROMPT,
-    SceneType.MOBILE_COMPONENT: WEB_COMPONENT_PROMPT,  # 移动端组件规范类似，模板已差异化
+    SceneType.MOBILE_COMPONENT: WEB_COMPONENT_DUAL_PROMPT,  # 移动端组件统一走双端模板
     SceneType.MOBILE_PAGE: MOBILE_PAGE_PROMPT,
     SceneType.BACKEND_API: BACKEND_API_PROMPT,
     SceneType.BACKEND_FEIGN: BACKEND_FEIGN_PROMPT,

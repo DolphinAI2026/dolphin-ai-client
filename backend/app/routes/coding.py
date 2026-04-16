@@ -2047,9 +2047,9 @@ def _build_workspace_context(ws_id: str) -> dict:
         ]
 
         # 按项目类型挑选关键文件，避免把表单组件规则错误带到布局/后端项目
-        if project_type in {"form-component", "mobile-component"}:
-            key_extensions = ('.vue', '.widget.config.js', '.editor.config.js')
-            key_names = ('apaas.json', 'form-widget.mixin.js')
+        if project_type in {"form-component", "form-component-dual", "mobile-component"}:
+            key_extensions = ('.vue', '.widget.config.js', '.editor.config.js', '.widget.config.json')
+            key_names = ('apaas.json', 'form-widget.mixin.js', 'widget.config.json')
         elif project_type == "form-list":
             key_extensions = ('.vue', '.js')
             key_names = ('apaas.json', 'index.js')
@@ -2416,6 +2416,7 @@ async def publish_workspace(
 # project_type → 平台 fileType 映射
 _PROJECT_TYPE_TO_FILE_TYPE = {
     "form-component": "FRONTCOMPONENT",
+    "form-component-dual": "FRONTCOMPONENT",
     "menu-page": "FRONTENGINE",
     "form-page": "FRONTENGINE",
     "form-list": "FRONTLISTVIEW",
@@ -2479,16 +2480,78 @@ async def upload_workspace_to_platform(
 
     # 2. 构建 + 打包
     ws_mgr = WorkspaceManager()
+    ws_path = ws_mgr.get_workspace_path(ws_id)
+    meta = ws_mgr._read_meta(ws_path)
+    project_type = meta.get("project_type", "")
+    display_name = meta.get("display_name") or meta.get("project_name", ws_id)
+
+    # 双端模板：构建两个包，各自上传
+    if project_type == ProjectType.FORM_COMPONENT_DUAL.value:
+        try:
+            dual_packages = await ws_mgr.build_and_package_dual(ws_id)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"双端构建失败: {e}")
+
+        upload_url = f"{env.base_url.rstrip('/')}/xdap-app/selfdevelopment/add/developmentKit"
+
+        async def _do_upload_file(token: str, file_path: Path, ft: str):
+            with open(file_path, "rb") as f:
+                file_bytes = f.read()
+            async with httpx.AsyncClient(verify=False, timeout=120.0) as http:
+                return await http.post(
+                    upload_url,
+                    headers={
+                        "xdaptenantid": env.platform_tenant_id,
+                        "xdaptoken": token,
+                        "xdaptimestamp": str(int(time.time() * 1000)),
+                    },
+                    files={"file": (file_path.name, file_bytes, "application/zip")},
+                    data={
+                        "fileType": ft,
+                        "description": f"{display_name} - 由 apaas-builder 上传",
+                        "uploadId": str(int(time.time() * 1000)),
+                        "versionCode": uuid.uuid4().hex,
+                        "useScope": "全部应用",
+                        "internalResource": "false",
+                        "effectiveScope": "SINGLE_APPLICATION",
+                    },
+                )
+
+        upload_results = []
+        for zip_path_str, ft in dual_packages:
+            file_path = Path(zip_path_str)
+            try:
+                response = await _do_upload_file(env.token, file_path, ft)
+            except httpx.RequestError as e:
+                raise HTTPException(status_code=502, detail=f"上传 {file_path.name} 请求失败: {e}")
+            try:
+                resp_data = response.json()
+            except Exception:
+                raise HTTPException(status_code=502, detail=f"平台响应非JSON，状态码: {response.status_code}")
+
+            def _is_unauthorized(data: dict) -> bool:
+                msg = (data.get("message") or data.get("msg") or "").lower()
+                code = data.get("code")
+                return response.status_code == 401 or code == 401 or "unauthorized" in msg
+
+            if _is_unauthorized(resp_data):
+                new_token = await _refresh_env_token(env, db)
+                try:
+                    response = await _do_upload_file(new_token, file_path, ft)
+                    resp_data = response.json()
+                except Exception as e:
+                    raise HTTPException(status_code=502, detail=f"刷新 token 后重试失败: {e}")
+
+            upload_results.append({"file": file_path.name, "fileType": ft, "response": resp_data})
+
+        return {"status": "ok", "message": f"双端上传完成，共 {len(upload_results)} 个包", "results": upload_results}
+
+    # 单端项目：原有逻辑
     try:
         zip_path = await ws_mgr.build_and_package(ws_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"构建失败: {e}")
 
-    # 3. 读取 workspace 元信息（project_type、display_name）
-    ws_path = ws_mgr.get_workspace_path(ws_id)
-    meta = ws_mgr._read_meta(ws_path)
-    project_type = meta.get("project_type", "")
-    display_name = meta.get("display_name") or meta.get("project_name", ws_id)
     file_type = _PROJECT_TYPE_TO_FILE_TYPE.get(project_type)
     if not file_type:
         raise HTTPException(status_code=400, detail=f"不支持上传的项目类型: {project_type}")
@@ -2760,6 +2823,7 @@ def _scene_to_project_type(scene_type: SceneType) -> str:
     """场景类型转项目类型"""
     mapping = {
         SceneType.WEB_COMPONENT: "form-component",
+        SceneType.WEB_COMPONENT_DUAL: "form-component-dual",
         SceneType.WEB_PAGE: "form-page",
         SceneType.WEB_LIST_VIEW: "form-list",
         SceneType.WEB_LAYOUT: "layout",
@@ -2895,6 +2959,7 @@ def _extract_display_name(message: str, project_type: str, fallback_name: str) -
 
     suffix_map = {
         "form-component": "组件",
+        "form-component-dual": "组件",
         "mobile-component": "组件",
         "form-page": "页面",
         "menu-page": "页面",

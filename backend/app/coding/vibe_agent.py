@@ -445,9 +445,17 @@ class VibeCodingAgent:
                         if func_name == "start_serve" and not is_error:
                             try:
                                 serve_data = json.loads(result_str)
+                                # 单端：{"url": "..."}
                                 serve_url = serve_data.get("url", "")
                                 if serve_url:
                                     _emit({"type": "serve_started", "url": serve_url})
+                                # 双端：{"web_url": "...", "mobile_url": "..."}
+                                web_url = serve_data.get("web_url", "")
+                                mobile_url = serve_data.get("mobile_url", "")
+                                if web_url:
+                                    _emit({"type": "serve_started", "url": web_url})
+                                if mobile_url:
+                                    _emit({"type": "serve_started", "url": mobile_url})
                             except (json.JSONDecodeError, Exception):
                                 pass
 

@@ -250,12 +250,13 @@ def build_ide_url(
 def scene_to_project_type(scene_type: SceneType) -> str:
     mapping = {
         SceneType.WEB_COMPONENT: "form-component",
+        SceneType.WEB_COMPONENT_DUAL: "form-component-dual",
         SceneType.WEB_PAGE: "form-page",
         SceneType.WEB_LIST_VIEW: "form-list",
         SceneType.WEB_LAYOUT: "layout",
         SceneType.WEB_PLUGIN: "plugin",
         SceneType.BACKEND_API: "backend-api",
-        SceneType.MOBILE_COMPONENT: "mobile-component",
+        SceneType.MOBILE_COMPONENT: "form-component-dual",  # 移动端组件统一走双端模板
         SceneType.MOBILE_PAGE: "mobile-page",
         SceneType.SCRIPT_JS: "script",
         SceneType.SCRIPT_PYTHON: "script",
@@ -265,11 +266,12 @@ def scene_to_project_type(scene_type: SceneType) -> str:
         SceneType.UI_STYLE: "ui-style",
         SceneType.LIST_CUSTOM_MODULE: "list-custom-module",
     }
-    return mapping.get(scene_type, "form-component")
+    return mapping.get(scene_type, "form-component-dual")
 
 
 PROJECT_TYPE_TO_SCENE = {
     "form-component": SceneType.WEB_COMPONENT,
+    "form-component-dual": SceneType.WEB_COMPONENT_DUAL,
     "menu-page": SceneType.WEB_PAGE,
     "form-page": SceneType.WEB_PAGE,
     "form-list": SceneType.WEB_LIST_VIEW,
@@ -716,7 +718,7 @@ async def save_coding_message(db: AsyncSession, conversation_id: int, role: str,
 
 BRAINSTORM_PROPOSAL_MARKER = "<!-- BRAINSTORM_PROPOSAL -->"
 BRAINSTORM_MAX_REVISIONS = 3  # 最多修改 3 轮，超出自动生成代码
-BRAINSTORM_SCENES = {SceneType.WEB_COMPONENT, SceneType.WEB_PAGE, SceneType.WEB_LIST_VIEW, SceneType.BACKEND_API}
+BRAINSTORM_SCENES = {SceneType.WEB_COMPONENT, SceneType.WEB_COMPONENT_DUAL, SceneType.WEB_PAGE, SceneType.WEB_LIST_VIEW, SceneType.BACKEND_API}
 
 _BRAINSTORM_PROMPT_FORM_COMPONENT = """\
 你是一位资深 aPaaS 表单组件架构师。请分析用户需求，输出一份简洁的设计确认单（不超过 600 字，中文）。
@@ -887,6 +889,7 @@ _BRAINSTORM_PROMPT_BACKEND_API = """\
 
 _BRAINSTORM_PROMPTS = {
     SceneType.WEB_COMPONENT: _BRAINSTORM_PROMPT_FORM_COMPONENT,
+    SceneType.WEB_COMPONENT_DUAL: _BRAINSTORM_PROMPT_FORM_COMPONENT,
     SceneType.WEB_PAGE: _BRAINSTORM_PROMPT_PAGE,
     SceneType.WEB_LIST_VIEW: _BRAINSTORM_PROMPT_LIST,
     SceneType.BACKEND_API: _BRAINSTORM_PROMPT_BACKEND_API,
@@ -945,9 +948,13 @@ async def _detect_scene_llm_call(
   典型形态：数据查询页面、图表分析页面、报表页面、管理列表页、看板、大屏、仪表盘、自开发菜单页面。
   技术特征：有独立路由、完整页面结构（Vue 页面组件 + index.js + apaas.json），可使用 this.$request 调接口。
 
-- **web_component**：嵌入在低代码表单字段中的可复用 UI 控件，不是独立页面。
-  典型形态：自定义选择器、日期范围组件、文件上传控件、富文本编辑器、自定义输入框、数据关联选择控件。
-  技术特征：需实现 ide/edit/read/list/print/search 多种渲染模式，使用 FormWidgetConfigMixin，有 widget.config.js。
+- **web_component_dual**：嵌入在低代码表单字段中的可复用 UI 控件（**默认选项**），同时支持 PC 端和移动端。
+  典型形态：自定义选择器、日期范围组件、文件上传控件、富文本编辑器、自定义输入框、数据关联选择控件、移动端表单控件。
+  技术特征：shared/ 层共享 widget.config 和业务逻辑，web/ 使用 element-ui，mobile/ 使用 cube-ui，各自独立打包。
+  **使用时机：用户说"做一个组件/控件"但未明确说只要PC端，或明确提到移动端组件，均使用此场景。**
+
+- **web_component**：仅限 PC 端的表单组件，**仅在用户明确指定"只需PC端"/"不需要移动端"时才选此项**。
+  技术特征：单包结构，无 shared/ 层，使用 element-ui。
 
 - **web_list_view**：自定义列表视图，嵌入在列表页中替换默认展示方式（基于 ListEngine），不是独立页面。
 
@@ -959,7 +966,7 @@ async def _detect_scene_llm_call(
 
 ### 移动端类
 - **mobile_page**：移动端独立页面（使用 cube-ui 组件库）。
-- **mobile_component**：移动端表单中嵌入使用的自定义控件。
+- **mobile_component**：已废弃，统一使用 **web_component_dual**。
 
 ### 后端 Java 类
 - **backend_api**：开发后端 REST 接口服务（SpringBoot/Java Controller + Service），接口路径以 /custom 开头，包名以 com.xdap 开头。只要主体是"开发接口/API/数据接口"，无论是否提及 SpringBoot，都属于此类。注意：前端页面"调用接口"不属于此类。
@@ -976,18 +983,24 @@ async def _detect_scene_llm_call(
 
 ## 关键区分原则
 
-**web_page vs web_component**（最常见混淆）：
+**web_component_dual vs web_component**（最重要）：
+- "做一个组件/控件/选择器/输入框/表单组件"（未说明端） → **web_component_dual**
+- "移动端组件/手机端控件/mobile组件" → **web_component_dual**
+- "同时支持PC和移动端的组件" → **web_component_dual**
+- "只需PC端组件/仅PC端/不需要移动端" → **web_component**（明确指定PC-only才选）
+
+**web_page vs web_component_dual**（最常见混淆）：
 - "页面/菜单页面/自开发页面/查询页面/分析页面/报表/看板/大屏" → **web_page**
-- "组件/控件/选择器/输入框/自开发组件/表单组件" → **web_component**
+- "组件/控件/选择器/输入框/自开发组件/表单组件" → **web_component_dual**
 - 图表、表格出现在"页面"语境中 → **web_page**（图表页面是完整页面，不是组件）
 
 **backend_api vs web_page**：
 - 用户要"开发接口/写后端/SpringBoot/Java Controller" → **backend_api**
 - 用户要"做一个页面，页面里调用接口" → **web_page**（接口调用是前端行为）
 
-**backend_api vs web_component**（"自定义接口"易混淆）：
+**backend_api vs web_component_dual**（"自定义接口"易混淆）：
 - 主体是"接口/API/数据接口/查询接口/REST接口" → **backend_api**（"自定义数据查询接口"是后端接口）
-- 主体是"组件/控件/选择器/输入框" → **web_component**
+- 主体是"组件/控件/选择器/输入框" → **web_component_dual**
 
 ## 示例
 
@@ -995,9 +1008,13 @@ async def _detect_scene_llm_call(
 "创建一个项目分析图表自开发页面" → web_page
 "做一个数据看板页面" → web_page
 "开发一个员工查询菜单页面" → web_page
-"做一个自定义日期范围选择器" → web_component
-"开发一个关联数据选择组件" → web_component
-"写一个员工信息展示的富文本输入框" → web_component
+"做一个自定义日期范围选择器" → web_component_dual
+"开发一个关联数据选择组件" → web_component_dual
+"写一个员工信息展示的富文本输入框" → web_component_dual
+"开发一个移动端的评分组件" → web_component_dual
+"做一个手机端表单控件" → web_component_dual
+"创建一个只需要PC端的表单组件" → web_component
+"开发一个仅PC端使用的自定义输入框" → web_component
 "开发一个 SpringBoot 接口查询订单数据" → backend_api
 "开发一个自定义数据查询接口" → backend_api
 "写一个查询用户信息的后端接口" → backend_api
@@ -1020,8 +1037,8 @@ async def _detect_scene_llm_call(
     try:
         return SceneType(scene_code)
     except ValueError:
-        logger.warning(f"[detect_scene] 无法识别场景 '{scene_code}'，使用默认 web_component")
-        return SceneType.WEB_COMPONENT
+        logger.warning(f"[detect_scene] 无法识别场景 '{scene_code}'，使用默认 web_component_dual")
+        return SceneType.WEB_COMPONENT_DUAL
 
 
 async def _generate_brainstorm_proposal(

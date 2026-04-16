@@ -20,6 +20,7 @@ from typing import Awaitable, Callable, Optional
 
 from app.coding.form_component_editor import (
     normalize_form_component_editor_artifacts,
+    normalize_form_component_dual_apaas_json,
     normalize_form_component_generated_file,
     validate_form_component_editor_workspace,
 )
@@ -247,17 +248,50 @@ def _validate_json_config_file(file_path: str, content: str) -> list[str]:
     return errors
 
 
+_FORBIDDEN_FORM_COMPONENT_FILES = {
+    # Vue app 脚手架文件 — form-component 工程打包为独立 widget，不需要 App 壳
+    "src/App.vue", "src/main.js", "src/index.html",
+    "web/src/App.vue", "web/src/main.js", "web/src/index.html",
+    "mobile/src/App.vue", "mobile/src/main.js", "mobile/src/index.html",
+}
+
+
+def _is_form_component_workspace(workspace_path: Path) -> bool:
+    """判断工作区是否为 form-component 系列（单端或双端）。"""
+    if (workspace_path / "shared" / "widget.config.json").exists():
+        return True
+    meta_file = workspace_path / ".workspace.json"
+    if meta_file.exists():
+        try:
+            import json as _json
+            meta = _json.loads(meta_file.read_text(encoding="utf-8"))
+            ptype = meta.get("project_type", "")
+            return ptype in {"form-component", "form-component-dual", "mobile-component"}
+        except Exception:
+            pass
+    return False
+
+
 async def _write_file(args: dict, workspace_path: Path) -> str:
     file_path = args.get("file_path", "")
     content = args.get("content", "")
     if not file_path:
         return "Error: file_path is required"
+    # 拦截 Vue app 壳文件：form-component 工程不需要 App.vue/main.js
+    normalized_rel = file_path.replace("\\", "/").lstrip("./").strip("/")
+    if normalized_rel in _FORBIDDEN_FORM_COMPONENT_FILES and _is_form_component_workspace(workspace_path):
+        return (
+            f"Error: {file_path} 不应存在。form-component 工程打包为独立 widget，"
+            "没有 App 壳也没有 main.js 入口。预览由平台注入，不要生成 App.vue / main.js / index.html。"
+            "如果需要调试渲染，直接修改 form-component/ 下的 Vue 组件即可。"
+        )
     try:
         file_path, content = normalize_form_component_generated_file(file_path, content, workspace_path)
         resolved = _resolve_safe(file_path, workspace_path)
         resolved.parent.mkdir(parents=True, exist_ok=True)
         resolved.write_text(content, encoding="utf-8")
         normalize_form_component_editor_artifacts(workspace_path)
+        normalize_form_component_dual_apaas_json(workspace_path)
         contract_errors = validate_form_component_editor_workspace(workspace_path)
         if contract_errors:
             return "Error: " + "; ".join(contract_errors)
@@ -303,6 +337,7 @@ async def _edit_file(args: dict, workspace_path: Path) -> str:
         if target_resolved != resolved and resolved.exists():
             resolved.unlink()
         normalize_form_component_editor_artifacts(workspace_path)
+        normalize_form_component_dual_apaas_json(workspace_path)
         contract_errors = validate_form_component_editor_workspace(workspace_path)
         if contract_errors:
             return "Error: " + "; ".join(contract_errors)
@@ -518,12 +553,67 @@ async def _run_command(
         return f"Error running command: {e}"
 
 
+async def _spawn_one_serve(
+    cmd: list,
+    cwd: str,
+    env: dict,
+    progress_callback: Optional[Callable[[str], Awaitable[None] | None]],
+    label: str = "",
+):
+    """启动单个 serve 子进程，流式输出日志，返回 (proc, detected_port)。
+    启动失败时返回 (None, None)。
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            cwd=cwd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            env=env,
+        )
+    except Exception as e:
+        await _emit_progress(progress_callback, f"[{label}] 启动失败: {e}\n")
+        return None, None
+
+    detected_port: Optional[int] = None
+    deadline = asyncio.get_event_loop().time() + 90
+
+    while asyncio.get_event_loop().time() < deadline:
+        try:
+            raw = await asyncio.wait_for(proc.stdout.readline(), timeout=5.0)  # type: ignore[union-attr]
+        except asyncio.TimeoutError:
+            if proc.returncode is not None:
+                break
+            continue
+        if not raw:
+            break
+
+        text = _strip_ansi(raw.decode("utf-8", errors="replace")).rstrip("\n")
+        prefix = f"[{label}] " if label else ""
+        await _emit_progress(progress_callback, prefix + text + "\n")
+
+        m = re.search(r"Local:\s+https?://localhost:(\d+)", text)
+        if m and detected_port is None:
+            detected_port = int(m.group(1))
+
+        if "Public:" in text or ("App running at" in text and detected_port):
+            await asyncio.sleep(0.3)
+            break
+
+    if proc.returncode is not None:
+        return None, None
+
+    return proc, detected_port
+
+
 async def _start_serve(
     args: dict,
     workspace_path: Path,
     progress_callback: Optional[Callable[[str], Awaitable[None] | None]] = None,
 ) -> str:
-    """启动 dev server，复用已有进程，流式输出启动日志，返回 JSON 含公网 URL。"""
+    """启动 dev server，复用已有进程，流式输出启动日志，返回 JSON 含公网 URL。
+    双端工程（form-component-dual）并发启动 PC 端和移动端两个 serve 进程。
+    """
     import json as _json
 
     from app.coding.workspace import WorkspaceManager
@@ -532,18 +622,21 @@ async def _start_serve(
     ws_id = workspace_path.name
     ws_mgr = WorkspaceManager()
 
-    # 已在运行 → 直接复用
-    status = ws_mgr.is_serve_running(ws_id)
-    if status["running"]:
-        port = status["port"]
-        proxy_base = (settings.code_server_base_url or "").rstrip("/")
-        url = f"{proxy_base}/proxy/{port}/"
-        await _emit_progress(progress_callback, f"调试服务已在运行（端口 {port}），复用现有进程。\n")
-        return _json.dumps({"status": "already_running", "url": url, "port": port})
+    # ── 检测是否双端工程 ──────────────────────────────────────────
+    _is_dual = False
+    _meta_file = workspace_path / ".workspace.json"
+    if _meta_file.exists():
+        try:
+            _meta = _json.loads(_meta_file.read_text(encoding="utf-8"))
+            _is_dual = _meta.get("project_type") == "form-component-dual"
+        except Exception:
+            pass
 
-    # 读取 PROXY_BASE
+    # ── 读取 PROXY_BASE ──────────────────────────────────────────
     proxy_base = (settings.code_server_base_url or "").rstrip("/")
-    vibe_cfg = workspace_path / "vibe-serve-config"
+    # 双端：从 web/ 子目录读取；单端：从工作区根目录读取
+    _cfg_dir = workspace_path / "web" if _is_dual else workspace_path
+    vibe_cfg = _cfg_dir / "vibe-serve-config"
     if vibe_cfg.exists():
         for line in vibe_cfg.read_text(encoding="utf-8").splitlines():
             m = re.match(r"^PROXY_BASE=(.+)$", line)
@@ -551,14 +644,109 @@ async def _start_serve(
                 proxy_base = m.group(1).strip()
                 break
 
-    # 启动命令：优先 vibe-serve.js，回退到 npx vue-cli-service
+    # ── 已在运行 → 直接复用 ──────────────────────────────────────
+    status = ws_mgr.is_serve_running(ws_id)
+    if status["running"]:
+        if status.get("dual"):
+            parts = []
+            if status.get("web"):
+                parts.append(f"PC 端（端口 {status['web']['port']}）")
+            if status.get("mobile"):
+                parts.append(f"移动端（端口 {status['mobile']['port']}）")
+            await _emit_progress(
+                progress_callback,
+                f"调试服务已在运行（{'、'.join(parts)}），复用现有进程。\n",
+            )
+            web_url = (
+                f"{proxy_base}/proxy/{status['web']['port']}/"
+                if status.get("web") else None
+            )
+            mobile_url = (
+                f"{proxy_base}/proxy/{status['mobile']['port']}/"
+                if status.get("mobile") else None
+            )
+            return _json.dumps({
+                "status": "already_running",
+                "web_url": web_url,
+                "mobile_url": mobile_url,
+            })
+        else:
+            port = status["port"]
+            url = f"{proxy_base}/proxy/{port}/"
+            await _emit_progress(
+                progress_callback, f"调试服务已在运行（端口 {port}），复用现有进程。\n"
+            )
+            return _json.dumps({"status": "already_running", "url": url, "port": port})
+
+    env = _build_command_env()
+
+    # ══════════════════════════════════════════════════════════════
+    # 双端工程：并发启动 web/ 和 mobile/ 两个独立 Vue CLI 项目
+    # ══════════════════════════════════════════════════════════════
+    if _is_dual:
+        import socket as _socket
+
+        def _find_free_port(start: int = 8082) -> int:
+            """找一个本地可用端口，避免 web 和 mobile 争抢同一个端口。"""
+            port = start
+            while True:
+                with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as s:
+                    if s.connect_ex(("localhost", port)) != 0:
+                        return port
+                    port += 1
+
+        web_port_hint = _find_free_port(8082)
+        mobile_port_hint = _find_free_port(web_port_hint + 1)
+
+        def _make_cmd(sub: str) -> list:
+            vibe_js = workspace_path / sub / "vibe-serve.js"
+            if vibe_js.exists():
+                return ["node", "vibe-serve.js", "src/index.js"]
+            return ["npx", "vue-cli-service", "serve", "src/index.js"]
+
+        # 各自设置不同的 PORT 环境变量，避免并发时两个进程争抢同一端口
+        web_env = {**env, "PORT": str(web_port_hint)}
+        mobile_env = {**env, "PORT": str(mobile_port_hint)}
+
+        (web_proc, web_port), (mobile_proc, mobile_port) = await asyncio.gather(
+            _spawn_one_serve(
+                _make_cmd("web"), str(workspace_path / "web"), web_env, progress_callback, "PC端"
+            ),
+            _spawn_one_serve(
+                _make_cmd("mobile"), str(workspace_path / "mobile"), mobile_env, progress_callback, "移动端"
+            ),
+        )
+
+        if web_proc is None and mobile_proc is None:
+            return _json.dumps({"status": "error", "message": "双端 serve 启动均失败"})
+
+        dual_entry: dict = {}
+        web_url = mobile_url = None
+        if web_proc is not None:
+            web_port = web_port or 8082
+            dual_entry["web"] = {"process": web_proc, "port": web_port}
+            web_url = f"{proxy_base}/proxy/{web_port}/"
+        if mobile_proc is not None:
+            mobile_port = mobile_port or 8083
+            dual_entry["mobile"] = {"process": mobile_proc, "port": mobile_port}
+            mobile_url = f"{proxy_base}/proxy/{mobile_port}/"
+
+        ws_mgr._serve_processes[ws_id] = dual_entry
+        return _json.dumps({
+            "status": "ok",
+            "web_url": web_url,
+            "mobile_url": mobile_url,
+        })
+
+    # ══════════════════════════════════════════════════════════════
+    # 单端工程：原有逻辑不变
+    # ══════════════════════════════════════════════════════════════
     vibe_js = workspace_path / "vibe-serve.js"
     if vibe_js.exists():
         cmd = ["node", "vibe-serve.js", "src/index.js"]
     else:
         cmd = ["npx", "vue-cli-service", "serve", "src/index.js"]
 
-    env = _build_command_env()
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -586,12 +774,10 @@ async def _start_serve(
         text = _strip_ansi(raw.decode("utf-8", errors="replace")).rstrip("\n")
         await _emit_progress(progress_callback, text + "\n")
 
-        # 检测端口
         m = re.search(r"Local:\s+https?://localhost:(\d+)", text)
         if m and detected_port is None:
             detected_port = int(m.group(1))
 
-        # 出现 Public URL 说明启动完成，停止阻塞
         if "Public:" in text or ("App running at" in text and detected_port):
             await asyncio.sleep(0.3)
             break
