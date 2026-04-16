@@ -6,6 +6,7 @@ Implements an autonomous agent loop:
   User requirement -> LLM -> tool calls -> execute tools -> feed results back -> repeat until done
 """
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -66,7 +67,6 @@ class VibeCodingAgent:
         Use stream_events() to consume events via SSE.
         If agent is already running for this workspace, returns existing task info.
         """
-        import asyncio
 
         if self.ws_id in self._running_agents:
             info = self._running_agents[self.ws_id]
@@ -97,8 +97,6 @@ class VibeCodingAgent:
         Consume events from a running agent. Can be called multiple times
         (e.g., after SSE reconnect) -- missed events are replayed from history.
         """
-        import asyncio
-
         if self.ws_id not in self._running_agents:
             yield {"type": "agent_error", "message": "No agent running for this workspace"}
             return
@@ -143,7 +141,6 @@ class VibeCodingAgent:
         5. Adaptive tool result sizing based on remaining context budget
         """
         from app.harness.tool_registry import ToolRegistry
-        import asyncio
 
         tool_registry = ToolRegistry(profile="coding")
 
@@ -595,6 +592,142 @@ class VibeCodingAgent:
             base_url = base_url.rstrip("/") + "/v1"
         return base_url
 
+    # ============================================================
+    # 共享 prompt 段（form-component 单端 / form-component-dual 双端共用）
+    # ------------------------------------------------------------
+    # 这些段只有路径前缀不同（src vs web/src），用 __BASE_PATH__ 占位符
+    # 让两个分支调用 .replace("__BASE_PATH__", ...) 渲染。
+    # 维护这些规则只需改这一处，避免 dual / 单端漂移。
+    # ============================================================
+
+    _SHARED_WIDGET_CONFIG_SECTION = """
+## widget.config.json Requirements
+- **文件格式**: 生成 `{name}.widget.config.json`（纯 JSON，不是 JS 文件），路径为 `__BASE_PATH__/form-component-config/form-widget/{name}.widget.config.json`。
+- **导入方式**: `index.js` 中使用 `import XxxWidgetConfig from './{name}.widget.config.json'`（必须带 `.json` 后缀）。
+- Top-level structure MUST include: `version`, `code`, `desc`, `instance`, `component`, `widget`, `client`, `componentModelField`, `methods`, `formatValueSchema` — 缺少任何一个平台会崩溃。
+- `code`: MUST start with `FORM_CUSTOM_` followed by a semantic uppercase string (e.g. `FORM_CUSTOM_DATA_SELECT`). Must match `apaas.json` `code` field.
+- `desc.iconType`: fixed value `"DEFAULT"`.
+- `desc.icon`: MUST be a real SVG string semantically matching the component (e.g. `"<svg xmlns=\\"http://www.w3.org/2000/svg\\" viewBox=\\"0 0 24 24\\">...</svg>"`). Never use an icon class string.
+- **CRITICAL**: `desc.text`、`desc.description`、`widget.display.label` 必须根据**当前需求**填写真实的中文名称和描述，绝对禁止出现 "Demo"、"demo"、"Demo组件"、"Demo组件描述" 等占位文字。例如国际手机号组件应填写 `"text": "国际手机号"`。
+- `instance`: fixed `{ "uuid": "$itemUuid", "inTable": false }`.
+- `widget.display.width`: `3 | 6 | 12` (1/4 / 1/2 / full row). `mobileWidth`: `6 | 12`. `height: 1`. `hidden/readOnly/required/onlyCreateEdit`: all `false`.
+- `widget.allow`: MUST include all 4 fields: `"calcRule": false`, `"useInTableColumn": <boolean>`, `"scanCode": false`, `"copy": false`. `useInTableColumn` should be `true` by default unless sub-table usage is explicitly not needed.
+- `widget.default`: `{ "customDefaultKey": "defaultValue", "value": null }` — value is `null`, NOT `""`.
+- `widget.validator`: `{ "uniqueCheck": false }`.
+- `widget.special`: MUST include 3 fields: `frontBusinessObjectComponentType`, `saveWithHidden: false`, `customComponentConfig`. **`customComponentConfig` must contain the default values for ALL config properties defined in `setting.vue`** (e.g. `{"defaultCountryCode": "CN", "placeholder": "", "clearable": true}`). Use `{}` only when there is no setting panel. Do NOT use empty strings as defaults for string fields — use `null` or a sensible default instead.
+- `widget.special.frontBusinessObjectComponentType`: `"BOF_TEXT"` for string/json values, `"BOF_NUMBER"` for numbers, `"BOF_DATE"` for single date values.
+- `componentModelField` (top-level, NOT inside widget.special): `["STRING"]` for <500 chars, `["BIG_TEXT"]` for ≥500 chars, `["NUM"]` for numbers, `["DATE"]` for single dates.
+- `widget.editor.config`: array starting with `["INFO","LABEL","FIELD_CODE","TITLE_DESCRIPTION","WIDTH","HIDDEN","READONLY","REQUIRED","EDITONNEW","UNIQUE","HIDDEN_SAVE","HIDDEN_TRIGGER","TRIGGER_BUSINESS_EVENTS"]`. **CRITICAL**: if a custom setting panel exists, the editor.config.json `code` (= widget code + `_SETTING`) MUST be appended at the **end** of this array. `FORMULA_RULE` only if needed. `excludeInTable` must be `["WIDTH"]` ONLY — do not add other values.
+- `client.mobile.widget.editor.config`: same structure as `widget.editor.config`.
+- `client.mobile.component`: required fields `edit`, `read`, `ide`; optional `list`, `association`, `lov`, `tableColumn`. Names should be `Mobile` + PC component name convention.
+- `component` (PC): required `ide`, `edit`, `read`; optional `list`, `association`, `lov`, `print`, `search`, `searchIde`.
+"""
+
+    _SHARED_EDITOR_CONFIG_SECTION = """
+## editor.config.json Requirements
+- **文件格式**: 生成 `{name}.editor.config.json`（纯 JSON，不是 JS 文件），路径为 `__BASE_PATH__/form-component-config/form-editor/{name}.editor.config.json`。**不要**生成 `.editor.config.js`。
+- **⚠️ 此文件只有 4 个字段**，不能放任何其他内容（禁止 `editorConfigList`、`options`、`staticData`、`type`、`group` 等）：
+  ```json
+  {
+    "code": "FORM_CUSTOM_RATE_SETTING",
+    "editorConfigType": "FORM_CUSTOM_RATE_SETTING",
+    "componentName": "FormComponentRateSetting",
+    "configProperty": "customComponentConfig"
+  }
+  ```
+- `code` = widget.config.json 的顶层 `code` + `_SETTING`（例如 widget `code` 为 `FORM_CUSTOM_RATE` 则此处为 `FORM_CUSTOM_RATE_SETTING`）。
+- `editorConfigType`：**与 `code` 完全相同的值**。
+- `componentName`：必须与 `setting.vue` 中的 `name` 选项完全一致。
+- `configProperty`：**固定值 `"customComponentConfig"`，不可修改**。
+- **文件命名规范**：文件名必须语义化，使用 `{组件名}.editor.config.json`，例如 `form-component-rate.editor.config.json`，不得使用 `dev-edit.editor.config.json` 这类无意义名称。
+- **注册**：必须同时更新 `__BASE_PATH__/form-component-config/form-editor/index.js`，添加 import 和注册。
+"""
+
+    _SHARED_SETTING_VUE_SECTION = """
+## setting.vue Rules
+- setting.vue uses `componentConfig` prop + `formEngine` prop
+- setting.vue 必须通过 `componentConfig` prop 读取平台配置，但模板中统一绑定 `customComponentConfig.xxx`（computed 别名），不要直接写 `componentConfig.customComponentConfig.xxx`
+- 方法名不是关键，关键是配置写入路径必须正确：严禁在 setting.vue 中使用 `localConfig`、`formData`、`config` 这类镜像配置
+- 如果存在 `saveConfig()` / `handleChange()` / `updateComponentConfig()` 等方法，它们也只能直接操作 `customComponentConfig.xxx`，不能通过 `$emit('update:componentConfig', ...)` 或镜像状态回写
+- 严禁调用不存在的配置写入 API：`formEngine.updateWidgetConfig(...)`、`formEngine.updateCustomComponentConfig(...)`、`formEngine.updateWidgetCustomConfig(...)`、`formEngine.updateSpecialConfig(...)`、`formEngine.setWidgetInfo(...)`
+- `inject` 声明必须带 `{ default: null }`
+- 配置直接存 `customComponentConfig` 根级别，不要多嵌套（如 `{ chartConfig: { dataSource } }` 错，应为 `{ dataSource }`）
+- 不要在 computed 里用 `$set`（会导致无限循环）
+- formEngine 通过 prop 传入（不是 inject）
+- **最外层不要包一层 `<el-form>`**，平台外层已提供表单容器，内部直接用 `<el-form-item>` 等即可
+- **最外层容器不要设置 padding**，平台区域已做好布局，额外 padding 会压缩可用空间
+- `setting.vue` must be written to `__BASE_PATH__/form-component/form-editor/{name}-setting.vue`
+- `editorConfigList` must be aggregated by `__BASE_PATH__/form-component-config/form-editor/index.js` from `./{name}.editor.config.json`
+- The edit.vue is the primary file. read.vue shows readonly view. ide.vue shows placeholder. Others can be minimal.
+"""
+
+    _SHARED_FORMVALUE_STORAGE_SECTION = """
+## formValue 存储规范（★ 必须遵守，否则数据无法入库）
+- 组件值改变后必须同步写入 `this.formValue`，平台通过 formValue 将数据持久化到数据库
+- 组件内部 UI 状态可以用 `data` 维护，但业务值变化时必须同步到 formValue
+- formValue 只接受基本数据类型：`string`、`number`、`boolean`、`null`
+- 对象、数组等复杂类型必须先 `JSON.stringify()` 序列化再赋值，读取时用 `JSON.parse()` 反序列化
+- 推荐模式：`mounted() { if (this.formValue) try { this.innerValue = JSON.parse(this.formValue) } catch(e) {} }`，`handleChange(val) { this.innerValue = val; this.formValue = JSON.stringify(val) }`
+"""
+
+    _SHARED_FORMENGINE_API_SECTION = """
+## ⚠️ formEngine API 白名单（★ 极严格，违反会运行时崩溃）
+
+**在写任何 `this.formEngine.xxx` 代码前，必须确认该属性/方法在以下白名单中。白名单外的一切 `formEngine.xxx(...)` 方法调用都是 LLM 臆想，不存在。**
+
+### ✅ 允许的只读属性
+
+- `formEngine.engineContext.instance.documentId` — 当前文档 ID
+- `formEngine.engineContext.instance.instanceId` — 当前表单实例 ID
+- `formEngine.formDataControl.allTileFormItemList` — 所有表单字段配置数组
+- `formEngine.formDataControl.componentMap` — uuid → 组件配置 Map（用 `.get(uuid)` 访问）
+- `formEngine.formDataControl.ctlComponentMap` — 表单控件实例 Map
+- `formEngine.formRef` — 表单 ref 引用
+
+### ✅ 允许调用的方法
+
+- `formEngine.formRef.validateField(propKey, callback)` — 触发单字段校验
+- `formEngine.bsEventControl.triggerEventValueChange(widget, event)` — 触发业务事件
+
+### ✅ 允许写的状态标记
+
+- `formEngine.formDataControl.ctlFormDataChanged = true` — 标记表单数据已变更（赋值**后**请确保 `this.formData` 已通过 `$set` 更新）
+
+### ❌ 严禁臆想的方法（下列方法在 formEngine 上**根本不存在**，调用会直接报 `is not a function`）
+
+| 臆想的错误调用 | 正确替代方案 |
+|---|---|
+| `formEngine.setWidgetValue(uuid, val)` | `this.$set(this.formData, uuid, val)` |
+| `formEngine.setFieldValue(...)` / `setFormValue(...)` | 同上 |
+| `formEngine.updateWidgetConfig(...)` | setting.vue 里用 `v-model="customComponentConfig.xxx"` 双向绑定 |
+| `formEngine.updateCustomComponentConfig(...)` | 同上 |
+| `formEngine.updateWidgetCustomConfig(...)` | 同上 |
+| `formEngine.updateSpecialConfig(...)` | 同上 |
+| `formEngine.setWidgetInfo(...)` | 同上 |
+| `formEngine.saveConfig(...)` / `submitConfig(...)` / `applyConfig(...)` | 不存在，无需调用 |
+| `formEngine.getFieldByCode(...)` / `getComponentByCode(...)` | 用 `allTileFormItemList.find(c => c.code === 'xxx')` |
+
+**铁律**：
+1. 写 `this.formEngine.xxx(...)` 前，先检查 xxx 是否在上方"允许调用的方法"中；不在就**不要写**
+2. 给其他字段赋值**唯一正确方式**：`this.$set(this.formData, targetUuid, value)` + 可选 `this.formEngine.formDataControl.ctlFormDataChanged = true`
+3. 修改自身组件配置**唯一正确方式**：setting.vue 里 `v-model="customComponentConfig.xxx"`
+4. 如果你不确定某个 API 是否存在，**宁可不写，不要猜**
+"""
+
+    @classmethod
+    def _render_form_component_sections(cls, base_path: str) -> str:
+        """渲染 form-component 共享段（widget.config.json + editor.config.json + setting.vue + formValue）。
+
+        base_path: 文件路径前缀。单端为 `src`，双端为 `web/src`。
+        """
+        return (
+            cls._SHARED_WIDGET_CONFIG_SECTION.replace("__BASE_PATH__", base_path)
+            + cls._SHARED_EDITOR_CONFIG_SECTION.replace("__BASE_PATH__", base_path)
+            + cls._SHARED_SETTING_VUE_SECTION.replace("__BASE_PATH__", base_path)
+            + cls._SHARED_FORMVALUE_STORAGE_SECTION
+            + cls._SHARED_FORMENGINE_API_SECTION
+        )
+
     def _build_prompt(self, requirement: str, conversation_summary: str) -> str:
         """Build the user prompt that tells the agent what to do."""
         info = self.ws_mgr.get_workspace_info(self.ws_id)
@@ -664,57 +797,141 @@ class VibeCodingAgent:
 
 ## BOF Type & formValue
 - BOF_NUMBER caveat: `formValue` may arrive as a string from the platform. Always guard: `const n = Number(this.formValue); if (isNaN(n)) { /* fallback */ }`.
+""" + self._render_form_component_sections(base_path="src")
+        if project_type == "form-component-dual":
+            workflow = """
+## Workflow — IMPORTANT: Be efficient! Minimize tool calls.
+0. **Before tool calls**: First write a short, user-facing progress note in Chinese (1-3 sentences) explaining what you understood and what you will do next.
+1. **FIRST** (1 call): Use glob_files to see the project structure
+2. **THEN** (1-3 calls max): If `.cursor/rules/*.mdc` exists, read those rule files first, then read ONLY the key implementation files you need. Do NOT read every file.
+3. **IMMEDIATELY write code**: Use write_file to create/update ALL component files (web/ and mobile/) in one batch. Call write_file multiple times in a SINGLE turn (parallel tool calls).
+4. **THEN** run `npm run build` to check compilation (builds both web/ and mobile/)
+5. If errors, fix and rebuild. If success, report completion.
 
-## widget.config.json Requirements
-- **文件格式**: 生成 `{name}.widget.config.json`（纯 JSON，不是 JS 文件），路径为 `src/form-component-config/form-widget/{name}.widget.config.json`。
-- **导入方式**: `index.js` 中使用 `import XxxWidgetConfig from './{name}.widget.config.json'`（必须带 `.json` 后缀）。
-- Top-level structure MUST include: `version`, `code`, `desc`, `instance`, `component`, `widget`, `client`, `componentModelField`, `methods`, `formatValueSchema` — 缺少任何一个平台会崩溃。
-- `code`: MUST start with `FORM_CUSTOM_` followed by a semantic uppercase string (e.g. `FORM_CUSTOM_DATA_SELECT`). Must match `apaas.json` `code` field.
-- `desc.iconType`: fixed value `"DEFAULT"`.
-- `desc.icon`: MUST be a real SVG string semantically matching the component (e.g. `"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\">...</svg>"`). Never use an icon class string.
-- **CRITICAL**: `desc.text`、`desc.description`、`widget.display.label` 必须根据**当前需求**填写真实的中文名称和描述，绝对禁止出现 "Demo"、"demo"、"Demo组件"、"Demo组件描述" 等占位文字。例如国际手机号组件应填写 `"text": "国际手机号"`。
-- `instance`: fixed `{ "uuid": "$itemUuid", "inTable": false }`.
-- `widget.display.width`: `3 | 6 | 12` (1/4 / 1/2 / full row). `mobileWidth`: `6 | 12`. `height: 1`. `hidden/readOnly/required/onlyCreateEdit`: all `false`.
-- `widget.allow`: MUST include all 4 fields: `"calcRule": false`, `"useInTableColumn": <boolean>`, `"scanCode": false`, `"copy": false`. `useInTableColumn` should be `true` by default unless sub-table usage is explicitly not needed.
-- `widget.default`: `{ "customDefaultKey": "defaultValue", "value": null }` — value is `null`, NOT `""`.
-- `widget.validator`: `{ "uniqueCheck": false }`.
-- `widget.special`: MUST include 3 fields: `frontBusinessObjectComponentType`, `saveWithHidden: false`, `customComponentConfig`. **`customComponentConfig` must contain the default values for ALL config properties defined in `setting.vue`** (e.g. `{"defaultCountryCode": "CN", "placeholder": "", "clearable": true}`). Use `{}` only when there is no setting panel. Do NOT use empty strings as defaults for string fields — use `null` or a sensible default instead.
-- `widget.special.frontBusinessObjectComponentType`: `"BOF_TEXT"` for string/json values, `"BOF_NUMBER"` for numbers, `"BOF_DATE"` for single date values.
-- `componentModelField` (top-level, NOT inside widget.special): `["STRING"]` for <500 chars, `["BIG_TEXT"]` for ≥500 chars, `["NUM"]` for numbers, `["DATE"]` for single dates.
-- `widget.editor.config`: array starting with `["INFO","LABEL","FIELD_CODE","TITLE_DESCRIPTION","WIDTH","HIDDEN","READONLY","REQUIRED","EDITONNEW","UNIQUE","HIDDEN_SAVE","HIDDEN_TRIGGER","TRIGGER_BUSINESS_EVENTS"]`. **CRITICAL**: if a custom setting panel exists, the editor.config.json `code` (= widget code + `_SETTING`) MUST be appended at the **end** of this array. `FORMULA_RULE` only if needed. `excludeInTable` must be `["WIDTH"]` ONLY — do not add other values.
-- `client.mobile.widget.editor.config`: same structure as `widget.editor.config`.
-- `client.mobile.component`: required fields `edit`, `read`, `ide`; optional `list`, `association`, `lov`, `tableColumn`. Names should be `Mobile` + PC component name convention.
-- `component` (PC): required `ide`, `edit`, `read`; optional `list`, `association`, `lov`, `print`, `search`, `searchIde`.
+## CRITICAL Rules
+- **Progress notes are visible to the user**: keep them brief, concrete, and friendly. Do NOT dump hidden reasoning or long analysis.
+- **DO NOT loop**: Never read the same file twice. Never read more than 3 files before writing code.
+- **Write ALL files at once**: In a single turn, call write_file for ALL web/ and mobile/ vue files. Do NOT write one file per turn.
+- **When generating designer config**: update `web/src/form-component/form-editor/index.js` and `web/src/form-component-config/form-editor/index.js` in the same batch as `setting.vue` / `{name}.editor.config.json`.
+- **Be decisive**: You are an expert. After reading the scaffold structure and 1-2 example files, you have enough context to write the component.
+- **Maximum 8 turns total**: If you haven't written code by turn 4, something is wrong. Write the code NOW.
+- **NEVER use `<el-dialog>` inside form widgets** — it breaks FormEngine component resolution and crashes the platform with `Cannot read properties of undefined (reading 'edit')`. Use `<el-popover :append-to-body="true">` instead for any preview/popup interaction.
 
-## editor.config.json Requirements
-- **文件格式**: 生成 `{name}.editor.config.json`（纯 JSON，不是 JS 文件），路径为 `src/form-component-config/form-editor/{name}.editor.config.json`。**不要**生成 `.editor.config.js`。
-- **⚠️ 此文件只有 4 个字段**，不能放任何其他内容（禁止 `editorConfigList`、`options`、`staticData`、`type`、`group` 等）：
-  ```json
-  {
-    "code": "FORM_CUSTOM_RATE_SETTING",
-    "editorConfigType": "FORM_CUSTOM_RATE_SETTING",
-    "componentName": "FormComponentRateSetting",
-    "configProperty": "customComponentConfig"
+## Technical Constraints — Dual-End Project
+- This is a **dual-end** (PC + Mobile) project with three directories: `shared/`, `web/`, `mobile/`
+- aPaaS form component with 7 render scenes (edit/read/ide/list/print/search/search-ide), both web/ and mobile/ have the same scenes
+- Scaffold files already exist. Do NOT modify vue.config.js or babel.config.js.
+- Vue 2.7 for both ends
+- **PC (web/)**: Element UI (`el-*` components), globally registered, do NOT import
+- **Mobile (mobile/)**: 可使用 **cube-ui**（平台全局注册，无需 import）或 **Vant 2**（`<van-*>` 组件，vue.config.js 已配置 `unplugin-vue-components` + `VantResolver` 按需自动引入，无需手动 import）。**注意：必须使用 Vant 2（vant@latest-v2），不要使用 Vant 3/4，因为项目基于 Vue 2.7**
+- **console.log is stripped in production — use `console.info` for ALL debug output in every mode.**
+- **formEngine is NOT available in `beforeCreate()` — only access `this.formEngine` from `created()` or later.**
+
+## Mixin Per Mode — IMPORTANT: use @shared/ alias (NOT @/)
+- edit / ide / read → `import FormWidgetMixin from '@shared/mixin/form-widget.mixin'`
+- list            → `import ListWidgetMixin from '@shared/mixin/list-widget.mixin'`
+- print           → `import PrintWidgetMixin from '@shared/mixin/print-widget.mixin'`
+- search          → `import SearchWidgetMixin from '@shared/mixin/search-widget.mixin'`
+- search-ide      → `import SearchIdeWidgetMixin from '@shared/mixin/search-ide-widget.mixin'`
+- editor (setting.vue, web only) → `import EditorFormConfigMixin from '@shared/mixin/form-config.mixin'`
+- **NEVER use `@/mixin/...`** — shared mixins live in `shared/mixin/`, the alias `@shared` points to `../shared`
+
+## Mode-specific Rules
+- **List mode**: config = `this.componentConfig` (NOT `this.widget`); `this.formValue` is the concrete value prop directly (no propKey indexing); NO `<x-proxy-form-item>` wrapper.
+- **Print mode**: NO UI component tags — neither Element UI nor Vant renders in print context; NO `<x-proxy-form-item>`; pure HTML/CSS only; use structure `div.print-item > div.print-item-title + div.print-item-value`; when `widget.isInTable` is true, omit the title.
+- **Search mode**: NO `<x-proxy-form-item>`; submit via `this.$emit('change', [value])` — value MUST be wrapped in an array; do NOT use formValue setter.
+- **Search-IDE mode**: NO `<x-proxy-form-item>`; all inputs `disabled`; only implement when Search mode is also implemented.
+- **IDE mode**: all inputs must be `disabled` — IDE renders in the form designer canvas where user interaction is not allowed.
+- **Edit mode**: check `this.widget.readOnly`; guard formValue undefined with fallback; never use both `v-model` and `@input` on the same element (causes infinite loop).
+
+## BOF Type & formValue
+- BOF_NUMBER caveat: `formValue` may arrive as a string from the platform. Always guard: `const n = Number(this.formValue); if (isNaN(n)) { /* fallback */ }`.
+
+## 组件 name 命名约定
+- PC 组件：`FormComponentXxxEdit` / `FormComponentXxxIde` / `FormComponentXxxRead` 等（PascalCase）
+- 移动端组件：`MobileFormComponentXxxEdit` / `MobileFormComponentXxxIde` 等（Mobile 前缀 + PC 命名）
+- 移动端文件名：`mobile-{name}-edit.vue`（kebab-case，加 `mobile-` 前缀）
+
+## widget.config.json 中必须同时声明 PC 和移动端组件
+```json
+{
+  "component": { "ide": "FormComponentXxxIde", "edit": "FormComponentXxxEdit", ... },
+  "client": {
+    "mobile": {
+      "component": { "ide": "MobileFormComponentXxxIde", "edit": "MobileFormComponentXxxEdit", ... }
+    }
   }
-  ```
-- `code` = widget.config.json 的顶层 `code` + `_SETTING`（例如 widget `code` 为 `FORM_CUSTOM_RATE` 则此处为 `FORM_CUSTOM_RATE_SETTING`）。
-- `editorConfigType`：**与 `code` 完全相同的值**。
-- `componentName`：必须与 `setting.vue` 中的 `name` 选项完全一致。
-- `configProperty`：**固定值 `"customComponentConfig"`，不可修改**。
-- **文件命名规范**：文件名必须语义化，使用 `{组件名}.editor.config.json`，例如 `form-component-rate.editor.config.json`，不得使用 `dev-edit.editor.config.json` 这类无意义名称。
-- **注册**：必须同时更新 `src/form-component-config/form-editor/index.js`，添加 import 和注册。
+}
+```
 
-## setting.vue Rules
-- setting.vue uses componentConfig prop + formEngine prop
-- setting.vue 必须通过 `componentConfig` prop 读取平台配置，但模板中统一绑定 `customComponentConfig.xxx`（computed 别名），不要直接写 `componentConfig.customComponentConfig.xxx`
-- 方法名不是关键，关键是配置写入路径必须正确：严禁在 setting.vue 中使用 `localConfig`、`formData`、`config` 这类镜像配置
-- 如果存在 `saveConfig()` / `handleChange()` / `updateComponentConfig()` 等方法，它们也只能直接操作 `customComponentConfig.xxx`，不能通过 `$emit('update:componentConfig', ...)` 或镜像状态回写
-- 严禁调用不存在的配置写入 API：`formEngine.updateWidgetConfig(...)`、`formEngine.updateCustomComponentConfig(...)`、`formEngine.updateWidgetCustomConfig(...)`、`formEngine.updateSpecialConfig(...)`、`formEngine.setWidgetInfo(...)`
-- `setting.vue` must be written to `src/form-component/form-editor/{name}-setting.vue`
-- `editorConfigList` must be aggregated by `src/form-component-config/form-editor/index.js` from `./{name}.editor.config.json`
-- The edit.vue is the primary file. read.vue shows readonly view. ide.vue shows placeholder. Others can be minimal.
+## ⚠️ code 字段三文件必须同步
+`shared/widget.config.json.code`、`web/src/apaas.json.customWidgetList[0].code`、`mobile/src/apaas.json.customWidgetList[0].code` 三者必须**完全一致**。如果使用语义化 code（如 `FORM_CUSTOM_TIME_PICKER`），必须同时更新这三个文件的 `code` 字段。
+
+## ⚠️ 移动端 edit.vue 必须使用 `<x-proxy-form-item>` 包裹（与 PC 端一致）
+- `mobile/src/form-component/form-widget/edit/mobile-{name}-edit.vue` 模板最外层必须是 `<x-proxy-form-item>`
+- 即使移动端使用 cube-ui 或 Vant，`x-proxy-form-item` 仍由 shared/ 平台注入，用于标题/校验提示/只读态等统一行为
+- 此规则**仅对 edit 场景生效**，list/print/search/search-ide 场景仍**不要**包裹 `x-proxy-form-item`
+
+## ⚠️ 文件命名必须与 widget.config.json.code 语义一致
+- 若 `shared/widget.config.json.code = FORM_CUSTOM_TIME_PICKER`，则 semantic = `time-picker`
+- 各 scene 下文件名必须为 `form-component-time-picker-{scene}.vue`（PC）/ `mobile-form-component-time-picker-{scene}.vue`（移动）
+- 禁止出现与 code 语义不一致的文件名（如 `form-component-time-only-picker-edit.vue`）
+
+## ⚠️ "一个组件 = 一套文件"
+- 每个自开发组件对应 7 个 scene 各一个 vue 文件（共 14 个：PC 7 + 移动 7），构成"一套"
+- 多组件工程（`customWidgetList` 多项）每个组件一套，互不覆盖，`index.js` 按 code 聚合
+- 单组件工程里每个 scene 目录**只保留这一个组件的 vue 文件**，其他一律清理（脚手架占位 `form-component-custom-*.vue` / 旧文件 / 语义不一致的副本必须显式 delete）
+
+## FORM_COMPONENT_DUAL 路径规范（与 FORM_COMPONENT 单端的差异）
+- 所有 widget.config.json / editor.config.json / setting.vue / index.js 都在 `web/` 子目录下，路径前缀为 `web/src/`
+- 配置面板聚合文件：`web/src/form-component/form-editor/index.js`（import setting.vue 并放入数组）
+- editorConfigList 聚合文件：`web/src/form-component-config/form-editor/index.js`（import editor.config.json）
+- 以上 4 个文件必须**同一批次一起写入**
+- 移动端 `mobile/` 没有 setting.vue 和 editor.config.json
+""" + self._render_form_component_sections(base_path="web/src")
+        elif project_type in ("menu-page", "form-page", "mobile-page"):
+            workflow = """
+## Workflow — IMPORTANT: Be efficient! Minimize tool calls.
+0. **Before tool calls**: First write a short, user-facing progress note in Chinese (1-3 sentences) explaining what you understood and what you will do next.
+1. **FIRST** (1 call): Use glob_files to see the project structure
+2. **THEN** (1-2 calls max): Read ONLY the key files (`src/apaas.json`, `src/index.js`, `src/form-page/*.vue` or `src/Home.vue`, `src/api/index.js`)
+3. **IMMEDIATELY write code**: Update the page files in one batch. Do NOT apply the 7-scene form-component pattern.
+4. **THEN** run `npm run build` to check compilation
+5. If errors, fix and rebuild. If success, report completion.
+
+## CRITICAL Rules
+- **Progress notes are visible to the user**: keep them brief, concrete, and friendly.
+- **DO NOT loop**: Never read the same file twice. Never read more than 3 files before writing code.
+- **Do NOT generate `widget.config.json`, `editor.config.json`, or `setting.vue`** — 这些是表单组件专属，页面场景不需要
+- **Do NOT apply 7-scene pattern** (edit/read/ide/list/print/search/search-ide) — 页面只是普通 Vue 组件
+
+## Technical Constraints — MENU_PAGE / FORM_PAGE
+- 页面打包为 UMD 组件后部署，可作为独立菜单页面或被平台弹窗（x-lov）引用
+- `templateType` 必须是 `MENU_PAGE`（或对应页面类型）
+- Vue 2.7 + Element UI（全局注册，不要 import）
+- **`$request` 不是 Promise** — 必须用 `.asyncThen()` / `.asyncErrorCatch()`，**不能用** `.then()` / `.catch()`
+- **不要使用** `x-http-block-table` / `x-ag-grid` — 直接使用 Element UI 的 `<el-table>` + `<el-pagination>`
+- 组件名必须是 `apaas-custom-{kebab-name}` 格式，与 `apaas.json` 的 router 配置一致
+- `src/index.js` 中必须 `window[Symbol.for("组件名")] = Component` 注册
+- 弹窗场景必须实现 `getSelectedData()` 方法，返回 `this.selectedRows` 数组
+- **跨页多选** — el-table 翻页会清空选中，需自己维护 `selectedRows` 并用 `toggleRowSelection` 恢复
+- 布局用 flex，表格区域 `flex: 1` 填充剩余空间
+- 国际化目录 `src/form-page-local/` 必须存在（即使只有中文也要）
+- 只修改 `src/` 下的业务文件，不要改 `vue.config.js`、`babel.config.js`
+
+## API 来源说明（开始开发前必须确认）
+页面需要数据才有意义。如果用户未说明数据来源，必须先问：
+1. "数据从哪里获取？是使用低代码平台现有表单的 API，还是自定义外部 API？"
+2. **平台 API**：需要 formId、tabId、字段映射
+3. **自定义 API**：需要 API 地址和参数格式
+
+若用户未提供，可用 mock 数据实现 UI 并标注 `// TODO: 替换为实际 API`，同时告知用户需要补充。
+
+## mobile-page 特殊说明
+- 移动端页面使用 cube-ui 组件库（平台全局注册，无需 import）
+- 其他规则与 menu-page 相同
 """
-        if project_type == "layout":
+        elif project_type == "layout":
             workflow = """
 ## Workflow — IMPORTANT: Be efficient! Minimize tool calls.
 0. **Before tool calls**: First write a short, user-facing progress note in Chinese (1-3 sentences) explaining what you understood and what you will do next.

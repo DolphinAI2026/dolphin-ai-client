@@ -1,6 +1,8 @@
 const path = require('path')
 const { defineConfig } = require('@vue/cli-service')
 const apaasJson = require('./src/apaas.json')
+const { VantResolver } = require('unplugin-vue-components/resolvers');
+const ComponentsPlugin = require('unplugin-vue-components/webpack');
 
 module.exports = defineConfig({
   transpileDependencies: true,
@@ -24,7 +26,12 @@ module.exports = defineConfig({
     output: {
       library: apaasJson.outputName,
       libraryTarget: 'umd'
-    }
+    },
+    plugins: [
+      ComponentsPlugin({
+        resolvers: [VantResolver()],
+      }),
+    ]
   },
   css: {
     loaderOptions: {

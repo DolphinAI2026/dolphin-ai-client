@@ -50,7 +50,7 @@ alwaysApply: true
         ├── form-component-config/
         │   └── form-widget/index.js  ← import from '@shared/widget.config'
         └── form-component/
-            └── form-widget/       ← 移动端 Vue 组件（使用 cube-ui）
+            └── form-widget/       ← 移动端 Vue 组件（使用 cube-ui 或 Vant 2）
                 ├── ide/           ← 文件名前缀 mobile-，组件 name 加 Mobile 前缀
                 ├── edit/
                 ├── read/
@@ -81,7 +81,7 @@ alwaysApply: true
 
 - 组件 `name` 命名：`MobileFormComponentXxxIde`、`MobileFormComponentXxxEdit` 等
 - 文件名命名：`mobile-form-component-xxx-ide.vue`
-- **使用 cube-ui**（平台已全局注册，无需 import）
+- **可使用 cube-ui**（平台已全局注册，无需 import）**或 Vant 2**（vue.config.js 已配置 `unplugin-vue-components` + `VantResolver` 按需引入，直接使用 `<van-xxx>` 即可，无需手动 import）
 - mixin 引入与 web 相同：`import FormWidgetMixin from '@shared/mixin/form-widget.mixin'`
 
 ---
@@ -183,8 +183,18 @@ export default {
 ```vue
 <template>
   <div class="form-widget mobile-form-component-xxx-edit">
-    <!-- cube-ui 组件，无需 import -->
-    <cube-input v-model="formValue" :disabled="widget.readOnly" />
+    <x-proxy-form-item
+      :isInTable="widget.isInTable"
+      :showRequired="showRequired"
+      :label="widget.label"
+      :validatorRules="validatorRules"
+      :validateKey="validateKey"
+      :validateInfo="validateInfo"
+      :webFormSettings="webFormSettings"
+    >
+      <!-- Vant 或 cube-ui 组件，无需手动 import -->
+      <van-field v-model="formValue" :disabled="widget.readOnly" placeholder="请输入" />
+    </x-proxy-form-item>
   </div>
 </template>
 <script>
@@ -217,7 +227,7 @@ export default {
 
 ## 其他要求
 
-1. PC 端使用 ElementUI（`el-*`），移动端使用 cube-ui，均由平台全局注册，**不需要 import**
+1. PC 端使用 ElementUI（`el-*`），平台已全局注册无需 import；移动端可使用 **cube-ui**（平台全局注册，无需 import）或 **Vant 2**（`<van-*>`，通过 `unplugin-vue-components` 按需自动引入，无需手动 import）
 2. 组件自己的值使用 `formValue` 获取和绑定（来自 `FormWidgetMixin`）
 3. 完整业务数据使用 `this.formData` 获取，结构为 `{ [uuid]: value }`
 4. **不要在 `shared/` 中引入任何 UI 组件库代码**
