@@ -240,6 +240,7 @@ function buildOperations(row: TableRow) {
 export function buildStructuredDocFromPreviewConfig(
   data: any,
   options?: {
+    appName?: string
     appCode?: string
     description?: string
   }
@@ -284,7 +285,7 @@ export function buildStructuredDocFromPreviewConfig(
 
   return {
     app_info: {
-      name: data.appName || '未命名应用',
+      name: options?.appName || data.appName || '未命名应用',
       code: options?.appCode || data.appCode || '',
       description: options?.description || '',
     },

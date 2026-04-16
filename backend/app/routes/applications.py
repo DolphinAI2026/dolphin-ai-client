@@ -42,6 +42,39 @@ def _normalize_app_code(candidate: str | None) -> str:
     return ""
 
 
+# ── 应用名推断 ──────────────────────────────────────────────
+# LLM 解析结果里常见的"默认值"集合。遇到这些值时认为解析没有提取出真实应用名，
+# 此时改从文档标题/正文推断，推断不到才退回文件名。
+_DEFAULT_APP_NAMES = {"业务应用", "应用", "未命名应用", ""}
+
+
+def _infer_app_name_from_doc(text: str, filename: str = "") -> str:
+    """从文档正文或文件名里推断应用名称。
+
+    策略：
+      1. 扫文档正文，取第一行包含"系统"或"应用"且 ≤ 32 字的行作为应用名；
+         跳过常见的章节/目录噪声（"设计说明书"、"修订记录"、"目录"、"功能设计"）。
+      2. 命中不到时退回文件名（剥掉常见后缀 / 分隔符）。
+    返回空串表示推断失败，由调用方决定兜底值。
+    """
+    for line in (text or "").splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        cleaned = stripped.strip("*# ").strip()
+        if not cleaned:
+            continue
+        if any(token in cleaned for token in ("设计说明书", "修订记录", "目录", "功能设计")):
+            continue
+        if len(cleaned) <= 32 and ("系统" in cleaned or "应用" in cleaned):
+            return cleaned
+
+    name = (filename or "").replace('.md', '').replace('-', ' ').replace('_', ' ')
+    for suffix in ('功能设计', '设计文档', '需求文档', '设计', '配置文档'):
+        name = name.replace(suffix, '')
+    return name.strip()
+
+
 def _compact_permission_rule(rule: dict) -> dict:
     compact_rule = {
         "role": rule.get("role") or rule.get("roleCode") or rule.get("role_code"),
@@ -1788,12 +1821,11 @@ async def upload_design_doc(
         logger.error(f"文档解析失败: {e}", exc_info=True)
         raise HTTPException(status_code=400, detail=f"文档解析失败: {e}")
 
-    # 如果解析出的 appName 是默认值，用文件名推断
-    if data.get("appName") in ("业务应用", "应用", None, "") and file.filename:
-        name = file.filename.replace('.md', '').replace('-', ' ').replace('_', ' ')
-        for suffix in ('功能设计', '设计文档', '需求文档', '设计'):
-            name = name.replace(suffix, '')
-        data["appName"] = name.strip() or data["appName"]
+    # 若解析结果是默认值，优先从文档正文/标题推断，退回文件名
+    if str(data.get("appName") or "").strip() in _DEFAULT_APP_NAMES:
+        inferred = _infer_app_name_from_doc(text, file.filename or "")
+        if inferred:
+            data["appName"] = inferred
 
     return {
         "type": "preview",
@@ -1992,12 +2024,10 @@ async def upload_doc_with_conversation(
             yield {"event": "error", "data": json.dumps({"message": "配置生成失败：无数据"}, ensure_ascii=False)}
             return
 
-        # 推断应用名
-        if data.get("appName") in ("业务应用", "应用", None, "") and fname:
-            name = fname.replace('.md', '').replace('-', ' ').replace('_', ' ')
-            for suffix in ('功能设计', '设计文档', '需求文档', '设计'):
-                name = name.replace(suffix, '')
-            data["appName"] = name.strip() or "业务应用"
+        # 若解析结果是默认值，优先从文档正文/标题推断，退回文件名
+        if str(data.get("appName") or "").strip() in _DEFAULT_APP_NAMES:
+            inferred = _infer_app_name_from_doc(text, fname)
+            data["appName"] = inferred or "业务应用"
 
         # 创建对话 + 消息（用独立 session）
         async with AsyncSessionLocal() as session:
