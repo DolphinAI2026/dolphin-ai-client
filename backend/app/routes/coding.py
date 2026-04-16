@@ -27,9 +27,8 @@ from app.database import get_db
 from app.models import User, Conversation, Message, Project, LLMConfig
 from app.deps import get_auth_context, AuthContext
 from app.coding.scenes import SceneType, get_scene, get_all_scenes, get_scenes_by_category
-from app.coding.generator import CodingGenerator, parse_files_from_response, CodeGenerationResult
-from app.coding.templates import get_project_template
-from app.coding.prompts import get_scene_prompt, AGENT_SYSTEM_PROMPT
+from app.coding.generator import CodingGenerator
+from app.coding.prompts import AGENT_SYSTEM_PROMPT
 from app.coding.workspace import WorkspaceManager, ProjectType
 from app.llm_client import LLMClient
 from app.apaas_client import APaaSClient
@@ -761,35 +760,6 @@ async def _codex_responses_proxy(
 # 请求/响应模型
 # ============================================================
 
-class GenerateRequest(BaseModel):
-    """代码生成请求"""
-    scene_type: Optional[str] = None  # 场景类型，为空则自动识别
-    requirement: str                   # 用户需求描述
-    conversation_id: Optional[int] = None  # 关联的对话ID
-    app_id: Optional[str] = None      # 关联的aPaaS应用ID（来自builder）
-    module_name: Optional[str] = None  # 模块名称
-
-
-class DetectSceneRequest(BaseModel):
-    """场景识别请求"""
-    requirement: str
-
-
-class TemplateRequest(BaseModel):
-    """模板生成请求"""
-    scene_type: str
-    module_name: str
-
-
-class CodingChatRequest(BaseModel):
-    """Coding对话请求（流式）"""
-    scene_type: Optional[str] = None
-    message: str
-    conversation_id: Optional[int] = None
-    app_id: Optional[str] = None
-    workspace_id: Optional[str] = None  # 关联的工作区ID
-
-
 class CreateWorkspaceRequest(BaseModel):
     """创建工作区请求"""
     project_type: str   # form-component, form-page, form-list, backend-api
@@ -837,186 +807,6 @@ async def list_scenes(category: Optional[str] = None):
         }
         for s in scenes
     ]
-
-
-@router.post("/detect-scene")
-async def detect_scene(
-    req: DetectSceneRequest,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
-):
-    """根据用户需求自动识别开发场景"""
-    generator = CodingGenerator()
-    scene_type = await generator.detect_scene(req.requirement)
-    scene_info = get_scene(scene_type)
-    return {
-        "scene_type": scene_type.value,
-        "scene_name": scene_info.name,
-        "scene_description": scene_info.description,
-        "conventions": scene_info.required_conventions,
-    }
-
-
-# ============================================================
-# 模板相关接口
-# ============================================================
-
-@router.post("/template")
-async def generate_template(
-    req: TemplateRequest,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
-):
-    """生成项目模板骨架"""
-    try:
-        scene_type = SceneType(req.scene_type)
-    except ValueError:
-        raise HTTPException(status_code=400, detail=f"不支持的场景类型: {req.scene_type}")
-
-    files = get_project_template(scene_type, req.module_name)
-    return {
-        "scene_type": req.scene_type,
-        "module_name": req.module_name,
-        "files": [
-            {"path": path, "content": content}
-            for path, content in files.items()
-        ],
-    }
-
-
-# ============================================================
-# 代码生成接口
-# ============================================================
-
-@router.post("/generate")
-async def generate_code(
-    req: GenerateRequest,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
-    db: Annotated[AsyncSession, Depends(get_db)],
-):
-    """非流式代码生成"""
-    user = ctx.user
-    generator = CodingGenerator()
-
-    # 确定场景类型
-    if req.scene_type:
-        try:
-            scene_type = SceneType(req.scene_type)
-        except ValueError:
-            raise HTTPException(status_code=400, detail=f"不支持的场景类型: {req.scene_type}")
-    else:
-        scene_type = await generator.detect_scene(req.requirement)
-
-    # 获取对话历史
-    history = []
-    if req.conversation_id:
-        history = await _get_conversation_history(db, req.conversation_id)
-
-    # 获取应用上下文（如果关联了builder应用）
-    app_context = None
-    if req.app_id and user.apaas_token:
-        app_context = await _get_app_context(user, req.app_id)
-
-    # 生成代码
-    result = await generator.generate(
-        scene_type=scene_type,
-        user_requirement=req.requirement,
-        conversation_history=history,
-        app_context=app_context,
-    )
-
-    # 保存到对话
-    if req.conversation_id:
-        await _save_coding_message(db, req.conversation_id, "user", req.requirement)
-        assistant_content = json.dumps(result.to_dict(), ensure_ascii=False)
-        await _save_coding_message(db, req.conversation_id, "assistant", assistant_content)
-
-    return result.to_dict()
-
-
-@router.post("/generate-stream")
-async def generate_code_stream(
-    req: CodingChatRequest,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
-    db: Annotated[AsyncSession, Depends(get_db)],
-):
-    """流式代码生成（SSE）"""
-    user = ctx.user
-    generator = CodingGenerator()
-
-    # 确定场景类型
-    if req.scene_type:
-        try:
-            scene_type = SceneType(req.scene_type)
-        except ValueError:
-            raise HTTPException(status_code=400, detail=f"不支持的场景类型: {req.scene_type}")
-    else:
-        scene_type = await generator.detect_scene(req.message)
-
-    # 获取对话历史
-    history = []
-    if req.conversation_id:
-        history = await _get_conversation_history(db, req.conversation_id)
-
-    # 获取应用上下文
-    app_context = None
-    if req.app_id and user.apaas_token:
-        app_context = await _get_app_context(user, req.app_id)
-
-    # 获取工作区上下文
-    workspace_context = None
-    if req.workspace_id:
-        workspace_context = _build_workspace_context(req.workspace_id)
-
-    # 创建或获取对话
-    conversation_id = req.conversation_id
-    if not conversation_id:
-        conv = Conversation(
-            title=req.message[:50],
-            user_id=user.id,
-            tenant_id=ctx.tenant_id,
-            agent_type="coding",
-            workspace_id=req.workspace_id,
-        )
-        db.add(conv)
-        await db.commit()
-        await db.refresh(conv)
-        conversation_id = conv.id
-
-    # 保存用户消息
-    await _save_coding_message(db, conversation_id, "user", req.message)
-
-    async def event_generator():
-        full_response = ""
-        # 先发送场景信息
-        yield json.dumps({
-            "type": "scene_detected",
-            "scene_type": scene_type.value,
-            "scene_name": get_scene(scene_type).name,
-            "conversation_id": conversation_id,
-        }, ensure_ascii=False)
-
-        # 流式输出代码
-        async for chunk in generator.generate_stream(
-            scene_type=scene_type,
-            user_requirement=req.message,
-            conversation_history=history,
-            app_context=app_context,
-            workspace_context=workspace_context,
-        ):
-            full_response += chunk
-            yield json.dumps({
-                "type": "content",
-                "content": chunk,
-            }, ensure_ascii=False)
-
-        # 保存助手回复
-        await _save_coding_message(db, conversation_id, "assistant", full_response)
-
-        yield json.dumps({
-            "type": "done",
-            "conversation_id": conversation_id,
-        }, ensure_ascii=False)
-
-    return _event_stream_response(event_generator())
 
 
 # ============================================================
@@ -1960,8 +1750,8 @@ async def delete_workspace(
     ws_id: str,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
 ):
-    """删除工作区"""
-    workspace_mgr.delete_workspace(ws_id)
+    """删除工作区：先停掉所有 npm run serve 进程，再删除工作区文件夹。"""
+    await workspace_mgr.delete_workspace(ws_id)
     return {"status": "ok"}
 
 
@@ -1985,19 +1775,6 @@ async def _get_conversation_history(
         for m in messages
         if m.role in ("user", "assistant")
     ]
-
-
-async def _save_coding_message(
-    db: AsyncSession, conversation_id: int, role: str, content: str
-):
-    """保存对话消息"""
-    msg = Message(
-        conversation_id=conversation_id,
-        role=role,
-        content=content,
-    )
-    db.add(msg)
-    await db.commit()
 
 
 def _summarize_history_content(content: str, max_chars: int = 220) -> str:
@@ -2033,113 +1810,6 @@ def _build_ide_conversation_context(history: list[dict[str, str]], max_messages:
         lines.append(f"{label}: {summary}")
 
     return "\n".join(lines)[:1800]
-
-
-def _build_workspace_context(ws_id: str) -> dict:
-    """构建工作区上下文，用于告知 AI 现有文件结构和关键文件内容"""
-    try:
-        info = workspace_mgr.get_workspace_info(ws_id)
-        files = info.get("files", [])
-        project_type = (info.get("project_type", "") or "").lower()
-        rule_files = [
-            fp for fp in files
-            if fp.startswith(".cursor/rules/") and fp.endswith(".mdc")
-        ]
-
-        # 按项目类型挑选关键文件，避免把表单组件规则错误带到布局/后端项目
-        if project_type in {"form-component", "form-component-dual", "mobile-component"}:
-            key_extensions = ('.vue', '.widget.config.js', '.editor.config.js', '.widget.config.json')
-            key_names = ('apaas.json', 'form-widget.mixin.js', 'widget.config.json')
-        elif project_type == "form-list":
-            key_extensions = ('.vue', '.js')
-            key_names = ('apaas.json', 'index.js')
-        elif project_type == "plugin":
-            key_extensions = ('.vue', '.js')
-            key_names = ('apaas.json', 'admin.js', 'app.js', 'mobile.js', 'extension.js', 'tab-config.js')
-        elif project_type == "layout":
-            key_extensions = ('.vue',)
-            key_names = ('apaas.json', 'index.js')
-        elif project_type in {"menu-page", "form-page", "mobile-page"}:
-            key_extensions = ('.vue', '.js')
-            key_names = ('apaas.json', 'index.js')
-        elif project_type in {"backend-api", "backend-feign", "backend-scheduled"}:
-            key_extensions = ('.java', '.xml', '.yml', '.yaml', '.properties', '.md')
-            key_names = ('pom.xml', 'application.yml', 'application.yaml', 'application.properties')
-        else:
-            key_extensions = ('.vue', '.js')
-            key_names = ('apaas.json', 'index.js')
-
-        key_file_paths = list(rule_files)
-        for fp in files:
-            basename = fp.split('/')[-1] if '/' in fp else fp
-            if fp in key_file_paths:
-                continue
-            if any(fp.endswith(ext) for ext in key_extensions):
-                key_file_paths.append(fp)
-            elif basename in key_names:
-                key_file_paths.append(fp)
-
-        key_files = {}
-        for fp in key_file_paths:
-            try:
-                content = workspace_mgr.read_file(ws_id, fp)
-                # 跳过过大的文件（如 mixin > 800行），只传摘要
-                lines = content.split('\n')
-                if len(lines) > 300:
-                    # 对于大文件只传前50行 + 最后20行
-                    content = '\n'.join(lines[:50]) + '\n// ... (省略中间部分) ...\n' + '\n'.join(lines[-20:])
-                key_files[fp] = content
-            except Exception:
-                pass
-
-        return {
-            "workspace_id": ws_id,
-            "project_name": info.get("project_name", ""),
-            "project_type": info.get("project_type", ""),
-            "files": files,
-            "key_files": key_files,
-        }
-    except Exception as e:
-        logger.warning(f"构建工作区上下文失败: {e}")
-        return None
-
-
-async def _get_app_context(user: User, app_id: str) -> dict:
-    """从aPaaS平台获取应用上下文（模型、字典等）"""
-    try:
-        client = APaaSClient(
-            tenant_id=user.apaas_tenant_id,
-            token=user.apaas_token,
-        )
-        models = await client.query_models(app_id)
-        dicts = await client.query_dicts(app_id)
-        menus = await client.query_menus(app_id)
-
-        return {
-            "app_id": app_id,
-            "models": [
-                {
-                    "name": m.get("modelName"),
-                    "code": m.get("modelCode"),
-                    "fields": [
-                        {"name": f.get("fieldName"), "code": f.get("fieldCode"), "type": f.get("fieldType")}
-                        for f in m.get("fields", m.get("dataModelFields", []))
-                    ],
-                }
-                for m in models
-            ],
-            "dicts": [
-                {"name": d.get("dictionaryName"), "code": d.get("dictionaryCode")}
-                for d in dicts
-            ],
-            "menus": [
-                {"name": m.get("menuName"), "id": m.get("id")}
-                for m in menus
-            ],
-        }
-    except Exception as e:
-        logger.warning(f"获取应用上下文失败: {e}")
-        return None
 
 
 # ============================================================
@@ -2225,97 +1895,6 @@ async def upload_file(
             logger.warning(f"Failed to extract PDF content: {e}")
 
     return result
-
-
-# ============================================================
-# 打包 & 下载接口
-# ============================================================
-
-@router.post("/workspace/{ws_id}/build")
-async def build_workspace(
-    ws_id: str,
-    x_vibe_ide_token: Annotated[Optional[str], Header(alias="X-Vibe-IDE-Token")] = None,
-):
-    """在工作区执行 mvn clean package 打包"""
-    import subprocess
-
-    ws_mgr_temp = WorkspaceManager()
-    try:
-        ws_info = ws_mgr_temp.get_workspace_info(ws_id)
-        ws_path = ws_info["path"]
-    except Exception:
-        raise HTTPException(status_code=404, detail="工作区不存在")
-
-    pom_path = os.path.join(ws_path, "pom.xml")
-    if not os.path.exists(pom_path):
-        raise HTTPException(status_code=400, detail="工作区没有 pom.xml，无法打包")
-
-    try:
-        result = subprocess.run(
-            ["mvn", "clean", "package", "-DskipTests", "-q"],
-            cwd=ws_path,
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
-        if result.returncode != 0:
-            return {
-                "success": False,
-                "error": result.stderr[-2000:] if result.stderr else "Unknown build error",
-                "output": result.stdout[-1000:] if result.stdout else "",
-            }
-
-        # Find the built JAR/WAR
-        target_dir = os.path.join(ws_path, "target")
-        artifacts = []
-        if os.path.isdir(target_dir):
-            for f in os.listdir(target_dir):
-                if f.endswith((".jar", ".war")) and not f.endswith("-sources.jar"):
-                    fp = os.path.join(target_dir, f)
-                    artifacts.append({
-                        "filename": f,
-                        "path": fp,
-                        "size": os.path.getsize(fp),
-                    })
-
-        return {
-            "success": True,
-            "artifacts": artifacts,
-            "output": result.stdout[-500:] if result.stdout else "Build successful",
-        }
-    except subprocess.TimeoutExpired:
-        raise HTTPException(status_code=504, detail="打包超时（5分钟），请检查项目配置")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"打包失败: {e}")
-
-
-@router.get("/workspace/{ws_id}/download")
-async def download_artifact(
-    ws_id: str,
-    filename: str = Query(..., description="要下载的文件名"),
-):
-    """下载工作区中的打包产物"""
-    from fastapi.responses import FileResponse
-
-    ws_mgr_temp = WorkspaceManager()
-    try:
-        ws_info = ws_mgr_temp.get_workspace_info(ws_id)
-        ws_path = ws_info["path"]
-    except Exception:
-        raise HTTPException(status_code=404, detail="工作区不存在")
-
-    # 安全检查：只允许下载 target/ 目录下的文件
-    safe_name = os.path.basename(filename)
-    file_path = os.path.join(ws_path, "target", safe_name)
-
-    if not os.path.isfile(file_path):
-        raise HTTPException(status_code=404, detail=f"文件不存在: {safe_name}")
-
-    return FileResponse(
-        path=file_path,
-        filename=safe_name,
-        media_type="application/octet-stream",
-    )
 
 
 # ============================================================
@@ -2434,6 +2013,105 @@ class UploadToPlatformRequest(BaseModel):
     env_id: int
 
 
+async def _query_existing_development_kits(
+    base_url: str,
+    tenant_id: str,
+    token: str,
+    key_word: str,
+) -> list[dict]:
+    """查询平台已有的自开发组件列表（模糊匹配 keyWord）。
+
+    接口: POST /xdap-app/selfdevelopment/query/allDevelopmentKit
+    keyWord 直接使用完整文件名（含 .zip）或 outputName 前缀，平台做模糊匹配。
+
+    返回 table 原始列表；调用方自行按 fileName 精准匹配。
+    查询失败（网络/非 JSON/code != ok）统一返回空列表，调用方走新增分支。
+    """
+    import time as _time
+    query_url = f"{base_url.rstrip('/')}/xdap-app/selfdevelopment/query/allDevelopmentKit"
+    logger.info(f"[upload-to-platform] 查询已有组件 keyWord={key_word!r}")
+    async with httpx.AsyncClient(verify=False, timeout=30.0) as http:
+        try:
+            resp = await http.post(
+                query_url,
+                headers={
+                    "xdaptenantid": tenant_id,
+                    "xdaptoken": token,
+                    "xdaptimestamp": str(int(_time.time() * 1000)),
+                    "Content-Type": "application/json",
+                },
+                json={"keyWord": key_word, "page": 1, "pageSize": 50},
+            )
+        except httpx.RequestError as e:
+            logger.warning(f"[upload-to-platform] 查询已有组件失败: {e}")
+            return []
+    try:
+        data = resp.json()
+    except Exception:
+        logger.warning(f"[upload-to-platform] 查询响应非 JSON: status={resp.status_code}")
+        return []
+    if data.get("code") != "ok":
+        logger.warning(f"[upload-to-platform] 查询失败 code={data.get('code')} msg={data.get('message')}")
+        return []
+    table = data.get("table") or []
+    kits = [item for item in table if isinstance(item, dict)]
+    logger.info(f"[upload-to-platform] 查询到 {len(kits)} 条: {[k.get('fileName') for k in kits]}")
+    return kits
+
+
+def _find_kit_by_filename(kits: list[dict], file_name: str) -> Optional[dict]:
+    """在查询返回的 table 中按 fileName 精准匹配。"""
+    for item in kits:
+        if item.get("fileName") == file_name:
+            return item
+    return None
+
+
+def _build_upload_form_data(
+    *,
+    file_type: str,
+    description: str,
+    version_code: str,
+    upload_id: str,
+    existing_kit: Optional[dict] = None,
+) -> dict:
+    """构造上传的表单字段。
+
+    - 新增：返回 fileType / description / uploadId / versionCode / useScope 等基础字段
+    - 更新：在基础字段上追加 id / ossObjectName / fileName / yeahMonthDate 等从查询结果继承的字段；
+            description 自动追加"更新于 YYYY-MM-DD HH:MM:SS"便于在平台侧辨认版本
+    """
+    effective_description = description
+    if existing_kit:
+        from datetime import datetime as _dt
+        ts = _dt.now().strftime("%Y-%m-%d %H:%M:%S")
+        effective_description = f"{description}（更新于 {ts}）"
+
+    form: dict = {
+        "fileType": file_type,
+        "description": effective_description,
+        "uploadId": upload_id,
+        "versionCode": version_code,
+        "useScope": "全部应用",
+        "internalResource": "false",
+        "effectiveScope": "SINGLE_APPLICATION",
+    }
+    if existing_kit:
+        # 更新场景：复用平台已有的 id / ossObjectName / fileName / yeahMonthDate 等
+        for key in ("id", "ossObjectName", "fileName", "yeahMonthDate"):
+            val = existing_kit.get(key)
+            if val is not None:
+                form[key] = str(val)
+        # 复用 useScope / effectiveScope / internalResource（平台可能有不同配置）
+        if existing_kit.get("useScope"):
+            form["useScope"] = existing_kit["useScope"]
+        if existing_kit.get("effectiveScope"):
+            form["effectiveScope"] = existing_kit["effectiveScope"]
+        if "internalResource" in existing_kit:
+            form["internalResource"] = str(existing_kit["internalResource"]).lower()
+    return form
+
+
 @router.post("/workspace/{ws_id}/upload-to-platform")
 async def upload_workspace_to_platform(
     ws_id: str,
@@ -2492,36 +2170,57 @@ async def upload_workspace_to_platform(
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"双端构建失败: {e}")
 
-        upload_url = f"{env.base_url.rstrip('/')}/xdap-app/selfdevelopment/add/developmentKit"
+        add_url = f"{env.base_url.rstrip('/')}/xdap-app/selfdevelopment/add/developmentKit"
+        update_url = f"{env.base_url.rstrip('/')}/xdap-app/selfdevelopment/update/developmentKit"
 
-        async def _do_upload_file(token: str, file_path: Path, ft: str):
+        async def _do_upload_file(token: str, file_path: Path, ft: str, existing_kit: Optional[dict]):
             with open(file_path, "rb") as f:
                 file_bytes = f.read()
+            form_data = _build_upload_form_data(
+                file_type=ft,
+                description=f"{display_name} - 由 apaas-builder 上传",
+                version_code=uuid.uuid4().hex,
+                upload_id=str(int(time.time() * 1000)),
+                existing_kit=existing_kit,
+            )
+            target_url = update_url if existing_kit else add_url
             async with httpx.AsyncClient(verify=False, timeout=120.0) as http:
                 return await http.post(
-                    upload_url,
+                    target_url,
                     headers={
                         "xdaptenantid": env.platform_tenant_id,
                         "xdaptoken": token,
                         "xdaptimestamp": str(int(time.time() * 1000)),
                     },
                     files={"file": (file_path.name, file_bytes, "application/zip")},
-                    data={
-                        "fileType": ft,
-                        "description": f"{display_name} - 由 apaas-builder 上传",
-                        "uploadId": str(int(time.time() * 1000)),
-                        "versionCode": uuid.uuid4().hex,
-                        "useScope": "全部应用",
-                        "internalResource": "false",
-                        "effectiveScope": "SINGLE_APPLICATION",
-                    },
+                    data=form_data,
                 )
+
+        # 双端：用 PC outputName（无 .zip / 无 -m 后缀）作为 keyWord 一次查询，
+        # PC 包 form-xxx.zip 和 mobile 包 form-xxx-m.zip 都能被模糊命中
+        web_file_name = next(
+            (Path(p).name for p, ft in dual_packages if ft == "FRONTCOMPONENT"),
+            None,
+        )
+        default_name = web_file_name or (Path(dual_packages[0][0]).name if dual_packages else "")
+        # 去掉 .zip 后缀做 keyWord（平台模糊匹配，不能带后缀）
+        query_keyword = default_name[:-4] if default_name.endswith(".zip") else default_name
+        existing_kits = await _query_existing_development_kits(
+            env.base_url, env.platform_tenant_id, env.token, query_keyword,
+        )
 
         upload_results = []
         for zip_path_str, ft in dual_packages:
             file_path = Path(zip_path_str)
+            existing_kit = _find_kit_by_filename(existing_kits, file_path.name)
+            action = "update" if existing_kit else "create"
+            logger.info(
+                f"[upload-to-platform] {file_path.name} → {action}"
+                + (f" (id={existing_kit.get('id')})" if existing_kit else "")
+            )
+
             try:
-                response = await _do_upload_file(env.token, file_path, ft)
+                response = await _do_upload_file(env.token, file_path, ft, existing_kit)
             except httpx.RequestError as e:
                 raise HTTPException(status_code=502, detail=f"上传 {file_path.name} 请求失败: {e}")
             try:
@@ -2536,15 +2235,32 @@ async def upload_workspace_to_platform(
 
             if _is_unauthorized(resp_data):
                 new_token = await _refresh_env_token(env, db)
+                # token 刷新后整个列表重新查一次，避免 mobile 包那条还在用过期 token 的结果
+                existing_kits = await _query_existing_development_kits(
+                    env.base_url, env.platform_tenant_id, new_token, query_keyword,
+                )
+                existing_kit = _find_kit_by_filename(existing_kits, file_path.name)
                 try:
-                    response = await _do_upload_file(new_token, file_path, ft)
+                    response = await _do_upload_file(new_token, file_path, ft, existing_kit)
                     resp_data = response.json()
                 except Exception as e:
                     raise HTTPException(status_code=502, detail=f"刷新 token 后重试失败: {e}")
 
-            upload_results.append({"file": file_path.name, "fileType": ft, "response": resp_data})
+            upload_results.append({
+                "file": file_path.name,
+                "fileType": ft,
+                "action": action,
+                "response": resp_data,
+            })
 
-        return {"status": "ok", "message": f"双端上传完成，共 {len(upload_results)} 个包", "results": upload_results}
+        action_summary = ", ".join(
+            f"{r['file']}({'更新' if r['action'] == 'update' else '新增'})" for r in upload_results
+        )
+        return {
+            "status": "ok",
+            "message": f"双端上传完成：{action_summary}",
+            "results": upload_results,
+        }
 
     # 单端项目：原有逻辑
     try:
@@ -2557,7 +2273,8 @@ async def upload_workspace_to_platform(
         raise HTTPException(status_code=400, detail=f"不支持上传的项目类型: {project_type}")
 
     # 4. 上传到平台（token 过期时自动刷新后重试一次）
-    upload_url = f"{env.base_url.rstrip('/')}/xdap-app/selfdevelopment/add/developmentKit"
+    add_url = f"{env.base_url.rstrip('/')}/xdap-app/selfdevelopment/add/developmentKit"
+    update_url = f"{env.base_url.rstrip('/')}/xdap-app/selfdevelopment/update/developmentKit"
 
     # 后端项目：直接上传 JAR 文件（平台要求 application/java-archive）
     _backend_project_types = {"backend-api", "backend-feign", "backend-scheduled"}
@@ -2572,31 +2289,40 @@ async def upload_workspace_to_platform(
         upload_file_path = Path(zip_path)
         upload_content_type = "application/zip"
 
-    async def _do_upload(token: str):
+    async def _do_upload(token: str, existing_kit: Optional[dict]):
         with open(upload_file_path, "rb") as f:
             file_bytes = f.read()
+        form_data = _build_upload_form_data(
+            file_type=file_type,
+            description=f"{display_name} - 由 apaas-builder 上传",
+            version_code=uuid.uuid4().hex,
+            upload_id=str(int(time.time() * 1000)),
+            existing_kit=existing_kit,
+        )
+        target_url = update_url if existing_kit else add_url
         async with httpx.AsyncClient(verify=False, timeout=120.0) as http:
             return await http.post(
-                upload_url,
+                target_url,
                 headers={
                     "xdaptenantid": env.platform_tenant_id,
                     "xdaptoken": token,
                     "xdaptimestamp": str(int(time.time() * 1000)),
                 },
                 files={"file": (upload_file_path.name, file_bytes, upload_content_type)},
-                data={
-                    "fileType": file_type,
-                    "description": f"{display_name} - 由 apaas-builder 上传",
-                    "uploadId": str(int(time.time() * 1000)),
-                    "versionCode": uuid.uuid4().hex,
-                    "useScope": "全部应用",
-                    "internalResource": "false",
-                    "effectiveScope": "SINGLE_APPLICATION",
-                },
+                data=form_data,
             )
 
+    # 先查询平台是否已有同名组件（keyWord 去掉 .zip 后缀，平台模糊匹配）
+    single_file_name = upload_file_path.name
+    single_query_keyword = single_file_name[:-4] if single_file_name.endswith(".zip") else single_file_name
+    existing_kits = await _query_existing_development_kits(
+        env.base_url, env.platform_tenant_id, env.token, single_query_keyword,
+    )
+    existing_kit = _find_kit_by_filename(existing_kits, single_file_name)
+    action = "update" if existing_kit else "create"
+
     try:
-        response = await _do_upload(env.token)
+        response = await _do_upload(env.token, existing_kit)
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail=f"上传请求失败: {e}")
 
@@ -2613,8 +2339,13 @@ async def upload_workspace_to_platform(
 
     if _is_unauthorized(resp_data):
         new_token = await _refresh_env_token(env, db)
+        # token 刷新后重新查询
+        existing_kits = await _query_existing_development_kits(
+            env.base_url, env.platform_tenant_id, new_token, single_query_keyword,
+        )
+        existing_kit = _find_kit_by_filename(existing_kits, upload_file_path.name)
         try:
-            response = await _do_upload(new_token)
+            response = await _do_upload(new_token, existing_kit)
             resp_data = response.json()
         except httpx.RequestError as e:
             raise HTTPException(status_code=502, detail=f"上传请求失败: {e}")
@@ -2623,7 +2354,8 @@ async def upload_workspace_to_platform(
 
     code = resp_data.get("code")
     if code == "ok" or code == 200:
-        return {"status": "ok", "message": "上传成功"}
+        action_label = "更新" if action == "update" else "新增"
+        return {"status": "ok", "message": f"上传成功（{action_label}）", "action": action}
     else:
         msg = resp_data.get("message") or resp_data.get("msg") or "上传失败"
         raise HTTPException(status_code=500, detail=msg)
@@ -3011,118 +2743,3 @@ async def _is_new_component_intent(generator: CodingGenerator, message: str, ws_
         return False
 
 
-# ========== 组件预览 ==========
-
-from fastapi.responses import HTMLResponse, FileResponse as StaticFileResponse
-from app.coding.preview import generate_preview_html
-
-
-@router.post("/workspace/{ws_id}/preview")
-async def preview_workspace(ws_id: str):
-    """触发构建（如需）并返回预览 URL"""
-    ws_path = workspace_mgr.get_workspace_path(ws_id)
-    if not ws_path.exists():
-        raise HTTPException(status_code=404, detail="Workspace not found")
-
-    # 按需构建
-    ws_mgr = WorkspaceManager()
-    build_result = await ws_mgr.build_if_needed(ws_id)
-    if build_result.get("status") == "error":
-        raise HTTPException(status_code=500, detail=f"构建失败: {build_result.get('message', '')}")
-
-    # 读取 apaas.json
-    apaas_json_path = ws_path / "src" / "apaas.json"
-    apaas_config = {}
-    if apaas_json_path.exists():
-        with open(apaas_json_path, "r", encoding="utf-8") as f:
-            apaas_config = json.load(f)
-
-    workspace_meta = {}
-    workspace_meta_path = ws_path / ".workspace.json"
-    if workspace_meta_path.exists():
-        with open(workspace_meta_path, "r", encoding="utf-8") as f:
-            workspace_meta = json.load(f)
-    output_name = apaas_config.get("outputName") or workspace_meta.get("project_name") or ws_id
-    template_type = apaas_config.get("templateType", "FORM_COMPONENT")
-    project_type = workspace_meta.get("project_type", "")
-
-    return {
-        "status": "ok",
-        "preview_url": f"/api/coding/workspace/{ws_id}/preview/sandbox",
-        "output_name": output_name,
-        "template_type": template_type,
-        "project_type": project_type,
-        "build_message": build_result.get("message", ""),
-    }
-
-
-@router.get("/workspace/{ws_id}/preview/sandbox")
-async def preview_sandbox(ws_id: str):
-    """返回预览沙箱 HTML 页面"""
-    ws_path = workspace_mgr.get_workspace_path(ws_id)
-    if not ws_path.exists():
-        raise HTTPException(status_code=404, detail="Workspace not found")
-
-    # 读取 apaas.json
-    apaas_json_path = ws_path / "src" / "apaas.json"
-    apaas_config = {}
-    if apaas_json_path.exists():
-        with open(apaas_json_path, "r", encoding="utf-8") as f:
-            apaas_config = json.load(f)
-
-    workspace_meta = {}
-    workspace_meta_path = ws_path / ".workspace.json"
-    if workspace_meta_path.exists():
-        with open(workspace_meta_path, "r", encoding="utf-8") as f:
-            workspace_meta = json.load(f)
-    output_name = apaas_config.get("outputName") or workspace_meta.get("project_name") or ws_id
-    template_type = apaas_config.get("templateType", "FORM_COMPONENT")
-    project_type = workspace_meta.get("project_type", "")
-    dist_base_url = f"/api/coding/workspace/{ws_id}/preview/dist"
-
-    html = generate_preview_html(
-        template_type,
-        apaas_config,
-        dist_base_url,
-        output_name,
-        project_type=project_type,
-    )
-    return HTMLResponse(content=html)
-
-
-@router.get("/workspace/{ws_id}/preview/dist/{filename:path}")
-async def preview_dist_file(ws_id: str, filename: str):
-    """静态服务预览构建产物目录下的文件"""
-    output_dir = workspace_mgr.get_build_output_dir(ws_id)
-    file_path = output_dir / filename
-
-    if not file_path.exists() or not file_path.is_file():
-        raise HTTPException(status_code=404, detail=f"File not found: {filename}")
-
-    # 安全检查：确保文件在构建产物目录下
-    try:
-        file_path.resolve().relative_to(output_dir.resolve())
-    except ValueError:
-        raise HTTPException(status_code=403, detail="Access denied")
-
-    # 确定 MIME 类型
-    suffix = file_path.suffix.lower()
-    media_types = {
-        ".js": "application/javascript",
-        ".css": "text/css",
-        ".json": "application/json",
-        ".map": "application/json",
-        ".png": "image/png",
-        ".jpg": "image/jpeg",
-        ".svg": "image/svg+xml",
-        ".woff": "font/woff",
-        ".woff2": "font/woff2",
-        ".ttf": "font/ttf",
-    }
-    media_type = media_types.get(suffix, "application/octet-stream")
-
-    return StaticFileResponse(
-        path=str(file_path),
-        media_type=media_type,
-        headers={"Cache-Control": "no-cache"},
-    )

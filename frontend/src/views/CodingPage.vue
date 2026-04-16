@@ -244,12 +244,16 @@
                     </div>
                     <div class="workspace-card-actions">
                       <button
-                        class="workspace-card-action workspace-card-action-primary"
-                        title="进入开发"
+                        :class="['workspace-card-action', 'workspace-card-action-primary', { 'is-loading': openingWsId === ws.id }]"
+                        :title="openingWsId === ws.id ? '打开中...' : '进入开发'"
+                        :disabled="openingWsId === ws.id"
                         @click.stop="openExistingWorkspace(ws)"
                       >
-                        <svg class="workspace-card-action-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                        <svg v-if="openingWsId !== ws.id" class="workspace-card-action-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                           <path d="M5.25 3.5L11 8L5.25 12.5V3.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" />
+                        </svg>
+                        <svg v-else class="workspace-card-action-icon spin" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                          <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5" stroke-dasharray="28 10" stroke-linecap="round" />
                         </svg>
                       </button>
                       <button
@@ -268,14 +272,35 @@
                         </svg>
                       </button>
                       <button
-                        class="workspace-card-action"
-                        title="下载源码"
+                        :class="['workspace-card-action', { 'is-loading': downloadingWsId === ws.id }]"
+                        :title="downloadingWsId === ws.id ? '下载中...' : '下载源码'"
+                        :disabled="downloadingWsId === ws.id"
                         @click.stop="downloadWorkspaceArtifact(ws, 'src')"
                       >
-                        <svg class="workspace-card-action-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                        <svg v-if="downloadingWsId !== ws.id" class="workspace-card-action-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                           <path d="M8 4V9.75" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
                           <path d="M10.25 7.5L8 9.75L5.75 7.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
                           <path d="M4 10.25V11.25C4 11.9404 4.55964 12.5 5.25 12.5H10.75C11.4404 12.5 12 11.9404 12 11.25V10.25" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+                        </svg>
+                        <svg v-else class="workspace-card-action-icon spin" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                          <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5" stroke-dasharray="28 10" stroke-linecap="round" />
+                        </svg>
+                      </button>
+                      <button
+                        :class="['workspace-card-action', 'workspace-card-action-danger', { 'is-loading': deletingWsId === ws.id }]"
+                        :title="deletingWsId === ws.id ? '删除中...' : '删除工作区'"
+                        :disabled="deletingWsId === ws.id || openingWsId === ws.id || downloadingWsId === ws.id || uploadingWsId === ws.id"
+                        @click.stop="deleteWorkspace(ws)"
+                      >
+                        <svg v-if="deletingWsId !== ws.id" class="workspace-card-action-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                          <path d="M3 4.5H13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+                          <path d="M6 4.5V3.25C6 2.83579 6.33579 2.5 6.75 2.5H9.25C9.66421 2.5 10 2.83579 10 3.25V4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+                          <path d="M4.5 4.5L5 12.25C5.03 12.8 5.5 13.25 6.05 13.25H9.95C10.5 13.25 10.97 12.8 11 12.25L11.5 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+                          <path d="M6.75 7V11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+                          <path d="M9.25 7V11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+                        </svg>
+                        <svg v-else class="workspace-card-action-icon spin" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                          <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5" stroke-dasharray="28 10" stroke-linecap="round" />
                         </svg>
                       </button>
                     </div>
@@ -348,38 +373,15 @@
                 </div>
               </template>
 
-              <!-- 文件写入 -->
-              <template v-else-if="msg.type === 'file_write'">
-                <div class="msg-file-card">
-                  <div class="file-card-header" @click="msg.collapsed = !msg.collapsed">
-                    <span class="file-card-op file-card-op--new">+</span>
-                    <span class="file-card-name">{{ msg.fileName }}</span>
-                    <span class="file-card-badge file-card-badge--new">新建</span>
-                    <svg class="file-card-chevron" :class="{ rotated: !msg.collapsed }" viewBox="0 0 16 16" fill="none">
-                      <path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-                    </svg>
-                  </div>
-                  <div v-if="!msg.collapsed && msg.fileContent" class="file-card-code">
-                    <pre><code>{{ msg.fileContent }}</code></pre>
-                  </div>
-                </div>
-              </template>
-
-              <!-- 文件编辑 -->
-              <template v-else-if="msg.type === 'file_edit'">
-                <div class="msg-file-card">
-                  <div class="file-card-header" @click="msg.collapsed = !msg.collapsed">
-                    <span class="file-card-op file-card-op--edit">~</span>
-                    <span class="file-card-name">{{ msg.fileName }}</span>
-                    <span class="file-card-badge file-card-badge--edit">修改</span>
-                    <svg class="file-card-chevron" :class="{ rotated: !msg.collapsed }" viewBox="0 0 16 16" fill="none">
-                      <path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-                    </svg>
-                  </div>
-                  <div v-if="!msg.collapsed && msg.fileContent" class="file-card-code">
-                    <pre><code>{{ msg.fileContent }}</code></pre>
-                  </div>
-                </div>
+              <!-- 文件写入 / 文件编辑 -->
+              <template v-else-if="msg.type === 'file_write' || msg.type === 'file_edit'">
+                <FileCard
+                  :action="msg.type === 'file_write' ? 'write' : 'edit'"
+                  :file-name="msg.fileName"
+                  :file-content="msg.fileContent"
+                  :collapsed="msg.collapsed"
+                  @toggle="msg.collapsed = !msg.collapsed"
+                />
               </template>
 
               <!-- 工具调用（读文件/扫描/搜索等，含可折叠结果） -->
@@ -571,7 +573,7 @@
 import { API_PREFIX } from '@/utils/request'
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowDown, ArrowLeft, Download, TopRight, Paperclip, Monitor, Delete, Fold, Expand, ChatDotRound } from '@element-plus/icons-vue'
 import { useCodingStore } from '@/stores/coding'
 import { platformEnvApi, type PlatformEnv } from '@/api/platformEnv'
@@ -582,10 +584,15 @@ import { harnessApi } from '@/api/harness'
 import { conversationApi } from '@/api/conversation'
 import { llmConfigApi, type BuilderModelOption } from '@/api/llmConfig'
 import { consumeSseResponse } from '@/utils/sse'
-import { marked } from 'marked'
 import ThemeToggle from '@/components/ThemeToggle.vue'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
 import EnvSelectModal from '@/components/EnvSelectModal.vue'
+import FileCard from '@/components/FileCard.vue'
+import { useCodingModel } from './coding/useCodingModel'
+import { useStreamMessages, formatSceneType, renderMarkdown } from './coding/useStreamMessages'
+import { useIdeManager } from './coding/useIdeManager'
+import { useCodingWorkspace } from './coding/useCodingWorkspace'
+import { useCodingPipeline } from './coding/useCodingPipeline'
 
 const route = useRoute()
 const router = useRouter()
@@ -594,359 +601,78 @@ const userStore = useUserStore()
 
 // ============ Core State ============
 const userInput = ref('')
-const ideUrl = ref<string | null>(null)
-const ideLoaded = ref(false)
-const ideLoadError = ref('')
-const ideLoadingText = ref('正在连接 IDE...')
-let ideLoadTimer: ReturnType<typeof setTimeout> | null = null
 const isCreating = ref(false)
 const creatingStatus = ref('')
-const codingModelOptions = ref<BuilderModelOption[]>([])
-const codingModelLoading = ref(false)
-const updatingCodingModel = ref(false)
-const selectedCodingModelValue = ref<string | null>(null)
-const persistedCodingModelValue = ref<string | null>(null)
-const codingModelPopoverVisible = ref(false)
 
-const toCodingModelValue = (configId: number | null | undefined) =>
-  configId != null ? `llmcfg:${configId}` : null
-
-const parseCodingModelConfigId = (modelValue?: string | null): number | null => {
-  if (!modelValue?.startsWith('llmcfg:')) return null
-  const parsed = Number(modelValue.slice('llmcfg:'.length))
-  return Number.isFinite(parsed) ? parsed : null
-}
-
-const defaultCodingModelValue = computed(() =>
-  toCodingModelValue(codingModelOptions.value.find(option => option.is_default)?.id)
-  ?? toCodingModelValue(codingModelOptions.value[0]?.id)
-  ?? null
-)
-
-const selectedCodingModelOption = computed(() =>
-  codingModelOptions.value.find(option => toCodingModelValue(option.id) === selectedCodingModelValue.value) ?? null
-)
-
-const codingModelHint = computed(() => {
-  if (codingModelLoading.value) return '正在加载可用模型...'
-  if (codingModelOptions.value.length === 0) return '未配置可用模型，请前往环境管理配置'
-  if (codingStore.conversationId) return '切换后仅影响后续开发与打开 IDE 的默认模型'
-  return '首条消息会使用当前选择的模型'
-})
-
-const normalizeCodingModelValue = (modelValue?: string | null): string | null => {
-  const values = new Set(codingModelOptions.value.map(option => toCodingModelValue(option.id)).filter(Boolean) as string[])
-  if (modelValue && values.has(modelValue)) return modelValue
-  return defaultCodingModelValue.value
-}
-
-const applyCodingModelSelection = (configId?: number | null) => {
-  const normalized = normalizeCodingModelValue(toCodingModelValue(configId))
-  selectedCodingModelValue.value = normalized
-  persistedCodingModelValue.value = codingStore.conversationId ? normalized : null
-}
-
-const formatCodingModelProvider = (provider: string): string => {
-  const labels: Record<string, string> = {
-    minimax: 'MiniMax',
-    qwen: 'Qwen',
-    gpt: 'GPT',
-    codex: 'Codex',
-    sonnet: 'Sonnet',
-    opus: 'Opus',
-    openai: 'OpenAI',
-    anthropic: 'Anthropic',
-  }
-  return labels[provider] || provider
-}
-
-const codingModelSummary = computed(() => {
-  if (codingModelLoading.value) return '正在加载可用模型...'
-  if (!selectedCodingModelOption.value) return '请选择开发模型'
-  return `${formatCodingModelProvider(selectedCodingModelOption.value.provider)} / ${selectedCodingModelOption.value.model}`
-})
-
-const loadCodingModelOptions = async () => {
-  codingModelLoading.value = true
-  try {
-    codingModelOptions.value = await llmConfigApi.listOptions('coding')
-    selectedCodingModelValue.value = normalizeCodingModelValue(selectedCodingModelValue.value)
-    if (codingStore.conversationId) {
-      persistedCodingModelValue.value = normalizeCodingModelValue(persistedCodingModelValue.value)
-    }
-  } catch (e) {
-    console.error('获取 coding 模型列表失败:', e)
-    codingModelOptions.value = []
-    selectedCodingModelValue.value = null
-    persistedCodingModelValue.value = null
-  } finally {
-    codingModelLoading.value = false
-  }
-}
-
-const handleCodingModelChange = async (nextValue: string | null) => {
-  selectedCodingModelValue.value = nextValue
-  if (!codingStore.conversationId) return
-
-  const previousValue = persistedCodingModelValue.value
-  updatingCodingModel.value = true
-  try {
-    const updated = await conversationApi.updateModel(
-      codingStore.conversationId,
-      parseCodingModelConfigId(nextValue),
-    )
-    const normalized = normalizeCodingModelValue(toCodingModelValue(updated.selected_llm_config_id))
-    selectedCodingModelValue.value = normalized
-    persistedCodingModelValue.value = normalized
-  } catch (e: any) {
-    selectedCodingModelValue.value = normalizeCodingModelValue(previousValue)
-    ElMessage.error(e?.response?.data?.detail || '切换模型失败')
-  } finally {
-    updatingCodingModel.value = false
-  }
-}
-
-const selectCodingModel = async (option: BuilderModelOption) => {
-  codingModelPopoverVisible.value = false
-  const nextValue = toCodingModelValue(option.id)
-  if (nextValue === selectedCodingModelValue.value) return
-  await handleCodingModelChange(nextValue)
-}
+// ── IDE iframe 管理（已抽成 composable）──
+const {
+  ideUrl,
+  ideLoaded,
+  ideLoadError,
+  ideLoadingText,
+  pendingIdeUrl,
+  activeView,
+  setIdeUrl,
+  onIdeFrameLoad,
+  onIdeFrameError,
+  retryIdeLoad,
+  openPendingIde,
+} = useIdeManager()
+// ── Coding 模型选择（已抽成 composable）──
+const {
+  codingModelOptions,
+  codingModelLoading,
+  updatingCodingModel,
+  selectedCodingModelValue,
+  persistedCodingModelValue,
+  codingModelPopoverVisible,
+  selectedCodingModelOption,
+  codingModelHint,
+  codingModelSummary,
+  toCodingModelValue,
+  normalizeCodingModelValue,
+  applyCodingModelSelection,
+  formatCodingModelProvider,
+  loadCodingModelOptions,
+  handleCodingModelChange,
+  selectCodingModel,
+} = useCodingModel()
 
 // ============ Stream Messages (对话流) ============
-interface StreamMessage {
-  type: 'user' | 'thinking' | 'tool' | 'file_write' | 'file_edit' | 'command' | 'status' | 'error' | 'message'
-  content: string
-  fileName?: string
-  fileContent?: string
-  collapsed?: boolean
-  result?: string
-  resultCollapsed?: boolean
-  /** pipeline step 归属，用于原地更新 */
-  stepKey?: string
-  /** true = 显示为完成 badge 芯片 */
-  stepDone?: boolean
-  /** true = 隐藏（被后续完成消息替代） */
-  hidden?: boolean
-  timestamp: number
-}
+// ── 对话流消息（已抽成 composable）──
+const {
+  streamMessages,
+  isStreaming,
+  streamContainerRef,
+  scrollStreamToBottom,
+  addStreamMsg,
+  appendToLastThinking,
+  appendToLastCommand,
+  completeStepMsg,
+  addStepRunningMsg,
+  restoreReplayStreamMessages,
+} = useStreamMessages()
 
-const SCENE_TYPE_LABEL: Record<string, string> = {
-  web_component: '自开发组件',
-  form_component: '自开发组件',
-  component: '自开发组件',
-  web_page: '自开发页面',
-  page: '自开发页面',
-  backend_api: '后端接口',
-  api: '后端接口',
-  backend: '后端接口',
-  service: '后端服务',
-}
-function formatSceneType(raw: string): string {
-  return SCENE_TYPE_LABEL[raw] || raw
-}
-/** 将所有匹配 stepKey 且未完成的 status 消息更新为 badge（防止 SSE 重复事件导致残留） */
-function completeStepMsg(stepKey: string, badgeText: string) {
-  streamMessages.value
-    .filter(m => m.stepKey === stepKey && !m.stepDone)
-    .forEach(m => { m.content = badgeText; m.stepDone = true })
-}
-/** 添加步骤进行中消息，若已存在相同 stepKey 的未完成消息则跳过 */
-function addStepRunningMsg(content: string, stepKey: string) {
-  const exists = streamMessages.value.some(m => m.stepKey === stepKey && !m.stepDone)
-  if (!exists) addStreamMsg({ type: 'status', content, stepKey })
-}
-const streamMessages = ref<StreamMessage[]>([])
-const isStreaming = ref(false)
-const streamContainerRef = ref<HTMLElement>()
-const pendingIdeUrl = ref<string | null>(null)
-const activeView = ref<'chat' | 'ide'>('chat')
+// ── 工作区列表和元信息展示（已抽成 composable）──
+const {
+  allWorkspaces,
+  isDownloading,
+  downloadingWsId,
+  embeddedAppId,
+  existingWorkspaces,
+  workspaceShowcaseItems,
+  workspaceDisplayName,
+  workspaceCodeName,
+  workspaceTooltip,
+  workspaceTypeLabel,
+  downloadWorkspaceArtifact,
+} = useCodingWorkspace()
 
-/** 清理模型输出中的 think 标签和多余空行 */
-function cleanThinkTags(text: string): string {
-  return text
-    .replace(/<\/?think>/gi, '')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
-}
+/** 正在打开的工作区 id（卡片级 loading 标记，防止重复点击） */
+const openingWsId = ref<string | null>(null)
+/** 正在删除的工作区 id */
+const deletingWsId = ref<string | null>(null)
 
-function renderMarkdown(content: string): string {
-  if (!content) return ''
-  try {
-    return marked.parse(content) as string
-  } catch {
-    return content
-  }
-}
-
-function addStreamMsg(msg: Omit<StreamMessage, 'timestamp'>) {
-  // 过滤 thinking 类型中的 <think> 标签
-  const cleaned = { ...msg }
-  if (cleaned.type === 'thinking' && cleaned.content) {
-    cleaned.content = cleanThinkTags(cleaned.content)
-    if (!cleaned.content) return // 过滤后为空则不添加
-  }
-  // thinking 消息默认展开（collapsed 未设置时初始化为 false）
-  if (cleaned.type === 'thinking' && cleaned.collapsed === undefined) {
-    cleaned.collapsed = false
-  }
-  // 思考过程出现时，隐藏所有还在进行中的步骤状态消息（未完成的 stepKey 消息 + 正在处理...）
-  if (cleaned.type === 'thinking') {
-    streamMessages.value.forEach(m => {
-      if (m.type === 'status' && !m.stepDone && !m.hidden) {
-        m.hidden = true
-      }
-    })
-  }
-  streamMessages.value.push({ ...cleaned, timestamp: Date.now() })
-  // 自动滚动到底部
-  nextTick(() => {
-    const el = streamContainerRef.value
-    if (el) el.scrollTop = el.scrollHeight
-  })
-}
-
-function appendToLastThinking(text: string) {
-  // delta 中也可能包含 <think> 标签片段，先追加再定期清理
-  const msgs = streamMessages.value
-  if (msgs.length > 0 && msgs[msgs.length - 1].type === 'thinking') {
-    msgs[msgs.length - 1].content += text
-    // 每次追加后清理标签（标签可能跨多个 delta 到达）
-    msgs[msgs.length - 1].content = msgs[msgs.length - 1].content
-      .replace(/<\/?think>/gi, '')
-  } else {
-    addStreamMsg({ type: 'thinking', content: text })
-  }
-  nextTick(() => {
-    const el = streamContainerRef.value
-    if (el) el.scrollTop = el.scrollHeight
-  })
-}
-
-function appendToLastCommand(text: string) {
-  const msgs = streamMessages.value
-  if (msgs.length > 0 && msgs[msgs.length - 1].type === 'command') {
-    msgs[msgs.length - 1].content += text
-  } else {
-    addStreamMsg({ type: 'command', content: text })
-  }
-  nextTick(() => {
-    const el = streamContainerRef.value
-    if (el) el.scrollTop = el.scrollHeight
-  })
-}
-
-/** replay 时识别步骤进行中消息（已有对应完成消息则跳过） */
-const STEP_RUNNING_PATTERNS = [
-  '正在识别开发场景',
-  '正在初始化工程脚手架',
-  'AI 开始编写代码',
-  '正在处理',
-]
-/** replay 时把完成消息还原为 badge */
-const STEP_DONE_PATTERNS: [RegExp, string | null][] = [
-  [/^✓\s*识别为\s+(.+)$/, null],          // 保留原文，转 badge
-  [/^✓\s*工程脚手架已初始化$/, '工程脚手架已初始化'],
-  [/^✓\s*代码生成完成$/, '代码生成完成'],
-  [/^✅\s*代码生成完成$/, '代码生成完成'],
-]
-/** 工具执行结果 pattern — 在旧数据中以 status 消息保存，现在应跳过（文件卡片已表达同等信息） */
-const TOOL_RESULT_PATTERNS = [
-  /^✅\s+Successfully\s/i,
-  /^Successfully\s+(wrote|read|ran|created|deleted|moved)\s/i,
-]
-function replayIsRunning(content: string) {
-  return STEP_RUNNING_PATTERNS.some(p => content.includes(p))
-}
-function isToolResultMsg(content: string) {
-  return TOOL_RESULT_PATTERNS.some(p => p.test(content))
-}
-function replayAsBadge(content: string): string | null {
-  for (const [re, label] of STEP_DONE_PATTERNS) {
-    const m = content.match(re)
-    if (m) {
-      if (label) return label
-      // 动态内容：取匹配组 1（如"识别为 自开发组件"中的 sceneType）
-      const raw = m[1]?.trim() || ''
-      return `识别为 ${formatSceneType(raw)}`
-    }
-  }
-  return null
-}
-
-function restoreReplayStreamMessages(messages: ReplayStreamMessage[]) {
-  const restored: StreamMessage[] = []
-  for (let i = 0; i < messages.length; i++) {
-    const msg = messages[i]
-    const next = messages[i + 1]
-    const content = msg.content || ''
-
-    // 跳过已有完成消息覆盖的进行中步骤
-    if (msg.type === 'status' && replayIsRunning(content)) continue
-    // 旧数据中的工具执行结果（如 "✅ Successfully wrote..."）— 跳过，文件卡片已表达
-    if (msg.type === 'status' && isToolResultMsg(content)) continue
-
-    // 将紧跟在 tool 消息后的 ✅ 状态结果合并到 tool 消息中
-    if (msg.type === 'tool' && next?.type === 'status' && (next.content?.startsWith('✅') || next.content?.startsWith('\u2705'))) {
-      restored.push({
-        type: 'tool',
-        content,
-        result: next.content.replace(/^✅\s*/, ''),
-        resultCollapsed: true,
-        timestamp: msg.timestamp || Date.now() + i,
-      })
-      i++
-      continue
-    }
-
-    // 步骤完成消息 → 还原为 badge（优先使用已存储的 stepDone 标记）
-    if (msg.stepDone) {
-      restored.push({
-        type: 'status',
-        content,
-        stepDone: true,
-        stepKey: msg.stepKey,
-        timestamp: msg.timestamp || Date.now() + i,
-      })
-      continue
-    }
-
-    // 步骤完成消息 → 还原为 badge（兼容旧数据）
-    const badgeText = msg.type === 'status' ? replayAsBadge(content) : null
-    if (badgeText) {
-      restored.push({
-        type: 'status',
-        content: badgeText,
-        stepDone: true,
-        timestamp: msg.timestamp || Date.now() + i,
-      })
-      continue
-    }
-
-    restored.push({
-      type: msg.type as StreamMessage['type'],
-      content,
-      fileName: msg.fileName,
-      fileContent: msg.fileContent,
-      collapsed: msg.collapsed,
-      hidden: msg.hidden,
-      timestamp: msg.timestamp || Date.now() + i,
-    })
-  }
-  streamMessages.value = restored
-  nextTick(() => {
-    const el = streamContainerRef.value
-    if (el) el.scrollTop = el.scrollHeight
-  })
-}
-const allWorkspaces = ref<WorkspaceInfo[]>([])
-const embeddedAppId = computed(() => (route.query.app_id as string) || '')
-const existingWorkspaces = computed(() => {
-  if (!embeddedAppId.value) return allWorkspaces.value
-  return allWorkspaces.value.filter((ws: any) => String(ws.project_id || '') === embeddedAppId.value)
-})
-const workspaceShowcaseItems = computed(() => existingWorkspaces.value.slice(0, 6))
-const isDownloading = ref(false)
 const embeddedPanelCollapsed = ref(false)
 
 // ============ Attachment State ============
@@ -960,46 +686,6 @@ const chatFileInputRef = ref<HTMLInputElement>()
 const showEnvPicker = ref(false)
 const platformEnvs = ref<PlatformEnv[]>([])
 
-const wsTypeGroupMap: Record<string, { key: string; icon: string; label: string; order: number }> = {
-  'form-component':    { key: 'component-pc',     icon: '🧩', label: 'PC 组件',       order: 1 },
-  'menu-page':         { key: 'page-pc',          icon: '🖥️', label: 'PC 页面',       order: 2 },
-  'form-page':         { key: 'page-pc',          icon: '🖥️', label: 'PC 页面',       order: 2 },
-  'mobile-component':  { key: 'component-mobile', icon: '📱', label: 'Mobile 组件',   order: 3 },
-  'mobile-page':       { key: 'page-mobile',      icon: '📱', label: 'Mobile 页面',   order: 4 },
-  'backend-api':       { key: 'backend',          icon: '⚙️', label: '后端接口',      order: 5 },
-  'backend-feign':     { key: 'backend',          icon: '⚙️', label: '后端接口',      order: 5 },
-  'backend-scheduled': { key: 'backend',          icon: '⚙️', label: '后端接口',      order: 5 },
-}
-
-function workspaceDisplayName(ws: WorkspaceInfo | null | undefined) {
-  if (!ws) return ''
-  return ws.display_name?.trim() || ws.project_name
-}
-
-function workspaceCodeName(ws: WorkspaceInfo | null | undefined) {
-  if (!ws || !ws.project_name) return ''
-  const displayName = workspaceDisplayName(ws)
-  return displayName !== ws.project_name ? ws.project_name : ''
-}
-
-function workspaceTooltip(ws: WorkspaceInfo | null | undefined) {
-  if (!ws) return ''
-  const displayName = workspaceDisplayName(ws)
-  const codeName = workspaceCodeName(ws)
-  return codeName ? `${displayName}\n${codeName}` : displayName
-}
-
-function workspaceTypeLabel(projectType: string) {
-  return wsTypeGroupMap[projectType]?.label || '其他'
-}
-
-async function downloadWorkspaceArtifact(ws: WorkspaceInfo, type: 'dist' | 'src') {
-  try {
-    await codingApi.downloadZip(ws.id, type)
-  } catch (e: any) {
-    ElMessage.error(e?.message || '下载失败')
-  }
-}
 
 // ============ Upload to Platform ============
 const uploadingWsId = ref<string | null>(null)
@@ -1146,7 +832,13 @@ onUnmounted(() => {
 // ============ Workspace Operations ============
 
 async function openExistingWorkspace(ws: WorkspaceInfo) {
-  await openWorkspaceById(ws.id)
+  if (openingWsId.value === ws.id) return  // 防止重复点击
+  openingWsId.value = ws.id
+  try {
+    await openWorkspaceById(ws.id)
+  } finally {
+    openingWsId.value = null
+  }
 }
 
 async function openWorkspaceCatalogPage() {
@@ -1159,73 +851,6 @@ async function openWorkspaceCatalogPage() {
 }
 
 // 设置 IDE URL — 先销毁旧 iframe 再创建新的，避免 code-server session 缓存
-async function setIdeUrl(url: string) {
-  // 提取不含 cache-busting 参数的 base URL 做比较
-  const baseUrl = url.replace(/[&?]_t=\d+$/, '')
-  const currentBase = (ideUrl.value || '').replace(/[&?]_t=\d+$/, '')
-
-  if (currentBase && currentBase === baseUrl) {
-    // 同一个 URL — 不重建 iframe，保留 IDE 状态（Chat 历史、编辑器状态等）
-    return
-  }
-
-  ideLoaded.value = false  // 显示 loading overlay
-  ideLoadError.value = ''
-  ideLoadingText.value = '正在连接 IDE...'
-  ideUrl.value = null  // 销毁旧 iframe
-  await nextTick()  // 等 DOM 更新（替代硬编码 100ms 延迟）
-  ideUrl.value = baseUrl + (baseUrl.includes('?') ? '&' : '?') + '_t=' + Date.now()
-  // 启动 30 秒加载超时
-  if (ideLoadTimer) clearTimeout(ideLoadTimer)
-  ideLoadTimer = setTimeout(() => {
-    if (!ideLoaded.value) {
-      ideLoadError.value = 'IDE 加载超时，请检查 code-server 是否运行'
-    }
-  }, 30_000)
-  // 2秒后更新提示文字
-  setTimeout(() => {
-    if (!ideLoaded.value && !ideLoadError.value) {
-      ideLoadingText.value = '正在加载编辑器...'
-    }
-  }, 2000)
-}
-
-function onIdeFrameLoad() {
-  ideLoaded.value = true
-  ideLoadError.value = ''
-  if (ideLoadTimer) { clearTimeout(ideLoadTimer); ideLoadTimer = null }
-}
-
-function onIdeFrameError() {
-  ideLoadError.value = 'IDE 加载失败，code-server 可能未启动'
-  if (ideLoadTimer) { clearTimeout(ideLoadTimer); ideLoadTimer = null }
-}
-
-function retryIdeLoad() {
-  if (!ideUrl.value) return
-  const base = ideUrl.value.replace(/[&?]_t=\d+$/, '')
-  ideLoaded.value = false
-  ideLoadError.value = ''
-  ideLoadingText.value = '正在重新连接...'
-  ideUrl.value = null
-  nextTick(() => {
-    ideUrl.value = base + (base.includes('?') ? '&' : '?') + '_t=' + Date.now()
-    if (ideLoadTimer) clearTimeout(ideLoadTimer)
-    ideLoadTimer = setTimeout(() => {
-      if (!ideLoaded.value) {
-        ideLoadError.value = '重试超时，请检查 code-server 状态'
-      }
-    }, 30_000)
-  })
-}
-
-async function openPendingIde() {
-  if (!pendingIdeUrl.value) return
-  await setIdeUrl(pendingIdeUrl.value)
-  pendingIdeUrl.value = null
-  activeView.value = 'ide'
-}
-
 async function openWorkspaceById(wsId: string) {
   try {
     // 并行加载 workspace 信息和会话（减少 1 个 RTT）
@@ -1338,6 +963,26 @@ function startNewWorkspace() {
 }
 
 async function deleteWorkspace(ws: WorkspaceInfo) {
+  if (deletingWsId.value === ws.id) return  // 防止重复点击
+  const displayName = workspaceDisplayName(ws) || ws.project_name
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除工作区「${displayName}」吗？\n\n此操作将：\n1. 停止该工作区所有正在运行的 npm run serve 进程\n2. 永久删除该工作区目录及所有文件\n\n此操作不可撤销！`,
+      '危险操作确认',
+      {
+        confirmButtonText: '确认删除',
+        cancelButtonText: '取消',
+        type: 'warning',
+        dangerouslyUseHTMLString: false,
+        confirmButtonClass: 'el-button--danger',
+      },
+    )
+  } catch {
+    // 用户取消
+    return
+  }
+
+  deletingWsId.value = ws.id
   try {
     await codingApi.deleteWorkspace(ws.id)
     allWorkspaces.value = allWorkspaces.value.filter(w => w.id !== ws.id)
@@ -1346,9 +991,11 @@ async function deleteWorkspace(ws: WorkspaceInfo) {
       ideUrl.value = null
       localStorage.removeItem('coding_last_workspace_id')
     }
-    ElMessage.success('\u5DF2\u5220\u9664')
+    ElMessage.success('已删除')
   } catch (e: any) {
-    ElMessage.error(e.message || '\u5220\u9664\u5931\u8D25')
+    ElMessage.error(e.message || '删除失败')
+  } finally {
+    deletingWsId.value = null
   }
 }
 
@@ -1397,289 +1044,23 @@ function removeAttachment() {
 }
 
 // ============ Send Message / Create Workspace ============
+// SSE handlers + upload + build request + consume SSE + load IDE URL + sendMessage / sendSuggestion
+// 全部抽到 useCodingPipeline composable
+const { sendMessage, sendSuggestion } = useCodingPipeline({
+  model: { codingModelOptions, codingModelLoading, updatingCodingModel, selectedCodingModelValue, persistedCodingModelValue, codingModelPopoverVisible, selectedCodingModelOption, codingModelHint, codingModelSummary, toCodingModelValue, normalizeCodingModelValue, applyCodingModelSelection, loadCodingModelOptions, handleCodingModelChange, selectCodingModel } as any,
+  stream: { streamMessages, isStreaming, streamContainerRef, scrollStreamToBottom, addStreamMsg, appendToLastThinking, appendToLastCommand, completeStepMsg, addStepRunningMsg, restoreReplayStreamMessages } as any,
+  ide: { ideUrl, ideLoaded, ideLoadError, ideLoadingText, pendingIdeUrl, activeView, setIdeUrl, onIdeFrameLoad, onIdeFrameError, retryIdeLoad, openPendingIde } as any,
+  workspace: { allWorkspaces, isDownloading, embeddedAppId, existingWorkspaces, workspaceShowcaseItems, workspaceDisplayName, workspaceCodeName, workspaceTooltip, workspaceTypeLabel, downloadWorkspaceArtifact } as any,
+  activeSceneCategory,
+  pendingSceneCategory,
+  sceneCategoryToProjectType,
+  userInput,
+  attachedFile,
+  attachedPreviewUrl,
+  isUploading,
+  isCreating,
+})
 
-function sendSuggestion(text: string) {
-  userInput.value = text
-  pendingSceneCategory.value = activeSceneCategory.value
-  sendMessage()
-}
-
-async function sendMessage() {
-  const message = userInput.value.trim()
-  if (!message && !attachedFile.value) return
-  if (isCreating.value) return
-
-  userInput.value = ''
-  const currentAttachment = attachedFile.value
-  const currentPreviewUrl = attachedPreviewUrl.value
-  attachedFile.value = null
-  attachedPreviewUrl.value = null
-
-  isCreating.value = true
-  isStreaming.value = true
-  activeView.value = 'chat'
-  let sseParseErrors = 0  // SSE 解析错误计数
-  // 保留历史消息，多轮之间加分隔
-  if (streamMessages.value.length > 0) {
-    addStreamMsg({ type: 'status', content: '───' })
-  }
-  addStreamMsg({ type: 'user', content: message })
-  addStreamMsg({ type: 'status', content: codingStore.workspace ? '正在处理...' : '正在识别开发场景...', stepKey: codingStore.workspace ? undefined : 'detect_scene' })
-
-  try {
-  // Upload attachment if present
-  let uploadResult: UploadResult | null = null
-  if (currentAttachment) {
-    try {
-      isUploading.value = true
-      uploadResult = await codingApi.uploadFile(currentAttachment, codingStore.workspace?.id)
-    } catch (e: any) {
-      ElMessage.error(`\u9644\u4EF6\u4E0A\u4F20\u5931\u8D25: ${e.message}`)
-    } finally {
-      isUploading.value = false
-      if (currentPreviewUrl) URL.revokeObjectURL(currentPreviewUrl)
-    }
-  }
-
-  // Build final message with attachment context
-  let finalMessage = message
-  if (uploadResult) {
-    if (uploadResult.content) {
-      finalMessage = `[\u9644\u4EF6\u6587\u6863: ${uploadResult.filename}]\n\`\`\`\n${uploadResult.content}\n\`\`\`\n\n${message}`
-    } else {
-      finalMessage = `${message}\n\n[\u9644\u4EF6\u56FE\u7247: ${uploadResult.filename}, \u5DF2\u4FDD\u5B58\u81F3: ${uploadResult.file_path}]`
-    }
-  }
-
-  const _sceneKey = pendingSceneCategory.value || activeSceneCategory.value
-  const _projectType = sceneCategoryToProjectType[_sceneKey] || route.query.type as string || null
-  pendingSceneCategory.value = null
-
-    const token = userStore.token
-
-  const body: Record<string, any> = {
-      message: finalMessage,
-      workspace_id: codingStore.workspace?.id || null,
-      conversation_id: codingStore.conversationId || null,
-      selected_model: selectedCodingModelValue.value || null,
-      app_id: (route.query.app_id as string) || null,
-      project_id: embeddedAppId.value ? Number(embeddedAppId.value) : null,
-      project_type: _projectType,
-      quick_create: false,
-    }
-
-    const response = await fetch(harnessApi.codingPipelineUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-      body: JSON.stringify(body),
-    })
-
-    if (!response.ok) {
-      const errBody = await response.json().catch(() => ({ detail: `HTTP ${response.status}` }))
-      throw new Error(errBody.detail || `HTTP ${response.status}`)
-    }
-
-    await consumeSseResponse(response, async ({ data }) => {
-      const payload = data.trim()
-      if (!payload || payload === '[DONE]') return
-
-      try {
-        const parsed = JSON.parse(payload)
-
-        if (parsed.type === 'step') {
-          const stepKey = parsed.step as string
-          const stepStatus = parsed.status as string
-          if (stepKey === 'detect_scene') {
-            // running 状态已在发送消息时预先添加，此处只处理完成
-            if (stepStatus === 'done') {
-              const label = formatSceneType(parsed.data?.scene_type || 'component')
-              completeStepMsg('detect_scene', `识别为 ${label}`)
-            }
-          } else if (stepKey === 'create_workspace') {
-            if (stepStatus === 'running') {
-              addStepRunningMsg('正在初始化工程脚手架...', 'create_workspace')
-            } else if (stepStatus === 'done' && parsed.data) {
-              completeStepMsg('create_workspace', '工程脚手架已初始化')
-              const wsData = { ...parsed.data, id: parsed.data.workspace_id || parsed.data.id }
-              codingStore.setWorkspace(wsData)
-              codingStore.workspacePath = parsed.data.workspace_path || null
-              localStorage.setItem('coding_last_workspace_id', wsData.id)
-              try { allWorkspaces.value = await codingApi.listWorkspaces() } catch {}
-            }
-          } else if (stepKey === 'brainstorm') {
-            if (stepStatus === 'running') {
-              addStepRunningMsg('正在生成需求确认...', 'brainstorm')
-            } else if (stepStatus === 'done') {
-              completeStepMsg('brainstorm', '需求确认已生成')
-            }
-          } else if (stepKey === 'generate') {
-            if (stepStatus === 'running') {
-              addStepRunningMsg('AI 开始编写代码...', 'generate')
-            } else if (stepStatus === 'done') {
-              completeStepMsg('generate', '代码生成完成')
-            }
-          }
-        } else if (parsed.type === 'content') {
-          // content 事件：来自 pipeline 的显式消息（如 brainstorm 提案），用 message 类型展示
-          const text = (parsed.content || '') as string
-          if (text.trim()) {
-            addStreamMsg({ type: 'message', content: text })
-          }
-        } else if (parsed.type === 'agent_tool') {
-          const toolName = parsed.tool as string
-          const toolArgs = parsed.args || {}
-          const preview = (parsed.input_preview || '') as string
-          if (toolName === 'write_file') {
-            const filePath = (toolArgs.file_path || '') as string
-            const fileName = filePath.split('/').pop() || preview
-            const content = (toolArgs.content || '') as string
-            addStreamMsg({
-              type: 'file_write', content: '', fileName,
-              fileContent: content || undefined, collapsed: true,
-            })
-          } else if (toolName === 'edit_file') {
-            const filePath = (toolArgs.file_path || '') as string
-            const fileName = filePath.split('/').pop() || preview
-            const newStr = (toolArgs.new_string || '') as string
-            addStreamMsg({
-              type: 'file_edit', content: '', fileName,
-              fileContent: newStr || undefined, collapsed: true,
-            })
-          } else if (toolName === 'run_command') {
-            const cmd = (toolArgs.command || preview || '') as string
-            addStreamMsg({ type: 'command', content: cmd })
-          } else if (toolName === 'read_file') {
-            addStreamMsg({ type: 'tool', content: `\uD83D\uDCC4 \u8BFB\u53D6 ${preview}` })
-          } else if (toolName === 'glob_files') {
-            addStreamMsg({ type: 'tool', content: `\uD83D\uDCC2 \u626B\u63CF ${preview || '\u9879\u76EE\u6587\u4EF6'}` })
-          } else if (toolName === 'grep_search') {
-            addStreamMsg({ type: 'tool', content: `\uD83D\uDD0D \u641C\u7D22 ${preview}` })
-          }
-        } else if (parsed.type === 'agent_command_output') {
-          const chunk = (parsed.chunk || '') as string
-          if (chunk) appendToLastCommand(chunk)
-        } else if (parsed.type === 'agent_result') {
-          const preview = (parsed.output_preview || '') as string
-          if (parsed.is_error) {
-            addStreamMsg({ type: 'error', content: preview || '执行失败' })
-          } else if (preview) {
-            // 将结果挂到上一条 tool 消息，使其变为可折叠卡片
-            const last = streamMessages.value[streamMessages.value.length - 1]
-            if (last?.type === 'tool') {
-              last.result = preview
-              last.resultCollapsed = true
-            }
-          }
-        } else if (parsed.type === 'agent_thinking') {
-          // agent_thinking 是完整思考块，但 agent_thinking_delta 已经流式展示了同样内容
-          // 只在没有活跃的 thinking 消息时才新增（避免重复）
-          const text = (parsed.content || '') as string
-          if (text.trim()) {
-            const last = streamMessages.value[streamMessages.value.length - 1]
-            if (!(last?.type === 'thinking' && last.content.includes(text.slice(0, 50)))) {
-              addStreamMsg({ type: 'thinking', content: text })
-            }
-          }
-        } else if (parsed.type === 'agent_thinking_delta') {
-          const delta = (parsed.content || '') as string
-          if (delta) appendToLastThinking(delta)
-        } else if (parsed.type === 'serve_started') {
-          const url = (parsed.url || '') as string
-          if (url) {
-            try { (window as any).__apaasDebug?.addRecord(url) } catch (_) {}
-            addStreamMsg({ type: 'message', content: `调试服务已启动：${url}` })
-          }
-        } else if (parsed.type === 'agent_done') {
-          addStreamMsg({ type: 'status', content: '\u2705 \u4EE3\u7801\u751F\u6210\u5B8C\u6210' })
-        } else if (parsed.type === 'scene_detected') {
-          codingStore.conversationId = parsed.conversation_id
-        } else if (parsed.type === 'done') {
-          isStreaming.value = false
-          isCreating.value = false  // 立即解除输入框禁用，后续 API 在后台继续
-          codingStore.conversationId = parsed.conversation_id
-          if (parsed.conversation_id) {
-            persistedCodingModelValue.value = normalizeCodingModelValue(selectedCodingModelValue.value)
-          }
-          if (parsed.workspace_id && !codingStore.workspace) {
-            try {
-              const ws = await codingApi.getWorkspace(parsed.workspace_id)
-              codingStore.setWorkspace(ws)
-              localStorage.setItem('coding_last_workspace_id', ws.id)
-            } catch { /* ignore */ }
-          }
-          if (parsed.ide_url && !parsed.waiting_confirmation) {
-            // 只在代码生成完成后（非 brainstorm 等待阶段）才设置 IDE URL
-            // 避免 brainstorm 阶段用重命名前的旧路径预加载 iframe
-            pendingIdeUrl.value = parsed.ide_url
-            // IDE 未打开时才主动加载；已打开时只更新 pendingIdeUrl
-            // 避免迭代完成后因路径变化重建 iframe 导致闪屏，用户点按钮时再加载
-            if (!ideUrl.value) {
-              setIdeUrl(parsed.ide_url)
-            }
-          }
-          if ('Notification' in window && Notification.permission === 'granted') {
-            if (parsed.waiting_confirmation) {
-              new Notification('aPaaS Builder', { body: '设计方案已生成，请确认后开始生成代码' })
-            } else {
-              new Notification('aPaaS Builder', { body: '代码已生成完成，快来看看吧' })
-            }
-          }
-          try {
-            const ctx = new AudioContext()
-            const gain = ctx.createGain()
-            gain.connect(ctx.destination)
-            gain.gain.setValueAtTime(0, ctx.currentTime)
-            gain.gain.linearRampToValueAtTime(0.08, ctx.currentTime + 0.005)
-            gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35)
-            const osc = ctx.createOscillator()
-            osc.type = 'sine'
-            osc.frequency.setValueAtTime(1318, ctx.currentTime) // E6，清脆轻快
-            osc.connect(gain)
-            osc.start(ctx.currentTime)
-            osc.stop(ctx.currentTime + 0.35)
-            osc.onended = () => ctx.close()
-          } catch (_) {}
-        } else if (parsed.type === 'error') {
-          addStreamMsg({ type: 'error', content: parsed.message || '\u53D1\u751F\u9519\u8BEF' })
-          isStreaming.value = false
-        }
-      } catch (parseErr) {
-        sseParseErrors++
-        if (sseParseErrors <= 3) {
-          console.warn(`[CodingPage] SSE parse error #${sseParseErrors}:`, parseErr)
-        }
-        if (sseParseErrors === 5) {
-          ElMessage.warning('部分 SSE 事件解析失败，结果可能不完整')
-        }
-      }
-    }, { yieldEvery: 6 })
-
-    // If we got a workspace but no IDE URL from SSE, fetch it and preload (don't auto-switch)
-    if (!ideUrl.value && codingStore.workspace) {
-      try {
-        const { ide_url } = await codingApi.getIdeUrl(codingStore.workspace.id, codingStore.conversationId)
-        pendingIdeUrl.value = ide_url
-        await setIdeUrl(ide_url)
-      } catch (err: any) {
-        ElMessage.warning(err?.message || 'IDE URL 获取失败')
-      }
-    }
-
-    // Refresh workspace list
-    if (codingStore.workspace) {
-      try { allWorkspaces.value = await codingApi.listWorkspaces() } catch {}
-    }
-
-  } catch (error: any) {
-    addStreamMsg({ type: 'error', content: error.message || '\u53D1\u751F\u9519\u8BEF' })
-    isStreaming.value = false
-  } finally {
-    isCreating.value = false
-  }
-}
 
 // ============ Header Actions ============
 
@@ -2973,6 +2354,12 @@ watch(() => route.path, () => {
   color: var(--t-brand);
   border-color: var(--t-brand-glow);
   background: var(--t-brand-subtle);
+}
+
+.workspace-card-action-danger:hover {
+  color: #f56c6c;
+  border-color: rgba(245, 108, 108, 0.35);
+  background: rgba(245, 108, 108, 0.08);
 }
 
 .workspace-card-action:disabled,

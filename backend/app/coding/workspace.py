@@ -94,6 +94,22 @@ DEFAULT_RULES_ROOT = Path(__file__).parent / "default_rules"
 FALLBACK_NPM_REGISTRY = "https://registry.npmmirror.com"
 
 
+def _safe_read_json(path: Path, default=None):
+    """安全读取 JSON 文件。文件不存在、读取失败或解析失败时返回 default。
+
+    替代散落各处的 `try: json.loads(path.read_text(...)) except Exception: fallback` 模式，
+    集中处理错误语义（静默失败，不打日志 — 调用方有需要可自行 warn）。
+    """
+    if default is None:
+        default = {}
+    try:
+        if not path.exists():
+            return default
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return default
+
+
 @lru_cache(maxsize=1)
 def _resolve_default_npm_registry() -> str:
     explicit_registry = (
@@ -464,12 +480,7 @@ class WorkspaceManager:
             apaas_json_path = ws_path / "web" / "src" / "apaas.json"
         else:
             apaas_json_path = ws_path / "src" / "apaas.json"
-        if not apaas_json_path.exists():
-            return {}
-        try:
-            return json.loads(apaas_json_path.read_text(encoding="utf-8"))
-        except Exception:
-            return {}
+        return _safe_read_json(apaas_json_path)
 
     def _get_frontend_plugin_output_dir(self, ws_path: Path, apaas_config: dict) -> Path:
         plugin_code = (apaas_config.get("code") or "").strip()
@@ -645,12 +656,7 @@ class WorkspaceManager:
         # 双端模板：从 web/src/apaas.json 读取 PC 端输出目录
         if meta.get("project_type") == ProjectType.FORM_COMPONENT_DUAL.value:
             web_apaas = ws_path / "web" / "src" / "apaas.json"
-            web_config = {}
-            if web_apaas.exists():
-                try:
-                    web_config = json.loads(web_apaas.read_text(encoding="utf-8"))
-                except Exception:
-                    pass
+            web_config = _safe_read_json(web_apaas)
             output_name = self._resolve_output_name(
                 web_config,
                 meta.get("project_name") or self._fallback_project_name_from_path(ws_path),
@@ -785,10 +791,7 @@ class WorkspaceManager:
     async def _run_build_process(self, cwd: Path) -> tuple[int, bytes, bytes]:
         meta_path = cwd / ".workspace.json"
         if meta_path.exists():
-            try:
-                meta = json.loads(meta_path.read_text(encoding="utf-8"))
-            except Exception:
-                meta = {}
+            meta = _safe_read_json(meta_path)
             if meta.get("project_type") == ProjectType.BACKEND_API.value:
                 return await self._run_backend_build_process(cwd)
 
@@ -1039,14 +1042,9 @@ class WorkspaceManager:
         if not node_modules_path.exists():
             return False
 
-        state_path = self._install_state_path(ws_path)
-        if state_path.exists():
-            try:
-                state = json.loads(state_path.read_text(encoding="utf-8"))
-                if state.get("signature") == signature:
-                    return True
-            except Exception:
-                pass
+        state = _safe_read_json(self._install_state_path(ws_path))
+        if state.get("signature") == signature:
+            return True
 
         package_lock_path = ws_path / "package-lock.json"
         if package_lock_path.exists() or any(node_modules_path.iterdir()):
@@ -1296,24 +1294,18 @@ class WorkspaceManager:
 
             # 已安装且签名匹配
             node_modules = install_dir / "node_modules"
-            if node_modules.exists() and state_path.exists():
-                try:
-                    state = json.loads(state_path.read_text(encoding="utf-8"))
-                    if state.get("signature") == signature:
-                        return {"status": "ok", "message": "依赖已就绪"}
-                except Exception:
-                    pass
+            if node_modules.exists():
+                state = _safe_read_json(state_path)
+                if state.get("signature") == signature:
+                    return {"status": "ok", "message": "依赖已就绪"}
 
             install_lock = self._install_locks.setdefault(f"subdir:{signature}", asyncio.Lock())
             async with install_lock:
                 # 双重检查
-                if node_modules.exists() and state_path.exists():
-                    try:
-                        state = json.loads(state_path.read_text(encoding="utf-8"))
-                        if state.get("signature") == signature:
-                            return {"status": "ok", "message": "依赖已就绪"}
-                    except Exception:
-                        pass
+                if node_modules.exists():
+                    state = _safe_read_json(state_path)
+                    if state.get("signature") == signature:
+                        return {"status": "ok", "message": "依赖已就绪"}
 
                 def _write_state(src: str):
                     state_path.write_text(
@@ -1487,17 +1479,13 @@ class WorkspaceManager:
         # 双端模板：src 路径取 web/src 和 mobile/src 两者最新时间
         if meta.get("project_type") == ProjectType.FORM_COMPONENT_DUAL.value:
             mobile_output_dir = None
-            mobile_apaas = ws_path / "mobile" / "src" / "apaas.json"
-            if mobile_apaas.exists():
-                try:
-                    mobile_cfg = json.loads(mobile_apaas.read_text(encoding="utf-8"))
-                    mobile_output_name = self._resolve_output_name(
-                        mobile_cfg,
-                        meta.get("project_name") or self._fallback_project_name_from_path(ws_path),
-                    )
-                    mobile_output_dir = ws_path / "mobile" / mobile_output_name
-                except Exception:
-                    pass
+            mobile_cfg = _safe_read_json(ws_path / "mobile" / "src" / "apaas.json")
+            if mobile_cfg:
+                mobile_output_name = self._resolve_output_name(
+                    mobile_cfg,
+                    meta.get("project_name") or self._fallback_project_name_from_path(ws_path),
+                )
+                mobile_output_dir = ws_path / "mobile" / mobile_output_name
             # 任意一端产物不存在都需重新构建
             if not self._has_build_artifacts(output_dir) or (
                 mobile_output_dir and not self._has_build_artifacts(mobile_output_dir)
@@ -1536,12 +1524,7 @@ class WorkspaceManager:
         """构建项目"""
         ws_path = self.get_workspace_path(ws_id)
 
-        self._ensure_form_component_workspace_compat(ws_path)
-        self._ensure_menu_page_workspace_compat(ws_path)
-        self._ensure_layout_workspace_compat(ws_path)
-        self._ensure_form_list_workspace_compat(ws_path)
-        self._ensure_plugin_workspace_compat(ws_path)
-        self._ensure_backend_workspace_compat(ws_path)
+        self._run_workspace_compat_handlers(ws_path)
 
         meta = self._read_meta(ws_path)
         if self._project_requires_npm_install(meta.get("project_type", "")):
@@ -1558,86 +1541,83 @@ class WorkspaceManager:
             await self._ensure_df_apaas_cli()
             self._ensure_workspace_npmrc(ws_path)
 
-        # 双端模板：分别构建 web/ 和 mobile/
-        if meta.get("project_type") == ProjectType.FORM_COMPONENT_DUAL.value:
-            try:
-                all_stdout, all_stderr = b"", b""
-                for subdir in ("web", "mobile"):
-                    sub_path = ws_path / subdir
-                    if not sub_path.is_dir():
-                        continue
-                    returncode, stdout, stderr = await self._run_build_process(sub_path)
-                    all_stdout += stdout
-                    all_stderr += stderr
-                    if returncode != 0:
-                        build_result = {
-                            "status": "error",
-                            "message": f"{subdir}/ 构建失败: " + self._summarize_build_failure(stdout, stderr),
-                        }
-                        meta["status"] = WorkspaceStatus.ERROR.value
-                        self._write_meta(ws_path, meta)
-                        return build_result
-                # 验证两端产物
-                web_ok = self._has_build_artifacts(self._get_build_output_dir(ws_path))
-                if not web_ok:
-                    build_result = {"status": "error", "message": "双端构建完成但未找到 web/ 产物，请检查 web/src 代码"}
-                    meta["status"] = WorkspaceStatus.ERROR.value
-                    self._write_meta(ws_path, meta)
-                    return build_result
-                # 检查 mobile 端产物
-                mobile_apaas = ws_path / "mobile" / "src" / "apaas.json"
-                if mobile_apaas.exists():
-                    try:
-                        mobile_cfg = json.loads(mobile_apaas.read_text(encoding="utf-8"))
-                        mobile_output_name = self._resolve_output_name(
-                            mobile_cfg,
-                            meta.get("project_name") or self._fallback_project_name_from_path(ws_path),
-                        )
-                        mobile_output_dir = ws_path / "mobile" / mobile_output_name
-                        if not self._has_build_artifacts(mobile_output_dir):
-                            build_result = {
-                                "status": "error",
-                                "message": f"双端构建完成但未找到 mobile/ 产物（{mobile_output_dir.name}/），请检查 mobile/src 代码",
-                            }
-                            meta["status"] = WorkspaceStatus.ERROR.value
-                            self._write_meta(ws_path, meta)
-                            return build_result
-                    except Exception as e:
-                        logger.warning(f"[build_project] 校验 mobile 产物时出错: {e}")
-                meta["status"] = WorkspaceStatus.READY.value
-                self._write_meta(ws_path, meta)
-                return {"status": "ok", "message": "双端构建成功"}
-            except Exception as e:
-                meta["status"] = WorkspaceStatus.ERROR.value
-                self._write_meta(ws_path, meta)
-                return {"status": "error", "message": str(e)}
-
+        # 按项目类型分派
         try:
-            build_result = None
-            if " " in str(ws_path) and self._uses_df_apaas_cli_build(ws_path):
-                build_result = await self._build_with_staging(ws_path)
+            if meta.get("project_type") == ProjectType.FORM_COMPONENT_DUAL.value:
+                result = await self._build_dual_project(ws_path, meta)
             else:
-                returncode, stdout, stderr = await self._run_build_process(ws_path)
-                if returncode == 0 and self._has_build_artifacts(self._get_build_output_dir(ws_path)):
-                    build_result = {"status": "ok", "message": "构建成功"}
-                else:
-                    build_result = {
-                        "status": "error",
-                        "message": self._summarize_build_failure(stdout, stderr),
-                    }
-
-            if build_result["status"] == "ok":
-                meta["status"] = WorkspaceStatus.READY.value
-                self._write_meta(ws_path, meta)
-                return build_result
-            else:
-                meta["status"] = WorkspaceStatus.ERROR.value
-                self._write_meta(ws_path, meta)
-                return build_result
+                result = await self._build_single_project(ws_path)
         except Exception as e:
-            meta["status"] = WorkspaceStatus.ERROR.value
-            self._write_meta(ws_path, meta)
-            return {"status": "error", "message": str(e)}
+            result = {"status": "error", "message": str(e)}
+
+        return self._finalize_build(ws_path, meta, result)
+
+    def _finalize_build(self, ws_path: Path, meta: dict, result: dict) -> dict:
+        """统一写入 meta.status（READY / ERROR），返回 result。"""
+        meta["status"] = (
+            WorkspaceStatus.READY.value if result.get("status") == "ok"
+            else WorkspaceStatus.ERROR.value
+        )
+        self._write_meta(ws_path, meta)
+        return result
+
+    async def _build_dual_project(self, ws_path: Path, meta: dict) -> dict:
+        """双端项目：分别构建 web/ 和 mobile/，各自验证产物。"""
+        all_stdout, all_stderr = b"", b""
+        for subdir in ("web", "mobile"):
+            sub_path = ws_path / subdir
+            if not sub_path.is_dir():
+                continue
+            returncode, stdout, stderr = await self._run_build_process(sub_path)
+            all_stdout += stdout
+            all_stderr += stderr
+            if returncode != 0:
+                return {
+                    "status": "error",
+                    "message": f"{subdir}/ 构建失败: " + self._summarize_build_failure(stdout, stderr),
+                }
+
+        # 验证 web/ 产物
+        if not self._has_build_artifacts(self._get_build_output_dir(ws_path)):
+            detail = self._summarize_build_failure(all_stdout, all_stderr)
+            return {
+                "status": "error",
+                "message": f"双端构建完成但未找到 web/ 产物，请检查 web/src 代码\n构建日志:\n{detail}",
+            }
+
+        # 验证 mobile/ 产物（若存在 mobile/src/apaas.json）
+        mobile_cfg = _safe_read_json(ws_path / "mobile" / "src" / "apaas.json")
+        if mobile_cfg:
+            try:
+                mobile_output_name = self._resolve_output_name(
+                    mobile_cfg,
+                    meta.get("project_name") or self._fallback_project_name_from_path(ws_path),
+                )
+                mobile_output_dir = ws_path / "mobile" / mobile_output_name
+                if not self._has_build_artifacts(mobile_output_dir):
+                    detail = self._summarize_build_failure(all_stdout, all_stderr)
+                    return {
+                        "status": "error",
+                        "message": f"双端构建完成但未找到 mobile/ 产物（{mobile_output_dir.name}/），请检查 mobile/src 代码\n构建日志:\n{detail}",
+                    }
+            except Exception as e:
+                logger.warning(f"[build_project] 校验 mobile 产物时出错: {e}")
+
+        return {"status": "ok", "message": "双端构建成功"}
+
+    async def _build_single_project(self, ws_path: Path) -> dict:
+        """单端项目：直接在 ws_path 跑 npm/mvn build，验证产物。"""
+        # 路径含空格 + 使用 df-apaas-cli → 用 staging 目录避空格陷阱
+        if " " in str(ws_path) and self._uses_df_apaas_cli_build(ws_path):
+            return await self._build_with_staging(ws_path)
+
+        returncode, stdout, stderr = await self._run_build_process(ws_path)
+        if returncode == 0 and self._has_build_artifacts(self._get_build_output_dir(ws_path)):
+            return {"status": "ok", "message": "构建成功"}
+        return {
+            "status": "error",
+            "message": self._summarize_build_failure(stdout, stderr),
+        }
 
     # ======== Serve & Debug 进程管理 ========
     _serve_processes: dict = {}   # {ws_id: {"process": Process, "port": int}}
@@ -1697,17 +1677,30 @@ class WorkspaceManager:
         return {"status": "ok", "port": port, "message": f"serve 正在启动（端口 {port}）"}
 
     async def stop_serve(self, ws_id: str) -> dict:
-        """停止 serve 进程"""
+        """停止 serve 进程（单端 or 双端均支持）"""
         if ws_id not in self._serve_processes:
             return {"status": "ok", "message": "serve 未运行"}
         info = self._serve_processes.pop(ws_id)
-        proc = info["process"]
-        if proc.returncode is None:
+
+        async def _terminate(proc):
+            if proc is None or proc.returncode is not None:
+                return
             proc.terminate()
             try:
                 await asyncio.wait_for(proc.wait(), timeout=5)
             except asyncio.TimeoutError:
                 proc.kill()
+
+        # 双端格式：{"web": {"process": ..., "port": ...}, "mobile": {"process": ..., "port": ...}}
+        if "web" in info or "mobile" in info:
+            for side in ("web", "mobile"):
+                side_info = info.get(side)
+                if side_info:
+                    await _terminate(side_info.get("process"))
+        else:
+            # 单端格式：{"process": proc, "port": int}
+            await _terminate(info.get("process"))
+
         return {"status": "ok", "message": "serve 已停止"}
 
     def is_serve_running(self, ws_id: str) -> dict:
@@ -1829,13 +1822,7 @@ class WorkspaceManager:
             sub_path = ws_path / subdir
             if not sub_path.is_dir():
                 continue
-            apaas_json_path = sub_path / "src" / "apaas.json"
-            apaas_cfg: dict = {}
-            if apaas_json_path.exists():
-                try:
-                    apaas_cfg = json.loads(apaas_json_path.read_text(encoding="utf-8"))
-                except Exception:
-                    pass
+            apaas_cfg = _safe_read_json(sub_path / "src" / "apaas.json")
             output_name = self._resolve_output_name(apaas_cfg, project_name)
             output_dir = sub_path / output_name
             cli_zip = sub_path / f"{output_name}.zip"
@@ -1880,13 +1867,7 @@ class WorkspaceManager:
                 continue
 
             # 读 sub/src/apaas.json 获取 outputName
-            apaas_json_path = sub_path / "src" / "apaas.json"
-            apaas_cfg: dict = {}
-            if apaas_json_path.exists():
-                try:
-                    apaas_cfg = json.loads(apaas_json_path.read_text(encoding="utf-8"))
-                except Exception:
-                    pass
+            apaas_cfg = _safe_read_json(sub_path / "src" / "apaas.json")
             output_name = self._resolve_output_name(apaas_cfg, project_name)
             output_dir = sub_path / output_name
 
@@ -2472,8 +2453,15 @@ const resultPath = '{str(result_json_path)}'
             ),
         )
 
-    def delete_workspace(self, ws_id: str):
-        """删除工作区"""
+    async def delete_workspace(self, ws_id: str):
+        """删除工作区：先停掉所有 serve 进程，再递归删除文件夹。"""
+        # 1. 停 serve 进程（单端 / 双端都会清理）
+        try:
+            await self.stop_serve(ws_id)
+        except Exception as e:
+            logger.warning(f"[delete_workspace] 停止 serve 进程失败（忽略继续删除）: {e}")
+
+        # 2. 收集所有匹配的工作区目录
         matched_paths: list[Path] = []
         try:
             matched_paths.append(self.get_workspace_path(ws_id))
@@ -2487,6 +2475,7 @@ const resultPath = '{str(result_json_path)}'
             except Exception:
                 continue
 
+        # 3. 递归删除
         for ws_path in {path.resolve(): path for path in matched_paths}.values():
             if ws_path.exists():
                 shutil.rmtree(ws_path)
@@ -2631,6 +2620,31 @@ dist/
                 }
             ]
         }, indent=2, ensure_ascii=False))
+
+    def _run_workspace_compat_handlers(self, ws_path: Path) -> None:
+        """按 project_type 分派到对应的兼容修复函数。
+
+        比依次调用所有 6 个 `_ensure_*_workspace_compat` 更高效：
+        - 只读一次 meta（不需要每个 handler 都读一次）
+        - 集中注册表，加新项目类型只改这里
+        - 每个 handler 内部仍保留 project_type guard 作为防御（被外部直接调用时依然安全）
+        """
+        if not (ws_path / ".workspace.json").exists():
+            return
+        meta = self._read_meta(ws_path)
+        project_type = meta.get("project_type", "")
+
+        handlers = {
+            ProjectType.FORM_COMPONENT.value: self._ensure_form_component_workspace_compat,
+            ProjectType.MENU_PAGE.value: self._ensure_menu_page_workspace_compat,
+            ProjectType.LAYOUT.value: self._ensure_layout_workspace_compat,
+            ProjectType.FORM_LIST.value: self._ensure_form_list_workspace_compat,
+            ProjectType.PLUGIN.value: self._ensure_plugin_workspace_compat,
+            ProjectType.BACKEND_API.value: self._ensure_backend_workspace_compat,
+        }
+        handler = handlers.get(project_type)
+        if handler:
+            handler(ws_path)
 
     def _ensure_layout_workspace_compat(self, ws_path: Path):
         """修复旧版布局工作区，使其对齐 PAGE_LAYOUT 脚手架协议。"""

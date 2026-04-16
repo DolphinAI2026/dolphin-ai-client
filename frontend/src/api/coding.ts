@@ -15,13 +15,6 @@ export interface GeneratedFile {
   language: string
 }
 
-export interface GenerateResult {
-  files: GeneratedFile[]
-  explanation: string
-  scene_type: string
-  validation_errors: string[]
-}
-
 export interface CodingConversation {
   id: number
   title: string
@@ -77,27 +70,6 @@ export const codingApi = {
   /** 获取所有开发场景 */
   getScenes(category?: string) {
     return request.get<any, CodingScene[]>('/coding/scenes', { params: { category } })
-  },
-
-  /** 自动识别场景 */
-  detectScene(requirement: string) {
-    return request.post<any, { scene_type: string; scene_name: string; scene_description: string; conventions: string[] }>('/coding/detect-scene', { requirement })
-  },
-
-  /** 生成项目模板 */
-  getTemplate(scene_type: string, module_name: string) {
-    return request.post<any, { files: GeneratedFile[] }>('/coding/template', { scene_type, module_name })
-  },
-
-  /** 非流式代码生成 */
-  generate(data: {
-    scene_type?: string
-    requirement: string
-    conversation_id?: number
-    app_id?: string
-    module_name?: string
-  }) {
-    return request.post<any, GenerateResult>('/coding/generate', data)
   },
 
   /** 获取Coding对话列表 */
@@ -237,13 +209,6 @@ export const codingApi = {
       throw new Error(err.detail || '发布失败')
     }
     return resp.blob()
-  },
-
-  /** 预览组件（触发构建 + 返回预览 URL） */
-  preview(wsId: string) {
-    return request.post<any, { status: string; preview_url: string; output_name: string; template_type: string; project_type?: string; build_message: string }>(
-      `/coding/workspace/${wsId}/preview`, {}, { timeout: 300000 }
-    )
   },
 
   /** 上传文件（图片/文档附件） */

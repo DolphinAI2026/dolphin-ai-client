@@ -139,6 +139,7 @@ const pendingUploadWs = ref<WorkspaceInfo | null>(null)
 
 const groupMap: Record<string, { key: string; label: string }> = {
   'form-component': { key: 'component-pc', label: 'PC组件' },
+  'form-component-dual': { key: 'component-pc', label: '双端组件' },
   'menu-page': { key: 'page-pc', label: 'PC页面' },
   'form-page': { key: 'page-pc', label: 'PC页面' },
   'form-list': { key: 'list-view', label: '列表视图' },
