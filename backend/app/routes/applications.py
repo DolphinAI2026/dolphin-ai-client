@@ -18,6 +18,7 @@ from jose import JWTError, jwt
 from app.config import settings, APP_DEPLOY_ABSTRACT
 from app.apaas_client import APaaSClient
 from app.crypto import decrypt_password
+from app.json_utils import loads_if_str
 
 from app.services.config_converter import convert_analysis_to_app_config
 
@@ -402,7 +403,7 @@ async def _ensure_doc_version_parsed_config(
     parsed = None
     if version.parsed_config:
         try:
-            parsed = json.loads(version.parsed_config) if isinstance(version.parsed_config, str) else version.parsed_config
+            parsed = loads_if_str(version.parsed_config)
         except Exception:
             parsed = None
 
@@ -671,7 +672,7 @@ def _enrich(app: Application) -> ApplicationResponse:
     resolved_app_code = app.app_code
     if app.config_preview:
         try:
-            config = json.loads(app.config_preview) if isinstance(app.config_preview, str) else app.config_preview
+            config = loads_if_str(app.config_preview)
             data = config.get("data", config)
             resolved_app_code = data.get("appCode") or data.get("app_code") or resolved_app_code
             models = len(data.get("models", []))
@@ -1448,7 +1449,7 @@ async def update_app_code(
     app.app_code = new_code
     if app.config_preview:
         try:
-            config = json.loads(app.config_preview) if isinstance(app.config_preview, str) else app.config_preview
+            config = loads_if_str(app.config_preview)
             data = config.get("data", config)
             data["app_code"] = new_code
             app.config_preview = _dump_preview_config(config)
@@ -1747,7 +1748,7 @@ async def generate_application(
     if not current_user.apaas_token:
         raise HTTPException(status_code=400, detail="未连接得帆云平台，请先在设置中连接APaaS平台")
 
-    config = json.loads(app.config_preview) if isinstance(app.config_preview, str) else app.config_preview
+    config = loads_if_str(app.config_preview)
     client = APaaSClient(base_url=current_user.apaas_base_url, tenant_id=current_user.apaas_tenant_id, token=current_user.apaas_token)
     # 记住已有的 apaas_app_id（SSE generator 需要自己的 session）
     existing_apaas_app_id = app.apaas_app_id
@@ -1968,7 +1969,7 @@ async def upload_doc_with_conversation(
             # ── 增量模式：用纯代码 diff 与 V1 config 对比，继承编码 ──
             if v1_doc_info and v1_doc_info.get("parsed_config"):
                 try:
-                    v1_parsed_config = json.loads(v1_doc_info["parsed_config"]) if isinstance(v1_doc_info["parsed_config"], str) else v1_doc_info["parsed_config"]
+                    v1_parsed_config = loads_if_str(v1_doc_info["parsed_config"])
                     yield {"event": "progress", "data": json.dumps({"message": "对比配置差异..."}, ensure_ascii=False)}
                     resource_diff = compute_config_diff(v1_parsed_config, data)
                     if resource_diff.normalized_new_config:
@@ -2376,7 +2377,7 @@ async def upload_doc_version(
             v1_config: dict = {}
             if current_config_str:
                 try:
-                    loaded = json.loads(current_config_str) if isinstance(current_config_str, str) else current_config_str
+                    loaded = loads_if_str(current_config_str)
                     v1_config = loaded.get("data", loaded)
                 except Exception:
                     pass
@@ -2526,8 +2527,8 @@ async def get_change_plan(
         "conversation_id": plan.conversation_id,
         "from_version": plan.from_version,
         "to_version": plan.to_version,
-        "diff_summary": json.loads(plan.diff_summary) if isinstance(plan.diff_summary, str) else plan.diff_summary,
-        "actions": json.loads(plan.actions) if isinstance(plan.actions, str) else plan.actions,
+        "diff_summary": loads_if_str(plan.diff_summary),
+        "actions": loads_if_str(plan.actions),
         "status": plan.status,
         "created_at": str(plan.created_at) if plan.created_at else None,
         "executed_at": str(plan.executed_at) if plan.executed_at else None,
@@ -2560,7 +2561,7 @@ async def update_change_plan_selections(
     if plan.status != "pending":
         raise HTTPException(status_code=400, detail=f"变更计划状态为 {plan.status}，不能修改")
 
-    actions = json.loads(plan.actions) if isinstance(plan.actions, str) else plan.actions
+    actions = loads_if_str(plan.actions)
     for action in actions:
         aid = action.get("id")
         if aid and aid in body.selections:
@@ -2642,19 +2643,19 @@ async def execute_change_plan(
                 from_doc_obj = from_doc.scalar_one_or_none()
                 if from_doc_obj and from_doc_obj.parsed_config:
                     try:
-                        current_config = json.loads(from_doc_obj.parsed_config) if isinstance(from_doc_obj.parsed_config, str) else from_doc_obj.parsed_config
+                        current_config = loads_if_str(from_doc_obj.parsed_config)
                     except Exception:
                         pass
 
             # 回退：如果没有找到 from_version 的配置，使用 config_preview
             if not current_config and current_config_str:
                 try:
-                    loaded = json.loads(current_config_str) if isinstance(current_config_str, str) else current_config_str
+                    loaded = loads_if_str(current_config_str)
                     current_config = loaded.get("data", loaded)
                 except Exception:
                     pass
 
-            actions = json.loads(actions_str) if isinstance(actions_str, str) else actions_str
+            actions = loads_if_str(actions_str)
             selected = [a for a in actions if a.get("selected", True)]
 
             yield {"event": "progress", "data": json.dumps({"step": f"应用 {len(selected)} 项变更..."}, ensure_ascii=False)}
@@ -2908,7 +2909,7 @@ async def delete_doc_version(
     app.current_doc_version = latest.version if latest else None
     if latest and latest.parsed_config:
         try:
-            parsed = json.loads(latest.parsed_config) if isinstance(latest.parsed_config, str) else latest.parsed_config
+            parsed = loads_if_str(latest.parsed_config)
             app.config_preview = _dump_preview_config(parsed)
         except Exception:
             logger.warning("删除文档版本后同步 config_preview 失败", exc_info=True)

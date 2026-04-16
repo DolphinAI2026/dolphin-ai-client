@@ -31,6 +31,7 @@ from app.step_executor import (
     execute_create_workflow, execute_configure_permissions,
 )
 from app.app_locks import acquire_app_lock
+from app.json_utils import loads_if_str
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +90,7 @@ _COMPONENT_TYPE_LABELS = {
 
 def _load_state(app: Application) -> dict:
     if app.generation_state:
-        state = json.loads(app.generation_state) if isinstance(app.generation_state, str) else app.generation_state
+        state = loads_if_str(app.generation_state)
     else:
         state = {"steps_completed": [], "step_errors": {}}
         # 仅首次（无 generation_state）时兼容旧流程
@@ -106,7 +107,7 @@ def _save_state(app: Application, state: dict):
 def _load_config(app: Application) -> dict:
     if not app.config_preview:
         raise HTTPException(status_code=400, detail="应用配置为空，请先在对话中生成配置")
-    return json.loads(app.config_preview) if isinstance(app.config_preview, str) else app.config_preview
+    return loads_if_str(app.config_preview)
 
 
 def _component_type_label(value: str, model_type: str = "") -> str:
@@ -671,7 +672,7 @@ def _build_steps(config: dict, state: dict, apaas_app_id: str = None) -> list[St
 def _sync_platform_codes_to_config(app: Application, state: dict, data: dict):
     """部署完成后，将平台真实编码回写到 config_preview"""
     try:
-        config = json.loads(app.config_preview) if isinstance(app.config_preview, str) else app.config_preview
+        config = loads_if_str(app.config_preview)
         cfg_data = config.get("data", config)
 
         # 回写平台最终应用编码
@@ -730,7 +731,7 @@ async def _sync_current_doc_version_content(db: AsyncSession, app: Application):
         from app.models import DocumentVersion
         import hashlib
 
-        config = json.loads(app.config_preview) if isinstance(app.config_preview, str) else app.config_preview
+        config = loads_if_str(app.config_preview)
         data = config.get("data", config)
         doc_version_result = await db.execute(
             select(DocumentVersion).where(

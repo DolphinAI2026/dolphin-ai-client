@@ -16,6 +16,7 @@ from app.deps import get_auth_context, AuthContext
 from app.llm_client import LLMClient
 from app.field_types import build_prompt_field_types_compact
 from app.context_compact import ContextCompactor
+from app.json_utils import loads_if_str
 
 
 async def _get_tenant_llm_config(db: AsyncSession, tenant_id: int) -> dict | None:
@@ -456,7 +457,7 @@ def _resolve_effective_config(server_config, client_config_raw) -> dict | None:
     if not client_config_raw:
         return None
     try:
-        return json.loads(client_config_raw) if isinstance(client_config_raw, str) else client_config_raw
+        return loads_if_str(client_config_raw)
     except Exception:
         return None
 
