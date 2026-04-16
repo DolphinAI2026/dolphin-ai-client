@@ -1956,6 +1956,15 @@ async def upload_doc_with_conversation(
             parse_meta = parse_result.get("parse_meta", {}) if isinstance(parse_result, dict) else {}
             data = parse_result.get("data", parse_result)
 
+            # LLM 返回的 appName 常常是"应用"/"未命名应用"等默认值；必须在发出任何
+            # SSE 事件（skeleton/complete/done）之前把它推断为文档里的真实名字，
+            # 否则前端 skeleton 阶段会先把默认值写入 store，后续事件的守卫逻辑会
+            # 阻止覆盖，最终界面显示"未命名应用"。
+            if isinstance(data, dict) and str(data.get("appName") or "").strip() in _DEFAULT_APP_NAMES:
+                inferred = _infer_app_name_from_doc(text, fname)
+                if inferred:
+                    data["appName"] = inferred
+
             # ── 增量模式：用纯代码 diff 与 V1 config 对比，继承编码 ──
             if v1_doc_info and v1_doc_info.get("parsed_config"):
                 try:
@@ -2024,10 +2033,10 @@ async def upload_doc_with_conversation(
             yield {"event": "error", "data": json.dumps({"message": "配置生成失败：无数据"}, ensure_ascii=False)}
             return
 
-        # 若解析结果是默认值，优先从文档正文/标题推断，退回文件名
+        # 兜底：若推断仍未覆盖（例如进入了增量 diff 分支把 data 换了引用），
+        # 这里再兜一次，确保最终保存到 DB / SSE done 事件里的 appName 不是默认值。
         if str(data.get("appName") or "").strip() in _DEFAULT_APP_NAMES:
-            inferred = _infer_app_name_from_doc(text, fname)
-            data["appName"] = inferred or "业务应用"
+            data["appName"] = _infer_app_name_from_doc(text, fname) or "业务应用"
 
         # 创建对话 + 消息（用独立 session）
         async with AsyncSessionLocal() as session:
