@@ -4285,6 +4285,24 @@ function extractAppCodeFromText(text: string): string {
   return ''
 }
 
+// 从文档头部纯前端推断应用名，用于文档刚上传、后端 AI 兜底还没跑完时立即占位显示。
+// 后端 SSE done 返回权威值时会通过 store.setAppName 覆盖，setter 自带默认占位过滤。
+function extractAppNameFromText(text: string): string {
+  if (!text) return ''
+  const DEFAULTS = new Set(['', '未命名应用', '业务应用', '应用', '应用设计文档'])
+  const patterns = [
+    /\|\s*应用名称\s*\|\s*`?([^|\n`]+?)`?\s*\|/i,  // 标准表格行
+    /应用名称[：:\s`]*([^\n`|]+)/i,                // "应用名称: xxx" 散文
+    /^#\s+([^\n#]+)$/m,                            // 一级标题兜底
+  ]
+  for (const p of patterns) {
+    const m = text.match(p)
+    const v = String(m?.[1] || '').trim()
+    if (v && !DEFAULTS.has(v)) return v
+  }
+  return ''
+}
+
 function resetConversationWorkspace() {
   store.reset()
   store.showConnectModal = false
@@ -4860,6 +4878,15 @@ const uploadDocFile = async (file: File) => {
     if (conversationId.value) {
       formData.append('conversation_id', String(conversationId.value))
     }
+
+    // 先本地读文档头部推断应用名，立即填进 store。
+    // 否则大文档会走后端 AI 兜底（3-5 分钟），期间界面应用名会空。
+    // 后端 SSE done 返回真值时 setAppName 会用后端结果覆盖（setter 会过滤默认值）。
+    try {
+      const head = await file.slice(0, 8192).text()
+      const local = extractAppNameFromText(head)
+      if (local) store.setAppName(local)
+    } catch { /* 读失败就走原路径，不阻塞上传 */ }
 
     const response = await fetch(`${API_PREFIX}/applications/upload-doc-with-conversation`, {
       method: 'POST',
