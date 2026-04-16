@@ -37,4 +37,5 @@ Thumbs.db
 
 # Build artifacts
 frontend/dist/
+.vite/
 workspaces/

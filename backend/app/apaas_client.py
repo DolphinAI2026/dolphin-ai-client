@@ -15,6 +15,8 @@ from cryptography.hazmat.backends import default_backend
 import logging
 import threading
 
+from app.error_messages import APAAS_TOKEN_EXPIRED
+
 logger = logging.getLogger(__name__)
 DESKTOP_API_DEBUG_LOG = Path.home() / "Desktop" / "apaas_api_debug.log"
 
@@ -302,7 +304,7 @@ class APaaSClient:
 
             if response.status_code == 401:
                 logger.error(f"401 Unauthorized - token可能已过期或无效")
-                raise Exception("Token已过期或无效，请重新连接APaaS平台")
+                raise Exception(APAAS_TOKEN_EXPIRED)
 
             response.raise_for_status()
             data = response.json()

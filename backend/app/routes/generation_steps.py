@@ -32,6 +32,7 @@ from app.step_executor import (
 )
 from app.app_locks import acquire_app_lock
 from app.json_utils import loads_if_str
+from app.error_messages import APAAS_TOKEN_EXPIRED_STEP, is_apaas_token_error
 
 logger = logging.getLogger(__name__)
 
@@ -999,7 +1000,7 @@ async def execute_step(
             logger.error(f"步骤 {step_key} 执行失败: {error_msg}", exc_info=True)
 
             # Token 过期时，优先尝试使用环境里保存的账号密码自动重登并重试当前步骤
-            if "Token已过期" in error_msg or "401" in error_msg:
+            if is_apaas_token_error(error_msg) or "401" in error_msg:
                 relogin_success = False
                 if env and env.username and getattr(env, "password_enc", None):
                     try:
@@ -1044,7 +1045,7 @@ async def execute_step(
                         env.token = None
                         env.status = "disconnected"
                     await db.commit()
-                    step_exception = HTTPException(status_code=401, detail="APaaS平台Token已过期，请在环境管理中重新登录")
+                    step_exception = HTTPException(status_code=401, detail=APAAS_TOKEN_EXPIRED_STEP)
             else:
                 # 编码冲突时自动处理
                 is_dict_or_role_step = step_key.startswith("create_dict:") or step_key.startswith("create_role:") or step_key == "create_roles_dicts"

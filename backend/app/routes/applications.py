@@ -19,6 +19,11 @@ from app.config import settings, APP_DEPLOY_ABSTRACT
 from app.apaas_client import APaaSClient
 from app.crypto import decrypt_password
 from app.json_utils import loads_if_str
+from app.error_messages import (
+    APAAS_LOGIN_FAILED,
+    APAAS_TOKEN_EXPIRED_GENERIC,
+    is_apaas_token_error,
+)
 
 from app.services.config_converter import convert_analysis_to_app_config
 
@@ -1578,7 +1583,7 @@ async def publish_application(
         return {"ok": True, "version": next_version, "remote_status": "ENABLE"}
     except Exception as e:
         detail = str(e)
-        if ("Token已过期或无效" in detail or "401" in detail) and env.username and env.password_enc:
+        if (is_apaas_token_error(detail) or "401" in detail) and env.username and env.password_enc:
             try:
                 password = decrypt_password(env.password_enc)
                 refresh_client = APaaSClient(base_url=env.base_url, tenant_id=env.platform_tenant_id)
@@ -1606,7 +1611,7 @@ async def publish_application(
                     await db.commit()
                     return {"ok": True, "version": next_version, "remote_status": "ENABLE"}
             except Exception as retry_error:
-                raise HTTPException(status_code=401, detail=f"平台登录失效，请重新连接APaaS平台：{retry_error}")
+                raise HTTPException(status_code=401, detail=f"{APAAS_LOGIN_FAILED}：{retry_error}")
         raise HTTPException(status_code=400, detail=f"上线失败: {detail}")
 
 
@@ -1794,8 +1799,8 @@ async def generate_application(
 
                 # 特殊处理401错误
                 error_msg = str(e)
-                if "401" in error_msg or "Token已过期" in error_msg or "Unauthorized" in error_msg:
-                    error_msg = "APaaS平台Token已过期，请重新连接平台后再试"
+                if "401" in error_msg or is_apaas_token_error(error_msg) or "Unauthorized" in error_msg:
+                    error_msg = APAAS_TOKEN_EXPIRED_GENERIC
 
                 yield {"event": "error", "data": json.dumps({"type": "error", "message": error_msg}, ensure_ascii=False)}
 

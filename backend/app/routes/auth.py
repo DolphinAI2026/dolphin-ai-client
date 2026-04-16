@@ -13,6 +13,7 @@ from app.schemas import (
 from app.auth import verify_password, get_password_hash, create_access_token, create_selection_token
 from app.deps import get_auth_context, AuthContext
 from app.config import settings
+from app.error_messages import SELECT_TOKEN_INVALID, SELECT_TOKEN_EXPIRED
 
 router = APIRouter(prefix="/auth", tags=["认证"])
 
@@ -160,10 +161,10 @@ async def select_tenant(
     try:
         payload = jwt.decode(data.selection_token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
         if payload.get("type") != "selection":
-            raise HTTPException(status_code=401, detail="无效的选择 Token")
+            raise HTTPException(status_code=401, detail=SELECT_TOKEN_INVALID)
         user_id = int(payload.get("sub"))
     except JWTError:
-        raise HTTPException(status_code=401, detail="选择 Token 已过期或无效")
+        raise HTTPException(status_code=401, detail=SELECT_TOKEN_EXPIRED)
 
     # 验证用户属于该租户
     result = await db.execute(
