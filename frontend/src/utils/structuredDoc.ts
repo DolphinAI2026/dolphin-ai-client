@@ -285,7 +285,9 @@ export function buildStructuredDocFromPreviewConfig(
 
   return {
     app_info: {
-      name: options?.appName || data.appName || '未命名应用',
+      // 应用名由调用方负责解析并传入（通常来自 store.preview.appName）；
+      // 这里不再回填占位符，让上层或模板自行决定空值如何展示。
+      name: options?.appName || data.appName || '',
       code: options?.appCode || data.appCode || '',
       description: options?.description || '',
     },

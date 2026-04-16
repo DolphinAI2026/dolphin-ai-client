@@ -107,7 +107,7 @@
           <div class="doc-view-head">
             <div class="doc-view-title">功能设计文档</div>
             <div class="doc-view-meta">
-              <div class="doc-view-file">{{ lastParsedFilename || `${store.preview.appName || '未命名应用'}.md` }}</div>
+              <div class="doc-view-file">{{ lastParsedFilename || `${store.preview.appName || '功能设计文档'}.md` }}</div>
               <button class="doc-download-btn" @click="downloadCurrentDoc">下载 .md</button>
             </div>
           </div>
@@ -1166,7 +1166,8 @@ const latestDocConversationId = ref<number | null>(null)
 const latestParseMeta = ref<any | null>(null)
 const readyForGenerate = computed(() => !!store.currentApp && parseReady.value)
 const appParsedMode = computed(() => route.query.app_mode === 'parsed')
-const builderAppDisplayName = computed(() => store.preview.appName || store.currentApp?.name || '未命名应用')
+// 应用名统一从 store.preview.appName 读；为空就空着，不再回填默认占位
+const builderAppDisplayName = computed(() => store.preview.appName || '')
 const chatGeneratedDocContent = computed(() => {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const msg = messages[i]
@@ -1185,7 +1186,7 @@ const currentDocAppCode = computed(() => {
 const displayAppCode = computed(() => currentDocAppCode.value || parsedAppCode.value || loadedAppCode.value || buildAppCode(store.preview.appName))
 const currentPreviewConfigPayload = computed(() => ({
   ...store.preview,
-  appName: store.preview.appName || builderAppDisplayName.value || '',
+  appName: store.preview.appName || '',
   appCode: parsedAppCode.value || loadedAppCode.value || currentDocAppCode.value || buildAppCode(store.preview.appName),
 }))
 function formatParseMetaSummary(meta: any) {
@@ -2718,8 +2719,8 @@ const extractPreviewData = (content: string) => {
           console.warn('已有配置，忽略 LLM 重复输出的完整 JSON')
           continue
         }
-        store.currentApp = { name: parsed.data.appName, status: 'draft' }
-        store.preview.appName = parsed.data.appName || ''
+        store.currentApp = { status: 'draft' }
+        store.setAppName(parsed.data.appName)
         store.preview.roles = parsed.data.roles || []
         store.preview.dicts = parsed.data.dicts || []
         store.preview.models = parsed.data.models || []
@@ -2944,7 +2945,7 @@ const applyPatch = (actions: any[]) => {
   }
   // 标记配置已更新
   if (!store.currentApp) {
-    store.currentApp = { name: store.preview.appName, status: 'draft' }
+    store.currentApp = { status: 'draft' }
   }
 }
 
@@ -3107,14 +3108,14 @@ const loadConversation = async (cid: number) => {
         const linkedApp = apps.find((a: any) => a.conversation_id === cid && a.config_preview)
         if (linkedApp?.config_preview) {
           const data = linkedApp.config_preview.data || linkedApp.config_preview
-          store.preview.appName = data.appName || ''
+          store.setAppName(data.appName)
           store.preview.models = data.models || []
           store.preview.forms = data.forms || []
           store.preview.dicts = data.dicts || []
           store.preview.roles = data.roles || []
           store.preview.workflows = data.workflows || []
           store.preview.permissions = data.permissions || []
-          store.currentApp = { name: store.preview.appName, status: 'draft' }
+          store.currentApp = { status: 'draft' }
           if (linkedApp.id && typeof linkedApp.id === 'number') {
             existingAppId.value = linkedApp.id
           }
@@ -3311,14 +3312,18 @@ const selectedDocVersionItem = computed<DocVersionListItem | null>(() => {
   return displayDocVersions.value[0] || null
 })
 const docVersionStructuredResult = (item?: Pick<DocVersion, 'parsed_config' | 'raw_content'> | null, fallbackConfig?: any) => {
+  // appName 原则：优先用传入数据里的名字（历史 version 可能跟当前不同），
+  // 否则回退到 store.preview.appName（store 的 setAppName 已过滤掉默认占位值）
   const parsed = item?.parsed_config?.data || item?.parsed_config
   if (parsed && typeof parsed === 'object') {
     return buildStructuredDocFromPreviewConfig(parsed, {
+      appName: parsed.appName || store.preview.appName,
       appCode: parsed.appCode || extractAppCodeFromText(String(item?.raw_content || '')),
     })
   }
   if (fallbackConfig && typeof fallbackConfig === 'object') {
     return buildStructuredDocFromPreviewConfig(fallbackConfig, {
+      appName: fallbackConfig.appName || store.preview.appName,
       appCode: fallbackConfig.appCode || displayAppCode.value,
     })
   }
@@ -3681,7 +3686,7 @@ const loadLatestDocForApp = async (appId: number) => {
     latestDocConversationId.value = null
     if (latest?.parsed_config) {
       const parsed = latest.parsed_config?.data || latest.parsed_config
-      store.preview.appName = parsed?.appName || store.preview.appName || ''
+      store.setAppName(parsed?.appName)
       store.preview.models = parsed?.models || store.preview.models || []
       store.preview.forms = parsed?.forms || store.preview.forms || []
       store.preview.dicts = parsed?.dicts || store.preview.dicts || []
@@ -4356,7 +4361,7 @@ function resetPreviewForNewParse() {
   store.preview.roles = []
   store.preview.workflows = []
   store.preview.permissions = []
-  store.preview.appName = ''
+  store.setAppName('', { force: true })
   store.currentApp = null
   latestDocContent.value = ''
   latestDocAppId.value = null
@@ -4957,8 +4962,8 @@ const uploadDocFile = async (file: File) => {
                 const skeletonName = pickAppName(data.data)
                 const skeletonCode = pickAppCode(data.data)
                 if (skeletonName && !store.preview.appName) {
-                  store.preview.appName = skeletonName
-                  store.currentApp = { name: skeletonName, status: 'draft' }
+                  store.setAppName(skeletonName)
+                  store.currentApp = { status: 'draft' }
                 }
                 if (skeletonCode) {
                   parsedAppCode.value = skeletonCode
@@ -4993,6 +4998,14 @@ const uploadDocFile = async (file: File) => {
             }
           } catch (parseErr: any) {
             if (parseErr.message && !parseErr.message.includes('JSON')) throw parseErr
+            // JSON 解析失败多见于大 done 事件跨 chunk 被切断；完整的 data 行
+            // 会在下一次 read 拼接后重新进入这段 handleSseLines。保留警告便于排查。
+            console.warn('[SSE] JSON parse failed (possibly mid-chunk)', {
+              event: currentEvent,
+              lineLen: (line || '').length,
+              preview: String(line || '').slice(0, 200),
+              error: parseErr.message,
+            })
           }
         }
       }
@@ -5037,8 +5050,8 @@ const uploadDocFile = async (file: File) => {
       const appName = pickAppName(previewData)
       const appCode = pickAppCode(previewData)
       if (previewData?.appName || previewData?.models || appName || appCode) {
-        store.currentApp = { name: appName || store.preview.appName || '未命名应用', status: 'draft' }
-        store.preview.appName = appName || store.preview.appName || ''
+        store.currentApp = { status: 'draft' }
+        store.setAppName(appName)
         parsedAppCode.value = appCode || buildAppCode(store.preview.appName)
         store.preview.roles = previewData.roles || []
         store.preview.dicts = previewData.dicts || []
@@ -5082,7 +5095,7 @@ const uploadDocFile = async (file: File) => {
       // done 事件未收到（大 payload SSE 丢失），但 progress 已逐步推送了数据到 store
       console.warn('done 事件丢失，使用 store 中已累积的数据兜底')
       if (!store.currentApp) {
-        store.currentApp = { name: store.preview.appName || '未命名应用', status: 'draft' }
+        store.currentApp = { status: 'draft' }
       }
       parseReady.value = true
       lastParsedFilename.value = file.name
@@ -5336,7 +5349,7 @@ const handleDocVersionUpload = async (file: File, appId: number) => {
               latestParseMeta.value = data.parse_meta || null
               if (data.parsed_config) {
                 const pc = data.parsed_config.data || data.parsed_config
-                store.preview.appName = pc.appName || store.preview.appName
+                store.setAppName(pc.appName)
                 store.preview.models = pc.models || []
                 store.preview.forms = pc.forms || []
                 store.preview.dicts = pc.dicts || []
@@ -5345,7 +5358,6 @@ const handleDocVersionUpload = async (file: File, appId: number) => {
                 store.preview.permissions = pc.permissions || []
                 store.currentApp = {
                   ...(store.currentApp || {}),
-                  name: store.preview.appName || store.currentApp?.name || '',
                   status: 'draft',
                   apaas_app_id: store.currentApp?.apaas_app_id,
                 }
@@ -5369,7 +5381,7 @@ const handleDocVersionUpload = async (file: File, appId: number) => {
       // 将最新解析结果更新到 store
       const pc = changePlanData.parsed_config?.data || changePlanData.parsed_config
       if (pc) {
-        store.preview.appName = pc.appName || store.preview.appName
+        store.setAppName(pc.appName)
         store.preview.roles = pc.roles || []
         store.preview.dicts = pc.dicts || []
         store.preview.models = pc.models || []
@@ -5524,7 +5536,7 @@ const executeChangePlan = async () => {
     if (updatedConfig) {
       const previewData = updatedConfig.data || updatedConfig
       if (previewData.appName || previewData.models) {
-        store.preview.appName = previewData.appName || store.preview.appName
+        store.setAppName(previewData.appName)
         store.preview.roles = previewData.roles || store.preview.roles
         store.preview.dicts = previewData.dicts || store.preview.dicts
         store.preview.models = previewData.models || store.preview.models
@@ -5615,7 +5627,7 @@ const startAssembleConfig = async () => {
           // 骨架完成 → 显示模型名和字典名（占位）
           if (evt.phase === 'skeleton' && evt.status === 'done' && evt.data) {
             const sk = evt.data
-            store.preview.appName = sk.appName || ''
+            store.setAppName(sk.appName)
             store.preview.roles = sk.roles || []
             // 用骨架的 dict_names 创建空字典占位
             store.preview.dicts = (sk.dict_names || []).map((d: any) => ({
@@ -5625,7 +5637,7 @@ const startAssembleConfig = async () => {
             store.preview.models = (sk.model_names || []).map((m: any) => ({
               name: m.name, code: m.code, fields: []
             }))
-            store.currentApp = { name: store.preview.appName, status: 'draft' }
+            store.currentApp = { status: 'draft' }
           }
 
           // 字典批次完成 → 更新对应字典的选项
@@ -5680,14 +5692,14 @@ const startAssembleConfig = async () => {
           // 完整配置 → 最终覆盖
           if (evt.phase === 'complete' && evt.data) {
             const d = evt.data
-            store.preview.appName = d.appName || store.preview.appName
+            store.setAppName(d.appName)
             store.preview.roles = d.roles || store.preview.roles
             store.preview.dicts = d.dicts || store.preview.dicts
             store.preview.models = d.models || store.preview.models
             store.preview.forms = d.forms || store.preview.forms
             store.preview.workflows = d.workflows || []
             store.preview.permissions = d.permissions || []
-            store.currentApp = { name: store.preview.appName, status: 'ready' }
+            store.currentApp = { status: 'ready' }
             parseReady.value = true
           }
 
@@ -5986,7 +5998,7 @@ const sendMessage = async () => {
             const configData = parsed.data ?? parsed
             if (configData && typeof configData === 'object') {
               const d = configData.data ?? configData
-              if (d.appName !== undefined) store.preview.appName = d.appName
+              if (d.appName !== undefined) store.setAppName(d.appName)
               if (Array.isArray(d.roles)) store.preview.roles = d.roles
               if (Array.isArray(d.dicts)) store.preview.dicts = d.dicts
               if (Array.isArray(d.models)) store.preview.models = d.models
@@ -6057,7 +6069,8 @@ const sendMessage = async () => {
               if (!store.currentApp && assistantContent.length > 50) {
                 const appNameMatch = assistantContent.match(/搭建.*?[**](.+?)[**]/)
                 if (appNameMatch) {
-                  store.currentApp = { name: appNameMatch[1] || '', status: 'talking' }
+                  store.setAppName(appNameMatch[1])
+                  store.currentApp = { status: 'talking' }
                 }
               }
             }
@@ -6179,7 +6192,8 @@ const triggerFullBuildPipeline = async () => {
     }
     const created = await applicationApi.create(payload)
     existingAppId.value = created.id
-    store.currentApp = { name: appConfig.appName || '', status: 'ready' }
+    store.setAppName(appConfig.appName)
+    store.currentApp = { status: 'ready' }
 
     // Step 6: Update progress message
     if (pMsg) {
@@ -6258,10 +6272,11 @@ const generateDocInBackground = async () => {
       if (appConfig.appCode) {
         parsedAppCode.value = appConfig.appCode
       }
-      if (!store.currentApp && appConfig.appName) {
-        store.currentApp = { name: appConfig.appName, status: 'draft' }
-      } else if (store.currentApp && appConfig.appName) {
-        store.currentApp = { ...store.currentApp, name: appConfig.appName }
+      if (appConfig.appName) {
+        store.setAppName(appConfig.appName)
+        if (!store.currentApp) {
+          store.currentApp = { status: 'draft' }
+        }
       }
       parseReady.value = true
       syncCurrentDocFromPreview('当前生成的设计文档', buildDocMarkdownFromPreview(appConfig))
@@ -6369,10 +6384,11 @@ const generateDocInChat = async () => {
         if (appConfig.appCode) {
           parsedAppCode.value = appConfig.appCode
         }
-        if (!store.currentApp && appConfig.appName) {
-          store.currentApp = { name: appConfig.appName, status: 'draft' }
-        } else if (store.currentApp && appConfig.appName) {
-          store.currentApp = { ...store.currentApp, name: appConfig.appName }
+        if (appConfig.appName) {
+          store.setAppName(appConfig.appName)
+          if (!store.currentApp) {
+            store.currentApp = { status: 'draft' }
+          }
         }
         parseReady.value = true
         syncCurrentDocFromPreview('当前生成的设计文档', buildDocMarkdownFromPreview(appConfig))
@@ -6428,7 +6444,8 @@ const confirmDocAndBuild = async () => {
     }
     const created = await applicationApi.create(payload)
     existingAppId.value = created.id
-    store.currentApp = { name: appConfig.appName || '', status: 'ready' }
+    store.setAppName(appConfig.appName)
+    store.currentApp = { status: 'ready' }
 
     // Step 5: Add confirmation message
     messages.push({
@@ -6458,7 +6475,7 @@ const confirmDocAndBuild = async () => {
 
 const buildDocMarkdownFromPreview = (previewOverride?: any) => {
   const preview = previewOverride || store.preview
-  const appName = preview?.appName || '未命名应用'
+  const appName = preview?.appName || ''
   const appCode = previewOverride ? (preview?.appCode || '') : displayAppCode.value
   const lines: string[] = []
   const models = preview?.models || []
@@ -6783,14 +6800,14 @@ onMounted(async () => {
         if (app.config_preview) {
           const data = app.config_preview.data || app.config_preview
           configData = data
-          store.preview.appName = data.appName || app.app_name || ''
+          store.setAppName(data.appName || app.app_name)
           store.preview.models = data.models || []
           store.preview.forms = data.forms || []
           store.preview.dicts = data.dicts || []
           store.preview.roles = data.roles || []
           store.preview.workflows = data.workflows || []
           store.preview.permissions = data.permissions || []
-          store.currentApp = { name: store.preview.appName, status: app.status || 'ready', apaas_app_id: app.apaas_app_id }
+          store.currentApp = { status: app.status || 'ready', apaas_app_id: app.apaas_app_id }
           platformDirectUrl.value = app.apaas_url || ''
           parseReady.value = store.preview.models.length > 0
           currentAgent.value = 'builder'
@@ -6875,14 +6892,14 @@ onMounted(async () => {
               const linkedApp = apps.find((a: any) => a.conversation_id === cid && a.config_preview)
               if (linkedApp?.config_preview) {
                 const data = linkedApp.config_preview.data || linkedApp.config_preview
-                store.preview.appName = data.appName || ''
+                store.setAppName(data.appName)
                 store.preview.models = data.models || []
                 store.preview.forms = data.forms || []
                 store.preview.dicts = data.dicts || []
                 store.preview.roles = data.roles || []
                 store.preview.workflows = data.workflows || []
                 store.preview.permissions = data.permissions || []
-                store.currentApp = { name: store.preview.appName, status: 'draft', apaas_app_id: linkedApp.apaas_app_id }
+                store.currentApp = { status: 'draft', apaas_app_id: linkedApp.apaas_app_id }
                 parseReady.value = store.preview.models.length > 0
                 existingAppId.value = linkedApp.id
                 loadedAppCode.value = linkedApp.app_code || ''
@@ -6926,12 +6943,12 @@ onMounted(async () => {
         if (app.config_preview) {
           const data = app.config_preview.data || app.config_preview
           configData = data
-          store.preview.appName = data.appName || app.app_name || ''
+          store.setAppName(data.appName || app.app_name)
           store.preview.models = data.models || []
           store.preview.forms = data.forms || []
           store.preview.dicts = data.dicts || []
           store.preview.roles = data.roles || []
-          store.currentApp = { name: store.preview.appName, status: app.status || 'ready', apaas_app_id: app.apaas_app_id }
+          store.currentApp = { status: app.status || 'ready', apaas_app_id: app.apaas_app_id }
           parseReady.value = store.preview.models.length > 0
           currentAgent.value = 'builder'
         }
@@ -7028,7 +7045,7 @@ watch(() => route.query.app_id, async (newAppId, oldAppId) => {
   store.preview.roles = []
   store.preview.workflows = []
   store.preview.permissions = []
-  store.preview.appName = ''
+  store.setAppName('', { force: true })
   store.currentApp = null
   parsedAppCode.value = ''
   loadedAppCode.value = ''
@@ -7055,14 +7072,14 @@ watch(() => route.query.app_id, async (newAppId, oldAppId) => {
     if (app.config_preview) {
       const data = app.config_preview.data || app.config_preview
       configData = data
-      store.preview.appName = data.appName || app.app_name || ''
+      store.setAppName(data.appName || app.app_name)
       store.preview.models = data.models || []
       store.preview.forms = data.forms || []
       store.preview.dicts = data.dicts || []
       store.preview.roles = data.roles || []
       store.preview.workflows = data.workflows || []
       store.preview.permissions = data.permissions || []
-      store.currentApp = { name: store.preview.appName, status: app.status || 'ready', apaas_app_id: app.apaas_app_id }
+      store.currentApp = { status: app.status || 'ready', apaas_app_id: app.apaas_app_id }
       platformDirectUrl.value = app.apaas_url || ''
       parseReady.value = store.preview.models.length > 0
       currentAgent.value = 'builder'
