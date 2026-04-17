@@ -5811,18 +5811,12 @@ const getRequirementsSemanticAction = (text: string): 'generate_doc' | 'build' |
 }
 
 const createConversation = async () => {
-  const token = localStorage.getItem('token')
   const agentTypeForCreate = currentAgent.value === 'requirements' ? 'builder' : currentAgent.value
-  const res = await fetch(`${API_PREFIX}/conversations`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-    body: JSON.stringify({
+  try {
+    const data = await conversationApi.create({
       agent_type: agentTypeForCreate,
       ...(selectedBuilderModelId.value != null ? { selected_llm_config_id: selectedBuilderModelId.value } : {}),
-    })
-  })
-  if (res.ok) {
-    const data = await res.json()
+    }) as any
     conversationId.value = data.id
     selectedConversationId.value = data.id
     applyBuilderModelSelection(data.selected_llm_config_id)
@@ -5830,6 +5824,8 @@ const createConversation = async () => {
     router.replace(`/chat/${data.id}`)
     // 刷新对话列表
     fetchConversationList()
+  } catch (e) {
+    console.error('创建对话失败', e)
   }
 }
 
@@ -6766,23 +6762,19 @@ const ensureFreshRequirementsConversation = async () => {
   resetMessagesToWelcome()
 
   pendingInitialConversationPromise = (async () => {
-    const token = localStorage.getItem('token')
-    const res = await fetch(`${API_PREFIX}/conversations`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-      body: JSON.stringify({
+    try {
+      const data = await conversationApi.create({
         agent_type: 'builder',
         ...(selectedBuilderModelId.value != null ? { selected_llm_config_id: selectedBuilderModelId.value } : {}),
-      })
-    })
-    if (!res.ok) return
-
-    const data = await res.json()
-    conversationId.value = data.id
-    selectedConversationId.value = data.id
-    currentAgent.value = 'requirements'
-    router.replace(`/chat/${data.id}`)
-    resetMessagesToWelcome()
+      }) as any
+      conversationId.value = data.id
+      selectedConversationId.value = data.id
+      currentAgent.value = 'requirements'
+      router.replace(`/chat/${data.id}`)
+      resetMessagesToWelcome()
+    } catch (e) {
+      console.error('初始化对话失败', e)
+    }
   })().finally(() => {
     pendingInitialConversationPromise = null
   })
@@ -6796,11 +6788,8 @@ onMounted(async () => {
   try {
     const token = localStorage.getItem('token')
     if (token) {
-      const res = await fetch(`${API_PREFIX}/apaas/status`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      })
-      if (res.ok) {
-        const data = await res.json()
+      const data = await request.get<any, any>('/apaas/status')
+      if (data) {
         store.connected = data.connected
       }
     }

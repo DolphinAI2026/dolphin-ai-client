@@ -202,7 +202,7 @@
 </template>
 
 <script setup lang="ts">
-import { API_PREFIX } from '@/utils/request'
+import request from '@/utils/request'
 import { ref, reactive, computed, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Loading, Close } from '@element-plus/icons-vue'
@@ -326,15 +326,9 @@ async function fetchAvailableUsers() {
   if (availableUsers.value.length > 0) return
   loadingUsers.value = true
   try {
-    const token = localStorage.getItem('token') || ''
-    const resp = await fetch(`${API_PREFIX}/auth/users`, {
-      headers: { 'Authorization': `Bearer ${token}` }
-    })
-    if (resp.ok) {
-      const allUsers: { id: number; username: string }[] = await resp.json()
-      const memberIds = new Set(members.value.map(m => m.user_id))
-      availableUsers.value = allUsers.filter(u => !memberIds.has(u.id))
-    }
+    const allUsers = await request.get<any, { id: number; username: string }[]>('/auth/users')
+    const memberIds = new Set(members.value.map(m => m.user_id))
+    availableUsers.value = (allUsers || []).filter(u => !memberIds.has(u.id))
   } catch (e) {
     console.error('获取用户列表失败', e)
   } finally {
