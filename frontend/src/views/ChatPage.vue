@@ -235,7 +235,7 @@
       </div>
 
       <div class="preview-side builder-result-side">
-        <div v-if="!showDeployedVersionedView || isUpdateReviewMode" class="preview-side-header">
+        <div class="preview-side-header">
           <div class="preview-side-heading">
             <div class="preview-side-heading-main">
               <div class="preview-side-title-row">
@@ -302,7 +302,7 @@
         <div class="preview-body">
           <div v-if="showBuilderPreview" class="tab-content">
             <!-- 正常模式：统一用标准文档结构渲染 -->
-            <template v-if="!isUpdateReviewMode && !showDeployedVersionedView">
+            <template v-if="!isUpdateReviewMode">
               <div v-if="liveStructuredDocResult" class="doc-version-content expanded doc-preview-body structured-doc-host">
                 <StructuredDocRenderer :doc-result="liveStructuredDocResult" />
               </div>
@@ -321,26 +321,6 @@
                         <span class="change-badge" :class="role.badge.tone">{{ role.badge.label }}</span>
                       </div>
                       <div class="preview-item-code">{{ role.code }}</div>
-                    </div>
-                  </div>
-                  <div class="preview-item-desc">{{ role.description }}</div>
-                </div>
-              </template>
-              <template v-else-if="showDeployedVersionedView">
-                <div v-if="deployedRoleItems.length === 0" class="preview-empty small">暂无角色数据</div>
-                <div
-                  v-for="(role, idx) in deployedRoleItems"
-                  :key="role.key"
-                  class="preview-item-card versioned-card"
-                  :class="{ 'history-muted-card': role.versionBadge.muted }"
-                >
-                  <div class="preview-item-head">
-                    <div>
-                      <div class="preview-item-title-row">
-                        <div class="preview-item-title">{{ idx + 1 }}. {{ role.name }}</div>
-                        <span class="version-badge" :class="role.versionBadge.tone">{{ role.versionBadge.label }}</span>
-                      </div>
-                      <div class="preview-item-code">{{ role.code || '未设置编码' }}</div>
                     </div>
                   </div>
                   <div class="preview-item-desc">{{ role.description }}</div>
@@ -384,41 +364,6 @@
                       <code class="dict-option-code">{{ option.code }}</code>
                       <span class="dict-option-name">{{ option.name }}</span>
                       <span class="change-badge mini" :class="option.badge.tone">{{ option.badge.label }}</span>
-                    </div>
-                  </div>
-                </div>
-              </template>
-              <template v-else-if="showDeployedVersionedView">
-                <div v-if="deployedDictItems.length === 0" class="preview-empty small">暂无数据字典</div>
-                <div
-                  v-for="(dict, idx) in deployedDictItems"
-                  :key="dict.key"
-                  class="preview-item-card versioned-card"
-                  :class="{ 'history-muted-card': dict.versionBadge.muted }"
-                >
-                  <div class="preview-item-head">
-                    <div>
-                      <div class="preview-item-title-row">
-                        <div class="preview-item-title">{{ idx + 1 }}. {{ dict.name }}</div>
-                        <span class="version-badge" :class="dict.versionBadge.tone">{{ dict.versionBadge.label }}</span>
-                      </div>
-                      <div class="preview-item-code">{{ dict.code || '未设置编码' }}</div>
-                    </div>
-                  </div>
-                  <div class="form-meta-row resource-meta-row">
-                    <span class="form-meta-chip">{{ dict.optionCount }} 个选项</span>
-                    <span class="form-meta-chip subtle">{{ dict.summary }}</span>
-                  </div>
-                  <div class="dict-option-list">
-                    <div
-                      v-for="option in dict.options"
-                      :key="option.key"
-                      class="dict-option-row versioned"
-                      :class="{ 'history-muted-row': option.versionBadge.muted }"
-                    >
-                      <code class="dict-option-code">{{ option.code }}</code>
-                      <span class="dict-option-name">{{ option.name }}</span>
-                      <span class="version-badge mini" :class="option.versionBadge.tone">{{ option.versionBadge.label }}</span>
                     </div>
                   </div>
                 </div>
@@ -472,47 +417,6 @@
                       <div class="field-right">
                         <span class="ftype">{{ field.type }}</span>
                         <span class="change-badge mini" :class="field.badge.tone">{{ field.badge.label }}</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </template>
-              <template v-else-if="showDeployedVersionedView">
-                <div v-if="deployedModelItems.length === 0" class="preview-empty small">暂无数据模型</div>
-                <div
-                  v-for="(model, idx) in deployedModelItems"
-                  :key="model.key"
-                  class="model-card versioned-card"
-                  :class="{ 'history-muted-card': model.versionBadge.muted }"
-                >
-                  <div class="model-header">
-                    <div class="model-title-stack">
-                      <div class="preview-item-title-row">
-                        <span class="model-name">{{ idx + 1 }}. {{ model.name }}</span>
-                        <span class="version-badge" :class="model.versionBadge.tone">{{ model.versionBadge.label }}</span>
-                      </div>
-                      <span class="model-summary">{{ model.summary }}</span>
-                    </div>
-                    <span class="form-meta-chip subtle">{{ model.tableTypeLabel }}</span>
-                    <span class="model-code">{{ model.code || '未设置编码' }}</span>
-                  </div>
-                  <div class="field-list">
-                    <div
-                      v-for="field in model.fields"
-                      :key="field.key"
-                      class="field-row versioned"
-                      :class="{ 'history-muted-row': field.versionBadge.muted }"
-                    >
-                      <div class="field-left">
-                        <div class="field-icon">{{ getFieldIcon(field) }}</div>
-                        <div class="field-text">
-                          <span class="field-name">{{ field.name }}</span>
-                          <span class="field-code">{{ field.code }}</span>
-                        </div>
-                      </div>
-                      <div class="field-right">
-                        <span class="ftype">{{ field.type }}</span>
-                        <span class="version-badge mini" :class="field.versionBadge.tone">{{ field.versionBadge.label }}</span>
                       </div>
                     </div>
                   </div>
@@ -573,45 +477,6 @@
                         <span class="form-change-detail">{{ component.detail }}</span>
                       </div>
                       <span class="change-badge mini" :class="component.badge.tone">{{ component.badge.label }}</span>
-                    </div>
-                  </div>
-                </div>
-              </template>
-              <template v-else-if="showDeployedVersionedView">
-                <div v-if="deployedFormItems.length === 0" class="preview-empty small">暂无表单配置</div>
-                <div
-                  v-for="(form, idx) in deployedFormItems"
-                  :key="form.key"
-                  class="preview-item-card form-preview-card versioned-card"
-                  :class="{ 'history-muted-card': form.versionBadge.muted }"
-                >
-                  <div class="preview-item-head">
-                    <div>
-                      <div class="preview-item-title-row">
-                        <div class="preview-item-title">{{ idx + 1 }}. {{ form.name }}</div>
-                        <span class="version-badge" :class="form.versionBadge.tone">{{ form.versionBadge.label }}</span>
-                      </div>
-                      <div class="preview-item-code">{{ form.code || '未设置编码' }}</div>
-                    </div>
-                  </div>
-                  <div class="form-meta-row resource-meta-row">
-                    <span v-if="form.modelName" class="form-meta-chip">{{ form.modelName }}</span>
-                    <span v-if="form.modelCode" class="form-meta-chip subtle">{{ form.modelCode }}</span>
-                    <span class="form-meta-chip subtle">{{ form.tableTypeLabel }}</span>
-                    <span class="form-meta-chip subtle">{{ form.componentCount }} 个组件</span>
-                  </div>
-                  <div class="form-change-list">
-                    <div
-                      v-for="component in form.components"
-                      :key="component.key"
-                      class="form-change-row versioned"
-                      :class="{ 'history-muted-row': component.versionBadge.muted }"
-                    >
-                      <div class="form-change-main">
-                        <span class="form-change-name">{{ component.name }}</span>
-                        <span class="form-change-detail">{{ component.detail }}</span>
-                      </div>
-                      <span class="version-badge mini" :class="component.versionBadge.tone">{{ component.versionBadge.label }}</span>
                     </div>
                   </div>
                 </div>
@@ -1265,14 +1130,6 @@ const getBuilderTabCount = (tabKey: typeof builderPreviewTab.value) => {
     if (tabKey === 'permissions') return 0
     return docPreviewAvailable.value ? 1 : 0
   }
-  if (showDeployedVersionedView.value) {
-    if (tabKey === 'roles') return deployedRoleItems.value.length
-    if (tabKey === 'dicts') return deployedDictItems.value.length
-    if (tabKey === 'models') return deployedModelItems.value.length
-    if (tabKey === 'forms') return deployedFormItems.value.length
-    if (tabKey === 'permissions') return permissionPreviewItems.value.length
-    return docPreviewAvailable.value ? 1 : 0
-  }
   if (tabKey === 'roles') return store.preview.roles.length
   if (tabKey === 'dicts') return store.preview.dicts.length
   if (tabKey === 'models') return store.preview.models.length
@@ -1316,11 +1173,13 @@ const showUpdateButton = computed(() => !!existingAppId.value && isPlatformDeplo
 const showExecuteUpdateButton = computed(() => isUpdateReviewMode.value && !!store.changePlan?.actions?.length)
 const showBuilderComposer = computed(() => !isPlatformDeployed.value || isUpdateReviewMode.value)
 const showDeployProgressInline = computed(() => deploySteps.value.length > 0 || deployOpen.value || isPlatformDeployed.value)
-const showDeployedVersionedView = computed(() => isPlatformDeployed.value && !isUpdateReviewMode.value)
+// 用户已决定废弃 "已部署应用版本化视图"：右侧永远显示文档（单文档或 diff），
+// 不再区分 showDeployedVersionedView 模式。保留此处常量以便语义搜索，
+// 但所有分支按 false 处理（= 渲染文档视图）。
 const showDeploySidebar = computed(() =>
   isUpdateReviewMode.value ||
   isUpdateExecutionMode.value ||
-  !showDeployedVersionedView.value
+  !isPlatformDeployed.value
 )
 const showViewSwitcher = computed(() =>
   !!existingAppId.value && (
@@ -1595,411 +1454,9 @@ const updateFormDiffItems = computed(() =>
   })
 )
 
-const deployedRoleItems = computed<VersionedRoleItem[]>(() => {
-  const roleMap = new Map<string, VersionedRoleItem>()
-  const latestVersion = normalizeVersionNumber(currentDocVersion.value, 1)
-  const ensureRoleItem = (source: any, fallbackCode: string, version: number, tone: VersionBadgeMeta['tone']) => {
-    const code = getRoleCodeValue(source, fallbackCode)
-    const existing = roleMap.get(code)
-    const nextItem: VersionedRoleItem = {
-      key: existing?.key || `deployed-role-${code}`,
-      name: getRoleNameValue(source, existing?.name || code || '未命名角色'),
-      code,
-      description: getRoleDescription(source || existing || {}),
-      versionBadge: buildVersionBadge(tone, version),
-    }
-    roleMap.set(code, nextItem)
-    return nextItem
-  }
 
-  completedChangePlans.value.forEach((plan: any) => {
-    const version = normalizeVersionNumber(plan?.toVersion, 1)
-    const roleChanges = Array.isArray(plan?.resourceDiff?.role_changes) ? plan.resourceDiff.role_changes : []
-    roleChanges.forEach((change: any, idx: number) => {
-      const source = change?.new_value || change?.old_value || {}
-      const code = getRoleCodeValue(source, change?.code || `role_${version}_${idx + 1}`)
-      const tone = getVersionToneForChange(change?.change_type, 'role')
-      ensureRoleItem({
-        ...source,
-        code,
-        name: getPrimaryText(change?.name, source?.name, source?.roleName),
-        description: getRoleDescription(source || change?.old_value || {}),
-      }, code, version, tone)
-    })
-  })
 
-  store.preview.roles.forEach((role: any, idx: number) => {
-    ensureRoleItem(role, `role_${idx + 1}`, latestVersion, 'active')
-  })
 
-  return sortVersionedItems(Array.from(roleMap.values()))
-})
-
-const deployedDictItems = computed<VersionedDictItem[]>(() => {
-  const dictMap = new Map<string, {
-    key: string
-    name: string
-    code: string
-    versionBadge: VersionBadgeMeta
-    optionsMap: Map<string, VersionedDictOptionItem>
-  }>()
-  const latestVersion = normalizeVersionNumber(currentDocVersion.value, 1)
-
-  const ensureDictItem = (source: any, fallbackCode: string, version: number, tone: VersionBadgeMeta['tone']) => {
-    const code = getDictCodeValue(source, fallbackCode)
-    const existing = dictMap.get(code)
-    const item = existing || {
-      key: `deployed-dict-${code}`,
-      name: getDictNameValue(source, code || '未命名字典'),
-      code,
-      versionBadge: buildVersionBadge(tone, version),
-      optionsMap: new Map<string, VersionedDictOptionItem>(),
-    }
-    item.name = getDictNameValue(source, item.name || code || '未命名字典')
-    item.code = code
-    item.versionBadge = buildVersionBadge(tone, version)
-    dictMap.set(code, item)
-    return item
-  }
-  const ensureDictOptionItem = (
-    dictItem: { optionsMap: Map<string, VersionedDictOptionItem>; versionBadge: VersionBadgeMeta },
-    source: any,
-    fallbackCode: string,
-    version: number,
-    tone: VersionBadgeMeta['tone'],
-  ) => {
-    const code = getDictOptionCodeValue(source, fallbackCode)
-    const existing = dictItem.optionsMap.get(code)
-    dictItem.optionsMap.set(code, {
-      key: existing?.key || `${code}-${version}`,
-      name: getDictOptionNameValue(source, existing?.name || code || '未命名选项'),
-      code,
-      versionBadge: buildVersionBadge(tone, version),
-    })
-    if (tone === 'active' && !dictItem.versionBadge.muted) {
-      dictItem.versionBadge = buildVersionBadge('active', version)
-    }
-  }
-
-  completedChangePlans.value.forEach((plan: any) => {
-    const version = normalizeVersionNumber(plan?.toVersion, 1)
-    const dictChanges = Array.isArray(plan?.resourceDiff?.dict_changes) ? plan.resourceDiff.dict_changes : []
-    dictChanges.forEach((change: any, idx: number) => {
-      const tone = getVersionToneForChange(change?.change_type, 'dict')
-      const source = change?.new_value || change?.old_value || {}
-      const code = getDictCodeValue(source, change?.code || `dict_${version}_${idx + 1}`)
-      const dictItem = ensureDictItem({
-        ...source,
-        code,
-        name: getPrimaryText(change?.name, source?.name, source?.dictionaryName),
-      }, code, version, tone)
-
-      if (String(change?.change_type || '').toLowerCase() === 'added') {
-        normalizeDictOptions(change?.new_value || source).forEach((option: any, optionIdx: number) => {
-          ensureDictOptionItem(dictItem, option, `opt_${optionIdx + 1}`, version, 'active')
-        })
-      }
-
-      if (String(change?.change_type || '').toLowerCase() === 'deleted') {
-        const deletedOptions = normalizeDictOptions(change?.old_value || source)
-        if (!dictItem.optionsMap.size) {
-          deletedOptions.forEach((option: any, optionIdx: number) => {
-            ensureDictOptionItem(dictItem, option, `opt_${optionIdx + 1}`, version, 'disabled')
-          })
-        }
-        markNestedItemsAsMuted(dictItem.optionsMap, 'disabled', version)
-        return
-      }
-
-      const optionChanges = Array.isArray(change?.option_changes) ? change.option_changes : []
-      optionChanges.forEach((optionChange: any, optionIdx: number) => {
-        const optionTone = getVersionToneForChange(optionChange?.change_type, 'dict_option')
-        const optionSource = optionChange?.new_value || optionChange?.old_value || {}
-        ensureDictOptionItem(dictItem, {
-          ...optionSource,
-          code: getPrimaryText(optionChange?.code, optionSource?.code, optionSource?.item_code),
-          name: getPrimaryText(optionChange?.name, optionSource?.name, optionSource?.item_name),
-        }, optionChange?.code || `opt_${version}_${optionIdx + 1}`, version, optionTone)
-      })
-    })
-  })
-
-  store.preview.dicts.forEach((dict: any, idx: number) => {
-    const dictItem = ensureDictItem(dict, `dict_${idx + 1}`, latestVersion, 'active')
-    normalizeDictOptions(dict).forEach((option: any, optionIdx: number) => {
-      ensureDictOptionItem(dictItem, option, `opt_${optionIdx + 1}`, latestVersion, 'active')
-    })
-  })
-
-  return sortVersionedItems(Array.from(dictMap.values()).map((item) => {
-    const options = sortVersionedItems(Array.from(item.optionsMap.values()))
-    return {
-      key: item.key,
-      name: item.name,
-      code: item.code,
-      versionBadge: item.versionBadge,
-      options,
-      optionCount: options.length,
-      summary: options.length ? options.map(option => option.name).slice(0, 6).join('、') + (options.length > 6 ? ` 等 ${options.length} 项` : '') : '暂无选项',
-    }
-  }))
-})
-
-const deployedModelItems = computed<VersionedModelItem[]>(() => {
-  const modelMap = new Map<string, {
-    key: string
-    name: string
-    code: string
-    tableTypeLabel: string
-    versionBadge: VersionBadgeMeta
-    fieldsMap: Map<string, VersionedModelFieldItem>
-  }>()
-  const latestVersion = normalizeVersionNumber(currentDocVersion.value, 1)
-
-  const ensureModelItem = (source: any, fallbackCode: string, version: number, tone: VersionBadgeMeta['tone']) => {
-    const code = getModelCodeValue(source, fallbackCode)
-    const existing = modelMap.get(code)
-    const item = existing || {
-      key: `deployed-model-${code}`,
-      name: getModelNameValue(source, code || '未命名模型'),
-      code,
-      tableTypeLabel: getTableTypeLabel(source?.table_type || source?.tableType || source?.type),
-      versionBadge: buildVersionBadge(tone, version),
-      fieldsMap: new Map<string, VersionedModelFieldItem>(),
-    }
-    item.name = getModelNameValue(source, item.name || code || '未命名模型')
-    item.code = code
-    item.tableTypeLabel = getTableTypeLabel(source?.table_type || source?.tableType || source?.type)
-    item.versionBadge = buildVersionBadge(tone, version)
-    modelMap.set(code, item)
-    return item
-  }
-  const ensureModelFieldItem = (
-    modelItem: { fieldsMap: Map<string, VersionedModelFieldItem>; versionBadge: VersionBadgeMeta },
-    source: any,
-    fallbackCode: string,
-    version: number,
-    tone: VersionBadgeMeta['tone'],
-  ) => {
-    const code = getFieldCodeValue(source, fallbackCode)
-    const existing = modelItem.fieldsMap.get(code)
-    modelItem.fieldsMap.set(code, {
-      key: existing?.key || `${code}-${version}`,
-      name: getFieldNameValue(source, existing?.name || code || '未命名字段'),
-      code,
-      type: getFieldTypeValue(source),
-      versionBadge: buildVersionBadge(tone, version),
-    })
-    if (tone === 'active' && !modelItem.versionBadge.muted) {
-      modelItem.versionBadge = buildVersionBadge('active', version)
-    }
-  }
-
-  completedChangePlans.value.forEach((plan: any) => {
-    const version = normalizeVersionNumber(plan?.toVersion, 1)
-    const modelChanges = Array.isArray(plan?.resourceDiff?.model_changes) ? plan.resourceDiff.model_changes : []
-    modelChanges.forEach((change: any, idx: number) => {
-      const tone = getVersionToneForChange(change?.change_type, 'model')
-      const source = change?.new_value || change?.old_value || {}
-      const code = getModelCodeValue(source, change?.code || `model_${version}_${idx + 1}`)
-      const modelItem = ensureModelItem({
-        ...source,
-        code,
-        name: getPrimaryText(change?.name, source?.name, source?.modelName),
-      }, code, version, tone)
-
-      if (String(change?.change_type || '').toLowerCase() === 'added') {
-        getModelFieldSource(change?.new_value || source).forEach((field: any, fieldIdx: number) => {
-          ensureModelFieldItem(modelItem, field, `field_${fieldIdx + 1}`, version, 'active')
-        })
-      }
-
-      if (String(change?.change_type || '').toLowerCase() === 'deleted') {
-        const deletedFields = getModelFieldSource(change?.old_value || source)
-        if (!modelItem.fieldsMap.size) {
-          deletedFields.forEach((field: any, fieldIdx: number) => {
-            ensureModelFieldItem(modelItem, field, `field_${fieldIdx + 1}`, version, 'disabled')
-          })
-        }
-        markNestedItemsAsMuted(modelItem.fieldsMap, 'disabled', version)
-        return
-      }
-
-      const fieldChanges = Array.isArray(change?.field_changes) ? change.field_changes : []
-      fieldChanges.forEach((fieldChange: any, fieldIdx: number) => {
-        const fieldTone = getVersionToneForChange(fieldChange?.change_type, 'field')
-        const fieldSource = fieldChange?.new_value || fieldChange?.old_value || {}
-        ensureModelFieldItem(modelItem, {
-          ...fieldSource,
-          code: getPrimaryText(fieldChange?.code, fieldSource?.code, fieldSource?.fieldCode),
-          name: getPrimaryText(fieldChange?.name, fieldSource?.name, fieldSource?.fieldName),
-          type: getPrimaryText(fieldChange?.field_type, fieldSource?.fieldType, fieldSource?.type),
-        }, fieldChange?.code || `field_${version}_${fieldIdx + 1}`, version, fieldTone)
-      })
-    })
-  })
-
-  store.preview.models.forEach((model: any, idx: number) => {
-    const modelItem = ensureModelItem(model, `model_${idx + 1}`, latestVersion, 'active')
-    getModelFieldSource(model).forEach((field: any, fieldIdx: number) => {
-      ensureModelFieldItem(modelItem, field, `field_${fieldIdx + 1}`, latestVersion, 'active')
-    })
-  })
-
-  return sortVersionedItems(Array.from(modelMap.values()).map((item) => {
-    const fields = sortVersionedItems(Array.from(item.fieldsMap.values()))
-    return {
-      key: item.key,
-      name: item.name,
-      code: item.code,
-      tableTypeLabel: item.tableTypeLabel,
-      versionBadge: item.versionBadge,
-      fields,
-      summary: `${item.tableTypeLabel} · ${fields.length} 个字段`,
-    }
-  }))
-})
-
-const deployedFormItems = computed<VersionedFormItem[]>(() => {
-  const formMap = new Map<string, {
-    key: string
-    name: string
-    code: string
-    modelName: string
-    modelCode: string
-    tableTypeLabel: string
-    versionBadge: VersionBadgeMeta
-    componentsMap: Map<string, VersionedFormComponentItem>
-  }>()
-  const latestVersion = normalizeVersionNumber(currentDocVersion.value, 1)
-
-  const ensureFormItem = (source: any, fallbackCode: string, version: number, tone: VersionBadgeMeta['tone']) => {
-    const code = getFormCodeValue(source, fallbackCode)
-    const existing = formMap.get(code)
-    const item = existing || {
-      key: `deployed-form-${code}`,
-      name: getFormNameValue(source, code || '未命名表单'),
-      code,
-      modelName: getPrimaryText(source?.modelName, source?.model_name),
-      modelCode: getFormModelCodeValue(source),
-      tableTypeLabel: getTableTypeLabel(source?.table_type || source?.tableType || source?.type),
-      versionBadge: buildVersionBadge(tone, version),
-      componentsMap: new Map<string, VersionedFormComponentItem>(),
-    }
-    item.name = getFormNameValue(source, item.name || code || '未命名表单')
-    item.code = code
-    item.modelName = getPrimaryText(source?.modelName, source?.model_name, item.modelName)
-    item.modelCode = getFormModelCodeValue(source, item.modelCode)
-    item.tableTypeLabel = getTableTypeLabel(source?.table_type || source?.tableType || source?.type)
-    item.versionBadge = buildVersionBadge(tone, version)
-    formMap.set(code, item)
-    return item
-  }
-  const ensureFormComponentItem = (
-    formItem: { componentsMap: Map<string, VersionedFormComponentItem>; versionBadge: VersionBadgeMeta },
-    source: any,
-    fallbackCode: string,
-    version: number,
-    tone: VersionBadgeMeta['tone'],
-  ) => {
-    const code = getFormComponentCodeValue(source, fallbackCode)
-    const existing = formItem.componentsMap.get(code)
-    formItem.componentsMap.set(code, {
-      key: existing?.key || `${code}-${version}`,
-      name: getFormComponentNameValue(source, existing?.name || code || '未命名组件'),
-      code,
-      detail: getFormComponentDetailValue(source),
-      versionBadge: buildVersionBadge(tone, version),
-    })
-    if (tone === 'active' && !formItem.versionBadge.muted) {
-      formItem.versionBadge = buildVersionBadge('active', version)
-    }
-  }
-
-  completedChangePlans.value.forEach((plan: any) => {
-    const version = normalizeVersionNumber(plan?.toVersion, 1)
-    const formChanges = Array.isArray(plan?.resourceDiff?.form_changes) ? plan.resourceDiff.form_changes : []
-    formChanges.forEach((change: any, idx: number) => {
-      const tone = getVersionToneForChange(change?.change_type, 'form')
-      const source = change?.new_value || change?.old_value || {}
-      const code = getFormCodeValue(source, change?.code || `form_${version}_${idx + 1}`)
-      const formItem = ensureFormItem({
-        ...source,
-        code,
-        name: getPrimaryText(change?.name, source?.name, source?.formName),
-        modelCode: getPrimaryText(change?.model_code, source?.modelCode, source?.model_code),
-      }, code, version, tone)
-
-      if (String(change?.change_type || '').toLowerCase() === 'added') {
-        getFormComponentSource(change?.new_value || source).forEach((component: any, componentIdx: number) => {
-          ensureFormComponentItem(formItem, component, `component_${componentIdx + 1}`, version, 'active')
-        })
-      }
-
-      if (String(change?.change_type || '').toLowerCase() === 'deleted') {
-        const deletedComponents = getFormComponentSource(change?.old_value || source)
-        if (!formItem.componentsMap.size) {
-          deletedComponents.forEach((component: any, componentIdx: number) => {
-            ensureFormComponentItem(formItem, component, `component_${componentIdx + 1}`, version, 'deleted')
-          })
-        }
-        markNestedItemsAsMuted(formItem.componentsMap, 'deleted', version)
-        return
-      }
-
-      const componentChanges = Array.isArray(change?.component_changes) ? change.component_changes : []
-      componentChanges.forEach((componentChange: any, componentIdx: number) => {
-        const componentTone = getVersionToneForChange(componentChange?.change_type, 'component')
-        const componentSource = componentChange?.new_value || componentChange?.old_value || {}
-        ensureFormComponentItem(formItem, {
-          ...componentSource,
-          code: getPrimaryText(componentChange?.code, componentSource?.code, componentSource?.model_field),
-          name: getPrimaryText(componentChange?.name, componentSource?.name, componentSource?.label),
-          model_field: getPrimaryText(componentChange?.model_field, componentSource?.model_field),
-          table_model_code: getPrimaryText(componentChange?.table_model_code, componentSource?.table_model_code),
-          component_type: getPrimaryText(componentChange?.component_type, componentSource?.component_type),
-          changed_properties: componentChange?.changed_properties,
-        }, componentChange?.code || `component_${version}_${componentIdx + 1}`, version, componentTone)
-      })
-    })
-  })
-
-  store.preview.models
-    .filter((model: any) => !/sub|child|子表/.test(String(model?.table_type || model?.type || '').toLowerCase()))
-    .forEach((model: any, idx: number) => {
-    const modelCode = getModelCodeValue(model, `model_${idx + 1}`)
-    const formItem = ensureFormItem({
-      name: getPrimaryText(model?.form_name, model?.name),
-      code: getPrimaryText(model?.form_code, model?.code, `form_${idx + 1}`),
-      modelName: getPrimaryText(model?.name, model?.form_name),
-      modelCode,
-      table_type: model?.table_type || model?.type,
-    }, `form_${idx + 1}`, latestVersion, 'active')
-    getModelFieldSource(model).forEach((field: any, fieldIdx: number) => {
-      ensureFormComponentItem(formItem, {
-        code: getFieldCodeValue(field, `component_${fieldIdx + 1}`),
-        name: getFieldNameValue(field, `组件${fieldIdx + 1}`),
-        model_field: `${modelCode}.${getFieldCodeValue(field, `field_${fieldIdx + 1}`)}`,
-        component_type: getFieldTypeValue(field),
-      }, `component_${fieldIdx + 1}`, latestVersion, 'active')
-    })
-  })
-
-  return sortVersionedItems(Array.from(formMap.values()).map((item) => {
-    const components = sortVersionedItems(Array.from(item.componentsMap.values()))
-    return {
-      key: item.key,
-      name: item.name,
-      code: item.code,
-      modelName: item.modelName,
-      modelCode: item.modelCode,
-      tableTypeLabel: item.tableTypeLabel,
-      versionBadge: item.versionBadge,
-      components,
-      componentCount: components.length,
-    }
-  }))
-})
 
 const updateReviewGroups = computed(() => [
   { title: '角色', icon: '👥', items: updateRoleDiffItems.value },
@@ -7115,11 +6572,6 @@ watch(isUpdateReviewMode, (enabled) => {
   if (!currentTabVisible || getBuilderTabCount(builderPreviewTab.value) === 0) {
     builderPreviewTab.value = getPreferredUpdateTab()
   }
-}, { immediate: true })
-
-watch(showDeployedVersionedView, (enabled) => {
-  if (!enabled) return
-  builderPreviewTab.value = 'docs'
 }, { immediate: true })
 
 watch(displayDocVersions, (versions) => {
