@@ -1181,13 +1181,6 @@ async def run_complete_generation(
                 else:
                     raise
 
-        # 兼容：原 Phase 2 for-loop 的循环变量 `m` 会泄漏进 Phase 3 作用域被读取
-        # （见 Phase 3 create_menu 处的 m["name"]，属历史 bug，批 4 清理）
-        if new_models_to_create:
-            m = new_models_to_create[-1][1]
-        elif models:
-            m = models[-1]
-
         yield {"stage": 2, "status": "done", "step": f"模型完成（{len(model_info)} 个）"}
 
     except Exception as e:
@@ -1266,15 +1259,15 @@ async def run_complete_generation(
                             form_id = fr["id"]
                             form_results.append({
                                 "formId": form_id,
-                                "formName": fr.get("formName", m["name"]),
+                                "formName": fr.get("formName", form_name),
                                 "formCode": fr.get("formCode", ""),
                                 "menuId": fr.get("menuId", ""),
                             })
                             # formConfig API 创建的菜单不可见，需要额外创建菜单
                             try:
-                                await client.create_menu(app_id, m["name"], form_id, menu_order=idx)
+                                await client.create_menu(app_id, form_name, form_id, menu_order=idx)
                             except Exception as menu_err:
-                                logger.warning(f"创建菜单失败（{m['name']}）: {menu_err}")
+                                logger.warning(f"创建菜单失败（{form_name}）: {menu_err}")
                 yield {"stage": 3, "status": "running", "step": f"创建: {form_name}"}
             except Exception as e:
                 yield {"stage": 3, "status": "running", "step": f"失败 {form_name}: {e}"}
