@@ -308,6 +308,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { handleError } from '@/utils/errorHandler'
 import { platformEnvApi, type PlatformEnv } from '@/api/platformEnv'
 import { llmConfigApi, type LlmConfig, type ProviderPreset } from '@/api/llmConfig'
+import { providerOptions, providerLabel, purposeLabel } from '@/utils/llmConfig'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
 
 const activeTab = ref<'envs' | 'llm'>('envs')
@@ -477,17 +478,6 @@ const llmSaving = ref(false)
 const presets = ref<ProviderPreset[]>([])
 const llmLoaded = ref(false)
 
-const providerOptions = [
-  { value: 'minimax', label: 'MiniMax' },
-  { value: 'qwen', label: '通义千问 (Qwen)' },
-  { value: 'deepseek', label: 'DeepSeek' },
-  { value: 'zhipu', label: '智谱 (Zhipu)' },
-  { value: 'moonshot', label: 'Moonshot' },
-  { value: 'openai', label: 'OpenAI' },
-  { value: 'anthropic', label: 'Anthropic' },
-  { value: 'custom', label: '自定义' },
-]
-
 const llmForm = reactive({
   config_name: '',
   provider: 'minimax',
@@ -505,16 +495,6 @@ const currentModelOptions = computed(() => {
   const preset = presets.value.find(p => p.provider === llmForm.provider)
   return preset?.models || []
 })
-
-function providerLabel(provider: string): string {
-  const opt = providerOptions.find(p => p.value === provider)
-  return opt?.label || provider
-}
-
-function purposeLabel(purpose: string): string {
-  const map: Record<string, string> = { all: '全部场景', builder: '应用构建', coding: '代码生成' }
-  return map[purpose] || purpose
-}
 
 function resetLlmForm() {
   llmForm.config_name = ''
