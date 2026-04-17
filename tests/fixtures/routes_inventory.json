@@ -1,0 +1,1280 @@
+[
+  {
+    "path": "/apaas/{path:path}",
+    "methods": [
+      "DELETE",
+      "GET",
+      "OPTIONS",
+      "POST",
+      "PUT"
+    ],
+    "name": "proxy_apaas"
+  },
+  {
+    "path": "/api/apaas/connect",
+    "methods": [
+      "POST"
+    ],
+    "name": "apaas_connect"
+  },
+  {
+    "path": "/api/apaas/login",
+    "methods": [
+      "POST"
+    ],
+    "name": "apaas_login"
+  },
+  {
+    "path": "/api/apaas/status",
+    "methods": [
+      "GET"
+    ],
+    "name": "apaas_status"
+  },
+  {
+    "path": "/api/applications",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_applications"
+  },
+  {
+    "path": "/api/applications",
+    "methods": [
+      "POST"
+    ],
+    "name": "create_application"
+  },
+  {
+    "path": "/api/applications/auto-create",
+    "methods": [
+      "POST"
+    ],
+    "name": "auto_create_application"
+  },
+  {
+    "path": "/api/applications/convert-config",
+    "methods": [
+      "POST"
+    ],
+    "name": "convert_config"
+  },
+  {
+    "path": "/api/applications/doc-versions-by-conversation/{conversation_id}",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_doc_versions_by_conversation"
+  },
+  {
+    "path": "/api/applications/import-from-platform",
+    "methods": [
+      "POST"
+    ],
+    "name": "import_from_platform"
+  },
+  {
+    "path": "/api/applications/upload-doc",
+    "methods": [
+      "POST"
+    ],
+    "name": "upload_design_doc"
+  },
+  {
+    "path": "/api/applications/upload-doc-with-conversation",
+    "methods": [
+      "POST"
+    ],
+    "name": "upload_doc_with_conversation"
+  },
+  {
+    "path": "/api/applications/{app_id}",
+    "methods": [
+      "DELETE"
+    ],
+    "name": "delete_application"
+  },
+  {
+    "path": "/api/applications/{app_id}",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_application"
+  },
+  {
+    "path": "/api/applications/{app_id}",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_application"
+  },
+  {
+    "path": "/api/applications/{app_id}",
+    "methods": [
+      "PUT"
+    ],
+    "name": "update_application"
+  },
+  {
+    "path": "/api/applications/{app_id}/api-logs",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_api_logs"
+  },
+  {
+    "path": "/api/applications/{app_id}/change-plans/{plan_id}",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_change_plan"
+  },
+  {
+    "path": "/api/applications/{app_id}/change-plans/{plan_id}/execute",
+    "methods": [
+      "POST"
+    ],
+    "name": "execute_change_plan"
+  },
+  {
+    "path": "/api/applications/{app_id}/change-plans/{plan_id}/selections",
+    "methods": [
+      "PUT"
+    ],
+    "name": "update_change_plan_selections"
+  },
+  {
+    "path": "/api/applications/{app_id}/code",
+    "methods": [
+      "PATCH"
+    ],
+    "name": "update_app_code"
+  },
+  {
+    "path": "/api/applications/{app_id}/doc-versions",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_doc_versions"
+  },
+  {
+    "path": "/api/applications/{app_id}/doc-versions/{version_id}",
+    "methods": [
+      "DELETE"
+    ],
+    "name": "delete_doc_version"
+  },
+  {
+    "path": "/api/applications/{app_id}/generate",
+    "methods": [
+      "GET"
+    ],
+    "name": "generate_application"
+  },
+  {
+    "path": "/api/applications/{app_id}/generate-icon",
+    "methods": [
+      "POST"
+    ],
+    "name": "generate_application_icon"
+  },
+  {
+    "path": "/api/applications/{app_id}/platform-config",
+    "methods": [
+      "PATCH"
+    ],
+    "name": "update_platform_config"
+  },
+  {
+    "path": "/api/applications/{app_id}/publish",
+    "methods": [
+      "POST"
+    ],
+    "name": "publish_application"
+  },
+  {
+    "path": "/api/applications/{app_id}/resolve-conflict",
+    "methods": [
+      "POST"
+    ],
+    "name": "resolve_conflict"
+  },
+  {
+    "path": "/api/applications/{app_id}/steps/execute",
+    "methods": [
+      "POST"
+    ],
+    "name": "execute_step"
+  },
+  {
+    "path": "/api/applications/{app_id}/steps/reset",
+    "methods": [
+      "POST"
+    ],
+    "name": "reset_step"
+  },
+  {
+    "path": "/api/applications/{app_id}/steps/status",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_step_status"
+  },
+  {
+    "path": "/api/applications/{app_id}/upload-doc-version",
+    "methods": [
+      "POST"
+    ],
+    "name": "upload_doc_version"
+  },
+  {
+    "path": "/api/auth/login",
+    "methods": [
+      "POST"
+    ],
+    "name": "login"
+  },
+  {
+    "path": "/api/auth/me",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_me"
+  },
+  {
+    "path": "/api/auth/register",
+    "methods": [
+      "POST"
+    ],
+    "name": "register"
+  },
+  {
+    "path": "/api/auth/select-tenant",
+    "methods": [
+      "POST"
+    ],
+    "name": "select_tenant"
+  },
+  {
+    "path": "/api/auth/users",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_users"
+  },
+  {
+    "path": "/api/chat/generate-config",
+    "methods": [
+      "POST"
+    ],
+    "name": "generate_config_phased"
+  },
+  {
+    "path": "/api/chat/send",
+    "methods": [
+      "POST"
+    ],
+    "name": "send_message"
+  },
+  {
+    "path": "/api/chat/send-with-file",
+    "methods": [
+      "POST"
+    ],
+    "name": "send_message_with_file"
+  },
+  {
+    "path": "/api/coding/auto-pipeline",
+    "methods": [
+      "POST"
+    ],
+    "name": "auto_pipeline"
+  },
+  {
+    "path": "/api/coding/conversations",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_coding_conversations"
+  },
+  {
+    "path": "/api/coding/conversations/{conversation_id}/messages",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_coding_messages"
+  },
+  {
+    "path": "/api/coding/detect-scene",
+    "methods": [
+      "POST"
+    ],
+    "name": "detect_scene"
+  },
+  {
+    "path": "/api/coding/generate",
+    "methods": [
+      "POST"
+    ],
+    "name": "generate_code"
+  },
+  {
+    "path": "/api/coding/generate-stream",
+    "methods": [
+      "POST"
+    ],
+    "name": "generate_code_stream"
+  },
+  {
+    "path": "/api/coding/models",
+    "methods": [
+      "GET"
+    ],
+    "name": "ide_available_models_simple"
+  },
+  {
+    "path": "/api/coding/scenes",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_scenes"
+  },
+  {
+    "path": "/api/coding/skills",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_skills"
+  },
+  {
+    "path": "/api/coding/skills/{skill_name}/execute",
+    "methods": [
+      "POST"
+    ],
+    "name": "execute_skill"
+  },
+  {
+    "path": "/api/coding/template",
+    "methods": [
+      "POST"
+    ],
+    "name": "generate_template"
+  },
+  {
+    "path": "/api/coding/upload",
+    "methods": [
+      "POST"
+    ],
+    "name": "upload_file"
+  },
+  {
+    "path": "/api/coding/workspace/create",
+    "methods": [
+      "POST"
+    ],
+    "name": "create_workspace"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}",
+    "methods": [
+      "DELETE"
+    ],
+    "name": "delete_workspace"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_workspace_info"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/browser/auto-inject",
+    "methods": [
+      "POST"
+    ],
+    "name": "auto_inject_component"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/browser/back",
+    "methods": [
+      "POST"
+    ],
+    "name": "go_back"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/browser/click",
+    "methods": [
+      "POST"
+    ],
+    "name": "click"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/browser/close",
+    "methods": [
+      "POST"
+    ],
+    "name": "close_browser"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/browser/dblclick",
+    "methods": [
+      "POST"
+    ],
+    "name": "dblclick"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/browser/forward",
+    "methods": [
+      "POST"
+    ],
+    "name": "go_forward"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/browser/inject",
+    "methods": [
+      "POST"
+    ],
+    "name": "inject_component"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/browser/launch",
+    "methods": [
+      "POST"
+    ],
+    "name": "launch_browser"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/browser/navigate",
+    "methods": [
+      "POST"
+    ],
+    "name": "navigate"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/browser/press",
+    "methods": [
+      "POST"
+    ],
+    "name": "press_key"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/browser/refresh",
+    "methods": [
+      "POST"
+    ],
+    "name": "refresh"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/browser/screenshot",
+    "methods": [
+      "GET"
+    ],
+    "name": "screenshot"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/browser/scroll",
+    "methods": [
+      "POST"
+    ],
+    "name": "scroll"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/browser/serve-info",
+    "methods": [
+      "GET"
+    ],
+    "name": "serve_info"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/browser/status",
+    "methods": [
+      "GET"
+    ],
+    "name": "session_status"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/browser/type",
+    "methods": [
+      "POST"
+    ],
+    "name": "type_text"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/build",
+    "methods": [
+      "POST"
+    ],
+    "name": "build_workspace"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/build",
+    "methods": [
+      "POST"
+    ],
+    "name": "build_workspace"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/conversation",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_workspace_conversation"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/debug",
+    "methods": [
+      "POST"
+    ],
+    "name": "debug_workspace"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/debug/screenshot/{filename}",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_debug_screenshot"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/download",
+    "methods": [
+      "GET"
+    ],
+    "name": "download_artifact"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/download",
+    "methods": [
+      "GET"
+    ],
+    "name": "download_workspace_zip"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/file",
+    "methods": [
+      "GET"
+    ],
+    "name": "read_workspace_file"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/file",
+    "methods": [
+      "POST"
+    ],
+    "name": "write_workspace_file"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/files",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_workspace_files"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/ide-url",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_workspace_ide_url"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/ide/chat/completions",
+    "methods": [
+      "POST"
+    ],
+    "name": "ide_chat_completions_proxy"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/ide/completions",
+    "methods": [
+      "POST"
+    ],
+    "name": "ide_inline_completions"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/ide/image-context",
+    "methods": [
+      "POST"
+    ],
+    "name": "ide_image_context_proxy"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/ide/models",
+    "methods": [
+      "GET"
+    ],
+    "name": "ide_available_models"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/ide/pipeline",
+    "methods": [
+      "POST"
+    ],
+    "name": "ide_coding_pipeline"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/ide/symbols",
+    "methods": [
+      "GET"
+    ],
+    "name": "ide_symbol_search"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/install",
+    "methods": [
+      "POST"
+    ],
+    "name": "install_workspace_deps"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/preview",
+    "methods": [
+      "POST"
+    ],
+    "name": "preview_workspace"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/preview/dist/{filename:path}",
+    "methods": [
+      "GET"
+    ],
+    "name": "preview_dist_file"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/preview/sandbox",
+    "methods": [
+      "GET"
+    ],
+    "name": "preview_sandbox"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/publish",
+    "methods": [
+      "POST"
+    ],
+    "name": "publish_workspace"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/serve",
+    "methods": [
+      "POST"
+    ],
+    "name": "manage_serve"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/serve-status",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_serve_status"
+  },
+  {
+    "path": "/api/coding/workspace/{ws_id}/upload-to-platform",
+    "methods": [
+      "POST"
+    ],
+    "name": "upload_workspace_to_platform"
+  },
+  {
+    "path": "/api/coding/workspaces",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_workspaces"
+  },
+  {
+    "path": "/api/conversations",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_conversations"
+  },
+  {
+    "path": "/api/conversations",
+    "methods": [
+      "POST"
+    ],
+    "name": "create_conversation"
+  },
+  {
+    "path": "/api/conversations/with-apps/list",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_conversations_with_apps"
+  },
+  {
+    "path": "/api/conversations/{conversation_id}",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_conversation"
+  },
+  {
+    "path": "/api/conversations/{conversation_id}/agent-type",
+    "methods": [
+      "PATCH"
+    ],
+    "name": "update_agent_type"
+  },
+  {
+    "path": "/api/conversations/{conversation_id}/messages",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_messages"
+  },
+  {
+    "path": "/api/conversations/{conversation_id}/model",
+    "methods": [
+      "PATCH"
+    ],
+    "name": "update_conversation_model"
+  },
+  {
+    "path": "/api/harness/coding/pipeline",
+    "methods": [
+      "POST"
+    ],
+    "name": "coding_pipeline"
+  },
+  {
+    "path": "/api/harness/coding/workspace/{ws_id}/ide/pipeline",
+    "methods": [
+      "POST"
+    ],
+    "name": "ide_coding_pipeline"
+  },
+  {
+    "path": "/api/harness/profiles",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_profiles"
+  },
+  {
+    "path": "/api/harness/threads",
+    "methods": [
+      "POST"
+    ],
+    "name": "create_thread"
+  },
+  {
+    "path": "/api/harness/threads/{thread_id}",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_thread"
+  },
+  {
+    "path": "/api/harness/threads/{thread_id}/artifacts",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_thread_artifacts"
+  },
+  {
+    "path": "/api/harness/threads/{thread_id}/events",
+    "methods": [
+      "GET"
+    ],
+    "name": "replay_events"
+  },
+  {
+    "path": "/api/harness/threads/{thread_id}/turns",
+    "methods": [
+      "POST"
+    ],
+    "name": "start_turn"
+  },
+  {
+    "path": "/api/health",
+    "methods": [
+      "GET"
+    ],
+    "name": "health_check"
+  },
+  {
+    "path": "/api/llm-configs",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_llm_configs"
+  },
+  {
+    "path": "/api/llm-configs",
+    "methods": [
+      "POST"
+    ],
+    "name": "create_llm_config"
+  },
+  {
+    "path": "/api/llm-configs/options",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_llm_config_options"
+  },
+  {
+    "path": "/api/llm-configs/presets",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_provider_presets"
+  },
+  {
+    "path": "/api/llm-configs/{config_id}",
+    "methods": [
+      "DELETE"
+    ],
+    "name": "delete_llm_config"
+  },
+  {
+    "path": "/api/llm-configs/{config_id}",
+    "methods": [
+      "PUT"
+    ],
+    "name": "update_llm_config"
+  },
+  {
+    "path": "/api/llm-configs/{config_id}/set-default",
+    "methods": [
+      "POST"
+    ],
+    "name": "set_default_llm_config"
+  },
+  {
+    "path": "/api/llm-configs/{config_id}/status",
+    "methods": [
+      "POST"
+    ],
+    "name": "update_llm_config_status"
+  },
+  {
+    "path": "/api/llm-configs/{config_id}/test",
+    "methods": [
+      "POST"
+    ],
+    "name": "test_llm_config"
+  },
+  {
+    "path": "/api/marketplace",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_components"
+  },
+  {
+    "path": "/api/marketplace/my",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_my_components"
+  },
+  {
+    "path": "/api/marketplace/publish",
+    "methods": [
+      "POST"
+    ],
+    "name": "publish_component"
+  },
+  {
+    "path": "/api/marketplace/{component_id}",
+    "methods": [
+      "DELETE"
+    ],
+    "name": "unpublish_component"
+  },
+  {
+    "path": "/api/marketplace/{component_id}",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_component"
+  },
+  {
+    "path": "/api/marketplace/{component_id}/download",
+    "methods": [
+      "GET"
+    ],
+    "name": "download_component"
+  },
+  {
+    "path": "/api/platform-envs",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_envs"
+  },
+  {
+    "path": "/api/platform-envs",
+    "methods": [
+      "POST"
+    ],
+    "name": "create_env"
+  },
+  {
+    "path": "/api/platform-envs/embed-url",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_embed_url"
+  },
+  {
+    "path": "/api/platform-envs/{env_id}",
+    "methods": [
+      "DELETE"
+    ],
+    "name": "delete_env"
+  },
+  {
+    "path": "/api/platform-envs/{env_id}",
+    "methods": [
+      "PUT"
+    ],
+    "name": "update_env"
+  },
+  {
+    "path": "/api/platform-envs/{env_id}/login",
+    "methods": [
+      "POST"
+    ],
+    "name": "login_env"
+  },
+  {
+    "path": "/api/platform-envs/{env_id}/remote-apps",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_remote_apps"
+  },
+  {
+    "path": "/api/platform-envs/{env_id}/set-default",
+    "methods": [
+      "POST"
+    ],
+    "name": "set_default"
+  },
+  {
+    "path": "/api/platform-envs/{env_id}/test",
+    "methods": [
+      "POST"
+    ],
+    "name": "test_env"
+  },
+  {
+    "path": "/api/platform-proxy/entry",
+    "methods": [
+      "GET"
+    ],
+    "name": "proxy_entry"
+  },
+  {
+    "path": "/api/platform-proxy/init",
+    "methods": [
+      "POST"
+    ],
+    "name": "proxy_init"
+  },
+  {
+    "path": "/api/projects",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_projects"
+  },
+  {
+    "path": "/api/projects",
+    "methods": [
+      "POST"
+    ],
+    "name": "create_project"
+  },
+  {
+    "path": "/api/projects/{project_id}",
+    "methods": [
+      "DELETE"
+    ],
+    "name": "delete_project"
+  },
+  {
+    "path": "/api/projects/{project_id}",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_project"
+  },
+  {
+    "path": "/api/projects/{project_id}",
+    "methods": [
+      "PUT"
+    ],
+    "name": "update_project"
+  },
+  {
+    "path": "/api/projects/{project_id}/connect",
+    "methods": [
+      "POST"
+    ],
+    "name": "connect_project_platform"
+  },
+  {
+    "path": "/api/projects/{project_id}/members",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_members"
+  },
+  {
+    "path": "/api/projects/{project_id}/members",
+    "methods": [
+      "POST"
+    ],
+    "name": "add_member"
+  },
+  {
+    "path": "/api/projects/{project_id}/members/{member_id}",
+    "methods": [
+      "DELETE"
+    ],
+    "name": "remove_member"
+  },
+  {
+    "path": "/api/projects/{project_id}/members/{member_id}",
+    "methods": [
+      "PUT"
+    ],
+    "name": "update_member_role"
+  },
+  {
+    "path": "/api/projects/{project_id}/platform-apps",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_platform_apps"
+  },
+  {
+    "path": "/api/projects/{project_id}/workspaces",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_project_workspaces"
+  },
+  {
+    "path": "/api/requirements/export-md",
+    "methods": [
+      "POST"
+    ],
+    "name": "export_md"
+  },
+  {
+    "path": "/api/requirements/sessions",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_sessions"
+  },
+  {
+    "path": "/api/requirements/sessions",
+    "methods": [
+      "POST"
+    ],
+    "name": "create_session"
+  },
+  {
+    "path": "/api/requirements/sessions/{session_id}",
+    "methods": [
+      "DELETE"
+    ],
+    "name": "delete_session"
+  },
+  {
+    "path": "/api/requirements/sessions/{session_id}",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_session"
+  },
+  {
+    "path": "/api/requirements/sessions/{session_id}/chat",
+    "methods": [
+      "POST"
+    ],
+    "name": "chat"
+  },
+  {
+    "path": "/api/requirements/sessions/{session_id}/chat-with-file",
+    "methods": [
+      "POST"
+    ],
+    "name": "chat_with_file"
+  },
+  {
+    "path": "/api/requirements/sessions/{session_id}/generate-doc",
+    "methods": [
+      "POST"
+    ],
+    "name": "generate_doc"
+  },
+  {
+    "path": "/api/requirements/sessions/{session_id}/generate-doc-chat",
+    "methods": [
+      "POST"
+    ],
+    "name": "generate_doc_chat"
+  },
+  {
+    "path": "/api/templates",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_templates"
+  },
+  {
+    "path": "/api/templates",
+    "methods": [
+      "POST"
+    ],
+    "name": "create_template"
+  },
+  {
+    "path": "/api/templates/upload",
+    "methods": [
+      "POST"
+    ],
+    "name": "upload_template"
+  },
+  {
+    "path": "/api/templates/{code}",
+    "methods": [
+      "DELETE"
+    ],
+    "name": "delete_template"
+  },
+  {
+    "path": "/api/templates/{code}",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_template"
+  },
+  {
+    "path": "/api/templates/{code}",
+    "methods": [
+      "PUT"
+    ],
+    "name": "update_template"
+  },
+  {
+    "path": "/backend/{path:path}",
+    "methods": [
+      "DELETE",
+      "GET",
+      "OPTIONS",
+      "PATCH",
+      "POST",
+      "PUT"
+    ],
+    "name": "proxy_backend"
+  },
+  {
+    "path": "/docs",
+    "methods": [
+      "GET",
+      "HEAD"
+    ],
+    "name": "swagger_ui_html"
+  },
+  {
+    "path": "/docs/oauth2-redirect",
+    "methods": [
+      "GET",
+      "HEAD"
+    ],
+    "name": "swagger_ui_redirect"
+  },
+  {
+    "path": "/openapi.json",
+    "methods": [
+      "GET",
+      "HEAD"
+    ],
+    "name": "openapi"
+  },
+  {
+    "path": "/platform/{path:path}",
+    "methods": [
+      "DELETE",
+      "GET",
+      "OPTIONS",
+      "POST",
+      "PUT"
+    ],
+    "name": "proxy_platform"
+  },
+  {
+    "path": "/plugin/{path:path}",
+    "methods": [
+      "DELETE",
+      "GET",
+      "OPTIONS",
+      "POST",
+      "PUT"
+    ],
+    "name": "proxy_plugin"
+  },
+  {
+    "path": "/redoc",
+    "methods": [
+      "GET",
+      "HEAD"
+    ],
+    "name": "redoc_html"
+  },
+  {
+    "path": "/smartbi/{path:path}",
+    "methods": [
+      "DELETE",
+      "GET",
+      "OPTIONS",
+      "POST",
+      "PUT"
+    ],
+    "name": "proxy_smartbi"
+  },
+  {
+    "path": "/xdap-admin/{path:path}",
+    "methods": [
+      "DELETE",
+      "GET",
+      "OPTIONS",
+      "PATCH",
+      "POST",
+      "PUT"
+    ],
+    "name": "proxy_xdap_admin"
+  },
+  {
+    "path": "/xdap-open/{path:path}",
+    "methods": [
+      "DELETE",
+      "GET",
+      "OPTIONS",
+      "POST",
+      "PUT"
+    ],
+    "name": "proxy_xdap_open"
+  },
+  {
+    "path": "/xdap-plugin/{path:path}",
+    "methods": [
+      "DELETE",
+      "GET",
+      "OPTIONS",
+      "PATCH",
+      "POST",
+      "PUT"
+    ],
+    "name": "proxy_xdap_plugin"
+  }
+]
