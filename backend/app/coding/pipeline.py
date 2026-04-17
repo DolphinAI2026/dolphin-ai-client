@@ -734,10 +734,11 @@ _BRAINSTORM_PROMPT_FORM_COMPONENT = """\
 3. **组件名必须反映核心功能**：从用户需求提炼 kebab-case 短名（如"日期时间段选择" → `date-time-range`），**严禁**用 `custom` / `demo` / `component` / `custom-dev` 等通用占位词。
 4. **配置项表格的"数据类型"列**：只允许填 JS/JSON 基础类型（`String` / `Number` / `Boolean` / `Array` / `Object`）。**禁止**把 UI 组件名（如 `form-custom-select-editor`、`form-custom-field-assign-editor`）填到"数据类型"列里——那是 UI 渲染方式，要填到"UI 渲染"列或在"说明"列里提及。
 5. **字段赋值场景识别**：如果用户需求提到"赋值给其他字段 / 输出到某字段 / 字段联动 / 计算结果写到某字段 / 回填到表单字段"等能力，**必须**在"配置项"段新增一条配置项，其：
-   - 数据类型 = `String`（存单个目标字段 uuid）或 `Array`（存多个目标字段 uuid 列表）
-   - UI 渲染 = `form-custom-field-assign-editor`（scaffold 已预置，让用户在设计器里选目标字段）
+   - 数据类型 = `Array`（**固定值**，存储格式是 `[{origin, target}, ...]` 赋值对列表，用户可配 0 到 N 条）
+   - UI 渲染 = `form-custom-field-assign-editor`（scaffold 已预置，让用户在设计器里选目标字段）；子表场景用 `form-custom-table-field-assign-editor`（数据类型同样是 `Array`，存储格式是 `[{origin, target, type, assignmentList}, ...]`）
+   - 默认值 = `[]`
    - 说明中明确"用户通过此配置项选择接收赋值的目标字段"
-   **不要**靠"aPaaS 字段联动规则"或其他外部机制绕过。
+   **不要**把数据类型写成 String（即使组件只有 1 个源字段，底层也是单元素数组，不是字符串）。**不要**靠"aPaaS 字段联动规则"或其他外部机制绕过。
 6. 每个章节只输出模板要求的内容，不要把本"元约束"区的文字（包括本条）复制进输出。
 
 ## 输出模板（严格照此结构输出）
@@ -944,7 +945,7 @@ _BRAINSTORM_REVISION_PROMPT = """\
 1. **最小修改**：只改用户明确要求改的部分，**不要动**用户没提到的其他字段/命名/结构，上一版其他地方原样保留。
 2. **歧义反问优先**：如用户反馈含 "没 X / 没有 X / 缺 X / 少 X / 漏 X / 还是没 X" 或 "X 不对 / X 不好" 等模糊表述，**不要猜**，只输出下面"澄清输出格式"段就停止，不要输出修改后方案。
 3. **单组件优先**：用户追加能力默认加到当前同一个组件上，仅在用户明确说"拆分/独立组件/新组件"时才新建；模糊时走规则 2。
-4. **字段赋值场景识别**：如果用户要求涉及"给其他字段赋值/输出到某字段/字段联动/计算结果写到某字段/回填到表单字段"等，对应配置项必须满足：**数据类型**是 `String`（单目标）或 `Array`（多目标），**UI 渲染**用 `form-custom-field-assign-editor`（让用户在设计器里选目标字段 uuid）。注意：`form-custom-field-assign-editor` 是 UI 组件名、不是数据类型名，**不要**把它填到"数据类型"列里。不要靠 aPaaS 字段联动规则等外部机制绕过。
+4. **字段赋值场景识别**：如果用户要求涉及"给其他字段赋值/输出到某字段/字段联动/计算结果写到某字段/回填到表单字段"等，对应配置项必须满足：**数据类型固定是 `Array`**（不管用户配几条赋值对，底层存储都是 `[{origin, target}, ...]`；子表版 table-field-assign-editor 也是 `Array`，元素多一个 `assignmentList`），**UI 渲染**用 `form-custom-field-assign-editor` 或 `form-custom-table-field-assign-editor`。默认值 `[]`。注意：editor 名是 UI 组件名、不是数据类型名，**不要**把它填到"数据类型"列里；也**不要**把数据类型写成 String。不要靠 aPaaS 字段联动规则等外部机制绕过。
 5. **UI 渲染选择优先级**：配置项的 UI 渲染优先从预置原子选（input/select/textarea/switch + 两个 assign editor）；预置原子语义不匹配时（如**日期/日期时间/颜色/范围**等），标注为 `form-custom-[业务名]-editor`（codegen 会按铁则新建业务 editor）。禁止语义错配（如日期字段用 input-editor 让用户手打字符串）。
 5. **需求覆盖校验表格必填**：修改后方案末尾的"需求覆盖校验"段需把原始需求逐条编号，每条在表格里标注落地位置；未落地的条款在表格同一行直接写"未实现，原因：..."，不要静默省略。
 6. **本次变更 diff**：修改后方案**开头**列出 "## 🔄 本次变更"，用 `[新增] / [删除] / [修改]` 三类条目概括。
