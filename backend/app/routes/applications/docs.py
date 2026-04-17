@@ -43,68 +43,17 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# 从 parent package (applications/__init__.py) 延迟引入 shared helpers。
-#
-# 每个 proxy 调用时才从 sys.modules 拿 parent module，拿到时它已经执行
-# 到 "from . import docs" 那一行，所以 parent 的 shared helpers 都已就绪。
-# 这个间接层是必要的：模块顶层 `from . import _xxx` 会在 docs.py 加载时
-# 立刻尝试访问 parent 的属性，但此时 parent 还未完全执行完（__init__.py
-# 最后一句才 import docs）——而 docs 里所有 route handler 实际被调用时，
-# parent 早已完成加载，proxy 转发就 OK。
-# ---------------------------------------------------------------------------
-import sys as _sys
-
-
-def _shared(name: str):
-    return getattr(_sys.modules["app.routes.applications"], name)
-
-
-def _dump_preview_config(*args, **kwargs):
-    return _shared("_dump_preview_config")(*args, **kwargs)
-
-
-def _dump_parsed_config(*args, **kwargs):
-    return _shared("_dump_parsed_config")(*args, **kwargs)
-
-
-def _ensure_doc_version_parsed_config(*args, **kwargs):
-    return _shared("_ensure_doc_version_parsed_config")(*args, **kwargs)
-
-
-def _ensure_doc_version_rendered_content(*args, **kwargs):
-    return _shared("_ensure_doc_version_rendered_content")(*args, **kwargs)
-
-
-def _infer_app_name_from_doc(*args, **kwargs):
-    return _shared("_infer_app_name_from_doc")(*args, **kwargs)
-
-
-def _render_doc_content_from_config(*args, **kwargs):
-    return _shared("_render_doc_content_from_config")(*args, **kwargs)
-
-
-def _resolve_builder_llm_cfg(*args, **kwargs):
-    return _shared("_resolve_builder_llm_cfg")(*args, **kwargs)
-
-
-class _LazyDefaultAppNames:
-    """_DEFAULT_APP_NAMES 是 set 常量；首次访问时从 parent 拿，后续 cache。"""
-    _cache = None
-
-    def _get(self):
-        if self._cache is None:
-            self._cache = _shared("_DEFAULT_APP_NAMES")
-        return self._cache
-
-    def __contains__(self, item):
-        return item in self._get()
-
-    def __iter__(self):
-        return iter(self._get())
-
-
-_DEFAULT_APP_NAMES = _LazyDefaultAppNames()
+# 共享 helper 直接从 sibling _helpers.py 取，不再通过 parent package 代理
+from ._helpers import (  # noqa: F401
+    _dump_preview_config,
+    _dump_parsed_config,
+    _ensure_doc_version_parsed_config,
+    _ensure_doc_version_rendered_content,
+    _infer_app_name_from_doc,
+    _render_doc_content_from_config,
+    _resolve_builder_llm_cfg,
+    _DEFAULT_APP_NAMES,
+)
 
 
 # ---------------------------------------------------------------------------
