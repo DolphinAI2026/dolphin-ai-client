@@ -27,110 +27,15 @@ logger = logging.getLogger(__name__)
 # 工具函数
 # ---------------------------------------------------------------------------
 
-def _rand(n: int = 4) -> str:
-    """根据配置决定是否生成随机后缀"""
-    if settings.enable_code_suffix:
-        return "".join(random.choices(string.ascii_lowercase + string.digits, k=n))
-    return ""
-
-
-def _apply_suffix(code: str, suffix: str) -> str:
-    """为编码添加后缀（如果有）"""
-    if suffix:
-        return f"{code}_{suffix}"
-    return code
-
-
-def _sanitize_code(code: str) -> str:
-    """确保 code 纯 ASCII、字母开头、无保留字冲突"""
-    if not code:
-        return f"c{_rand(6)}"
-    c = re.sub(r"[^a-zA-Z0-9_]", "", code)
-    if len(c) < 2:
-        c = "c" + hashlib.md5(code.encode()).hexdigest()[:7]
-    if c[0].isdigit():
-        c = "f_" + c
-    return c.lower()
-
-
-_RESERVED = {
-    # SQL 关键字（MySQL + PostgreSQL + 通用 SQL）
-    "add", "all", "alter", "and", "any", "as", "asc", "between", "by",
-    "call", "case", "check", "column", "constraint", "create", "cross",
-    "current", "database", "default", "delete", "desc", "describe",
-    "distinct", "drop", "each", "else", "end", "escape", "exists",
-    "explain", "false", "for", "foreign", "from", "full", "function",
-    "grant", "group", "having", "if", "in", "index", "inner", "insert",
-    "into", "is", "join", "key", "left", "like", "limit", "lock",
-    "not", "null", "offset", "on", "or", "order", "outer", "primary",
-    "procedure", "references", "replace", "return", "revoke", "right",
-    "rollback", "row", "rows", "schema", "select", "set", "show",
-    "table", "then", "to", "trigger", "true", "union", "unique",
-    "unlock", "update", "use", "using", "values", "view", "when",
-    "where", "with",
-    # SQL 函数 / 聚合
-    "avg", "count", "max", "min", "sum", "rank", "abs", "cast",
-    "coalesce", "convert", "extract", "length", "lower", "upper",
-    "trim", "substring", "position",
-    # MySQL 特有保留字
-    "accessible", "analyze", "asensitive", "before", "bigint", "binary",
-    "blob", "both", "cascade", "change", "char", "character", "collate",
-    "condition", "continue", "databases", "day_hour", "day_microsecond",
-    "day_minute", "day_second", "dec", "decimal", "declare", "delayed",
-    "deterministic", "div", "double", "dual", "elseif", "enclosed",
-    "escaped", "exit", "fetch", "float", "float4", "float8", "force",
-    "fulltext", "generated", "get", "grouping", "groups", "high_priority",
-    "hour_microsecond", "hour_minute", "hour_second", "ignore", "infile",
-    "int", "int1", "int2", "int3", "int4", "int8", "integer", "interval",
-    "iterate", "keys", "kill", "leading", "leave", "linear", "lines",
-    "load", "localtime", "localtimestamp", "long", "longblob", "longtext",
-    "loop", "low_priority", "master_bind", "master_ssl_verify_server_cert",
-    "match", "maxvalue", "mediumblob", "mediumint", "mediumtext",
-    "middleint", "minute_microsecond", "minute_second", "mod", "modifies",
-    "natural", "no_write_to_binlog", "numeric", "optimize", "optimizer_costs",
-    "option", "optionally", "out", "outfile", "partition", "precision",
-    "purge", "range", "read", "reads", "real", "recursive", "regexp",
-    "release", "rename", "repeat", "require", "resignal", "restrict",
-    "rlike", "second_microsecond", "sensitive", "separator", "signal",
-    "smallint", "spatial", "specific", "sql", "sqlexception", "sqlstate",
-    "sqlwarning", "ssl", "straight_join", "stored", "system",
-    "terminated", "text", "tinyblob", "tinyint", "tinytext", "trailing",
-    "undo", "unsigned", "usage", "utc_date", "utc_time", "utc_timestamp",
-    "varbinary", "varchar", "varcharacter", "varying", "virtual",
-    "while", "window", "write", "xor", "year_month", "zerofill",
-    # 常见短名 / 业务名（平台可能保留）
-    "id", "no", "name", "type", "status", "state", "value", "data",
-    "code", "date", "time", "timestamp", "number", "level", "action",
-    "result", "role", "user", "label", "field", "fields", "file",
-    "size", "start", "stop", "open", "close", "source", "scope",
-    "method", "language", "comment", "location", "email", "phone",
-    "address", "account", "model", "unit", "category", "manager",
-    "priority", "amount", "currency", "operator", "spec", "begin",
-    "commit", "password", "subject", "title", "description", "content",
-    "note", "notes", "remark", "remarks", "company", "customer",
-    "contact", "product", "service", "price", "total", "quantity",
-    "region", "area", "domain", "mode", "version", "class", "object",
-    "event", "process", "rule", "policy", "plan", "task", "job",
-    "session", "token", "hash", "link", "path", "url", "list",
-    "map", "array", "queue", "stack", "tree", "node", "page",
-    "form", "menu", "input", "output", "error", "log", "audit",
-    "archive", "backup", "cache", "temp", "test", "debug", "admin",
-    "root", "owner", "parent", "child", "master", "slave", "host",
-    "port", "server", "client", "local", "global", "public", "private",
-    "static", "dynamic", "abstract", "virtual", "super", "self", "this",
-    "new", "old",
-}
-
-
-def _safe_field_code(code: str) -> str:
-    """确保字段编码不与数据库关键字冲突。
-
-    策略：优先保留原始编码，仅在没有编码时再兜底生成。
-    """
-    raw = str(code or "").strip()
-    if raw:
-        return raw
-    return _sanitize_code(code)
+# id / 字段编码工具迁移到 operations 层，这里 re-export 保持向后兼容
+# （step_executor.py / incremental_executor.py 仍 from app.generator_v2 import _rand 等）
+from app.operations.identifiers import (  # noqa: F401
+    _RESERVED,
+    _rand,
+    _apply_suffix,
+    _sanitize_code,
+    _safe_field_code,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -147,13 +52,7 @@ COMP_TYPE_MAP = get_comp_type_map()
 # 辅助：解析平台模型 → fields 字典
 # ---------------------------------------------------------------------------
 
-def _extract_fields(platform_model: dict) -> Dict[str, str]:
-    """从平台返回的模型数据中提取 {fieldName: fieldCode}"""
-    return {
-        f.get("fieldName"): f.get("fieldCode")
-        for f in platform_model.get("fields", [])
-        if f.get("fieldName") and f.get("fieldCode")
-    }
+from app.operations.identifiers import _extract_fields  # noqa: F401,E402 (re-export for back-compat)
 
 
 def _permission_object_for_form_config(rule: dict, role_code_map: Dict[str, dict]) -> dict:
