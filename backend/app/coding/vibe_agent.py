@@ -603,6 +603,29 @@ class VibeCodingAgent:
     _SHARED_WIDGET_CONFIG_SECTION = """
 ## widget.config.json Requirements
 
+### 🛑 生成方式铁则（防止 Pydantic 校验失败）
+
+scaffold 已预置**完整合法**的 widget.config.json 作为模板（单端路径：
+`src/form-component-config/form-widget/form-component-demo.widget.config.json`；
+双端路径：`shared/widget.config.json`）。模板里每个字段类型、取值都**已经是平台
+要求的正确形式**（含 `version: 2.0`、`widget.display.mobileWidth: 12`、
+`widget.editor.excludeInTable: ["WIDTH"]`、`client.mobile.widget.editor.excludeInTable` 等）。
+
+**必做**：
+1. 先 `read_file` 读这份模板
+2. 用 `edit_file` **只修改需要变化的字段值**（`code` / `desc.text` / `desc.description` / `desc.icon` / `component.*` 组件名 / `client.mobile.component.*` / `widget.special.*` / `componentModelField` / `widget.editor.config` 末尾追加 `_SETTING`）
+3. **保留**所有其他字段的结构和类型不变
+
+**严禁**：
+- 用 `write_file` 从零写 widget.config.json —— 从零写几乎必然漏字段或类型错，
+  会被 Pydantic 校验拒绝（典型错误：`version — Input should be a valid number`、
+  `widget.display.mobileWidth — Field required`、`client.mobile.widget.editor.excludeInTable — Field required`）
+- 把 `version` 写成字符串（如 `"1.0.0"`、`"0.0.1"`）—— **必须是 number**（`2.0`）
+- 省略 `mobileWidth` / `excludeInTable` / `client.mobile.widget.editor` 等看似可选但实际必填的字段
+
+**如果工具返回 `Error: .../widget.config.json: ... — Field required` 或 `... — Input should be a valid ...`**：
+立即 `edit_file` 把对应字段补上或改成正确类型，**不要放弃这个文件的生成**。
+
 ### ⚠️ 文件位置（按项目类型严格区分，违反会导致双份/错位）
 
 - **单端项目**（form-component）：
@@ -937,8 +960,8 @@ setting.vue 的配置项**必须严格对齐 brainstorm "设计方案确认"中"
 ## Workflow — IMPORTANT: Be efficient! Minimize tool calls.
 0. **Before tool calls**: First write a short, user-facing progress note in Chinese (1-3 sentences) explaining what you understood and what you will do next.
 1. **FIRST** (1 call): Use glob_files to see the project structure
-2. **THEN** (1-3 calls max): If `.cursor/rules/*.mdc` exists, read those rule files first, then read ONLY the key implementation files you need (edit.vue and mixin). Do NOT read every file.
-3. **IMMEDIATELY write code**: Use write_file to create/update ALL component files in one batch. Call write_file multiple times in a SINGLE turn (parallel tool calls).
+2. **THEN** (1-3 calls max): If `.cursor/rules/*.mdc` exists, read those rule files first, then read ONLY the key implementation files you need (edit.vue and mixin). Do NOT read every file. **必读**：scaffold 默认的 `form-component-demo.widget.config.json` 和一份 `.editor.config.json`，作为后续 edit 的模板——这样能保证结构、字段类型都合法。
+3. **IMMEDIATELY write code**: 已经有 scaffold 占位文件（demo 前缀）的走 `edit_file` 替换关键字段（最推荐 widget.config.json / editor.config.json / apaas.json 这类严格 schema 的文件）；新增业务文件才用 `write_file`。**不要**对 widget.config.json 用 write_file 从零写——几乎必然漏字段被校验拒绝。Call tools multiple times in a SINGLE turn (parallel tool calls).
 4. **Build 前一致性自检（必做）**: run build 前，用 glob 或 list_dir **逐个验证** 7 个 scene 目录 (`src/form-component/form-widget/{edit,read,ide,list,print,search,search-ide}/`) 下的 `index.js` 引用的每一个 `.vue` 文件是否都真实存在。只要有一个"index.js 引用了但 vue 不存在"，立即先补建/修正，不要先跑 build。
 5. **THEN** run `npm run build` to check compilation
 6. If errors, fix and rebuild. If success, report completion.
@@ -949,6 +972,7 @@ setting.vue 的配置项**必须严格对齐 brainstorm "设计方案确认"中"
 - **Write ALL files at once**: In a single turn, call write_file for edit.vue, read.vue, ide.vue, setting.vue etc. Do NOT write one file per turn.
 - **When generating designer config**: update `src/form-component/form-editor/index.js` and `src/form-component-config/form-editor/index.js` in the same batch as `setting.vue` / `{name}.editor.config.json`.
 - **index.js 与 vue 必须一致**: 修改任何 `index.js` 的 import 路径时，**必须**同步确保对应 vue 文件存在（新建或重命名）。不允许出现 "index.js 指向的文件不存在" 的 half-rename 状态。如不需要某个 scene，保持 scaffold 默认的 `form-component-demo-{scene}.vue` 原样，index.js 也别改。
+- **工具返回 Error 必须修复，不是放弃信号**：write_file / edit_file / run_command 等工具返回字符串以 `Error:` 开头时（如 `Error: widget.config.json: version — Input should be a valid number`），**必须**立即用 edit_file 修正对应字段再次 write，直到该工具返回 `Successfully wrote ...` 或 `[exit code: 0]`。**严禁**因为连续 3~5 条工具 Error 就终止任务（不要在 LLM 响应里返回空 tool_calls，那会触发 agent 结束）；必须坚持修到成功或撞 30 轮上限。典型修复模式：`write_file A.json → Error: A.json: foo — Field required` → `edit_file A.json 补上 foo` → 再 `write_file` 验证。
 - **Be decisive**: You are an expert. After reading the scaffold structure and 1-2 example files, you have enough context to write the component.
 - **Maximum 8 turns total**: If you haven't written code by turn 4, something is wrong. Write the code NOW.
 - **NEVER use `<el-dialog>` inside form widgets** — it breaks FormEngine component resolution and crashes the platform with `Cannot read properties of undefined (reading 'edit')`. Use `<el-popover :append-to-body="true">` instead for any preview/popup interaction.
@@ -1008,8 +1032,8 @@ src/form-component/form-widget/
 ## Workflow — IMPORTANT: Be efficient! Minimize tool calls.
 0. **Before tool calls**: First write a short, user-facing progress note in Chinese (1-3 sentences) explaining what you understood and what you will do next.
 1. **FIRST** (1 call): Use glob_files to see the project structure
-2. **THEN** (1-3 calls max): If `.cursor/rules/*.mdc` exists, read those rule files first, then read ONLY the key implementation files you need. Do NOT read every file.
-3. **IMMEDIATELY write code**: Use write_file to create/update ALL component files (web/ and mobile/) in one batch. Call write_file multiple times in a SINGLE turn (parallel tool calls).
+2. **THEN** (1-3 calls max): If `.cursor/rules/*.mdc` exists, read those rule files first, then read ONLY the key implementation files you need. Do NOT read every file. **必读**：scaffold 默认的 `shared/widget.config.json` 和一份 `.editor.config.json`，作为后续 edit 的模板——保证结构、字段类型都合法。
+3. **IMMEDIATELY write code**: 已经有 scaffold 占位文件（demo 前缀）或已有的严格 schema 文件（`shared/widget.config.json`）走 `edit_file` 替换关键字段；新增业务文件才用 `write_file`。**不要**对 widget.config.json 用 write_file 从零写——几乎必然漏字段被校验拒绝。Call tools multiple times in a SINGLE turn (parallel tool calls for web/ and mobile/ files).
 4. **Build 前一致性自检（必做）**: run build 前，用 glob 或 list_dir **逐个验证**两端 7 个 scene 目录（`web/src/form-component/form-widget/{edit,read,ide,list,print,search,search-ide}/` 和 `mobile/src/form-component/form-widget/{...}/`）下的 `index.js` 引用的每一个 `.vue` 文件是否都真实存在。只要有一个"index.js 引用了但 vue 不存在"，立即先补建/修正，不要先跑 build。
 5. **THEN** run `npm run build` to check compilation (builds both web/ and mobile/)
 6. If errors, fix and rebuild. If success, report completion.
@@ -1020,6 +1044,7 @@ src/form-component/form-widget/
 - **Write ALL files at once**: In a single turn, call write_file for ALL web/ and mobile/ vue files. Do NOT write one file per turn.
 - **When generating designer config**: update `web/src/form-component/form-editor/index.js` and `web/src/form-component-config/form-editor/index.js` in the same batch as `setting.vue` / `{name}.editor.config.json`.
 - **index.js 与 vue 必须一致**: 修改任何 `index.js` 的 import 路径时，**必须**同步确保对应 vue 文件存在（新建或重命名）。不允许出现 "index.js 指向的文件不存在" 的 half-rename 状态。如不需要某个 scene，保持 scaffold 默认的 `form-component-demo-{scene}.vue` / `mobile-form-component-demo-{scene}.vue` 原样，index.js 也别改。
+- **工具返回 Error 必须修复，不是放弃信号**：write_file / edit_file / run_command 等工具返回字符串以 `Error:` 开头时（如 `Error: widget.config.json: version — Input should be a valid number`），**必须**立即用 edit_file 修正对应字段再次 write，直到该工具返回 `Successfully wrote ...` 或 `[exit code: 0]`。**严禁**因为连续 3~5 条工具 Error 就终止任务（不要在 LLM 响应里返回空 tool_calls，那会触发 agent 结束）；必须坚持修到成功或撞 30 轮上限。典型修复模式：`write_file A.json → Error: A.json: foo — Field required` → `edit_file A.json 补上 foo` → 再 `write_file` 验证。
 - **Be decisive**: You are an expert. After reading the scaffold structure and 1-2 example files, you have enough context to write the component.
 - **Maximum 8 turns total**: If you haven't written code by turn 4, something is wrong. Write the code NOW.
 - **NEVER use `<el-dialog>` inside form widgets** — it breaks FormEngine component resolution and crashes the platform with `Cannot read properties of undefined (reading 'edit')`. Use `<el-popover :append-to-body="true">` instead for any preview/popup interaction.
