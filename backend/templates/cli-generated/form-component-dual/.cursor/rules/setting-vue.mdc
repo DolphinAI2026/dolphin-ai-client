@@ -43,9 +43,9 @@ alwaysApply: true
 - `./components/form-custom-textarea-editor.vue` — 多行输入
 - `./components/form-custom-switch-editor.vue` — 开关
 
-### 字段赋值 editor（数据选择类组件场景）
-- `./components/form-custom-field-assign-editor.vue` — 主表字段赋值（source 字段 → target 字段 1:1 映射）
-- `./components/form-custom-table-field-assign-editor.vue` — 子表字段赋值（目标子表 ← 源子表 全量/增量 + 字段级映射）
+### 字段赋值 editor（组件把派生值写给其他字段的场景）
+- `./components/form-custom-field-assign-editor.vue` — 主表字段赋值（让用户把**组件产出的源字段**映射到表单里的目标字段）
+- `./components/form-custom-table-field-assign-editor.vue` — 子表字段赋值（子表级别映射 + 子表内字段映射）
 
 ### 工具 & 常量
 - `./utils/form-item.util.js` — 7 个 formItemList 遍历工具（如 `getAllFormItemListExcludeTable`、`getAllSonTableFormItemList`）
@@ -229,122 +229,199 @@ const customFormConfigList = [
 export default customFormConfigList;
 ```
 
-## 字段赋值场景（数据选择类组件）
+## 字段赋值场景（组件把派生值写给其他字段）
 
-如果组件是"数据选择类"（点一下拉出另一张表/API 的数据回填到当前表单），除了
-`{name}-setting.vue`，通常还要生成一个 **`{name}-assign.vue`** 作为第二个设置 Tab，
-专门配置"源字段 → 目标字段"的映射规则。
+### 何时需要用字段赋值 editor
+任意下面一种场景，都要用 `form-custom-field-assign-editor` 或 `form-custom-table-field-assign-editor`（而不是靠 aPaaS 字段联动规则等外部机制）：
+- 数据选择类组件：选中一行数据后把多个字段回填到当前表单
+- **派生值输出**：组件自身算出的派生值（如时间差、总分、金额合计）需要写到其他字段
+- 联动赋值：组件自身变化时自动更新其他字段
 
-### 何时需要 assign.vue
-- 选中一行数据后，需要把该行多个字段分别赋值到当前表单的多个字段（主表字段赋值）
-- 选中的数据含子表，需要把整个子表或子表的字段映射到当前表单的子表（子表字段赋值）
+简单场景直接把赋值配置写在 `{name}-setting.vue` 里；规则多且复杂时（数据选择类）可独立一个 `{name}-assign.vue` 作为第二个 Tab。注意：setting.vue 和 assign.vue 都**只放 web 端**（`web/src/form-component/form-editor/`）。
 
-### assign.vue 骨架
+### 核心概念：`otherFields` 不是"表单里其他字段"
+
+**`otherFields` 是"组件作为赋值源能产出的字段列表"**（组件侧的**源字段**），不是"当前表单里除自身外的字段"。用户在 UI 里会为每个源字段选一个真实表单目标字段；editor 内部会按 `componentType` 过滤，只让用户选同类型的真实字段。
+
+`otherFields` 每个元素结构：
+
+```javascript
+{
+  uuid: string,          // 组件内部逻辑 key（自行编造的业务语义 id，不是表单真实字段 uuid）
+  label: string,         // 中文展示名
+  componentType: string, // 按派生值的数据类型选（见下表）
+}
+```
+
+**componentType 映射表**（按派生值的业务类型选）：
+
+| 派生值类型 | componentType |
+|---|---|
+| 数字 | `FORM_NUMBER_INPUT` |
+| 字符串 | `FORM_TEXT_INPUT` |
+| 金额 | `FORM_MONEY_INPUT` |
+| 中国大陆手机号 | `FORM_PHONE_INPUT` |
+| 邮箱 | `FORM_EMAIL_INPUT` |
+| 中国大陆证件号 | `FORM_IDCARD_INPUT` |
+
+### 完整示例：时间差组件的 setting.vue
+
+组件功能：用户选起止时间，组件算出时间差（毫秒），把差值赋值到用户在 setting 里指定的目标字段。
 
 ```vue
 <template>
-  <div class="form-custom-demo-assign">
+  <div class="form-custom-date-time-range-setting">
+    <form-custom-input-editor label="起始时间" property="startTime" v-bind="$props" />
+    <form-custom-input-editor label="结束时间" property="endTime" v-bind="$props" />
+
     <form-custom-field-assign-editor
-      label="主表单字段赋值"
-      property="mainFormAssign"
-      :otherFields="mainFormFieldsOptions"
+      label="时间差赋值"
+      property="diffAssign"
       v-bind="$props"
+      :otherFields="diffSourceFields"
+      :help="['把组件算出的时间差赋值到指定字段']"
     ></form-custom-field-assign-editor>
-
-    <form-custom-table-field-assign-editor
-      label="子表单字段赋值"
-      property="tableFormAssign"
-      :otherTableFields="tableFieldsOptions"
-      v-bind="$props"
-    ></form-custom-table-field-assign-editor>
-
-    <form-custom-switch-editor
-      label="字段置空时清空主表赋值"
-      property="clearMainAssign"
-      v-bind="$props"
-    ></form-custom-switch-editor>
   </div>
 </template>
 
 <script>
 import EditorFormConfigMixin from '@shared/mixin/form-config.mixin';
+import FormCustomInputEditor from './components/form-custom-input-editor.vue';
 import FormCustomFieldAssignEditor from './components/form-custom-field-assign-editor.vue';
-import FormCustomTableFieldAssignEditor from './components/form-custom-table-field-assign-editor.vue';
-import FormCustomSwitchEditor from './components/form-custom-switch-editor.vue';
 
 export default {
-  name: 'FormComponentDemoAssign',   // ⚠️ 与对应 assign 的 editor.config.json 的 componentName 一致
+  name: 'FormComponentDateTimeRangeSetting',
   mixins: [EditorFormConfigMixin],
-  components: { FormCustomFieldAssignEditor, FormCustomTableFieldAssignEditor, FormCustomSwitchEditor },
+  components: { FormCustomInputEditor, FormCustomFieldAssignEditor },
   computed: {
-    // 从组件的数据源（如 customComponentConfig.response.table）派生出可供映射的字段列表
-    mainFormFieldsOptions() {
-      // 返回 [{ uuid, label, componentType }] 结构
-      return [];
-    },
-    tableFieldsOptions() {
-      // 返回 [{ uuid, label, componentType: 'FORM_WIDGET_SON_TABLE', children }] 结构
-      return [];
+    diffSourceFields() {
+      // 组件自身产出的源字段列表。时间差组件只输出一个"时间差"派生值，所以只有一项。
+      return [
+        { uuid: 'diff', label: '时间差', componentType: 'FORM_NUMBER_INPUT' },
+      ];
     },
   },
 };
 </script>
 ```
 
-### 字段赋值 editor 的参数约定
+### 子表场景：`form-custom-table-field-assign-editor` 的 `otherTableFields`
 
-**`form-custom-field-assign-editor` 的 `otherFields`**：
+场景是组件产出每行带多列的子表数据（例如给某个子表批量写值）。`otherTableFields` 描述**源子表的结构**：
+
 ```javascript
 [{
-  uuid: string,        // 字段唯一标识（作为 key 存储）
-  label: string,       // 展示名
-  componentType: string, // 用于限制能赋值到哪些目标字段类型
+  uuid: string,                           // 源子表 id
+  label: string,                          // 源子表中文名
+  componentType: 'FORM_WIDGET_SON_TABLE', // ⚠️ 第一级必须是子表类型
+  children: [                             // 子表每一列的字段描述
+    { uuid: 'col1', label: '列1',   componentType: 'FORM_NUMBER_INPUT' },
+    { uuid: 'col2', label: '时间差', componentType: 'FORM_NUMBER_INPUT' },
+    { uuid: 'col3', label: '备注',   componentType: 'FORM_TEXT_INPUT'   },
+  ],
 }]
 ```
 
-**`form-custom-table-field-assign-editor` 的 `otherTableFields`**：
+**⚠️ 关键约束**：第一级元素的 `componentType` **必须**是 `'FORM_WIDGET_SON_TABLE'`；`children` 每项的 `componentType` 按上面的 componentType 映射表选。
+
+### edit.vue 里怎么消费赋值配置（运行时写值）
+
+`form-custom-field-assign-editor` 配置完后，`customComponentConfig.diffAssign` 存储格式为：
+
 ```javascript
 [{
-  uuid: string,
-  label: string,
-  componentType: 'FORM_WIDGET_SON_TABLE',
-  children: [{ uuid, label, componentType }],  // 子表内字段
+  origin: { uuid: 'diff', label: '时间差', componentType: 'FORM_NUMBER_INPUT' },
+  target: { uuid: 'abc123-真实表单字段uuid', label: '结果字段', componentType: 'FORM_NUMBER_INPUT' },
 }]
 ```
 
-### assign.vue 存储结构
+web 端和 mobile 端的 edit.vue 都要同样消费，算出派生值后按配置写到目标字段：
 
-`componentConfig.customComponentConfig.mainFormAssign` 会变成：
 ```javascript
-[{ origin: {uuid, label, componentType}, target: {uuid, label, componentType} }, ...]
+watch: {
+  formValue() { this.emitAssign(); },
+},
+methods: {
+  emitAssign() {
+    const diff = this.computeDiff();  // 自己算派生值
+    const assigns = this.widget.customComponentConfig.diffAssign || [];
+    for (const pair of assigns) {
+      if (pair.origin.uuid === 'diff' && pair.target?.uuid) {
+        this.$set(this.formData, pair.target.uuid, diff);
+      }
+    }
+    if (this.formEngine?.formDataControl) {
+      this.formEngine.formDataControl.ctlFormDataChanged = true;
+    }
+  },
+}
 ```
 
-`componentConfig.customComponentConfig.tableFormAssign` 会变成：
-```javascript
-[{
-  origin: {uuid, label},    // 源子表
-  target: {uuid, label},    // 目标子表
-  type: 'all' | 'add',      // 全量 or 增量
-  assignmentList: [{ origin, target }, ...],  // 字段级映射
-}]
-```
+**严禁**靠"aPaaS 字段联动规则"等外部机制实现赋值。自开发组件必须在 edit.vue 里通过 `this.$set(this.formData, targetUuid, value)` 直接写值。
 
-### 同时注册 setting + assign
+### 独立 assign.vue（数据选择类组件，多赋值规则）
+
+数据选择类组件赋值规则多时（主表 + 子表 + 清空行为），可拆出独立 `{name}-assign.vue`（同样只在 web 端）：
 
 ```javascript
 // web/src/form-component/form-editor/index.js
 import FormComponentDemoSetting from './form-component-demo-setting.vue';
 import FormComponentDemoAssign from './form-component-demo-assign.vue';
-
-const customFormConfigList = [
-  FormComponentDemoSetting,
-  FormComponentDemoAssign,
-];
-
+const customFormConfigList = [FormComponentDemoSetting, FormComponentDemoAssign];
 export default customFormConfigList;
 ```
 
-对应的 `web/src/form-component-config/form-editor/` 也需要两份 `*.editor.config.json`，分别注册 setting 和 assign 面板。
+对应 `web/src/form-component-config/form-editor/` 也要两份 `*.editor.config.json`。
+
+## 🛑 自造业务 editor 的强制约定（严禁违反）
+
+scaffold 6 个预置 editor 原子（input / select / textarea / switch / sechma-item + field-assign/table-field-assign）**覆盖绝大多数场景**。只有确认预置原子完全无法满足的业务 UI（例如日期范围、颜色选择、JSON 结构编辑器）才允许新建 `web/src/form-component/form-editor/components/form-custom-{业务名}-editor.vue`。
+
+**必须严格按以下模式**，否则会出现"UI 显示正常但数据存不进去"的静默 bug：
+
+```vue
+<template>
+  <form-custom-sechma-item
+    :label="label"
+    :property="property"
+    :config-property="configProperty"
+    :showRequired="showRequired"
+    :help="help"
+    :rules="rules"
+  >
+    <!-- 你的业务 UI，用 v-model="formValue" 读写值 -->
+    <el-date-picker
+      v-model="formValue"
+      type="datetimerange"
+      value-format="yyyy-MM-dd HH:mm:ss"
+      @change="handleChange"
+    />
+  </form-custom-sechma-item>
+</template>
+<script>
+import EditorFormConfigMixin from '@shared/mixin/form-config.mixin';
+import FormEditorMixin from '@shared/mixin/form-editor.mixin';   // ⚠️ 必须 import
+import FormCustomSechmaItem from './form-custom-sechma-item.vue';
+
+export default {
+  name: 'FormCustomDateTimeRangeEditor',
+  mixins: [EditorFormConfigMixin, FormEditorMixin],             // ⚠️ 必须 mixins 两者
+  components: { FormCustomSechmaItem },
+  // 只声明业务特有 props（如日期格式、自定义 options 等）；
+  // label / property / help / showRequired / placeholder 由 FormEditorMixin 提供，不要重复声明
+};
+</script>
+```
+
+**铁则**：
+
+1. **必须** `mixins: [EditorFormConfigMixin, FormEditorMixin]`——`formValue` 由 FormEditorMixin 自动双向绑定到 `componentConfig[configProperty][property]`，**禁止**自己实现 computed getter/setter。
+2. **禁止**通过 `this.$parent[configProperty]` 读配置（错误 API）。
+3. **禁止**重复声明 `label` / `property` / `help` / `showRequired` / `placeholder` props，FormEditorMixin 已提供。
+4. **必须**用 `<form-custom-sechma-item>` 包裹，透传 `label / property / configProperty / showRequired / help / rules` 6 个 prop。
+5. 值变化时调用 `handleChange`（FormEditorMixin 提供）或让 `v-model="formValue"` 自动触发，**禁止** `$emit('update:componentConfig', ...)`。
+6. 参照 scaffold 里 `form-custom-input-editor.vue` / `form-custom-select-editor.vue` 的结构，保持一致。
+7. **双端专属**：import 必须用 `@shared/mixin/...`，不要用 `@/mixin/...`。
 
 ## 易错点清单
 

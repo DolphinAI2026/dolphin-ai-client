@@ -663,16 +663,51 @@ class VibeCodingAgent:
 - `form-custom-switch-editor.vue` — 开关（替代 `<el-switch>`）
 
 还有 2 个字段赋值 editor：
-- `form-custom-field-assign-editor.vue` — 主表字段赋值（源 → 目标 uuid 1:1 映射）
-- `form-custom-table-field-assign-editor.vue` — 子表字段赋值（子表级别的批量映射）
+- `form-custom-field-assign-editor.vue` — 主表字段赋值
+- `form-custom-table-field-assign-editor.vue` — 子表字段赋值
 
-**⚠️ 以下任一场景都必须用 `form-custom-field-assign-editor` 让用户在 setting 面板配置目标字段，不要用外部联动规则绕过**：
-- 数据选择类组件：用户选中数据后把多个字段回填到当前表单
-- 派生值输出：组件计算出的派生值（如时间差、总分、合计金额）需要写到其他字段
-- 联动赋值：组件自身输入变化时需要自动更新其他字段
-- 任何"组件把值赋给用户在设计器里选定的目标字段"的需求
+**⚠️ 任何"组件把派生值/选中值写给其他字段"的场景都必须用字段赋值 editor**（数据选择类回填 / 派生值输出 / 联动赋值），**严禁**靠 aPaaS 字段联动规则等外部机制。
 
-**禁止**："edit 的 onChange 输出 xxx 通过 aPaaS 字段联动规则绑定至目标字段" 这种方案——这是给**非自开发组件**用的机制。自开发组件必须让用户在 setting.vue 里通过 `form-custom-field-assign-editor` 配置 target uuid，然后 edit.vue 通过 `this.$set(this.formData, targetUuid, value)` + `this.formEngine.formDataControl.ctlFormDataChanged = true` 直接写值。
+**`otherFields` 是"组件作为赋值源能产出的字段列表"**（组件侧的**源字段**，不是表单里其他字段）。每个元素 `{uuid, label, componentType}`：
+- `uuid`：组件内部逻辑 key（自行编造的业务语义 id，不是真实字段 uuid）
+- `label`：中文展示名
+- `componentType`：按派生值类型选——数字 `FORM_NUMBER_INPUT` / 字符串 `FORM_TEXT_INPUT` / 金额 `FORM_MONEY_INPUT` / 手机号 `FORM_PHONE_INPUT` / 邮箱 `FORM_EMAIL_INPUT` / 证件号 `FORM_IDCARD_INPUT`
+
+示例（时间差组件）：
+```vue
+<form-custom-field-assign-editor
+  label="时间差赋值" property="diffAssign" v-bind="$props"
+  :otherFields="diffSourceFields"
+></form-custom-field-assign-editor>
+```
+```js
+computed: {
+  diffSourceFields() {
+    return [{ uuid: 'diff', label: '时间差', componentType: 'FORM_NUMBER_INPUT' }];
+  },
+}
+```
+
+`otherTableFields`（子表赋值）：第一级 `componentType` 必须是 `FORM_WIDGET_SON_TABLE`，`children` 每项按 componentType 映射表选。
+
+edit.vue 消费赋值配置：从 `customComponentConfig.diffAssign` 里拿到 `[{origin, target}]`，按 target.uuid 写值：
+```js
+this.$set(this.formData, pair.target.uuid, diff);
+this.formEngine.formDataControl.ctlFormDataChanged = true;
+```
+
+**完整示例和 otherTableFields 结构详见 `.cursor/rules/setting-vue.mdc`。**
+
+## 🛑 自造业务 editor 的强制约定
+
+预置原子无法满足时允许新建 `components/form-custom-{业务名}-editor.vue`，**必须**按以下铁则（否则"UI 正常但数据存不进去"静默 bug）：
+
+1. **必须** `mixins: [EditorFormConfigMixin, FormEditorMixin]` —— `formValue` 由 FormEditorMixin 自动双向绑定到 `componentConfig[configProperty][property]`，**禁止**自己实现 computed getter/setter。
+2. **禁止** `this.$parent[configProperty]` 读配置（错误 API）。
+3. **禁止**重复声明 `label` / `property` / `help` / `showRequired` / `placeholder` props —— FormEditorMixin 已提供，只声明业务特有 props。
+4. **必须**用 `<form-custom-sechma-item>` 包裹（透传 label/property/configProperty/showRequired/help/rules 6 个 prop）。
+5. 值变化调 `handleChange`（FormEditorMixin 提供）或让 `v-model="formValue"` 自动触发。**禁止** `$emit('update:componentConfig', ...)`。
+6. 参考 scaffold 里 `form-custom-input-editor.vue` / `form-custom-select-editor.vue` 的结构。
 
 **🔴 setting.vue 中严禁直接使用下列 Element UI 原生组件**：
 - `<el-form-item>` / `<el-form>` / `<el-input>` / `<el-select>` / `<el-option>`
