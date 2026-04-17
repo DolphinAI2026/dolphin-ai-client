@@ -518,6 +518,79 @@ def _build_form_components_from_definition(
 # Phase 0 预处理
 # ---------------------------------------------------------------------------
 
+def _classify_dicts(
+    dicts: List[dict],
+    existing: Dict[str, dict],
+    dict_codes: Dict[str, str],
+    suffix: str,
+) -> tuple[List[dict], List[str]]:
+    """把 dicts 拆成 (new_dicts, reused_names)。
+
+    副作用：写入 dict_codes 映射（复用用平台已有 code，新建用本地生成 code）。
+    """
+    new_dicts: List[dict] = []
+    reused_names: List[str] = []
+    for d in dicts:
+        ed = existing.get(d["name"])
+        if ed:
+            pc = ed["dictionaryCode"]
+            dict_codes[d["name"]] = pc
+            dict_codes[d.get("code", d["name"])] = pc
+            reused_names.append(d["name"])
+        else:
+            dc = f"{_sanitize_code(d.get('code', 'dict'))}_{suffix}"
+            dict_codes[d["name"]] = dc
+            dict_codes[d.get("code", d["name"])] = dc
+            new_dicts.append(d)
+    return new_dicts, reused_names
+
+
+async def _seed_dict_options(
+    client: APaaSClient,
+    app_id: str,
+    new_dicts: List[dict],
+    dict_codes: Dict[str, str],
+    suffix: str,
+) -> int:
+    """为新建字典灌入选项（直连 httpx，因 client 未封装该接口）。
+
+    返回写入的选项总数。
+    """
+    all_platform_dicts = await client.query_dicts(app_id)
+    dict_by_code = {d.get("dictionaryCode"): d for d in all_platform_dicts}
+    total_opts = 0
+    async with httpx.AsyncClient(verify=False, timeout=30.0) as http:
+        headers = client._get_headers(app_id)
+        for d in new_dicts:
+            dc = dict_codes[d["name"]]
+            obj = dict_by_code.get(dc)
+            if not obj or not d.get("options"):
+                continue
+            dict_id = obj["id"]
+            for idx, opt in enumerate(d["options"]):
+                opt_name = opt["name"] if isinstance(opt, dict) else str(opt)
+                opt_code_raw = opt.get("code", f"opt{idx}") if isinstance(opt, dict) else f"opt{idx}"
+                await http.post(
+                    f"{client.base_url}/xdap-app/dataDictionary/add/dictionaryValue",
+                    headers=headers,
+                    json={
+                        "appId": app_id,
+                        "dictionaryId": dict_id,
+                        "valueCode": f"{_sanitize_code(opt_code_raw)}_{suffix}",
+                        "valueName": opt_name,
+                        "valueNameI18nAssociated": False,
+                        "valueNameI18nResourceCode": "",
+                        "valueNameI18n": {},
+                        "displayOrder": idx,
+                        "valueDescribe": "",
+                        "valueStatus": "ENABLE",
+                        "valueMulticolor": "#027AFF",
+                    },
+                )
+                total_opts += 1
+    return total_opts
+
+
 def _select_models_and_dicts(
     all_models: List[dict],
     dicts: List[dict],
@@ -626,19 +699,9 @@ async def run_complete_generation(
     if dicts:
         try:
             existing = {d.get("dictionaryName"): d for d in await client.query_dicts(app_id)}
-            new_dicts = []
-            for d in dicts:
-                ed = existing.get(d["name"])
-                if ed:
-                    pc = ed["dictionaryCode"]
-                    dict_codes[d["name"]] = pc
-                    dict_codes[d.get("code", d["name"])] = pc
-                    yield {"stage": 1, "status": "running", "step": f"复用字典: {d['name']}"}
-                else:
-                    dc = f"{_sanitize_code(d.get('code', 'dict'))}_{suffix}"
-                    dict_codes[d["name"]] = dc
-                    dict_codes[d.get("code", d["name"])] = dc
-                    new_dicts.append(d)
+            new_dicts, reused_names = _classify_dicts(dicts, existing, dict_codes, suffix)
+            for name in reused_names:
+                yield {"stage": 1, "status": "running", "step": f"复用字典: {name}"}
 
             if new_dicts:
                 payload = [
@@ -651,40 +714,7 @@ async def run_complete_generation(
                     for d in new_dicts
                 ]
                 await client.create_dicts(app_id, payload)
-
-                # 添加选项
-                all_platform_dicts = await client.query_dicts(app_id)
-                dict_by_code = {d.get("dictionaryCode"): d for d in all_platform_dicts}
-                total_opts = 0
-                async with httpx.AsyncClient(verify=False, timeout=30.0) as http:
-                    headers = client._get_headers(app_id)
-                    for d in new_dicts:
-                        dc = dict_codes[d["name"]]
-                        obj = dict_by_code.get(dc)
-                        if not obj or not d.get("options"):
-                            continue
-                        dict_id = obj["id"]
-                        for idx, opt in enumerate(d["options"]):
-                            opt_name = opt["name"] if isinstance(opt, dict) else str(opt)
-                            opt_code_raw = opt.get("code", f"opt{idx}") if isinstance(opt, dict) else f"opt{idx}"
-                            await http.post(
-                                f"{client.base_url}/xdap-app/dataDictionary/add/dictionaryValue",
-                                headers=headers,
-                                json={
-                                    "appId": app_id,
-                                    "dictionaryId": dict_id,
-                                    "valueCode": f"{_sanitize_code(opt_code_raw)}_{suffix}",
-                                    "valueName": opt_name,
-                                    "valueNameI18nAssociated": False,
-                                    "valueNameI18nResourceCode": "",
-                                    "valueNameI18n": {},
-                                    "displayOrder": idx,
-                                    "valueDescribe": "",
-                                    "valueStatus": "ENABLE",
-                                    "valueMulticolor": "#027AFF",
-                                },
-                            )
-                            total_opts += 1
+                total_opts = await _seed_dict_options(client, app_id, new_dicts, dict_codes, suffix)
                 yield {"stage": 1, "status": "running", "step": f"新建 {len(new_dicts)} 个字典，{total_opts} 个选项"}
         except Exception as e:
             logger.error(f"字典创建失败: {e}", exc_info=True)
