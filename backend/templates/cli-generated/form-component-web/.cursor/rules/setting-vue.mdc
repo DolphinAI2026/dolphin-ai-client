@@ -11,18 +11,29 @@ alwaysApply: true
 
 ## 🛑 硬性 DON'T（严禁违反，违反必 build 失败或数据丢失）
 
-**严禁**在 setting.vue 中直接使用以下 Element UI 原生组件（必须用对应的 `form-custom-*-editor` 原子替换）：
+### setting.vue 主体只允许使用以下标签
 
-| 严禁 | 正确替代 |
-|---|---|
-| `<el-form-item>` | 用任一 `form-custom-*-editor` 原子（内部已包含 el-form-item） |
-| `<el-input>` | `<form-custom-input-editor>` |
-| `<el-input type="textarea">` | `<form-custom-textarea-editor>` |
-| `<el-select>` + `<el-option>` | `<form-custom-select-editor :options="[]">` |
-| `<el-switch>` | `<form-custom-switch-editor>` |
-| `<el-radio-group>` + `<el-radio>` | `<form-custom-select-editor>`（单选即下拉） |
-| `<el-checkbox-group>` + `<el-checkbox>` | `<form-custom-select-editor :multiple="true">` |
-| `<el-form>`（最外层不要包） | 平台外层已提供表单容器，直接用 `<div class="form-custom-{name}-setting">` 包裹 |
+**✅ 允许**：
+- `form-custom-input-editor` / `form-custom-select-editor` / `form-custom-textarea-editor` / `form-custom-switch-editor`（scaffold 预置原子）
+- `form-custom-field-assign-editor` / `form-custom-table-field-assign-editor`（赋值 editor）
+- 你按"🛑 自造业务 editor 强制约定"小节自建的 `form-custom-{业务名}-editor`
+
+**🔴 严禁**在 setting.vue 主体里直接使用：
+
+| 严禁 | 为什么错 | 正确替代 |
+|---|---|---|
+| `<form-custom-sechma-item>` | **只是容器**，不提供 formValue 双向绑定；在 setting.vue 主体里直用后，你只能手写 `<el-date-picker v-model="formValue" />` 这种错误代码 —— setting.vue 本体**没有 formValue**，值会掉到 phantom property，**UI 正常但数据完全不存**。sechma-item 仅允许用在业务 editor（`components/form-custom-{name}-editor.vue`）的 template 里作为外壳。 | 抽成业务 editor：`components/form-custom-{name}-editor.vue`（按下方"自造业务 editor 铁则"写），setting.vue 里只用 `<form-custom-{name}-editor label="..." property="..." v-bind="$props" />` |
+| `<el-form-item>` | 同上（平台外层已提供表单容器） | 用 form-custom-*-editor（内部已包含 el-form-item） |
+| `<el-input>` / `<el-input type="textarea">` | 没有双向绑定到 `componentConfig[configProperty][property]`，数据丢失 | `<form-custom-input-editor>` / `<form-custom-textarea-editor>` |
+| `<el-select>` + `<el-option>` | 同上 | `<form-custom-select-editor :options="[]">` |
+| `<el-switch>` | 同上 | `<form-custom-switch-editor>` |
+| `<el-radio-group>` + `<el-radio>` | 同上 | `<form-custom-select-editor>`（单选即下拉） |
+| `<el-checkbox-group>` + `<el-checkbox>` | 同上 | `<form-custom-select-editor :multiple="true">` |
+| `<el-date-picker>` / `<el-time-picker>` 直接用 | 没有双向绑定，数据丢失 | 抽成业务 editor（参考"自造业务 editor 强制约定"），不要在 setting.vue 主体里内联 |
+| `<el-form>`（最外层不要包） | 平台外层已提供表单容器 | 直接用 `<div class="form-custom-{name}-setting">` 包裹 |
+| 内联 `v-model="formValue"` 在 setting.vue 主体的插槽/元素上 | **setting.vue 本体没有 formValue** —— `formValue` 是 `FormEditorMixin` 提供给**业务 editor 组件**的，setting.vue 只用 `EditorFormConfigMixin`（无 formValue），写 `v-model="formValue"` 完全不生效 | 任何需要"UI + 双向绑定"的场景都抽成业务 editor，setting.vue 里只做组件组装 |
+
+### 其他严禁
 
 **严禁**调用不存在的 API：`formEngine.updateWidgetConfig()`、`formEngine.updateCustomComponentConfig()`、`formEngine.setWidgetInfo()` 等。
 

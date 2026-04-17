@@ -656,7 +656,7 @@ class VibeCodingAgent:
 
 `__BASE_PATH__/form-component/form-editor/components/` 目录下 scaffold **已预置 6 个 editor 原子组件**（LLM 不要重新生成，直接 import 使用）：
 
-- `form-custom-sechma-item.vue` — label + help tooltip + 校验容器（通常被下面 5 个内部使用，直接用得少）
+- `form-custom-sechma-item.vue` — **仅在业务 editor 内部作为外壳容器使用**。**严禁**在 setting.vue 主体 template 里直接用：sechma-item 不提供 formValue 双向绑定，setting.vue 本体又没有 formValue，直用后写 `<el-date-picker v-model="formValue" />` 会掉进 phantom property，UI 正常但数据完全不存。
 - `form-custom-input-editor.vue` — 单行输入（替代 `<el-input>`）
 - `form-custom-select-editor.vue` — 下拉（替代 `<el-select>` + `<el-option>`，通过 `options` prop 传选项）
 - `form-custom-textarea-editor.vue` — 多行输入（替代 `<el-input type="textarea">`）
