@@ -1130,6 +1130,7 @@ import ConnectModal from '@/components/ConnectModal.vue'
 import EnvSelectModal from '@/components/EnvSelectModal.vue'
 import { platformEnvApi } from '@/api/platformEnv'
 import request from '@/utils/request'
+import { isApaasTokenError } from '@/utils/errorHandler'
 import { buildPlatformProxyEntryUrl, repairPlatformIframe } from '@/utils/platformIframe'
 import type { Message } from '@/types'
 import TopBar from '@/components/TopBar.vue'
@@ -2464,7 +2465,7 @@ const publishCurrentApp = async () => {
     ElMessage.success('应用已上线')
   } catch (e: any) {
     const detail = e?.response?.data?.detail || e?.message || '上线失败'
-    if (String(detail).includes('重新连接APaaS平台') || String(detail).includes('Token已过期或无效')) {
+    if (isApaasTokenError(String(detail))) {
       ElMessage.warning('平台登录已失效，请先重新连接平台环境')
       store.showConnectModal = true
     } else {
@@ -4502,7 +4503,7 @@ async function deployExec(key: string) {
     }
   } catch (e: any) {
     const detail = e?.response?.data?.detail || e?.message || '失败'
-    if (String(detail).includes('重新连接APaaS平台') || String(detail).includes('Token已过期或无效')) {
+    if (isApaasTokenError(String(detail))) {
       ElMessage.warning('平台登录已失效，请先重新连接平台环境')
       store.showConnectModal = true
     } else {
@@ -4566,7 +4567,7 @@ async function deployRunAll() {
     ElMessage.success('全部完成！')
   } catch (e: any) {
     const detail = e?.response?.data?.detail || e?.message || '失败'
-    if (String(detail).includes('重新连接APaaS平台') || String(detail).includes('Token已过期或无效')) {
+    if (isApaasTokenError(String(detail))) {
       ElMessage.warning('平台登录已失效，请先重新连接平台环境')
       store.showConnectModal = true
     } else {
