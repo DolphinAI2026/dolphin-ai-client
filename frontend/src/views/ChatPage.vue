@@ -1131,6 +1131,7 @@ import EnvSelectModal from '@/components/EnvSelectModal.vue'
 import { platformEnvApi } from '@/api/platformEnv'
 import request from '@/utils/request'
 import { isApaasTokenError, handleError } from '@/utils/errorHandler'
+import { resolveComponentLabel } from '@/utils/componentTypes'
 import { buildPlatformProxyEntryUrl, repairPlatformIframe } from '@/utils/platformIframe'
 import type { Message } from '@/types'
 import TopBar from '@/components/TopBar.vue'
@@ -1197,51 +1198,11 @@ function formatParseMetaSummary(meta: any) {
 }
 
 function docExportComponentTypeLabel(value: any, modelType?: any) {
-  const labels: Record<string, string> = {
-    FORM_DOCUMENT_NUMBER: '单据号',
-    FORM_TEXT_INPUT: '单行输入',
-    FORM_TEXTAREA_INPUT: '多行输入',
-    FORM_TEXTAREA: '多行输入',
-    FORM_PHONE_INPUT: '手机号码',
-    FORM_EMAIL_INPUT: '电子邮箱',
-    FORM_SELECT_INPUT_SINGLE: '下拉单选',
-    FORM_SELECT_INPUT: '下拉多选',
-    FORM_SELECT: '下拉单选',
-    FORM_SELECT_MULTI: '下拉多选',
-    FORM_DATA_SELECTOR_SINGLE: '数据单选',
-    FORM_DATA_SELECTOR: '数据选择',
-    FORM_DATEPICK_INPUT: '日期时间',
-    FORM_DATE_PICKER: '日期时间',
-    FORM_MONEY_INPUT: '金额',
-    FORM_NUMBER_INPUT: '数字',
-    FORM_FILE_UPLOAD: '附件上传',
-    FORM_UPLOAD: '附件上传',
-    FORM_SWITCH_SELECT: '开关',
-    FORM_SWITCH: '开关',
-    FORM_PEOPLE_SELECT: '人员选择',
-    FORM_USER_SELECT: '人员选择',
-    FORM_DEPARTMENT_SELECT: '部门选择',
-    FORM_DEPT_SELECT: '部门选择',
-    FORM_WIDGET_LOCATION: '地理位置',
-    FORM_WIDGET_SON_TABLE: '子表',
-    FORM_RADIO_INPUT: '单选框',
-    FORM_RADIO: '单选框',
-    FORM_CHECKBOX_INPUT: '复选框',
-    FORM_CHECKBOX: '复选框',
-    FORM_RICH_TEXT: '富文本',
-    FORM_HYPERLINK_INPUT: '超链接',
-    FORM_LINK: '超链接',
-    FORM_IDCARD_INPUT: '身份证号',
-    FORM_ID_CARD: '身份证号',
-    FORM_WIDGET_AREA: '地区地址',
-    FORM_LOCATION: '地理位置',
-    FORM_ADDRESS: '地区地址',
-    FORM_ASSOCIATION: '关联表单',
-    FORM_SERIAL: '单据号',
-  }
   const raw = String(value || '').trim()
   const modelLabel = String(modelType || '').trim()
-  const label = labels[raw] || raw || modelLabel || '-'
+  const label = resolveComponentLabel(raw, '') || raw || modelLabel || '-'
+  // 业务规则：如果组件类型退回到默认"单行输入"但模型层声明的类型更具体，
+  // 以模型声明为准（导出 md 时更贴合原意）
   if (label === '单行输入' && modelLabel && modelLabel !== '单行输入') return modelLabel
   return label
 }
