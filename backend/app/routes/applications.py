@@ -1840,6 +1840,148 @@ async def upload_design_doc(
     }
 
 
+def _build_doc_upload_context_summary(data: dict, fname: str) -> str:
+    """生成文档上传后保存到 Conversation 的系统上下文消息文本。
+
+    纯字符串拼接，无副作用。保留原文案（"用户上传了设计文档《...》"等）
+    以免破坏已有对话的系统消息格式约定。
+    """
+    models_summary = [
+        f"- {m.get('name')}：{', '.join(f.get('name', '') for f in m.get('fields', []))}"
+        for m in data.get("models", [])
+    ]
+    dicts_summary = [
+        f"- {d.get('name')}（{d.get('code')}）：{', '.join(o.get('name','') for o in d.get('options',[]))}"
+        for d in data.get("dicts", [])
+    ]
+    roles_summary = [r.get('name', '') for r in data.get("roles", [])]
+
+    context_content = f"用户上传了设计文档《{fname}》，已解析为以下配置摘要：\n\n"
+    context_content += f"应用名：{data.get('appName', '业务应用')}\n"
+    context_content += f"角色：{', '.join(roles_summary)}\n\n"
+    context_content += f"数据字典：\n" + "\n".join(dicts_summary) + "\n\n"
+    context_content += f"业务表单：\n" + "\n".join(models_summary) + "\n\n"
+    context_content += "用户可能会要求修改配置。当用户确认后，生成完整的配置JSON。"
+    return context_content
+
+
+async def _persist_doc_upload(
+    *,
+    data: dict,
+    fname: str,
+    text: str,
+    parse_meta: dict,
+    existing_conversation_id: Optional[int],
+    user_id: int,
+    tenant_id: Optional[int],
+    v1_parsed_config: Optional[dict],
+    is_incremental: bool,
+) -> dict:
+    """把文档解析结果持久化到 DB（Conversation / Messages / DocumentVersion），
+    返回 SSE done 事件要用的 done_data dict。
+
+    副作用契约（跟原直线代码完全一致）：
+      - 用独立 AsyncSessionLocal session；不会改主请求 db
+      - 增量模式复用 existing_conversation_id，否则新建 Conversation
+      - 写 4 条 system Message：上下文摘要 / doc_raw json / config json / doc_raw 代码块
+      - 增量模式计算 resource_diff 并用 normalized_new_config 覆盖 data
+      - 新增 DocumentVersion（version = max_ver + 1，content_hash 用 config json sha256）
+      - 返回 done_data 含 conversation_id / preview / rendered_doc / parse_meta /
+        version / is_incremental；增量模式追加 diff 字段
+    """
+    from app.database import AsyncSessionLocal
+    from app.config_diff import compute_config_diff
+
+    async with AsyncSessionLocal() as session:
+        from app.models import Conversation, Message
+
+        # 增量模式复用已有对话，首次上传创建新对话
+        if existing_conversation_id:
+            conv_id = existing_conversation_id
+        else:
+            conversation = Conversation(
+                user_id=user_id, tenant_id=tenant_id,
+                title=f"文档：{fname}", agent_type="builder", status="active"
+            )
+            session.add(conversation)
+            await session.flush()
+            conv_id = conversation.id
+
+        # 系统上下文消息
+        context_content = _build_doc_upload_context_summary(data, fname)
+        session.add(Message(conversation_id=conv_id, role="system", content=context_content))
+
+        # 保存原始文档内容（供后续创建 DocumentVersion 使用）
+        doc_raw_msg = json.dumps({"type": "doc_raw", "filename": fname, "content": text}, ensure_ascii=False)
+        session.add(Message(conversation_id=conv_id, role="system", content=doc_raw_msg))
+
+        models_count = len(data.get("models", []))
+        roles_count = len(data.get("roles", []))
+        dicts_count = len(data.get("dicts", []))
+
+        resource_diff = None
+        if is_incremental and v1_parsed_config:
+            # 增量模式：用 config_diff 展示差异（会自动完成编码继承）
+            resource_diff = compute_config_diff(v1_parsed_config, data)
+            # 使用编码继承后的配置，确保 V1 的 code 被保留
+            if resource_diff.normalized_new_config:
+                data = resource_diff.normalized_new_config
+
+        # 保存完整配置 JSON 作为 system 消息（刷新页面时可恢复）
+        config_msg = '```json\n' + _dump_preview_config(data) + '\n```'
+        session.add(Message(conversation_id=conv_id, role="system", content=config_msg))
+
+        # 保存原始文档内容（用于后续创建 DocumentVersion）
+        doc_msg = '```doc_raw\n' + json.dumps({"filename": fname, "raw_content": text}, ensure_ascii=False) + '\n```'
+        session.add(Message(conversation_id=conv_id, role="system", content=doc_msg))
+
+        # 自动保存 DocumentVersion（conversation_id 关联，application_id 待后续绑定）
+        import hashlib
+        # 检查同一 conversation 下已有版本号
+        existing_ver_result = await session.execute(
+            select(sa_func.max(DocumentVersion.version))
+            .where(DocumentVersion.conversation_id == conv_id)
+        )
+        max_ver = existing_ver_result.scalar() or 0
+        new_version = max_ver + 1
+
+        config_json_str = _dump_parsed_config(data)
+        rendered_doc = _render_doc_content_from_config(
+            data.get("appName", ""),
+            data.get("appCode", ""),
+            data,
+        )
+
+        doc_ver = DocumentVersion(
+            application_id=None,
+            conversation_id=conv_id,
+            version=new_version,
+            filename=fname,
+            content_hash=hashlib.sha256(config_json_str.encode()).hexdigest(),
+            raw_content=rendered_doc,
+            parsed_config=config_json_str,
+            parent_version=max_ver if max_ver > 0 else None,
+            summary=f"{models_count} 模型, {dicts_count} 字典, {roles_count} 角色",
+        )
+        session.add(doc_ver)
+
+        await session.commit()
+
+        done_data = {
+            "conversation_id": conv_id,
+            "preview": data,
+            "rendered_doc": rendered_doc,
+            "parse_meta": parse_meta,
+            "version": new_version,
+            "is_incremental": is_incremental,
+        }
+        # 增量模式下额外返回 diff 信息
+        if is_incremental and resource_diff is not None:
+            done_data["diff"] = resource_diff.to_dict()
+
+        return done_data
+
+
 def _iter_parse_progress_events(data: dict, parse_meta: dict):
     """为一份已解析的 preview data 生成所有 SSE progress 事件。
 
@@ -2072,111 +2214,22 @@ async def upload_doc_with_conversation(
         if str(data.get("appName") or "").strip() in _DEFAULT_APP_NAMES:
             data["appName"] = _infer_app_name_from_doc(text, fname) or "业务应用"
 
-        # 创建对话 + 消息（用独立 session）
-        async with AsyncSessionLocal() as session:
-            from app.models import Conversation, Message
-
-            # 增量模式复用已有对话，首次上传创建新对话
-            if existing_conversation_id:
-                conv_id = existing_conversation_id
-            else:
-                conversation = Conversation(
-                    user_id=user_id, tenant_id=tenant_id,
-                    title=f"文档：{fname}", agent_type="builder", status="active"
-                )
-                session.add(conversation)
-                await session.flush()
-                conv_id = conversation.id
-
-            # 系统上下文
-            models_summary = []
-            for m in data.get("models", []):
-                field_names = [f.get("name", "") for f in m.get("fields", [])]
-                models_summary.append(f"- {m.get('name')}：{', '.join(field_names)}")
-            dicts_summary = [f"- {d.get('name')}（{d.get('code')}）：{', '.join(o.get('name','') for o in d.get('options',[]))}" for d in data.get("dicts", [])]
-            roles_summary = [r.get('name', '') for r in data.get("roles", [])]
-
-            context_content = f"用户上传了设计文档《{fname}》，已解析为以下配置摘要：\n\n"
-            context_content += f"应用名：{data.get('appName', '业务应用')}\n"
-            context_content += f"角色：{', '.join(roles_summary)}\n\n"
-            context_content += f"数据字典：\n" + "\n".join(dicts_summary) + "\n\n"
-            context_content += f"业务表单：\n" + "\n".join(models_summary) + "\n\n"
-            context_content += "用户可能会要求修改配置。当用户确认后，生成完整的配置JSON。"
-
-            session.add(Message(conversation_id=conv_id, role="system", content=context_content))
-
-            # 保存原始文档内容（供后续创建 DocumentVersion 使用）
-            doc_raw_msg = json.dumps({"type": "doc_raw", "filename": fname, "content": text}, ensure_ascii=False)
-            session.add(Message(conversation_id=conv_id, role="system", content=doc_raw_msg))
-
-            models_count = len(data.get("models", []))
-            roles_count = len(data.get("roles", []))
-            dicts_count = len(data.get("dicts", []))
-            if is_incremental and v1_parsed_config:
-                # 增量模式：用 config_diff 展示差异（会自动完成编码继承）
-                v1_for_diff = v1_parsed_config
-                resource_diff = compute_config_diff(v1_for_diff, data)
-                # 使用编码继承后的配置，确保 V1 的 code 被保留
-                if resource_diff.normalized_new_config:
-                    data = resource_diff.normalized_new_config
-
-            # 保存完整配置 JSON 作为 system 消息（刷新页面时可恢复）
-            config_msg = '```json\n' + _dump_preview_config(data) + '\n```'
-            session.add(Message(conversation_id=conv_id, role="system", content=config_msg))
-
-            # 保存原始文档内容（用于后续创建 DocumentVersion）
-            doc_msg = '```doc_raw\n' + json.dumps({"filename": fname, "raw_content": text}, ensure_ascii=False) + '\n```'
-            session.add(Message(conversation_id=conv_id, role="system", content=doc_msg))
-
-            # 自动保存 DocumentVersion（conversation_id 关联，application_id 待后续绑定）
-            import hashlib
-            # 检查同一 conversation 下已有版本号
-            existing_ver_result = await session.execute(
-                select(sa_func.max(DocumentVersion.version))
-                .where(DocumentVersion.conversation_id == conv_id)
-            )
-            max_ver = existing_ver_result.scalar() or 0
-            new_version = max_ver + 1
-
-            config_json_str = _dump_parsed_config(data)
-            rendered_doc = _render_doc_content_from_config(
-                data.get("appName", ""),
-                data.get("appCode", ""),
-                data,
-            )
-
-            doc_ver = DocumentVersion(
-                application_id=None,
-                conversation_id=conv_id,
-                version=new_version,
-                filename=fname,
-                content_hash=hashlib.sha256(config_json_str.encode()).hexdigest(),
-                raw_content=rendered_doc,
-                parsed_config=config_json_str,
-                parent_version=max_ver if max_ver > 0 else None,
-                summary=f"{models_count} 模型, {dicts_count} 字典, {roles_count} 角色",
-            )
-            session.add(doc_ver)
-
-            await session.commit()
-
-            done_data = {
-                "conversation_id": conv_id,
-                "preview": data,
-                "rendered_doc": rendered_doc,
-                "parse_meta": parse_meta,
-                "version": new_version,
-                "is_incremental": is_incremental,
-            }
-            # 增量模式下额外返回 diff 信息
-            if is_incremental and v1_parsed_config:
-                resource_diff_dict = resource_diff.to_dict()
-                done_data["diff"] = resource_diff_dict
-
-            yield {
-                "event": "done",
-                "data": json.dumps(done_data, ensure_ascii=False)
-            }
+        # 创建对话 + 消息 + DocumentVersion（独立 session）
+        done_data = await _persist_doc_upload(
+            data=data,
+            fname=fname,
+            text=text,
+            parse_meta=parse_meta,
+            existing_conversation_id=existing_conversation_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            v1_parsed_config=v1_parsed_config,
+            is_incremental=is_incremental,
+        )
+        yield {
+            "event": "done",
+            "data": json.dumps(done_data, ensure_ascii=False),
+        }
 
     from sse_starlette.sse import EventSourceResponse
     return EventSourceResponse(event_generator())
