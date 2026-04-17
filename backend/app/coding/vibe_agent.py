@@ -968,12 +968,16 @@ setting.vue 的配置项**必须严格对齐 brainstorm "设计方案确认"中"
 0. **Before tool calls**: First write a short, user-facing progress note in Chinese (1-3 sentences) explaining what you understood and what you will do next.
 1. **FIRST** (1 call): Use glob_files to see the project structure
 2. **THEN** (1-3 calls max): If `.cursor/rules/*.mdc` exists, read those rule files first, then read ONLY the key implementation files you need (edit.vue and mixin). Do NOT read every file. **必读**：scaffold 默认的 `form-component-demo.widget.config.json` 和一份 `.editor.config.json`，作为后续 edit 的模板——这样能保证结构、字段类型都合法。
-3. **IMMEDIATELY write code**: 已经有 scaffold 占位文件（demo 前缀）的走 `edit_file` 替换关键字段（最推荐 widget.config.json / editor.config.json / apaas.json 这类严格 schema 的文件）；新增业务文件才用 `write_file`。**不要**对 widget.config.json 用 write_file 从零写——几乎必然漏字段被校验拒绝。Call tools multiple times in a SINGLE turn (parallel tool calls).
+3. **IMMEDIATELY write code（一次性并行写多个）**: 严格 schema 的 JSON（widget.config.json 等）走 `edit_file` 改关键字段；新增业务文件才用 `write_file`。**无论 edit_file 还是 write_file 都必须批量并行**——一个 turn 同时发 7+ 个 tool_calls 把所有 mode vue / setting / index.js / widget.config.json 等一次性写/改完。**不要**对 widget.config.json 用 write_file 从零写（漏字段）；**也不要**一轮只 edit/write 一个文件（耗光 30 轮上限任务必失败）。
 4. **Build 前一致性自检（必做）**: run build 前，用 glob 或 list_dir **逐个验证** 7 个 scene 目录 (`src/form-component/form-widget/{edit,read,ide,list,print,search,search-ide}/`) 下的 `index.js` 引用的每一个 `.vue` 文件是否都真实存在。只要有一个"index.js 引用了但 vue 不存在"，立即先补建/修正，不要先跑 build。
 5. **THEN** run `npm run build` to check compilation
 6. If errors, fix and rebuild. If success, report completion.
 
 ## CRITICAL Rules
+- **🔴 必须 parallel tool_calls，严禁一轮一个文件**：写代码阶段**每个 turn 必须一次发出 5+ 个并行 `write_file`/`edit_file` 调用**。这个组件通常需要写 20+ 个文件（7 个 scene vue + setting.vue + widget.config.json + editor.config.json + 多个 index.js），如果每轮只调 1 个 tool，30 轮上限会被消耗殆尽而组件还没写完，任务失败。
+  - ❌ 反例（任务必失败）：`turn1: [write_file]` `turn2: [write_file]` `turn3: [write_file]` ... 每轮 1 个
+  - ✅ 正例：`turn1: [write_file×7]`（所有 mode vue 一次性写完）`turn2: [edit_file×3, write_file×2]`（widget.config / editor.config / setting.vue / 两个 index.js）`turn3: [run_command]`（build）
+  - 即使工具可能返回 Error，也要**并行发**——Error 后下一轮并行 edit_file 修复，而不是怕 Error 变成一轮一个
 - **Progress notes are visible to the user**: keep them brief, concrete, and friendly. Do NOT dump hidden reasoning or long analysis.
 - **DO NOT loop**: Never read the same file twice. Never read more than 3 files before writing code.
 - **Write ALL files at once**: In a single turn, call write_file for edit.vue, read.vue, ide.vue, setting.vue etc. Do NOT write one file per turn.
@@ -1040,12 +1044,16 @@ src/form-component/form-widget/
 0. **Before tool calls**: First write a short, user-facing progress note in Chinese (1-3 sentences) explaining what you understood and what you will do next.
 1. **FIRST** (1 call): Use glob_files to see the project structure
 2. **THEN** (1-3 calls max): If `.cursor/rules/*.mdc` exists, read those rule files first, then read ONLY the key implementation files you need. Do NOT read every file. **必读**：scaffold 默认的 `shared/widget.config.json` 和一份 `.editor.config.json`，作为后续 edit 的模板——保证结构、字段类型都合法。
-3. **IMMEDIATELY write code**: 已经有 scaffold 占位文件（demo 前缀）或已有的严格 schema 文件（`shared/widget.config.json`）走 `edit_file` 替换关键字段；新增业务文件才用 `write_file`。**不要**对 widget.config.json 用 write_file 从零写——几乎必然漏字段被校验拒绝。Call tools multiple times in a SINGLE turn (parallel tool calls for web/ and mobile/ files).
+3. **IMMEDIATELY write code（一次性并行写多个）**: 严格 schema 的 JSON（`shared/widget.config.json` 等）走 `edit_file` 改关键字段；新增业务文件才用 `write_file`。**无论 edit_file 还是 write_file 都必须批量并行**——一个 turn 同时发 7+ 个 tool_calls 把 web/ 和 mobile/ 的所有 mode vue / setting / index.js 等一次性写/改完。**不要**对 widget.config.json 用 write_file 从零写（漏字段）；**也不要**一轮只 edit/write 一个文件（耗光 30 轮上限任务必失败）。
 4. **Build 前一致性自检（必做）**: run build 前，用 glob 或 list_dir **逐个验证**两端 7 个 scene 目录（`web/src/form-component/form-widget/{edit,read,ide,list,print,search,search-ide}/` 和 `mobile/src/form-component/form-widget/{...}/`）下的 `index.js` 引用的每一个 `.vue` 文件是否都真实存在。只要有一个"index.js 引用了但 vue 不存在"，立即先补建/修正，不要先跑 build。
 5. **THEN** run `npm run build` to check compilation (builds both web/ and mobile/)
 6. If errors, fix and rebuild. If success, report completion.
 
 ## CRITICAL Rules
+- **🔴 必须 parallel tool_calls，严禁一轮一个文件**：写代码阶段**每个 turn 必须一次发出 7+ 个并行 `write_file`/`edit_file` 调用**。双端组件通常需要写 30+ 个文件（web 7 个 scene vue + mobile 7 个 scene vue + setting.vue + widget.config.json + editor.config.json + 多个 index.js），如果每轮只调 1 个 tool，30 轮上限会被消耗殆尽而组件还没写完，任务失败。
+  - ❌ 反例（任务必失败）：`turn1: [write_file]` `turn2: [write_file]` `turn3: [write_file]` ... 每轮 1 个
+  - ✅ 正例：`turn1: [write_file×7]`（web/ 7 个 mode vue 一次性写完）`turn2: [write_file×7]`（mobile/ 7 个 mode vue 一次性写完）`turn3: [edit_file×3, write_file×2]`（widget.config / editor.config / setting.vue / 两个 index.js）`turn4: [run_command]`（build）
+  - 即使工具可能返回 Error，也要**并行发**——Error 后下一轮并行 edit_file 修复，而不是怕 Error 变成一轮一个
 - **Progress notes are visible to the user**: keep them brief, concrete, and friendly. Do NOT dump hidden reasoning or long analysis.
 - **DO NOT loop**: Never read the same file twice. Never read more than 3 files before writing code.
 - **Write ALL files at once**: In a single turn, call write_file for ALL web/ and mobile/ vue files. Do NOT write one file per turn.
