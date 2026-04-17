@@ -662,7 +662,17 @@ class VibeCodingAgent:
 - `form-custom-textarea-editor.vue` — 多行输入（替代 `<el-input type="textarea">`）
 - `form-custom-switch-editor.vue` — 开关（替代 `<el-switch>`）
 
-还有 2 个字段赋值专用 editor（`form-custom-field-assign-editor.vue` / `form-custom-table-field-assign-editor.vue`），仅在"数据选择类"组件需要把外部数据映射到当前表单字段时使用。
+还有 2 个字段赋值 editor：
+- `form-custom-field-assign-editor.vue` — 主表字段赋值（源 → 目标 uuid 1:1 映射）
+- `form-custom-table-field-assign-editor.vue` — 子表字段赋值（子表级别的批量映射）
+
+**⚠️ 以下任一场景都必须用 `form-custom-field-assign-editor` 让用户在 setting 面板配置目标字段，不要用外部联动规则绕过**：
+- 数据选择类组件：用户选中数据后把多个字段回填到当前表单
+- 派生值输出：组件计算出的派生值（如时间差、总分、合计金额）需要写到其他字段
+- 联动赋值：组件自身输入变化时需要自动更新其他字段
+- 任何"组件把值赋给用户在设计器里选定的目标字段"的需求
+
+**禁止**："edit 的 onChange 输出 xxx 通过 aPaaS 字段联动规则绑定至目标字段" 这种方案——这是给**非自开发组件**用的机制。自开发组件必须让用户在 setting.vue 里通过 `form-custom-field-assign-editor` 配置 target uuid，然后 edit.vue 通过 `this.$set(this.formData, targetUuid, value)` + `this.formEngine.formDataControl.ctlFormDataChanged = true` 直接写值。
 
 **🔴 setting.vue 中严禁直接使用下列 Element UI 原生组件**：
 - `<el-form-item>` / `<el-form>` / `<el-input>` / `<el-select>` / `<el-option>`
