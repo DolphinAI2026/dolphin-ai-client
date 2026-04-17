@@ -651,6 +651,65 @@ async def _rollback_models_to_reuse_by_name(
 
 
 # ---------------------------------------------------------------------------
+# Phase 3 表单辅助
+# ---------------------------------------------------------------------------
+
+async def _load_existing_form_menus(client: APaaSClient, app_id: str) -> Dict[str, str]:
+    """查询应用已有表单菜单，返回 {menuName: formId}。异常吞掉返回空表。"""
+    existing_forms: Dict[str, str] = {}
+    try:
+        menus = await client.query_menus(app_id)
+
+        def _collect(items: list):
+            for item in items:
+                if item.get("formId"):
+                    existing_forms[item.get("menuName", "")] = item["formId"]
+                _collect(item.get("submenus", []) or item.get("children", []) or [])
+
+        _collect(menus)
+    except Exception:
+        pass
+    return existing_forms
+
+
+def _resolve_forms_to_build(all_forms: List[dict], models: List[dict]) -> List[dict]:
+    """用户提供 all_forms 则用之；否则按 models 自动生成每模型一份空 form。"""
+    forms_to_build = all_forms or []
+    if not forms_to_build:
+        forms_to_build = [
+            {
+                "name": m["name"],
+                "modelCode": m.get("code"),
+                "allModelCodes": [m.get("code")],
+                "components": [],
+            }
+            for m in models
+        ]
+    return forms_to_build
+
+
+def _build_form_create_payload(
+    form: dict,
+    form_name: str,
+    all_model_codes: List[str],
+    components: List[dict],
+    query_conditions: List[str],
+    query_list: List[str],
+) -> List[dict]:
+    """构造单表单的 create_form_config 请求体（list 包裹一个 dict）。"""
+    return [{
+        "formName": form_name,
+        "formCode": str(form.get("formCode") or form.get("code") or f"form_{_rand(6)}"),
+        "allModelCodes": all_model_codes,
+        "formComponents": components,
+        "listPageView": {
+            "queryConditions": query_conditions,
+            "queryList": query_list,
+        },
+    }]
+
+
+# ---------------------------------------------------------------------------
 # Phase 1 字典辅助
 # ---------------------------------------------------------------------------
 
@@ -923,30 +982,8 @@ async def run_complete_generation(
     form_results: List[dict] = []  # [{formId, formCode, formName, menuId}]
     try:
         model_lookup = _build_model_lookup(models, model_info)
-        # 查询已有表单菜单
-        existing_forms: Dict[str, str] = {}
-        try:
-            menus = await client.query_menus(app_id)
-            def _collect(items: list):
-                for item in items:
-                    if item.get("formId"):
-                        existing_forms[item.get("menuName", "")] = item["formId"]
-                    _collect(item.get("submenus", []) or item.get("children", []) or [])
-            _collect(menus)
-        except Exception:
-            pass
-
-        forms_to_build = all_forms or []
-        if not forms_to_build:
-            forms_to_build = [
-                {
-                    "name": m["name"],
-                    "modelCode": m.get("code"),
-                    "allModelCodes": [m.get("code")],
-                    "components": [],
-                }
-                for m in models
-            ]
+        existing_forms = await _load_existing_form_menus(client, app_id)
+        forms_to_build = _resolve_forms_to_build(all_forms, models)
 
         for idx, form in enumerate(forms_to_build):
             form_name = form.get("name") or form.get("formName") or form.get("modelCode") or f"表单{idx+1}"
@@ -991,16 +1028,14 @@ async def run_complete_generation(
                 yield {"stage": 3, "status": "running", "step": f"跳过 {form_name}（无可用字段）"}
                 continue
 
-            form_payload = [{
-                "formName": form_name,
-                "formCode": str(form.get("formCode") or form.get("code") or f"form_{_rand(6)}"),
-                "allModelCodes": all_model_codes,
-                "formComponents": components,
-                "listPageView": {
-                    "queryConditions": query_conditions,
-                    "queryList": query_list,
-                },
-            }]
+            form_payload = _build_form_create_payload(
+                form=form,
+                form_name=form_name,
+                all_model_codes=all_model_codes,
+                components=components,
+                query_conditions=query_conditions,
+                query_list=query_list,
+            )
 
             try:
                 result = await client.create_form_config(app_id, form_payload)
