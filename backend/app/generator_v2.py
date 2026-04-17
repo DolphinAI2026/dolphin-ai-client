@@ -688,6 +688,101 @@ def _resolve_forms_to_build(all_forms: List[dict], models: List[dict]) -> List[d
     return forms_to_build
 
 
+def _collect_label_dict_map(
+    models: List[dict],
+    dict_codes: Dict[str, str],
+) -> Dict[str, str]:
+    """收集 {字段 label: 平台字典 code}，含子表字段。"""
+    label_dict: Dict[str, str] = {}
+    for m in models:
+        for f in m.get("fields", []):
+            if f.get("type") in ("下拉单选", "下拉多选") and f.get("dict"):
+                label_dict[f["name"]] = dict_codes.get(f["dict"], "")
+            if f.get("type") == "子表":
+                for sf in f.get("sub_fields", []):
+                    if sf.get("type") in ("下拉单选", "下拉多选") and sf.get("dict"):
+                        label_dict[sf["name"]] = dict_codes.get(sf["dict"], "")
+    return label_dict
+
+
+def _bind_dict_on_component(
+    comp: dict,
+    label_dict: Dict[str, str],
+    dict_id_map: Dict[str, str],
+    dict_options_map: Dict[str, list],
+) -> bool:
+    """把单个下拉组件绑定到平台字典选项；命中改动返回 True。"""
+    ct = comp.get("componentType")
+    if ct not in ("FORM_SELECT_INPUT_SINGLE", "FORM_SELECT_INPUT"):
+        return False
+    dc = label_dict.get(comp.get("label", ""), "")
+    if not dc or dc not in dict_id_map:
+        return False
+    did = dict_id_map[dc]
+    opts = dict_options_map.get(dc, [])
+    choose = [
+        {
+            "id": o.get("valueCode"),
+            "label": o.get("valueName"),
+            "labelI18nAssociated": False,
+            "color": o.get("valueMulticolor", "#027AFF"),
+            "status": o.get("valueStatus", "ENABLE"),
+            "checked": False,
+            "displayOrder": o.get("displayOrder", 0),
+        }
+        for o in opts
+    ]
+    comp["source"] = {"type": "DICTIONARY_TYPE", "id": did}
+    comp["chooseOptions"] = choose
+    comp["dictionaryChooseOptions"] = choose
+    comp["chooseType"] = "SINGLE" if ct == "FORM_SELECT_INPUT_SINGLE" else "MULTIPLE"
+    comp["multicolor"] = True
+    if ct == "FORM_SELECT_INPUT_SINGLE":
+        comp["componentType"] = "FORM_SELECT_INPUT"
+    return True
+
+
+async def _rebind_dicts_on_forms(
+    client: APaaSClient,
+    app_id: str,
+    form_ids: List[str],
+    models: List[dict],
+    dict_codes: Dict[str, str],
+) -> int:
+    """用平台实际字典选项回写到每个表单的下拉组件。返回成功更新的表单数。"""
+    all_platform_dicts = await client.query_dicts(app_id)
+    dict_id_map = {d.get("dictionaryCode"): d.get("id") for d in all_platform_dicts if d.get("dictionaryCode") and d.get("id")}
+    dict_options_map: Dict[str, list] = {}
+    for dc, did in dict_id_map.items():
+        dict_options_map[dc] = await client.query_dict_options(app_id, did)
+
+    label_dict = _collect_label_dict_map(models, dict_codes)
+
+    bound_count = 0
+    for form_id in form_ids:
+        try:
+            fc = await client.query_form_config(app_id, form_id)
+            comps = fc.get("detailPage", {}).get("formComponents", [])
+            updated = False
+
+            for comp in comps:
+                if _bind_dict_on_component(comp, label_dict, dict_id_map, dict_options_map):
+                    updated = True
+                # 子表内的列组件
+                if comp.get("componentType") == "FORM_WIDGET_SON_TABLE":
+                    for col in comp.get("tableColumn", []):
+                        if _bind_dict_on_component(col, label_dict, dict_id_map, dict_options_map):
+                            updated = True
+
+            if updated:
+                await client.save_form_config(app_id, fc)
+                bound_count += 1
+        except Exception as e:
+            logger.warning(f"绑定表单 {form_id} 字典失败: {e}")
+
+    return bound_count
+
+
 def _build_form_create_payload(
     form: dict,
     form_name: str,
@@ -1062,75 +1157,9 @@ async def run_complete_generation(
         form_ids = [fr["formId"] for fr in form_results if fr.get("formId")]
         if dicts and form_ids:
             try:
-                all_platform_dicts = await client.query_dicts(app_id)
-                dict_id_map = {d.get("dictionaryCode"): d.get("id") for d in all_platform_dicts if d.get("dictionaryCode") and d.get("id")}
-                dict_options_map: Dict[str, list] = {}
-                for dc, did in dict_id_map.items():
-                    dict_options_map[dc] = await client.query_dict_options(app_id, did)
-
-                # 收集所有下拉字段字典映射（含子表）
-                label_dict: Dict[str, str] = {}
-                for m in models:
-                    for f in m.get("fields", []):
-                        if f.get("type") in ("下拉单选", "下拉多选") and f.get("dict"):
-                            label_dict[f["name"]] = dict_codes.get(f["dict"], "")
-                        if f.get("type") == "子表":
-                            for sf in f.get("sub_fields", []):
-                                if sf.get("type") in ("下拉单选", "下拉多选") and sf.get("dict"):
-                                    label_dict[sf["name"]] = dict_codes.get(sf["dict"], "")
-
-                def _bind_dict(comp: dict) -> bool:
-                    ct = comp.get("componentType")
-                    if ct not in ("FORM_SELECT_INPUT_SINGLE", "FORM_SELECT_INPUT"):
-                        return False
-                    dc = label_dict.get(comp.get("label", ""), "")
-                    if not dc or dc not in dict_id_map:
-                        return False
-                    did = dict_id_map[dc]
-                    opts = dict_options_map.get(dc, [])
-                    choose = [
-                        {
-                            "id": o.get("valueCode"),
-                            "label": o.get("valueName"),
-                            "labelI18nAssociated": False,
-                            "color": o.get("valueMulticolor", "#027AFF"),
-                            "status": o.get("valueStatus", "ENABLE"),
-                            "checked": False,
-                            "displayOrder": o.get("displayOrder", 0),
-                        }
-                        for o in opts
-                    ]
-                    comp["source"] = {"type": "DICTIONARY_TYPE", "id": did}
-                    comp["chooseOptions"] = choose
-                    comp["dictionaryChooseOptions"] = choose
-                    comp["chooseType"] = "SINGLE" if ct == "FORM_SELECT_INPUT_SINGLE" else "MULTIPLE"
-                    comp["multicolor"] = True
-                    if ct == "FORM_SELECT_INPUT_SINGLE":
-                        comp["componentType"] = "FORM_SELECT_INPUT"
-                    return True
-
-                bound_count = 0
-                for form_id in form_ids:
-                    try:
-                        fc = await client.query_form_config(app_id, form_id)
-                        comps = fc.get("detailPage", {}).get("formComponents", [])
-                        updated = False
-
-                        for comp in comps:
-                            if _bind_dict(comp):
-                                updated = True
-                            # 子表内的列组件
-                            if comp.get("componentType") == "FORM_WIDGET_SON_TABLE":
-                                for col in comp.get("tableColumn", []):
-                                    if _bind_dict(col):
-                                        updated = True
-
-                        if updated:
-                            await client.save_form_config(app_id, fc)
-                            bound_count += 1
-                    except Exception as e:
-                        logger.warning(f"绑定表单 {form_id} 字典失败: {e}")
-
+                bound_count = await _rebind_dicts_on_forms(
+                    client, app_id, form_ids, models, dict_codes
+                )
                 if bound_count:
                     yield {"stage": 3, "status": "running", "step": f"字典绑定: {bound_count} 个表单"}
             except Exception as e:
