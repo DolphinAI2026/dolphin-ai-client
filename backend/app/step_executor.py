@@ -674,6 +674,153 @@ def _resolve_form_code(form: dict, form_name: str) -> str:
     return f"form_{_sanitize_code(form.get('code', form_name))}"
 
 
+def _build_create_form_payload(
+    form_name: str,
+    form_code: str,
+    all_model_codes: List[str],
+    components: List[dict],
+    query_conditions: List[str],
+    query_list: List[str],
+) -> List[dict]:
+    """组装传给 client.create_form_config 的 payload（单元素 list）。"""
+    return [{
+        "formName": form_name,
+        "formCode": form_code,
+        "allModelCodes": all_model_codes,
+        "formComponents": components,
+        "listPageView": {
+            "queryConditions": query_conditions,
+            "queryList": query_list,
+        },
+    }]
+
+
+async def _create_form_and_menu(
+    client: APaaSClient,
+    app_id: str,
+    form_payload: List[dict],
+    form_name: str,
+    form_index: int,
+) -> dict:
+    """调 create_form_config 创建表单并按返回 id 创建/更新菜单。
+
+    行为契约：
+      - form_result 初始为占位（formId/formCode/menuId='', reused=False, message="创建成功: ..."）
+      - client.create_form_config 返回 list 时，对每个带 id 的 fr 填 form_result
+      - 菜单创建失败 logger.warning 但**不中断**，继续返回 form_result
+    """
+    result = await client.create_form_config(app_id, form_payload)
+    form_result = {
+        "formId": "", "formName": form_name, "formCode": "", "menuId": "",
+        "reused": False, "message": f"创建成功: {form_name}",
+    }
+    if isinstance(result, list):
+        for fr in result:
+            if isinstance(fr, dict) and "id" in fr:
+                form_result["formId"] = fr["id"]
+                form_result["formCode"] = fr.get("formCode", "")
+                form_result["menuId"] = fr.get("menuId", "")
+                # 平台 formConfig API 会自动创建菜单，但菜单名可能是默认值（如"我的待办"）
+                # 需要用返回的 menuId 更新菜单名为实际的模型名称
+                menu_id = fr.get("menuId", "")
+                try:
+                    if menu_id:
+                        # 有 menuId：更新已有菜单名称
+                        await client.create_menu(app_id, form_name, fr["id"], menu_order=form_index, menu_id=menu_id)
+                        logger.info(f"更新菜单名称: {form_name} (menuId={menu_id})")
+                    else:
+                        # 没有 menuId：创建新菜单
+                        await client.create_menu(app_id, form_name, fr["id"], menu_order=form_index)
+                except Exception as menu_err:
+                    logger.warning(f"创建/更新菜单失败（{form_name}）: {menu_err}")
+    return form_result
+
+
+async def _bind_dicts_to_form(
+    client: APaaSClient,
+    app_id: str,
+    form_result: dict,
+    form_components: List[dict],
+    dict_codes: Dict[str, str],
+    form_name: str,
+) -> None:
+    """给已创建表单的下拉组件回写字典绑定配置。
+
+    行为契约（跟原直线代码完全一致）：
+      - 失败 logger.warning 不阻断，原函数继续返回 form_result
+      - 成功且有组件更新 → form_result["message"] 追加 "（含字典绑定）"
+      - 直接在 form_result dict 原地修改 message；不返回任何值
+    """
+    try:
+        all_platform_dicts = await client.query_dicts(app_id)
+        dict_id_map = {d.get("dictionaryCode"): d.get("id") for d in all_platform_dicts}
+        dict_options_map: Dict[str, list] = {}
+        for dc, did in dict_id_map.items():
+            if did:
+                dict_options_map[dc] = await client.query_dict_options(app_id, did)
+
+        # 收集所有下拉字段的字典映射（包括子表字段）
+        label_dict: Dict[str, str] = {}
+        for comp in form_components:
+            ct = str(comp.get("componentType", comp.get("component_type", "")))
+            if ct in ("FORM_SELECT_INPUT_SINGLE", "FORM_SELECT_INPUT"):
+                dict_code = comp.get("dict") or comp.get("dictCode") or comp.get("dict_code")
+                if dict_code:
+                    label_dict[comp.get("label", "")] = dict_codes.get(dict_code, dict_code)
+
+        def _bind_dict_to_comp(comp: dict) -> bool:
+            """给单个组件绑定字典，返回是否有更新。"""
+            ct = comp.get("componentType")
+            if ct not in ("FORM_SELECT_INPUT_SINGLE", "FORM_SELECT_INPUT"):
+                return False
+            dc = label_dict.get(comp.get("label", ""), "")
+            if not dc or dc not in dict_id_map:
+                return False
+            did = dict_id_map[dc]
+            opts = dict_options_map.get(dc, [])
+            choose = [
+                {
+                    "id": o.get("valueCode"),
+                    "label": o.get("valueName"),
+                    "labelI18nAssociated": False,
+                    "color": o.get("valueMulticolor", "#027AFF"),
+                    "status": o.get("valueStatus", "ENABLE"),
+                    "checked": False,
+                    "displayOrder": o.get("displayOrder", 0),
+                }
+                for o in opts
+            ]
+            comp["source"] = {"type": "DICTIONARY_TYPE", "id": did}
+            comp["chooseOptions"] = choose
+            comp["dictionaryChooseOptions"] = choose
+            comp["chooseType"] = "SINGLE" if ct == "FORM_SELECT_INPUT_SINGLE" else "MULTIPLE"
+            comp["multicolor"] = True
+            if ct == "FORM_SELECT_INPUT_SINGLE":
+                comp["componentType"] = "FORM_SELECT_INPUT"
+            return True
+
+        fc = await client.query_form_config(app_id, form_result["formId"])
+        comps = fc.get("detailPage", {}).get("formComponents", [])
+        updated = False
+
+        for comp in comps:
+            # 顶层组件
+            if _bind_dict_to_comp(comp):
+                updated = True
+            # 子表内的列组件
+            if comp.get("componentType") == "FORM_WIDGET_SON_TABLE":
+                for col in comp.get("tableColumn", []):
+                    if _bind_dict_to_comp(col):
+                        updated = True
+
+        if updated:
+            logger.info("save_form_config reason: 字典绑定回写 (form=%s)", form_name)
+            await client.save_form_config(app_id, fc)
+            form_result["message"] += "（含字典绑定）"
+    except Exception as e:
+        logger.warning(f"字典绑定失败（不阻断）: {e}")
+
+
 def _build_form_components(
     form: dict,
     model_code: str,
@@ -814,16 +961,14 @@ async def execute_create_form(
     # formCode: 使用模型编码或生成唯一标识
     form_code = _resolve_form_code(form, form_name)
 
-    form_payload = [{
-        "formName": form_name,
-        "formCode": form_code,
-        "allModelCodes": all_model_codes,
-        "formComponents": components,
-        "listPageView": {
-            "queryConditions": query_conditions,
-            "queryList": query_list,
-        },
-    }]
+    form_payload = _build_create_form_payload(
+        form_name=form_name,
+        form_code=form_code,
+        all_model_codes=all_model_codes,
+        components=components,
+        query_conditions=query_conditions,
+        query_list=query_list,
+    )
 
     logger.info(
         "execute_create_form payload (%s):\n%s",
@@ -831,102 +976,24 @@ async def execute_create_form(
         json.dumps(form_payload, ensure_ascii=False, indent=2),
     )
 
-    result = await client.create_form_config(app_id, form_payload)
-    form_result = {
-        "formId": "", "formName": form_name, "formCode": "", "menuId": "",
-        "reused": False, "message": f"创建成功: {form_name}",
-    }
-
-    if isinstance(result, list):
-        for fr in result:
-            if isinstance(fr, dict) and "id" in fr:
-                form_result["formId"] = fr["id"]
-                form_result["formCode"] = fr.get("formCode", "")
-                form_result["menuId"] = fr.get("menuId", "")
-                # 平台 formConfig API 会自动创建菜单，但菜单名可能是默认值（如"我的待办"）
-                # 需要用返回的 menuId 更新菜单名为实际的模型名称
-                menu_id = fr.get("menuId", "")
-                try:
-                    if menu_id:
-                        # 有 menuId：更新已有菜单名称
-                        await client.create_menu(app_id, form_name, fr["id"], menu_order=form_index, menu_id=menu_id)
-                        logger.info(f"更新菜单名称: {form_name} (menuId={menu_id})")
-                    else:
-                        # 没有 menuId：创建新菜单
-                        await client.create_menu(app_id, form_name, fr["id"], menu_order=form_index)
-                except Exception as menu_err:
-                    logger.warning(f"创建/更新菜单失败（{form_name}）: {menu_err}")
+    form_result = await _create_form_and_menu(
+        client=client,
+        app_id=app_id,
+        form_payload=form_payload,
+        form_name=form_name,
+        form_index=form_index,
+    )
 
     # --- 绑定字典 ---
     if form_result["formId"] and dict_codes:
-        try:
-            all_platform_dicts = await client.query_dicts(app_id)
-            dict_id_map = {d.get("dictionaryCode"): d.get("id") for d in all_platform_dicts}
-            dict_options_map: Dict[str, list] = {}
-            for dc, did in dict_id_map.items():
-                if did:
-                    dict_options_map[dc] = await client.query_dict_options(app_id, did)
-
-            # 收集所有下拉字段的字典映射（包括子表字段）
-            label_dict: Dict[str, str] = {}
-            for comp in form_components:
-                ct = str(comp.get("componentType", comp.get("component_type", "")))
-                if ct in ("FORM_SELECT_INPUT_SINGLE", "FORM_SELECT_INPUT"):
-                    dict_code = comp.get("dict") or comp.get("dictCode") or comp.get("dict_code")
-                    if dict_code:
-                        label_dict[comp.get("label", "")] = dict_codes.get(dict_code, dict_code)
-
-            def _bind_dict_to_comp(comp: dict) -> bool:
-                """给单个组件绑定字典，返回是否有更新。"""
-                ct = comp.get("componentType")
-                if ct not in ("FORM_SELECT_INPUT_SINGLE", "FORM_SELECT_INPUT"):
-                    return False
-                dc = label_dict.get(comp.get("label", ""), "")
-                if not dc or dc not in dict_id_map:
-                    return False
-                did = dict_id_map[dc]
-                opts = dict_options_map.get(dc, [])
-                choose = [
-                    {
-                        "id": o.get("valueCode"),
-                        "label": o.get("valueName"),
-                        "labelI18nAssociated": False,
-                        "color": o.get("valueMulticolor", "#027AFF"),
-                        "status": o.get("valueStatus", "ENABLE"),
-                        "checked": False,
-                        "displayOrder": o.get("displayOrder", 0),
-                    }
-                    for o in opts
-                ]
-                comp["source"] = {"type": "DICTIONARY_TYPE", "id": did}
-                comp["chooseOptions"] = choose
-                comp["dictionaryChooseOptions"] = choose
-                comp["chooseType"] = "SINGLE" if ct == "FORM_SELECT_INPUT_SINGLE" else "MULTIPLE"
-                comp["multicolor"] = True
-                if ct == "FORM_SELECT_INPUT_SINGLE":
-                    comp["componentType"] = "FORM_SELECT_INPUT"
-                return True
-
-            fc = await client.query_form_config(app_id, form_result["formId"])
-            comps = fc.get("detailPage", {}).get("formComponents", [])
-            updated = False
-
-            for comp in comps:
-                # 顶层组件
-                if _bind_dict_to_comp(comp):
-                    updated = True
-                # 子表内的列组件
-                if comp.get("componentType") == "FORM_WIDGET_SON_TABLE":
-                    for col in comp.get("tableColumn", []):
-                        if _bind_dict_to_comp(col):
-                            updated = True
-
-            if updated:
-                logger.info("save_form_config reason: 字典绑定回写 (form=%s)", form_name)
-                await client.save_form_config(app_id, fc)
-                form_result["message"] += "（含字典绑定）"
-        except Exception as e:
-            logger.warning(f"字典绑定失败（不阻断）: {e}")
+        await _bind_dicts_to_form(
+            client=client,
+            app_id=app_id,
+            form_result=form_result,
+            form_components=form.get("components", []) or [],
+            dict_codes=dict_codes,
+            form_name=form_name,
+        )
 
     # --- 回写数据选择 / 关联表单引用 ---
     if form_result["formId"]:
