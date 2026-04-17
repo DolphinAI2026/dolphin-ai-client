@@ -803,6 +803,25 @@ export default customFormEditorList
 - `form-component-config/form-editor/index.js` = 平台注册的 JSON 清单（聚合 `.editor.config.json`），导出 `editorConfigList`
 - `form-component/form-editor/index.js` = 实际的 Vue 组件清单（聚合 `.vue`），导出 `customFormEditorList`
 
+### ⚠️ 配置项完整性（必须与 brainstorm 方案 1:1 对齐）
+
+setting.vue 的配置项**必须严格对齐 brainstorm "设计方案确认"中"配置项"表格**——表格列了 N 条 property，setting.vue 就要有 N 个对应的 form-custom-*-editor 节点，**每条 property 都要在 setting.vue 里有独立的 editor 节点**。
+
+**严禁**：
+- 省略任何配置项（哪怕"看起来可以先跳过"或"实现起来复杂"都不允许）
+- 修改 property 名（brainstorm 表格里叫 `defaultValue` 就必须叫这个，不能改名）
+- 修改数据类型 / UI 渲染 editor 类型
+- 合并多个配置项
+
+**特别注意：brainstorm 里标了自造业务 editor（如 `form-custom-date-time-editor` 等非预置原子）的配置项**：
+- 必须**先**按"🛑 自造业务 editor 的强制约定"小节新建该业务 editor 的 vue 文件（使用 `mixins: [EditorFormConfigMixin, FormEditorMixin]` + `<form-custom-sechma-item>` 包裹 + `v-model="formValue"`）
+- **再**在 setting.vue 里 import 并使用这个业务 editor
+- **严禁**因"这个 editor 比较麻烦，先跳过对应配置项"——如果 brainstorm 方案确定了这个配置项，它就是硬契约。你有义务同时新建业务 editor 并在 setting.vue 使用它。
+
+**自检**：写完 setting.vue 和相关业务 editor 后，build 前逐条核对 brainstorm 配置项表格：
+- 表格里每一行 property 名 → 在 setting.vue 里都能找到一个 `<form-custom-xxx-editor property="{同名}" ...>` 节点
+- 表格里标了业务 editor 的行 → `components/form-custom-xxx-editor.vue` 真实存在
+
 ### 所有 7 个 scene 都必须完整实现（禁止 half-rename）
 - 7 个 scene（edit / read / ide / list / print / search / search-ide）每个目录下的 `.vue` 文件都必须真实存在，对应 `index.js` 每一行 `import` 指向的文件都必须存在。
 - **绝对禁止**出现"改了 index.js 的 import 路径但没建对应 vue"的 half-rename 状态——会导致 webpack 报 `Module not found` build 失败。

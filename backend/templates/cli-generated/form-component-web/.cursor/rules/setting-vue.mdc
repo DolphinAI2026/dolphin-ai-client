@@ -221,6 +221,24 @@ methods: {
 }
 ```
 
+## ⚠️ 配置项完整性（必须与 brainstorm 方案 1:1 对齐）
+
+setting.vue 里的配置项**必须严格对齐 brainstorm "设计方案确认"中"配置项"表格**：表格列了 N 条 property，setting.vue 就要有 N 个对应的 `form-custom-*-editor` 节点，**每条 property 都要有独立的 editor 节点**。
+
+**严禁**：
+- 省略任何配置项（哪怕觉得"暂时可以先跳过"或"实现起来麻烦"）
+- 修改 property 名、数据类型、UI 渲染 editor 类型
+- 合并或重排多个配置项
+
+**brainstorm 里标了自造业务 editor（如 `form-custom-date-time-editor` 等非预置原子）的配置项**：
+1. **先**按下方"🛑 自造业务 editor 的强制约定"新建该业务 editor 的 vue 文件
+2. **再**在 setting.vue 里 import 并使用它
+3. **严禁**因为"业务 editor 复杂"就跳过对应配置项——brainstorm 方案里的每条配置项都是硬契约
+
+**build 前自检**：逐条核对 brainstorm 配置项表格与实际 setting.vue：
+- 每个 property 名 → setting.vue 里能找到 `<form-custom-xxx-editor property="{同名}" ...>`
+- 标了业务 editor 的行 → `components/form-custom-xxx-editor.vue` 真实存在
+
 ## ⚠️ setting.vue 完整注册清单（缺一不可，否则平台加载不到设置面板）
 
 生成 `{name}-setting.vue` 后**必须同时完成以下两处注册**。只改其中一个是 half-register，用户打开属性面板空空如也。
