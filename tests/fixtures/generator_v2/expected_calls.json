@@ -1,0 +1,447 @@
+[
+  {
+    "method": "create_roles",
+    "args": {
+      "app_id": "fake_app_id",
+      "payload": [
+        {
+          "appId": "fake_app_id",
+          "roleCode": "admin",
+          "roleName": "管理员"
+        },
+        {
+          "appId": "fake_app_id",
+          "roleCode": "user",
+          "roleName": "普通用户"
+        }
+      ]
+    }
+  },
+  {
+    "method": "query_roles",
+    "args": {
+      "app_id": "fake_app_id"
+    }
+  },
+  {
+    "method": "query_dicts",
+    "args": {
+      "app_id": "fake_app_id"
+    }
+  },
+  {
+    "method": "create_dicts",
+    "args": {
+      "app_id": "fake_app_id",
+      "payload": [
+        {
+          "appId": "fake_app_id",
+          "dictionaryCode": "status_",
+          "dictionaryName": "状态",
+          "dictionaryOptions": []
+        }
+      ]
+    }
+  },
+  {
+    "method": "query_dicts",
+    "args": {
+      "app_id": "fake_app_id"
+    }
+  },
+  {
+    "method": "query_models",
+    "args": {
+      "app_id": "fake_app_id"
+    }
+  },
+  {
+    "method": "create_models",
+    "args": {
+      "app_id": "fake_app_id",
+      "payload": {
+        "appId": "fake_app_id",
+        "datasourceId": "",
+        "dataModels": [
+          {
+            "appId": "fake_app_id",
+            "modelName": "任务",
+            "modelCode": "task_",
+            "modelDescription": "任务模型",
+            "fields": [
+              {
+                "fieldName": "标题",
+                "fieldCode": "title",
+                "fieldType": "STRING",
+                "fieldDescription": "单行输入"
+              },
+              {
+                "fieldName": "状态",
+                "fieldCode": "status",
+                "fieldType": "STRING",
+                "fieldDescription": "下拉单选"
+              },
+              {
+                "fieldName": "描述",
+                "fieldCode": "desc",
+                "fieldType": "BIG_TEXT",
+                "fieldDescription": "多行输入"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "method": "query_models",
+    "args": {
+      "app_id": "fake_app_id"
+    }
+  },
+  {
+    "method": "query_menus",
+    "args": {
+      "app_id": "fake_app_id"
+    }
+  },
+  {
+    "method": "create_form_config",
+    "args": {
+      "app_id": "fake_app_id",
+      "payload": [
+        {
+          "formName": "任务",
+          "formCode": "form_",
+          "allModelCodes": [
+            "task_"
+          ],
+          "formComponents": [
+            {
+              "componentType": "FORM_TEXT_INPUT",
+              "label": "标题",
+              "modelField": "task_.title"
+            },
+            {
+              "componentType": "FORM_TEXT_INPUT",
+              "label": "状态",
+              "modelField": "task_.status"
+            },
+            {
+              "componentType": "FORM_TEXT_INPUT",
+              "label": "描述",
+              "modelField": "task_.desc"
+            }
+          ],
+          "listPageView": {
+            "queryConditions": [
+              "task_.title",
+              "task_.status",
+              "task_.desc"
+            ],
+            "queryList": [
+              "task_.title",
+              "task_.status",
+              "task_.desc"
+            ]
+          }
+        }
+      ]
+    }
+  },
+  {
+    "method": "create_menu",
+    "args": {
+      "app_id": "fake_app_id",
+      "name": "任务",
+      "form_id": "1004",
+      "menu_order": 0
+    }
+  },
+  {
+    "method": "query_dicts",
+    "args": {
+      "app_id": "fake_app_id"
+    }
+  },
+  {
+    "method": "query_dict_options",
+    "args": {
+      "app_id": "fake_app_id",
+      "dict_id": "1003"
+    }
+  },
+  {
+    "method": "query_form_config",
+    "args": {
+      "app_id": "fake_app_id",
+      "form_id": "1004"
+    }
+  },
+  {
+    "method": "create_form_permissions",
+    "args": {
+      "app_id": "fake_app_id",
+      "payload": [
+        {
+          "formCode": "form_",
+          "appId": "fake_app_id",
+          "tenantId": "",
+          "formId": "1004",
+          "operationPermissionGroups": [
+            {
+              "permissionName": "管理员操作权限",
+              "permissionDescribe": "",
+              "permissionObjects": [
+                {
+                  "permissionObjectDisplayName": "管理员",
+                  "permissionObjectType": "ROLE",
+                  "permissionObjectValue": "1001",
+                  "permissionRange": {
+                    "rangeType": "ALL"
+                  }
+                }
+              ],
+              "permissionOperationType": {
+                "addPermission": true,
+                "batchAgreePermission": false,
+                "batchDeletePermission": false,
+                "batchRejectPermission": false,
+                "copyAddPermission": false,
+                "importPermission": false,
+                "shareFormPermission": false,
+                "temporaryStoragePermission": false
+              }
+            },
+            {
+              "permissionName": "普通用户操作权限",
+              "permissionDescribe": "",
+              "permissionObjects": [
+                {
+                  "permissionObjectDisplayName": "普通用户",
+                  "permissionObjectType": "ROLE",
+                  "permissionObjectValue": "1002",
+                  "permissionRange": {
+                    "rangeType": "ALL"
+                  }
+                }
+              ],
+              "permissionOperationType": {
+                "addPermission": true,
+                "batchAgreePermission": false,
+                "batchDeletePermission": false,
+                "batchRejectPermission": false,
+                "copyAddPermission": false,
+                "importPermission": false,
+                "shareFormPermission": false,
+                "temporaryStoragePermission": false
+              }
+            }
+          ],
+          "dataPermissionGroups": [
+            {
+              "permissionName": "管理员数据权限",
+              "permissionDescribe": "",
+              "permissionObjects": [
+                {
+                  "permissionObjectDisplayName": "管理员",
+                  "permissionObjectType": "ROLE",
+                  "permissionObjectValue": "1001",
+                  "permissionRange": {
+                    "rangeType": "ALL"
+                  }
+                }
+              ],
+              "permissionOperationType": {
+                "queryPermission": true,
+                "deletePermission": true,
+                "updatePermission": true,
+                "commentPermission": true,
+                "dataSharePermission": true,
+                "exportPermission": false,
+                "logPermission": true,
+                "printPermission": true,
+                "queryApprovalInfoPermission": true
+              }
+            },
+            {
+              "permissionName": "普通用户数据权限",
+              "permissionDescribe": "",
+              "permissionObjects": [
+                {
+                  "permissionObjectDisplayName": "普通用户",
+                  "permissionObjectType": "ROLE",
+                  "permissionObjectValue": "1002",
+                  "permissionRange": {
+                    "rangeType": "SELF"
+                  }
+                }
+              ],
+              "permissionOperationType": {
+                "queryPermission": true,
+                "deletePermission": false,
+                "updatePermission": false,
+                "commentPermission": true,
+                "dataSharePermission": true,
+                "exportPermission": false,
+                "logPermission": true,
+                "printPermission": true,
+                "queryApprovalInfoPermission": true
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "method": "query_detail_page_config",
+    "args": {
+      "app_id": "fake_app_id",
+      "form_id": "1004"
+    }
+  },
+  {
+    "method": "save_form_config",
+    "args": {
+      "app_id": "fake_app_id",
+      "form_config": {
+        "detailPage": {
+          "formComponents": []
+        },
+        "permissionGroups": [
+          {
+            "groupConditions": [],
+            "selectorFilterConditionList": [],
+            "dataPermissions": [
+              {
+                "permissionType": "ALL_USER",
+                "permissionValue": "ALL_USER",
+                "queryPermission": true,
+                "updatePermission": true,
+                "deletePermission": true,
+                "addPermission": true
+              }
+            ]
+          },
+          {
+            "groupConditions": [],
+            "selectorFilterConditionList": [],
+            "dataPermissions": [
+              {
+                "permissionType": "ALL_USER",
+                "permissionValue": "ALL_USER",
+                "queryPermission": true,
+                "updatePermission": false,
+                "deletePermission": false,
+                "addPermission": true
+              }
+            ]
+          }
+        ],
+        "advancedPermissionGroups": [
+          {
+            "permissionName": "管理员权限",
+            "permissionDescribe": "",
+            "permissionOperationType": {
+              "queryPermission": true,
+              "updatePermission": true,
+              "deletePermission": true,
+              "commentPermission": true,
+              "dataSharePermission": true,
+              "exportPermission": false,
+              "logPermission": true,
+              "printPermission": true,
+              "queryApprovalInfoPermission": true
+            },
+            "filterConditionGroups": [],
+            "permissionObjects": [
+              {
+                "permissionObjectType": "ROLE",
+                "permissionObjectValue": "1001",
+                "permissionObjectDisplayName": "管理员",
+                "permissionRange": {
+                  "rangeType": "ALL"
+                }
+              }
+            ]
+          },
+          {
+            "permissionName": "普通用户权限",
+            "permissionDescribe": "",
+            "permissionOperationType": {
+              "queryPermission": true,
+              "updatePermission": false,
+              "deletePermission": false,
+              "commentPermission": true,
+              "dataSharePermission": true,
+              "exportPermission": false,
+              "logPermission": true,
+              "printPermission": true,
+              "queryApprovalInfoPermission": true
+            },
+            "filterConditionGroups": [],
+            "permissionObjects": [
+              {
+                "permissionObjectType": "ROLE",
+                "permissionObjectValue": "1002",
+                "permissionObjectDisplayName": "普通用户",
+                "permissionRange": {
+                  "rangeType": "SELF"
+                }
+              }
+            ]
+          }
+        ],
+        "operationPermissionGroups": [
+          {
+            "uuid": "perm-op-1",
+            "permissionName": "管理员操作权限",
+            "permissionDescribe": "",
+            "permissionOperationType": {
+              "temporaryStoragePermission": false,
+              "addPermission": true,
+              "importPermission": false,
+              "copyAddPermission": false,
+              "batchDeletePermission": false,
+              "batchRejectPermission": false,
+              "batchAgreePermission": false,
+              "shareFormPermission": false,
+              "processAnalysisPermission": false
+            },
+            "permissionObjects": [
+              {
+                "permissionObjectType": "ROLE",
+                "permissionObjectValue": "1001",
+                "permissionObjectDisplayName": "管理员"
+              }
+            ]
+          },
+          {
+            "uuid": "perm-op-2",
+            "permissionName": "普通用户操作权限",
+            "permissionDescribe": "",
+            "permissionOperationType": {
+              "temporaryStoragePermission": false,
+              "addPermission": true,
+              "importPermission": false,
+              "copyAddPermission": false,
+              "batchDeletePermission": false,
+              "batchRejectPermission": false,
+              "batchAgreePermission": false,
+              "shareFormPermission": false,
+              "processAnalysisPermission": false
+            },
+            "permissionObjects": [
+              {
+                "permissionObjectType": "ROLE",
+                "permissionObjectValue": "1002",
+                "permissionObjectDisplayName": "普通用户"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+]

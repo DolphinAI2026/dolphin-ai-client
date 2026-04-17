@@ -1,0 +1,81 @@
+[
+  {
+    "stage": 0,
+    "status": "running",
+    "step": "1 个表单、1 个字典、2 个角色"
+  },
+  {
+    "stage": 0,
+    "status": "done",
+    "step": "配置解析完成"
+  },
+  {
+    "stage": 1,
+    "status": "running",
+    "step": "创建公共资源..."
+  },
+  {
+    "stage": 1,
+    "status": "running",
+    "step": "角色: 管理员, 普通用户"
+  },
+  {
+    "stage": 1,
+    "status": "running",
+    "step": "新建 1 个字典，0 个选项"
+  },
+  {
+    "stage": 1,
+    "status": "done",
+    "step": "公共资源完成"
+  },
+  {
+    "stage": 2,
+    "status": "running",
+    "step": "创建数据模型..."
+  },
+  {
+    "stage": 2,
+    "status": "running",
+    "step": "新建: 任务"
+  },
+  {
+    "stage": 2,
+    "status": "done",
+    "step": "模型完成（1 个）"
+  },
+  {
+    "stage": 3,
+    "status": "running",
+    "step": "创建表单..."
+  },
+  {
+    "stage": 3,
+    "status": "running",
+    "step": "创建: 任务"
+  },
+  {
+    "stage": 3,
+    "status": "done",
+    "step": "表单完成（1 个）"
+  },
+  {
+    "stage": 4,
+    "status": "running",
+    "step": "配置权限..."
+  },
+  {
+    "stage": 4,
+    "status": "running",
+    "step": "配置 1 个表单权限"
+  },
+  {
+    "stage": 4,
+    "status": "done",
+    "step": "权限配置完成"
+  },
+  {
+    "type": "complete",
+    "message": "应用 测试应用 生成完成！共 1 个表单"
+  }
+]
