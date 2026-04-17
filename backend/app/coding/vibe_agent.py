@@ -633,8 +633,17 @@ class VibeCodingAgent:
 - `widget.default`: `{ "customDefaultKey": "defaultValue", "value": null }` — value is `null`, NOT `""`.
 - `widget.validator`: `{ "uniqueCheck": false }`.
 - `widget.special`: MUST include 3 fields: `frontBusinessObjectComponentType`, `saveWithHidden: false`, `customComponentConfig`. **`customComponentConfig` must contain the default values for ALL config properties defined in `setting.vue`** (e.g. `{"defaultCountryCode": "CN", "placeholder": "", "clearable": true}`). Use `{}` only when there is no setting panel. Do NOT use empty strings as defaults for string fields — use `null` or a sensible default instead.
-- `widget.special.frontBusinessObjectComponentType`: `"BOF_TEXT"` for string/json values, `"BOF_NUMBER"` for numbers, `"BOF_DATE"` for single date values.
-- `componentModelField` (top-level, NOT inside widget.special): `["STRING"]` for <500 chars, `["BIG_TEXT"]` for ≥500 chars, `["NUM"]` for numbers, `["DATE"]` for single dates.
+- `widget.special.frontBusinessObjectComponentType` 和 `componentModelField` 按 formValue 存储格式选，**必须严格按下表**（最容易踩的坑是"日期范围/时间段"组件被误判为 DATE，实际要用 STRING/BOF_TEXT）：
+
+| formValue 形态 | componentModelField | frontBusinessObjectComponentType |
+|---|---|---|
+| 单个短字符串（< 500 字符） | `["STRING"]` | `"BOF_TEXT"` |
+| 长字符串、富文本、base64（≥ 500 字符） | `["BIG_TEXT"]` | `"BOF_TEXT"` |
+| 纯数字（如 `42`、`3.14`） | `["NUM"]` | `"BOF_NUMBER"` |
+| **单个日期**（如 `"2024-01-01"` 或 `"2024-01-01 10:00:00"`，**单一字符串**） | `["DATE"]` | `"BOF_DATE"` |
+| **日期范围 / 时间段 / JSON 数组 / 序列化对象**（如 `["2024-01-01", "2024-01-02"]` 或 `'{"start":"...","end":"..."}'`） | `["STRING"]`（< 500 字符）或 `["BIG_TEXT"]`（≥ 500 字符） | `"BOF_TEXT"` |
+
+**铁则**：`DATE` / `BOF_DATE` **只适用于"单一日期字符串"**。任何 JSON 数组、序列化对象、多字段组合值**一律**按字符串存储（`STRING`/`BIG_TEXT` + `BOF_TEXT`）。日期**范围**类组件（日期段、日期时间段、时间段）属于 JSON 数组，不是 DATE。
 - `widget.editor.config`: array starting with `["INFO","LABEL","FIELD_CODE","TITLE_DESCRIPTION","WIDTH","HIDDEN","READONLY","REQUIRED","EDITONNEW","UNIQUE","HIDDEN_SAVE","HIDDEN_TRIGGER","TRIGGER_BUSINESS_EVENTS"]`. **CRITICAL**: if a custom setting panel exists, the editor.config.json `code` (= widget code + `_SETTING`) MUST be appended at the **end** of this array. `FORMULA_RULE` only if needed. `excludeInTable` must be `["WIDTH"]` ONLY — do not add other values.
 - `client.mobile.widget.editor.config`: same structure as `widget.editor.config`.
 - `client.mobile.component`: required fields `edit`, `read`, `ide`; optional `list`, `association`, `lov`, `tableColumn`. Names should be `Mobile` + PC component name convention.
@@ -674,9 +683,11 @@ class VibeCodingAgent:
 - `form-custom-textarea-editor.vue` — 多行输入（替代 `<el-input type="textarea">`）
 - `form-custom-switch-editor.vue` — 开关（替代 `<el-switch>`）
 
-还有 2 个字段赋值 editor：
-- `form-custom-field-assign-editor.vue` — 主表字段赋值
-- `form-custom-table-field-assign-editor.vue` — 子表字段赋值
+还有 2 个字段赋值 editor，**严格按场景区分**：
+- `form-custom-field-assign-editor.vue` — **主表字段赋值**（默认选它）。组件产出 1~N 个派生值，用户为每个派生值选一个**主表字段**接收。典型：时间差→数字字段、总分→数字字段、选中数据→多个主表字段回填。
+- `form-custom-table-field-assign-editor.vue` — **子表字段赋值（仅子表场景）**。**只有**组件产出的是**"整个子表的多行数据"**、需要批量写到某个目标子表时才用。典型：从外部接口拉回一个表格（含多行），把这整张表映射到当前表单的某个子表。
+
+**🔴 严禁误用 table 版**：如果派生值是"单一数值/字符串"（如时间差、合计金额、选中的 1 条记录），**必须用 form-custom-field-assign-editor**（主表版），**不要**因为组件本身"支持在子表中使用"就用 table 版——组件用在子表中 ≠ 赋值目标是子表。只有当 `otherFields`/源字段 componentType 是 `FORM_WIDGET_SON_TABLE` 时才用 table 版。
 
 **⚠️ 任何"组件把派生值/选中值写给其他字段"的场景都必须用字段赋值 editor**（数据选择类回填 / 派生值输出 / 联动赋值），**严禁**靠 aPaaS 字段联动规则等外部机制。
 

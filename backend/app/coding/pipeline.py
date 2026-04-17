@@ -735,7 +735,7 @@ _BRAINSTORM_PROMPT_FORM_COMPONENT = """\
 4. **配置项表格的"数据类型"列**：只允许填 JS/JSON 基础类型（`String` / `Number` / `Boolean` / `Array` / `Object`）。**禁止**把 UI 组件名（如 `form-custom-select-editor`、`form-custom-field-assign-editor`）填到"数据类型"列里——那是 UI 渲染方式，要填到"UI 渲染"列或在"说明"列里提及。
 5. **字段赋值场景识别**：如果用户需求提到"赋值给其他字段 / 输出到某字段 / 字段联动 / 计算结果写到某字段 / 回填到表单字段"等能力，**必须**在"配置项"段新增一条配置项，其：
    - 数据类型 = `Array`（**固定值**，存储格式是 `[{{origin, target}}, ...]` 赋值对列表，用户可配 0 到 N 条）
-   - UI 渲染 = `form-custom-field-assign-editor`（scaffold 已预置，让用户在设计器里选目标字段）；子表场景用 `form-custom-table-field-assign-editor`（数据类型同样是 `Array`，存储格式是 `[{{origin, target, type, assignmentList}}, ...]`）
+   - UI 渲染 = `form-custom-field-assign-editor`（**默认选它**，用于主表字段赋值，如时间差→数字字段、合计→金额字段等单一派生值场景）；**仅当**组件产出"整个子表的多行数据"需要映射到目标子表时才用 `form-custom-table-field-assign-editor`（这种场景 `otherFields` 的首层 componentType 是 `FORM_WIDGET_SON_TABLE`）。不要因为组件支持"在子表中使用"就误选 table 版——组件用在子表 ≠ 赋值目标是子表
    - 默认值 = `[]`
    - 说明中明确"用户通过此配置项选择接收赋值的目标字段"
    **不要**把数据类型写成 String（即使组件只有 1 个源字段，底层也是单元素数组，不是字符串）。**不要**靠"aPaaS 字段联动规则"或其他外部机制绕过。
@@ -753,10 +753,18 @@ _BRAINSTORM_PROMPT_FORM_COMPONENT = """\
 ---
 
 ### 数据存储
+
+> **⚠️ 选择铁则**（最容易踩："日期范围/时间段"组件被误选为 DATE，实际应为 STRING/BOF_TEXT）：
+> - 单个短字符串（<500 字符）→ `["STRING"]` + `BOF_TEXT`
+> - 长字符串/富文本/base64（≥500 字符）→ `["BIG_TEXT"]` + `BOF_TEXT`
+> - 纯数字 → `["NUM"]` + `BOF_NUMBER`
+> - **单一日期字符串**（如 `"2024-01-01"`）→ `["DATE"]` + `BOF_DATE`
+> - **日期范围 / 时间段 / JSON 数组 / 序列化对象**（如 `["2024-01-01","2024-01-02"]`）→ `["STRING"]`（<500）或 `["BIG_TEXT"]`（≥500） + `BOF_TEXT`（**不要选 DATE/BOF_DATE**）
+
 | 字段 | 值 |
 |------|----|
 | formValue 格式 | `[具体JSON示例或基础类型示例]` |
-| componentModelField | `["STRING" / "BIG_TEXT" / "NUM" / "DATE"]`（选一个并说明理由） |
+| componentModelField | `["STRING" / "BIG_TEXT" / "NUM" / "DATE"]`（按上表选一个并说明理由） |
 | BOF 类型 | `BOF_TEXT / BOF_NUMBER / BOF_DATE`（与上行对应） |
 
 ### 配置项（setting.vue 面板，如无需配置则填"无"）
