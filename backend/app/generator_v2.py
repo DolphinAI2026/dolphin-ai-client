@@ -688,6 +688,132 @@ def _resolve_forms_to_build(all_forms: List[dict], models: List[dict]) -> List[d
     return forms_to_build
 
 
+# ---------------------------------------------------------------------------
+# Phase 4 权限辅助
+# ---------------------------------------------------------------------------
+
+def _build_permission_payload_for_form(
+    form_result: dict,
+    user_perm: Optional[dict],
+    role_code_map: Dict[str, dict],
+    app_id: str,
+) -> Optional[tuple[dict, dict]]:
+    """根据单个表单的用户权限规则，构造 (perm_payload, sync_job)。
+
+    user_perm 为 None 或无 rules 时返回 None。
+    """
+    if not user_perm or not user_perm.get("rules"):
+        return None
+
+    form_code = form_result.get("formCode", "")
+    form_id = form_result.get("formId", "")
+    op_groups: List[dict] = []
+    data_groups: List[dict] = []
+
+    for rule in user_perm["rules"]:
+        role_code = rule.get("role", "")
+        # 找到对应角色的平台编码
+        perm_obj_type = "ALL_USER"
+        perm_obj_value = ""
+        perm_obj_name = "全部人员"
+        if role_code and role_code != "all":
+            role_info = role_code_map.get(role_code, {})
+            perm_obj_type = "ROLE"
+            perm_obj_value = role_info.get("id") or role_info.get("roleCode", role_code)
+            perm_obj_name = role_info.get("roleName", role_code)
+
+        op = rule.get("op", "all")
+        op_set = {part.strip() for part in str(op).split(",") if part.strip()} if isinstance(op, str) else {"all"}
+        can_view = "all" in op_set or "view" in op_set
+        can_add = "all" in op_set or "add" in op_set
+        can_edit = "all" in op_set or "edit" in op_set
+        can_delete = "all" in op_set or "delete" in op_set
+        can_import = bool(rule.get("canImport"))
+        can_draft = bool(rule.get("canDraft"))
+        can_export = bool(rule.get("canExport"))
+        perm_op = {
+            "addPermission": can_add,
+            "batchAgreePermission": False,
+            "batchDeletePermission": False,
+            "batchRejectPermission": False,
+            "copyAddPermission": False,
+            "importPermission": can_import,
+            "shareFormPermission": False,
+            "temporaryStoragePermission": can_draft,
+        }
+
+        data_range = rule.get("data", "ALL")
+        range_map = {
+            "all": "ALL", "self": "SELF", "dept": "CURRENT_USER_DEPT",
+            "dept_sub": "CURRENT_USER_DEPT_LOW_LEVEL",
+        }
+        range_type = range_map.get(data_range, data_range.upper() if isinstance(data_range, str) else "ALL")
+
+        if any((can_add, can_import, can_draft)):
+            op_groups.append({
+                "permissionName": f"{perm_obj_name}操作权限",
+                "permissionDescribe": "",
+                "permissionObjects": [{
+                    "permissionObjectDisplayName": perm_obj_name,
+                    "permissionObjectType": perm_obj_type,
+                    "permissionObjectValue": perm_obj_value,
+                    "permissionRange": {"rangeType": "ALL"},
+                }],
+                "permissionOperationType": perm_op,
+            })
+        data_groups.append({
+            "permissionName": f"{perm_obj_name}数据权限",
+            "permissionDescribe": "",
+            "permissionObjects": [{
+                "permissionObjectDisplayName": perm_obj_name,
+                "permissionObjectType": perm_obj_type,
+                "permissionObjectValue": perm_obj_value,
+                "permissionRange": {"rangeType": range_type},
+            }],
+            "permissionOperationType": {
+                "queryPermission": can_view,
+                "deletePermission": can_delete,
+                "updatePermission": can_edit,
+                "commentPermission": can_view,
+                "dataSharePermission": can_view,
+                "exportPermission": can_export,
+                "logPermission": can_view,
+                "printPermission": can_view,
+                "queryApprovalInfoPermission": can_view,
+            },
+        })
+
+    perm_payload = {
+        "formCode": form_code,
+        "appId": app_id,
+        "tenantId": "",
+        "formId": form_id,
+        "operationPermissionGroups": op_groups,
+        "dataPermissionGroups": data_groups,
+    }
+    sync_job = {"form_id": form_id, "rules": user_perm["rules"]}
+    return perm_payload, sync_job
+
+
+async def _apply_permissions_and_sync(
+    client: APaaSClient,
+    app_id: str,
+    perm_payloads: List[dict],
+    sync_jobs: List[dict],
+    role_code_map: Dict[str, dict],
+) -> None:
+    """下发表单权限并回写到 formConfig（两步：批量 create + 逐个 sync）。"""
+    await client.create_form_permissions(app_id, perm_payloads)
+    for job in sync_jobs:
+        await _sync_form_permissions_to_form_config(
+            client=client,
+            app_id=app_id,
+            form_id=job["form_id"],
+            rules=job["rules"],
+            role_code_map=role_code_map,
+        )
+
+
 def _collect_label_dict_map(
     models: List[dict],
     dict_codes: Dict[str, str],
@@ -1179,115 +1305,20 @@ async def run_complete_generation(
     if permissions or form_results:
         yield {"stage": 4, "status": "running", "step": "配置权限..."}
         try:
-            # 如果用户没有指定权限规则，生成默认权限：全员可访问
-            perm_payloads = []
-            permission_sync_jobs = []
+            perm_payloads: List[dict] = []
+            permission_sync_jobs: List[dict] = []
             for fr in form_results:
-                form_code = fr.get("formCode", "")
-                form_id = fr.get("formId", "")
-
-                # 查找用户是否为该表单指定了权限
                 user_perm = next((p for p in permissions if p.get("form") == fr.get("formName")), None)
+                built = _build_permission_payload_for_form(fr, user_perm, role_code_map, app_id)
+                if built is not None:
+                    perm_payload, sync_job = built
+                    perm_payloads.append(perm_payload)
+                    permission_sync_jobs.append(sync_job)
 
-                if user_perm and user_perm.get("rules"):
-                    # 用户指定了权限规则 → 转换为平台格式
-                    op_groups = []
-                    data_groups = []
-                    for rule in user_perm["rules"]:
-                        role_code = rule.get("role", "")
-                        # 找到对应角色的平台编码
-                        perm_obj_type = "ALL_USER"
-                        perm_obj_value = ""
-                        perm_obj_name = "全部人员"
-                        if role_code and role_code != "all":
-                            role_info = role_code_map.get(role_code, {})
-                            perm_obj_type = "ROLE"
-                            perm_obj_value = role_info.get("id") or role_info.get("roleCode", role_code)
-                            perm_obj_name = role_info.get("roleName", role_code)
-
-                        op = rule.get("op", "all")
-                        op_set = {part.strip() for part in str(op).split(",") if part.strip()} if isinstance(op, str) else {"all"}
-                        can_view = "all" in op_set or "view" in op_set
-                        can_add = "all" in op_set or "add" in op_set
-                        can_edit = "all" in op_set or "edit" in op_set
-                        can_delete = "all" in op_set or "delete" in op_set
-                        can_import = bool(rule.get("canImport"))
-                        can_draft = bool(rule.get("canDraft"))
-                        can_export = bool(rule.get("canExport"))
-                        perm_op = {
-                            "addPermission": can_add,
-                            "batchAgreePermission": False,
-                            "batchDeletePermission": False,
-                            "batchRejectPermission": False,
-                            "copyAddPermission": False,
-                            "importPermission": can_import,
-                            "shareFormPermission": False,
-                            "temporaryStoragePermission": can_draft,
-                        }
-
-                        data_range = rule.get("data", "ALL")
-                        range_map = {
-                            "all": "ALL", "self": "SELF", "dept": "CURRENT_USER_DEPT",
-                            "dept_sub": "CURRENT_USER_DEPT_LOW_LEVEL",
-                        }
-                        range_type = range_map.get(data_range, data_range.upper() if isinstance(data_range, str) else "ALL")
-
-                        if any((can_add, can_import, can_draft)):
-                            op_groups.append({
-                                "permissionName": f"{perm_obj_name}操作权限",
-                                "permissionDescribe": "",
-                                "permissionObjects": [{
-                                    "permissionObjectDisplayName": perm_obj_name,
-                                    "permissionObjectType": perm_obj_type,
-                                    "permissionObjectValue": perm_obj_value,
-                                    "permissionRange": {"rangeType": "ALL"},
-                                }],
-                                "permissionOperationType": perm_op,
-                            })
-                        data_groups.append({
-                            "permissionName": f"{perm_obj_name}数据权限",
-                            "permissionDescribe": "",
-                            "permissionObjects": [{
-                                "permissionObjectDisplayName": perm_obj_name,
-                                "permissionObjectType": perm_obj_type,
-                                "permissionObjectValue": perm_obj_value,
-                                "permissionRange": {"rangeType": range_type},
-                            }],
-                            "permissionOperationType": {
-                                "queryPermission": can_view,
-                                "deletePermission": can_delete,
-                                "updatePermission": can_edit,
-                                "commentPermission": can_view,
-                                "dataSharePermission": can_view,
-                                "exportPermission": can_export,
-                                "logPermission": can_view,
-                                "printPermission": can_view,
-                                "queryApprovalInfoPermission": can_view,
-                            },
-                        })
-
-                    perm_payloads.append({
-                        "formCode": form_code,
-                        "appId": app_id,
-                        "tenantId": "",
-                        "formId": form_id,
-                        "operationPermissionGroups": op_groups,
-                        "dataPermissionGroups": data_groups,
-                    })
-                    permission_sync_jobs.append({
-                        "form_id": form_id,
-                        "rules": user_perm["rules"],
-                    })
             if perm_payloads:
-                await client.create_form_permissions(app_id, perm_payloads)
-                for job in permission_sync_jobs:
-                    await _sync_form_permissions_to_form_config(
-                        client=client,
-                        app_id=app_id,
-                        form_id=job["form_id"],
-                        rules=job["rules"],
-                        role_code_map=role_code_map,
-                    )
+                await _apply_permissions_and_sync(
+                    client, app_id, perm_payloads, permission_sync_jobs, role_code_map
+                )
                 yield {"stage": 4, "status": "running", "step": f"配置 {len(perm_payloads)} 个表单权限"}
 
             yield {"stage": 4, "status": "done", "step": "权限配置完成"}
