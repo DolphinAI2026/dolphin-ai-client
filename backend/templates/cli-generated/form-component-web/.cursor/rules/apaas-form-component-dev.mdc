@@ -529,6 +529,52 @@ const printFormComponentList = [
 export default printFormComponentList
 ```
 
+##### 多 mode 共享配置访问的 mixin 模式（推荐）
+
+当组件多个 mode（edit / read / ide / list / print / search）都要访问同一套
+`widget.customComponentConfig.xxx` 字段时，应在
+`src/form-component/form-widget/mixins/form-item.mixin.js` 里集中定义 computed
+快捷方式，避免各 mode 文件重复写长路径和派生逻辑。
+
+**mixin 文件**（`src/form-component/form-widget/mixins/form-item.mixin.js`）：
+
+```javascript
+export default {
+  computed: {
+    customComponentConfig() { return this.widget.customComponentConfig },
+    // 逐个 customComponentConfig 字段的快捷
+    url()        { return this.customComponentConfig.url },
+    chooseType() { return this.customComponentConfig.chooseType },
+    response()   { return this.customComponentConfig.response },
+    showField()  { return this.customComponentConfig.showField },
+    // 派生属性集中写
+    isSingle()   { return this.chooseType === 'SINGLE' },
+  }
+}
+```
+
+**各 mode 文件 import 使用**：
+
+```javascript
+import FormWidgetConfigMixin from '@/mixin/form-widget.mixin';
+import FormItemMixin from '../mixins/form-item.mixin';
+
+export default {
+  name: 'FormComponentDemoEdit',
+  mixins: [FormWidgetConfigMixin, FormItemMixin],
+  // 模板里直接用 this.url / this.isSingle / this.response，不必再写 widget.customComponentConfig.xxx
+}
+```
+
+**何时值得做**：
+- customComponentConfig 字段数 ≥ 3，且被 2+ 个 mode 使用
+- 有派生属性（`isXxx` / `isYyy`）需要跨 mode 复用
+- config 字段命名将来可能调整（集中式 mixin 改一处，各 mode 不受影响）
+
+**何时不值得**：
+- 只有 edit 一个 mode 读配置，其他 mode 不关心
+- 组件只有 1~2 个极简配置字段
+
 ### 表单设计器右侧配置
 
 右侧属性面板的每一项配置，均由form-component-config/form-editor目录下的文件定义。
