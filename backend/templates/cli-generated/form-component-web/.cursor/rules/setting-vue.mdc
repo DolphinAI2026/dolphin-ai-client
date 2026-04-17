@@ -1,0 +1,207 @@
+---
+description: 自开发组件 setting.vue（设置面板）生成规则
+globs:
+  - "src/form-component/form-editor/*-setting.vue"
+alwaysApply: true
+---
+
+# setting.vue（设置面板）生成规则
+
+## 何时需要生成
+
+当组件有"设计器中可配置的属性"时，在 `src/form-component/form-editor/` 下生成 `{name}-setting.vue`，并同步写 `{name}.editor.config.json`（详见 editor-config.mdc）。
+
+## 基础设施（scaffold 已预置，直接 import 即可，不要重写）
+
+- `@/mixin/form-editor.mixin.js`
+  — 提供 `formValue` 双向绑定、`rules` 自动拼装、标准 props（label / property / showRequired / placeholder / help / i18nString 等）
+- `./components/form-custom-sechma-item.vue` — label + help tooltip + 校验容器
+- `./components/form-custom-input-editor.vue` — 单行输入（el-input）
+- `./components/form-custom-select-editor.vue` — 下拉（x-select，需传 options）
+- `./components/form-custom-textarea-editor.vue` — 多行输入
+- `./components/form-custom-switch-editor.vue` — 开关
+
+**不要**重新生成上述文件。业务性子组件（如 `form-custom-card-list` / `request-header-form`）才按需生成。
+
+## setting.vue 骨架
+
+```vue
+<template>
+  <div class="form-custom-demo-setting">
+    <form-custom-select-editor
+      label="显示字段"
+      property="showField"
+      v-bind="$props"
+      :showRequired="true"
+      :options="fieldOptions"
+      :help="['组件展示的字段']"
+    ></form-custom-select-editor>
+
+    <form-custom-input-editor
+      label="占位文本"
+      property="placeholder"
+      v-bind="$props"
+      :help="['为空时的提示文字']"
+    ></form-custom-input-editor>
+
+    <form-custom-switch-editor
+      label="可搜索"
+      property="searchable"
+      v-bind="$props"
+    ></form-custom-switch-editor>
+  </div>
+</template>
+
+<script>
+import EditorFormConfigMixin from '@/mixin/form-config.mixin';
+import FormCustomInputEditor from './components/form-custom-input-editor.vue';
+import FormCustomSelectEditor from './components/form-custom-select-editor.vue';
+import FormCustomSwitchEditor from './components/form-custom-switch-editor.vue';
+
+export default {
+  name: 'FormComponentDemoSetting', // ⚠️ 必须与 editor.config.json 的 componentName 完全一致
+  mixins: [EditorFormConfigMixin],
+  components: { FormCustomInputEditor, FormCustomSelectEditor, FormCustomSwitchEditor },
+  computed: {
+    fieldOptions() {
+      return [{ value: 'name', label: '名称' }];
+    },
+  },
+};
+</script>
+```
+
+## EditorFormConfigMixin 注入的核心属性
+
+| 属性 | 用途 |
+|---|---|
+| `this.componentConfig` | 整个组件的配置对象 |
+| `this.componentConfig.customComponentConfig[property]` | **所有用户输入值存这里** |
+| `this._validate` | 传给弹窗子表单做校验 |
+| `this.formItemList` | 表单所有字段列表（字段映射场景） |
+| `this.globalData.appId` | 当前应用 ID（拉平台变量/字典时用） |
+| `$props` | editor 原子组件必须 `v-bind="$props"` 透传 |
+
+## 数据存取
+
+- **读**：`this.componentConfig.customComponentConfig.<property>`
+- **写**（数组需保证响应式）：
+  ```javascript
+  const list = [...(this.componentConfig.customComponentConfig.xxx || [])];
+  list.push(item);
+  this.$set(this.componentConfig.customComponentConfig, 'xxx', list);
+  ```
+- **禁止**用 `this.widget.xxx`（那是运行时属性，setting.vue 里读不到）
+
+## 弹窗模式（复杂配置场景）
+
+当配置项需要独立子表单（如 header 列表、字段映射）：
+
+```vue
+<form-custom-sechma-item label="请求头" property="headers" v-bind="$props">
+  <div class="add-card-button" @click="headerModalVisible = true">添加请求头</div>
+  <form-custom-card-list
+    deleteModalTitle="删除请求头"
+    deleteModalMessage="是否确定删除请求头？"
+    :card-list="componentConfig.customComponentConfig.headers"
+  ></form-custom-card-list>
+  <x-modal
+    title="添加请求头"
+    :append-to-body="true"
+    :destroy-on-close="true"
+    :customModalBg="true"
+    :modal="false"
+    :okConfig="headerOkConfig"
+    :cancelConfig="cancelConfig"
+    :modalVisible.sync="headerModalVisible"
+    width="middle"
+  >
+    <request-header-form
+      ref="headerFormRef"
+      :formItemList="formItemList"
+      :_validate="_validate"
+      :componentConfig="componentConfig"
+    ></request-header-form>
+  </x-modal>
+</form-custom-sechma-item>
+```
+
+```javascript
+data() {
+  return {
+    headerModalVisible: false,
+    cancelConfig: { title: this.$t('common.cancel') },
+    headerOkConfig: {
+      title: this.$t('common.confirm'),
+      onOk: () => {
+        this.$refs.headerFormRef.validator().then(() => {
+          const list = [...(this.componentConfig.customComponentConfig.headers || [])];
+          list.push(this.$refs.headerFormRef.header);
+          this.$set(this.componentConfig.customComponentConfig, 'headers', list);
+          this.headerModalVisible = false;
+        }).catch(() => console.error('校验失败'));
+        return true; // ⚠️ return true = 阻止 x-modal 自动关闭，由 onOk 内部决定关闭时机
+      },
+    },
+  };
+}
+```
+
+## 联动显示
+
+```vue
+<form-custom-switch-editor label="分页" property="pagination" v-bind="$props" />
+<form-custom-input-editor
+  v-if="componentConfig.customComponentConfig.pagination"
+  label="每页条数"
+  property="pageSize"
+  v-bind="$props"
+/>
+```
+
+## 网络请求（拉平台变量/字典）
+
+```javascript
+created() {
+  this.queryVariableList();
+},
+methods: {
+  queryVariableList() {
+    this.$request({
+      url: '/xdap-app/variable/query/variableDetails',
+      method: 'get',
+      disableSuccessMsg: true,
+      params: { appId: this.globalData.appId, page: 1, pageSize: 1000 },
+    }).asyncThen(
+      (resp) => { this.variableList = resp.table; },
+      (err) => console.error(err),
+    ).asyncErrorCatch((err) => console.error(err));
+  },
+}
+```
+
+## 注册到 form-editor/index.js
+
+```javascript
+// src/form-component/form-editor/index.js
+import FormComponentDemoSetting from './form-component-demo-setting.vue';
+
+const customFormConfigList = [
+  FormComponentDemoSetting,
+];
+
+export default customFormConfigList;
+```
+
+## 易错点清单
+
+| ⚠️ 问题 | 正确做法 |
+|---|---|
+| 用 `this.widget.xxx` 读配置 | setting.vue 用 `this.componentConfig.customComponentConfig.xxx` |
+| 数组直接 `push` 到 customComponentConfig | 先拷贝再 `this.$set` 赋值 |
+| `onOk` 未 `return true` 导致意外自动关闭 | 需要内部控制关闭时机时 `return true` |
+| setting.vue `name` 与 editor.config.json `componentName` 不一致 | 必须完全一致（PascalCase） |
+| 漏注册到 `form-editor/index.js` 的 `customFormConfigList` | 必须导出 |
+| 用 `.then/.catch` 写 `this.$request` | 必须 `asyncThen(ok, bizErr).asyncErrorCatch(netErr)` |
+| 原子 editor 漏 `v-bind="$props"` | 导致 configProperty 丢失、校验失效 |
+| 重写 `form-editor.mixin.js` 或 `form-custom-*-editor.vue` | scaffold 已预置，直接 import，不要重写 |
