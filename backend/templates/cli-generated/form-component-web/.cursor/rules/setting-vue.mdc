@@ -13,13 +13,24 @@ alwaysApply: true
 
 ## 基础设施（scaffold 已预置，直接 import 即可，不要重写）
 
+### Mixin
 - `@/mixin/form-editor.mixin.js`
   — 提供 `formValue` 双向绑定、`rules` 自动拼装、标准 props（label / property / showRequired / placeholder / help / i18nString 等）
+
+### 通用 editor 原子
 - `./components/form-custom-sechma-item.vue` — label + help tooltip + 校验容器
 - `./components/form-custom-input-editor.vue` — 单行输入（el-input）
 - `./components/form-custom-select-editor.vue` — 下拉（x-select，需传 options）
 - `./components/form-custom-textarea-editor.vue` — 多行输入
 - `./components/form-custom-switch-editor.vue` — 开关
+
+### 字段赋值 editor（数据选择类组件场景）
+- `./components/form-custom-field-assign-editor.vue` — 主表字段赋值（source 字段 → target 字段 1:1 映射）
+- `./components/form-custom-table-field-assign-editor.vue` — 子表字段赋值（目标子表 ← 源子表 全量/增量 + 字段级映射）
+
+### 工具 & 常量
+- `./utils/form-item.util.js` — 7 个 formItemList 遍历工具（如 `getAllFormItemListExcludeTable`、`getAllSonTableFormItemList`）
+- `./constant/form-component-types.js` — FORM_* 组件类型常量（`INCLUDE_COMPONENT_TYPE` / `EXCLUDE_SHOW_FIELD_TYPE` 等）
 
 **不要**重新生成上述文件。业务性子组件（如 `form-custom-card-list` / `request-header-form`）才按需生成。
 
@@ -192,6 +203,123 @@ const customFormConfigList = [
 
 export default customFormConfigList;
 ```
+
+## 字段赋值场景（数据选择类组件）
+
+如果组件是"数据选择类"（点一下拉出另一张表/API 的数据回填到当前表单），除了
+`{name}-setting.vue`，通常还要生成一个 **`{name}-assign.vue`** 作为第二个设置 Tab，
+专门配置"源字段 → 目标字段"的映射规则。
+
+### 何时需要 assign.vue
+- 选中一行数据后，需要把该行多个字段分别赋值到当前表单的多个字段（主表字段赋值）
+- 选中的数据含子表，需要把整个子表或子表的字段映射到当前表单的子表（子表字段赋值）
+
+### assign.vue 骨架
+
+```vue
+<template>
+  <div class="form-custom-demo-assign">
+    <form-custom-field-assign-editor
+      label="主表单字段赋值"
+      property="mainFormAssign"
+      :otherFields="mainFormFieldsOptions"
+      v-bind="$props"
+    ></form-custom-field-assign-editor>
+
+    <form-custom-table-field-assign-editor
+      label="子表单字段赋值"
+      property="tableFormAssign"
+      :otherTableFields="tableFieldsOptions"
+      v-bind="$props"
+    ></form-custom-table-field-assign-editor>
+
+    <form-custom-switch-editor
+      label="字段置空时清空主表赋值"
+      property="clearMainAssign"
+      v-bind="$props"
+    ></form-custom-switch-editor>
+  </div>
+</template>
+
+<script>
+import EditorFormConfigMixin from '@/mixin/form-config.mixin';
+import FormCustomFieldAssignEditor from './components/form-custom-field-assign-editor.vue';
+import FormCustomTableFieldAssignEditor from './components/form-custom-table-field-assign-editor.vue';
+import FormCustomSwitchEditor from './components/form-custom-switch-editor.vue';
+
+export default {
+  name: 'FormComponentDemoAssign',   // ⚠️ 与对应 assign 的 editor.config.json 的 componentName 一致
+  mixins: [EditorFormConfigMixin],
+  components: { FormCustomFieldAssignEditor, FormCustomTableFieldAssignEditor, FormCustomSwitchEditor },
+  computed: {
+    // 从组件的数据源（如 customComponentConfig.response.table）派生出可供映射的字段列表
+    mainFormFieldsOptions() {
+      // 返回 [{ uuid, label, componentType }] 结构
+      return [];
+    },
+    tableFieldsOptions() {
+      // 返回 [{ uuid, label, componentType: 'FORM_WIDGET_SON_TABLE', children }] 结构
+      return [];
+    },
+  },
+};
+</script>
+```
+
+### 字段赋值 editor 的参数约定
+
+**`form-custom-field-assign-editor` 的 `otherFields`**：
+```javascript
+[{
+  uuid: string,        // 字段唯一标识（作为 key 存储）
+  label: string,       // 展示名
+  componentType: string, // 用于限制能赋值到哪些目标字段类型
+}]
+```
+
+**`form-custom-table-field-assign-editor` 的 `otherTableFields`**：
+```javascript
+[{
+  uuid: string,
+  label: string,
+  componentType: 'FORM_WIDGET_SON_TABLE',
+  children: [{ uuid, label, componentType }],  // 子表内字段
+}]
+```
+
+### assign.vue 存储结构
+
+`componentConfig.customComponentConfig.mainFormAssign` 会变成：
+```javascript
+[{ origin: {uuid, label, componentType}, target: {uuid, label, componentType} }, ...]
+```
+
+`componentConfig.customComponentConfig.tableFormAssign` 会变成：
+```javascript
+[{
+  origin: {uuid, label},    // 源子表
+  target: {uuid, label},    // 目标子表
+  type: 'all' | 'add',      // 全量 or 增量
+  assignmentList: [{ origin, target }, ...],  // 字段级映射
+}]
+```
+
+### 同时注册 setting + assign
+
+```javascript
+// src/form-component/form-editor/index.js
+import FormComponentDemoSetting from './form-component-demo-setting.vue';
+import FormComponentDemoAssign from './form-component-demo-assign.vue';
+
+const customFormConfigList = [
+  FormComponentDemoSetting,
+  FormComponentDemoAssign,
+];
+
+export default customFormConfigList;
+```
+
+对应的 `src/form-component-config/form-editor/` 也需要两份 `*.editor.config.json`，分别注册 setting 和 assign 面板。
 
 ## 易错点清单
 
