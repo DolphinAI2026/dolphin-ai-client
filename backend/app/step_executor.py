@@ -674,31 +674,36 @@ def _resolve_form_code(form: dict, form_name: str) -> str:
     return f"form_{_sanitize_code(form.get('code', form_name))}"
 
 
-async def execute_create_form(
-    client: APaaSClient,
-    app_id: str,
+def _build_form_components(
     form: dict,
-    form_index: int,
+    model_code: str,
+    mi: dict,
     dict_codes: Dict[str, str],
     model_info: Dict[str, dict],
     all_models: List[dict],
-    all_forms: Optional[List[dict]] = None,
-    form_results: Optional[List[dict]] = None,
-) -> dict:
-    """创建单个表单 + 绑定字典，返回 form 结果。"""
-    form_name, main_model_code, all_model_codes, mi = _resolve_form_main_model(form, model_info)
+    all_forms: Optional[List[dict]],
+    form_name: str,
+) -> tuple[List[dict], List[str], List[str]]:
+    """根据 form.components 组装平台组件列表 + 列表页查询字段。
 
-    reuse_result = await _find_existing_form_reuse(client, app_id, form_name)
-    if reuse_result is not None:
-        return reuse_result
+    返回 (components, query_conditions, query_list)。
 
-    model_code = mi["code"]
-    components = []
-    query_conditions = []
-    query_list = []
+    行为契约（跟原直线代码完全一致）：
+      - 遍历 form.components，每项转成 platform 组件 dict
+      - 识别 FORM_DATA_SELECTOR(_SINGLE) / FORM_ASSOCIATION 类型并补配置
+      - sectionType == "sub" 的归到 sub_groups（按 tableModelCode 分组）
+      - 其他组件进 components；同时维护 query_conditions(<=4) / query_list(<=8) / listable 计数
+      - components 空时：用 mi["fields"] 降级构造默认组件（logger.warning）
+      - 降级后仍为空时：**不抛** ValueError——保留给主函数决定
+    """
+    components: List[dict] = []
+    query_conditions: List[str] = []
+    query_list: List[str] = []
     listable = 0
     form_components = form.get("components", []) or []
     sub_groups: Dict[str, dict] = {}
+    form_identity = _form_identity_map(all_forms or [])
+
     for comp in form_components:
         section_type = str(comp.get("sectionType", comp.get("section_type", "main"))).strip() or "main"
         component_model_code = str(comp.get("modelCode", comp.get("model_code", ""))).strip() or model_code
@@ -717,7 +722,7 @@ async def execute_create_form(
                 built[key] = bool(comp.get(key))
 
         desired_component_type = str(component_type).strip()
-        target_model_code, target_field, origin_field = _resolve_component_reference(comp, _form_identity_map(all_forms or []))
+        target_model_code, target_field, origin_field = _resolve_component_reference(comp, form_identity)
         if desired_component_type in ("FORM_DATA_SELECTOR_SINGLE", "FORM_DATA_SELECTOR") and target_model_code:
             built["componentType"] = desired_component_type
             built["dataSelectorConfig"] = {
@@ -754,9 +759,12 @@ async def execute_create_form(
 
     components.extend(sub_groups.values())
 
+    # 原直线代码里的降级分支：components 空时用 mi["fields"] 生成默认组件
     if not components:
         model_fields = mi["fields"]
-        logger.warning(f"表单 {form_name}: 配置组件为空, 降级使用平台实际字段: {list(model_fields.keys())}")
+        logger.warning(
+            f"表单 {form_name}: 配置组件为空, 降级使用平台实际字段: {list(model_fields.keys())}"
+        )
         for field_name, field_code in model_fields.items():
             fallback_field = {"name": field_name, "type": "单行输入", "required": False}
             components.append(_build_component(fallback_field, model_code, field_code, dict_codes, all_models, model_info))
@@ -766,6 +774,39 @@ async def execute_create_form(
                     query_conditions.append(mf)
                 query_list.append(mf)
                 listable += 1
+
+    return components, query_conditions, query_list
+
+
+async def execute_create_form(
+    client: APaaSClient,
+    app_id: str,
+    form: dict,
+    form_index: int,
+    dict_codes: Dict[str, str],
+    model_info: Dict[str, dict],
+    all_models: List[dict],
+    all_forms: Optional[List[dict]] = None,
+    form_results: Optional[List[dict]] = None,
+) -> dict:
+    """创建单个表单 + 绑定字典，返回 form 结果。"""
+    form_name, main_model_code, all_model_codes, mi = _resolve_form_main_model(form, model_info)
+
+    reuse_result = await _find_existing_form_reuse(client, app_id, form_name)
+    if reuse_result is not None:
+        return reuse_result
+
+    model_code = mi["code"]
+    components, query_conditions, query_list = _build_form_components(
+        form=form,
+        model_code=model_code,
+        mi=mi,
+        dict_codes=dict_codes,
+        model_info=model_info,
+        all_models=all_models,
+        all_forms=all_forms,
+        form_name=form_name,
+    )
 
     if not components:
         raise ValueError(f"表单 {form_name} 无可用字段组件")
