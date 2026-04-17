@@ -760,6 +760,17 @@ _BRAINSTORM_PROMPT_FORM_COMPONENT = """\
 ### 第三方依赖
 - [列出需要额外安装的 npm 包，若无则填"无"]
 
+## ✅ 需求覆盖校验（必填）
+
+把用户原始需求拆成编号列表（按其原文顺序），每条标注对应的落地位置（配置项名称 / 交互场景 / 具体行为）：
+
+| # | 原始需求 | 落地位置 |
+|---|---|---|
+| 1 | [简述第 1 条需求] | [具体配置项 / 交互 / 行为] |
+| 2 | ... | ... |
+
+**如果某条需求在当前设计下未落地，必须显式声明"需求 N 未实现，原因：..."，不允许静默省略。**
+
 ---
 以上是我对需求的理解，请确认是否准确？如有需要调整的地方请告知，确认后将立即开始生成代码。\
 """
@@ -894,6 +905,65 @@ _BRAINSTORM_PROMPTS = {
     SceneType.WEB_LIST_VIEW: _BRAINSTORM_PROMPT_LIST,
     SceneType.BACKEND_API: _BRAINSTORM_PROMPT_BACKEND_API,
 }
+
+
+_BRAINSTORM_REVISION_PROMPT = """\
+你是一位资深 aPaaS 架构师，正在根据用户反馈**修改**一份已有的设计方案（不是重新设计）。
+
+## 原始需求
+{original_requirement}
+
+## 上一版设计方案
+{previous_proposal}
+
+## 用户反馈
+{user_feedback}
+
+## 修改规则（必须严格遵守）
+
+### 规则 1：最小修改原则
+只改用户明确要求改的部分，**不要动**用户没提到的其他字段/命名/结构。上一版里其他地方必须原样保留。
+
+### 规则 2：歧义反问优先（最重要）
+如果用户反馈含下列模糊表述，**禁止直接猜**，必须输出反问并停止修改方案：
+
+- "没 X / 没有 X / 缺 X / 少 X / 漏 X / 还是没 X"——可能是"补上 X"也可能是"移除 X"
+- "X 不对 / X 不好"——不清楚是删/替/改
+
+反问格式（输出这段就结束，不要输出修改后方案）：
+
+```
+## ⚠️ 需要澄清
+你说的"[引用原话]"，我理解为以下两种可能：
+- A. [解释 A]
+- B. [解释 B]
+请告诉我是 A 还是 B，我再修改方案。
+```
+
+### 规则 3：单组件优先
+用户追加能力时，**默认**加到当前已设计的同一个组件上，**不要**另起独立组件。
+只有用户**明确说**"拆分 / 独立组件 / 新组件 / 分开" 等词时才允许新建。
+模糊时走规则 2 反问。
+
+### 规则 4：需求覆盖校验
+修改后的方案末尾必须输出"需求覆盖校验"段：把原始需求逐条编号，每条标注对应落地位置。
+任何未落地的条款必须显式声明"需求 N 未实现，原因：..."，不允许静默省略。
+
+### 规则 5：本次变更 diff
+修改后方案**开头**列出本次变更：
+
+```
+## 🔄 本次变更
+- [新增] xxx
+- [删除] yyy
+- [修改] zzz
+```
+
+## 输出格式
+
+- 如触发规则 2：只输出"## ⚠️ 需要澄清"段，不要输出方案
+- 否则：严格按上一版 Markdown 结构输出修改后方案，保持章节顺序/表格列名一致
+"""
 
 
 async def _brainstorm_llm_call(
@@ -1044,17 +1114,34 @@ async def _detect_scene_llm_call(
 async def _generate_brainstorm_proposal(
     tenant_id: Optional[int],
     model: str,
-    message: str,
     scene_type: SceneType,
+    *,
+    requirement: str,
+    previous_proposal: Optional[str] = None,
+    user_feedback: Optional[str] = None,
 ) -> str:
-    """LLM 生成结构化设计确认单（使用租户 coding LLM 配置）。"""
-    prompt_tpl = _BRAINSTORM_PROMPTS.get(scene_type, _BRAINSTORM_PROMPT_PAGE)
-    prompt = prompt_tpl.format(message=message[:1000])
+    """LLM 生成结构化设计确认单（使用租户 coding LLM 配置）。
+
+    首轮调用：只传 requirement（用户原始消息），走场景首轮 prompt 模板。
+    修改轮调用：同时传 previous_proposal（上一版方案）+ user_feedback（用户新反馈），
+    走 _BRAINSTORM_REVISION_PROMPT，强制 LLM 做最小修改、歧义反问、需求覆盖校验。
+    """
+    if previous_proposal and user_feedback:
+        prompt = _BRAINSTORM_REVISION_PROMPT.format(
+            original_requirement=requirement[:1000],
+            previous_proposal=previous_proposal[:2500],
+            user_feedback=user_feedback[:500],
+        )
+        max_tokens = 1200  # 修改轮需要输出变更 diff + 需求覆盖校验，稍放宽
+    else:
+        prompt_tpl = _BRAINSTORM_PROMPTS.get(scene_type, _BRAINSTORM_PROMPT_PAGE)
+        prompt = prompt_tpl.format(message=requirement[:1000])
+        max_tokens = 1000
     try:
         return await _brainstorm_llm_call(
             tenant_id, model,
             [{"role": "user", "content": prompt}],
-            max_tokens=1000,
+            max_tokens=max_tokens,
             temperature=0.3,
         )
     except Exception as e:
@@ -1342,9 +1429,11 @@ async def run_coding_pipeline(
                 return
 
             elif intent == "revise":
-                revised_message = f"{original_requirement}\n\n用户反馈（请据此修改方案）：{params.message}"
                 new_proposal = await _generate_brainstorm_proposal(
-                    params.tenant_id, effective_model, revised_message, scene_type
+                    params.tenant_id, effective_model, scene_type,
+                    requirement=original_requirement,
+                    previous_proposal=brainstorm_proposal,
+                    user_feedback=params.message,
                 )
                 if new_proposal:
                     await save_coding_message(db, conversation_id, "assistant",
@@ -1370,7 +1459,8 @@ async def run_coding_pipeline(
             # 新建工作区：先生成设计方案，等用户确认后再生成代码
             yield _record_event({"type": "step", "step": "brainstorm", "status": "running"})
             proposal = await _generate_brainstorm_proposal(
-                params.tenant_id, effective_model, params.message, scene_type
+                params.tenant_id, effective_model, scene_type,
+                requirement=params.message,
             )
             if proposal:
                 await save_coding_message(db, conversation_id, "assistant",
