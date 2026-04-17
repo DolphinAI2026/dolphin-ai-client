@@ -184,12 +184,26 @@ export function useCodingPipeline(deps: PipelineDeps) {
       }
     },
     agent_thinking: (parsed) => {
+      // 后端每轮 LLM 思考会 emit 两次：逐 token 的 agent_thinking_delta（流式）
+      // + 末尾一次完整的 agent_thinking（全文）。delta 流通常已经把完整内容
+      // 累积到 streamMessages 最后一条 thinking 卡片上了，这里的 agent_thinking
+      // 事件只做两件事：
+      //   1) 如果 delta 流丢失几段，用完整 text 补齐最后这条 thinking 卡片
+      //   2) 如果 delta 流完全没出现过（最后一条不是 thinking），fallback 新建
+      // 之前的 last.content.includes(text.slice(0, 50)) 判断在短文本/delta 不全
+      // 的情况下会误判，导致同卡片里文字重复两遍。
       const text = (parsed.content || '') as string
       if (!text.trim()) return
       const last = streamMessages.value[streamMessages.value.length - 1]
-      if (!(last?.type === 'thinking' && last.content.includes(text.slice(0, 50)))) {
-        addStreamMsg({ type: 'thinking', content: text })
+      if (last?.type === 'thinking') {
+        // delta 已经在累积；text 是完整全文，用长度兜底补齐（delta 短则覆盖）
+        if (last.content.length < text.length) {
+          last.content = text
+        }
+        return
       }
+      // delta 流没创建 thinking 卡片（罕见），fallback 新建
+      addStreamMsg({ type: 'thinking', content: text })
     },
     agent_thinking_delta: (parsed) => {
       const delta = (parsed.content || '') as string
