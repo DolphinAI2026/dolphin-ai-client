@@ -278,6 +278,9 @@ def _build_permission_groups_for_form_config(
     return permission_groups, advanced_groups, operation_groups
 
 
+_STATE_CHANGED_MARKERS = ("页面状态已改变", "无法保存")
+
+
 async def _sync_form_permissions_to_form_config(
     client: APaaSClient,
     app_id: str,
@@ -285,22 +288,41 @@ async def _sync_form_permissions_to_form_config(
     rules: List[dict],
     role_code_map: Dict[str, dict],
 ) -> None:
-    form_config = await client.query_detail_page_config(app_id, form_id)
-    permission_groups, advanced_groups, operation_groups = _build_permission_groups_for_form_config(
-        rules,
-        role_code_map,
-    )
-    form_config["permissionGroups"] = permission_groups
-    form_config["advancedPermissionGroups"] = advanced_groups
-    form_config["operationPermissionGroups"] = operation_groups
-    logger.info(
-        "save_form_config reason: 回写表单权限 (formId=%s, permissionGroups=%s, advanced=%s, operation=%s)",
-        form_id,
-        len(permission_groups),
-        len(advanced_groups),
-        len(operation_groups),
-    )
-    await client.save_form_config(app_id, form_config)
+    """回写表单权限到 formConfig。
+
+    平台在并发场景下可能返回"当前页面状态已改变，无法保存"——此时重查再存一次，
+    单次重试足以覆盖常见瞬时冲突；仍失败则把最新异常抛出（由调用方的 except 兜底）。
+    """
+    last_exc: Exception | None = None
+    for attempt in range(2):
+        form_config = await client.query_detail_page_config(app_id, form_id)
+        permission_groups, advanced_groups, operation_groups = _build_permission_groups_for_form_config(
+            rules,
+            role_code_map,
+        )
+        form_config["permissionGroups"] = permission_groups
+        form_config["advancedPermissionGroups"] = advanced_groups
+        form_config["operationPermissionGroups"] = operation_groups
+        logger.info(
+            "save_form_config reason: 回写表单权限 (formId=%s, permissionGroups=%s, advanced=%s, operation=%s, attempt=%s)",
+            form_id,
+            len(permission_groups),
+            len(advanced_groups),
+            len(operation_groups),
+            attempt + 1,
+        )
+        try:
+            await client.save_form_config(app_id, form_config)
+            return
+        except Exception as exc:
+            msg = str(exc)
+            if any(marker in msg for marker in _STATE_CHANGED_MARKERS) and attempt == 0:
+                logger.warning("save_form_config 冲突，重试一次 (formId=%s): %s", form_id, msg)
+                last_exc = exc
+                continue
+            raise
+    if last_exc is not None:
+        raise last_exc
 
 
 # ---------------------------------------------------------------------------
