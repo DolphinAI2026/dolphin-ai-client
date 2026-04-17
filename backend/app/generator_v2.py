@@ -518,6 +518,142 @@ def _build_form_components_from_definition(
 # Phase 0 预处理
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Phase 2 数据模型辅助
+# ---------------------------------------------------------------------------
+
+def _classify_models_reuse_vs_new(
+    models: List[dict],
+    existing_by_name: Dict[str, dict],
+    model_info: Dict,
+) -> tuple[List[dict], List[tuple]]:
+    """把 models 拆成 (reused, new_models_to_create)。
+
+    副作用：为复用模型（含子表）原地写入 model_info。
+    new_models_to_create 形如 [(idx, model_dict), ...]，子表登记留给 _build_model_payload_with_subs。
+    """
+    reused: List[dict] = []
+    new_models_to_create: List[tuple] = []
+    for idx, m in enumerate(models):
+        em = existing_by_name.get(m["name"])
+        if em:
+            model_info[idx] = {"name": m["name"], "code": em["modelCode"], "fields": _extract_fields(em)}
+            reused.append(m)
+            for f in m.get("fields", []):
+                if f.get("type") == "子表" and f.get("sub_fields"):
+                    sub_em = existing_by_name.get(f["name"])
+                    if sub_em:
+                        model_info[f"{idx}_sub_{f['name']}"] = {
+                            "name": f["name"], "code": sub_em["modelCode"], "fields": _extract_fields(sub_em),
+                        }
+        else:
+            new_models_to_create.append((idx, m))
+    return reused, new_models_to_create
+
+
+def _build_model_payload_with_subs(
+    new_models_to_create: List[tuple],
+    app_id: str,
+    suffix: str,
+    model_info: Dict,
+) -> dict:
+    """构造 create_models 的 payload，同时登记 model_info（主模型 + 子表）。"""
+    data_models: List[dict] = []
+    for idx, m in new_models_to_create:
+        mc = f"{_sanitize_code(m.get('code', 'model'))}_{suffix}"
+        fields_map = {}
+
+        # 子表模型
+        for f in m.get("fields", []):
+            if f.get("type") == "子表" and f.get("sub_fields"):
+                sub_code = f"{_sanitize_code(f.get('sub_code') or m.get('code', 'model') + '_sub')}_{suffix}"
+                sub_fields = []
+                sub_fields_map = {}
+                for sf in f["sub_fields"]:
+                    sfc = _safe_field_code(sf.get("code") or sf["name"])
+                    sub_fields.append({
+                        "fieldName": sf["name"], "fieldCode": sfc,
+                        "fieldType": FIELD_TYPE_MAP.get(sf.get("type", ""), "STRING"),
+                        "fieldDescription": sf.get("type", ""),
+                    })
+                    sub_fields_map[sf["name"]] = sfc
+                data_models.append({
+                    "appId": app_id, "modelName": f["name"],
+                    "modelCode": sub_code, "modelDescription": f["name"],
+                    "fields": sub_fields,
+                })
+                model_info[f"{idx}_sub_{f['name']}"] = {"name": f["name"], "code": sub_code, "fields": sub_fields_map}
+
+        # 主模型字段
+        main_fields = []
+        for f in m.get("fields", []):
+            if f.get("type") == "子表":
+                continue
+            fc = _safe_field_code(f.get("code") or f["name"])
+            main_fields.append({
+                "fieldName": f["name"], "fieldCode": fc,
+                "fieldType": FIELD_TYPE_MAP.get(f.get("type", ""), "STRING"),
+                "fieldDescription": f.get("type", ""),
+            })
+            fields_map[f["name"]] = fc
+
+        data_models.append({
+            "appId": app_id, "modelName": m["name"],
+            "modelCode": mc, "modelDescription": m.get("description", m["name"]),
+            "fields": main_fields,
+        })
+        model_info[idx] = {"name": m["name"], "code": mc, "fields": fields_map}
+
+    return {"appId": app_id, "datasourceId": "", "dataModels": data_models}
+
+
+async def _refresh_model_codes_from_platform(
+    client: APaaSClient,
+    app_id: str,
+    new_models_to_create: List[tuple],
+    model_info: Dict,
+) -> None:
+    """创建后回查，用平台真实 fieldCode 覆盖 model_info（平台可能追加后缀）。"""
+    refreshed = await client.query_models(app_id)
+    ref_by_code = {rm.get("modelCode"): rm for rm in refreshed}
+    for idx, m in new_models_to_create:
+        mi = model_info.get(idx)
+        if mi and mi["code"] in ref_by_code:
+            mi["fields"] = _extract_fields(ref_by_code[mi["code"]])
+        for f in m.get("fields", []):
+            if f.get("type") == "子表":
+                sub_key = f"{idx}_sub_{f['name']}"
+                sub_mi = model_info.get(sub_key)
+                if sub_mi and sub_mi["code"] in ref_by_code:
+                    sub_mi["fields"] = _extract_fields(ref_by_code[sub_mi["code"]])
+
+
+async def _rollback_models_to_reuse_by_name(
+    client: APaaSClient,
+    app_id: str,
+    new_models_to_create: List[tuple],
+    model_info: Dict,
+) -> None:
+    """编码冲突时回退：按 modelName 匹配平台已有模型覆盖 model_info。"""
+    refreshed = await client.query_models(app_id)
+    ref_by_name = {rm.get("modelName"): rm for rm in refreshed}
+    for idx, m in new_models_to_create:
+        rm = ref_by_name.get(m["name"])
+        if rm:
+            model_info[idx] = {"name": m["name"], "code": rm["modelCode"], "fields": _extract_fields(rm)}
+            for f in m.get("fields", []):
+                if f.get("type") == "子表":
+                    srm = ref_by_name.get(f["name"])
+                    if srm:
+                        model_info[f"{idx}_sub_{f['name']}"] = {
+                            "name": f["name"], "code": srm["modelCode"], "fields": _extract_fields(srm),
+                        }
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 字典辅助
+# ---------------------------------------------------------------------------
+
 def _classify_dicts(
     dicts: List[dict],
     existing: Dict[str, dict],
@@ -739,109 +875,38 @@ async def run_complete_generation(
     try:
         existing_models = await client.query_models(app_id)
         existing_by_name = {m.get("modelName"): m for m in existing_models}
-        new_models_to_create: List[tuple] = []
-
-        for idx, m in enumerate(models):
-            em = existing_by_name.get(m["name"])
-            if em:
-                model_info[idx] = {"name": m["name"], "code": em["modelCode"], "fields": _extract_fields(em)}
-                yield {"stage": 2, "status": "running", "step": f"复用: {m['name']}"}
-                # 复用子表
-                for f in m.get("fields", []):
-                    if f.get("type") == "子表" and f.get("sub_fields"):
-                        sub_em = existing_by_name.get(f["name"])
-                        if sub_em:
-                            model_info[f"{idx}_sub_{f['name']}"] = {
-                                "name": f["name"], "code": sub_em["modelCode"], "fields": _extract_fields(sub_em),
-                            }
-            else:
-                new_models_to_create.append((idx, m))
+        reused, new_models_to_create = _classify_models_reuse_vs_new(
+            models, existing_by_name, model_info
+        )
+        for m in reused:
+            yield {"stage": 2, "status": "running", "step": f"复用: {m['name']}"}
 
         if new_models_to_create:
-            data_models = []
-            for idx, m in new_models_to_create:
-                mc = f"{_sanitize_code(m.get('code', 'model'))}_{suffix}"
-                fields_map = {}
-
-                # 子表模型
-                for f in m.get("fields", []):
-                    if f.get("type") == "子表" and f.get("sub_fields"):
-                        sub_code = f"{_sanitize_code(f.get('sub_code') or m.get('code', 'model') + '_sub')}_{suffix}"
-                        sub_fields = []
-                        sub_fields_map = {}
-                        for sf in f["sub_fields"]:
-                            sfc = _safe_field_code(sf.get("code") or sf["name"])
-                            sub_fields.append({
-                                "fieldName": sf["name"], "fieldCode": sfc,
-                                "fieldType": FIELD_TYPE_MAP.get(sf.get("type", ""), "STRING"),
-                                "fieldDescription": sf.get("type", ""),
-                            })
-                            sub_fields_map[sf["name"]] = sfc
-                        data_models.append({
-                            "appId": app_id, "modelName": f["name"],
-                            "modelCode": sub_code, "modelDescription": f["name"],
-                            "fields": sub_fields,
-                        })
-                        model_info[f"{idx}_sub_{f['name']}"] = {"name": f["name"], "code": sub_code, "fields": sub_fields_map}
-
-                # 主模型字段
-                main_fields = []
-                for f in m.get("fields", []):
-                    if f.get("type") == "子表":
-                        continue
-                    fc = _safe_field_code(f.get("code") or f["name"])
-                    main_fields.append({
-                        "fieldName": f["name"], "fieldCode": fc,
-                        "fieldType": FIELD_TYPE_MAP.get(f.get("type", ""), "STRING"),
-                        "fieldDescription": f.get("type", ""),
-                    })
-                    fields_map[f["name"]] = fc
-
-                data_models.append({
-                    "appId": app_id, "modelName": m["name"],
-                    "modelCode": mc, "modelDescription": m.get("description", m["name"]),
-                    "fields": main_fields,
-                })
-                model_info[idx] = {"name": m["name"], "code": mc, "fields": fields_map}
-
-            payload = {"appId": app_id, "datasourceId": "", "dataModels": data_models}
+            payload = _build_model_payload_with_subs(
+                new_models_to_create, app_id, suffix, model_info
+            )
 
             try:
                 await client.create_models(app_id, payload)
                 yield {"stage": 2, "status": "running", "step": f"新建: {'、'.join(m['name'] for _, m in new_models_to_create)}"}
-
-                # 用平台实际的 fieldCode 覆盖（平台可能追加后缀）
-                refreshed = await client.query_models(app_id)
-                ref_by_code = {rm.get("modelCode"): rm for rm in refreshed}
-                for idx, m in new_models_to_create:
-                    mi = model_info.get(idx)
-                    if mi and mi["code"] in ref_by_code:
-                        mi["fields"] = _extract_fields(ref_by_code[mi["code"]])
-                    for f in m.get("fields", []):
-                        if f.get("type") == "子表":
-                            sub_key = f"{idx}_sub_{f['name']}"
-                            sub_mi = model_info.get(sub_key)
-                            if sub_mi and sub_mi["code"] in ref_by_code:
-                                sub_mi["fields"] = _extract_fields(ref_by_code[sub_mi["code"]])
-
+                await _refresh_model_codes_from_platform(
+                    client, app_id, new_models_to_create, model_info
+                )
             except Exception as e:
                 if "编码重复" in str(e) or "已存在" in str(e):
                     yield {"stage": 2, "status": "running", "step": "编码冲突，回退到复用模式..."}
-                    refreshed = await client.query_models(app_id)
-                    ref_by_name = {rm.get("modelName"): rm for rm in refreshed}
-                    for idx, m in new_models_to_create:
-                        rm = ref_by_name.get(m["name"])
-                        if rm:
-                            model_info[idx] = {"name": m["name"], "code": rm["modelCode"], "fields": _extract_fields(rm)}
-                            for f in m.get("fields", []):
-                                if f.get("type") == "子表":
-                                    srm = ref_by_name.get(f["name"])
-                                    if srm:
-                                        model_info[f"{idx}_sub_{f['name']}"] = {
-                                            "name": f["name"], "code": srm["modelCode"], "fields": _extract_fields(srm),
-                                        }
+                    await _rollback_models_to_reuse_by_name(
+                        client, app_id, new_models_to_create, model_info
+                    )
                 else:
                     raise
+
+        # 兼容：原 Phase 2 for-loop 的循环变量 `m` 会泄漏进 Phase 3 作用域被读取
+        # （见 Phase 3 create_menu 处的 m["name"]，属历史 bug，批 4 清理）
+        if new_models_to_create:
+            m = new_models_to_create[-1][1]
+        elif models:
+            m = models[-1]
 
         yield {"stage": 2, "status": "done", "step": f"模型完成（{len(model_info)} 个）"}
 
