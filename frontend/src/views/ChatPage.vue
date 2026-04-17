@@ -775,15 +775,6 @@ const router = useRouter()
 const route = useRoute()
 const store = usePreviewStore()
 const userStore = useUserStore()
-const builderPreviewTab = ref<'roles' | 'dicts' | 'models' | 'forms' | 'permissions' | 'docs'>('docs')
-const allBuilderPreviewTabs = [
-  { key: 'roles', label: '角色' },
-  { key: 'dicts', label: '数据字典' },
-  { key: 'models', label: '数据模型' },
-  { key: 'forms', label: '表单' },
-  { key: 'permissions', label: '权限' },
-  { key: 'docs', label: '文档' },
-] as const
 const rightQuickInput = ref('')
 const parsedAppCode = ref('')
 const loadedAppCode = ref('')
@@ -876,33 +867,6 @@ const roleNamesText = computed(() => {
   const names = store.preview.roles.map((r: any) => r?.name).filter(Boolean)
   return names.length ? names.slice(0, 8).join('、') + (names.length > 8 ? ` 等 ${names.length} 项` : '') : '暂无'
 })
-const visibleBuilderPreviewTabs = computed(() =>
-  isUpdateReviewMode.value
-    ? allBuilderPreviewTabs.filter(tab => tab.key !== 'permissions')
-    : allBuilderPreviewTabs.filter(tab => tab.key === 'docs')
-)
-const activeBuilderTabLabel = computed(() => visibleBuilderPreviewTabs.value.find(tab => tab.key === builderPreviewTab.value)?.label || '角色')
-const activeBuilderStepIndex = computed(() => Math.max(0, visibleBuilderPreviewTabs.value.findIndex(tab => tab.key === builderPreviewTab.value)))
-const getBuilderTabCount = (tabKey: typeof builderPreviewTab.value) => {
-  if (isUpdateReviewMode.value) {
-    if (tabKey === 'roles') return updateRoleDiffItems.value.length
-    if (tabKey === 'dicts') return updateDictDiffItems.value.length
-    if (tabKey === 'models') return updateModelDiffItems.value.length
-    if (tabKey === 'forms') return updateFormDiffItems.value.length
-    if (tabKey === 'permissions') return 0
-    return docPreviewAvailable.value ? 1 : 0
-  }
-  if (tabKey === 'roles') return store.preview.roles.length
-  if (tabKey === 'dicts') return store.preview.dicts.length
-  if (tabKey === 'models') return store.preview.models.length
-  if (tabKey === 'forms') return formPreviewItems.value.length
-  if (tabKey === 'permissions') return permissionPreviewItems.value.length
-  return docPreviewAvailable.value ? 1 : 0
-}
-const getBuilderTabMeta = (tabKey: typeof builderPreviewTab.value) => {
-  const count = getBuilderTabCount(tabKey)
-  return count > 0 ? `${count} 项` : '待补充'
-}
 const builderLifecycleStatus = computed(() => {
   if (deployAllDone.value || store.currentApp?.status === 'completed') {
     return { key: 'deployed', label: '已部署' as const }
@@ -956,7 +920,7 @@ const builderStatusText = computed(() => {
   if (parseReady.value) return '准备就绪'
   return '待完善'
 })
-const builderQuickPlaceholder = computed(() => `补充或修改${activeBuilderTabLabel.value}内容，例如：把${activeBuilderTabLabel.value}再细化一下...`)
+const builderQuickPlaceholder = computed(() => `补充或修改${'文档'}内容，例如：把${'文档'}再细化一下...`)
 const hasStructuredPreviewData = computed(() =>
   !!store.preview.appName
   || store.preview.roles.length > 0
@@ -1227,14 +1191,6 @@ const updateReviewGroups = computed(() => [
   { title: '表单配置', icon: '📋', items: updateFormDiffItems.value },
 ].filter(group => group.items.length > 0))
 
-const getPreferredUpdateTab = () => {
-  if (updateModelDiffItems.value.length) return 'models'
-  if (updateRoleDiffItems.value.length) return 'roles'
-  if (updateDictDiffItems.value.length) return 'dicts'
-  if (updateFormDiffItems.value.length) return 'forms'
-  return 'docs'
-}
-
 const BUILDER_WELCOME_MESSAGE = '你好！我是你的智能搭建助手。\n告诉我你想搭建什么，我会帮你梳理需求、生成设计文档，并引导你完成完整搭建流程。\n可以直接描述业务需求，也可以上传原型图或设计稿开始。'
 function createWelcomeMessage(): Message {
   return {
@@ -1267,17 +1223,6 @@ const focusQuickInput = () => {
   nextTick(() => {
     inputRef.value?.focus()
   })
-}
-
-const startSingleEdit = (tab: typeof builderPreviewTab.value, payload: any) => {
-  if (isUpdateReviewMode.value) {
-    ElMessage.info('更新页面当前为变更对比视图，不支持直接编辑，请重新上传设计文档。')
-    return
-  }
-  builderPreviewTab.value = tab
-  const targetName = payload?.name || payload?.form || payload?.table || payload?.code || activeBuilderTabLabel.value
-  inputText.value = `请帮我修改${activeBuilderTabLabel.value}「${targetName}」：`
-  focusQuickInput()
 }
 
 const submitRightQuickEdit = () => {
@@ -1715,46 +1660,6 @@ const getPrimaryText = (...values: any[]) => {
   }
   return ''
 }
-const normalizeVersionNumber = (value: any, fallback = 1) => {
-  const parsed = Number(value)
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
-}
-const buildVersionBadge = (tone: VersionBadgeMeta['tone'], version: any): VersionBadgeMeta => {
-  const normalizedVersion = normalizeVersionNumber(version, 1)
-  if (tone === 'active') {
-    return {
-      label: `最新 V${normalizedVersion}`,
-      tone,
-      version: normalizedVersion,
-      muted: false,
-    }
-  }
-  return {
-    label: `${tone === 'deleted' ? '删除' : '禁用'} V${normalizedVersion}`,
-    tone,
-    version: normalizedVersion,
-    muted: true,
-  }
-}
-const getVersionToneForChange = (
-  changeType: string,
-  scope: Parameters<typeof getChangeBadgeMeta>[1],
-): VersionBadgeMeta['tone'] => {
-  const badge = getChangeBadgeMeta(changeType, scope)
-  if (badge.tone === 'delete') return 'deleted'
-  if (badge.tone === 'disable') return 'disabled'
-  return 'active'
-}
-const sortVersionedItems = <T extends { name?: string; code?: string; versionBadge: VersionBadgeMeta }>(items: T[]) =>
-  [...items].sort((a, b) => {
-    if (a.versionBadge.muted !== b.versionBadge.muted) {
-      return a.versionBadge.muted ? 1 : -1
-    }
-    if (a.versionBadge.version !== b.versionBadge.version) {
-      return b.versionBadge.version - a.versionBadge.version
-    }
-    return String(a.name || a.code || '').localeCompare(String(b.name || b.code || ''), 'zh-Hans-CN', { numeric: true })
-  })
 const getRoleCodeValue = (role: any, fallback = '') =>
   getPrimaryText(role?.code, role?.roleCode, role?.role_code, fallback)
 const getRoleNameValue = (role: any, fallback = '') =>
@@ -1824,35 +1729,6 @@ const getFormComponentSource = (form: any) =>
     : Array.isArray(form?.fields)
       ? form.fields
       : []
-const markNestedItemsAsMuted = (
-  items: Map<string, { versionBadge: VersionBadgeMeta }>,
-  tone: VersionBadgeMeta['tone'],
-  version: number,
-) => {
-  items.forEach((item) => {
-    item.versionBadge = buildVersionBadge(tone, version)
-  })
-}
-const completedPlanRefsFromVersions = (versions: any[]) => {
-  const refs: Array<{ id: number; fromVersion: number; toVersion: number }> = []
-  const seen = new Set<number>()
-  versions.forEach((versionItem: any) => {
-    const plans = Array.isArray(versionItem?.change_plans) ? versionItem.change_plans : []
-    plans.forEach((plan: any) => {
-      const planId = Number(plan?.id)
-      if (!planId || seen.has(planId)) return
-      if (String(plan?.status || '').toLowerCase() !== 'completed') return
-      seen.add(planId)
-      refs.push({
-        id: planId,
-        fromVersion: normalizeVersionNumber(plan?.from_version, 0),
-        toVersion: normalizeVersionNumber(plan?.to_version, 1),
-      })
-    })
-  })
-  return refs.sort((a, b) => (a.toVersion - b.toVersion) || (a.fromVersion - b.fromVersion) || (a.id - b.id))
-}
-
 const agents: Record<string, { name: string; icon: string }> = {
   builder: { name: 'aPaaS Builder AI', icon: '🤖' },
   requirements: { name: 'aPaaS Builder AI', icon: '🤖' },
@@ -2350,73 +2226,10 @@ interface ChangeBadgeMeta {
   label: string
   tone: 'create' | 'update' | 'delete' | 'disable'
 }
-interface VersionBadgeMeta {
-  label: string
-  tone: 'active' | 'deleted' | 'disabled'
-  version: number
-  muted: boolean
-}
-interface VersionedRoleItem {
-  key: string
-  name: string
-  code: string
-  description: string
-  versionBadge: VersionBadgeMeta
-}
-interface VersionedDictOptionItem {
-  key: string
-  name: string
-  code: string
-  versionBadge: VersionBadgeMeta
-}
-interface VersionedDictItem {
-  key: string
-  name: string
-  code: string
-  summary: string
-  optionCount: number
-  options: VersionedDictOptionItem[]
-  versionBadge: VersionBadgeMeta
-}
-interface VersionedModelFieldItem {
-  key: string
-  name: string
-  code: string
-  type: string
-  versionBadge: VersionBadgeMeta
-}
-interface VersionedModelItem {
-  key: string
-  name: string
-  code: string
-  tableTypeLabel: string
-  summary: string
-  fields: VersionedModelFieldItem[]
-  versionBadge: VersionBadgeMeta
-}
-interface VersionedFormComponentItem {
-  key: string
-  name: string
-  code: string
-  detail: string
-  versionBadge: VersionBadgeMeta
-}
-interface VersionedFormItem {
-  key: string
-  name: string
-  code: string
-  modelName: string
-  modelCode: string
-  tableTypeLabel: string
-  componentCount: number
-  components: VersionedFormComponentItem[]
-  versionBadge: VersionBadgeMeta
-}
 const docVersions = ref<DocVersion[]>([])
 const docVersionsLoading = ref(false)
 const updatingDocVersion = ref(false)
 const executingChangePlan = ref(false)
-const completedChangePlans = ref<any[]>([])
 const docVersionPreviewVisible = ref(false)
 const docVersionPreviewContent = ref('')
 const docVersionPreviewItem = ref<DocVersionListItem | null>(null)
@@ -2662,47 +2475,6 @@ const normalizeChangePlanState = (raw: any) => {
   }
 }
 
-const loadCompletedChangePlans = async (appId: number, docVersionResponse?: any) => {
-  if (!appId) {
-    completedChangePlans.value = []
-    return []
-  }
-  try {
-    const payload = docVersionResponse || await applicationApi.getDocVersions(appId)
-    const { versions } = getDocVersionsPayload(payload)
-    const planRefs = completedPlanRefsFromVersions(versions)
-    if (!planRefs.length) {
-      completedChangePlans.value = []
-      return []
-    }
-
-    const details = await Promise.all(planRefs.map(async (planRef) => {
-      try {
-        const detail = await applicationApi.getChangePlan(appId, planRef.id)
-        const normalized = normalizeChangePlanState(detail)
-        if (!normalized) return null
-        return {
-          ...normalized,
-          fromVersion: planRef.fromVersion || normalized.fromVersion,
-          toVersion: planRef.toVersion || normalized.toVersion,
-        }
-      } catch (error) {
-        console.error(`Failed to fetch completed change plan ${planRef.id}`, error)
-        return null
-      }
-    }))
-
-    completedChangePlans.value = details
-      .filter(Boolean)
-      .sort((a: any, b: any) => (normalizeVersionNumber(a?.toVersion, 1) - normalizeVersionNumber(b?.toVersion, 1)))
-    return completedChangePlans.value
-  } catch (error) {
-    console.error('Failed to load completed change plans', error)
-    completedChangePlans.value = []
-    return []
-  }
-}
-
 const applyChangePlanState = (raw: any) => {
   const normalized = normalizeChangePlanState(raw)
   store.changePlan = normalized
@@ -2907,7 +2679,6 @@ const loadLatestDocForApp = async (appId: number) => {
     const { versions, currentVersion } = getDocVersionsPayload(verRes)
     docVersions.value = versions
     currentDocVersionNumber.value = currentVersion || Number(versions?.[0]?.version || 1)
-    await loadCompletedChangePlans(appId, verRes)
     const sortedVersions = [...versions].sort((a: any, b: any) => (Number(b?.version) || 0) - (Number(a?.version) || 0))
     const latest = sortedVersions.find((item: any) => getDocDisplayVersion(item) === currentVersion) || sortedVersions[0]
     if (latest?.filename || latest?.display_filename) lastParsedFilename.value = getDocDisplayFilename(latest)
@@ -2938,7 +2709,6 @@ const loadLatestDocForApp = async (appId: number) => {
   } catch {
     // ignore
   }
-  completedChangePlans.value = []
   return null
 }
 
@@ -2960,7 +2730,6 @@ const restorePendingChangePlan = async (appId: number, docVersionResponse?: any)
     }
 
     applyChangePlanState(changePlanDetail)
-    builderPreviewTab.value = getPreferredUpdateTab()
     deployOpen.value = true
     return true
   } catch (error) {
@@ -3588,8 +3357,6 @@ function resetConversationWorkspace() {
   selectedDocVersionKey.value = null
   deletingDocVersionId.value = null
   currentDocVersionNumber.value = 1
-  completedChangePlans.value = []
-
   deployOpen.value = false
   deployAppId.value = null
   deploySteps.value = []
@@ -4650,8 +4417,6 @@ const handleDocVersionUpload = async (file: File, appId: number) => {
 
       // 启用 update review 模式，右侧面板展示变更对比
       applyChangePlanState(changePlanData)
-      builderPreviewTab.value = getPreferredUpdateTab()
-
       const pmsg = messages.find(m => m.id === progressMsgId)
       if (pmsg) {
         const addCount = changePlanData.actions?.filter((a: any) => a.op?.startsWith('add')).length || 0
@@ -6299,7 +6064,6 @@ watch(() => route.query.app_id, async (newAppId, oldAppId) => {
   latestDocAppId.value = null
   latestDocConversationId.value = null
   conversationId.value = null
-  completedChangePlans.value = []
   activeView.value = 'builder'
   platformIframeUrl.value = ''
   platformIframeKey.value = 0
@@ -6379,10 +6143,8 @@ watch(activeView, (view) => {
 watch(isUpdateReviewMode, (enabled) => {
   if (!enabled) return
   deployOpen.value = true
-  const currentTabVisible = visibleBuilderPreviewTabs.value.some(tab => tab.key === builderPreviewTab.value)
-  if (!currentTabVisible || getBuilderTabCount(builderPreviewTab.value) === 0) {
-    builderPreviewTab.value = getPreferredUpdateTab()
-  }
+  // 原先这里会根据 isUpdateReviewMode 切换到合适的 tab，但 tab 机制已废弃，
+  // 右侧永远走文档对比视图，保留 watch 仅为打开右侧部署面板。
 }, { immediate: true })
 
 watch(displayDocVersions, (versions) => {
@@ -6394,26 +6156,20 @@ watch(displayDocVersions, (versions) => {
   }
 }, { immediate: true })
 
-// 切换到文档 tab 时自动加载版本列表
-watch(builderPreviewTab, (tab) => {
-  if (tab === 'docs' && (existingAppId.value || conversationId.value) && docVersions.value.length === 0) {
-    fetchDocVersions()
-  }
-})
 watch(existingAppId, (id) => {
-  if (id && builderPreviewTab.value === 'docs') {
+  if (id) {
     fetchDocVersions()
   }
 })
 watch(conversationId, (id) => {
   if (isDocParsing.value) {
-    if (id && builderPreviewTab.value === 'docs' && docVersions.value.length === 0) {
+    if (id && docVersions.value.length === 0) {
       fetchDocVersions()
     }
     return
   }
   if (route.query.app_id || existingAppId.value) {
-    if (id && builderPreviewTab.value === 'docs' && docVersions.value.length === 0) {
+    if (id && docVersions.value.length === 0) {
       fetchDocVersions()
     }
     return
@@ -6422,7 +6178,7 @@ watch(conversationId, (id) => {
   existingAppId.value = null
   docVersions.value = []
   currentDocPreviewOverride.value = null
-  if (id && builderPreviewTab.value === 'docs') {
+  if (id) {
     fetchDocVersions()
   }
 })
