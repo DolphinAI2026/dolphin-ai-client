@@ -506,6 +506,19 @@ import { usePreviewStore } from '@/stores/preview'
 import ThemeToggle from '@/components/ThemeToggle.vue'
 import { requirementsApi, type RequirementsSession, type ChatMessage, type AnalysisResult } from '@/api/requirements'
 import { llmConfigApi, type BuilderModelOption } from '@/api/llmConfig'
+import {
+  normalizeDocResult as _normalizeDocResult,
+  formatBuilderModelOption,
+  isFileMessage,
+  extractFileName,
+  extractUserText,
+  stripThink,
+  renderMarkdown,
+  formatDate,
+} from '@/utils/requirements'
+
+const normalizeDocResult = (raw: any): AnalysisResult | null =>
+  _normalizeDocResult<AnalysisResult & { [k: string]: unknown }>(raw) as AnalysisResult | null
 
 const router = useRouter()
 const route = useRoute()
@@ -572,18 +585,6 @@ const builderModelHint = computed(() => {
   return '首条消息会使用当前选择的模型'
 })
 
-function normalizeDocResult(raw: any): AnalysisResult | null {
-  if (!raw || typeof raw !== 'object') return null
-  const hasCore =
-    raw.app_info &&
-    Array.isArray(raw.roles) &&
-    Array.isArray(raw.data_dictionary) &&
-    Array.isArray(raw.tables) &&
-    Array.isArray(raw.role_table_mapping)
-  if (!hasCore) return null
-  return raw as AnalysisResult
-}
-
 function normalizeBuilderModelId(modelId?: number | null): number | null {
   const ids = new Set(builderModelOptions.value.map(option => option.id))
   if (modelId != null && ids.has(modelId)) return modelId
@@ -594,10 +595,6 @@ function applyBuilderModelSelection(modelId?: number | null) {
   const normalized = normalizeBuilderModelId(modelId)
   selectedBuilderModelId.value = normalized
   persistedBuilderModelId.value = currentSessionId.value ? normalized : null
-}
-
-function formatBuilderModelOption(option: BuilderModelOption): string {
-  return option.config_name
 }
 
 async function loadBuilderModelOptions() {
@@ -693,54 +690,6 @@ function syncMatrix() {
       })
     }
   })
-}
-
-// ── 文件消息识别 ──────────────────────────────────────────────────────────────
-const FILE_MSG_RE = /\[上传文件：([^\]]+)\]/
-
-function isFileMessage(content: string): boolean {
-  return FILE_MSG_RE.test(content)
-}
-function extractFileName(content: string): string {
-  return content.match(FILE_MSG_RE)?.[1] ?? ''
-}
-function extractUserText(content: string): string {
-  const idx = content.indexOf('[上传文件：')
-  return idx > 0 ? content.slice(0, idx).trim() : ''
-}
-
-// ── Markdown 渲染 ──────────────────────────────────────────────────────────
-function stripThink(text: string): string {
-  let t = text.replace(/<think>[\s\S]*?<\/think>/g, '')
-  const idx = t.indexOf('<think>')
-  if (idx >= 0) t = t.slice(0, idx)
-  return t.trim()
-}
-
-function renderMarkdown(text: string): string {
-  if (!text) return ''
-  const cleaned = stripThink(text)
-  if (!cleaned) return '<span style="color:var(--c-text-muted);font-style:italic">(thinking...)</span>'
-  return cleaned
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    .replace(/`(.+?)`/g, '<code>$1</code>')
-    .replace(/^#{1,3}\s(.+)$/gm, '<strong>$1</strong>')
-    .replace(/^[-•]\s(.+)$/gm, '• $1')
-    .replace(/\n/g, '<br>')
-}
-
-function formatDate(dateStr: string): string {
-  const d = new Date(dateStr)
-  const now = new Date()
-  const diff = now.getTime() - d.getTime()
-  if (diff < 60000) return '刚刚'
-  if (diff < 3600000) return `${Math.floor(diff / 60000)} 分钟前`
-  if (diff < 86400000) return `${Math.floor(diff / 3600000)} 小时前`
-  return d.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
 }
 
 function autoResizeInput() {
