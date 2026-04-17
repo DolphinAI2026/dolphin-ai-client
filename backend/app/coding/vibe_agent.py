@@ -608,7 +608,13 @@ class VibeCodingAgent:
 - `code`: MUST start with `FORM_CUSTOM_` followed by a semantic uppercase string (e.g. `FORM_CUSTOM_DATA_SELECT`). Must match `apaas.json` `code` field.
 - `desc.iconType`: fixed value `"DEFAULT"`.
 - `desc.icon`: MUST be a real SVG string semantically matching the component (e.g. `"<svg xmlns=\\"http://www.w3.org/2000/svg\\" viewBox=\\"0 0 24 24\\">...</svg>"`). Never use an icon class string.
-- **CRITICAL**: `desc.text`、`desc.description`、`widget.display.label` 必须根据**当前需求**填写真实的中文名称和描述，绝对禁止出现 "Demo"、"demo"、"Demo组件"、"Demo组件描述" 等占位文字。例如国际手机号组件应填写 `"text": "国际手机号"`。
+- **CRITICAL**: `desc.text`、`desc.description`、`widget.display.label` 必须根据**当前需求**填写真实的中文名称和描述，绝对禁止出现 "Demo"、"demo"、"Demo组件"、"Demo组件描述"、"Custom"、"custom"、"Component"、"自定义组件"、"通用组件" 等**占位/通用词**作为组件名称。例如国际手机号组件应填写 `"text": "国际手机号"`；日期时间段组件应填写 `"text": "日期时间段"`。
+- **CRITICAL 命名铁则**: 组件的 kebab-case 英文名（用于 `code` 派生和所有文件命名）**必须反映组件核心功能**，从用户需求中提炼语义短语。**严禁**使用以下通用/占位词作为组件英文名：`custom` / `demo` / `component` / `custom-dev` / `form-component` / `custom-component`。示例：
+  - 需求"日期时间段选择组件" → kebab-case 名 `date-time-range` → `code: "FORM_CUSTOM_DATE_TIME_RANGE"` → 文件名 `form-component-date-time-range-edit.vue`
+  - 需求"星级评分" → `star-rating` → `FORM_CUSTOM_STAR_RATING` → `form-component-star-rating-edit.vue`
+  - 需求"颜色选择器" → `color-picker` → `FORM_CUSTOM_COLOR_PICKER` → `form-component-color-picker-edit.vue`
+
+  如果用户给的需求抽象（如"自定义组件"），必须在 brainstorm 阶段反问具体功能后再确定名字，不允许直接用 custom 兜底。
 - `instance`: fixed `{ "uuid": "$itemUuid", "inTable": false }`.
 - `widget.display.width`: `3 | 6 | 12` (1/4 / 1/2 / full row). `mobileWidth`: `6 | 12`. `height: 1`. `hidden/readOnly/required/onlyCreateEdit`: all `false`.
 - `widget.allow`: MUST include all 4 fields: `"calcRule": false`, `"useInTableColumn": <boolean>`, `"scanCode": false`, `"copy": false`. `useInTableColumn` should be `true` by default unless sub-table usage is explicitly not needed.
@@ -645,20 +651,84 @@ class VibeCodingAgent:
 
     _SHARED_SETTING_VUE_SECTION = """
 ## setting.vue Rules
-- setting.vue uses `componentConfig` prop + `formEngine` prop
-- setting.vue 必须通过 `componentConfig` prop 读取平台配置，但模板中统一绑定 `customComponentConfig.xxx`（computed 别名），不要直接写 `componentConfig.customComponentConfig.xxx`
-- 方法名不是关键，关键是配置写入路径必须正确：严禁在 setting.vue 中使用 `localConfig`、`formData`、`config` 这类镜像配置
-- 如果存在 `saveConfig()` / `handleChange()` / `updateComponentConfig()` 等方法，它们也只能直接操作 `customComponentConfig.xxx`，不能通过 `$emit('update:componentConfig', ...)` 或镜像状态回写
+
+### ⚠️ 必须使用 scaffold 预置的 editor 原子组件（严禁用 Element UI 原生）
+
+`__BASE_PATH__/form-component/form-editor/components/` 目录下 scaffold **已预置 6 个 editor 原子组件**（LLM 不要重新生成，直接 import 使用）：
+
+- `form-custom-sechma-item.vue` — label + help tooltip + 校验容器（通常被下面 5 个内部使用，直接用得少）
+- `form-custom-input-editor.vue` — 单行输入（替代 `<el-input>`）
+- `form-custom-select-editor.vue` — 下拉（替代 `<el-select>` + `<el-option>`，通过 `options` prop 传选项）
+- `form-custom-textarea-editor.vue` — 多行输入（替代 `<el-input type="textarea">`）
+- `form-custom-switch-editor.vue` — 开关（替代 `<el-switch>`）
+
+还有 2 个字段赋值专用 editor（`form-custom-field-assign-editor.vue` / `form-custom-table-field-assign-editor.vue`），仅在"数据选择类"组件需要把外部数据映射到当前表单字段时使用。
+
+**🔴 setting.vue 中严禁直接使用下列 Element UI 原生组件**：
+- `<el-form-item>` / `<el-form>` / `<el-input>` / `<el-select>` / `<el-option>`
+- `<el-switch>` / `<el-radio>` / `<el-radio-group>` / `<el-checkbox>` / `<el-checkbox-group>`
+
+遇到上述需求**必须**用对应的 `form-custom-*-editor` 原子替换。
+
+### 正确示例（模板即可复用）
+
+```vue
+<template>
+  <div class="form-custom-{name}-setting">
+    <form-custom-input-editor
+      label="占位文本" property="placeholder" v-bind="$props"
+      :help="['为空时的提示文字']"
+    ></form-custom-input-editor>
+    <form-custom-select-editor
+      label="显示模式" property="mode" v-bind="$props"
+      :options="modeOptions" :showRequired="true"
+    ></form-custom-select-editor>
+    <form-custom-switch-editor
+      label="允许为空" property="nullable" v-bind="$props"
+    ></form-custom-switch-editor>
+  </div>
+</template>
+
+<script>
+// 单端：@/mixin/form-config.mixin ；双端：@shared/mixin/form-config.mixin
+import EditorFormConfigMixin from '@/mixin/form-config.mixin';
+import FormCustomInputEditor from './components/form-custom-input-editor.vue';
+import FormCustomSelectEditor from './components/form-custom-select-editor.vue';
+import FormCustomSwitchEditor from './components/form-custom-switch-editor.vue';
+
+export default {
+  name: 'FormComponent{Name}Setting',  // 必须与 editor.config.json 的 componentName 一致（PascalCase）
+  mixins: [EditorFormConfigMixin],
+  components: { FormCustomInputEditor, FormCustomSelectEditor, FormCustomSwitchEditor },
+  computed: {
+    modeOptions() { return [{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }]; },
+  },
+};
+</script>
+```
+
+所有 editor 原子都约定同一组 props：`label`、`property`、`v-bind="$props"`（**必传**，透传 configProperty 给容器）；`showRequired` / `help`（字符串数组） / `placeholder` 可选；`form-custom-select-editor` 额外需要 `options`。
+
+### 写入路径和校验规范
+- setting.vue 通过 `componentConfig` prop 读取平台配置。editor 原子内部已封装 formValue 双向绑定到 `componentConfig.customComponentConfig[property]`，setting.vue 主体代码不需要手写读写逻辑。
+- 如果业务必须写 `saveConfig()` / `handleChange()`，只能直接操作 `customComponentConfig.xxx`，严禁通过 `$emit('update:componentConfig', ...)` 或镜像状态回写
 - 严禁调用不存在的配置写入 API：`formEngine.updateWidgetConfig(...)`、`formEngine.updateCustomComponentConfig(...)`、`formEngine.updateWidgetCustomConfig(...)`、`formEngine.updateSpecialConfig(...)`、`formEngine.setWidgetInfo(...)`
+- 严禁在 setting.vue 中使用 `localConfig`、`formData`、`config` 这类镜像配置
 - `inject` 声明必须带 `{ default: null }`
 - 配置直接存 `customComponentConfig` 根级别，不要多嵌套（如 `{ chartConfig: { dataSource } }` 错，应为 `{ dataSource }`）
 - 不要在 computed 里用 `$set`（会导致无限循环）
 - formEngine 通过 prop 传入（不是 inject）
-- **最外层不要包一层 `<el-form>`**，平台外层已提供表单容器，内部直接用 `<el-form-item>` 等即可
 - **最外层容器不要设置 padding**，平台区域已做好布局，额外 padding 会压缩可用空间
+
+### 文件路径
 - `setting.vue` must be written to `__BASE_PATH__/form-component/form-editor/{name}-setting.vue`
 - `editorConfigList` must be aggregated by `__BASE_PATH__/form-component-config/form-editor/index.js` from `./{name}.editor.config.json`
-- The edit.vue is the primary file. read.vue shows readonly view. ide.vue shows placeholder. Others can be minimal.
+
+### 所有 7 个 scene 都必须完整实现（禁止 half-rename）
+- 7 个 scene（edit / read / ide / list / print / search / search-ide）每个目录下的 `.vue` 文件都必须真实存在，对应 `index.js` 每一行 `import` 指向的文件都必须存在。
+- **绝对禁止**出现"改了 index.js 的 import 路径但没建对应 vue"的 half-rename 状态——会导致 webpack 报 `Module not found` build 失败。
+- 如果某个 scene 用不到，保持 scaffold 默认的 `form-component-demo-{scene}.vue` 原样（连带 index.js 也别改），不要半改。
+- 7 个 scene 地位平等：不存在"edit 是主要，其他可简略"这样的优先级——每个 scene 都有独立 UI 职责，必须完整实现。
 """
 
     _SHARED_FORMVALUE_STORAGE_SECTION = """
@@ -760,14 +830,16 @@ class VibeCodingAgent:
 1. **FIRST** (1 call): Use glob_files to see the project structure
 2. **THEN** (1-3 calls max): If `.cursor/rules/*.mdc` exists, read those rule files first, then read ONLY the key implementation files you need (edit.vue and mixin). Do NOT read every file.
 3. **IMMEDIATELY write code**: Use write_file to create/update ALL component files in one batch. Call write_file multiple times in a SINGLE turn (parallel tool calls).
-4. **THEN** run `npm run build` to check compilation
-5. If errors, fix and rebuild. If success, report completion.
+4. **Build 前一致性自检（必做）**: run build 前，用 glob 或 list_dir **逐个验证** 7 个 scene 目录 (`src/form-component/form-widget/{edit,read,ide,list,print,search,search-ide}/`) 下的 `index.js` 引用的每一个 `.vue` 文件是否都真实存在。只要有一个"index.js 引用了但 vue 不存在"，立即先补建/修正，不要先跑 build。
+5. **THEN** run `npm run build` to check compilation
+6. If errors, fix and rebuild. If success, report completion.
 
 ## CRITICAL Rules
 - **Progress notes are visible to the user**: keep them brief, concrete, and friendly. Do NOT dump hidden reasoning or long analysis.
 - **DO NOT loop**: Never read the same file twice. Never read more than 3 files before writing code.
 - **Write ALL files at once**: In a single turn, call write_file for edit.vue, read.vue, ide.vue, setting.vue etc. Do NOT write one file per turn.
 - **When generating designer config**: update `src/form-component/form-editor/index.js` and `src/form-component-config/form-editor/index.js` in the same batch as `setting.vue` / `{name}.editor.config.json`.
+- **index.js 与 vue 必须一致**: 修改任何 `index.js` 的 import 路径时，**必须**同步确保对应 vue 文件存在（新建或重命名）。不允许出现 "index.js 指向的文件不存在" 的 half-rename 状态。如不需要某个 scene，保持 scaffold 默认的 `form-component-demo-{scene}.vue` 原样，index.js 也别改。
 - **Be decisive**: You are an expert. After reading the scaffold structure and 1-2 example files, you have enough context to write the component.
 - **Maximum 8 turns total**: If you haven't written code by turn 4, something is wrong. Write the code NOW.
 - **NEVER use `<el-dialog>` inside form widgets** — it breaks FormEngine component resolution and crashes the platform with `Cannot read properties of undefined (reading 'edit')`. Use `<el-popover :append-to-body="true">` instead for any preview/popup interaction.
@@ -779,9 +851,33 @@ class VibeCodingAgent:
 - **console.log is stripped in production — use `console.info` for ALL debug output in every mode.**
 - **formEngine is NOT available in `beforeCreate()` — only access `this.formEngine` from `created()` or later.**
 
+## 🛑 目录结构铁则（绝对不要违反）
+
+所有 7 个 scene 的 vue 文件**只能放在下列唯一目录下**：
+
+```
+src/form-component/form-widget/
+├── edit/       ← form-component-{name}-edit.vue
+├── read/       ← form-component-{name}-read.vue
+├── ide/        ← form-component-{name}-ide.vue
+├── list/       ← form-component-{name}-list.vue
+├── print/      ← form-component-{name}-print.vue
+├── search/     ← form-component-{name}-search.vue
+└── search-ide/ ← form-component-{name}-search-ide.vue
+```
+
+**禁止**创建以下目录（常见幻觉，scaffold **不存在**）：
+- ❌ `src/form-component/list-widget/`
+- ❌ `src/form-component/print-widget/`
+- ❌ `src/form-component/search-widget/`
+- ❌ `src/form-component/search-ide-widget/`
+- ❌ `src/form-component/edit-widget/`
+
+注意：mixin 文件名（如 `list-widget.mixin.js`、`search-widget.mixin.js`）**只是文件名**，**不是目录名**。list/search/print/search-ide 的 vue 都在 `form-widget/{mode}/` 下。
+
 ## Mixin Per Mode (always use default import, never named import)
 - edit / ide / read → `import FormWidgetMixin from '@/mixin/form-widget.mixin'`
-- list            → `import ListWidgetMixin from '@/mixin/list-widget.mixin'`
+- list            → `import ListWidgetMixin from '@/mixin/list-widget.mixin'` （仅是 mixin 文件名，不要据此创建 list-widget/ 目录）
 - print           → `import PrintWidgetMixin from '@/mixin/print-widget.mixin'`
 - search          → `import SearchWidgetMixin from '@/mixin/search-widget.mixin'`
 - search-ide      → `import SearchIdeWidgetMixin from '@/mixin/search-ide-widget.mixin'`
@@ -805,14 +901,16 @@ class VibeCodingAgent:
 1. **FIRST** (1 call): Use glob_files to see the project structure
 2. **THEN** (1-3 calls max): If `.cursor/rules/*.mdc` exists, read those rule files first, then read ONLY the key implementation files you need. Do NOT read every file.
 3. **IMMEDIATELY write code**: Use write_file to create/update ALL component files (web/ and mobile/) in one batch. Call write_file multiple times in a SINGLE turn (parallel tool calls).
-4. **THEN** run `npm run build` to check compilation (builds both web/ and mobile/)
-5. If errors, fix and rebuild. If success, report completion.
+4. **Build 前一致性自检（必做）**: run build 前，用 glob 或 list_dir **逐个验证**两端 7 个 scene 目录（`web/src/form-component/form-widget/{edit,read,ide,list,print,search,search-ide}/` 和 `mobile/src/form-component/form-widget/{...}/`）下的 `index.js` 引用的每一个 `.vue` 文件是否都真实存在。只要有一个"index.js 引用了但 vue 不存在"，立即先补建/修正，不要先跑 build。
+5. **THEN** run `npm run build` to check compilation (builds both web/ and mobile/)
+6. If errors, fix and rebuild. If success, report completion.
 
 ## CRITICAL Rules
 - **Progress notes are visible to the user**: keep them brief, concrete, and friendly. Do NOT dump hidden reasoning or long analysis.
 - **DO NOT loop**: Never read the same file twice. Never read more than 3 files before writing code.
 - **Write ALL files at once**: In a single turn, call write_file for ALL web/ and mobile/ vue files. Do NOT write one file per turn.
 - **When generating designer config**: update `web/src/form-component/form-editor/index.js` and `web/src/form-component-config/form-editor/index.js` in the same batch as `setting.vue` / `{name}.editor.config.json`.
+- **index.js 与 vue 必须一致**: 修改任何 `index.js` 的 import 路径时，**必须**同步确保对应 vue 文件存在（新建或重命名）。不允许出现 "index.js 指向的文件不存在" 的 half-rename 状态。如不需要某个 scene，保持 scaffold 默认的 `form-component-demo-{scene}.vue` / `mobile-form-component-demo-{scene}.vue` 原样，index.js 也别改。
 - **Be decisive**: You are an expert. After reading the scaffold structure and 1-2 example files, you have enough context to write the component.
 - **Maximum 8 turns total**: If you haven't written code by turn 4, something is wrong. Write the code NOW.
 - **NEVER use `<el-dialog>` inside form widgets** — it breaks FormEngine component resolution and crashes the platform with `Cannot read properties of undefined (reading 'edit')`. Use `<el-popover :append-to-body="true">` instead for any preview/popup interaction.
@@ -827,9 +925,39 @@ class VibeCodingAgent:
 - **console.log is stripped in production — use `console.info` for ALL debug output in every mode.**
 - **formEngine is NOT available in `beforeCreate()` — only access `this.formEngine` from `created()` or later.**
 
+## 🛑 目录结构铁则（双端项目，绝对不要违反）
+
+web/ 和 mobile/ **两端**的 7 个 scene vue 都**只能放在各自的 form-widget/ 下**：
+
+```
+web/src/form-component/form-widget/
+├── edit/       ← form-component-{name}-edit.vue
+├── read/       ← form-component-{name}-read.vue
+├── ide/        ← form-component-{name}-ide.vue
+├── list/       ← form-component-{name}-list.vue
+├── print/      ← form-component-{name}-print.vue
+├── search/     ← form-component-{name}-search.vue
+└── search-ide/ ← form-component-{name}-search-ide.vue
+
+mobile/src/form-component/form-widget/
+├── edit/       ← mobile-form-component-{name}-edit.vue
+├── read/       ← mobile-form-component-{name}-read.vue
+├── ide/        ← mobile-form-component-{name}-ide.vue
+├── list/       ← mobile-form-component-{name}-list.vue
+├── print/      ← mobile-form-component-{name}-print.vue
+├── search/     ← mobile-form-component-{name}-search.vue
+└── search-ide/ ← mobile-form-component-{name}-search-ide.vue
+```
+
+**禁止**创建以下目录（常见幻觉，scaffold **不存在**）：
+- ❌ `web/src/form-component/list-widget/` / `print-widget/` / `search-widget/` / `search-ide-widget/`
+- ❌ `mobile/src/form-component/list-widget/` / `print-widget/` / `search-widget/` / `search-ide-widget/`
+
+注意：mixin 文件名（`list-widget.mixin.js` / `search-widget.mixin.js` / `print-widget.mixin.js`）**只是文件名**，**不是目录名**。list/search/print/search-ide 的 vue 全部在各端的 `form-widget/{mode}/` 下，没有例外。
+
 ## Mixin Per Mode — IMPORTANT: use @shared/ alias (NOT @/)
 - edit / ide / read → `import FormWidgetMixin from '@shared/mixin/form-widget.mixin'`
-- list            → `import ListWidgetMixin from '@shared/mixin/list-widget.mixin'`
+- list            → `import ListWidgetMixin from '@shared/mixin/list-widget.mixin'` （仅是 mixin 文件名，不要据此创建 list-widget/ 目录）
 - print           → `import PrintWidgetMixin from '@shared/mixin/print-widget.mixin'`
 - search          → `import SearchWidgetMixin from '@shared/mixin/search-widget.mixin'`
 - search-ide      → `import SearchIdeWidgetMixin from '@shared/mixin/search-ide-widget.mixin'`
@@ -880,7 +1008,7 @@ class VibeCodingAgent:
 ## ⚠️ "一个组件 = 一套文件"
 - 每个自开发组件对应 7 个 scene 各一个 vue 文件（共 14 个：PC 7 + 移动 7），构成"一套"
 - 多组件工程（`customWidgetList` 多项）每个组件一套，互不覆盖，`index.js` 按 code 聚合
-- 单组件工程里每个 scene 目录**只保留这一个组件的 vue 文件**，其他一律清理（脚手架占位 `form-component-custom-*.vue` / 旧文件 / 语义不一致的副本必须显式 delete）
+- 单组件工程里每个 scene 目录**只保留这一个组件的 vue 文件**，其他一律清理（脚手架占位 `form-component-demo-*.vue` / `mobile-form-component-demo-*.vue` / 旧文件 / 语义不一致的副本必须显式 delete）
 
 ## FORM_COMPONENT_DUAL 路径规范（与 FORM_COMPONENT 单端的差异）
 - 所有 widget.config.json / editor.config.json / setting.vue / index.js 都在 `web/` 子目录下，路径前缀为 `web/src/`

@@ -7,6 +7,25 @@ alwaysApply: true
 
 # setting.vue（设置面板）生成规则
 
+> **⚠️ 本文件是 setting.vue 生成的权威文档，优先级高于 apaas-form-component-dev.mdc 里任何涉及 setting.vue 的老示例。**
+
+## 🛑 硬性 DON'T（严禁违反，违反必 build 失败或数据丢失）
+
+**严禁**在 setting.vue 中直接使用以下 Element UI 原生组件（必须用对应的 `form-custom-*-editor` 原子替换）：
+
+| 严禁 | 正确替代 |
+|---|---|
+| `<el-form-item>` | 用任一 `form-custom-*-editor` 原子（内部已包含 el-form-item） |
+| `<el-input>` | `<form-custom-input-editor>` |
+| `<el-input type="textarea">` | `<form-custom-textarea-editor>` |
+| `<el-select>` + `<el-option>` | `<form-custom-select-editor :options="[]">` |
+| `<el-switch>` | `<form-custom-switch-editor>` |
+| `<el-radio-group>` + `<el-radio>` | `<form-custom-select-editor>`（单选即下拉） |
+| `<el-checkbox-group>` + `<el-checkbox>` | `<form-custom-select-editor :multiple="true">` |
+| `<el-form>`（最外层不要包） | 平台外层已提供表单容器，直接用 `<div class="form-custom-{name}-setting">` 包裹 |
+
+**严禁**调用不存在的 API：`formEngine.updateWidgetConfig()`、`formEngine.updateCustomComponentConfig()`、`formEngine.setWidgetInfo()` 等。
+
 ## 何时需要生成
 
 当组件有"设计器中可配置的属性"时，在 `src/form-component/form-editor/` 下生成 `{name}-setting.vue`，并同步写 `{name}.editor.config.json`（详见 editor-config.mdc）。

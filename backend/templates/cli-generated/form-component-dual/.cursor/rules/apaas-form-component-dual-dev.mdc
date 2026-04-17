@@ -283,13 +283,18 @@ export default {
 
 ## ⚠️ setting.vue 配置保存规范（严禁违反）
 
-**唯一正确方式：v-model 直接双向绑定**：
-```html
-<el-select v-model="componentConfig.customComponentConfig.chartType" size="mini" />
-<el-input v-model="componentConfig.customComponentConfig.dataSource" size="mini" />
+**唯一正确方式：使用 scaffold 预置的 `form-custom-*-editor` 原子组件**（详见 `setting-vue.mdc`）。原子组件内部已封装双向绑定到 `componentConfig.customComponentConfig[property]`：
+```vue
+<form-custom-select-editor
+  label="图表类型" property="chartType" v-bind="$props"
+  :options="chartTypeOptions"
+></form-custom-select-editor>
+<form-custom-input-editor
+  label="数据源" property="dataSource" v-bind="$props"
+></form-custom-input-editor>
 ```
 
-**严禁使用**：`saveConfig()`、`formEngine.updateWidgetConfig()`、`formEngine.setWidgetInfo()` 等任何写入方法均不存在。
+**严禁**在 setting.vue 里使用 `<el-form-item>` / `<el-input>` / `<el-select>` / `<el-option>` / `<el-switch>` / `<el-radio>` / `<el-checkbox>` 等 Element UI 原生组件；也严禁调用 `saveConfig()`、`formEngine.updateWidgetConfig()`、`formEngine.setWidgetInfo()` 等不存在的写入方法。
 
 ---
 

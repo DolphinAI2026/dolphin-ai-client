@@ -630,133 +630,83 @@ export default editorConfigList
 
 #### 配置项vue组件代码示例
 
-- `setting.vue` 内部不要再包一层 `<el-form>`，平台外层已经提供了表单容器；内部直接写 `el-form-item` 即可。
 - `setting.vue` 最外层容器和 `.setting-panel` 不要设置 `padding`，平台容器已经处理好了布局。
+- **必须使用 scaffold 预置的 `form-custom-*-editor` 原子组件**（详见 `setting-vue.mdc`）。**严禁**在 setting.vue 里直接使用 `<el-form-item>` / `<el-input>` / `<el-select>` / `<el-option>` / `<el-switch>` / `<el-radio>` / `<el-checkbox>` 等 Element UI 原生组件。
 
 src/form-component/form-editor/form-component-rate-setting.vue
 ```vue
 <template>
-    <div class="form-config-item">
-        <div class="label-wrapper">
-            <el-form-item label="允许半选">
-                <el-select
-                    v-model="componentConfig.customComponentConfig.allowHalf"
-                    size="mini"
-                >
-                    <el-option
-                        v-for="item in options"
-                        :key="item.value"
-                        :label="item.label"
-                        :value="item.value"
-                    />
-                </el-select>
-            </el-form-item>
-            <el-form-item label="自定义数量">
-                <el-select
-                    v-model="componentConfig.customComponentConfig.selfNum"
-                    size="mini"
-                    @change="update($event, 'selfNum')"
-                >
-                    <el-option
-                        v-for="item in starOptions"
-                        :key="item.value"
-                        :label="item.label"
-                        :value="item.value"
-                    />
-                </el-select>
-            </el-form-item>
-            <el-form-item label="显示辅助文字">
-                <el-select
-                    v-model="componentConfig.customComponentConfig.showText"
-                    size="mini"
-                >
-                    <el-option
-                        v-for="item in options"
-                        :key="item.value"
-                        :label="item.label"
-                        :value="item.value"
-                    />
-                </el-select>
-            </el-form-item>
-            <el-form-item
-                v-if="componentConfig.customComponentConfig.showText"
-                label="设置辅助文字"
-            >
-                <texts-item
-                    v-for="i in componentConfig.customComponentConfig.selfNum"
-                    :key="i"
-                    :starNum="i"
-                    :customComponentConfig="componentConfig.customComponentConfig"
-                ></texts-item>
-            </el-form-item>
-        </div>
+    <div class="form-custom-rate-setting">
+        <form-custom-switch-editor
+            label="允许半选"
+            property="allowHalf"
+            v-bind="$props"
+        ></form-custom-switch-editor>
+
+        <form-custom-select-editor
+            label="自定义数量"
+            property="selfNum"
+            v-bind="$props"
+            :options="starOptions"
+            @change="onSelfNumChange"
+        ></form-custom-select-editor>
+
+        <form-custom-switch-editor
+            label="显示辅助文字"
+            property="showText"
+            v-bind="$props"
+        ></form-custom-switch-editor>
+
+        <form-custom-sechma-item
+            v-if="componentConfig.customComponentConfig.showText"
+            label="设置辅助文字"
+            property="texts"
+            v-bind="$props"
+        >
+            <texts-item
+                v-for="i in componentConfig.customComponentConfig.selfNum"
+                :key="i"
+                :starNum="i"
+                :customComponentConfig="componentConfig.customComponentConfig"
+            ></texts-item>
+        </form-custom-sechma-item>
     </div>
 </template>
 <script>
 import EditorFormConfigMixin from '@/mixin/form-config.mixin'
+import FormCustomSwitchEditor from './components/form-custom-switch-editor.vue'
+import FormCustomSelectEditor from './components/form-custom-select-editor.vue'
+import FormCustomSechmaItem from './components/form-custom-sechma-item.vue'
 import TextsItem from './texts-item.vue'
 
 export default {
     name: 'FormComponentRateSetting',
     mixins: [EditorFormConfigMixin],
-    components: { TextsItem },
+    components: {
+        FormCustomSwitchEditor,
+        FormCustomSelectEditor,
+        FormCustomSechmaItem,
+        TextsItem,
+    },
     data() {
         return {
-            options: [
-                {
-                    label: '启用',
-                    value: true
-                },
-                {
-                    label: '禁用',
-                    value: false
-                }
-            ],
             starOptions: [
-                {
-                    label: '三星',
-                    value: 3
-                },
-                {
-                    label: '四星',
-                    value: 4
-                },
-                {
-                    label: '五星',
-                    value: 5
-                },
-                {
-                    label: '六星',
-                    value: 6
-                },
-                {
-                    label: '七星',
-                    value: 7
-                },
-                {
-                    label: '八星',
-                    value: 8
-                },
-                {
-                    label: '九星',
-                    value: 9
-                },
-                {
-                    label: '十星',
-                    value: 10
-                }
+                { label: '三星', value: 3 },
+                { label: '四星', value: 4 },
+                { label: '五星', value: 5 },
+                { label: '六星', value: 6 },
+                { label: '七星', value: 7 },
+                { label: '八星', value: 8 },
+                { label: '九星', value: 9 },
+                { label: '十星', value: 10 },
             ],
-            rateColor: '#ffd21e'
         }
     },
-    created() { },
     methods: {
-        update(value, type) {
-            if (type == 'selfNum') {
-                this.componentConfig.customComponentConfig.texts = [...new Array(value)]
-            }
-        }
-    }
+        onSelfNumChange(value) {
+            this.componentConfig.customComponentConfig.texts = [...new Array(value)]
+        },
+    },
 }
 </script>
 ```
