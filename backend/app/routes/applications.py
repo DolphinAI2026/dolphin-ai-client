@@ -1840,6 +1840,32 @@ async def upload_design_doc(
     }
 
 
+async def _find_v1_doc_version(
+    db: AsyncSession,
+    conversation_id: Optional[int],
+) -> Optional[dict]:
+    """若 conversation_id 存在，查该对话下最新的 DocumentVersion 作为 V1 基线。
+
+    返回精简 dict（raw_content / parsed_config / version），或 None。
+    """
+    if not conversation_id:
+        return None
+    result = await db.execute(
+        select(DocumentVersion)
+        .where(DocumentVersion.conversation_id == conversation_id)
+        .order_by(desc(DocumentVersion.version))
+        .limit(1)
+    )
+    doc_obj = result.scalar_one_or_none()
+    if not doc_obj:
+        return None
+    return {
+        "raw_content": doc_obj.raw_content,
+        "parsed_config": doc_obj.parsed_config,
+        "version": doc_obj.version,
+    }
+
+
 @router.post("/upload-doc-with-conversation")
 async def upload_doc_with_conversation(
     file: UploadFile = File(...),
@@ -1878,22 +1904,8 @@ async def upload_doc_with_conversation(
         conversation_id=existing_conversation_id,
     )
 
-    # 如果传了 conversation_id，预先查找 V1 文档版本
-    v1_doc_info: Optional[dict] = None
-    if existing_conversation_id:
-        v1_result = await db.execute(
-            select(DocumentVersion)
-            .where(DocumentVersion.conversation_id == existing_conversation_id)
-            .order_by(desc(DocumentVersion.version))
-            .limit(1)
-        )
-        v1_doc_obj = v1_result.scalar_one_or_none()
-        if v1_doc_obj:
-            v1_doc_info = {
-                "raw_content": v1_doc_obj.raw_content,
-                "parsed_config": v1_doc_obj.parsed_config,
-                "version": v1_doc_obj.version,
-            }
+    # 如果传了 conversation_id，预先查找 V1 文档版本作为增量对比基线
+    v1_doc_info: Optional[dict] = await _find_v1_doc_version(db, existing_conversation_id)
 
     async def event_generator():
         import asyncio
