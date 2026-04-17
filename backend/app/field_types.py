@@ -167,6 +167,39 @@ _COMPAT_TYPES: Dict[str, FieldTypeInfo] = {
 }
 
 
+# ── 数据库字段类型 → aPaaS 字段类型（兜底映射）────────────────
+# 当文档/LLM 输出了数据库类型（varchar / int / date 等）而非 aPaaS
+# 类型时，用这张表做兜底翻译。
+_DB_TYPE_MAP: Dict[str, str] = {
+    "varchar": "单行输入",
+    "char": "单行输入",
+    "text": "多行输入",
+    "longtext": "多行输入",
+    "clob": "多行输入",
+    "int": "数字",
+    "integer": "数字",
+    "bigint": "数字",
+    "smallint": "数字",
+    "float": "数字",
+    "double": "数字",
+    "decimal": "数字",
+    "numeric": "数字",
+    "date": "日期时间",
+    "datetime": "日期时间",
+    "timestamp": "日期时间",
+    "boolean": "开关",
+    "bool": "开关",
+    "tinyint": "开关",
+    "blob": "附件上传",
+}
+
+# "字典绑定"类字段类型（字段上需要/可选 dict code）
+_DICT_FIELD_TYPES: Set[str] = {"下拉单选", "下拉多选", "单选框", "复选框"}
+
+# "关联模型"类字段类型（字段上需要/可选 ref code）
+_REF_FIELD_TYPES: Set[str] = {"数据单选", "数据选择", "关联表单"}
+
+
 # ── 容错别名表（非标准名 → 标准名）────────────────────────────
 # 这些是 LLM / 文档可能误写的类型名，只用于规范化修正，
 # 不会被 get_valid_type_names / get_comp_type_map 等"正向查询" API 列入。
@@ -226,11 +259,26 @@ def get_valid_type_names() -> Set[str]:
 def get_type_aliases() -> Dict[str, str]:
     """非标准类型名 → 标准类型名（容错别名表）。
 
-    注意：这里的别名**不在** get_valid_type_names() / get_comp_type_map() 里，
+    注意：这里的别名**不在** get_valid_type_names() / get_comp_type_map() 里,
     仅用于校验/规范化场景做模糊匹配兜底。调用方通常先判断 ftype in
     get_valid_type_names()，落空再查这里。
     """
     return dict(_TYPE_ALIASES)
+
+
+def get_db_type_map() -> Dict[str, str]:
+    """数据库字段类型名 → aPaaS 字段类型。"""
+    return dict(_DB_TYPE_MAP)
+
+
+def get_dict_field_types() -> Set[str]:
+    """"字典绑定"类字段类型集合。"""
+    return set(_DICT_FIELD_TYPES)
+
+
+def get_ref_field_types() -> Set[str]:
+    """"关联模型"类字段类型集合。"""
+    return set(_REF_FIELD_TYPES)
 
 
 def build_prompt_field_types_table() -> str:

@@ -7,34 +7,14 @@ from typing import List, Optional, Tuple
 from app.doc_section_splitter import split_subsections
 from app.doc_table_parser import parse_table, parse_all_tables
 from app.config_validator import _normalize_field_type, RESERVED_FIELD_CODES
+from app.field_types import get_db_type_map, get_dict_field_types, get_ref_field_types
 
 
-# 数据库字段类型 → aPaaS 字段类型（兜底映射）
-_DB_TYPE_MAP = {
-    "varchar": "单行输入",
-    "char": "单行输入",
-    "text": "多行输入",
-    "longtext": "多行输入",
-    "clob": "多行输入",
-    "int": "数字",
-    "integer": "数字",
-    "bigint": "数字",
-    "smallint": "数字",
-    "float": "数字",
-    "double": "数字",
-    "decimal": "数字",
-    "numeric": "数字",
-    "date": "日期时间",
-    "datetime": "日期时间",
-    "timestamp": "日期时间",
-    "boolean": "开关",
-    "bool": "开关",
-    "tinyint": "开关",
-    "blob": "附件上传",
-}
-
-_DICT_TYPES = {"下拉单选", "下拉多选", "单选框", "复选框"}
-_REF_TYPES = {"数据单选", "数据选择", "关联表单"}
+# 单一真相源都在 app.field_types；下面只是模块级缓存，保持名字不变、下游 0 改动。
+# 新增/修改数据库映射、字典类、关联类都去 field_types.py 改。
+_DB_TYPE_MAP = get_db_type_map()
+_DICT_TYPES = get_dict_field_types()
+_REF_TYPES = get_ref_field_types()
 _SUB_TABLE_TYPE = "子表"
 
 
