@@ -2222,7 +2222,12 @@ async def upload_workspace_to_platform(
             try:
                 response = await _do_upload_file(env.token, file_path, ft, existing_kit)
             except httpx.RequestError as e:
-                raise HTTPException(status_code=502, detail=f"上传 {file_path.name} 请求失败: {e}")
+                logger.exception(f"[upload-to-platform] 上传 {file_path.name} 失败: {target_url}")
+                err_detail = str(e) or repr(e)
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"上传 {file_path.name} 请求失败: {type(e).__name__}: {err_detail}（目标 URL: {target_url}）",
+                )
             try:
                 resp_data = response.json()
             except Exception:
@@ -2324,7 +2329,12 @@ async def upload_workspace_to_platform(
     try:
         response = await _do_upload(env.token, existing_kit)
     except httpx.RequestError as e:
-        raise HTTPException(status_code=502, detail=f"上传请求失败: {e}")
+        logger.exception(f"[upload-to-platform] 单端上传失败 base_url={env.base_url}")
+        err_detail = str(e) or repr(e)
+        raise HTTPException(
+            status_code=502,
+            detail=f"上传请求失败: {type(e).__name__}: {err_detail}（目标平台 base_url: {env.base_url}）",
+        )
 
     # 5. 解析响应；若 token 过期则刷新后重试一次
     try:
@@ -2348,7 +2358,12 @@ async def upload_workspace_to_platform(
             response = await _do_upload(new_token, existing_kit)
             resp_data = response.json()
         except httpx.RequestError as e:
-            raise HTTPException(status_code=502, detail=f"上传请求失败: {e}")
+            logger.exception(f"[upload-to-platform] 单端 token 刷新后重试上传失败 base_url={env.base_url}")
+            err_detail = str(e) or repr(e)
+            raise HTTPException(
+                status_code=502,
+                detail=f"上传请求失败: {type(e).__name__}: {err_detail}（目标平台 base_url: {env.base_url}）",
+            )
         except Exception:
             raise HTTPException(status_code=502, detail=f"平台响应非JSON，状态码: {response.status_code}")
 
