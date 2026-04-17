@@ -168,6 +168,10 @@ class VibeCodingAgent:
 
         turn = 0
         final_result = "completed"
+        # 记录上一轮 emit 的 progress_note，避免 LLM 连续多轮只 tool_calls 时
+        # 重复发送同样的固定文本（如"上下文已经够了，下一步开始批量写入组件文件。"
+        # 在 10+ 轮 write_file 中就会产生 10+ 张相同内容的 thinking 卡片）
+        last_progress_note = ""
         try:
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(connect=10, read=300, write=10, pool=10)
@@ -318,8 +322,11 @@ class VibeCodingAgent:
                         info = self.ws_mgr.get_workspace_info(self.ws_id)
                         _pt = (info.get("project_type", "") or "").lower()
                         progress_note = self._describe_tool_plan(tool_names, _pt)
-                        if progress_note:
+                        # 仅当和上一轮 emit 的 progress_note 不同才推送，避免多轮同
+                        # tool_names 生成同样的固定文本重复刷屏（type B 重复）
+                        if progress_note and progress_note != last_progress_note:
                             _emit({"type": "agent_thinking_delta", "content": progress_note})
+                            last_progress_note = progress_note
 
                     # ── Phase 4: Execute tools (parallel when possible) ──
                     has_write = any(t in ("write_file", "edit_file", "run_command") for t in tool_names)
