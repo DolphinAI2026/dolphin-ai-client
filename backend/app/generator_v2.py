@@ -515,6 +515,39 @@ def _build_form_components_from_definition(
 
 
 # ---------------------------------------------------------------------------
+# Phase 0 预处理
+# ---------------------------------------------------------------------------
+
+def _select_models_and_dicts(
+    all_models: List[dict],
+    dicts: List[dict],
+    selected_indices: Optional[List[int]],
+) -> tuple[List[dict], List[dict]]:
+    """根据 selected_model_indices 过滤模型与字典。
+
+    字典只保留被选中模型（含子字段）引用的。
+    """
+    if selected_indices is not None and len(selected_indices) < len(all_models):
+        models = [all_models[i] for i in selected_indices if i < len(all_models)]
+    else:
+        models = all_models
+
+    if selected_indices is not None:
+        used = set()
+        for m in models:
+            for f in m.get("fields", []):
+                if f.get("dict"):
+                    used.add(f["dict"])
+                for sf in f.get("sub_fields", []):
+                    if sf.get("dict"):
+                        used.add(sf["dict"])
+        if used:
+            dicts = [d for d in dicts if d.get("code") in used]
+
+    return models, dicts
+
+
+# ---------------------------------------------------------------------------
 # 主生成流程
 # ---------------------------------------------------------------------------
 
@@ -532,25 +565,9 @@ async def run_complete_generation(
     all_models = data.get("models", [])
     all_forms = data.get("forms", [])
 
-    # 支持选择性生成
-    selected_indices = config.get("selected_model_indices")
-    if selected_indices is not None and len(selected_indices) < len(all_models):
-        models = [all_models[i] for i in selected_indices if i < len(all_models)]
-    else:
-        models = all_models
-
-    # 过滤字典：只保留被选中模型引用的
-    if selected_indices is not None:
-        used = set()
-        for m in models:
-            for f in m.get("fields", []):
-                if f.get("dict"):
-                    used.add(f["dict"])
-                for sf in f.get("sub_fields", []):
-                    if sf.get("dict"):
-                        used.add(sf["dict"])
-        if used:
-            dicts = [d for d in dicts if d.get("code") in used]
+    models, dicts = _select_models_and_dicts(
+        all_models, dicts, config.get("selected_model_indices")
+    )
 
     suffix = _rand()
 
