@@ -33,6 +33,7 @@ from app.step_executor import (
 from app.app_locks import acquire_app_lock
 from app.json_utils import loads_if_str
 from app.error_messages import APAAS_TOKEN_EXPIRED_STEP, is_apaas_token_error
+from app.field_types import get_comp_type_map
 
 logger = logging.getLogger(__name__)
 
@@ -41,48 +42,46 @@ router = APIRouter(tags=["生成步骤"])
 # 临时关闭审批流程创建步骤，避免部署链路被当前流程配置问题阻塞。
 WORKFLOW_STEPS_ENABLED = False
 
-_COMPONENT_TYPE_LABELS = {
-    "FORM_DOCUMENT_NUMBER": "单据号",
-    "FORM_TEXT_INPUT": "单行输入",
-    "FORM_TEXTAREA_INPUT": "多行输入",
+# 平台 / 历史数据偶尔会返回非规范组件码（缺 _INPUT / _SELECT 之类后缀），
+# 这里列出这些别名到中文显示名的固定映射。
+# 规范码的映射则从 field_types.FIELD_TYPES 自动反转——FIELD_TYPES 增改时此处无需手动同步。
+_PLATFORM_LEGACY_COMPONENT_ALIASES = {
     "FORM_TEXTAREA": "多行输入",
-    "FORM_PHONE_INPUT": "手机号码",
-    "FORM_EMAIL_INPUT": "电子邮箱",
-    "FORM_SELECT_INPUT_SINGLE": "下拉单选",
-    "FORM_SELECT_INPUT": "下拉多选",
     "FORM_SELECT": "下拉单选",
     "FORM_SELECT_MULTI": "下拉多选",
-    "FORM_DATA_SELECTOR_SINGLE": "数据单选",
-    "FORM_DATA_SELECTOR": "数据选择",
-    "FORM_DATEPICK_INPUT": "日期时间",
     "FORM_DATE_PICKER": "日期时间",
-    "FORM_MONEY_INPUT": "金额",
-    "FORM_NUMBER_INPUT": "数字",
-    "FORM_FILE_UPLOAD": "附件上传",
     "FORM_UPLOAD": "附件上传",
-    "FORM_SWITCH_SELECT": "开关",
     "FORM_SWITCH": "开关",
-    "FORM_PEOPLE_SELECT": "人员选择",
     "FORM_USER_SELECT": "人员选择",
-    "FORM_DEPARTMENT_SELECT": "部门选择",
     "FORM_DEPT_SELECT": "部门选择",
-    "FORM_WIDGET_LOCATION": "地理位置",
-    "FORM_WIDGET_SON_TABLE": "子表",
-    "FORM_RADIO_INPUT": "单选框",
     "FORM_RADIO": "单选框",
-    "FORM_CHECKBOX_INPUT": "复选框",
     "FORM_CHECKBOX": "复选框",
-    "FORM_RICH_TEXT": "富文本",
-    "FORM_HYPERLINK_INPUT": "超链接",
     "FORM_LINK": "超链接",
-    "FORM_IDCARD_INPUT": "身份证号",
     "FORM_ID_CARD": "身份证号",
-    "FORM_WIDGET_AREA": "地区地址",
     "FORM_LOCATION": "地理位置",
     "FORM_ADDRESS": "地区地址",
-    "FORM_ASSOCIATION": "关联表单",
     "FORM_SERIAL": "单据号",
 }
+
+
+def _build_component_type_labels() -> dict:
+    """组件类型码 → 中文显示名。
+
+    规范码：反转 field_types.get_comp_type_map()。多个中文名指向同一组件码时，
+    用 setdefault 保证 FIELD_TYPES 里先注册的主要名字胜出（别名/兼容名来自
+    _COMPAT_TYPES，按顺序在后，自动被忽略）。
+    非规范码：由 _PLATFORM_LEGACY_COMPONENT_ALIASES 静态补齐。
+    """
+    labels: dict = {}
+    for display_name, component_code in get_comp_type_map().items():
+        labels.setdefault(component_code, display_name)
+    # 规范码（来自 field_types）优先于 legacy 别名，合并时 legacy 放后备位
+    merged: dict = dict(_PLATFORM_LEGACY_COMPONENT_ALIASES)
+    merged.update(labels)
+    return merged
+
+
+_COMPONENT_TYPE_LABELS = _build_component_type_labels()
 
 
 # ------------------------------------------------------------------

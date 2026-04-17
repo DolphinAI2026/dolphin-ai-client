@@ -8,39 +8,12 @@ import re
 import string
 from typing import Callable, Dict, List, Optional
 
-# 组件类型映射：预览类型 → 表单组件类型
-COMPONENT_TYPE_MAP = {
-    '单据号': 'FORM_DOCUMENT_NUMBER',
-    '单行输入': 'FORM_TEXT_INPUT',
-    '多行输入': 'FORM_TEXTAREA_INPUT',
-    '手机号码': 'FORM_PHONE_INPUT',
-    '电子邮箱': 'FORM_EMAIL_INPUT',
-    '下拉单选': 'FORM_SELECT_INPUT_SINGLE',
-    '下拉多选': 'FORM_SELECT_INPUT',
-    '数据单选': 'FORM_DATA_SELECTOR_SINGLE',
-    '日期时间': 'FORM_DATEPICK_INPUT',
-    '金额': 'FORM_MONEY_INPUT',
-    '数字': 'FORM_NUMBER_INPUT',
-    '附件上传': 'FORM_FILE_UPLOAD',
-    '开关': 'FORM_SWITCH_SELECT',
-    '布尔': 'FORM_SWITCH_SELECT',
-    '人员选择': 'FORM_PEOPLE_SELECT',
-    '部门选择': 'FORM_DEPARTMENT_SELECT',
-    '地理位置': 'FORM_WIDGET_LOCATION',
-    '子表': 'FORM_WIDGET_SON_TABLE',
-    # 新增组件类型（正确的平台组件编码）
-    '单选框': 'FORM_RADIO_INPUT',
-    '复选框': 'FORM_CHECKBOX_INPUT',
-    '多选框': 'FORM_CHECKBOX_INPUT',
-    '富文本': 'FORM_RICH_TEXT',
-    '超链接': 'FORM_HYPERLINK_INPUT',
-    '身份证号': 'FORM_IDCARD_INPUT',
-    '证件号': 'FORM_IDCARD_INPUT',
-    '地区地址': 'FORM_WIDGET_AREA',
-    '数据选择': 'FORM_DATA_SELECTOR',
-    '数据多选': 'FORM_DATA_SELECTOR',
-    '关联表单': 'FORM_ASSOCIATION',
-}
+from app.field_types import get_comp_type_map
+
+# 组件类型映射：预览类型 → 表单组件类型。
+# 单一真相源在 app.field_types.FIELD_TYPES；这里用模块级缓存保持调用点不变。
+# 新增组件类型请在 field_types.py 注册，无需改这里。
+COMPONENT_TYPE_MAP: Dict[str, str] = get_comp_type_map()
 
 # 组件注册表：componentType → builder function
 COMPONENT_REGISTRY: Dict[str, Callable] = {}
