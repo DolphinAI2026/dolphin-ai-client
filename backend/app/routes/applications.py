@@ -1840,6 +1840,65 @@ async def upload_design_doc(
     }
 
 
+def _iter_parse_progress_events(data: dict, parse_meta: dict):
+    """为一份已解析的 preview data 生成所有 SSE progress 事件。
+
+    严格保持与原直线代码一模一样的事件顺序、字段名、message 文本：
+      1. [skeleton] 骨架完成：N 个模型、N 个字典、N 个角色 + data=skeleton_data
+      2. [roles] / [dicts] / [models] / [forms] / [permissions] batch 事件
+         （各自模块非空时才发；batch 内容是 data[模块] 本身）
+      3. [complete] 配置组装完成 + data=data + parse_meta=parse_meta
+
+    这是 SSE 契约的核心，前端 ChatPage.vue 依赖 message 前缀里的
+    phase 名来分派状态。调用方 `yield from` 本生成器以保持顺序。
+    """
+    roles_count = len(data.get("roles", []))
+    dicts_count = len(data.get("dicts", []))
+    models_count = len(data.get("models", []))
+
+    skeleton_data = {
+        "appName": data.get("appName", ""),
+        "appCode": data.get("appCode", ""),
+        "roles": data.get("roles", []),
+    }
+    yield {"event": "progress", "data": json.dumps({
+        "message": f"[skeleton] 骨架完成：{models_count} 个模型、{dicts_count} 个字典、{roles_count} 个角色",
+        "data": skeleton_data,
+    }, ensure_ascii=False)}
+
+    if data.get("roles"):
+        yield {"event": "progress", "data": json.dumps({
+            "message": f"[roles] 角色生成完成：{roles_count} 个",
+            "batch": data["roles"],
+        }, ensure_ascii=False)}
+    if data.get("dicts"):
+        yield {"event": "progress", "data": json.dumps({
+            "message": f"[dicts] 字典生成完成：{dicts_count} 个",
+            "batch": data["dicts"],
+        }, ensure_ascii=False)}
+    if data.get("models"):
+        yield {"event": "progress", "data": json.dumps({
+            "message": f"[models] 模型生成完成：{models_count} 个",
+            "batch": data["models"],
+        }, ensure_ascii=False)}
+    if data.get("forms"):
+        forms_count = len(data.get("forms", []))
+        yield {"event": "progress", "data": json.dumps({
+            "message": f"[forms] 表单生成完成：{forms_count} 个",
+            "batch": data["forms"],
+        }, ensure_ascii=False)}
+    if data.get("permissions"):
+        yield {"event": "progress", "data": json.dumps({
+            "message": "[permissions] 权限生成完成",
+            "batch": data["permissions"],
+        }, ensure_ascii=False)}
+    yield {"event": "progress", "data": json.dumps({
+        "message": "[complete] 配置组装完成",
+        "data": data,
+        "parse_meta": parse_meta,
+    }, ensure_ascii=False)}
+
+
 async def _find_v1_doc_version(
     db: AsyncSession,
     conversation_id: Optional[int],
@@ -1995,51 +2054,8 @@ async def upload_doc_with_conversation(
                     logger.warning(f"增量 diff 失败，使用全量解析结果: {e}")
 
             if data:
-                roles_count = len(data.get("roles", []))
-                dicts_count = len(data.get("dicts", []))
-                models_count = len(data.get("models", []))
-
-                skeleton_data = {
-                    "appName": data.get("appName", ""),
-                    "appCode": data.get("appCode", ""),
-                    "roles": data.get("roles", []),
-                }
-                yield {"event": "progress", "data": json.dumps({
-                    "message": f"[skeleton] 骨架完成：{models_count} 个模型、{dicts_count} 个字典、{roles_count} 个角色",
-                    "data": skeleton_data,
-                }, ensure_ascii=False)}
-
-                if data.get("roles"):
-                    yield {"event": "progress", "data": json.dumps({
-                        "message": f"[roles] 角色生成完成：{roles_count} 个",
-                        "batch": data["roles"],
-                    }, ensure_ascii=False)}
-                if data.get("dicts"):
-                    yield {"event": "progress", "data": json.dumps({
-                        "message": f"[dicts] 字典生成完成：{dicts_count} 个",
-                        "batch": data["dicts"],
-                    }, ensure_ascii=False)}
-                if data.get("models"):
-                    yield {"event": "progress", "data": json.dumps({
-                        "message": f"[models] 模型生成完成：{models_count} 个",
-                        "batch": data["models"],
-                    }, ensure_ascii=False)}
-                if data.get("forms"):
-                    forms_count = len(data.get("forms", []))
-                    yield {"event": "progress", "data": json.dumps({
-                        "message": f"[forms] 表单生成完成：{forms_count} 个",
-                        "batch": data["forms"],
-                    }, ensure_ascii=False)}
-                if data.get("permissions"):
-                    yield {"event": "progress", "data": json.dumps({
-                        "message": "[permissions] 权限生成完成",
-                        "batch": data["permissions"],
-                    }, ensure_ascii=False)}
-                yield {"event": "progress", "data": json.dumps({
-                    "message": "[complete] 配置组装完成",
-                    "data": data,
-                    "parse_meta": parse_meta,
-                }, ensure_ascii=False)}
+                for evt in _iter_parse_progress_events(data, parse_meta):
+                    yield evt
 
         except Exception as e:
             err_msg = str(e) or repr(e) or type(e).__name__
