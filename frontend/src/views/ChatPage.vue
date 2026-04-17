@@ -286,12 +286,30 @@
         </div>
         <div class="preview-body">
           <div v-if="showBuilderPreview" class="tab-content">
-            <!-- 正常模式：统一用标准文档结构渲染 -->
+            <!-- 正常模式：单文档视图 -->
             <template v-if="!isUpdateReviewMode">
               <div v-if="liveStructuredDocResult" class="doc-version-content expanded doc-preview-body structured-doc-host">
                 <StructuredDocRenderer :doc-result="liveStructuredDocResult" />
               </div>
               <pre v-else-if="selectedDocDisplayContent" class="doc-version-content expanded doc-preview-body plain-doc-fallback">{{ selectedDocDisplayContent }}</pre>
+              <div v-else class="preview-empty small">暂无可展示的文档内容</div>
+            </template>
+            <!-- 更新审查模式：顶部变更 banner + 带 diff 高亮的单栏文档视图 -->
+            <template v-else>
+              <div v-if="updateReviewChangeSummary.length > 0" class="update-review-banner">
+                <span class="update-review-banner-prefix">💡 本次更新变更</span>
+                <span
+                  v-for="item in updateReviewChangeSummary"
+                  :key="item.label"
+                  class="update-review-banner-chip"
+                >{{ item.icon }} {{ item.label }} {{ item.count }}</span>
+              </div>
+              <div v-if="updateReviewRightDocResult" class="doc-version-content expanded doc-preview-body structured-doc-host">
+                <StructuredDocDiffRenderer
+                  :doc-result="updateReviewRightDocResult"
+                  :diff-meta="updateReviewDiffMeta.right"
+                />
+              </div>
               <div v-else class="preview-empty small">暂无可展示的文档内容</div>
             </template>
 
@@ -2702,6 +2720,55 @@ const isUpdateReviewMode = computed(() =>
 const updateResourceDiff = computed<any | null>(() => {
   const diff = store.changePlan?.resourceDiff
   return diff && typeof diff === 'object' ? diff : null
+})
+
+// ── 更新审查：文档对比视图数据 ───────────────────────────────
+// isUpdateReviewMode 下右侧不再展示"资源差异 card"，而是复用文档渲染：
+// 顶部 banner + 单栏 StructuredDocDiffRenderer（基于 V1↔V2 文档对比
+// 计算出的 diff-meta 做字段级高亮）。
+const updateReviewV1DocItem = computed<DocVersionListItem | null>(() => {
+  if (!isUpdateReviewMode.value) return null
+  const fromVer = Number((store.changePlan as any)?.fromVersion ?? (store.changePlan as any)?.from_version ?? 0)
+  if (!fromVer) return null
+  return displayDocVersions.value.find(item => getDocDisplayVersion(item) === fromVer) || null
+})
+
+const updateReviewV2DocItem = computed<DocVersionListItem | null>(() => {
+  if (!isUpdateReviewMode.value) return null
+  const toVer = Number((store.changePlan as any)?.toVersion ?? (store.changePlan as any)?.to_version ?? 0)
+  if (toVer) {
+    const matched = displayDocVersions.value.find(item => getDocDisplayVersion(item) === toVer)
+    if (matched) return matched
+  }
+  return displayDocVersions.value[0] || null
+})
+
+const updateReviewLeftDocResult = computed(() =>
+  docVersionStructuredResult(updateReviewV1DocItem.value)
+)
+
+const updateReviewRightDocResult = computed(() =>
+  docVersionStructuredResult(updateReviewV2DocItem.value, hasStructuredPreviewData.value ? currentPreviewConfigPayload.value : null)
+)
+
+const updateReviewDiffMeta = computed(() =>
+  computeStructuredDocDiff(updateReviewLeftDocResult.value, updateReviewRightDocResult.value)
+)
+
+interface UpdateReviewBannerItem {
+  icon: string
+  label: string
+  count: number
+}
+
+const updateReviewChangeSummary = computed<UpdateReviewBannerItem[]>(() => {
+  if (!isUpdateReviewMode.value) return []
+  return [
+    { icon: '👥', label: '角色', count: updateRoleDiffItems.value.length },
+    { icon: '📖', label: '字典', count: updateDictDiffItems.value.length },
+    { icon: '🗃', label: '模型', count: updateModelDiffItems.value.length },
+    { icon: '📋', label: '表单', count: updateFormDiffItems.value.length },
+  ].filter(item => item.count > 0)
 })
 const docDiffStats = computed(() => ({
   added: docVersionDiffLeftStructuredResult.value || docVersionDiffRightStructuredResult.value
@@ -7593,6 +7660,32 @@ watch(conversationId, (id) => {
   color: var(--t-brand-light);
   border-image: var(--t-brand-gradient) 1;
   border-bottom-width: 2px; border-bottom-style: solid;
+}
+.update-review-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  margin: 0 0 12px 0;
+  border-radius: 8px;
+  background: var(--t-brand-soft, rgba(46, 132, 255, 0.08));
+  border: 1px solid var(--t-brand-border, rgba(46, 132, 255, 0.2));
+  font-size: 13px;
+  color: var(--t-text-primary);
+}
+.update-review-banner-prefix {
+  font-weight: 600;
+  margin-right: 4px;
+  color: var(--t-brand-light, #2e84ff);
+}
+.update-review-banner-chip {
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--t-surface, rgba(255, 255, 255, 0.6));
+  border: 1px solid var(--t-border-subtle, rgba(0, 0, 0, 0.08));
+  font-size: 12px;
+  white-space: nowrap;
 }
 .preview-empty { padding: 24px; text-align: center; color: var(--t-text-muted); font-size: 13px; margin-top: 80px; }
 .preview-empty .empty-icon { font-size: 40px; opacity: 0.3; margin-bottom: 12px; }
