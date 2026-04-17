@@ -760,7 +760,15 @@ _BRAINSTORM_PROMPT_FORM_COMPONENT = """\
 
 ### 配置项（setting.vue 面板，如无需配置则填"无"）
 
-> "数据类型"只填 JS 基础类型；"UI 渲染"填 setting.vue 里用于渲染该配置的组件名（`form-custom-input-editor` / `form-custom-select-editor` / `form-custom-textarea-editor` / `form-custom-switch-editor` / `form-custom-field-assign-editor` / `form-custom-table-field-assign-editor` 之一）。
+> - **数据类型**：只填 JS 基础类型（String / Number / Boolean / Array / Object）
+> - **UI 渲染**：填 setting.vue 里用于渲染该配置的组件名。选择优先级：
+>   1. **优先**从 scaffold 预置原子里选：`form-custom-input-editor`（单行文本）/ `form-custom-select-editor`（下拉）/ `form-custom-textarea-editor`（多行文本）/ `form-custom-switch-editor`（开关）
+>   2. 赋值场景用：`form-custom-field-assign-editor` / `form-custom-table-field-assign-editor`
+>   3. **只有预置原子语义不匹配时**（如日期/日期范围/颜色/JSON 等），才标注 `form-custom-{业务名}-editor`（codegen 阶段会按 setting-vue.mdc 的"自造业务 editor 铁则"新建）。**示例**：
+>     - 日期字段 → `form-custom-date-editor`
+>     - 日期时间字段 → `form-custom-date-time-editor`
+>     - 颜色字段 → `form-custom-color-editor`
+>   4. **禁止**：日期类字段用 `form-custom-input-editor`（用户只能手打字符串体验差）、单个布尔用 `form-custom-select-editor`（应该用 switch）等语义错配
 
 | 属性 | 数据类型 | UI 渲染 | 默认值 | 说明 |
 |------|---------|--------|--------|------|
@@ -937,6 +945,7 @@ _BRAINSTORM_REVISION_PROMPT = """\
 2. **歧义反问优先**：如用户反馈含 "没 X / 没有 X / 缺 X / 少 X / 漏 X / 还是没 X" 或 "X 不对 / X 不好" 等模糊表述，**不要猜**，只输出下面"澄清输出格式"段就停止，不要输出修改后方案。
 3. **单组件优先**：用户追加能力默认加到当前同一个组件上，仅在用户明确说"拆分/独立组件/新组件"时才新建；模糊时走规则 2。
 4. **字段赋值场景识别**：如果用户要求涉及"给其他字段赋值/输出到某字段/字段联动/计算结果写到某字段/回填到表单字段"等，对应配置项必须满足：**数据类型**是 `String`（单目标）或 `Array`（多目标），**UI 渲染**用 `form-custom-field-assign-editor`（让用户在设计器里选目标字段 uuid）。注意：`form-custom-field-assign-editor` 是 UI 组件名、不是数据类型名，**不要**把它填到"数据类型"列里。不要靠 aPaaS 字段联动规则等外部机制绕过。
+5. **UI 渲染选择优先级**：配置项的 UI 渲染优先从预置原子选（input/select/textarea/switch + 两个 assign editor）；预置原子语义不匹配时（如**日期/日期时间/颜色/范围**等），标注为 `form-custom-{业务名}-editor`（codegen 会按铁则新建业务 editor）。禁止语义错配（如日期字段用 input-editor 让用户手打字符串）。
 5. **需求覆盖校验表格必填**：修改后方案末尾的"需求覆盖校验"段需把原始需求逐条编号，每条在表格里标注落地位置；未落地的条款在表格同一行直接写"未实现，原因：..."，不要静默省略。
 6. **本次变更 diff**：修改后方案**开头**列出 "## 🔄 本次变更"，用 `[新增] / [删除] / [修改]` 三类条目概括。
 
