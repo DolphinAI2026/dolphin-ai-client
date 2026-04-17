@@ -89,6 +89,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { handleError } from '@/utils/errorHandler'
 import request from '@/utils/request'
 
 interface TemplateItem {
@@ -170,7 +171,7 @@ const handleSave = async () => {
     await loadTemplates()
     emit('updated')
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail || '保存失败')
+    handleError(e, { fallback: '保存失败' })
   } finally {
     saving.value = false
   }
@@ -204,7 +205,7 @@ const handleUpload = async (e: Event) => {
     await loadTemplates()
     emit('updated')
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail || '上传失败')
+    handleError(e, { fallback: '上传失败' })
   }
 }
 </script>

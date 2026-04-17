@@ -500,6 +500,7 @@ import {
   Promotion, MagicStick, FullScreen, Warning, Refresh
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { handleError } from '@/utils/errorHandler'
 import { useUserStore } from '@/stores/user'
 import { usePreviewStore } from '@/stores/preview'
 import ThemeToggle from '@/components/ThemeToggle.vue'
@@ -638,7 +639,7 @@ async function handleBuilderModelChange(nextValue: number | null) {
     }
   } catch (e: any) {
     selectedBuilderModelId.value = normalizeBuilderModelId(previousValue)
-    ElMessage.error(e?.response?.data?.detail || '切换模型失败')
+    handleError(e, { fallback: '切换模型失败' })
   } finally {
     updatingBuilderModel.value = false
   }

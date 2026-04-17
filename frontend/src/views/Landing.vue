@@ -273,6 +273,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { handleError } from '@/utils/errorHandler'
 import request from '@/utils/request'
 import { usePreviewStore } from '@/stores/preview'
 import { useUserStore } from '@/stores/user'
@@ -471,7 +472,7 @@ async function previewTemplate(template: TemplateFile) {
   } catch (error: any) {
     if (!templatePreview.value) {
       templatePreviewVisible.value = false
-      ElMessage.error(error?.response?.data?.detail || '加载模板失败')
+      handleError(error, { fallback: '加载模板失败' })
       return
     }
   } finally {
@@ -492,7 +493,7 @@ async function downloadTemplate(template: TemplateFile) {
     document.body.removeChild(link)
     URL.revokeObjectURL(url)
   } catch (error: any) {
-    ElMessage.error(error?.response?.data?.detail || '下载模板失败')
+    handleError(error, { fallback: '下载模板失败' })
   }
 }
 

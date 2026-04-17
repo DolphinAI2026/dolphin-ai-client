@@ -136,6 +136,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { handleError } from '@/utils/errorHandler'
 import { applicationApi } from '@/api/application'
 import { conversationApi, type ConversationWithApp } from '@/api/conversation'
 import type { MergedApplication } from '@/types'
@@ -342,7 +343,7 @@ async function confirmDelete(a: MergedApplication) {
     ElMessage.success('已删除')
   } catch (error: any) {
     if (error === 'cancel' || error === 'close' || error?.action === 'cancel' || error?.action === 'close') return
-    ElMessage.error(error?.response?.data?.detail || error?.message || '删除失败')
+    handleError(error, { fallback: '删除失败' })
   }
 }
 

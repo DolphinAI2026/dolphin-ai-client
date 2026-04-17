@@ -305,6 +305,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { handleError } from '@/utils/errorHandler'
 import { platformEnvApi, type PlatformEnv } from '@/api/platformEnv'
 import { llmConfigApi, type LlmConfig, type ProviderPreset } from '@/api/llmConfig'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
@@ -401,7 +402,7 @@ async function handleSave() {
     dialogVisible.value = false
     await loadEnvs()
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail || '操作失败')
+    handleError(e, { fallback: '操作失败' })
   }
   saving.value = false
 }
@@ -417,7 +418,7 @@ async function handleTest(env: EnvWithUI) {
       ElMessage.error(res.error || '连接失败')
     }
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail || '测试失败')
+    handleError(e, { fallback: '测试失败' })
   }
   env._testing = false
 }
@@ -433,7 +434,7 @@ async function handleLogin(env: EnvWithUI) {
       ElMessage.error('登录失败')
     }
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail || '登录失败')
+    handleError(e, { fallback: '登录失败' })
   }
   env._logging = false
 }
@@ -444,7 +445,7 @@ async function handleSetDefault(env: PlatformEnv) {
     ElMessage.success(`已将「${env.env_name}」设为默认环境`)
     await loadEnvs()
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail || '设置失败')
+    handleError(e, { fallback: '设置失败' })
   }
 }
 
@@ -643,7 +644,7 @@ async function handleLlmSave() {
     llmDialogVisible.value = false
     await reloadLlmConfigs()
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail || '操作失败')
+    handleError(e, { fallback: '操作失败' })
   }
   llmSaving.value = false
 }
@@ -661,7 +662,7 @@ async function handleLlmTest(cfg: LlmConfigWithUI) {
       cfg.status = previousStatus === 'inactive' ? 'inactive' : 'error'
     }
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail || '测试失败')
+    handleError(e, { fallback: '测试失败' })
   }
   cfg._testing = false
 }
@@ -685,7 +686,7 @@ async function handleLlmToggleStatus(cfg: LlmConfigWithUI) {
     await reloadLlmConfigs()
   } catch (e: any) {
     if (e !== 'cancel' && e !== 'close') {
-      ElMessage.error(e?.response?.data?.detail || `${actionLabel}失败`)
+      handleError(e, { fallback: '${actionLabel}失败' })
     }
   } finally {
     cfg._toggling = false
@@ -698,7 +699,7 @@ async function handleLlmSetDefault(cfg: LlmConfig) {
     ElMessage.success(`已将「${cfg.config_name}」设为默认模型`)
     await reloadLlmConfigs()
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail || '设置失败')
+    handleError(e, { fallback: '设置失败' })
   }
 }
 

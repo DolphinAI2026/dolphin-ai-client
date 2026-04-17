@@ -1130,7 +1130,7 @@ import ConnectModal from '@/components/ConnectModal.vue'
 import EnvSelectModal from '@/components/EnvSelectModal.vue'
 import { platformEnvApi } from '@/api/platformEnv'
 import request from '@/utils/request'
-import { isApaasTokenError } from '@/utils/errorHandler'
+import { isApaasTokenError, handleError } from '@/utils/errorHandler'
 import { buildPlatformProxyEntryUrl, repairPlatformIframe } from '@/utils/platformIframe'
 import type { Message } from '@/types'
 import TopBar from '@/components/TopBar.vue'
@@ -2319,7 +2319,7 @@ const handleBuilderModelChange = async (nextValue: number | null) => {
     }
   } catch (e: any) {
     selectedBuilderModelId.value = normalizeBuilderModelId(previousValue)
-    ElMessage.error(e?.response?.data?.detail || '切换模型失败')
+    handleError(e, { fallback: '切换模型失败' })
   } finally {
     updatingBuilderModel.value = false
   }
@@ -3810,7 +3810,7 @@ const deleteDocVersion = async (ver: DocVersionListItem) => {
     await fetchDocVersions()
     ElMessage.success(`已删除版本 V${getDocDisplayVersion(ver)}`)
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail || e?.message || '删除版本失败')
+    handleError(e, { fallback: '删除版本失败' })
   } finally {
     deletingDocVersionId.value = null
   }
