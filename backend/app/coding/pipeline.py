@@ -993,6 +993,72 @@ async def _brainstorm_llm_call(
         return data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
 
 
+async def _brainstorm_llm_call_stream(
+    tenant_id: Optional[int],
+    model: str,
+    messages: list,
+    *,
+    max_tokens: int = 1200,
+    temperature: float = 0.3,
+) -> AsyncIterator[str]:
+    """流式版 _brainstorm_llm_call：按 SSE 增量解析 chat/completions delta，逐段 yield。
+
+    仅用于输出较长的 brainstorm proposal，避免用户等十几秒空白才一次性看到整份方案。
+    出错时退化为非流式调用，yield 完整结果。
+    """
+    from app.coding.vibe_agent import VibeCodingAgent
+    import httpx
+    import json as _json
+
+    agent = VibeCodingAgent.__new__(VibeCodingAgent)
+    agent.tenant_id = tenant_id
+    base_url, api_key, llm_model = await agent._load_llm_config(model)
+
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=180, write=10, pool=10)) as client:
+            async with client.stream(
+                "POST",
+                f"{base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={
+                    "model": llm_model,
+                    "messages": messages,
+                    "max_tokens": max_tokens,
+                    "temperature": temperature,
+                    "stream": True,
+                },
+            ) as resp:
+                resp.raise_for_status()
+                async for raw_line in resp.aiter_lines():
+                    if not raw_line:
+                        continue
+                    line = raw_line.strip()
+                    if not line.startswith("data:"):
+                        continue
+                    payload = line[5:].strip()
+                    if payload == "[DONE]":
+                        break
+                    try:
+                        chunk = _json.loads(payload)
+                    except Exception:
+                        continue
+                    choices = chunk.get("choices") or []
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta") or {}
+                    content_piece = delta.get("content") or ""
+                    if content_piece:
+                        yield content_piece
+    except Exception as e:
+        logger.warning(f"Brainstorm streaming failed, falling back to non-stream: {e}")
+        fallback = await _brainstorm_llm_call(
+            tenant_id, model, messages,
+            max_tokens=max_tokens, temperature=temperature,
+        )
+        if fallback:
+            yield fallback
+
+
 async def _detect_scene_llm_call(
     tenant_id: Optional[int],
     model: str,
@@ -1101,6 +1167,59 @@ async def _detect_scene_llm_call(
         return SceneType.WEB_COMPONENT_DUAL
 
 
+def _build_brainstorm_proposal_prompt(
+    scene_type: SceneType,
+    *,
+    requirement: str,
+    previous_proposal: Optional[str] = None,
+    user_feedback: Optional[str] = None,
+) -> tuple[str, int]:
+    """组装 brainstorm proposal 的 user prompt 和 max_tokens。"""
+    if previous_proposal and user_feedback:
+        prompt = _BRAINSTORM_REVISION_PROMPT.format(
+            original_requirement=requirement[:1000],
+            previous_proposal=previous_proposal[:2500],
+            user_feedback=user_feedback[:500],
+        )
+        return prompt, 1200
+    prompt_tpl = _BRAINSTORM_PROMPTS.get(scene_type, _BRAINSTORM_PROMPT_PAGE)
+    return prompt_tpl.format(message=requirement[:1000]), 1000
+
+
+async def _generate_brainstorm_proposal_stream(
+    tenant_id: Optional[int],
+    model: str,
+    scene_type: SceneType,
+    *,
+    requirement: str,
+    previous_proposal: Optional[str] = None,
+    user_feedback: Optional[str] = None,
+) -> AsyncIterator[str]:
+    """流式生成结构化设计确认单（使用租户 coding LLM 配置），边 yield 增量 delta。
+
+    首轮调用：只传 requirement（用户原始消息），走场景首轮 prompt 模板。
+    修改轮调用：同时传 previous_proposal（上一版方案）+ user_feedback（用户新反馈），
+    走 _BRAINSTORM_REVISION_PROMPT，强制 LLM 做最小修改、歧义反问、需求覆盖校验。
+    """
+    prompt, max_tokens = _build_brainstorm_proposal_prompt(
+        scene_type,
+        requirement=requirement,
+        previous_proposal=previous_proposal,
+        user_feedback=user_feedback,
+    )
+    try:
+        async for delta in _brainstorm_llm_call_stream(
+            tenant_id, model,
+            [{"role": "user", "content": prompt}],
+            max_tokens=max_tokens,
+            temperature=0.3,
+        ):
+            if delta:
+                yield delta
+    except Exception as e:
+        logger.warning(f"Brainstorm streaming generation failed: {e}")
+
+
 async def _generate_brainstorm_proposal(
     tenant_id: Optional[int],
     model: str,
@@ -1110,23 +1229,13 @@ async def _generate_brainstorm_proposal(
     previous_proposal: Optional[str] = None,
     user_feedback: Optional[str] = None,
 ) -> str:
-    """LLM 生成结构化设计确认单（使用租户 coding LLM 配置）。
-
-    首轮调用：只传 requirement（用户原始消息），走场景首轮 prompt 模板。
-    修改轮调用：同时传 previous_proposal（上一版方案）+ user_feedback（用户新反馈），
-    走 _BRAINSTORM_REVISION_PROMPT，强制 LLM 做最小修改、歧义反问、需求覆盖校验。
-    """
-    if previous_proposal and user_feedback:
-        prompt = _BRAINSTORM_REVISION_PROMPT.format(
-            original_requirement=requirement[:1000],
-            previous_proposal=previous_proposal[:2500],
-            user_feedback=user_feedback[:500],
-        )
-        max_tokens = 1200  # 修改轮需要输出变更 diff + 需求覆盖校验，稍放宽
-    else:
-        prompt_tpl = _BRAINSTORM_PROMPTS.get(scene_type, _BRAINSTORM_PROMPT_PAGE)
-        prompt = prompt_tpl.format(message=requirement[:1000])
-        max_tokens = 1000
+    """LLM 生成结构化设计确认单（非流式，保留给需要完整结果的调用点）。"""
+    prompt, max_tokens = _build_brainstorm_proposal_prompt(
+        scene_type,
+        requirement=requirement,
+        previous_proposal=previous_proposal,
+        user_feedback=user_feedback,
+    )
     try:
         return await _brainstorm_llm_call(
             tenant_id, model,
@@ -1419,16 +1528,19 @@ async def run_coding_pipeline(
                 return
 
             elif intent == "revise":
-                new_proposal = await _generate_brainstorm_proposal(
+                new_proposal_parts: list[str] = []
+                async for delta in _generate_brainstorm_proposal_stream(
                     params.tenant_id, effective_model, scene_type,
                     requirement=original_requirement,
                     previous_proposal=brainstorm_proposal,
                     user_feedback=params.message,
-                )
+                ):
+                    new_proposal_parts.append(delta)
+                    yield _record_event({"type": "content", "content": delta})
+                new_proposal = "".join(new_proposal_parts)
                 if new_proposal:
                     await save_coding_message(db, conversation_id, "assistant",
                                               BRAINSTORM_PROPOSAL_MARKER + new_proposal)
-                    yield _record_event({"type": "content", "content": new_proposal})
                 ide_url = _build_ide_url_for_pipeline(params, ws_id, conversation_id, effective_model)
                 yield _record_event({
                     "type": "done", "workspace_id": ws_id,
@@ -1446,17 +1558,20 @@ async def run_coding_pipeline(
                 )
 
         elif not is_iteration and scene_type in BRAINSTORM_SCENES:
-            # 新建工作区：先生成设计方案，等用户确认后再生成代码
+            # 新建工作区：先流式生成设计方案，等用户确认后再生成代码
             yield _record_event({"type": "step", "step": "brainstorm", "status": "running"})
-            proposal = await _generate_brainstorm_proposal(
+            proposal_parts: list[str] = []
+            async for delta in _generate_brainstorm_proposal_stream(
                 params.tenant_id, effective_model, scene_type,
                 requirement=params.message,
-            )
+            ):
+                proposal_parts.append(delta)
+                yield _record_event({"type": "content", "content": delta})
+            proposal = "".join(proposal_parts)
             if proposal:
                 await save_coding_message(db, conversation_id, "assistant",
                                           BRAINSTORM_PROPOSAL_MARKER + proposal)
                 yield _record_event({"type": "step", "step": "brainstorm", "status": "done"})
-                yield _record_event({"type": "content", "content": proposal})
                 ide_url = _build_ide_url_for_pipeline(params, ws_id, conversation_id, effective_model)
                 yield _record_event({
                     "type": "done", "workspace_id": ws_id,
