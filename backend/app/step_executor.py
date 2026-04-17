@@ -590,6 +590,90 @@ async def _update_existing_form(
 # Step 4: 创建单个表单
 # ------------------------------------------------------------------
 
+def _resolve_form_main_model(
+    form: dict,
+    model_info: Dict[str, dict],
+) -> tuple[str, str, List[str], dict]:
+    """从 form + model_info 里解析主模型上下文。
+
+    返回 (form_name, main_model_code, all_model_codes, main_model_info)。
+    主模型未找到时 raise ValueError，跟原有行为一致。
+    """
+    form_name = form.get("name") or form.get("formName") or "未命名表单"
+    main_model_code = str(form.get("modelCode", form.get("model_code", ""))).strip()
+    all_model_codes_raw = [
+        str(code).strip()
+        for code in (form.get("allModelCodes") or form.get("all_model_codes") or [])
+        if str(code).strip()
+    ]
+    all_model_codes = list(dict.fromkeys(
+        ([main_model_code] if main_model_code else []) + all_model_codes_raw
+    ))
+
+    model_info_by_code = {
+        str(info.get("code", "")).strip(): info
+        for info in model_info.values()
+        if isinstance(info, dict) and str(info.get("code", "")).strip()
+    }
+    mi = model_info_by_code.get(main_model_code)
+    if not mi:
+        raise ValueError(f"表单 {form_name} 的主模型 {main_model_code or '-'} 尚未创建")
+    return form_name, main_model_code, all_model_codes, mi
+
+
+async def _find_existing_form_reuse(
+    client: APaaSClient,
+    app_id: str,
+    form_name: str,
+) -> Optional[dict]:
+    """查平台已有菜单，若 form_name 已存在则返回复用用的 form_result，否则返回 None。
+
+    query_menus 失败时按原逻辑静默忽略（视为"没有已存在表单"），不中断流程。
+    """
+    existing_forms: Dict[str, dict] = {}
+    try:
+        menus = await client.query_menus(app_id)
+
+        def _collect(items: list):
+            for item in items:
+                if item.get("formId"):
+                    existing_forms[item.get("menuName", "")] = {
+                        "formId": item["formId"],
+                        "menuId": item.get("id", ""),
+                    }
+                _collect(item.get("submenus", []) or item.get("children", []) or [])
+
+        _collect(menus)
+    except Exception:
+        pass
+
+    if form_name not in existing_forms:
+        return None
+    ef = existing_forms[form_name]
+    return {
+        "formId": ef["formId"],
+        "formName": form_name,
+        "formCode": "",
+        "menuId": ef["menuId"],
+        "reused": True,
+        "message": f"复用已有表单: {form_name}",
+    }
+
+
+def _resolve_form_code(form: dict, form_name: str) -> str:
+    """生成或取出 form_code。
+
+    优先级：form.formCode > form.form_code > 随机 `form_XXXXXX` > 基于 form.code/name 的 sanitize。
+    """
+    form_code = str(form.get("formCode", form.get("form_code", ""))).strip()
+    if form_code:
+        return form_code
+    form_code_suffix = _rand(6)
+    if form_code_suffix:
+        return f"form_{form_code_suffix}"
+    return f"form_{_sanitize_code(form.get('code', form_name))}"
+
+
 async def execute_create_form(
     client: APaaSClient,
     app_id: str,
@@ -602,48 +686,11 @@ async def execute_create_form(
     form_results: Optional[List[dict]] = None,
 ) -> dict:
     """创建单个表单 + 绑定字典，返回 form 结果。"""
-    form_name = form.get("name") or form.get("formName") or "未命名表单"
-    main_model_code = str(form.get("modelCode", form.get("model_code", ""))).strip()
-    all_model_codes_raw = [str(code).strip() for code in (form.get("allModelCodes") or form.get("all_model_codes") or []) if str(code).strip()]
-    all_model_codes = list(dict.fromkeys(([main_model_code] if main_model_code else []) + all_model_codes_raw))
+    form_name, main_model_code, all_model_codes, mi = _resolve_form_main_model(form, model_info)
 
-    model_info_by_code = {
-        str(info.get("code", "")).strip(): info
-        for info in model_info.values()
-        if isinstance(info, dict) and str(info.get("code", "")).strip()
-    }
-    mi = model_info_by_code.get(main_model_code)
-    if not mi:
-        raise ValueError(f"表单 {form_name} 的主模型 {main_model_code or '-'} 尚未创建")
-
-    # 检查是否已存在（同时记录 formId 和 menuId）
-    existing_forms: Dict[str, dict] = {}
-    try:
-        menus = await client.query_menus(app_id)
-        def _collect(items: list):
-            for item in items:
-                if item.get("formId"):
-                    existing_forms[item.get("menuName", "")] = {
-                        "formId": item["formId"],
-                        "menuId": item.get("id", ""),
-                    }
-                _collect(item.get("submenus", []) or item.get("children", []) or [])
-        _collect(menus)
-    except Exception:
-        pass
-
-    if form_name in existing_forms:
-        ef = existing_forms[form_name]
-        form_id = ef["formId"]
-        menu_id = ef["menuId"]
-        return {
-            "formId": form_id,
-            "formName": form_name,
-            "formCode": "",
-            "menuId": menu_id,
-            "reused": True,
-            "message": f"复用已有表单: {form_name}",
-        }
+    reuse_result = await _find_existing_form_reuse(client, app_id, form_name)
+    if reuse_result is not None:
+        return reuse_result
 
     model_code = mi["code"]
     components = []
@@ -724,13 +771,7 @@ async def execute_create_form(
         raise ValueError(f"表单 {form_name} 无可用字段组件")
 
     # formCode: 使用模型编码或生成唯一标识
-    form_code = str(form.get("formCode", form.get("form_code", ""))).strip()
-    if not form_code:
-        form_code_suffix = _rand(6)
-        if form_code_suffix:
-            form_code = f"form_{form_code_suffix}"
-        else:
-            form_code = f"form_{_sanitize_code(form.get('code', form_name))}"
+    form_code = _resolve_form_code(form, form_name)
 
     form_payload = [{
         "formName": form_name,
