@@ -645,6 +645,16 @@ import request from '@/utils/request'
 import { isApaasTokenError, handleError } from '@/utils/errorHandler'
 import { resolveComponentLabel } from '@/utils/componentTypes'
 import {
+  formatParseMetaSummary,
+  docExportComponentTypeLabel,
+  docExportFieldCode,
+  docExportBool,
+  isSubTableComponent,
+  docExportModelMaps,
+  isAutoDocSummaryMessage,
+  suggestNextConflictCode,
+} from '@/utils/chatPage'
+import {
   buildAppCode,
   pickAppCode,
   pickAppName,
@@ -701,51 +711,6 @@ const currentPreviewConfigPayload = computed(() => ({
   appName: store.preview.appName || '',
   appCode: parsedAppCode.value || loadedAppCode.value || currentDocAppCode.value || buildAppCode(store.preview.appName),
 }))
-function formatParseMetaSummary(meta: any) {
-  const score = Number(meta?.standard_score ?? meta?.score)
-  if (!Number.isFinite(score)) return ''
-  return `文档标准度：${score} 分`
-}
-
-function docExportComponentTypeLabel(value: any, modelType?: any) {
-  const raw = String(value || '').trim()
-  const modelLabel = String(modelType || '').trim()
-  const label = resolveComponentLabel(raw, '') || raw || modelLabel || '-'
-  // 业务规则：如果组件类型退回到默认"单行输入"但模型层声明的类型更具体，
-  // 以模型声明为准（导出 md 时更贴合原意）
-  if (label === '单行输入' && modelLabel && modelLabel !== '单行输入') return modelLabel
-  return label
-}
-
-function docExportFieldCode(modelField: any) {
-  const raw = String(modelField || '').trim()
-  return raw.includes('.') ? raw.split('.').pop() || '' : raw
-}
-
-function docExportBool(value: any) {
-  return value ? '是' : '否'
-}
-
-function isSubTableComponent(component: any) {
-  return String(component?.componentType || component?.component_type || '').trim() === 'FORM_WIDGET_SON_TABLE'
-}
-
-function docExportModelMaps(models: any[]) {
-  const modelsByCode = new Map<string, any>()
-  const fieldsByModel = new Map<string, Map<string, any>>()
-  ;(models || []).forEach((model: any) => {
-    const modelCode = String(model?.code || '')
-    if (!modelCode) return
-    modelsByCode.set(modelCode, model)
-    const fieldMap = new Map<string, any>()
-    ;(model?.fields || []).forEach((field: any) => {
-      const fieldCode = String(field?.code || '')
-      if (fieldCode) fieldMap.set(fieldCode, field)
-    })
-    fieldsByModel.set(modelCode, fieldMap)
-  })
-  return { modelsByCode, fieldsByModel }
-}
 
 const modelNamesText = computed(() => {
   const names = store.preview.models.map((m: any) => m?.name).filter(Boolean)
@@ -1097,16 +1062,6 @@ function createWelcomeMessage(): Message {
 function resetMessagesToWelcome() {
   messages.splice(0, messages.length)
   messages.push(createWelcomeMessage())
-}
-
-function isAutoDocSummaryMessage(content: string) {
-  const text = String(content || '').trim()
-  if (!text) return false
-  if (!text.startsWith('我已经理解了设计文档《')) return false
-  return text.includes('识别出：')
-    && (text.includes('你可以告诉我需要调整的地方')
-      || text.includes('或者直接说"开始生成"')
-      || text.includes('或者直接点击"开始生成"'))
 }
 
 const visibleMessages = computed(() => messages)
@@ -2959,18 +2914,6 @@ const currentUpdateExecutionLabel = computed(() => {
 const parseReady = ref(false)
 const isDocParsing = ref(false)         // 文档解析进行中（右侧显示 loading）
 const docParsingStep = ref('')          // 当前解析步骤描述
-
-function suggestNextConflictCode(code: string) {
-  const source = String(code || '').trim()
-  if (!source) return 'codeV1'
-  const matched = source.match(/^(.*?)(?:V(\d+))$/i)
-  if (matched) {
-    const prefix = matched[1] || source
-    const version = Number(matched[2] || '0')
-    return `${prefix}V${version + 1}`
-  }
-  return `${source}V1`
-}
 
 function syncCurrentDocFromPreview(summary = '当前构建后的最新文档', contentOverride = '') {
   const content = String(contentOverride || latestDocContent.value || '').trim()
