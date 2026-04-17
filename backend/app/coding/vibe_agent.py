@@ -602,8 +602,20 @@ class VibeCodingAgent:
 
     _SHARED_WIDGET_CONFIG_SECTION = """
 ## widget.config.json Requirements
-- **文件格式**: 生成 `{name}.widget.config.json`（纯 JSON，不是 JS 文件），路径为 `__BASE_PATH__/form-component-config/form-widget/{name}.widget.config.json`。
-- **导入方式**: `index.js` 中使用 `import XxxWidgetConfig from './{name}.widget.config.json'`（必须带 `.json` 后缀）。
+
+### ⚠️ 文件位置（按项目类型严格区分，违反会导致双份/错位）
+
+- **单端项目**（form-component）：
+  - 文件路径：`src/form-component-config/form-widget/{name}.widget.config.json`（每个组件独立一份）
+  - 聚合文件 `src/form-component-config/form-widget/index.js`：`import XxxWidgetConfig from './{name}.widget.config.json'`
+- **双端项目**（form-component-dual）：
+  - 文件路径：**`shared/widget.config.json`**（两端共用**唯一一份**，scaffold 已预置，LLM **只修改内容不新建文件**）
+  - **严禁**在 `web/src/form-component-config/form-widget/` 或 `mobile/src/form-component-config/form-widget/` 下新建 `*.widget.config.json`
+  - 两端的 `form-component-config/form-widget/index.js` scaffold 已 `import XxxWidgetConfig from '@shared/widget.config.json'`，**保持原样不动**
+  - 严禁出现"widget.config 在 shared/ 和 web/ 双写"的状态
+
+### 其他格式要求
+- 纯 JSON 文件（不是 JS），以 `.json` 后缀结尾。
 - Top-level structure MUST include: `version`, `code`, `desc`, `instance`, `component`, `widget`, `client`, `componentModelField`, `methods`, `formatValueSchema` — 缺少任何一个平台会崩溃。
 - `code`: MUST start with `FORM_CUSTOM_` followed by a semantic uppercase string (e.g. `FORM_CUSTOM_DATA_SELECT`). Must match `apaas.json` `code` field.
 - `desc.iconType`: fixed value `"DEFAULT"`.
@@ -768,6 +780,28 @@ export default {
 ### 文件路径
 - `setting.vue` must be written to `__BASE_PATH__/form-component/form-editor/{name}-setting.vue`
 - `editorConfigList` must be aggregated by `__BASE_PATH__/form-component-config/form-editor/index.js` from `./{name}.editor.config.json`
+
+### ⚠️ setting.vue 完整注册清单（缺一不可，否则平台加载不到设置面板）
+
+生成 `{name}-setting.vue` 后**必须同时完成以下两处注册**。只改其中一个是 half-register，平台看不到设置面板（用户点击属性面板空空如也）。
+
+**注册 1**：`{name}.editor.config.json` → 追加到 `__BASE_PATH__/form-component-config/form-editor/index.js`
+```js
+import DemoEditorConfig from './{name}.editor.config.json'
+const editorConfigList = [DemoEditorConfig]
+export default editorConfigList
+```
+
+**注册 2**：`{name}-setting.vue` 本身 → 追加到 `__BASE_PATH__/form-component/form-editor/index.js`（⚠️ **最容易漏**）
+```js
+import FormComponentDemoSetting from './{name}-setting.vue'
+const customFormEditorList = [FormComponentDemoSetting]
+export default customFormEditorList
+```
+
+两个 index.js 的职责区分：
+- `form-component-config/form-editor/index.js` = 平台注册的 JSON 清单（聚合 `.editor.config.json`），导出 `editorConfigList`
+- `form-component/form-editor/index.js` = 实际的 Vue 组件清单（聚合 `.vue`），导出 `customFormEditorList`
 
 ### 所有 7 个 scene 都必须完整实现（禁止 half-rename）
 - 7 个 scene（edit / read / ide / list / print / search / search-ide）每个目录下的 `.vue` 文件都必须真实存在，对应 `index.js` 每一行 `import` 指向的文件都必须存在。

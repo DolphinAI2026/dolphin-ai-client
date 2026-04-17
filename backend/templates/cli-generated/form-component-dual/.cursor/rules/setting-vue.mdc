@@ -227,18 +227,37 @@ methods: {
 }
 ```
 
-## 注册到 form-editor/index.js
+## ⚠️ setting.vue 完整注册清单（缺一不可，否则平台加载不到设置面板）
 
-```javascript
-// web/src/form-component/form-editor/index.js
-import FormComponentDemoSetting from './form-component-demo-setting.vue';
+生成 `{name}-setting.vue` 后**必须同时完成以下两处注册**。只改其中一个是 half-register，用户打开属性面板空空如也。
 
-const customFormConfigList = [
-  FormComponentDemoSetting,
-];
-
-export default customFormConfigList;
+**注册 1**：`{name}.editor.config.json` → 追加到 `web/src/form-component-config/form-editor/index.js`
+```js
+import FormComponentDemoEditorConfig from './form-component-demo.editor.config.json'
+const editorConfigList = [FormComponentDemoEditorConfig]
+export default editorConfigList
 ```
+
+**注册 2**：`{name}-setting.vue` 本身 → 追加到 `web/src/form-component/form-editor/index.js`（⚠️ **最容易漏**）
+```javascript
+import FormComponentDemoSetting from './form-component-demo-setting.vue';
+const customFormEditorList = [FormComponentDemoSetting];
+export default customFormEditorList;
+```
+
+两个 index.js 的职责区分：
+- `form-component-config/form-editor/index.js` = 平台注册的 JSON 清单（聚合 `.editor.config.json`），导出 `editorConfigList`
+- `form-component/form-editor/index.js` = 实际的 Vue 组件清单（聚合 `.vue`），导出 `customFormEditorList`
+
+## ⚠️ widget.config.json 在双端项目里只有一份（严禁双写）
+
+双端项目的 `widget.config.json` **只在 `shared/widget.config.json`**（scaffold 已预置，LLM 只修改内容不新建文件）。
+
+**严禁**：
+- 在 `web/src/form-component-config/form-widget/` 下新建 `*.widget.config.json`
+- 在 `mobile/src/form-component-config/form-widget/` 下新建 `*.widget.config.json`
+
+web 和 mobile 两端的 `form-component-config/form-widget/index.js` 都已经 `import XxxWidgetConfig from '@shared/widget.config.json'`，保持原样不要改。
 
 ## 字段赋值场景（组件把派生值写给其他字段）
 
