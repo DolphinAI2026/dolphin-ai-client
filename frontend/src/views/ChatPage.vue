@@ -257,13 +257,14 @@
               class="preview-side-cta secondary"
               @click="triggerDocVersionUpload"
               :disabled="updatingDocVersion || executingChangePlan"
-            >
-              <svg class="cta-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <path d="M13.2 5.6A5.5 5.5 0 1 0 14 8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
-                <path d="M10.8 3.6h2.5v2.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-              <span>{{ updatingDocVersion ? '分析更新中...' : '更新应用' }}</span>
-            </button>
+            >{{ updatingDocVersion ? '分析更新中...' : '更新应用' }}</button>
+            <button
+              v-if="showExecuteUpdateButton"
+              class="preview-side-cta secondary"
+              @click="clearChangePlanState"
+              :disabled="executingChangePlan"
+              title="放弃本次变更，返回文档视图"
+            >取消更新</button>
             <button
               v-if="showExecuteUpdateButton"
               class="preview-side-cta"
@@ -285,6 +286,42 @@
           </div>
         </div>
         <div class="preview-body">
+          <!-- 文档版本列表：≥2 版时展示切换 + 对比 + 下载 -->
+          <div
+            v-if="showBuilderPreview && !isUpdateReviewMode && displayDocVersions.length >= 2"
+            class="doc-version-list compact"
+            style="padding: 20px 20px 0 20px;"
+          >
+            <div
+              v-for="ver in displayDocVersions"
+              :key="ver.key"
+              class="doc-version-row version-row-selectable"
+              :class="{ 'version-row-active': selectedDocVersionKey === ver.key }"
+            >
+              <div class="doc-version-summary">
+                <button class="doc-version-toggle" @click="selectDocVersion(ver)">
+                  <div class="doc-version-main">
+                    <div class="doc-ver-header">
+                      <strong>V{{ getDocDisplayVersion(ver) }}</strong>
+                      <span style="color: var(--t-text-secondary); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ getDocDisplayFilename(ver) }}</span>
+                    </div>
+                    <div style="font-size: 12px; color: var(--t-text-secondary); line-height: 1.5;">{{ ver.summary }}</div>
+                  </div>
+                </button>
+                <button
+                  v-if="canCompareDocVersion(ver)"
+                  class="preview-side-cta secondary"
+                  style="padding: 4px 12px; font-size: 12px; flex-shrink: 0;"
+                  @click.stop="openDocDiff(ver)"
+                >对比</button>
+                <button
+                  class="preview-side-cta secondary"
+                  style="padding: 4px 12px; font-size: 12px; flex-shrink: 0;"
+                  @click.stop="downloadDocVersion(ver)"
+                >下载</button>
+              </div>
+            </div>
+          </div>
           <div v-if="showBuilderPreview" class="tab-content">
             <!-- 正常模式：单文档视图 -->
             <template v-if="!isUpdateReviewMode">
@@ -7338,6 +7375,16 @@ watch(conversationId, (id) => {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+/* 版本列表选中态：明显蓝色高亮（覆盖默认的 .current 浅色） */
+.version-row-selectable { cursor: pointer; }
+.version-row-selectable.version-row-active {
+  border-color: var(--t-brand) !important;
+  background: rgba(92, 115, 255, 0.08) !important;
+  box-shadow: 0 0 0 1px var(--t-brand) inset;
+}
+.version-row-selectable.version-row-active .doc-ver-header strong {
+  color: var(--t-brand);
 }
 .doc-version-list { display: flex; flex-direction: column; gap: 10px; }
 .doc-version-list.compact {
