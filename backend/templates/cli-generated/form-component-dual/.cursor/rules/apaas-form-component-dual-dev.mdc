@@ -210,6 +210,64 @@ export default {
 </style>
 ```
 
+### Scene vue 读配置的铁则 + 多 mode 共享 mixin 模式
+
+**⚠️ Scene vue（web/ 和 mobile/ 两端的 edit/read/ide/list/print/search/search-ide）访问 `customComponentConfig` 的唯一正确方式是 `this.widget.customComponentConfig`**。Scene vue 使用 `FormWidgetMixin`（或 List/Print/Search 对应的 widget mixin），这些 mixin 挂载的是 `widget`，**不是** `customComponentConfig`——直接写 `this.customComponentConfig` 永远得到 `undefined`，后续 `|| {}` 得到空对象，配置全部失效（编译过、build 过，运行时用户在 setting 里配的 displayFormat/allowedWeekdays/timePrecision 等**静默失灵**，极难排查）。
+
+**对照表**：
+
+| 位置 | 读配置写法 | 来源 |
+|---|---|---|
+| setting.vue（web/src/form-component/form-editor/） | `this.componentConfig.customComponentConfig.xxx` | EditorFormConfigMixin 提供 `componentConfig` prop |
+| scene vue（web/src/form-component/form-widget/{mode}/ 和 mobile/src/form-component/form-widget/{mode}/） | **`this.widget.customComponentConfig.xxx`** | FormWidgetMixin 提供 `widget` |
+| 业务 editor（web/src/form-component/form-editor/components/form-custom-*-editor.vue） | `this.formValue`（双向绑定到 componentConfig[configProperty][property]） | FormEditorMixin + EditorFormConfigMixin |
+
+**禁止**把 setting.vue 的 `this.componentConfig.customComponentConfig` 写法直接复制到 scene vue——属性名根本不一样，两端 scene vue 都必须用 `this.widget.customComponentConfig`。
+
+双端组件的 web 和 mobile 两边每个 mode（edit / read / ide / list / print / search）
+都要访问同一套 `widget.customComponentConfig.xxx`。为避免重复，在
+`shared/mixin/form-item.mixin.js` 集中定义 computed 快捷方式，**web 和 mobile
+两端的 mode 文件共用**。
+
+**mixin 文件**（`shared/mixin/form-item.mixin.js`）：
+
+```javascript
+export default {
+  computed: {
+    customComponentConfig() { return this.widget.customComponentConfig },
+    // 逐个 customComponentConfig 字段的快捷
+    url()        { return this.customComponentConfig.url },
+    chooseType() { return this.customComponentConfig.chooseType },
+    response()   { return this.customComponentConfig.response },
+    showField()  { return this.customComponentConfig.showField },
+    // 派生属性集中写
+    isSingle()   { return this.chooseType === 'SINGLE' },
+  }
+}
+```
+
+**web / mobile 各 mode 文件 import 使用**（`@shared/mixin/...`）：
+
+```javascript
+import FormWidgetMixin from '@shared/mixin/form-widget.mixin';
+import FormItemMixin from '@shared/mixin/form-item.mixin';
+
+export default {
+  name: 'FormComponentDemoEdit',   // mobile 端为 MobileFormComponentDemoEdit
+  mixins: [FormWidgetMixin, FormItemMixin],
+  // 模板里直接用 this.url / this.isSingle / this.response
+}
+```
+
+**何时值得做**：
+- customComponentConfig 字段数 ≥ 3，且被 2+ 个 mode 使用
+- 有派生属性（`isXxx` / `isYyy`）需要跨 mode（尤其跨端）复用
+- config 字段命名将来可能调整（集中式 mixin 改一处，两端所有 mode 自动生效）
+
+**何时不值得**：
+- 只有 edit 一个 mode 读配置，其他 mode 不关心
+- 组件只有 1~2 个极简配置字段
+
 ---
 
 ## 修改规范
@@ -237,13 +295,18 @@ export default {
 
 ## ⚠️ setting.vue 配置保存规范（严禁违反）
 
-**唯一正确方式：v-model 直接双向绑定**：
-```html
-<el-select v-model="componentConfig.customComponentConfig.chartType" size="mini" />
-<el-input v-model="componentConfig.customComponentConfig.dataSource" size="mini" />
+**唯一正确方式：使用 scaffold 预置的 `form-custom-*-editor` 原子组件**（详见 `setting-vue.mdc`）。原子组件内部已封装双向绑定到 `componentConfig.customComponentConfig[property]`：
+```vue
+<form-custom-select-editor
+  label="图表类型" property="chartType" v-bind="$props"
+  :options="chartTypeOptions"
+></form-custom-select-editor>
+<form-custom-input-editor
+  label="数据源" property="dataSource" v-bind="$props"
+></form-custom-input-editor>
 ```
 
-**严禁使用**：`saveConfig()`、`formEngine.updateWidgetConfig()`、`formEngine.setWidgetInfo()` 等任何写入方法均不存在。
+**严禁**在 setting.vue 里使用 `<el-form-item>` / `<el-input>` / `<el-select>` / `<el-option>` / `<el-switch>` / `<el-radio>` / `<el-checkbox>` 等 Element UI 原生组件；也严禁调用 `saveConfig()`、`formEngine.updateWidgetConfig()`、`formEngine.setWidgetInfo()` 等不存在的写入方法。
 
 ---
 

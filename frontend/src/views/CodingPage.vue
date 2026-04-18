@@ -882,16 +882,54 @@ function loadConversationHistory(
   messages: Array<{ role: string; content: string }>,
   replayStreamMessages: ReplayStreamMessage[] = [],
 ) {
+  streamMessages.value = []
+
+  // 先还原 brainstorm 阶段消息（messages 里有，stream_messages 通常不含）
+  // 场景：messages 里会出现 "<!-- BRAINSTORM_PROPOSAL --> ..." 的 assistant 消息，
+  // 它前面那条 user 是原始需求。stream_messages 里第一条 user 通常是"确认/revise"。
+  // 所以这里只把 brainstorm 方案及之前的 user 预先插入，codegen 阶段的内容交给 replay 恢复。
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i]
+    const content = msg.content || ''
+    if (msg.role === 'assistant' && content.startsWith('<!-- BRAINSTORM_PROPOSAL -->')) {
+      // 找到这条 brainstorm 方案前一条 user（原始需求）
+      for (let j = i - 1; j >= 0; j--) {
+        if (messages[j].role === 'user') {
+          addStreamMsg({ type: 'user', content: messages[j].content })
+          break
+        }
+      }
+      // brainstorm 方案本体用 type:'message' 渲染（始终展开，Markdown）
+      addStreamMsg({
+        type: 'message',
+        content: content.replace(/^<!-- BRAINSTORM_PROPOSAL -->/, '').trim(),
+      })
+      break
+    }
+  }
+
+  // 有 codegen 阶段的 stream_messages 就 append 恢复（这是细节最丰富的路径）
   if (replayStreamMessages.length > 0) {
     restoreReplayStreamMessages(replayStreamMessages)
     return
   }
+
+  // fallback：没有 stream_messages 时用 messages 整体重建
+  //（通常是旧数据或生成失败的会话）
   streamMessages.value = []
   for (const msg of messages) {
+    const content = msg.content || ''
     if (msg.role === 'user') {
-      addStreamMsg({ type: 'user', content: msg.content })
+      addStreamMsg({ type: 'user', content })
     } else if (msg.role === 'assistant') {
-      parseAssistantHistory(msg.content || '')
+      if (content.startsWith('<!-- BRAINSTORM_PROPOSAL -->')) {
+        addStreamMsg({
+          type: 'message',
+          content: content.replace(/^<!-- BRAINSTORM_PROPOSAL -->/, '').trim(),
+        })
+      } else {
+        parseAssistantHistory(content)
+      }
     }
   }
 }

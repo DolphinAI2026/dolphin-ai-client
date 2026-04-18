@@ -341,6 +341,10 @@ async def _edit_file(args: dict, workspace_path: Path) -> str:
         contract_errors = validate_form_component_editor_workspace(workspace_path)
         if contract_errors:
             return "Error: " + "; ".join(contract_errors)
+        # JSON config 结构校验（和 _write_file 保持一致，避免 edit_file 改坏 JSON schema 不报错）
+        json_errors = _validate_json_config_file(target_file_path, normalized_content)
+        if json_errors:
+            return "Error: " + "; ".join(json_errors)
         return f"Successfully edited {target_file_path}"
     except ValueError as e:
         return f"Error: {e}"

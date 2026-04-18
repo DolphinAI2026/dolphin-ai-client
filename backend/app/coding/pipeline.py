@@ -727,7 +727,21 @@ _BRAINSTORM_PROMPT_FORM_COMPONENT = """\
 
 用户需求：{message}
 
-请严格按以下 Markdown 格式输出，每个字段都必须给出具体值，禁止出现"视需求而定"：
+## 元约束（⚠️ 这些是给你的指令，**绝对不要把约束文字本身抄进方案里**）
+
+1. 严格按下面"输出模板"部分的 Markdown 结构输出。模板里 `[方括号]` 或 `...` 占位符必须替换为具体内容，**禁止**出现"视需求而定"等模糊词。
+2. "需求覆盖校验"表格必填：把用户原始需求拆成编号列表（按原文顺序），每条标注对应的落地位置（配置项名称 / 交互场景 / 具体行为）。如某条需求未落地，必须在表格同一行的"落地位置"列里显式声明"未实现，原因：..."——不允许静默省略。
+3. **组件名必须反映核心功能**：从用户需求提炼 kebab-case 短名（如"日期时间段选择" → `date-time-range`），**严禁**用 `custom` / `demo` / `component` / `custom-dev` 等通用占位词。
+4. **配置项表格的"数据类型"列**：只允许填 JS/JSON 基础类型（`String` / `Number` / `Boolean` / `Array` / `Object`）。**禁止**把 UI 组件名（如 `form-custom-select-editor`、`form-custom-field-assign-editor`）填到"数据类型"列里——那是 UI 渲染方式，要填到"UI 渲染"列或在"说明"列里提及。
+5. **字段赋值场景识别**：如果用户需求提到"赋值给其他字段 / 输出到某字段 / 字段联动 / 计算结果写到某字段 / 回填到表单字段"等能力，**必须**在"配置项"段新增一条配置项，其：
+   - 数据类型 = `Array`（**固定值**，存储格式是 `[{{origin, target}}, ...]` 赋值对列表，用户可配 0 到 N 条）
+   - UI 渲染 = `form-custom-field-assign-editor`（**默认选它**，用于主表字段赋值，如时间差→数字字段、合计→金额字段等单一派生值场景）；**仅当**组件产出"整个子表的多行数据"需要映射到目标子表时才用 `form-custom-table-field-assign-editor`（这种场景 `otherFields` 的首层 componentType 是 `FORM_WIDGET_SON_TABLE`）。不要因为组件支持"在子表中使用"就误选 table 版——组件用在子表 ≠ 赋值目标是子表
+   - 默认值 = `[]`
+   - 说明中明确"用户通过此配置项选择接收赋值的目标字段"
+   **不要**把数据类型写成 String（即使组件只有 1 个源字段，底层也是单元素数组，不是字符串）。**不要**靠"aPaaS 字段联动规则"或其他外部机制绕过。
+6. 每个章节只输出模板要求的内容，不要把本"元约束"区的文字（包括本条）复制进输出。
+
+## 输出模板（严格照此结构输出）
 
 ## 📋 设计方案确认
 
@@ -739,16 +753,35 @@ _BRAINSTORM_PROMPT_FORM_COMPONENT = """\
 ---
 
 ### 数据存储
+
+> **⚠️ 选择铁则**（最容易踩："日期范围/时间段"组件被误选为 DATE，实际应为 STRING/BOF_TEXT）：
+> - 单个短字符串（<500 字符）→ `["STRING"]` + `BOF_TEXT`
+> - 长字符串/富文本/base64（≥500 字符）→ `["BIG_TEXT"]` + `BOF_TEXT`
+> - 纯数字 → `["NUM"]` + `BOF_NUMBER`
+> - **单一日期字符串**（如 `"2024-01-01"`）→ `["DATE"]` + `BOF_DATE`
+> - **日期范围 / 时间段 / JSON 数组 / 序列化对象**（如 `["2024-01-01","2024-01-02"]`）→ `["STRING"]`（<500）或 `["BIG_TEXT"]`（≥500） + `BOF_TEXT`（**不要选 DATE/BOF_DATE**）
+
 | 字段 | 值 |
 |------|----|
 | formValue 格式 | `[具体JSON示例或基础类型示例]` |
-| componentModelField | `["STRING" / "BIG_TEXT" / "NUM" / "DATE"]`（选一个并说明理由） |
+| componentModelField | `["STRING" / "BIG_TEXT" / "NUM" / "DATE"]`（按上表选一个并说明理由） |
 | BOF 类型 | `BOF_TEXT / BOF_NUMBER / BOF_DATE`（与上行对应） |
 
 ### 配置项（setting.vue 面板，如无需配置则填"无"）
-| 属性 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `propName` | String/Boolean/Number | `默认值` | 说明 |
+
+> - **数据类型**：只填 JS 基础类型（String / Number / Boolean / Array / Object）
+> - **UI 渲染**：填 setting.vue 里用于渲染该配置的组件名。选择优先级：
+>   1. **优先**从 scaffold 预置原子里选：`form-custom-input-editor`（单行文本）/ `form-custom-select-editor`（下拉）/ `form-custom-textarea-editor`（多行文本）/ `form-custom-switch-editor`（开关）
+>   2. 赋值场景用：`form-custom-field-assign-editor` / `form-custom-table-field-assign-editor`
+>   3. **只有预置原子语义不匹配时**（如日期/日期范围/颜色/JSON 等），才标注 `form-custom-[业务名]-editor`（codegen 阶段会按 setting-vue.mdc 的"自造业务 editor 铁则"新建）。**示例**：
+>     - 日期字段 → `form-custom-date-editor`
+>     - 日期时间字段 → `form-custom-date-time-editor`
+>     - 颜色字段 → `form-custom-color-editor`
+>   4. **禁止**：日期类字段用 `form-custom-input-editor`（用户只能手打字符串体验差）、单个布尔用 `form-custom-select-editor`（应该用 switch）等语义错配
+
+| 属性 | 数据类型 | UI 渲染 | 默认值 | 说明 |
+|------|---------|--------|--------|------|
+| `propName` | String / Boolean / Number / Array / Object | `form-custom-xxx-editor` | `默认值` | 说明 |
 
 ### 各场景交互
 - **编辑（edit）**：
@@ -759,6 +792,13 @@ _BRAINSTORM_PROMPT_FORM_COMPONENT = """\
 
 ### 第三方依赖
 - [列出需要额外安装的 npm 包，若无则填"无"]
+
+## ✅ 需求覆盖校验
+
+| # | 原始需求 | 落地位置 |
+|---|---|---|
+| 1 | [简述第 1 条需求] | [具体配置项 / 交互 / 行为] |
+| 2 | ... | ... |
 
 ---
 以上是我对需求的理解，请确认是否准确？如有需要调整的地方请告知，确认后将立即开始生成代码。\
@@ -894,6 +934,44 @@ _BRAINSTORM_PROMPTS = {
     SceneType.WEB_LIST_VIEW: _BRAINSTORM_PROMPT_LIST,
     SceneType.BACKEND_API: _BRAINSTORM_PROMPT_BACKEND_API,
 }
+
+
+_BRAINSTORM_REVISION_PROMPT = """\
+你是一位资深 aPaaS 架构师，正在根据用户反馈**修改**一份已有的设计方案（不是重新设计）。
+
+## 原始需求
+{original_requirement}
+
+## 上一版设计方案
+{previous_proposal}
+
+## 用户反馈
+{user_feedback}
+
+## 修改规则（⚠️ 给你的元指令，**严禁把规则文字本身复制到输出里**）
+
+1. **最小修改**：只改用户明确要求改的部分，**不要动**用户没提到的其他字段/命名/结构，上一版其他地方原样保留。
+2. **歧义反问优先**：如用户反馈含 "没 X / 没有 X / 缺 X / 少 X / 漏 X / 还是没 X" 或 "X 不对 / X 不好" 等模糊表述，**不要猜**，只输出下面"澄清输出格式"段就停止，不要输出修改后方案。
+3. **单组件优先**：用户追加能力默认加到当前同一个组件上，仅在用户明确说"拆分/独立组件/新组件"时才新建；模糊时走规则 2。
+4. **字段赋值场景识别**：如果用户要求涉及"给其他字段赋值/输出到某字段/字段联动/计算结果写到某字段/回填到表单字段"等，对应配置项必须满足：**数据类型固定是 `Array`**（不管用户配几条赋值对，底层存储都是 `[{{origin, target}}, ...]`；子表版 table-field-assign-editor 也是 `Array`，元素多一个 `assignmentList`），**UI 渲染**用 `form-custom-field-assign-editor` 或 `form-custom-table-field-assign-editor`。默认值 `[]`。注意：editor 名是 UI 组件名、不是数据类型名，**不要**把它填到"数据类型"列里；也**不要**把数据类型写成 String。不要靠 aPaaS 字段联动规则等外部机制绕过。
+5. **UI 渲染选择优先级**：配置项的 UI 渲染优先从预置原子选（input/select/textarea/switch + 两个 assign editor）；预置原子语义不匹配时（如**日期/日期时间/颜色/范围**等），标注为 `form-custom-[业务名]-editor`（codegen 会按铁则新建业务 editor）。禁止语义错配（如日期字段用 input-editor 让用户手打字符串）。
+5. **需求覆盖校验表格必填**：修改后方案末尾的"需求覆盖校验"段需把原始需求逐条编号，每条在表格里标注落地位置；未落地的条款在表格同一行直接写"未实现，原因：..."，不要静默省略。
+6. **本次变更 diff**：修改后方案**开头**列出 "## 🔄 本次变更"，用 `[新增] / [删除] / [修改]` 三类条目概括。
+
+## 澄清输出格式（仅规则 2 触发时使用）
+
+```
+## ⚠️ 需要澄清
+你说的"[引用原话]"，我理解为以下两种可能：
+- A. [解释 A]
+- B. [解释 B]
+请告诉我是 A 还是 B，我再修改方案。
+```
+
+## 方案输出格式（其他情况使用）
+
+严格按上一版 Markdown 结构输出修改后方案，保持章节顺序/表格列名一致，开头带"本次变更"段。**不要**把"修改规则"章节的文字复制到输出。
+"""
 
 
 async def _brainstorm_llm_call(
@@ -1044,17 +1122,34 @@ async def _detect_scene_llm_call(
 async def _generate_brainstorm_proposal(
     tenant_id: Optional[int],
     model: str,
-    message: str,
     scene_type: SceneType,
+    *,
+    requirement: str,
+    previous_proposal: Optional[str] = None,
+    user_feedback: Optional[str] = None,
 ) -> str:
-    """LLM 生成结构化设计确认单（使用租户 coding LLM 配置）。"""
-    prompt_tpl = _BRAINSTORM_PROMPTS.get(scene_type, _BRAINSTORM_PROMPT_PAGE)
-    prompt = prompt_tpl.format(message=message[:1000])
+    """LLM 生成结构化设计确认单（使用租户 coding LLM 配置）。
+
+    首轮调用：只传 requirement（用户原始消息），走场景首轮 prompt 模板。
+    修改轮调用：同时传 previous_proposal（上一版方案）+ user_feedback（用户新反馈），
+    走 _BRAINSTORM_REVISION_PROMPT，强制 LLM 做最小修改、歧义反问、需求覆盖校验。
+    """
+    if previous_proposal and user_feedback:
+        prompt = _BRAINSTORM_REVISION_PROMPT.format(
+            original_requirement=requirement[:1000],
+            previous_proposal=previous_proposal[:2500],
+            user_feedback=user_feedback[:500],
+        )
+        max_tokens = 1200  # 修改轮需要输出变更 diff + 需求覆盖校验，稍放宽
+    else:
+        prompt_tpl = _BRAINSTORM_PROMPTS.get(scene_type, _BRAINSTORM_PROMPT_PAGE)
+        prompt = prompt_tpl.format(message=requirement[:1000])
+        max_tokens = 1000
     try:
         return await _brainstorm_llm_call(
             tenant_id, model,
             [{"role": "user", "content": prompt}],
-            max_tokens=1000,
+            max_tokens=max_tokens,
             temperature=0.3,
         )
     except Exception as e:
@@ -1342,9 +1437,11 @@ async def run_coding_pipeline(
                 return
 
             elif intent == "revise":
-                revised_message = f"{original_requirement}\n\n用户反馈（请据此修改方案）：{params.message}"
                 new_proposal = await _generate_brainstorm_proposal(
-                    params.tenant_id, effective_model, revised_message, scene_type
+                    params.tenant_id, effective_model, scene_type,
+                    requirement=original_requirement,
+                    previous_proposal=brainstorm_proposal,
+                    user_feedback=params.message,
                 )
                 if new_proposal:
                     await save_coding_message(db, conversation_id, "assistant",
@@ -1370,7 +1467,8 @@ async def run_coding_pipeline(
             # 新建工作区：先生成设计方案，等用户确认后再生成代码
             yield _record_event({"type": "step", "step": "brainstorm", "status": "running"})
             proposal = await _generate_brainstorm_proposal(
-                params.tenant_id, effective_model, params.message, scene_type
+                params.tenant_id, effective_model, scene_type,
+                requirement=params.message,
             )
             if proposal:
                 await save_coding_message(db, conversation_id, "assistant",

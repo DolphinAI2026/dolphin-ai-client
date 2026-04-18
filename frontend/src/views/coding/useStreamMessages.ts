@@ -250,7 +250,9 @@ export function useStreamMessages() {
         timestamp: msg.timestamp || Date.now() + i,
       })
     }
-    streamMessages.value = restored
+    // append 而非覆盖：允许调用方（如 loadConversationHistory）在 restore 之前
+    // 预先插入 brainstorm 阶段消息；如果调用方需要整体重置，在调用前自行置空即可
+    streamMessages.value = [...streamMessages.value, ...restored]
     scrollStreamToBottom()
   }
 
