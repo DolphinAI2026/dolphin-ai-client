@@ -1,8 +1,9 @@
 """变更计划（change plans）相关路由。
 
-3 条：
+4 条：
   GET    /{app_id}/change-plans/{plan_id}
   PUT    /{app_id}/change-plans/{plan_id}/selections
+  POST   /{app_id}/change-plans/{plan_id}/cancel
   POST   /{app_id}/change-plans/{plan_id}/execute
 
 从 applications.__init__ 拆出；对外 URL 与契约保持不变（由 routes_inventory snapshot 兜底）。
@@ -108,6 +109,66 @@ async def update_change_plan_selections(
     plan.actions = json.dumps(actions, ensure_ascii=False)
     await db.commit()
     return {"ok": True, "actions": actions}
+
+
+@router.post("/{app_id}/change-plans/{plan_id}/cancel")
+async def cancel_change_plan(
+    app_id: int,
+    plan_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """取消变更计划：
+    - 标记 ChangePlan.status = cancelled
+    - 应用 status 回到 completed
+    - current_doc_version + config_preview 回滚到 plan.from_version
+      （V2 文档保留在历史里，只是不再作为当前版本）
+    """
+    from . import _dump_preview_config
+
+    result = await db.execute(
+        select(Application).where(Application.id == app_id, Application.tenant_id == ctx.tenant_id)
+    )
+    app = result.scalar_one_or_none()
+    if not app:
+        raise HTTPException(status_code=404, detail="应用不存在")
+    await check_resource_permission(ctx, db, app, "application", Action.EDIT)
+
+    result = await db.execute(
+        select(ChangePlan).where(ChangePlan.id == plan_id, ChangePlan.application_id == app_id)
+    )
+    plan = result.scalar_one_or_none()
+    if not plan:
+        raise HTTPException(status_code=404, detail="变更计划不存在")
+    if plan.status not in ("pending", "confirmed"):
+        raise HTTPException(status_code=400, detail=f"变更计划状态为 {plan.status}，不能取消")
+
+    # 回滚到 from_version 的文档版本（V1）的 parsed_config
+    from_version = plan.from_version
+    if from_version:
+        v1_result = await db.execute(
+            select(DocumentVersion).where(
+                DocumentVersion.application_id == app_id,
+                DocumentVersion.version == from_version,
+            )
+        )
+        v1_doc = v1_result.scalar_one_or_none()
+        if v1_doc and v1_doc.parsed_config:
+            try:
+                v1_config = loads_if_str(v1_doc.parsed_config)
+                if app.app_name:
+                    v1_config["appName"] = app.app_name
+                app.config_preview = _dump_preview_config(v1_config)
+                app.current_doc_version = from_version
+            except Exception as e:
+                logger.warning(f"取消变更计划时回滚 config_preview 失败: {e}")
+
+    plan.status = "cancelled"
+    if app.status == "updating":
+        app.status = "completed"
+
+    await db.commit()
+    return {"ok": True, "app_status": app.status, "current_doc_version": app.current_doc_version}
 
 
 @router.post("/{app_id}/change-plans/{plan_id}/execute")

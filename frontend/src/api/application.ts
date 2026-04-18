@@ -81,6 +81,11 @@ export const applicationApi = {
     return request.put<any, any>(`/applications/${appId}/change-plans/${planId}/selections`, { selections })
   },
 
+  /** 取消变更计划：应用状态回到 completed，回滚到 from_version */
+  cancelChangePlan(appId: number, planId: number) {
+    return request.post<any, any>(`/applications/${appId}/change-plans/${planId}/cancel`)
+  },
+
   /** 执行变更计划（SSE） */
   executeChangePlanUrl(appId: number, planId: number): string {
     const token = localStorage.getItem('token') || ''

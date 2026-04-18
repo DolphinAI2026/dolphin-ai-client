@@ -261,9 +261,9 @@
             <button
               v-if="showExecuteUpdateButton"
               class="preview-side-cta secondary"
-              @click="clearChangePlanState"
+              @click="cancelChangePlanAction"
               :disabled="executingChangePlan"
-              title="放弃本次变更，返回文档视图"
+              title="放弃本次变更，回滚到上一版本"
             >取消更新</button>
             <button
               v-if="showExecuteUpdateButton"
@@ -2368,6 +2368,23 @@ const applyChangePlanState = (raw: any) => {
 const clearChangePlanState = () => {
   store.showChangePlan = false
   store.changePlan = null
+}
+
+/** 用户主动取消更新：调后端回滚 + 清前端状态 */
+const cancelChangePlanAction = async () => {
+  const appId = existingAppId.value
+  const planId = (store.changePlan as any)?.id
+  if (appId && planId) {
+    try {
+      await applicationApi.cancelChangePlan(appId, planId)
+    } catch (e: any) {
+      console.error('取消变更计划失败', e)
+      ElMessage.warning('取消失败，但已退出更新视图')
+    }
+  }
+  clearChangePlanState()
+  // 回滚后刷新版本列表和应用信息（状态从 updating → completed）
+  await fetchDocVersions()
 }
 
 const isUpdateReviewMode = computed(() =>
