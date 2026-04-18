@@ -69,7 +69,7 @@ class CodingProfile(HarnessProfile):
 
         thread_ctx.metadata 中应包含 pipeline 所需参数：
         - workspace_id, conversation_id, selected_model, project_id, project_type
-        - quick_create, code_server_base_url, api_base_builder, ide_token
+        - code_server_base_url, api_base_builder, ide_token
         """
         from app.coding.pipeline import PipelineParams, run_coding_pipeline
 
@@ -84,7 +84,6 @@ class CodingProfile(HarnessProfile):
             selected_model=meta.get("selected_model"),
             project_id=meta.get("project_id"),
             project_type=meta.get("project_type"),
-            quick_create=meta.get("quick_create", False),
             code_server_base_url=meta.get("code_server_base_url", ""),
             api_base_builder=meta.get("api_base_builder"),
             ide_token=meta.get("ide_token"),

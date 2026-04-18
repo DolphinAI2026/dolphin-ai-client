@@ -783,7 +783,6 @@ class AutoPipelineRequest(BaseModel):
     app_id: Optional[str] = None           # aPaaS 应用ID (deprecated, use project_id)
     project_id: Optional[int] = None       # 关联项目ID（优先使用项目的平台配置）
     project_type: Optional[str] = None     # 前端指定的项目类型（menu-page 等）
-    quick_create: bool = False             # 快速模式：只创建工作区+脚手架，跳过 agent/install/serve
 
 
 # ============================================================
@@ -1131,7 +1130,6 @@ class IDEPipelineRequest(BaseModel):
     selected_model: Optional[str] = None
     project_id: Optional[int] = None
     project_type: Optional[str] = None
-    quick_create: bool = False
 
 
 @router.get("/models")
@@ -1299,7 +1297,6 @@ async def ide_coding_pipeline(
         selected_model=req.selected_model,
         project_id=req.project_id,
         project_type=req.project_type,
-        quick_create=req.quick_create,
         code_server_base_url=settings.code_server_base_url or "",
         api_base_builder=api_base_pattern,
         ide_token=ide_token,
@@ -1932,7 +1929,6 @@ async def auto_pipeline(
         selected_model=req.selected_model,
         project_id=req.project_id,
         project_type=req.project_type,
-        quick_create=req.quick_create,
         code_server_base_url=settings.code_server_base_url or "",
         api_base_builder=api_base_pattern,
     )

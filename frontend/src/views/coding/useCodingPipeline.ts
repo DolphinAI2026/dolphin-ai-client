@@ -299,7 +299,6 @@ export function useCodingPipeline(deps: PipelineDeps) {
       app_id: (route.query.app_id as string) || null,
       project_id: embeddedAppId.value ? Number(embeddedAppId.value) : null,
       project_type: sceneCategoryToProjectType[sceneKey] || (route.query.type as string) || null,
-      quick_create: false,
     }
   }
 

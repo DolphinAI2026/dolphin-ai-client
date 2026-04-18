@@ -20,7 +20,6 @@ export interface CodingPipelineOptions {
   conversationId?: number | null;
   projectId?: number | null;
   projectType?: string | null;
-  quickCreate?: boolean;
   token?: vscode.CancellationToken;
 }
 
@@ -173,7 +172,7 @@ export class LLMClient {
    * the same coding runtime as the web Chat mode.
    */
   async *streamCodingPipeline(options: CodingPipelineOptions): AsyncGenerator<any, void> {
-    const { message, selectedModel, conversationId, projectId, projectType, quickCreate = false, token } = options;
+    const { message, selectedModel, conversationId, projectId, projectType, token } = options;
 
     const url = this.config.getHarnessEndpoint('/pipeline');
     const headers = this.config.getHeaders();
@@ -183,7 +182,6 @@ export class LLMClient {
       conversation_id: conversationId ?? this.config.get().conversationId ?? undefined,
       project_id: projectId ?? undefined,
       project_type: projectType ?? undefined,
-      quick_create: quickCreate,
     });
 
     const controller = new AbortController();
