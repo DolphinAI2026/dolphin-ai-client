@@ -154,12 +154,17 @@ run("cd /root/apaas-builder/backend && .venv/bin/pip install -q -r requirements.
 
 # 4. 重启后端
 print("\n=== 重启后端...")
-run("pkill -f 'uvicorn app.main:app.*8003' || true")
-time.sleep(2)
-run("cd /root/apaas-builder && nohup backend/.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8003 --workers 2 >> backend.log 2>&1 &")
+# 匹配新旧两种命令（uvicorn app.main:app 和老的 uvicorn main:app），否则老进程会继续占 8003 掩盖新进程 crash
+run("pkill -9 -f 'uvicorn.*:app.*8003' || true")
+time.sleep(3)
+# cwd 必须是 backend/，否则 `app.main:app` 会 ModuleNotFoundError: No module named 'app'
+run("cd /root/apaas-builder/backend && nohup .venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8003 --workers 2 >> ../backend.log 2>&1 &")
 time.sleep(4)
 code = run("curl -s -o /dev/null -w '%{http_code}' http://localhost:8003/api/health")
 print(f"  健康检查: {code}")
+# 真实路由探测：老代码没有 harness 路由，能骗过 /api/health
+hit = run("curl -s http://localhost:8003/openapi.json | grep -c '/harness/coding/pipeline' || true")
+print(f"  harness 路由命中: {hit}")
 
 sftp.close(); client.close()
 print("\n✅ 部署完成！")
@@ -181,6 +186,7 @@ PYEOF
 | 依赖有变化 | 脚本会自动执行 `pip install -r requirements.txt`，无需手动操作 |
 | 工作区模板改动 | 改动 `backend/templates/` 或 `workspace.py` 后，已存在的旧工作区不会自动更新；需要重新创建工作区才能生效 |
 | deploy.py 卡在"重启后端" | paramiko 执行 `nohup ... &` 时 SSH 通道不会自动关闭，属正常现象。观察到"=== 安装依赖..."已完成即可手动 kill deploy.py 进程，然后执行健康检查确认服务正常 |
+| 部署后 action 绿灯但新路由 404 | 历史 bug：老 `pkill` 只匹配 `app.main:app`，匹配不到老进程的 `main:app`（跑在 `venv/` 而非 `.venv/`）。老进程占着 8003 让 `/api/health` 返回 200 骗过健康检查，新进程实际 crash。修复已加真实路由探测（`openapi.json` 要包含 `/harness/coding/pipeline`）兜底 |
 | dev server HTTPS 已移除 | workspace 模板的 `vue.config.js` 不再配置 HTTPS，dev server 跑纯 HTTP，通过 code-server `/proxy/{port}/` 访问。旧工作区若仍有 `https: {...}` 配置需手动删除 |
 | 公网预览地址 | 在 code-server 终端执行 `npm run serve` 后，终端会自动打印公网访问地址：`https://agent.dfy.definesys.cn/ai-builder/ide/proxy/{port}/` |
 
@@ -255,10 +261,12 @@ ps aux | grep uvicorn
 tail -50 /root/apaas-builder/backend.log
 
 # 手动重启后端
-pkill -f 'uvicorn app.main:app.*8003'
-cd /root/apaas-builder
-nohup backend/.venv/bin/python -m uvicorn app.main:app \
-  --host 0.0.0.0 --port 8003 --workers 2 >> backend.log 2>&1 &
+# 注意：kill 模式要匹配两种启动命令（新的 app.main:app 和老的 main:app），否则老进程会一直占端口
+pkill -9 -f 'uvicorn.*:app.*8003'
+# cwd 必须是 backend/，否则 `app.main:app` 会 ModuleNotFoundError
+cd /root/apaas-builder/backend
+nohup .venv/bin/python -m uvicorn app.main:app \
+  --host 0.0.0.0 --port 8003 --workers 2 >> ../backend.log 2>&1 &
 
 # 重载 nginx（改了 nginx 配置后）
 nginx -t && nginx -s reload

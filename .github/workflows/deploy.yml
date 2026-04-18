@@ -109,16 +109,19 @@ jobs:
           run(f'cd {REMOTE_BACKEND} && .venv/bin/pip install -q -r requirements.txt')
 
           print('=== 重启后端 ===')
+          # 匹配 `uvicorn app.main:app` 和老命令 `uvicorn main:app`，都带 8003
+          # 必须两种都杀，否则老进程会继续占端口让健康检查通过，掩盖新进程 crash
           try:
-              run("pkill -f 'uvicorn app.main:app.*8003' || true")
-              time.sleep(2)
+              run("pkill -9 -f 'uvicorn.*:app.*8003' || true")
+              time.sleep(3)
+              run("pgrep -f 'uvicorn.*:app.*8003' || echo '  端口 8003 上无残留 uvicorn 进程'")
           except Exception:
               pass
-          # 用 timeout=5 避免 paramiko 阻塞等待常驻进程退出
+          # cwd 必须是 backend/，否则 `app.main:app` import 不到（ModuleNotFoundError: No module named 'app'）
           try:
               transport = client.get_transport()
               chan = transport.open_session()
-              chan.exec_command("cd /root/apaas-builder && nohup backend/.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8003 --workers 2 >> backend.log 2>&1 &")
+              chan.exec_command("cd /root/apaas-builder/backend && nohup .venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8003 --workers 2 >> ../backend.log 2>&1 &")
               chan.close()
           except Exception:
               pass
@@ -137,12 +140,22 @@ jobs:
                           timeout=30, allow_agent=False, look_for_keys=False)
           _, stdout, _ = client2.exec_command("curl -s -o /dev/null -w '%{http_code}' http://localhost:8003/api/health")
           code = stdout.read().decode().strip()
-          print(f'  状态码: {code}')
+          print(f'  /api/health 状态码: {code}')
           if code != '200':
-              _, stdout, _ = client2.exec_command('tail -20 /root/apaas-builder/backend.log')
+              _, stdout, _ = client2.exec_command('tail -40 /root/apaas-builder/backend.log')
               print(stdout.read().decode())
               client2.close()
-              raise Exception('健康检查失败')
+              raise Exception('健康检查失败：/api/health 未返回 200')
+
+          # 真实路由探测：老代码没有 harness 路由，能骗过 /api/health 但骗不过这里
+          _, stdout, _ = client2.exec_command("curl -s http://localhost:8003/openapi.json | grep -c '/harness/coding/pipeline' || true")
+          harness_hit = stdout.read().decode().strip()
+          print(f'  openapi 含 harness/coding/pipeline 命中数: {harness_hit}')
+          if harness_hit == '0':
+              _, stdout, _ = client2.exec_command('tail -40 /root/apaas-builder/backend.log')
+              print(stdout.read().decode())
+              client2.close()
+              raise Exception('健康检查失败：新路由未注册，可能跑的是老进程')
 
           client2.close()
           print('=== 部署成功 ===')
