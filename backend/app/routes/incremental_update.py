@@ -30,6 +30,7 @@ from app.config_version import (
     get_snapshot_config, three_way_diff,
 )
 from app.models import ConfigSnapshot
+from app.json_utils import loads_if_str
 
 router = APIRouter(prefix="/applications", tags=["增量更新"])
 logger = logging.getLogger(__name__)
@@ -107,7 +108,7 @@ async def compute_diff(
     old_config = None
     if app.config_preview:
         try:
-            old_config = json.loads(app.config_preview) if isinstance(app.config_preview, str) else app.config_preview
+            old_config = loads_if_str(app.config_preview)
         except Exception:
             pass
 
@@ -171,7 +172,7 @@ async def execute_update(
     old_config = None
     if app.config_preview:
         try:
-            old_config = json.loads(app.config_preview) if isinstance(app.config_preview, str) else app.config_preview
+            old_config = loads_if_str(app.config_preview)
         except Exception:
             pass
 
@@ -415,7 +416,7 @@ async def sync_preview(
     local_config = None
     if app.config_preview:
         try:
-            local_config = json.loads(app.config_preview) if isinstance(app.config_preview, str) else app.config_preview
+            local_config = loads_if_str(app.config_preview)
         except Exception:
             pass
 
@@ -533,7 +534,7 @@ async def rollback_version(
     current_config = None
     if app.config_preview:
         try:
-            current_config = json.loads(app.config_preview) if isinstance(app.config_preview, str) else app.config_preview
+            current_config = loads_if_str(app.config_preview)
         except Exception:
             pass
 
@@ -586,7 +587,7 @@ async def check_conflicts(
     current_config = None
     if app.config_preview:
         try:
-            current_config = json.loads(app.config_preview) if isinstance(app.config_preview, str) else app.config_preview
+            current_config = loads_if_str(app.config_preview)
         except Exception:
             pass
 
@@ -745,7 +746,7 @@ def _build_execute_stream_response(
                     old_config = None
                     if old_config_str:
                         try:
-                            old_config = json.loads(old_config_str) if isinstance(old_config_str, str) else old_config_str
+                            old_config = loads_if_str(old_config_str)
                         except Exception:
                             pass
 

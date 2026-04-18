@@ -17,6 +17,7 @@ from app.models import Project, ProjectMember, User
 from app.deps import get_auth_context, AuthContext
 from app.apaas_client import APaaSClient
 from app.coding.workspace import WorkspaceManager, WORKSPACE_ROOT
+from app.error_messages import APAAS_TOKEN_EXPIRED_PROJECT, APAAS_TOKEN_REFRESH_FAILED
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -40,7 +41,7 @@ async def ensure_platform_token(project: Project, db: AsyncSession) -> str:
 
     # Token 无效，用保存的凭证重新登录
     if not project.platform_username or not project.platform_password_enc:
-        raise HTTPException(401, "Token已过期，请在项目设置中重新连接平台")
+        raise HTTPException(401, APAAS_TOKEN_EXPIRED_PROJECT)
 
     try:
         password = base64.b64decode(project.platform_password_enc).decode()
@@ -59,7 +60,7 @@ async def ensure_platform_token(project: Project, db: AsyncSession) -> str:
         raise
     except Exception as e:
         logger.error(f"自动刷新 token 失败: {e}")
-        raise HTTPException(401, "Token已过期且自动刷新失败，请在项目设置中重新连接平台")
+        raise HTTPException(401, APAAS_TOKEN_REFRESH_FAILED)
 
 
 # ============================================================

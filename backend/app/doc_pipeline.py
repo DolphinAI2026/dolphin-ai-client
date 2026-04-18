@@ -64,6 +64,52 @@ def _strip_template_scaffolding(text: str) -> str:
     return "\n".join(output).strip()
 
 
+def _detect_incomplete_modules(text: str, result: ParseResult) -> set[str]:
+    """识别“有结果但明显不完整”的模块，交给模块级 LLM 补齐。
+
+    目标不是严格判错，而是避免稀疏解析结果直接进入回显/构建。
+    """
+    sections = split_sections(text)
+    incomplete: set[str] = set()
+
+    def _section_len(key: str) -> int:
+        return len(str(sections.get(key) or "").strip())
+
+    roles = result.config.get("roles", []) or []
+    dicts = result.config.get("dicts", []) or []
+    models = result.config.get("models", []) or []
+    forms = result.config.get("forms", []) or []
+    permissions = result.config.get("permissions", []) or []
+
+    total_model_fields = sum(len(m.get("fields", []) or []) for m in models)
+    main_model_count = sum(1 for m in models if str(m.get("table_type", "")).strip() != "子表")
+
+    if _section_len("roles") > 120 and len(roles) <= 1:
+        incomplete.add("roles")
+
+    if _section_len("dicts") > 160 and len(dicts) == 0:
+        incomplete.add("dicts")
+
+    # 模型章节很长却只解析出极少模型/字段，通常意味着规则解析只抓到了骨架。
+    if _section_len("models") > 400 and (main_model_count == 0 or total_model_fields <= 5):
+        incomplete.add("models")
+    elif _section_len("models") > 1200 and main_model_count <= 1:
+        incomplete.add("models")
+
+    # forms 只检测"整段有内容但一个都没解析出"这种真失败场景。
+    # 不再用 len(forms) < main_model_count 判定不完整——该判据基于"每个 model 都有 form"
+    # 的业务假设，对"主表+子表/明细"的典型文档会产生误判：parser 其实已经正确解析，
+    # 但会被误拖进 _fallback_ai_parse（3-5 分钟），反而被 AI 搞乱（例如把 5.1 表单清单
+    # 也塞进 models）。保留 AI 兜底只用于 parser 真正失败的情况。
+    if _section_len("forms") > 200 and len(forms) == 0:
+        incomplete.add("forms")
+
+    if _section_len("permissions") > 180 and len(permissions) == 0:
+        incomplete.add("permissions")
+
+    return incomplete
+
+
 async def parse_document(
     text: str,
     llm_cfg: Optional[Dict[str, Any]] = None,
@@ -100,6 +146,10 @@ async def parse_document(
     # ── Step 2: 先尝试保真解析，避免低分文档在整篇标准化时丢信息 ───────
     await progress("[skeleton] 解析文档结构...")
     result = parse(text)
+    incomplete_modules = _detect_incomplete_modules(text, result)
+    if incomplete_modules:
+        result.failed_modules.update(incomplete_modules)
+        await progress(f"[skeleton] 检测到模块内容不完整，准备智能补齐：{', '.join(sorted(incomplete_modules))}")
 
     # 纯代码解析完成后，立即推送已成功的模块（毫秒级）
     _pushed_modules: set = set()

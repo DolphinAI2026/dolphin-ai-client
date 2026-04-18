@@ -94,6 +94,34 @@ TYPE_ICON_MAP: dict[str, str] = {
 SKIP_FIELDS = {"id", "created_at", "updated_at", "deleted_at", "created_by", "updated_by",
                "create_time", "update_time", "creator", "modifier", "tenant_id", "org_id"}
 
+PLATFORM_TO_DB_TYPE_MAP: dict[str, str] = {
+    "单据号": "VARCHAR",
+    "单行输入": "VARCHAR",
+    "多行输入": "TEXT",
+    "富文本": "TEXT",
+    "手机号码": "VARCHAR",
+    "电子邮箱": "VARCHAR",
+    "身份证号": "VARCHAR",
+    "超链接": "VARCHAR",
+    "下拉单选": "VARCHAR",
+    "下拉多选": "VARCHAR",
+    "单选框": "VARCHAR",
+    "复选框": "VARCHAR",
+    "数据单选": "VARCHAR",
+    "数据选择": "VARCHAR",
+    "关联表单": "VARCHAR",
+    "日期时间": "DATETIME",
+    "数字": "INT",
+    "金额": "DECIMAL",
+    "附件上传": "TEXT",
+    "开关": "BOOLEAN",
+    "人员选择": "VARCHAR",
+    "部门选择": "VARCHAR",
+    "地理位置": "VARCHAR",
+    "地区地址": "VARCHAR",
+    "子表": "",
+}
+
 
 def _normalize_type(raw_type: str, field_name: str = "", has_dict: bool = False) -> str:
     """Map a raw data_type string to a valid platform field type."""
@@ -140,6 +168,14 @@ def _normalize_type(raw_type: str, field_name: str = "", has_dict: bool = False)
 
     # Fallback
     return "单行输入"
+
+
+def _normalize_database_field_type(raw_db_type: str, platform_field_type: str) -> str:
+    raw = str(raw_db_type or "").strip()
+    if raw:
+        upper = re.sub(r"\(.*\)", "", raw).strip().upper()
+        return upper or raw
+    return PLATFORM_TO_DB_TYPE_MAP.get(platform_field_type, "VARCHAR")
 
 
 def _normalize_code(code: str) -> str:
@@ -349,6 +385,8 @@ def convert_analysis_to_app_config(doc_result: dict[str, Any]) -> dict[str, Any]
                 continue
 
             raw_type = f.get("data_type", "")
+            raw_db_type = f.get("database_field_type") or f.get("databaseFieldType") or raw_type
+            raw_length = f.get("length") or f.get("max_length") or f.get("maxLength") or ""
             desc = f.get("description", "")
 
             # Check if this field references a dict
@@ -381,9 +419,15 @@ def convert_analysis_to_app_config(doc_result: dict[str, Any]) -> dict[str, Any]
                 "name": f_name,
                 "code": f_code,
                 "type": field_type,
+                "database_field_type": _normalize_database_field_type(raw_db_type, field_type),
+                "databaseFieldType": _normalize_database_field_type(raw_db_type, field_type),
                 "icon": TYPE_ICON_MAP.get(field_type, "T"),
                 "required": not f.get("nullable", True),
             }
+            if raw_length not in (None, ""):
+                field_entry["length"] = str(raw_length)
+                field_entry["max_length"] = str(raw_length)
+                field_entry["maxLength"] = str(raw_length)
 
             if field_dict:
                 field_entry["dict"] = field_dict

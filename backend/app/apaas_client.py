@@ -1,8 +1,11 @@
 from __future__ import annotations
+import asyncio
 import httpx
 import time
 import base64
 import json
+from datetime import datetime
+from pathlib import Path
 from typing import Optional, Any
 from urllib.parse import parse_qsl, urlsplit
 from cryptography.hazmat.primitives import serialization
@@ -12,7 +15,15 @@ from cryptography.hazmat.backends import default_backend
 import logging
 import threading
 
+from app.error_messages import APAAS_TOKEN_EXPIRED
+
 logger = logging.getLogger(__name__)
+DESKTOP_API_DEBUG_LOG = Path.home() / "Desktop" / "apaas_api_debug.log"
+
+# 查询所有模型的字段时，同时在飞的 query_model_fields 请求上限。
+# 10 是经验值：既能把串行的等待时间压下来，又不会触发 APaaS 平台限流。
+# 如果未来平台端扩容/收紧了速率限制，调整这个常量即可。
+QUERY_MODEL_FIELDS_CONCURRENCY = 10
 
 # ---------------------------------------------------------------------------
 # API 调用日志收集器（线程安全）
@@ -54,6 +65,22 @@ def _to_json(obj: Any) -> str:
     if isinstance(obj, str):
         return obj
     return json.dumps(obj, ensure_ascii=False, indent=2)
+
+
+def _append_desktop_api_debug_log(event: str, payload: dict[str, Any]) -> None:
+    """将关键 APaaS 调用单独落到桌面，方便手工联调时直接查看。"""
+    record = {
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "event": event,
+        **payload,
+    }
+    try:
+        DESKTOP_API_DEBUG_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with DESKTOP_API_DEBUG_LOG.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, ensure_ascii=False))
+            fh.write("\n")
+    except Exception as exc:
+        logger.warning("写入桌面 APaaS 调试日志失败: %s", exc)
 
 
 def _encode_security_info(app_id: str) -> str:
@@ -277,7 +304,7 @@ class APaaSClient:
 
             if response.status_code == 401:
                 logger.error(f"401 Unauthorized - token可能已过期或无效")
-                raise Exception("Token已过期或无效，请重新连接APaaS平台")
+                raise Exception(APAAS_TOKEN_EXPIRED)
 
             response.raise_for_status()
             data = response.json()
@@ -337,11 +364,40 @@ class APaaSClient:
     async def create_form_config(self, app_id: str, payload: list) -> list:
         """批量创建表单配置 — /common/resource/formConfig"""
         logger.info(f"创建表单: {[p.get('formName') for p in payload]}")
-        result = await self._post_resource("/common/resource/formConfig", payload, app_id)
+        _append_desktop_api_debug_log(
+            "create_form_config.request",
+            {
+                "app_id": app_id,
+                "path": "/common/resource/formConfig",
+                "form_names": [p.get("formName") for p in payload if isinstance(p, dict)],
+                "request_payload": payload,
+            },
+        )
+        try:
+            result = await self._post_resource("/common/resource/formConfig", payload, app_id)
+        except Exception as exc:
+            _append_desktop_api_debug_log(
+                "create_form_config.error",
+                {
+                    "app_id": app_id,
+                    "path": "/common/resource/formConfig",
+                    "request_payload": payload,
+                    "error": str(exc),
+                },
+            )
+            raise
         if isinstance(result, list):
             for r in result:
                 if isinstance(r, dict):
                     logger.info(f"表单返回: formName={r.get('formName')}, formCode={r.get('formCode')}, menuId={r.get('menuId')}, id={r.get('id')}")
+        _append_desktop_api_debug_log(
+            "create_form_config.response",
+            {
+                "app_id": app_id,
+                "path": "/common/resource/formConfig",
+                "response_payload": result,
+            },
+        )
         return result if isinstance(result, list) else []
 
     async def create_process_config(self, app_id: str, payload: list) -> dict:
@@ -367,7 +423,37 @@ class APaaSClient:
             return data
 
     async def create_form_permissions(self, app_id: str, payload: list) -> dict:
-        return await self._post_resource("/common/resource/formPermission", payload, app_id)
+        _append_desktop_api_debug_log(
+            "create_form_permissions.request",
+            {
+                "app_id": app_id,
+                "path": "/common/resource/formPermission",
+                "permission_count": len(payload) if isinstance(payload, list) else 0,
+                "request_payload": payload,
+            },
+        )
+        try:
+            result = await self._post_resource("/common/resource/formPermission", payload, app_id)
+        except Exception as exc:
+            _append_desktop_api_debug_log(
+                "create_form_permissions.error",
+                {
+                    "app_id": app_id,
+                    "path": "/common/resource/formPermission",
+                    "request_payload": payload,
+                    "error": str(exc),
+                },
+            )
+            raise
+        _append_desktop_api_debug_log(
+            "create_form_permissions.response",
+            {
+                "app_id": app_id,
+                "path": "/common/resource/formPermission",
+                "response_payload": result,
+            },
+        )
+        return result
 
     async def query_roles(self, app_id: str, keyword: str = "") -> list:
         """查询应用角色列表"""
@@ -488,10 +574,30 @@ class APaaSClient:
             if not isinstance(models, list):
                 return []
 
+            # 并发查询每个模型的字段，避免原先串行 await 导致的 N * RTT 累计等待。
+            # 用 Semaphore 限流防止触发平台端速率限制；单个查询失败不影响整批。
+            semaphore = asyncio.Semaphore(QUERY_MODEL_FIELDS_CONCURRENCY)
+
+            async def _fetch_fields(model_id: str) -> list:
+                if not model_id:
+                    return []
+                async with semaphore:
+                    try:
+                        return await self.query_model_fields(app_id, model_id)
+                    except Exception as exc:
+                        logger.warning("query_model_fields 失败 (dataModelId=%s): %s", model_id, exc)
+                        return []
+
+            model_ids = [
+                str(model.get("id", model.get("dataModelId", "")) or "").strip()
+                for model in models
+            ]
+            fields_by_index = await asyncio.gather(
+                *[_fetch_fields(mid) for mid in model_ids]
+            )
+
             normalized_models = []
-            for model in models:
-                model_id = str(model.get("id", model.get("dataModelId", "")) or "").strip()
-                fields = await self.query_model_fields(app_id, model_id) if model_id else []
+            for model, model_id, fields in zip(models, model_ids, fields_by_index):
                 normalized = dict(model)
                 normalized["id"] = model_id or model.get("id")
                 normalized["modelCode"] = model.get("modelCode", model.get("code", ""))

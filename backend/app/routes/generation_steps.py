@@ -31,6 +31,8 @@ from app.step_executor import (
     execute_create_workflow, execute_configure_permissions,
 )
 from app.app_locks import acquire_app_lock
+from app.json_utils import loads_if_str
+from app.error_messages import APAAS_TOKEN_EXPIRED_STEP, is_apaas_token_error
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +91,7 @@ _COMPONENT_TYPE_LABELS = {
 
 def _load_state(app: Application) -> dict:
     if app.generation_state:
-        state = json.loads(app.generation_state) if isinstance(app.generation_state, str) else app.generation_state
+        state = loads_if_str(app.generation_state)
     else:
         state = {"steps_completed": [], "step_errors": {}}
         # 仅首次（无 generation_state）时兼容旧流程
@@ -106,7 +108,7 @@ def _save_state(app: Application, state: dict):
 def _load_config(app: Application) -> dict:
     if not app.config_preview:
         raise HTTPException(status_code=400, detail="应用配置为空，请先在对话中生成配置")
-    return json.loads(app.config_preview) if isinstance(app.config_preview, str) else app.config_preview
+    return loads_if_str(app.config_preview)
 
 
 def _component_type_label(value: str, model_type: str = "") -> str:
@@ -252,16 +254,19 @@ def _extract_form_dependencies(forms: list[dict]) -> dict[int, set[int]]:
         for value in _form_identity_values(form):
             identity_to_idx.setdefault(value, idx)
 
+    # 关联表单（FORM_ASSOCIATION）只是展示组件，创建表单时不需要目标先存在
+    _ASSOCIATION_TYPES = {"FORM_ASSOCIATION", "关联表单"}
+
     deps_by_idx: dict[int, set[int]] = {}
     for idx, form in enumerate(forms):
         deps: set[int] = set()
         for component in form.get("components") or []:
-            association = component.get("formAssociationConfig") or component.get("form_association_config") or {}
+            comp_type = str(component.get("componentType") or component.get("component_type") or "").strip()
+            if comp_type in _ASSOCIATION_TYPES:
+                continue  # 关联表单不产生创建顺序依赖
             ref = component.get("ref") or {}
             targets = [
-                str(association.get("targetModelCode") or "").strip(),
                 str(component.get("selector_form_code") or "").strip(),
-                str(component.get("association_form_code") or "").strip(),
                 str(component.get("ref_model_code") or "").strip(),
                 str(ref.get("model") or "").strip() if isinstance(ref, dict) else str(ref or "").strip(),
             ]
@@ -668,7 +673,7 @@ def _build_steps(config: dict, state: dict, apaas_app_id: str = None) -> list[St
 def _sync_platform_codes_to_config(app: Application, state: dict, data: dict):
     """部署完成后，将平台真实编码回写到 config_preview"""
     try:
-        config = json.loads(app.config_preview) if isinstance(app.config_preview, str) else app.config_preview
+        config = loads_if_str(app.config_preview)
         cfg_data = config.get("data", config)
 
         # 回写平台最终应用编码
@@ -727,7 +732,7 @@ async def _sync_current_doc_version_content(db: AsyncSession, app: Application):
         from app.models import DocumentVersion
         import hashlib
 
-        config = json.loads(app.config_preview) if isinstance(app.config_preview, str) else app.config_preview
+        config = loads_if_str(app.config_preview)
         data = config.get("data", config)
         doc_version_result = await db.execute(
             select(DocumentVersion).where(
@@ -995,7 +1000,7 @@ async def execute_step(
             logger.error(f"步骤 {step_key} 执行失败: {error_msg}", exc_info=True)
 
             # Token 过期时，优先尝试使用环境里保存的账号密码自动重登并重试当前步骤
-            if "Token已过期" in error_msg or "401" in error_msg:
+            if is_apaas_token_error(error_msg) or "401" in error_msg:
                 relogin_success = False
                 if env and env.username and getattr(env, "password_enc", None):
                     try:
@@ -1040,7 +1045,7 @@ async def execute_step(
                         env.token = None
                         env.status = "disconnected"
                     await db.commit()
-                    step_exception = HTTPException(status_code=401, detail="APaaS平台Token已过期，请在环境管理中重新登录")
+                    step_exception = HTTPException(status_code=401, detail=APAAS_TOKEN_EXPIRED_STEP)
             else:
                 # 编码冲突时自动处理
                 is_dict_or_role_step = step_key.startswith("create_dict:") or step_key.startswith("create_role:") or step_key == "create_roles_dicts"

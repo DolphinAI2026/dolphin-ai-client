@@ -107,12 +107,12 @@
           <div class="doc-view-head">
             <div class="doc-view-title">功能设计文档</div>
             <div class="doc-view-meta">
-              <div class="doc-view-file">{{ lastParsedFilename || `${store.preview.appName || '未命名应用'}.md` }}</div>
+              <div class="doc-view-file">{{ lastParsedFilename || `${store.preview.appName || '功能设计文档'}.md` }}</div>
               <button class="doc-download-btn" @click="downloadCurrentDoc">下载 .md</button>
             </div>
           </div>
-          <div v-if="selectedDocStructuredResult" class="doc-preview-body structured-doc-host">
-            <StructuredDocRenderer :doc-result="selectedDocStructuredResult" />
+          <div v-if="liveStructuredDocResult" class="doc-preview-body structured-doc-host">
+            <StructuredDocRenderer :doc-result="liveStructuredDocResult" />
           </div>
           <pre v-else-if="selectedDocDisplayContent" class="doc-preview-body plain-doc-fallback">{{ selectedDocDisplayContent }}</pre>
           <div v-else class="doc-view-empty">
@@ -136,17 +136,6 @@
                   <span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span>
                 </div>
               </div>
-            </div>
-          </div>
-          <!-- 设计文档结构化卡片（requirements 模式生成完成后显示） -->
-          <div v-if="docResultForCard" class="chat-bubble assistant">
-            <div class="bubble-inner" style="max-width:90%">
-              <DesignDocCard
-                :doc-result="docResultForCard"
-                :confirming="confirmingDoc"
-                @confirm="confirmDocAndBuild"
-                @edit="(updated: any) => { docResultForCard = updated }"
-              />
             </div>
           </div>
           <!-- 编码冲突修复输入 -->
@@ -314,8 +303,8 @@
           <div v-if="showBuilderPreview" class="tab-content">
             <!-- 正常模式：统一用标准文档结构渲染 -->
             <template v-if="!isUpdateReviewMode && !showDeployedVersionedView">
-              <div v-if="selectedDocStructuredResult" class="doc-version-content expanded doc-preview-body structured-doc-host">
-                <StructuredDocRenderer :doc-result="selectedDocStructuredResult" />
+              <div v-if="liveStructuredDocResult" class="doc-version-content expanded doc-preview-body structured-doc-host">
+                <StructuredDocRenderer :doc-result="liveStructuredDocResult" />
               </div>
               <pre v-else-if="selectedDocDisplayContent" class="doc-version-content expanded doc-preview-body plain-doc-fallback">{{ selectedDocDisplayContent }}</pre>
               <div v-else class="preview-empty small">暂无可展示的文档内容</div>
@@ -803,8 +792,8 @@
                         >全屏</button>
                       </div>
                     </div>
-                    <div v-if="selectedDocStructuredResult" class="doc-version-content expanded doc-preview-body structured-doc-host">
-                      <StructuredDocRenderer :doc-result="selectedDocStructuredResult" />
+                    <div v-if="liveStructuredDocResult" class="doc-version-content expanded doc-preview-body structured-doc-host">
+                      <StructuredDocRenderer :doc-result="liveStructuredDocResult" />
                     </div>
                     <pre v-else-if="selectedDocDisplayContent" class="doc-version-content expanded doc-preview-body plain-doc-fallback">{{ selectedDocDisplayContent }}</pre>
                     <div v-else class="doc-version-empty">暂无可展示的设计文档内容</div>
@@ -1148,7 +1137,6 @@ import WorkbenchShell from '@/components/WorkbenchShell.vue'
 import StructuredDocRenderer from '@/components/StructuredDocRenderer.vue'
 import StructuredDocDiffRenderer from '@/components/StructuredDocDiffRenderer.vue'
 import { llmConfigApi, type BuilderModelOption } from '@/api/llmConfig'
-import DesignDocCard from '@/components/DesignDocCard.vue'
 import { requirementsApi } from '@/api/requirements'
 import { convertConfig } from '@/api/conversation'
 import { buildStructuredDocFromPreviewConfig } from '@/utils/structuredDoc'
@@ -1178,15 +1166,27 @@ const latestDocConversationId = ref<number | null>(null)
 const latestParseMeta = ref<any | null>(null)
 const readyForGenerate = computed(() => !!store.currentApp && parseReady.value)
 const appParsedMode = computed(() => route.query.app_mode === 'parsed')
-const builderAppDisplayName = computed(() => store.preview.appName || store.currentApp?.name || '未命名应用')
+// 应用名统一从 store.preview.appName 读；为空就空着，不再回填默认占位
+const builderAppDisplayName = computed(() => store.preview.appName || '')
+const chatGeneratedDocContent = computed(() => {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const msg = messages[i]
+    if (!msg || msg.role !== 'assistant') continue
+    const content = String(msg.content || '').trim()
+    if (!content) continue
+    if (content.includes('功能设计文档') && /^#\s+/m.test(content)) return content
+    if (content.includes('## 一、') || content.includes('### 1.1')) return content
+  }
+  return ''
+})
 const currentDocAppCode = computed(() => {
-  const content = String(selectedDocDisplayContent.value || latestDocContent.value || '').trim()
+  const content = String(selectedDocDisplayContent.value || latestDocContent.value || chatGeneratedDocContent.value || '').trim()
   return content ? extractAppCodeFromText(content) : ''
 })
 const displayAppCode = computed(() => currentDocAppCode.value || parsedAppCode.value || loadedAppCode.value || buildAppCode(store.preview.appName))
 const currentPreviewConfigPayload = computed(() => ({
   ...store.preview,
-  appName: store.preview.appName || builderAppDisplayName.value || '',
+  appName: store.preview.appName || '',
   appCode: parsedAppCode.value || loadedAppCode.value || currentDocAppCode.value || buildAppCode(store.preview.appName),
 }))
 function formatParseMetaSummary(meta: any) {
@@ -1374,13 +1374,19 @@ const builderStatusText = computed(() => {
   return '待完善'
 })
 const builderQuickPlaceholder = computed(() => `补充或修改${activeBuilderTabLabel.value}内容，例如：把${activeBuilderTabLabel.value}再细化一下...`)
-const hasPreviewContent = computed(() =>
+const hasStructuredPreviewData = computed(() =>
   !!store.preview.appName
   || store.preview.roles.length > 0
   || store.preview.dicts.length > 0
   || store.preview.models.length > 0
   || formPreviewItems.value.length > 0
   || permissionPreviewItems.value.length > 0
+)
+const hasPreviewContent = computed(() =>
+  hasStructuredPreviewData.value
+  || !!docResultForCard.value
+  || !!chatGeneratedDocContent.value
+  || !!latestDocContent.value.trim()
 )
 const showBuilderPreview = computed(() =>
   hasPreviewContent.value && (
@@ -2713,8 +2719,8 @@ const extractPreviewData = (content: string) => {
           console.warn('已有配置，忽略 LLM 重复输出的完整 JSON')
           continue
         }
-        store.currentApp = { name: parsed.data.appName, status: 'draft' }
-        store.preview.appName = parsed.data.appName || ''
+        store.currentApp = { status: 'draft' }
+        store.setAppName(parsed.data.appName)
         store.preview.roles = parsed.data.roles || []
         store.preview.dicts = parsed.data.dicts || []
         store.preview.models = parsed.data.models || []
@@ -2939,7 +2945,7 @@ const applyPatch = (actions: any[]) => {
   }
   // 标记配置已更新
   if (!store.currentApp) {
-    store.currentApp = { name: store.preview.appName, status: 'draft' }
+    store.currentApp = { status: 'draft' }
   }
 }
 
@@ -3074,15 +3080,18 @@ const loadConversation = async (cid: number) => {
           extractPreviewData(msg.content)
           continue
         }
+        const normalizedContent = msg.role === 'assistant'
+          ? normalizeLoadedAssistantContent(msg.content)
+          : msg.content
         messages.push({
           id: msg.id,
           role: msg.role as any,
           agent: msg.role === 'assistant' ? 'builder' : undefined,
-          content: msg.content,
+          content: normalizedContent,
           created_at: msg.created_at
         })
         if (msg.role === 'assistant') {
-          extractPreviewData(msg.content)
+          extractPreviewData(normalizedContent)
         }
       }
       scrollToBottom()
@@ -3099,14 +3108,14 @@ const loadConversation = async (cid: number) => {
         const linkedApp = apps.find((a: any) => a.conversation_id === cid && a.config_preview)
         if (linkedApp?.config_preview) {
           const data = linkedApp.config_preview.data || linkedApp.config_preview
-          store.preview.appName = data.appName || ''
+          store.setAppName(data.appName)
           store.preview.models = data.models || []
           store.preview.forms = data.forms || []
           store.preview.dicts = data.dicts || []
           store.preview.roles = data.roles || []
           store.preview.workflows = data.workflows || []
           store.preview.permissions = data.permissions || []
-          store.currentApp = { name: store.preview.appName, status: 'draft' }
+          store.currentApp = { status: 'draft' }
           if (linkedApp.id && typeof linkedApp.id === 'number') {
             existingAppId.value = linkedApp.id
           }
@@ -3303,33 +3312,42 @@ const selectedDocVersionItem = computed<DocVersionListItem | null>(() => {
   return displayDocVersions.value[0] || null
 })
 const docVersionStructuredResult = (item?: Pick<DocVersion, 'parsed_config' | 'raw_content'> | null, fallbackConfig?: any) => {
+  // appName 原则：优先用传入数据里的名字（历史 version 可能跟当前不同），
+  // 否则回退到 store.preview.appName（store 的 setAppName 已过滤掉默认占位值）
   const parsed = item?.parsed_config?.data || item?.parsed_config
   if (parsed && typeof parsed === 'object') {
     return buildStructuredDocFromPreviewConfig(parsed, {
+      appName: parsed.appName || store.preview.appName,
       appCode: parsed.appCode || extractAppCodeFromText(String(item?.raw_content || '')),
     })
   }
   if (fallbackConfig && typeof fallbackConfig === 'object') {
     return buildStructuredDocFromPreviewConfig(fallbackConfig, {
+      appName: fallbackConfig.appName || store.preview.appName,
       appCode: fallbackConfig.appCode || displayAppCode.value,
     })
   }
   return null
 }
 const selectedDocStructuredResult = computed(() => {
-  return docVersionStructuredResult(selectedDocVersionItem.value, hasPreviewContent.value ? currentPreviewConfigPayload.value : null)
+  return docVersionStructuredResult(selectedDocVersionItem.value, hasStructuredPreviewData.value ? currentPreviewConfigPayload.value : null)
 })
+const liveStructuredDocResult = computed(() => (
+  selectedDocStructuredResult.value || docResultForCard.value || null
+))
 
 const resolveDocDisplayContent = (item?: Pick<DocVersion, 'version' | 'raw_content' | 'parsed_config'> | null) => {
+  const raw = String(item?.raw_content || '').trim()
+  if (raw) return raw
+
   const isCurrentVersion = !!item && getDocDisplayVersion(item) === Number(currentDocVersion.value || 0)
-  if (isCurrentVersion && hasPreviewContent.value) {
+  if (isCurrentVersion && hasStructuredPreviewData.value) {
     const latestMarkdown = buildDocMarkdownFromPreview(currentPreviewConfigPayload.value).trim()
     if (latestMarkdown) return latestMarkdown
   }
 
   const rebuilt = item?.parsed_config ? buildDocMarkdownFromVersion(item as DocVersionListItem) : ''
-  const raw = String(item?.raw_content || '').trim()
-  return raw || rebuilt || String(latestDocContent.value || '').trim()
+  return rebuilt || String(latestDocContent.value || '').trim() || chatGeneratedDocContent.value
 }
 
 const selectedDocDisplayContent = computed(() => resolveDocDisplayContent(selectedDocVersionItem.value))
@@ -3668,7 +3686,7 @@ const loadLatestDocForApp = async (appId: number) => {
     latestDocConversationId.value = null
     if (latest?.parsed_config) {
       const parsed = latest.parsed_config?.data || latest.parsed_config
-      store.preview.appName = parsed?.appName || store.preview.appName || ''
+      store.setAppName(parsed?.appName)
       store.preview.models = parsed?.models || store.preview.models || []
       store.preview.forms = parsed?.forms || store.preview.forms || []
       store.preview.dicts = parsed?.dicts || store.preview.dicts || []
@@ -4267,6 +4285,24 @@ function extractAppCodeFromText(text: string): string {
   return ''
 }
 
+// 从文档头部纯前端推断应用名，用于文档刚上传、后端 AI 兜底还没跑完时立即占位显示。
+// 后端 SSE done 返回权威值时会通过 store.setAppName 覆盖，setter 自带默认占位过滤。
+function extractAppNameFromText(text: string): string {
+  if (!text) return ''
+  const DEFAULTS = new Set(['', '未命名应用', '业务应用', '应用', '应用设计文档'])
+  const patterns = [
+    /\|\s*应用名称\s*\|\s*`?([^|\n`]+?)`?\s*\|/i,  // 标准表格行
+    /应用名称[：:\s`]*([^\n`|]+)/i,                // "应用名称: xxx" 散文
+    /^#\s+([^\n#]+)$/m,                            // 一级标题兜底
+  ]
+  for (const p of patterns) {
+    const m = text.match(p)
+    const v = String(m?.[1] || '').trim()
+    if (v && !DEFAULTS.has(v)) return v
+  }
+  return ''
+}
+
 function resetConversationWorkspace() {
   store.reset()
   store.showConnectModal = false
@@ -4343,7 +4379,7 @@ function resetPreviewForNewParse() {
   store.preview.roles = []
   store.preview.workflows = []
   store.preview.permissions = []
-  store.preview.appName = ''
+  store.setAppName('', { force: true })
   store.currentApp = null
   latestDocContent.value = ''
   latestDocAppId.value = null
@@ -4843,6 +4879,15 @@ const uploadDocFile = async (file: File) => {
       formData.append('conversation_id', String(conversationId.value))
     }
 
+    // 先本地读文档头部推断应用名，立即填进 store。
+    // 否则大文档会走后端 AI 兜底（3-5 分钟），期间界面应用名会空。
+    // 后端 SSE done 返回真值时 setAppName 会用后端结果覆盖（setter 会过滤默认值）。
+    try {
+      const head = await file.slice(0, 8192).text()
+      const local = extractAppNameFromText(head)
+      if (local) store.setAppName(local)
+    } catch { /* 读失败就走原路径，不阻塞上传 */ }
+
     const response = await fetch(`${API_PREFIX}/applications/upload-doc-with-conversation`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${token}` },
@@ -4944,8 +4989,8 @@ const uploadDocFile = async (file: File) => {
                 const skeletonName = pickAppName(data.data)
                 const skeletonCode = pickAppCode(data.data)
                 if (skeletonName && !store.preview.appName) {
-                  store.preview.appName = skeletonName
-                  store.currentApp = { name: skeletonName, status: 'draft' }
+                  store.setAppName(skeletonName)
+                  store.currentApp = { status: 'draft' }
                 }
                 if (skeletonCode) {
                   parsedAppCode.value = skeletonCode
@@ -4980,6 +5025,14 @@ const uploadDocFile = async (file: File) => {
             }
           } catch (parseErr: any) {
             if (parseErr.message && !parseErr.message.includes('JSON')) throw parseErr
+            // JSON 解析失败多见于大 done 事件跨 chunk 被切断；完整的 data 行
+            // 会在下一次 read 拼接后重新进入这段 handleSseLines。保留警告便于排查。
+            console.warn('[SSE] JSON parse failed (possibly mid-chunk)', {
+              event: currentEvent,
+              lineLen: (line || '').length,
+              preview: String(line || '').slice(0, 200),
+              error: parseErr.message,
+            })
           }
         }
       }
@@ -5024,8 +5077,8 @@ const uploadDocFile = async (file: File) => {
       const appName = pickAppName(previewData)
       const appCode = pickAppCode(previewData)
       if (previewData?.appName || previewData?.models || appName || appCode) {
-        store.currentApp = { name: appName || store.preview.appName || '未命名应用', status: 'draft' }
-        store.preview.appName = appName || store.preview.appName || ''
+        store.currentApp = { status: 'draft' }
+        store.setAppName(appName)
         parsedAppCode.value = appCode || buildAppCode(store.preview.appName)
         store.preview.roles = previewData.roles || []
         store.preview.dicts = previewData.dicts || []
@@ -5069,7 +5122,7 @@ const uploadDocFile = async (file: File) => {
       // done 事件未收到（大 payload SSE 丢失），但 progress 已逐步推送了数据到 store
       console.warn('done 事件丢失，使用 store 中已累积的数据兜底')
       if (!store.currentApp) {
-        store.currentApp = { name: store.preview.appName || '未命名应用', status: 'draft' }
+        store.currentApp = { status: 'draft' }
       }
       parseReady.value = true
       lastParsedFilename.value = file.name
@@ -5323,7 +5376,7 @@ const handleDocVersionUpload = async (file: File, appId: number) => {
               latestParseMeta.value = data.parse_meta || null
               if (data.parsed_config) {
                 const pc = data.parsed_config.data || data.parsed_config
-                store.preview.appName = pc.appName || store.preview.appName
+                store.setAppName(pc.appName)
                 store.preview.models = pc.models || []
                 store.preview.forms = pc.forms || []
                 store.preview.dicts = pc.dicts || []
@@ -5332,7 +5385,6 @@ const handleDocVersionUpload = async (file: File, appId: number) => {
                 store.preview.permissions = pc.permissions || []
                 store.currentApp = {
                   ...(store.currentApp || {}),
-                  name: store.preview.appName || store.currentApp?.name || '',
                   status: 'draft',
                   apaas_app_id: store.currentApp?.apaas_app_id,
                 }
@@ -5356,7 +5408,7 @@ const handleDocVersionUpload = async (file: File, appId: number) => {
       // 将最新解析结果更新到 store
       const pc = changePlanData.parsed_config?.data || changePlanData.parsed_config
       if (pc) {
-        store.preview.appName = pc.appName || store.preview.appName
+        store.setAppName(pc.appName)
         store.preview.roles = pc.roles || []
         store.preview.dicts = pc.dicts || []
         store.preview.models = pc.models || []
@@ -5511,7 +5563,7 @@ const executeChangePlan = async () => {
     if (updatedConfig) {
       const previewData = updatedConfig.data || updatedConfig
       if (previewData.appName || previewData.models) {
-        store.preview.appName = previewData.appName || store.preview.appName
+        store.setAppName(previewData.appName)
         store.preview.roles = previewData.roles || store.preview.roles
         store.preview.dicts = previewData.dicts || store.preview.dicts
         store.preview.models = previewData.models || store.preview.models
@@ -5602,7 +5654,7 @@ const startAssembleConfig = async () => {
           // 骨架完成 → 显示模型名和字典名（占位）
           if (evt.phase === 'skeleton' && evt.status === 'done' && evt.data) {
             const sk = evt.data
-            store.preview.appName = sk.appName || ''
+            store.setAppName(sk.appName)
             store.preview.roles = sk.roles || []
             // 用骨架的 dict_names 创建空字典占位
             store.preview.dicts = (sk.dict_names || []).map((d: any) => ({
@@ -5612,7 +5664,7 @@ const startAssembleConfig = async () => {
             store.preview.models = (sk.model_names || []).map((m: any) => ({
               name: m.name, code: m.code, fields: []
             }))
-            store.currentApp = { name: store.preview.appName, status: 'draft' }
+            store.currentApp = { status: 'draft' }
           }
 
           // 字典批次完成 → 更新对应字典的选项
@@ -5667,14 +5719,14 @@ const startAssembleConfig = async () => {
           // 完整配置 → 最终覆盖
           if (evt.phase === 'complete' && evt.data) {
             const d = evt.data
-            store.preview.appName = d.appName || store.preview.appName
+            store.setAppName(d.appName)
             store.preview.roles = d.roles || store.preview.roles
             store.preview.dicts = d.dicts || store.preview.dicts
             store.preview.models = d.models || store.preview.models
             store.preview.forms = d.forms || store.preview.forms
             store.preview.workflows = d.workflows || []
             store.preview.permissions = d.permissions || []
-            store.currentApp = { name: store.preview.appName, status: 'ready' }
+            store.currentApp = { status: 'ready' }
             parseReady.value = true
           }
 
@@ -5718,13 +5770,53 @@ const generatePreviewFromConversation = async () => {
   await startAssembleConfig()
 }
 
+const isConfirmationIntent = (text: string) => {
+  const normalized = String(text || '').trim().toLowerCase()
+  if (!normalized) return false
+  return [
+    '确认', '可以', '可以了', '好的', '好', 'ok', 'okay', '没问题', '就这样',
+    '开始生成', '生成吧', '直接生成', '立即生成', '开始吧', '开始构建', '开始搭建', '继续生成', '继续'
+  ].some(keyword => normalized.includes(keyword))
+}
+
+const looksLikeGeneratedDesignDoc = (input: string) => {
+  const text = String(input || '').trim()
+  if (!text) return false
+  const cleaned = stripHiddenAssistantBlocks(text)
+  return (
+    cleaned.includes('功能设计文档')
+    || cleaned.includes('应用设计文档')
+    || (cleaned.includes('## 一、') && cleaned.includes('## 四、数据模型'))
+    || (cleaned.startsWith('# ') && cleaned.includes('## 一、项目目标'))
+  )
+}
+
+const getRequirementsSemanticAction = (text: string): 'generate_doc' | 'build' | null => {
+  if (!isRequirementsMode.value || !isConfirmationIntent(text)) return null
+
+  const lastAssistant = [...messages].reverse().find((msg) => msg.role === 'assistant')
+  const assistantContent = String(lastAssistant?.content || '')
+  const hasDocReady = !!docResultForCard.value
+    || !!latestDocContent.value.trim()
+    || !!chatGeneratedDocContent.value
+    || hasStructuredPreviewData.value
+
+  if (assistantContent.includes('请确认操作') || assistantContent.includes('点击下方按钮') || assistantContent.includes('生成结构化的功能设计文档')) {
+    return hasDocReady ? 'build' : 'generate_doc'
+  }
+
+  if (hasDocReady) return 'build'
+  return 'generate_doc'
+}
+
 const createConversation = async () => {
   const token = localStorage.getItem('token')
+  const agentTypeForCreate = currentAgent.value === 'requirements' ? 'builder' : currentAgent.value
   const res = await fetch(`${API_PREFIX}/conversations`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
     body: JSON.stringify({
-      agent_type: currentAgent.value,
+      agent_type: agentTypeForCreate,
       ...(selectedBuilderModelId.value != null ? { selected_llm_config_id: selectedBuilderModelId.value } : {}),
     })
   })
@@ -5745,7 +5837,6 @@ const sendMessage = async () => {
   sendingMessage.value = true
   const text = inputText.value.trim()
   const attachmentPayload = pendingChatAttachment.value
-  const shouldUseBuilderConversation = !(attachmentPayload?.kind === 'image') && (parseReady.value || !!existingAppId.value || hasPreviewContent.value) && currentAgent.value === 'requirements'
   inputText.value = ''
   pendingChatAttachment.value = null
   messages.push({
@@ -5776,7 +5867,39 @@ const sendMessage = async () => {
     return
   }
 
-  if (shouldUseBuilderConversation && conversationId.value) {
+  const semanticAction = getRequirementsSemanticAction(text)
+  if (semanticAction) {
+    isTyping.value = false
+    if (semanticAction === 'build') {
+      messages.push({
+        id: Date.now(),
+        role: 'assistant',
+        agent: 'requirements',
+        content: '收到确认，正在开始生成应用配置。',
+        created_at: ''
+      })
+      scrollToBottom()
+      await triggerFullBuildPipeline()
+    } else {
+      messages.push({
+        id: Date.now(),
+        role: 'assistant',
+        agent: 'requirements',
+        content: '收到确认，正在为你生成设计文档并同步到右侧预览。',
+        created_at: ''
+      })
+      scrollToBottom()
+      await generateDocInBackground()
+    }
+    sendingMessage.value = false
+    return
+  }
+
+  const shouldSwitchToBuilder = !(attachmentPayload?.kind === 'image')
+    && (parseReady.value || !!existingAppId.value || hasPreviewContent.value)
+    && currentAgent.value === 'requirements'
+
+  if (shouldSwitchToBuilder && conversationId.value) {
     try {
       await conversationApi.updateAgentType(conversationId.value, 'builder')
       currentAgent.value = 'builder'
@@ -5792,21 +5915,16 @@ const sendMessage = async () => {
   // 调用后端API
   try {
     const token = localStorage.getItem('token')
-    const useRequirementsApi = currentAgent.value === 'requirements' && !shouldUseBuilderConversation
     const response = attachmentPayload
       ? await (() => {
           const formData = new FormData()
           formData.append('message', text)
           formData.append('file', attachmentPayload.file)
-          if (!useRequirementsApi) {
-            formData.append('conversation_id', String(conversationId.value))
-          }
-          if (!useRequirementsApi && incrementalConfigPayload) {
+          formData.append('conversation_id', String(conversationId.value))
+          if (incrementalConfigPayload) {
             formData.append('current_config', JSON.stringify(incrementalConfigPayload))
           }
-          const url = useRequirementsApi
-            ? requirementsApi.chatWithFileUrl(conversationId.value)
-            : `${API_PREFIX}/chat/send-with-file`
+          const url = `${API_PREFIX}/chat/send-with-file`
           return fetch(url, {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${token}` },
@@ -5814,16 +5932,12 @@ const sendMessage = async () => {
           })
         })()
       : await (() => {
-          const url = useRequirementsApi
-            ? requirementsApi.chatUrl(conversationId.value)
-            : `${API_PREFIX}/chat/send`
-          const body = useRequirementsApi
-            ? { message: text }
-            : {
-                conversation_id: conversationId.value,
-                message: text,
-                ...(incrementalConfigPayload ? { current_config: incrementalConfigPayload } : {})
-              }
+          const url = `${API_PREFIX}/chat/send`
+          const body = {
+            conversation_id: conversationId.value,
+            message: text,
+            ...(incrementalConfigPayload ? { current_config: incrementalConfigPayload } : {})
+          }
           return fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
@@ -5838,6 +5952,7 @@ const sendMessage = async () => {
     let assistantContent = ''
     let sseBuffer = ''
     let currentEvent = ''
+    let serverConfigReceived = false  // 服务端已推送 config，done 时跳过客户端重提取
 
     if (!reader) throw new Error('无法读取响应')
 
@@ -5905,6 +6020,39 @@ const sendMessage = async () => {
             return
           }
 
+          // 服务端推送 config（pipeline 解析完成 或 LLM 生成/patch 后）
+          if (normalizedType === 'config' || currentEvent === 'config') {
+            const configData = parsed.data ?? parsed
+            if (configData && typeof configData === 'object') {
+              const d = configData.data ?? configData
+              if (d.appName !== undefined) store.setAppName(d.appName)
+              if (Array.isArray(d.roles)) store.preview.roles = d.roles
+              if (Array.isArray(d.dicts)) store.preview.dicts = d.dicts
+              if (Array.isArray(d.models)) store.preview.models = d.models
+              if (Array.isArray(d.forms)) store.preview.forms = d.forms
+              if (Array.isArray(d.permissions)) store.preview.permissions = d.permissions
+              parseReady.value = true
+              serverConfigReceived = true  // 服务端已合并，done 时跳过客户端重提取
+            }
+            continue
+          }
+
+          if (normalizedType === 'progress' || currentEvent === 'progress') {
+            // pipeline 解析进度：有局部数据时实时更新右侧预览
+            if (parsed.module && Array.isArray(parsed.data)) {
+              const mod = parsed.module as string
+              const data = parsed.data
+              if (mod === 'roles') store.preview.roles = data
+              else if (mod === 'dicts') store.preview.dicts = data
+              else if (mod === 'models') store.preview.models = data
+              else if (mod === 'forms') store.preview.forms = data
+              else if (mod === 'permissions') store.preview.permissions = data
+              parseReady.value = true
+              serverConfigReceived = true
+            }
+            continue
+          }
+
           if (normalizedType === 'done') {
             isTyping.value = false
             const lastMsg = messages[messages.length - 1]
@@ -5912,26 +6060,44 @@ const sendMessage = async () => {
             if (isRequirementsMode.value) {
               const hasBuildTrigger = assistantContent.includes('<!-- TRIGGER_BUILD -->')
               const hasDesignComplete = assistantContent.includes('<!-- DESIGN_COMPLETE -->')
-              if (hasBuildTrigger || hasDesignComplete) {
+              const hasGeneratedDocBody = looksLikeGeneratedDesignDoc(assistantContent)
+              if (hasBuildTrigger || hasDesignComplete || hasGeneratedDocBody) {
+                const fullDocContent = assistantContent
+                  .replace('<!-- TRIGGER_BUILD -->', '')
+                  .replace('<!-- DESIGN_COMPLETE -->', '')
+                  .trim()
+                if (fullDocContent) {
+                  latestDocContent.value = fullDocContent
+                }
+                const compactDocMessage = hasBuildTrigger
+                  ? '需求已确认，完整设计文档已同步到右侧，正在准备开始构建。'
+                  : '设计文档已生成，完整内容请查看右侧预览。'
                 if (lastMsg) {
-                  lastMsg.content = assistantContent
-                    .replace('<!-- TRIGGER_BUILD -->', '')
-                    .replace('<!-- DESIGN_COMPLETE -->', '')
-                    .trim()
+                  lastMsg.content = compactDocMessage
+                } else {
+                  messages.push({
+                    id: Date.now(),
+                    role: 'assistant',
+                    agent: currentAgent.value,
+                    content: compactDocMessage,
+                    created_at: ''
+                  })
                 }
                 if (hasBuildTrigger) {
                   triggerFullBuildPipeline()
-                } else {
+                } else if (hasDesignComplete) {
                   generateDocInBackground()
                 }
               }
             } else {
-              const patchApplied = await extractPatchData(assistantContent)
-              if (!patchApplied) extractPreviewData(assistantContent)
+              // 服务端已推送合并后的 config，跳过客户端重提取，避免 patch 二次应用
+              const patchApplied = serverConfigReceived ? false : await extractPatchData(assistantContent)
+              if (!patchApplied && !serverConfigReceived) extractPreviewData(assistantContent)
               if (!store.currentApp && assistantContent.length > 50) {
                 const appNameMatch = assistantContent.match(/搭建.*?[**](.+?)[**]/)
                 if (appNameMatch) {
-                  store.currentApp = { name: appNameMatch[1] || '', status: 'talking' }
+                  store.setAppName(appNameMatch[1])
+                  store.currentApp = { status: 'talking' }
                 }
               }
             }
@@ -6053,7 +6219,8 @@ const triggerFullBuildPipeline = async () => {
     }
     const created = await applicationApi.create(payload)
     existingAppId.value = created.id
-    store.currentApp = { name: appConfig.appName || '', status: 'ready' }
+    store.setAppName(appConfig.appName)
+    store.currentApp = { status: 'ready' }
 
     // Step 6: Update progress message
     if (pMsg) {
@@ -6132,10 +6299,11 @@ const generateDocInBackground = async () => {
       if (appConfig.appCode) {
         parsedAppCode.value = appConfig.appCode
       }
-      if (!store.currentApp && appConfig.appName) {
-        store.currentApp = { name: appConfig.appName, status: 'draft' }
-      } else if (store.currentApp && appConfig.appName) {
-        store.currentApp = { ...store.currentApp, name: appConfig.appName }
+      if (appConfig.appName) {
+        store.setAppName(appConfig.appName)
+        if (!store.currentApp) {
+          store.currentApp = { status: 'draft' }
+        }
       }
       parseReady.value = true
       syncCurrentDocFromPreview('当前生成的设计文档', buildDocMarkdownFromPreview(appConfig))
@@ -6171,7 +6339,8 @@ const generateDocInChat = async () => {
     if (!reader) throw new Error('无法读取响应流')
     const decoder = new TextDecoder()
     let buffer = ''
-    let assistantContent = ''
+    const progressMessageId = Date.now()
+    let hasInsertedProgressMessage = false
 
     while (true) {
       const { done, value } = await reader.read()
@@ -6191,21 +6360,33 @@ const generateDocInChat = async () => {
             // Phase 1: streaming text content
             if (data.content) {
               isTyping.value = false
-              assistantContent += data.content
-              const lastMsg = messages[messages.length - 1]
-              if (lastMsg && lastMsg.role === 'assistant' && lastMsg.id === -1) {
-                lastMsg.content = assistantContent
-              } else {
-                messages.push({ id: -1, role: 'assistant', agent: 'requirements', content: assistantContent, created_at: '' })
+              if (!hasInsertedProgressMessage) {
+                messages.push({
+                  id: progressMessageId,
+                  role: 'assistant',
+                  agent: 'requirements',
+                  content: '正在整理设计文档，完整内容会直接显示在右侧预览区。',
+                  created_at: ''
+                })
+                hasInsertedProgressMessage = true
               }
               scrollToBottom()
             }
             // Phase 2: structured JSON result
             if (data.doc_result) {
               docResultForCard.value = data.doc_result
-              // Finalize the streaming message
-              const lastMsg = messages[messages.length - 1]
-              if (lastMsg && lastMsg.id === -1) lastMsg.id = Date.now()
+              const progressMsg = messages.find((msg) => msg.id === progressMessageId)
+              if (progressMsg) {
+                progressMsg.content = '设计文档已生成，完整内容请查看右侧预览。'
+              } else {
+                messages.push({
+                  id: progressMessageId,
+                  role: 'assistant',
+                  agent: 'requirements',
+                  content: '设计文档已生成，完整内容请查看右侧预览。',
+                  created_at: ''
+                })
+              }
             }
           } catch { /* ignore */ }
         }
@@ -6215,6 +6396,32 @@ const generateDocInChat = async () => {
     isTyping.value = false
     if (!docResultForCard.value) {
       messages.push({ id: Date.now(), role: 'assistant', agent: 'requirements', content: '设计文档生成失败，请重试。', created_at: '' })
+    } else {
+      try {
+        const appConfig = await convertConfig(docResultForCard.value)
+        store.preview = {
+          appName: appConfig.appName || '',
+          roles: appConfig.roles || [],
+          dicts: appConfig.dicts || [],
+          models: appConfig.models || [],
+          forms: appConfig.forms || [],
+          workflows: appConfig.workflows || [],
+          permissions: appConfig.permissions || [],
+        }
+        if (appConfig.appCode) {
+          parsedAppCode.value = appConfig.appCode
+        }
+        if (appConfig.appName) {
+          store.setAppName(appConfig.appName)
+          if (!store.currentApp) {
+            store.currentApp = { status: 'draft' }
+          }
+        }
+        parseReady.value = true
+        syncCurrentDocFromPreview('当前生成的设计文档', buildDocMarkdownFromPreview(appConfig))
+      } catch (error) {
+        console.error('Sync generated doc preview failed:', error)
+      }
     }
     scrollToBottom()
   } catch (e: any) {
@@ -6264,7 +6471,8 @@ const confirmDocAndBuild = async () => {
     }
     const created = await applicationApi.create(payload)
     existingAppId.value = created.id
-    store.currentApp = { name: appConfig.appName || '', status: 'ready' }
+    store.setAppName(appConfig.appName)
+    store.currentApp = { status: 'ready' }
 
     // Step 5: Add confirmation message
     messages.push({
@@ -6294,7 +6502,7 @@ const confirmDocAndBuild = async () => {
 
 const buildDocMarkdownFromPreview = (previewOverride?: any) => {
   const preview = previewOverride || store.preview
-  const appName = preview?.appName || '未命名应用'
+  const appName = preview?.appName || ''
   const appCode = previewOverride ? (preview?.appCode || '') : displayAppCode.value
   const lines: string[] = []
   const models = preview?.models || []
@@ -6525,6 +6733,18 @@ const getRenderableContentText = (input: string) => {
   return text.replace(/\n{3,}/g, '\n\n').trim()
 }
 
+const normalizeLoadedAssistantContent = (input: string) => {
+  const cleaned = getRenderableContentText(input)
+  if (!cleaned) return ''
+  if (cleaned.includes('<!-- TRIGGER_BUILD -->')) {
+    return '需求已确认，完整设计文档已同步到右侧，正在准备开始构建。'
+  }
+  if (cleaned.includes('<!-- DESIGN_COMPLETE -->') || looksLikeGeneratedDesignDoc(cleaned)) {
+    return '设计文档已生成，完整内容请查看右侧预览。'
+  }
+  return cleaned
+}
+
 const formatContent = (t: string) => {
   const text = getRenderableContentText(t)
   return text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>').replace(/• /g, '<span style="color:#818cf8;margin-right:4px">•</span> ')
@@ -6550,7 +6770,7 @@ const ensureFreshRequirementsConversation = async () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
       body: JSON.stringify({
-        agent_type: 'requirements',
+        agent_type: 'builder',
         ...(selectedBuilderModelId.value != null ? { selected_llm_config_id: selectedBuilderModelId.value } : {}),
       })
     })
@@ -6607,14 +6827,14 @@ onMounted(async () => {
         if (app.config_preview) {
           const data = app.config_preview.data || app.config_preview
           configData = data
-          store.preview.appName = data.appName || app.app_name || ''
+          store.setAppName(data.appName || app.app_name)
           store.preview.models = data.models || []
           store.preview.forms = data.forms || []
           store.preview.dicts = data.dicts || []
           store.preview.roles = data.roles || []
           store.preview.workflows = data.workflows || []
           store.preview.permissions = data.permissions || []
-          store.currentApp = { name: store.preview.appName, status: app.status || 'ready', apaas_app_id: app.apaas_app_id }
+          store.currentApp = { status: app.status || 'ready', apaas_app_id: app.apaas_app_id }
           platformDirectUrl.value = app.apaas_url || ''
           parseReady.value = store.preview.models.length > 0
           currentAgent.value = 'builder'
@@ -6640,7 +6860,10 @@ onMounted(async () => {
               for (const msg of historyMessages) {
                 if (msg.role === 'system') continue
                 if (msg.role === 'assistant' && isAutoDocSummaryMessage(msg.content)) continue
-                messages.push({ id: msg.id, role: msg.role as any, agent: msg.role === 'assistant' ? 'builder' : undefined, content: msg.content, created_at: msg.created_at })
+                const normalizedContent = msg.role === 'assistant'
+                  ? normalizeLoadedAssistantContent(msg.content)
+                  : msg.content
+                messages.push({ id: msg.id, role: msg.role as any, agent: msg.role === 'assistant' ? 'builder' : undefined, content: normalizedContent, created_at: msg.created_at })
               }
               scrollToBottom()
             }
@@ -6673,15 +6896,18 @@ onMounted(async () => {
               if (msg.role === 'assistant' && isAutoDocSummaryMessage(msg.content)) {
                 continue
               }
+              const normalizedContent = msg.role === 'assistant'
+                ? normalizeLoadedAssistantContent(msg.content)
+                : msg.content
               messages.push({
                 id: msg.id,
                 role: msg.role as any,
                 agent: msg.role === 'assistant' ? 'builder' : undefined,
-                content: msg.content,
+                content: normalizedContent,
                 created_at: msg.created_at
               })
               if (msg.role === 'assistant') {
-                extractPreviewData(msg.content)
+                extractPreviewData(normalizedContent)
               }
             }
             scrollToBottom()
@@ -6693,14 +6919,14 @@ onMounted(async () => {
               const linkedApp = apps.find((a: any) => a.conversation_id === cid && a.config_preview)
               if (linkedApp?.config_preview) {
                 const data = linkedApp.config_preview.data || linkedApp.config_preview
-                store.preview.appName = data.appName || ''
+                store.setAppName(data.appName)
                 store.preview.models = data.models || []
                 store.preview.forms = data.forms || []
                 store.preview.dicts = data.dicts || []
                 store.preview.roles = data.roles || []
                 store.preview.workflows = data.workflows || []
                 store.preview.permissions = data.permissions || []
-                store.currentApp = { name: store.preview.appName, status: 'draft', apaas_app_id: linkedApp.apaas_app_id }
+                store.currentApp = { status: 'draft', apaas_app_id: linkedApp.apaas_app_id }
                 parseReady.value = store.preview.models.length > 0
                 existingAppId.value = linkedApp.id
                 loadedAppCode.value = linkedApp.app_code || ''
@@ -6744,12 +6970,12 @@ onMounted(async () => {
         if (app.config_preview) {
           const data = app.config_preview.data || app.config_preview
           configData = data
-          store.preview.appName = data.appName || app.app_name || ''
+          store.setAppName(data.appName || app.app_name)
           store.preview.models = data.models || []
           store.preview.forms = data.forms || []
           store.preview.dicts = data.dicts || []
           store.preview.roles = data.roles || []
-          store.currentApp = { name: store.preview.appName, status: app.status || 'ready', apaas_app_id: app.apaas_app_id }
+          store.currentApp = { status: app.status || 'ready', apaas_app_id: app.apaas_app_id }
           parseReady.value = store.preview.models.length > 0
           currentAgent.value = 'builder'
         }
@@ -6772,7 +6998,10 @@ onMounted(async () => {
               for (const msg of historyMessages) {
                 if (msg.role === 'system') continue
                 if (msg.role === 'assistant' && isAutoDocSummaryMessage(msg.content)) continue
-                messages.push({ id: msg.id, role: msg.role as any, agent: msg.role === 'assistant' ? 'builder' : undefined, content: msg.content, created_at: msg.created_at })
+                const normalizedContent = msg.role === 'assistant'
+                  ? normalizeLoadedAssistantContent(msg.content)
+                  : msg.content
+                messages.push({ id: msg.id, role: msg.role as any, agent: msg.role === 'assistant' ? 'builder' : undefined, content: normalizedContent, created_at: msg.created_at })
               }
             }
           }
@@ -6843,7 +7072,7 @@ watch(() => route.query.app_id, async (newAppId, oldAppId) => {
   store.preview.roles = []
   store.preview.workflows = []
   store.preview.permissions = []
-  store.preview.appName = ''
+  store.setAppName('', { force: true })
   store.currentApp = null
   parsedAppCode.value = ''
   loadedAppCode.value = ''
@@ -6870,14 +7099,14 @@ watch(() => route.query.app_id, async (newAppId, oldAppId) => {
     if (app.config_preview) {
       const data = app.config_preview.data || app.config_preview
       configData = data
-      store.preview.appName = data.appName || app.app_name || ''
+      store.setAppName(data.appName || app.app_name)
       store.preview.models = data.models || []
       store.preview.forms = data.forms || []
       store.preview.dicts = data.dicts || []
       store.preview.roles = data.roles || []
       store.preview.workflows = data.workflows || []
       store.preview.permissions = data.permissions || []
-      store.currentApp = { name: store.preview.appName, status: app.status || 'ready', apaas_app_id: app.apaas_app_id }
+      store.currentApp = { status: app.status || 'ready', apaas_app_id: app.apaas_app_id }
       platformDirectUrl.value = app.apaas_url || ''
       parseReady.value = store.preview.models.length > 0
       currentAgent.value = 'builder'
@@ -7549,7 +7778,11 @@ watch(conversationId, (id) => {
 .chat-bubble.assistant { display: flex; justify-content: flex-start; }
 .bubble-row { display: flex; align-items: flex-start; gap: 10px; }
 .bubble-row.user { justify-content: flex-end; width: 100%; }
+.bubble-row.assistant { width: 100%; }
 .bubble-inner { max-width: 80%; }
+.chat-bubble.assistant .bubble-inner {
+  max-width: min(720px, calc(100% - 36px));
+}
 .bubble-inner.welcome-bubble {
   max-width: min(920px, 96%);
 }

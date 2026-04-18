@@ -15,9 +15,15 @@ from app.schemas import ApplicationCreate, ApplicationResponse, MergedAppRespons
 from app.deps import get_auth_context, AuthContext
 from app.permissions import has_org_permission, check_resource_permission, batch_get_permissions, Action
 from jose import JWTError, jwt
-from app.config import settings
+from app.config import settings, APP_DEPLOY_ABSTRACT
 from app.apaas_client import APaaSClient
 from app.crypto import decrypt_password
+from app.json_utils import loads_if_str
+from app.error_messages import (
+    APAAS_LOGIN_FAILED,
+    APAAS_TOKEN_EXPIRED_GENERIC,
+    is_apaas_token_error,
+)
 
 from app.services.config_converter import convert_analysis_to_app_config
 
@@ -40,6 +46,39 @@ def _normalize_app_code(candidate: str | None) -> str:
     if raw and raw[0].isalpha():
         return raw
     return ""
+
+
+# ── 应用名推断 ──────────────────────────────────────────────
+# LLM 解析结果里常见的"默认值"集合。遇到这些值时认为解析没有提取出真实应用名，
+# 此时改从文档标题/正文推断，推断不到才退回文件名。
+_DEFAULT_APP_NAMES = {"业务应用", "应用", "未命名应用", ""}
+
+
+def _infer_app_name_from_doc(text: str, filename: str = "") -> str:
+    """从文档正文或文件名里推断应用名称。
+
+    策略：
+      1. 扫文档正文，取第一行包含"系统"或"应用"且 ≤ 32 字的行作为应用名；
+         跳过常见的章节/目录噪声（"设计说明书"、"修订记录"、"目录"、"功能设计"）。
+      2. 命中不到时退回文件名（剥掉常见后缀 / 分隔符）。
+    返回空串表示推断失败，由调用方决定兜底值。
+    """
+    for line in (text or "").splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        cleaned = stripped.strip("*# ").strip()
+        if not cleaned:
+            continue
+        if any(token in cleaned for token in ("设计说明书", "修订记录", "目录", "功能设计")):
+            continue
+        if len(cleaned) <= 32 and ("系统" in cleaned or "应用" in cleaned):
+            return cleaned
+
+    name = (filename or "").replace('.md', '').replace('-', ' ').replace('_', ' ')
+    for suffix in ('功能设计', '设计文档', '需求文档', '设计', '配置文档'):
+        name = name.replace(suffix, '')
+    return name.strip()
 
 
 def _compact_permission_rule(rule: dict) -> dict:
@@ -369,23 +408,11 @@ async def _ensure_doc_version_parsed_config(
     parsed = None
     if version.parsed_config:
         try:
-            parsed = json.loads(version.parsed_config) if isinstance(version.parsed_config, str) else version.parsed_config
+            parsed = loads_if_str(version.parsed_config)
         except Exception:
             parsed = None
 
     raw_content = str(version.raw_content or "").strip()
-
-    if raw_content and not _doc_content_looks_like_template(raw_content):
-        try:
-            from app.doc_pipeline import parse_document
-
-            reparsed = await parse_document(raw_content)
-            if reparsed:
-                version.parsed_config = _dump_parsed_config(reparsed)
-                await db.flush()
-                return _compact_preview_payload(reparsed)
-        except Exception:
-            logger.warning("文档版本重解析失败 id=%s", version.id, exc_info=True)
 
     parsed_is_stale = parsed is None or _parsed_config_is_stale(parsed)
     raw_needs_reparse = False
@@ -407,6 +434,20 @@ async def _ensure_doc_version_parsed_config(
 
     if not raw_content:
         return parsed
+
+    if _doc_content_looks_like_template(raw_content):
+        return parsed
+
+    try:
+        from app.doc_pipeline import parse_document
+
+        reparsed = await parse_document(raw_content)
+        if reparsed:
+            version.parsed_config = _dump_parsed_config(reparsed)
+            await db.flush()
+            return _compact_preview_payload(reparsed)
+    except Exception:
+        logger.warning("文档版本重解析失败 id=%s", version.id, exc_info=True)
 
     return parsed
 
@@ -636,7 +677,7 @@ def _enrich(app: Application) -> ApplicationResponse:
     resolved_app_code = app.app_code
     if app.config_preview:
         try:
-            config = json.loads(app.config_preview) if isinstance(app.config_preview, str) else app.config_preview
+            config = loads_if_str(app.config_preview)
             data = config.get("data", config)
             resolved_app_code = data.get("appCode") or data.get("app_code") or resolved_app_code
             models = len(data.get("models", []))
@@ -1413,7 +1454,7 @@ async def update_app_code(
     app.app_code = new_code
     if app.config_preview:
         try:
-            config = json.loads(app.config_preview) if isinstance(app.config_preview, str) else app.config_preview
+            config = loads_if_str(app.config_preview)
             data = config.get("data", config)
             data["app_code"] = new_code
             app.config_preview = _dump_preview_config(config)
@@ -1536,13 +1577,13 @@ async def publish_application(
               next_version = "1.0.1"
         else:
           next_version = "1.0.0"
-        await client.deploy_app(str(app.apaas_app_id), next_version, abstract="aPaaS Builder 应用上线")
+        await client.deploy_app(str(app.apaas_app_id), next_version, abstract=APP_DEPLOY_ABSTRACT)
         app.status = "completed"
         await db.commit()
         return {"ok": True, "version": next_version, "remote_status": "ENABLE"}
     except Exception as e:
         detail = str(e)
-        if ("Token已过期或无效" in detail or "401" in detail) and env.username and env.password_enc:
+        if (is_apaas_token_error(detail) or "401" in detail) and env.username and env.password_enc:
             try:
                 password = decrypt_password(env.password_enc)
                 refresh_client = APaaSClient(base_url=env.base_url, tenant_id=env.platform_tenant_id)
@@ -1565,12 +1606,12 @@ async def publish_application(
                             next_version = "1.0.1"
                     else:
                         next_version = "1.0.0"
-                    await client.deploy_app(str(app.apaas_app_id), next_version, abstract="aPaaS Builder 应用上线")
+                    await client.deploy_app(str(app.apaas_app_id), next_version, abstract=APP_DEPLOY_ABSTRACT)
                     app.status = "completed"
                     await db.commit()
                     return {"ok": True, "version": next_version, "remote_status": "ENABLE"}
             except Exception as retry_error:
-                raise HTTPException(status_code=401, detail=f"平台登录失效，请重新连接APaaS平台：{retry_error}")
+                raise HTTPException(status_code=401, detail=f"{APAAS_LOGIN_FAILED}：{retry_error}")
         raise HTTPException(status_code=400, detail=f"上线失败: {detail}")
 
 
@@ -1712,7 +1753,7 @@ async def generate_application(
     if not current_user.apaas_token:
         raise HTTPException(status_code=400, detail="未连接得帆云平台，请先在设置中连接APaaS平台")
 
-    config = json.loads(app.config_preview) if isinstance(app.config_preview, str) else app.config_preview
+    config = loads_if_str(app.config_preview)
     client = APaaSClient(base_url=current_user.apaas_base_url, tenant_id=current_user.apaas_tenant_id, token=current_user.apaas_token)
     # 记住已有的 apaas_app_id（SSE generator 需要自己的 session）
     existing_apaas_app_id = app.apaas_app_id
@@ -1758,8 +1799,8 @@ async def generate_application(
 
                 # 特殊处理401错误
                 error_msg = str(e)
-                if "401" in error_msg or "Token已过期" in error_msg or "Unauthorized" in error_msg:
-                    error_msg = "APaaS平台Token已过期，请重新连接平台后再试"
+                if "401" in error_msg or is_apaas_token_error(error_msg) or "Unauthorized" in error_msg:
+                    error_msg = APAAS_TOKEN_EXPIRED_GENERIC
 
                 yield {"event": "error", "data": json.dumps({"type": "error", "message": error_msg}, ensure_ascii=False)}
 
@@ -1786,12 +1827,11 @@ async def upload_design_doc(
         logger.error(f"文档解析失败: {e}", exc_info=True)
         raise HTTPException(status_code=400, detail=f"文档解析失败: {e}")
 
-    # 如果解析出的 appName 是默认值，用文件名推断
-    if data.get("appName") in ("业务应用", "应用", None, "") and file.filename:
-        name = file.filename.replace('.md', '').replace('-', ' ').replace('_', ' ')
-        for suffix in ('功能设计', '设计文档', '需求文档', '设计'):
-            name = name.replace(suffix, '')
-        data["appName"] = name.strip() or data["appName"]
+    # 若解析结果是默认值，优先从文档正文/标题推断，退回文件名
+    if str(data.get("appName") or "").strip() in _DEFAULT_APP_NAMES:
+        inferred = _infer_app_name_from_doc(text, file.filename or "")
+        if inferred:
+            data["appName"] = inferred
 
     return {
         "type": "preview",
@@ -1922,10 +1962,19 @@ async def upload_doc_with_conversation(
             parse_meta = parse_result.get("parse_meta", {}) if isinstance(parse_result, dict) else {}
             data = parse_result.get("data", parse_result)
 
+            # LLM 返回的 appName 常常是"应用"/"未命名应用"等默认值；必须在发出任何
+            # SSE 事件（skeleton/complete/done）之前把它推断为文档里的真实名字，
+            # 否则前端 skeleton 阶段会先把默认值写入 store，后续事件的守卫逻辑会
+            # 阻止覆盖，最终界面显示"未命名应用"。
+            if isinstance(data, dict) and str(data.get("appName") or "").strip() in _DEFAULT_APP_NAMES:
+                inferred = _infer_app_name_from_doc(text, fname)
+                if inferred:
+                    data["appName"] = inferred
+
             # ── 增量模式：用纯代码 diff 与 V1 config 对比，继承编码 ──
             if v1_doc_info and v1_doc_info.get("parsed_config"):
                 try:
-                    v1_parsed_config = json.loads(v1_doc_info["parsed_config"]) if isinstance(v1_doc_info["parsed_config"], str) else v1_doc_info["parsed_config"]
+                    v1_parsed_config = loads_if_str(v1_doc_info["parsed_config"])
                     yield {"event": "progress", "data": json.dumps({"message": "对比配置差异..."}, ensure_ascii=False)}
                     resource_diff = compute_config_diff(v1_parsed_config, data)
                     if resource_diff.normalized_new_config:
@@ -1990,12 +2039,10 @@ async def upload_doc_with_conversation(
             yield {"event": "error", "data": json.dumps({"message": "配置生成失败：无数据"}, ensure_ascii=False)}
             return
 
-        # 推断应用名
-        if data.get("appName") in ("业务应用", "应用", None, "") and fname:
-            name = fname.replace('.md', '').replace('-', ' ').replace('_', ' ')
-            for suffix in ('功能设计', '设计文档', '需求文档', '设计'):
-                name = name.replace(suffix, '')
-            data["appName"] = name.strip() or "业务应用"
+        # 兜底：若推断仍未覆盖（例如进入了增量 diff 分支把 data 换了引用），
+        # 这里再兜一次，确保最终保存到 DB / SSE done 事件里的 appName 不是默认值。
+        if str(data.get("appName") or "").strip() in _DEFAULT_APP_NAMES:
+            data["appName"] = _infer_app_name_from_doc(text, fname) or "业务应用"
 
         # 创建对话 + 消息（用独立 session）
         async with AsyncSessionLocal() as session:
@@ -2335,7 +2382,7 @@ async def upload_doc_version(
             v1_config: dict = {}
             if current_config_str:
                 try:
-                    loaded = json.loads(current_config_str) if isinstance(current_config_str, str) else current_config_str
+                    loaded = loads_if_str(current_config_str)
                     v1_config = loaded.get("data", loaded)
                 except Exception:
                     pass
@@ -2485,8 +2532,8 @@ async def get_change_plan(
         "conversation_id": plan.conversation_id,
         "from_version": plan.from_version,
         "to_version": plan.to_version,
-        "diff_summary": json.loads(plan.diff_summary) if isinstance(plan.diff_summary, str) else plan.diff_summary,
-        "actions": json.loads(plan.actions) if isinstance(plan.actions, str) else plan.actions,
+        "diff_summary": loads_if_str(plan.diff_summary),
+        "actions": loads_if_str(plan.actions),
         "status": plan.status,
         "created_at": str(plan.created_at) if plan.created_at else None,
         "executed_at": str(plan.executed_at) if plan.executed_at else None,
@@ -2519,7 +2566,7 @@ async def update_change_plan_selections(
     if plan.status != "pending":
         raise HTTPException(status_code=400, detail=f"变更计划状态为 {plan.status}，不能修改")
 
-    actions = json.loads(plan.actions) if isinstance(plan.actions, str) else plan.actions
+    actions = loads_if_str(plan.actions)
     for action in actions:
         aid = action.get("id")
         if aid and aid in body.selections:
@@ -2601,19 +2648,19 @@ async def execute_change_plan(
                 from_doc_obj = from_doc.scalar_one_or_none()
                 if from_doc_obj and from_doc_obj.parsed_config:
                     try:
-                        current_config = json.loads(from_doc_obj.parsed_config) if isinstance(from_doc_obj.parsed_config, str) else from_doc_obj.parsed_config
+                        current_config = loads_if_str(from_doc_obj.parsed_config)
                     except Exception:
                         pass
 
             # 回退：如果没有找到 from_version 的配置，使用 config_preview
             if not current_config and current_config_str:
                 try:
-                    loaded = json.loads(current_config_str) if isinstance(current_config_str, str) else current_config_str
+                    loaded = loads_if_str(current_config_str)
                     current_config = loaded.get("data", loaded)
                 except Exception:
                     pass
 
-            actions = json.loads(actions_str) if isinstance(actions_str, str) else actions_str
+            actions = loads_if_str(actions_str)
             selected = [a for a in actions if a.get("selected", True)]
 
             yield {"event": "progress", "data": json.dumps({"step": f"应用 {len(selected)} 项变更..."}, ensure_ascii=False)}
@@ -2867,7 +2914,7 @@ async def delete_doc_version(
     app.current_doc_version = latest.version if latest else None
     if latest and latest.parsed_config:
         try:
-            parsed = json.loads(latest.parsed_config) if isinstance(latest.parsed_config, str) else latest.parsed_config
+            parsed = loads_if_str(latest.parsed_config)
             app.config_preview = _dump_preview_config(parsed)
         except Exception:
             logger.warning("删除文档版本后同步 config_preview 失败", exc_info=True)

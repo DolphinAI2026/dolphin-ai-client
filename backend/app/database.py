@@ -68,6 +68,9 @@ async def init_db():
             "ALTER TABLE conversations ADD COLUMN doc_result JSON",
             # 上下文压缩：对话摘要字段
             "ALTER TABLE conversations ADD COLUMN context_summary TEXT",
+            # 对话阶段 + 服务端 config 状态
+            "ALTER TABLE conversations ADD COLUMN phase VARCHAR(20)",
+            "ALTER TABLE conversations ADD COLUMN current_config JSON",
         ]:
             try:
                 await conn.execute(text(stmt))

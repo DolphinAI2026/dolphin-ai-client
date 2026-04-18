@@ -1,7 +1,7 @@
 <template>
   <div class="structured-doc">
     <section class="doc-section app-hero">
-      <h1 class="doc-app-name">{{ appInfo.name || '未命名应用' }}</h1>
+      <h1 class="doc-app-name">{{ appInfo.name }}</h1>
     </section>
 
     <section class="doc-section">
@@ -289,10 +289,50 @@ const dicts = computed(() => {
 
 const tables = computed(() => {
   const source = props.docResult?.tables || props.docResult?.models || []
+  const normalizeDbType = (rawDbType: any, platformType: any) => {
+    const raw = String(rawDbType || '').trim()
+    if (raw && !/^[\u4e00-\u9fa5]+$/.test(raw)) return raw
+
+    const normalizedPlatformType = String(platformType || raw || '').trim()
+    const mapping: Record<string, string> = {
+      单据号: 'VARCHAR',
+      单行输入: 'VARCHAR',
+      多行输入: 'TEXT',
+      富文本: 'TEXT',
+      手机号码: 'VARCHAR',
+      电子邮箱: 'VARCHAR',
+      身份证号: 'VARCHAR',
+      超链接: 'VARCHAR',
+      下拉单选: 'VARCHAR',
+      下拉多选: 'VARCHAR',
+      单选框: 'VARCHAR',
+      复选框: 'VARCHAR',
+      数据单选: 'VARCHAR',
+      数据选择: 'VARCHAR',
+      关联表单: 'VARCHAR',
+      日期时间: 'DATETIME',
+      日期: 'DATE',
+      时间: 'TIME',
+      数字: 'DECIMAL',
+      金额: 'DECIMAL',
+      附件上传: 'TEXT',
+      附件: 'TEXT',
+      开关: 'BOOLEAN',
+      人员选择: 'VARCHAR',
+      部门选择: 'VARCHAR',
+      地理位置: 'VARCHAR',
+      地区地址: 'VARCHAR',
+      子表: '',
+    }
+    return mapping[normalizedPlatformType] || normalizedPlatformType || '-'
+  }
   const normalizeField = (field: any) => ({
     field_code: field.field_code || field.code || '',
     field_name: field.field_name || field.name || '',
-    database_field_type: field.database_field_type || field.databaseFieldType || field.db_type || 'varchar',
+    database_field_type: normalizeDbType(
+      field.database_field_type || field.databaseFieldType || field.db_type || '',
+      field.type || field.field_type || '',
+    ),
     max_length: field.max_length || field.maxLength || field.length || '',
     length: field.length || field.max_length || field.maxLength || '',
     type: field.type || field.field_type || '',

@@ -1,7 +1,7 @@
 <template>
   <div class="structured-doc diff-doc">
     <section class="doc-section app-hero">
-      <h1 class="doc-app-name" :class="cellStatusClass(appInfoStatus('name'))">{{ appInfo.name || '未命名应用' }}</h1>
+      <h1 class="doc-app-name" :class="cellStatusClass(appInfoStatus('name'))">{{ appInfo.name }}</h1>
     </section>
 
     <section class="doc-section">

@@ -15,6 +15,7 @@ from typing import AsyncIterator, Optional
 import httpx
 
 from app.coding.workspace import WorkspaceManager
+from app.json_utils import loads_if_str
 
 logger = logging.getLogger(__name__)
 
@@ -339,7 +340,7 @@ class VibeCodingAgent:
                         func_name = tc["function"]["name"]
                         raw_args = tc["function"]["arguments"]
                         try:
-                            func_args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                            func_args = loads_if_str(raw_args)
                         except json.JSONDecodeError:
                             func_args = {}
 

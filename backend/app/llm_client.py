@@ -363,15 +363,24 @@ class LLMClient:
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                url,
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-            )
+        import asyncio as _asyncio
+        _retryable_codes = {429, 529, 503, 502}
+        _max_retries = 3
+        for _attempt in range(_max_retries + 1):
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(
+                    url,
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                )
+            if response.status_code in _retryable_codes and _attempt < _max_retries:
+                wait = 2 ** _attempt  # 1s, 2s, 4s
+                logger.warning(f"LLM API {response.status_code}，{wait}s 后重试（{_attempt+1}/{_max_retries}）")
+                await _asyncio.sleep(wait)
+                continue
             response.raise_for_status()
             return response.json()
 
