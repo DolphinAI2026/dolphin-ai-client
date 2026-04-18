@@ -2170,8 +2170,11 @@ def normalize_form_component_dual_apaas_json(workspace_path: Path) -> list[str]:
     web_output_name = f"form-component-custom-{semantic}"
     mobile_output_name = f"{web_output_name}-m"
 
-    # 步骤 1.5：归一化 form-widget 场景子目录（以 semantic 为准删占位 .vue、重建 index.js）
-    changed_files.extend(_normalize_dual_scene_dirs(workspace_path, semantic))
+    # 注：scene 目录归一化（删占位 .vue、重建 index.js）只能在 agent 全部跑完后做。
+    # 不能在每次 _write_file 后跑——LLM 写实现 vue 文件和写 widget.config.json
+    # 之间存在中间状态，此时 widget code 反推的 semantic 与新 vue 文件名不匹配，
+    # 会把刚写入的真实业务文件当 stray 误删。
+    # 入口在 finalize_form_component_dual_workspace()（agent done 后调用）。
 
     for sub, output_name in (("web", web_output_name), ("mobile", mobile_output_name)):
         apaas_path = workspace_path / sub / "src" / "apaas.json"
@@ -2207,3 +2210,28 @@ def normalize_form_component_dual_apaas_json(workspace_path: Path) -> list[str]:
             changed_files.append(f"{sub}/src/apaas.json")
 
     return changed_files
+
+
+def finalize_form_component_dual_workspace(workspace_path: Path) -> list[str]:
+    """Agent 全部跑完后调用：
+    - 归一化 form-widget 场景子目录（删脚手架占位 vue + 重建 index.js）
+
+    必须在 agent 不再写文件后才能调，否则会把"还没写完 widget.config.json
+    时 LLM 写入的真实业务 vue"误判为 stray 删掉。
+    """
+    shared_widget_path = workspace_path / "shared" / "widget.config.json"
+    if not shared_widget_path.exists():
+        return []
+    try:
+        widget_config = json.loads(shared_widget_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    widget_code = widget_config.get("code", "")
+    if not widget_code:
+        return []
+    semantic = ""
+    if widget_code.startswith("FORM_CUSTOM_"):
+        semantic = widget_code[len("FORM_CUSTOM_"):].lower().replace("_", "-")
+    if not semantic or semantic in ("custom", "demo", "dev"):
+        semantic = "component"
+    return _normalize_dual_scene_dirs(workspace_path, semantic)

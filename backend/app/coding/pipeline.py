@@ -23,6 +23,7 @@ from app.config import settings
 from app.models import User, Conversation, Message, Project
 from app.coding.form_component_editor import (
     normalize_form_component_editor_artifacts,
+    finalize_form_component_dual_workspace,
     validate_form_component_editor_workspace,
 )
 from app.coding.scenes import SceneType, get_scene
@@ -57,7 +58,6 @@ class PipelineParams:
         selected_model: Optional[str] = None,
         project_id: Optional[int] = None,
         project_type: Optional[str] = None,
-        quick_create: bool = False,
         # 预计算的 request-scoped 值
         code_server_base_url: str = "",
         api_base_builder: Optional[str] = None,  # 用于构建 IDE proxy URL 的函数
@@ -72,7 +72,6 @@ class PipelineParams:
         self.selected_model = selected_model
         self.project_id = project_id
         self.project_type = project_type
-        self.quick_create = quick_create
         self.code_server_base_url = code_server_base_url or settings.code_server_base_url or ""
         self.api_base_builder = api_base_builder
         self.ide_token = ide_token
@@ -1200,6 +1199,36 @@ async def _classify_brainstorm_response(
         return "confirm"  # 分类失败时默认确认，避免死循环
 
 
+_BRAINSTORM_KEBAB_RE = re.compile(r"\*\*组件名称\*\*[：:]\s*([^（(]+?)\s*[（(]\s*`([a-z][a-z0-9-]*)`\s*[）)]")
+_BRAINSTORM_CODE_RE = re.compile(r"\*\*代码标识\*\*[：:]\s*`(FORM_CUSTOM_[A-Z0-9_]+)`")
+
+
+def _parse_brainstorm_metadata(proposal: str) -> dict:
+    """从 brainstorm proposal markdown 中提取 form-component 命名 metadata。
+
+    匹配 _BRAINSTORM_PROMPT_FORM_COMPONENT 的输出格式：
+        **组件名称**：[中文名]（`kebab-case英文名`）
+        **代码标识**：`FORM_CUSTOM_XXX`
+
+    返回 dict（任一字段缺失则为 None）：
+        {"display_name": "...", "short_kebab": "...", "widget_code": "FORM_CUSTOM_..."}
+
+    用于"延迟到 T4 创建工作区"模式：用户确认 brainstorm 后，从 proposal 提取
+    final 命名直接传给 create_workspace，避免事后 rename。
+    """
+    result: dict = {"display_name": None, "short_kebab": None, "widget_code": None}
+    if not proposal:
+        return result
+    m = _BRAINSTORM_KEBAB_RE.search(proposal)
+    if m:
+        result["display_name"] = m.group(1).strip()
+        result["short_kebab"] = m.group(2).strip()
+    m = _BRAINSTORM_CODE_RE.search(proposal)
+    if m:
+        result["widget_code"] = m.group(1).strip()
+    return result
+
+
 def _get_brainstorm_state(history: list) -> tuple:
     """
     检查对话是否处于等待 brainstorm 确认状态。
@@ -1314,21 +1343,37 @@ async def run_coding_pipeline(
                 ws_id = None
                 yield _record_event({"type": "content", "content": "💡 检测到你想做一个新组件，正在为你创建新的工作区...\n\n"})
 
+        # 预加载对话历史（不含本轮 user message）。用途：
+        # 1) 判断是否处于 brainstorm 续轮：若上一条 assistant 是 brainstorm 提案，
+        #    本轮 user message 是 confirm/revise/abort 回复，**不能**用它做场景识别
+        #    （否则"确认"两个字会被识别成业务事件弹窗）
+        # 2) brainstorm 续轮时用 original_requirement（首条用户消息）重做场景识别
+        # 3) 提供给 brainstorm 决策与 agent 上下文使用，避免重复 fetch
+        prior_history: list = []
+        if conversation_id and not is_iteration:
+            try:
+                prior_history = await get_conversation_history(db, conversation_id)
+            except Exception:
+                prior_history = []
+        prior_brainstorm_proposal, prior_original_requirement, prior_revision_count = _get_brainstorm_state(prior_history)
+
         # ---- Step 1: 场景检测 ----
         if not replay_stream_messages:
             _push_replay_message(replay_stream_messages, "user", params.message)
 
         if not is_iteration:
             yield _record_event({"type": "step", "step": "detect_scene", "status": "running"})
+            # brainstorm 续轮（用户回复"确认/再改一下"）：必须用 original_requirement 而非 params.message
+            detection_message = prior_original_requirement if prior_brainstorm_proposal else params.message
             if params.project_type in ("script",):
                 try:
-                    scene_type = await _detect_scene_llm_call(params.tenant_id, effective_model, params.message)
+                    scene_type = await _detect_scene_llm_call(params.tenant_id, effective_model, detection_message)
                 except Exception:
                     scene_type = SceneType.SCRIPT_JS
             else:
                 # 始终用 AI 从 message 识别场景，project_type 仅作降级兜底
                 # 只取第一行（用户的直接意图），避免后面附带的 API 文档等内容干扰识别
-                intent_snippet = params.message.split("\n")[0][:300]
+                intent_snippet = detection_message.split("\n")[0][:300]
                 fallback = PROJECT_TYPE_TO_SCENE.get(params.project_type or "", SceneType.WEB_COMPONENT)
                 try:
                     scene_type = await _detect_scene_llm_call(params.tenant_id, effective_model, intent_snippet)
@@ -1343,35 +1388,15 @@ async def run_coding_pipeline(
             pt = info.get("project_type", "form-component")
             scene_type = PROJECT_TYPE_TO_SCENE.get(pt, SceneType.WEB_COMPONENT)
 
-        # ---- Step 2: 创建工作区 ----
+        # ---- Step 2: 创建/恢复对话（不创建工作区，workspace_id 此时可为 None）----
+        # 工作区创建延迟到"用户确认 brainstorm 后"或"非 brainstorm 场景的首次进入"。
+        # brainstorm 阶段（abort / revise）若工作区还未创建，磁盘零落地、无 stale 残留。
         if not is_iteration:
-            yield _record_event({"type": "step", "step": "create_workspace", "status": "running"})
-            try:
-                project_name = await extract_project_name(generator, params.message)
-            except Exception:
-                project_name = "custom-dev"
-            # 新对话：AI 已完成场景检测，以检测结果为准；params.project_type 仅作兜底
-            project_type_str = scene_to_project_type(scene_type) or params.project_type or "form-component"
-            project_type_enum = ProjectType(project_type_str)
-            display_name = extract_display_name(params.message, project_type_str, project_name)
-            meta = ws_mgr.create_workspace(
-                project_type_enum, project_name, params.user_id,
-                project_id=project_id, display_name=display_name,
-            )
-            ws_id = meta["id"]
-            yield _record_event({"type": "step", "step": "create_workspace", "status": "done", "data": {
-                "workspace_id": ws_id,
-                "project_name": meta["project_name"],
-                "display_name": meta.get("display_name", meta["project_name"]),
-            }})
-
-        # ---- quick_create 快速模式 ----
-        if params.quick_create:
             if not conversation_id:
                 coding_conversation = Conversation(
                     title=params.message[:50], user_id=params.user_id,
                     tenant_id=params.tenant_id, agent_type="coding",
-                    workspace_id=ws_id, selected_llm_config_id=effective_model_config_id,
+                    workspace_id=None, selected_llm_config_id=effective_model_config_id,
                 )
                 db.add(coding_conversation)
                 await db.commit()
@@ -1380,49 +1405,83 @@ async def run_coding_pipeline(
             elif coding_conversation and params.selected_model is not None:
                 coding_conversation.selected_llm_config_id = effective_model_config_id
                 await db.commit()
-            await save_coding_message(db, conversation_id, "user", params.message)
-
-            ide_url = _build_ide_url_for_pipeline(params, ws_id, conversation_id, effective_model)
-            yield _record_event({"type": "done", "workspace_id": ws_id, "conversation_id": conversation_id, "ide_url": ide_url})
-            return
-
-        # ---- Step 3: 创建对话 & Brainstorm 需求澄清 ----
-
-        # 创建或更新对话（brainstorm 也需要 conversation_id 来持久化提案）
-        if not conversation_id:
-            coding_conversation = Conversation(
-                title=params.message[:50], user_id=params.user_id,
-                tenant_id=params.tenant_id, agent_type="coding",
-                workspace_id=ws_id, selected_llm_config_id=effective_model_config_id,
-            )
-            db.add(coding_conversation)
-            await db.commit()
-            await db.refresh(coding_conversation)
-            conversation_id = coding_conversation.id
-        elif coding_conversation and params.selected_model is not None:
-            coding_conversation.selected_llm_config_id = effective_model_config_id
-            await db.commit()
-            await db.refresh(coding_conversation)
+                await db.refresh(coding_conversation)
 
         await save_coding_message(db, conversation_id, "user", params.message)
 
-        # 对话历史
-        history: list = []
+        # 对话历史：复用 step 1 之前预加载的 prior_history（不含本轮 user message，
+        # 但 brainstorm 状态判断与场景识别都基于"上一轮结束后的状态"，对就该这样）。
+        # iteration 模式 prior_history 是空的，需要补加载一次。
+        if is_iteration and conversation_id:
+            try:
+                prior_history = await get_conversation_history(db, conversation_id)
+            except Exception:
+                prior_history = []
+            prior_brainstorm_proposal, prior_original_requirement, prior_revision_count = _get_brainstorm_state(prior_history)
+        history = prior_history
         conversation_summary = ""
-        if conversation_id:
-            history = await get_conversation_history(db, conversation_id)
-            if history:
-                conversation_summary = "\n".join(
-                    f"{'User' if m.get('role') == 'user' else 'Assistant'}: {m.get('content', '')[:200]}"
-                    for m in history[-6:]
-                )
+        if history:
+            conversation_summary = "\n".join(
+                f"{'User' if m.get('role') == 'user' else 'Assistant'}: {m.get('content', '')[:200]}"
+                for m in history[-6:]
+            )
+
+        # ── 创建工作区的本地辅助（必要时调用）──────────────
+        # 优先用 brainstorm proposal 提取的 short_kebab / display_name 命名（form-component
+        # 类，folder 一次定型不再 rename）；缺失时回退 extract_project_name。
+        # 创建后立即把 conversation.workspace_id 关联上，event yield create_workspace step。
+        async def _create_workspace_now(brainstorm_for_naming: Optional[str]) -> tuple[str, dict]:
+            """创建工作区并关联 conversation。返回 (ws_id, done_event_data)。
+
+            优先使用 brainstorm proposal 提取的 short_kebab/display_name 给工作区命名；
+            缺失时回退到 extract_project_name。folder name 一旦创建后不再变化。
+            """
+            nonlocal coding_conversation
+            project_type_str = scene_to_project_type(scene_type) or params.project_type or "form-component"
+            project_type_enum_local = ProjectType(project_type_str)
+
+            project_name: Optional[str] = None
+            display_name_value: Optional[str] = None
+            if brainstorm_for_naming:
+                bs = _parse_brainstorm_metadata(brainstorm_for_naming)
+                if bs.get("short_kebab"):
+                    project_name = bs["short_kebab"]
+                if bs.get("display_name"):
+                    display_name_value = bs.get("display_name")
+
+            if not project_name:
+                try:
+                    project_name = await extract_project_name(generator, params.message)
+                except Exception:
+                    project_name = "custom-dev"
+
+            if not display_name_value:
+                display_name_value = extract_display_name(params.message, project_type_str, project_name)
+
+            meta_local = ws_mgr.create_workspace(
+                project_type_enum_local, project_name, params.user_id,
+                project_id=project_id, display_name=display_name_value,
+            )
+            new_ws_id = meta_local["id"]
+            if coding_conversation is not None:
+                coding_conversation.workspace_id = new_ws_id
+                await db.commit()
+                await db.refresh(coding_conversation)
+            return new_ws_id, {
+                "workspace_id": new_ws_id,
+                "project_name": meta_local["project_name"],
+                "display_name": meta_local.get("display_name", meta_local["project_name"]),
+            }
 
         # ── Brainstorm 需求澄清 ──────────────────────────
         effective_requirement = params.message
-        brainstorm_proposal, original_requirement, revision_count = _get_brainstorm_state(history)
+        # 直接复用 step 1 之前已经从 prior_history 提取的 brainstorm 状态
+        brainstorm_proposal, original_requirement, revision_count = (
+            prior_brainstorm_proposal, prior_original_requirement, prior_revision_count
+        )
 
         if brainstorm_proposal:
-            # 当前处于等待 brainstorm 确认状态
+            # 已有 brainstorm 提案：处理 abort/revise/confirm
             if revision_count < BRAINSTORM_MAX_REVISIONS:
                 intent = await _classify_brainstorm_response(params.tenant_id, effective_model, params.message)
             else:
@@ -1430,10 +1489,11 @@ async def run_coding_pipeline(
                 logger.info(f"Brainstorm max revisions reached ({revision_count}), forcing confirm")
 
             if intent == "abort":
-                yield _record_event({"type": "content", "content": "已取消，工作区保留但不生成代码。如需重新开始请描述新需求。"})
-                ide_url = _build_ide_url_for_pipeline(params, ws_id, conversation_id, effective_model)
-                yield _record_event({"type": "done", "workspace_id": ws_id,
-                                     "conversation_id": conversation_id, "ide_url": ide_url})
+                yield _record_event({"type": "content", "content": "已取消。如需重新开始请描述新需求。"})
+                # brainstorm 阶段工作区还未创建 → ws_id=None, ide_url=None；
+                # 前端依据 ide_url 决定 IDE 标签是否可点（None 时禁用）。
+                yield _record_event({"type": "done", "workspace_id": None,
+                                     "conversation_id": conversation_id, "ide_url": None})
                 return
 
             elif intent == "revise":
@@ -1447,10 +1507,9 @@ async def run_coding_pipeline(
                     await save_coding_message(db, conversation_id, "assistant",
                                               BRAINSTORM_PROPOSAL_MARKER + new_proposal)
                     yield _record_event({"type": "content", "content": new_proposal})
-                ide_url = _build_ide_url_for_pipeline(params, ws_id, conversation_id, effective_model)
                 yield _record_event({
-                    "type": "done", "workspace_id": ws_id,
-                    "conversation_id": conversation_id, "ide_url": ide_url,
+                    "type": "done", "workspace_id": None,
+                    "conversation_id": conversation_id, "ide_url": None,
                     "waiting_confirmation": True,
                 })
                 return
@@ -1462,9 +1521,13 @@ async def run_coding_pipeline(
                     f"[设计方案已确认，请严格按以下方案生成代码，无需再向用户确认]\n"
                     f"{brainstorm_proposal}"
                 )
+                # ★ 此处才创建工作区，按 brainstorm 提取的 final 命名定型
+                yield _record_event({"type": "step", "step": "create_workspace", "status": "running"})
+                ws_id, _data = await _create_workspace_now(brainstorm_for_naming=brainstorm_proposal)
+                yield _record_event({"type": "step", "step": "create_workspace", "status": "done", "data": _data})
 
         elif not is_iteration and scene_type in BRAINSTORM_SCENES:
-            # 新建工作区：先生成设计方案，等用户确认后再生成代码
+            # 首次发起 brainstorm：proposal 输出后等用户确认，工作区暂不创建
             yield _record_event({"type": "step", "step": "brainstorm", "status": "running"})
             proposal = await _generate_brainstorm_proposal(
                 params.tenant_id, effective_model, scene_type,
@@ -1475,16 +1538,25 @@ async def run_coding_pipeline(
                                           BRAINSTORM_PROPOSAL_MARKER + proposal)
                 yield _record_event({"type": "step", "step": "brainstorm", "status": "done"})
                 yield _record_event({"type": "content", "content": proposal})
-                ide_url = _build_ide_url_for_pipeline(params, ws_id, conversation_id, effective_model)
                 yield _record_event({
-                    "type": "done", "workspace_id": ws_id,
-                    "conversation_id": conversation_id, "ide_url": ide_url,
+                    "type": "done", "workspace_id": None,
+                    "conversation_id": conversation_id, "ide_url": None,
                     "waiting_confirmation": True,
                 })
                 return
-            # proposal 生成失败时降级：直接走代码生成
+            # proposal 失败降级直接走 codegen → 仍需先建工作区
             yield _record_event({"type": "step", "step": "brainstorm", "status": "done"})
             logger.warning("Brainstorm proposal generation failed, falling back to direct codegen")
+
+        # 走到这里有三种情况，且 ws_id 可能仍是 None：
+        #   1. iteration 模式（ws_id 已存在，跳过）
+        #   2. 非 brainstorm 场景（如 backend-api 不在 BRAINSTORM_SCENES）
+        #   3. brainstorm proposal 失败降级
+        # 后两种 ws_id 仍是 None → 此时按用户原始消息命名创建工作区。
+        if not ws_id:
+            yield _record_event({"type": "step", "step": "create_workspace", "status": "running"})
+            ws_id, _data = await _create_workspace_now(brainstorm_for_naming=None)
+            yield _record_event({"type": "step", "step": "create_workspace", "status": "done", "data": _data})
 
         # ---- Agent 代码生成 ----
         yield _record_event({"type": "step", "step": "generate", "status": "running"})
@@ -1556,10 +1628,19 @@ async def run_coding_pipeline(
         normalized_files = normalize_form_component_editor_artifacts(workspace_path)
         if normalized_files:
             logger.info("Normalized form-component editor artifacts for %s: %s", ws_id, normalized_files)
-        # 将工作区文件夹重命名为与 apaas.json outputName 一致（form-component-custom-xxx__id）
-        if ws_mgr.try_rename_workspace_to_output_name(ws_id):
-            workspace_path = ws_mgr.get_workspace_path(ws_id)
-            logger.info("Renamed workspace folder to match outputName for %s", ws_id)
+        # 双端工程 scene 目录归一化只能在 agent 全部跑完后做一次。
+        # 不能内嵌进 _write_file 后置链路——LLM 写实现 vue 与写 widget.config.json
+        # 之间存在 semantic 不一致的中间窗口，期间归一化会把刚写入的真实业务
+        # 文件当 stray 误删。
+        finalize_changed = finalize_form_component_dual_workspace(workspace_path)
+        if finalize_changed:
+            normalized_files.extend(finalize_changed)
+            logger.info("Finalized form-component-dual scene dirs for %s: %s", ws_id, finalize_changed)
+        # 工作区 folder name 一旦创建即永久不变（避免 .vibe-ide.code-workspace 绝对路径
+        # 失效、IDE URL 缓存失效、agent 持有的 ws_path 失效等连锁问题）。
+        # 包名走 apaas.json 的 outputName，与 folder name 解耦。
+        # form-component-dual 的命名定型在创建工作区时一次性完成（见 _create_workspace_now，
+        # 调用时机是用户确认 brainstorm 后；首次 brainstorm 提案阶段工作区还未创建）。
         contract_errors = validate_form_component_editor_workspace(workspace_path)
         if contract_errors:
             raise RuntimeError("；".join(contract_errors))

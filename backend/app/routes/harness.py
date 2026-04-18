@@ -162,7 +162,6 @@ class CodingPipelineRequest(BaseModel):
     selected_model: str | None = None
     project_id: int | None = None
     project_type: str | None = None
-    quick_create: bool = False
 
 
 class IDECodingPipelineRequest(BaseModel):
@@ -171,7 +170,6 @@ class IDECodingPipelineRequest(BaseModel):
     selected_model: str | None = None
     project_id: int | None = None
     project_type: str | None = None
-    quick_create: bool = False
 
 
 @router.post("/coding/pipeline")
@@ -193,7 +191,6 @@ async def coding_pipeline(
         "selected_model": req.selected_model,
         "project_id": req.project_id,
         "project_type": req.project_type,
-        "quick_create": req.quick_create,
     }
     _inject_coding_metadata(metadata, ctx, request)
 
@@ -236,7 +233,6 @@ async def ide_coding_pipeline(
         "selected_model": req.selected_model,
         "project_id": req.project_id,
         "project_type": req.project_type,
-        "quick_create": req.quick_create,
         "ide_token": ide_token,
     }
     _inject_coding_metadata(metadata, None, request)
