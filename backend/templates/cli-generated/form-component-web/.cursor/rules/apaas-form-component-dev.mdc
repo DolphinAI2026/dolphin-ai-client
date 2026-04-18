@@ -529,7 +529,19 @@ const printFormComponentList = [
 export default printFormComponentList
 ```
 
-##### 多 mode 共享配置访问的 mixin 模式（推荐）
+##### Scene vue 读配置的铁则 + 多 mode 共享 mixin 模式
+
+**⚠️ Scene vue（edit/read/ide/list/print/search/search-ide）访问 `customComponentConfig` 的唯一正确方式是 `this.widget.customComponentConfig`**。Scene vue 使用 `FormWidgetMixin`（或 List/Print/Search 对应的 widget mixin），这些 mixin 挂载的是 `widget`，**不是** `customComponentConfig`——直接写 `this.customComponentConfig` 永远得到 `undefined`，后续 `|| {}` 得到空对象，配置全部失效（编译过、build 过，运行时用户在 setting 里配的 displayFormat/allowedWeekdays/timePrecision 等**静默失灵**，极难排查）。
+
+**对照表**：
+
+| 位置 | 读配置写法 | 来源 |
+|---|---|---|
+| setting.vue（form-editor/） | `this.componentConfig.customComponentConfig.xxx` | EditorFormConfigMixin 提供 `componentConfig` prop |
+| scene vue（form-widget/{mode}/） | **`this.widget.customComponentConfig.xxx`** | FormWidgetMixin 提供 `widget` |
+| 业务 editor（components/form-custom-*-editor.vue） | `this.formValue`（双向绑定到 componentConfig[configProperty][property]） | FormEditorMixin + EditorFormConfigMixin |
+
+**禁止**把 setting.vue 的 `this.componentConfig.customComponentConfig` 写法直接复制到 scene vue——属性名根本不一样。
 
 当组件多个 mode（edit / read / ide / list / print / search）都要访问同一套
 `widget.customComponentConfig.xxx` 字段时，应在

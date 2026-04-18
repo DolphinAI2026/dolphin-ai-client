@@ -974,6 +974,10 @@ setting.vue 的配置项**必须严格对齐 brainstorm "设计方案确认"中"
 6. If errors, fix and rebuild. If success, report completion.
 
 ## CRITICAL Rules
+- **🔴 Scene vue 读配置铁则（违反必致所有配置失效）**：edit/read/ide/list/print/search/search-ide 这 7 个 scene vue 里**必须用 `this.widget.customComponentConfig`** 读用户在 setting.vue 里配的参数。**严禁**写 `this.customComponentConfig`（组件本身没有这个属性，永远得到 `undefined`，`undefined || {}` 得到 `{}`，导致 displayFormat/allowedWeekdays 等所有配置都永远是默认值，用户配了等于白配）。
+  - ❌ 错：`customConfig() { return this.customComponentConfig || {}; }`（拿到 {}）
+  - ✅ 对：`customConfig() { return this.widget.customComponentConfig || {}; }`
+  - 区别：**setting.vue 用 `this.componentConfig.customComponentConfig`**（EditorFormConfigMixin 提供 componentConfig prop）；**scene vue 用 `this.widget.customComponentConfig`**（FormWidgetMixin 提供 widget）。两种 mixin 挂载的属性名不同，混用会静默失效。
 - **🔴 必须 parallel tool_calls，严禁一轮一个文件**：写代码阶段**每个 turn 必须一次发出 5+ 个并行 `write_file`/`edit_file` 调用**。这个组件通常需要写 20+ 个文件（7 个 scene vue + setting.vue + widget.config.json + editor.config.json + 多个 index.js），如果每轮只调 1 个 tool，30 轮上限会被消耗殆尽而组件还没写完，任务失败。
   - ❌ 反例（任务必失败）：`turn1: [write_file]` `turn2: [write_file]` `turn3: [write_file]` ... 每轮 1 个
   - ✅ 正例：`turn1: [write_file×7]`（所有 mode vue 一次性写完）`turn2: [edit_file×3, write_file×2]`（widget.config / editor.config / setting.vue / 两个 index.js）`turn3: [run_command]`（build）
@@ -1050,6 +1054,10 @@ src/form-component/form-widget/
 6. If errors, fix and rebuild. If success, report completion.
 
 ## CRITICAL Rules
+- **🔴 Scene vue 读配置铁则（违反必致所有配置失效）**：web/ 和 mobile/ 两端 7 个 scene vue（edit/read/ide/list/print/search/search-ide）里**必须用 `this.widget.customComponentConfig`** 读用户在 setting.vue 里配的参数。**严禁**写 `this.customComponentConfig`（组件本身没有这个属性，永远得到 `undefined`，`undefined || {}` 得到 `{}`，导致 displayFormat/allowedWeekdays 等所有配置都永远是默认值，用户配了等于白配）。
+  - ❌ 错：`customConfig() { return this.customComponentConfig || {}; }`（拿到 {}）
+  - ✅ 对：`customConfig() { return this.widget.customComponentConfig || {}; }`
+  - 区别：**setting.vue（web/src/form-component/form-editor/）用 `this.componentConfig.customComponentConfig`**（EditorFormConfigMixin 提供 componentConfig prop）；**scene vue（web/src/form-component/form-widget/{mode}/ 和 mobile/src/form-component/form-widget/{mode}/）用 `this.widget.customComponentConfig`**（FormWidgetMixin 提供 widget）。两种 mixin 挂载的属性名不同，混用会静默失效（编译过 build 过，运行时配置全部失效）。
 - **🔴 必须 parallel tool_calls，严禁一轮一个文件**：写代码阶段**每个 turn 必须一次发出 7+ 个并行 `write_file`/`edit_file` 调用**。双端组件通常需要写 30+ 个文件（web 7 个 scene vue + mobile 7 个 scene vue + setting.vue + widget.config.json + editor.config.json + 多个 index.js），如果每轮只调 1 个 tool，30 轮上限会被消耗殆尽而组件还没写完，任务失败。
   - ❌ 反例（任务必失败）：`turn1: [write_file]` `turn2: [write_file]` `turn3: [write_file]` ... 每轮 1 个
   - ✅ 正例：`turn1: [write_file×7]`（web/ 7 个 mode vue 一次性写完）`turn2: [write_file×7]`（mobile/ 7 个 mode vue 一次性写完）`turn3: [edit_file×3, write_file×2]`（widget.config / editor.config / setting.vue / 两个 index.js）`turn4: [run_command]`（build）
