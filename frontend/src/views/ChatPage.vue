@@ -3923,11 +3923,18 @@ const uploadDocFile = async (file: File) => {
       pmsg.content += '\n\n❌ 解析中断：未收到后端完成结果，请重试。'
     }
   } catch (err: any) {
-    const pmsg = messages.find(m => m.id === progressMsgId)
-    if (pmsg) {
-      pmsg.content += `\n\n❌ 解析失败: ${err?.message || '未知错误'}`
+    // 如果业务已经解析成功（parseReady 在 done 分支设为 true），说明这个 err
+    // 是 SSE 连接关闭/读取尾部时的假阳性（fetch ReadableStream 尾端常见），
+    // 不应该覆盖已完成的 UI
+    if (parseReady.value) {
+      console.warn('SSE 解析已完成后 fetch 抛出假阳性错误，忽略:', err?.message)
     } else {
-      messages.push({ id: Date.now(), role: 'assistant', agent: 'builder', content: `文档解析失败: ${err?.message || '未知错误'}`, created_at: '' })
+      const pmsg = messages.find(m => m.id === progressMsgId)
+      if (pmsg) {
+        pmsg.content += `\n\n❌ 解析失败: ${err?.message || '未知错误'}`
+      } else {
+        messages.push({ id: Date.now(), role: 'assistant', agent: 'builder', content: `文档解析失败: ${err?.message || '未知错误'}`, created_at: '' })
+      }
     }
     isDocParsing.value = false
   }
