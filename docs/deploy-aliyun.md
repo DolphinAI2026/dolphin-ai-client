@@ -142,7 +142,8 @@ location /ai-builder/ {
     try_files $uri $uri/ /ai-builder/index.html;
 }
 
-# 后端 API
+# 后端 API（含 SSE 流式接口：/applications/.../execute、/ai-builder/chat/stream 等）
+# 关键：SSE 必须关 buffering，timeout 要覆盖最长 LLM 响应时间（大文档解析可能 >5 分钟）
 location /ai-builder/api/ {
     rewrite ^/ai-builder/api/(.*) /api/$1 break;
     proxy_pass http://127.0.0.1:8003;
@@ -153,8 +154,16 @@ location /ai-builder/api/ {
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
-    proxy_read_timeout 300s;
-    proxy_send_timeout 300s;
+    proxy_read_timeout 1800s;
+    proxy_send_timeout 1800s;
+
+    # SSE 流式三件套：缺了就前端看不到增量 / 中途断连报 "network error"
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_set_header X-Accel-Buffering no;
+    chunked_transfer_encoding on;
+    tcp_nodelay on;
+
     client_max_body_size 50m;
 }
 
@@ -165,7 +174,7 @@ location /ai-builder/platform/ {
     proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
-    proxy_read_timeout 300s;
+    proxy_read_timeout 1800s;
 }
 
 location /ai-builder/backend/ {
@@ -174,7 +183,7 @@ location /ai-builder/backend/ {
     proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
-    proxy_read_timeout 300s;
+    proxy_read_timeout 1800s;
 }
 NGINX
 ```

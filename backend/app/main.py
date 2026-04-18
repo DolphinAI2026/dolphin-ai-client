@@ -103,6 +103,19 @@ async def plugin_asset_middleware(request, call_next):
     return await call_next(request)
 
 
+# SSE 防缓冲 middleware：所有 text/event-stream 响应自动注入 header，
+# 避免 nginx / 反向代理缓冲导致前端看不到增量 + 中途断连报 "network error"。
+# 对 EventSourceResponse 兜底（nginx 的 proxy_buffering off 失效时仍可生效）。
+@app.middleware("http")
+async def sse_no_buffering_middleware(request, call_next):
+    response = await call_next(request)
+    content_type = response.headers.get("content-type", "")
+    if content_type.startswith("text/event-stream"):
+        response.headers["X-Accel-Buffering"] = "no"
+        response.headers["Cache-Control"] = "no-cache, no-transform"
+    return response
+
+
 # 静态文件（浏览器预览页面等）
 _static_dir = Path(__file__).parent / "static"
 if _static_dir.is_dir():
