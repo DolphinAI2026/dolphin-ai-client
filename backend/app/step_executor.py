@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any, Dict, List, Optional
@@ -1219,7 +1220,10 @@ def _build_permission_groups_for_form_config(
             object_name = role_name
         else:
             object_type = "ALL_USER"
-            object_value = "ALL_USER"
+            # 与 formPermission API payload 对齐：ALL_USER 时 permissionObjectValue
+            # 必须是空字符串，不能写成 "ALL_USER"（平台会当成具体用户 ID 去查，
+            # 查不到就降级成"本人"）
+            object_value = ""
             object_name = "全部人员"
 
         permission_groups.append({
@@ -1235,6 +1239,8 @@ def _build_permission_groups_for_form_config(
             }],
         })
 
+        # dataPermissionGroups 按标准 API：permissionOperationType 只含 3 个字段
+        # （query/update/delete）。平台 response 也印证只保留这 3 个。
         advanced_groups.append({
             "permissionName": f"{object_name}权限",
             "permissionDescribe": "",
@@ -1242,12 +1248,6 @@ def _build_permission_groups_for_form_config(
                 "queryPermission": can_view,
                 "updatePermission": can_edit,
                 "deletePermission": can_delete,
-                "commentPermission": can_view,
-                "dataSharePermission": can_view,
-                "exportPermission": can_export,
-                "logPermission": can_view,
-                "printPermission": can_view,
-                "queryApprovalInfoPermission": can_view,
             },
             "filterConditionGroups": [],
             "permissionObjects": [{
@@ -1259,6 +1259,8 @@ def _build_permission_groups_for_form_config(
         })
 
         if any((can_add, can_import, can_draft)):
+            # operationPermissionGroups 按标准 API：去掉 processAnalysisPermission
+            # （不在标准字段里），保留 8 项
             operation_groups.append({
                 "uuid": f"perm-op-{index}",
                 "permissionName": f"{object_name}操作权限",
@@ -1272,12 +1274,12 @@ def _build_permission_groups_for_form_config(
                     "batchRejectPermission": False,
                     "batchAgreePermission": False,
                     "shareFormPermission": False,
-                    "processAnalysisPermission": False,
                 },
                 "permissionObjects": [{
                     "permissionObjectType": object_type,
                     "permissionObjectValue": object_value,
                     "permissionObjectDisplayName": object_name,
+                    "permissionRange": {"rangeType": range_type},
                 }],
             })
 
@@ -1688,6 +1690,45 @@ def _build_form_permission_payload(
     rules: List[dict],
     role_codes: Dict[str, dict],
 ) -> dict:
+    """构造 create_form_permissions API 的 payload。
+
+    按标准 API 规范（skills/apaas-create-permission.md）只发 2 个顶层组：
+    - operationPermissionGroups — 功能权限（新增/导入/暂存/批量/复制/分享等）
+    - dataPermissionGroups      — 数据权限（查看/编辑/删除/导出/评论/日志/打印等）
+
+    之前额外发的 permissionGroups + advancedPermissionGroups 非标准，
+    平台不识别（response 里这两个 key 不存在），已移除。
+    """
+    _permission_groups, advanced_groups, operation_groups_list = (
+        _build_permission_groups_for_form_config(rules, role_codes)
+    )
+    # 去掉非标准字段，贴合标准 payload
+    cleaned_ops = []
+    for g in operation_groups_list:
+        cleaned = {k: v for k, v in g.items() if k != "uuid"}
+        cleaned_ops.append(cleaned)
+    cleaned_data = []
+    for g in advanced_groups:
+        cleaned = {k: v for k, v in g.items() if k != "filterConditionGroups"}
+        cleaned_data.append(cleaned)
+    return {
+        "formCode": form_code,
+        "appId": app_id,
+        "tenantId": "",
+        "formId": form_id,
+        "operationPermissionGroups": cleaned_ops,
+        "dataPermissionGroups": cleaned_data,
+    }
+
+
+def _build_form_permission_payload_legacy(
+    app_id: str,
+    form_code: str,
+    form_id: str,
+    rules: List[dict],
+    role_codes: Dict[str, dict],
+) -> dict:
+    """旧 payload 构造（保留作对比/回退用，暂不调用）。"""
     operation_groups: Dict[tuple, dict] = {}
     data_groups: Dict[tuple, dict] = {}
 
@@ -1788,24 +1829,51 @@ async def _sync_form_permissions_to_form_config(
     rules: List[dict],
     role_codes: Dict[str, dict],
 ) -> None:
-    """将权限同步回表单详情配置，确保平台页面权限设置能读到业务权限组。"""
-    form_config = await client.query_detail_page_config(app_id, form_id)
+    """将权限同步回表单详情配置，确保平台页面权限设置能读到业务权限组。
+
+    和 create_form_permissions 修改同一份数据的不同字段会引发平台乐观锁冲突
+    （"当前页面状态已改变"）。这里做最多 3 次自动重试：每次重新 query 最新
+    form_config 再 save，期间中断很短，重试成功率高。
+    """
     permission_groups, advanced_groups, operation_groups = _build_permission_groups_for_form_config(
         rules,
         role_codes,
     )
-    form_config["permissionGroups"] = permission_groups
-    form_config["advancedPermissionGroups"] = advanced_groups
-    form_config["operationPermissionGroups"] = operation_groups
 
-    logger.info(
-        "save_form_config reason: 回写表单权限 (formId=%s, permissionGroups=%s, advanced=%s, operation=%s)",
-        form_id,
-        len(permission_groups),
-        len(advanced_groups),
-        len(operation_groups),
-    )
-    await client.save_form_config(app_id, form_config)
+    max_attempts = 3
+    last_exc: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            # 每次重试都重新 query 拿最新版本，避免再踩旧版本的乐观锁
+            form_config = await client.query_detail_page_config(app_id, form_id)
+            form_config["permissionGroups"] = permission_groups
+            form_config["advancedPermissionGroups"] = advanced_groups
+            form_config["operationPermissionGroups"] = operation_groups
+
+            logger.info(
+                "save_form_config reason: 回写表单权限 (formId=%s, attempt=%d, permissionGroups=%s, advanced=%s, operation=%s)",
+                form_id, attempt,
+                len(permission_groups),
+                len(advanced_groups),
+                len(operation_groups),
+            )
+            await client.save_form_config(app_id, form_config)
+            return
+        except Exception as e:
+            last_exc = e
+            msg = str(e)
+            # 只对乐观锁类错误重试；其他错误直接抛
+            is_stale = "当前页面状态已改变" in msg or "状态已改变" in msg
+            if not is_stale or attempt >= max_attempts:
+                raise
+            logger.warning(
+                "save_form_config 乐观锁冲突 (formId=%s, attempt=%d/%d)，重新 query + save",
+                form_id, attempt, max_attempts,
+            )
+            await asyncio.sleep(0.3 * attempt)  # 简单退避
+    # 理论上不会走到这里
+    if last_exc:
+        raise last_exc
 
 
 async def execute_configure_permissions(
@@ -1869,13 +1937,9 @@ async def execute_configure_permissions(
                 "rules": rules,
             })
     if perm_payloads:
+        # 创建权限的专属 API：POST /common/resource/formPermission
+        # 平台靠这个接口做运行时权限判定；UI 页面也从这里读权限数据。
         await client.create_form_permissions(app_id, perm_payloads)
-        for job in permission_sync_jobs:
-            await _sync_form_permissions_to_form_config(
-                client=client,
-                app_id=app_id,
-                form_id=job["form_id"],
-                rules=job["rules"],
-                role_codes=role_codes,
-            )
+        # 不再调 save_form_config 回写 permissionGroups —— 那是双写，会触发
+        # 版本乐观锁冲突，而且没有实际价值（权限已经写进独立权限表了）。
     return {"permissions_count": len(perm_payloads)}
