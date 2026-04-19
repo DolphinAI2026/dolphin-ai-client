@@ -36,10 +36,9 @@ export interface PipelineDeps {
   stream: StreamDeps
   ide: IdeDeps
   workspace: WorkspaceDeps
-  /** 组件级场景选择 ref（首次消息用） */
+  /** 组件级场景选择 ref（仅用于建议示例分组展示；实际场景由 LLM 从 message 识别） */
   activeSceneCategory: Ref<string>
   pendingSceneCategory: Ref<string | null>
-  sceneCategoryToProjectType: Record<string, string>
   /** 组件级输入 / 上传 ref */
   userInput: Ref<string>
   attachedFile: Ref<File | null>
@@ -77,7 +76,6 @@ export function useCodingPipeline(deps: PipelineDeps) {
     workspace: { allWorkspaces, embeddedAppId },
     activeSceneCategory,
     pendingSceneCategory,
-    sceneCategoryToProjectType,
     userInput,
     attachedFile,
     attachedPreviewUrl,
@@ -290,7 +288,7 @@ export function useCodingPipeline(deps: PipelineDeps) {
     }
   }
 
-  function buildPipelineRequest(finalMessage: string, sceneKey: string): Record<string, any> {
+  function buildPipelineRequest(finalMessage: string, _sceneKey: string): Record<string, any> {
     return {
       message: finalMessage,
       workspace_id: codingStore.workspace?.id || null,
@@ -298,7 +296,6 @@ export function useCodingPipeline(deps: PipelineDeps) {
       selected_model: selectedCodingModelValue.value || null,
       app_id: (route.query.app_id as string) || null,
       project_id: embeddedAppId.value ? Number(embeddedAppId.value) : null,
-      project_type: sceneCategoryToProjectType[sceneKey] || (route.query.type as string) || null,
     }
   }
 

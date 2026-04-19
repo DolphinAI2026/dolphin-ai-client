@@ -1168,7 +1168,7 @@ mobile/src/form-component/form-widget/
 - 多组件工程（`customWidgetList` 多项）每个组件一套，互不覆盖，`index.js` 按 code 聚合
 - 单组件工程里每个 scene 目录**只保留这一个组件的 vue 文件**，其他一律清理（脚手架占位 `form-component-demo-*.vue` / `mobile-form-component-demo-*.vue` / 旧文件 / 语义不一致的副本必须显式 delete）
 
-## FORM_COMPONENT_DUAL 路径规范（与 FORM_COMPONENT 单端的差异）
+## FORM_COMPONENT_DUAL 路径规范（双端组件）
 - 所有 widget.config.json / editor.config.json / setting.vue / index.js 都在 `web/` 子目录下，路径前缀为 `web/src/`
 - 配置面板聚合文件：`web/src/form-component/form-editor/index.js`（import setting.vue 并放入数组）
 - editorConfigList 聚合文件：`web/src/form-component-config/form-editor/index.js`（import editor.config.json）

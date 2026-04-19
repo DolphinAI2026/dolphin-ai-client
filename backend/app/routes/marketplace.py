@@ -38,7 +38,7 @@ class PublishRequest(BaseModel):
     name: str
     code: str
     description: Optional[str] = None
-    category: str = "form-component"
+    category: str = "form-component-dual"
     version: str = "1.0.0"
     tags: Optional[list[str]] = None
     readme: Optional[str] = None

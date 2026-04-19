@@ -266,7 +266,7 @@ def _is_form_component_workspace(workspace_path: Path) -> bool:
             import json as _json
             meta = _json.loads(meta_file.read_text(encoding="utf-8"))
             ptype = meta.get("project_type", "")
-            return ptype in {"form-component", "form-component-dual", "mobile-component"}
+            return ptype == "form-component-dual"
         except Exception:
             pass
     return False

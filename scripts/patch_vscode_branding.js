@@ -25,7 +25,6 @@ function humanizeProjectName(projectName, projectType) {
 
   const suffixMap = {
     'form-component': '组件',
-    'mobile-component': '移动端组件',
     'form-page': '页面',
     'mobile-page': '移动端页面',
     'form-view': '列表视图',
@@ -35,7 +34,7 @@ function humanizeProjectName(projectName, projectType) {
   };
 
   const cleaned = projectName
-    .replace(/^(form-component|mobile-component|form-page|mobile-page|form-view|frontend-plugin|page-layout|app-layout)-/, '')
+    .replace(/^(form-component|form-page|mobile-page|form-view|frontend-plugin|page-layout|app-layout)-/, '')
     .replace(/[-_]+/g, ' ')
     .trim();
 

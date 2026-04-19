@@ -782,7 +782,6 @@ class AutoPipelineRequest(BaseModel):
     selected_model: Optional[str] = None   # 当前会话选中的 coding 模型（llmcfg:<id>）
     app_id: Optional[str] = None           # aPaaS 应用ID (deprecated, use project_id)
     project_id: Optional[int] = None       # 关联项目ID（优先使用项目的平台配置）
-    project_type: Optional[str] = None     # 前端指定的项目类型（menu-page 等）
 
 
 # ============================================================
@@ -1129,7 +1128,6 @@ class IDEPipelineRequest(BaseModel):
     conversation_id: Optional[int] = None
     selected_model: Optional[str] = None
     project_id: Optional[int] = None
-    project_type: Optional[str] = None
 
 
 @router.get("/models")
@@ -1296,7 +1294,6 @@ async def ide_coding_pipeline(
         conversation_id=req.conversation_id,
         selected_model=req.selected_model,
         project_id=req.project_id,
-        project_type=req.project_type,
         code_server_base_url=settings.code_server_base_url or "",
         api_base_builder=api_base_pattern,
         ide_token=ide_token,
@@ -1928,7 +1925,6 @@ async def auto_pipeline(
         conversation_id=req.conversation_id,
         selected_model=req.selected_model,
         project_id=req.project_id,
-        project_type=req.project_type,
         code_server_base_url=settings.code_server_base_url or "",
         api_base_builder=api_base_pattern,
     )
@@ -1990,14 +1986,12 @@ async def publish_workspace(
 
 # project_type → 平台 fileType 映射
 _PROJECT_TYPE_TO_FILE_TYPE = {
-    "form-component": "FRONTCOMPONENT",
     "form-component-dual": "FRONTCOMPONENT",
     "menu-page": "FRONTENGINE",
     "form-page": "FRONTENGINE",
     "form-list": "FRONTLISTVIEW",
     "layout": "FRONTLAYOUT",
     "mobile-page": "MFRONTENGINE",
-    "mobile-component": "MFRONTCOMPONENT",
     "plugin": "FRONTTENANTCOMPONENT",
     "backend-api": "BACKENDENGINE",
     "backend-feign": "BACKENDENGINE",
@@ -2565,24 +2559,16 @@ def _append_agent_event_to_history(history_parts: list[str], event: dict[str, An
 def _scene_to_project_type(scene_type: SceneType) -> str:
     """场景类型转项目类型"""
     mapping = {
-        SceneType.WEB_COMPONENT: "form-component",
         SceneType.WEB_COMPONENT_DUAL: "form-component-dual",
         SceneType.WEB_PAGE: "form-page",
         SceneType.WEB_LIST_VIEW: "form-list",
         SceneType.WEB_LAYOUT: "layout",
         SceneType.WEB_PLUGIN: "plugin",
         SceneType.BACKEND_API: "backend-api",
-        SceneType.MOBILE_COMPONENT: "mobile-component",
         SceneType.MOBILE_PAGE: "mobile-page",
-        SceneType.SCRIPT_JS: "script",
-        SceneType.SCRIPT_PYTHON: "script",
-        SceneType.SCRIPT_GROOVY: "script",
-        SceneType.BUSINESS_DIALOG: "script",
         SceneType.WEB_LOGIN: "web-login",
-        SceneType.UI_STYLE: "ui-style",
-        SceneType.LIST_CUSTOM_MODULE: "list-custom-module",
     }
-    return mapping.get(scene_type, "form-component")
+    return mapping.get(scene_type, "form-component-dual")
 
 
 async def _extract_project_name(generator: CodingGenerator, message: str) -> str:
@@ -2701,9 +2687,7 @@ def _extract_display_name(message: str, project_type: str, fallback_name: str) -
     ).strip("，。,.!！?？：: ")
 
     suffix_map = {
-        "form-component": "组件",
         "form-component-dual": "组件",
-        "mobile-component": "组件",
         "form-page": "页面",
         "menu-page": "页面",
         "mobile-page": "页面",

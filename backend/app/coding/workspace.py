@@ -216,9 +216,7 @@ DISPLAY_NAME_HINTS = {
 }
 
 PROJECT_TYPE_PREFIXES = {
-    "form-component": "form-component-",
     "form-component-dual": "form-component-",
-    "mobile-component": "",
     "form-page": "form-page-",
     "menu-page": "form-page-",
     "mobile-page": "form-page-",
@@ -229,9 +227,7 @@ PROJECT_TYPE_PREFIXES = {
 }
 
 PROJECT_TYPE_SUFFIXES = {
-    "form-component": "组件",
     "form-component-dual": "组件",
-    "mobile-component": "组件",
     "form-page": "页面",
     "menu-page": "页面",
     "mobile-page": "页面",
@@ -241,29 +237,17 @@ PROJECT_TYPE_SUFFIXES = {
     "backend-scheduled": "定时任务",
     "layout": "布局",
     "plugin": "插件",
-    "script": "脚本",
-    "script-js": "脚本",
-    "script-python": "脚本",
-    "script-groovy": "脚本",
-    "business-dialog": "弹窗",
-    "ui-style": "样式",
-    "list-custom-module": "模块",
     "web-login": "登录页",
 }
 
 FRONTEND_RULE_WORKSPACE_TYPES = {
-    "form-component",
     "form-component-dual",
-    "mobile-component",
     "form-page",
     "menu-page",
     "mobile-page",
     "form-list",
     "layout",
     "plugin",
-    "business-dialog",
-    "ui-style",
-    "list-custom-module",
     "web-login",
 }
 
@@ -276,9 +260,7 @@ PAGE_RULE_WORKSPACE_TYPES = {
 
 class ProjectType(str, Enum):
     """项目类型"""
-    FORM_COMPONENT = "form-component"           # 表单自开发组件（PC）
-    FORM_COMPONENT_DUAL = "form-component-dual" # 表单自开发组件（双端：PC + 移动端）
-    MOBILE_COMPONENT = "mobile-component"       # 移动端自开发组件
+    FORM_COMPONENT_DUAL = "form-component-dual" # 表单自开发组件（双端：PC + 移动端，所有组件统一走此模板）
     FORM_PAGE = "form-page"                     # 自开发菜单页面（PC）
     MENU_PAGE = "menu-page"                     # 自开发菜单页面（PC，别名）
     MOBILE_PAGE = "mobile-page"                 # 移动端自开发页面
@@ -288,13 +270,6 @@ class ProjectType(str, Enum):
     BACKEND_API = "backend-api"                 # 后端自开发接口
     BACKEND_FEIGN = "backend-feign"             # 后端外部调用（FeignClient）
     BACKEND_SCHEDULED = "backend-scheduled"     # 后端定时任务
-    SCRIPT = "script"                           # 脚本扩展
-    SCRIPT_JS = "script-js"                     # JavaScript脚本扩展
-    SCRIPT_PYTHON = "script-python"             # Python脚本扩展
-    SCRIPT_GROOVY = "script-groovy"             # Groovy脚本扩展
-    BUSINESS_DIALOG = "business-dialog"         # 业务事件自定义弹窗
-    UI_STYLE = "ui-style"                       # UI样式扩展（CSS）
-    LIST_CUSTOM_MODULE = "list-custom-module"   # 列表自定义模块
     WEB_LOGIN = "web-login"                     # 自定义登录页
 
 
@@ -310,7 +285,6 @@ class WorkspaceStatus(str, Enum):
 CLI_TEMPLATE_DIR = Path(__file__).parent.parent.parent / "templates" / "cli-generated"
 
 CLI_TEMPLATE_MAP: dict[str, str] = {
-    ProjectType.FORM_COMPONENT:      "form-component-web",
     ProjectType.FORM_COMPONENT_DUAL: "form-component-dual",
     ProjectType.MENU_PAGE:           "form-page-web",
     ProjectType.FORM_PAGE:      "form-page-web",
@@ -381,23 +355,6 @@ class WorkspaceManager:
                 continue
         return latest
 
-    def _reconcile_workspace_rule_files(self, ws_path: Path, project_type: Optional[str] = None):
-        project_type_value = project_type or str(self._read_meta(ws_path).get("project_type") or "")
-        if project_type_value != ProjectType.FORM_COMPONENT.value:
-            return
-
-        rules_dir = ws_path / ".cursor" / "rules"
-        canonical_rule = rules_dir / "apaas-form-component-dev.mdc"
-        duplicate_rule = rules_dir / "form-component-dev-guide.mdc"
-
-        try:
-            if canonical_rule.exists() and duplicate_rule.exists():
-                duplicate_rule.unlink()
-            elif duplicate_rule.exists() and not canonical_rule.exists():
-                duplicate_rule.rename(canonical_rule)
-        except OSError:
-            logger.warning("Failed to reconcile duplicate rule files under %s", rules_dir, exc_info=True)
-
     def _migrate_workspace_if_needed(self, ws_path: Path) -> Path:
         if ws_path.parent == WORKSPACE_ROOT or WORKSPACE_ROOT == LEGACY_WORKSPACE_ROOT:
             self._ensure_copy_asset_placeholders(ws_path)
@@ -420,20 +377,12 @@ class WorkspaceManager:
     def get_workspace_path(self, ws_id: str) -> Path:
         cached = self._workspace_path_cache.get(ws_id)
         if cached and cached.exists():
-            try:
-                self._reconcile_workspace_rule_files(cached)
-            except Exception:
-                pass
             return cached
 
         for root in WORKSPACE_SEARCH_ROOTS:
             direct = root / ws_id
             if direct.exists():
                 resolved_path = self._migrate_workspace_if_needed(direct)
-                try:
-                    self._reconcile_workspace_rule_files(resolved_path)
-                except Exception:
-                    pass
                 self._workspace_path_cache[ws_id] = resolved_path
                 return resolved_path
 
@@ -444,13 +393,6 @@ class WorkspaceManager:
                 continue
             if meta.get("id") == ws_id:
                 resolved_path = self._migrate_workspace_if_needed(candidate)
-                try:
-                    self._reconcile_workspace_rule_files(
-                        resolved_path,
-                        str(meta.get("project_type") or ""),
-                    )
-                except Exception:
-                    pass
                 self._workspace_path_cache[ws_id] = resolved_path
                 return resolved_path
 
@@ -458,13 +400,6 @@ class WorkspaceManager:
 
     def _decorate_workspace_meta(self, ws_path: Path, meta: dict) -> dict:
         hydrated = self._ensure_display_name(ws_path, meta)
-        try:
-            self._reconcile_workspace_rule_files(
-                ws_path,
-                str(hydrated.get("project_type") or ""),
-            )
-        except Exception:
-            pass
         hydrated["folder_name"] = ws_path.name
         hydrated["disk_path"] = str(ws_path.resolve())
         activity_ts = self._workspace_activity_ts(ws_path)
@@ -530,10 +465,6 @@ class WorkspaceManager:
     def _seed_default_workspace_rules(self, ws_path: Path, project_type: Union[ProjectType, str]):
         rule_files = self._get_default_rule_files(project_type)
         if not rule_files:
-            self._reconcile_workspace_rule_files(
-                ws_path,
-                project_type.value if isinstance(project_type, ProjectType) else str(project_type),
-            )
             return
 
         rules_dir = ws_path / ".cursor" / "rules"
@@ -544,11 +475,6 @@ class WorkspaceManager:
             if target.exists():
                 continue
             shutil.copy2(source, target)
-
-        self._reconcile_workspace_rule_files(
-            ws_path,
-            project_type.value if isinstance(project_type, ProjectType) else str(project_type),
-        )
 
     def _ensure_copy_asset_placeholders(self, ws_path: Path):
         """为 copyAssets 目录补可见占位文件，避免 df-apaas-cli 的 cp path/* 在空目录时报错。"""
@@ -709,13 +635,6 @@ class WorkspaceManager:
             ProjectType.BACKEND_API.value,
             ProjectType.BACKEND_FEIGN.value,
             ProjectType.BACKEND_SCHEDULED.value,
-            ProjectType.SCRIPT_JS.value,
-            ProjectType.SCRIPT_PYTHON.value,
-            ProjectType.SCRIPT_GROOVY.value,
-            ProjectType.BUSINESS_DIALOG.value,
-            ProjectType.SCRIPT.value,
-            ProjectType.UI_STYLE.value,
-            ProjectType.LIST_CUSTOM_MODULE.value,
         )
 
     def _clean_build_output(self, text: str) -> str:
@@ -889,9 +808,6 @@ class WorkspaceManager:
         # 生成脚手架 —— 优先使用 df-apaas-cli 预生成的标准模板
         if project_type.value in CLI_TEMPLATE_MAP:
             self._scaffold_via_cli_template(ws_path, safe_name, project_type, display_name=resolved_display_name)
-            if project_type == ProjectType.FORM_COMPONENT:
-                normalize_form_component_editor_artifacts(ws_path)
-                self._ensure_form_component_workspace_compat(ws_path)
         elif project_type == ProjectType.BACKEND_API:
             self._scaffold_backend_api(ws_path, safe_name)
         elif project_type == ProjectType.BACKEND_FEIGN:
@@ -899,22 +815,8 @@ class WorkspaceManager:
         elif project_type == ProjectType.BACKEND_SCHEDULED:
             self._scaffold_backend_scheduled(ws_path, safe_name)
         # ── 以下类型已从 UI 隐藏，保留 fallback 以兼容旧数据 ──
-        elif project_type == ProjectType.MOBILE_COMPONENT:
-            self._scaffold_form_component(ws_path, safe_name, mobile=True)
         elif project_type == ProjectType.MOBILE_PAGE:
             self._scaffold_form_page(ws_path, safe_name, mobile=True)
-        elif project_type in (ProjectType.SCRIPT, ProjectType.SCRIPT_JS):
-            self._scaffold_script_js(ws_path, safe_name)
-        elif project_type == ProjectType.SCRIPT_PYTHON:
-            self._scaffold_script_python(ws_path, safe_name)
-        elif project_type == ProjectType.SCRIPT_GROOVY:
-            self._scaffold_script_groovy(ws_path, safe_name)
-        elif project_type == ProjectType.BUSINESS_DIALOG:
-            self._scaffold_business_dialog(ws_path, safe_name)
-        elif project_type == ProjectType.UI_STYLE:
-            self._scaffold_ui_style(ws_path, safe_name)
-        elif project_type == ProjectType.LIST_CUSTOM_MODULE:
-            self._scaffold_list_custom_module(ws_path, safe_name)
         elif project_type == ProjectType.WEB_LOGIN:
             self._scaffold_web_login(ws_path, safe_name)
         else:
@@ -2584,7 +2486,6 @@ dist/
         project_type = meta.get("project_type", "")
 
         handlers = {
-            ProjectType.FORM_COMPONENT.value: self._ensure_form_component_workspace_compat,
             ProjectType.MENU_PAGE.value: self._ensure_menu_page_workspace_compat,
             ProjectType.LAYOUT.value: self._ensure_layout_workspace_compat,
             ProjectType.FORM_LIST.value: self._ensure_form_list_workspace_compat,
@@ -2731,43 +2632,6 @@ dist/
         repaired_apaas["copyAssets"] = [f"public/form-view/{project_name}"]
         repaired_apaas["outputName"] = repaired_apaas.get("outputName") or project_name
         apaas_json_path.write_text(json.dumps(repaired_apaas, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    def _ensure_form_component_workspace_compat(self, ws_path: Path):
-        """修复旧版表单组件工作区的 i18n 引导，避免预览/构建时因平台对象未就绪而中断。"""
-        meta = self._read_meta(ws_path)
-        if meta.get("project_type") != ProjectType.FORM_COMPONENT.value:
-            return
-
-        locale_index_path = ws_path / "src" / "form-component-local" / "index.js"
-        if not locale_index_path.exists():
-            return
-
-        locale_index_content = locale_index_path.read_text(encoding="utf-8")
-        if "const platformI18n =" in locale_index_content and "window.APaaSSDK?.context?.globalVueI18n" in locale_index_content:
-            return
-
-        legacy_markers = (
-            "window.df.getI18n().mergeLocaleMessage",
-            "const mergeLocaleMessage =",
-        )
-        if not any(marker in locale_index_content for marker in legacy_markers):
-            return
-
-        locale_index_path.write_text(
-            """import zhLocaleModule from './zh-CN/index.js'
-import enLocaleModule from './en-US/index.js'
-
-const platformI18n =
-  window.df?.getI18n?.() ||
-  window.APaaSSDK?.context?.globalVueI18n
-
-if (platformI18n?.mergeLocaleMessage) {
-  platformI18n.mergeLocaleMessage('zh-CN', zhLocaleModule)
-  platformI18n.mergeLocaleMessage('en-US', enLocaleModule)
-}
-""",
-            encoding="utf-8",
-        )
 
     def _ensure_menu_page_workspace_compat(self, ws_path: Path):
         """修复旧版菜单/表单/移动页面工作区，使其对齐 MENU_PAGE 协议。"""
@@ -3239,7 +3103,6 @@ export default { install, activate, staticComponents }
 
         # 计算不含前缀的 kebab 短名（如 "rating-star"）
         prefix_map = {
-            ProjectType.FORM_COMPONENT:      "form-component-",
             ProjectType.FORM_COMPONENT_DUAL: "form-component-",
             ProjectType.MENU_PAGE:           "form-page-",
             ProjectType.FORM_PAGE:           "form-page-",
@@ -3259,36 +3122,7 @@ export default { install, activate, staticComponents }
         # ── 构建替换对 ──────────────────────────
         replacements: list[tuple[str, str]] = []
 
-        if project_type == ProjectType.FORM_COMPONENT:
-            # 占位值 => 目标值
-            old_kebab = f"form-component-{placeholder}"       # form-component-demo
-            new_kebab = f"form-component-{short_name}"
-
-            # FORM_CUSTOM_DEMO → FORM_CUSTOM_{SHORT_NAME}
-            old_upper = f"FORM_CUSTOM_{placeholder.upper()}"  # FORM_CUSTOM_DEMO
-            new_upper = "FORM_CUSTOM_" + short_name.replace("-", "_").upper()
-
-            # FORM_COMPONENT_DEMO (no _CUSTOM_) → FORM_COMPONENT_{SHORT_NAME}
-            old_no_custom_upper = f"FORM_COMPONENT_{placeholder.upper()}"  # FORM_COMPONENT_DEMO
-            new_no_custom_upper = "FORM_COMPONENT_" + short_name.replace("-", "_").upper()
-
-            old_no_custom_kebab = old_no_custom_upper.replace("_", "-").lower()  # form-component-demo
-            new_no_custom_kebab = new_no_custom_upper.replace("_", "-").lower()
-
-            old_pascal = "FormComponentDemo"
-            parts = short_name.split("-")
-            new_pascal_suffix = "".join(p.capitalize() for p in parts)
-            new_pascal = f"FormComponent{new_pascal_suffix}"
-
-            replacements = [
-                # 长的先替换，避免子串冲突
-                (old_upper, new_upper),
-                (old_no_custom_upper, new_no_custom_upper),
-                (old_no_custom_kebab, new_no_custom_kebab),
-                (old_pascal, new_pascal),
-                (old_kebab, new_kebab),
-            ]
-        elif project_type == ProjectType.FORM_COMPONENT_DUAL:
+        if project_type == ProjectType.FORM_COMPONENT_DUAL:
             # 双端模板：web/ 和 mobile/ 各有独立包
             old_kebab = f"form-component-{placeholder}"           # form-component-demo
             new_kebab = f"form-component-{short_name}"
@@ -3409,819 +3243,6 @@ export default { install, activate, staticComponents }
                     target = p.parent / new_name
                     if not target.exists():
                         p.rename(target)
-
-    # ── 以下为旧版 Python 手写脚手架方法（deprecated, 保留兼容） ──
-
-    def _scaffold_form_component(self, ws_path: Path, name: str, mobile: bool = False):
-        """[DEPRECATED] 表单自开发组件脚手架 - 完整 FORM_COMPONENT 7场景架构"""
-        # 公共文件
-        self._write_common_files(ws_path, name, "FORM_COMPONENT")
-
-        # 组件 code（大写下划线格式）
-        code = "FORM_CUSTOM_COMPONENT_" + name.replace("form-component-", "").replace("-", "_").upper()
-        setting_code = code + "_SETTING"
-        # 组件名前缀（PascalCase）
-        parts = name.replace("form-component-", "").split("-")
-        pascal = "".join(p.capitalize() for p in parts)
-        prefix = f"FormComponent{pascal}"
-        # 文件名 kebab-case
-        kebab = name.replace("form-component-", "")
-        full_kebab = f"form-component-{kebab}"
-
-        # ======== 项目根文件 ========
-
-        # package.json（对齐真实 df-apaas-cli 项目）
-        self._write(ws_path, "package.json", json.dumps({
-            "name": name,
-            "version": "1.0.0",
-            "engines": {"node": "16.x"},
-            "templateType": "FORM_COMPONENT",
-            "private": True,
-            "scripts": {
-                "lint": "vue-cli-service lint",
-                "serve": "node vibe-serve.js src/index.js",
-                "debug": "df-apaas-cli debug",
-                "build": "df-apaas-cli build"
-            },
-            "dependencies": {
-                "core-js": "3.8.3",
-                "vue": "2.7.14"
-            },
-            "devDependencies": {
-                "@babel/core": "7.12.16",
-                "@babel/eslint-parser": "7.12.16",
-                "@vue/cli-plugin-babel": "5.0.0",
-                "@vue/cli-plugin-eslint": "5.0.0",
-                "@vue/cli-service": "5.0.8",
-                "dart-sass": "1.25.0",
-                "eslint": "7.32.0",
-                "eslint-plugin-vue": "8.0.3",
-                "sass": "1.85.1",
-                "sass-loader": "8.0.2",
-                "vue-template-compiler": "2.7.14"
-            },
-            "eslintConfig": {
-                "root": True,
-                "env": {"node": True},
-                "extends": ["plugin:vue/essential", "eslint:recommended"],
-                "parserOptions": {"parser": "@babel/eslint-parser"},
-                "rules": {}
-            },
-            "browserslist": ["> 1%", "last 2 versions", "not dead", "Chrome 40.0", "ie >= 11"]
-        }, indent=2, ensure_ascii=False))
-        self._write(ws_path, "vibe-serve.js", _VIBE_SERVE_JS)
-        from app.config import settings
-        self._write(ws_path, "vibe-serve-config", f"PROXY_BASE={(settings.code_server_base_url or '').rstrip('/')}\n")
-
-        # vue.config.js
-        self._write(ws_path, "vue.config.js", """const { defineConfig } = require('@vue/cli-service')
-const apaasJson = require('./src/apaas.json')
-
-module.exports = defineConfig({
-  transpileDependencies: true,
-  productionSourceMap: false,
-  devServer: {
-    host: '0.0.0.0',
-    port: '8080',
-    hot: true,
-    allowedHosts: 'all',
-    headers: { 'Access-Control-Allow-Origin': '*' },
-    client: { overlay: false }
-  },
-  configureWebpack: {
-    output: {
-      library: apaasJson.outputName,
-      libraryTarget: 'umd'
-    }
-  },
-  css: {
-    loaderOptions: {
-      sass: { implementation: require('sass') }
-    }
-  }
-})
-""")
-
-        # babel.config.js
-        self._write(ws_path, "babel.config.js", "module.exports = {\n  presets: ['@vue/cli-plugin-babel/preset']\n}\n")
-
-        # ======== src/apaas.json ========
-        self._write(ws_path, "src/apaas.json", json.dumps({
-            "entry": "index.js",
-            "templateType": "FORM_COMPONENT",
-            "customWidgetList": [
-                {"code": code, "text": kebab, "description": kebab}
-            ],
-            "copyAssets": [f"public/form-component/{name}"],
-            "router": {},
-            "outputName": name
-        }, indent=2, ensure_ascii=False))
-
-        # ======== src/index.js（FormEngine 注册入口）========
-        self._write(ws_path, "src/index.js", f"""import './form-component-local/index.js'
-import {{ customFormEditorList, customFormWidgetList }} from './form-component'
-import {{ widgetConfigList, editorConfigList }} from './form-component-config'
-import {{ AbilityFieldMap, AbilityFieldConvert }} from './form-ability'
-
-// eslint-disable-next-line
-const install = function(Vue, opts) {{
-  if (customFormEditorList && Array.isArray(customFormEditorList)) {{
-    customFormEditorList.forEach((comp) => {{ Vue.component(comp.name, comp) }})
-  }}
-  if (customFormWidgetList && Array.isArray(customFormWidgetList)) {{
-    customFormWidgetList.forEach((comp) => {{ Vue.component(comp.name, comp) }})
-  }}
-  if (editorConfigList && Array.isArray(editorConfigList)) {{
-    editorConfigList.forEach((editorConfig) => {{
-      Vue.FormEngine.WidgetControl.registerEditorConfig(editorConfig)
-    }})
-  }}
-  if (widgetConfigList && Array.isArray(widgetConfigList)) {{
-    widgetConfigList.forEach((widgetConfig) => {{
-      Vue.FormEngine && Vue.FormEngine.registerCustomGroupWidgetConfig({{ widgetConfig }})
-    }})
-  }}
-  Vue.FormEngine && Vue.FormEngine.AbilityControl && Vue.FormEngine.AbilityControl.batchRegisterComponentTypeConfig(AbilityFieldMap)
-  Vue.FormEngine && Vue.FormEngine.AbilityControl && Vue.FormEngine.AbilityControl.batchRegisterFieldValueConvert(AbilityFieldConvert)
-}}
-
-const FormComponent = {{ install: install }}
-export default FormComponent
-""")
-
-        # ======== form-component/（7场景组件）========
-        self._write(ws_path, "src/form-component/index.js", """import customFormWidgetList from './form-widget'
-import customFormEditorList from './form-editor'
-
-export { customFormWidgetList, customFormEditorList }
-""")
-
-        # form-widget 聚合
-        self._write(ws_path, "src/form-component/form-widget/index.js", """import ideFormComponentList from './ide'
-import editFormComponentList from './edit'
-import readFormComponentList from './read'
-import listFormComponentList from './list'
-import printFormComponentList from './print'
-import searchFormComponentList from './search'
-import searchIdeFormComponentList from './search-ide'
-
-const customFormComponentList = [
-  ...ideFormComponentList, ...editFormComponentList, ...readFormComponentList,
-  ...listFormComponentList, ...printFormComponentList,
-  ...searchFormComponentList, ...searchIdeFormComponentList
-]
-
-export default customFormComponentList
-""")
-
-        # --- IDE 场景 ---
-        self._write(ws_path, "src/form-component/form-widget/ide/index.js",
-                     f"import Comp from './{full_kebab}-ide.vue'\nexport default [Comp]\n")
-        self._write(ws_path, f"src/form-component/form-widget/ide/{full_kebab}-ide.vue", f"""<template>
-  <div class="form-widget {full_kebab}-ide">
-    <x-proxy-form-item
-      :isInTable="widget.isInTable" :showRequired="showRequired" :label="widget.label"
-      :validatorRules="validatorRules" :validateKey="validateKey" :validateInfo="validateInfo"
-    >
-      <div style="border:1px dashed #dcdfe6;padding:12px;border-radius:4px;background:#fafafa;">
-        <span style="font-size:12px;color:#909399;">自定义组件（设计态预览）</span>
-      </div>
-    </x-proxy-form-item>
-  </div>
-</template>
-<script>
-import FormWidgetMixin from '@/mixin/form-widget.mixin'
-export default {{ name: '{prefix}Ide', mixins: [FormWidgetMixin] }}
-</script>
-""")
-
-        # --- Edit 场景（核心） ---
-        self._write(ws_path, "src/form-component/form-widget/edit/index.js",
-                     f"import Comp from './{full_kebab}-edit.vue'\nexport default [Comp]\n")
-        self._write(ws_path, f"src/form-component/form-widget/edit/{full_kebab}-edit.vue", f"""<template>
-  <div class="form-widget {full_kebab}-edit">
-    <x-proxy-form-item
-      :isInTable="widget.isInTable" :showRequired="showRequired" :label="widget.label"
-      :validatorRules="validatorRules" :validateKey="validateKey" :validateInfo="validateInfo"
-    >
-      <!-- TODO: AI 将在此实现编辑态交互组件 -->
-      <el-input v-model="editValue" placeholder="请输入" />
-    </x-proxy-form-item>
-  </div>
-</template>
-<script>
-import FormWidgetMixin from '@/mixin/form-widget.mixin'
-export default {{
-  name: '{prefix}Edit',
-  mixins: [FormWidgetMixin],
-  computed: {{
-    editValue: {{
-      get() {{ return this.formValue || '' }},
-      set(val) {{ this.formValue = val }}
-    }}
-  }}
-}}
-</script>
-<style lang="scss">
-.{full_kebab}-edit {{}}
-</style>
-""")
-
-        # --- Read 场景 ---
-        self._write(ws_path, "src/form-component/form-widget/read/index.js",
-                     f"import Comp from './{full_kebab}-read.vue'\nexport default [Comp]\n")
-        self._write(ws_path, f"src/form-component/form-widget/read/{full_kebab}-read.vue", f"""<template>
-  <div class="form-widget {full_kebab}-read">
-    <x-proxy-form-item
-      :isInTable="widget.isInTable" :showRequired="showRequired" :label="widget.label"
-      :validatorRules="validatorRules" :validateKey="validateKey" :validateInfo="validateInfo"
-    >
-      <span>{{{{ formValue || '-' }}}}</span>
-    </x-proxy-form-item>
-  </div>
-</template>
-<script>
-import FormWidgetMixin from '@/mixin/form-widget.mixin'
-export default {{ name: '{prefix}Read', mixins: [FormWidgetMixin] }}
-</script>
-""")
-
-        # --- List 场景 ---
-        self._write(ws_path, "src/form-component/form-widget/list/index.js",
-                     f"import Comp from './{full_kebab}-list.vue'\nexport default [Comp]\n")
-        self._write(ws_path, f"src/form-component/form-widget/list/{full_kebab}-list.vue", f"""<template>
-  <div class="form-widget {full_kebab}-list">
-    <span>{{{{ formValue || '-' }}}}</span>
-  </div>
-</template>
-<script>
-export default {{
-  name: '{prefix}List',
-  props: {{
-    componentConfig: {{ type: Object, default() {{ return {{}} }} }},
-    formValue: {{ type: [String, Object, Array], default: '' }},
-    propKey: {{ type: String, default: '' }}
-  }}
-}}
-</script>
-""")
-
-        # --- Print 场景 ---
-        self._write(ws_path, "src/form-component/form-widget/print/index.js",
-                     f"import Comp from './{full_kebab}-print.vue'\nexport default [Comp]\n")
-        self._write(ws_path, f"src/form-component/form-widget/print/{full_kebab}-print.vue", f"""<template>
-  <div class="form-widget {full_kebab}-print">
-    <span>{{{{ formValue || '-' }}}}</span>
-  </div>
-</template>
-<script>
-import PrintWidgetMixin from '@/mixin/print-widget.mixin'
-export default {{ name: '{prefix}Print', mixins: [PrintWidgetMixin] }}
-</script>
-""")
-
-        # --- Search 场景 ---
-        self._write(ws_path, "src/form-component/form-widget/search/index.js",
-                     f"import Comp from './{full_kebab}-search.vue'\nexport default [Comp]\n")
-        self._write(ws_path, f"src/form-component/form-widget/search/{full_kebab}-search.vue", f"""<template>
-  <div class="form-widget {full_kebab}-search">
-    <x-proxy-form-item :isInTable="widget.isInTable" :showRequired="showRequired"
-      :label="widget.label" :validatorRules="validatorRules"
-      :validateKey="validateKey" :validateInfo="validateInfo">
-      <el-input v-model="searchValue" clearable size="mini" placeholder="请输入" />
-    </x-proxy-form-item>
-  </div>
-</template>
-<script>
-import SearchWidgetMixin from '@/mixin/search-widget.mixin'
-export default {{
-  name: '{prefix}Search',
-  mixins: [SearchWidgetMixin],
-  computed: {{
-    searchValue: {{
-      get() {{ return this.formValue }},
-      set(val) {{ this.formValue = val }}
-    }}
-  }}
-}}
-</script>
-""")
-
-        # --- Search-IDE 场景 ---
-        self._write(ws_path, "src/form-component/form-widget/search-ide/index.js",
-                     f"import Comp from './{full_kebab}-search-ide.vue'\nexport default [Comp]\n")
-        self._write(ws_path, f"src/form-component/form-widget/search-ide/{full_kebab}-search-ide.vue", f"""<template>
-  <div class="form-widget {full_kebab}-search-ide">
-    <x-proxy-form-item :isInTable="widget.isInTable" :showRequired="showRequired"
-      :label="widget.label" :validatorRules="validatorRules"
-      :validateKey="validateKey" :validateInfo="validateInfo">
-      <el-input disabled size="mini" placeholder="搜索（设计态预览）" />
-    </x-proxy-form-item>
-  </div>
-</template>
-<script>
-import SearchIdeWidgetMixin from '@/mixin/search-ide-widget.mixin'
-export default {{ name: '{prefix}SearchIde', mixins: [SearchIdeWidgetMixin] }}
-</script>
-""")
-
-        # ======== form-editor（设计器配置面板）========
-        self._write(ws_path, "src/form-component/form-editor/index.js",
-                     f"import {prefix}Setting from './{full_kebab}-setting.vue'\n\nconst customFormEditorList = [{prefix}Setting]\n\nexport default customFormEditorList\n")
-        self._write(ws_path, f"src/form-component/form-editor/{full_kebab}-setting.vue", f"""<template>
-  <div class="form-config-item form-config-{kebab}-setting">
-    <div class="setting-panel">
-      <!-- 直接放置 el-form-item，平台外层已提供 el-form -->
-      <!-- 在此添加配置项，统一使用 v-model="customComponentConfig.xxx" -->
-    </div>
-  </div>
-</template>
-<script>
-export default {{
-  name: '{prefix}Setting',
-  props: {{
-    componentConfig: {{ default: null }},
-    formEngine: {{ default: null }},
-    widget: {{ default: null }},
-    editConfig: {{ default: null }},
-    configProperty: {{ default: null }},
-    formItemList: {{ default: null }},
-    formRule: {{ default: null }},
-    globalData: {{ default: null }},
-    widgetConfig: {{ default: null }},
-    disabled: {{ default: false }}
-  }},
-  inject: {{
-    renderGlobal: {{ default: null }},
-    getPreviewLanguage: {{ default: null }},
-    getI18nShowStatus: {{ default: null }},
-    filterTableFromNodeFields: {{ default: null }}
-  }},
-  computed: {{
-    customComponentConfig() {{
-      const target = this.componentConfig || this.widget || null
-      return (target && target.customComponentConfig) || {{}}
-    }},
-    engine() {{
-      if (this.formEngine) return this.formEngine
-      if (this.renderGlobal) return this.renderGlobal
-      return null
-    }},
-    subTableList() {{
-      if (!this.engine || !this.engine.formDataControl) return []
-      return (this.engine.formDataControl.allTileFormItemList || [])
-        .filter(item => item.componentType === 'FORM_WIDGET_SON_TABLE')
-    }}
-  }},
-  created() {{
-    const target = this.componentConfig || this.widget || null
-    if (target && !target.customComponentConfig) {{
-      this.$set(target, 'customComponentConfig', {{}})
-    }}
-  }}
-}}
-</script>
-<style lang="scss">
-.form-config-{kebab}-setting {{}}
-</style>
-""")
-
-        # ======== form-component-config ========
-        self._write(ws_path, "src/form-component-config/index.js", """import widgetConfigList from './form-widget'
-import editorConfigList from './form-editor'
-
-export { widgetConfigList, editorConfigList }
-""")
-        self._write(ws_path, "src/form-component-config/form-widget/index.js",
-                     f"import config from './{full_kebab}.widget.config'\nexport default [config]\n")
-        self._write(ws_path, f"src/form-component-config/form-widget/{full_kebab}.widget.config.js", f"""const config = {{
-  version: 2.0,
-  code: '{code}',
-  desc: {{
-    iconType: 'DEFAULT',
-    icon: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" fill="#409EFF"/><text x="12" y="16" text-anchor="middle" fill="#fff" font-size="10">C</text></svg>',
-    text: '{kebab}',
-    description: '{kebab}'
-  }},
-  instance: {{ uuid: '$itemUuid', inTable: false }},
-  component: {{
-    ide: '{prefix}Ide',
-    edit: '{prefix}Edit',
-    read: '{prefix}Read',
-    list: '{prefix}List',
-    association: '{prefix}List',
-    lov: '{prefix}List',
-    print: '{prefix}Print',
-    search: '{prefix}Search',
-    searchIde: '{prefix}SearchIde'
-  }},
-  widget: {{
-    display: {{
-      label: '{kebab}', width: 6, mobileWidth: 12, height: 1,
-      hidden: false, readOnly: false, required: false, onlyCreateEdit: false
-    }},
-    allow: {{ useInTableColumn: true }},
-    default: {{ customDefaultKey: 'defaultValue', value: '' }},
-    validator: {{ uniqueCheck: false, numberMax: 5 }},
-    validatorList: [{{ validatorConfig: [], validatorMessage: '' }}],
-    special: {{ frontBusinessObjectComponentType: 'BOF_TEXT', saveWithHidden: false }},
-    customComponentConfig: {{}},
-    editor: {{
-      config: [
-        'INFO', 'LABEL', 'FIELD_CODE', 'TITLE_DESCRIPTION', 'WIDTH',
-        '{setting_code}',
-        'FORMULA_RULE', 'HIDDEN', 'READONLY', 'REQUIRED', 'EDITONNEW',
-        'UNIQUE', 'HIDDEN_SAVE', 'HIDDEN_TRIGGER', 'TRIGGER_BUSINESS_EVENTS'
-      ],
-      excludeInTable: ['WIDTH']
-    }}
-  }},
-  componentModelField: ['STRING'],
-  client: {{
-    mobile: {{
-      widget: {{
-        editor: {{
-          config: [
-            'INFO', 'LABEL', 'FIELD_CODE', 'WIDTH', '{setting_code}',
-            'FORMULA_RULE', 'HIDDEN', 'READONLY', 'REQUIRED', 'EDITONNEW',
-            'UNIQUE', 'HIDDEN_SAVE', 'HIDDEN_TRIGGER', 'TRIGGER_BUSINESS_EVENTS'
-          ],
-          excludeInTable: ['WIDTH']
-        }}
-      }},
-      component: {{
-        ide: '{prefix}Ide', edit: '{prefix}Edit',
-        read: '{prefix}Read', list: '{prefix}List',
-        association: '{prefix}List', lov: '{prefix}List',
-        tableColumn: '{prefix}List'
-      }}
-    }}
-  }},
-  methods: {{}},
-  formatValueSchema: {{}}
-}}
-
-export default config
-""")
-
-        self._write(ws_path, "src/form-component-config/form-editor/index.js",
-                     f"import {prefix}EditorConfig from './{full_kebab}.editor.config'\n\nconst editorConfigList = [{prefix}EditorConfig]\n\nexport default editorConfigList\n")
-        self._write(ws_path, f"src/form-component-config/form-editor/{full_kebab}.editor.config.js", f"""const {prefix}EditorConfig = {{
-  code: '{setting_code}',
-  editorConfigType: '{setting_code}',
-  componentName: '{prefix}Setting',
-  configProperty: 'customComponentConfig'
-}}
-
-export default {prefix}EditorConfig
-""")
-
-        # ======== Mixin（完整版，非 mock）========
-        self._write(ws_path, "src/mixin/form-widget.mixin.js", self._get_form_widget_mixin())
-        self._write(ws_path, "src/mixin/form-config.mixin.js", self._get_form_config_mixin())
-        self._write(ws_path, "src/mixin/list-widget.mixin.js", """const ListWidgetMixin = {
-  inject: ["listEngine"],
-  props: {
-    componentConfig: { required: true, type: Object },
-    formValue: { required: true, type: Object },
-    propKey: { required: true, type: String }
-  }
-}
-export default ListWidgetMixin
-""")
-        self._write(ws_path, "src/mixin/print-widget.mixin.js", """const PrintWidgetMixin = {
-  props: {
-    widget: { required: true },
-    componentType: { type: String },
-    formData: { required: true },
-    propKey: { type: String, default: '' },
-    inTable: { type: Boolean, default: false },
-    formRuleConfig: { type: Object, default: () => {} }
-  },
-  computed: {
-    formValue: {
-      get() { return this.propKey ? this.formData[this.propKey] : '' },
-      set(value) { this.formData[this.propKey] = value; this.$set(this.formData, this.propKey, value) }
-    }
-  }
-}
-export default PrintWidgetMixin
-""")
-        self._write(ws_path, "src/mixin/search-widget.mixin.js", """export default {
-  model: { prop: 'value', event: 'change' },
-  props: {
-    widget: { type: Object, default: () => ({}) },
-    compInfo: { type: Object, default: () => ({}) },
-    value: { type: Array, default: () => [] },
-    placeholder: { type: String },
-    searchItemConfig: { type: Object, default: () => ({}) }
-  },
-  computed: {
-    computeValue: {
-      get() { return this.value },
-      set(value) { this.$emit('change', value) }
-    },
-    labelStyle() {
-      return {
-        width: this.searchItemConfig.labelWidth ? this.searchItemConfig.labelWidth / 14 + 'rem' : '',
-        textAlign: this.searchItemConfig.labelalign || ''
-      }
-    },
-    formItemStyle() {
-      return {
-        minWidth: this.searchItemConfig.labelWidth && this.searchItemConfig.labelalign === 'right' ? (this.searchItemConfig.labelWidth + 12 + 44) / 14 + 'rem' : ''
-      }
-    }
-  }
-}
-""")
-        self._write(ws_path, "src/mixin/search-ide-widget.mixin.js", """export default {
-  model: { prop: 'value', event: 'change' },
-  props: {
-    widget: { type: Object, default: () => ({}) },
-    compInfo: { type: Object, default: () => ({}) },
-    value: { type: Array, default: () => [] }
-  },
-  computed: {
-    computeValue: {
-      get() { return this.value },
-      set(value) { this.$emit('change', value) }
-    }
-  }
-}
-""")
-
-        # ======== Validator ========
-        self._write(ws_path, "src/validator/widget-required-validator.js", """import { WidgetAreaRequiredValidator } from './widget-area-validator'
-const WidgetRequiredValidator = (errorMsg, uuid, xid, widget) => {
-  return (rule, value, callback) => {
-    if (widget && widget.componentType === 'FORM_WIDGET_AREA') {
-      return WidgetAreaRequiredValidator(errorMsg, uuid, xid)('', widget, value, callback)
-    }
-    if (value === undefined || value === null) return callback(new Error(errorMsg), uuid, xid)
-    if (Array.isArray(value) && !value.length) return callback(new Error(errorMsg), uuid, xid)
-    if (typeof value === 'string' && !value) return callback(new Error(errorMsg), uuid, xid)
-    if (typeof value === 'object' && JSON.stringify(value) === '{}') return callback(new Error(errorMsg), uuid, xid)
-    return callback()
-  }
-}
-export default WidgetRequiredValidator
-""")
-        self._write(ws_path, "src/validator/widget-regex-validator.js", """const WidgetRegexValidator = (regex, errorMsg) => {
-  let reg
-  try { reg = new RegExp(regex) } catch (e) { console.log(e) }
-  if (!reg) return
-  return (rule, value, callback) => {
-    if (value && !reg.test(value)) { callback(new Error(errorMsg)) } else { callback() }
-  }
-}
-export default WidgetRegexValidator
-""")
-        self._write(ws_path, "src/validator/widget-area-validator.js", """const WidgetAreaRequiredValidator = (errorMsg, uuid, xid) => {
-  return (rule, widget, value, callback) => {
-    if (!value) return callback(new Error(errorMsg), uuid, xid)
-    if (!value.province || !value.province.code) return callback(new Error(errorMsg), uuid, xid)
-    return callback()
-  }
-}
-export { WidgetAreaRequiredValidator }
-""")
-
-        # ======== form-ability ========
-        self._write(ws_path, "src/form-ability/index.js", """import AbilityFieldMap from './ability-field-map.config'
-import AbilityFieldConvert from './ability-field-convert.config.js'
-export { AbilityFieldMap, AbilityFieldConvert }
-""")
-        self._write(ws_path, "src/form-ability/ability-field-map.config.js",
-                     "// eslint-disable-next-line\nconst AbilityControl = window.df.getVue().constructor.FormEngine.AbilityControl\nexport default {}\n")
-        self._write(ws_path, "src/form-ability/ability-field-convert.config.js",
-                     "// eslint-disable-next-line\nconst AbilityControl = window.df.getVue().constructor.FormEngine.AbilityControl\nexport default {}\n")
-
-        # ======== i18n ========
-        self._write(ws_path, "src/form-component-local/index.js", """import zhLocaleModule from './zh-CN/index.js'
-import enLocaleModule from './en-US/index.js'
-
-const platformI18n =
-  window.df?.getI18n?.() ||
-  window.APaaSSDK?.context?.globalVueI18n
-
-if (platformI18n?.mergeLocaleMessage) {
-  platformI18n.mergeLocaleMessage('zh-CN', zhLocaleModule)
-  platformI18n.mergeLocaleMessage('en-US', enLocaleModule)
-}
-""")
-        self._write(ws_path, "src/form-component-local/zh-CN/index.js", "export default { formComponent: {} }\n")
-        self._write(ws_path, "src/form-component-local/en-US/index.js", "export default { formComponent: {} }\n")
-
-        # ======== API ========
-        self._write(ws_path, "src/api/index.js", """const Api = {
-  // 在这里定义接口
-}
-export default Api
-""")
-
-    def _get_form_widget_mixin(self):
-        """返回精简防御版 FormWidgetMixin — 只处理核心 formValue 读写，不依赖平台内部全局变量"""
-        return r"""/**
- * FormWidgetMixin — 精简防御版
- * 提供 formValue 读写、基础 props、校验、事件发射。
- * 不依赖 window._ / window.APaaSSDK 等平台全局对象，确保 debug 注入时不崩溃。
- */
-
-const FormWidgetMixin = {
-  props: {
-    widget: { type: Object, default: () => ({}) },
-    renderScene: { type: String, default: 'edit' },
-    propKey: { type: String, default: '' },
-    validateKey: { type: String, default: '' },
-    validateInfo: { type: Object, default: () => ({}) },
-    formData: { type: Object, default: () => ({}) },
-    globalFormData: { type: Object, default: () => ({}) },
-    globalData: { type: Object, default: () => ({}) },
-    formItemList: { type: Array, default: () => [] },
-    valueValidatedStatus: { type: Boolean, default: true },
-    rowIndex: { type: Number, default: 0 },
-    tableRowChangeFlag: { type: Boolean, default: false }
-  },
-  inject: {
-    renderGlobal: { default: null },
-    themeConfig: { default: null }
-  },
-  computed: {
-    formValue: {
-      get() {
-        if (!this.valueValidatedStatus || !this.propKey) return undefined
-        return this.formData ? this.formData[this.propKey] : undefined
-      },
-      set(value) {
-        if (!this.formData || !this.propKey) return
-        if (this.formData[this.propKey] !== value) {
-          this.$set(this.formData, this.propKey, value)
-          try {
-            const engine = this.renderGlobal
-            if (engine && engine.formDataControl) {
-              engine.formDataControl.ctlFormDataChanged = true
-            }
-          } catch (_) { /* safe */ }
-        }
-      }
-    },
-    formEngine() { return this.renderGlobal || null },
-    showRequired() { return !!(this.widget && this.widget.required && !this.widget.readOnly) },
-    validatorRules() {
-      const rules = []
-      try {
-        if (this.renderScene === 'edit' && this.showRequired && !(this.widget && this.widget.hidden)) {
-          const label = (this.widget && this.widget.label) || ''
-          const msg = label + ' \u4e0d\u80fd\u4e3a\u7a7a'
-          rules.push({
-            trigger: ['blur', 'change'],
-            type: 'required',
-            message: msg,
-            validator: (rule, value, callback) => {
-              if (value === undefined || value === null || value === '' || (Array.isArray(value) && !value.length)) {
-                return callback(new Error(msg))
-              }
-              callback()
-            }
-          })
-        }
-      } catch (_) { /* safe */ }
-      return rules
-    },
-    webFormSettings() {
-      return {
-        widgetStyle: (this.widget && this.widget.widgetStyle) || {},
-        border: (this.widget && this.widget.border) || {}
-      }
-    }
-  },
-  methods: {
-    $formEventEmit(eventName, event) {
-      this.$emit(eventName, event)
-      this.$emit('formEventEmit', {
-        eventName,
-        propKey: this.propKey,
-        event,
-        widget: this.widget
-      })
-    },
-    updatePropValue(key, value) {
-      if (this.formData && key) {
-        this.$set(this.formData, key, value)
-        this.$nextTick(() => {
-          this.$emit('formEventEmit', { eventName: 'change', event: value, propKey: key, widget: null })
-        })
-      }
-    }
-  }
-}
-
-export default FormWidgetMixin
-"""
-
-    def _get_form_config_mixin(self):
-        """返回标准 EditorFormConfigMixin — 设计器配置面板 mixin"""
-        return r"""import WidgetRequiredValidator from '@/validator/widget-required-validator'
-
-const EditorFormConfigMixin = {
-  props: {
-    widgetConfig: { required: false, default: function() { return {} } },
-    componentConfig: { required: true },
-    editConfig: { required: true },
-    configProperty: {},
-    formItemList: {},
-    formRule: {},
-    globalData: {},
-    formEngine: { type: Object, default() { return {} } },
-    disabled: { type: Boolean, default: function() { return false } },
-    menuTitle: { type: String, default: '' },
-    renderWay: { type: String, default: () => { return 'normal' } },
-    renderDisplayComponentData: { type: Array, default() { return [] } },
-    separateConfigFlag: { type: Boolean, default: false }
-  },
-  inject: ['getPreviewLanguage', 'getI18nShowStatus', 'filterTableFromNodeFields'],
-  computed: {
-    tenantModule() {
-      const sessionStorageTxt = window.sessionStorage && window.sessionStorage.__vuex__session
-      return JSON.parse(sessionStorageTxt || '{}').tenantModule || {}
-    },
-    configValue: {
-      get() { return this.componentConfig[this.configProperty] },
-      set(value) { this.$set(this.componentConfig, this.configProperty, value) }
-    },
-    typeOptions() {
-      return [
-        { type: 'input', label: this.$t('formConfig.selectDataSource.inputValue') },
-        { type: 'rule', label: this.$t('formConfig.formulaRule.formulaRule') }
-      ]
-    },
-    compDefaultValueType: {
-      get() { return this.componentConfig.defaultValueType ? this.componentConfig.defaultValueType : 'input' },
-      set(value) { if (value) { this.$set(this.componentConfig, 'defaultValueType', value) } }
-    },
-    configI18nCode: {
-      get() { return this.componentConfig[this.configProperty + 'I18nResourceCode'] },
-      set(value) { this.$set(this.componentConfig, this.configProperty + 'I18nResourceCode', value) }
-    },
-    configI18nAssociated: {
-      get() { return this.componentConfig[this.configProperty + 'I18nAssociated'] },
-      set(value) { this.$set(this.componentConfig, this.configProperty + 'I18nAssociated', value) }
-    },
-    configI18nData: {
-      get() { return this.componentConfig[this.configProperty + 'I18n'] },
-      set(value) { this.$set(this.componentConfig, this.configProperty + 'I18n', value) }
-    },
-    previewLanguage() {
-      return (
-        (this.getPreviewLanguage && this.getPreviewLanguage() && this.getPreviewLanguage().replace('-', '')) ||
-        (this.$i18n && this.$i18n.locale && this.$i18n.locale.replace('-', ''))
-      )
-    },
-    i18nTextShowStatus() {
-      return this.getI18nShowStatus && this.getI18nShowStatus()
-    }
-  },
-  methods: {
-    updateConfigByKey(key, value) {
-      if (this.editConfig.allowProperties && Array.isArray(this.editConfig.allowProperties)) {
-        if (!this.editConfig.allowProperties.includes(key)) {
-          throw new Error('无法更新configProperty中未定义的属性配置')
-        }
-        this.$set(this.componentConfig, key, value)
-        this.$forceUpdate()
-      }
-    },
-    getConfigByKey(key) { return this.componentConfig[key] },
-    updateRuleByType(type, value) {
-      let currentRules = this.formRule[this.componentConfig.uuid]
-      if (!currentRules) {
-        currentRules = { [type]: [] }
-        currentRules[type].push(value)
-      } else {
-        if (currentRules[type]) { currentRules[type][0] = value } else { currentRules[type] = [value] }
-      }
-      this.$set(this.formRule, this.componentConfig.uuid, currentRules)
-    },
-    getRuleByType(type) {
-      let currentRules = this.formRule[this.componentConfig.uuid]
-      if (!currentRules || !currentRules[type]) { return false }
-      return currentRules[type][0]
-    },
-    _validate(type, message, trigger = ['blur', 'change'], isI18n = false) {
-      const validator = { trigger: trigger }
-      if (typeof type === 'string') {
-        validator.type = type
-        if (type === 'required') { validator.validator = WidgetRequiredValidator(isI18n ? this.$t(message) : message) }
-        validator.message = isI18n ? this.$t(message) : message
-      } else if (typeof type === 'function') { validator.validator = type }
-      return validator
-    }
-  }
-}
-
-export default EditorFormConfigMixin
-"""
 
     # ------------------------------------------------------------------
     # Layout scaffold
@@ -6114,173 +5135,6 @@ server:
 scheduled:
   {module_name}:
     enabled: true
-""")
-
-    # ======== 轻量级脚手架（脚本 & 业务弹窗）========
-
-    def _scaffold_script_js(self, ws_path: Path, name: str):
-        """JavaScript 脚本扩展脚手架 - 仅生成 src/script.js"""
-        self._write(ws_path, "src/script.js", f"""\
-/**
- * JavaScript 脚本扩展 - {name}
- * 在业务事件中嵌入前端 JavaScript 脚本
- *
- * API:
- *   lowCodeContext.businessEventEngine.customNodeData  - 当前节点数据
- *   lowCodeContext.businessEventEngine.inputDatas       - 触发数据
- *   lowCodeContext.businessEventEngine.confirmEventEmit(result) - 确认执行
- *   lowCodeContext.businessEventEngine.cancelEventEmit()  - 取消执行
- */
-
-// 获取触发数据
-const inputDatas = lowCodeContext.businessEventEngine.inputDatas
-const formData = inputDatas[0] || {{}}
-
-// TODO: 实现业务逻辑
-
-// 返回结果
-return {{}}
-""")
-
-    def _scaffold_script_python(self, ws_path: Path, name: str):
-        """Python 脚本扩展脚手架 - 仅生成 src/script.py"""
-        self._write(ws_path, "src/script.py", f"""\
-\"\"\"
-Python 脚本扩展 - {name}
-在后端业务事件中执行 Python 脚本
-
-API:
-  definesys.input()    - 获取输入参数（dict）
-  definesys.output()   - 设置输出结果
-  definesys.log()      - 日志输出
-  definesys.http_get/http_post - HTTP 请求
-\"\"\"
-
-# 获取输入数据
-params = definesys.input()
-
-# TODO: 实现业务逻辑
-
-# 返回结果
-definesys.output({{"status": "ok"}})
-""")
-
-    def _scaffold_script_groovy(self, ws_path: Path, name: str):
-        """Groovy 脚本扩展脚手架 - 仅生成 src/script.groovy"""
-        self._write(ws_path, "src/script.groovy", f"""\
-/**
- * Groovy 脚本扩展 - {name}
- * 在后端业务事件中执行 Groovy 脚本
- *
- * API:
- *   xdapEventSystemFunctions.getFullData() - 获取完整表单数据
- *   xdapEventSystemFunctions.setResult()   - 设置返回结果
- */
-
-def fullData = xdapEventSystemFunctions.getFullData()
-
-// TODO: 实现业务逻辑
-
-xdapEventSystemFunctions.setResult(["status": "ok"])
-""")
-
-    def _scaffold_business_dialog(self, ws_path: Path, name: str):
-        """业务事件自定义弹窗脚手架 - 仅生成 src/setting.js"""
-        self._write(ws_path, "src/setting.js", f"""\
-/**
- * 业务事件自定义弹窗 - {name}
- * 在业务事件触发时弹出自定义对话框，采集用户输入
- */
-const componentOptions = {{
-  language: 'Vue',
-  template: `
-    <div class="custom-dialog-{name}">
-      <el-form ref="ruleForm" :model="formData" :rules="rules" label-width="80px">
-        <el-form-item label="备注" prop="remark">
-          <el-input v-model="formData.remark" type="textarea" :rows="3" placeholder="请输入"></el-input>
-        </el-form-item>
-      </el-form>
-    </div>
-  `,
-  footerTemplate: `
-    <el-button @click="onCancel">取消</el-button>
-    <el-button type="primary" @click="onSubmit" :loading="submitting">确定</el-button>
-  `,
-  data() {{
-    return {{
-      modalOptions: {{
-        modalVisible: true,
-        title: '{name}',
-        width: '480',
-        loading: false,
-        closeConfig: {{
-          onClose: () => {{ lowCodeContext.businessEventEngine.cancelEventEmit() }},
-        }},
-      }},
-      formData: {{ remark: '' }},
-      rules: {{ remark: [{{ required: true, message: '请输入备注', trigger: 'blur' }}] }},
-      submitting: false,
-    }}
-  }},
-  methods: {{
-    onSubmit() {{
-      this.$refs.ruleForm.validate((valid) => {{
-        if (valid) {{
-          this.submitting = true
-          lowCodeContext.businessEventEngine.confirmEventEmit(this.formData)
-          this.modalOptions.modalVisible = false
-        }}
-      }})
-    }},
-    onCancel() {{
-      lowCodeContext.businessEventEngine.cancelEventEmit()
-      this.modalOptions.modalVisible = false
-    }},
-  }},
-}}
-""")
-
-    def _scaffold_ui_style(self, ws_path: Path, name: str):
-        """UI 样式扩展脚手架 — 轻量，仅生成 CSS 文件"""
-        self._write(ws_path, "src/style.css", f"""/**
- * UI 样式扩展 - {name}
- * 使用 .form-custom-style 作用域，或 [data-component-id="xxx"] 定位字段
- */
-
-.form-custom-style {{
-  .el-form-item__label {{ font-weight: 600; }}
-  .el-input__inner {{ border-radius: 6px; }}
-}}
-""")
-
-    def _scaffold_list_custom_module(self, ws_path: Path, name: str):
-        """列表自定义模块脚手架 — 轻量，生成 Vue 模板 + SCSS"""
-        pascal = "".join(w.capitalize() for w in name.split("-"))
-        self._write(ws_path, "src/module-template.vue", f"""<template>
-  <div class="list-custom-module-{name}">
-    <div v-for="(item, idx) in listData" :key="idx" class="module-item">
-      {{{{ item.name || '-' }}}}
-    </div>
-    <div v-if="!listData.length" class="module-empty">暂无数据</div>
-  </div>
-</template>
-<script>
-export default {{
-  name: '{pascal}Module',
-  props: {{ lowCodeContext: {{ type: Object, default: () => ({{}}) }} }},
-  data() {{ return {{ listData: [], total: 0 }} }},
-  mounted() {{
-    const cfg = this.lowCodeContext?.pageViewConfig
-    if (cfg) {{ this.listData = cfg.data || []; this.total = cfg.total || 0 }}
-  }},
-}}
-</script>
-""")
-        self._write(ws_path, "src/module-style.scss", f""".list-custom-module-{name} {{
-  padding: 16px;
-  .module-item {{ padding: 10px 12px; border-bottom: 1px solid #ebeef5; font-size: 14px; }}
-  .module-empty {{ text-align: center; color: #c0c4cc; padding: 40px 0; }}
-}}
 """)
 
     def _scaffold_web_login(self, ws_path: Path, name: str):
