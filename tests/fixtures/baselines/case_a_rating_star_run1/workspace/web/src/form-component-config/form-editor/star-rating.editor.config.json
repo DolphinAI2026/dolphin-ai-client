@@ -1,0 +1,6 @@
+{
+  "code": "FORM_CUSTOM_STAR_RATING_SETTING",
+  "editorConfigType": "FORM_CUSTOM_STAR_RATING_SETTING",
+  "componentName": "FormComponentStarRatingSetting",
+  "configProperty": "customComponentConfig"
+}

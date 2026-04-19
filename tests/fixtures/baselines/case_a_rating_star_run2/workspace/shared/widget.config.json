@@ -1,0 +1,114 @@
+{
+  "version": 2.0,
+  "code": "FORM_CUSTOM_STAR_RATING",
+  "desc": {
+    "iconType": "DEFAULT",
+    "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\"><path d=\"M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z\" fill=\"#FFD700\" stroke=\"#E6C200\" stroke-width=\"1\"/></svg>",
+    "text": "星级评分",
+    "description": "提供0-5星的可选评分，支持半星精度和自定义颜色"
+  },
+  "instance": {
+    "uuid": "$itemUuid",
+    "inTable": false
+  },
+  "component": {
+    "ide": "FormComponentStarRatingIde",
+    "edit": "FormComponentStarRatingEdit",
+    "read": "FormComponentStarRatingRead",
+    "list": "FormComponentStarRatingList",
+    "print": "FormComponentStarRatingPrint",
+    "search": "FormComponentStarRatingSearch",
+    "searchIde": "FormComponentStarRatingSearchIde"
+  },
+  "widget": {
+    "display": {
+      "label": "星级评分",
+      "width": 6,
+      "mobileWidth": 12,
+      "height": 1,
+      "hidden": false,
+      "readOnly": false,
+      "required": false,
+      "onlyCreateEdit": false
+    },
+    "allow": {
+      "calcRule": false,
+      "useInTableColumn": true,
+      "scanCode": false,
+      "copy": false
+    },
+    "default": {
+      "customDefaultKey": "defaultValue",
+      "value": null
+    },
+    "validator": {
+      "uniqueCheck": false
+    },
+    "special": {
+      "frontBusinessObjectComponentType": "BOF_NUMBER",
+      "saveWithHidden": false,
+      "customComponentConfig": {
+        "maxStars": 5,
+        "allowHalfStar": true,
+        "starColor": "#FFD700",
+        "emptyColor": "#E0E0E0",
+        "starSize": 24
+      }
+    },
+    "editor": {
+      "config": [
+        "INFO",
+        "LABEL",
+        "FIELD_CODE",
+        "TITLE_DESCRIPTION",
+        "WIDTH",
+        "HIDDEN",
+        "READONLY",
+        "REQUIRED",
+        "EDITONNEW",
+        "UNIQUE",
+        "HIDDEN_SAVE",
+        "HIDDEN_TRIGGER",
+        "TRIGGER_BUSINESS_EVENTS",
+        "FORM_CUSTOM_STAR_RATING_SETTING"
+      ],
+      "excludeInTable": ["WIDTH"]
+    }
+  },
+  "client": {
+    "mobile": {
+      "component": {
+        "ide": "MobileFormComponentStarRatingIde",
+        "edit": "MobileFormComponentStarRatingEdit",
+        "read": "MobileFormComponentStarRatingRead",
+        "list": "MobileFormComponentStarRatingList",
+        "print": "MobileFormComponentStarRatingPrint",
+        "search": "MobileFormComponentStarRatingSearch",
+        "searchIde": "MobileFormComponentStarRatingSearchIde"
+      },
+      "widget": {
+        "editor": {
+          "config": [
+            "INFO",
+            "LABEL",
+            "FIELD_CODE",
+            "TITLE_DESCRIPTION",
+            "WIDTH",
+            "HIDDEN",
+            "READONLY",
+            "REQUIRED",
+            "EDITONNEW",
+            "UNIQUE",
+            "HIDDEN_SAVE",
+            "HIDDEN_TRIGGER",
+            "TRIGGER_BUSINESS_EVENTS"
+          ],
+          "excludeInTable": ["WIDTH"]
+        }
+      }
+    }
+  },
+  "componentModelField": ["NUM"],
+  "methods": {},
+  "formatValueSchema": {}
+}
