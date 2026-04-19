@@ -36,16 +36,6 @@ from app.config import settings
 from app.coding.verifier import ComponentVerifier
 from app.routes.llm_configs import list_llm_configs_for_purpose
 
-try:
-    from app.coding.vibe_agent import VibeCodingAgent
-    _VIBE_AGENT_IMPORT_ERROR = None
-except ModuleNotFoundError as exc:
-    if exc.name == "claude_agent_sdk":
-        VibeCodingAgent = None
-        _VIBE_AGENT_IMPORT_ERROR = exc
-    else:
-        raise
-
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/coding", tags=["coding"])
 

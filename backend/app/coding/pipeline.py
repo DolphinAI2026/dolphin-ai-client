@@ -968,16 +968,12 @@ async def _brainstorm_llm_call(
     temperature: float = 0.3,
 ) -> str:
     """
-    使用与 VibeCodingAgent 相同的租户 LLM 配置发起调用。
-    避免 brainstorm 使用默认 settings LLM 而非租户配置的 coding LLM。
+    使用租户的 coding LLM 配置发起调用（走 Dashscope/MiniMax 等，非通用 settings LLM）。
     """
-    from app.coding.vibe_agent import VibeCodingAgent
+    from app.agents.coding.llm_config import load_coding_llm_config
     import httpx
 
-    # 借用 VibeCodingAgent 的 LLM 配置解析
-    agent = VibeCodingAgent.__new__(VibeCodingAgent)
-    agent.tenant_id = tenant_id
-    base_url, api_key, llm_model = await agent._load_llm_config(model)
+    base_url, api_key, llm_model = await load_coding_llm_config(tenant_id, model)
 
     async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=120, write=10, pool=10)) as client:
         resp = await client.post(
@@ -1272,8 +1268,6 @@ async def run_coding_pipeline(
     这是 auto-pipeline 的业务逻辑抽取版本，
     不依赖 FastAPI Request/AuthContext，所有需要的值通过 PipelineParams 传入。
     """
-    from app.coding.vibe_agent import VibeCodingAgent
-
     generator = CodingGenerator()
     ws_mgr = WorkspaceManager()
 
@@ -1561,17 +1555,17 @@ async def run_coding_pipeline(
         # ---- Agent 代码生成 ----
         yield _record_event({"type": "step", "step": "generate", "status": "running"})
 
-        # 运行 Agent（迁移后路径：CodingAgent + Adapter；VibeCodingAgent 待 Stage 4 清理删除）
+        # 运行 Agent（CodingAgent + Stream Adapter）
         from app.agents.coding import CodingAgent, CodingAgentStreamAdapter
+        from app.agents.coding.llm_config import load_coding_llm_config
         from app.agents.publisher import InMemoryEventPublisher
         from app.agents.trace_writer import InMemoryTraceWriter
         from app.agents.types import AgentContext
         from app.llm_client import LLMClient
 
-        # 借用 VibeCodingAgent._load_llm_config 拿租户 LLM 配置（Stage 4 清理时会抽离）
-        _cfg_helper = VibeCodingAgent.__new__(VibeCodingAgent)
-        _cfg_helper.tenant_id = params.tenant_id
-        _base_url, _api_key, _cfg_model = await _cfg_helper._load_llm_config(effective_model)
+        _base_url, _api_key, _cfg_model = await load_coding_llm_config(
+            params.tenant_id, effective_model,
+        )
         _coding_llm = LLMClient(api_key=_api_key, base_url=_base_url, model=_cfg_model)
 
         _coding_ctx = AgentContext(

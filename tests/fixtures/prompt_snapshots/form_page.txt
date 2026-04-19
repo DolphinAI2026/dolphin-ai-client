@@ -1,0 +1,50 @@
+## Task
+做个测试
+
+## Workspace Info
+- Project name: test-comp
+- Project type: form-page
+- Working directory: /tmp/ws
+
+## Previous Conversation Summary
+None (first development session)
+
+## Workflow — IMPORTANT: Be efficient! Minimize tool calls.
+0. **Before tool calls**: First write a short, user-facing progress note in Chinese (1-3 sentences) explaining what you understood and what you will do next.
+1. **FIRST** (1 call): Use glob_files to see the project structure
+2. **THEN** (1-2 calls max): Read ONLY the key files (`src/apaas.json`, `src/index.js`, `src/form-page/*.vue` or `src/Home.vue`, `src/api/index.js`)
+3. **IMMEDIATELY write code**: Update the page files in one batch. Do NOT apply the 7-scene form-component pattern.
+4. **THEN** run `npm run build` to check compilation
+5. If errors, fix and rebuild. If success, report completion.
+
+## CRITICAL Rules
+- **Progress notes are visible to the user**: keep them brief, concrete, and friendly.
+- **DO NOT loop**: Never read the same file twice. Never read more than 3 files before writing code.
+- **Do NOT generate `widget.config.json`, `editor.config.json`, or `setting.vue`** — 这些是表单组件专属，页面场景不需要
+- **Do NOT apply 7-scene pattern** (edit/read/ide/list/print/search/search-ide) — 页面只是普通 Vue 组件
+
+## Technical Constraints — MENU_PAGE / FORM_PAGE
+- 页面打包为 UMD 组件后部署，可作为独立菜单页面或被平台弹窗（x-lov）引用
+- `templateType` 必须是 `MENU_PAGE`（或对应页面类型）
+- Vue 2.7 + Element UI（全局注册，不要 import）
+- **`$request` 不是 Promise** — 必须用 `.asyncThen()` / `.asyncErrorCatch()`，**不能用** `.then()` / `.catch()`
+- **不要使用** `x-http-block-table` / `x-ag-grid` — 直接使用 Element UI 的 `<el-table>` + `<el-pagination>`
+- 组件名必须是 `apaas-custom-{kebab-name}` 格式，与 `apaas.json` 的 router 配置一致
+- `src/index.js` 中必须 `window[Symbol.for("组件名")] = Component` 注册
+- 弹窗场景必须实现 `getSelectedData()` 方法，返回 `this.selectedRows` 数组
+- **跨页多选** — el-table 翻页会清空选中，需自己维护 `selectedRows` 并用 `toggleRowSelection` 恢复
+- 布局用 flex，表格区域 `flex: 1` 填充剩余空间
+- 国际化目录 `src/form-page-local/` 必须存在（即使只有中文也要）
+- 只修改 `src/` 下的业务文件，不要改 `vue.config.js`、`babel.config.js`
+
+## API 来源说明（开始开发前必须确认）
+页面需要数据才有意义。如果用户未说明数据来源，必须先问：
+1. "数据从哪里获取？是使用低代码平台现有表单的 API，还是自定义外部 API？"
+2. **平台 API**：需要 formId、tabId、字段映射
+3. **自定义 API**：需要 API 地址和参数格式
+
+若用户未提供，可用 mock 数据实现 UI 并标注 `// TODO: 替换为实际 API`，同时告知用户需要补充。
+
+## mobile-page 特殊说明
+- 移动端页面使用 cube-ui 组件库（平台全局注册，无需 import）
+- 其他规则与 menu-page 相同

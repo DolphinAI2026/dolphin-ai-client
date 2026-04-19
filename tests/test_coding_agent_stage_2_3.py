@@ -1,7 +1,8 @@
 """CodingAgent Stage 2.3 单测：Prompt 构造（build_user_prompt）。
 
-核心验证：CodingAgent.build_initial_user_message() 与 VibeCodingAgent._build_prompt()
-在所有 project_type 下**字节级完全一致**（纯搬迁，不改行为）。
+核心验证：各 project_type 下 build_user_prompt 产出与**锁定的 snapshot fixture**
+字节级完全一致（Stage 4 清理 VibeCodingAgent 之前已验证 snapshot 与
+VibeCodingAgent._build_prompt 字节级等价）。
 """
 import asyncio
 import json
@@ -20,15 +21,21 @@ from app.agents.coding.prompts import build_user_prompt, render_form_component_s
 from app.agents.publisher import InMemoryEventPublisher
 from app.agents.trace_writer import InMemoryTraceWriter
 from app.agents.types import AgentContext
-from app.coding.vibe_agent import VibeCodingAgent
+
+
+_SNAPSHOT_DIR = Path(__file__).parent / "fixtures" / "prompt_snapshots"
 
 
 # ══════════════════════════════════════════════════════════════
-# build_user_prompt 与 VibeCodingAgent._build_prompt 一致性
+# build_user_prompt 对齐锁定的 snapshot fixture
 # ══════════════════════════════════════════════════════════════
 
 def _compare_prompts(project_type: str, conversation_summary: str = "", requirement: str = "做个测试") -> None:
-    """对比新旧两套 prompt 构造输出是否完全一致。"""
+    """对比 build_user_prompt 输出与 snapshot fixture 是否字节级一致。
+
+    Snapshot fixture 在 Stage 4 清理 VibeCodingAgent 前生成，保证了锁定时刻的
+    VibeCodingAgent._build_prompt 输出被永久保留（字节级一致）。
+    """
     fake_info = {
         "project_name": "test-comp",
         "project_type": project_type,
@@ -36,7 +43,6 @@ def _compare_prompts(project_type: str, conversation_summary: str = "", requirem
     }
     ws_path = Path("/tmp/ws")
 
-    # 新：build_user_prompt
     new_prompt = build_user_prompt(
         requirement=requirement,
         conversation_summary=conversation_summary,
@@ -44,21 +50,13 @@ def _compare_prompts(project_type: str, conversation_summary: str = "", requirem
         workspace_path=ws_path,
     )
 
-    # 旧：VibeCodingAgent._build_prompt
-    class FakeWsMgr:
-        def get_workspace_info(self, ws_id):
-            return fake_info
+    tag = "_with_summary" if conversation_summary else ""
+    snapshot_file = _SNAPSHOT_DIR / f"{project_type.replace('-', '_')}{tag}.txt"
+    expected = snapshot_file.read_text()
 
-    agent = VibeCodingAgent.__new__(VibeCodingAgent)
-    agent.ws_id = "x"
-    agent.ws_mgr = FakeWsMgr()
-    agent.ws_path = ws_path
-    agent._system_prompt = "s"
-    agent.tenant_id = 1
-    old_prompt = agent._build_prompt(requirement=requirement, conversation_summary=conversation_summary)
-
-    assert new_prompt == old_prompt, (
-        f"{project_type}: prompt 不一致 new={len(new_prompt)} old={len(old_prompt)}"
+    assert new_prompt == expected, (
+        f"{project_type}{tag}: prompt 与 snapshot 不一致 "
+        f"new={len(new_prompt)} expected={len(expected)}"
     )
 
 

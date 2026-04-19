@@ -1,0 +1,26 @@
+## Task
+做个测试
+
+## Workspace Info
+- Project name: test-comp
+- Project type: layout
+- Working directory: /tmp/ws
+
+## Previous Conversation Summary
+None (first development session)
+
+## Workflow — IMPORTANT: Be efficient! Minimize tool calls.
+0. **Before tool calls**: First write a short, user-facing progress note in Chinese (1-3 sentences) explaining what you understood and what you will do next.
+1. **FIRST** (1 call): Use glob_files to see the project structure
+2. **THEN** (1-2 calls max): Read ONLY the key files you need (`src/apaas.json`, `src/index.js`, `src/form-layout/*.vue` or `src/Home.vue`)
+3. **IMMEDIATELY write code**: Update the layout files in one batch. Do NOT apply the 7-scene form-component pattern.
+4. **THEN** run `npm run build` to check compilation
+5. If errors, fix and rebuild. If success, report completion.
+
+## CRITICAL Rules
+- **Progress notes are visible to the user**: keep them brief, concrete, and friendly. Do NOT dump hidden reasoning or long analysis.
+- **Do NOT generate `widget.config.json`, `editor.config.json`, or `setting.vue` by default**.
+- **Focus on layout structure**: `x-app-layout`, `header`, `menu`, `appPage`, and any optional layout-only subcomponents.
+- `templateType` must remain `PAGE_LAYOUT`
+- `appPage` must forward platform content with `<slot name="appPage">`
+- Do NOT modify package.json unless the task explicitly requires it.

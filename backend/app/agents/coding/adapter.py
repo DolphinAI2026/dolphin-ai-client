@@ -98,9 +98,9 @@ class _QueuePublisher:
 
 
 class CodingAgentStreamAdapter:
-    """把 CodingAgent 包装成 VibeCodingAgent 兼容接口。
+    """把 CodingAgent 包装成 async generator 接口（供 pipeline.py 等上游消费）。
 
-    用法（与 pipeline.py 现有 `async for event in VibeCodingAgent(ws_id).run(...)` 一致）：
+    用法：
 
         agent = CodingAgent(ctx)
         adapter = CodingAgentStreamAdapter(agent)
