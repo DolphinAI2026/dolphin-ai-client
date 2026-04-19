@@ -345,8 +345,20 @@ const tables = computed(() => {
   const normalizedTables: any[] = []
   const seenTableCodes = new Set<string>()
 
+  // 预建 code → model 索引，用于 sub_fields 为空时按 sub_code 兜底找字段
+  const modelByCode = new Map<string, any>()
+  for (const m of source) {
+    const code = m.table_code || m.code || ''
+    if (code) modelByCode.set(code, m)
+  }
+  // 所有被引用过的子表 code，后续这些 model 不再作为独立表渲染（避免重复）
+  const consumedAsSubCodes = new Set<string>()
+
   for (const table of source) {
     const tableCode = table.table_code || table.code || ''
+    // 如果这个 model 已被当作子表引用过，跳过独立渲染（去重）
+    if (tableCode && consumedAsSubCodes.has(tableCode)) continue
+
     const tableName = table.table_name || table.name || ''
     const tableType = table.table_type || table.tableType || ''
     const rawFields = Array.isArray(table.fields) ? table.fields : []
@@ -370,16 +382,41 @@ const tables = computed(() => {
       const subName = subField.name || subField.field_name || subField.fieldName || subCode
       const dedupeKey = subCode || `${tableCode}::${subName}`
       if (seenTableCodes.has(dedupeKey)) continue
+
+      // sub_fields 为空时，按 sub_code 从 models 里找同名 model 的 fields 兜底
+      let subFields = subField.sub_fields || subField.subFields || []
+      if (subFields.length === 0 && subCode && modelByCode.has(subCode)) {
+        const refModel = modelByCode.get(subCode)
+        subFields = Array.isArray(refModel?.fields) ? refModel.fields : []
+        // 标记 refModel 已被子表消费，不再作为独立表渲染
+        consumedAsSubCodes.add(subCode)
+        seenTableCodes.add(subCode)
+      }
+
       normalizedTables.push({
         table_code: subCode,
         table_name: subName,
         table_type: '子表',
         parent_model_code: tableCode,
-        fields: (subField.sub_fields || subField.subFields || []).map(normalizeField),
+        fields: subFields.map(normalizeField),
       })
       seenTableCodes.add(dedupeKey)
     }
   }
+
+  // 反向清理：如果 consumedAsSubCodes 里的 code 已经被独立渲染过（tableCode 顺序在前），
+  // 从 normalizedTables 里剔除，避免重复
+  const filtered = normalizedTables.filter((t: any, i: number) => {
+    if (!t.table_code) return true
+    if (t.table_type === '子表') return true
+    if (consumedAsSubCodes.has(t.table_code)) {
+      // 找到第一次出现的 index，保留非"子表"那份会被跳过 — 这里直接删
+      return false
+    }
+    return true
+  })
+  normalizedTables.length = 0
+  normalizedTables.push(...filtered)
 
   return normalizedTables
 })

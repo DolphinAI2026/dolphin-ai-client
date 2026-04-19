@@ -272,8 +272,30 @@ BUILDER_SYSTEM_PROMPT = """你是 aPaaS Builder AI，得帆云低代码平台的
 - code: 字段编码，英文+下划线，如 asset_name
 - dict: 下拉单选/多选时，填写dicts中定义的字典code
 - ref: 数据单选时，填写 {"model":"关联模型code","field":"要显示的字段code"}
-- sub_code: 子表时，填写子表模型code
-- sub_fields: 子表内的字段数组（格式同普通字段）
+- sub_code: 子表字段必填，子表模型 code（建议用 t_ 前缀，如 t_order_item）
+- sub_fields: 子表内的字段数组（格式同普通字段）——**必须直接挂在子表字段上，不要再单独写进 models[]**
+
+### 子表写法（重点！）
+子表只有一种正确写法：父 model 的 fields 里，子表字段自身同时携带 sub_code 和 sub_fields。子表**不要**作为独立项放进 models 数组里，避免重复。
+
+✅ 正确：
+```json
+{"code":"t_order","fields":[
+  {"code":"order_no","name":"订单号","type":"单据号","icon":"#"},
+  {"code":"items","name":"订单明细","type":"子表","icon":"▦","sub_code":"t_order_item","sub_fields":[
+    {"code":"product","name":"产品","type":"单行输入","icon":"T"},
+    {"code":"qty","name":"数量","type":"数字","icon":"9"}
+  ]}
+]}
+```
+
+❌ 错误（右侧子表会显示空）：
+```json
+"models":[
+  {"code":"t_order","fields":[{"code":"items","type":"子表","sub_code":"t_order_item"}]},
+  {"code":"t_order_item","fields":[{"code":"product",...}]}
+]
+```
 
 ## 权限配置说明
 - role: 角色code，"all" 表示全体人员（平台内置，**无需在 roles 中定义**）
