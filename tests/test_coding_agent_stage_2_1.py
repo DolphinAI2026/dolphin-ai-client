@@ -84,10 +84,11 @@ def test_build_initial_user_message_with_summary():
 
 
 def test_build_initial_user_message_no_summary():
+    """空 summary 时显示 "None (first development session)"（与旧 VibeCodingAgent 行为一致）"""
     ctx = _make_ctx(input_data={"requirement": "做个组件"})
     msg = CodingAgent(ctx).build_initial_user_message()
     assert "做个组件" in msg
-    assert "Previous Conversation" not in msg
+    assert "None (first development session)" in msg
 
 
 # ══════════════════════════════════════════════════════════════

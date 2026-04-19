@@ -206,8 +206,16 @@ class BaseAgent(ABC, Generic[ProductT]):
                     self.status = AgentStatus.RUNNING
                     await self._trace_state_change(AgentStatus.PAUSED, AgentStatus.RUNNING)
 
-                # 3. 子类 hook
+                # 3. 子类 hook：循环检测 / nudge
                 await self.on_each_turn(self._turn)
+
+                # 3b. Context 压缩（子类可覆盖返回压缩后的 messages）
+                try:
+                    new_messages = await self.on_context_overflow(self._messages)
+                    if new_messages is not None and new_messages is not self._messages:
+                        self._messages = new_messages
+                except Exception as e:
+                    logger.warning("on_context_overflow hook failed: %s", e)
 
                 # 4. 终止检查
                 terminate, reason = self.should_terminate()
