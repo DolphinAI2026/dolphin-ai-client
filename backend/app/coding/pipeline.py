@@ -1362,8 +1362,13 @@ async def run_coding_pipeline(
             _push_replay_message(replay_stream_messages, "user", params.message)
 
         if not is_iteration:
-            yield _record_event({"type": "step", "step": "detect_scene", "status": "running"})
-            # brainstorm 续轮（用户回复"确认/再改一下"）：必须用 original_requirement 而非 params.message
+            # brainstorm 续轮（用户回复"确认/再改一下"）：场景已在首轮识别并通知过前端，
+            # 本轮只做静默识别（scene_type 下游还要用，例如选 brainstorm 模板、生成 project_type），
+            # 不再 emit detect_scene step / scene_detected，避免前端出现两张 "识别为..." badge
+            is_brainstorm_continuation = bool(prior_brainstorm_proposal)
+            if not is_brainstorm_continuation:
+                yield _record_event({"type": "step", "step": "detect_scene", "status": "running"})
+            # brainstorm 续轮：必须用 original_requirement 而非 params.message
             detection_message = prior_original_requirement if prior_brainstorm_proposal else params.message
             if params.project_type in ("script",):
                 try:
@@ -1380,9 +1385,10 @@ async def run_coding_pipeline(
                 except Exception:
                     logger.warning(f"场景识别失败，使用兜底场景 {fallback}: {traceback.format_exc()}")
                     scene_type = fallback
-            yield _record_event({"type": "step", "step": "detect_scene", "status": "done", "data": {"scene_type": scene_type.value}})
-            # 通知前端 scene_detected + conversation_id（如果已有）
-            yield _record_event({"type": "scene_detected", "conversation_id": conversation_id})
+            if not is_brainstorm_continuation:
+                yield _record_event({"type": "step", "step": "detect_scene", "status": "done", "data": {"scene_type": scene_type.value}})
+                # 通知前端 scene_detected + conversation_id（如果已有）
+                yield _record_event({"type": "scene_detected", "conversation_id": conversation_id})
         else:
             info = ws_mgr.get_workspace_info(ws_id)
             pt = info.get("project_type", "form-component")
