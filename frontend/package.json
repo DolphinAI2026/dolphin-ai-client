@@ -4,7 +4,8 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "VITE_BASE_URL=/ai-builder/ vite --host 0.0.0.0",
+    "dev": "VITE_BASE_URL=/ai-builder/ vite --host 127.0.0.1",
+    "dev:lan": "VITE_BASE_URL=/ai-builder/ vite --host 0.0.0.0",
     "dev:root": "vite",
     "build": "VITE_BASE_URL=/ai-builder/ vue-tsc -b && VITE_BASE_URL=/ai-builder/ vite build",
     "build:nocheck": "VITE_BASE_URL=/ai-builder/ vite build",
