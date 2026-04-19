@@ -351,11 +351,16 @@
             </template>
 
           </div>
-          <div v-else class="preview-empty preview-empty-stage" :class="{ parsing: isDocParsing }">
+          <div v-else class="preview-empty preview-empty-stage" :class="{ parsing: isDocParsing || generatingDoc }">
             <template v-if="isDocParsing">
               <div class="parsing-spinner"></div>
               <div class="preview-empty-title">正在解析文档...</div>
               <div class="preview-empty-copy">{{ docParsingStep || 'AI 正在分析文档内容，请稍候' }}</div>
+            </template>
+            <template v-else-if="generatingDoc">
+              <div class="parsing-spinner"></div>
+              <div class="preview-empty-title">正在生成结构化配置...</div>
+              <div class="preview-empty-copy">AI 正在把对话整理成完整的设计文档，通常需要 1-2 分钟，请稍候</div>
             </template>
             <template v-else>
               <div class="preview-empty-icon" aria-hidden="true">
@@ -864,9 +869,13 @@ const formPreviewItems = computed(() => {
         fieldsText: components.length
           ? components.map((component: any) => component?.label || component?.name || component?.code || '未命名字段').slice(0, 8).join('、')
           : '暂无字段配置',
-        previewFields: components.slice(0, 6).map((component: any, fieldIdx: number) => ({
-          name: component?.label || component?.name || component?.code || `字段${fieldIdx + 1}`,
-          code: component?.code || `field_${fieldIdx + 1}`,
+        previewFields: components.slice(0, 6).map((component: any, fieldIdx: number) => {
+          // component 常常只有 modelField 没有独立 code，拆出来兜底
+          const mf = String(component?.modelField || component?.model_field || '')
+          const mfCode = mf.includes('.') ? mf.split('.', 2)[1] : ''
+          return ({
+          name: component?.label || component?.name || component?.code || mfCode || `字段${fieldIdx + 1}`,
+          code: component?.code || component?.field_code || component?.fieldCode || mfCode || `field_${fieldIdx + 1}`,
           fullWidth: ['textarea', '文本域', '描述', '备注', 'rich'].some((keyword) => String(component?.componentType || component?.label || '').toLowerCase().includes(String(keyword).toLowerCase())),
           mockText: ['date', '日期', 'time', '时间'].some((keyword) => String(component?.componentType || '').toLowerCase().includes(String(keyword).toLowerCase()))
             ? '请选择'
@@ -876,7 +885,8 @@ const formPreviewItems = computed(() => {
                 ? '请输入数值'
                 : '请输入内容',
           mockIcon: ['date', '日期', 'time', '时间', 'select', 'enum', '字典', '下拉'].some((keyword) => String(component?.componentType || '').toLowerCase().includes(String(keyword).toLowerCase())) ? '▾' : ''
-        }))
+          })
+        })
       }
     })
   }
@@ -5077,15 +5087,14 @@ const generateDocInBackground = async () => {
 
     if (docResultForCard.value) {
       const appConfig = await convertConfig(docResultForCard.value)
-      store.preview = {
-        appName: appConfig.appName || '',
-        roles: appConfig.roles || [],
-        dicts: appConfig.dicts || [],
-        models: appConfig.models || [],
-        forms: appConfig.forms || [],
-        workflows: appConfig.workflows || [],
-        permissions: appConfig.permissions || [],
-      }
+      // 逐字段赋值而不是整体替换，保证 Pinia 响应式追踪到变化
+      store.preview.appName = appConfig.appName || ''
+      store.preview.roles = appConfig.roles || []
+      store.preview.dicts = appConfig.dicts || []
+      store.preview.models = appConfig.models || []
+      store.preview.forms = appConfig.forms || []
+      store.preview.workflows = appConfig.workflows || []
+      store.preview.permissions = appConfig.permissions || []
       if (appConfig.appCode) {
         parsedAppCode.value = appConfig.appCode
       }
@@ -5096,6 +5105,10 @@ const generateDocInBackground = async () => {
         }
       }
       parseReady.value = true
+      // 有 preview 数据后切到 builder 模式，showBuilderPreview 才能过
+      if (currentAgent.value === 'requirements' && store.preview.models.length > 0) {
+        currentAgent.value = 'builder'
+      }
       syncCurrentDocFromPreview('当前生成的设计文档', buildDocMarkdownFromPreview(appConfig))
       scrollToBottom()
     }
@@ -5199,15 +5212,14 @@ const generateDocInChat = async () => {
     } else {
       try {
         const appConfig = await convertConfig(docResultForCard.value)
-        store.preview = {
-          appName: appConfig.appName || '',
-          roles: appConfig.roles || [],
-          dicts: appConfig.dicts || [],
-          models: appConfig.models || [],
-          forms: appConfig.forms || [],
-          workflows: appConfig.workflows || [],
-          permissions: appConfig.permissions || [],
-        }
+        // 逐字段赋值而不是整体替换，保证 Pinia 响应式追踪
+        store.preview.appName = appConfig.appName || ''
+        store.preview.roles = appConfig.roles || []
+        store.preview.dicts = appConfig.dicts || []
+        store.preview.models = appConfig.models || []
+        store.preview.forms = appConfig.forms || []
+        store.preview.workflows = appConfig.workflows || []
+        store.preview.permissions = appConfig.permissions || []
         if (appConfig.appCode) {
           parsedAppCode.value = appConfig.appCode
         }
@@ -5218,6 +5230,10 @@ const generateDocInChat = async () => {
           }
         }
         parseReady.value = true
+        // 有 preview 数据后切到 builder 模式
+        if (currentAgent.value === 'requirements' && store.preview.models.length > 0) {
+          currentAgent.value = 'builder'
+        }
         syncCurrentDocFromPreview('当前生成的设计文档', buildDocMarkdownFromPreview(appConfig))
       } catch (error) {
         console.error('Sync generated doc preview failed:', error)
@@ -5587,6 +5603,23 @@ const ensureFreshRequirementsConversation = async () => {
 
 onMounted(async () => {
   store.showConnectModal = false
+
+  // ── 防状态残留：从其他页面（Landing 等）进来时，如果路由里既没 app_id
+  // 也没 conversation id，说明是"全新对话"场景，必须先清掉上一次挂在 store
+  // 里的 preview / currentApp —— 否则右侧会显示上一个应用的脏数据。
+  // pendingFile / pendingMarkdown 是上传流程在 Landing 页临时 set 的，要留。
+  const hasAppId = !!route.query.app_id
+  const hasConvId = !!route.params.id
+  if (!hasAppId && !hasConvId && !store.pendingFile && !store.pendingMarkdown) {
+    store.reset()
+    existingAppId.value = null
+    parseReady.value = false
+    parsedAppCode.value = ''
+    loadedAppCode.value = ''
+    conversationId.value = null
+    currentAgent.value = 'requirements'
+  }
+
   // 检查平台连接状态
   try {
     const token = localStorage.getItem('token')

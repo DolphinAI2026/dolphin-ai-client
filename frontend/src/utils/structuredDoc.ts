@@ -336,9 +336,13 @@ export function buildStructuredDocFromPreviewConfig(
         const rawComponentType = component?.componentType || component?.component_type || component?.type || ''
         const refMeta = resolveRefMeta(component)
         const associationConfig = component?.formAssociationConfig || component?.form_association_config || {}
+        // component 可能只有 modelField="t_xxx.field_code" 没有独立 code 字段
+        // （_build_forms_from_models 自动生成的就是这种结构），从 modelField 兜底拆出 code
+        const modelFieldStr = String(component?.modelField || component?.model_field || '')
+        const modelFieldCode = modelFieldStr.includes('.') ? modelFieldStr.split('.', 2)[1] : ''
         return {
-          field_code: component?.code || `field_${compIdx + 1}`,
-          field_name: component?.label || component?.name || component?.code || `字段${compIdx + 1}`,
+          field_code: component?.code || component?.field_code || component?.fieldCode || modelFieldCode || `field_${compIdx + 1}`,
+          field_name: component?.label || component?.name || component?.code || modelFieldCode || `字段${compIdx + 1}`,
           component_type: rawComponentType,
           raw_component_type: rawComponentType,
           section_type: component?.sectionType
