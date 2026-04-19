@@ -3923,18 +3923,34 @@ const uploadDocFile = async (file: File) => {
       pmsg.content += '\n\n❌ 解析中断：未收到后端完成结果，请重试。'
     }
   } catch (err: any) {
-    // 如果业务已经解析成功（parseReady 在 done 分支设为 true），说明这个 err
-    // 是 SSE 连接关闭/读取尾部时的假阳性（fetch ReadableStream 尾端常见），
-    // 不应该覆盖已完成的 UI
-    if (parseReady.value) {
-      console.warn('SSE 解析已完成后 fetch 抛出假阳性错误，忽略:', err?.message)
-    } else {
-      const pmsg = messages.find(m => m.id === progressMsgId)
-      if (pmsg) {
-        pmsg.content += `\n\n❌ 解析失败: ${err?.message || '未知错误'}`
-      } else {
-        messages.push({ id: Date.now(), role: 'assistant', agent: 'builder', content: `文档解析失败: ${err?.message || '未知错误'}`, created_at: '' })
+    // 假阳性判定：store.preview 已有完整数据（progress 事件累积）或
+    // 消息里已显示成功标记，就认为是 SSE 尾部假阳性，抢救状态并忽略错误。
+    const pmsg = messages.find(m => m.id === progressMsgId)
+    const hasAccumulatedPreview =
+      store.preview.models.length > 0 ||
+      store.preview.dicts.length > 0 ||
+      store.preview.roles.length > 0 ||
+      formPreviewItems.value.length > 0 ||
+      permissionPreviewItems.value.length > 0
+    const contentShowsSuccess = pmsg && typeof pmsg.content === 'string'
+      && (pmsg.content.includes('请检查右侧预览内容') || pmsg.content.includes('解析进度 100'))
+    if (parseReady.value || contentShowsSuccess || hasAccumulatedPreview) {
+      console.warn('[SSE] 解析已完成，忽略尾部假阳性错误:', err?.message)
+      // 抢救状态：原本成功分支会做的关键赋值补一下，否则右侧 UI 过不去
+      parseReady.value = true
+      if (!store.currentApp && store.preview.appName) {
+        store.currentApp = { status: 'draft' }
       }
+      if (currentAgent.value === 'requirements' && store.preview.models.length > 0) {
+        currentAgent.value = 'builder'
+      }
+      if (pmsg && !contentShowsSuccess) {
+        pmsg.content = buildProgressContent(true)
+      }
+    } else if (pmsg) {
+      pmsg.content += `\n\n❌ 解析失败: ${err?.message || '未知错误'}`
+    } else {
+      messages.push({ id: Date.now(), role: 'assistant', agent: 'builder', content: `文档解析失败: ${err?.message || '未知错误'}`, created_at: '' })
     }
     isDocParsing.value = false
   }
@@ -5029,24 +5045,33 @@ const generateDocInBackground = async () => {
     const decoder = new TextDecoder()
     let buffer = ''
 
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n')
-      buffer = lines.pop() || ''
+    // 容忍 SSE 尾部假阳性 network error：只要 docResultForCard 拿到就不算失败
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
 
-      for (const line of lines) {
-        if (line.startsWith('data:')) {
-          const dataStr = line.slice(5).trim()
-          if (!dataStr) continue
-          try {
-            const data = JSON.parse(dataStr)
-            if (data.doc_result) {
-              docResultForCard.value = data.doc_result
-            }
-          } catch { /* ignore */ }
+        for (const line of lines) {
+          if (line.startsWith('data:')) {
+            const dataStr = line.slice(5).trim()
+            if (!dataStr) continue
+            try {
+              const data = JSON.parse(dataStr)
+              if (data.doc_result) {
+                docResultForCard.value = data.doc_result
+              }
+            } catch { /* ignore */ }
+          }
         }
+      }
+    } catch (streamErr: any) {
+      if (docResultForCard.value) {
+        console.warn('[SSE] doc_result 已到达，忽略尾部假阳性:', streamErr?.message)
+      } else {
+        throw streamErr
       }
     }
 
@@ -5107,54 +5132,64 @@ const generateDocInChat = async () => {
     const progressMessageId = Date.now()
     let hasInsertedProgressMessage = false
 
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n')
-      buffer = lines.pop() || ''
+    // 包住 read 循环，SSE 尾部 "network error" 假阳性不要打断后面的 store 灌数据。
+    // 只要 docResultForCard 已拿到，就算 reader 抛错也认为是成功，继续走。
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
 
-      for (const line of lines) {
-        if (line.startsWith('event:')) {
-          // event line handled below via data
-        } else if (line.startsWith('data:')) {
-          const dataStr = line.slice(5).trim()
-          if (!dataStr) continue
-          try {
-            const data = JSON.parse(dataStr)
-            // Phase 1: streaming text content
-            if (data.content) {
-              isTyping.value = false
-              if (!hasInsertedProgressMessage) {
-                messages.push({
-                  id: progressMessageId,
-                  role: 'assistant',
-                  agent: 'requirements',
-                  content: '正在整理设计文档，完整内容会直接显示在右侧预览区。',
-                  created_at: ''
-                })
-                hasInsertedProgressMessage = true
+        for (const line of lines) {
+          if (line.startsWith('event:')) {
+            // event line handled below via data
+          } else if (line.startsWith('data:')) {
+            const dataStr = line.slice(5).trim()
+            if (!dataStr) continue
+            try {
+              const data = JSON.parse(dataStr)
+              // Phase 1: streaming text content
+              if (data.content) {
+                isTyping.value = false
+                if (!hasInsertedProgressMessage) {
+                  messages.push({
+                    id: progressMessageId,
+                    role: 'assistant',
+                    agent: 'requirements',
+                    content: '正在整理设计文档，完整内容会直接显示在右侧预览区。',
+                    created_at: ''
+                  })
+                  hasInsertedProgressMessage = true
+                }
+                scrollToBottom()
               }
-              scrollToBottom()
-            }
-            // Phase 2: structured JSON result
-            if (data.doc_result) {
-              docResultForCard.value = data.doc_result
-              const progressMsg = messages.find((msg) => msg.id === progressMessageId)
-              if (progressMsg) {
-                progressMsg.content = '设计文档已生成，完整内容请查看右侧预览。'
-              } else {
-                messages.push({
-                  id: progressMessageId,
-                  role: 'assistant',
-                  agent: 'requirements',
-                  content: '设计文档已生成，完整内容请查看右侧预览。',
-                  created_at: ''
-                })
+              // Phase 2: structured JSON result
+              if (data.doc_result) {
+                docResultForCard.value = data.doc_result
+                const progressMsg = messages.find((msg) => msg.id === progressMessageId)
+                if (progressMsg) {
+                  progressMsg.content = '设计文档已生成，完整内容请查看右侧预览。'
+                } else {
+                  messages.push({
+                    id: progressMessageId,
+                    role: 'assistant',
+                    agent: 'requirements',
+                    content: '设计文档已生成，完整内容请查看右侧预览。',
+                    created_at: ''
+                  })
+                }
               }
-            }
-          } catch { /* ignore */ }
+            } catch { /* ignore */ }
+          }
         }
+      }
+    } catch (streamErr: any) {
+      if (docResultForCard.value) {
+        console.warn('[SSE] 设计文档已到达，忽略尾部假阳性:', streamErr?.message)
+      } else {
+        throw streamErr
       }
     }
 

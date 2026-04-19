@@ -2,8 +2,14 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 from sqlalchemy import String, Text, DateTime, Integer, Boolean, ForeignKey, UniqueConstraint, JSON, func
+from sqlalchemy.dialects.mysql import LONGTEXT
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
+
+# 存大 JSON / markdown 的列用 LONGTEXT（MySQL 4GB），SQLite 下等价于 TEXT。
+# 直接 Text 在 MySQL 下是 TEXT（上限 64KB），大文档解析的 config/raw_content 会
+# 溢出报 "Data too long for column" 500。本地 SQLite 不会暴露这个 bug。
+BigText = Text().with_variant(LONGTEXT, "mysql")
 
 # Import tenant models
 from app.models.tenant import Tenant, UserTenant, Role, Team, TeamMember
@@ -35,9 +41,9 @@ class DocumentVersion(Base):
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     filename: Mapped[str] = mapped_column(String(255), nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    raw_content: Mapped[str] = mapped_column(Text, nullable=False)
-    structure_index: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON 章节索引
-    parsed_config: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON 解析配置
+    raw_content: Mapped[str] = mapped_column(BigText, nullable=False)
+    structure_index: Mapped[Optional[str]] = mapped_column(BigText, nullable=True)  # JSON 章节索引
+    parsed_config: Mapped[Optional[str]] = mapped_column(BigText, nullable=True)  # JSON 解析配置
     parent_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 基于哪个版本修改的（版本链）
     summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
@@ -52,8 +58,8 @@ class ChangePlan(Base):
     conversation_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     from_version: Mapped[int] = mapped_column(Integer, nullable=False)
     to_version: Mapped[int] = mapped_column(Integer, nullable=False)
-    diff_summary: Mapped[str] = mapped_column(Text, nullable=False)  # JSON {added, modified, removed}
-    actions: Mapped[str] = mapped_column(Text, nullable=False)  # JSON patch actions 数组
+    diff_summary: Mapped[str] = mapped_column(BigText, nullable=False)  # JSON {added, modified, removed}
+    actions: Mapped[str] = mapped_column(BigText, nullable=False)  # JSON patch actions 数组
     status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)  # pending/confirmed/completed/cancelled
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     executed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
@@ -84,7 +90,7 @@ class Message(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     conversation_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     role: Mapped[str] = mapped_column(String(20), nullable=False)  # user/assistant/system
-    content: Mapped[str] = mapped_column(Text, nullable=False)
+    content: Mapped[str] = mapped_column(BigText, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 
@@ -154,7 +160,7 @@ class ConfigSnapshot(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     application_id: Mapped[int] = mapped_column(Integer, ForeignKey("applications.id"), nullable=False, index=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False)
-    config_json: Mapped[str] = mapped_column(Text, nullable=False)  # JSON: 完整 config_preview 内容
+    config_json: Mapped[str] = mapped_column(BigText, nullable=False)  # JSON: 完整 config_preview 内容
     source: Mapped[str] = mapped_column(String(30), nullable=False)  # "chat" | "document" | "sync" | "rollback" | "generation"
     summary: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)  # 变更摘要
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
@@ -201,9 +207,9 @@ class Application(Base):
     app_code: Mapped[str] = mapped_column(String(50), nullable=False)
     icon_svg: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    requirement_doc: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON
-    config_preview: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON
-    generation_state: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON - copilot 中间状态
+    requirement_doc: Mapped[Optional[str]] = mapped_column(BigText, nullable=True)  # JSON
+    config_preview: Mapped[Optional[str]] = mapped_column(BigText, nullable=True)  # JSON
+    generation_state: Mapped[Optional[str]] = mapped_column(BigText, nullable=True)  # JSON - copilot 中间状态
     current_doc_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 当前文档版本号
     status: Mapped[str] = mapped_column(String(20), default="draft", nullable=False)  # draft/generating/updating/completed/failed
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
