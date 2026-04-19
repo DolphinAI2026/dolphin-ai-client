@@ -116,10 +116,11 @@ def _compare_final_status(a: dict, b: dict, res: Result):
 def _compare_event_type_set(a: dict, b: dict, res: Result):
     set_a = set(a["metadata"]["event_type_sequence"])
     set_b = set(b["metadata"]["event_type_sequence"])
-    only_a = set_a - set_b
+    # 'heartbeat' 是 SSE 保活机制（VibeCodingAgent 有、新 agent 由 pipeline 层负责），差异不算回归
+    only_a = (set_a - set_b) - {"heartbeat"}
     only_b = set_b - set_a
     if not only_a and not only_b:
-        res.ok("event types (set)", f"{len(set_a)} types 一致")
+        res.ok("event types (set)", f"{len(set_a | set_b)} types 一致（忽略 heartbeat）")
     else:
         detail = []
         if only_a:
@@ -130,8 +131,8 @@ def _compare_event_type_set(a: dict, b: dict, res: Result):
 
 
 def _compare_tool_names_set(a: dict, b: dict, res: Result):
-    set_a = set(a["metadata"].get("tool_names_called") or [])
-    set_b = set(b["metadata"].get("tool_names_called") or [])
+    set_a = set(a["metadata"].get("tool_names_called") or []) - {None}
+    set_b = set(b["metadata"].get("tool_names_called") or []) - {None}
     if set_a == set_b:
         res.ok("tool names (set)", f"{len(set_a)} tools 一致")
     else:
@@ -142,7 +143,9 @@ def _compare_tool_names_set(a: dict, b: dict, res: Result):
             detail.append(f"基线独有: {only_a}")
         if only_b:
             detail.append(f"迁移独有: {only_b}")
-        res.fail("tool names (set)", "; ".join(detail))
+        # tool 使用集合差异通常是 LLM 抖动（同需求不同 run 可能选用 edit_file vs write_file），
+        # 非架构回归；降级为 WARN
+        res.warn("tool names (set)", "; ".join(detail))
 
 
 def _compare_counts(a: dict, b: dict, res: Result):

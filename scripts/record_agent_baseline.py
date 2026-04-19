@@ -260,6 +260,7 @@ async def record_case(
 
     # —— 统计 metadata —— #
     tool_calls = [e for e in events if e.get("type") == "agent_tool"]
+    # VibeCodingAgent 用 "tool" 字段；兼容也看 "name"（个别旧数据）
     metadata = {
         "case_name": case_name,
         "message": message,
@@ -268,7 +269,7 @@ async def record_case(
         "events_by_type": dict(Counter(e.get("type") for e in events)),
         "event_type_sequence": [e.get("type") for e in events],
         "tool_call_count": len(tool_calls),
-        "tool_names_called": [e.get("name") for e in tool_calls],
+        "tool_names_called": [e.get("tool") or e.get("name") for e in tool_calls],
         "workspace_id": ws_id,
         "ide_url": (final_data or {}).get("ide_url"),
         "final_status": "success" if (ws_id and not error_message) else "failed",
