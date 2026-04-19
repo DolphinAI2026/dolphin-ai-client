@@ -1561,8 +1561,33 @@ async def run_coding_pipeline(
         # ---- Agent 代码生成 ----
         yield _record_event({"type": "step", "step": "generate", "status": "running"})
 
-        # 运行 Agent
-        agent = VibeCodingAgent(ws_id, system_prompt=AGENT_SYSTEM_PROMPT, tenant_id=params.tenant_id)
+        # 运行 Agent（迁移后路径：CodingAgent + Adapter；VibeCodingAgent 待 Stage 4 清理删除）
+        from app.agents.coding import CodingAgent, CodingAgentStreamAdapter
+        from app.agents.publisher import InMemoryEventPublisher
+        from app.agents.trace_writer import InMemoryTraceWriter
+        from app.agents.types import AgentContext
+        from app.llm_client import LLMClient
+
+        # 借用 VibeCodingAgent._load_llm_config 拿租户 LLM 配置（Stage 4 清理时会抽离）
+        _cfg_helper = VibeCodingAgent.__new__(VibeCodingAgent)
+        _cfg_helper.tenant_id = params.tenant_id
+        _base_url, _api_key, _cfg_model = await _cfg_helper._load_llm_config(effective_model)
+        _coding_llm = LLMClient(api_key=_api_key, base_url=_base_url, model=_cfg_model)
+
+        _coding_ctx = AgentContext(
+            session_id=f"cs_{ws_id}",
+            conversation_id=conversation_id or 0,
+            user_id=params.user_id,
+            tenant_id=params.tenant_id,
+            model=_cfg_model,
+            workspace_id=ws_id,
+            input={"system_prompt": AGENT_SYSTEM_PROMPT},
+            publisher=InMemoryEventPublisher(),   # adapter 会 wrap 成 queue publisher
+            trace_writer=InMemoryTraceWriter(),   # Stage 4 后接 DB
+            llm_client=_coding_llm,
+        )
+        _coding_agent = CodingAgent(_coding_ctx)
+        agent = CodingAgentStreamAdapter(_coding_agent)
         agent_result_text = ""
         persisted_agent_output: list[str] = []
         tool_events_for_summary: list[dict[str, Any]] = []

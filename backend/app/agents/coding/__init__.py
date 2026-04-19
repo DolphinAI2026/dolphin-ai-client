@@ -9,6 +9,7 @@
 - Stage 4: 删除 VibeCodingAgent
 """
 
+from app.agents.coding.adapter import CodingAgentStreamAdapter
 from app.agents.coding.agent import CodingAgent
 
-__all__ = ["CodingAgent"]
+__all__ = ["CodingAgent", "CodingAgentStreamAdapter"]
