@@ -53,6 +53,12 @@ const router = createRouter({
       meta: { requiresAuth: true, navExpanded: true }
     },
     {
+      path: '/coding-v2/:conversationId?',
+      name: 'CodingV2',
+      component: () => import('@/views/coding-v2/CodingPageV2.vue'),
+      meta: { requiresAuth: true, navExpanded: true }
+    },
+    {
       path: '/marketplace',
       name: 'Marketplace',
       component: () => import('@/views/MarketplacePage.vue'),
