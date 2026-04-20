@@ -359,6 +359,19 @@ class CodingAgent(BaseAgent[dict]):
             "is_error": not result.success,
         })
 
+        # 错误埋点
+        if not result.success:
+            recorder = (self.ctx.extra or {}).get("error_recorder")
+            if recorder is not None:
+                error_type = "tool_not_found" if result.error == "tool_not_found" else "tool_fail"
+                await recorder.record(
+                    error_type=error_type,
+                    error_message=result.error or result.content or "",
+                    round_index=(self.ctx.extra or {}).get("round_index", 0),
+                    turn=self._turn,
+                    tool_name=tool_name,
+                )
+
         return result
 
     def _get_project_type(self) -> str:

@@ -514,6 +514,8 @@ async def drive_coding_with_autofix(
     for round_i in range(max_fix_rounds + 1):
         # —— coding —— #
         coding_ctx = coding_ctx_factory()
+        # 注入 round_index（供 error_recorder 使用）
+        coding_ctx.extra = {**(coding_ctx.extra or {}), "round_index": round_i}
         if fix_hint:
             coding_ctx.input = {**(coding_ctx.input or {}), "fix_hint": fix_hint}
         # push_phase=False：phase 由本函数统一管理
@@ -574,7 +576,11 @@ async def drive_coding_with_autofix(
 
         if vr_result.status == "emitted":
             if vr_result.overall_status == "passed":
-                # VERIFY → DONE
+                # VERIFY → DONE；将之前所有轮错误标记为 resolved
+                recorder = (coding_ctx.extra or {}).get("error_recorder")
+                if recorder is not None and round_i > 0:
+                    for _ri in range(round_i):
+                        await recorder.mark_resolved(_ri)
                 try:
                     await orch.on_coding_done(db, conversation_id=conversation_id)
                 except Exception as e:
@@ -599,7 +605,22 @@ async def drive_coding_with_autofix(
                     reports=reports,
                     coding_results=coding_results,
                 )
-            # overall_status == failed
+            # overall_status == failed — 记录 verify_fail 事件
+            recorder = (coding_ctx.extra or {}).get("error_recorder")
+            if recorder is not None:
+                failed_items = [
+                    it for it in (vr_result.report or {}).get("items", [])
+                    if it.get("status") == "failed"
+                ]
+                fail_summary = "; ".join(
+                    it.get("description", "")[:80] for it in failed_items[:5]
+                )
+                await recorder.record(
+                    error_type="verify_fail",
+                    error_message=f"验收失败 {len(failed_items)} 项: {fail_summary}",
+                    round_index=round_i,
+                )
+
             if round_i >= max_fix_rounds:
                 # 已用完重试额度 → VERIFY → DONE（带 failed 状态）
                 try:

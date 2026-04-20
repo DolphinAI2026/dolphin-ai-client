@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Annotated, Any, Optional
+import secrets
+from typing import Annotated, Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -872,8 +873,6 @@ async def _run_coding_task(
 
     三 session 分离可防止 asyncio.gather 并发工具调用时不同 db 操作互相干扰。
     """
-    import secrets
-
     coding_session_id = f"c_{secrets.token_hex(6)}"
 
     async with (
@@ -927,11 +926,33 @@ async def _run_coding_task(
                     task_db.add(cs_row)
                     await task_db.commit()
 
+                    # 构建错误录制器（project_type 从 workspace 读，scene_type 从 spec 读）
+                    from app.services.error_recorder import AgentErrorRecorder
+                    _project_type = ""
+                    try:
+                        ws_info = ws_mgr.get_workspace_info(workspace_id)
+                        _project_type = (ws_info.get("project_type") or "").lower()
+                    except Exception:
+                        pass
+                    _scene_type = (spec_envelope.get("scene_type") or "") if isinstance(spec_envelope, dict) else ""
+                    error_recorder = AgentErrorRecorder(
+                        coding_session_id=coding_session_id,
+                        spec_id=spec_id_for_cs,
+                        workspace_id=workspace_id,
+                        project_type=_project_type,
+                        scene_type=_scene_type,
+                    )
+
+                    def _make_ctx_with_recorder(session_id: str) -> AgentContext:
+                        ctx = _make_ctx(session_id)
+                        ctx.extra = {**(ctx.extra or {}), "error_recorder": error_recorder}
+                        return ctx
+
                     autofix_result = await driver.drive_coding_with_autofix(
                         task_db,
                         conversation_id=conversation_id,
                         spec_envelope=spec_envelope,
-                        coding_ctx_factory=lambda: _make_ctx(f"c_{secrets.token_hex(6)}"),
+                        coding_ctx_factory=lambda: _make_ctx_with_recorder(f"c_{secrets.token_hex(6)}"),
                         verification_ctx_factory=lambda: _make_ctx(f"v_{secrets.token_hex(6)}"),
                         workspace_root=workspace_root,
                         coding_session_id=coding_session_id,
@@ -956,3 +977,101 @@ async def _run_coding_task(
                 await task_db.rollback()
             except Exception:
                 pass
+
+
+# ══════════════════════════════════════════════════════════════
+# Error Report API
+# ══════════════════════════════════════════════════════════════
+
+class ErrorEventItem(BaseModel):
+    id: str
+    coding_session_id: str
+    spec_id: Optional[str]
+    workspace_id: Optional[str]
+    project_type: Optional[str]
+    scene_type: Optional[str]
+    round_index: int
+    turn: int
+    error_type: str
+    tool_name: Optional[str]
+    error_message: str
+    resolved: bool
+    created_at: str
+
+
+class ErrorReportResponse(BaseModel):
+    total: int
+    tool_fail_count: int
+    verify_fail_count: int
+    resolved_count: int
+    project_type_breakdown: dict[str, int]
+    error_type_breakdown: dict[str, int]
+    items: List[ErrorEventItem]
+
+
+@router.get("/error-report", response_model=ErrorReportResponse)
+async def get_error_report(
+    session_id: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+    project_type: Optional[str] = None,
+    scene_type: Optional[str] = None,
+    limit: int = 200,
+    auth: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    """查询 CodingAgent 错误事件报告，用于提示词优化分析。
+
+    支持按 session_id / workspace_id / project_type / scene_type 过滤。
+    返回汇总统计 + 明细列表。
+    """
+    from sqlalchemy import select
+    from app.models.agent_models import AgentErrorEvent
+
+    stmt = select(AgentErrorEvent)
+    if session_id:
+        stmt = stmt.where(AgentErrorEvent.coding_session_id == session_id)
+    if workspace_id:
+        stmt = stmt.where(AgentErrorEvent.workspace_id == workspace_id)
+    if project_type:
+        stmt = stmt.where(AgentErrorEvent.project_type == project_type)
+    if scene_type:
+        stmt = stmt.where(AgentErrorEvent.scene_type == scene_type)
+    stmt = stmt.order_by(AgentErrorEvent.created_at.desc()).limit(limit)
+
+    rows = (await db.execute(stmt)).scalars().all()
+
+    items = [
+        ErrorEventItem(
+            id=r.id,
+            coding_session_id=r.coding_session_id,
+            spec_id=r.spec_id,
+            workspace_id=r.workspace_id,
+            project_type=r.project_type,
+            scene_type=r.scene_type,
+            round_index=r.round_index,
+            turn=r.turn,
+            error_type=r.error_type,
+            tool_name=r.tool_name,
+            error_message=r.error_message,
+            resolved=r.resolved,
+            created_at=r.created_at.isoformat() if r.created_at else "",
+        )
+        for r in rows
+    ]
+
+    project_type_breakdown: dict[str, int] = {}
+    error_type_breakdown: dict[str, int] = {}
+    for it in items:
+        k = it.project_type or "unknown"
+        project_type_breakdown[k] = project_type_breakdown.get(k, 0) + 1
+        error_type_breakdown[it.error_type] = error_type_breakdown.get(it.error_type, 0) + 1
+
+    return ErrorReportResponse(
+        total=len(items),
+        tool_fail_count=sum(1 for it in items if it.error_type in ("tool_fail", "tool_not_found")),
+        verify_fail_count=sum(1 for it in items if it.error_type == "verify_fail"),
+        resolved_count=sum(1 for it in items if it.resolved),
+        project_type_breakdown=project_type_breakdown,
+        error_type_breakdown=error_type_breakdown,
+        items=items,
+    )

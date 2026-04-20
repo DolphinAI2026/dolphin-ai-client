@@ -19,6 +19,7 @@ from typing import Any, Optional
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     DateTime,
     Float,
     ForeignKey,
@@ -338,4 +339,65 @@ class ConversationEvent(Base):
 
     __table_args__ = (
         Index("ix_conv_events_conv_seq", "conversation_id", "seq"),
+    )
+
+
+# ══════════════════════════════════════════════════════════════
+# 8. agent_error_events — CodingAgent 错误记录（提示词优化用）
+# ══════════════════════════════════════════════════════════════
+
+class AgentErrorEvent(Base):
+    """CodingAgent 执行中的错误事件，供提示词优化分析使用。
+
+    记录三类事件：
+    - tool_fail      : tool 调用返回 success=False（含参数错误、执行失败）
+    - tool_not_found : LLM 调用了不存在的 tool
+    - verify_fail    : 验收轮失败（overall_status=failed）
+
+    resolved=True 表示该轮错误在后续轮次中被修复（验收通过时更新）。
+    """
+    __tablename__ = "agent_error_events"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    coding_session_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("coding_sessions.id"), nullable=False, index=True,
+    )
+    spec_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    workspace_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
+    project_type: Mapped[Optional[str]] = mapped_column(
+        String(50), nullable=True,
+        comment="form-component-dual / page / backend-api 等",
+    )
+    scene_type: Mapped[Optional[str]] = mapped_column(
+        String(50), nullable=True,
+        comment="component / page / backend_api",
+    )
+    round_index: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False,
+        comment="autofix 第几轮，0-based（第 0 轮为首次生成）",
+    )
+    turn: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False,
+        comment="agent 内第几轮对话（tool_fail 时有效）",
+    )
+    error_type: Mapped[str] = mapped_column(
+        String(32), nullable=False,
+        comment="tool_fail / tool_not_found / verify_fail",
+    )
+    tool_name: Mapped[Optional[str]] = mapped_column(
+        String(100), nullable=True,
+        comment="tool_fail / tool_not_found 时填写",
+    )
+    error_message: Mapped[str] = mapped_column(Text, nullable=False)
+    resolved: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False,
+        comment="True=后续轮次已修复（验收通过后批量更新）",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False, index=True,
+    )
+
+    __table_args__ = (
+        Index("ix_agent_error_events_session_round", "coding_session_id", "round_index"),
+        Index("ix_agent_error_events_project_type", "project_type", "error_type"),
     )
