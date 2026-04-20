@@ -171,9 +171,6 @@ async def drive_brainstorm(
         persisted_spec_id = None
         if auto_persist_spec and envelope:
             try:
-                # reuse_envelope_spec_id=True：emit_spec tool 已经生成 spec_id 并通过
-                #   brainstorm.spec_emitted event 发给前端了，必须让 DB 主键与 event 里
-                #   的 spec_id 完全一致，否则前端按事件里的 id GET /api/spec/{id} 就 404。
                 row = await spec_service.save_spec(
                     db,
                     brainstorm_session_id=session_id,
@@ -181,6 +178,8 @@ async def drive_brainstorm(
                     reuse_envelope_spec_id=True,
                 )
                 persisted_spec_id = row.id
+                # spec 立即 commit，保证下面发 SSE 事件时前端能 GET 到
+                await db.commit()
             except Exception as e:
                 logger.exception("Spec 持久化失败（brainstorm session=%s）：%s", session_id, e)
                 await bs_svc.mark_session_failed(
@@ -191,6 +190,34 @@ async def drive_brainstorm(
                     session_id=session_id,
                     agent_result=result,
                 )
+
+        # spec 已 commit → 再发 brainstorm.spec_emitted 事件，避免前端收到事件时 spec 不存在
+        if persisted_spec_id:
+            spec_envelope_obj = envelope
+            scene_type_val = (
+                spec_envelope_obj.scene_type.value
+                if hasattr(spec_envelope_obj, "scene_type")
+                else str(spec_envelope_obj)
+            )
+            confidence_val = (
+                spec_envelope_obj.provenance.confidence
+                if hasattr(spec_envelope_obj, "provenance")
+                else 0.0
+            )
+            try:
+                await agent.ctx.publisher.publish(
+                    conversation_id=conversation_id,
+                    event_type="brainstorm.spec_emitted",
+                    agent="brainstorm",
+                    session_id=session_id,
+                    data={
+                        "spec_id": persisted_spec_id,
+                        "scene_type": scene_type_val,
+                        "confidence": confidence_val,
+                    },
+                )
+            except Exception as e:
+                logger.warning("brainstorm.spec_emitted 事件发布失败（非致命）: %s", e)
 
         # 推进 phase：UNDERSTAND → CONFIRM
         try:

@@ -400,7 +400,8 @@ def test_tool_emit_spec_happy_path():
     assert r.success, r.content
     assert state.emitted is True
     assert state.emitted_spec_id is not None
-    assert r.emit_event and r.emit_event["type"] == "brainstorm.spec_emitted"
+    # emit_event 由 driver 层在 spec commit 后发出，tool 本身不再携带（避免竞态 404）
+    assert r.emit_event is None
     assert r.data.get("confidence") >= 0.9
 
 

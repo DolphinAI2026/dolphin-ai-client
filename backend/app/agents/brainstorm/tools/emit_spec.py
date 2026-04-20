@@ -212,6 +212,9 @@ def build_emit_spec_tool(state: BrainstormState) -> Tool:
 
         gate_tag = "" if gate == "ok" else f"（置信度 gate={gate}：{gate_reason}）"
 
+        # 注意：不在这里发 brainstorm.spec_emitted 事件。
+        # drive_brainstorm 会在 spec 落库 commit 之后再发，避免前端
+        # 收到事件时 spec 还没持久化（竞态 → 404）。
         return ToolResult(
             success=True,
             content=(
@@ -228,15 +231,6 @@ def build_emit_spec_tool(state: BrainstormState) -> Tool:
                     for w in vresult.warnings
                 ],
                 "envelope": envelope.model_dump(mode="json"),
-            },
-            emit_event={
-                "type": "brainstorm.spec_emitted",
-                "data": {
-                    "spec_id": spec_id,
-                    "scene_type": envelope.scene_type.value,
-                    "confidence": confidence,
-                    "gate": gate,
-                },
             },
         )
 
