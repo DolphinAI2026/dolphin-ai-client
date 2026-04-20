@@ -457,19 +457,10 @@ def test_pause_on_ask_user_like_tool():
     ctx = _make_ctx(pub, tw, llm)
     agent = PauseAgent(ctx)
 
-    # 启动后 pause，我们用另一个 task 在外面 cancel 它
-    async def run_and_cancel():
-        task = asyncio.create_task(agent.run())
-        # 给点时间让 agent 到 pause 状态
-        await asyncio.sleep(0.1)
-        agent.cancel()  # 退出 pause 并退出循环
-        return await task
+    result = asyncio.run(agent.run())
 
-    result = asyncio.run(run_and_cancel())
-
-    # 被 cancel，status=ABORTED
-    assert result.status == AgentStatus.ABORTED
-    # 应产生 paused 事件
+    # agent 检测到 should_pause 后立即返回 PAUSED（不阻塞等 cancel/resume）
+    assert result.status == AgentStatus.PAUSED
     assert any(e["type"] == "system.paused" for e in pub.events)
 
 

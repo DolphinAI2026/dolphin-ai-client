@@ -334,7 +334,11 @@ def test_full_run_with_tool_then_complete():
             "project_type": "form-component-dual", "user_id": 1,
         }))
         os.environ["APAAS_WORKSPACE_ROOT"] = tmp
+        import app.coding.workspace as _ws_mod
         from app.coding.workspace import WorkspaceManager
+        # 模块级常量在首次 import 时固化，全套件运行时需要重新 patch
+        _ws_mod.WORKSPACE_ROOT = Path(tmp)
+        _ws_mod.WORKSPACE_SEARCH_ROOTS = (Path(tmp),)
         WorkspaceManager._workspace_path_cache.clear()
 
         llm = MockStreamLLMClient([
