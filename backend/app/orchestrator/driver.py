@@ -540,10 +540,17 @@ async def drive_coding_with_autofix(
             )
 
         # coding 成功：GENERATE → VERIFY
+        # ⚠️ 必须 commit，否则 task_db 持有 conversations 行锁（FK），
+        #    pub_db 插入 conversation_events 时 FK 检查需共享锁 → Lock wait timeout
         try:
             await orch.on_coding_complete_start_verify(db, conversation_id=conversation_id)
+            await db.commit()
         except Exception as e:
             logger.warning("phase GENERATE→VERIFY 推进失败（非致命）: %s", e)
+            try:
+                await db.rollback()
+            except Exception:
+                pass
 
         # —— verify —— #
         verification_ctx = verification_ctx_factory()
@@ -599,10 +606,16 @@ async def drive_coding_with_autofix(
                     coding_results=coding_results,
                 )
             # 还有重试额度 → VERIFY → GENERATE
+            # ⚠️ 必须 commit，同 GENERATE→VERIFY 的理由：FK 行锁
             try:
                 await orch.on_verify_retry(db, conversation_id=conversation_id)
+                await db.commit()
             except Exception as e:
                 logger.warning("phase VERIFY→GENERATE 推进失败（非致命）: %s", e)
+                try:
+                    await db.rollback()
+                except Exception:
+                    pass
             fix_hint = _build_fix_hint_from_report(vr_result, spec_envelope)
             continue
 
