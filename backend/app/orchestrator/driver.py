@@ -546,11 +546,19 @@ async def drive_coding_with_autofix(
             await orch.on_coding_complete_start_verify(db, conversation_id=conversation_id)
             await db.commit()
         except Exception as e:
-            logger.warning("phase GENERATE→VERIFY 推进失败（非致命）: %s", e)
+            logger.error("phase GENERATE→VERIFY 推进失败，终止本轮验收: %s", e)
             try:
                 await db.rollback()
             except Exception:
                 pass
+            # commit 失败 → phase 状态不确定，不能继续跑验收
+            return AutoFixLoopResult(
+                final_status="failed",
+                rounds=round_i + 1,
+                last_verification=last_verification,
+                reports=reports,
+                coding_results=coding_results,
+            )
 
         # —— verify —— #
         verification_ctx = verification_ctx_factory()

@@ -398,6 +398,8 @@ def test_autofix_loop_first_round_passes():
     async def run():
         db, conv, user, engine = await _make_db()
         try:
+            # autofix 需要从 GENERATE phase 开始（GENERATE→VERIFY 是合法转移）
+            await transition_phase(db, conversation_id=conv.id, to=Phase.GENERATE, strict=False)
             with tempfile.TemporaryDirectory() as td:
                 envelope = _envelope()
                 import app.orchestrator.driver as drv
@@ -439,6 +441,7 @@ def test_autofix_loop_retries_until_fail():
     async def run():
         db, conv, user, engine = await _make_db()
         try:
+            await transition_phase(db, conversation_id=conv.id, to=Phase.GENERATE, strict=False)
             with tempfile.TemporaryDirectory() as td:
                 envelope = _envelope()
                 import app.orchestrator.driver as drv
@@ -488,6 +491,7 @@ def test_autofix_loop_partial_does_not_retry():
     async def run():
         db, conv, user, engine = await _make_db()
         try:
+            await transition_phase(db, conversation_id=conv.id, to=Phase.GENERATE, strict=False)
             with tempfile.TemporaryDirectory() as td:
                 envelope = _envelope()
                 import app.orchestrator.driver as drv
@@ -525,7 +529,7 @@ def test_autofix_loop_partial_does_not_retry():
     _run(run)
 
 
-def test_autofix_loop_second_round_passes_after_fix():
+def test_autofix_loop_second_round_passes_after_fix():  # noqa: PLR0912
     """第 1 轮 failed，第 2 轮 passed → final_status=passed，rounds=2"""
     # 用一个 stateful VerificationAgent：第一次调用 FailAgent，第二次调用 PassAgent
     # 通过替换 driver.VerificationAgent 的 factory 来实现
@@ -559,6 +563,7 @@ def test_autofix_loop_second_round_passes_after_fix():
     async def run():
         db, conv, user, engine = await _make_db()
         try:
+            await transition_phase(db, conversation_id=conv.id, to=Phase.GENERATE, strict=False)
             with tempfile.TemporaryDirectory() as td:
                 envelope = _envelope()
                 import app.orchestrator.driver as drv

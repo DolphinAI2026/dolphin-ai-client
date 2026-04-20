@@ -489,6 +489,9 @@ async def start_coding_from_spec(
 
     # 快照 envelope + workspace_id 到任务变量（避免 session 关闭后访问懒加载属性）
     envelope = dict(spec_row.content or {})
+    # 确保 spec_id 字段存在（save_spec 写入的，但旧数据或异常路径可能缺失）
+    if not envelope.get("spec_id"):
+        envelope["spec_id"] = spec_row.id
     workspace_id = conv.workspace_id
     conversation_id = conv.id
     user_id = ctx.user.id
@@ -670,6 +673,16 @@ async def _run_iterate_dispatch_task(
         base_spec = await spec_service.get_spec(task_db, base_spec_id)
         if not base_spec:
             logger.error("iterate dispatch: base spec %s 不存在", base_spec_id)
+            try:
+                await publisher.publish(
+                    conversation_id=conversation_id,
+                    event_type="iteration.failed",
+                    agent="orchestrator",
+                    session_id=None,
+                    data={"error": f"spec {base_spec_id} not found"},
+                )
+            except Exception:
+                pass
             return
 
         # classify
@@ -681,6 +694,16 @@ async def _run_iterate_dispatch_task(
             )
         except Exception as e:
             logger.exception("classify_iteration crashed: %s", e)
+            try:
+                await publisher.publish(
+                    conversation_id=conversation_id,
+                    event_type="iteration.failed",
+                    agent="orchestrator",
+                    session_id=None,
+                    data={"error": f"classify failed: {e}"},
+                )
+            except Exception:
+                pass
             return
 
         # 发事件给前端
@@ -771,12 +794,15 @@ async def _run_iterate_dispatch_task(
             except Exception:
                 pass
 
+            new_spec_envelope = dict(new_spec.content or {})
+            if not new_spec_envelope.get("spec_id"):
+                new_spec_envelope["spec_id"] = new_spec.id
             await _run_coding_task(
                 conversation_id=conversation_id,
                 user_id=user_id,
                 tenant_id=tenant_id,
                 workspace_id=workspace_id,
-                spec_envelope=new_spec.content or {},
+                spec_envelope=new_spec_envelope,
             )
             return
 
@@ -886,7 +912,10 @@ async def _run_coding_task(
 
                 if workspace_root:
                     # 先创建 coding_sessions 行（verification_reports 有 FK 依赖它）
-                    spec_id_for_cs = spec_envelope.get("spec_id", "") if isinstance(spec_envelope, dict) else ""
+                    spec_id_for_cs = (spec_envelope.get("spec_id") or "") if isinstance(spec_envelope, dict) else ""
+                    if not spec_id_for_cs:
+                        logger.error("coding task %s: spec_envelope 缺少 spec_id，无法创建 CodingSession", coding_session_id)
+                        return
                     cs_row = CodingSessionModel(
                         id=coding_session_id,
                         conversation_id=conversation_id,
