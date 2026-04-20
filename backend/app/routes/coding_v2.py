@@ -876,6 +876,7 @@ async def _run_coding_task(
             if workspace_id:
                 # workspace 已存在：跑 coding → verify autofix 闭环
                 from app.coding.workspace import WorkspaceManager
+                from app.models.agent_models import CodingSession as CodingSessionModel
                 ws_mgr = WorkspaceManager()
                 workspace_root = ""
                 try:
@@ -884,7 +885,20 @@ async def _run_coding_task(
                     logger.warning("get_workspace_path(%s) 失败：%s，降级为无 verify", workspace_id, e)
 
                 if workspace_root:
-                    await driver.drive_coding_with_autofix(
+                    # 先创建 coding_sessions 行（verification_reports 有 FK 依赖它）
+                    spec_id_for_cs = spec_envelope.get("spec_id", "") if isinstance(spec_envelope, dict) else ""
+                    cs_row = CodingSessionModel(
+                        id=coding_session_id,
+                        conversation_id=conversation_id,
+                        spec_id=spec_id_for_cs,
+                        workspace_id=workspace_id,
+                        status="running",
+                        model_used=model,
+                    )
+                    task_db.add(cs_row)
+                    await task_db.commit()
+
+                    autofix_result = await driver.drive_coding_with_autofix(
                         task_db,
                         conversation_id=conversation_id,
                         spec_envelope=spec_envelope,
@@ -893,6 +907,8 @@ async def _run_coding_task(
                         workspace_root=workspace_root,
                         coding_session_id=coding_session_id,
                     )
+                    # 更新 coding_sessions 状态
+                    cs_row.status = "completed" if autofix_result.final_status in ("passed", "partial") else "failed"
                     await task_db.commit()
                     return
 
