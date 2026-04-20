@@ -683,10 +683,16 @@ def build_user_prompt(
     conversation_summary: str,
     workspace_info: dict[str, Any],
     workspace_path: Path,
+    spec_brief: str | None = None,
 ) -> str:
     """构造 CodingAgent 的首条 user message（替代 VibeCodingAgent._build_prompt）。
 
-    输出结构：Task → Workspace Info → Workspace Rules → Previous Summary → Workflow（按 project_type）
+    输出结构：Task → (Structured Spec) → Workspace Info → Workspace Rules → Previous Summary → Workflow
+
+    Args:
+        spec_brief: 可选 — BrainstormAgent emit 的 Spec 渲染后的 markdown 摘要。
+                    传入时在 Task 之后插入"## Structured Spec"段，LLM 应优先参考此段。
+                    不传（None 或 ""）时保持旧行为（与 snapshot 字节级一致）。
     """
     project_type = (workspace_info.get("project_type", "") or "").lower()
     files = workspace_info.get("files", []) or []
@@ -697,11 +703,23 @@ def build_user_prompt(
 
     parts: list[str] = [
         f"## Task\n{requirement}",
+    ]
+
+    # Spec 驱动路径：把结构化规格紧跟 Task 展示
+    if spec_brief:
+        parts.append(
+            "\n## Structured Spec (from BrainstormAgent)\n"
+            "以下是 brainstorm agent 与用户确认后产出的结构化规格。**优先按此段实现，"
+            "Task 段只是用户原话，细节以 Spec 为准**。\n\n"
+            + spec_brief.rstrip()
+        )
+
+    parts.extend([
         "\n## Workspace Info",
         f"- Project name: {workspace_info.get('project_name', '')}",
         f"- Project type: {project_type}",
         f"- Working directory: {workspace_path}",
-    ]
+    ])
 
     if rule_files:
         parts.append("\n## Workspace Rules")

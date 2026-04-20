@@ -177,11 +177,15 @@ class CodingAgent(BaseAgent[dict]):
     def build_initial_user_message(self) -> str:
         """构造首条 user message。
 
-        从 VibeCodingAgent._build_prompt 迁移到 prompts.build_user_prompt，
-        逻辑字节级一致（7 种 project_type 全覆盖）。
+        双路径支持：
+        - 旧路径（raw requirement）：输入无 spec_envelope，与 VibeCodingAgent 字节级一致
+        - 新路径（Spec 驱动）：输入有 spec_envelope / spec_brief → 在 Task 后追加
+          Structured Spec 段；Task 段用 intent.core_purpose 或用户原话
         """
         requirement = self.ctx.input.get("requirement", "")
         summary = self.ctx.input.get("conversation_summary", "")
+        # Spec 驱动时 spec_bridge 会塞 spec_brief；未传时保持旧行为
+        spec_brief = self.ctx.input.get("spec_brief") or None
 
         # 获取 workspace info（project_name / project_type / files）
         workspace_info: dict[str, Any] = {}
@@ -195,11 +199,18 @@ class CodingAgent(BaseAgent[dict]):
             except Exception as e:
                 logger.warning("无法获取 workspace info: %s", e)
 
+        # Spec 驱动：若 ctx.input 指定了 project_type 但 workspace 未知，用 input 覆盖
+        # （让 CodingAgent 选对 workflow 模板，即使 workspace 还没创建）
+        if not workspace_info.get("project_type") and self.ctx.input.get("project_type"):
+            workspace_info = dict(workspace_info)
+            workspace_info["project_type"] = self.ctx.input["project_type"]
+
         return build_user_prompt(
             requirement=requirement,
             conversation_summary=summary,
             workspace_info=workspace_info,
             workspace_path=workspace_path,
+            spec_brief=spec_brief,
         )
 
     def should_terminate(self) -> tuple[bool, str]:
