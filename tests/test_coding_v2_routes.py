@@ -79,13 +79,20 @@ def _mock_auth(tenant_id: int, user_id: int = 1):
 
 
 def _client(tenant_id: int = TENANT_A, user_id: int = 1) -> TestClient:
+    from app.routes.sse import _sse_auth
     c = TestClient(app)
-    app.dependency_overrides[get_auth_context] = _mock_auth(tenant_id, user_id)
+    mock_fn = _mock_auth(tenant_id, user_id)
+    app.dependency_overrides[get_auth_context] = mock_fn
+    # SSE 路由用的是单独的 _sse_auth dependency（支持 query token），
+    # 测试需同步覆盖，否则请求会走真实 token 校验失败
+    app.dependency_overrides[_sse_auth] = mock_fn
     return c
 
 
 def _clear():
+    from app.routes.sse import _sse_auth
     app.dependency_overrides.pop(get_auth_context, None)
+    app.dependency_overrides.pop(_sse_auth, None)
 
 
 def _uniq() -> str:

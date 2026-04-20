@@ -167,19 +167,32 @@ class BaseAgent(ABC, Generic[ProductT]):
 
     async def run(self) -> AgentResult[ProductT]:
         result: AgentResult[ProductT] = AgentResult(status=AgentStatus.IDLE)
+        # 判断是 fresh start 还是 resume：
+        # resume 场景 —— _messages 已经由 from_snapshot 恢复（非空），_turn 也已恢复
+        # fresh 场景 —— 首次构造 agent，_messages 是空 list，_turn=0
+        is_resume = bool(self._messages)
         try:
-            await self._publish("start", {"session_id": self.ctx.session_id})
+            if is_resume:
+                await self._publish("resumed", {
+                    "session_id": self.ctx.session_id,
+                    "turn": self._turn,
+                    "messages_count": len(self._messages),
+                })
+            else:
+                await self._publish("start", {"session_id": self.ctx.session_id})
             await self.before_run()
 
+            prev_status = self.status
             self.status = AgentStatus.RUNNING
-            await self._trace_state_change(AgentStatus.IDLE, AgentStatus.RUNNING)
+            await self._trace_state_change(prev_status, AgentStatus.RUNNING)
 
-            # 构造首条消息
-            self._messages = [
-                {"role": "system", "content": self.get_system_prompt()},
-                {"role": "user", "content": self.build_initial_user_message()},
-            ]
-            await self._on_message_appended_safe(self._messages[-1])
+            if not is_resume:
+                # 构造首条消息（fresh start）
+                self._messages = [
+                    {"role": "system", "content": self.get_system_prompt()},
+                    {"role": "user", "content": self.build_initial_user_message()},
+                ]
+                await self._on_message_appended_safe(self._messages[-1])
 
             max_turns = self.get_max_turns()
 
@@ -193,18 +206,22 @@ class BaseAgent(ABC, Generic[ProductT]):
                     break
 
                 # 2. 暂停检查
+                #
+                # 语义：某个 tool 返回 should_pause=True（例如 ask_user 等用户答）→
+                # `_handle_tool_calls` 会调 self.pause() 设置 _pause_flag。
+                # 这里检测到后**立即退出 run()**，让上层 driver 拿到 PAUSED 状态
+                # → driver 调用 suspend_session 落 snapshot 到 DB → HTTP 连接释放。
+                # 用户回答后，新的请求构造新的 agent（from_snapshot + 注入 tool_result）
+                # → 再调 run()（is_resume=True 接续跑）。
+                #
+                # 之前这里 `await _wait_for_resume_or_cancel()` 同进程阻塞，导致
+                # driver 永远拿不到 run() 返回值 → snapshot 从不保存 → resume 无效。
                 if self._pause_flag.is_set():
                     self.status = AgentStatus.PAUSED
                     await self._trace_state_change(AgentStatus.RUNNING, AgentStatus.PAUSED)
                     await self._publish("paused", {"session_id": self.ctx.session_id})
-                    # 等待 resume（或 cancel）
-                    await self._wait_for_resume_or_cancel()
-                    if self._cancel_flag.is_set():
-                        self._stop_reason = StopReason.CANCELLED
-                        self.status = AgentStatus.ABORTED
-                        break
-                    self.status = AgentStatus.RUNNING
-                    await self._trace_state_change(AgentStatus.PAUSED, AgentStatus.RUNNING)
+                    self._stop_reason = StopReason.PAUSED
+                    break
 
                 # 3. 子类 hook：循环检测 / nudge
                 await self.on_each_turn(self._turn)
@@ -278,8 +295,11 @@ class BaseAgent(ABC, Generic[ProductT]):
                 await self.on_max_turns_exceeded()
 
             # —— 产出 —— #
+            # PAUSED 场景不走 finalize（agent 没结束，只是等用户回答）
             product: Optional[ProductT] = None
-            if self.status not in (AgentStatus.ABORTED, AgentStatus.FAILED):
+            if self.status == AgentStatus.PAUSED:
+                pass
+            elif self.status not in (AgentStatus.ABORTED, AgentStatus.FAILED):
                 try:
                     product = await self.finalize()
                     self.status = AgentStatus.COMPLETED
@@ -584,13 +604,21 @@ class BaseAgent(ABC, Generic[ProductT]):
     # ══════════════════════════════════════════════════════════════
 
     async def _publish(self, action: str, data: dict[str, Any]) -> None:
-        """发布带 namespace 的 SSE 事件：{agent_type}.{action}"""
+        """发布带 namespace 的 SSE 事件。
+
+        - 若 action 已经包含点号（如 tool emit_event.type 给的 `brainstorm.ask_user`
+          或跨 agent 命名如 `iteration.classified`），直接用
+        - 否则补上 `{agent_type}.` 前缀（如 action=`start` → `brainstorm.start`）
+
+        这样 tool 的 emit_event.type 可以写完整 namespace 自述命名，不会被套两层。
+        """
         if self.ctx.publisher is None:
             return
+        event_type = action if "." in action else f"{self.agent_type.value}.{action}"
         try:
             await self.ctx.publisher.publish(
                 conversation_id=self.ctx.conversation_id,
-                event_type=f"{self.agent_type.value}.{action}",
+                event_type=event_type,
                 agent=self.agent_type.value,
                 session_id=self.ctx.session_id,
                 data=data,

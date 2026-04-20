@@ -222,6 +222,17 @@ onBeforeUnmount(() => {
   sse?.stop()
 })
 
+// currentSpecId 变化时自动拉取 spec 数据（SSE onEvent 是 fire-and-forget，
+// 加 watch 作为保底：只要 specId 有值且 spec 还没加载就触发一次拉取）
+watch(
+  () => store.currentSpecId,
+  (id) => {
+    if (id && !store.currentSpec) {
+      loadCurrentSpec()
+    }
+  },
+)
+
 async function attachToConversation(convId: number) {
   store.attachConversation(convId)
   startSse(convId)

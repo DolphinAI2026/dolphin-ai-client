@@ -36,6 +36,7 @@ from app.orchestrator import (
     RouteDecision,
     driver,
     get_phase,
+    on_scaffold_done,
     route_user_message,
     start_brainstorm,
 )
@@ -375,7 +376,12 @@ async def _run_brainstorm_task(
     selected_model_id: Optional[int],
     user_message: str,
 ) -> None:
-    """后台跑 BrainstormAgent。独立 DB session，事件通过 publisher 推 SSE。"""
+    """后台跑 BrainstormAgent。独立 DB session，事件通过 publisher 推 SSE。
+
+    commit 策略：task 结束时统一 commit；driver 层只 flush 不 commit，
+    避免 task 内部复杂路径下多次 commit。publisher 的事件行是独立 session
+    自我 commit（不受此影响）。
+    """
     async with AsyncSessionLocal() as task_db:
         try:
             agent_ctx = await _build_agent_context(
@@ -390,8 +396,13 @@ async def _run_brainstorm_task(
             )
             agent = BrainstormAgent(agent_ctx)
             await driver.drive_brainstorm(task_db, agent=agent, session_id=session_id)
+            await task_db.commit()
         except Exception as e:
             logger.exception("brainstorm task %s crashed: %s", session_id, e)
+            try:
+                await task_db.rollback()
+            except Exception:
+                pass
 
 
 async def _resume_brainstorm_task(
@@ -404,7 +415,12 @@ async def _resume_brainstorm_task(
     selected_model_id: Optional[int],
     user_message: str,
 ) -> None:
-    """从 DB snapshot resume BrainstormAgent，把用户新消息作为额外输入注入。"""
+    """从 DB snapshot resume BrainstormAgent。
+
+    关键：resume_session 会把 `user_message` 作为上一轮 ask_user 的 tool_result
+    追加进 agent._messages，LLM 看到的是真正的对话历史 + 用户最新回答，
+    而不是从头重跑（见架构文档 § 5.5）。
+    """
     async with AsyncSessionLocal() as task_db:
         try:
             agent_ctx = await _build_agent_context(
@@ -415,18 +431,24 @@ async def _resume_brainstorm_task(
                 tenant_id=tenant_id,
                 workspace_id=workspace_id,
                 selected_model_id=selected_model_id,
-                input_data={
-                    "requirement": user_message,
-                    # 注入 ask_user 的答案（供 tool 同步模式读取）
-                    "_ask_user_answer": {"answer": user_message, "question_matches": True},
-                },
+                # input 保留 requirement 供 build_initial_user_message 兜底，
+                # 但 resume 场景下 run() 不会调 build_initial_user_message
+                input_data={"requirement": user_message},
             )
             _, agent = await bs_svc.resume_session(
-                task_db, session_id=session_id, ctx=agent_ctx,
+                task_db,
+                session_id=session_id,
+                ctx=agent_ctx,
+                user_answer=user_message,
             )
             await driver.drive_brainstorm(task_db, agent=agent, session_id=session_id)
+            await task_db.commit()
         except Exception as e:
             logger.exception("brainstorm resume task %s crashed: %s", session_id, e)
+            try:
+                await task_db.rollback()
+            except Exception:
+                pass
 
 
 # ══════════════════════════════════════════════════════════════
@@ -465,22 +487,154 @@ async def start_coding_from_spec(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "conversation missing")
     phase = await get_phase(db, conv.id)
 
-    # 快照 envelope 到任务变量（避免 session 关闭后访问 spec_row.content）
+    # 快照 envelope + workspace_id 到任务变量（避免 session 关闭后访问懒加载属性）
     envelope = dict(spec_row.content or {})
+    workspace_id = conv.workspace_id
+    conversation_id = conv.id
+    user_id = ctx.user.id
+    tenant_id = ctx.tenant_id
     await db.commit()
 
-    asyncio.create_task(_run_coding_task(
-        conversation_id=conv.id,
-        user_id=ctx.user.id,
-        tenant_id=ctx.tenant_id,
-        workspace_id=conv.workspace_id,
-        spec_envelope=envelope,
-    ))
+    if phase == Phase.SCAFFOLD:
+        # 首轮：工作区尚未创建，先 scaffold 再 coding
+        asyncio.create_task(_run_scaffold_then_coding_task(
+            conversation_id=conversation_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            spec_envelope=envelope,
+        ))
+    else:
+        # 迭代：工作区已存在，直接 coding
+        asyncio.create_task(_run_coding_task(
+            conversation_id=conversation_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            spec_envelope=envelope,
+        ))
 
     return StartCodingResponse(
-        conversation_id=conv.id,
+        conversation_id=conversation_id,
         spec_id=spec_id,
         phase=phase.value,
+    )
+
+
+def _spec_scene_to_project_type(scene_type: str) -> str:
+    """Spec scene_type 字符串 → WorkspaceManager ProjectType 字符串"""
+    return {
+        "web_component_dual": "form-component-dual",
+        "web_page": "form-page",
+        "mobile_page": "mobile-page",
+        "backend_api": "backend-api",
+        "backend_feign": "backend-feign",
+        "backend_scheduled": "backend-scheduled",
+    }.get(scene_type, "form-component-dual")
+
+
+async def _run_scaffold_then_coding_task(
+    *,
+    conversation_id: int,
+    user_id: int,
+    tenant_id: int,
+    spec_envelope: dict[Any, Any],
+) -> None:
+    """后台任务：创建工作区（SCAFFOLD）→ 推进 phase GENERATE → 跑 CodingAgent。
+
+    WorkspaceManager.create_workspace() 是同步 IO 密集型操作（拷贝模板），
+    用 asyncio.to_thread 避免阻塞事件循环。
+    """
+    from app.coding.workspace import WorkspaceManager, ProjectType
+
+    scene_type_str = spec_envelope.get("scene_type", "web_component_dual")
+    project_type_str = _spec_scene_to_project_type(scene_type_str)
+    identity = spec_envelope.get("identity") or {}
+    code_name: str = identity.get("code_name") or "custom-dev"
+    display_name: str = identity.get("display_name") or code_name
+
+    async with AsyncSessionLocal() as task_db:
+        async with AsyncSessionLocal() as pub_db:
+            publisher = get_db_publisher().scoped(pub_db)  # type: ignore[attr-defined]
+            try:
+                # 发 scaffold 开始事件
+                await publisher.publish(
+                    conversation_id=conversation_id,
+                    event_type="scaffold.started",
+                    agent="orchestrator",
+                    session_id=None,
+                    data={
+                        "scene_type": scene_type_str,
+                        "project_type": project_type_str,
+                        "code_name": code_name,
+                    },
+                )
+
+                # 同步创建工作区，在线程池里跑（避免阻塞 event loop）
+                ws_mgr = WorkspaceManager()
+                try:
+                    meta = await asyncio.to_thread(
+                        ws_mgr.create_workspace,
+                        ProjectType(project_type_str),
+                        code_name,
+                        user_id,
+                        None,           # project_id
+                        display_name,   # display_name
+                    )
+                except Exception as e:
+                    logger.exception("scaffold: create_workspace 失败: %s", e)
+                    await publisher.publish(
+                        conversation_id=conversation_id,
+                        event_type="scaffold.failed",
+                        agent="orchestrator",
+                        session_id=None,
+                        data={"error": str(e)},
+                    )
+                    # phase → FAILED
+                    from app.orchestrator import on_agent_failed
+                    await on_agent_failed(task_db, conversation_id=conversation_id, error_message=str(e))
+                    await task_db.commit()
+                    return
+
+                workspace_id: str = meta["id"]
+
+                # 把 workspace_id 关联到 conversation
+                conv = await task_db.get(Conversation, conversation_id)
+                if conv:
+                    conv.workspace_id = workspace_id
+                    await task_db.flush()
+
+                # phase: SCAFFOLD → GENERATE
+                await on_scaffold_done(task_db, conversation_id=conversation_id)
+                await task_db.commit()
+
+                # 发 scaffold 完成事件
+                await publisher.publish(
+                    conversation_id=conversation_id,
+                    event_type="scaffold.done",
+                    agent="orchestrator",
+                    session_id=None,
+                    data={
+                        "workspace_id": workspace_id,
+                        "project_name": meta.get("project_name", code_name),
+                        "display_name": meta.get("display_name", display_name),
+                    },
+                )
+
+            except Exception as e:
+                logger.exception("scaffold task crashed (conv=%s): %s", conversation_id, e)
+                try:
+                    await task_db.rollback()
+                except Exception:
+                    pass
+                return
+
+    # scaffold 成功后，用新 workspace_id 跑 coding
+    await _run_coding_task(
+        conversation_id=conversation_id,
+        user_id=user_id,
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        spec_envelope=spec_envelope,
     )
 
 
@@ -683,23 +837,77 @@ async def _run_coding_task(
     workspace_id: Optional[str],
     spec_envelope: dict[str, Any],
 ) -> None:
-    """后台跑 CodingAgent，消费 Spec"""
+    """后台跑 CodingAgent → VerificationAgent autofix 闭环。
+
+    Session 隔离：
+    - task_db   driver 的 coordinator phase 转移
+    - pub_db    publisher（含 per-conversation lock，serialize 并发事件写）
+    - trace_db  trace_writer（含 per-instance lock，serialize asyncio.gather 并发 trace 写）
+
+    三 session 分离可防止 asyncio.gather 并发工具调用时不同 db 操作互相干扰。
+    """
     import secrets
 
-    session_id = f"c_{secrets.token_hex(6)}"
-    async with AsyncSessionLocal() as task_db:
+    coding_session_id = f"c_{secrets.token_hex(6)}"
+
+    async with (
+        AsyncSessionLocal() as task_db,
+        AsyncSessionLocal() as pub_db,
+        AsyncSessionLocal() as trace_db,
+    ):
         try:
-            agent_ctx = await _build_agent_context(
-                task_db,
-                session_id=session_id,
-                conversation_id=conversation_id,
-                user_id=user_id,
-                tenant_id=tenant_id,
-                workspace_id=workspace_id,
-                input_data={},
+            base_url, api_key, model = await load_coding_llm_config(tenant_id, None)
+            llm_client = LLMClient(api_key=api_key, base_url=base_url, model=model)
+
+            def _make_ctx(session_id: str) -> AgentContext:
+                return AgentContext(
+                    session_id=session_id,
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                    tenant_id=tenant_id,
+                    model=model,
+                    workspace_id=workspace_id,
+                    input={},
+                    publisher=get_db_publisher().scoped(pub_db),    # type: ignore[attr-defined]
+                    trace_writer=get_db_trace_writer().scoped(trace_db),  # type: ignore[attr-defined]
+                    llm_client=llm_client,
+                )
+
+            if workspace_id:
+                # workspace 已存在：跑 coding → verify autofix 闭环
+                from app.coding.workspace import WorkspaceManager
+                ws_mgr = WorkspaceManager()
+                workspace_root = ""
+                try:
+                    workspace_root = str(ws_mgr.get_workspace_path(workspace_id))
+                except Exception as e:
+                    logger.warning("get_workspace_path(%s) 失败：%s，降级为无 verify", workspace_id, e)
+
+                if workspace_root:
+                    await driver.drive_coding_with_autofix(
+                        task_db,
+                        conversation_id=conversation_id,
+                        spec_envelope=spec_envelope,
+                        coding_ctx_factory=lambda: _make_ctx(f"c_{secrets.token_hex(6)}"),
+                        verification_ctx_factory=lambda: _make_ctx(f"v_{secrets.token_hex(6)}"),
+                        workspace_root=workspace_root,
+                        coding_session_id=coding_session_id,
+                    )
+                    await task_db.commit()
+                    return
+
+            # 降级路径（workspace 不存在或路径解析失败）：直接 coding，不走 verify
+            logger.warning(
+                "coding task %s：workspace_id=%s 无效，降级为直接 coding（无 verify）",
+                coding_session_id, workspace_id,
             )
-            await driver.drive_coding_from_spec(
-                task_db, spec_envelope=spec_envelope, ctx=agent_ctx,
-            )
+            ctx = _make_ctx(coding_session_id)
+            await driver.drive_coding_from_spec(task_db, spec_envelope=spec_envelope, ctx=ctx)
+            await task_db.commit()
+
         except Exception as e:
-            logger.exception("coding task %s crashed: %s", session_id, e)
+            logger.exception("coding task %s crashed: %s", coding_session_id, e)
+            try:
+                await task_db.rollback()
+            except Exception:
+                pass

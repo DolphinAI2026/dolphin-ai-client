@@ -146,8 +146,14 @@ async def resume_session(
     *,
     session_id: str,
     ctx: AgentContext,
+    user_answer: Optional[str] = None,
 ) -> tuple[agent_models.BrainstormSession, BrainstormAgent]:
     """从 DB 读 snapshot 恢复一个 BrainstormAgent 实例。
+
+    Args:
+        user_answer: 若非空，把它作为"上一轮 ask_user 工具的 tool_result"注入到
+                     agent._messages 里，让 LLM 看到用户的回答（见架构文档 § 5.5 第 5 步）。
+                     调用 agent.run() 时它会从这个历史上下文继续推理，不会重头跑。
 
     调用方需要保证 ctx 字段与原 session 匹配（session_id / conversation_id / user_id / tenant_id）。
     """
@@ -161,10 +167,97 @@ async def resume_session(
     # 构造 agent（from_snapshot 会调 _deserialize_custom_state 恢复业务态）
     agent = BrainstormAgent.from_snapshot(ctx, snap)
 
+    # 注入用户答案为 tool_result
+    if user_answer:
+        _inject_user_answer_as_tool_result(agent, user_answer)
+
     row.status = BsStatus.ACTIVE
     row.last_activity_at = datetime.utcnow()
     await db.flush()
     return row, agent
+
+
+def _inject_user_answer_as_tool_result(agent: BrainstormAgent, user_answer: str) -> None:
+    """把用户答案追加为 ask_user 的 tool_result 到 agent._messages 里。
+
+    查找规则：从 _messages 末尾向前找最后一条 role=assistant 且带 tool_calls 的消息，
+    取它最后一个 tool_call（通常是 ask_user）的 id，append 对应 role=tool 的消息。
+
+    同时：若该 ask_user 调用的 arguments 里带了 p1_key，把它同步回写到
+    agent.state（state.mark_p1_answered），让 p1_coverage / confidence 能推进。
+    这是真实 pause/resume 路径下 P1 答案落地的唯一入口——ask_user tool 本身
+    在 should_pause=True 分支不会执行到 mark_p1_answered（它在同步注入分支里）。
+
+    若找不到匹配（例如 snapshot 结构异常），则以 role=user 的文本消息形式追加兜底，
+    避免让 LLM 看到孤悬的 assistant.tool_calls 而报错。
+    """
+    import json
+
+    messages = agent._messages  # type: ignore[attr-defined]
+    target_tool_call_id: Optional[str] = None
+    target_tool_name: Optional[str] = None
+    target_p1_key: Optional[str] = None
+    for msg in reversed(messages):
+        if msg.get("role") != "assistant":
+            continue
+        tool_calls = msg.get("tool_calls") or []
+        if not tool_calls:
+            continue
+        last_tc = tool_calls[-1]
+        target_tool_call_id = last_tc.get("id")
+        fn = last_tc.get("function") or {}
+        target_tool_name = fn.get("name")
+        raw_args = fn.get("arguments")
+        parsed_args: dict[str, Any] = {}
+        if isinstance(raw_args, dict):
+            parsed_args = raw_args
+        elif isinstance(raw_args, str) and raw_args.strip():
+            try:
+                parsed_args = json.loads(raw_args)
+            except Exception:
+                parsed_args = {}
+        p1_raw = parsed_args.get("p1_key") if isinstance(parsed_args, dict) else None
+        if isinstance(p1_raw, str) and p1_raw.strip():
+            target_p1_key = p1_raw.strip()
+        break
+
+    if target_tool_call_id:
+        # 用 OpenAI function-calling 的 tool 消息格式追加
+        content = f"[USER ANSWER] {user_answer}"
+        if target_tool_name and target_tool_name != "ask_user":
+            # 不是预期的 ask_user，仍注入但标注（防止误判）
+            content = f"[USER ANSWER for {target_tool_name}] {user_answer}"
+        messages.append({
+            "role": "tool",
+            "tool_call_id": target_tool_call_id,
+            "content": content,
+        })
+        if target_tool_name == "ask_user" and target_p1_key:
+            hit = agent.state.mark_p1_answered(target_p1_key, user_answer)
+            if hit:
+                logger.info(
+                    "resume_session: marked P1 '%s' answered (p1_coverage=%.2f)",
+                    target_p1_key,
+                    agent.state.p1_coverage(),
+                )
+            else:
+                logger.warning(
+                    "resume_session: p1_key '%s' not found in state.p1_questions",
+                    target_p1_key,
+                )
+        logger.info(
+            "resume_session: injected user answer as tool_result for tool_call_id=%s",
+            target_tool_call_id,
+        )
+    else:
+        # 兜底：作为额外 user message 追加（不常见场景）
+        messages.append({
+            "role": "user",
+            "content": f"[补充] {user_answer}",
+        })
+        logger.warning(
+            "resume_session: no pending tool_call found, appended as user message fallback",
+        )
 
 
 async def mark_session_completed(

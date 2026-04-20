@@ -171,10 +171,14 @@ async def drive_brainstorm(
         persisted_spec_id = None
         if auto_persist_spec and envelope:
             try:
+                # reuse_envelope_spec_id=True：emit_spec tool 已经生成 spec_id 并通过
+                #   brainstorm.spec_emitted event 发给前端了，必须让 DB 主键与 event 里
+                #   的 spec_id 完全一致，否则前端按事件里的 id GET /api/spec/{id} 就 404。
                 row = await spec_service.save_spec(
                     db,
                     brainstorm_session_id=session_id,
                     envelope=envelope,
+                    reuse_envelope_spec_id=True,
                 )
                 persisted_spec_id = row.id
             except Exception as e:
@@ -259,6 +263,7 @@ async def drive_coding_from_spec(
     ctx: AgentContext,
     conversation_summary: str = "",
     max_turns: int = 30,
+    push_phase: bool = True,
 ) -> CodingDriveResult:
     """基于 Spec 启动 CodingAgent 并跑完。
 
@@ -290,10 +295,11 @@ async def drive_coding_from_spec(
     spec_id = spec_envelope.get("spec_id") or ""
 
     if result.status == AgentStatus.COMPLETED:
-        try:
-            await orch.on_coding_done(db, conversation_id=conversation_id)
-        except Exception as e:
-            logger.warning("coding done 阶段推进失败（非致命）: %s", e)
+        if push_phase:
+            try:
+                await orch.on_coding_done(db, conversation_id=conversation_id)
+            except Exception as e:
+                logger.warning("coding done 阶段推进失败（非致命）: %s", e)
         return CodingDriveResult(status="done", spec_id=spec_id, agent_result=result)
 
     if result.status == AgentStatus.ABORTED:
@@ -445,6 +451,7 @@ def _build_fix_hint_from_report(
 async def drive_coding_with_autofix(
     db: AsyncSession,
     *,
+    conversation_id: int,
     spec_envelope: dict[str, Any],
     coding_ctx_factory,
     verification_ctx_factory,
@@ -454,7 +461,13 @@ async def drive_coding_with_autofix(
 ) -> AutoFixLoopResult:
     """驱动 coding → verify 循环，最多 max_fix_rounds 次重跑。
 
+    Phase 管理（由本函数全权负责，drive_coding_from_spec 用 push_phase=False）：
+        GENERATE → coding → VERIFY → (passed → DONE)
+                                     (failed, round < max → GENERATE → retry)
+                                     (failed, round == max → DONE[failed])
+
     Args:
+        conversation_id: 用于 phase 转移
         coding_ctx_factory: 每轮调一次返回一个"新的 coding AgentContext"（含 publisher 等）
         verification_ctx_factory: 同上，verification 用的
         workspace_root: 物理目录
@@ -476,8 +489,9 @@ async def drive_coding_with_autofix(
         coding_ctx = coding_ctx_factory()
         if fix_hint:
             coding_ctx.input = {**(coding_ctx.input or {}), "fix_hint": fix_hint}
+        # push_phase=False：phase 由本函数统一管理
         coding_result = await drive_coding_from_spec(
-            db, spec_envelope=spec_envelope, ctx=coding_ctx,
+            db, spec_envelope=spec_envelope, ctx=coding_ctx, push_phase=False,
         )
         coding_results.append(coding_result)
         if coding_result.status == "aborted":
@@ -498,6 +512,12 @@ async def drive_coding_with_autofix(
                 coding_results=coding_results,
             )
 
+        # coding 成功：GENERATE → VERIFY
+        try:
+            await orch.on_coding_complete_start_verify(db, conversation_id=conversation_id)
+        except Exception as e:
+            logger.warning("phase GENERATE→VERIFY 推进失败（非致命）: %s", e)
+
         # —— verify —— #
         verification_ctx = verification_ctx_factory()
         vr_result = await drive_verification(
@@ -512,6 +532,11 @@ async def drive_coding_with_autofix(
 
         if vr_result.status == "emitted":
             if vr_result.overall_status == "passed":
+                # VERIFY → DONE
+                try:
+                    await orch.on_coding_done(db, conversation_id=conversation_id)
+                except Exception as e:
+                    logger.warning("phase VERIFY→DONE 推进失败（非致命）: %s", e)
                 return AutoFixLoopResult(
                     final_status="passed",
                     rounds=round_i + 1,
@@ -520,7 +545,11 @@ async def drive_coding_with_autofix(
                     coding_results=coding_results,
                 )
             if vr_result.overall_status in ("partial",):
-                # partial 不重跑（都是 needs_review，交人工），直接返回
+                # partial 不重跑（都是 needs_review，交人工）
+                try:
+                    await orch.on_coding_done(db, conversation_id=conversation_id)
+                except Exception as e:
+                    logger.warning("phase VERIFY→DONE 推进失败（非致命）: %s", e)
                 return AutoFixLoopResult(
                     final_status="partial",
                     rounds=round_i + 1,
@@ -528,8 +557,13 @@ async def drive_coding_with_autofix(
                     reports=reports,
                     coding_results=coding_results,
                 )
-            # overall_status == failed：判断是否还有重试额度
+            # overall_status == failed
             if round_i >= max_fix_rounds:
+                # 已用完重试额度 → VERIFY → DONE（带 failed 状态）
+                try:
+                    await orch.on_coding_done(db, conversation_id=conversation_id)
+                except Exception as e:
+                    logger.warning("phase VERIFY→DONE 推进失败（非致命）: %s", e)
                 return AutoFixLoopResult(
                     final_status="failed",
                     rounds=round_i + 1,
@@ -537,11 +571,19 @@ async def drive_coding_with_autofix(
                     reports=reports,
                     coding_results=coding_results,
                 )
-            # 准备下一轮的 fix_hint
+            # 还有重试额度 → VERIFY → GENERATE
+            try:
+                await orch.on_verify_retry(db, conversation_id=conversation_id)
+            except Exception as e:
+                logger.warning("phase VERIFY→GENERATE 推进失败（非致命）: %s", e)
             fix_hint = _build_fix_hint_from_report(vr_result, spec_envelope)
             continue
 
-        # verify 降级或失败：不重跑，直接退出
+        # verify 降级或失败：不重跑，直接 VERIFY → DONE
+        try:
+            await orch.on_coding_done(db, conversation_id=conversation_id)
+        except Exception as e:
+            logger.warning("phase VERIFY→DONE 推进失败（非致命）: %s", e)
         return AutoFixLoopResult(
             final_status="failed",
             rounds=round_i + 1,
@@ -551,6 +593,10 @@ async def drive_coding_with_autofix(
         )
 
     # 理论上不会走到这里
+    try:
+        await orch.on_coding_done(db, conversation_id=conversation_id)
+    except Exception as e:
+        logger.warning("phase VERIFY→DONE 推进失败（非致命）: %s", e)
     return AutoFixLoopResult(
         final_status="failed",
         rounds=max_fix_rounds + 1,

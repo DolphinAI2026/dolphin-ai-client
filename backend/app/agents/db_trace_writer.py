@@ -1,6 +1,7 @@
 """DbTraceWriter — 把 agent 内部 trace 写入 agent_traces 表。"""
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from typing import Any, Optional
@@ -88,11 +89,15 @@ class DbTraceWriter:
 
 
 class ScopedDbTraceWriter:
-    """满足 TraceWriter Protocol 的 adapter — 绑定一个 DB session。"""
+    """满足 TraceWriter Protocol 的 adapter — 绑定一个 DB session。
+
+    _lock 序列化并发 write 调用（防止 asyncio.gather 下多 tool 同时写同一 session）。
+    """
 
     def __init__(self, writer: "DbTraceWriter", db: AsyncSession) -> None:
         self._writer = writer
         self._db = db
+        self._lock: asyncio.Lock = asyncio.Lock()
 
     async def write(
         self,
@@ -107,18 +112,19 @@ class ScopedDbTraceWriter:
         duration_ms: Optional[int] = None,
         model: Optional[str] = None,
     ) -> str:
-        return await self._writer.write(
-            session_type=session_type,
-            session_id=session_id,
-            turn=turn,
-            event_type=event_type,
-            payload=payload,
-            tokens_input=tokens_input,
-            tokens_output=tokens_output,
-            duration_ms=duration_ms,
-            model=model,
-            db=self._db,
-        )
+        async with self._lock:
+            return await self._writer.write(
+                session_type=session_type,
+                session_id=session_id,
+                turn=turn,
+                event_type=event_type,
+                payload=payload,
+                tokens_input=tokens_input,
+                tokens_output=tokens_output,
+                duration_ms=duration_ms,
+                model=model,
+                db=self._db,
+            )
 
 
 def _make_scoped_writer(writer: "DbTraceWriter", db: AsyncSession) -> ScopedDbTraceWriter:

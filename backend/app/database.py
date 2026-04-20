@@ -9,7 +9,17 @@ class Base(DeclarativeBase):
 
 _engine_kwargs = dict(echo=False, future=True)
 if not settings.database_url.startswith("sqlite"):
-    _engine_kwargs.update(pool_size=10, max_overflow=20, pool_recycle=3600)
+    # pool_pre_ping=True：每次从池里取连接前先发 SELECT 1 探活，
+    #   避免 MySQL server 侧 wait_timeout 断开后前端还在用僵尸连接
+    #   → "Lost connection to MySQL server during query"
+    # pool_recycle=1800：自己主动回收 30 分钟以上的连接（比常见 MySQL
+    #   wait_timeout=600 更长时，pre_ping 兜底；两者叠加够稳）
+    _engine_kwargs.update(
+        pool_size=10,
+        max_overflow=20,
+        pool_recycle=1800,
+        pool_pre_ping=True,
+    )
 
 engine = create_async_engine(settings.database_url, **_engine_kwargs)
 

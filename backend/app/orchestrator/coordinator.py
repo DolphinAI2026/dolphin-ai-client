@@ -315,6 +315,21 @@ async def on_spec_confirmed(
     await transition_phase(db, conversation_id=conversation_id, to=target)
 
 
+async def on_scaffold_done(db: AsyncSession, *, conversation_id: int) -> None:
+    """工作区创建完成 → phase SCAFFOLD → GENERATE"""
+    await transition_phase(db, conversation_id=conversation_id, to=Phase.GENERATE)
+
+
+async def on_coding_complete_start_verify(db: AsyncSession, *, conversation_id: int) -> None:
+    """coding 完成，进入 AC 验收（autofix 闭环） GENERATE → VERIFY"""
+    await transition_phase(db, conversation_id=conversation_id, to=Phase.VERIFY)
+
+
+async def on_verify_retry(db: AsyncSession, *, conversation_id: int) -> None:
+    """AC 验收失败，重跑 coding（autofix 闭环重试） VERIFY → GENERATE"""
+    await transition_phase(db, conversation_id=conversation_id, to=Phase.GENERATE)
+
+
 async def on_coding_done(db: AsyncSession, *, conversation_id: int) -> None:
     """CodingAgent 正常结束 → phase = DONE（MVP 跳过 VERIFY）"""
     current = await get_phase(db, conversation_id)

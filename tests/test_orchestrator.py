@@ -33,6 +33,7 @@ from app.orchestrator import (  # noqa: E402
     on_agent_failed,
     on_brainstorm_emit,
     on_coding_done,
+    on_scaffold_done,
     on_spec_confirmed,
     on_user_cancel,
     parse_phase,
@@ -352,6 +353,18 @@ def test_on_spec_confirmed_iteration_goes_to_generate():
         bs = await start_brainstorm(db, conversation_id=conv.id, user_id=1, tenant_id=1, model="m")
         await on_brainstorm_emit(db, conversation_id=conv.id, brainstorm_session_id=bs.id, spec_id="spec_x")
         await on_spec_confirmed(db, conversation_id=conv.id, spec_id="spec_x", need_scaffold=False)
+        assert await get_phase(db, conv.id) == Phase.GENERATE
+    _run(run())
+
+
+def test_on_scaffold_done_transitions_to_generate():
+    async def run():
+        db, conv, _engine = await _make_db()
+        bs = await start_brainstorm(db, conversation_id=conv.id, user_id=1, tenant_id=1, model="m")
+        await on_brainstorm_emit(db, conversation_id=conv.id, brainstorm_session_id=bs.id, spec_id="spec_x")
+        await on_spec_confirmed(db, conversation_id=conv.id, spec_id="spec_x", need_scaffold=True)
+        assert await get_phase(db, conv.id) == Phase.SCAFFOLD
+        await on_scaffold_done(db, conversation_id=conv.id)
         assert await get_phase(db, conv.id) == Phase.GENERATE
     _run(run())
 

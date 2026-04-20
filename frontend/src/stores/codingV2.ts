@@ -302,7 +302,22 @@ export const useCodingV2Store = defineStore('codingV2', () => {
       return
     }
 
-    // 5. orchestrator / system
+    // 5. scaffold
+    if (type === 'scaffold.started') {
+      phase.value = 'scaffold'
+      return
+    }
+    if (type === 'scaffold.done') {
+      phase.value = 'generate'
+      return
+    }
+    if (type === 'scaffold.failed') {
+      sseLastError.value = String(data.error || 'scaffold failed')
+      phase.value = 'failed'
+      return
+    }
+
+    // 6. orchestrator / system
     if (type === 'orchestrator.phase_changed' || type === 'system.phase') {
       if (data.phase) phase.value = data.phase as Phase
       return

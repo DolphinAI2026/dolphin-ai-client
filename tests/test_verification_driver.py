@@ -413,6 +413,7 @@ def test_autofix_loop_first_round_passes():
 
                     result = await driver.drive_coding_with_autofix(
                         db,
+                        conversation_id=conv.id,
                         spec_envelope=envelope,
                         coding_ctx_factory=coding_ctx,
                         verification_ctx_factory=verify_ctx,
@@ -455,6 +456,7 @@ def test_autofix_loop_retries_until_fail():
 
                     result = await driver.drive_coding_with_autofix(
                         db,
+                        conversation_id=conv.id,
                         spec_envelope=envelope,
                         coding_ctx_factory=coding_ctx,
                         verification_ctx_factory=verify_ctx,
@@ -502,6 +504,7 @@ def test_autofix_loop_partial_does_not_retry():
 
                     result = await driver.drive_coding_with_autofix(
                         db,
+                        conversation_id=conv.id,
                         spec_envelope=envelope,
                         coding_ctx_factory=coding_ctx,
                         verification_ctx_factory=verify_ctx,
@@ -573,6 +576,7 @@ def test_autofix_loop_second_round_passes_after_fix():
 
                     result = await driver.drive_coding_with_autofix(
                         db,
+                        conversation_id=conv.id,
                         spec_envelope=envelope,
                         coding_ctx_factory=coding_ctx,
                         verification_ctx_factory=verify_ctx,
