@@ -417,6 +417,11 @@ async def drive_verification(
             )
         except Exception as e:
             logger.exception("verification report persist failed: %s", e)
+            # flush 失败会使 session 陷入 PendingRollbackError，必须 rollback 重置
+            try:
+                await db.rollback()
+            except Exception:
+                pass
 
     # driver 侧 status：
     # - agent COMPLETED + emit_report 被调用 → "emitted"
