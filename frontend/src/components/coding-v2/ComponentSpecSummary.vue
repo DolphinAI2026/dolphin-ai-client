@@ -4,7 +4,7 @@
     <!-- ── 数据存储 ── -->
     <div v-if="data" class="doc-section">
       <div class="sec-title">数据存储</div>
-      <table class="data-table">
+      <div class="table-wrap"><table class="data-table">
         <thead>
           <tr>
             <th>字段</th>
@@ -39,13 +39,13 @@
             <td class="field-note">{{ data.storage_note }}</td>
           </tr>
         </tbody>
-      </table>
+      </table></div>
     </div>
 
     <!-- ── 配置项 ── -->
     <div v-if="configProps.length" class="doc-section">
       <div class="sec-title">配置项（{{ configProps.length }}）</div>
-      <table class="prop-table">
+      <div class="table-wrap"><table class="prop-table">
         <colgroup>
           <col style="width: 150px" />
           <col style="width: 90px" />
@@ -74,7 +74,7 @@
             <td class="desc-cell">{{ cp.label }}</td>
           </tr>
         </tbody>
-      </table>
+      </table></div>
     </div>
 
     <!-- ── 渲染场景 ── -->
@@ -95,7 +95,7 @@
     <!-- ── 平台钩子 ── -->
     <div v-if="hooks" class="doc-section">
       <div class="sec-title">平台钩子</div>
-      <table class="data-table">
+      <div class="table-wrap"><table class="data-table">
         <thead>
           <tr><th>字段</th><th>值</th></tr>
         </thead>
@@ -119,7 +119,7 @@
             </td>
           </tr>
         </tbody>
-      </table>
+      </table></div>
     </div>
 
     <!-- ── 三方依赖 ── -->
@@ -173,14 +173,18 @@ function fmtDefault(v: unknown): string {
   margin-bottom: 14px;
 }
 
+/* ── 表格外框 ── */
+.table-wrap {
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
 /* ── 数据存储表 ── */
 .data-table {
   width: 100%;
   border-collapse: collapse;
   font-size: 13px;
-  border: 1px solid #e5e7eb;
-  border-radius: 6px;
-  overflow: hidden;
 }
 .data-table thead tr {
   background: #f9fafb;
@@ -218,9 +222,6 @@ function fmtDefault(v: unknown): string {
   width: 100%;
   border-collapse: collapse;
   font-size: 13px;
-  border: 1px solid #e5e7eb;
-  border-radius: 6px;
-  overflow: hidden;
 }
 .prop-table thead tr { background: #f9fafb; }
 .prop-table th {
@@ -260,6 +261,7 @@ function fmtDefault(v: unknown): string {
   background: #eff6ff;
   padding: 2px 6px;
   border-radius: 3px;
+  white-space: nowrap;
 }
 .default-code {
   font-family: 'Menlo', 'Monaco', monospace;
