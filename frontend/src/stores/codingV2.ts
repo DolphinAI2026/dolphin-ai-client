@@ -99,6 +99,9 @@ export const useCodingV2Store = defineStore('codingV2', () => {
   // —— 文本流（给 MessageList 展示） —— //
   const streamedText = ref<string>('')
 
+  // —— Workspace —— //
+  const workspaceId = ref<string | null>(null)
+
   // —— 连接状态 —— //
   const sseConnected = ref(false)
   const sseLastError = ref<string | null>(null)
@@ -164,6 +167,7 @@ export const useCodingV2Store = defineStore('codingV2', () => {
     filesWritten.value = []
     lastVerificationReport.value = null
     streamedText.value = ''
+    workspaceId.value = null
     sseConnected.value = false
     sseLastError.value = null
   }
@@ -320,6 +324,7 @@ export const useCodingV2Store = defineStore('codingV2', () => {
     // 6. orchestrator / system
     if (type === 'orchestrator.phase_changed' || type === 'system.phase') {
       if (data.phase) phase.value = data.phase as Phase
+      if (data.workspace_id) workspaceId.value = data.workspace_id
       return
     }
   }
@@ -367,6 +372,7 @@ export const useCodingV2Store = defineStore('codingV2', () => {
     filesWritten,
     lastVerificationReport,
     streamedText,
+    workspaceId,
     sseConnected,
     sseLastError,
     // computed

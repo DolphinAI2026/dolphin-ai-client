@@ -960,6 +960,7 @@ async def _run_coding_task(
                         verification_ctx_factory=lambda: _make_ctx(f"v_{secrets.token_hex(6)}"),
                         workspace_root=workspace_root,
                         coding_session_id=coding_session_id,
+                        workspace_id=workspace_id,
                     )
                     # 更新 coding_sessions 状态
                     cs_row.status = "completed" if autofix_result.final_status in ("passed", "partial") else "failed"

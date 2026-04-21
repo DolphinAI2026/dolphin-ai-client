@@ -188,3 +188,13 @@ export function rollbackSpec(specId: string): Promise<RollbackResponse> {
 export function buildSseUrl(conversationId: number, lastSeenSeq: number = 0): string {
   return `${API_PREFIX}/sse/conversation/${conversationId}?last_seen_seq=${lastSeenSeq}`
 }
+
+// ══════════════════════════════════════════════════════════════
+// IDE URL
+// ══════════════════════════════════════════════════════════════
+
+export function getIdeUrl(workspaceId: string, conversationId?: number | null): Promise<{ ide_url: string }> {
+  return request.get(`/coding/workspace/${encodeURIComponent(workspaceId)}/ide-url`, {
+    params: conversationId ? { conversation_id: conversationId } : undefined,
+  })
+}

@@ -511,6 +511,7 @@ async def drive_coding_with_autofix(
     verification_ctx_factory,
     workspace_root: str,
     coding_session_id: str,
+    workspace_id: str = "",
     max_fix_rounds: int = MAX_AUTO_FIX_ROUNDS,
 ) -> AutoFixLoopResult:
     """驱动 coding → verify 循环，最多 max_fix_rounds 次重跑。
@@ -538,17 +539,20 @@ async def drive_coding_with_autofix(
     last_verification: Optional[VerificationDriveResult] = None
     verification_ctx = None  # 每轮覆盖，循环外兜底时使用
 
-    async def _emit_phase(phase: str) -> None:
+    async def _emit_phase(phase: str, extra: Optional[dict[str, Any]] = None) -> None:
         """通过 verification_ctx 的 publisher 发布 orchestrator.phase_changed SSE。"""
         if verification_ctx is None or verification_ctx.publisher is None:
             return
+        data: dict[str, Any] = {"phase": phase}
+        if extra:
+            data.update(extra)
         try:
             await verification_ctx.publisher.publish(
                 conversation_id=conversation_id,
                 event_type="orchestrator.phase_changed",
                 agent="orchestrator",
                 session_id=None,
-                data={"phase": phase},
+                data=data,
             )
         except Exception as e:
             logger.warning("phase_changed[%s] SSE 发布失败（非致命）: %s", phase, e)
@@ -641,7 +645,7 @@ async def drive_coding_with_autofix(
                     await db.commit()
                 except Exception as e:
                     logger.warning("phase VERIFY→DONE 推进失败（非致命）: %s", e)
-                await _emit_phase("done")
+                await _emit_phase("done", {"workspace_id": workspace_id} if workspace_id else None)
                 return AutoFixLoopResult(
                     final_status="passed",
                     rounds=round_i + 1,
@@ -656,7 +660,7 @@ async def drive_coding_with_autofix(
                     await db.commit()
                 except Exception as e:
                     logger.warning("phase VERIFY→DONE 推进失败（非致命）: %s", e)
-                await _emit_phase("done")
+                await _emit_phase("done", {"workspace_id": workspace_id} if workspace_id else None)
                 return AutoFixLoopResult(
                     final_status="partial",
                     rounds=round_i + 1,
@@ -688,7 +692,7 @@ async def drive_coding_with_autofix(
                     await db.commit()
                 except Exception as e:
                     logger.warning("phase VERIFY→DONE 推进失败（非致命）: %s", e)
-                await _emit_phase("done")
+                await _emit_phase("done", {"workspace_id": workspace_id} if workspace_id else None)
                 return AutoFixLoopResult(
                     final_status="failed",
                     rounds=round_i + 1,

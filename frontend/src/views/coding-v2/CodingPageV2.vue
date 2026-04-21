@@ -133,6 +133,15 @@
           </p>
           <p>你可以在下方对话继续迭代，或打开工作区查看代码。</p>
 
+          <button
+            v-if="store.workspaceId"
+            class="open-ide-btn"
+            :disabled="ideLoading"
+            @click="openIde"
+          >
+            {{ ideLoading ? '加载中...' : '🖥️ 打开 IDE' }}
+          </button>
+
           <!-- 显示最终 report -->
           <VerificationReportPanel
             v-if="store.lastVerificationReport"
@@ -159,6 +168,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   confirmSpec as apiConfirmSpec,
+  getIdeUrl,
   getSpec as apiGetSpec,
   sendCodingMessage,
   startCodingFromSpec,
@@ -180,6 +190,7 @@ const store = useCodingV2Store()
 
 const input = ref('')
 const submitting = ref(false)
+const ideLoading = ref(false)
 
 let sse: SseClient | null = null
 
@@ -338,6 +349,19 @@ function onCancelSpec() {
   // MVP：取消就是回到 UNDERSTAND 让用户继续说
   input.value = ''
   store.phase = 'understand'
+}
+
+async function openIde() {
+  if (!store.workspaceId || ideLoading.value) return
+  ideLoading.value = true
+  try {
+    const { ide_url } = await getIdeUrl(store.workspaceId, store.conversationId)
+    window.open(ide_url, '_blank')
+  } catch (e: any) {
+    store.sseLastError = `IDE 链接获取失败：${e?.response?.data?.detail ?? e?.message ?? e}`
+  } finally {
+    ideLoading.value = false
+  }
 }
 
 watch(
@@ -499,6 +523,19 @@ watch(
 .failed-icon { color: #ef4444; }
 .done-panel { align-items: stretch; text-align: left; }
 .done-panel h3, .done-panel p { text-align: center; margin: 0; }
+.open-ide-btn {
+  align-self: center;
+  padding: 8px 22px;
+  border-radius: 8px;
+  background: #10b981;
+  color: white;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+}
+.open-ide-btn:hover:not(:disabled) { background: #059669; }
+.open-ide-btn:disabled { background: #d1d5db; cursor: not-allowed; }
 
 .scaffold-panel { flex-direction: row; justify-content: flex-start; text-align: left; }
 .scaffold-spinner { display: flex; gap: 14px; align-items: center; }
