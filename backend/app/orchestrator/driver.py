@@ -637,6 +637,8 @@ async def drive_coding_with_autofix(
                         await recorder.mark_resolved(_ri)
                 try:
                     await orch.on_coding_done(db, conversation_id=conversation_id)
+                    # ⚠️ 必须 commit 释放行锁，否则 pub_db 发 SSE 时 FK 检查超时
+                    await db.commit()
                 except Exception as e:
                     logger.warning("phase VERIFY→DONE 推进失败（非致命）: %s", e)
                 await _emit_phase("done")
@@ -651,6 +653,7 @@ async def drive_coding_with_autofix(
                 # partial 不重跑（都是 needs_review，交人工）
                 try:
                     await orch.on_coding_done(db, conversation_id=conversation_id)
+                    await db.commit()
                 except Exception as e:
                     logger.warning("phase VERIFY→DONE 推进失败（非致命）: %s", e)
                 await _emit_phase("done")
@@ -682,6 +685,7 @@ async def drive_coding_with_autofix(
                 # 已用完重试额度 → VERIFY → DONE（带 failed 状态）
                 try:
                     await orch.on_coding_done(db, conversation_id=conversation_id)
+                    await db.commit()
                 except Exception as e:
                     logger.warning("phase VERIFY→DONE 推进失败（非致命）: %s", e)
                 await _emit_phase("done")
@@ -709,6 +713,7 @@ async def drive_coding_with_autofix(
         # verify 降级或失败：不重跑，直接 VERIFY → DONE
         try:
             await orch.on_coding_done(db, conversation_id=conversation_id)
+            await db.commit()
         except Exception as e:
             logger.warning("phase VERIFY→DONE 推进失败（非致命）: %s", e)
         await _emit_phase("done")
@@ -723,6 +728,7 @@ async def drive_coding_with_autofix(
     # 理论上不会走到这里
     try:
         await orch.on_coding_done(db, conversation_id=conversation_id)
+        await db.commit()
     except Exception as e:
         logger.warning("phase VERIFY→DONE 推进失败（非致命）: %s", e)
     await _emit_phase("done")
