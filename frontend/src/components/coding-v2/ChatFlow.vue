@@ -54,11 +54,7 @@
 
       <!-- ── 代码生成进行中 ── -->
       <div v-else-if="msg.kind === 'coding-active'" class="full-card">
-        <CodingProgress
-          :tool-traces="store.toolTraces.filter(t => t.agent === 'coding')"
-          :files="store.filesWritten"
-          :streamed-text="store.streamedText"
-        />
+        <CodingProgress />
       </div>
 
       <!-- ── 完成 ── -->

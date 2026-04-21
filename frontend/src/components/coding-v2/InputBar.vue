@@ -1,13 +1,8 @@
 <template>
   <div class="input-bar">
-    <!-- Codex 风格反问区：仅当有待答问题时展示 -->
+    <!-- 选项 chips（问题已在聊天列表中，此处只显示选项） -->
     <Transition name="ask-slide">
       <div v-if="pendingQuestion" class="ask-overlay">
-        <div class="ask-banner">
-          <span class="ask-icon">💬</span>
-          <span class="ask-text">{{ pendingQuestion.question }}</span>
-          <span v-if="pendingQuestion.context" class="ask-ctx">{{ pendingQuestion.context }}</span>
-        </div>
         <div class="chips-row">
           <button
             v-for="opt in pendingQuestion.options"
@@ -127,42 +122,18 @@ function autoResize() {
   flex-direction: column;
 }
 
-/* ── 反问区 ── */
+/* ── 选项区（问题在聊天列表里，只显示 chips） ── */
 .ask-overlay {
-  border-bottom: 1px solid #e5e7eb;
+  border-bottom: 1px solid #ede9fe;
   background: #faf5ff;
-  padding: 12px 16px;
+  padding: 10px 16px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-}
-.ask-banner {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.ask-icon { font-size: 15px; flex-shrink: 0; margin-top: 1px; }
-.ask-text {
-  font-size: 14px;
-  font-weight: 500;
-  color: #1e1b4b;
-  flex: 1;
-  line-height: 1.5;
-}
-.ask-ctx {
-  display: block;
-  width: 100%;
-  font-size: 12px;
-  color: #6b7280;
-  padding-left: 23px;
-  margin-top: -4px;
 }
 .chips-row {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  padding-left: 23px;
 }
 .chip {
   padding: 5px 14px;

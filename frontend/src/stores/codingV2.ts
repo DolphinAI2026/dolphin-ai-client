@@ -75,6 +75,29 @@ export interface FileWriteEntry {
 }
 
 // ══════════════════════════════════════════════════════════════
+// 代码生成时序日志（驱动 CodingProgress V1 风格渲染）
+// ══════════════════════════════════════════════════════════════
+
+export type CodingLogKind = 'thinking' | 'tool' | 'file' | 'milestone'
+
+export interface CodingLogEntry {
+  id: string
+  kind: CodingLogKind
+  timestamp: number
+  // thinking
+  text?: string
+  // tool
+  toolName?: string
+  argsPreview?: string
+  toolStatus?: 'running' | 'done' | 'error'
+  filePath?: string       // write_file / edit_file 的目标路径（从 agent_tool 事件读取）
+  // file（write 结果行）
+  fileAction?: 'create' | 'edit' | 'delete'
+  // milestone
+  milestoneText?: string
+}
+
+// ══════════════════════════════════════════════════════════════
 // 聊天流消息（统一有序消息列表，驱动 ChatFlow 渲染）
 // ══════════════════════════════════════════════════════════════
 
@@ -122,6 +145,7 @@ export const useCodingV2Store = defineStore('codingV2', () => {
   const lastIterationBanner = ref<IterationBanner | null>(null)
   const toolTraces = ref<ToolTraceEntry[]>([])
   const filesWritten = ref<FileWriteEntry[]>([])
+  const codingLog = ref<CodingLogEntry[]>([])
   const lastVerificationReport = ref<VerificationReport | null>(null)
 
   // —— 文本流（给 MessageList 展示） —— //
@@ -219,6 +243,7 @@ export const useCodingV2Store = defineStore('codingV2', () => {
     lastIterationBanner.value = null
     toolTraces.value = []
     filesWritten.value = []
+    codingLog.value = []
     lastVerificationReport.value = null
     streamedText.value = ''
     workspaceId.value = null
@@ -323,34 +348,75 @@ export const useCodingV2Store = defineStore('codingV2', () => {
     if (type === 'coding.agent_thinking_delta' || type === 'agent_thinking_delta') {
       const delta = data.delta || data.content || ''
       streamedText.value = streamedText.value + delta
+      // codingLog：追加到最后的 thinking 条目，或新建
+      const lastLog = codingLog.value[codingLog.value.length - 1]
+      if (lastLog?.kind === 'thinking') {
+        lastLog.text = (lastLog.text || '') + delta
+      } else {
+        codingLog.value.push({ id: `think-${seq}`, kind: 'thinking', timestamp: Date.now(), text: delta })
+      }
       return
     }
     if (type === 'coding.agent_tool' || type === 'agent_tool') {
+      const toolName = data.tool || data.name || '?'
+      // 修复：后端发 input_preview，不是 args_preview
+      const preview = data.input_preview || data.args_preview || summarizeArgs(data.args)
       toolTraces.value.push({
         id: `tool-${seq}`,
         agent: ev.agent || 'coding',
-        tool: data.tool || data.name || '?',
+        tool: toolName,
         status: 'running',
         timestamp: Date.now(),
-        args_preview: data.args_preview || summarizeArgs(data.args),
+        args_preview: preview,
       })
+      // codingLog
+      const logEntry: CodingLogEntry = {
+        id: `tool-${seq}`,
+        kind: 'tool',
+        timestamp: Date.now(),
+        toolName,
+        argsPreview: preview,
+        toolStatus: 'running',
+      }
+      // write_file / edit_file：从 data.input 读路径，供 agent_result 回写 file 行
+      if (data.input?.file_path) {
+        logEntry.filePath = data.input.file_path
+      }
+      codingLog.value.push(logEntry)
       return
     }
     if (type === 'coding.agent_result' || type === 'agent_result') {
-      // 匹配最近同 tool 的 entry 标为 done
+      const toolName = data.tool || data.name || '?'
+      // 匹配最近同 tool 的 entry 标为 done（toolTraces）
       const trace = toolTraces.value.slice().reverse().find(
-        (t) => t.tool === (data.tool || data.name) && t.status === 'running',
+        (t) => t.tool === toolName && t.status === 'running',
       )
       if (trace) {
-        trace.status = data.success === false ? 'error' : 'done'
-        trace.summary = data.summary || data.content?.slice?.(0, 200)
+        trace.status = data.is_error === true ? 'error' : 'done'
+        trace.summary = data.output_preview || data.summary || data.content?.slice?.(0, 200)
+      }
+      // codingLog：更新对应 tool 条目状态
+      const logEntry = codingLog.value.slice().reverse().find(
+        e => e.kind === 'tool' && e.toolName === toolName && e.toolStatus === 'running',
+      )
+      if (logEntry) {
+        logEntry.toolStatus = data.is_error === true ? 'error' : 'done'
       }
       // 文件写入 tool 额外记录
-      if (data.tool === 'write_file' || data.tool === 'edit_file') {
+      if (toolName === 'write_file' || toolName === 'edit_file') {
+        // 路径优先从 logEntry.filePath（agent_tool 时已存）
+        const filePath = logEntry?.filePath || data.path || '?'
         filesWritten.value.push({
-          path: data.path || data.args?.path || '?',
-          action: data.tool === 'write_file' ? 'create' : 'edit',
-          summary: data.summary,
+          path: filePath,
+          action: toolName === 'write_file' ? 'create' : 'edit',
+          summary: data.output_preview || data.summary,
+        })
+        codingLog.value.push({
+          id: `file-${seq}`,
+          kind: 'file',
+          timestamp: Date.now(),
+          filePath,
+          fileAction: toolName === 'write_file' ? 'create' : 'edit',
         })
       }
       return
@@ -394,6 +460,13 @@ export const useCodingV2Store = defineStore('codingV2', () => {
     }
     if (type === 'scaffold.done') {
       phase.value = 'generate'
+      // codingLog：里程碑
+      codingLog.value.push({
+        id: `milestone-scaffold-${seq}`,
+        kind: 'milestone',
+        timestamp: Date.now(),
+        milestoneText: '工程脚手架已初始化',
+      })
       _pushChat({ id: `pd-generate-${seq}`, kind: 'phase-divider', phase: 'generate', phaseLabel: '💻 生成代码' })
       _pushChat({ id: `coding-active-${seq}`, kind: 'coding-active' })
       return
@@ -455,6 +528,7 @@ export const useCodingV2Store = defineStore('codingV2', () => {
     lastIterationBanner,
     toolTraces,
     filesWritten,
+    codingLog,
     lastVerificationReport,
     streamedText,
     workspaceId,
