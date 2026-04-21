@@ -92,19 +92,16 @@ function fmtConfig(c: Record<string, any>): string {
 /* ── Section ── */
 .doc-section {
   padding: 20px 24px;
-  border-bottom: 1px solid #f3f4f6;
+  border-bottom: 1px solid #f0f0f0;
 }
 .doc-section:last-child {
   border-bottom: none;
 }
 .sec-heading {
-  font-size: 12px;
-  font-weight: 600;
-  color: #6b7280;
+  font-size: 14px;
+  font-weight: 700;
+  color: #111827;
   margin: 0 0 14px;
-  padding-left: 8px;
-  border-left: 3px solid #8b5cf6;
-  line-height: 1;
 }
 
 /* ── 键值表 ── */

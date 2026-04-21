@@ -41,7 +41,7 @@ const expanded = ref(false)
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 13px 24px;
+  padding: 20px 24px;
   background: transparent;
   border: none;
   cursor: pointer;
@@ -67,9 +67,9 @@ const expanded = ref(false)
 }
 
 .oq-text {
-  font-size: 12px;
-  color: #4b5563;
-  font-weight: 500;
+  font-size: 14px;
+  color: #111827;
+  font-weight: 700;
   flex: 1;
 }
 

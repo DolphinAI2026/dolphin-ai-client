@@ -12,20 +12,10 @@
       <!-- ── 用户消息 ── -->
       <div v-if="msg.kind === 'user'" class="row row-user">
         <div class="bubble bubble-user">{{ msg.text }}</div>
-        <div class="avatar avatar-user">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
-          </svg>
-        </div>
       </div>
 
       <!-- ── 反问历史（只显示问题，不显示回答，回答在用户气泡里） ── -->
       <div v-else-if="msg.kind === 'ask-user'" class="row row-agent">
-        <div class="avatar avatar-agent">
-          <svg viewBox="0 0 24 24" fill="currentColor">
-            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/>
-          </svg>
-        </div>
         <div class="bubble bubble-agent">
           <div class="ask-q">{{ getBubble(msg.bubbleId)?.question }}</div>
           <div v-if="getBubble(msg.bubbleId)?.answered" class="ask-answered-badge">✓ 已回答</div>
@@ -105,11 +95,6 @@
 
     <!-- ── Thinking 指示器：Agent 处理中且没有待答问题时显示 ── -->
     <div v-if="isThinking" class="row row-agent">
-      <div class="avatar avatar-agent">
-        <svg viewBox="0 0 24 24" fill="currentColor">
-          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/>
-        </svg>
-      </div>
       <div class="thinking-bubble">
         <span class="dot d1" />
         <span class="dot d2" />
@@ -216,26 +201,6 @@ function iterLabel(level?: string): string {
 .row-user { flex-direction: row-reverse; }
 .row-agent { flex-direction: row; }
 
-.avatar {
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  padding: 5px;
-  box-sizing: border-box;
-}
-.avatar svg { width: 100%; height: 100%; }
-.avatar-user {
-  background: #dbeafe;
-  color: #1d4ed8;
-}
-.avatar-agent {
-  background: #f3f0ff;
-  color: #7c3aed;
-}
 
 /* ── 气泡 ── */
 .bubble {

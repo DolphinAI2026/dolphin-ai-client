@@ -1,40 +1,42 @@
 <template>
   <div class="comp-spec">
 
-    <!-- ── 数据 ── -->
+    <!-- ── 数据存储 ── -->
     <div v-if="data" class="doc-section">
-      <div class="sec-label">数据</div>
-      <table class="kv-table">
-        <colgroup>
-          <col style="width: 90px" />
-          <col />
-        </colgroup>
+      <div class="sec-title">数据存储</div>
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>字段</th>
+            <th>值</th>
+          </tr>
+        </thead>
         <tbody>
           <tr>
-            <td class="kv-key">BOF 类型</td>
-            <td><code class="code-tag">{{ data.bof_type }}</code></td>
+            <td class="field-name">BOF 类型</td>
+            <td><code class="val-code">{{ data.bof_type }}</code></td>
           </tr>
           <tr v-if="data.component_model_field?.length">
-            <td class="kv-key">存储字段</td>
+            <td class="field-name">存储字段</td>
             <td>
               <code
                 v-for="f in data.component_model_field"
                 :key="f"
-                class="code-tag field-chip"
+                class="val-code field-chip"
               >{{ f }}</code>
             </td>
           </tr>
           <tr>
-            <td class="kv-key">值形态</td>
-            <td><code class="code-tag">{{ data.form_value_shape }}</code></td>
+            <td class="field-name">值形态</td>
+            <td><code class="val-code">{{ data.form_value_shape }}</code></td>
           </tr>
           <tr v-if="data.default_value !== undefined">
-            <td class="kv-key">默认值</td>
-            <td><code class="code-tag">{{ data.default_value }}</code></td>
+            <td class="field-name">默认值</td>
+            <td><code class="val-code">{{ data.default_value }}</code></td>
           </tr>
           <tr v-if="data.storage_note">
-            <td class="kv-key">备注</td>
-            <td class="kv-note">{{ data.storage_note }}</td>
+            <td class="field-name">备注</td>
+            <td class="field-note">{{ data.storage_note }}</td>
           </tr>
         </tbody>
       </table>
@@ -42,13 +44,13 @@
 
     <!-- ── 配置项 ── -->
     <div v-if="configProps.length" class="doc-section">
-      <div class="sec-label">配置项（{{ configProps.length }}）</div>
+      <div class="sec-title">配置项（{{ configProps.length }}）</div>
       <table class="prop-table">
         <colgroup>
-          <col style="width: 130px" />
-          <col style="width: 80px" />
-          <col style="width: 200px" />
-          <col style="width: 80px" />
+          <col style="width: 150px" />
+          <col style="width: 90px" />
+          <col style="width: 220px" />
+          <col style="width: 90px" />
           <col />
         </colgroup>
         <thead>
@@ -64,13 +66,10 @@
           <tr v-for="(cp, i) in configProps" :key="i">
             <td>
               <code class="prop-key">{{ cp.key }}</code>
-              <span v-if="cp.required" class="req-dot" title="必填">*</span>
+              <span v-if="cp.required" class="req-mark">*</span>
             </td>
-            <td><code class="type-code">{{ cp.type }}</code></td>
-            <td>
-              <code class="editor-code">{{ cp.ui_editor }}</code>
-              <span v-if="cp.is_custom_editor" class="custom-tag">自定义</span>
-            </td>
+            <td><span class="type-text">{{ cp.type }}</span></td>
+            <td><code class="editor-code">{{ cp.ui_editor }}</code></td>
             <td><code class="default-code">{{ fmtDefault(cp.default) }}</code></td>
             <td class="desc-cell">{{ cp.label }}</td>
           </tr>
@@ -80,14 +79,14 @@
 
     <!-- ── 渲染场景 ── -->
     <div v-if="scenesRequired.length || scenesOptional.length" class="doc-section">
-      <div class="sec-label">渲染场景</div>
+      <div class="sec-title">渲染场景</div>
       <div class="scenes-wrap">
         <template v-if="scenesRequired.length">
-          <span class="scenes-group-label">必需</span>
+          <span class="scenes-label">必需</span>
           <span v-for="s in scenesRequired" :key="s" class="scene-chip required">{{ s }}</span>
         </template>
         <template v-if="scenesOptional.length">
-          <span class="scenes-group-label" :style="scenesRequired.length ? 'margin-left:12px' : ''">可选</span>
+          <span class="scenes-label" :style="scenesRequired.length ? 'margin-left:12px' : ''">可选</span>
           <span v-for="s in scenesOptional" :key="s" class="scene-chip">{{ s }}</span>
         </template>
       </div>
@@ -95,27 +94,26 @@
 
     <!-- ── 平台钩子 ── -->
     <div v-if="hooks" class="doc-section">
-      <div class="sec-label">平台钩子</div>
-      <table class="kv-table">
-        <colgroup>
-          <col style="width: 90px" />
-          <col />
-        </colgroup>
+      <div class="sec-title">平台钩子</div>
+      <table class="data-table">
+        <thead>
+          <tr><th>字段</th><th>值</th></tr>
+        </thead>
         <tbody>
           <tr>
-            <td class="kv-key">表格内嵌</td>
+            <td class="field-name">表格内嵌</td>
             <td :class="hooks.in_table_supported ? 'val-yes' : 'val-no'">
               {{ hooks.in_table_supported ? '✓ 支持' : '— 不支持' }}
             </td>
           </tr>
           <tr>
-            <td class="kv-key">搜索</td>
+            <td class="field-name">搜索</td>
             <td :class="hooks.search_enabled ? 'val-yes' : 'val-no'">
               {{ hooks.search_enabled ? '✓ 启用' : '— 关闭' }}
             </td>
           </tr>
           <tr>
-            <td class="kv-key">打印</td>
+            <td class="field-name">打印</td>
             <td :class="hooks.print_enabled ? 'val-yes' : 'val-no'">
               {{ hooks.print_enabled ? '✓ 启用' : '— 关闭' }}
             </td>
@@ -126,10 +124,12 @@
 
     <!-- ── 三方依赖 ── -->
     <div v-if="thirdPartyDeps.length" class="doc-section">
-      <div class="sec-label">三方依赖</div>
-      <div class="dep-wrap">
-        <code v-for="d in thirdPartyDeps" :key="d" class="dep-chip">{{ d }}</code>
-      </div>
+      <div class="sec-title">第三方依赖</div>
+      <ul class="dep-list">
+        <li v-for="d in thirdPartyDeps" :key="d">
+          <code class="val-code">{{ d }}</code>
+        </li>
+      </ul>
     </div>
 
   </div>
@@ -162,121 +162,129 @@ function fmtDefault(v: unknown): string {
 /* ── Section ── */
 .doc-section {
   padding: 20px 24px;
-  border-bottom: 1px solid #f3f4f6;
+  border-bottom: 1px solid #f0f0f0;
 }
 .doc-section:last-child { border-bottom: none; }
 
-.sec-label {
+.sec-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #111827;
+  margin-bottom: 14px;
+}
+
+/* ── 数据存储表 ── */
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.data-table thead tr {
+  background: #f9fafb;
+}
+.data-table th {
+  padding: 10px 14px;
+  text-align: left;
   font-size: 12px;
   font-weight: 600;
   color: #6b7280;
-  margin-bottom: 14px;
-  padding-left: 8px;
-  border-left: 3px solid #8b5cf6;
-  line-height: 1;
+  border-bottom: 1px solid #e5e7eb;
 }
-
-/* ── 键值表 ── */
-.kv-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-.kv-table td {
-  padding: 9px 10px 9px 0;
+.data-table td {
+  padding: 11px 14px;
   border-bottom: 1px solid #f3f4f6;
   vertical-align: middle;
-  font-size: 13px;
-  color: #1f2937;
 }
-.kv-table tr:last-child td { border-bottom: none; }
-.kv-key {
-  color: #9ca3af;
-  font-size: 12px;
-  padding-right: 12px;
+.data-table tbody tr:last-child td { border-bottom: none; }
+.data-table tbody tr:hover { background: #fafafa; }
+
+.field-name {
+  color: #374151;
+  font-size: 13px;
+  width: 140px;
   white-space: nowrap;
 }
-.kv-note { color: #9ca3af; font-size: 12px; }
+.field-note { color: #9ca3af; font-size: 12px; }
 
 /* ── 配置项表 ── */
 .prop-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12px;
+  font-size: 13px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  overflow: hidden;
 }
-.prop-table thead tr {
-  background: #f5f3ff;
-}
+.prop-table thead tr { background: #f9fafb; }
 .prop-table th {
-  padding: 10px 12px 10px 0;
+  padding: 10px 14px;
   text-align: left;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
-  color: #7c3aed;
-  border-bottom: 2px solid #ede9fe;
-  white-space: nowrap;
+  color: #6b7280;
+  border-bottom: 1px solid #e5e7eb;
 }
-.prop-table th:first-child { padding-left: 0; }
 .prop-table td {
-  padding: 10px 12px 10px 0;
+  padding: 11px 14px;
   border-bottom: 1px solid #f3f4f6;
   vertical-align: middle;
-  color: #374151;
 }
-.prop-table tr:last-child td { border-bottom: none; }
+.prop-table tbody tr:last-child td { border-bottom: none; }
 .prop-table tbody tr:hover { background: #fafafa; }
 
 .prop-key {
-  font-weight: 500;
-  color: #111827;
-}
-.req-dot {
-  color: #ef4444;
-  font-weight: 700;
-  margin-left: 2px;
-}
-.type-code { color: #7c3aed; }
-.editor-code { color: #374151; }
-.default-code { color: #6b7280; }
-.desc-cell { color: #4b5563; font-size: 12px; }
-
-.custom-tag {
-  margin-left: 5px;
-  padding: 1px 5px;
-  border-radius: 3px;
-  background: #fef3c7;
-  color: #92400e;
-  font-size: 10px;
-}
-
-/* ── 通用 code ── */
-.code-tag {
-  background: #f3f4f6;
+  font-family: 'Menlo', 'Monaco', monospace;
+  font-size: 12px;
+  color: #5b21b6;
+  background: #f3f0ff;
   padding: 2px 6px;
   border-radius: 3px;
-  font-size: 12px;
-  font-family: 'Menlo', 'Monaco', monospace;
-  color: #374151;
 }
-.field-chip { margin-right: 5px; }
-code {
-  background: #f3f4f6;
+.req-mark { color: #ef4444; font-weight: 700; margin-left: 2px; }
+.type-text { color: #374151; font-size: 13px; }
+.editor-code {
+  font-family: 'Menlo', 'Monaco', monospace;
+  font-size: 11px;
+  color: #1d4ed8;
+  background: #eff6ff;
   padding: 2px 6px;
   border-radius: 3px;
-  font-size: 12px;
-  font-family: 'Menlo', 'Monaco', monospace;
-  color: #374151;
 }
+.default-code {
+  font-family: 'Menlo', 'Monaco', monospace;
+  font-size: 12px;
+  color: #6b7280;
+  background: #f9fafb;
+  padding: 2px 5px;
+  border-radius: 3px;
+}
+.desc-cell { color: #374151; font-size: 13px; }
+
+/* ── 通用 code 值 ── */
+.val-code {
+  font-family: 'Menlo', 'Monaco', monospace;
+  font-size: 12px;
+  color: #2563eb;
+  background: transparent;
+  padding: 0;
+}
+.field-chip { margin-right: 8px; }
+.val-yes { color: #059669; font-size: 13px; }
+.val-no  { color: #9ca3af; font-size: 13px; }
 
 /* ── 场景 ── */
 .scenes-wrap {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   flex-wrap: wrap;
 }
-.scenes-group-label { font-size: 12px; color: #9ca3af; }
+.scenes-label { font-size: 13px; color: #9ca3af; }
 .scene-chip {
-  padding: 2px 9px;
+  padding: 3px 10px;
   border-radius: 999px;
   background: #f3f4f6;
   color: #374151;
@@ -289,19 +297,14 @@ code {
   border-color: #ddd6fe;
 }
 
-/* ── 钩子 ── */
-.val-yes { color: #059669; font-size: 13px; }
-.val-no  { color: #9ca3af; font-size: 13px; }
-
 /* ── 依赖 ── */
-.dep-wrap { display: flex; gap: 8px; flex-wrap: wrap; }
-.dep-chip {
-  background: #f3f4f6;
-  color: #374151;
-  padding: 3px 8px;
-  border-radius: 4px;
-  font-size: 12px;
-  font-family: 'Menlo', 'Monaco', monospace;
-  border: 1px solid #e5e7eb;
+.dep-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
+.dep-list li { display: flex; align-items: center; }
 </style>
