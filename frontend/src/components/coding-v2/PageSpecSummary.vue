@@ -1,37 +1,50 @@
 <template>
   <div class="page-spec">
-    <section v-if="route" class="block">
-      <h3>路由</h3>
-      <div class="kv">
-        <div><span class="k">router_name</span><code>{{ route.router_name }}</code></div>
-        <div><span class="k">menu_title</span>{{ route.menu_title }}</div>
-      </div>
+
+    <!-- ── 路由 ── -->
+    <section v-if="route" class="doc-section">
+      <h4 class="sec-heading">路由</h4>
+      <table class="kv-table">
+        <tbody>
+          <tr>
+            <td class="kv-key">router_name</td>
+            <td><code>{{ route.router_name }}</code></td>
+          </tr>
+          <tr v-if="route.menu_title">
+            <td class="kv-key">菜单标题</td>
+            <td>{{ route.menu_title }}</td>
+          </tr>
+        </tbody>
+      </table>
     </section>
 
-    <section v-if="layout" class="block">
-      <h3>布局</h3>
+    <!-- ── 布局 ── -->
+    <section v-if="layout" class="doc-section">
+      <h4 class="sec-heading">布局</h4>
       <code>{{ layout }}</code>
     </section>
 
-    <section v-if="dataSources.length" class="block">
-      <h3>数据源（{{ dataSources.length }}）</h3>
-      <ul class="list">
-        <li v-for="(ds, i) in dataSources" :key="i">
-          <strong>{{ ds.name }}</strong>
+    <!-- ── 数据源 ── -->
+    <section v-if="dataSources.length" class="doc-section">
+      <h4 class="sec-heading">数据源（{{ dataSources.length }}）</h4>
+      <ul class="item-list">
+        <li v-for="(ds, i) in dataSources" :key="i" class="item-row">
+          <span class="item-name">{{ ds.name }}</span>
           <span class="tag">{{ ds.type }}</span>
-          <span v-if="ds.type === 'api'">
+          <span v-if="ds.type === 'api'" class="item-detail">
             <code>{{ ds.method || 'GET' }} {{ ds.endpoint }}</code>
           </span>
         </li>
       </ul>
     </section>
 
-    <section v-if="sections.length" class="block">
-      <h3>UI 区块（{{ sections.length }}）</h3>
-      <ul class="list">
-        <li v-for="(s, i) in sections" :key="i">
-          <strong>{{ s.name }}</strong>
-          <code class="type">{{ s.type }}</code>
+    <!-- ── UI 区块 ── -->
+    <section v-if="sections.length" class="doc-section">
+      <h4 class="sec-heading">UI 区块（{{ sections.length }}）</h4>
+      <ul class="item-list">
+        <li v-for="(s, i) in sections" :key="i" class="item-row">
+          <span class="item-name">{{ s.name }}</span>
+          <code class="type-code">{{ s.type }}</code>
           <span v-if="s.is_custom_type" class="custom-tag">自定义</span>
           <div v-if="s.config && Object.keys(s.config).length" class="cfg">
             <code>{{ fmtConfig(s.config) }}</code>
@@ -40,12 +53,14 @@
       </ul>
     </section>
 
-    <section v-if="thirdPartyDeps.length" class="block">
-      <h3>三方依赖</h3>
-      <ul class="dep-list">
-        <li v-for="d in thirdPartyDeps" :key="d"><code>{{ d }}</code></li>
-      </ul>
+    <!-- ── 三方依赖 ── -->
+    <section v-if="thirdPartyDeps.length" class="doc-section">
+      <h4 class="sec-heading">三方依赖</h4>
+      <div class="dep-row">
+        <code v-for="d in thirdPartyDeps" :key="d" class="dep-chip">{{ d }}</code>
+      </div>
     </section>
+
   </div>
 </template>
 
@@ -69,35 +84,80 @@ function fmtConfig(c: Record<string, any>): string {
 </script>
 
 <style scoped>
-.page-spec { display: flex; flex-direction: column; gap: 16px; }
-.block h3 {
-  font-size: 14px;
-  margin: 0 0 8px;
-  color: #1f2937;
-  font-weight: 600;
-}
-.kv { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
-.k { min-width: 110px; color: #6b7280; font-size: 12px; display: inline-block; }
-.list { list-style: none; padding: 0; margin: 0; font-size: 13px; }
-.list li {
-  padding: 6px 0;
-  border-top: 1px dashed #e5e7eb;
+.page-spec {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
+  flex-direction: column;
+}
+
+/* ── Section ── */
+.doc-section {
+  padding: 10px 18px 12px;
+  border-bottom: 1px solid #f3f4f6;
+}
+.doc-section:last-child {
+  border-bottom: none;
+}
+.sec-heading {
+  font-size: 11px;
+  font-weight: 600;
+  color: #9ca3af;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 0 0 8px;
+}
+
+/* ── 键值表 ── */
+.kv-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.kv-table tr:last-child td { border-bottom: none; }
+.kv-table td {
+  padding: 5px 10px 5px 0;
+  border-bottom: 1px solid #f9fafb;
+  vertical-align: top;
+  color: #1f2937;
+}
+.kv-key {
+  color: #6b7280;
+  font-size: 12px;
+  width: 90px;
+  white-space: nowrap;
+}
+
+/* ── 列表 ── */
+.item-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
   gap: 6px;
 }
-.list li:first-child { border-top: none; }
+.item-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 12px;
+}
+.item-name { font-weight: 500; color: #1f2937; font-size: 13px; }
+.item-detail { color: #6b7280; }
+
 .tag {
-  padding: 1px 6px;
+  padding: 1px 7px;
   border-radius: 999px;
   background: #dbeafe;
   color: #1d4ed8;
   font-size: 11px;
 }
-.type { background: #f3f4f6; padding: 1px 6px; border-radius: 3px; font-size: 12px; }
+.type-code {
+  font-size: 11px;
+  font-family: 'Menlo', 'Monaco', monospace;
+}
 .custom-tag {
-  padding: 1px 6px;
+  padding: 1px 5px;
   border-radius: 3px;
   background: #fef3c7;
   color: #92400e;
@@ -105,16 +165,26 @@ function fmtConfig(c: Record<string, any>): string {
 }
 .cfg {
   width: 100%;
-  margin-top: 4px;
-  padding-left: 10px;
+  padding-left: 4px;
   color: #6b7280;
   font-size: 12px;
 }
+
+/* ── 依赖 ── */
+.dep-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.dep-chip {
+  font-size: 12px;
+  background: #f3f4f6;
+  color: #374151;
+}
+
+/* ── code 通用 ── */
 code {
   background: #f3f4f6;
-  padding: 1px 6px;
+  padding: 1px 5px;
   border-radius: 3px;
-  font-size: 12px;
+  font-size: 11px;
+  font-family: 'Menlo', 'Monaco', monospace;
+  color: #374151;
 }
-.dep-list { margin: 0; padding-left: 20px; }
 </style>
