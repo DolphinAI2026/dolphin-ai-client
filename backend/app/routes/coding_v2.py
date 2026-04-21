@@ -462,6 +462,29 @@ class StartCodingResponse(BaseModel):
     phase: str
 
 
+class ConversationWorkspaceResponse(BaseModel):
+    conversation_id: int
+    workspace_id: Optional[str]
+
+
+@router.get("/conversations/{conversation_id}/workspace", response_model=ConversationWorkspaceResponse)
+async def get_conversation_workspace(
+    conversation_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> ConversationWorkspaceResponse:
+    """获取对话关联的 workspace_id（用于打开 IDE 等场景）。"""
+    conv = await db.get(Conversation, conversation_id)
+    if not conv:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "conversation not found")
+    if conv.tenant_id != ctx.tenant_id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "tenant mismatch")
+    return ConversationWorkspaceResponse(
+        conversation_id=conv.id,
+        workspace_id=conv.workspace_id,
+    )
+
+
 @router.post("/spec/{spec_id}/start-coding", response_model=StartCodingResponse)
 async def start_coding_from_spec(
     spec_id: str,

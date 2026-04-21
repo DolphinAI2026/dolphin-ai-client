@@ -198,3 +198,7 @@ export function getIdeUrl(workspaceId: string, conversationId?: number | null): 
     params: conversationId ? { conversation_id: conversationId } : undefined,
   })
 }
+
+export function getConversationWorkspace(conversationId: number): Promise<{ conversation_id: number; workspace_id: string | null }> {
+  return request.get(`/coding/v2/conversations/${conversationId}/workspace`)
+}

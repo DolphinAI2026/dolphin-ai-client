@@ -168,6 +168,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   confirmSpec as apiConfirmSpec,
+  getConversationWorkspace,
   getIdeUrl,
   getSpec as apiGetSpec,
   sendCodingMessage,
@@ -244,12 +245,32 @@ watch(
   },
 )
 
+// phase 变为 done 时，若 workspaceId 还没拿到，主动拉一次
+watch(
+  () => store.phase,
+  async (p) => {
+    if (p === 'done' && !store.workspaceId && store.conversationId) {
+      try {
+        const res = await getConversationWorkspace(store.conversationId)
+        if (res.workspace_id) store.workspaceId = res.workspace_id
+      } catch { /* 非致命，按钮只是不显示 */ }
+    }
+  },
+)
+
 async function attachToConversation(convId: number) {
   store.attachConversation(convId)
   startSse(convId)
   // 若已有 spec，拉全量
   if (store.currentSpecId && !store.currentSpec) {
     await loadCurrentSpec()
+  }
+  // 若已是 done 且没有 workspaceId，主动拉
+  if (store.phase === 'done' && !store.workspaceId) {
+    try {
+      const res = await getConversationWorkspace(convId)
+      if (res.workspace_id) store.workspaceId = res.workspace_id
+    } catch { /* ignore */ }
   }
 }
 
