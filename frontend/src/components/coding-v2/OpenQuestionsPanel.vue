@@ -41,7 +41,7 @@ const expanded = ref(false)
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 9px 20px;
+  padding: 13px 24px;
   background: transparent;
   border: none;
   cursor: pointer;
@@ -88,16 +88,16 @@ const expanded = ref(false)
 
 /* ── 展开内容 ── */
 .oq-body {
-  padding: 0 20px 12px;
+  padding: 4px 24px 18px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 
 .oq-item {
   display: flex;
-  gap: 10px;
-  padding: 9px 12px;
+  gap: 12px;
+  padding: 12px 14px;
   background: #f0f7ff;
   border-radius: 6px;
   border-left: 3px solid #93c5fd;

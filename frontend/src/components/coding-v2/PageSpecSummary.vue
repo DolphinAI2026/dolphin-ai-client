@@ -91,7 +91,7 @@ function fmtConfig(c: Record<string, any>): string {
 
 /* ── Section ── */
 .doc-section {
-  padding: 10px 18px 12px;
+  padding: 20px 24px;
   border-bottom: 1px solid #f3f4f6;
 }
 .doc-section:last-child {
@@ -101,7 +101,7 @@ function fmtConfig(c: Record<string, any>): string {
   font-size: 12px;
   font-weight: 600;
   color: #6b7280;
-  margin: 0 0 10px;
+  margin: 0 0 14px;
   padding-left: 8px;
   border-left: 3px solid #8b5cf6;
   line-height: 1;

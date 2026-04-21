@@ -147,11 +147,11 @@ const formattedSpec = computed(() => JSON.stringify(props.envelope.spec, null, 2
 
 /* ── 文档头 ── */
 .doc-head {
-  padding: 16px 20px 14px;
+  padding: 20px 24px 18px;
   border-bottom: 2px solid #f3f4f6;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
 }
 
 .head-row1 {
@@ -249,15 +249,15 @@ const formattedSpec = computed(() => JSON.stringify(props.envelope.spec, null, 2
 
 .doc-purpose {
   margin: 0;
-  font-size: 13px;
+  font-size: 14px;
   color: #374151;
-  line-height: 1.6;
+  line-height: 1.7;
 }
 .doc-req {
   margin: 0;
-  font-size: 12px;
+  font-size: 13px;
   color: #9ca3af;
-  line-height: 1.5;
+  line-height: 1.6;
 }
 .req-label {
   display: inline-block;
@@ -267,14 +267,14 @@ const formattedSpec = computed(() => JSON.stringify(props.envelope.spec, null, 2
 
 /* ── Section ── */
 .doc-section {
-  padding: 14px 20px;
+  padding: 20px 24px;
   border-bottom: 1px solid #f3f4f6;
 }
 .sec-label {
   font-size: 12px;
   font-weight: 600;
   color: #6b7280;
-  margin-bottom: 10px;
+  margin-bottom: 14px;
   padding-left: 8px;
   border-left: 3px solid #8b5cf6;
   line-height: 1;
@@ -286,12 +286,12 @@ const formattedSpec = computed(() => JSON.stringify(props.envelope.spec, null, 2
   padding-left: 20px;
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 8px;
 }
 .ac-list li {
   font-size: 13px;
   color: #1f2937;
-  line-height: 1.6;
+  line-height: 1.7;
 }
 
 /* ── 约束 ── */
@@ -342,7 +342,7 @@ const formattedSpec = computed(() => JSON.stringify(props.envelope.spec, null, 2
   display: flex;
   justify-content: flex-end;
   gap: 10px;
-  padding: 12px 20px;
+  padding: 16px 24px;
   background: #fafafa;
   border-top: 1px solid #f3f4f6;
 }

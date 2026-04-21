@@ -161,7 +161,7 @@ function fmtDefault(v: unknown): string {
 
 /* ── Section ── */
 .doc-section {
-  padding: 14px 20px;
+  padding: 20px 24px;
   border-bottom: 1px solid #f3f4f6;
 }
 .doc-section:last-child { border-bottom: none; }
@@ -170,7 +170,7 @@ function fmtDefault(v: unknown): string {
   font-size: 12px;
   font-weight: 600;
   color: #6b7280;
-  margin-bottom: 10px;
+  margin-bottom: 14px;
   padding-left: 8px;
   border-left: 3px solid #8b5cf6;
   line-height: 1;
@@ -182,8 +182,8 @@ function fmtDefault(v: unknown): string {
   border-collapse: collapse;
 }
 .kv-table td {
-  padding: 6px 8px 6px 0;
-  border-bottom: 1px solid #f9fafb;
+  padding: 9px 10px 9px 0;
+  border-bottom: 1px solid #f3f4f6;
   vertical-align: middle;
   font-size: 13px;
   color: #1f2937;
@@ -207,7 +207,7 @@ function fmtDefault(v: unknown): string {
   background: #f5f3ff;
 }
 .prop-table th {
-  padding: 7px 10px 7px 0;
+  padding: 10px 12px 10px 0;
   text-align: left;
   font-size: 11px;
   font-weight: 600;
@@ -217,7 +217,7 @@ function fmtDefault(v: unknown): string {
 }
 .prop-table th:first-child { padding-left: 0; }
 .prop-table td {
-  padding: 7px 10px 7px 0;
+  padding: 10px 12px 10px 0;
   border-bottom: 1px solid #f3f4f6;
   vertical-align: middle;
   color: #374151;
