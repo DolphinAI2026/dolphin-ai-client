@@ -32,6 +32,7 @@ scaffold 已预置**完整合法**的 widget.config.json 作为模板（单端�
 1. 先 `read_file` 读这份模板
 2. 用 `edit_file` **只修改需要变化的字段值**（`code` / `desc.text` / `desc.description` / `desc.icon` / `component.*` 组件名 / `client.mobile.component.*` / `widget.special.*` / `componentModelField` / `widget.editor.config` 末尾追加 `_SETTING`）
 3. **保留**所有其他字段的结构和类型不变
+4. **如果 `edit_file` 返回 `Error: old_string not found`**：立即重新 `read_file` 获取文件当前内容，再从当前内容中**逐字复制** old_string，不要凭记忆或之前读取的版本推断构造
 
 **严禁**：
 - 用 `write_file` 从零写 widget.config.json —— 从零写几乎必然漏字段或类型错，
@@ -177,6 +178,29 @@ this.formEngine.formDataControl.ctlFormDataChanged = true;
 - `<el-switch>` / `<el-radio>` / `<el-radio-group>` / `<el-checkbox>` / `<el-checkbox-group>`
 
 遇到上述需求**必须**用对应的 `form-custom-*-editor` 原子替换。
+
+### 🔴 import 路径铁则（路径写错直接构建失败，最高频错误）
+
+setting.vue 与 `components/` 目录**同级**，都在 `form-editor/` 下：
+
+```
+form-editor/
+  ├── {name}-setting.vue     ← 当前文件在这里
+  └── components/
+        ├── form-custom-input-editor.vue
+        ├── form-custom-switch-editor.vue
+        ├── form-custom-select-editor.vue
+        └── form-custom-textarea-editor.vue
+```
+
+因此 import **必须**使用 `./components/`（当前目录的子目录），**严禁** `../components/`（父级路径）：
+
+```js
+// ✅ 正确
+import FormCustomInputEditor from './components/form-custom-input-editor.vue';
+// ❌ 错误 → Module not found: Can't resolve '../components/form-custom-input-editor.vue'
+import FormCustomInputEditor from '../components/form-custom-input-editor.vue';
+```
 
 ### 正确示例（模板即可复用）
 
