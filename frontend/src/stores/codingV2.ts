@@ -75,6 +75,34 @@ export interface FileWriteEntry {
 }
 
 // ══════════════════════════════════════════════════════════════
+// 聊天流消息（统一有序消息列表，驱动 ChatFlow 渲染）
+// ══════════════════════════════════════════════════════════════
+
+export type ChatMessageKind =
+  | 'user'          // 用户发出的消息
+  | 'ask-user'      // brainstorm 反问（带 options）
+  | 'phase-divider' // 阶段分割线
+  | 'spec-ready'    // Spec 已生成，等待确认
+  | 'coding-active' // 代码生成进行中（live 面板）
+  | 'done'          // 全部完成
+  | 'error'         // 执行出错
+  | 'iteration'     // 迭代分类 banner
+
+export interface ChatMessage {
+  id: string
+  kind: ChatMessageKind
+  timestamp: number
+  // kind 专属字段（仅填对应 kind 的字段）
+  text?: string         // user | error
+  phase?: Phase         // phase-divider
+  phaseLabel?: string   // phase-divider
+  bubbleId?: string     // ask-user → 对应 askUserBubbles 中的条目
+  level?: string        // iteration
+  rationale?: string    // iteration
+  confidence?: number   // iteration
+}
+
+// ══════════════════════════════════════════════════════════════
 // Store
 // ══════════════════════════════════════════════════════════════
 
@@ -105,6 +133,32 @@ export const useCodingV2Store = defineStore('codingV2', () => {
   // —— 连接状态 —— //
   const sseConnected = ref(false)
   const sseLastError = ref<string | null>(null)
+
+  // —— 聊天流消息（有序列表，驱动 ChatFlow） —— //
+  const chatMessages = ref<ChatMessage[]>([])
+
+  function _pushChat(msg: Omit<ChatMessage, 'timestamp'>) {
+    chatMessages.value.push({ ...msg, timestamp: Date.now() })
+  }
+
+  /** 用户发送消息时，视图层调用此方法添加用户气泡 */
+  function addUserChatMessage(text: string) {
+    _pushChat({
+      id: `user-${Date.now()}`,
+      kind: 'user',
+      text,
+    })
+  }
+
+  /** 阶段转换时，视图层（或 ingestEvent）调用此方法插入分割线 */
+  function addPhaseDivider(phase: Phase, label: string) {
+    _pushChat({
+      id: `pd-${phase}-${Date.now()}`,
+      kind: 'phase-divider',
+      phase,
+      phaseLabel: label,
+    })
+  }
 
   // ══════════════════════════════════════════════════════════════
   // 计算：当前应展示的"主面板"
@@ -170,6 +224,7 @@ export const useCodingV2Store = defineStore('codingV2', () => {
     workspaceId.value = null
     sseConnected.value = false
     sseLastError.value = null
+    chatMessages.value = []
   }
 
   function attachConversation(id: number) {
@@ -192,8 +247,9 @@ export const useCodingV2Store = defineStore('codingV2', () => {
       return
     }
     if (type === 'brainstorm.ask_user') {
+      const bubbleId = `ask-${seq}`
       const bubble: AskUserBubble = {
-        id: `ask-${seq}`,
+        id: bubbleId,
         question: data.question || '?',
         options: (data.options || []) as AskUserOption[],
         priority: (data.priority || 2) as 1 | 2 | 3,
@@ -205,12 +261,17 @@ export const useCodingV2Store = defineStore('codingV2', () => {
         answered: false,
       }
       askUserBubbles.value.push(bubble)
+      // 聊天流：插入反问消息（问题显示在 InputBar 上方，这里仅记录已回答的历史）
+      _pushChat({ id: bubbleId, kind: 'ask-user', bubbleId })
       return
     }
     if (type === 'brainstorm.spec_emitted') {
       currentSpecId.value = data.spec_id || null
       // envelope 由视图侧调 getSpec 拉（包含完整 JSON）
       phase.value = 'confirm'
+      // 聊天流：分割线 + spec 预览卡
+      _pushChat({ id: `pd-confirm-${seq}`, kind: 'phase-divider', phase: 'confirm', phaseLabel: '📋 Spec 已生成，请确认' })
+      _pushChat({ id: `spec-ready-${seq}`, kind: 'spec-ready' })
       return
     }
 
@@ -221,6 +282,13 @@ export const useCodingV2Store = defineStore('codingV2', () => {
         rationale: data.rationale || '',
         confidence: Number(data.confidence) || 0,
       }
+      _pushChat({
+        id: `iter-${seq}`,
+        kind: 'iteration',
+        level: data.level,
+        rationale: data.rationale || '',
+        confidence: Number(data.confidence) || 0,
+      })
       return
     }
     if (type === 'iteration.cross_scene_warning') {
@@ -230,6 +298,13 @@ export const useCodingV2Store = defineStore('codingV2', () => {
         confidence: 1,
         message: data.message || '',
       }
+      _pushChat({
+        id: `iter-warn-${seq}`,
+        kind: 'iteration',
+        level: 'cross_scene',
+        rationale: data.message || data.rationale || '',
+        confidence: 1,
+      })
       return
     }
     if (type === 'iteration.trivial_patched') {
@@ -280,11 +355,14 @@ export const useCodingV2Store = defineStore('codingV2', () => {
     }
     if (type === 'coding.agent_done' || type === 'agent_done') {
       phase.value = 'done'
+      _pushChat({ id: `done-${seq}`, kind: 'done' })
       return
     }
     if (type === 'coding.agent_error' || type === 'agent_error') {
-      sseLastError.value = String(data.message || data.error || 'coding failed')
+      const errMsg = String(data.message || data.error || 'coding failed')
+      sseLastError.value = errMsg
       phase.value = 'failed'
+      _pushChat({ id: `error-${seq}`, kind: 'error', text: errMsg })
       return
     }
 
@@ -309,15 +387,20 @@ export const useCodingV2Store = defineStore('codingV2', () => {
     // 5. scaffold
     if (type === 'scaffold.started') {
       phase.value = 'scaffold'
+      _pushChat({ id: `pd-scaffold-${seq}`, kind: 'phase-divider', phase: 'scaffold', phaseLabel: '🏗️ 搭建工作区...' })
       return
     }
     if (type === 'scaffold.done') {
       phase.value = 'generate'
+      _pushChat({ id: `pd-generate-${seq}`, kind: 'phase-divider', phase: 'generate', phaseLabel: '💻 生成代码' })
+      _pushChat({ id: `coding-active-${seq}`, kind: 'coding-active' })
       return
     }
     if (type === 'scaffold.failed') {
-      sseLastError.value = String(data.error || 'scaffold failed')
+      const errMsg = String(data.error || 'scaffold failed')
+      sseLastError.value = errMsg
       phase.value = 'failed'
+      _pushChat({ id: `error-scaffold-${seq}`, kind: 'error', text: errMsg })
       return
     }
 
@@ -384,6 +467,10 @@ export const useCodingV2Store = defineStore('codingV2', () => {
     openQuestions,
     acceptanceCriteria,
     sceneType,
+    // chat messages
+    chatMessages,
+    addUserChatMessage,
+    addPhaseDivider,
     // actions
     resetAll,
     attachConversation,
