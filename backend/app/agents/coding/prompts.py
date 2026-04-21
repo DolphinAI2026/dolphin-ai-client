@@ -406,7 +406,7 @@ def render_form_component_sections(base_path: str) -> str:
             " `mobile/src/form-component-config/form-widget/` 下新建 `*.widget.config.json`\n"
             "- 两端的 `form-component-config/form-widget/index.js` scaffold 已"
             " `import XxxWidgetConfig from '@shared/widget.config.json'`，**保持原样不动**\n"
-            "- 严禁出现"widget.config 在 shared/ 和 web/ 双写"的状态"
+            '- 严禁出现"widget.config 在 shared/ 和 web/ 双写"的状态'
         )
         editor_mixin_import = "import EditorFormConfigMixin from '@shared/mixin/form-config.mixin';"
     else:
