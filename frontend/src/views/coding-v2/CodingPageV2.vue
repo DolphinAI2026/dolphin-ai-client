@@ -211,6 +211,8 @@ function isPast(p: Phase): boolean {
   ]
   const currentIdx = order.indexOf(store.phase)
   const targetIdx = order.indexOf(p)
+  // done 是终态，自身也算 past（绿色 ✓），不再显示蓝色 active
+  if (store.phase === 'done') return currentIdx >= targetIdx
   return currentIdx > targetIdx
 }
 
