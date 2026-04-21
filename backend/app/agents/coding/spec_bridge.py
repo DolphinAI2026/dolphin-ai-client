@@ -198,6 +198,23 @@ def render_spec_brief(envelope: dict[str, Any]) -> str:
 
 # ── 分场景渲染子函数 ──
 
+def _render_prop_validation(v: dict[str, Any] | None) -> str:
+    """把 PropValidation dict 渲染为紧凑单行字符串，用于 Spec 摘要表格"""
+    if not v:
+        return "—"
+    parts: list[str] = []
+    for field, label in [
+        ("min", "min"), ("max", "max"), ("step", "step"),
+        ("min_length", "minLen"), ("max_length", "maxLen"),
+        ("min_items", "minItems"), ("max_items", "maxItems"),
+    ]:
+        if v.get(field) is not None:
+            parts.append(f"{label}={v[field]}")
+    if v.get("pattern"):
+        parts.append(f"pattern=`{v['pattern'][:30]}`")
+    return ", ".join(parts) if parts else "—"
+
+
 def _render_component_spec(spec: dict[str, Any]) -> str:
     """渲染 ComponentSpec 为 markdown 段落"""
     out: list[str] = ["## 组件规格"]
@@ -217,13 +234,14 @@ def _render_component_spec(spec: dict[str, Any]) -> str:
     props = spec.get("config_properties") or []
     if props:
         out.append("### 配置项（setting.vue）")
-        out.append("| key | type | label | default | required | ui_editor | is_custom | 说明 |")
-        out.append("|---|---|---|---|---|---|---|---|")
+        out.append("| key | type | label | default | required | ui_editor | is_custom | 校验 | 说明 |")
+        out.append("|---|---|---|---|---|---|---|---|---|")
         for p in props:
             out.append(
                 f"| `{p.get('key')}` | `{p.get('type')}` | {p.get('label', '')} | "
                 f"`{p.get('default')}` | {'是' if p.get('required') else '否'} | "
                 f"`{p.get('ui_editor')}` | {'是' if p.get('is_custom_editor') else '否'} | "
+                f"{_render_prop_validation(p.get('validation'))} | "
                 f"{(p.get('description') or '').replace('|', '\\|')} |"
             )
         out.append("")

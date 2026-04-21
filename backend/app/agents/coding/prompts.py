@@ -247,6 +247,49 @@ export default {
 - `setting.vue` must be written to `__BASE_PATH__/form-component/form-editor/{name}-setting.vue`
 - `editorConfigList` must be aggregated by `__BASE_PATH__/form-component-config/form-editor/index.js` from `./{name}.editor.config.json`
 
+### ⚠️ Spec 驱动：is_custom_editor 和 validation 必须处理
+
+CodingAgent 读 Spec 配置项表格时，以下两个字段必须响应：
+
+**`is_custom` = 是（is_custom_editor=true）→ 先建业务 editor 文件，再在 setting.vue 使用**
+
+Spec 中 `is_custom` 为"是"的配置项，其 `ui_editor` 值（如 `form-custom-color-editor`）不是预置组件，
+必须**在同一批次**先 `write_file` 创建 `__BASE_PATH__/form-component/form-editor/components/{ui_editor}.vue`，
+再在 setting.vue 里 import 并使用，严禁先写 setting.vue 后补建 editor（会触发 Module not found）。
+业务 editor 必须遵守"🛑 自造业务 editor 的强制约定"章节的规则（mixin + sechma-item 包裹 + v-model=formValue）。
+
+**`校验` 列不为 `—` → 在 editor 节点上添加 `:rules`**
+
+根据 prop type 不同，`:rules` 写法如下：
+
+```vue
+<!-- type="number"，validation={min:3, max:10} -->
+<form-custom-input-editor
+  property="maxScore" v-bind="$props"
+  :rules="[
+    { pattern: /^[0-9]+$/, message: '请输入整数' },
+    { validator: (rule, val, cb) => (Number(val) >= 3 && Number(val) <= 10 ? cb() : cb('请输入 3~10 之间的数字')) }
+  ]"
+></form-custom-input-editor>
+
+<!-- type="string"，validation={max_length:50} -->
+<form-custom-input-editor
+  property="label" v-bind="$props"
+  :rules="[{ max: 50, message: '不超过 50 个字符' }]"
+></form-custom-input-editor>
+
+<!-- type="string"，validation={pattern:"^#[0-9A-Fa-f]{3,6}$"} -->
+<form-custom-input-editor
+  property="activeColor" v-bind="$props"
+  :rules="[{ pattern: /^#[0-9A-Fa-f]{3,6}$/, message: '请输入有效的 hex 颜色值' }]"
+></form-custom-input-editor>
+
+<!-- type="array"，validation={min_items:1, max_items:5} -->
+<!-- array editor 通常有自己的校验，参考 editor 的 rules API -->
+```
+
+`校验` 列为 `—` 的配置项不需要加 `:rules`（但 `required=true` 的配置项需加 `{ required: true, message: '必填' }`）。
+
 ### ⚠️ setting.vue 完整注册清单（缺一不可，否则平台加载不到设置面板）
 
 生成 `{name}-setting.vue` 后**必须同时完成以下两处注册**。只改其中一个是 half-register，平台看不到设置面板（用户点击属性面板空空如也）。

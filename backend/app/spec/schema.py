@@ -180,6 +180,30 @@ class ComponentDataSpec(BaseModel):
     storage_note: str = Field("", description="存储格式的自然语言说明")
 
 
+class PropValidation(BaseModel):
+    """配置项校验规则（按 prop.type 使用对应字段，其余字段留 None）
+
+    - type="number"  → 填 min / max / step
+    - type="string"  → 填 min_length / max_length / pattern
+    - type="array"   → 填 min_items / max_items
+    - type="boolean" → 通常无需 validation，留 None
+    """
+    # ── number ──
+    min: Optional[float] = Field(None, description="最小值（number 专用）")
+    max: Optional[float] = Field(None, description="最大值（number 专用）")
+    step: Optional[float] = Field(None, description="步长（number 专用）")
+    # ── string ──
+    min_length: Optional[int] = Field(None, description="最小长度（string 专用）")
+    max_length: Optional[int] = Field(None, description="最大长度（string 专用）")
+    pattern: Optional[str] = Field(
+        None,
+        description="正则表达式字符串（不含 / 围栏），如 '^#[0-9A-Fa-f]{3,6}$'（string 专用）",
+    )
+    # ── array ──
+    min_items: Optional[int] = Field(None, description="最少条目数（array 专用）")
+    max_items: Optional[int] = Field(None, description="最多条目数（array 专用）")
+
+
 class ConfigProperty(BaseModel):
     """setting.vue 里一个配置项的规格"""
     key: str = Field(
@@ -210,7 +234,15 @@ class ConfigProperty(BaseModel):
 
     editor_props: dict[str, Any] = Field(
         default_factory=dict,
-        description="传给 editor 的额外 props（如 min/max/placeholder）",
+        description="传给 editor 的额外 props（如 placeholder / activeText）",
+    )
+    validation: Optional[PropValidation] = Field(
+        None,
+        description=(
+            "校验规则（按 prop.type 填对应字段）。"
+            "number → min/max/step；string → min_length/max_length/pattern；"
+            "array → min_items/max_items。CodingAgent 读此字段生成 :rules。"
+        ),
     )
     description: Optional[str] = None
     options: Optional[list[dict[str, Any]]] = Field(

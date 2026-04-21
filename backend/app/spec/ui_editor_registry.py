@@ -183,5 +183,17 @@ EDITOR_PROMPT_SECTION = f"""### UI Editor 选型规则
 自定义时：
 - 名字仍遵守正则 `^form-custom-[a-z][a-z0-9-]*-editor$`
 - CodingAgent 会生成 `form-editor/components/{{editor_name}}.vue`
-- 设计时尽量复用 Element Plus 基础组件
+- 设计时尽量复用 Element UI 基础组件
+
+**`validation` 字段填写规则**（按 prop `type` 选对应字段，其余留 null）：
+
+| prop type | 可用字段 | 示例 |
+|---|---|---|
+| `number` | `min` / `max` / `step` | `{{"min": 1, "max": 10}}` |
+| `string` | `min_length` / `max_length` / `pattern` | `{{"max_length": 50}}` 或 `{{"pattern": "^#[0-9A-Fa-f]{{3,6}}$"}}` |
+| `array` | `min_items` / `max_items` | `{{"min_items": 1, "max_items": 5}}` |
+| `boolean` | —（无需 validation） | 留 `null` |
+
+- **能推断范围的就填**：如最大分值 1~10 → `{{"min": 1, "max": 10}}`；颜色 hex → `{{"pattern": "^#[0-9A-Fa-f]{{3,6}}$"}}`
+- **不确定时留 null**：不要强行填无意义的 validation（如 string 无最大长度限制就留 null）
 """
