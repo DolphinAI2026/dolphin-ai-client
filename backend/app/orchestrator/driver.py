@@ -431,6 +431,28 @@ async def drive_verification(
     if result.status == AgentStatus.COMPLETED:
         drive_status = "emitted" if final.get("emitted") else "degraded"
 
+    # 降级路径：emit_report 未被调用，主动推 SSE，让前端看到验收结果
+    # （正常 emitted 路径已由 emit_report tool 自行发布 verification.report_emitted）
+    if drive_status == "degraded" and ctx.publisher is not None:
+        try:
+            await ctx.publisher.publish(
+                conversation_id=ctx.conversation_id,
+                event_type="verification.report_emitted",
+                agent="verification",
+                session_id=ctx.session_id,
+                data={
+                    "report_id": final.get("report_id") or (report_row.id if report_row else None),
+                    "overall_status": final.get("overall_status") or "partial",
+                    "passed_count": int(final.get("passed_count") or 0),
+                    "failed_count": int(final.get("failed_count") or 0),
+                    "items": final.get("items") or [],
+                    "summary": "验收超时降级：未检查完的条目已标记为需人工审核",
+                    "degraded": True,
+                },
+            )
+        except Exception as e:
+            logger.warning("降级 verification.report_emitted SSE 发布失败（非致命）: %s", e)
+
     return VerificationDriveResult(
         status=drive_status,
         report_id=final.get("report_id") or (report_row.id if report_row else None),
@@ -514,6 +536,22 @@ async def drive_coding_with_autofix(
     reports: list[VerificationDriveResult] = []
     coding_results: list[CodingDriveResult] = []
     last_verification: Optional[VerificationDriveResult] = None
+    verification_ctx = None  # 每轮覆盖，循环外兜底时使用
+
+    async def _emit_phase(phase: str) -> None:
+        """通过 verification_ctx 的 publisher 发布 orchestrator.phase_changed SSE。"""
+        if verification_ctx is None or verification_ctx.publisher is None:
+            return
+        try:
+            await verification_ctx.publisher.publish(
+                conversation_id=conversation_id,
+                event_type="orchestrator.phase_changed",
+                agent="orchestrator",
+                session_id=None,
+                data={"phase": phase},
+            )
+        except Exception as e:
+            logger.warning("phase_changed[%s] SSE 发布失败（非致命）: %s", phase, e)
 
     fix_hint = ""
     for round_i in range(max_fix_rounds + 1):
@@ -569,6 +607,17 @@ async def drive_coding_with_autofix(
 
         # —— verify —— #
         verification_ctx = verification_ctx_factory()
+        # SSE：通知前端 coding 已完成（步骤4变绿）、验收已开始（步骤5激活）
+        try:
+            await coding_ctx.publisher.publish(
+                conversation_id=conversation_id,
+                event_type="orchestrator.phase_changed",
+                agent="orchestrator",
+                session_id=None,
+                data={"phase": "verify"},
+            )
+        except Exception as e:
+            logger.warning("phase_changed[verify] SSE 发布失败（非致命）: %s", e)
         vr_result = await drive_verification(
             db,
             ctx=verification_ctx,
@@ -590,6 +639,7 @@ async def drive_coding_with_autofix(
                     await orch.on_coding_done(db, conversation_id=conversation_id)
                 except Exception as e:
                     logger.warning("phase VERIFY→DONE 推进失败（非致命）: %s", e)
+                await _emit_phase("done")
                 return AutoFixLoopResult(
                     final_status="passed",
                     rounds=round_i + 1,
@@ -603,6 +653,7 @@ async def drive_coding_with_autofix(
                     await orch.on_coding_done(db, conversation_id=conversation_id)
                 except Exception as e:
                     logger.warning("phase VERIFY→DONE 推进失败（非致命）: %s", e)
+                await _emit_phase("done")
                 return AutoFixLoopResult(
                     final_status="partial",
                     rounds=round_i + 1,
@@ -633,6 +684,7 @@ async def drive_coding_with_autofix(
                     await orch.on_coding_done(db, conversation_id=conversation_id)
                 except Exception as e:
                     logger.warning("phase VERIFY→DONE 推进失败（非致命）: %s", e)
+                await _emit_phase("done")
                 return AutoFixLoopResult(
                     final_status="failed",
                     rounds=round_i + 1,
@@ -659,6 +711,7 @@ async def drive_coding_with_autofix(
             await orch.on_coding_done(db, conversation_id=conversation_id)
         except Exception as e:
             logger.warning("phase VERIFY→DONE 推进失败（非致命）: %s", e)
+        await _emit_phase("done")
         return AutoFixLoopResult(
             final_status="failed",
             rounds=round_i + 1,
@@ -672,6 +725,7 @@ async def drive_coding_with_autofix(
         await orch.on_coding_done(db, conversation_id=conversation_id)
     except Exception as e:
         logger.warning("phase VERIFY→DONE 推进失败（非致命）: %s", e)
+    await _emit_phase("done")
     return AutoFixLoopResult(
         final_status="failed",
         rounds=max_fix_rounds + 1,

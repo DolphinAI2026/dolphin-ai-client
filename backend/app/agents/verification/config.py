@@ -1,8 +1,10 @@
 """VerificationAgent 运行参数。"""
 from __future__ import annotations
 
-MAX_TURNS: int = 10
-"""BaseAgent 主循环上限（架构文档 § 5.2）"""
+from app.config import settings
+
+MAX_TURNS: int = settings.verification_max_turns
+"""BaseAgent 主循环上限（架构文档 § 5.2）；通过 VERIFICATION_MAX_TURNS 环境变量覆盖"""
 
 MAX_AUTO_FIX_ROUNDS: int = 2
 """AC 失败后自动触发 CodingAgent 重跑的最大次数（架构文档 § 12.1 第 9 条）"""

@@ -15,7 +15,9 @@ emit_spec tool 返回都是 dict），降低耦合。
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Optional
+
+from app.config import settings as _settings
 
 # Spec 场景 → project_type 映射（供 CodingAgent 的 WorkspaceManager 用）
 _SCENE_TO_PROJECT_TYPE: dict[str, str] = {
@@ -41,7 +43,7 @@ def build_coding_input_from_spec(
     envelope: dict[str, Any],
     *,
     conversation_summary: str = "",
-    max_turns: int = 30,
+    max_turns: Optional[int] = None,
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """把 Spec envelope 翻成 CodingAgent 的 ctx.input dict。
@@ -56,12 +58,14 @@ def build_coding_input_from_spec(
     Args:
         envelope: 完整 Spec envelope dict（含 schema_version / scene_type / identity / ... / spec）
         conversation_summary: 可选历史摘要（一般空 —— brainstorm 已把对话浓缩成 Spec）
-        max_turns: 默认 30（和 VibeCodingAgent 一致）
+        max_turns: None 时读取 settings.coding_max_turns（默认 30）；显式传入时覆盖
         extra: 透传额外字段（如 system_prompt override）
 
     Returns:
         CodingAgent 构造 AgentContext 时 ctx.input 的值。
     """
+    if max_turns is None:
+        max_turns = _settings.coding_max_turns
     if not isinstance(envelope, dict):
         raise TypeError(f"envelope must be dict, got {type(envelope).__name__}")
     scene_type = envelope.get("scene_type") or "web_component_dual"
