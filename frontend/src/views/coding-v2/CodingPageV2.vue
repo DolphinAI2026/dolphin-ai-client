@@ -199,8 +199,10 @@ async function loadCurrentSpec() {
 }
 
 // ── 用户发送消息 ──
-async function onSend(text: string) {
-  if (!text || submitting.value) return
+// apiText: 发给后端的原始值（chip.value / 自由输入）
+// displayText: 用户气泡展示的可读文字（chip.label；自由输入时与 apiText 相同）
+async function onSend(apiText: string, displayText?: string) {
+  if (!apiText || submitting.value) return
   submitting.value = true
 
   // 聊天流：如果是首条消息，插入"理解"阶段分割线
@@ -208,12 +210,12 @@ async function onSend(text: string) {
   if (wasIdle) {
     store.addPhaseDivider('understand', '💬 理解需求')
   }
-  store.addUserChatMessage(text)
+  store.addUserChatMessage(displayText ?? apiText)
 
   try {
     const resp: SendMessageResponse = await sendCodingMessage({
       conversation_id: store.conversationId,
-      message: text,
+      message: apiText,
     })
     if (!store.conversationId) {
       await router.replace({ name: 'CodingV2', params: { conversationId: String(resp.conversation_id) } })
@@ -233,9 +235,10 @@ async function onSend(text: string) {
 }
 
 // ── 选项回答（chips 点击） ──
-async function onAnswer(payload: { bubbleId: string; answer: string; p1_key?: string | null }) {
+async function onAnswer(payload: { bubbleId: string; answer: string; displayText: string; p1_key?: string | null }) {
   store.markAskUserAnswered(payload.bubbleId, payload.answer)
-  await onSend(payload.answer)
+  // displayText（label）用于气泡，answer（value）发给后端
+  await onSend(payload.answer, payload.displayText)
 }
 
 // ── Spec 确认 / 取消 ──

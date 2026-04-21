@@ -14,7 +14,7 @@
             :key="opt.value"
             class="chip"
             :disabled="disabled || submitting"
-            @click="quickAnswer(opt.value)"
+            @click="quickAnswer(opt)"
           >
             {{ opt.label }}
           </button>
@@ -59,7 +59,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue'
-import type { AskUserBubble } from '@/stores/codingV2'
+import type { AskUserBubble, AskUserOption } from '@/stores/codingV2'
 
 const props = defineProps<{
   pendingAskUser?: AskUserBubble | null
@@ -69,7 +69,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'send', text: string): void
-  (e: 'answer', payload: { bubbleId: string; answer: string; p1_key?: string | null }): void
+  (e: 'answer', payload: { bubbleId: string; answer: string; displayText: string; p1_key?: string | null }): void
 }>()
 
 const localInput = ref('')
@@ -96,11 +96,12 @@ function send() {
   })
 }
 
-function quickAnswer(value: string) {
+function quickAnswer(opt: AskUserOption) {
   if (!props.pendingAskUser || props.submitting || props.disabled) return
   emit('answer', {
     bubbleId: props.pendingAskUser.id,
-    answer: value,
+    answer: opt.value,       // 发送给后端的值（可能是 enum key）
+    displayText: opt.label,  // 用户气泡展示的可读文字
     p1_key: props.pendingAskUser.p1_key,
   })
 }

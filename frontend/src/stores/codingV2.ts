@@ -228,7 +228,9 @@ export const useCodingV2Store = defineStore('codingV2', () => {
   }
 
   function attachConversation(id: number) {
-    if (conversationId.value !== id) resetAll()
+    // 仅在"从一个已有对话切换到另一个"时才重置
+    // null → 具体 ID（首次建对话）不应清空 chatMessages
+    if (conversationId.value !== null && conversationId.value !== id) resetAll()
     conversationId.value = id
   }
 

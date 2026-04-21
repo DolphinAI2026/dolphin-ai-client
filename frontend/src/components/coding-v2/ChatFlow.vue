@@ -1,29 +1,34 @@
 <template>
   <div class="chat-flow" ref="containerRef">
     <!-- 空状态 -->
-    <div v-if="store.chatMessages.length === 0" class="empty-state">
+    <div v-if="store.chatMessages.length === 0 && !store.isRunning" class="empty-state">
       <div class="empty-icon">🚀</div>
       <h3>开始一个新需求</h3>
       <p>在下方输入框描述你要做什么，AI 会通过结构化对话帮你理清楚，然后生成代码。</p>
     </div>
 
     <template v-for="msg in store.chatMessages" :key="msg.id">
+
       <!-- ── 用户消息 ── -->
       <div v-if="msg.kind === 'user'" class="row row-user">
         <div class="bubble bubble-user">{{ msg.text }}</div>
-        <div class="avatar avatar-user">👤</div>
+        <div class="avatar avatar-user">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
+          </svg>
+        </div>
       </div>
 
-      <!-- ── 反问（ask-user）历史 ── -->
+      <!-- ── 反问历史（只显示问题，不显示回答，回答在用户气泡里） ── -->
       <div v-else-if="msg.kind === 'ask-user'" class="row row-agent">
-        <div class="avatar avatar-agent">🤖</div>
-        <div class="ask-history-card" :class="getBubble(msg.bubbleId)?.answered ? 'answered' : 'pending'">
+        <div class="avatar avatar-agent">
+          <svg viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/>
+          </svg>
+        </div>
+        <div class="bubble bubble-agent">
           <div class="ask-q">{{ getBubble(msg.bubbleId)?.question }}</div>
-          <div v-if="getBubble(msg.bubbleId)?.answered" class="ask-ans">
-            <span class="ans-label">你回答：</span>
-            <span class="ans-text">{{ getBubble(msg.bubbleId)?.answer }}</span>
-          </div>
-          <div v-else class="ask-waiting">等待中...</div>
+          <div v-if="getBubble(msg.bubbleId)?.answered" class="ask-answered-badge">✓ 已回答</div>
         </div>
       </div>
 
@@ -67,14 +72,14 @@
               {{ store.lastVerificationReport.items.length }} 条验收点通过
             </div>
           </div>
+          <button
+            v-if="store.workspaceId"
+            class="ide-btn"
+            @click="$emit('openIde')"
+          >
+            🖥️ 打开 IDE
+          </button>
         </div>
-        <button
-          v-if="store.workspaceId"
-          class="ide-btn"
-          @click="$emit('openIde')"
-        >
-          🖥️ 打开 IDE
-        </button>
         <VerificationReportPanel
           v-if="store.lastVerificationReport"
           :report="store.lastVerificationReport"
@@ -99,15 +104,30 @@
         </div>
         <span v-if="msg.confidence" class="iter-conf">{{ Math.round((msg.confidence || 0) * 100) }}%</span>
       </div>
+
     </template>
 
-    <!-- 底部锚点，滚动到这里 -->
-    <div ref="bottomRef" style="height: 1px;" />
+    <!-- ── Thinking 指示器：Agent 处理中且没有待答问题时显示 ── -->
+    <div v-if="isThinking" class="row row-agent">
+      <div class="avatar avatar-agent">
+        <svg viewBox="0 0 24 24" fill="currentColor">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/>
+        </svg>
+      </div>
+      <div class="thinking-bubble">
+        <span class="dot d1" />
+        <span class="dot d2" />
+        <span class="dot d3" />
+      </div>
+    </div>
+
+    <!-- 底部锚点 -->
+    <div ref="bottomRef" style="height: 16px;" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { nextTick, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useCodingV2Store } from '@/stores/codingV2'
 import type { AskUserBubble } from '@/stores/codingV2'
 import CodingProgress from './CodingProgress.vue'
@@ -129,7 +149,14 @@ function getBubble(id?: string): AskUserBubble | undefined {
   return store.askUserBubbles.find((b) => b.id === id)
 }
 
-// 自动滚到底部：消息增加 or 思考文本更新
+// Thinking 指示器：正在运行 且 没有待答问题 且 不是脚手架阶段（有自己的进度）
+const isThinking = computed(() =>
+  store.isRunning &&
+  !store.pendingAskUser &&
+  store.phase !== 'scaffold',
+)
+
+// 自动滚到底部
 async function scrollToBottom() {
   await nextTick()
   bottomRef.value?.scrollIntoView({ behavior: 'smooth' })
@@ -138,6 +165,7 @@ async function scrollToBottom() {
 watch(() => store.chatMessages.length, scrollToBottom)
 watch(() => store.streamedText, scrollToBottom)
 watch(() => store.toolTraces.length, scrollToBottom)
+watch(isThinking, scrollToBottom)
 
 // 迭代 banner 辅助
 function iterIcon(level?: string): string {
@@ -164,10 +192,10 @@ function iterLabel(level?: string): string {
 .chat-flow {
   flex: 1;
   overflow-y: auto;
-  padding: 24px 0;
+  padding: 16px 0 8px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 4px;
 }
 
 /* ── 空状态 ── */
@@ -175,80 +203,89 @@ function iterLabel(level?: string): string {
   margin: auto;
   text-align: center;
   max-width: 400px;
-  padding: 40px 24px;
+  padding: 60px 24px;
   color: #6b7280;
 }
-.empty-icon { font-size: 48px; margin-bottom: 12px; }
-.empty-state h3 { color: #111827; margin: 0 0 8px; font-size: 18px; }
-.empty-state p { font-size: 14px; line-height: 1.6; margin: 0; }
+.empty-icon { font-size: 44px; margin-bottom: 16px; }
+.empty-state h3 { color: #111827; margin: 0 0 10px; font-size: 18px; font-weight: 600; }
+.empty-state p { font-size: 14px; line-height: 1.7; margin: 0; }
 
 /* ── 消息行 ── */
 .row {
   display: flex;
   align-items: flex-end;
   gap: 8px;
-  padding: 0 20px;
+  padding: 4px 20px;
 }
 .row-user { flex-direction: row-reverse; }
 .row-agent { flex-direction: row; }
 
 .avatar {
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 16px;
   flex-shrink: 0;
+  padding: 5px;
+  box-sizing: border-box;
 }
-.avatar-user { background: #dbeafe; }
-.avatar-agent { background: #f3f4f6; }
+.avatar svg { width: 100%; height: 100%; }
+.avatar-user {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+.avatar-agent {
+  background: #f3f0ff;
+  color: #7c3aed;
+}
 
+/* ── 气泡 ── */
 .bubble {
-  max-width: 72%;
+  max-width: 68%;
   padding: 10px 14px;
-  border-radius: 12px;
   font-size: 14px;
-  line-height: 1.6;
+  line-height: 1.65;
   white-space: pre-wrap;
   word-break: break-word;
 }
 .bubble-user {
   background: #3b82f6;
   color: white;
-  border-bottom-right-radius: 4px;
+  border-radius: 18px 18px 4px 18px;
+  box-shadow: 0 1px 2px rgba(59,130,246,0.3);
 }
-
-/* ── ask-user 历史卡片 ── */
-.ask-history-card {
-  max-width: 72%;
+.bubble-agent {
   background: white;
+  color: #111827;
   border: 1px solid #e5e7eb;
-  border-left: 3px solid #8b5cf6;
-  border-radius: 10px;
-  padding: 10px 14px;
+  border-radius: 18px 18px 18px 4px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
-.ask-history-card.answered { border-left-color: #10b981; }
 .ask-q {
-  font-size: 13px;
-  font-weight: 500;
-  color: #111827;
+  font-size: 14px;
+  color: #1e1b4b;
+  line-height: 1.55;
 }
-.ask-ans { font-size: 13px; }
-.ans-label { color: #6b7280; margin-right: 4px; }
-.ans-text { color: #065f46; font-weight: 500; }
-.ask-waiting { font-size: 12px; color: #9ca3af; }
+.ask-answered-badge {
+  font-size: 11px;
+  color: #10b981;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
 
 /* ── 阶段分割线 ── */
 .phase-divider {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 4px 20px;
+  padding: 10px 24px;
+  margin: 4px 0;
 }
 .phase-divider::before,
 .phase-divider::after {
@@ -258,18 +295,19 @@ function iterLabel(level?: string): string {
   background: #e5e7eb;
 }
 .divider-label {
-  font-size: 12px;
-  color: #6b7280;
+  font-size: 11px;
+  color: #9ca3af;
   white-space: nowrap;
-  padding: 2px 10px;
+  padding: 3px 12px;
   background: #f9fafb;
   border-radius: 999px;
   border: 1px solid #e5e7eb;
+  letter-spacing: 0.02em;
 }
 
-/* ── 全宽卡片（spec / coding / done / error） ── */
+/* ── 全宽卡片 ── */
 .full-card {
-  margin: 4px 20px;
+  margin: 6px 20px;
 }
 
 /* ── 完成卡 ── */
@@ -277,7 +315,7 @@ function iterLabel(level?: string): string {
   background: white;
   border: 1px solid #d1fae5;
   border-radius: 12px;
-  padding: 20px;
+  padding: 18px 20px;
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -285,14 +323,14 @@ function iterLabel(level?: string): string {
 .done-header {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 12px;
 }
-.done-icon { font-size: 32px; }
-.done-title { font-size: 16px; font-weight: 600; color: #065f46; }
-.done-sub { font-size: 13px; color: #6b7280; margin-top: 2px; }
+.done-icon { font-size: 28px; flex-shrink: 0; }
+.done-title { font-size: 15px; font-weight: 600; color: #065f46; }
+.done-sub { font-size: 12px; color: #6b7280; margin-top: 2px; }
 .ide-btn {
-  align-self: flex-start;
-  padding: 8px 20px;
+  margin-left: auto;
+  padding: 7px 16px;
   border-radius: 8px;
   background: #10b981;
   color: white;
@@ -300,6 +338,7 @@ function iterLabel(level?: string): string {
   cursor: pointer;
   font-size: 13px;
   font-weight: 500;
+  white-space: nowrap;
 }
 .ide-btn:hover { background: #059669; }
 
@@ -308,16 +347,16 @@ function iterLabel(level?: string): string {
   background: #fff1f2;
   border: 1px solid #fecdd3;
   border-radius: 12px;
-  padding: 16px 20px;
+  padding: 14px 18px;
   display: flex;
   align-items: flex-start;
   gap: 12px;
 }
-.error-icon { font-size: 24px; }
+.error-icon { font-size: 22px; flex-shrink: 0; }
 .error-title { font-size: 14px; font-weight: 600; color: #be123c; margin-bottom: 4px; }
-.error-text { font-size: 13px; color: #9f1239; }
+.error-text { font-size: 13px; color: #9f1239; line-height: 1.5; }
 
-/* ── Spec 加载中 ── */
+/* ── Spec 加载 ── */
 .spec-loading {
   display: flex;
   align-items: center;
@@ -329,21 +368,37 @@ function iterLabel(level?: string): string {
   color: #6b7280;
   font-size: 14px;
 }
-.spinner {
-  width: 20px;
-  height: 20px;
-  border: 2px solid #e5e7eb;
-  border-top-color: #8b5cf6;
-  border-radius: 50%;
-  animation: spin 800ms linear infinite;
-  flex-shrink: 0;
+
+/* ── Thinking 气泡 ── */
+.thinking-bubble {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 18px 18px 18px 4px;
+  padding: 12px 18px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
 }
-@keyframes spin { to { transform: rotate(360deg); } }
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #a78bfa;
+  animation: thinking 1.4s ease-in-out infinite;
+}
+.d1 { animation-delay: 0s; }
+.d2 { animation-delay: 0.2s; }
+.d3 { animation-delay: 0.4s; }
+@keyframes thinking {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+  30% { transform: translateY(-5px); opacity: 1; }
+}
 
 /* ── 迭代 banner ── */
 .iteration-banner {
-  margin: 0 20px;
-  padding: 10px 14px;
+  margin: 4px 20px;
+  padding: 9px 14px;
   border-radius: 8px;
   display: flex;
   align-items: center;
@@ -357,7 +412,7 @@ function iterLabel(level?: string): string {
 .iter-patch { background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; }
 .iter-rewrite { background: #fef3c7; border-color: #fde68a; color: #92400e; }
 .iter-cross_scene { background: #fff7ed; border-color: #fed7aa; color: #c2410c; }
-.iter-icon { font-size: 16px; flex-shrink: 0; }
+.iter-icon { font-size: 15px; flex-shrink: 0; }
 .iter-body { flex: 1; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .iter-level { font-weight: 600; }
 .iter-rationale { opacity: 0.85; }
@@ -368,4 +423,16 @@ function iterLabel(level?: string): string {
   border-radius: 999px;
   flex-shrink: 0;
 }
+
+/* ── spinner ── */
+.spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid #e5e7eb;
+  border-top-color: #8b5cf6;
+  border-radius: 50%;
+  animation: spin 800ms linear infinite;
+  flex-shrink: 0;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
 </style>
