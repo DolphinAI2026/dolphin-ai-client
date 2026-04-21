@@ -1,16 +1,21 @@
 <template>
-  <div v-if="questions.length" class="oq-panel">
-    <button class="oq-header" @click="expanded = !expanded">
+  <div v-if="questions.length" class="oq-wrap">
+    <button class="oq-trigger" @click="expanded = !expanded">
       <span class="oq-icon">ℹ</span>
-      <span class="oq-title">AI 默认假设（{{ questions.length }} 条）</span>
-      <span class="oq-chevron">{{ expanded ? '∧' : '∨' }}</span>
+      <span class="oq-text">AI 默认假设（{{ questions.length }} 条）</span>
+      <span class="oq-hint">{{ expanded ? '收起' : '查看详情' }}</span>
+      <span class="oq-chevron" :class="{ open: expanded }">›</span>
     </button>
-    <ul v-if="expanded" class="oq-list">
-      <li v-for="(q, i) in questions" :key="i" class="oq-item">
-        <div class="oq-q">{{ q.question }}</div>
-        <div class="oq-a">→ {{ q.assumed_answer }}</div>
-      </li>
-    </ul>
+
+    <div v-if="expanded" class="oq-body">
+      <div v-for="(q, i) in questions" :key="i" class="oq-item">
+        <div class="oq-idx">Q{{ i + 1 }}</div>
+        <div class="oq-content">
+          <div class="oq-q">{{ q.question }}</div>
+          <div class="oq-a">假设：{{ q.assumed_answer }}</div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -25,75 +30,100 @@ const expanded = ref(false)
 </script>
 
 <style scoped>
-.oq-panel {
+.oq-wrap {
   border-top: 1px solid #f3f4f6;
   border-bottom: 1px solid #f3f4f6;
 }
 
-.oq-header {
+/* ── 触发行 ── */
+.oq-trigger {
   width: 100%;
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 8px 18px;
+  gap: 8px;
+  padding: 9px 20px;
   background: transparent;
   border: none;
   cursor: pointer;
   text-align: left;
-  color: #6b7280;
-  font-size: 12px;
+  transition: background 120ms;
 }
-.oq-header:hover { background: #f9fafb; }
+.oq-trigger:hover { background: #f9fafb; }
 
 .oq-icon {
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
   background: #dbeafe;
-  color: #1d4ed8;
-  font-size: 10px;
+  color: #2563eb;
+  font-size: 11px;
+  font-style: normal;
   font-weight: 700;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  font-style: normal;
   line-height: 1;
 }
 
-.oq-title { flex: 1; color: #4b5563; font-size: 12px; }
+.oq-text {
+  font-size: 12px;
+  color: #4b5563;
+  font-weight: 500;
+  flex: 1;
+}
 
-.oq-chevron {
-  font-size: 10px;
+.oq-hint {
+  font-size: 11px;
   color: #9ca3af;
 }
 
-.oq-list {
-  list-style: none;
-  margin: 0;
-  padding: 0 18px 10px;
+.oq-chevron {
+  font-size: 14px;
+  color: #9ca3af;
+  transition: transform 200ms;
+  line-height: 1;
+}
+.oq-chevron.open { transform: rotate(90deg); }
+
+/* ── 展开内容 ── */
+.oq-body {
+  padding: 0 20px 12px;
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
 .oq-item {
-  padding: 8px 10px;
-  background: #f8faff;
+  display: flex;
+  gap: 10px;
+  padding: 9px 12px;
+  background: #f0f7ff;
   border-radius: 6px;
-  border-left: 3px solid #bfdbfe;
+  border-left: 3px solid #93c5fd;
 }
+
+.oq-idx {
+  font-size: 11px;
+  font-weight: 700;
+  color: #2563eb;
+  min-width: 22px;
+  padding-top: 1px;
+  flex-shrink: 0;
+}
+
+.oq-content { flex: 1; display: flex; flex-direction: column; gap: 3px; }
 
 .oq-q {
   font-size: 12px;
   color: #1e3a5f;
-  line-height: 1.5;
+  line-height: 1.55;
+  font-weight: 500;
 }
 
 .oq-a {
-  font-size: 11px;
+  font-size: 12px;
   color: #4b5563;
-  margin-top: 3px;
   line-height: 1.5;
 }
 </style>

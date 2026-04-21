@@ -1,23 +1,29 @@
 <template>
   <div class="spec-doc">
+
     <!-- ── 文档头 ── -->
     <div class="doc-head">
-      <div class="head-main">
+      <div class="head-row1">
         <span class="doc-name">{{ envelope.identity.display_name }}</span>
-        <code class="code-chip chip-code">{{ envelope.identity.code_name }}</code>
-        <code v-if="envelope.identity.widget_code" class="code-chip chip-widget">
-          {{ envelope.identity.widget_code }}
-        </code>
-        <span class="scene-tag" :class="'scene-' + envelope.scene_type">{{ sceneLabel }}</span>
-        <span class="ver-tag">v{{ envelope.provenance.version }}</span>
-      </div>
-      <div class="head-sub">
-        <span class="confidence-inline" :class="confClass">
-          <span class="conf-bar-wrap"><span class="conf-bar" :style="{ width: confPct + '%' }" /></span>
-          <span class="conf-txt">置信度 {{ confPct }}%</span>
-          <span class="conf-tag">{{ confLabel }}</span>
+        <span class="head-chips">
+          <code class="chip chip-code">{{ envelope.identity.code_name }}</code>
+          <code v-if="envelope.identity.widget_code" class="chip chip-widget">
+            {{ envelope.identity.widget_code }}
+          </code>
+          <span class="chip chip-scene" :class="'scene-' + envelope.scene_type">{{ sceneLabel }}</span>
+          <span class="chip chip-ver">v{{ envelope.provenance.version }}</span>
         </span>
       </div>
+
+      <!-- 置信度 -->
+      <div class="conf-row">
+        <div class="conf-bar-wrap">
+          <div class="conf-bar" :class="confClass" :style="{ width: confPct + '%' }" />
+        </div>
+        <span class="conf-pct">置信度 {{ confPct }}%</span>
+        <span class="conf-badge" :class="confClass">{{ confLabel }}</span>
+      </div>
+
       <p class="doc-purpose">{{ envelope.intent.core_purpose }}</p>
       <p v-if="envelope.intent.original_requirement" class="doc-req">
         <span class="req-label">原始需求</span>{{ envelope.intent.original_requirement }}
@@ -25,51 +31,52 @@
     </div>
 
     <!-- ── 验收点 ── -->
-    <section class="doc-section">
-      <h4 class="sec-heading">验收点</h4>
+    <div class="doc-section">
+      <div class="sec-label">验收点</div>
       <ol class="ac-list">
         <li v-for="(ac, i) in envelope.intent.acceptance_criteria" :key="i">{{ ac }}</li>
       </ol>
-    </section>
+    </div>
 
     <!-- ── 默认假设 ── -->
     <OpenQuestionsPanel :questions="envelope.provenance.open_questions || []" />
 
-    <!-- ── 场景特定 ── -->
+    <!-- ── 场景特定内容 ── -->
     <ComponentSpecSummary v-if="envelope.scene_type === 'web_component_dual'" :spec="envelope.spec" />
     <PageSpecSummary v-else-if="envelope.scene_type === 'web_page' || envelope.scene_type === 'mobile_page'" :spec="envelope.spec" />
     <BackendApiSpecSummary v-else-if="envelope.scene_type.startsWith('backend_')" :spec="envelope.spec" />
-    <details v-else class="raw-spec">
+    <details v-else class="raw-fallback">
       <summary>原始 spec JSON</summary>
       <pre>{{ formattedSpec }}</pre>
     </details>
 
     <!-- ── 约束 ── -->
-    <section v-if="constraintsHard.length || constraintsSoft.length" class="doc-section">
-      <h4 class="sec-heading">约束</h4>
-      <div v-if="constraintsHard.length" class="constraint-group">
-        <span class="clabel">🔒 硬约束</span>
-        <ul><li v-for="(c, i) in constraintsHard" :key="i" class="c-hard">{{ c }}</li></ul>
+    <div v-if="constraintsHard.length || constraintsSoft.length" class="doc-section">
+      <div class="sec-label">约束</div>
+      <div v-if="constraintsHard.length" class="constraint-group hard">
+        <span class="c-prefix">🔒 硬约束</span>
+        <ul><li v-for="(c, i) in constraintsHard" :key="i">{{ c }}</li></ul>
       </div>
-      <div v-if="constraintsSoft.length" class="constraint-group">
-        <span class="clabel">💡 软约束</span>
-        <ul><li v-for="(c, i) in constraintsSoft" :key="i" class="c-soft">{{ c }}</li></ul>
+      <div v-if="constraintsSoft.length" class="constraint-group soft">
+        <span class="c-prefix">💡 软约束</span>
+        <ul><li v-for="(c, i) in constraintsSoft" :key="i">{{ c }}</li></ul>
       </div>
-    </section>
+    </div>
 
     <!-- ── JSON 查看 ── -->
-    <div class="json-toggle">
-      <button class="toggle-btn" @click="showJson = !showJson">
+    <div class="json-row">
+      <button class="json-btn" @click="showJson = !showJson">
         {{ showJson ? '收起' : '👁 查看' }}完整 JSON
       </button>
     </div>
     <pre v-if="showJson" class="raw-json">{{ formattedEnvelope }}</pre>
 
-    <!-- ── 操作按钮 ── -->
+    <!-- ── 操作按钮（confirm 阶段） ── -->
     <div v-if="allowActions" class="doc-actions">
       <button class="btn btn-ghost" @click="$emit('cancel')">取消</button>
       <button class="btn btn-confirm" @click="$emit('confirm')">✅ 确认生成代码</button>
     </div>
+
   </div>
 </template>
 
@@ -129,136 +136,148 @@ const formattedSpec = computed(() => JSON.stringify(props.envelope.spec, null, 2
 </script>
 
 <style scoped>
-/* ── 文档容器 ── */
+/* ── 容器 ── */
 .spec-doc {
   background: white;
   border: 1px solid #e5e7eb;
   border-radius: 10px;
   overflow: hidden;
-  display: flex;
-  flex-direction: column;
+  font-size: 13px;
 }
 
 /* ── 文档头 ── */
 .doc-head {
-  padding: 14px 18px 12px;
-  border-bottom: 1px solid #f3f4f6;
+  padding: 16px 20px 14px;
+  border-bottom: 2px solid #f3f4f6;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
-.head-main {
+
+.head-row1 {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 10px;
   flex-wrap: wrap;
 }
+
 .doc-name {
-  font-size: 16px;
+  font-size: 18px;
   font-weight: 700;
   color: #111827;
+  letter-spacing: -0.01em;
 }
-.code-chip {
+
+.head-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
   font-size: 11px;
-  font-family: 'Menlo', 'Monaco', monospace;
-  padding: 2px 7px;
+  padding: 2px 8px;
   border-radius: 4px;
+  font-family: inherit;
+  white-space: nowrap;
 }
 .chip-code {
+  font-family: 'Menlo', 'Monaco', monospace;
   background: #ede9fe;
   color: #5b21b6;
   border: 1px solid #ddd6fe;
 }
 .chip-widget {
+  font-family: 'Menlo', 'Monaco', monospace;
   background: #dbeafe;
   color: #1e40af;
   border: 1px solid #bfdbfe;
 }
-.scene-tag {
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 999px;
+.chip-scene {
   font-weight: 500;
 }
-.scene-web_component_dual { background: #f3e8ff; color: #6d28d9; }
-.scene-web_page { background: #dbeafe; color: #1d4ed8; }
-.scene-mobile_page { background: #cffafe; color: #0e7490; }
-.scene-backend_api { background: #d1fae5; color: #065f46; }
-.scene-backend_feign { background: #fef3c7; color: #92400e; }
-.scene-backend_scheduled { background: #f3f4f6; color: #374151; }
-.ver-tag {
-  font-size: 11px;
-  color: #9ca3af;
-  padding: 2px 7px;
+.scene-web_component_dual { background: #f3e8ff; color: #6d28d9; border: 1px solid #e9d5ff; }
+.scene-web_page            { background: #dbeafe; color: #1d4ed8; border: 1px solid #bfdbfe; }
+.scene-mobile_page         { background: #cffafe; color: #0e7490; border: 1px solid #a5f3fc; }
+.scene-backend_api         { background: #d1fae5; color: #065f46; border: 1px solid #a7f3d0; }
+.scene-backend_feign       { background: #fef3c7; color: #92400e; border: 1px solid #fde68a; }
+.scene-backend_scheduled   { background: #f3f4f6; color: #374151; border: 1px solid #e5e7eb; }
+
+.chip-ver {
   background: #f9fafb;
+  color: #9ca3af;
   border: 1px solid #e5e7eb;
-  border-radius: 4px;
   font-variant-numeric: tabular-nums;
 }
 
 /* ── 置信度 ── */
-.head-sub { display: flex; align-items: center; }
-.confidence-inline {
+.conf-row {
   display: flex;
   align-items: center;
-  gap: 7px;
-  font-size: 12px;
+  gap: 8px;
 }
 .conf-bar-wrap {
-  width: 80px;
-  height: 4px;
+  width: 100px;
+  height: 6px;
   background: #e5e7eb;
-  border-radius: 2px;
+  border-radius: 3px;
   overflow: hidden;
+  flex-shrink: 0;
 }
 .conf-bar {
   height: 100%;
-  border-radius: 2px;
-  transition: width 200ms;
+  border-radius: 3px;
+  transition: width 300ms ease;
 }
-.conf-ok .conf-bar { background: #10b981; }
-.conf-warn .conf-bar { background: #f59e0b; }
-.conf-low .conf-bar { background: #ef4444; }
-.conf-txt { color: #6b7280; font-variant-numeric: tabular-nums; }
-.conf-tag {
-  padding: 1px 6px;
-  border-radius: 999px;
+.conf-ok  .conf-bar, .conf-bar.conf-ok  { background: #10b981; }
+.conf-warn .conf-bar, .conf-bar.conf-warn { background: #f59e0b; }
+.conf-low  .conf-bar, .conf-bar.conf-low  { background: #ef4444; }
+
+.conf-pct { font-size: 12px; color: #6b7280; font-variant-numeric: tabular-nums; }
+
+.conf-badge {
   font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 999px;
 }
-.conf-ok .conf-tag { background: #d1fae5; color: #047857; }
-.conf-warn .conf-tag { background: #fef3c7; color: #92400e; }
-.conf-low .conf-tag { background: #fee2e2; color: #b91c1c; }
+.conf-badge.conf-ok   { background: #d1fae5; color: #047857; }
+.conf-badge.conf-warn { background: #fef3c7; color: #92400e; }
+.conf-badge.conf-low  { background: #fee2e2; color: #b91c1c; }
 
 .doc-purpose {
   margin: 0;
   font-size: 13px;
   color: #374151;
-  line-height: 1.55;
+  line-height: 1.6;
 }
 .doc-req {
   margin: 0;
   font-size: 12px;
-  color: #6b7280;
-  line-height: 1.55;
+  color: #9ca3af;
+  line-height: 1.5;
 }
 .req-label {
   display: inline-block;
   margin-right: 6px;
-  color: #9ca3af;
+  color: #d1d5db;
 }
 
-/* ── 通用 section ── */
+/* ── Section ── */
 .doc-section {
-  padding: 12px 18px;
+  padding: 14px 20px;
   border-bottom: 1px solid #f3f4f6;
 }
-.sec-heading {
+.sec-label {
   font-size: 12px;
   font-weight: 600;
   color: #6b7280;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  margin: 0 0 8px;
+  margin-bottom: 10px;
+  padding-left: 8px;
+  border-left: 3px solid #8b5cf6;
+  line-height: 1;
 }
 
 /* ── 验收点 ── */
@@ -267,78 +286,74 @@ const formattedSpec = computed(() => JSON.stringify(props.envelope.spec, null, 2
   padding-left: 20px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 5px;
 }
 .ac-list li {
   font-size: 13px;
   color: #1f2937;
-  line-height: 1.55;
+  line-height: 1.6;
 }
 
 /* ── 约束 ── */
-.constraint-group { margin-bottom: 8px; }
+.constraint-group { margin-bottom: 10px; }
 .constraint-group:last-child { margin-bottom: 0; }
-.clabel { font-size: 12px; color: #6b7280; }
-.constraint-group ul { margin: 4px 0 0; padding-left: 20px; }
-.constraint-group ul li { font-size: 13px; line-height: 1.55; padding: 2px 0; }
-.c-hard { color: #b91c1c; }
-.c-soft { color: #92400e; }
+.c-prefix { font-size: 12px; color: #6b7280; font-weight: 500; }
+.constraint-group ul { margin: 5px 0 0; padding-left: 20px; }
+.constraint-group ul li { font-size: 13px; line-height: 1.6; padding: 2px 0; }
+.hard ul li { color: #b91c1c; }
+.soft ul li { color: #92400e; }
 
 /* ── JSON ── */
-.json-toggle { padding: 8px 18px; }
-.toggle-btn {
+.json-row { padding: 8px 20px; }
+.json-btn {
   background: transparent;
   border: 1px dashed #d1d5db;
-  color: #6b7280;
+  color: #9ca3af;
   padding: 3px 10px;
   border-radius: 4px;
   font-size: 11px;
   cursor: pointer;
+  transition: all 120ms;
 }
-.toggle-btn:hover { background: #f9fafb; color: #111827; }
+.json-btn:hover { background: #f9fafb; color: #374151; border-style: solid; }
+
 .raw-json {
-  margin: 0 18px 12px;
+  margin: 0 20px 12px;
   background: #0f172a;
   border-radius: 6px;
-  padding: 10px 12px;
+  padding: 10px 14px;
   color: #e2e8f0;
   font-size: 11px;
   font-family: 'Menlo', 'Monaco', monospace;
   max-height: 360px;
   overflow: auto;
 }
-.raw-spec {
-  margin: 0 18px 12px;
+.raw-fallback {
+  margin: 12px 20px;
   background: #0f172a;
   border-radius: 6px;
-  padding: 10px 12px;
+  padding: 10px 14px;
 }
-.raw-spec summary { color: #94a3b8; font-size: 12px; cursor: pointer; }
-.raw-spec pre {
-  margin: 8px 0 0;
-  color: #e2e8f0;
-  font-size: 11px;
-  font-family: 'Menlo', 'Monaco', monospace;
-  max-height: 300px;
-  overflow: auto;
-}
+.raw-fallback summary { color: #94a3b8; font-size: 12px; cursor: pointer; }
+.raw-fallback pre { margin: 8px 0 0; color: #e2e8f0; font-size: 11px; font-family: 'Menlo', 'Monaco', monospace; max-height: 300px; overflow: auto; }
 
 /* ── 操作按钮 ── */
 .doc-actions {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
-  padding: 12px 18px;
-  border-top: 1px solid #f3f4f6;
+  padding: 12px 20px;
   background: #fafafa;
+  border-top: 1px solid #f3f4f6;
 }
 .btn {
-  padding: 7px 16px;
+  padding: 8px 18px;
   border-radius: 7px;
   border: none;
   cursor: pointer;
   font-size: 13px;
   font-weight: 500;
+  transition: all 120ms;
 }
 .btn-ghost {
   background: transparent;

@@ -2,40 +2,55 @@
   <div class="comp-spec">
 
     <!-- ── 数据 ── -->
-    <section v-if="data" class="doc-section">
-      <h4 class="sec-heading">数据</h4>
+    <div v-if="data" class="doc-section">
+      <div class="sec-label">数据</div>
       <table class="kv-table">
+        <colgroup>
+          <col style="width: 90px" />
+          <col />
+        </colgroup>
         <tbody>
           <tr>
             <td class="kv-key">BOF 类型</td>
-            <td><code>{{ data.bof_type }}</code></td>
+            <td><code class="code-tag">{{ data.bof_type }}</code></td>
           </tr>
           <tr v-if="data.component_model_field?.length">
             <td class="kv-key">存储字段</td>
             <td>
-              <code v-for="f in data.component_model_field" :key="f" class="field-chip">{{ f }}</code>
+              <code
+                v-for="f in data.component_model_field"
+                :key="f"
+                class="code-tag field-chip"
+              >{{ f }}</code>
             </td>
           </tr>
           <tr>
             <td class="kv-key">值形态</td>
-            <td><code>{{ data.form_value_shape }}</code></td>
+            <td><code class="code-tag">{{ data.form_value_shape }}</code></td>
           </tr>
           <tr v-if="data.default_value !== undefined">
             <td class="kv-key">默认值</td>
-            <td><code>{{ data.default_value }}</code></td>
+            <td><code class="code-tag">{{ data.default_value }}</code></td>
           </tr>
           <tr v-if="data.storage_note">
             <td class="kv-key">备注</td>
-            <td class="note-cell">{{ data.storage_note }}</td>
+            <td class="kv-note">{{ data.storage_note }}</td>
           </tr>
         </tbody>
       </table>
-    </section>
+    </div>
 
     <!-- ── 配置项 ── -->
-    <section v-if="configProps.length" class="doc-section">
-      <h4 class="sec-heading">配置项（{{ configProps.length }}）</h4>
+    <div v-if="configProps.length" class="doc-section">
+      <div class="sec-label">配置项（{{ configProps.length }}）</div>
       <table class="prop-table">
+        <colgroup>
+          <col style="width: 130px" />
+          <col style="width: 80px" />
+          <col style="width: 200px" />
+          <col style="width: 80px" />
+          <col />
+        </colgroup>
         <thead>
           <tr>
             <th>属性</th>
@@ -49,39 +64,43 @@
           <tr v-for="(cp, i) in configProps" :key="i">
             <td>
               <code class="prop-key">{{ cp.key }}</code>
-              <span v-if="cp.required" class="req-mark" title="必填">*</span>
+              <span v-if="cp.required" class="req-dot" title="必填">*</span>
             </td>
             <td><code class="type-code">{{ cp.type }}</code></td>
             <td>
-              <code>{{ cp.ui_editor }}</code>
+              <code class="editor-code">{{ cp.ui_editor }}</code>
               <span v-if="cp.is_custom_editor" class="custom-tag">自定义</span>
             </td>
             <td><code class="default-code">{{ fmtDefault(cp.default) }}</code></td>
-            <td class="label-cell">{{ cp.label }}</td>
+            <td class="desc-cell">{{ cp.label }}</td>
           </tr>
         </tbody>
       </table>
-    </section>
+    </div>
 
     <!-- ── 渲染场景 ── -->
-    <section v-if="scenesRequired.length || scenesOptional.length" class="doc-section">
-      <h4 class="sec-heading">渲染场景</h4>
-      <div class="scenes-row">
+    <div v-if="scenesRequired.length || scenesOptional.length" class="doc-section">
+      <div class="sec-label">渲染场景</div>
+      <div class="scenes-wrap">
         <template v-if="scenesRequired.length">
-          <span class="scenes-label">必需</span>
+          <span class="scenes-group-label">必需</span>
           <span v-for="s in scenesRequired" :key="s" class="scene-chip required">{{ s }}</span>
         </template>
         <template v-if="scenesOptional.length">
-          <span class="scenes-label optional-sep">可选</span>
+          <span class="scenes-group-label" :style="scenesRequired.length ? 'margin-left:12px' : ''">可选</span>
           <span v-for="s in scenesOptional" :key="s" class="scene-chip">{{ s }}</span>
         </template>
       </div>
-    </section>
+    </div>
 
     <!-- ── 平台钩子 ── -->
-    <section v-if="hooks" class="doc-section">
-      <h4 class="sec-heading">平台钩子</h4>
+    <div v-if="hooks" class="doc-section">
+      <div class="sec-label">平台钩子</div>
       <table class="kv-table">
+        <colgroup>
+          <col style="width: 90px" />
+          <col />
+        </colgroup>
         <tbody>
           <tr>
             <td class="kv-key">表格内嵌</td>
@@ -103,15 +122,15 @@
           </tr>
         </tbody>
       </table>
-    </section>
+    </div>
 
     <!-- ── 三方依赖 ── -->
-    <section v-if="thirdPartyDeps.length" class="doc-section">
-      <h4 class="sec-heading">三方依赖</h4>
-      <div class="dep-row">
+    <div v-if="thirdPartyDeps.length" class="doc-section">
+      <div class="sec-label">三方依赖</div>
+      <div class="dep-wrap">
         <code v-for="d in thirdPartyDeps" :key="d" class="dep-chip">{{ d }}</code>
       </div>
-    </section>
+    </div>
 
   </div>
 </template>
@@ -138,98 +157,87 @@ function fmtDefault(v: unknown): string {
 </script>
 
 <style scoped>
-.comp-spec {
-  display: flex;
-  flex-direction: column;
-}
+.comp-spec { display: flex; flex-direction: column; }
 
 /* ── Section ── */
 .doc-section {
-  padding: 10px 18px 12px;
+  padding: 14px 20px;
   border-bottom: 1px solid #f3f4f6;
 }
-.doc-section:last-child {
-  border-bottom: none;
-}
-.sec-heading {
-  font-size: 11px;
+.doc-section:last-child { border-bottom: none; }
+
+.sec-label {
+  font-size: 12px;
   font-weight: 600;
-  color: #9ca3af;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  margin: 0 0 8px;
+  color: #6b7280;
+  margin-bottom: 10px;
+  padding-left: 8px;
+  border-left: 3px solid #8b5cf6;
+  line-height: 1;
 }
 
 /* ── 键值表 ── */
 .kv-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13px;
 }
-.kv-table tr:last-child td { border-bottom: none; }
 .kv-table td {
-  padding: 5px 10px 5px 0;
+  padding: 6px 8px 6px 0;
   border-bottom: 1px solid #f9fafb;
-  vertical-align: top;
+  vertical-align: middle;
+  font-size: 13px;
   color: #1f2937;
 }
+.kv-table tr:last-child td { border-bottom: none; }
 .kv-key {
-  color: #6b7280;
+  color: #9ca3af;
   font-size: 12px;
-  width: 80px;
+  padding-right: 12px;
   white-space: nowrap;
-  flex-shrink: 0;
 }
-.note-cell { color: #6b7280; font-size: 12px; }
-.field-chip {
-  margin-right: 4px;
-}
+.kv-note { color: #9ca3af; font-size: 12px; }
 
-/* ── 属性表 ── */
+/* ── 配置项表 ── */
 .prop-table {
   width: 100%;
-  font-size: 12px;
   border-collapse: collapse;
+  font-size: 12px;
+}
+.prop-table thead tr {
+  background: #f5f3ff;
 }
 .prop-table th {
+  padding: 7px 10px 7px 0;
   text-align: left;
-  padding: 5px 10px 5px 0;
-  border-bottom: 1px solid #e5e7eb;
-  color: #9ca3af;
-  font-weight: 500;
   font-size: 11px;
+  font-weight: 600;
+  color: #7c3aed;
+  border-bottom: 2px solid #ede9fe;
   white-space: nowrap;
 }
+.prop-table th:first-child { padding-left: 0; }
 .prop-table td {
-  padding: 6px 10px 6px 0;
+  padding: 7px 10px 7px 0;
   border-bottom: 1px solid #f3f4f6;
-  vertical-align: top;
+  vertical-align: middle;
   color: #374151;
 }
 .prop-table tr:last-child td { border-bottom: none; }
-.prop-key {
-  color: #374151;
-  font-weight: 500;
-}
-.req-mark {
-  color: #ef4444;
-  font-size: 12px;
-  margin-left: 2px;
-  font-weight: 700;
-}
-.type-code { color: #6d28d9; }
-.default-code { color: #6b7280; }
-.label-cell { color: #6b7280; }
+.prop-table tbody tr:hover { background: #fafafa; }
 
-/* ── code 通用 ── */
-code {
-  background: #f3f4f6;
-  padding: 1px 5px;
-  border-radius: 3px;
-  font-size: 11px;
-  font-family: 'Menlo', 'Monaco', monospace;
-  color: #374151;
+.prop-key {
+  font-weight: 500;
+  color: #111827;
 }
+.req-dot {
+  color: #ef4444;
+  font-weight: 700;
+  margin-left: 2px;
+}
+.type-code { color: #7c3aed; }
+.editor-code { color: #374151; }
+.default-code { color: #6b7280; }
+.desc-cell { color: #4b5563; font-size: 12px; }
 
 .custom-tag {
   margin-left: 5px;
@@ -240,36 +248,60 @@ code {
   font-size: 10px;
 }
 
+/* ── 通用 code ── */
+.code-tag {
+  background: #f3f4f6;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 12px;
+  font-family: 'Menlo', 'Monaco', monospace;
+  color: #374151;
+}
+.field-chip { margin-right: 5px; }
+code {
+  background: #f3f4f6;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 12px;
+  font-family: 'Menlo', 'Monaco', monospace;
+  color: #374151;
+}
+
 /* ── 场景 ── */
-.scenes-row {
+.scenes-wrap {
   display: flex;
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
 }
-.scenes-label {
-  font-size: 12px;
-  color: #9ca3af;
-}
-.optional-sep { margin-left: 4px; }
+.scenes-group-label { font-size: 12px; color: #9ca3af; }
 .scene-chip {
-  padding: 2px 8px;
+  padding: 2px 9px;
   border-radius: 999px;
   background: #f3f4f6;
   color: #374151;
   font-size: 12px;
+  border: 1px solid #e5e7eb;
 }
-.scene-chip.required { background: #dbeafe; color: #1d4ed8; }
+.scene-chip.required {
+  background: #ede9fe;
+  color: #5b21b6;
+  border-color: #ddd6fe;
+}
 
 /* ── 钩子 ── */
-.val-yes { color: #059669; }
-.val-no  { color: #9ca3af; }
+.val-yes { color: #059669; font-size: 13px; }
+.val-no  { color: #9ca3af; font-size: 13px; }
 
 /* ── 依赖 ── */
-.dep-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.dep-wrap { display: flex; gap: 8px; flex-wrap: wrap; }
 .dep-chip {
-  font-size: 12px;
   background: #f3f4f6;
   color: #374151;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: 'Menlo', 'Monaco', monospace;
+  border: 1px solid #e5e7eb;
 }
 </style>

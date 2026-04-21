@@ -3,7 +3,7 @@
 
     <!-- ── 路由 ── -->
     <section v-if="route" class="doc-section">
-      <h4 class="sec-heading">路由</h4>
+      <div class="sec-heading">路由</div>
       <table class="kv-table">
         <tbody>
           <tr>
@@ -20,13 +20,13 @@
 
     <!-- ── 布局 ── -->
     <section v-if="layout" class="doc-section">
-      <h4 class="sec-heading">布局</h4>
+      <div class="sec-heading">布局</div>
       <code>{{ layout }}</code>
     </section>
 
     <!-- ── 数据源 ── -->
     <section v-if="dataSources.length" class="doc-section">
-      <h4 class="sec-heading">数据源（{{ dataSources.length }}）</h4>
+      <div class="sec-heading">数据源（{{ dataSources.length }}）</div>
       <ul class="item-list">
         <li v-for="(ds, i) in dataSources" :key="i" class="item-row">
           <span class="item-name">{{ ds.name }}</span>
@@ -40,7 +40,7 @@
 
     <!-- ── UI 区块 ── -->
     <section v-if="sections.length" class="doc-section">
-      <h4 class="sec-heading">UI 区块（{{ sections.length }}）</h4>
+      <div class="sec-heading">UI 区块（{{ sections.length }}）</div>
       <ul class="item-list">
         <li v-for="(s, i) in sections" :key="i" class="item-row">
           <span class="item-name">{{ s.name }}</span>
@@ -55,7 +55,7 @@
 
     <!-- ── 三方依赖 ── -->
     <section v-if="thirdPartyDeps.length" class="doc-section">
-      <h4 class="sec-heading">三方依赖</h4>
+      <div class="sec-heading">三方依赖</div>
       <div class="dep-row">
         <code v-for="d in thirdPartyDeps" :key="d" class="dep-chip">{{ d }}</code>
       </div>
@@ -98,12 +98,13 @@ function fmtConfig(c: Record<string, any>): string {
   border-bottom: none;
 }
 .sec-heading {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
-  color: #9ca3af;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  margin: 0 0 8px;
+  color: #6b7280;
+  margin: 0 0 10px;
+  padding-left: 8px;
+  border-left: 3px solid #8b5cf6;
+  line-height: 1;
 }
 
 /* ── 键值表 ── */
