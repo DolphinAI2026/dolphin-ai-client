@@ -608,8 +608,9 @@ async def drive_coding_with_autofix(
             # overall_status == failed — 记录 verify_fail 事件
             recorder = (coding_ctx.extra or {}).get("error_recorder")
             if recorder is not None:
+                _vr_product = (vr_result.agent_result.product if vr_result.agent_result else {}) or {}
                 failed_items = [
-                    it for it in (vr_result.report or {}).get("items", [])
+                    it for it in _vr_product.get("items", [])
                     if it.get("status") == "failed"
                 ]
                 fail_summary = "; ".join(

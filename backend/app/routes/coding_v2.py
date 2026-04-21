@@ -910,6 +910,10 @@ async def _run_coding_task(
                     logger.warning("get_workspace_path(%s) 失败：%s，降级为无 verify", workspace_id, e)
 
                 if workspace_root:
+                    logger.info(
+                        "coding task %s: workspace_root=%s，将运行 coding → verify autofix 闭环",
+                        coding_session_id, workspace_root,
+                    )
                     # 先创建 coding_sessions 行（verification_reports 有 FK 依赖它）
                     spec_id_for_cs = (spec_envelope.get("spec_id") or "") if isinstance(spec_envelope, dict) else ""
                     if not spec_id_for_cs:
