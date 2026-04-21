@@ -22,9 +22,8 @@ _SHARED_WIDGET_CONFIG_SECTION = """
 
 ### 🛑 生成方式铁则（防止 Pydantic 校验失败）
 
-scaffold 已预置**完整合法**的 widget.config.json 作为模板（单端路径：
-`src/form-component-config/form-widget/form-component-demo.widget.config.json`；
-双端路径：`shared/widget.config.json`）。模板里每个字段类型、取值都**已经是平台
+scaffold 已预置**完整合法**的 widget.config.json 作为模板（路径：
+`__WIDGET_CONFIG_TEMPLATE_PATH__`）。模板里每个字段类型、取值都**已经是平台
 要求的正确形式**（含 `version: 2.0`、`widget.display.mobileWidth: 12`、
 `widget.editor.excludeInTable: ["WIDTH"]`、`client.mobile.widget.editor.excludeInTable` 等）。
 
@@ -46,14 +45,7 @@ scaffold 已预置**完整合法**的 widget.config.json 作为模板（单端�
 
 ### ⚠️ 文件位置（按项目类型严格区分，违反会导致双份/错位）
 
-- **单端项目**（form-component）：
-  - 文件路径：`src/form-component-config/form-widget/{name}.widget.config.json`（每个组件独立一份）
-  - 聚合文件 `src/form-component-config/form-widget/index.js`：`import XxxWidgetConfig from './{name}.widget.config.json'`
-- **双端项目**（form-component-dual）：
-  - 文件路径：**`shared/widget.config.json`**（两端共用**唯一一份**，scaffold 已预置，LLM **只修改内容不新建文件**）
-  - **严禁**在 `web/src/form-component-config/form-widget/` 或 `mobile/src/form-component-config/form-widget/` 下新建 `*.widget.config.json`
-  - 两端的 `form-component-config/form-widget/index.js` scaffold 已 `import XxxWidgetConfig from '@shared/widget.config.json'`，**保持原样不动**
-  - 严禁出现"widget.config 在 shared/ 和 web/ 双写"的状态
+__WIDGET_CONFIG_FILE_POSITIONS__
 
 ### 其他格式要求
 - 纯 JSON 文件（不是 JS），以 `.json` 后缀结尾。
@@ -222,8 +214,7 @@ import FormCustomInputEditor from '../components/form-custom-input-editor.vue';
 </template>
 
 <script>
-// 单端：@/mixin/form-config.mixin ；双端：@shared/mixin/form-config.mixin
-import EditorFormConfigMixin from '@/mixin/form-config.mixin';
+__EDITOR_MIXIN_IMPORT__
 import FormCustomInputEditor from './components/form-custom-input-editor.vue';
 import FormCustomSelectEditor from './components/form-custom-select-editor.vue';
 import FormCustomSwitchEditor from './components/form-custom-switch-editor.vue';
@@ -360,10 +351,46 @@ _SHARED_FORMENGINE_API_SECTION = """
 
 def render_form_component_sections(base_path: str) -> str:
     """渲染 form-component 共享段。base_path 单端 `src`，双端 `web/src`。"""
+    is_dual = base_path == "web/src"
+
+    # 占位符 → 按项目类型渲染不同内容
+    if is_dual:
+        widget_config_template_path = "shared/widget.config.json"
+        widget_config_file_positions = (
+            "- 文件路径：**`shared/widget.config.json`**"
+            "（两端共用**唯一一份**，scaffold 已预置，LLM **只修改内容不新建文件**）\n"
+            "- **严禁**在 `web/src/form-component-config/form-widget/` 或"
+            " `mobile/src/form-component-config/form-widget/` 下新建 `*.widget.config.json`\n"
+            "- 两端的 `form-component-config/form-widget/index.js` scaffold 已"
+            " `import XxxWidgetConfig from '@shared/widget.config.json'`，**保持原样不动**\n"
+            "- 严禁出现"widget.config 在 shared/ 和 web/ 双写"的状态"
+        )
+        editor_mixin_import = "import EditorFormConfigMixin from '@shared/mixin/form-config.mixin';"
+    else:
+        widget_config_template_path = (
+            "src/form-component-config/form-widget/form-component-demo.widget.config.json"
+        )
+        widget_config_file_positions = (
+            "- 文件路径：`src/form-component-config/form-widget/{name}.widget.config.json`"
+            "（每个组件独立一份）\n"
+            "- 聚合文件 `src/form-component-config/form-widget/index.js`："
+            "`import XxxWidgetConfig from './{name}.widget.config.json'`"
+        )
+        editor_mixin_import = "import EditorFormConfigMixin from '@/mixin/form-config.mixin';"
+
+    def _render(text: str) -> str:
+        return (
+            text
+            .replace("__BASE_PATH__", base_path)
+            .replace("__WIDGET_CONFIG_TEMPLATE_PATH__", widget_config_template_path)
+            .replace("__WIDGET_CONFIG_FILE_POSITIONS__", widget_config_file_positions)
+            .replace("__EDITOR_MIXIN_IMPORT__", editor_mixin_import)
+        )
+
     return (
-        _SHARED_WIDGET_CONFIG_SECTION.replace("__BASE_PATH__", base_path)
-        + _SHARED_EDITOR_CONFIG_SECTION.replace("__BASE_PATH__", base_path)
-        + _SHARED_SETTING_VUE_SECTION.replace("__BASE_PATH__", base_path)
+        _render(_SHARED_WIDGET_CONFIG_SECTION)
+        + _render(_SHARED_EDITOR_CONFIG_SECTION)
+        + _render(_SHARED_SETTING_VUE_SECTION)
         + _SHARED_FORMVALUE_STORAGE_SECTION
         + _SHARED_FORMENGINE_API_SECTION
     )
