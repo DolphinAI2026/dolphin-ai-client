@@ -1,9 +1,6 @@
 name: 部署到线上环境
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
 concurrency:

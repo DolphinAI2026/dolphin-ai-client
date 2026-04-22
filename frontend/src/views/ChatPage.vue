@@ -3504,11 +3504,8 @@ const startDeployFlow = async () => {
   if (!selectedEnvId.value) {
     try {
       const envs = await platformEnvApi.list()
-      const defaultEnv = envs.find(e => e.is_default && e.status === 'connected')
-      if (defaultEnv) {
-        selectedEnvId.value = defaultEnv.id
-      } else if (envs.some(e => e.status === 'connected')) {
-        // 有已连接环境但没默认，弹出选择
+      if (envs.some(e => e.status === 'connected')) {
+        // 未绑定环境时，始终弹出选择框
         showEnvSelect.value = true
         return
       } else {
