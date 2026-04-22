@@ -221,7 +221,7 @@ nginx -t && nginx -s reload
 ```bash
 cd /root/apaas-builder/backend
 nohup .venv/bin/python -m uvicorn app.main:app \
-    --host 0.0.0.0 --port 8003 --workers 2 \
+    --host 0.0.0.0 --port 8003 --workers 1 \
     > /root/apaas-builder/backend.log 2>&1 &
 ```
 
@@ -238,7 +238,7 @@ Type=simple
 User=root
 WorkingDirectory=/root/apaas-builder/backend
 Environment=PATH=/root/apaas-builder/backend/.venv/bin:/usr/local/bin:/usr/bin
-ExecStart=/root/apaas-builder/backend/.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8003 --workers 2
+ExecStart=/root/apaas-builder/backend/.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8003 --workers 1
 Restart=always
 RestartSec=5
 
@@ -302,7 +302,7 @@ cd ../frontend && npx vite build --base=/ai-builder/
 
 # 重启后端
 systemctl restart apaas-builder
-# 或：fuser -k 8003/tcp && cd /root/apaas-builder/backend && nohup .venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8003 --workers 2 > /root/apaas-builder/backend.log 2>&1 &
+# 或：fuser -k 8003/tcp && cd /root/apaas-builder/backend && nohup .venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8003 --workers 1 > /root/apaas-builder/backend.log 2>&1 &
 ```
 
 ## 8. 常见问题

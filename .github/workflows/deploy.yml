@@ -116,10 +116,11 @@ jobs:
           except Exception:
               pass
           # cwd 必须是 backend/，否则 `app.main:app` import 不到（ModuleNotFoundError: No module named 'app'）
+          # --workers 1：platform_proxy._proxy_state 是模块级全局 dict，多 worker 下跨 worker 不共享，iframe 后续请求会打到空状态的 worker 导致"智能体不存在"。多 worker 需要先把 state 下沉到 DB/cookie 再放开
           try:
               transport = client.get_transport()
               chan = transport.open_session()
-              chan.exec_command("cd /root/apaas-builder/backend && nohup .venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8003 --workers 2 >> ../backend.log 2>&1 &")
+              chan.exec_command("cd /root/apaas-builder/backend && nohup .venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8003 --workers 1 >> ../backend.log 2>&1 &")
               chan.close()
           except Exception:
               pass
