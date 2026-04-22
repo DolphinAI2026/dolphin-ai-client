@@ -110,8 +110,9 @@ jobs:
           # 必须两种都杀，否则老进程会继续占端口让健康检查通过，掩盖新进程 crash
           try:
               run("pkill -9 -f 'uvicorn.*:app.*8003' || true")
+              run("fuser -k 8003/tcp || true")
               time.sleep(3)
-              run("pgrep -f 'uvicorn.*:app.*8003' || echo '  端口 8003 上无残留 uvicorn 进程'")
+              run("ss -tlnp | grep 8003 || echo '  端口 8003 已释放'")
           except Exception:
               pass
           # cwd 必须是 backend/，否则 `app.main:app` import 不到（ModuleNotFoundError: No module named 'app'）
