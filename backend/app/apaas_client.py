@@ -609,6 +609,53 @@ class APaaSClient:
             logger.info(f"查询到 {len(normalized_models)} 个模型: {[m.get('modelCode') for m in normalized_models]}")
             return normalized_models
 
+    async def query_all_model_codes(self) -> list[dict]:
+        """查询租户全部模型（不按 appId 过滤，仅返回 code/name/appId 这些轻字段）。
+
+        用于首次部署前的"模型 code 冲突预检"——避免新建时和平台其他应用撞 code。
+        不拉字段，比 query_models 快很多。
+        """
+        ts = self._get_timestamp()
+        url = f"{self.base_url}/xdap-app/dataModel/query/list"
+        params = {"timestamp": ts}
+        payload = {
+            "page": 1,
+            "pageSize": 5000,
+            "keyWord": "",
+            "modelType": "",
+            "appId": "",
+        }
+        _log_request("POST", url, payload, params=params)
+        start = time.time()
+        async with httpx.AsyncClient(verify=False, timeout=60.0) as client:
+            response = await client.post(url, headers=self._get_headers(), params=params, json=payload)
+            elapsed_ms = (time.time() - start) * 1000
+            response.raise_for_status()
+            data = response.json()
+            _log_response(url, response.status_code, data, elapsed_ms, request_body=_to_json(payload))
+            if data.get("code") != "ok":
+                logger.warning(f"query_all_model_codes 返回非 ok: {data.get('message')}")
+                return []
+            payload_data = data.get("data") or {}
+            raw_models = payload_data.get("list") or data.get("table") or []
+            if not isinstance(raw_models, list):
+                return []
+            result = []
+            for m in raw_models:
+                if not isinstance(m, dict):
+                    continue
+                code = str(m.get("modelCode", m.get("code", "")) or "").strip()
+                if not code:
+                    continue
+                result.append({
+                    "code": code,
+                    "name": str(m.get("modelName", m.get("name", "")) or "").strip(),
+                    "app_id": str(m.get("appId", "") or "").strip(),
+                    "app_name": str(m.get("appName", "") or "").strip(),
+                })
+            logger.info(f"租户模型总数: {len(result)}")
+            return result
+
     async def query_model_fields(self, app_id: str, data_model_id: str) -> list:
         """查询单个模型下的字段列表"""
         resolved_id = str(data_model_id or "").strip()

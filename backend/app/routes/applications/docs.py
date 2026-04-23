@@ -696,7 +696,14 @@ async def upload_doc_version(
                 progress_messages.append((msg, batch))
 
             yield {"event": "progress", "data": json.dumps({"step": "parse", "message": "检查文档标准度..."}, ensure_ascii=False)}
-            parse_result = await parse_document(text, llm_cfg=doc_llm_cfg, on_progress=_on_progress)
+            # 更新比对必须使用纯代码解析（strict=True），禁用所有 LLM 兜底：
+            # LLM 的非确定性会让 v1 / v2 解析产生系统性偏差，污染 diff 结果
+            parse_result = await parse_document(
+                text,
+                llm_cfg=doc_llm_cfg,
+                on_progress=_on_progress,
+                strict=True,
+            )
             parse_meta = parse_result.get("parse_meta", {}) if isinstance(parse_result, dict) else {}
 
             for item in progress_messages:
@@ -821,6 +828,27 @@ async def upload_doc_version(
                 }
 
         except Exception as e:
+            from app.doc_pipeline import DocNotStandardError
+
+            if isinstance(e, DocNotStandardError):
+                logger.warning(
+                    f"文档未按模板规范：failed_modules={e.failed_modules}, score={e.score}, decision={e.decision}"
+                )
+                yield {
+                    "event": "error",
+                    "data": json.dumps({
+                        "code": "doc_not_standard",
+                        "message": str(e),
+                        "step": current_step,
+                        "error_type": e.__class__.__name__,
+                        "failed_modules": e.failed_modules,
+                        "errors": e.errors[:20],
+                        "standard_score": e.score,
+                        "decision": e.decision,
+                    }, ensure_ascii=False)
+                }
+                return
+
             logger.error(f"文档版本上传失败: {e}", exc_info=True)
             detail = str(e).strip() or repr(e).strip() or e.__class__.__name__
             yield {

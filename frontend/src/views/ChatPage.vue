@@ -665,6 +665,41 @@
         <div v-if="apiLogs.length === 0" class="api-logs-empty">暂无日志</div>
       </div>
     </el-dialog>
+    <el-dialog
+      v-model="conflictDialogVisible"
+      title="模型编码在平台已被占用"
+      width="680px"
+      class="conflict-dialog"
+      :close-on-click-modal="false"
+      :close-on-press-escape="false"
+      :show-close="false"
+      destroy-on-close
+    >
+      <div class="conflict-dialog-tip">
+        以下模型的编码在平台其他应用中已存在，直接部署会失败。已为每项自动加
+        <code>_V1</code> 后缀，你可以再编辑调整；确认后统一应用到配置。
+      </div>
+      <div class="conflict-dialog-table">
+        <div class="conflict-row conflict-head">
+          <div class="col-name">模型名</div>
+          <div class="col-orig">原编码（已占用）</div>
+          <div class="col-new">新编码</div>
+        </div>
+        <div v-for="(c, idx) in conflictList" :key="c.original_code" class="conflict-row">
+          <div class="col-name">{{ c.name || '（未命名）' }}</div>
+          <div class="col-orig"><code>{{ c.original_code }}</code></div>
+          <div class="col-new">
+            <el-input v-model="conflictList[idx].suggested_code" size="small" />
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <button class="conflict-btn cancel" :disabled="conflictApplying" @click="cancelConflictResolve">取消构建</button>
+        <button class="conflict-btn confirm" :disabled="conflictApplying" @click="confirmConflictRenames">
+          {{ conflictApplying ? '应用中…' : '全部确认并继续' }}
+        </button>
+      </template>
+    </el-dialog>
   </div><!-- /chat-page -->
   </WorkbenchShell>
 </template>
@@ -3524,6 +3559,80 @@ const startDeployFlow = async () => {
   await startGenerateWithEnv(selectedEnvId.value!)
 }
 
+// ── 首次部署前的模型 code 冲突预检 ─────────────────────────────
+// 流程：create/update app → preflightConflicts → 有冲突则弹框 → applyCodeRename → loadDeployStatusAndRunAll
+const conflictDialogVisible = ref(false)
+const conflictList = ref<Array<{ name: string; original_code: string; suggested_code: string }>>([])
+const conflictApplying = ref(false)
+let conflictResolver: ((ok: boolean) => void) | null = null
+
+async function runPreflightConflicts(appId: number): Promise<boolean> {
+  let preflight
+  try {
+    preflight = await applicationApi.preflightConflicts(appId)
+  } catch (e) {
+    // 预检失败不阻塞部署（和后端 skipped 分支语义一致）
+    console.warn('[preflight] 扫描失败，跳过冲突检查', e)
+    return true
+  }
+  if (!preflight || !preflight.has_conflicts) return true
+
+  conflictList.value = preflight.conflicts.map(c => ({
+    name: c.name,
+    original_code: c.original_code,
+    suggested_code: c.suggested_code,
+  }))
+  conflictDialogVisible.value = true
+  return await new Promise<boolean>(resolve => {
+    conflictResolver = resolve
+  })
+}
+
+async function confirmConflictRenames() {
+  const renames: Record<string, string> = {}
+  for (const c of conflictList.value) {
+    const orig = (c.original_code || '').trim()
+    const nw = (c.suggested_code || '').trim()
+    if (!orig || !nw) continue
+    if (orig === nw) continue
+    renames[orig] = nw
+  }
+  if (Object.keys(renames).length === 0) {
+    ElMessage.warning('每个冲突都必须给出新编码，且不能和原编码相同')
+    return
+  }
+  conflictApplying.value = true
+  try {
+    const appId = existingAppId.value
+    if (!appId) throw new Error('缺少应用 ID')
+    const res = await applicationApi.applyCodeRename(appId, renames)
+    ElMessage.success(`已更新 ${res.changed_count} 处引用`)
+
+    // 同步刷新本地 preview，让右侧面板展示新的 code
+    try {
+      const app = await applicationApi.get(appId)
+      const cpRaw = (app as any).config_preview
+      if (cpRaw) {
+        const cp = typeof cpRaw === 'string' ? JSON.parse(cpRaw) : cpRaw
+        const data = cp?.data || cp
+        if (data?.models) store.preview.models = data.models
+      }
+    } catch { /* ignore, 后续 loadDeployStatus 还会再拉 */ }
+
+    conflictDialogVisible.value = false
+    if (conflictResolver) { conflictResolver(true); conflictResolver = null }
+  } catch (e: any) {
+    ElMessage.error('应用新编码失败：' + (e?.message || ''))
+  } finally {
+    conflictApplying.value = false
+  }
+}
+
+function cancelConflictResolve() {
+  conflictDialogVisible.value = false
+  if (conflictResolver) { conflictResolver(false); conflictResolver = null }
+}
+
 const startGenerateWithEnv = async (envId: number) => {
   generating.value = true
   try {
@@ -3542,17 +3651,30 @@ const startGenerateWithEnv = async (envId: number) => {
     }
 
     let newAppId: number
+    let alreadyDeployed = false
     if (existingAppId.value) {
       const app = await applicationApi.update(existingAppId.value, payload)
       newAppId = (app as any).id
       loadedAppCode.value = (app as any).app_code || appCode
+      alreadyDeployed = !!(app as any).apaas_app_id
     } else {
       const app = await applicationApi.create(payload)
       newAppId = (app as any).id
       existingAppId.value = newAppId
       loadedAppCode.value = (app as any).app_code || appCode
+      alreadyDeployed = !!(app as any).apaas_app_id
     }
     parsedAppCode.value = loadedAppCode.value || appCode
+
+    // 首次部署前做模型 code 冲突预检；已部署的（后续重新部署）跳过
+    if (!alreadyDeployed) {
+      const ok = await runPreflightConflicts(newAppId)
+      if (!ok) {
+        ElMessage.info('构建已取消，请在文档中调整模型编码后重试')
+        return
+      }
+    }
+
     // 不跳转，在本页打开部署面板
     deployAppId.value = newAppId
     deployOpen.value = true
@@ -4185,6 +4307,30 @@ const handleDocVersionUpload = async (file: File, appId: number) => {
                 syncCurrentDocFromPreview('当前解析出的最新文档', data.rendered_doc || '')
               }
             } else if (currentEvent === 'error') {
+              if (data.code === 'doc_not_standard') {
+                const modules = Array.isArray(data.failed_modules) ? data.failed_modules : []
+                const moduleLabels: Record<string, string> = {
+                  app_info: '一、应用信息',
+                  roles: '二、角色列表',
+                  dicts: '三、数据字典',
+                  models: '四、数据模型',
+                  forms: '五、表单配置',
+                  permissions: '六、权限配置',
+                  config_validator: '配置结构校验',
+                }
+                const modulesText = modules.length
+                  ? modules.map(m => moduleLabels[m] || m).join('、')
+                  : '未知模块'
+                const errorLines = Array.isArray(data.errors) ? data.errors.slice(0, 6) : []
+                const err = new Error(
+                  `文档未按模板规范，更新已中止。\n` +
+                  `无法解析的模块：${modulesText}\n` +
+                  (errorLines.length ? `\n问题：\n- ${errorLines.join('\n- ')}\n` : '') +
+                  `\n请按标准模板调整文档后重新上传（更新模式不允许 AI 兜底修复）。`
+                )
+                ;(err as any).code = 'doc_not_standard'
+                throw err
+              }
               throw new Error(data.message || '文档分析失败')
             }
           } catch (parseErr: any) {
@@ -9090,5 +9236,86 @@ watch(conversationId, (id) => {
 .req-hint {
   font-size: 11px;
   color: var(--t-text-muted);
+}
+
+/* ── 模型编码冲突弹窗 ── */
+.conflict-dialog-tip {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--t-text-secondary);
+  margin-bottom: 14px;
+}
+.conflict-dialog-tip code {
+  background: rgba(124, 58, 237, 0.12);
+  color: var(--t-text-primary);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+.conflict-dialog-table {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--t-border-subtle);
+  border-radius: 8px;
+  overflow: hidden;
+  max-height: 420px;
+  overflow-y: auto;
+}
+.conflict-row {
+  display: grid;
+  grid-template-columns: 1fr 1.1fr 1.3fr;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--t-bg-panel);
+  align-items: center;
+}
+.conflict-row.conflict-head {
+  background: var(--t-bg-elevated);
+  font-size: 12px;
+  color: var(--t-text-muted);
+  font-weight: 500;
+}
+.conflict-row .col-name {
+  font-size: 13px;
+  color: var(--t-text-primary);
+  word-break: break-all;
+}
+.conflict-row .col-orig code {
+  background: rgba(220, 38, 38, 0.12);
+  color: #f87171;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  word-break: break-all;
+}
+.conflict-btn {
+  padding: 8px 18px;
+  border-radius: 8px;
+  border: none;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  margin-left: 8px;
+}
+.conflict-btn.cancel {
+  background: transparent;
+  color: var(--t-text-secondary);
+  border: 1px solid var(--t-border-subtle);
+}
+.conflict-btn.cancel:hover:not(:disabled) {
+  background: var(--t-bg-elevated);
+}
+.conflict-btn.confirm {
+  background: linear-gradient(135deg, #7c3aed, #5b21b6);
+  color: #fff;
+}
+.conflict-btn.confirm:hover:not(:disabled) {
+  opacity: 0.92;
+}
+.conflict-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 </style>

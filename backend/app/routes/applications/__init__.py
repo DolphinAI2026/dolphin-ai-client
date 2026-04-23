@@ -1059,3 +1059,5 @@ from . import generate as _generate  # noqa: E402
 router.include_router(_generate.router)
 from . import docs as _docs  # noqa: E402
 router.include_router(_docs.router)
+from . import preflight as _preflight  # noqa: E402
+router.include_router(_preflight.router)

@@ -105,6 +105,30 @@ export const applicationApi = {
     return request.get<any, any>(`/applications/doc-versions-by-conversation/${conversationId}`)
   },
 
+  /** 首次部署前的模型 code 冲突预检（租户级扫描） */
+  preflightConflicts(appId: number) {
+    return request.post<any, {
+      has_conflicts: boolean
+      skipped?: string | null
+      scanned_remote_count: number
+      conflicts: Array<{
+        resource_type: string
+        name: string
+        original_code: string
+        suggested_code: string
+      }>
+    }>(`/applications/${appId}/preflight-conflicts`)
+  },
+
+  /** 应用用户确认的 {old_code: new_code} 到 config_preview（只改模型 code 及引用） */
+  applyCodeRename(appId: number, renames: Record<string, string>) {
+    return request.post<any, {
+      ok: boolean
+      changed_count: number
+      applied_renames: Record<string, string>
+    }>(`/applications/${appId}/apply-code-rename`, { renames })
+  },
+
   /** 编码冲突修复 */
   resolveConflict(appId: number, data: { step: string; model_name: string; old_code: string; new_code: string }) {
     return request.post<any, any>(`/applications/${appId}/resolve-conflict`, data)

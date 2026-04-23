@@ -27,6 +27,28 @@ _FALLBACK_TO_AI = True
 _LARGE_DOC_CHAR_LIMIT = 40000
 
 
+class DocNotStandardError(Exception):
+    """strict 模式下文档未按模板规范，无法纯代码解析。
+
+    用于"更新比对"这类必须保证 parse 结果确定性的场景：
+    两次解析必须一致，因此不允许 LLM 兜底。
+    """
+
+    def __init__(
+        self,
+        failed_modules,
+        errors=None,
+        score: Optional[int] = None,
+        decision: Optional[str] = None,
+    ):
+        self.failed_modules = sorted(list(failed_modules or []))
+        self.errors = list(errors or [])
+        self.score = score
+        self.decision = decision
+        modules_hint = ", ".join(self.failed_modules) or "(未知)"
+        super().__init__(f"文档未按模板规范，以下模块无法纯代码解析：{modules_hint}")
+
+
 _FRONTMATTER_RE = re.compile(r"^---\s*\n.*?\n---\s*\n?", re.DOTALL)
 _SKIP_SECTION_TITLES = ("使用说明", "用户注意事项")
 _STANDARD_SECTION_RE = re.compile(r"^##\s+(?:[一二三四五六七八九十]+[、.]?\s*)?.+")
@@ -114,6 +136,8 @@ async def parse_document(
     text: str,
     llm_cfg: Optional[Dict[str, Any]] = None,
     on_progress: ProgressCallback = None,
+    *,
+    strict: bool = False,
 ) -> Dict[str, Any]:
     """解析上传的 markdown 文档，返回 preview config
 
@@ -121,6 +145,9 @@ async def parse_document(
         text: markdown 原文
         llm_cfg: tenant 级 LLM 配置
         on_progress: 进度回调 async def(msg: str)
+        strict: True 时禁用所有 LLM 兜底（模块修复 / 全量 AI / validator 兜底）。
+            纯代码解析失败即抛 DocNotStandardError。用于"更新比对"等要求 parse
+            结果确定性的场景。
 
     Returns:
         {"type": "preview", "data": {...}, "parse_meta": {...}}
@@ -170,6 +197,15 @@ async def parse_document(
     if result.failed_modules:
         failed_list = ', '.join(result.failed_modules)
         await progress(f"[skeleton] 部分模块需要智能修复：{failed_list}")
+
+    # strict 模式：任何解析失败都直接抛，不走 LLM 兜底
+    if strict and result.failed_modules:
+        raise DocNotStandardError(
+            failed_modules=result.failed_modules,
+            errors=result.errors,
+            score=score,
+            decision=decision,
+        )
 
     # 大文档优先保持单一 canonical config 源头。
     # 若规则解析后仍有失败模块，则直接切到分块 AI 兜底，避免把整篇超长文档再次塞进模块修复 prompt。
@@ -230,6 +266,13 @@ async def parse_document(
             result.errors.extend(warnings)
     except ValueError as e:
         logger.error(f"config 校验失败: {e}")
+        if strict:
+            raise DocNotStandardError(
+                failed_modules=["config_validator"],
+                errors=[str(e)],
+                score=score,
+                decision=decision,
+            ) from e
         if _FALLBACK_TO_AI:
             await progress("配置校验失败，启用智能解析兜底...")
             return await _fallback_ai_parse(
