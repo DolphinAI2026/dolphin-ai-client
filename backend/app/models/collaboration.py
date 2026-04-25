@@ -73,6 +73,7 @@ class GitConnection(Base):
     provider: Mapped[str] = mapped_column(String(20), nullable=False)
     host: Mapped[str] = mapped_column(String(255), nullable=False)
     access_token_enc: Mapped[str] = mapped_column(Text, nullable=False)
+    webhook_secret_enc: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     group_id_or_org: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="connected", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
