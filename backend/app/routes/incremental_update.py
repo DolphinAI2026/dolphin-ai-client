@@ -31,6 +31,8 @@ from app.config_version import (
 )
 from app.models import ConfigSnapshot
 from app.json_utils import loads_if_str
+from app.spec.agent import SpecAgent
+from app.spec.persistence import load_spec, save_spec
 
 router = APIRouter(prefix="/applications", tags=["增量更新"])
 logger = logging.getLogger(__name__)
@@ -74,6 +76,8 @@ class ExecuteRequest(BaseModel):
     skip_processes: bool = False
     # 可选：选择性执行（如果提供，只执行选中的变更）
     selected_changes: Optional[list] = None
+    # 可选：V2 文档原文（如果提供且应用绑了 canonical_spec，走 SpecAgent diff_only 路径）
+    v2_doc_text: Optional[str] = None
 
 
 class ExecuteResponse(BaseModel):
@@ -257,6 +261,7 @@ async def execute_update_stream(
     db: Annotated[AsyncSession, Depends(get_db)],
     token: Optional[str] = Query(None),
     new_config: Optional[str] = Query(None),
+    v2_doc_text: Optional[str] = Query(None),
 ):
     """
     流式执行增量更新（SSE）
@@ -302,6 +307,13 @@ async def execute_update_stream(
     if not app.apaas_app_id:
         raise HTTPException(status_code=400, detail="应用尚未在平台创建")
 
+    # ── γ: SpecAgent diff_only 分支（应用已绑 canonical_spec 且带 V2 文档原文）──
+    spec_resp = await _try_build_spec_agent_stream_response(
+        app=app, tenant_id=tenant_id, v2_doc_text=v2_doc_text, db=db,
+    )
+    if spec_resp is not None:
+        return spec_resp
+
     # 解析新配置
     if not new_config:
         raise HTTPException(status_code=400, detail="缺少 new_config 参数")
@@ -338,6 +350,13 @@ async def execute_update_stream_post(
 
     if not app.apaas_app_id:
         raise HTTPException(status_code=400, detail="应用尚未在平台创建")
+
+    # ── γ: SpecAgent diff_only 分支（应用已绑 canonical_spec 且带 V2 文档原文）──
+    spec_resp = await _try_build_spec_agent_stream_response(
+        app=app, tenant_id=ctx.tenant_id, v2_doc_text=request.v2_doc_text, db=db,
+    )
+    if spec_resp is not None:
+        return spec_resp
 
     client = await _get_platform_client_for_app(app, ctx.user, db)
 
@@ -621,6 +640,14 @@ async def check_conflicts(
 
 # ==================== 辅助函数 ====================
 
+async def _get_tenant_llm_config(db: AsyncSession, tenant_id: int) -> dict | None:
+    from app.harness.llm_resolver import resolve_llm_config
+    resolved = await resolve_llm_config(db, tenant_id, purpose="builder")
+    if not resolved:
+        return None
+    return {"api_key": resolved.api_key, "base_url": resolved.base_url, "model": resolved.model, "max_tokens": resolved.max_tokens}
+
+
 async def _get_platform_client_for_app(
     app: Application,
     user: User,
@@ -728,6 +755,72 @@ async def _try_refresh_env_token(env: PlatformEnv, db: AsyncSession) -> bool:
         logger.warning(f"平台环境 {env.id} token 刷新失败: {e}")
 
     return False
+
+async def _try_build_spec_agent_stream_response(
+    *,
+    app: Application,
+    tenant_id: int,
+    v2_doc_text: Optional[str],
+    db: AsyncSession,
+) -> Optional[EventSourceResponse]:
+    """γ 分支：当 Application 绑了 canonical_spec_id 且请求带了 V2 文档原文时，
+    走 SpecAgent.bootstrap_from_doc(diff_only=True) 路径，返回 SSE。
+
+    返回 None 表示条件不满足，调用方走老 ChangePlan 流程。
+    """
+    if not getattr(app, "canonical_spec_id", None):
+        return None
+    if not v2_doc_text:
+        return None
+
+    spec = await load_spec(db, app.canonical_spec_id, tenant_id=tenant_id)
+    if spec is None:
+        return None
+
+    llm_cfg = await _get_tenant_llm_config(db, tenant_id)
+    if llm_cfg is None:
+        raise HTTPException(status_code=503, detail="LLM 配置不可用")
+
+    agent = SpecAgent(
+        llm_base_url=llm_cfg["base_url"],
+        llm_api_key=llm_cfg["api_key"],
+        llm_model=llm_cfg["model"],
+    )
+
+    async def spec_diff_generator():
+        try:
+            async with AsyncSessionLocal() as session:
+                async for ev in agent.bootstrap_from_doc(
+                    spec,
+                    doc_text=v2_doc_text,
+                    diff_only=True,
+                ):
+                    if ev.kind == "assistant_delta":
+                        yield {"event": "message", "data": json.dumps(
+                            {"type": "message", "data": ev.text}, ensure_ascii=False)}
+                    elif ev.kind == "spec_patch":
+                        # 这是 V2 增量，bump version 表示新修订
+                        ev.spec.version = (ev.spec.version or 1) + 1
+                        await save_spec(session, ev.spec, tenant_id=tenant_id)
+                        yield {"event": "spec_patch", "data": json.dumps(
+                            {"type": "spec_patch", "data": ev.spec.model_dump(mode="json")},
+                            ensure_ascii=False)}
+                    elif ev.kind == "tool_error":
+                        yield {"event": "tool_error", "data": json.dumps(
+                            {"type": "tool_error", "tool": ev.tool_name, "message": ev.message},
+                            ensure_ascii=False)}
+                    elif ev.kind == "final":
+                        pass
+            yield {"event": "done", "data": json.dumps(
+                {"type": "complete", "result": {"success": True, "spec_diff_applied": True}},
+                ensure_ascii=False)}
+        except Exception as e:
+            logger.exception("SpecAgent diff_only 流程失败")
+            yield {"event": "error", "data": json.dumps(
+                {"type": "error", "message": str(e)}, ensure_ascii=False)}
+
+    return EventSourceResponse(spec_diff_generator())
+
 
 def _build_execute_stream_response(
     app_id: int,
