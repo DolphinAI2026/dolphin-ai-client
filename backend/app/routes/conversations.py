@@ -77,6 +77,7 @@ async def create_conversation(
         agent_type=conversation.agent_type,
         status=conversation.status,
         selected_llm_config_id=conversation.selected_llm_config_id,
+        spec_id=conversation.spec_id,
         created_at=conversation.created_at,
         updated_at=conversation.updated_at
     )
@@ -104,6 +105,7 @@ async def list_conversations(
             agent_type=conv.agent_type,
             status=conv.status,
             selected_llm_config_id=conv.selected_llm_config_id,
+        spec_id=conv.spec_id,
             created_at=conv.created_at,
             updated_at=conv.updated_at
         )
@@ -135,6 +137,7 @@ async def get_conversation(
         agent_type=conversation.agent_type,
         status=conversation.status,
         selected_llm_config_id=conversation.selected_llm_config_id,
+        spec_id=conversation.spec_id,
         created_at=conversation.created_at,
         updated_at=conversation.updated_at
     )
@@ -187,6 +190,7 @@ async def update_conversation_model(
         agent_type=conversation.agent_type,
         status=conversation.status,
         selected_llm_config_id=conversation.selected_llm_config_id,
+        spec_id=conversation.spec_id,
         created_at=conversation.created_at,
         updated_at=conversation.updated_at,
     )
@@ -228,6 +232,7 @@ async def update_agent_type(
         agent_type=conversation.agent_type,
         status=conversation.status,
         selected_llm_config_id=conversation.selected_llm_config_id,
+        spec_id=conversation.spec_id,
         created_at=conversation.created_at,
         updated_at=conversation.updated_at,
     )
@@ -337,6 +342,7 @@ async def list_conversations_with_apps(
             agent_type=conv.agent_type,
             status=conv.status,
             selected_llm_config_id=conv.selected_llm_config_id,
+        spec_id=conv.spec_id,
             created_at=str(conv.created_at),
             updated_at=str(conv.updated_at),
             app_id=app.id if app else None,

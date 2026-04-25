@@ -67,6 +67,7 @@ class ConversationResponse(BaseModel):
     agent_type: str
     status: str
     selected_llm_config_id: Optional[int] = None
+    spec_id: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 

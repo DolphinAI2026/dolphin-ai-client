@@ -65,7 +65,7 @@
         >↗</button>
       </template>
     </TopBar>
-    <div v-show="!SHOW_PLATFORM_CONFIG || activeView === 'builder'" class="builder-chat-phase-strip">
+    <div v-show="(!SHOW_PLATFORM_CONFIG || activeView === 'builder') && !useSpecMode" class="builder-chat-phase-strip">
       <div class="builder-chat-agent">
         <span class="builder-chat-agent-dot"></span>
         <span>搭建智能体</span>
@@ -1877,6 +1877,13 @@ const syncBuilderModelFromConversation = async (cid: number) => {
     // Sync agent_type for requirements mode detection
     if (conversation.agent_type) {
       currentAgent.value = conversation.agent_type
+    }
+    // 加载关联的 SPEC（如果对话已绑定 spec_id）
+    if (conversation.spec_id) {
+      try { await specStore.load(conversation.spec_id) }
+      catch (e) { console.warn('加载 SPEC 失败:', e) }
+    } else {
+      specStore.reset()
     }
 
     const convIdx = conversationList.value.findIndex(item => item.id === cid)

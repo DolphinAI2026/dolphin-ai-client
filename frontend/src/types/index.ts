@@ -49,6 +49,7 @@ export interface Conversation {
   agent_type: 'builder' | 'assistant' | 'developer' | 'coding' | 'requirements'
   status: string
   selected_llm_config_id?: number | null
+  spec_id?: string | null
   created_at: string
   updated_at: string
 }
