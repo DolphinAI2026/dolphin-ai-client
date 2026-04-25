@@ -17,6 +17,8 @@ from app.llm_client import LLMClient
 from app.field_types import build_prompt_field_types_compact
 from app.context_compact import ContextCompactor
 from app.json_utils import loads_if_str
+from app.spec.agent import SpecAgent
+from app.spec.persistence import load_spec, save_spec
 
 
 async def _get_tenant_llm_config(db: AsyncSession, tenant_id: int) -> dict | None:
@@ -569,6 +571,57 @@ async def send_message(
         conversation.current_config,
         getattr(data, 'current_config', None)
     )
+
+    # ── SpecAgent branch: if conversation has a linked spec, drive the new state machine ──
+    if conversation.spec_id:
+        spec = await load_spec(db, conversation.spec_id)
+        if spec is None:
+            # Spec was deleted but FK lingers — fall back to legacy path
+            conversation.spec_id = None
+            await db.commit()
+        else:
+            llm_cfg = await _get_conversation_llm_config(db, conversation)
+            if llm_cfg is None:
+                raise HTTPException(status_code=400, detail="未配置可用的 LLM 模型，请在环境管理 → 模型配置中添加并启用模型")
+            agent = SpecAgent(
+                llm_base_url=llm_cfg["base_url"],
+                llm_api_key=llm_cfg["api_key"],
+                llm_model=llm_cfg["model"],
+            )
+            # User message has already been persisted above (lines 544-550).
+            # Build history excluding that latest user message — agent.run takes it
+            # as a separate argument.
+            history = [
+                {"role": m.role, "content": m.content}
+                for m in messages[:-1]
+            ]
+
+            async def spec_event_generator():
+                last_assistant_text = ""
+                try:
+                    async for ev in agent.run(spec, user_message=data.message, history=history):
+                        if ev.kind == "assistant_delta":
+                            last_assistant_text += ev.text or ""
+                            yield {"event": "message", "data": json.dumps(
+                                {"type": "message", "data": ev.text}, ensure_ascii=False)}
+                        elif ev.kind == "spec_patch":
+                            await save_spec(db, ev.spec, tenant_id=ctx.tenant_id)
+                            yield {"event": "spec_patch", "data": json.dumps(
+                                {"type": "spec_patch", "data": ev.spec.model_dump(mode="json")},
+                                ensure_ascii=False)}
+                        elif ev.kind == "tool_error":
+                            yield {"event": "tool_error", "data": json.dumps(
+                                {"type": "tool_error", "tool": ev.tool_name, "message": ev.message},
+                                ensure_ascii=False)}
+                        elif ev.kind == "final":
+                            db.add(Message(conversation_id=conversation.id, role="assistant",
+                                           content=last_assistant_text))
+                            await db.commit()
+                    yield {"event": "done", "data": json.dumps({"type": "done", "data": "completed"})}
+                except Exception as e:
+                    yield {"event": "error", "data": json.dumps({"type": "error", "data": str(e)})}
+
+            return EventSourceResponse(spec_event_generator())
 
     # 根据 phase 选 system prompt
     system_prompt = _build_phase_prompt(conversation.agent_type, effective_config)
