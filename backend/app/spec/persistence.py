@@ -30,11 +30,13 @@ def empty_spec(*, created_by: int, application_id: Optional[int] = None) -> Spec
     return s
 
 
-def to_orm(spec: Spec, *, tenant_id: int) -> SpecORM:
+def to_orm(spec: Spec, *, tenant_id: int, kind: str = "draft", commit_sha: Optional[str] = None) -> SpecORM:
     return SpecORM(
         id=spec.id,
         application_id=spec.application_id,
         version=spec.version,
+        kind=kind,
+        commit_sha=commit_sha,
         parent_spec_id=spec.parent_spec_id,
         payload=spec.model_dump(mode="json"),
         phase=spec.phase.value,

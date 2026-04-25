@@ -14,6 +14,8 @@ class Spec(Base):
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     application_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("applications.id"), nullable=True)
     version: Mapped[int] = mapped_column(Integer, default=1)
+    kind: Mapped[str] = mapped_column(String(20), default="draft", nullable=False)  # 'canonical' | 'draft'
+    commit_sha: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     parent_spec_id: Mapped[Optional[str]] = mapped_column(String(40), ForeignKey("specs.id"), nullable=True)
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
     phase: Mapped[str] = mapped_column(String(20), default="gathering")
@@ -22,4 +24,4 @@ class Spec(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
     created_by: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"))
-    tenant_id: Mapped[int] = mapped_column(Integer, default=1)
+    tenant_id: Mapped[int] = mapped_column(Integer, nullable=False)
