@@ -75,13 +75,9 @@
             <div class="coding-landing-hero" :style="codingLandingVars">
               <div class="coding-landing-bg"></div>
 
-              <div class="brand-mark">
-                <div class="brand-glyph">{}</div>
-                <div class="brand-eyebrow">APAAS CODING · VIBE IDE</div>
-              </div>
-
               <section class="brand-copy">
                 <h1 class="brand-title">
+                  <span class="brand-glyph-inline">{}</span>
                   <span>AI 帮你写代码</span>
                 </h1>
                 <p class="brand-sub">描述组件、页面或接口，AI 帮你打开 Coding 工作区。</p>
@@ -2292,8 +2288,8 @@ watch(() => route.path, () => {
   gap: 8px;
   justify-content: flex-start;
   width: 100%;
-  margin: 24px 0 12px;
-  padding-bottom: 4px;
+  margin: 12px 0 8px;
+  padding-bottom: 2px;
   scrollbar-width: none;
   flex-shrink: 0;
 }
@@ -2335,8 +2331,8 @@ watch(() => route.path, () => {
 .scene-suggestion-grid {
   width: min(100%, 1280px);
   display: flex;
-  gap: 10px;
-  margin: 0 0 24px;
+  gap: 8px;
+  margin: 0 0 16px;
   padding-bottom: 2px;
   overflow-x: auto;
   overflow-y: hidden;
@@ -2350,39 +2346,34 @@ watch(() => route.path, () => {
 
 .scene-suggestion-card {
   flex: 0 0 auto;
-  min-height: 40px;
+  min-height: 32px;
   max-width: 360px;
-  padding: 0 18px;
+  padding: 6px 14px;
   border-radius: 999px;
-  border: 1px solid rgba(227, 232, 246, 0.72);
-  background: rgba(255, 255, 255, 0.78);
-  color: #73819d;
+  border: 1px solid var(--t-border-subtle);
+  background: var(--t-bg-input);
+  color: var(--t-text-secondary);
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 500;
   line-height: 1.35;
   white-space: nowrap;
   text-align: left;
   cursor: pointer;
-  box-shadow:
-    0 6px 16px rgba(107, 118, 172, 0.04),
-    inset 0 1px 0 rgba(255, 255, 255, 0.82);
-  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+  transition: transform 0.2s ease, border-color 0.2s ease, color 0.2s ease, background 0.2s ease;
 }
 
 .scene-suggestion-card:hover {
   transform: translateY(-1px);
-  border-color: rgba(112, 126, 238, 0.16);
-  color: #55637f;
-  box-shadow:
-    0 10px 20px rgba(99, 102, 241, 0.06),
-    inset 0 1px 0 rgba(255, 255, 255, 0.88);
+  border-color: var(--t-brand);
+  color: var(--t-brand);
+  background: var(--t-brand-subtle);
 }
 
 /* ============ Workspace Showcase ============ */
 .workspace-showcase {
   width: min(100%, 1280px);
-  margin-top: 8px;
-  padding-top: 24px;
+  margin-top: 4px;
+  padding-top: 16px;
   border-top: 1px solid var(--t-border-subtle);
   flex-shrink: 0;
 }
@@ -2437,13 +2428,14 @@ watch(() => route.path, () => {
   border: 1px solid var(--t-border-subtle);
   border-radius: 12px;
   background: var(--t-bg-panel);
-  padding: 14px;
+  padding: 12px 14px;
   text-align: left;
   cursor: pointer;
   transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
-  min-height: 96px;
+  min-height: 0;
   display: flex;
   flex-direction: column;
+  gap: 10px;
 }
 
 .workspace-card:hover {
@@ -2521,9 +2513,9 @@ watch(() => route.path, () => {
 }
 
 .workspace-card-footer {
-  margin-top: auto;
-  padding-top: 10px;
-  border-top: 1px solid var(--t-border-subtle);
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
   display: flex;
   align-items: center;
   justify-content: flex-end;
@@ -2536,22 +2528,22 @@ watch(() => route.path, () => {
 }
 
 .workspace-card-action {
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   display: flex;
   align-items: center;
   justify-content: center;
   border: 1px solid var(--t-border-subtle);
   background: var(--t-bg-input);
   color: var(--t-text-secondary);
-  border-radius: 10px;
+  border-radius: 8px;
   cursor: pointer;
   transition: all 0.2s ease;
 }
 
 .workspace-card-action-icon {
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
   display: block;
 }
 
@@ -3376,8 +3368,8 @@ watch(() => route.path, () => {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 14px;
-  padding: 14px 16px 6px;
+  gap: 12px;
+  padding: 8px 16px 4px;
   flex-shrink: 0;
 }
 
@@ -3424,15 +3416,30 @@ watch(() => route.path, () => {
 
 .brand-title {
   margin: 0;
-  font-size: 28px;
+  font-size: 22px;
   line-height: 1.2;
   font-weight: 650;
   letter-spacing: -0.005em;
-  color: var(--t-text-primary);
+  color: var(--landing-mode-color);
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  justify-content: center;
 }
 
-.brand-title span {
-  color: var(--landing-mode-color);
+.brand-glyph-inline {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: inline-grid;
+  place-items: center;
+  background: linear-gradient(135deg, var(--landing-mode-color), var(--landing-mode-ink));
+  color: #fff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  flex-shrink: 0;
 }
 
 .brand-sub {
