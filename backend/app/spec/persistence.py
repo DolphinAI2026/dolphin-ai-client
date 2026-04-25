@@ -11,6 +11,12 @@ from app.spec.schema import Spec, Completeness, Phase, derive_completeness
 from app.models.spec import Spec as SpecORM
 
 
+class OptimisticLockError(Exception):
+    """触发场景：save_spec 时发现 DB 中的 version 比传入的 spec.version 大或不一致。
+    意味着有并发会话已先一步保存。调用方应重新 load_spec → 合并 → 再 save。"""
+    pass
+
+
 def new_spec_id() -> str:
     return f"spec_{uuid.uuid4().hex[:12]}"
 
@@ -141,20 +147,31 @@ def bootstrap_from_legacy_config(
 
 
 async def save_spec(db: AsyncSession, spec: Spec, *, tenant_id: int) -> SpecORM:
-    """Upsert Spec by id."""
+    """Upsert Spec by id with optimistic locking.
+
+    新建（DB 无此 id）：直接插入，version=spec.version 或 1。
+    已存在：DB row 的 version 必须等于 spec.version（即"我看到的版本"），
+            否则 raise OptimisticLockError。成功时 row.version 自增 1。
+    """
     existing = await db.execute(select(SpecORM).where(SpecORM.id == spec.id))
     row = existing.scalar_one_or_none()
     if row is None:
         row = to_orm(spec, tenant_id=tenant_id)
+        if not row.version:
+            row.version = 1
         db.add(row)
     else:
+        if row.version != spec.version:
+            raise OptimisticLockError(
+                f"Spec {spec.id} version mismatch: db={row.version}, incoming={spec.version}"
+            )
         row.payload = spec.model_dump(mode="json")
         row.phase = spec.phase.value
         row.completeness_confirmed = spec.completeness.confirmed
         row.completeness_total = spec.completeness.total
         row.application_id = spec.application_id
-        row.version = spec.version
         row.parent_spec_id = spec.parent_spec_id
         row.updated_at = spec.updated_at
+        row.version = row.version + 1  # CAS 自增
     await db.commit()
     return row
