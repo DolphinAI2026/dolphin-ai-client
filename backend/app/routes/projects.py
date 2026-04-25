@@ -22,6 +22,7 @@ from app.models.tenant import UserTenant
 from app.project_access import (
     ProjectAccess,
     get_project_access,
+    normalize_project_role,
     project_role_at_least,
     project_role_permissions,
     require_project_access,
@@ -102,11 +103,11 @@ class ProjectConnectRequest(BaseModel):
 class AddMemberRequest(BaseModel):
     username: Optional[str] = None
     user_id: Optional[int] = None
-    role: str = "member"
+    role: str = "contributor"
 
 
 class UpdateMemberRoleRequest(BaseModel):
-    role: str  # "admin" | "member"
+    role: str  # "maintainer" | "contributor" | "viewer"（旧 "admin"/"member" 也兼容）
 
 
 # ============================================================
@@ -447,9 +448,12 @@ async def add_member(
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="该用户已是项目成员")
 
-    role = req.role if req.role in ("admin", "member") else "member"
-    if role == "admin" and access.role != "owner":
-        raise HTTPException(status_code=403, detail="仅项目所有者可添加管理员")
+    requested = normalize_project_role(req.role)
+    if requested == "owner":
+        raise HTTPException(status_code=400, detail="不能直接邀请为 owner，仅项目创建者拥有该角色")
+    if requested == "maintainer" and access.role != "owner":
+        raise HTTPException(status_code=403, detail="仅项目所有者可添加管理员（maintainer）")
+    role = requested
 
     member = ProjectMember(
         project_id=project_id,
@@ -497,8 +501,9 @@ async def remove_member(
         raise HTTPException(status_code=400, detail="无法移除项目所有者")
     if member.user_id == ctx.user.id:
         raise HTTPException(status_code=400, detail="请勿通过项目设置移除自己")
-    if member.role == "admin" and access.role != "owner":
-        raise HTTPException(status_code=403, detail="仅项目所有者可移除管理员")
+    member_normalized = normalize_project_role(member.role)
+    if member_normalized == "maintainer" and access.role != "owner":
+        raise HTTPException(status_code=403, detail="仅项目所有者可移除管理员（maintainer）")
 
     await db.delete(member)
     await db.commit()
@@ -534,10 +539,12 @@ async def update_member_role(
     if member.role == "owner":
         raise HTTPException(status_code=400, detail="无法修改所有者角色")
 
-    if req.role not in ("admin", "member"):
-        raise HTTPException(status_code=400, detail="角色只能是 admin 或 member")
-
-    member.role = req.role
+    new_role = normalize_project_role(req.role)
+    if new_role == "owner":
+        raise HTTPException(status_code=400, detail="不能改成 owner（owner 由项目创建者持有）")
+    if new_role not in ("maintainer", "contributor", "viewer"):
+        raise HTTPException(status_code=400, detail="角色只能是 maintainer / contributor / viewer")
+    member.role = new_role
     await db.commit()
     await db.refresh(member)
     return {
