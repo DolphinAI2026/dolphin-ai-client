@@ -613,11 +613,11 @@ const userInput = ref('')
 const isCreating = ref(false)
 const creatingStatus = ref('')
 
-// 参考首页 Landing 的 code 模式色板
+// 参考设计稿：Code 模式专属色板（绿，区分 CoWork 紫蓝、Chat 青）
 const codingLandingVars: Record<string, string> = {
-  '--landing-mode-color': 'oklch(67% 0.14 255)',
-  '--landing-mode-soft': 'oklch(95% 0.03 255)',
-  '--landing-mode-ink': 'oklch(50% 0.17 255)',
+  '--landing-mode-color': 'oklch(62% 0.14 155)',
+  '--landing-mode-soft': 'oklch(95% 0.04 155)',
+  '--landing-mode-ink': 'oklch(42% 0.14 155)',
 }
 
 // ── IDE iframe 管理（已抽成 composable）──
