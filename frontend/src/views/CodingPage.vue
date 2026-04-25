@@ -83,9 +83,8 @@
               <section class="brand-copy">
                 <h1 class="brand-title">
                   <span>AI 帮你写代码</span>
-                  <em>把需求直接变成可运行的组件和页面</em>
                 </h1>
-                <p class="brand-sub">面向自开发扩展：描述组件、页面或接口，AI 自动创建工作区，并打开睿鲸 AI Coding 继续迭代。</p>
+                <p class="brand-sub">描述组件、页面或接口，AI 帮你打开 Coding 工作区。</p>
               </section>
 
               <section class="composer">
@@ -2489,6 +2488,11 @@ watch(() => route.path, () => {
   font-size: 12px;
   font-weight: 650;
   line-height: 1.35;
+  /* 防御 display_name 偶尔是 chat 长片段，单行省略 */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
 }
 
 .workspace-card-meta-row {
@@ -3383,8 +3387,8 @@ watch(() => route.path, () => {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 18px;
-  padding: 20px 16px 8px;
+  gap: 14px;
+  padding: 14px 16px 6px;
   flex-shrink: 0;
 }
 
@@ -3435,24 +3439,17 @@ watch(() => route.path, () => {
   line-height: 1.2;
   font-weight: 650;
   letter-spacing: -0.005em;
-  color: #111827;
+  color: var(--t-text-primary);
 }
 
 .brand-title span {
   color: var(--landing-mode-color);
 }
 
-.brand-title em {
-  margin-left: 10px;
-  display: inline-block;
-  font-style: normal;
-  color: #111827;
-}
-
 .brand-sub {
   margin: 8px auto 0;
   max-width: 520px;
-  color: #667085;
+  color: var(--t-text-secondary);
   font-size: 13px;
   line-height: 1.55;
 }

@@ -54,7 +54,17 @@ export function useCodingWorkspace() {
 
   function workspaceDisplayName(ws: WorkspaceInfo | null | undefined) {
     if (!ws) return ''
-    return ws.display_name?.trim() || ws.project_name
+    const raw = ws.display_name?.trim() || ''
+    // 防御 display_name 是 chat 消息片段（"[" 开头、"项。"、"-"、长篇 markdown 等）
+    const looksLikeChatFragment =
+      /^[\[【（]/.test(raw) ||
+      /^项[。.]/.test(raw) ||
+      /^[-*]\s/.test(raw) ||
+      raw.length > 30
+    if (!raw || looksLikeChatFragment) {
+      return ws.project_name || `工作区 ${ws.id}`
+    }
+    return raw
   }
 
   function workspaceCodeName(ws: WorkspaceInfo | null | undefined) {
