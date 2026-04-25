@@ -49,6 +49,40 @@ class ItemAction(BaseModel):
     payload: dict = {}
 
 
+class UpgradeFromLegacyRequest(BaseModel):
+    application_id: int
+
+
+@router.post("/upgrade-from-legacy")
+async def upgrade_from_legacy_config(
+    body: UpgradeFromLegacyRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Reverse-engineer a Spec from an existing Application.config and link it."""
+    from app.models import Application
+    from app.spec.persistence import bootstrap_from_legacy_config
+
+    app = await db.get(Application, body.application_id)
+    if not app or app.tenant_id != ctx.tenant_id:
+        raise HTTPException(404, detail="应用不存在")
+    if app.canonical_spec_id:
+        raise HTTPException(409, detail="应用已升级，请直接编辑")
+    if not app.config:
+        raise HTTPException(400, detail="应用无 config 可反推")
+
+    legacy = app.config if isinstance(app.config, dict) else {}
+    spec = bootstrap_from_legacy_config(
+        application_id=app.id,
+        legacy_config=legacy,
+        created_by=ctx.user.id,
+    )
+    await save_spec(db, spec, tenant_id=ctx.tenant_id)
+    app.canonical_spec_id = spec.id
+    await db.commit()
+    return {"id": spec.id, "phase": spec.phase.value}
+
+
 @router.get("/{spec_id}")
 async def get_spec(
     spec_id: str,

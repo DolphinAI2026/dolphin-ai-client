@@ -60,6 +60,84 @@ async def load_spec(db: AsyncSession, spec_id: str, *, tenant_id: int | None = N
     return from_orm(row) if row else None
 
 
+def bootstrap_from_legacy_config(
+    *, application_id: int, legacy_config: dict, created_by: int
+) -> Spec:
+    """Reverse-engineer a Spec from legacy Application.config (best effort).
+
+    Used to upgrade old apps to SPEC mode. The output Spec has all items
+    confirmed=false so the user can review before transitioning to ready.
+    """
+    from app.spec.schema import (
+        Goal,
+        Role,
+        ObjectSpec,
+        FieldSpec,
+        DictSpec,
+        DictOption,
+        PermissionSpec,
+        PermissionRule,
+    )
+
+    data = legacy_config.get("data", legacy_config)
+    spec = empty_spec(created_by=created_by, application_id=application_id)
+    spec.phase = Phase.DRAFTING
+
+    if data.get("appName"):
+        spec.goal = Goal(
+            title=data["appName"],
+            summary="(从已有应用反推)",
+            business_problem="(请补充)",
+            confirmed=False,
+        )
+
+    for r in data.get("roles", []):
+        spec.roles.append(Role(
+            code=r["code"],
+            name=r["name"],
+            scope=r.get("scope", "ALL"),
+            confirmed=False,
+        ))
+
+    for d in data.get("dicts", []):
+        spec.dicts.append(DictSpec(
+            code=d["code"],
+            name=d["name"],
+            options=[DictOption(**o) for o in d.get("options", [])],
+            confirmed=False,
+        ))
+
+    for m in data.get("models", []):
+        fields = []
+        for f in m.get("fields", []):
+            fields.append(FieldSpec(
+                code=f["code"],
+                name=f["name"],
+                type=f.get("type", "单行输入"),
+                required=f.get("required", False),
+                dict_code=f.get("dict"),
+                ref_model=f.get("ref", {}).get("model") if f.get("ref") else None,
+                ref_field=f.get("ref", {}).get("field") if f.get("ref") else None,
+                confirmed=False,
+            ))
+        spec.objects.append(ObjectSpec(
+            code=m["code"],
+            name=m["name"],
+            fields=fields,
+            confirmed=False,
+        ))
+
+    for p in data.get("permissions", []):
+        spec.permissions.append(PermissionSpec(
+            object_code=p["form"],
+            rules=[PermissionRule(**r) for r in p.get("rules", [])],
+            confirmed=False,
+        ))
+
+    spec.completeness = derive_completeness(spec)
+    return spec
+
+
 async def save_spec(db: AsyncSession, spec: Spec, *, tenant_id: int) -> SpecORM:
     """Upsert Spec by id."""
     existing = await db.execute(select(SpecORM).where(SpecORM.id == spec.id))
