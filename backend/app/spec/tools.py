@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from app.spec.schema import (
     Spec, Phase, Goal, Role, FieldSpec, ObjectSpec,
@@ -232,7 +232,7 @@ def _short_id(prefix: str) -> str:
 
 
 def _now() -> datetime:
-    return datetime.utcnow()
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def _refresh(spec: Spec) -> Spec:

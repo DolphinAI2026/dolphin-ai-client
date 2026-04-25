@@ -1,7 +1,7 @@
 """Helpers to convert between Pydantic Spec and ORM Spec."""
 
 from __future__ import annotations
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 from typing import Optional
 from sqlalchemy import select
@@ -16,7 +16,7 @@ def new_spec_id() -> str:
 
 
 def empty_spec(*, created_by: int, application_id: Optional[int] = None) -> Spec:
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     s = Spec(
         id=new_spec_id(),
         application_id=application_id,
@@ -51,8 +51,11 @@ def from_orm(row: SpecORM) -> Spec:
     return Spec.model_validate(row.payload)
 
 
-async def load_spec(db: AsyncSession, spec_id: str) -> Optional[Spec]:
-    result = await db.execute(select(SpecORM).where(SpecORM.id == spec_id))
+async def load_spec(db: AsyncSession, spec_id: str, *, tenant_id: int | None = None) -> Optional[Spec]:
+    stmt = select(SpecORM).where(SpecORM.id == spec_id)
+    if tenant_id is not None:
+        stmt = stmt.where(SpecORM.tenant_id == tenant_id)
+    result = await db.execute(stmt)
     row = result.scalar_one_or_none()
     return from_orm(row) if row else None
 

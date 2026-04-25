@@ -55,7 +55,7 @@ async def get_spec(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    spec = await load_spec(db, spec_id)
+    spec = await load_spec(db, spec_id, tenant_id=ctx.tenant_id)
     if spec is None:
         raise HTTPException(status_code=404, detail=f"spec {spec_id} not found")
     return spec.model_dump(mode="json")
@@ -68,7 +68,7 @@ async def transition_phase(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    spec = await load_spec(db, spec_id)
+    spec = await load_spec(db, spec_id, tenant_id=ctx.tenant_id)
     if spec is None:
         raise HTTPException(status_code=404, detail=f"spec {spec_id} not found")
     try:
@@ -90,7 +90,7 @@ async def update_item(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """Map (item_type, action) → tool name and dispatch."""
-    spec = await load_spec(db, spec_id)
+    spec = await load_spec(db, spec_id, tenant_id=ctx.tenant_id)
     if spec is None:
         raise HTTPException(status_code=404, detail=f"spec {spec_id} not found")
 

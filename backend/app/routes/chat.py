@@ -574,7 +574,7 @@ async def send_message(
 
     # ── SpecAgent branch: if conversation has a linked spec, drive the new state machine ──
     if conversation.spec_id:
-        spec = await load_spec(db, conversation.spec_id)
+        spec = await load_spec(db, conversation.spec_id, tenant_id=ctx.tenant_id)
         if spec is None:
             # Spec was deleted but FK lingers — fall back to legacy path
             conversation.spec_id = None
@@ -614,8 +614,9 @@ async def send_message(
                                 {"type": "tool_error", "tool": ev.tool_name, "message": ev.message},
                                 ensure_ascii=False)}
                         elif ev.kind == "final":
+                            final_text = last_assistant_text.strip() or "[已更新 SPEC]"
                             db.add(Message(conversation_id=conversation.id, role="assistant",
-                                           content=last_assistant_text))
+                                           content=final_text))
                             await db.commit()
                     yield {"event": "done", "data": json.dumps({"type": "done", "data": "completed"})}
                 except Exception as e:
