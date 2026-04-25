@@ -160,3 +160,11 @@ class GitLabProvider:
         )
         data = resp.json()
         return base64.b64decode(data["content"]).decode("utf-8")
+
+    async def revert_commit(self, *, repo_full_path: str, branch: str, commit_sha: str) -> None:
+        """GitLab 原生 revert API：POST /projects/{id}/repository/commits/{sha}/revert"""
+        await self._request(
+            "POST",
+            f"/projects/{quote(repo_full_path, safe='')}/repository/commits/{commit_sha}/revert",
+            json={"branch": branch},
+        )

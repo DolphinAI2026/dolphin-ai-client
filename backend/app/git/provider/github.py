@@ -186,6 +186,24 @@ class GitHubProvider:
         data = resp.json()
         return base64.b64decode(data["content"]).decode("utf-8")
 
+    async def revert_commit(self, *, repo_full_path: str, branch: str, commit_sha: str) -> None:
+        """GitHub 没有原生 revert API；v1 简化为强推 branch ref 到 commit_sha 的 parent。
+
+        ⚠ 需要 webhook 用户对 branch 有 admin 权限（绕过 branch protection），
+        生产更安全的方案是改用 PR revert 工作流（留 v2）。
+        """
+        owner, repo = _split_repo(repo_full_path)
+        commit_resp = await self._request("GET", f"/repos/{owner}/{repo}/commits/{commit_sha}")
+        parents = commit_resp.json().get("parents", [])
+        if not parents:
+            raise RuntimeError(f"commit {commit_sha} has no parent; cannot revert")
+        parent_sha = parents[0]["sha"]
+        await self._request(
+            "PATCH",
+            f"/repos/{owner}/{repo}/git/refs/heads/{branch}",
+            json={"sha": parent_sha, "force": True},
+        )
+
 
 def _split_repo(repo_full_path: str) -> tuple[str, str]:
     parts = repo_full_path.split("/", 1)
