@@ -186,6 +186,14 @@ def _builtin_llm_specs() -> list[dict]:
         model=settings.coding_model_opus_model,
         purpose="coding",
     )
+    _append(
+        config_name="内置通用模型 (Dolphin gpt-5.5)",
+        provider="dolphin",
+        base_url=settings.dolphin_base_url,
+        api_key=settings.dolphin_api_key,
+        model=settings.dolphin_model,
+        purpose="all",
+    )
 
     return specs
 

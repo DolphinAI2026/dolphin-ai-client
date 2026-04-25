@@ -26,6 +26,10 @@ PROVIDER_PRESETS = {
     "moonshot": {"base_url": "https://api.moonshot.cn/v1", "models": ["moonshot-v1-128k", "moonshot-v1-32k"]},
     "openai": {"base_url": "https://api.openai.com/v1", "models": ["gpt-4o", "gpt-4o-mini"]},
     "anthropic": {"base_url": "https://api.anthropic.com/v1", "models": ["claude-sonnet-4-20250514"]},
+    "dolphin": {
+        "base_url": "http://ai-agent.dfy.definesys.cn/omnigate/0",
+        "models": ["gpt-5.5", "gpt-5.4", "gpt-5.3-codex", "claude-sonnet-4-6", "claude-opus-4-6"],
+    },
 }
 
 
@@ -288,8 +292,15 @@ async def test_llm_config(
 
     try:
         async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
-            is_codex = config.provider == "codex" or "codex" in (config.model or "").lower()
-            is_anthropic_compat = "/anthropic" in (config.base_url or "")
+            # Dolphin omnigate 是统一 OpenAI 兼容网关，所有模型都走 chat/completions
+            is_unified_gateway = "/omnigate" in (config.base_url or "").lower()
+            is_codex = (
+                not is_unified_gateway
+                and (config.provider == "codex" or "codex" in (config.model or "").lower())
+            )
+            is_anthropic_compat = (
+                not is_unified_gateway and "/anthropic" in (config.base_url or "")
+            )
 
             if is_codex:
                 resp = await client.post(
