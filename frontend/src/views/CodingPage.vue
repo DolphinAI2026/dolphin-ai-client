@@ -252,10 +252,6 @@
                     <span class="workspace-card-type">{{ workspaceTypeLabel(ws.project_type) }}</span>
                   </div>
                   <div class="workspace-card-footer">
-                    <div class="workspace-card-meta">
-                      <span>文件类型：{{ workspaceTypeLabel(ws.project_type) }}</span>
-                      <span>包名：{{ workspaceCodeName(ws) || ws.project_name }}</span>
-                    </div>
                     <div class="workspace-card-actions">
                       <button
                         :class="['workspace-card-action', 'workspace-card-action-primary', { 'is-loading': openingWsId === ws.id }]"
@@ -2387,7 +2383,7 @@ watch(() => route.path, () => {
   width: min(100%, 1280px);
   margin-top: 8px;
   padding-top: 24px;
-  border-top: 1px solid #eef0f4;
+  border-top: 1px solid var(--t-border-subtle);
   flex-shrink: 0;
 }
 
@@ -2439,21 +2435,21 @@ watch(() => route.path, () => {
 
 .workspace-card {
   border: 1px solid var(--t-border-subtle);
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.9);
-  padding: 13px;
+  border-radius: 12px;
+  background: var(--t-bg-panel);
+  padding: 14px;
   text-align: left;
   cursor: pointer;
   transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
-  min-height: 134px;
+  min-height: 96px;
   display: flex;
   flex-direction: column;
 }
 
 .workspace-card:hover {
   transform: translateY(-1px);
-  border-color: var(--t-brand-glow);
-  box-shadow: 0 8px 18px rgba(99, 102, 241, 0.1);
+  border-color: var(--t-brand);
+  box-shadow: var(--t-shadow-md);
 }
 
 .workspace-catalog-grid {
@@ -2505,9 +2501,10 @@ watch(() => route.path, () => {
   height: 20px;
   padding: 0 7px;
   border-radius: 10px;
-  background: rgba(241, 243, 252, 0.95);
-  color: #95a2bf;
+  background: var(--t-bg-input);
+  color: var(--t-text-muted);
   font-size: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
 .workspace-card-type {
@@ -2525,21 +2522,12 @@ watch(() => route.path, () => {
 
 .workspace-card-footer {
   margin-top: auto;
-  padding-top: 8px;
-  border-top: 1px solid rgba(229, 233, 247, 0.9);
+  padding-top: 10px;
+  border-top: 1px solid var(--t-border-subtle);
   display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
+  align-items: center;
+  justify-content: flex-end;
   gap: 12px;
-}
-
-.workspace-card-meta {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  color: var(--t-text-muted);
-  font-size: 10px;
-  line-height: 1.35;
 }
 
 .workspace-card-actions {
@@ -2554,7 +2542,7 @@ watch(() => route.path, () => {
   align-items: center;
   justify-content: center;
   border: 1px solid var(--t-border-subtle);
-  background: #fff;
+  background: var(--t-bg-input);
   color: var(--t-text-secondary);
   border-radius: 10px;
   cursor: pointer;
@@ -2569,7 +2557,8 @@ watch(() => route.path, () => {
 
 .workspace-card-action-primary {
   color: var(--t-brand);
-  border-color: rgba(99, 102, 241, 0.2);
+  border-color: var(--t-brand-subtle);
+  background: var(--t-brand-subtle);
 }
 
 .workspace-card-action:hover {
