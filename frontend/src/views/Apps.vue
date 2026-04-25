@@ -129,6 +129,15 @@
                 <el-icon><Promotion /></el-icon>
               </button>
               <button
+                v-if="canManageMembers(app)"
+                class="apps-icon-btn"
+                type="button"
+                :title="`管理 ${app.app_name} 的成员`"
+                @click="openMembersDialog(app)"
+              >
+                <el-icon><UserFilled /></el-icon>
+              </button>
+              <button
                 v-if="canDeleteApp(app)"
                 class="apps-icon-btn danger"
                 type="button"
@@ -137,7 +146,7 @@
               >
                 <el-icon><Delete /></el-icon>
               </button>
-              <button v-if="!canOpenPlatform(app) && !canDeployApp(app) && !canDeleteApp(app)" class="apps-icon-btn muted" type="button" title="更多">
+              <button v-if="!canOpenPlatform(app) && !canDeployApp(app) && !canManageMembers(app) && !canDeleteApp(app)" class="apps-icon-btn muted" type="button" title="更多">
                 <el-icon><MoreFilled /></el-icon>
               </button>
             </div>
@@ -184,27 +193,49 @@
             <div class="apps-card-actions" @click.stop>
               <button v-if="canOpenPlatform(app)" class="apps-mini-action" type="button" @click="openInPlatform(app)">平台</button>
               <button v-if="canDeployApp(app)" class="apps-mini-action primary" type="button" @click="deployApp(app)">生成</button>
+              <button v-if="canManageMembers(app)" class="apps-mini-action" type="button" @click="openMembersDialog(app)">成员</button>
               <button v-if="canDeleteApp(app)" class="apps-mini-action danger" type="button" @click="confirmDelete(app)">删除</button>
             </div>
           </article>
         </div>
       </section>
     </main>
+
+    <!-- Phase A: 成员管理弹窗 -->
+    <div v-if="membersDialogApp" class="modal-backdrop" @click.self="membersDialogApp = null">
+      <div class="modal modal-large" @click.stop>
+        <div class="modal-header">
+          <h3>{{ membersDialogApp.app_name }} — 成员管理</h3>
+          <button class="builder-btn" type="button" @click="membersDialogApp = null">关闭</button>
+        </div>
+        <MembersPanel
+          :title="`应用 ${membersDialogApp.app_name}`"
+          :current-role="membersDialogRole"
+          :load-members="loadAppMembers"
+          :invite="inviteAppMember"
+          :update-role="updateAppMemberRole"
+          :remove="removeAppMember"
+        />
+      </div>
+    </div>
   </BuilderFrame>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { Delete, Grid, Link as LinkIcon, List, MoreFilled, Plus, Promotion } from '@element-plus/icons-vue'
+import { Delete, Grid, Link as LinkIcon, List, MoreFilled, Plus, Promotion, UserFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { handleError } from '@/utils/errorHandler'
 import { applicationApi } from '@/api/application'
 import { conversationApi, type ConversationWithApp } from '@/api/conversation'
 import BuilderFrame from '@/components/BuilderFrame.vue'
+import MembersPanel from '@/components/MembersPanel.vue'
 import type { MergedApplication } from '@/types'
 import { buildPlatformProxyEntryUrl } from '@/utils/platformIframe'
 import { useUserStore } from '@/stores/user'
+import { applicationMembersApi } from '@/api/applicationMembers'
+import { normalizeRole, type ProjectRole, type ApplicationMember } from '@/types/collaboration'
 
 type AppTab = 'all' | 'active' | 'deployed' | 'draft'
 type ViewMode = 'list' | 'card'
@@ -479,6 +510,51 @@ onMounted(async () => {
     loading.value = false
   }
 })
+
+// ---- Phase A: Application member management ----
+const membersDialogApp = ref<{ id: number; app_name: string } | null>(null)
+const membersDialogRole = ref<ProjectRole>('viewer')
+
+function canManageMembers(app: MergedApplication) {
+  // 仅 local（已落到我们后端）的应用支持成员管理
+  return app.source === 'local'
+}
+
+async function openMembersDialog(app: MergedApplication) {
+  const numericId = Number(app.id)
+  if (!Number.isFinite(numericId)) {
+    ElMessage.warning('该应用暂不支持成员管理')
+    return
+  }
+  membersDialogApp.value = { id: numericId, app_name: app.app_name }
+  try {
+    const list = await applicationMembersApi.list(numericId)
+    const me = list.find(m => m.user_id === userStore.user?.id)
+    membersDialogRole.value = normalizeRole(me?.role)
+  } catch {
+    membersDialogRole.value = 'viewer'
+  }
+}
+
+async function loadAppMembers(): Promise<ApplicationMember[]> {
+  if (!membersDialogApp.value) return []
+  return applicationMembersApi.list(membersDialogApp.value.id)
+}
+
+async function inviteAppMember(req: { username: string; role: ProjectRole }) {
+  if (!membersDialogApp.value) return
+  await applicationMembersApi.invite(membersDialogApp.value.id, req)
+}
+
+async function updateAppMemberRole(userId: number, role: ProjectRole) {
+  if (!membersDialogApp.value) return
+  await applicationMembersApi.updateRole(membersDialogApp.value.id, userId, role)
+}
+
+async function removeAppMember(userId: number) {
+  if (!membersDialogApp.value) return
+  await applicationMembersApi.remove(membersDialogApp.value.id, userId)
+}
 </script>
 
 <style scoped>
@@ -1074,5 +1150,53 @@ onMounted(async () => {
   .apps-row-actions {
     justify-content: flex-start;
   }
+}
+
+/* Phase A: members dialog */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+.modal {
+  background: var(--b-bg, #fff);
+  border-radius: 8px;
+  min-width: 480px;
+  max-width: 720px;
+  max-height: 80vh;
+  overflow: auto;
+}
+.modal-large {
+  min-width: 640px;
+}
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--b-border, #eee);
+}
+.modal-header h3 {
+  margin: 0;
+}
+.builder-btn {
+  padding: 6px 12px;
+  border: 1px solid var(--b-line, #ddd);
+  background: var(--b-panel, #f5f5f5);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.builder-btn-primary {
+  background: var(--b-primary, #1f8a4d);
+  color: #fff;
+  border-color: var(--b-primary, #1f8a4d);
+}
+.builder-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 </style>
