@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from app.config import settings, APP_TITLE, APP_DESCRIPTION, APP_VERSION
 from app.database import init_db
-from app.routes import auth, conversations, chat, applications, apaas, generation_steps, coding, incremental_update, projects, marketplace, templates, platform_envs, platform_proxy, llm_configs, browser, requirements, harness, spec as spec_routes
+from app.routes import auth, conversations, chat, applications, apaas, generation_steps, coding, incremental_update, projects, marketplace, templates, platform_envs, platform_proxy, llm_configs, browser, requirements, harness, spec as spec_routes, application_members
 
 
 @asynccontextmanager
@@ -88,6 +88,7 @@ app.include_router(browser.router, prefix="/api")
 app.include_router(requirements.router, prefix="/api")
 app.include_router(harness.router, prefix="/api")
 app.include_router(spec_routes.router, prefix="/api")
+app.include_router(application_members.router, prefix="/api")
 # 平台代理路由注册在根路径（/platform/... 和 /backend/... 需要直接匹配）
 app.include_router(platform_proxy.router)
 
