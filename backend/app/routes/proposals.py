@@ -42,6 +42,11 @@ class UpdateProposalRequest(BaseModel):
     description: Optional[str] = None
 
 
+class ReviewRequest(BaseModel):
+    action: str  # 'approve' | 'request_changes' | 'comment'
+    body: Optional[str] = None
+
+
 # ============ application 子路由 ============
 
 app_router = APIRouter(prefix="/applications", tags=["proposals"])
@@ -239,3 +244,65 @@ async def close_proposal(
     row.status = "closed"
     await db.commit()
     return {"id": row.id, "status": row.status}
+
+
+@prop_router.post("/{proposal_id}/reviews")
+async def submit_review(
+    proposal_id: str,
+    req: ReviewRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """提交一条 review。
+
+    action：
+    - 'approve' → status 转 'approved'
+    - 'request_changes' → status 转 'changes_requested'
+    - 'comment' → status 不变
+
+    权限：
+    - approve / request_changes 需 maintainer+
+    - comment 需 viewer+
+    - 不能 review 自己的提案（创建者 != reviewer）
+    - proposal 状态须为 open / changes_requested 才能 review
+    """
+    from app.models.collaboration import ProposalReview
+
+    pv = await _load_proposal_or_404(db, proposal_id)
+
+    if req.action not in ("approve", "request_changes", "comment"):
+        raise HTTPException(400, "action 仅支持 approve/request_changes/comment")
+
+    # role 检查：approve / request_changes 需要 maintainer+
+    min_role = "maintainer" if req.action in ("approve", "request_changes") else "viewer"
+    _app, _role = await _require_application_access(
+        db, application_id=pv.application_id, user_id=ctx.user.id, tenant_id=ctx.tenant_id,
+        minimum_role=min_role,
+    )
+
+    if pv.created_by == ctx.user.id and req.action in ("approve", "request_changes"):
+        raise HTTPException(400, "不能审阅自己的提案")
+    if pv.status not in ("open", "changes_requested"):
+        raise HTTPException(400, f"状态 {pv.status} 不可评审")
+
+    review = ProposalReview(
+        proposal_id=proposal_id,
+        reviewer_id=ctx.user.id,
+        action=req.action,
+        body=req.body,
+    )
+    db.add(review)
+    row = (await db.execute(select(ChangeProposal).where(ChangeProposal.id == proposal_id))).scalar_one()
+    if req.action == "approve":
+        row.status = "approved"
+    elif req.action == "request_changes":
+        row.status = "changes_requested"
+    await db.commit()
+    await db.refresh(review)
+    return {
+        "id": review.id,
+        "action": review.action,
+        "body": review.body,
+        "proposal_status": row.status,
+        "created_at": review.created_at.isoformat() if review.created_at else None,
+    }
