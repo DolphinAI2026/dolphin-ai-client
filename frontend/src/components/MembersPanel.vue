@@ -187,14 +187,14 @@ watch(() => props.title, refresh)
 .members-panel { padding: 16px; }
 .members-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
 .members-table { width: 100%; border-collapse: collapse; }
-.members-table th, .members-table td { padding: 8px 12px; border-bottom: 1px solid var(--b-border, #eee); text-align: left; }
+.members-table th, .members-table td { padding: 8px 12px; border-bottom: 1px solid var(--line); text-align: left; }
 .members-table select { padding: 4px 8px; }
-.empty { text-align: center; color: var(--b-muted, #888); padding: 24px; }
-.modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.4); display: flex; align-items: center; justify-content: center; z-index: 1000; }
-.modal { background: var(--b-bg, #fff); padding: 24px; border-radius: 8px; min-width: 320px; }
+.empty { text-align: center; color: var(--fg-muted); padding: 24px; }
+.modal-backdrop { position: fixed; inset: 0; background: var(--t-bg-overlay, rgba(0,0,0,.4)); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+.modal { background: var(--bg-panel); color: var(--fg); padding: 24px; border-radius: 8px; min-width: 320px; box-shadow: var(--sh-pop); }
 .modal label { display: block; margin: 12px 0; }
-.modal input, .modal select { width: 100%; padding: 6px 8px; margin-top: 4px; }
+.modal input, .modal select { width: 100%; padding: 6px 8px; margin-top: 4px; background: var(--bg-inset); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
-.error { color: #c00; font-size: 12px; }
-.builder-btn-danger { background: #c00; color: #fff; }
+.error { color: var(--t-danger); font-size: 12px; }
+.builder-btn-danger { background: var(--t-danger); color: var(--t-text-inverse, #fff); }
 </style>

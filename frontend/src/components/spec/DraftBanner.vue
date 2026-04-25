@@ -38,13 +38,14 @@ const emit = defineEmits<{
 <style scoped>
 .draft-banner {
   display: flex; justify-content: space-between; align-items: center;
-  padding: 8px 16px; background: var(--b-warn-bg, #fff8e6);
-  border-bottom: 1px solid var(--b-warn-border, #ffd866);
+  padding: 8px 16px; background: var(--brand-soft);
+  border-bottom: 1px solid var(--brand);
+  color: var(--fg);
   font-size: 13px;
 }
 .banner-content { display: flex; gap: 12px; align-items: center; }
 .banner-icon { font-size: 16px; }
-.banner-link a { color: var(--b-link, #0067d6); text-decoration: none; }
+.banner-link a { color: var(--brand); text-decoration: none; }
 .banner-link a:hover { text-decoration: underline; }
 .banner-actions { display: flex; gap: 8px; }
 </style>
