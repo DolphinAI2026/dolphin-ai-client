@@ -8,6 +8,9 @@
         <span class="status-badge" :class="`status-${detail.status}`">
           {{ STATUS_DISPLAY_NAMES[detail.status] || detail.status }}
         </span>
+        <a v-if="detail.git_pr_url" :href="detail.git_pr_url" target="_blank" class="builder-btn git-pr-btn">
+          查看 PR ↗
+        </a>
       </header>
 
       <div class="detail-body">
@@ -89,6 +92,9 @@
           <section v-if="detail.status === 'applied'" class="applied-card">
             <h3>已 apply</h3>
             <p>@ {{ formatDate(detail.applied_at) }}</p>
+            <p v-if="(detail.apply_log as any)?.git_tag" class="git-tag-row">
+              Git tag: <code>{{ (detail.apply_log as any).git_tag }}</code>
+            </p>
           </section>
 
           <section v-if="detail.status === 'apply_failed'" class="apply-failed-card">
@@ -284,53 +290,75 @@ onMounted(refresh)
 .proposal-detail { padding: 24px; }
 .detail-header { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
 .status-badge { padding: 4px 10px; border-radius: 12px; font-size: 12px; }
-.status-draft { background: #eee; }
-.status-open { background: #cce5ff; }
-.status-changes_requested { background: #ffe5b4; }
-.status-approved { background: #d4edda; }
-.status-applying { background: #fff3cd; }
-.status-applied { background: #c3e6cb; }
-.status-apply_failed { background: #f5c6cb; }
-.status-closed { background: #ddd; }
+.status-draft { background: var(--bg-inset); color: var(--fg-muted); }
+.status-open { background: var(--t-brand-subtle, rgba(79,110,247,0.08)); color: var(--brand); }
+.status-changes_requested { background: var(--t-warning-subtle); color: var(--t-warning); }
+.status-approved { background: var(--t-success-subtle); color: var(--t-success); }
+.status-applying { background: var(--t-warning-subtle); color: var(--t-warning); }
+.status-applied { background: var(--t-success-subtle); color: var(--t-success); }
+.status-apply_failed { background: var(--t-danger-subtle); color: var(--t-danger); }
+.status-closed { background: var(--bg-inset); color: var(--fg-muted); }
 
 .detail-body { display: grid; grid-template-columns: 2fr 1fr; gap: 24px; }
 .left-pane h3, .right-pane h3 { margin: 16px 0 8px; }
-.description-md { white-space: pre-wrap; padding: 12px; background: var(--b-soft, #f6f8fa); border-radius: 6px; }
+.description-md { white-space: pre-wrap; padding: 12px; background: var(--bg-inset); color: var(--fg); border-radius: 6px; }
 .apply-summary ul { padding-left: 0; list-style: none; }
-.apply-summary li { padding: 6px 0; border-bottom: 1px solid var(--b-border, #eee); }
-.reversibility-badge { display: inline-block; padding: 2px 8px; border-radius: 8px; font-size: 11px; margin-right: 8px; color: white; }
-.reversibility-green { background: #28a745; }
-.reversibility-yellow { background: #ffc107; color: #333; }
-.reversibility-red { background: #dc3545; }
+.apply-summary li { padding: 6px 0; border-bottom: 1px solid var(--line); }
+.reversibility-badge { display: inline-block; padding: 2px 8px; border-radius: 8px; font-size: 11px; margin-right: 8px; color: var(--t-text-inverse, #fff); }
+.reversibility-green { background: var(--t-success); }
+.reversibility-yellow { background: var(--t-warning); color: var(--bg-ink); }
+.reversibility-red { background: var(--t-danger); }
 
 .validation-card, .reviews-card, .apply-card, .applied-card, .apply-failed-card, .draft-card {
-  border: 1px solid var(--b-border, #eee); padding: 16px; border-radius: 8px; margin-bottom: 16px;
+  border: 1px solid var(--line); background: var(--bg-panel); padding: 16px; border-radius: 8px; margin-bottom: 16px;
 }
 .check-row { padding: 8px 0; }
-.check-row ul { padding-left: 32px; color: #c00; font-size: 13px; }
-.check-pass { color: #28a745; font-weight: bold; }
-.check-fail { color: #c00; font-weight: bold; }
+.check-row ul { padding-left: 32px; color: var(--t-danger); font-size: 13px; }
+.check-pass { color: var(--t-success); font-weight: bold; }
+.check-fail { color: var(--t-danger); font-weight: bold; }
 
-.review-item { padding: 8px 0; border-bottom: 1px solid var(--b-border, #eee); }
+.review-item { padding: 8px 0; border-bottom: 1px solid var(--line); }
 .action-badge { padding: 2px 8px; border-radius: 8px; font-size: 11px; margin: 0 6px; }
-.action-approve { background: #d4edda; }
-.action-request_changes { background: #f5c6cb; }
-.action-comment { background: #e2e3e5; }
-.review-body { margin-top: 4px; padding: 8px; background: var(--b-soft, #f6f8fa); border-radius: 4px; }
+.action-approve { background: var(--t-success-subtle); color: var(--t-success); }
+.action-request_changes { background: var(--t-danger-subtle); color: var(--t-danger); }
+.action-comment { background: var(--bg-inset); color: var(--fg-muted); }
+.review-body { margin-top: 4px; padding: 8px; background: var(--bg-inset); color: var(--fg); border-radius: 4px; }
 
 .review-form { margin-top: 16px; }
-.review-form textarea { width: 100%; padding: 8px; box-sizing: border-box; }
+.review-form textarea { width: 100%; padding: 8px; box-sizing: border-box; background: var(--bg-inset); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; }
 .review-actions { display: flex; gap: 8px; margin-top: 8px; }
-.muted { color: var(--b-muted, #888); }
+.muted { color: var(--fg-muted); }
 .small { font-size: 12px; }
 
 .apply-btn { width: 100%; padding: 12px; }
 
-.modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; z-index: 1000; }
-.modal { background: var(--b-bg, white); padding: 24px; border-radius: 8px; max-width: 600px; width: 90%; }
-.irreversible-list { padding-left: 20px; color: #c00; }
+.modal-backdrop { position: fixed; inset: 0; background: var(--t-bg-overlay, rgba(0,0,0,.5)); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+.modal { background: var(--bg-panel); color: var(--fg); padding: 24px; border-radius: 8px; max-width: 600px; width: 90%; box-shadow: var(--sh-pop); }
+.irreversible-list { padding-left: 20px; color: var(--t-danger); }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
-.builder-btn-danger { background: #c00; color: white; }
-.loading, .error { padding: 48px; text-align: center; color: var(--b-muted, #888); }
-.error { color: #c00; }
+.builder-btn-danger { background: var(--t-danger); color: var(--t-text-inverse, #fff); }
+.loading, .error { padding: 48px; text-align: center; color: var(--fg-muted); }
+.error { color: var(--t-danger); }
+
+.git-pr-btn {
+  margin-left: auto;
+  font-size: 12px;
+  padding: 4px 12px;
+  border: 1px solid var(--brand);
+  color: var(--brand);
+  background: transparent;
+  border-radius: 6px;
+  text-decoration: none;
+  font-weight: 500;
+}
+.git-pr-btn:hover { background: var(--brand-soft); }
+
+.git-tag-row { margin-top: 6px; font-size: 12px; color: var(--fg-muted); }
+.git-tag-row code {
+  background: var(--bg-inset);
+  color: var(--fg);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-family: var(--b-mono, ui-monospace, SFMono-Regular, monospace);
+}
 </style>

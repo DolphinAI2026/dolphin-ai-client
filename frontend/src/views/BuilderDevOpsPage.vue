@@ -23,7 +23,7 @@
             <h1 class="builder-section-title">{{ currentLabel }}</h1>
             <p class="builder-section-sub">{{ subText }}</p>
           </div>
-          <div v-if="appOptions.length > 1 && (active === 'proposals' || active === 'apply-history')" class="app-select">
+          <div v-if="appOptions.length > 1 && (active === 'proposals' || active === 'apply-history' || active === 'git-repo')" class="app-select">
             <select v-model.number="selectedApplicationId" @change="onAppChange">
               <option v-for="a in appOptions" :key="a.id" :value="a.id">{{ a.app_name }}</option>
             </select>
@@ -89,6 +89,29 @@
                 </tr>
               </tbody>
             </table>
+          </section>
+        </template>
+
+        <!-- Git 仓库 tab -->
+        <template v-if="active === 'git-repo'">
+          <section class="builder-panel git-info">
+            <div v-if="!gitInfo" class="empty">未选择应用，或应用尚未绑定 git</div>
+            <template v-else>
+              <h3>Git 仓库</h3>
+              <p><strong>Provider：</strong>{{ gitInfo.git_provider || '—' }}</p>
+              <p>
+                <strong>仓库 URL：</strong>
+                <a v-if="gitInfo.git_repo_url" :href="gitInfo.git_repo_url" target="_blank" class="git-link">
+                  {{ gitInfo.git_repo_url }}
+                </a>
+                <span v-else class="muted">尚未初始化</span>
+              </p>
+              <p><strong>默认分支：</strong>{{ gitInfo.git_default_branch || '—' }}</p>
+              <p class="muted small">提示：apply 后会在该 repo 自动 merge spec/proposal-* 分支并打 apply-* tag。</p>
+              <p v-if="!gitInfo.git_repo_url" class="muted small">
+                如需初始化，请到 Project Overview → Git 集成页 调 "为应用创建 repo"。
+              </p>
+            </template>
           </section>
         </template>
 
@@ -159,6 +182,7 @@ const active = ref<string>(String(route.query.tab || 'proposals'))
 const nav = [
   { key: 'proposals', label: '提案', icon: Promotion },
   { key: 'apply-history', label: 'Apply 历史', icon: Files },
+  { key: 'git-repo', label: 'Git 仓库', icon: Promotion },
   { key: 'pipelines', label: '流水线', icon: Operation },
   { key: 'runs', label: '运行历史', icon: Files },
   { key: 'envs', label: '环境拓扑', icon: Operation },
@@ -181,6 +205,15 @@ const appOptions = ref<{ id: number; app_name: string }[]>([])
 const selectedApplicationId = ref<number | null>(null)
 const proposals = ref<ProposalSummary[]>([])
 const statusFilter = ref<string>('all')
+
+interface GitInfo {
+  git_provider: string | null
+  git_repo_url: string | null
+  git_default_branch: string | null
+}
+const gitInfo = ref<GitInfo | null>(null)
+// 缓存 list 结果以便 git tab 直接读取，避免重复请求
+const appsCache = ref<any[]>([])
 
 const statusFilters = [
   { key: 'all', label: '全部' },
@@ -221,6 +254,7 @@ function goToProposal(id: string) {
 async function loadApps() {
   try {
     const apps = await applicationApi.list()
+    appsCache.value = apps as any[]
     appOptions.value = (apps as any[])
       .map(a => ({ id: Number(a.id), app_name: a.app_name }))
       .filter(a => Number.isFinite(a.id) && a.id > 0)
@@ -232,6 +266,23 @@ async function loadApps() {
     }
   } catch (e) {
     console.error('Load apps failed', e)
+  }
+}
+
+function loadGitInfo() {
+  if (!selectedApplicationId.value) {
+    gitInfo.value = null
+    return
+  }
+  const app = appsCache.value.find(a => Number(a.id) === selectedApplicationId.value)
+  if (!app) {
+    gitInfo.value = null
+    return
+  }
+  gitInfo.value = {
+    git_provider: app.git_provider ?? null,
+    git_repo_url: app.git_repo_url ?? null,
+    git_default_branch: app.git_default_branch ?? null,
   }
 }
 
@@ -257,10 +308,12 @@ function onAppChange() {
 
 watch(selectedApplicationId, () => {
   loadProposals()
+  loadGitInfo()
 })
 
 onMounted(async () => {
   await loadApps()
+  loadGitInfo()
 })
 </script>
 
@@ -308,4 +361,12 @@ onMounted(async () => {
 .builder-dot.ok { background: var(--t-success); }
 .builder-dot.warn { background: var(--t-warning); }
 .builder-dot.err { background: var(--t-danger); }
+
+.git-info { padding: 20px; }
+.git-info h3 { margin: 0 0 12px; color: var(--fg); }
+.git-info p { margin: 6px 0; color: var(--fg); font-size: 13px; }
+.git-info .muted { color: var(--fg-muted); }
+.git-info .small { font-size: 12px; }
+.git-link { color: var(--brand); text-decoration: none; font-family: var(--b-mono, ui-monospace, SFMono-Regular, monospace); word-break: break-all; }
+.git-link:hover { text-decoration: underline; }
 </style>
