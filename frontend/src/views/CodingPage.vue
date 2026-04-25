@@ -1839,9 +1839,7 @@ watch(() => route.path, () => {
   align-items: stretch;
   justify-content: center;
   overflow-y: auto;
-  background:
-    radial-gradient(circle at top, rgba(101, 120, 255, 0.11), transparent 34%),
-    linear-gradient(180deg, #f5f7ff 0%, #f7fbff 100%);
+  background: #fbfcfe;
 }
 
 .welcome-inner {
@@ -1852,7 +1850,7 @@ watch(() => route.path, () => {
   max-width: 1160px;
   width: 100%;
   min-height: 100%;
-  padding: 6px 36px 28px;
+  padding: 8px 36px 32px;
   position: relative;
 }
 
@@ -2299,7 +2297,7 @@ watch(() => route.path, () => {
   gap: 8px;
   justify-content: flex-start;
   width: 100%;
-  margin-bottom: 26px;
+  margin: 24px 0 12px;
   padding-bottom: 4px;
   scrollbar-width: none;
   flex-shrink: 0;
@@ -2343,7 +2341,7 @@ watch(() => route.path, () => {
   width: min(100%, 1280px);
   display: flex;
   gap: 10px;
-  margin: -12px 0 14px;
+  margin: 0 0 24px;
   padding-bottom: 2px;
   overflow-x: auto;
   overflow-y: hidden;
@@ -2388,7 +2386,9 @@ watch(() => route.path, () => {
 /* ============ Workspace Showcase ============ */
 .workspace-showcase {
   width: min(100%, 1280px);
-  margin-top: 0;
+  margin-top: 8px;
+  padding-top: 24px;
+  border-top: 1px solid #eef0f4;
   flex-shrink: 0;
 }
 
@@ -2397,7 +2397,7 @@ watch(() => route.path, () => {
   align-items: flex-end;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 8px;
+  margin-bottom: 12px;
   width: 100%;
 }
 
@@ -3376,77 +3376,65 @@ watch(() => route.path, () => {
   filter: brightness(1.15);
 }
 
-/* ============ Landing-style Hero（参考 Landing.vue code 模式） ============ */
+/* ============ Landing-style Hero（精简版：减重 + 节奏统一） ============ */
 .coding-landing-hero {
   position: relative;
   width: 100%;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 24px;
-  padding: 28px 16px 32px;
+  gap: 18px;
+  padding: 20px 16px 8px;
   flex-shrink: 0;
 }
 
+/* 装饰性背景去掉，避免和下方 dashboard 冲突 */
 .coding-landing-bg {
-  position: absolute;
-  inset: -28px -16px 0;
-  pointer-events: none;
-  background-image:
-    radial-gradient(rgba(54, 128, 198, 0.07) 1px, transparent 1px),
-    radial-gradient(rgba(82, 74, 190, 0.055) 1px, transparent 1px);
-  background-size: 32px 32px, 64px 64px;
-  background-position: 0 0, 16px 16px;
-  mask-image: radial-gradient(ellipse 800px 600px at center 30%, black, transparent);
-  z-index: 0;
-}
-
-.coding-landing-hero > *:not(.coding-landing-bg) {
-  position: relative;
-  z-index: 1;
+  display: none;
 }
 
 .brand-mark {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
 }
 
 .brand-glyph {
-  width: 48px;
-  height: 48px;
-  border-radius: 12px;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
   display: grid;
   place-items: center;
   background: linear-gradient(135deg, var(--landing-mode-color), var(--landing-mode-ink));
   color: #fff;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 21px;
+  font-size: 16px;
   font-weight: 700;
-  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.12), 0 0 0 1px rgba(15, 23, 42, 0.12);
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.10), 0 0 0 1px rgba(15, 23, 42, 0.08);
 }
 
 .brand-eyebrow {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 11px;
+  font-size: 10px;
   line-height: 1;
   color: var(--landing-mode-ink);
-  letter-spacing: 0.05em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
+  opacity: 0.78;
 }
 
 .brand-copy {
-  max-width: 720px;
+  max-width: 640px;
   text-align: center;
 }
 
 .brand-title {
   margin: 0;
-  font-size: 40px;
-  line-height: 1.1;
+  font-size: 28px;
+  line-height: 1.2;
   font-weight: 650;
-  letter-spacing: 0;
+  letter-spacing: -0.005em;
   color: #111827;
 }
 
@@ -3455,53 +3443,43 @@ watch(() => route.path, () => {
 }
 
 .brand-title em {
-  margin-left: 12px;
+  margin-left: 10px;
   display: inline-block;
   font-style: normal;
   color: #111827;
 }
 
 .brand-sub {
-  margin: 12px auto 0;
-  max-width: 560px;
+  margin: 8px auto 0;
+  max-width: 520px;
   color: #667085;
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1.55;
 }
 
 .composer {
   width: 100%;
-  max-width: 760px;
+  max-width: 720px;
 }
 
 .composer-shell {
   position: relative;
   overflow: hidden;
-  border-radius: 12px;
-  border: 0.5px solid #d1d8e5;
+  border-radius: 10px;
+  border: 1px solid #e4e8f0;
   background: #fff;
-  box-shadow:
-    0 8px 24px rgba(15, 23, 42, 0.08),
-    0 0 0 1px color-mix(in srgb, var(--landing-mode-color) 14%, transparent);
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.04);
   transition: box-shadow 0.18s ease, border-color 0.18s ease;
 }
 
 .composer-shell:focus-within {
-  border-color: color-mix(in srgb, var(--landing-mode-color) 54%, #d1d8e5);
-  box-shadow:
-    0 12px 32px rgba(15, 23, 42, 0.10),
-    0 0 0 3px color-mix(in srgb, var(--landing-mode-color) 16%, transparent);
+  border-color: color-mix(in srgb, var(--landing-mode-color) 38%, #d1d8e5);
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.06), 0 0 0 3px color-mix(in srgb, var(--landing-mode-color) 12%, transparent);
 }
 
+/* 去掉装饰性圆点底纹 */
 .ai-surface::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background-image: radial-gradient(color-mix(in srgb, var(--landing-mode-color) 8%, transparent) 1px, transparent 1px);
-  background-size: 20px 20px;
-  opacity: 0.5;
-  mask-image: radial-gradient(ellipse at center, black 30%, transparent 70%);
+  display: none;
 }
 
 .composer-mode-bar {
@@ -3510,13 +3488,13 @@ watch(() => route.path, () => {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 12px;
-  border-bottom: 0.5px solid color-mix(in srgb, var(--landing-mode-color) 22%, #d8dee8);
-  background: var(--landing-mode-soft);
-  color: var(--landing-mode-ink);
+  padding: 5px 12px;
+  border-bottom: 1px solid #eef0f4;
+  background: #fafbfc;
+  color: #667085;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 11px;
-  letter-spacing: 0.04em;
+  font-size: 10px;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
