@@ -89,8 +89,10 @@ async def run_migration(sql_path: Path) -> int:
                     if code in IDEMPOTENT_ERRNOS:
                         print(f"  [{i:>3}] SKIP   {short}... ({IDEMPOTENT_ERRNOS[code]})")
                         skipped += 1
-                        # MySQL 在事务里某些 DDL 错误会让事务进入失败状态 → 单语句独立事务
-                        # （SQLAlchemy + aiomysql 下面会自动开新 trx，OK）
+                        # MySQL 对每条 DDL 隐式 commit，即便包在 engine.begin() 内，
+                        # 服务端也已落库。所以 swallow errno 1060/1050/1061/1091 后
+                        # 继续下一条是安全的。仅 UPDATE/INSERT 等 DML 共享事务，
+                        # 但 DML 不会触发这些 errno，永远进 raise 分支。
                     else:
                         raise
     finally:
