@@ -114,6 +114,11 @@ class ApplicationResponse(BaseModel):
     forms: int = 0
     roles: int = 0
     dicts: int = 0
+    # Phase C：project & git
+    project_id: Optional[int] = None
+    git_repo_url: Optional[str] = None
+    git_provider: Optional[str] = None
+    git_default_branch: Optional[str] = None
     created_at: datetime
     updated_at: datetime
     permissions: Optional[dict] = None  # {edit: bool, delete: bool, clone: bool}
@@ -141,6 +146,11 @@ class MergedAppResponse(BaseModel):
     permissions: Optional[dict] = None
     env_name: Optional[str] = None          # 关联平台环境名称
     env_status: Optional[str] = None        # 关联平台环境连接状态
+    # Phase C：project & git
+    project_id: Optional[int] = None
+    git_repo_url: Optional[str] = None
+    git_provider: Optional[str] = None
+    git_default_branch: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 

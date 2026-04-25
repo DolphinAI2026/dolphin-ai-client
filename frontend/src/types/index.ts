@@ -77,6 +77,11 @@ export interface Application {
   forms?: number
   roles?: number
   dicts?: number
+  // Phase C：project & git
+  project_id?: number | null
+  git_repo_url?: string | null
+  git_provider?: string | null
+  git_default_branch?: string | null
   created_at: string
   updated_at: string
 }
@@ -102,6 +107,11 @@ export interface MergedApplication {
   permissions?: Record<string, boolean>
   env_name?: string
   env_status?: string
+  // Phase C：project & git
+  project_id?: number | null
+  git_repo_url?: string | null
+  git_provider?: string | null
+  git_default_branch?: string | null
   created_at?: string
   updated_at?: string
 }

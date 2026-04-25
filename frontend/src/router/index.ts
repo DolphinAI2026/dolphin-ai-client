@@ -47,6 +47,12 @@ const router = createRouter({
       meta: { requiresAuth: true }
     },
     {
+      path: '/project/:id/git',
+      name: 'ProjectGitSetup',
+      component: () => import('@/views/ProjectGitSetup.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
       path: '/ide',
       name: 'Ide',
       redirect: '/coding'

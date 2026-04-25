@@ -717,6 +717,10 @@ def _enrich(app: Application) -> ApplicationResponse:
         platform_env_id=app.platform_env_id,
         apaas_app_id=app.apaas_app_id, config_preview=config,
         models=models, forms=forms, roles=roles, dicts=dicts,
+        project_id=app.project_id,
+        git_repo_url=app.git_repo_url,
+        git_provider=app.git_provider,
+        git_default_branch=app.git_default_branch,
         created_at=app.created_at, updated_at=app.updated_at
     )
 
@@ -785,6 +789,10 @@ def _build_local(app: Application, perms: dict | None = None, env_name: str | No
         permissions=perms,
         env_name=env_name,
         env_status=env_status,
+        project_id=app.project_id,
+        git_repo_url=app.git_repo_url,
+        git_provider=app.git_provider,
+        git_default_branch=app.git_default_branch,
         created_at=str(enriched.created_at) if enriched.created_at else None,
         updated_at=str(enriched.updated_at) if enriched.updated_at else None,
     )
@@ -814,6 +822,10 @@ def _build_linked(app: Application, remote: dict, perms: dict | None = None, env
         permissions=perms,
         env_name=env_name,
         env_status=env_status,
+        project_id=app.project_id,
+        git_repo_url=app.git_repo_url,
+        git_provider=app.git_provider,
+        git_default_branch=app.git_default_branch,
         created_at=str(enriched.created_at) if enriched.created_at else None,
         updated_at=str(enriched.updated_at) if enriched.updated_at else None,
     )
