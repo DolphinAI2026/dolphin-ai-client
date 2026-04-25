@@ -220,6 +220,19 @@ async def execute_apply(
         proposal_row.applied_at = datetime.now(timezone.utc).replace(tzinfo=None)
         proposal_row.apply_log = {"ops": apply_log, "previous_canonical": previous_canonical}
         await db.commit()
+
+        # 同步到 git（如绑定）
+        try:
+            from app.git.sync import finalize_apply_to_git
+            tag = await finalize_apply_to_git(db, proposal=proposal_row, application=app_row)
+            if tag:
+                proposal_row.apply_log = {**(proposal_row.apply_log or {}), "git_tag": tag}
+                await db.commit()
+        except Exception as ge:
+            # git 失败不让 apply 失败 — 标 warning 即可（已经在平台 apply 了）
+            apply_log.append({"git_finalize_failed": str(ge)})
+            proposal_row.apply_log = {**(proposal_row.apply_log or {}), "git_finalize_failed": str(ge)}
+            await db.commit()
     except Exception as e:
         success = False
         failure_reason = str(e)

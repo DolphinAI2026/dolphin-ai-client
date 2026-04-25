@@ -62,6 +62,42 @@ async def push_proposal_branch(
     return (branch_name, pr.url)
 
 
+async def finalize_apply_to_git(
+    db: AsyncSession, *, proposal: ChangeProposal, application: Application,
+) -> str | None:
+    """apply 成功后 merge PR + tag canonical commit。
+
+    返回 tag 字符串。如 application 没绑 git、proposal 没 git_pr_url 或
+    GitConnection 不存在，返回 None（noop）。
+    """
+    if not application.git_repo_url or not proposal.git_pr_url:
+        return None
+
+    git_conn = (await db.execute(
+        select(GitConnection).where(GitConnection.project_id == application.project_id)
+    )).scalar_one_or_none()
+    if not git_conn:
+        return None
+
+    provider = make_provider(git_conn)
+    repo_full_path = _extract_repo_path(application.git_repo_url, git_conn.host)
+
+    # 从 git_pr_url 拿 PR number（GitLab MR url 末段是 iid，GitHub PR url 末段是 number）
+    pr_number = int(proposal.git_pr_url.rsplit("/", 1)[-1])
+    commit = await provider.merge_pull_request(repo_full_path=repo_full_path, pr_number=pr_number)
+
+    # tag canonical commit
+    from datetime import datetime
+    tag = f"apply-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}-{proposal.id[-8:]}"
+    await provider.add_tag(
+        repo_full_path=repo_full_path,
+        tag=tag,
+        ref=commit.sha,
+        message=f"applied {proposal.title}",
+    )
+    return tag
+
+
 def _extract_repo_path(git_repo_url: str, host: str) -> str:
     """从 git_repo_url（含 host）拆出 group/repo 形式"""
     # git_repo_url 形如 'https://github.com/org/repo' 或 'https://gitlab.com/group/repo'
