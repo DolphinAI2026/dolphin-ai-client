@@ -71,27 +71,32 @@
         <!-- Welcome State -->
         <div v-if="!ideUrl && !isStreaming && streamMessages.length === 0" class="welcome-pane">
           <div class="welcome-inner">
-            <div class="welcome-hero">
-              <div class="welcome-icon">&#x2728;</div>
-              <h2 class="welcome-title">Code · 智能开发</h2>
-              <p class="welcome-desc">先沉淀开发 SPEC，确认范围、数据接口和验收标准，再打开睿鲸 AI Coding 生成代码。</p>
+            <!-- 参考首页 Landing 风格的 hero -->
+            <div class="coding-landing-hero" :style="codingLandingVars">
+              <div class="coding-landing-bg"></div>
 
-              <!-- Input Area (centered) -->
-              <div class="welcome-input-area">
-                <!-- Attachment Preview -->
-                <div v-if="attachedFile" class="attachment-preview">
-                  <div v-if="attachedPreviewUrl" class="attachment-thumb">
-                    <img :src="attachedPreviewUrl" alt="preview" />
-                    <button class="attachment-remove" @click="removeAttachment">&times;</button>
-                  </div>
-                  <div v-else class="attachment-file">
-                    <span class="attachment-file-icon">&#128196;</span>
-                    <span class="attachment-file-name">{{ attachedFile.name }}</span>
-                    <button class="attachment-remove" @click="removeAttachment">&times;</button>
-                  </div>
-                </div>
+              <div class="brand-mark">
+                <div class="brand-glyph">{}</div>
+                <div class="brand-eyebrow">APAAS CODING · VIBE IDE</div>
+              </div>
 
-                <div class="input-wrapper" @paste="handlePaste">
+              <section class="brand-copy">
+                <h1 class="brand-title">
+                  <span>AI 帮你写代码</span>
+                  <em>把需求直接变成可运行的组件和页面</em>
+                </h1>
+                <p class="brand-sub">面向自开发扩展：描述组件、页面或接口，AI 自动创建工作区，并打开睿鲸 AI Coding 继续迭代。</p>
+              </section>
+
+              <section class="composer">
+                <div class="composer-shell ai-surface">
+                  <div class="composer-mode-bar">
+                    <span class="composer-mode-label">
+                      <span>{}</span>
+                      Code · 智能开发
+                    </span>
+                  </div>
+
                   <input
                     ref="fileInputRef"
                     type="file"
@@ -99,92 +104,96 @@
                     style="display: none"
                     @change="handleFileSelect"
                   />
-                  <div class="composer-topline">
-                    <div class="coding-model-inline">
-                      <el-popover
-                        v-model:visible="codingModelPopoverVisible"
-                        placement="bottom-start"
-                        trigger="click"
-                        :width="360"
-                        popper-class="coding-model-popover"
-                        :disabled="codingModelLoading || updatingCodingModel || codingModelOptions.length === 0"
-                      >
-                        <template #reference>
-                          <button
-                            type="button"
-                            class="coding-model-trigger"
-                            :class="{ 'is-open': codingModelPopoverVisible, 'is-disabled': codingModelLoading || updatingCodingModel || codingModelOptions.length === 0 }"
-                            :disabled="codingModelLoading || updatingCodingModel || codingModelOptions.length === 0"
-                            aria-label="选择模型"
-                          >
-                            <div class="coding-model-trigger-content">
-                              <div class="coding-model-trigger-main">
-                                <span class="coding-model-trigger-name">{{ selectedCodingModelOption?.config_name || '选择模型' }}</span>
-                              </div>
-                              <el-icon class="coding-model-trigger-icon">
-                                <ArrowDown />
-                              </el-icon>
-                            </div>
-                          </button>
-                        </template>
-                        <div class="coding-model-panel">
-                          <button
-                            v-for="option in codingModelOptions"
-                            :key="option.id"
-                            type="button"
-                            class="coding-model-panel-option"
-                            :class="{ 'is-active': selectedCodingModelValue === toCodingModelValue(option.id) }"
-                            @click="selectCodingModel(option)"
-                          >
-                            <div class="coding-model-panel-option-head">
-                              <span class="coding-model-panel-option-name">{{ option.config_name }}</span>
-                              <span v-if="option.is_default" class="coding-model-panel-option-default">默认</span>
-                            </div>
-                            <span class="coding-model-panel-option-meta">
-                              {{ formatCodingModelProvider(option.provider) }} / {{ option.model }}
-                            </span>
-                          </button>
-                        </div>
-                      </el-popover>
-                      <span class="coding-model-tip">{{ codingModelHint }}</span>
+
+                  <!-- 附件预览 -->
+                  <div v-if="attachedFile" class="composer-attachment">
+                    <div v-if="attachedPreviewUrl" class="composer-attachment-thumb">
+                      <img :src="attachedPreviewUrl" alt="preview" />
+                      <button class="composer-attachment-remove" @click="removeAttachment">&times;</button>
+                    </div>
+                    <div v-else class="composer-attachment-file">
+                      <span class="composer-attachment-file-icon">&#128196;</span>
+                      <span class="composer-attachment-file-name">{{ attachedFile.name }}</span>
+                      <button class="composer-attachment-remove" @click="removeAttachment">&times;</button>
                     </div>
                   </div>
-                  <div class="input-mainline">
-                    <el-button
-                      text
-                      class="attach-btn"
+
+                  <div class="composer-body" @paste="handlePaste">
+                    <textarea
+                      v-model="userInput"
+                      class="composer-input"
+                      placeholder="描述你想开发的内容。例如：做一个头像上传组件，支持裁剪、预览、上传失败重试，并输出可接入表单的组件。"
+                      @keydown.ctrl.enter="sendMessage"
+                      @keydown.meta.enter="sendMessage"
+                      :disabled="isCreating"
+                    ></textarea>
+                  </div>
+
+                  <div class="composer-toolbar">
+                    <button
+                      type="button"
+                      class="chip"
                       @click="fileInputRef?.click()"
                       :disabled="isCreating"
                       title="上传附件"
+                    >＋ 附加文件</button>
+
+                    <el-popover
+                      v-model:visible="codingModelPopoverVisible"
+                      placement="bottom-start"
+                      trigger="click"
+                      :width="360"
+                      popper-class="coding-model-popover"
+                      :disabled="codingModelLoading || updatingCodingModel || codingModelOptions.length === 0"
                     >
-                      <el-icon :size="18"><Paperclip /></el-icon>
-                    </el-button>
-                    <div class="composer-text-zone">
-                      <el-input
-                        v-model="userInput"
-                        type="textarea"
-                        :rows="1"
-                        :autosize="{ minRows: 1, maxRows: 5 }"
-                        placeholder="描述你想开发的页面、组件或接口。我会先生成开发 SPEC，确认后再创建项目并打开 AI 代码编辑器"
-                        @keydown.ctrl.enter="sendMessage"
-                        @keydown.meta.enter="sendMessage"
-                        :disabled="isCreating"
-                        resize="none"
-                      />
-                    </div>
-                    <el-button
-                      type="primary"
-                      class="send-btn"
-                      :loading="isCreating || isUploading"
-                      @click="sendMessage"
+                      <template #reference>
+                        <button
+                          type="button"
+                          class="chip composer-model-chip"
+                          :class="{ 'is-open': codingModelPopoverVisible, 'is-disabled': codingModelLoading || updatingCodingModel || codingModelOptions.length === 0 }"
+                          :disabled="codingModelLoading || updatingCodingModel || codingModelOptions.length === 0"
+                          aria-label="选择模型"
+                        >
+                          <span>{{ selectedCodingModelOption?.config_name || '选择模型' }}</span>
+                          <el-icon><ArrowDown /></el-icon>
+                        </button>
+                      </template>
+                      <div class="coding-model-panel">
+                        <button
+                          v-for="option in codingModelOptions"
+                          :key="option.id"
+                          type="button"
+                          class="coding-model-panel-option"
+                          :class="{ 'is-active': selectedCodingModelValue === toCodingModelValue(option.id) }"
+                          @click="selectCodingModel(option)"
+                        >
+                          <div class="coding-model-panel-option-head">
+                            <span class="coding-model-panel-option-name">{{ option.config_name }}</span>
+                            <span v-if="option.is_default" class="coding-model-panel-option-default">默认</span>
+                          </div>
+                          <span class="coding-model-panel-option-meta">
+                            {{ formatCodingModelProvider(option.provider) }} / {{ option.model }}
+                          </span>
+                        </button>
+                      </div>
+                    </el-popover>
+
+                    <div class="toolbar-spacer"></div>
+
+                    <button
+                      type="button"
+                      class="landing-submit"
                       :disabled="(!userInput.trim() && !attachedFile) || isCreating"
-                      circle
+                      @click="sendMessage"
                     >
-                      <el-icon v-if="!isCreating && !isUploading"><TopRight /></el-icon>
-                    </el-button>
+                      <span v-if="!isCreating && !isUploading">↗</span>
+                      <span v-else class="composer-submit-spinner" />
+                      进入开发
+                      <span class="submit-kbd">⌘↵</span>
+                    </button>
                   </div>
                 </div>
-              </div>
+              </section>
             </div>
 
             <!-- Scene Category Chips -->
@@ -617,6 +626,13 @@ const themeStore = useThemeStore()
 const userInput = ref('')
 const isCreating = ref(false)
 const creatingStatus = ref('')
+
+// 参考首页 Landing 的 code 模式色板
+const codingLandingVars: Record<string, string> = {
+  '--landing-mode-color': 'oklch(67% 0.14 255)',
+  '--landing-mode-soft': 'oklch(95% 0.03 255)',
+  '--landing-mode-ink': 'oklch(50% 0.17 255)',
+}
 
 // ── IDE iframe 管理（已抽成 composable）──
 const {
@@ -3358,6 +3374,364 @@ watch(() => route.path, () => {
 
 .coding-page :deep(.el-button--success:hover) {
   filter: brightness(1.15);
+}
+
+/* ============ Landing-style Hero（参考 Landing.vue code 模式） ============ */
+.coding-landing-hero {
+  position: relative;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 24px;
+  padding: 28px 16px 32px;
+  flex-shrink: 0;
+}
+
+.coding-landing-bg {
+  position: absolute;
+  inset: -28px -16px 0;
+  pointer-events: none;
+  background-image:
+    radial-gradient(rgba(54, 128, 198, 0.07) 1px, transparent 1px),
+    radial-gradient(rgba(82, 74, 190, 0.055) 1px, transparent 1px);
+  background-size: 32px 32px, 64px 64px;
+  background-position: 0 0, 16px 16px;
+  mask-image: radial-gradient(ellipse 800px 600px at center 30%, black, transparent);
+  z-index: 0;
+}
+
+.coding-landing-hero > *:not(.coding-landing-bg) {
+  position: relative;
+  z-index: 1;
+}
+
+.brand-mark {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.brand-glyph {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(135deg, var(--landing-mode-color), var(--landing-mode-ink));
+  color: #fff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 21px;
+  font-weight: 700;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.12), 0 0 0 1px rgba(15, 23, 42, 0.12);
+}
+
+.brand-eyebrow {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--landing-mode-ink);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.brand-copy {
+  max-width: 720px;
+  text-align: center;
+}
+
+.brand-title {
+  margin: 0;
+  font-size: 40px;
+  line-height: 1.1;
+  font-weight: 650;
+  letter-spacing: 0;
+  color: #111827;
+}
+
+.brand-title span {
+  color: var(--landing-mode-color);
+}
+
+.brand-title em {
+  margin-left: 12px;
+  display: inline-block;
+  font-style: normal;
+  color: #111827;
+}
+
+.brand-sub {
+  margin: 12px auto 0;
+  max-width: 560px;
+  color: #667085;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.composer {
+  width: 100%;
+  max-width: 760px;
+}
+
+.composer-shell {
+  position: relative;
+  overflow: hidden;
+  border-radius: 12px;
+  border: 0.5px solid #d1d8e5;
+  background: #fff;
+  box-shadow:
+    0 8px 24px rgba(15, 23, 42, 0.08),
+    0 0 0 1px color-mix(in srgb, var(--landing-mode-color) 14%, transparent);
+  transition: box-shadow 0.18s ease, border-color 0.18s ease;
+}
+
+.composer-shell:focus-within {
+  border-color: color-mix(in srgb, var(--landing-mode-color) 54%, #d1d8e5);
+  box-shadow:
+    0 12px 32px rgba(15, 23, 42, 0.10),
+    0 0 0 3px color-mix(in srgb, var(--landing-mode-color) 16%, transparent);
+}
+
+.ai-surface::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: radial-gradient(color-mix(in srgb, var(--landing-mode-color) 8%, transparent) 1px, transparent 1px);
+  background-size: 20px 20px;
+  opacity: 0.5;
+  mask-image: radial-gradient(ellipse at center, black 30%, transparent 70%);
+}
+
+.composer-mode-bar {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 0.5px solid color-mix(in srgb, var(--landing-mode-color) 22%, #d8dee8);
+  background: var(--landing-mode-soft);
+  color: var(--landing-mode-ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.composer-mode-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.composer-mode-label > span:first-child {
+  display: inline-flex;
+  width: 16px;
+  align-items: center;
+  justify-content: center;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+}
+
+.composer-attachment {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px 0;
+}
+
+.composer-attachment-thumb {
+  position: relative;
+  width: 60px;
+  height: 60px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 0.5px solid #d8dee8;
+}
+
+.composer-attachment-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.composer-attachment-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 0.5px solid #d8dee8;
+  background: #f8fafc;
+  font-size: 12px;
+  color: #667085;
+}
+
+.composer-attachment-file-icon {
+  font-size: 14px;
+}
+
+.composer-attachment-file-name {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-attachment-remove {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(15, 23, 42, 0.55);
+  color: #fff;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.composer-attachment-thumb .composer-attachment-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+}
+
+.composer-body {
+  position: relative;
+  z-index: 1;
+  padding: 14px 16px 10px;
+}
+
+.composer-input {
+  width: 100%;
+  min-height: 72px;
+  max-height: 240px;
+  border: 0;
+  outline: 0;
+  resize: none;
+  background: transparent;
+  color: #111827;
+  font-size: 14px;
+  line-height: 1.55;
+  font-family: inherit;
+}
+
+.composer-input::placeholder {
+  color: #98a2b3;
+}
+
+.composer-toolbar {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 0.5px solid #e4e8f0;
+  background: #f8fafc;
+}
+
+.chip {
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 0.5px solid #d8dee8;
+  background: #fff;
+  color: #667085;
+  cursor: pointer;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.chip:hover:not(:disabled) {
+  background: #f1f4f9;
+  color: #111827;
+}
+
+.chip:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.composer-model-chip {
+  max-width: 280px;
+}
+
+.composer-model-chip > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 240px;
+}
+
+.composer-model-chip.is-open {
+  border-color: var(--landing-mode-color);
+  color: var(--landing-mode-ink);
+}
+
+.toolbar-spacer {
+  flex: 1;
+}
+
+.landing-submit {
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 0.5px solid var(--landing-mode-color);
+  background: var(--landing-mode-color);
+  color: #fff;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.landing-submit:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.submit-kbd {
+  display: inline-flex;
+  min-width: 16px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 5px;
+  border-radius: 3px;
+  border: 0.5px solid rgba(255, 255, 255, 0.18);
+  background: rgba(0, 0, 0, 0.18);
+  color: #fff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 9px;
+  line-height: 14px;
+}
+
+.composer-submit-spinner {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 255, 255, 0.5);
+  border-top-color: #fff;
+  animation: composer-submit-spin 0.7s linear infinite;
+}
+
+@keyframes composer-submit-spin {
+  to { transform: rotate(360deg); }
 }
 </style>
 
