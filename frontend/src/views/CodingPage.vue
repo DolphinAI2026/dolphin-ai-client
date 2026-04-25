@@ -1,5 +1,5 @@
 <template>
-  <WorkbenchShell>
+  <BuilderFrame :breadcrumbs="[{ label: '智能开发' }]">
     <!-- Env Picker Dialog -->
     <el-dialog v-model="showEnvPicker" title="选择调试平台环境" width="500px" :append-to-body="true">
       <div v-if="platformEnvs.length === 0" style="text-align:center;color:#999;padding:20px;">
@@ -577,7 +577,7 @@
         </template>
       </aside>
     </div>
-  </WorkbenchShell>
+  </BuilderFrame>
 
   <EnvSelectModal v-model="showUploadEnvModal" @selected="onUploadEnvSelected" />
 </template>
@@ -598,7 +598,7 @@ import { conversationApi } from '@/api/conversation'
 import { llmConfigApi, type BuilderModelOption } from '@/api/llmConfig'
 import { consumeSseResponse } from '@/utils/sse'
 import { useThemeStore } from '@/stores/theme'
-import WorkbenchShell from '@/components/WorkbenchShell.vue'
+import BuilderFrame from '@/components/BuilderFrame.vue'
 import EnvSelectModal from '@/components/EnvSelectModal.vue'
 import FileCard from '@/components/FileCard.vue'
 import { useCodingModel } from './coding/useCodingModel'
@@ -2286,6 +2286,7 @@ watch(() => route.path, () => {
   margin-bottom: 26px;
   padding-bottom: 4px;
   scrollbar-width: none;
+  flex-shrink: 0;
 }
 
 .scene-tabs::-webkit-scrollbar {
@@ -2331,6 +2332,7 @@ watch(() => route.path, () => {
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
+  flex-shrink: 0;
 }
 
 .scene-suggestion-grid::-webkit-scrollbar {
@@ -2371,6 +2373,7 @@ watch(() => route.path, () => {
 .workspace-showcase {
   width: min(100%, 1280px);
   margin-top: 0;
+  flex-shrink: 0;
 }
 
 .workspace-showcase-header {
