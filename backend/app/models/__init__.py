@@ -223,6 +223,10 @@ class Application(Base):
     current_doc_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 当前文档版本号
     canonical_spec_id: Mapped[Optional[str]] = mapped_column(String(40), ForeignKey("specs.id"), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="draft", nullable=False)  # draft/generating/updating/completed/failed
+    # Phase C 协作：git 镜像元数据
+    git_repo_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    git_provider: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # 'gitlab' | 'github'
+    git_default_branch: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 

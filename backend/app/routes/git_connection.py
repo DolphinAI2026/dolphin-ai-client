@@ -10,12 +10,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.deps import get_auth_context, AuthContext
+from app.models import Application
 from app.models.collaboration import GitConnection
 from app.git.connection import encrypt_token
 from app.project_access import require_project_access
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/projects", tags=["git-connection"])
+# application 级别的 git-init 走独立 router（路径前缀不同）
+app_router = APIRouter(prefix="/applications", tags=["git-init"])
 
 
 class ConnectGitPATRequest(BaseModel):
@@ -117,4 +120,56 @@ def _to_dict(conn: GitConnection) -> dict:
         "group_id_or_org": conn.group_id_or_org,
         "status": conn.status,
         # 不返回 access_token_enc — 安全
+    }
+
+
+@app_router.post("/{application_id}/git-init")
+async def init_repo_endpoint(
+    application_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """为 application 在 git 平台上初始化 repo + 推第一版 SPEC。
+
+    要求：
+    - application 存在且属于当前 tenant
+    - application.project_id 必须存在（用来查 GitConnection）
+    - 调用方至少是 project maintainer
+    - 该 project 已配置 GitConnection（先调 POST /api/projects/{id}/git-connection）
+    """
+    from app.git.repo_init import init_repo_for_application
+
+    app_obj = (await db.execute(
+        select(Application).where(
+            Application.id == application_id,
+            Application.tenant_id == ctx.tenant_id,
+        )
+    )).scalar_one_or_none()
+    if not app_obj:
+        raise HTTPException(404, "应用不存在")
+
+    if app_obj.project_id is None:
+        raise HTTPException(400, "应用未关联 project，无法初始化 git repo")
+
+    # role check：project maintainer+ 才能 init
+    await require_project_access(
+        db, project_id=app_obj.project_id, user_id=ctx.user.id, tenant_id=ctx.tenant_id,
+        minimum_role="maintainer",
+    )
+
+    git_conn = (await db.execute(
+        select(GitConnection).where(GitConnection.project_id == app_obj.project_id)
+    )).scalar_one_or_none()
+    if not git_conn:
+        raise HTTPException(
+            400,
+            "项目尚未连接 git；请先调用 POST /api/projects/{project_id}/git-connection",
+        )
+
+    full_path = await init_repo_for_application(db, application=app_obj, git_connection=git_conn)
+    return {
+        "git_repo_url": app_obj.git_repo_url,
+        "git_provider": app_obj.git_provider,
+        "git_default_branch": app_obj.git_default_branch,
+        "full_path": full_path,
     }

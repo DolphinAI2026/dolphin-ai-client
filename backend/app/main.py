@@ -92,6 +92,7 @@ app.include_router(application_members.router, prefix="/api")
 app.include_router(proposals.app_router, prefix="/api")
 app.include_router(proposals.prop_router, prefix="/api")
 app.include_router(git_connection.router, prefix="/api")
+app.include_router(git_connection.app_router, prefix="/api")
 # 平台代理路由注册在根路径（/platform/... 和 /backend/... 需要直接匹配）
 app.include_router(platform_proxy.router)
 
