@@ -178,3 +178,40 @@ async def save_spec(db: AsyncSession, spec: Spec, *, tenant_id: int) -> SpecORM:
     # version 触发 OptimisticLockError（如 stream 模式连续多个 spec_patch）
     spec.version = row.version
     return row
+
+
+async def fork_canonical_to_draft(
+    db: AsyncSession,
+    *,
+    canonical: Spec,
+    user_id: int,
+    tenant_id: int,
+) -> Spec:
+    """从 canonical Spec 派生一个 personal draft（深拷贝 + 新 id）。
+
+    新 draft：
+    - id 全新（new_spec_id）
+    - parent_spec_id 指向 canonical.id
+    - version 重置为 1（draft 自己的版本线，与 canonical 版本独立）
+    - kind='draft'（持久化时由 to_orm 写入）
+    - application_id 继承
+
+    持久化 draft 到 DB，返回 in-memory Spec 对象。
+    """
+    new_id = new_spec_id()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    # 通过 model_dump → re-parse 实现深拷贝
+    payload = canonical.model_dump(mode="json")
+    payload["id"] = new_id
+    payload["parent_spec_id"] = canonical.id
+    payload["version"] = 1
+    payload["created_by"] = user_id
+    payload["created_at"] = now.isoformat()
+    payload["updated_at"] = now.isoformat()
+    draft = Spec.model_validate(payload)
+
+    # 持久化为 kind='draft'
+    orm = to_orm(draft, tenant_id=tenant_id, kind="draft")
+    db.add(orm)
+    await db.commit()
+    return draft
