@@ -1242,6 +1242,32 @@ watch(
 .el-dialog.env-dialog .el-overlay {
   background-color: rgba(0, 0, 0, 0.6) !important;
 }
+/* 确保 dark 模式下 primary 按钮可见 + 字号统一 */
+.el-dialog.env-dialog .el-button--primary {
+  background: var(--b-brand) !important;
+  border-color: var(--b-brand) !important;
+  color: #ffffff !important;
+}
+.el-dialog.env-dialog .el-button--primary:hover,
+.el-dialog.env-dialog .el-button--primary:focus {
+  background: var(--b-brand-ink) !important;
+  border-color: var(--b-brand-ink) !important;
+  color: #ffffff !important;
+}
+.el-dialog.env-dialog .el-button {
+  font-size: 14px;
+  padding: 8px 18px;
+}
+/* 输入框字体放大（用户反馈过小） */
+.el-dialog.env-dialog .el-input__inner,
+.el-dialog.env-dialog .el-textarea__inner,
+.el-dialog.env-dialog .el-select__wrapper {
+  font-size: 14px !important;
+}
+.el-dialog.env-dialog .el-input,
+.el-dialog.env-dialog .el-input-number {
+  font-size: 14px;
+}
 .el-dialog.env-dialog .el-input__suffix {
   color: var(--b-text-muted);
 }
@@ -1265,10 +1291,11 @@ watch(
   -webkit-text-fill-color: var(--b-text) !important;
   transition: background-color 5000s ease-in-out 0s;
 }
-/* 按钮样式覆盖 */
+/* 按钮样式覆盖（修：之前用了未定义的 --b-ink，dark 模式下变成默认浅色） */
 .el-dialog.env-dialog .el-button--primary {
-  background: var(--b-ink) !important;
-  border: 1px solid var(--b-ink) !important;
+  background: var(--b-brand) !important;
+  border: 1px solid var(--b-brand) !important;
+  color: #ffffff !important;
 }
 .el-dialog.env-dialog .el-button--default {
   background: var(--b-panel-soft) !important;
