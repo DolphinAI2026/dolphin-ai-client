@@ -11,16 +11,25 @@ from app.models import Project, ProjectMember
 
 
 PROJECT_ROLE_LEVELS = {
-    "member": 1,
-    "admin": 2,
-    "owner": 3,
+    "viewer": 1,
+    "contributor": 2,
+    "maintainer": 3,
+    "owner": 4,
+}
+
+# 旧名称到新名称的映射（向后兼容，DB 已通过 migration 改了，但 API 入参可能还是旧名称）
+LEGACY_ROLE_ALIASES = {
+    "member": "contributor",
+    "admin": "maintainer",
 }
 
 
 def normalize_project_role(role: Optional[str]) -> str:
+    if role in LEGACY_ROLE_ALIASES:
+        return LEGACY_ROLE_ALIASES[role]
     if role in PROJECT_ROLE_LEVELS:
         return role
-    return "member"
+    return "viewer"
 
 
 def project_role_at_least(role: Optional[str], required: str) -> bool:
@@ -32,14 +41,14 @@ def project_role_at_least(role: Optional[str], required: str) -> bool:
 def project_role_permissions(role: Optional[str]) -> dict[str, bool]:
     normalized = normalize_project_role(role)
     return {
-        "can_view": True,
-        "can_edit": project_role_at_least(normalized, "member"),
-        "can_manage_project": project_role_at_least(normalized, "admin"),
-        "can_manage_platform": project_role_at_least(normalized, "admin"),
-        "can_manage_members": project_role_at_least(normalized, "admin"),
+        "can_view": True,  # viewer 起就能看
+        "can_edit": project_role_at_least(normalized, "contributor"),
+        "can_manage_project": project_role_at_least(normalized, "maintainer"),
+        "can_manage_platform": project_role_at_least(normalized, "maintainer"),
+        "can_manage_members": project_role_at_least(normalized, "maintainer"),
         "can_manage_member_roles": normalized == "owner",
         "can_delete": normalized == "owner",
-        "can_publish": project_role_at_least(normalized, "admin"),
+        "can_publish": project_role_at_least(normalized, "maintainer"),
     }
 
 
@@ -84,7 +93,7 @@ async def get_project_access(
 
     return ProjectAccess(
         project=project,
-        role=normalize_project_role(member.role or "member"),
+        role=normalize_project_role(member.role or "contributor"),
     )
 
 
@@ -94,7 +103,7 @@ async def require_project_access(
     project_id: int,
     user_id: int,
     tenant_id: int,
-    minimum_role: str = "member",
+    minimum_role: str = "contributor",
 ) -> ProjectAccess:
     access = await get_project_access(
         db,
