@@ -14,6 +14,13 @@ BigText = Text().with_variant(LONGTEXT, "mysql")
 # Import tenant models
 from app.models.tenant import Tenant, UserTenant, Role, Team, TeamMember
 from app.models.spec import Spec  # noqa: F401  — register ORM mapping
+from app.models.collaboration import (  # noqa: F401  — register ORM mapping
+    ApplicationMember,
+    ChangeProposal,
+    ProposalReview,
+    GitConnection,
+    PlatformDriftLog,
+)
 
 
 class User(Base):
