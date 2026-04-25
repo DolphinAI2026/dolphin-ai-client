@@ -68,154 +68,149 @@
           <div class="toggle-bar-placeholder"></div>
         </div>
 
-        <!-- Welcome State -->
+        <!-- Welcome State (Workspace-first redesign) -->
         <div v-if="!ideUrl && !isStreaming && streamMessages.length === 0" class="welcome-pane">
-          <div class="welcome-inner">
-            <!-- 参考首页 Landing 风格的 hero -->
-            <div class="coding-landing-hero" :style="codingLandingVars">
-              <div class="coding-landing-bg"></div>
+          <div class="welcome-inner" :style="codingLandingVars">
 
-              <section class="brand-copy">
-                <h1 class="brand-title">
-                  <span class="brand-glyph-inline">{}</span>
-                  <span>AI 帮你写代码</span>
-                </h1>
-                <p class="brand-sub">描述组件、页面或接口，AI 帮你打开 Coding 工作区。</p>
-              </section>
+            <!-- ─── 顶部紧凑 Composer：单行输入 + 内嵌 toolbar ─── -->
+            <section class="qc-section">
+              <input
+                ref="fileInputRef"
+                type="file"
+                accept=".md,.pdf,.docx,.txt,.png,.jpg,.jpeg"
+                style="display: none"
+                @change="handleFileSelect"
+              />
 
-              <section class="composer">
-                <div class="composer-shell ai-surface">
-                  <div class="composer-mode-bar">
-                    <span class="composer-mode-label">
-                      <span>{}</span>
-                      Code · 智能开发
-                    </span>
+              <div class="qc-shell ai-surface">
+                <div class="qc-row" @paste="handlePaste">
+                  <textarea
+                    v-model="userInput"
+                    class="qc-input"
+                    :placeholder="`描述你想开发的 ${activeSceneCategoryLabel}…`"
+                    rows="1"
+                    @keydown.enter.exact.prevent="sendMessage"
+                    @keydown.meta.enter.prevent="sendMessage"
+                    @keydown.ctrl.enter.prevent="sendMessage"
+                    :disabled="isCreating"
+                  ></textarea>
+                  <button
+                    type="button"
+                    class="qc-submit"
+                    :disabled="(!userInput.trim() && !attachedFile) || isCreating"
+                    @click="sendMessage"
+                    title="进入开发 (Enter)"
+                  >
+                    <span v-if="!isCreating && !isUploading" class="qc-submit-arrow">↗</span>
+                    <span v-else class="composer-submit-spinner" />
+                  </button>
+                </div>
+
+                <!-- 附件预览 -->
+                <div v-if="attachedFile" class="qc-attach">
+                  <div v-if="attachedPreviewUrl" class="qc-attach-thumb">
+                    <img :src="attachedPreviewUrl" alt="preview" />
+                    <button class="qc-attach-remove" @click="removeAttachment">&times;</button>
                   </div>
-
-                  <input
-                    ref="fileInputRef"
-                    type="file"
-                    accept=".md,.pdf,.docx,.txt,.png,.jpg,.jpeg"
-                    style="display: none"
-                    @change="handleFileSelect"
-                  />
-
-                  <!-- 附件预览 -->
-                  <div v-if="attachedFile" class="composer-attachment">
-                    <div v-if="attachedPreviewUrl" class="composer-attachment-thumb">
-                      <img :src="attachedPreviewUrl" alt="preview" />
-                      <button class="composer-attachment-remove" @click="removeAttachment">&times;</button>
-                    </div>
-                    <div v-else class="composer-attachment-file">
-                      <span class="composer-attachment-file-icon">&#128196;</span>
-                      <span class="composer-attachment-file-name">{{ attachedFile.name }}</span>
-                      <button class="composer-attachment-remove" @click="removeAttachment">&times;</button>
-                    </div>
-                  </div>
-
-                  <div class="composer-body" @paste="handlePaste">
-                    <textarea
-                      v-model="userInput"
-                      class="composer-input"
-                      placeholder="描述你想开发的内容。例如：做一个头像上传组件，支持裁剪、预览、上传失败重试，并输出可接入表单的组件。"
-                      @keydown.ctrl.enter="sendMessage"
-                      @keydown.meta.enter="sendMessage"
-                      :disabled="isCreating"
-                    ></textarea>
-                  </div>
-
-                  <div class="composer-toolbar">
-                    <button
-                      type="button"
-                      class="chip"
-                      @click="fileInputRef?.click()"
-                      :disabled="isCreating"
-                      title="上传附件"
-                    >＋ 附加文件</button>
-
-                    <el-popover
-                      v-model:visible="codingModelPopoverVisible"
-                      placement="bottom-start"
-                      trigger="click"
-                      :width="360"
-                      popper-class="coding-model-popover"
-                      :disabled="codingModelLoading || updatingCodingModel || codingModelOptions.length === 0"
-                    >
-                      <template #reference>
-                        <button
-                          type="button"
-                          class="chip composer-model-chip"
-                          :class="{ 'is-open': codingModelPopoverVisible, 'is-disabled': codingModelLoading || updatingCodingModel || codingModelOptions.length === 0 }"
-                          :disabled="codingModelLoading || updatingCodingModel || codingModelOptions.length === 0"
-                          aria-label="选择模型"
-                        >
-                          <span>{{ selectedCodingModelOption?.config_name || '选择模型' }}</span>
-                          <el-icon><ArrowDown /></el-icon>
-                        </button>
-                      </template>
-                      <div class="coding-model-panel">
-                        <button
-                          v-for="option in codingModelOptions"
-                          :key="option.id"
-                          type="button"
-                          class="coding-model-panel-option"
-                          :class="{ 'is-active': selectedCodingModelValue === toCodingModelValue(option.id) }"
-                          @click="selectCodingModel(option)"
-                        >
-                          <div class="coding-model-panel-option-head">
-                            <span class="coding-model-panel-option-name">{{ option.config_name }}</span>
-                            <span v-if="option.is_default" class="coding-model-panel-option-default">默认</span>
-                          </div>
-                          <span class="coding-model-panel-option-meta">
-                            {{ formatCodingModelProvider(option.provider) }} / {{ option.model }}
-                          </span>
-                        </button>
-                      </div>
-                    </el-popover>
-
-                    <div class="toolbar-spacer"></div>
-
-                    <button
-                      type="button"
-                      class="landing-submit"
-                      :disabled="(!userInput.trim() && !attachedFile) || isCreating"
-                      @click="sendMessage"
-                    >
-                      <span v-if="!isCreating && !isUploading">↗</span>
-                      <span v-else class="composer-submit-spinner" />
-                      进入开发
-                      <span class="submit-kbd">⌘↵</span>
-                    </button>
+                  <div v-else class="qc-attach-file">
+                    <span class="qc-attach-icon">&#128196;</span>
+                    <span class="qc-attach-name">{{ attachedFile.name }}</span>
+                    <button class="qc-attach-remove" @click="removeAttachment">&times;</button>
                   </div>
                 </div>
-              </section>
-            </div>
 
-            <!-- Scene Category Chips -->
-            <div class="scene-tabs">
-              <button
-                v-for="cat in sceneCategories"
-                :key="cat.key"
-                class="scene-tab"
-                :class="{ active: activeSceneCategory === cat.key }"
-                @click="activeSceneCategory = cat.key"
-              >
-                <span class="scene-tab-icon">{{ cat.icon }}</span>
-                {{ cat.label }}
-              </button>
-            </div>
+                <!-- Toolbar：附件 + 类型 + 模型 -->
+                <div class="qc-toolbar">
+                  <button
+                    type="button"
+                    class="qc-chip qc-icon-only"
+                    @click="fileInputRef?.click()"
+                    :disabled="isCreating"
+                    title="附加文件"
+                  >📎</button>
 
-            <div v-if="sceneSuggestions[activeSceneCategory]?.length" class="scene-suggestion-grid">
-              <button
-                v-for="suggestion in sceneSuggestions[activeSceneCategory]"
-                :key="suggestion"
-                class="scene-suggestion-card"
-                @click="sendSuggestion(suggestion)"
-              >
-                {{ suggestion }}
-              </button>
-            </div>
+                  <!-- 类型选择（替代外面的 tab pills） -->
+                  <el-popover placement="bottom-start" trigger="click" :width="180">
+                    <template #reference>
+                      <button type="button" class="qc-chip qc-chip-type" title="项目类型">
+                        <span>{{ activeSceneCategoryIcon }}</span>
+                        <span>{{ activeSceneCategoryLabel }}</span>
+                        <el-icon><ArrowDown /></el-icon>
+                      </button>
+                    </template>
+                    <div class="qc-type-panel">
+                      <button
+                        v-for="cat in sceneCategories"
+                        :key="cat.key"
+                        type="button"
+                        class="qc-type-option"
+                        :class="{ 'is-active': activeSceneCategory === cat.key }"
+                        @click="activeSceneCategory = cat.key"
+                      >
+                        <span>{{ cat.icon }}</span>
+                        <span>{{ cat.label }}</span>
+                      </button>
+                    </div>
+                  </el-popover>
 
+                  <!-- 模型选择 -->
+                  <el-popover
+                    v-model:visible="codingModelPopoverVisible"
+                    placement="bottom-start"
+                    trigger="click"
+                    :width="360"
+                    popper-class="coding-model-popover"
+                    :disabled="codingModelLoading || updatingCodingModel || codingModelOptions.length === 0"
+                  >
+                    <template #reference>
+                      <button
+                        type="button"
+                        class="qc-chip"
+                        :class="{ 'is-open': codingModelPopoverVisible, 'is-disabled': codingModelLoading || updatingCodingModel || codingModelOptions.length === 0 }"
+                        :disabled="codingModelLoading || updatingCodingModel || codingModelOptions.length === 0"
+                        aria-label="选择模型"
+                      >
+                        <span>{{ selectedCodingModelOption?.config_name || '选择模型' }}</span>
+                        <el-icon><ArrowDown /></el-icon>
+                      </button>
+                    </template>
+                    <div class="coding-model-panel">
+                      <button
+                        v-for="option in codingModelOptions"
+                        :key="option.id"
+                        type="button"
+                        class="coding-model-panel-option"
+                        :class="{ 'is-active': selectedCodingModelValue === toCodingModelValue(option.id) }"
+                        @click="selectCodingModel(option)"
+                      >
+                        <div class="coding-model-panel-option-head">
+                          <span class="coding-model-panel-option-name">{{ option.config_name }}</span>
+                          <span v-if="option.is_default" class="coding-model-panel-option-default">默认</span>
+                        </div>
+                        <span class="coding-model-panel-option-meta">
+                          {{ formatCodingModelProvider(option.provider) }} / {{ option.model }}
+                        </span>
+                      </button>
+                    </div>
+                  </el-popover>
+
+                  <div class="qc-spacer"></div>
+
+                  <span class="qc-kbd-hint">⌘↵ 进入开发</span>
+                </div>
+              </div>
+
+              <!-- 灰色 hint 行：suggestion 折叠成单行 -->
+              <p v-if="topSuggestions.length" class="qc-hints">
+                <span class="qc-hints-label">💡 试试</span>
+                <template v-for="(s, i) in topSuggestions" :key="s">
+                  <button type="button" class="qc-hint-item" @click="sendSuggestion(s)">{{ s }}</button>
+                  <span v-if="i < topSuggestions.length - 1" class="qc-hint-sep">·</span>
+                </template>
+              </p>
+            </section>
+
+            <!-- ─── 主区域：工作区列表 ─── -->
             <div class="workspace-showcase">
               <div class="workspace-showcase-header">
                 <div>
@@ -877,6 +872,17 @@ const sceneSuggestions: Record<string, string[]> = {
 }
 
 const activeSceneCategory = ref('component-pc')
+
+// Workspace-first 重设新增的派生状态
+const activeSceneCategoryLabel = computed(() =>
+  sceneCategories.find(c => c.key === activeSceneCategory.value)?.label || '组件'
+)
+const activeSceneCategoryIcon = computed(() =>
+  sceneCategories.find(c => c.key === activeSceneCategory.value)?.icon || '🧩'
+)
+const topSuggestions = computed(() =>
+  (sceneSuggestions[activeSceneCategory.value] || []).slice(0, 4)
+)
 const pendingSceneCategory = ref<string | null>(null)
 
 const sceneCategoryToProjectType: Record<string, string> = {
@@ -2367,6 +2373,265 @@ watch(() => route.path, () => {
   border-color: var(--t-brand);
   color: var(--t-brand);
   background: var(--t-brand-subtle);
+}
+
+/* ============ Quick Composer (Workspace-first 重设) ============ */
+.qc-section {
+  width: min(100%, 960px);
+  margin: 12px auto 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.qc-shell {
+  border: 1px solid var(--t-border-subtle);
+  border-radius: 12px;
+  background: var(--t-bg-panel);
+  overflow: hidden;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.qc-shell:focus-within {
+  border-color: var(--landing-mode-color);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--landing-mode-color) 14%, transparent);
+}
+
+.qc-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 10px 10px 16px;
+}
+
+.qc-input {
+  flex: 1;
+  border: 0;
+  outline: 0;
+  resize: none;
+  background: transparent;
+  color: var(--t-text-primary);
+  font-size: 14px;
+  line-height: 1.55;
+  font-family: inherit;
+  min-height: 24px;
+  max-height: 160px;
+  padding: 0;
+}
+
+.qc-input::placeholder {
+  color: var(--t-text-muted);
+}
+
+.qc-submit {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  border: 0;
+  background: var(--landing-mode-color);
+  color: #fff;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.qc-submit:disabled {
+  opacity: 0.32;
+  cursor: not-allowed;
+}
+
+.qc-submit:not(:disabled):hover {
+  transform: translateY(-1px);
+}
+
+.qc-submit-arrow {
+  display: inline-block;
+  transform: translate(-1px, 1px);
+}
+
+.qc-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px 10px;
+}
+
+.qc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--t-border-subtle);
+  background: var(--t-bg-input);
+  color: var(--t-text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.qc-chip:not(:disabled):hover {
+  color: var(--t-brand);
+  border-color: var(--t-brand);
+  background: var(--t-brand-subtle);
+}
+
+.qc-chip:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.qc-icon-only {
+  width: 26px;
+  padding: 0;
+  justify-content: center;
+}
+
+.qc-chip-type {
+  font-weight: 500;
+}
+
+.qc-spacer {
+  flex: 1;
+}
+
+.qc-kbd-hint {
+  color: var(--t-text-muted);
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.qc-type-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+}
+
+.qc-type-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--t-text-primary);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  text-align: left;
+  transition: background 0.15s ease;
+}
+
+.qc-type-option:hover {
+  background: var(--t-bg-panel-hover);
+}
+
+.qc-type-option.is-active {
+  background: var(--t-brand-subtle);
+  color: var(--t-brand);
+  font-weight: 600;
+}
+
+.qc-attach {
+  padding: 0 12px 8px;
+}
+
+.qc-attach-thumb {
+  position: relative;
+  display: inline-block;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--t-border-subtle);
+}
+
+.qc-attach-thumb img {
+  display: block;
+  max-width: 96px;
+  max-height: 64px;
+  object-fit: cover;
+}
+
+.qc-attach-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--t-bg-input);
+  color: var(--t-text-secondary);
+  font-size: 12px;
+}
+
+.qc-attach-icon {
+  font-size: 13px;
+}
+
+.qc-attach-name {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qc-attach-remove {
+  margin-left: 4px;
+  width: 18px;
+  height: 18px;
+  border-radius: 9px;
+  border: 0;
+  background: rgba(0, 0, 0, 0.06);
+  color: inherit;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.qc-hints {
+  margin: 0;
+  padding: 0 4px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  color: var(--t-text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.qc-hints-label {
+  flex-shrink: 0;
+  margin-right: 4px;
+}
+
+.qc-hint-item {
+  border: 0;
+  background: transparent;
+  color: var(--t-text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.qc-hint-item:hover {
+  background: var(--t-brand-subtle);
+  color: var(--t-brand);
+}
+
+.qc-hint-sep {
+  color: var(--t-text-muted);
+  opacity: 0.5;
+  user-select: none;
 }
 
 /* ============ Workspace Showcase ============ */
