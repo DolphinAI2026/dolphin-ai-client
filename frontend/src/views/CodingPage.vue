@@ -3466,9 +3466,9 @@ watch(() => route.path, () => {
   position: relative;
   overflow: hidden;
   border-radius: 10px;
-  border: 1px solid #e4e8f0;
-  background: #fff;
-  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.04);
+  border: 1px solid var(--t-border-subtle);
+  background: var(--t-bg-panel);
+  box-shadow: var(--t-shadow-sm);
   transition: box-shadow 0.18s ease, border-color 0.18s ease;
 }
 
@@ -3489,9 +3489,9 @@ watch(() => route.path, () => {
   align-items: center;
   gap: 8px;
   padding: 5px 12px;
-  border-bottom: 1px solid #eef0f4;
-  background: #fafbfc;
-  color: #667085;
+  border-bottom: 1px solid var(--t-border-subtle);
+  background: var(--t-bg-input);
+  color: var(--t-text-secondary);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 10px;
   letter-spacing: 0.06em;

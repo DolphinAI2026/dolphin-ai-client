@@ -430,9 +430,9 @@ html[data-theme="dark"] {
 }
 
 html[data-theme="dark"] .builder-nav-logo {
-  background: #f8fafc;
-  border-color: #f8fafc;
-  color: #090b10;
+  background: var(--t-bg-elevated);
+  border-color: var(--t-bg-elevated);
+  color: var(--t-text-primary);
 }
 
 html[data-theme="dark"] .builder-btn-primary {
@@ -442,8 +442,8 @@ html[data-theme="dark"] .builder-btn-primary {
 }
 
 html[data-theme="dark"] .builder-nav-tooltip {
-  background: #f8fafc;
-  color: #090b10;
+  background: var(--t-bg-elevated);
+  color: var(--t-text-primary);
 }
 
 .builder-btn-primary:hover {
