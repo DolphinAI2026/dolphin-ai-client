@@ -56,6 +56,17 @@ async def create_conversation(
         status="active"
     )
     db.add(conversation)
+    await db.flush()
+
+    initial_message = (data.initial_message or "").strip()
+    if initial_message:
+        conversation.title = initial_message.replace("\n", " ")[:30]
+        db.add(Message(
+            conversation_id=conversation.id,
+            role="user",
+            content=initial_message,
+        ))
+
     await db.commit()
     await db.refresh(conversation)
 

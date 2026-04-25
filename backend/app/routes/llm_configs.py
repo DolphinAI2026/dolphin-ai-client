@@ -146,7 +146,7 @@ async def get_provider_presets():
 
 @router.get("")
 async def list_llm_configs(
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """列出当前租户的 LLM 配置"""

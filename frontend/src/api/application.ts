@@ -9,14 +9,14 @@ export const applicationApi = {
   get(id: number) {
     return request.get<any, Application>(`/applications/${id}`)
   },
-  create(data: { conversation_id?: number; app_name: string; app_code: string; description?: string; config_preview?: any; platform_env_id?: number | null }) {
+  create(data: { conversation_id?: number; project_id?: number; app_name: string; app_code: string; description?: string; config_preview?: any; platform_env_id?: number | null }) {
     return request.post<any, Application>('/applications', data)
   },
-  update(id: number, data: { conversation_id?: number; app_name: string; app_code: string; description?: string; config_preview?: any; platform_env_id?: number | null }) {
+  update(id: number, data: { conversation_id?: number; project_id?: number; app_name: string; app_code: string; description?: string; config_preview?: any; platform_env_id?: number | null }) {
     return request.put<any, Application>(`/applications/${id}`, data)
   },
   /** 首次生成配置时自动创建应用（不重复创建） */
-  autoCreate(data: { app_name: string; config_preview: any; conversation_id?: number }) {
+  autoCreate(data: { app_name: string; config_preview: any; conversation_id?: number; project_id?: number }) {
     return request.post<any, { app_id: number; app_name: string; app_code: string; is_new: boolean }>('/applications/auto-create', data)
   },
   /** 从平台导入已有应用 */
@@ -69,6 +69,17 @@ export const applicationApi = {
   uploadDocVersionUrl(appId: number): string {
     const token = localStorage.getItem('token') || ''
     return `${API_PREFIX}/applications/${appId}/upload-doc-version?token=${token}`
+  },
+
+  /** 根据对话更新诉求生成新版 SPEC 草稿 */
+  draftDocUpdate(appId: number, data: { instruction: string; conversation_id?: number | null; current_doc?: string }) {
+    return request.post<any, {
+      markdown: string
+      filename: string
+      summary: string
+      doc_result?: any
+      app_config?: any
+    }>(`/applications/${appId}/draft-doc-update`, data, { timeout: 300000 })
   },
 
   /** 获取变更计划 */

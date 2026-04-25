@@ -18,6 +18,14 @@ from app.deps import get_auth_context, AuthContext
 from app.apaas_client import APaaSClient
 from app.coding.workspace import WorkspaceManager, WORKSPACE_ROOT
 from app.error_messages import APAAS_TOKEN_EXPIRED_PROJECT, APAAS_TOKEN_REFRESH_FAILED
+from app.models.tenant import UserTenant
+from app.project_access import (
+    ProjectAccess,
+    get_project_access,
+    project_role_at_least,
+    project_role_permissions,
+    require_project_access,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -105,8 +113,8 @@ class UpdateMemberRoleRequest(BaseModel):
 # 辅助函数
 # ============================================================
 
-def _project_to_dict(p: Project) -> dict:
-    return {
+def _project_to_dict(p: Project, *, current_role: Optional[str] = None) -> dict:
+    payload = {
         "id": p.id,
         "name": p.name,
         "description": p.description,
@@ -120,44 +128,10 @@ def _project_to_dict(p: Project) -> dict:
         "created_at": p.created_at.isoformat() if p.created_at else None,
         "updated_at": p.updated_at.isoformat() if p.updated_at else None,
     }
-
-
-async def _get_project_or_404(
-    project_id: int,
-    user_id: int,
-    db: AsyncSession,
-) -> Project:
-    """获取项目 — 允许项目所有者或成员访问"""
-    result = await db.execute(
-        select(Project).where(Project.id == project_id)
-    )
-    project = result.scalar_one_or_none()
-    if not project:
-        raise HTTPException(status_code=404, detail="项目不存在")
-    # 检查是否为项目所有者或成员
-    if project.user_id == user_id:
-        return project
-    member_result = await db.execute(
-        select(ProjectMember).where(
-            ProjectMember.project_id == project_id,
-            ProjectMember.user_id == user_id,
-        )
-    )
-    if member_result.scalar_one_or_none():
-        return project
-    raise HTTPException(status_code=404, detail="项目不存在")
-
-
-async def _get_member_role(project_id: int, user_id: int, db: AsyncSession) -> Optional[str]:
-    """获取用户在项目中的角色"""
-    result = await db.execute(
-        select(ProjectMember).where(
-            ProjectMember.project_id == project_id,
-            ProjectMember.user_id == user_id,
-        )
-    )
-    member = result.scalar_one_or_none()
-    return member.role if member else None
+    if current_role:
+        payload["current_role"] = current_role
+        payload.update(project_role_permissions(current_role))
+    return payload
 
 
 # ============================================================
@@ -175,6 +149,10 @@ async def list_projects(
         select(ProjectMember.project_id).where(ProjectMember.user_id == ctx.user.id)
     )
     member_project_ids = [row[0] for row in member_result.all()]
+    role_result = await db.execute(
+        select(ProjectMember.project_id, ProjectMember.role).where(ProjectMember.user_id == ctx.user.id)
+    )
+    role_map = {project_id: role for project_id, role in role_result.all()}
 
     result = await db.execute(
         select(Project)
@@ -188,7 +166,13 @@ async def list_projects(
         .order_by(Project.updated_at.desc())
     )
     projects = result.scalars().all()
-    return [_project_to_dict(p) for p in projects]
+    return [
+        _project_to_dict(
+            p,
+            current_role=role_map.get(p.id) or ("owner" if p.user_id == ctx.user.id else "member"),
+        )
+        for p in projects
+    ]
 
 
 @router.post("")
@@ -216,7 +200,7 @@ async def create_project(
     db.add(owner_member)
     await db.commit()
     await db.refresh(project)
-    return _project_to_dict(project)
+    return _project_to_dict(project, current_role="owner")
 
 
 @router.get("/{project_id}")
@@ -226,8 +210,13 @@ async def get_project(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """获取项目详情"""
-    project = await _get_project_or_404(project_id, ctx.user.id, db)
-    return _project_to_dict(project)
+    access = await require_project_access(
+        db,
+        project_id=project_id,
+        user_id=ctx.user.id,
+        tenant_id=ctx.tenant_id,
+    )
+    return _project_to_dict(access.project, current_role=access.role)
 
 
 @router.put("/{project_id}")
@@ -238,7 +227,14 @@ async def update_project(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """更新项目（包括平台配置）"""
-    project = await _get_project_or_404(project_id, ctx.user.id, db)
+    access = await require_project_access(
+        db,
+        project_id=project_id,
+        user_id=ctx.user.id,
+        tenant_id=ctx.tenant_id,
+        minimum_role="admin",
+    )
+    project = access.project
 
     for field in ["name", "description", "platform_url", "platform_tenant_id",
                   "platform_token", "platform_username", "platform_app_id", "platform_app_name",
@@ -249,7 +245,7 @@ async def update_project(
 
     await db.commit()
     await db.refresh(project)
-    return _project_to_dict(project)
+    return _project_to_dict(project, current_role=access.role)
 
 
 @router.delete("/{project_id}")
@@ -259,7 +255,14 @@ async def delete_project(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """删除项目（级联删除关联的成员记录）"""
-    project = await _get_project_or_404(project_id, ctx.user.id, db)
+    access = await require_project_access(
+        db,
+        project_id=project_id,
+        user_id=ctx.user.id,
+        tenant_id=ctx.tenant_id,
+        minimum_role="owner",
+    )
+    project = access.project
     # 先用原始 SQL 删除关联的 project_members（避免 ORM flush 顺序问题）
     from sqlalchemy import text
     await db.execute(text("DELETE FROM project_members WHERE project_id = :pid"), {"pid": project_id})
@@ -279,7 +282,13 @@ async def list_platform_apps(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """获取项目已连接平台的应用列表"""
-    project = await _get_project_or_404(project_id, ctx.user.id, db)
+    access = await require_project_access(
+        db,
+        project_id=project_id,
+        user_id=ctx.user.id,
+        tenant_id=ctx.tenant_id,
+    )
+    project = access.project
 
     if not project.platform_token:
         raise HTTPException(status_code=400, detail="项目尚未连接平台，请先登录")
@@ -314,7 +323,14 @@ async def connect_project_platform(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """为项目连接/登录得帆云平台"""
-    project = await _get_project_or_404(project_id, ctx.user.id, db)
+    access = await require_project_access(
+        db,
+        project_id=project_id,
+        user_id=ctx.user.id,
+        tenant_id=ctx.tenant_id,
+        minimum_role="admin",
+    )
+    project = access.project
 
     client = APaaSClient(base_url=req.base_url, tenant_id=req.tenant_id)
     try:
@@ -340,7 +356,7 @@ async def connect_project_platform(
 
         await db.commit()
         await db.refresh(project)
-        return _project_to_dict(project)
+        return _project_to_dict(project, current_role=access.role)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"平台登录失败: {e}")
 
@@ -356,7 +372,12 @@ async def list_members(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """列出项目所有成员"""
-    await _get_project_or_404(project_id, ctx.user.id, db)
+    await require_project_access(
+        db,
+        project_id=project_id,
+        user_id=ctx.user.id,
+        tenant_id=ctx.tenant_id,
+    )
     result = await db.execute(
         select(ProjectMember, User)
         .join(User, ProjectMember.user_id == User.id)
@@ -384,12 +405,13 @@ async def add_member(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """添加项目成员（需要 owner 或 admin 权限）"""
-    await _get_project_or_404(project_id, ctx.user.id, db)
-
-    # 权限检查
-    caller_role = await _get_member_role(project_id, ctx.user.id, db)
-    if caller_role not in ("owner", "admin"):
-        raise HTTPException(status_code=403, detail="无权添加成员")
+    access = await require_project_access(
+        db,
+        project_id=project_id,
+        user_id=ctx.user.id,
+        tenant_id=ctx.tenant_id,
+        minimum_role="admin",
+    )
 
     # 查找目标用户
     if req.user_id:
@@ -402,6 +424,18 @@ async def add_member(
     target_user = result.scalar_one_or_none()
     if not target_user:
         raise HTTPException(status_code=404, detail="用户不存在")
+    if not target_user.is_active:
+        raise HTTPException(status_code=400, detail="目标用户已被禁用")
+
+    membership_result = await db.execute(
+        select(UserTenant).where(
+            UserTenant.user_id == target_user.id,
+            UserTenant.tenant_id == ctx.tenant_id,
+            UserTenant.status == 1,
+        )
+    )
+    if not membership_result.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="目标用户不是当前组织的有效成员")
 
     # 检查是否已是成员
     existing = await db.execute(
@@ -414,6 +448,9 @@ async def add_member(
         raise HTTPException(status_code=400, detail="该用户已是项目成员")
 
     role = req.role if req.role in ("admin", "member") else "member"
+    if role == "admin" and access.role != "owner":
+        raise HTTPException(status_code=403, detail="仅项目所有者可添加管理员")
+
     member = ProjectMember(
         project_id=project_id,
         user_id=target_user.id,
@@ -439,11 +476,13 @@ async def remove_member(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """移除项目成员（owner 不可被移除）"""
-    await _get_project_or_404(project_id, ctx.user.id, db)
-
-    caller_role = await _get_member_role(project_id, ctx.user.id, db)
-    if caller_role not in ("owner", "admin"):
-        raise HTTPException(status_code=403, detail="无权移除成员")
+    access = await require_project_access(
+        db,
+        project_id=project_id,
+        user_id=ctx.user.id,
+        tenant_id=ctx.tenant_id,
+        minimum_role="admin",
+    )
 
     result = await db.execute(
         select(ProjectMember).where(
@@ -456,6 +495,10 @@ async def remove_member(
         raise HTTPException(status_code=404, detail="成员不存在")
     if member.role == "owner":
         raise HTTPException(status_code=400, detail="无法移除项目所有者")
+    if member.user_id == ctx.user.id:
+        raise HTTPException(status_code=400, detail="请勿通过项目设置移除自己")
+    if member.role == "admin" and access.role != "owner":
+        raise HTTPException(status_code=403, detail="仅项目所有者可移除管理员")
 
     await db.delete(member)
     await db.commit()
@@ -471,11 +514,13 @@ async def update_member_role(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """更新成员角色（仅 owner 可操作）"""
-    await _get_project_or_404(project_id, ctx.user.id, db)
-
-    caller_role = await _get_member_role(project_id, ctx.user.id, db)
-    if caller_role != "owner":
-        raise HTTPException(status_code=403, detail="仅项目所有者可修改角色")
+    await require_project_access(
+        db,
+        project_id=project_id,
+        user_id=ctx.user.id,
+        tenant_id=ctx.tenant_id,
+        minimum_role="owner",
+    )
 
     result = await db.execute(
         select(ProjectMember).where(
@@ -513,16 +558,26 @@ async def list_project_workspaces(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """列出项目下的所有工作区"""
-    # Verify project ownership
-    await _get_project_or_404(project_id, ctx.user.id, db)
+    access = await require_project_access(
+        db,
+        project_id=project_id,
+        user_id=ctx.user.id,
+        tenant_id=ctx.tenant_id,
+    )
 
     ws_mgr = WorkspaceManager()
-    all_workspaces = ws_mgr.list_user_workspaces(ctx.user.id)
-
-    # Filter workspaces belonging to this project
-    project_workspaces = []
-    for ws in all_workspaces:
-        if ws.get("project_id") == project_id:
-            project_workspaces.append(ws)
-
-    return project_workspaces
+    all_workspaces = ws_mgr.list_project_workspaces(project_id)
+    permissions = {
+        "edit": project_role_at_least(access.role, "member"),
+        "delete": project_role_at_least(access.role, "admin"),
+        "publish": project_role_at_least(access.role, "admin"),
+        "upload_to_platform": project_role_at_least(access.role, "admin"),
+    }
+    return [
+        {
+            **ws,
+            "access_role": access.role,
+            "permissions": permissions,
+        }
+        for ws in all_workspaces
+    ]

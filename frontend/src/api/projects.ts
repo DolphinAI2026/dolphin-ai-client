@@ -14,6 +14,15 @@ export interface Project {
   platform_connected: boolean
   created_at: string
   updated_at: string
+  current_role?: 'owner' | 'admin' | 'member'
+  can_view?: boolean
+  can_edit?: boolean
+  can_manage_project?: boolean
+  can_manage_platform?: boolean
+  can_manage_members?: boolean
+  can_manage_member_roles?: boolean
+  can_delete?: boolean
+  can_publish?: boolean
 }
 
 export interface CreateProjectData {

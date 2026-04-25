@@ -5,20 +5,16 @@ export type ThemeMode = 'light' | 'dark'
 
 const STORAGE_KEY = 'theme'
 
+function resolveInitialTheme(): ThemeMode {
+  const saved = localStorage.getItem(STORAGE_KEY) as ThemeMode | null
+  if (saved === 'light' || saved === 'dark') return saved
+  return 'light'
+}
+
 export const useThemeStore = defineStore('theme', () => {
-  const mode = ref<ThemeMode>(getInitialTheme())
+  const mode = ref<ThemeMode>(resolveInitialTheme())
 
   const isDark = computed(() => mode.value === 'dark')
-
-  function getInitialTheme(): ThemeMode {
-    const saved = localStorage.getItem(STORAGE_KEY) as ThemeMode | null
-    if (saved === 'light') return 'light'
-    if (saved === 'dark') {
-      localStorage.setItem(STORAGE_KEY, 'light')
-      return 'light'
-    }
-    return 'light'
-  }
 
   function applyTheme(theme: ThemeMode) {
     const html = document.documentElement

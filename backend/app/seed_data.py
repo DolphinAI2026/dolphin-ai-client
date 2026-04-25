@@ -1,5 +1,6 @@
 """Seed data for multi-tenant system."""
 from __future__ import annotations
+from collections.abc import Sequence
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
@@ -9,7 +10,7 @@ from app.models.tenant import Tenant, Role
 from app.permissions import PERMISSION_CODES
 
 
-async def seed_default_roles(db: AsyncSession, tenant_id: int):
+async def seed_default_roles(db: AsyncSession, tenant_id: int, *, commit: bool = True):
     """创建默认角色（租户管理员、开发者、查看者）"""
 
     # 检查是否已存在角色
@@ -68,7 +69,10 @@ async def seed_default_roles(db: AsyncSession, tenant_id: int):
     )
     db.add(viewer_role)
 
-    await db.commit()
+    if commit:
+        await db.commit()
+    else:
+        await db.flush()
     print(f"✅ 租户 {tenant_id} 的默认角色已创建")
 
 
@@ -186,13 +190,24 @@ def _builtin_llm_specs() -> list[dict]:
     return specs
 
 
-async def sync_builtin_llm_configs(db: AsyncSession):
+async def sync_builtin_llm_configs(
+    db: AsyncSession,
+    tenant_ids: Sequence[int] | None = None,
+    *,
+    commit: bool = True,
+):
     """把 .env 中的内置模型同步到 llm_configs，避免前台重复手工配置。"""
     specs = _builtin_llm_specs()
     if not specs:
         return
 
-    tenants = (await db.execute(select(Tenant))).scalars().all()
+    tenant_id_list = list(tenant_ids or [])
+    if tenant_id_list:
+        tenants = (
+            await db.execute(select(Tenant).where(Tenant.id.in_(tenant_id_list)))
+        ).scalars().all()
+    else:
+        tenants = (await db.execute(select(Tenant))).scalars().all()
     if not tenants:
         return
 
@@ -253,7 +268,10 @@ async def sync_builtin_llm_configs(db: AsyncSession):
             for row, spec in rows:
                 row.is_default = bool(default_name and spec["config_name"] == default_name)
 
-    await db.commit()
+    if commit:
+        await db.commit()
+    else:
+        await db.flush()
     print("✅ 已同步内置 LLM 配置到 llm_configs")
 
 

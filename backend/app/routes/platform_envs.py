@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models import PlatformEnv
-from app.deps import get_auth_context, AuthContext
+from app.deps import get_auth_context, AuthContext, require_tenant_admin
 from app.apaas_client import APaaSClient
 
 logger = logging.getLogger(__name__)
@@ -49,7 +49,7 @@ class EnvUpdate(BaseModel):
 
 @router.get("")
 async def list_envs(
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """列出当前租户的所有平台环境"""
@@ -77,7 +77,7 @@ async def list_envs(
 @router.post("")
 async def create_env(
     data: EnvCreate,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """创建平台环境"""
@@ -101,7 +101,7 @@ async def create_env(
 async def update_env(
     env_id: int,
     data: EnvUpdate,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """更新平台环境"""
@@ -164,7 +164,7 @@ async def update_env(
 @router.delete("/{env_id}")
 async def delete_env(
     env_id: int,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """删除平台环境"""
@@ -190,7 +190,7 @@ async def delete_env(
 @router.post("/{env_id}/test")
 async def test_env(
     env_id: int,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """测试平台环境连接"""
@@ -237,7 +237,7 @@ async def test_env(
 @router.post("/{env_id}/login")
 async def login_env(
     env_id: int,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """用账号密码登录获取 token"""
@@ -279,7 +279,7 @@ async def login_env(
 @router.post("/{env_id}/set-default")
 async def set_default(
     env_id: int,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """设为默认环境"""
@@ -300,7 +300,7 @@ async def set_default(
 @router.get("/{env_id}/remote-apps")
 async def list_remote_apps(
     env_id: int,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """列出平台上可导入的应用列表（排除已导入的）"""
@@ -374,7 +374,7 @@ async def list_remote_apps(
 @router.get("/embed-url")
 async def get_embed_url(
     app_id: int,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """获取嵌入低代码平台的 iframe URL（含 token）"""

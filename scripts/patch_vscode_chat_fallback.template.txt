@@ -1,12 +1,35 @@
 async activateDefaultAgent(e){
-await this.G.whenInstalledExtensionsRegistered();
-const i=new Ei(qi.defaultChatAgent?.extensionId??"apaas-builder.ruijing-ai");
+const __apaasExtService=this.extensionService||this.G;
+const __apaasInstantiationService=this.instantiationService||this.H;
+const __apaasChatAgentService=this.chatAgentService||this.L;
+const __apaasConfigService=this.configurationService||this.M;
+await __apaasExtService.whenInstalledExtensionsRegistered();
+const i=(()=>{
+const _id=qi.defaultChatAgent?.extensionId??"apaas-builder.ruijing-ai";
+if(_id&&typeof _id=="object"&&typeof _id.value=="string")return _id;
+if(typeof Ii!="undefined")return new Ii(String(_id));
+return{value:String(_id)};
+})();
+const __apaasDefaultAgentId=qi.defaultChatAgent?.provider?.default?.id??"ai-coding";
+const __apaasExtensionIdValue=typeof i=="string"?i:i?.value;
+const __apaasIsProductAgent=T=>{
+const _eid=typeof T?.extensionId=="string"?T.extensionId:T?.extensionId?.value;
+return !!T&&(T.id===__apaasDefaultAgentId||_eid===__apaasExtensionIdValue);
+};
+const __apaasFindProductAgent=e=>{
+try{
+const _agents=typeof __apaasChatAgentService.getAgents=="function"?__apaasChatAgentService.getAgents():[];
+const _active=typeof __apaasChatAgentService.getActivatedAgents=="function"?__apaasChatAgentService.getActivatedAgents().map(T=>T?.data||T):[];
+return _active.find(__apaasIsProductAgent)||_agents.find(T=>__apaasIsProductAgent(T)&&(!e||!T.locations||T.locations.includes(e)))||null;
+}catch{return null;}
+};
 const n=async()=>{
 const y=globalThis;
+const __apaasMd=T=>({value:String(T??""),isTrusted:!0,supportThemeIcons:!0});
 if(y.__apaasMiniMaxDynamicAgentDisposer)return;
 if(!y.__apaasModelSelector){let _sm=null;try{_sm=localStorage.getItem("apaas-selected-model")}catch{}y.__apaasModelSelector={models:[],selected:_sm,loaded:!1,injected:!1};}
 const S={
-id:qi.defaultChatAgent?.provider?.default?.id??"ai-coding",
+id:__apaasDefaultAgentId,
 name:"ai-coding",
 fullName:"睿鲸AI",
 description:"睿鲸AI Coding Assistant",
@@ -17,11 +40,11 @@ extensionDisplayName:"睿鲸AI Coding",
 isDefault:!0,
 isCore:!1,
 canAccessPreviousChatHistory:!0,
-locations:[At.Chat,At.EditorInline,At.Notebook,At.Terminal],
-modes:[Si.Ask,Si.Edit,Si.Agent].filter(k=>k!==void 0),
+locations:[At.Chat,"panel",At.EditorInline,At.Notebook,At.Terminal],
+modes:typeof Si!="undefined"?[Si.Ask,Si.Edit,Si.Agent].filter(k=>k!==void 0):["ask","edit","agent"],
 slashCommands:[],
 metadata:{
-additionalWelcomeMessage:new we("可以直接让我阅读当前工作区代码。若你给出文件路径、组件名、报错信息或想看的模块，我会优先结合源码分析。")
+additionalWelcomeMessage:typeof we!="undefined"?__apaasMd("可以直接让我阅读当前工作区代码。若你给出文件路径、组件名、报错信息或想看的模块，我会优先结合源码分析。"):void 0
 }
 };
 const k={
@@ -81,12 +104,12 @@ return`${T.origin}${oe}/api/coding/workspace/${vibeContextState.workspaceId}/ide
 return"";
 }
 })();
-const ee=(vibeContextState.apiBase||this.M.getValue("minimax.apiBase")||"").replace(/\/$/,"");
+const ee=(vibeContextState.apiBase||__apaasConfigService.getValue("minimax.apiBase")||"").replace(/\/$/,"");
 const ae=vibeContextState.ideToken||"";
-const se=this.M.getValue("minimax.apiKey")||"";
+const se=__apaasConfigService.getValue("minimax.apiKey")||"";
 const Ae=(ae?[be,ee]:[ee]).map(T=>(T||"").replace(/\/$/,"")).filter(Boolean).filter((T,ie,oe)=>oe.indexOf(T)===ie);
 const _isAutoMode2=()=>{try{return localStorage.getItem("apaas-auto-mode")!=="false";}catch{return!0;}};
-const _fallbackModel=vibeContextState.model||this.M.getValue("minimax.model")||"MiniMax-M2.7";
+const _fallbackModel=vibeContextState.model||__apaasConfigService.getValue("minimax.model")||"MiniMax-M2.7";
 const _manualModel=y.__apaasModelSelector?.selected||_fallbackModel;
 const _autoEditModel=(()=>{const ms=y.__apaasModelSelector?.models||[];const pref=["claude-sonnet-4-6","claude-sonnet-4","gpt-5.4","gpt-4o"];for(const p of pref){if(ms.find(m=>m.id===p))return p;}return _fallbackModel;})();
 const _hasIdeProxy=!!vibeContextState.workspaceId;
@@ -424,7 +447,7 @@ return _gtext;
 };
 const Rt=async T=>{
 try{
-return await this.H.invokeFunction(async ie=>{
+return await __apaasInstantiationService.invokeFunction(async ie=>{
 const oe=ie.get(Qe).getWorkspace();
 const re=ie.get(Me);
 const pe=oe.folders[0];
@@ -475,7 +498,7 @@ _doPlanExec=_pendingPlan;
 }
 if(_pendingPlan&&!_doPlanExec&&/^(取消|拒绝|cancel|no|reject|算了|不要|不用了)/i.test(_userInput)){
 globalThis.__pendingPlan=null;
-P([{kind:"markdownContent",content:new we("已取消计划，文件未变动。")}]);
+P([{kind:"markdownContent",content:__apaasMd("已取消计划，文件未变动。")}]);
 return{timings:{firstProgress:0,totalElapsed:Date.now()-te}};
 }
 const pendingRt=globalThis.__pendingEdits;
@@ -486,7 +509,7 @@ _doEditApply=pendingRt;
 }
 if(!_doPlanExec&&!_doEditApply&&pendingRt&&/^(取消|拒绝|cancel|no|reject|算了|不要)/i.test(_userInput)){
 globalThis.__pendingEdits=null;
-P([{kind:"markdownContent",content:new we("已取消修改，文件未变动。")}]);
+P([{kind:"markdownContent",content:__apaasMd("已取消修改，文件未变动。")}]);
 return{timings:{firstProgress:0,totalElapsed:Date.now()-te}};
 }
 const rt=fe(ue(M?.message)||ue(M?.prompt)||ue(M?.text)||"");
@@ -650,7 +673,7 @@ let _eChunksIn=0;
 let _eChunksOut=0;
 let _eThinkShown=!1;
 const _ePaintThrottle=150;
-const _eFlush=()=>{if(!_ePending)return;P([{kind:"markdownContent",content:new we(_ePending)}]);_ePending="";_eLastPaint=Date.now();};
+const _eFlush=()=>{if(!_ePending)return;P([{kind:"markdownContent",content:__apaasMd(_ePending)}]);_ePending="";_eLastPaint=Date.now();};
 const _eBi=ie.body?.getReader();
 if(_eBi){
 const _eDec=new TextDecoder;let _eBuf="";
@@ -669,7 +692,7 @@ if(!_eP||_eP==="[DONE]")continue;
 try{const _eJ=JSON.parse(_eP);const _eC=_eJ?.choices?.[0]?.delta?.content;if(_eC){
 _eChunksIn++;
 const _eF=_eSi.push(_eC);
-if(!_eF){if(!_eThinkShown&&_eChunksIn>3&&_eChunksOut===0){_eThinkShown=!0;P([{kind:"markdownContent",content:new we("*🧠 模型正在深度思考中...*\n\n")}]);}continue;}
+if(!_eF){if(!_eThinkShown&&_eChunksIn>3&&_eChunksOut===0){_eThinkShown=!0;P([{kind:"markdownContent",content:__apaasMd("*🧠 模型正在深度思考中...*\n\n")}]);}continue;}
 _eChunksOut++;
 _eText+=_eF;_ePending+=_eF;
 if(Date.now()-_eLastPaint>=_ePaintThrottle)_eFlush();
@@ -744,7 +767,7 @@ let _pLastPaint=0;
 let _pChunksIn=0;
 let _pChunksOut=0;
 let _pThinkShown=!1;
-const _pFlush=()=>{if(!_pPending)return;P([{kind:"markdownContent",content:new we(_pPending)}]);_pPending="";_pLastPaint=Date.now();};
+const _pFlush=()=>{if(!_pPending)return;P([{kind:"markdownContent",content:__apaasMd(_pPending)}]);_pPending="";_pLastPaint=Date.now();};
 const _pBi=ie.body?.getReader();
 if(_pBi){
 const _pDec=new TextDecoder;let _pBuf="";
@@ -761,7 +784,7 @@ if(!_pP||_pP==="[DONE]")continue;
 try{const _pJ=JSON.parse(_pP);const _pC=_pJ?.choices?.[0]?.delta?.content;if(_pC){
 _pChunksIn++;
 const _pF=_pSi.push(_pC);
-if(!_pF){if(!_pThinkShown&&_pChunksIn>3&&_pChunksOut===0){_pThinkShown=!0;P([{kind:"markdownContent",content:new we("*🧠 模型正在思考计划...*\n\n")}]);}continue;}
+if(!_pF){if(!_pThinkShown&&_pChunksIn>3&&_pChunksOut===0){_pThinkShown=!0;P([{kind:"markdownContent",content:__apaasMd("*🧠 模型正在思考计划...*\n\n")}]);}continue;}
 _pChunksOut++;
 _pText+=_pF;_pPending+=_pF;
 if(Date.now()-_pLastPaint>=150)_pFlush();
@@ -787,7 +810,7 @@ const kt=await ft(plan.userMsg||"");
 const gt=plan.userMsg||"";
 for(let i=0;i<plan.files.length;i++){
 const file=plan.files[i];
-P([{kind:"markdownContent",content:new we(`\n⏳ **生成中 (${i+1}/${plan.files.length})** \`${file.path}\`...\n`)}]);
+P([{kind:"markdownContent",content:__apaasMd(`\n⏳ **生成中 (${i+1}/${plan.files.length})** \`${file.path}\`...\n`)}]);
 const _otherFiles=plan.files.filter((_,idx)=>idx!==i).map(f=>`- \`${f.path}\` — ${f.description}`).join("\n");
 const _prevSummary=generatedSummaries.map(s=>`### ${s.path}\n\`\`\`\n${s.excerpt}\n\`\`\``).join("\n");
 const _fileRoleHint=(fp=>{if(fp.endsWith(".widget.config.js"))return"这是组件配置文件。严格遵循 PROJECT_RULES 中的 widget config 结构。";const _rm=fp.match(/form-widget\/(ide|edit|read|list|print|search|search-ide)\//);if(_rm){const _mm={ide:"FormWidgetMixin",edit:"FormWidgetMixin",read:"FormWidgetMixin",list:"无mixin，用inject+props",print:"PrintWidgetMixin",search:"SearchWidgetMixin","search-ide":"SearchIdeWidgetMixin"};return`这是 ${_rm[1]} 渲染模式组件。使用: ${_mm[_rm[1]]||"参考 PROJECT_RULES"}。`;}if(fp.endsWith(".editor.config.js"))return"编辑器配置，必须含 code, editorConfigType, componentName, configProperty。";if(/form-editor\/.*\.vue$/.test(fp))return"设计器属性面板组件，用 EditorFormConfigMixin。";if(fp==="src/apaas.json")return"平台元数据，type 要与 widget config 的 code 一致。";if(/\/index\.js$/.test(fp))return"聚合导出，保留已有导入。";return"";})(file.path);
@@ -829,7 +852,7 @@ const _fSi=ge();
 let _fText="";
 let _fPending="";
 let _fLastPaint=0;
-const _fFlush=()=>{if(!_fPending)return;P([{kind:"markdownContent",content:new we(_fPending)}]);_fPending="";_fLastPaint=Date.now();};
+const _fFlush=()=>{if(!_fPending)return;P([{kind:"markdownContent",content:__apaasMd(_fPending)}]);_fPending="";_fLastPaint=Date.now();};
 const _fBi=resp.body?.getReader();
 if(_fBi){
 const _fDec=new TextDecoder;let _fBuf="";
@@ -862,7 +885,7 @@ const _fParsed=_parseMarkdownEdits(_fText);
 if(_fParsed.edits.length>0){
 let _fWriteOk=!1;
 try{
-await this.H.invokeFunction(async ie=>{
+await __apaasInstantiationService.invokeFunction(async ie=>{
 const oe=ie.get(Qe).getWorkspace();
 const re=ie.get(Me);
 const pe=oe.folders[0];
@@ -902,29 +925,29 @@ const lines=(ed.content||"").split("\n");
 const excerpt=lines.slice(0,50).join("\n");
 generatedSummaries.push({path:ed.path,excerpt});
 }
-P([{kind:"markdownContent",content:new we(`✅ \`${file.path}\` 已写入\n`)}]);
+P([{kind:"markdownContent",content:__apaasMd(`✅ \`${file.path}\` 已写入\n`)}]);
 }else{
 results.skipped.push({path:file.path,reason:"未解析到文件内容"});
-P([{kind:"markdownContent",content:new we(`⚠️ \`${file.path}\` 生成失败，跳过\n`)}]);
+P([{kind:"markdownContent",content:__apaasMd(`⚠️ \`${file.path}\` 生成失败，跳过\n`)}]);
 }
 }
 const po=results.applied.map(r=>`- ✅ ${r.path}`).join("\n");
 const ps=results.skipped.map(r=>`- ❌ ${r.path}: ${r.reason}`).join("\n");
-P([{kind:"markdownContent",content:new we(`\n---\n**全部完成 (${results.applied.length}/${plan.files.length})**\n${po?`\n已写入：\n${po}`:""}${ps?`\n未成功：\n${ps}`:""}\n`)}]);
+P([{kind:"markdownContent",content:__apaasMd(`\n---\n**全部完成 (${results.applied.length}/${plan.files.length})**\n${po?`\n已写入：\n${po}`:""}${ps?`\n未成功：\n${ps}`:""}\n`)}]);
 return results;
 };
 if(_doPlanExec){
-P([{kind:"markdownContent",content:new we("📋 计划已确认，开始逐文件生成...\n")}]);
+P([{kind:"markdownContent",content:__apaasMd("📋 计划已确认，开始逐文件生成...\n")}]);
 await ExecPlanEt(_doPlanExec);
 return{timings:{firstProgress:0,totalElapsed:Date.now()-te}};
 }
 if(_doEditApply){
-P([{kind:"markdownContent",content:new we("正在应用修改...\n")}]);
+P([{kind:"markdownContent",content:__apaasMd("正在应用修改...\n")}]);
 const pr=await Rt(_doEditApply);
 const po=(pr?.applied||[]).map(r=>`- ✅ ${r.path} (${r.action})`).join("\n");
 const ps=(pr?.skipped||[]).map(r=>`- ❌ ${r.path}: ${r.reason}`).join("\n");
 const pm=[po?`已写入文件：\n${po}`:"",ps?`未写入：\n${ps}`:""].filter(Boolean).join("\n\n");
-P([{kind:"markdownContent",content:new we(pm||"操作完成。")}]);
+P([{kind:"markdownContent",content:__apaasMd(pm||"操作完成。")}]);
 return{timings:{firstProgress:0,totalElapsed:Date.now()-te}};
 }
 const _needsCodeModel=VIBE_EDIT_REQUEST(rt)||/确认|开始|直接|go|start|ok/i.test(rt);
@@ -1015,12 +1038,12 @@ let _thinkHintShown=!1;
 let _totalChunksReceived=0;
 let _totalChunksOutput=0;
 const _paintThrottle=120;
-const _flushChunks=()=>{if(!_pendingChunks)return;P([{kind:"markdownContent",content:new we(_pendingChunks)}]);_pendingChunks="";_lastPaint=Date.now();};
+const _flushChunks=()=>{if(!_pendingChunks)return;P([{kind:"markdownContent",content:__apaasMd(_pendingChunks)}]);_pendingChunks="";_lastPaint=Date.now();};
 const bi=yi.body?.getReader();
 if(!bi){
 let T="";
 try{const ie=await yi.json();T=fe(ie?.choices?.[0]?.message?.content||"");}catch{}
-if(T){P([{kind:"markdownContent",content:new we(T)}]);return{timings:{firstProgress:0,totalElapsed:Date.now()-te}};}
+if(T){P([{kind:"markdownContent",content:__apaasMd(T)}]);return{timings:{firstProgress:0,totalElapsed:Date.now()-te}};}
 return{errorDetails:{message:"Model returned an empty response."}};
 }
 const vi=new TextDecoder;
@@ -1046,7 +1069,7 @@ const Le=ve?.choices?.[0]?.delta?.content||ve?.choices?.[0]?.message?.content;
 if(!Le)continue;
 _totalChunksReceived++;
 const Je=Si.push(Le);
-if(!Je){if(!_thinkHintShown&&_totalChunksReceived>3&&_totalChunksOutput===0){_thinkHintShown=!0;P([{kind:"markdownContent",content:new we("*🧠 模型正在深度思考中...*\n\n")}]);}continue;}
+if(!Je){if(!_thinkHintShown&&_totalChunksReceived>3&&_totalChunksOutput===0){_thinkHintShown=!0;P([{kind:"markdownContent",content:__apaasMd("*🧠 模型正在深度思考中...*\n\n")}]);}continue;}
 _totalChunksOutput++;
 _uniText+=Je;_pendingChunks+=Je;
 if(Date.now()-_lastPaint>=_paintThrottle)_flushChunks();
@@ -1064,7 +1087,7 @@ if(_uniEdits.edits.length>0){
 console.log("[PATCH] unified: detected",_uniEdits.edits.length,"FILE blocks, applying edits");
 let editGroupOk=!1;
 try{
-await this.H.invokeFunction(async ie=>{
+await __apaasInstantiationService.invokeFunction(async ie=>{
 const oe=ie.get(Qe).getWorkspace();
 const re=ie.get(Me);
 const pe=oe.folders[0];
@@ -1090,7 +1113,7 @@ console.warn("[PATCH] textEditGroup failed, falling back",eg);
 }
 if(!editGroupOk){
 globalThis.__pendingEdits=_uniEdits;
-P([{kind:"markdownContent",content:new we(`\n---\n输入 **确认** 应用修改，或 **取消** 放弃。\n`)}]);
+P([{kind:"markdownContent",content:__apaasMd(`\n---\n输入 **确认** 应用修改，或 **取消** 放弃。\n`)}]);
 }
 return{timings:{firstProgress:Ii,totalElapsed:Date.now()-te}};
 }
@@ -1099,16 +1122,44 @@ if(_uniPlan.files.length>0){
 console.log("[PATCH] unified: detected plan with",_uniPlan.files.length,"files");
 _uniPlan.userMsg=gt;
 globalThis.__pendingPlan=_uniPlan;
-P([{kind:"markdownContent",content:new we(`\n---\n输入 **确认** 开始逐文件生成代码，或 **取消** 放弃。也可以回复调整要求。\n`)}]);
+P([{kind:"markdownContent",content:__apaasMd(`\n---\n输入 **确认** 开始逐文件生成代码，或 **取消** 放弃。也可以回复调整要求。\n`)}]);
 return{timings:{firstProgress:Ii,totalElapsed:Date.now()-te}};
 }
 console.log("[PATCH] unified: plain chat response, len=",_uniText.length);
 return{timings:{firstProgress:Ii,totalElapsed:Date.now()-te}};
 }
 };
-y.__apaasMiniMaxDynamicAgentDisposer=this.L.registerDynamicAgent(S,k);
+y.__apaasMiniMaxDynamicAgentDisposer=__apaasChatAgentService.registerDynamicAgent(S,k);
 y.__apaasMiniMaxHandler=k;
 console.log("[PATCH] registered MiniMax dynamic agent fallback");
+const __apaasEnsureChatVisible=()=>{
+if(y.__apaasOpenChatRequested)return;
+let _hasVibeContext=!1;
+try{
+const _u=new URL(globalThis.location?.href||"http://localhost/");
+_hasVibeContext=!!(_u.searchParams.get("vibe_workspace_id")||_u.searchParams.get("vibe_api_base"));
+}catch{}
+if(!_hasVibeContext)return;
+y.__apaasOpenChatRequested=!0;
+let _tries=0;
+const _open=async()=>{
+_tries++;
+try{
+await __apaasInstantiationService.invokeFunction(async _accessor=>{
+if(typeof fe==="undefined")throw new Error("command service token not found");
+const _cmd=_accessor.get(fe);
+await _cmd.executeCommand("workbench.action.chat.open");
+try{await _cmd.executeCommand("workbench.action.chat.focusInput");}catch{}
+});
+console.log("[PATCH] ensured Chat view is visible");
+}catch(_err){
+if(_tries<12)setTimeout(_open,500);
+else console.warn("[PATCH] ensure Chat view failed",_err);
+}
+};
+setTimeout(_open,600);
+};
+__apaasEnsureChatVisible();
 if(!y.__apaasModelSelectorInit){
 y.__apaasModelSelectorInit=!0;
 const _msCSS=`.chat-input-picker-item,.model-picker-badge,.copilot-chat-model-picker-widget,.chat-model-picker{display:none!important;}.apaas-inline-controls{display:inline-flex;align-items:center;gap:2px;margin-left:4px;position:relative;}.apaas-upload-btn{background:none;border:none;color:var(--vscode-descriptionForeground);cursor:pointer;font-size:13px;padding:2px 4px;border-radius:4px;line-height:1;}.apaas-upload-btn:hover{color:var(--vscode-foreground);}.apaas-model-btn{display:inline-flex;align-items:center;gap:3px;background:none;border:none;border-radius:4px;color:var(--vscode-descriptionForeground);font-size:11px;cursor:pointer;padding:2px 6px;font-family:inherit;}.apaas-model-btn:hover{background:var(--vscode-toolbar-hoverBackground);color:var(--vscode-foreground);}.apaas-model-dropdown{display:none;position:fixed;min-width:260px;max-height:400px;overflow-y:auto;background:var(--vscode-menu-background,var(--vscode-quickInput-background));border:1px solid var(--vscode-menu-border,var(--vscode-widget-border));border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,0.5);padding:4px 0;z-index:99999;}.apaas-model-dropdown.open{display:block;}.apaas-dd-section{padding:4px 12px;font-size:10px;color:var(--vscode-descriptionForeground);text-transform:uppercase;letter-spacing:0.5px;}.apaas-dd-auto{display:flex;align-items:center;justify-content:space-between;padding:6px 12px;cursor:pointer;font-size:12px;color:var(--vscode-foreground);}.apaas-dd-auto:hover{background:var(--vscode-list-hoverBackground);}.apaas-dd-auto-sw{width:28px;height:16px;border-radius:8px;background:var(--vscode-input-border,#555);position:relative;transition:background 0.2s;cursor:pointer;}.apaas-dd-auto-sw.on{background:var(--vscode-terminal-ansiGreen,#89d185);}.apaas-dd-auto-sw::after{content:"";position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:#fff;transition:transform 0.2s;}.apaas-dd-auto-sw.on::after{transform:translateX(12px);}.apaas-model-item{display:flex;align-items:center;padding:6px 12px;cursor:pointer;font-size:12px;color:var(--vscode-foreground);gap:8px;}.apaas-model-item:hover{background:var(--vscode-list-hoverBackground);}.apaas-model-item .check{width:16px;text-align:center;color:var(--vscode-terminal-ansiGreen,#89d185);font-size:13px;flex-shrink:0;}.apaas-model-item .mname{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}.apaas-model-item .mprov{font-size:10px;color:var(--vscode-descriptionForeground);flex-shrink:0;}.apaas-upload-tags{display:flex;flex-wrap:wrap;gap:4px;padding:4px 8px;border-bottom:1px solid var(--vscode-widget-border,#333);}.apaas-upload-tag{display:inline-flex;align-items:center;gap:4px;background:var(--vscode-badge-background,#4d4d4d);color:var(--vscode-badge-foreground,#fff);font-size:11px;padding:2px 8px;border-radius:10px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}.apaas-upload-tag-x{cursor:pointer;font-size:13px;font-weight:bold;margin-left:2px;opacity:0.7;}.apaas-upload-tag-x:hover{opacity:1;}`;
@@ -1247,22 +1298,25 @@ setTimeout(_autoSend,2000);
 }
 };
 for(let o=0;o<50;o++){
-const r=await this.G.getExtension(i),a=this.L.getContributedDefaultAgent(e)??this.L.getContributedDefaultAgent(At.Chat);
+const r=await __apaasExtService.getExtension(i),a=__apaasFindProductAgent(e)??__apaasFindProductAgent(At.Chat);
 if(r||a)break;
 await new Promise(l=>setTimeout(l,100));
 }
-let t=this.L.getContributedDefaultAgent(e)??this.L.getContributedDefaultAgent(At.Chat);
-t||(t={id:qi.defaultChatAgent?.provider?.default?.id??"ai-coding",extensionId:i,isCore:!1,locations:[e],modes:[Si.Ask]});
-if(!t.isCore){
+let t=__apaasFindProductAgent(e)??__apaasFindProductAgent(At.Chat);
+t||(t={id:__apaasDefaultAgentId,extensionId:i,isCore:!1,locations:[e],modes:typeof Si!="undefined"?[Si.Ask]:["ask"]});
+const __apaasKnownExtension=!!(await __apaasExtService.getExtension(i));
+if(__apaasKnownExtension&&!t.isCore){
 try{
-await this.G.activateById(t.extensionId,{activationEvent:"onChatParticipant:"+t.id,extensionId:t.extensionId,startup:!1});
+await __apaasExtService.activateById(i,{activationEvent:"onChatParticipant:"+t.id,extensionId:i,startup:!1});
 }catch(o){
 console.warn("[PATCH] activateById failed, will use dynamic fallback",o);
 }
+}else if(!__apaasKnownExtension){
+console.log("[PATCH] product extension is not available in this extension host, using dynamic fallback");
 }
 await n();
-if(!this.L.getActivatedAgents().find(o=>o.id===t.id)){
-const o=this.L.getActivatedAgents().find(r=>r.id===t.id);
+if(!__apaasChatAgentService.getActivatedAgents().find(o=>o.id===t.id)){
+const o=__apaasChatAgentService.getActivatedAgents().find(r=>r.id===t.id);
 if(!o)throw new sa("No default agent registered");
 }
 }getSession(e){

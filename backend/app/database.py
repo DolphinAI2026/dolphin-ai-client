@@ -39,6 +39,7 @@ async def init_db():
             "ALTER TABLE applications ADD COLUMN generation_state TEXT",
             "ALTER TABLE conversations ADD COLUMN workspace_id VARCHAR(50)",
             "ALTER TABLE conversations ADD COLUMN selected_llm_config_id INTEGER",
+            "ALTER TABLE conversations ADD COLUMN project_id INTEGER",
             "ALTER TABLE users ADD COLUMN apaas_base_url VARCHAR(255)",
             "ALTER TABLE users ADD COLUMN apaas_tenant_id VARCHAR(50)",
             # Projects table columns (in case table existed before new columns were added)

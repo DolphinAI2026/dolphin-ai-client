@@ -28,6 +28,7 @@ class UserInfo(BaseModel):
     tenant_id: Optional[int] = None
     tenant_name: Optional[str] = None
     tenant_role: Optional[str] = None
+    org_permissions: Optional[dict] = None
 
 
 class TenantOption(BaseModel):
@@ -54,8 +55,9 @@ class TenantSelectRequest(BaseModel):
 
 # Conversation schemas
 class ConversationCreate(BaseModel):
-    agent_type: str = Field(..., pattern="^(builder|assistant|developer|requirements)$")
+    agent_type: str = Field(..., pattern="^(builder|assistant|developer|requirements|coding)$")
     selected_llm_config_id: Optional[int] = None
+    initial_message: Optional[str] = None
 
 
 class ConversationResponse(BaseModel):
@@ -83,6 +85,7 @@ class MessageResponse(BaseModel):
 # Application schemas
 class ApplicationCreate(BaseModel):
     conversation_id: Optional[int] = None
+    project_id: Optional[int] = None
     app_name: str
     app_code: str
     description: Optional[str] = None

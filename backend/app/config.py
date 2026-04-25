@@ -45,6 +45,12 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 1440
 
+    # Signup / tenancy
+    # isolated_tenant: 自注册用户自动创建独立租户
+    # invite_only: 关闭开放注册，仅允许被邀请加入现有租户
+    # shared_default_tenant: 兼容旧模式，自注册用户加入 default 租户
+    self_signup_mode: str = "isolated_tenant"
+
     # Server
     host: str = "0.0.0.0"
     port: int = 8000

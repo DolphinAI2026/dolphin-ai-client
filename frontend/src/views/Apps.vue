@@ -1,199 +1,359 @@
 <template>
-  <WorkbenchShell>
-    <div class="apps-main">
-      <!-- Filter tabs + view toggle -->
-      <div class="filter-bar">
-        <div class="filter-tabs">
-          <button v-for="tab in tabs" :key="tab.value"
-            :class="['filter-tab', { active: activeTab === tab.value }]"
-            @click="activeTab = tab.value">
-            {{ tab.label }}
-            <span class="tab-count" v-if="tabCounts[tab.value]">{{ tabCounts[tab.value] }}</span>
+  <BuilderFrame :breadcrumbs="[{ label: '应用' }]">
+    <template #actions>
+      <button class="apps-create-btn" type="button" @click="router.push('/')">
+        <el-icon><Plus /></el-icon>
+        <span>新建应用</span>
+      </button>
+    </template>
+
+    <main class="apps-page builder-page">
+      <section class="apps-header">
+        <div>
+          <h1>我的应用</h1>
+          <p>{{ appsSummary }}</p>
+        </div>
+      </section>
+
+      <section class="apps-toolbar" aria-label="应用筛选和视图切换">
+        <div class="apps-tabs" role="tablist" aria-label="应用状态">
+          <button
+            v-for="tab in tabs"
+            :key="tab.value"
+            class="apps-tab"
+            :class="{ active: activeTab === tab.value }"
+            type="button"
+            role="tab"
+            :aria-selected="activeTab === tab.value"
+            @click="activeTab = tab.value"
+          >
+            <span>{{ tab.label }}</span>
+            <span v-if="tab.count" class="apps-tab-count">{{ tab.count }}</span>
           </button>
         </div>
-        <div class="view-toggle">
-          <button :class="['toggle-btn', { active: viewMode === 'grid' }]" @click="viewMode = 'grid'" title="卡片视图">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+
+        <div class="apps-view-toggle" aria-label="视图切换">
+          <button
+            class="apps-view-btn"
+            :class="{ active: viewMode === 'list' }"
+            type="button"
+            title="列表视图"
+            @click="viewMode = 'list'"
+          >
+            <el-icon><List /></el-icon>
           </button>
-          <button :class="['toggle-btn', { active: viewMode === 'list' }]" @click="viewMode = 'list'" title="列表视图">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+          <button
+            class="apps-view-btn"
+            :class="{ active: viewMode === 'card' }"
+            type="button"
+            title="卡片视图"
+            @click="viewMode = 'card'"
+          >
+            <el-icon><Grid /></el-icon>
           </button>
         </div>
-      </div>
+      </section>
 
-      <!-- Content area -->
-      <div class="app-content" :class="viewMode">
-      <div v-if="loading" class="empty-state">加载中...</div>
-      <div v-else-if="filteredApps.length === 0" class="empty-state">
-        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.3"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-        <span>暂无应用</span>
-      </div>
+      <section class="apps-content" :class="`is-${viewMode}`">
+        <div v-if="loading" class="apps-state">加载中...</div>
+        <div v-else-if="filteredApps.length === 0" class="apps-state">
+          <span class="apps-state-icon">ap</span>
+          <strong>暂无应用</strong>
+          <span>从首页新建应用后，会在这里继续构建、部署和查看历史对话。</span>
+        </div>
 
-      <!-- Grid (card) view -->
-      <template v-if="viewMode === 'grid'">
-        <div v-for="a in filteredApps" :key="a.id" class="grid-card" @click="router.push({ path: '/chat', query: { app_id: String(a.id) } })">
-          <div class="grid-card-top">
-            <div class="grid-card-icon" :class="sourceIconClass(a)" v-html="appIconSvg(a)"></div>
-            <div class="grid-card-badges">
-              <span class="card-status" :class="statusClass(a)">{{ a.status }}</span>
-              <span v-if="a.env_name" class="env-badge">{{ a.env_name }}</span>
+        <div v-else-if="viewMode === 'list'" class="apps-table">
+          <div class="apps-table-head">
+            <span>应用</span>
+            <span>阶段</span>
+            <span>进度</span>
+            <span>更新</span>
+            <span aria-hidden="true"></span>
+          </div>
+
+          <div
+            v-for="app in filteredApps"
+            :key="app.id"
+            class="apps-row"
+            role="button"
+            tabindex="0"
+            @click="openApp(app)"
+            @keyup.enter="openApp(app)"
+          >
+            <div class="apps-row-app">
+              <span class="apps-avatar" :style="appAccentStyle(app)">{{ appIconInitial(app) }}</span>
+              <span class="apps-row-main">
+                <strong>{{ app.app_name }}</strong>
+                <span class="apps-row-meta">
+                  <code>{{ app.app_code || `app-${app.id}` }}</code>
+                  <template v-if="latestHistory(app)">
+                    <span class="apps-dot-sep"></span>
+                    <button class="apps-history-link" type="button" @click.stop="openLatestConversation(app)">
+                      最近：{{ latestHistoryTitle(app) }}
+                    </button>
+                  </template>
+                </span>
+              </span>
             </div>
-          </div>
-          <h3 class="grid-card-name">{{ a.app_name }}</h3>
-          <div class="grid-card-meta">
-            <span v-if="a.app_code" class="card-code">{{ a.app_code }}</span>
-            <span class="grid-card-date">{{ a.updated_at?.slice(0, 16) }}</span>
-          </div>
-          <div v-if="a.models || a.forms || a.roles || a.dicts" class="grid-card-stats">
-            <span><i class="dot indigo"></i>{{ a.models || 0 }} 模型</span>
-            <span><i class="dot emerald"></i>{{ a.forms || 0 }} 表单</span>
-            <span><i class="dot amber"></i>{{ a.roles || 0 }} 角色</span>
-            <span><i class="dot purple"></i>{{ a.dicts || 0 }} 字典</span>
-          </div>
-          <div v-if="appHistory(a).length" class="conversation-history">
-            <div class="conversation-history-title">历史对话</div>
-            <button
-              v-for="item in appHistory(a)"
-              :key="item.id"
-              class="conversation-history-item"
-              @click.stop="router.push(`/chat/${item.id}?app_id=${a.id}`)"
-            >
-              <span class="conversation-history-name">{{ historyTitle(item) }}</span>
-              <span class="conversation-history-meta">{{ historySummary(item) }} · {{ historyTime(item) }}</span>
-            </button>
-          </div>
-          <div class="grid-card-actions" @click.stop>
-            <button v-if="a.apaas_app_id" class="action-btn primary" @click.stop="openInPlatform(a)" title="在平台中打开">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-            </button>
-            <button v-if="a.source === 'local' && (a.local_status === 'draft' || a.local_status === 'failed')" class="action-btn primary" @click.stop="router.push({ path: '/chat', query: { deploy_app_id: String(a.id) } })" title="生成到平台">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-            </button>
-            <button v-if="canDeleteApp(a)" class="action-btn danger" @click.stop="confirmDelete(a)" title="删除">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-            </button>
-          </div>
-        </div>
-      </template>
 
-      <!-- List view -->
-      <template v-if="viewMode === 'list'">
-        <div v-for="a in filteredApps" :key="a.id" class="list-card" @click="router.push({ path: '/chat', query: { app_id: String(a.id) } })">
-          <div class="card-header">
-            <div class="card-left">
-              <div class="card-icon" :class="sourceIconClass(a)" v-html="appIconSvg(a)"></div>
-              <div class="card-info">
-                <div class="card-name-row">
-                  <h3>{{ a.app_name }}</h3>
-                  <span class="card-status" :class="statusClass(a)">{{ a.status }}</span>
-                  <span v-if="a.env_name" class="env-badge">{{ a.env_name }}</span>
-                </div>
-                <div class="card-meta">
-                  <span>{{ a.updated_at?.slice(0, 16) }}</span>
-                  <span v-if="a.app_code" class="card-code">{{ a.app_code }}</span>
-                  <span v-if="a.apaas_app_id" class="card-code">ID: {{ a.apaas_app_id }}</span>
-                </div>
-              </div>
+            <div class="apps-row-stage">
+              <span class="apps-stage-pill" :class="appStage(app).tone">{{ appStage(app).label }}</span>
             </div>
-            <div class="card-actions" @click.stop>
-              <a v-if="a.apaas_url" :href="a.apaas_url" target="_blank" class="action-btn primary" title="在平台中打开">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-              </a>
-              <button v-if="a.source === 'local' && (a.local_status === 'draft' || a.local_status === 'failed')" class="action-btn primary" @click.stop="router.push({ path: '/chat', query: { deploy_app_id: String(a.id) } })" title="生成到平台">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+
+            <div class="apps-row-progress">
+              <span class="apps-progress-track">
+                <span class="apps-progress-bar" :class="appStage(app).tone" :style="{ width: `${appProgress(app)}%` }"></span>
+              </span>
+              <span>{{ appProgress(app) }}%</span>
+            </div>
+
+            <div class="apps-row-updated">{{ appUpdatedLabel(app) }}</div>
+
+            <div class="apps-row-actions" @click.stop>
+              <button
+                v-if="canOpenPlatform(app)"
+                class="apps-icon-btn"
+                type="button"
+                title="在平台中打开"
+                @click="openInPlatform(app)"
+              >
+                <el-icon><LinkIcon /></el-icon>
               </button>
-              <button v-if="canDeleteApp(a)" class="action-btn danger" @click.stop="confirmDelete(a)" title="删除">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              <button
+                v-if="canDeployApp(app)"
+                class="apps-icon-btn"
+                type="button"
+                title="生成到平台"
+                @click="deployApp(app)"
+              >
+                <el-icon><Promotion /></el-icon>
+              </button>
+              <button
+                v-if="canDeleteApp(app)"
+                class="apps-icon-btn danger"
+                type="button"
+                :title="deleteTooltip(app)"
+                @click="confirmDelete(app)"
+              >
+                <el-icon><Delete /></el-icon>
+              </button>
+              <button v-if="!canOpenPlatform(app) && !canDeployApp(app) && !canDeleteApp(app)" class="apps-icon-btn muted" type="button" title="更多">
+                <el-icon><MoreFilled /></el-icon>
               </button>
             </div>
           </div>
-          <div v-if="a.models || a.forms || a.roles || a.dicts" class="card-stats">
-            <span><i class="dot indigo"></i>{{ a.models || 0 }} 模型</span>
-            <span><i class="dot emerald"></i>{{ a.forms || 0 }} 表单</span>
-            <span><i class="dot amber"></i>{{ a.roles || 0 }} 角色</span>
-            <span><i class="dot purple"></i>{{ a.dicts || 0 }} 字典</span>
-          </div>
-          <div v-if="appHistory(a).length" class="conversation-history list">
-            <div class="conversation-history-title">历史对话</div>
-            <button
-              v-for="item in appHistory(a)"
-              :key="item.id"
-              class="conversation-history-item"
-              @click.stop="router.push(`/chat/${item.id}?app_id=${a.id}`)"
-            >
-              <span class="conversation-history-name">{{ historyTitle(item) }}</span>
-              <span class="conversation-history-meta">{{ historySummary(item) }} · {{ historyTime(item) }}</span>
-            </button>
-          </div>
         </div>
-      </template>
-      </div>
-    </div>
-  </WorkbenchShell>
+
+        <div v-else class="apps-card-grid">
+          <article
+            v-for="app in filteredApps"
+            :key="app.id"
+            class="apps-card"
+            @click="openApp(app)"
+          >
+            <div class="apps-card-top">
+              <span class="apps-avatar large" :style="appAccentStyle(app)">{{ appIconInitial(app) }}</span>
+              <span class="apps-stage-pill" :class="appStage(app).tone">{{ appStage(app).label }}</span>
+            </div>
+            <h2>{{ app.app_name }}</h2>
+            <div class="apps-card-code">
+              <code>{{ app.app_code || `app-${app.id}` }}</code>
+              <span>{{ appUpdatedLabel(app) }}</span>
+            </div>
+            <div class="apps-card-progress">
+              <span class="apps-progress-track">
+                <span class="apps-progress-bar" :class="appStage(app).tone" :style="{ width: `${appProgress(app)}%` }"></span>
+              </span>
+              <span>{{ appProgress(app) }}%</span>
+            </div>
+            <div v-if="hasAppStats(app)" class="apps-card-stats">
+              <span>{{ app.models || 0 }} 模型</span>
+              <span>{{ app.forms || 0 }} 表单</span>
+              <span>{{ app.roles || 0 }} 角色</span>
+              <span>{{ app.dicts || 0 }} 字典</span>
+            </div>
+            <button
+              v-if="latestHistory(app)"
+              class="apps-card-history"
+              type="button"
+              @click.stop="openLatestConversation(app)"
+            >
+              <span>{{ latestHistoryTitle(app) }}</span>
+              <small>{{ latestHistoryMeta(app) }}</small>
+            </button>
+            <div class="apps-card-actions" @click.stop>
+              <button v-if="canOpenPlatform(app)" class="apps-mini-action" type="button" @click="openInPlatform(app)">平台</button>
+              <button v-if="canDeployApp(app)" class="apps-mini-action primary" type="button" @click="deployApp(app)">生成</button>
+              <button v-if="canDeleteApp(app)" class="apps-mini-action danger" type="button" @click="confirmDelete(app)">删除</button>
+            </div>
+          </article>
+        </div>
+      </section>
+    </main>
+  </BuilderFrame>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { Delete, Grid, Link as LinkIcon, List, MoreFilled, Plus, Promotion } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { handleError } from '@/utils/errorHandler'
 import { applicationApi } from '@/api/application'
 import { conversationApi, type ConversationWithApp } from '@/api/conversation'
+import BuilderFrame from '@/components/BuilderFrame.vue'
 import type { MergedApplication } from '@/types'
-import WorkbenchShell from '@/components/WorkbenchShell.vue'
 import { buildPlatformProxyEntryUrl } from '@/utils/platformIframe'
 import { useUserStore } from '@/stores/user'
 
+type AppTab = 'all' | 'active' | 'deployed' | 'draft'
+type ViewMode = 'list' | 'card'
+type AppStage = {
+  group: Exclude<AppTab, 'all'>
+  label: string
+  tone: 'active' | 'success' | 'draft' | 'danger'
+  progress: number
+}
+
 const router = useRouter()
+const userStore = useUserStore()
 const apps = ref<MergedApplication[]>([])
 const appHistoryMap = ref<Record<number, ConversationWithApp[]>>({})
 const loading = ref(true)
-const activeTab = ref<'all' | 'draft' | 'generating' | 'updating' | 'completed'>('all')
-const viewMode = ref<'grid' | 'list'>('grid')
+const activeTab = ref<AppTab>('all')
+const viewMode = ref<ViewMode>('list')
 
-const tabs = [
+const tabDefinitions: Array<{ label: string; value: AppTab }> = [
   { label: '全部', value: 'all' },
+  { label: '进行中', value: 'active' },
+  { label: '已部署', value: 'deployed' },
   { label: '草稿', value: 'draft' },
-  { label: '生成中', value: 'generating' },
-  { label: '更新中', value: 'updating' },
-  { label: '已生成', value: 'completed' },
 ]
 
-function matchesTab(a: MergedApplication, tab: typeof activeTab.value) {
-  if (tab === 'all') return true
-  if (tab === 'completed') return a.local_status === 'completed' || !!a.apaas_app_id
-  return a.local_status === tab
-}
+const APP_ACCENTS = ['#5871e8', '#2aa871', '#d28b16', '#14aeb8', '#e35a49', '#8a65d9']
 
-const tabCounts = computed(() => {
-  const counts: Record<string, number> = {}
-  for (const t of tabs) {
-    counts[t.value] = apps.value.filter(a => matchesTab(a, t.value as typeof activeTab.value)).length
-  }
-  return counts
-})
+const tabs = computed(() =>
+  tabDefinitions.map(tab => ({
+    ...tab,
+    count: apps.value.filter(app => matchesTab(app, tab.value)).length,
+  })),
+)
 
 const filteredApps = computed(() => {
-  return apps.value.filter(a => matchesTab(a, activeTab.value))
+  return [...apps.value]
+    .filter(app => matchesTab(app, activeTab.value))
+    .sort((a, b) => appTimeMs(b.updated_at || b.created_at) - appTimeMs(a.updated_at || a.created_at))
 })
 
-const userStore = useUserStore()
+const deployedCount = computed(() => apps.value.filter(app => appStage(app).group === 'deployed').length)
+const activeCount = computed(() => apps.value.filter(app => appStage(app).group === 'active').length)
+const appsSummary = computed(() => `${apps.value.length} 个应用 · ${deployedCount.value} 个已部署 · ${activeCount.value} 个进行中`)
 
-function appNumericId(a: MergedApplication) {
-  const raw = Number(a.id)
+function matchesTab(app: MergedApplication, tab: AppTab) {
+  if (tab === 'all') return true
+  return appStage(app).group === tab
+}
+
+function appStage(app: MergedApplication): AppStage {
+  if (app.local_status === 'completed' || app.apaas_app_id) {
+    return { group: 'deployed', label: '部署', tone: 'success', progress: 100 }
+  }
+  if (app.local_status === 'generating') {
+    return { group: 'active', label: '配置生成', tone: 'active', progress: 76 }
+  }
+  if (app.local_status === 'updating') {
+    return { group: 'active', label: '自开发', tone: 'active', progress: 62 }
+  }
+  if (app.local_status === 'failed') {
+    return { group: 'draft', label: '需求理解', tone: 'danger', progress: 18 }
+  }
+  if (hasAppStats(app)) {
+    return { group: 'active', label: 'SPEC 设计', tone: 'active', progress: 42 }
+  }
+  return { group: 'draft', label: '需求理解', tone: 'draft', progress: 12 }
+}
+
+function appProgress(app: MergedApplication) {
+  return appStage(app).progress
+}
+
+function normalizeTimestamp(value?: string | null) {
+  if (!value) return ''
+  const normalized = String(value).trim()
+  const hasTimezone = /(?:z|[+-]\d{2}:?\d{2})$/i.test(normalized)
+  const isDateTime = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(normalized)
+  return isDateTime && !hasTimezone ? `${normalized.replace(' ', 'T')}Z` : normalized
+}
+
+function appTimeMs(value?: string | null) {
+  const normalized = normalizeTimestamp(value)
+  if (!normalized) return 0
+  const time = new Date(normalized).getTime()
+  return Number.isFinite(time) ? time : 0
+}
+
+function hasAppStats(app: MergedApplication) {
+  return Boolean((app.models || 0) + (app.forms || 0) + (app.roles || 0) + (app.dicts || 0))
+}
+
+function appNumericId(app: MergedApplication) {
+  const raw = Number(app.id)
   return Number.isFinite(raw) ? raw : null
 }
 
-function openInPlatform(a: MergedApplication) {
-  const appId = appNumericId(a)
+function canOpenPlatform(app: MergedApplication) {
+  return Boolean(app.apaas_url || app.apaas_app_id)
+}
+
+function openInPlatform(app: MergedApplication) {
+  if (app.apaas_url) {
+    window.open(app.apaas_url, '_blank', 'noopener,noreferrer')
+    return
+  }
+  const appId = appNumericId(app)
   if (!appId) return
   const token = userStore.token || localStorage.getItem('token') || ''
   const url = buildPlatformProxyEntryUrl(appId, token)
   window.open(url, '_blank', 'noopener,noreferrer')
 }
 
-function appHistory(a: MergedApplication) {
-  const id = appNumericId(a)
+function openApp(app: MergedApplication) {
+  router.push({ path: '/chat', query: { app_id: String(app.id) } })
+}
+
+function canDeployApp(app: MergedApplication) {
+  return app.source === 'local' && (app.local_status === 'draft' || app.local_status === 'failed')
+}
+
+function deployApp(app: MergedApplication) {
+  router.push({ path: '/chat', query: { deploy_app_id: String(app.id) } })
+}
+
+function openConversation(app: MergedApplication, item?: ConversationWithApp) {
+  if (!item) return
+  router.push(`/chat/${item.id}?app_id=${app.id}`)
+}
+
+function latestHistory(app: MergedApplication) {
+  return appHistory(app)[0] || null
+}
+
+function openLatestConversation(app: MergedApplication) {
+  openConversation(app, latestHistory(app) || undefined)
+}
+
+function latestHistoryTitle(app: MergedApplication) {
+  const item = latestHistory(app)
+  return item ? historyTitle(item) : ''
+}
+
+function latestHistoryMeta(app: MergedApplication) {
+  const item = latestHistory(app)
+  return item ? `${historySummary(item)} · ${historyTime(item)}` : ''
+}
+
+function appHistory(app: MergedApplication) {
+  const id = appNumericId(app)
   if (id == null) return []
   return appHistoryMap.value[id] || []
 }
@@ -203,7 +363,7 @@ function historyTitle(item: ConversationWithApp) {
 }
 
 function historyTime(item: ConversationWithApp) {
-  return (item.updated_at || item.created_at || '').slice(0, 16)
+  return relativeTime(item.updated_at || item.created_at)
 }
 
 function historySummary(item: ConversationWithApp) {
@@ -222,7 +382,7 @@ function buildAppHistoryMap(list: ConversationWithApp[]) {
   for (const key of Object.keys(next)) {
     const items = next[Number(key)] || []
     next[Number(key)] = items
-      .sort((a, b) => new Date(b.updated_at || b.created_at || 0).getTime() - new Date(a.updated_at || a.created_at || 0).getTime())
+      .sort((a, b) => appTimeMs(b.updated_at || b.created_at) - appTimeMs(a.updated_at || a.created_at))
       .slice(0, 3)
   }
   return next
@@ -234,112 +394,70 @@ function nameHash(name: string): number {
   return h
 }
 
-function escapeSvgText(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;')
-}
-
-const ICON_PALETTES = [
-  ['#6366f1', '#818cf8'],  // indigo
-  ['#0ea5e9', '#38bdf8'],  // sky
-  ['#10b981', '#34d399'],  // emerald
-  ['#f59e0b', '#fbbf24'],  // amber
-  ['#ef4444', '#f87171'],  // red
-  ['#8b5cf6', '#a78bfa'],  // violet
-  ['#06b6d4', '#22d3ee'],  // cyan
-  ['#f97316', '#fb923c'],  // orange
-  ['#ec4899', '#f472b6'],  // pink
-  ['#14b8a6', '#2dd4bf'],  // teal
-]
-
-function appIconInitial(a: MergedApplication): string {
-  const appName = String(a.app_name || '').trim()
-  const appCode = String(a.app_code || '').trim()
+function appIconInitial(app: MergedApplication): string {
+  const appName = String(app.app_name || '').trim()
+  const appCode = String(app.app_code || '').trim()
   const source = appName || appCode || 'A'
   const chars = Array.from(source)
   const first = chars.find(char => char.trim()) || 'A'
   return /[a-z]/.test(first) ? first.toUpperCase() : first
 }
 
-function appIconBody(a: MergedApplication): string {
-  const initial = escapeSvgText(appIconInitial(a))
-  return `<text x="24" y="31" text-anchor="middle" font-size="22" font-weight="700"
-    font-family="-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif"
-    fill="rgba(255,255,255,0.96)">${initial}</text>`
+function appAccentStyle(app: MergedApplication) {
+  const stage = appStage(app)
+  if (stage.tone === 'draft') return { background: '#aab5c5' }
+  if (stage.tone === 'danger') return { background: '#d14a61' }
+  if (stage.tone === 'success') return { background: '#2aa871' }
+  const seed = app.app_name || app.app_code || String(app.id)
+  return { background: APP_ACCENTS[nameHash(seed) % APP_ACCENTS.length] }
 }
 
-function appIconSvg(a: MergedApplication): string {
-  const iconSeed = a.app_name || a.app_code || 'app'
-  const [c1, c2] = ICON_PALETTES[nameHash(iconSeed) % ICON_PALETTES.length]
-  const gradId = `g${nameHash(`${iconSeed}-${a.id}`) % 9999}`
-
-  // 特殊状态覆盖颜色
-  const isUpdating = a.local_status === 'updating'
-  const isDraft = !a.apaas_app_id && a.local_status !== 'completed'
-
-  const [bg1, bg2] = isUpdating
-    ? ['#f59e0b', '#fbbf24']
-    : isDraft
-      ? ['#94a3b8', '#cbd5e1']
-      : [c1, c2]
-
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" viewBox="0 0 48 48">
-  <defs>
-    <linearGradient id="${gradId}" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="${bg1}"/>
-      <stop offset="100%" stop-color="${bg2}"/>
-    </linearGradient>
-  </defs>
-  <rect width="48" height="48" rx="12" fill="url(#${gradId})"/>
-  ${appIconBody(a)}
-</svg>`
+function appUpdatedLabel(app: MergedApplication) {
+  return relativeTime(app.updated_at || app.created_at)
 }
 
-function sourceIconClass(a: MergedApplication) {
-  if (a.local_status === 'updating') return 'updating'
-  if (a.local_status === 'completed' || a.apaas_app_id) return 'success'
-  if (a.local_status === 'generating') return 'generating'
-  return 'draft'
+function relativeTime(value?: string | null) {
+  if (!value) return '-'
+  const time = appTimeMs(value)
+  if (!Number.isFinite(time)) return String(value).slice(0, 16)
+  const diffMs = Date.now() - time
+  if (diffMs < 60_000) return '刚刚'
+  const minutes = Math.floor(diffMs / 60_000)
+  if (minutes < 60) return `${minutes} 分钟前`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours} 小时前`
+  if (hours < 48) return '昨天'
+  const days = Math.floor(hours / 24)
+  if (days < 7) return `${days} 天前`
+  return String(value).slice(0, 10)
 }
 
-function statusClass(a: MergedApplication) {
-  if (a.local_status === 'updating') return 'updating'
-  if (a.local_status === 'completed' || a.apaas_app_id) return 'success'
-  if (a.local_status === 'generating') return 'generating'
-  if (a.local_status === 'failed') return 'failed'
-  return 'draft'
+function canDeleteApp(app: MergedApplication) {
+  if (app.source !== 'local') return false
+  if (app.apaas_app_id) return false
+  return app.local_status === 'draft' || app.local_status === 'failed'
 }
 
-function canDeleteApp(a: MergedApplication) {
-  if (a.source !== 'local') return false
-  if (a.apaas_app_id) return false
-  return a.local_status === 'draft' || a.local_status === 'failed'
-}
-
-function deleteTooltip(a: MergedApplication) {
-  if (canDeleteApp(a)) return '删除'
-  if (a.source !== 'local') return '平台应用不允许删除'
-  if (a.apaas_app_id || a.local_status === 'completed' || a.local_status === 'generating' || a.local_status === 'updating') return '已构建应用不允许删除'
+function deleteTooltip(app: MergedApplication) {
+  if (canDeleteApp(app)) return '删除'
+  if (app.source !== 'local') return '平台应用不允许删除'
+  if (app.apaas_app_id || app.local_status === 'completed' || app.local_status === 'generating' || app.local_status === 'updating') return '已构建应用不允许删除'
   return '当前状态不允许删除'
 }
 
-async function confirmDelete(a: MergedApplication) {
-  if (!canDeleteApp(a)) {
-    ElMessage.warning(deleteTooltip(a))
+async function confirmDelete(app: MergedApplication) {
+  if (!canDeleteApp(app)) {
+    ElMessage.warning(deleteTooltip(app))
     return
   }
   try {
-    await ElMessageBox.confirm(`确定删除「${a.app_name}」？此操作不可恢复。`, '删除应用', {
+    await ElMessageBox.confirm(`确定删除「${app.app_name}」？此操作不可恢复。`, '删除应用', {
       confirmButtonText: '删除',
       cancelButtonText: '取消',
-      type: 'warning'
+      type: 'warning',
     })
-    await applicationApi.delete(Number(a.id))
-    apps.value = apps.value.filter(x => x.id !== a.id)
+    await applicationApi.delete(Number(app.id))
+    apps.value = apps.value.filter(item => item.id !== app.id)
     ElMessage.success('已删除')
   } catch (error: any) {
     if (error === 'cancel' || error === 'close' || error?.action === 'cancel' || error?.action === 'close') return
@@ -355,470 +473,606 @@ onMounted(async () => {
     ])
     apps.value = Array.isArray(list) ? list : []
     appHistoryMap.value = buildAppHistoryMap(Array.isArray(conversations) ? conversations : [])
-  } catch (e) { /* ignore */ }
-  loading.value = false
+  } catch (error) {
+    handleError(error, { fallback: '应用列表加载失败' })
+  } finally {
+    loading.value = false
+  }
 })
 </script>
 
 <style scoped>
-.apps-main {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-/* ── Nav ── */
-.nav-bar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 12px 24px;
-  background: var(--t-bg-nav);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border-bottom: 1px solid var(--t-border-subtle);
-  flex-shrink: 0;
-}
-
-.nav-left {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.back-btn {
-  background: none;
-  border: none;
-  color: var(--t-text-secondary);
-  cursor: pointer;
-  padding: 4px;
-  border-radius: 6px;
-  display: flex;
-  align-items: center;
-  transition: all 0.2s;
-}
-.back-btn:hover { color: #fff; background: var(--t-border-subtle); }
-
-.logo-box {
-  width: 28px;
-  height: 28px;
-  background: var(--t-brand-gradient);
-  border-radius: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #fff;
-  font-weight: 700;
-  font-size: 12px;
-}
-
-.title {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--t-text-primary);
-}
-
-.new-btn {
-  display: flex;
+.apps-create-btn {
+  height: 30px;
+  display: inline-flex;
   align-items: center;
   gap: 6px;
-  background: var(--t-brand-gradient);
+  border: 1px solid var(--b-ink);
+  border-radius: var(--b-radius-md);
+  background: var(--b-ink);
   color: #fff;
-  border: none;
-  padding: 8px 18px;
-  border-radius: 10px;
-  font-size: 13px;
-  font-weight: 500;
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 650;
   cursor: pointer;
-  transition: opacity 0.2s;
 }
-.nav-right-group {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.new-btn:hover { opacity: 0.9; }
 
-/* ── Filter ── */
-.filter-bar {
+.apps-create-btn:hover {
+  background: #252b38;
+}
+
+:global(html[data-theme="dark"]) .apps-create-btn,
+:global(html[data-theme="dark"]) .apps-mini-action.primary {
+  background: var(--b-brand);
+  border-color: var(--b-brand);
+  color: #070a12;
+}
+
+:global(html[data-theme="dark"]) .apps-create-btn:hover,
+:global(html[data-theme="dark"]) .apps-mini-action.primary:hover {
+  background: #a5b4fc;
+  border-color: #a5b4fc;
+  color: #070a12;
+}
+
+.apps-page {
   display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 22px 28px 32px;
+}
+
+.apps-header {
+  display: flex;
+  align-items: flex-end;
   justify-content: space-between;
-  align-items: center;
-  padding: 16px 24px 0;
-  max-width: 1200px;
-  margin: 0 auto;
+  gap: 16px;
+  max-width: 1160px;
   width: 100%;
+  margin: 0 auto;
 }
 
-.filter-tabs {
-  display: flex;
-  gap: 4px;
+.apps-header h1 {
+  margin: 0;
+  color: var(--b-text);
+  font-size: 24px;
+  line-height: 1.25;
+  font-weight: 750;
+  letter-spacing: 0;
 }
 
-.view-toggle {
+.apps-header p {
+  margin: 6px 0 0;
+  color: var(--b-text-muted);
+  font-size: 13px;
+}
+
+.apps-toolbar {
+  max-width: 1160px;
+  width: 100%;
+  margin: 8px auto 2px;
   display: flex;
-  gap: 2px;
-  background: var(--t-bg-subtle);
-  border-radius: 8px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.apps-tabs,
+.apps-view-toggle {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--b-line);
+  border-radius: var(--b-radius-md);
+  background: var(--b-bg-sub);
   padding: 2px;
 }
 
-.toggle-btn {
-  width: 32px;
-  height: 32px;
-  border: none;
-  background: none;
-  color: var(--t-text-muted);
-  cursor: pointer;
+.apps-tab {
+  min-width: 52px;
+  height: 26px;
+  border: 0;
   border-radius: 6px;
-  display: flex;
+  background: transparent;
+  color: var(--b-text-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.15s;
-}
-.toggle-btn:hover { color: var(--t-text-secondary); }
-.toggle-btn.active { background: var(--t-brand-subtle); color: var(--t-brand-light); }
-
-.filter-tab {
-  background: none;
-  border: none;
-  padding: 7px 16px;
-  font-size: 13px;
-  color: var(--t-text-secondary);
-  cursor: pointer;
-  border-radius: 8px;
-  display: flex;
-  align-items: center;
   gap: 6px;
-  transition: all 0.15s;
-}
-.filter-tab:hover { background: var(--t-border-subtle); color: var(--t-text-primary); }
-.filter-tab.active { background: var(--t-brand-subtle); color: var(--t-brand-light); font-weight: 600; }
-
-.tab-count {
-  font-size: 11px;
-  background: var(--t-border-subtle);
-  color: var(--t-text-secondary);
-  padding: 0 7px;
-  border-radius: 10px;
-  min-width: 20px;
-  text-align: center;
-}
-.filter-tab.active .tab-count { background: var(--t-brand-subtle); color: var(--t-brand-light); }
-
-/* ── Content area ── */
-.app-content {
-  flex: 1;
-  overflow-y: auto;
-  max-width: 1200px;
-  margin: 0 auto;
-  width: 100%;
-  padding: 16px 24px 60px;
+  padding: 0 10px;
 }
 
-.app-content.grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 14px;
-  align-content: start;
+.apps-tab.active {
+  background: var(--b-panel);
+  color: var(--b-text);
+  font-weight: 650;
+  box-shadow: var(--b-shadow-xs);
 }
 
-.app-content.list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+.apps-tab-count {
+  min-width: 18px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--b-brand-soft);
+  color: var(--b-brand);
+  font-family: var(--b-mono);
+  font-size: 10px;
+  line-height: 14px;
 }
 
-.empty-state {
-  text-align: center;
-  color: var(--t-text-muted);
-  padding: 80px 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-  font-size: 14px;
-}
-
-/* ── Grid Card ── */
-.grid-card {
-  background: var(--t-bg-panel);
-  border: 1px solid var(--t-border-subtle);
-  border-radius: 14px;
-  padding: 18px;
-  cursor: pointer;
-  transition: all 0.2s;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  position: relative;
-}
-.grid-card:hover {
-  background: var(--t-bg-input);
-  border-color: var(--t-brand-subtle);
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
-  transform: translateY(-2px);
-}
-
-.grid-card-top {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-}
-
-.grid-card-icon {
-  width: 44px;
-  height: 44px;
-  border-radius: 12px;
-  overflow: hidden;
+.apps-view-toggle {
   flex-shrink: 0;
 }
 
-.grid-card-badges {
-  display: flex;
-  gap: 4px;
+.apps-view-btn {
+  width: 32px;
+  height: 26px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--b-text-muted);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
 }
 
-.grid-card-name {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--t-text-primary);
-  margin: 0;
-  line-height: 1.3;
+.apps-view-btn.active {
+  background: var(--b-panel);
+  color: var(--b-text);
+  box-shadow: var(--b-shadow-xs);
 }
 
-.grid-card-meta {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  font-size: 11px;
-  color: var(--t-text-muted);
+.apps-content {
+  max-width: 1160px;
+  width: 100%;
+  margin: 0 auto;
 }
 
-.grid-card-date { font-size: 11px; }
-
-.grid-card-stats {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  padding-top: 10px;
-  border-top: 1px solid var(--t-bg-subtle);
-  font-size: 11px;
-  color: var(--t-text-muted);
-}
-
-.conversation-history {
+.apps-state {
+  min-height: 340px;
+  border: 1px solid var(--b-line);
+  border-radius: var(--b-radius-md);
+  background: var(--b-panel);
   display: flex;
   flex-direction: column;
+  align-items: center;
+  justify-content: center;
   gap: 8px;
-  padding-top: 10px;
-  border-top: 1px solid var(--t-bg-subtle);
+  color: var(--b-text-muted);
+  font-size: 13px;
+  text-align: center;
 }
 
-.conversation-history.list {
-  margin-top: 14px;
+.apps-state strong {
+  color: var(--b-text);
+  font-size: 14px;
 }
 
-.conversation-history-title {
-  font-size: 11px;
-  color: var(--t-text-muted);
+.apps-state-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  background: var(--b-ink);
+  color: #fff;
+  font-family: var(--b-mono);
+  font-weight: 700;
 }
 
-.conversation-history-item {
-  width: 100%;
-  border: 1px solid var(--t-border-subtle);
-  background: var(--t-bg-subtle);
+.apps-table {
+  overflow: hidden;
+  border: 1px solid var(--b-line);
+  border-radius: var(--b-radius-md);
+  background: var(--b-panel);
+}
+
+.apps-table-head,
+.apps-row {
+  display: grid;
+  grid-template-columns: minmax(320px, 1.5fr) minmax(120px, 0.7fr) minmax(150px, 0.7fr) minmax(110px, 0.45fr) 112px;
+  align-items: center;
+  column-gap: 18px;
+}
+
+.apps-table-head {
+  min-height: 28px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--b-line);
+  color: var(--b-text-muted);
+  font-size: 12px;
+}
+
+.apps-row {
+  min-height: 56px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--b-line);
+  color: var(--b-text);
+  cursor: pointer;
+  transition: background 0.15s ease;
+  outline: none;
+}
+
+.apps-row:last-child {
+  border-bottom: 0;
+}
+
+.apps-row:hover,
+.apps-row:focus-visible {
+  background: var(--b-panel-soft);
+}
+
+.apps-row-app {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+.apps-avatar {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 750;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+
+.apps-avatar.large {
+  width: 44px;
+  height: 44px;
   border-radius: 10px;
+  font-size: 18px;
+}
+
+.apps-row-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.apps-row-main strong {
+  min-width: 0;
+  color: var(--b-text);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.apps-row-meta {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--b-text-muted);
+  font-size: 11px;
+}
+
+.apps-row-meta code,
+.apps-card-code code {
+  border-radius: 4px;
+  background: var(--b-bg-sub);
+  color: var(--b-text-muted);
+  padding: 2px 5px;
+  font-family: var(--b-mono);
+  font-size: 10px;
+  line-height: 1;
+}
+
+.apps-dot-sep {
+  width: 3px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--b-text-faint);
+}
+
+.apps-history-link {
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--b-text-muted);
+  font: inherit;
+  font-size: 11px;
+  padding: 0;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.apps-history-link:hover {
+  color: var(--b-text);
+}
+
+.apps-stage-pill {
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--b-line);
+  border-radius: 6px;
+  background: var(--b-bg-sub);
+  color: var(--b-text-muted);
+  padding: 0 9px;
+  font-size: 11px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.apps-stage-pill.active {
+  background: var(--b-brand-soft);
+  color: var(--b-brand-ink);
+  border-color: rgba(79, 110, 247, 0.18);
+}
+
+.apps-stage-pill.success {
+  background: var(--b-teal-soft);
+  color: var(--b-teal);
+  border-color: rgba(15, 159, 143, 0.16);
+}
+
+.apps-stage-pill.danger {
+  background: var(--b-red-soft);
+  color: var(--b-red);
+  border-color: rgba(209, 74, 97, 0.16);
+}
+
+.apps-row-progress,
+.apps-card-progress {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--b-text-muted);
+  font-family: var(--b-mono);
+  font-size: 11px;
+}
+
+.apps-progress-track {
+  width: 80px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--b-bg-sub);
+  overflow: hidden;
+}
+
+.apps-progress-bar {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--b-ink);
+}
+
+.apps-progress-bar.active {
+  background: var(--b-ink);
+}
+
+.apps-progress-bar.success {
+  background: var(--b-teal);
+}
+
+.apps-progress-bar.draft {
+  background: #aab5c5;
+}
+
+.apps-progress-bar.danger {
+  background: var(--b-red);
+}
+
+.apps-row-updated {
+  color: var(--b-text-muted);
+  font-size: 12px;
+}
+
+.apps-row-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.apps-icon-btn {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--b-line);
+  border-radius: 7px;
+  background: var(--b-panel);
+  color: var(--b-text-muted);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.apps-icon-btn:hover {
+  border-color: var(--b-line-strong);
+  color: var(--b-text);
+  background: var(--b-bg-sub);
+}
+
+.apps-icon-btn.danger {
+  color: var(--b-red);
+}
+
+.apps-icon-btn.muted {
+  color: var(--b-text-faint);
+}
+
+.apps-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(286px, 1fr));
+  gap: 14px;
+}
+
+.apps-card {
+  min-height: 240px;
+  border: 1px solid var(--b-line);
+  border-radius: var(--b-radius-md);
+  background: var(--b-panel);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.apps-card:hover {
+  border-color: var(--b-line-strong);
+  box-shadow: var(--b-shadow-sm);
+  transform: translateY(-1px);
+}
+
+.apps-card-top,
+.apps-card-actions,
+.apps-card-code,
+.apps-card-stats {
+  display: flex;
+  align-items: center;
+}
+
+.apps-card-top {
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.apps-card h2 {
+  margin: 2px 0 0;
+  color: var(--b-text);
+  font-size: 15px;
+  line-height: 1.35;
+  font-weight: 750;
+}
+
+.apps-card-code {
+  gap: 8px;
+  color: var(--b-text-muted);
+  font-size: 11px;
+}
+
+.apps-card-stats {
+  gap: 11px;
+  flex-wrap: wrap;
+  padding-top: 10px;
+  border-top: 1px solid var(--b-line);
+  color: var(--b-text-muted);
+  font-size: 11px;
+}
+
+.apps-card-history {
+  width: 100%;
+  border: 1px solid var(--b-line);
+  border-radius: var(--b-radius-md);
+  background: var(--b-panel-soft);
   padding: 9px 10px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  align-items: flex-start;
+  gap: 3px;
+  color: var(--b-text);
   text-align: left;
   cursor: pointer;
-  transition: all 0.2s;
 }
 
-.conversation-history-item:hover {
-  border-color: var(--t-brand-subtle);
-  background: var(--t-bg-input);
-}
-
-.conversation-history-name {
+.apps-card-history span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 12px;
-  color: var(--t-text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
-.conversation-history-meta {
+.apps-card-history small {
+  color: var(--b-text-muted);
   font-size: 11px;
-  color: var(--t-text-muted);
 }
 
-.grid-card-actions {
-  display: flex;
-  gap: 4px;
-  position: absolute;
-  bottom: 18px;
-  right: 18px;
-  opacity: 0;
-  transition: opacity 0.2s;
+.apps-card-actions {
+  margin-top: auto;
+  justify-content: flex-end;
+  gap: 7px;
 }
-.grid-card:hover .grid-card-actions { opacity: 1; }
-@media (hover: none) { .grid-card-actions { opacity: 1; } }
 
-/* ── List Card ── */
-.list-card {
-  background: var(--t-bg-panel);
-  border: 1px solid var(--t-border-subtle);
-  border-radius: 14px;
-  padding: 18px 20px;
+.apps-mini-action {
+  height: 26px;
+  border: 1px solid var(--b-line);
+  border-radius: 6px;
+  background: var(--b-panel);
+  color: var(--b-text-muted);
+  padding: 0 9px;
+  font-size: 11px;
   cursor: pointer;
-  transition: all 0.2s;
-}
-.list-card:hover {
-  background: var(--t-bg-input);
-  border-color: var(--t-border-subtle);
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
 }
 
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+.apps-mini-action.primary {
+  background: var(--b-ink);
+  border-color: var(--b-ink);
+  color: #fff;
 }
 
-.card-left {
-  display: flex;
-  gap: 14px;
-  align-items: center;
-  min-width: 0;
+.apps-mini-action.danger {
+  color: var(--b-red);
 }
 
-.card-icon {
-  width: 42px;
-  height: 42px;
-  border-radius: 10px;
-  overflow: hidden;
-  flex-shrink: 0;
-}
+@media (max-width: 860px) {
+  .apps-page {
+    padding: 18px 16px 28px;
+  }
 
-.card-info { min-width: 0; }
+  .apps-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
 
-.card-name-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
+  .apps-tabs {
+    width: 100%;
+    overflow-x: auto;
+  }
 
-.card-name-row h3 {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--t-text-primary);
-  margin: 0;
-  white-space: nowrap;
-}
+  .apps-view-toggle {
+    align-self: flex-end;
+  }
 
-.card-status {
-  padding: 1px 8px;
-  border-radius: 10px;
-  font-size: 10px;
-  font-weight: 500;
-}
-.card-status.success { background: rgba(52, 211, 153, 0.15); color: #34d399; }
-.card-status.draft { background: var(--t-border-subtle); color: var(--t-text-muted); }
-.card-status.generating { background: rgba(96, 165, 250, 0.16); color: #2563eb; }
-.card-status.updating { background: rgba(251, 191, 36, 0.16); color: #b7791f; }
-.card-status.failed { background: rgba(239, 68, 68, 0.15); color: var(--t-danger); }
+  .apps-table-head {
+    display: none;
+  }
 
-.card-meta {
-  display: flex;
-  gap: 10px;
-  font-size: 11px;
-  color: var(--t-text-muted);
-  align-items: center;
-  margin-top: 4px;
-  flex-wrap: wrap;
-}
+  .apps-table {
+    border: 0;
+    background: transparent;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
 
-.card-code {
-  font-family: 'SF Mono', Monaco, Consolas, monospace;
-  font-size: 10px;
-  color: var(--t-text-muted);
-  background: var(--t-border-subtle);
-  padding: 1px 6px;
-  border-radius: 4px;
-}
+  .apps-row {
+    min-height: 0;
+    border: 1px solid var(--b-line);
+    border-radius: var(--b-radius-md);
+    background: var(--b-panel);
+    grid-template-columns: 1fr;
+    row-gap: 10px;
+    padding: 12px;
+  }
 
-/* ── Actions ── */
-.card-actions {
-  display: flex;
-  gap: 4px;
-  flex-shrink: 0;
-}
+  .apps-row-stage,
+  .apps-row-progress,
+  .apps-row-updated,
+  .apps-row-actions {
+    margin-left: 41px;
+  }
 
-.action-btn {
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
-  border: 1px solid var(--t-border-subtle);
-  background: var(--t-bg-subtle);
-  color: var(--t-text-secondary);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.2s;
-  text-decoration: none;
-}
-.action-btn:hover { background: var(--t-border-subtle); color: #fff; }
-.action-btn.primary { border-color: var(--t-brand-subtle); color: var(--t-brand-light); }
-.action-btn.primary:hover { background: var(--t-brand-subtle); color: var(--t-brand-light); }
-.action-btn.danger { border-color: rgba(239, 68, 68, 0.15); color: rgba(239, 68, 68, 0.5); }
-.action-btn.danger:hover { background: rgba(239, 68, 68, 0.1); color: var(--t-danger); }
-.action-btn:disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
-  pointer-events: none;
-}
-
-/* ── Stats ── */
-.card-stats {
-  display: flex;
-  gap: 20px;
-  margin-top: 14px;
-  padding-top: 12px;
-  border-top: 1px solid var(--t-bg-subtle);
-  font-size: 11px;
-  color: var(--t-text-muted);
-}
-
-.card-stats .dot {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  margin-right: 5px;
-}
-.dot.indigo { background: var(--t-brand-light); }
-.dot.emerald { background: #34d399; }
-.dot.amber { background: var(--t-warning); }
-.dot.purple { background: var(--t-brand-light); }
-
-/* ── Env badge ── */
-.env-badge {
-  font-size: 10px;
-  padding: 1px 8px;
-  border-radius: 10px;
-  font-weight: 500;
-  white-space: nowrap;
-  background: rgba(56, 189, 248, 0.12);
-  color: #38bdf8;
-  max-width: 160px;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  .apps-row-actions {
+    justify-content: flex-start;
+  }
 }
 </style>

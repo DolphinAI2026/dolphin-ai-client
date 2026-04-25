@@ -8,7 +8,8 @@
     <script>
       // Prevent flash of wrong theme (FOWT)
       ;(function() {
-        var t = localStorage.getItem('theme') || 'dark'
+        var saved = localStorage.getItem('theme')
+        var t = saved === 'dark' || saved === 'light' ? saved : 'light'
         document.documentElement.setAttribute('data-theme', t)
         if (t === 'dark') document.documentElement.classList.add('dark')
       })()

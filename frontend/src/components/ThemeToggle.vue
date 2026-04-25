@@ -5,7 +5,13 @@ const theme = useThemeStore()
 </script>
 
 <template>
-  <button class="theme-toggle" @click="theme.toggle()" :title="theme.isDark ? '切换到浅色模式' : '切换到深色模式'">
+  <button
+    class="theme-toggle"
+    :class="{ active: theme.isDark }"
+    type="button"
+    @click="theme.toggle()"
+    :title="theme.isDark ? '切换到浅色模式' : '切换到黑色主题'"
+  >
     <!-- Sun icon (shown when dark mode is active) -->
     <svg v-if="theme.isDark" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <circle cx="12" cy="12" r="5"/>
@@ -34,7 +40,7 @@ const theme = useThemeStore()
   height: 34px;
   border-radius: 8px;
   border: 1px solid var(--t-border-subtle);
-  background: var(--t-bg-subtle);
+  background: var(--t-bg-panel);
   color: var(--t-text-secondary);
   cursor: pointer;
   transition: all 0.2s ease;
@@ -44,5 +50,11 @@ const theme = useThemeStore()
   background: var(--t-bg-panel-hover);
   color: var(--t-text-primary);
   border-color: var(--t-border-strong);
+}
+
+.theme-toggle.active {
+  background: var(--t-bg-input);
+  color: var(--t-brand-light);
+  border-color: color-mix(in srgb, var(--t-brand) 42%, var(--t-border-strong));
 }
 </style>

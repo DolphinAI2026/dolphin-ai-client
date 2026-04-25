@@ -111,8 +111,9 @@ export interface ChatRequest {
 }
 
 export interface ConversationCreate {
-  agent_type: 'builder' | 'assistant' | 'developer' | 'coding'
+  agent_type: 'builder' | 'assistant' | 'developer' | 'coding' | 'requirements'
   selected_llm_config_id?: number | null
+  initial_message?: string | null
 }
 
 // Preview types
@@ -173,8 +174,10 @@ export interface PreviewData {
   dicts: DictDef[]
   models: ModelDef[]
   forms: any[]
+  flows?: any[]
   workflows: WorkflowDef[]
   permissions: PermissionDef[]
+  custom_development?: any[]
 }
 
 export interface GenStage {

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime
 from typing import Annotated, Optional
 
@@ -33,7 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
 from app.database import get_db
-from app.models import User, Application, DocumentVersion, Conversation, ChangePlan
+from app.models import User, Application, DocumentVersion, Conversation, ChangePlan, Message
 from app.auth import get_current_user
 from app.deps import get_auth_context, AuthContext
 from app.permissions import check_resource_permission, Action
@@ -41,6 +42,12 @@ from app.json_utils import loads_if_str
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+class DraftDocUpdateRequest(BaseModel):
+    instruction: str
+    conversation_id: Optional[int] = None
+    current_doc: Optional[str] = None
 
 
 # 共享 helper 直接从 sibling _helpers.py 取，不再通过 parent package 代理
@@ -573,6 +580,185 @@ def _remove_deleted_from_config(v1_config: dict, text_diff: dict) -> dict:
     return deepcopy(v1_config)
 
 
+@router.post("/{app_id}/draft-doc-update")
+async def draft_doc_update(
+    app_id: int,
+    body: DraftDocUpdateRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)] = None,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+):
+    """根据自然语言更新诉求生成新版标准 SPEC 草稿。
+
+    这里不直接执行更新，只产出稳定的 Markdown 文档；前端随后复用
+    upload-doc-version 的严格解析、版本记录和变更计划流程。
+    """
+    instruction = (body.instruction or "").strip()
+    if not instruction:
+        raise HTTPException(status_code=400, detail="更新诉求不能为空")
+
+    result = await db.execute(
+        select(Application).where(Application.id == app_id, Application.tenant_id == ctx.tenant_id)
+    )
+    app = result.scalar_one_or_none()
+    if not app:
+        raise HTTPException(status_code=404, detail="应用不存在")
+    await check_resource_permission(ctx, db, app, "application", Action.EDIT)
+
+    current_config: dict = {}
+    if app.config_preview:
+        try:
+            loaded = loads_if_str(app.config_preview)
+            current_config = loaded.get("data", loaded) if isinstance(loaded, dict) else {}
+        except Exception:
+            current_config = {}
+
+    current_doc = (body.current_doc or "").strip()
+    if not current_doc:
+        latest_result = await db.execute(
+            select(DocumentVersion)
+            .where(DocumentVersion.application_id == app.id)
+            .order_by(DocumentVersion.version.desc())
+            .limit(1)
+        )
+        latest_doc = latest_result.scalar_one_or_none()
+        if latest_doc:
+            current_doc = await _ensure_doc_version_rendered_content(db, app, latest_doc)
+
+    conversation: Conversation | None = None
+    if body.conversation_id:
+        conv_result = await db.execute(
+            select(Conversation).where(
+                Conversation.id == body.conversation_id,
+                Conversation.tenant_id == ctx.tenant_id,
+            )
+        )
+        conversation = conv_result.scalar_one_or_none()
+        if conversation:
+            db.add(Message(
+                conversation_id=conversation.id,
+                role="user",
+                content=f"【更新应用】{instruction}",
+            ))
+            await db.commit()
+
+    doc_llm_cfg = await _resolve_builder_llm_cfg(
+        db,
+        ctx.tenant_id,
+        conversation_id=body.conversation_id,
+    )
+    if doc_llm_cfg:
+        doc_llm_cfg = {**doc_llm_cfg, "max_tokens": 8000}
+
+    from app.routes.requirements import (
+        GENERATE_DOC_PROMPT,
+        _complete_with_config,
+        _repair_doc_json,
+        _regenerate_doc_json,
+        extract_json,
+        is_valid_doc_result,
+    )
+    from app.services.config_converter import convert_analysis_to_app_config
+
+    app_name = app.app_name or current_config.get("appName") or "业务应用"
+    app_code = app.app_code or current_config.get("appCode") or current_config.get("app_code") or ""
+    current_config_text = json.dumps(current_config, ensure_ascii=False, indent=2)[:60000]
+    current_doc_text = current_doc[:60000]
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "你是 aPaaS 应用更新设计助手。你的任务是基于现有应用 SPEC 和配置，"
+                "把用户的增量更新诉求合并成一份完整的新版功能设计文档 JSON。"
+                "必须保留未被更新诉求影响的模型、字段、角色、字典、流程、权限和自开发定义。"
+                "只输出 JSON，不要输出 Markdown、解释、注释或代码块。"
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"""当前应用：{app_name}
+当前应用编码：{app_code}
+
+## 现有标准 SPEC
+{current_doc_text or "（未找到已渲染 SPEC，以下配置 JSON 为准）"}
+
+## 现有应用配置 JSON
+{current_config_text}
+
+## 本次更新诉求
+{instruction}
+
+请输出“更新后的完整结构化功能设计文档 JSON”，不是差异 JSON。要求：
+1. 未被本次诉求影响的内容必须原样保留。
+2. app_info.name 保持为“{app_name}”，app_info.code 优先保持“{app_code}”。
+3. custom_development 必须输出数组；如果没有强制自开发项，也要输出 1 条 none/config_only 记录。
+4. 复杂校验、计算、Hook、插件、外部接口、报表看板、定制页面/列表模块等配置无法完整覆盖的内容必须进入 custom_development。
+5. 输出结构必须满足下面的 schema 指令：
+
+{GENERATE_DOC_PROMPT}
+""",
+        },
+    ]
+
+    try:
+        full_text = await _complete_with_config(doc_llm_cfg, messages, max_tokens=8000, temperature=0.0)
+        try:
+            doc_result = extract_json(full_text)
+        except Exception:
+            try:
+                doc_result = await _repair_doc_json(doc_llm_cfg, full_text)
+            except Exception:
+                doc_result = await _regenerate_doc_json(doc_llm_cfg, messages)
+
+        if not is_valid_doc_result(doc_result):
+            raise ValueError("模型返回的设计文档结构不完整")
+
+        app_config = convert_analysis_to_app_config(doc_result)
+        app_config["appName"] = app_name
+        if app_code:
+            app_config["appCode"] = app_code
+        custom_development = doc_result.get("custom_development")
+        if isinstance(custom_development, list):
+            app_config["custom_development"] = custom_development
+        elif current_config.get("custom_development"):
+            app_config["custom_development"] = current_config.get("custom_development")
+        else:
+            app_config["custom_development"] = [{
+                "type": "config_only",
+                "name": "暂无强制自开发项",
+                "trigger": "当前需求可优先通过模型、表单、权限和基础流程配置覆盖",
+                "scope": "如后续出现复杂交互、外部接口、算法规则或报表看板，再进入 IDE 自开发",
+                "acceptance": "配置内容可完成主要业务闭环",
+            }]
+
+        if current_config.get("models") and not app_config.get("models"):
+            raise ValueError("更新后文档未包含任何数据模型，已中止以避免覆盖现有应用")
+
+        markdown = _render_doc_content_from_config(app_name, app_config.get("appCode", app_code), app_config)
+        safe_code = re.sub(r"[^A-Za-z0-9_-]+", "-", app_config.get("appCode") or app_code or "app").strip("-").lower()
+        filename = f"{safe_code or 'app'}-update-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}.md"
+        summary = f"已根据对话诉求生成新版 SPEC，包含 {len(app_config.get('models') or [])} 个模型、{len(app_config.get('forms') or [])} 张表单。"
+
+        if conversation:
+            db.add(Message(
+                conversation_id=conversation.id,
+                role="assistant",
+                content=f"{summary} 已进入文档版本对比和变更计划确认。",
+            ))
+            await db.commit()
+
+        return {
+            "markdown": markdown,
+            "filename": filename,
+            "summary": summary,
+            "doc_result": doc_result,
+            "app_config": app_config,
+        }
+    except Exception as e:
+        logger.error("draft doc update failed: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"生成新版 SPEC 失败: {str(e)}")
+
+
 @router.post("/{app_id}/upload-doc-version")
 async def upload_doc_version(
     app_id: int,
@@ -1045,4 +1231,3 @@ async def list_doc_versions_by_conversation(
 
 
 # ── 获取单个应用信息 ──
-

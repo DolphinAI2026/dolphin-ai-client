@@ -3,7 +3,12 @@
     <!-- Env Picker Dialog -->
     <el-dialog v-model="showEnvPicker" title="选择调试平台环境" width="500px" :append-to-body="true">
       <div v-if="platformEnvs.length === 0" style="text-align:center;color:#999;padding:20px;">
-        暂无平台环境，请先到<el-link type="primary" @click="$router.push('/platform-envs')">环境管理</el-link>添加
+        <template v-if="userStore.isTenantAdmin">
+          暂无平台环境，请先到<el-link type="primary" @click="$router.push('/platform-envs')">环境管理</el-link>添加
+        </template>
+        <template v-else>
+          当前账号没有环境管理权限，请联系租户管理员配置可用环境。
+        </template>
       </div>
       <div v-else style="display:flex;flex-direction:column;gap:12px;">
         <div
@@ -49,9 +54,10 @@
             </button>
             <button
               class="view-toggle-btn"
-              :class="{ active: activeView === 'ide', disabled: !ideUrl }"
-              :disabled="!ideUrl"
-              @click="ideUrl && (activeView = 'ide')"
+              :class="{ active: activeView === 'ide', disabled: !canOpenIdeView }"
+              :disabled="!canOpenIdeView"
+              :title="webIdeUnavailable ? '当前环境未配置 Web IDE' : 'IDE'"
+              @click="switchToIdeView"
             >
               <el-icon :size="13"><Monitor /></el-icon>
               <span class="view-toggle-label">IDE</span>
@@ -67,8 +73,8 @@
           <div class="welcome-inner">
             <div class="welcome-hero">
               <div class="welcome-icon">&#x2728;</div>
-              <h2 class="welcome-title">AI Coding</h2>
-              <p class="welcome-desc">用AI快速开发</p>
+              <h2 class="welcome-title">Code · 智能开发</h2>
+              <p class="welcome-desc">先沉淀开发 SPEC，确认范围、数据接口和验收标准，再打开睿鲸 AI Coding 生成代码。</p>
 
               <!-- Input Area (centered) -->
               <div class="welcome-input-area">
@@ -159,7 +165,7 @@
                         type="textarea"
                         :rows="1"
                         :autosize="{ minRows: 1, maxRows: 5 }"
-                        placeholder="描述你想开发的内容，告诉我你想开发什么，我会自动创建项目并打开 AI 代码编辑器"
+                        placeholder="描述你想开发的页面、组件或接口。我会先生成开发 SPEC，确认后再创建项目并打开 AI 代码编辑器"
                         @keydown.ctrl.enter="sendMessage"
                         @keydown.meta.enter="sendMessage"
                         :disabled="isCreating"
@@ -209,7 +215,7 @@
             <div class="workspace-showcase">
               <div class="workspace-showcase-header">
                 <div>
-                  <h3 class="workspace-showcase-title">我的自开发文件</h3>
+                  <h3 class="workspace-showcase-title">最近自开发工作区</h3>
                 </div>
                 <button
                   v-if="existingWorkspaces.length > 0"
@@ -257,6 +263,7 @@
                         </svg>
                       </button>
                       <button
+                        v-if="canUploadWorkspace(ws)"
                         :class="['workspace-card-action', { 'is-loading': uploadingWsId === ws.id }]"
                         :title="uploadingWsId === ws.id ? '上传中...' : '上传组件包'"
                         :disabled="uploadingWsId === ws.id"
@@ -287,6 +294,7 @@
                         </svg>
                       </button>
                       <button
+                        v-if="canDeleteWorkspace(ws)"
                         :class="['workspace-card-action', 'workspace-card-action-danger', { 'is-loading': deletingWsId === ws.id }]"
                         :title="deletingWsId === ws.id ? '删除中...' : '删除工作区'"
                         :disabled="deletingWsId === ws.id || openingWsId === ws.id || downloadingWsId === ws.id || uploadingWsId === ws.id"
@@ -309,7 +317,7 @@
               </div>
 
               <div v-else class="workspace-showcase-empty">
-                暂无自开发文件，先描述一个需求，我们会自动创建项目。
+                暂无自开发工作区。先描述一个开发需求，我们会先生成开发 SPEC。
               </div>
             </div>
           </div>
@@ -545,10 +553,10 @@
             </button>
             <button
               class="embedded-panel-btn"
-              :class="{ active: activeView === 'ide', disabled: !ideUrl }"
-              :disabled="!ideUrl"
-              @click="ideUrl && (activeView = 'ide')"
-              title="代码编辑器"
+              :class="{ active: activeView === 'ide', disabled: !canOpenIdeView }"
+              :disabled="!canOpenIdeView"
+              @click="switchToIdeView"
+              :title="webIdeUnavailable ? '当前环境未配置 Web IDE' : '代码编辑器'"
             >
               <el-icon :size="16"><Monitor /></el-icon>
             </button>
@@ -557,7 +565,12 @@
             <button class="embedded-panel-btn" :disabled="isDownloading" @click="downloadCode" title="下载代码">
               <el-icon :size="16"><Download /></el-icon>
             </button>
-            <button class="embedded-panel-btn danger" @click="deleteCurrentWorkspace" title="删除工作区">
+            <button
+              v-if="codingStore.workspace && canDeleteWorkspace(codingStore.workspace)"
+              class="embedded-panel-btn danger"
+              @click="deleteCurrentWorkspace"
+              title="删除工作区"
+            >
               <el-icon :size="16"><Delete /></el-icon>
             </button>
           </div>
@@ -578,13 +591,13 @@ import { ArrowDown, ArrowLeft, Download, TopRight, Paperclip, Monitor, Delete, F
 import { useCodingStore } from '@/stores/coding'
 import { platformEnvApi, type PlatformEnv } from '@/api/platformEnv'
 import { useUserStore } from '@/stores/user'
-import { codingApi } from '@/api/coding'
+import { codingApi, isIdeUnavailableError } from '@/api/coding'
 import type { WorkspaceInfo, UploadResult, ReplayStreamMessage } from '@/api/coding'
 import { harnessApi } from '@/api/harness'
 import { conversationApi } from '@/api/conversation'
 import { llmConfigApi, type BuilderModelOption } from '@/api/llmConfig'
 import { consumeSseResponse } from '@/utils/sse'
-import ThemeToggle from '@/components/ThemeToggle.vue'
+import { useThemeStore } from '@/stores/theme'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
 import EnvSelectModal from '@/components/EnvSelectModal.vue'
 import FileCard from '@/components/FileCard.vue'
@@ -598,6 +611,7 @@ const route = useRoute()
 const router = useRouter()
 const codingStore = useCodingStore()
 const userStore = useUserStore()
+const themeStore = useThemeStore()
 
 // ============ Core State ============
 const userInput = ref('')
@@ -618,6 +632,72 @@ const {
   retryIdeLoad,
   openPendingIde,
 } = useIdeManager()
+
+const webIdeUnavailable = ref(false)
+const ideUnavailableNotified = ref(false)
+const canOpenIdeView = computed(() => (
+  !webIdeUnavailable.value &&
+  (!!ideUrl.value || !!pendingIdeUrl.value || !!codingStore.workspace)
+))
+
+function setWebIdeUnavailable() {
+  webIdeUnavailable.value = true
+  pendingIdeUrl.value = null
+  ideUrl.value = null
+  if (activeView.value === 'ide') activeView.value = 'chat'
+}
+
+function notifyWebIdeUnavailable(message = '当前环境未配置 Web IDE，已保持在对话模式继续开发') {
+  setWebIdeUnavailable()
+  if (!ideUnavailableNotified.value) {
+    ElMessage.info(message)
+    ideUnavailableNotified.value = true
+  }
+}
+
+function setWebIdeAvailable() {
+  webIdeUnavailable.value = false
+  ideUnavailableNotified.value = false
+}
+
+async function switchToIdeView() {
+  if (webIdeUnavailable.value) {
+    notifyWebIdeUnavailable()
+    return
+  }
+
+  if (ideUrl.value) {
+    setWebIdeAvailable()
+    activeView.value = 'ide'
+    return
+  }
+
+  if (pendingIdeUrl.value) {
+    setWebIdeAvailable()
+    await openPendingIde()
+    return
+  }
+
+  const workspace = codingStore.workspace
+  if (!workspace) {
+    ElMessage.info('当前还没有可打开的 IDE 工作区')
+    return
+  }
+
+  try {
+    const { ide_url } = await codingApi.getIdeUrl(workspace.id, codingStore.conversationId, themeStore.mode)
+    setWebIdeAvailable()
+    await setIdeUrl(ide_url)
+    activeView.value = 'ide'
+  } catch (error: any) {
+    if (isIdeUnavailableError(error)) {
+      notifyWebIdeUnavailable()
+      return
+    }
+    ElMessage.warning(error?.response?.data?.detail || error?.message || 'IDE URL 获取失败')
+  }
+}
+
 // ── Coding 模型选择（已抽成 composable）──
 const {
   codingModelOptions,
@@ -658,6 +738,7 @@ const {
   allWorkspaces,
   isDownloading,
   downloadingWsId,
+  embeddedProjectId,
   embeddedAppId,
   existingWorkspaces,
   workspaceShowcaseItems,
@@ -691,6 +772,14 @@ const platformEnvs = ref<PlatformEnv[]>([])
 const uploadingWsId = ref<string | null>(null)
 const showUploadEnvModal = ref(false)
 const pendingUploadWs = ref<WorkspaceInfo | null>(null)
+
+function canUploadWorkspace(ws: WorkspaceInfo) {
+  return ws.permissions?.upload_to_platform !== false
+}
+
+function canDeleteWorkspace(ws: WorkspaceInfo) {
+  return ws.permissions?.delete !== false
+}
 
 async function uploadWorkspaceCard(ws: WorkspaceInfo) {
   uploadingWsId.value = ws.id
@@ -756,10 +845,10 @@ const sceneSuggestions: Record<string, string[]> = {
     '创建一个图表分析组件，支持柱状图和饼图',
   ],
   'page-pc': [
+    '做一个项目进度甘特图页面，复用低代码任务表单服务',
     '做一个数据查询表格页面，带搜索和分页',
     '开发一个供应商管理弹窗选择页面',
-    '创建一个项目分析图表页面',
-    '做一个审批流程页面，支持多级审批',
+    '创建一个项目分析图表页面，包含统计卡片和趋势图',
   ],
   'component-mobile': [
     '开发一个移动端签名板组件',
@@ -791,10 +880,48 @@ const sceneCategoryToProjectType: Record<string, string> = {
   backend: 'backend-api',
 }
 
+const AI_BUILDER_PENDING_CODING_KEY = 'ai_builder_pending_coding'
+
+async function maybeConsumeAiBuilderDispatch() {
+  if (route.query.from_ai_builder !== '1') return
+  if (route.query.workspace_id || route.query.ws) return
+  if (streamMessages.value.length > 0 || isCreating.value || isStreaming.value) return
+
+  const raw = sessionStorage.getItem(AI_BUILDER_PENDING_CODING_KEY)
+  if (!raw) return
+
+  let payload: { message?: string; projectId?: number | null; sceneCategory?: string } | null = null
+  try {
+    payload = JSON.parse(raw)
+  } catch {
+    sessionStorage.removeItem(AI_BUILDER_PENDING_CODING_KEY)
+    return
+  }
+
+  if (!payload?.message?.trim()) {
+    sessionStorage.removeItem(AI_BUILDER_PENDING_CODING_KEY)
+    return
+  }
+
+  sessionStorage.removeItem(AI_BUILDER_PENDING_CODING_KEY)
+
+  if (payload.projectId) {
+    localStorage.setItem('coding_last_project_id', String(payload.projectId))
+  }
+  if (payload.sceneCategory && sceneSuggestions[payload.sceneCategory]?.length) {
+    activeSceneCategory.value = payload.sceneCategory
+    pendingSceneCategory.value = payload.sceneCategory
+  }
+
+  userInput.value = payload.message.trim()
+  await nextTick()
+  await sendMessage()
+}
+
 // ============ Lifecycle ============
 
 onMounted(async () => {
-  // 申请浏览器通知权限（用于设计方案生成后提醒用户）
+  // 申请浏览器通知权限（用于开发 SPEC 生成后提醒用户）
   if ('Notification' in window && Notification.permission === 'default') {
     Notification.requestPermission()
   }
@@ -822,6 +949,7 @@ onMounted(async () => {
     await openWorkspaceById(wsId)
   } else {
     selectedCodingModelValue.value = normalizeCodingModelValue(selectedCodingModelValue.value)
+    await maybeConsumeAiBuilderDispatch()
   }
 })
 
@@ -845,6 +973,7 @@ async function openWorkspaceCatalogPage() {
   await router.push({
     path: '/workspace-catalog',
     query: {
+      ...(embeddedProjectId.value ? { project_id: embeddedProjectId.value } : {}),
       ...(embeddedAppId.value ? { app_id: embeddedAppId.value } : {}),
     },
   })
@@ -869,9 +998,18 @@ async function openWorkspaceById(wsId: string) {
       workspaceConversation.stream_messages || [],
     )
 
-    const { ide_url } = await codingApi.getIdeUrl(ws.id, workspaceConversation.conversation_id)
-    await setIdeUrl(ide_url)
-    activeView.value = 'ide'
+    try {
+      const { ide_url } = await codingApi.getIdeUrl(ws.id, workspaceConversation.conversation_id, themeStore.mode)
+      setWebIdeAvailable()
+      await setIdeUrl(ide_url)
+      activeView.value = 'ide'
+    } catch (error: any) {
+      if (isIdeUnavailableError(error)) {
+        notifyWebIdeUnavailable('当前环境未配置 Web IDE，已进入对话开发模式')
+        return
+      }
+      throw error
+    }
   } catch (error: any) {
     ElMessage.error(`打开工作区失败: ${error.message}`)
   }
@@ -993,7 +1131,9 @@ function startNewWorkspace() {
   codingStore.reset()
   persistedCodingModelValue.value = null
   selectedCodingModelValue.value = normalizeCodingModelValue(selectedCodingModelValue.value)
+  setWebIdeAvailable()
   ideUrl.value = null
+  pendingIdeUrl.value = null
   ideLoaded.value = false
   streamMessages.value = []
   activeView.value = 'chat'
@@ -1027,6 +1167,8 @@ async function deleteWorkspace(ws: WorkspaceInfo) {
     if (codingStore.workspace?.id === ws.id) {
       codingStore.reset()
       ideUrl.value = null
+      pendingIdeUrl.value = null
+      setWebIdeAvailable()
       localStorage.removeItem('coding_last_workspace_id')
     }
     ElMessage.success('已删除')
@@ -1097,6 +1239,8 @@ const { sendMessage, sendSuggestion } = useCodingPipeline({
   attachedPreviewUrl,
   isUploading,
   isCreating,
+  onIdeUnavailable: setWebIdeUnavailable,
+  onIdeAvailable: setWebIdeAvailable,
 })
 
 
@@ -1112,7 +1256,7 @@ async function openBrowserPreviewWithEnv(env: PlatformEnv) {
   if (!codingStore.workspace) return
   showEnvPicker.value = false
   try {
-    const { ide_url } = await codingApi.getIdeUrl(codingStore.workspace.id, codingStore.conversationId)
+    const { ide_url } = await codingApi.getIdeUrl(codingStore.workspace.id, codingStore.conversationId, themeStore.mode)
     const urlParams = new URLSearchParams(new URL(ide_url).search)
     const token = urlParams.get('vibe_ide_token') || ''
     const wsId = codingStore.workspace.id
@@ -1140,10 +1284,27 @@ async function downloadCode() {
 
 // ============ Watchers ============
 
+watch(() => themeStore.mode, async (mode) => {
+  const workspace = codingStore.workspace
+  if (!workspace || webIdeUnavailable.value) return
+  try {
+    const { ide_url } = await codingApi.getIdeUrl(workspace.id, codingStore.conversationId, mode)
+    if (activeView.value === 'ide' && ideUrl.value) {
+      await setIdeUrl(ide_url)
+    } else {
+      pendingIdeUrl.value = ide_url
+    }
+  } catch {
+    // 主题同步失败不影响当前开发会话。
+  }
+})
+
 watch(() => route.path, () => {
   if (!route.path.startsWith('/coding')) {
     codingStore.reset()
     ideUrl.value = null
+    pendingIdeUrl.value = null
+    setWebIdeAvailable()
   }
 })
 </script>
@@ -3194,5 +3355,166 @@ watch(() => route.path, () => {
 
 .coding-page :deep(.el-button--success:hover) {
   filter: brightness(1.15);
+}
+</style>
+
+<style>
+html[data-theme="dark"] .coding-page,
+html[data-theme="dark"] .coding-body,
+html[data-theme="dark"] .main-content,
+html[data-theme="dark"] .welcome-pane,
+html[data-theme="dark"] .stream-pane,
+html[data-theme="dark"] .stream-messages,
+html[data-theme="dark"] .ide-loading-overlay {
+  background: #090b10 !important;
+  color: rgba(248, 250, 252, 0.94) !important;
+}
+
+html[data-theme="dark"] .coding-header,
+html[data-theme="dark"] .content-view-toggle-bar,
+html[data-theme="dark"] .workspace-sidebar,
+html[data-theme="dark"] .embedded-panel,
+html[data-theme="dark"] .chat-input-bar {
+  background: #0d1117 !important;
+  border-color: rgba(148, 163, 184, 0.14) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme="dark"] .welcome-pane {
+  background:
+    radial-gradient(circle at top, rgba(124, 140, 255, 0.16), transparent 34%),
+    linear-gradient(180deg, #090b10 0%, #0d1117 100%) !important;
+}
+
+html[data-theme="dark"] .welcome-title {
+  background: linear-gradient(135deg, #a5b4fc, #f8fafc);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+html[data-theme="dark"] .welcome-desc,
+html[data-theme="dark"] .coding-model-tip,
+html[data-theme="dark"] .workspace-card-meta,
+html[data-theme="dark"] .creating-text,
+html[data-theme="dark"] .stream-actions-hint,
+html[data-theme="dark"] .ide-loading-content {
+  color: rgba(203, 213, 225, 0.68) !important;
+}
+
+html[data-theme="dark"] .view-toggle,
+html[data-theme="dark"] .toggle-bar-back-btn,
+html[data-theme="dark"] .header-btn,
+html[data-theme="dark"] .coding-model-trigger,
+html[data-theme="dark"] .input-wrapper,
+html[data-theme="dark"] .attach-btn,
+html[data-theme="dark"] .scene-suggestion-card,
+html[data-theme="dark"] .workspace-card,
+html[data-theme="dark"] .workspace-showcase-empty,
+html[data-theme="dark"] .workspace-card-action,
+html[data-theme="dark"] .chat-input-wrapper,
+html[data-theme="dark"] .attachment-preview,
+html[data-theme="dark"] .msg-ai-message,
+html[data-theme="dark"] .msg-thinking-card,
+html[data-theme="dark"] .msg-file-card,
+html[data-theme="dark"] .msg-command-card,
+html[data-theme="dark"] .msg-tool-row {
+  background: #111318 !important;
+  border-color: rgba(148, 163, 184, 0.14) !important;
+  color: rgba(203, 213, 225, 0.72) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme="dark"] .input-wrapper:focus-within,
+html[data-theme="dark"] .chat-input-wrapper:focus-within,
+html[data-theme="dark"] .coding-model-trigger:hover:not(:disabled),
+html[data-theme="dark"] .coding-model-trigger.is-open {
+  border-color: rgba(124, 140, 255, 0.36) !important;
+  box-shadow: 0 0 0 3px rgba(124, 140, 255, 0.12) !important;
+}
+
+html[data-theme="dark"] .composer-topline,
+html[data-theme="dark"] .workspace-card-footer,
+html[data-theme="dark"] .stream-actions,
+html[data-theme="dark"] .thinking-card-body,
+html[data-theme="dark"] .file-card-code,
+html[data-theme="dark"] .command-output,
+html[data-theme="dark"] .tool-row-result {
+  background: #0d1117 !important;
+  border-color: rgba(148, 163, 184, 0.14) !important;
+}
+
+html[data-theme="dark"] .coding-model-trigger-name,
+html[data-theme="dark"] .coding-model-panel-option-name,
+html[data-theme="dark"] .workspace-showcase-title,
+html[data-theme="dark"] .workspace-card-name,
+html[data-theme="dark"] .file-card-name,
+html[data-theme="dark"] .ai-message-body.markdown-body,
+html[data-theme="dark"] .markdown-body :is(h1, h2, h3, strong),
+html[data-theme="dark"] .chat-input-wrapper .chat-input .el-textarea__inner,
+html[data-theme="dark"] .input-wrapper .el-textarea__inner {
+  color: rgba(248, 250, 252, 0.94) !important;
+}
+
+html[data-theme="dark"] .input-wrapper .el-textarea__inner::placeholder,
+html[data-theme="dark"] .chat-input-wrapper .chat-input .el-textarea__inner::placeholder {
+  color: rgba(148, 163, 184, 0.56) !important;
+}
+
+html[data-theme="dark"] .coding-model-trigger-meta,
+html[data-theme="dark"] .coding-model-panel-option-meta,
+html[data-theme="dark"] .thinking-text,
+html[data-theme="dark"] .command-text,
+html[data-theme="dark"] .command-output,
+html[data-theme="dark"] .tool-row-text,
+html[data-theme="dark"] .tool-row-result pre {
+  color: rgba(203, 213, 225, 0.66) !important;
+}
+
+html[data-theme="dark"] .scene-tab,
+html[data-theme="dark"] .workspace-card-code,
+html[data-theme="dark"] .workspace-card-type,
+html[data-theme="dark"] .file-card-badge,
+html[data-theme="dark"] .sidebar-group-count {
+  background: rgba(148, 163, 184, 0.10) !important;
+  border-color: rgba(148, 163, 184, 0.14) !important;
+  color: rgba(203, 213, 225, 0.72) !important;
+}
+
+html[data-theme="dark"] .scene-tab.active,
+html[data-theme="dark"] .view-toggle-btn.active,
+html[data-theme="dark"] .workspace-card-action-primary,
+html[data-theme="dark"] .coding-model-panel-option.is-active {
+  background: rgba(124, 140, 255, 0.14) !important;
+  border-color: rgba(124, 140, 255, 0.30) !important;
+  color: #b6c2ff !important;
+}
+
+html[data-theme="dark"] .scene-suggestion-card:hover,
+html[data-theme="dark"] .workspace-card:hover,
+html[data-theme="dark"] .workspace-card-action:hover,
+html[data-theme="dark"] .coding-model-panel-option:hover {
+  background: #1a1d24 !important;
+  border-color: rgba(124, 140, 255, 0.26) !important;
+  color: rgba(248, 250, 252, 0.92) !important;
+}
+
+html[data-theme="dark"] .send-btn:disabled {
+  background: #1a1d24 !important;
+  color: rgba(148, 163, 184, 0.58) !important;
+  opacity: 0.72 !important;
+}
+
+html[data-theme="dark"] .workspace-card-action-danger:hover,
+html[data-theme="dark"] .msg-error-row {
+  background: rgba(248, 113, 113, 0.12) !important;
+  border-color: rgba(248, 113, 113, 0.22) !important;
+  color: #fca5a5 !important;
+}
+
+html[data-theme="dark"] .coding-model-popover.el-popover.el-popper {
+  background: #111318 !important;
+  border-color: rgba(148, 163, 184, 0.16) !important;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.52) !important;
 }
 </style>

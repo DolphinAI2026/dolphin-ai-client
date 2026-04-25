@@ -847,7 +847,7 @@ export default customFormEditorList
 
 ### ⚠️ 配置项完整性（必须与 brainstorm 方案 1:1 对齐）
 
-setting.vue 的配置项**必须严格对齐 brainstorm "设计方案确认"中"配置项"表格**——表格列了 N 条 property，setting.vue 就要有 N 个对应的 form-custom-*-editor 节点，**每条 property 都要在 setting.vue 里有独立的 editor 节点**。
+setting.vue 的配置项**必须严格对齐 brainstorm "开发 SPEC 确认"中"配置项"表格**——表格列了 N 条 property，setting.vue 就要有 N 个对应的 form-custom-*-editor 节点，**每条 property 都要在 setting.vue 里有独立的 editor 节点**。
 
 **严禁**：
 - 省略任何配置项（哪怕"看起来可以先跳过"或"实现起来复杂"都不允许）

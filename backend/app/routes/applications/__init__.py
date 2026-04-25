@@ -26,6 +26,7 @@ from app.error_messages import (
 )
 
 from app.services.config_converter import convert_analysis_to_app_config
+from app.project_access import get_project_access, project_role_at_least, require_project_access
 
 
 # 共享 helper 从子模块 re-export（保持 `from app.routes.applications import _xxx` 的向后兼容）
@@ -40,6 +41,67 @@ class GenerateAppIconResponse(BaseModel):
     ok: bool
     app_id: int
     icon_svg: str
+
+
+async def _get_application_permissions(
+    ctx: AuthContext,
+    db: AsyncSession,
+    app: Application,
+) -> Optional[dict[str, bool]]:
+    if app.project_id:
+        access = await get_project_access(
+            db,
+            project_id=int(app.project_id),
+            user_id=ctx.user.id,
+            tenant_id=ctx.tenant_id,
+        )
+        if not access:
+            return None
+        return {
+            Action.VIEW: True,
+            Action.EDIT: project_role_at_least(access.role, "member"),
+            Action.DELETE: project_role_at_least(access.role, "admin"),
+            Action.CLONE: project_role_at_least(access.role, "member"),
+            "publish": project_role_at_least(access.role, "admin"),
+            "access_role": access.role,
+        }
+
+    if ctx.tenant_role in ("platform_admin", "tenant_admin"):
+        return {
+            Action.VIEW: True,
+            Action.EDIT: True,
+            Action.DELETE: True,
+            Action.CLONE: True,
+            "publish": True,
+            "access_role": "tenant_admin",
+        }
+
+    is_owner = app.created_by == ctx.user.id or app.user_id == ctx.user.id
+    if not is_owner:
+        return None
+
+    return {
+        Action.VIEW: True,
+        Action.EDIT: True,
+        Action.DELETE: True,
+        Action.CLONE: True,
+        "publish": True,
+        "access_role": "owner",
+    }
+
+
+async def _require_application_permission(
+    ctx: AuthContext,
+    db: AsyncSession,
+    app: Application,
+    action: str,
+) -> dict[str, bool]:
+    permissions = await _get_application_permissions(ctx, db, app)
+    if not permissions:
+        raise HTTPException(status_code=404, detail="应用不存在")
+    if not permissions.get(action, False):
+        raise HTTPException(status_code=403, detail="无权操作该应用")
+    return permissions
 
 
 
@@ -62,8 +124,6 @@ async def list_applications(
     query = query.order_by(desc(Application.updated_at))
     result = await db.execute(query)
     local_apps = result.scalars().all()
-
-    permissions_list = await batch_get_permissions(ctx, db, local_apps, "application")
 
     # 1.5 获取所有环境信息（用于构建 URL 和显示环境名称）
     env_base_url = None
@@ -103,7 +163,10 @@ async def list_applications(
     merged: list[MergedAppResponse] = []
     matched_remote_ids: set[str] = set()
 
-    for app, perms in zip(local_apps, permissions_list):
+    for app in local_apps:
+        perms = await _get_application_permissions(ctx, db, app)
+        if not perms or not perms.get(Action.VIEW, False):
+            continue
         # 查找应用关联的环境信息
         app_env = env_map.get(app.platform_env_id) if app.platform_env_id else None
         app_env_name = app_env["env_name"] if app_env else None
@@ -158,10 +221,15 @@ async def get_application(
         raise HTTPException(status_code=404, detail="应用不存在")
 
     # 检查查看权限
-    await check_resource_permission(ctx, db, app, "application", Action.VIEW)
+    permissions = await _require_application_permission(ctx, db, app, Action.VIEW)
 
     resp = _enrich(app)
-    resp.permissions = (await batch_get_permissions(ctx, db, [app], "application"))[0]
+    resp.permissions = {
+        Action.EDIT: permissions.get(Action.EDIT, False),
+        Action.DELETE: permissions.get(Action.DELETE, False),
+        Action.CLONE: permissions.get(Action.CLONE, False),
+        "publish": permissions.get("publish", False),
+    }
 
     # 构建平台直达链接
     if app.apaas_app_id:
@@ -216,12 +284,22 @@ async def create_application(
         )
         raise HTTPException(status_code=403, detail="你的角色没有创建应用的权限")
 
+    if data.project_id:
+        await require_project_access(
+            db,
+            project_id=data.project_id,
+            user_id=ctx.user.id,
+            tenant_id=ctx.tenant_id,
+            minimum_role="member",
+        )
+
     config_str = _dump_preview_config(data.config_preview) if data.config_preview else None
     app = Application(
         user_id=ctx.user.id,
         tenant_id=ctx.tenant_id,
         created_by=ctx.user.id,
         team_id=None,  # 默认个人应用，后续可以转移到团队
+        project_id=data.project_id,
         conversation_id=data.conversation_id,
         app_name=data.app_name,
         app_code=data.app_code,
@@ -311,7 +389,7 @@ async def create_application(
         await db.refresh(app)
 
     resp = _enrich(app)
-    resp.permissions = {Action.EDIT: True, Action.DELETE: True, Action.CLONE: True}  # 创建者全部权限
+    resp.permissions = {Action.EDIT: True, Action.DELETE: True, Action.CLONE: True, "publish": True}
     return resp
 
 
@@ -320,6 +398,7 @@ class AutoCreateRequest(BaseModel):
     app_name: str
     config_preview: dict
     conversation_id: Optional[int] = None
+    project_id: Optional[int] = None
 
 
 class AutoCreateResponse(BaseModel):
@@ -380,6 +459,15 @@ async def auto_create_application(
                 is_new=False,
             )
 
+    if data.project_id:
+        await require_project_access(
+            db,
+            project_id=data.project_id,
+            user_id=ctx.user.id,
+            tenant_id=ctx.tenant_id,
+            minimum_role="member",
+        )
+
     # 生成 app_code：优先使用解析文档中的 appCode
     import hashlib
     preview_data = data.config_preview.get("data", data.config_preview) if isinstance(data.config_preview, dict) else {}
@@ -396,6 +484,7 @@ async def auto_create_application(
         user_id=ctx.user.id,
         tenant_id=ctx.tenant_id,
         created_by=ctx.user.id,
+        project_id=data.project_id,
         conversation_id=data.conversation_id,
         app_name=data.app_name,
         app_code=ascii_code,
@@ -538,6 +627,7 @@ async def import_from_platform(
 
     # 6. 已存在同平台应用：作为新版本重新导入
     if existing_app:
+        await _require_application_permission(ctx, db, existing_app, Action.EDIT)
         import hashlib
 
         max_ver_result = await db.execute(
@@ -637,7 +727,7 @@ async def update_application(
     if not app:
         raise HTTPException(status_code=404, detail="应用不存在")
 
-    await check_resource_permission(ctx, db, app, "application", Action.EDIT)
+    await _require_application_permission(ctx, db, app, Action.EDIT)
 
     app.app_name = data.app_name
     app.description = data.description
@@ -677,6 +767,7 @@ async def update_app_code(
     app = result.scalar_one_or_none()
     if not app:
         raise HTTPException(status_code=404, detail="应用不存在")
+    await _require_application_permission(ctx, db, app, Action.EDIT)
     new_code = body.get("app_code")
     if not new_code:
         raise HTTPException(status_code=400, detail="app_code 不能为空")
@@ -729,7 +820,7 @@ async def generate_application_icon(
     if not app:
         raise HTTPException(status_code=404, detail="应用不存在")
 
-    await check_resource_permission(ctx, db, app, "application", Action.EDIT)
+    await _require_application_permission(ctx, db, app, Action.EDIT)
 
     icon_svg = _fallback_generated_icon(app)
     app.icon_svg = icon_svg
@@ -754,7 +845,9 @@ async def publish_application(
     if not app.apaas_app_id:
         raise HTTPException(status_code=400, detail="应用尚未部署，不能上线")
 
-    await check_resource_permission(ctx, db, app, "application", Action.EDIT)
+    permissions = await _require_application_permission(ctx, db, app, Action.EDIT)
+    if not permissions.get("publish", False):
+        raise HTTPException(status_code=403, detail="当前角色无权上线该应用")
 
     env = None
     if app.platform_env_id:
@@ -870,7 +963,7 @@ async def update_platform_config(
     if not app:
         raise HTTPException(status_code=404, detail="应用不存在")
 
-    await check_resource_permission(ctx, db, app, "application", Action.EDIT)
+    await _require_application_permission(ctx, db, app, Action.EDIT)
 
     if data.platform_url is not None:
         app.platform_url = data.platform_url
@@ -903,7 +996,7 @@ async def delete_application(
         if not app:
             raise HTTPException(status_code=404, detail="应用不存在")
 
-        await check_resource_permission(ctx, db, app, "application", Action.DELETE)
+        await _require_application_permission(ctx, db, app, Action.DELETE)
 
         if app.status in {"completed", "generating"} or app.apaas_app_id:
             raise HTTPException(status_code=400, detail="已构建或已同步到平台的应用不允许删除")
@@ -952,6 +1045,7 @@ async def get_application(
     app = result.scalar_one_or_none()
     if not app:
         raise HTTPException(status_code=404, detail="应用不存在")
+    permissions = await _require_application_permission(ctx, db, app, Action.VIEW)
 
     # 获取关联的平台环境
     env_base_url = None
@@ -975,6 +1069,12 @@ async def get_application(
         "apaas_app_id": app.apaas_app_id,
         "apaas_url": apaas_url,
         "platform_env_id": app.platform_env_id,
+        "permissions": {
+            Action.EDIT: permissions.get(Action.EDIT, False),
+            Action.DELETE: permissions.get(Action.DELETE, False),
+            Action.CLONE: permissions.get(Action.CLONE, False),
+            "publish": permissions.get("publish", False),
+        },
         "created_at": str(app.created_at) if app.created_at else None,
     }
 
@@ -1003,7 +1103,7 @@ async def list_api_logs(
     if not app:
         raise HTTPException(status_code=404, detail="应用不存在")
 
-    await check_resource_permission(ctx, db, app, "application", Action.VIEW)
+    await _require_application_permission(ctx, db, app, Action.VIEW)
 
     # 构建查询
     query = select(ApiCallLog).where(ApiCallLog.application_id == app_id)

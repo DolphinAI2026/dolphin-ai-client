@@ -562,6 +562,7 @@ def convert_analysis_to_app_config(doc_result: dict[str, Any]) -> dict[str, Any]
         "dicts": dicts,
         "models": models,
         "forms": _build_forms_from_models(models),
+        "flows": flows_raw,
         "workflows": workflows,
         "permissions": permissions,
     }

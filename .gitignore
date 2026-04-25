@@ -32,6 +32,11 @@ Thumbs.db
 # Logs
 *.log
 /tmp/
+.run/
+.playwright-cli/
+.playwright-mcp/
+output/
+/*.png
 
 # Claude
 .claude/

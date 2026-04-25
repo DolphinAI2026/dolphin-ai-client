@@ -47,6 +47,29 @@ const router = createRouter({
       meta: { requiresAuth: true }
     },
     {
+      path: '/ide',
+      name: 'Ide',
+      redirect: '/coding'
+    },
+    {
+      path: '/devops',
+      name: 'DevOps',
+      component: () => import('@/views/BuilderDevOpsPage.vue'),
+      meta: { navExpanded: true }
+    },
+    {
+      path: '/settings',
+      name: 'Settings',
+      redirect: to => {
+        const rawTab = Array.isArray(to.query.tab) ? to.query.tab[0] : to.query.tab
+        const tab = String(rawTab || 'llm')
+        if (tab === 'envs') return { path: '/platform-envs', query: { tab: 'envs' } }
+        if (tab === 'team' || tab === 'members') return { path: '/tenant-users' }
+        return { path: '/platform-envs', query: { tab: 'llm' } }
+      },
+      meta: { requiresAuth: true, navExpanded: true }
+    },
+    {
       path: '/coding',
       name: 'Coding',
       component: () => import('@/views/CodingPage.vue'),
@@ -62,7 +85,13 @@ const router = createRouter({
       path: '/platform-envs',
       name: 'PlatformEnvs',
       component: () => import('@/views/PlatformEnvs.vue'),
-      meta: { requiresAuth: true, navExpanded: true }
+      meta: { requiresAuth: true, requiresTenantAdmin: true, navExpanded: true }
+    },
+    {
+      path: '/tenant-users',
+      name: 'TenantUsers',
+      component: () => import('@/views/TenantUsers.vue'),
+      meta: { requiresAuth: true, requiresTenantAdmin: true, navExpanded: true }
     },
     {
       path: '/requirements/:id?',
@@ -106,6 +135,11 @@ router.beforeEach(async (to, _from, next) => {
       next('/login')
       return
     }
+  }
+
+  if (to.meta.requiresTenantAdmin && !userStore.isTenantAdmin) {
+    next('/')
+    return
   }
 
   if (to.path === '/login' && userStore.token) {

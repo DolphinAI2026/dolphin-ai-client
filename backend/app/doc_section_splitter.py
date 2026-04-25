@@ -25,6 +25,10 @@ _SECTION_KEYWORDS: Dict[str, str] = {
     "权限定义": "permissions",
     "权限配置": "permissions",
     "审批流程": "workflows",
+    "流程配置": "workflows",
+    "业务流程": "workflows",
+    "自开发定义": "custom_development",
+    "智能开发定义": "custom_development",
 }
 
 # 子章节标题解析：### 名称（code）【tag】 或 ### 名称(code)【tag】

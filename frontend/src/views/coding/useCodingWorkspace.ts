@@ -35,11 +35,19 @@ export function useCodingWorkspace() {
   /** 正在下载的工作区 id（卡片级 loading 标记，防止重复点击） */
   const downloadingWsId = ref<string | null>(null)
 
-  const embeddedAppId = computed(() => (route.query.app_id as string) || '')
+  const embeddedProjectId = computed(() => {
+    const raw = route.query.project_id
+    return Array.isArray(raw) ? (raw[0] || '') : (raw || '')
+  })
+
+  const embeddedAppId = computed(() => {
+    const embeddedApp = route.query.app_id as string
+    return embeddedApp || ''
+  })
 
   const existingWorkspaces = computed(() => {
-    if (!embeddedAppId.value) return allWorkspaces.value
-    return allWorkspaces.value.filter((ws: any) => String(ws.project_id || '') === embeddedAppId.value)
+    if (!embeddedProjectId.value) return allWorkspaces.value
+    return allWorkspaces.value.filter((ws: any) => String(ws.project_id || '') === embeddedProjectId.value)
   })
 
   const workspaceShowcaseItems = computed(() => existingWorkspaces.value.slice(0, 6))
@@ -83,6 +91,7 @@ export function useCodingWorkspace() {
     allWorkspaces,
     isDownloading,
     downloadingWsId,
+    embeddedProjectId,
     embeddedAppId,
     // computed
     existingWorkspaces,

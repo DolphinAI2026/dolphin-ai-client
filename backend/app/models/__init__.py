@@ -73,6 +73,7 @@ class Conversation(Base):
     tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     agent_type: Mapped[str] = mapped_column(String(20), nullable=False)  # builder/assistant/developer/requirements
+    project_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     workspace_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)  # coding工作区ID
     selected_llm_config_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(20), default="active", nullable=False)  # active/completed/failed

@@ -8,6 +8,7 @@ import router from './router'
 import App from './App.vue'
 import './styles/theme-vars.css'
 import './style.css'
+import './styles/builder.css'
 import { useThemeStore } from './stores/theme'
 
 const app = createApp(App)

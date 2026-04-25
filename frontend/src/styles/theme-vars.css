@@ -75,35 +75,37 @@ html[data-theme="light"] {
 
 /* ── Dark Theme ── */
 html[data-theme="dark"] {
-  /* Surfaces — deeper, layered */
-  --t-bg-base: #0f0f17;
-  --t-bg-panel: #181824;
-  --t-bg-panel-hover: #222233;
-  --t-bg-input: #1e1e2e;
-  --t-bg-elevated: #1c1c2c;
-  --t-bg-nav: rgba(15, 15, 23, 0.92);
+  color-scheme: dark;
+
+  /* Surfaces — black IDE style */
+  --t-bg-base: #090b10;
+  --t-bg-panel: #111318;
+  --t-bg-panel-hover: #1a1d24;
+  --t-bg-input: #0d1117;
+  --t-bg-elevated: #171a21;
+  --t-bg-nav: rgba(9, 11, 16, 0.94);
   --t-bg-overlay: rgba(0, 0, 0, 0.65);
-  --t-bg-subtle: rgba(255, 255, 255, 0.03);
-  --t-bg-code: #1a1a28;
+  --t-bg-subtle: rgba(255, 255, 255, 0.04);
+  --t-bg-code: #0d1117;
 
   /* Text */
-  --t-text-primary: rgba(255, 255, 255, 0.93);
-  --t-text-secondary: rgba(255, 255, 255, 0.55);
-  --t-text-muted: rgba(255, 255, 255, 0.30);
+  --t-text-primary: rgba(248, 250, 252, 0.94);
+  --t-text-secondary: rgba(203, 213, 225, 0.68);
+  --t-text-muted: rgba(148, 163, 184, 0.46);
   --t-text-inverse: #1a1a2e;
 
   /* Borders */
-  --t-border-subtle: rgba(255, 255, 255, 0.07);
-  --t-border-strong: rgba(255, 255, 255, 0.13);
+  --t-border-subtle: rgba(148, 163, 184, 0.14);
+  --t-border-strong: rgba(148, 163, 184, 0.24);
 
-  /* Brand — Indigo / Purple */
-  --t-brand: #818cf8;
+  /* Brand — IDE blue / violet */
+  --t-brand: #7c8cff;
   --t-brand-light: #a5b4fc;
-  --t-brand-dark: #6366f1;
-  --t-brand-subtle: rgba(129, 140, 248, 0.12);
-  --t-brand-gradient: linear-gradient(135deg, #6366f1, #818cf8);
-  --t-brand-glow: rgba(129, 140, 248, 0.18);
-  --t-brand-text: #a5b4fc;
+  --t-brand-dark: #6375f2;
+  --t-brand-subtle: rgba(124, 140, 255, 0.14);
+  --t-brand-gradient: linear-gradient(135deg, #6375f2, #8aa2ff);
+  --t-brand-glow: rgba(124, 140, 255, 0.20);
+  --t-brand-text: #b6c2ff;
 
   /* Status */
   --t-success: #34d399;

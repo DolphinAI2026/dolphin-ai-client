@@ -2,202 +2,98 @@
   <WorkbenchShell>
     <main class="main">
       <div class="bg"></div>
-      <div class="content">
-        <div class="hero">
-          <div class="hero-mark" aria-hidden="true">
-            <svg width="34" height="34" viewBox="0 0 24 24" fill="none">
-              <path d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 17l-6.2 4.3 2.4-7.4L2 9.4h7.6L12 2z" fill="#7D72F6"/>
-            </svg>
-          </div>
-          <div class="hero-title">aPaaS Builder AI</div>
-          <div class="hero-sub">两种搭建路径，覆盖从标准文档导入到 AI 对话生成的完整应用设计流程</div>
+      <header class="landing-topbar">
+        <div class="landing-breadcrumbs">
+          <span>aPaaS Builder</span>
+          <span>/</span>
+          <strong>新建</strong>
+        </div>
+        <div class="landing-topbar-spacer"></div>
+        <button class="landing-command" type="button" @click="openCommandPalette">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <circle cx="7" cy="7" r="4.2" stroke="currentColor" stroke-width="1.4" />
+            <path d="m10.2 10.2 2.8 2.8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
+          </svg>
+          <span>搜索应用、模型、对话...</span>
+          <kbd>⌘K</kbd>
+        </button>
+      </header>
+      <div class="landing" :style="landingModeVars">
+        <div class="landing-bg"></div>
+
+        <div class="brand-mark">
+          <div class="brand-glyph">{{ landingGlyph }}</div>
+          <div class="brand-eyebrow">{{ currentLandingMode.eyebrow }}</div>
         </div>
 
-        <div class="upload-workbench upload-entry-grid">
-          <section class="upload-feature-card">
-            <div class="entry-head">
-              <div class="entry-copy">
-                <div class="card-tag">设计文档</div>
-                <div class="upload-title">上传 Markdown 设计文档</div>
-                <div class="entry-subtitle">
-                  已有标准设计文档时，从这里直接进入解析和搭建流程。
-                </div>
-              </div>
-              <div class="entry-side-note">模板预览 / 拖拽上传 / 直接解析</div>
-            </div>
+        <section class="brand-copy">
+          <h1 class="brand-title">
+            <span>{{ currentLandingMode.tagline }}</span>
+            <em>{{ landingTitleSuffix }}</em>
+          </h1>
+          <p class="brand-sub">{{ currentLandingMode.desc }}</p>
+        </section>
 
-            <div
-              v-if="templateFiles.length"
-              class="template-inline-section"
-              :class="{ dragging: uploadDragging }"
-              @dragover.prevent="uploadDragging = true"
-              @dragleave.prevent="uploadDragging = false"
-              @drop.prevent="handleFileDrop"
-            >
-              <div class="template-inline-head">
-                <div class="template-inline-label">默认模板</div>
-                <div class="landing-model-picker">
-                  <span class="landing-model-label">解析模型</span>
-                  <el-select
-                    v-model="selectedLandingModelId"
-                    class="landing-model-select"
-                    popper-class="model-select-dropdown"
-                    size="small"
-                    placeholder="选择模型"
-                    :loading="builderModelLoading"
-                    :disabled="builderModelLoading || builderModelOptions.length === 0"
-                  >
-                    <el-option
-                      v-for="option in builderModelOptions"
-                      :key="option.id"
-                      :label="formatBuilderModelOption(option)"
-                      :value="option.id"
-                    >
-                      <div class="builder-model-option-row">
-                        <span class="builder-model-option-name">{{ option.config_name }}</span>
-                        <span class="builder-model-option-meta">{{ option.provider }} / {{ option.model }}</span>
-                      </div>
-                    </el-option>
-                  </el-select>
-                  <span class="landing-model-hint">{{ landingModelHint }}</span>
-                </div>
-              </div>
-
-              <article v-for="template in templateFiles" :key="template.code" class="template-item template-item-inline template-item-compact">
-                <div class="template-icon" aria-hidden="true">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-                    <path d="M8 4.5h6l4 4V19a1.5 1.5 0 0 1-1.5 1.5h-8A1.5 1.5 0 0 1 7 19V6A1.5 1.5 0 0 1 8.5 4.5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" />
-                    <path d="M14 4.5V9h4" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" />
-                    <path d="M9.5 13h5M9.5 16h5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
-                  </svg>
-                </div>
-
-                <div class="template-main">
-                  <div class="template-topline">
-                    <div class="template-name">{{ template.name }}</div>
-                    <span class="template-category">{{ template.category || '通用模板' }}</span>
-                  </div>
-                  <div class="template-summary">{{ template.description || '用于快速搭建设计文档结构。' }}</div>
-                  <div class="template-meta">
-                    <span>{{ template.filename }}</span>
-                    <span>Markdown</span>
-                    <span>{{ formatTemplateUpdatedAt(template.updated_at) }}</span>
-                  </div>
-                </div>
-
-                <div class="template-actions">
-                  <button class="template-action ghost" type="button" @click="previewTemplate(template)">预览</button>
-                  <button class="template-action ghost" type="button" @click="downloadTemplate(template)">下载模板</button>
-                  <label class="template-action solid template-upload-btn">
-                    上传文档
-                    <input type="file" accept=".md,text/markdown" @change="handleDocUpload" hidden />
-                  </label>
-                </div>
-              </article>
-            </div>
-
-            <div v-else class="template-empty template-empty-inline">
-              暂无可展示的模板文件，请先在模板管理中补充模板。
-            </div>
-
-            <div class="upload-footnote">
-              <span>仅支持 Markdown 功能设计文档，上传后会自动跳转到解析页面。</span>
-            </div>
-          </section>
-
-          <section class="upload-feature-card ai-entry-card">
-            <div class="entry-head entry-head-compact">
-              <div class="entry-copy">
-                <div class="card-tag">AI生成</div>
-                <div class="upload-title">通过 AI 对话生成设计文档</div>
-              </div>
-              <div class="entry-side-note">从模糊需求到标准文档</div>
-            </div>
-            <div class="ai-entry-body">
-              <div class="ai-entry-visual" aria-hidden="true">
-                <div class="ai-orbit ai-orbit-large"></div>
-                <div class="ai-orbit ai-orbit-small"></div>
-                <div class="ai-entry-core">
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-                    <path d="M12 3 14.4 9.6 21 12l-6.6 2.4L12 21l-2.4-6.6L3 12l6.6-2.4L12 3Z" fill="currentColor"/>
-                  </svg>
-                </div>
-              </div>
-              <div class="ai-entry-copy">
-                <div class="ai-entry-heading">从需求对话开始</div>
-                <div class="ai-entry-desc">
-                  用对话先把业务目标、角色、模型和表单梳理清楚，再由系统自动生成标准设计文档并进入搭建流程。
-                </div>
-              </div>
-              <div class="ai-entry-steps">
-                <div class="ai-entry-step">
-                  <span class="ai-entry-step-index">01</span>
-                  <span class="ai-entry-step-text">逐步补充需求，不用一次写全</span>
-                </div>
-                <div class="ai-entry-step">
-                  <span class="ai-entry-step-index">02</span>
-                  <span class="ai-entry-step-text">自动生成标准设计文档</span>
-                </div>
-                <div class="ai-entry-step">
-                  <span class="ai-entry-step-index">03</span>
-                  <span class="ai-entry-step-text">确认后继续进入应用搭建</span>
-                </div>
-              </div>
-              <div class="ai-entry-actions">
-                <button class="ai-entry-cta" type="button" @click="startAIGenerate">
-                  <span>进入 AI 生成</span>
-                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                    <path d="M3 8h9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-                    <path d="m8.5 3.5 4 4-4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
-                  </svg>
-                </button>
-                <div class="ai-entry-note">进入对话模式后，可边聊边生成设计文档。</div>
-              </div>
-            </div>
-          </section>
+        <div class="mode-switcher" aria-label="AI 入口模式">
+          <button
+            v-for="mode in landingModeList"
+            :key="mode.key"
+            type="button"
+            class="mode-tab"
+            :class="{ active: landingMode === mode.key }"
+            :aria-pressed="landingMode === mode.key"
+            @click="landingMode = mode.key; focusLandingInput()"
+          >
+            <span class="mode-tab-icon">{{ mode.icon }}</span>
+            <span class="mode-tab-label">{{ mode.label }}</span>
+            <span class="mode-tab-zh">{{ mode.zh }}</span>
+            <span v-if="landingMode === mode.key" class="mode-tab-dot"></span>
+          </button>
         </div>
 
-        <div class="body-content">
-          <div class="stats-row">
-            <div class="stat-card">
-              <div class="stat-label">已搭建应用</div>
-              <div class="stat-num">{{ totalAppsCount }}</div>
+        <section class="composer">
+          <div class="composer-shell ai-surface">
+            <div class="composer-mode-bar">
+              <span class="composer-mode-label">
+                <span>{{ currentLandingMode.icon }}</span>
+                {{ currentLandingMode.label }} · {{ currentLandingMode.zh }}
+              </span>
             </div>
-            <div class="stat-card">
-              <div class="stat-label">AI 对话次数</div>
-              <div class="stat-num">{{ totalConversationCount }}</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-label">已生成模块数</div>
-              <div class="stat-num">{{ generatedModules }}</div>
-            </div>
-          </div>
 
-          <div>
-            <div class="section-header">
-              <span class="section-title">已搭建应用</span>
-              <div class="section-actions">
-                <button class="import-link" @click="showImportDialog = true">
-                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1v8M2.5 5.5L6 9l3.5-3.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M1 11h10" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
-                  从平台导入
-                </button>
-                <button class="view-all-link" @click="navigateTo('/apps')">查看全部 →</button>
-              </div>
+            <div class="composer-body">
+              <textarea
+                ref="landingTextareaRef"
+                v-model="landingInput"
+                class="composer-input"
+                :placeholder="currentLandingMode.placeholder"
+                @keydown="handleLandingKeydown"
+              ></textarea>
             </div>
-            <div class="app-grid">
-              <button v-for="(app,idx) in recentApps.slice(0,6)" :key="app.id" class="app-card" @click="openApp(app)">
-                <div class="app-card-header">
-                  <div class="app-dot" :class="idx===1 ? 'teal' : idx===2 ? 'amber' : 'purple'">{{ (app.label || 'A').slice(0, 1).toUpperCase() }}</div>
-                  <div>
-                    <div class="app-name">{{ app.label }}</div>
-                    <div class="app-time">{{ app.timeLabel }}更新</div>
-                  </div>
-                </div>
-                <span class="app-status" :class="app.status==='processing' ? 'building' : 'done'">{{ app.status==='processing' ? '构建中' : '已生成' }}</span>
+
+            <div class="composer-toolbar">
+              <button v-if="landingMode !== 'code'" class="chip" type="button" @click="prdInputRef?.click()">＋ 附加文档</button>
+              <button v-if="landingMode !== 'code'" class="chip" type="button" @click="showImportDialog = true">引用项目</button>
+              <button v-else class="chip" type="button" @click="navigateTo('/coding')">打开工作台</button>
+
+              <div class="toolbar-spacer"></div>
+
+              <div v-if="landingMode === 'cowork'" class="seg-ctrl">
+                <button class="seg-btn" :class="{ active: landingDetail === 'auto' }" type="button" @click="landingDetail = 'auto'">AI 判断</button>
+                <button class="seg-btn" :class="{ active: landingDetail === 'config' }" type="button" @click="landingDetail = 'config'">偏配置</button>
+                <button class="seg-btn" :class="{ active: landingDetail === 'dev' }" type="button" @click="landingDetail = 'dev'">偏开发</button>
+              </div>
+
+              <button class="landing-submit" type="button" :disabled="!landingInput.trim()" @click="submitLanding">
+                <span>↗</span>
+                {{ currentLandingMode.cta }}
+                <span class="submit-kbd">⌘↵</span>
               </button>
             </div>
           </div>
-        </div>
+        </section>
+
+        <input ref="prdInputRef" type="file" accept=".md,.markdown,.txt,.pdf,.doc,.docx" hidden @change="handleLandingDocUpload" />
+        <div v-if="landingNotice" class="landing-toast">{{ landingNotice }}</div>
       </div>
     </main>
   </WorkbenchShell>
@@ -304,6 +200,60 @@ interface TemplateDetail extends TemplateFile {
   content: string
 }
 
+type LandingModeKey = 'chat' | 'cowork' | 'code'
+type LandingDetailMode = 'auto' | 'config' | 'dev'
+
+interface LandingModeConfig {
+  key: LandingModeKey
+  label: string
+  zh: string
+  tagline: string
+  titleSuffix: string
+  eyebrow: string
+  desc: string
+  color: string
+  colorSoft: string
+  colorInk: string
+  icon: string
+  placeholder: string
+  cta: string
+}
+
+const PENDING_CODING_KEY = 'ai_builder_pending_coding'
+
+const landingModeList: LandingModeConfig[] = [
+  {
+    key: 'cowork',
+    label: 'CoWork',
+    zh: '协同构建',
+    tagline: 'AI 帮你搭系统',
+    titleSuffix: '把一句话变成可上线的应用',
+    eyebrow: 'APAAS BUILDER · v2.4',
+    desc: 'AI 生成 SPEC，拆解配置与自开发，边聊边出设计与代码，一条对话完成交付。',
+    color: 'oklch(55% 0.18 268)',
+    colorSoft: 'oklch(96% 0.03 268)',
+    colorInk: 'oklch(45% 0.18 268)',
+    icon: '▣',
+    placeholder: '描述你要交付的应用。例如：做一个设备巡检系统，巡检员能录入巡检记录、上传照片，主管审核后进入报表...',
+    cta: '开始构建',
+  },
+  {
+    key: 'code',
+    label: 'Code',
+    zh: '智能开发',
+    tagline: 'AI 帮你写代码',
+    titleSuffix: '把需求直接变成可运行的组件和页面',
+    eyebrow: 'APAAS CODING · VIBE IDE',
+    desc: '面向自开发扩展：描述组件、页面或接口，AI 自动创建工作区，并打开睿鲸 AI Coding 继续迭代。',
+    color: 'oklch(67% 0.14 255)',
+    colorSoft: 'oklch(95% 0.03 255)',
+    colorInk: 'oklch(50% 0.17 255)',
+    icon: '{}',
+    placeholder: '描述你想开发的内容。例如：做一个头像上传组件，支持裁剪、预览、上传失败重试，并输出可接入表单的组件。',
+    cta: '进入开发',
+  },
+]
+
 const recentSessions = ref<ConversationWithApp[]>([])
 const recentApps = ref<AppItem[]>([])
 const generatedModules = ref(0)
@@ -323,6 +273,26 @@ const templateCache = new Map<string, TemplateDetail>()
 const builderModelOptions = ref<BuilderModelOption[]>([])
 const builderModelLoading = ref(false)
 const selectedLandingModelId = ref<number | null>(null)
+const showLegacyEntries = ref(false)
+const showWorkspaceOverview = ref(false)
+const landingMode = ref<LandingModeKey>('cowork')
+const landingInput = ref('')
+const landingDetail = ref<LandingDetailMode>('auto')
+const landingNotice = ref('')
+const landingTextareaRef = ref<HTMLTextAreaElement | null>(null)
+const prdInputRef = ref<HTMLInputElement | null>(null)
+let landingNoticeTimer: number | null = null
+
+const currentLandingMode = computed(() => (
+  landingModeList.find(item => item.key === landingMode.value) ?? landingModeList[0]
+))
+const landingGlyph = computed(() => 'ap')
+const landingTitleSuffix = computed(() => currentLandingMode.value.titleSuffix)
+const landingModeVars = computed<Record<string, string>>(() => ({
+  '--landing-mode-color': currentLandingMode.value.color,
+  '--landing-mode-soft': currentLandingMode.value.colorSoft,
+  '--landing-mode-ink': currentLandingMode.value.colorInk,
+}))
 const templatePreviewIntro = computed(() => {
   const content = templatePreview.value?.content || ''
   if (!content) return ''
@@ -353,6 +323,80 @@ function formatDate(dateStr: string) {
 
 function navigateTo(path: string) {
   router.push(path)
+}
+
+function openCommandPalette() {
+  window.dispatchEvent(new CustomEvent('builder:open-command'))
+}
+
+function focusLandingInput() {
+  requestAnimationFrame(() => landingTextareaRef.value?.focus())
+}
+
+function setLandingNotice(message: string) {
+  landingNotice.value = message
+  if (landingNoticeTimer != null) {
+    window.clearTimeout(landingNoticeTimer)
+  }
+  landingNoticeTimer = window.setTimeout(() => {
+    landingNotice.value = ''
+    landingNoticeTimer = null
+  }, 1800)
+}
+
+function seedPrdExample() {
+  landingMode.value = 'cowork'
+  landingDetail.value = 'auto'
+  landingInput.value = 'PRD 摘要：做一个设备巡检系统，巡检员可按计划执行巡检、离线录入、上传照片；主管审核异常记录并自动生成工单；管理层看统计报表。'
+  setLandingNotice('已载入 PRD 摘要示例')
+  focusLandingInput()
+}
+
+function handleLandingKeydown(event: KeyboardEvent) {
+  if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+    event.preventDefault()
+    submitLanding()
+  }
+}
+
+function handleLandingDocUpload(event: Event) {
+  const target = event.target as HTMLInputElement
+  const file = target.files?.[0]
+  target.value = ''
+  if (!file) return
+  landingMode.value = 'cowork'
+  previewStore.pendingBuilderModelId = selectedLandingModelId.value
+  previewStore.pendingFile = file
+  router.push({ path: '/chat', query: { mode: 'requirements' } })
+}
+
+async function submitLanding() {
+  const prompt = landingInput.value.trim()
+  if (!prompt) {
+    ElMessage.warning('请先输入你要做什么')
+    return
+  }
+
+  previewStore.pendingBuilderModelId = selectedLandingModelId.value
+
+  if (landingMode.value === 'code') {
+    sessionStorage.setItem(PENDING_CODING_KEY, JSON.stringify({
+      message: prompt,
+      projectId: null,
+      sceneCategory: 'page-pc',
+    }))
+    await router.push({ path: '/coding', query: { from_ai_builder: '1' } })
+    return
+  }
+
+  await router.push({
+    path: '/chat',
+    query: {
+      prompt,
+      mode: landingMode.value === 'cowork' ? 'requirements' : 'chat',
+      ...(landingMode.value === 'cowork' ? { detail: landingDetail.value } : {}),
+    },
+  })
 }
 
 function isMarkdownFile(file: File) {
@@ -640,62 +684,757 @@ onMounted(loadApps)
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 .main {
-  --surface-strong: rgba(255, 255, 255, 0.88);
-  --surface-soft: rgba(255, 255, 255, 0.72);
-  --surface-muted: rgba(245, 247, 255, 0.88);
-  --stroke-soft: rgba(83, 74, 183, 0.16);
-  --stroke-strong: rgba(83, 74, 183, 0.26);
-  --text-strong: #26215C;
-  --text-secondary: #534AB7;
-  --text-muted: #716CB2;
-  --accent: #4B43A2;
-  --accent-soft: #EEEDFE;
-  --shadow-soft: 0 18px 40px rgba(78, 71, 147, 0.08);
+  --surface-strong: rgba(255, 255, 255, 0.96);
+  --surface-soft: rgba(255, 255, 255, 0.86);
+  --surface-muted: rgba(248, 250, 252, 0.94);
+  --stroke-soft: rgba(15, 23, 42, 0.10);
+  --stroke-strong: rgba(15, 23, 42, 0.16);
+  --text-strong: #111827;
+  --text-secondary: #334155;
+  --text-muted: #64748b;
+  --accent: #111827;
+  --accent-soft: #f1f5f9;
+  --shadow-soft: 0 18px 38px rgba(15, 23, 42, 0.06);
   flex: 1;
   display: flex;
   flex-direction: column;
   overflow: hidden;
   position: relative;
 }
-.bg { position: absolute; inset: 0; background: linear-gradient(160deg, #EEEDFE 0%, #E6F1FB 45%, #E1F5EE 100%); z-index: 0; }
-.content { flex: 1; overflow-y: auto; position: relative; z-index: 1; }
+.bg { position: absolute; inset: 0; background: #f4f6fa; z-index: 0; }
+.content {
+  flex: 1;
+  overflow-y: auto;
+  position: relative;
+  z-index: 1;
+  padding: 0 22px 28px;
+}
 
-.hero {
-  padding: 28px 24px 18px;
-  text-align: center;
+.landing-topbar {
+  position: relative;
+  z-index: 2;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 16px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.landing-breadcrumbs {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.landing-breadcrumbs strong {
+  color: #111827;
+  font-weight: 700;
+}
+
+.landing-topbar-spacer {
+  flex: 1;
+  min-width: 16px;
+}
+
+.landing-command {
+  height: 32px;
+  width: 420px;
+  max-width: 42vw;
+  border: 1px solid rgba(15, 23, 42, 0.10);
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #64748b;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 9px;
+  padding: 0 9px;
+  cursor: pointer;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.landing-command span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.landing-command:hover {
+  background: #fff;
+  color: #111827;
+}
+
+.landing-command kbd {
+  flex-shrink: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 10px;
+  line-height: 1;
+  padding: 3px 5px;
+  border-radius: 4px;
+  border: 1px solid rgba(15, 23, 42, 0.10);
+  background: #fff;
+  color: #64748b;
+}
+
+.landing {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  z-index: 1;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  justify-content: center;
+  gap: 30px;
+  padding: 34px 32px 38px;
+  background: #fbfcfe;
 }
-.hero-mark {
-  width: 58px;
-  height: 58px;
-  border-radius: 20px;
+
+.landing-bg {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    radial-gradient(rgba(54, 128, 198, 0.07) 1px, transparent 1px),
+    radial-gradient(rgba(82, 74, 190, 0.055) 1px, transparent 1px);
+  background-size: 32px 32px, 64px 64px;
+  background-position: 0 0, 16px 16px;
+  mask-image: radial-gradient(ellipse 800px 600px at center 40%, black, transparent);
+}
+
+.landing-bg::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse 600px 300px at center 30%, color-mix(in srgb, var(--landing-mode-color) 12%, transparent), transparent);
+}
+
+.brand-mark {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  position: relative;
+  z-index: 1;
+}
+
+.brand-glyph {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(135deg, var(--landing-mode-color), var(--landing-mode-ink));
+  color: #fff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 21px;
+  font-weight: 700;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.12), 0 0 0 1px rgba(15, 23, 42, 0.12);
+}
+
+.brand-eyebrow {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--landing-mode-ink);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.brand-copy {
+  position: relative;
+  z-index: 1;
+  max-width: 720px;
+  text-align: center;
+}
+
+.brand-title {
+  margin: 0;
+  font-size: 40px;
+  line-height: 1.1;
+  font-weight: 650;
+  letter-spacing: 0;
+  color: #111827;
+}
+
+.brand-title span {
+  color: var(--landing-mode-color);
+}
+
+.brand-title em {
+  margin-left: 12px;
+  display: inline-block;
+  font-style: normal;
+  color: #111827;
+}
+
+.brand-sub {
+  margin: 12px auto 0;
+  max-width: 560px;
+  color: #667085;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.mode-switcher {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 10px;
+  border: 0.5px solid #d8dee8;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 0 0 0.5px rgba(15, 23, 42, 0.04);
+}
+
+.mode-tab {
+  min-width: 132px;
+  min-height: 38px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-radius: 7px;
+  border: 0.5px solid transparent;
+  background: transparent;
+  color: #667085;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.mode-tab-static {
+  cursor: default;
+}
+
+.mode-tab:hover:not(.active) {
+  background: #f5f7fb;
+  color: #111827;
+}
+
+.mode-tab.active {
+  border-color: var(--landing-mode-color);
+  background: var(--landing-mode-soft);
+  color: var(--landing-mode-ink);
+  font-weight: 650;
+}
+
+.mode-tab-icon,
+.composer-mode-label span {
+  display: inline-flex;
+  width: 16px;
+  align-items: center;
+  justify-content: center;
+  color: currentColor;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+}
+
+.mode-tab-label {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.mode-tab-zh {
+  margin-left: auto;
+  color: currentColor;
+  font-size: 11px;
+  opacity: 0.68;
+  white-space: nowrap;
+}
+
+.mode-tab-dot {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--landing-mode-color);
+}
+
+.composer {
+  width: 100%;
+  max-width: 760px;
+  position: relative;
+  z-index: 1;
+}
+
+.composer-shell {
+  overflow: hidden;
+  border-radius: 12px;
+  border: 0.5px solid #d1d8e5;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08), 0 0 0 1px color-mix(in srgb, var(--landing-mode-color) 14%, transparent);
+  transition: box-shadow 0.18s ease, border-color 0.18s ease;
+}
+
+.composer-shell:focus-within {
+  border-color: color-mix(in srgb, var(--landing-mode-color) 54%, #d1d8e5);
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.10), 0 0 0 3px color-mix(in srgb, var(--landing-mode-color) 16%, transparent);
+}
+
+.ai-surface {
+  position: relative;
+}
+
+.ai-surface::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: radial-gradient(color-mix(in srgb, var(--landing-mode-color) 8%, transparent) 1px, transparent 1px);
+  background-size: 20px 20px;
+  opacity: 0.5;
+  mask-image: radial-gradient(ellipse at center, black 30%, transparent 70%);
+}
+
+.composer-mode-bar {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 0.5px solid color-mix(in srgb, var(--landing-mode-color) 22%, #d8dee8);
+  background: var(--landing-mode-soft);
+  color: var(--landing-mode-ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.composer-mode-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.kbd-inline,
+.submit-kbd {
+  display: inline-flex;
+  min-width: 16px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 5px;
+  border-radius: 3px;
+  border: 0.5px solid #d8dee8;
+  background: #fff;
+  color: #667085;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 9px;
+  line-height: 14px;
+}
+
+.composer-body {
+  position: relative;
+  z-index: 1;
+  padding: 14px 16px 10px;
+}
+
+.composer-input {
+  width: 100%;
+  min-height: 72px;
+  max-height: 240px;
+  border: 0;
+  outline: 0;
+  resize: none;
+  background: transparent;
+  color: #111827;
+  font-size: 14px;
+  line-height: 1.55;
+  font-family: inherit;
+}
+
+.composer-input::placeholder {
+  color: #98a2b3;
+}
+
+.composer-toolbar {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 0.5px solid #e4e8f0;
+  background: #f8fafc;
+}
+
+.chip {
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 0.5px solid #d8dee8;
+  background: #fff;
+  color: #667085;
+  cursor: pointer;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.chip:hover {
+  background: #f1f4f9;
+  color: #111827;
+}
+
+.toolbar-spacer {
+  flex: 1;
+}
+
+.seg-ctrl {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 2px;
+  gap: 1px;
+  border-radius: 7px;
+  border: 0.5px solid #d8dee8;
+  background: #fff;
+}
+
+.seg-btn {
+  height: 20px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: #667085;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.seg-btn.active {
+  background: #111827;
+  color: #fff;
+}
+
+.landing-submit {
+  height: 28px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(238, 237, 254, 0.88));
-  box-shadow:
-    inset 0 0 0 1px rgba(125, 114, 246, 0.12),
-    0 18px 36px rgba(103, 96, 180, 0.10);
+  gap: 6px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 0.5px solid var(--landing-mode-color);
+  background: var(--landing-mode-color);
+  color: #fff;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
 }
+
+.landing-submit:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.landing-submit .submit-kbd {
+  border-color: rgba(255, 255, 255, 0.18);
+  background: rgba(0, 0, 0, 0.18);
+  color: #fff;
+}
+
+.landing-footnotes {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  color: #98a2b3;
+  font-size: 11px;
+}
+
+.landing-footnotes button {
+  border: none;
+  background: transparent;
+  color: #667085;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.landing-footnotes button:hover {
+  color: #111827;
+}
+
+.landing-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  z-index: 20;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border-radius: 6px;
+  background: #111827;
+  color: #fff;
+  box-shadow: 0 16px 48px rgba(15, 23, 42, 0.16);
+  font-size: 11px;
+}
+
+:global(html[data-theme="dark"]) .main {
+  --surface-strong: rgba(17, 19, 24, 0.96);
+  --surface-soft: rgba(17, 19, 24, 0.86);
+  --surface-muted: rgba(13, 17, 23, 0.94);
+  --stroke-soft: rgba(148, 163, 184, 0.14);
+  --stroke-strong: rgba(148, 163, 184, 0.24);
+  --text-strong: rgba(248, 250, 252, 0.94);
+  --text-secondary: rgba(203, 213, 225, 0.70);
+  --text-muted: rgba(148, 163, 184, 0.48);
+  --accent: #f8fafc;
+  --accent-soft: rgba(124, 140, 255, 0.14);
+  --shadow-soft: 0 18px 38px rgba(0, 0, 0, 0.38);
+}
+
+:global(html[data-theme="dark"]) .bg,
+:global(html[data-theme="dark"]) .landing {
+  background: #090b10;
+}
+
+:global(html[data-theme="dark"]) .landing-topbar {
+  border-bottom-color: rgba(148, 163, 184, 0.14);
+  background: rgba(9, 11, 16, 0.94);
+}
+
+:global(html[data-theme="dark"]) .landing-breadcrumbs {
+  color: rgba(203, 213, 225, 0.62);
+}
+
+:global(html[data-theme="dark"]) .landing-breadcrumbs strong,
+:global(html[data-theme="dark"]) .brand-title,
+:global(html[data-theme="dark"]) .brand-title em {
+  color: rgba(248, 250, 252, 0.94);
+}
+
+:global(html[data-theme="dark"]) .landing-command {
+  border-color: rgba(148, 163, 184, 0.18);
+  background: #0d1117;
+  color: rgba(203, 213, 225, 0.64);
+}
+
+:global(html[data-theme="dark"]) .landing-command:hover {
+  background: #151922;
+  color: rgba(248, 250, 252, 0.94);
+}
+
+:global(html[data-theme="dark"]) .landing-command kbd,
+:global(html[data-theme="dark"]) .kbd-inline,
+:global(html[data-theme="dark"]) .submit-kbd {
+  border-color: rgba(148, 163, 184, 0.18);
+  background: #111318;
+  color: rgba(203, 213, 225, 0.62);
+}
+
+:global(html[data-theme="dark"]) .landing-bg {
+  background-image:
+    radial-gradient(rgba(124, 140, 255, 0.12) 1px, transparent 1px),
+    radial-gradient(rgba(52, 211, 153, 0.06) 1px, transparent 1px);
+}
+
+:global(html[data-theme="dark"]) .brand-sub {
+  color: rgba(203, 213, 225, 0.66);
+}
+
+:global(html[data-theme="dark"]) .brand-glyph {
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.40), 0 0 0 1px rgba(148, 163, 184, 0.18);
+}
+
+:global(html[data-theme="dark"]) .mode-switcher,
+:global(html[data-theme="dark"]) .composer-shell,
+:global(html[data-theme="dark"]) .seg-ctrl,
+:global(html[data-theme="dark"]) .chip {
+  border-color: rgba(148, 163, 184, 0.16);
+  background: #111318;
+  box-shadow: 0 0 0 0.5px rgba(148, 163, 184, 0.10);
+}
+
+:global(html[data-theme="dark"]) .mode-tab.active {
+  border-color: color-mix(in srgb, var(--landing-mode-color) 62%, rgba(148, 163, 184, 0.24));
+  background: rgba(124, 140, 255, 0.12);
+}
+
+:global(html[data-theme="dark"]) .composer-shell {
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.38), 0 0 0 1px color-mix(in srgb, var(--landing-mode-color) 18%, transparent);
+}
+
+:global(html[data-theme="dark"]) .composer-mode-bar {
+  border-bottom-color: rgba(148, 163, 184, 0.14);
+  background: rgba(124, 140, 255, 0.11);
+}
+
+:global(html[data-theme="dark"]) .composer-input {
+  color: rgba(248, 250, 252, 0.94);
+}
+
+:global(html[data-theme="dark"]) .composer-input::placeholder {
+  color: rgba(148, 163, 184, 0.56);
+}
+
+:global(html[data-theme="dark"]) .composer-toolbar {
+  border-top-color: rgba(148, 163, 184, 0.14);
+  background: #0d1117;
+}
+
+:global(html[data-theme="dark"]) .chip,
+:global(html[data-theme="dark"]) .seg-btn,
+:global(html[data-theme="dark"]) .landing-footnotes button {
+  color: rgba(203, 213, 225, 0.64);
+}
+
+:global(html[data-theme="dark"]) .chip:hover {
+  background: #1a1d24;
+  color: rgba(248, 250, 252, 0.94);
+}
+
+:global(html[data-theme="dark"]) .seg-btn.active {
+  background: #f8fafc;
+  color: #090b10;
+}
+
+:global(html[data-theme="dark"]) .landing-submit .submit-kbd {
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(0, 0, 0, 0.26);
+  color: #fff;
+}
+
+:global(html[data-theme="dark"]) .landing-footnotes {
+  color: rgba(148, 163, 184, 0.45);
+}
+
+:global(html[data-theme="dark"]) .landing-footnotes button:hover {
+  color: rgba(248, 250, 252, 0.94);
+}
+
+.hero {
+  max-width: 1320px;
+  margin: 18px auto 12px;
+  padding: 0 2px;
+  text-align: left;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.hero-copy {
+  min-width: 0;
+  max-width: 760px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.hero-kicker {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .hero-title {
-  font-size: 25px;
+  font-size: 24px;
   font-weight: 700;
   color: var(--text-strong);
-  letter-spacing: -0.04em;
+  letter-spacing: 0;
 }
+
 .hero-sub {
-  max-width: 680px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.hero-status {
+  flex-shrink: 0;
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border: 1px solid rgba(15, 23, 42, 0.10);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.88);
+  color: #475569;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #22c55e;
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.14);
+}
+
+.legacy-entry-shell {
+  max-width: 1320px;
+  margin: 12px auto 0;
+  padding: 16px 18px;
+  border-radius: 8px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(255, 255, 255, 0.82);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.legacy-entry-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.legacy-entry-label {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #6f67a9;
+}
+
+.legacy-entry-title {
   font-size: 13px;
   line-height: 1.7;
-  color: var(--text-secondary);
-  opacity: 0.88;
+  color: #4c4775;
+}
+
+.legacy-entry-toggle {
+  border: none;
+  border-radius: 8px;
+  min-height: 34px;
+  padding: 0 16px;
+  background: #eef2f7;
+  color: #111827;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
 }
 
 .upload-workbench {
-  padding: 0 24px;
+  max-width: 1320px;
+  margin: 0 auto;
+  padding: 0;
   display: block;
 }
 .upload-entry-grid {
@@ -1112,30 +1851,77 @@ onMounted(loadApps)
   background: rgba(255, 255, 255, 0.7);
 }
 
-.body-content { padding: 14px 24px 22px; display: flex; flex-direction: column; gap: 16px; }
+.body-content {
+  max-width: 1320px;
+  margin: 0 auto;
+  padding: 14px 0 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.overview-shell {
+  max-width: 1320px;
+  margin: 14px auto 0;
+  padding: 16px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+}
+.overview-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.overview-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+  color: #64748b;
+}
+.overview-title {
+  font-size: 13px;
+  line-height: 1.7;
+  color: #334155;
+}
+.overview-toggle {
+  border: none;
+  background: #eef2f7;
+  color: #111827;
+  min-height: 34px;
+  padding: 0 16px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  flex-shrink: 0;
+}
 .stats-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
-.stat-card { background: rgba(255,255,255,0.78); border: 0.5px solid rgba(255,255,255,0.92); border-radius: 20px; padding: 14px 16px; box-shadow: 0 14px 34px rgba(78, 71, 147, 0.05); }
-.stat-label { font-size: 11px; color: #534AB7; margin-bottom: 5px; opacity: 0.8; }
-.stat-num { font-size: 20px; font-weight: 500; color: #26215C; }
+.stat-card { background: rgba(255,255,255,0.86); border: 1px solid rgba(15,23,42,0.08); border-radius: 8px; padding: 14px 16px; }
+.stat-label { font-size: 11px; color: #64748b; margin-bottom: 5px; opacity: 0.9; }
+.stat-num { font-size: 20px; font-weight: 600; color: #111827; }
 .stat-sub { font-size: 11px; color: #3B6D11; margin-top: 2px; }
 
 .section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
-.section-title { font-size: 13px; font-weight: 500; color: #26215C; }
+.section-title { font-size: 13px; font-weight: 600; color: #111827; }
 .section-actions { display: flex; align-items: center; gap: 12px; }
-.import-link { border: none; background: transparent; color: #6d73d5; font-size: 12px; font-weight: 500; cursor: pointer; padding: 0; display: flex; align-items: center; gap: 4px; }
-.import-link:hover { color: #534AB7; }
-.view-all-link { border: none; background: transparent; color: #6d73d5; font-size: 12px; font-weight: 500; cursor: pointer; padding: 0; }
-.view-all-link:hover { color: #534AB7; }
+.import-link { border: none; background: transparent; color: #334155; font-size: 12px; font-weight: 600; cursor: pointer; padding: 0; display: flex; align-items: center; gap: 4px; }
+.import-link:hover { color: #111827; }
+.view-all-link { border: none; background: transparent; color: #334155; font-size: 12px; font-weight: 600; cursor: pointer; padding: 0; }
+.view-all-link:hover { color: #111827; }
 .app-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-.app-card { background: rgba(255,255,255,0.78); border: 0.5px solid rgba(255,255,255,0.92); border-radius: 20px; padding: 14px; cursor: pointer; text-align: left; box-shadow: 0 14px 34px rgba(78, 71, 147, 0.04); }
+.app-card { background: rgba(255,255,255,0.86); border: 1px solid rgba(15,23,42,0.08); border-radius: 8px; padding: 14px; cursor: pointer; text-align: left; }
 .app-card-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .app-dot { width: 28px; height: 28px; border-radius: 7px; display: flex; align-items: center; justify-content: center; font-size: 13px; flex-shrink: 0; }
 .app-dot { font-weight: 700; color: #4c419f; }
 .app-dot.purple { background: #EEEDFE; }
 .app-dot.teal { background: #E1F5EE; }
 .app-dot.amber { background: #FAEEDA; }
-.app-name { font-size: 12px; font-weight: 500; color: #26215C; }
-.app-time { font-size: 11px; color: #534AB7; opacity: 0.6; margin-top: 1px; }
+.app-name { font-size: 12px; font-weight: 600; color: #111827; }
+.app-time { font-size: 11px; color: #64748b; opacity: 0.8; margin-top: 1px; }
 .app-status { display: inline-flex; font-size: 11px; padding: 2px 7px; border-radius: 20px; }
 .app-status.done { background: #EAF3DE; color: #3B6D11; }
 .app-status.building { background: #EEEDFE; color: #534AB7; }
@@ -1239,6 +2025,9 @@ onMounted(loadApps)
 }
 
 @media (max-width: 1180px) {
+  .landing-command {
+    width: 360px;
+  }
   .upload-entry-grid,
   .stats-row,
   .app-grid {
@@ -1247,11 +2036,81 @@ onMounted(loadApps)
 }
 
 @media (max-width: 780px) {
-  .hero,
-  .upload-workbench,
-  .body-content {
-    padding-left: 18px;
-    padding-right: 18px;
+  .landing-topbar {
+    height: auto;
+    min-height: 52px;
+    flex-direction: column;
+    align-items: stretch;
+    padding: 10px 12px;
+  }
+  .landing-command {
+    width: 100%;
+    max-width: none;
+  }
+  .content {
+    padding: 0 14px 22px;
+  }
+  .landing {
+    justify-content: flex-start;
+    gap: 22px;
+    padding: 24px 16px 28px;
+  }
+  .brand-glyph {
+    width: 42px;
+    height: 42px;
+    font-size: 18px;
+  }
+  .brand-title {
+    font-size: 30px;
+  }
+  .brand-title em {
+    display: block;
+    margin: 6px 0 0;
+  }
+  .brand-sub {
+    font-size: 13px;
+  }
+  .mode-switcher {
+    width: 100%;
+    max-width: 760px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .mode-tab {
+    min-width: 0;
+    padding: 8px 9px;
+  }
+  .mode-tab-zh,
+  .mode-tab-dot {
+    display: none;
+  }
+  .composer-toolbar {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .toolbar-spacer {
+    display: none;
+  }
+  .seg-ctrl {
+    order: 10;
+  }
+  .landing-submit {
+    margin-left: auto;
+  }
+  .landing-footnotes {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 10px;
+  }
+  .legacy-entry-shell {
+    margin-top: 10px;
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .overview-shell {
+    margin-top: 10px;
+    flex-direction: column;
+    align-items: stretch;
   }
   .upload-feature-card {
     padding: 18px;
@@ -1278,13 +2137,14 @@ onMounted(loadApps)
     justify-content: center;
   }
   .hero {
-    padding-top: 26px;
+    margin-top: 14px;
+    flex-direction: column;
+    align-items: flex-start;
     gap: 8px;
   }
-  .hero-mark {
-    width: 54px;
-    height: 54px;
-    border-radius: 20px;
+  .hero-status {
+    width: 100%;
+    justify-content: flex-start;
   }
   .hero-title {
     font-size: 22px;
@@ -1327,5 +2187,130 @@ onMounted(loadApps)
     flex-direction: column;
     gap: 8px;
   }
+}
+
+@media (max-height: 880px) {
+  .landing {
+    justify-content: flex-start;
+  }
+}
+</style>
+
+<style>
+html[data-theme="dark"] .main {
+  --surface-strong: rgba(17, 19, 24, 0.96);
+  --surface-soft: rgba(17, 19, 24, 0.88);
+  --surface-muted: rgba(13, 17, 23, 0.94);
+  --stroke-soft: rgba(148, 163, 184, 0.14);
+  --stroke-strong: rgba(148, 163, 184, 0.24);
+  --text-strong: rgba(248, 250, 252, 0.94);
+  --text-secondary: rgba(203, 213, 225, 0.70);
+  --text-muted: rgba(148, 163, 184, 0.50);
+  --accent: #f8fafc;
+  --accent-soft: rgba(124, 140, 255, 0.14);
+  --shadow-soft: 0 18px 44px rgba(0, 0, 0, 0.42);
+}
+
+html[data-theme="dark"] .main,
+html[data-theme="dark"] .bg,
+html[data-theme="dark"] .landing {
+  background: #090b10 !important;
+  color: rgba(248, 250, 252, 0.94);
+}
+
+html[data-theme="dark"] .landing-topbar {
+  background: rgba(9, 11, 16, 0.96) !important;
+  border-bottom-color: rgba(148, 163, 184, 0.14) !important;
+}
+
+html[data-theme="dark"] .landing-breadcrumbs {
+  color: rgba(203, 213, 225, 0.64);
+}
+
+html[data-theme="dark"] .landing-breadcrumbs strong,
+html[data-theme="dark"] .brand-title,
+html[data-theme="dark"] .brand-title em {
+  color: rgba(248, 250, 252, 0.94) !important;
+}
+
+html[data-theme="dark"] .landing-command,
+html[data-theme="dark"] .mode-switcher,
+html[data-theme="dark"] .composer-shell,
+html[data-theme="dark"] .seg-ctrl,
+html[data-theme="dark"] .chip {
+  background: #111318 !important;
+  border-color: rgba(148, 163, 184, 0.16) !important;
+  color: rgba(203, 213, 225, 0.66) !important;
+  box-shadow: 0 0 0 0.5px rgba(148, 163, 184, 0.10);
+}
+
+html[data-theme="dark"] .landing-command:hover,
+html[data-theme="dark"] .chip:hover {
+  background: #1a1d24 !important;
+  color: rgba(248, 250, 252, 0.94) !important;
+}
+
+html[data-theme="dark"] .landing-command kbd,
+html[data-theme="dark"] .kbd-inline,
+html[data-theme="dark"] .submit-kbd {
+  background: #0d1117 !important;
+  border-color: rgba(148, 163, 184, 0.18) !important;
+  color: rgba(203, 213, 225, 0.62) !important;
+}
+
+html[data-theme="dark"] .landing-bg {
+  background-image:
+    radial-gradient(rgba(124, 140, 255, 0.12) 1px, transparent 1px),
+    radial-gradient(rgba(52, 211, 153, 0.06) 1px, transparent 1px) !important;
+}
+
+html[data-theme="dark"] .brand-sub {
+  color: rgba(203, 213, 225, 0.66) !important;
+}
+
+html[data-theme="dark"] .brand-eyebrow,
+html[data-theme="dark"] .mode-tab.active {
+  color: #b6c2ff !important;
+}
+
+html[data-theme="dark"] .mode-tab.active {
+  border-color: rgba(138, 162, 255, 0.72) !important;
+  background: rgba(124, 140, 255, 0.14) !important;
+}
+
+html[data-theme="dark"] .composer-shell {
+  box-shadow: 0 18px 52px rgba(0, 0, 0, 0.42), 0 0 0 1px rgba(138, 162, 255, 0.14) !important;
+}
+
+html[data-theme="dark"] .composer-mode-bar,
+html[data-theme="dark"] .composer-toolbar {
+  background: #0d1117 !important;
+  border-color: rgba(148, 163, 184, 0.14) !important;
+}
+
+html[data-theme="dark"] .composer-input {
+  color: rgba(248, 250, 252, 0.94) !important;
+}
+
+html[data-theme="dark"] .composer-input::placeholder {
+  color: rgba(148, 163, 184, 0.56) !important;
+}
+
+html[data-theme="dark"] .seg-btn {
+  color: rgba(203, 213, 225, 0.64) !important;
+}
+
+html[data-theme="dark"] .seg-btn.active {
+  background: #f8fafc !important;
+  color: #090b10 !important;
+}
+
+html[data-theme="dark"] .landing-footnotes,
+html[data-theme="dark"] .landing-footnotes button {
+  color: rgba(148, 163, 184, 0.58) !important;
+}
+
+html[data-theme="dark"] .landing-footnotes button:hover {
+  color: rgba(248, 250, 252, 0.94) !important;
 }
 </style>

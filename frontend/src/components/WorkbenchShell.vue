@@ -1,16 +1,18 @@
 <template>
   <div class="workbench-shell">
-    <GlobalNavRail v-if="showNav" />
+    <BuilderNavRail v-if="showNav" />
     <div class="workbench-main">
       <slot />
     </div>
+    <BuilderCommandPalette />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
-import GlobalNavRail from '@/components/GlobalNavRail.vue'
+import BuilderNavRail from '@/components/BuilderNavRail.vue'
+import BuilderCommandPalette from '@/components/BuilderCommandPalette.vue'
 
 const route = useRoute()
 const showNav = computed(() => route.query.embed_nav !== '0')

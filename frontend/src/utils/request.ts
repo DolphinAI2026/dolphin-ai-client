@@ -2,8 +2,10 @@ import axios from 'axios'
 import type { AxiosInstance, AxiosResponse } from 'axios'
 import { isApaasTokenError } from './errorHandler'
 
-/** API 路径前缀，适配 vite base（本地 /api，生产 /ai-builder/api） */
-export const API_PREFIX = `${import.meta.env.BASE_URL}api`.replace('//', '/')
+/** API 路径前缀：本地开发固定走 Vite 代理 `/api`，生产环境跟随 base */
+export const API_PREFIX = import.meta.env.DEV
+  ? '/api'
+  : `${import.meta.env.BASE_URL}api`.replace('//', '/')
 
 const request: AxiosInstance = axios.create({
   baseURL: API_PREFIX,

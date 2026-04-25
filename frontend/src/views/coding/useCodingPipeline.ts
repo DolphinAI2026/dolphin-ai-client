@@ -16,8 +16,9 @@ import { useRoute } from 'vue-router'
 
 import { useCodingStore } from '@/stores/coding'
 import { useUserStore } from '@/stores/user'
+import { useThemeStore } from '@/stores/theme'
 import { consumeSseResponse } from '@/utils/sse'
-import { codingApi } from '@/api/coding'
+import { codingApi, isIdeUnavailableError } from '@/api/coding'
 import { harnessApi } from '@/api/harness'
 
 import { formatSceneType } from './useStreamMessages'
@@ -46,11 +47,14 @@ export interface PipelineDeps {
   attachedPreviewUrl: Ref<string | null>
   isUploading: Ref<boolean>
   isCreating: Ref<boolean>
+  onIdeUnavailable?: () => void
+  onIdeAvailable?: () => void
 }
 
 export function useCodingPipeline(deps: PipelineDeps) {
   const codingStore = useCodingStore()
   const userStore = useUserStore()
+  const themeStore = useThemeStore()
   const route = useRoute()
 
   const {
@@ -74,7 +78,7 @@ export function useCodingPipeline(deps: PipelineDeps) {
       setIdeUrl,
       activeView,
     },
-    workspace: { allWorkspaces, embeddedAppId },
+    workspace: { allWorkspaces },
     activeSceneCategory,
     pendingSceneCategory,
     sceneCategoryToProjectType,
@@ -83,7 +87,16 @@ export function useCodingPipeline(deps: PipelineDeps) {
     attachedPreviewUrl,
     isUploading,
     isCreating,
+    onIdeUnavailable,
+    onIdeAvailable,
   } = deps
+  let ideUnavailableNotified = false
+
+  function resolveRouteProjectId(): number | null {
+    const raw = route.query.project_id
+    const projectId = Number(Array.isArray(raw) ? raw[0] : raw)
+    return Number.isFinite(projectId) && projectId > 0 ? projectId : null
+  }
 
   // ── STEP / TOOL 子查表 ──
 
@@ -107,7 +120,7 @@ export function useCodingPipeline(deps: PipelineDeps) {
         try { allWorkspaces.value = await codingApi.listWorkspaces() } catch {}
       },
     },
-    brainstorm: { running: '正在生成需求确认...', done: '需求确认已生成' },
+    brainstorm: { running: '正在生成开发 SPEC...', done: '开发 SPEC 待确认' },
     generate: { running: 'AI 开始编写代码...', done: '代码生成完成' },
   }
 
@@ -236,12 +249,13 @@ export function useCodingPipeline(deps: PipelineDeps) {
         } catch { /* ignore */ }
       }
       if (parsed.ide_url && !parsed.waiting_confirmation) {
+        onIdeAvailable?.()
         pendingIdeUrl.value = parsed.ide_url
         if (!ideUrl.value) setIdeUrl(parsed.ide_url)
       }
       if ('Notification' in window && Notification.permission === 'granted') {
         new Notification('aPaaS Builder', {
-          body: parsed.waiting_confirmation ? '设计方案已生成，请确认后开始生成代码' : '代码已生成完成，快来看看吧',
+          body: parsed.waiting_confirmation ? '开发 SPEC 已生成，请确认后开始生成代码' : '代码已生成完成，快来看看吧',
         })
       }
       playDoneChime()
@@ -278,11 +292,25 @@ export function useCodingPipeline(deps: PipelineDeps) {
   async function loadIdeUrlAfterPipeline(): Promise<void> {
     if (!ideUrl.value && codingStore.workspace) {
       try {
-        const { ide_url } = await codingApi.getIdeUrl(codingStore.workspace.id, codingStore.conversationId)
+        const { ide_url } = await codingApi.getIdeUrl(codingStore.workspace.id, codingStore.conversationId, themeStore.mode)
+        onIdeAvailable?.()
         pendingIdeUrl.value = ide_url
         await setIdeUrl(ide_url)
+        ideUnavailableNotified = false
       } catch (err: any) {
-        ElMessage.warning(err?.message || 'IDE URL 获取失败')
+        if (isIdeUnavailableError(err)) {
+          onIdeUnavailable?.()
+          activeView.value = 'chat'
+          if (!ideUnavailableNotified) {
+            addStreamMsg({
+              type: 'status',
+              content: '当前环境未配置 Web IDE，已保持在对话模式继续完成智能开发。',
+            })
+            ideUnavailableNotified = true
+          }
+        } else {
+          ElMessage.warning(err?.message || 'IDE URL 获取失败')
+        }
       }
     }
     if (codingStore.workspace) {
@@ -297,7 +325,7 @@ export function useCodingPipeline(deps: PipelineDeps) {
       conversation_id: codingStore.conversationId || null,
       selected_model: selectedCodingModelValue.value || null,
       app_id: (route.query.app_id as string) || null,
-      project_id: embeddedAppId.value ? Number(embeddedAppId.value) : null,
+      project_id: resolveRouteProjectId(),
       project_type: sceneCategoryToProjectType[sceneKey] || (route.query.type as string) || null,
     }
   }

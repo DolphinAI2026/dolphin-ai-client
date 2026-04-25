@@ -308,8 +308,10 @@ def _compact_preview_payload(config: dict | None) -> dict:
         "dicts": data.get("dicts", []),
         "models": compact_models,
         "forms": compact_forms,
+        "flows": data.get("flows", []),
         "workflows": data.get("workflows", []),
         "permissions": compact_permissions or data.get("permissions", []),
+        "custom_development": data.get("custom_development", []),
     }
 
 

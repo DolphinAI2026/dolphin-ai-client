@@ -1,10 +1,14 @@
 const fs = require('fs');
 const path = require('path');
+const { resolve } = require('./lib/codeServerResolver');
 
-const productJsonPath = '/Users/mars/.local/lib/code-server-4.112.0/lib/vscode/product.json';
-const workbenchPath =
-  '/Users/mars/.local/lib/code-server-4.112.0/lib/vscode/out/vs/code/browser/workbench/workbench.js';
-const workspacesRoot = '/Users/mars/Vibe Coding/apaas-builder-ai/workspaces';
+const codeServerInfo = resolve();
+const productJsonPath = codeServerInfo.productJsonPath;
+const workbenchPath = codeServerInfo.workbenchPath;
+const workspacesRootCandidates = [
+  path.resolve(__dirname, '..', 'workspaces'),
+  path.join(process.env.HOME || '', '.apaas-builder-ai', 'workspaces'),
+].filter(Boolean);
 
 const brandName = '睿鲸AI Coding';
 const brandSubtitle = '得帆低代码二次开发的 Vibe Coding 工具';
@@ -50,6 +54,10 @@ function humanizeProjectName(projectName, projectType) {
 
 function loadWorkspaceDisplayMap() {
   const displayMap = {};
+  const workspacesRoot = workspacesRootCandidates.find((candidate) => fs.existsSync(candidate));
+  if (!workspacesRoot) {
+    return displayMap;
+  }
   const dirs = fs.readdirSync(workspacesRoot, { withFileTypes: true }).filter((entry) => entry.isDirectory());
 
   for (const dir of dirs) {
@@ -660,6 +668,37 @@ function patchProductJson() {
   const product = JSON.parse(fs.readFileSync(productJsonPath, 'utf8'));
   product.nameShort = brandName;
   product.nameLong = brandName;
+  product.defaultChatAgent = {
+    extensionId: 'apaas-builder.ruijing-ai',
+    chatExtensionId: 'apaas-builder.ruijing-ai',
+    chatExtensionOutputId: '',
+    chatExtensionOutputExtensionStateCommand: '',
+    documentationUrl: '',
+    termsStatementUrl: '',
+    privacyStatementUrl: '',
+    skusDocumentationUrl: '',
+    publicCodeMatchesUrl: '',
+    entitlementSignupLimitedUrl: '',
+    provider: {
+      default: {
+        id: 'ruijing-ai.chat',
+        name: '睿鲸AI',
+      },
+      enterprise: {
+        id: '',
+        name: '',
+      },
+      apple: {
+        id: '',
+        name: '',
+      },
+      google: {
+        id: '',
+        name: '',
+      },
+    },
+    providerUriSetting: '',
+  };
   fs.writeFileSync(productJsonPath, `${JSON.stringify(product, null, 2)}\n`);
 }
 
@@ -672,9 +711,7 @@ function patchWorkbench() {
     ';(() => {\n  if (globalThis.__RUIJING_BRANDING_PATCH__) return;',
   ];
 
-  if (sourceMapIdx < 0) {
-    throw new Error('Could not locate workbench source map marker');
-  }
+  const insertIdx = sourceMapIdx >= 0 ? sourceMapIdx : source.length;
 
   fs.copyFileSync(workbenchPath, `${workbenchPath}.bak-branding-20260327`);
   const patchStart = patchStartMarkers
@@ -682,14 +719,15 @@ function patchWorkbench() {
     .filter((index) => index >= 0)
     .sort((a, b) => a - b)[0] ?? -1;
   const updated =
-    patchStart >= 0 && patchStart < sourceMapIdx
-      ? `${source.slice(0, patchStart)}\n${brandingPatch}\n${source.slice(sourceMapIdx)}`
-      : `${source.slice(0, sourceMapIdx)}\n${brandingPatch}\n${source.slice(sourceMapIdx)}`;
+    patchStart >= 0 && patchStart < insertIdx
+      ? `${source.slice(0, patchStart)}\n${brandingPatch}\n${source.slice(insertIdx)}`
+      : `${source.slice(0, insertIdx)}\n${brandingPatch}\n${source.slice(insertIdx)}`;
   fs.writeFileSync(workbenchPath, updated);
   return patchStart >= 0 ? 'replaced' : 'patched';
 }
 
 function main() {
+  console.log(`Auto-detected code-server ${codeServerInfo.version}: ${workbenchPath}`);
   patchProductJson();
   const state = patchWorkbench();
   console.log(`Branding ${state}.`);

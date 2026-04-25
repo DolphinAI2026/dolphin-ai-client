@@ -8,7 +8,12 @@
     "vscode": "^1.93.0"
   },
   "categories": ["AI", "Chat"],
-  "activationEvents": ["onStartupFinished"],
+  "extensionKind": ["workspace"],
+  "activationEvents": [
+    "onStartupFinished",
+    "onChatParticipant:ruijing-ai.chat",
+    "onCommand:ruijing-ai.selectModel"
+  ],
   "main": "./dist/extension.js",
   "contributes": {
     "chatParticipants": [
