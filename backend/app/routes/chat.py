@@ -741,6 +741,7 @@ async def send_message_with_file(
     file_content = ""
     file_name = ""
     route_to_pipeline = False  # 是否把文件路由到 doc_pipeline
+    doc_score = 0  # 文档标准度（γ 分支也会用到）
 
     if file and file.filename:
         file_name = file.filename
@@ -752,7 +753,7 @@ async def send_message_with_file(
             image_data_url = f"data:{mime};base64,{b64}"
         else:
             file_content = await _parse_uploaded_document(file)
-            # 对文档文件做标准度检测，决定走 pipeline 还是 chat 上下文
+            # 对文档文件做标准度检测；分数 >=60 且没有 spec_id 时走 pipeline
             if file_content and conversation.agent_type in {"builder", "requirements"}:
                 try:
                     from app.doc_standard_detector import detect as _detect_doc
@@ -782,6 +783,62 @@ async def send_message_with_file(
             await db.commit()
 
     llm_cfg = await _get_conversation_llm_config(db, conversation)
+
+    # ── γ: SpecAgent bootstrap branch（spec_id 已绑且有文档内容）──
+    if conversation.spec_id and file_content:
+        spec = await load_spec(db, conversation.spec_id, tenant_id=ctx.tenant_id)
+        if spec is not None:
+            if llm_cfg is None:
+                raise HTTPException(status_code=503, detail="LLM 配置不可用")
+            agent = SpecAgent(
+                llm_base_url=llm_cfg["base_url"],
+                llm_api_key=llm_cfg["api_key"],
+                llm_model=llm_cfg["model"],
+            )
+            spec_has_content = bool(spec.goal or spec.objects)
+            # diff_only：spec 已有内容 → V2 文档增量更新
+            diff_only = spec_has_content
+            # silent：文档标准度高 且 spec 仍为空 → 直接预填
+            silent = (doc_score >= 60) and not spec_has_content
+
+            async def spec_doc_generator():
+                last_text = ""
+                try:
+                    async for ev in agent.bootstrap_from_doc(
+                        spec,
+                        doc_text=file_content,
+                        silent=silent,
+                        diff_only=diff_only,
+                    ):
+                        if ev.kind == "assistant_delta":
+                            last_text += ev.text or ""
+                            yield {"event": "message", "data": json.dumps(
+                                {"type": "message", "data": ev.text}, ensure_ascii=False)}
+                        elif ev.kind == "spec_patch":
+                            await save_spec(db, ev.spec, tenant_id=ctx.tenant_id)
+                            yield {"event": "spec_patch", "data": json.dumps(
+                                {"type": "spec_patch", "data": ev.spec.model_dump(mode="json")},
+                                ensure_ascii=False)}
+                        elif ev.kind == "tool_error":
+                            yield {"event": "tool_error", "data": json.dumps(
+                                {"type": "tool_error", "tool": ev.tool_name, "message": ev.message},
+                                ensure_ascii=False)}
+                        elif ev.kind == "final":
+                            final_text = last_text.strip() or f"[已从文档「{file_name}」预填 SPEC]"
+                            db.add(Message(
+                                conversation_id=conversation.id, role="assistant",
+                                content=final_text,
+                            ))
+                            await db.commit()
+                    yield {"event": "done", "data": json.dumps({"type": "done", "data": "completed"})}
+                except Exception as e:
+                    yield {"event": "error", "data": json.dumps({"type": "error", "data": str(e)})}
+
+            return EventSourceResponse(spec_doc_generator())
+        else:
+            # spec 已被删除 → 清掉 FK，走老路径
+            conversation.spec_id = None
+            await db.commit()
 
     # ── 走 doc_pipeline（文档标准度 >= 60）───────────────────────
     if route_to_pipeline:
