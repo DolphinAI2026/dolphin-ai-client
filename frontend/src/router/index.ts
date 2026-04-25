@@ -58,6 +58,12 @@ const router = createRouter({
       meta: { navExpanded: true }
     },
     {
+      path: '/proposals/:id',
+      name: 'ProposalDetail',
+      component: () => import('@/views/ProposalDetailPage.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
       path: '/settings',
       name: 'Settings',
       redirect: to => {
