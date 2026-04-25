@@ -47,6 +47,10 @@ class ReviewRequest(BaseModel):
     body: Optional[str] = None
 
 
+class ApplyRequest(BaseModel):
+    confirm_irreversible: bool = False
+
+
 # ============ application 子路由 ============
 
 app_router = APIRouter(prefix="/applications", tags=["proposals"])
@@ -306,3 +310,58 @@ async def submit_review(
         "proposal_status": row.status,
         "created_at": review.created_at.isoformat() if review.created_at else None,
     }
+
+
+@prop_router.post("/{proposal_id}/apply")
+async def apply_proposal(
+    proposal_id: str,
+    req: ApplyRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """触发 apply（第二道门 + 不可逆确认 + ops 执行）。
+
+    流程：
+    - 状态须为 'approved'，调用者 role 须为 maintainer+
+    - 算 plan：第二道门 validate + diff + reversibility
+    - 若 plan.issues 非空 → 400
+    - 若 rebase_required → 409
+    - 若 has_irreversible 且未 confirm → 返回 needs_confirmation + plan
+    - 否则 status='applying' → execute_apply → 'applied' / 'apply_failed'
+    """
+    from app.proposal.apply import build_apply_plan, execute_apply
+
+    pv = await _load_proposal_or_404(db, proposal_id)
+    _app, _role = await _require_application_access(
+        db, application_id=pv.application_id, user_id=ctx.user.id, tenant_id=ctx.tenant_id,
+        minimum_role="maintainer",
+    )
+    if pv.status != "approved":
+        raise HTTPException(400, f"提案状态 {pv.status} 不可 apply（需要 approved）")
+
+    plan = await build_apply_plan(
+        db,
+        application_id=pv.application_id,
+        draft_spec_id=pv.draft_spec_id,
+        base_canonical_id=pv.base_canonical_spec_id,
+        tenant_id=ctx.tenant_id,
+    )
+    if plan.issues:
+        raise HTTPException(400, f"apply 前校验失败：{'; '.join(plan.issues)}")
+    if plan.rebase_required:
+        raise HTTPException(409, f"需要 rebase：{plan.rebase_reason}")
+    if plan.has_irreversible and not req.confirm_irreversible:
+        # 把 plan 写回，让前端展示"不可逆"提示
+        row = (await db.execute(select(ChangeProposal).where(ChangeProposal.id == proposal_id))).scalar_one()
+        row.apply_plan = plan.to_dict()
+        await db.commit()
+        return {"status": "needs_confirmation", "apply_plan": plan.to_dict()}
+
+    # 标 applying
+    row = (await db.execute(select(ChangeProposal).where(ChangeProposal.id == proposal_id))).scalar_one()
+    row.status = "applying"
+    row.apply_plan = plan.to_dict()
+    await db.commit()
+
+    result = await execute_apply(db, proposal_id=proposal_id, plan=plan, tenant_id=ctx.tenant_id)
+    return {"status": "applied" if result["success"] else "apply_failed", **result}
