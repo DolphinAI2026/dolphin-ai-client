@@ -13,6 +13,7 @@ BigText = Text().with_variant(LONGTEXT, "mysql")
 
 # Import tenant models
 from app.models.tenant import Tenant, UserTenant, Role, Team, TeamMember
+from app.models.spec import Spec  # noqa: F401  — register ORM mapping
 
 
 class User(Base):
@@ -81,6 +82,7 @@ class Conversation(Base):
     context_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # 对话摘要（上下文压缩用）
     phase: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # gathering | refining
     current_config: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # 服务端权威 config 状态
+    spec_id: Mapped[Optional[str]] = mapped_column(String(40), ForeignKey("specs.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -212,6 +214,7 @@ class Application(Base):
     config_preview: Mapped[Optional[str]] = mapped_column(BigText, nullable=True)  # JSON
     generation_state: Mapped[Optional[str]] = mapped_column(BigText, nullable=True)  # JSON - copilot 中间状态
     current_doc_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 当前文档版本号
+    canonical_spec_id: Mapped[Optional[str]] = mapped_column(String(40), ForeignKey("specs.id"), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="draft", nullable=False)  # draft/generating/updating/completed/failed
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
