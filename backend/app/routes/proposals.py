@@ -97,11 +97,27 @@ async def promote_to_proposal(
     await db.commit()
     await db.refresh(proposal)
 
+    # git 同步（如绑定 git_repo_url）
+    if app.git_repo_url:
+        try:
+            from app.git.sync import push_proposal_branch
+            result = await push_proposal_branch(db, proposal=proposal, application=app)
+            if result:
+                branch, pr_url = result
+                proposal.git_branch = branch
+                proposal.git_pr_url = pr_url
+                await db.commit()
+        except Exception as e:
+            logger.warning(f"git push for proposal {proposal.id} failed: {e}")
+            # 不阻断 promote；git 后续可 retry
+
     return {
         "id": proposal.id,
         "status": proposal.status,
         "validation_report": proposal.validation_report,
         "title": proposal.title,
+        "git_branch": proposal.git_branch,
+        "git_pr_url": proposal.git_pr_url,
     }
 
 
