@@ -2286,95 +2286,6 @@ watch(() => route.path, () => {
   right: -6px;
 }
 
-/* ============ Scene Tabs ============ */
-.scene-tabs {
-  display: flex;
-  flex-wrap: nowrap;
-  overflow-x: auto;
-  gap: 8px;
-  justify-content: flex-start;
-  width: 100%;
-  margin: 12px 0 8px;
-  padding-bottom: 2px;
-  scrollbar-width: none;
-  flex-shrink: 0;
-}
-
-.scene-tabs::-webkit-scrollbar {
-  display: none;
-}
-
-.scene-tab {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 8px 14px;
-  border-radius: 999px;
-  border: 1px solid var(--t-border-subtle);
-  background: transparent;
-  color: var(--t-text-secondary);
-  font-size: 13px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  flex: 0 0 auto;
-}
-
-.scene-tab:hover {
-  border-color: var(--t-brand-glow);
-  color: var(--t-text-primary);
-}
-
-.scene-tab.active {
-  border-color: var(--t-brand);
-  background: var(--t-brand-subtle);
-  color: var(--t-brand-light);
-}
-
-.scene-tab-icon {
-  font-size: 13px;
-}
-
-.scene-suggestion-grid {
-  width: min(100%, 1280px);
-  display: flex;
-  gap: 8px;
-  margin: 0 0 16px;
-  padding-bottom: 2px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none;
-  flex-shrink: 0;
-}
-
-.scene-suggestion-grid::-webkit-scrollbar {
-  display: none;
-}
-
-.scene-suggestion-card {
-  flex: 0 0 auto;
-  min-height: 32px;
-  max-width: 360px;
-  padding: 6px 14px;
-  border-radius: 999px;
-  border: 1px solid var(--t-border-subtle);
-  background: var(--t-bg-input);
-  color: var(--t-text-secondary);
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 1.35;
-  white-space: nowrap;
-  text-align: left;
-  cursor: pointer;
-  transition: transform 0.2s ease, border-color 0.2s ease, color 0.2s ease, background 0.2s ease;
-}
-
-.scene-suggestion-card:hover {
-  transform: translateY(-1px);
-  border-color: var(--t-brand);
-  color: var(--t-brand);
-  background: var(--t-brand-subtle);
-}
-
 /* ============ Quick Composer (Workspace-first 重设) ============ */
 .qc-section {
   width: min(100%, 960px);
@@ -2861,10 +2772,6 @@ watch(() => route.path, () => {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .scene-suggestion-grid {
-    gap: 8px;
-  }
-
   .workspace-cards-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -2874,18 +2781,6 @@ watch(() => route.path, () => {
   .workspace-catalog-grid {
     grid-template-columns: 1fr;
     gap: 10px;
-  }
-
-  .scene-suggestion-grid {
-    gap: 8px;
-    margin: -10px 0 12px;
-  }
-
-  .scene-suggestion-card {
-    min-height: 36px;
-    max-width: 280px;
-    padding: 0 14px;
-    font-size: 11px;
   }
 
   .workspace-showcase-header {
@@ -3626,253 +3521,9 @@ watch(() => route.path, () => {
   filter: brightness(1.15);
 }
 
-/* ============ Landing-style Hero（精简版：减重 + 节奏统一） ============ */
-.coding-landing-hero {
-  position: relative;
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 16px 4px;
-  flex-shrink: 0;
-}
-
-/* 装饰性背景去掉，避免和下方 dashboard 冲突 */
-.coding-landing-bg {
-  display: none;
-}
-
-.brand-mark {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-}
-
-.brand-glyph {
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
-  display: grid;
-  place-items: center;
-  background: linear-gradient(135deg, var(--landing-mode-color), var(--landing-mode-ink));
-  color: #fff;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 16px;
-  font-weight: 700;
-  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.10), 0 0 0 1px rgba(15, 23, 42, 0.08);
-}
-
-.brand-eyebrow {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 10px;
-  line-height: 1;
-  color: var(--landing-mode-ink);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  opacity: 0.78;
-}
-
-.brand-copy {
-  max-width: 640px;
-  text-align: center;
-}
-
-.brand-title {
-  margin: 0;
-  font-size: 22px;
-  line-height: 1.2;
-  font-weight: 650;
-  letter-spacing: -0.005em;
-  color: var(--landing-mode-color);
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  justify-content: center;
-}
-
-.brand-glyph-inline {
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
-  display: inline-grid;
-  place-items: center;
-  background: linear-gradient(135deg, var(--landing-mode-color), var(--landing-mode-ink));
-  color: #fff;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 13px;
-  font-weight: 700;
-  line-height: 1;
-  flex-shrink: 0;
-}
-
-.brand-sub {
-  margin: 8px auto 0;
-  max-width: 520px;
-  color: var(--t-text-secondary);
-  font-size: 13px;
-  line-height: 1.55;
-}
-
-.composer {
-  width: 100%;
-  max-width: 720px;
-}
-
-.composer-shell {
-  position: relative;
-  overflow: hidden;
-  border-radius: 10px;
-  border: 1px solid var(--t-border-subtle);
-  background: var(--t-bg-panel);
-  box-shadow: var(--t-shadow-sm);
-  transition: box-shadow 0.18s ease, border-color 0.18s ease;
-}
-
-.composer-shell:focus-within {
-  border-color: color-mix(in srgb, var(--landing-mode-color) 38%, #d1d8e5);
-  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.06), 0 0 0 3px color-mix(in srgb, var(--landing-mode-color) 12%, transparent);
-}
-
 /* 去掉装饰性圆点底纹 */
 .ai-surface::before {
   display: none;
-}
-
-.composer-mode-bar {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 12px;
-  border-bottom: 1px solid var(--t-border-subtle);
-  background: var(--t-bg-input);
-  color: var(--t-text-secondary);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 10px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.composer-mode-label {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-weight: 600;
-}
-
-.composer-mode-label > span:first-child {
-  display: inline-flex;
-  width: 16px;
-  align-items: center;
-  justify-content: center;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 12px;
-}
-
-.composer-attachment {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px 0;
-}
-
-.composer-attachment-thumb {
-  position: relative;
-  width: 60px;
-  height: 60px;
-  border-radius: 6px;
-  overflow: hidden;
-  border: 0.5px solid #d8dee8;
-}
-
-.composer-attachment-thumb img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.composer-attachment-file {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
-  border-radius: 6px;
-  border: 0.5px solid #d8dee8;
-  background: #f8fafc;
-  font-size: 12px;
-  color: #667085;
-}
-
-.composer-attachment-file-icon {
-  font-size: 14px;
-}
-
-.composer-attachment-file-name {
-  max-width: 220px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.composer-attachment-remove {
-  width: 18px;
-  height: 18px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  border-radius: 50%;
-  background: rgba(15, 23, 42, 0.55);
-  color: #fff;
-  font-size: 12px;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.composer-attachment-thumb .composer-attachment-remove {
-  position: absolute;
-  top: 2px;
-  right: 2px;
-}
-
-.composer-body {
-  position: relative;
-  z-index: 1;
-  padding: 14px 16px 10px;
-}
-
-.composer-input {
-  width: 100%;
-  min-height: 72px;
-  max-height: 240px;
-  border: 0;
-  outline: 0;
-  resize: none;
-  background: transparent;
-  color: #111827;
-  font-size: 14px;
-  line-height: 1.55;
-  font-family: inherit;
-}
-
-.composer-input::placeholder {
-  color: #98a2b3;
-}
-
-.composer-toolbar {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  border-top: 0.5px solid #e4e8f0;
-  background: #f8fafc;
 }
 
 .chip {
@@ -3898,63 +3549,6 @@ watch(() => route.path, () => {
 .chip:disabled {
   opacity: 0.55;
   cursor: not-allowed;
-}
-
-.composer-model-chip {
-  max-width: 280px;
-}
-
-.composer-model-chip > span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 240px;
-}
-
-.composer-model-chip.is-open {
-  border-color: var(--landing-mode-color);
-  color: var(--landing-mode-ink);
-}
-
-.toolbar-spacer {
-  flex: 1;
-}
-
-.landing-submit {
-  height: 28px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 0 10px;
-  border-radius: 6px;
-  border: 0.5px solid var(--landing-mode-color);
-  background: var(--landing-mode-color);
-  color: #fff;
-  cursor: pointer;
-  font-size: 12px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.landing-submit:disabled {
-  opacity: 0.42;
-  cursor: not-allowed;
-}
-
-.submit-kbd {
-  display: inline-flex;
-  min-width: 16px;
-  align-items: center;
-  justify-content: center;
-  padding: 0 5px;
-  border-radius: 3px;
-  border: 0.5px solid rgba(255, 255, 255, 0.18);
-  background: rgba(0, 0, 0, 0.18);
-  color: #fff;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 9px;
-  line-height: 14px;
 }
 
 .composer-submit-spinner {
@@ -4021,7 +3615,6 @@ html[data-theme="dark"] .header-btn,
 html[data-theme="dark"] .coding-model-trigger,
 html[data-theme="dark"] .input-wrapper,
 html[data-theme="dark"] .attach-btn,
-html[data-theme="dark"] .scene-suggestion-card,
 html[data-theme="dark"] .workspace-card,
 html[data-theme="dark"] .workspace-showcase-empty,
 html[data-theme="dark"] .workspace-card-action,
@@ -4084,7 +3677,6 @@ html[data-theme="dark"] .tool-row-result pre {
   color: rgba(203, 213, 225, 0.66) !important;
 }
 
-html[data-theme="dark"] .scene-tab,
 html[data-theme="dark"] .workspace-card-code,
 html[data-theme="dark"] .workspace-card-type,
 html[data-theme="dark"] .file-card-badge,
@@ -4094,7 +3686,6 @@ html[data-theme="dark"] .sidebar-group-count {
   color: rgba(203, 213, 225, 0.72) !important;
 }
 
-html[data-theme="dark"] .scene-tab.active,
 html[data-theme="dark"] .view-toggle-btn.active,
 html[data-theme="dark"] .workspace-card-action-primary,
 html[data-theme="dark"] .coding-model-panel-option.is-active {
@@ -4103,7 +3694,6 @@ html[data-theme="dark"] .coding-model-panel-option.is-active {
   color: #b6c2ff !important;
 }
 
-html[data-theme="dark"] .scene-suggestion-card:hover,
 html[data-theme="dark"] .workspace-card:hover,
 html[data-theme="dark"] .workspace-card-action:hover,
 html[data-theme="dark"] .coding-model-panel-option:hover {
