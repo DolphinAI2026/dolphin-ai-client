@@ -788,7 +788,6 @@ async def _try_build_spec_agent_stream_response(
     )
 
     async def spec_diff_generator():
-        version_bumped = False
         try:
             async with AsyncSessionLocal() as session:
                 async for ev in agent.bootstrap_from_doc(
@@ -800,11 +799,8 @@ async def _try_build_spec_agent_stream_response(
                         yield {"event": "message", "data": json.dumps(
                             {"type": "message", "data": ev.text}, ensure_ascii=False)}
                     elif ev.kind == "spec_patch":
-                        # V2 增量：每次 bootstrap stream 仅 bump 一次 version，
-                        # 后续 spec_patch 事件复用同一版本号
-                        if not version_bumped:
-                            ev.spec.version = (ev.spec.version or 1) + 1
-                            version_bumped = True
+                        # save_spec 自身 CAS 自增 version 并同步回 ev.spec.version，
+                        # 所以 stream 中连续 save 不会冲突，每次推进 +1（旧手动 bump 已删）
                         await save_spec(session, ev.spec, tenant_id=tenant_id)
                         yield {"event": "spec_patch", "data": json.dumps(
                             {"type": "spec_patch", "data": ev.spec.model_dump(mode="json")},

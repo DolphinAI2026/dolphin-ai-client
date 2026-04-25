@@ -174,4 +174,7 @@ async def save_spec(db: AsyncSession, spec: Spec, *, tenant_id: int) -> SpecORM:
         row.updated_at = spec.updated_at
         row.version = row.version + 1  # CAS 自增
     await db.commit()
+    # 保持调用方的 in-memory spec.version 与 DB 同步，连续 save 不会因 stale
+    # version 触发 OptimisticLockError（如 stream 模式连续多个 spec_patch）
+    spec.version = row.version
     return row
