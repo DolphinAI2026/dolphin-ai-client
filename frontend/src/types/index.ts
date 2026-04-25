@@ -114,6 +114,7 @@ export interface ConversationCreate {
   agent_type: 'builder' | 'assistant' | 'developer' | 'coding' | 'requirements'
   selected_llm_config_id?: number | null
   initial_message?: string | null
+  spec_id?: string | null
 }
 
 // Preview types

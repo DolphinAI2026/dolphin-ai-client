@@ -136,6 +136,15 @@
         ></iframe>
       </div>
 
+      <!-- SPEC PhaseBar (Phase β: only when requirements agent is active) -->
+      <div
+        v-if="useSpecMode"
+        v-show="!SHOW_PLATFORM_CONFIG || activeView === 'builder'"
+        class="spec-phasebar-strip"
+      >
+        <PhaseBar />
+      </div>
+
       <!-- 智能搭建内容区（横向布局） -->
       <div
         v-show="!SHOW_PLATFORM_CONFIG || activeView === 'builder'"
@@ -295,7 +304,7 @@
         </div>
       </div>
 
-      <div class="preview-side builder-result-side">
+      <div v-if="!useSpecMode" class="preview-side builder-result-side">
         <div v-show="!isUpdateReviewMode" class="builder-canvas-tabs">
           <button
             v-for="tab in builderCanvasTabs"
@@ -686,7 +695,7 @@
         </div>
       </div>
 
-      <aside v-if="showDeploySidebar" class="deploy-side" :class="{ open: deployOpen || isUpdateReviewMode || isUpdateExecutionMode }">
+      <aside v-if="!useSpecMode && showDeploySidebar" class="deploy-side" :class="{ open: deployOpen || isUpdateReviewMode || isUpdateExecutionMode }">
         <div class="deploy-header">
           <div>
             <div class="deploy-title-row">
@@ -814,6 +823,12 @@
           </div>
         </div>
       </aside>
+
+      <!-- SPEC three-pane (Phase β): replaces preview-side + deploy-aside when in spec mode -->
+      <div v-if="useSpecMode" class="spec-canvas-pane">
+        <SpecCanvas />
+      </div>
+      <SpecInspector v-if="useSpecMode" class="spec-inspector-pane" />
     </div><!-- /builder-content -->
     </div><!-- /content-area -->
 
@@ -1010,6 +1025,10 @@ import { requirementsApi } from '@/api/requirements'
 import { convertConfig } from '@/api/conversation'
 import { buildStructuredDocFromPreviewConfig } from '@/utils/structuredDoc'
 import { computeStructuredDocDiff } from '@/utils/structuredDocDiff'
+import { useSpecStore } from '@/stores/spec'
+import PhaseBar from '@/components/spec/PhaseBar.vue'
+import SpecCanvas from '@/components/spec/SpecCanvas.vue'
+import SpecInspector from '@/components/spec/SpecInspector.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -1020,6 +1039,7 @@ const activeProjectId = computed(() => {
 })
 const store = usePreviewStore()
 const userStore = useUserStore()
+const specStore = useSpecStore()
 const rightQuickInput = ref('')
 const parsedAppCode = ref('')
 const loadedAppCode = ref('')
@@ -2543,6 +2563,8 @@ const generating = ref(false)
 
 // ── Requirements mode ──
 const isRequirementsMode = computed(() => currentAgent.value === 'requirements')
+// ── SPEC three-pane mode (Phase β): all requirements conversations now drive a Spec ──
+const useSpecMode = computed(() => currentAgent.value === 'requirements')
 const docResultForCard = ref<any>(null)       // doc_result JSON for DesignDocCard
 const generatingDoc = ref(false)               // 正在生成设计文档
 const confirmingDoc = ref(false)               // 正在确认转换配置
@@ -5758,6 +5780,13 @@ const sendMessage = async () => {
             continue
           }
 
+          if (currentEvent === 'spec_patch' || normalizedType === 'spec_patch') {
+            if (parsed?.data) {
+              specStore.applyPatch(parsed.data)
+            }
+            continue
+          }
+
           if (normalizedType === 'progress' || currentEvent === 'progress') {
             // pipeline 解析进度：有局部数据时实时更新右侧预览
             if (parsed.module && Array.isArray(parsed.data)) {
@@ -6831,11 +6860,26 @@ const ensureFreshRequirementsConversation = async (initialMessage = '') => {
 
   pendingInitialConversationPromise = (async () => {
     try {
+      // Phase β: create Spec first so the conversation is bound to it from message #1
+      let newSpecId: string | null = null
+      try {
+        newSpecId = await specStore.create(null)
+      } catch (e) {
+        console.warn('Failed to create spec, proceeding without spec_id', e)
+      }
       const data = await conversationApi.create({
         agent_type: 'requirements',
+        ...(newSpecId ? { spec_id: newSpecId } : {}),
         ...(initialMessage.trim() ? { initial_message: initialMessage.trim() } : {}),
         ...(selectedBuilderModelId.value != null ? { selected_llm_config_id: selectedBuilderModelId.value } : {}),
       }) as any
+      if (newSpecId) {
+        try {
+          await specStore.load(newSpecId)
+        } catch (e) {
+          console.warn('Failed to load spec into store', e)
+        }
+      }
       conversationId.value = data.id
       selectedConversationId.value = data.id
       currentAgent.value = 'requirements'
@@ -7502,6 +7546,24 @@ watch(conversationId, (id) => {
   border: 1px solid rgba(128, 145, 255, 0.12);
   background: linear-gradient(180deg, rgba(255,255,255,0.8), rgba(245, 248, 255, 0.86));
   box-shadow: 0 20px 50px rgba(31, 41, 85, 0.06), inset 0 1px 0 rgba(255,255,255,0.75);
+}
+
+/* ── SPEC three-pane (Phase β) ── */
+.spec-phasebar-strip {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--t-border-subtle);
+  background: var(--t-bg-panel);
+}
+.spec-canvas-pane {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+.spec-inspector-pane {
+  flex-shrink: 0;
+}
+@media (max-width: 1280px) {
+  .spec-inspector-pane { display: none; }
 }
 .builder-content.single-pane .preview-side {
   flex: 1;
