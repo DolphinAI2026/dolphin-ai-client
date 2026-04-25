@@ -229,6 +229,21 @@ async def test_add_tag_posts_refs(patched_httpx):
 
 
 @pytest.mark.asyncio
+async def test_read_file_decodes_base64(patched_httpx):
+    encoded = base64.b64encode(b'{"foo": 42}').decode("ascii")
+    patched_httpx.responses = [_FakeResponse(200, {"content": encoded, "encoding": "base64"})]
+    provider = GitHubProvider(access_token="ghp_test")
+    text = await provider.read_file(
+        repo_full_path="acme/widgets", path="spec/canonical.json", ref="feature/x",
+    )
+    assert text == '{"foo": 42}'
+    call = patched_httpx.calls[0]
+    assert call["method"] == "GET"
+    assert call["url"] == "https://api.github.com/repos/acme/widgets/contents/spec/canonical.json"
+    assert call["params"] == {"ref": "feature/x"}
+
+
+@pytest.mark.asyncio
 async def test_add_pr_comment_posts_to_issues_endpoint(patched_httpx):
     patched_httpx.responses = [_FakeResponse(201, {"id": 1})]
     provider = GitHubProvider(access_token="ghp_test")

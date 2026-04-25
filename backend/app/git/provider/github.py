@@ -176,6 +176,16 @@ class GitHubProvider:
             json={"body": body},
         )
 
+    async def read_file(self, *, repo_full_path: str, path: str, ref: str) -> str:
+        owner, repo = _split_repo(repo_full_path)
+        resp = await self._request(
+            "GET",
+            f"/repos/{owner}/{repo}/contents/{path}",
+            params={"ref": ref},
+        )
+        data = resp.json()
+        return base64.b64decode(data["content"]).decode("utf-8")
+
 
 def _split_repo(repo_full_path: str) -> tuple[str, str]:
     parts = repo_full_path.split("/", 1)

@@ -56,3 +56,7 @@ class GitProvider(Protocol):
 
     async def add_pr_comment(self, *, repo_full_path: str, pr_number: int, body: str) -> None:
         ...
+
+    async def read_file(self, *, repo_full_path: str, path: str, ref: str) -> str:
+        """读 repo 中指定 ref（branch/tag/sha）的文件内容（utf-8 文本）"""
+        ...

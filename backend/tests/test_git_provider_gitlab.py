@@ -169,6 +169,23 @@ async def test_commit_files_creates_branch_when_missing(patched_httpx):
 
 
 @pytest.mark.asyncio
+async def test_read_file_decodes_base64(patched_httpx):
+    import base64 as _b64
+    encoded = _b64.b64encode(b'{"hello": "world"}').decode("ascii")
+    patched_httpx.responses = [_FakeResponse(200, {"content": encoded, "encoding": "base64"})]
+    provider = GitLabProvider(host="https://gitlab.com", access_token="t")
+    text = await provider.read_file(
+        repo_full_path="acme/widgets", path="spec/canonical.json", ref="main",
+    )
+    assert text == '{"hello": "world"}'
+    call = patched_httpx.calls[0]
+    assert call["method"] == "GET"
+    assert "/repository/files/" in call["url"]
+    assert "spec%2Fcanonical.json" in call["url"]
+    assert call["params"] == {"ref": "main"}
+
+
+@pytest.mark.asyncio
 async def test_create_pull_request_returns_iid(patched_httpx):
     patched_httpx.responses = [
         _FakeResponse(201, {

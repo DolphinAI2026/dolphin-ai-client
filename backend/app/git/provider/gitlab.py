@@ -150,3 +150,13 @@ class GitLabProvider:
             f"/projects/{quote(repo_full_path, safe='')}/merge_requests/{pr_number}/notes",
             json={"body": body},
         )
+
+    async def read_file(self, *, repo_full_path: str, path: str, ref: str) -> str:
+        import base64
+        resp = await self._request(
+            "GET",
+            f"/projects/{quote(repo_full_path, safe='')}/repository/files/{quote(path, safe='')}",
+            params={"ref": ref},
+        )
+        data = resp.json()
+        return base64.b64decode(data["content"]).decode("utf-8")
