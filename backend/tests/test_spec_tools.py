@@ -18,13 +18,14 @@ def _empty_spec():
 
 
 def test_tool_definitions_count():
-    assert len(TOOL_DEFINITIONS) == 21
+    assert len(TOOL_DEFINITIONS) == 22
     names = {t["function"]["name"] for t in TOOL_DEFINITIONS}
     assert "ask_clarifying_question" in names
     assert "set_goal" in names
     assert "transition_phase" in names
     assert "add_role" in names
     assert "confirm_role" in names
+    assert "confirm_goal" in names
     assert "dismiss_role" in names
 
 

@@ -55,6 +55,67 @@ SPEC_DRAFTING_PROMPT = """你正在整理 SPEC 草案。当前 SPEC：
 """
 
 
+SPEC_BOOTSTRAP_SILENT_PROMPT = """你正在从一份完整的需求文档自动初始化 SPEC。
+文档已经过用户预审，将其完整内容当成"用户确认过的事实"对待，不需要再问澄清问题。
+
+【你的任务】
+1. 阅读文档，识别业务目标、角色、数据对象（含字段）、字典、权限规则。
+2. 用 set_goal / add_role / add_object / add_dict / add_permission 一次性写入 SPEC（confirmed=false）。
+3. 写完后用 confirm_* 把所有项目标记为 confirmed=true（用户已认可文档内容）。
+4. 调 transition_phase("ready") 完成 bootstrap。
+5. 不要 ask_clarifying_question，文档已经覆盖一切。
+
+【纪律】
+- 字段类型用中文（"单行输入"/"数字"/"下拉单选"/"单据号"等）。
+- code 全部 snake_case，object code 加 t_ 前缀。
+- 权限：每个 object 至少一条 role="all" 或具体角色规则。
+- 不要在对话文本里复述文档内容（用 tool 而不是文本）。
+
+文档：
+---
+{doc_text}
+---
+"""
+
+
+SPEC_BOOTSTRAP_INTERACTIVE_PROMPT = """你正在从一份初稿文档预填 SPEC，但文档不够规范，需要用户审核。
+
+【流程】
+1. 用 add_*/set_goal 把文档里识别出的元素写入 SPEC（confirmed=false，让用户在 UI 审）。
+2. 对文档里语义模糊或缺失的字段，用 ask_clarifying_question 标记。
+3. 写完进入 drafting phase: transition_phase("drafting")。
+4. 不要主动 confirm_*。
+
+文档：
+---
+{doc_text}
+---
+"""
+
+
+SPEC_BOOTSTRAP_DIFF_PROMPT = """你正在基于已存在的 SPEC 应用文档增量。
+
+当前 SPEC：
+{spec_summary}
+
+新文档（V2）：
+---
+{doc_text}
+---
+
+【任务】
+1. 找出 V2 相对于现有 SPEC 的差异（新增/修改/删除）。
+2. 用 add_*/update_*/dismiss_* 应用差异，confirmed=false 让用户审。
+3. 进入 drafting phase: transition_phase("drafting")。
+4. 不要 confirm_*；不要复述已有 SPEC 的不变项。
+
+【字段语义】
+- code 不变 → 视作"修改"，用 update_*
+- code 不存在了 → 视作"删除"，用 dismiss_*
+- 新 code 出现 → 视作"新增"，用 add_*
+"""
+
+
 def build_prompt(spec: Spec) -> str:
     summary = _summarize_spec(spec)
     if spec.phase == Phase.GATHERING:
@@ -255,4 +316,142 @@ class SpecAgent:
                     })
 
             # Hit max_turns
+            yield SpecAgentEvent(kind="final", spec=spec, text=full_content)
+
+    async def bootstrap_from_doc(
+        self,
+        spec: Spec,
+        doc_text: str,
+        *,
+        silent: bool = False,
+        diff_only: bool = False,
+    ) -> AsyncIterator[SpecAgentEvent]:
+        """Drive the LLM to populate (or diff-update) a SPEC from a document.
+
+        Modes:
+        - silent=True: doc is authoritative; LLM auto-confirms + jumps to Phase.READY
+        - silent=False, diff_only=False: doc is a draft; LLM populates with confirmed=false, transitions to drafting
+        - diff_only=True: doc is a V2 increment; LLM applies diff against existing spec, transitions to drafting
+        """
+        if diff_only:
+            system_prompt = SPEC_BOOTSTRAP_DIFF_PROMPT.format(
+                spec_summary=_summarize_spec(spec),
+                doc_text=doc_text,
+            )
+        elif silent:
+            system_prompt = SPEC_BOOTSTRAP_SILENT_PROMPT.format(doc_text=doc_text)
+        else:
+            system_prompt = SPEC_BOOTSTRAP_INTERACTIVE_PROMPT.format(doc_text=doc_text)
+
+        user_msg = "请按上述指令处理文档。" if not diff_only else "请应用 V2 文档的差异。"
+        messages: list[dict] = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_msg},
+        ]
+
+        full_content = ""
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=10, read=300, write=10, pool=10)
+        ) as client:
+            for turn in range(self.max_turns):
+                payload = {
+                    "model": self.model,
+                    "messages": messages,
+                    "tools": TOOL_DEFINITIONS,
+                    "max_tokens": 4096,
+                    "temperature": 0.2,
+                    "stream": True,
+                }
+                full_content = ""
+                tool_calls_map: dict = {}
+
+                stream = _open_stream(client, self.base_url, self.api_key, payload)
+                async for line in stream:
+                    if not line.startswith("data: "):
+                        continue
+                    data_str = line[6:]
+                    if data_str.strip() == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data_str)
+                    except json.JSONDecodeError:
+                        continue
+                    choices = chunk.get("choices") or []
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta", {})
+                    if delta.get("content"):
+                        full_content += delta["content"]
+                        yield SpecAgentEvent(
+                            kind="assistant_delta", spec=spec, text=delta["content"]
+                        )
+                    if delta.get("tool_calls"):
+                        for tc in delta["tool_calls"]:
+                            idx = tc.get("index", 0)
+                            entry = tool_calls_map.setdefault(
+                                idx, {"id": "", "name": "", "arguments": ""}
+                            )
+                            if tc.get("id"):
+                                entry["id"] = tc["id"]
+                            func = tc.get("function", {})
+                            if func.get("name"):
+                                entry["name"] = func["name"]
+                            if func.get("arguments"):
+                                entry["arguments"] += func["arguments"]
+
+                assistant_msg: dict = {"role": "assistant", "content": full_content or None}
+                assembled: list[dict] = []
+                for idx in sorted(tool_calls_map.keys()):
+                    entry = tool_calls_map[idx]
+                    if not entry["name"]:
+                        continue
+                    raw = entry["arguments"] or "{}"
+                    try:
+                        json.loads(raw)
+                        valid_args = raw
+                    except json.JSONDecodeError:
+                        valid_args = "{}"
+                    assembled.append({
+                        "id": entry["id"] or f"call_{turn}_{idx}",
+                        "type": "function",
+                        "function": {"name": entry["name"], "arguments": valid_args},
+                    })
+                if assembled:
+                    assistant_msg["tool_calls"] = assembled
+                messages.append(assistant_msg)
+
+                if not assembled:
+                    yield SpecAgentEvent(kind="final", spec=spec, text=full_content)
+                    return
+
+                # bootstrap_from_doc: NEVER enforce_first_turn (doc IS the answer)
+                for tc in assembled:
+                    name = tc["function"]["name"]
+                    try:
+                        args = json.loads(tc["function"]["arguments"] or "{}")
+                    except json.JSONDecodeError:
+                        args = {}
+                    yield SpecAgentEvent(
+                        kind="tool_call", spec=spec, tool_name=name, tool_args=args
+                    )
+                    try:
+                        spec = dispatch_tool(spec, name, args, enforce_first_turn=False)
+                        result_str = "ok"
+                        yield SpecAgentEvent(
+                            kind="spec_patch", spec=spec, tool_name=name
+                        )
+                    except ToolError as e:
+                        result_str = f"Error: {e}"
+                        yield SpecAgentEvent(
+                            kind="tool_error",
+                            spec=spec,
+                            tool_name=name,
+                            message=str(e),
+                        )
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": result_str,
+                    })
+
             yield SpecAgentEvent(kind="final", spec=spec, text=full_content)

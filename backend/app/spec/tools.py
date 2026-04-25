@@ -182,7 +182,10 @@ TOOL_DEFINITIONS: list[dict] = [
               },
               "required": ["object_code", "rules"],
           }),
-    # ── Confirm (5) ──
+    # ── Confirm (6) ──
+    _tool("confirm_goal", "Mark the application goal as user-confirmed.", {
+        "type": "object", "properties": {}, "required": [],
+    }),
     _tool("confirm_role", "Mark a role as user-confirmed.", {
         "type": "object", "properties": {"code": _str_param("Role code")}, "required": ["code"],
     }),
@@ -366,6 +369,13 @@ def _flip_confirmed(item, value: bool):
     item.confirmed = value
 
 
+def _confirm_goal(spec: Spec, args: dict) -> Spec:
+    if spec.goal is None:
+        raise ToolError("Goal not set; cannot confirm")
+    _flip_confirmed(spec.goal, True)
+    return _refresh(spec)
+
+
 def _confirm_role(spec: Spec, args: dict) -> Spec:
     role = next((r for r in spec.roles if r.code == args["code"]), None)
     if role is None:
@@ -449,6 +459,7 @@ _TOOL_DISPATCH = {
     "update_field": _update_field,
     "add_dict": _add_dict,
     "add_permission": _add_permission,
+    "confirm_goal": _confirm_goal,
     "confirm_role": _confirm_role,
     "confirm_object": _confirm_object,
     "confirm_field": _confirm_field,
