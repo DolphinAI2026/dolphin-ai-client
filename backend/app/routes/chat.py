@@ -572,6 +572,36 @@ async def send_message(
         getattr(data, 'current_config', None)
     )
 
+    # ── Phase B: fork on first edit ──
+    # 当 ChatPage 显式传 application_id 且 conversation 还没绑 spec 时，
+    # 若该 application 有 canonical_spec_id，自动 fork 成 personal draft 并指向 conversation.spec_id。
+    # 后续 SpecAgent 改的是 draft，不污染 canonical。
+    # 老调用方未传 application_id 时跳过，保持既有行为（empty_spec 路径不变）。
+    if not conversation.spec_id and getattr(data, "application_id", None):
+        from app.models import Application
+        from app.spec.persistence import fork_canonical_to_draft
+        app_row = (
+            await db.execute(
+                select(Application).where(
+                    Application.id == data.application_id,
+                    Application.tenant_id == ctx.tenant_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if app_row and app_row.canonical_spec_id:
+            canonical = await load_spec(
+                db, app_row.canonical_spec_id, tenant_id=ctx.tenant_id
+            )
+            if canonical:
+                draft = await fork_canonical_to_draft(
+                    db,
+                    canonical=canonical,
+                    user_id=ctx.user.id,
+                    tenant_id=ctx.tenant_id,
+                )
+                conversation.spec_id = draft.id
+                await db.commit()
+
     # ── SpecAgent branch: if conversation has a linked spec, drive the new state machine ──
     if conversation.spec_id:
         spec = await load_spec(db, conversation.spec_id, tenant_id=ctx.tenant_id)

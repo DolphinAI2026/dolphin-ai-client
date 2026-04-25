@@ -150,6 +150,8 @@ class ChatRequest(BaseModel):
     conversation_id: int
     message: str
     current_config: Optional[dict] = None
+    # Phase B: ChatPage 显式传 application_id 时，触发首次编辑前的 fork canonical → personal draft
+    application_id: Optional[int] = None
 
 
 class ChatStreamEvent(BaseModel):
