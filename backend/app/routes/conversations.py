@@ -53,6 +53,7 @@ async def create_conversation(
         title={"builder": "新对话", "requirements": "需求分析", "coding": "智能开发"}.get(data.agent_type, "新对话"),
         agent_type=data.agent_type,
         selected_llm_config_id=selected_llm_config_id,
+        spec_id=data.spec_id,
         status="active"
     )
     db.add(conversation)

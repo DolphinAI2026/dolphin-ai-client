@@ -58,6 +58,7 @@ class ConversationCreate(BaseModel):
     agent_type: str = Field(..., pattern="^(builder|assistant|developer|requirements|coding)$")
     selected_llm_config_id: Optional[int] = None
     initial_message: Optional[str] = None
+    spec_id: Optional[str] = None
 
 
 class ConversationResponse(BaseModel):
