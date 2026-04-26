@@ -1,5 +1,5 @@
 <template>
-  <BuilderFrame :breadcrumbs="[{ label: '智能开发' }]">
+  <BuilderFrame :breadcrumbs="[{ label: '智能开发' }]" :class="{ 'is-embedded': embedMode }">
     <!-- Env Picker Dialog -->
     <el-dialog v-model="showEnvPicker" title="选择调试平台环境" width="500px" :append-to-body="true">
       <div v-if="platformEnvs.length === 0" style="text-align:center;color:#999;padding:20px;">
@@ -616,6 +616,10 @@ import { useCodingPipeline } from './coding/useCodingPipeline'
 const route = useRoute()
 const router = useRouter()
 const codingStore = useCodingStore()
+
+// Embed mode (?embed=true) used by WorkspaceShell CodeView iframe
+// (Phase F Task 9): hides nav rail + topbar via .is-embedded CSS hack.
+const embedMode = computed(() => route.query.embed === 'true')
 const userStore = useUserStore()
 const themeStore = useThemeStore()
 
@@ -1386,6 +1390,13 @@ watch(() => route.path, () => {
 /* ============================================================
    CodingPage — Project Launcher + Embedded IDE
    ============================================================ */
+
+/* Embed mode (?embed=true): hide topbar so this view can be cleanly
+ * iframed by WorkspaceShell (Phase F Task 9). NavRail is hidden via
+ * the existing ?embed_nav=0 mechanism passed by the iframe URL. */
+.is-embedded :deep(.builder-topbar) {
+  display: none !important;
+}
 
 .coding-page {
   height: 100vh;
