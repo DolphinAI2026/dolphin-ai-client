@@ -1161,3 +1161,53 @@ from . import docs as _docs  # noqa: E402
 router.include_router(_docs.router)
 from . import preflight as _preflight  # noqa: E402
 router.include_router(_preflight.router)
+
+
+# ---------------------------------------------------------------------------
+# Phase F：Application 默认模式 (simple|pro|None) 端点
+# ---------------------------------------------------------------------------
+class UpdateAppDefaultModeRequest(BaseModel):
+    default_mode: Optional[str] = None  # None or 'simple' or 'pro'
+
+
+@router.get("/{application_id}/default-mode")
+async def get_application_default_mode(
+    application_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    app = (await db.execute(
+        select(Application).where(
+            Application.id == application_id, Application.tenant_id == ctx.tenant_id
+        )
+    )).scalar_one_or_none()
+    if not app:
+        raise HTTPException(404, "应用不存在")
+    return {"application_id": app.id, "default_mode": app.default_mode}
+
+
+@router.patch("/{application_id}/default-mode")
+async def patch_application_default_mode(
+    application_id: int,
+    req: UpdateAppDefaultModeRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    app = (await db.execute(
+        select(Application).where(
+            Application.id == application_id, Application.tenant_id == ctx.tenant_id
+        )
+    )).scalar_one_or_none()
+    if not app:
+        raise HTTPException(404, "应用不存在")
+    if not app.project_id:
+        raise HTTPException(400, "应用未关联 project，无法设置默认模式")
+    await require_project_access(
+        db, project_id=app.project_id, user_id=ctx.user.id, tenant_id=ctx.tenant_id,
+        minimum_role="maintainer",
+    )
+    if req.default_mode not in (None, "simple", "pro"):
+        raise HTTPException(400, "default_mode 仅支持 None / 'simple' / 'pro'")
+    app.default_mode = req.default_mode
+    await db.commit()
+    return {"application_id": app.id, "default_mode": app.default_mode}
