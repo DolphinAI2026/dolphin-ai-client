@@ -1,8 +1,11 @@
-"""Git 连接管理（Phase C v1：仅 PAT 直连，OAuth 完整流留 v2）"""
+"""Git 连接管理（Phase C v1：PAT 直连；Phase D Task 7：OAuth 完整流）"""
 from __future__ import annotations
 from typing import Annotated
 import logging
+import os
+from urllib.parse import urlencode
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -288,3 +291,176 @@ async def sync_workspace_to_repo_endpoint(
         )
     except RuntimeError as e:
         raise HTTPException(400, str(e))
+
+
+# ─────────────────────────────────────────────────────────────────
+# Phase D Task 7 — OAuth 完整流（GitHub + GitLab）
+# ─────────────────────────────────────────────────────────────────
+
+
+GITHUB_AUTHORIZE_URL = "https://github.com/login/oauth/authorize"
+GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token"
+GITHUB_DEFAULT_SCOPE = "repo,read:org"
+GITLAB_DEFAULT_SCOPE = "api read_repository write_repository"
+
+
+def _builder_base_url() -> str:
+    """前端可达的 Builder URL（OAuth callback redirect_uri 拼装用）。"""
+    return os.environ.get("BUILDER_PUBLIC_URL", "http://localhost:5173").rstrip("/")
+
+
+def _redirect_uri(provider: str) -> str:
+    return f"{_builder_base_url()}/git/callback/{provider}"
+
+
+@router.get("/{project_id}/git-oauth/start")
+async def git_oauth_start(
+    project_id: int,
+    provider: str,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    host: str | None = None,
+):
+    """返回 OAuth authorize URL，让前端跳转。
+
+    state v1 简化为 project_id（生产应加 nonce 防 CSRF — backlog）。
+    """
+    await require_project_access(
+        db, project_id=project_id, user_id=ctx.user.id, tenant_id=ctx.tenant_id,
+        minimum_role="maintainer",
+    )
+
+    if provider not in ("github", "gitlab"):
+        raise HTTPException(400, "provider 仅支持 github / gitlab")
+
+    state = str(project_id)
+
+    if provider == "github":
+        client_id = os.environ.get("GITHUB_CLIENT_ID")
+        if not client_id:
+            raise HTTPException(500, "GITHUB_CLIENT_ID 未配置")
+        params = {
+            "client_id": client_id,
+            "redirect_uri": _redirect_uri("github"),
+            "scope": os.environ.get("GITHUB_OAUTH_SCOPE", GITHUB_DEFAULT_SCOPE),
+            "state": state,
+        }
+        return {"authorize_url": f"{GITHUB_AUTHORIZE_URL}?{urlencode(params)}"}
+
+    # gitlab
+    client_id = os.environ.get("GITLAB_CLIENT_ID")
+    if not client_id:
+        raise HTTPException(500, "GITLAB_CLIENT_ID 未配置")
+    gitlab_host = (host or os.environ.get("GITLAB_HOST") or "https://gitlab.com").rstrip("/")
+    params = {
+        "client_id": client_id,
+        "redirect_uri": _redirect_uri("gitlab"),
+        "response_type": "code",
+        "scope": os.environ.get("GITLAB_OAUTH_SCOPE", GITLAB_DEFAULT_SCOPE),
+        "state": state,
+    }
+    return {"authorize_url": f"{gitlab_host}/oauth/authorize?{urlencode(params)}"}
+
+
+class OAuthCallbackRequest(BaseModel):
+    provider: str           # 'github' | 'gitlab'
+    code: str
+    state: str
+    group_id_or_org: str
+    host: str | None = None  # gitlab self-hosted 可指定
+
+
+@router.post("/{project_id}/git-oauth/callback")
+async def git_oauth_callback(
+    project_id: int,
+    req: OAuthCallbackRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """前端把 ?code=... 转交回来；用 code 换 access_token + upsert GitConnection。"""
+    await require_project_access(
+        db, project_id=project_id, user_id=ctx.user.id, tenant_id=ctx.tenant_id,
+        minimum_role="maintainer",
+    )
+
+    if req.provider not in ("github", "gitlab"):
+        raise HTTPException(400, "provider 仅支持 github / gitlab")
+
+    # state v1 校验：必须等于 project_id（生产应做 nonce + signed token）
+    if req.state != str(project_id):
+        raise HTTPException(400, "state 不匹配（CSRF 防护）")
+
+    if req.provider == "github":
+        client_id = os.environ.get("GITHUB_CLIENT_ID")
+        client_secret = os.environ.get("GITHUB_CLIENT_SECRET")
+        if not client_id or not client_secret:
+            raise HTTPException(500, "GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET 未配置")
+        token_url = GITHUB_TOKEN_URL
+        token_payload = {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "code": req.code,
+            "redirect_uri": _redirect_uri("github"),
+        }
+        host = "https://api.github.com"
+    else:
+        client_id = os.environ.get("GITLAB_CLIENT_ID")
+        client_secret = os.environ.get("GITLAB_CLIENT_SECRET")
+        if not client_id or not client_secret:
+            raise HTTPException(500, "GITLAB_CLIENT_ID / GITLAB_CLIENT_SECRET 未配置")
+        host = (req.host or os.environ.get("GITLAB_HOST") or "https://gitlab.com").rstrip("/")
+        token_url = f"{host}/oauth/token"
+        token_payload = {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "code": req.code,
+            "grant_type": "authorization_code",
+            "redirect_uri": _redirect_uri("gitlab"),
+        }
+
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        resp = await client.post(
+            token_url,
+            data=token_payload,
+            headers={"Accept": "application/json"},
+        )
+    if resp.status_code >= 400:
+        logger.warning("OAuth token exchange failed: %s %s", resp.status_code, resp.text[:200])
+        raise HTTPException(502, f"OAuth token 换取失败：{resp.status_code}")
+    try:
+        data = resp.json()
+    except Exception:
+        raise HTTPException(502, "OAuth token 响应非 JSON")
+
+    access_token = data.get("access_token")
+    if not access_token:
+        err = data.get("error_description") or data.get("error") or "未知错误"
+        raise HTTPException(502, f"OAuth 未返回 access_token：{err}")
+
+    # upsert GitConnection
+    existing = (await db.execute(
+        select(GitConnection).where(GitConnection.project_id == project_id)
+    )).scalar_one_or_none()
+    if existing:
+        existing.provider = req.provider
+        existing.host = host
+        existing.access_token_enc = encrypt_token(access_token)
+        existing.group_id_or_org = req.group_id_or_org
+        existing.status = "connected"
+        await db.commit()
+        await db.refresh(existing)
+        conn = existing
+    else:
+        conn = GitConnection(
+            project_id=project_id,
+            provider=req.provider,
+            host=host,
+            access_token_enc=encrypt_token(access_token),
+            group_id_or_org=req.group_id_or_org,
+            status="connected",
+        )
+        db.add(conn)
+        await db.commit()
+        await db.refresh(conn)
+
+    return _to_dict(conn)

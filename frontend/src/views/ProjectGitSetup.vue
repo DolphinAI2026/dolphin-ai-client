@@ -46,37 +46,58 @@
           </template>
 
           <template v-else>
-            <p class="muted small">尚未连接 git。Phase C v1 仅支持 PAT 直连模式（OAuth 留 v2）。</p>
-            <form class="form-grid" @submit.prevent="onConnect">
-              <div class="form-row">
-                <label>Provider</label>
-                <select v-model="form.provider" required>
-                  <option value="gitlab">GitLab</option>
-                  <option value="github">GitHub</option>
-                </select>
-              </div>
-              <div class="form-row">
-                <label>Host</label>
-                <input v-model="form.host" required
-                       :placeholder="form.provider === 'gitlab' ? 'https://gitlab.com' : 'https://api.github.com'" />
-              </div>
-              <div class="form-row">
-                <label>{{ form.provider === 'gitlab' ? 'Group ID 或 path' : 'Organization 名称' }}</label>
-                <input v-model="form.group_id_or_org" required
-                       :placeholder="form.provider === 'gitlab' ? '例：my-group 或 1234' : '例：my-org'" />
-              </div>
-              <div class="form-row">
-                <label>Personal Access Token</label>
-                <input v-model="form.access_token" type="password" required
-                       placeholder="只在创建/转发时使用，不会展示" />
-              </div>
-              <div class="form-actions">
-                <button type="submit" class="btn btn-primary" :disabled="connecting">
-                  {{ connecting ? '连接中…' : '连接 git' }}
+            <p class="muted small">尚未连接 git。推荐使用 OAuth 授权；自建 GitLab 或不便走 OAuth 的场景可用 PAT。</p>
+
+            <div class="oauth-section">
+              <h4 class="section-title">OAuth 连接（推荐）</h4>
+              <div class="oauth-buttons">
+                <button class="btn btn-primary" type="button" :disabled="oauthLoading" @click="oauthConnect('github')">
+                  用 GitHub OAuth 连接
+                </button>
+                <button class="btn btn-primary" type="button" :disabled="oauthLoading" @click="oauthConnect('gitlab')">
+                  用 GitLab OAuth 连接
                 </button>
               </div>
-              <p v-if="connectError" class="error-text">{{ connectError }}</p>
-            </form>
+              <p class="muted small hint">
+                需后端配置 <code>GITHUB_CLIENT_ID</code> / <code>GITHUB_CLIENT_SECRET</code>
+                或 <code>GITLAB_CLIENT_ID</code> / <code>GITLAB_CLIENT_SECRET</code> 环境变量
+              </p>
+              <p v-if="oauthError" class="error-text">{{ oauthError }}</p>
+            </div>
+
+            <details class="pat-section">
+              <summary>或者用 Personal Access Token (PAT) 手动连接</summary>
+              <form class="form-grid" @submit.prevent="onConnect">
+                <div class="form-row">
+                  <label>Provider</label>
+                  <select v-model="form.provider" required>
+                    <option value="gitlab">GitLab</option>
+                    <option value="github">GitHub</option>
+                  </select>
+                </div>
+                <div class="form-row">
+                  <label>Host</label>
+                  <input v-model="form.host" required
+                         :placeholder="form.provider === 'gitlab' ? 'https://gitlab.com' : 'https://api.github.com'" />
+                </div>
+                <div class="form-row">
+                  <label>{{ form.provider === 'gitlab' ? 'Group ID 或 path' : 'Organization 名称' }}</label>
+                  <input v-model="form.group_id_or_org" required
+                         :placeholder="form.provider === 'gitlab' ? '例：my-group 或 1234' : '例：my-org'" />
+                </div>
+                <div class="form-row">
+                  <label>Personal Access Token</label>
+                  <input v-model="form.access_token" type="password" required
+                         placeholder="只在创建/转发时使用，不会展示" />
+                </div>
+                <div class="form-actions">
+                  <button type="submit" class="btn btn-primary" :disabled="connecting">
+                    {{ connecting ? '连接中…' : '连接 git' }}
+                  </button>
+                </div>
+                <p v-if="connectError" class="error-text">{{ connectError }}</p>
+              </form>
+            </details>
           </template>
         </section>
 
@@ -134,6 +155,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import request from '@/utils/request'
 import { projectsApi, type Project } from '@/api/projects'
 import { applicationApi } from '@/api/application'
 import { gitConnectionApi, type GitConnection, type ConnectGitPATRequest } from '@/api/gitConnection'
@@ -155,6 +177,9 @@ const apps = ref<MergedApplication[]>([])
 const loadingApps = ref(true)
 const initing = reactive<Record<string, boolean>>({})
 const initError = ref('')
+
+const oauthLoading = ref(false)
+const oauthError = ref('')
 
 const form = reactive<ConnectGitPATRequest>({
   provider: 'gitlab',
@@ -242,6 +267,50 @@ async function onInitRepo(app: MergedApplication) {
     initError.value = e?.response?.data?.detail || e?.message || '创建 repo 失败'
   } finally {
     initing[app.id] = false
+  }
+}
+
+async function oauthConnect(provider: 'github' | 'gitlab') {
+  oauthError.value = ''
+  const promptLabel = provider === 'github'
+    ? '输入 GitHub Org/Username（OAuth 完成后将作为 group_id_or_org 写入连接）'
+    : '输入 GitLab Group path（OAuth 完成后将作为 group_id_or_org 写入连接）'
+  const groupOrOrg = prompt(promptLabel)
+  if (!groupOrOrg) return
+
+  let host: string | null = null
+  if (provider === 'gitlab') {
+    host = prompt('GitLab Host（自建实例填完整 URL；公网 GitLab 留空）', '') || null
+  }
+
+  sessionStorage.setItem(`git-oauth-${provider}-org`, groupOrOrg)
+  sessionStorage.setItem('git-oauth-project', String(projectId))
+  if (host) {
+    sessionStorage.setItem(`git-oauth-${provider}-host`, host)
+  } else {
+    sessionStorage.removeItem(`git-oauth-${provider}-host`)
+  }
+
+  oauthLoading.value = true
+  try {
+    const params: Record<string, string> = { provider }
+    if (host) params.host = host
+    const qs = new URLSearchParams(params).toString()
+    const res = await request.get<any, { authorize_url: string }>(
+      `/projects/${projectId}/git-oauth/start?${qs}`
+    )
+    if (!res?.authorize_url) {
+      oauthError.value = 'OAuth start 未返回 authorize_url'
+      oauthLoading.value = false
+      return
+    }
+    window.location.href = res.authorize_url
+    // 不重置 oauthLoading：本页面即将卸载
+  } catch (e: any) {
+    oauthError.value = e?.response?.data?.detail
+      || e?.message
+      || `OAuth start 失败：可能后端未配置 ${provider.toUpperCase()}_CLIENT_ID`
+    oauthLoading.value = false
   }
 }
 
@@ -394,4 +463,49 @@ onMounted(async () => {
 .small { font-size: 12px; }
 .error-text { color: var(--t-danger); font-size: 12px; margin-top: 8px; }
 .hint { color: var(--t-warning); font-size: 12px; margin-top: 12px; }
+
+.oauth-section {
+  margin: 12px 0 16px;
+  padding: 14px;
+  background: var(--bg-inset, var(--t-bg-subtle));
+  border-radius: 8px;
+}
+.section-title {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg, var(--t-text-primary));
+}
+.oauth-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+.oauth-section .hint {
+  margin-top: 8px;
+  color: var(--fg-muted, var(--t-text-muted));
+}
+.oauth-section .hint code {
+  font-family: var(--b-mono, ui-monospace, SFMono-Regular, monospace);
+  background: rgba(0, 0, 0, 0.06);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+
+.pat-section {
+  margin-top: 8px;
+  border: 1px solid var(--line, var(--t-border-subtle));
+  border-radius: 8px;
+  padding: 0 12px;
+}
+.pat-section > summary {
+  cursor: pointer;
+  padding: 10px 0;
+  font-size: 13px;
+  color: var(--fg-muted, var(--t-text-muted));
+  user-select: none;
+}
+.pat-section[open] > summary {
+  border-bottom: 1px solid var(--line, var(--t-border-subtle));
+  margin-bottom: 8px;
+  color: var(--fg, var(--t-text-primary));
+}
+.pat-section .form-grid { padding-bottom: 12px; }
 </style>

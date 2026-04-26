@@ -53,6 +53,12 @@ const router = createRouter({
       meta: { requiresAuth: true }
     },
     {
+      path: '/git/callback/:provider',
+      name: 'GitOAuthCallback',
+      component: () => import('@/views/GitOAuthCallback.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
       path: '/ide',
       name: 'Ide',
       redirect: '/coding'
