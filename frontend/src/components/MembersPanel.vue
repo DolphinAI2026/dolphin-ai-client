@@ -51,6 +51,17 @@
       </tbody>
     </table>
 
+    <BaseDialog
+      :visible="removeDialogVisible"
+      title="移除成员"
+      :message="pendingRemove ? `确认移除 ${pendingRemove.username}？` : ''"
+      dangerous
+      confirm-text="移除"
+      @confirm="confirmRemove"
+      @cancel="cancelRemove"
+    />
+    <BaseToast :visible="toastVisible" :message="toastMessage" :type="toastType" />
+
     <div v-if="showInvite" class="modal-backdrop" @click.self="showInvite = false">
       <div class="modal">
         <h4>邀请成员</h4>
@@ -88,6 +99,8 @@ import {
   normalizeRole,
   roleAtLeast,
 } from '@/types/collaboration'
+import BaseDialog from '@/components/BaseDialog.vue'
+import BaseToast from '@/components/BaseToast.vue'
 
 type AnyMember = (ApplicationMember | ProjectMemberView) & { source?: string }
 
@@ -107,6 +120,22 @@ const showInvite = ref(false)
 const inviteUsername = ref('')
 const inviteRole = ref<ProjectRole>('contributor')
 const inviteError = ref('')
+
+// Phase F Task 12a: BaseDialog/BaseToast 替原生 confirm/alert
+const removeDialogVisible = ref(false)
+const pendingRemove = ref<AnyMember | null>(null)
+const toastVisible = ref(false)
+const toastMessage = ref('')
+const toastType = ref<'info' | 'success' | 'warn' | 'error'>('error')
+
+let toastTimer: ReturnType<typeof setTimeout> | null = null
+function showToast(message: string, type: 'info' | 'success' | 'warn' | 'error' = 'error') {
+  toastMessage.value = message
+  toastType.value = type
+  toastVisible.value = true
+  if (toastTimer) clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => { toastVisible.value = false }, 3000)
+}
 
 const canManage = computed(() => roleAtLeast(props.currentRole, 'maintainer'))
 
@@ -151,18 +180,32 @@ async function onRoleChange(m: AnyMember, newRole: string) {
     await props.updateRole(m.user_id, role)
     await refresh()
   } catch (e: any) {
-    alert(e?.response?.data?.detail || e?.message || '更新角色失败')
+    showToast(e?.response?.data?.detail || e?.message || '更新角色失败', 'error')
     await refresh()
   }
 }
 
-async function onRemove(m: AnyMember) {
-  if (!confirm(`确认移除 ${m.username}？`)) return
+function onRemove(m: AnyMember) {
+  pendingRemove.value = m
+  removeDialogVisible.value = true
+}
+
+function cancelRemove() {
+  removeDialogVisible.value = false
+  pendingRemove.value = null
+}
+
+async function confirmRemove() {
+  const m = pendingRemove.value
+  removeDialogVisible.value = false
+  if (!m) return
   try {
     await props.remove(m.user_id)
     await refresh()
   } catch (e: any) {
-    alert(e?.response?.data?.detail || e?.message || '移除失败')
+    showToast(e?.response?.data?.detail || e?.message || '移除失败', 'error')
+  } finally {
+    pendingRemove.value = null
   }
 }
 
