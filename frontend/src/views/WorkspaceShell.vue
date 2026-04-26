@@ -13,16 +13,23 @@
     <div v-else-if="store.error" class="error">{{ store.error }}</div>
     <main v-else-if="store.state" class="ws-main">
       <section class="pane chat-pane">
-        <!-- ChatPanel — Task 6 实现，先占位 -->
-        <p class="muted">ChatPanel 占位（Task 6）</p>
+        <ChatPanel />
       </section>
       <section class="pane preview-pane">
         <!-- PreviewPanel — Task 7-9 实现 -->
         <p class="muted">PreviewPanel 占位（Tasks 7-9）</p>
       </section>
       <section class="pane activity-pane">
-        <!-- ActivityPanel — Task 6 后半实现 -->
-        <p class="muted">ActivityPanel 占位（Task 6）</p>
+        <ActivityPanel
+          :application-id="store.state.application.id"
+          :draft="store.state.current_draft"
+          :canonical="store.state.canonical"
+          :proposals="store.state.open_proposals"
+          :applied-history="store.state.applied_history"
+          :git="store.state.git"
+          :mode="store.effectiveMode"
+          :role="store.state.user_role_on_app"
+        />
       </section>
     </main>
   </div>
@@ -36,6 +43,8 @@ import { useUserPreferenceStore } from '@/stores/userPreference'
 import { preferencesApi } from '@/api/preferences'
 import { roleAtLeast } from '@/types/collaboration'
 import WorkspaceTopBar from '@/components/workspace/WorkspaceTopBar.vue'
+import ChatPanel from '@/components/workspace/ChatPanel.vue'
+import ActivityPanel from '@/components/workspace/ActivityPanel.vue'
 
 const route = useRoute()
 const router = useRouter()

@@ -1,7 +1,7 @@
 <template>
   <WorkbenchShell>
   <div class="chat-page">
-    <TopBar title="" show-back :show-home="false" back-to="/apps">
+    <TopBar v-if="!embedMode" title="" show-back :show-home="false" back-to="/apps">
       <template #center>
         <div class="top-bar-center builder-chat-top-center">
           <div class="builder-chat-crumbs">
@@ -65,7 +65,7 @@
         >↗</button>
       </template>
     </TopBar>
-    <div v-show="(!SHOW_PLATFORM_CONFIG || activeView === 'builder') && !useSpecMode" class="builder-chat-phase-strip">
+    <div v-if="!embedMode" v-show="(!SHOW_PLATFORM_CONFIG || activeView === 'builder') && !useSpecMode" class="builder-chat-phase-strip">
       <div class="builder-chat-agent">
         <span class="builder-chat-agent-dot"></span>
         <span>搭建智能体</span>
@@ -138,7 +138,7 @@
 
       <!-- SPEC PhaseBar (Phase β: only when requirements agent is active) -->
       <div
-        v-if="useSpecMode"
+        v-if="useSpecMode && !embedMode"
         v-show="!SHOW_PLATFORM_CONFIG || activeView === 'builder'"
         class="spec-phasebar-strip"
       >
@@ -1032,6 +1032,7 @@ import SpecInspector from '@/components/spec/SpecInspector.vue'
 
 const router = useRouter()
 const route = useRoute()
+const embedMode = computed(() => route.query.embed === 'true')
 const activeProjectId = computed(() => {
   const raw = Array.isArray(route.query.project_id) ? route.query.project_id[0] : route.query.project_id
   const parsed = Number(raw)
