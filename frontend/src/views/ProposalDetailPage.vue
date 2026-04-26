@@ -3,6 +3,7 @@
     <div v-if="loading" class="loading">加载中…</div>
     <div v-else-if="error" class="error">{{ error }}</div>
     <main v-else-if="detail" class="proposal-detail">
+      <DriftBanner v-if="driftStatus?.drift" :status="driftStatus" @resolve="onResolveDrift" />
       <header class="detail-header">
         <h1>{{ detail.title }}</h1>
         <span class="status-badge" :class="`status-${detail.status}`">
@@ -131,10 +132,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import BuilderFrame from '@/components/BuilderFrame.vue'
+import DriftBanner from '@/components/DriftBanner.vue'
 import { proposalsApi } from '@/api/proposals'
+import { gitConnectionApi, type DriftStatus } from '@/api/gitConnection'
 import {
   type ProposalDetail, type ApplyOp, type Reversibility,
   STATUS_DISPLAY_NAMES,
@@ -152,6 +155,7 @@ const refreshing = ref(false)
 const applying = ref(false)
 const reviewBody = ref('')
 const confirmModal = ref<ApplyOp[] | null>(null)
+const driftStatus = ref<DriftStatus | null>(null)
 
 const validationChecks = computed(() => {
   if (!detail.value?.validation_report) return {}
@@ -282,6 +286,26 @@ async function onConfirmApply() {
     applying.value = false
   }
 }
+
+async function loadDriftStatus() {
+  if (!detail.value?.application_id) {
+    driftStatus.value = null
+    return
+  }
+  try {
+    driftStatus.value = await gitConnectionApi.driftStatus(detail.value.application_id)
+  } catch {
+    driftStatus.value = null
+  }
+}
+
+function onResolveDrift() {
+  alert('请到 Project Overview → Git 集成页面解决漂移（仅 owner 可操作）')
+}
+
+watch(() => detail.value?.application_id, () => {
+  loadDriftStatus()
+})
 
 onMounted(refresh)
 </script>

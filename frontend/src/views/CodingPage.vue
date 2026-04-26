@@ -561,6 +561,15 @@
               <el-icon :size="16"><Download /></el-icon>
             </button>
             <button
+              v-if="codingStore.workspace && currentAppGitRepoUrl"
+              class="embedded-panel-btn"
+              :disabled="syncingToRepo"
+              @click="onSyncToRepo"
+              :title="syncingToRepo ? 'Syncing...' : 'Sync to repo'"
+            >
+              <span class="sync-btn-label">{{ syncingToRepo ? 'Syncing...' : 'Sync to repo' }}</span>
+            </button>
+            <button
               v-if="codingStore.workspace && canDeleteWorkspace(codingStore.workspace)"
               class="embedded-panel-btn danger"
               @click="deleteCurrentWorkspace"
@@ -591,6 +600,8 @@ import type { WorkspaceInfo, UploadResult, ReplayStreamMessage } from '@/api/cod
 import { harnessApi } from '@/api/harness'
 import { conversationApi } from '@/api/conversation'
 import { llmConfigApi, type BuilderModelOption } from '@/api/llmConfig'
+import { gitConnectionApi } from '@/api/gitConnection'
+import { applicationApi } from '@/api/application'
 import { consumeSseResponse } from '@/utils/sse'
 import { useThemeStore } from '@/stores/theme'
 import BuilderFrame from '@/components/BuilderFrame.vue'
@@ -757,6 +768,55 @@ const openingWsId = ref<string | null>(null)
 const deletingWsId = ref<string | null>(null)
 
 const embeddedPanelCollapsed = ref(false)
+
+// ── Phase D Task 6：Sync workspace → repo ──
+const syncingToRepo = ref(false)
+const currentAppGitRepoUrl = ref<string | null>(null)
+
+async function loadCurrentAppGitRepo() {
+  const appIdRaw = embeddedAppId.value
+  if (!appIdRaw) {
+    currentAppGitRepoUrl.value = null
+    return
+  }
+  const appId = Number(appIdRaw)
+  if (!Number.isFinite(appId)) {
+    currentAppGitRepoUrl.value = null
+    return
+  }
+  try {
+    const app = await applicationApi.get(appId)
+    currentAppGitRepoUrl.value = app?.git_repo_url || null
+  } catch {
+    currentAppGitRepoUrl.value = null
+  }
+}
+
+async function onSyncToRepo() {
+  const ws = codingStore.workspace
+  const appIdRaw = embeddedAppId.value
+  if (!ws || !appIdRaw) return
+  const appId = Number(appIdRaw)
+  if (!Number.isFinite(appId)) {
+    ElMessage.error('应用 ID 不合法')
+    return
+  }
+  syncingToRepo.value = true
+  try {
+    const result = await gitConnectionApi.syncWorkspace(appId, ws.id)
+    ElMessage.success(
+      `Sync 成功：commit ${result.commit_sha?.slice(0, 7) || '?'} on ${result.branch || '?'}（${result.file_count ?? 0} 个文件）`
+    )
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || e?.message || 'Sync 失败')
+  } finally {
+    syncingToRepo.value = false
+  }
+}
+
+watch(() => embeddedAppId.value, () => {
+  loadCurrentAppGitRepo()
+}, { immediate: true })
 
 // ============ Attachment State ============
 const attachedFile = ref<File | null>(null)
