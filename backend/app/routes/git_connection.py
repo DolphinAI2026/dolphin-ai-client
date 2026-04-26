@@ -246,3 +246,45 @@ async def resolve_drift_endpoint(
     return await resolve_drift(
         db, application=app_obj, direction=req.direction, resolved_by=ctx.user.id,
     )
+
+
+# ─────────────────────────────────────────────────────────────────
+# Phase D Task 5 — Workspace → repo sync 端点
+# ─────────────────────────────────────────────────────────────────
+
+
+@app_router.post("/{application_id}/workspaces/{workspace_id}/sync-to-repo")
+async def sync_workspace_to_repo_endpoint(
+    application_id: int,
+    workspace_id: str,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """把 workspace 推到 repo 的 workspaces/<id>/ 子目录（v1 单向）。
+
+    需 project contributor+。
+    """
+    from app.git.workspace_sync import push_workspace_to_repo
+
+    app_obj = (await db.execute(
+        select(Application).where(
+            Application.id == application_id,
+            Application.tenant_id == ctx.tenant_id,
+        )
+    )).scalar_one_or_none()
+    if not app_obj:
+        raise HTTPException(404, "应用不存在")
+    if app_obj.project_id is None:
+        raise HTTPException(400, "应用未关联 project")
+
+    await require_project_access(
+        db, project_id=app_obj.project_id, user_id=ctx.user.id, tenant_id=ctx.tenant_id,
+        minimum_role="contributor",
+    )
+
+    try:
+        return await push_workspace_to_repo(
+            db, application=app_obj, workspace_id=workspace_id,
+        )
+    except RuntimeError as e:
+        raise HTTPException(400, str(e))
