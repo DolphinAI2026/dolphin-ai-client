@@ -228,6 +228,38 @@ async def _persist_doc_upload(
         )
         session.add(doc_ver)
 
+        # ── 同步建 Spec 并挂到 conversation.spec_id（Phase A-E SPEC 路径）──
+        # 修复：V1 doc_pipeline 只写 current_config 不写 Spec，导致 ChatPage
+        # SpecCanvas 显示空。这里用 bootstrap_from_legacy_config 从已解析
+        # config 派生一份 Spec（首次或 spec 仍空时）。
+        try:
+            from app.spec.persistence import bootstrap_from_legacy_config, save_spec
+
+            conv_row = (await session.execute(
+                select(Conversation).where(Conversation.id == conv_id)
+            )).scalar_one()
+
+            need_create_spec = True
+            if conv_row.spec_id:
+                # 既有 Spec：检查是否仍为空（无 goal + 无 objects），空则覆盖
+                from app.models.spec import Spec as SpecORM
+                existing = (await session.execute(
+                    select(SpecORM).where(SpecORM.id == conv_row.spec_id)
+                )).scalar_one_or_none()
+                if existing and existing.completeness_total > 0:
+                    need_create_spec = False  # 已有内容，不覆盖
+
+            if need_create_spec:
+                spec_obj = bootstrap_from_legacy_config(
+                    application_id=None,
+                    legacy_config=data,
+                    created_by=user_id,
+                )
+                await save_spec(session, spec_obj, tenant_id=tenant_id or 1)
+                conv_row.spec_id = spec_obj.id
+        except Exception as e:
+            logger.warning(f"_persist_doc_upload: spec backfill 失败（不阻断主流程）: {e}")
+
         await session.commit()
 
         done_data = {

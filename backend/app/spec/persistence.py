@@ -69,7 +69,7 @@ async def load_spec(db: AsyncSession, spec_id: str, *, tenant_id: int | None = N
 
 
 def bootstrap_from_legacy_config(
-    *, application_id: int, legacy_config: dict, created_by: int
+    *, application_id: Optional[int], legacy_config: dict, created_by: int
 ) -> Spec:
     """Reverse-engineer a Spec from legacy Application.config (best effort).
 
@@ -135,10 +135,37 @@ def bootstrap_from_legacy_config(
             confirmed=False,
         ))
 
+    # 兼容遗留 V1 数据：op 可能是 "add,view,edit" 或 "add/edit" 这种合并值；
+    # data 可能是 "CURRENT_USER_DEPT" 等业务方言。这里宽松归一化，保留能解析的，丢弃不合规的。
+    _OP_ALIASES = {"all", "add", "edit", "delete", "view"}
+    _DATA_ALIASES = {
+        "all": "ALL", "self": "SELF", "dept": "DEPT", "dept_low": "DEPT_LOW",
+        "current_user_dept": "DEPT", "current_user_dept_low_level": "DEPT_LOW",
+    }
     for p in data.get("permissions", []):
+        rules = []
+        for r in p.get("rules", []):
+            try:
+                # 修正 op：拆分合并值，取第一个合规
+                op = r.get("op", "all")
+                if isinstance(op, str):
+                    parts = [s.strip().lower() for s in op.replace("/", ",").split(",")]
+                    valid = next((s for s in parts if s in _OP_ALIASES), None)
+                    if not valid:
+                        continue
+                    r = {**r, "op": valid}
+                # 修正 data：方言归一化
+                d = r.get("data")
+                if isinstance(d, str):
+                    canonical = _DATA_ALIASES.get(d.lower())
+                    if canonical:
+                        r = {**r, "data": canonical}
+                rules.append(PermissionRule(**r))
+            except Exception:
+                continue
         spec.permissions.append(PermissionSpec(
             object_code=p["form"],
-            rules=[PermissionRule(**r) for r in p.get("rules", [])],
+            rules=rules,
             confirmed=False,
         ))
 
