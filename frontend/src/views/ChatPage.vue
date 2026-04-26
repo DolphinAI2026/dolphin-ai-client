@@ -5674,6 +5674,15 @@ const sendMessage = async () => {
           if (incrementalConfigPayload) {
             formData.append('current_config', JSON.stringify(incrementalConfigPayload))
           }
+          // Phase E E3：传 application_id 激活 Phase B fork hook
+          // chat.py 当 conversation.spec_id 空 + application 有 canonical 时
+          // 自动 fork canonical → personal draft，SpecAgent 编辑的是 draft
+          {
+            const appIdNum = Number(store.currentApp?.id)
+            if (Number.isFinite(appIdNum) && appIdNum > 0) {
+              formData.append('application_id', String(appIdNum))
+            }
+          }
           const url = `${API_PREFIX}/chat/send-with-file`
           return fetch(url, {
             method: 'POST',
@@ -5683,10 +5692,12 @@ const sendMessage = async () => {
         })()
       : await (() => {
           const url = `${API_PREFIX}/chat/send`
-          const body = {
+          const appIdNum = Number(store.currentApp?.id)
+          const body: Record<string, any> = {
             conversation_id: conversationId.value,
             message: text,
-            ...(incrementalConfigPayload ? { current_config: incrementalConfigPayload } : {})
+            ...(incrementalConfigPayload ? { current_config: incrementalConfigPayload } : {}),
+            ...(Number.isFinite(appIdNum) && appIdNum > 0 ? { application_id: appIdNum } : {}),
           }
           return fetch(url, {
             method: 'POST',
