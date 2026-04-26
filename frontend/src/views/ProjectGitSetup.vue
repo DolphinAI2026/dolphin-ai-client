@@ -149,17 +149,47 @@
         </section>
       </div>
     </div>
+
+    <BaseDialog
+      :visible="disconnectDialogVisible"
+      title="断开 Git 连接"
+      message="确定要断开 git 连接吗？已初始化的 repo 不会被删除。"
+      dangerous
+      confirm-text="断开"
+      @confirm="confirmDisconnect"
+      @cancel="disconnectDialogVisible = false"
+    />
+
+    <BaseDialog
+      :visible="oauthDialogVisible"
+      :title="oauthDialogTitle"
+      confirm-text="继续"
+      @confirm="confirmOauthDialog"
+      @cancel="cancelOauthDialog"
+    >
+      <div class="oauth-dialog-body">
+        <label>
+          {{ oauthOrgLabel }}
+          <input v-model="oauthOrgInput" type="text" :placeholder="oauthOrgPlaceholder" />
+        </label>
+        <label v-if="oauthDialogProvider === 'gitlab'">
+          GitLab Host（自建实例填完整 URL；公网 GitLab 留空）
+          <input v-model="oauthHostInput" type="text" placeholder="https://gitlab.example.com" />
+        </label>
+      </div>
+    </BaseDialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import request from '@/utils/request'
 import { projectsApi, type Project } from '@/api/projects'
 import { applicationApi } from '@/api/application'
 import { gitConnectionApi, type GitConnection, type ConnectGitPATRequest } from '@/api/gitConnection'
 import type { MergedApplication } from '@/types'
+import BaseDialog from '@/components/BaseDialog.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -238,8 +268,13 @@ async function onConnect() {
   }
 }
 
-async function onDisconnect() {
-  if (!confirm('确定要断开 git 连接吗？已初始化的 repo 不会被删除。')) return
+// Phase F Task 12b: BaseDialog 替原生 confirm
+const disconnectDialogVisible = ref(false)
+function onDisconnect() {
+  disconnectDialogVisible.value = true
+}
+async function confirmDisconnect() {
+  disconnectDialogVisible.value = false
   connectError.value = ''
   disconnecting.value = true
   try {
@@ -270,18 +305,41 @@ async function onInitRepo(app: MergedApplication) {
   }
 }
 
-async function oauthConnect(provider: 'github' | 'gitlab') {
-  oauthError.value = ''
-  const promptLabel = provider === 'github'
-    ? '输入 GitHub Org/Username（OAuth 完成后将作为 group_id_or_org 写入连接）'
-    : '输入 GitLab Group path（OAuth 完成后将作为 group_id_or_org 写入连接）'
-  const groupOrOrg = prompt(promptLabel)
-  if (!groupOrOrg) return
+// Phase F Task 12b: BaseDialog 替原生 prompt（OAuth org/host 输入）
+const oauthDialogVisible = ref(false)
+const oauthDialogProvider = ref<'github' | 'gitlab'>('github')
+const oauthOrgInput = ref('')
+const oauthHostInput = ref('')
+const oauthDialogTitle = computed(() =>
+  oauthDialogProvider.value === 'github' ? 'GitHub OAuth 连接' : 'GitLab OAuth 连接',
+)
+const oauthOrgLabel = computed(() =>
+  oauthDialogProvider.value === 'github'
+    ? 'GitHub Org/Username（OAuth 完成后将作为 group_id_or_org 写入连接）'
+    : 'GitLab Group path（OAuth 完成后将作为 group_id_or_org 写入连接）',
+)
+const oauthOrgPlaceholder = computed(() =>
+  oauthDialogProvider.value === 'github' ? 'my-org 或 my-username' : 'mygroup/subgroup',
+)
 
-  let host: string | null = null
-  if (provider === 'gitlab') {
-    host = prompt('GitLab Host（自建实例填完整 URL；公网 GitLab 留空）', '') || null
-  }
+function oauthConnect(provider: 'github' | 'gitlab') {
+  oauthError.value = ''
+  oauthDialogProvider.value = provider
+  oauthOrgInput.value = ''
+  oauthHostInput.value = ''
+  oauthDialogVisible.value = true
+}
+
+function cancelOauthDialog() {
+  oauthDialogVisible.value = false
+}
+
+async function confirmOauthDialog() {
+  const provider = oauthDialogProvider.value
+  const groupOrOrg = oauthOrgInput.value.trim()
+  if (!groupOrOrg) return
+  const host = provider === 'gitlab' ? (oauthHostInput.value.trim() || null) : null
+  oauthDialogVisible.value = false
 
   sessionStorage.setItem(`git-oauth-${provider}-org`, groupOrOrg)
   sessionStorage.setItem('git-oauth-project', String(projectId))
@@ -320,6 +378,10 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+.oauth-dialog-body { display: flex; flex-direction: column; gap: 12px; min-width: 360px; }
+.oauth-dialog-body label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--fg-muted, var(--t-text-secondary)); }
+.oauth-dialog-body input { padding: 6px 8px; background: var(--bg-inset, var(--t-bg-base)); color: var(--fg, var(--t-text-primary)); border: 1px solid var(--line, var(--t-border-base)); border-radius: 4px; font-size: 13px; }
+
 .git-setup {
   height: 100vh;
   display: flex;

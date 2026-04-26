@@ -150,6 +150,7 @@
         </div>
       </div>
     </main>
+    <BaseToast :visible="toastVisible" :message="toastMessage" :type="toastType" />
   </BuilderFrame>
 </template>
 
@@ -158,6 +159,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import BuilderFrame from '@/components/BuilderFrame.vue'
 import DriftBanner from '@/components/DriftBanner.vue'
+import BaseToast from '@/components/BaseToast.vue'
 import { proposalsApi } from '@/api/proposals'
 import { gitConnectionApi, type DriftStatus } from '@/api/gitConnection'
 import {
@@ -180,6 +182,19 @@ const applying = ref(false)
 const reviewBody = ref('')
 const confirmModal = ref<ApplyOp[] | null>(null)
 const driftStatus = ref<DriftStatus | null>(null)
+
+// Phase F Task 12b: BaseToast 替原生 alert
+const toastVisible = ref(false)
+const toastMessage = ref('')
+const toastType = ref<'info' | 'success' | 'warn' | 'error'>('error')
+let toastTimer: ReturnType<typeof setTimeout> | null = null
+function showToast(message: string, type: 'info' | 'success' | 'warn' | 'error' = 'error') {
+  toastMessage.value = message
+  toastType.value = type
+  toastVisible.value = true
+  if (toastTimer) clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => { toastVisible.value = false }, 3000)
+}
 
 const applyLog = computed<ApplyLogV2 | null>(() => {
   const al = detail.value?.apply_log
@@ -255,7 +270,7 @@ async function onRefreshValidation() {
   try {
     detail.value = await proposalsApi.refreshValidation(proposalId.value)
   } catch (e: any) {
-    alert(e?.response?.data?.detail || e?.message || '校验失败')
+    showToast(e?.response?.data?.detail || e?.message || '校验失败', 'error')
   } finally {
     refreshing.value = false
   }
@@ -263,7 +278,7 @@ async function onRefreshValidation() {
 
 async function onComment() {
   if (!reviewBody.value.trim()) {
-    alert('请填写留言内容')
+    showToast('请填写留言内容', 'warn')
     return
   }
   try {
@@ -271,7 +286,7 @@ async function onComment() {
     reviewBody.value = ''
     await refresh()
   } catch (e: any) {
-    alert(e?.response?.data?.detail || e?.message || '留言失败')
+    showToast(e?.response?.data?.detail || e?.message || '留言失败', 'error')
   }
 }
 
@@ -281,7 +296,7 @@ async function onRequestChanges() {
     reviewBody.value = ''
     await refresh()
   } catch (e: any) {
-    alert(e?.response?.data?.detail || e?.message || '请求修改失败')
+    showToast(e?.response?.data?.detail || e?.message || '请求修改失败', 'error')
   }
 }
 
@@ -291,7 +306,7 @@ async function onApprove() {
     reviewBody.value = ''
     await refresh()
   } catch (e: any) {
-    alert(e?.response?.data?.detail || e?.message || '批准失败')
+    showToast(e?.response?.data?.detail || e?.message || '批准失败', 'error')
   }
 }
 
@@ -308,7 +323,7 @@ async function onApply() {
       await refresh()
     }
   } catch (e: any) {
-    alert(e?.response?.data?.detail || e?.message || 'apply 失败')
+    showToast(e?.response?.data?.detail || e?.message || 'apply 失败', 'error')
   } finally {
     applying.value = false
   }
@@ -321,7 +336,7 @@ async function onConfirmApply() {
     confirmModal.value = null
     await refresh()
   } catch (e: any) {
-    alert(e?.response?.data?.detail || e?.message || 'apply 失败')
+    showToast(e?.response?.data?.detail || e?.message || 'apply 失败', 'error')
   } finally {
     applying.value = false
   }
@@ -340,7 +355,7 @@ async function loadDriftStatus() {
 }
 
 function onResolveDrift() {
-  alert('请到 Project Overview → Git 集成页面解决漂移（仅 owner 可操作）')
+  showToast('请到 Project Overview → Git 集成页面解决漂移（仅 owner 可操作）', 'info')
 }
 
 watch(() => detail.value?.application_id, () => {
