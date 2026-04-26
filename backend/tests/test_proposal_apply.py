@@ -1,11 +1,13 @@
-"""ChangeProposal apply API + diff + plan 测试（Phase B Task 6）"""
+"""ChangeProposal apply API + diff + plan 测试（Phase B Task 6 + Phase E Task 3）"""
 from datetime import datetime, timezone
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import select
 
 from app.deps import AuthContext
+from app.incremental_executor import ExecutionResult
 from app.models import Application, User
 from app.models.collaboration import ApplicationMember, ChangeProposal
 from app.models.spec import Spec as SpecORM
@@ -18,6 +20,20 @@ from app.routes.proposals import (
     ApplyRequest, PromoteRequest, ReviewRequest,
     apply_proposal, promote_to_proposal, submit_review,
 )
+
+
+def _fake_success_result() -> ExecutionResult:
+    """模拟 IncrementalExecutor.execute_diff 返回成功结果（不真踩 aPaaS 平台）"""
+    r = ExecutionResult()
+    r.add_success("models", "fake created t_order")
+    return r
+
+
+def _fake_failure_result(*errors: str) -> ExecutionResult:
+    r = ExecutionResult()
+    for e in errors:
+        r.add_error(e)
+    return r
 
 
 def _ctx_for(user: User, tenant_id: int) -> AuthContext:
@@ -233,13 +249,21 @@ async def test_apply_rejects_irreversible_without_confirm(db_session):
 
 @pytest.mark.asyncio
 async def test_apply_succeeds_with_confirm_advances_canonical(db_session):
-    """draft 加字段（yellow） + confirm → apply 成功，canonical_spec_id 推进到 draft"""
+    """draft 加字段（yellow） + confirm → apply 成功，canonical_spec_id 推进到 draft
+
+    Phase E：execute_apply 现在真调 IncrementalExecutor，测试通过 mock
+    execute_platform_apply 返回 success=True 的 ExecutionResult，避免真踩平台 API。
+    """
     s = await _seed(db_session, draft_adds_field=True)
     ctx = _ctx_for(s["owner"], s["tenant"].id)
 
-    res = await apply_proposal(
-        s["proposal_id"], ApplyRequest(confirm_irreversible=True), ctx, db_session,
-    )
+    with patch(
+        "app.proposal.apply.execute_platform_apply",
+        new=AsyncMock(return_value=_fake_success_result()),
+    ):
+        res = await apply_proposal(
+            s["proposal_id"], ApplyRequest(confirm_irreversible=True), ctx, db_session,
+        )
     assert res["status"] == "applied"
     assert res["success"] is True
 
@@ -256,13 +280,61 @@ async def test_apply_succeeds_with_confirm_advances_canonical(db_session):
     assert p_row.status == "applied"
     assert p_row.applied_at is not None
     assert p_row.apply_log is not None
-    assert p_row.apply_log["previous_canonical"] == s["canonical_id"]
+    # Phase E：apply_log 升级为 v2 shape，previous_canonical 在 ops 列表里
+    ops = p_row.apply_log.get("ops", [])
+    assert any(op.get("previous_canonical") == s["canonical_id"] for op in ops)
+    # executor_result 写入
+    assert p_row.apply_log.get("executor_result", {}).get("success") is True
 
     # spec kind 改成 canonical
     spec_row = (await db_session.execute(
         select(SpecORM).where(SpecORM.id == s["draft_id"])
     )).scalar_one()
     assert spec_row.kind == "canonical"
+
+
+@pytest.mark.asyncio
+async def test_apply_executor_failure_marks_apply_failed(db_session):
+    """execute_platform_apply 返 success=False → proposal status='apply_failed'
+
+    Phase E Task 3 新增：验证 IncrementalExecutor 失败时 execute_apply 不切 canonical 指针、
+    标 apply_failed、apply_log 含 failure_reason + executor_result。
+    """
+    s = await _seed(db_session, draft_adds_field=True)
+    ctx = _ctx_for(s["owner"], s["tenant"].id)
+
+    fake_failure = _fake_failure_result(
+        "create model t_order failed: 字段冲突",
+        "create field amount failed: 字段已存在",
+    )
+
+    with patch(
+        "app.proposal.apply.execute_platform_apply",
+        new=AsyncMock(return_value=fake_failure),
+    ):
+        res = await apply_proposal(
+            s["proposal_id"], ApplyRequest(confirm_irreversible=True), ctx, db_session,
+        )
+
+    assert res["status"] == "apply_failed"
+    assert res["success"] is False
+    assert "字段冲突" in (res.get("failure_reason") or "")
+
+    # canonical 不应被推进
+    app_row = (await db_session.execute(
+        select(Application).where(Application.id == s["app"].id)
+    )).scalar_one()
+    assert app_row.canonical_spec_id == s["canonical_id"]
+
+    # proposal 状态 + apply_log
+    p_row = (await db_session.execute(
+        select(ChangeProposal).where(ChangeProposal.id == s["proposal_id"])
+    )).scalar_one()
+    assert p_row.status == "apply_failed"
+    assert p_row.apply_log is not None
+    assert p_row.apply_log.get("success") is False
+    assert "字段冲突" in (p_row.apply_log.get("failure_reason") or "")
+    assert p_row.apply_log.get("executor_result", {}).get("success") is False
 
 
 @pytest.mark.asyncio

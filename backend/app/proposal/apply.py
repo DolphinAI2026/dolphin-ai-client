@@ -1,4 +1,4 @@
-"""第二道门 + ops 执行（apply 流程，Phase B v1）"""
+"""第二道门 + ops 执行（apply 流程，Phase B v1 + Phase E real-apply）"""
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
@@ -10,6 +10,7 @@ from app.spec.schema import Spec
 from app.spec.persistence import load_spec
 from app.models import Application
 from app.models.collaboration import ChangeProposal
+from app.proposal.platform_apply import execute_platform_apply
 from app.proposal.validation import validate as validate_spec
 
 
@@ -189,70 +190,131 @@ async def execute_apply(
     plan: ApplyPlan,
     tenant_id: int,
 ) -> dict:
-    """执行 ops。Phase B v1 简化版：
+    """真接平台 apply（Phase E 升级，替换 Phase B/C/D v1 的 noop_in_v1 实现）。
 
-    不真正调平台 API（避开 generation 流复杂度）；
-    只把 draft promote 成新的 canonical Spec（kind='canonical'），
-    然后 application.canonical_spec_id 指过去。
+    流程：
+    1. load draft + canonical
+    2. 调 execute_platform_apply (Task 2 桥) → IncrementalExecutor.execute_diff
+    3. 写 apply_log 含 executor.journal 详细资源记录
+    4. 全成功：切 canonical_spec_id 指针 + draft kind→canonical + git tag
+    5. 部分失败：status=apply_failed + 自动开 fix-up proposal (Task 4)
 
-    Phase C/D 时把 step_executor 接进来真实部署到平台。
+    ⚠ ship 后 apply 真改远端 aPaaS 平台数据（不可逆）。生产前确保用户已配
+    测试 tenant + 走过 dry-run。
     """
+    import logging
     from datetime import datetime, timezone
     from app.models.spec import Spec as SpecORM
+
+    logger = logging.getLogger(__name__)
 
     proposal_row = (await db.execute(
         select(ChangeProposal).where(ChangeProposal.id == proposal_id)
     )).scalar_one()
+    app_row = (await db.execute(
+        select(Application).where(Application.id == proposal_row.application_id)
+    )).scalar_one()
 
-    # apply_log 累计
     apply_log: list[dict] = []
     success = True
-    failure_reason = None
+    failure_reason: Optional[str] = None
+    exec_result_dict: dict = {}
+    exec_result = None
 
     try:
-        # 加载 draft
+        # 1. 加载 draft + canonical
         draft = await load_spec(db, proposal_row.draft_spec_id, tenant_id=tenant_id)
         if not draft:
             raise RuntimeError("draft 不存在")
 
-        # 把 draft kind 改成 canonical
-        spec_row = (await db.execute(
-            select(SpecORM).where(SpecORM.id == draft.id)
-        )).scalar_one()
-        spec_row.kind = "canonical"
+        canonical = None
+        if app_row.canonical_spec_id:
+            canonical = await load_spec(db, app_row.canonical_spec_id, tenant_id=tenant_id)
 
-        # application.canonical_spec_id 指过去
-        app_row = (await db.execute(
-            select(Application).where(Application.id == proposal_row.application_id)
-        )).scalar_one()
-        previous_canonical = app_row.canonical_spec_id
-        app_row.canonical_spec_id = draft.id
+        # 2. 真平台 apply
+        exec_result = await execute_platform_apply(
+            application=app_row, canonical=canonical, draft=draft, dry_run=False,
+        )
+        exec_result_dict = exec_result.to_dict()
+        apply_log.append({"executor_journal": exec_result.journal.to_dict()})
 
-        for op in plan.ops:
-            apply_log.append({"op": op.kind, "target": op.target, "status": "noop_in_v1"})
+        if not exec_result.success:
+            success = False
+            failure_reason = (
+                "; ".join(exec_result.errors[:3])
+                or "executor returned success=False"
+            )
+            proposal_row.status = "apply_failed"
+        else:
+            # 3a. 切 canonical_spec_id 指针 + draft kind→canonical
+            spec_row = (await db.execute(
+                select(SpecORM).where(SpecORM.id == draft.id)
+            )).scalar_one()
+            spec_row.kind = "canonical"
+            previous_canonical = app_row.canonical_spec_id
+            app_row.canonical_spec_id = draft.id
+            apply_log.append({"previous_canonical": previous_canonical})
+            proposal_row.status = "applied"
+            proposal_row.applied_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
-        proposal_row.status = "applied"
-        proposal_row.applied_at = datetime.now(timezone.utc).replace(tzinfo=None)
-        proposal_row.apply_log = {"ops": apply_log, "previous_canonical": previous_canonical}
+        proposal_row.apply_log = {
+            "ops": apply_log,
+            "executor_result": exec_result_dict,
+            "success": success,
+            "failure_reason": failure_reason,
+        }
         await db.commit()
 
-        # 同步到 git（如绑定）
-        try:
-            from app.git.sync import finalize_apply_to_git
-            tag = await finalize_apply_to_git(db, proposal=proposal_row, application=app_row)
-            if tag:
-                proposal_row.apply_log = {**(proposal_row.apply_log or {}), "git_tag": tag}
+        # 3b. git 同步（仅成功路径，Phase C 保留）
+        if success:
+            try:
+                from app.git.sync import finalize_apply_to_git
+                tag = await finalize_apply_to_git(db, proposal=proposal_row, application=app_row)
+                if tag:
+                    proposal_row.apply_log = {**(proposal_row.apply_log or {}), "git_tag": tag}
+                    await db.commit()
+            except Exception as ge:
+                logger.warning(f"git finalize failed: {ge}")
+                apply_log.append({"git_finalize_failed": str(ge)})
+                proposal_row.apply_log = {**(proposal_row.apply_log or {}), "git_finalize_failed": str(ge)}
                 await db.commit()
-        except Exception as ge:
-            # git 失败不让 apply 失败 — 标 warning 即可（已经在平台 apply 了）
-            apply_log.append({"git_finalize_failed": str(ge)})
-            proposal_row.apply_log = {**(proposal_row.apply_log or {}), "git_finalize_failed": str(ge)}
-            await db.commit()
+
+        # 4. partial failure → 自动开 fix-up proposal（Task 4 实现）
+        if not success and exec_result is not None:
+            try:
+                from app.proposal.fixup import create_fixup_proposal
+                fixup_id = await create_fixup_proposal(
+                    db,
+                    failed_proposal=proposal_row,
+                    exec_result=exec_result,
+                    tenant_id=tenant_id,
+                )
+                if fixup_id:
+                    proposal_row.apply_log = {
+                        **(proposal_row.apply_log or {}),
+                        "fixup_proposal_id": fixup_id,
+                    }
+                    await db.commit()
+            except Exception as fe:
+                logger.exception(f"fixup creation failed: {fe}")
+
     except Exception as e:
+        logger.exception(f"apply failed for proposal {proposal_id}: {e}")
         success = False
         failure_reason = str(e)
         proposal_row.status = "apply_failed"
-        proposal_row.apply_log = {"ops": apply_log, "error": failure_reason}
+        proposal_row.apply_log = {
+            "ops": apply_log,
+            "executor_result": exec_result_dict,
+            "success": False,
+            "failure_reason": failure_reason,
+            "error": failure_reason,
+        }
         await db.commit()
 
-    return {"success": success, "failure_reason": failure_reason, "apply_log": apply_log}
+    return {
+        "success": success,
+        "failure_reason": failure_reason,
+        "apply_log": apply_log,
+        "executor_result": exec_result_dict,
+    }

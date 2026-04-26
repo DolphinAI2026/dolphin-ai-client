@@ -5,6 +5,7 @@ Mock provider，不发真实 HTTP。
 import pytest
 from unittest.mock import AsyncMock, patch
 
+from app.incremental_executor import ExecutionResult
 from app.models import Application, Project, User
 from app.models.collaboration import ChangeProposal, GitConnection
 from app.models.tenant import Tenant, UserTenant
@@ -14,6 +15,13 @@ from app.git.sync import finalize_apply_to_git
 from app.spec.persistence import empty_spec, to_orm
 from app.spec.schema import Goal, Phase
 from app.proposal.persistence import create_proposal
+
+
+def _fake_executor_success() -> ExecutionResult:
+    """Phase E：execute_apply 现在调 IncrementalExecutor，单测必须 mock 不真踩平台 API"""
+    r = ExecutionResult()
+    r.add_success("models", "fake created")
+    return r
 
 
 async def _make_user(db, username: str) -> User:
@@ -186,7 +194,10 @@ async def test_execute_apply_records_git_tag_in_apply_log(db_session):
     )
 
     fake = _mock_provider()
-    with patch("app.git.sync.make_provider", return_value=fake):
+    with patch("app.git.sync.make_provider", return_value=fake), patch(
+        "app.proposal.apply.execute_platform_apply",
+        new=AsyncMock(return_value=_fake_executor_success()),
+    ):
         result = await execute_apply(
             db_session, proposal_id=s["proposal"].id, plan=plan, tenant_id=s["tenant"].id,
         )
@@ -219,7 +230,10 @@ async def test_execute_apply_git_failure_does_not_fail_apply(db_session):
 
     fake = _mock_provider()
     fake.merge_pull_request = AsyncMock(side_effect=RuntimeError("merge conflict"))
-    with patch("app.git.sync.make_provider", return_value=fake):
+    with patch("app.git.sync.make_provider", return_value=fake), patch(
+        "app.proposal.apply.execute_platform_apply",
+        new=AsyncMock(return_value=_fake_executor_success()),
+    ):
         result = await execute_apply(
             db_session, proposal_id=s["proposal"].id, plan=plan, tenant_id=s["tenant"].id,
         )
