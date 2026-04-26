@@ -6,45 +6,37 @@
       :application-id="store.state.application.id"
       @done="onProposalDone"
     />
-    <div v-if="!conversationId" class="empty">
-      <p class="muted">还没有对话</p>
-      <button class="builder-btn builder-btn-primary" @click="onCreateConversation">开始对话</button>
-    </div>
     <iframe
-      v-else
+      v-if="iframeSrc"
       :src="iframeSrc"
       class="chat-iframe"
       sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
     />
+    <div v-else class="empty">
+      <p class="muted">未指定应用上下文</p>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
-import { conversationApi } from '@/api/conversation'
+import { computed } from 'vue'
 import { useWorkspaceStore } from '@/stores/workspace'
 import PromoteApproveApplyCard from './PromoteApproveApplyCard.vue'
 
 const store = useWorkspaceStore()
-const conversationId = ref<number | null>(null)
 
 function onProposalDone(_id: string) {
   // store.refresh() 已在 PromoteApproveApplyCard 内部调用
 }
 
+// 复用 ChatPage 既有的 deploy_app_id 解析路径：自动找应用关联的活跃 conversation
+// 包括：既有 SPEC 进度 / 部署进度 / 5-stage 仍可见（embed 模式仅隐顶栏 / breadcrumb）
 const iframeSrc = computed(() => {
-  if (!conversationId.value) return ''
-  return `/chat/${conversationId.value}?embed=true`
+  const appId = store.application?.id
+  if (!appId) return ''
+  // 用 BASE_URL 兼容 vite base = '/ai-builder/' 的部署
+  return `${import.meta.env.BASE_URL}chat?deploy_app_id=${appId}&embed=true`
 })
-
-async function onCreateConversation() {
-  if (!store.application) return
-  // v1: 简化为每次手动开启新对话（application_id ↔ conversation_id 关联待 Phase F.1.5）
-  const conv = await conversationApi.create({
-    agent_type: 'builder',
-  })
-  conversationId.value = conv.id
-}
 </script>
 
 <style scoped>
