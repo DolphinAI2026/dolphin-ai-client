@@ -94,6 +94,12 @@ const router = createRouter({
       meta: { requiresAuth: true, navExpanded: true }
     },
     {
+      path: '/work/:appId',
+      name: 'WorkspaceShell',
+      component: () => import('@/views/WorkspaceShell.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
       path: '/marketplace',
       name: 'Marketplace',
       component: () => import('@/views/MarketplacePage.vue'),
