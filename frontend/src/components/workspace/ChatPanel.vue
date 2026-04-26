@@ -1,5 +1,11 @@
 <template>
   <div class="chat-panel">
+    <PromoteApproveApplyCard
+      v-if="store.effectiveMode === 'simple' && store.state?.current_draft && store.state?.application"
+      :draft-spec-id="store.state.current_draft.id"
+      :application-id="store.state.application.id"
+      @done="onProposalDone"
+    />
     <div v-if="!conversationId" class="empty">
       <p class="muted">还没有对话</p>
       <button class="builder-btn builder-btn-primary" @click="onCreateConversation">开始对话</button>
@@ -17,9 +23,14 @@
 import { ref, computed } from 'vue'
 import { conversationApi } from '@/api/conversation'
 import { useWorkspaceStore } from '@/stores/workspace'
+import PromoteApproveApplyCard from './PromoteApproveApplyCard.vue'
 
 const store = useWorkspaceStore()
 const conversationId = ref<number | null>(null)
+
+function onProposalDone(_id: string) {
+  // store.refresh() 已在 PromoteApproveApplyCard 内部调用
+}
 
 const iframeSrc = computed(() => {
   if (!conversationId.value) return ''
