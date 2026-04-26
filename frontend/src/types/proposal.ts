@@ -79,3 +79,30 @@ export const STATUS_DISPLAY_NAMES: Record<ProposalStatus, string> = {
 
 // re-export for convenience（避免 unused import 警告）
 export type { ProjectRole }
+
+export interface ExecutorJournalEntry {
+  resource_type: string
+  operation: string
+  resource_name: string
+  resource_code: string
+  platform_id?: string | null
+  timestamp: number
+}
+
+export interface ExecutorResult {
+  success: boolean
+  results: Record<string, string[]>
+  errors: string[]
+  warnings: string[]
+  journal: ExecutorJournalEntry[]
+}
+
+export interface ApplyLogV2 {
+  ops?: any[]
+  executor_result?: ExecutorResult
+  fixup_proposal_id?: string
+  git_tag?: string
+  failure_reason?: string
+  error?: string
+  previous_canonical?: string
+}

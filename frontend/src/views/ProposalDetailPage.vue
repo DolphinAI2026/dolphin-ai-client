@@ -93,14 +93,36 @@
           <section v-if="detail.status === 'applied'" class="applied-card">
             <h3>已 apply</h3>
             <p>@ {{ formatDate(detail.applied_at) }}</p>
-            <p v-if="(detail.apply_log as any)?.git_tag" class="git-tag-row">
-              Git tag: <code>{{ (detail.apply_log as any).git_tag }}</code>
+            <p v-if="appliedGitTag" class="git-tag-row">
+              Git tag: <code>{{ appliedGitTag }}</code>
             </p>
+            <details v-if="executorResult && executorResult.journal?.length">
+              <summary>平台部署详情（{{ executorResult.journal.length }} 个资源）</summary>
+              <ul class="journal-list">
+                <li v-for="(entry, idx) in executorResult.journal" :key="idx">
+                  <span class="journal-icon">{{ entry.platform_id ? '✓' : '✗' }}</span>
+                  <code>{{ entry.operation }} {{ entry.resource_type }}:{{ entry.resource_code }}</code>
+                  <span v-if="entry.platform_id" class="muted small">(id: {{ entry.platform_id }})</span>
+                </li>
+              </ul>
+            </details>
           </section>
 
           <section v-if="detail.status === 'apply_failed'" class="apply-failed-card">
             <h3>apply 失败</h3>
-            <p>{{ (detail.apply_log as any)?.error || '未知错误' }}</p>
+            <p>{{ failedReason }}</p>
+            <details v-if="executorResult?.errors?.length">
+              <summary>错误列表（{{ executorResult.errors.length }} 条）</summary>
+              <ul class="error-list">
+                <li v-for="(err, idx) in executorResult.errors" :key="idx">{{ err }}</li>
+              </ul>
+            </details>
+            <p v-if="fixupProposalId" class="fixup-link">
+              🔧 系统已自动创建 fix-up proposal：
+              <button class="builder-btn builder-btn-primary" type="button" @click="goToProposal(fixupProposalId)">
+                查看 fix-up
+              </button>
+            </p>
           </section>
 
           <section v-if="detail.status === 'draft'" class="draft-card">
@@ -133,18 +155,20 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import BuilderFrame from '@/components/BuilderFrame.vue'
 import DriftBanner from '@/components/DriftBanner.vue'
 import { proposalsApi } from '@/api/proposals'
 import { gitConnectionApi, type DriftStatus } from '@/api/gitConnection'
 import {
   type ProposalDetail, type ApplyOp, type Reversibility,
+  type ApplyLogV2, type ExecutorResult,
   STATUS_DISPLAY_NAMES,
 } from '@/types/proposal'
 import { useUserStore } from '@/stores/user'
 
 const route = useRoute()
+const router = useRouter()
 const userStore = useUserStore()
 
 const proposalId = computed(() => String(route.params.id))
@@ -156,6 +180,22 @@ const applying = ref(false)
 const reviewBody = ref('')
 const confirmModal = ref<ApplyOp[] | null>(null)
 const driftStatus = ref<DriftStatus | null>(null)
+
+const applyLog = computed<ApplyLogV2 | null>(() => {
+  const al = detail.value?.apply_log
+  return al ? (al as ApplyLogV2) : null
+})
+
+const executorResult = computed<ExecutorResult | null>(() => applyLog.value?.executor_result || null)
+const fixupProposalId = computed<string | null>(() => applyLog.value?.fixup_proposal_id || null)
+const appliedGitTag = computed<string | null>(() => applyLog.value?.git_tag || null)
+const failedReason = computed<string>(() =>
+  applyLog.value?.failure_reason || applyLog.value?.error || '未知错误'
+)
+
+function goToProposal(proposalId: string) {
+  router.push(`/proposals/${proposalId}`)
+}
 
 const validationChecks = computed(() => {
   if (!detail.value?.validation_report) return {}
@@ -385,4 +425,15 @@ onMounted(refresh)
   border-radius: 4px;
   font-family: var(--b-mono, ui-monospace, SFMono-Regular, monospace);
 }
+
+.journal-list, .error-list { list-style: none; padding-left: 0; margin-top: 8px; }
+.journal-list li, .error-list li { padding: 4px 0; border-bottom: 1px solid var(--line); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.journal-icon { display: inline-block; width: 16px; }
+.fixup-link {
+  margin-top: 12px; padding: 12px;
+  background: var(--t-warning-subtle); color: var(--t-warning);
+  border-radius: 6px;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.error-list li { color: var(--t-danger); }
 </style>
