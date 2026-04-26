@@ -14,6 +14,7 @@ BigText = Text().with_variant(LONGTEXT, "mysql")
 # Import tenant models
 from app.models.tenant import Tenant, UserTenant, Role, Team, TeamMember
 from app.models.spec import Spec  # noqa: F401  — register ORM mapping
+from app.models.preference import UserPreference  # noqa: F401  — register ORM mapping
 from app.models.collaboration import (  # noqa: F401  — register ORM mapping
     ApplicationMember,
     ChangeProposal,
@@ -223,6 +224,7 @@ class Application(Base):
     current_doc_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 当前文档版本号
     canonical_spec_id: Mapped[Optional[str]] = mapped_column(String(40), ForeignKey("specs.id"), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="draft", nullable=False)  # draft/generating/updating/completed/failed
+    default_mode: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # 'simple' | 'pro' | None
     # Phase C 协作：git 镜像元数据
     git_repo_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     git_provider: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # 'gitlab' | 'github'
