@@ -16,8 +16,12 @@
         <ChatPanel />
       </section>
       <section class="pane preview-pane">
-        <!-- PreviewPanel — Task 7-9 实现 -->
-        <p class="muted">PreviewPanel 占位（Tasks 7-9）</p>
+        <PreviewPanel
+          :draft-spec-id="store.state.current_draft?.id ?? null"
+          :canonical-spec-id="store.state.canonical?.id ?? null"
+          :platform-url="store.state.application.platform_url"
+          :apaas-app-id="store.state.application.apaas_app_id"
+        />
       </section>
       <section class="pane activity-pane">
         <ActivityPanel
@@ -45,6 +49,7 @@ import { roleAtLeast } from '@/types/collaboration'
 import WorkspaceTopBar from '@/components/workspace/WorkspaceTopBar.vue'
 import ChatPanel from '@/components/workspace/ChatPanel.vue'
 import ActivityPanel from '@/components/workspace/ActivityPanel.vue'
+import PreviewPanel from '@/components/workspace/PreviewPanel.vue'
 
 const route = useRoute()
 const router = useRouter()
