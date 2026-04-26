@@ -191,6 +191,7 @@
               <small>{{ latestHistoryMeta(app) }}</small>
             </button>
             <div class="apps-card-actions" @click.stop>
+              <button class="apps-mini-action" type="button" @click="openAppInChat(app)">对话</button>
               <button v-if="canOpenPlatform(app)" class="apps-mini-action" type="button" @click="openInPlatform(app)">平台</button>
               <button v-if="canDeployApp(app)" class="apps-mini-action primary" type="button" @click="deployApp(app)">生成</button>
               <button v-if="canManageMembers(app)" class="apps-mini-action" type="button" @click="openMembersDialog(app)">成员</button>
@@ -349,6 +350,18 @@ function openInPlatform(app: MergedApplication) {
 }
 
 function openApp(app: MergedApplication) {
+  // Phase F Task 11: 主点击进入新 WorkspaceShell (/work/:appId)。
+  // 仅 local app（数字 id）能进 workspace；remote-only 应用 fallback 到老 chat 路径。
+  const appIdNum = appNumericId(app)
+  if (appIdNum !== null && appIdNum > 0) {
+    router.push(`/work/${appIdNum}`)
+  } else {
+    router.push({ path: '/chat', query: { app_id: String(app.id) } })
+  }
+}
+
+function openAppInChat(app: MergedApplication) {
+  // 备选：直达老 ChatPage（保留为 mini-action / 兼容入口）。
   router.push({ path: '/chat', query: { app_id: String(app.id) } })
 }
 
