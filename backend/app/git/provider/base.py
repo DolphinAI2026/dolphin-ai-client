@@ -64,3 +64,7 @@ class GitProvider(Protocol):
     async def revert_commit(self, *, repo_full_path: str, branch: str, commit_sha: str) -> None:
         """Revert merge commit on given branch（GitLab native API；GitHub force-push parent）"""
         ...
+
+    async def get_branch_head(self, *, repo_full_path: str, branch: str) -> str:
+        """返回指定 branch HEAD 的 commit sha（drift 检测用）"""
+        ...

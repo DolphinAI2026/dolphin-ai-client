@@ -173,3 +173,76 @@ async def init_repo_endpoint(
         "git_default_branch": app_obj.git_default_branch,
         "full_path": full_path,
     }
+
+
+# ─────────────────────────────────────────────────────────────────
+# Phase D Task 4 — Drift status / resolve endpoints
+# ─────────────────────────────────────────────────────────────────
+
+
+@app_router.get("/{application_id}/drift-status")
+async def drift_status_endpoint(
+    application_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """漂移检测：对比 git main HEAD 和 Builder canonical commit_sha。
+
+    需 project viewer+（contributor 之上的最低读权限即可）。
+    """
+    from app.git.drift import check_drift
+
+    app_obj = (await db.execute(
+        select(Application).where(
+            Application.id == application_id,
+            Application.tenant_id == ctx.tenant_id,
+        )
+    )).scalar_one_or_none()
+    if not app_obj:
+        raise HTTPException(404, "应用不存在")
+
+    if app_obj.project_id is not None:
+        await require_project_access(
+            db, project_id=app_obj.project_id, user_id=ctx.user.id, tenant_id=ctx.tenant_id,
+            minimum_role="contributor",
+        )
+
+    return await check_drift(db, application=app_obj)
+
+
+class ResolveDriftRequest(BaseModel):
+    direction: str  # 'git_to_builder' | 'builder_to_git'
+
+
+@app_router.post("/{application_id}/resolve-drift")
+async def resolve_drift_endpoint(
+    application_id: int,
+    req: ResolveDriftRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """记录漂移解决意图。需 project owner。"""
+    from app.git.drift import resolve_drift
+
+    app_obj = (await db.execute(
+        select(Application).where(
+            Application.id == application_id,
+            Application.tenant_id == ctx.tenant_id,
+        )
+    )).scalar_one_or_none()
+    if not app_obj:
+        raise HTTPException(404, "应用不存在")
+    if app_obj.project_id is None:
+        raise HTTPException(400, "应用未关联 project，无法解决漂移")
+
+    await require_project_access(
+        db, project_id=app_obj.project_id, user_id=ctx.user.id, tenant_id=ctx.tenant_id,
+        minimum_role="owner",
+    )
+
+    if req.direction not in ("git_to_builder", "builder_to_git"):
+        raise HTTPException(400, "direction 必须是 git_to_builder 或 builder_to_git")
+
+    return await resolve_drift(
+        db, application=app_obj, direction=req.direction, resolved_by=ctx.user.id,
+    )

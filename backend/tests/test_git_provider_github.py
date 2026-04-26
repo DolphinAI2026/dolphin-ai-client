@@ -253,3 +253,18 @@ async def test_add_pr_comment_posts_to_issues_endpoint(patched_httpx):
     call = patched_httpx.calls[0]
     assert call["url"] == "https://api.github.com/repos/acme/widgets/issues/42/comments"
     assert call["json"] == {"body": "LGTM"}
+
+
+@pytest.mark.asyncio
+async def test_get_branch_head_returns_commit_sha(patched_httpx):
+    """GET /repos/{owner}/{repo}/branches/{branch} → commit.sha"""
+    patched_httpx.responses = [_FakeResponse(200, {
+        "name": "main",
+        "commit": {"sha": "deadbeefcafe", "url": "https://api.github.com/..."},
+    })]
+    provider = GitHubProvider(access_token="ghp_test")
+    sha = await provider.get_branch_head(repo_full_path="acme/widgets", branch="main")
+    assert sha == "deadbeefcafe"
+    call = patched_httpx.calls[0]
+    assert call["method"] == "GET"
+    assert call["url"] == "https://api.github.com/repos/acme/widgets/branches/main"

@@ -214,3 +214,18 @@ async def test_create_pull_request_returns_iid(patched_httpx):
         "title": "My MR",
         "description": "desc",
     }
+
+
+@pytest.mark.asyncio
+async def test_get_branch_head_returns_commit_id(patched_httpx):
+    """GET /projects/{id}/repository/branches/{branch} → commit.id"""
+    patched_httpx.responses = [_FakeResponse(200, {
+        "name": "main",
+        "commit": {"id": "abc123sha", "short_id": "abc1234"},
+    })]
+    provider = GitLabProvider(host="https://gitlab.com", access_token="t")
+    sha = await provider.get_branch_head(repo_full_path="acme/widgets", branch="main")
+    assert sha == "abc123sha"
+    call = patched_httpx.calls[0]
+    assert call["method"] == "GET"
+    assert "/repository/branches/main" in call["url"]

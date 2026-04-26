@@ -158,6 +158,21 @@ async def build_apply_plan(
     ops = diff_spec(canonical, draft)
     has_irreversible = any(o.reversibility == "red" for o in ops)
 
+    # 4. 漂移检测：apply 前确保 git main 和 Builder canonical 视图一致（Phase D Task 4）
+    if app.git_repo_url:
+        try:
+            from app.git.drift import check_drift
+            drift = await check_drift(db, application=app)
+            if drift.get("drift"):
+                git_short = (drift.get("git_sha") or "")[:8]
+                builder_short = (drift.get("builder_sha") or "none")[:8]
+                issues.append(
+                    f"git 漂移：git={git_short} vs builder={builder_short}，需先解决"
+                )
+        except Exception as e:
+            # 漂移检测本身失败（如网络问题）不阻塞 apply
+            issues.append(f"漂移检测失败（已跳过）：{e}")
+
     return ApplyPlan(
         ops=ops,
         has_irreversible=has_irreversible,

@@ -168,3 +168,11 @@ class GitLabProvider:
             f"/projects/{quote(repo_full_path, safe='')}/repository/commits/{commit_sha}/revert",
             json={"branch": branch},
         )
+
+    async def get_branch_head(self, *, repo_full_path: str, branch: str) -> str:
+        """返回 branch HEAD commit id：GET /projects/{id}/repository/branches/{branch}"""
+        resp = await self._request(
+            "GET",
+            f"/projects/{quote(repo_full_path, safe='')}/repository/branches/{quote(branch, safe='')}",
+        )
+        return resp.json()["commit"]["id"]

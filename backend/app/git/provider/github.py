@@ -205,6 +205,13 @@ class GitHubProvider:
         )
 
 
+    async def get_branch_head(self, *, repo_full_path: str, branch: str) -> str:
+        """返回 branch HEAD sha：GET /repos/{owner}/{repo}/branches/{branch}"""
+        owner, repo = _split_repo(repo_full_path)
+        resp = await self._request("GET", f"/repos/{owner}/{repo}/branches/{branch}")
+        return resp.json()["commit"]["sha"]
+
+
 def _split_repo(repo_full_path: str) -> tuple[str, str]:
     parts = repo_full_path.split("/", 1)
     if len(parts) != 2:
