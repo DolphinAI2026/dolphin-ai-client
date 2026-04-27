@@ -158,8 +158,7 @@ print("\n=== 重启后端...")
 run("pkill -9 -f 'uvicorn.*:app.*8003' || true")
 time.sleep(3)
 # cwd 必须是 backend/，否则 `app.main:app` 会 ModuleNotFoundError: No module named 'app'
-# --workers 1：platform_proxy._proxy_state 是模块级全局 dict，多 worker 下 iframe 后续请求会打到空状态的 worker
-run("cd /root/apaas-builder/backend && nohup .venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8003 --workers 1 >> ../backend.log 2>&1 &")
+run("cd /root/apaas-builder/backend && nohup .venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8003 --workers 2 >> ../backend.log 2>&1 &")
 time.sleep(4)
 code = run("curl -s -o /dev/null -w '%{http_code}' http://localhost:8003/api/health")
 print(f"  健康检查: {code}")
@@ -266,9 +265,8 @@ tail -50 /root/apaas-builder/backend.log
 pkill -9 -f 'uvicorn.*:app.*8003'
 # cwd 必须是 backend/，否则 `app.main:app` 会 ModuleNotFoundError
 cd /root/apaas-builder/backend
-# --workers 1：platform_proxy 代理状态跨 worker 不共享，多 worker 会导致 iframe "智能体不存在"
 nohup .venv/bin/python -m uvicorn app.main:app \
-  --host 0.0.0.0 --port 8003 --workers 1 >> ../backend.log 2>&1 &
+  --host 0.0.0.0 --port 8003 --workers 2 >> ../backend.log 2>&1 &
 
 # 重载 nginx（改了 nginx 配置后）
 nginx -t && nginx -s reload
