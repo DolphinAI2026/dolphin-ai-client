@@ -16,25 +16,33 @@
 0. **Before tool calls**: First write a short, user-facing progress note in Chinese (1-3 sentences) explaining what you understood and what you will do next.
 1. **FIRST** (1 call): Use glob_files to see the project structure
 2. **THEN** (1-3 calls max): If `.cursor/rules/*.mdc` exists, read those rule files first, then read ONLY the key implementation files you need. Do NOT read every file. **必读**：scaffold 默认的 `shared/widget.config.json` 和一份 `.editor.config.json`，作为后续 edit 的模板——保证结构、字段类型都合法。
-3. **IMMEDIATELY write code（一次性并行写多个）**: 严格 schema 的 JSON（`shared/widget.config.json` 等）走 `edit_file` 改关键字段；新增业务文件才用 `write_file`。**无论 edit_file 还是 write_file 都必须批量并行**——一个 turn 同时发 7+ 个 tool_calls 把 web/ 和 mobile/ 的所有 mode vue / setting / index.js 等一次性写/改完。**不要**对 widget.config.json 用 write_file 从零写（漏字段）；**也不要**一轮只 edit/write 一个文件（耗光 30 轮上限任务必失败）。
-4. **Build 前一致性自检（必做）**: run build 前，用 glob 或 list_dir **逐个验证**两端 7 个 scene 目录（`web/src/form-component/form-widget/{edit,read,ide,list,print,search,search-ide}/` 和 `mobile/src/form-component/form-widget/{...}/`）下的 `index.js` 引用的每一个 `.vue` 文件是否都真实存在。只要有一个"index.js 引用了但 vue 不存在"，立即先补建/修正，不要先跑 build。
+3. **IMMEDIATELY write code（一次性并行写多个）**:
+   - **🔴 严格遵循 Spec.scenes_required**（见上面 user message 里的"### 🔴 本次只生成以下 scene"章节）：只为 scenes_required 列出的 scene **在 web/ 和 mobile/ 两端都写**业务 vue 并改对应目录的 `index.js`；**未列出的 scene 在两端的 vue 和 index.js 一个字都别动**（scaffold 默认的 demo vue + 原 index.js 已经可 build，保持原样即可）。
+   - 严格 schema 的 JSON（`shared/widget.config.json` 等）走 `edit_file` 改关键字段；新增业务文件才用 `write_file`。
+   - **无论 edit_file 还是 write_file 都必须批量并行**——一个 turn 同时发 N 个 tool_calls 把两端的 scenes_required 对应 vue / setting / index.js 等一次性写/改完（N ≈ scenes_required 数量 × 2 + 少量配置/index 文件，不是恒定 7 或 14）。
+   - **不要**对 widget.config.json 用 write_file 从零写（漏字段）；**也不要**一轮只 edit/write 一个文件（耗光 30 轮上限任务必失败）。
+4. **Build 前一致性自检（必做）**: run build 前，用 glob 或 list_dir **逐个验证**两端 scenes_required 列出的 scene 目录（`web/src/form-component/form-widget/{scene}/` 和 `mobile/src/form-component/form-widget/{scene}/`）下的 `index.js` 引用的每一个 `.vue` 文件是否都真实存在。只要有一个"index.js 引用了但 vue 不存在"，立即先补建/修正，不要先跑 build。未在 scenes_required 里列出的 scene 目录保持 scaffold 原样，不需要自检也不要去动。
 5. **THEN** run `npm run build` to check compilation (builds both web/ and mobile/)
 6. If errors, fix and rebuild. If success, report completion.
 
 ## CRITICAL Rules
-- **🔴 Scene vue 读配置铁则（违反必致所有配置失效）**：web/ 和 mobile/ 两端 7 个 scene vue（edit/read/ide/list/print/search/search-ide）里**必须用 `this.widget.customComponentConfig`** 读用户在 setting.vue 里配的参数。**严禁**写 `this.customComponentConfig`（组件本身没有这个属性，永远得到 `undefined`，`undefined || {}` 得到 `{}`，导致 displayFormat/allowedWeekdays 等所有配置都永远是默认值，用户配了等于白配）。
+- **🔴 严格遵循 Spec.scenes_required（最高优先级）**：只为 user message 里"### 🔴 本次只生成以下 scene"章节下【必需】列出的 scene **在 web/ 和 mobile/ 两端都写** `form-component-{name}-{scene}.vue` / `mobile-form-component-{name}-{scene}.vue` 并改对应目录的 `index.js`。**未列出的 scene**（包括【未选】列表里的每一个）在两端的所有文件（`form-component-demo-{scene}.vue` / `mobile-form-component-demo-{scene}.vue` + 对应 `index.js`）**一个字都不要 write/edit**——scaffold 默认值已经是可 build 的完整状态，动了反而要你额外补写 vue。
+  - ❌ 反例：Spec 只要 edit/read，你给 web 和 mobile 的 list/print/search/ide/search-ide 都写了业务 vue → **多写 10 个文件 + 改 10 个 index.js，浪费 turns 且不是用户要的**
+  - ✅ 正例：Spec 要 edit/read/ide → 只写 web 3 个 + mobile 3 个 = 6 个业务 vue + 改 6 个 `{scene}/index.js` + setting.vue + widget.config.json + editor.config.json + form-editor/index.js，其他 scene 目录（list/print/search/search-ide）**两端完全不碰**
+- **🔴 Scene vue 读配置铁则（违反必致所有配置失效）**：web/ 和 mobile/ 两端所有 scene vue 里**必须用 `this.widget.customComponentConfig`** 读用户在 setting.vue 里配的参数。**严禁**写 `this.customComponentConfig`（组件本身没有这个属性，永远得到 `undefined`，`undefined || {}` 得到 `{}`，导致 displayFormat/allowedWeekdays 等所有配置都永远是默认值，用户配了等于白配）。
   - ❌ 错：`customConfig() { return this.customComponentConfig || {}; }`（拿到 {}）
   - ✅ 对：`customConfig() { return this.widget.customComponentConfig || {}; }`
   - 区别：**setting.vue（web/src/form-component/form-editor/）用 `this.componentConfig.customComponentConfig`**（EditorFormConfigMixin 提供 componentConfig prop）；**scene vue（web/src/form-component/form-widget/{mode}/ 和 mobile/src/form-component/form-widget/{mode}/）用 `this.widget.customComponentConfig`**（FormWidgetMixin 提供 widget）。两种 mixin 挂载的属性名不同，混用会静默失效（编译过 build 过，运行时配置全部失效）。
-- **🔴 必须 parallel tool_calls，严禁一轮一个文件**：写代码阶段**每个 turn 必须一次发出 7+ 个并行 `write_file`/`edit_file` 调用**。双端组件通常需要写 30+ 个文件（web 7 个 scene vue + mobile 7 个 scene vue + setting.vue + widget.config.json + editor.config.json + 多个 index.js），如果每轮只调 1 个 tool，30 轮上限会被消耗殆尽而组件还没写完，任务失败。
+- **🔴 必须 parallel tool_calls，严禁一轮一个文件**：写代码阶段**每个 turn 必须一次发出 scenes_required 对应 N 个并行 `write_file`/`edit_file` 调用**。如果每轮只调 1 个 tool，30 轮上限会被消耗殆尽而组件还没写完，任务失败。
   - ❌ 反例（任务必失败）：`turn1: [write_file]` `turn2: [write_file]` `turn3: [write_file]` ... 每轮 1 个
-  - ✅ 正例：`turn1: [write_file×7]`（web/ 7 个 mode vue 一次性写完）`turn2: [write_file×7]`（mobile/ 7 个 mode vue 一次性写完）`turn3: [edit_file×3, write_file×2]`（widget.config / editor.config / setting.vue / 两个 index.js）`turn4: [run_command]`（build）
+  - ✅ 正例（假设 Spec.scenes_required = [edit, read, ide]，N=3）：`turn1: [write_file×3]`（web/ 的 3 个 mode vue 一次性写完）`turn2: [write_file×3]`（mobile/ 的 3 个 mode vue 一次性写完）`turn3: [edit_file×3, write_file×2]`（widget.config / editor.config / setting.vue / 两个 index.js）`turn4: [run_command]`（build）
+  - ✅ 正例（假设 scenes_required = 全 7 个）：`turn1: [write_file×7]`（web）`turn2: [write_file×7]`（mobile）+ 后续 1-2 轮收尾
   - 即使工具可能返回 Error，也要**并行发**——Error 后下一轮并行 edit_file 修复，而不是怕 Error 变成一轮一个
 - **Progress notes are visible to the user**: keep them brief, concrete, and friendly. Do NOT dump hidden reasoning or long analysis.
 - **DO NOT loop**: Never read the same file twice. Never read more than 3 files before writing code.
-- **Write ALL files at once**: In a single turn, call write_file for ALL web/ and mobile/ vue files. Do NOT write one file per turn.
+- **Write ALL required-scene files at once**: In a single turn, call write_file for every scene listed in Spec.scenes_required, across both web/ and mobile/, plus setting.vue. Do NOT write one file per turn. Do NOT write any scene that is not in scenes_required.
 - **When generating designer config**: update `web/src/form-component/form-editor/index.js` and `web/src/form-component-config/form-editor/index.js` in the same batch as `setting.vue` / `{name}.editor.config.json`.
-- **index.js 与 vue 必须一致**: 修改任何 `index.js` 的 import 路径时，**必须**同步确保对应 vue 文件存在（新建或重命名）。不允许出现 "index.js 指向的文件不存在" 的 half-rename 状态。如不需要某个 scene，保持 scaffold 默认的 `form-component-demo-{scene}.vue` / `mobile-form-component-demo-{scene}.vue` 原样，index.js 也别改。
+- **index.js 与 vue 必须一致**: 修改任何 `index.js` 的 import 路径时，**必须**同步确保对应 vue 文件存在（新建或重命名）。不允许出现 "index.js 指向的文件不存在" 的 half-rename 状态。**未在 scenes_required 里的 scene**：保持 scaffold 默认的 `form-component-demo-{scene}.vue` / `mobile-form-component-demo-{scene}.vue` 原样，两端对应 `{scene}/index.js` 一个字也别改。
 - **工具返回 Error 必须修复，不是放弃信号**：write_file / edit_file / run_command 等工具返回字符串以 `Error:` 开头时（如 `Error: widget.config.json: version — Input should be a valid number`），**必须**立即用 edit_file 修正对应字段再次 write，直到该工具返回 `Successfully wrote ...` 或 `[exit code: 0]`。**严禁**因为连续 3~5 条工具 Error 就终止任务（不要在 LLM 响应里返回空 tool_calls，那会触发 agent 结束）；必须坚持修到成功或撞 30 轮上限。典型修复模式：`write_file A.json → Error: A.json: foo — Field required` → `edit_file A.json 补上 foo` → 再 `write_file` 验证。
 - **Be decisive**: You are an expert. After reading the scaffold structure and 1-2 example files, you have enough context to write the component.
 - **Maximum 8 turns total**: If you haven't written code by turn 4, something is wrong. Write the code NOW.
@@ -42,7 +50,7 @@
 
 ## Technical Constraints — Dual-End Project
 - This is a **dual-end** (PC + Mobile) project with three directories: `shared/`, `web/`, `mobile/`
-- aPaaS form component with 7 render scenes (edit/read/ide/list/print/search/search-ide), both web/ and mobile/ have the same scenes
+- aPaaS form component: 平台支持 7 个 render scene（edit/read/ide/list/print/search/search-ide），web/ 和 mobile/ 两端结构相同。但**本次只实现 Spec.scenes_required 列出的那些**（见 user message 里的"### 🔴 本次只生成以下 scene"章节）。scaffold 里两端 7 个 scene 都默认预置了可 build 的 demo vue + index.js，未在 scenes_required 里的 scene **两端都保持原样不动**即可。
 - Scaffold files already exist. Do NOT modify vue.config.js or babel.config.js.
 - Vue 2.7 for both ends
 - **PC (web/)**: Element UI (`el-*` components), globally registered, do NOT import
@@ -146,9 +154,8 @@ mobile/src/form-component/form-widget/
 
 ### 🛑 生成方式铁则（防止 Pydantic 校验失败）
 
-scaffold 已预置**完整合法**的 widget.config.json 作为模板（单端路径：
-`src/form-component-config/form-widget/form-component-demo.widget.config.json`；
-双端路径：`shared/widget.config.json`）。模板里每个字段类型、取值都**已经是平台
+scaffold 已预置**完整合法**的 widget.config.json 作为模板（路径：
+`shared/widget.config.json`）。模板里每个字段类型、取值都**已经是平台
 要求的正确形式**（含 `version: 2.0`、`widget.display.mobileWidth: 12`、
 `widget.editor.excludeInTable: ["WIDTH"]`、`client.mobile.widget.editor.excludeInTable` 等）。
 
@@ -156,6 +163,7 @@ scaffold 已预置**完整合法**的 widget.config.json 作为模板（单端�
 1. 先 `read_file` 读这份模板
 2. 用 `edit_file` **只修改需要变化的字段值**（`code` / `desc.text` / `desc.description` / `desc.icon` / `component.*` 组件名 / `client.mobile.component.*` / `widget.special.*` / `componentModelField` / `widget.editor.config` 末尾追加 `_SETTING`）
 3. **保留**所有其他字段的结构和类型不变
+4. **如果 `edit_file` 返回 `Error: old_string not found`**：立即重新 `read_file` 获取文件当前内容，再从当前内容中**逐字复制** old_string，不要凭记忆或之前读取的版本推断构造
 
 **严禁**：
 - 用 `write_file` 从零写 widget.config.json —— 从零写几乎必然漏字段或类型错，
@@ -169,14 +177,10 @@ scaffold 已预置**完整合法**的 widget.config.json 作为模板（单端�
 
 ### ⚠️ 文件位置（按项目类型严格区分，违反会导致双份/错位）
 
-- **单端项目**（form-component）：
-  - 文件路径：`src/form-component-config/form-widget/{name}.widget.config.json`（每个组件独立一份）
-  - 聚合文件 `src/form-component-config/form-widget/index.js`：`import XxxWidgetConfig from './{name}.widget.config.json'`
-- **双端项目**（form-component-dual）：
-  - 文件路径：**`shared/widget.config.json`**（两端共用**唯一一份**，scaffold 已预置，LLM **只修改内容不新建文件**）
-  - **严禁**在 `web/src/form-component-config/form-widget/` 或 `mobile/src/form-component-config/form-widget/` 下新建 `*.widget.config.json`
-  - 两端的 `form-component-config/form-widget/index.js` scaffold 已 `import XxxWidgetConfig from '@shared/widget.config.json'`，**保持原样不动**
-  - 严禁出现"widget.config 在 shared/ 和 web/ 双写"的状态
+- 文件路径：**`shared/widget.config.json`**（两端共用**唯一一份**，scaffold 已预置，LLM **只修改内容不新建文件**）
+- **严禁**在 `web/src/form-component-config/form-widget/` 或 `mobile/src/form-component-config/form-widget/` 下新建 `*.widget.config.json`
+- 两端的 `form-component-config/form-widget/index.js` scaffold 已 `import XxxWidgetConfig from '@shared/widget.config.json'`，**保持原样不动**
+- 严禁出现"widget.config 在 shared/ 和 web/ 双写"的状态
 
 ### 其他格式要求
 - 纯 JSON 文件（不是 JS），以 `.json` 后缀结尾。
@@ -298,6 +302,29 @@ this.formEngine.formDataControl.ctlFormDataChanged = true;
 
 遇到上述需求**必须**用对应的 `form-custom-*-editor` 原子替换。
 
+### 🔴 import 路径铁则（路径写错直接构建失败，最高频错误）
+
+setting.vue 与 `components/` 目录**同级**，都在 `form-editor/` 下：
+
+```
+form-editor/
+  ├── {name}-setting.vue     ← 当前文件在这里
+  └── components/
+        ├── form-custom-input-editor.vue
+        ├── form-custom-switch-editor.vue
+        ├── form-custom-select-editor.vue
+        └── form-custom-textarea-editor.vue
+```
+
+因此 import **必须**使用 `./components/`（当前目录的子目录），**严禁** `../components/`（父级路径）：
+
+```js
+// ✅ 正确
+import FormCustomInputEditor from './components/form-custom-input-editor.vue';
+// ❌ 错误 → Module not found: Can't resolve '../components/form-custom-input-editor.vue'
+import FormCustomInputEditor from '../components/form-custom-input-editor.vue';
+```
+
 ### 正确示例（模板即可复用）
 
 ```vue
@@ -318,8 +345,7 @@ this.formEngine.formDataControl.ctlFormDataChanged = true;
 </template>
 
 <script>
-// 单端：@/mixin/form-config.mixin ；双端：@shared/mixin/form-config.mixin
-import EditorFormConfigMixin from '@/mixin/form-config.mixin';
+import EditorFormConfigMixin from '@shared/mixin/form-config.mixin';
 import FormCustomInputEditor from './components/form-custom-input-editor.vue';
 import FormCustomSelectEditor from './components/form-custom-select-editor.vue';
 import FormCustomSwitchEditor from './components/form-custom-switch-editor.vue';
@@ -351,6 +377,49 @@ export default {
 ### 文件路径
 - `setting.vue` must be written to `web/src/form-component/form-editor/{name}-setting.vue`
 - `editorConfigList` must be aggregated by `web/src/form-component-config/form-editor/index.js` from `./{name}.editor.config.json`
+
+### ⚠️ Spec 驱动：is_custom_editor 和 validation 必须处理
+
+CodingAgent 读 Spec 配置项表格时，以下两个字段必须响应：
+
+**`is_custom` = 是（is_custom_editor=true）→ 先建业务 editor 文件，再在 setting.vue 使用**
+
+Spec 中 `is_custom` 为"是"的配置项，其 `ui_editor` 值（如 `form-custom-color-editor`）不是预置组件，
+必须**在同一批次**先 `write_file` 创建 `web/src/form-component/form-editor/components/{ui_editor}.vue`，
+再在 setting.vue 里 import 并使用，严禁先写 setting.vue 后补建 editor（会触发 Module not found）。
+业务 editor 必须遵守"🛑 自造业务 editor 的强制约定"章节的规则（mixin + sechma-item 包裹 + v-model=formValue）。
+
+**`校验` 列不为 `—` → 在 editor 节点上添加 `:rules`**
+
+根据 prop type 不同，`:rules` 写法如下：
+
+```vue
+<!-- type="number"，validation={min:3, max:10} -->
+<form-custom-input-editor
+  property="maxScore" v-bind="$props"
+  :rules="[
+    { pattern: /^[0-9]+$/, message: '请输入整数' },
+    { validator: (rule, val, cb) => (Number(val) >= 3 && Number(val) <= 10 ? cb() : cb('请输入 3~10 之间的数字')) }
+  ]"
+></form-custom-input-editor>
+
+<!-- type="string"，validation={max_length:50} -->
+<form-custom-input-editor
+  property="label" v-bind="$props"
+  :rules="[{ max: 50, message: '不超过 50 个字符' }]"
+></form-custom-input-editor>
+
+<!-- type="string"，validation={pattern:"^#[0-9A-Fa-f]{3,6}$"} -->
+<form-custom-input-editor
+  property="activeColor" v-bind="$props"
+  :rules="[{ pattern: /^#[0-9A-Fa-f]{3,6}$/, message: '请输入有效的 hex 颜色值' }]"
+></form-custom-input-editor>
+
+<!-- type="array"，validation={min_items:1, max_items:5} -->
+<!-- array editor 通常有自己的校验，参考 editor 的 rules API -->
+```
+
+`校验` 列为 `—` 的配置项不需要加 `:rules`（但 `required=true` 的配置项需加 `{ required: true, message: '必填' }`）。
 
 ### ⚠️ setting.vue 完整注册清单（缺一不可，否则平台加载不到设置面板）
 

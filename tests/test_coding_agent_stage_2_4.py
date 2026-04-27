@@ -273,8 +273,10 @@ def test_on_llm_response_empty_content_with_tool_calls_emits_progress_note():
     )
     asyncio.run(agent.on_llm_response(resp))
 
-    # 应发 agent_thinking_delta 事件（note）
-    events = [e for e in ctx.publisher.events if e["type"] == "coding.agent_thinking_delta"]
+    # 应发 agent_thinking 聚合事件（note 是事后合成的完整文本，不是 delta 流）
+    # 走 delta 会被前端拼到上一条未封口的 thinking 上 → 思考卡尾部突然多出
+    # 一段和上下文无关的合成 note，造成视觉跳变。
+    events = [e for e in ctx.publisher.events if e["type"] == "coding.agent_thinking"]
     assert len(events) == 1
     assert "读取" in events[0]["data"]["content"] or "读" in events[0]["data"]["content"]
 
@@ -292,7 +294,7 @@ def test_on_llm_response_duplicate_note_not_repushed():
     asyncio.run(agent.on_llm_response(resp))
     asyncio.run(agent.on_llm_response(resp))
 
-    events = [e for e in ctx.publisher.events if e["type"] == "coding.agent_thinking_delta"]
+    events = [e for e in ctx.publisher.events if e["type"] == "coding.agent_thinking"]
     assert len(events) == 1  # 第二轮同 note 被去重
 
 
@@ -422,6 +424,10 @@ def test_on_context_overflow_invoked_each_turn():
     ]
     ctx = _make_ctx(llm_client=MockLLM(scripts))
     agent = TrackedAgent(ctx)
+    # 预置 messages → run() 走 is_resume 分支，跳过 build_initial_user_message。
+    # 否则没 workspace_id 时 prompt dispatcher 的 project_type='' 会 raise
+    # （这个测试只关心 on_context_overflow hook，不需要真实构造 prompt）。
+    agent._messages = [{"role": "user", "content": "test"}]
     result = asyncio.run(agent.run())
 
     # 至少调一次 on_context_overflow（轮 1 前）

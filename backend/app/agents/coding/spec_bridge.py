@@ -249,11 +249,27 @@ def _render_component_spec(spec: dict[str, Any]) -> str:
     sr = spec.get("scenes_required") or []
     so = spec.get("scenes_optional") or []
     if sr or so:
-        out.append("### 渲染场景")
+        out.append("### 🔴 本次只生成以下 scene（未列出的 scene 一个字都别动）")
         if sr:
-            out.append(f"- **必需**：{', '.join(sr)}")
+            out.append(f"- **必需（本次必须写业务代码的 scene）**：{', '.join(sr)}")
         if so:
-            out.append(f"- **可选**：{', '.join(so)}")
+            out.append(f"- **可选（可写可不写，用户未明确要求）**：{', '.join(so)}")
+        not_in = [
+            s for s in ("edit", "read", "ide", "list", "print", "search", "search-ide")
+            if s not in sr and s not in so
+        ]
+        if not_in:
+            out.append(
+                f"- **未选（保持 scaffold 默认的 `form-component-demo-{{scene}}.vue` 原样，"
+                f"对应目录的 index.js 不要改）**：{', '.join(not_in)}"
+            )
+        out.append("")
+        out.append(
+            "> ⚠️ 上面【未选】的 scene 在 scaffold 里已经有完整的 demo vue + index.js 占位，"
+            "`npm run build` 可以直接跑通。你只需为【必需】scene 写新的 "
+            "`form-component-{name}-{scene}.vue` 并改对应目录的 `index.js` 把 demo 改成新组件。"
+            "任何未列出的 scene 文件（包括 web/ 和 mobile/ 两端）都不要 write/edit。"
+        )
         out.append("")
 
     hooks = spec.get("platform_hooks") or {}

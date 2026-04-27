@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from app.agents.iteration.spec_patch import IterationLevel, PatchOp, SpecPatch
@@ -22,8 +22,35 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class Ambiguity:
+    """LLM 识别出的、用户消息未明确说清的字段歧义。
+
+    出现在 RefineIntent.ambiguities 里，意味着这次 refine 会触及该字段，但用户没说
+    具体值/方案。处理策略：
+    - 优先：用 default 兜底，写进新 Spec 的 provenance.open_questions（不打扰用户）
+    - 兜底：如果 default 缺失或不安全，发 ask_user 精准反问（必须带 target_path = path）
+    """
+    path: str
+    """歧义字段的 Spec 路径，dot+[index] 语法（与 SpecPatch 一致）"""
+
+    question: str
+    """中文问题，**必须只关于这个 path**，禁止跨字段"""
+
+    options: list[str] = field(default_factory=list)
+    """候选值（值列表，前端展示给用户选择）"""
+
+    default: Optional[str] = None
+    """默认兜底值。非空时可不打扰用户、走 open_question 路径"""
+
+
+@dataclass
 class IterationClassification:
-    """classify_iteration 返回"""
+    """classify_iteration 返回 —— 既是分级，也是结构化的"修改意图"（RefineIntent）。
+
+    旧字段（level/rationale/confidence/patch）保留作 backward-compat。新字段
+    （target_paths/derived_paths/ambiguities）驱动新的 Refine Strategy Router
+    （见 routes/coding_v2.py 的 _run_iterate_dispatch_task）。
+    """
     level: IterationLevel
     rationale: str
     """LLM 判断依据，给用户看"""
@@ -32,7 +59,36 @@ class IterationClassification:
     """0-1，LLM 对自身判断的信心"""
 
     patch: Optional[SpecPatch] = None
-    """trivial 级时 LLM 会顺便产 SpecPatch；minor/major 为 None"""
+    """LLM 能精确构造 patch 时附带；否则 None。trivial 级要求必填，minor 级允许填。"""
+
+    # ── Refine Intent（结构化修改意图）—— Phase A 新增 ── #
+
+    target_paths: list[str] = field(default_factory=list)
+    """用户消息**直接指向**的 Spec 字段路径（dot+[index] 语法）。
+
+    例：用户说"attachmentFieldCode 应改为组件选择器" →
+        ["spec.config_properties[2].ui_editor"]
+
+    后续 brainstorm / ask_user 必须**只能**操作 target_paths ∪ derived_paths 内的字段，
+    其它字段由 server 端校验拒绝越界（防止"答非所问"重问已确定字段）。
+    """
+
+    derived_paths: list[str] = field(default_factory=list)
+    """LLM 推断会被联动影响的字段路径（target_paths 的"涟漪"）。
+
+    例：把 ui_editor 改为自定义 → derived = ["spec.config_properties[2].is_custom_editor",
+        "spec.config_properties[2].editor_props"]
+
+    和 target_paths 一起组成本次 refine 的"许可范围"。
+    """
+
+    ambiguities: list[Ambiguity] = field(default_factory=list)
+    """target_paths/derived_paths 内的字段中，用户没说清楚的那些。
+
+    每条歧义带 (path, question, options, default)。处理策略：
+    - default 安全 → 写进 open_questions，不打扰用户
+    - default 不安全 → 发 ask_user（必须带 target_path = path）
+    """
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -40,61 +96,136 @@ class IterationClassification:
             "rationale": self.rationale,
             "confidence": self.confidence,
             "patch": self.patch.to_dict() if self.patch else None,
+            "target_paths": list(self.target_paths),
+            "derived_paths": list(self.derived_paths),
+            "ambiguities": [
+                {
+                    "path": a.path,
+                    "question": a.question,
+                    "options": list(a.options),
+                    "default": a.default,
+                }
+                for a in self.ambiguities
+            ],
         }
+
+    @property
+    def allowed_paths(self) -> list[str]:
+        """target_paths ∪ derived_paths，去重保序。后续 brainstorm 的 scope 约束就用这个。"""
+        seen: set[str] = set()
+        out: list[str] = []
+        for p in (*self.target_paths, *self.derived_paths):
+            if p not in seen:
+                seen.add(p)
+                out.append(p)
+        return out
 
 
 # ══════════════════════════════════════════════════════════════
 # Prompt
 # ══════════════════════════════════════════════════════════════
 
-_SYSTEM_PROMPT = """你是 aPaaS 迭代分级助手。用户在**已完成的**智能开发对话里发了新消息，
-你要判断该消息属于以下 4 档哪一档：
+_SYSTEM_PROMPT = """你是 aPaaS 迭代分级助手。用户对**已经签过的 Spec** 提出修改/补充。
+你的任务：**精确定位**用户想改哪些字段，输出结构化的"修改意图"。
 
-1. **trivial** —— 明确的小修改，不需要反问、不需要改动结构：
-   - 例："主色改成红色" / "最多星数改成 10" / "去掉 print 场景"
-   - 你**直接**在响应里给 SpecPatch 操作，CodingAgent 按 patch 重跑
+# 核心心智
 
-2. **minor** —— 模糊的小修改，需要 1 轮反问才能确定细节：
-   - 例："弄漂亮一点" / "能不能再精简一点"
-   - 不给 patch，brainstorm 反问后再决定
+用户每次修改 = 对 Spec 树的一次**局部 patch**。你不是要重新理解组件、重新问基础问题，
+而是要**像 git diff 一样**精确指出"哪些字段会变"。
 
-3. **major** —— 重大改动（新增 / 删除 / 语义重写）：
-   - 例："加一个备注字段" / "把组件改成多选"
-   - 必须走完整的 brainstorm 反问流程
+# 输出 4 个关键字段
 
-4. **cross_scene** —— 用户要做的事**跨场景**（从组件变页面、从页面变接口）：
-   - 例：当前是 web_component_dual，用户说"把它改成一个管理页面"
-   - 警告用户这应该**新建工作区**
+## 1. level（必填）—— 修改的"波及范围"
 
-# 判断原则
+- **trivial** —— 改动可机械精确表达 + 你能直接构造 SpecPatch + 无任何歧义
+  - 例："星数最多改 10" → set spec.config_properties[i].validation.max = 10
+- **minor** —— 改动可定位到具体字段，但需要少量补充信息（user 没说清细节）
+  - 例："默认值改大一点" → 知道改 default，但具体值要问 / 默认猜
+- **major** —— 改动较大，需要起对话明确细节（但**仍限定在 target_paths**）
+  - 例："把单选改成多选" → 涉及 ui_editor/editor_props/data_spec 多字段，需要确认细节
+- **cross_scene** —— 用户要的事跨越场景（如组件改页面）→ 警告
 
-- 能精确指到某字段的改动 → trivial 优先
-- 涉及"新增配置项/字段" → major（改配置数组也算，因为影响 UX）
-- 用户原话很模糊（"优化"/"更好"/"精简"）→ minor
-- scene_type 明显要变 → cross_scene
+## 2. target_paths（必填，可空数组）—— 用户消息**直接指向**的 Spec 字段
 
-# 输出
+dot + [index] 语法，必须能精确定位到 Spec envelope 里的字段。
 
-必须返回纯 JSON，结构：
+例：
+- "attachmentFieldCode 应改为组件选择器" → ["spec.config_properties[2].ui_editor"]
+  （要从 config_properties 里找到 key=attachmentFieldCode 的那一项）
+- "默认值改成 3 星" → ["spec.config_properties[i].default"]
+- "加一个 showLabel 配置" → ["spec.config_properties"]（数组追加）
+- "core_purpose 应该是..." → ["intent.core_purpose"]
+
+**关键**：target_paths 的存在意义是**约束后续 brainstorm 不要越界问其他字段**。
+所以一定要精确，不要写 ["spec"] 这种过宽路径。
+
+## 3. derived_paths（必填，可空数组）—— target_paths 的"涟漪"
+
+target_paths 改变后，**根据规范必须联动改的其他字段**。
+
+例：
+- target = [".ui_editor"]（改成自定义 editor）
+  → derived = [".is_custom_editor", ".editor_props"]（要标 custom + 配 editor 参数）
+- target = [".form_value_shape"]（改成 array）
+  → derived = [".bof_type", ".component_model_field", ".storage_note"]
+
+如果想不到联动，留空数组。
+
+## 4. ambiguities（必填，可空数组）—— 用户没说清楚的字段
+
+每条 = {path, question, options, default}：
+- path：必须在 target_paths ∪ derived_paths 内
+- question：中文问题，**只问这一个字段**
+- options：候选值列表（让用户选，比让用户打字好）
+- default：你的兜底默认值（用户不答时用这个，记 open_question）
+
+例：用户说"加个 selector 选附件" 但没说"是否多选" →
 ```json
 {
-  "level": "trivial" | "minor" | "major" | "cross_scene",
-  "rationale": "一句话中文说明",
-  "confidence": 0.0~1.0,
-  "patch": {  // 仅 trivial 必填，其他档填 null
-    "operations": [
-      {"op": "set", "path": "spec.config_properties[0].default", "value": "red"}
-    ],
-    "rationale": "改主色"
-  }
+  "path": "spec.config_properties[2].editor_props.multiple",
+  "question": "附件选择器是否需要支持多选？",
+  "options": ["单选", "多选"],
+  "default": "单选"
 }
 ```
 
-**重要**：
-- SpecPatch 的 path 使用 **dot + [index]** 语法（不是 JSON-pointer /）
-- op 只允许 set / add / remove
-- trivial 且给 patch 时：confidence 应 ≥ 0.75，否则降为 minor
-- 不确定时宁可升级（trivial → minor，minor → major）"""
+# patch 字段（可选）
+
+如果你**完全确定改法**且能用 set/add/remove 操作精确表达，附带 patch：
+```json
+"patch": {
+  "operations": [
+    {"op": "set", "path": "spec.config_properties[0].default", "value": "red"}
+  ],
+  "rationale": "改主色"
+}
+```
+- 仅 trivial 强制要求 patch
+- minor / major 也可以附带（如果你能构造） → 走快通道
+- patch 的 path 必须在 target_paths ∪ derived_paths 内
+
+# 完整输出
+
+```json
+{
+  "level": "trivial" | "minor" | "major" | "cross_scene",
+  "rationale": "一句话中文说明这次修改的本质",
+  "confidence": 0.0~1.0,
+  "target_paths": ["spec.xxx", ...],
+  "derived_paths": ["spec.yyy", ...],
+  "ambiguities": [{"path": "...", "question": "...", "options": [...], "default": "..."}, ...],
+  "patch": { ... } | null
+}
+```
+
+# 铁律
+
+- target_paths 必须精确到字段级，不许写 ["spec"] / ["intent"] 这种宽路径
+- ambiguities 中每个 path 必须在 target_paths ∪ derived_paths 内
+- 严禁把"你想确认一下"的事写成 ambiguity（不是用户没说清的字段就不要列）
+- cross_scene 时 target_paths/derived_paths/ambiguities/patch 都给空
+- SpecPatch path 使用 dot + [index] 语法（不是 JSON-pointer /）
+- 不确定时宁可升级（trivial → minor，minor → major），但**保持 target_paths 精确**"""
 
 
 def _build_user_prompt(user_message: str, spec_envelope: dict[str, Any]) -> str:
@@ -229,9 +360,18 @@ def _parse_classification(
         confidence = 0.0
     confidence = max(0.0, min(1.0, confidence))
 
+    # —— Refine Intent 字段（Phase A 新增） —— #
+    target_paths = _parse_str_list(raw_obj.get("target_paths"))
+    derived_paths = _parse_str_list(raw_obj.get("derived_paths"))
+    ambiguities = _parse_ambiguities(
+        raw_obj.get("ambiguities"),
+        allowed_paths=set(target_paths) | set(derived_paths),
+    )
+
+    # —— Patch 解析（trivial / minor / major 都允许带 patch，trivial 强制） —— #
     patch: Optional[SpecPatch] = None
     patch_raw = raw_obj.get("patch")
-    if level == IterationLevel.TRIVIAL and isinstance(patch_raw, dict):
+    if isinstance(patch_raw, dict):
         ops_raw = patch_raw.get("operations") or []
         parsed_ops: list[PatchOp] = []
         for op_obj in ops_raw:
@@ -247,30 +387,84 @@ def _parse_classification(
                 operations=parsed_ops,
                 rationale=str(patch_raw.get("rationale") or rationale),
                 user_instruction=user_message,
-                iteration_level=IterationLevel.TRIVIAL,
+                iteration_level=level if level in (IterationLevel.TRIVIAL, IterationLevel.MINOR) else IterationLevel.MINOR,
             )
-        else:
-            # trivial 但没 patch → 降为 minor（LLM 没完成职责，让 brainstorm 接手）
+
+    # —— trivial 一致性兜底 —— #
+    if level == IterationLevel.TRIVIAL:
+        if patch is None:
+            # trivial 必须有 patch，没有则降级
             level = IterationLevel.MINOR
             rationale += "（LLM 未给出可用 patch，降级到 minor）"
+        elif confidence < 0.6:
+            # 置信度过低 → 降级 + 丢 patch（不安全直接 apply）
+            level = IterationLevel.MINOR
+            patch = None
+            rationale += "（confidence 过低，降级到 minor）"
 
-    # trivial 但 LLM 没给 patch（patch_raw 是 None 或不是 dict）→ 降级
-    if level == IterationLevel.TRIVIAL and patch is None:
-        level = IterationLevel.MINOR
-        rationale += "（LLM 未给出可用 patch，降级到 minor）"
-
-    # 置信度过低的 trivial → 降级
-    if level == IterationLevel.TRIVIAL and confidence < 0.6:
-        level = IterationLevel.MINOR
+    # —— cross_scene：清掉 patch（跨场景不能 patch） —— #
+    if level == IterationLevel.CROSS_SCENE:
         patch = None
-        rationale += "（confidence 过低，降级到 minor）"
 
     return IterationClassification(
         level=level,
         rationale=rationale,
         confidence=confidence,
         patch=patch,
+        target_paths=target_paths,
+        derived_paths=derived_paths,
+        ambiguities=ambiguities,
     )
+
+
+def _parse_str_list(raw: Any) -> list[str]:
+    """容忍各种格式：null / list / str。返回去重保序的字符串列表。"""
+    if not raw:
+        return []
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in raw:
+        s = str(item).strip()
+        if s and s not in seen:
+            seen.add(s)
+            out.append(s)
+    return out
+
+
+def _parse_ambiguities(raw: Any, *, allowed_paths: set[str]) -> list["Ambiguity"]:
+    """解析 ambiguities 数组。LLM 可能省略 default/options，宽松处理。
+
+    强约束：每条 path 必须落在 allowed_paths 内（target ∪ derived），否则丢弃。
+    （这是 Refine Intent 的核心不变量：歧义只能在用户指向的范围内。）
+    """
+    if not raw or not isinstance(raw, list):
+        return []
+    out: list[Ambiguity] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        path = str(item.get("path") or "").strip()
+        question = str(item.get("question") or "").strip()
+        if not path or not question:
+            continue
+        if allowed_paths and path not in allowed_paths:
+            logger.warning(
+                "classify: drop ambiguity with path %r outside allowed set %r",
+                path, allowed_paths,
+            )
+            continue
+        opts_raw = item.get("options")
+        opts: list[str] = []
+        if isinstance(opts_raw, list):
+            opts = [str(o) for o in opts_raw if o is not None]
+        default = item.get("default")
+        default_s = str(default).strip() if default is not None else None
+        out.append(Ambiguity(path=path, question=question, options=opts, default=default_s))
+    return out
 
 
 async def classify_iteration(

@@ -392,34 +392,25 @@ _SHARED_FORMENGINE_API_SECTION = """
 """
 
 
-def render_form_component_sections(base_path: str) -> str:
-    """渲染 form-component 共享段。base_path 单端 `src`，双端 `web/src`。"""
-    is_dual = base_path == "web/src"
+def render_form_component_sections() -> str:
+    """渲染 form-component 双端 (web/ + mobile/) 共享段。
 
-    # 占位符 → 按项目类型渲染不同内容
-    if is_dual:
-        widget_config_template_path = "shared/widget.config.json"
-        widget_config_file_positions = (
-            "- 文件路径：**`shared/widget.config.json`**"
-            "（两端共用**唯一一份**，scaffold 已预置，LLM **只修改内容不新建文件**）\n"
-            "- **严禁**在 `web/src/form-component-config/form-widget/` 或"
-            " `mobile/src/form-component-config/form-widget/` 下新建 `*.widget.config.json`\n"
-            "- 两端的 `form-component-config/form-widget/index.js` scaffold 已"
-            " `import XxxWidgetConfig from '@shared/widget.config.json'`，**保持原样不动**\n"
-            '- 严禁出现"widget.config 在 shared/ 和 web/ 双写"的状态'
-        )
-        editor_mixin_import = "import EditorFormConfigMixin from '@shared/mixin/form-config.mixin';"
-    else:
-        widget_config_template_path = (
-            "src/form-component-config/form-widget/form-component-demo.widget.config.json"
-        )
-        widget_config_file_positions = (
-            "- 文件路径：`src/form-component-config/form-widget/{name}.widget.config.json`"
-            "（每个组件独立一份）\n"
-            "- 聚合文件 `src/form-component-config/form-widget/index.js`："
-            "`import XxxWidgetConfig from './{name}.widget.config.json'`"
-        )
-        editor_mixin_import = "import EditorFormConfigMixin from '@/mixin/form-config.mixin';"
+    历史遗留：曾支持单端 form-component（base_path=`src`）和双端（`web/src`），
+    2026-04 产品线统一到双端（见 `workspace.py` ProjectType.FORM_COMPONENT_DUAL
+    注释："所有组件统一走此模板"）。单端分支随后删除。
+    """
+    base_path = "web/src"
+    widget_config_template_path = "shared/widget.config.json"
+    widget_config_file_positions = (
+        "- 文件路径：**`shared/widget.config.json`**"
+        "（两端共用**唯一一份**，scaffold 已预置，LLM **只修改内容不新建文件**）\n"
+        "- **严禁**在 `web/src/form-component-config/form-widget/` 或"
+        " `mobile/src/form-component-config/form-widget/` 下新建 `*.widget.config.json`\n"
+        "- 两端的 `form-component-config/form-widget/index.js` scaffold 已"
+        " `import XxxWidgetConfig from '@shared/widget.config.json'`，**保持原样不动**\n"
+        '- 严禁出现"widget.config 在 shared/ 和 web/ 双写"的状态'
+    )
+    editor_mixin_import = "import EditorFormConfigMixin from '@shared/mixin/form-config.mixin';"
 
     def _render(text: str) -> str:
         return (
@@ -443,111 +434,38 @@ def render_form_component_sections(base_path: str) -> str:
 # 项目类型特定 workflow prompt 段
 # ══════════════════════════════════════════════════════════════
 
-_WORKFLOW_FORM_COMPONENT = """
-## Workflow — IMPORTANT: Be efficient! Minimize tool calls.
-0. **Before tool calls**: First write a short, user-facing progress note in Chinese (1-3 sentences) explaining what you understood and what you will do next.
-1. **FIRST** (1 call): Use glob_files to see the project structure
-2. **THEN** (1-3 calls max): If `.cursor/rules/*.mdc` exists, read those rule files first, then read ONLY the key implementation files you need (edit.vue and mixin). Do NOT read every file. **必读**：scaffold 默认的 `form-component-demo.widget.config.json` 和一份 `.editor.config.json`，作为后续 edit 的模板——这样能保证结构、字段类型都合法。
-3. **IMMEDIATELY write code（一次性并行写多个）**: 严格 schema 的 JSON（widget.config.json 等）走 `edit_file` 改关键字段；新增业务文件才用 `write_file`。**无论 edit_file 还是 write_file 都必须批量并行**——一个 turn 同时发 7+ 个 tool_calls 把所有 mode vue / setting / index.js / widget.config.json 等一次性写/改完。**不要**对 widget.config.json 用 write_file 从零写（漏字段）；**也不要**一轮只 edit/write 一个文件（耗光 30 轮上限任务必失败）。
-4. **Build 前一致性自检（必做）**: run build 前，用 glob 或 list_dir **逐个验证** 7 个 scene 目录 (`src/form-component/form-widget/{edit,read,ide,list,print,search,search-ide}/`) 下的 `index.js` 引用的每一个 `.vue` 文件是否都真实存在。只要有一个"index.js 引用了但 vue 不存在"，立即先补建/修正，不要先跑 build。
-5. **THEN** run `npm run build` to check compilation
-6. If errors, fix and rebuild. If success, report completion.
-
-## CRITICAL Rules
-- **🔴 Scene vue 读配置铁则（违反必致所有配置失效）**：edit/read/ide/list/print/search/search-ide 这 7 个 scene vue 里**必须用 `this.widget.customComponentConfig`** 读用户在 setting.vue 里配的参数。**严禁**写 `this.customComponentConfig`（组件本身没有这个属性，永远得到 `undefined`，`undefined || {}` 得到 `{}`，导致 displayFormat/allowedWeekdays 等所有配置都永远是默认值，用户配了等于白配）。
-  - ❌ 错：`customConfig() { return this.customComponentConfig || {}; }`（拿到 {}）
-  - ✅ 对：`customConfig() { return this.widget.customComponentConfig || {}; }`
-  - 区别：**setting.vue 用 `this.componentConfig.customComponentConfig`**（EditorFormConfigMixin 提供 componentConfig prop）；**scene vue 用 `this.widget.customComponentConfig`**（FormWidgetMixin 提供 widget）。两种 mixin 挂载的属性名不同，混用会静默失效。
-- **🔴 必须 parallel tool_calls，严禁一轮一个文件**：写代码阶段**每个 turn 必须一次发出 5+ 个并行 `write_file`/`edit_file` 调用**。这个组件通常需要写 20+ 个文件（7 个 scene vue + setting.vue + widget.config.json + editor.config.json + 多个 index.js），如果每轮只调 1 个 tool，30 轮上限会被消耗殆尽而组件还没写完，任务失败。
-  - ❌ 反例（任务必失败）：`turn1: [write_file]` `turn2: [write_file]` `turn3: [write_file]` ... 每轮 1 个
-  - ✅ 正例：`turn1: [write_file×7]`（所有 mode vue 一次性写完）`turn2: [edit_file×3, write_file×2]`（widget.config / editor.config / setting.vue / 两个 index.js）`turn3: [run_command]`（build）
-  - 即使工具可能返回 Error，也要**并行发**——Error 后下一轮并行 edit_file 修复，而不是怕 Error 变成一轮一个
-- **Progress notes are visible to the user**: keep them brief, concrete, and friendly. Do NOT dump hidden reasoning or long analysis.
-- **DO NOT loop**: Never read the same file twice. Never read more than 3 files before writing code.
-- **Write ALL files at once**: In a single turn, call write_file for edit.vue, read.vue, ide.vue, setting.vue etc. Do NOT write one file per turn.
-- **When generating designer config**: update `src/form-component/form-editor/index.js` and `src/form-component-config/form-editor/index.js` in the same batch as `setting.vue` / `{name}.editor.config.json`.
-- **index.js 与 vue 必须一致**: 修改任何 `index.js` 的 import 路径时，**必须**同步确保对应 vue 文件存在（新建或重命名）。不允许出现 "index.js 指向的文件不存在" 的 half-rename 状态。如不需要某个 scene，保持 scaffold 默认的 `form-component-demo-{scene}.vue` 原样，index.js 也别改。
-- **工具返回 Error 必须修复，不是放弃信号**：write_file / edit_file / run_command 等工具返回字符串以 `Error:` 开头时（如 `Error: widget.config.json: version — Input should be a valid number`），**必须**立即用 edit_file 修正对应字段再次 write，直到该工具返回 `Successfully wrote ...` 或 `[exit code: 0]`。**严禁**因为连续 3~5 条工具 Error 就终止任务（不要在 LLM 响应里返回空 tool_calls，那会触发 agent 结束）；必须坚持修到成功或撞 30 轮上限。典型修复模式：`write_file A.json → Error: A.json: foo — Field required` → `edit_file A.json 补上 foo` → 再 `write_file` 验证。
-- **Be decisive**: You are an expert. After reading the scaffold structure and 1-2 example files, you have enough context to write the component.
-- **Maximum 8 turns total**: If you haven't written code by turn 4, something is wrong. Write the code NOW.
-- **NEVER use `<el-dialog>` inside form widgets** — it breaks FormEngine component resolution and crashes the platform with `Cannot read properties of undefined (reading 'edit')`. Use `<el-popover :append-to-body="true">` instead for any preview/popup interaction.
-
-## Technical Constraints
-- aPaaS form component with 7 render scenes (edit/read/ide/list/print/search/search-ide)
-- Scaffold files already exist. Do NOT modify vue.config.js or babel.config.js. Avoid unrelated index.js changes, but you may update `src/form-component/form-editor/index.js` and `src/form-component-config/form-editor/index.js` when adding `setting.vue` / `editor.config.json`.
-- Vue 2.7 + Element UI (globally registered, do NOT import Element UI)
-- **console.log is stripped in production — use `console.info` for ALL debug output in every mode.**
-- **formEngine is NOT available in `beforeCreate()` — only access `this.formEngine` from `created()` or later.**
-
-## 🛑 目录结构铁则（绝对不要违反）
-
-所有 7 个 scene 的 vue 文件**只能放在下列唯一目录下**：
-
-```
-src/form-component/form-widget/
-├── edit/       ← form-component-{name}-edit.vue
-├── read/       ← form-component-{name}-read.vue
-├── ide/        ← form-component-{name}-ide.vue
-├── list/       ← form-component-{name}-list.vue
-├── print/      ← form-component-{name}-print.vue
-├── search/     ← form-component-{name}-search.vue
-└── search-ide/ ← form-component-{name}-search-ide.vue
-```
-
-**禁止**创建以下目录（常见幻觉，scaffold **不存在**）：
-- ❌ `src/form-component/list-widget/`
-- ❌ `src/form-component/print-widget/`
-- ❌ `src/form-component/search-widget/`
-- ❌ `src/form-component/search-ide-widget/`
-- ❌ `src/form-component/edit-widget/`
-
-注意：mixin 文件名（如 `list-widget.mixin.js`、`search-widget.mixin.js`）**只是文件名**，**不是目录名**。list/search/print/search-ide 的 vue 都在 `form-widget/{mode}/` 下。
-
-## Mixin Per Mode (always use default import, never named import)
-- edit / ide / read → `import FormWidgetMixin from '@/mixin/form-widget.mixin'`
-- list            → `import ListWidgetMixin from '@/mixin/list-widget.mixin'` （仅是 mixin 文件名，不要据此创建 list-widget/ 目录）
-- print           → `import PrintWidgetMixin from '@/mixin/print-widget.mixin'`
-- search          → `import SearchWidgetMixin from '@/mixin/search-widget.mixin'`
-- search-ide      → `import SearchIdeWidgetMixin from '@/mixin/search-ide-widget.mixin'`
-- editor (setting.vue) → `import EditorFormConfigMixin from '@/mixin/form-config.mixin'`
-
-## Mode-specific Rules
-- **List mode**: config = `this.componentConfig` (NOT `this.widget`); `this.formValue` is the concrete value prop directly (no propKey indexing); NO `<x-proxy-form-item>` wrapper.
-- **Print mode**: NO `<el-xxx>` tags — Element UI does not render in print context; NO `<x-proxy-form-item>`; pure HTML/CSS only; use structure `div.print-item > div.print-item-title + div.print-item-value`; when `widget.isInTable` is true, omit the title.
-- **Search mode**: NO `<x-proxy-form-item>`; submit via `this.$emit('change', [value])` — value MUST be wrapped in an array; do NOT use formValue setter.
-- **Search-IDE mode**: NO `<x-proxy-form-item>`; all inputs `disabled`; only implement when Search mode is also implemented.
-- **IDE mode**: all inputs must be `disabled` — IDE renders in the form designer canvas where user interaction is not allowed.
-- **Edit mode**: check `this.widget.readOnly`; guard formValue undefined with fallback; never use both `v-model` and `@input` on the same element (causes infinite loop).
-
-## BOF Type & formValue
-- BOF_NUMBER caveat: `formValue` may arrive as a string from the platform. Always guard: `const n = Number(this.formValue); if (isNaN(n)) { /* fallback */ }`.
-"""
-
-
 _WORKFLOW_FORM_COMPONENT_DUAL = """
 ## Workflow — IMPORTANT: Be efficient! Minimize tool calls.
 0. **Before tool calls**: First write a short, user-facing progress note in Chinese (1-3 sentences) explaining what you understood and what you will do next.
 1. **FIRST** (1 call): Use glob_files to see the project structure
 2. **THEN** (1-3 calls max): If `.cursor/rules/*.mdc` exists, read those rule files first, then read ONLY the key implementation files you need. Do NOT read every file. **必读**：scaffold 默认的 `shared/widget.config.json` 和一份 `.editor.config.json`，作为后续 edit 的模板——保证结构、字段类型都合法。
-3. **IMMEDIATELY write code（一次性并行写多个）**: 严格 schema 的 JSON（`shared/widget.config.json` 等）走 `edit_file` 改关键字段；新增业务文件才用 `write_file`。**无论 edit_file 还是 write_file 都必须批量并行**——一个 turn 同时发 7+ 个 tool_calls 把 web/ 和 mobile/ 的所有 mode vue / setting / index.js 等一次性写/改完。**不要**对 widget.config.json 用 write_file 从零写（漏字段）；**也不要**一轮只 edit/write 一个文件（耗光 30 轮上限任务必失败）。
-4. **Build 前一致性自检（必做）**: run build 前，用 glob 或 list_dir **逐个验证**两端 7 个 scene 目录（`web/src/form-component/form-widget/{edit,read,ide,list,print,search,search-ide}/` 和 `mobile/src/form-component/form-widget/{...}/`）下的 `index.js` 引用的每一个 `.vue` 文件是否都真实存在。只要有一个"index.js 引用了但 vue 不存在"，立即先补建/修正，不要先跑 build。
+3. **IMMEDIATELY write code（一次性并行写多个）**:
+   - **🔴 严格遵循 Spec.scenes_required**（见上面 user message 里的"### 🔴 本次只生成以下 scene"章节）：只为 scenes_required 列出的 scene **在 web/ 和 mobile/ 两端都写**业务 vue 并改对应目录的 `index.js`；**未列出的 scene 在两端的 vue 和 index.js 一个字都别动**（scaffold 默认的 demo vue + 原 index.js 已经可 build，保持原样即可）。
+   - 严格 schema 的 JSON（`shared/widget.config.json` 等）走 `edit_file` 改关键字段；新增业务文件才用 `write_file`。
+   - **无论 edit_file 还是 write_file 都必须批量并行**——一个 turn 同时发 N 个 tool_calls 把两端的 scenes_required 对应 vue / setting / index.js 等一次性写/改完（N ≈ scenes_required 数量 × 2 + 少量配置/index 文件，不是恒定 7 或 14）。
+   - **不要**对 widget.config.json 用 write_file 从零写（漏字段）；**也不要**一轮只 edit/write 一个文件（耗光 30 轮上限任务必失败）。
+4. **Build 前一致性自检（必做）**: run build 前，用 glob 或 list_dir **逐个验证**两端 scenes_required 列出的 scene 目录（`web/src/form-component/form-widget/{scene}/` 和 `mobile/src/form-component/form-widget/{scene}/`）下的 `index.js` 引用的每一个 `.vue` 文件是否都真实存在。只要有一个"index.js 引用了但 vue 不存在"，立即先补建/修正，不要先跑 build。未在 scenes_required 里列出的 scene 目录保持 scaffold 原样，不需要自检也不要去动。
 5. **THEN** run `npm run build` to check compilation (builds both web/ and mobile/)
 6. If errors, fix and rebuild. If success, report completion.
 
 ## CRITICAL Rules
-- **🔴 Scene vue 读配置铁则（违反必致所有配置失效）**：web/ 和 mobile/ 两端 7 个 scene vue（edit/read/ide/list/print/search/search-ide）里**必须用 `this.widget.customComponentConfig`** 读用户在 setting.vue 里配的参数。**严禁**写 `this.customComponentConfig`（组件本身没有这个属性，永远得到 `undefined`，`undefined || {}` 得到 `{}`，导致 displayFormat/allowedWeekdays 等所有配置都永远是默认值，用户配了等于白配）。
+- **🔴 严格遵循 Spec.scenes_required（最高优先级）**：只为 user message 里"### 🔴 本次只生成以下 scene"章节下【必需】列出的 scene **在 web/ 和 mobile/ 两端都写** `form-component-{name}-{scene}.vue` / `mobile-form-component-{name}-{scene}.vue` 并改对应目录的 `index.js`。**未列出的 scene**（包括【未选】列表里的每一个）在两端的所有文件（`form-component-demo-{scene}.vue` / `mobile-form-component-demo-{scene}.vue` + 对应 `index.js`）**一个字都不要 write/edit**——scaffold 默认值已经是可 build 的完整状态，动了反而要你额外补写 vue。
+  - ❌ 反例：Spec 只要 edit/read，你给 web 和 mobile 的 list/print/search/ide/search-ide 都写了业务 vue → **多写 10 个文件 + 改 10 个 index.js，浪费 turns 且不是用户要的**
+  - ✅ 正例：Spec 要 edit/read/ide → 只写 web 3 个 + mobile 3 个 = 6 个业务 vue + 改 6 个 `{scene}/index.js` + setting.vue + widget.config.json + editor.config.json + form-editor/index.js，其他 scene 目录（list/print/search/search-ide）**两端完全不碰**
+- **🔴 Scene vue 读配置铁则（违反必致所有配置失效）**：web/ 和 mobile/ 两端所有 scene vue 里**必须用 `this.widget.customComponentConfig`** 读用户在 setting.vue 里配的参数。**严禁**写 `this.customComponentConfig`（组件本身没有这个属性，永远得到 `undefined`，`undefined || {}` 得到 `{}`，导致 displayFormat/allowedWeekdays 等所有配置都永远是默认值，用户配了等于白配）。
   - ❌ 错：`customConfig() { return this.customComponentConfig || {}; }`（拿到 {}）
   - ✅ 对：`customConfig() { return this.widget.customComponentConfig || {}; }`
   - 区别：**setting.vue（web/src/form-component/form-editor/）用 `this.componentConfig.customComponentConfig`**（EditorFormConfigMixin 提供 componentConfig prop）；**scene vue（web/src/form-component/form-widget/{mode}/ 和 mobile/src/form-component/form-widget/{mode}/）用 `this.widget.customComponentConfig`**（FormWidgetMixin 提供 widget）。两种 mixin 挂载的属性名不同，混用会静默失效（编译过 build 过，运行时配置全部失效）。
-- **🔴 必须 parallel tool_calls，严禁一轮一个文件**：写代码阶段**每个 turn 必须一次发出 7+ 个并行 `write_file`/`edit_file` 调用**。双端组件通常需要写 30+ 个文件（web 7 个 scene vue + mobile 7 个 scene vue + setting.vue + widget.config.json + editor.config.json + 多个 index.js），如果每轮只调 1 个 tool，30 轮上限会被消耗殆尽而组件还没写完，任务失败。
+- **🔴 必须 parallel tool_calls，严禁一轮一个文件**：写代码阶段**每个 turn 必须一次发出 scenes_required 对应 N 个并行 `write_file`/`edit_file` 调用**。如果每轮只调 1 个 tool，30 轮上限会被消耗殆尽而组件还没写完，任务失败。
   - ❌ 反例（任务必失败）：`turn1: [write_file]` `turn2: [write_file]` `turn3: [write_file]` ... 每轮 1 个
-  - ✅ 正例：`turn1: [write_file×7]`（web/ 7 个 mode vue 一次性写完）`turn2: [write_file×7]`（mobile/ 7 个 mode vue 一次性写完）`turn3: [edit_file×3, write_file×2]`（widget.config / editor.config / setting.vue / 两个 index.js）`turn4: [run_command]`（build）
+  - ✅ 正例（假设 Spec.scenes_required = [edit, read, ide]，N=3）：`turn1: [write_file×3]`（web/ 的 3 个 mode vue 一次性写完）`turn2: [write_file×3]`（mobile/ 的 3 个 mode vue 一次性写完）`turn3: [edit_file×3, write_file×2]`（widget.config / editor.config / setting.vue / 两个 index.js）`turn4: [run_command]`（build）
+  - ✅ 正例（假设 scenes_required = 全 7 个）：`turn1: [write_file×7]`（web）`turn2: [write_file×7]`（mobile）+ 后续 1-2 轮收尾
   - 即使工具可能返回 Error，也要**并行发**——Error 后下一轮并行 edit_file 修复，而不是怕 Error 变成一轮一个
 - **Progress notes are visible to the user**: keep them brief, concrete, and friendly. Do NOT dump hidden reasoning or long analysis.
 - **DO NOT loop**: Never read the same file twice. Never read more than 3 files before writing code.
-- **Write ALL files at once**: In a single turn, call write_file for ALL web/ and mobile/ vue files. Do NOT write one file per turn.
+- **Write ALL required-scene files at once**: In a single turn, call write_file for every scene listed in Spec.scenes_required, across both web/ and mobile/, plus setting.vue. Do NOT write one file per turn. Do NOT write any scene that is not in scenes_required.
 - **When generating designer config**: update `web/src/form-component/form-editor/index.js` and `web/src/form-component-config/form-editor/index.js` in the same batch as `setting.vue` / `{name}.editor.config.json`.
-- **index.js 与 vue 必须一致**: 修改任何 `index.js` 的 import 路径时，**必须**同步确保对应 vue 文件存在（新建或重命名）。不允许出现 "index.js 指向的文件不存在" 的 half-rename 状态。如不需要某个 scene，保持 scaffold 默认的 `form-component-demo-{scene}.vue` / `mobile-form-component-demo-{scene}.vue` 原样，index.js 也别改。
+- **index.js 与 vue 必须一致**: 修改任何 `index.js` 的 import 路径时，**必须**同步确保对应 vue 文件存在（新建或重命名）。不允许出现 "index.js 指向的文件不存在" 的 half-rename 状态。**未在 scenes_required 里的 scene**：保持 scaffold 默认的 `form-component-demo-{scene}.vue` / `mobile-form-component-demo-{scene}.vue` 原样，两端对应 `{scene}/index.js` 一个字也别改。
 - **工具返回 Error 必须修复，不是放弃信号**：write_file / edit_file / run_command 等工具返回字符串以 `Error:` 开头时（如 `Error: widget.config.json: version — Input should be a valid number`），**必须**立即用 edit_file 修正对应字段再次 write，直到该工具返回 `Successfully wrote ...` 或 `[exit code: 0]`。**严禁**因为连续 3~5 条工具 Error 就终止任务（不要在 LLM 响应里返回空 tool_calls，那会触发 agent 结束）；必须坚持修到成功或撞 30 轮上限。典型修复模式：`write_file A.json → Error: A.json: foo — Field required` → `edit_file A.json 补上 foo` → 再 `write_file` 验证。
 - **Be decisive**: You are an expert. After reading the scaffold structure and 1-2 example files, you have enough context to write the component.
 - **Maximum 8 turns total**: If you haven't written code by turn 4, something is wrong. Write the code NOW.
@@ -555,7 +473,7 @@ _WORKFLOW_FORM_COMPONENT_DUAL = """
 
 ## Technical Constraints — Dual-End Project
 - This is a **dual-end** (PC + Mobile) project with three directories: `shared/`, `web/`, `mobile/`
-- aPaaS form component with 7 render scenes (edit/read/ide/list/print/search/search-ide), both web/ and mobile/ have the same scenes
+- aPaaS form component: 平台支持 7 个 render scene（edit/read/ide/list/print/search/search-ide），web/ 和 mobile/ 两端结构相同。但**本次只实现 Spec.scenes_required 列出的那些**（见 user message 里的"### 🔴 本次只生成以下 scene"章节）。scaffold 里两端 7 个 scene 都默认预置了可 build 的 demo vue + index.js，未在 scenes_required 里的 scene **两端都保持原样不动**即可。
 - Scaffold files already exist. Do NOT modify vue.config.js or babel.config.js.
 - Vue 2.7 for both ends
 - **PC (web/)**: Element UI (`el-*` components), globally registered, do NOT import
@@ -778,15 +696,24 @@ def build_user_prompt(
     workspace_info: dict[str, Any],
     workspace_path: Path,
     spec_brief: str | None = None,
+    fix_hint: str | None = None,
+    round_index: int = 0,
 ) -> str:
     """构造 CodingAgent 的首条 user message（替代 VibeCodingAgent._build_prompt）。
 
-    输出结构：Task → (Structured Spec) → Workspace Info → Workspace Rules → Previous Summary → Workflow
+    输出结构：
+        (AutoFix Retry Banner)?  # 仅当 round_index>0 && fix_hint 非空
+        → Task → (Structured Spec) → Workspace Info → Workspace Rules
+        → Previous Summary → Workflow
 
     Args:
         spec_brief: 可选 — BrainstormAgent emit 的 Spec 渲染后的 markdown 摘要。
                     传入时在 Task 之后插入"## Structured Spec"段，LLM 应优先参考此段。
                     不传（None 或 ""）时保持旧行为（与 snapshot 字节级一致）。
+        fix_hint:   可选 — drive_coding_with_autofix 在 verify 失败后构造的错误清单。
+                    传入时在 user message 最前面插入"🔴 本次是验收失败后的重试"段，
+                    让 LLM 知道 workspace 里已有上一轮代码、只针对性改失败项。
+        round_index: 当前 autofix 轮次。0=首轮（不展示 banner），>0=重试（展示）。
     """
     project_type = (workspace_info.get("project_type", "") or "").lower()
     files = workspace_info.get("files", []) or []
@@ -795,9 +722,31 @@ def build_user_prompt(
         if file_path.startswith(".cursor/rules/") and file_path.endswith(".mdc")
     ]
 
-    parts: list[str] = [
-        f"## Task\n{requirement}",
-    ]
+    parts: list[str] = []
+
+    # AutoFix retry banner —— 放在最前面，让 LLM 一眼看到"这是第几轮修复、要改什么"
+    # 否则下面 Workflow 里"FIRST glob_files / THEN read rules"会让 LLM 以为是首轮，
+    # 重新从零扫结构 → 耗 turn + 盖掉上轮写对的文件。
+    if fix_hint and round_index > 0:
+        parts.append(
+            f"## 🔴 本次是 Round {round_index}（验收失败后的重试，不是首轮）\n\n"
+            "**前置事实**：\n"
+            "- Workspace 里**已有**你上一轮写的代码（不是空 scaffold）\n"
+            "- 上一轮 verify 失败，以下列表是**必须针对性修复**的项\n\n"
+            f"{fix_hint.rstrip()}\n\n"
+            "**修复规则（严格遵守）**：\n"
+            "1. **跳过首轮动作**：不要再 glob_files 扫项目结构、不要再读 `.cursor/rules/*.mdc`。"
+            "这些你上一轮都做过了，现在直接进入修复。\n"
+            "2. **先 read_file 确认当前代码状态**：上轮写的文件大概率接近对的，只差上面列出的点。"
+            "看完再动手，不要盲改。\n"
+            "3. **只改失败 AC 对应的文件**：没失败的 AC 对应的文件**一个字都别动**，"
+            "避免引入新 bug 破坏已通过的点。\n"
+            "4. **用 edit_file 定向改，不要 write_file 整份重写**：整份重写会覆盖上轮写对的"
+            "部分；edit_file 只改需要改的几行。\n"
+            "5. **修完并行再跑一次 run_command build**：确认本轮修复不破坏编译。"
+        )
+
+    parts.append(f"## Task\n{requirement}")
 
     # Spec 驱动路径：把结构化规格紧跟 Task 展示
     if spec_brief:
@@ -828,7 +777,7 @@ def build_user_prompt(
         parts.append("\n## Previous Conversation Summary\nNone (first development session)")
 
     if project_type == "form-component-dual":
-        workflow = _WORKFLOW_FORM_COMPONENT_DUAL + render_form_component_sections(base_path="web/src")
+        workflow = _WORKFLOW_FORM_COMPONENT_DUAL + render_form_component_sections()
     elif project_type in ("menu-page", "form-page", "mobile-page"):
         workflow = _WORKFLOW_PAGE
     elif project_type == "layout":
@@ -839,8 +788,18 @@ def build_user_prompt(
         workflow = _WORKFLOW_PLUGIN
     elif project_type == "backend-api":
         workflow = _WORKFLOW_BACKEND_API
+    elif not project_type:
+        # 空 project_type → 没挂 workspace 的裸调用（单元测试 / 调试）
+        # 默认走 form-component-dual（当前产品主力类型），保持能跑。
+        workflow = _WORKFLOW_FORM_COMPONENT_DUAL + render_form_component_sections()
     else:
-        workflow = _WORKFLOW_FORM_COMPONENT + render_form_component_sections(base_path="src")
+        # 非空但未登记：backend-feign / backend-scheduled / web-login 等
+        # 这里**必须**显式 raise —— 以前 fallback 到单端 form-component 会让
+        # 完全不搭边的项目类型被喂错 prompt，bug 很隐蔽。
+        raise ValueError(
+            f"prompts.build_system_prompt: 未登记的 project_type={project_type!r}。"
+            "请在上方 if/elif 链里为该类型添加 workflow，不要依赖兜底。"
+        )
 
     parts.append(workflow)
     return "\n".join(parts)

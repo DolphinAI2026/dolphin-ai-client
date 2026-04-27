@@ -23,10 +23,13 @@
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
 from pydantic import TypeAdapter, ValidationError
+
+logger = logging.getLogger(__name__)
 
 from app.agents.brainstorm.confidence import compute_confidence, emit_decision
 from app.agents.brainstorm.state import BrainstormState
@@ -130,9 +133,17 @@ def build_emit_spec_tool(state: BrainstormState) -> Tool:
                 seen.add(oq.question)
 
         # 计算 confidence + 决策
+        # ── iterate 模式跳过 confidence gate ──
+        # 触发条件：state.allowed_paths 非空（由 _run_iterate_dispatch_task 注入）
+        # 原因：iterate 场景下 scene/P1 都已在 base_spec 里定好，LLM 不会再调
+        # detect_scene，导致 state.scene_confidence=0 / p1_coverage=0。
+        # 如果仍卡在 gate="block"，LLM 会"必须回到 detect_scene"但 iterate prompt
+        # 又禁止 detect_scene → 死循环 → 消息堆积到 LLM 返回 400。
+        # 解法：iterate 模式信任 classifier 已经明确了改动范围，直接允许 emit。
+        is_iterate = bool(state.allowed_paths)
         confidence = compute_confidence(state)
         gate, gate_reason = emit_decision(confidence)
-        if gate == "block":
+        if gate == "block" and not is_iterate:
             return ToolResult(
                 success=False,
                 content=(
@@ -144,6 +155,11 @@ def build_emit_spec_tool(state: BrainstormState) -> Tool:
                 ),
                 error="confidence_too_low",
                 data={"confidence": confidence, "gate": gate},
+            )
+        if is_iterate and gate == "block":
+            logger.info(
+                "emit_spec: iterate 模式跳过 confidence gate（allowed_paths=%s, computed_confidence=%.2f）",
+                state.allowed_paths, confidence,
             )
 
         # 系统补齐字段

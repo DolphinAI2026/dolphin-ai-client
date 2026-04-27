@@ -48,18 +48,40 @@
         <span v-else class="send-arrow">↑</span>
       </button>
     </div>
-    <div class="composer-hint">Ctrl/⌘+Enter 发送</div>
+    <div class="composer-foot">
+      <!-- 模型选择（三个 agent 共用） -->
+      <label v-if="store.modelOptions.length > 0" class="model-picker">
+        <span class="picker-label">模型</span>
+        <select v-model="selectedModel" class="picker-select" :disabled="submitting || disabled">
+          <option :value="null">租户默认</option>
+          <option v-for="m in store.modelOptions" :key="m.id" :value="m.id">
+            {{ m.config_name }}（{{ m.provider }} · {{ m.model }}{{ m.is_default ? ' · 默认' : '' }}）
+          </option>
+        </select>
+      </label>
+      <div class="composer-hint">Ctrl/⌘+Enter 发送</div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue'
-import type { AskUserBubble, AskUserOption } from '@/stores/codingV2'
+import { useCodingV2Store, type AskUserBubble, type AskUserOption } from '@/stores/codingV2'
+
+const store = useCodingV2Store()
+
+// v-model 桥接 store，让 <select> 能双向
+const selectedModel = computed({
+  get: () => store.selectedModelId,
+  set: (v: number | null) => { store.selectedModelId = v },
+})
 
 const props = defineProps<{
   pendingAskUser?: AskUserBubble | null
   submitting?: boolean
   disabled?: boolean
+  /** 禁用时显示在 placeholder 的解释文案，例如 "AI 正在处理你的上一条消息..." */
+  disabledReason?: string | null
 }>()
 
 const emit = defineEmits<{
@@ -75,6 +97,7 @@ const pendingQuestion = computed(() =>
 )
 
 const placeholder = computed(() => {
+  if (props.disabled && props.disabledReason) return props.disabledReason
   if (pendingQuestion.value) return '或者直接输入你的回答...'
   return '说说你要做什么...'
 })
@@ -82,7 +105,18 @@ const placeholder = computed(() => {
 function send() {
   const text = localInput.value.trim()
   if (!text || props.submitting || props.disabled) return
-  emit('send', text)
+  // 有待答反问时，自由输入走 answer 通道（标记 bubble 已答 + 关闭 chips）；
+  // 否则走普通 send。
+  if (props.pendingAskUser && !props.pendingAskUser.answered) {
+    emit('answer', {
+      bubbleId: props.pendingAskUser.id,
+      answer: text,
+      displayText: text,
+      p1_key: props.pendingAskUser.p1_key,
+    })
+  } else {
+    emit('send', text)
+  }
   localInput.value = ''
   nextTick(() => {
     if (inputRef.value) {
@@ -228,12 +262,48 @@ function autoResize() {
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+.composer-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 14px 8px;
+}
 .composer-hint {
   font-size: 11px;
   color: #9ca3af;
-  text-align: right;
-  padding: 2px 14px 8px;
+  margin-left: auto;
 }
+
+/* ── 模型选择器 ── */
+.model-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #6b7280;
+  flex-shrink: 0;
+  max-width: 70%;
+}
+.picker-label {
+  color: #9ca3af;
+  flex-shrink: 0;
+}
+.picker-select {
+  font-size: 11.5px;
+  color: #4b5563;
+  background: transparent;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 3px 6px;
+  cursor: pointer;
+  outline: none;
+  max-width: 100%;
+  font-family: inherit;
+  transition: border-color 120ms, background 120ms;
+}
+.picker-select:hover:not(:disabled) { border-color: #c4b5fd; background: #faf5ff; }
+.picker-select:focus { border-color: #8b5cf6; }
+.picker-select:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* ── 动画 ── */
 .ask-slide-enter-active,

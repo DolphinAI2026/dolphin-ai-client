@@ -60,10 +60,6 @@ def _compare_prompts(project_type: str, conversation_summary: str = "", requirem
     )
 
 
-def test_prompt_identical_form_component():
-    _compare_prompts("form-component")
-
-
 def test_prompt_identical_form_component_dual():
     _compare_prompts("form-component-dual")
 
@@ -129,20 +125,67 @@ def test_prompt_identical_with_rule_files():
 
 
 # ══════════════════════════════════════════════════════════════
+# AutoFix retry banner（fix_hint + round_index）
+# ══════════════════════════════════════════════════════════════
+
+def test_prompt_fix_hint_omitted_on_first_round():
+    """round_index=0（首轮）即使传了 fix_hint 也不展示 banner。"""
+    fake_info = {"project_name": "t", "project_type": "form-component-dual", "files": []}
+    p = build_user_prompt(
+        requirement="r",
+        conversation_summary="",
+        workspace_info=fake_info,
+        workspace_path=Path("/tmp/ws"),
+        fix_hint="## 上一轮验收的失败项\n- #0 xxx",
+        round_index=0,
+    )
+    assert "🔴 本次是 Round" not in p
+    assert "上一轮验收的失败项" not in p
+
+
+def test_prompt_fix_hint_rendered_on_retry_round():
+    """round_index>0 + fix_hint 非空 → 前置 retry banner，明确跳过首轮动作。"""
+    fake_info = {"project_name": "t", "project_type": "form-component-dual", "files": []}
+    hint = "## 上一轮验收的失败项（CodingAgent 请针对性修复）\n### Acceptance Criteria 失败\n- #2 手机号输入框支持基础格式校验"
+    p = build_user_prompt(
+        requirement="写个国际手机号组件",
+        conversation_summary="",
+        workspace_info=fake_info,
+        workspace_path=Path("/tmp/ws"),
+        fix_hint=hint,
+        round_index=1,
+    )
+    # banner 必须在 Task 之前
+    assert p.index("🔴 本次是 Round 1") < p.index("## Task")
+    # fix_hint 文本被嵌入
+    assert "手机号输入框支持基础格式校验" in p
+    # 明确指令：跳过 glob/rules、用 edit_file、只改失败项
+    assert "跳过首轮动作" in p
+    assert "edit_file" in p
+    assert "没失败的 AC 对应的文件" in p
+
+
+def test_prompt_fix_hint_empty_on_retry_does_not_render_banner():
+    """round_index>0 但 fix_hint 为空（极端情况）→ 不展示 banner，避免空段。"""
+    fake_info = {"project_name": "t", "project_type": "form-component-dual", "files": []}
+    p = build_user_prompt(
+        requirement="r",
+        conversation_summary="",
+        workspace_info=fake_info,
+        workspace_path=Path("/tmp/ws"),
+        fix_hint="",
+        round_index=2,
+    )
+    assert "🔴 本次是 Round" not in p
+
+
+# ══════════════════════════════════════════════════════════════
 # render_form_component_sections 路径替换
 # ══════════════════════════════════════════════════════════════
 
-def test_render_form_component_sections_single_end_base_path():
-    """单端 base_path=src 时，__BASE_PATH__ 应全部替换为 src"""
-    text = render_form_component_sections("src")
-    assert "__BASE_PATH__" not in text
-    assert "src/form-component-config/form-widget" in text
-    assert "src/form-component/form-editor" in text
-
-
 def test_render_form_component_sections_dual_end_base_path():
-    """双端 base_path=web/src"""
-    text = render_form_component_sections("web/src")
+    """双端 form-component（`web/src`）是唯一支持的变体，单端已废弃"""
+    text = render_form_component_sections()
     assert "__BASE_PATH__" not in text
     assert "web/src/form-component-config/form-widget" in text
     assert "web/src/form-component/form-editor" in text
@@ -183,7 +226,12 @@ def test_agent_system_prompt_override():
 
 
 def test_agent_build_initial_message_without_workspace():
-    """没有 workspace_id 时退化为 project_type 空的默认 workflow（form-component 单端）"""
+    """没有 workspace_id 时 project_type 为空 → 默认走 form-component-dual workflow。
+
+    单端已废弃；裸调用（单元测试/调试）默认拿到双端 prompt。真正未登记的
+    project_type（backend-feign/web-login 等）会被 dispatcher 显式 raise，
+    避免"被喂错 prompt 但静默通过"的隐蔽 bug。
+    """
     ctx = _make_ctx(workspace_id=None, input_data={
         "requirement": "需求文本",
         "conversation_summary": "summary 内容",
@@ -194,7 +242,7 @@ def test_agent_build_initial_message_without_workspace():
     assert "## Task\n需求文本" in msg
     # Summary 段
     assert "summary 内容" in msg
-    # workflow 进入默认分支（form-component）
+    # workflow 进入 form-component-dual 默认分支
     assert "## Workflow" in msg
 
 

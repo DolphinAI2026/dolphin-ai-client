@@ -18,7 +18,11 @@ from typing import Any, Optional
 
 from app.agents.base import BaseAgent
 from app.agents.brainstorm.config import MAX_TURNS
-from app.agents.brainstorm.prompts import AGENT_SYSTEM_PROMPT, build_user_prompt
+from app.agents.brainstorm.prompts import (
+    AGENT_SYSTEM_PROMPT,
+    AGENT_SYSTEM_PROMPT_ITERATE,
+    build_user_prompt,
+)
 from app.agents.brainstorm.state import BrainstormState
 from app.agents.brainstorm.tools import build_brainstorm_tools
 from app.agents.types import AgentContext, AgentType, Tool
@@ -35,6 +39,16 @@ class BrainstormAgent(BaseAgent[dict]):
     def __init__(self, context: AgentContext) -> None:
         super().__init__(context)
         self._state = BrainstormState()
+
+        # iterate 模式：把 ctx.input["allowed_paths"] 灌进 state，
+        # ask_user tool 会在 execute 里校验任何 target_path 都必须落在该集合内。
+        # 这是"AI 不要答非所问"的硬约束（路由层来自 RefineIntent.allowed_paths）。
+        allowed_paths_input = (context.input or {}).get("allowed_paths")
+        if isinstance(allowed_paths_input, list):
+            self._state.allowed_paths = [
+                str(p).strip() for p in allowed_paths_input if str(p).strip()
+            ]
+
         self._tools: list[Tool] = build_brainstorm_tools(self._state)
 
         # 场景预判（可选，orchestrator 可以把上一轮识别的 scene 塞进来）
@@ -55,6 +69,13 @@ class BrainstormAgent(BaseAgent[dict]):
         override = (self.ctx.input or {}).get("system_prompt")
         if isinstance(override, str) and override.strip():
             return override
+        # iterate 模式（用户在已有 Spec 上修正）用专门的 prompt：
+        # - 删掉 "detect_scene → P1 反问" 工作流
+        # - 强调"默认直接 emit，反问是兜底"
+        # - 严禁重问已在上一版 Spec 明确的字段（form_value_shape / scenes_required 等）
+        # 触发条件：调用方塞了 base_spec_brief（refine_brainstorm / iterate minor-major 路径）
+        if (self.ctx.input or {}).get("base_spec_brief"):
+            return AGENT_SYSTEM_PROMPT_ITERATE
         return AGENT_SYSTEM_PROMPT
 
     def get_tools(self) -> list[Tool]:
@@ -82,7 +103,12 @@ class BrainstormAgent(BaseAgent[dict]):
                 workspace_info = None
 
         attachments = inp.get("attachments") or None
-        is_iteration = bool(inp.get("is_iteration")) or workspace_info is not None
+        base_spec_brief = inp.get("base_spec_brief") or None
+        is_iteration = (
+            bool(inp.get("is_iteration"))
+            or workspace_info is not None
+            or bool(base_spec_brief)
+        )
 
         return build_user_prompt(
             requirement=requirement,
@@ -90,6 +116,7 @@ class BrainstormAgent(BaseAgent[dict]):
             workspace_info=workspace_info,
             attachments=attachments,
             is_iteration=is_iteration,
+            base_spec_brief=base_spec_brief,
         )
 
     def should_terminate(self) -> tuple[bool, str]:

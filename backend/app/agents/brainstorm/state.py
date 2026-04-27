@@ -133,6 +133,18 @@ class BrainstormState:
     emitted_spec_id: Optional[str] = None
     """emit 后的 spec_id（finalize 取用）"""
 
+    # —— Iterate scope（Refine Intent 注入；fresh 模式为空） —— #
+
+    allowed_paths: list[str] = field(default_factory=list)
+    """Iterate 模式下：本次 refine 允许 ask_user / 修改的 Spec 字段路径白名单。
+
+    来自 RefineIntent 的 target_paths ∪ derived_paths。空列表表示 fresh 模式
+    （不约束）。非空时 ask_user tool 会校验 target_path 必须落在该集合内，
+    越界直接拒绝并返回错误，引导 LLM 不要重问已确定字段。
+
+    设计意图：把"AI 不要答非所问"从 prompt 喊话升级为 tool layer 硬约束。
+    """
+
     # —— Snapshot / restore —— #
 
     def to_snapshot(self) -> dict[str, Any]:
@@ -149,6 +161,7 @@ class BrainstormState:
             "workspace_context_read": self.workspace_context_read,
             "emitted": self.emitted,
             "emitted_spec_id": self.emitted_spec_id,
+            "allowed_paths": list(self.allowed_paths),
         }
 
     @classmethod
@@ -169,6 +182,7 @@ class BrainstormState:
             workspace_context_read=snap.get("workspace_context_read", False),
             emitted=snap.get("emitted", False),
             emitted_spec_id=snap.get("emitted_spec_id"),
+            allowed_paths=list(snap.get("allowed_paths", []) or []),
         )
 
     # —— 语义辅助 —— #

@@ -178,6 +178,15 @@ def test_adapter_yields_pipeline_compatible_events_end_to_end():
         ])
         ctx = _make_ctx(llm, workspace_id="ws_aa")
         agent = CodingAgent(ctx)
+        # 预置 messages → base run() 走 is_resume 分支，跳过 build_initial_user_message。
+        # build_initial 会读 WorkspaceManager；但 WorkspaceManager 的 WORKSPACE_ROOT
+        # 在模块 import 时就已固定（见 workspace.py 顶部 `_resolve_workspace_root`），
+        # 环境变量 APAAS_WORKSPACE_ROOT 晚设无效 —— 测试并发跑时 workspace 会读不到。
+        # 这个 adapter 测试只关心事件流 shape，不需要真实 prompt 构造，直接跳过。
+        agent._messages = [
+            {"role": "system", "content": "test"},
+            {"role": "user", "content": "写个文件"},
+        ]
         adapter = CodingAgentStreamAdapter(agent)
 
         async def collect():
