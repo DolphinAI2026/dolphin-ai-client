@@ -22,6 +22,21 @@ logger = logging.getLogger(__name__)
 
 
 # ══════════════════════════════════════════════════════════════
+# Ephemeral 事件类型：不落 DB，只走实时 fan-out
+# ══════════════════════════════════════════════════════════════
+#
+# 这些事件在生成过程中高频（每个 LLM token 一条），如果每条都 commit 一次 DB，
+# 远端 MySQL 的 fsync + network RTT 会把实时打字机效果拖到几秒后。
+#
+# 策略：不持久化 delta，但 agent 在流式结束时会另发一条 `agent_thinking`
+# （带 full content）落 DB —— 刷新回放时用整条思考文本重建条目，不需要 delta。
+EPHEMERAL_EVENT_TYPES: frozenset[str] = frozenset({
+    "coding.agent_thinking_delta",
+    "agent_thinking_delta",
+})
+
+
+# ══════════════════════════════════════════════════════════════
 # 全局 seq counter + SSE 订阅管理（单实例）
 # ══════════════════════════════════════════════════════════════
 
@@ -98,31 +113,36 @@ class DbEventPublisher:
         Agent 代码应通过 ctx.publisher.publish(... db=ctx.db) 调用。
         """
         state = self._state(conversation_id)
+        is_ephemeral = event_type in EPHEMERAL_EVENT_TYPES
         async with state.lock:
             await self._ensure_seq_loaded(state, conversation_id, db)
             state.seq_counter += 1
             seq = state.seq_counter
 
-            # 持久化
-            event_id = uuid.uuid4().hex
-            event_row = ConversationEvent(
-                id=event_id,
-                conversation_id=conversation_id,
-                seq=seq,
-                event_type=event_type,
-                agent=agent,
-                session_id=session_id,
-                payload=data or {},
-            )
-            db.add(event_row)
-            try:
-                await db.commit()
-            except Exception as e:
-                logger.error("Failed to persist conversation_event: %s", e)
-                await db.rollback()
-                # 退回 seq（避免 seq 跳跃）
-                state.seq_counter -= 1
-                raise
+            # 非 ephemeral 事件才持久化；ephemeral（高频 thinking delta）只 fan-out 给
+            # 实时订阅者，跳过 DB commit 以避免 MySQL fsync 拖慢打字机。
+            # 代价：刷新后 delta 不会回放——但 agent 在流式结束会另发
+            # agent_thinking（full_content）落 DB，重建条目用整条聚合内容。
+            if not is_ephemeral:
+                event_id = uuid.uuid4().hex
+                event_row = ConversationEvent(
+                    id=event_id,
+                    conversation_id=conversation_id,
+                    seq=seq,
+                    event_type=event_type,
+                    agent=agent,
+                    session_id=session_id,
+                    payload=data or {},
+                )
+                db.add(event_row)
+                try:
+                    await db.commit()
+                except Exception as e:
+                    logger.error("Failed to persist conversation_event: %s", e)
+                    await db.rollback()
+                    # 退回 seq（避免 seq 跳跃）
+                    state.seq_counter -= 1
+                    raise
 
             # 构造 SSE envelope
             event = {

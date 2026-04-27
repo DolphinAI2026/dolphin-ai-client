@@ -27,14 +27,15 @@
         <span class="divider-label">{{ msg.phaseLabel }}</span>
       </div>
 
-      <!-- ── Spec 预览 ── -->
-      <div v-else-if="msg.kind === 'spec-ready'" class="full-card">
+      <!-- ── Spec 版本卡（每个版本一张，永远只有最新一张可点确认） ── -->
+      <div v-else-if="msg.kind === 'spec-version'" class="full-card">
         <SpecPreview
-          v-if="store.currentSpec"
-          :envelope="store.currentSpec"
-          :allow-actions="store.phase === 'confirm'"
-          @confirm="$emit('confirmSpec')"
-          @cancel="$emit('cancelSpec')"
+          v-if="getCard(msg.specCardId)"
+          :card-data="getCard(msg.specCardId)!"
+          :latest-version="latestVersion"
+          :submitting="confirmSubmitting && msg.specCardId === currentLatestId"
+          :refining="store.specRefineInFlight && getCard(msg.specCardId)?.isLatest"
+          @confirm="$emit('confirmSpec', $event)"
         />
         <div v-else class="spec-loading">
           <div class="spinner"></div>
@@ -42,9 +43,17 @@
         </div>
       </div>
 
-      <!-- ── 代码生成进行中 ── -->
+      <!-- ── 代码生成进行中（autofix 多轮：每张独立卡，冻结的读快照） ── -->
       <div v-else-if="msg.kind === 'coding-active'" class="full-card">
-        <CodingProgress />
+        <CodingProgress :frozen-log="msg.frozenCodingLog" />
+      </div>
+
+      <!-- ── 验收进行中（同上，冻结的读自己的快照） ── -->
+      <div v-else-if="msg.kind === 'verify-active'" class="full-card">
+        <VerificationProgress
+          :frozen-log="msg.frozenVerifyLog"
+          :frozen-report="msg.frozenVerifyReport"
+        />
       </div>
 
       <!-- ── 完成 ── -->
@@ -66,18 +75,23 @@
             🖥️ 打开 IDE
           </button>
         </div>
-        <VerificationReportPanel
-          v-if="store.lastVerificationReport"
-          :report="store.lastVerificationReport"
-        />
+        <!-- 验收报告详情已由上方 verify-active 卡片展示，此处不再重复 -->
       </div>
 
       <!-- ── 错误 ── -->
       <div v-else-if="msg.kind === 'error'" class="full-card error-card">
         <span class="error-icon">💥</span>
-        <div>
+        <div class="error-body">
           <div class="error-title">执行失败</div>
           <div class="error-text">{{ msg.text }}</div>
+          <button
+            v-if="msg.canRetry"
+            class="retry-btn"
+            :disabled="retrying"
+            @click="$emit('retryCoding')"
+          >
+            {{ retrying ? '重新触发中…' : '🔄 重新生成' }}
+          </button>
         </div>
       </div>
 
@@ -113,12 +127,17 @@ import { useCodingV2Store } from '@/stores/codingV2'
 import type { AskUserBubble } from '@/stores/codingV2'
 import CodingProgress from './CodingProgress.vue'
 import SpecPreview from './SpecPreview.vue'
-import VerificationReportPanel from './VerificationReportPanel.vue'
+import VerificationProgress from './VerificationProgress.vue'
+
+defineProps<{
+  confirmSubmitting?: boolean
+  retrying?: boolean
+}>()
 
 defineEmits<{
-  (e: 'confirmSpec'): void
-  (e: 'cancelSpec'): void
+  (e: 'confirmSpec', specId: string): void
   (e: 'openIde'): void
+  (e: 'retryCoding'): void
 }>()
 
 const store = useCodingV2Store()
@@ -129,6 +148,18 @@ function getBubble(id?: string): AskUserBubble | undefined {
   if (!id) return undefined
   return store.askUserBubbles.find((b) => b.id === id)
 }
+
+// Spec 版本卡查询：按 spec_id 找 store.specVersions 里那张
+function getCard(specCardId?: string) {
+  return store.getSpecCard(specCardId)
+}
+
+// 当前最新版的 version / spec_id（用于历史卡显示"被 vN 替代"、判断 confirm loading 归属）
+const currentLatestId = computed<string | null>(() => store.currentSpecId)
+const latestVersion = computed<number | null>(() => {
+  const c = store.specVersions.find(c => c.isLatest)
+  return c ? c.version : null
+})
 
 // Thinking 指示器：正在运行 且 没有待答问题 且 不是脚手架阶段（有自己的进度）
 const isThinking = computed(() =>
@@ -143,10 +174,34 @@ async function scrollToBottom() {
   bottomRef.value?.scrollIntoView({ behavior: 'smooth' })
 }
 
+// spec-ready 这类卡片：envelope 是 async 拉（brainstorm.spec_emitted 推 spec-ready
+// 卡片时 currentSpec 还是 null，视图侧 getSpec() 回来后才渲染完整 Spec 表格）。
+// 初始 scroll 在 envelope 到之前就发了，卡片撑大后会停在中间段。
+// 解法：对 currentSpec / verificationReport 这类"内容后到"的状态再滚一次，
+// 且用更长的延时（80ms）等 markdown / 表格子组件渲染完再滚。
+async function scrollToBottomAfterRender() {
+  await nextTick()
+  await new Promise((r) => setTimeout(r, 80))
+  bottomRef.value?.scrollIntoView({ behavior: 'smooth' })
+}
+
 watch(() => store.chatMessages.length, scrollToBottom)
 watch(() => store.streamedText, scrollToBottom)
 watch(() => store.toolTraces.length, scrollToBottom)
 watch(isThinking, scrollToBottom)
+
+// verify 阶段：tool_call / ac_result 追加到 store.verifyLog（不走 chatMessages）
+// 之前没人 watch 它，所以验收过程整个不同步滚动。
+watch(() => store.verifyLog.length, scrollToBottom)
+
+// coding 阶段：file 写入 / tool 调用 / thinking 条目增删追加到 store.codingLog
+// streamedText 只覆盖了 delta 流，非 delta 的条目（如 write_file 结束）不触发。
+watch(() => store.codingLog.length, scrollToBottom)
+
+// 异步内容：currentSpec envelope 到货（spec-ready 卡开始真正渲染）、
+// lastVerificationReport 最终报告到货 —— 都要延时滚一次让表格撑开后再定位
+watch(() => store.currentSpec, scrollToBottomAfterRender)
+watch(() => store.lastVerificationReport, scrollToBottomAfterRender)
 
 // 迭代 banner 辅助
 function iterIcon(level?: string): string {
@@ -314,8 +369,22 @@ function iterLabel(level?: string): string {
   gap: 12px;
 }
 .error-icon { font-size: 22px; flex-shrink: 0; }
+.error-body { flex: 1; min-width: 0; }
 .error-title { font-size: 14px; font-weight: 600; color: #be123c; margin-bottom: 4px; }
 .error-text { font-size: 13px; color: #9f1239; line-height: 1.5; }
+.retry-btn {
+  margin-top: 10px;
+  background: #be123c;
+  color: white;
+  border: none;
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background 0.12s, opacity 0.12s;
+}
+.retry-btn:hover:not(:disabled) { background: #9f1239; }
+.retry-btn:disabled { opacity: 0.55; cursor: not-allowed; }
 
 /* ── Spec 加载 ── */
 .spec-loading {

@@ -57,6 +57,31 @@ from app.agents.types import (
 logger = logging.getLogger(__name__)
 
 
+def _short_args_preview(args: dict[str, Any], limit: int = 140) -> str:
+    """给 `tool_call` SSE 事件做一个人看得懂的参数预览。
+
+    优先挑可读字段（query / path / file_path / ac_index 等），兜底是截断的 JSON。
+    长字段（content / evidence 之类）直接略掉，不然会挤掉有用信息。
+    """
+    if not args:
+        return ""
+    # 常用字段优先（挑一个最能代表"干了什么"的字段；ac_index 不在这里——
+    # check_ac 的 ac_result 行已经展示了 "AC #N"，这里再重复没意义）
+    for k in ("query", "path", "file_path", "glob", "pattern", "url", "command"):
+        if k in args and args[k] not in (None, ""):
+            v = args[k]
+            s = str(v)
+            return s if len(s) <= limit else s[:limit] + "…"
+    # 兜底：压成一行 JSON，跳掉 content/evidence/new_string/old_string 等大字段
+    skip = {"content", "evidence", "new_string", "old_string"}
+    compact = {k: v for k, v in args.items() if k not in skip}
+    try:
+        s = json.dumps(compact, ensure_ascii=False)
+    except Exception:
+        s = str(compact)
+    return s if len(s) <= limit else s[:limit] + "…"
+
+
 class BaseAgent(ABC, Generic[ProductT]):
     """所有 agent 的抽象基类"""
 
@@ -541,7 +566,13 @@ class BaseAgent(ABC, Generic[ProductT]):
                 args = tc.arguments
                 args = await self.before_tool_call(tool, args)
                 await self._trace(TraceEventType.TOOL_CALL, {"tool": tool.name, "args": args})
-                await self._publish("tool_call", {"tool": tool.name})
+                # 带一个 args 预览给前端做"代码搜索: xxx"这种展示；
+                # coding agent 自己在 before_tool_call 里发了更富的 agent_tool 事件，
+                # 这里的 tool_call 事件对它是冗余但无害。
+                await self._publish(
+                    "tool_call",
+                    {"tool": tool.name, "input_preview": _short_args_preview(args)},
+                )
 
                 start_ts = time.time()
                 result = await tool.execute(args, self.ctx)

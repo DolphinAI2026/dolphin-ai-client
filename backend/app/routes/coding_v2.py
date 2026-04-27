@@ -21,12 +21,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.brainstorm import BrainstormAgent
 from app.agents.coding.llm_config import load_coding_llm_config
+from app.agents.coding.spec_bridge import render_spec_brief
 from app.agents.db_publisher import get_db_publisher
 from app.agents.db_trace_writer import get_db_trace_writer
 from app.agents.iteration import (
     IterationLevel,
     classify_iteration,
 )
+from app.agents.iteration.spec_patch import PatchOp
 from app.agents.types import AgentContext
 from app.database import AsyncSessionLocal, get_db
 from app.deps import AuthContext, get_auth_context
@@ -92,9 +94,11 @@ async def _build_agent_context(
     input_data: Optional[dict[str, Any]] = None,
 ) -> AgentContext:
     """统一构造 AgentContext（publisher / trace_writer / llm_client）"""
+    # load_coding_llm_config 只认 "llmcfg:<id>" 前缀为"按 id 挑 config"，
+    # 否则会把裸字符串当成 model 名 override（结果是退回租户默认，用户选择被忽略）。
     base_url, api_key, model = await load_coding_llm_config(
         tenant_id,
-        str(selected_model_id) if selected_model_id else None,
+        f"llmcfg:{selected_model_id}" if selected_model_id else None,
     )
     llm_client = LLMClient(api_key=api_key, base_url=base_url, model=model)
 
@@ -158,6 +162,20 @@ async def send_message(
         if conv.tenant_id != ctx.tenant_id:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "tenant mismatch")
 
+    # Step 1.5：把用户这条消息作为事件写入 conversation_events，
+    # 让 SSE 重连/重载时能按序回放（前端气泡就能重建）
+    try:
+        await get_db_publisher().scoped(db).publish(  # type: ignore[attr-defined]
+            conversation_id=conv.id,
+            event_type="conversation.user_message",
+            agent="user",
+            session_id=None,
+            data={"text": payload.message},
+        )
+        await db.commit()
+    except Exception as e:
+        logger.warning("publish conversation.user_message failed (non-fatal): %s", e)
+
     # Step 2：路由决策
     decision: RouteDecision = await route_user_message(db, conversation_id=conv.id)
 
@@ -208,7 +226,74 @@ async def send_message(
         return _build_response(conv.id, decision)
 
     if decision.action == "refine_brainstorm":
-        # CONFIRM 阶段收到文本：视为 refine 触发 → 回到 UNDERSTAND + 新 brainstorm session
+        # CONFIRM 阶段收到文本：用户在纠正/补充**已展示但尚未确认**的 Spec。
+        #
+        # 关键改造（2026-04-23）：旧逻辑"回 UNDERSTAND + 起全新 brainstorm session"
+        # 把用户的纠正当全新需求喂给 BrainstormAgent，LLM 看不到旧 Spec，
+        # 会把"附件 formValue 是对象数组"误判成"用户想做一个附件上传组件"
+        # → 重开 scene 检测、重问场景。
+        #
+        # 现在改成走 iterate 分发（with from_confirm_phase=True）：
+        # - trivial：LLM 基于旧 Spec 生成 SpecPatch，apply 出新 Spec 后**停在 CONFIRM**
+        #   让用户看到更新后的 Spec 再点确认（不自动跑 coding）
+        # - minor：起 brainstorm 但 trigger=ITERATE_MINOR（保留旧 Spec 上下文）
+        # - major：起 brainstorm 但 trigger=ITERATE_MAJOR
+        # - cross_scene：警告用户
+        bs_active = await bs_svc.get_active_session_for_conversation(db, conv.id)
+        if not bs_active:
+            # CONFIRM 阶段一般 bs_active 还在，但保险起见扫已完成的会话
+            from sqlalchemy import desc as _desc, select as _select
+            stmt = (
+                _select(bs_svc.agent_models.BrainstormSession)
+                .where(
+                    bs_svc.agent_models.BrainstormSession.conversation_id == conv.id,
+                    bs_svc.agent_models.BrainstormSession.final_spec_id.isnot(None),
+                )
+                .order_by(_desc(bs_svc.agent_models.BrainstormSession.ended_at))
+                .limit(1)
+            )
+            bs_active = (await db.execute(stmt)).scalar_one_or_none()
+
+        # 找 base Spec 的两级 fallback：
+        #   1) bs_active.final_spec_id —— 只在用户点过"确认生成"之后才会写（见
+        #      driver.confirm_spec_and_prepare_coding → mark_session_completed）
+        #   2) 但 CONFIRM 阶段 Spec 已展示、用户**未点确认**时 session 还是 ACTIVE，
+        #      final_spec_id 是 None。此时直接按 session_id 反查 spec 表里最新那条。
+        base_spec_row = None
+        if bs_active and bs_active.final_spec_id:
+            base_spec_row = await spec_service.get_spec(db, bs_active.final_spec_id)
+        if not base_spec_row and bs_active:
+            base_spec_row = await spec_service.get_latest_spec_for_session(db, bs_active.id)
+
+        if base_spec_row:
+            # 走 iterate 分发，带 from_confirm_phase=True
+            await db.commit()
+            asyncio.create_task(_run_iterate_dispatch_task(
+                conversation_id=conv.id,
+                user_id=ctx.user.id,
+                tenant_id=ctx.tenant_id,
+                workspace_id=conv.workspace_id,
+                selected_model_id=payload.selected_model,
+                user_message=payload.message,
+                base_spec_id=base_spec_row.id,
+                from_confirm_phase=True,
+            ))
+            decision = RouteDecision(
+                action="refine_brainstorm",
+                phase=Phase.CONFIRM,
+                session_id=None,
+                reason=(
+                    "CONFIRM 阶段收到纠正消息，走 iterate 分级（trivial 直接打 patch 停在 CONFIRM；"
+                    "minor/major 起 brainstorm 带旧 Spec 上下文）"
+                ),
+            )
+            return _build_response(conv.id, decision)
+
+        # 两级 fallback 都找不到 base_spec —— 降级到老的"重启 brainstorm"行为（理论上不该发生）
+        logger.warning(
+            "refine_brainstorm: 找不到 base_spec，conversation=%s，降级到全新 brainstorm",
+            conv.id,
+        )
         from app.orchestrator import transition_phase
         await transition_phase(db, conversation_id=conv.id, to=Phase.UNDERSTAND)
         bs_row = await start_brainstorm(
@@ -376,15 +461,30 @@ async def _run_brainstorm_task(
     workspace_id: Optional[str],
     selected_model_id: Optional[int],
     user_message: str,
+    base_spec_brief: Optional[str] = None,
+    allowed_paths: Optional[list[str]] = None,
 ) -> None:
     """后台跑 BrainstormAgent。独立 DB session，事件通过 publisher 推 SSE。
 
     commit 策略：task 结束时统一 commit；driver 层只 flush 不 commit，
     避免 task 内部复杂路径下多次 commit。publisher 的事件行是独立 session
     自我 commit（不受此影响）。
+
+    Args:
+        base_spec_brief: 非空 = iterate 场景，塞进 ctx.input 让 BrainstormAgent
+            在 user message 里看到上一版 Spec 摘要，把 user_message 当作对 base_spec
+            的纠正而不是新需求；同时切换 system prompt 到 iterate 模式。
+        allowed_paths: 非空 = scope 约束，灌进 BrainstormState.allowed_paths，
+            ask_user tool 校验 target_path 必须落在内（防越界重问已确定字段）。
     """
     async with AsyncSessionLocal() as task_db:
         try:
+            input_data: dict[str, Any] = {"requirement": user_message}
+            if base_spec_brief:
+                input_data["base_spec_brief"] = base_spec_brief
+                input_data["is_iteration"] = True
+            if allowed_paths:
+                input_data["allowed_paths"] = list(allowed_paths)
             agent_ctx = await _build_agent_context(
                 task_db,
                 session_id=session_id,
@@ -393,7 +493,7 @@ async def _run_brainstorm_task(
                 tenant_id=tenant_id,
                 workspace_id=workspace_id,
                 selected_model_id=selected_model_id,
-                input_data={"requirement": user_message},
+                input_data=input_data,
             )
             agent = BrainstormAgent(agent_ctx)
             await driver.drive_brainstorm(task_db, agent=agent, session_id=session_id)
@@ -674,21 +774,31 @@ async def _run_iterate_dispatch_task(
     selected_model_id: Optional[int],
     user_message: str,
     base_spec_id: str,
+    from_confirm_phase: bool = False,
 ) -> None:
-    """DONE 后的新消息：先 classify，然后按级别分派。
+    """对既有 Spec 的精化 / 迭代：先 classify，然后按级别分派。
 
-    - trivial：apply patch → 新版 Spec → drive_coding
-    - minor：起 brainstorm（反问聚焦细节）
-    - major：起完整 brainstorm
+    两个调用入口：
+    1. **DONE 后的新消息**（`from_confirm_phase=False`，默认）：组件开发已完成，
+       用户追加新需求。trivial 直接 apply patch 后**自动继续 coding** 改代码。
+    2. **CONFIRM 阶段的纠正**（`from_confirm_phase=True`）：Spec 已展示但还没确认，
+       用户纠正 AI 假设或补充信息。trivial apply patch 后**停在 CONFIRM**
+       让用户看到更新后的 Spec 再决定是否确认 → **不** 自动跑 coding。
+
+    级别动作：
+    - trivial：apply patch → 新版 Spec → （if from_confirm_phase 停在 CONFIRM；
+      否则 drive_coding）
+    - minor：起 brainstorm（反问聚焦细节，trigger = ITERATE_MINOR）
+    - major：起完整 brainstorm（trigger = ITERATE_MAJOR）
     - cross_scene：发事件提醒用户新建工作区
     """
     from app.orchestrator import coordinator as orch_coord
 
     async with AsyncSessionLocal() as task_db:
-        # 构造 LLMClient
+        # 构造 LLMClient（参数格式必须是 "llmcfg:<id>"，见 _build_agent_context 注释）
         base_url, api_key, model = await load_coding_llm_config(
             tenant_id,
-            str(selected_model_id) if selected_model_id else None,
+            f"llmcfg:{selected_model_id}" if selected_model_id else None,
         )
         llm_client = LLMClient(api_key=api_key, base_url=base_url, model=model)
         publisher = get_db_publisher().scoped(task_db)  # type: ignore[attr-defined]
@@ -730,7 +840,7 @@ async def _run_iterate_dispatch_task(
                 pass
             return
 
-        # 发事件给前端
+        # 发事件给前端（带 RefineIntent 关键字段，便于审计）
         try:
             await publisher.publish(
                 conversation_id=conversation_id,
@@ -742,12 +852,23 @@ async def _run_iterate_dispatch_task(
                     "rationale": classification.rationale,
                     "confidence": classification.confidence,
                     "has_patch": classification.patch is not None,
+                    "target_paths": list(classification.target_paths),
+                    "derived_paths": list(classification.derived_paths),
+                    "ambiguities_count": len(classification.ambiguities),
                 },
             )
         except Exception as e:
             logger.warning("publish iteration.classified failed: %s", e)
 
-        # 分派
+        # ── Refine Strategy Router（4 类策略）──
+        #
+        # 1. CROSS_SCENE → Reject（跨场景，不动）
+        # 2. classification.patch 存在 → Patch + (Open Questions if ambiguities)
+        #    适用 trivial 全部场景，以及 minor/major 中 LLM 给了 patch 的场景
+        # 3. 没 patch + target_paths 非空 → Constrained Brainstorm（带 allowed_paths）
+        # 4. 没 patch + 没 target_paths → Fallback Brainstorm（兜底，不带 allowed_paths）
+
+        # ── 路由 1：CROSS_SCENE ──
         if classification.level == IterationLevel.CROSS_SCENE:
             try:
                 await publisher.publish(
@@ -765,83 +886,188 @@ async def _run_iterate_dispatch_task(
                 )
             except Exception as e:
                 logger.warning("publish cross_scene_warning failed: %s", e)
-            return  # phase 保持 DONE，等用户操作
+            return
 
-        if classification.level == IterationLevel.TRIVIAL and classification.patch is not None:
-            # 快通道：直接 apply patch 产新 spec → coding
-            try:
-                new_spec = await iteration_service.apply_patch_as_new_spec(
-                    task_db, base_spec_id=base_spec_id, patch=classification.patch,
-                )
-                await task_db.commit()
-            except Exception as e:
-                logger.exception("iterate trivial patch apply failed: %s", e)
-                try:
-                    await publisher.publish(
-                        conversation_id=conversation_id,
-                        event_type="iteration.patch_failed",
-                        agent="orchestrator",
-                        session_id=None,
-                        data={"error": str(e), "falling_back": "minor"},
-                    )
-                except Exception:
-                    pass
-                # 降级：走 brainstorm minor
-                await _start_brainstorm_for_iterate(
-                    task_db,
-                    conversation_id=conversation_id, user_id=user_id, tenant_id=tenant_id,
-                    workspace_id=workspace_id, selected_model_id=selected_model_id,
-                    user_message=user_message, trigger=bs_svc.BsTrigger.ITERATE_MINOR,
-                )
-                return
-
-            # phase: DONE → UNDERSTAND → CONFIRM → GENERATE（用 reset + transitions）
-            await orch_coord.reset_phase(task_db, conversation_id)
-            await orch_coord.transition_phase(task_db, conversation_id=conversation_id, to=Phase.UNDERSTAND)
-            await orch_coord.transition_phase(task_db, conversation_id=conversation_id, to=Phase.CONFIRM)
-            await orch_coord.transition_phase(task_db, conversation_id=conversation_id, to=Phase.GENERATE)
-            await task_db.commit()
-
-            # 异步启动 coding
-            try:
-                await publisher.publish(
-                    conversation_id=conversation_id,
-                    event_type="iteration.trivial_patched",
-                    agent="orchestrator",
-                    session_id=None,
-                    data={
-                        "new_spec_id": new_spec.id,
-                        "new_version": new_spec.version,
-                        "patch_ops_count": len(classification.patch.operations),
-                    },
-                )
-            except Exception:
-                pass
-
-            new_spec_envelope = dict(new_spec.content or {})
-            if not new_spec_envelope.get("spec_id"):
-                new_spec_envelope["spec_id"] = new_spec.id
-            await _run_coding_task(
+        # ── 路由 2：Patch + Open Questions ──
+        if classification.patch is not None:
+            await _route_patch_with_ambiguities(
+                task_db=task_db,
+                publisher=publisher,
+                base_spec=base_spec,
+                base_spec_id=base_spec_id,
+                classification=classification,
                 conversation_id=conversation_id,
                 user_id=user_id,
                 tenant_id=tenant_id,
                 workspace_id=workspace_id,
-                spec_envelope=new_spec_envelope,
+                selected_model_id=selected_model_id,
+                user_message=user_message,
+                from_confirm_phase=from_confirm_phase,
             )
             return
 
-        # MINOR / MAJOR：起 brainstorm
+        # ── 路由 3 / 4：Constrained / Fallback Brainstorm ──
+        # 没 patch 但有 target_paths → 起 brainstorm 但**作用域硬约束**在 allowed_paths
+        # 既没 patch 也没 target_paths → 兜底 brainstorm（罕见，相当于让 LLM 重新展开聊）
         trigger = (
             bs_svc.BsTrigger.ITERATE_MINOR
             if classification.level == IterationLevel.MINOR
             else bs_svc.BsTrigger.ITERATE_MAJOR
         )
+        allowed_paths = classification.allowed_paths
+        if allowed_paths:
+            logger.info(
+                "iterate dispatch → Constrained Brainstorm (level=%s, allowed_paths=%s)",
+                classification.level.value, allowed_paths,
+            )
+        else:
+            logger.warning(
+                "iterate dispatch → Fallback Brainstorm (level=%s, no target_paths from classifier)",
+                classification.level.value,
+            )
         await _start_brainstorm_for_iterate(
             task_db,
             conversation_id=conversation_id, user_id=user_id, tenant_id=tenant_id,
             workspace_id=workspace_id, selected_model_id=selected_model_id,
             user_message=user_message, trigger=trigger,
+            base_spec_brief=_safe_render_spec_brief(base_spec.content or {}),
+            allowed_paths=allowed_paths,  # 空列表表示无约束
         )
+
+
+async def _route_patch_with_ambiguities(
+    *,
+    task_db,
+    publisher,
+    base_spec,
+    base_spec_id: str,
+    classification,
+    conversation_id: int,
+    user_id: int,
+    tenant_id: int,
+    workspace_id: Optional[str],
+    selected_model_id: Optional[int],
+    user_message: str,
+    from_confirm_phase: bool,
+) -> None:
+    """路由 2：Patch + Open Questions。
+
+    LLM 已经构造了 SpecPatch，意味着主要变更可以机械应用。
+    如果同时有 ambiguities（用户没说清楚的次要字段），把它们转成 open_questions
+    追加到新 envelope —— 用户在新 Spec 卡上能看到"AI 用了哪些默认假设"，
+    可以再下一轮 refine 修正。
+    """
+    from app.orchestrator import coordinator as orch_coord
+
+    # 构造扩展 patch：原 ops + 把 ambiguities 转为 add open_questions 的 ops
+    patch = classification.patch
+    extra_ops: list[PatchOp] = []
+    for amb in classification.ambiguities:
+        assumed = amb.default if amb.default is not None else "(未指定，请用户在下一版确认)"
+        extra_ops.append(PatchOp(
+            op="add",
+            path="provenance.open_questions",
+            value={
+                "question": amb.question,
+                "assumed_answer": str(assumed),
+            },
+        ))
+    if extra_ops:
+        patch.operations.extend(extra_ops)
+
+    try:
+        new_spec = await iteration_service.apply_patch_as_new_spec(
+            task_db, base_spec_id=base_spec_id, patch=patch,
+        )
+        await task_db.commit()
+    except Exception as e:
+        logger.exception("iterate patch apply failed: %s", e)
+        try:
+            await publisher.publish(
+                conversation_id=conversation_id,
+                event_type="iteration.patch_failed",
+                agent="orchestrator",
+                session_id=None,
+                data={"error": str(e), "falling_back": "constrained_brainstorm"},
+            )
+        except Exception:
+            pass
+        # patch apply 失败 → 降级为 Constrained Brainstorm（带 allowed_paths）
+        await _start_brainstorm_for_iterate(
+            task_db,
+            conversation_id=conversation_id, user_id=user_id, tenant_id=tenant_id,
+            workspace_id=workspace_id, selected_model_id=selected_model_id,
+            user_message=user_message, trigger=bs_svc.BsTrigger.ITERATE_MINOR,
+            base_spec_brief=_safe_render_spec_brief(base_spec.content or {}),
+            allowed_paths=classification.allowed_paths,
+        )
+        return
+
+    # phase 流转：
+    #   - CONFIRM 阶段 refine（from_confirm_phase=True）→ 停 CONFIRM 等用户再确认
+    #   - DONE 阶段 iterate（from_confirm_phase=False）→ 自动 GENERATE 跑 coding
+    if from_confirm_phase:
+        await orch_coord.reset_phase(task_db, conversation_id)
+        await orch_coord.transition_phase(task_db, conversation_id=conversation_id, to=Phase.UNDERSTAND)
+        await orch_coord.transition_phase(task_db, conversation_id=conversation_id, to=Phase.CONFIRM)
+        await task_db.commit()
+    else:
+        await orch_coord.reset_phase(task_db, conversation_id)
+        await orch_coord.transition_phase(task_db, conversation_id=conversation_id, to=Phase.UNDERSTAND)
+        await orch_coord.transition_phase(task_db, conversation_id=conversation_id, to=Phase.CONFIRM)
+        await orch_coord.transition_phase(task_db, conversation_id=conversation_id, to=Phase.GENERATE)
+        await task_db.commit()
+
+    # 发 trivial_patched 事件 — 前端 push 新版 Spec 卡
+    try:
+        await publisher.publish(
+            conversation_id=conversation_id,
+            event_type="iteration.trivial_patched",
+            agent="orchestrator",
+            session_id=None,
+            data={
+                "new_spec_id": new_spec.id,
+                "new_version": new_spec.version,
+                "parent_version": base_spec.version,
+                "patch_ops_count": len(patch.operations),
+                "ambiguities_resolved_as_open_questions": len(extra_ops),
+                "rationale": classification.rationale,
+                "stay_in_confirm": from_confirm_phase,
+            },
+        )
+    except Exception:
+        pass
+
+    if from_confirm_phase:
+        return
+
+    # DONE 路径：自动跑 coding
+    new_spec_envelope = dict(new_spec.content or {})
+    if not new_spec_envelope.get("spec_id"):
+        new_spec_envelope["spec_id"] = new_spec.id
+    await _run_coding_task(
+        conversation_id=conversation_id,
+        user_id=user_id,
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        spec_envelope=new_spec_envelope,
+    )
+
+
+def _safe_render_spec_brief(envelope: dict[str, Any]) -> Optional[str]:
+    """把 Spec envelope 渲染成 markdown brief；渲染异常时返回 None。
+
+    brainstorm iterate 路径用，失败时退回"无 brief"行为，保证迭代任务不被渲染
+    错误阻断。调用 spec_bridge.render_spec_brief（coding agent 也用同一个）。
+    """
+    if not envelope:
+        return None
+    try:
+        text = render_spec_brief(envelope)
+        return text.strip() or None
+    except Exception as e:
+        logger.warning("render_spec_brief failed: %s", e)
+        return None
 
 
 async def _start_brainstorm_for_iterate(
@@ -854,8 +1080,17 @@ async def _start_brainstorm_for_iterate(
     selected_model_id: Optional[int],
     user_message: str,
     trigger: str,
+    base_spec_brief: Optional[str] = None,
+    allowed_paths: Optional[list[str]] = None,
 ) -> None:
-    """iterate 场景下开新 brainstorm session 的通用路径"""
+    """iterate 场景下开新 brainstorm session 的通用路径
+
+    Args:
+        base_spec_brief: 上一版 Spec 摘要，让 LLM 看到已有共识不再重问场景
+        allowed_paths: Refine Intent 的 target_paths ∪ derived_paths。
+            非空时 BrainstormAgent 的 ask_user tool 会硬约束 target_path 必须落在内，
+            越界直接拒绝。这是"AI 不要答非所问"的 tool layer 强约束。
+    """
     from app.orchestrator import transition_phase as _transition
 
     await _transition(task_db, conversation_id=conversation_id, to=Phase.UNDERSTAND)
@@ -876,6 +1111,8 @@ async def _start_brainstorm_for_iterate(
         workspace_id=workspace_id,
         selected_model_id=selected_model_id,
         user_message=user_message,
+        base_spec_brief=base_spec_brief,
+        allowed_paths=allowed_paths,
     )
 
 
@@ -904,7 +1141,13 @@ async def _run_coding_task(
         AsyncSessionLocal() as trace_db,
     ):
         try:
-            base_url, api_key, model = await load_coding_llm_config(tenant_id, None)
+            # 从 conversation 读用户在首条消息时选的 llm_config；不在就走租户默认
+            conv_row = await task_db.get(Conversation, conversation_id)
+            selected_cfg_id = conv_row.selected_llm_config_id if conv_row else None
+            base_url, api_key, model = await load_coding_llm_config(
+                tenant_id,
+                f"llmcfg:{selected_cfg_id}" if selected_cfg_id else None,
+            )
             llm_client = LLMClient(api_key=api_key, base_url=base_url, model=model)
 
             def _make_ctx(session_id: str) -> AgentContext:

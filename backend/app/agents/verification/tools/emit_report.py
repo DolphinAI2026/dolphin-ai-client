@@ -133,6 +133,10 @@ def build_emit_report_tool(state: VerificationState) -> Tool:
                     "overall_status": overall,
                     "passed_count": state.passed_count(),
                     "failed_count": state.failed_count(),
+                    # 前端要直接渲染每条 AC 的 pass/fail + evidence，
+                    # 这里随事件一起发；数据已经在 state 里，没额外成本
+                    "items": [a.to_dict() for a in state.ac_items],
+                    "summary": summary,
                 },
             },
         )

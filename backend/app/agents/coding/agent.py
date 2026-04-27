@@ -181,11 +181,18 @@ class CodingAgent(BaseAgent[dict]):
         - 旧路径（raw requirement）：输入无 spec_envelope，与 VibeCodingAgent 字节级一致
         - 新路径（Spec 驱动）：输入有 spec_envelope / spec_brief → 在 Task 后追加
           Structured Spec 段；Task 段用 intent.core_purpose 或用户原话
+
+        AutoFix 路径：drive_coding_with_autofix 每轮把 `fix_hint` 塞进 ctx.input、
+        `round_index` 塞进 ctx.extra。round_index>0 时前置一段"本次是重试"banner，
+        告知 LLM workspace 里已有上轮代码、只针对性修失败的 AC。
         """
         requirement = self.ctx.input.get("requirement", "")
         summary = self.ctx.input.get("conversation_summary", "")
         # Spec 驱动时 spec_bridge 会塞 spec_brief；未传时保持旧行为
         spec_brief = self.ctx.input.get("spec_brief") or None
+        # AutoFix 重试路径：driver.py 每轮重跑时注入
+        fix_hint = self.ctx.input.get("fix_hint") or None
+        round_index = int((self.ctx.extra or {}).get("round_index", 0))
 
         # 获取 workspace info（project_name / project_type / files）
         workspace_info: dict[str, Any] = {}
@@ -211,6 +218,8 @@ class CodingAgent(BaseAgent[dict]):
             workspace_info=workspace_info,
             workspace_path=workspace_path,
             spec_brief=spec_brief,
+            fix_hint=fix_hint,
+            round_index=round_index,
         )
 
     def should_terminate(self) -> tuple[bool, str]:
@@ -246,7 +255,12 @@ class CodingAgent(BaseAgent[dict]):
             note = _describe_tool_plan(tool_names, project_type)
             # 去重（避免连续多轮同 tool_names 生成同 note 刷屏）
             if note and note != self._last_progress_note:
-                await self._publish("agent_thinking_delta", {"content": note})
+                # 发 aggregate（agent_thinking）而非 delta：note 是事后合成的
+                # 完整文本，不存在"后续 delta 继续追加"的语义。
+                # 若发 delta，前端延续上一条未封口的 thinking 条目把 note 拼上去，
+                # 造成"思考卡尾部突然多出一段和上下文不连贯的文字"。
+                # 走 aggregate：前端 sealed 逻辑自动把 note 渲染成独立条目。
+                await self._publish("agent_thinking", {"content": note})
                 self._last_progress_note = note
 
     async def on_each_turn(self, turn: int) -> None:
@@ -510,9 +524,18 @@ class CodingAgent(BaseAgent[dict]):
             "finish_reason": finish_reason,
         }, duration_ms=duration_ms)
 
-        # 如果没 tool_calls 就整条 assistant content 作为 "thinking" 事件（兼容老 SSE）
-        if not assembled_tool_calls and full_content:
-            await self._publish("agent_thinking", {"content": full_content})
+        # 流式结束后，发一条 aggregated thinking 事件（会落 DB）
+        # 用途：
+        # 1. 刷新后回放能重建完整思考文本（delta 事件是 ephemeral 不存 DB）
+        # 2. 前端收到 aggregate 会把对应 thinking 条目置 sealed=true，
+        #    阻止下一轮的 delta 继续往这条上拼（否则会出现"条目文本跨轮累积"的 bug）
+        # 必须合并 reasoning_content + full_content：两者在流式阶段都是
+        # 通过 agent_thinking_delta 发给前端、被累积到**同一个**条目里，
+        # aggregate 如果只发 full_content，前端覆盖时就会把 reasoning 部分丢掉，
+        # 造成"卡片文字突然缩短/改变"的视觉跳变。
+        combined_thinking = (reasoning_content or "") + (full_content or "")
+        if combined_thinking:
+            await self._publish("agent_thinking", {"content": combined_thinking})
 
         return response
 

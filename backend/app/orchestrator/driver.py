@@ -204,6 +204,15 @@ async def drive_brainstorm(
                 if hasattr(spec_envelope_obj, "provenance")
                 else 0.0
             )
+            # 版本信息：让前端无需额外 HTTP 就能画 "v3 基于 v2 迭代" 之类的 divider
+            version_val: int | None = None
+            parent_version_val: int | None = None
+            core_purpose_val: str | None = None
+            if hasattr(spec_envelope_obj, "provenance"):
+                version_val = getattr(spec_envelope_obj.provenance, "version", None)
+                parent_version_val = getattr(spec_envelope_obj.provenance, "parent_version", None)
+            if hasattr(spec_envelope_obj, "intent"):
+                core_purpose_val = getattr(spec_envelope_obj.intent, "core_purpose", None)
             try:
                 await agent.ctx.publisher.publish(
                     conversation_id=conversation_id,
@@ -214,6 +223,9 @@ async def drive_brainstorm(
                         "spec_id": persisted_spec_id,
                         "scene_type": scene_type_val,
                         "confidence": confidence_val,
+                        "version": version_val,
+                        "parent_version": parent_version_val,
+                        "core_purpose": core_purpose_val,
                     },
                 )
             except Exception as e:

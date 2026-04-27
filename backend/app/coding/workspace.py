@@ -1505,7 +1505,43 @@ class WorkspaceManager:
             except Exception as e:
                 logger.warning(f"[build_project] 校验 mobile 产物时出错: {e}")
 
+        # 构建产物校验通过 → 清掉 web/{outputName}/ 和 mobile/{outputName}/ 目录。
+        # 目的：
+        # 1. 打包后的 UMD 文件是混淆过的代码，LLM（coding agent / verification agent）
+        #    grep / read 它们完全无益，只会浪费 turn 且污染推理上下文
+        #    （比如 verify 阶段看到 form-component-custom-intl-phone.umd.js 会反复 read 它）
+        # 2. LLM 有时会 glob 全工作区，看到 UMD 目录后臆想"产物该在 dist 目录"
+        #    之类无关结论，影响思考过程质量
+        # 保留 .zip：下载 / 上传到平台 / 发布市场用的是 .zip 制品，放在 ws_path 根下不动。
+        # 副作用：如果用户点"下载 dist"按钮（routes/coding.py `type=dist`），
+        # 会拿到 400「请先构建项目」，需再跑一次构建。可接受。
+        self._cleanup_dual_build_artifacts(ws_path, meta)
+
         return {"status": "ok", "message": "双端构建成功"}
+
+    def _cleanup_dual_build_artifacts(self, ws_path: Path, meta: dict) -> None:
+        """删掉双端构建产物目录（web/{outputName}/ 和 mobile/{outputName}/）。
+
+        只在 form-component-dual 类型调用，只删 UMD/assets 目录本身，不触 .zip / src / node_modules。
+        所有异常静默吞 —— 清理是锦上添花，失败不应阻断主流程。
+        """
+        for side in ("web", "mobile"):
+            try:
+                apaas = _safe_read_json(ws_path / side / "src" / "apaas.json")
+                if not apaas:
+                    continue
+                output_name = self._resolve_output_name(
+                    apaas,
+                    meta.get("project_name") or self._fallback_project_name_from_path(ws_path),
+                )
+                artifact_dir = ws_path / side / output_name
+                if artifact_dir.exists() and artifact_dir.is_dir():
+                    shutil.rmtree(artifact_dir, ignore_errors=True)
+                    logger.info(
+                        f"[build] cleanup: removed build artifact dir {side}/{output_name}/"
+                    )
+            except Exception as e:
+                logger.warning(f"[build] cleanup 跳过 {side}（非致命）: {e}")
 
     async def _build_single_project(self, ws_path: Path) -> dict:
         """单端项目：直接在 ws_path 跑 npm/mvn build，验证产物。"""

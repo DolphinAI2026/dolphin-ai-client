@@ -24,6 +24,17 @@ async def lifespan(app: FastAPI):
     async with AsyncSessionLocal() as session:
         await seed_initial_data(session)
 
+    # 清理进程上次退出时悬挂的 coding session
+    # （uvicorn --reload / 崩溃 / 部署重启留下的 status='running' 行）
+    try:
+        from app.startup_recovery import sweep_dead_coding_sessions
+        await sweep_dead_coding_sessions()
+    except Exception as e:
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "startup recovery sweep failed (非致命): %s", e,
+        )
+
     # 预热平台代理状态（避免首次请求 503）
     from app.routes.platform_proxy import _ensure_proxy_state
     try:

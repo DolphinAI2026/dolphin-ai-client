@@ -248,6 +248,63 @@ def test_tool_ask_user_empty_question_rejected():
     assert not r.success
 
 
+def test_tool_ask_user_rejects_nested_list_options():
+    """LLM 偶尔会把 options 多裹一层 [[{...}]] —— 必须拒绝并不消耗反问次数。"""
+    state = BrainstormState()
+    tools = {t.name: t for t in build_brainstorm_tools(state)}
+    r = _run(tools["ask_user"].execute(
+        {
+            "question": "q?",
+            "priority": 1,
+            "options": [[
+                {"value": "a", "label": "A"},
+                {"value": "b", "label": "B"},
+            ]],
+        },
+        _ctx(),
+    ))
+    assert not r.success
+    assert r.error == "invalid_options_format"
+    assert "多裹了一层" in r.content or "一维数组" in r.content
+    assert state.ask_user_count == 0
+
+
+def test_tool_ask_user_rejects_options_not_a_list():
+    state = BrainstormState()
+    tools = {t.name: t for t in build_brainstorm_tools(state)}
+    r = _run(tools["ask_user"].execute(
+        {"question": "q?", "priority": 1, "options": {"value": "a", "label": "A"}},
+        _ctx(),
+    ))
+    assert not r.success
+    assert r.error == "invalid_options_format"
+    assert state.ask_user_count == 0
+
+
+def test_tool_ask_user_rejects_item_missing_fields():
+    state = BrainstormState()
+    tools = {t.name: t for t in build_brainstorm_tools(state)}
+    r = _run(tools["ask_user"].execute(
+        {"question": "q?", "priority": 1, "options": [{"value": "a"}]},
+        _ctx(),
+    ))
+    assert not r.success
+    assert r.error == "invalid_options_format"
+    assert 'label' in r.content
+
+
+def test_tool_ask_user_accepts_empty_options():
+    """options 未传或为空是合法的（schema 上 options 非必填）。"""
+    state = BrainstormState()
+    tools = {t.name: t for t in build_brainstorm_tools(state)}
+    r = _run(tools["ask_user"].execute(
+        {"question": "q?", "priority": 1},
+        _ctx(),
+    ))
+    assert r.success
+    assert r.emit_event["data"]["options"] == []
+
+
 # ══════════════════════════════════════════════════════════════
 # Tool: query_marketplace
 # ══════════════════════════════════════════════════════════════

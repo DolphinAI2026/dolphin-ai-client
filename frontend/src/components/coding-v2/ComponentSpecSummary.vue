@@ -177,7 +177,10 @@ function fmtDefault(v: unknown): string {
 .table-wrap {
   border: 1px solid #e5e7eb;
   border-radius: 6px;
-  overflow: hidden;
+  /* nowrap 的列可能把表撑宽，用水平滚动兜底（desc-cell 仍允许换行），
+     而不是竖着折行把值切成两行。 */
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 /* ── 数据存储表 ── */
@@ -232,6 +235,7 @@ function fmtDefault(v: unknown): string {
   color: #6b7280;
   border-bottom: 1px solid #e5e7eb;
   border-right: 1px solid #e5e7eb;
+  white-space: nowrap;
 }
 .prop-table th:last-child { border-right: none; }
 .prop-table td {
@@ -239,7 +243,11 @@ function fmtDefault(v: unknown): string {
   border-bottom: 1px solid #e5e7eb;
   border-right: 1px solid #e5e7eb;
   vertical-align: middle;
+  /* 默认不换行（属性/类型/UI/默认值等短字段单行展示更整齐），
+     只有 .desc-cell（说明列）允许自然换行。 */
+  white-space: nowrap;
 }
+.prop-table td.desc-cell { white-space: normal; }
 .prop-table td:last-child { border-right: none; }
 .prop-table tbody tr:last-child td { border-bottom: none; }
 .prop-table tbody tr:hover { background: #fafafa; }
