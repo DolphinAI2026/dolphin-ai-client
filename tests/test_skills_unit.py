@@ -123,8 +123,9 @@ class TestBuildRolePayload:
         payload = _build_role_payload("app1", roles)
         assert len(payload) == 2
         assert payload[0]["roleName"] == "管理员"
-        assert payload[0]["roleCode"].startswith("R_admin_")
-        assert payload[1]["roleCode"].startswith("R_操作员_")
+        # enable_code_suffix=False 时无后缀，直接取 code/name
+        assert payload[0]["roleCode"] == "admin"
+        assert payload[1]["roleCode"] == "操作员"
 
 
 # ── build_component: 全部 16 种组件 ──

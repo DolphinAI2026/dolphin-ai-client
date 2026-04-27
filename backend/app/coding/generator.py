@@ -30,13 +30,9 @@ class CodingGenerator:
   典型形态：数据查询页面、图表分析页面、报表页面、管理列表页、看板、大屏、仪表盘、自开发菜单页面。
   技术特征：有独立路由、完整页面结构（Vue 页面组件 + index.js + apaas.json），可使用 this.$request 调接口。
 
-- **web_component**：嵌入在低代码表单字段中的可复用 UI 控件，不是独立页面。
+- **web_component_dual**：嵌入在低代码表单字段中的可复用 UI 控件（双端：PC + 移动端），所有组件类需求统一走此场景。
   典型形态：自定义选择器、日期范围组件、文件上传控件、富文本编辑器、自定义输入框、数据关联选择控件。
-  技术特征：需实现 ide/edit/read/list/print/search 多种渲染模式，使用 FormWidgetConfigMixin，有 widget.config.js。
-
-- **web_component_dual**：同时包含 PC 端和移动端的双端自开发表单组件。
-  典型形态：需要同时在 PC 和移动端使用的表单组件。
-  技术特征：三层目录结构 shared/ + web/ + mobile/，分别打包。
+  技术特征：三层目录结构 shared/ + web/ + mobile/，shared 层共享 widget.config 与业务逻辑，web 使用 element-ui，mobile 使用 cube-ui。
 
 - **web_list_view**：自定义列表视图，嵌入在列表页中替换默认展示方式（基于 ListEngine），不是独立页面。
 
@@ -48,26 +44,17 @@ class CodingGenerator:
 
 ### 移动端类
 - **mobile_page**：移动端独立页面（使用 cube-ui 组件库）。
-- **mobile_component**：移动端表单中嵌入使用的自定义控件。
 
 ### 后端 Java 类
 - **backend_api**：开发 SpringBoot/Java 后端 REST 接口（Controller + Service），接口路径以 /custom 开头，包名以 com.xdap 开头。注意：前端页面"调用接口"不属于此类。
 - **backend_feign**：用 FeignClient 调用外部 HTTP 服务，含接口定义、DTO、FeignConfig。
 - **backend_scheduled**：Spring @Scheduled 定时任务，含 ScheduledTask.java + Dao + Service。
 
-### 脚本类
-- **script_js**：业务事件中的前端 JavaScript 脚本（通过 lowCodeContext.businessEventEngine 获取数据）。
-- **script_python**：业务事件中的后端 Python 脚本（使用 definesys 模块）。
-- **script_groovy**：业务事件中的后端 Groovy 脚本（通过 xdapEventSystemFunctions 获取数据）。
-- **business_dialog**：表单提交时弹出的二次确认或信息采集弹窗（Vue 模板，通过 businessEventEngine 控制确认/取消）。
-- **ui_style**：仅调整 CSS 样式（.form-custom-style 作用域），无业务逻辑。
-- **list_custom_module**：列表页面中嵌入的自定义展示区块（通过 lowCodeContext.pageViewConfig 获取数据）。
-
 ## 关键区分原则
 
-**web_page vs web_component**（最常见混淆）：
+**web_page vs web_component_dual**（最常见混淆）：
 - "页面/菜单页面/自开发页面/查询页面/分析页面/报表/看板/大屏" → **web_page**
-- "组件/控件/选择器/输入框/自开发组件/表单组件" → **web_component**
+- "组件/控件/选择器/输入框/自开发组件/表单组件" → **web_component_dual**
 - 图表、表格出现在"页面"语境中 → **web_page**（图表页面是完整页面，不是组件）
 
 **backend_api vs web_page**：
@@ -80,14 +67,12 @@ class CodingGenerator:
 "创建一个项目分析图表自开发页面" → web_page
 "做一个数据看板页面" → web_page
 "开发一个员工查询菜单页面" → web_page
-"做一个自定义日期范围选择器" → web_component
-"开发一个关联数据选择组件" → web_component
-"写一个员工信息展示的富文本输入框" → web_component
+"做一个自定义日期范围选择器" → web_component_dual
+"开发一个关联数据选择组件" → web_component_dual
+"写一个员工信息展示的富文本输入框" → web_component_dual
 "开发一个 SpringBoot 接口查询订单数据" → backend_api
 "用 FeignClient 调用外部天气 API" → backend_feign
-"每天凌晨同步一次数据，定时任务" → backend_scheduled
-"表单提交前弹窗让用户二次确认" → business_dialog
-"调整表单里某个字段的背景色" → ui_style"""
+"每天凌晨同步一次数据，定时任务" → backend_scheduled"""
 
         response = await self.llm_client.chat_completion(
             [
@@ -105,5 +90,5 @@ class CodingGenerator:
             return SceneType(scene_code)
         except ValueError:
             # 默认返回Web组件
-            logger.warning(f"无法识别场景 '{scene_code}'，默认使用 web_component")
-            return SceneType.WEB_COMPONENT
+            logger.warning(f"无法识别场景 '{scene_code}'，默认使用 web_component_dual")
+            return SceneType.WEB_COMPONENT_DUAL

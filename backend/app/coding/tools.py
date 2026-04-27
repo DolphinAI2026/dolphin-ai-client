@@ -65,7 +65,11 @@ TOOL_DEFINITIONS = [
                 "properties": {
                     "file_path": {
                         "type": "string",
-                        "description": "Path to the file (relative to workspace root)",
+                        "description": (
+                            "Required. Path to the file relative to workspace root. "
+                            "Example: 'web/src/form-component/form-editor/form-component-xxx-setting.vue'. "
+                            "Omitting this parameter will cause an error."
+                        ),
                     },
                     "content": {
                         "type": "string",
@@ -80,17 +84,33 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "edit_file",
-            "description": "Find and replace a string in a file. The old_string must match exactly (including whitespace and indentation). The file_path is relative to the workspace root.",
+            "description": (
+                "Find and replace a string in a file. "
+                "IMPORTANT: You MUST call read_file on the target file first to obtain its exact current content — "
+                "never construct old_string from memory or a previous read, as the file may have changed. "
+                "If this tool returns 'Error: old_string not found', call read_file again to refresh the content "
+                "and rebuild old_string from the refreshed content before retrying. "
+                "The old_string must match exactly (including whitespace and indentation). "
+                "The file_path is relative to the workspace root."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "file_path": {
                         "type": "string",
-                        "description": "Path to the file (relative to workspace root)",
+                        "description": (
+                            "Required. Path to the file relative to workspace root. "
+                            "The file must already exist. "
+                            "Example: 'web/src/form-component/form-editor/form-component-xxx-setting.vue'. "
+                            "Omitting this parameter will cause an error."
+                        ),
                     },
                     "old_string": {
                         "type": "string",
-                        "description": "The exact text to find in the file",
+                        "description": (
+                            "The exact text to find in the file. "
+                            "Must be copied verbatim from a read_file result — do not guess or reconstruct from memory."
+                        ),
                     },
                     "new_string": {
                         "type": "string",
@@ -266,7 +286,7 @@ def _is_form_component_workspace(workspace_path: Path) -> bool:
             import json as _json
             meta = _json.loads(meta_file.read_text(encoding="utf-8"))
             ptype = meta.get("project_type", "")
-            return ptype in {"form-component", "form-component-dual", "mobile-component"}
+            return ptype == "form-component-dual"
         except Exception:
             pass
     return False

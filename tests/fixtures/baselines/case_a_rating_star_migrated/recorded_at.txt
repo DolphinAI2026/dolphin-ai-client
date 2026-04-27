@@ -1,0 +1,7 @@
+recorded_at: 2026-04-19T21:26:01.705030
+mode: offline (direct pipeline call)
+workspace_root: /Users/mars/Desktop/apaas-build/apaas-builder-ai/.claude/worktrees/competent-chatterjee-6d4c33/tests/fixtures/baselines/_record_workspaces
+sqlite_db: /Users/mars/Desktop/apaas-build/apaas-builder-ai/.claude/worktrees/competent-chatterjee-6d4c33/tests/fixtures/baselines/_record_db.sqlite3
+duration_s: 733.4
+workspace_id: 1_389e1c95
+final_status: success

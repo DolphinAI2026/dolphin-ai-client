@@ -741,9 +741,8 @@ function onUploadEnvSelected(envId: number) {
 
 // ============ Scene Categories & Suggestions ============
 const sceneCategories = [
-  { key: 'component-pc', icon: '\uD83E\uDDE9', label: 'PC\u7EC4\u4EF6' },
+  { key: 'component-pc', icon: '\uD83E\uDDE9', label: '\u7EC4\u4EF6' },
   { key: 'page-pc', icon: '\uD83D\uDDA5\uFE0F', label: 'PC\u9875\u9762' },
-  { key: 'component-mobile', icon: '\uD83D\uDCF1', label: 'Mobile\u7EC4\u4EF6' },
   { key: 'page-mobile', icon: '\uD83D\uDCF1', label: 'Mobile\u9875\u9762' },
   { key: 'backend', icon: '\u2699\uFE0F', label: '\u540E\u7AEF\u63A5\u53E3' },
 ]
@@ -761,12 +760,6 @@ const sceneSuggestions: Record<string, string[]> = {
     '创建一个项目分析图表页面',
     '做一个审批流程页面，支持多级审批',
   ],
-  'component-mobile': [
-    '开发一个移动端签名板组件',
-    '做一个移动端图片选择上传组件',
-    '实现一个移动端级联选择器组件',
-    '创建一个移动端评分组件',
-  ],
   'page-mobile': [
     '做一个移动端数据查询列表页面',
     '开发一个移动端审批详情页面',
@@ -782,14 +775,6 @@ const sceneSuggestions: Record<string, string[]> = {
 
 const activeSceneCategory = ref('component-pc')
 const pendingSceneCategory = ref<string | null>(null)
-
-const sceneCategoryToProjectType: Record<string, string> = {
-  'component-pc': 'form-component',
-  'page-pc': 'menu-page',
-  'component-mobile': 'mobile-component',
-  'page-mobile': 'mobile-page',
-  backend: 'backend-api',
-}
 
 // ============ Lifecycle ============
 
@@ -1091,7 +1076,6 @@ const { sendMessage, sendSuggestion } = useCodingPipeline({
   workspace: { allWorkspaces, isDownloading, embeddedAppId, existingWorkspaces, workspaceShowcaseItems, workspaceDisplayName, workspaceCodeName, workspaceTooltip, workspaceTypeLabel, downloadWorkspaceArtifact } as any,
   activeSceneCategory,
   pendingSceneCategory,
-  sceneCategoryToProjectType,
   userInput,
   attachedFile,
   attachedPreviewUrl,

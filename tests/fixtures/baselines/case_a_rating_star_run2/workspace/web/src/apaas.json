@@ -1,0 +1,13 @@
+{
+  "entry": "index.js",
+  "templateType": "FORM_COMPONENT",
+  "customWidgetList": [
+    {
+      "code": "FORM_CUSTOM_STAR_RATING",
+      "text": "星级评分",
+      "description": "提供0-5星的可选评分，支持半星精度和自定义颜色"
+    }
+  ],
+  "copyAssets": [],
+  "outputName": "form-component-custom-star-rating"
+}

@@ -78,8 +78,15 @@ class Conversation(Base):
     status: Mapped[str] = mapped_column(String(20), default="active", nullable=False)  # active/completed/failed
     doc_result: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # 需求分析生成的设计文档 JSON
     context_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # 对话摘要（上下文压缩用）
-    phase: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # gathering | refining
+    phase: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # gathering | refining（智能搭建用）
     current_config: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # 服务端权威 config 状态
+    # 智能开发 V2 架构 - agent 流水线状态（不复用 phase 字段避免与智能搭建冲突）
+    coding_phase: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True,
+        comment="understand / confirm / scaffold / generate / verify / done / iterate",
+    )
+    coding_active_brainstorm_session_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    coding_active_coding_session_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -140,7 +147,7 @@ class MarketplaceComponent(Base):
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     code: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=True)
-    category: Mapped[str] = mapped_column(String(50), default="form-component")
+    category: Mapped[str] = mapped_column(String(50), default="form-component-dual")
     version: Mapped[str] = mapped_column(String(20), default="1.0.0")
     author_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
     tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id"), nullable=False)

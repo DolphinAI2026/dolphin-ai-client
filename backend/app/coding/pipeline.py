@@ -57,7 +57,6 @@ class PipelineParams:
         conversation_id: Optional[int] = None,
         selected_model: Optional[str] = None,
         project_id: Optional[int] = None,
-        project_type: Optional[str] = None,
         # 预计算的 request-scoped 值
         code_server_base_url: str = "",
         api_base_builder: Optional[str] = None,  # 用于构建 IDE proxy URL 的函数
@@ -71,7 +70,6 @@ class PipelineParams:
         self.conversation_id = conversation_id
         self.selected_model = selected_model
         self.project_id = project_id
-        self.project_type = project_type
         self.code_server_base_url = code_server_base_url or settings.code_server_base_url or ""
         self.api_base_builder = api_base_builder
         self.ide_token = ide_token
@@ -246,30 +244,26 @@ def build_ide_url(
 
 # ── 场景/项目辅助函数 ──────────────────────────────
 
+class UnsupportedSceneError(Exception):
+    """LLM 识别到智能开发模块不支持的场景（脚本/弹窗/样式等），需引导用户改用辅助搭建。"""
+
+
 def scene_to_project_type(scene_type: SceneType) -> str:
     mapping = {
-        SceneType.WEB_COMPONENT: "form-component",
         SceneType.WEB_COMPONENT_DUAL: "form-component-dual",
         SceneType.WEB_PAGE: "form-page",
         SceneType.WEB_LIST_VIEW: "form-list",
         SceneType.WEB_LAYOUT: "layout",
         SceneType.WEB_PLUGIN: "plugin",
         SceneType.BACKEND_API: "backend-api",
-        SceneType.MOBILE_COMPONENT: "form-component-dual",  # 移动端组件统一走双端模板
         SceneType.MOBILE_PAGE: "mobile-page",
-        SceneType.SCRIPT_JS: "script",
-        SceneType.SCRIPT_PYTHON: "script",
-        SceneType.SCRIPT_GROOVY: "script",
-        SceneType.BUSINESS_DIALOG: "script",
         SceneType.WEB_LOGIN: "web-login",
-        SceneType.UI_STYLE: "ui-style",
-        SceneType.LIST_CUSTOM_MODULE: "list-custom-module",
     }
     return mapping.get(scene_type, "form-component-dual")
 
 
 PROJECT_TYPE_TO_SCENE = {
-    "form-component": SceneType.WEB_COMPONENT,
+    "form-component": SceneType.WEB_COMPONENT_DUAL,
     "form-component-dual": SceneType.WEB_COMPONENT_DUAL,
     "menu-page": SceneType.WEB_PAGE,
     "form-page": SceneType.WEB_PAGE,
@@ -277,14 +271,7 @@ PROJECT_TYPE_TO_SCENE = {
     "backend-api": SceneType.BACKEND_API,
     "layout": SceneType.WEB_LAYOUT,
     "plugin": SceneType.WEB_PLUGIN,
-    "mobile-component": SceneType.MOBILE_COMPONENT,
     "mobile-page": SceneType.MOBILE_PAGE,
-    "script-js": SceneType.SCRIPT_JS,
-    "script-python": SceneType.SCRIPT_PYTHON,
-    "script-groovy": SceneType.SCRIPT_GROOVY,
-    "business-dialog": SceneType.BUSINESS_DIALOG,
-    "ui-style": SceneType.UI_STYLE,
-    "list-custom-module": SceneType.LIST_CUSTOM_MODULE,
     "web-login": SceneType.WEB_LOGIN,
 }
 
@@ -387,7 +374,7 @@ def extract_display_name(message: str, project_type: str, fallback_name: str) ->
     ).strip("，。,.!！?？：: ")
 
     suffix_map = {
-        "form-component": "组件", "mobile-component": "组件",
+        "form-component-dual": "组件",
         "form-page": "页面", "menu-page": "页面", "mobile-page": "页面",
         "form-list": "列表", "layout": "布局", "plugin": "插件", "backend-api": "接口",
     }
@@ -717,7 +704,7 @@ async def save_coding_message(db: AsyncSession, conversation_id: int, role: str,
 
 BRAINSTORM_PROPOSAL_MARKER = "<!-- BRAINSTORM_PROPOSAL -->"
 BRAINSTORM_MAX_REVISIONS = 3  # 最多修改 3 轮，超出自动生成代码
-BRAINSTORM_SCENES = {SceneType.WEB_COMPONENT, SceneType.WEB_COMPONENT_DUAL, SceneType.WEB_PAGE, SceneType.WEB_LIST_VIEW, SceneType.BACKEND_API}
+BRAINSTORM_SCENES = {SceneType.WEB_COMPONENT_DUAL, SceneType.WEB_PAGE, SceneType.WEB_LIST_VIEW, SceneType.BACKEND_API}
 
 _BRAINSTORM_PROMPT_FORM_COMPONENT = """\
 你是一位资深 aPaaS 表单组件架构师。请分析用户需求，输出一份简洁的设计确认单（不超过 600 字，中文）。
@@ -927,7 +914,6 @@ _BRAINSTORM_PROMPT_BACKEND_API = """\
 """
 
 _BRAINSTORM_PROMPTS = {
-    SceneType.WEB_COMPONENT: _BRAINSTORM_PROMPT_FORM_COMPONENT,
     SceneType.WEB_COMPONENT_DUAL: _BRAINSTORM_PROMPT_FORM_COMPONENT,
     SceneType.WEB_PAGE: _BRAINSTORM_PROMPT_PAGE,
     SceneType.WEB_LIST_VIEW: _BRAINSTORM_PROMPT_LIST,
@@ -982,16 +968,12 @@ async def _brainstorm_llm_call(
     temperature: float = 0.3,
 ) -> str:
     """
-    使用与 VibeCodingAgent 相同的租户 LLM 配置发起调用。
-    避免 brainstorm 使用默认 settings LLM 而非租户配置的 coding LLM。
+    使用租户的 coding LLM 配置发起调用（走 Dashscope/MiniMax 等，非通用 settings LLM）。
     """
-    from app.coding.vibe_agent import VibeCodingAgent
+    from app.agents.coding.llm_config import load_coding_llm_config
     import httpx
 
-    # 借用 VibeCodingAgent 的 LLM 配置解析
-    agent = VibeCodingAgent.__new__(VibeCodingAgent)
-    agent.tenant_id = tenant_id
-    base_url, api_key, llm_model = await agent._load_llm_config(model)
+    base_url, api_key, llm_model = await load_coding_llm_config(tenant_id, model)
 
     async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=120, write=10, pool=10)) as client:
         resp = await client.post(
@@ -1025,13 +1007,10 @@ async def _detect_scene_llm_call(
   典型形态：数据查询页面、图表分析页面、报表页面、管理列表页、看板、大屏、仪表盘、自开发菜单页面。
   技术特征：有独立路由、完整页面结构（Vue 页面组件 + index.js + apaas.json），可使用 this.$request 调接口。
 
-- **web_component_dual**：嵌入在低代码表单字段中的可复用 UI 控件（**默认选项**），同时支持 PC 端和移动端。
+- **web_component_dual**：嵌入在低代码表单字段中的可复用 UI 控件，同时支持 PC 端和移动端（**所有组件类需求统一走此场景**）。
   典型形态：自定义选择器、日期范围组件、文件上传控件、富文本编辑器、自定义输入框、数据关联选择控件、移动端表单控件。
   技术特征：shared/ 层共享 widget.config 和业务逻辑，web/ 使用 element-ui，mobile/ 使用 cube-ui，各自独立打包。
-  **使用时机：用户说"做一个组件/控件"但未明确说只要PC端，或明确提到移动端组件，均使用此场景。**
-
-- **web_component**：仅限 PC 端的表单组件，**仅在用户明确指定"只需PC端"/"不需要移动端"时才选此项**。
-  技术特征：单包结构，无 shared/ 层，使用 element-ui。
+  **使用时机：凡是"组件/控件/选择器/输入框/表单组件"类的需求，不论用户是否强调"只要 PC 端"，一律使用此场景（不再提供仅 PC 端变体）。**
 
 - **web_list_view**：自定义列表视图，嵌入在列表页中替换默认展示方式（基于 ListEngine），不是独立页面。
 
@@ -1043,28 +1022,27 @@ async def _detect_scene_llm_call(
 
 ### 移动端类
 - **mobile_page**：移动端独立页面（使用 cube-ui 组件库）。
-- **mobile_component**：已废弃，统一使用 **web_component_dual**。
 
 ### 后端 Java 类
 - **backend_api**：开发后端 REST 接口服务（SpringBoot/Java Controller + Service），接口路径以 /custom 开头，包名以 com.xdap 开头。只要主体是"开发接口/API/数据接口"，无论是否提及 SpringBoot，都属于此类。注意：前端页面"调用接口"不属于此类。
 - **backend_feign**：用 FeignClient 调用外部 HTTP 服务，含接口定义、DTO、FeignConfig。
 - **backend_scheduled**：Spring @Scheduled 定时任务，含 ScheduledTask.java + Dao + Service。
 
-### 脚本类
-- **script_js**：业务事件中的前端 JavaScript 脚本（通过 lowCodeContext.businessEventEngine 获取数据）。
-- **script_python**：业务事件中的后端 Python 脚本（使用 definesys 模块）。
-- **script_groovy**：业务事件中的后端 Groovy 脚本（通过 xdapEventSystemFunctions 获取数据）。
-- **business_dialog**：表单提交时弹出的二次确认或信息采集弹窗（Vue 模板，通过 businessEventEngine 控制确认/取消）。
-- **ui_style**：仅调整 CSS 样式（.form-custom-style 作用域），无业务逻辑。
-- **list_custom_module**：列表页面中嵌入的自定义展示区块（通过 lowCodeContext.pageViewConfig 获取数据）。
+## 不支持的场景（必须引导用户改用辅助搭建）
+
+本智能开发模块**不支持**以下场景，遇到这类需求必须输出 `unsupported_script`，由上层流程提示用户改用"辅助搭建"模块完成：
+- 业务事件中的 JavaScript / Python / Groovy **脚本**
+- 业务事件提交时的**自定义弹窗**
+- 仅调整 **CSS 样式**的场景
+- 列表页面中嵌入的**自定义模块**
 
 ## 关键区分原则
 
-**web_component_dual vs web_component**（最重要）：
+**组件类（统一用 web_component_dual）**：
 - "做一个组件/控件/选择器/输入框/表单组件"（未说明端） → **web_component_dual**
 - "移动端组件/手机端控件/mobile组件" → **web_component_dual**
 - "同时支持PC和移动端的组件" → **web_component_dual**
-- "只需PC端组件/仅PC端/不需要移动端" → **web_component**（明确指定PC-only才选）
+- "只需PC端组件/仅PC端/不需要移动端" → **web_component_dual**（仍用双端模板，只是 mobile/ 可以留空或简化）
 
 **web_page vs web_component_dual**（最常见混淆）：
 - "页面/菜单页面/自开发页面/查询页面/分析页面/报表/看板/大屏" → **web_page**
@@ -1090,15 +1068,16 @@ async def _detect_scene_llm_call(
 "写一个员工信息展示的富文本输入框" → web_component_dual
 "开发一个移动端的评分组件" → web_component_dual
 "做一个手机端表单控件" → web_component_dual
-"创建一个只需要PC端的表单组件" → web_component
-"开发一个仅PC端使用的自定义输入框" → web_component
+"创建一个只需要PC端的表单组件" → web_component_dual
+"开发一个仅PC端使用的自定义输入框" → web_component_dual
 "开发一个 SpringBoot 接口查询订单数据" → backend_api
 "开发一个自定义数据查询接口" → backend_api
 "写一个查询用户信息的后端接口" → backend_api
 "用 FeignClient 调用外部天气 API" → backend_feign
 "每天凌晨同步一次数据，定时任务" → backend_scheduled
-"表单提交前弹窗让用户二次确认" → business_dialog
-"调整表单里某个字段的背景色" → ui_style"""
+"写一段 JS 脚本校验表单" → unsupported_script
+"表单提交前弹窗让用户二次确认" → unsupported_script
+"调整表单里某个字段的背景色" → unsupported_script"""
 
     raw = await _brainstorm_llm_call(
         tenant_id, model,
@@ -1109,8 +1088,23 @@ async def _detect_scene_llm_call(
         max_tokens=20,
         temperature=0,
     )
-    scene_code = raw.strip().lower().split("\n")[0].strip().strip("`").strip('"').strip("'")
-    logger.info(f"[detect_scene] LLM 返回: {scene_code!r}")
+    # 调试：记录原始响应前 500 字符
+    logger.info(f"[detect_scene] LLM RAW (first 500): {raw[:500]!r}")
+    # 清理 LLM reasoning tag（MiniMax 等推理模型会返回 <think>...</think> 前缀）
+    cleaned = re.sub(r"<think>[\s\S]*?</think>", "", raw, flags=re.IGNORECASE).strip()
+    # 降级：如果只有开标签没闭合，取 </think> 之后的内容；若完全没闭合也没外部正文，从 think 内尝试提取最后一个场景代码
+    if not cleaned:
+        # 没外部正文 — 尝试从原始 raw 里捡最后一个合法 scene_code
+        for candidate in re.findall(r"\b(web_component_dual|web_page|mobile_page|backend_api|backend_feign|backend_scheduled|web_component|web_list_view|web_layout|web_login|web_plugin|unsupported_script)\b", raw, flags=re.IGNORECASE):
+            cleaned = candidate
+        logger.warning(f"[detect_scene] 清洗后为空，从 raw 提取: {cleaned!r}")
+    scene_code = cleaned.lower().split("\n")[-1].strip().strip("`").strip('"').strip("'")
+    logger.info(f"[detect_scene] LLM 返回（清洗后）: {scene_code!r}")
+    if scene_code == "unsupported_script":
+        raise UnsupportedSceneError(
+            "当前需求属于业务事件脚本 / 弹窗 / CSS 样式 / 列表自定义模块类场景，"
+            "本智能开发模块暂不支持。请改用【辅助搭建】模块完成。"
+        )
     try:
         return SceneType(scene_code)
     except ValueError:
@@ -1274,8 +1268,6 @@ async def run_coding_pipeline(
     这是 auto-pipeline 的业务逻辑抽取版本，
     不依赖 FastAPI Request/AuthContext，所有需要的值通过 PipelineParams 传入。
     """
-    from app.coding.vibe_agent import VibeCodingAgent
-
     generator = CodingGenerator()
     ws_mgr = WorkspaceManager()
 
@@ -1370,29 +1362,30 @@ async def run_coding_pipeline(
                 yield _record_event({"type": "step", "step": "detect_scene", "status": "running"})
             # brainstorm 续轮：必须用 original_requirement 而非 params.message
             detection_message = prior_original_requirement if prior_brainstorm_proposal else params.message
-            if params.project_type in ("script",):
-                try:
-                    scene_type = await _detect_scene_llm_call(params.tenant_id, effective_model, detection_message)
-                except Exception:
-                    scene_type = SceneType.SCRIPT_JS
-            else:
-                # 始终用 AI 从 message 识别场景，project_type 仅作降级兜底
-                # 只取第一行（用户的直接意图），避免后面附带的 API 文档等内容干扰识别
-                intent_snippet = detection_message.split("\n")[0][:300]
-                fallback = PROJECT_TYPE_TO_SCENE.get(params.project_type or "", SceneType.WEB_COMPONENT)
-                try:
-                    scene_type = await _detect_scene_llm_call(params.tenant_id, effective_model, intent_snippet)
-                except Exception:
-                    logger.warning(f"场景识别失败，使用兜底场景 {fallback}: {traceback.format_exc()}")
-                    scene_type = fallback
-            if not is_brainstorm_continuation:
-                yield _record_event({"type": "step", "step": "detect_scene", "status": "done", "data": {"scene_type": scene_type.value}})
-                # 通知前端 scene_detected + conversation_id（如果已有）
-                yield _record_event({"type": "scene_detected", "conversation_id": conversation_id})
+            # 始终用 AI 从 message 识别场景，project_type 仅作降级兜底
+            # 只取第一行（用户的直接意图），避免后面附带的 API 文档等内容干扰识别
+            intent_snippet = detection_message.split("\n")[0][:300]
+            fallback = SceneType.WEB_COMPONENT_DUAL
+            try:
+                scene_type = await _detect_scene_llm_call(params.tenant_id, effective_model, intent_snippet)
+            except UnsupportedSceneError as exc:
+                yield _record_event({
+                    "type": "step", "step": "detect_scene", "status": "done",
+                    "data": {"scene_type": "unsupported_script"},
+                })
+                yield _record_event({"type": "message", "content": str(exc)})
+                yield _record_event({"type": "done", "ws_id": None, "ide_url": None, "conversation_id": conversation_id})
+                return
+            except Exception:
+                logger.warning(f"场景识别失败，使用兜底场景 {fallback}: {traceback.format_exc()}")
+                scene_type = fallback
+            yield _record_event({"type": "step", "step": "detect_scene", "status": "done", "data": {"scene_type": scene_type.value}})
+            # 通知前端 scene_detected + conversation_id（如果已有）
+            yield _record_event({"type": "scene_detected", "conversation_id": conversation_id})
         else:
             info = ws_mgr.get_workspace_info(ws_id)
-            pt = info.get("project_type", "form-component")
-            scene_type = PROJECT_TYPE_TO_SCENE.get(pt, SceneType.WEB_COMPONENT)
+            pt = info.get("project_type", "form-component-dual")
+            scene_type = PROJECT_TYPE_TO_SCENE.get(pt, SceneType.WEB_COMPONENT_DUAL)
 
         # ---- Step 2: 创建/恢复对话（不创建工作区，workspace_id 此时可为 None）----
         # 工作区创建延迟到"用户确认 brainstorm 后"或"非 brainstorm 场景的首次进入"。
@@ -1443,7 +1436,7 @@ async def run_coding_pipeline(
             缺失时回退到 extract_project_name。folder name 一旦创建后不再变化。
             """
             nonlocal coding_conversation
-            project_type_str = scene_to_project_type(scene_type) or params.project_type or "form-component"
+            project_type_str = scene_to_project_type(scene_type) or "form-component-dual"
             project_type_enum_local = ProjectType(project_type_str)
 
             project_name: Optional[str] = None
@@ -1567,8 +1560,33 @@ async def run_coding_pipeline(
         # ---- Agent 代码生成 ----
         yield _record_event({"type": "step", "step": "generate", "status": "running"})
 
-        # 运行 Agent
-        agent = VibeCodingAgent(ws_id, system_prompt=AGENT_SYSTEM_PROMPT, tenant_id=params.tenant_id)
+        # 运行 Agent（CodingAgent + Stream Adapter）
+        from app.agents.coding import CodingAgent, CodingAgentStreamAdapter
+        from app.agents.coding.llm_config import load_coding_llm_config
+        from app.agents.publisher import InMemoryEventPublisher
+        from app.agents.trace_writer import InMemoryTraceWriter
+        from app.agents.types import AgentContext
+        from app.llm_client import LLMClient
+
+        _base_url, _api_key, _cfg_model = await load_coding_llm_config(
+            params.tenant_id, effective_model,
+        )
+        _coding_llm = LLMClient(api_key=_api_key, base_url=_base_url, model=_cfg_model)
+
+        _coding_ctx = AgentContext(
+            session_id=f"cs_{ws_id}",
+            conversation_id=conversation_id or 0,
+            user_id=params.user_id,
+            tenant_id=params.tenant_id,
+            model=_cfg_model,
+            workspace_id=ws_id,
+            input={"system_prompt": AGENT_SYSTEM_PROMPT},
+            publisher=InMemoryEventPublisher(),   # adapter 会 wrap 成 queue publisher
+            trace_writer=InMemoryTraceWriter(),   # Stage 4 后接 DB
+            llm_client=_coding_llm,
+        )
+        _coding_agent = CodingAgent(_coding_ctx)
+        agent = CodingAgentStreamAdapter(_coding_agent)
         agent_result_text = ""
         persisted_agent_output: list[str] = []
         tool_events_for_summary: list[dict[str, Any]] = []

@@ -1,0 +1,3 @@
+# 录制脚本的临时产物（不入库）
+_record_db.sqlite3
+_record_workspaces/

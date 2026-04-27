@@ -1,0 +1,130 @@
+{
+  "version": 2.0,
+  "code": "FORM_CUSTOM_STAR_RATING",
+  "desc": {
+    "iconType": "DEFAULT",
+    "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\"><polygon fill=\"#FFD700\" points=\"12,2 15,9 22,9 17,14 19,21 12,17 5,21 7,14 2,9 9,9\"/></svg>",
+    "text": "星级评分",
+    "description": "支持半星和自定义颜色的星级评分组件"
+  },
+  "instance": {
+    "uuid": "$itemUuid",
+    "inTable": false
+  },
+  "component": {
+    "ide": "FormComponentStarRatingIde",
+    "edit": "FormComponentStarRatingEdit",
+    "read": "FormComponentStarRatingRead",
+    "list": "FormComponentStarRatingList",
+    "print": "FormComponentStarRatingPrint",
+    "search": "FormComponentStarRatingSearch",
+    "searchIde": "FormComponentStarRatingSearchIde"
+  },
+  "widget": {
+    "display": {
+      "width": 3,
+      "mobileWidth": 6,
+      "height": 1,
+      "hidden": false,
+      "readOnly": false,
+      "required": false,
+      "label": "星级评分"
+    },
+    "allow": {
+      "calcRule": false,
+      "useInTableColumn": true,
+      "scanCode": false,
+      "copy": false
+    },
+    "default": {
+      "customDefaultKey": "defaultValue",
+      "value": null
+    },
+    "validator": {
+      "uniqueCheck": false
+    },
+    "special": {
+      "frontBusinessObjectComponentType": "BOF_NUMBER",
+      "saveWithHidden": false,
+      "customComponentConfig": {
+        "maxStars": 5,
+        "allowHalf": true,
+        "activeColor": "#FFD700",
+        "inactiveColor": "#E0E0E0",
+        "size": "24px",
+        "showLabel": false,
+        "readonly": false,
+        "previewValue": 0
+      }
+    },
+    "editor": {
+      "config": [
+        "INFO",
+        "LABEL",
+        "FIELD_CODE",
+        "TITLE_DESCRIPTION",
+        "WIDTH",
+        "HIDDEN",
+        "READONLY",
+        "REQUIRED",
+        "EDITONNEW",
+        "UNIQUE",
+        "HIDDEN_SAVE",
+        "HIDDEN_TRIGGER",
+        "TRIGGER_BUSINESS_EVENTS",
+        "FORM_CUSTOM_STAR_RATING_SETTING"
+      ],
+      "excludeInTable": ["WIDTH"]
+    }
+  },
+  "client": {
+    "mobile": {
+      "widget": {
+        "display": {
+          "width": 6,
+          "hidden": false,
+          "readOnly": false,
+          "required": false
+        },
+        "editor": {
+          "config": [
+            "INFO",
+            "LABEL",
+            "FIELD_CODE",
+            "TITLE_DESCRIPTION",
+            "HIDDEN",
+            "READONLY",
+            "REQUIRED",
+            "EDITONNEW",
+            "UNIQUE",
+            "HIDDEN_SAVE",
+            "HIDDEN_TRIGGER",
+            "TRIGGER_BUSINESS_EVENTS",
+            "FORM_CUSTOM_STAR_RATING_SETTING"
+          ],
+          "excludeInTable": ["WIDTH"]
+        }
+      },
+      "component": {
+        "ide": "MobileFormComponentStarRatingIde",
+        "edit": "MobileFormComponentStarRatingEdit",
+        "read": "MobileFormComponentStarRatingRead",
+        "list": "MobileFormComponentStarRatingList",
+        "print": "MobileFormComponentStarRatingPrint",
+        "search": "MobileFormComponentStarRatingSearch",
+        "searchIde": "MobileFormComponentStarRatingSearchIde"
+      }
+    }
+  },
+  "componentModelField": ["NUM"],
+  "methods": {
+    "validate": "function validate() { return true; }",
+    "clear": "function clear() { this.formValue = null; }"
+  },
+  "formatValueSchema": {
+    "type": "number",
+    "format": "value",
+    "minimum": 0,
+    "maximum": "maxStars"
+  }
+}

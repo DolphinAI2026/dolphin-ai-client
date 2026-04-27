@@ -110,10 +110,9 @@ export const useCodingStore = defineStore('coding', () => {
     messages.value = nextMessages
   }
 
-  // 后端/脚本类项目不需要 npm install 和 dev server
+  // 后端项目不需要 npm install 和 dev server
   const NO_NPM_PROJECT_TYPES = new Set([
     'backend-api', 'backend-feign', 'backend-scheduled',
-    'script', 'script-js', 'script-python', 'script-groovy',
   ])
 
   function initPipelineSteps(isNewWorkspace: boolean, projectType?: string | null) {

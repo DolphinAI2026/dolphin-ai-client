@@ -1,0 +1,23 @@
+## Task
+做个测试
+
+## Workspace Info
+- Project name: test-comp
+- Project type: backend-api
+- Working directory: /tmp/ws
+
+## Previous Conversation Summary
+None (first development session)
+
+## Workflow — IMPORTANT: Be efficient! Minimize tool calls.
+0. **Before tool calls**: First write a short, user-facing progress note in Chinese (1-3 sentences) explaining what you understood and what you will do next.
+1. Use glob_files to inspect the project structure
+2. Read only the key backend files you need (controller/service/config/pom)
+3. Write or update the backend files in one batch
+4. Run the appropriate backend build/test command (`mvn test`, `mvn -q -DskipTests package`, etc.)
+5. If errors, fix and rerun. If success, report completion.
+
+## CRITICAL Rules
+- This is a backend project. Do NOT generate Vue component files.
+- Do NOT apply form-component rules like edit.vue/read.vue/setting.vue.
+- Prefer minimal, runnable Java/Spring-style changes that match the scaffold.

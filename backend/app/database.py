@@ -9,7 +9,17 @@ class Base(DeclarativeBase):
 
 _engine_kwargs = dict(echo=False, future=True)
 if not settings.database_url.startswith("sqlite"):
-    _engine_kwargs.update(pool_size=10, max_overflow=20, pool_recycle=3600)
+    # pool_pre_ping=True：每次从池里取连接前先发 SELECT 1 探活，
+    #   避免 MySQL server 侧 wait_timeout 断开后前端还在用僵尸连接
+    #   → "Lost connection to MySQL server during query"
+    # pool_recycle=1800：自己主动回收 30 分钟以上的连接（比常见 MySQL
+    #   wait_timeout=600 更长时，pre_ping 兜底；两者叠加够稳）
+    _engine_kwargs.update(
+        pool_size=10,
+        max_overflow=20,
+        pool_recycle=1800,
+        pool_pre_ping=True,
+    )
 
 engine = create_async_engine(settings.database_url, **_engine_kwargs)
 
@@ -32,6 +42,8 @@ async def init_db():
     from sqlalchemy import text
     # 确保 harness models 被 Base 注册（create_all 会创建新表）
     import app.harness.models  # noqa: F401
+    # 智能开发 V2 - agent 架构相关表（agent_messages / brainstorm_sessions / specs / ...）
+    import app.models.agent_models  # noqa: F401
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         # 迁移：确保新列存在（兼容 SQLite 和 MySQL）
@@ -71,6 +83,10 @@ async def init_db():
             # 对话阶段 + 服务端 config 状态
             "ALTER TABLE conversations ADD COLUMN phase VARCHAR(20)",
             "ALTER TABLE conversations ADD COLUMN current_config JSON",
+            # 智能开发 V2 - agent 流水线状态
+            "ALTER TABLE conversations ADD COLUMN coding_phase VARCHAR(32)",
+            "ALTER TABLE conversations ADD COLUMN coding_active_brainstorm_session_id VARCHAR(64)",
+            "ALTER TABLE conversations ADD COLUMN coding_active_coding_session_id VARCHAR(64)",
         ]:
             try:
                 await conn.execute(text(stmt))

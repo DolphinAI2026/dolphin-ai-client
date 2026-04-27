@@ -52,6 +52,12 @@ class Settings(BaseSettings):
     # Encryption
     encryption_key: str = "default-key-change-in-production-32b"  # Fernet key for password encryption
 
+    # Agent Turn Limits（可通过 .env 覆盖）
+    coding_max_turns: int = 30
+    """CodingAgent 最大轮次，对应 CODING_MAX_TURNS 环境变量"""
+    verification_max_turns: int = 20
+    """VerificationAgent 最大轮次，对应 VERIFICATION_MAX_TURNS 环境变量"""
+
     # Code Generation
     # 是否为资源编码添加随机后缀（避免编码冲突）
     # 开发/测试环境建议开启，生产环境建议关闭

@@ -341,9 +341,7 @@ def _validate_frontend(files: List["GeneratedFile"], scene: "SceneInfo") -> List
     # 检查是否有apaas.json
     apaas_jsons = [f for f in files if f.path.endswith("apaas.json")]
     if scene.platform in ("web", "mobile") and not apaas_jsons:
-        # 脚本和样式场景不需要apaas.json
-        if scene.type.value not in ("script_js", "business_dialog", "ui_style", "list_custom_module"):
-            errors.append("缺少 apaas.json 配置文件")
+        errors.append("缺少 apaas.json 配置文件")
 
     # 检查apaas.json内容
     for f in apaas_jsons:
