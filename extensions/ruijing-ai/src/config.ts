@@ -10,6 +10,7 @@ export interface RuijingConfig {
   model: string;
   conversationId: number | null;
   autoMode: boolean;
+  onlineMode: boolean;
 }
 
 export class Config {
@@ -35,7 +36,7 @@ export class Config {
     const vsConfig = vscode.workspace.getConfiguration('ruijing-ai');
 
     // Try reading .vscode/ruijing-ai.json from workspace
-    let fileConfig: Record<string, string> = {};
+    let fileConfig: Record<string, any> = {};
     const folders = vscode.workspace.workspaceFolders;
     if (folders?.length) {
       try {
@@ -49,15 +50,22 @@ export class Config {
       }
     }
 
+    const workspaceId = this._asString(fileConfig.workspaceId);
+    const runtimeMode = this._asString(fileConfig.runtimeMode);
+    const apiBase = this._asString(fileConfig.apiBase) || vsConfig.get<string>('apiBase') || '';
+
     return {
-      workspaceId: fileConfig.workspaceId || '',
-      ideToken: fileConfig.ideToken || '',
-      apiBase: fileConfig.apiBase || vsConfig.get<string>('apiBase') || '',
-      harnessApiBase: fileConfig.harnessApiBase || this._deriveHarnessApiBase(fileConfig.apiBase || vsConfig.get<string>('apiBase') || ''),
-      apiKey: fileConfig.apiKey || vsConfig.get<string>('apiKey') || '',
-      model: fileConfig.model || vsConfig.get<string>('model') || 'MiniMax-M2.7',
+      workspaceId,
+      ideToken: this._asString(fileConfig.ideToken),
+      apiBase,
+      harnessApiBase: this._asString(fileConfig.harnessApiBase) || this._deriveHarnessApiBase(apiBase),
+      apiKey: this._asString(fileConfig.apiKey) || vsConfig.get<string>('apiKey') || '',
+      model: this._asString(fileConfig.model) || vsConfig.get<string>('model') || 'MiniMax-M2.7',
       conversationId: this._parseConversationId(fileConfig.conversationId),
       autoMode: vsConfig.get<boolean>('autoMode') ?? true,
+      onlineMode: this._parseBoolean(fileConfig.onlineMode)
+        || runtimeMode === 'online-coding'
+        || workspaceId.startsWith('oc_'),
     };
   }
 
@@ -95,6 +103,16 @@ export class Config {
       if (Number.isFinite(parsed)) return parsed;
     }
     return null;
+  }
+
+  private _parseBoolean(value: unknown): boolean {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'string') return value.trim().toLowerCase() === 'true';
+    return false;
+  }
+
+  private _asString(value: unknown): string {
+    return typeof value === 'string' ? value : '';
   }
 
   private _deriveHarnessApiBase(apiBase: string): string {

@@ -10,12 +10,14 @@ const MAX_FILES_TO_READ = 24;
 const MAX_TOTAL_CONTENT = 48000; // Increased from 36K to utilize larger context windows
 const ESTIMATED_CHARS_PER_TOKEN = 3.5; // 粗略估算：1 token ≈ 3.5 chars（中英混合）
 const MAX_WORKSPACE_FILE_INDEX = 60;
+const MAX_REMOTE_PROMPT = 4000;
 const CACHE_TTL = 300_000; // 5 min（文件保存时通过 dirty 标志清除）
 const SOURCE_FILE_RE = /\.(vue|js|jsx|ts|tsx|json|java|xml|yml|yaml|properties|scss|css|less|html)$/i;
 const I18N_TASK_RE = /(国际化|i18n|多语言|语言包|locale|翻译|文案)/i;
 const FORM_COMPONENT_TASK_RE = /(组件|widget|表单组件|form-component|render|渲染|upload|avatar|date|picker)/i;
 const CONFIG_TASK_RE = /(componentModelField|配置文件|配置项|config|widget\.config|editor\.config|字段类型|数据模型|STRING|DATE|字段绑定)/i;
 const INSPECT_TASK_RE = /(检查|排查|看看|看一下|看一看|存不存在|缺失|缺少|不存在|有没有|是否存在|注册|入口|导入|导出|import|export|index\.js)/i;
+const OVERVIEW_TASK_RE = /(完整代码|整体代码|全部代码|读代码|读取代码|看代码|分析代码|工程代码|项目代码|仓库代码|工作区.*代码|读一下.*代码|看一下.*代码|项目结构|仓库结构|代码结构|架构|梳理|overview|architecture|review)/i;
 const STOP_WORDS = new Set([
   'src', 'form', 'component', 'widget', 'config', 'file', 'path', 'this', 'that',
   'date', 'range', 'string', 'model', 'field', 'type', 'please', 'help', 'code',
@@ -52,7 +54,11 @@ export class ContextBuilder {
     }
 
     try {
-      const result = await this._buildContext(folders[0], mentioned, userMessage);
+      let result = await this._buildContext(folders[0], mentioned, userMessage);
+      const remoteContext = await this._loadOnlineWorkspaceContext(userMessage, result);
+      if (remoteContext) {
+        result = remoteContext;
+      }
       this.cache = { key: cacheKey, text: result, ts: Date.now() };
       this.dirty = false;
       return result;
@@ -75,6 +81,7 @@ export class ContextBuilder {
     const isFormComponentTask = FORM_COMPONENT_TASK_RE.test(userMessage);
     const isConfigTask = CONFIG_TASK_RE.test(userMessage);
     const isInspectTask = INSPECT_TASK_RE.test(userMessage);
+    const isOverviewTask = OVERVIEW_TASK_RE.test(userMessage);
     const activeSourceFiles = vscode.window.visibleTextEditors
       .map(editor => vscode.workspace.asRelativePath(editor.document.uri, false))
       .filter(rel =>
@@ -119,6 +126,12 @@ export class ContextBuilder {
 
     // Priority 3: currently open editors
     for (const rel of activeSourceFiles) pushUnique(rel);
+
+    // Priority 4: broad repository read — sample manifests, docs and common entry points.
+    // This gives "看完整代码 / 分析项目结构" prompts real workspace evidence instead of only a file index.
+    if (isOverviewTask || (isInspectTask && !mentioned.length)) {
+      for (const file of this._getOverviewFiles(relativePaths)) pushUnique(file);
+    }
 
     // Priority 4: scaffold-aware — detect form-component workspace by apaas.json
     const isFormScaffold = relativePaths.includes('src/apaas.json');
@@ -186,6 +199,7 @@ export class ContextBuilder {
 
     // Read file contents (limited)
     const excerpts: string[] = [];
+    const readFiles: string[] = [];
     let totalLen = 0;
     for (const rel of toRead.slice(0, MAX_FILES_TO_READ)) {
       if (totalLen > MAX_TOTAL_CONTENT) break;
@@ -205,6 +219,7 @@ export class ContextBuilder {
           content = content.slice(0, maxContent) + '\n/* ... truncated ... */';
         }
         excerpts.push(`### ${rel}\n\`\`\`\n${content}\n\`\`\``);
+        readFiles.push(rel);
         totalLen += content.length;
       } catch {
         // file not readable, skip
@@ -217,9 +232,11 @@ export class ContextBuilder {
     // Load skill guides if available
     const skillSection = await this._loadSkills(folder, userMessage);
 
-    const fileListStr = relativePaths.slice(0, MAX_WORKSPACE_FILE_INDEX).join('\n');
+    const fileIndexLimit = relativePaths.length <= 120 ? relativePaths.length : MAX_WORKSPACE_FILE_INDEX;
+    const fileListStr = relativePaths.slice(0, fileIndexLimit).join('\n');
     const searchSummary = searchTerms.length ? `SEARCH_TERMS:\n${searchTerms.join(', ')}\n\n` : '';
-    const contextStr = `${searchSummary}RELEVANT_FILE_CONTENTS:\n${excerpts.join('\n\n')}${symbolSection}\n\nWORKSPACE_FILE_INDEX(${relativePaths.length}):\n${fileListStr}${skillSection}`;
+    const readFileSummary = readFiles.length ? `READ_FILES:\n${readFiles.join('\n')}\n\n` : '';
+    const contextStr = `${searchSummary}${readFileSummary}RELEVANT_FILE_CONTENTS:\n${excerpts.join('\n\n')}${symbolSection}\n\nWORKSPACE_FILE_INDEX(${relativePaths.length}):\n${fileListStr}${skillSection}`;
 
     // 粗略 token budget 估算 + 警告
     const estimatedTokens = Math.ceil(contextStr.length / ESTIMATED_CHARS_PER_TOKEN);
@@ -232,6 +249,49 @@ export class ContextBuilder {
   private _buildCacheKey(mentioned: string[], userMessage: string): string {
     const normalizedMessage = userMessage.toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 240);
     return `${mentioned.slice().sort().join(',')}|${normalizedMessage}`;
+  }
+
+  private async _loadOnlineWorkspaceContext(userMessage: string, localContext: string): Promise<string> {
+    if (!this.config) return '';
+    const cfg = this.config.get();
+    if (!cfg.onlineMode || !cfg.workspaceId || !cfg.apiBase) return '';
+
+    const hasLocalReadFiles = /READ_FILES:\n[^\n]/.test(localContext);
+    const localIndexMatch = localContext.match(/WORKSPACE_FILE_INDEX\((\d+)\)/);
+    const localIndexCount = localIndexMatch ? Number(localIndexMatch[1]) : 0;
+    const shouldPreferRemote =
+      OVERVIEW_TASK_RE.test(userMessage) ||
+      !hasLocalReadFiles ||
+      !Number.isFinite(localIndexCount) ||
+      localIndexCount === 0;
+
+    if (!shouldPreferRemote) return '';
+
+    const base = this._onlineCodingApiBase(cfg.apiBase);
+    if (!base) return '';
+
+    try {
+      const url = `${base}/workspaces/${encodeURIComponent(cfg.workspaceId)}/ide/context?prompt=${encodeURIComponent(userMessage.slice(0, MAX_REMOTE_PROMPT))}`;
+      const resp = await fetch(url, {
+        headers: this.config.getHeaders(),
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!resp.ok) return '';
+      const data = await resp.json() as any;
+      const context = typeof data?.context === 'string' ? data.context : '';
+      return /READ_FILES:\n[^\n]/.test(context) ? context : '';
+    } catch (err) {
+      console.warn('[RuijingAI] online workspace context fallback failed', err);
+      return '';
+    }
+  }
+
+  private _onlineCodingApiBase(apiBase: string): string {
+    let base = (apiBase || '').replace(/\/+$/, '');
+    base = base.replace(/\/workspace\/[^/]+\/ide$/, '');
+    base = base.replace(/\/api\/harness\/coding$/, '/api/online-coding');
+    base = base.replace(/\/api\/coding$/, '/api/online-coding');
+    return base.includes('/api/online-coding') ? base : '';
   }
 
   private _expandMentionedPathCandidates(rawPath: string): string[] {
@@ -287,6 +347,72 @@ export class ContextBuilder {
     return prioritized;
   }
 
+  private _getOverviewFiles(relativePaths: string[]): string[] {
+    const exactPriority = [
+      'README.md',
+      'ARCHITECTURE.md',
+      'PROJECT_SUMMARY.md',
+      'QUICKSTART.md',
+      'package.json',
+      'frontend/package.json',
+      'backend/package.json',
+      'pnpm-workspace.yaml',
+      'turbo.json',
+      'vite.config.ts',
+      'vite.config.js',
+      'next.config.js',
+      'frontend/next.config.js',
+      'frontend/vite.config.ts',
+      'frontend/vite.config.js',
+      'frontend/app/page.tsx',
+      'frontend/app/layout.tsx',
+      'frontend/app/globals.css',
+      'frontend/src/main.ts',
+      'frontend/src/main.tsx',
+      'frontend/src/App.vue',
+      'frontend/src/App.tsx',
+      'frontend/src/router/index.ts',
+      'backend/src/server.ts',
+      'backend/src/index.ts',
+      'backend/src/app.ts',
+      'backend/src/pty-manager.ts',
+      'backend/src/memory-manager.ts',
+      'src/main.ts',
+      'src/main.tsx',
+      'src/App.vue',
+      'src/App.tsx',
+      'src/index.ts',
+      'src/index.tsx',
+      'server.ts',
+      'app.ts',
+    ];
+
+    const result: string[] = [];
+    const add = (rel: string) => {
+      if (relativePaths.includes(rel) && !result.includes(rel)) result.push(rel);
+    };
+
+    for (const rel of exactPriority) add(rel);
+
+    const manifestLike = relativePaths.filter(rel =>
+      /(^|\/)(package\.json|pom\.xml|build\.gradle|Cargo\.toml|go\.mod|pyproject\.toml|requirements\.txt)$/.test(rel)
+    );
+    for (const rel of manifestLike) {
+      if (!result.includes(rel)) result.push(rel);
+    }
+
+    const commonEntry = relativePaths.filter(rel =>
+      /\.(vue|js|jsx|ts|tsx|py|go|java)$/i.test(rel) &&
+      /(^|\/)(main|index|app|server|layout|page)\.(vue|js|jsx|ts|tsx|py|go|java)$/i.test(rel) &&
+      !/(^|\/)(node_modules|dist|build|coverage|target|backup|tmp|temp)\//.test(rel)
+    );
+    for (const rel of commonEntry.slice(0, 12)) {
+      if (!result.includes(rel)) result.push(rel);
+    }
+
+    return result.slice(0, 24);
+  }
+
   private _scorePath(
     rel: string,
     searchTerms: string[],
@@ -324,9 +450,10 @@ export class ContextBuilder {
    * and read surrounding code blocks (±50 lines) for the top matches.
    */
   private async _querySymbolIndex(searchTerms: string[], folder: vscode.WorkspaceFolder): Promise<string> {
-    if (!this.config || !searchTerms.length) return '';
+    const config = this.config;
+    if (!config || !searchTerms.length) return '';
 
-    const cfg = this.config.get();
+    const cfg = config.get();
     if (!cfg.workspaceId || !cfg.apiBase) return ''; // Only works in remote workspace mode
 
     // Filter terms that look like identifiers (not generic words)
@@ -337,10 +464,10 @@ export class ContextBuilder {
     let totalLen = 0;
 
     // 并行查询所有 symbol terms（替代串行 for loop，减少 ~70% 等待时间）
-    const headers = this.config.getHeaders();
+    const headers = config.getHeaders();
     const symbolResults = await Promise.allSettled(
       identifiers.map(async (term) => {
-        const url = this.config.getEndpoint(`/symbols?q=${encodeURIComponent(term)}&limit=5`);
+        const url = config.getEndpoint(`/symbols?q=${encodeURIComponent(term)}&limit=5`);
         const resp = await fetch(url, { headers, signal: AbortSignal.timeout(5000) });
         if (!resp.ok) return [];
         const data = await resp.json() as any;

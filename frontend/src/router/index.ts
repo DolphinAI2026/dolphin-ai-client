@@ -41,6 +41,36 @@ const router = createRouter({
       meta: { requiresAuth: true }
     },
     {
+      path: '/vibe-coding',
+      name: 'OnlineCoding',
+      component: () => import('@/views/OnlineCodingPage.vue'),
+      meta: { requiresAuth: true, navExpanded: true }
+    },
+    {
+      path: '/vibe-coding/new',
+      name: 'OnlineCodingNew',
+      component: () => import('@/views/OnlineCodingWorkspacePage.vue'),
+      meta: { requiresAuth: true, navExpanded: true }
+    },
+    {
+      path: '/vibe-coding/workspaces/:id',
+      name: 'OnlineCodingWorkspace',
+      component: () => import('@/views/OnlineCodingWorkspacePage.vue'),
+      meta: { requiresAuth: true, navExpanded: true }
+    },
+    {
+      path: '/online-coding',
+      redirect: '/vibe-coding',
+    },
+    {
+      path: '/online-coding/new',
+      redirect: '/vibe-coding/new',
+    },
+    {
+      path: '/online-coding/workspaces/:id',
+      redirect: to => ({ path: `/vibe-coding/workspaces/${to.params.id}`, query: to.query }),
+    },
+    {
       path: '/project/:id',
       name: 'ProjectOverview',
       component: () => import('@/views/ProjectOverview.vue'),
@@ -136,6 +166,19 @@ const router = createRouter({
 
 router.beforeEach(async (to, _from, next) => {
   const userStore = useUserStore()
+
+  if (to.path === '/coding' && to.query.type === 'full-code') {
+    const rawId = Array.isArray(to.query.online_workspace_id)
+      ? to.query.online_workspace_id[0]
+      : to.query.online_workspace_id || (Array.isArray(to.query.online_ws) ? to.query.online_ws[0] : to.query.online_ws)
+    const workspaceId = rawId ? String(rawId) : ''
+    const rawView = Array.isArray(to.query.online_view) ? to.query.online_view[0] : to.query.online_view
+    next({
+      path: workspaceId ? `/vibe-coding/workspaces/${workspaceId}` : '/vibe-coding/new',
+      query: rawView === 'ide' ? { view: 'ide' } : {},
+    })
+    return
+  }
 
   if (to.meta.requiresAuth && !userStore.token) {
     next('/login')

@@ -81,7 +81,7 @@ export function isIdeUnavailableError(error: any): boolean {
     error?.message ||
     ''
   )
-  return status === 501 && detail.includes('Web IDE')
+  return (status === 501 || status === 503) && detail.includes('Web IDE')
 }
 
 export const codingApi = {

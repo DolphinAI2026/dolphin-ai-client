@@ -297,6 +297,64 @@ def _verify_ide_access_token(token: str, ws_id: str) -> dict[str, Any]:
     return payload
 
 
+def _inject_online_workspace_context(ws_id: str, payload: dict[str, Any]) -> None:
+    """Server-side safety net for online-coding IDE chats.
+
+    The VS Code web extension normally injects WORKSPACE_CONTEXT, but code-server
+    can keep a stale extension host alive across reloads. For online workspaces,
+    inject the same repo context at the backend proxy layer so the model never
+    asks the user to paste files that are already available on disk.
+    """
+    messages = payload.get("messages")
+    if not isinstance(messages, list):
+        return
+
+    for message in messages:
+        if isinstance(message, dict) and "WORKSPACE_CONTEXT" in str(message.get("content") or ""):
+            return
+
+    prompt = ""
+    for message in reversed(messages):
+        if isinstance(message, dict) and message.get("role") == "user":
+            prompt = str(message.get("content") or "")
+            break
+
+    try:
+        from app.routes.online_coding import (
+            _build_ide_workspace_context,
+            _find_workspace_dir,
+            _repo_path,
+        )
+
+        ws_dir, _ = _find_workspace_dir(ws_id)
+        repo_dir = _repo_path(ws_dir)
+        context_payload = _build_ide_workspace_context(repo_dir, prompt)
+        workspace_context = str(context_payload.get("context") or "")
+        read_files = context_payload.get("read_files") or []
+        if not workspace_context.strip():
+            return
+    except Exception as exc:
+        logger.warning("Failed to inject online workspace context for %s: %s", ws_id, exc)
+        return
+
+    context_message = {
+        "role": "system",
+        "content": (
+            "以下是当前 Vibe Coding 在线工作区的真实代码上下文，"
+            "请直接基于这些文件分析，不要再要求用户手动粘贴目录或代码。\n\n"
+            f"WORKSPACE_CONTEXT:\n{workspace_context[:60000]}"
+        ),
+    }
+
+    insert_at = 1 if messages and isinstance(messages[0], dict) and messages[0].get("role") == "system" else 0
+    messages.insert(insert_at, context_message)
+    logger.info(
+        "Injected online workspace context for %s: %s",
+        ws_id,
+        ", ".join(str(item) for item in read_files[:8]),
+    )
+
+
 def _code_server_chat_images_dir() -> Path:
     return Path.home() / ".local" / "share" / "code-server" / "User" / "workspaceStorage" / "vscode-chat-images"
 
@@ -1397,6 +1455,9 @@ async def ide_chat_completions_proxy(
     except Exception:
         raise HTTPException(status_code=400, detail="无效的请求体")
 
+    if ws_id.startswith("oc_"):
+        _inject_online_workspace_context(ws_id, payload)
+
     tenant_config = None
     if db is not None:
         tenant_config = await _resolve_tenant_coding_model_config(
@@ -1404,12 +1465,27 @@ async def ide_chat_completions_proxy(
             token_payload.get("tid"),
             payload.get("model", ""),
         )
+        if tenant_config and "gpt-5.5" in (tenant_config.model or "").lower():
+            fallback_config = await _resolve_tenant_coding_model_config(
+                db,
+                token_payload.get("tid"),
+                "gpt-5.4",
+            )
+            if fallback_config and fallback_config.id != tenant_config.id:
+                logger.warning(
+                    "IDE model %s is not available in current gateway, fallback to %s",
+                    tenant_config.model,
+                    fallback_config.model,
+                )
+                tenant_config = fallback_config
 
     if tenant_config:
         payload["model"] = tenant_config.model
         upstream_url = _build_chat_completions_url(tenant_config.base_url)
         api_key = decrypt_password(tenant_config.api_key_enc)
     else:
+        if "gpt-5.5" in (payload.get("model") or "").lower():
+            payload["model"] = settings.coding_model_gpt54_model or "gpt-5.4"
         upstream_url, api_key = _resolve_coding_model(payload.get("model", ""))
     upstream_headers = {
         "Content-Type": "application/json",
