@@ -1,0 +1,40 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: apaas-builder
+  namespace: apaas-builder
+  annotations:
+    # SSE 流式响应 + 长连接
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+spec:
+  ingressClassName: nginx
+  # TLS（如有证书，取消注释并填 secret 名）
+  # tls:
+  #   - hosts:
+  #       - df-aigc.dfy.definesys.cn
+  #     secretName: apaas-builder-tls
+  rules:
+    # TODO: 替换成你实际的域名（如 apaas-builder.definesys.cn、agent-k8s.dfy.definesys.cn 等）
+    - host: df-aigc.dfy.definesys.cn
+      http:
+        paths:
+          # 前缀匹配 /ai-builder/，ingress 把原始路径原样透传给 Service，
+          # 由 Pod 内 nginx sidecar 做具体的 location 分发 + rewrite
+          - path: /ai-builder
+            pathType: Prefix
+            backend:
+              service:
+                name: apaas-builder
+                port:
+                  name: http
+          # 根路径也转过去，让 sidecar 返回 301 到 /ai-builder/
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: apaas-builder
+                port:
+                  name: http

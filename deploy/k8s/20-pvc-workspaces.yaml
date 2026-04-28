@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: apaas-workspaces
+  namespace: apaas-builder
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      # workspaces + npm-cache 都在这里，按实际需要调整
+      storage: 50Gi

@@ -1,0 +1,127 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: apaas-builder-nginx
+  namespace: apaas-builder
+data:
+  default.conf: |
+    # WebSocket upgrade map（http{} context 生效，conf.d/*.conf 会被主 nginx.conf 的 include 放进 http{}）
+    map $http_upgrade $connection_upgrade {
+        default upgrade;
+        ''      close;
+    }
+
+    server {
+        listen 80;
+        server_name _;
+
+        root /usr/share/nginx/html;
+        index index.html;
+
+        client_max_body_size 100M;
+
+        # Ingress 解包 TLS 后用 HTTP 转发到 sidecar，return 301 /foo/ 默认会生成
+        # Location: http://host/foo/。absolute_redirect off 让 nginx 返回相对路径，
+        # 浏览器保留原 scheme（https）。
+        absolute_redirect off;
+
+        # ============================================================
+        # 路径前缀部署：/ai-builder/*
+        # 前端 build 时 VITE_BASE_URL=/ai-builder/，资源都带这个前缀
+        # nginx sidecar 把前缀去掉再转给后端 / code-server（它们都在根路径上）
+        # ============================================================
+
+        # code-server (Web IDE + WebSocket) — 最优先匹配
+        location /ai-builder/ide/ {
+            rewrite ^/ai-builder/ide/(.*)$ /$1 break;
+            proxy_pass http://127.0.0.1:8080;
+            proxy_http_version 1.1;
+
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection $connection_upgrade;
+
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Forwarded-Host $host;
+            proxy_set_header X-Forwarded-Prefix /ai-builder/ide;
+
+            proxy_read_timeout 86400s;
+            proxy_send_timeout 86400s;
+        }
+
+        # 后端 API：/ai-builder/api/* → 后端 /api/*
+        location /ai-builder/api/ {
+            rewrite ^/ai-builder/api/(.*)$ /api/$1 break;
+            proxy_pass http://127.0.0.1:8003;
+            proxy_http_version 1.1;
+
+            proxy_buffering off;
+            proxy_cache off;
+            proxy_set_header Connection "";
+
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Forwarded-Prefix /ai-builder;
+
+            proxy_read_timeout 600s;
+            proxy_send_timeout 600s;
+        }
+
+        # 平台代理路由（根路径上的 /platform/、/backend/ 等，前端带 /ai-builder 前缀访问）
+        location ~ ^/ai-builder/(platform|backend|smartbi|xdap-|apaas)(/|$) {
+            rewrite ^/ai-builder/(.*)$ /$1 break;
+            proxy_pass http://127.0.0.1:8003;
+            proxy_http_version 1.1;
+
+            proxy_buffering off;
+            proxy_set_header Connection "";
+
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+
+            proxy_read_timeout 600s;
+            proxy_send_timeout 600s;
+        }
+
+        # 平台插件资源：/{32位hex}/... —— 后端 middleware 识别
+        # 注意：这类 URL 是绝对路径（不带 /ai-builder 前缀），不经过 ingress 前缀匹配时进不来。
+        # 如果前端代码生成的插件 URL 也带了 /ai-builder/ 前缀，就会先 match 上面的 SPA fallback。
+        # 实际运行中遇到 404 再排查。
+        location ~ "^/[0-9a-f]{32}/" {
+            proxy_pass http://127.0.0.1:8003;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+        }
+
+        # 静态资源（带 hash 的 assets，Vite 构建产物）
+        location /ai-builder/assets/ {
+            alias /usr/share/nginx/html/assets/;
+            access_log off;
+            expires 7d;
+            add_header Cache-Control "public, max-age=604800, immutable";
+            try_files $uri =404;
+        }
+
+        # SPA 兜底：/ai-builder/ 下一切未命中路径都回 index.html
+        location /ai-builder/ {
+            rewrite ^/ai-builder/(.*)$ /$1 break;
+            try_files $uri $uri/ /index.html;
+        }
+
+        # 根路径重定向到 /ai-builder/
+        location = / {
+            return 301 /ai-builder/;
+        }
+
+        # /ai-builder（无斜杠）也重定向到 /ai-builder/
+        # 否则 nginx 会当成静态文件找 /usr/share/nginx/html/ai-builder 然后 404
+        location = /ai-builder {
+            return 301 /ai-builder/;
+        }
+    }

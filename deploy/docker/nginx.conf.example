@@ -1,0 +1,98 @@
+# apaas-builder 宿主 nginx 配置片段示例
+# 详见 DEPLOY_CONTAINER.md
+#
+# 两种用法：
+# A) 主机独占容器部署：把 /ai-builder/ 的转发目标从 127.0.0.1:8003 / 8080 保持不变即可
+# B) 与主机裸跑并存（线上过渡期）：新增一段 /ai-builder-docker/，指向容器端口
+#    下方示例默认展示【并存场景】
+#
+# 前提：
+#   容器用的端口（与 docker-compose.yml 中 PORT / CODE_SERVER_PORT 对齐）：
+#     127.0.0.1:8103  ← 容器后端 uvicorn
+#     127.0.0.1:8090  ← 容器 code-server
+#     127.0.0.1:8082+ ← 容器内工作区 dev-server（自动跳过主机已占端口）
+#   容器前端 dist 挂在宿主 /data/apaas-docker/frontend-dist/
+
+# WebSocket upgrade 辅助 map（放 http{} 段，仅需定义一次；若主机 nginx 已有则略）
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name agent.dfy.definesys.cn;   # 按实际域名改
+
+    ssl_certificate     /etc/nginx/ssl/agent.dfy.definesys.cn.crt;
+    ssl_certificate_key /etc/nginx/ssl/agent.dfy.definesys.cn.key;
+    client_max_body_size 100M;
+
+    # ========================================================
+    # 【保留】现有主机裸跑：/ai-builder/  → 127.0.0.1:8003 / 8080
+    # 不改动，现有 /etc/nginx/apaas-builder.conf 继续生效
+    # ========================================================
+
+    # ========================================================
+    # 【新增】容器版：/ai-builder-docker/  → 127.0.0.1:8103 / 8090
+    # ========================================================
+
+    # 前端静态（容器构建时已按 /ai-builder-docker/ 打 base，nginx 直接 serve）
+    location ^~ /ai-builder-docker/assets/ {
+        alias /data/apaas-docker/frontend-dist/assets/;
+        access_log off;
+        expires 7d;
+        add_header Cache-Control "public, max-age=604800, immutable";
+        try_files $uri =404;
+    }
+    location ~* ^/ai-builder-docker/([^/]+\.(ico|png|svg|json|webmanifest|woff2?|ttf))$ {
+        root /data/apaas-docker/frontend-dist/;
+        rewrite ^/ai-builder-docker/(.*)$ /$1 break;
+        access_log off;
+        expires 7d;
+    }
+
+    # code-server (Web IDE + WebSocket)
+    location ^~ /ai-builder-docker/ide/ {
+        proxy_pass http://127.0.0.1:8090/;
+        proxy_http_version 1.1;
+
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+    }
+
+    # 后端 API + SSE（剩余所有 /ai-builder-docker/*）
+    location /ai-builder-docker/ {
+        proxy_pass http://127.0.0.1:8103/;
+        proxy_http_version 1.1;
+
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_set_header Connection "";
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Prefix /ai-builder-docker;
+
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+    }
+
+    location = /ai-builder-docker {
+        return 301 /ai-builder-docker/;
+    }
+}
+
+# ============================================================
+# 【主机独占部署 模板】参考 /etc/nginx/apaas-builder.conf 的现有规则，
+# 或直接把 ai-builder-docker 全改回 ai-builder，端口改回 8003/8080。
+# ============================================================
