@@ -1,20 +1,23 @@
 <template>
-  <WorkbenchShell>
-    <div class="envs-main">
+  <BuilderFrame :breadcrumbs="[{ label: '设置' }, { label: activeTab === 'envs' ? '平台环境' : '模型配置' }]">
+    <template #actions>
+      <button v-if="activeTab === 'envs'" class="new-btn" @click="openCreate">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        添加环境
+      </button>
+      <button v-if="activeTab === 'llm'" class="new-btn" @click="openLlmCreate">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        新增模型
+      </button>
+    </template>
+    <div class="envs-main builder-page">
       <div class="tabs-bar">
         <div class="tabs-group">
-          <button :class="['tab-item', { active: activeTab === 'envs' }]" @click="activeTab = 'envs'">平台环境</button>
-          <button :class="['tab-item', { active: activeTab === 'llm' }]" @click="activeTab = 'llm'; loadLlmConfigs()">模型配置</button>
+          <button :class="['tab-item', { active: activeTab === 'envs' }]" @click="setActiveTab('envs')">平台环境</button>
+          <button :class="['tab-item', { active: activeTab === 'llm' }]" @click="setActiveTab('llm')">模型配置</button>
         </div>
-        <div class="tabs-actions">
-          <button v-if="activeTab === 'envs'" class="new-btn" @click="openCreate">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-            添加环境
-          </button>
-          <button v-if="activeTab === 'llm'" class="new-btn" @click="openLlmCreate">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-            新增模型
-          </button>
+        <div class="tabs-summary">
+          {{ activeTab === 'envs' ? `${envs.length} 个环境连接` : `${llmConfigs.length} 个模型配置` }}
         </div>
       </div>
 
@@ -75,9 +78,9 @@
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                 编辑
               </button>
-              <button class="env-action-btn danger" @click="handleDelete(env)" title="删除">
+              <button class="env-action-btn danger" @click="handleDelete(env)" :disabled="env._deleting" title="删除">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-                删除
+                {{ env._deleting ? '删除中...' : '删除' }}
               </button>
             </div>
           </div>
@@ -299,25 +302,41 @@
       </template>
       </el-dialog>
     </div>
-  </WorkbenchShell>
+  </BuilderFrame>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed } from 'vue'
+import { ref, reactive, onMounted, computed, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { handleError } from '@/utils/errorHandler'
 import { platformEnvApi, type PlatformEnv } from '@/api/platformEnv'
 import { llmConfigApi, type LlmConfig, type ProviderPreset } from '@/api/llmConfig'
 import { providerOptions, providerLabel, purposeLabel } from '@/utils/llmConfig'
-import WorkbenchShell from '@/components/WorkbenchShell.vue'
+import BuilderFrame from '@/components/BuilderFrame.vue'
 
-const activeTab = ref<'envs' | 'llm'>('envs')
+const route = useRoute()
+const router = useRouter()
+
+function normalizeTab(value: unknown): 'envs' | 'llm' {
+  const raw = Array.isArray(value) ? value[0] : value
+  return raw === 'llm' ? 'llm' : 'envs'
+}
+
+const activeTab = ref<'envs' | 'llm'>(normalizeTab(route.query.tab))
+
+async function setActiveTab(tab: 'envs' | 'llm') {
+  activeTab.value = tab
+  router.replace({ path: '/platform-envs', query: { ...route.query, tab } })
+  if (tab === 'llm') await loadLlmConfigs()
+}
 
 // ==================== 平台环境相关 ====================
 
 interface EnvWithUI extends PlatformEnv {
   _testing?: boolean
   _logging?: boolean
+  _deleting?: boolean
 }
 
 const envs = ref<EnvWithUI[]>([])
@@ -457,10 +476,26 @@ async function handleDelete(env: PlatformEnv) {
       cancelButtonText: '取消',
       type: 'warning',
     })
-    await platformEnvApi.delete(env.id)
-    ElMessage.success('已删除')
+  } catch {
+    return
+  }
+
+  const target = env as EnvWithUI
+  target._deleting = true
+  try {
+    const res: any = await platformEnvApi.delete(env.id)
+    const unlinked = Number(res?.unlinked_applications || 0)
+    if (unlinked > 0) {
+      ElMessage.success(`已删除，并解绑 ${unlinked} 个关联应用`)
+    } else {
+      ElMessage.success('已删除')
+    }
     await loadEnvs()
-  } catch { /* cancelled */ }
+  } catch (e: any) {
+    handleError(e, { fallback: '删除失败' })
+  } finally {
+    target._deleting = false
+  }
 }
 
 // ==================== LLM 模型配置相关 ====================
@@ -531,7 +566,7 @@ async function openLlmCreate() {
 function openLlmEdit(cfg: LlmConfig) {
   editingLlm.value = cfg
   llmForm.config_name = cfg.config_name
-  llmForm.provider = cfg.provider
+  llmForm.provider = cfg.provider === 'gpt' ? 'dolphin' : cfg.provider
   llmForm.base_url = cfg.base_url
   llmForm.api_key = ''
   llmForm.model = cfg.model
@@ -700,7 +735,17 @@ async function handleLlmDelete(cfg: LlmConfig) {
 
 onMounted(() => {
   loadEnvs()
+  if (activeTab.value === 'llm') loadLlmConfigs()
 })
+
+watch(
+  () => route.query.tab,
+  value => {
+    const next = normalizeTab(value)
+    activeTab.value = next
+    if (next === 'llm') loadLlmConfigs()
+  }
+)
 </script>
 
 <style scoped>
@@ -709,6 +754,8 @@ onMounted(() => {
   min-width: 0;
   display: flex;
   flex-direction: column;
+  gap: 16px;
+  background: var(--b-bg);
 }
 
 /* ── Nav ── */
@@ -717,10 +764,10 @@ onMounted(() => {
   justify-content: space-between;
   align-items: center;
   padding: 12px 24px;
-  background: var(--t-bg-panel);
+  background: var(--b-panel);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  border-bottom: 1px solid var(--t-border-subtle);
+  border-bottom: 1px solid var(--b-line);
   flex-shrink: 0;
 }
 
@@ -733,7 +780,7 @@ onMounted(() => {
 .back-btn {
   background: none;
   border: none;
-  color: var(--t-text-secondary);
+  color: var(--b-text-muted);
   cursor: pointer;
   padding: 4px;
   border-radius: 6px;
@@ -741,12 +788,12 @@ onMounted(() => {
   align-items: center;
   transition: all 0.2s;
 }
-.back-btn:hover { color: #fff; background: var(--t-border-subtle); }
+.back-btn:hover { color: var(--b-text); background: var(--b-bg-sub); }
 
 .logo-box {
   width: 28px;
   height: 28px;
-  background: var(--t-brand-gradient);
+  background: var(--b-ink);
   border-radius: 8px;
   display: flex;
   align-items: center;
@@ -759,20 +806,21 @@ onMounted(() => {
 .title {
   font-size: 15px;
   font-weight: 600;
-  color: var(--t-text-primary);
+  color: var(--b-text);
 }
 
 .new-btn {
   display: flex;
   align-items: center;
   gap: 6px;
-  background: var(--t-brand-gradient);
+  height: 30px;
+  background: var(--b-ink);
   color: #fff;
-  border: none;
-  padding: 8px 18px;
-  border-radius: 10px;
-  font-size: 13px;
-  font-weight: 500;
+  border: 1px solid var(--b-ink);
+  padding: 0 12px;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 700;
   cursor: pointer;
   transition: opacity 0.2s;
 }
@@ -783,16 +831,32 @@ onMounted(() => {
 }
 .new-btn:hover { opacity: 0.9; }
 
+:global(html[data-theme="dark"]) .new-btn,
+:global(html[data-theme="dark"]) .empty-add-btn {
+  background: #151922;
+  border-color: rgba(124, 140, 255, 0.34);
+  color: #c7d2fe;
+  box-shadow: none;
+}
+
+:global(html[data-theme="dark"]) .new-btn:hover,
+:global(html[data-theme="dark"]) .empty-add-btn:hover {
+  opacity: 1;
+  background: rgba(124, 140, 255, 0.16);
+  border-color: rgba(124, 140, 255, 0.46);
+  color: #f8fafc;
+}
+
 /* ── Tabs Bar ── */
 .tabs-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  max-width: 1200px;
-  margin: 0 auto;
+  max-width: 1180px;
+  margin: 0 auto 2px;
   width: 100%;
-  padding: 18px 24px 10px;
+  padding: 0;
   background: transparent;
   border-bottom: none;
   flex-shrink: 0;
@@ -802,68 +866,57 @@ onMounted(() => {
 .tabs-group {
   display: flex;
   align-items: center;
-  gap: 0;
+  gap: 4px;
   min-width: 0;
-  padding: 4px;
-  background: rgba(255, 255, 255, 0.72);
-  border: 1px solid rgba(123, 138, 178, 0.12);
-  border-radius: 18px;
-  box-shadow: 0 10px 24px rgba(104, 116, 160, 0.08);
-  backdrop-filter: blur(10px);
+  padding: 3px;
+  background: var(--b-panel);
+  border: 1px solid var(--b-line);
+  border-radius: 8px;
+  box-shadow: var(--b-shadow-xs);
 }
 
-.tabs-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  flex-shrink: 0;
+.tabs-summary {
+  color: var(--b-text-muted);
+  font-size: 12px;
+  font-family: var(--b-mono);
 }
 
 .tab-item {
-  padding: 10px 18px;
+  height: 28px;
+  padding: 0 12px;
   border: none;
   background: none;
-  color: var(--t-text-muted);
-  font-size: 13px;
-  font-weight: 600;
+  color: var(--b-text-muted);
+  font-size: 12px;
+  font-weight: 700;
   cursor: pointer;
   position: relative;
-  border-radius: 14px;
+  border-radius: 6px;
   transition: all 0.2s;
 }
 .tab-item:hover {
-  color: var(--t-text-secondary);
-  background: rgba(99, 102, 241, 0.06);
+  color: var(--b-text);
+  background: var(--b-bg-sub);
 }
 .tab-item.active {
-  color: #334166;
-  background: rgba(255, 255, 255, 0.94);
-  box-shadow: 0 6px 18px rgba(117, 129, 170, 0.12);
-}
-.tab-item.active::after {
-  content: '';
-  position: absolute;
-  bottom: 3px;
-  left: 14px;
-  right: 14px;
-  height: 2px;
-  background: var(--t-brand-gradient);
-  border-radius: 2px;
+  color: var(--b-text);
+  background: var(--b-bg-sub);
+  box-shadow: inset 0 0 0 1px var(--b-line);
 }
 
 /* ── Content ── */
 .env-content {
   flex: 1;
   overflow-y: auto;
-  max-width: 1200px;
+  max-width: 1180px;
   margin: 0 auto;
   width: 100%;
-  padding: 8px 24px 60px;
+  padding: 0 0 44px;
 }
 
 .empty-state {
   text-align: center;
-  color: var(--t-text-muted);
+  color: var(--b-text-muted);
   padding: 80px 0;
   display: flex;
   flex-direction: column;
@@ -874,12 +927,12 @@ onMounted(() => {
 
 .empty-add-btn {
   margin-top: 8px;
-  background: var(--t-brand-gradient);
+  background: var(--b-ink);
   color: #fff;
-  border: none;
-  padding: 8px 20px;
-  border-radius: 10px;
-  font-size: 13px;
+  border: 1px solid var(--b-ink);
+  padding: 7px 14px;
+  border-radius: 7px;
+  font-size: 12px;
   cursor: pointer;
   transition: opacity 0.2s;
 }
@@ -888,25 +941,25 @@ onMounted(() => {
 /* ── Grid ── */
 .env-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 12px;
 }
 
 /* ── Card ── */
 .env-card {
-  background: var(--t-bg-panel);
-  border: 1px solid var(--t-border-subtle);
-  border-radius: 14px;
-  padding: 20px;
+  background: var(--b-panel);
+  border: 1px solid var(--b-line);
+  border-radius: 8px;
+  padding: 14px;
   transition: all 0.2s;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
+  box-shadow: var(--b-shadow-xs);
 }
 .env-card:hover {
-  background: var(--t-bg-input);
-  border-color: var(--t-brand-glow);
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  border-color: var(--b-line-strong);
+  box-shadow: var(--b-shadow-sm);
 }
 
 .env-card-header {
@@ -918,27 +971,26 @@ onMounted(() => {
 .env-card-left {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 
 .env-status-dot {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   flex-shrink: 0;
 }
 .env-status-dot.connected {
-  background: var(--t-success);
-  box-shadow: 0 0 8px rgba(52, 211, 153, 0.4);
+  background: #10b981;
 }
 .env-status-dot.disconnected {
-  background: var(--t-text-muted);
+  background: var(--b-text-faint);
 }
 
 .env-name {
   font-size: 15px;
-  font-weight: 600;
-  color: var(--t-text-primary);
+  font-weight: 700;
+  color: var(--b-text);
   margin: 0;
   display: flex;
   align-items: center;
@@ -951,23 +1003,23 @@ onMounted(() => {
 
 .env-status-tag {
   font-size: 11px;
-  padding: 2px 10px;
-  border-radius: 10px;
-  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-weight: 700;
 }
 .env-status-tag.connected {
-  background: rgba(52, 211, 153, 0.15);
-  color: var(--t-success);
+  background: var(--b-teal-soft);
+  color: var(--b-teal);
 }
 .env-status-tag.disconnected {
-  background: var(--t-border-subtle);
-  color: var(--t-text-muted);
+  background: var(--b-bg-sub);
+  color: var(--b-text-muted);
 }
 
 .env-card-body {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 7px;
 }
 
 .env-field {
@@ -978,24 +1030,24 @@ onMounted(() => {
 
 .env-label {
   font-size: 11px;
-  color: var(--t-text-muted);
+  color: var(--b-text-faint);
   flex-shrink: 0;
   min-width: 52px;
 }
 
 .env-value {
   font-size: 12px;
-  color: var(--t-text-secondary);
+  color: var(--b-text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .env-value.mono {
-  font-family: 'SF Mono', Monaco, Consolas, monospace;
+  font-family: var(--b-mono);
   font-size: 11px;
-  color: var(--t-text-secondary);
-  background: var(--t-bg-subtle);
+  color: var(--b-text-muted);
+  background: var(--b-bg-sub);
   padding: 1px 6px;
   border-radius: 4px;
 }
@@ -1004,8 +1056,8 @@ onMounted(() => {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  padding-top: 12px;
-  border-top: 1px solid var(--t-border-subtle);
+  padding-top: 10px;
+  border-top: 1px solid var(--b-line);
 }
 
 .env-action-btn {
@@ -1013,45 +1065,44 @@ onMounted(() => {
   align-items: center;
   gap: 4px;
   padding: 4px 8px;
-  font-size: 12px;
   border-radius: 6px;
-  border: 1px solid var(--t-border-subtle);
-  background: var(--t-bg-subtle);
-  color: var(--t-text-secondary);
+  border: 1px solid var(--b-line);
+  background: var(--b-panel-soft);
+  color: var(--b-text-muted);
   font-size: 11px;
   cursor: pointer;
   transition: all 0.2s;
 }
 .env-action-btn:hover {
-  background: var(--t-border-subtle);
-  color: var(--t-text-primary);
+  background: var(--b-bg-sub);
+  color: var(--b-text);
 }
 .env-action-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 .env-action-btn.danger {
-  border-color: rgba(239, 68, 68, 0.15);
-  color: rgba(239, 68, 68, 0.5);
+  border-color: rgba(209, 74, 97, 0.22);
+  color: var(--b-red);
 }
 .env-action-btn.danger:hover {
-  background: rgba(239, 68, 68, 0.1);
-  color: var(--t-danger);
+  background: var(--b-red-soft);
+  color: var(--b-red);
 }
 .env-action-btn.status-toggle {
-  border-color: rgba(99, 102, 241, 0.18);
-  color: var(--t-brand-light);
+  border-color: rgba(79, 110, 247, 0.22);
+  color: var(--b-brand-ink);
 }
 .env-action-btn.status-toggle:hover {
-  background: rgba(99, 102, 241, 0.12);
-  color: #fff;
+  background: var(--b-brand-soft);
+  color: var(--b-brand-ink);
 }
 .env-action-btn.status-toggle.inactive {
-  border-color: rgba(52, 211, 153, 0.18);
-  color: var(--t-success);
+  border-color: rgba(15, 159, 143, 0.24);
+  color: var(--b-teal);
 }
 .env-action-btn.status-toggle.inactive:hover {
-  background: rgba(52, 211, 153, 0.12);
+  background: var(--b-teal-soft);
 }
 
 /* Dialog styles moved to non-scoped block below */
@@ -1060,13 +1111,13 @@ onMounted(() => {
 .auth-section {
   margin-top: 8px;
   padding: 16px;
-  background: var(--t-bg-subtle);
-  border: 1px solid var(--t-border-subtle);
-  border-radius: 12px;
+  background: var(--b-bg-sub);
+  border: 1px solid var(--b-line);
+  border-radius: 8px;
 }
 .auth-section-label {
   font-size: 12px;
-  color: var(--t-text-muted);
+  color: var(--b-text-muted);
   margin-bottom: 10px;
   font-weight: 500;
 }
@@ -1075,8 +1126,9 @@ onMounted(() => {
 .auth-tabs {
   display: flex;
   gap: 2px;
-  background: var(--t-bg-subtle);
-  border-radius: 10px;
+  background: var(--b-panel);
+  border: 1px solid var(--b-line);
+  border-radius: 8px;
   padding: 3px;
   margin: 8px 0 20px;
 }
@@ -1086,18 +1138,18 @@ onMounted(() => {
   padding: 8px 0;
   border: none;
   background: none;
-  color: var(--t-text-secondary);
+  color: var(--b-text-muted);
   font-size: 13px;
   cursor: pointer;
-  border-radius: 8px;
+  border-radius: 6px;
   transition: all 0.2s;
 }
 .auth-tab:hover {
-  color: var(--t-text-secondary);
+  color: var(--b-text);
 }
 .auth-tab.active {
-  background: var(--t-brand-glow);
-  color: var(--t-brand-light);
+  background: var(--b-brand-soft);
+  color: var(--b-brand-ink);
   font-weight: 600;
 }
 
@@ -1122,10 +1174,10 @@ onMounted(() => {
 .temperature-value {
   font-size: 13px;
   font-weight: 600;
-  color: var(--t-text-primary);
+  color: var(--b-text);
   min-width: 28px;
   text-align: right;
-  font-family: 'SF Mono', Monaco, Consolas, monospace;
+  font-family: var(--b-mono);
 }
 
 .llm-default-switch {
@@ -1138,7 +1190,7 @@ onMounted(() => {
 
 .llm-switch-label {
   font-size: 13px;
-  color: var(--t-text-secondary);
+  color: var(--b-text-muted);
 }
 
 /* ── Scrollbar ── */
@@ -1149,164 +1201,204 @@ onMounted(() => {
   background: transparent;
 }
 .env-content::-webkit-scrollbar-thumb {
-  background: var(--t-border-subtle);
+  background: var(--b-line-strong);
   border-radius: 3px;
 }
 .env-content::-webkit-scrollbar-thumb:hover {
-  background: var(--t-border-strong);
+  background: var(--b-text-faint);
 }
 </style>
 
 <style>
-/* ── Dialog dark theme (non-scoped for teleported el-dialog) ── */
+html[data-theme="dark"] .builder-topbar .new-btn {
+  background: #151922 !important;
+  border-color: rgba(124, 140, 255, 0.34) !important;
+  color: #c7d2fe !important;
+  box-shadow: none !important;
+}
+
+html[data-theme="dark"] .builder-topbar .new-btn:hover {
+  background: rgba(124, 140, 255, 0.16) !important;
+  border-color: rgba(124, 140, 255, 0.46) !important;
+  color: #f8fafc !important;
+}
+
+/* ── Dialog theme (non-scoped for teleported el-dialog) ── */
 .el-dialog.env-dialog {
-  background: var(--t-bg-panel) !important;
-  color: var(--t-text-primary);
-  border: 1px solid var(--t-border-subtle);
-  border-radius: 16px;
+  background: var(--b-panel) !important;
+  color: var(--b-text);
+  border: 1px solid var(--b-line);
+  border-radius: 8px;
 }
 .el-dialog.env-dialog .el-dialog__header {
-  border-bottom: 1px solid var(--t-border-subtle);
+  border-bottom: 1px solid var(--b-line);
   padding: 16px 20px;
 }
 .el-dialog.env-dialog .el-dialog__title {
-  color: var(--t-text-primary) !important;
+  color: var(--b-text) !important;
   font-size: 15px;
-  font-weight: 600;
+  font-weight: 700;
 }
 .el-dialog.env-dialog .el-dialog__headerbtn .el-dialog__close {
-  color: var(--t-text-muted);
+  color: var(--b-text-muted);
 }
 .el-dialog.env-dialog .el-dialog__body {
   padding: 20px;
 }
 .el-dialog.env-dialog .el-dialog__footer {
-  border-top: 1px solid var(--t-border-subtle);
+  border-top: 1px solid var(--b-line);
   padding: 14px 20px;
 }
 .el-dialog.env-dialog .el-form-item__label {
-  color: var(--t-text-secondary) !important;
+  color: var(--b-text-muted) !important;
   font-size: 13px;
 }
 .el-dialog.env-dialog .el-input__wrapper {
-  background: var(--t-bg-input) !important;
-  box-shadow: 0 0 0 1px var(--t-border-subtle) inset !important;
+  background: var(--b-panel-soft) !important;
+  box-shadow: 0 0 0 1px var(--b-line) inset !important;
 }
 .el-dialog.env-dialog .el-input__inner {
-  color: var(--t-text-primary) !important;
-  -webkit-text-fill-color: var(--t-text-primary) !important;
+  color: var(--b-text) !important;
+  -webkit-text-fill-color: var(--b-text) !important;
 }
 .el-dialog.env-dialog .el-input__inner::placeholder {
-  color: var(--t-text-muted) !important;
-  -webkit-text-fill-color: var(--t-text-muted) !important;
+  color: var(--b-text-faint) !important;
+  -webkit-text-fill-color: var(--b-text-faint) !important;
 }
 .el-dialog.env-dialog .el-textarea__inner {
-  background: var(--t-bg-input) !important;
-  box-shadow: 0 0 0 1px var(--t-border-subtle) inset !important;
-  color: var(--t-text-primary) !important;
+  background: var(--b-panel-soft) !important;
+  box-shadow: 0 0 0 1px var(--b-line) inset !important;
+  color: var(--b-text) !important;
 }
 .el-dialog.env-dialog .el-input__wrapper:hover,
 .el-dialog.env-dialog .el-textarea__inner:hover {
-  box-shadow: 0 0 0 1px var(--t-brand-glow) inset !important;
+  box-shadow: 0 0 0 1px var(--b-line-strong) inset !important;
 }
 .el-dialog.env-dialog .el-input__wrapper.is-focus,
 .el-dialog.env-dialog .el-textarea__inner:focus {
-  box-shadow: 0 0 0 1px var(--t-brand) inset !important;
+  box-shadow: 0 0 0 1px var(--b-brand) inset !important;
 }
 .el-dialog.env-dialog .el-overlay {
   background-color: rgba(0, 0, 0, 0.6) !important;
 }
+/* 确保 dark 模式下 primary 按钮可见 + 字号统一 */
+.el-dialog.env-dialog .el-button--primary {
+  background: var(--b-brand) !important;
+  border-color: var(--b-brand) !important;
+  color: #ffffff !important;
+}
+.el-dialog.env-dialog .el-button--primary:hover,
+.el-dialog.env-dialog .el-button--primary:focus {
+  background: var(--b-brand-ink) !important;
+  border-color: var(--b-brand-ink) !important;
+  color: #ffffff !important;
+}
+.el-dialog.env-dialog .el-button {
+  font-size: 14px;
+  padding: 8px 18px;
+}
+/* 输入框字体放大（用户反馈过小） */
+.el-dialog.env-dialog .el-input__inner,
+.el-dialog.env-dialog .el-textarea__inner,
+.el-dialog.env-dialog .el-select__wrapper {
+  font-size: 14px !important;
+}
+.el-dialog.env-dialog .el-input,
+.el-dialog.env-dialog .el-input-number {
+  font-size: 14px;
+}
 .el-dialog.env-dialog .el-input__suffix {
-  color: var(--t-text-muted);
+  color: var(--b-text-muted);
 }
 /* 密码框眼睛图标 */
 .el-dialog.env-dialog .el-input__password {
-  color: var(--t-text-muted) !important;
+  color: var(--b-text-muted) !important;
 }
 .el-dialog.env-dialog .el-input__password:hover {
-  color: var(--t-text-secondary) !important;
+  color: var(--b-text) !important;
 }
 /* 确保 prefix/suffix icon 颜色 */
 .el-dialog.env-dialog .el-input__prefix,
 .el-dialog.env-dialog .el-input__suffix-inner {
-  color: var(--t-text-muted) !important;
+  color: var(--b-text-muted) !important;
 }
 /* 覆盖浏览器自动填充的背景色 */
 .el-dialog.env-dialog .el-input__inner:-webkit-autofill,
 .el-dialog.env-dialog .el-input__inner:-webkit-autofill:hover,
 .el-dialog.env-dialog .el-input__inner:-webkit-autofill:focus {
-  -webkit-box-shadow: 0 0 0 1000px var(--t-bg-input) inset !important;
-  -webkit-text-fill-color: var(--t-text-primary) !important;
+  -webkit-box-shadow: 0 0 0 1000px var(--b-panel-soft) inset !important;
+  -webkit-text-fill-color: var(--b-text) !important;
   transition: background-color 5000s ease-in-out 0s;
 }
-/* 按钮样式覆盖 */
+/* 按钮样式覆盖（修：之前用了未定义的 --b-ink，dark 模式下变成默认浅色） */
 .el-dialog.env-dialog .el-button--primary {
-  background: var(--t-brand-gradient) !important;
-  border: none !important;
+  background: var(--b-brand) !important;
+  border: 1px solid var(--b-brand) !important;
+  color: #ffffff !important;
 }
 .el-dialog.env-dialog .el-button--default {
-  background: var(--t-border-subtle) !important;
-  border: 1px solid var(--t-border-subtle) !important;
-  color: var(--t-text-secondary) !important;
+  background: var(--b-panel-soft) !important;
+  border: 1px solid var(--b-line) !important;
+  color: var(--b-text-muted) !important;
 }
 .el-dialog.env-dialog .el-button--default:hover {
-  background: var(--t-border-strong) !important;
-  color: var(--t-text-primary) !important;
+  background: var(--b-bg-sub) !important;
+  color: var(--b-text) !important;
 }
 /* ── Select dropdown 主题 ── */
 .el-dialog.env-dialog .el-select .el-input__wrapper {
-  background: var(--t-bg-input) !important;
-  box-shadow: 0 0 0 1px var(--t-border-subtle) inset !important;
+  background: var(--b-panel-soft) !important;
+  box-shadow: 0 0 0 1px var(--b-line) inset !important;
 }
 .el-dialog.env-dialog .el-select .el-input__inner {
-  color: var(--t-text-primary) !important;
-  -webkit-text-fill-color: var(--t-text-primary) !important;
+  color: var(--b-text) !important;
+  -webkit-text-fill-color: var(--b-text) !important;
 }
 /* ── InputNumber 主题 ── */
 .el-dialog.env-dialog .el-input-number .el-input__wrapper {
-  background: var(--t-bg-input) !important;
-  box-shadow: 0 0 0 1px var(--t-border-subtle) inset !important;
+  background: var(--b-panel-soft) !important;
+  box-shadow: 0 0 0 1px var(--b-line) inset !important;
 }
 .el-dialog.env-dialog .el-input-number__decrease,
 .el-dialog.env-dialog .el-input-number__increase {
-  background: var(--t-bg-subtle) !important;
-  color: var(--t-text-secondary) !important;
-  border-color: var(--t-border-subtle) !important;
+  background: var(--b-bg-sub) !important;
+  color: var(--b-text-muted) !important;
+  border-color: var(--b-line) !important;
 }
 .el-dialog.env-dialog .el-input-number__decrease:hover,
 .el-dialog.env-dialog .el-input-number__increase:hover {
-  color: var(--t-text-primary) !important;
+  color: var(--b-text) !important;
 }
 /* ── Slider 主题 ── */
 .el-dialog.env-dialog .el-slider__runway {
-  background: var(--t-border-subtle) !important;
+  background: var(--b-line) !important;
 }
 .el-dialog.env-dialog .el-slider__button {
-  border-color: var(--t-brand) !important;
+  border-color: var(--b-brand) !important;
 }
 /* ── Switch 主题 ── */
 .el-dialog.env-dialog .el-switch.is-checked .el-switch__core {
-  border-color: var(--t-brand) !important;
-  background-color: var(--t-brand) !important;
+  border-color: var(--b-brand) !important;
+  background-color: var(--b-brand) !important;
 }
 /* ── Select popper 全局样式 ── */
 .el-select-dropdown {
-  background: var(--t-bg-panel) !important;
-  border: 1px solid var(--t-border-subtle) !important;
+  background: var(--b-panel) !important;
+  border: 1px solid var(--b-line) !important;
 }
 .el-select-dropdown__item {
-  color: var(--t-text-secondary) !important;
+  color: var(--b-text-muted) !important;
 }
 .el-select-dropdown__item.hover,
 .el-select-dropdown__item:hover {
-  background: var(--t-bg-input) !important;
-  color: var(--t-text-primary) !important;
+  background: var(--b-bg-sub) !important;
+  color: var(--b-text) !important;
 }
 .el-select-dropdown__item.is-selected {
-  color: var(--t-brand-light) !important;
+  color: var(--b-brand-ink) !important;
   font-weight: 600;
 }
 .el-select-dropdown .el-scrollbar__bar {
-  background: var(--t-border-subtle);
+  background: var(--b-line);
 }
 </style>

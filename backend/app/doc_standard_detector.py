@@ -26,7 +26,7 @@ _WEIGHTS = {
 # 必填章节 key
 _REQUIRED_SECTIONS = {"app_info", "roles", "models", "permissions"}
 # 可选章节 key
-_OPTIONAL_SECTIONS = {"dicts", "forms", "workflows"}
+_OPTIONAL_SECTIONS = {"dicts", "forms", "workflows", "custom_development"}
 
 # 各章节标准表头
 _STANDARD_HEADERS: Dict[str, List[str]] = {

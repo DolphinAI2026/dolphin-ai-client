@@ -17,6 +17,8 @@ from app.llm_client import LLMClient
 from app.field_types import build_prompt_field_types_compact
 from app.context_compact import ContextCompactor
 from app.json_utils import loads_if_str
+from app.builder_spec.agent import SpecAgent
+from app.builder_spec.persistence import load_spec, save_spec_rebased
 
 
 async def _get_tenant_llm_config(db: AsyncSession, tenant_id: int) -> dict | None:
@@ -74,6 +76,51 @@ def _strip_hidden_blocks(text: str) -> str:
     cleaned = re.sub(r"<think>[\s\S]*?</think>", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"<think>[\s\S]*$", "", cleaned, flags=re.IGNORECASE)
     return cleaned.strip()
+
+
+def _format_pending_decision_message(decisions: list) -> str:
+    active = [d for d in decisions if not getattr(d, "resolved", False)]
+    if not active:
+        return ""
+    if len(active) == 1:
+        d = active[0]
+        lines = ["我需要你确认一个关键点：", str(getattr(d, "topic", "")).strip()]
+        why = str(getattr(d, "why_blocking", "") or "").strip()
+        if why:
+            lines.append(f"原因：{why}")
+        options = [str(opt).strip() for opt in (getattr(d, "options", None) or []) if str(opt).strip()]
+        if options:
+            lines.append("可选方案：")
+            lines.extend([f"{idx}. {opt}" for idx, opt in enumerate(options, 1)])
+    else:
+        lines = [f"我需要你确认 {len(active)} 个关键点："]
+        for idx, d in enumerate(active, 1):
+            topic = str(getattr(d, "topic", "")).strip()
+            why = str(getattr(d, "why_blocking", "") or "").strip()
+            suffix = f"（{why}）" if why else ""
+            lines.append(f"{idx}. {topic}{suffix}")
+            options = [str(opt).strip() for opt in (getattr(d, "options", None) or []) if str(opt).strip()]
+            for opt_idx, opt in enumerate(options, 1):
+                lines.append(f"   {idx}.{opt_idx} {opt}")
+    lines.append("你直接在对话里回答即可，我会同步更新右侧 SPEC。")
+    return "\n".join(line for line in lines if line)
+
+
+def _append_decision_message(existing_text: str, decisions: list) -> tuple[str, str]:
+    """Return assistant text plus a user-facing decision prompt for new blockers."""
+    decision_text = _format_pending_decision_message(decisions)
+    if not decision_text:
+        return existing_text, ""
+    topics = [
+        str(getattr(d, "topic", "") or "").strip()
+        for d in decisions
+        if str(getattr(d, "topic", "") or "").strip()
+    ]
+    if topics and all(topic in existing_text for topic in topics):
+        return existing_text, ""
+    if existing_text.strip():
+        return f"{existing_text.rstrip()}\n\n{decision_text}", decision_text
+    return decision_text, decision_text
 
 
 async def _parse_uploaded_document(file: UploadFile) -> str:
@@ -570,6 +617,109 @@ async def send_message(
         getattr(data, 'current_config', None)
     )
 
+    # ── Phase B: fork on first edit ──
+    # 当 ChatPage 显式传 application_id 且 conversation 还没绑 spec 时，
+    # 若该 application 有 canonical_spec_id，自动 fork 成 personal draft 并指向 conversation.spec_id。
+    # 后续 SpecAgent 改的是 draft，不污染 canonical。
+    # 老调用方未传 application_id 时跳过，保持既有行为（empty_spec 路径不变）。
+    if not conversation.spec_id and getattr(data, "application_id", None):
+        from app.models import Application
+        from app.builder_spec.persistence import fork_canonical_to_draft
+        app_row = (
+            await db.execute(
+                select(Application).where(
+                    Application.id == data.application_id,
+                    Application.tenant_id == ctx.tenant_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if app_row and app_row.canonical_spec_id:
+            canonical = await load_spec(
+                db, app_row.canonical_spec_id, tenant_id=ctx.tenant_id
+            )
+            if canonical:
+                draft = await fork_canonical_to_draft(
+                    db,
+                    canonical=canonical,
+                    user_id=ctx.user.id,
+                    tenant_id=ctx.tenant_id,
+                )
+                conversation.spec_id = draft.id
+                await db.commit()
+
+    # ── SpecAgent branch: if conversation has a linked spec, drive the new state machine ──
+    if conversation.spec_id:
+        spec = await load_spec(db, conversation.spec_id, tenant_id=ctx.tenant_id)
+        if spec is None:
+            # Spec was deleted but FK lingers — fall back to legacy path
+            conversation.spec_id = None
+            await db.commit()
+        else:
+            llm_cfg = await _get_conversation_llm_config(db, conversation)
+            if llm_cfg is None:
+                raise HTTPException(status_code=400, detail="未配置可用的 LLM 模型，请在环境管理 → 模型配置中添加并启用模型")
+            agent = SpecAgent(
+                llm_base_url=llm_cfg["base_url"],
+                llm_api_key=llm_cfg["api_key"],
+                llm_model=llm_cfg["model"],
+            )
+            # User message has already been persisted above (lines 544-550).
+            # Build history excluding that latest user message — agent.run takes it
+            # as a separate argument.
+            history = [
+                {"role": m.role, "content": m.content}
+                for m in messages[:-1]
+            ]
+
+            async def spec_event_generator():
+                last_assistant_text = ""
+                seen_pending_decision_ids = {
+                    d.id for d in spec.decisions_pending if not d.resolved
+                }
+                try:
+                    yield {"event": "thinking", "data": json.dumps(
+                        {"type": "thinking", "data": "正在分析你的回复..."},
+                        ensure_ascii=False)}
+                    async for ev in agent.run(spec, user_message=data.message, history=history):
+                        if ev.kind == "assistant_delta":
+                            last_assistant_text += ev.text or ""
+                            yield {"event": "message", "data": json.dumps(
+                                {"type": "message", "data": ev.text}, ensure_ascii=False)}
+                        elif ev.kind == "spec_patch":
+                            await save_spec_rebased(db, ev.spec, tenant_id=ctx.tenant_id)
+                            yield {"event": "spec_patch", "data": json.dumps(
+                                {"type": "spec_patch", "data": ev.spec.model_dump(mode="json")},
+                                ensure_ascii=False)}
+                            new_decisions = [
+                                d for d in ev.spec.decisions_pending
+                                if not d.resolved and d.id not in seen_pending_decision_ids
+                            ]
+                            seen_pending_decision_ids = {
+                                d.id for d in ev.spec.decisions_pending if not d.resolved
+                            }
+                            last_assistant_text, decision_text = _append_decision_message(
+                                last_assistant_text,
+                                new_decisions,
+                            )
+                            if decision_text:
+                                yield {"event": "message", "data": json.dumps(
+                                    {"type": "message", "data": decision_text},
+                                    ensure_ascii=False)}
+                        elif ev.kind == "tool_error":
+                            yield {"event": "tool_error", "data": json.dumps(
+                                {"type": "tool_error", "tool": ev.tool_name, "message": ev.message},
+                                ensure_ascii=False)}
+                        elif ev.kind == "final":
+                            final_text = last_assistant_text.strip() or "已更新 SPEC，右侧预览已同步。"
+                            db.add(Message(conversation_id=conversation.id, role="assistant",
+                                           content=final_text))
+                            await db.commit()
+                    yield {"event": "done", "data": json.dumps({"type": "done", "data": "completed"})}
+                except Exception as e:
+                    yield {"event": "error", "data": json.dumps({"type": "error", "data": str(e)})}
+
+            return EventSourceResponse(spec_event_generator())
+
     # 根据 phase 选 system prompt
     system_prompt = _build_phase_prompt(conversation.agent_type, effective_config)
     llm_messages = [{"role": "system", "content": system_prompt}]
@@ -687,6 +837,7 @@ async def send_message_with_file(
     file_content = ""
     file_name = ""
     route_to_pipeline = False  # 是否把文件路由到 doc_pipeline
+    doc_score = 0  # 文档标准度（γ 分支也会用到）
 
     if file and file.filename:
         file_name = file.filename
@@ -698,7 +849,7 @@ async def send_message_with_file(
             image_data_url = f"data:{mime};base64,{b64}"
         else:
             file_content = await _parse_uploaded_document(file)
-            # 对文档文件做标准度检测，决定走 pipeline 还是 chat 上下文
+            # 对文档文件做标准度检测；分数 >=60 且没有 spec_id 时走 pipeline
             if file_content and conversation.agent_type in {"builder", "requirements"}:
                 try:
                     from app.doc_standard_detector import detect as _detect_doc
@@ -728,6 +879,86 @@ async def send_message_with_file(
             await db.commit()
 
     llm_cfg = await _get_conversation_llm_config(db, conversation)
+
+    # ── γ: SpecAgent bootstrap branch（spec_id 已绑且有文档内容）──
+    if conversation.spec_id and file_content:
+        spec = await load_spec(db, conversation.spec_id, tenant_id=ctx.tenant_id)
+        if spec is not None:
+            if llm_cfg is None:
+                raise HTTPException(status_code=503, detail="LLM 配置不可用")
+            agent = SpecAgent(
+                llm_base_url=llm_cfg["base_url"],
+                llm_api_key=llm_cfg["api_key"],
+                llm_model=llm_cfg["model"],
+            )
+            spec_has_content = bool(spec.goal or spec.objects)
+            # diff_only：spec 已有内容 → V2 文档增量更新
+            diff_only = spec_has_content
+            # silent：文档标准度高 且 spec 仍为空 → 直接预填
+            silent = (doc_score >= 60) and not spec_has_content
+
+            async def spec_doc_generator():
+                last_text = ""
+                seen_pending_decision_ids = {
+                    d.id for d in spec.decisions_pending if not d.resolved
+                }
+                try:
+                    yield {"event": "thinking", "data": json.dumps(
+                        {"type": "thinking", "data": "正在解析文档并同步 SPEC..."},
+                        ensure_ascii=False)}
+                    async for ev in agent.bootstrap_from_doc(
+                        spec,
+                        doc_text=file_content,
+                        silent=silent,
+                        diff_only=diff_only,
+                    ):
+                        if ev.kind == "assistant_delta":
+                            last_text += ev.text or ""
+                            yield {"event": "message", "data": json.dumps(
+                                {"type": "message", "data": ev.text}, ensure_ascii=False)}
+                        elif ev.kind == "spec_patch":
+                            await save_spec_rebased(db, ev.spec, tenant_id=ctx.tenant_id)
+                            yield {"event": "spec_patch", "data": json.dumps(
+                                {"type": "spec_patch", "data": ev.spec.model_dump(mode="json")},
+                                ensure_ascii=False)}
+                            new_decisions = [
+                                d for d in ev.spec.decisions_pending
+                                if not d.resolved and d.id not in seen_pending_decision_ids
+                            ]
+                            seen_pending_decision_ids = {
+                                d.id for d in ev.spec.decisions_pending if not d.resolved
+                            }
+                            last_text, decision_text = _append_decision_message(
+                                last_text,
+                                new_decisions,
+                            )
+                            if decision_text:
+                                yield {"event": "message", "data": json.dumps(
+                                    {"type": "message", "data": decision_text},
+                                    ensure_ascii=False)}
+                        elif ev.kind == "tool_error":
+                            yield {"event": "tool_error", "data": json.dumps(
+                                {"type": "tool_error", "tool": ev.tool_name, "message": ev.message},
+                                ensure_ascii=False)}
+                        elif ev.kind == "final":
+                            final_text = (
+                                last_text.strip()
+                                or f"已从文档「{file_name}」预填 SPEC，右侧预览已同步。"
+                            )
+                            db.add(Message(
+                                conversation_id=conversation.id, role="assistant",
+                                content=final_text,
+                            ))
+                            await db.commit()
+                    yield {"event": "done", "data": json.dumps({"type": "done", "data": "completed"})}
+                except Exception as e:
+                    yield {"event": "error", "data": json.dumps({"type": "error", "data": str(e)})}
+
+            return EventSourceResponse(spec_doc_generator())
+        else:
+            # spec 已被删除 → 清掉 FK，走老路径
+            conversation.spec_id = None
+            await db.commit()
 
     # ── 走 doc_pipeline（文档标准度 >= 60）───────────────────────
     if route_to_pipeline:

@@ -40,22 +40,31 @@
         <div v-show="activeTab === 'basic'" class="settings-pane">
           <el-form :model="form" label-position="top" size="default">
             <el-form-item label="应用名称" required>
-              <el-input v-model="form.name" placeholder="例如：劳务管理系统" />
+              <el-input v-model="form.name" :disabled="!canEditProject" placeholder="例如：劳务管理系统" />
             </el-form-item>
             <el-form-item label="应用描述">
-              <el-input v-model="form.description" type="textarea" :rows="3" placeholder="简要描述应用用途" />
+              <el-input v-model="form.description" :disabled="!canEditProject" type="textarea" :rows="3" placeholder="简要描述应用用途" />
             </el-form-item>
           </el-form>
         </div>
 
         <!-- 平台环境 -->
         <div v-if="isEdit" v-show="activeTab === 'platform'" class="settings-pane">
+          <el-alert
+            v-if="!canManagePlatform"
+            type="info"
+            :closable="false"
+            show-icon
+            style="margin-bottom: 12px"
+          >
+            当前角色仅可查看项目平台配置，修改和连接平台需要项目管理员权限。
+          </el-alert>
           <el-form :model="form" label-position="top" size="default">
             <el-form-item label="平台地址">
-              <el-input v-model="form.platform_url" placeholder="https://your-apaas.com/backend/" />
+              <el-input v-model="form.platform_url" :disabled="!canManagePlatform" placeholder="https://your-apaas.com/backend/" />
             </el-form-item>
             <el-form-item label="租户ID">
-              <el-input v-model="form.platform_tenant_id" placeholder="平台租户ID" />
+              <el-input v-model="form.platform_tenant_id" :disabled="!canManagePlatform" placeholder="平台租户ID" />
             </el-form-item>
 
             <el-tabs v-model="connectMode" class="connect-mode-tabs">
@@ -65,13 +74,13 @@
 
             <template v-if="connectMode === 'login'">
               <el-form-item label="用户名（手机号/邮箱）">
-                <el-input v-model="loginForm.username" placeholder="请输入登录账号" />
+                <el-input v-model="loginForm.username" :disabled="!canManagePlatform" placeholder="请输入登录账号" />
               </el-form-item>
               <el-form-item label="密码">
-                <el-input v-model="loginForm.password" type="password" show-password placeholder="请输入密码" />
+                <el-input v-model="loginForm.password" :disabled="!canManagePlatform" type="password" show-password placeholder="请输入密码" />
               </el-form-item>
               <el-form-item>
-                <el-button type="primary" :loading="connecting" @click="handleConnect" :disabled="!canConnect">
+                <el-button type="primary" :loading="connecting" @click="handleConnect" :disabled="!canManagePlatform || !canConnect">
                   登录并连接平台
                 </el-button>
                 <el-tag v-if="form.platform_connected" type="success" size="small" style="margin-left: 8px">已连接</el-tag>
@@ -81,7 +90,7 @@
 
             <template v-else>
               <el-form-item label="Token">
-                <el-input v-model="tokenForm.token" type="textarea" :rows="3" placeholder="从浏览器F12复制xdaptoken值" />
+                <el-input v-model="tokenForm.token" :disabled="!canManagePlatform" type="textarea" :rows="3" placeholder="从浏览器F12复制xdaptoken值" />
               </el-form-item>
               <el-alert type="info" :closable="false" show-icon style="margin-bottom: 12px">
                 <template #title>
@@ -95,7 +104,7 @@
               <el-select
                 v-model="form.platform_app_id"
                 placeholder="请先连接平台后选择应用"
-                :disabled="!form.platform_connected"
+                :disabled="!form.platform_connected || !canManagePlatform"
                 :loading="loadingApps"
                 filterable
                 style="width: 100%"
@@ -116,7 +125,7 @@
         <div v-if="isEdit" v-show="activeTab === 'team'" class="settings-pane">
           <div class="team-members-section">
             <!-- 添加成员 -->
-            <div class="add-member-row">
+            <div v-if="canManageMembers" class="add-member-row">
               <el-select
                 v-model="selectedUserId"
                 filterable
@@ -148,6 +157,15 @@
                 添加
               </el-button>
             </div>
+            <el-alert
+              v-else
+              type="info"
+              :closable="false"
+              show-icon
+              style="margin-bottom: 12px"
+            >
+              当前角色只能查看团队成员，添加/移除成员需要项目管理员权限。
+            </el-alert>
 
             <!-- 成员列表 -->
             <div v-if="loadingMembers" class="members-loading">
@@ -167,6 +185,7 @@
                 <template v-if="member.role !== 'owner'">
                   <el-select
                     :model-value="member.role"
+                    :disabled="!canManageMemberRoles"
                     size="small"
                     style="width: 90px; margin-left: auto"
                     @change="(val: string) => handleUpdateRole(member, val)"
@@ -175,6 +194,7 @@
                     <el-option label="成员" value="member" />
                   </el-select>
                   <el-button
+                    v-if="canManageMembers"
                     type="danger"
                     size="small"
                     text
@@ -194,7 +214,7 @@
 
     <template #footer>
       <el-button @click="visible = false">取消</el-button>
-      <el-button type="primary" :loading="saving" @click="handleSave">
+      <el-button v-if="canEditProject" type="primary" :loading="saving" @click="handleSave">
         {{ isEdit ? '保存' : '创建' }}
       </el-button>
     </template>
@@ -221,6 +241,10 @@ const visible = defineModel<boolean>({ default: false })
 
 const isEdit = computed(() => !!props.project?.id)
 const activeTab = ref('basic')
+const canEditProject = computed(() => !isEdit.value || !!props.project?.can_manage_project)
+const canManagePlatform = computed(() => !!props.project?.can_manage_platform)
+const canManageMembers = computed(() => !!props.project?.can_manage_members)
+const canManageMemberRoles = computed(() => !!props.project?.can_manage_member_roles)
 
 const form = reactive({
   name: '',
@@ -337,6 +361,10 @@ async function fetchAvailableUsers() {
 }
 
 async function handleAddMember() {
+  if (!canManageMembers.value) {
+    ElMessage.warning('当前角色无权添加成员')
+    return
+  }
   if (!props.project?.id) {
     ElMessage.warning('请先保存应用')
     return
@@ -365,6 +393,10 @@ async function handleAddMember() {
 }
 
 async function handleRemoveMember(member: ProjectMember) {
+  if (!canManageMembers.value) {
+    ElMessage.warning('当前角色无权移除成员')
+    return
+  }
   if (!props.project?.id) return
   try {
     await ElMessageBox.confirm(`确定移除成员 ${member.username}？`, '确认移除', {
@@ -383,6 +415,10 @@ async function handleRemoveMember(member: ProjectMember) {
 }
 
 async function handleUpdateRole(member: ProjectMember, newRole: string) {
+  if (!canManageMemberRoles.value) {
+    ElMessage.warning('当前角色无权修改成员角色')
+    return
+  }
   if (!props.project?.id) return
   try {
     await projectsApi.updateMemberRole(props.project.id, member.id, newRole)
@@ -402,6 +438,10 @@ function handleAppSelect(appId: string) {
 }
 
 async function handleConnect() {
+  if (!canManagePlatform.value) {
+    ElMessage.warning('当前角色无权修改平台配置')
+    return
+  }
   if (!props.project?.id) return
   connecting.value = true
   try {
@@ -424,6 +464,10 @@ async function handleConnect() {
 }
 
 async function handleSave() {
+  if (!canEditProject.value) {
+    ElMessage.warning('当前角色无权修改项目')
+    return
+  }
   if (!form.name.trim()) {
     ElMessage.warning('请输入应用名称')
     return

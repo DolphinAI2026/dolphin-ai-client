@@ -73,12 +73,14 @@ function cleanThinkTags(text: string): string {
 // ── replay 历史消息识别模式 ──
 const STEP_RUNNING_PATTERNS = [
   '正在识别开发场景',
+  '正在生成开发 SPEC',
   '正在初始化工程脚手架',
   'AI 开始编写代码',
   '正在处理',
 ]
 const STEP_DONE_PATTERNS: [RegExp, string | null][] = [
   [/^✓\s*识别为\s+(.+)$/, null],          // 保留原文，转 badge
+  [/^✓\s*开发 SPEC 待确认$/, '开发 SPEC 待确认'],
   [/^✓\s*工程脚手架已初始化$/, '工程脚手架已初始化'],
   [/^✓\s*代码生成完成$/, '代码生成完成'],
   [/^✅\s*代码生成完成$/, '代码生成完成'],

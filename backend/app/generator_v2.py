@@ -327,6 +327,19 @@ def _build_model_lookup(models: List[dict], model_info: Dict) -> Dict[str, dict]
     return lookup
 
 
+def _first_non_empty(*values, default=""):
+    for value in values:
+        if value in (None, ""):
+            continue
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped:
+                return stripped
+            continue
+        return value
+    return default
+
+
 def _resolve_reference_component(
     comp_def: dict,
     built: dict,
@@ -841,7 +854,7 @@ def _build_form_create_payload(
     """构造单表单的 create_form_config 请求体（list 包裹一个 dict）。"""
     return [{
         "formName": form_name,
-        "formCode": str(form.get("formCode") or form.get("code") or f"form_{_rand(6)}"),
+        "formCode": str(form.get("formCode") or form.get("form_code") or form.get("code") or f"form_{_rand(6)}"),
         "allModelCodes": all_model_codes,
         "formComponents": components,
         "listPageView": {
@@ -1121,8 +1134,24 @@ async def run_complete_generation(
         forms_to_build = _resolve_forms_to_build(all_forms, models)
 
         for idx, form in enumerate(forms_to_build):
-            form_name = form.get("name") or form.get("formName") or form.get("modelCode") or f"表单{idx+1}"
-            model_code = str(form.get("modelCode", form.get("model_code", ""))).strip()
+            form_name = _first_non_empty(
+                form.get("formName"),
+                form.get("form_name"),
+                form.get("name"),
+                form.get("modelCode"),
+                form.get("model_code"),
+                form.get("mainModelCode"),
+                form.get("main_model_code"),
+                default=f"表单{idx+1}",
+            )
+            model_code = str(_first_non_empty(
+                form.get("modelCode"),
+                form.get("model_code"),
+                form.get("mainModelCode"),
+                form.get("main_model_code"),
+                form.get("main_model"),
+                default="",
+            )).strip()
             mi = model_lookup.get(model_code) if model_code else None
             if not mi and idx < len(models):
                 mi = model_info.get(idx)
@@ -1136,7 +1165,10 @@ async def run_complete_generation(
                 continue
 
             all_model_codes = []
-            for raw_code in form.get("allModelCodes", []) or [model_code]:
+            all_model_source = form.get("allModelCodes") or form.get("all_model_codes") or [model_code]
+            if isinstance(all_model_source, str):
+                all_model_source = [all_model_source]
+            for raw_code in all_model_source:
                 resolved_code = model_lookup.get(str(raw_code).strip(), {}).get("code", raw_code)
                 if resolved_code:
                     all_model_codes.append(resolved_code)

@@ -53,9 +53,21 @@ async def create_conversation(
         title={"builder": "新对话", "requirements": "需求分析", "coding": "智能开发"}.get(data.agent_type, "新对话"),
         agent_type=data.agent_type,
         selected_llm_config_id=selected_llm_config_id,
+        spec_id=data.spec_id,
         status="active"
     )
     db.add(conversation)
+    await db.flush()
+
+    initial_message = (data.initial_message or "").strip()
+    if initial_message:
+        conversation.title = initial_message.replace("\n", " ")[:30]
+        db.add(Message(
+            conversation_id=conversation.id,
+            role="user",
+            content=initial_message,
+        ))
+
     await db.commit()
     await db.refresh(conversation)
 
@@ -65,6 +77,7 @@ async def create_conversation(
         agent_type=conversation.agent_type,
         status=conversation.status,
         selected_llm_config_id=conversation.selected_llm_config_id,
+        spec_id=conversation.spec_id,
         created_at=conversation.created_at,
         updated_at=conversation.updated_at
     )
@@ -92,6 +105,7 @@ async def list_conversations(
             agent_type=conv.agent_type,
             status=conv.status,
             selected_llm_config_id=conv.selected_llm_config_id,
+        spec_id=conv.spec_id,
             created_at=conv.created_at,
             updated_at=conv.updated_at
         )
@@ -123,6 +137,7 @@ async def get_conversation(
         agent_type=conversation.agent_type,
         status=conversation.status,
         selected_llm_config_id=conversation.selected_llm_config_id,
+        spec_id=conversation.spec_id,
         created_at=conversation.created_at,
         updated_at=conversation.updated_at
     )
@@ -175,6 +190,7 @@ async def update_conversation_model(
         agent_type=conversation.agent_type,
         status=conversation.status,
         selected_llm_config_id=conversation.selected_llm_config_id,
+        spec_id=conversation.spec_id,
         created_at=conversation.created_at,
         updated_at=conversation.updated_at,
     )
@@ -216,6 +232,7 @@ async def update_agent_type(
         agent_type=conversation.agent_type,
         status=conversation.status,
         selected_llm_config_id=conversation.selected_llm_config_id,
+        spec_id=conversation.spec_id,
         created_at=conversation.created_at,
         updated_at=conversation.updated_at,
     )
@@ -325,6 +342,7 @@ async def list_conversations_with_apps(
             agent_type=conv.agent_type,
             status=conv.status,
             selected_llm_config_id=conv.selected_llm_config_id,
+        spec_id=conv.spec_id,
             created_at=str(conv.created_at),
             updated_at=str(conv.updated_at),
             app_id=app.id if app else None,

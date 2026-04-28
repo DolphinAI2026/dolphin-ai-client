@@ -40,10 +40,13 @@ async def get_db():
 
 async def init_db():
     from sqlalchemy import text
-    # 确保 harness models 被 Base 注册（create_all 会创建新表）
+    # 确保 extension models 被 Base 注册（create_all 会创建新表）
     import app.harness.models  # noqa: F401
     # 智能开发 V2 - agent 架构相关表（agent_messages / brainstorm_sessions / specs / ...）
     import app.models.agent_models  # noqa: F401
+    import app.models.collaboration  # noqa: F401
+    import app.models.preference  # noqa: F401
+    import app.models.spec  # noqa: F401
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         # 迁移：确保新列存在（兼容 SQLite 和 MySQL）
@@ -51,6 +54,7 @@ async def init_db():
             "ALTER TABLE applications ADD COLUMN generation_state TEXT",
             "ALTER TABLE conversations ADD COLUMN workspace_id VARCHAR(50)",
             "ALTER TABLE conversations ADD COLUMN selected_llm_config_id INTEGER",
+            "ALTER TABLE conversations ADD COLUMN project_id INTEGER",
             "ALTER TABLE users ADD COLUMN apaas_base_url VARCHAR(255)",
             "ALTER TABLE users ADD COLUMN apaas_tenant_id VARCHAR(50)",
             # Projects table columns (in case table existed before new columns were added)
@@ -58,6 +62,13 @@ async def init_db():
             "ALTER TABLE projects ADD COLUMN platform_app_name VARCHAR(100)",
             # Document-driven incremental development
             "ALTER TABLE applications ADD COLUMN current_doc_version INTEGER",
+            # SPEC / collaboration mode metadata
+            "ALTER TABLE applications ADD COLUMN canonical_spec_id VARCHAR(40)",
+            "ALTER TABLE conversations ADD COLUMN spec_id VARCHAR(40)",
+            "ALTER TABLE applications ADD COLUMN default_mode VARCHAR(20)",
+            "ALTER TABLE applications ADD COLUMN git_repo_url VARCHAR(500)",
+            "ALTER TABLE applications ADD COLUMN git_provider VARCHAR(20)",
+            "ALTER TABLE applications ADD COLUMN git_default_branch VARCHAR(100)",
             # App code for app-mode debug
             "ALTER TABLE projects ADD COLUMN platform_app_code VARCHAR(100)",
             "ALTER TABLE projects ADD COLUMN platform_password_enc TEXT",

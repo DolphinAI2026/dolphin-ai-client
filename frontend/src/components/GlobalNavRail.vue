@@ -31,47 +31,72 @@
       </button>
     </div>
 
-    <div class="sidebar-nav">
-      <template v-for="item in primaryNavItems" :key="item.key">
+    <div class="sidebar-section">
+      <div class="nav-section-label">主入口</div>
+      <div class="sidebar-nav">
+        <template v-for="item in primaryNavItems" :key="item.key">
+          <button
+            class="nav-item"
+            :class="{ active: activeKey === item.key }"
+            :title="item.label"
+            @click="navigateTo(item.path)"
+          >
+            <svg v-if="item.key === 'home'" class="nav-icon" viewBox="0 0 16 16" fill="currentColor">
+              <rect x="2" y="3" width="12" height="2" rx="1" />
+              <rect x="2" y="7" width="8" height="2" rx="1" />
+              <rect x="2" y="11" width="10" height="2" rx="1" />
+            </svg>
+            <svg v-else class="nav-icon" viewBox="0 0 16 16" fill="none">
+              <path d="M4.5 5L2 8l2.5 3M11.5 5L14 8l-2.5 3M9.5 4l-3 8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            <span class="nav-label">{{ item.label }}</span>
+          </button>
+        </template>
+      </div>
+    </div>
+
+    <div class="sidebar-divider"></div>
+
+    <div class="sidebar-section">
+      <div class="nav-section-label">辅助工作台</div>
+      <div class="sidebar-nav sidebar-nav-secondary">
         <button
+          v-for="item in workspaceNavItems"
+          :key="item.key"
           class="nav-item"
           :class="{ active: activeKey === item.key }"
           :title="item.label"
           @click="navigateTo(item.path)"
         >
-          <svg v-if="item.key === 'home'" class="nav-icon" viewBox="0 0 16 16" fill="currentColor">
-            <rect x="2" y="3" width="12" height="2" rx="1" />
-            <rect x="2" y="7" width="8" height="2" rx="1" />
-            <rect x="2" y="11" width="10" height="2" rx="1" />
-          </svg>
-          <svg v-else class="nav-icon" viewBox="0 0 16 16" fill="none">
+          <svg class="nav-icon" viewBox="0 0 16 16" fill="none">
             <path d="M4.5 5L2 8l2.5 3M11.5 5L14 8l-2.5 3M9.5 4l-3 8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
           </svg>
           <span class="nav-label">{{ item.label }}</span>
         </button>
-      </template>
+      </div>
     </div>
 
-    <div class="sidebar-divider"></div>
+    <div v-if="adminNavItems.length" class="sidebar-divider"></div>
 
-    <div class="sidebar-nav sidebar-nav-secondary">
-      <button
-        v-for="item in secondaryNavItems"
-        :key="item.key"
-        class="nav-item"
-        :class="{ active: activeKey === item.key }"
-        :title="item.label"
-        @click="navigateTo(item.path)"
-      >
-        <svg class="nav-icon" viewBox="0 0 16 16" fill="none">
-          <rect x="2" y="2" width="12" height="9" rx="1.5" stroke="currentColor" stroke-width="1.3" />
-          <path d="M5 14h6M8 11v3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
-        </svg>
-        <span class="nav-label">{{ item.label }}</span>
-      </button>
+    <div v-if="adminNavItems.length" class="sidebar-section">
+      <div class="nav-section-label">管理</div>
+      <div class="sidebar-nav sidebar-nav-secondary">
+        <button
+          v-for="item in adminNavItems"
+          :key="item.key"
+          class="nav-item"
+          :class="{ active: activeKey === item.key }"
+          :title="item.label"
+          @click="navigateTo(item.path)"
+        >
+          <svg class="nav-icon" viewBox="0 0 16 16" fill="none">
+            <rect x="2" y="2" width="12" height="9" rx="1.5" stroke="currentColor" stroke-width="1.3" />
+            <path d="M5 14h6M8 11v3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
+          </svg>
+          <span class="nav-label">{{ item.label }}</span>
+        </button>
+      </div>
     </div>
-
-    <div class="sidebar-divider"></div>
 
     <div class="sidebar-bottom">
       <el-dropdown trigger="click" @command="handleUserCommand" class="user-dropdown">
@@ -101,18 +126,27 @@ const userStore = useUserStore()
 const expanded = ref(true)
 
 const primaryNavItems = [
-  { key: 'home', label: '智能搭建', path: '/' },
-  { key: 'coding', label: '智能开发', path: '/coding' },
+  { key: 'home', label: 'AI Builder', path: '/' },
 ]
 
-const secondaryNavItems = [
-  { key: 'env', label: '环境管理', path: '/platform-envs' },
+const workspaceNavItems = [
+  { key: 'coding', label: '开发工作区', path: '/coding' },
 ]
+
+const adminNavItems = computed(() =>
+  userStore.isTenantAdmin
+    ? [
+        { key: 'env', label: '平台环境', path: '/platform-envs' },
+        { key: 'users', label: '组织用户', path: '/tenant-users' },
+      ]
+    : []
+)
 
 const activeKey = computed(() => {
   if (route.path === '/' || route.path.startsWith('/apps')) return 'home'
   if (route.path.startsWith('/coding')) return 'coding'
   if (route.path.startsWith('/platform-envs')) return 'env'
+  if (route.path.startsWith('/tenant-users')) return 'users'
   return 'home'
 })
 
@@ -245,6 +279,19 @@ async function handleUserCommand(command: string | number | object) {
   gap: 4px;
 }
 
+.sidebar-section {
+  display: flex;
+  flex-direction: column;
+}
+
+.nav-section-label {
+  padding: 10px 22px 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: rgba(99, 96, 136, 0.78);
+}
+
 .sidebar-nav-secondary {
   padding-top: 2px;
 }
@@ -354,6 +401,7 @@ async function handleUserCommand(command: string | number | object) {
 }
 
 .global-nav-rail.collapsed .logo-text,
+.global-nav-rail.collapsed .nav-section-label,
 .global-nav-rail.collapsed .nav-label,
 .global-nav-rail.collapsed .user-name {
   display: none;

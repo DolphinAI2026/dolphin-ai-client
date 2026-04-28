@@ -57,6 +57,13 @@ export interface WorkspaceInfo {
   user_id: number
   status: string
   files?: string[]
+  access_role?: 'owner' | 'admin' | 'member'
+  permissions?: {
+    edit?: boolean
+    delete?: boolean
+    publish?: boolean
+    upload_to_platform?: boolean
+  }
 }
 
 export interface UploadResult {
@@ -64,6 +71,17 @@ export interface UploadResult {
   content_type: string
   content?: string
   file_path: string
+}
+
+export function isIdeUnavailableError(error: any): boolean {
+  const status = error?.response?.status
+  const detail = String(
+    error?.response?.data?.detail ||
+    error?.response?.data?.message ||
+    error?.message ||
+    ''
+  )
+  return (status === 501 || status === 503) && detail.includes('Web IDE')
 }
 
 export const codingApi = {
@@ -127,9 +145,12 @@ export const codingApi = {
   },
 
   /** 获取工作区 Web IDE URL */
-  getIdeUrl(wsId: string, conversationId?: number | null) {
+  getIdeUrl(wsId: string, conversationId?: number | null, theme?: 'light' | 'dark') {
+    const params: Record<string, string | number> = {}
+    if (conversationId) params.conversation_id = conversationId
+    if (theme) params.theme = theme
     return request.get<any, { ide_url: string }>(`/coding/workspace/${wsId}/ide-url`, {
-      params: conversationId ? { conversation_id: conversationId } : undefined,
+      params: Object.keys(params).length ? params : undefined,
     })
   },
 

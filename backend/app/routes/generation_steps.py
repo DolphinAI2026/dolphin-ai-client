@@ -208,6 +208,20 @@ def _field_code_from_model_field(model_field: str) -> str:
     return raw.split(".")[-1] if "." in raw else raw
 
 
+def _first_form_value(form: dict, *keys: str, default: str = "") -> str:
+    for key in keys:
+        value = form.get(key)
+        if value in (None, ""):
+            continue
+        if isinstance(value, str):
+            value = value.strip()
+            if value:
+                return value
+            continue
+        return str(value)
+    return default
+
+
 def _build_model_maps(models: list[dict]) -> tuple[dict[str, dict], dict[str, dict]]:
     models_by_code: dict[str, dict] = {}
     fields_by_model: dict[str, dict] = {}
@@ -241,8 +255,12 @@ def _form_identity_values(form: dict) -> set[str]:
         str(form.get("code") or "").strip(),
         str(form.get("name") or "").strip(),
         str(form.get("formName") or "").strip(),
+        str(form.get("form_name") or "").strip(),
         str(form.get("modelCode") or "").strip(),
         str(form.get("model_code") or "").strip(),
+        str(form.get("mainModelCode") or "").strip(),
+        str(form.get("main_model_code") or "").strip(),
+        str(form.get("main_model") or "").strip(),
     }
     return {value for value in values if value}
 
@@ -399,7 +417,14 @@ def _build_steps(config: dict, state: dict, apaas_app_id: str = None) -> list[St
     for idx in _ordered_form_indices(forms):
         form = forms[idx]
         key = f"create_form:{idx}"
-        form_model_code = str(form.get("modelCode", form.get("model_code", ""))).strip()
+        form_model_code = _first_form_value(
+            form,
+            "modelCode",
+            "model_code",
+            "mainModelCode",
+            "main_model_code",
+            "main_model",
+        )
         model_idx = next((i for i, m in enumerate(models) if str(m.get("code", "")).strip() == form_model_code), None)
         model_key = f"create_model:{model_idx}" if model_idx is not None else None
         form_dep_keys = [f"create_form:{dep_idx}" for dep_idx in sorted(form_deps.get(idx, set()))]
@@ -410,7 +435,8 @@ def _build_steps(config: dict, state: dict, apaas_app_id: str = None) -> list[St
             and all(dep_key in completed for dep_key in form_dep_keys)
         )
         steps.append(StepStatus(
-            key=key, label=f"创建表单: {form.get('name', form.get('formName', f'表单{idx}'))}",
+            key=key,
+            label=f"创建表单: {_first_form_value(form, 'formName', 'form_name', 'name', default=f'表单{idx}')}",
             status="completed" if key in completed else ("error" if key in errors else "pending"),
             deps_met=deps_ok,
             model_index=model_idx if model_idx is not None else idx,
@@ -1037,7 +1063,14 @@ async def _execute_step_impl(
             "formId": result.get("formId", ""),
             "formCode": result.get("formCode", ""),
             "formName": result.get("formName", ""),
-            "modelCode": form_def.get("modelCode") or form_def.get("model_code") or "",
+            "modelCode": _first_form_value(
+                form_def,
+                "modelCode",
+                "model_code",
+                "mainModelCode",
+                "main_model_code",
+                "main_model",
+            ),
             "menuId": result.get("menuId", ""),
         })
         return result

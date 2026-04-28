@@ -211,7 +211,39 @@
     </section>
 
     <section class="doc-section">
-      <h2 class="doc-section-title">六、权限定义</h2>
+      <h2 class="doc-section-title">六、流程配置</h2>
+      <div v-if="!flows.length" class="doc-empty-block">暂无流程配置</div>
+      <div v-for="flow in flows" :key="flow.flow_code || flow.flow_name" class="doc-subsection">
+        <h3 class="doc-subsection-title">{{ flow.flow_name || '未命名流程' }}（{{ flow.flow_code || '-' }}）</h3>
+        <p v-if="flow.description" class="doc-sub-meta">{{ flow.description }}</p>
+        <div class="doc-table-wrap">
+          <table class="doc-table">
+            <thead>
+              <tr>
+                <th>步骤</th>
+                <th>动作</th>
+                <th>角色</th>
+                <th>状态/结果</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-if="!(flow.steps || []).length">
+                <td colspan="4" class="empty-cell">暂无流程步骤</td>
+              </tr>
+              <tr v-for="step in (flow.steps || [])" :key="`${flow.flow_code || flow.flow_name}-${step.step}-${step.action}`">
+                <td>{{ step.step || '-' }}</td>
+                <td>{{ step.action || '-' }}</td>
+                <td>{{ step.role || '-' }}</td>
+                <td>{{ step.status || '-' }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section">
+      <h2 class="doc-section-title">七、权限定义</h2>
       <div v-if="!roleTableMapping.length" class="doc-empty-block">暂无权限定义</div>
       <div v-for="mapping in roleTableMapping" :key="mapping.table_code || mapping.table_name" class="doc-subsection">
         <h3 class="doc-subsection-title">{{ mapping.table_name || mapping.table_code || '未命名对象' }}</h3>
@@ -248,6 +280,32 @@
             </tbody>
           </table>
         </div>
+      </div>
+    </section>
+
+    <section class="doc-section">
+      <h2 class="doc-section-title">八、开发边界</h2>
+      <div class="doc-table-wrap">
+        <table class="doc-table">
+          <thead>
+            <tr>
+              <th>类型</th>
+              <th>名称</th>
+              <th>触发条件</th>
+              <th>实现范围</th>
+              <th>验收口径</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="item in customDevelopment" :key="`${item.type}-${item.name}`">
+              <td>{{ item.type }}</td>
+              <td>{{ item.name }}</td>
+              <td>{{ item.trigger }}</td>
+              <td>{{ item.scope }}</td>
+              <td>{{ item.acceptance }}</td>
+            </tr>
+          </tbody>
+        </table>
       </div>
     </section>
   </div>
@@ -622,6 +680,50 @@ const roleTableMapping = computed(() => {
   }))
 })
 
+const flows = computed(() => {
+  const source = props.docResult?.flows || props.docResult?.workflows || []
+  return source.map((flow: any, idx: number) => ({
+    flow_code: flow.flow_code || flow.code || flow.workflowCode || `flow_${idx + 1}`,
+    flow_name: flow.flow_name || flow.name || flow.workflowName || `流程${idx + 1}`,
+    description: flow.description || flow.remark || '',
+    steps: (flow.steps || flow.nodes || flow.actions || []).map((step: any, stepIdx: number) => ({
+      step: step.step || step.order || stepIdx + 1,
+      action: step.action || step.name || step.label || '',
+      role: step.role || step.assignee || '',
+      status: step.status || step.result || '',
+    })),
+  }))
+})
+
+const customDevelopment = computed(() => {
+  const source = props.docResult?.custom_development
+    || props.docResult?.customDevelopment
+    || props.docResult?.customDevelopments
+    || props.docResult?.custom_dev
+    || props.docResult?.customDev
+  const rawItems = Array.isArray(source)
+    ? source
+    : (source?.items || source?.tasks || source?.features || [])
+  const items = Array.isArray(rawItems)
+    ? rawItems.map((item: any, index: number) => ({
+        type: String(item.type || item.scene || item.category || '开发扩展').trim(),
+        name: String(item.name || item.item_name || item.title || item.module || `开发项 ${index + 1}`).trim(),
+        trigger: String(item.trigger || item.reason || item.condition || item.description || '配置能力无法完整覆盖').trim(),
+        scope: String(item.scope || item.implementation || item.deliverable || item.deliverables || '在 IDE 中实现并回写项目上下文').trim(),
+        acceptance: String(item.acceptance || item.acceptance_criteria || item.test || '完成源码、联调和可演示验证').trim(),
+      }))
+      .filter((item: any) => item.name)
+    : []
+
+  return items.length ? items : [{
+    type: '配置优先',
+    name: '暂无强制开发扩展',
+    trigger: '当前需求可先由模型、表单、权限和基础流程配置覆盖',
+    scope: '如后续出现复杂交互、外部接口、算法规则或报表看板，再进入 IDE 补充',
+    acceptance: '低代码配置可完成主流程演示',
+  }]
+})
+
 function formatBool(value: any) {
   return value ? '是' : '否'
 }
@@ -796,5 +898,52 @@ function displayComponentType(component: any) {
   .doc-table th {
     font-size: 12px;
   }
+}
+</style>
+
+<style>
+html[data-theme="dark"] .structured-doc-host .structured-doc {
+  color: rgba(226, 232, 240, 0.88);
+}
+
+html[data-theme="dark"] .structured-doc-host .doc-section {
+  border-bottom-color: rgba(148, 163, 184, 0.16);
+}
+
+html[data-theme="dark"] .structured-doc-host .doc-app-name,
+html[data-theme="dark"] .structured-doc-host .doc-section-title,
+html[data-theme="dark"] .structured-doc-host .doc-subsection-title {
+  color: rgba(248, 250, 252, 0.94);
+}
+
+html[data-theme="dark"] .structured-doc-host .doc-app-desc,
+html[data-theme="dark"] .structured-doc-host .doc-sub-meta,
+html[data-theme="dark"] .structured-doc-host .empty-cell,
+html[data-theme="dark"] .structured-doc-host .doc-empty-block {
+  color: rgba(148, 163, 184, 0.72);
+}
+
+html[data-theme="dark"] .structured-doc-host .doc-table-wrap {
+  border-color: rgba(148, 163, 184, 0.18);
+  background: #0f131a;
+}
+
+html[data-theme="dark"] .structured-doc-host .doc-table th,
+html[data-theme="dark"] .structured-doc-host .doc-table td {
+  border-color: rgba(148, 163, 184, 0.14);
+}
+
+html[data-theme="dark"] .structured-doc-host .doc-table th {
+  background: #151922;
+  color: #b6c2ff;
+}
+
+html[data-theme="dark"] .structured-doc-host .doc-table td {
+  background: #0f131a;
+  color: rgba(226, 232, 240, 0.86);
+}
+
+html[data-theme="dark"] .structured-doc-host .doc-table tr:nth-child(even) td {
+  background: #111722;
 }
 </style>

@@ -10,7 +10,7 @@ import sys
 # ── 0. 必须第一个运行：强制 SQLite，否则 app.database 引入 MySQL 引擎 ──────
 os.environ.setdefault("LLM_API_KEY", "test-key")
 os.environ.setdefault("JWT_SECRET_KEY", "test-secret")
-os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///file::memory:?cache=shared&uri=true"
+os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
 
 # ── 1. 让所有测试都能 import app.* ───────────────────────────────────────────
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))

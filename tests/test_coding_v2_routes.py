@@ -17,7 +17,7 @@ import sys
 os.environ.setdefault("LLM_API_KEY", "test-key")
 os.environ.setdefault("JWT_SECRET_KEY", "test-secret")
 # 强制 in-memory SQLite；必须在 import app 之前设置，且要 override .env 里的 MySQL
-os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///file::memory:?cache=shared&uri=true"
+os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
 
@@ -25,7 +25,7 @@ from unittest import mock  # noqa: E402
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app.database import AsyncSessionLocal, Base, engine  # noqa: E402
+from app.database import AsyncSessionLocal, init_db  # noqa: E402
 from app.deps import AuthContext, get_auth_context  # noqa: E402
 from app.main import app  # noqa: E402
 import app.models as models  # noqa: E402
@@ -52,8 +52,7 @@ def _run(coro):
 
 
 async def _ensure_tables():
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    await init_db()
 
 
 _run(_ensure_tables())

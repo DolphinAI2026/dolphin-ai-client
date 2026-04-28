@@ -3,7 +3,7 @@
  *
  * 与老 api/coding.ts 区别：
  * - 新流水线（/api/coding/v2/message）+ 结构化 Spec + SSE 订阅
- * - 所有方法对应后端 coding_v2 / spec / sse 路由
+ * - 所有方法对应后端 coding_v2 / coding_v2_spec / sse 路由
  */
 import request from '@/utils/request'
 import { API_PREFIX } from '@/utils/request'
@@ -137,15 +137,15 @@ export function startCodingFromSpec(specId: string): Promise<StartCodingResponse
 }
 
 // ══════════════════════════════════════════════════════════════
-// /api/spec/*
+// /api/coding/v2/specs/*
 // ══════════════════════════════════════════════════════════════
 
 export function getSpec(specId: string): Promise<SpecDetail> {
-  return request.get(`/spec/${encodeURIComponent(specId)}`)
+  return request.get(`/coding/v2/specs/${encodeURIComponent(specId)}`)
 }
 
 export function listSpecVersions(specId: string): Promise<SpecSummary[]> {
-  return request.get(`/spec/${encodeURIComponent(specId)}/versions`)
+  return request.get(`/coding/v2/specs/${encodeURIComponent(specId)}/versions`)
 }
 
 export interface ConfirmResponse {
@@ -156,7 +156,7 @@ export interface ConfirmResponse {
 }
 
 export function confirmSpec(specId: string): Promise<ConfirmResponse> {
-  return request.post(`/spec/${encodeURIComponent(specId)}/confirm`)
+  return request.post(`/coding/v2/specs/${encodeURIComponent(specId)}/confirm`)
 }
 
 export interface RefineResponse {
@@ -165,7 +165,7 @@ export interface RefineResponse {
 }
 
 export function refineSpec(specId: string, instruction?: string): Promise<RefineResponse> {
-  return request.post(`/spec/${encodeURIComponent(specId)}/refine`, {
+  return request.post(`/coding/v2/specs/${encodeURIComponent(specId)}/refine`, {
     instruction: instruction ?? null,
   })
 }
@@ -178,7 +178,7 @@ export interface RollbackResponse {
 }
 
 export function rollbackSpec(specId: string): Promise<RollbackResponse> {
-  return request.post(`/spec/${encodeURIComponent(specId)}/rollback`)
+  return request.post(`/coding/v2/specs/${encodeURIComponent(specId)}/rollback`)
 }
 
 // ══════════════════════════════════════════════════════════════

@@ -9,8 +9,10 @@
  */
 
 import { ref, nextTick } from 'vue'
+import { useThemeStore } from '@/stores/theme'
 
 export function useIdeManager() {
+  const themeStore = useThemeStore()
   const ideUrl = ref<string | null>(null)
   const ideLoaded = ref(false)
   const ideLoadError = ref('')
@@ -30,8 +32,20 @@ export function useIdeManager() {
     return base + (base.includes('?') ? '&' : '?') + '_t=' + Date.now()
   }
 
+  function appendThemeParams(base: string): string {
+    try {
+      const url = new URL(base, window.location.href)
+      url.searchParams.set('vibe_ui_theme', themeStore.mode)
+      url.searchParams.set('vscode_theme', themeStore.isDark ? 'Default Dark Modern' : 'Default Light Modern')
+      return url.toString()
+    } catch {
+      const joiner = base.includes('?') ? '&' : '?'
+      return `${base}${joiner}vibe_ui_theme=${themeStore.mode}`
+    }
+  }
+
   async function setIdeUrl(url: string) {
-    const baseUrl = stripCacheParam(url)
+    const baseUrl = appendThemeParams(stripCacheParam(url))
     const currentBase = stripCacheParam(ideUrl.value || '')
 
     if (currentBase && currentBase === baseUrl) {

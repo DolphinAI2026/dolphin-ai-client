@@ -6,7 +6,9 @@
   - _section_dicts
   - _section_models
   - _section_forms
+  - _section_workflows
   - _section_permissions
+  - _section_custom_development
 
 render(app_name, app_code, data) 是外部唯一入口，保持与原
 _render_design_doc_markdown 同签名同输出（snapshot 测试覆盖）。
@@ -260,7 +262,7 @@ def _section_permissions(
     data_scope_label: Callable,
 ) -> list[str]:
     lines = [
-        "## 六、权限定义",
+        "## 七、权限定义",
         "",
         "| 表单名称 | 角色编码 | 可暂存 | 可新增 | 可导入 | 可查看 | 可编辑 | 可删除 | 可导出 | 数据范围 |",
         "|---|---|---|---|---|---|---|---|---|---|",
@@ -296,6 +298,98 @@ def _section_permissions(
                 )
     else:
         lines.append("|  |  | 否 | 否 | 否 | 否 | 否 | 否 | 否 |  |")
+    lines.extend(["", "---", ""])
+    return lines
+
+
+def _section_workflows(workflows: list[dict]) -> list[str]:
+    lines = ["## 六、流程配置", ""]
+    if workflows:
+        for idx, flow in enumerate(workflows, start=1):
+            flow_name = flow.get("name") or flow.get("flow_name") or flow.get("workflowName") or f"流程{idx}"
+            flow_code = flow.get("code") or flow.get("flow_code") or flow.get("workflowCode") or ""
+            flow_desc = flow.get("description") or flow.get("remark") or ""
+            lines.extend([
+                f"### {flow_name}（{flow_code or '-'}）",
+                "",
+            ])
+            if flow_desc:
+                lines.extend([str(flow_desc), ""])
+            lines.extend([
+                "| 步骤 | 动作 | 角色 | 状态/结果 |",
+                "|---|---|---|---|",
+            ])
+            steps = flow.get("steps") or flow.get("nodes") or flow.get("actions") or []
+            if steps:
+                for step_idx, step in enumerate(steps, start=1):
+                    lines.append(
+                        f"| {step.get('step') or step.get('order') or step_idx} | "
+                        f"{step.get('action') or step.get('name') or step.get('label') or ''} | "
+                        f"{step.get('role') or step.get('assignee') or ''} | "
+                        f"{step.get('status') or step.get('result') or ''} |"
+                    )
+            else:
+                lines.append("|  |  |  |  |")
+            lines.append("")
+    else:
+        lines.extend([
+            "暂无流程配置；默认先按表单的基础新增、查看、编辑和权限控制闭环。",
+            "",
+        ])
+    lines.extend(["---", ""])
+    return lines
+
+
+def _normalize_custom_development_items(data: dict) -> list[dict[str, str]]:
+    source = (
+        data.get("custom_development")
+        or data.get("customDevelopment")
+        or data.get("custom_dev")
+        or []
+    )
+    if isinstance(source, dict):
+        source = source.get("items") or source.get("tasks") or source.get("features") or []
+    if not isinstance(source, list):
+        source = []
+
+    items: list[dict[str, str]] = []
+    for idx, item in enumerate(source):
+        if not isinstance(item, dict):
+            continue
+        deliverables = item.get("deliverables") or item.get("deliverable") or ""
+        if isinstance(deliverables, list):
+            deliverables_text = "、".join(str(value) for value in deliverables if str(value).strip())
+        else:
+            deliverables_text = str(deliverables or "").strip()
+        items.append({
+            "type": str(item.get("type") or item.get("scene") or item.get("category") or "自开发扩展").strip(),
+            "name": str(item.get("name") or item.get("item_name") or item.get("title") or f"自开发项 {idx + 1}").strip(),
+            "trigger": str(item.get("trigger") or item.get("reason") or item.get("condition") or item.get("description") or "配置能力无法完整覆盖").strip(),
+            "scope": str(item.get("scope") or item.get("implementation") or deliverables_text or "在 IDE 中实现并回写项目上下文").strip(),
+            "acceptance": str(item.get("acceptance") or item.get("acceptance_criteria") or item.get("test") or "完成源码、联调和可演示验证").strip(),
+        })
+
+    return items or [{
+        "type": "配置优先",
+        "name": "暂无强制自开发项",
+        "trigger": "当前需求可先由模型、表单、权限和基础流程配置覆盖",
+        "scope": "如后续出现复杂交互、外部接口、算法规则或报表看板，再进入 IDE 补充",
+        "acceptance": "低代码配置可完成主流程演示",
+    }]
+
+
+def _section_custom_development(data: dict) -> list[str]:
+    lines = [
+        "## 八、自开发定义",
+        "",
+        "| 类型 | 名称 | 触发条件 | 实现范围 | 验收口径 |",
+        "|---|---|---|---|---|",
+    ]
+    for item in _normalize_custom_development_items(data):
+        lines.append(
+            f"| {item['type']} | {item['name']} | {item['trigger']} | {item['scope']} | {item['acceptance']} |"
+        )
+    lines.append("")
     return lines
 
 
@@ -321,6 +415,7 @@ def render(
     roles = data.get("roles", []) or []
     dicts = data.get("dicts", []) or []
     models = data.get("models", []) or []
+    workflows = data.get("workflows") or data.get("flows") or []
     permissions = data.get("permissions", []) or []
     models_by_code, fields_by_model = build_model_maps(models)
 
@@ -342,10 +437,12 @@ def render(
         is_sub_table_component=is_sub_table_component,
     )
     lines.extend(form_lines)
+    lines.extend(_section_workflows(workflows))
     lines.extend(_section_permissions(
         permissions,
         form_name_by_code,
         data_scope_label=data_scope_label,
     ))
+    lines.extend(_section_custom_development(data))
 
     return "\n".join(lines).strip() + "\n"

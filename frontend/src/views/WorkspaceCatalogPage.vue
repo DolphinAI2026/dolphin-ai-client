@@ -604,4 +604,102 @@ onMounted(async () => {
     font-size: 14px;
   }
 }
+
+</style>
+
+<style>
+html[data-theme="dark"] .catalog-main {
+  background: #090b10 !important;
+  color: rgba(248, 250, 252, 0.94) !important;
+}
+
+html[data-theme="dark"] .catalog-main .filter-tab {
+  color: rgba(203, 213, 225, 0.66) !important;
+}
+
+html[data-theme="dark"] .catalog-main .filter-tab:hover {
+  background: #151922 !important;
+  color: rgba(248, 250, 252, 0.90) !important;
+}
+
+html[data-theme="dark"] .catalog-main .filter-tab.active {
+  background: rgba(124, 140, 255, 0.14) !important;
+  color: #b6c2ff !important;
+}
+
+html[data-theme="dark"] .catalog-main .tab-count,
+html[data-theme="dark"] .catalog-main .source-badge,
+html[data-theme="dark"] .catalog-main .card-code {
+  background: rgba(148, 163, 184, 0.10) !important;
+  border-color: rgba(148, 163, 184, 0.14) !important;
+  color: rgba(203, 213, 225, 0.72) !important;
+}
+
+html[data-theme="dark"] .catalog-main .view-toggle {
+  background: #111318 !important;
+  border: 1px solid rgba(148, 163, 184, 0.14) !important;
+}
+
+html[data-theme="dark"] .catalog-main .toggle-btn {
+  color: rgba(203, 213, 225, 0.62) !important;
+}
+
+html[data-theme="dark"] .catalog-main .toggle-btn.active {
+  background: rgba(124, 140, 255, 0.16) !important;
+  color: #b6c2ff !important;
+}
+
+html[data-theme="dark"] .catalog-main .grid-card,
+html[data-theme="dark"] .catalog-main .list-card {
+  background: #111318 !important;
+  border-color: rgba(148, 163, 184, 0.14) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme="dark"] .catalog-main .grid-card:hover,
+html[data-theme="dark"] .catalog-main .list-card:hover {
+  background: #151922 !important;
+  border-color: rgba(124, 140, 255, 0.26) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme="dark"] .catalog-main .grid-card-name,
+html[data-theme="dark"] .catalog-main .card-name-row h3 {
+  color: rgba(248, 250, 252, 0.94) !important;
+}
+
+html[data-theme="dark"] .catalog-main .grid-card-meta,
+html[data-theme="dark"] .catalog-main .card-meta,
+html[data-theme="dark"] .catalog-main .grid-card-stats,
+html[data-theme="dark"] .catalog-main .card-stats,
+html[data-theme="dark"] .catalog-main .empty-state {
+  color: rgba(203, 213, 225, 0.64) !important;
+}
+
+html[data-theme="dark"] .catalog-main .grid-card-footer {
+  border-top-color: rgba(148, 163, 184, 0.14) !important;
+}
+
+html[data-theme="dark"] .catalog-main .card-status {
+  background: rgba(52, 211, 153, 0.12) !important;
+  color: #67e8a9 !important;
+}
+
+html[data-theme="dark"] .catalog-main .action-btn {
+  background: #151922 !important;
+  border-color: rgba(148, 163, 184, 0.16) !important;
+  color: rgba(203, 213, 225, 0.70) !important;
+}
+
+html[data-theme="dark"] .catalog-main .action-btn.primary {
+  background: rgba(124, 140, 255, 0.14) !important;
+  border-color: rgba(124, 140, 255, 0.30) !important;
+  color: #b6c2ff !important;
+}
+
+html[data-theme="dark"] .catalog-main .action-btn:hover {
+  background: #1a1d24 !important;
+  border-color: rgba(124, 140, 255, 0.28) !important;
+  color: rgba(248, 250, 252, 0.92) !important;
+}
 </style>

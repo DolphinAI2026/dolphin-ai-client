@@ -24,7 +24,7 @@ from sqlalchemy import select
 
 from app.crypto import decrypt_password
 from app.database import get_db
-from app.models import User, Conversation, Message, Project, LLMConfig
+from app.models import User, Conversation, Message, Project, ProjectMember, LLMConfig
 from app.deps import get_auth_context, AuthContext
 from app.coding.scenes import SceneType, get_scene, get_all_scenes, get_scenes_by_category
 from app.coding.generator import CodingGenerator
@@ -35,6 +35,7 @@ from app.apaas_client import APaaSClient
 from app.config import settings
 from app.coding.verifier import ComponentVerifier
 from app.routes.llm_configs import list_llm_configs_for_purpose
+from app.project_access import project_role_at_least, require_project_access
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/coding", tags=["coding"])
@@ -58,6 +59,14 @@ IDE_EXCLUDED_GLOBS = (
 CODING_LLM_CONFIG_PREFIX = "llmcfg:"
 
 
+def _normalize_ide_theme(theme: Optional[str]) -> str:
+    return "light" if theme == "light" else "dark"
+
+
+def _ide_color_theme(theme: Optional[str]) -> str:
+    return "Default Light Modern" if _normalize_ide_theme(theme) == "light" else "Default Dark Modern"
+
+
 def _event_stream_response(
     generator: AsyncIterator[str] | AsyncIterator[dict[str, Any]],
     *,
@@ -70,7 +79,7 @@ def _event_stream_response(
     return EventSourceResponse(generator, **kwargs)
 
 
-def _ensure_vibe_workspace_file(ws_path: Path) -> Path:
+def _ensure_vibe_workspace_file(ws_path: Path, ide_theme: Optional[str] = None) -> Path:
     """为 Web IDE 生成轻量 workspace，避免直接打开庞大目录造成白屏或卡顿。"""
     workspace_file = ws_path / ".vibe-ide.code-workspace"
     workspace_payload = {
@@ -81,6 +90,7 @@ def _ensure_vibe_workspace_file(ws_path: Path) -> Path:
             "files.watcherExclude": {pattern: True for pattern in IDE_EXCLUDED_GLOBS},
             "explorer.autoReveal": False,
             "git.autoRepositoryDetection": "openEditors",
+            "workbench.colorTheme": _ide_color_theme(ide_theme),
         },
     }
     serialized = json.dumps(workspace_payload, ensure_ascii=False, indent=2)
@@ -275,6 +285,64 @@ def _verify_ide_access_token(token: str, ws_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=403, detail="IDE 访问令牌与当前工作区不匹配")
 
     return payload
+
+
+def _inject_online_workspace_context(ws_id: str, payload: dict[str, Any]) -> None:
+    """Server-side safety net for online-coding IDE chats.
+
+    The VS Code web extension normally injects WORKSPACE_CONTEXT, but code-server
+    can keep a stale extension host alive across reloads. For online workspaces,
+    inject the same repo context at the backend proxy layer so the model never
+    asks the user to paste files that are already available on disk.
+    """
+    messages = payload.get("messages")
+    if not isinstance(messages, list):
+        return
+
+    for message in messages:
+        if isinstance(message, dict) and "WORKSPACE_CONTEXT" in str(message.get("content") or ""):
+            return
+
+    prompt = ""
+    for message in reversed(messages):
+        if isinstance(message, dict) and message.get("role") == "user":
+            prompt = str(message.get("content") or "")
+            break
+
+    try:
+        from app.routes.online_coding import (
+            _build_ide_workspace_context,
+            _find_workspace_dir,
+            _repo_path,
+        )
+
+        ws_dir, _ = _find_workspace_dir(ws_id)
+        repo_dir = _repo_path(ws_dir)
+        context_payload = _build_ide_workspace_context(repo_dir, prompt)
+        workspace_context = str(context_payload.get("context") or "")
+        read_files = context_payload.get("read_files") or []
+        if not workspace_context.strip():
+            return
+    except Exception as exc:
+        logger.warning("Failed to inject online workspace context for %s: %s", ws_id, exc)
+        return
+
+    context_message = {
+        "role": "system",
+        "content": (
+            "以下是当前 Vibe Coding 在线工作区的真实代码上下文，"
+            "请直接基于这些文件分析，不要再要求用户手动粘贴目录或代码。\n\n"
+            f"WORKSPACE_CONTEXT:\n{workspace_context[:60000]}"
+        ),
+    }
+
+    insert_at = 1 if messages and isinstance(messages[0], dict) and messages[0].get("role") == "system" else 0
+    messages.insert(insert_at, context_message)
+    logger.info(
+        "Injected online workspace context for %s: %s",
+        ws_id,
+        ", ".join(str(item) for item in read_files[:8]),
+    )
 
 
 def _code_server_chat_images_dir() -> Path:
@@ -871,10 +939,57 @@ async def get_coding_messages(
 workspace_mgr = WorkspaceManager()
 
 
+def _workspace_permissions(access_role: str) -> dict[str, bool]:
+    return {
+        "edit": project_role_at_least(access_role, "member"),
+        "delete": project_role_at_least(access_role, "admin"),
+        "publish": project_role_at_least(access_role, "admin"),
+        "upload_to_platform": project_role_at_least(access_role, "admin"),
+    }
+
+
+def _decorate_workspace_access(meta: dict[str, Any], access_role: str) -> dict[str, Any]:
+    return {
+        **meta,
+        "access_role": access_role,
+        "permissions": _workspace_permissions(access_role),
+    }
+
+
+async def _ensure_workspace_access(
+    ws_id: str,
+    ctx: AuthContext,
+    db: AsyncSession,
+    *,
+    minimum_project_role: str = "member",
+) -> dict[str, Any]:
+    try:
+        meta = workspace_mgr.get_workspace_info(ws_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="工作区不存在")
+
+    project_id = meta.get("project_id")
+    if project_id:
+        access = await require_project_access(
+            db,
+            project_id=int(project_id),
+            user_id=ctx.user.id,
+            tenant_id=ctx.tenant_id,
+            minimum_role=minimum_project_role,
+        )
+        return _decorate_workspace_access(meta, access.role)
+
+    if meta.get("user_id") != ctx.user.id:
+        raise HTTPException(status_code=403, detail="无权访问该工作区")
+
+    return _decorate_workspace_access(meta, "owner")
+
+
 @router.post("/workspace/create")
 async def create_workspace(
     req: CreateWorkspaceRequest,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """创建新工作区（脚手架初始化）"""
     try:
@@ -885,6 +1000,17 @@ async def create_workspace(
             detail=f"不支持的项目类型: {req.project_type}，可选: {[t.value for t in ProjectType]}"
         )
 
+    access_role = "owner"
+    if req.project_id:
+        project_access = await require_project_access(
+            db,
+            project_id=req.project_id,
+            user_id=ctx.user.id,
+            tenant_id=ctx.tenant_id,
+            minimum_role="member",
+        )
+        access_role = project_access.role
+
     meta = workspace_mgr.create_workspace(
         project_type=project_type,
         project_name=req.project_name,
@@ -893,15 +1019,17 @@ async def create_workspace(
         project_id=req.project_id,
     )
     meta["files"] = workspace_mgr.list_files(meta["id"])
-    return meta
+    return _decorate_workspace_access(meta, access_role)
 
 
 @router.post("/workspace/{ws_id}/install")
 async def install_workspace_deps(
     ws_id: str,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """安装工作区依赖（npm install）"""
+    await _ensure_workspace_access(ws_id, ctx, db, minimum_project_role="member")
     try:
         result = await workspace_mgr.install_deps(ws_id)
         return result
@@ -913,8 +1041,10 @@ async def install_workspace_deps(
 async def build_workspace(
     ws_id: str,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """构建工作区项目"""
+    await _ensure_workspace_access(ws_id, ctx, db, minimum_project_role="member")
     try:
         result = await workspace_mgr.build_project(ws_id)
         return result
@@ -926,6 +1056,7 @@ async def build_workspace(
 async def download_workspace_zip(
     ws_id: str,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
     type: str = Query(default="dist", description="下载类型: dist=构建产物, src=源代码"),
 ):
     """下载工作区打包文件（zip）"""
@@ -933,10 +1064,7 @@ async def download_workspace_zip(
     import io
     from fastapi.responses import StreamingResponse
 
-    try:
-        info = workspace_mgr.get_workspace_info(ws_id)
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="工作区不存在")
+    info = await _ensure_workspace_access(ws_id, ctx, db, minimum_project_role="member")
 
     ws_path = workspace_mgr.get_workspace_path(ws_id)
     project_name = info.get("project_name", ws_id)
@@ -1003,12 +1131,10 @@ async def download_workspace_zip(
 async def get_workspace_info(
     ws_id: str,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """获取工作区信息"""
-    try:
-        return workspace_mgr.get_workspace_info(ws_id)
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="工作区不存在")
+    return await _ensure_workspace_access(ws_id, ctx, db, minimum_project_role="member")
 
 
 @router.get("/workspace/{ws_id}/ide-url")
@@ -1017,12 +1143,14 @@ async def get_workspace_ide_url(
     request: Request,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     conversation_id: Optional[int] = Query(default=None, description="可选，会话ID，用于把上下文带入 Vibe IDE"),
+    theme: Optional[str] = Query(default=None, description="light/dark，用于同步 aPaaS Builder 与 Web IDE 主题"),
     db: Annotated[AsyncSession, Depends(get_db)] = None,
 ):
     """获取工作区的 Web IDE (code-server) URL"""
     base_url = settings.code_server_base_url
     if not base_url:
         raise HTTPException(status_code=501, detail="Web IDE 未配置，请在 .env 中设置 CODE_SERVER_BASE_URL")
+    workspace_meta = await _ensure_workspace_access(ws_id, ctx, db, minimum_project_role="member")
     ws_path = workspace_mgr.get_workspace_path(ws_id)
     if not ws_path.exists():
         raise HTTPException(status_code=404, detail="工作区不存在")
@@ -1030,30 +1158,26 @@ async def get_workspace_ide_url(
     effective_conversation_id = conversation_id
     effective_conversation: Optional[Conversation] = None
     if db is not None:
+        is_project_workspace = bool(workspace_meta.get("project_id"))
         if effective_conversation_id is None:
-            stmt = (
-                select(Conversation)
-                .where(
-                    Conversation.user_id == ctx.user.id,
-                    Conversation.tenant_id == ctx.tenant_id,
-                    Conversation.workspace_id == ws_id,
-                    Conversation.agent_type == "coding",
-                )
-                .order_by(Conversation.updated_at.desc())
-                .limit(1)
-            )
+            conditions = [
+                Conversation.tenant_id == ctx.tenant_id,
+                Conversation.workspace_id == ws_id,
+                Conversation.agent_type == "coding",
+            ]
+            if not is_project_workspace:
+                conditions.append(Conversation.user_id == ctx.user.id)
+            stmt = select(Conversation).where(*conditions).order_by(Conversation.updated_at.desc()).limit(1)
         else:
-            stmt = (
-                select(Conversation)
-                .where(
-                    Conversation.id == effective_conversation_id,
-                    Conversation.user_id == ctx.user.id,
-                    Conversation.tenant_id == ctx.tenant_id,
-                    Conversation.workspace_id == ws_id,
-                    Conversation.agent_type == "coding",
-                )
-                .limit(1)
-            )
+            conditions = [
+                Conversation.id == effective_conversation_id,
+                Conversation.tenant_id == ctx.tenant_id,
+                Conversation.workspace_id == ws_id,
+                Conversation.agent_type == "coding",
+            ]
+            if not is_project_workspace:
+                conditions.append(Conversation.user_id == ctx.user.id)
+            stmt = select(Conversation).where(*conditions).limit(1)
         result = await db.execute(stmt)
         effective_conversation = result.scalar_one_or_none()
         if effective_conversation:
@@ -1061,7 +1185,8 @@ async def get_workspace_ide_url(
         else:
             effective_conversation_id = None
 
-    _ensure_vibe_workspace_file(ws_path)  # 仍然生成 workspace 文件（保留 exclude 配置）
+    normalized_theme = _normalize_ide_theme(theme)
+    _ensure_vibe_workspace_file(ws_path, normalized_theme)  # 仍然生成 workspace 文件（保留 exclude 配置）
     _ensure_cursor_rules(ws_path)  # 复制 .cursor/rules 开发规范到工作区
     ide_token = _create_ide_access_token(ctx, ws_id)
     api_base = _build_ide_proxy_api_base(request, ws_id)
@@ -1091,6 +1216,7 @@ async def get_workspace_ide_url(
         "vibe_harness_api_base": harness_api_base,
         "vibe_ide_token": ide_token,
         "vibe_model": ide_model,
+        "vibe_ui_theme": normalized_theme,
     }
     if effective_conversation_id and db is not None:
         history = await _get_conversation_history(db, effective_conversation_id)
@@ -1316,6 +1442,9 @@ async def ide_chat_completions_proxy(
     except Exception:
         raise HTTPException(status_code=400, detail="无效的请求体")
 
+    if ws_id.startswith("oc_"):
+        _inject_online_workspace_context(ws_id, payload)
+
     tenant_config = None
     if db is not None:
         tenant_config = await _resolve_tenant_coding_model_config(
@@ -1323,12 +1452,27 @@ async def ide_chat_completions_proxy(
             token_payload.get("tid"),
             payload.get("model", ""),
         )
+        if tenant_config and "gpt-5.5" in (tenant_config.model or "").lower():
+            fallback_config = await _resolve_tenant_coding_model_config(
+                db,
+                token_payload.get("tid"),
+                "gpt-5.4",
+            )
+            if fallback_config and fallback_config.id != tenant_config.id:
+                logger.warning(
+                    "IDE model %s is not available in current gateway, fallback to %s",
+                    tenant_config.model,
+                    fallback_config.model,
+                )
+                tenant_config = fallback_config
 
     if tenant_config:
         payload["model"] = tenant_config.model
         upstream_url = _build_chat_completions_url(tenant_config.base_url)
         api_key = decrypt_password(tenant_config.api_key_enc)
     else:
+        if "gpt-5.5" in (payload.get("model") or "").lower():
+            payload["model"] = settings.coding_model_gpt54_model or "gpt-5.4"
         upstream_url, api_key = _resolve_coding_model(payload.get("model", ""))
     upstream_headers = {
         "Content-Type": "application/json",
@@ -1602,8 +1746,10 @@ async def ide_image_context_proxy(
 async def list_workspace_files(
     ws_id: str,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """列出工作区文件"""
+    await _ensure_workspace_access(ws_id, ctx, db, minimum_project_role="member")
     try:
         return workspace_mgr.list_files(ws_id)
     except FileNotFoundError:
@@ -1615,8 +1761,10 @@ async def read_workspace_file(
     ws_id: str,
     file_path: str = Query(..., description="文件相对路径"),
     ctx: Annotated[AuthContext, Depends(get_auth_context)] = None,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
 ):
     """读取工作区文件内容"""
+    await _ensure_workspace_access(ws_id, ctx, db, minimum_project_role="member")
     try:
         content = workspace_mgr.read_file(ws_id, file_path)
         return {"path": file_path, "content": content}
@@ -1631,8 +1779,10 @@ async def write_workspace_file(
     ws_id: str,
     req: WriteFileRequest,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """写入文件到工作区"""
+    await _ensure_workspace_access(ws_id, ctx, db, minimum_project_role="member")
     try:
         workspace_mgr.write_file(ws_id, req.file_path, req.content)
         return {"status": "ok", "path": req.file_path}
@@ -1645,9 +1795,36 @@ async def write_workspace_file(
 @router.get("/workspaces")
 async def list_workspaces(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """列出当前用户的所有工作区"""
-    return workspace_mgr.list_user_workspaces(ctx.user.id)
+    owned_result = await db.execute(
+        select(Project.id).where(
+            Project.tenant_id == ctx.tenant_id,
+            Project.user_id == ctx.user.id,
+        )
+    )
+    member_result = await db.execute(
+        select(ProjectMember.project_id).where(ProjectMember.user_id == ctx.user.id)
+    )
+    project_ids = {row[0] for row in owned_result.all()}
+    project_ids.update(row[0] for row in member_result.all())
+
+    workspaces = workspace_mgr.list_accessible_workspaces(ctx.user.id, list(project_ids))
+    decorated: list[dict[str, Any]] = []
+    for ws in workspaces:
+        project_id = ws.get("project_id")
+        if project_id:
+            access = await require_project_access(
+                db,
+                project_id=int(project_id),
+                user_id=ctx.user.id,
+                tenant_id=ctx.tenant_id,
+            )
+            decorated.append(_decorate_workspace_access(ws, access.role))
+        else:
+            decorated.append(_decorate_workspace_access(ws, "owner"))
+    return decorated
 
 
 @router.get("/workspace/{ws_id}/conversation")
@@ -1657,17 +1834,15 @@ async def get_workspace_conversation(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """获取工作区关联的对话及消息"""
-    stmt = (
-        select(Conversation)
-        .where(
-            Conversation.user_id == ctx.user.id,
-            Conversation.tenant_id == ctx.tenant_id,
-            Conversation.workspace_id == ws_id,
-            Conversation.agent_type == "coding",
-        )
-        .order_by(Conversation.updated_at.desc())
-        .limit(10)
-    )
+    workspace_meta = await _ensure_workspace_access(ws_id, ctx, db, minimum_project_role="member")
+    conditions = [
+        Conversation.tenant_id == ctx.tenant_id,
+        Conversation.workspace_id == ws_id,
+        Conversation.agent_type == "coding",
+    ]
+    if not workspace_meta.get("project_id"):
+        conditions.append(Conversation.user_id == ctx.user.id)
+    stmt = select(Conversation).where(*conditions).order_by(Conversation.updated_at.desc()).limit(10)
     result = await db.execute(stmt)
     conversations = result.scalars().all()
 
@@ -1733,8 +1908,10 @@ async def get_workspace_conversation(
 async def delete_workspace(
     ws_id: str,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """删除工作区：先停掉所有 npm run serve 进程，再删除工作区文件夹。"""
+    await _ensure_workspace_access(ws_id, ctx, db, minimum_project_role="admin")
     await workspace_mgr.delete_workspace(ws_id)
     return {"status": "ok"}
 
@@ -1804,6 +1981,8 @@ def _build_ide_conversation_context(history: list[dict[str, str]], max_messages:
 async def upload_file(
     file: UploadFile = File(...),
     workspace_id: Optional[str] = Query(None),
+    ctx: Annotated[AuthContext, Depends(get_auth_context)] = None,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
 ):
     """
     上传文件（图片/文档）用于对话附件。
@@ -1824,12 +2003,8 @@ async def upload_file(
 
     # Determine save directory
     if workspace_id:
-        ws_mgr_temp = WorkspaceManager()
-        try:
-            ws_info = ws_mgr_temp.get_workspace_info(workspace_id)
-            save_dir = os.path.join(ws_info["path"], "uploads")
-        except Exception:
-            save_dir = os.path.join(tempfile.gettempdir(), "coding_uploads")
+        workspace_meta = await _ensure_workspace_access(workspace_id, ctx, db, minimum_project_role="member")
+        save_dir = os.path.join(workspace_meta["disk_path"], "uploads")
     else:
         save_dir = os.path.join(tempfile.gettempdir(), "coding_uploads")
 
@@ -1903,6 +2078,17 @@ async def auto_pipeline(
     """
     from app.coding.pipeline import PipelineParams, run_coding_pipeline
 
+    if req.workspace_id:
+        await _ensure_workspace_access(req.workspace_id, ctx, db, minimum_project_role="member")
+    if req.project_id:
+        await require_project_access(
+            db,
+            project_id=req.project_id,
+            user_id=ctx.user.id,
+            tenant_id=ctx.tenant_id,
+            minimum_role="member",
+        )
+
     # 预计算 request-scoped 值
     api_base = _build_ide_proxy_api_base(request, req.workspace_id or "__placeholder__")
     api_base_pattern = api_base.replace(req.workspace_id or "__placeholder__", "{ws_id}")
@@ -1930,9 +2116,11 @@ async def auto_pipeline(
 async def manage_serve(
     ws_id: str,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
     action: str = Query(default="start", description="start 或 stop"),
 ):
     """启动或停止工作区的 serve 进程"""
+    await _ensure_workspace_access(ws_id, ctx, db, minimum_project_role="member")
     ws_mgr = WorkspaceManager()
     if action == "start":
         result = await ws_mgr.start_serve(ws_id)
@@ -1947,8 +2135,10 @@ async def manage_serve(
 async def get_serve_status(
     ws_id: str,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """查询 serve 运行状态"""
+    await _ensure_workspace_access(ws_id, ctx, db, minimum_project_role="member")
     ws_mgr = WorkspaceManager()
     return ws_mgr.is_serve_running(ws_id)
 
@@ -1958,8 +2148,10 @@ async def get_serve_status(
 async def publish_workspace(
     ws_id: str,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """构建 + 打包 zip（一键发布）"""
+    await _ensure_workspace_access(ws_id, ctx, db, minimum_project_role="admin")
     ws_mgr = WorkspaceManager()
     try:
         zip_path = await ws_mgr.build_and_package(ws_id)
@@ -2103,6 +2295,8 @@ async def upload_workspace_to_platform(
     import time
     import uuid
     from app.models import PlatformEnv
+
+    await _ensure_workspace_access(ws_id, ctx, db, minimum_project_role="admin")
 
     # 1. 查询平台环境（验证属于当前 tenant）
     result = await db.execute(
@@ -2357,9 +2551,15 @@ async def upload_workspace_to_platform(
 
 
 @router.get("/workspace/{ws_id}/debug/screenshot/{filename}")
-async def get_debug_screenshot(ws_id: str, filename: str):
+async def get_debug_screenshot(
+    ws_id: str,
+    filename: str,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
     """Serve debug screenshot image"""
     import re
+    await _ensure_workspace_access(ws_id, ctx, db, minimum_project_role="member")
     # Sanitize filename to prevent directory traversal
     if not re.match(r'^[\w\-\.]+\.(png|jpg|jpeg)$', filename):
         raise HTTPException(status_code=400, detail="Invalid filename")
@@ -2390,6 +2590,7 @@ async def debug_workspace(
 ):
     """启动 Debug 模式：确保 serve 运行 + 启动 Puppeteer 注入组件到平台"""
     ws_mgr = WorkspaceManager()
+    workspace_meta = await _ensure_workspace_access(ws_id, ctx, db, minimum_project_role="member")
 
     # 1. 确保 serve 在运行
     serve_info = ws_mgr.is_serve_running(ws_id)
@@ -2418,13 +2619,16 @@ async def debug_workspace(
     _project_id = req.project_id
     if not _project_id:
         # Try to get project_id from workspace metadata
-        ws_info_meta = ws_mgr.get_workspace_info(ws_id)
-        _project_id = ws_info_meta.get("project_id")
+        _project_id = workspace_meta.get("project_id")
     if _project_id:
-        result = await db.execute(
-            select(Project).where(Project.id == _project_id, Project.user_id == user.id)
+        access = await require_project_access(
+            db,
+            project_id=int(_project_id),
+            user_id=user.id,
+            tenant_id=ctx.tenant_id,
+            minimum_role="member",
         )
-        project = result.scalar_one_or_none()
+        project = access.project
 
     if project and project.platform_url:
         _platform_url = req.platform_url or _get_platform_frontend_url(project.platform_url)
@@ -2726,5 +2930,3 @@ async def _is_new_component_intent(generator: CodingGenerator, message: str, ws_
     except Exception as e:
         logger.warning(f"意图判断失败: {e}")
         return False
-
-

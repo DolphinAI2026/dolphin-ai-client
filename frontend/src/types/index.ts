@@ -14,11 +14,6 @@ export interface LoginRequest {
   password: string
 }
 
-export interface RegisterRequest {
-  username: string
-  password: string
-}
-
 export interface TenantOption {
   tenant_id: number
   tenant_name: string
@@ -49,6 +44,7 @@ export interface Conversation {
   agent_type: 'builder' | 'assistant' | 'developer' | 'coding' | 'requirements'
   status: string
   selected_llm_config_id?: number | null
+  spec_id?: string | null
   created_at: string
   updated_at: string
 }
@@ -76,6 +72,11 @@ export interface Application {
   forms?: number
   roles?: number
   dicts?: number
+  // Phase C：project & git
+  project_id?: number | null
+  git_repo_url?: string | null
+  git_provider?: string | null
+  git_default_branch?: string | null
   created_at: string
   updated_at: string
 }
@@ -101,6 +102,11 @@ export interface MergedApplication {
   permissions?: Record<string, boolean>
   env_name?: string
   env_status?: string
+  // Phase C：project & git
+  project_id?: number | null
+  git_repo_url?: string | null
+  git_provider?: string | null
+  git_default_branch?: string | null
   created_at?: string
   updated_at?: string
 }
@@ -111,8 +117,10 @@ export interface ChatRequest {
 }
 
 export interface ConversationCreate {
-  agent_type: 'builder' | 'assistant' | 'developer' | 'coding'
+  agent_type: 'builder' | 'assistant' | 'developer' | 'coding' | 'requirements'
   selected_llm_config_id?: number | null
+  initial_message?: string | null
+  spec_id?: string | null
 }
 
 // Preview types
@@ -173,8 +181,10 @@ export interface PreviewData {
   dicts: DictDef[]
   models: ModelDef[]
   forms: any[]
+  flows?: any[]
   workflows: WorkflowDef[]
   permissions: PermissionDef[]
+  custom_development?: any[]
 }
 
 export interface GenStage {

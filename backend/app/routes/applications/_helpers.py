@@ -132,6 +132,18 @@ def _compact_preview_payload(config: dict | None) -> dict:
     if not isinstance(data, dict):
         return {}
 
+    def _first_present(*values):
+        for value in values:
+            if value in (None, ""):
+                continue
+            if isinstance(value, str):
+                stripped = value.strip()
+                if stripped:
+                    return stripped
+                continue
+            return value
+        return None
+
     def _compact_model_field(field: dict) -> dict:
         compact_field = {
             "code": field.get("code"),
@@ -268,15 +280,27 @@ def _compact_preview_payload(config: dict | None) -> dict:
                     compact_comp["tableColumn"] = compact_columns
             compact_components.append(compact_comp)
 
+        form_code = _first_present(form.get("formCode"), form.get("form_code"), form.get("code"))
+        form_name = _first_present(form.get("formName"), form.get("form_name"), form.get("name"), form.get("title"))
+        model_code = _first_present(
+            form.get("modelCode"),
+            form.get("model_code"),
+            form.get("mainModelCode"),
+            form.get("main_model_code"),
+            form.get("main_model"),
+        )
+        all_model_codes = _first_present(form.get("allModelCodes"), form.get("all_model_codes"))
+
         compact_form = {
-            "code": form.get("code") or form.get("formCode"),
-            "name": form.get("name") or form.get("formName"),
-            "formCode": form.get("formCode") or form.get("code"),
-            "modelCode": form.get("modelCode"),
+            "code": form_code,
+            "name": form_name,
+            "formCode": form_code,
+            "formName": form_name,
+            "modelCode": model_code,
             "components": compact_components,
         }
-        if form.get("allModelCodes"):
-            compact_form["allModelCodes"] = form.get("allModelCodes")
+        if all_model_codes:
+            compact_form["allModelCodes"] = all_model_codes
         compact_forms.append(compact_form)
 
     compact_permissions = []
@@ -308,8 +332,10 @@ def _compact_preview_payload(config: dict | None) -> dict:
         "dicts": data.get("dicts", []),
         "models": compact_models,
         "forms": compact_forms,
+        "flows": data.get("flows", []),
         "workflows": data.get("workflows", []),
         "permissions": compact_permissions or data.get("permissions", []),
+        "custom_development": data.get("custom_development", []),
     }
 
 
@@ -640,11 +666,12 @@ async def _resolve_builder_llm_cfg(
     tenant_id: int,
     *,
     conversation_id: Optional[int] = None,
+    selected_config_id: Optional[int] = None,
 ) -> dict | None:
     from app.harness.llm_resolver import resolve_llm_config
 
-    selected_config_id: Optional[int] = None
-    if conversation_id is not None:
+    resolved_selected_config_id: Optional[int] = selected_config_id
+    if resolved_selected_config_id is None and conversation_id is not None:
         conv_result = await db.execute(
             select(Conversation).where(
                 Conversation.id == conversation_id,
@@ -653,13 +680,13 @@ async def _resolve_builder_llm_cfg(
         )
         conversation = conv_result.scalar_one_or_none()
         if conversation:
-            selected_config_id = conversation.selected_llm_config_id
+            resolved_selected_config_id = conversation.selected_llm_config_id
 
     resolved = await resolve_llm_config(
         db,
         tenant_id,
         purpose="builder",
-        selected_config_id=selected_config_id,
+        selected_config_id=resolved_selected_config_id,
     )
     if not resolved:
         return None
@@ -715,6 +742,10 @@ def _enrich(app: Application) -> ApplicationResponse:
         platform_env_id=app.platform_env_id,
         apaas_app_id=app.apaas_app_id, config_preview=config,
         models=models, forms=forms, roles=roles, dicts=dicts,
+        project_id=app.project_id,
+        git_repo_url=app.git_repo_url,
+        git_provider=app.git_provider,
+        git_default_branch=app.git_default_branch,
         created_at=app.created_at, updated_at=app.updated_at
     )
 
@@ -783,6 +814,10 @@ def _build_local(app: Application, perms: dict | None = None, env_name: str | No
         permissions=perms,
         env_name=env_name,
         env_status=env_status,
+        project_id=app.project_id,
+        git_repo_url=app.git_repo_url,
+        git_provider=app.git_provider,
+        git_default_branch=app.git_default_branch,
         created_at=str(enriched.created_at) if enriched.created_at else None,
         updated_at=str(enriched.updated_at) if enriched.updated_at else None,
     )
@@ -812,6 +847,10 @@ def _build_linked(app: Application, remote: dict, perms: dict | None = None, env
         permissions=perms,
         env_name=env_name,
         env_status=env_status,
+        project_id=app.project_id,
+        git_repo_url=app.git_repo_url,
+        git_provider=app.git_provider,
+        git_default_branch=app.git_default_branch,
         created_at=str(enriched.created_at) if enriched.created_at else None,
         updated_at=str(enriched.updated_at) if enriched.updated_at else None,
     )

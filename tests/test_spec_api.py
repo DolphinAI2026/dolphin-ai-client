@@ -1,8 +1,8 @@
 """Spec API 路由集成测试。
 
 跑 FastAPI TestClient + 内存 SQLite。覆盖：
-- GET /api/spec/{id} / /versions
-- POST /api/spec/{id}/confirm / /refine / /rollback
+- GET /api/coding/v2/specs/{id} / /versions
+- POST /api/coding/v2/specs/{id}/confirm / /refine / /rollback
 - 租户隔离：其他租户用户不能读
 """
 import asyncio
@@ -14,7 +14,7 @@ from pathlib import Path
 
 os.environ.setdefault("LLM_API_KEY", "test-key")
 os.environ.setdefault("JWT_SECRET_KEY", "test-secret")
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///file::memory:?cache=shared&uri=true")
+os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
 
@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
 
 from app.deps import AuthContext  # noqa: E402
 from app.main import app  # noqa: E402
-from app.database import AsyncSessionLocal, Base, engine  # noqa: E402
+from app.database import AsyncSessionLocal, init_db  # noqa: E402
 import app.models as models  # noqa: E402
 import app.models.agent_models as agent_models  # noqa: E402
 from app.services import brainstorm_session_service as bs_svc  # noqa: E402
@@ -66,8 +66,7 @@ def _run(coro):
 
 
 async def _ensure_tables():
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    await init_db()
 
 
 def _uniq() -> str:
@@ -167,7 +166,7 @@ def test_get_spec_returns_detail():
     spec_id, _, _ = _run(_seed_spec())
     client = _make_client()
     try:
-        resp = client.get(f"/api/spec/{spec_id}")
+        resp = client.get(f"/api/coding/v2/specs/{spec_id}")
         assert resp.status_code == 200, resp.text
         data = resp.json()
         assert data["spec_id"] == spec_id
@@ -181,7 +180,7 @@ def test_get_spec_returns_detail():
 def test_get_spec_not_found_returns_404():
     client = _make_client()
     try:
-        resp = client.get("/api/spec/nonexistent")
+        resp = client.get("/api/coding/v2/specs/nonexistent")
         assert resp.status_code == 404
     finally:
         _clear_override()
@@ -191,7 +190,7 @@ def test_get_spec_other_tenant_403():
     spec_id, _, _ = _run(_seed_spec(tenant_id=TENANT_A))
     client = _make_client(tenant_id=TENANT_B)
     try:
-        resp = client.get(f"/api/spec/{spec_id}")
+        resp = client.get(f"/api/coding/v2/specs/{spec_id}")
         assert resp.status_code == 403, resp.text
     finally:
         _clear_override()
@@ -216,7 +215,7 @@ def test_list_versions_desc_order():
 
     client = _make_client()
     try:
-        resp = client.get(f"/api/spec/{spec_id}/versions")
+        resp = client.get(f"/api/coding/v2/specs/{spec_id}/versions")
         assert resp.status_code == 200, resp.text
         arr = resp.json()
         assert [v["version"] for v in arr] == [3, 2, 1]
@@ -228,7 +227,7 @@ def test_confirm_marks_session_completed():
     spec_id, bs_id, _ = _run(_seed_spec())
     client = _make_client()
     try:
-        resp = client.post(f"/api/spec/{spec_id}/confirm")
+        resp = client.post(f"/api/coding/v2/specs/{spec_id}/confirm")
         assert resp.status_code == 200, resp.text
         data = resp.json()
         assert data["spec_id"] == spec_id
@@ -236,7 +235,7 @@ def test_confirm_marks_session_completed():
         assert data["phase_hint"] in {"scaffold", "generate", "already_confirmed"}
 
         # 再次 confirm 返回 already_confirmed
-        resp2 = client.post(f"/api/spec/{spec_id}/confirm")
+        resp2 = client.post(f"/api/coding/v2/specs/{spec_id}/confirm")
         assert resp2.status_code == 200
         assert resp2.json()["phase_hint"] == "already_confirmed"
     finally:
@@ -256,8 +255,8 @@ def test_refine_switches_session_back_to_active():
     # 先 confirm
     client = _make_client()
     try:
-        client.post(f"/api/spec/{spec_id}/confirm")
-        resp = client.post(f"/api/spec/{spec_id}/refine", json={"instruction": "提高配置项清晰度"})
+        client.post(f"/api/coding/v2/specs/{spec_id}/confirm")
+        resp = client.post(f"/api/coding/v2/specs/{spec_id}/refine", json={"instruction": "提高配置项清晰度"})
         assert resp.status_code == 200, resp.text
         assert resp.json()["brainstorm_session_id"] == bs_id
     finally:
@@ -282,7 +281,7 @@ def test_refine_on_terminal_session_rejected():
 
     client = _make_client()
     try:
-        resp = client.post(f"/api/spec/{spec_id}/refine", json={})
+        resp = client.post(f"/api/coding/v2/specs/{spec_id}/refine", json={})
         assert resp.status_code == 400, resp.text
     finally:
         _clear_override()
@@ -306,7 +305,7 @@ def test_rollback_creates_new_version():
 
     client = _make_client()
     try:
-        resp = client.post(f"/api/spec/{r1_id}/rollback")
+        resp = client.post(f"/api/coding/v2/specs/{r1_id}/rollback")
         assert resp.status_code == 200, resp.text
         data = resp.json()
         assert data["parent_version"] == 1
@@ -320,7 +319,7 @@ def test_confirm_other_tenant_403():
     spec_id, _, _ = _run(_seed_spec(tenant_id=TENANT_A))
     client = _make_client(tenant_id=TENANT_B)
     try:
-        resp = client.post(f"/api/spec/{spec_id}/confirm")
+        resp = client.post(f"/api/coding/v2/specs/{spec_id}/confirm")
         assert resp.status_code == 403
     finally:
         _clear_override()

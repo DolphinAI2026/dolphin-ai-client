@@ -33,18 +33,36 @@ export function useCodingWorkspace() {
   /** 正在下载的工作区 id（卡片级 loading 标记，防止重复点击） */
   const downloadingWsId = ref<string | null>(null)
 
-  const embeddedAppId = computed(() => (route.query.app_id as string) || '')
+  const embeddedProjectId = computed(() => {
+    const raw = route.query.project_id
+    return Array.isArray(raw) ? (raw[0] || '') : (raw || '')
+  })
+
+  const embeddedAppId = computed(() => {
+    const embeddedApp = route.query.app_id as string
+    return embeddedApp || ''
+  })
 
   const existingWorkspaces = computed(() => {
-    if (!embeddedAppId.value) return allWorkspaces.value
-    return allWorkspaces.value.filter((ws: any) => String(ws.project_id || '') === embeddedAppId.value)
+    if (!embeddedProjectId.value) return allWorkspaces.value
+    return allWorkspaces.value.filter((ws: any) => String(ws.project_id || '') === embeddedProjectId.value)
   })
 
   const workspaceShowcaseItems = computed(() => existingWorkspaces.value.slice(0, 6))
 
   function workspaceDisplayName(ws: WorkspaceInfo | null | undefined) {
     if (!ws) return ''
-    return ws.display_name?.trim() || ws.project_name
+    const raw = ws.display_name?.trim() || ''
+    // 防御 display_name 是 chat 消息片段（"[" 开头、"项。"、"-"、长篇 markdown 等）
+    const looksLikeChatFragment =
+      /^[\[【（]/.test(raw) ||
+      /^项[。.]/.test(raw) ||
+      /^[-*]\s/.test(raw) ||
+      raw.length > 30
+    if (!raw || looksLikeChatFragment) {
+      return ws.project_name || `工作区 ${ws.id}`
+    }
+    return raw
   }
 
   function workspaceCodeName(ws: WorkspaceInfo | null | undefined) {
@@ -81,6 +99,7 @@ export function useCodingWorkspace() {
     allWorkspaces,
     isDownloading,
     downloadingWsId,
+    embeddedProjectId,
     embeddedAppId,
     // computed
     existingWorkspaces,

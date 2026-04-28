@@ -41,10 +41,81 @@ const router = createRouter({
       meta: { requiresAuth: true }
     },
     {
+      path: '/vibe-coding',
+      name: 'OnlineCoding',
+      component: () => import('@/views/OnlineCodingPage.vue'),
+      meta: { requiresAuth: true, navExpanded: true }
+    },
+    {
+      path: '/vibe-coding/new',
+      name: 'OnlineCodingNew',
+      component: () => import('@/views/OnlineCodingWorkspacePage.vue'),
+      meta: { requiresAuth: true, navExpanded: true }
+    },
+    {
+      path: '/vibe-coding/workspaces/:id',
+      name: 'OnlineCodingWorkspace',
+      component: () => import('@/views/OnlineCodingWorkspacePage.vue'),
+      meta: { requiresAuth: true, navExpanded: true }
+    },
+    {
+      path: '/online-coding',
+      redirect: '/vibe-coding',
+    },
+    {
+      path: '/online-coding/new',
+      redirect: '/vibe-coding/new',
+    },
+    {
+      path: '/online-coding/workspaces/:id',
+      redirect: to => ({ path: `/vibe-coding/workspaces/${to.params.id}`, query: to.query }),
+    },
+    {
       path: '/project/:id',
       name: 'ProjectOverview',
       component: () => import('@/views/ProjectOverview.vue'),
       meta: { requiresAuth: true }
+    },
+    {
+      path: '/project/:id/git',
+      name: 'ProjectGitSetup',
+      component: () => import('@/views/ProjectGitSetup.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/git/callback/:provider',
+      name: 'GitOAuthCallback',
+      component: () => import('@/views/GitOAuthCallback.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/ide',
+      name: 'Ide',
+      redirect: '/coding'
+    },
+    {
+      path: '/devops',
+      name: 'DevOps',
+      component: () => import('@/views/BuilderDevOpsPage.vue'),
+      meta: { navExpanded: true }
+    },
+    {
+      path: '/proposals/:id',
+      name: 'ProposalDetail',
+      component: () => import('@/views/ProposalDetailPage.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/settings',
+      name: 'Settings',
+      redirect: to => {
+        const rawTab = Array.isArray(to.query.tab) ? to.query.tab[0] : to.query.tab
+        const tab = String(rawTab || 'llm')
+        if (tab === 'envs') return { path: '/platform-envs', query: { tab: 'envs' } }
+        if (tab === 'team' || tab === 'members') return { path: '/tenant-users' }
+        return { path: '/platform-envs', query: { tab: 'llm' } }
+      },
+      meta: { requiresAuth: true, navExpanded: true }
     },
     {
       path: '/coding',
@@ -59,6 +130,12 @@ const router = createRouter({
       meta: { requiresAuth: true, navExpanded: true }
     },
     {
+      path: '/work/:appId',
+      name: 'WorkspaceShell',
+      redirect: to => ({ path: '/chat', query: { app_id: String(to.params.appId) } }),
+      meta: { requiresAuth: true }
+    },
+    {
       path: '/marketplace',
       name: 'Marketplace',
       component: () => import('@/views/MarketplacePage.vue'),
@@ -68,7 +145,13 @@ const router = createRouter({
       path: '/platform-envs',
       name: 'PlatformEnvs',
       component: () => import('@/views/PlatformEnvs.vue'),
-      meta: { requiresAuth: true, navExpanded: true }
+      meta: { requiresAuth: true, requiresTenantAdmin: true, navExpanded: true }
+    },
+    {
+      path: '/tenant-users',
+      name: 'TenantUsers',
+      component: () => import('@/views/TenantUsers.vue'),
+      meta: { requiresAuth: true, requiresTenantAdmin: true, navExpanded: true }
     },
     {
       path: '/requirements/:id?',
@@ -89,6 +172,19 @@ const router = createRouter({
 
 router.beforeEach(async (to, _from, next) => {
   const userStore = useUserStore()
+
+  if (to.path === '/coding' && to.query.type === 'full-code') {
+    const rawId = Array.isArray(to.query.online_workspace_id)
+      ? to.query.online_workspace_id[0]
+      : to.query.online_workspace_id || (Array.isArray(to.query.online_ws) ? to.query.online_ws[0] : to.query.online_ws)
+    const workspaceId = rawId ? String(rawId) : ''
+    const rawView = Array.isArray(to.query.online_view) ? to.query.online_view[0] : to.query.online_view
+    next({
+      path: workspaceId ? `/vibe-coding/workspaces/${workspaceId}` : '/vibe-coding/new',
+      query: rawView === 'ide' ? { view: 'ide' } : {},
+    })
+    return
+  }
 
   if (to.meta.requiresAuth && !userStore.token) {
     next('/login')
@@ -112,6 +208,11 @@ router.beforeEach(async (to, _from, next) => {
       next('/login')
       return
     }
+  }
+
+  if (to.meta.requiresTenantAdmin && !userStore.isTenantAdmin) {
+    next('/')
+    return
   }
 
   if (to.path === '/login' && userStore.token) {

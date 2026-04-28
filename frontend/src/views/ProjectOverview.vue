@@ -101,6 +101,29 @@
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
             </div>
           </div>
+
+          <div class="entry-card" @click="goToGitSetup">
+            <div class="entry-icon git-icon">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="url(#gitGrad)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/>
+                <defs>
+                  <linearGradient id="gitGrad" x1="2" y1="2" x2="22" y2="22">
+                    <stop offset="0%" stop-color="#f472b6"/>
+                    <stop offset="100%" stop-color="#a855f7"/>
+                  </linearGradient>
+                </defs>
+              </svg>
+            </div>
+            <div class="entry-body">
+              <div class="entry-title">Git 集成</div>
+              <div class="entry-subtitle">连接 GitLab/GitHub</div>
+              <div class="entry-tags">PAT · 应用 repo · PR 流</div>
+            </div>
+            <div class="entry-action">
+              <span class="action-text">进入</span>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+            </div>
+          </div>
         </div>
 
         <!-- Workspaces -->
@@ -210,6 +233,10 @@ const goToCoding = () => {
 const goToPageDev = () => {
   localStorage.setItem('coding_last_project_id', String(projectId))
   router.push({ path: '/coding', query: { project_id: String(projectId), type: 'page' } })
+}
+
+const goToGitSetup = () => {
+  router.push(`/project/${projectId}/git`)
 }
 
 const openWorkspace = (ws: WorkspaceInfo) => {
@@ -384,7 +411,7 @@ const onProjectSaved = async () => {
 /* ── Entry Cards ── */
 .entry-cards {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 16px;
   margin-bottom: 48px;
 }
@@ -427,6 +454,10 @@ const onProjectSaved = async () => {
 
 .page-icon {
   background: rgba(52, 211, 153, 0.1);
+}
+
+.git-icon {
+  background: rgba(168, 85, 247, 0.1);
 }
 
 .entry-body {

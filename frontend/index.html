@@ -5,10 +5,14 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>aPaaS Builder AI</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <script>
       // Prevent flash of wrong theme (FOWT)
       ;(function() {
-        var t = localStorage.getItem('theme') || 'dark'
+        var saved = localStorage.getItem('theme')
+        var t = saved === 'dark' || saved === 'light' ? saved : 'light'
         document.documentElement.setAttribute('data-theme', t)
         if (t === 'dark') document.documentElement.classList.add('dark')
       })()

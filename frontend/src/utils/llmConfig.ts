@@ -10,6 +10,7 @@ export interface ProviderOption {
 }
 
 export const providerOptions: readonly ProviderOption[] = [
+  { value: 'dolphin', label: 'Dolphin' },
   { value: 'minimax', label: 'MiniMax' },
   { value: 'qwen', label: '通义千问 (Qwen)' },
   { value: 'deepseek', label: 'DeepSeek' },
@@ -21,6 +22,7 @@ export const providerOptions: readonly ProviderOption[] = [
 ]
 
 export function providerLabel(provider: string): string {
+  if (provider === 'gpt') return 'Dolphin'
   const opt = providerOptions.find(p => p.value === provider)
   return opt?.label || provider
 }

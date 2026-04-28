@@ -90,6 +90,11 @@ class Settings(BaseSettings):
     coding_model_opus_api_key: str = ""
     coding_model_opus_model: str = "claude-opus-4-6"
 
+    # Dolphin omnigate 统一网关（OpenAI 兼容，gpt-5.5 通用模型）
+    dolphin_base_url: str = ""
+    dolphin_api_key: str = ""
+    dolphin_model: str = "gpt-5.5"
+
 
 def _normalize_database_url(url: str) -> str:
     """将相对 SQLite 路径固定到 backend 目录下，避免随 cwd 漂移。"""
@@ -102,6 +107,8 @@ def _normalize_database_url(url: str) -> str:
         return url
 
     path_part = url[len(matched_prefix):]
+    if path_part == ":memory:" or path_part.startswith("file:"):
+        return url
     if not path_part or path_part.startswith("/"):
         return url
 

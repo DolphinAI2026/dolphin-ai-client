@@ -591,7 +591,7 @@ async def start_coding_from_spec(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> StartCodingResponse:
-    """用户在 CONFIRM 阶段点"确认生成代码"后调用（/api/spec/{id}/confirm 之后）。
+    """用户在 CONFIRM 阶段点"确认生成代码"后调用（/api/coding/v2/specs/{id}/confirm 之后）。
 
     本接口不做 phase 二次推进（confirm 已经把 phase 推到 SCAFFOLD/GENERATE），
     只是把 CodingAgent 在后台跑起来。

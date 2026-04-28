@@ -64,6 +64,7 @@ export class ChatHandler {
   ) {
     this.llmClient = new LLMClient(config);
     this.contextBuilder = new ContextBuilder();
+    this.contextBuilder.setConfig(config);
     this.guidesLoader = new GuidesLoader();
     this.fileWriter = new FileWriter();
     this.planMode = new PlanMode(this.llmClient, this.fileWriter, this.contextBuilder, this.guidesLoader);
@@ -129,6 +130,12 @@ export class ChatHandler {
         this.contextBuilder.build(userMsg),
         this.guidesLoader.load(),
       ]);
+      const readFiles = this._extractReadFiles(workspaceCtx);
+      if (readFiles.length > 0) {
+        const preview = readFiles.slice(0, 8).map(file => `\`${file}\``).join('、');
+        const suffix = readFiles.length > 8 ? ` 等 ${readFiles.length} 个文件` : '';
+        stream.markdown(`🔎 已读取工作区代码上下文：${preview}${suffix}\n\n`);
+      }
 
       // Determine model
       const needsCodeModel = isEditIntent(userMsg);
@@ -229,6 +236,7 @@ export class ChatHandler {
 
   private _canUseCodingPipeline(): boolean {
     const cfg = this.config.get();
+    if (cfg.onlineMode) return false;
     return !!(cfg.workspaceId && cfg.ideToken && (cfg.harnessApiBase || cfg.apiBase));
   }
 
@@ -510,6 +518,16 @@ export class ChatHandler {
       // ignore
     }
     return { conversationId: null, messages: [] };
+  }
+
+  private _extractReadFiles(workspaceCtx: string): string[] {
+    const match = workspaceCtx.match(/READ_FILES:\n([\s\S]*?)\n\nRELEVANT_FILE_CONTENTS:/);
+    if (!match) return [];
+    return match[1]
+      .split('\n')
+      .map(line => line.trim())
+      .filter(Boolean)
+      .slice(0, 24);
   }
 
   /** Check if user message mentions a specific file path */

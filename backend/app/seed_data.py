@@ -1,5 +1,6 @@
 """Seed data for multi-tenant system."""
 from __future__ import annotations
+from collections.abc import Sequence
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
@@ -9,7 +10,7 @@ from app.models.tenant import Tenant, Role
 from app.permissions import PERMISSION_CODES
 
 
-async def seed_default_roles(db: AsyncSession, tenant_id: int):
+async def seed_default_roles(db: AsyncSession, tenant_id: int, *, commit: bool = True):
     """创建默认角色（租户管理员、开发者、查看者）"""
 
     # 检查是否已存在角色
@@ -68,7 +69,10 @@ async def seed_default_roles(db: AsyncSession, tenant_id: int):
     )
     db.add(viewer_role)
 
-    await db.commit()
+    if commit:
+        await db.commit()
+    else:
+        await db.flush()
     print(f"✅ 租户 {tenant_id} 的默认角色已创建")
 
 
@@ -115,93 +119,94 @@ def _builtin_llm_specs() -> list[dict]:
             }
         )
 
+    # 精简内置模型清单：低代码搭建统一走 gpt-5.5 / Qwen。
+    # gpt-5.4 的历史连接信息容易漂移，停止作为内置 seed 初始化。
+    # 其余模型用户按需通过"新增模型"自行添加。
     _append(
-        config_name="内置通用模型 (MiniMax)",
-        provider="minimax",
-        base_url=settings.llm_api_base,
-        api_key=settings.llm_api_key,
-        model=settings.llm_model,
+        config_name="内置通用模型 (gpt-5.5)",
+        provider="dolphin",
+        base_url=settings.dolphin_base_url,
+        api_key=settings.dolphin_api_key,
+        model=settings.dolphin_model,  # gpt-5.5
         purpose="all",
         is_default=True,
     )
     _append(
-        config_name="内置通用模型 (Qwen 3.5 Plus)",
+        config_name="内置通用模型 (Qwen 3.6 Plus)",
         provider="qwen",
         base_url=settings.coding_model_qwen_base_url,
         api_key=settings.coding_model_qwen_api_key,
-        model="qwen3.5-plus",
+        model="qwen3.6-plus",
         purpose="all",
-    )
-
-    _append(
-        config_name="内置 Coding Qwen",
-        provider="qwen",
-        base_url=settings.coding_model_qwen_base_url,
-        api_key=settings.coding_model_qwen_api_key,
-        model=settings.coding_model_qwen_model,
-        purpose="coding",
-    )
-    _append(
-        config_name="内置 Coding DeepSeek",
-        provider="deepseek",
-        base_url=settings.coding_model_deepseek_base_url,
-        api_key=settings.coding_model_deepseek_api_key,
-        model=settings.coding_model_deepseek_model,
-        purpose="coding",
-    )
-    _append(
-        config_name="内置 Coding Codex",
-        provider="codex",
-        base_url=settings.coding_model_codex_base_url,
-        api_key=settings.coding_model_codex_api_key,
-        model=settings.coding_model_codex_model,
-        purpose="coding",
-    )
-    _append(
-        config_name="内置 Coding GPT",
-        provider="gpt",
-        base_url=settings.coding_model_gpt54_base_url,
-        api_key=settings.coding_model_gpt54_api_key,
-        model=settings.coding_model_gpt54_model,
-        purpose="coding",
-    )
-    _append(
-        config_name="内置 Coding Sonnet",
-        provider="sonnet",
-        base_url=settings.coding_model_sonnet_base_url,
-        api_key=settings.coding_model_sonnet_api_key,
-        model=settings.coding_model_sonnet_model,
-        purpose="coding",
-        is_default=True,
-    )
-    _append(
-        config_name="内置 Coding Opus",
-        provider="opus",
-        base_url=settings.coding_model_opus_base_url,
-        api_key=settings.coding_model_opus_api_key,
-        model=settings.coding_model_opus_model,
-        purpose="coding",
     )
 
     return specs
 
 
-async def sync_builtin_llm_configs(db: AsyncSession):
-    """把 .env 中的内置模型同步到 llm_configs，避免前台重复手工配置。"""
-    specs = _builtin_llm_specs()
-    if not specs:
-        return
+# 历史 builtin 名清单：之前 seed 出来现在不再要的（精简到 gpt5.5/qwen3.6 后）
+# 启动 sync 时若 tenant 下有这些 config_name 自动删除，避免管理员手工清理。
+_OBSOLETE_BUILTIN_NAMES = {
+    "内置通用模型 (MiniMax)",
+    "内置通用模型 (Qwen 3.5 Plus)",
+    "内置 Coding Qwen",
+    "内置 Coding DeepSeek",
+    "内置 Coding Codex",
+    "内置 Coding GPT",
+    "内置 Coding GPT (gpt-5.4)",
+    "内置 Coding Sonnet",
+    "内置 Coding Opus",
+    "内置通用模型 (Dolphin gpt-5.5)",  # 旧名，新版改成 "内置通用模型 (gpt-5.5)"
+}
 
-    tenants = (await db.execute(select(Tenant))).scalars().all()
+
+async def sync_builtin_llm_configs(
+    db: AsyncSession,
+    tenant_ids: Sequence[int] | None = None,
+    *,
+    commit: bool = True,
+):
+    """把 .env 中的内置模型同步到 llm_configs，避免前台重复手工配置。
+
+    同时清理 _OBSOLETE_BUILTIN_NAMES 列表里的旧 builtin（之前 seed 出来现在
+    不再要的），避免每次重启又出现一堆默认模型。
+    """
+    tenant_id_list = list(tenant_ids or [])
+    if tenant_id_list:
+        tenants = (
+            await db.execute(select(Tenant).where(Tenant.id.in_(tenant_id_list)))
+        ).scalars().all()
+    else:
+        tenants = (await db.execute(select(Tenant))).scalars().all()
     if not tenants:
         return
 
+    specs = _builtin_llm_specs()
     managed_names = {spec["config_name"] for spec in specs}
 
     for tenant in tenants:
+        # 1. 清理 obsolete builtin（不影响用户手工添加的同名 / 自定义命名 config）
+        obsolete_rows = (await db.execute(
+            select(LLMConfig).where(
+                LLMConfig.tenant_id == tenant.id,
+                LLMConfig.config_name.in_(_OBSOLETE_BUILTIN_NAMES),
+            )
+        )).scalars().all()
+        for row in obsolete_rows:
+            await db.delete(row)
+        await db.flush()  # 让后续 select 看到删除结果
+
+        if not specs:
+            continue
+
+        # 2. 已有同 (provider, model, purpose) 的用户配置则跳过新建（防止 builtin 跟用户自定义重复）
         existing = (
             await db.execute(select(LLMConfig).where(LLMConfig.tenant_id == tenant.id))
         ).scalars().all()
+        existing_duplicate_by_key: dict[tuple[str, str, str], LLMConfig] = {}
+        for row in existing:
+            if row.config_name in managed_names:
+                continue
+            existing_duplicate_by_key.setdefault((row.provider, row.model, row.purpose), row)
         existing_by_name = {row.config_name: row for row in existing}
 
         manual_defaults = {
@@ -212,9 +217,17 @@ async def sync_builtin_llm_configs(db: AsyncSession):
             for purpose in {"all", "coding", "builder"}
         }
 
-        synced_rows: list[LLMConfig] = []
+        synced_pairs: list[tuple[LLMConfig, dict]] = []
         for spec in specs:
             row = existing_by_name.get(spec["config_name"])
+            if row is None:
+                duplicate_row = existing_duplicate_by_key.get(
+                    (spec["provider"], spec["model"], spec["purpose"])
+                )
+                if duplicate_row is not None:
+                    # 复用用户已有同模型同用途配置，但仍保留 spec 元信息参与默认值判断。
+                    synced_pairs.append((duplicate_row, spec))
+                    continue
             if row is None:
                 row = LLMConfig(
                     tenant_id=tenant.id,
@@ -240,10 +253,10 @@ async def sync_builtin_llm_configs(db: AsyncSession):
                 row.temperature = spec["temperature"]
                 if row.status not in {"active", "inactive", "error"}:
                     row.status = "active"
-            synced_rows.append(row)
+            synced_pairs.append((row, spec))
 
         by_purpose: dict[str, list[tuple[LLMConfig, dict]]] = {}
-        for row, spec in zip(synced_rows, specs):
+        for row, spec in synced_pairs:
             by_purpose.setdefault(spec["purpose"], []).append((row, spec))
 
         for purpose, rows in by_purpose.items():
@@ -253,7 +266,10 @@ async def sync_builtin_llm_configs(db: AsyncSession):
             for row, spec in rows:
                 row.is_default = bool(default_name and spec["config_name"] == default_name)
 
-    await db.commit()
+    if commit:
+        await db.commit()
+    else:
+        await db.flush()
     print("✅ 已同步内置 LLM 配置到 llm_configs")
 
 

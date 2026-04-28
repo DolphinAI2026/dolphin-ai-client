@@ -63,6 +63,14 @@ const HEADER_ALIASES: Record<string, string> = {
   '可删除': '可删除',
   '可导出': '可导出',
   '数据范围': '数据范围',
+  '步骤': '步骤',
+  '动作': '动作',
+  '状态/结果': '状态/结果',
+  '类型': '类型',
+  '名称': '名称',
+  '触发条件': '触发条件',
+  '实现范围': '实现范围',
+  '验收口径': '验收口径',
 }
 
 function resolveRefMeta(source: any): { model: string; field: string } {
@@ -283,6 +291,27 @@ export function buildStructuredDocFromPreviewConfig(
     }),
   }))
 
+  const normalizeCustomDevItems = (sourceData: any) => {
+    const source = sourceData?.custom_development
+      || sourceData?.customDevelopment
+      || sourceData?.customDevelopments
+      || sourceData?.custom_dev
+      || sourceData?.customDev
+    const rawItems = Array.isArray(source)
+      ? source
+      : (source?.items || source?.tasks || source?.features || [])
+    if (!Array.isArray(rawItems)) return []
+    return rawItems
+      .map((item: any, index: number) => ({
+        type: String(item?.type || item?.scene || item?.category || '自开发扩展').trim(),
+        name: String(item?.name || item?.item_name || item?.title || item?.module || `自开发项 ${index + 1}`).trim(),
+        trigger: String(item?.trigger || item?.reason || item?.condition || item?.description || '配置能力无法完整覆盖').trim(),
+        scope: String(item?.scope || item?.implementation || item?.deliverable || item?.deliverables || '在 IDE 中实现并回写项目上下文').trim(),
+        acceptance: String(item?.acceptance || item?.acceptance_criteria || item?.test || '完成源码、联调和可演示验证').trim(),
+      }))
+      .filter((item: any) => item.name)
+  }
+
   return {
     app_info: {
       // 应用名由调用方负责解析并传入（通常来自 store.preview.appName）；
@@ -389,6 +418,18 @@ export function buildStructuredDocFromPreviewConfig(
       }),
     })),
     role_table_mapping: roleTableMapping,
+    flows: (data.workflows || data.flows || []).map((flow: any, idx: number) => ({
+      flow_code: flow?.code || flow?.flow_code || flow?.workflowCode || `flow_${idx + 1}`,
+      flow_name: flow?.name || flow?.flow_name || flow?.workflowName || `流程${idx + 1}`,
+      description: flow?.description || flow?.remark || '',
+      steps: (flow?.steps || flow?.nodes || flow?.actions || []).map((step: any, stepIdx: number) => ({
+        step: step?.step || step?.order || stepIdx + 1,
+        action: step?.action || step?.name || step?.label || '',
+        role: step?.role || step?.assignee || '',
+        status: step?.status || step?.result || '',
+      })),
+    })),
+    custom_development: normalizeCustomDevItems(data),
   }
 }
 
@@ -715,6 +756,33 @@ export function standardDocMdToStructuredDoc(markdown: string) {
     permissionMap.set(formName, target)
   })
 
+  const flowsSection = getSection(sections, ['流程配置', '审批流程', '业务流程'])
+  const flows = splitSubsections(flowsSection).map((block, idx) => {
+    const table = parseAllTables(block.content).find(rows => rows[0] && '步骤' in rows[0]) || []
+    return {
+      flow_code: `flow_${idx + 1}`,
+      flow_name: titleAfterMarker(block.title, '').replace(/^[\d.]+\s*/, '') || `流程${idx + 1}`,
+      description: block.content.split('\n').find(line => line.trim() && !line.includes('|')) || '',
+      steps: table.map((row, stepIdx) => ({
+        step: row['步骤'] || stepIdx + 1,
+        action: row['动作'] || '',
+        role: row['角色'] || '',
+        status: row['状态/结果'] || row['状态'] || '',
+      })),
+    }
+  }).filter(flow => flow.flow_name)
+
+  const customDevSection = getSection(sections, ['自开发定义', '智能开发定义'])
+  const customDevelopment = (parseAllTables(customDevSection)
+    .find(table => table[0] && '类型' in table[0] && '名称' in table[0]) || [])
+    .map((row, idx) => ({
+      type: row['类型'] || '自开发扩展',
+      name: row['名称'] || `自开发项 ${idx + 1}`,
+      trigger: row['触发条件'] || '',
+      scope: row['实现范围'] || '',
+      acceptance: row['验收口径'] || '',
+    }))
+
   return {
     app_info: {
       name: appInfo['应用名称'] || '',
@@ -726,5 +794,7 @@ export function standardDocMdToStructuredDoc(markdown: string) {
     tables,
     forms,
     role_table_mapping: Array.from(permissionMap.values()).filter(item => item.permissions.length > 0),
+    flows,
+    custom_development: customDevelopment,
   }
 }

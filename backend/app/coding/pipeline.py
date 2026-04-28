@@ -42,6 +42,14 @@ IDE_EXCLUDED_GLOBS = [
 ]
 
 
+def normalize_ide_theme(theme: Optional[str]) -> str:
+    return "light" if theme == "light" else "dark"
+
+
+def ide_color_theme(theme: Optional[str]) -> str:
+    return "Default Light Modern" if normalize_ide_theme(theme) == "light" else "Default Dark Modern"
+
+
 # ── Pipeline 参数 ──────────────────────────────────
 
 class PipelineParams:
@@ -78,7 +86,7 @@ class PipelineParams:
 
 # ── IDE 工具函数（从 routes/coding.py 搬过来） ──────
 
-def ensure_vibe_workspace_file(ws_path: Path) -> Path:
+def ensure_vibe_workspace_file(ws_path: Path, ide_theme: Optional[str] = None) -> Path:
     """为 Web IDE 生成轻量 workspace 文件。"""
     workspace_file = ws_path / ".vibe-ide.code-workspace"
     workspace_payload = {
@@ -89,6 +97,7 @@ def ensure_vibe_workspace_file(ws_path: Path) -> Path:
             "files.watcherExclude": {p: True for p in IDE_EXCLUDED_GLOBS},
             "explorer.autoReveal": False,
             "git.autoRepositoryDetection": "openEditors",
+            "workbench.colorTheme": ide_color_theme(ide_theme),
         },
     }
     serialized = json.dumps(workspace_payload, ensure_ascii=False, indent=2)
@@ -222,7 +231,8 @@ def build_ide_url(
     if not base_url:
         return None
 
-    ensure_vibe_workspace_file(ws_path)
+    ide_theme = "dark"
+    ensure_vibe_workspace_file(ws_path, ide_theme)
     ensure_cursor_rules(ws_path)
     write_ruijing_extension_config(ws_path, ws_id, ide_token, api_base, model, conversation_id=conversation_id)
 
@@ -233,6 +243,7 @@ def build_ide_url(
         "vibe_harness_api_base": derive_harness_api_base(api_base),
         "vibe_ide_token": ide_token,
         "vibe_model": model,
+        "vibe_ui_theme": ide_theme,
     }
     if conversation_id:
         query_params["vibe_conversation_id"] = str(conversation_id)
@@ -703,11 +714,11 @@ async def save_coding_message(db: AsyncSession, conversation_id: int, role: str,
 # ── Brainstorm 需求澄清 ────────────────────────────
 
 BRAINSTORM_PROPOSAL_MARKER = "<!-- BRAINSTORM_PROPOSAL -->"
-BRAINSTORM_MAX_REVISIONS = 3  # 最多修改 3 轮，超出自动生成代码
-BRAINSTORM_SCENES = {SceneType.WEB_COMPONENT_DUAL, SceneType.WEB_PAGE, SceneType.WEB_LIST_VIEW, SceneType.BACKEND_API}
+BRAINSTORM_MAX_REVISIONS = 8  # 仅用于记录多轮修订，不再强制进入代码生成
+BRAINSTORM_SCENES = {SceneType.WEB_COMPONENT, SceneType.WEB_COMPONENT_DUAL, SceneType.WEB_PAGE, SceneType.WEB_LIST_VIEW, SceneType.BACKEND_API}
 
 _BRAINSTORM_PROMPT_FORM_COMPONENT = """\
-你是一位资深 aPaaS 表单组件架构师。请分析用户需求，输出一份简洁的设计确认单（不超过 600 字，中文）。
+你是一位资深 aPaaS 表单组件架构师。请分析用户需求，输出一份可落地的开发 SPEC 确认单（不超过 700 字，中文）。
 
 开发类型：aPaaS 自定义表单组件（需生成 widget.config.json 及 edit/read/ide/list/print/search/search-ide 7 个场景文件）
 
@@ -729,7 +740,7 @@ _BRAINSTORM_PROMPT_FORM_COMPONENT = """\
 
 ## 输出模板（严格照此结构输出）
 
-## 📋 设计方案确认
+## 📋 开发 SPEC 确认
 
 **组件名称**：[中文名]（`[kebab-case英文名]`）
 **代码标识**：`FORM_CUSTOM_[大写下划线]`
@@ -791,45 +802,70 @@ _BRAINSTORM_PROMPT_FORM_COMPONENT = """\
 """
 
 _BRAINSTORM_PROMPT_PAGE = """\
-你是一位资深 aPaaS 前端页面架构师。请分析用户需求，输出一份简洁的设计确认单（不超过 600 字，中文）。
+你是一位资深 aPaaS 前端页面架构师。请分析用户需求，输出一份结构化的开发 SPEC 确认单（中文）。
 
 开发类型：aPaaS 自定义菜单页面（Vue 2.7 + Element UI，不可使用 Vue Router）
 
 用户需求：{message}
 
+## 元约束（这些是给你的指令，禁止抄进输出）
+1. 这是进入代码生成前的开发 SPEC，不是概念设计稿。每个章节都必须可指导后续代码实现。
+2. 优先复用 aPaaS 低代码已有能力：模型、表单、字典、权限、流程、平台 `$request` 服务。只有低代码配置覆盖不了的 UI、交互、聚合查询、可视化才进入自开发。
+3. 数据接口必须说明数据来源：`复用低代码表单服务 / 新增自开发接口 / 暂用 mock` 三选一，不允许只写 `/api/...`。
+4. 若用户需求缺少关键输入，不要假装完整；在"待确认问题"中列出，但仍给出默认建议。
+5. 输出总长度控制在 900 字内，表格优先，禁止长篇解释。
+
 请严格按以下 Markdown 格式输出，每个字段都必须给出具体值：
 
-## 📋 设计方案确认
+## 📋 开发 SPEC 确认
 
 **页面名称**：[中文名]（`[kebab-case英文名]`）
+**自开发类型**：自定义菜单页面
+**实现范围**：[页面/组件/接口/依赖的边界]
 
 **功能概述**：[一句话描述核心功能]
 
 ---
+
+### 1. 需求拆解与边界
+| 项 | 内容 |
+|----|------|
+| 核心目标 | [用户真正要解决的问题] |
+| 低代码复用 | [可直接复用的模型/表单/字典/权限/流程，没有则填"无"] |
+| 自开发范围 | [必须写代码实现的部分] |
+| 不做范围 | [本次明确不做的内容，没有则填"无"] |
 
 ### 页面结构
 ```
 [用 ASCII 画出主要区域布局，如搜索栏/表格/弹窗等]
 ```
 
-### 数据接口
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/...` | 列表查询 |
+### 2. 数据与接口策略
+| 数据/接口 | 来源 | 方法与路径 | 入参 | 出参 | 说明 |
+|-----------|------|------------|------|------|------|
+| [名称] | 复用低代码表单服务 / 新增自开发接口 / 暂用 mock | `GET /xxx` | [关键入参] | [关键出参] | [用途] |
 
-### 主要交互流程
+### 3. 状态与交互
 1. [步骤 1]
 2. [步骤 2]
 
-### 第三方依赖
+### 4. 验收标准
+- [可验证标准 1]
+- [可验证标准 2]
+- [可验证标准 3]
+
+### 5. 第三方依赖
 - [列出需要额外安装的 npm 包，若无则填"无"]
 
+### 6. 待确认问题
+- [没有则填"无"]
+
 ---
-以上是我对需求的理解，请确认是否准确？如有需要调整的地方请告知，确认后将立即开始生成代码。\
+以上是我整理的开发 SPEC，请确认是否准确；如需调整数据来源、接口或交互，请直接补充，确认后再开始生成代码。\
 """
 
 _BRAINSTORM_PROMPT_LIST = """\
-你是一位资深 aPaaS 前端架构师。请分析用户需求，输出一份简洁的设计确认单（不超过 500 字，中文）。
+你是一位资深 aPaaS 前端架构师。请分析用户需求，输出一份结构化的开发 SPEC 确认单（不超过 800 字，中文）。
 
 开发类型：aPaaS 自定义列表视图（Vue 2.7 + Element UI）
 
@@ -837,35 +873,46 @@ _BRAINSTORM_PROMPT_LIST = """\
 
 请严格按以下 Markdown 格式输出，每个字段都必须给出具体值：
 
-## 📋 设计方案确认
+## 📋 开发 SPEC 确认
 
 **列表名称**：[中文名]（`[kebab-case英文名]`）
+**自开发类型**：自定义列表视图
 
 **功能概述**：[一句话描述]
 
 ---
 
-### 列表结构
+### 1. 需求拆解与边界
+| 项 | 内容 |
+|----|------|
+| 低代码复用 | [可复用列表/模型/权限，没有则填"无"] |
+| 自开发范围 | [必须写代码的展示、筛选、操作等] |
+
+### 2. 列表结构
 | 列名 | 字段 | 说明 |
 |------|------|------|
 | 名称 | `name` | ... |
 
-### 操作与功能
+### 3. 操作与功能
 - **行操作**：[查看/编辑/删除等]
 - **批量操作**：[如有]
 - **搜索/筛选**：[支持哪些条件]
 
-### 数据接口
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/...` | 列表查询 |
+### 4. 数据接口
+| 数据/接口 | 来源 | 方法与路径 | 入参 | 出参 | 说明 |
+|-----------|------|------------|------|------|------|
+| 列表查询 | 复用低代码表单服务 / 新增自开发接口 / 暂用 mock | `GET /xxx` | [关键入参] | [关键出参] | [用途] |
+
+### 5. 验收标准
+- [可验证标准 1]
+- [可验证标准 2]
 
 ---
-以上是我对需求的理解，请确认是否准确？如有需要调整的地方请告知，确认后将立即开始生成代码。\
+以上是我整理的开发 SPEC，请确认是否准确；如需调整数据来源、接口或交互，请直接补充，确认后再开始生成代码。\
 """
 
 _BRAINSTORM_PROMPT_BACKEND_API = """\
-你是一位资深 aPaaS 后端架构师。请分析用户需求，输出一份简洁的设计确认单（不超过 600 字，中文）。
+你是一位资深 aPaaS 后端架构师。请分析用户需求，输出一份结构化的开发 SPEC 确认单（中文）。
 
 开发类型：aPaaS 后端自开发接口（SpringBoot Java，接口路径以 /custom 开头，包名 com.xdap）
 
@@ -873,29 +920,30 @@ _BRAINSTORM_PROMPT_BACKEND_API = """\
 
 请严格按以下 Markdown 格式输出，每个字段都必须给出具体值，禁止出现"视需求而定"：
 
-## 📋 设计方案确认
+## 📋 开发 SPEC 确认
 
 **接口名称**：[中文名]（`[camelCase英文名]`）
 **接口路径**：`/custom/[资源路径]`
 **请求方式**：`GET / POST`
+**实现范围**：[接口、服务、DAO、DTO、权限校验边界]
 
 **功能概述**：[一句话描述核心功能]
 
 ---
 
-### 数据表
+### 1. 数据来源与边界
 | 表名 | 说明 |
 |------|------|
 | `t_xxx` | ... |
 
-### 请求参数
+### 2. 请求参数
 | 参数名 | 类型 | 必填 | 说明 |
 |--------|------|------|------|
 | `keyword` | String | 否 | 模糊搜索关键词 |
 | `pageNum` | Integer | 是 | 页码，从 1 开始 |
 | `pageSize` | Integer | 是 | 每页条数 |
 
-### 响应结构
+### 3. 响应结构
 ```json
 {{
   "total": 100,
@@ -905,12 +953,16 @@ _BRAINSTORM_PROMPT_BACKEND_API = """\
 }}
 ```
 
-### 业务逻辑要点
+### 4. 业务逻辑要点
 1. [数据查询逻辑、关联表处理、字段转换等]
 2. [如有状态映射、JSON解析等特殊处理，逐条说明]
 
+### 5. 验收标准
+- [可验证标准 1]
+- [可验证标准 2]
+
 ---
-以上是我对需求的理解，请确认是否准确？如有需要调整的地方请告知，确认后将立即开始生成代码。\
+以上是我整理的开发 SPEC，请确认是否准确；如需调整参数、数据来源或业务规则，请直接补充，确认后再开始生成代码。\
 """
 
 _BRAINSTORM_PROMPTS = {
@@ -922,12 +974,12 @@ _BRAINSTORM_PROMPTS = {
 
 
 _BRAINSTORM_REVISION_PROMPT = """\
-你是一位资深 aPaaS 架构师，正在根据用户反馈**修改**一份已有的设计方案（不是重新设计）。
+你是一位资深 aPaaS 架构师，正在根据用户反馈**修改**一份已有的开发 SPEC（不是重新设计）。
 
 ## 原始需求
 {original_requirement}
 
-## 上一版设计方案
+## 上一版开发 SPEC
 {previous_proposal}
 
 ## 用户反馈
@@ -953,9 +1005,9 @@ _BRAINSTORM_REVISION_PROMPT = """\
 请告诉我是 A 还是 B，我再修改方案。
 ```
 
-## 方案输出格式（其他情况使用）
+## 开发 SPEC 输出格式（其他情况使用）
 
-严格按上一版 Markdown 结构输出修改后方案，保持章节顺序/表格列名一致，开头带"本次变更"段。**不要**把"修改规则"章节的文字复制到输出。
+严格按上一版 Markdown 结构输出修改后开发 SPEC，保持章节顺序/表格列名一致，开头带"本次变更"段。**不要**把"修改规则"章节的文字复制到输出。
 """
 
 
@@ -1121,10 +1173,10 @@ async def _generate_brainstorm_proposal(
     previous_proposal: Optional[str] = None,
     user_feedback: Optional[str] = None,
 ) -> str:
-    """LLM 生成结构化设计确认单（使用租户 coding LLM 配置）。
+    """LLM 生成结构化开发 SPEC 确认单（使用租户 coding LLM 配置）。
 
     首轮调用：只传 requirement（用户原始消息），走场景首轮 prompt 模板。
-    修改轮调用：同时传 previous_proposal（上一版方案）+ user_feedback（用户新反馈），
+    修改轮调用：同时传 previous_proposal（上一版开发 SPEC）+ user_feedback（用户新反馈），
     走 _BRAINSTORM_REVISION_PROMPT，强制 LLM 做最小修改、歧义反问、需求覆盖校验。
     """
     if previous_proposal and user_feedback:
@@ -1133,11 +1185,11 @@ async def _generate_brainstorm_proposal(
             previous_proposal=previous_proposal[:2500],
             user_feedback=user_feedback[:500],
         )
-        max_tokens = 1200  # 修改轮需要输出变更 diff + 需求覆盖校验，稍放宽
+        max_tokens = 1500  # 修改轮需要输出变更 diff + 需求覆盖校验，稍放宽
     else:
         prompt_tpl = _BRAINSTORM_PROMPTS.get(scene_type, _BRAINSTORM_PROMPT_PAGE)
         prompt = prompt_tpl.format(message=requirement[:1000])
-        max_tokens = 1000
+        max_tokens = 1400
     try:
         return await _brainstorm_llm_call(
             tenant_id, model,
@@ -1156,23 +1208,41 @@ async def _classify_brainstorm_response(
     user_message: str,
 ) -> str:
     """
-    LLM 分类用户对设计方案的回复意图。
+    LLM 分类用户对开发 SPEC 的回复意图。
     Returns: 'confirm' | 'revise' | 'abort'
     """
     # 快速关键词判断，避免 LLM 分类不稳定
-    msg_lower = user_message.strip().lower()
+    msg = user_message.strip()
+    msg_lower = msg.lower()
     _CONFIRM_KEYWORDS = {"好的", "可以", "没问题", "确认", "开始", "生成", "同意", "ok", "yes", "对", "行", "好"}
     _ABORT_KEYWORDS = {"取消", "不做了", "算了", "放弃", "abort"}
-    _REVISE_KEYWORDS = {"改", "修改", "不对", "应该", "加", "删", "换", "调整", "需要", "要"}
+    _REVISE_KEYWORDS = {
+        "改", "修改", "不对", "应该", "加", "删", "换", "调整", "需要", "要",
+        "接口", "api", "调用", "服务", "数据源", "数据来源", "低代码", "表单", "模型",
+        "权限", "字段", "筛选", "过滤", "图表", "页面", "验收", "依赖",
+    }
+    _QUESTION_KEYWORDS = {"？", "?", "吗", "如何", "怎么", "为什么", "能否", "是否", "可否", "能不能", "可不可以", "是不是", "有没有"}
     if any(kw in msg_lower for kw in _ABORT_KEYWORDS):
         return "abort"
-    if any(kw in msg_lower for kw in _CONFIRM_KEYWORDS) and not any(kw in msg_lower for kw in _REVISE_KEYWORDS):
+
+    # 只有非常短的纯确认才进入代码生成；任何追问或新增约束都回到 SPEC 修订。
+    if any(kw in msg_lower for kw in _QUESTION_KEYWORDS):
+        return "revise"
+    if any(kw in msg_lower for kw in _REVISE_KEYWORDS):
+        return "revise"
+
+    compact_msg = re.sub(r"[\s，,。.!！]+", "", msg_lower)
+    confirm_patterns = {
+        "好的", "可以", "没问题", "确认", "开始", "生成", "同意", "ok", "yes", "对", "行", "好",
+        "确认开始", "可以开始", "开始生成", "按这个来", "就这样", "没问题开始",
+    }
+    if compact_msg in confirm_patterns or (len(compact_msg) <= 12 and any(kw in compact_msg for kw in _CONFIRM_KEYWORDS)):
         return "confirm"
 
     prompt = (
-        "判断用户对设计方案的回复意图，只回复 CONFIRM、REVISE 或 ABORT，不要其他内容。\n\n"
-        "- CONFIRM：确认方案、同意、开始生成（如：好的、没问题、可以、开始、ok、对）\n"
-        "- REVISE：要求修改（如：不对、改一下、应该是...、加个...）\n"
+        "判断用户对开发 SPEC 的回复意图，只回复 CONFIRM、REVISE 或 ABORT，不要其他内容。\n\n"
+        "- CONFIRM：只包含确认方案、同意、开始生成（如：好的、没问题、确认、开始、ok）\n"
+        "- REVISE：要求修改、补充约束、追问是否可行、讨论接口/数据源/服务/低代码复用（如：接口能否...、可以通过...吗、应该是...、加个...）\n"
         "- ABORT：取消、不做了\n\n"
         f"用户回复：{user_message}"
     )
@@ -1188,9 +1258,11 @@ async def _classify_brainstorm_response(
             return "abort"
         if "REVISE" in answer:
             return "revise"
-        return "confirm"  # 兜底确认，避免死循环
+        if "CONFIRM" in answer:
+            return "confirm"
+        return "revise"
     except Exception:
-        return "confirm"  # 分类失败时默认确认，避免死循环
+        return "revise"  # 分类失败时保守留在 SPEC 修订阶段，避免误触发代码生成
 
 
 _BRAINSTORM_KEBAB_RE = re.compile(r"\*\*组件名称\*\*[：:]\s*([^（(]+?)\s*[（(]\s*`([a-z][a-z0-9-]*)`\s*[）)]")
@@ -1214,6 +1286,10 @@ def _parse_brainstorm_metadata(proposal: str) -> dict:
     if not proposal:
         return result
     m = _BRAINSTORM_KEBAB_RE.search(proposal)
+    if not m:
+        m = re.search(r"\*\*(?:页面名称|列表名称)\*\*[：:]\s*([^（(]+?)\s*[（(]\s*`([a-z][a-z0-9-]*)`\s*[）)]", proposal)
+    if not m:
+        m = re.search(r"\*\*接口名称\*\*[：:]\s*([^（(]+?)\s*[（(]\s*`([a-z][A-Za-z0-9]*)`\s*[）)]", proposal)
     if m:
         result["display_name"] = m.group(1).strip()
         result["short_kebab"] = m.group(2).strip()
@@ -1481,11 +1557,9 @@ async def run_coding_pipeline(
 
         if brainstorm_proposal:
             # 已有 brainstorm 提案：处理 abort/revise/confirm
-            if revision_count < BRAINSTORM_MAX_REVISIONS:
-                intent = await _classify_brainstorm_response(params.tenant_id, effective_model, params.message)
-            else:
-                intent = "confirm"
-                logger.info(f"Brainstorm max revisions reached ({revision_count}), forcing confirm")
+            intent = await _classify_brainstorm_response(params.tenant_id, effective_model, params.message)
+            if revision_count >= BRAINSTORM_MAX_REVISIONS and intent == "revise":
+                logger.info(f"Brainstorm has {revision_count} revisions; continue revising instead of forcing confirm")
 
             if intent == "abort":
                 yield _record_event({"type": "content", "content": "已取消。如需重新开始请描述新需求。"})
@@ -1514,10 +1588,10 @@ async def run_coding_pipeline(
                 return
 
             else:
-                # 用户确认：用原始需求 + 确认的设计方案作为 Agent 完整上下文
+                # 用户明确确认：用原始需求 + 确认的开发 SPEC 作为 Agent 完整上下文
                 effective_requirement = (
                     f"{original_requirement}\n\n"
-                    f"[设计方案已确认，请严格按以下方案生成代码，无需再向用户确认]\n"
+                    f"[开发 SPEC 已确认，请严格按以下 SPEC 生成代码，无需再向用户确认]\n"
                     f"{brainstorm_proposal}"
                 )
                 # ★ 此处才创建工作区，按 brainstorm 提取的 final 命名定型
@@ -1549,7 +1623,7 @@ async def run_coding_pipeline(
 
         # 走到这里有三种情况，且 ws_id 可能仍是 None：
         #   1. iteration 模式（ws_id 已存在，跳过）
-        #   2. 非 brainstorm 场景（如 backend-api 不在 BRAINSTORM_SCENES）
+        #   2. 非 brainstorm 场景
         #   3. brainstorm proposal 失败降级
         # 后两种 ws_id 仍是 None → 此时按用户原始消息命名创建工作区。
         if not ws_id:

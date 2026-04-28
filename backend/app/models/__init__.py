@@ -13,6 +13,15 @@ BigText = Text().with_variant(LONGTEXT, "mysql")
 
 # Import tenant models
 from app.models.tenant import Tenant, UserTenant, Role, Team, TeamMember
+from app.models.spec import Spec  # noqa: F401  — register ORM mapping
+from app.models.preference import UserPreference  # noqa: F401  — register ORM mapping
+from app.models.collaboration import (  # noqa: F401  — register ORM mapping
+    ApplicationMember,
+    ChangeProposal,
+    ProposalReview,
+    GitConnection,
+    PlatformDriftLog,
+)
 
 
 class User(Base):
@@ -73,6 +82,7 @@ class Conversation(Base):
     tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     agent_type: Mapped[str] = mapped_column(String(20), nullable=False)  # builder/assistant/developer/requirements
+    project_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     workspace_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)  # coding工作区ID
     selected_llm_config_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(20), default="active", nullable=False)  # active/completed/failed
@@ -87,6 +97,7 @@ class Conversation(Base):
     )
     coding_active_brainstorm_session_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     coding_active_coding_session_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    spec_id: Mapped[Optional[str]] = mapped_column(String(40), ForeignKey("builder_specs.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -218,7 +229,13 @@ class Application(Base):
     config_preview: Mapped[Optional[str]] = mapped_column(BigText, nullable=True)  # JSON
     generation_state: Mapped[Optional[str]] = mapped_column(BigText, nullable=True)  # JSON - copilot 中间状态
     current_doc_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 当前文档版本号
+    canonical_spec_id: Mapped[Optional[str]] = mapped_column(String(40), ForeignKey("builder_specs.id"), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="draft", nullable=False)  # draft/generating/updating/completed/failed
+    default_mode: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # 'simple' | 'pro' | None
+    # Phase C 协作：git 镜像元数据
+    git_repo_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    git_provider: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # 'gitlab' | 'github'
+    git_default_branch: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 

@@ -10,11 +10,6 @@ class UserLogin(BaseModel):
     password: str
 
 
-class UserRegister(BaseModel):
-    username: str
-    password: str
-
-
 class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"
@@ -28,6 +23,7 @@ class UserInfo(BaseModel):
     tenant_id: Optional[int] = None
     tenant_name: Optional[str] = None
     tenant_role: Optional[str] = None
+    org_permissions: Optional[dict] = None
 
 
 class TenantOption(BaseModel):
@@ -54,8 +50,10 @@ class TenantSelectRequest(BaseModel):
 
 # Conversation schemas
 class ConversationCreate(BaseModel):
-    agent_type: str = Field(..., pattern="^(builder|assistant|developer|requirements)$")
+    agent_type: str = Field(..., pattern="^(builder|assistant|developer|requirements|coding)$")
     selected_llm_config_id: Optional[int] = None
+    initial_message: Optional[str] = None
+    spec_id: Optional[str] = None
 
 
 class ConversationResponse(BaseModel):
@@ -64,6 +62,7 @@ class ConversationResponse(BaseModel):
     agent_type: str
     status: str
     selected_llm_config_id: Optional[int] = None
+    spec_id: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -83,6 +82,7 @@ class MessageResponse(BaseModel):
 # Application schemas
 class ApplicationCreate(BaseModel):
     conversation_id: Optional[int] = None
+    project_id: Optional[int] = None
     app_name: str
     app_code: str
     description: Optional[str] = None
@@ -109,6 +109,11 @@ class ApplicationResponse(BaseModel):
     forms: int = 0
     roles: int = 0
     dicts: int = 0
+    # Phase C：project & git
+    project_id: Optional[int] = None
+    git_repo_url: Optional[str] = None
+    git_provider: Optional[str] = None
+    git_default_branch: Optional[str] = None
     created_at: datetime
     updated_at: datetime
     permissions: Optional[dict] = None  # {edit: bool, delete: bool, clone: bool}
@@ -136,6 +141,11 @@ class MergedAppResponse(BaseModel):
     permissions: Optional[dict] = None
     env_name: Optional[str] = None          # 关联平台环境名称
     env_status: Optional[str] = None        # 关联平台环境连接状态
+    # Phase C：project & git
+    project_id: Optional[int] = None
+    git_repo_url: Optional[str] = None
+    git_provider: Optional[str] = None
+    git_default_branch: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -145,6 +155,8 @@ class ChatRequest(BaseModel):
     conversation_id: int
     message: str
     current_config: Optional[dict] = None
+    # Phase B: ChatPage 显式传 application_id 时，触发首次编辑前的 fork canonical → personal draft
+    application_id: Optional[int] = None
 
 
 class ChatStreamEvent(BaseModel):

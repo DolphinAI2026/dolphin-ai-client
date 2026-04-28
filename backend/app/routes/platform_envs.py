@@ -9,12 +9,12 @@ from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import PlatformEnv
-from app.deps import get_auth_context, AuthContext
+from app.models import Application, PlatformEnv
+from app.deps import AuthContext, require_tenant_admin, resolve_effective_tenant_id
 from app.apaas_client import APaaSClient
 
 logger = logging.getLogger(__name__)
@@ -49,13 +49,14 @@ class EnvUpdate(BaseModel):
 
 @router.get("")
 async def list_envs(
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """列出当前租户的所有平台环境"""
+    tenant_id = await resolve_effective_tenant_id(db, ctx)
     result = await db.execute(
         select(PlatformEnv)
-        .where(PlatformEnv.tenant_id == ctx.tenant_id)
+        .where(PlatformEnv.tenant_id == tenant_id)
         .order_by(PlatformEnv.created_at.desc())
     )
     envs = result.scalars().all()
@@ -77,12 +78,13 @@ async def list_envs(
 @router.post("")
 async def create_env(
     data: EnvCreate,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """创建平台环境"""
+    tenant_id = await resolve_effective_tenant_id(db, ctx)
     env = PlatformEnv(
-        tenant_id=ctx.tenant_id,
+        tenant_id=tenant_id,
         env_name=data.env_name,
         base_url=data.base_url.rstrip("/"),
         platform_tenant_id=data.platform_tenant_id,
@@ -101,14 +103,15 @@ async def create_env(
 async def update_env(
     env_id: int,
     data: EnvUpdate,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """更新平台环境"""
+    tenant_id = await resolve_effective_tenant_id(db, ctx)
     result = await db.execute(
         select(PlatformEnv).where(
             PlatformEnv.id == env_id,
-            PlatformEnv.tenant_id == ctx.tenant_id,
+            PlatformEnv.tenant_id == tenant_id,
         )
     )
     env = result.scalar_one_or_none()
@@ -164,23 +167,41 @@ async def update_env(
 @router.delete("/{env_id}")
 async def delete_env(
     env_id: int,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """删除平台环境"""
+    tenant_id = await resolve_effective_tenant_id(db, ctx)
     result = await db.execute(
         select(PlatformEnv).where(
             PlatformEnv.id == env_id,
-            PlatformEnv.tenant_id == ctx.tenant_id,
+            PlatformEnv.tenant_id == tenant_id,
         )
     )
     env = result.scalar_one_or_none()
     if not env:
         raise HTTPException(status_code=404, detail="环境不存在")
 
+    linked_count_result = await db.execute(
+        select(func.count(Application.id)).where(
+            Application.tenant_id == tenant_id,
+            Application.platform_env_id == env_id,
+        )
+    )
+    linked_count = int(linked_count_result.scalar_one() or 0)
+    if linked_count:
+        await db.execute(
+            update(Application)
+            .where(
+                Application.tenant_id == tenant_id,
+                Application.platform_env_id == env_id,
+            )
+            .values(platform_env_id=None)
+        )
+
     await db.delete(env)
     await db.commit()
-    return {"ok": True}
+    return {"ok": True, "unlinked_applications": linked_count}
 
 
 # ============================================================
@@ -190,14 +211,15 @@ async def delete_env(
 @router.post("/{env_id}/test")
 async def test_env(
     env_id: int,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """测试平台环境连接"""
+    tenant_id = await resolve_effective_tenant_id(db, ctx)
     result = await db.execute(
         select(PlatformEnv).where(
             PlatformEnv.id == env_id,
-            PlatformEnv.tenant_id == ctx.tenant_id,
+            PlatformEnv.tenant_id == tenant_id,
         )
     )
     env = result.scalar_one_or_none()
@@ -237,14 +259,15 @@ async def test_env(
 @router.post("/{env_id}/login")
 async def login_env(
     env_id: int,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """用账号密码登录获取 token"""
+    tenant_id = await resolve_effective_tenant_id(db, ctx)
     result = await db.execute(
         select(PlatformEnv).where(
             PlatformEnv.id == env_id,
-            PlatformEnv.tenant_id == ctx.tenant_id,
+            PlatformEnv.tenant_id == tenant_id,
         )
     )
     env = result.scalar_one_or_none()
@@ -279,13 +302,14 @@ async def login_env(
 @router.post("/{env_id}/set-default")
 async def set_default(
     env_id: int,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """设为默认环境"""
+    tenant_id = await resolve_effective_tenant_id(db, ctx)
     # 先取消所有默认
     all_envs_result = await db.execute(
-        select(PlatformEnv).where(PlatformEnv.tenant_id == ctx.tenant_id)
+        select(PlatformEnv).where(PlatformEnv.tenant_id == tenant_id)
     )
     for e in all_envs_result.scalars().all():
         e.is_default = (e.id == env_id)
@@ -300,16 +324,17 @@ async def set_default(
 @router.get("/{env_id}/remote-apps")
 async def list_remote_apps(
     env_id: int,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """列出平台上可导入的应用列表（排除已导入的）"""
     from app.models import Application
 
+    tenant_id = await resolve_effective_tenant_id(db, ctx)
     result = await db.execute(
         select(PlatformEnv).where(
             PlatformEnv.id == env_id,
-            PlatformEnv.tenant_id == ctx.tenant_id,
+            PlatformEnv.tenant_id == tenant_id,
         )
     )
     env = result.scalar_one_or_none()
@@ -345,7 +370,7 @@ async def list_remote_apps(
     # 查询已导入的 apaas_app_id
     imported_result = await db.execute(
         select(Application.apaas_app_id).where(
-            Application.tenant_id == ctx.tenant_id,
+            Application.tenant_id == tenant_id,
             Application.apaas_app_id.isnot(None),
         )
     )
@@ -374,15 +399,16 @@ async def list_remote_apps(
 @router.get("/embed-url")
 async def get_embed_url(
     app_id: int,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """获取嵌入低代码平台的 iframe URL（含 token）"""
     from app.models import Application
 
+    tenant_id = await resolve_effective_tenant_id(db, ctx)
     # 查应用
     result = await db.execute(
-        select(Application).where(Application.id == app_id, Application.tenant_id == ctx.tenant_id)
+        select(Application).where(Application.id == app_id, Application.tenant_id == tenant_id)
     )
     app = result.scalar_one_or_none()
     if not app:
@@ -397,14 +423,14 @@ async def get_embed_url(
         env = env_result.scalar_one_or_none()
     if not env:
         env_result = await db.execute(
-            select(PlatformEnv).where(PlatformEnv.tenant_id == ctx.tenant_id, PlatformEnv.is_default == True)
+            select(PlatformEnv).where(PlatformEnv.tenant_id == tenant_id, PlatformEnv.is_default == True)
         )
         env = env_result.scalar_one_or_none()
     if not env:
         # 兜底：取第一个已连接的环境
         env_result = await db.execute(
             select(PlatformEnv).where(
-                PlatformEnv.tenant_id == ctx.tenant_id,
+                PlatformEnv.tenant_id == tenant_id,
                 PlatformEnv.status == "connected",
             ).limit(1)
         )

@@ -979,6 +979,7 @@ async function handleGenerateDoc() {
     const decoder = new TextDecoder()
     let buffer = ''
     let currentEvent = ''
+    let validationPayload: any = null
 
     while (true) {
       const { done, value } = await reader.read()
@@ -998,6 +999,10 @@ async function handleGenerateDoc() {
             if (currentEvent === 'error' || data.message) {
               throw new Error(data.message || '生成失败')
             }
+            if (currentEvent === 'validation_required' || data.needs_user_input || data.validation?.needs_user_input) {
+              validationPayload = data.validation || data
+              continue
+            }
             if (data.doc_result) {
               docResult.value = data.doc_result
               const idx = sessions.value.findIndex(s => s.id === currentSessionId.value)
@@ -1013,6 +1018,17 @@ async function handleGenerateDoc() {
           }
         }
       }
+    }
+
+    if (validationPayload) {
+      const message = validationPayload.assistant_message || '设计文档预检发现编码冲突，请先补充新的模型或字段编码。'
+      genProgress.value = 100
+      genStep.value = '等待补充编码'
+      genError.value = message
+      messages.value.push({ role: 'assistant', content: message })
+      ElMessage.warning('需要先确认编码后再生成设计文档')
+      await scrollToBottom()
+      return
     }
 
     if (docResult.value) {

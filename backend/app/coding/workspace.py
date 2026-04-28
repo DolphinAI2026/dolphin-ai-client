@@ -2391,6 +2391,72 @@ const resultPath = '{str(result_json_path)}'
             ),
         )
 
+    def list_project_workspaces(self, project_id: int) -> list:
+        """列出项目下的所有工作区。"""
+        results_by_id: dict[str, dict] = {}
+        if not any(root.exists() for root in WORKSPACE_SEARCH_ROOTS):
+            return []
+        for d in self._iter_workspace_dirs():
+            try:
+                meta = self._decorate_workspace_meta(d, self._read_meta(d))
+                if meta.get("project_id") != project_id:
+                    continue
+                ws_id = str(meta.get("id") or d.name)
+                existing = results_by_id.get(ws_id)
+                if not existing:
+                    results_by_id[ws_id] = meta
+                    continue
+
+                existing_path = Path(existing.get("disk_path") or d)
+                if self._workspace_root_priority(d) < self._workspace_root_priority(existing_path):
+                    results_by_id[ws_id] = meta
+            except Exception:
+                pass
+        return sorted(
+            results_by_id.values(),
+            key=lambda meta: (
+                -(float(meta.get("activity_ts") or 0)),
+                self._workspace_root_priority(Path(meta.get("disk_path") or WORKSPACE_ROOT)),
+                str(meta.get("display_name") or meta.get("project_name") or meta.get("id") or ""),
+            ),
+        )
+
+    def list_accessible_workspaces(self, user_id: int, project_ids: list[int] | None = None) -> list:
+        """列出用户可访问的工作区：个人工作区 + 有权限的项目工作区。"""
+        allowed_projects = set(project_ids or [])
+        results_by_id: dict[str, dict] = {}
+        if not any(root.exists() for root in WORKSPACE_SEARCH_ROOTS):
+            return []
+        for d in self._iter_workspace_dirs():
+            try:
+                meta = self._decorate_workspace_meta(d, self._read_meta(d))
+                project_id = meta.get("project_id")
+                if project_id:
+                    if project_id not in allowed_projects:
+                        continue
+                elif meta.get("user_id") != user_id:
+                    continue
+
+                ws_id = str(meta.get("id") or d.name)
+                existing = results_by_id.get(ws_id)
+                if not existing:
+                    results_by_id[ws_id] = meta
+                    continue
+
+                existing_path = Path(existing.get("disk_path") or d)
+                if self._workspace_root_priority(d) < self._workspace_root_priority(existing_path):
+                    results_by_id[ws_id] = meta
+            except Exception:
+                pass
+        return sorted(
+            results_by_id.values(),
+            key=lambda meta: (
+                -(float(meta.get("activity_ts") or 0)),
+                self._workspace_root_priority(Path(meta.get("disk_path") or WORKSPACE_ROOT)),
+                str(meta.get("display_name") or meta.get("project_name") or meta.get("id") or ""),
+            ),
+        )
+
     async def delete_workspace(self, ws_id: str):
         """删除工作区：先停掉所有 serve 进程，再递归删除文件夹。"""
         # 1. 停 serve 进程（单端 / 双端都会清理）

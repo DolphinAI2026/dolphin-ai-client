@@ -25,8 +25,10 @@ export const usePreviewStore = defineStore('preview', () => {
     dicts: [],
     models: [],
     forms: [],
+    flows: [],
     workflows: [],
-    permissions: []
+    permissions: [],
+    custom_development: []
   })
 
   const defaultStages = () => [
@@ -82,8 +84,10 @@ export const usePreviewStore = defineStore('preview', () => {
     preview.dicts = []
     preview.models = []
     preview.forms = []
+    preview.flows = []
     preview.workflows = []
     preview.permissions = []
+    preview.custom_development = []
     resetGenProgress()
   }
 

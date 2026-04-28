@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import httpx
 
 from app.database import get_db
-from app.deps import AuthContext, get_auth_context, require_tenant_admin
+from app.deps import AuthContext, get_auth_context, require_tenant_admin, resolve_effective_tenant_id
 from app.models import LLMConfig
 from app.crypto import encrypt_password, decrypt_password
 from app.llm_client import LLMClient
@@ -26,6 +26,10 @@ PROVIDER_PRESETS = {
     "moonshot": {"base_url": "https://api.moonshot.cn/v1", "models": ["moonshot-v1-128k", "moonshot-v1-32k"]},
     "openai": {"base_url": "https://api.openai.com/v1", "models": ["gpt-4o", "gpt-4o-mini"]},
     "anthropic": {"base_url": "https://api.anthropic.com/v1", "models": ["claude-sonnet-4-20250514"]},
+    "dolphin": {
+        "base_url": "http://ai-agent.dfy.definesys.cn/omnigate/0",
+        "models": ["gpt-5.5", "gpt-5.4", "gpt-5.3-codex", "claude-sonnet-4-6", "claude-opus-4-6"],
+    },
 }
 
 
@@ -146,13 +150,14 @@ async def get_provider_presets():
 
 @router.get("")
 async def list_llm_configs(
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """列出当前租户的 LLM 配置"""
+    tenant_id = await resolve_effective_tenant_id(db, ctx)
     result = await db.execute(
         select(LLMConfig)
-        .where(LLMConfig.tenant_id == ctx.tenant_id)
+        .where(LLMConfig.tenant_id == tenant_id)
         .order_by(LLMConfig.is_default.desc(), LLMConfig.created_at.desc())
     )
     rows = result.scalars().all()
@@ -166,7 +171,8 @@ async def list_llm_config_options(
     purpose: str = Query("builder"),
 ):
     """列出指定用途可用的模型选项（面向普通用户的只读列表）。"""
-    rows = await list_llm_configs_for_purpose(db, ctx.tenant_id, purpose)
+    tenant_id = await resolve_effective_tenant_id(db, ctx)
+    rows = await list_llm_configs_for_purpose(db, tenant_id, purpose)
     return [LLMConfigOptionResponse.from_db(row) for row in rows]
 
 
@@ -177,12 +183,13 @@ async def create_llm_config(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """新增 LLM 配置（管理员）"""
+    tenant_id = await resolve_effective_tenant_id(db, ctx)
     # 如果设为默认，先清除其他同 purpose 的默认
     if req.is_default:
-        await _clear_defaults(db, ctx.tenant_id, req.purpose)
+        await _clear_defaults(db, tenant_id, req.purpose)
 
     config = LLMConfig(
-        tenant_id=ctx.tenant_id,
+        tenant_id=tenant_id,
         config_name=req.config_name,
         provider=req.provider,
         base_url=req.base_url.rstrip("/"),
@@ -207,8 +214,9 @@ async def update_llm_config(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """编辑 LLM 配置（管理员）"""
+    tenant_id = await resolve_effective_tenant_id(db, ctx)
     result = await db.execute(
-        select(LLMConfig).where(LLMConfig.id == config_id, LLMConfig.tenant_id == ctx.tenant_id)
+        select(LLMConfig).where(LLMConfig.id == config_id, LLMConfig.tenant_id == tenant_id)
     )
     config = result.scalar_one_or_none()
     if not config:
@@ -237,14 +245,14 @@ async def update_llm_config(
     if req.is_default is True:
         if config.status != "active":
             raise HTTPException(status_code=400, detail="未启用模型不能设为默认")
-        await _clear_defaults(db, ctx.tenant_id, config.purpose)
+        await _clear_defaults(db, tenant_id, config.purpose)
         config.is_default = True
     elif req.is_default is False:
         config.is_default = False
 
     if config.status == "inactive" and config.is_default:
         config.is_default = False
-        await _assign_replacement_default(db, ctx.tenant_id, config.purpose, exclude_id=config.id)
+        await _assign_replacement_default(db, tenant_id, config.purpose, exclude_id=config.id)
 
     await db.commit()
     await db.refresh(config)
@@ -258,8 +266,9 @@ async def delete_llm_config(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """删除 LLM 配置（管理员）"""
+    tenant_id = await resolve_effective_tenant_id(db, ctx)
     result = await db.execute(
-        select(LLMConfig).where(LLMConfig.id == config_id, LLMConfig.tenant_id == ctx.tenant_id)
+        select(LLMConfig).where(LLMConfig.id == config_id, LLMConfig.tenant_id == tenant_id)
     )
     config = result.scalar_one_or_none()
     if not config:
@@ -277,8 +286,9 @@ async def test_llm_config(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """测试 LLM 配置连接"""
+    tenant_id = await resolve_effective_tenant_id(db, ctx)
     result = await db.execute(
-        select(LLMConfig).where(LLMConfig.id == config_id, LLMConfig.tenant_id == ctx.tenant_id)
+        select(LLMConfig).where(LLMConfig.id == config_id, LLMConfig.tenant_id == tenant_id)
     )
     config = result.scalar_one_or_none()
     if not config:
@@ -288,8 +298,15 @@ async def test_llm_config(
 
     try:
         async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
-            is_codex = config.provider == "codex" or "codex" in (config.model or "").lower()
-            is_anthropic_compat = "/anthropic" in (config.base_url or "")
+            # Dolphin omnigate 是统一 OpenAI 兼容网关，所有模型都走 chat/completions
+            is_unified_gateway = "/omnigate" in (config.base_url or "").lower()
+            is_codex = (
+                not is_unified_gateway
+                and (config.provider == "codex" or "codex" in (config.model or "").lower())
+            )
+            is_anthropic_compat = (
+                not is_unified_gateway and "/anthropic" in (config.base_url or "")
+            )
 
             if is_codex:
                 resp = await client.post(
@@ -364,8 +381,9 @@ async def set_default_llm_config(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """设为默认 LLM 配置"""
+    tenant_id = await resolve_effective_tenant_id(db, ctx)
     result = await db.execute(
-        select(LLMConfig).where(LLMConfig.id == config_id, LLMConfig.tenant_id == ctx.tenant_id)
+        select(LLMConfig).where(LLMConfig.id == config_id, LLMConfig.tenant_id == tenant_id)
     )
     config = result.scalar_one_or_none()
     if not config:
@@ -373,7 +391,7 @@ async def set_default_llm_config(
     if config.status != "active":
         raise HTTPException(status_code=400, detail="请先启用模型后再设为默认")
 
-    await _clear_defaults(db, ctx.tenant_id, config.purpose)
+    await _clear_defaults(db, tenant_id, config.purpose)
     config.is_default = True
     await db.commit()
     await db.refresh(config)
@@ -391,8 +409,9 @@ async def update_llm_config_status(
     if req.status not in {"active", "inactive"}:
         raise HTTPException(status_code=400, detail="状态只支持 active 或 inactive")
 
+    tenant_id = await resolve_effective_tenant_id(db, ctx)
     result = await db.execute(
-        select(LLMConfig).where(LLMConfig.id == config_id, LLMConfig.tenant_id == ctx.tenant_id)
+        select(LLMConfig).where(LLMConfig.id == config_id, LLMConfig.tenant_id == tenant_id)
     )
     config = result.scalar_one_or_none()
     if not config:
@@ -401,7 +420,7 @@ async def update_llm_config_status(
     config.status = req.status
     if req.status == "inactive" and config.is_default:
         config.is_default = False
-        await _assign_replacement_default(db, ctx.tenant_id, config.purpose, exclude_id=config.id)
+        await _assign_replacement_default(db, tenant_id, config.purpose, exclude_id=config.id)
 
     await db.commit()
     await db.refresh(config)

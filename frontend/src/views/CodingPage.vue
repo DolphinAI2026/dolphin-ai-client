@@ -1,9 +1,14 @@
 <template>
-  <WorkbenchShell>
+  <BuilderFrame :breadcrumbs="[{ label: '睿鲸AI Coding' }]" :class="{ 'is-embedded': embedMode }">
     <!-- Env Picker Dialog -->
     <el-dialog v-model="showEnvPicker" title="选择调试平台环境" width="500px" :append-to-body="true">
       <div v-if="platformEnvs.length === 0" style="text-align:center;color:#999;padding:20px;">
-        暂无平台环境，请先到<el-link type="primary" @click="$router.push('/platform-envs')">环境管理</el-link>添加
+        <template v-if="userStore.isTenantAdmin">
+          暂无平台环境，请先到<el-link type="primary" @click="$router.push('/platform-envs')">环境管理</el-link>添加
+        </template>
+        <template v-else>
+          当前账号没有环境管理权限，请联系租户管理员配置可用环境。
+        </template>
       </div>
       <div v-else style="display:flex;flex-direction:column;gap:12px;">
         <div
@@ -49,9 +54,10 @@
             </button>
             <button
               class="view-toggle-btn"
-              :class="{ active: activeView === 'ide', disabled: !ideUrl }"
-              :disabled="!ideUrl"
-              @click="ideUrl && (activeView = 'ide')"
+              :class="{ active: activeView === 'ide', disabled: !canOpenIdeView }"
+              :disabled="!canOpenIdeView"
+              :title="webIdeUnavailable ? '当前环境未配置 Web IDE' : 'IDE'"
+              @click="switchToIdeView"
             >
               <el-icon :size="13"><Monitor /></el-icon>
               <span class="view-toggle-label">IDE</span>
@@ -62,154 +68,156 @@
           <div class="toggle-bar-placeholder"></div>
         </div>
 
-        <!-- Welcome State -->
+        <!-- Welcome State (Codex-like command center) -->
         <div v-if="!ideUrl && !isStreaming && streamMessages.length === 0" class="welcome-pane">
-          <div class="welcome-inner">
-            <div class="welcome-hero">
-              <div class="welcome-icon">&#x2728;</div>
-              <h2 class="welcome-title">AI Coding</h2>
-              <p class="welcome-desc">用AI快速开发</p>
+          <div class="welcome-inner" :style="codingLandingVars">
 
-              <!-- Input Area (centered) -->
-              <div class="welcome-input-area">
-                <!-- Attachment Preview -->
-                <div v-if="attachedFile" class="attachment-preview">
-                  <div v-if="attachedPreviewUrl" class="attachment-thumb">
+            <section class="qc-section coding-command-center">
+              <input
+                ref="fileInputRef"
+                type="file"
+                accept=".md,.pdf,.docx,.txt,.png,.jpg,.jpeg"
+                style="display: none"
+                @change="handleFileSelect"
+              />
+
+              <div class="coding-command-copy">
+                <p class="coding-command-kicker">睿鲸AI CODING</p>
+                <h1 class="coding-command-title">你想开发什么？</h1>
+                <p class="coding-command-subtitle">描述组件、页面、接口或脚本，AI 会先形成开发任务，再创建工作区。</p>
+              </div>
+
+              <div class="qc-shell ai-surface">
+                <div class="qc-row" @paste="handlePaste">
+                  <textarea
+                    v-model="userInput"
+                    class="qc-input"
+                    :placeholder="`问 AI 开发一个 ${activeSceneCategoryLabel}，例如：项目总览分析页面…`"
+                    rows="1"
+                    @keydown.enter.exact.prevent="sendMessage"
+                    @keydown.meta.enter.prevent="sendMessage"
+                    @keydown.ctrl.enter.prevent="sendMessage"
+                    :disabled="isCreating"
+                  ></textarea>
+                  <button
+                    type="button"
+                    class="qc-submit"
+                    :disabled="(!userInput.trim() && !attachedFile) || isCreating"
+                    @click="sendMessage"
+                    title="进入开发 (Enter)"
+                  >
+                    <span v-if="!isCreating && !isUploading" class="qc-submit-arrow">↗</span>
+                    <span v-else class="composer-submit-spinner" />
+                  </button>
+                </div>
+
+                <!-- 附件预览 -->
+                <div v-if="attachedFile" class="qc-attach">
+                  <div v-if="attachedPreviewUrl" class="qc-attach-thumb">
                     <img :src="attachedPreviewUrl" alt="preview" />
-                    <button class="attachment-remove" @click="removeAttachment">&times;</button>
+                    <button class="qc-attach-remove" @click="removeAttachment">&times;</button>
                   </div>
-                  <div v-else class="attachment-file">
-                    <span class="attachment-file-icon">&#128196;</span>
-                    <span class="attachment-file-name">{{ attachedFile.name }}</span>
-                    <button class="attachment-remove" @click="removeAttachment">&times;</button>
+                  <div v-else class="qc-attach-file">
+                    <span class="qc-attach-icon">&#128196;</span>
+                    <span class="qc-attach-name">{{ attachedFile.name }}</span>
+                    <button class="qc-attach-remove" @click="removeAttachment">&times;</button>
                   </div>
                 </div>
 
-                <div class="input-wrapper" @paste="handlePaste">
-                  <input
-                    ref="fileInputRef"
-                    type="file"
-                    accept=".md,.pdf,.docx,.txt,.png,.jpg,.jpeg"
-                    style="display: none"
-                    @change="handleFileSelect"
-                  />
-                  <div class="composer-topline">
-                    <div class="coding-model-inline">
-                      <el-popover
-                        v-model:visible="codingModelPopoverVisible"
-                        placement="bottom-start"
-                        trigger="click"
-                        :width="360"
-                        popper-class="coding-model-popover"
-                        :disabled="codingModelLoading || updatingCodingModel || codingModelOptions.length === 0"
+                <!-- Toolbar：附件 + 类型 + 模型 -->
+                <div class="qc-toolbar">
+                  <button
+                    type="button"
+                    class="qc-chip qc-icon-only"
+                    @click="fileInputRef?.click()"
+                    :disabled="isCreating"
+                    title="附加文件"
+                  >📎</button>
+
+                  <!-- 类型选择（替代外面的 tab pills） -->
+                  <el-popover placement="bottom-start" trigger="click" :width="180">
+                    <template #reference>
+                      <button type="button" class="qc-chip qc-chip-type" title="项目类型">
+                        <span>{{ activeSceneCategoryIcon }}</span>
+                        <span>{{ activeSceneCategoryLabel }}</span>
+                        <el-icon><ArrowDown /></el-icon>
+                      </button>
+                    </template>
+                    <div class="qc-type-panel">
+                      <button
+                        v-for="cat in sceneCategories"
+                        :key="cat.key"
+                        type="button"
+                        class="qc-type-option"
+                        :class="{ 'is-active': activeSceneCategory === cat.key }"
+                        @click="activeSceneCategory = cat.key"
                       >
-                        <template #reference>
-                          <button
-                            type="button"
-                            class="coding-model-trigger"
-                            :class="{ 'is-open': codingModelPopoverVisible, 'is-disabled': codingModelLoading || updatingCodingModel || codingModelOptions.length === 0 }"
-                            :disabled="codingModelLoading || updatingCodingModel || codingModelOptions.length === 0"
-                            aria-label="选择模型"
-                          >
-                            <div class="coding-model-trigger-content">
-                              <div class="coding-model-trigger-main">
-                                <span class="coding-model-trigger-name">{{ selectedCodingModelOption?.config_name || '选择模型' }}</span>
-                              </div>
-                              <el-icon class="coding-model-trigger-icon">
-                                <ArrowDown />
-                              </el-icon>
-                            </div>
-                          </button>
-                        </template>
-                        <div class="coding-model-panel">
-                          <button
-                            v-for="option in codingModelOptions"
-                            :key="option.id"
-                            type="button"
-                            class="coding-model-panel-option"
-                            :class="{ 'is-active': selectedCodingModelValue === toCodingModelValue(option.id) }"
-                            @click="selectCodingModel(option)"
-                          >
-                            <div class="coding-model-panel-option-head">
-                              <span class="coding-model-panel-option-name">{{ option.config_name }}</span>
-                              <span v-if="option.is_default" class="coding-model-panel-option-default">默认</span>
-                            </div>
-                            <span class="coding-model-panel-option-meta">
-                              {{ formatCodingModelProvider(option.provider) }} / {{ option.model }}
-                            </span>
-                          </button>
+                        <span>{{ cat.icon }}</span>
+                        <span>{{ cat.label }}</span>
+                      </button>
+                    </div>
+                  </el-popover>
+
+                  <!-- 模型选择 -->
+                  <el-popover
+                    v-model:visible="codingModelPopoverVisible"
+                    placement="bottom-start"
+                    trigger="click"
+                    :width="360"
+                    popper-class="coding-model-popover"
+                    :disabled="codingModelLoading || updatingCodingModel || codingModelOptions.length === 0"
+                  >
+                    <template #reference>
+                      <button
+                        type="button"
+                        class="qc-chip"
+                        :class="{ 'is-open': codingModelPopoverVisible, 'is-disabled': codingModelLoading || updatingCodingModel || codingModelOptions.length === 0 }"
+                        :disabled="codingModelLoading || updatingCodingModel || codingModelOptions.length === 0"
+                        aria-label="选择模型"
+                      >
+                        <span>{{ selectedCodingModelOption?.config_name || '选择模型' }}</span>
+                        <el-icon><ArrowDown /></el-icon>
+                      </button>
+                    </template>
+                    <div class="coding-model-panel">
+                      <button
+                        v-for="option in codingModelOptions"
+                        :key="option.id"
+                        type="button"
+                        class="coding-model-panel-option"
+                        :class="{ 'is-active': selectedCodingModelValue === toCodingModelValue(option.id) }"
+                        @click="selectCodingModel(option)"
+                      >
+                        <div class="coding-model-panel-option-head">
+                          <span class="coding-model-panel-option-name">{{ option.config_name }}</span>
+                          <span v-if="option.is_default" class="coding-model-panel-option-default">默认</span>
                         </div>
-                      </el-popover>
-                      <span class="coding-model-tip">{{ codingModelHint }}</span>
+                        <span class="coding-model-panel-option-meta">
+                          {{ formatCodingModelProvider(option.provider) }} / {{ option.model }}
+                        </span>
+                      </button>
                     </div>
-                  </div>
-                  <div class="input-mainline">
-                    <el-button
-                      text
-                      class="attach-btn"
-                      @click="fileInputRef?.click()"
-                      :disabled="isCreating"
-                      title="上传附件"
-                    >
-                      <el-icon :size="18"><Paperclip /></el-icon>
-                    </el-button>
-                    <div class="composer-text-zone">
-                      <el-input
-                        v-model="userInput"
-                        type="textarea"
-                        :rows="1"
-                        :autosize="{ minRows: 1, maxRows: 5 }"
-                        placeholder="描述你想开发的内容，告诉我你想开发什么，我会自动创建项目并打开 AI 代码编辑器"
-                        @keydown.ctrl.enter="sendMessage"
-                        @keydown.meta.enter="sendMessage"
-                        :disabled="isCreating"
-                        resize="none"
-                      />
-                    </div>
-                    <el-button
-                      type="primary"
-                      class="send-btn"
-                      :loading="isCreating || isUploading"
-                      @click="sendMessage"
-                      :disabled="(!userInput.trim() && !attachedFile) || isCreating"
-                      circle
-                    >
-                      <el-icon v-if="!isCreating && !isUploading"><TopRight /></el-icon>
-                    </el-button>
-                  </div>
+                  </el-popover>
+
+                  <div class="qc-spacer"></div>
+
+                  <span class="qc-kbd-hint">Enter / ⌘↵</span>
                 </div>
               </div>
-            </div>
 
-            <!-- Scene Category Chips -->
-            <div class="scene-tabs">
-              <button
-                v-for="cat in sceneCategories"
-                :key="cat.key"
-                class="scene-tab"
-                :class="{ active: activeSceneCategory === cat.key }"
-                @click="activeSceneCategory = cat.key"
-              >
-                <span class="scene-tab-icon">{{ cat.icon }}</span>
-                {{ cat.label }}
-              </button>
-            </div>
-
-            <div v-if="sceneSuggestions[activeSceneCategory]?.length" class="scene-suggestion-grid">
-              <button
-                v-for="suggestion in sceneSuggestions[activeSceneCategory]"
-                :key="suggestion"
-                class="scene-suggestion-card"
-                @click="sendSuggestion(suggestion)"
-              >
-                {{ suggestion }}
-              </button>
-            </div>
+              <p v-if="topSuggestions.length" class="qc-hints">
+                <span class="qc-hints-label">试试</span>
+                <template v-for="(s, i) in topSuggestions" :key="s">
+                  <button type="button" class="qc-hint-item" @click="sendSuggestion(s)">{{ s }}</button>
+                  <span v-if="i < topSuggestions.length - 1" class="qc-hint-sep">·</span>
+                </template>
+              </p>
+            </section>
 
             <div class="workspace-showcase">
               <div class="workspace-showcase-header">
                 <div>
-                  <h3 class="workspace-showcase-title">我的自开发文件</h3>
+                  <h3 class="workspace-showcase-title">已开发组件</h3>
                 </div>
                 <button
                   v-if="existingWorkspaces.length > 0"
@@ -238,10 +246,6 @@
                     <span class="workspace-card-type">{{ workspaceTypeLabel(ws.project_type) }}</span>
                   </div>
                   <div class="workspace-card-footer">
-                    <div class="workspace-card-meta">
-                      <span>文件类型：{{ workspaceTypeLabel(ws.project_type) }}</span>
-                      <span>包名：{{ workspaceCodeName(ws) || ws.project_name }}</span>
-                    </div>
                     <div class="workspace-card-actions">
                       <button
                         :class="['workspace-card-action', 'workspace-card-action-primary', { 'is-loading': openingWsId === ws.id }]"
@@ -257,6 +261,7 @@
                         </svg>
                       </button>
                       <button
+                        v-if="canUploadWorkspace(ws)"
                         :class="['workspace-card-action', { 'is-loading': uploadingWsId === ws.id }]"
                         :title="uploadingWsId === ws.id ? '上传中...' : '上传组件包'"
                         :disabled="uploadingWsId === ws.id"
@@ -287,6 +292,7 @@
                         </svg>
                       </button>
                       <button
+                        v-if="canDeleteWorkspace(ws)"
                         :class="['workspace-card-action', 'workspace-card-action-danger', { 'is-loading': deletingWsId === ws.id }]"
                         :title="deletingWsId === ws.id ? '删除中...' : '删除工作区'"
                         :disabled="deletingWsId === ws.id || openingWsId === ws.id || downloadingWsId === ws.id || uploadingWsId === ws.id"
@@ -309,7 +315,7 @@
               </div>
 
               <div v-else class="workspace-showcase-empty">
-                暂无自开发文件，先描述一个需求，我们会自动创建项目。
+                暂无已开发组件。先描述一个开发需求，我们会创建工作区并保留交付记录。
               </div>
             </div>
           </div>
@@ -545,10 +551,10 @@
             </button>
             <button
               class="embedded-panel-btn"
-              :class="{ active: activeView === 'ide', disabled: !ideUrl }"
-              :disabled="!ideUrl"
-              @click="ideUrl && (activeView = 'ide')"
-              title="代码编辑器"
+              :class="{ active: activeView === 'ide', disabled: !canOpenIdeView }"
+              :disabled="!canOpenIdeView"
+              @click="switchToIdeView"
+              :title="webIdeUnavailable ? '当前环境未配置 Web IDE' : '代码编辑器'"
             >
               <el-icon :size="16"><Monitor /></el-icon>
             </button>
@@ -557,14 +563,28 @@
             <button class="embedded-panel-btn" :disabled="isDownloading" @click="downloadCode" title="下载代码">
               <el-icon :size="16"><Download /></el-icon>
             </button>
-            <button class="embedded-panel-btn danger" @click="deleteCurrentWorkspace" title="删除工作区">
+            <button
+              v-if="codingStore.workspace && currentAppGitRepoUrl"
+              class="embedded-panel-btn"
+              :disabled="syncingToRepo"
+              @click="onSyncToRepo"
+              :title="syncingToRepo ? 'Syncing...' : 'Sync to repo'"
+            >
+              <span class="sync-btn-label">{{ syncingToRepo ? 'Syncing...' : 'Sync to repo' }}</span>
+            </button>
+            <button
+              v-if="codingStore.workspace && canDeleteWorkspace(codingStore.workspace)"
+              class="embedded-panel-btn danger"
+              @click="deleteCurrentWorkspace"
+              title="删除工作区"
+            >
               <el-icon :size="16"><Delete /></el-icon>
             </button>
           </div>
         </template>
       </aside>
     </div>
-  </WorkbenchShell>
+  </BuilderFrame>
 
   <EnvSelectModal v-model="showUploadEnvModal" @selected="onUploadEnvSelected" />
 </template>
@@ -578,18 +598,16 @@ import { ArrowDown, ArrowLeft, Download, TopRight, Paperclip, Monitor, Delete, F
 import { useCodingStore } from '@/stores/coding'
 import { platformEnvApi, type PlatformEnv } from '@/api/platformEnv'
 import { useUserStore } from '@/stores/user'
-import { codingApi } from '@/api/coding'
-import type { WorkspaceInfo, UploadResult, ReplayStreamMessage } from '@/api/coding'
-import { harnessApi } from '@/api/harness'
-import { conversationApi } from '@/api/conversation'
-import { llmConfigApi, type BuilderModelOption } from '@/api/llmConfig'
-import { consumeSseResponse } from '@/utils/sse'
-import ThemeToggle from '@/components/ThemeToggle.vue'
-import WorkbenchShell from '@/components/WorkbenchShell.vue'
+import { codingApi, isIdeUnavailableError } from '@/api/coding'
+import type { WorkspaceInfo, ReplayStreamMessage } from '@/api/coding'
+import { gitConnectionApi } from '@/api/gitConnection'
+import { applicationApi } from '@/api/application'
+import { useThemeStore } from '@/stores/theme'
+import BuilderFrame from '@/components/BuilderFrame.vue'
 import EnvSelectModal from '@/components/EnvSelectModal.vue'
 import FileCard from '@/components/FileCard.vue'
 import { useCodingModel } from './coding/useCodingModel'
-import { useStreamMessages, formatSceneType, renderMarkdown } from './coding/useStreamMessages'
+import { useStreamMessages, renderMarkdown } from './coding/useStreamMessages'
 import { useIdeManager } from './coding/useIdeManager'
 import { useCodingWorkspace } from './coding/useCodingWorkspace'
 import { useCodingPipeline } from './coding/useCodingPipeline'
@@ -597,12 +615,23 @@ import { useCodingPipeline } from './coding/useCodingPipeline'
 const route = useRoute()
 const router = useRouter()
 const codingStore = useCodingStore()
+
+// Embed mode (?embed=true) used by WorkspaceShell CodeView iframe
+// (Phase F Task 9): hides nav rail + topbar via .is-embedded CSS hack.
+const embedMode = computed(() => route.query.embed === 'true')
 const userStore = useUserStore()
+const themeStore = useThemeStore()
 
 // ============ Core State ============
 const userInput = ref('')
 const isCreating = ref(false)
-const creatingStatus = ref('')
+
+// Code mode uses the same calm blue family as the workbench primary action.
+const codingLandingVars: Record<string, string> = {
+  '--landing-mode-color': '#6f7ff2',
+  '--landing-mode-soft': 'rgba(111, 127, 242, 0.10)',
+  '--landing-mode-ink': '#4c5fda',
+}
 
 // ── IDE iframe 管理（已抽成 composable）──
 const {
@@ -618,6 +647,72 @@ const {
   retryIdeLoad,
   openPendingIde,
 } = useIdeManager()
+
+const webIdeUnavailable = ref(false)
+const ideUnavailableNotified = ref(false)
+const canOpenIdeView = computed(() => (
+  !webIdeUnavailable.value &&
+  (!!ideUrl.value || !!pendingIdeUrl.value || !!codingStore.workspace)
+))
+
+function setWebIdeUnavailable() {
+  webIdeUnavailable.value = true
+  pendingIdeUrl.value = null
+  ideUrl.value = null
+  if (activeView.value === 'ide') activeView.value = 'chat'
+}
+
+function notifyWebIdeUnavailable(message = '当前环境未配置 Web IDE，已保持在对话模式继续开发') {
+  setWebIdeUnavailable()
+  if (!ideUnavailableNotified.value) {
+    ElMessage.info(message)
+    ideUnavailableNotified.value = true
+  }
+}
+
+function setWebIdeAvailable() {
+  webIdeUnavailable.value = false
+  ideUnavailableNotified.value = false
+}
+
+async function switchToIdeView() {
+  if (webIdeUnavailable.value) {
+    notifyWebIdeUnavailable()
+    return
+  }
+
+  if (ideUrl.value) {
+    setWebIdeAvailable()
+    activeView.value = 'ide'
+    return
+  }
+
+  if (pendingIdeUrl.value) {
+    setWebIdeAvailable()
+    await openPendingIde()
+    return
+  }
+
+  const workspace = codingStore.workspace
+  if (!workspace) {
+    ElMessage.info('当前还没有可打开的 IDE 工作区')
+    return
+  }
+
+  try {
+    const { ide_url } = await codingApi.getIdeUrl(workspace.id, codingStore.conversationId, themeStore.mode)
+    setWebIdeAvailable()
+    await setIdeUrl(ide_url)
+    activeView.value = 'ide'
+  } catch (error: any) {
+    if (isIdeUnavailableError(error)) {
+      notifyWebIdeUnavailable()
+      return
+    }
+    ElMessage.warning(error?.response?.data?.detail || error?.message || 'IDE URL 获取失败')
+  }
+}
+
 // ── Coding 模型选择（已抽成 composable）──
 const {
   codingModelOptions,
@@ -658,6 +753,7 @@ const {
   allWorkspaces,
   isDownloading,
   downloadingWsId,
+  embeddedProjectId,
   embeddedAppId,
   existingWorkspaces,
   workspaceShowcaseItems,
@@ -675,6 +771,55 @@ const deletingWsId = ref<string | null>(null)
 
 const embeddedPanelCollapsed = ref(false)
 
+// ── Phase D Task 6：Sync workspace → repo ──
+const syncingToRepo = ref(false)
+const currentAppGitRepoUrl = ref<string | null>(null)
+
+async function loadCurrentAppGitRepo() {
+  const appIdRaw = embeddedAppId.value
+  if (!appIdRaw) {
+    currentAppGitRepoUrl.value = null
+    return
+  }
+  const appId = Number(appIdRaw)
+  if (!Number.isFinite(appId)) {
+    currentAppGitRepoUrl.value = null
+    return
+  }
+  try {
+    const app = await applicationApi.get(appId)
+    currentAppGitRepoUrl.value = app?.git_repo_url || null
+  } catch {
+    currentAppGitRepoUrl.value = null
+  }
+}
+
+async function onSyncToRepo() {
+  const ws = codingStore.workspace
+  const appIdRaw = embeddedAppId.value
+  if (!ws || !appIdRaw) return
+  const appId = Number(appIdRaw)
+  if (!Number.isFinite(appId)) {
+    ElMessage.error('应用 ID 不合法')
+    return
+  }
+  syncingToRepo.value = true
+  try {
+    const result = await gitConnectionApi.syncWorkspace(appId, ws.id)
+    ElMessage.success(
+      `Sync 成功：commit ${result.commit_sha?.slice(0, 7) || '?'} on ${result.branch || '?'}（${result.file_count ?? 0} 个文件）`
+    )
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || e?.message || 'Sync 失败')
+  } finally {
+    syncingToRepo.value = false
+  }
+}
+
+watch(() => embeddedAppId.value, () => {
+  loadCurrentAppGitRepo()
+}, { immediate: true })
+
 // ============ Attachment State ============
 const attachedFile = ref<File | null>(null)
 const attachedPreviewUrl = ref<string | null>(null)
@@ -691,6 +836,14 @@ const platformEnvs = ref<PlatformEnv[]>([])
 const uploadingWsId = ref<string | null>(null)
 const showUploadEnvModal = ref(false)
 const pendingUploadWs = ref<WorkspaceInfo | null>(null)
+
+function canUploadWorkspace(ws: WorkspaceInfo) {
+  return ws.permissions?.upload_to_platform !== false
+}
+
+function canDeleteWorkspace(ws: WorkspaceInfo) {
+  return ws.permissions?.delete !== false
+}
 
 async function uploadWorkspaceCard(ws: WorkspaceInfo) {
   uploadingWsId.value = ws.id
@@ -712,7 +865,10 @@ async function uploadWorkspaceCard(ws: WorkspaceInfo) {
   }
 
   if (connectedEnvs.length === 1) {
-    await doUploadWorkspace(ws, connectedEnvs[0].id)
+    const env = connectedEnvs[0]
+    if (env) {
+      await doUploadWorkspace(ws, env.id)
+    }
   } else {
     uploadingWsId.value = null
     pendingUploadWs.value = ws
@@ -741,8 +897,9 @@ function onUploadEnvSelected(envId: number) {
 
 // ============ Scene Categories & Suggestions ============
 const sceneCategories = [
-  { key: 'component-pc', icon: '\uD83E\uDDE9', label: '\u7EC4\u4EF6' },
+  { key: 'component-pc', icon: '\uD83E\uDDE9', label: 'PC\u7EC4\u4EF6' },
   { key: 'page-pc', icon: '\uD83D\uDDA5\uFE0F', label: 'PC\u9875\u9762' },
+  { key: 'component-mobile', icon: '\uD83D\uDCF1', label: 'Mobile\u7EC4\u4EF6' },
   { key: 'page-mobile', icon: '\uD83D\uDCF1', label: 'Mobile\u9875\u9762' },
   { key: 'backend', icon: '\u2699\uFE0F', label: '\u540E\u7AEF\u63A5\u53E3' },
 ]
@@ -755,10 +912,16 @@ const sceneSuggestions: Record<string, string[]> = {
     '创建一个图表分析组件，支持柱状图和饼图',
   ],
   'page-pc': [
+    '做一个项目进度甘特图页面，复用低代码任务表单服务',
     '做一个数据查询表格页面，带搜索和分页',
     '开发一个供应商管理弹窗选择页面',
-    '创建一个项目分析图表页面',
-    '做一个审批流程页面，支持多级审批',
+    '创建一个项目分析图表页面，包含统计卡片和趋势图',
+  ],
+  'component-mobile': [
+    '开发一个移动端签名板组件',
+    '做一个移动端图片选择上传组件',
+    '实现一个移动端级联选择器组件',
+    '创建一个移动端评分组件',
   ],
   'page-mobile': [
     '做一个移动端数据查询列表页面',
@@ -774,12 +937,68 @@ const sceneSuggestions: Record<string, string[]> = {
 }
 
 const activeSceneCategory = ref('component-pc')
+
+// Workspace-first 重设新增的派生状态
+const activeSceneCategoryLabel = computed(() =>
+  sceneCategories.find(c => c.key === activeSceneCategory.value)?.label || '组件'
+)
+const activeSceneCategoryIcon = computed(() =>
+  sceneCategories.find(c => c.key === activeSceneCategory.value)?.icon || '🧩'
+)
+const topSuggestions = computed(() =>
+  (sceneSuggestions[activeSceneCategory.value] || []).slice(0, 4)
+)
 const pendingSceneCategory = ref<string | null>(null)
+
+const sceneCategoryToProjectType: Record<string, string> = {
+  'component-pc': 'form-component',
+  'page-pc': 'menu-page',
+  'component-mobile': 'mobile-component',
+  'page-mobile': 'mobile-page',
+  backend: 'backend-api',
+}
+
+const AI_BUILDER_PENDING_CODING_KEY = 'ai_builder_pending_coding'
+async function maybeConsumeAiBuilderDispatch() {
+  if (route.query.from_ai_builder !== '1') return
+  if (route.query.workspace_id || route.query.ws) return
+  if (streamMessages.value.length > 0 || isCreating.value || isStreaming.value) return
+
+  const raw = sessionStorage.getItem(AI_BUILDER_PENDING_CODING_KEY)
+  if (!raw) return
+
+  let payload: { message?: string; projectId?: number | null; sceneCategory?: string } | null = null
+  try {
+    payload = JSON.parse(raw)
+  } catch {
+    sessionStorage.removeItem(AI_BUILDER_PENDING_CODING_KEY)
+    return
+  }
+
+  if (!payload?.message?.trim()) {
+    sessionStorage.removeItem(AI_BUILDER_PENDING_CODING_KEY)
+    return
+  }
+
+  sessionStorage.removeItem(AI_BUILDER_PENDING_CODING_KEY)
+
+  if (payload.projectId) {
+    localStorage.setItem('coding_last_project_id', String(payload.projectId))
+  }
+  if (payload.sceneCategory && sceneSuggestions[payload.sceneCategory]?.length) {
+    activeSceneCategory.value = payload.sceneCategory
+    pendingSceneCategory.value = payload.sceneCategory
+  }
+
+  userInput.value = payload.message.trim()
+  await nextTick()
+  await sendMessage()
+}
 
 // ============ Lifecycle ============
 
 onMounted(async () => {
-  // 申请浏览器通知权限（用于设计方案生成后提醒用户）
+  // 申请浏览器通知权限（用于开发 SPEC 生成后提醒用户）
   if ('Notification' in window && Notification.permission === 'default') {
     Notification.requestPermission()
   }
@@ -807,6 +1026,7 @@ onMounted(async () => {
     await openWorkspaceById(wsId)
   } else {
     selectedCodingModelValue.value = normalizeCodingModelValue(selectedCodingModelValue.value)
+    await maybeConsumeAiBuilderDispatch()
   }
 })
 
@@ -830,6 +1050,7 @@ async function openWorkspaceCatalogPage() {
   await router.push({
     path: '/workspace-catalog',
     query: {
+      ...(embeddedProjectId.value ? { project_id: embeddedProjectId.value } : {}),
       ...(embeddedAppId.value ? { app_id: embeddedAppId.value } : {}),
     },
   })
@@ -854,9 +1075,18 @@ async function openWorkspaceById(wsId: string) {
       workspaceConversation.stream_messages || [],
     )
 
-    const { ide_url } = await codingApi.getIdeUrl(ws.id, workspaceConversation.conversation_id)
-    await setIdeUrl(ide_url)
-    activeView.value = 'ide'
+    try {
+      const { ide_url } = await codingApi.getIdeUrl(ws.id, workspaceConversation.conversation_id, themeStore.mode)
+      setWebIdeAvailable()
+      await setIdeUrl(ide_url)
+      activeView.value = 'ide'
+    } catch (error: any) {
+      if (isIdeUnavailableError(error)) {
+        notifyWebIdeUnavailable('当前环境未配置 Web IDE，已进入对话开发模式')
+        return
+      }
+      throw error
+    }
   } catch (error: any) {
     ElMessage.error(`打开工作区失败: ${error.message}`)
   }
@@ -875,12 +1105,14 @@ function loadConversationHistory(
   // 所以这里只把 brainstorm 方案及之前的 user 预先插入，codegen 阶段的内容交给 replay 恢复。
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i]
+    if (!msg) continue
     const content = msg.content || ''
     if (msg.role === 'assistant' && content.startsWith('<!-- BRAINSTORM_PROPOSAL -->')) {
       // 找到这条 brainstorm 方案前一条 user（原始需求）
       for (let j = i - 1; j >= 0; j--) {
-        if (messages[j].role === 'user') {
-          addStreamMsg({ type: 'user', content: messages[j].content })
+        const previous = messages[j]
+        if (previous?.role === 'user') {
+          addStreamMsg({ type: 'user', content: previous.content })
           break
         }
       }
@@ -978,7 +1210,9 @@ function startNewWorkspace() {
   codingStore.reset()
   persistedCodingModelValue.value = null
   selectedCodingModelValue.value = normalizeCodingModelValue(selectedCodingModelValue.value)
+  setWebIdeAvailable()
   ideUrl.value = null
+  pendingIdeUrl.value = null
   ideLoaded.value = false
   streamMessages.value = []
   activeView.value = 'chat'
@@ -1012,6 +1246,8 @@ async function deleteWorkspace(ws: WorkspaceInfo) {
     if (codingStore.workspace?.id === ws.id) {
       codingStore.reset()
       ideUrl.value = null
+      pendingIdeUrl.value = null
+      setWebIdeAvailable()
       localStorage.removeItem('coding_last_workspace_id')
     }
     ElMessage.success('已删除')
@@ -1073,30 +1309,27 @@ const { sendMessage, sendSuggestion } = useCodingPipeline({
   model: { codingModelOptions, codingModelLoading, updatingCodingModel, selectedCodingModelValue, persistedCodingModelValue, codingModelPopoverVisible, selectedCodingModelOption, codingModelHint, codingModelSummary, toCodingModelValue, normalizeCodingModelValue, applyCodingModelSelection, loadCodingModelOptions, handleCodingModelChange, selectCodingModel } as any,
   stream: { streamMessages, isStreaming, streamContainerRef, scrollStreamToBottom, addStreamMsg, appendToLastThinking, appendToLastCommand, completeStepMsg, addStepRunningMsg, restoreReplayStreamMessages } as any,
   ide: { ideUrl, ideLoaded, ideLoadError, ideLoadingText, pendingIdeUrl, activeView, setIdeUrl, onIdeFrameLoad, onIdeFrameError, retryIdeLoad, openPendingIde } as any,
-  workspace: { allWorkspaces, isDownloading, embeddedAppId, existingWorkspaces, workspaceShowcaseItems, workspaceDisplayName, workspaceCodeName, workspaceTooltip, workspaceTypeLabel, downloadWorkspaceArtifact } as any,
+  workspace: { allWorkspaces, isDownloading, embeddedProjectId, embeddedAppId, existingWorkspaces, workspaceShowcaseItems, workspaceDisplayName, workspaceCodeName, workspaceTooltip, workspaceTypeLabel, downloadWorkspaceArtifact } as any,
   activeSceneCategory,
   pendingSceneCategory,
+  sceneCategoryToProjectType,
   userInput,
   attachedFile,
   attachedPreviewUrl,
   isUploading,
   isCreating,
+  onIdeUnavailable: setWebIdeUnavailable,
+  onIdeAvailable: setWebIdeAvailable,
 })
 
 
 // ============ Header Actions ============
 
-async function loadPlatformEnvs() {
-  try {
-    platformEnvs.value = await platformEnvApi.list()
-  } catch { /* ignore */ }
-}
-
 async function openBrowserPreviewWithEnv(env: PlatformEnv) {
   if (!codingStore.workspace) return
   showEnvPicker.value = false
   try {
-    const { ide_url } = await codingApi.getIdeUrl(codingStore.workspace.id, codingStore.conversationId)
+    const { ide_url } = await codingApi.getIdeUrl(codingStore.workspace.id, codingStore.conversationId, themeStore.mode)
     const urlParams = new URLSearchParams(new URL(ide_url).search)
     const token = urlParams.get('vibe_ide_token') || ''
     const wsId = codingStore.workspace.id
@@ -1124,10 +1357,27 @@ async function downloadCode() {
 
 // ============ Watchers ============
 
+watch(() => themeStore.mode, async (mode) => {
+  const workspace = codingStore.workspace
+  if (!workspace || webIdeUnavailable.value) return
+  try {
+    const { ide_url } = await codingApi.getIdeUrl(workspace.id, codingStore.conversationId, mode)
+    if (activeView.value === 'ide' && ideUrl.value) {
+      await setIdeUrl(ide_url)
+    } else {
+      pendingIdeUrl.value = ide_url
+    }
+  } catch {
+    // 主题同步失败不影响当前开发会话。
+  }
+})
+
 watch(() => route.path, () => {
   if (!route.path.startsWith('/coding')) {
     codingStore.reset()
     ideUrl.value = null
+    pendingIdeUrl.value = null
+    setWebIdeAvailable()
   }
 })
 </script>
@@ -1136,6 +1386,13 @@ watch(() => route.path, () => {
 /* ============================================================
    CodingPage — Project Launcher + Embedded IDE
    ============================================================ */
+
+/* Embed mode (?embed=true): hide topbar so this view can be cleanly
+ * iframed by WorkspaceShell (Phase F Task 9). NavRail is hidden via
+ * the existing ?embed_nav=0 mechanism passed by the iframe URL. */
+.is-embedded :deep(.builder-topbar) {
+  display: none !important;
+}
 
 .coding-page {
   height: 100vh;
@@ -1219,12 +1476,15 @@ watch(() => route.path, () => {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 7px 16px;
+  height: 34px;
+  padding: 0 13px;
   border: 1px solid var(--t-border-subtle);
   border-radius: 8px;
   background: transparent;
   color: var(--t-text-secondary);
-  font-size: 14px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
   cursor: pointer;
   transition: all 0.15s ease;
 }
@@ -1639,62 +1899,27 @@ watch(() => route.path, () => {
   min-width: 0;
 }
 
-/* ============ Welcome Pane ============ */
 .welcome-pane {
   flex: 1;
-  display: flex;
-  align-items: stretch;
-  justify-content: center;
+  min-height: 0;
   overflow-y: auto;
   background:
-    radial-gradient(circle at top, rgba(101, 120, 255, 0.11), transparent 34%),
-    linear-gradient(180deg, #f5f7ff 0%, #f7fbff 100%);
+    radial-gradient(circle at 50% 8%, rgba(97, 112, 238, 0.12), transparent 30%),
+    linear-gradient(rgba(97, 112, 238, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(97, 112, 238, 0.045) 1px, transparent 1px),
+    #f7f9fd;
+  background-size: auto, 26px 26px, 26px 26px, auto;
 }
 
 .welcome-inner {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  max-width: 1160px;
-  width: 100%;
+  width: min(100%, 1180px);
   min-height: 100%;
-  padding: 6px 36px 28px;
-  position: relative;
-}
-
-.welcome-hero {
-  width: 100%;
-  min-height: clamp(328px, 46vh, 468px);
+  margin: 0 auto;
+  padding: 48px 28px 40px;
   display: flex;
   flex-direction: column;
-  align-items: center;
   justify-content: center;
-}
-
-.welcome-icon {
-  font-size: 26px;
-  margin-bottom: 8px;
-  filter: drop-shadow(0 0 24px var(--t-brand-glow));
-}
-
-.welcome-title {
-  font-size: 34px;
-  font-weight: 800;
-  margin: 0 0 10px;
-  background: var(--t-brand-gradient);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-  letter-spacing: -0.02em;
-}
-
-.welcome-desc {
-  color: var(--t-text-secondary);
-  font-size: 14px;
-  margin: 0 0 16px;
-  line-height: 1.6;
-  max-width: 680px;
+  gap: 26px;
 }
 
 /* ============ Welcome Input Area ============ */
@@ -1993,7 +2218,7 @@ watch(() => route.path, () => {
   transform: translateY(-1px);
 }
 
-@media (max-width: 920px) {
+@media (max-width: 820px) {
   .coding-model-trigger {
     width: 100%;
     min-width: 0;
@@ -2098,102 +2323,370 @@ watch(() => route.path, () => {
   right: -6px;
 }
 
-/* ============ Scene Tabs ============ */
-.scene-tabs {
+/* ============ Quick Composer (Workspace-first 重设) ============ */
+.qc-section {
+  width: min(100%, 860px);
+  margin: 0 auto;
   display: flex;
-  flex-wrap: nowrap;
-  overflow-x: auto;
-  gap: 8px;
-  justify-content: flex-start;
-  width: 100%;
-  margin-bottom: 26px;
-  padding-bottom: 4px;
-  scrollbar-width: none;
+  flex-direction: column;
+  gap: 14px;
+  flex-shrink: 0;
 }
 
-.scene-tabs::-webkit-scrollbar {
-  display: none;
+.coding-command-center {
+  align-items: stretch;
 }
 
-.scene-tab {
+.coding-command-copy {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 4px;
-  padding: 8px 14px;
-  border-radius: 999px;
-  border: 1px solid var(--t-border-subtle);
-  background: transparent;
+  gap: 8px;
+  margin-bottom: 2px;
+  text-align: center;
+}
+
+.coding-command-kicker {
+  margin: 0;
+  color: #6f7ff2;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.coding-command-title {
+  margin: 0;
+  color: var(--t-text-primary);
+  font-size: clamp(30px, 3.2vw, 42px);
+  line-height: 1.12;
+  font-weight: 760;
+  letter-spacing: 0;
+}
+
+.coding-command-subtitle {
+  margin: 0;
+  max-width: 560px;
   color: var(--t-text-secondary);
   font-size: 13px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  flex: 0 0 auto;
+  line-height: 1.65;
 }
 
-.scene-tab:hover {
-  border-color: var(--t-brand-glow);
+.qc-shell {
+  width: 100%;
+  border: 1px solid #dbe2ea;
+  border-radius: 16px;
+  background: #fff;
+  overflow: hidden;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.05);
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.qc-shell:focus-within {
+  border-color: #c7d2fe;
+  box-shadow: 0 0 0 3px rgba(111, 127, 242, 0.10);
+}
+
+.qc-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 17px 16px 8px 18px;
+}
+
+.qc-input {
+  flex: 1;
+  border: 0;
+  outline: 0;
+  resize: none;
+  background: transparent;
   color: var(--t-text-primary);
+  font-size: 15px;
+  line-height: 1.55;
+  font-family: inherit;
+  min-height: 70px;
+  max-height: 190px;
+  padding: 0;
+  font-weight: 500;
 }
 
-.scene-tab.active {
+.qc-input::placeholder {
+  color: #8b98ae;
+}
+
+.qc-submit {
+  flex-shrink: 0;
+  width: 42px;
+  height: 42px;
+  margin-top: 2px;
+  border-radius: 12px;
+  border: 0;
+  background: #111827;
+  color: #fff;
+  font-size: 18px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: none;
+  transition: opacity 0.15s ease, transform 0.15s ease, background 0.15s ease;
+}
+
+.qc-submit:disabled {
+  opacity: 0.34;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.qc-submit:not(:disabled):hover {
+  transform: translateY(-1px);
+  background: #020617;
+}
+
+.qc-submit-arrow {
+  display: inline-block;
+  transform: translate(-1px, 1px);
+}
+
+.qc-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px 15px 18px;
+}
+
+.qc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 11px;
+  border-radius: 10px;
+  border: 1px solid #dbe2ea;
+  background: #f8fafc;
+  color: var(--t-text-secondary);
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.qc-chip:not(:disabled):hover {
+  color: var(--t-brand);
   border-color: var(--t-brand);
   background: var(--t-brand-subtle);
-  color: var(--t-brand-light);
 }
 
-.scene-tab-icon {
+.qc-chip:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.qc-icon-only {
+  width: 32px;
+  padding: 0;
+  justify-content: center;
+}
+
+.qc-chip-type {
+  font-weight: 500;
+}
+
+.qc-spacer {
+  flex: 1;
+}
+
+.qc-kbd-hint {
+  color: var(--t-text-muted);
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.qc-type-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+}
+
+.qc-type-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--t-text-primary);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  text-align: left;
+  transition: background 0.15s ease;
+}
+
+.qc-type-option:hover {
+  background: var(--t-bg-panel-hover);
+}
+
+.qc-type-option.is-active {
+  background: var(--t-brand-subtle);
+  color: var(--t-brand);
+  font-weight: 600;
+}
+
+.qc-attach {
+  padding: 0 12px 8px;
+}
+
+.qc-attach-thumb {
+  position: relative;
+  display: inline-block;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--t-border-subtle);
+}
+
+.qc-attach-thumb img {
+  display: block;
+  max-width: 96px;
+  max-height: 64px;
+  object-fit: cover;
+}
+
+.qc-attach-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--t-bg-input);
+  color: var(--t-text-secondary);
+  font-size: 12px;
+}
+
+.qc-attach-icon {
   font-size: 13px;
 }
 
-.scene-suggestion-grid {
-  width: min(100%, 1280px);
-  display: flex;
-  gap: 10px;
-  margin: -12px 0 14px;
-  padding-bottom: 2px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none;
-}
-
-.scene-suggestion-grid::-webkit-scrollbar {
-  display: none;
-}
-
-.scene-suggestion-card {
-  flex: 0 0 auto;
-  min-height: 40px;
-  max-width: 360px;
-  padding: 0 18px;
-  border-radius: 999px;
-  border: 1px solid rgba(227, 232, 246, 0.72);
-  background: rgba(255, 255, 255, 0.78);
-  color: #73819d;
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1.35;
+.qc-attach-name {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
-  text-align: left;
-  cursor: pointer;
-  box-shadow:
-    0 6px 16px rgba(107, 118, 172, 0.04),
-    inset 0 1px 0 rgba(255, 255, 255, 0.82);
-  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease, color 0.2s ease;
 }
 
-.scene-suggestion-card:hover {
+.qc-attach-remove {
+  margin-left: 4px;
+  width: 18px;
+  height: 18px;
+  border-radius: 9px;
+  border: 0;
+  background: rgba(0, 0, 0, 0.06);
+  color: inherit;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.qc-hints {
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  align-items: center;
+  gap: 8px;
+  color: var(--t-text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.qc-hints-label {
+  flex-shrink: 0;
+  margin-right: 2px;
+  color: var(--t-text-muted);
+  font-weight: 600;
+}
+
+.qc-hint-item {
+  border: 1px solid #dbe2ea;
+  background: #fff;
+  color: #61708c;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 5px 9px;
+  border-radius: 999px;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+}
+
+.qc-hint-item:hover {
+  background: var(--landing-mode-soft);
+  border-color: color-mix(in srgb, var(--landing-mode-color) 32%, transparent);
+  color: var(--landing-mode-ink);
   transform: translateY(-1px);
-  border-color: rgba(112, 126, 238, 0.16);
-  color: #55637f;
-  box-shadow:
-    0 10px 20px rgba(99, 102, 241, 0.06),
-    inset 0 1px 0 rgba(255, 255, 255, 0.88);
+}
+
+.qc-hint-sep {
+  color: var(--t-text-muted);
+  opacity: 0.5;
+  user-select: none;
+}
+
+@media (max-width: 760px) {
+  .welcome-inner {
+    padding: 30px 18px 28px;
+    gap: 20px;
+  }
+
+  .coding-command-title {
+    font-size: 30px;
+  }
+
+  .qc-section {
+    width: 100%;
+  }
+
+  .qc-row {
+    padding: 18px 14px 8px 16px;
+    gap: 10px;
+  }
+
+  .qc-input {
+    min-height: 86px;
+    font-size: 16px;
+  }
+
+  .qc-submit {
+    width: 42px;
+    height: 42px;
+    border-radius: 14px;
+  }
+
+  .qc-toolbar {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    padding: 0 14px 14px 16px;
+  }
+
+  .qc-spacer,
+  .qc-kbd-hint {
+    display: none;
+  }
+
+  .qc-hints {
+    justify-content: flex-start;
+  }
 }
 
 /* ============ Workspace Showcase ============ */
 .workspace-showcase {
-  width: min(100%, 1280px);
-  margin-top: 0;
+  width: min(100%, 1040px);
+  margin: 2px auto 0;
+  padding-top: 22px;
+  border-top: 1px solid #dfe4ec;
+  flex-shrink: 0;
 }
 
 .workspace-showcase-header {
@@ -2201,7 +2694,7 @@ watch(() => route.path, () => {
   align-items: flex-end;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 8px;
+  margin-bottom: 12px;
   width: 100%;
 }
 
@@ -2209,7 +2702,7 @@ watch(() => route.path, () => {
   margin: 0;
   color: var(--t-text-primary);
   font-size: 15px;
-  font-weight: 650;
+  font-weight: 760;
   line-height: 1.2;
   text-align: left;
 }
@@ -2236,29 +2729,30 @@ watch(() => route.path, () => {
 
 .workspace-cards-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
   width: 100%;
   align-items: stretch;
 }
 
 .workspace-card {
-  border: 1px solid var(--t-border-subtle);
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.9);
-  padding: 13px;
+  border: 1px solid #dbe2ea;
+  border-radius: 14px;
+  background: #fff;
+  padding: 14px 16px 12px;
   text-align: left;
   cursor: pointer;
   transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
-  min-height: 134px;
+  min-height: 112px;
   display: flex;
   flex-direction: column;
+  gap: 10px;
 }
 
 .workspace-card:hover {
   transform: translateY(-1px);
-  border-color: var(--t-brand-glow);
-  box-shadow: 0 8px 18px rgba(99, 102, 241, 0.1);
+  border-color: #c7d2fe;
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.05);
 }
 
 .workspace-catalog-grid {
@@ -2290,9 +2784,14 @@ watch(() => route.path, () => {
 
 .workspace-card-name {
   color: var(--t-text-primary);
-  font-size: 12px;
-  font-weight: 650;
+  font-size: 13px;
+  font-weight: 720;
   line-height: 1.35;
+  /* 防御 display_name 偶尔是 chat 长片段，单行省略 */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
 }
 
 .workspace-card-meta-row {
@@ -2305,9 +2804,10 @@ watch(() => route.path, () => {
   height: 20px;
   padding: 0 7px;
   border-radius: 10px;
-  background: rgba(241, 243, 252, 0.95);
-  color: #95a2bf;
+  background: #f3f6fb;
+  color: var(--t-text-muted);
   font-size: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
 .workspace-card-type {
@@ -2316,8 +2816,8 @@ watch(() => route.path, () => {
   padding: 0 7px;
   height: 20px;
   border-radius: 999px;
-  background: var(--t-brand-subtle);
-  color: var(--t-brand-light);
+  background: #f3f6fb;
+  color: #647085;
   font-size: 9px;
   font-weight: 600;
   white-space: nowrap;
@@ -2325,21 +2825,12 @@ watch(() => route.path, () => {
 
 .workspace-card-footer {
   margin-top: auto;
-  padding-top: 8px;
-  border-top: 1px solid rgba(229, 233, 247, 0.9);
+  padding-top: 0;
+  border-top: 0;
   display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
+  align-items: center;
+  justify-content: flex-end;
   gap: 12px;
-}
-
-.workspace-card-meta {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  color: var(--t-text-muted);
-  font-size: 10px;
-  line-height: 1.35;
 }
 
 .workspace-card-actions {
@@ -2348,28 +2839,29 @@ watch(() => route.path, () => {
 }
 
 .workspace-card-action {
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--t-border-subtle);
-  background: #fff;
+  border: 1px solid #dbe2ea;
+  background: #f8fafc;
   color: var(--t-text-secondary);
-  border-radius: 10px;
+  border-radius: 8px;
   cursor: pointer;
   transition: all 0.2s ease;
 }
 
 .workspace-card-action-icon {
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
   display: block;
 }
 
 .workspace-card-action-primary {
-  color: var(--t-brand);
-  border-color: rgba(99, 102, 241, 0.2);
+  color: #4f6bff;
+  border-color: #cfd8ff;
+  background: #f4f6ff;
 }
 
 .workspace-card-action:hover {
@@ -2415,10 +2907,6 @@ watch(() => route.path, () => {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .scene-suggestion-grid {
-    gap: 8px;
-  }
-
   .workspace-cards-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -2428,18 +2916,6 @@ watch(() => route.path, () => {
   .workspace-catalog-grid {
     grid-template-columns: 1fr;
     gap: 10px;
-  }
-
-  .scene-suggestion-grid {
-    gap: 8px;
-    margin: -10px 0 12px;
-  }
-
-  .scene-suggestion-card {
-    min-height: 36px;
-    max-width: 280px;
-    padding: 0 14px;
-    font-size: 11px;
   }
 
   .workspace-showcase-header {
@@ -2501,10 +2977,10 @@ watch(() => route.path, () => {
 /* 用户消息 */
 .msg-user-bubble {
   max-width: 75%;
-  padding: 10px 16px;
+  padding: 10px 15px;
   background: var(--t-brand);
   color: #fff;
-  border-radius: 16px 16px 4px 16px;
+  border-radius: 14px 14px 4px 14px;
   font-size: 14px;
   line-height: 1.6;
   margin-bottom: 4px;
@@ -3178,5 +3654,281 @@ watch(() => route.path, () => {
 
 .coding-page :deep(.el-button--success:hover) {
   filter: brightness(1.15);
+}
+
+/* 去掉装饰性圆点底纹 */
+.ai-surface::before {
+  display: none;
+}
+
+.chip {
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 0.5px solid #d8dee8;
+  background: #fff;
+  color: #667085;
+  cursor: pointer;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.chip:hover:not(:disabled) {
+  background: #f1f4f9;
+  color: #111827;
+}
+
+.chip:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.composer-submit-spinner {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 255, 255, 0.5);
+  border-top-color: #fff;
+  animation: composer-submit-spin 0.7s linear infinite;
+}
+
+@keyframes composer-submit-spin {
+  to { transform: rotate(360deg); }
+}
+</style>
+
+<style>
+html[data-theme="dark"] .coding-page,
+html[data-theme="dark"] .coding-body,
+html[data-theme="dark"] .main-content,
+html[data-theme="dark"] .welcome-pane,
+html[data-theme="dark"] .stream-pane,
+html[data-theme="dark"] .stream-messages,
+html[data-theme="dark"] .ide-loading-overlay {
+  background: #090b10 !important;
+  color: rgba(248, 250, 252, 0.94) !important;
+}
+
+html[data-theme="dark"] .coding-header,
+html[data-theme="dark"] .content-view-toggle-bar,
+html[data-theme="dark"] .workspace-sidebar,
+html[data-theme="dark"] .embedded-panel,
+html[data-theme="dark"] .chat-input-bar {
+  background: #0d1117 !important;
+  border-color: rgba(148, 163, 184, 0.14) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme="dark"] .welcome-pane {
+  background:
+    radial-gradient(circle at 50% 6%, rgba(88, 105, 255, 0.16), transparent 30%),
+    linear-gradient(rgba(124, 140, 255, 0.055) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(124, 140, 255, 0.055) 1px, transparent 1px),
+    #090b10 !important;
+  background-size: auto, 28px 28px, 28px 28px, auto !important;
+}
+
+html[data-theme="dark"] .coding-command-kicker {
+  color: #9aa8ff !important;
+}
+
+html[data-theme="dark"] .coding-command-title {
+  color: rgba(255, 255, 255, 0.94) !important;
+}
+
+html[data-theme="dark"] .coding-command-subtitle {
+  color: rgba(212, 212, 216, 0.66) !important;
+}
+
+html[data-theme="dark"] .welcome-title {
+  background: linear-gradient(135deg, #a5b4fc, #f8fafc);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+html[data-theme="dark"] .welcome-desc,
+html[data-theme="dark"] .coding-model-tip,
+html[data-theme="dark"] .workspace-card-meta,
+html[data-theme="dark"] .creating-text,
+html[data-theme="dark"] .stream-actions-hint,
+html[data-theme="dark"] .ide-loading-content {
+  color: rgba(203, 213, 225, 0.68) !important;
+}
+
+html[data-theme="dark"] .view-toggle,
+html[data-theme="dark"] .toggle-bar-back-btn,
+html[data-theme="dark"] .header-btn,
+html[data-theme="dark"] .qc-shell,
+html[data-theme="dark"] .qc-chip,
+html[data-theme="dark"] .coding-model-trigger,
+html[data-theme="dark"] .input-wrapper,
+html[data-theme="dark"] .attach-btn,
+html[data-theme="dark"] .workspace-card,
+html[data-theme="dark"] .workspace-showcase-empty,
+html[data-theme="dark"] .workspace-card-action,
+html[data-theme="dark"] .chat-input-wrapper,
+html[data-theme="dark"] .attachment-preview,
+html[data-theme="dark"] .msg-ai-message,
+html[data-theme="dark"] .msg-thinking-card,
+html[data-theme="dark"] .msg-file-card,
+html[data-theme="dark"] .msg-command-card,
+html[data-theme="dark"] .msg-tool-row {
+  background: #111318 !important;
+  border-color: rgba(148, 163, 184, 0.14) !important;
+  color: rgba(203, 213, 225, 0.72) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme="dark"] .qc-shell {
+  background: #111318 !important;
+  border-color: rgba(148, 163, 184, 0.14) !important;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.22) !important;
+}
+
+html[data-theme="dark"] .input-wrapper:focus-within,
+html[data-theme="dark"] .chat-input-wrapper:focus-within,
+html[data-theme="dark"] .coding-model-trigger:hover:not(:disabled),
+html[data-theme="dark"] .coding-model-trigger.is-open {
+  border-color: rgba(124, 140, 255, 0.36) !important;
+  box-shadow: 0 0 0 3px rgba(124, 140, 255, 0.12) !important;
+}
+
+html[data-theme="dark"] .qc-shell:focus-within {
+  border-color: rgba(124, 140, 255, 0.36) !important;
+  box-shadow:
+    0 18px 44px rgba(0, 0, 0, 0.22),
+    0 0 0 3px rgba(124, 140, 255, 0.12) !important;
+}
+
+html[data-theme="dark"] .composer-topline,
+html[data-theme="dark"] .workspace-card-footer,
+html[data-theme="dark"] .stream-actions,
+html[data-theme="dark"] .thinking-card-body,
+html[data-theme="dark"] .file-card-code,
+html[data-theme="dark"] .command-output,
+html[data-theme="dark"] .tool-row-result {
+  background: #0d1117 !important;
+  border-color: rgba(148, 163, 184, 0.14) !important;
+}
+
+html[data-theme="dark"] .coding-model-trigger-name,
+html[data-theme="dark"] .coding-model-panel-option-name,
+html[data-theme="dark"] .workspace-showcase-title,
+html[data-theme="dark"] .workspace-card-name,
+html[data-theme="dark"] .file-card-name,
+html[data-theme="dark"] .ai-message-body.markdown-body,
+html[data-theme="dark"] .markdown-body :is(h1, h2, h3, strong),
+html[data-theme="dark"] .qc-input,
+html[data-theme="dark"] .chat-input-wrapper .chat-input .el-textarea__inner,
+html[data-theme="dark"] .input-wrapper .el-textarea__inner {
+  color: rgba(248, 250, 252, 0.94) !important;
+}
+
+html[data-theme="dark"] .qc-input::placeholder,
+html[data-theme="dark"] .input-wrapper .el-textarea__inner::placeholder,
+html[data-theme="dark"] .chat-input-wrapper .chat-input .el-textarea__inner::placeholder {
+  color: rgba(148, 163, 184, 0.56) !important;
+}
+
+html[data-theme="dark"] .coding-model-trigger-meta,
+html[data-theme="dark"] .coding-model-panel-option-meta,
+html[data-theme="dark"] .thinking-text,
+html[data-theme="dark"] .command-text,
+html[data-theme="dark"] .command-output,
+html[data-theme="dark"] .tool-row-text,
+html[data-theme="dark"] .tool-row-result pre {
+  color: rgba(203, 213, 225, 0.66) !important;
+}
+
+html[data-theme="dark"] .workspace-card-code,
+html[data-theme="dark"] .workspace-card-type,
+html[data-theme="dark"] .file-card-badge,
+html[data-theme="dark"] .sidebar-group-count {
+  background: rgba(148, 163, 184, 0.10) !important;
+  border-color: rgba(148, 163, 184, 0.14) !important;
+  color: rgba(203, 213, 225, 0.72) !important;
+}
+
+html[data-theme="dark"] .qc-submit {
+  background: rgba(244, 244, 245, 0.94) !important;
+  color: #111318 !important;
+  box-shadow: none !important;
+}
+
+html[data-theme="dark"] .qc-submit:not(:disabled):hover {
+  background: #ffffff !important;
+}
+
+html[data-theme="dark"] .qc-hints-label,
+html[data-theme="dark"] .qc-kbd-hint,
+html[data-theme="dark"] .qc-hint-sep {
+  color: rgba(161, 161, 170, 0.58) !important;
+}
+
+html[data-theme="dark"] .qc-hint-item {
+  background: transparent !important;
+  border-color: transparent !important;
+  color: rgba(212, 212, 216, 0.72) !important;
+}
+
+html[data-theme="dark"] .qc-hint-item:hover {
+  background: rgba(124, 140, 255, 0.12) !important;
+  border-color: rgba(124, 140, 255, 0.22) !important;
+  color: #dbe3ff !important;
+}
+
+html[data-theme="dark"] .view-toggle-btn.active,
+html[data-theme="dark"] .workspace-card-action-primary,
+html[data-theme="dark"] .coding-model-panel-option.is-active {
+  background: rgba(124, 140, 255, 0.14) !important;
+  border-color: rgba(124, 140, 255, 0.30) !important;
+  color: #b6c2ff !important;
+}
+
+html[data-theme="dark"] .msg-user-bubble {
+  background: rgba(124, 140, 255, 0.18) !important;
+  border: 1px solid rgba(124, 140, 255, 0.30) !important;
+  color: rgba(248, 250, 252, 0.94) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme="dark"] .toggle-bar-back-btn {
+  color: rgba(203, 213, 225, 0.74) !important;
+  font-weight: 600 !important;
+}
+
+html[data-theme="dark"] .workspace-showcase {
+  border-top-color: rgba(148, 163, 184, 0.12) !important;
+}
+
+html[data-theme="dark"] .workspace-card:hover,
+html[data-theme="dark"] .workspace-card-action:hover,
+html[data-theme="dark"] .coding-model-panel-option:hover {
+  background: #1a1d24 !important;
+  border-color: rgba(124, 140, 255, 0.26) !important;
+  color: rgba(248, 250, 252, 0.92) !important;
+}
+
+html[data-theme="dark"] .send-btn:disabled {
+  background: #1a1d24 !important;
+  color: rgba(148, 163, 184, 0.58) !important;
+  opacity: 0.72 !important;
+}
+
+html[data-theme="dark"] .workspace-card-action-danger:hover,
+html[data-theme="dark"] .msg-error-row {
+  background: rgba(248, 113, 113, 0.12) !important;
+  border-color: rgba(248, 113, 113, 0.22) !important;
+  color: #fca5a5 !important;
+}
+
+html[data-theme="dark"] .coding-model-popover.el-popover.el-popper {
+  background: #111318 !important;
+  border-color: rgba(148, 163, 184, 0.16) !important;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.52) !important;
 }
 </style>
