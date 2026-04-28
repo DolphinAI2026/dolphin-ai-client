@@ -37,6 +37,14 @@ docs/
 tests/
 examples/
 extensions/
+!extensions/
+!extensions/ruijing-ai/
+!extensions/ruijing-ai/package.json
+!extensions/ruijing-ai/package-lock.json
+!extensions/ruijing-ai/tsconfig.json
+!extensions/ruijing-ai/esbuild.js
+!extensions/ruijing-ai/src/
+!extensions/ruijing-ai/src/**
 CHANGELOG.md
 DEVELOPMENT.md
 QUICKSTART.md

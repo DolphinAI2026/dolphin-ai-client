@@ -28,7 +28,7 @@ spec:
       # 把镜像里的 /app/frontend/dist 拷到共享卷，sidecar nginx 从那里 serve
       initContainers:
         - name: copy-frontend-dist
-          image: hub.dfy.definesys.cn/ai-builder/apaas-builder:20260423-ab
+          image: hub.dfy.definesys.cn/ai-builder/apaas-builder:20260428-ruijing
           imagePullPolicy: IfNotPresent
           command:
             - sh
@@ -45,7 +45,7 @@ spec:
       containers:
         # 主容器：uvicorn + code-server（由 supervisord 管）
         - name: apaas-builder
-          image: hub.dfy.definesys.cn/ai-builder/apaas-builder:20260423-ab
+          image: hub.dfy.definesys.cn/ai-builder/apaas-builder:20260428-ruijing
           imagePullPolicy: IfNotPresent
           env:
             # K8s 同 Pod 内 container 共享 network namespace，nginx sidecar 用 localhost 连过来
@@ -54,6 +54,12 @@ spec:
               value: "127.0.0.1"
             - name: WAIT_FOR_MYSQL
               value: "1"
+            # backend/app/coding/workspace.py 直接读取进程环境变量；
+            # 仅写在 backend.env 文件里不会生效，必须在 Pod env 显式注入。
+            - name: APAAS_WORKSPACE_ROOT
+              value: "/root/apaas-builder/workspaces"
+            - name: APAAS_NPM_CACHE_DIR
+              value: "/root/apaas-builder/workspaces/.npm-cache"
           ports:
             - { name: api, containerPort: 8003 }
             - { name: ide, containerPort: 8080 }

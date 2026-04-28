@@ -11,6 +11,11 @@ data:
         ''      close;
     }
 
+    map $http_x_forwarded_proto $proxy_x_forwarded_proto {
+        default $http_x_forwarded_proto;
+        ''      $scheme;
+    }
+
     server {
         listen 80;
         server_name _;
@@ -43,7 +48,7 @@ data:
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
             proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Forwarded-Proto $proxy_x_forwarded_proto;
             proxy_set_header X-Forwarded-Host $host;
             proxy_set_header X-Forwarded-Prefix /ai-builder/ide;
 
@@ -64,7 +69,7 @@ data:
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
             proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Forwarded-Proto $proxy_x_forwarded_proto;
             proxy_set_header X-Forwarded-Prefix /ai-builder;
 
             proxy_read_timeout 600s;
@@ -83,7 +88,7 @@ data:
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
             proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Forwarded-Proto $proxy_x_forwarded_proto;
 
             proxy_read_timeout 600s;
             proxy_send_timeout 600s;

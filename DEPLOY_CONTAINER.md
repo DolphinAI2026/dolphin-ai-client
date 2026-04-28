@@ -124,18 +124,39 @@ FLUSH PRIVILEGES;
 
 ```bash
 cd /path/to/apaas-builder-ai
-docker build -f deploy/docker/Dockerfile -t apaas-builder:latest .
+docker build --platform linux/amd64 \
+  -f deploy/docker/Dockerfile \
+  --build-arg VITE_BASE_URL=/ai-builder/ \
+  -t apaas-builder:latest .
 ```
 
-镜像构建分两阶段：
+镜像构建分三阶段：
 
 1. **stage 1 (`node:20-bookworm-slim`)**：装 `frontend/` 依赖，运行 `VITE_BASE_URL=/ai-builder/ vite build` 产出 `frontend/dist/`
-2. **stage 2 (`python:3.11-slim`)**：装 `requirements.txt`（含 `playwright` Python 包）、code-server、Node 20（给工作区用），再 copy stage 1 的 `frontend/dist/`。**默认不下载 Chromium**——前端目前未调用 `/browser/*` 端点，装上纯浪费镜像空间。需要时参考下方「启用浏览器预览」章节
+2. **stage 2 (`node:20-bookworm-slim`)**：从 `extensions/ruijing-ai` 构建睿鲸 VS Code 扩展 VSIX
+3. **stage 3 (`python:3.12-slim-bookworm`)**：装 `requirements.txt`（含 `playwright` Python 包）、code-server、Node 20（给工作区用），安装睿鲸扩展，执行 `scripts/patch_all.js --code-server-path /opt/code-server`，再 copy stage 1 的 `frontend/dist/`。**默认不下载 Chromium**——前端目前未调用 `/browser/*` 端点，装上纯浪费镜像空间。需要时参考下方「启用浏览器预览」章节
 
 **什么改动会让缓存失效**：
 - 改 `frontend/package.json` → stage 1 依赖层失效
-- 改 `backend/requirements.txt` → stage 2 依赖层失效
+- 改 `extensions/ruijing-ai/package.json` → stage 2 扩展依赖层失效
+- 改 `extensions/ruijing-ai/src/*` 或 `scripts/patch_*.js` → code-server 扩展/patch 层失效
+- 改 `backend/requirements.txt` → stage 3 依赖层失效
 - 改业务代码 → 只有 COPY 层失效，依赖层复用
+
+> Apple Silicon 本机默认容易构出 `linux/arm64` 镜像；线上 Linux 节点使用 amd64 时，构建和推送生产镜像必须显式带 `--platform linux/amd64`。
+
+### code-server / 睿鲸 AI 扩展
+
+镜像内置安装 `apaas-builder.ruijing-ai`，并对 code-server 的 `workbench.js` 做 Chat fallback patch：把原生 Chat 对 `GitHub.copilot-chat` 的检查改为 `apaas-builder.ruijing-ai`。否则即使手动安装扩展，Chat 面板也可能仍显示 VS Code 默认 Agent 引导界面。
+
+运行后可验证：
+
+```bash
+docker exec apaas-builder code-server --list-extensions --show-versions | grep ruijing
+
+docker exec apaas-builder sh -lc \
+  'WB=/opt/code-server/lib/vscode/out/vs/code/browser/workbench/workbench.js; grep -q GitHub.copilot-chat "$WB" && echo "patch missing" || echo "patch ok"'
+```
 
 ---
 

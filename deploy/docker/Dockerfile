@@ -29,7 +29,22 @@ RUN node_modules/.bin/vite build
 
 
 # ------------------------------------------------------------
-# stage 2: 运行时镜像
+# stage 2: 构建 code-server 睿鲸扩展
+# ------------------------------------------------------------
+FROM node:20-bookworm-slim AS ruijing-extension-builder
+
+WORKDIR /build/extensions/ruijing-ai
+
+COPY extensions/ruijing-ai/package.json extensions/ruijing-ai/package-lock.json ./
+RUN npm ci --prefer-offline --no-audit --progress=false
+
+COPY extensions/ruijing-ai/ ./
+RUN npm run build \
+    && npx @vscode/vsce package --no-dependencies
+
+
+# ------------------------------------------------------------
+# stage 3: 运行时镜像
 #   - Python 3.11 + 后端依赖
 #   - Node 20（工作区 npm run serve 用）
 #   - Playwright Chromium
@@ -82,6 +97,17 @@ RUN set -eux; \
     ln -s /opt/code-server/bin/code-server /usr/local/bin/code-server; \
     rm /tmp/cs.tgz; \
     code-server --version
+
+# --- code-server 睿鲸扩展 + Chat fallback patch -------------
+# 主机部署依赖 workbench.js patch 将原生 Chat 的 GitHub Copilot 检查
+# 切到 apaas-builder.ruijing-ai；容器镜像必须内置同样处理，避免手动安装扩展
+# 后仍显示 VS Code 默认 Agent 界面。
+COPY --from=ruijing-extension-builder /build/extensions/ruijing-ai/ruijing-ai-*.vsix /tmp/ruijing-ai.vsix
+COPY scripts/ /app/scripts/
+RUN set -eux; \
+    code-server --install-extension /tmp/ruijing-ai.vsix --force; \
+    node /app/scripts/patch_all.js --code-server-path /opt/code-server; \
+    rm -f /tmp/ruijing-ai.vsix
 
 # --- 后端 Python 依赖 ---------------------------------------
 WORKDIR /app/backend

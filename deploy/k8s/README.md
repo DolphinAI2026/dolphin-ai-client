@@ -30,7 +30,7 @@ StatefulSet apaas-builder (replicas=1, nodeAffinity app-tier=true)
 ## 前置
 
 - **MySQL**：已部署在 `mysql` 命名空间（单节点，集群内 DNS `mysql.mysql.svc.cluster.local:3306`）。业务库/账号已创建：`apaas_builder` / `apaas:apaas2024`。详见 [../../主备部署mysql(1).md](../../../../../Downloads/单节点部署mysql.md) 的单节点修改版。
-- **镜像**：已推送到 `hub.dfy.definesys.cn/ai-builder/apaas-builder:20260423`。
+- **镜像**：当前部署使用 `hub.dfy.definesys.cn/ai-builder/apaas-builder:20260428-ruijing`。
 - **节点标签**：`apaas.definesys.com/app-tier=true` 已在 `i8vbj7weas0dx1id3v9wa` 上（PV + 调度会绑到这台）。
 - **IngressClass**：`nginx`（集群已有）。
 
@@ -69,6 +69,8 @@ CODE_SERVER_BASE_URL=https://df-aigc.dfy.definesys.cn/ai-builder/ide/
 APAAS_WORKSPACE_ROOT=/root/apaas-builder/workspaces
 APAAS_NPM_CACHE_DIR=/root/apaas-builder/workspaces/.npm-cache
 ```
+
+> 注意：`backend.env` 里的 `APAAS_WORKSPACE_ROOT` 只作为配置留档；后端工作区代码直接读取进程环境变量。`30-statefulset.yaml` 必须同步显式注入 `APAAS_WORKSPACE_ROOT=/root/apaas-builder/workspaces` 和 `APAAS_NPM_CACHE_DIR=/root/apaas-builder/workspaces/.npm-cache`，否则后端会回退到镜像内 `/app/workspaces`，与 code-server/PVC 路径不一致。
 
 先建 namespace，再建 secret：
 
@@ -151,7 +153,10 @@ curl -s -H 'Host: df-aigc.dfy.definesys.cn' http://<节点IP>/api/health
 
 ```bash
 # 1. 本地构建新镜像
-docker build -f deploy/docker/Dockerfile --build-arg VITE_BASE_URL=/ -t apaas-builder:local .
+docker build --platform linux/amd64 \
+  -f deploy/docker/Dockerfile \
+  --build-arg VITE_BASE_URL=/ai-builder/ \
+  -t apaas-builder:local .
 
 # 2. 推到私库（日期 tag）
 TAG=$(date +%Y%m%d)
@@ -159,36 +164,57 @@ docker tag apaas-builder:local hub.dfy.definesys.cn/ai-builder/apaas-builder:$TA
 docker push hub.dfy.definesys.cn/ai-builder/apaas-builder:$TAG
 
 # 3. 改 statefulset.yaml 里的 tag（两处：initContainer 和主容器，保持一致）
-sed -i '' "s|apaas-builder:[0-9]\{8\}|apaas-builder:$TAG|g" deploy/k8s/30-statefulset.yaml
+sed -i '' -E "s|apaas-builder:[^[:space:]]+|apaas-builder:$TAG|g" deploy/k8s/30-statefulset.yaml
 kubectl apply -f deploy/k8s/30-statefulset.yaml
 
 # 4. 或直接 set image（不改 yaml）
 kubectl -n apaas-builder set image statefulset/apaas-builder \
+  copy-frontend-dist=hub.dfy.definesys.cn/ai-builder/apaas-builder:$TAG \
   apaas-builder=hub.dfy.definesys.cn/ai-builder/apaas-builder:$TAG
 
 # 然后等 pod 滚动
 kubectl -n apaas-builder rollout status statefulset/apaas-builder
 ```
 
-> 注意：StatefulSet 里 initContainer 和主容器**都**引用同一镜像（dist 来自镜像内）。用 `set image` 只改主容器，initContainer 用的还是旧镜像——**前端可能不更新**。升级前端时直接 apply 整份 yaml 更稳。
+> 注意：StatefulSet 里 initContainer 和主容器**都**引用同一镜像（dist 来自镜像内）。如果只改主容器，initContainer 用的还是旧镜像，前端可能不更新。升级前端时直接 apply 整份 yaml 更稳。
 
 ## 关于 VITE_BASE_URL
 
-当前镜像 `:20260423` 用 `VITE_BASE_URL=/` 构建，前端资源从根路径加载。适合本方案（独立域名 + 根路径 `/`）。
+当前路径前缀方案使用 `/ai-builder/`，镜像必须用 `--build-arg VITE_BASE_URL=/ai-builder/` 构建，和 nginx sidecar 的 `/ai-builder/*` location 保持一致。
 
-如果要换成路径前缀部署（比如 `/ai-builder/`），必须**重新构建镜像**：
+如果要换成根路径或其他前缀部署，必须**重新构建镜像**：
 
 ```bash
-docker build --build-arg VITE_BASE_URL=/ai-builder/ ...
+docker build --platform linux/amd64 --build-arg VITE_BASE_URL=<prefix> ...
 ```
 
 并同步修改 Ingress 的 path、nginx sidecar ConfigMap 里的 location 规则。
+
+## code-server / 睿鲸 AI 扩展
+
+容器镜像会在构建时完成两件事：
+
+1. 从 `extensions/ruijing-ai` 构建并安装 `apaas-builder.ruijing-ai` VSIX。
+2. 执行 `scripts/patch_all.js --code-server-path /opt/code-server`，把 code-server 原生 Chat 对 `GitHub.copilot-chat` 的检查切到 `apaas-builder.ruijing-ai`。
+
+部署后可用以下命令确认：
+
+```bash
+kubectl -n apaas-builder exec apaas-builder-0 -c apaas-builder -- \
+  sh -lc 'code-server --list-extensions --show-versions | grep ruijing'
+
+kubectl -n apaas-builder exec apaas-builder-0 -c apaas-builder -- \
+  sh -lc 'WB=/opt/code-server/lib/vscode/out/vs/code/browser/workbench/workbench.js; grep -q GitHub.copilot-chat "$WB" && echo "patch missing" || echo "patch ok"'
+```
+
+期望输出包含 `apaas-builder.ruijing-ai@0.1.0`，并显示 `patch ok`。
 
 ## 回滚
 
 ```bash
 # 上一版本镜像的 tag 你应该还留着，直接切回去
 kubectl -n apaas-builder set image statefulset/apaas-builder \
+  copy-frontend-dist=hub.dfy.definesys.cn/ai-builder/apaas-builder:<旧 tag> \
   apaas-builder=hub.dfy.definesys.cn/ai-builder/apaas-builder:<旧 tag>
 kubectl -n apaas-builder rollout status statefulset/apaas-builder
 ```
