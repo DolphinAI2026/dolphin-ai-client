@@ -1,5 +1,5 @@
 <template>
-  <BuilderFrame :breadcrumbs="[{ label: '智能开发' }]" :class="{ 'is-embedded': embedMode }">
+  <BuilderFrame :breadcrumbs="[{ label: '睿鲸AI Coding' }]" :class="{ 'is-embedded': embedMode }">
     <!-- Env Picker Dialog -->
     <el-dialog v-model="showEnvPicker" title="选择调试平台环境" width="500px" :append-to-body="true">
       <div v-if="platformEnvs.length === 0" style="text-align:center;color:#999;padding:20px;">
@@ -68,12 +68,11 @@
           <div class="toggle-bar-placeholder"></div>
         </div>
 
-        <!-- Welcome State (Workspace-first redesign) -->
+        <!-- Welcome State (Codex-like command center) -->
         <div v-if="!ideUrl && !isStreaming && streamMessages.length === 0" class="welcome-pane">
           <div class="welcome-inner" :style="codingLandingVars">
 
-            <!-- ─── 顶部紧凑 Composer：单行输入 + 内嵌 toolbar ─── -->
-            <section class="qc-section">
+            <section class="qc-section coding-command-center">
               <input
                 ref="fileInputRef"
                 type="file"
@@ -82,12 +81,18 @@
                 @change="handleFileSelect"
               />
 
+              <div class="coding-command-copy">
+                <p class="coding-command-kicker">睿鲸AI CODING</p>
+                <h1 class="coding-command-title">你想开发什么？</h1>
+                <p class="coding-command-subtitle">描述组件、页面、接口或脚本，AI 会先形成开发任务，再创建工作区。</p>
+              </div>
+
               <div class="qc-shell ai-surface">
                 <div class="qc-row" @paste="handlePaste">
                   <textarea
                     v-model="userInput"
                     class="qc-input"
-                    :placeholder="`描述你想开发的 ${activeSceneCategoryLabel}…`"
+                    :placeholder="`问 AI 开发一个 ${activeSceneCategoryLabel}，例如：项目总览分析页面…`"
                     rows="1"
                     @keydown.enter.exact.prevent="sendMessage"
                     @keydown.meta.enter.prevent="sendMessage"
@@ -196,13 +201,12 @@
 
                   <div class="qc-spacer"></div>
 
-                  <span class="qc-kbd-hint">⌘↵ 进入开发</span>
+                  <span class="qc-kbd-hint">Enter / ⌘↵</span>
                 </div>
               </div>
 
-              <!-- 灰色 hint 行：suggestion 折叠成单行 -->
               <p v-if="topSuggestions.length" class="qc-hints">
-                <span class="qc-hints-label">💡 试试</span>
+                <span class="qc-hints-label">试试</span>
                 <template v-for="(s, i) in topSuggestions" :key="s">
                   <button type="button" class="qc-hint-item" @click="sendSuggestion(s)">{{ s }}</button>
                   <span v-if="i < topSuggestions.length - 1" class="qc-hint-sep">·</span>
@@ -210,11 +214,10 @@
               </p>
             </section>
 
-            <!-- ─── 主区域：工作区列表 ─── -->
             <div class="workspace-showcase">
               <div class="workspace-showcase-header">
                 <div>
-                  <h3 class="workspace-showcase-title">最近自开发工作区</h3>
+                  <h3 class="workspace-showcase-title">已开发组件</h3>
                 </div>
                 <button
                   v-if="existingWorkspaces.length > 0"
@@ -312,7 +315,7 @@
               </div>
 
               <div v-else class="workspace-showcase-empty">
-                暂无自开发工作区。先描述一个开发需求，我们会先生成开发 SPEC。
+                暂无已开发组件。先描述一个开发需求，我们会创建工作区并保留交付记录。
               </div>
             </div>
           </div>
@@ -596,19 +599,15 @@ import { useCodingStore } from '@/stores/coding'
 import { platformEnvApi, type PlatformEnv } from '@/api/platformEnv'
 import { useUserStore } from '@/stores/user'
 import { codingApi, isIdeUnavailableError } from '@/api/coding'
-import type { WorkspaceInfo, UploadResult, ReplayStreamMessage } from '@/api/coding'
-import { harnessApi } from '@/api/harness'
-import { conversationApi } from '@/api/conversation'
-import { llmConfigApi, type BuilderModelOption } from '@/api/llmConfig'
+import type { WorkspaceInfo, ReplayStreamMessage } from '@/api/coding'
 import { gitConnectionApi } from '@/api/gitConnection'
 import { applicationApi } from '@/api/application'
-import { consumeSseResponse } from '@/utils/sse'
 import { useThemeStore } from '@/stores/theme'
 import BuilderFrame from '@/components/BuilderFrame.vue'
 import EnvSelectModal from '@/components/EnvSelectModal.vue'
 import FileCard from '@/components/FileCard.vue'
 import { useCodingModel } from './coding/useCodingModel'
-import { useStreamMessages, formatSceneType, renderMarkdown } from './coding/useStreamMessages'
+import { useStreamMessages, renderMarkdown } from './coding/useStreamMessages'
 import { useIdeManager } from './coding/useIdeManager'
 import { useCodingWorkspace } from './coding/useCodingWorkspace'
 import { useCodingPipeline } from './coding/useCodingPipeline'
@@ -626,13 +625,12 @@ const themeStore = useThemeStore()
 // ============ Core State ============
 const userInput = ref('')
 const isCreating = ref(false)
-const creatingStatus = ref('')
 
-// 参考设计稿：Code 模式专属色板（绿，区分 CoWork 紫蓝、Chat 青）
+// Code mode uses the same calm blue family as the workbench primary action.
 const codingLandingVars: Record<string, string> = {
-  '--landing-mode-color': 'oklch(62% 0.14 155)',
-  '--landing-mode-soft': 'oklch(95% 0.04 155)',
-  '--landing-mode-ink': 'oklch(42% 0.14 155)',
+  '--landing-mode-color': '#6f7ff2',
+  '--landing-mode-soft': 'rgba(111, 127, 242, 0.10)',
+  '--landing-mode-ink': '#4c5fda',
 }
 
 // ── IDE iframe 管理（已抽成 composable）──
@@ -867,7 +865,10 @@ async function uploadWorkspaceCard(ws: WorkspaceInfo) {
   }
 
   if (connectedEnvs.length === 1) {
-    await doUploadWorkspace(ws, connectedEnvs[0].id)
+    const env = connectedEnvs[0]
+    if (env) {
+      await doUploadWorkspace(ws, env.id)
+    }
   } else {
     uploadingWsId.value = null
     pendingUploadWs.value = ws
@@ -958,7 +959,6 @@ const sceneCategoryToProjectType: Record<string, string> = {
 }
 
 const AI_BUILDER_PENDING_CODING_KEY = 'ai_builder_pending_coding'
-
 async function maybeConsumeAiBuilderDispatch() {
   if (route.query.from_ai_builder !== '1') return
   if (route.query.workspace_id || route.query.ws) return
@@ -1105,12 +1105,14 @@ function loadConversationHistory(
   // 所以这里只把 brainstorm 方案及之前的 user 预先插入，codegen 阶段的内容交给 replay 恢复。
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i]
+    if (!msg) continue
     const content = msg.content || ''
     if (msg.role === 'assistant' && content.startsWith('<!-- BRAINSTORM_PROPOSAL -->')) {
       // 找到这条 brainstorm 方案前一条 user（原始需求）
       for (let j = i - 1; j >= 0; j--) {
-        if (messages[j].role === 'user') {
-          addStreamMsg({ type: 'user', content: messages[j].content })
+        const previous = messages[j]
+        if (previous?.role === 'user') {
+          addStreamMsg({ type: 'user', content: previous.content })
           break
         }
       }
@@ -1323,12 +1325,6 @@ const { sendMessage, sendSuggestion } = useCodingPipeline({
 
 // ============ Header Actions ============
 
-async function loadPlatformEnvs() {
-  try {
-    platformEnvs.value = await platformEnvApi.list()
-  } catch { /* ignore */ }
-}
-
 async function openBrowserPreviewWithEnv(env: PlatformEnv) {
   if (!codingStore.workspace) return
   showEnvPicker.value = false
@@ -1480,12 +1476,15 @@ watch(() => route.path, () => {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 7px 16px;
+  height: 34px;
+  padding: 0 13px;
   border: 1px solid var(--t-border-subtle);
   border-radius: 8px;
   background: transparent;
   color: var(--t-text-secondary);
-  font-size: 14px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
   cursor: pointer;
   transition: all 0.15s ease;
 }
@@ -1900,60 +1899,27 @@ watch(() => route.path, () => {
   min-width: 0;
 }
 
-/* ============ Welcome Pane ============ */
 .welcome-pane {
   flex: 1;
-  display: flex;
-  align-items: stretch;
-  justify-content: center;
+  min-height: 0;
   overflow-y: auto;
-  background: #fbfcfe;
+  background:
+    radial-gradient(circle at 50% 8%, rgba(97, 112, 238, 0.12), transparent 30%),
+    linear-gradient(rgba(97, 112, 238, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(97, 112, 238, 0.045) 1px, transparent 1px),
+    #f7f9fd;
+  background-size: auto, 26px 26px, 26px 26px, auto;
 }
 
 .welcome-inner {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  max-width: 1160px;
-  width: 100%;
+  width: min(100%, 1180px);
   min-height: 100%;
-  padding: 8px 36px 32px;
-  position: relative;
-}
-
-.welcome-hero {
-  width: 100%;
-  min-height: clamp(328px, 46vh, 468px);
+  margin: 0 auto;
+  padding: 48px 28px 40px;
   display: flex;
   flex-direction: column;
-  align-items: center;
   justify-content: center;
-}
-
-.welcome-icon {
-  font-size: 26px;
-  margin-bottom: 8px;
-  filter: drop-shadow(0 0 24px var(--t-brand-glow));
-}
-
-.welcome-title {
-  font-size: 34px;
-  font-weight: 800;
-  margin: 0 0 10px;
-  background: var(--t-brand-gradient);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-  letter-spacing: -0.02em;
-}
-
-.welcome-desc {
-  color: var(--t-text-secondary);
-  font-size: 14px;
-  margin: 0 0 16px;
-  line-height: 1.6;
-  max-width: 680px;
+  gap: 26px;
 }
 
 /* ============ Welcome Input Area ============ */
@@ -2252,7 +2218,7 @@ watch(() => route.path, () => {
   transform: translateY(-1px);
 }
 
-@media (max-width: 920px) {
+@media (max-width: 820px) {
   .coding-model-trigger {
     width: 100%;
     min-width: 0;
@@ -2359,32 +2325,73 @@ watch(() => route.path, () => {
 
 /* ============ Quick Composer (Workspace-first 重设) ============ */
 .qc-section {
-  width: min(100%, 960px);
-  margin: 12px auto 20px;
+  width: min(100%, 860px);
+  margin: 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 14px;
   flex-shrink: 0;
 }
 
+.coding-command-center {
+  align-items: stretch;
+}
+
+.coding-command-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 2px;
+  text-align: center;
+}
+
+.coding-command-kicker {
+  margin: 0;
+  color: #6f7ff2;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.coding-command-title {
+  margin: 0;
+  color: var(--t-text-primary);
+  font-size: clamp(30px, 3.2vw, 42px);
+  line-height: 1.12;
+  font-weight: 760;
+  letter-spacing: 0;
+}
+
+.coding-command-subtitle {
+  margin: 0;
+  max-width: 560px;
+  color: var(--t-text-secondary);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
 .qc-shell {
-  border: 1px solid var(--t-border-subtle);
-  border-radius: 12px;
-  background: var(--t-bg-panel);
+  width: 100%;
+  border: 1px solid #dbe2ea;
+  border-radius: 16px;
+  background: #fff;
   overflow: hidden;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.05);
   transition: border-color 0.18s ease, box-shadow 0.18s ease;
 }
 
 .qc-shell:focus-within {
-  border-color: var(--landing-mode-color);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--landing-mode-color) 14%, transparent);
+  border-color: #c7d2fe;
+  box-shadow: 0 0 0 3px rgba(111, 127, 242, 0.10);
 }
 
 .qc-row {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 10px 10px 16px;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 17px 16px 8px 18px;
 }
 
 .qc-input {
@@ -2394,42 +2401,47 @@ watch(() => route.path, () => {
   resize: none;
   background: transparent;
   color: var(--t-text-primary);
-  font-size: 14px;
+  font-size: 15px;
   line-height: 1.55;
   font-family: inherit;
-  min-height: 24px;
-  max-height: 160px;
+  min-height: 70px;
+  max-height: 190px;
   padding: 0;
+  font-weight: 500;
 }
 
 .qc-input::placeholder {
-  color: var(--t-text-muted);
+  color: #8b98ae;
 }
 
 .qc-submit {
   flex-shrink: 0;
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
+  width: 42px;
+  height: 42px;
+  margin-top: 2px;
+  border-radius: 12px;
   border: 0;
-  background: var(--landing-mode-color);
+  background: #111827;
   color: #fff;
-  font-size: 16px;
+  font-size: 18px;
   font-weight: 600;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: opacity 0.15s ease, transform 0.15s ease;
+  box-shadow: none;
+  transition: opacity 0.15s ease, transform 0.15s ease, background 0.15s ease;
 }
 
 .qc-submit:disabled {
-  opacity: 0.32;
+  opacity: 0.34;
   cursor: not-allowed;
+  box-shadow: none;
 }
 
 .qc-submit:not(:disabled):hover {
   transform: translateY(-1px);
+  background: #020617;
 }
 
 .qc-submit-arrow {
@@ -2440,21 +2452,22 @@ watch(() => route.path, () => {
 .qc-toolbar {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 0 10px 10px;
+  gap: 8px;
+  padding: 0 16px 15px 18px;
 }
 
 .qc-chip {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  height: 26px;
-  padding: 0 10px;
-  border-radius: 999px;
-  border: 1px solid var(--t-border-subtle);
-  background: var(--t-bg-input);
+  gap: 6px;
+  height: 32px;
+  padding: 0 11px;
+  border-radius: 10px;
+  border: 1px solid #dbe2ea;
+  background: #f8fafc;
   color: var(--t-text-secondary);
   font-size: 12px;
+  font-weight: 650;
   cursor: pointer;
   transition: all 0.15s ease;
 }
@@ -2471,7 +2484,7 @@ watch(() => route.path, () => {
 }
 
 .qc-icon-only {
-  width: 26px;
+  width: 32px;
   padding: 0;
   justify-content: center;
 }
@@ -2486,7 +2499,7 @@ watch(() => route.path, () => {
 
 .qc-kbd-hint {
   color: var(--t-text-muted);
-  font-size: 11px;
+  font-size: 12px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
@@ -2579,11 +2592,12 @@ watch(() => route.path, () => {
 
 .qc-hints {
   margin: 0;
-  padding: 0 4px;
+  padding: 0;
   display: flex;
   flex-wrap: wrap;
+  justify-content: flex-start;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   color: var(--t-text-muted);
   font-size: 12px;
   line-height: 1.4;
@@ -2591,23 +2605,27 @@ watch(() => route.path, () => {
 
 .qc-hints-label {
   flex-shrink: 0;
-  margin-right: 4px;
+  margin-right: 2px;
+  color: var(--t-text-muted);
+  font-weight: 600;
 }
 
 .qc-hint-item {
-  border: 0;
-  background: transparent;
-  color: var(--t-text-secondary);
+  border: 1px solid #dbe2ea;
+  background: #fff;
+  color: #61708c;
   font-size: 12px;
   cursor: pointer;
-  padding: 2px 6px;
-  border-radius: 4px;
-  transition: background 0.15s ease, color 0.15s ease;
+  padding: 5px 9px;
+  border-radius: 999px;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
 }
 
 .qc-hint-item:hover {
-  background: var(--t-brand-subtle);
-  color: var(--t-brand);
+  background: var(--landing-mode-soft);
+  border-color: color-mix(in srgb, var(--landing-mode-color) 32%, transparent);
+  color: var(--landing-mode-ink);
+  transform: translateY(-1px);
 }
 
 .qc-hint-sep {
@@ -2616,12 +2634,58 @@ watch(() => route.path, () => {
   user-select: none;
 }
 
+@media (max-width: 760px) {
+  .welcome-inner {
+    padding: 30px 18px 28px;
+    gap: 20px;
+  }
+
+  .coding-command-title {
+    font-size: 30px;
+  }
+
+  .qc-section {
+    width: 100%;
+  }
+
+  .qc-row {
+    padding: 18px 14px 8px 16px;
+    gap: 10px;
+  }
+
+  .qc-input {
+    min-height: 86px;
+    font-size: 16px;
+  }
+
+  .qc-submit {
+    width: 42px;
+    height: 42px;
+    border-radius: 14px;
+  }
+
+  .qc-toolbar {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    padding: 0 14px 14px 16px;
+  }
+
+  .qc-spacer,
+  .qc-kbd-hint {
+    display: none;
+  }
+
+  .qc-hints {
+    justify-content: flex-start;
+  }
+}
+
 /* ============ Workspace Showcase ============ */
 .workspace-showcase {
-  width: min(100%, 1280px);
-  margin-top: 4px;
-  padding-top: 16px;
-  border-top: 1px solid var(--t-border-subtle);
+  width: min(100%, 1040px);
+  margin: 2px auto 0;
+  padding-top: 22px;
+  border-top: 1px solid #dfe4ec;
   flex-shrink: 0;
 }
 
@@ -2638,7 +2702,7 @@ watch(() => route.path, () => {
   margin: 0;
   color: var(--t-text-primary);
   font-size: 15px;
-  font-weight: 650;
+  font-weight: 760;
   line-height: 1.2;
   text-align: left;
 }
@@ -2665,21 +2729,21 @@ watch(() => route.path, () => {
 
 .workspace-cards-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
   width: 100%;
   align-items: stretch;
 }
 
 .workspace-card {
-  border: 1px solid var(--t-border-subtle);
-  border-radius: 12px;
-  background: var(--t-bg-panel);
-  padding: 12px 14px;
+  border: 1px solid #dbe2ea;
+  border-radius: 14px;
+  background: #fff;
+  padding: 14px 16px 12px;
   text-align: left;
   cursor: pointer;
   transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
-  min-height: 0;
+  min-height: 112px;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -2687,8 +2751,8 @@ watch(() => route.path, () => {
 
 .workspace-card:hover {
   transform: translateY(-1px);
-  border-color: var(--t-brand);
-  box-shadow: var(--t-shadow-md);
+  border-color: #c7d2fe;
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.05);
 }
 
 .workspace-catalog-grid {
@@ -2720,8 +2784,8 @@ watch(() => route.path, () => {
 
 .workspace-card-name {
   color: var(--t-text-primary);
-  font-size: 12px;
-  font-weight: 650;
+  font-size: 13px;
+  font-weight: 720;
   line-height: 1.35;
   /* 防御 display_name 偶尔是 chat 长片段，单行省略 */
   overflow: hidden;
@@ -2740,7 +2804,7 @@ watch(() => route.path, () => {
   height: 20px;
   padding: 0 7px;
   border-radius: 10px;
-  background: var(--t-bg-input);
+  background: #f3f6fb;
   color: var(--t-text-muted);
   font-size: 10px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
@@ -2752,15 +2816,15 @@ watch(() => route.path, () => {
   padding: 0 7px;
   height: 20px;
   border-radius: 999px;
-  background: var(--t-brand-subtle);
-  color: var(--t-brand-light);
+  background: #f3f6fb;
+  color: #647085;
   font-size: 9px;
   font-weight: 600;
   white-space: nowrap;
 }
 
 .workspace-card-footer {
-  margin-top: 0;
+  margin-top: auto;
   padding-top: 0;
   border-top: 0;
   display: flex;
@@ -2780,8 +2844,8 @@ watch(() => route.path, () => {
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--t-border-subtle);
-  background: var(--t-bg-input);
+  border: 1px solid #dbe2ea;
+  background: #f8fafc;
   color: var(--t-text-secondary);
   border-radius: 8px;
   cursor: pointer;
@@ -2795,9 +2859,9 @@ watch(() => route.path, () => {
 }
 
 .workspace-card-action-primary {
-  color: var(--t-brand);
-  border-color: var(--t-brand-subtle);
-  background: var(--t-brand-subtle);
+  color: #4f6bff;
+  border-color: #cfd8ff;
+  background: #f4f6ff;
 }
 
 .workspace-card-action:hover {
@@ -2913,10 +2977,10 @@ watch(() => route.path, () => {
 /* 用户消息 */
 .msg-user-bubble {
   max-width: 75%;
-  padding: 10px 16px;
+  padding: 10px 15px;
   background: var(--t-brand);
   color: #fff;
-  border-radius: 16px 16px 4px 16px;
+  border-radius: 14px 14px 4px 14px;
   font-size: 14px;
   line-height: 1.6;
   margin-bottom: 4px;
@@ -3660,8 +3724,23 @@ html[data-theme="dark"] .chat-input-bar {
 
 html[data-theme="dark"] .welcome-pane {
   background:
-    radial-gradient(circle at top, rgba(124, 140, 255, 0.16), transparent 34%),
-    linear-gradient(180deg, #090b10 0%, #0d1117 100%) !important;
+    radial-gradient(circle at 50% 6%, rgba(88, 105, 255, 0.16), transparent 30%),
+    linear-gradient(rgba(124, 140, 255, 0.055) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(124, 140, 255, 0.055) 1px, transparent 1px),
+    #090b10 !important;
+  background-size: auto, 28px 28px, 28px 28px, auto !important;
+}
+
+html[data-theme="dark"] .coding-command-kicker {
+  color: #9aa8ff !important;
+}
+
+html[data-theme="dark"] .coding-command-title {
+  color: rgba(255, 255, 255, 0.94) !important;
+}
+
+html[data-theme="dark"] .coding-command-subtitle {
+  color: rgba(212, 212, 216, 0.66) !important;
 }
 
 html[data-theme="dark"] .welcome-title {
@@ -3683,6 +3762,8 @@ html[data-theme="dark"] .ide-loading-content {
 html[data-theme="dark"] .view-toggle,
 html[data-theme="dark"] .toggle-bar-back-btn,
 html[data-theme="dark"] .header-btn,
+html[data-theme="dark"] .qc-shell,
+html[data-theme="dark"] .qc-chip,
 html[data-theme="dark"] .coding-model-trigger,
 html[data-theme="dark"] .input-wrapper,
 html[data-theme="dark"] .attach-btn,
@@ -3702,12 +3783,25 @@ html[data-theme="dark"] .msg-tool-row {
   box-shadow: none !important;
 }
 
+html[data-theme="dark"] .qc-shell {
+  background: #111318 !important;
+  border-color: rgba(148, 163, 184, 0.14) !important;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.22) !important;
+}
+
 html[data-theme="dark"] .input-wrapper:focus-within,
 html[data-theme="dark"] .chat-input-wrapper:focus-within,
 html[data-theme="dark"] .coding-model-trigger:hover:not(:disabled),
 html[data-theme="dark"] .coding-model-trigger.is-open {
   border-color: rgba(124, 140, 255, 0.36) !important;
   box-shadow: 0 0 0 3px rgba(124, 140, 255, 0.12) !important;
+}
+
+html[data-theme="dark"] .qc-shell:focus-within {
+  border-color: rgba(124, 140, 255, 0.36) !important;
+  box-shadow:
+    0 18px 44px rgba(0, 0, 0, 0.22),
+    0 0 0 3px rgba(124, 140, 255, 0.12) !important;
 }
 
 html[data-theme="dark"] .composer-topline,
@@ -3728,11 +3822,13 @@ html[data-theme="dark"] .workspace-card-name,
 html[data-theme="dark"] .file-card-name,
 html[data-theme="dark"] .ai-message-body.markdown-body,
 html[data-theme="dark"] .markdown-body :is(h1, h2, h3, strong),
+html[data-theme="dark"] .qc-input,
 html[data-theme="dark"] .chat-input-wrapper .chat-input .el-textarea__inner,
 html[data-theme="dark"] .input-wrapper .el-textarea__inner {
   color: rgba(248, 250, 252, 0.94) !important;
 }
 
+html[data-theme="dark"] .qc-input::placeholder,
 html[data-theme="dark"] .input-wrapper .el-textarea__inner::placeholder,
 html[data-theme="dark"] .chat-input-wrapper .chat-input .el-textarea__inner::placeholder {
   color: rgba(148, 163, 184, 0.56) !important;
@@ -3757,12 +3853,56 @@ html[data-theme="dark"] .sidebar-group-count {
   color: rgba(203, 213, 225, 0.72) !important;
 }
 
+html[data-theme="dark"] .qc-submit {
+  background: rgba(244, 244, 245, 0.94) !important;
+  color: #111318 !important;
+  box-shadow: none !important;
+}
+
+html[data-theme="dark"] .qc-submit:not(:disabled):hover {
+  background: #ffffff !important;
+}
+
+html[data-theme="dark"] .qc-hints-label,
+html[data-theme="dark"] .qc-kbd-hint,
+html[data-theme="dark"] .qc-hint-sep {
+  color: rgba(161, 161, 170, 0.58) !important;
+}
+
+html[data-theme="dark"] .qc-hint-item {
+  background: transparent !important;
+  border-color: transparent !important;
+  color: rgba(212, 212, 216, 0.72) !important;
+}
+
+html[data-theme="dark"] .qc-hint-item:hover {
+  background: rgba(124, 140, 255, 0.12) !important;
+  border-color: rgba(124, 140, 255, 0.22) !important;
+  color: #dbe3ff !important;
+}
+
 html[data-theme="dark"] .view-toggle-btn.active,
 html[data-theme="dark"] .workspace-card-action-primary,
 html[data-theme="dark"] .coding-model-panel-option.is-active {
   background: rgba(124, 140, 255, 0.14) !important;
   border-color: rgba(124, 140, 255, 0.30) !important;
   color: #b6c2ff !important;
+}
+
+html[data-theme="dark"] .msg-user-bubble {
+  background: rgba(124, 140, 255, 0.18) !important;
+  border: 1px solid rgba(124, 140, 255, 0.30) !important;
+  color: rgba(248, 250, 252, 0.94) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme="dark"] .toggle-bar-back-btn {
+  color: rgba(203, 213, 225, 0.74) !important;
+  font-weight: 600 !important;
+}
+
+html[data-theme="dark"] .workspace-showcase {
+  border-top-color: rgba(148, 163, 184, 0.12) !important;
 }
 
 html[data-theme="dark"] .workspace-card:hover,

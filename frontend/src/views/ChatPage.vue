@@ -9,7 +9,7 @@
             <span>/</span>
             <span>{{ builderAppDisplayName || '新建应用' }}</span>
             <span>/</span>
-            <strong>Chat 工作台</strong>
+            <strong>AI-Builder</strong>
           </div>
           <div v-if="showViewSwitcher" class="mode-switcher">
             <button class="mode-btn" :class="{ active: activeView === 'builder' }" @click="setActiveView('builder')">
@@ -30,26 +30,31 @@
               </span>
               <span>辅助搭建</span>
             </button>
-            <button class="mode-btn" @click="openCodingWorkspace()">
-              <span class="mode-btn-icon" aria-hidden="true">
-                <svg viewBox="0 0 16 16" fill="none">
-                  <path d="M5.2 4.4L2.6 8l2.6 3.6M10.8 4.4L13.4 8l-2.6 3.6M9 3l-2 10" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round" />
-                </svg>
-              </span>
-              <span>智能开发</span>
-            </button>
           </div>
         </div>
       </template>
       <template #actions>
-        <button class="builder-top-action ghost" type="button" @click="openCodingWorkspace()">
-          IDE
+        <button
+          v-if="showBuilderArtifactToggle"
+          class="builder-top-action artifact icon-only"
+          type="button"
+          :aria-pressed="showAnyBuilderArtifactPanel"
+          :aria-label="showAnyBuilderArtifactPanel ? '收起产物面板' : '打开产物面板'"
+          :title="showAnyBuilderArtifactPanel ? '收起产物面板' : '打开产物面板'"
+          @click="toggleArtifactPanel"
+        >
+          <span class="builder-top-action-icon" aria-hidden="true">
+            <svg viewBox="0 0 16 16" fill="none">
+              <rect x="2.3" y="3" width="11.4" height="10" rx="2" stroke="currentColor" stroke-width="1.3" />
+              <path d="M8 3v10" stroke="currentColor" stroke-width="1.3" />
+            </svg>
+          </span>
         </button>
         <button
           v-if="showStartDeployButton"
           class="builder-top-action primary"
           type="button"
-          @click="startDeployFlow()"
+          @click="startDeployFromTopbar"
           :disabled="assembling || generating || deployRunningAll || deployExecuting !== null || !hasPreviewContent"
         >
           部署到预览
@@ -65,7 +70,7 @@
         >↗</button>
       </template>
     </TopBar>
-    <div v-if="!embedMode" v-show="(!SHOW_PLATFORM_CONFIG || activeView === 'builder') && !useSpecMode" class="builder-chat-phase-strip">
+    <div v-if="!embedMode" v-show="showBuilderPhaseStrip" class="builder-chat-phase-strip">
       <div class="builder-chat-agent">
         <span class="builder-chat-agent-dot"></span>
         <span>搭建智能体</span>
@@ -126,19 +131,9 @@
         </div>
       </div>
 
-      <!-- 智能开发内容区 — iframe 嵌入 CodingPage -->
-      <div v-show="activeView === 'coding'" class="coding-content">
-        <iframe
-          v-if="codingIframeUrl"
-          :src="codingIframeUrl"
-          class="coding-embed-frame"
-          allow="clipboard-read; clipboard-write"
-        ></iframe>
-      </div>
-
       <!-- SPEC PhaseBar (Phase β: only when requirements agent is active) -->
       <div
-        v-if="useSpecMode && !embedMode"
+        v-if="showSpecArtifactPanel"
         v-show="!SHOW_PLATFORM_CONFIG || activeView === 'builder'"
         class="spec-phasebar-strip"
       >
@@ -149,7 +144,11 @@
       <div
         v-show="!SHOW_PLATFORM_CONFIG || activeView === 'builder'"
         class="builder-content"
-        :class="{ 'single-pane': !showBuilderChatSide }"
+        :class="{
+          'single-pane': !showBuilderChatSide,
+          'artifacts-open': showAnyBuilderArtifactPanel,
+          'artifacts-hidden': !showAnyBuilderArtifactPanel
+        }"
       >
       <!-- 左侧对话区 -->
       <div v-if="showBuilderChatSide" class="chat-side">
@@ -181,7 +180,7 @@
                 v-for="stat in specOverviewStats"
                 :key="stat.key"
                 type="button"
-                @click="canvasTab = stat.tab"
+                @click="openArtifactPanel(stat.tab)"
               >
                 <span>{{ stat.value }}</span>
                 {{ stat.label }}
@@ -189,7 +188,12 @@
             </div>
           </section>
           <div class="messages" ref="messagesRef">
-            <div v-for="(msg, idx) in visibleMessages" :key="msg.id ?? `msg-${idx}`" class="chat-bubble" :class="msg.role">
+            <div
+              v-for="(msg, idx) in visibleMessages"
+              :key="msg.id ?? `msg-${idx}`"
+              class="chat-bubble"
+              :class="[msg.role, { 'streaming-message': isStreamingAssistantMessage(msg) }]"
+            >
               <div class="bubble-row" :class="msg.role">
                 <div v-if="msg.role === 'assistant'" class="assistant-avatar" aria-hidden="true">AI</div>
                 <div class="bubble-inner" :class="{ 'welcome-bubble': msg.role === 'assistant' && msg.content === BUILDER_WELCOME_MESSAGE }">
@@ -304,7 +308,7 @@
         </div>
       </div>
 
-      <div v-if="!useSpecMode" class="preview-side builder-result-side">
+      <div v-if="showBuilderArtifactPanel" class="preview-side builder-result-side">
         <div v-show="!isUpdateReviewMode" class="builder-canvas-tabs">
           <button
             v-for="tab in builderCanvasTabs"
@@ -312,7 +316,7 @@
             type="button"
             class="builder-canvas-tab"
             :class="{ active: canvasTab === tab.key }"
-            @click="canvasTab = tab.key"
+            @click="openArtifactPanel(tab.key)"
           >
             <span>{{ tab.label }}</span>
             <em v-if="tab.badge">{{ tab.badge }}</em>
@@ -357,7 +361,7 @@
             <button
               v-if="showStartDeployButton"
               class="preview-side-cta"
-              @click="startDeployFlow()"
+              @click="startDeployFromArtifact"
               :disabled="assembling || generating || deployRunningAll || deployExecuting !== null || !hasPreviewContent"
             >{{ generating || deployRunningAll || deployExecuting !== null ? '构建中...' : '开始构建' }}</button>
             <button
@@ -366,84 +370,96 @@
               @click="publishCurrentApp"
               :disabled="publishingApp || isAppOnline"
             >{{ publishingApp ? '上线中...' : isAppOnline ? '已上线' : '上线应用' }}</button>
+            <button
+              class="preview-panel-collapse"
+              type="button"
+              @click="closeArtifactPanel"
+              title="收起产物面板"
+              aria-label="收起产物面板"
+            >
+              <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <rect x="2.3" y="3" width="11.4" height="10" rx="2" stroke="currentColor" stroke-width="1.3" />
+                <path d="M8 3v10" stroke="currentColor" stroke-width="1.3" />
+                <path d="M6.1 6.2L4.3 8l1.8 1.8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+            </button>
           </div>
         </div>
         <div class="preview-body">
-          <!-- 文档版本列表：≥2 版时展示切换 + 对比 + 下载 -->
+          <!-- 文档版本：默认只展示当前版本，历史版本收进可展开列表 -->
           <div
             v-if="showBuilderPreview && canvasTab === 'spec' && !isUpdateReviewMode && displayDocVersions.length >= 2"
-            class="doc-version-list compact"
-            style="padding: 20px 20px 0 20px;"
+            class="doc-version-switcher"
           >
-            <div
-              v-for="ver in displayDocVersions"
-              :key="ver.key"
-              class="doc-version-row version-row-selectable"
-              :class="{ 'version-row-active': selectedDocVersionKey === ver.key }"
-            >
-              <div class="doc-version-summary">
-                <button class="doc-version-toggle" @click="selectDocVersion(ver)">
-                  <div class="doc-version-main">
-                    <div class="doc-ver-header">
-                      <strong>V{{ getDocDisplayVersion(ver) }}</strong>
-                      <span style="color: var(--t-text-secondary); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ getDocDisplayFilename(ver) }}</span>
-                    </div>
-                    <div style="font-size: 12px; color: var(--t-text-secondary); line-height: 1.5;">{{ ver.summary }}</div>
-                  </div>
-                </button>
+            <div class="doc-version-current-strip">
+              <button
+                v-if="selectedDocVersionItem"
+                class="doc-version-current-main"
+                type="button"
+                @click="docVersionHistoryOpen = !docVersionHistoryOpen"
+              >
+                <span class="doc-version-current-badge">V{{ getDocDisplayVersion(selectedDocVersionItem) }}</span>
+                <span class="doc-version-current-text">
+                  <strong>{{ getDocDisplayFilename(selectedDocVersionItem) }}</strong>
+                  <small>{{ selectedDocVersionItem.summary || '当前设计文档版本' }}</small>
+                </span>
+              </button>
+              <div class="doc-version-current-actions">
                 <button
-                  v-if="canCompareDocVersion(ver)"
-                  class="preview-side-cta secondary"
-                  style="padding: 4px 12px; font-size: 12px; flex-shrink: 0;"
-                  @click.stop="openDocDiff(ver)"
+                  v-if="selectedDocVersionItem && canCompareDocVersion(selectedDocVersionItem)"
+                  class="doc-version-action"
+                  type="button"
+                  @click.stop="openDocDiff(selectedDocVersionItem)"
                 >对比</button>
                 <button
-                  class="preview-side-cta secondary"
-                  style="padding: 4px 12px; font-size: 12px; flex-shrink: 0;"
-                  @click.stop="downloadDocVersion(ver)"
+                  v-if="selectedDocVersionItem"
+                  class="doc-version-action"
+                  type="button"
+                  @click.stop="downloadDocVersion(selectedDocVersionItem)"
                 >下载</button>
+                <button
+                  class="doc-version-history-toggle"
+                  type="button"
+                  :aria-expanded="docVersionHistoryOpen"
+                  @click="docVersionHistoryOpen = !docVersionHistoryOpen"
+                >
+                  版本记录 {{ displayDocVersions.length }}
+                  <span aria-hidden="true">{{ docVersionHistoryOpen ? '收起' : '展开' }}</span>
+                </button>
+              </div>
+            </div>
+            <div v-if="docVersionHistoryOpen" class="doc-version-history-panel">
+              <div
+                v-for="ver in displayDocVersions"
+                :key="ver.key"
+                class="doc-version-history-row"
+                :class="{ active: selectedDocVersionKey === ver.key }"
+              >
+                <button class="doc-version-history-main" type="button" @click="selectDocVersion(ver)">
+                  <span class="doc-history-version">V{{ getDocDisplayVersion(ver) }}</span>
+                  <span class="doc-history-copy">
+                    <strong>{{ getDocDisplayFilename(ver) }}</strong>
+                    <small>{{ ver.summary || '设计文档版本' }}</small>
+                  </span>
+                  <em v-if="selectedDocVersionKey === ver.key">当前查看</em>
+                </button>
+                <div class="doc-version-history-actions">
+                  <button
+                    v-if="canCompareDocVersion(ver)"
+                    class="doc-version-mini-action"
+                    type="button"
+                    @click.stop="openDocDiff(ver)"
+                  >对比</button>
+                  <button
+                    class="doc-version-mini-action"
+                    type="button"
+                    @click.stop="downloadDocVersion(ver)"
+                  >下载</button>
+                </div>
               </div>
             </div>
           </div>
           <div v-if="showBuilderPreview && canvasTab === 'spec'" class="tab-content spec-tab-content">
-            <section v-if="showSpecOverview && !isUpdateReviewMode" class="spec-overview-panel" aria-label="SPEC 覆盖度">
-              <div class="spec-overview-head">
-                <div>
-                  <span class="spec-overview-eyebrow">SPEC 覆盖度</span>
-                  <h3>配置与自开发覆盖度</h3>
-                  <p>{{ specOverviewLead }}</p>
-                </div>
-                <div class="spec-score" :class="{ complete: specCompletenessScore === 100 }">
-                  <strong>{{ specCompletenessScore }}%</strong>
-                  <span>{{ specPrimaryGaps.length ? '仍需补齐' : '可进入构建' }}</span>
-                </div>
-              </div>
-              <div class="spec-overview-grid">
-                <button
-                  v-for="stat in specOverviewStats"
-                  :key="stat.key"
-                  type="button"
-                  class="spec-overview-stat"
-                  @click="canvasTab = stat.tab"
-                >
-                  <span>{{ stat.value }}</span>
-                  <strong>{{ stat.label }}</strong>
-                  <em>{{ stat.helper }}</em>
-                </button>
-              </div>
-              <div class="spec-readiness-list">
-                <div
-                  v-for="item in specReadinessItems"
-                  :key="item.key"
-                  class="spec-readiness-item"
-                  :class="{ ready: item.ready }"
-                >
-                  <span>{{ item.ready ? '已覆盖' : '待补齐' }}</span>
-                  <strong>{{ item.label }}</strong>
-                  <em>{{ item.detail }}</em>
-                </div>
-              </div>
-            </section>
             <!-- 正常模式：单文档视图 -->
             <template v-if="!isUpdateReviewMode">
               <div v-if="liveStructuredDocResult" class="doc-version-content expanded doc-preview-body structured-doc-host">
@@ -471,6 +487,52 @@
               <div v-else class="preview-empty small">暂无可展示的文档内容</div>
             </template>
 
+          </div>
+          <div v-else-if="canvasTab === 'base'" class="builder-canvas-panel">
+            <div class="canvas-panel-head">
+              <div>
+                <h3>基础配置</h3>
+                <p>集中查看应用角色和数据字典，避免散落在文档或表单里逐段查找。</p>
+              </div>
+              <span>{{ baseConfigCount }} 项</span>
+            </div>
+            <div class="canvas-basic-grid">
+              <section class="canvas-basic-section">
+                <div class="canvas-basic-section-head">
+                  <strong>角色</strong>
+                  <span>{{ canvasRoleItems.length }} 个</span>
+                </div>
+                <div v-if="canvasRoleItems.length" class="canvas-role-list">
+                  <article v-for="(role, index) in canvasRoleItems" :key="canvasRoleKey(role, index)" class="canvas-role-card">
+                    <div>
+                      <strong>{{ canvasRoleName(role, index) }}</strong>
+                      <code>{{ canvasRoleCode(role, index) }}</code>
+                    </div>
+                    <span>{{ canvasRoleScope(role) }}</span>
+                  </article>
+                </div>
+                <div v-else class="preview-empty small">暂无角色定义。</div>
+              </section>
+              <section class="canvas-basic-section">
+                <div class="canvas-basic-section-head">
+                  <strong>数据字典</strong>
+                  <span>{{ canvasDictItems.length }} 个</span>
+                </div>
+                <div v-if="canvasDictItems.length" class="canvas-dict-list">
+                  <article v-for="(dict, index) in canvasDictItems" :key="canvasDictKey(dict, index)" class="canvas-dict-card">
+                    <div class="canvas-dict-title">
+                      <strong>{{ canvasDictName(dict, index) }}</strong>
+                      <code>{{ canvasDictCode(dict, index) }}</code>
+                    </div>
+                    <div class="canvas-dict-options">
+                      <span v-for="option in canvasDictOptions(dict).slice(0, 6)" :key="option.code">{{ option.name }}</span>
+                      <em v-if="canvasDictOptions(dict).length > 6">+{{ canvasDictOptions(dict).length - 6 }}</em>
+                    </div>
+                  </article>
+                </div>
+                <div v-else class="preview-empty small">暂无数据字典。</div>
+              </section>
+            </div>
           </div>
           <div v-else-if="canvasTab === 'models'" class="builder-canvas-panel">
             <div class="canvas-panel-head">
@@ -529,10 +591,10 @@
           <div v-else-if="canvasTab === 'flow'" class="builder-canvas-panel">
             <div class="canvas-panel-head">
               <div>
-                <h3>{{ businessFlowItems.length ? '业务流程' : '生成流程' }}</h3>
-                <p>{{ businessFlowItems.length ? '来自 SPEC 的审批、流转和系统动作定义。' : '从角色、字典、模型、表单到权限配置的真实执行步骤。' }}</p>
+                <h3>业务流程</h3>
+                <p>这里只展示目标应用里的审批、流转和业务闭环，不展示平台内部构建步骤。</p>
               </div>
-              <span>{{ businessFlowItems.length ? `${businessFlowItems.length} 条` : `${deploySteps.length} 步` }}</span>
+              <span>{{ businessFlowItems.length }} 条</span>
             </div>
             <div v-if="businessFlowItems.length" class="canvas-flow-list">
               <section v-for="flow in businessFlowItems" :key="flow.key" class="canvas-flow-group">
@@ -554,26 +616,13 @@
                 </div>
               </section>
             </div>
-            <div v-else-if="deployGroups.length" class="canvas-flow-list">
-              <section v-for="group in deployGroups" :key="group.title" class="canvas-flow-group">
-                <div class="canvas-flow-title">
-                  <strong>{{ group.title }}</strong>
-                  <span>{{ group.doneCount }}/{{ group.steps.length }}</span>
-                </div>
-                <div v-for="step in group.steps" :key="step.key" class="canvas-flow-step" :class="step.status">
-                  <span class="flow-dot"></span>
-                  <span>{{ step.label }}</span>
-                  <em>{{ step.status }}</em>
-                </div>
-              </section>
-            </div>
-            <div v-else class="preview-empty small">点击「部署到预览」后会显示真实生成流水线。</div>
+            <div v-else class="preview-empty small">暂无业务流程定义。这里不会混入角色、字典、模型、表单等平台生成步骤。</div>
           </div>
           <div v-else-if="canvasTab === 'code'" class="builder-canvas-panel code-panel">
             <div class="canvas-panel-head">
               <div>
-                <h3>自开发任务</h3>
-                <p>来自 SPEC 的自开发边界会在这里形成 IDE 任务，避免把可配置内容误送去写代码。</p>
+                <h3>开发边界</h3>
+                <p>来自 SPEC 的开发边界会在这里形成后续 IDE 任务，避免把可配置内容误送去写代码。</p>
               </div>
               <span>{{ customDevelopmentSummary }}</span>
             </div>
@@ -611,12 +660,12 @@
                   :disabled="!isActionableCustomDev(item)"
                   @click="dispatchCustomDevToCoding(item, index)"
                 >
-                  {{ isActionableCustomDev(item) ? '生成 IDE 任务' : '暂无需自开发' }}
+                  {{ isActionableCustomDev(item) ? '生成 IDE 任务' : '暂无需开发扩展' }}
                 </button>
               </article>
             </div>
             <div v-else class="custom-dev-empty">
-              <strong>暂无强制自开发项</strong>
+              <strong>暂无强制开发扩展</strong>
               <span>当前 SPEC 可先由模型、表单、流程和权限配置覆盖；后续补充复杂组件、Hook、接口或看板时再进入 IDE。</span>
               <button class="code-panel-button secondary" type="button" @click="dispatchGeneralSpecToCoding">带当前 SPEC 进入 IDE</button>
             </div>
@@ -825,10 +874,10 @@
       </aside>
 
       <!-- SPEC three-pane (Phase β): replaces preview-side + deploy-aside when in spec mode -->
-      <div v-if="useSpecMode" class="spec-canvas-pane">
+      <div v-if="showSpecArtifactPanel" class="spec-canvas-pane">
         <SpecCanvas />
       </div>
-      <SpecInspector v-if="useSpecMode" class="spec-inspector-pane" />
+      <SpecInspector v-if="showSpecArtifactPanel" class="spec-inspector-pane" />
     </div><!-- /builder-content -->
     </div><!-- /content-area -->
 
@@ -1124,6 +1173,21 @@ const roleNamesText = computed(() => {
   const names = store.preview.roles.map((r: any) => r?.name).filter(Boolean)
   return names.length ? names.slice(0, 8).join('、') + (names.length > 8 ? ` 等 ${names.length} 项` : '') : '暂无'
 })
+const canvasRoleItems = computed<any[]>(() => Array.isArray(store.preview.roles) ? store.preview.roles as any[] : [])
+const canvasDictItems = computed<any[]>(() => Array.isArray(store.preview.dicts) ? store.preview.dicts as any[] : [])
+const baseConfigCount = computed(() => canvasRoleItems.value.length + canvasDictItems.value.length)
+const canvasRoleKey = (role: any, index: number) => role?.code || role?.role_code || role?.name || `role-${index}`
+const canvasRoleName = (role: any, index: number) => role?.name || role?.role_name || role?.code || `角色${index + 1}`
+const canvasRoleCode = (role: any, index: number) => role?.code || role?.role_code || `role_${index + 1}`
+const canvasRoleScope = (role: any) => {
+  const scope = role?.scope || role?.data_scope || role?.dataScope || ''
+  if (!scope) return '未配置范围'
+  return getDataScopeLabel(scope).text
+}
+const canvasDictKey = (dict: any, index: number) => dict?.code || dict?.dict_code || dict?.name || `dict-${index}`
+const canvasDictName = (dict: any, index: number) => dict?.name || dict?.dict_name || dict?.code || `字典${index + 1}`
+const canvasDictCode = (dict: any, index: number) => dict?.code || dict?.dict_code || `dict_${index + 1}`
+const canvasDictOptions = (dict: any) => normalizeDictOptions(dict)
 const builderLifecycleStatus = computed(() => {
   if (deployAllDone.value || store.currentApp?.status === 'completed') {
     return { key: 'deployed', label: '已部署' as const }
@@ -1147,6 +1211,11 @@ const isAppPublishing = computed(() => {
   return status.includes('publish') || status.includes('上线中') || status.includes('publishing')
 })
 const isApplicationUpdateChatMode = ref(false)
+const shouldDefaultOpenArtifactPanel = () => {
+  const requestedView = Array.isArray(route.query.view) ? route.query.view[0] : route.query.view
+  return requestedView !== 'platform' && requestedView !== 'coding'
+}
+const artifactPanelVisible = ref(shouldDefaultOpenArtifactPanel())
 const showStartDeployButton = computed(() => !deployAllDone.value && !isPlatformDeployed.value)
 const showPublishButton = computed(() =>
   isPlatformDeployed.value &&
@@ -1155,10 +1224,32 @@ const showPublishButton = computed(() =>
 )
 const showUpdateButton = computed(() => !!existingAppId.value && isPlatformDeployed.value && !isUpdateReviewMode.value)
 const showExecuteUpdateButton = computed(() => isUpdateReviewMode.value && !!store.changePlan?.actions?.length)
+const showBuilderArtifactPanel = computed(() =>
+  artifactPanelVisible.value &&
+  !useSpecMode.value &&
+  (!SHOW_PLATFORM_CONFIG || activeView.value === 'builder')
+)
+const showSpecArtifactPanel = computed(() =>
+  artifactPanelVisible.value &&
+  useSpecMode.value &&
+  !embedMode.value &&
+  (!SHOW_PLATFORM_CONFIG || activeView.value === 'builder')
+)
+const showAnyBuilderArtifactPanel = computed(() =>
+  showBuilderArtifactPanel.value || showSpecArtifactPanel.value
+)
+const showBuilderArtifactToggle = computed(() =>
+  !embedMode.value &&
+  (!SHOW_PLATFORM_CONFIG || activeView.value === 'builder')
+)
+const showBuilderPhaseStrip = computed(() =>
+  (!SHOW_PLATFORM_CONFIG || activeView.value === 'builder') &&
+  !useSpecMode.value &&
+  showAnyBuilderArtifactPanel.value
+)
 const showBuilderChatSide = computed(() =>
-  !isPlatformDeployed.value ||
-  isUpdateReviewMode.value ||
-  isApplicationUpdateChatMode.value
+  !embedMode.value &&
+  (!SHOW_PLATFORM_CONFIG || activeView.value === 'builder')
 )
 const showBuilderComposer = computed(() => showBuilderChatSide.value)
 const showDeployProgressInline = computed(() => deploySteps.value.length > 0 || deployOpen.value || isPlatformDeployed.value)
@@ -1189,10 +1280,15 @@ const builderQuickPlaceholder = computed(() =>
     : `补充或修改${'文档'}内容，例如：把${'文档'}再细化一下...`
 )
 
-type BuilderCanvasTabKey = 'spec' | 'models' | 'forms' | 'flow' | 'code'
+type BuilderCanvasTabKey = 'spec' | 'base' | 'models' | 'forms' | 'flow' | 'code'
 
-const builderCanvasTabKeys = new Set<BuilderCanvasTabKey>(['spec', 'models', 'forms', 'flow', 'code'])
+const builderCanvasTabKeys = new Set<BuilderCanvasTabKey>(['spec', 'base', 'models', 'forms', 'flow'])
 const canvasTab = ref<BuilderCanvasTabKey>('spec')
+
+const getRouteCanvasTab = () => {
+  const raw = Array.isArray(route.query.tab) ? route.query.tab[0] : route.query.tab
+  return builderCanvasTabKeys.has(raw as BuilderCanvasTabKey) ? raw as BuilderCanvasTabKey : null
+}
 
 watch(
   () => route.query.tab,
@@ -1200,10 +1296,52 @@ watch(
     const raw = Array.isArray(value) ? value[0] : value
     if (builderCanvasTabKeys.has(raw as BuilderCanvasTabKey)) {
       canvasTab.value = raw as BuilderCanvasTabKey
+      artifactPanelVisible.value = true
     }
   },
   { immediate: true }
 )
+
+watch(
+  () => route.query.app_id,
+  () => {
+    if (!getRouteCanvasTab()) {
+      artifactPanelVisible.value = shouldDefaultOpenArtifactPanel()
+    }
+  }
+)
+
+watch(
+  () => route.params.id,
+  () => {
+    if (!getRouteCanvasTab()) {
+      artifactPanelVisible.value = shouldDefaultOpenArtifactPanel()
+    }
+  }
+)
+
+function openArtifactPanel(tab?: BuilderCanvasTabKey) {
+  if (tab) canvasTab.value = tab
+  artifactPanelVisible.value = true
+}
+
+function closeArtifactPanel() {
+  artifactPanelVisible.value = false
+}
+
+function toggleArtifactPanel() {
+  artifactPanelVisible.value = !showAnyBuilderArtifactPanel.value
+}
+
+function startDeployFromTopbar() {
+  openArtifactPanel('spec')
+  startDeployFlow()
+}
+
+function startDeployFromArtifact() {
+  openArtifactPanel('spec')
+  startDeployFlow()
+}
 
 const builderPhaseSteps = computed(() => {
   const hasSpecDocument = !!docPreviewContent.value
@@ -1223,7 +1361,6 @@ const builderPhaseSteps = computed(() => {
     { key: 'demand', label: '理解需求', status: demandFinished ? 'done' : 'active' },
     { key: 'spec', label: 'SPEC 设计', status: specReady ? 'done' : specActive ? 'active' : 'pending' },
     { key: 'config', label: '配置生成', status: configReady ? 'done' : generating.value || isDocParsing.value ? 'active' : 'pending' },
-    { key: 'code', label: '自开发', status: activeView.value === 'coding' ? 'active' : deployed ? 'done' : 'pending' },
     { key: 'deploy', label: '部署', status: deployed ? 'done' : deployRunningAll.value || deployExecuting.value !== null ? 'active' : 'pending' },
   ]
 })
@@ -1305,21 +1442,13 @@ const businessFlowItems = computed<BusinessFlowItem[]>(() => {
 
 const builderCanvasTabs = computed<Array<{ key: BuilderCanvasTabKey; label: string; badge: string }>>(() => [
   { key: 'spec', label: 'SPEC', badge: docPreviewAvailable.value ? 'v0.1' : '' },
+  { key: 'base', label: '基础配置', badge: baseConfigCount.value ? String(baseConfigCount.value) : '' },
   { key: 'models', label: '模型', badge: store.preview.models.length ? String(store.preview.models.length) : '' },
   { key: 'forms', label: '表单', badge: formPreviewItems.value.length ? String(formPreviewItems.value.length) : '' },
   {
     key: 'flow',
-    label: '流程',
-    badge: businessFlowItems.value.length
-      ? String(businessFlowItems.value.length)
-      : deploySteps.value.length ? String(deploySteps.value.length) : '',
-  },
-  {
-    key: 'code',
-    label: '自开发',
-    badge: actionableCustomDevelopmentItems.value.length
-      ? String(actionableCustomDevelopmentItems.value.length)
-      : activeView.value === 'coding' ? 'IDE' : '',
+    label: '业务流程',
+    badge: businessFlowItems.value.length ? String(businessFlowItems.value.length) : '',
   },
 ])
 
@@ -1465,10 +1594,10 @@ const specOverviewStats = computed<Array<{
   helper: string
   tab: BuilderCanvasTabKey
 }>>(() => [
+  { key: 'base', label: '基础配置', value: baseConfigCount.value, helper: '角色/字典', tab: 'base' },
   { key: 'models', label: '模型', value: store.preview.models.length, helper: '数据对象', tab: 'models' },
   { key: 'forms', label: '表单', value: formPreviewItems.value.length, helper: '页面草图', tab: 'forms' },
-  { key: 'flows', label: '流程', value: businessFlowItems.value.length, helper: '业务闭环', tab: 'flow' },
-  { key: 'custom', label: '自开发', value: customDevelopmentItems.value.length, helper: 'IDE 任务', tab: 'code' },
+  { key: 'flows', label: '业务流程', value: businessFlowItems.value.length, helper: '业务闭环', tab: 'flow' },
 ])
 
 const specReadinessItems = computed(() => [
@@ -1481,22 +1610,14 @@ const specReadinessItems = computed(() => [
   {
     key: 'config',
     label: '配置对象可落地',
-    ready: store.preview.models.length > 0 && formPreviewItems.value.length > 0,
-    detail: `${store.preview.models.length} 个模型、${formPreviewItems.value.length} 张表单`,
+    ready: baseConfigCount.value > 0 && store.preview.models.length > 0 && formPreviewItems.value.length > 0,
+    detail: `${baseConfigCount.value} 项基础配置、${store.preview.models.length} 个模型、${formPreviewItems.value.length} 张表单`,
   },
   {
     key: 'flows',
     label: '业务流程可复核',
     ready: businessFlowItems.value.length > 0,
-    detail: businessFlowItems.value.length ? `${businessFlowItems.value.length} 条流程已结构化` : '仍缺审批或流转定义',
-  },
-  {
-    key: 'custom',
-    label: '自开发边界明确',
-    ready: customDevelopmentItems.value.length > 0,
-    detail: actionableCustomDevelopmentItems.value.length
-      ? `${actionableCustomDevelopmentItems.value.length} 项可生成 IDE 任务`
-      : customDevelopmentItems.value.length ? '配置优先，无强制自开发' : '仍缺自开发定义',
+    detail: businessFlowItems.value.length ? `${businessFlowItems.value.length} 条业务流程已结构化` : '仍缺审批或流转定义',
   },
 ])
 
@@ -1515,11 +1636,15 @@ const specOverviewLead = computed(() => {
   if (specPrimaryGaps.value.length) {
     return `当前还需要补齐：${specPrimaryGaps.value.map(item => item.label).join('、')}。`
   }
-  return `已覆盖 ${store.preview.models.length} 个模型、${formPreviewItems.value.length} 张表单、${businessFlowItems.value.length} 条流程和 ${customDevelopmentItems.value.length} 项自开发定义。`
+  return `已覆盖 ${baseConfigCount.value} 项基础配置、${store.preview.models.length} 个模型、${formPreviewItems.value.length} 张表单和 ${businessFlowItems.value.length} 条业务流程。`
 })
 
 const showSpecOverview = computed(() => hasPreviewContent.value || hasStructuredPreviewData.value)
-const showBuilderSpecBrief = computed(() => showSpecOverview.value && !appParsedMode.value)
+const showBuilderSpecBrief = computed(() =>
+  showSpecOverview.value &&
+  !appParsedMode.value &&
+  !showBuilderArtifactToggle.value
+)
 
 const normalizeDictOptions = (dict: any) =>
   (dict?.options || dict?.values || []).map((item: any, idx: number) => (
@@ -1699,6 +1824,7 @@ const chatImageInputRef = ref<HTMLInputElement>()
 const inputText = ref('')
 const isTyping = ref(false)
 const sendingMessage = ref(false)
+const streamingAssistantMessageId = ref<number | null>(null)
 const pendingChatAttachment = ref<{ file: File; kind: 'image' | 'file'; previewUrl: string } | null>(null)
 const canSendMessage = computed(() => (!!inputText.value.trim() || !!pendingChatAttachment.value) && !sendingMessage.value)
 
@@ -1871,16 +1997,20 @@ const loadBuilderModelOptions = async () => {
   }
 }
 
-const syncBuilderModelFromConversation = async (cid: number) => {
+const syncBuilderModelFromConversation = async (
+  cid: number,
+  options: { syncAgent?: boolean; syncSpec?: boolean } = {}
+) => {
+  const syncAgent = options.syncAgent ?? true
+  const syncSpec = options.syncSpec ?? syncAgent
   try {
     const conversation = await conversationApi.get(cid)
     applyBuilderModelSelection(conversation.selected_llm_config_id)
-    // Sync agent_type for requirements mode detection
-    if (conversation.agent_type) {
+    if (conversation.agent_type && syncAgent) {
       currentAgent.value = conversation.agent_type
     }
-    // 加载关联的 SPEC（如果对话已绑定 spec_id）
-    if (conversation.spec_id) {
+    // 已有应用详情以应用配置为锚点，不允许历史 requirements 对话异步切换整页视图。
+    if (conversation.spec_id && syncSpec) {
       try { await specStore.load(conversation.spec_id) }
       catch (e) { console.warn('加载 SPEC 失败:', e) }
     } else {
@@ -1920,6 +2050,30 @@ const handleBuilderModelChange = async (nextValue: number | null) => {
       }
     }
   } catch (e: any) {
+    if (existingAppId.value && e?.response?.status === 404) {
+      try {
+        const created = await conversationApi.create({
+          agent_type: 'builder',
+          ...(nextValue != null ? { selected_llm_config_id: nextValue } : {}),
+        }) as any
+        conversationId.value = created.id
+        selectedConversationId.value = created.id
+        currentAgent.value = 'builder'
+        applyBuilderModelSelection(created.selected_llm_config_id ?? nextValue)
+        router.replace({
+          path: `/chat/${created.id}`,
+          query: {
+            ...route.query,
+            ...(existingAppId.value ? { app_id: String(existingAppId.value) } : {}),
+            view: 'builder',
+          },
+        })
+        fetchConversationList()
+        return
+      } catch (createError) {
+        console.error('模型切换时重建应用更新会话失败:', createError)
+      }
+    }
     selectedBuilderModelId.value = normalizeBuilderModelId(previousValue)
     handleError(e, { fallback: '切换模型失败' })
   } finally {
@@ -1939,23 +2093,37 @@ const fetchAppCount = async () => {
 // ── 平台配置 iframe ──
 const activeView = ref<'builder' | 'platform' | 'coding'>('builder')
 
-// ── 智能开发（iframe 嵌入 CodingPage） ──
+const loadUploadedDocumentSpec = async (specId?: string | null) => {
+  let resolvedSpecId = specId || null
+
+  if (!resolvedSpecId && conversationId.value) {
+    try {
+      const conversation = await conversationApi.get(conversationId.value)
+      applyBuilderModelSelection(conversation.selected_llm_config_id)
+      resolvedSpecId = conversation.spec_id || null
+    } catch (e) {
+      console.warn('文档上传后获取会话 SPEC 失败:', e)
+    }
+  }
+
+  if (!resolvedSpecId) return false
+
+  await specStore.load(resolvedSpecId)
+  if (!specStore.current) {
+    console.warn('文档上传后加载 SPEC 失败:', specStore.lastError || resolvedSpecId)
+    return false
+  }
+
+  currentAgent.value = 'requirements'
+  activeView.value = 'builder'
+  parseReady.value = true
+  openArtifactPanel('spec')
+  return true
+}
+
+// ── 开发入口：统一跳转到独立开发页，AI-Builder 不再嵌入第二套开发界面 ──
 const AI_BUILDER_PENDING_CODING_KEY = 'ai_builder_pending_coding'
 const codingDispatchToken = ref('')
-
-const codingIframeUrl = computed(() => {
-  const appId = existingAppId.value || route.query.app_id
-  const base = import.meta.env.BASE_URL.replace(/\/$/, '')
-  const params = new URLSearchParams()
-  params.set('embed_nav', '0')
-  if (appId) params.set('app_id', String(appId))
-  if (activeProjectId.value) params.set('project_id', String(activeProjectId.value))
-  if (codingDispatchToken.value) {
-    params.set('from_ai_builder', '1')
-    params.set('dispatch', codingDispatchToken.value)
-  }
-  return `${base}/coding?${params.toString()}`
-})
 
 function buildCodingRouteQuery(dispatchToken = '') {
   const appId = existingAppId.value || route.query.app_id
@@ -2117,9 +2285,14 @@ const setActiveView = (view: 'builder' | 'platform' | 'coding') => {
   if (view === 'platform') {
     switchToPlatform()
   } else {
-    activeView.value = view
+    activeView.value = 'builder'
   }
-  persistAppActiveView(view)
+  persistAppActiveView(activeView.value)
+}
+
+const isGeneratedApplication = (app: any) => {
+  const status = String(app?.status || app?.local_status || '').toLowerCase()
+  return Boolean(app?.apaas_app_id || status === 'completed')
 }
 
 const restoreActiveViewForApp = async (app: any) => {
@@ -2139,8 +2312,7 @@ const restoreActiveViewForApp = async (app: any) => {
   if (!requestedView && localStorage.getItem(storageKey) === 'coding') {
     localStorage.removeItem(storageKey)
   }
-  // 应用列表/普通链接进入时始终先展示智能搭建；只有 URL 显式 view=coding 才进智能开发。
-  activeView.value = requestedView === 'coding' ? 'coding' : 'builder'
+  activeView.value = requestedView === 'platform' ? 'platform' : 'builder'
 }
 
 // 字段类型图标映射（兜底，防止后端返回中文导致竖排）
@@ -2253,6 +2425,58 @@ const messages = reactive<Message[]>([])
 resetMessagesToWelcome()
 
 const scrollToBottom = () => { nextTick(() => { if (messagesRef.value) messagesRef.value.scrollTop = messagesRef.value.scrollHeight }) }
+
+const STREAMING_ASSISTANT_ID = -1
+
+const isStreamingAssistantMessage = (msg: Message) =>
+  msg.role === 'assistant' && msg.id === streamingAssistantMessageId.value
+
+const findStreamingAssistantMessage = () => {
+  const lastMsg = messages[messages.length - 1]
+  if (lastMsg && lastMsg.role === 'assistant' && lastMsg.id === STREAMING_ASSISTANT_ID) {
+    return lastMsg
+  }
+  return null
+}
+
+const setStreamingAssistantMessage = (content: string) => {
+  const normalized = content.trim() || '正在处理...'
+  isTyping.value = false
+  streamingAssistantMessageId.value = STREAMING_ASSISTANT_ID
+  const existing = findStreamingAssistantMessage()
+  if (existing) {
+    existing.content = normalized
+  } else {
+    messages.push({
+      id: STREAMING_ASSISTANT_ID,
+      role: 'assistant',
+      agent: currentAgent.value,
+      content: normalized,
+      created_at: ''
+    })
+  }
+  scrollToBottom()
+}
+
+const replaceOrAppendAssistantMessage = (content: string, agent = currentAgent.value) => {
+  const existing = findStreamingAssistantMessage()
+  if (existing) {
+    existing.id = Date.now()
+    existing.agent = agent
+    existing.content = content
+  } else {
+    messages.push({
+      id: Date.now(),
+      role: 'assistant',
+      agent,
+      content,
+      created_at: ''
+    })
+  }
+  streamingAssistantMessageId.value = null
+  isTyping.value = false
+  scrollToBottom()
+}
 
 const clearChangePlanExecutionMessages = () => {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
@@ -2571,8 +2795,8 @@ const generating = ref(false)
 
 // ── Requirements mode ──
 const isRequirementsMode = computed(() => currentAgent.value === 'requirements')
-// ── SPEC three-pane mode (Phase β): all requirements conversations now drive a Spec ──
-const useSpecMode = computed(() => currentAgent.value === 'requirements')
+// 独立需求会话进入 SPEC 画布；已有应用详情固定使用构建预览，避免异步历史会话把页面切走。
+const useSpecMode = computed(() => currentAgent.value === 'requirements' && !existingAppId.value)
 const docResultForCard = ref<any>(null)       // doc_result JSON for DesignDocCard
 const generatingDoc = ref(false)               // 正在生成设计文档
 const confirmingDoc = ref(false)               // 正在确认转换配置
@@ -2742,6 +2966,7 @@ interface ChangeBadgeMeta {
 }
 const docVersions = ref<DocVersion[]>([])
 const docVersionsLoading = ref(false)
+const docVersionHistoryOpen = ref(false)
 const updatingDocVersion = ref(false)
 const executingChangePlan = ref(false)
 const docVersionPreviewVisible = ref(false)
@@ -3262,7 +3487,7 @@ const loadLatestDocForApp = async (appId: number) => {
       store.preview.workflows = parsed?.workflows || store.preview.workflows || []
       store.preview.permissions = parsed?.permissions || store.preview.permissions || []
       setPreviewCustomDevelopment(parsed)
-      parseReady.value = store.preview.models.length > 0
+      parseReady.value = store.preview.models.length > 0 || store.preview.forms.length > 0
     }
     currentDocPreviewOverride.value = null
     const selectedVersion = latest
@@ -3355,6 +3580,7 @@ const toggleDocVersion = (ver: DocVersionListItem) => {
 const selectDocVersion = (ver: DocVersionListItem) => {
   selectedDocVersionKey.value = ver.key
   expandedDocVersionKey.value = ver.key
+  docVersionHistoryOpen.value = false
 }
 
 const deleteDocVersion = async (ver: DocVersionListItem) => {
@@ -3384,6 +3610,7 @@ const deleteDocVersion = async (ver: DocVersionListItem) => {
 
 const startApplicationUpdateChat = () => {
   if (!existingAppId.value) return
+  openArtifactPanel(getRouteCanvasTab() || 'spec')
   activeView.value = 'builder'
   isApplicationUpdateChatMode.value = true
   if (appParsedMode.value) {
@@ -3407,6 +3634,13 @@ const startApplicationUpdateChat = () => {
     inputRef.value?.focus()
     scrollToBottom()
   })
+}
+
+const enterGeneratedApplicationWorkspace = (app: any) => {
+  if (!isGeneratedApplication(app)) return
+  const requestedView = Array.isArray(route.query.view) ? route.query.view[0] : route.query.view
+  if (requestedView === 'coding' || requestedView === 'platform') return
+  startApplicationUpdateChat()
 }
 
 const triggerDocVersionUpload = () => {
@@ -4110,7 +4344,7 @@ async function resolveConflictAndRetry() {
           loadedAppCode.value = resolveResp.app_code
           parsedAppCode.value = resolveResp.app_code
         }
-        parseReady.value = store.preview.models.length > 0
+        parseReady.value = store.preview.models.length > 0 || store.preview.forms.length > 0
       }
       if (resolveResp?.doc_version) {
         await loadLatestDocForApp(deployAppId.value)
@@ -4602,17 +4836,18 @@ const uploadDocFile = async (file: File) => {
       latestParseMeta.value = finalResult.parse_meta || null
       conversationId.value = finalResult.conversation_id
       selectedConversationId.value = finalResult.conversation_id
-      if (conversationId.value && currentAgent.value === 'requirements') {
+      if (conversationId.value && !existingAppId.value) {
         try {
-          await conversationApi.updateAgentType(conversationId.value, 'builder')
+          await conversationApi.updateAgentType(conversationId.value, 'requirements')
         } catch (e) {
-          console.warn('Failed to switch uploaded-doc conversation to builder mode', e)
+          console.warn('Failed to keep uploaded-doc conversation in requirements mode', e)
         }
-        currentAgent.value = 'builder'
+        currentAgent.value = 'requirements'
       }
       router.replace(`/chat/${finalResult.conversation_id}`)
+      let loadedUploadedSpec = await loadUploadedDocumentSpec(finalResult.spec_id || null)
       lastParsedFilename.value = file.name
-      latestDocContent.value = ''
+      latestDocContent.value = finalResult.rendered_doc || fileText || ''
       latestDocAppId.value = null
       latestDocConversationId.value = finalResult.conversation_id || null
 
@@ -4656,6 +4891,12 @@ const uploadDocFile = async (file: File) => {
 
       // 文档上传完成后自动刷新文档版本列表
       await fetchDocVersions()
+      // 上传解析会同时创建/回填 Spec。自动创建应用和版本列表刷新后再强制
+      // 拉一次，可以避免右侧预览仍停留在空态，需要用户再发消息才刷新。
+      loadedUploadedSpec = (await loadUploadedDocumentSpec(finalResult.spec_id || null)) || loadedUploadedSpec
+      if (!loadedUploadedSpec) {
+        await loadUploadedDocumentSpec(null)
+      }
 
       // 替换进度消息为完成总结
       if (pmsg) {
@@ -4672,7 +4913,7 @@ const uploadDocFile = async (file: File) => {
       }
       parseReady.value = true
       lastParsedFilename.value = file.name
-      latestDocContent.value = ''
+      latestDocContent.value = latestDocContent.value || fileText || ''
       latestDocAppId.value = null
       latestDocConversationId.value = conversationId.value
       // 自动创建 Application
@@ -4693,6 +4934,7 @@ const uploadDocFile = async (file: File) => {
       }
 
       await fetchDocVersions()
+      await loadUploadedDocumentSpec(null)
 
       if (pmsg) {
         parseTracker.currentStep = '解析完成'
@@ -4724,9 +4966,7 @@ const uploadDocFile = async (file: File) => {
       if (!store.currentApp && store.preview.appName) {
         store.currentApp = { status: 'draft' }
       }
-      if (currentAgent.value === 'requirements' && store.preview.models.length > 0) {
-        currentAgent.value = 'builder'
-      }
+      await loadUploadedDocumentSpec(null)
       if (pmsg && !contentShowsSuccess) {
         pmsg.content = buildProgressContent(true)
       }
@@ -5393,6 +5633,24 @@ const isConfirmationIntent = (text: string) => {
     || /^(开始|继续|直接|立即).*(生成|构建|搭建)$/.test(compact)
 }
 
+const isBuildStartIntent = (text: string) => {
+  const normalized = String(text || '').trim().toLowerCase()
+  if (!normalized) return false
+  const compact = normalized.replace(/\s+/g, '')
+  if (!compact || compact.length > 36) return false
+
+  const exactIntents = [
+    '开始构建', '开始搭建', '开始创建', '开始生成', '开始部署',
+    '构建吧', '搭建吧', '创建吧', '生成吧', '部署吧',
+    '可以开始构建', '可以开始搭建', '可以开始创建', '可以开始生成',
+    '部署到预览', '发布到预览', '开始预览', '上线预览',
+  ]
+  if (exactIntents.includes(compact)) return true
+
+  return /^(可以|确认|好的|好|ok|没问题)?(开始|继续|直接|立即)?(创建|构建|搭建|生成|部署|上线)(应用|配置|到预览|吧)?$/.test(compact)
+    || /^(帮我|给我|麻烦)?(开始|直接)?(创建|构建|搭建|生成|部署)(这个|当前)?(应用|项目|配置)?(吧)?$/.test(compact)
+}
+
 const looksLikeGeneratedDesignDoc = (input: string) => {
   const text = String(input || '').trim()
   if (!text) return false
@@ -5406,7 +5664,7 @@ const looksLikeGeneratedDesignDoc = (input: string) => {
 }
 
 const getRequirementsSemanticAction = (text: string): 'generate_doc' | 'build' | null => {
-  if (!isRequirementsMode.value || !isConfirmationIntent(text)) return null
+  if (!isRequirementsMode.value || (!isConfirmationIntent(text) && !isBuildStartIntent(text))) return null
 
   const lastAssistant = [...messages].reverse().find((msg) => msg.role === 'assistant')
   const assistantContent = String(lastAssistant?.content || '')
@@ -5443,7 +5701,18 @@ const createConversation = async () => {
 }
 
 const ensureApplicationUpdateConversation = async () => {
-  if (conversationId.value) return true
+  if (conversationId.value) {
+    try {
+      await conversationApi.get(conversationId.value)
+      return true
+    } catch (e: any) {
+      if (e?.response?.status !== 404) {
+        console.warn('校验更新会话失败，将尝试创建新会话:', e)
+      }
+      conversationId.value = null
+      selectedConversationId.value = null
+    }
+  }
   try {
     const data = await conversationApi.create({
       agent_type: 'builder',
@@ -5509,7 +5778,7 @@ const submitApplicationUpdateMessage = async (
       id: Date.now(),
       role: 'assistant',
       agent: 'builder',
-      content: '请直接描述这次要更新的内容，例如新增字段、调整流程、补充权限或增加自开发项。',
+      content: '请直接描述这次要更新的内容，例如新增字段、调整表单、补充权限或优化流程。',
       created_at: ''
     })
     scrollToBottom()
@@ -5517,11 +5786,11 @@ const submitApplicationUpdateMessage = async (
   }
 
   const progressMsgId = Date.now()
-  messages.push({
+    messages.push({
     id: progressMsgId,
     role: 'assistant',
     agent: 'builder',
-    content: '收到更新诉求，正在基于当前 SPEC 生成新版设计文档...',
+    content: '正在理解你的诉求，并判断要改哪一块配置...',
     created_at: ''
   })
   scrollToBottom()
@@ -5533,18 +5802,57 @@ const submitApplicationUpdateMessage = async (
       latestDocContent.value ||
       buildDocMarkdownFromPreview(currentPreviewConfigPayload.value)
     ).trim()
+    const shouldSendInlineDoc = docVersions.value.length === 0 && currentDoc.length > 0 && currentDoc.length <= 12000
     const result = await applicationApi.draftDocUpdate(existingAppId.value, {
       instruction,
       conversation_id: conversationId.value,
-      current_doc: currentDoc,
+      selected_llm_config_id: selectedBuilderModelId.value,
+      ...(shouldSendInlineDoc ? { current_doc: currentDoc } : {}),
     })
+
+    if (result?.actionable_update === false || result?.type === 'assistant_reply') {
+      const progressMsg = messages.find(msg => msg.id === progressMsgId)
+      if (progressMsg) {
+        progressMsg.content = result.message || result.summary || '我理解了。你可以继续补充要调整的业务范围、字段、表单、权限或流程。'
+      }
+      return
+    }
+
+    if (result?.direct_config_update && (result.change_plan || result.change_plan_id)) {
+      const planPayload = result.change_plan || result
+      const parsedConfig = planPayload.parsed_config?.data || planPayload.parsed_config || result.app_config?.data || result.app_config
+      if (parsedConfig) {
+        hydratePreviewFromConfig(parsedConfig)
+        store.currentApp = {
+          ...(store.currentApp || {}),
+          status: 'updating',
+          apaas_app_id: store.currentApp?.apaas_app_id,
+        }
+      }
+      latestParseMeta.value = planPayload.parse_meta || null
+      currentDocVersionNumber.value = Number(planPayload.to_version || planPayload.version || currentDocVersionNumber.value || 1)
+      lastParsedFilename.value = result.filename || lastParsedFilename.value
+      const renderedDoc = planPayload.rendered_doc || result.rendered_doc || result.markdown || ''
+      if (renderedDoc) {
+        syncCurrentDocFromPreview('当前更新后的最新文档', renderedDoc)
+      }
+      applyChangePlanState(planPayload)
+      await fetchDocVersions()
+      const progressMsg = messages.find(msg => msg.id === progressMsgId)
+      if (progressMsg) {
+        const actionCount = Array.isArray(planPayload.actions) ? planPayload.actions.length : changePlanTotalCount.value
+        progressMsg.content = `${result.summary || '已生成本次配置变更计划。'}\n\n右侧已更新 SPEC，并识别出 ${actionCount || 0} 项可执行变更。确认后点击「执行更新」同步到平台。`
+      }
+      return
+    }
+
     if (!result?.markdown?.trim()) {
       throw new Error('后端未返回新版 SPEC 内容')
     }
 
     const progressMsg = messages.find(msg => msg.id === progressMsgId)
     if (progressMsg) {
-      progressMsg.content = `${result.summary || '新版 SPEC 已生成'}\n\n正在进入文档版本对比和变更计划分析...`
+      progressMsg.content = `${result.summary || '新版 SPEC 已生成'}\n\n正在生成配置变更计划...`
     }
     const generatedFile = new File(
       [result.markdown],
@@ -5646,9 +5954,33 @@ const sendMessage = async () => {
     return
   }
 
+  const shouldStartBuildFromChat = !isRequirementsMode.value
+    && !attachmentPayload
+    && isBuildStartIntent(text)
+    && hasPreviewContent.value
+    && !deployAllDone.value
+    && !deployRunningAll.value
+    && deployExecuting.value === null
+
+  if (shouldStartBuildFromChat) {
+    isTyping.value = false
+    messages.push({
+      id: Date.now(),
+      role: 'assistant',
+      agent: currentAgent.value,
+      content: '收到，我现在开始构建并部署到预览。执行进度会在右侧构建面板里显示。',
+      created_at: ''
+    })
+    scrollToBottom()
+    await startDeployFlow()
+    sendingMessage.value = false
+    return
+  }
+
   const shouldSwitchToBuilder = !(attachmentPayload?.kind === 'image')
     && (parseReady.value || !!existingAppId.value || hasPreviewContent.value)
     && currentAgent.value === 'requirements'
+    && !specStore.current
 
   if (shouldSwitchToBuilder && conversationId.value) {
     try {
@@ -5715,8 +6047,18 @@ const sendMessage = async () => {
     let sseBuffer = ''
     let currentEvent = ''
     let serverConfigReceived = false  // 服务端已推送 config，done 时跳过客户端重提取
+    let specPatchReceived = false
+    let toolErrorCount = 0
 
     if (!reader) throw new Error('无法读取响应')
+
+    const updateStreamStatus = (statusText: string) => {
+      if (!getRenderableContentText(assistantContent)) {
+        setStreamingAssistantMessage(statusText)
+      }
+    }
+
+    updateStreamStatus('正在理解你的需求...')
 
     while (true) {
       const { done, value } = await reader.read()
@@ -5744,6 +6086,7 @@ const sendMessage = async () => {
           const normalizedType = parsed.type || currentEvent
 
           if (normalizedType === 'thinking') {
+            updateStreamStatus(String(parsed.data || parsed.content || '正在思考你的需求...'))
             continue
           }
 
@@ -5753,15 +6096,16 @@ const sendMessage = async () => {
             assistantContent += content
             const renderableAssistantContent = getRenderableContentText(assistantContent)
             if (!renderableAssistantContent) {
-              isTyping.value = true
+              updateStreamStatus('正在整理回复内容...')
               continue
             }
             isTyping.value = false
             const lastMsg = messages[messages.length - 1]
-            if (lastMsg && lastMsg.role === 'assistant' && lastMsg.agent === currentAgent.value && lastMsg.id === -1) {
+            streamingAssistantMessageId.value = STREAMING_ASSISTANT_ID
+            if (lastMsg && lastMsg.role === 'assistant' && lastMsg.agent === currentAgent.value && lastMsg.id === STREAMING_ASSISTANT_ID) {
               lastMsg.content = assistantContent
             } else {
-              messages.push({ id: -1, role: 'assistant', agent: currentAgent.value, content: assistantContent, created_at: '' })
+              messages.push({ id: STREAMING_ASSISTANT_ID, role: 'assistant', agent: currentAgent.value, content: assistantContent, created_at: '' })
             }
             scrollToBottom()
             continue
@@ -5770,14 +6114,19 @@ const sendMessage = async () => {
           if (normalizedType === 'error') {
             isTyping.value = false
             const detail = parsed.data || parsed.message || '模型返回异常，请切换模型后重试。'
-            messages.push({
-              id: Date.now(),
-              role: 'assistant',
-              agent: currentAgent.value,
-              content: `当前模型暂时不可用：${detail}`,
-              created_at: ''
-            })
-            scrollToBottom()
+            const specVersionMismatch = /Spec\s+\S+\s+version mismatch/i.test(String(detail))
+            if (specVersionMismatch && specStore.current?.id) {
+              try {
+                await specStore.load(specStore.current.id)
+              } catch (e) {
+                console.warn('刷新 SPEC 状态失败:', e)
+              }
+            }
+            replaceOrAppendAssistantMessage(
+              specVersionMismatch
+                ? 'SPEC 状态同步遇到版本冲突，已刷新本地状态。请重新发送这条消息。'
+                : `AI 响应失败：${detail}`
+            )
             sendingMessage.value = false
             return
           }
@@ -5795,6 +6144,7 @@ const sendMessage = async () => {
               if (Array.isArray(d.permissions)) store.preview.permissions = d.permissions
               parseReady.value = true
               serverConfigReceived = true  // 服务端已合并，done 时跳过客户端重提取
+              updateStreamStatus('正在更新右侧配置预览...')
             }
             continue
           }
@@ -5802,7 +6152,19 @@ const sendMessage = async () => {
           if (currentEvent === 'spec_patch' || normalizedType === 'spec_patch') {
             if (parsed?.data) {
               specStore.applyPatch(parsed.data)
+              specPatchReceived = true
+              updateStreamStatus('正在把确认结果写入 SPEC...')
             }
+            continue
+          }
+
+          if (currentEvent === 'tool_error' || normalizedType === 'tool_error') {
+            toolErrorCount += 1
+            updateStreamStatus(
+              toolErrorCount === 1
+                ? '正在校验已有配置，避免重复写入...'
+                : `正在处理第 ${toolErrorCount} 个校验提示...`
+            )
             continue
           }
 
@@ -5818,14 +6180,27 @@ const sendMessage = async () => {
               else if (mod === 'permissions') store.preview.permissions = data
               parseReady.value = true
               serverConfigReceived = true
+              updateStreamStatus('正在更新右侧预览...')
             }
             continue
           }
 
           if (normalizedType === 'done') {
-            isTyping.value = false
             const lastMsg = messages[messages.length - 1]
-            if (lastMsg && lastMsg.id === -1) lastMsg.id = Date.now()
+            const fallbackMessage = specPatchReceived
+              ? '已更新 SPEC，右侧预览已同步。你可以继续确认，或者告诉我下一步要调整什么。'
+              : serverConfigReceived
+                ? '已更新右侧配置预览。'
+                : ''
+            if (!assistantContent && fallbackMessage) {
+              assistantContent = fallbackMessage
+              if (lastMsg && lastMsg.id === STREAMING_ASSISTANT_ID) {
+                lastMsg.content = fallbackMessage
+              }
+            }
+            if (lastMsg && lastMsg.id === STREAMING_ASSISTANT_ID) lastMsg.id = Date.now()
+            streamingAssistantMessageId.value = null
+            isTyping.value = false
             if (isRequirementsMode.value) {
               const hasBuildTrigger = assistantContent.includes('<!-- TRIGGER_BUILD -->')
               const hasDesignComplete = assistantContent.includes('<!-- DESIGN_COMPLETE -->')
@@ -5879,27 +6254,39 @@ const sendMessage = async () => {
       }
     }
     if (!assistantContent) {
-      isTyping.value = false
-      messages.push({
-        id: Date.now(),
-        role: 'assistant',
-        agent: currentAgent.value,
-        content: '当前模型没有返回内容，请切换模型后再试一次。',
-        created_at: ''
-      })
-      scrollToBottom()
+      replaceOrAppendAssistantMessage('当前模型没有返回内容，请切换模型后再试一次。')
     }
   } catch (error) {
     console.error('Send error:', error)
-    isTyping.value = false
-    messages.push({ id: Date.now(), role: 'assistant', agent: currentAgent.value, content: '发送失败，请重试。', created_at: '' })
-    scrollToBottom()
+    replaceOrAppendAssistantMessage('发送失败，请重试。')
   } finally {
+    streamingAssistantMessageId.value = null
     sendingMessage.value = false
     if (!pendingChatAttachment.value && chatImageInputRef.value) {
       chatImageInputRef.value.value = ''
     }
   }
+}
+
+const appendValidationRequiredMessage = (payload: any, replaceMessageId?: number) => {
+  const message = payload?.assistant_message
+    || payload?.validation?.assistant_message
+    || '设计文档预检发现编码冲突，请先补充新的编码后再生成。'
+  const target = replaceMessageId ? messages.find(m => m.id === replaceMessageId) : null
+  if (target) {
+    target.content = message
+    target.agent = 'requirements'
+  } else {
+    messages.push({
+      id: Date.now(),
+      role: 'assistant',
+      agent: 'requirements',
+      content: message,
+      created_at: '',
+    })
+  }
+  ElMessage.warning('需要先确认编码后再生成设计文档')
+  scrollToBottom()
 }
 
 // ── Requirements: 完整生成流程（用户确认后触发） ──
@@ -5934,6 +6321,7 @@ const triggerFullBuildPipeline = async () => {
     const decoder = new TextDecoder()
     let buffer = ''
     let docResult: any = null
+    let validationPayload: any = null
 
     while (true) {
       const { done, value } = await reader.read()
@@ -5945,10 +6333,19 @@ const triggerFullBuildPipeline = async () => {
         if (line.startsWith('data:')) {
           try {
             const data = JSON.parse(line.slice(5).trim())
+            if (data.needs_user_input || data.validation?.needs_user_input) {
+              validationPayload = data
+              continue
+            }
             if (data.doc_result) docResult = data.doc_result
           } catch { /* ignore */ }
         }
       }
+    }
+
+    if (validationPayload) {
+      appendValidationRequiredMessage(validationPayload, progressMsgId)
+      return
     }
 
     if (!docResult) throw new Error('未能生成设计文档')
@@ -6044,6 +6441,7 @@ const generateDocInBackground = async () => {
     if (!reader) throw new Error('无法读取响应流')
     const decoder = new TextDecoder()
     let buffer = ''
+    let validationPayload: any = null
 
     // 容忍 SSE 尾部假阳性 network error：只要 docResultForCard 拿到就不算失败
     try {
@@ -6060,6 +6458,10 @@ const generateDocInBackground = async () => {
             if (!dataStr) continue
             try {
               const data = JSON.parse(dataStr)
+              if (data.needs_user_input || data.validation?.needs_user_input) {
+                validationPayload = data
+                continue
+              }
               if (data.doc_result) {
                 docResultForCard.value = data.doc_result
               }
@@ -6075,7 +6477,12 @@ const generateDocInBackground = async () => {
       }
     }
 
-      if (docResultForCard.value) {
+    if (validationPayload) {
+      appendValidationRequiredMessage(validationPayload)
+      return
+    }
+
+    if (docResultForCard.value) {
       const appConfig = await convertConfig(docResultForCard.value)
       const previewPayload = buildGeneratedPreviewPayload(appConfig, docResultForCard.value)
       syncCustomDevelopmentFromDocResult(docResultForCard.value)
@@ -6165,6 +6572,7 @@ const generateDocInChat = async () => {
     let buffer = ''
     const progressMessageId = Date.now()
     let hasInsertedProgressMessage = false
+    let validationPayload: any = null
 
     // 包住 read 循环，SSE 尾部 "network error" 假阳性不要打断后面的 store 灌数据。
     // 只要 docResultForCard 已拿到，就算 reader 抛错也认为是成功，继续走。
@@ -6184,6 +6592,26 @@ const generateDocInChat = async () => {
             if (!dataStr) continue
             try {
               const data = JSON.parse(dataStr)
+              if (data.needs_user_input || data.validation?.needs_user_input) {
+                validationPayload = data
+                isTyping.value = false
+                if (!hasInsertedProgressMessage) {
+                  messages.push({
+                    id: progressMessageId,
+                    role: 'assistant',
+                    agent: 'requirements',
+                    content: data.assistant_message || data.validation?.assistant_message || '设计文档预检发现编码冲突，请先补充新的编码后再生成。',
+                    created_at: ''
+                  })
+                  hasInsertedProgressMessage = true
+                } else {
+                  const progressMsg = messages.find((msg) => msg.id === progressMessageId)
+                  if (progressMsg) {
+                    progressMsg.content = data.assistant_message || data.validation?.assistant_message || progressMsg.content
+                  }
+                }
+                continue
+              }
               // Phase 1: streaming text content
               if (data.content) {
                 isTyping.value = false
@@ -6228,6 +6656,10 @@ const generateDocInChat = async () => {
     }
 
     isTyping.value = false
+    if (validationPayload) {
+      appendValidationRequiredMessage(validationPayload, progressMessageId)
+      return
+    }
     if (!docResultForCard.value) {
       messages.push({ id: Date.now(), role: 'assistant', agent: 'requirements', content: '设计文档生成失败，请重试。', created_at: '' })
     } else {
@@ -6370,8 +6802,8 @@ function normalizeCustomDevelopmentItems(preview: any): CustomDevelopmentItem[] 
 
   return items
     .map((item: any, index: number) => ({
-      type: String(item?.type || item?.scene || item?.category || '自开发扩展').trim(),
-      name: String(item?.name || item?.item_name || item?.title || item?.module || `自开发项 ${index + 1}`).trim(),
+      type: String(item?.type || item?.scene || item?.category || '开发扩展').trim(),
+      name: String(item?.name || item?.item_name || item?.title || item?.module || `开发项 ${index + 1}`).trim(),
       trigger: String(item?.trigger || item?.reason || item?.condition || item?.description || '配置能力无法完整覆盖').trim(),
       scope: String(item?.scope || item?.implementation || item?.deliverable || item?.deliverables || '在 IDE 中实现并回写项目上下文').trim(),
       acceptance: String(item?.acceptance || item?.acceptance_criteria || item?.test || '完成源码、联调和可演示验证').trim(),
@@ -6429,7 +6861,7 @@ function isActionableCustomDev(item: CustomDevelopmentItem) {
   const text = `${item.type} ${item.name} ${item.trigger} ${item.scope}`.toLowerCase()
   if (!item.name.trim()) return false
   if (['none', 'no', 'no_custom', 'config_only', 'configuration', '配置优先'].includes(type)) return false
-  if (text.includes('暂无强制自开发') || text.includes('无需自开发') || text.includes('配置优先')) return false
+  if (text.includes('暂无强制开发扩展') || text.includes('无需开发扩展') || text.includes('配置优先')) return false
   return true
 }
 
@@ -6454,7 +6886,7 @@ function customDevTypeLabel(type: string) {
     no_custom: '配置优先',
     config_only: '配置优先',
   }
-  return labels[normalized] || type || '自开发扩展'
+  return labels[normalized] || type || '开发扩展'
 }
 
 function inferCodingSceneCategory(type: string) {
@@ -6499,12 +6931,12 @@ function resolveCurrentSpecMarkdown() {
 function buildCustomDevCodingBrief(item: CustomDevelopmentItem, index: number) {
   const specContext = truncateCodingContext(resolveCurrentSpecMarkdown())
   return [
-    '# 来自 aPaaS Builder SPEC 的自开发任务',
+    '# 来自 aPaaS Builder SPEC 的开发任务',
     '',
     `应用名称：${store.preview.appName || builderAppDisplayName.value || '未命名应用'}`,
     `应用编码：${displayAppCode.value || '-'}`,
     `任务编号：DEV-${index + 1}`,
-    `自开发类型：${customDevTypeLabel(item.type)}（${item.type || '-'}）`,
+    `开发类型：${customDevTypeLabel(item.type)}（${item.type || '-'}）`,
     `任务名称：${item.name}`,
     '',
     '## 触发条件',
@@ -6517,8 +6949,8 @@ function buildCustomDevCodingBrief(item: CustomDevelopmentItem, index: number) {
     item.acceptance,
     '',
     '## 执行要求',
-    '- 先判断该内容是否确实需要自开发；如果平台配置可覆盖，说明原因并给出配置方案。',
-    '- 如果确实需要自开发，按当前项目的 AI Coding / 自开发规范实现，并保留可验证说明。',
+    '- 先判断该内容是否确实需要进入开发入口；如果平台配置可覆盖，说明原因并给出配置方案。',
+    '- 如果确实需要开发扩展，按当前项目的 Vibe Coding 规范实现，并保留可验证说明。',
     '- 不要改动与本任务无关的模型、表单、流程、权限定义。',
     '',
     '## 当前 SPEC 上下文',
@@ -6536,8 +6968,8 @@ function buildGeneralSpecCodingBrief() {
     `应用名称：${store.preview.appName || builderAppDisplayName.value || '未命名应用'}`,
     `应用编码：${displayAppCode.value || '-'}`,
     '',
-    '当前 SPEC 没有识别到强制自开发项。请先基于 SPEC 检查是否存在配置能力无法覆盖的复杂组件、Hook、外部接口、算法规则或报表看板。',
-    '如果存在，请拆分为可实现的自开发任务；如果不存在，请输出“配置优先”的判断和建议。',
+    '当前 SPEC 没有识别到强制开发扩展。请先基于 SPEC 检查是否存在配置能力无法覆盖的复杂组件、Hook、外部接口、算法规则或报表看板。',
+    '如果存在，请拆分为可实现的开发任务；如果不存在，请输出“配置优先”的判断和建议。',
     '',
     '## 当前 SPEC 上下文',
     '```markdown',
@@ -6560,7 +6992,7 @@ function dispatchCodingTask(message: string, sceneCategory: string) {
 function dispatchCustomDevToCoding(item: CustomDevelopmentItem, index: number) {
   if (!isActionableCustomDev(item)) return
   dispatchCodingTask(buildCustomDevCodingBrief(item, index), inferCodingSceneCategory(item.type))
-  ElMessage.success('已将自开发任务派发到 IDE')
+  ElMessage.success('已将开发任务派发到 IDE')
 }
 
 function dispatchGeneralSpecToCoding() {
@@ -6750,13 +7182,13 @@ const buildDocMarkdownFromPreview = (previewOverride?: any) => {
   }
   lines.push('', '---', '')
 
-  lines.push('## 八、自开发定义', '')
-  lines.push('### 8.1 自开发边界', '')
+  lines.push('## 八、开发边界', '')
+  lines.push('### 8.1 开发边界说明', '')
   lines.push('| 范围 | 说明 | 交付物 |')
   lines.push('|------|------|--------|')
   lines.push('| 平台配置优先 | 数据模型、表单布局、权限矩阵、基础流程和字典优先由 aPaaS 配置生成 | 配置预览、部署流水线 |')
-  lines.push('| 自开发触发条件 | 复杂前端组件、定制页面、外部系统接口、复杂校验/计算、Hook、报表看板等配置无法完整覆盖的内容 | IDE 任务、源码变更、测试说明 |')
-  lines.push('', '### 8.2 已识别自开发项', '')
+  lines.push('| 开发触发条件 | 复杂前端组件、定制页面、外部系统接口、复杂校验/计算、Hook、报表看板等配置无法完整覆盖的内容 | IDE 任务、源码变更、测试说明 |')
+  lines.push('', '### 8.2 已识别开发项', '')
   lines.push('| 类型 | 名称 | 触发条件 | 实现范围 | 验收口径 |')
   lines.push('|------|------|----------|----------|----------|')
   const customDevItems = normalizeCustomDevelopmentItems(preview)
@@ -6765,7 +7197,7 @@ const buildDocMarkdownFromPreview = (previewOverride?: any) => {
       lines.push(`| ${item.type} | ${item.name} | ${item.trigger} | ${item.scope} | ${item.acceptance} |`)
     })
   } else {
-    lines.push('| 暂无强制自开发项 | 配置优先 | 当前需求可先由模型、表单、权限和流程配置覆盖 | 如后续出现复杂交互、外部接口或算法规则，再进入 IDE 补充 | 低代码配置可完成主流程演示 |')
+    lines.push('| 暂无强制开发扩展 | 配置优先 | 当前需求可先由模型、表单、权限和流程配置覆盖 | 如后续出现复杂交互、外部接口或算法规则，再进入 IDE 补充 | 低代码配置可完成主流程演示 |')
   }
   lines.push('')
 
@@ -6987,7 +7419,7 @@ onMounted(async () => {
           setPreviewCustomDevelopment(data)
           store.currentApp = { status: app.status || 'ready', apaas_app_id: app.apaas_app_id }
           platformDirectUrl.value = app.apaas_url || ''
-          parseReady.value = store.preview.models.length > 0
+          parseReady.value = store.preview.models.length > 0 || store.preview.forms.length > 0
           currentAgent.value = 'builder'
         }
         loadedAppCode.value = app.app_code || pickAppCode(configData) || ''
@@ -7003,7 +7435,7 @@ onMounted(async () => {
         if (app.conversation_id) {
           conversationId.value = app.conversation_id
           selectedConversationId.value = app.conversation_id
-          await syncBuilderModelFromConversation(app.conversation_id)
+          await syncBuilderModelFromConversation(app.conversation_id, { syncAgent: false, syncSpec: false })
           if (!appParsedMode.value) {
             const historyMessages = await conversationApi.getMessages(app.conversation_id)
             if (historyMessages?.length) {
@@ -7020,6 +7452,7 @@ onMounted(async () => {
             }
           }
         }
+        enterGeneratedApplicationWorkspace(app)
         console.log(`Loaded app ${aid}: ${app.app_name}`)
       } catch (e) {
         console.error('Failed to load application:', e)
@@ -7079,7 +7512,7 @@ onMounted(async () => {
                 store.preview.permissions = data.permissions || []
                 setPreviewCustomDevelopment(data)
                 store.currentApp = { status: 'draft', apaas_app_id: linkedApp.apaas_app_id }
-                parseReady.value = store.preview.models.length > 0
+                parseReady.value = store.preview.models.length > 0 || store.preview.forms.length > 0
                 existingAppId.value = linkedApp.id
                 loadedAppCode.value = linkedApp.app_code || ''
                 parsedAppCode.value = loadedAppCode.value
@@ -7128,7 +7561,7 @@ onMounted(async () => {
           store.preview.dicts = data.dicts || []
           store.preview.roles = data.roles || []
           store.currentApp = { status: app.status || 'ready', apaas_app_id: app.apaas_app_id }
-          parseReady.value = store.preview.models.length > 0
+          parseReady.value = store.preview.models.length > 0 || store.preview.forms.length > 0
           currentAgent.value = 'builder'
         }
         loadedAppCode.value = app.app_code || pickAppCode(configData) || ''
@@ -7142,7 +7575,7 @@ onMounted(async () => {
         // 加载关联的对话
         if (app.conversation_id) {
           conversationId.value = app.conversation_id
-          await syncBuilderModelFromConversation(app.conversation_id)
+          await syncBuilderModelFromConversation(app.conversation_id, { syncAgent: false, syncSpec: false })
           if (!appParsedMode.value) {
             const historyMessages = await conversationApi.getMessages(app.conversation_id)
             if (historyMessages?.length) {
@@ -7281,7 +7714,7 @@ watch(() => route.query.app_id, async (newAppId, oldAppId) => {
       setPreviewCustomDevelopment(data)
       store.currentApp = { status: app.status || 'ready', apaas_app_id: app.apaas_app_id }
       platformDirectUrl.value = app.apaas_url || ''
-      parseReady.value = store.preview.models.length > 0
+      parseReady.value = store.preview.models.length > 0 || store.preview.forms.length > 0
       currentAgent.value = 'builder'
     }
     loadedAppCode.value = app.app_code || pickAppCode(configData) || ''
@@ -7292,6 +7725,7 @@ watch(() => route.query.app_id, async (newAppId, oldAppId) => {
     if (app.conversation_id) {
       conversationId.value = app.conversation_id
       selectedConversationId.value = app.conversation_id
+      await syncBuilderModelFromConversation(app.conversation_id, { syncAgent: false, syncSpec: false })
       if (!appParsedMode.value) {
         const historyMessages = await conversationApi.getMessages(app.conversation_id)
         if (historyMessages?.length) {
@@ -7304,6 +7738,7 @@ watch(() => route.query.app_id, async (newAppId, oldAppId) => {
         }
       }
     }
+    enterGeneratedApplicationWorkspace(app)
   } catch (e) {
     console.error('Failed to switch app:', e)
   }
@@ -7321,9 +7756,7 @@ watch(() => route.params.id, (newConversationId, oldConversationId) => {
 
 watch(() => route.query.view, (nextView) => {
   const requestedView = Array.isArray(nextView) ? nextView[0] : nextView
-  if (requestedView === 'coding') {
-    activeView.value = 'coding'
-  } else if (requestedView === 'builder' && activeView.value !== 'builder') {
+  if (requestedView === 'builder' && activeView.value !== 'builder') {
     activeView.value = 'builder'
   }
 })
@@ -7345,6 +7778,9 @@ watch(isUpdateReviewMode, (enabled) => {
 }, { immediate: true })
 
 watch(displayDocVersions, (versions) => {
+  if (versions.length < 2) {
+    docVersionHistoryOpen.value = false
+  }
   if (expandedDocVersionKey.value && !versions.some(ver => ver.key === expandedDocVersionKey.value)) {
     expandedDocVersionKey.value = null
   }
@@ -7642,7 +8078,8 @@ watch(conversationId, (id) => {
 }
 .builder-control-hint.inside-card {
   padding: 0 6px 2px;
-  font-size: 9px;
+  font-size: 10px;
+  line-height: 1.35;
 }
 .builder-generate-btn {
   height: 36px;
@@ -7997,6 +8434,29 @@ watch(conversationId, (id) => {
   color: var(--t-text-primary); border-bottom-left-radius: 4px;
   box-shadow: var(--t-shadow-sm);
 }
+.chat-bubble.streaming-message .assistant-avatar {
+  animation: avatarBlink 1.4s ease-in-out infinite;
+}
+.chat-bubble.streaming-message .bubble-content.assistant {
+  position: relative;
+  border-color: rgba(91, 111, 255, 0.28);
+  background:
+    linear-gradient(90deg, rgba(91, 111, 255, 0.08), rgba(20, 184, 166, 0.06)),
+    var(--t-bg-panel);
+}
+.chat-bubble.streaming-message .bubble-content.assistant::after {
+  content: '';
+  display: inline-block;
+  width: 1.2em;
+  height: 1em;
+  margin-left: 4px;
+  vertical-align: -0.1em;
+  background: radial-gradient(circle, currentColor 45%, transparent 48%) 0.05em 0.58em / 0.34em 0.34em no-repeat,
+    radial-gradient(circle, currentColor 45%, transparent 48%) 0.43em 0.58em / 0.34em 0.34em no-repeat,
+    radial-gradient(circle, currentColor 45%, transparent 48%) 0.81em 0.58em / 0.34em 0.34em no-repeat;
+  opacity: 0.72;
+  animation: streamDots 1.2s steps(3, end) infinite;
+}
 .chat-inline-upload {
   margin-top: 8px;
   padding: 10px;
@@ -8091,6 +8551,11 @@ watch(conversationId, (id) => {
   0%, 100% { box-shadow: 0 6px 16px rgba(92, 115, 255, 0.18); filter: brightness(1); }
   50% { box-shadow: 0 8px 22px rgba(92, 115, 255, 0.32); filter: brightness(1.12); }
 }
+@keyframes streamDots {
+  0% { clip-path: inset(0 0.82em 0 0); }
+  33% { clip-path: inset(0 0.42em 0 0); }
+  66%, 100% { clip-path: inset(0 0 0 0); }
+}
 
 .typing-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--t-text-muted); display: inline-block; animation: pulseDot 1.4s infinite ease-in-out both; margin-right: 3px; }
 .typing-dot:nth-child(1) { animation-delay: -0.32s; }
@@ -8148,13 +8613,13 @@ watch(conversationId, (id) => {
   background: transparent;
   resize: none;
   outline: none;
-  font-size: 15px;
-  line-height: 1.65;
+  font-size: 13px;
+  line-height: 1.5;
   color: var(--t-text-primary);
-  min-height: 42px;
+  min-height: 38px;
   max-height: 200px;
   overflow-y: auto;
-  padding: 8px 0;
+  padding: 7px 0;
   font-family: inherit;
 }
 .input-card-top textarea::placeholder { color: var(--t-text-muted); }
@@ -8840,6 +9305,205 @@ watch(conversationId, (id) => {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+.doc-version-switcher {
+  padding: 16px 16px 0;
+}
+.doc-version-current-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 14px;
+  border: 1px solid rgba(92, 115, 255, 0.24);
+  border-radius: 16px;
+  background:
+    linear-gradient(135deg, rgba(92, 115, 255, 0.12), rgba(255, 255, 255, 0.92)),
+    var(--t-bg-elevated);
+  box-shadow: 0 8px 24px rgba(51, 65, 145, 0.08);
+}
+.doc-version-current-main {
+  min-width: 0;
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--t-text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+.doc-version-current-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(92, 115, 255, 0.14);
+  color: var(--t-brand-text);
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.doc-version-current-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.doc-version-current-text strong {
+  overflow: hidden;
+  color: var(--t-text-primary);
+  font-size: 13px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.doc-version-current-text small {
+  overflow: hidden;
+  color: var(--t-text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.doc-version-current-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.doc-version-action,
+.doc-version-history-toggle,
+.doc-version-mini-action {
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 12px;
+  border: 1px solid rgba(92, 115, 255, 0.16);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.88);
+  color: var(--t-text-primary);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color 0.18s ease, background 0.18s ease, color 0.18s ease, transform 0.18s ease;
+}
+.doc-version-action:hover,
+.doc-version-history-toggle:hover,
+.doc-version-mini-action:hover {
+  border-color: rgba(92, 115, 255, 0.32);
+  background: rgba(92, 115, 255, 0.08);
+  color: var(--t-brand-text);
+}
+.doc-version-history-toggle {
+  min-width: 126px;
+}
+.doc-version-history-toggle span {
+  color: var(--t-text-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+.doc-version-history-panel {
+  max-height: 268px;
+  overflow: auto;
+  margin-top: 10px;
+  padding: 6px;
+  border: 1px solid rgba(92, 115, 255, 0.14);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 12px 28px rgba(31, 41, 85, 0.08);
+}
+.doc-version-history-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px;
+  border-radius: 10px;
+  transition: background 0.18s ease;
+}
+.doc-version-history-row + .doc-version-history-row {
+  border-top: 1px solid rgba(128, 145, 255, 0.10);
+}
+.doc-version-history-row:hover,
+.doc-version-history-row.active {
+  background: rgba(92, 115, 255, 0.08);
+}
+.doc-version-history-main {
+  min-width: 0;
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.doc-history-version {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 28px;
+  border-radius: 999px;
+  background: rgba(92, 115, 255, 0.10);
+  color: var(--t-brand-text);
+  font-size: 12px;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+.doc-history-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.doc-history-copy strong {
+  overflow: hidden;
+  color: var(--t-text-primary);
+  font-size: 12px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.doc-history-copy small {
+  overflow: hidden;
+  color: var(--t-text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.doc-version-history-main em {
+  margin-left: auto;
+  color: var(--t-brand-text);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+.doc-version-history-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.doc-version-mini-action {
+  height: 30px;
+  padding: 0 10px;
+  font-size: 11px;
 }
 /* 版本列表选中态：明显蓝色高亮（覆盖默认的 .current 浅色） */
 .version-row-selectable { cursor: pointer; }
@@ -9630,7 +10294,8 @@ watch(conversationId, (id) => {
   }
 
   .doc-current-head,
-  .doc-top-actions {
+  .doc-top-actions,
+  .doc-version-current-strip {
     align-items: stretch;
     flex-direction: column;
   }
@@ -9639,10 +10304,20 @@ watch(conversationId, (id) => {
     width: 100%;
   }
 
+  .doc-version-current-actions,
   .doc-ver-actions {
     width: 100%;
     justify-content: flex-start;
     flex-wrap: wrap;
+  }
+
+  .doc-version-history-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .doc-version-history-actions {
+    justify-content: flex-start;
   }
 
   .form-change-row,
@@ -10549,7 +11224,7 @@ watch(conversationId, (id) => {
   cursor: not-allowed;
 }
 
-/* 新版 Chat 工作台外观：保留真实搭建逻辑，只重排视觉层 */
+/* 新版 AI-Builder 外观：保留真实搭建逻辑，只重排视觉层 */
 .chat-page {
   background: #eef1f6;
 }
@@ -10611,6 +11286,37 @@ watch(conversationId, (id) => {
   border-color: #111827;
   background: #111827;
   color: #fff;
+}
+
+.builder-top-action.artifact {
+  background: transparent;
+  color: #647085;
+}
+
+.builder-top-action.icon-only {
+  width: 32px;
+  padding: 0;
+  border-radius: 8px;
+}
+
+.builder-top-action.artifact[aria-pressed="true"] {
+  border-color: #cbd5e1;
+  background: #f8fafc;
+  color: #111827;
+}
+
+.builder-top-action-icon {
+  width: 15px;
+  height: 15px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+
+.builder-top-action-icon svg {
+  width: 15px;
+  height: 15px;
 }
 
 .builder-top-action:disabled {
@@ -10698,9 +11404,9 @@ watch(conversationId, (id) => {
 }
 
 .builder-chat-phase.active {
-  border-color: #cbd7ff;
-  background: #eef3ff;
-  color: #2f55d4;
+  border-color: #cbd5e1;
+  background: #fff;
+  color: #1f2937;
   font-weight: 700;
 }
 
@@ -10753,6 +11459,83 @@ watch(conversationId, (id) => {
   background: #eef1f6;
   height: 100%;
   min-height: 0;
+}
+
+.builder-content.artifacts-hidden {
+  justify-content: center;
+  padding: 0 clamp(16px, 5vw, 72px);
+}
+
+.builder-content.artifacts-hidden .chat-side {
+  flex: 1 1 auto;
+  width: min(100%, 860px);
+  max-width: 860px;
+  min-width: 0;
+  margin: 0 auto;
+  border-right: 0;
+  background: transparent;
+}
+
+.builder-content.artifacts-hidden .messages {
+  padding: 20px clamp(4px, 1.8vw, 18px) 14px;
+}
+
+.builder-content.artifacts-hidden .builder-spec-brief {
+  width: min(100%, 780px);
+  margin: 14px auto 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 14px;
+  border: 1px solid #dbe2ea;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.builder-content.artifacts-hidden .builder-spec-brief-main {
+  min-width: 190px;
+  gap: 3px;
+}
+
+.builder-content.artifacts-hidden .builder-spec-brief-main strong {
+  font-size: 15px;
+}
+
+.builder-content.artifacts-hidden .builder-spec-brief-main p {
+  max-width: 360px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.builder-content.artifacts-hidden .builder-spec-brief-stats {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 1 auto;
+}
+
+.builder-content.artifacts-hidden .builder-spec-brief-stats button {
+  width: 72px;
+  min-height: 42px;
+  padding: 5px 6px;
+}
+
+.builder-content.artifacts-hidden .builder-workbench {
+  width: min(100%, 780px);
+  margin: 0 auto 14px;
+  border: 1px solid #dbe2ea;
+  border-radius: 14px;
+}
+
+.builder-content.artifacts-hidden .builder-composer-shell {
+  border: 0;
+  box-shadow: none;
+}
+
+.builder-content.artifacts-open .chat-side {
+  border-right: 1px solid #dfe4ec;
 }
 
 .chat-side {
@@ -10826,7 +11609,9 @@ watch(conversationId, (id) => {
 }
 
 .input-card-top textarea {
-  min-height: 42px;
+  min-height: 38px;
+  font-size: 13px;
+  line-height: 1.5;
   color: #111827;
 }
 
@@ -10894,7 +11679,7 @@ watch(conversationId, (id) => {
 
 .builder-spec-brief-stats {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 6px;
 }
 
@@ -10999,6 +11784,29 @@ watch(conversationId, (id) => {
   border-color: #dbe2ea;
   background: #fff;
   color: #111827;
+}
+
+.preview-panel-collapse {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #dbe2ea;
+  border-radius: 8px;
+  background: #fff;
+  color: #647085;
+  cursor: pointer;
+}
+
+.preview-panel-collapse:hover {
+  border-color: #cbd5e1;
+  color: #111827;
+}
+
+.preview-panel-collapse svg {
+  width: 16px;
+  height: 16px;
 }
 
 .preview-body {
@@ -11227,6 +12035,110 @@ watch(conversationId, (id) => {
 
 .canvas-model-grid {
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.canvas-basic-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.9fr) minmax(320px, 1.1fr);
+  gap: 12px;
+}
+
+.canvas-basic-section {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+  border: 1px solid #dbe2ea;
+  border-radius: 8px;
+  background: #fff;
+  padding: 14px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+}
+
+.canvas-basic-section-head,
+.canvas-dict-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.canvas-basic-section-head strong,
+.canvas-dict-title strong,
+.canvas-role-card strong {
+  color: #111827;
+  font-size: 13px;
+}
+
+.canvas-basic-section-head span {
+  color: #8792a4;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.canvas-role-list,
+.canvas-dict-list {
+  display: grid;
+  gap: 8px;
+}
+
+.canvas-role-card,
+.canvas-dict-card {
+  border: 1px solid #e3e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 10px 12px;
+}
+
+.canvas-role-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.canvas-role-card div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.canvas-role-card code,
+.canvas-dict-title code {
+  color: #647085;
+  background: #edf2f8;
+  border: 1px solid #e3e8f0;
+  border-radius: 6px;
+  padding: 2px 6px;
+  font-size: 11px;
+  width: fit-content;
+}
+
+.canvas-role-card > span {
+  color: #647085;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.canvas-dict-card {
+  display: grid;
+  gap: 10px;
+}
+
+.canvas-dict-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.canvas-dict-options span,
+.canvas-dict-options em {
+  border: 1px solid #e3e8f0;
+  border-radius: 999px;
+  padding: 3px 8px;
+  color: #475569;
+  background: #fff;
+  font-size: 12px;
+  font-style: normal;
 }
 
 .canvas-model-card,
@@ -11560,6 +12472,10 @@ watch(conversationId, (id) => {
   .spec-readiness-list {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .canvas-basic-grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>
 
@@ -11599,6 +12515,9 @@ html[data-theme="dark"] .spec-overview-stat span,
 html[data-theme="dark"] .spec-overview-stat strong,
 html[data-theme="dark"] .spec-readiness-item strong,
 html[data-theme="dark"] .canvas-panel-head h3,
+html[data-theme="dark"] .canvas-basic-section-head strong,
+html[data-theme="dark"] .canvas-role-card strong,
+html[data-theme="dark"] .canvas-dict-title strong,
 html[data-theme="dark"] .canvas-model-title strong,
 html[data-theme="dark"] .canvas-form-head strong,
 html[data-theme="dark"] .canvas-flow-title strong,
@@ -11609,6 +12528,8 @@ html[data-theme="dark"] .custom-dev-empty strong {
 
 html[data-theme="dark"] .builder-chat-agent code,
 html[data-theme="dark"] .builder-canvas-tab em,
+html[data-theme="dark"] .canvas-role-card code,
+html[data-theme="dark"] .canvas-dict-title code,
 html[data-theme="dark"] .canvas-model-title code,
 html[data-theme="dark"] .canvas-form-head code,
 html[data-theme="dark"] .canvas-flow-title code,
@@ -11624,6 +12545,9 @@ html[data-theme="dark"] .builder-spec-brief-stats button,
 html[data-theme="dark"] .spec-score,
 html[data-theme="dark"] .spec-overview-stat,
 html[data-theme="dark"] .spec-readiness-item,
+html[data-theme="dark"] .canvas-basic-section,
+html[data-theme="dark"] .canvas-role-card,
+html[data-theme="dark"] .canvas-dict-card,
 html[data-theme="dark"] .canvas-model-card,
 html[data-theme="dark"] .canvas-form-card,
 html[data-theme="dark"] .canvas-flow-group,
@@ -11635,19 +12559,86 @@ html[data-theme="dark"] .doc-version-content.expanded.doc-preview-body {
   box-shadow: none !important;
 }
 
+html[data-theme="dark"] .builder-spec-brief-stats button {
+  color: rgba(203, 213, 225, 0.66) !important;
+}
+
+html[data-theme="dark"] .builder-spec-brief-stats span {
+  color: #b6c2ff !important;
+  opacity: 0.92 !important;
+}
+
+html[data-theme="dark"] .builder-spec-brief-stats button:hover {
+  background: #151922 !important;
+  border-color: rgba(124, 140, 255, 0.28) !important;
+  color: rgba(248, 250, 252, 0.90) !important;
+}
+
+html[data-theme="dark"] .builder-canvas-tab {
+  color: rgba(148, 163, 184, 0.72) !important;
+}
+
+html[data-theme="dark"] .builder-canvas-tab.active {
+  background: rgba(124, 140, 255, 0.08) !important;
+  border-bottom-color: #8b9aff !important;
+  color: rgba(248, 250, 252, 0.94) !important;
+}
+
+html[data-theme="dark"] .builder-canvas-tab.active em {
+  background: #8b9aff !important;
+  border-color: #8b9aff !important;
+  color: #090b10 !important;
+}
+
 html[data-theme="dark"] .mode-btn.active,
 html[data-theme="dark"] .builder-chat-phase.active {
-  background: rgba(124, 140, 255, 0.14) !important;
-  border-color: rgba(124, 140, 255, 0.32) !important;
-  color: #b6c2ff !important;
+  background: #151922 !important;
+  border-color: rgba(124, 140, 255, 0.26) !important;
+  color: rgba(248, 250, 252, 0.88) !important;
   box-shadow: none !important;
 }
 
-html[data-theme="dark"] .builder-chat-phase.done,
+html[data-theme="dark"] .builder-chat-phase.active span {
+  background: #8b9aff !important;
+  color: #090b10 !important;
+}
+
 html[data-theme="dark"] .spec-score.complete,
 html[data-theme="dark"] .spec-readiness-item.ready {
-  background: rgba(52, 211, 153, 0.10) !important;
-  border-color: rgba(52, 211, 153, 0.20) !important;
+  background: rgba(52, 211, 153, 0.08) !important;
+  border-color: rgba(52, 211, 153, 0.18) !important;
+}
+
+html[data-theme="dark"] .builder-chat-phase.done {
+  background: #111318 !important;
+  border-color: rgba(148, 163, 184, 0.14) !important;
+  color: rgba(203, 213, 225, 0.70) !important;
+}
+
+html[data-theme="dark"] .builder-chat-phase.done span {
+  background: rgba(52, 211, 153, 0.12) !important;
+  color: #7dd3a7 !important;
+}
+
+html[data-theme="dark"] .builder-top-action.artifact {
+  background: transparent !important;
+  border-color: rgba(148, 163, 184, 0.16) !important;
+  color: rgba(203, 213, 225, 0.80) !important;
+}
+
+html[data-theme="dark"] .builder-top-action.artifact[aria-pressed="true"] {
+  background: #202636 !important;
+  border-color: rgba(148, 163, 184, 0.22) !important;
+  color: rgba(248, 250, 252, 0.92) !important;
+}
+
+html[data-theme="dark"] .builder-content.artifacts-hidden .chat-side {
+  background: transparent !important;
+  border-color: transparent !important;
+}
+
+html[data-theme="dark"] .builder-content.artifacts-hidden .messages {
+  background: transparent !important;
 }
 
 html[data-theme="dark"] .chat-side,
@@ -11659,6 +12650,84 @@ html[data-theme="dark"] .deploy-side {
   background: #111318 !important;
   border-color: rgba(148, 163, 184, 0.14) !important;
   box-shadow: none !important;
+}
+
+html[data-theme="dark"] .builder-inline-model-select .el-select__wrapper {
+  min-height: 28px !important;
+  background: #151922 !important;
+  border: 1px solid rgba(148, 163, 184, 0.16) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme="dark"] .builder-inline-model-select .el-select__wrapper.is-focused {
+  border-color: rgba(124, 140, 255, 0.34) !important;
+  box-shadow: 0 0 0 1px rgba(124, 140, 255, 0.16) inset !important;
+}
+
+html[data-theme="dark"] .builder-inline-model-select .el-select__selected-item,
+html[data-theme="dark"] .builder-inline-model-select .el-select__placeholder,
+html[data-theme="dark"] .builder-inline-model-select .el-select__caret,
+html[data-theme="dark"] .builder-inline-model-select .el-icon {
+  color: rgba(203, 213, 225, 0.78) !important;
+  font-size: 12px !important;
+}
+
+html[data-theme="dark"] .doc-version-current-strip {
+  background: linear-gradient(135deg, rgba(124, 140, 255, 0.12), #151922) !important;
+  border-color: rgba(124, 140, 255, 0.30) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme="dark"] .doc-version-current-text strong,
+html[data-theme="dark"] .doc-history-copy strong {
+  color: rgba(248, 250, 252, 0.92) !important;
+}
+
+html[data-theme="dark"] .doc-version-current-text small,
+html[data-theme="dark"] .doc-history-copy small,
+html[data-theme="dark"] .doc-version-history-toggle span {
+  color: rgba(148, 163, 184, 0.72) !important;
+}
+
+html[data-theme="dark"] .doc-version-current-badge,
+html[data-theme="dark"] .doc-history-version {
+  background: rgba(124, 140, 255, 0.18) !important;
+  color: #b6c2ff !important;
+}
+
+html[data-theme="dark"] .doc-version-history-panel {
+  background: #111318 !important;
+  border-color: rgba(148, 163, 184, 0.14) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme="dark"] .doc-version-history-row + .doc-version-history-row {
+  border-top-color: rgba(148, 163, 184, 0.12) !important;
+}
+
+html[data-theme="dark"] .doc-version-history-row:hover,
+html[data-theme="dark"] .doc-version-history-row.active {
+  background: rgba(124, 140, 255, 0.10) !important;
+}
+
+html[data-theme="dark"] .doc-version-action,
+html[data-theme="dark"] .doc-version-history-toggle,
+html[data-theme="dark"] .doc-version-mini-action {
+  background: #151922 !important;
+  border-color: rgba(148, 163, 184, 0.18) !important;
+  color: rgba(248, 250, 252, 0.88) !important;
+}
+
+html[data-theme="dark"] .doc-version-action:hover,
+html[data-theme="dark"] .doc-version-history-toggle:hover,
+html[data-theme="dark"] .doc-version-mini-action:hover {
+  border-color: rgba(124, 140, 255, 0.32) !important;
+  background: rgba(124, 140, 255, 0.12) !important;
+  color: #b6c2ff !important;
+}
+
+html[data-theme="dark"] .builder-control-hint.inside-card {
+  color: rgba(148, 163, 184, 0.58) !important;
 }
 
 html[data-theme="dark"] .builder-workbench {
@@ -11675,19 +12744,39 @@ html[data-theme="dark"] .bubble-content.assistant {
   color: rgba(248, 250, 252, 0.92) !important;
 }
 
-html[data-theme="dark"] .bubble-content.user,
-html[data-theme="dark"] .assistant-avatar,
+html[data-theme="dark"] .chat-bubble.streaming-message .bubble-content.assistant {
+  background:
+    linear-gradient(90deg, rgba(124, 140, 255, 0.16), rgba(45, 212, 191, 0.08)),
+    #151922 !important;
+  border-color: rgba(124, 140, 255, 0.36) !important;
+}
+
 html[data-theme="dark"] .builder-top-action.primary,
 html[data-theme="dark"] .preview-side-cta,
 html[data-theme="dark"] .code-panel-button {
-  background: #f8fafc !important;
-  border-color: #f8fafc !important;
+  background: #9aa8ff !important;
+  border-color: #9aa8ff !important;
   color: #090b10 !important;
+  box-shadow: none !important;
+}
+
+html[data-theme="dark"] .bubble-content.user {
+  background: rgba(124, 140, 255, 0.16) !important;
+  border: 1px solid rgba(124, 140, 255, 0.26) !important;
+  color: rgba(248, 250, 252, 0.94) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme="dark"] .assistant-avatar {
+  background: #202636 !important;
+  border: 1px solid rgba(148, 163, 184, 0.16) !important;
+  color: #b6c2ff !important;
   box-shadow: none !important;
 }
 
 html[data-theme="dark"] .builder-top-action.ghost,
 html[data-theme="dark"] .preview-side-cta.secondary,
+html[data-theme="dark"] .preview-panel-collapse,
 html[data-theme="dark"] .code-panel-button.secondary,
 html[data-theme="dark"] .doc-upload-btn.subtle,
 html[data-theme="dark"] .doc-action-btn {
@@ -11699,6 +12788,11 @@ html[data-theme="dark"] .doc-action-btn {
 html[data-theme="dark"] .input-card-top textarea,
 html[data-theme="dark"] .conflict-input {
   color: rgba(248, 250, 252, 0.92) !important;
+}
+
+html[data-theme="dark"] .input-card:focus-within {
+  border-color: rgba(124, 140, 255, 0.32) !important;
+  box-shadow: 0 0 0 1px rgba(124, 140, 255, 0.18) inset !important;
 }
 
 html[data-theme="dark"] .input-card-top textarea::placeholder,
@@ -11737,6 +12831,8 @@ html[data-theme="dark"] .spec-overview-head p,
 html[data-theme="dark"] .spec-readiness-item em,
 html[data-theme="dark"] .builder-spec-brief-main p,
 html[data-theme="dark"] .canvas-panel-head p,
+html[data-theme="dark"] .canvas-basic-section-head span,
+html[data-theme="dark"] .canvas-role-card > span,
 html[data-theme="dark"] .canvas-model-meta,
 html[data-theme="dark"] .canvas-flow-desc,
 html[data-theme="dark"] .canvas-flow-step,
@@ -11748,6 +12844,8 @@ html[data-theme="dark"] .custom-dev-empty span {
 
 html[data-theme="dark"] .preview-empty-features,
 html[data-theme="dark"] .preview-empty-icon,
+html[data-theme="dark"] .canvas-dict-options span,
+html[data-theme="dark"] .canvas-dict-options em,
 html[data-theme="dark"] .canvas-field-list span,
 html[data-theme="dark"] .custom-dev-type,
 html[data-theme="dark"] .custom-dev-state {

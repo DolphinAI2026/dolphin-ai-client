@@ -126,7 +126,7 @@ const router = createRouter({
     {
       path: '/work/:appId',
       name: 'WorkspaceShell',
-      component: () => import('@/views/WorkspaceShell.vue'),
+      redirect: to => ({ path: '/chat', query: { app_id: String(to.params.appId) } }),
       meta: { requiresAuth: true }
     },
     {

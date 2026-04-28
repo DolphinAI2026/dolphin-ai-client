@@ -2,7 +2,7 @@ import pytest
 from datetime import datetime
 from sqlalchemy import select
 
-from app.spec.persistence import empty_spec, save_spec
+from app.spec.persistence import empty_spec, load_spec, save_spec
 from app.spec.schema import Phase, Role
 
 
@@ -17,6 +17,35 @@ async def test_get_spec_returns_payload(db_session, monkeypatch):
     row = (await db_session.execute(select(SpecORM).where(SpecORM.id == spec.id))).scalar_one()
     assert row.payload["roles"][0]["code"] == "r1"
     assert row.phase == "gathering"
+
+
+@pytest.mark.asyncio
+async def test_save_spec_keeps_payload_version_in_sync(db_session):
+    spec = empty_spec(created_by=1)
+    await save_spec(db_session, spec, tenant_id=1)
+
+    from app.models.spec import Spec as SpecORM
+    row = (await db_session.execute(select(SpecORM).where(SpecORM.id == spec.id))).scalar_one()
+    assert row.version == 1
+    assert row.payload["version"] == 1
+
+    spec.roles.append(Role(code="asset_admin", name="资产管理员", scope="ALL", confirmed=False))
+    await save_spec(db_session, spec, tenant_id=1)
+
+    row = (await db_session.execute(select(SpecORM).where(SpecORM.id == spec.id))).scalar_one()
+    assert spec.version == 2
+    assert row.version == 2
+    assert row.payload["version"] == 2
+
+    loaded = await load_spec(db_session, spec.id, tenant_id=1)
+    assert loaded is not None
+    assert loaded.version == 2
+    loaded.roles[0].confirmed = True
+    await save_spec(db_session, loaded, tenant_id=1)
+
+    row = (await db_session.execute(select(SpecORM).where(SpecORM.id == spec.id))).scalar_one()
+    assert loaded.version == 3
+    assert row.payload["version"] == 3
 
 
 @pytest.mark.asyncio

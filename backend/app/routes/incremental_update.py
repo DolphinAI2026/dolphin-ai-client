@@ -32,7 +32,7 @@ from app.config_version import (
 from app.models import ConfigSnapshot
 from app.json_utils import loads_if_str
 from app.spec.agent import SpecAgent
-from app.spec.persistence import load_spec, save_spec
+from app.spec.persistence import load_spec, save_spec_rebased
 
 router = APIRouter(prefix="/applications", tags=["增量更新"])
 logger = logging.getLogger(__name__)
@@ -801,7 +801,7 @@ async def _try_build_spec_agent_stream_response(
                     elif ev.kind == "spec_patch":
                         # save_spec 自身 CAS 自增 version 并同步回 ev.spec.version，
                         # 所以 stream 中连续 save 不会冲突，每次推进 +1（旧手动 bump 已删）
-                        await save_spec(session, ev.spec, tenant_id=tenant_id)
+                        await save_spec_rebased(session, ev.spec, tenant_id=tenant_id)
                         yield {"event": "spec_patch", "data": json.dumps(
                             {"type": "spec_patch", "data": ev.spec.model_dump(mode="json")},
                             ensure_ascii=False)}

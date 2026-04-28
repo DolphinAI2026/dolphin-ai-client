@@ -1,5 +1,5 @@
 import request from '@/utils/request'
-import type { LoginRequest, RegisterRequest, Token, User, LoginResponse, TenantSelectRequest } from '@/types'
+import type { LoginRequest, Token, User, LoginResponse, TenantSelectRequest } from '@/types'
 
 export interface TenantRoleOption {
   id: number
@@ -13,8 +13,12 @@ export interface TenantUser {
   id: number
   username: string
   is_active: boolean
+  is_platform_admin?: boolean
+  tenant_id?: number | null
+  tenant_name?: string | null
+  tenant_summary?: string | null
   tenant_status: number
-  tenant_role: 'tenant_admin' | 'developer' | 'viewer' | 'member'
+  tenant_role: 'platform_admin' | 'tenant_admin' | 'developer' | 'viewer' | 'member'
   role_code?: string | null
   role_name?: string | null
   org_permissions?: Record<string, boolean>
@@ -22,13 +26,14 @@ export interface TenantUser {
   created_at?: string | null
 }
 
+export interface ActiveTenantUser {
+  id: number
+  username: string
+}
+
 export const authApi = {
   login(data: LoginRequest) {
     return request.post<any, LoginResponse>('/auth/login', data)
-  },
-
-  register(data: RegisterRequest) {
-    return request.post<any, Token>('/auth/register', data)
   },
 
   selectTenant(data: TenantSelectRequest) {
@@ -41,6 +46,10 @@ export const authApi = {
 
   listTenantUsers() {
     return request.get<any, TenantUser[]>('/auth/tenant-users')
+  },
+
+  listActiveUsers() {
+    return request.get<any, ActiveTenantUser[]>('/auth/users')
   },
 
   listTenantRoles() {

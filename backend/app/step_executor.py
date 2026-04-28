@@ -28,6 +28,19 @@ def _field_value(field: dict, *keys: str, default=None):
     return default
 
 
+def _first_non_empty(*values, default=""):
+    for value in values:
+        if value in (None, ""):
+            continue
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped:
+                return stripped
+            continue
+        return value
+    return default
+
+
 def _normalize_database_field_type(field: dict) -> str:
     raw = _field_value(field, "database_field_type", "databaseFieldType", "db_type", "dbType")
     if raw:
@@ -600,13 +613,31 @@ def _resolve_form_main_model(
     返回 (form_name, main_model_code, all_model_codes, main_model_info)。
     主模型未找到时 raise ValueError，跟原有行为一致。
     """
-    form_name = form.get("name") or form.get("formName") or "未命名表单"
-    main_model_code = str(form.get("modelCode", form.get("model_code", ""))).strip()
+    form_name = _first_non_empty(
+        form.get("formName"),
+        form.get("form_name"),
+        form.get("name"),
+        form.get("title"),
+        default="未命名表单",
+    )
+    main_model_code = str(_first_non_empty(
+        form.get("modelCode"),
+        form.get("model_code"),
+        form.get("mainModelCode"),
+        form.get("main_model_code"),
+        form.get("main_model"),
+        default="",
+    )).strip()
+    all_model_source = form.get("allModelCodes") or form.get("all_model_codes") or []
+    if isinstance(all_model_source, str):
+        all_model_source = [all_model_source]
     all_model_codes_raw = [
         str(code).strip()
-        for code in (form.get("allModelCodes") or form.get("all_model_codes") or [])
+        for code in all_model_source
         if str(code).strip()
     ]
+    if not main_model_code and all_model_codes_raw:
+        main_model_code = all_model_codes_raw[0]
     all_model_codes = list(dict.fromkeys(
         ([main_model_code] if main_model_code else []) + all_model_codes_raw
     ))
@@ -664,9 +695,14 @@ async def _find_existing_form_reuse(
 def _resolve_form_code(form: dict, form_name: str) -> str:
     """生成或取出 form_code。
 
-    优先级：form.formCode > form.form_code > 随机 `form_XXXXXX` > 基于 form.code/name 的 sanitize。
+    优先级：form.formCode > form.form_code > form.code > 随机 `form_XXXXXX` > 基于 form.name 的 sanitize。
     """
-    form_code = str(form.get("formCode", form.get("form_code", ""))).strip()
+    form_code = str(_first_non_empty(
+        form.get("formCode"),
+        form.get("form_code"),
+        form.get("code"),
+        default="",
+    )).strip()
     if form_code:
         return form_code
     form_code_suffix = _rand(6)
@@ -1018,8 +1054,9 @@ def _form_identity_map(forms: List[dict]) -> Dict[str, dict]:
     for form in forms:
         for key in (
             form.get("formCode"), form.get("form_code"), form.get("code"),
-            form.get("formName"), form.get("name"),
+            form.get("formName"), form.get("form_name"), form.get("name"),
             form.get("modelCode"), form.get("model_code"),
+            form.get("mainModelCode"), form.get("main_model_code"), form.get("main_model"),
         ):
             value = str(key or "").strip()
             if value:
@@ -1073,7 +1110,14 @@ def _resolve_component_reference(comp_def: dict, form_map: Dict[str, dict]) -> t
 
     resolved_form = form_map.get(target)
     if resolved_form:
-        target_model_code = str(resolved_form.get("modelCode", resolved_form.get("model_code", target))).strip() or target
+        target_model_code = str(_first_non_empty(
+            resolved_form.get("modelCode"),
+            resolved_form.get("model_code"),
+            resolved_form.get("mainModelCode"),
+            resolved_form.get("main_model_code"),
+            resolved_form.get("main_model"),
+            default=target,
+        )).strip() or target
         return target_model_code, target_field, origin_field
     return target, target_field, origin_field
 
@@ -1091,7 +1135,11 @@ def _resolve_target_form_result(
         comp_def.get("formCode"),
         comp_def.get("form_code"),
         comp_def.get("code"),
+        comp_def.get("formName"),
+        comp_def.get("form_name"),
+        comp_def.get("name"),
         ref.get("formCode") if isinstance(ref, dict) else "",
+        ref.get("form_code") if isinstance(ref, dict) else "",
     ):
         candidate = str(value or "").strip()
         if not candidate:
@@ -1103,9 +1151,14 @@ def _resolve_target_form_result(
             if (
                 form_result.get("formCode") == form_def.get("formCode")
                 or form_result.get("formCode") == form_def.get("code")
+                or form_result.get("formCode") == form_def.get("form_code")
                 or form_result.get("formName") == form_def.get("formName")
                 or form_result.get("formName") == form_def.get("name")
+                or form_result.get("formName") == form_def.get("form_name")
                 or form_result.get("modelCode") == form_def.get("modelCode")
+                or form_result.get("modelCode") == form_def.get("model_code")
+                or form_result.get("modelCode") == form_def.get("mainModelCode")
+                or form_result.get("modelCode") == form_def.get("main_model_code")
             ):
                 return form_result
 

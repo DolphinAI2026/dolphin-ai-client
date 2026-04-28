@@ -25,6 +25,7 @@ import json
 import logging
 import re
 from datetime import datetime
+from copy import deepcopy
 from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
@@ -47,6 +48,7 @@ logger = logging.getLogger(__name__)
 class DraftDocUpdateRequest(BaseModel):
     instruction: str
     conversation_id: Optional[int] = None
+    selected_llm_config_id: Optional[int] = None
     current_doc: Optional[str] = None
 
 
@@ -61,6 +63,513 @@ from ._helpers import (  # noqa: F401
     _resolve_builder_llm_cfg,
     _DEFAULT_APP_NAMES,
 )
+
+
+def _safe_code_from_name(name: str, *, suffix: str = "field") -> str:
+    import hashlib
+
+    ascii_code = re.sub(r"[^a-zA-Z0-9_]+", "_", (name or "").strip()).strip("_").lower()
+    if ascii_code:
+        return ascii_code[:48]
+    digest = hashlib.sha1((name or suffix).encode("utf-8")).hexdigest()[:8]
+    return f"{suffix}_{digest}"
+
+
+def _infer_update_field_type(name: str, instruction: str) -> str:
+    raw = f"{name}\n{instruction}"
+    if re.search(r"金额|费用|价格|单价|总价|额度|预算|amount|price|cost", raw, re.I):
+        return "金额"
+    if re.search(r"数量|次数|人数|比例|分数|得分|number|count", raw, re.I):
+        return "数字"
+    if re.search(r"日期|时间|date|time", raw, re.I):
+        return "日期时间"
+    if re.search(r"附件|文件|图片|照片|上传", raw, re.I):
+        return "附件上传"
+    if re.search(r"是否|启用|开关", raw, re.I):
+        return "开关"
+    if re.search(r"部门", raw, re.I):
+        return "部门选择"
+    if re.search(r"人员|负责人|经办人|申请人|审批人", raw, re.I):
+        return "人员选择"
+    if re.search(r"类型|状态|类别|等级", raw, re.I):
+        return "下拉单选"
+    if re.search(r"说明|备注|描述|原因|意见", raw, re.I):
+        return "多行输入"
+    return "单行输入"
+
+
+def _split_update_field_names(raw: str) -> list[str]:
+    cleaned = re.sub(r"(字段|信息|项|属性)$", "", (raw or "").strip())
+    names = [
+        re.sub(r"^(一个|一项|新增|增加|添加|补充|需要|要)", "", item).strip()
+        for item in re.split(r"[、,，/和及与]+", cleaned)
+    ]
+    return [name for name in names if 1 <= len(name) <= 24]
+
+
+def _extract_add_field_names(instruction: str) -> list[str]:
+    names: list[str] = []
+    patterns = [
+        r"(?:新增|增加|添加|补充)\s*([^。；;\n]+?)\s*字段",
+        r"(?:新增|增加|添加|补充)\s*字段\s*[:：]?\s*([^。；;\n]+)",
+        r"(?:加上|加一个|加一项)\s*([^。；;\n]+)",
+    ]
+    non_field_terms = re.compile(r"(功能|模块|页面|表单|模型|流程|角色|权限|菜单|报表|看板|接口|应用)$")
+    for pattern in patterns:
+        for match in re.finditer(pattern, instruction):
+            for name in _split_update_field_names(match.group(1)):
+                if non_field_terms.search(name):
+                    continue
+                if name not in names:
+                    names.append(name)
+    return names[:8]
+
+
+def _is_trivial_non_update_message(instruction: str) -> bool:
+    raw = (instruction or "").strip()
+    compact = re.sub(r"[\s,，.。!！?？~～]+", "", raw).lower()
+    if not compact:
+        return True
+    exact = {
+        "hi",
+        "hello",
+        "hey",
+        "你好",
+        "你好啊",
+        "您好",
+        "在吗",
+        "在不在",
+        "test",
+        "测试",
+        "测试一下",
+        "ok",
+        "好的",
+        "收到",
+        "谢谢",
+        "thanks",
+    }
+    return compact in exact
+
+
+def _is_broad_feature_request(instruction: str) -> bool:
+    raw = instruction or ""
+    if _extract_add_field_names(raw):
+        return False
+    has_add = bool(re.search(r"(新增|增加|添加|补充|加一个|加一项|做一个|做个|创建|建设)", raw))
+    has_feature = bool(re.search(r"(功能|模块|页面|菜单|报表|看板|管理)", raw))
+    has_concrete_config = bool(re.search(r"(字段|列|属性|字典|选项|状态|权限|流程节点|审批|表单字段)", raw))
+    return has_add and has_feature and not has_concrete_config
+
+
+def _build_broad_feature_clarification(instruction: str) -> str:
+    target = re.sub(r"^(帮我|请|麻烦|我要|我想|给我)", "", (instruction or "").strip())
+    target = re.sub(r"(新增|增加|添加|补充|创建|建设|做一个|做个|加一个|加一项)", "", target).strip(" ：:，,。")
+    target = target or "这个功能"
+    return (
+        f"可以做“{target}”。为了避免把现有配置改偏，我需要先确认 3 点："
+        "这个功能管理的核心字段有哪些、它和现有哪张表关联、哪些角色可以新增/查看/编辑。"
+        "你也可以直接说“按默认创建”，我会先生成基础模型、表单和权限草稿。"
+    )
+
+
+def _build_update_context_summary(current_config: dict, current_doc: str) -> dict:
+    def _take_named(items: object, code_keys: tuple[str, ...], name_keys: tuple[str, ...], limit: int = 20) -> list[dict]:
+        result: list[dict] = []
+        for item in items or []:
+            if not isinstance(item, dict):
+                continue
+            code = next((str(item.get(key) or "").strip() for key in code_keys if str(item.get(key) or "").strip()), "")
+            name = next((str(item.get(key) or "").strip() for key in name_keys if str(item.get(key) or "").strip()), "")
+            result.append({"code": code, "name": name})
+            if len(result) >= limit:
+                break
+        return result
+
+    headings = []
+    for line in (current_doc or "").splitlines():
+        text = line.strip()
+        if re.match(r"^#{1,4}\s+", text) or re.match(r"^[一二三四五六七八九十]+[、.．]", text):
+            headings.append(text[:80])
+        if len(headings) >= 24:
+            break
+
+    return {
+        "appName": current_config.get("appName"),
+        "appCode": current_config.get("appCode") or current_config.get("app_code"),
+        "counts": {
+            "models": len(current_config.get("models") or []),
+            "forms": len(current_config.get("forms") or []),
+            "roles": len(current_config.get("roles") or []),
+            "flows": len(current_config.get("flows") or []),
+            "custom_development": len(current_config.get("custom_development") or []),
+        },
+        "models": _take_named(current_config.get("models"), ("code", "modelCode", "model_code"), ("name", "modelName", "model_name")),
+        "forms": _take_named(current_config.get("forms"), ("formCode", "code", "form_code"), ("formName", "name", "title", "form_name")),
+        "roles": _take_named(current_config.get("roles"), ("code", "roleCode", "role_code"), ("name", "roleName", "role_name")),
+        "doc_headings": headings,
+    }
+
+
+def _coerce_preview_config(payload: object) -> dict:
+    if not isinstance(payload, dict):
+        return {}
+    data = payload.get("data", payload)
+    if not isinstance(data, dict):
+        return {}
+    if data.get("models") or data.get("forms") or data.get("roles"):
+        return data
+    if data.get("app_info") or data.get("tables"):
+        try:
+            from app.services.config_converter import convert_analysis_to_app_config
+            return convert_analysis_to_app_config(data)
+        except Exception:
+            logger.warning("coerce doc_result to config_preview failed", exc_info=True)
+    return data
+
+
+def _compact_update_text(value: object) -> str:
+    return re.sub(r"[\s_\-·/（）()【】\[\]{}:：,，.。]+", "", str(value or "")).lower()
+
+
+def _model_identity(model: dict) -> tuple[str, str]:
+    name = str(model.get("name") or model.get("modelName") or model.get("model_name") or "").strip()
+    code = str(model.get("code") or model.get("modelCode") or model.get("model_code") or "").strip()
+    return name, code
+
+
+def _pick_update_target_model(config: dict, instruction: str) -> dict | None:
+    models = config.get("models") or []
+    if not models:
+        return None
+    compact_instruction = _compact_update_text(instruction)
+
+    # 用户经常直接说 “industry 增加一个备注字段” 或 “行业表单加备注”。
+    # 先按模型 code / name / 表单 code / name 精确命中，避免默认落到第一张主表。
+    for model in models:
+        name, code = _model_identity(model)
+        candidates = [code, name]
+        if any(candidate and _compact_update_text(candidate) in compact_instruction for candidate in candidates):
+            return model
+
+    forms = config.get("forms") or []
+    for form in forms:
+        form_candidates = [
+            form.get("formCode"),
+            form.get("code"),
+            form.get("formName"),
+            form.get("name"),
+            form.get("modelCode"),
+            form.get("bindModelCode"),
+            form.get("modelName"),
+            form.get("bindModelName"),
+        ]
+        if not any(candidate and _compact_update_text(candidate) in compact_instruction for candidate in form_candidates):
+            continue
+        form_model_code = str(
+            form.get("modelCode")
+            or form.get("bindModelCode")
+            or form.get("main_model_code")
+            or form.get("model_code")
+            or ""
+        )
+        form_model_name = str(form.get("modelName") or form.get("bindModelName") or "")
+        for model in models:
+            name, code = _model_identity(model)
+            if (form_model_code and code == form_model_code) or (form_model_name and name == form_model_name):
+                return model
+
+    target_match = re.search(r"(?:到|在|给|为)\s*([^。；;\n]{2,32}?)(?:表单|表|模型|列表|页面|模块)", instruction)
+    target_text = target_match.group(1).strip() if target_match else ""
+    if target_text:
+        for model in models:
+            name, code = _model_identity(model)
+            if target_text in name or target_text in code or name in target_text:
+                return model
+    for model in models:
+        if str(model.get("table_type") or model.get("type") or "主表") not in {"子表", "sub", "child"}:
+            return model
+    return models[0]
+
+
+def _append_field_component_to_forms(config: dict, model: dict, field: dict) -> None:
+    model_code = model.get("code") or model.get("modelCode") or model.get("model_code") or ""
+    field_code = field.get("code") or field.get("fieldCode") or field.get("field_code") or ""
+    field_name = field.get("name") or field.get("fieldName") or field.get("field_name") or field_code
+    try:
+        from app.field_types import get_comp_type_map
+        component_type = get_comp_type_map().get(str(field.get("type") or ""), "FORM_TEXT_INPUT")
+    except Exception:
+        component_type = "FORM_TEXT_INPUT"
+    if not model_code or not field_code:
+        return
+
+    for form in config.get("forms") or []:
+        form_model = form.get("modelCode") or form.get("bindModelCode") or form.get("main_model_code") or form.get("model_code")
+        if form_model and str(form_model) != str(model_code):
+            continue
+        components = form.setdefault("components", [])
+        if any(str(item.get("code") or item.get("fieldCode") or "") == str(field_code) for item in components if isinstance(item, dict)):
+            continue
+        components.append({
+            "code": field_code,
+            "label": field_name,
+            "name": field_name,
+            "modelField": f"{model_code}.{field_code}",
+            "componentType": component_type,
+            "required": False,
+            "hidden": False,
+            "readonly": False,
+            "showInList": False,
+            "searchable": False,
+        })
+
+
+def _try_apply_simple_add_field_update(current_config: dict, instruction: str) -> tuple[dict, list[str]] | None:
+    field_names = _extract_add_field_names(instruction)
+    if not field_names:
+        return None
+
+    config = deepcopy(current_config)
+    target_model = _pick_update_target_model(config, instruction)
+    if not target_model:
+        return None
+
+    fields = target_model.setdefault("fields", [])
+    existing_codes = {str(field.get("code") or field.get("fieldCode") or field.get("field_code") or "") for field in fields if isinstance(field, dict)}
+    existing_names = {str(field.get("name") or field.get("fieldName") or field.get("field_name") or "") for field in fields if isinstance(field, dict)}
+    added: list[str] = []
+    for name in field_names:
+        if name in existing_names:
+            continue
+        base_code = _safe_code_from_name(name)
+        code = base_code
+        index = 2
+        while code in existing_codes:
+            code = f"{base_code}_{index}"
+            index += 1
+        field = {
+            "code": code,
+            "name": name,
+            "type": _infer_update_field_type(name, instruction),
+            "required": False,
+            "description": f"根据更新诉求新增：{instruction[:80]}",
+        }
+        fields.append(field)
+        existing_codes.add(code)
+        existing_names.add(name)
+        added.append(name)
+        _append_field_component_to_forms(config, target_model, field)
+
+    if not added:
+        return None
+    return config, added
+
+
+async def _create_direct_update_change_plan(
+    *,
+    db: AsyncSession,
+    app: Application,
+    conversation_id: int | None,
+    from_config: dict,
+    to_config: dict,
+    filename: str,
+    rendered_doc: str,
+    summary: str,
+) -> dict:
+    """Persist a deterministic config update without round-tripping through doc upload."""
+    from app.config_diff import compute_config_diff
+    from app.doc_differ import semantic_diff, diff_to_actions
+    import hashlib
+
+    max_ver_result = await db.execute(
+        select(sa_func.max(DocumentVersion.version)).where(DocumentVersion.application_id == app.id)
+    )
+    max_ver = max_ver_result.scalar() or 0
+    if max_ver == 0 and from_config:
+        base_rendered_doc = _render_doc_content_from_config(
+            app.app_name or from_config.get("appName", ""),
+            app.app_code or from_config.get("appCode", ""),
+            from_config,
+        )
+        base_config_json = _dump_parsed_config(from_config)
+        base_doc_ver = DocumentVersion(
+            application_id=app.id,
+            version=1,
+            filename=f"{filename.rsplit('.', 1)[0]}-base.md" if filename.endswith(".md") else "base.md",
+            content_hash=hashlib.sha256(base_config_json.encode()).hexdigest(),
+            raw_content=base_rendered_doc,
+            structure_index=json.dumps({}, ensure_ascii=False),
+            parsed_config=base_config_json,
+            parent_version=None,
+            summary="更新前配置基线",
+        )
+        db.add(base_doc_ver)
+        await db.flush()
+        max_ver = 1
+    new_version = max_ver + 1
+
+    resource_diff = compute_config_diff(from_config, to_config)
+    if resource_diff.normalized_new_config:
+        to_config = resource_diff.normalized_new_config
+        rendered_doc = _render_doc_content_from_config(
+            app.app_name or to_config.get("appName", ""),
+            app.app_code or to_config.get("appCode", ""),
+            to_config,
+        )
+
+    diff = semantic_diff(from_config, to_config)
+    actions = diff_to_actions(diff, to_config)
+    resource_diff_dict = resource_diff.to_dict()
+    config_json = _dump_parsed_config(to_config)
+
+    doc_ver = DocumentVersion(
+        application_id=app.id,
+        version=new_version,
+        filename=filename,
+        content_hash=hashlib.sha256(config_json.encode()).hexdigest(),
+        raw_content=rendered_doc,
+        structure_index=json.dumps({}, ensure_ascii=False),
+        parsed_config=config_json,
+        parent_version=max_ver if max_ver > 0 else None,
+        summary=summary,
+    )
+    db.add(doc_ver)
+    await db.flush()
+
+    change_plan = ChangePlan(
+        application_id=app.id,
+        conversation_id=conversation_id,
+        from_version=max_ver,
+        to_version=new_version,
+        diff_summary=json.dumps(resource_diff_dict, ensure_ascii=False),
+        actions=json.dumps(actions, ensure_ascii=False),
+        status="pending",
+    )
+    db.add(change_plan)
+
+    app.current_doc_version = new_version
+    if app.app_name:
+        to_config["appName"] = app.app_name
+    if app.app_code:
+        to_config["appCode"] = app.app_code
+    app.config_preview = _dump_preview_config(to_config)
+    if app.apaas_app_id or app.status in ("completed", "updating"):
+        app.status = "updating"
+    else:
+        app.status = "draft"
+    if app.generation_state:
+        try:
+            gs = json.loads(app.generation_state)
+            gs["config_version"] = new_version
+            gs["config_updated_at"] = datetime.utcnow().isoformat()
+            app.generation_state = json.dumps(gs, ensure_ascii=False)
+        except Exception:
+            pass
+
+    await db.commit()
+    await db.refresh(change_plan)
+
+    return {
+        "version": new_version,
+        "from_version": max_ver,
+        "to_version": new_version,
+        "summary": resource_diff.summary or summary,
+        "diff": resource_diff_dict,
+        "semantic_diff": diff,
+        "actions": actions,
+        "change_plan_id": change_plan.id,
+        "is_first_version": max_ver == 0,
+        "parsed_config": to_config,
+        "rendered_doc": rendered_doc,
+        "parse_meta": {
+            "mode": "direct_config_update",
+            "llm_repaired": False,
+        },
+    }
+
+
+def _append_update_note_to_config(current_config: dict, instruction: str) -> dict:
+    config = deepcopy(current_config)
+    items = config.setdefault("custom_development", [])
+    if not isinstance(items, list):
+        items = []
+        config["custom_development"] = items
+    items.append({
+        "type": "pending_update_review",
+        "name": "待确认的更新诉求",
+        "trigger": instruction[:160],
+        "scope": "模型暂时无法稳定产出结构化变更，先保留为待确认更新项，避免直接覆盖现有应用配置。",
+        "acceptance": "确认后再拆解为字段、表单、权限、流程或自开发执行项。",
+    })
+    return config
+
+
+async def _classify_update_request_with_llm(
+    doc_llm_cfg: dict | None,
+    *,
+    app_name: str,
+    instruction: str,
+    current_doc: str,
+    current_config: dict,
+) -> dict:
+    """Use the tenant builder model to decide whether a chat turn is an app update."""
+    from app.routes.requirements import _complete_with_config, extract_json
+
+    context_summary = _build_update_context_summary(current_config, current_doc)
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "你是低代码应用变更对话调度器。先判断用户这句话是不是要修改当前应用。"
+                "你必须只输出 JSON，不要 Markdown，不要代码块。"
+                "JSON 字段：action, actionable_update, normalized_instruction, assistant_reply, confidence。"
+                "action 只能是 update、answer、clarify。"
+                "当用户明确要求新增、删除、修改、调整字段、表单、模型、页面、权限、流程、数据字典、报表、接口或自开发内容时，"
+                "action=update 且 actionable_update=true，并把 normalized_instruction 写成可执行的变更描述。"
+                "当用户只是寒暄、测试、询问当前能力、问下一步怎么做，或信息不足无法动配置时，action=answer 或 clarify，"
+                "actionable_update=false，并用 assistant_reply 自然回复或追问。"
+                "如果用户只说新增某个管理功能/模块/页面，但没有给出字段、关联关系、角色权限或流程，优先 action=clarify。"
+                "不要把闲聊强行解释成应用变更，也不要凭空生成不存在的更新。"
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"""当前应用：{app_name}
+当前应用配置摘要：
+{json.dumps(context_summary, ensure_ascii=False)}
+
+用户消息：
+{instruction}
+
+请输出 JSON，例如：
+{{"action":"clarify","actionable_update":false,"normalized_instruction":"","assistant_reply":"...","confidence":0.82}}
+""",
+        },
+    ]
+    raw = await _complete_with_config(doc_llm_cfg, messages, max_tokens=1000, temperature=0.2)
+    result = extract_json(raw)
+    action = str(result.get("action") or "").strip().lower()
+    actionable = bool(result.get("actionable_update")) or action == "update"
+    normalized_instruction = str(result.get("normalized_instruction") or "").strip()
+    assistant_reply = str(result.get("assistant_reply") or result.get("reply") or "").strip()
+    confidence = result.get("confidence", None)
+
+    if actionable:
+        return {
+            "action": "update",
+            "actionable_update": True,
+            "normalized_instruction": normalized_instruction or instruction,
+            "assistant_reply": assistant_reply,
+            "confidence": confidence,
+        }
+
+    return {
+        "action": action if action in {"answer", "clarify"} else "clarify",
+        "actionable_update": False,
+        "normalized_instruction": normalized_instruction,
+        "assistant_reply": assistant_reply or "我在。你可以继续告诉我要调整哪个字段、表单、权限、流程或页面。",
+        "confidence": confidence,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -158,13 +667,15 @@ async def _persist_doc_upload(
     async with AsyncSessionLocal() as session:
         from app.models import Conversation, Message
 
+        spec_id_for_result: Optional[str] = None
+
         # 增量模式复用已有对话，首次上传创建新对话
         if existing_conversation_id:
             conv_id = existing_conversation_id
         else:
             conversation = Conversation(
                 user_id=user_id, tenant_id=tenant_id,
-                title=f"文档：{fname}", agent_type="builder", status="active"
+                title=f"文档：{fname}", agent_type="requirements", status="active"
             )
             session.add(conversation)
             await session.flush()
@@ -238,6 +749,7 @@ async def _persist_doc_upload(
             conv_row = (await session.execute(
                 select(Conversation).where(Conversation.id == conv_id)
             )).scalar_one()
+            spec_id_for_result = conv_row.spec_id
 
             need_create_spec = True
             if conv_row.spec_id:
@@ -257,6 +769,7 @@ async def _persist_doc_upload(
                 )
                 await save_spec(session, spec_obj, tenant_id=tenant_id or 1)
                 conv_row.spec_id = spec_obj.id
+                spec_id_for_result = spec_obj.id
         except Exception as e:
             logger.warning(f"_persist_doc_upload: spec backfill 失败（不阻断主流程）: {e}")
 
@@ -269,6 +782,7 @@ async def _persist_doc_upload(
             "parse_meta": parse_meta,
             "version": new_version,
             "is_incremental": is_incremental,
+            "spec_id": spec_id_for_result,
         }
         # 增量模式下额外返回 diff 信息
         if is_incremental and resource_diff is not None:
@@ -639,11 +1153,11 @@ async def draft_doc_update(
     current_config: dict = {}
     if app.config_preview:
         try:
-            loaded = loads_if_str(app.config_preview)
-            current_config = loaded.get("data", loaded) if isinstance(loaded, dict) else {}
+            current_config = _coerce_preview_config(loads_if_str(app.config_preview))
         except Exception:
             current_config = {}
 
+    latest_doc: DocumentVersion | None = None
     current_doc = (body.current_doc or "").strip()
     if not current_doc:
         latest_result = await db.execute(
@@ -655,6 +1169,21 @@ async def draft_doc_update(
         latest_doc = latest_result.scalar_one_or_none()
         if latest_doc:
             current_doc = await _ensure_doc_version_rendered_content(db, app, latest_doc)
+    else:
+        latest_result = await db.execute(
+            select(DocumentVersion)
+            .where(DocumentVersion.application_id == app.id)
+            .order_by(DocumentVersion.version.desc())
+            .limit(1)
+        )
+        latest_doc = latest_result.scalar_one_or_none()
+
+    if not current_config and latest_doc:
+        try:
+            parsed = await _ensure_doc_version_parsed_config(db, latest_doc)
+            current_config = _coerce_preview_config(parsed)
+        except Exception:
+            logger.warning("draft doc update load latest parsed_config failed", exc_info=True)
 
     conversation: Conversation | None = None
     if body.conversation_id:
@@ -673,10 +1202,49 @@ async def draft_doc_update(
             ))
             await db.commit()
 
+    if _is_trivial_non_update_message(instruction):
+        assistant_reply = "我在。你可以直接描述要调整的字段、表单、权限、流程，或者上传新版 Markdown 设计文档。"
+        if conversation:
+            db.add(Message(
+                conversation_id=conversation.id,
+                role="assistant",
+                content=assistant_reply,
+            ))
+            await db.commit()
+        return {
+            "type": "assistant_reply",
+            "action": "answer",
+            "actionable_update": False,
+            "message": assistant_reply,
+            "summary": assistant_reply,
+            "confidence": 1.0,
+        }
+
+    preclassified_simple_update = _try_apply_simple_add_field_update(current_config, instruction)
+
+    if _is_broad_feature_request(instruction):
+        assistant_reply = _build_broad_feature_clarification(instruction)
+        if conversation:
+            db.add(Message(
+                conversation_id=conversation.id,
+                role="assistant",
+                content=assistant_reply,
+            ))
+            await db.commit()
+        return {
+            "type": "assistant_reply",
+            "action": "clarify",
+            "actionable_update": False,
+            "message": assistant_reply,
+            "summary": assistant_reply,
+            "confidence": 0.92,
+        }
+
     doc_llm_cfg = await _resolve_builder_llm_cfg(
         db,
         ctx.tenant_id,
         conversation_id=body.conversation_id,
+        selected_config_id=body.selected_llm_config_id,
     )
     if doc_llm_cfg:
         doc_llm_cfg = {**doc_llm_cfg, "max_tokens": 8000}
@@ -693,8 +1261,155 @@ async def draft_doc_update(
 
     app_name = app.app_name or current_config.get("appName") or "业务应用"
     app_code = app.app_code or current_config.get("appCode") or current_config.get("app_code") or ""
-    current_config_text = json.dumps(current_config, ensure_ascii=False, indent=2)[:60000]
-    current_doc_text = current_doc[:60000]
+    current_config_text = json.dumps(_build_update_context_summary(current_config, current_doc), ensure_ascii=False, indent=2)[:20000]
+    current_doc_text = current_doc[:12000]
+
+    try:
+        if preclassified_simple_update:
+            update_intent = {
+                "action": "update",
+                "actionable_update": True,
+                "normalized_instruction": instruction,
+                "assistant_reply": "",
+                "confidence": 0.72,
+            }
+        elif doc_llm_cfg:
+            update_intent = await _classify_update_request_with_llm(
+                doc_llm_cfg,
+                app_name=app_name,
+                instruction=instruction,
+                current_doc=current_doc_text,
+                current_config=current_config,
+            )
+        else:
+            assistant_reply = "当前没有可用的模型配置，无法分析复杂更新。你可以先切换/测试可用模型，或直接描述明确字段变更，例如“给会议主表新增备注字段”。"
+            if conversation:
+                db.add(Message(
+                    conversation_id=conversation.id,
+                    role="assistant",
+                    content=assistant_reply,
+                ))
+                await db.commit()
+            return {
+                "type": "assistant_reply",
+                "action": "clarify",
+                "actionable_update": False,
+                "message": assistant_reply,
+                "summary": assistant_reply,
+                "confidence": 0.7,
+            }
+    except Exception as e:
+        if preclassified_simple_update:
+            update_intent = {
+                "action": "update",
+                "actionable_update": True,
+                "normalized_instruction": instruction,
+                "assistant_reply": "",
+                "confidence": 0.62,
+            }
+        else:
+            logger.error("draft doc update intent classification failed: %s", e, exc_info=True)
+            raise HTTPException(status_code=502, detail=f"AI 意图识别失败: {str(e)}")
+
+    if not update_intent.get("actionable_update"):
+        assistant_reply = (
+            str(update_intent.get("assistant_reply") or "").strip()
+            or "我在。你可以继续告诉我要调整哪个字段、表单、权限、流程或页面。"
+        )
+        if conversation:
+            db.add(Message(
+                conversation_id=conversation.id,
+                role="assistant",
+                content=assistant_reply,
+            ))
+            await db.commit()
+        return {
+            "type": "assistant_reply",
+            "action": update_intent.get("action") or "clarify",
+            "actionable_update": False,
+            "message": assistant_reply,
+            "summary": assistant_reply,
+            "confidence": update_intent.get("confidence"),
+        }
+
+    effective_instruction = str(update_intent.get("normalized_instruction") or "").strip() or instruction
+
+    if not current_config:
+        assistant_reply = "当前应用缺少可用于更新的配置快照。请先重新导入/上传一次设计文档，或从平台同步应用配置后再继续更新。"
+        if conversation:
+            db.add(Message(
+                conversation_id=conversation.id,
+                role="assistant",
+                content=assistant_reply,
+            ))
+            await db.commit()
+        return {
+            "type": "assistant_reply",
+            "action": "clarify",
+            "actionable_update": False,
+            "message": assistant_reply,
+            "summary": assistant_reply,
+            "confidence": update_intent.get("confidence"),
+        }
+
+    if _is_broad_feature_request(effective_instruction):
+        assistant_reply = _build_broad_feature_clarification(effective_instruction)
+        if conversation:
+            db.add(Message(
+                conversation_id=conversation.id,
+                role="assistant",
+                content=assistant_reply,
+            ))
+            await db.commit()
+        return {
+            "type": "assistant_reply",
+            "action": "clarify",
+            "actionable_update": False,
+            "message": assistant_reply,
+            "summary": assistant_reply,
+            "confidence": update_intent.get("confidence"),
+        }
+
+    simple_update = preclassified_simple_update or _try_apply_simple_add_field_update(current_config, effective_instruction)
+    if simple_update:
+        app_config, added_fields = simple_update
+        app_config["appName"] = app_name
+        if app_code:
+            app_config["appCode"] = app_code
+        markdown = _render_doc_content_from_config(app_name, app_config.get("appCode", app_code), app_config)
+        safe_code = re.sub(r"[^A-Za-z0-9_-]+", "-", app_config.get("appCode") or app_code or "app").strip("-").lower()
+        filename = f"{safe_code or 'app'}-update-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}.md"
+        summary = f"我理解为新增字段：{'、'.join(added_fields)}。已直接生成本次配置变更计划，等待你确认执行。"
+        plan_payload = await _create_direct_update_change_plan(
+            db=db,
+            app=app,
+            conversation_id=body.conversation_id,
+            from_config=current_config,
+            to_config=app_config,
+            filename=filename,
+            rendered_doc=markdown,
+            summary=summary,
+        )
+        if conversation:
+            db.add(Message(
+                conversation_id=conversation.id,
+                role="assistant",
+                content=summary,
+            ))
+            await db.commit()
+        return {
+            "type": "direct_config_update",
+            "actionable_update": True,
+            "direct_config_update": True,
+            "markdown": markdown,
+            "filename": filename,
+            "summary": summary,
+            "doc_result": None,
+            "app_config": app_config,
+            "change_plan": plan_payload,
+            **plan_payload,
+            "ai_assisted": True,
+        }
 
     messages = [
         {
@@ -702,7 +1417,7 @@ async def draft_doc_update(
             "content": (
                 "你是 aPaaS 应用更新设计助手。你的任务是基于现有应用 SPEC 和配置，"
                 "把用户的增量更新诉求合并成一份完整的新版功能设计文档 JSON。"
-                "必须保留未被更新诉求影响的模型、字段、角色、字典、流程、权限和自开发定义。"
+                "必须保留未被更新诉求影响的模型、字段、角色、字典、流程、权限和开发边界。"
                 "只输出 JSON，不要输出 Markdown、解释、注释或代码块。"
             ),
         },
@@ -714,11 +1429,14 @@ async def draft_doc_update(
 ## 现有标准 SPEC
 {current_doc_text or "（未找到已渲染 SPEC，以下配置 JSON 为准）"}
 
-## 现有应用配置 JSON
+## 现有应用配置摘要 JSON
 {current_config_text}
 
-## 本次更新诉求
+## 用户原始消息
 {instruction}
+
+## AI 归一化后的更新诉求
+{effective_instruction}
 
 请输出“更新后的完整结构化功能设计文档 JSON”，不是差异 JSON。要求：
 1. 未被本次诉求影响的内容必须原样保留。
@@ -788,6 +1506,31 @@ async def draft_doc_update(
         }
     except Exception as e:
         logger.error("draft doc update failed: %s", e, exc_info=True)
+        if current_config:
+            app_config = _append_update_note_to_config(current_config, effective_instruction)
+            app_config["appName"] = app_name
+            if app_code:
+                app_config["appCode"] = app_code
+            markdown = _render_doc_content_from_config(app_name, app_config.get("appCode", app_code), app_config)
+            safe_code = re.sub(r"[^A-Za-z0-9_-]+", "-", app_config.get("appCode") or app_code or "app").strip("-").lower()
+            filename = f"{safe_code or 'app'}-update-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}.md"
+            summary = "AI 已识别这是应用更新诉求，但生成新版 SPEC 时失败；我先保留当前配置并记录本次更新点，避免覆盖现有应用。"
+            if conversation:
+                db.add(Message(
+                    conversation_id=conversation.id,
+                    role="assistant",
+                    content=summary,
+                ))
+                await db.commit()
+            return {
+                "markdown": markdown,
+                "filename": filename,
+                "summary": summary,
+                "doc_result": None,
+                "app_config": app_config,
+                "fallback": True,
+                "error": str(e),
+            }
         raise HTTPException(status_code=500, detail=f"生成新版 SPEC 失败: {str(e)}")
 
 

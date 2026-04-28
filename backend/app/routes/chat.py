@@ -18,7 +18,7 @@ from app.field_types import build_prompt_field_types_compact
 from app.context_compact import ContextCompactor
 from app.json_utils import loads_if_str
 from app.spec.agent import SpecAgent
-from app.spec.persistence import load_spec, save_spec
+from app.spec.persistence import load_spec, save_spec_rebased
 
 
 async def _get_tenant_llm_config(db: AsyncSession, tenant_id: int) -> dict | None:
@@ -76,6 +76,51 @@ def _strip_hidden_blocks(text: str) -> str:
     cleaned = re.sub(r"<think>[\s\S]*?</think>", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"<think>[\s\S]*$", "", cleaned, flags=re.IGNORECASE)
     return cleaned.strip()
+
+
+def _format_pending_decision_message(decisions: list) -> str:
+    active = [d for d in decisions if not getattr(d, "resolved", False)]
+    if not active:
+        return ""
+    if len(active) == 1:
+        d = active[0]
+        lines = ["我需要你确认一个关键点：", str(getattr(d, "topic", "")).strip()]
+        why = str(getattr(d, "why_blocking", "") or "").strip()
+        if why:
+            lines.append(f"原因：{why}")
+        options = [str(opt).strip() for opt in (getattr(d, "options", None) or []) if str(opt).strip()]
+        if options:
+            lines.append("可选方案：")
+            lines.extend([f"{idx}. {opt}" for idx, opt in enumerate(options, 1)])
+    else:
+        lines = [f"我需要你确认 {len(active)} 个关键点："]
+        for idx, d in enumerate(active, 1):
+            topic = str(getattr(d, "topic", "")).strip()
+            why = str(getattr(d, "why_blocking", "") or "").strip()
+            suffix = f"（{why}）" if why else ""
+            lines.append(f"{idx}. {topic}{suffix}")
+            options = [str(opt).strip() for opt in (getattr(d, "options", None) or []) if str(opt).strip()]
+            for opt_idx, opt in enumerate(options, 1):
+                lines.append(f"   {idx}.{opt_idx} {opt}")
+    lines.append("你直接在对话里回答即可，我会同步更新右侧 SPEC。")
+    return "\n".join(line for line in lines if line)
+
+
+def _append_decision_message(existing_text: str, decisions: list) -> tuple[str, str]:
+    """Return assistant text plus a user-facing decision prompt for new blockers."""
+    decision_text = _format_pending_decision_message(decisions)
+    if not decision_text:
+        return existing_text, ""
+    topics = [
+        str(getattr(d, "topic", "") or "").strip()
+        for d in decisions
+        if str(getattr(d, "topic", "") or "").strip()
+    ]
+    if topics and all(topic in existing_text for topic in topics):
+        return existing_text, ""
+    if existing_text.strip():
+        return f"{existing_text.rstrip()}\n\n{decision_text}", decision_text
+    return decision_text, decision_text
 
 
 async def _parse_uploaded_document(file: UploadFile) -> str:
@@ -628,23 +673,44 @@ async def send_message(
 
             async def spec_event_generator():
                 last_assistant_text = ""
+                seen_pending_decision_ids = {
+                    d.id for d in spec.decisions_pending if not d.resolved
+                }
                 try:
+                    yield {"event": "thinking", "data": json.dumps(
+                        {"type": "thinking", "data": "正在分析你的回复..."},
+                        ensure_ascii=False)}
                     async for ev in agent.run(spec, user_message=data.message, history=history):
                         if ev.kind == "assistant_delta":
                             last_assistant_text += ev.text or ""
                             yield {"event": "message", "data": json.dumps(
                                 {"type": "message", "data": ev.text}, ensure_ascii=False)}
                         elif ev.kind == "spec_patch":
-                            await save_spec(db, ev.spec, tenant_id=ctx.tenant_id)
+                            await save_spec_rebased(db, ev.spec, tenant_id=ctx.tenant_id)
                             yield {"event": "spec_patch", "data": json.dumps(
                                 {"type": "spec_patch", "data": ev.spec.model_dump(mode="json")},
                                 ensure_ascii=False)}
+                            new_decisions = [
+                                d for d in ev.spec.decisions_pending
+                                if not d.resolved and d.id not in seen_pending_decision_ids
+                            ]
+                            seen_pending_decision_ids = {
+                                d.id for d in ev.spec.decisions_pending if not d.resolved
+                            }
+                            last_assistant_text, decision_text = _append_decision_message(
+                                last_assistant_text,
+                                new_decisions,
+                            )
+                            if decision_text:
+                                yield {"event": "message", "data": json.dumps(
+                                    {"type": "message", "data": decision_text},
+                                    ensure_ascii=False)}
                         elif ev.kind == "tool_error":
                             yield {"event": "tool_error", "data": json.dumps(
                                 {"type": "tool_error", "tool": ev.tool_name, "message": ev.message},
                                 ensure_ascii=False)}
                         elif ev.kind == "final":
-                            final_text = last_assistant_text.strip() or "[已更新 SPEC]"
+                            final_text = last_assistant_text.strip() or "已更新 SPEC，右侧预览已同步。"
                             db.add(Message(conversation_id=conversation.id, role="assistant",
                                            content=final_text))
                             await db.commit()
@@ -833,7 +899,13 @@ async def send_message_with_file(
 
             async def spec_doc_generator():
                 last_text = ""
+                seen_pending_decision_ids = {
+                    d.id for d in spec.decisions_pending if not d.resolved
+                }
                 try:
+                    yield {"event": "thinking", "data": json.dumps(
+                        {"type": "thinking", "data": "正在解析文档并同步 SPEC..."},
+                        ensure_ascii=False)}
                     async for ev in agent.bootstrap_from_doc(
                         spec,
                         doc_text=file_content,
@@ -845,16 +917,34 @@ async def send_message_with_file(
                             yield {"event": "message", "data": json.dumps(
                                 {"type": "message", "data": ev.text}, ensure_ascii=False)}
                         elif ev.kind == "spec_patch":
-                            await save_spec(db, ev.spec, tenant_id=ctx.tenant_id)
+                            await save_spec_rebased(db, ev.spec, tenant_id=ctx.tenant_id)
                             yield {"event": "spec_patch", "data": json.dumps(
                                 {"type": "spec_patch", "data": ev.spec.model_dump(mode="json")},
                                 ensure_ascii=False)}
+                            new_decisions = [
+                                d for d in ev.spec.decisions_pending
+                                if not d.resolved and d.id not in seen_pending_decision_ids
+                            ]
+                            seen_pending_decision_ids = {
+                                d.id for d in ev.spec.decisions_pending if not d.resolved
+                            }
+                            last_text, decision_text = _append_decision_message(
+                                last_text,
+                                new_decisions,
+                            )
+                            if decision_text:
+                                yield {"event": "message", "data": json.dumps(
+                                    {"type": "message", "data": decision_text},
+                                    ensure_ascii=False)}
                         elif ev.kind == "tool_error":
                             yield {"event": "tool_error", "data": json.dumps(
                                 {"type": "tool_error", "tool": ev.tool_name, "message": ev.message},
                                 ensure_ascii=False)}
                         elif ev.kind == "final":
-                            final_text = last_text.strip() or f"[已从文档「{file_name}」预填 SPEC]"
+                            final_text = (
+                                last_text.strip()
+                                or f"已从文档「{file_name}」预填 SPEC，右侧预览已同步。"
+                            )
                             db.add(Message(
                                 conversation_id=conversation.id, role="assistant",
                                 content=final_text,

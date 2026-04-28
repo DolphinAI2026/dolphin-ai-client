@@ -56,13 +56,19 @@ def to_orm(spec: Spec, *, tenant_id: int, kind: str = "draft", commit_sha: Optio
 
 
 def from_orm(row: SpecORM) -> Spec:
-    return Spec.model_validate(row.payload)
+    spec = Spec.model_validate(row.payload or {})
+    # DB row.version is the optimistic-lock source of truth. Older payloads can
+    # lag one version behind because the row version is incremented during save.
+    spec.version = row.version or spec.version or 1
+    spec.application_id = row.application_id if row.application_id is not None else spec.application_id
+    return spec
 
 
 async def load_spec(db: AsyncSession, spec_id: str, *, tenant_id: int | None = None) -> Optional[Spec]:
     stmt = select(SpecORM).where(SpecORM.id == spec_id)
     if tenant_id is not None:
         stmt = stmt.where(SpecORM.tenant_id == tenant_id)
+    stmt = stmt.execution_options(populate_existing=True)
     result = await db.execute(stmt)
     row = result.scalar_one_or_none()
     return from_orm(row) if row else None
@@ -180,18 +186,31 @@ async def save_spec(db: AsyncSession, spec: Spec, *, tenant_id: int) -> SpecORM:
     已存在：DB row 的 version 必须等于 spec.version（即"我看到的版本"），
             否则 raise OptimisticLockError。成功时 row.version 自增 1。
     """
-    existing = await db.execute(select(SpecORM).where(SpecORM.id == spec.id))
+    spec.completeness = derive_completeness(spec)
+    spec.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    stmt = select(SpecORM).where(SpecORM.id == spec.id)
+    if tenant_id is not None:
+        stmt = stmt.where(SpecORM.tenant_id == tenant_id)
+    existing = await db.execute(stmt.execution_options(populate_existing=True))
     row = existing.scalar_one_or_none()
     if row is None:
+        if not spec.version:
+            spec.version = 1
         row = to_orm(spec, tenant_id=tenant_id)
         if not row.version:
             row.version = 1
+            spec.version = 1
+            row.payload = spec.model_dump(mode="json")
         db.add(row)
     else:
         if row.version != spec.version:
             raise OptimisticLockError(
                 f"Spec {spec.id} version mismatch: db={row.version}, incoming={spec.version}"
             )
+        next_version = row.version + 1
+        spec.version = next_version
+        row.version = next_version  # CAS 自增
         row.payload = spec.model_dump(mode="json")
         row.phase = spec.phase.value
         row.completeness_confirmed = spec.completeness.confirmed
@@ -199,10 +218,54 @@ async def save_spec(db: AsyncSession, spec: Spec, *, tenant_id: int) -> SpecORM:
         row.application_id = spec.application_id
         row.parent_spec_id = spec.parent_spec_id
         row.updated_at = spec.updated_at
-        row.version = row.version + 1  # CAS 自增
     await db.commit()
     # 保持调用方的 in-memory spec.version 与 DB 同步，连续 save 不会因 stale
     # version 触发 OptimisticLockError（如 stream 模式连续多个 spec_patch）
+    spec.version = row.version
+    return row
+
+
+async def save_spec_rebased(db: AsyncSession, spec: Spec, *, tenant_id: int) -> SpecORM:
+    """Save a Spec patch after rebasing one stale version conflict.
+
+    `save_spec` stays strict and is still the default API for direct user actions.
+    Streaming SPEC agents can emit several full-spec snapshots while the DB row
+    has already advanced from a previous patch in the same conversation. In that
+    path the incoming object is authoritative, so we refresh the DB version and
+    write against the latest row instead of surfacing "model unavailable" to the user.
+    """
+    try:
+        return await save_spec(db, spec, tenant_id=tenant_id)
+    except OptimisticLockError:
+        await db.rollback()
+
+    spec.completeness = derive_completeness(spec)
+    spec.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    stmt = (
+        select(SpecORM)
+        .where(SpecORM.id == spec.id, SpecORM.tenant_id == tenant_id)
+        .execution_options(populate_existing=True)
+    )
+    result = await db.execute(stmt)
+    row = result.scalar_one_or_none()
+    if row is None:
+        try:
+            return await save_spec(db, spec, tenant_id=tenant_id)
+        except OptimisticLockError:
+            raise
+
+    next_version = (row.version or 0) + 1
+    spec.version = next_version
+    row.version = next_version
+    row.payload = spec.model_dump(mode="json")
+    row.phase = spec.phase.value
+    row.completeness_confirmed = spec.completeness.confirmed
+    row.completeness_total = spec.completeness.total
+    row.application_id = spec.application_id
+    row.parent_spec_id = spec.parent_spec_id
+    row.updated_at = spec.updated_at
+    await db.commit()
     spec.version = row.version
     return row
 

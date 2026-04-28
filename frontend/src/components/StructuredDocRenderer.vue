@@ -284,7 +284,7 @@
     </section>
 
     <section class="doc-section">
-      <h2 class="doc-section-title">八、自开发定义</h2>
+      <h2 class="doc-section-title">八、开发边界</h2>
       <div class="doc-table-wrap">
         <table class="doc-table">
           <thead>
@@ -706,8 +706,8 @@ const customDevelopment = computed(() => {
     : (source?.items || source?.tasks || source?.features || [])
   const items = Array.isArray(rawItems)
     ? rawItems.map((item: any, index: number) => ({
-        type: String(item.type || item.scene || item.category || '自开发扩展').trim(),
-        name: String(item.name || item.item_name || item.title || item.module || `自开发项 ${index + 1}`).trim(),
+        type: String(item.type || item.scene || item.category || '开发扩展').trim(),
+        name: String(item.name || item.item_name || item.title || item.module || `开发项 ${index + 1}`).trim(),
         trigger: String(item.trigger || item.reason || item.condition || item.description || '配置能力无法完整覆盖').trim(),
         scope: String(item.scope || item.implementation || item.deliverable || item.deliverables || '在 IDE 中实现并回写项目上下文').trim(),
         acceptance: String(item.acceptance || item.acceptance_criteria || item.test || '完成源码、联调和可演示验证').trim(),
@@ -717,7 +717,7 @@ const customDevelopment = computed(() => {
 
   return items.length ? items : [{
     type: '配置优先',
-    name: '暂无强制自开发项',
+    name: '暂无强制开发扩展',
     trigger: '当前需求可先由模型、表单、权限和基础流程配置覆盖',
     scope: '如后续出现复杂交互、外部接口、算法规则或报表看板，再进入 IDE 补充',
     acceptance: '低代码配置可完成主流程演示',
@@ -898,5 +898,52 @@ function displayComponentType(component: any) {
   .doc-table th {
     font-size: 12px;
   }
+}
+</style>
+
+<style>
+html[data-theme="dark"] .structured-doc-host .structured-doc {
+  color: rgba(226, 232, 240, 0.88);
+}
+
+html[data-theme="dark"] .structured-doc-host .doc-section {
+  border-bottom-color: rgba(148, 163, 184, 0.16);
+}
+
+html[data-theme="dark"] .structured-doc-host .doc-app-name,
+html[data-theme="dark"] .structured-doc-host .doc-section-title,
+html[data-theme="dark"] .structured-doc-host .doc-subsection-title {
+  color: rgba(248, 250, 252, 0.94);
+}
+
+html[data-theme="dark"] .structured-doc-host .doc-app-desc,
+html[data-theme="dark"] .structured-doc-host .doc-sub-meta,
+html[data-theme="dark"] .structured-doc-host .empty-cell,
+html[data-theme="dark"] .structured-doc-host .doc-empty-block {
+  color: rgba(148, 163, 184, 0.72);
+}
+
+html[data-theme="dark"] .structured-doc-host .doc-table-wrap {
+  border-color: rgba(148, 163, 184, 0.18);
+  background: #0f131a;
+}
+
+html[data-theme="dark"] .structured-doc-host .doc-table th,
+html[data-theme="dark"] .structured-doc-host .doc-table td {
+  border-color: rgba(148, 163, 184, 0.14);
+}
+
+html[data-theme="dark"] .structured-doc-host .doc-table th {
+  background: #151922;
+  color: #b6c2ff;
+}
+
+html[data-theme="dark"] .structured-doc-host .doc-table td {
+  background: #0f131a;
+  color: rgba(226, 232, 240, 0.86);
+}
+
+html[data-theme="dark"] .structured-doc-host .doc-table tr:nth-child(even) td {
+  background: #111722;
 }
 </style>

@@ -10,6 +10,7 @@ from sqlalchemy import select
 from app.spec.persistence import (
     empty_spec,
     save_spec,
+    save_spec_rebased,
     load_spec,
     OptimisticLockError,
 )
@@ -59,3 +60,28 @@ async def test_stale_version_raises_optimistic_lock_error(db_session):
     # B 拿着过期 version=1 再 save → 应触发 OptimisticLockError
     with pytest.raises(OptimisticLockError):
         await save_spec(db_session, spec_b, tenant_id=1)
+
+
+@pytest.mark.asyncio
+async def test_rebased_save_recovers_one_stale_stream_patch(db_session):
+    """Streaming chat patches may carry a stale version; rebase helper retries once."""
+    from app.spec.schema import Role
+
+    spec = empty_spec(created_by=1)
+    spec.version = 1
+    await save_spec(db_session, spec, tenant_id=1)
+
+    stale_patch = await load_spec(db_session, spec.id, tenant_id=1)
+    fresh_patch = await load_spec(db_session, spec.id, tenant_id=1)
+    assert stale_patch is not None and fresh_patch is not None
+
+    fresh_patch.roles.append(Role(code="asset_admin", name="资产管理员", scope="ALL"))
+    await save_spec(db_session, fresh_patch, tenant_id=1)
+
+    stale_patch.roles.append(Role(code="warehouse_admin", name="仓库管理员", scope="ALL"))
+    await save_spec_rebased(db_session, stale_patch, tenant_id=1)
+
+    row = (await db_session.execute(select(SpecORM).where(SpecORM.id == spec.id))).scalar_one()
+    assert row.version == 3
+    assert row.payload["version"] == 3
+    assert row.payload["roles"][0]["code"] == "warehouse_admin"

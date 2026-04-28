@@ -119,7 +119,8 @@ def _builtin_llm_specs() -> list[dict]:
             }
         )
 
-    # 精简内置模型清单：仅保留 gpt5.5 (Dolphin) / gpt5.4 / qwen3.6-plus
+    # 精简内置模型清单：低代码搭建统一走 gpt-5.5 / Qwen。
+    # gpt-5.4 的历史连接信息容易漂移，停止作为内置 seed 初始化。
     # 其余模型用户按需通过"新增模型"自行添加。
     _append(
         config_name="内置通用模型 (gpt-5.5)",
@@ -128,15 +129,6 @@ def _builtin_llm_specs() -> list[dict]:
         api_key=settings.dolphin_api_key,
         model=settings.dolphin_model,  # gpt-5.5
         purpose="all",
-        is_default=True,
-    )
-    _append(
-        config_name="内置 Coding GPT (gpt-5.4)",
-        provider="gpt",
-        base_url=settings.coding_model_gpt54_base_url,
-        api_key=settings.coding_model_gpt54_api_key,
-        model=settings.coding_model_gpt54_model,  # gpt-5.4
-        purpose="coding",
         is_default=True,
     )
     _append(
@@ -151,7 +143,7 @@ def _builtin_llm_specs() -> list[dict]:
     return specs
 
 
-# 历史 builtin 名清单：之前 seed 出来现在不再要的（精简到 gpt5.5/gpt5.4/qwen3.6 后）
+# 历史 builtin 名清单：之前 seed 出来现在不再要的（精简到 gpt5.5/qwen3.6 后）
 # 启动 sync 时若 tenant 下有这些 config_name 自动删除，避免管理员手工清理。
 _OBSOLETE_BUILTIN_NAMES = {
     "内置通用模型 (MiniMax)",
@@ -159,7 +151,8 @@ _OBSOLETE_BUILTIN_NAMES = {
     "内置 Coding Qwen",
     "内置 Coding DeepSeek",
     "内置 Coding Codex",
-    "内置 Coding GPT",            # 旧名，新版改成 "内置 Coding GPT (gpt-5.4)"
+    "内置 Coding GPT",
+    "内置 Coding GPT (gpt-5.4)",
     "内置 Coding Sonnet",
     "内置 Coding Opus",
     "内置通用模型 (Dolphin gpt-5.5)",  # 旧名，新版改成 "内置通用模型 (gpt-5.5)"
@@ -177,10 +170,6 @@ async def sync_builtin_llm_configs(
     同时清理 _OBSOLETE_BUILTIN_NAMES 列表里的旧 builtin（之前 seed 出来现在
     不再要的），避免每次重启又出现一堆默认模型。
     """
-    specs = _builtin_llm_specs()
-    if not specs:
-        return
-
     tenant_id_list = list(tenant_ids or [])
     if tenant_id_list:
         tenants = (
@@ -191,6 +180,7 @@ async def sync_builtin_llm_configs(
     if not tenants:
         return
 
+    specs = _builtin_llm_specs()
     managed_names = {spec["config_name"] for spec in specs}
 
     for tenant in tenants:
@@ -205,16 +195,18 @@ async def sync_builtin_llm_configs(
             await db.delete(row)
         await db.flush()  # 让后续 select 看到删除结果
 
-        # 2. 已有同 (provider, model) 的用户配置则跳过新建（防止 builtin 跟用户自定义重复）
+        if not specs:
+            continue
+
+        # 2. 已有同 (provider, model, purpose) 的用户配置则跳过新建（防止 builtin 跟用户自定义重复）
         existing = (
             await db.execute(select(LLMConfig).where(LLMConfig.tenant_id == tenant.id))
         ).scalars().all()
-        user_provider_model = {(r.provider, r.model) for r in existing}
-        specs_to_skip = {
-            spec["config_name"] for spec in specs
-            if spec["config_name"] not in {row.config_name for row in existing}
-            and (spec["provider"], spec["model"]) in user_provider_model
-        }
+        existing_duplicate_by_key: dict[tuple[str, str, str], LLMConfig] = {}
+        for row in existing:
+            if row.config_name in managed_names:
+                continue
+            existing_duplicate_by_key.setdefault((row.provider, row.model, row.purpose), row)
         existing_by_name = {row.config_name: row for row in existing}
 
         manual_defaults = {
@@ -225,12 +217,17 @@ async def sync_builtin_llm_configs(
             for purpose in {"all", "coding", "builder"}
         }
 
-        synced_rows: list[LLMConfig] = []
+        synced_pairs: list[tuple[LLMConfig, dict]] = []
         for spec in specs:
             row = existing_by_name.get(spec["config_name"])
-            if row is None and spec["config_name"] in specs_to_skip:
-                # 已有用户配置同 provider+model，跳过新建 builtin 避免重复
-                continue
+            if row is None:
+                duplicate_row = existing_duplicate_by_key.get(
+                    (spec["provider"], spec["model"], spec["purpose"])
+                )
+                if duplicate_row is not None:
+                    # 复用用户已有同模型同用途配置，但仍保留 spec 元信息参与默认值判断。
+                    synced_pairs.append((duplicate_row, spec))
+                    continue
             if row is None:
                 row = LLMConfig(
                     tenant_id=tenant.id,
@@ -256,10 +253,10 @@ async def sync_builtin_llm_configs(
                 row.temperature = spec["temperature"]
                 if row.status not in {"active", "inactive", "error"}:
                     row.status = "active"
-            synced_rows.append(row)
+            synced_pairs.append((row, spec))
 
         by_purpose: dict[str, list[tuple[LLMConfig, dict]]] = {}
-        for row, spec in zip(synced_rows, specs):
+        for row, spec in synced_pairs:
             by_purpose.setdefault(spec["purpose"], []).append((row, spec))
 
         for purpose, rows in by_purpose.items():

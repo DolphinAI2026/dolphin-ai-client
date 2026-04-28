@@ -212,10 +212,14 @@
         <MembersPanel
           :title="`应用 ${membersDialogApp.app_name}`"
           :current-role="membersDialogRole"
+          :current-user-id="userStore.user?.id"
           :load-members="loadAppMembers"
+          :load-user-options="loadTenantUserOptions"
           :invite="inviteAppMember"
           :update-role="updateAppMemberRole"
           :remove="removeAppMember"
+          :open-user-management="openTenantUserManagement"
+          :can-open-user-management="userStore.isTenantAdmin"
         />
       </div>
     </div>
@@ -229,6 +233,7 @@ import { Delete, Grid, Link as LinkIcon, List, MoreFilled, Plus, Promotion, User
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { handleError } from '@/utils/errorHandler'
 import { applicationApi } from '@/api/application'
+import { authApi } from '@/api/auth'
 import { conversationApi, type ConversationWithApp } from '@/api/conversation'
 import BuilderFrame from '@/components/BuilderFrame.vue'
 import MembersPanel from '@/components/MembersPanel.vue'
@@ -236,7 +241,7 @@ import type { MergedApplication } from '@/types'
 import { buildPlatformProxyEntryUrl } from '@/utils/platformIframe'
 import { useUserStore } from '@/stores/user'
 import { applicationMembersApi } from '@/api/applicationMembers'
-import { normalizeRole, type ProjectRole, type ApplicationMember } from '@/types/collaboration'
+import { normalizeRole, type ProjectRole, type ApplicationMember, type MemberUserOption } from '@/types/collaboration'
 
 type AppTab = 'all' | 'active' | 'deployed' | 'draft'
 type ViewMode = 'list' | 'card'
@@ -294,7 +299,7 @@ function appStage(app: MergedApplication): AppStage {
     return { group: 'active', label: '配置生成', tone: 'active', progress: 76 }
   }
   if (app.local_status === 'updating') {
-    return { group: 'active', label: '自开发', tone: 'active', progress: 62 }
+    return { group: 'active', label: '更新中', tone: 'active', progress: 62 }
   }
   if (app.local_status === 'failed') {
     return { group: 'draft', label: '需求理解', tone: 'danger', progress: 18 }
@@ -337,6 +342,22 @@ function canOpenPlatform(app: MergedApplication) {
   return Boolean(app.apaas_url || app.apaas_app_id)
 }
 
+function isGeneratedApp(app: MergedApplication) {
+  return Boolean(
+    app.apaas_app_id ||
+    app.local_status === 'completed' ||
+    app.status === 'completed'
+  )
+}
+
+function appWorkspaceQuery(app: MergedApplication) {
+  const appId = String(appNumericId(app) ?? app.id)
+  if (isGeneratedApp(app)) {
+    return { app_id: appId, tab: 'spec', workspace: 'update' }
+  }
+  return { app_id: appId }
+}
+
 function openInPlatform(app: MergedApplication) {
   if (app.apaas_url) {
     window.open(app.apaas_url, '_blank', 'noopener,noreferrer')
@@ -350,19 +371,14 @@ function openInPlatform(app: MergedApplication) {
 }
 
 function openApp(app: MergedApplication) {
-  // Phase F Task 11: 主点击进入新 WorkspaceShell (/work/:appId)。
-  // 仅 local app（数字 id）能进 workspace；remote-only 应用 fallback 到老 chat 路径。
-  const appIdNum = appNumericId(app)
-  if (appIdNum !== null && appIdNum > 0) {
-    router.push(`/work/${appIdNum}`)
-  } else {
-    router.push({ path: '/chat', query: { app_id: String(app.id) } })
-  }
+  // WorkspaceShell is not a complete editing surface yet. Keep the primary
+  // application entry on ChatPage, which owns app-scoped SPEC/edit/deploy flow.
+  router.push({ path: '/chat', query: appWorkspaceQuery(app) })
 }
 
 function openAppInChat(app: MergedApplication) {
   // 备选：直达老 ChatPage（保留为 mini-action / 兼容入口）。
-  router.push({ path: '/chat', query: { app_id: String(app.id) } })
+  router.push({ path: '/chat', query: appWorkspaceQuery(app) })
 }
 
 function canDeployApp(app: MergedApplication) {
@@ -529,8 +545,8 @@ const membersDialogApp = ref<{ id: number; app_name: string } | null>(null)
 const membersDialogRole = ref<ProjectRole>('viewer')
 
 function canManageMembers(app: MergedApplication) {
-  // 仅 local（已落到我们后端）的应用支持成员管理
-  return app.source === 'local'
+  // 本地/已关联应用才有 Builder 侧成员关系；权限由弹窗内根据 effective role 再细分。
+  return app.source === 'local' || app.source === 'linked'
 }
 
 async function openMembersDialog(app: MergedApplication) {
@@ -554,9 +570,18 @@ async function loadAppMembers(): Promise<ApplicationMember[]> {
   return applicationMembersApi.list(membersDialogApp.value.id)
 }
 
-async function inviteAppMember(req: { username: string; role: ProjectRole }) {
+async function inviteAppMember(req: { username?: string; user_id?: number; role: ProjectRole }) {
   if (!membersDialogApp.value) return
   await applicationMembersApi.invite(membersDialogApp.value.id, req)
+}
+
+async function loadTenantUserOptions(): Promise<MemberUserOption[]> {
+  const users = await authApi.listActiveUsers()
+  return (users || []).map(user => ({ id: user.id, username: user.username }))
+}
+
+function openTenantUserManagement() {
+  router.push('/tenant-users')
 }
 
 async function updateAppMemberRole(userId: number, role: ProjectRole) {
@@ -572,36 +597,41 @@ async function removeAppMember(userId: number) {
 
 <style scoped>
 .apps-create-btn {
-  height: 30px;
+  height: 34px;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  border: 1px solid var(--b-ink);
-  border-radius: var(--b-radius-md);
-  background: var(--b-ink);
+  gap: 8px;
+  border: 1px solid #4357e8;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #5a6cff, #4154e8);
   color: #fff;
-  padding: 0 12px;
+  padding: 0 14px;
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 760;
   cursor: pointer;
+  box-shadow: 0 10px 22px rgba(65, 84, 232, 0.20);
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
 }
 
 .apps-create-btn:hover {
-  background: #252b38;
+  transform: translateY(-1px);
+  background: linear-gradient(135deg, #6677ff, #4b5df2);
+  box-shadow: 0 14px 28px rgba(65, 84, 232, 0.26);
 }
 
 :global(html[data-theme="dark"]) .apps-create-btn,
 :global(html[data-theme="dark"]) .apps-mini-action.primary {
-  background: var(--b-brand);
-  border-color: var(--b-brand);
-  color: #070a12;
+  background: linear-gradient(135deg, #7b88ff, #5265ff) !important;
+  border-color: rgba(154, 168, 255, 0.48) !important;
+  color: #ffffff !important;
+  box-shadow: 0 12px 26px rgba(82, 101, 255, 0.30) !important;
 }
 
 :global(html[data-theme="dark"]) .apps-create-btn:hover,
 :global(html[data-theme="dark"]) .apps-mini-action.primary:hover {
-  background: #a5b4fc;
-  border-color: #a5b4fc;
-  color: #070a12;
+  background: linear-gradient(135deg, #8a96ff, #6273ff) !important;
+  border-color: rgba(181, 190, 255, 0.62) !important;
+  color: #ffffff !important;
 }
 
 .apps-page {
@@ -1169,44 +1199,57 @@ async function removeAppMember(userId: number) {
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.4);
+  background: rgba(3, 7, 18, 0.64);
+  backdrop-filter: blur(6px);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 1000;
+  padding: 28px;
 }
 .modal {
-  background: var(--b-bg, #fff);
-  border-radius: 8px;
-  min-width: 480px;
-  max-width: 720px;
-  max-height: 80vh;
+  background: var(--b-panel);
+  border: 1px solid var(--b-line);
+  border-radius: var(--b-radius-md);
+  min-width: min(480px, calc(100vw - 32px));
+  max-width: min(960px, calc(100vw - 32px));
+  max-height: min(86vh, 820px);
   overflow: auto;
+  box-shadow: var(--b-shadow-lg);
 }
 .modal-large {
-  min-width: 640px;
+  width: min(960px, calc(100vw - 32px));
 }
 .modal-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--b-border, #eee);
+  gap: 14px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--b-line);
 }
 .modal-header h3 {
   margin: 0;
+  color: var(--b-text);
+  font-size: 16px;
+  font-weight: 750;
 }
 .builder-btn {
-  padding: 6px 12px;
-  border: 1px solid var(--b-line, #ddd);
-  background: var(--b-panel, #f5f5f5);
-  border-radius: 4px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--b-line);
+  background: var(--b-bg-sub);
+  color: var(--b-text);
+  border-radius: var(--b-radius-sm);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
   cursor: pointer;
 }
 .builder-btn-primary {
-  background: var(--b-primary, #1f8a4d);
-  color: #fff;
-  border-color: var(--b-primary, #1f8a4d);
+  background: var(--b-brand);
+  color: #070a12;
+  border-color: var(--b-brand);
 }
 .builder-btn:disabled {
   opacity: 0.5;

@@ -7,7 +7,7 @@ import { ElMessage } from 'element-plus'
 const spec = useSpecStore()
 
 interface PhaseStep {
-  key: Phase | 'code' | 'deploy'
+  key: Phase | 'review' | 'deploy'
   label: string
   status: 'done' | 'active' | 'pending'
   clickable: boolean
@@ -36,13 +36,13 @@ const steps = computed<PhaseStep[]>(() => {
       status: currentIdx >= 2 ? (currentIdx > 2 ? 'done' : 'active') : 'pending',
       clickable: false, // generating runs only when SPEC complete
     },
-    { key: 'code', label: '自开发', status: 'pending', clickable: false },
+    { key: 'review', label: '验证确认', status: currentIdx > 2 ? 'done' : 'pending', clickable: false },
     { key: 'deploy', label: '部署', status: 'pending', clickable: false },
   ]
 })
 
 async function handleClick(step: PhaseStep) {
-  if (!step.clickable || step.key === 'code' || step.key === 'deploy') return
+  if (!step.clickable || step.key === 'review' || step.key === 'deploy') return
   try {
     await spec.transitionPhase(step.key as Phase, '用户在 PhaseBar 点击切换')
   } catch (e: unknown) {

@@ -69,7 +69,7 @@
                 type="button"
                 @click="advancedOpen = !advancedOpen"
               >
-                {{ advancedOpen ? '收起高级补充' : '补充项目 / 模型 / 自开发关注点' }}
+                {{ advancedOpen ? '收起高级补充' : '补充项目 / 模型 / 开发边界' }}
               </button>
               <button class="secondary-action compact-action" type="button" :disabled="isGenerating" @click="resetPanel">
                 清空
@@ -90,7 +90,7 @@
       <div v-if="advancedOpen && builderMode === 'cowork'" class="advanced-panel">
         <div class="advanced-panel-head">
           <div class="advanced-panel-title">高级补充</div>
-          <div class="advanced-panel-subtitle">可选：绑定协作项目、切换分析模型，或补充你已经知道需要自开发的部分。</div>
+          <div class="advanced-panel-subtitle">可选：绑定协作项目、切换分析模型，或补充你已经知道需要进入开发入口的部分。</div>
         </div>
         <div class="composer-context-row">
           <div class="field-group">
@@ -135,11 +135,11 @@
           </div>
         </div>
         <label class="input-block">
-          <span class="input-label">自开发关注点</span>
+          <span class="input-label">开发边界</span>
           <textarea
             v-model="codingFocus"
             class="panel-textarea panel-textarea-secondary"
-            placeholder="如果你已经知道哪些部分可能需要自开发，可以补充给 AI，例如：复杂页面、专用组件、外部接口、统计看板等。"
+            placeholder="如果你已经知道哪些部分可能需要进入开发入口，可以补充给 AI，例如：复杂页面、专用组件、外部接口、统计看板等。"
             rows="4"
           ></textarea>
         </label>
@@ -199,7 +199,7 @@
 
         <div class="design-doc-card">
           <div class="section-kicker">统一设计文档</div>
-          <div class="design-doc-title">AI 已把需求拆成“配置部分”和“自开发部分”</div>
+          <div class="design-doc-title">AI 已把需求拆成“配置部分”和“开发边界”</div>
           <div class="design-doc-grid">
             <article class="design-section-card">
               <div class="design-section-label">配置部分</div>
@@ -216,7 +216,7 @@
               </div>
             </article>
             <article class="design-section-card design-section-card-accent">
-              <div class="design-section-label">自开发部分</div>
+              <div class="design-section-label">开发边界</div>
               <div class="design-section-title">{{ codingScopeMetric }}</div>
               <div class="design-section-text">{{ codingScopeSummary }}</div>
               <div class="design-section-points">
@@ -333,7 +333,7 @@
         <div class="empty-state-text">
           这里不会先堆一排工具入口。
           <br />
-          AI 会先理解业务目标，再判断平台搭建与自开发边界，最后给出一个明确的下一步。
+          AI 会先理解业务目标，再判断平台搭建与开发边界，最后给出一个明确的下一步。
         </div>
       </div>
     </article>
@@ -411,7 +411,7 @@ const statusItems = ref<StatusItem[]>([
 const resultTabs = [
   { key: 'structure' as ResultTabKey, label: '完整设计文档' },
   { key: 'builder' as ResultTabKey, label: '配置生成文档' },
-  { key: 'coding' as ResultTabKey, label: '自开发任务文档' },
+  { key: 'coding' as ResultTabKey, label: '开发任务文档' },
 ]
 
 const builderModes = [
@@ -420,18 +420,18 @@ const builderModes = [
     label: 'Chat',
     zh: '问答 / 操作',
     eyebrow: 'Chat',
-    title: '直接进入 Chat 工作台',
-    subtitle: '适合问业务数据、查流程、操作已有应用，输入会带到真实 Chat 工作台里继续处理。',
+    title: '直接进入 AI-Builder',
+    subtitle: '适合问业务数据、查流程、操作已有应用，输入会带到真实 AI-Builder 里继续处理。',
     placeholder: '比如：上季度华东销售额是多少？工单 #2408 为什么卡住了？',
     cta: '进入 Chat',
   },
   {
     key: 'cowork' as BuilderModeKey,
-    label: 'CoWork',
-    zh: '协同构建',
+    label: 'Builder',
+    zh: '智能搭建',
     eyebrow: 'AI Builder',
     title: '先用对话讲清楚你要交付什么',
-    subtitle: 'AI 会先生成统一设计文档，再拆成“配置部分”和“自开发部分”。你确认之后，系统再继续生成完整的低代码应用。',
+    subtitle: 'AI 会先生成统一设计文档，再拆成“配置部分”和“开发边界”。你确认之后，系统再继续生成完整的低代码应用。',
     placeholder: '比如：做一个设备巡检系统，巡检员录入巡检记录，主管审核并查看统计分析。',
     cta: '发送给 AI',
   },
@@ -441,7 +441,7 @@ const builderModes = [
     zh: '直接写码',
     eyebrow: 'AI Coding',
     title: '直接进入 IDE 编码',
-    subtitle: '适合已有项目或明确的自开发任务。输入会进入真实 AI Coding 工作台，由当前工程的开发链路继续执行。',
+    subtitle: '适合已有项目或明确的代码任务。输入会进入真实 Vibe Coding 工作台，由当前工程的开发链路继续执行。',
     placeholder: '比如：给 CRM 加一个按筛选条件导出 Excel 的 Hook，字段按当前筛选。',
     cta: '进入 IDE',
   },
@@ -515,7 +515,7 @@ const customDevHighlights = computed(() => {
   const items = [
     codingFocus.value.trim() ? '这部分会先整理成可执行的开发任务简报' : '',
     `推荐进入 ${recommendedSceneLabel.value} 场景继续生成`,
-    '只处理平台配置承接不了的部分，避免过度自开发',
+    '只处理平台配置承接不了的部分，避免过度开发扩展',
     '生成后的代码任务会继续挂在同一个项目上下文里',
   ].filter(Boolean)
   return items.slice(0, 4)
@@ -528,7 +528,7 @@ const executionPlan = computed(() => {
   }
   const secondStep = hasExplicitCodingFocus.value
     ? {
-        title: '再处理必须自开发的部分',
+        title: '再处理必须进入开发入口的部分',
         detail: `把 ${recommendedSceneLabel.value} 任务整理成可执行的 Coding Brief，避免用户自己判断技术路径。`,
       }
     : {
@@ -548,14 +548,14 @@ const primaryActionLabel = computed(() => (
 
 const primaryActionTitle = computed(() => (
   hasExplicitCodingFocus.value
-    ? '确认后，AI 会先生成配置部分，再继续生成自开发部分'
-    : '确认后，AI 会先完成配置生成，再判断是否需要继续自开发'
+    ? '确认后，AI 会先生成配置部分，再继续整理开发边界'
+    : '确认后，AI 会先完成配置生成，再判断是否需要进入开发入口'
 ))
 
 const primaryActionText = computed(() => (
   hasExplicitCodingFocus.value
-    ? '这一步相当于确认统一设计文档。AI 会先用低代码配置生成主体应用，再把自开发部分交给智能开发继续补齐。'
-    : '这一步会先启动配置生成。若平台配置不足以完整交付，AI 会继续拆出需要补充的自开发任务。'
+    ? '这一步相当于确认统一设计文档。AI 会先用低代码配置生成主体应用，再把开发边界交给独立开发入口继续补齐。'
+    : '这一步会先启动配置生成。若平台配置不足以完整交付，AI 会继续拆出需要进入开发入口的任务。'
 ))
 
 const showCodingAction = computed(() => Boolean(codingBrief.value.trim()))
@@ -631,7 +631,7 @@ function resetPanel() {
   setStatus([
     { label: '等待输入业务需求或上传文档', state: 'idle' },
     { label: 'AI 会先统一理解需求', state: 'idle' },
-    { label: '随后拆成配置部分与自开发部分', state: 'idle' },
+    { label: '随后拆成配置部分与开发边界', state: 'idle' },
   ])
 }
 
@@ -706,13 +706,13 @@ async function generateUnifiedPlan() {
   setStatus([
     { label: 'AI 已接管这次任务', state: 'running', detail: '正在建立统一上下文' },
     { label: '理解需求并生成统一设计文档', state: 'idle' },
-    { label: '拆成配置部分与自开发部分', state: 'idle' },
+    { label: '拆成配置部分与开发边界', state: 'idle' },
     { label: '等待确认后开始生成应用', state: 'idle' },
   ])
 
   try {
     updateStatus(1, { state: 'running', detail: 'AI 正在理解业务需求并整理统一设计文档' })
-    updateStatus(2, { state: 'running', detail: 'AI 正在拆出配置部分和自开发部分' })
+    updateStatus(2, { state: 'running', detail: 'AI 正在拆出配置部分和开发边界' })
     updateStatus(3, { state: 'running', detail: '正在整理确认后要执行的生成动作' })
 
     const result = await requirementsApi.unifiedPlan({
@@ -729,6 +729,35 @@ async function generateUnifiedPlan() {
         : `会话 #${result.session_id} 已创建`,
     })
 
+    if (result.needs_user_input || result.validation?.needs_user_input) {
+      const message = result.validation?.assistant_message || result.summary || '设计文档预检发现编码冲突，请先补充新的模型或字段编码。'
+      requirementDigest.value = message
+      generatedSummary.value = ''
+      docResult.value = null
+      builderMarkdown.value = ''
+      codingBrief.value = ''
+      recommendedSceneCategory.value = 'page-pc'
+      activeTab.value = 'structure'
+      updateStatus(1, {
+        state: 'error',
+        detail: '生成标准设计文档前发现编码冲突，需要用户先确认新编码',
+      })
+      updateStatus(2, {
+        state: 'idle',
+        detail: '等待用户回复新的模型编码或字段编码',
+      })
+      updateStatus(3, {
+        state: 'idle',
+        detail: '编码确认后再继续生成标准 MD 并创建应用',
+      })
+      ElMessage.warning('需要先确认编码后再生成设计文档')
+      return
+    }
+
+    if (!result.doc_result) {
+      throw new Error(result.summary || '统一方案生成失败：后端未返回设计文档')
+    }
+
     requirementDigest.value = result.summary || ''
     generatedSummary.value = ''
     docResult.value = result.doc_result
@@ -744,7 +773,7 @@ async function generateUnifiedPlan() {
     })
     updateStatus(2, {
       state: 'done',
-      detail: result.used_fallback ? '已切换到基础分析模式，先生成基础设计文档' : '配置部分与自开发部分已拆分完成',
+      detail: result.used_fallback ? '已切换到基础分析模式，先生成基础设计文档' : '配置部分与开发边界已拆分完成',
     })
     updateStatus(3, {
       state: 'done',

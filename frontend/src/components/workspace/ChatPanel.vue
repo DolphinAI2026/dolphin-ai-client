@@ -7,14 +7,14 @@
       @done="onProposalDone"
     />
     <div class="cta">
-      <p class="muted">完整 Chat 工作台体验</p>
+      <p class="muted">完整 AI-Builder 体验</p>
       <button class="builder-btn builder-btn-primary big" type="button" @click="openChat">
-        打开 Chat 工作台 ↗
+        打开 AI-Builder ↗
       </button>
       <p class="hint muted small">
         · 跟 AI 对话生成 / 修改 SPEC<br />
         · 上传文档自动解析<br />
-        · 5 阶段流程：理解需求 → SPEC → 配置 → 自开发 → 部署
+        · 4 阶段流程：理解需求 → SPEC → 配置 → 部署
       </p>
       <p class="meta muted small" v-if="store.state?.current_draft || store.state?.canonical">
         当前 SPEC：v{{ store.state?.canonical?.version ?? store.state?.current_draft?.version }}
@@ -29,9 +29,11 @@
 
 <script setup lang="ts">
 import { useWorkspaceStore } from '@/stores/workspace'
+import { useRouter } from 'vue-router'
 import PromoteApproveApplyCard from './PromoteApproveApplyCard.vue'
 
 const store = useWorkspaceStore()
+const router = useRouter()
 
 function onProposalDone(_id: string) {
   // store.refresh() 已在 PromoteApproveApplyCard 内部调用
@@ -40,8 +42,7 @@ function onProposalDone(_id: string) {
 function openChat() {
   const appId = store.application?.id
   if (!appId) return
-  // 同窗口打开（保留浏览器后退到 WorkspaceShell）
-  window.location.href = `${import.meta.env.BASE_URL}chat?deploy_app_id=${appId}`
+  router.push({ path: '/chat', query: { app_id: String(appId) } })
 }
 </script>
 

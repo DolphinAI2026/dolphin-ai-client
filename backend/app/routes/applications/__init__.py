@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 from app.database import get_db
 from app.models import User, Application, DocumentVersion, ChangePlan, ApiCallLog, PlatformEnv, Conversation, ConfigSnapshot
+from app.models.collaboration import ApplicationMember
 from app.auth import get_current_user
 from app.schemas import ApplicationCreate, ApplicationResponse, MergedAppResponse
 from app.deps import get_auth_context, AuthContext
@@ -26,7 +27,7 @@ from app.error_messages import (
 )
 
 from app.services.config_converter import convert_analysis_to_app_config
-from app.project_access import get_project_access, project_role_at_least, require_project_access
+from app.project_access import get_project_access, normalize_project_role, project_role_at_least, require_project_access
 
 
 # 共享 helper 从子模块 re-export（保持 `from app.routes.applications import _xxx` 的向后兼容）
@@ -48,6 +49,27 @@ async def _get_application_permissions(
     db: AsyncSession,
     app: Application,
 ) -> Optional[dict[str, bool]]:
+    def role_permissions(role: str) -> dict[str, bool]:
+        normalized = normalize_project_role(role)
+        return {
+            Action.VIEW: True,
+            Action.EDIT: project_role_at_least(normalized, "contributor"),
+            Action.DELETE: normalized == "owner",
+            Action.CLONE: project_role_at_least(normalized, "contributor"),
+            "publish": project_role_at_least(normalized, "maintainer"),
+            "can_manage_members": project_role_at_least(normalized, "maintainer"),
+            "can_manage_member_roles": normalized == "owner",
+            "access_role": normalized,
+        }
+
+    if ctx.tenant_role in ("platform_admin", "tenant_admin"):
+        return {
+            **role_permissions("owner"),
+            "access_role": "tenant_admin",
+        }
+
+    effective_role: Optional[str] = "owner" if (app.created_by == ctx.user.id or app.user_id == ctx.user.id) else None
+
     if app.project_id:
         access = await get_project_access(
             db,
@@ -55,39 +77,28 @@ async def _get_application_permissions(
             user_id=ctx.user.id,
             tenant_id=ctx.tenant_id,
         )
-        if not access:
-            return None
-        return {
-            Action.VIEW: True,
-            Action.EDIT: project_role_at_least(access.role, "member"),
-            Action.DELETE: project_role_at_least(access.role, "admin"),
-            Action.CLONE: project_role_at_least(access.role, "member"),
-            "publish": project_role_at_least(access.role, "admin"),
-            "access_role": access.role,
-        }
+        if access:
+            effective_role = max(
+                [role for role in (effective_role, access.role) if role],
+                key=lambda role: {"viewer": 1, "contributor": 2, "maintainer": 3, "owner": 4}.get(normalize_project_role(role), 0),
+            )
 
-    if ctx.tenant_role in ("platform_admin", "tenant_admin"):
-        return {
-            Action.VIEW: True,
-            Action.EDIT: True,
-            Action.DELETE: True,
-            Action.CLONE: True,
-            "publish": True,
-            "access_role": "tenant_admin",
-        }
+    direct_member = (await db.execute(
+        select(ApplicationMember).where(
+            ApplicationMember.application_id == app.id,
+            ApplicationMember.user_id == ctx.user.id,
+        )
+    )).scalar_one_or_none()
+    if direct_member:
+        effective_role = max(
+            [role for role in (effective_role, direct_member.role) if role],
+            key=lambda role: {"viewer": 1, "contributor": 2, "maintainer": 3, "owner": 4}.get(normalize_project_role(role), 0),
+        )
 
-    is_owner = app.created_by == ctx.user.id or app.user_id == ctx.user.id
-    if not is_owner:
+    if not effective_role:
         return None
 
-    return {
-        Action.VIEW: True,
-        Action.EDIT: True,
-        Action.DELETE: True,
-        Action.CLONE: True,
-        "publish": True,
-        "access_role": "owner",
-    }
+    return role_permissions(effective_role)
 
 
 async def _require_application_permission(

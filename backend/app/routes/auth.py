@@ -7,49 +7,21 @@ from app.database import get_db
 from app.models import User
 from app.models.tenant import Tenant, UserTenant, Role
 from app.schemas import (
-    UserLogin, UserRegister, Token, UserInfo,
+    UserLogin, Token, UserInfo,
     LoginResponse, TenantOption, TenantSelectRequest
 )
 from app.auth import verify_password, get_password_hash, create_access_token, create_selection_token
-from app.deps import get_auth_context, AuthContext, require_tenant_admin
+from app.deps import (
+    AuthContext,
+    get_auth_context,
+    require_tenant_admin,
+    resolve_default_tenant_id_for_user,
+)
 from app.config import settings
 from app.error_messages import SELECT_TOKEN_INVALID, SELECT_TOKEN_EXPIRED
-from app.seed_data import seed_default_roles, sync_builtin_llm_configs
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/auth", tags=["认证"])
-
-
-async def _get_default_tenant_admin_role(db: AsyncSession, tenant_id: int) -> Role | None:
-    result = await db.execute(
-        select(Role).where(
-            Role.tenant_id == tenant_id,
-            Role.role_code == "R_tenant_admin",
-        )
-    )
-    return result.scalar_one_or_none()
-
-
-async def _create_isolated_signup_tenant(
-    db: AsyncSession,
-    *,
-    username: str,
-    user_id: int,
-) -> tuple[Tenant, Role | None]:
-    tenant = Tenant(
-        tenant_name=f"{username} 的组织",
-        tenant_code=f"self_{user_id}",
-        plan_type="free",
-        max_applications=10,
-        status=1,
-    )
-    db.add(tenant)
-    await db.flush()
-
-    await seed_default_roles(db, tenant.id, commit=False)
-    await sync_builtin_llm_configs(db, tenant_ids=[tenant.id], commit=False)
-    admin_role = await _get_default_tenant_admin_role(db, tenant.id)
-    return tenant, admin_role
 
 
 def _resolve_tenant_role(role: Optional[Role]) -> tuple[str, Optional[str], dict]:
@@ -65,12 +37,16 @@ def _resolve_tenant_role(role: Optional[Role]) -> tuple[str, Optional[str], dict
     return "member", role.role_name, role.permissions or {}
 
 
-def _serialize_tenant_user(user: User, membership: UserTenant, role: Optional[Role]) -> dict:
+def _serialize_tenant_user(user: User, membership: UserTenant, role: Optional[Role], tenant: Optional[Tenant] = None) -> dict:
     tenant_role, role_name, permissions = _resolve_tenant_role(role)
     return {
         "id": user.id,
         "username": user.username,
         "is_active": user.is_active,
+        "is_platform_admin": user.is_platform_admin,
+        "tenant_id": membership.tenant_id,
+        "tenant_name": tenant.tenant_name if tenant else None,
+        "tenant_summary": tenant.tenant_name if tenant else None,
         "tenant_status": membership.status,
         "tenant_role": tenant_role,
         "role_code": role.role_code if role else None,
@@ -79,6 +55,75 @@ def _serialize_tenant_user(user: User, membership: UserTenant, role: Optional[Ro
         "joined_at": membership.joined_at.isoformat() if membership.joined_at else None,
         "created_at": user.created_at.isoformat() if user.created_at else None,
     }
+
+
+def _serialize_platform_user(user: User, memberships: list[tuple[UserTenant, Tenant, Optional[Role]]]) -> dict:
+    active_memberships = [m for m, _tenant, _role in memberships if m.status == 1]
+    tenant_names = [tenant.tenant_name for _m, tenant, _role in memberships]
+    tenant_summary = "、".join(tenant_names[:3])
+    if len(tenant_names) > 3:
+        tenant_summary += f" 等 {len(tenant_names)} 个组织"
+    if not tenant_summary:
+        tenant_summary = "未加入组织"
+
+    tenant_role = "member"
+    role_code = "normal_user"
+    role_name = "普通账号"
+    permissions: dict = {}
+    if user.is_platform_admin:
+        tenant_role = "platform_admin"
+        role_code = "platform_admin"
+        role_name = "平台超级管理员"
+        tenant_summary = "全部组织"
+    else:
+        for _membership, _tenant, role in memberships:
+            resolved_role, resolved_name, resolved_permissions = _resolve_tenant_role(role)
+            if resolved_role == "tenant_admin":
+                tenant_role = resolved_role
+                role_code = role.role_code if role else "normal_user"
+                role_name = resolved_name or role_name
+                permissions = resolved_permissions
+                break
+            if resolved_role != "member" and tenant_role == "member":
+                tenant_role = resolved_role
+                role_code = role.role_code if role else "normal_user"
+                role_name = resolved_name or role_name
+                permissions = resolved_permissions
+
+    return {
+        "id": user.id,
+        "username": user.username,
+        "is_active": user.is_active,
+        "is_platform_admin": user.is_platform_admin,
+        "tenant_id": None,
+        "tenant_name": None,
+        "tenant_summary": tenant_summary,
+        "tenant_status": 1 if user.is_active else 0,
+        "tenant_role": tenant_role,
+        "role_code": role_code,
+        "role_name": role_name,
+        "org_permissions": permissions,
+        "joined_at": active_memberships[0].joined_at.isoformat() if active_memberships else None,
+        "created_at": user.created_at.isoformat() if user.created_at else None,
+    }
+
+
+async def _load_user_memberships(
+    db: AsyncSession, user_ids: list[int]
+) -> dict[int, list[tuple[UserTenant, Tenant, Optional[Role]]]]:
+    if not user_ids:
+        return {}
+    result = await db.execute(
+        select(UserTenant, Tenant, Role)
+        .join(Tenant, Tenant.id == UserTenant.tenant_id)
+        .outerjoin(Role, Role.id == UserTenant.role_id)
+        .where(UserTenant.user_id.in_(user_ids))
+        .order_by(Tenant.tenant_name.asc(), UserTenant.joined_at.asc())
+    )
+    grouped: dict[int, list[tuple[UserTenant, Tenant, Optional[Role]]]] = {}
+    for membership, tenant, role in result.all():
+        grouped.setdefault(membership.user_id, []).append((membership, tenant, role))
+    return grouped
 
 
 class UpdateTenantUserStatusRequest(BaseModel):
@@ -93,69 +138,6 @@ class InviteTenantUserRequest(BaseModel):
     username: str
     password: Optional[str] = None
     role_code: Optional[str] = None
-
-
-@router.post("/register", response_model=Token)
-async def register(
-    user_data: UserRegister,
-    db: Annotated[AsyncSession, Depends(get_db)]
-):
-    # 检查用户名是否已存在
-    result = await db.execute(select(User).where(User.username == user_data.username))
-    if result.scalar_one_or_none():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="用户名已存在"
-        )
-
-    # 创建新用户
-    hashed_password = get_password_hash(user_data.password)
-    new_user = User(
-        username=user_data.username,
-        hashed_password=hashed_password
-    )
-    db.add(new_user)
-    await db.flush()
-
-    signup_mode = (settings.self_signup_mode or "isolated_tenant").strip().lower()
-
-    if signup_mode == "invite_only":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="当前环境已关闭开放注册，请联系管理员邀请加入组织",
-        )
-
-    if signup_mode == "isolated_tenant":
-        target_tenant, target_role = await _create_isolated_signup_tenant(
-            db,
-            username=user_data.username,
-            user_id=new_user.id,
-        )
-    elif signup_mode == "shared_default_tenant":
-        result = await db.execute(select(Tenant).where(Tenant.tenant_code == "default"))
-        target_tenant = result.scalar_one_or_none()
-        if not target_tenant:
-            raise HTTPException(status_code=500, detail="系统未初始化")
-        target_role = await _get_default_tenant_admin_role(db, target_tenant.id)
-    else:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"无效的注册模式: {settings.self_signup_mode}",
-        )
-
-    user_tenant = UserTenant(
-        user_id=new_user.id,
-        tenant_id=target_tenant.id,
-        role_id=target_role.id if target_role else None,
-        is_default=True,
-        status=1
-    )
-    db.add(user_tenant)
-    await db.commit()
-
-    # 直接返回 JWT（单租户）
-    access_token = create_access_token(data={"sub": new_user.id}, tenant_id=target_tenant.id)
-    return Token(access_token=access_token)
 
 
 @router.post("/login", response_model=LoginResponse)
@@ -179,9 +161,11 @@ async def login(
             detail="用户已被禁用"
         )
 
-    # 平台管理员 — 直接登录，无租户
+    # 平台管理员直接进入默认租户上下文。平台管理权限仍由
+    # is_platform_admin 标识提供，tenant_id 用于租户级配置页查询。
     if user.is_platform_admin:
-        access_token = create_access_token(data={"sub": user.id}, tenant_id=None)
+        tenant_id = await resolve_default_tenant_id_for_user(db, user.id)
+        access_token = create_access_token(data={"sub": user.id}, tenant_id=tenant_id)
         return LoginResponse(access_token=access_token)
 
     # 获取用户的租户成员关系
@@ -292,6 +276,24 @@ async def list_tenant_roles(
     ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
+    if ctx.tenant_role == "platform_admin":
+        return [
+            {
+                "id": -1,
+                "role_code": "normal_user",
+                "role_name": "普通账号",
+                "is_system": True,
+                "permissions": {},
+            },
+            {
+                "id": 0,
+                "role_code": "platform_admin",
+                "role_name": "平台超级管理员",
+                "is_system": True,
+                "permissions": {"*": True},
+            },
+        ]
+
     result = await db.execute(
         select(Role).where(Role.tenant_id == ctx.tenant_id).order_by(Role.is_system.desc(), Role.created_at.asc())
     )
@@ -313,15 +315,22 @@ async def list_tenant_users(
     ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
+    if ctx.tenant_role == "platform_admin":
+        result = await db.execute(select(User).order_by(User.created_at.asc(), User.id.asc()))
+        users = result.scalars().all()
+        memberships = await _load_user_memberships(db, [user.id for user in users])
+        return [_serialize_platform_user(user, memberships.get(user.id, [])) for user in users]
+
     result = await db.execute(
-        select(UserTenant, User, Role)
+        select(UserTenant, User, Tenant, Role)
         .join(User, User.id == UserTenant.user_id)
+        .join(Tenant, Tenant.id == UserTenant.tenant_id)
         .outerjoin(Role, Role.id == UserTenant.role_id)
         .where(UserTenant.tenant_id == ctx.tenant_id)
         .order_by(UserTenant.joined_at.asc(), User.created_at.asc())
     )
     rows = result.all()
-    return [_serialize_tenant_user(user, membership, role) for membership, user, role in rows]
+    return [_serialize_tenant_user(user, membership, role, tenant) for membership, user, tenant, role in rows]
 
 
 @router.post("/tenant-users/invite")
@@ -335,6 +344,30 @@ async def invite_tenant_user(
         raise HTTPException(status_code=400, detail="用户名不能为空")
 
     role_code = (req.role_code or "R_developer").strip() or "R_developer"
+    if ctx.tenant_role == "platform_admin":
+        if role_code not in ("platform_admin", "normal_user"):
+            raise HTTPException(status_code=400, detail="平台管理员只能创建平台超级管理员或普通账号")
+        user_result = await db.execute(select(User).where(User.username == username))
+        user = user_result.scalar_one_or_none()
+        if not user:
+            if not req.password:
+                raise HTTPException(status_code=400, detail="用户不存在，请提供初始密码创建账号")
+            user = User(
+                username=username,
+                hashed_password=get_password_hash(req.password),
+                is_platform_admin=role_code == "platform_admin",
+            )
+            db.add(user)
+            await db.flush()
+        else:
+            if role_code == "platform_admin":
+                user.is_platform_admin = True
+        user.is_active = True
+        await db.commit()
+        await db.refresh(user)
+        memberships = await _load_user_memberships(db, [user.id])
+        return _serialize_platform_user(user, memberships.get(user.id, []))
+
     role_result = await db.execute(
         select(Role).where(
             Role.tenant_id == ctx.tenant_id,
@@ -401,6 +434,17 @@ async def update_tenant_user_status(
     if user_id == ctx.user.id:
         raise HTTPException(status_code=400, detail="不能在当前会话里禁用自己")
 
+    if ctx.tenant_role == "platform_admin":
+        result = await db.execute(select(User).where(User.id == user_id))
+        user = result.scalar_one_or_none()
+        if not user:
+            raise HTTPException(status_code=404, detail="用户不存在")
+        user.is_active = req.status == 1
+        await db.commit()
+        await db.refresh(user)
+        memberships = await _load_user_memberships(db, [user.id])
+        return _serialize_platform_user(user, memberships.get(user.id, []))
+
     result = await db.execute(
         select(UserTenant, User, Role)
         .join(User, User.id == UserTenant.user_id)
@@ -428,6 +472,21 @@ async def update_tenant_user_role(
     ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
+    if ctx.tenant_role == "platform_admin":
+        if req.role_code not in ("platform_admin", "normal_user"):
+            raise HTTPException(status_code=400, detail="平台管理员只能切换平台超级管理员或普通账号")
+        result = await db.execute(select(User).where(User.id == user_id))
+        user = result.scalar_one_or_none()
+        if not user:
+            raise HTTPException(status_code=404, detail="用户不存在")
+        if user_id == ctx.user.id and req.role_code != "platform_admin":
+            raise HTTPException(status_code=400, detail="不能取消自己的平台超级管理员权限")
+        user.is_platform_admin = req.role_code == "platform_admin"
+        await db.commit()
+        await db.refresh(user)
+        memberships = await _load_user_memberships(db, [user.id])
+        return _serialize_platform_user(user, memberships.get(user.id, []))
+
     membership_result = await db.execute(
         select(UserTenant, User)
         .join(User, User.id == UserTenant.user_id)

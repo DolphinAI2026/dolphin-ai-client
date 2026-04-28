@@ -18,6 +18,8 @@ from app.routes.application_members import (
     invite_application_member,
     list_application_members,
 )
+from app.routes.applications import _get_application_permissions
+from app.permissions import Action
 
 
 async def _make_user(db, username: str) -> User:
@@ -181,6 +183,27 @@ async def test_invite_duplicate_returns_400(db_session):
 
 
 @pytest.mark.asyncio
+async def test_direct_application_member_gets_application_permissions(db_session):
+    """直接邀请的应用成员应能进入应用列表/详情权限计算。"""
+    s = await _seed(db_session)
+    ctx = AuthContext(
+        user=s["direct_user"],
+        tenant_id=s["tenant"].id,
+        tenant_role="member",
+        org_permissions={"application:view": True, "application:edit": True},
+    )
+
+    perms = await _get_application_permissions(ctx, db_session, s["application"])
+
+    assert perms is not None
+    assert perms[Action.VIEW] is True
+    assert perms[Action.EDIT] is True
+    assert perms["publish"] is False
+    assert perms["can_manage_members"] is False
+    assert perms["access_role"] == "contributor"
+
+
+@pytest.mark.asyncio
 async def test_only_owner_can_invite_maintainer(db_session):
     """contributor 调用者尝试邀请 maintainer → 403"""
     s = await _seed(db_session)
@@ -195,7 +218,12 @@ async def test_only_owner_can_invite_maintainer(db_session):
     pm.role = "maintainer"
     await db_session.commit()
 
-    ctx = _ctx_for(s["pm_user"], s["tenant"].id)
+    ctx = AuthContext(
+        user=s["pm_user"],
+        tenant_id=s["tenant"].id,
+        tenant_role="member",
+        org_permissions={"application:view": True, "application:edit": True},
+    )
     req = InviteAppMemberRequest(user_id=s["outside_user"].id, role="maintainer")
     with pytest.raises(HTTPException) as exc:
         await invite_application_member(s["application"].id, req, ctx, db_session)

@@ -78,9 +78,9 @@
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                 编辑
               </button>
-              <button class="env-action-btn danger" @click="handleDelete(env)" title="删除">
+              <button class="env-action-btn danger" @click="handleDelete(env)" :disabled="env._deleting" title="删除">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-                删除
+                {{ env._deleting ? '删除中...' : '删除' }}
               </button>
             </div>
           </div>
@@ -336,6 +336,7 @@ async function setActiveTab(tab: 'envs' | 'llm') {
 interface EnvWithUI extends PlatformEnv {
   _testing?: boolean
   _logging?: boolean
+  _deleting?: boolean
 }
 
 const envs = ref<EnvWithUI[]>([])
@@ -475,10 +476,26 @@ async function handleDelete(env: PlatformEnv) {
       cancelButtonText: '取消',
       type: 'warning',
     })
-    await platformEnvApi.delete(env.id)
-    ElMessage.success('已删除')
+  } catch {
+    return
+  }
+
+  const target = env as EnvWithUI
+  target._deleting = true
+  try {
+    const res: any = await platformEnvApi.delete(env.id)
+    const unlinked = Number(res?.unlinked_applications || 0)
+    if (unlinked > 0) {
+      ElMessage.success(`已删除，并解绑 ${unlinked} 个关联应用`)
+    } else {
+      ElMessage.success('已删除')
+    }
     await loadEnvs()
-  } catch { /* cancelled */ }
+  } catch (e: any) {
+    handleError(e, { fallback: '删除失败' })
+  } finally {
+    target._deleting = false
+  }
 }
 
 // ==================== LLM 模型配置相关 ====================
@@ -549,7 +566,7 @@ async function openLlmCreate() {
 function openLlmEdit(cfg: LlmConfig) {
   editingLlm.value = cfg
   llmForm.config_name = cfg.config_name
-  llmForm.provider = cfg.provider
+  llmForm.provider = cfg.provider === 'gpt' ? 'dolphin' : cfg.provider
   llmForm.base_url = cfg.base_url
   llmForm.api_key = ''
   llmForm.model = cfg.model
@@ -816,9 +833,18 @@ watch(
 
 :global(html[data-theme="dark"]) .new-btn,
 :global(html[data-theme="dark"]) .empty-add-btn {
-  background: var(--b-brand);
-  border-color: var(--b-brand);
-  color: #070a12;
+  background: #151922;
+  border-color: rgba(124, 140, 255, 0.34);
+  color: #c7d2fe;
+  box-shadow: none;
+}
+
+:global(html[data-theme="dark"]) .new-btn:hover,
+:global(html[data-theme="dark"]) .empty-add-btn:hover {
+  opacity: 1;
+  background: rgba(124, 140, 255, 0.16);
+  border-color: rgba(124, 140, 255, 0.46);
+  color: #f8fafc;
 }
 
 /* ── Tabs Bar ── */
@@ -1184,6 +1210,19 @@ watch(
 </style>
 
 <style>
+html[data-theme="dark"] .builder-topbar .new-btn {
+  background: #151922 !important;
+  border-color: rgba(124, 140, 255, 0.34) !important;
+  color: #c7d2fe !important;
+  box-shadow: none !important;
+}
+
+html[data-theme="dark"] .builder-topbar .new-btn:hover {
+  background: rgba(124, 140, 255, 0.16) !important;
+  border-color: rgba(124, 140, 255, 0.46) !important;
+  color: #f8fafc !important;
+}
+
 /* ── Dialog theme (non-scoped for teleported el-dialog) ── */
 .el-dialog.env-dialog {
   background: var(--b-panel) !important;

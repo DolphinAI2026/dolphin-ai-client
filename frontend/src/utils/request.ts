@@ -42,7 +42,6 @@ request.interceptors.response.use(
     )
     const isAuthRequest =
       reqUrl.includes('/auth/login') ||
-      reqUrl.includes('/auth/register') ||
       reqUrl.includes('/auth/select-tenant')
     // 平台 session 问题：走集中定义的 APAAS_TOKEN_MARKERS，加一条兜底（"平台" + "token" 共现）
     const isPlatformSessionIssue =

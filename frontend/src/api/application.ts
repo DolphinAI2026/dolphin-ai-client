@@ -72,13 +72,22 @@ export const applicationApi = {
   },
 
   /** 根据对话更新诉求生成新版 SPEC 草稿 */
-  draftDocUpdate(appId: number, data: { instruction: string; conversation_id?: number | null; current_doc?: string }) {
+  draftDocUpdate(appId: number, data: { instruction: string; conversation_id?: number | null; selected_llm_config_id?: number | null; current_doc?: string }) {
     return request.post<any, {
-      markdown: string
-      filename: string
+      type?: string
+      actionable_update?: boolean
+      message?: string
+      markdown?: string
+      filename?: string
       summary: string
       doc_result?: any
       app_config?: any
+      direct_config_update?: boolean
+      change_plan?: any
+      parsed_config?: any
+      rendered_doc?: string
+      actions?: any[]
+      change_plan_id?: number
     }>(`/applications/${appId}/draft-doc-update`, data, { timeout: 300000 })
   },
 

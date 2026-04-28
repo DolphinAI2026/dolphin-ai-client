@@ -9,16 +9,16 @@ const spec = useSpecStore()
 async function confirm() {
   try {
     await spec.updateItem('permission', props.permission.object_code, 'confirm')
-    ElMessage.success('权限已确认')
-  } catch (e: unknown) { ElMessage.error(`确认失败：${e instanceof Error ? e.message : String(e)}`) }
+    ElMessage.success('权限已采纳')
+  } catch (e: unknown) { ElMessage.error(`采纳失败：${e instanceof Error ? e.message : String(e)}`) }
 }
 
 async function dismiss() {
-  try { await ElMessageBox.confirm(`删除「${props.permission.object_code}」的权限规则？`, '确认删除', { type: 'warning' }) } catch { return }
+  try { await ElMessageBox.confirm(`忽略「${props.permission.object_code}」的权限规则？忽略后将不进入本轮生成草稿。`, '忽略权限规则', { type: 'warning' }) } catch { return }
   try {
     await spec.updateItem('permission', props.permission.object_code, 'dismiss')
-    ElMessage.success('权限已删除')
-  } catch (e: unknown) { ElMessage.error(`删除失败：${e instanceof Error ? e.message : String(e)}`) }
+    ElMessage.success('权限已忽略')
+  } catch (e: unknown) { ElMessage.error(`忽略失败：${e instanceof Error ? e.message : String(e)}`) }
 }
 
 function opLabel(op: string): string {
@@ -32,7 +32,7 @@ function dataLabel(d: string): string {
 <template>
   <article class="spec-card" :class="{ confirmed: permission.confirmed }">
     <header class="spec-card-header">
-      <h4 class="spec-card-title">🔒 {{ permission.object_code }} 的权限</h4>
+      <h4 class="spec-card-title">{{ permission.object_code }} 的权限</h4>
     </header>
     <table class="perm-rules">
       <thead><tr><th>角色</th><th>操作</th><th>数据范围</th></tr></thead>
@@ -45,27 +45,66 @@ function dataLabel(d: string): string {
       </tbody>
     </table>
     <footer class="spec-card-actions">
-      <span v-if="permission.confirmed" class="spec-card-status">✓ 已确认</span>
+      <span v-if="permission.confirmed" class="spec-card-status">✓ 已采纳</span>
       <template v-else>
-        <button class="action-btn confirm" @click="confirm">✓ 确认</button>
-        <button class="action-btn dismiss" @click="dismiss">✕ 删除</button>
+        <button class="action-btn confirm" @click="confirm">✓ 采纳</button>
+        <button class="action-btn dismiss" @click="dismiss">忽略</button>
       </template>
     </footer>
   </article>
 </template>
 
 <style scoped>
-.spec-card { border: 1px solid var(--t-border-subtle); border-radius: var(--t-radius-md); padding: 12px 14px; background: var(--t-bg-panel); }
-.spec-card.confirmed { border-color: var(--t-success); background: var(--t-success-subtle); }
+.spec-card { border: 1px solid var(--t-border-subtle); border-radius: 12px; padding: 13px 15px; background: var(--t-bg-panel); }
+.spec-card.confirmed { border-color: var(--t-border-strong); box-shadow: inset 3px 0 0 var(--t-success); }
 .spec-card-header { display: flex; align-items: baseline; gap: 8px; }
-.spec-card-title { margin: 0; font-size: 14px; color: var(--t-text-primary); }
-.perm-rules { width: 100%; margin: 8px 0; border-collapse: collapse; font-size: 12px; }
-.perm-rules th, .perm-rules td { padding: 4px 8px; border-bottom: 1px solid var(--t-border-subtle); text-align: left; }
-.perm-rules th { color: var(--t-text-muted); font-weight: 500; }
-.perm-rules td code { font-family: monospace; background: var(--t-bg-input); padding: 1px 5px; border-radius: 3px; }
-.spec-card-actions { display: flex; gap: 8px; margin-top: 8px; }
-.action-btn { padding: 4px 10px; font-size: 12px; border: 1px solid var(--t-border-subtle); border-radius: var(--t-radius-sm); background: var(--t-bg-input); cursor: pointer; }
+.spec-card-title { margin: 0; font-size: 14px; line-height: 1.35; color: var(--t-text-primary); }
+.perm-rules {
+  width: 100%;
+  margin: 10px 0 0;
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid var(--t-border-subtle);
+  border-radius: 10px;
+  overflow: hidden;
+  font-size: 12px;
+}
+.perm-rules th, .perm-rules td { padding: 7px 9px; border-bottom: 1px solid var(--t-border-subtle); text-align: left; }
+.perm-rules tbody tr:last-child td { border-bottom: 0; }
+.perm-rules th { color: var(--t-text-muted); font-weight: 700; background: var(--t-bg-input); }
+.perm-rules td { color: var(--t-text-secondary); }
+.perm-rules td code {
+  font-family: monospace;
+  background: var(--t-bg-input);
+  border: 1px solid var(--t-border-subtle);
+  padding: 1px 6px;
+  border-radius: 6px;
+  color: var(--t-text-primary);
+}
+.spec-card-actions { display: flex; gap: 6px; margin-top: 10px; align-items: center; }
+.action-btn {
+  height: 26px;
+  padding: 0 9px;
+  font-size: 12px;
+  border: 1px solid var(--t-border-subtle);
+  border-radius: 8px;
+  background: var(--t-bg-input);
+  color: var(--t-text-secondary);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
 .action-btn.confirm:hover { background: var(--t-success-subtle); border-color: var(--t-success); color: var(--t-success); }
 .action-btn.dismiss:hover { background: var(--t-danger-subtle); border-color: var(--t-danger); color: var(--t-danger); }
-.spec-card-status { color: var(--t-success); font-size: 12px; font-weight: 600; }
+.spec-card-status {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--t-border-subtle);
+  border-radius: 999px;
+  background: var(--t-success-subtle);
+  color: var(--t-success);
+  font-size: 11px;
+  font-weight: 700;
+}
 </style>

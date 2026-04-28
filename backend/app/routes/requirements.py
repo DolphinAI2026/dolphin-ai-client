@@ -20,6 +20,7 @@ from app.database import get_db
 from app.deps import get_auth_context, AuthContext
 from app.llm_client import LLMClient
 from app.models import Conversation, Message
+from app.services.design_doc_preflight import validate_design_doc_preflight
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +105,7 @@ GENERATE_DOC_PROMPT = """请根据上面的对话内容，按照以下6个需求
 | ⑤ 流程 | flows + tables.fields | 每个有流程的业务对象生成一条流程记录；流程也推断字段和可用操作 |
 | 功能模块 | modules | 按业务模块归类功能点，标注可操作角色，体现系统能做什么 |
 | ⑥ 权限对象 | role_table_mapping | 每个角色对每张主表的操作权限和数据范围 |
-| 自开发定义 | custom_development | 识别配置无法完整覆盖的扩展点，明确触发条件、实现范围和验收口径 |
+| 自开发定义 | 暂不输出 | 当前阶段只沉淀低代码配置 MD；复杂自开发后续从 Vibe Coding/IDE 入口处理 |
 
 ---
 
@@ -224,16 +225,7 @@ GENERATE_DOC_PROMPT = """请根据上面的对话内容，按照以下6个需求
       ]
     }
   ],
-  "custom_development": [
-    {
-      "type": "自开发类型：form_component/form_page/list_custom_module/backend_api/plugin/hook/report/integration/none",
-      "name": "自开发项名称；如无需自开发，填 暂无强制自开发项",
-      "trigger": "为什么平台配置无法完整覆盖；如无需自开发，说明配置已覆盖主流程",
-      "scope": "需要在 IDE 中实现的范围、依赖的表单/模型/接口",
-      "deliverables": ["源码文件或模块", "联调说明", "测试用例"],
-      "acceptance": "验收口径，必须可演示、可验证"
-    }
-  ]
+  "custom_development": []
 }
 
 ---
@@ -307,10 +299,9 @@ GENERATE_DOC_PROMPT = """请根据上面的对话内容，按照以下6个需求
 - 纯 CRUD 无审批的表不需要生成流程
 
 ### 【自开发定义 custom_development】
-- 必须输出 custom_development 数组，即使没有强制自开发项也要输出 1 条 none 记录
-- 先判断模型、表单、权限、基础流程是否可由平台配置覆盖；能配置的不要误判成自开发
-- 只有复杂前端组件、定制页面/列表模块、外部系统接口、复杂校验/计算、Hook、插件、报表看板等配置无法完整覆盖的内容才列为自开发
-- 每条自开发项必须说明触发条件、实现范围、交付物和验收口径，作为后续 IDE 工作区输入
+- 当前阶段不生成自开发配置，custom_development 必须输出空数组 []
+- 复杂前端组件、外部接口、Hook、插件、报表看板等内容只在需求摘要中记录为后续事项，不进入本次低代码配置 JSON
+- 本次 JSON 只用于生成标准 MD 与低代码应用配置，避免把自开发内容误送到平台创建接口
 
 ### 【其他规则】
 - is_pk、is_fk、nullable 必须是布尔值 true 或 false（不能是字符串）
@@ -398,7 +389,7 @@ async def _repair_doc_json(cfg: dict | None, raw_text: str) -> dict:
                 "app_info(object), roles(array), data_dictionary(array), tables(array), "
                 "modules(array), flows(array), role_table_mapping(array), forms(array), custom_development(array)。"
                 "每张主表至少保留 6 个业务字段；每张主表都要有表单、功能模块和权限矩阵。"
-                "如果没有强制自开发项，custom_development 输出一条 type=none 的配置优先记录。"
+                "当前配置阶段不生成自开发项，custom_development 必须是空数组 []。"
             ),
         },
         {
@@ -421,8 +412,8 @@ async def _regenerate_doc_json(cfg: dict | None, base_messages: list[dict[str, A
                 "严格只输出一个完整合法 JSON 对象，不能有 <think>、解释、注释、Markdown 代码块。"
                 "必须包含 app_info、roles、data_dictionary、tables、modules、flows、"
                 "role_table_mapping、forms、custom_development。"
-                "每个业务对象独立成表，每张主表至少 6 个业务字段，并生成对应表单、流程、权限和自开发定义。"
-                "如果无法确定字段值，给出合理默认值，但必须保证 SPEC 结构完整。"
+                "每个业务对象独立成表，每张主表至少 6 个业务字段，并生成对应表单、流程和权限。"
+                "custom_development 必须是空数组 []。如果无法确定字段值，给出合理默认值，但必须保证 SPEC 结构完整。"
             ),
         }
     )
@@ -468,7 +459,6 @@ DOC_REQUIRED_LIST_KEYS = (
     "flows",
     "role_table_mapping",
     "forms",
-    "custom_development",
 )
 
 SYSTEM_FIELD_CODES = {
@@ -1023,7 +1013,7 @@ def _derive_forms_for_doc_result(doc: dict) -> list[dict]:
 
 
 def normalize_doc_result(doc: dict, messages: list[dict[str, Any]] | None = None) -> dict:
-    """把模型输出规范化为完整 SPEC，避免缺表单/流程/自开发时仍被当成完成态。"""
+    """把模型输出规范化为完整 SPEC，避免缺表单/流程时仍被当成完成态。"""
     source = doc if isinstance(doc, dict) else {}
     normalized = dict(source)
     app_info = _normalize_doc_app_info(source.get("app_info"), messages)
@@ -1043,7 +1033,7 @@ def normalize_doc_result(doc: dict, messages: list[dict[str, Any]] | None = None
         tables,
         roles,
     )
-    normalized["custom_development"] = _normalize_custom_development_items(source)
+    normalized["custom_development"] = []
     normalized["forms"] = _derive_forms_for_doc_result(normalized)
     return normalized
 
@@ -1065,6 +1055,25 @@ def is_valid_doc_result(doc: dict) -> bool:
     if not doc.get("forms") or not doc.get("modules") or not doc.get("flows") or not doc.get("role_table_mapping"):
         return False
     return all(len(table.get("fields") or []) >= 6 for table in main_tables)
+
+
+async def _save_assistant_message(session_id: int, content: str) -> None:
+    """Persist an assistant message for async SSE flows that stop before doc_result."""
+    if not content.strip():
+        return
+    from app.database import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as save_db:
+        save_db.add(Message(conversation_id=session_id, role="assistant", content=content))
+        await save_db.commit()
+
+
+def _validation_payload(preflight) -> dict[str, Any]:
+    return {
+        "needs_user_input": True,
+        "assistant_message": preflight.assistant_message,
+        "validation": preflight.to_payload(),
+    }
 
 
 def _looks_like_asset_management(user_text: str) -> bool:
@@ -1343,138 +1352,316 @@ def _normalize_custom_development_items(doc: dict) -> list[dict[str, str]]:
 
 
 def json_to_markdown(data: dict) -> str:
-    """将 5 模块 JSON 转换为 Markdown 格式的功能设计文档"""
-    lines = []
-    app_info = data.get('app_info', {})
-    lines.append(f"# {app_info.get('name', '功能设计文档')}")
-    lines.append('')
+    """Convert requirements JSON into the standard parseable design-doc MD."""
 
-    # 一、应用信息
-    lines.append('## 一、应用信息')
-    lines.append('')
-    lines.append(f"- **应用编码**：{app_info.get('code', '')}")
-    lines.append(f"- **应用名称**：{app_info.get('name', '')}")
-    lines.append(f"- **描述**：{app_info.get('description', '')}")
-    lines.append('')
+    def cell(value: Any) -> str:
+        text = str(value or "").replace("\r\n", "\n").replace("\n", "<br>")
+        return text.replace("|", "\\|").strip()
 
-    # 二、角色清单
-    lines.append('## 二、角色清单')
-    lines.append('')
-    lines.append('| 角色编码 | 角色名称 | 职责描述 |')
-    lines.append('|---------|---------|---------|')
-    for role in data.get('roles', []):
-        lines.append(f"| {role.get('role_code', '')} | {role.get('role_name', '')} | {role.get('description', '')} |")
-    lines.append('')
+    def yes_no(value: Any, default: bool = False) -> str:
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"是", "yes", "true", "1", "y"}:
+                return "是"
+            if normalized in {"否", "no", "false", "0", "n"}:
+                return "否"
+        return "是" if bool(value) else ("是" if default else "否")
 
-    # 三、数据字典
-    lines.append('## 三、数据字典')
-    lines.append('')
-    for d in data.get('data_dictionary', []):
-        lines.append(f"### {d.get('dict_name', '')}（{d.get('dict_code', '')}）")
-        lines.append('')
-        lines.append('| 编码 | 名称 |')
-        lines.append('|------|------|')
-        for item in d.get('items', []):
-            lines.append(f"| {item.get('item_code', '')} | {item.get('item_name', '')} |")
-        lines.append('')
+    def component_label(value: Any, field: dict | None = None) -> str:
+        raw = str(value or "").strip()
+        mapping = {
+            "FORM_TEXT_INPUT": "单行输入",
+            "FORM_TEXTAREA": "多行输入",
+            "FORM_SELECT": "下拉单选",
+            "FORM_MULTI_SELECT": "下拉多选",
+            "FORM_DATE_PICKER": "日期",
+            "FORM_DATETIME_PICKER": "日期时间",
+            "FORM_NUMBER_INPUT": "数字",
+            "FORM_UPLOAD": "附件上传",
+            "FORM_USER_SELECT": "人员选择",
+            "FORM_DEPT_SELECT": "部门选择",
+            "FORM_SWITCH": "开关",
+            "FORM_RADIO": "单选框",
+            "FORM_CHECKBOX": "复选框",
+        }
+        if raw in mapping:
+            return mapping[raw]
+        if raw:
+            return raw
+        data_type = str((field or {}).get("data_type") or "").upper()
+        field_name = str((field or {}).get("field_name") or "")
+        if data_type in {"DATE", "DATETIME"} or any(key in field_name for key in ("日期", "时间")):
+            return "日期时间" if data_type == "DATETIME" else "日期"
+        if data_type in {"INT", "BIGINT", "DECIMAL"}:
+            return "数字"
+        if data_type == "TEXT" or any(key in field_name for key in ("说明", "描述", "备注", "原因", "内容")):
+            return "多行输入"
+        return "单行输入"
 
-    # 四、表结构
-    lines.append('## 四、表结构')
-    lines.append('')
-    for table in data.get('tables', []):
-        ttype = table.get('table_type', '主表')
-        parent = table.get('parent_table', '')
-        parent_str = f' → {parent}' if parent else ''
-        lines.append(f"### {table.get('table_name', '')}（{table.get('table_code', '')}）【{ttype}{parent_str}】")
-        lines.append('')
-        desc = table.get('description', '')
-        if desc:
-            lines.append(f'> {desc}')
-            lines.append('')
-        lines.append('| 字段编码 | 字段名称 | 数据类型 | 长度 | 主键 | 外键 | 可空 | 默认值 | 描述 |')
-        lines.append('|---------|---------|---------|-----|------|------|------|--------|------|')
-        for f in table.get('fields', []):
-            pk = '✓' if f.get('is_pk') else '-'
-            fk = '✓' if f.get('is_fk') else '-'
-            nullable = '是' if f.get('nullable', True) else '否'
+    def scope_label(value: Any) -> str:
+        return {
+            "none": "无权限",
+            "self": "仅本人",
+            "dept": "本部门",
+            "all": "全公司",
+            "custom": "自定义",
+            "SELF": "仅本人",
+            "CURRENT_USER_DEPT": "本部门",
+            "ALL": "全公司",
+        }.get(str(value or "").strip(), str(value or "").strip() or "无权限")
+
+    def permission_flag(operations: list, *keywords: str) -> str:
+        ops = {str(op).strip() for op in (operations or [])}
+        return "是" if any(keyword in ops for keyword in keywords) else "否"
+
+    app_info = data.get("app_info") or {}
+    tables = [table for table in (data.get("tables") or []) if isinstance(table, dict)]
+    forms = [form for form in (data.get("forms") or []) if isinstance(form, dict)]
+    table_by_code = {str(table.get("table_code") or "").strip(): table for table in tables}
+
+    lines: list[str] = []
+    lines.append(f"# {cell(app_info.get('name') or '功能设计文档')}")
+    lines.append("")
+
+    lines.append("## 一、应用信息")
+    lines.append("")
+    lines.append("| 应用名称 | 应用编码 | 说明 |")
+    lines.append("|---|---|---|")
+    lines.append(f"| {cell(app_info.get('name'))} | {cell(app_info.get('code'))} | {cell(app_info.get('description'))} |")
+    lines.append("")
+
+    lines.append("## 二、角色列表")
+    lines.append("")
+    lines.append("| 角色编码 | 角色名称 | 职责说明 |")
+    lines.append("|---|---|---|")
+    for role in data.get("roles") or []:
+        if not isinstance(role, dict):
+            continue
+        lines.append(f"| {cell(role.get('role_code'))} | {cell(role.get('role_name'))} | {cell(role.get('description'))} |")
+    lines.append("")
+
+    lines.append("## 三、数据字典")
+    lines.append("")
+    dicts = [item for item in (data.get("data_dictionary") or []) if isinstance(item, dict)]
+    if dicts:
+        for dictionary in dicts:
+            lines.append(f"### {cell(dictionary.get('dict_name'))}（{cell(dictionary.get('dict_code'))}）")
+            lines.append("")
+            lines.append("| 选项编码 | 选项名称 |")
+            lines.append("|---|---|")
+            for item in dictionary.get("items") or []:
+                if isinstance(item, dict):
+                    lines.append(f"| {cell(item.get('item_code'))} | {cell(item.get('item_name'))} |")
+            lines.append("")
+    else:
+        lines.append("暂无数据字典。")
+        lines.append("")
+
+    lines.append("## 四、数据模型")
+    lines.append("")
+    lines.append("### 4.1 模型定义")
+    lines.append("")
+    lines.append("| 模型编码 | 模型名称 | 类型 | 所属主表模型编码 | 说明 |")
+    lines.append("|---|---|---|---|---|")
+    for table in tables:
+        lines.append(
+            "| "
+            f"{cell(table.get('table_code'))} | "
+            f"{cell(table.get('table_name'))} | "
+            f"{cell(table.get('table_type') or '主表')} | "
+            f"{cell(table.get('parent_table'))} | "
+            f"{cell(table.get('description'))} |"
+        )
+    lines.append("")
+    lines.append("### 4.2 模型字段")
+    lines.append("")
+    lines.append("| 模型编码 | 字段编码 | 字段名称 | 字段类型 | 数据库字段类型 | 长度/精度 | 必填 | 字典编码 | 关联模型编码 | 关联显示字段编码 | 说明 |")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|---|")
+    for table in tables:
+        table_code = str(table.get("table_code") or "").strip()
+        for field in table.get("fields") or []:
+            if not isinstance(field, dict):
+                continue
+            data_type = field.get("data_type") or field.get("database_field_type") or ""
             lines.append(
-                f"| {f.get('field_code', '')} | {f.get('field_name', '')} | {f.get('data_type', '')} "
-                f"| {f.get('length', '')} | {pk} | {fk} | {nullable} | {f.get('default_value', '')} | {f.get('description', '')} |"
+                "| "
+                f"{cell(table_code)} | "
+                f"{cell(field.get('field_code'))} | "
+                f"{cell(field.get('field_name'))} | "
+                f"{cell(component_label('', field))} | "
+                f"{cell(data_type)} | "
+                f"{cell(field.get('length'))} | "
+                f"{yes_no(not field.get('nullable', True))} | "
+                f"{cell(field.get('dict_code') or field.get('dict'))} | "
+                f"{cell(field.get('ref_model') or field.get('target_model_code'))} | "
+                f"{cell(field.get('ref_field') or field.get('target_field_code'))} | "
+                f"{cell(field.get('description'))} |"
             )
-        lines.append('')
+    lines.append("")
 
-    # 五、功能模块与业务流程
-    lines.append('## 五、功能模块与业务流程')
-    lines.append('')
-    modules = data.get('modules', []) or []
-    if modules:
-        lines.append('### 5.1 功能模块')
-        lines.append('')
-        for module in modules:
-            lines.append(f"#### {module.get('module_name', '')}（{module.get('module_code', '')}）")
-            if module.get('description'):
-                lines.append(f"> {module.get('description', '')}")
-            lines.append('')
-            lines.append('| 功能点 | 描述 | 角色 |')
-            lines.append('|--------|------|------|')
-            for feature in module.get('features', []) or []:
-                roles_text = '、'.join(feature.get('roles', []) or [])
-                lines.append(f"| {feature.get('name', '')} | {feature.get('description', '')} | {roles_text} |")
-            lines.append('')
+    lines.append("## 五、表单定义")
+    lines.append("")
+    lines.append("### 5.1 表单清单")
+    lines.append("")
+    lines.append("| 表单编码 | 表单名称 | 绑定主表模型 | 说明 |")
+    lines.append("|---|---|---|---|")
+    if forms:
+        for form in forms:
+            form_code = form.get("form_code") or form.get("code") or form.get("model_code") or form.get("modelCode")
+            form_name = form.get("form_name") or form.get("name") or form_code
+            model_code = form.get("model_code") or form.get("modelCode") or form_code
+            lines.append(f"| {cell(form_code)} | {cell(form_name)} | {cell(model_code)} | {cell(form.get('description'))} |")
+    else:
+        for table in tables:
+            if str(table.get("table_type", "主表")).lower() in {"子表", "sub", "child"}:
+                continue
+            lines.append(f"| {cell(table.get('table_code'))} | {cell(table.get('table_name'))} | {cell(table.get('table_code'))} | {cell(table.get('description'))} |")
+    lines.append("")
 
-    flows = data.get('flows', []) or []
+    lines.append("### 5.2 主表字段定义")
+    lines.append("")
+    lines.append("| 表单名称 | 字段编码 | 字段名称 | 组件类型 | 必填 | 隐藏 | 只读 | 列表展示 | 查询条件 | 字典编码 | 目标模型编码 | 目标字段编码 | 本表关联字段编码 | 说明 |")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+    if forms:
+        for form in forms:
+            form_name = str(form.get("form_name") or form.get("name") or form.get("form_code") or "").strip()
+            model_code = str(form.get("model_code") or form.get("modelCode") or form.get("form_code") or "").strip()
+            model_fields = {
+                str(field.get("field_code") or "").strip(): field
+                for field in (table_by_code.get(model_code, {}).get("fields") or [])
+                if isinstance(field, dict)
+            }
+            components = form.get("components") or []
+            for component in components:
+                if not isinstance(component, dict):
+                    continue
+                section_type = str(component.get("section_type") or component.get("sectionType") or "main").lower()
+                if section_type == "sub":
+                    continue
+                field_code = str(component.get("field_code") or component.get("code") or "").strip()
+                field = model_fields.get(field_code, {})
+                lines.append(
+                    "| "
+                    f"{cell(form_name)} | "
+                    f"{cell(field_code)} | "
+                    f"{cell(component.get('field_name') or component.get('label') or field.get('field_name'))} | "
+                    f"{cell(component_label(component.get('component_type') or component.get('componentType'), field))} | "
+                    f"{yes_no(component.get('required'))} | "
+                    f"{yes_no(component.get('hidden'))} | "
+                    f"{yes_no(component.get('readonly'))} | "
+                    f"{yes_no(component.get('show_in_list') if 'show_in_list' in component else component.get('showInList'))} | "
+                    f"{yes_no(component.get('searchable'))} | "
+                    f"{cell(component.get('dict_code') or component.get('dict'))} | "
+                    f"{cell(component.get('target_model_code') or component.get('targetModelCode'))} | "
+                    f"{cell(component.get('target_field_code') or component.get('targetFieldCode'))} | "
+                    f"{cell(component.get('origin_field_code') or component.get('originFieldCode'))} | "
+                    f"{cell(component.get('description'))} |"
+                )
+    else:
+        for table in tables:
+            if str(table.get("table_type", "主表")).lower() in {"子表", "sub", "child"}:
+                continue
+            for field in table.get("fields") or []:
+                if isinstance(field, dict):
+                    lines.append(
+                        f"| {cell(table.get('table_name'))} | {cell(field.get('field_code'))} | {cell(field.get('field_name'))} | "
+                        f"{cell(component_label('', field))} | {yes_no(not field.get('nullable', True))} | 否 | 否 | 是 | 否 | "
+                        f"{cell(field.get('dict_code') or field.get('dict'))} |  |  |  | {cell(field.get('description'))} |"
+                    )
+    lines.append("")
+
+    lines.append("### 5.3 子表区域定义")
+    lines.append("")
+    lines.append("| 表单名称 | 子表区域名称 | 绑定模型 | 说明 |")
+    lines.append("|---|---|---|---|")
+    has_subtable = False
+    for table in tables:
+        if str(table.get("table_type", "")).lower() in {"子表", "sub", "child"}:
+            has_subtable = True
+            parent = str(table.get("parent_table") or "").strip()
+            parent_name = next(
+                (item.get("table_name") for item in tables if item.get("table_code") == parent),
+                parent,
+            )
+            lines.append(f"| {cell(parent_name)} | {cell(table.get('table_name'))} | {cell(table.get('table_code'))} | {cell(table.get('description'))} |")
+    if not has_subtable:
+        lines.append("|  |  |  | 暂无子表结构 |")
+    lines.append("")
+
+    lines.append("### 5.4 子表字段定义")
+    lines.append("")
+    lines.append("| 表单名称 | 子表区域名称 | 字段编码 | 字段名称 | 组件类型 | 必填 | 隐藏 | 只读 | 列表展示 | 字典编码 | 说明 |")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|---|")
+    if has_subtable:
+        for table in tables:
+            if str(table.get("table_type", "")).lower() not in {"子表", "sub", "child"}:
+                continue
+            parent = str(table.get("parent_table") or "").strip()
+            parent_name = next(
+                (item.get("table_name") for item in tables if item.get("table_code") == parent),
+                parent,
+            )
+            for field in table.get("fields") or []:
+                if isinstance(field, dict):
+                    lines.append(
+                        f"| {cell(parent_name)} | {cell(table.get('table_name'))} | {cell(field.get('field_code'))} | "
+                        f"{cell(field.get('field_name'))} | {cell(component_label('', field))} | {yes_no(not field.get('nullable', True))} | "
+                        f"否 | 否 | 是 | {cell(field.get('dict_code') or field.get('dict'))} | {cell(field.get('description'))} |"
+                    )
+    else:
+        lines.append("|  |  |  |  |  | 否 | 否 | 否 | 否 |  | 暂无子表字段 |")
+    lines.append("")
+
+    lines.append("## 六、流程配置")
+    lines.append("")
+    flows = [flow for flow in (data.get("flows") or []) if isinstance(flow, dict)]
     if flows:
-        lines.append('### 5.2 业务流程')
-        lines.append('')
         for flow in flows:
-            lines.append(f"#### {flow.get('flow_name', '')}（{flow.get('flow_code', '')}）")
-            if flow.get('description'):
-                lines.append(f"> {flow.get('description', '')}")
-            lines.append('')
-            lines.append('| 步骤 | 动作 | 角色 | 状态/结果 |')
-            lines.append('|------|------|------|-----------|')
-            for step in flow.get('steps', []) or []:
-                lines.append(f"| {step.get('step', '')} | {step.get('action', '')} | {step.get('role', '')} | {step.get('status', '')} |")
-            lines.append('')
-    if not modules and not flows:
-        lines.append('暂无功能模块或流程配置。')
-        lines.append('')
+            lines.append(f"### {cell(flow.get('flow_name'))}（{cell(flow.get('flow_code'))}）")
+            lines.append("")
+            if flow.get("description"):
+                lines.append(cell(flow.get("description")))
+                lines.append("")
+            lines.append("| 步骤 | 动作 | 角色 | 状态/结果 |")
+            lines.append("|---|---|---|---|")
+            for step in flow.get("steps") or []:
+                if isinstance(step, dict):
+                    lines.append(f"| {cell(step.get('step'))} | {cell(step.get('action'))} | {cell(step.get('role'))} | {cell(step.get('status'))} |")
+            lines.append("")
+    else:
+        lines.append("暂无流程配置。")
+        lines.append("")
 
-    # 六、角色权限矩阵
-    lines.append('## 六、角色权限矩阵')
-    lines.append('')
-    SCOPE_LABELS = {'none': '无权限', 'self': '仅本人', 'dept': '本部门', 'all': '全公司', 'custom': '自定义'}
-    mappings = data.get('role_table_mapping', [])
-    roles = data.get('roles', [])
-    if mappings and roles:
-        for mapping in mappings:
-            lines.append(f"### {mapping.get('table_name', mapping.get('table_code', ''))}")
-            lines.append('')
-            lines.append('| 角色 | 操作权限 | 数据范围 |')
-            lines.append('|------|---------|---------|')
-            perm_by_role = {}
-            for p in mapping.get('permissions', []):
-                perm_by_role[p.get('role_code', '')] = p
-            for role in roles:
-                rc = role.get('role_code', '')
-                rn = role.get('role_name', rc)
-                p = perm_by_role.get(rc, {})
-                ops = '、'.join(p.get('operations', [])) or '—'
-                scope_val = p.get('data_scope', 'none')
-                scope_lbl = SCOPE_LABELS.get(scope_val, scope_val)
-                lines.append(f'| {rn} | {ops} | {scope_lbl} |')
-            lines.append('')
+    lines.append("## 七、权限定义")
+    lines.append("")
+    lines.append("| 表单名称 | 角色编码 | 可暂存 | 可新增 | 可导入 | 可查看 | 可编辑 | 可删除 | 可导出 | 数据范围 |")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|")
+    for mapping in data.get("role_table_mapping") or []:
+        if not isinstance(mapping, dict):
+            continue
+        form_name = mapping.get("table_name") or mapping.get("form_name") or mapping.get("table_code")
+        for permission in mapping.get("permissions") or []:
+            if not isinstance(permission, dict):
+                continue
+            operations = permission.get("operations") or []
+            lines.append(
+                "| "
+                f"{cell(form_name)} | "
+                f"{cell(permission.get('role_code'))} | "
+                f"{permission_flag(operations, '暂存')} | "
+                f"{permission_flag(operations, '新增', '复制新建')} | "
+                f"{permission_flag(operations, '导入')} | "
+                f"{permission_flag(operations, '查看', '查看审批历史')} | "
+                f"{permission_flag(operations, '编辑')} | "
+                f"{permission_flag(operations, '删除', '批量删除')} | "
+                f"{permission_flag(operations, '导出')} | "
+                f"{scope_label(permission.get('data_scope'))} |"
+            )
+    lines.append("")
+    lines.append("> 自开发内容不在本次配置文档中生成；后续如需复杂组件、外部接口或 Hook，请从 Vibe Coding/IDE 入口单独处理。")
+    lines.append("")
 
-    # 七、自开发定义
-    lines.append('## 七、自开发定义')
-    lines.append('')
-    lines.append('| 类型 | 名称 | 触发条件 | 实现范围 | 验收口径 |')
-    lines.append('|------|------|----------|----------|----------|')
-    for item in _normalize_custom_development_items(data):
-        lines.append(f"| {item['type']} | {item['name']} | {item['trigger']} | {item['scope']} | {item['acceptance']} |")
-    lines.append('')
-
-    return '\n'.join(lines)
+    return "\n".join(lines)
 
 
 def _clean_requirement_lines(text: str) -> list[str]:
@@ -2442,6 +2629,12 @@ async def generate_doc(
             import traceback
             logger.error("generate-doc error: %s\n%s", e, traceback.format_exc())
             doc_result = normalize_doc_result(_build_fallback_doc_result(truncated), truncated)
+            preflight = validate_design_doc_preflight(doc_result)
+            if not preflight.ok:
+                await _save_assistant_message(session_id, preflight.assistant_message)
+                yield {"event": "validation_required", "data": json.dumps(_validation_payload(preflight), ensure_ascii=False)}
+                yield {"event": "done", "data": "{}"}
+                return
             from app.database import AsyncSessionLocal
             async with AsyncSessionLocal() as save_db:
                 save_result = await save_db.execute(
@@ -2492,6 +2685,13 @@ async def generate_doc(
             doc_result = normalize_doc_result(_build_fallback_doc_result(truncated), truncated)
             logger.warning("invalid schema fallback doc_result for session_id=%s", session_id)
 
+        preflight = validate_design_doc_preflight(doc_result)
+        if not preflight.ok:
+            await _save_assistant_message(session_id, preflight.assistant_message)
+            yield {"event": "validation_required", "data": json.dumps(_validation_payload(preflight), ensure_ascii=False)}
+            yield {"event": "done", "data": "{}"}
+            return
+
         # 写回数据库
         from app.database import AsyncSessionLocal
         async with AsyncSessionLocal() as save_db:
@@ -2533,8 +2733,8 @@ GENERATE_DOC_SUMMARY_PROMPT = """根据我们之前的对话，请帮我整理�
 ### 权限设计
 简述各角色的数据范围和操作权限。
 
-### 自开发定义
-列出平台配置无法覆盖、需要进入 IDE 自开发的扩展项；如果没有强制自开发项，也要说明当前按配置优先。
+### 后续扩展
+如果存在外部接口、复杂组件、Hook 或报表看板等配置暂不覆盖的内容，只作为后续扩展说明，不进入本次配置生成。
 
 请简洁清晰地输出，不要输出 JSON，只输出可读的 Markdown 文档。"""
 
@@ -2675,6 +2875,14 @@ async def generate_doc_chat(
 
         if not is_valid_doc_result(doc_result):
             doc_result = normalize_doc_result(_build_fallback_doc_result(truncated), truncated)
+
+        preflight = validate_design_doc_preflight(doc_result)
+        if not preflight.ok:
+            await _save_assistant_message(session_id, preflight.assistant_message)
+            yield {"event": "content", "data": json.dumps({"content": "\n\n" + preflight.assistant_message}, ensure_ascii=False)}
+            yield {"event": "validation_required", "data": json.dumps(_validation_payload(preflight), ensure_ascii=False)}
+            yield {"event": "done", "data": "{}"}
+            return
 
         # Save to database
         async with AsyncSessionLocal() as save_db:
@@ -2842,6 +3050,29 @@ async def generate_unified_plan(
         )
 
     doc_result = normalize_doc_result(doc_result, history)
+
+    preflight = validate_design_doc_preflight(doc_result)
+    if not preflight.ok:
+        db.add(Message(
+            conversation_id=conv.id,
+            role="assistant",
+            content=preflight.assistant_message,
+        ))
+        await db.commit()
+        return {
+            "session_id": conv.id,
+            "project_id": conv.project_id,
+            "summary": preflight.assistant_message,
+            "doc_result": None,
+            "builder_markdown": "",
+            "coding_brief": "",
+            "recommended_scene": None,
+            "used_fallback": used_fallback,
+            "fallback_reason": fallback_reason,
+            "needs_user_input": True,
+            "validation": preflight.to_payload(),
+            "source_file_name": file_name or None,
+        }
 
     recommended_scene = _infer_recommended_scene(doc_result, coding_focus)
     builder_markdown = json_to_markdown(doc_result)

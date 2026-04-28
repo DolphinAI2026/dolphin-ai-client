@@ -17,6 +17,10 @@
           <span>搜索应用、模型、对话...</span>
           <kbd>⌘K</kbd>
         </button>
+        <div v-if="userStore.isTenantAdmin" class="landing-admin-actions">
+          <button type="button" @click="navigateTo('/tenant-users')">成员管理</button>
+          <button type="button" @click="navigateTo('/platform-envs?tab=envs')">平台环境</button>
+        </div>
       </header>
       <div class="landing" :style="landingModeVars">
         <div class="landing-bg"></div>
@@ -71,9 +75,11 @@
             </div>
 
             <div class="composer-toolbar">
-              <button v-if="landingMode !== 'code'" class="chip" type="button" @click="prdInputRef?.click()">＋ 附加文档</button>
-              <button v-if="landingMode !== 'code'" class="chip" type="button" @click="showImportDialog = true">引用项目</button>
-              <button v-else class="chip" type="button" @click="navigateTo('/coding')">打开工作台</button>
+              <button v-if="landingMode === 'cowork'" class="chip" type="button" @click="prdInputRef?.click()">＋ 附加文档</button>
+              <button v-if="landingMode === 'cowork'" class="chip" type="button" @click="showImportDialog = true">引用项目</button>
+              <button v-if="landingMode === 'cowork'" class="chip template-chip" type="button" @click="openTemplateFromComposer">文档模板</button>
+              <button v-else-if="landingMode === 'code'" class="chip" type="button" @click="navigateTo('/coding?type=apaas-custom-dev')">选择应用</button>
+              <button v-else class="chip" type="button" @click="navigateTo('/vibe-coding/new')">导入 Git 仓库</button>
 
               <div class="toolbar-spacer"></div>
 
@@ -150,8 +156,7 @@
     <div v-if="templatePreviewLoading" class="template-preview-empty">
       正在加载模板内容...
     </div>
-    <div v-else-if="templatePreviewParsedDoc" class="template-preview-structured">
-      <pre v-if="templatePreviewIntro" class="template-preview-body template-preview-intro">{{ templatePreviewIntro }}</pre>
+    <div v-else-if="templatePreviewParsedDoc" class="template-preview-structured structured-doc-host">
       <StructuredDocRenderer :doc-result="templatePreviewParsedDoc" />
     </div>
     <pre v-else class="template-preview-body">{{ templatePreview?.content || '' }}</pre>
@@ -168,7 +173,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { handleError } from '@/utils/errorHandler'
 import request from '@/utils/request'
 import { usePreviewStore } from '@/stores/preview'
@@ -200,7 +205,7 @@ interface TemplateDetail extends TemplateFile {
   content: string
 }
 
-type LandingModeKey = 'chat' | 'cowork' | 'code'
+type LandingModeKey = 'chat' | 'cowork' | 'code' | 'online'
 type LandingDetailMode = 'auto' | 'config' | 'dev'
 
 interface LandingModeConfig {
@@ -224,12 +229,12 @@ const PENDING_CODING_KEY = 'ai_builder_pending_coding'
 const landingModeList: LandingModeConfig[] = [
   {
     key: 'cowork',
-    label: 'CoWork',
-    zh: '协同构建',
+    label: 'Builder',
+    zh: '智能搭建',
     tagline: 'AI 帮你搭系统',
     titleSuffix: '把一句话变成可上线的应用',
-    eyebrow: 'APAAS BUILDER · v2.4',
-    desc: 'AI 生成 SPEC，拆解配置与自开发，边聊边出设计与代码，一条对话完成交付。',
+    eyebrow: 'APAAS BUILDER AI · V3',
+    desc: 'AI 生成 SPEC，拆解配置与开发边界，边聊边出设计与代码，一条对话完成交付。',
     color: 'oklch(55% 0.18 268)',
     colorSoft: 'oklch(96% 0.03 268)',
     colorInk: 'oklch(45% 0.18 268)',
@@ -239,20 +244,36 @@ const landingModeList: LandingModeConfig[] = [
   },
   {
     key: 'code',
-    label: 'Code',
-    zh: '智能开发',
-    tagline: 'AI 帮你写代码',
-    titleSuffix: '把需求直接变成可运行的组件和页面',
-    eyebrow: 'APAAS CODING · VIBE IDE',
-    desc: '面向自开发扩展：描述组件、页面或接口，AI 自动创建工作区，并打开睿鲸 AI Coding 继续迭代。',
-    color: 'oklch(67% 0.14 255)',
-    colorSoft: 'oklch(95% 0.03 255)',
-    colorInk: 'oklch(50% 0.17 255)',
+    label: '睿鲸AI',
+    zh: 'Coding',
+    tagline: 'AI 帮你做二开',
+    titleSuffix: '把需求变成平台组件、页面和接口',
+    eyebrow: 'RUIJING AI CODING',
+    desc: '面向得帆低代码开发扩展：描述组件、页面、接口或脚本，AI 创建模板工作区并辅助构建、上传和发布。',
+    color: 'oklch(62% 0.15 185)',
+    colorSoft: 'oklch(96% 0.03 185)',
+    colorInk: 'oklch(42% 0.14 185)',
     icon: '{}',
     placeholder: '描述你想开发的内容。例如：做一个头像上传组件，支持裁剪、预览、上传失败重试，并输出可接入表单的组件。',
-    cta: '进入开发',
+    cta: '进入睿鲸AI Coding',
+  },
+  {
+    key: 'online',
+    label: 'Vibe Coding',
+    zh: '全代码',
+    tagline: 'AI 帮你改全代码',
+    titleSuffix: '导入 Git 仓库，在云工作区里开发',
+    eyebrow: 'VIBE CODING · CLOUD WORKSPACE',
+    desc: '面向完整代码仓库：导入 GitHub/GitLab 项目，AI 在沙箱里读代码、改代码、跑测试、开预览并提交 PR。',
+    color: 'oklch(60% 0.18 292)',
+    colorSoft: 'oklch(96% 0.035 292)',
+    colorInk: 'oklch(45% 0.18 292)',
+    icon: '</>',
+    placeholder: '描述你要处理的代码任务。例如：导入 supplier-portal 仓库，把首页改成供应商风险看板，跑完测试后提交一个 PR。',
+    cta: '进入 Vibe Coding',
   },
 ]
+const fallbackLandingMode: LandingModeConfig = landingModeList[0]!
 
 const recentSessions = ref<ConversationWithApp[]>([])
 const recentApps = ref<AppItem[]>([])
@@ -268,40 +289,31 @@ const templatePreviewVisible = ref(false)
 const templatePreviewLoading = ref(false)
 const templatePreview = ref<TemplateDetail | null>(null)
 const templatePreviewParsedDoc = ref<any | null>(null)
-const uploadDragging = ref(false)
 const templateCache = new Map<string, TemplateDetail>()
 const builderModelOptions = ref<BuilderModelOption[]>([])
 const builderModelLoading = ref(false)
 const selectedLandingModelId = ref<number | null>(null)
-const showLegacyEntries = ref(false)
-const showWorkspaceOverview = ref(false)
 const landingMode = ref<LandingModeKey>('cowork')
 const landingInput = ref('')
 const landingDetail = ref<LandingDetailMode>('auto')
 const landingNotice = ref('')
 const landingTextareaRef = ref<HTMLTextAreaElement | null>(null)
 const prdInputRef = ref<HTMLInputElement | null>(null)
-let landingNoticeTimer: number | null = null
 
-const currentLandingMode = computed(() => (
-  landingModeList.find(item => item.key === landingMode.value) ?? landingModeList[0]
+const currentLandingMode = computed<LandingModeConfig>(() => (
+  landingModeList.find(item => item.key === landingMode.value) ?? fallbackLandingMode
 ))
-const landingGlyph = computed(() => 'ap')
+const landingGlyph = computed(() => {
+  if (landingMode.value === 'online') return '</>'
+  if (landingMode.value === 'code') return '{}'
+  return 'AI'
+})
 const landingTitleSuffix = computed(() => currentLandingMode.value.titleSuffix)
 const landingModeVars = computed<Record<string, string>>(() => ({
   '--landing-mode-color': currentLandingMode.value.color,
   '--landing-mode-soft': currentLandingMode.value.colorSoft,
   '--landing-mode-ink': currentLandingMode.value.colorInk,
 }))
-const templatePreviewIntro = computed(() => {
-  const content = templatePreview.value?.content || ''
-  if (!content) return ''
-  const normalized = content.replace(/\r\n/g, '\n')
-  const marker = normalized.search(/^##\s+[一二三四五六七八九十]+、/m)
-  if (marker <= 0) return ''
-  return normalized.slice(0, marker).trim()
-})
-
 const userInitial = computed(() => (userStore.user?.username || 'A').slice(0, 1))
 const userDisplayName = computed(() => (userStore.user as any)?.nickname || userStore.user?.username || 'admin')
 const defaultLandingModelId = computed(() =>
@@ -309,12 +321,6 @@ const defaultLandingModelId = computed(() =>
   ?? builderModelOptions.value[0]?.id
   ?? null
 )
-const landingModelHint = computed(() => {
-  if (builderModelLoading.value) return '正在加载模型...'
-  if (builderModelOptions.value.length === 0) return '未配置可用模型'
-  return '上传时使用当前模型'
-})
-
 function formatDate(dateStr: string) {
   if (!dateStr) return '今天'
   const d = new Date(dateStr)
@@ -331,25 +337,6 @@ function openCommandPalette() {
 
 function focusLandingInput() {
   requestAnimationFrame(() => landingTextareaRef.value?.focus())
-}
-
-function setLandingNotice(message: string) {
-  landingNotice.value = message
-  if (landingNoticeTimer != null) {
-    window.clearTimeout(landingNoticeTimer)
-  }
-  landingNoticeTimer = window.setTimeout(() => {
-    landingNotice.value = ''
-    landingNoticeTimer = null
-  }, 1800)
-}
-
-function seedPrdExample() {
-  landingMode.value = 'cowork'
-  landingDetail.value = 'auto'
-  landingInput.value = 'PRD 摘要：做一个设备巡检系统，巡检员可按计划执行巡检、离线录入、上传照片；主管审核异常记录并自动生成工单；管理层看统计报表。'
-  setLandingNotice('已载入 PRD 摘要示例')
-  focusLandingInput()
 }
 
 function handleLandingKeydown(event: KeyboardEvent) {
@@ -379,13 +366,24 @@ async function submitLanding() {
 
   previewStore.pendingBuilderModelId = selectedLandingModelId.value
 
+  if (landingMode.value === 'online') {
+    await router.push({ path: '/vibe-coding/new', query: { prompt } })
+    return
+  }
+
   if (landingMode.value === 'code') {
     sessionStorage.setItem(PENDING_CODING_KEY, JSON.stringify({
       message: prompt,
       projectId: null,
       sceneCategory: 'page-pc',
     }))
-    await router.push({ path: '/coding', query: { from_ai_builder: '1' } })
+    await router.push({
+      path: '/coding',
+      query: {
+        from_ai_builder: '1',
+        type: 'apaas-custom-dev',
+      },
+    })
     return
   }
 
@@ -399,18 +397,10 @@ async function submitLanding() {
   })
 }
 
-function isMarkdownFile(file: File) {
-  return /\.md$/i.test(file.name)
-}
-
 function normalizeLandingModelId(modelId?: number | null) {
   const ids = new Set(builderModelOptions.value.map(option => option.id))
   if (modelId != null && ids.has(modelId)) return modelId
   return defaultLandingModelId.value
-}
-
-function formatBuilderModelOption(option: BuilderModelOption) {
-  return option.config_name
 }
 
 async function loadBuilderModelOptions() {
@@ -428,58 +418,12 @@ async function loadBuilderModelOptions() {
   }
 }
 
-function startDocUpload(file: File) {
-  if (!isMarkdownFile(file)) {
-    ElMessage.warning('当前仅支持上传 .md 格式的功能设计文档')
-    return
-  }
-  previewStore.pendingBuilderModelId = selectedLandingModelId.value
-  previewStore.pendingFile = file
-  router.push('/chat')
-}
-
-function startAIGenerate() {
-  previewStore.pendingBuilderModelId = selectedLandingModelId.value
-  router.push({ path: '/chat', query: { mode: 'requirements' } })
-}
-
-function handleDocUpload(e: Event) {
-  const target = e.target as HTMLInputElement
-  const file = target.files?.[0]
-  target.value = ''
-  if (!file) return
-  startDocUpload(file)
-}
-
-function handleFileDrop(e: DragEvent) {
-  uploadDragging.value = false
-  const file = e.dataTransfer?.files?.[0]
-  if (!file) return
-  startDocUpload(file)
-}
-
-function openApp(app: AppItem) {
-  router.push({ path: '/chat', query: { app_id: String(app.id) } })
-}
-
 function sortTemplateFiles(list: TemplateFile[]) {
   return [...list].sort((a, b) => {
     const timeDiff = new Date(b.updated_at || 0).getTime() - new Date(a.updated_at || 0).getTime()
     if (timeDiff !== 0) return timeDiff
     return a.name.localeCompare(b.name, 'zh-CN')
   })
-}
-
-function formatTemplateUpdatedAt(value?: string) {
-  if (!value) return '最近更新未知'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return '最近更新未知'
-  const yyyy = date.getFullYear()
-  const mm = `${date.getMonth() + 1}`.padStart(2, '0')
-  const dd = `${date.getDate()}`.padStart(2, '0')
-  const hh = `${date.getHours()}`.padStart(2, '0')
-  const mi = `${date.getMinutes()}`.padStart(2, '0')
-  return `最近更新 ${yyyy}-${mm}-${dd} ${hh}:${mi}`
 }
 
 async function loadTemplateFiles() {
@@ -506,22 +450,38 @@ async function getTemplateDetail(template: TemplateFile) {
   return fullDetail
 }
 
-async function previewTemplate(template: TemplateFile) {
+async function openTemplatePreview(template: TemplateFile) {
+  templatePreviewVisible.value = true
+  templatePreviewLoading.value = true
+  templatePreview.value = { ...template, content: '' }
+  templatePreviewParsedDoc.value = null
+
   try {
-    templatePreviewVisible.value = true
-    templatePreviewLoading.value = true
-    templatePreviewParsedDoc.value = null
-    templatePreview.value = await getTemplateDetail(template)
-    templatePreviewParsedDoc.value = standardDocMdToStructuredDoc(templatePreview.value.content)
-  } catch (error: any) {
-    if (!templatePreview.value) {
-      templatePreviewVisible.value = false
-      handleError(error, { fallback: '加载模板失败' })
-      return
+    const detail = await getTemplateDetail(template)
+    templatePreview.value = detail
+    try {
+      templatePreviewParsedDoc.value = standardDocMdToStructuredDoc(detail.content)
+    } catch {
+      templatePreviewParsedDoc.value = null
     }
+  } catch (error: any) {
+    templatePreviewVisible.value = false
+    handleError(error, { fallback: '加载模板失败' })
   } finally {
     templatePreviewLoading.value = false
   }
+}
+
+async function openTemplateFromComposer() {
+  if (!templateFiles.value.length) {
+    await loadTemplateFiles()
+  }
+  const template = templateFiles.value[0]
+  if (!template) {
+    ElMessage.warning('暂无可用文档模板')
+    return
+  }
+  await openTemplatePreview(template)
 }
 
 async function downloadTemplate(template: TemplateFile) {
@@ -588,20 +548,6 @@ function buildFallbackAppsFromConversations(list: ConversationWithApp[]) {
 
 function resetPasswordForm() {
   passwordForm.value = { oldPassword: '', newPassword: '', confirmPassword: '' }
-}
-
-async function logoutWithConfirm() {
-  try {
-    await ElMessageBox.confirm('确认退出当前账号吗？', '退出登录', {
-      confirmButtonText: '退出登录',
-      cancelButtonText: '取消',
-      type: 'warning'
-    })
-    userStore.logout()
-    router.push('/login')
-  } catch {
-    // 用户取消
-  }
 }
 
 async function submitChangePassword() {
@@ -784,6 +730,34 @@ onMounted(loadApps)
   color: #64748b;
 }
 
+.landing-admin-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.landing-admin-actions button {
+  height: 34px;
+  padding: 0 14px;
+  border: 1px solid rgba(68, 91, 214, 0.20);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.86);
+  color: #24314f;
+  font-size: 12px;
+  font-weight: 760;
+  cursor: pointer;
+  box-shadow: 0 10px 24px rgba(51, 65, 85, 0.07);
+  transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease, color 0.18s ease;
+}
+
+.landing-admin-actions button:hover {
+  transform: translateY(-1px);
+  border-color: rgba(68, 91, 214, 0.32);
+  color: #3858d6;
+  background: #f8faff;
+}
+
 .landing {
   flex: 1;
   min-height: 0;
@@ -836,8 +810,9 @@ onMounted(loadApps)
   background: linear-gradient(135deg, var(--landing-mode-color), var(--landing-mode-ink));
   color: #fff;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 21px;
-  font-weight: 700;
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: 0;
   box-shadow: 0 2px 8px rgba(15, 23, 42, 0.12), 0 0 0 1px rgba(15, 23, 42, 0.12);
 }
 
@@ -1094,6 +1069,12 @@ onMounted(loadApps)
   color: #111827;
 }
 
+.template-chip {
+  color: var(--landing-mode-ink);
+  border-color: color-mix(in srgb, var(--landing-mode-color) 28%, #d8dee8);
+  background: color-mix(in srgb, var(--landing-mode-soft) 66%, #fff);
+}
+
 .toolbar-spacer {
   flex: 1;
 }
@@ -1237,6 +1218,19 @@ onMounted(loadApps)
   color: rgba(248, 250, 252, 0.94);
 }
 
+:global(html[data-theme="dark"]) .landing-admin-actions button {
+  border-color: rgba(148, 163, 184, 0.18);
+  background: rgba(17, 19, 24, 0.86);
+  color: rgba(226, 232, 240, 0.82);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+:global(html[data-theme="dark"]) .landing-admin-actions button:hover {
+  border-color: rgba(124, 140, 255, 0.36);
+  background: rgba(26, 29, 36, 0.96);
+  color: rgba(248, 250, 252, 0.94);
+}
+
 :global(html[data-theme="dark"]) .landing-command kbd,
 :global(html[data-theme="dark"]) .kbd-inline,
 :global(html[data-theme="dark"]) .submit-kbd {
@@ -1304,6 +1298,12 @@ onMounted(loadApps)
 :global(html[data-theme="dark"]) .chip:hover {
   background: #1a1d24;
   color: rgba(248, 250, 252, 0.94);
+}
+
+:global(html[data-theme="dark"]) .template-chip {
+  color: rgba(226, 232, 240, 0.88);
+  border-color: color-mix(in srgb, var(--landing-mode-color) 44%, rgba(148, 163, 184, 0.16));
+  background: color-mix(in srgb, var(--landing-mode-color) 12%, #111318);
 }
 
 :global(html[data-theme="dark"]) .seg-btn.active {
@@ -2047,6 +2047,12 @@ onMounted(loadApps)
     width: 100%;
     max-width: none;
   }
+  .landing-admin-actions {
+    width: 100%;
+  }
+  .landing-admin-actions button {
+    flex: 1;
+  }
   .content {
     padding: 0 14px 22px;
   }
@@ -2231,6 +2237,41 @@ html[data-theme="dark"] .landing-breadcrumbs strong,
 html[data-theme="dark"] .brand-title,
 html[data-theme="dark"] .brand-title em {
   color: rgba(248, 250, 252, 0.94) !important;
+}
+
+html[data-theme="dark"] .template-preview-dialog .el-dialog {
+  background: #10141b !important;
+  border: 1px solid rgba(148, 163, 184, 0.16) !important;
+  box-shadow: 0 26px 80px rgba(0, 0, 0, 0.54) !important;
+}
+
+html[data-theme="dark"] .template-preview-dialog .el-dialog__header {
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14) !important;
+}
+
+html[data-theme="dark"] .template-preview-dialog .el-dialog__title {
+  color: rgba(248, 250, 252, 0.94) !important;
+}
+
+html[data-theme="dark"] .template-preview-dialog .el-dialog__headerbtn .el-dialog__close {
+  color: rgba(203, 213, 225, 0.62) !important;
+}
+
+html[data-theme="dark"] .template-preview-head {
+  color: rgba(203, 213, 225, 0.72);
+}
+
+html[data-theme="dark"] .template-preview-meta,
+html[data-theme="dark"] .template-preview-desc,
+html[data-theme="dark"] .template-preview-empty {
+  color: rgba(148, 163, 184, 0.72) !important;
+}
+
+html[data-theme="dark"] .template-preview-structured,
+html[data-theme="dark"] .template-preview-body {
+  background: #0f131a !important;
+  border-color: rgba(148, 163, 184, 0.16) !important;
+  color: rgba(226, 232, 240, 0.88) !important;
 }
 
 html[data-theme="dark"] .landing-command,

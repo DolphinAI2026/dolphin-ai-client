@@ -128,17 +128,37 @@ export interface AnalysisResult {
   }>
 }
 
+export interface DesignDocValidationIssue {
+  severity: 'blocking' | 'warning' | string
+  code: string
+  target_type: string
+  target_name: string
+  current_code: string
+  message: string
+  suggestion?: string
+}
+
+export interface DesignDocValidationPayload {
+  ok: boolean
+  needs_user_input: boolean
+  assistant_message: string
+  blocking_issues?: DesignDocValidationIssue[]
+  warnings?: DesignDocValidationIssue[]
+}
+
 export interface UnifiedPlanResponse {
   session_id: number
   project_id?: number | null
   summary: string
-  doc_result: AnalysisResult
+  doc_result: AnalysisResult | null
   builder_markdown: string
   coding_brief: string
-  recommended_scene: string
+  recommended_scene: string | null
   used_fallback: boolean
   fallback_reason?: string | null
   source_file_name?: string | null
+  needs_user_input?: boolean
+  validation?: DesignDocValidationPayload
 }
 
 const BASE = '/requirements'

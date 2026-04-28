@@ -28,6 +28,10 @@ export interface ApplicationMember {
   role: ProjectRole
   source: 'creator' | 'inherited' | 'direct'
   created_at: string | null
+  is_active?: boolean
+  tenant_status?: number | null
+  tenant_role_code?: string | null
+  tenant_role_name?: string | null
   id?: number  // optional：仅 direct 类型 member 有 ApplicationMember.id
 }
 
@@ -37,6 +41,11 @@ export interface ProjectMemberView {
   username: string
   role: ProjectRole
   created_at: string | null
+}
+
+export interface MemberUserOption {
+  id: number
+  username: string
 }
 
 export const ROLE_DISPLAY_NAMES: Record<ProjectRole, string> = {

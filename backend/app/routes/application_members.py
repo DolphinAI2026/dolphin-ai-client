@@ -16,11 +16,18 @@ from app.database import get_db
 from app.deps import get_auth_context, AuthContext
 from app.models import Application, Project, ProjectMember, User
 from app.models.collaboration import ApplicationMember
-from app.models.tenant import UserTenant
+from app.models.tenant import Role, UserTenant
 from app.project_access import normalize_project_role, project_role_at_least
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/applications", tags=["application-members"])
+
+_ROLE_LEVELS = {
+    "viewer": 1,
+    "contributor": 2,
+    "maintainer": 3,
+    "owner": 4,
+}
 
 
 class InviteAppMemberRequest(BaseModel):
@@ -86,9 +93,7 @@ async def _user_role_on_application(
     candidates = [r for r in (direct_role, inherited_role) if r]
     if not candidates:
         return None
-    return max(candidates, key=lambda r: {
-        "viewer": 1, "contributor": 2, "maintainer": 3, "owner": 4
-    }.get(r, 0))
+    return max(candidates, key=lambda r: _ROLE_LEVELS.get(r, 0))
 
 
 async def _require_application_access(
@@ -98,14 +103,58 @@ async def _require_application_access(
     user_id: int,
     tenant_id: int,
     minimum_role: str = "contributor",
+    tenant_role: str | None = None,
 ) -> tuple[Application, str]:
     app = await _resolve_application_or_404(db, application_id, tenant_id)
+    if tenant_role in ("platform_admin", "tenant_admin"):
+        return app, "owner"
     role = await _user_role_on_application(db, application=app, user_id=user_id)
     if not role:
         raise HTTPException(404, "应用不存在或无权访问")
     if not project_role_at_least(role, minimum_role):
         raise HTTPException(403, "无权访问该应用")
     return app, role
+
+
+def _merge_member(members: dict[int, dict], item: dict) -> None:
+    """Merge duplicate membership sources and keep the highest effective app role."""
+    user_id = int(item["user_id"])
+    item["role"] = normalize_project_role(item.get("role"))
+    existing = members.get(user_id)
+    if not existing or _ROLE_LEVELS.get(item["role"], 0) > _ROLE_LEVELS.get(existing.get("role"), 0):
+        members[user_id] = item
+
+
+async def _attach_tenant_user_meta(
+    db: AsyncSession,
+    *,
+    members: dict[int, dict],
+    tenant_id: int,
+) -> None:
+    if not members:
+        return
+    rows = (await db.execute(
+        select(UserTenant, Role)
+        .outerjoin(Role, Role.id == UserTenant.role_id)
+        .where(
+            UserTenant.tenant_id == tenant_id,
+            UserTenant.user_id.in_(list(members.keys())),
+        )
+    )).all()
+    meta_by_user_id = {
+        membership.user_id: {
+            "tenant_status": membership.status,
+            "tenant_role_code": role.role_code if role else None,
+            "tenant_role_name": role.role_name if role else None,
+        }
+        for membership, role in rows
+    }
+    for user_id, member in members.items():
+        member.update(meta_by_user_id.get(user_id, {
+            "tenant_status": None,
+            "tenant_role_code": None,
+            "tenant_role_name": None,
+        }))
 
 
 @router.get("/{application_id}/members")
@@ -120,6 +169,7 @@ async def list_application_members(
         application_id=application_id,
         user_id=ctx.user.id,
         tenant_id=ctx.tenant_id,
+        tenant_role=ctx.tenant_role,
     )
 
     members: dict[int, dict] = {}
@@ -131,13 +181,14 @@ async def list_application_members(
             .where(ProjectMember.project_id == app.project_id)
         )).all()
         for pm, u in pm_rows:
-            members[u.id] = {
+            _merge_member(members, {
                 "user_id": u.id,
                 "username": u.username,
                 "role": normalize_project_role(pm.role),
                 "source": "inherited",
+                "is_active": u.is_active,
                 "created_at": pm.created_at.isoformat() if pm.created_at else None,
-            }
+            })
 
     am_rows = (await db.execute(
         select(ApplicationMember, User)
@@ -145,27 +196,30 @@ async def list_application_members(
         .where(ApplicationMember.application_id == application_id)
     )).all()
     for am, u in am_rows:
-        members[u.id] = {
+        _merge_member(members, {
             "user_id": u.id,
             "username": u.username,
             "role": normalize_project_role(am.role),
             "source": "direct",
+            "is_active": u.is_active,
             "created_at": am.created_at.isoformat() if am.created_at else None,
-        }
+        })
 
     if app.created_by not in members:
         owner_user = (await db.execute(
             select(User).where(User.id == app.created_by)
         )).scalar_one_or_none()
         if owner_user:
-            members[owner_user.id] = {
+            _merge_member(members, {
                 "user_id": owner_user.id,
                 "username": owner_user.username,
                 "role": "owner",
                 "source": "creator",
+                "is_active": owner_user.is_active,
                 "created_at": app.created_at.isoformat() if app.created_at else None,
-            }
+            })
 
+    await _attach_tenant_user_meta(db, members=members, tenant_id=ctx.tenant_id)
     return list(members.values())
 
 
@@ -183,6 +237,7 @@ async def invite_application_member(
         user_id=ctx.user.id,
         tenant_id=ctx.tenant_id,
         minimum_role="maintainer",
+        tenant_role=ctx.tenant_role,
     )
 
     if req.user_id:
@@ -211,6 +266,19 @@ async def invite_application_member(
         raise HTTPException(400, "不能直接邀请为 owner（只有创建者持有）")
     if requested == "maintainer" and role != "owner":
         raise HTTPException(403, "仅应用 owner 可添加 maintainer")
+    if app.created_by == target.id:
+        raise HTTPException(400, "创建者已拥有 owner 权限")
+
+    inherited_role = None
+    if app.project_id:
+        inherited_member = (await db.execute(
+            select(ProjectMember).where(
+                ProjectMember.project_id == app.project_id,
+                ProjectMember.user_id == target.id,
+            )
+        )).scalar_one_or_none()
+        if inherited_member:
+            inherited_role = normalize_project_role(inherited_member.role)
 
     existing = (await db.execute(
         select(ApplicationMember).where(
@@ -220,6 +288,8 @@ async def invite_application_member(
     )).scalar_one_or_none()
     if existing:
         raise HTTPException(400, "该用户已是应用成员")
+    if inherited_role and _ROLE_LEVELS.get(requested, 0) <= _ROLE_LEVELS.get(inherited_role, 0):
+        raise HTTPException(400, "该用户已通过项目成员获得同等或更高权限")
 
     member = ApplicationMember(
         application_id=application_id,
@@ -256,6 +326,7 @@ async def update_application_member_role(
         user_id=ctx.user.id,
         tenant_id=ctx.tenant_id,
         minimum_role="owner",
+        tenant_role=ctx.tenant_role,
     )
     am = (await db.execute(
         select(ApplicationMember).where(
@@ -292,6 +363,7 @@ async def remove_application_member(
         user_id=ctx.user.id,
         tenant_id=ctx.tenant_id,
         minimum_role="maintainer",
+        tenant_role=ctx.tenant_role,
     )
     am = (await db.execute(
         select(ApplicationMember).where(

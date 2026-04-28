@@ -7,20 +7,27 @@
     <div class="tenant-users-page builder-page">
       <div class="tenant-users-header">
         <div>
-          <h1>成员管理</h1>
-          <p>管理当前组织内的普通用户、租户角色和启停状态。</p>
+          <h1>{{ pageTitle }}</h1>
+          <p>{{ pageDesc }}</p>
+          <p class="tenant-users-note">{{ pageNote }}</p>
         </div>
       </div>
 
       <div class="tenant-users-panel">
         <el-table v-loading="loading" :data="users" stripe>
           <el-table-column prop="username" label="用户名" min-width="180" />
+          <el-table-column v-if="isPlatformAdmin" label="所属组织" min-width="220">
+            <template #default="{ row }">
+              {{ row.tenant_summary || row.tenant_name || '-' }}
+            </template>
+          </el-table-column>
           <el-table-column label="组织角色" min-width="180">
             <template #default="{ row }">
               <el-select
                 :model-value="row.role_code || ''"
                 size="small"
                 style="width: 150px"
+                :disabled="isPlatformAdmin && row.id === userStore.user?.id"
                 @change="(val: string) => updateRole(row, val)"
               >
                 <el-option
@@ -36,6 +43,7 @@
             <template #default="{ row }">
               <el-switch
                 :model-value="row.tenant_status === 1"
+                :disabled="isPlatformAdmin && row.id === userStore.user?.id"
                 @change="(val: boolean) => updateStatus(row, val)"
               />
             </template>
@@ -43,7 +51,7 @@
           <el-table-column label="权限视图" min-width="150">
             <template #default="{ row }">
               <el-tag
-                :type="row.tenant_role === 'tenant_admin' ? 'warning' : row.tenant_role === 'developer' ? 'primary' : 'info'"
+                :type="roleTagType(row.tenant_role)"
                 size="small"
               >
                 {{ roleLabel(row.tenant_role) }}
@@ -58,10 +66,10 @@
         </el-table>
       </div>
 
-      <el-dialog v-model="dialogVisible" title="添加用户到当前组织" width="460px">
+      <el-dialog v-model="dialogVisible" :title="isPlatformAdmin ? '添加平台账号' : '添加用户到当前组织'" width="460px">
         <el-form :model="inviteForm" label-position="top">
           <el-form-item label="用户名" required>
-            <el-input v-model="inviteForm.username" placeholder="已有账号会直接加入当前组织" />
+            <el-input v-model="inviteForm.username" placeholder="输入已有用户名，例如 mars；账号不存在时会新建" />
           </el-form-item>
           <el-form-item label="初始密码">
             <el-input v-model="inviteForm.password" type="password" show-password placeholder="仅当账号不存在时需要填写" />
@@ -87,11 +95,13 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import BuilderFrame from '@/components/BuilderFrame.vue'
 import { authApi, type TenantRoleOption, type TenantUser } from '@/api/auth'
+import { useUserStore } from '@/stores/user'
 
+const userStore = useUserStore()
 const loading = ref(false)
 const saving = ref(false)
 const users = ref<TenantUser[]>([])
@@ -102,12 +112,32 @@ const inviteForm = ref({
   password: '',
   role_code: 'R_developer',
 })
+const isPlatformAdmin = computed(() => userStore.tenantRole === 'platform_admin')
+const pageTitle = computed(() => isPlatformAdmin.value ? '账号管理' : '成员管理')
+const pageDesc = computed(() =>
+  isPlatformAdmin.value
+    ? '管理平台内全部账号的启停状态和最高权限。'
+    : '管理当前组织内的普通用户、租户角色和启停状态。'
+)
+const pageNote = computed(() =>
+  isPlatformAdmin.value
+    ? '平台超级管理员可以查看全部组织账号；普通账号仍需加入具体组织后才能进入业务工作台。'
+    : '自注册账号会先进入自己的独立组织；如需加入本组织，请用「添加用户」输入已有用户名。'
+)
 
 function roleLabel(role: TenantUser['tenant_role']) {
+  if (role === 'platform_admin') return '平台超级管理员'
   if (role === 'tenant_admin') return '租户管理员'
   if (role === 'developer') return '开发者'
   if (role === 'viewer') return '查看者'
   return '成员'
+}
+
+function roleTagType(role: TenantUser['tenant_role']) {
+  if (role === 'platform_admin') return 'danger'
+  if (role === 'tenant_admin') return 'warning'
+  if (role === 'developer') return 'primary'
+  return 'info'
 }
 
 function formatDate(value?: string | null) {
@@ -124,8 +154,11 @@ async function loadAll() {
     ])
     roles.value = roleList
     users.value = userList
-    if (!inviteForm.value.role_code && roleList.length > 0) {
-      inviteForm.value.role_code = roleList[0].role_code
+    const firstRoleCode = roleList[0]?.role_code
+    if (isPlatformAdmin.value && inviteForm.value.role_code === 'R_developer') {
+      inviteForm.value.role_code = 'normal_user'
+    } else if (!inviteForm.value.role_code && firstRoleCode) {
+      inviteForm.value.role_code = firstRoleCode
     }
   } catch (error: any) {
     ElMessage.error(error.message || '加载用户管理数据失败')
@@ -171,7 +204,7 @@ async function inviteUser() {
     inviteForm.value = {
       username: '',
       password: '',
-      role_code: roles.value[0]?.role_code || 'R_developer',
+      role_code: isPlatformAdmin.value ? 'normal_user' : roles.value[0]?.role_code || 'R_developer',
     }
     await loadAll()
     ElMessage.success('用户已加入当前组织')
@@ -218,6 +251,10 @@ onMounted(() => {
   margin: 5px 0 0;
   color: var(--b-text-muted);
   font-size: 12px;
+}
+
+.tenant-users-header .tenant-users-note {
+  color: var(--b-text-dim);
 }
 
 .tenant-users-panel {

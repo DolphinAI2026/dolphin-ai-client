@@ -21,7 +21,7 @@
 
     <button class="builder-global-search" type="button" @click="commandOpen = true">
       <Search />
-      <span>搜索应用、模型、对话...</span>
+      <span>搜索应用、仓库、模型、对话...</span>
       <kbd>⌘K</kbd>
     </button>
 
@@ -34,7 +34,7 @@
           <input
             ref="commandInput"
             v-model="query"
-            placeholder="搜索页面、应用、设置..."
+            placeholder="搜索页面、应用、仓库、设置..."
             @keydown.enter="goFirst"
             @keydown.esc="commandOpen = false"
           >
@@ -62,6 +62,7 @@ import { useRouter } from 'vue-router'
 import {
   ArrowRight,
   ChatDotRound,
+  Connection,
   DataAnalysis,
   Grid,
   HomeFilled,
@@ -86,11 +87,12 @@ const query = ref('')
 const commandInput = ref<HTMLInputElement | null>(null)
 
 const commandItems = [
-  { icon: HomeFilled, title: '新建协同构建', meta: 'CoWork 默认入口，从需求生成 SPEC', to: '/' },
+  { icon: HomeFilled, title: '新建智能搭建', meta: 'Builder 默认入口，从需求生成 SPEC', to: '/' },
   { icon: ChatDotRound, title: '继续搭建对话', meta: '设备巡检管理 · SPEC v0.1', to: '/chat' },
   { icon: Grid, title: '我的应用', meta: '5 个应用 · 3 个进行中', to: '/apps' },
   { icon: DataAnalysis, title: '查看模型和表单', meta: '模型、表单、流程、权限', to: '/chat?tab=models' },
-  { icon: Monitor, title: '打开 IDE', meta: '自开发工作区与 AI diff', to: '/ide' },
+  { icon: Connection, title: 'Vibe Coding', meta: '全代码仓库工作区', to: '/vibe-coding' },
+  { icon: Monitor, title: '打开 IDE', meta: '开发工作区与 AI diff', to: '/ide' },
   { icon: Promotion, title: 'DevOps 总览', meta: '流水线、环境、审批', to: '/devops' },
   { icon: Setting, title: '模型配置', meta: '真实模型供应商、API Key、默认模型', to: '/platform-envs?tab=llm' },
   { icon: Setting, title: '成员管理', meta: '组织成员、角色和启停状态', to: '/tenant-users' },
