@@ -306,7 +306,7 @@ async def on_spec_confirmed(
     spec_id: str,
     need_scaffold: bool,
 ) -> None:
-    """用户确认 Spec 后（/api/spec/{id}/confirm 调用此函数）。
+    """用户确认 Spec 后（/api/coding/v2/specs/{id}/confirm 调用此函数）。
 
     need_scaffold=True（首轮 / 无 workspace）→ phase = SCAFFOLD
     need_scaffold=False（迭代）→ phase = GENERATE

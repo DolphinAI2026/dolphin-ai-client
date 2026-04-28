@@ -445,7 +445,7 @@ def test_full_multi_round_pause_resume_to_emit():
             assert r4.spec_id is not None
             assert r4.spec_envelope is not None
             # DB 主键 / envelope.spec_id / spec_emitted 事件 spec_id 必须三方一致，
-            # 否则前端按事件 spec_id GET /api/spec/{id} 会 404。
+            # 否则前端按事件 spec_id GET /api/coding/v2/specs/{id} 会 404。
             assert r4.spec_id == r4.spec_envelope["spec_id"], (
                 f"driver.spec_id={r4.spec_id} != envelope.spec_id={r4.spec_envelope['spec_id']}"
             )

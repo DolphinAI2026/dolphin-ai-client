@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.deps import get_auth_context, AuthContext
+from app.json_utils import loads_if_str
 from app.builder_spec.persistence import load_spec, save_spec, empty_spec
 from app.builder_spec.tools import dispatch_tool, ToolError
 from app.builder_spec.schema import Phase
@@ -53,13 +54,25 @@ class UpgradeFromLegacyRequest(BaseModel):
     application_id: int
 
 
+def _load_legacy_config_from_application(app) -> dict:
+    """Return the legacy app config payload from the current Application model."""
+    raw = getattr(app, "config_preview", None) or getattr(app, "config", None)
+    if not raw:
+        return {}
+    parsed = loads_if_str(raw, default={})
+    if not isinstance(parsed, dict):
+        return {}
+    data = parsed.get("data", parsed)
+    return data if isinstance(data, dict) else {}
+
+
 @router.post("/upgrade-from-legacy")
 async def upgrade_from_legacy_config(
     body: UpgradeFromLegacyRequest,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """Reverse-engineer a Spec from an existing Application.config and link it."""
+    """Reverse-engineer a Spec from an existing Application.config_preview and link it."""
     from app.models import Application
     from app.builder_spec.persistence import bootstrap_from_legacy_config
 
@@ -68,10 +81,13 @@ async def upgrade_from_legacy_config(
         raise HTTPException(404, detail="应用不存在")
     if app.canonical_spec_id:
         raise HTTPException(409, detail="应用已升级，请直接编辑")
-    if not app.config:
-        raise HTTPException(400, detail="应用无 config 可反推")
+    try:
+        legacy = _load_legacy_config_from_application(app)
+    except Exception as exc:
+        raise HTTPException(400, detail=f"应用 config_preview 解析失败: {exc}") from exc
+    if not legacy:
+        raise HTTPException(400, detail="应用无 config_preview 可反推")
 
-    legacy = app.config if isinstance(app.config, dict) else {}
     spec = bootstrap_from_legacy_config(
         application_id=app.id,
         legacy_config=legacy,

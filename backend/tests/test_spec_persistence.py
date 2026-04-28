@@ -1,4 +1,7 @@
 import pytest
+import json
+from types import SimpleNamespace
+
 from app.builder_spec.persistence import bootstrap_from_legacy_config
 from app.builder_spec.schema import Phase
 
@@ -32,3 +35,22 @@ def test_bootstrap_from_legacy_config_basic():
     assert all(not r.confirmed for r in spec.roles)
     assert spec.completeness.total > 0
     assert spec.completeness.confirmed == 0
+
+
+def test_load_legacy_config_from_application_uses_config_preview_data_wrapper():
+    from app.routes.spec import _load_legacy_config_from_application
+
+    app = SimpleNamespace(
+        config_preview=json.dumps({
+            "type": "preview",
+            "data": {
+                "appName": "ems",
+                "models": [{"code": "t_ems_form", "name": "报销单"}],
+            },
+        }, ensure_ascii=False),
+    )
+
+    legacy = _load_legacy_config_from_application(app)
+
+    assert legacy["appName"] == "ems"
+    assert legacy["models"][0]["code"] == "t_ems_form"
