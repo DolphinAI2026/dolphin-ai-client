@@ -1,0 +1,658 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Online Vibe Coding Home Prototype</title>
+  <style>
+    :root {
+      --bg: #f7f8fb;
+      --sub: #f2f4f8;
+      --panel: #ffffff;
+      --panel-soft: #fbfcff;
+      --line: rgba(24, 31, 45, 0.10);
+      --line-strong: rgba(24, 31, 45, 0.16);
+      --text: #181f2d;
+      --muted: #667085;
+      --faint: #9aa4b2;
+      --ink: #111827;
+      --accent: #4f6ef7;
+      --accent-soft: #eef3ff;
+      --teal: #0f9f8f;
+      --teal-soft: #e9f8f5;
+      --amber: #b7791f;
+      --amber-soft: #fff5df;
+      --violet: #6d5dfc;
+      --violet-soft: #f1efff;
+      --mono: "SF Mono", "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #090b10;
+        --sub: #0d1117;
+        --panel: #111318;
+        --panel-soft: #151922;
+        --line: rgba(148, 163, 184, 0.14);
+        --line-strong: rgba(148, 163, 184, 0.24);
+        --text: rgba(248, 250, 252, 0.94);
+        --muted: rgba(203, 213, 225, 0.66);
+        --faint: rgba(148, 163, 184, 0.48);
+        --ink: #f8fafc;
+        --accent: #8aa2ff;
+        --accent-soft: rgba(124, 140, 255, 0.14);
+        --teal: #34d399;
+        --teal-soft: rgba(52, 211, 153, 0.14);
+        --amber: #fbbf24;
+        --amber-soft: rgba(251, 191, 36, 0.14);
+        --violet: #a78bfa;
+        --violet-soft: rgba(167, 139, 250, 0.14);
+      }
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      font-family: Inter, "Noto Sans SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      -webkit-font-smoothing: antialiased;
+    }
+
+    button { font: inherit; }
+
+    .app {
+      height: 100vh;
+      display: grid;
+      grid-template-columns: 56px 1fr;
+      overflow: hidden;
+    }
+
+    .nav {
+      background: var(--sub);
+      border-right: 1px solid var(--line);
+      padding: 10px 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .logo,
+    .nav-btn,
+    .avatar {
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+    }
+
+    .logo {
+      background: var(--ink);
+      color: white;
+      font-family: var(--mono);
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    .nav-btn {
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    .nav-btn.active {
+      background: var(--panel);
+      color: var(--text);
+      box-shadow: 0 1px 2px rgba(24, 31, 45, 0.06), 0 0 0 1px var(--line);
+    }
+
+    .nav-spacer { flex: 1; }
+    .avatar {
+      width: 30px;
+      height: 30px;
+      border-radius: 999px;
+      background: #c98b2a;
+      color: white;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .page {
+      min-width: 0;
+      min-height: 0;
+      overflow: auto;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .topbar {
+      height: 52px;
+      flex: 0 0 52px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 16px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.92);
+    }
+
+    .breadcrumbs {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .breadcrumbs strong { color: var(--text); }
+    .spacer { flex: 1; }
+
+    .search {
+      width: 420px;
+      max-width: 42vw;
+      height: 32px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #f8fafc;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 0 9px;
+      font-size: 12px;
+    }
+
+    .search kbd {
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      padding: 1px 5px;
+      background: white;
+      color: var(--faint);
+      font-size: 11px;
+      font-family: var(--mono);
+    }
+
+    .content {
+      width: min(1180px, calc(100vw - 96px));
+      margin: 0 auto;
+      padding: 44px 0 48px;
+    }
+
+    .hero {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 24px;
+      margin-bottom: 22px;
+    }
+
+    .eyebrow {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--accent);
+      letter-spacing: .04em;
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }
+
+    .title {
+      margin: 0;
+      font-size: 30px;
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      margin: 10px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.7;
+      max-width: 680px;
+    }
+
+    .summary {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      height: 24px;
+      padding: 0 8px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .entry-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+
+    .entry {
+      min-height: 250px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--panel);
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      box-shadow: 0 1px 2px rgba(24, 31, 45, 0.04);
+    }
+
+    .entry.primary {
+      border-color: rgba(79, 110, 247, 0.25);
+      box-shadow: 0 10px 28px rgba(79, 110, 247, 0.08), 0 0 0 1px rgba(79, 110, 247, 0.05);
+    }
+
+    .entry-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .mark {
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      display: grid;
+      place-items: center;
+      font-family: var(--mono);
+      font-size: 13px;
+      font-weight: 750;
+    }
+
+    .mark.builder { background: var(--accent-soft); color: var(--accent); }
+    .mark.lowcode { background: var(--teal-soft); color: var(--teal); }
+    .mark.online { background: var(--violet-soft); color: var(--violet); }
+
+    .badge {
+      height: 24px;
+      border-radius: 8px;
+      padding: 0 8px;
+      display: inline-flex;
+      align-items: center;
+      background: var(--panel-soft);
+      border: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .badge.new {
+      color: var(--violet);
+      background: var(--violet-soft);
+      border-color: rgba(109, 93, 252, .18);
+    }
+
+    .entry h2 {
+      margin: 0;
+      font-size: 17px;
+      line-height: 1.3;
+      letter-spacing: 0;
+    }
+
+    .entry p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.65;
+    }
+
+    .entry-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .entry-list span {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+
+    .entry-list span::before {
+      content: "";
+      width: 5px;
+      height: 5px;
+      border-radius: 999px;
+      background: var(--faint);
+      flex: 0 0 auto;
+    }
+
+    .entry-actions {
+      margin-top: auto;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .btn {
+      height: 34px;
+      border-radius: 8px;
+      border: 1px solid var(--line-strong);
+      background: var(--panel);
+      color: var(--text);
+      padding: 0 11px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .btn.primary {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: white;
+    }
+
+    .btn.violet {
+      border-color: var(--violet);
+      background: var(--violet);
+      color: white;
+    }
+
+    .lower {
+      display: grid;
+      grid-template-columns: 1fr 360px;
+      gap: 12px;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--panel);
+      overflow: hidden;
+    }
+
+    .panel-head {
+      height: 42px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 12px;
+      font-size: 12px;
+      font-weight: 750;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .02em;
+    }
+
+    .work-list {
+      padding: 8px;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .work-item,
+    .activity-item {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      background: var(--panel-soft);
+      min-width: 0;
+    }
+
+    .work-title {
+      font-size: 13px;
+      font-weight: 700;
+      margin-bottom: 7px;
+    }
+
+    .work-meta {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .activity-list {
+      padding: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .activity-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .activity-item strong {
+      color: var(--text);
+      display: block;
+      font-size: 13px;
+      margin-bottom: 3px;
+    }
+
+    @media (max-width: 1120px) {
+      .entry-grid,
+      .lower { grid-template-columns: 1fr; }
+      .content { width: min(760px, calc(100vw - 88px)); }
+      .hero { align-items: flex-start; flex-direction: column; }
+      .summary { justify-content: flex-start; }
+      .work-list { grid-template-columns: 1fr; }
+    }
+
+    @media (prefers-color-scheme: dark) {
+      .logo {
+        background: #e8edff;
+        color: #090b10;
+      }
+
+      .topbar {
+        background: rgba(17, 19, 24, 0.94);
+      }
+
+      .search {
+        background: rgba(21, 25, 34, 0.96);
+      }
+
+      .search kbd {
+        background: #090b10;
+      }
+
+      .entry {
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.34);
+      }
+
+      .entry.primary {
+        box-shadow: 0 12px 34px rgba(0, 0, 0, 0.30), 0 0 0 1px rgba(138, 162, 255, 0.08);
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="nav">
+      <div class="logo">V</div>
+      <button class="nav-btn active">NEW</button>
+      <button class="nav-btn">APP</button>
+      <button class="nav-btn">COD</button>
+      <button class="nav-btn">RUN</button>
+      <button class="nav-btn">REV</button>
+      <div class="nav-spacer"></div>
+      <button class="nav-btn">SET</button>
+      <div class="avatar">M</div>
+    </div>
+
+    <main class="page">
+      <div class="topbar">
+        <div class="breadcrumbs">
+          <span>aPaaS Builder</span>
+          <span>/</span>
+          <strong>新建</strong>
+        </div>
+        <div class="spacer"></div>
+        <div class="search">
+          <span>搜索应用、Git 仓库、运行记录...</span>
+          <kbd>⌘K</kbd>
+        </div>
+      </div>
+
+      <section class="content">
+        <div class="hero">
+          <div>
+            <div class="eyebrow">AI DEVELOPMENT WORKSPACE</div>
+            <h1 class="title">今天要做什么？</h1>
+            <p class="subtitle">
+              选择低代码智能搭建、低代码二次开发，或进入 Vibe Coding 处理完整代码仓库。
+            </p>
+          </div>
+          <div class="summary">
+            <span class="chip">3 个入口</span>
+            <span class="chip">低代码 + 全代码</span>
+            <span class="chip">沙箱运行</span>
+          </div>
+        </div>
+
+        <div class="entry-grid">
+          <article class="entry primary">
+            <div class="entry-head">
+              <div class="mark builder">AI</div>
+              <span class="badge">默认</span>
+            </div>
+            <div>
+              <h2>低代码智能搭建</h2>
+              <p>描述业务系统，AI 生成 SPEC、对象、表单、流程、权限，并进入应用工作台。</p>
+            </div>
+            <div class="entry-list">
+              <span>从一句话或 PRD 开始</span>
+              <span>生成可审阅的配置变更</span>
+              <span>保留发布前确认与回滚</span>
+            </div>
+            <div class="entry-actions">
+              <button class="btn primary">开始搭建</button>
+              <button class="btn">上传 PRD</button>
+            </div>
+          </article>
+
+          <article class="entry">
+            <div class="entry-head">
+              <div class="mark lowcode">{}</div>
+              <span class="badge">aPaaS</span>
+            </div>
+            <div>
+              <h2>Code 模式 · 低代码二开</h2>
+              <p>开发得帆平台自定义组件、页面、接口和脚本，AI 创建模板工作区并辅助迭代。</p>
+            </div>
+            <div class="entry-list">
+              <span>组件 / 页面 / 后端接口</span>
+              <span>内置平台 SDK 与开发规范</span>
+              <span>构建后上传到低代码平台</span>
+            </div>
+            <div class="entry-actions">
+              <button class="btn">进入 Code 模式</button>
+              <button class="btn">选择应用</button>
+            </div>
+          </article>
+
+          <article class="entry">
+            <div class="entry-head">
+              <div class="mark online">&lt;/&gt;</div>
+              <span class="badge new">Vibe Coding</span>
+            </div>
+            <div>
+              <h2>全代码 Coding</h2>
+              <p>导入 Git 仓库或新建项目，在云沙箱里让 AI 读代码、改代码、跑测试、开 PR。</p>
+            </div>
+            <div class="entry-list">
+              <span>GitHub / GitLab 仓库导入</span>
+              <span>Web IDE + Preview + Terminal</span>
+              <span>提交 commit 或发起 PR</span>
+            </div>
+            <div class="entry-actions">
+              <button class="btn violet">导入 Git 仓库</button>
+              <button class="btn">新建项目</button>
+            </div>
+          </article>
+        </div>
+
+        <div class="lower">
+          <section class="panel">
+            <div class="panel-head">
+              <span>最近工作</span>
+              <span>查看全部</span>
+            </div>
+            <div class="work-list">
+              <div class="work-item">
+                <div class="work-title">供应商门户重构</div>
+                <div class="work-meta">
+                  <span class="chip">Vibe Coding</span>
+                  <span class="chip">PR ready</span>
+                </div>
+              </div>
+              <div class="work-item">
+                <div class="work-title">客户拜访管理</div>
+                <div class="work-meta">
+                  <span class="chip">智能搭建</span>
+                  <span class="chip">待确认</span>
+                </div>
+              </div>
+              <div class="work-item">
+                <div class="work-title">头像上传组件</div>
+                <div class="work-meta">
+                  <span class="chip">低代码二开</span>
+                  <span class="chip">build pass</span>
+                </div>
+              </div>
+              <div class="work-item">
+                <div class="work-title">billing-api</div>
+                <div class="work-meta">
+                  <span class="chip">Full code</span>
+                  <span class="chip">tests failed</span>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <span>待处理</span>
+              <span>4</span>
+            </div>
+            <div class="activity-list">
+              <div class="activity-item">
+                <div><strong>低代码 apply 风险确认</strong><span>客户分类字段类型变更</span></div>
+                <span class="chip">Review</span>
+              </div>
+              <div class="activity-item">
+                <div><strong>Vibe Coding PR</strong><span>supplier-home branch ready</span></div>
+                <span class="chip">PR</span>
+              </div>
+              <div class="activity-item">
+                <div><strong>沙箱休眠</strong><span>billing-api 可恢复</span></div>
+                <span class="chip">Resume</span>
+              </div>
+            </div>
+          </section>
+        </div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>
