@@ -3,6 +3,7 @@ import { ChatHandler } from './chatHandler';
 import { ModelSelector } from './modelSelector';
 import { Config } from './config';
 import { LLMClient } from './llmClient';
+import { registerLMProvider } from './lmProvider';
 
 export function activate(context: vscode.ExtensionContext) {
   console.log('[RuijingAI] Extension activating...');
@@ -11,6 +12,10 @@ export function activate(context: vscode.ExtensionContext) {
   const llmClient = new LLMClient(config);
   const modelSelector = new ModelSelector(config);
   const handler = new ChatHandler(config, modelSelector);
+
+  // 注册后端为 VS Code Language Model Provider（VS Code 1.95+ 要求）
+  // 不注册则 chatParticipant 报 "Language model unavailable"
+  registerLMProvider(context, config);
 
   // Register ChatParticipant
   const participant = vscode.chat.createChatParticipant('ruijing-ai.chat', handler.handle.bind(handler));
