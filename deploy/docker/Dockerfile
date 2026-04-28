@@ -44,7 +44,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     NODE_MAJOR=20 \
-    CODE_SERVER_VERSION=4.98.2
+    CODE_SERVER_VERSION=4.112.0
 
 # --- 系统依赖 + Node 20 ------------------------------------
 # 注：未安装 Chromium 运行时依赖。playwright Python 包会装（import 需要），

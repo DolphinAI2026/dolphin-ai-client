@@ -20,7 +20,8 @@ export class Config {
   constructor(private context: vscode.ExtensionContext) {}
 
   get(): RuijingConfig {
-    if (this._cached && Date.now() - this._cachedAt < 30_000) {
+    // 缓存 TTL 缩短至 5s，确保工作区切换后能快速感知新的 ruijing-ai.json
+    if (this._cached && Date.now() - this._cachedAt < 5_000) {
       return this._cached;
     }
     this._cached = this._load();
