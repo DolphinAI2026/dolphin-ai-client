@@ -1,0 +1,13 @@
+{
+  "entry": "index.js",
+  "templateType": "FORM_COMPONENT",
+  "customWidgetList": [
+    {
+      "code": "FORM_CUSTOM_COMPONENT_SUPPLIER_NETWORK",
+      "text": "供应商网络图",
+      "description": "供应商关系网络可视化组件，支持力导向关系图和多维度数据汇总看板"
+    }
+  ],
+  "copyAssets": [],
+  "outputName": "form-component-supplier-network"
+}
