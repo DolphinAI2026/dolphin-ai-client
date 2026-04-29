@@ -19,15 +19,18 @@ from urllib.parse import urlencode, urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Header, Query, Request
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.coding.workspace import WORKSPACE_ROOT
+from app.database import get_db
 from app.deps import AuthContext, get_auth_context
 from app.routes.coding import (
     _align_local_code_server_base_url,
     _build_ide_proxy_api_base,
     _create_ide_access_token,
     _derive_harness_api_base,
+    _get_default_coding_model_id,
     _verify_ide_access_token,
     _write_ruijing_extension_config,
 )
@@ -986,6 +989,7 @@ async def get_online_coding_workspace_ide_url(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     theme: Optional[str] = Query(default=None, description="light/dark，用于同步界面主题"),
     selected_model: Optional[str] = Query(default=None, max_length=256, description="Vibe Coding Agent 使用的模型标识"),
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
 ):
     ws_dir, meta = _find_workspace_dir(workspace_id)
     if meta.get("user_id") != ctx.user.id:
@@ -1004,7 +1008,11 @@ async def get_online_coding_workspace_ide_url(
 
     ide_token = _create_ide_access_token(ctx, workspace_id)
     api_base = _build_ide_proxy_api_base(request, workspace_id)
-    extension_model = selected_model.strip() if selected_model and selected_model.strip() else settings.llm_model
+    extension_model = (
+        selected_model.strip()
+        if selected_model and selected_model.strip()
+        else await _get_default_coding_model_id(db, ctx.tenant_id)
+    )
     _write_ruijing_extension_config(repo_dir, workspace_id, ide_token, api_base, extension_model)
     config_file = repo_dir / ".vscode" / "ruijing-ai.json"
     try:
