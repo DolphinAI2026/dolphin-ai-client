@@ -1085,7 +1085,7 @@ def normalize_doc_result(doc: dict, messages: list[dict[str, Any]] | None = None
         tables,
         roles,
     )
-    normalized["custom_development"] = []
+    normalized["custom_development"] = _normalize_custom_development_items(source)
     normalized["forms"] = _derive_forms_for_doc_result(normalized)
     return normalized
 

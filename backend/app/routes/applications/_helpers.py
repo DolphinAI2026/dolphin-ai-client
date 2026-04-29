@@ -739,12 +739,13 @@ def _fallback_generated_icon(app: Application) -> str:
 def _enrich(app: Application) -> ApplicationResponse:
     config = None
     models = forms = roles = dicts = 0
-    resolved_app_code = _normalize_app_code(app.app_code) or _coerce_app_code(app.app_name)
+    resolved_app_code = app.app_code or _coerce_app_code(app.app_name)
     if app.config_preview:
         try:
             config = loads_if_str(app.config_preview)
             data = config.get("data", config)
-            resolved_app_code = _normalize_app_code(data.get("appCode") or data.get("app_code")) or resolved_app_code
+            preview_app_code = str(data.get("appCode") or data.get("app_code") or "").strip()
+            resolved_app_code = preview_app_code or resolved_app_code
             models = len(data.get("models", []))
             forms = models
             roles = len(data.get("roles", []))
