@@ -118,6 +118,22 @@ if (updated.includes(vsdaSnippet)) {
   changed = true;
 }
 
+// code-server 4.112 uses a class-based VSDA loader that still tries to fetch
+// node_modules/vsda/rust/web/vsda.js and vsda_bg.wasm in the browser. The
+// files are absent in our deployment and the built-in signing path is not used
+// by ruijing-ai, so replace the loader with a no-op validator/signer.
+const vsdaWebStart = 'async j(){const e=new r5;let[t]=await Promise.all([this.k(),new Promise((n,o)=>{Sf("vsda","rust/web/vsda.js")';
+const vsdaDecorateMarker = ';__decorate([si],$Be.prototype,"j",null)';
+const vsdaStart = updated.indexOf(vsdaWebStart);
+const vsdaEnd = vsdaStart >= 0 ? updated.indexOf(vsdaDecorateMarker, vsdaStart) : -1;
+if (vsdaStart >= 0 && vsdaEnd > vsdaStart && !updated.slice(vsdaStart, vsdaEnd).includes('patched:vsda-noop')) {
+  updated = updated.slice(0, vsdaStart) +
+    'async j(){return{validator:class{createNewMessage(e){return e}validate(){return"ok"}free(){}},sign:e=>e}}/*patched:vsda-noop*/async k(){return new ArrayBuffer(0)}}' +
+    updated.slice(vsdaEnd);
+  console.log('  Patched VSDA web loader to no-op validator');
+  changed = true;
+}
+
 // Patch 3: Extension-installed check — the setup flow checks if GitHub.copilot
 // and GitHub.copilot-chat extensions are installed to determine chat readiness.
 // Since we use apaas-builder.ruijing-ai instead, redirect these checks.
