@@ -13,7 +13,7 @@ import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Annotated, AsyncIterator, Any
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlencode, urlparse, urlunparse
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Request, Header, Response
 from fastapi.responses import StreamingResponse, JSONResponse
@@ -225,6 +225,53 @@ def _build_public_api_base(request: Request) -> str:
     return f"{proto}://{host}".rstrip("/")
 
 
+def _browser_origin_from_request(request: Request) -> str:
+    origin = (request.headers.get("origin") or "").strip()
+    if origin:
+        return origin.rstrip("/")
+
+    referer = (request.headers.get("referer") or "").strip()
+    if referer:
+        parsed = urlparse(referer)
+        if parsed.scheme and parsed.netloc:
+            return f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+
+    return ""
+
+
+def _align_local_code_server_base_url(request: Request, base_url: str) -> str:
+    """Keep local Builder and code-server on the same browser host.
+
+    Mixing localhost and 127.0.0.1 puts the embedded workbench in a third-party
+    context in some browsers, which breaks VS Code Web storage during startup.
+    """
+    normalized = (base_url or "").rstrip("/")
+    if not normalized:
+        return ""
+
+    parsed_code_server = urlparse(normalized)
+    if not parsed_code_server.scheme or not parsed_code_server.netloc:
+        return normalized
+
+    browser_origin = _browser_origin_from_request(request)
+    parsed_origin = urlparse(browser_origin)
+    local_hosts = {"127.0.0.1", "localhost"}
+    code_server_host = (parsed_code_server.hostname or "").strip().lower()
+    browser_host = (parsed_origin.hostname or "").strip().lower()
+
+    if code_server_host not in local_hosts or browser_host not in local_hosts:
+        return normalized
+
+    port = parsed_code_server.port
+    netloc = parsed_origin.hostname or parsed_code_server.hostname or ""
+    if port:
+        netloc = f"{netloc}:{port}"
+    elif parsed_code_server.netloc.endswith(":"):
+        netloc = f"{netloc}:"
+
+    return urlunparse(parsed_code_server._replace(netloc=netloc)).rstrip("/")
+
+
 def _derive_harness_api_base(api_base: str) -> str:
     """把 coding IDE API base 映射成 harness IDE API base。"""
     return (api_base or "").replace("/api/coding/", "/api/harness/coding/")
@@ -235,7 +282,7 @@ def _infer_public_builder_prefix(request: Request) -> str:
     if forwarded_prefix:
         return forwarded_prefix.rstrip("/")
 
-    code_server_base = (settings.code_server_base_url or "").rstrip("/")
+    code_server_base = _align_local_code_server_base_url(request, settings.code_server_base_url)
     if not code_server_base:
         return ""
 
@@ -250,7 +297,7 @@ def _build_ide_proxy_api_base(request: Request, ws_id: str) -> str:
     """为 code-server 场景优先生成同源代理地址，避免浏览器被 CSP 拦截直连后端。"""
     public_base = _build_public_api_base(request)
     public_prefix = _infer_public_builder_prefix(request)
-    code_server_base = (settings.code_server_base_url or "").rstrip("/")
+    code_server_base = _align_local_code_server_base_url(request, settings.code_server_base_url)
     if not code_server_base:
         return f"{public_base}{public_prefix}/api/coding/workspace/{ws_id}/ide"
 
@@ -1159,7 +1206,7 @@ async def get_workspace_ide_url(
     db: Annotated[AsyncSession, Depends(get_db)] = None,
 ):
     """获取工作区的 Web IDE (code-server) URL"""
-    base_url = settings.code_server_base_url
+    base_url = _align_local_code_server_base_url(request, settings.code_server_base_url)
     if not base_url:
         raise HTTPException(status_code=501, detail="Web IDE 未配置，请在 .env 中设置 CODE_SERVER_BASE_URL")
     workspace_meta = await _ensure_workspace_access(ws_id, ctx, db, minimum_project_role="member")

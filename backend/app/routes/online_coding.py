@@ -24,6 +24,7 @@ from app.config import settings
 from app.coding.workspace import WORKSPACE_ROOT
 from app.deps import AuthContext, get_auth_context
 from app.routes.coding import (
+    _align_local_code_server_base_url,
     _build_ide_proxy_api_base,
     _create_ide_access_token,
     _derive_harness_api_base,
@@ -992,7 +993,7 @@ async def get_online_coding_workspace_ide_url(
     if not _is_repo_imported(meta):
         raise HTTPException(status_code=400, detail="仓库导入成功后才能进入 IDE")
 
-    base_url = (settings.code_server_base_url or "").rstrip("/")
+    base_url = _align_local_code_server_base_url(request, settings.code_server_base_url)
     if not base_url:
         raise HTTPException(status_code=501, detail="Web IDE 未配置，请在 .env 中设置 CODE_SERVER_BASE_URL")
     await _ensure_local_code_server_available(base_url)
