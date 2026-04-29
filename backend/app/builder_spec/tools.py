@@ -38,14 +38,14 @@ def _str_param(desc: str) -> dict:
 TOOL_DEFINITIONS: list[dict] = [
     # ── Universal ──
     _tool("ask_clarifying_question",
-          "Append a pending decision (clarifying question) for the user to answer.",
+          "Append a pending decision for the user to answer. Use this for every follow-up question; provide 2-6 options when the answer is enumerable.",
           {
               "type": "object",
               "properties": {
                   "topic": _str_param("Short question, e.g. '季度起算月'"),
                   "why_blocking": _str_param("Why this blocks SPEC progression (optional)"),
                   "options": {"type": "array", "items": {"type": "string"},
-                              "description": "Candidate answers (optional)"},
+                              "description": "Candidate answers. Required for enumerable choices; leave empty only for open text answers."},
                   "blocking": {"type": "boolean", "default": True,
                                "description": "Whether this blocks phase transition"},
               },
@@ -91,7 +91,7 @@ TOOL_DEFINITIONS: list[dict] = [
               },
               "required": ["code", "name", "scope"],
           }),
-    _tool("update_role", "Update an existing role's fields. Confirmed flag preserved.",
+    _tool("update_role", "Update an existing role's fields. Marks the changed role unconfirmed for review.",
           {
               "type": "object",
               "properties": {
@@ -141,7 +141,7 @@ TOOL_DEFINITIONS: list[dict] = [
               },
               "required": ["object_code", "field"],
           }),
-    _tool("update_field", "Update an existing field. Confirmed flag preserved.",
+    _tool("update_field", "Update an existing field. Marks the changed field unconfirmed for review.",
           {
               "type": "object",
               "properties": {
@@ -304,9 +304,18 @@ def _update_role(spec: Spec, args: dict) -> Spec:
     role = next((r for r in spec.roles if r.code == args["code"]), None)
     if role is None:
         raise ToolError(f"Role code={args['code']} not found")
-    if "name" in args: role.name = args["name"]
-    if "scope" in args: role.scope = args["scope"]
-    if "description" in args: role.description = args["description"]
+    changed = False
+    if "name" in args:
+        role.name = args["name"]
+        changed = True
+    if "scope" in args:
+        role.scope = args["scope"]
+        changed = True
+    if "description" in args:
+        role.description = args["description"]
+        changed = True
+    if changed:
+        role.confirmed = False
     return _refresh(spec)
 
 
@@ -339,9 +348,13 @@ def _update_field(spec: Spec, args: dict) -> Spec:
     field = next((f for f in obj.fields if f.code == args["field_code"]), None)
     if field is None:
         raise ToolError(f"Field code={args['field_code']} not found in {obj.code}")
+    changed = False
     for key in ("name", "type", "required", "dict_code", "ref_model", "ref_field", "description"):
         if key in args:
             setattr(field, key, args[key])
+            changed = True
+    if changed:
+        field.confirmed = False
     return _refresh(spec)
 
 
@@ -472,13 +485,21 @@ _TOOL_DISPATCH = {
     "dismiss_permission": _dismiss_permission,
 }
 
-
-# ── Mutation-creating tools that should not run as the very first action of a fresh
-# ── gathering phase. The first turn must establish at least 3 clarifying questions
-# ── (per spec section 5 strong constraint #1).
-_FIRST_TURN_BLOCKED = {
-    "set_goal", "add_role", "update_role", "add_object", "add_field",
-    "update_field", "add_dict", "add_permission",
+_REVISION_WRITES = {
+    "ask_clarifying_question",
+    "set_goal",
+    "add_role",
+    "update_role",
+    "add_object",
+    "add_field",
+    "update_field",
+    "add_dict",
+    "add_permission",
+    "dismiss_role",
+    "dismiss_object",
+    "dismiss_field",
+    "dismiss_dict",
+    "dismiss_permission",
 }
 
 
@@ -491,17 +512,9 @@ def dispatch_tool(spec: Spec, name: str, args: dict, *, enforce_first_turn: bool
     if name not in _TOOL_DISPATCH:
         raise ToolError(f"Unknown tool: {name}")
 
-    if (
-        enforce_first_turn
-        and spec.phase == Phase.GATHERING
-        and spec.completeness.confirmed == 0
-        and len(spec.decisions_pending) < 3
-        and name in _FIRST_TURN_BLOCKED
-    ):
-        raise ToolError(
-            f"In gathering phase first turn (completeness=0, decisions<3), "
-            f"you must call ask_clarifying_question at least 3 times before "
-            f"calling {name}. Re-plan this turn to start with clarifying questions."
-        )
-
-    return _TOOL_DISPATCH[name](spec, args)
+    original_phase = spec.phase
+    spec = _TOOL_DISPATCH[name](spec, args)
+    if original_phase in {Phase.GENERATING, Phase.READY} and name in _REVISION_WRITES:
+        spec.phase = Phase.DRAFTING
+        spec = _refresh(spec)
+    return spec

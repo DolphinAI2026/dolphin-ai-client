@@ -25,7 +25,7 @@ from app.config_diff import (
 )
 from app.apaas_client import APaaSClient, _extract_query_params, _log_request, _log_response
 from app.generator_v2 import _extract_fields
-from app.step_executor import execute_create_form
+from app.step_executor import execute_create_form, _apply_form_identity_to_form_config
 
 logger = logging.getLogger(__name__)
 
@@ -1201,6 +1201,11 @@ class IncrementalExecutor:
         if "components" in form_data:
             current_config["detailPage"]["formComponents"] = form_data["components"]
 
+        _apply_form_identity_to_form_config(
+            current_config,
+            form_name=change.name,
+            form_code=change.code,
+        )
         await self.client.save_form_config(self.app_id, current_config)
         self._remote_forms_cache = None
         self.result.add_success("forms", f"更新表单: {change.name}")

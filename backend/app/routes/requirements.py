@@ -16,11 +16,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
 import httpx
+from app.app_code import normalize_app_code
 from app.database import get_db
 from app.deps import get_auth_context, AuthContext
 from app.llm_client import LLMClient
 from app.models import Conversation, Message
 from app.services.design_doc_preflight import validate_design_doc_preflight
+from app.lowcode_standards import safe_field_code
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +115,7 @@ GENERATE_DOC_PROMPT = """请根据上面的对话内容，按照以下6个需求
 
 {
   "app_info": {
-    "code": "应用编码（英文大写缩写，如 OMS、CRM、ERP，若未明确则根据业务域推断）",
+    "code": "应用编码（小写字母、中划线、数字；必须以字母开头；最多 17 个字符）",
     "name": "应用名称（中文）",
     "description": "应用简要描述（1-2句话，体现项目目标）"
   },
@@ -145,9 +147,9 @@ GENERATE_DOC_PROMPT = """请根据上面的对话内容，按照以下6个需求
       "description": "表用途描述",
       "fields": [
         {
-          "field_code": "字段名（英文下划线）",
+          "field_code": "字段名（英文下划线；不能使用数据库/平台保留短名，如 name/title/status/type/level/department/user/phone/email/manager/result/remark/description/content，必须加业务前缀，如 candidate_name、job_title、candidate_status）",
           "field_name": "字段中文名",
-          "data_type": "VARCHAR/BIGINT/INT/DECIMAL/DATE/DATETIME/TINYINT/TEXT/BOOLEAN",
+          "data_type": "varchar/text/datetime/date/decimal/int/bigint",
           "length": "长度（无则填空字符串）",
           "is_pk": false,
           "is_fk": false,
@@ -263,12 +265,22 @@ GENERATE_DOC_PROMPT = """请根据上面的对话内容，按照以下6个需求
 
 **★ 第三步：每张表字段来源（综合三路）**
 - 来自业务对象属性：该对象本身需要记录的信息（名称、金额、日期范围、备注等）
-- 来自枚举字段：凡用到 data_dictionary 中字典的字段（如 leave_type → VARCHAR，存储枚举 code）
+- 来自枚举字段：凡用到 data_dictionary 中字典的字段（如 leave_type → varchar，存储枚举 code）
 - 来自流程推断：有审批流程的表需要推断：申请日期(apply_date)、申请原因(reason)、附件说明(attachment_desc)等
 - 来自关联关系：子表需要父表外键字段（is_fk=true）
 - 【禁止】通用字段（平台自动管理）：id、create_time、update_time、create_by、update_by、deleted、approval_status
 
 **★ 字段数量要求：每张表至少 6 个业务字段**
+
+**★ 字段编码合规要求**
+- 字段编码只能使用英文小写、数字、下划线，必须以字母开头。
+- 严禁直接使用数据库/平台保留短名：name、title、type、status、state、level、department、user、role、phone、email、manager、result、remark、remarks、description、content、date、time、number、file 等。
+- 遇到通用字段必须加业务前缀：岗位名称用 job_title，不用 title；候选人姓名用 candidate_name，不用 name；招聘状态用 requisition_status，不用 status；需求部门用 requisition_department，不用 department。
+
+**★ 数据库字段类型合规要求**
+- tables.fields[].data_type 只能使用：varchar、text、datetime、date、decimal、int、bigint。
+- 严禁把组件类型或语义类型写入 data_type：department、user、dict、ref、file、textarea、number、boolean、tinyint 都不允许作为数据库字段类型。
+- 人员选择、部门选择、字典、数据选择、附件等均按存储值选择 varchar/text/int 等数据库类型，具体交互放到 forms.components[].component_type。
 
 **★ 如果对话中包含 [上传文件：...] 的文件内容，必须扫描文件全文，将所有提及的业务实体（不论对话中是否明确确认）全部识别为表；文件内容中的表格、功能列表、业务流程描述都是提取依据**
 
@@ -538,10 +550,32 @@ def _infer_doc_app_code(app_name: str) -> str:
     return ascii_code or "app_builder"
 
 
+def _infer_lowcode_app_code(app_name: str) -> str:
+    hints = [
+        ("巡检", "insp-mgmt"),
+        ("会议", "meeting-req"),
+        ("项目", "project-mgmt"),
+        ("客户", "crm"),
+        ("CRM", "crm"),
+        ("财务", "finance-mgmt"),
+        ("停车", "parking-mgmt"),
+        ("报销", "expense-mgmt"),
+        ("请假", "leave-mgmt"),
+        ("人事", "hr-mgmt"),
+        ("人才", "talent-mgmt"),
+        ("员工", "employee-mgmt"),
+    ]
+    for keyword, code in hints:
+        if keyword in app_name:
+            return code
+    return normalize_app_code(app_name) or "app-builder"
+
+
 def _normalize_doc_app_info(raw: Any, messages: list[dict[str, Any]] | None = None) -> dict[str, str]:
     raw = raw if isinstance(raw, dict) else {}
     app_name = str(raw.get("name") or raw.get("app_name") or "").strip() or _infer_doc_app_name(messages)
-    app_code = str(raw.get("code") or raw.get("app_code") or "").strip() or _infer_doc_app_code(app_name)
+    raw_code = str(raw.get("code") or raw.get("app_code") or "").strip()
+    app_code = normalize_app_code(raw_code) or _infer_lowcode_app_code(app_name)
     description = str(raw.get("description") or "").strip() or f"{app_name}用于承载核心业务数据、流程、权限和后续扩展能力。"
     return {"code": app_code, "name": app_name, "description": description}
 
@@ -550,44 +584,48 @@ def _normalize_doc_data_type(raw_type: Any, field_name: str = "") -> str:
     value = str(raw_type or "").strip()
     if value:
         upper = value.upper()
-        if upper in {"VARCHAR", "BIGINT", "INT", "DECIMAL", "DATE", "DATETIME", "TINYINT", "TEXT", "BOOLEAN"}:
-            return upper
+        allowed = {"VARCHAR", "BIGINT", "INT", "DECIMAL", "DATE", "DATETIME", "TEXT"}
+        if upper in allowed:
+            return upper.lower()
+        if upper in {"TINYINT", "BOOLEAN", "BOOL"}:
+            return "int"
         mapping = {
-            "单据号": "VARCHAR",
-            "单行输入": "VARCHAR",
-            "多行输入": "TEXT",
-            "富文本": "TEXT",
-            "下拉单选": "VARCHAR",
-            "下拉多选": "VARCHAR",
-            "单选框": "VARCHAR",
-            "复选框": "VARCHAR",
-            "日期": "DATE",
-            "日期时间": "DATETIME",
-            "时间": "DATETIME",
-            "金额": "DECIMAL",
-            "数字": "INT",
-            "附件上传": "TEXT",
-            "人员选择": "VARCHAR",
-            "部门选择": "VARCHAR",
-            "开关": "BOOLEAN",
+            "单据号": "varchar",
+            "单行输入": "varchar",
+            "多行输入": "text",
+            "富文本": "text",
+            "下拉单选": "varchar",
+            "下拉多选": "varchar",
+            "单选框": "varchar",
+            "复选框": "varchar",
+            "日期": "date",
+            "日期时间": "datetime",
+            "时间": "datetime",
+            "金额": "decimal",
+            "数字": "int",
+            "附件上传": "text",
+            "人员选择": "varchar",
+            "部门选择": "varchar",
+            "开关": "int",
         }
         if value in mapping:
             return mapping[value]
     if any(k in field_name for k in ("日期", "时间")):
-        return "DATETIME"
+        return "datetime"
     if any(k in field_name for k in ("金额", "数量", "次数", "评分", "百分比")):
-        return "DECIMAL"
+        return "decimal"
     if any(k in field_name for k in ("说明", "描述", "备注", "原因", "内容")):
-        return "TEXT"
-    return "VARCHAR"
+        return "text"
+    return "varchar"
 
 
-def _field_template(code: str, name: str, data_type: str = "VARCHAR", *, required: bool = False, desc: str = "") -> dict:
+def _field_template(code: str, name: str, data_type: str = "varchar", *, required: bool = False, desc: str = "") -> dict:
+    data_type = _normalize_doc_data_type(data_type, name)
     return {
         "field_code": code,
         "field_name": name,
         "data_type": data_type,
-        "length": "255" if data_type == "VARCHAR" else "",
+        "length": "255" if data_type == "varchar" else "",
         "is_pk": False,
         "is_fk": False,
         "nullable": not required,
@@ -665,10 +703,24 @@ def _normalize_doc_tables(raw_tables: Any, app_info: dict[str, str]) -> list[dic
             table_code = f"t_{table_code}"
         table_type = str(raw_table.get("table_type") or raw_table.get("type") or "主表").strip() or "主表"
         fields = [f for f in (_normalize_doc_field(item) for item in _list_or_empty(raw_table.get("fields"))) if f]
+        used_field_codes: set[str] = set()
+        for field in fields:
+            field["field_code"] = safe_field_code(
+                field.get("field_code"),
+                model_code=table_code,
+                field_name=str(field.get("field_name") or ""),
+                used_codes=used_field_codes,
+            )
         seen_codes = {field["field_code"] for field in fields}
         for fallback in _default_business_fields(table_name):
             if len(fields) >= 6:
                 break
+            fallback["field_code"] = safe_field_code(
+                fallback.get("field_code"),
+                model_code=table_code,
+                field_name=str(fallback.get("field_name") or ""),
+                used_codes=used_field_codes,
+            )
             if fallback["field_code"] in seen_codes:
                 continue
             fields.append(fallback)
@@ -1204,9 +1256,7 @@ def _build_fallback_doc_result(messages: list[dict[str, Any]]) -> dict:
 
     m = re.search(r"([^\n，。；]{2,30}系统)", user_text)
     app_name = m.group(1) if m else "业务管理系统"
-    app_code = "APP_" + re.sub(r"[^A-Za-z0-9]", "", app_name.upper())[:8]
-    if app_code == "APP_":
-        app_code = "APP_DEMO"
+    app_code = _infer_lowcode_app_code(app_name)
 
     table_name = app_name.replace("系统", "") + "申请"
     table_name = table_name if table_name.strip() else "业务申请"
@@ -1705,8 +1755,7 @@ def _infer_unified_app_name(business_input: str, coding_focus: str = "", uploade
 
 
 def _infer_unified_app_code(app_name: str) -> str:
-    normalized = re.sub(r"[^A-Z0-9]", "", app_name.upper())[:8]
-    return f"APP_{normalized or 'DEMO'}"
+    return _infer_lowcode_app_code(app_name)
 
 
 def _infer_entity_name(business_input: str, coding_focus: str = "") -> str:

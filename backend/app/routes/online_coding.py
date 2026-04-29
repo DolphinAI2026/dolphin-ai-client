@@ -109,6 +109,9 @@ EMPTY_REPO_IMPORT_ERROR = (
     "仓库导入成功，但默认分支没有任何可读取文件。"
     "请确认仓库不是空仓库，或先推送代码到默认分支后重新导入。"
 )
+EMPTY_REPO_READY_MESSAGE = (
+    "空仓库已接入，可以直接打开 IDE，从 0 到 1 初始化项目。"
+)
 
 SOURCE_FILE_RE = re.compile(
     r"\.(vue|js|jsx|ts|tsx|json|py|java|go|rs|xml|yml|yaml|toml|ini|properties|scss|css|less|html|md)$",
@@ -357,6 +360,16 @@ def _choose_context_files(files: list[str], prompt: str) -> list[str]:
 
 def _build_ide_workspace_context(repo_dir: Path, prompt: str) -> dict:
     files = _list_repo_files(repo_dir)
+    if not files:
+        return {
+            "context": "\n".join([
+                "EMPTY_REPO: true",
+                "当前 Git 仓库没有业务文件。请把它当作 0-1 新项目，先根据用户目标创建项目结构、README 和首版代码。",
+                f"USER_GOAL: {prompt.strip() or '用户尚未补充具体开发目标'}",
+            ]),
+            "read_files": [],
+            "file_count": 0,
+        }
     selected = _choose_context_files(files, prompt)
     excerpts: list[str] = []
     read_files: list[str] = []
@@ -481,15 +494,27 @@ def _workspace_file_count(meta: dict) -> int:
 
 def _mark_empty_repo_import(meta: dict, *, branch: Optional[str] = None) -> dict:
     meta.update({
-        "status": "import_failed",
-        "sandbox_status": "not_configured",
+        "status": "repo_imported",
+        "sandbox_status": "repo_ready",
         "branch": branch or meta.get("branch") or None,
         "file_count": 0,
         "files": [],
-        "import_error": EMPTY_REPO_IMPORT_ERROR,
+        "imported_at": meta.get("imported_at") or _now_iso(),
+        "import_error": None,
         "updated_at": _now_iso(),
     })
     return meta
+
+
+def _is_legacy_empty_repo_import(meta: dict) -> bool:
+    return (
+        meta.get("status") == "import_failed"
+        and str(meta.get("import_error") or "").strip() == EMPTY_REPO_IMPORT_ERROR
+    )
+
+
+def _is_repo_imported(meta: dict) -> bool:
+    return meta.get("status") == "repo_imported" or _is_legacy_empty_repo_import(meta)
 
 
 def _friendly_git_error(error_text: str) -> str:
@@ -642,7 +667,11 @@ async def _import_repository(
             branch = await _detect_repo_branch(git_bin, ws_dir, repo_dir)
             origin = await _detect_repo_origin(git_bin, ws_dir, repo_dir)
             file_count, files = _summarize_repo(repo_dir)
-            if file_count > 0 and _same_repo_url(origin, repo_url):
+            if _same_repo_url(origin, repo_url):
+                if file_count <= 0:
+                    _mark_empty_repo_import(meta, branch=branch)
+                    _write_workspace(ws_dir, meta)
+                    return meta
                 meta.update({
                     "status": "repo_imported",
                     "sandbox_status": "repo_ready",
@@ -719,16 +748,23 @@ def _public_workspace(meta: dict) -> OnlineCodingWorkspace:
     file_count = _workspace_file_count(meta)
     import_error = meta.get("import_error") or None
     sandbox_status = meta.get("sandbox_status") or "not_configured"
-    if status == "repo_imported" and file_count <= 0:
-        status = "import_failed"
-        sandbox_status = "not_configured"
-        import_error = EMPTY_REPO_IMPORT_ERROR
+    if _is_legacy_empty_repo_import(meta):
+        status = "repo_imported"
+        sandbox_status = "repo_ready"
+        import_error = None
     if status == "repo_imported":
-        next_steps = [
-            "打开 IDE 浏览仓库代码",
-            "让 AI 分析仓库结构并生成开发计划",
-            "确认后在沙箱里安装依赖、运行测试和生成 PR",
-        ]
+        if file_count <= 0:
+            next_steps = [
+                "打开 IDE 初始化首版工程",
+                "让 AI 根据开发目标生成项目结构和代码",
+                "生成首版后再提交并推送到默认分支",
+            ]
+        else:
+            next_steps = [
+                "打开 IDE 浏览仓库代码",
+                "让 AI 分析仓库结构并生成开发计划",
+                "确认后在沙箱里安装依赖、运行测试和生成 PR",
+            ]
     elif status == "import_failed":
         next_steps = [
             "检查仓库地址和访问权限",
@@ -895,10 +931,10 @@ async def read_online_coding_workspace_file(
     ws_dir, meta = _find_workspace_dir(workspace_id)
     if meta.get("user_id") != ctx.user.id:
         raise HTTPException(status_code=403, detail="无权访问该 Vibe Coding 工作区")
-    if meta.get("status") != "repo_imported":
+    if not _is_repo_imported(meta):
         raise HTTPException(status_code=400, detail="仓库导入成功后才能读取文件")
     if _workspace_file_count(meta) <= 0:
-        raise HTTPException(status_code=400, detail=EMPTY_REPO_IMPORT_ERROR)
+        raise HTTPException(status_code=400, detail="空仓库还没有可读取文件，请先在 IDE 中创建项目文件")
 
     repo_dir = _repo_path(ws_dir)
     target = _resolve_repo_file(repo_dir, file_path)
@@ -928,10 +964,8 @@ async def get_online_coding_workspace_ide_context(
     """
     ws_dir, meta = _find_workspace_dir(workspace_id)
     _verify_online_ide_access(workspace_id, meta, x_vibe_ide_token or token)
-    if meta.get("status") != "repo_imported":
+    if not _is_repo_imported(meta):
         raise HTTPException(status_code=400, detail="仓库导入成功后才能读取代码上下文")
-    if _workspace_file_count(meta) <= 0:
-        raise HTTPException(status_code=400, detail=EMPTY_REPO_IMPORT_ERROR)
 
     repo_dir = _repo_path(ws_dir)
     if not repo_dir.exists():
@@ -955,10 +989,8 @@ async def get_online_coding_workspace_ide_url(
     ws_dir, meta = _find_workspace_dir(workspace_id)
     if meta.get("user_id") != ctx.user.id:
         raise HTTPException(status_code=403, detail="无权访问该 Vibe Coding 工作区")
-    if meta.get("status") != "repo_imported":
+    if not _is_repo_imported(meta):
         raise HTTPException(status_code=400, detail="仓库导入成功后才能进入 IDE")
-    if _workspace_file_count(meta) <= 0:
-        raise HTTPException(status_code=400, detail=EMPTY_REPO_IMPORT_ERROR)
 
     base_url = (settings.code_server_base_url or "").rstrip("/")
     if not base_url:

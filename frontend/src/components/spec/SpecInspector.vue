@@ -2,6 +2,12 @@
 import { computed } from 'vue'
 import { useSpecStore } from '@/stores/spec'
 
+const props = withDefaults(defineProps<{
+  showDecisions?: boolean
+}>(), {
+  showDecisions: true,
+})
+
 const spec = useSpecStore()
 
 const completenessPct = computed(() => {
@@ -45,7 +51,7 @@ function sectionLabel(key: string): string {
     </section>
 
     <!-- 待决策 -->
-    <section class="inspector-section">
+    <section v-if="props.showDecisions" class="inspector-section">
       <h4 class="inspector-h">待决策 <span class="inspector-count">{{ spec.pendingDecisions.length }}</span></h4>
       <ul class="decisions-list">
         <li v-for="d in spec.pendingDecisions" :key="d.id" class="decision-item" :class="{ blocking: d.blocking }">

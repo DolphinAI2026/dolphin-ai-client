@@ -10,6 +10,11 @@ export interface CreateSpecResponse {
   phase: Phase
 }
 
+export interface GenerateConfigResponse {
+  spec: Spec
+  config: Record<string, unknown>
+}
+
 export const specApi = {
   create(body: CreateSpecRequest = {}) {
     return request.post<CreateSpecResponse>('/spec', body)
@@ -19,6 +24,12 @@ export const specApi = {
   },
   transitionPhase(specId: string, target: Phase, reason = 'user request') {
     return request.put<Spec>(`/spec/${specId}/phase`, { target, reason })
+  },
+  confirmAll(specId: string) {
+    return request.put<Spec>(`/spec/${specId}/confirm-all`, {})
+  },
+  generateConfig(specId: string) {
+    return request.post<GenerateConfigResponse>(`/spec/${specId}/generate-config`, {})
   },
   updateItem(
     specId: string,

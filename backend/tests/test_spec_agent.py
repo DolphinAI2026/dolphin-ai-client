@@ -96,10 +96,9 @@ async def test_agent_runs_clarifying_questions_first_turn():
 
 
 @pytest.mark.asyncio
-async def test_agent_rejects_set_goal_in_first_turn_with_zero_completeness():
-    """LLM tries to call set_goal in gathering first turn → tool returns error,
-    agent feeds error back; we verify the spec is unchanged (no goal set) and a
-    tool_error event surfaced."""
+async def test_agent_accepts_set_goal_in_first_turn_when_confident():
+    """LLM can extract high-confidence facts on the first turn instead of being forced
+    to ask a fixed number of questions."""
     spec = empty_spec(created_by=1)
     turn1_chunks = [
         _tool_call_chunk(0, "call_x", "set_goal",
@@ -120,12 +119,30 @@ async def test_agent_rejects_set_goal_in_first_turn_with_zero_completeness():
             events.append(ev)
 
     final_spec = next(e.spec for e in reversed(events) if e.kind == "final")
-    assert final_spec.goal is None  # set_goal was rejected
-    # Tool error surfaced; the error message references ask_clarifying_question
-    assert any(
-        e.kind == "tool_error" and "ask_clarifying_question" in (e.message or "")
-        for e in events
+    assert final_spec.goal is not None
+    assert final_spec.goal.title == "预算"
+    assert not any(e.kind == "tool_error" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_agent_allows_revision_after_ready_phase():
+    """A generated SPEC remains editable through chat; ready is not terminal."""
+    spec = empty_spec(created_by=1)
+    spec.phase = Phase.READY
+    turn1_chunks = [_content_chunk("可以继续调整，我会把变更写入草案。"), _empty_finish_chunk()]
+
+    agent = SpecAgent(
+        llm_base_url="http://fake", llm_api_key="fake", llm_model="fake-model",
     )
+    fake = _make_open_stream_mock([FakeLLMStream(turn1_chunks)])
+
+    with patch("app.builder_spec.agent._open_stream", side_effect=fake):
+        events = []
+        async for ev in agent.run(spec, user_message="候选人表单增加备注字段"):
+            events.append(ev)
+
+    assert events[-1].kind == "final"
+    assert "继续调整" in (events[-1].text or "")
 
 
 @pytest.mark.asyncio

@@ -43,7 +43,7 @@ export const conversationApi = {
   },
 
   /** 获取带应用信息的对话列表（用于对话历史） */
-  listWithApps(params?: { agent_type?: string }) {
+  listWithApps(params?: { agent_type?: string; app_ids?: string }) {
     return request.get<any, ConversationWithApp[]>('/conversations/with-apps/list', { params })
   }
 }

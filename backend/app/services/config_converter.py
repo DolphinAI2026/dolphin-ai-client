@@ -9,6 +9,9 @@ import re
 import logging
 from typing import Any
 
+from app.app_code import coerce_app_code
+from app.lowcode_standards import normalize_database_field_type, safe_field_code
+
 logger = logging.getLogger(__name__)
 
 # ── Field type mapping ─────────────────────────────────────────────────────
@@ -171,11 +174,7 @@ def _normalize_type(raw_type: str, field_name: str = "", has_dict: bool = False)
 
 
 def _normalize_database_field_type(raw_db_type: str, platform_field_type: str) -> str:
-    raw = str(raw_db_type or "").strip()
-    if raw:
-        upper = re.sub(r"\(.*\)", "", raw).strip().upper()
-        return upper or raw
-    return PLATFORM_TO_DB_TYPE_MAP.get(platform_field_type, "VARCHAR")
+    return normalize_database_field_type(raw_db_type, component_type=platform_field_type)
 
 
 def _normalize_code(code: str) -> str:
@@ -328,7 +327,7 @@ def convert_analysis_to_app_config(doc_result: dict[str, Any]) -> dict[str, Any]
 
     # ── appName & appCode ──
     app_name = app_info.get("name", "新应用")
-    app_code = _normalize_code(app_info.get("code", "app"))
+    app_code = coerce_app_code(app_info.get("code"), fallback="app-builder")
 
     # ── roles ──
     roles = []
@@ -383,6 +382,7 @@ def convert_analysis_to_app_config(doc_result: dict[str, Any]) -> dict[str, Any]
                 continue
             if not f_code or not f_name:
                 continue
+            f_code = safe_field_code(f_code, model_code=t_code, field_name=f_name, used_codes={field.get("code", "") for field in fields})
 
             raw_type = f.get("data_type", "")
             raw_db_type = f.get("database_field_type") or f.get("databaseFieldType") or raw_type

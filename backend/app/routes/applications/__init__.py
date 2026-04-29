@@ -5,14 +5,14 @@ from datetime import datetime
 from typing import Annotated, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
 from pydantic import BaseModel
-from sqlalchemy import select, desc, func as sa_func, delete
+from sqlalchemy import select, desc, func as sa_func, delete, and_, not_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 from app.database import get_db
-from app.models import User, Application, DocumentVersion, ChangePlan, ApiCallLog, PlatformEnv, Conversation, ConfigSnapshot
+from app.models import User, Application, DocumentVersion, ChangePlan, ApiCallLog, PlatformEnv, Conversation, ConfigSnapshot, Project, ProjectMember
 from app.models.collaboration import ApplicationMember
 from app.auth import get_current_user
-from app.schemas import ApplicationCreate, ApplicationResponse, MergedAppResponse
+from app.schemas import ApplicationCreate, ApplicationPageResponse, ApplicationResponse, MergedAppResponse
 from app.deps import get_auth_context, AuthContext
 from app.permissions import has_org_permission, check_resource_permission, batch_get_permissions, Action
 from jose import JWTError, jwt
@@ -36,6 +36,83 @@ from . import _helpers  # noqa: F401
 
 router = APIRouter(prefix="/applications", tags=["应用"])
 logger = logging.getLogger(__name__)
+
+
+def _is_application_admin(ctx: AuthContext) -> bool:
+    return ctx.tenant_role in ("platform_admin", "tenant_admin")
+
+
+def _application_access_clause(ctx: AuthContext):
+    if _is_application_admin(ctx):
+        return None
+    project_owner_ids = (
+        select(Project.id)
+        .where(Project.tenant_id == ctx.tenant_id, Project.user_id == ctx.user.id)
+    )
+    project_member_ids = (
+        select(ProjectMember.project_id)
+        .join(Project, Project.id == ProjectMember.project_id)
+        .where(Project.tenant_id == ctx.tenant_id, ProjectMember.user_id == ctx.user.id)
+    )
+    direct_member_ids = (
+        select(ApplicationMember.application_id)
+        .where(ApplicationMember.user_id == ctx.user.id)
+    )
+    return or_(
+        Application.created_by == ctx.user.id,
+        Application.user_id == ctx.user.id,
+        Application.project_id.in_(project_owner_ids),
+        Application.project_id.in_(project_member_ids),
+        Application.id.in_(direct_member_ids),
+    )
+
+
+def _application_stage_clause(stage: str | None):
+    if not stage or stage == "all":
+        return None
+    deployed = or_(Application.status == "completed", Application.apaas_app_id.isnot(None))
+    has_draft_config = and_(
+        Application.config_preview.isnot(None),
+        Application.config_preview != "",
+        Application.config_preview != "{}",
+        Application.config_preview != "null",
+    )
+    active = and_(
+        not_(deployed),
+        Application.status != "failed",
+        or_(Application.status.in_(("generating", "updating")), has_draft_config),
+    )
+    if stage == "deployed":
+        return deployed
+    if stage == "active":
+        return active
+    if stage == "draft":
+        return and_(not_(deployed), not_(active))
+    return None
+
+
+def _apply_application_list_filters(stmt, ctx: AuthContext, team_scope: str | None, source_filter: str | None, stage: str | None = None):
+    stmt = stmt.where(Application.tenant_id == ctx.tenant_id)
+    if team_scope == "personal":
+        stmt = stmt.where(Application.created_by == ctx.user.id, Application.team_id.is_(None))
+    elif team_scope and team_scope.isdigit():
+        stmt = stmt.where(Application.team_id == int(team_scope))
+
+    access_clause = _application_access_clause(ctx)
+    if access_clause is not None:
+        stmt = stmt.where(access_clause)
+
+    if source_filter == "local":
+        stmt = stmt.where(Application.apaas_app_id.is_(None))
+    elif source_filter == "linked":
+        stmt = stmt.where(Application.apaas_app_id.isnot(None))
+    elif source_filter == "remote":
+        stmt = stmt.where(Application.id == -1)
+
+    stage_clause = _application_stage_clause(stage)
+    if stage_clause is not None:
+        stmt = stmt.where(stage_clause)
+    return stmt
 
 
 class GenerateAppIconResponse(BaseModel):
@@ -215,6 +292,102 @@ async def list_applications(
     return merged
 
 
+@router.get("/page", response_model=ApplicationPageResponse)
+async def list_applications_page(
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    team_scope: Annotated[Optional[str], Query()] = None,
+    source_filter: Annotated[Optional[str], Query()] = None,  # local / linked
+    stage: Annotated[Optional[str], Query()] = "all",  # all / active / deployed / draft
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+):
+    """分页获取 Builder 本地应用列表。
+
+    这个端点只分页 Builder 侧已接入/已生成的应用；未绑定的远程平台应用仍走旧列表接口。
+    """
+
+    async def count_stage(stage_value: str | None) -> int:
+        stmt = _apply_application_list_filters(
+            select(sa_func.count(Application.id)).select_from(Application),
+            ctx,
+            team_scope,
+            source_filter,
+            stage_value,
+        )
+        return int((await db.execute(stmt)).scalar() or 0)
+
+    counts = {
+        "all": await count_stage("all"),
+        "active": await count_stage("active"),
+        "deployed": await count_stage("deployed"),
+        "draft": await count_stage("draft"),
+    }
+    stage_key = stage if stage in counts else "all"
+    total = counts[stage_key]
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    safe_page = min(page, total_pages)
+
+    query = _apply_application_list_filters(
+        select(Application),
+        ctx,
+        team_scope,
+        source_filter,
+        stage_key,
+    )
+    query = query.order_by(desc(Application.updated_at)).offset((safe_page - 1) * page_size).limit(page_size)
+    result = await db.execute(query)
+    local_apps = result.scalars().all()
+
+    env_base_url = None
+    env_tenant_id = None
+    env_map: dict[int, dict] = {}
+    try:
+        env_result = await db.execute(
+            select(PlatformEnv).where(PlatformEnv.tenant_id == ctx.tenant_id)
+        )
+        all_envs = env_result.scalars().all()
+        for env in all_envs:
+            env_map[env.id] = {"env_name": env.env_name, "status": env.status}
+            if env.is_default:
+                env_base_url = env.base_url
+                env_tenant_id = env.platform_tenant_id
+    except Exception:
+        pass
+
+    items: list[MergedAppResponse] = []
+    for app in local_apps:
+        perms = await _get_application_permissions(ctx, db, app)
+        if not perms or not perms.get(Action.VIEW, False):
+            continue
+        app_env = env_map.get(app.platform_env_id) if app.platform_env_id else None
+        app_env_name = app_env["env_name"] if app_env else None
+        app_env_status = app_env["status"] if app_env else None
+        if app.apaas_app_id:
+            items.append(
+                _build_linked(
+                    app,
+                    {},
+                    perms,
+                    env_base_url,
+                    env_tenant_id,
+                    app_env_name,
+                    app_env_status,
+                )
+            )
+        else:
+            items.append(_build_local(app, perms, app_env_name, app_env_status))
+
+    return {
+        "items": items,
+        "total": total,
+        "page": safe_page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+        "counts": counts,
+    }
+
+
 @router.get("/{app_id}", response_model=ApplicationResponse)
 async def get_application(
     app_id: int,
@@ -304,7 +477,29 @@ async def create_application(
             minimum_role="member",
         )
 
-    config_str = _dump_preview_config(data.config_preview) if data.config_preview else None
+    if data.canonical_spec_id:
+        from app.builder_spec.persistence import load_spec
+        spec = await load_spec(db, data.canonical_spec_id, tenant_id=ctx.tenant_id)
+        if spec is None:
+            raise HTTPException(status_code=404, detail="关联的 SPEC 不存在")
+
+    app_code = _normalize_app_code(data.app_code)
+    if not app_code and isinstance(data.config_preview, dict):
+        preview_data = data.config_preview.get("data", data.config_preview)
+        if isinstance(preview_data, dict):
+            app_code = _normalize_app_code(preview_data.get("appCode") or preview_data.get("app_code"))
+    app_code = app_code or _coerce_app_code(data.app_name)
+    if not app_code:
+        raise HTTPException(status_code=400, detail=APP_CODE_RULE_TEXT)
+
+    config_preview = data.config_preview
+    if isinstance(config_preview, dict):
+        preview_data = config_preview.get("data", config_preview)
+        if isinstance(preview_data, dict):
+            preview_data["appCode"] = app_code
+            preview_data["app_code"] = app_code
+
+    config_str = _dump_preview_config(config_preview) if config_preview else None
     app = Application(
         user_id=ctx.user.id,
         tenant_id=ctx.tenant_id,
@@ -313,10 +508,11 @@ async def create_application(
         project_id=data.project_id,
         conversation_id=data.conversation_id,
         app_name=data.app_name,
-        app_code=data.app_code,
+        app_code=app_code,
         description=data.description,
         platform_env_id=data.platform_env_id,
         config_preview=config_str,
+        canonical_spec_id=data.canonical_spec_id,
         status="draft"
     )
     db.add(app)
@@ -374,11 +570,11 @@ async def create_application(
                     except (json.JSONDecodeError, IndexError, ValueError):
                         pass
 
-                if data.config_preview:
+                if config_preview:
                     await _sync_canonical_config_to_current_doc_version(
                         db,
                         app,
-                        data.config_preview,
+                        config_preview,
                         filename=doc_filename,
                         create_if_missing=True,
                     )
@@ -388,14 +584,14 @@ async def create_application(
         except Exception as e:
             logger.warning(f"Failed to link/create DocumentVersion: {e}")
 
-    if data.config_preview:
+    if config_preview:
         await _sync_canonical_config_to_current_doc_version(
             db,
             app,
-            data.config_preview,
+            config_preview,
             create_if_missing=not bool(app.current_doc_version),
         )
-        app.config_preview = _dump_preview_config(data.config_preview)
+        app.config_preview = _dump_preview_config(config_preview)
         await db.commit()
         await db.refresh(app)
 
@@ -441,6 +637,16 @@ async def auto_create_application(
         existing = result.scalar_one_or_none()
         if existing:
             # 更新配置，并把本次对话里尚未绑定的最新文档版本挂到当前应用
+            preview_data = data.config_preview.get("data", data.config_preview) if isinstance(data.config_preview, dict) else {}
+            existing_code = (
+                _normalize_app_code(existing.app_code)
+                or _normalize_app_code(preview_data.get("appCode") if isinstance(preview_data, dict) else "")
+                or _coerce_app_code(data.app_name)
+            )
+            if isinstance(preview_data, dict):
+                preview_data["appCode"] = existing_code
+                preview_data["app_code"] = existing_code
+            existing.app_code = existing_code
             existing.config_preview = _dump_preview_config(data.config_preview)
             existing.app_name = data.app_name
             try:
@@ -484,11 +690,12 @@ async def auto_create_application(
     preview_data = data.config_preview.get("data", data.config_preview) if isinstance(data.config_preview, dict) else {}
     ascii_code = _normalize_app_code(preview_data.get("appCode") if isinstance(preview_data, dict) else "")
     if not ascii_code:
-        code_base = data.app_name.lower().replace(" ", "-").replace("_", "-")
-        ascii_code = ''.join(c for c in code_base if c.isascii() and (c.isalnum() or c == '-'))
-        ascii_code = ascii_code.strip('-')
-    if len(ascii_code) < 2:
-        ascii_code = "app-" + hashlib.md5(data.app_name.encode()).hexdigest()[:6]
+        ascii_code = _normalize_app_code(data.app_name)
+    if not ascii_code:
+        ascii_code = f"app-{hashlib.md5(data.app_name.encode()).hexdigest()[:6]}"
+    if isinstance(preview_data, dict):
+        preview_data["appCode"] = ascii_code
+        preview_data["app_code"] = ascii_code
 
     config_str = _dump_preview_config(data.config_preview)
     app = Application(
@@ -634,7 +841,9 @@ async def import_from_platform(
         logger.warning(f"生成 markdown 失败: {e}")
         markdown_spec = ""
 
-    resolved_app_code = app_code or _normalize_app_code(config.get("appCode")) or app_name.lower().replace(" ", "_")
+    resolved_app_code = _normalize_app_code(app_code) or _normalize_app_code(config.get("appCode")) or _coerce_app_code(app_name)
+    config["appCode"] = resolved_app_code
+    config["app_code"] = resolved_app_code
 
     # 6. 已存在同平台应用：作为新版本重新导入
     if existing_app:
@@ -743,10 +952,17 @@ async def update_application(
     app.app_name = data.app_name
     app.description = data.description
     if hasattr(data, 'app_code') and data.app_code:
-        app.app_code = data.app_code
+        normalized_app_code = _normalize_app_code(data.app_code)
+        if not normalized_app_code:
+            raise HTTPException(status_code=400, detail=APP_CODE_RULE_TEXT)
+        app.app_code = normalized_app_code
     if hasattr(data, 'platform_env_id') and data.platform_env_id is not None:
         app.platform_env_id = data.platform_env_id
     if data.config_preview:
+        preview_data = data.config_preview.get("data", data.config_preview) if isinstance(data.config_preview, dict) else {}
+        if isinstance(preview_data, dict):
+            preview_data["appCode"] = app.app_code
+            preview_data["app_code"] = app.app_code
         app.config_preview = _dump_preview_config(data.config_preview)
         await _sync_canonical_config_to_current_doc_version(
             db,
@@ -779,14 +995,17 @@ async def update_app_code(
     if not app:
         raise HTTPException(status_code=404, detail="应用不存在")
     await _require_application_permission(ctx, db, app, Action.EDIT)
-    new_code = body.get("app_code")
+    new_code = str(body.get("app_code") or "").strip()
     if not new_code:
         raise HTTPException(status_code=400, detail="app_code 不能为空")
+    if not _is_valid_app_code(new_code):
+        raise HTTPException(status_code=400, detail=APP_CODE_RULE_TEXT)
     app.app_code = new_code
     if app.config_preview:
         try:
             config = loads_if_str(app.config_preview)
             data = config.get("data", config)
+            data["appCode"] = new_code
             data["app_code"] = new_code
             app.config_preview = _dump_preview_config(config)
 

@@ -11,6 +11,7 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from app.config_validator import RESERVED_FIELD_CODES
+from app.lowcode_standards import ALLOWED_DATABASE_FIELD_TYPES, normalize_database_field_type
 
 
 CODE_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_]*$")
@@ -348,6 +349,39 @@ def _check_fields(
                 suggestion=_suggest_code(f"{field_code}_2"),
             )
         seen_fields[field_code] = field_name
+        raw_db_type = (
+            field.get("database_field_type")
+            or field.get("databaseFieldType")
+            or field.get("data_type")
+            or field.get("type")
+            or ""
+        )
+        normalized_db_type = normalize_database_field_type(raw_db_type, field_name=field_name)
+        if normalized_db_type not in ALLOWED_DATABASE_FIELD_TYPES:
+            _issue(
+                blocking,
+                severity="blocking",
+                code="field_database_type_invalid",
+                target_type="field",
+                target_name=f"{table_name}.{field_name}",
+                current_code=field_code,
+                message=(
+                    f"模型「{table_name}」字段「{field_name}」的数据库字段类型 `{raw_db_type}` "
+                    "不符合低代码规范。"
+                ),
+                suggestion="varchar/text/datetime/date/decimal/int/bigint",
+            )
+        elif raw_db_type and str(raw_db_type).strip().lower() != normalized_db_type:
+            _issue(
+                warnings,
+                severity="warning",
+                code="field_database_type_normalized",
+                target_type="field",
+                target_name=f"{table_name}.{field_name}",
+                current_code=field_code,
+                message=f"字段「{field_name}」的数据库字段类型 `{raw_db_type}` 会按规范归一为 `{normalized_db_type}`。",
+                suggestion=normalized_db_type,
+            )
 
     main_fields = [
         field for field in (table.get("fields") or [])

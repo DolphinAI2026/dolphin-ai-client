@@ -5,6 +5,29 @@
  * 任何组件需要做"应用名提取"或"从中文名推编码"时直接 import 即可。
  */
 
+export const APP_CODE_MAX_LENGTH = 17
+export const APP_CODE_PATTERN = /^[a-z][a-z0-9-]{0,16}$/
+export const APP_CODE_RULE_TEXT = '应用编码只能输入小写字母、中划线和数字；必须以小写字母开头；最多 17 个字符。'
+
+export function isValidAppCode(code: string): boolean {
+  return APP_CODE_PATTERN.test(String(code || '').trim())
+}
+
+export function normalizeAppCode(candidate: string): string {
+  let code = String(candidate || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[_\s]+/g, '-')
+    .replace(/[^a-z0-9-]/g, '')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '')
+
+  if (!code) return ''
+  if (!/^[a-z]/.test(code)) code = `app-${code}`
+  code = code.slice(0, APP_CODE_MAX_LENGTH).replace(/-+$/g, '')
+  return isValidAppCode(code) ? code : ''
+}
+
 /**
  * 从可能有多种字段名变体的 data 对象中抽取应用编码。
  * 支持顺序：appCode > app_code > app_info.code > appInfo.code。
@@ -40,15 +63,15 @@ export function pickAppName(data: any): string {
 export function extractAppCodeFromText(text: string): string {
   if (!text) return ''
   const patterns = [
-    /应用编码[：:\s`]*([A-Za-z][A-Za-z0-9_-]{1,63})/i,
-    /app[_\s-]?code[：:\s`]*([A-Za-z][A-Za-z0-9_-]{1,63})/i,
-    /\|\s*应用编码\s*\|\s*`?([A-Za-z][A-Za-z0-9_-]{1,63})`?\s*\|/i,
-    /\|\s*App\s*Code\s*\|\s*`?([A-Za-z][A-Za-z0-9_-]{1,63})`?\s*\|/i,
-    /"code"\s*:\s*"([A-Za-z][A-Za-z0-9_-]{1,63})"/i,
+    /应用编码[：:\s`]*([A-Za-z][A-Za-z0-9_-]{0,63})/i,
+    /app[_\s-]?code[：:\s`]*([A-Za-z][A-Za-z0-9_-]{0,63})/i,
+    /\|\s*应用编码\s*\|\s*`?([A-Za-z][A-Za-z0-9_-]{0,63})`?\s*\|/i,
+    /\|\s*App\s*Code\s*\|\s*`?([A-Za-z][A-Za-z0-9_-]{0,63})`?\s*\|/i,
+    /"code"\s*:\s*"([A-Za-z][A-Za-z0-9_-]{0,63})"/i,
   ]
   for (const p of patterns) {
     const m = text.match(p)
-    if (m?.[1]) return m[1]
+    if (m?.[1]) return normalizeAppCode(m[1])
   }
   return ''
 }
@@ -77,32 +100,33 @@ export function extractAppNameFromText(text: string): string {
 }
 
 /**
- * 从中文应用名推断出一个合法的英文应用编码（kebab 风格）。
+ * 从中文应用名推断出一个合法的低代码应用编码（kebab 风格）。
  *
  * 策略（从严到宽）：
- *   1. 匹配常见完整系统名（"档案管理系统" → "archive_mgmt"）
- *   2. 按业务关键词分词拼接（"客户合同" → "customer_contract"）
- *   3. 如果全是英文/数字/下划线，规范化后直接用
- *   4. 兜底 "app_builder"
+ *   1. 匹配常见完整系统名（"档案管理系统" → "archive-mgmt"）
+ *   2. 按业务关键词分词拼接（"客户合同" → "customer-contract"）
+ *   3. 如果含英文/数字/分隔符，规范化后直接用
+ *   4. 兜底 "app-builder"
  */
 export function buildAppCode(name: string): string {
   const source = (name || '').trim()
-  if (!source) return 'app_builder'
+  if (!source) return 'app-builder'
 
   const phraseMap: Array<[RegExp, string]> = [
-    [/档案管理系统|档案管理平台/g, 'archive_mgmt'],
-    [/客户管理系统|客户管理平台/g, 'customer_mgmt'],
-    [/报销管理系统|报销管理平台/g, 'expense_mgmt'],
-    [/请假管理系统|请假管理平台/g, 'leave_mgmt'],
-    [/合同管理系统|合同管理平台/g, 'contract_mgmt'],
-    [/项目管理系统|项目管理平台/g, 'project_mgmt'],
-    [/采购管理系统|采购管理平台/g, 'purchase_mgmt'],
-    [/库存管理系统|库存管理平台/g, 'inventory_mgmt'],
-    [/员工管理系统|人事管理系统/g, 'employee_mgmt'],
-    [/工单管理系统|售后工单系统/g, 'ticket_mgmt'],
+    [/档案管理系统|档案管理平台/g, 'archive-mgmt'],
+    [/客户管理系统|客户管理平台/g, 'customer-mgmt'],
+    [/报销管理系统|报销管理平台/g, 'expense-mgmt'],
+    [/请假管理系统|请假管理平台/g, 'leave-mgmt'],
+    [/合同管理系统|合同管理平台/g, 'contract-mgmt'],
+    [/项目管理系统|项目管理平台/g, 'project-mgmt'],
+    [/采购管理系统|采购管理平台/g, 'purchase-mgmt'],
+    [/库存管理系统|库存管理平台/g, 'inventory-mgmt'],
+    [/员工管理系统|人事管理系统/g, 'employee-mgmt'],
+    [/人才管理系统|人才管理平台/g, 'talent-mgmt'],
+    [/工单管理系统|售后工单系统/g, 'ticket-mgmt'],
   ]
   for (const [pattern, code] of phraseMap) {
-    if (pattern.test(source)) return code
+    if (pattern.test(source)) return normalizeAppCode(code) || 'app-builder'
   }
 
   const tokenMap: Array<[RegExp, string]> = [
@@ -113,6 +137,7 @@ export function buildAppCode(name: string): string {
     [/用户/g, 'user'],
     [/会员/g, 'member'],
     [/员工|人事/g, 'employee'],
+    [/人才/g, 'talent'],
     [/部门/g, 'department'],
     [/报销|费用/g, 'expense'],
     [/请假|休假/g, 'leave'],
@@ -141,14 +166,9 @@ export function buildAppCode(name: string): string {
   }
 
   if (parts.length > 0) {
-    const code = parts.slice(0, 3).join('_').replace(/_mgmt_mgmt$/, '_mgmt')
-    return code.startsWith('mgmt') ? `app_${code}` : code
+    const code = parts.slice(0, 3).join('-').replace(/-mgmt-mgmt$/, '-mgmt')
+    return normalizeAppCode(code.startsWith('mgmt') ? `app-${code}` : code) || 'app-builder'
   }
 
-  const ascii = source
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '')
-  if (ascii) return ascii
-  return 'app_builder'
+  return normalizeAppCode(source) || 'app-builder'
 }

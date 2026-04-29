@@ -82,28 +82,10 @@ def _format_pending_decision_message(decisions: list) -> str:
     active = [d for d in decisions if not getattr(d, "resolved", False)]
     if not active:
         return ""
+    first_topic = str(getattr(active[0], "topic", "") or "").strip()
     if len(active) == 1:
-        d = active[0]
-        lines = ["我需要你确认一个关键点：", str(getattr(d, "topic", "")).strip()]
-        why = str(getattr(d, "why_blocking", "") or "").strip()
-        if why:
-            lines.append(f"原因：{why}")
-        options = [str(opt).strip() for opt in (getattr(d, "options", None) or []) if str(opt).strip()]
-        if options:
-            lines.append("可选方案：")
-            lines.extend([f"{idx}. {opt}" for idx, opt in enumerate(options, 1)])
-    else:
-        lines = [f"我需要你确认 {len(active)} 个关键点："]
-        for idx, d in enumerate(active, 1):
-            topic = str(getattr(d, "topic", "")).strip()
-            why = str(getattr(d, "why_blocking", "") or "").strip()
-            suffix = f"（{why}）" if why else ""
-            lines.append(f"{idx}. {topic}{suffix}")
-            options = [str(opt).strip() for opt in (getattr(d, "options", None) or []) if str(opt).strip()]
-            for opt_idx, opt in enumerate(options, 1):
-                lines.append(f"   {idx}.{opt_idx} {opt}")
-    lines.append("你直接在对话里回答即可，我会同步更新右侧 SPEC。")
-    return "\n".join(line for line in lines if line)
+        return f"我需要你确认「{first_topic or '一个关键点'}」。"
+    return f"我整理了 {len(active)} 个需要确认的点，先从「{first_topic or '当前关键点'}」开始。"
 
 
 def _append_decision_message(existing_text: str, decisions: list) -> tuple[str, str]:
@@ -391,7 +373,7 @@ REQUIREMENTS_SYSTEM_PROMPT = """你是一个懂业务、懂系统的应用搭建
 
 ### 应用概述
 - **应用名称**：xxx
-- **应用编码**：XXX（英文大写缩写）
+- **应用编码**：xxx（小写字母、中划线、数字；必须以字母开头；最多 17 个字符）
 - **描述**：xxx
 
 ### 角色清单
@@ -587,18 +569,42 @@ async def send_message(
     if not conversation:
         raise HTTPException(status_code=404, detail="对话不存在")
 
-    # 保存用户消息
-    user_message = Message(
-        conversation_id=conversation.id,
-        role="user",
-        content=data.message
-    )
-    db.add(user_message)
-    await db.commit()
+    effective_message = data.message
+    if data.resume_from_message_id:
+        resume_result = await db.execute(
+            select(Message).where(
+                Message.id == data.resume_from_message_id,
+                Message.conversation_id == conversation.id,
+                Message.role == "user",
+            )
+        )
+        resume_message = resume_result.scalar_one_or_none()
+        if not resume_message:
+            raise HTTPException(status_code=404, detail="待恢复的用户消息不存在")
+
+        latest_result = await db.execute(
+            select(Message)
+            .where(Message.conversation_id == conversation.id)
+            .order_by(Message.created_at.desc(), Message.id.desc())
+            .limit(1)
+        )
+        latest_message = latest_result.scalar_one_or_none()
+        if not latest_message or latest_message.id != resume_message.id:
+            raise HTTPException(status_code=409, detail="对话已有新的消息，请基于最新上下文继续")
+        effective_message = resume_message.content
+    else:
+        # 保存用户消息
+        user_message = Message(
+            conversation_id=conversation.id,
+            role="user",
+            content=effective_message
+        )
+        db.add(user_message)
+        await db.commit()
 
     # 自动更新对话标题（首条用户消息时）
     if conversation.title in ("新对话", "需求分析", "智能开发") or conversation.title.startswith("新对话"):
-        short_title = data.message.strip().replace("\n", " ")[:30]
+        short_title = effective_message.strip().replace("\n", " ")[:30]
         if short_title:
             conversation.title = short_title
             await db.commit()
@@ -680,7 +686,7 @@ async def send_message(
                     yield {"event": "thinking", "data": json.dumps(
                         {"type": "thinking", "data": "正在分析你的回复..."},
                         ensure_ascii=False)}
-                    async for ev in agent.run(spec, user_message=data.message, history=history):
+                    async for ev in agent.run(spec, user_message=effective_message, history=history):
                         if ev.kind == "assistant_delta":
                             last_assistant_text += ev.text or ""
                             yield {"event": "message", "data": json.dumps(
@@ -812,6 +818,7 @@ async def send_message_with_file(
     message: str = Form(default=""),
     file: Optional[UploadFile] = File(default=None),
     current_config: str = Form(default=""),
+    application_id: Optional[int] = Form(default=None),
 ):
     _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
     _MIME_MAP = {
@@ -877,6 +884,33 @@ async def send_message_with_file(
         if short_title:
             conversation.title = short_title
             await db.commit()
+
+    # 文件/截图发送也要和普通文字消息一样能绑定当前应用上下文。
+    # 否则带截图追问时可能走不到 canonical SPEC -> personal draft 的编辑链路。
+    if not conversation.spec_id and application_id:
+        from app.models import Application
+        from app.builder_spec.persistence import fork_canonical_to_draft
+        app_row = (
+            await db.execute(
+                select(Application).where(
+                    Application.id == application_id,
+                    Application.tenant_id == ctx.tenant_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if app_row and app_row.canonical_spec_id:
+            canonical = await load_spec(
+                db, app_row.canonical_spec_id, tenant_id=ctx.tenant_id
+            )
+            if canonical:
+                draft = await fork_canonical_to_draft(
+                    db,
+                    canonical=canonical,
+                    user_id=ctx.user.id,
+                    tenant_id=ctx.tenant_id,
+                )
+                conversation.spec_id = draft.id
+                await db.commit()
 
     llm_cfg = await _get_conversation_llm_config(db, conversation)
 

@@ -17,6 +17,24 @@ from __future__ import annotations
 
 from typing import Callable
 
+from app.lowcode_standards import normalize_database_field_type
+
+
+def _first_bool(*values) -> bool:
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, str) and value.strip() == "":
+            continue
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"1", "true", "yes", "y", "是"}:
+                return True
+            if lowered in {"0", "false", "no", "n", "否"}:
+                return False
+        return bool(value)
+    return False
+
 
 def _section_app_info(app_name: str, app_code: str, data: dict) -> list[str]:
     app_description = str(data.get("description") or data.get("appDescription") or data.get("remark") or "").strip()
@@ -112,6 +130,11 @@ def _section_models(models: list[dict]) -> list[str]:
                     or field.get("field_type")
                     or ""
                 )
+                database_field_type = normalize_database_field_type(
+                    database_field_type,
+                    component_type=field.get("type") or field.get("componentType"),
+                    field_name=str(field.get("name") or field.get("fieldName") or ""),
+                )
                 length_or_precision = (
                     field.get("max_length")
                     or field.get("maxLength")
@@ -181,8 +204,8 @@ def _section_forms(
                     main_field_rows.append(
                         f"| {form_name} | {field_code} | {component.get('label') or component.get('name') or field_meta.get('name', '')} | "
                         f"{component_type_label(component.get('componentType') or component.get('component_type'), field_meta.get('type', ''))} | "
-                        f"{bool_label(component.get('required'))} | {bool_label(component.get('hidden'))} | {bool_label(component.get('readonly') or component.get('readOnly'))} | "
-                        f"{bool_label(component.get('showInList') or component.get('list_visible'))} | {bool_label(component.get('searchable') or component.get('queryable'))} | "
+                        f"{bool_label(component.get('required'))} | {bool_label(component.get('hidden'))} | {bool_label(_first_bool(component.get('readonly'), component.get('readOnly')))} | "
+                        f"{bool_label(_first_bool(component.get('showInList'), component.get('list_visible')))} | {bool_label(_first_bool(component.get('searchable'), component.get('queryable')))} | "
                         f"{component.get('dict_code') or component.get('dictCode') or component.get('dict') or field_meta.get('dict_code') or field_meta.get('dict') or ''} | {ref_model_code} | {ref_field_code} | {origin_field_code} | "
                         f"{component.get('description') or field_meta.get('description', '')} |"
                     )
@@ -211,8 +234,8 @@ def _section_forms(
                             sub_field_rows.append(
                                 f"| {form_name} | {sub_label} | {column_code} | {column.get('label') or column.get('name') or field_meta.get('name', '')} | "
                                 f"{component_type_label(column.get('componentType') or column.get('component_type'), field_meta.get('type', ''))} | "
-                                f"{bool_label(column.get('required'))} | {bool_label(column.get('hidden'))} | {bool_label(column.get('readonly') or column.get('readOnly'))} | "
-                                f"{bool_label(column.get('showInList') or column.get('list_visible'))} | {bool_label(column.get('searchable') or column.get('queryable'))} | "
+                                f"{bool_label(column.get('required'))} | {bool_label(column.get('hidden'))} | {bool_label(_first_bool(column.get('readonly'), column.get('readOnly')))} | "
+                                f"{bool_label(_first_bool(column.get('showInList'), column.get('list_visible')))} | {bool_label(_first_bool(column.get('searchable'), column.get('queryable')))} | "
                                 f"{column.get('dict_code') or column.get('dictCode') or column.get('dict') or field_meta.get('dict_code') or field_meta.get('dict') or ''} | {ref_model_code} | {ref_field_code} | {origin_field_code} | "
                                 f"{column.get('description') or field_meta.get('description', '')} |"
                             )

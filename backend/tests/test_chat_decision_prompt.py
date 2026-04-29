@@ -34,12 +34,11 @@ def test_pending_decisions_are_rendered_as_chat_reply():
         _decision("d_stock", "库存数量口径", resolved=True),
     ])
 
-    assert "我需要你确认一个关键点" in message
+    assert "我需要你确认「组织使用范围」" in message
     assert "组织使用范围" in message
-    assert "1. 单仓库使用" in message
-    assert "2. 多个仓库统一管理" in message
+    assert "单仓库使用" not in message
+    assert "多个仓库统一管理" not in message
     assert "库存数量口径" not in message
-    assert "你直接在对话里回答即可" in message
 
 
 def test_append_decision_message_does_not_duplicate_existing_question():

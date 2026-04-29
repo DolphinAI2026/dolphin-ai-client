@@ -88,6 +88,8 @@ export const usePreviewStore = defineStore('preview', () => {
     preview.workflows = []
     preview.permissions = []
     preview.custom_development = []
+    delete (preview as any).__source
+    delete (preview as any).spec_id
     resetGenProgress()
   }
 

@@ -56,6 +56,43 @@ def test_confirm_role_flips_flag():
     assert spec.roles[0].confirmed is True
 
 
+def test_update_role_marks_confirmed_item_unconfirmed():
+    spec = _empty_spec()
+    spec = dispatch_tool(spec, "add_role", {"code": "r1", "name": "r1", "scope": "ALL"})
+    spec = dispatch_tool(spec, "confirm_role", {"code": "r1"})
+    spec = dispatch_tool(spec, "update_role", {"code": "r1", "description": "负责全局配置"})
+    assert spec.roles[0].description == "负责全局配置"
+    assert spec.roles[0].confirmed is False
+
+
+def test_update_field_marks_confirmed_item_unconfirmed():
+    spec = _empty_spec()
+    spec.objects.append(ObjectSpec(
+        code="t_candidate",
+        name="候选人",
+        fields=[FieldSpec(code="remark", name="备注", type="单行输入", confirmed=True)],
+        confirmed=True,
+    ))
+    spec = dispatch_tool(spec, "update_field", {
+        "object_code": "t_candidate",
+        "field_code": "remark",
+        "type": "多行文本",
+    })
+    assert spec.objects[0].fields[0].type == "多行文本"
+    assert spec.objects[0].fields[0].confirmed is False
+
+
+def test_ready_write_reopens_spec_as_draft():
+    spec = _empty_spec()
+    spec.phase = Phase.READY
+    spec = dispatch_tool(spec, "add_object", {
+        "code": "t_candidate",
+        "name": "候选人",
+        "fields": [{"code": "remark", "name": "备注", "type": "多行文本"}],
+    })
+    assert spec.phase == Phase.DRAFTING
+
+
 def test_dismiss_role_removes():
     spec = _empty_spec()
     spec = dispatch_tool(spec, "add_role", {"code": "r1", "name": "r1", "scope": "ALL"})
@@ -105,16 +142,14 @@ def test_transition_phase_allowed_when_no_blocking():
     assert new_spec.phase == Phase.DRAFTING
 
 
-def test_gathering_first_turn_blocks_set_goal_when_completeness_zero():
-    """Per design spec section 5: gathering phase first turn must call ask_clarifying_question
-    at least 3 times before any add_/set_."""
+def test_gathering_first_turn_allows_spec_extraction_when_confident():
+    """The agent may write high-confidence facts before asking follow-up questions."""
     spec = _empty_spec()
-    # confirmed=0, no decisions yet → must ask first
-    with pytest.raises(ToolError) as exc:
-        dispatch_tool(spec, "set_goal", {
-            "title": "x", "summary": "x", "business_problem": "x",
-        }, enforce_first_turn=True)
-    assert "ask_clarifying_question" in str(exc.value).lower()
+    new_spec = dispatch_tool(spec, "set_goal", {
+        "title": "预算管理", "summary": "管理预算申请与审批", "business_problem": "预算流转不透明",
+    }, enforce_first_turn=True)
+    assert new_spec.goal is not None
+    assert new_spec.goal.title == "预算管理"
 
 
 def test_unknown_tool_raises():

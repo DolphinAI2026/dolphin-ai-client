@@ -715,7 +715,12 @@ async def save_coding_message(db: AsyncSession, conversation_id: int, role: str,
 
 BRAINSTORM_PROPOSAL_MARKER = "<!-- BRAINSTORM_PROPOSAL -->"
 BRAINSTORM_MAX_REVISIONS = 8  # 仅用于记录多轮修订，不再强制进入代码生成
-BRAINSTORM_SCENES = {SceneType.WEB_COMPONENT, SceneType.WEB_COMPONENT_DUAL, SceneType.WEB_PAGE, SceneType.WEB_LIST_VIEW, SceneType.BACKEND_API}
+BRAINSTORM_SCENES = {
+    SceneType.WEB_COMPONENT_DUAL,
+    SceneType.WEB_PAGE,
+    SceneType.WEB_LIST_VIEW,
+    SceneType.BACKEND_API,
+}
 
 _BRAINSTORM_PROMPT_FORM_COMPONENT = """\
 你是一位资深 aPaaS 表单组件架构师。请分析用户需求，输出一份可落地的开发 SPEC 确认单（不超过 700 字，中文）。

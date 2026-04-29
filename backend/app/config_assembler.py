@@ -17,6 +17,7 @@ import logging
 import re
 from typing import AsyncGenerator, Dict, List, Optional, Tuple
 
+from app.app_code import normalize_app_code
 from app.llm_client import LLMClient
 
 logger = logging.getLogger(__name__)
@@ -45,7 +46,7 @@ SKELETON_PROMPT = """你是得帆云低代码平台的配置设计专家。
 ```json
 {
   "appName": "应用名称",
-  "appCode": "应用编码（英文小写+下划线或连字符）",
+  "appCode": "应用编码（小写字母、中划线、数字；必须以字母开头；最多 17 个字符）",
   "roles": [{"name": "角色名", "code": "role_code"}],
   "dict_names": [
     {"name": "字典名", "code": "dict_code", "hint": "简短描述用途"}
@@ -60,7 +61,8 @@ SKELETON_PROMPT = """你是得帆云低代码平台的配置设计专家。
 ```
 
 规则：
-- code 用英文小写+下划线，避免数据库保留字
+- role/dict/model code 用英文小写+下划线，避免数据库保留字
+- appCode 只能使用小写字母、中划线和数字，必须以小写字母开头，最多 17 个字符
 - appCode 必须从文档原文中提取（如“应用编码：xxx”），若文档未给出则根据 appName 生成
 - 识别所有需要字典的枚举字段（状态、类型、类别等），列入 dict_names
 - model_names 只列名称和简短描述，不要列字段详情
@@ -279,30 +281,23 @@ def _extract_dict_section(text: str, dict_name: str, dict_code: str) -> str:
 
 
 def _normalize_app_code(code: str) -> str:
-    c = (code or "").strip().replace(" ", "_").replace("-", "_")
-    c = re.sub(r"[^A-Za-z0-9_]", "", c)
-    c = re.sub(r"_+", "_", c).strip("_")
-    if not c:
-        return ""
-    if not re.match(r"^[A-Za-z]", c):
-        c = f"app_{c}"
-    return c[:64]
+    return normalize_app_code(code)
 
 
 def _build_app_code_from_name(name: str) -> str:
     base = _normalize_app_code(name)
     if base:
         return base
-    return "app_demo"
+    return "app-demo"
 
 
 def _extract_app_code_from_text(text: str) -> str:
     if not text:
         return ""
     patterns = [
-        r"应用编码[：:\s`]*([A-Za-z][A-Za-z0-9_-]{1,63})",
-        r"app[_\s-]?code[：:\s`]*([A-Za-z][A-Za-z0-9_-]{1,63})",
-        r'"code"\s*:\s*"([A-Za-z][A-Za-z0-9_-]{1,63})"',
+        r"应用编码[：:\s`]*([A-Za-z][A-Za-z0-9_-]{0,63})",
+        r"app[_\s-]?code[：:\s`]*([A-Za-z][A-Za-z0-9_-]{0,63})",
+        r'"code"\s*:\s*"([A-Za-z][A-Za-z0-9_-]{0,63})"',
     ]
     for p in patterns:
         m = re.search(p, text, re.IGNORECASE)

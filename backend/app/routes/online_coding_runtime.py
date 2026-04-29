@@ -16,11 +16,10 @@ from app.coding.preview_runtime import (
 )
 from app.deps import AuthContext, get_auth_context
 from app.routes.online_coding import (
-    EMPTY_REPO_IMPORT_ERROR,
     ONLINE_CODING_ROOT,
     _find_workspace_dir,
+    _is_repo_imported,
     _repo_path,
-    _workspace_file_count,
 )
 
 router = APIRouter(prefix="/online-coding", tags=["online-coding-runtime"])
@@ -126,10 +125,8 @@ def _get_online_repo_for_user(workspace_id: str, ctx: AuthContext) -> tuple[Path
     ws_dir, meta = _find_workspace_dir(workspace_id)
     if meta.get("user_id") != ctx.user.id:
         raise HTTPException(status_code=403, detail="无权访问该 Vibe Coding 工作区")
-    if meta.get("status") != "repo_imported":
+    if not _is_repo_imported(meta):
         raise HTTPException(status_code=400, detail="仓库导入成功后才能启动预览")
-    if _workspace_file_count(meta) <= 0:
-        raise HTTPException(status_code=400, detail=EMPTY_REPO_IMPORT_ERROR)
     repo_dir = _repo_path(ws_dir)
     if not repo_dir.exists():
         raise HTTPException(status_code=404, detail="仓库目录不存在")

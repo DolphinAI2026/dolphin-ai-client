@@ -147,10 +147,11 @@ def _build_prompt(module: str, section_text: str) -> str:
 
     if module == "models":
         base += (
-            "\n- 数据模型里的“存储类型”必须优先保留原文中的数据库类型，例如：varchar / text / decimal / date / datetime / int / bigint / boolean\n"
+            "\n- 数据模型里的“存储类型”必须优先保留原文中的数据库类型，只能使用：varchar / text / decimal / date / datetime / int / bigint\n"
             "- 只有原文完全没有数据库类型时，才可按字段语义补齐一个最接近的数据库类型\n"
             "- 原文如果同时出现“类型”和“组件”，则：类型用于“存储类型”，组件不要写进数据模型表\n"
             "- 如果字段来自附件/链接/日期/数字等组件，也不要把组件名写进“存储类型”，应写成对应数据库类型\n"
+            "- 字段编码不能直接使用 name/title/status/type/level/department/user/phone/email/manager/result/remark/description/content 等保留短名，必须加业务前缀\n"
         )
     if module == "forms":
         base += f"\n- 组件类型只能从以下选择：{_VALID_FIELD_TYPES}\n"

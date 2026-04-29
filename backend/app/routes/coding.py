@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -832,6 +833,17 @@ class WriteFileRequest(BaseModel):
     content: str
 
 
+class IDEFileEdit(BaseModel):
+    """Web IDE 内 Chat 应用文件修改。"""
+    path: str
+    content: Optional[str] = None
+    action: Optional[str] = "write"
+
+
+class IDEApplyEditsRequest(BaseModel):
+    edits: list[IDEFileEdit]
+
+
 class AutoPipelineRequest(BaseModel):
     """自动化 Pipeline 请求（对话式开发）"""
     message: str                           # 用户需求描述
@@ -1318,6 +1330,104 @@ async def ide_symbol_search(
     indexer = SymbolIndexer.get_or_create(ws_id, ws_path)
     matches = indexer.query(q.strip(), limit=limit)
     return {"symbols": [s.to_dict() for s in matches]}
+
+
+def _resolve_ide_edit_path(root: Path, file_path: str) -> tuple[str, Path]:
+    clean_path = (file_path or "").strip().replace("\\", "/").lstrip("/")
+    if not clean_path or ".." in Path(clean_path).parts:
+        raise ValueError("Invalid target path")
+
+    root_resolved = root.resolve()
+    target = (root_resolved / clean_path).resolve()
+    try:
+        target.relative_to(root_resolved)
+    except ValueError as exc:
+        raise ValueError("Invalid target path") from exc
+    return clean_path, target
+
+
+def _apply_ide_edits_to_path(root: Path, edits: list[IDEFileEdit]) -> dict[str, list[dict[str, str]]]:
+    applied: list[dict[str, str]] = []
+    skipped: list[dict[str, str]] = []
+
+    for edit in edits[:12]:
+        try:
+            rel_path, target = _resolve_ide_edit_path(root, edit.path)
+        except ValueError as exc:
+            skipped.append({"path": edit.path or "(empty)", "reason": str(exc)})
+            continue
+
+        action = (edit.action or "write").strip().lower()
+        try:
+            if action == "delete":
+                if target.is_dir():
+                    shutil.rmtree(target)
+                elif target.exists():
+                    target.unlink()
+                applied.append({"path": rel_path, "action": "delete"})
+                continue
+
+            if not isinstance(edit.content, str):
+                skipped.append({"path": rel_path, "reason": "Missing full file content"})
+                continue
+
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(edit.content, encoding="utf-8")
+            applied.append({"path": rel_path, "action": "create" if action == "create" else "write"})
+        except OSError as exc:
+            skipped.append({"path": rel_path, "reason": str(exc)})
+
+    return {"applied": applied, "skipped": skipped}
+
+
+@router.post("/workspace/{ws_id}/ide/apply-edits")
+async def ide_apply_file_edits(
+    ws_id: str,
+    req: IDEApplyEditsRequest,
+    x_vibe_ide_token: Annotated[Optional[str], Header(alias="X-Vibe-IDE-Token")] = None,
+    token: Optional[str] = Query(default=None),
+):
+    """让 Web IDE Chat 通过后端安全写入文件，避免依赖 code-server 压缩后的内部变量名。"""
+    ide_token = x_vibe_ide_token or token
+    if not ide_token:
+        raise HTTPException(status_code=401, detail="缺少 IDE 访问令牌，请重新从 Builder 打开 Web IDE")
+    token_payload = _verify_ide_access_token(ide_token, ws_id)
+
+    if ws_id.startswith("oc_"):
+        from app.routes.online_coding import (
+            _find_workspace_dir,
+            _repo_path,
+            _summarize_repo,
+            _write_workspace,
+        )
+
+        ws_dir, meta = _find_workspace_dir(ws_id)
+        if str(meta.get("user_id")) != str(token_payload.get("sub")):
+            raise HTTPException(status_code=403, detail="IDE 访问令牌与当前工作区用户不匹配")
+        if str(meta.get("tenant_id")) != str(token_payload.get("tid")):
+            raise HTTPException(status_code=403, detail="IDE 访问令牌与当前租户不匹配")
+
+        repo_dir = _repo_path(ws_dir)
+        repo_dir.mkdir(parents=True, exist_ok=True)
+        result = _apply_ide_edits_to_path(repo_dir, req.edits)
+        if result["applied"]:
+            file_count, files = _summarize_repo(repo_dir)
+            meta.update({
+                "status": "repo_imported",
+                "sandbox_status": "repo_ready",
+                "file_count": file_count,
+                "files": files,
+                "import_error": None,
+                "updated_at": datetime.utcnow().isoformat(),
+            })
+            _write_workspace(ws_dir, meta)
+        return result
+
+    try:
+        workspace_path = workspace_mgr.get_workspace_path(ws_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="工作区不存在")
+    return _apply_ide_edits_to_path(workspace_path, req.edits)
 
 
 @router.get("/skills")

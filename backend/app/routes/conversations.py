@@ -293,8 +293,19 @@ async def list_conversations_with_apps(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
     agent_type: Optional[str] = Query(None),
+    app_ids: Optional[str] = Query(None),
 ):
     """获取当前用户的所有对话，并附带关联的应用信息"""
+    scoped_app_ids: list[int] = []
+    if app_ids:
+        for raw in app_ids.split(","):
+            try:
+                value = int(raw.strip())
+            except ValueError:
+                continue
+            if value > 0:
+                scoped_app_ids.append(value)
+
     query = (
         select(Conversation)
         .where(
@@ -305,6 +316,18 @@ async def list_conversations_with_apps(
     )
     if agent_type:
         query = query.where(Conversation.agent_type == agent_type)
+    if scoped_app_ids:
+        app_conv_result = await db.execute(
+            select(Application.conversation_id).where(
+                Application.tenant_id == ctx.tenant_id,
+                Application.id.in_(scoped_app_ids),
+                Application.conversation_id.isnot(None),
+            )
+        )
+        conversation_ids = [row[0] for row in app_conv_result.all() if row[0]]
+        if not conversation_ids:
+            return []
+        query = query.where(Conversation.id.in_(conversation_ids))
 
     result = await db.execute(query)
     conversations = result.scalars().all()

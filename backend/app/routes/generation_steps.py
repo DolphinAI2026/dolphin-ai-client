@@ -19,6 +19,7 @@ from app.crypto import decrypt_password
 from app.database import get_db
 from app.deps import get_auth_context, AuthContext
 from app.models import Application, User, ApiCallLog
+from app.app_code import normalize_app_code
 from app.routes.applications import _dump_preview_config
 from app.schemas import (
     StepExecuteRequest, StepResetRequest,
@@ -34,6 +35,7 @@ from app.app_locks import acquire_app_lock
 from app.json_utils import loads_if_str
 from app.error_messages import APAAS_TOKEN_EXPIRED_STEP, is_apaas_token_error
 from app.field_types import get_comp_type_map
+from app.lowcode_standards import normalize_preview_config
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +110,47 @@ def _load_config(app: Application) -> dict:
     if not app.config_preview:
         raise HTTPException(status_code=400, detail="应用配置为空，请先在对话中生成配置")
     return loads_if_str(app.config_preview)
+
+
+def _normalized_config_for_steps(app: Application, *, persist: bool = False) -> dict:
+    config = _load_config(app)
+    normalized, changed, meta = normalize_preview_config(config)
+    if changed:
+        field_changes = sum(len(items) for items in (meta.get("field_code_map") or {}).values())
+        logger.info("低代码配置已规范化: app_id=%s field_code_changes=%s", app.id, field_changes)
+        if persist:
+            app.config_preview = _dump_preview_config(normalized)
+    return normalized
+
+
+def _upsert_form_result(state: dict, entry: dict) -> None:
+    """Store one form result without duplicating the same platform form."""
+    results = state.setdefault("form_results", [])
+    form_id = str(entry.get("formId") or "").strip()
+    model_code = str(entry.get("modelCode") or "").strip()
+    form_name = str(entry.get("formName") or "").strip()
+
+    def _merged(existing: dict, incoming: dict) -> dict:
+        merged = dict(existing)
+        for key, value in incoming.items():
+            if value not in (None, ""):
+                merged[key] = value
+            elif key not in merged:
+                merged[key] = value
+        return merged
+
+    for idx, item in enumerate(results):
+        if form_id and str(item.get("formId") or "").strip() == form_id:
+            results[idx] = _merged(item, entry)
+            return
+        if model_code and str(item.get("modelCode") or "").strip() == model_code:
+            results[idx] = _merged(item, entry)
+            return
+        if form_name and str(item.get("formName") or "").strip() == form_name:
+            results[idx] = _merged(item, entry)
+            return
+
+    results.append(entry)
 
 
 def _component_type_label(value: str, model_type: str = "") -> str:
@@ -475,13 +518,13 @@ def _sync_platform_codes_to_config(app: Application, state: dict, data: dict):
         cfg_data = config.get("data", config)
 
         # 回写平台最终应用编码
-        platform_app_code = str(
+        platform_app_code = normalize_app_code(
             state.get("platform_app_code")
             or cfg_data.get("appCode")
             or cfg_data.get("app_code")
             or app.app_code
             or ""
-        ).strip()
+        )
         if platform_app_code:
             cfg_data["appCode"] = platform_app_code
             cfg_data["app_code"] = platform_app_code
@@ -652,7 +695,7 @@ async def get_step_status(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     app = await _get_app(app_id, ctx, db)
-    config = _load_config(app)
+    config = _normalized_config_for_steps(app)
     state = _load_state(app)
     apaas_app_id = state.get("apaas_app_id") or app.apaas_app_id
     steps = _build_steps(config, state, apaas_app_id)
@@ -676,7 +719,7 @@ async def execute_step(
     from app.apaas_client import APaaSClient
 
     app = await _get_app(app_id, ctx, db)
-    config = _load_config(app)
+    config = _normalized_config_for_steps(app, persist=True)
     state = _load_state(app)
     data = config.get("data", config)
     models = data.get("models", [])
@@ -1058,8 +1101,7 @@ async def _execute_step_impl(
             all_forms=forms,
             form_results=existing_form_results,
         )
-        state.setdefault("form_results", [])
-        state["form_results"].append({
+        _upsert_form_result(state, {
             "formId": result.get("formId", ""),
             "formCode": result.get("formCode", ""),
             "formName": result.get("formName", ""),

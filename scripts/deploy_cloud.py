@@ -83,18 +83,28 @@ def make_tar(base_dir: Path, exclude_fn=None) -> bytes:
     return buf.read()
 
 
-def connect(host: str, user: str, password: str, port: int) -> paramiko.SSHClient:
+def connect(
+    host: str,
+    user: str,
+    password: str | None,
+    port: int,
+    key_file: str | None = None,
+) -> paramiko.SSHClient:
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    client.connect(
-        host,
-        port=port,
-        username=user,
-        password=password,
-        timeout=30,
-        allow_agent=False,
-        look_for_keys=False,
-    )
+    kwargs = {
+        "hostname": host,
+        "port": port,
+        "username": user,
+        "timeout": 30,
+        "allow_agent": False,
+        "look_for_keys": False,
+    }
+    if key_file:
+        kwargs["key_filename"] = os.path.expanduser(key_file)
+    else:
+        kwargs["password"] = password
+    client.connect(**kwargs)
     return client
 
 
@@ -132,6 +142,17 @@ def remote_start_backend(client: paramiko.SSHClient, remote_backend: str) -> Non
     channel.close()
 
 
+def remote_has_service(client: paramiko.SSHClient, service_name: str) -> bool:
+    result = remote_run(
+        client,
+        f"systemctl list-unit-files {service_name} --no-legend | "
+        f"grep -q '^{service_name}' && echo yes || echo no",
+        check=False,
+        timeout=60,
+    )
+    return result.strip() == "yes"
+
+
 def upload_tar(sftp: paramiko.SFTPClient, remote_path: str, data: bytes) -> None:
     with sftp.open(remote_path, "wb") as handle:
         handle.write(data)
@@ -143,6 +164,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--user", default=os.getenv("APAAS_DEPLOY_USER") or os.getenv("SERVER_USER") or DEFAULT_USER)
     parser.add_argument("--port", type=int, default=int(os.getenv("APAAS_DEPLOY_PORT") or DEFAULT_PORT))
     parser.add_argument("--remote-base", default=os.getenv("APAAS_REMOTE_BASE") or DEFAULT_REMOTE_BASE)
+    parser.add_argument("--key-file", default=os.getenv("APAAS_DEPLOY_KEY_FILE") or os.getenv("SERVER_KEY_FILE"))
     parser.add_argument("--skip-build", action="store_true", help="Use existing frontend/dist")
     parser.add_argument("--backend-only", action="store_true", help="Only deploy backend files and restart backend")
     parser.add_argument("--frontend-only", action="store_true", help="Only deploy frontend/dist")
@@ -157,7 +179,7 @@ def main() -> int:
         raise SystemExit("--backend-only and --frontend-only cannot be used together")
 
     password = os.getenv("APAAS_DEPLOY_PASSWORD") or os.getenv("SERVER_PASSWORD")
-    if not password:
+    if not password and not args.key_file:
         password = getpass.getpass(f"SSH password for {args.user}@{args.host}: ")
 
     remote_backend = f"{args.remote_base.rstrip('/')}/backend"
@@ -173,7 +195,7 @@ def main() -> int:
     client = None
     try:
         log("=== Connect ===")
-        client = connect(args.host, args.user, password, args.port)
+        client = connect(args.host, args.user, password, args.port, args.key_file)
         sftp = client.open_sftp()
 
         remote_run(client, f"mkdir -p {remote_backend} {remote_frontend}", timeout=60)
@@ -206,10 +228,13 @@ def main() -> int:
             remote_run(client, f"cd {remote_backend} && .venv/bin/pip install -q -r requirements.txt", timeout=600)
 
             log("=== Restart backend ===")
-            remote_run(client, "pkill -9 -f 'uvicorn.*:app.*8003' || true", check=False, timeout=60)
-            remote_run(client, "fuser -k 8003/tcp || true", check=False, timeout=60)
-            time.sleep(2)
-            remote_start_backend(client, remote_backend)
+            if remote_has_service(client, "apaas-builder-backend.service"):
+                remote_run(client, "systemctl restart apaas-builder-backend.service", timeout=120)
+            else:
+                remote_run(client, "pkill -9 -f 'uvicorn.*:app.*8003' || true", check=False, timeout=60)
+                remote_run(client, "fuser -k 8003/tcp || true", check=False, timeout=60)
+                time.sleep(2)
+                remote_start_backend(client, remote_backend)
             time.sleep(max(args.wait, 1))
 
             log("=== Remote health check ===")

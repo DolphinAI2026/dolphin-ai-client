@@ -87,6 +87,7 @@ class ApplicationCreate(BaseModel):
     app_code: str
     description: Optional[str] = None
     config_preview: Optional[dict] = None
+    canonical_spec_id: Optional[str] = None
     platform_env_id: Optional[int] = None
     # 平台环境配置（可选）
     platform_url: Optional[str] = None
@@ -102,6 +103,7 @@ class ApplicationResponse(BaseModel):
     status: str
     conversation_id: Optional[int] = None
     platform_env_id: Optional[int] = None
+    canonical_spec_id: Optional[str] = None
     apaas_app_id: Optional[str] = None
     apaas_url: Optional[str] = None
     config_preview: Optional[dict] = None
@@ -133,6 +135,7 @@ class MergedAppResponse(BaseModel):
     apaas_app_id: Optional[str] = None
     apaas_url: Optional[str] = None        # 平台直达链接
     conversation_id: Optional[int] = None  # 关联的对话ID，用于"继续完善"
+    canonical_spec_id: Optional[str] = None
     models: int = 0
     forms: int = 0
     roles: int = 0
@@ -150,6 +153,22 @@ class MergedAppResponse(BaseModel):
     updated_at: Optional[str] = None
 
 
+class ApplicationListCounts(BaseModel):
+    all: int = 0
+    active: int = 0
+    deployed: int = 0
+    draft: int = 0
+
+
+class ApplicationPageResponse(BaseModel):
+    items: List[MergedAppResponse]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+    counts: ApplicationListCounts
+
+
 # Chat schemas
 class ChatRequest(BaseModel):
     conversation_id: int
@@ -157,6 +176,8 @@ class ChatRequest(BaseModel):
     current_config: Optional[dict] = None
     # Phase B: ChatPage 显式传 application_id 时，触发首次编辑前的 fork canonical → personal draft
     application_id: Optional[int] = None
+    # 从已落库但未收到助手回复的最后一条用户消息恢复，不重复保存用户消息
+    resume_from_message_id: Optional[int] = None
 
 
 class ChatStreamEvent(BaseModel):

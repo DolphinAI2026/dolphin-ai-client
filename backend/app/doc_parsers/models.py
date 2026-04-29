@@ -8,6 +8,7 @@ from app.doc_section_splitter import split_subsections
 from app.doc_table_parser import parse_table, parse_all_tables
 from app.config_validator import _normalize_field_type, RESERVED_FIELD_CODES
 from app.field_types import get_db_type_map, get_dict_field_types, get_ref_field_types
+from app.lowcode_standards import normalize_component_type, normalize_database_field_type, safe_field_code
 
 
 # 单一真相源都在 app.field_types；下面只是模块级缓存，保持名字不变、下游 0 改动。
@@ -245,6 +246,10 @@ def _parse_fields(content: str, model_code: str, model_name: str,
         if not code:
             errors.append(f"模型 '{model_name}' 字段 '{name}'：缺少字段编码")
             continue
+        safe_code = safe_field_code(code, model_code=model_code, field_name=name, used_codes=set())
+        if code.lower() != safe_code:
+            errors.append(f"模型 '{model_name}' 字段 '{name}'：编码 '{code}' 与数据库/平台保留字冲突，已改为 '{safe_code}'")
+            code = safe_code
         if not re.match(r'^[a-zA-Z][a-zA-Z0-9_]*$', code):
             errors.append(f"模型 '{model_name}' 字段 '{name}'：编码 '{code}' 不合规")
             continue
@@ -256,6 +261,12 @@ def _parse_fields(content: str, model_code: str, model_name: str,
             continue
 
         field_type, type_warn = _resolve_field_type(raw_type)
+        field_type = normalize_component_type(
+            field_type,
+            field_name=name,
+            has_dict=bool(dict_code),
+            has_ref=bool(ref_model),
+        )
         if type_warn:
             errors.append(f"模型 '{model_name}' 字段 '{name}'：{type_warn}")
 
@@ -271,8 +282,16 @@ def _parse_fields(content: str, model_code: str, model_name: str,
             "code": code.lower(),
             "name": name,
             "type": field_type,
-            "databaseFieldType": raw_db_type or raw_type,
-            "database_field_type": raw_db_type or raw_type,
+            "databaseFieldType": normalize_database_field_type(
+                raw_db_type or raw_type,
+                component_type=field_type,
+                field_name=name,
+            ),
+            "database_field_type": normalize_database_field_type(
+                raw_db_type or raw_type,
+                component_type=field_type,
+                field_name=name,
+            ),
         }
 
         if raw_length:

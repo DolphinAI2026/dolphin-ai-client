@@ -487,6 +487,9 @@ _REWRITE_PROMPT = """\
 - 字段类型只能用：单据号/单行输入/多行输入/富文本/手机号码/电子邮箱/身份证号/超链接/
   数字/金额/日期时间/开关/附件上传/地理位置/地区地址/人员选择/部门选择/
   下拉单选/下拉多选/单选框/复选框/数据单选/数据选择/关联表单/子表
+- 数据模型里的“存储类型/数据库字段类型”只能用：varchar/text/datetime/date/decimal/int/bigint。
+- 不要把 department/user/dict/ref/file/textarea/number/boolean/tinyint 这类组件或语义类型写进数据模型存储类型。
+- 通用字段编码必须加业务前缀，不能直接使用 name/title/status/type/level/department/user/phone/email/manager/result/remark/description/content。
 - 下拉单选/下拉多选/单选框/复选框 必须有对应字典（字典编码列填写）
 - 数据单选/数据选择/关联表单/子表 必须有关联模型编码
 - 数据范围只能：全公司/本部门/本部门及下属部门/仅本人

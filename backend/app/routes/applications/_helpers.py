@@ -23,11 +23,18 @@ from app.config import settings, APP_DEPLOY_ABSTRACT
 from app.json_utils import loads_if_str
 from app.crypto import decrypt_password
 from app.apaas_client import APaaSClient
+from app.app_code import (
+    APP_CODE_RULE_TEXT,
+    coerce_app_code as _coerce_app_code,
+    is_valid_app_code as _is_valid_app_code,
+    normalize_app_code as _normalize_app_code,
+)
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
     "_DEFAULT_APP_NAMES",
+    "APP_CODE_RULE_TEXT",
     "_LOCAL_STATUS_MAP",
     "_REMOTE_STATUS_MAP",
     "_bind_pending_doc_versions_to_app",
@@ -35,6 +42,7 @@ __all__ = [
     "_build_linked",
     "_build_local",
     "_build_remote",
+    "_coerce_app_code",
     "_compact_permission_rule",
     "_compact_preview_payload",
     "_component_data_selection_meta_is_stale",
@@ -47,6 +55,7 @@ __all__ = [
     "_ensure_doc_version_rendered_content",
     "_fallback_generated_icon",
     "_infer_app_name_from_doc",
+    "_is_valid_app_code",
     "_normalize_app_code",
     "_normalize_doc_compare_text",
     "_parsed_config_is_stale",
@@ -56,17 +65,6 @@ __all__ = [
     "_resolve_display_status",
     "_sync_canonical_config_to_current_doc_version",
 ]
-
-
-def _normalize_app_code(candidate: str | None) -> str:
-    import re
-
-    raw = str(candidate or "").strip().replace("_", "-")
-    raw = re.sub(r"[^A-Za-z0-9-]", "", raw)
-    raw = re.sub(r"-{2,}", "-", raw).strip("-")
-    if raw and raw[0].isalpha():
-        return raw
-    return ""
 
 
 # ── 应用名推断 ──────────────────────────────────────────────
@@ -325,9 +323,11 @@ def _compact_preview_payload(config: dict | None) -> dict:
         if compact_perm.get("form") or compact_perm.get("formName") or compact_perm.get("formCode") or rules:
             compact_permissions.append(compact_perm)
 
+    app_code = _normalize_app_code(data.get("appCode") or data.get("app_code") or "")
+
     return {
         "appName": data.get("appName"),
-        "appCode": data.get("appCode"),
+        "appCode": app_code or None,
         "roles": data.get("roles", []),
         "dicts": data.get("dicts", []),
         "models": compact_models,
@@ -340,13 +340,28 @@ def _compact_preview_payload(config: dict | None) -> dict:
 
 
 def _dump_preview_config(config: dict | None) -> str:
-    compact = _compact_preview_payload(config)
+    normalized = _normalize_config_for_dump(config)
+    compact = _compact_preview_payload(normalized)
     return json.dumps({"type": "preview", "data": compact}, ensure_ascii=False, separators=(",", ":"))
 
 
 def _dump_parsed_config(config: dict | None) -> str:
-    compact = _compact_preview_payload(config)
+    normalized = _normalize_config_for_dump(config)
+    compact = _compact_preview_payload(normalized)
     return json.dumps(compact, ensure_ascii=False, separators=(",", ":"))
+
+
+def _normalize_config_for_dump(config: dict | None) -> dict:
+    if not isinstance(config, dict):
+        return {}
+    try:
+        from app.lowcode_standards import normalize_preview_config
+
+        normalized, _, _ = normalize_preview_config(config)
+        return normalized
+    except Exception:
+        logger.warning("dump config normalize failed, fallback to raw config", exc_info=True)
+        return config
 
 
 def _component_data_selection_meta_is_stale(component: dict | None) -> bool:
@@ -527,11 +542,13 @@ def _render_doc_content_from_config(
     config: dict | None,
 ) -> str:
     from app.routes.generation_steps import _render_design_doc_markdown
+    from app.lowcode_standards import normalize_preview_config
 
-    data = dict(_preview_data(config))
+    normalized_config, _, _ = normalize_preview_config(config or {})
+    data = dict(_preview_data(normalized_config))
     if app_name and not data.get("appName"):
         data["appName"] = app_name
-    final_app_code = data.get("appCode") or data.get("app_code") or app_code or ""
+    final_app_code = _normalize_app_code(data.get("appCode") or data.get("app_code") or app_code or "")
     if final_app_code and not data.get("appCode"):
         data["appCode"] = final_app_code
     return _render_design_doc_markdown(app_name or data.get("appName", ""), final_app_code, data)
@@ -722,12 +739,12 @@ def _fallback_generated_icon(app: Application) -> str:
 def _enrich(app: Application) -> ApplicationResponse:
     config = None
     models = forms = roles = dicts = 0
-    resolved_app_code = app.app_code
+    resolved_app_code = _normalize_app_code(app.app_code) or _coerce_app_code(app.app_name)
     if app.config_preview:
         try:
             config = loads_if_str(app.config_preview)
             data = config.get("data", config)
-            resolved_app_code = data.get("appCode") or data.get("app_code") or resolved_app_code
+            resolved_app_code = _normalize_app_code(data.get("appCode") or data.get("app_code")) or resolved_app_code
             models = len(data.get("models", []))
             forms = models
             roles = len(data.get("roles", []))
@@ -740,6 +757,7 @@ def _enrich(app: Application) -> ApplicationResponse:
         description=app.description, status=app.status,
         conversation_id=app.conversation_id,
         platform_env_id=app.platform_env_id,
+        canonical_spec_id=app.canonical_spec_id,
         apaas_app_id=app.apaas_app_id, config_preview=config,
         models=models, forms=forms, roles=roles, dicts=dicts,
         project_id=app.project_id,
@@ -808,6 +826,7 @@ def _build_local(app: Application, perms: dict | None = None, env_name: str | No
         local_status=app.status,
         apaas_app_id=app.apaas_app_id,
         conversation_id=app.conversation_id,
+        canonical_spec_id=enriched.canonical_spec_id,
         models=enriched.models, forms=enriched.forms,
         roles=enriched.roles, dicts=enriched.dicts,
         config_preview=enriched.config_preview,
@@ -827,7 +846,7 @@ def _build_linked(app: Application, remote: dict, perms: dict | None = None, env
     enriched = _enrich(app)
     remote_status = remote.get("status") or remote.get("appStatus") or ""
     apaas_id = str(remote.get("id", app.apaas_app_id or ""))
-    display_app_code = remote.get("appCode") or enriched.app_code
+    display_app_code = _normalize_app_code(remote.get("appCode")) or enriched.app_code
     return MergedAppResponse(
         id=str(app.id),
         app_name=enriched.app_name,
@@ -841,6 +860,7 @@ def _build_linked(app: Application, remote: dict, perms: dict | None = None, env
         apaas_app_id=apaas_id,
         apaas_url=_build_apaas_url(apaas_id, env_base_url, env_tenant_id),
         conversation_id=app.conversation_id,
+        canonical_spec_id=enriched.canonical_spec_id,
         models=enriched.models, forms=enriched.forms,
         roles=enriched.roles, dicts=enriched.dicts,
         config_preview=enriched.config_preview,

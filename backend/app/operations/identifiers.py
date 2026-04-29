@@ -122,12 +122,15 @@ _RESERVED = {
 def _safe_field_code(code: str) -> str:
     """确保字段编码不与数据库关键字冲突。
 
-    策略：优先保留原始编码，仅在没有编码时再兜底生成。
+    策略：保留合规编码；遇到数据库/平台保留短名时自动加业务字段后缀。
     """
     raw = str(code or "").strip()
-    if raw:
-        return raw
-    return _sanitize_code(code)
+    c = _sanitize_code(raw or code)
+    if c in _RESERVED:
+        c = f"{c}_field"
+    if c in _RESERVED:
+        c = f"f_{c}"
+    return c
 
 
 def _extract_fields(platform_model: dict) -> Dict[str, str]:

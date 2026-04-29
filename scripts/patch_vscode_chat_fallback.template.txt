@@ -108,6 +108,7 @@ const ee=(vibeContextState.apiBase||__apaasConfigService.getValue("minimax.apiBa
 const ae=vibeContextState.ideToken||"";
 const se=__apaasConfigService.getValue("minimax.apiKey")||"";
 const Ae=(ae?[be,ee]:[ee]).map(T=>(T||"").replace(/\/$/,"")).filter(Boolean).filter((T,ie,oe)=>oe.indexOf(T)===ie);
+const _ideHeaders=()=>({...((ae?{"X-Vibe-IDE-Token":ae,"Authorization":"Bearer "+ae}:se?{"Authorization":"Bearer "+se}:{}))});
 const _isAutoMode2=()=>{try{return localStorage.getItem("apaas-auto-mode")!=="false";}catch{return!0;}};
 const _fallbackModel=vibeContextState.model||__apaasConfigService.getValue("minimax.model")||"MiniMax-M2.7";
 const _manualModel=y.__apaasModelSelector?.selected||_fallbackModel;
@@ -418,21 +419,20 @@ const loadProjectGuides=async()=>{
 if(y.__projectGuidesCache&&(Date.now()-y.__projectGuidesCache.ts<300000))return y.__projectGuidesCache.text;
 if(!Ae.length||!vibeContextState.workspaceId)return"";
 const _gpfx=Ae[0].replace(/\/ide\/?$/,"");
-const _ghdr={...(ae?{"X-Vibe-IDE-Token":ae,"Authorization":"Bearer "+ae}:se?{"Authorization":"Bearer "+se}:{})};
 try{
 const _gparts=[];
 const _GUIDES=[["CLAUDE.md",5000,"PROJECT_GUIDE"],["memory.md",2000,"MEMORY"],[".claude/rules/coding-style.rule.md",6000,"RULE"],[".claude/rules/mpaas-query-reference.rule.md",5000,"RULE"],[".claude/rules/dev-workflow.rule.md",3000,"RULE"]];
 for(const[gp,lim,label]of _GUIDES){
-try{const _gr=await fetch(_gpfx+`/file?file_path=${encodeURIComponent(gp)}`,{headers:_ghdr});
+try{const _gr=await fetch(_gpfx+`/file?file_path=${encodeURIComponent(gp)}`,{headers:_ideHeaders()});
 if(!_gr.ok)continue;const _gj=await _gr.json();if(!_gj?.content)continue;
 _gparts.push(`## ${label}: ${gp}\n${_gj.content.slice(0,lim)}`);
 }catch{}}
-try{const _flr=await fetch(_gpfx+"/files",{headers:_ghdr});
+try{const _flr=await fetch(_gpfx+"/files",{headers:_ideHeaders()});
 if(_flr.ok){const _flj=await _flr.json();const _allFiles=(Array.isArray(_flj)?_flj:_flj?.files||[]).map(f=>typeof f==="string"?f:f?.path||f?.name||"");
 const _cursorRules=_allFiles.filter(f=>/^\.cursor\/rules\/.*\.(mdc|md)$/i.test(f)).slice(0,6);
 const _loadedPaths=new Set(_GUIDES.map(g=>g[0]));
 for(const cr of _cursorRules){if(_loadedPaths.has(cr)||_gparts.length>=8)break;
-try{const _crr=await fetch(_gpfx+`/file?file_path=${encodeURIComponent(cr)}`,{headers:_ghdr});
+try{const _crr=await fetch(_gpfx+`/file?file_path=${encodeURIComponent(cr)}`,{headers:_ideHeaders()});
 if(!_crr.ok)continue;const _crj=await _crr.json();let _crc=_crj?.content||"";
 const _fm=_crc.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);const _fmMeta=_fm?_fm[1]:"";if(_fm)_crc=_fm[2];
 const _isAlwaysApply=/alwaysApply:\s*true/i.test(_fmMeta);const _ruleLimit=_isAlwaysApply?35000:6000;
@@ -447,41 +447,24 @@ return _gtext;
 };
 const Rt=async T=>{
 try{
-return await __apaasInstantiationService.invokeFunction(async ie=>{
-const oe=ie.get(Qe).getWorkspace();
-const re=ie.get(Me);
-const pe=oe.folders[0];
-if(!pe)return{applied:[],skipped:[{path:"",reason:"No workspace folder available."}]};
-const ve=[],Le=[];
 const Je=Array.isArray(T?.edits)?T.edits.slice(0,12):[];
-for(const Mt of Je){
-const qt=((Mt?.path)||"").trim().replace(/\\/g,"/").replace(/^\/+/,"");
-if(!qt||qt.includes("..")){
-Le.push({path:qt||"(empty)",reason:"Invalid target path"});
-continue;
-}
-let Qt=pe.uri;
-for(const ni of qt.split("/").filter(Boolean))Qt=ze(Qt,ni);
-const Ot=String(Mt?.action||"write").toLowerCase();
-try{
-if(Ot==="delete"){
-await re.del(Qt,{recursive:!0,useTrash:!1});
-ve.push({path:qt,action:"delete"});
-continue;
-}
-if(typeof Mt?.content!="string"){
-Le.push({path:qt,reason:"Missing full file content"});
-continue;
-}
-try{await re.createFolder(Ai(Qt))}catch{}
-await re.writeFile(Qt,He.fromString(Mt.content));
-ve.push({path:qt,action:Ot==="create"?"create":"write"});y.__ftCacheDirty=!0;if(/CLAUDE\.md|\.claude\/rules|memory\.md/.test(qt))y.__projectGuidesCache=null;
-}catch(ni){
-Le.push({path:qt,reason:ni?.message||"Unknown write error"});
-}
-}
-return{applied:ve,skipped:Le};
+if(!Je.length)return{applied:[],skipped:[]};
+const _applyBase=Ae[0]||"";
+if(!_applyBase)return{applied:[],skipped:[{path:"",reason:"IDE backend proxy is not configured"}]};
+const _resp=await fetch(_applyBase+"/apply-edits",{
+method:"POST",
+headers:{..._ideHeaders(),"Content-Type":"application/json"},
+body:JSON.stringify({edits:Je})
 });
+if(!_resp.ok){
+let _msg=`HTTP ${_resp.status}`;
+try{const _body=await _resp.json();_msg=_body?.detail||_msg;}catch{}
+return{applied:[],skipped:Je.map(ed=>({path:(ed?.path||""),reason:_msg}))};
+}
+const _json=await _resp.json();
+y.__ftCacheDirty=!0;
+if(Je.some(ed=>/CLAUDE\.md|\.claude\/rules|memory\.md/.test(ed?.path||"")))y.__projectGuidesCache=null;
+return{applied:Array.isArray(_json?.applied)?_json.applied:[],skipped:Array.isArray(_json?.skipped)?_json.skipped:[]};
 }catch(ie){
 console.warn("[PATCH] apply edit plan failed",ie);
 return{applied:[],skipped:[{path:"",reason:ie?.message||"Failed to apply edit plan"}]};
@@ -885,47 +868,20 @@ const _fParsed=_parseMarkdownEdits(_fText);
 if(_fParsed.edits.length>0){
 let _fWriteOk=!1;
 try{
-await __apaasInstantiationService.invokeFunction(async ie=>{
-const oe=ie.get(Qe).getWorkspace();
-const re=ie.get(Me);
-const pe=oe.folders[0];
-if(!pe)return;
-for(const ed of _fParsed.edits){
-const qt=(ed.path||"").trim().replace(/\\/g,"/").replace(/^\/+/,"");
-if(!qt||qt.includes("..")||!ed.content)continue;
-let Qt=pe.uri;
-for(const ni of qt.split("/").filter(Boolean))Qt=ze(Qt,ni);
-let existLines=1,lastCol=1;
-try{
-const ex=(await re.readFile(Qt)).value.toString();
-const lns=ex.split("\n");
-existLines=lns.length;
-lastCol=lns[lns.length-1].length+1;
-}catch{existLines=1;lastCol=1;}
-P([{kind:"textEditGroup",uri:Qt,edits:[[{range:{startLineNumber:1,startColumn:1,endLineNumber:existLines,endColumn:lastCol},text:ed.content}]],done:!0}]);
-_fWriteOk=!0;
-results.applied.push({path:qt,action:"write"});
-}
-});
-}catch(eg){
-console.warn("[PATCH] ExecPlanEt textEditGroup failed for",file.path,eg);
-}
-if(!_fWriteOk){
-try{
 const applyResult=await Rt({edits:_fParsed.edits});
 for(const a of(applyResult?.applied||[]))results.applied.push(a);
 for(const s of(applyResult?.skipped||[]))results.skipped.push(s);
+_fWriteOk=(applyResult?.applied||[]).length>0;
 }catch(rtErr){
-console.warn("[PATCH] ExecPlanEt Rt fallback failed",rtErr);
+console.warn("[PATCH] ExecPlanEt apply-edits failed",rtErr);
 results.skipped.push({path:file.path,reason:"写入失败"});
-}
 }
 for(const ed of _fParsed.edits){
 const lines=(ed.content||"").split("\n");
 const excerpt=lines.slice(0,50).join("\n");
 generatedSummaries.push({path:ed.path,excerpt});
 }
-P([{kind:"markdownContent",content:__apaasMd(`✅ \`${file.path}\` 已写入\n`)}]);
+P([{kind:"markdownContent",content:__apaasMd(_fWriteOk?`✅ \`${file.path}\` 已写入\n`:`❌ \`${file.path}\` 写入失败，已跳过\n`)}]);
 }else{
 results.skipped.push({path:file.path,reason:"未解析到文件内容"});
 P([{kind:"markdownContent",content:__apaasMd(`⚠️ \`${file.path}\` 生成失败，跳过\n`)}]);
@@ -1085,36 +1041,8 @@ if(!_uniText)return{errorDetails:{message:"Model did not return a response."}};
 const _uniEdits=_parseMarkdownEdits(_uniText);
 if(_uniEdits.edits.length>0){
 console.log("[PATCH] unified: detected",_uniEdits.edits.length,"FILE blocks, applying edits");
-let editGroupOk=!1;
-try{
-await __apaasInstantiationService.invokeFunction(async ie=>{
-const oe=ie.get(Qe).getWorkspace();
-const re=ie.get(Me);
-const pe=oe.folders[0];
-if(!pe)return;
-for(const ed of _uniEdits.edits.slice(0,12)){
-const qt=(ed.path||"").trim().replace(/\\/g,"/").replace(/^\/+/,"");
-if(!qt||qt.includes("..")||ed.action==="delete"||!ed.content)continue;
-let Qt=pe.uri;
-for(const ni of qt.split("/").filter(Boolean))Qt=ze(Qt,ni);
-let existLines=1,lastCol=1;
-try{
-const ex=(await re.readFile(Qt)).value.toString();
-const lns=ex.split("\n");
-existLines=lns.length;
-lastCol=lns[lns.length-1].length+1;
-}catch{existLines=1;lastCol=1;}
-P([{kind:"textEditGroup",uri:Qt,edits:[[{range:{startLineNumber:1,startColumn:1,endLineNumber:existLines,endColumn:lastCol},text:ed.content}]],done:!0}]);
-editGroupOk=!0;
-}
-});
-}catch(eg){
-console.warn("[PATCH] textEditGroup failed, falling back",eg);
-}
-if(!editGroupOk){
 globalThis.__pendingEdits=_uniEdits;
-P([{kind:"markdownContent",content:__apaasMd(`\n---\n输入 **确认** 应用修改，或 **取消** 放弃。\n`)}]);
-}
+P([{kind:"markdownContent",content:__apaasMd(`\n---\n检测到 ${_uniEdits.edits.length} 个文件修改。输入 **确认** 应用修改，或 **取消** 放弃。\n`)}]);
 return{timings:{firstProgress:Ii,totalElapsed:Date.now()-te}};
 }
 const _uniPlan=_parsePlan(_uniText);

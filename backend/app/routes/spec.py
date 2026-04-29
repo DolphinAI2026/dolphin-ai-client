@@ -4,6 +4,8 @@ POST   /spec                           → create empty spec for current user
 GET    /spec/{id}                      → load full spec
 PUT    /spec/{id}/phase                → user-driven phase transition
 PUT    /spec/{id}/items/{type}/{code}  → user confirm/edit/dismiss single item
+PUT    /spec/{id}/confirm-all          → user confirm the full generated draft
+POST   /spec/{id}/generate-config      → convert confirmed draft into config preview
 
 The "items" endpoint dispatches to the same tool functions the agent uses,
 so behavior stays consistent.
@@ -19,6 +21,7 @@ from app.database import get_db
 from app.deps import get_auth_context, AuthContext
 from app.json_utils import loads_if_str
 from app.builder_spec.persistence import load_spec, save_spec, empty_spec
+from app.builder_spec.converter import spec_to_config
 from app.builder_spec.tools import dispatch_tool, ToolError
 from app.builder_spec.schema import Phase
 
@@ -48,6 +51,11 @@ class PhaseTransition(BaseModel):
 class ItemAction(BaseModel):
     action: Literal["confirm", "dismiss", "update"]
     payload: dict = {}
+
+
+class GenerateConfigResponse(BaseModel):
+    spec: dict
+    config: dict
 
 
 class UpgradeFromLegacyRequest(BaseModel):
@@ -128,6 +136,105 @@ async def transition_phase(
         raise HTTPException(status_code=409, detail=str(e))
     await save_spec(db, spec, tenant_id=ctx.tenant_id)
     return spec.model_dump(mode="json")
+
+
+@router.put("/{spec_id}/confirm-all")
+async def confirm_all_items(
+    spec_id: str,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Confirm the current AI draft as one coherent version.
+
+    The normal UX is document-first: users review the full draft, then confirm the
+    version instead of clicking every generated role/object/field one by one.
+    """
+    spec = await load_spec(db, spec_id, tenant_id=ctx.tenant_id)
+    if spec is None:
+        raise HTTPException(status_code=404, detail=f"spec {spec_id} not found")
+
+    try:
+        if spec.goal and not spec.goal.confirmed:
+            spec = dispatch_tool(spec, "confirm_goal", {})
+        for role in list(spec.roles):
+            if not role.confirmed:
+                spec = dispatch_tool(spec, "confirm_role", {"code": role.code})
+        for obj in list(spec.objects):
+            if not obj.confirmed:
+                spec = dispatch_tool(spec, "confirm_object", {"code": obj.code})
+            for field in list(obj.fields):
+                if not field.confirmed:
+                    spec = dispatch_tool(
+                        spec,
+                        "confirm_field",
+                        {"object_code": obj.code, "field_code": field.code},
+                    )
+        for dict_item in list(spec.dicts):
+            if not dict_item.confirmed:
+                spec = dispatch_tool(spec, "confirm_dict", {"code": dict_item.code})
+        for permission in list(spec.permissions):
+            if not permission.confirmed:
+                spec = dispatch_tool(
+                    spec,
+                    "confirm_permission",
+                    {"object_code": permission.object_code},
+                )
+    except ToolError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+    if (
+        spec.completeness.total > 0
+        and spec.completeness.confirmed >= spec.completeness.total
+        and spec.completeness.blocking_decisions == 0
+        and spec.phase in {Phase.GATHERING, Phase.DRAFTING}
+    ):
+        spec = dispatch_tool(
+            spec,
+            "transition_phase",
+            {"target": Phase.GENERATING.value, "reason": "user confirmed full draft"},
+        )
+
+    await save_spec(db, spec, tenant_id=ctx.tenant_id)
+    return spec.model_dump(mode="json")
+
+
+@router.post("/{spec_id}/generate-config", response_model=GenerateConfigResponse)
+async def generate_config_from_spec(
+    spec_id: str,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Convert the confirmed SPEC draft into low-code config preview data."""
+    spec = await load_spec(db, spec_id, tenant_id=ctx.tenant_id)
+    if spec is None:
+        raise HTTPException(status_code=404, detail=f"spec {spec_id} not found")
+
+    if spec.completeness.total == 0:
+        raise HTTPException(status_code=409, detail="SPEC 还没有可生成的设计内容")
+    if spec.completeness.confirmed < spec.completeness.total:
+        raise HTTPException(status_code=409, detail="请先确认当前设计文档版本")
+    if spec.completeness.blocking_decisions:
+        raise HTTPException(status_code=409, detail="仍有阻塞决策未确认")
+
+    try:
+        if spec.phase not in {Phase.GENERATING, Phase.READY}:
+            spec = dispatch_tool(
+                spec,
+                "transition_phase",
+                {"target": Phase.GENERATING.value, "reason": "start config generation"},
+            )
+        config = spec_to_config(spec)
+        if spec.phase != Phase.READY:
+            spec = dispatch_tool(
+                spec,
+                "transition_phase",
+                {"target": Phase.READY.value, "reason": "config preview generated"},
+            )
+    except ToolError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+    await save_spec(db, spec, tenant_id=ctx.tenant_id)
+    return {"spec": spec.model_dump(mode="json"), "config": config}
 
 
 @router.put("/{spec_id}/items/{item_type}/{item_code}")

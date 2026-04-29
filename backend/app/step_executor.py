@@ -13,10 +13,12 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from app.apaas_client import APaaSClient
+from app.app_code import coerce_app_code, normalize_app_code
 from app.generator_v2 import (
-    _rand, _sanitize_code, _safe_field_code, _extract_fields,
+    _rand, _sanitize_code, _extract_fields,
     _build_component, FIELD_TYPE_MAP, COMP_TYPE_MAP, _apply_suffix,
 )
+from app.lowcode_standards import normalize_component_type, normalize_database_field_type, safe_field_code
 
 logger = logging.getLogger(__name__)
 
@@ -43,17 +45,12 @@ def _first_non_empty(*values, default=""):
 
 def _normalize_database_field_type(field: dict) -> str:
     raw = _field_value(field, "database_field_type", "databaseFieldType", "db_type", "dbType")
-    if raw:
-        return str(raw).strip().lower()
-
-    raw_type = str(_field_value(field, "type", default="")).strip().lower()
-    if raw_type in {"int", "integer", "bigint", "smallint", "tinyint"}:
-        return raw_type
-    if raw_type in {"date", "datetime", "timestamp"}:
-        return raw_type
-    if raw_type in {"decimal", "double", "float"}:
-        return raw_type
-    return "varchar"
+    raw_type = _field_value(field, "type", "componentType", "fieldType", default="")
+    return normalize_database_field_type(
+        raw,
+        component_type=raw_type,
+        field_name=str(_field_value(field, "name", "fieldName", "label", default="")),
+    )
 
 
 def _resolve_platform_field_type(field: dict) -> str:
@@ -64,7 +61,12 @@ def _resolve_platform_field_type(field: dict) -> str:
         - config_validator：input=中文语义类型字符串，output=校验过的 schema 类型
     两者功能完全不同，历史上同名导致 import 时容易踩坑，已改名消歧义。
     """
-    semantic = str(_field_value(field, "type", default="")).strip()
+    semantic = normalize_component_type(
+        _field_value(field, "type", "componentType", "fieldType", default=""),
+        field_name=str(_field_value(field, "name", "fieldName", "label", default="")),
+        has_dict=bool(_field_value(field, "dict", "dict_code", "dictionaryCode", default="")),
+        has_ref=bool(_field_value(field, "ref", "targetModelCode", "target_model_code", default="")),
+    )
     mapped = FIELD_TYPE_MAP.get(semantic)
     if mapped:
         return mapped
@@ -90,9 +92,14 @@ def _normalize_field_length(field: dict):
 
 def _build_model_field_payload(field: dict) -> dict:
     raw_field_code = str(field.get("code") or "").strip()
+    model_code = str(field.get("_model_code") or field.get("modelCode") or field.get("model_code") or "").strip()
     payload = {
         "fieldName": field["name"],
-        "fieldCode": raw_field_code or _safe_field_code(field["name"]),
+        "fieldCode": safe_field_code(
+            raw_field_code or field["name"],
+            model_code=model_code,
+            field_name=str(field.get("name") or raw_field_code),
+        ),
         "fieldType": _resolve_platform_field_type(field),
         "databaseFieldType": _normalize_database_field_type(field),
         "fieldDescription": _normalize_field_comment(field),
@@ -102,6 +109,75 @@ def _build_model_field_payload(field: dict) -> dict:
     if max_length is not None:
         payload["maxLength"] = max_length
     return payload
+
+
+def _extract_field_codes(platform_model: dict) -> set[str]:
+    return {
+        str(f.get("fieldCode") or "").strip()
+        for f in platform_model.get("fields", [])
+        if str(f.get("fieldCode") or "").strip()
+    }
+
+
+async def _ensure_model_fields(
+    client: APaaSClient,
+    app_id: str,
+    model_id: str,
+    model_name: str,
+    model_code: str,
+    fields: List[dict],
+    existing_fields: Dict[str, str],
+    existing_field_codes: set[str],
+) -> int:
+    """给当前应用里的已有模型补齐缺失字段。
+
+    判重同时看字段名和字段编码：同编码字段已存在时复用，不再重复创建；
+    只有字段名和字段编码都不存在时才调用平台新增字段接口。
+    """
+    if not model_id:
+        return 0
+
+    added_count = 0
+    for f in fields:
+        if f.get("type") == "子表":
+            continue
+        raw_field_code = str(f.get("code") or f.get("field_code") or "").strip()
+        field_name = str(f.get("name") or f.get("fieldName") or raw_field_code).strip()
+        if field_name in existing_fields:
+            continue
+        if raw_field_code and raw_field_code in existing_field_codes:
+            existing_fields[field_name] = raw_field_code
+            logger.info("模型 %s 复用已有原始字段编码: %s (%s)", model_name, field_name, raw_field_code)
+            continue
+        field_payload = _build_model_field_payload({**f, "_model_code": model_code})
+        field_code = str(field_payload["fieldCode"] or "").strip()
+        if field_code and field_code in existing_field_codes:
+            existing_fields[field_name] = field_code
+            logger.info("模型 %s 复用已有字段编码: %s (%s)", model_name, field_name, field_code)
+            continue
+        try:
+            await client._post_resource(
+                "/modelField/add",
+                {
+                    "modelId": model_id,
+                    "appId": app_id,
+                    "fieldCode": field_payload["fieldCode"],
+                    "fieldName": field_name,
+                    "fieldType": field_payload["fieldType"],
+                    "databaseFieldType": field_payload["databaseFieldType"],
+                    "fieldStatus": "ENABLE",
+                    "fieldComment": field_payload["fieldComment"],
+                    **({"maxLength": field_payload["maxLength"]} if "maxLength" in field_payload else {}),
+                },
+                app_id=app_id,
+            )
+            existing_fields[field_name] = field_payload["fieldCode"]
+            existing_field_codes.add(field_payload["fieldCode"])
+            added_count += 1
+            logger.info("模型 %s 补齐字段: %s (%s)", model_name, field_name, field_payload["fieldCode"])
+        except Exception as add_err:
+            logger.warning("模型 %s 补齐字段 %s 失败: %s", model_name, field_name, add_err)
+    return added_count
 
 
 # ------------------------------------------------------------------
@@ -115,13 +191,14 @@ async def execute_create_app(
     description: str = "",
 ) -> dict:
     """在得帆云平台创建应用，返回 apaas_app_id 和 suffix。"""
+    app_code = coerce_app_code(app_code, fallback="app-builder")
     apaas_result = await client.create_app(app_name, app_code, description)
     apaas_app_id = str(apaas_result) if isinstance(apaas_result, str) else str(
         apaas_result.get("id", apaas_result.get("appId", ""))
     )
     platform_app_code = ""
     if isinstance(apaas_result, dict):
-        platform_app_code = str(apaas_result.get("appCode") or apaas_result.get("code") or "").strip()
+        platform_app_code = normalize_app_code(apaas_result.get("appCode") or apaas_result.get("code")) or app_code
     suffix = _rand()
     return {
         "apaas_app_id": apaas_app_id,
@@ -347,10 +424,18 @@ async def execute_create_model(
     # 检查是否已存在
     existing_models = await client.query_models(app_id)
     existing_by_name = {m.get("modelName"): m for m in existing_models}
+    existing_by_code = {
+        str(m.get("modelCode") or "").strip(): m
+        for m in existing_models
+        if str(m.get("modelCode") or "").strip()
+    }
+    raw_model_code = str(model.get("code") or "").strip()
+    mc = raw_model_code or _apply_suffix(_sanitize_code(model.get("code", "model")), suffix)
 
-    em = existing_by_name.get(model["name"])
+    em = existing_by_code.get(mc) or existing_by_name.get(model["name"])
     if em:
         existing_fields = _extract_fields(em)
+        existing_field_codes = _extract_field_codes(em)
         model_id = em.get("id") or em.get("modelId")
         model_info_entries[str(model_index)] = {
             "name": model["name"],
@@ -359,28 +444,16 @@ async def execute_create_model(
             "remote_id": model_id,
         }
         # 补齐缺失字段
-        added_count = 0
-        if model_id:
-            for f in model.get("fields", []):
-                if f.get("type") == "子表":
-                    continue
-                if f["name"] not in existing_fields:
-                    try:
-                        field_payload = _build_model_field_payload(f)
-                        await client._post_resource(
-                            "/modelField/add",
-                            {"modelId": model_id, "appId": app_id,
-                             "fieldCode": field_payload["fieldCode"], "fieldName": f["name"],
-                             "fieldType": field_payload["fieldType"],
-                             "databaseFieldType": field_payload["databaseFieldType"], "fieldStatus": "ENABLE",
-                             "fieldComment": field_payload["fieldComment"],
-                             **({"maxLength": field_payload["maxLength"]} if "maxLength" in field_payload else {})},
-                            app_id=app_id)
-                        existing_fields[f["name"]] = field_payload["fieldCode"]
-                        added_count += 1
-                        logger.info(f"模型 {model['name']} 补齐字段: {f['name']} ({field_payload['fieldCode']})")
-                    except Exception as add_err:
-                        logger.warning(f"模型 {model['name']} 补齐字段 {f['name']} 失败: {add_err}")
+        added_count = await _ensure_model_fields(
+            client,
+            app_id,
+            model_id,
+            model["name"],
+            em["modelCode"],
+            model.get("fields", []),
+            existing_fields,
+            existing_field_codes,
+        )
         if added_count:
             # 刷新字段编码
             refreshed = await client.query_models(app_id)
@@ -391,7 +464,9 @@ async def execute_create_model(
         # 复用子表
         for f in model.get("fields", []):
             if f.get("type") == "子表" and f.get("sub_fields"):
-                sub_em = existing_by_name.get(f["name"])
+                raw_sub_code = str(f.get("sub_code") or "").strip()
+                sub_code = raw_sub_code or _apply_suffix(_sanitize_code(f.get("sub_code") or model.get("code", "model") + "_sub"), suffix)
+                sub_em = existing_by_code.get(sub_code) or existing_by_name.get(f["name"])
                 if sub_em:
                     model_info_entries[f"{model_index}_sub_{f['name']}"] = {
                         "name": f["name"],
@@ -409,8 +484,6 @@ async def execute_create_model(
         }
 
     # 构建新模型
-    raw_model_code = str(model.get("code") or "").strip()
-    mc = raw_model_code or _apply_suffix(_sanitize_code(model.get('code', 'model')), suffix)
     keyword_retry_applied = False
     fields_map = {}
     data_models = []
@@ -423,7 +496,7 @@ async def execute_create_model(
             sub_fields = []
             sub_fields_map = {}
             for sf in f["sub_fields"]:
-                field_payload = _build_model_field_payload(sf)
+                field_payload = _build_model_field_payload({**sf, "_model_code": sub_code})
                 sfc = field_payload["fieldCode"]
                 sub_fields.append(field_payload)
                 sub_fields_map[sf["name"]] = sfc
@@ -441,7 +514,7 @@ async def execute_create_model(
     for f in model.get("fields", []):
         if f.get("type") == "子表":
             continue
-        field_payload = _build_model_field_payload(f)
+        field_payload = _build_model_field_payload({**f, "_model_code": mc})
         main_fields.append(field_payload)
         fields_map[f["name"]] = field_payload["fieldCode"]
 
@@ -475,40 +548,29 @@ async def execute_create_model(
             rm = ref_by_code.get(current_main_code) or ref_by_name.get(model["name"])
             if rm:
                 existing_fields = _extract_fields(rm)
+                existing_field_codes = _extract_field_codes(rm)
                 model_info_entries[str(model_index)] = {
                     "name": model["name"], "code": rm["modelCode"], "fields": existing_fields,
                 }
                 # 补齐缺失字段
                 model_id = rm.get("id") or rm.get("modelId")
-                if model_id:
-                    missing = []
-                    for f in model.get("fields", []):
-                        if f.get("type") == "子表":
-                            continue
-                        if f["name"] not in existing_fields:
-                            missing.append(f)
-                            try:
-                                field_payload = _build_model_field_payload(f)
-                                await client._post_resource(
-                                    "/modelField/add",
-                                    {"modelId": model_id, "appId": app_id,
-                                     "fieldCode": field_payload["fieldCode"], "fieldName": f["name"],
-                                     "fieldType": field_payload["fieldType"],
-                                     "databaseFieldType": field_payload["databaseFieldType"], "fieldStatus": "ENABLE",
-                                     "fieldComment": field_payload["fieldComment"],
-                                     **({"maxLength": field_payload["maxLength"]} if "maxLength" in field_payload else {})},
-                                    app_id=app_id)
-                                existing_fields[f["name"]] = field_payload["fieldCode"]
-                                logger.info(f"模型 {model['name']} 补齐字段: {f['name']} ({field_payload['fieldCode']})")
-                            except Exception as add_err:
-                                logger.warning(f"模型 {model['name']} 补齐字段 {f['name']} 失败: {add_err}")
-                    if missing:
-                        # 刷新字段编码（平台可能改了编码）
-                        refreshed2 = await client.query_models(app_id)
-                        for rm2 in refreshed2:
-                            if rm2.get("modelCode") == rm["modelCode"]:
-                                model_info_entries[str(model_index)]["fields"] = _extract_fields(rm2)
-                                break
+                added_count = await _ensure_model_fields(
+                    client,
+                    app_id,
+                    model_id,
+                    model["name"],
+                    rm["modelCode"],
+                    model.get("fields", []),
+                    existing_fields,
+                    existing_field_codes,
+                )
+                if added_count:
+                    # 刷新字段编码（平台可能改了编码）
+                    refreshed2 = await client.query_models(app_id)
+                    for rm2 in refreshed2:
+                        if rm2.get("modelCode") == rm["modelCode"]:
+                            model_info_entries[str(model_index)]["fields"] = _extract_fields(rm2)
+                            break
 
                 for f in model.get("fields", []):
                     if f.get("type") == "子表":
@@ -596,8 +658,157 @@ async def _update_existing_form(
         model["name"],
         len(new_components),
     )
+    _apply_form_identity_to_form_config(form_config, form_name=model["name"])
     await client.save_form_config(app_id, form_config)
     logger.info(f"表单 {model['name']} 补齐 {len(new_components)} 个组件")
+
+
+async def _merge_existing_form_components(
+    client: APaaSClient,
+    app_id: str,
+    form_id: str,
+    form_name: str,
+    desired_components: List[dict],
+    query_conditions: Optional[List[str]] = None,
+    query_list: Optional[List[str]] = None,
+) -> int:
+    if not form_id or not desired_components:
+        return 0
+
+    form_config = await client.query_form_config(app_id, form_id)
+    if not form_config:
+        return 0
+
+    def _component_groups() -> List[list]:
+        groups: List[list] = []
+        for group in (
+            form_config.get("components"),
+            form_config.get("formComponents"),
+            form_config.get("detailPage", {}).get("formComponents", [])
+            if isinstance(form_config.get("detailPage"), dict)
+            else [],
+        ):
+            if isinstance(group, list):
+                groups.append(group)
+        if not groups:
+            groups.append(form_config.setdefault("components", []))
+        return groups
+
+    def _iter_components(comps: list):
+        for c in comps or []:
+            if not isinstance(c, dict):
+                continue
+            yield c
+            for col in c.get("tableColumn", []) or []:
+                if isinstance(col, dict):
+                    yield col
+
+    def _copy_component_props(target: dict, desired: dict) -> bool:
+        changed = False
+        for key in (
+            "componentType",
+            "label",
+            "hidden",
+            "readonly",
+            "required",
+            "showInList",
+            "searchable",
+            "dict",
+            "dictCode",
+            "dict_code",
+            "dictionarySelectConfig",
+            "dataSelectorConfig",
+            "formAssociationConfig",
+        ):
+            if key not in desired:
+                continue
+            value = desired.get(key)
+            if value is None or value == "":
+                continue
+            if target.get(key) != value:
+                target[key] = value
+                changed = True
+        return changed
+
+    existing_by_mf: dict[str, dict] = {}
+    groups = _component_groups()
+    for group in groups:
+        for component in _iter_components(group):
+            model_field = str(component.get("modelField") or "").strip()
+            if model_field and model_field not in existing_by_mf:
+                existing_by_mf[model_field] = component
+
+    new_components: List[dict] = []
+    updated_count = 0
+    for component in desired_components:
+        model_field = str(component.get("modelField") or "").strip()
+        if model_field and model_field in existing_by_mf:
+            if _copy_component_props(existing_by_mf[model_field], component):
+                updated_count += 1
+            continue
+        new_components.append(component)
+        if model_field:
+            existing_by_mf[model_field] = component
+
+    if new_components:
+        groups[0].extend(new_components)
+
+    list_view_changed = _sync_existing_form_list_page_view(
+        form_config,
+        query_conditions or [],
+        query_list or [],
+    )
+
+    if not new_components and not updated_count and not list_view_changed:
+        return 0
+
+    changed_count = len(new_components) + updated_count
+    logger.info(
+        "save_form_config reason: 同步已有表单组件/列表页配置 (form=%s, added=%s, updated=%s, list_view=%s)",
+        form_name,
+        len(new_components),
+        updated_count,
+        list_view_changed,
+    )
+    _apply_form_identity_to_form_config(form_config, form_name=form_name)
+    await client.save_form_config(app_id, form_config)
+    return changed_count or 1
+
+
+def _sync_existing_form_list_page_view(
+    form_config: dict,
+    query_conditions: List[str],
+    query_list: List[str],
+) -> bool:
+    """Keep reused forms' list/search fields aligned with the normalized spec."""
+    desired_conditions = [
+        str(item).strip()
+        for item in query_conditions
+        if str(item).strip()
+    ]
+    desired_list = [
+        str(item).strip()
+        for item in query_list
+        if str(item).strip()
+    ]
+    if not desired_conditions and not desired_list:
+        return False
+
+    changed = False
+    targets = [form_config]
+    simple = form_config.get("simpleFormConfig")
+    if isinstance(simple, dict):
+        targets.append(simple)
+
+    for target in targets:
+        list_page = target.setdefault("listPageView", {})
+        if desired_conditions and list_page.get("queryConditions") != desired_conditions:
+            list_page["queryConditions"] = desired_conditions
+            changed = True
+        if desired_list and list_page.get("queryList") != desired_list:
+            list_page["queryList"] = desired_list
+            changed = True
+    return changed
 
 
 # ------------------------------------------------------------------
@@ -732,6 +943,50 @@ def _build_create_form_payload(
     }]
 
 
+def _apply_form_identity_to_form_config(
+    form_config: dict,
+    *,
+    form_name: str,
+    form_code: str = "",
+    all_model_codes: Optional[List[str]] = None,
+) -> bool:
+    """Ensure queried platform form config keeps the business form identity.
+
+    The platform may return a default form name such as "我的待办" in later
+    query/save flows. Any save after creation must carry the intended formName,
+    otherwise the default name can overwrite the correct one in form management.
+    """
+    if not isinstance(form_config, dict):
+        return False
+
+    changed = False
+    desired_name = str(form_name or "").strip()
+    desired_code = str(form_code or "").strip()
+    desired_models = [
+        str(code).strip()
+        for code in (all_model_codes or [])
+        if str(code).strip()
+    ]
+
+    def _apply(target: dict) -> None:
+        nonlocal changed
+        if not isinstance(target, dict):
+            return
+        if desired_name and target.get("formName") != desired_name:
+            target["formName"] = desired_name
+            changed = True
+        if desired_code and target.get("formCode") != desired_code:
+            target["formCode"] = desired_code
+            changed = True
+        if desired_models and target.get("allModelCodes") != desired_models:
+            target["allModelCodes"] = desired_models
+            changed = True
+
+    _apply(form_config)
+    _apply(form_config.get("simpleFormConfig", {}))
+    return changed
+
+
 async def _create_form_and_menu(
     client: APaaSClient,
     app_id: str,
@@ -773,6 +1028,262 @@ async def _create_form_and_menu(
     return form_result
 
 
+_DICT_BIND_COMPONENT_TYPES = {
+    "FORM_SELECT_INPUT_SINGLE",
+    "FORM_SELECT_INPUT",
+    "FORM_RADIO_INPUT",
+    "FORM_CHECKBOX_INPUT",
+}
+_DICT_MULTI_COMPONENT_TYPES = {"FORM_SELECT_INPUT", "FORM_CHECKBOX_INPUT"}
+
+
+def _normalize_dict_code(raw_code: Any, dict_codes: Dict[str, str]) -> str:
+    code = str(raw_code or "").strip()
+    if not code:
+        return ""
+    return str(dict_codes.get(code, code) or "").strip()
+
+
+def _component_dict_code(component: dict) -> str:
+    direct = _first_non_empty(
+        component.get("dict"),
+        component.get("dictCode"),
+        component.get("dict_code"),
+        component.get("dictionaryCode"),
+        default="",
+    )
+    if direct:
+        return str(direct).strip()
+    select_config = component.get("dictionarySelectConfig")
+    if isinstance(select_config, dict):
+        return str(select_config.get("dictionaryCode") or "").strip()
+    return ""
+
+
+def _component_lookup_keys(component: dict) -> List[str]:
+    keys: List[str] = []
+    for value in (
+        component.get("modelField"),
+        component.get("model_field"),
+        component.get("code"),
+        component.get("field_code"),
+        component.get("label"),
+        component.get("name"),
+    ):
+        text = str(value or "").strip()
+        if text and text not in keys:
+            keys.append(text)
+    return keys
+
+
+def _field_dict_code(field: dict) -> str:
+    return str(_first_non_empty(
+        field.get("dict"),
+        field.get("dictCode"),
+        field.get("dict_code"),
+        field.get("dictionaryCode"),
+        default="",
+    ) or "").strip()
+
+
+def _model_info_at(model_info: Dict[str, dict], key: Any) -> dict:
+    if not isinstance(model_info, dict):
+        return {}
+    for candidate in (key, str(key)):
+        value = model_info.get(candidate)
+        if isinstance(value, dict):
+            return value
+    return {}
+
+
+def _collect_component_dict_lookup(
+    form_components: List[dict],
+    all_models: Optional[List[dict]],
+    model_info: Optional[Dict[str, dict]],
+    dict_codes: Dict[str, str],
+) -> Dict[str, str]:
+    """收集表单组件可用的字典映射。
+
+    设计文档里字典通常挂在模型字段上，而 form.components 可能只保留
+    modelField。这里先按模型字段建立精确映射，再允许组件自身声明覆盖。
+    """
+    lookup: Dict[str, str] = {}
+
+    def _put(key: Any, dict_code: str) -> None:
+        text = str(key or "").strip()
+        if text and dict_code:
+            lookup[text] = dict_code
+
+    def _register_model_field(
+        *,
+        raw_model_code: str,
+        platform_model_code: str,
+        platform_fields: dict,
+        field: dict,
+    ) -> None:
+        raw_dict = _field_dict_code(field)
+        dict_code = _normalize_dict_code(raw_dict, dict_codes)
+        if not dict_code:
+            return
+        field_name = str(field.get("name") or field.get("fieldName") or "").strip()
+        raw_field_code = str(field.get("code") or field.get("field_code") or "").strip()
+        platform_field_code = str(
+            platform_fields.get(field_name)
+            or platform_fields.get(raw_field_code)
+            or raw_field_code
+            or ""
+        ).strip()
+
+        for key in (
+            f"{platform_model_code}.{platform_field_code}" if platform_model_code and platform_field_code else "",
+            f"{platform_model_code}.{raw_field_code}" if platform_model_code and raw_field_code else "",
+            f"{raw_model_code}.{raw_field_code}" if raw_model_code and raw_field_code else "",
+            platform_field_code,
+            raw_field_code,
+            field_name,
+        ):
+            _put(key, dict_code)
+
+    if all_models:
+        for index, model in enumerate(all_models):
+            if not isinstance(model, dict):
+                continue
+            raw_model_code = str(model.get("code") or model.get("modelCode") or "").strip()
+            mi = _model_info_at(model_info or {}, index)
+            platform_model_code = str(mi.get("code") or raw_model_code).strip()
+            platform_fields = mi.get("fields") if isinstance(mi.get("fields"), dict) else {}
+
+            for field in model.get("fields", []) or []:
+                if not isinstance(field, dict):
+                    continue
+                if field.get("type") == "子表":
+                    sub_key = f"{index}_sub_{field.get('name')}"
+                    sub_mi = _model_info_at(model_info or {}, sub_key)
+                    sub_platform_code = str(
+                        sub_mi.get("code") or field.get("code") or field.get("modelCode") or ""
+                    ).strip()
+                    sub_platform_fields = (
+                        sub_mi.get("fields") if isinstance(sub_mi.get("fields"), dict) else {}
+                    )
+                    for sub_field in field.get("sub_fields", []) or []:
+                        if isinstance(sub_field, dict):
+                            _register_model_field(
+                                raw_model_code=str(field.get("code") or "").strip(),
+                                platform_model_code=sub_platform_code,
+                                platform_fields=sub_platform_fields,
+                                field=sub_field,
+                            )
+                    continue
+
+                _register_model_field(
+                    raw_model_code=raw_model_code,
+                    platform_model_code=platform_model_code,
+                    platform_fields=platform_fields,
+                    field=field,
+                )
+
+    def _collect_from_component(component: dict) -> None:
+        dict_code = _normalize_dict_code(_component_dict_code(component), dict_codes)
+        if dict_code:
+            for key in _component_lookup_keys(component):
+                _put(key, dict_code)
+        for column in component.get("tableColumn", []) or []:
+            if isinstance(column, dict):
+                _collect_from_component(column)
+
+    for component in form_components or []:
+        if isinstance(component, dict):
+            _collect_from_component(component)
+
+    return lookup
+
+
+def _lookup_component_dict_code(component: dict, lookup: Dict[str, str]) -> str:
+    direct_code = _component_dict_code(component)
+    direct = lookup.get(direct_code, direct_code)
+    if direct:
+        return direct
+    for key in _component_lookup_keys(component):
+        if key in lookup:
+            return lookup[key]
+    return ""
+
+
+def _make_dictionary_choose_options(options: list) -> list:
+    choose = []
+    for index, option in enumerate(options or []):
+        if not isinstance(option, dict):
+            continue
+        value_code = _first_non_empty(
+            option.get("valueCode"),
+            option.get("optionCode"),
+            option.get("code"),
+            option.get("id"),
+            default="",
+        )
+        label = _first_non_empty(
+            option.get("valueName"),
+            option.get("optionName"),
+            option.get("label"),
+            option.get("name"),
+            default=value_code,
+        )
+        choose.append({
+            "id": value_code,
+            "label": label,
+            "labelI18nAssociated": False,
+            "color": option.get("valueMulticolor") or option.get("color") or "#027AFF",
+            "status": option.get("valueStatus") or option.get("status") or "ENABLE",
+            "checked": bool(option.get("checked", False)),
+            "displayOrder": option.get("displayOrder", index),
+        })
+    return choose
+
+
+def _apply_dictionary_binding_to_component(
+    component: dict,
+    dict_code: str,
+    dict_id: str,
+    options: list,
+) -> bool:
+    component_type = str(component.get("componentType") or "").strip()
+    if component_type not in _DICT_BIND_COMPONENT_TYPES or not dict_code or not dict_id:
+        return False
+
+    before = {
+        "source": component.get("source"),
+        "chooseOptions": component.get("chooseOptions"),
+        "dictionaryChooseOptions": component.get("dictionaryChooseOptions"),
+        "chooseType": component.get("chooseType"),
+        "multicolor": component.get("multicolor"),
+        "dictionaryMulticolorStatus": component.get("dictionaryMulticolorStatus"),
+        "dictionarySelectConfig": component.get("dictionarySelectConfig"),
+        "componentType": component.get("componentType"),
+    }
+    choose = _make_dictionary_choose_options(options)
+    component["source"] = {"type": "DICTIONARY_TYPE", "id": dict_id}
+    component["chooseOptions"] = choose
+    component["dictionaryChooseOptions"] = choose
+    component["chooseType"] = "MULTIPLE" if component_type in _DICT_MULTI_COMPONENT_TYPES else "SINGLE"
+    component["multicolor"] = True
+    component["dictionaryMulticolorStatus"] = "ENABLE"
+    component["dictionarySelectConfig"] = {
+        "dictionaryCode": dict_code,
+        "dictionarySelectOptions": choose,
+    }
+    after = {
+        "source": component.get("source"),
+        "chooseOptions": component.get("chooseOptions"),
+        "dictionaryChooseOptions": component.get("dictionaryChooseOptions"),
+        "chooseType": component.get("chooseType"),
+        "multicolor": component.get("multicolor"),
+        "dictionaryMulticolorStatus": component.get("dictionaryMulticolorStatus"),
+        "dictionarySelectConfig": component.get("dictionarySelectConfig"),
+        "componentType": component.get("componentType"),
+    }
+    return before != after
+
+
 async def _bind_dicts_to_form(
     client: APaaSClient,
     app_id: str,
@@ -780,6 +1291,8 @@ async def _bind_dicts_to_form(
     form_components: List[dict],
     dict_codes: Dict[str, str],
     form_name: str,
+    all_models: Optional[List[dict]] = None,
+    model_info: Optional[Dict[str, dict]] = None,
 ) -> None:
     """给已创建表单的下拉组件回写字典绑定配置。
 
@@ -796,64 +1309,53 @@ async def _bind_dicts_to_form(
             if did:
                 dict_options_map[dc] = await client.query_dict_options(app_id, did)
 
-        # 收集所有下拉字段的字典映射（包括子表字段）
-        label_dict: Dict[str, str] = {}
-        for comp in form_components:
-            ct = str(comp.get("componentType", comp.get("component_type", "")))
-            if ct in ("FORM_SELECT_INPUT_SINGLE", "FORM_SELECT_INPUT"):
-                dict_code = comp.get("dict") or comp.get("dictCode") or comp.get("dict_code")
-                if dict_code:
-                    label_dict[comp.get("label", "")] = dict_codes.get(dict_code, dict_code)
+        dict_lookup = _collect_component_dict_lookup(
+            form_components=form_components,
+            all_models=all_models,
+            model_info=model_info,
+            dict_codes=dict_codes,
+        )
 
         def _bind_dict_to_comp(comp: dict) -> bool:
             """给单个组件绑定字典，返回是否有更新。"""
-            ct = comp.get("componentType")
-            if ct not in ("FORM_SELECT_INPUT_SINGLE", "FORM_SELECT_INPUT"):
-                return False
-            dc = label_dict.get(comp.get("label", ""), "")
+            dc = _lookup_component_dict_code(comp, dict_lookup)
             if not dc or dc not in dict_id_map:
                 return False
             did = dict_id_map[dc]
             opts = dict_options_map.get(dc, [])
-            choose = [
-                {
-                    "id": o.get("valueCode"),
-                    "label": o.get("valueName"),
-                    "labelI18nAssociated": False,
-                    "color": o.get("valueMulticolor", "#027AFF"),
-                    "status": o.get("valueStatus", "ENABLE"),
-                    "checked": False,
-                    "displayOrder": o.get("displayOrder", 0),
-                }
-                for o in opts
-            ]
-            comp["source"] = {"type": "DICTIONARY_TYPE", "id": did}
-            comp["chooseOptions"] = choose
-            comp["dictionaryChooseOptions"] = choose
-            comp["chooseType"] = "SINGLE" if ct == "FORM_SELECT_INPUT_SINGLE" else "MULTIPLE"
-            comp["multicolor"] = True
-            if ct == "FORM_SELECT_INPUT_SINGLE":
-                comp["componentType"] = "FORM_SELECT_INPUT"
-            return True
+            return _apply_dictionary_binding_to_component(comp, dc, did, opts)
 
         fc = await client.query_form_config(app_id, form_result["formId"])
-        comps = fc.get("detailPage", {}).get("formComponents", [])
         updated = False
 
-        for comp in comps:
-            # 顶层组件
-            if _bind_dict_to_comp(comp):
-                updated = True
-            # 子表内的列组件
-            if comp.get("componentType") == "FORM_WIDGET_SON_TABLE":
-                for col in comp.get("tableColumn", []):
-                    if _bind_dict_to_comp(col):
-                        updated = True
+        component_groups = [
+            fc.get("detailPage", {}).get("formComponents", []),
+            fc.get("components", []),
+            fc.get("formComponents", []),
+        ]
+        for comps in component_groups:
+            for comp in comps or []:
+                # 顶层组件
+                if _bind_dict_to_comp(comp):
+                    updated = True
+                # 子表内的列组件
+                if comp.get("componentType") == "FORM_WIDGET_SON_TABLE":
+                    for col in comp.get("tableColumn", []) or []:
+                        if _bind_dict_to_comp(col):
+                            updated = True
 
         if updated:
+            _apply_form_identity_to_form_config(
+                fc,
+                form_name=form_name,
+                form_code=str(form_result.get("formCode") or ""),
+            )
             logger.info("save_form_config reason: 字典绑定回写 (form=%s)", form_name)
             await client.save_form_config(app_id, fc)
-            form_result["message"] += "（含字典绑定）"
+            message = str(form_result.get("message") or f"创建成功: {form_name}")
+            if "含字典绑定" not in message:
+                message += "（含字典绑定）"
+            form_result["message"] = message
     except Exception as e:
         logger.warning(f"字典绑定失败（不阻断）: {e}")
 
@@ -887,6 +1389,12 @@ def _build_form_components(
     form_components = form.get("components", []) or []
     sub_groups: Dict[str, dict] = {}
     form_identity = _form_identity_map(all_forms or [])
+    dict_lookup = _collect_component_dict_lookup(
+        form_components=form_components,
+        all_models=all_models,
+        model_info=model_info,
+        dict_codes=dict_codes,
+    )
 
     for comp in form_components:
         section_type = str(comp.get("sectionType", comp.get("section_type", "main"))).strip() or "main"
@@ -920,6 +1428,13 @@ def _build_form_components(
                 "originFieldCode": origin_field or field_code,
                 "targetModelCode": target_model_code,
                 "targetFieldCode": target_field,
+            }
+        dict_code = _lookup_component_dict_code({**comp, **built}, dict_lookup)
+        if dict_code and str(built.get("componentType") or "") in _DICT_BIND_COMPONENT_TYPES:
+            built["dict"] = dict_code
+            built["dictionarySelectConfig"] = {
+                "dictionaryCode": dict_code,
+                "dictionarySelectOptions": [],
             }
 
         if section_type == "sub":
@@ -976,10 +1491,6 @@ async def execute_create_form(
     """创建单个表单 + 绑定字典，返回 form 结果。"""
     form_name, main_model_code, all_model_codes, mi = _resolve_form_main_model(form, model_info)
 
-    reuse_result = await _find_existing_form_reuse(client, app_id, form_name)
-    if reuse_result is not None:
-        return reuse_result
-
     model_code = mi["code"]
     components, query_conditions, query_list = _build_form_components(
         form=form,
@@ -991,6 +1502,56 @@ async def execute_create_form(
         all_forms=all_forms,
         form_name=form_name,
     )
+
+    reuse_result = await _find_existing_form_reuse(client, app_id, form_name)
+    if reuse_result is not None:
+        if reuse_result.get("formId"):
+            try:
+                await _sync_form_component_references(
+                    client=client,
+                    app_id=app_id,
+                    form_id=str(reuse_result.get("formId") or ""),
+                    form_def=form,
+                    all_forms=all_forms or [],
+                    form_results=form_results or [],
+                )
+            except Exception as e:
+                logger.warning(f"复用表单引用预同步失败（不阻断）: {e}")
+        added_count = await _merge_existing_form_components(
+            client,
+            app_id,
+            str(reuse_result.get("formId") or ""),
+            form_name,
+            components,
+            query_conditions,
+            query_list,
+        )
+        if added_count:
+            reuse_result["message"] = f"复用已有表单: {form_name}，同步 {added_count} 项配置"
+        if reuse_result.get("formId") and dict_codes:
+            await _bind_dicts_to_form(
+                client=client,
+                app_id=app_id,
+                form_result=reuse_result,
+                form_components=components,
+                dict_codes=dict_codes,
+                form_name=form_name,
+                all_models=all_models,
+                model_info=model_info,
+            )
+        if reuse_result.get("formId"):
+            try:
+                await _sync_form_component_references(
+                    client=client,
+                    app_id=app_id,
+                    form_id=str(reuse_result.get("formId") or ""),
+                    form_def=form,
+                    all_forms=all_forms or [],
+                    form_results=form_results or [],
+                )
+            except Exception as e:
+                logger.warning(f"复用表单引用回写失败（不阻断）: {e}")
+        return reuse_result
 
     if not components:
         raise ValueError(f"表单 {form_name} 无可用字段组件")
@@ -1027,9 +1588,11 @@ async def execute_create_form(
             client=client,
             app_id=app_id,
             form_result=form_result,
-            form_components=form.get("components", []) or [],
+            form_components=components,
             dict_codes=dict_codes,
             form_name=form_name,
+            all_models=all_models,
+            model_info=model_info,
         )
 
     # --- 回写数据选择 / 关联表单引用 ---
@@ -1514,9 +2077,31 @@ async def _sync_form_component_references(
             updated = True
 
     if updated:
+        form_name = str(
+            form_def.get("formName")
+            or form_def.get("form_name")
+            or form_def.get("name")
+            or form_def.get("title")
+            or ""
+        ).strip()
+        form_code = str(
+            form_def.get("formCode")
+            or form_def.get("form_code")
+            or form_def.get("code")
+            or ""
+        ).strip()
+        all_model_codes = form_def.get("allModelCodes") or form_def.get("all_model_codes") or []
+        if isinstance(all_model_codes, str):
+            all_model_codes = [all_model_codes]
+        _apply_form_identity_to_form_config(
+            form_config,
+            form_name=form_name,
+            form_code=form_code,
+            all_model_codes=list(all_model_codes) if isinstance(all_model_codes, list) else [],
+        )
         logger.info(
             "save_form_config reason: 回写表单引用 (form=%s, formId=%s)",
-            form_def.get("name") or form_def.get("formName") or form_id,
+            form_name or form_id,
             form_id,
         )
         await client.save_form_config(app_id, form_config)

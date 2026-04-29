@@ -2,17 +2,34 @@ import request from '@/utils/request'
 import type { Application, MergedApplication } from '@/types'
 import { API_PREFIX } from '@/utils/request'
 
+export interface ApplicationPageResponse {
+  items: MergedApplication[]
+  total: number
+  page: number
+  page_size: number
+  total_pages: number
+  counts: {
+    all: number
+    active: number
+    deployed: number
+    draft: number
+  }
+}
+
 export const applicationApi = {
   list(params?: { include_remote?: boolean; source_filter?: string }) {
     return request.get<any, MergedApplication[]>('/applications', { params })
   },
+  listPage(params?: { page?: number; page_size?: number; stage?: string; source_filter?: string; team_scope?: string }) {
+    return request.get<any, ApplicationPageResponse>('/applications/page', { params })
+  },
   get(id: number) {
     return request.get<any, Application>(`/applications/${id}`)
   },
-  create(data: { conversation_id?: number; project_id?: number; app_name: string; app_code: string; description?: string; config_preview?: any; platform_env_id?: number | null }) {
+  create(data: { conversation_id?: number; project_id?: number; app_name: string; app_code: string; description?: string; config_preview?: any; canonical_spec_id?: string | null; platform_env_id?: number | null }) {
     return request.post<any, Application>('/applications', data)
   },
-  update(id: number, data: { conversation_id?: number; project_id?: number; app_name: string; app_code: string; description?: string; config_preview?: any; platform_env_id?: number | null }) {
+  update(id: number, data: { conversation_id?: number; project_id?: number; app_name: string; app_code: string; description?: string; config_preview?: any; canonical_spec_id?: string | null; platform_env_id?: number | null }) {
     return request.put<any, Application>(`/applications/${id}`, data)
   },
   /** 首次生成配置时自动创建应用（不重复创建） */
@@ -72,7 +89,7 @@ export const applicationApi = {
   },
 
   /** 根据对话更新诉求生成新版 SPEC 草稿 */
-  draftDocUpdate(appId: number, data: { instruction: string; conversation_id?: number | null; selected_llm_config_id?: number | null; current_doc?: string }) {
+  draftDocUpdate(appId: number, data: { instruction: string; conversation_id?: number | null; selected_llm_config_id?: number | null; current_doc?: string; resume_message_id?: number | null }) {
     return request.post<any, {
       type?: string
       actionable_update?: boolean

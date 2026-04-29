@@ -1,3 +1,4 @@
+from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 from app.config import settings
@@ -39,7 +40,6 @@ async def get_db():
 
 
 async def init_db():
-    from sqlalchemy import text
     # 确保 extension models 被 Base 注册（create_all 会创建新表）
     import app.harness.models  # noqa: F401
     # 智能开发 V2 - agent 架构相关表（agent_messages / brainstorm_sessions / specs / ...）
@@ -48,6 +48,8 @@ async def init_db():
     import app.models.preference  # noqa: F401
     import app.models.spec  # noqa: F401
     async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+        await _migrate_legacy_builder_specs(conn, inspect)
         await conn.run_sync(Base.metadata.create_all)
         # 迁移：确保新列存在（兼容 SQLite 和 MySQL）
         for stmt in [
@@ -142,3 +144,64 @@ async def init_db():
                 await conn.execute(text(idx_stmt))
             except Exception:
                 pass
+
+
+async def _migrate_legacy_builder_specs(conn, inspect_fn) -> None:
+    """Move pre-split AI Builder SPEC rows out of the old `specs` table.
+
+    Older local databases used `specs` for AI Builder business SPECs. The
+    integrated branch reserves `specs` for Coding V2 and stores AI Builder
+    records in `builder_specs`. If a legacy table is left in place, `/api/spec`
+    cannot load existing conversations and Coding V2 cannot create its schema.
+    """
+
+    def table_columns(sync_conn, table_name: str) -> set[str]:
+        inspector = inspect_fn(sync_conn)
+        if not inspector.has_table(table_name):
+            return set()
+        return {col["name"] for col in inspector.get_columns(table_name)}
+
+    specs_cols = await conn.run_sync(table_columns, "specs")
+    if not specs_cols:
+        return
+
+    is_legacy_builder_table = (
+        {"payload", "phase", "completeness_confirmed", "completeness_total"}.issubset(specs_cols)
+        and not {"brainstorm_session_id", "content", "scene_type"}.intersection(specs_cols)
+    )
+    if not is_legacy_builder_table:
+        return
+
+    builder_cols = await conn.run_sync(table_columns, "builder_specs")
+    copy_cols = [
+        "id",
+        "application_id",
+        "version",
+        "kind",
+        "commit_sha",
+        "parent_spec_id",
+        "payload",
+        "phase",
+        "completeness_confirmed",
+        "completeness_total",
+        "created_at",
+        "updated_at",
+        "created_by",
+        "tenant_id",
+    ]
+    if set(copy_cols).issubset(specs_cols) and set(copy_cols).issubset(builder_cols):
+        insert_keyword = "INSERT IGNORE" if conn.dialect.name == "mysql" else "INSERT OR IGNORE"
+        columns_sql = ", ".join(copy_cols)
+        await conn.execute(text(
+            f"{insert_keyword} INTO builder_specs ({columns_sql}) "
+            f"SELECT {columns_sql} FROM specs"
+        ))
+
+    archive_name = "legacy_builder_specs"
+    if await conn.run_sync(lambda sync_conn: inspect_fn(sync_conn).has_table(archive_name)):
+        archive_name = "legacy_builder_specs_archived"
+        suffix = 2
+        while await conn.run_sync(lambda sync_conn: inspect_fn(sync_conn).has_table(archive_name)):
+            archive_name = f"legacy_builder_specs_archived_{suffix}"
+            suffix += 1
+    await conn.execute(text(f"ALTER TABLE specs RENAME TO {archive_name}"))

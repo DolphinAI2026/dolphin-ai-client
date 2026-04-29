@@ -1,13 +1,13 @@
 <template>
   <BuilderFrame :breadcrumbs="[{ label: 'Vibe Coding' }]">
     <template #actions>
-      <button class="oc-top-btn" type="button" @click="goWorkspaceList">
+      <button class="oc-top-btn" type="button" title="返回工作区列表" @click="goWorkspaceList">
         <el-icon><ArrowLeft /></el-icon>
-        <span>工作区列表</span>
+        <span>工作区</span>
       </button>
     </template>
 
-    <main class="oc-page builder-page is-ide-view">
+    <main class="oc-page builder-page is-ide-view" :class="{ 'has-preview-panel': showPreviewPanel }">
       <div v-if="loading" class="oc-loading">加载 Vibe Coding 工作区...</div>
 
       <section v-else-if="!isRepoReady" class="oc-git-shell">
@@ -74,10 +74,16 @@
             <span v-if="workspace?.id">{{ workspace.id }}</span>
           </div>
           <div class="oc-ide-actions">
-            <span class="oc-runtime-pill" :class="runtimeStatusClass">
+            <span v-if="showPreviewPanel || runtimeRunning || runtimeBusy" class="oc-runtime-pill" :class="runtimeStatusClass">
               {{ runtimeStatusLabel }}
             </span>
-            <button class="oc-secondary" type="button" :disabled="runtimeBusy" @click="refreshPreviewRuntimeStatus(true)">
+            <button
+              v-if="showPreviewPanel || runtimeRunning || runtimeBusy"
+              class="oc-secondary"
+              type="button"
+              :disabled="runtimeBusy"
+              @click="refreshPreviewRuntimeStatus(true)"
+            >
               <el-icon :class="{ spin: runtimeLogsLoading }"><Refresh /></el-icon>
               <span>运行状态</span>
             </button>
@@ -89,12 +95,12 @@
               @click="startPreviewRuntime"
             >
               <el-icon :class="{ spin: runtimeBusy }"><Monitor /></el-icon>
-              <span>{{ runtimeBusy ? '启动中' : '启动预览' }}</span>
+              <span>{{ runtimeBusy ? '启动中' : '实验预览' }}</span>
             </button>
             <button v-else class="oc-secondary danger" type="button" :disabled="runtimeBusy" @click="stopPreviewRuntime">
               <span>停止预览</span>
             </button>
-            <button class="oc-icon-btn" type="button" :disabled="!runtimePreviewUrl" title="打开预览" @click="openPreviewWindow">
+            <button v-if="runtimePreviewUrl" class="oc-icon-btn" type="button" title="打开预览" @click="openPreviewWindow">
               <el-icon><TopRight /></el-icon>
             </button>
             <button class="oc-icon-btn" type="button" :disabled="openingIde" title="重新加载 IDE" @click="() => openIde(false)">
@@ -103,17 +109,17 @@
           </div>
         </section>
 
-        <section class="oc-runtime-panel">
+        <section v-if="showPreviewPanel" class="oc-runtime-panel" :class="{ 'has-detail': showRuntimeDetails }">
           <div class="oc-runtime-main">
             <div>
-              <strong>预览沙箱</strong>
+              <strong>实验预览</strong>
               <span>{{ runtimeSummary }}</span>
             </div>
             <a v-if="runtimePreviewUrl" :href="runtimePreviewUrl" target="_blank" rel="noreferrer">
               {{ runtimePreviewUrl }}
             </a>
           </div>
-          <div class="oc-runtime-meta">
+          <div v-if="showRuntimeDetails" class="oc-runtime-meta">
             <span>{{ runtimeWorkingDir }}</span>
             <span>{{ runtimeCommandText }}</span>
           </div>
@@ -198,6 +204,7 @@ const previewLogs = ref('')
 const runtimeBusy = ref(false)
 const runtimeLogsLoading = ref(false)
 const runtimeError = ref('')
+const previewPanelOpen = ref(false)
 
 const {
   streamMessages,
@@ -219,12 +226,12 @@ function routePromptText() {
 }
 
 function isWorkspaceReady(current?: OnlineCodingWorkspace | null) {
-  if (!current || current.status !== 'repo_imported') return false
-  return (current.file_count || current.files?.length || 0) > 0
+  return !!current && current.status === 'repo_imported'
 }
 
 const isRepoReady = computed(() => isWorkspaceReady(workspace.value))
 const workspaceFiles = computed(() => workspace.value?.files || [])
+const isEmptyRepo = computed(() => isRepoReady.value && workspaceFiles.value.length === 0 && !(workspace.value?.file_count || 0))
 const workspaceTitle = computed(() => repoName(workspace.value?.repo_url) || workspace.value?.id || 'Vibe Coding')
 const stageLabel = computed(() => {
   if (devStage.value === 'discovery') return '需求澄清'
@@ -249,6 +256,7 @@ const specStats = computed(() => {
 const repoSummary = computed(() => {
   const files = workspaceFiles.value
   if (!workspace.value) return '未选择仓库'
+  if (isEmptyRepo.value) return '空仓库；可从 0 到 1 初始化项目'
   const topDirs = summarizeCounts(files.map(file => file.includes('/') ? file.split('/')[0] || '/' : '/'), 3)
   const exts = summarizeCounts(files.map(file => {
     const name = file.split('/').pop() || file
@@ -277,7 +285,7 @@ const runtimeSummary = computed(() => {
   if (previewProject.value?.supported === false) return previewProject.value.reason || '当前仓库暂未识别到可预览的前端运行入口'
   if (runtimeRunning.value) return `端口 ${previewRuntime.value?.port} 已就绪，可在新窗口打开预览`
   if (runtimeBusy.value) return '正在准备依赖和启动开发服务，首次启动可能需要更久'
-  return '检测仓库里的前端入口，按需启动本地进程级预览沙箱'
+  return '按需检测仓库里的前端入口并启动实验预览服务'
 })
 const runtimeWorkingDir = computed(() => {
   const dir = previewRuntime.value?.working_dir || previewProject.value?.working_dir
@@ -295,6 +303,13 @@ const runtimeStartDisabled = computed(() => (
   !isRepoReady.value ||
   previewProject.value?.supported === false
 ))
+const showPreviewPanel = computed(() => (
+  previewPanelOpen.value ||
+  runtimeRunning.value ||
+  runtimeBusy.value ||
+  Boolean(runtimePreviewUrl.value)
+))
+const showRuntimeDetails = computed(() => Boolean(runtimePreviewUrl.value || runtimeError.value || previewLogs.value))
 
 onMounted(loadFromRoute)
 
@@ -330,7 +345,6 @@ async function loadFromRoute() {
     taskInput.value = loaded.task || ''
     if (isWorkspaceReady(loaded)) {
       await prepareStudio()
-      await refreshPreviewRuntimeStatus(false)
       await openIde(false)
     } else {
       resetRuntimeState()
@@ -395,24 +409,27 @@ async function submitWorkspace() {
     repoUrl.value = result.repo_url || repoUrl.value
     taskInput.value = result.task || taskInput.value
     if (isWorkspaceReady(result)) {
-      completeStepMsg('online_importing', `仓库已导入：${result.file_count || result.files.length} 个文件`)
-      addStreamMsg({
-        type: 'tool',
-        content: `扫描 ${repoName(result.repo_url) || result.id} 仓库文件`,
-        result: fileListPreview(result.files),
-        resultCollapsed: true,
-      })
+      const fileCount = result.file_count || result.files.length
+      completeStepMsg('online_importing', fileCount > 0 ? `仓库已导入：${fileCount} 个文件` : '空仓库已接入')
+      if (fileCount > 0) {
+        addStreamMsg({
+          type: 'tool',
+          content: `扫描 ${repoName(result.repo_url) || result.id} 仓库文件`,
+          result: fileListPreview(result.files),
+          resultCollapsed: true,
+        })
+      } else {
+        addStreamMsg({
+          type: 'message',
+          content: '这是一个空仓库，可以直接进入 IDE，让 AI 从 0 到 1 初始化项目结构和首版代码。',
+        })
+      }
       await router.replace({ path: `/vibe-coding/workspaces/${result.id}`, query: { view: 'ide' } })
       await prepareStudio()
-      await refreshPreviewRuntimeStatus(false)
       await openIde(false)
     } else if (result.status === 'import_failed') {
       completeStepMsg('online_importing', '仓库导入失败')
       addStreamMsg({ type: 'error', content: result.import_error || '仓库导入失败，请检查地址和访问权限。' })
-      await router.replace({ path: `/vibe-coding/workspaces/${result.id}` })
-    } else if (result.status === 'repo_imported') {
-      completeStepMsg('online_importing', '仓库导入结果为空')
-      addStreamMsg({ type: 'error', content: '仓库状态为已导入，但没有扫描到任何文件。请检查仓库地址、分支或后端导入配置后重新导入。' })
       await router.replace({ path: `/vibe-coding/workspaces/${result.id}` })
     } else {
       completeStepMsg('online_importing', '工作区已创建')
@@ -439,15 +456,19 @@ async function prepareStudio() {
     content: [
       summarizeRepo(),
       '',
-      '我们先不急着打开 IDE。你可以继续补充系统目标、角色、流程、字段和验收标准；右侧 SPEC 会保存到当前工作区。',
+      isEmptyRepo.value
+        ? '你可以在对话里继续补充技术栈、页面范围、数据模型和验收标准；也可以直接进入 IDE 初始化首版工程。'
+        : '我们先不急着打开 IDE。你可以继续补充系统目标、角色、流程、字段和验收标准；右侧 SPEC 会保存到当前工作区。',
     ].join('\n'),
   })
-  addStreamMsg({
-    type: 'tool',
-    content: `扫描 ${workspaceTitle.value} 的仓库文件`,
-    result: fileListPreview(current.files),
-    resultCollapsed: true,
-  })
+  if (current.files.length > 0) {
+    addStreamMsg({
+      type: 'tool',
+      content: `扫描 ${workspaceTitle.value} 的仓库文件`,
+      result: fileListPreview(current.files),
+      resultCollapsed: true,
+    })
+  }
   addStepRunningMsg('等待用户描述开发目标...', 'online_wait_goal')
   const first = preferredFile(current.files)
   if (first) {
@@ -607,11 +628,13 @@ function resetRuntimeState() {
   previewRuntime.value = null
   previewLogs.value = ''
   runtimeError.value = ''
+  previewPanelOpen.value = false
 }
 
 async function refreshPreviewRuntimeStatus(showToast = false) {
   const current = workspace.value
   if (!current || !isWorkspaceReady(current)) return
+  previewPanelOpen.value = true
   runtimeLogsLoading.value = true
   try {
     const [project, runtime] = await Promise.all([
@@ -636,6 +659,7 @@ async function refreshPreviewRuntimeStatus(showToast = false) {
 async function startPreviewRuntime() {
   const current = workspace.value
   if (!current || !isWorkspaceReady(current) || runtimeBusy.value) return
+  previewPanelOpen.value = true
   runtimeBusy.value = true
   runtimeError.value = ''
   previewLogs.value = ''
@@ -646,12 +670,12 @@ async function startPreviewRuntime() {
     runtimeError.value = result.runtime.error || ''
     await refreshPreviewRuntimeLogs()
     if (result.runtime.status === 'running') {
-      ElMessage.success('预览沙箱已启动')
+      ElMessage.success('实验预览已启动')
     } else if (result.runtime.error) {
       ElMessage.warning(result.runtime.error)
     }
   } catch (error: any) {
-    runtimeError.value = error?.response?.data?.detail || error?.message || '预览沙箱启动失败'
+    runtimeError.value = error?.response?.data?.detail || error?.message || '实验预览启动失败'
     ElMessage.error(runtimeError.value)
     await refreshPreviewRuntimeLogs()
   } finally {
@@ -662,14 +686,15 @@ async function startPreviewRuntime() {
 async function stopPreviewRuntime() {
   const current = workspace.value
   if (!current || runtimeBusy.value) return
+  previewPanelOpen.value = true
   runtimeBusy.value = true
   try {
     previewRuntime.value = await onlineCodingApi.stopPreviewRuntime(current.id)
     runtimeError.value = previewRuntime.value.error || ''
     await refreshPreviewRuntimeLogs()
-    ElMessage.success('预览沙箱已停止')
+    ElMessage.success('实验预览已停止')
   } catch (error: any) {
-    runtimeError.value = error?.response?.data?.detail || error?.message || '预览沙箱停止失败'
+    runtimeError.value = error?.response?.data?.detail || error?.message || '实验预览停止失败'
     ElMessage.warning(runtimeError.value)
   } finally {
     runtimeBusy.value = false
@@ -834,6 +859,9 @@ async function persistSpec(confirmed = specConfirmed.value) {
 function summarizeRepo() {
   const current = workspace.value
   if (!current) return '仓库已经准备好，可以开始分析。'
+  if (isEmptyRepo.value) {
+    return `我已经接入 ${workspaceTitle.value}，这是一个空仓库。下一步可以直接描述产品目标，让 AI 初始化项目结构、README 和首版代码。`
+  }
   return `我已经接入 ${workspaceTitle.value}，当前导入 ${current.file_count || current.files.length} 个文件。${repoSummary.value}。下一步可以让我分析架构、定位入口文件，或生成开发计划。`
 }
 
@@ -841,6 +869,14 @@ async function buildWorkspaceAnalysis(userMessage: string) {
   const current = workspace.value
   if (!current) return '当前没有选中的 Vibe Coding 工作区。'
   const files = current.files || []
+  if (files.length === 0) {
+    return [
+      userMessage ? '我检查了当前工作区状态。' : '',
+      `项目：${workspaceTitle.value}，分支 ${current.branch || '未知'}，当前是空仓库。`,
+      '这不是失败状态，适合作为 0-1 开发起点。',
+      '下一步建议：先确定技术栈、项目目录、首屏功能和提交规范，然后在 IDE 中生成 README、项目脚手架和首版代码。',
+    ].filter(Boolean).join('\n')
+  }
   const targets = [selectedFile.value, ...pickAnalysisFiles(files)]
     .filter((file, index, arr): file is string => Boolean(file) && arr.indexOf(file) === index)
     .slice(0, 8)
@@ -1042,6 +1078,14 @@ function goWorkspaceList() {
   padding: 0 12px;
   background: #fff;
   color: #475569;
+}
+
+.oc-top-btn {
+  min-height: 34px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: transparent;
+  box-shadow: none;
 }
 
 .oc-primary {
@@ -1471,16 +1515,20 @@ function goWorkspaceList() {
 }
 
 .oc-runtime-panel {
-  min-height: 96px;
+  min-height: 42px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   background: #0f141c;
   color: rgba(226, 232, 240, 0.82);
-  padding: 12px 16px;
+  padding: 7px 16px;
+}
+
+.oc-runtime-panel.has-detail {
+  min-height: 56px;
 }
 
 .oc-runtime-main {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 14px;
 }
@@ -1501,7 +1549,7 @@ function goWorkspaceList() {
 
 .oc-runtime-main span {
   display: block;
-  margin-top: 3px;
+  margin-top: 1px;
   color: rgba(203, 213, 225, 0.68);
 }
 
@@ -1515,7 +1563,7 @@ function goWorkspaceList() {
 }
 
 .oc-runtime-meta {
-  margin-top: 8px;
+  margin-top: 6px;
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
@@ -1788,12 +1836,16 @@ function goWorkspaceList() {
 
 .oc-ide-pane {
   width: 100%;
-  height: calc(100vh - 208px);
+  height: calc(100vh - 112px);
   min-height: 460px;
   margin: 0;
   position: relative;
   overflow: hidden;
   background: #111827;
+}
+
+.oc-page.is-ide-view.has-preview-panel .oc-ide-pane {
+  height: calc(100vh - 154px);
 }
 
 .oc-ide-frame {
@@ -1898,8 +1950,12 @@ function goWorkspaceList() {
   }
 
   .oc-ide-pane {
-    height: calc(100vh - 268px);
+    height: calc(100vh - 112px);
     min-height: 360px;
+  }
+
+  .oc-page.is-ide-view.has-preview-panel .oc-ide-pane {
+    height: calc(100vh - 214px);
   }
 }
 

@@ -66,6 +66,7 @@ export interface Application {
   status: string
   conversation_id?: number | null
   platform_env_id?: number | null
+  canonical_spec_id?: string | null
   apaas_app_id?: string | null
   apaas_url?: string | null
   models?: number
@@ -94,6 +95,7 @@ export interface MergedApplication {
   apaas_app_id?: string
   apaas_url?: string
   conversation_id?: number
+  canonical_spec_id?: string | null
   models: number
   forms: number
   roles: number
@@ -176,6 +178,8 @@ export interface PermissionDef {
 }
 
 export interface PreviewData {
+  __source?: string
+  spec_id?: string | null
   appName: string
   roles: RoleDef[]
   dicts: DictDef[]

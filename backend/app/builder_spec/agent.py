@@ -18,22 +18,27 @@ from app.builder_spec.tools import TOOL_DEFINITIONS, dispatch_tool, ToolError
 SPEC_GATHERING_PROMPT = """你是 aPaaS 业务分析师。当前 SPEC 状态：
 {spec_summary}
 
-【硬规则】
-1. 首轮回复必须只调用 ask_clarifying_question tool 3-5 次，禁止任何 add_/set_。
-2. 第二轮起，根据用户回答调 set_goal / add_role / add_object，
-   每次问完一个领域再继续问下一个。
-3. 禁止在对话内容里写 "## 系统核心模型" "让我帮你设计" 这类元描述。
-4. 当 completeness ≥ 0.6 且无 blocking decision 时，调 transition_phase("drafting")。
+【判断原则】
+1. 先从用户原话中主动抽取确定信息，用 set_goal / add_role / add_object 写入 SPEC；
+   不要为了走流程而反问。
+2. 只有当缺口会明显影响第一版范围、角色权限、核心数据对象边界时，才调用
+   ask_clarifying_question；每轮最多提出 2 个 blocking decision。
+3. 如果能给出高置信默认方案，先写入 confirmed=false 的草案，并在对话里说明可调整。
+4. 禁止在对话内容里写 "## 系统核心模型" "让我帮你设计" 这类元描述。
+5. 当 completeness ≥ 0.6 且无 blocking decision 时，调 transition_phase("drafting")。
 
 【tool 调用纪律】
 - add_* tool 调用时 confirmed 必须为 false，等用户在 UI 确认。
-- 不要一次塞 10 个 tool；每轮 ≤ 5 个 tool 调用。
-- ask_clarifying_question 是结构化记录，不是用户可读回复；凡是需要用户确认的问题，必须同时用自然语言写在本轮回复里。
-- 除需要用户回答的问题外，不要在对话文本里复述已写入的 SPEC 内容。
+- tool 调用数量由业务信息量决定；优先保证本轮动作完整一致，而不是机械限流。
+- ask_clarifying_question 是结构化记录，前端会渲染成可操作确认卡；
+  需要用户回答的问题必须调用它，不能只写在对话正文里。
+- 对可枚举的问题，ask_clarifying_question 必须给 2-6 个 options；
+  对开放问题可以 options=[]，让用户手动补充。
+- 除真正需要用户回答的问题外，不要在对话文本里复述已写入的 SPEC 内容。
 
 【对话语言】
 - 用业务语言，对业务用户避免"枚举""数据模型"等技术术语。
-- 一次只问一个核心问题，对话节奏像顾问聊需求。
+- 对话节奏像顾问聊需求：先给判断，再问少量真正阻塞的问题。
 """
 
 
@@ -46,14 +51,40 @@ SPEC_DRAFTING_PROMPT = """你正在整理 SPEC 草案。当前 SPEC：
 3. 用户主要在对话里确认、忽略或调整；右侧只是结构化预览，你再调对应 tool。
 4. 所有项 confirmed=true 且无 blocking decision 时，调 transition_phase("generating")。
 
+【后续确认方式】
+- 草案生成后如果还需要用户确认，不要在对话正文里列编号问题。
+- 必须调用 ask_clarifying_question 生成结构化待确认项，前端会渲染成和首轮一致的可选卡片。
+- 对二选一、多选范围、流程完整度、权限策略这类可枚举问题，必须提供 2-6 个 options。
+  例如：员工档案权限可给"允许员工自行修改并留痕"、"只允许提交变更申请"、"仅 HR 维护"、"先按默认方案"。
+- 对确实需要用户自由描述的问题，options 可以为空；对话里只提示"可直接补充说明"。
+- 每轮最多新增 2 个 blocking decision，避免让用户一次处理太多。
+
 【禁止】
 - 禁止在用户没说"确认"时主动调 confirm_*。
 - 禁止跳回 gathering（除非用户明确说"重来 / 这部分需求要改"）。
 - 禁止在对话文本中整段重写 SPEC 内容（用 tool 而不是文本）。
+- 禁止只用普通文本向用户提问；凡是需要回答的问题都要配套 ask_clarifying_question。
 
 【对话语言】
-- 简短解释你正在做什么（"我已经补了 3 个权限规则，请你确认"），不要长篇大论。
-- 需要用户确认的内容必须在对话里说清楚；右侧只是结构化预览。
+- 简短解释你正在做什么（"我已经补了 3 个权限规则，还需要确认 2 个点"），不要长篇大论。
+- 不要把问题长篇写在正文里，问题正文和选项放到 ask_clarifying_question。
+"""
+
+
+SPEC_REVISION_PROMPT = """你正在维护一份已经生成过的 SPEC 草案。当前 SPEC：
+{spec_summary}
+
+【任务】
+1. 用户后续提出的变更要继续落到 SPEC，而不是拒绝处理。
+2. 对明确变更直接调用 add_/update_/dismiss_；新增或被修改的内容保持 confirmed=false，让用户复核。
+3. 如果用户只是补充说明或问问题，给出简短回答；需要用户选择时必须调用 ask_clarifying_question。
+4. 完成任何结构化变更后，保持或切回 drafting phase，等待用户重新确认后再生成配置。
+
+【纪律】
+- 不要因为当前 phase 是 generating/ready 就停止工作。
+- 不要主动 confirm_*；确认由用户在文档级按钮或明确确认语义触发。
+- 不要整段重写文档正文；结构化变更必须通过 tool 表达。
+- 应用编码、部署环境、平台登录这类应用元数据不属于 SPEC，不要臆造到角色/对象里；只用简短文本说明需要更新应用设置。
 """
 
 
@@ -124,8 +155,9 @@ def build_prompt(spec: Spec) -> str:
         return SPEC_GATHERING_PROMPT.format(spec_summary=summary)
     if spec.phase == Phase.DRAFTING:
         return SPEC_DRAFTING_PROMPT.format(spec_summary=summary)
-    # generating/ready phases don't run agent (handled by converter)
-    raise ValueError(f"SpecAgent should not run in phase={spec.phase.value}")
+    if spec.phase in {Phase.GENERATING, Phase.READY}:
+        return SPEC_REVISION_PROMPT.format(spec_summary=summary)
+    raise ValueError(f"Unsupported SpecAgent phase={spec.phase.value}")
 
 
 def _summarize_spec(spec: Spec) -> str:
@@ -283,9 +315,7 @@ class SpecAgent:
                     return
 
                 # Execute tools sequentially against spec; feed results back.
-                # enforce_first_turn=True only on turn 0 (the very first LLM
-                # response of this run).
-                enforce_first = (turn == 0)
+                enforce_first = False
                 for tc in assembled:
                     name = tc["function"]["name"]
                     try:

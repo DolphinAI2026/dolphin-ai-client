@@ -50,6 +50,7 @@ class DraftDocUpdateRequest(BaseModel):
     conversation_id: Optional[int] = None
     selected_llm_config_id: Optional[int] = None
     current_doc: Optional[str] = None
+    resume_message_id: Optional[int] = None
 
 
 # 共享 helper 直接从 sibling _helpers.py 取，不再通过 parent package 代理
@@ -1195,12 +1196,35 @@ async def draft_doc_update(
         )
         conversation = conv_result.scalar_one_or_none()
         if conversation:
-            db.add(Message(
-                conversation_id=conversation.id,
-                role="user",
-                content=f"【更新应用】{instruction}",
-            ))
-            await db.commit()
+            if body.resume_message_id:
+                resume_result = await db.execute(
+                    select(Message).where(
+                        Message.id == body.resume_message_id,
+                        Message.conversation_id == conversation.id,
+                        Message.role == "user",
+                    )
+                )
+                resume_message = resume_result.scalar_one_or_none()
+                if not resume_message:
+                    raise HTTPException(status_code=404, detail="待恢复的用户消息不存在")
+                latest_result = await db.execute(
+                    select(Message)
+                    .where(Message.conversation_id == conversation.id)
+                    .order_by(Message.created_at.desc(), Message.id.desc())
+                    .limit(1)
+                )
+                latest_message = latest_result.scalar_one_or_none()
+                if not latest_message or latest_message.id != resume_message.id:
+                    raise HTTPException(status_code=409, detail="对话已有新的消息，请基于最新上下文继续")
+                resumed_instruction = str(resume_message.content or "").strip()
+                instruction = re.sub(r"^【更新应用】\s*", "", resumed_instruction).strip() or instruction
+            else:
+                db.add(Message(
+                    conversation_id=conversation.id,
+                    role="user",
+                    content=f"【更新应用】{instruction}",
+                ))
+                await db.commit()
 
     if _is_trivial_non_update_message(instruction):
         assistant_reply = "我在。你可以直接描述要调整的字段、表单、权限、流程，或者上传新版 Markdown 设计文档。"

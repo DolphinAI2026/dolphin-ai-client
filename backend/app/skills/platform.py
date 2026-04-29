@@ -11,6 +11,7 @@ import logging
 from typing import Dict, List, Optional, Tuple
 
 from app.apaas_client import APaaSClient
+from app.app_code import coerce_app_code
 from app.config import settings
 from app.field_types import get_field_type_map
 
@@ -102,18 +103,15 @@ async def create_app(
     Args:
         client: 已登录的 APaaSClient
         app_name: 应用名称
-        app_code: 应用编码（可选，自动生成）。只能包含字母、数字、连字符。
+        app_code: 应用编码（可选，自动生成）。只能包含小写字母、数字、连字符，必须以字母开头，最多 17 个字符。
         description: 应用描述
 
     Returns:
         app_id (str)
     """
     if not app_code:
-        # 自动生成：拼音首字母 + 随机后缀，只用连字符
-        app_code = f"app-{_rand(6)}"
-
-    # appCode 不能有下划线，替换为连字符
-    app_code = app_code.replace('_', '-')
+        app_code = f"app-{_rand(6) or 'demo'}"
+    app_code = coerce_app_code(app_code)
 
     result = await client.create_app(app_name, app_code, description)
     app_id = str(result) if isinstance(result, str) else str(result.get("id", result.get("appId", "")))
