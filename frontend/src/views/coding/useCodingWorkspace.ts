@@ -16,9 +16,11 @@ import { ElMessage } from 'element-plus'
 import { codingApi, type WorkspaceInfo } from '@/api/coding'
 
 const WS_TYPE_GROUP_MAP: Record<string, { key: string; icon: string; label: string; order: number }> = {
+  'form-component':      { key: 'component-pc',     icon: '🧩', label: 'PC 组件',       order: 1 },
   'form-component-dual': { key: 'component-pc',     icon: '🧩', label: '双端组件',      order: 1 },
   'menu-page':           { key: 'page-pc',          icon: '🖥️', label: 'PC 页面',       order: 2 },
   'form-page':           { key: 'page-pc',          icon: '🖥️', label: 'PC 页面',       order: 2 },
+  'mobile-component':    { key: 'component-mobile', icon: '📱', label: 'Mobile 组件',   order: 3 },
   'mobile-page':         { key: 'page-mobile',      icon: '📱', label: 'Mobile 页面',   order: 4 },
   'backend-api':         { key: 'backend',          icon: '⚙️', label: '后端接口',      order: 5 },
   'backend-feign':       { key: 'backend',          icon: '⚙️', label: '后端接口',      order: 5 },

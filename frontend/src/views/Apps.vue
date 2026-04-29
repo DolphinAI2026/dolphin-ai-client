@@ -25,7 +25,7 @@
             type="button"
             role="tab"
             :aria-selected="activeTab === tab.value"
-            @click="selectTab(tab.value)"
+            @click="activeTab = tab.value"
           >
             <span>{{ tab.label }}</span>
             <span v-if="tab.count" class="apps-tab-count">{{ tab.count }}</span>
@@ -200,49 +200,6 @@
           </article>
         </div>
       </section>
-
-      <section v-if="showPagination" class="apps-pagination" aria-label="应用分页">
-        <span class="apps-page-range">{{ pageRangeLabel }}</span>
-        <label class="apps-page-size">
-          <span>每页</span>
-          <select :value="pagination.pageSize" @change="changePageSize">
-            <option v-for="size in PAGE_SIZE_OPTIONS" :key="size" :value="size">{{ size }}</option>
-          </select>
-        </label>
-        <nav class="apps-page-nav" aria-label="页码">
-          <button
-            class="apps-page-btn"
-            type="button"
-            :disabled="pagination.page <= 1"
-            title="上一页"
-            @click="goToPage(pagination.page - 1)"
-          >
-            <el-icon><ArrowLeft /></el-icon>
-          </button>
-          <template v-for="(item, index) in pageButtons" :key="`${item}-${index}`">
-            <span v-if="item === 'ellipsis'" class="apps-page-ellipsis">...</span>
-            <button
-              v-else
-              class="apps-page-number"
-              :class="{ active: item === pagination.page }"
-              type="button"
-              :aria-current="item === pagination.page ? 'page' : undefined"
-              @click="goToPage(item)"
-            >
-              {{ item }}
-            </button>
-          </template>
-          <button
-            class="apps-page-btn"
-            type="button"
-            :disabled="pagination.page >= pagination.totalPages"
-            title="下一页"
-            @click="goToPage(pagination.page + 1)"
-          >
-            <el-icon><ArrowRight /></el-icon>
-          </button>
-        </nav>
-      </section>
     </main>
 
     <!-- Phase A: 成员管理弹窗 -->
@@ -272,7 +229,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { ArrowLeft, ArrowRight, Delete, Grid, Link as LinkIcon, List, MoreFilled, Plus, Promotion, UserFilled } from '@element-plus/icons-vue'
+import { Delete, Grid, Link as LinkIcon, List, MoreFilled, Plus, Promotion, UserFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { handleError } from '@/utils/errorHandler'
 import { applicationApi } from '@/api/application'
@@ -302,20 +259,6 @@ const appHistoryMap = ref<Record<number, ConversationWithApp[]>>({})
 const loading = ref(true)
 const activeTab = ref<AppTab>('all')
 const viewMode = ref<ViewMode>('list')
-const PAGE_SIZE_OPTIONS = [20, 50, 100]
-const pagination = ref({
-  page: 1,
-  pageSize: 20,
-  total: 0,
-  totalPages: 1,
-  counts: {
-    all: 0,
-    active: 0,
-    deployed: 0,
-    draft: 0,
-  } as Record<AppTab, number>,
-})
-let loadRequestSeq = 0
 
 const tabDefinitions: Array<{ label: string; value: AppTab }> = [
   { label: '全部', value: 'all' },
@@ -329,61 +272,23 @@ const APP_ACCENTS = ['#5871e8', '#2aa871', '#d28b16', '#14aeb8', '#e35a49', '#8a
 const tabs = computed(() =>
   tabDefinitions.map(tab => ({
     ...tab,
-    count: pagination.value.counts[tab.value] || 0,
+    count: apps.value.filter(app => matchesTab(app, tab.value)).length,
   })),
 )
 
 const filteredApps = computed(() => {
   return [...apps.value]
+    .filter(app => matchesTab(app, activeTab.value))
     .sort((a, b) => appTimeMs(b.updated_at || b.created_at) - appTimeMs(a.updated_at || a.created_at))
 })
 
-const deployedCount = computed(() => pagination.value.counts.deployed || 0)
-const activeCount = computed(() => pagination.value.counts.active || 0)
-const appsSummary = computed(() => `${pagination.value.counts.all || 0} 个应用 · ${deployedCount.value} 个已部署 · ${activeCount.value} 个进行中`)
-const showPagination = computed(() => !loading.value && pagination.value.total > 0)
-const pageRangeLabel = computed(() => {
-  if (!pagination.value.total) return '0 个应用'
-  const start = (pagination.value.page - 1) * pagination.value.pageSize + 1
-  const end = Math.min(pagination.value.page * pagination.value.pageSize, pagination.value.total)
-  return `${start}-${end} / ${pagination.value.total}`
-})
-const pageButtons = computed<Array<number | 'ellipsis'>>(() => {
-  const total = pagination.value.totalPages
-  const current = pagination.value.page
-  if (total <= 7) {
-    return Array.from({ length: total }, (_, index) => index + 1)
-  }
-  const visible = new Set<number>([1, total, current, current - 1, current + 1])
-  if (current <= 3) {
-    visible.add(2)
-    visible.add(3)
-    visible.add(4)
-  }
-  if (current >= total - 2) {
-    visible.add(total - 1)
-    visible.add(total - 2)
-    visible.add(total - 3)
-  }
-  const pages = [...visible]
-    .filter(page => page >= 1 && page <= total)
-    .sort((a, b) => a - b)
-  const result: Array<number | 'ellipsis'> = []
-  for (const page of pages) {
-    const last = result[result.length - 1]
-    if (typeof last === 'number' && page - last > 1) {
-      result.push('ellipsis')
-    }
-    result.push(page)
-  }
-  return result
-})
+const deployedCount = computed(() => apps.value.filter(app => appStage(app).group === 'deployed').length)
+const activeCount = computed(() => apps.value.filter(app => appStage(app).group === 'active').length)
+const appsSummary = computed(() => `${apps.value.length} 个应用 · ${deployedCount.value} 个已部署 · ${activeCount.value} 个进行中`)
 
-function selectTab(tab: AppTab) {
-  if (activeTab.value === tab) return
-  activeTab.value = tab
-  pagination.value.page = 1
-  void loadApplicationsPage()
+function matchesTab(app: MergedApplication, tab: AppTab) {
+  if (tab === 'all') return true
+  return appStage(app).group === tab
 }
 
 function appStage(app: MergedApplication): AppStage {
@@ -612,10 +517,7 @@ async function confirmDelete(app: MergedApplication) {
       type: 'warning',
     })
     await applicationApi.delete(Number(app.id))
-    if (apps.value.length <= 1 && pagination.value.page > 1) {
-      pagination.value.page -= 1
-    }
-    await loadApplicationsPage()
+    apps.value = apps.value.filter(item => item.id !== app.id)
     ElMessage.success('已删除')
   } catch (error: any) {
     if (error === 'cancel' || error === 'close' || error?.action === 'cancel' || error?.action === 'close') return
@@ -623,71 +525,19 @@ async function confirmDelete(app: MergedApplication) {
   }
 }
 
-function goToPage(page: number) {
-  const next = Math.min(Math.max(1, page), pagination.value.totalPages)
-  if (next === pagination.value.page) return
-  pagination.value.page = next
-  void loadApplicationsPage()
-}
-
-function changePageSize(event: Event) {
-  const target = event.target as HTMLSelectElement | null
-  const next = Number(target?.value || pagination.value.pageSize)
-  if (!PAGE_SIZE_OPTIONS.includes(next)) return
-  pagination.value.pageSize = next
-  pagination.value.page = 1
-  void loadApplicationsPage()
-}
-
-async function loadPageHistory(currentApps: MergedApplication[]) {
-  const appIds = currentApps
-    .map(app => appNumericId(app))
-    .filter((id): id is number => id != null)
-  if (!appIds.length) {
-    appHistoryMap.value = {}
-    return
-  }
-  const conversations = await conversationApi
-    .listWithApps({ agent_type: 'builder', app_ids: appIds.join(',') })
-    .catch(() => [])
-  appHistoryMap.value = buildAppHistoryMap(Array.isArray(conversations) ? conversations : [])
-}
-
-async function loadApplicationsPage() {
-  const requestSeq = ++loadRequestSeq
+onMounted(async () => {
   try {
-    loading.value = true
-    const result = await applicationApi.listPage({
-      page: pagination.value.page,
-      page_size: pagination.value.pageSize,
-      stage: activeTab.value,
-    })
-    if (requestSeq !== loadRequestSeq) return
-    apps.value = Array.isArray(result.items) ? result.items : []
-    pagination.value = {
-      page: result.page || 1,
-      pageSize: result.page_size || pagination.value.pageSize,
-      total: result.total || 0,
-      totalPages: result.total_pages || 1,
-      counts: {
-        all: result.counts?.all || 0,
-        active: result.counts?.active || 0,
-        deployed: result.counts?.deployed || 0,
-        draft: result.counts?.draft || 0,
-      },
-    }
-    await loadPageHistory(apps.value)
+    const [list, conversations] = await Promise.all([
+      applicationApi.list({ include_remote: false }),
+      conversationApi.listWithApps({ agent_type: 'builder' }).catch(() => []),
+    ])
+    apps.value = Array.isArray(list) ? list : []
+    appHistoryMap.value = buildAppHistoryMap(Array.isArray(conversations) ? conversations : [])
   } catch (error) {
     handleError(error, { fallback: '应用列表加载失败' })
   } finally {
-    if (requestSeq === loadRequestSeq) {
-      loading.value = false
-    }
+    loading.value = false
   }
-}
-
-onMounted(() => {
-  void loadApplicationsPage()
 })
 
 // ---- Phase A: Application member management ----
@@ -897,98 +747,6 @@ async function removeAppMember(userId: number) {
   max-width: 1160px;
   width: 100%;
   margin: 0 auto;
-}
-
-.apps-pagination {
-  max-width: 1160px;
-  width: 100%;
-  margin: -2px auto 0;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 12px;
-  color: var(--b-text-muted);
-  font-size: 12px;
-}
-
-.apps-page-range {
-  min-width: 92px;
-  text-align: right;
-  font-family: var(--b-mono);
-}
-
-.apps-page-size {
-  height: 30px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border: 1px solid var(--b-line);
-  border-radius: 8px;
-  background: var(--b-panel);
-  padding: 0 8px;
-}
-
-.apps-page-size select {
-  height: 24px;
-  min-width: 54px;
-  border: 0;
-  background: transparent;
-  color: var(--b-text);
-  font: inherit;
-  outline: none;
-}
-
-.apps-page-nav {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  border: 1px solid var(--b-line);
-  border-radius: 8px;
-  background: var(--b-panel);
-  padding: 2px;
-}
-
-.apps-page-btn,
-.apps-page-number {
-  width: 28px;
-  height: 26px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--b-text-muted);
-  display: grid;
-  place-items: center;
-  cursor: pointer;
-}
-
-.apps-page-number {
-  font-family: var(--b-mono);
-  font-size: 11px;
-}
-
-.apps-page-btn:not(:disabled):hover,
-.apps-page-number:not(.active):hover {
-  background: var(--b-panel-soft);
-  color: var(--b-text);
-}
-
-.apps-page-btn:disabled {
-  cursor: not-allowed;
-  opacity: 0.42;
-}
-
-.apps-page-number.active {
-  background: var(--b-ink);
-  color: #fff;
-  font-weight: 700;
-}
-
-.apps-page-ellipsis {
-  width: 20px;
-  text-align: center;
-  color: var(--b-text-faint);
-  font-family: var(--b-mono);
-  line-height: 26px;
 }
 
 .apps-state {
@@ -1401,21 +1159,6 @@ async function removeAppMember(userId: number) {
 
   .apps-view-toggle {
     align-self: flex-end;
-  }
-
-  .apps-pagination {
-    align-items: stretch;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  .apps-page-range {
-    text-align: left;
-  }
-
-  .apps-page-nav {
-    width: 100%;
-    justify-content: center;
   }
 
   .apps-table-head {

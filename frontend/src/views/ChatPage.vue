@@ -55,18 +55,18 @@
           class="builder-top-action primary"
           type="button"
           @click="startDeployFromTopbar"
-          :disabled="assembling || generating || deployRunningAll || deployExecuting !== null || !canStartDeployFlow"
+          :disabled="assembling || generating || deployRunningAll || deployExecuting !== null || !hasPreviewContent"
         >
-          {{ deployPrimaryActionLabel }}
+          部署到预览
         </button>
         <button
-          v-else-if="showRecoverDeployButton"
+          v-else-if="showBuildHistoryButton"
           class="builder-top-action primary"
           type="button"
-          @click="recoverDeployFlow"
+          @click="openDeployPanel"
           :disabled="assembling || generating || deployRunningAll || deployExecuting !== null"
         >
-          {{ recoverDeployActionLabel }}
+          创建过程
         </button>
         <button v-else class="builder-top-action primary" type="button" @click="router.push('/devops')">
           运行流水线
@@ -142,7 +142,7 @@
 
       <!-- SPEC PhaseBar (Phase β: only when requirements agent is active) -->
       <div
-        v-if="showSpecPhaseBar"
+        v-if="showSpecArtifactPanel"
         v-show="!SHOW_PLATFORM_CONFIG || activeView === 'builder'"
         class="spec-phasebar-strip"
       >
@@ -169,12 +169,7 @@
               <button class="doc-download-btn" @click="downloadCurrentDoc">下载 .md</button>
             </div>
           </div>
-          <SpecDocumentRenderer
-            v-if="builderSpecDocument"
-            :spec="builderSpecDocument"
-            class="spec-preview-document"
-          />
-          <div v-else-if="liveStructuredDocResult" class="doc-preview-body structured-doc-host">
+          <div v-if="liveStructuredDocResult" class="doc-preview-body structured-doc-host">
             <StructuredDocRenderer :doc-result="liveStructuredDocResult" />
           </div>
           <pre v-else-if="selectedDocDisplayContent" class="doc-preview-body plain-doc-fallback">{{ selectedDocDisplayContent }}</pre>
@@ -211,108 +206,7 @@
               <div class="bubble-row" :class="msg.role">
                 <div v-if="msg.role === 'assistant'" class="assistant-avatar" aria-hidden="true">AI</div>
                 <div class="bubble-inner" :class="{ 'welcome-bubble': msg.role === 'assistant' && msg.content === BUILDER_WELCOME_MESSAGE }">
-                  <div class="bubble-content" :class="msg.role" v-html="formatMessageContent(msg)"></div>
-                  <section
-                    v-if="shouldShowInterruptedRecovery(msg)"
-                    class="interrupted-recovery-card"
-                    aria-label="中断恢复"
-                  >
-                    <div>
-                      <strong>上次生成中断了</strong>
-                      <p>这条请求已经保存，但没有收到完整的 AI 回复。可以从这条请求继续生成，不需要重新输入。</p>
-                    </div>
-                    <div class="interrupted-recovery-actions">
-                      <button type="button" class="primary" :disabled="sendingMessage" @click="resumeInterruptedTurn">
-                        继续生成
-                      </button>
-                      <button type="button" :disabled="sendingMessage" @click="dismissInterruptedRecovery">
-                        忽略
-                      </button>
-                    </div>
-                  </section>
-                  <section
-                    v-if="shouldShowDecisionPrompt(msg, idx)"
-                    class="decision-turn-card"
-                    aria-label="待确认决策"
-                  >
-                    <template v-if="primaryInlineDecision">
-                      <header class="decision-turn-head">
-                        <span class="decision-turn-kicker">需要确认</span>
-                        <div class="decision-turn-meta">
-                          <span v-if="primaryInlineDecision.blocking" class="decision-turn-tag">阻塞</span>
-                          <button
-                            v-if="queuedInlineDecisions.length"
-                            type="button"
-                            class="decision-queue-toggle"
-                            @click="toggleDecisionQueue"
-                          >
-                            另有 {{ queuedInlineDecisions.length }} 个
-                          </button>
-                        </div>
-                      </header>
-                      <strong class="decision-turn-title">{{ primaryInlineDecision.topic }}</strong>
-                      <p v-if="primaryInlineDecision.why_blocking" class="decision-turn-why">
-                        {{ primaryInlineDecision.why_blocking }}
-                      </p>
-                      <div v-if="primaryInlineDecision.options.length" class="decision-turn-options">
-                        <button
-                          v-if="primaryInlineDecision.options.length > 1"
-                          type="button"
-                          class="select-all"
-                          :class="{ selected: areAllDecisionOptionsSelected(primaryInlineDecision) }"
-                          :aria-pressed="areAllDecisionOptionsSelected(primaryInlineDecision)"
-                          @click="toggleAllDecisionOptions(primaryInlineDecision)"
-                        >
-                          全部
-                        </button>
-                        <button
-                          v-for="(option, optionIndex) in primaryInlineDecision.options"
-                          :key="`${primaryInlineDecision.id}-${optionIndex}`"
-                          type="button"
-                          :class="{ selected: isDecisionOptionSelected(primaryInlineDecision, option) }"
-                          :aria-pressed="isDecisionOptionSelected(primaryInlineDecision, option)"
-                          @click="toggleDecisionOption(primaryInlineDecision, option)"
-                        >
-                          {{ option }}
-                        </button>
-                      </div>
-                      <div v-if="decisionQueueExpanded && queuedInlineDecisions.length" class="decision-queue-list">
-                        <article
-                          v-for="decision in queuedInlineDecisions"
-                          :key="decision.id"
-                          class="decision-queue-item"
-                        >
-                          <div class="decision-queue-title">
-                            <strong>{{ decision.topic }}</strong>
-                            <span v-if="decision.blocking">阻塞</span>
-                          </div>
-                          <p v-if="decision.why_blocking">{{ decision.why_blocking }}</p>
-                          <div v-if="decision.options.length" class="decision-queue-options">
-                            <button
-                              v-if="decision.options.length > 1"
-                              type="button"
-                              class="select-all"
-                              :class="{ selected: areAllDecisionOptionsSelected(decision) }"
-                              :aria-pressed="areAllDecisionOptionsSelected(decision)"
-                              @click="toggleAllDecisionOptions(decision)"
-                            >
-                              全部
-                            </button>
-                            <button
-                              v-for="(option, optionIndex) in decision.options"
-                              :key="`${decision.id}-${optionIndex}`"
-                              type="button"
-                              :class="{ selected: isDecisionOptionSelected(decision, option) }"
-                              :aria-pressed="isDecisionOptionSelected(decision, option)"
-                              @click="toggleDecisionOption(decision, option)"
-                            >
-                              {{ option }}
-                            </button>
-                          </div>
-                        </article>
-                      </div>
-                    </template>
-                  </section>
+                  <div class="bubble-content" :class="msg.role" v-html="formatContent(msg.content)"></div>
                 </div>
               </div>
             </div>
@@ -332,13 +226,12 @@
                 <div class="assistant-avatar" aria-hidden="true">AI</div>
                 <div class="bubble-inner">
                   <div class="bubble-content assistant conflict-resolve-box">
-                    <div class="conflict-label">检测到编码冲突，请确认最新编码（默认已补上 <code>-v1</code>）</div>
+                    <div class="conflict-label">检测到编码冲突，请确认最新编码（默认已补上 <code>V1</code>）</div>
                     <div class="conflict-input-row">
                       <input
                         v-model="activeConflict.newCode"
                         class="conflict-input"
-                        placeholder="输入新编码，如 code-v1"
-                        maxlength="17"
+                        placeholder="输入新编码，如 codeV1"
                         @keydown.enter="resolveConflictAndRetry"
                         :disabled="activeConflict.resolving"
                       />
@@ -462,12 +355,6 @@
               :disabled="updatingDocVersion || executingChangePlan || sendingMessage"
             >{{ updatingDocVersion ? '分析更新中...' : (isApplicationUpdateChatMode ? '继续更新' : '更新应用') }}</button>
             <button
-              v-if="showRecoverDeployButton"
-              class="preview-side-cta secondary"
-              @click="recoverDeployFlow"
-              :disabled="assembling || generating || deployRunningAll || deployExecuting !== null"
-            >{{ recoverDeployActionLabel }}</button>
-            <button
               v-if="showExecuteUpdateButton"
               class="preview-side-cta secondary"
               @click="cancelChangePlanAction"
@@ -484,8 +371,8 @@
               v-if="showStartDeployButton"
               class="preview-side-cta"
               @click="startDeployFromArtifact"
-              :disabled="assembling || generating || deployRunningAll || deployExecuting !== null || !canStartDeployFlow"
-            >{{ deployPrimaryActionLabel }}</button>
+              :disabled="assembling || generating || deployRunningAll || deployExecuting !== null || !hasPreviewContent"
+            >{{ generating || deployRunningAll || deployExecuting !== null ? '构建中...' : '开始构建' }}</button>
             <button
               v-if="showPublishButton"
               class="preview-side-cta success"
@@ -584,12 +471,7 @@
           <div v-if="showBuilderPreview && canvasTab === 'spec'" class="tab-content spec-tab-content">
             <!-- 正常模式：单文档视图 -->
             <template v-if="!isUpdateReviewMode">
-              <SpecDocumentRenderer
-                v-if="builderSpecDocument"
-                :spec="builderSpecDocument"
-                class="spec-preview-document"
-              />
-              <div v-else-if="liveStructuredDocResult" class="doc-version-content expanded doc-preview-body structured-doc-host">
+              <div v-if="liveStructuredDocResult" class="doc-version-content expanded doc-preview-body structured-doc-host">
                 <StructuredDocRenderer :doc-result="liveStructuredDocResult" />
               </div>
               <pre v-else-if="selectedDocDisplayContent" class="doc-version-content expanded doc-preview-body plain-doc-fallback">{{ selectedDocDisplayContent }}</pre>
@@ -875,7 +757,7 @@
         <div class="deploy-header">
           <div>
             <div class="deploy-title-row">
-              <div class="deploy-title">{{ isUpdateExecutionMode ? '更新进度' : isUpdateReviewMode ? '更新概览' : '部署进度' }}</div>
+              <div class="deploy-title">{{ isUpdateExecutionMode ? '更新进度' : isUpdateReviewMode ? '更新概览' : '创建过程' }}</div>
               <span v-if="isUpdateExecutionMode || currentDeployStep" class="deploy-live-badge">执行中</span>
             </div>
             <div class="deploy-desc">
@@ -883,7 +765,7 @@
                 ? (updateExecutionAllDone ? '本次更新已执行完成' : '仅展示本次增量更新涉及的步骤')
                 : isUpdateReviewMode
                 ? (store.changePlan?.diffSummary || '本次仅展示与上一版设计文档对比出的更新项')
-                : (deployAllDone ? '已完成全部部署步骤' : deployRunningAll || deployExecuting ? '正在自动执行部署步骤' : deployOpen ? '确认环境后会自动执行部署步骤' : '点击开始构建后在这里查看进度')
+                : (deployAllDone ? '已完成全部创建步骤' : deployRunningAll || deployExecuting ? '正在执行创建步骤' : deployOpen ? '可手动执行未完成步骤，失败项可点击重试' : '创建过程会保留在这里，可手动执行或重试步骤')
               }}
             </div>
             <div v-if="isUpdateExecutionMode && currentUpdateExecutionLabel" class="deploy-current-step">{{ currentUpdateExecutionLabel }}</div>
@@ -904,7 +786,7 @@
           <div class="deploy-conflict-copy">{{ activeConflict.model_name }} 的编码 <code>{{ activeConflict.current_code }}</code> 已存在，已切回左侧对话区等待你确认最新编码。</div>
         </div>
         <div v-if="deployOpen && deployLastError && !isUpdateReviewMode && !isUpdateExecutionMode" class="deploy-conflict-card error-card">
-          <div class="deploy-conflict-title">构建失败</div>
+          <div class="deploy-conflict-title">执行失败</div>
           <div class="deploy-conflict-copy">{{ deployLastError }}</div>
         </div>
         <div v-if="isUpdateExecutionMode" class="deploy-groups">
@@ -1002,12 +884,9 @@
 
       <!-- SPEC three-pane (Phase β): replaces preview-side + deploy-aside when in spec mode -->
       <div v-if="showSpecArtifactPanel" class="spec-canvas-pane">
-        <SpecCanvas
-          :config-generating="generatingSpecConfig"
-          @generate-config="generateConfigFromSpec"
-        />
+        <SpecCanvas />
       </div>
-      <SpecInspector v-if="showSpecArtifactPanel" class="spec-inspector-pane" :show-decisions="false" />
+      <SpecInspector v-if="showSpecArtifactPanel" class="spec-inspector-pane" />
     </div><!-- /builder-content -->
     </div><!-- /content-area -->
 
@@ -1132,7 +1011,7 @@
     >
       <div class="conflict-dialog-tip">
         以下模型的编码在平台其他应用中已存在，直接部署会失败。已为每项自动加
-        <code>-v1</code> 后缀，你可以再编辑调整；确认后统一应用到配置。
+        <code>_V1</code> 后缀，你可以再编辑调整；确认后统一应用到配置。
       </div>
       <div class="conflict-dialog-table">
         <div class="conflict-row conflict-head">
@@ -1188,8 +1067,6 @@ import {
 } from '@/utils/chatPage'
 import {
   buildAppCode,
-  APP_CODE_RULE_TEXT,
-  isValidAppCode,
   pickAppCode,
   pickAppName,
   extractAppCodeFromText,
@@ -1207,11 +1084,8 @@ import { convertConfig } from '@/api/conversation'
 import { buildStructuredDocFromPreviewConfig } from '@/utils/structuredDoc'
 import { computeStructuredDocDiff } from '@/utils/structuredDocDiff'
 import { useSpecStore } from '@/stores/spec'
-import type { Decision } from '@/types/spec'
-import { specToMarkdown } from '@/utils/specDocument'
 import PhaseBar from '@/components/spec/PhaseBar.vue'
 import SpecCanvas from '@/components/spec/SpecCanvas.vue'
-import SpecDocumentRenderer from '@/components/spec/SpecDocumentRenderer.vue'
 import SpecInspector from '@/components/spec/SpecInspector.vue'
 
 const router = useRouter()
@@ -1324,9 +1198,6 @@ const canvasDictName = (dict: any, index: number) => dict?.name || dict?.dict_na
 const canvasDictCode = (dict: any, index: number) => dict?.code || dict?.dict_code || `dict_${index + 1}`
 const canvasDictOptions = (dict: any) => normalizeDictOptions(dict)
 const builderLifecycleStatus = computed(() => {
-  if (deployHasIncomplete.value) {
-    return { key: 'generated', label: '已生成' as const }
-  }
   if (deployAllDone.value || store.currentApp?.status === 'completed') {
     return { key: 'deployed', label: '已部署' as const }
   }
@@ -1336,7 +1207,9 @@ const builderLifecycleStatus = computed(() => {
   return { key: 'draft', label: '草稿' as const }
 })
 const isPlatformDeployed = computed(() =>
-  builderLifecycleStatus.value.key === 'deployed'
+  builderLifecycleStatus.value.key === 'deployed' ||
+  !!store.currentApp?.apaas_app_id ||
+  store.currentApp?.status === 'completed'
 )
 const isAppOnline = computed(() =>
   currentRemoteStatus.value === 'ENABLE' ||
@@ -1353,24 +1226,12 @@ const shouldDefaultOpenArtifactPanel = () => {
 }
 const artifactPanelVisible = ref(shouldDefaultOpenArtifactPanel())
 const showStartDeployButton = computed(() => !deployAllDone.value && !isPlatformDeployed.value)
-const hasPartialPlatformBuild = computed(() => !!store.currentApp?.apaas_app_id && !isPlatformDeployed.value)
-const canStartDeployFlow = computed(() => hasPreviewContent.value || !!existingAppId.value)
-const deployPrimaryActionLabel = computed(() => {
-  if (generating.value || deployRunningAll.value || deployExecuting.value !== null) return '构建中...'
-  if (hasPartialPlatformBuild.value) return '继续构建'
-  return '部署到预览'
-})
-const showRecoverDeployButton = computed(() =>
+const showBuildHistoryButton = computed(() =>
   !!existingAppId.value &&
-  (!!store.currentApp?.apaas_app_id || deploySteps.value.length > 0) &&
   !showStartDeployButton.value &&
+  !isUpdateReviewMode.value &&
   !isUpdateExecutionMode.value
 )
-const recoverDeployActionLabel = computed(() => {
-  if (deployRunningAll.value || deployExecuting.value !== null) return '补跑中...'
-  if (deployHasIncomplete.value) return '补跑构建'
-  return '修复构建'
-})
 const showPublishButton = computed(() =>
   isPlatformDeployed.value &&
   !isUpdateReviewMode.value &&
@@ -1378,43 +1239,14 @@ const showPublishButton = computed(() =>
 )
 const showUpdateButton = computed(() => !!existingAppId.value && isPlatformDeployed.value && !isUpdateReviewMode.value)
 const showExecuteUpdateButton = computed(() => isUpdateReviewMode.value && !!store.changePlan?.actions?.length)
-const hasSpecArtifactContent = computed(() => {
-  const currentSpec = specStore.current
-  if (!currentSpec) return false
-  return Boolean(
-    currentSpec.goal ||
-    currentSpec.roles.length ||
-    currentSpec.objects.length ||
-    currentSpec.dicts.length ||
-    currentSpec.permissions.length ||
-    currentSpec.completeness.total > 0
-  )
-})
-const hasBuilderArtifactContent = computed(() =>
-  useSpecMode.value
-    ? hasSpecArtifactContent.value
-    : (
-        hasPreviewContent.value ||
-        isDocParsing.value ||
-        generatingDoc.value ||
-        generating.value ||
-        assembling.value ||
-        parseReady.value ||
-        deploySteps.value.length > 0 ||
-        deployOpen.value ||
-        isPlatformDeployed.value
-      )
-)
 const showBuilderArtifactPanel = computed(() =>
   artifactPanelVisible.value &&
   !useSpecMode.value &&
-  hasBuilderArtifactContent.value &&
   (!SHOW_PLATFORM_CONFIG || activeView.value === 'builder')
 )
 const showSpecArtifactPanel = computed(() =>
   artifactPanelVisible.value &&
   useSpecMode.value &&
-  hasSpecArtifactContent.value &&
   !embedMode.value &&
   (!SHOW_PLATFORM_CONFIG || activeView.value === 'builder')
 )
@@ -1422,12 +1254,6 @@ const showAnyBuilderArtifactPanel = computed(() =>
   showBuilderArtifactPanel.value || showSpecArtifactPanel.value
 )
 const showBuilderArtifactToggle = computed(() =>
-  !embedMode.value &&
-  hasBuilderArtifactContent.value &&
-  (!SHOW_PLATFORM_CONFIG || activeView.value === 'builder')
-)
-const showSpecPhaseBar = computed(() =>
-  useSpecMode.value &&
   !embedMode.value &&
   (!SHOW_PLATFORM_CONFIG || activeView.value === 'builder')
 )
@@ -1441,29 +1267,6 @@ const showBuilderChatSide = computed(() =>
   (!SHOW_PLATFORM_CONFIG || activeView.value === 'builder')
 )
 const showBuilderComposer = computed(() => showBuilderChatSide.value)
-const inlinePendingDecisions = computed<Decision[]>(() =>
-  specStore.pendingDecisions.filter((decision) => !decision.resolved)
-)
-const primaryInlineDecision = computed<Decision | null>(() =>
-  inlinePendingDecisions.value.find((decision) => decision.blocking) ??
-  inlinePendingDecisions.value[0] ??
-  null
-)
-const queuedInlineDecisions = computed<Decision[]>(() =>
-  inlinePendingDecisions.value.filter((decision) => decision.id !== primaryInlineDecision.value?.id)
-)
-const lastAssistantDecisionMessageIndex = computed(() => {
-  for (let i = visibleMessages.value.length - 1; i >= 0; i -= 1) {
-    if (visibleMessages.value[i]?.role === 'assistant') return i
-  }
-  return -1
-})
-const showInlineDecisionPanel = computed(() =>
-  showBuilderChatSide.value &&
-  useSpecMode.value &&
-  !appParsedMode.value &&
-  inlinePendingDecisions.value.length > 0
-)
 const showDeployProgressInline = computed(() => deploySteps.value.length > 0 || deployOpen.value || isPlatformDeployed.value)
 // 用户已决定废弃 "已部署应用版本化视图"：右侧永远显示文档（单文档或 diff），
 // 不再区分 showDeployedVersionedView 模式。保留此处常量以便语义搜索，
@@ -1471,8 +1274,6 @@ const showDeployProgressInline = computed(() => deploySteps.value.length > 0 || 
 const showDeploySidebar = computed(() =>
   isUpdateReviewMode.value ||
   isUpdateExecutionMode.value ||
-  deployOpen.value ||
-  deployHasIncomplete.value ||
   !isPlatformDeployed.value
 )
 const showViewSwitcher = computed(() =>
@@ -1549,20 +1350,12 @@ function toggleArtifactPanel() {
 
 function startDeployFromTopbar() {
   openArtifactPanel('spec')
-  if (hasPartialPlatformBuild.value || deployHasIncomplete.value) {
-    recoverDeployFlow()
-  } else {
-    startDeployFlow()
-  }
+  startDeployFlow()
 }
 
 function startDeployFromArtifact() {
   openArtifactPanel('spec')
-  if (hasPartialPlatformBuild.value || deployHasIncomplete.value) {
-    recoverDeployFlow()
-  } else {
-    startDeployFlow()
-  }
+  startDeployFlow()
 }
 
 const builderPhaseSteps = computed(() => {
@@ -2031,118 +1824,6 @@ function resetMessagesToWelcome() {
 }
 
 const visibleMessages = computed(() => messages)
-const decisionQueueExpanded = ref(false)
-const selectedDecisionOptions = ref<Record<string, string[]>>({})
-
-function shouldShowDecisionPrompt(msg: Message, index: number) {
-  return showInlineDecisionPanel.value &&
-    msg.role === 'assistant' &&
-    index === lastAssistantDecisionMessageIndex.value &&
-    !!primaryInlineDecision.value
-}
-
-function toggleDecisionQueue() {
-  decisionQueueExpanded.value = !decisionQueueExpanded.value
-  nextTick(scrollToBottom)
-}
-
-function decisionReplyPrefix(topic: string) {
-  return `关于「${topic}」，我选择：`
-}
-
-function splitDecisionOptionsText(value: string) {
-  return value
-    .split(/[、,，]/)
-    .map((item) => item.trim())
-    .filter(Boolean)
-}
-
-function readDecisionSelectionsFromInput(decision: Decision) {
-  const prefix = decisionReplyPrefix(decision.topic)
-  const allowedOptions = new Set(decision.options)
-  const selected: string[] = []
-  inputText.value
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith(prefix))
-    .forEach((line) => {
-      splitDecisionOptionsText(line.slice(prefix.length)).forEach((option) => {
-        if (allowedOptions.has(option) && !selected.includes(option)) {
-          selected.push(option)
-        }
-      })
-    })
-  return selected
-}
-
-function getDecisionSelections(decision: Decision) {
-  return selectedDecisionOptions.value[decision.id] ?? readDecisionSelectionsFromInput(decision)
-}
-
-function isDecisionOptionSelected(decision: Decision, option: string) {
-  return getDecisionSelections(decision).includes(option)
-}
-
-function areAllDecisionOptionsSelected(decision: Decision) {
-  if (!decision.options.length) return false
-  const selected = new Set(getDecisionSelections(decision))
-  return decision.options.every((option) => selected.has(option))
-}
-
-function syncDecisionReplyLine(decision: Decision, selections: string[]) {
-  const prefix = decisionReplyPrefix(decision.topic)
-  const retainedText = inputText.value
-    .split('\n')
-    .filter((line) => !line.trim().startsWith(prefix))
-    .join('\n')
-    .trim()
-  const reply = selections.length ? `${prefix}${selections.join('、')}` : ''
-  inputText.value = [retainedText, reply].filter(Boolean).join('\n')
-}
-
-function toggleDecisionOption(decision: Decision, option: string) {
-  const selected = new Set(getDecisionSelections(decision))
-  if (selected.has(option)) {
-    selected.delete(option)
-  } else {
-    selected.add(option)
-  }
-  const nextSelections = decision.options.filter((candidate) => selected.has(candidate))
-  selectedDecisionOptions.value = {
-    ...selectedDecisionOptions.value,
-    [decision.id]: nextSelections,
-  }
-  syncDecisionReplyLine(decision, nextSelections)
-  nextTick(() => {
-    autoResizeTextarea()
-    inputRef.value?.focus()
-  })
-}
-
-function toggleAllDecisionOptions(decision: Decision) {
-  const nextSelections = areAllDecisionOptionsSelected(decision)
-    ? []
-    : [...decision.options]
-  selectedDecisionOptions.value = {
-    ...selectedDecisionOptions.value,
-    [decision.id]: nextSelections,
-  }
-  syncDecisionReplyLine(decision, nextSelections)
-  nextTick(() => {
-    autoResizeTextarea()
-    inputRef.value?.focus()
-  })
-}
-
-watch(inlinePendingDecisions, (decisions) => {
-  const activeIds = new Set(decisions.map((decision) => decision.id))
-  const nextSelections = Object.fromEntries(
-    Object.entries(selectedDecisionOptions.value).filter(([decisionId]) => activeIds.has(decisionId))
-  )
-  if (Object.keys(nextSelections).length !== Object.keys(selectedDecisionOptions.value).length) {
-    selectedDecisionOptions.value = nextSelections
-  }
-})
 
 const focusQuickInput = () => {
   nextTick(() => {
@@ -2165,9 +1846,7 @@ const inputText = ref('')
 const isTyping = ref(false)
 const sendingMessage = ref(false)
 const streamingAssistantMessageId = ref<number | null>(null)
-type ChatAttachment = { file: File; kind: 'image' | 'file'; previewUrl: string }
-type ChatAttachmentSendStatus = 'sending' | 'sent' | 'answered' | 'failed' | 'ai_failed'
-const pendingChatAttachment = ref<ChatAttachment | null>(null)
+const pendingChatAttachment = ref<{ file: File; kind: 'image' | 'file'; previewUrl: string } | null>(null)
 const canSendMessage = computed(() => (!!inputText.value.trim() || !!pendingChatAttachment.value) && !sendingMessage.value)
 
 const escapeHtml = (value: string) => String(value || '')
@@ -2179,68 +1858,36 @@ const escapeHtml = (value: string) => String(value || '')
 
 const buildUserChatAttachmentContent = (
   text: string,
-  attachment: ChatAttachment,
-  status: ChatAttachmentSendStatus = 'sending'
+  attachment: { file: File; kind: 'image' | 'file'; previewUrl: string }
 ) => {
   const parts: string[] = []
   if (text.trim()) parts.push(escapeHtml(text.trim()))
-  const statusTextMap: Record<ChatAttachmentSendStatus, string> = {
-    sending: '正在上传并发送给 AI...',
-    sent: '已发送给 AI，正在等待回复...',
-    answered: 'AI 已读取并回复',
-    failed: '发送失败，附件已放回输入框，可重新发送',
-    ai_failed: '截图已发送，但 AI 处理失败',
-  }
-  const statusText = statusTextMap[status]
   if (attachment.kind === 'image') {
     parts.push(
-      `<div class="chat-inline-upload status-${status}">
+      `<div class="chat-inline-upload">
       <div class="chat-inline-upload-head">
         <span class="chat-inline-upload-badge">截图</span>
         <span class="chat-inline-upload-name">${escapeHtml(attachment.file.name)}</span>
-        <span class="chat-inline-upload-status">${statusText}</span>
       </div>
       <img class="chat-inline-upload-image" src="${attachment.previewUrl}" alt="${escapeHtml(attachment.file.name)}" />
-      <div class="chat-inline-upload-foot">${statusText}</div>
+      <div class="chat-inline-upload-foot">发送后会带着这张图片一起参与对话</div>
     </div>`
     )
   } else {
     parts.push(
-      `<div class="chat-inline-upload file status-${status}">
+      `<div class="chat-inline-upload file">
         <div class="chat-inline-upload-head">
           <span class="chat-inline-upload-badge">附件</span>
           <span class="chat-inline-upload-name">${escapeHtml(attachment.file.name)}</span>
-          <span class="chat-inline-upload-status">${statusText}</span>
         </div>
         <div class="chat-inline-upload-file-row">
           <span class="chat-inline-upload-file-icon">📄</span>
-          <span class="chat-inline-upload-file-tip">${statusText}</span>
+          <span class="chat-inline-upload-file-tip">发送后会带着这个附件一起参与对话</span>
         </div>
       </div>`
     )
   }
   return parts.join('\n\n')
-}
-
-const setAttachmentMessageStatus = (
-  messageId: number,
-  text: string,
-  attachment: ChatAttachment,
-  status: ChatAttachmentSendStatus
-) => {
-  const target = messages.find(msg => msg.id === messageId)
-  if (target) {
-    target.content = buildUserChatAttachmentContent(text, attachment, status)
-  }
-}
-
-const restorePendingAttachmentForRetry = (text: string, attachment: ChatAttachment) => {
-  pendingChatAttachment.value = attachment
-  inputText.value = text
-  nextTick(() => {
-    autoResizeTextarea()
-    inputRef.value?.focus()
-  })
 }
 
 const triggerChatImageUpload = () => {
@@ -2387,7 +2034,7 @@ const syncBuilderModelFromConversation = async (
     if (conversation.spec_id && syncSpec) {
       try { await specStore.load(conversation.spec_id) }
       catch (e) { console.warn('加载 SPEC 失败:', e) }
-    } else if (syncSpec) {
+    } else {
       specStore.reset()
     }
 
@@ -2665,7 +2312,6 @@ const setActiveView = (view: 'builder' | 'platform' | 'coding') => {
 }
 
 const isGeneratedApplication = (app: any) => {
-  if (deployHasIncomplete.value) return false
   const status = String(app?.status || app?.local_status || '').toLowerCase()
   return Boolean(app?.apaas_app_id || status === 'completed')
 }
@@ -2802,70 +2448,6 @@ resetMessagesToWelcome()
 const scrollToBottom = () => { nextTick(() => { if (messagesRef.value) messagesRef.value.scrollTop = messagesRef.value.scrollHeight }) }
 
 const STREAMING_ASSISTANT_ID = -1
-const INTERRUPTED_RECOVERY_MESSAGE_ID = -2
-const UPDATE_APP_MESSAGE_PREFIX = '【更新应用】'
-
-type InterruptedRecovery = {
-  messageId: number
-  content: string
-}
-
-const interruptedRecovery = ref<InterruptedRecovery | null>(null)
-
-const isResumePayload = (value: unknown): value is InterruptedRecovery =>
-  !!value
-  && typeof value === 'object'
-  && typeof (value as InterruptedRecovery).messageId === 'number'
-  && typeof (value as InterruptedRecovery).content === 'string'
-
-const stripUpdateAppPrefix = (content: string) =>
-  String(content || '').replace(new RegExp(`^${UPDATE_APP_MESSAGE_PREFIX}\\s*`), '').trim()
-
-const removeInterruptedRecoveryMessage = () => {
-  const index = messages.findIndex((msg) => msg.id === INTERRUPTED_RECOVERY_MESSAGE_ID)
-  if (index >= 0) messages.splice(index, 1)
-}
-
-const dismissInterruptedRecovery = () => {
-  interruptedRecovery.value = null
-  removeInterruptedRecoveryMessage()
-}
-
-const shouldShowInterruptedRecovery = (msg: Message) =>
-  msg.id === INTERRUPTED_RECOVERY_MESSAGE_ID && !!interruptedRecovery.value
-
-const maybeAppendInterruptedRecovery = () => {
-  if (!conversationId.value || sendingMessage.value) return
-  removeInterruptedRecoveryMessage()
-  interruptedRecovery.value = null
-
-  const lastPersisted = [...messages].reverse().find((msg) =>
-    msg.id > 0 && (msg.role === 'user' || msg.role === 'assistant')
-  )
-  if (!lastPersisted || lastPersisted.role !== 'user') return
-
-  const content = String(lastPersisted.content || '').trim()
-  if (!content || content.includes('chat-inline-upload') || /\[(上传截图|上传文件)：/.test(content)) return
-
-  interruptedRecovery.value = {
-    messageId: lastPersisted.id,
-    content,
-  }
-  messages.push({
-    id: INTERRUPTED_RECOVERY_MESSAGE_ID,
-    role: 'assistant',
-    agent: currentAgent.value,
-    content: '',
-    created_at: '',
-  })
-  scrollToBottom()
-}
-
-const resumeInterruptedTurn = async () => {
-  const recovery = interruptedRecovery.value
-  if (!recovery || sendingMessage.value) return
-  await sendMessage(recovery)
-}
 
 const isStreamingAssistantMessage = (msg: Message) =>
   msg.role === 'assistant' && msg.id === streamingAssistantMessageId.value
@@ -3232,35 +2814,12 @@ const conversationId = ref<number | null>(null)
 const existingAppId = ref<number | null>(null)  // 从"继续完善"进来时，关联的已有应用ID
 const generating = ref(false)
 
-function activeApplicationIdForChat(): number | null {
-  const candidates = [
-    existingAppId.value,
-    store.currentApp?.id,
-    route.query.app_id,
-  ]
-  for (const candidate of candidates) {
-    const parsed = Number(Array.isArray(candidate) ? candidate[0] : candidate)
-    if (Number.isFinite(parsed) && parsed > 0) return parsed
-  }
-  return null
-}
-
 // ── Requirements mode ──
 const isRequirementsMode = computed(() => currentAgent.value === 'requirements')
 // 独立需求会话进入 SPEC 画布；已有应用详情固定使用构建预览，避免异步历史会话把页面切走。
 const useSpecMode = computed(() => currentAgent.value === 'requirements' && !existingAppId.value)
-const builderSpecDocument = computed(() => {
-  const preview = currentPreviewConfigPayload.value
-  const source = String(preview?.__source || '')
-  const specId = String(preview?.spec_id || '')
-  if (useSpecMode.value || !specStore.current) return null
-  if (source === 'builder_spec') return specStore.current
-  if (specId && specStore.current.id === specId) return specStore.current
-  return null
-})
 const docResultForCard = ref<any>(null)       // doc_result JSON for DesignDocCard
 const generatingDoc = ref(false)               // 正在生成设计文档
-const generatingSpecConfig = ref(false)        // 正在把 SPEC 转成低代码配置预览
 const confirmingDoc = ref(false)               // 正在确认转换配置
 const showEnvSelect = ref(false)
 const selectedEnvId = ref<number | null>(null)
@@ -3376,14 +2935,12 @@ const loadConversation = async (cid: number) => {
           if (linkedApp.id && typeof linkedApp.id === 'number') {
             existingAppId.value = linkedApp.id
           }
-          await restoreSpecFromApplication(linkedApp, linkedApp.config_preview)
         }
       } catch { /* ignore */ }
     }
 
     // 更新 URL
     router.replace(`/chat/${cid}`)
-    maybeAppendInterruptedRecovery()
   } catch (e) {
     console.error('加载对话失败:', e)
     messages.push({ id: 0, role: 'assistant', agent: 'builder', content: '加载对话历史失败，请重试。', created_at: '' })
@@ -3405,35 +2962,6 @@ const startNewConversation = () => {
   currentAgent.value = 'requirements'
   resetMessagesToWelcome()
   router.replace('/chat')
-}
-
-function isFreshBuilderChatRoute() {
-  return route.path === '/chat'
-    && !route.params.id
-    && !route.query.app_id
-    && !route.query.deploy_app_id
-    && !route.query.prompt
-    && !route.query.app_mode
-}
-
-let resettingFreshBuilderChat = false
-
-async function initializeFreshBuilderChatFromRoute() {
-  if (!isFreshBuilderChatRoute() || resettingFreshBuilderChat) return
-  resettingFreshBuilderChat = true
-  try {
-    resetConversationWorkspace()
-    conversationId.value = null
-    selectedConversationId.value = null
-    persistedBuilderModelId.value = null
-    selectedBuilderModelId.value = defaultBuilderModelId.value
-    currentAgent.value = 'requirements'
-    resetMessagesToWelcome()
-    await ensureFreshRequirementsConversation('')
-    fetchConversationList()
-  } finally {
-    resettingFreshBuilderChat = false
-  }
 }
 
 // ── 文档版本 ──
@@ -3896,45 +3424,6 @@ const markUpdateExecutionStage = (stage: string, stepText: string) => {
   })
 }
 
-function resolveBuilderSpecMeta(rawConfig?: any, app?: any) {
-  const data = rawConfig?.data || rawConfig || {}
-  const source = String(rawConfig?.source || data?.__source || '').trim()
-  const specId = String(app?.canonical_spec_id || rawConfig?.spec_id || data?.spec_id || '').trim()
-  return {
-    source: source || (specId ? 'builder_spec' : ''),
-    specId,
-  }
-}
-
-function applyBuilderSpecMeta(rawConfig?: any, app?: any) {
-  const { source, specId } = resolveBuilderSpecMeta(rawConfig, app)
-  if (source) {
-    ;(store.preview as any).__source = source
-  } else {
-    delete (store.preview as any).__source
-  }
-  if (specId) {
-    ;(store.preview as any).spec_id = specId
-  } else {
-    delete (store.preview as any).spec_id
-  }
-  return { source, specId }
-}
-
-async function restoreSpecFromApplication(app?: any, rawConfig?: any) {
-  const { source, specId } = applyBuilderSpecMeta(rawConfig || app?.config_preview, app)
-  if (!specId) {
-    if (!useSpecMode.value && specStore.current) specStore.reset()
-    return
-  }
-  if (source !== 'builder_spec') return
-  if (specStore.current?.id === specId) return
-  await specStore.load(specId)
-  if (!specStore.current) {
-    console.warn('应用关联的 SPEC 加载失败:', specStore.lastError || specId)
-  }
-}
-
 function hydratePreviewFromConfig(rawConfig: any) {
   const data = rawConfig?.data || rawConfig
   if (!data || typeof data !== 'object') return false
@@ -3951,7 +3440,6 @@ function hydratePreviewFromConfig(rawConfig: any) {
   store.preview.workflows = data.workflows || []
   store.preview.permissions = data.permissions || []
   setPreviewCustomDevelopment(data)
-  applyBuilderSpecMeta(rawConfig)
   if (data.appCode) {
     parsedAppCode.value = data.appCode
   }
@@ -4414,9 +3902,6 @@ const activeConflict = ref<ConflictState | null>(null)
 const deployDoneCount = computed(() => deploySteps.value.filter(s => s.status === 'completed').length)
 const deployPercent = computed(() => deploySteps.value.length ? Math.round(deployDoneCount.value / deploySteps.value.length * 100) : 0)
 const deployAllDone = computed(() => deploySteps.value.length > 0 && deployDoneCount.value === deploySteps.value.length)
-const deployHasIncomplete = computed(() =>
-  deploySteps.value.length > 0 && deploySteps.value.some(step => step.status !== 'completed')
-)
 const currentDeployStep = computed(() =>
   deploySteps.value.find(step => step.key === deployExecuting.value) || null
 )
@@ -4487,7 +3972,7 @@ function settleExecutionLogs(level: ExecutionLogItem['level']) {
   const levelLabel = level === 'error' ? '失败' : level === 'success' ? '完成' : '进行中'
   executionLogs.value = executionLogs.value.map((log) => {
     if (log.level !== 'info') return log
-    if (!/^开始自动构建$|^开始执行：/u.test(log.message)) return log
+    if (!/^开始执行创建过程$|^开始执行：/u.test(log.message)) return log
     return {
       ...log,
       level,
@@ -4517,7 +4002,7 @@ function openConflictInConversation(payload: {
     id: Date.now(),
     role: 'assistant',
     agent: 'builder',
-    content: `⚠️ 检测到${payload.modelName}编码冲突：\`${payload.currentCode}\` 已存在。\n\n我先暂停当前构建。你可以确认建议编码 \`${suggestedCode}\`，也可以改成你想要的新编码，确认后我会继续构建。`,
+    content: `⚠️ 检测到${payload.modelName}编码冲突：\`${payload.currentCode}\` 已存在。\n\n我先暂停当前创建过程。你可以确认建议编码 \`${suggestedCode}\`，也可以改成你想要的新编码，确认后我会继续执行。`,
     created_at: new Date().toISOString(),
   })
   scrollToBottom()
@@ -4541,8 +4026,6 @@ function resetConversationWorkspace() {
   store.pendingFile = null
   store.pendingMarkdown = null
   existingAppId.value = null
-  docResultForCard.value = null
-  currentDocPreviewOverride.value = null
   parsedAppCode.value = ''
   loadedAppCode.value = ''
   currentRemoteStatus.value = ''
@@ -4553,26 +4036,15 @@ function resetConversationWorkspace() {
   latestParseMeta.value = null
   parseReady.value = false
   generating.value = false
-  generatingDoc.value = false
-  generatingSpecConfig.value = false
-  confirmingDoc.value = false
-  isDocParsing.value = false
-  docParsingStep.value = ''
-  isApplicationUpdateChatMode.value = false
   showEnvSelect.value = false
   selectedEnvId.value = null
   activeConflict.value = null
   isTyping.value = false
-  inputText.value = ''
-  selectedDecisionOptions.value = {}
-  decisionQueueExpanded.value = false
-  clearPendingChatAttachment()
   showApiLogs.value = false
   apiLogs.value = []
   apiLogFilter.value = ''
 
   activeView.value = 'builder'
-  artifactPanelVisible.value = shouldDefaultOpenArtifactPanel()
   platformIframeUrl.value = ''
   platformIframeKey.value = 0
   platformAppUrl.value = ''
@@ -4624,8 +4096,6 @@ function resetPreviewForNewParse() {
   ;(store.preview as any).flows = []
   store.preview.permissions = []
   ;(store.preview as any).custom_development = []
-  delete (store.preview as any).__source
-  delete (store.preview as any).spec_id
   store.setAppName('', { force: true })
   store.currentApp = null
   latestDocContent.value = ''
@@ -4711,7 +4181,7 @@ function persistDeployError(stepLabel: string, detail: string) {
     id: Date.now(),
     role: 'assistant',
     agent: 'builder',
-    content: `❌ 构建失败\n\n步骤：${stepLabel}\n原因：${detail}`,
+    content: `❌ 执行失败\n\n步骤：${stepLabel}\n原因：${detail}`,
     created_at: new Date().toISOString(),
   })
   scrollToBottom()
@@ -4770,7 +4240,7 @@ async function deployRunAll() {
   resetExecutionLogs()
   deployRunningAll.value = true
   deployLastError.value = ''
-  appendExecutionLog('info', '开始自动构建')
+  appendExecutionLog('info', '开始执行创建过程')
   try {
     for (const s of deploySteps.value) {
       if (s.status === 'completed') continue
@@ -4806,7 +4276,7 @@ async function deployRunAll() {
     }
     deployExecuting.value = null
     settleExecutionLogs('success')
-    appendExecutionLog('success', '全部部署步骤已完成')
+    appendExecutionLog('success', '全部创建步骤已完成')
     ElMessage.success('全部完成！')
   } catch (e: any) {
     const detail = e?.response?.data?.detail || e?.message || '失败'
@@ -4814,7 +4284,7 @@ async function deployRunAll() {
       ElMessage.warning('平台登录已失效，请先重新连接平台环境')
       store.showConnectModal = true
     } else {
-      persistDeployError(currentDeployStep.value?.label || '自动构建', detail)
+      persistDeployError(currentDeployStep.value?.label || '创建过程', detail)
       ElMessage.error(detail)
     }
   } finally {
@@ -4830,55 +4300,13 @@ async function loadDeployStatusAndRunAll() {
   await deployRunAll()
 }
 
-function isRepairableDeployStep(key: string) {
-  return key.startsWith('create_model:') ||
-    key.startsWith('create_form:') ||
-    key.startsWith('create_workflow:') ||
-    key === 'configure_permissions'
-}
-
-async function recoverDeployFlow() {
-  if (!existingAppId.value || deployRunningAll.value || deployExecuting.value !== null) return
-
-  const appId = existingAppId.value
-  activeView.value = 'builder'
-  isApplicationUpdateChatMode.value = false
-  store.showChangePlan = false
-  store.changePlan = null
-  deployAppId.value = appId
-  deployOpen.value = true
-  deployLastError.value = ''
-  resetExecutionLogs(true)
-
-  try {
-    await loadDeployStatus()
-    if (!deploySteps.value.length) {
-      await startDeployFlow()
-      return
-    }
-
-    const repairableSteps = deploySteps.value.filter(step => isRepairableDeployStep(step.key))
-    for (const step of repairableSteps) {
-      await applicationApi.resetStep(appId, step.key)
-    }
-    await loadDeployStatus()
-    appendExecutionLog('info', repairableSteps.length
-      ? `已重置 ${repairableSteps.length} 个模型/表单/权限步骤，准备按当前应用内容增量补跑`
-      : '没有需要重置的模型/表单/权限步骤，准备检查当前构建状态')
-    await deployRunAll()
-  } catch (e: any) {
-    const detail = e?.response?.data?.detail || e?.message || '补跑构建失败'
-    persistDeployError('补跑构建', detail)
-  }
-}
-
 function handleConflict(resp: any, stepKey: string) {
   const c = resp.conflict
   if (stepKey === 'create_app') {
     openConflictInConversation({
       step: stepKey,
       modelName: '应用',
-      currentCode: displayAppCode.value || c.current_code || 'app-builder',
+      currentCode: displayAppCode.value || c.current_code || 'app_builder',
       message: c.message,
       kind: 'app',
       resumeAll: deployRunningAll.value,
@@ -4901,8 +4329,8 @@ async function resolveConflictAndRetry() {
   const c = activeConflict.value
   if (!c.newCode.trim()) { ElMessage.warning('请输入新编码'); return }
   if (c.newCode === c.current_code) { ElMessage.warning('新编码不能和旧编码相同'); return }
-  if (c.kind === 'app' && !isValidAppCode(c.newCode.trim())) {
-    ElMessage.warning(APP_CODE_RULE_TEXT)
+  if (c.kind === 'app' && !/^[a-zA-Z][a-zA-Z0-9\-]*$/.test(c.newCode.trim())) {
+    ElMessage.warning('应用编码只能包含英文字母、数字和连字符(-)，且以字母开头')
     return
   }
 
@@ -4983,87 +4411,22 @@ function cancelConflict() {
   scrollToBottom()
 }
 
-function extractRequestedAppCode(text: string): string {
-  const content = String(text || '').trim()
-  if (!/(应用编码|app[_\s-]?code|编码)/i.test(content)) return ''
-  const patterns = [
-    /(?:改成|改为|换成|设置为|设为|变成|用|叫)\s*[`"'“”‘’]?([A-Za-z0-9_-]{1,64})[`"'“”‘’]?/i,
-    /(?:应用编码|app[_\s-]?code|编码)[^A-Za-z0-9_-]{0,12}([A-Za-z0-9_-]{1,64})/i,
-  ]
-  for (const pattern of patterns) {
-    const match = content.match(pattern)
-    if (match?.[1]) return match[1].trim()
-  }
-  return ''
-}
-
-async function tryHandleAppCodeChatCommand(text: string): Promise<boolean> {
-  const newCode = extractRequestedAppCode(text)
-  if (!newCode) return false
-  if (!isValidAppCode(newCode)) {
-    replaceOrAppendAssistantMessage(APP_CODE_RULE_TEXT)
-    return true
-  }
-
-  const appId = activeApplicationIdForChat()
-  if (!appId) return false
-
-  isTyping.value = false
-  if (activeConflict.value?.kind === 'app') {
-    activeConflict.value.newCode = newCode
-    await resolveConflictAndRetry()
-    return true
-  }
-
-  try {
-    await request.patch(`/applications/${appId}/code`, { app_code: newCode })
-    existingAppId.value = appId
-    loadedAppCode.value = newCode
-    parsedAppCode.value = newCode
-    try {
-      await applicationApi.resetStep(appId, 'create_app')
-      if (deployOpen.value) {
-        deployAppId.value = deployAppId.value || appId
-        await loadDeployStatus()
-      }
-    } catch (e) {
-      console.warn('Reset create_app step after app code update failed', e)
-    }
-    try {
-      await loadLatestDocForApp(appId)
-    } catch (e) {
-      console.warn('Refresh latest doc after app code update failed', e)
-    }
-    messages.push({
-      id: Date.now(),
-      role: 'assistant',
-      agent: currentAgent.value,
-      content: `应用编码已改成 \`${newCode}\`。如果之前卡在创建应用步骤，可以继续点击「开始构建」或重试该步骤。`,
-      created_at: new Date().toISOString(),
-    })
-    scrollToBottom()
-  } catch (e: any) {
-    const detail = e?.response?.data?.detail || e?.message || '更新失败'
-    replaceOrAppendAssistantMessage(`应用编码更新失败：${detail}`)
-  }
-  return true
-}
-
 const startDeployFlow = async () => {
-  // 有 apaas_app_id 只说明已创建平台应用，不代表字典、模型、表单等步骤全部完成。
-  // 先读取生成步骤状态，失败或未完成时直接续跑，不进入“应用更新”流程。
+  // 检查是否已部署到平台（有 apaas_app_id）
   if (existingAppId.value) {
     const existingApp = await applicationApi.get(existingAppId.value)
     if ((existingApp as any).apaas_app_id) {
+      // 先检查是否有未完成的步骤 — 如果有，直接打开部署面板继续
       try {
         const stepStatus = await applicationApi.getStepStatus(existingAppId.value)
         const steps = stepStatus.steps || []
         const hasIncomplete = steps.some((s: any) => s.status !== 'completed')
         if (hasIncomplete) {
-          // 有未完成步骤，直接打开部署面板继续
+          // 有未完成步骤时只打开创建过程，具体补跑由用户点击执行/重试触发。
           deployAppId.value = existingAppId.value
           deployOpen.value = true
-          await loadDeployStatusAndRunAll()
+          deploySteps.value = steps
+          await loadDeployStatus()
           return
         }
       } catch { /* ignore */ }
@@ -6311,17 +5674,6 @@ const isBuildStartIntent = (text: string) => {
     || /^(帮我|给我|麻烦)?(开始|直接)?(创建|构建|搭建|生成|部署)(这个|当前)?(应用|项目|配置)?(吧)?$/.test(compact)
 }
 
-const isBuildRetryIntent = (text: string) => {
-  const normalized = String(text || '').trim().toLowerCase()
-  if (!normalized) return false
-  const compact = normalized.replace(/\s+/g, '')
-  if (!compact || compact.length > 64) return false
-
-  return /(重新|重跑|再跑|补跑|续跑|继续|恢复|retry|rerun).*(生成|构建|部署|创建|流水线|应用|配置)/.test(compact)
-    || /(生成|构建|部署|创建|流水线).*(重新|重跑|再跑|补跑|续跑|继续|恢复|retry|rerun)/.test(compact)
-    || /(刚才|之前|上次).*(失败|中断|没成功).*(继续|重试|再来|重新|补跑)/.test(compact)
-}
-
 const looksLikeGeneratedDesignDoc = (input: string) => {
   const text = String(input || '').trim()
   if (!text) return false
@@ -6429,8 +5781,7 @@ const ensureApplicationUpdateConversation = async () => {
 
 const submitApplicationUpdateMessage = async (
   text: string,
-  attachmentPayload: ChatAttachment | null,
-  options: { resumeFromMessageId?: number } = {}
+  attachmentPayload: { file: File; kind: 'image' | 'file'; previewUrl: string } | null
 ) => {
   if (!existingAppId.value) return
   isTyping.value = false
@@ -6498,7 +5849,6 @@ const submitApplicationUpdateMessage = async (
       conversation_id: conversationId.value,
       selected_llm_config_id: selectedBuilderModelId.value,
       ...(shouldSendInlineDoc ? { current_doc: currentDoc } : {}),
-      ...(options.resumeFromMessageId ? { resume_message_id: options.resumeFromMessageId } : {}),
     })
 
     if (result?.actionable_update === false || result?.type === 'assistant_reply') {
@@ -6567,32 +5917,21 @@ const submitApplicationUpdateMessage = async (
   }
 }
 
-const sendMessage = async (resumePayload?: unknown) => {
-  const resume = isResumePayload(resumePayload) ? resumePayload : null
-  if ((!resume && !canSendMessage.value) || sendingMessage.value) return
+const sendMessage = async () => {
+  if (!canSendMessage.value || sendingMessage.value) return
   sendingMessage.value = true
-  const text = resume ? stripUpdateAppPrefix(resume.content) : inputText.value.trim()
-  const attachmentPayload = resume ? null : pendingChatAttachment.value
-  if (!text && !attachmentPayload) {
-    sendingMessage.value = false
-    return
-  }
-  const userMessageId = resume ? resume.messageId : Date.now()
-  if (resume) {
-    dismissInterruptedRecovery()
-  } else {
-    dismissInterruptedRecovery()
-    inputText.value = ''
-    pendingChatAttachment.value = null
-    messages.push({
-      id: userMessageId,
-      role: 'user',
-      content: attachmentPayload
-        ? buildUserChatAttachmentContent(text, attachmentPayload, 'sending')
-        : text,
-      created_at: ''
-    })
-  }
+  const text = inputText.value.trim()
+  const attachmentPayload = pendingChatAttachment.value
+  inputText.value = ''
+  pendingChatAttachment.value = null
+  messages.push({
+    id: Date.now(),
+    role: 'user',
+    content: attachmentPayload
+      ? buildUserChatAttachmentContent(text, attachmentPayload)
+      : text,
+    created_at: ''
+  })
   scrollToBottom()
   isTyping.value = true
 
@@ -6600,10 +5939,7 @@ const sendMessage = async (resumePayload?: unknown) => {
     await pendingInitialConversationPromise
   }
 
-  const isApplicationUpdateMessage = isApplicationUpdateChatMode.value
-    && isPlatformDeployed.value
-    && !!existingAppId.value
-    && !(attachmentPayload?.kind === 'image')
+  const isApplicationUpdateMessage = isApplicationUpdateChatMode.value && isPlatformDeployed.value && !!existingAppId.value
 
   // 如果还没有对话，先创建
   if (!conversationId.value) {
@@ -6617,33 +5953,13 @@ const sendMessage = async (resumePayload?: unknown) => {
   if (!conversationId.value) {
     isTyping.value = false
     sendingMessage.value = false
-    if (attachmentPayload) {
-      setAttachmentMessageStatus(userMessageId, text, attachmentPayload, 'failed')
-      restorePendingAttachmentForRetry(text, attachmentPayload)
-    }
     messages.push({ id: Date.now(), role: 'assistant', agent: currentAgent.value, content: '创建对话失败，请重试。', created_at: '' })
     scrollToBottom()
     return
   }
 
   if (isApplicationUpdateMessage) {
-    try {
-      await submitApplicationUpdateMessage(text, attachmentPayload, resume ? { resumeFromMessageId: resume.messageId } : {})
-      if (attachmentPayload) {
-        setAttachmentMessageStatus(userMessageId, text, attachmentPayload, 'sent')
-      }
-    } catch (error) {
-      if (attachmentPayload) {
-        setAttachmentMessageStatus(userMessageId, text, attachmentPayload, 'failed')
-        restorePendingAttachmentForRetry(text, attachmentPayload)
-      }
-      console.error('Application update send error:', error)
-      isTyping.value = false
-      sendingMessage.value = false
-      messages.push({ id: Date.now(), role: 'assistant', agent: currentAgent.value, content: '发送失败，请重试。', created_at: '' })
-      scrollToBottom()
-      return
-    }
+    await submitApplicationUpdateMessage(text, attachmentPayload)
     sendingMessage.value = false
     if (chatImageInputRef.value) {
       chatImageInputRef.value.value = ''
@@ -6651,18 +5967,7 @@ const sendMessage = async (resumePayload?: unknown) => {
     return
   }
 
-  if (!attachmentPayload) {
-    const handledAppCodeCommand = await tryHandleAppCodeChatCommand(text)
-    if (handledAppCodeCommand) {
-      sendingMessage.value = false
-      if (chatImageInputRef.value) {
-        chatImageInputRef.value.value = ''
-      }
-      return
-    }
-  }
-
-  const semanticAction = !attachmentPayload ? getRequirementsSemanticAction(text) : null
+  const semanticAction = getRequirementsSemanticAction(text)
   if (semanticAction) {
     isTyping.value = false
     if (semanticAction === 'build') {
@@ -6692,30 +5997,23 @@ const sendMessage = async (resumePayload?: unknown) => {
 
   const shouldStartBuildFromChat = !isRequirementsMode.value
     && !attachmentPayload
-    && (isBuildStartIntent(text) || isBuildRetryIntent(text))
-    && canStartDeployFlow.value
+    && isBuildStartIntent(text)
+    && hasPreviewContent.value
     && !deployAllDone.value
     && !deployRunningAll.value
     && deployExecuting.value === null
 
   if (shouldStartBuildFromChat) {
     isTyping.value = false
-    const isRetryBuild = isBuildRetryIntent(text)
     messages.push({
       id: Date.now(),
       role: 'assistant',
       agent: currentAgent.value,
-      content: isRetryBuild
-        ? '收到，我现在按当前已确认的配置续跑构建。已完成的步骤会保留，只补跑未完成或失败的步骤。'
-        : '收到，我现在开始构建并部署到预览。执行进度会在右侧构建面板里显示。',
+      content: '收到，我现在开始构建并部署到预览。执行进度会在右侧构建面板里显示。',
       created_at: ''
     })
     scrollToBottom()
-    if (isRetryBuild || hasPartialPlatformBuild.value || deployHasIncomplete.value) {
-      await recoverDeployFlow()
-    } else {
-      await startDeployFlow()
-    }
+    await startDeployFlow()
     sendingMessage.value = false
     return
   }
@@ -6739,7 +6037,6 @@ const sendMessage = async (resumePayload?: unknown) => {
     : null
 
   // 调用后端API
-  let requestAccepted = false
   try {
     const token = localStorage.getItem('token')
     const response = attachmentPayload
@@ -6755,8 +6052,8 @@ const sendMessage = async (resumePayload?: unknown) => {
           // chat.py 当 conversation.spec_id 空 + application 有 canonical 时
           // 自动 fork canonical → personal draft，SpecAgent 编辑的是 draft
           {
-            const appIdNum = activeApplicationIdForChat()
-            if (appIdNum) {
+            const appIdNum = Number(store.currentApp?.id)
+            if (Number.isFinite(appIdNum) && appIdNum > 0) {
               formData.append('application_id', String(appIdNum))
             }
           }
@@ -6769,13 +6066,12 @@ const sendMessage = async (resumePayload?: unknown) => {
         })()
       : await (() => {
           const url = `${API_PREFIX}/chat/send`
-          const appIdNum = activeApplicationIdForChat()
+          const appIdNum = Number(store.currentApp?.id)
           const body: Record<string, any> = {
             conversation_id: conversationId.value,
             message: text,
             ...(incrementalConfigPayload ? { current_config: incrementalConfigPayload } : {}),
-            ...(appIdNum ? { application_id: appIdNum } : {}),
-            ...(resume ? { resume_from_message_id: resume.messageId } : {}),
+            ...(Number.isFinite(appIdNum) && appIdNum > 0 ? { application_id: appIdNum } : {}),
           }
           return fetch(url, {
             method: 'POST',
@@ -6785,10 +6081,6 @@ const sendMessage = async (resumePayload?: unknown) => {
         })()
 
     if (!response.ok) throw new Error('发送失败')
-    requestAccepted = true
-    if (attachmentPayload) {
-      setAttachmentMessageStatus(userMessageId, text, attachmentPayload, 'sent')
-    }
 
     const reader = response.body?.getReader()
     const decoder = new TextDecoder()
@@ -6862,9 +6154,6 @@ const sendMessage = async (resumePayload?: unknown) => {
 
           if (normalizedType === 'error') {
             isTyping.value = false
-            if (attachmentPayload) {
-              setAttachmentMessageStatus(userMessageId, text, attachmentPayload, 'ai_failed')
-            }
             const detail = parsed.data || parsed.message || '模型返回异常，请切换模型后重试。'
             const specVersionMismatch = /Spec\s+\S+\s+version mismatch/i.test(String(detail))
             if (specVersionMismatch && specStore.current?.id) {
@@ -6938,9 +6227,6 @@ const sendMessage = async (resumePayload?: unknown) => {
           }
 
           if (normalizedType === 'done') {
-            if (attachmentPayload) {
-              setAttachmentMessageStatus(userMessageId, text, attachmentPayload, 'answered')
-            }
             const lastMsg = messages[messages.length - 1]
             const fallbackMessage = specPatchReceived
               ? '已更新 SPEC，右侧预览已同步。你可以继续确认，或者告诉我下一步要调整什么。'
@@ -7009,21 +6295,10 @@ const sendMessage = async (resumePayload?: unknown) => {
       }
     }
     if (!assistantContent) {
-      if (attachmentPayload) {
-        setAttachmentMessageStatus(userMessageId, text, attachmentPayload, 'ai_failed')
-      }
       replaceOrAppendAssistantMessage('当前模型没有返回内容，请切换模型后再试一次。')
     }
   } catch (error) {
     console.error('Send error:', error)
-    if (attachmentPayload) {
-      if (requestAccepted) {
-        setAttachmentMessageStatus(userMessageId, text, attachmentPayload, 'ai_failed')
-      } else {
-        setAttachmentMessageStatus(userMessageId, text, attachmentPayload, 'failed')
-        restorePendingAttachmentForRetry(text, attachmentPayload)
-      }
-    }
     replaceOrAppendAssistantMessage('发送失败，请重试。')
   } finally {
     streamingAssistantMessageId.value = null
@@ -7184,108 +6459,6 @@ const triggerFullBuildPipeline = async () => {
     ElMessage.error('生成失败: ' + (e.message || '未知错误'))
   } finally {
     generatingDoc.value = false
-    scrollToBottom()
-  }
-}
-
-const generateConfigFromSpec = async () => {
-  if (!specStore.current || generatingSpecConfig.value) return
-
-  if (!conversationId.value) {
-    await createConversation()
-  }
-  if (!conversationId.value) {
-    ElMessage.error('缺少对话上下文，无法生成配置')
-    return
-  }
-
-  generatingSpecConfig.value = true
-  const progressMsgId = Date.now()
-  messages.push({
-    id: progressMsgId,
-    role: 'assistant',
-    agent: 'requirements',
-    content: '正在把已确认的设计文档转换为低代码配置预览...',
-    created_at: '',
-  })
-  scrollToBottom()
-
-  try {
-    const config = await specStore.generateConfig()
-    if (!config) throw new Error('未能生成配置预览')
-
-    const previewPayload = buildSpecPreviewPayload(config)
-    ;(previewPayload as any).__source = 'builder_spec'
-    ;(previewPayload as any).spec_id = specStore.current?.id
-    const appName = previewPayload.appName || '新应用'
-    const appCode = buildAppCode(appName)
-
-    await conversationApi.updateAgentType(conversationId.value, 'builder')
-    currentAgent.value = 'builder'
-
-    store.preview = {
-      appName,
-      roles: previewPayload.roles || [],
-      dicts: previewPayload.dicts || [],
-      models: previewPayload.models || [],
-      forms: previewPayload.forms || [],
-      workflows: previewPayload.workflows || [],
-      permissions: previewPayload.permissions || [],
-      custom_development: [],
-    }
-    ;(store.preview as any).__source = 'builder_spec'
-    ;(store.preview as any).spec_id = specStore.current?.id
-    ;(store.preview as any).flows = []
-    parsedAppCode.value = appCode
-    loadedAppCode.value = appCode
-    parseReady.value = true
-    syncCurrentDocFromPreview(
-      '已确认的 SPEC 设计文档',
-      specToMarkdown(specStore.current) || buildDocMarkdownFromPreview(previewPayload)
-    )
-
-    const created = await applicationApi.create({
-      conversation_id: conversationId.value,
-      project_id: activeProjectId.value,
-      app_name: appName,
-      app_code: appCode,
-      config_preview: {
-        type: 'preview',
-        source: 'builder_spec',
-        spec_id: specStore.current?.id,
-        data: previewPayload,
-      },
-      canonical_spec_id: specStore.current?.id,
-    })
-
-    existingAppId.value = created.id
-    store.setAppName(appName)
-    store.currentApp = { status: 'ready' }
-    artifactPanelVisible.value = true
-
-    const progressMsg = messages.find(msg => msg.id === progressMsgId)
-    if (progressMsg) {
-      progressMsg.agent = 'builder'
-      progressMsg.content = `配置预览已生成！已提取 ${previewPayload.models.length} 个模型、${previewPayload.forms.length} 张表单、${previewPayload.roles.length} 个角色。\n\n下一步检查右侧配置预览，确认无误后点击「开始构建」部署到预览环境。`
-    }
-
-    router.replace({
-      path: `/chat/${conversationId.value}`,
-      query: {
-        app_id: String(created.id),
-        ...(activeProjectId.value ? { project_id: String(activeProjectId.value) } : {}),
-      },
-    })
-    fetchConversationList()
-    ElMessage.success('配置预览已生成')
-  } catch (e: any) {
-    const progressMsg = messages.find(msg => msg.id === progressMsgId)
-    if (progressMsg) {
-      progressMsg.content = `配置生成失败：${e?.response?.data?.detail || e?.message || '请稍后重试'}`
-    }
-    ElMessage.error('配置生成失败: ' + (e?.response?.data?.detail || e?.message || '未知错误'))
-  } finally {
-    generatingSpecConfig.value = false
     scrollToBottom()
   }
 }
@@ -7724,41 +6897,6 @@ function buildGeneratedPreviewPayload(appConfig: any, docResult: any) {
   }
 }
 
-function buildSpecPreviewPayload(config: any) {
-  const models = Array.isArray(config?.models) ? config.models : []
-  const generatedForms = models
-    .filter((model: any) => !/sub|child|子表/.test(String(model?.table_type || model?.type || '').toLowerCase()))
-    .map((model: any, index: number) => ({
-      name: model?.name || `表单${index + 1}`,
-      formName: model?.name || `表单${index + 1}`,
-      formCode: model?.formCode || model?.form_code || model?.code || `form_${index + 1}`,
-      modelCode: model?.code || `model_${index + 1}`,
-      components: Array.isArray(model?.fields)
-        ? model.fields.map((field: any) => ({
-            code: field?.code,
-            label: field?.name || field?.code,
-            name: field?.name || field?.code,
-            modelField: `${model?.code || ''}.${field?.code || ''}`,
-            componentType: field?.type || '单行输入',
-            required: !!field?.required,
-          }))
-        : [],
-    }))
-
-  return {
-    __source: 'builder_spec',
-    spec_id: specStore.current?.id,
-    appName: config?.appName || '',
-    roles: Array.isArray(config?.roles) ? config.roles : [],
-    dicts: Array.isArray(config?.dicts) ? config.dicts : [],
-    models,
-    forms: Array.isArray(config?.forms) && config.forms.length ? config.forms : generatedForms,
-    workflows: Array.isArray(config?.workflows) ? config.workflows : [],
-    permissions: Array.isArray(config?.permissions) ? config.permissions : [],
-    custom_development: [],
-  }
-}
-
 function isActionableCustomDev(item: CustomDevelopmentItem) {
   const type = String(item.type || '').trim().toLowerCase()
   const text = `${item.type} ${item.name} ${item.trigger} ${item.scope}`.toLowerCase()
@@ -8181,15 +7319,6 @@ const getRenderableContentText = (input: string) => {
   return text.replace(/\n{3,}/g, '\n\n').trim()
 }
 
-const stripLegacyDecisionPromptBlocks = (input: string) =>
-  String(input || '')
-    .replace(
-      /(?:^|\n)我需要你确认(?:一个关键点| \d+ 个关键点)：[\s\S]*?你直接在对话里回答即可，我会同步更新右侧 SPEC。/g,
-      '\n'
-    )
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
-
 const normalizeLoadedAssistantContent = (input: string) => {
   const cleaned = getRenderableContentText(input)
   if (!cleaned) return ''
@@ -8202,53 +7331,9 @@ const normalizeLoadedAssistantContent = (input: string) => {
   return cleaned
 }
 
-const renderFormattedText = (input: string, shouldEscape = false) => {
-  const safeText = shouldEscape ? escapeHtml(input) : input
-  return safeText
-    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\n/g, '<br>')
-    .replace(/• /g, '<span style="color:#818cf8;margin-right:4px">•</span> ')
-}
-
 const formatContent = (t: string) => {
   const text = getRenderableContentText(t)
-  return renderFormattedText(text)
-}
-
-const buildHistoricalUploadContent = (label: '截图' | '附件', fileName: string) => {
-  const isImage = label === '截图'
-  return `<div class="chat-inline-upload ${isImage ? '' : 'file'} status-sent historical">
-    <div class="chat-inline-upload-head">
-      <span class="chat-inline-upload-badge">${label}</span>
-      <span class="chat-inline-upload-name">${escapeHtml(fileName)}</span>
-      <span class="chat-inline-upload-status">已发送</span>
-    </div>
-    <div class="chat-inline-upload-foot">${isImage ? '截图已发送给 AI，历史记录仅保留文件名' : '附件已发送给 AI，历史记录仅保留文件名'}</div>
-  </div>`
-}
-
-const formatUserMessageContent = (content: string) => {
-  const rawSource = String(content || '')
-  const raw = rawSource.startsWith(UPDATE_APP_MESSAGE_PREFIX)
-    ? stripUpdateAppPrefix(rawSource)
-    : rawSource
-  if (raw.includes('chat-inline-upload')) return formatContent(raw)
-
-  const uploadCards: string[] = []
-  const plainText = raw.replace(/\n*\[(上传截图|上传文件)：([^\]]+)\]\n*/g, (_match, tag: string, fileName: string) => {
-    uploadCards.push(buildHistoricalUploadContent(tag === '上传截图' ? '截图' : '附件', fileName))
-    return '\n'
-  })
-  const text = getRenderableContentText(plainText)
-  return [text ? renderFormattedText(text, true) : '', ...uploadCards].filter(Boolean).join('\n\n')
-}
-
-const formatMessageContent = (msg: Message) => {
-  if (msg.role === 'user') return formatUserMessageContent(msg.content)
-  const content = msg.role === 'assistant'
-    ? stripLegacyDecisionPromptBlocks(msg.content)
-    : msg.content
-  return formatContent(content)
+  return text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>').replace(/• /g, '<span style="color:#818cf8;margin-right:4px">•</span> ')
 }
 
 let pendingInitialConversationPromise: Promise<void> | null = null
@@ -8409,7 +7494,6 @@ onMounted(async () => {
             }
           }
         }
-        await restoreSpecFromApplication(app, app.config_preview)
         enterGeneratedApplicationWorkspace(app)
         console.log(`Loaded app ${aid}: ${app.app_name}`)
       } catch (e) {
@@ -8479,7 +7563,6 @@ onMounted(async () => {
                 await refreshCurrentAppRemoteMeta(linkedApp.id)
                 const docVersionPayload = await loadLatestDocForApp(linkedApp.id)
                 await restorePendingChangePlan(linkedApp.id, docVersionPayload)
-                await restoreSpecFromApplication(linkedApp, linkedApp.config_preview)
                 // 更新 URL 为 app_id 模式
                 router.replace({ path: '/chat', query: { app_id: String(linkedApp.id) } })
                 console.log('Migrated to app-centric URL:', linkedApp.id)
@@ -8550,7 +7633,6 @@ onMounted(async () => {
             }
           }
         }
-        await restoreSpecFromApplication(app, app.config_preview)
       } catch { /* ignore */ }
     }
   }
@@ -8610,7 +7692,6 @@ onMounted(async () => {
   // 同步对话历史选中
   if (conversationId.value) {
     selectedConversationId.value = conversationId.value
-    maybeAppendInterruptedRecovery()
   } else {
     selectedBuilderModelId.value = defaultBuilderModelId.value
   }
@@ -8620,12 +7701,6 @@ onMounted(async () => {
 
   // 加载应用计数
   fetchAppCount()
-})
-
-// 从应用详情 / 历史对话点击左侧 AI-Builder 入口时，路由会变成干净的 /chat。
-// ChatPage 组件实例不会卸载，所以必须主动清掉上一个应用的半成品上下文。
-watch(() => route.fullPath, async () => {
-  await initializeFreshBuilderChatFromRoute()
 })
 
 // ── 监听 route.query.app_id 变化，实现侧栏点击切换应用 ──
@@ -8645,8 +7720,6 @@ watch(() => route.query.app_id, async (newAppId, oldAppId) => {
   ;(store.preview as any).flows = []
   store.preview.permissions = []
   ;(store.preview as any).custom_development = []
-  delete (store.preview as any).__source
-  delete (store.preview as any).spec_id
   store.setAppName('', { force: true })
   store.currentApp = null
   parsedAppCode.value = ''
@@ -8701,18 +7774,13 @@ watch(() => route.query.app_id, async (newAppId, oldAppId) => {
           for (const msg of historyMessages) {
             if (msg.role === 'system') continue
             if (msg.role === 'assistant' && isAutoDocSummaryMessage(msg.content)) continue
-            const normalizedContent = msg.role === 'assistant'
-              ? normalizeLoadedAssistantContent(msg.content)
-              : msg.content
-            messages.push({ id: msg.id, role: msg.role as any, agent: msg.role === 'assistant' ? 'builder' : undefined, content: normalizedContent, created_at: msg.created_at })
+            messages.push({ id: msg.id, role: msg.role as any, agent: msg.role === 'assistant' ? 'builder' : undefined, content: msg.content, created_at: msg.created_at })
           }
           scrollToBottom()
         }
       }
     }
-    await restoreSpecFromApplication(app, app.config_preview)
     enterGeneratedApplicationWorkspace(app)
-    maybeAppendInterruptedRecovery()
   } catch (e) {
     console.error('Failed to switch app:', e)
   }
@@ -9439,21 +8507,6 @@ watch(conversationId, (id) => {
   border: 1px solid rgba(255, 255, 255, 0.18);
   max-width: min(320px, 100%);
 }
-.chat-inline-upload.status-sending {
-  border-color: rgba(255, 255, 255, 0.28);
-}
-.chat-inline-upload.status-sent,
-.chat-inline-upload.status-answered {
-  border-color: rgba(125, 211, 252, 0.34);
-}
-.chat-inline-upload.status-failed,
-.chat-inline-upload.status-ai_failed {
-  border-color: rgba(252, 165, 165, 0.56);
-  background: rgba(248, 113, 113, 0.14);
-}
-.chat-inline-upload.historical {
-  background: rgba(255, 255, 255, 0.1);
-}
 .chat-inline-upload.file {
   padding: 12px;
 }
@@ -9491,18 +8544,6 @@ watch(conversationId, (id) => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-.chat-inline-upload-status {
-  margin-left: auto;
-  flex-shrink: 0;
-  font-size: 11px;
-  font-weight: 600;
-  opacity: 0.78;
-}
-.chat-inline-upload.status-failed .chat-inline-upload-status,
-.chat-inline-upload.status-ai_failed .chat-inline-upload-status {
-  color: #fecaca;
-  opacity: 1;
 }
 .chat-inline-upload-image {
   display: block;
@@ -12557,193 +11598,6 @@ watch(conversationId, (id) => {
   padding: 18px 14px 14px;
 }
 
-.decision-turn-card {
-  display: grid;
-  gap: 9px;
-  margin-top: 12px;
-  padding: 12px;
-  border: 1px solid #d8e0ec;
-  border-radius: 10px;
-  background: #f8fafc;
-}
-
-.interrupted-recovery-card {
-  display: grid;
-  gap: 10px;
-  margin-top: 12px;
-  padding: 12px;
-  border: 1px solid #bfdbfe;
-  border-radius: 10px;
-  background: #eff6ff;
-}
-
-.interrupted-recovery-card strong {
-  display: block;
-  color: #1e3a8a;
-  font-size: 13px;
-  line-height: 1.35;
-}
-
-.interrupted-recovery-card p {
-  margin: 4px 0 0;
-  color: #52637a;
-  font-size: 12px;
-  line-height: 1.55;
-}
-
-.interrupted-recovery-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.interrupted-recovery-actions button {
-  min-height: 30px;
-  padding: 5px 11px;
-  border: 1px solid #cbd5e1;
-  border-radius: 8px;
-  background: #fff;
-  color: #1f2937;
-  font-size: 12px;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.interrupted-recovery-actions button.primary {
-  border-color: #4f63ff;
-  background: #4f63ff;
-  color: #fff;
-}
-
-.interrupted-recovery-actions button:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-
-.decision-turn-head,
-.decision-turn-meta,
-.decision-queue-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.decision-turn-head {
-  justify-content: space-between;
-}
-
-.decision-turn-kicker {
-  color: #647085;
-  font-size: 11px;
-  font-weight: 800;
-  line-height: 1.2;
-}
-
-.decision-turn-tag,
-.decision-queue-title span {
-  display: inline-flex;
-  align-items: center;
-  height: 20px;
-  padding: 0 7px;
-  border-radius: 999px;
-  background: #fff4cc;
-  color: #8a5a00;
-  font-size: 11px;
-  font-weight: 800;
-  white-space: nowrap;
-}
-
-.decision-turn-title {
-  color: #111827;
-  font-size: 14px;
-  line-height: 1.35;
-}
-
-.decision-turn-why,
-.decision-queue-item p {
-  margin: 0;
-  color: #647085;
-  font-size: 12px;
-  line-height: 1.55;
-}
-
-.decision-turn-options,
-.decision-queue-options {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 7px;
-}
-
-.decision-turn-options button,
-.decision-queue-options button,
-.decision-queue-toggle {
-  max-width: 100%;
-  min-height: 30px;
-  padding: 5px 10px;
-  border: 1px solid #cbd5e1;
-  border-radius: 8px;
-  background: #fff;
-  color: #111827;
-  font-size: 12px;
-  line-height: 1.35;
-  text-align: left;
-  cursor: pointer;
-  transition: border-color 0.15s, background 0.15s, color 0.15s;
-}
-
-.decision-turn-options button:hover,
-.decision-queue-options button:hover,
-.decision-queue-toggle:hover {
-  border-color: #8fa2ff;
-  background: #f2f5ff;
-  color: #3548d4;
-}
-
-.decision-turn-options button.selected,
-.decision-queue-options button.selected {
-  border-color: #536dfe;
-  background: #eef2ff;
-  color: #3143d0;
-  box-shadow: inset 0 0 0 1px rgba(83, 109, 254, 0.22);
-}
-
-.decision-turn-options button.select-all,
-.decision-queue-options button.select-all {
-  font-weight: 800;
-}
-
-.decision-queue-toggle {
-  min-height: 24px;
-  padding: 3px 8px;
-  color: #647085;
-}
-
-.decision-queue-list {
-  display: grid;
-  gap: 8px;
-  padding-top: 4px;
-}
-
-.decision-queue-item {
-  display: grid;
-  gap: 7px;
-  padding: 9px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.72);
-}
-
-.decision-queue-title {
-  justify-content: space-between;
-}
-
-.decision-queue-title strong {
-  min-width: 0;
-  color: #111827;
-  font-size: 12px;
-  line-height: 1.35;
-}
-
 .bubble-content {
   border-radius: 10px;
   font-size: 13px;
@@ -13668,67 +12522,6 @@ watch(conversationId, (id) => {
 </style>
 
 <style>
-.chat-page .bubble-content .chat-inline-upload {
-  width: min(260px, 100%) !important;
-  max-width: min(260px, 100%) !important;
-  margin-top: 8px !important;
-  padding: 9px !important;
-  border-radius: 12px !important;
-  overflow: hidden !important;
-  box-sizing: border-box !important;
-}
-
-.chat-page .bubble-content .chat-inline-upload-head {
-  display: flex !important;
-  align-items: center !important;
-  gap: 6px !important;
-  min-width: 0 !important;
-  margin-bottom: 8px !important;
-}
-
-.chat-page .bubble-content .chat-inline-upload-badge,
-.chat-page .bubble-content .chat-inline-upload-status {
-  flex-shrink: 0 !important;
-  font-size: 11px !important;
-  line-height: 18px !important;
-}
-
-.chat-page .bubble-content .chat-inline-upload-name {
-  min-width: 0 !important;
-  overflow: hidden !important;
-  text-overflow: ellipsis !important;
-  white-space: nowrap !important;
-  font-size: 12px !important;
-}
-
-.chat-page .bubble-content .chat-inline-upload-status {
-  margin-left: auto !important;
-  opacity: 0.76 !important;
-}
-
-.chat-page .bubble-content .chat-inline-upload-image {
-  display: block !important;
-  width: 100% !important;
-  height: 150px !important;
-  max-width: 100% !important;
-  max-height: 150px !important;
-  border-radius: 9px !important;
-  object-fit: cover !important;
-  object-position: top left !important;
-  box-sizing: border-box !important;
-}
-
-.chat-page .bubble-content .chat-inline-upload-foot {
-  margin-top: 7px !important;
-  font-size: 11px !important;
-  line-height: 1.45 !important;
-  opacity: 0.78 !important;
-}
-
-.chat-page .bubble-content .chat-inline-upload-file-row {
-  min-height: 38px !important;
-}
-
 html[data-theme="dark"] .chat-page,
 html[data-theme="dark"] .content-area,
 html[data-theme="dark"] .builder-content,
@@ -13985,79 +12778,6 @@ html[data-theme="dark"] .builder-workbench {
 
 html[data-theme="dark"] .messages {
   background: #111318 !important;
-}
-
-html[data-theme="dark"] .decision-turn-card {
-  background: #151922 !important;
-  border-color: rgba(148, 163, 184, 0.16) !important;
-}
-
-html[data-theme="dark"] .interrupted-recovery-card {
-  background: rgba(37, 45, 66, 0.82) !important;
-  border-color: rgba(124, 140, 255, 0.34) !important;
-}
-
-html[data-theme="dark"] .interrupted-recovery-card strong {
-  color: rgba(248, 250, 252, 0.94) !important;
-}
-
-html[data-theme="dark"] .interrupted-recovery-card p {
-  color: rgba(203, 213, 225, 0.68) !important;
-}
-
-html[data-theme="dark"] .interrupted-recovery-actions button {
-  background: #111318 !important;
-  border-color: rgba(148, 163, 184, 0.18) !important;
-  color: rgba(248, 250, 252, 0.88) !important;
-}
-
-html[data-theme="dark"] .interrupted-recovery-actions button.primary {
-  background: #7c8cff !important;
-  border-color: #7c8cff !important;
-  color: #ffffff !important;
-}
-
-html[data-theme="dark"] .decision-turn-kicker,
-html[data-theme="dark"] .decision-turn-why,
-html[data-theme="dark"] .decision-queue-item p,
-html[data-theme="dark"] .decision-queue-toggle {
-  color: rgba(203, 213, 225, 0.68) !important;
-}
-
-html[data-theme="dark"] .decision-turn-title,
-html[data-theme="dark"] .decision-queue-title strong,
-html[data-theme="dark"] .decision-turn-options button,
-html[data-theme="dark"] .decision-queue-options button {
-  color: rgba(248, 250, 252, 0.92) !important;
-}
-
-html[data-theme="dark"] .decision-turn-tag,
-html[data-theme="dark"] .decision-queue-title span {
-  background: rgba(245, 158, 11, 0.16) !important;
-  color: #f6c56f !important;
-}
-
-html[data-theme="dark"] .decision-turn-options button,
-html[data-theme="dark"] .decision-queue-options button,
-html[data-theme="dark"] .decision-queue-toggle,
-html[data-theme="dark"] .decision-queue-item {
-  background: #111318 !important;
-  border-color: rgba(148, 163, 184, 0.16) !important;
-}
-
-html[data-theme="dark"] .decision-turn-options button:hover,
-html[data-theme="dark"] .decision-queue-options button:hover,
-html[data-theme="dark"] .decision-queue-toggle:hover {
-  background: rgba(124, 140, 255, 0.12) !important;
-  border-color: rgba(124, 140, 255, 0.34) !important;
-  color: #b6c2ff !important;
-}
-
-html[data-theme="dark"] .decision-turn-options button.selected,
-html[data-theme="dark"] .decision-queue-options button.selected {
-  background: rgba(124, 140, 255, 0.18) !important;
-  border-color: rgba(124, 140, 255, 0.58) !important;
-  color: #c8d0ff !important;
 }
 
 html[data-theme="dark"] .bubble-content.assistant {

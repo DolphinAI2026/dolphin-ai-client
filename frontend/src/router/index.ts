@@ -124,12 +124,6 @@ const router = createRouter({
       meta: { requiresAuth: true, navExpanded: true }
     },
     {
-      path: '/coding-v2/:conversationId?',
-      name: 'CodingV2',
-      component: () => import('@/views/coding-v2/CodingPageV2.vue'),
-      meta: { requiresAuth: true, navExpanded: true }
-    },
-    {
       path: '/work/:appId',
       name: 'WorkspaceShell',
       redirect: to => ({ path: '/chat', query: { app_id: String(to.params.appId) } }),

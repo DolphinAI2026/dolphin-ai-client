@@ -278,7 +278,7 @@ async function cleanupHiddenWorkspaces() {
 
 function statusMeta(workspace: OnlineCodingWorkspace) {
   const status = workspace.status
-  if (status === 'repo_imported' && isEmptyImported(workspace)) return { label: '空仓库', tone: 'success' }
+  if (status === 'repo_imported' && !isUsableImported(workspace)) return { label: '空仓库', tone: 'danger' }
   if (status === 'repo_imported') return { label: '已导入', tone: 'success' }
   if (status === 'import_failed') return { label: '需处理', tone: 'danger' }
   if (status === 'repo_importing') return { label: '导入中', tone: 'active' }
@@ -335,23 +335,19 @@ function workspaceRank(workspace: OnlineCodingWorkspace) {
 }
 
 function isDisposableWorkspace(workspace: OnlineCodingWorkspace) {
-  return !isUsableImported(workspace) && workspace.status !== 'repo_imported'
+  return !isUsableImported(workspace)
 }
 
 function canRemoveWorkspace(workspace: OnlineCodingWorkspace) {
-  return !isUsableImported(workspace) && workspace.status !== 'repo_imported'
+  return !isUsableImported(workspace)
 }
 
 function isUsableImported(workspace: OnlineCodingWorkspace) {
-  return workspace.status === 'repo_imported'
-}
-
-function isEmptyImported(workspace: OnlineCodingWorkspace) {
-  return workspace.status === 'repo_imported' && (workspace.file_count || workspace.files?.length || 0) <= 0
+  return workspace.status === 'repo_imported' && (workspace.file_count || workspace.files?.length || 0) > 0
 }
 
 function needsAttention(workspace: OnlineCodingWorkspace) {
-  return workspace.status === 'import_failed'
+  return workspace.status === 'import_failed' || (workspace.status === 'repo_imported' && !isUsableImported(workspace))
 }
 
 function workspaceTitle(workspace: OnlineCodingWorkspace) {
@@ -360,9 +356,9 @@ function workspaceTitle(workspace: OnlineCodingWorkspace) {
 }
 
 function workspaceActionLabel(workspace: OnlineCodingWorkspace) {
-  if (isEmptyImported(workspace)) return '进入并初始化'
   if (isUsableImported(workspace)) return '进入 AI 工作台'
   if (workspace.status === 'import_failed') return '处理'
+  if (workspace.status === 'repo_imported') return '重新处理'
   return '继续导入'
 }
 

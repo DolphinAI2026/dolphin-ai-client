@@ -1,6 +1,6 @@
 import axios from 'axios'
 import type { AxiosInstance, AxiosResponse } from 'axios'
-import { extractErrorMessage, isApaasTokenError } from './errorHandler'
+import { isApaasTokenError } from './errorHandler'
 
 /** API 路径前缀：本地开发固定走 Vite 代理 `/api`，生产环境跟随 base */
 export const API_PREFIX = import.meta.env.DEV
@@ -34,7 +34,12 @@ request.interceptors.response.use(
   (error) => {
     const status = error.response?.status
     const reqUrl = String(error.config?.url || '')
-    const errorDetail = extractErrorMessage(error)
+    const errorDetail = String(
+      error.response?.data?.detail ||
+      error.response?.data?.message ||
+      error.response?.data?.error ||
+      ''
+    )
     const isAuthRequest =
       reqUrl.includes('/auth/login') ||
       reqUrl.includes('/auth/select-tenant')

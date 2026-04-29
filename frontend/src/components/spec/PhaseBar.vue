@@ -15,11 +15,8 @@ interface PhaseStep {
 
 const steps = computed<PhaseStep[]>(() => {
   const p = spec.phase ?? 'gathering'
-  const c = spec.completeness
-  const draftConfirmed = !!c && c.total > 0 && c.confirmed >= c.total && c.blocking_decisions === 0
-  const effectivePhase: Phase = p === 'drafting' && draftConfirmed ? 'generating' : p
   const order: Phase[] = ['gathering', 'drafting', 'generating', 'ready']
-  const currentIdx = order.indexOf(effectivePhase)
+  const currentIdx = order.indexOf(p)
   return [
     {
       key: 'gathering' as Phase,
@@ -39,7 +36,7 @@ const steps = computed<PhaseStep[]>(() => {
       status: currentIdx >= 2 ? (currentIdx > 2 ? 'done' : 'active') : 'pending',
       clickable: false, // generating runs only when SPEC complete
     },
-    { key: 'review', label: '验证确认', status: currentIdx > 2 ? 'active' : 'pending', clickable: false },
+    { key: 'review', label: '验证确认', status: currentIdx > 2 ? 'done' : 'pending', clickable: false },
     { key: 'deploy', label: '部署', status: 'pending', clickable: false },
   ]
 })

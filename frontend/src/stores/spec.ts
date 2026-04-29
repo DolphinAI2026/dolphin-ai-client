@@ -43,28 +43,6 @@ export const useSpecStore = defineStore('spec', () => {
     }
   }
 
-  async function confirmAll() {
-    if (!current.value) return
-    try {
-      current.value = await specApi.confirmAll(current.value.id)
-    } catch (e: unknown) {
-      lastError.value = e instanceof Error ? e.message : String(e)
-      throw e
-    }
-  }
-
-  async function generateConfig() {
-    if (!current.value) return null
-    try {
-      const resp = await specApi.generateConfig(current.value.id)
-      current.value = resp.spec
-      return resp.config
-    } catch (e: unknown) {
-      lastError.value = e instanceof Error ? e.message : String(e)
-      throw e
-    }
-  }
-
   async function updateItem(
     type: ItemType,
     code: string,
@@ -102,8 +80,6 @@ export const useSpecStore = defineStore('spec', () => {
     load,
     create,
     transitionPhase,
-    confirmAll,
-    generateConfig,
     updateItem,
     applyPatch,
     reset,

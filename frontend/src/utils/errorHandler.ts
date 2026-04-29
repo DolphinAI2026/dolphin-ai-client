@@ -34,24 +34,6 @@ export interface HandleErrorOptions {
   silent?: boolean
 }
 
-function stringifyErrorValue(value: unknown): string {
-  if (value == null) return ''
-  if (typeof value === 'string') return value
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
-
-  const record = value as Record<string, unknown>
-  for (const key of ['detail', 'message', 'error', 'reason', 'msg']) {
-    const nested = stringifyErrorValue(record?.[key])
-    if (nested) return nested
-  }
-
-  try {
-    return JSON.stringify(value)
-  } catch {
-    return String(value)
-  }
-}
-
 /**
  * 从任意错误对象中提取可读文案。
  *
@@ -71,13 +53,19 @@ export function extractErrorMessage(err: unknown): string {
   // axios 错误优先级最高
   const data = e?.response?.data
   if (data) {
-    const message = stringifyErrorValue(data)
-    if (message) return message
+    if (typeof data === 'string') return data
+    if (data.detail) return String(data.detail)
+    if (data.message) return String(data.message)
+    if (data.error) return String(data.error)
   }
 
   if (e?.message) return String(e.message)
 
-  return stringifyErrorValue(err)
+  try {
+    return JSON.stringify(err)
+  } catch {
+    return String(err)
+  }
 }
 
 /**

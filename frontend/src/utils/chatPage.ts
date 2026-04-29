@@ -3,7 +3,6 @@
  * 无 Vue/reactive/store 依赖。
  */
 import { resolveComponentLabel } from '@/utils/componentTypes'
-import { APP_CODE_MAX_LENGTH, normalizeAppCode } from '@/utils/app'
 
 // ── 文档解析元数据 ─────────────────────────────────────
 export function formatParseMetaSummary(meta: any): string {
@@ -68,16 +67,15 @@ export function isAutoDocSummaryMessage(content: string): boolean {
 }
 
 // ── 冲突编码推荐 ──────────────────────────────────────
-/** 编码冲突时建议下一个可用编码：code-v1 → code-v2；无版本号则补 -v1。 */
+/** 编码冲突时建议下一个可用编码：codeV1 → codeV2 → …；无版本号则补 V1。 */
 export function suggestNextConflictCode(code: string): string {
-  const source = normalizeAppCode(String(code || '').trim()) || 'code'
-  const matched = source.match(/^(.*?)-v(\d+)$/)
+  const source = String(code || '').trim()
+  if (!source) return 'codeV1'
+  const matched = source.match(/^(.*?)(?:V(\d+))$/i)
   if (matched) {
     const prefix = matched[1] || source
     const version = Number(matched[2] || '0')
-    const suffix = `-v${version + 1}`
-    return `${prefix.slice(0, APP_CODE_MAX_LENGTH - suffix.length).replace(/-+$/g, '')}${suffix}`
+    return `${prefix}V${version + 1}`
   }
-  const suffix = '-v1'
-  return `${source.slice(0, APP_CODE_MAX_LENGTH - suffix.length).replace(/-+$/g, '')}${suffix}`
+  return `${source}V1`
 }

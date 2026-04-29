@@ -37,7 +37,7 @@ export interface PipelineDeps {
   stream: StreamDeps
   ide: IdeDeps
   workspace: WorkspaceDeps
-  /** 组件级场景选择 ref（仅用于建议示例分组展示；实际场景由 LLM 从 message 识别） */
+  /** 组件级场景选择 ref（首次消息用） */
   activeSceneCategory: Ref<string>
   pendingSceneCategory: Ref<string | null>
   sceneCategoryToProjectType: Record<string, string>
@@ -78,7 +78,7 @@ export function useCodingPipeline(deps: PipelineDeps) {
       setIdeUrl,
       activeView,
     },
-    workspace: { allWorkspaces, embeddedProjectId },
+    workspace: { allWorkspaces },
     activeSceneCategory,
     pendingSceneCategory,
     sceneCategoryToProjectType,
@@ -319,14 +319,13 @@ export function useCodingPipeline(deps: PipelineDeps) {
   }
 
   function buildPipelineRequest(finalMessage: string, sceneKey: string): Record<string, any> {
-    const resolvedProjectId = Number(embeddedProjectId.value || 0)
     return {
       message: finalMessage,
       workspace_id: codingStore.workspace?.id || null,
       conversation_id: codingStore.conversationId || null,
       selected_model: selectedCodingModelValue.value || null,
       app_id: (route.query.app_id as string) || null,
-      project_id: resolvedProjectId > 0 ? resolvedProjectId : resolveRouteProjectId(),
+      project_id: resolveRouteProjectId(),
       project_type: sceneCategoryToProjectType[sceneKey] || (route.query.type as string) || null,
     }
   }

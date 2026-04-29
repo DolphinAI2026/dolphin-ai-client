@@ -1309,7 +1309,7 @@ const { sendMessage, sendSuggestion } = useCodingPipeline({
   model: { codingModelOptions, codingModelLoading, updatingCodingModel, selectedCodingModelValue, persistedCodingModelValue, codingModelPopoverVisible, selectedCodingModelOption, codingModelHint, codingModelSummary, toCodingModelValue, normalizeCodingModelValue, applyCodingModelSelection, loadCodingModelOptions, handleCodingModelChange, selectCodingModel } as any,
   stream: { streamMessages, isStreaming, streamContainerRef, scrollStreamToBottom, addStreamMsg, appendToLastThinking, appendToLastCommand, completeStepMsg, addStepRunningMsg, restoreReplayStreamMessages } as any,
   ide: { ideUrl, ideLoaded, ideLoadError, ideLoadingText, pendingIdeUrl, activeView, setIdeUrl, onIdeFrameLoad, onIdeFrameError, retryIdeLoad, openPendingIde } as any,
-  workspace: { allWorkspaces, isDownloading, embeddedProjectId, embeddedAppId, existingWorkspaces, workspaceShowcaseItems, workspaceDisplayName, workspaceCodeName, workspaceTooltip, workspaceTypeLabel, downloadWorkspaceArtifact } as any,
+  workspace: { allWorkspaces, isDownloading, embeddedAppId, existingWorkspaces, workspaceShowcaseItems, workspaceDisplayName, workspaceCodeName, workspaceTooltip, workspaceTypeLabel, downloadWorkspaceArtifact } as any,
   activeSceneCategory,
   pendingSceneCategory,
   sceneCategoryToProjectType,

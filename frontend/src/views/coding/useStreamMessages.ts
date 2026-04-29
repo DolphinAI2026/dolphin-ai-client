@@ -31,9 +31,11 @@ export interface StreamMessage {
 }
 
 const SCENE_TYPE_LABEL: Record<string, string> = {
+  web_component: 'PC 端自开发组件',
   web_component_dual: '双端自开发组件',
-  form_component: '双端自开发组件',
+  form_component: 'PC 端自开发组件',
   component: '自开发组件',
+  mobile_component: '双端自开发组件',
   web_page: '自开发页面',
   web_list_view: '自开发列表视图',
   web_layout: '自定义布局',
@@ -47,6 +49,12 @@ const SCENE_TYPE_LABEL: Record<string, string> = {
   api: '后端接口',
   backend: '后端接口',
   service: '后端服务',
+  script_js: 'JS 脚本扩展',
+  script_python: 'Python 脚本扩展',
+  script_groovy: 'Groovy 脚本扩展',
+  business_dialog: '业务事件弹窗',
+  ui_style: '界面样式扩展',
+  list_custom_module: '列表自定义模块',
 }
 
 export function formatSceneType(raw: string): string {
