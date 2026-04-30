@@ -15,7 +15,28 @@
             title="收起会话列表"
           >«</button>
         </div>
-        <button class="new-btn" @click="onCreateSession">+ 新会话</button>
+        <el-dropdown trigger="click" placement="bottom-start" @command="onCreateSession">
+          <button class="new-btn">
+            <span>+ 新会话</span>
+            <span class="new-btn-caret">▾</span>
+          </button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="chat">
+                <div class="new-session-option">
+                  <div class="new-session-option-title">💬 Chat 会话</div>
+                  <div class="new-session-option-hint">从零对话理需求</div>
+                </div>
+              </el-dropdown-item>
+              <el-dropdown-item command="cowork">
+                <div class="new-session-option">
+                  <div class="new-session-option-title">📂 Cowork 会话</div>
+                  <div class="new-session-option-hint">批量材料整合成标准 md</div>
+                </div>
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
         <!-- 模式分组 tab：全部 / Chat / Cowork -->
         <div class="session-filter-tabs">
           <button
@@ -61,8 +82,8 @@
           >»</button>
           <button
             class="rail-btn"
-            @click="onCreateSession"
-            title="新会话"
+            @click="onCreateSession('chat')"
+            title="新建 Chat 会话（展开侧栏可选 Cowork）"
           >+</button>
           <div class="rail-spacer"></div>
           <button
@@ -948,9 +969,15 @@ async function onDeleteSession(s: AIChatSession) {
   }
 }
 
-async function onCreateSession() {
-  const s = await aiChatApi.createSession({ selected_llm_config_id: selectedLlmId.value })
+async function onCreateSession(mode: SessionFilter | string = 'chat') {
+  const targetMode: 'chat' | 'cowork' = mode === 'cowork' ? 'cowork' : 'chat'
+  const s = await aiChatApi.createSession({
+    selected_llm_config_id: selectedLlmId.value,
+    mode: targetMode,
+  })
   sessions.value.unshift(s)
+  // 切换 tab 到对应模式，让新建的会话出现在视野里
+  sessionsFilter.value = targetMode
   await loadSession(s.id)
 }
 
@@ -1487,6 +1514,35 @@ onMounted(async () => {
   padding: 8px 12px; border-radius: 8px; font-size: 13px; cursor: pointer; text-align: left;
 }
 .new-btn:hover { background: var(--ac-border-faint); }
+.new-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: 6px;
+}
+.new-btn-caret {
+  color: var(--ac-text-faint);
+  font-size: 11px;
+  margin-left: auto;
+  transform: translateY(-1px);
+}
+.new-session-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 0;
+  min-width: 180px;
+}
+.new-session-option-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--el-text-color-primary, #1f2937);
+}
+.new-session-option-hint {
+  font-size: 11.5px;
+  color: var(--el-text-color-secondary, #6b7280);
+}
 
 .session-filter-tabs {
   display: flex;
