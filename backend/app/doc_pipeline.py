@@ -408,30 +408,6 @@ async def _fix_failed_modules(
     return result
 
 
-async def _rewrite_full_doc(text: str, llm_cfg: Optional[Dict[str, Any]]) -> str:
-    """整篇文档 LLM 标准化（score < 50 时使用）"""
-    from app.module_standardizer import _llm_completion
-
-    prompt = f"""{_REWRITE_PROMPT}
-
-## 待标准化文档
-{text}
-
-## 输出（只输出标准 Markdown 文档，不要加任何解释）
-"""
-    try:
-        return (await _llm_completion(
-            messages=[{"role": "user", "content": prompt}],
-            llm_cfg=llm_cfg,
-            temperature=0.1,
-            max_tokens=8192,
-            timeout=180.0,
-        )).strip()
-    except Exception as e:
-        logger.error(f"整篇文档标准化失败: {e}")
-        return text
-
-
 async def _fallback_ai_parse(
     text: str,
     llm_cfg: Optional[Dict[str, Any]],
@@ -453,46 +429,3 @@ async def _fallback_ai_parse(
         if merged_meta:
             result["parse_meta"] = merged_meta
     return result
-
-
-# ── 整篇标准化 prompt ─────────────────────────────────────────
-_REWRITE_PROMPT = """\
-你是一个 aPaaS 应用设计文档格式化助手。
-请将下面这份设计文档整理成标准格式。
-
-## 标准格式要求
-
-文档必须包含以下章节（按顺序）：
-1. ## 一、应用信息 — 表格：应用编码 | 应用名称
-2. ## 二、角色列表 — 表格：角色编码 | 角色名称
-3. ## 三、数据字典 — 每个字典一个 ### 子章节，表格：选项编码 | 选项名称
-4. ## 四、数据模型 — 每个模型一个 ### 子章节（标注【主表】/【子表】），
-   表格：字段编码 | 字段名称 | 存储类型 | 长度 | 字典编码 | 关联模型编码 | 关联显示字段编码 | 说明
-5. ## 五、表单配置 — 每个表单一个 ### 子章节，
-   主表字段表格：字段编码 | 字段名称 | 是否隐藏 | 是否只读 | 是否必填 | 是否列表展示 | 是否查询条件
-   如存在子表，还需补充：
-   - 子表区域表格：子表模型编码 | 子表模型名称 | 子表显示名称
-   - 每个子表的字段表格：子表字段编码 | 子表字段名称 | 组件类型 | 是否必填 | 说明
-6. ## 六、流程配置 — 若原文未定义，则明确写“当前文档未定义流程配置。”
-   若原文已定义，则表格：步骤 | 动作 | 角色 | 状态/结果
-7. ## 七、权限配置 — 若原文未定义，则明确写“当前文档未定义权限明细，本节不生成权限表。”
-   若原文已定义，则表格：表单名称 | 角色编码 | 可暂存 | 可新增 | 可导入 | 可查看 | 可编辑 | 可删除 | 可导出 | 数据范围
-8. ## 八、自开发定义 — 若原文未定义，则明确写“暂无强制自开发项，当前按配置优先。”
-   表格：类型 | 名称 | 触发条件 | 实现范围 | 验收口径
-
-## 约束
-- 编码字段：英文小写字母+下划线，字母开头（如 supplier_type）
-- 不要丢失原文中的“长度/精度”“所属主表模型编码”“子表区域”“说明”
-- 如果同一个模型被多个表单复用，允许生成多个表单子章节，但数据模型仍只保留一份
-- 字段类型只能用：单据号/单行输入/多行输入/富文本/手机号码/电子邮箱/身份证号/超链接/
-  数字/金额/日期时间/开关/附件上传/地理位置/地区地址/人员选择/部门选择/
-  下拉单选/下拉多选/单选框/复选框/数据单选/数据选择/关联表单/子表
-- 数据模型里的“存储类型/数据库字段类型”只能用：varchar/text/datetime/date/decimal/int/bigint。
-- 不要把 department/user/dict/ref/file/textarea/number/boolean/tinyint 这类组件或语义类型写进数据模型存储类型。
-- 通用字段编码必须加业务前缀，不能直接使用 name/title/status/type/level/department/user/phone/email/manager/result/remark/description/content。
-- 下拉单选/下拉多选/单选框/复选框 必须有对应字典（字典编码列填写）
-- 数据单选/数据选择/关联表单/子表 必须有关联模型编码
-- 数据范围只能：全公司/本部门/本部门及下属部门/仅本人
-- 不要脑补，原文没有的内容不要新增
-- 缺失信息留空
-"""

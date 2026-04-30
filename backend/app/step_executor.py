@@ -1304,10 +1304,6 @@ async def _bind_dicts_to_form(
     try:
         all_platform_dicts = await client.query_dicts(app_id)
         dict_id_map = {d.get("dictionaryCode"): d.get("id") for d in all_platform_dicts}
-        dict_options_map: Dict[str, list] = {}
-        for dc, did in dict_id_map.items():
-            if did:
-                dict_options_map[dc] = await client.query_dict_options(app_id, did)
 
         dict_lookup = _collect_component_dict_lookup(
             form_components=form_components,
@@ -1315,6 +1311,27 @@ async def _bind_dicts_to_form(
             model_info=model_info,
             dict_codes=dict_codes,
         )
+
+        # 只查实际被本表单组件用到的字典；不查的字典一个 round-trip 都不打。
+        # 然后把剩下的查询并发跑（asyncio.gather）—— 平台对该接口没限流，
+        # 串行循环 N 个字典×~1s/次 是经典浪费。
+        used_dict_codes: set[str] = set()
+        for fc in (form_components or []):
+            dc = _lookup_component_dict_code(fc, dict_lookup)
+            if dc and dc in dict_id_map and dict_id_map.get(dc):
+                used_dict_codes.add(dc)
+        ordered_codes = [dc for dc in used_dict_codes]
+        dict_options_map: Dict[str, list] = {}
+        if ordered_codes:
+            results = await asyncio.gather(
+                *(client.query_dict_options(app_id, dict_id_map[dc]) for dc in ordered_codes),
+                return_exceptions=True,
+            )
+            for dc, opts in zip(ordered_codes, results):
+                if isinstance(opts, Exception):
+                    logger.warning(f"query_dict_options 失败 (dict={dc}): {opts}")
+                    continue
+                dict_options_map[dc] = opts
 
         def _bind_dict_to_comp(comp: dict) -> bool:
             """给单个组件绑定字典，返回是否有更新。"""
@@ -1415,20 +1432,51 @@ def _build_form_components(
 
         desired_component_type = str(component_type).strip()
         target_model_code, target_field, origin_field = _resolve_component_reference(comp, form_identity)
-        if desired_component_type in ("FORM_DATA_SELECTOR_SINGLE", "FORM_DATA_SELECTOR") and target_model_code:
-            built["componentType"] = desired_component_type
-            built["dataSelectorConfig"] = {
-                "type": "LOV_CHOOSE",
-                "otherModelCode": target_model_code,
-                "otherFieldCode": target_field,
-            }
-        elif desired_component_type == "FORM_ASSOCIATION" and target_model_code:
-            built["componentType"] = "FORM_ASSOCIATION"
-            built["formAssociationConfig"] = {
-                "originFieldCode": origin_field or field_code,
-                "targetModelCode": target_model_code,
-                "targetFieldCode": target_field,
-            }
+        # 平台要求"数据选择/关联表单"组件指向一张实际的【表单】（不是模型本身）。
+        # AI 生成的 ref 经常出现这两种坏情况：
+        #   1) 引用了一个根本不存在的实体（比如 "customer"）
+        #   2) 引用了存在的模型但没建对应表单（比如 "supplier" 只有 supplier_performance 表单）
+        # 两种情况发到平台都会被拒（bizCode 4291 "目标表单为空"）。所以真正的存在性
+        # 检查必须落在 form_identity（_form_identity_map(all_forms)）上，而非 model_info。
+        target_exists = bool(target_model_code) and (target_model_code in form_identity)
+        if desired_component_type in ("FORM_DATA_SELECTOR_SINGLE", "FORM_DATA_SELECTOR"):
+            if target_exists:
+                built["componentType"] = desired_component_type
+                built["dataSelectorConfig"] = {
+                    "type": "LOV_CHOOSE",
+                    "otherModelCode": target_model_code,
+                    "otherFieldCode": target_field,
+                }
+            else:
+                # 防御：SPEC 把字段配成了"数据选择"，但目标模型/表单不存在
+                # （典型场景：AI 生成的"适用客户"字段引用 customer_V1，但 SPEC 没建客户表）。
+                # 直接发 payload 平台会回 bizCode=4291"目标表单为空"，整张表单建不出来。
+                # 降级为普通文本输入，让表单先建出来；用户后续可在 SPEC 补建客户表，
+                # 走更新流程重新接上数据选择。
+                logger.warning(
+                    f"表单 {form_name} 字段 {field_code}: 数据选择目标模型 "
+                    f"'{target_model_code or '(空)'}' 在本应用 SPEC 中不存在，"
+                    f"降级为 FORM_TEXT_INPUT 以避免平台拒绝。"
+                )
+                built["componentType"] = "FORM_TEXT_INPUT"
+                desired_component_type = "FORM_TEXT_INPUT"
+        elif desired_component_type == "FORM_ASSOCIATION":
+            if target_exists:
+                built["componentType"] = "FORM_ASSOCIATION"
+                built["formAssociationConfig"] = {
+                    "originFieldCode": origin_field or field_code,
+                    "targetModelCode": target_model_code,
+                    "targetFieldCode": target_field,
+                }
+            else:
+                # 同上：关联表单的目标若不在本应用，平台同样拒。降级为文本。
+                logger.warning(
+                    f"表单 {form_name} 字段 {field_code}: 关联表单目标模型 "
+                    f"'{target_model_code or '(空)'}' 在本应用 SPEC 中不存在，"
+                    f"降级为 FORM_TEXT_INPUT 以避免平台拒绝。"
+                )
+                built["componentType"] = "FORM_TEXT_INPUT"
+                desired_component_type = "FORM_TEXT_INPUT"
         dict_code = _lookup_component_dict_code({**comp, **built}, dict_lookup)
         if dict_code and str(built.get("componentType") or "") in _DICT_BIND_COMPONENT_TYPES:
             built["dict"] = dict_code
@@ -1932,6 +1980,33 @@ async def _sync_form_component_references(
         return None
 
     target_form_cache: Dict[str, dict] = {}
+
+    # 预热：把本表单所有 ref 组件需要的"目标表单 detail page"一次性并发拉好，
+    # 避免下面 _apply_reference 里串行 await 一个个查（每次 1-3s），
+    # 一张表单里 5 个不同目标 ref 串行能直接吃掉 10 多秒。
+    target_form_ids_to_prefetch: set[str] = set()
+    for comp_def in comp_def_map.values():
+        try:
+            tmc, _, _ = _resolve_component_reference(comp_def, form_map)
+            if not tmc:
+                continue
+            target_form_result = _resolve_target_form_result(comp_def, form_map, form_results, tmc)
+            tfid = str((target_form_result or {}).get("formId", "")).strip()
+            if tfid:
+                target_form_ids_to_prefetch.add(tfid)
+        except Exception:
+            continue
+    if target_form_ids_to_prefetch:
+        ids = list(target_form_ids_to_prefetch)
+        prefetched = await asyncio.gather(
+            *(client.query_detail_page_config(app_id, tid) for tid in ids),
+            return_exceptions=True,
+        )
+        for tid, payload in zip(ids, prefetched):
+            if isinstance(payload, Exception):
+                logger.warning(f"预拉目标表单 detail page 失败 (formId={tid}): {payload}")
+                continue
+            target_form_cache[tid] = payload
 
     async def _get_target_form_payload(target_form_result: dict) -> dict:
         target_form_id = str(target_form_result.get("formId", "")).strip()
@@ -2458,60 +2533,6 @@ def _build_form_permission_payload_legacy(
         "operationPermissionGroups": list(operation_groups.values()),
         "dataPermissionGroups": list(data_groups.values()),
     }
-
-
-async def _sync_form_permissions_to_form_config(
-    client: APaaSClient,
-    app_id: str,
-    form_id: str,
-    rules: List[dict],
-    role_codes: Dict[str, dict],
-) -> None:
-    """将权限同步回表单详情配置，确保平台页面权限设置能读到业务权限组。
-
-    和 create_form_permissions 修改同一份数据的不同字段会引发平台乐观锁冲突
-    （"当前页面状态已改变"）。这里做最多 3 次自动重试：每次重新 query 最新
-    form_config 再 save，期间中断很短，重试成功率高。
-    """
-    permission_groups, advanced_groups, operation_groups = _build_permission_groups_for_form_config(
-        rules,
-        role_codes,
-    )
-
-    max_attempts = 3
-    last_exc: Exception | None = None
-    for attempt in range(1, max_attempts + 1):
-        try:
-            # 每次重试都重新 query 拿最新版本，避免再踩旧版本的乐观锁
-            form_config = await client.query_detail_page_config(app_id, form_id)
-            form_config["permissionGroups"] = permission_groups
-            form_config["advancedPermissionGroups"] = advanced_groups
-            form_config["operationPermissionGroups"] = operation_groups
-
-            logger.info(
-                "save_form_config reason: 回写表单权限 (formId=%s, attempt=%d, permissionGroups=%s, advanced=%s, operation=%s)",
-                form_id, attempt,
-                len(permission_groups),
-                len(advanced_groups),
-                len(operation_groups),
-            )
-            await client.save_form_config(app_id, form_config)
-            return
-        except Exception as e:
-            last_exc = e
-            msg = str(e)
-            # 只对乐观锁类错误重试；其他错误直接抛
-            is_stale = "当前页面状态已改变" in msg or "状态已改变" in msg
-            if not is_stale or attempt >= max_attempts:
-                raise
-            logger.warning(
-                "save_form_config 乐观锁冲突 (formId=%s, attempt=%d/%d)，重新 query + save",
-                form_id, attempt, max_attempts,
-            )
-            await asyncio.sleep(0.3 * attempt)  # 简单退避
-    # 理论上不会走到这里
-    if last_exc:
-        raise last_exc
 
 
 async def execute_configure_permissions(
