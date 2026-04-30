@@ -412,6 +412,18 @@
             :class="{ active: artifactRawView }"
             @click="artifactRawView = true"
           >原文</button>
+          <!-- 历史版本下拉（≥ 2 个版本时显示）-->
+          <select
+            v-if="activeArtifactVersions.length > 1"
+            class="art-version-select"
+            :value="activeArtifactVersion"
+            @change="onSelectArtifactVersion(($event.target as HTMLSelectElement).value)"
+            :title="`共 ${activeArtifactVersions.length} 个版本，可切换查看`"
+          >
+            <option v-for="v in activeArtifactVersions" :key="v.version" :value="v.version">
+              v{{ v.version }}{{ v.version === activeArtifactVersions[0].version ? ' (最新)' : '' }}
+            </option>
+          </select>
           <span class="art-preview-spacer"></span>
           <span class="art-meta-text">{{ artifactStats }}</span>
           <button class="small-btn" @click="copyArtifact" title="复制">⧉</button>
@@ -751,13 +763,10 @@ type TLItem =
   | { kind: 'streaming'; text: string }
 
 // 把同名连续 ≥2 次的 tool calls 折叠成一个 group
-function collapseTools(tcs: AIChatToolCall[]): TLItem[] {
+// seenWriteForFile 由外层 renderTimeline 维护并跨段累计，否则每次 collapse 都从 0
+// 计数 → 多个 segment 的 inline 卡片都误显示成 v1。
+function collapseTools(tcs: AIChatToolCall[], seenWriteForFile: Record<string, number>): TLItem[] {
   const out: TLItem[] = []
-  // 累计同 filename 的 write_artifact 第几次（用于挑对应版本的 artifact）。
-  // 之前用 artifacts.find(filename) 总是返回第一个匹配 → 多次 write 后所有
-  // inline 卡片都显示同一个版本。改为按调用顺序对齐 version：
-  // 第 N 次成功 write_artifact（同名）→ artifacts 里 version 第 N 大的那一条。
-  const seenWriteForFile: Record<string, number> = {}
   let i = 0
   while (i < tcs.length) {
     let j = i + 1
@@ -838,9 +847,11 @@ const renderTimeline = computed<TLItem[]>(() => {
 
   const items: TLItem[] = []
   let toolBuf: AIChatToolCall[] = []
+  // 跨所有 segment 累计的 write_artifact 计数，让 inline 卡片版本号正确递增
+  const seenWriteForFile: Record<string, number> = {}
   const flushTools = () => {
     if (!toolBuf.length) return
-    for (const it of collapseTools(toolBuf)) items.push(it)
+    for (const it of collapseTools(toolBuf, seenWriteForFile)) items.push(it)
     toolBuf = []
   }
   for (const item of sortable) {
@@ -1220,6 +1231,43 @@ async function loadArtifactByName(fname: string) {
     .filter(a => a.filename === fname)
     .sort((x, y) => y.version - x.version)[0]
   if (latest) await loadArtifact(latest)
+  // 同步拉该 filename 所有历史版本（用于版本下拉切换）
+  if (currentSession.value && fname) {
+    try {
+      const res = await aiChatApi.listArtifactVersions(currentSession.value.id, fname)
+      activeArtifactVersions.value = res.versions || []
+    } catch {
+      activeArtifactVersions.value = []
+    }
+  }
+}
+
+// 当前打开 filename 的所有历史版本（按 version 降序）
+const activeArtifactVersions = ref<AIChatArtifact[]>([])
+// 当前展示的版本号
+const activeArtifactVersion = computed(() => {
+  if (!activeArtifactName.value) return 0
+  // 取目前 activeArtifactContent 对应的版本号——通过 id 查 versions
+  const id = activeArtifactId.value
+  const found = activeArtifactVersions.value.find(v => v.id === id)
+  return found?.version || activeArtifactVersions.value[0]?.version || 0
+})
+
+async function onSelectArtifactVersion(versionStr: string) {
+  if (!currentSession.value || !activeArtifactName.value) return
+  const v = parseInt(versionStr, 10)
+  if (!Number.isFinite(v)) return
+  try {
+    const detail = await aiChatApi.getArtifact(
+      currentSession.value.id,
+      activeArtifactName.value,
+      v,
+    )
+    activeArtifactId.value = detail.id
+    activeArtifactContent.value = detail.content || ''
+  } catch {
+    ElMessage.error('加载历史版本失败')
+  }
 }
 
 // 自动选首个 artifact 作为右栏默认显示
@@ -1672,6 +1720,21 @@ onMounted(async () => {
   font-size: 12px;
   margin-right: 2px;
 }
+.art-version-select {
+  appearance: none;
+  background: var(--ac-btn);
+  border: 1px solid var(--ac-border);
+  color: var(--ac-text);
+  font-size: 12px;
+  padding: 3px 22px 3px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-family: ui-monospace, Menlo, monospace;
+  background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 10 10"><path d="M2 4 L5 7 L8 4" stroke="%23999" stroke-width="1.4" fill="none" stroke-linecap="round"/></svg>');
+  background-repeat: no-repeat;
+  background-position: right 6px center;
+}
+.art-version-select:hover { border-color: var(--ac-border-strong); }
 .session-menu-btn {
   appearance: none;
   background: transparent;

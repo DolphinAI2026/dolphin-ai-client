@@ -509,7 +509,39 @@ async def get_artifact(
     filename: str,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    version: Optional[int] = None,
 ):
+    """获取产出物内容。version 不传 → 返回最新版；传具体值 → 返回该版本。"""
+    await _load_session_or_404(db, session_id, ctx)
+    query = (
+        select(AIChatArtifact)
+        .where(
+            AIChatArtifact.session_id == session_id,
+            AIChatArtifact.filename == filename,
+        )
+    )
+    if version is not None:
+        query = query.where(AIChatArtifact.version == version)
+    else:
+        query = query.order_by(desc(AIChatArtifact.version))
+    res = await db.execute(query.limit(1))
+    a = res.scalar_one_or_none()
+    if not a:
+        raise HTTPException(status_code=404, detail="产出物不存在")
+    return {
+        **_artifact_to_dict(a),
+        "content": a.content,
+    }
+
+
+@router.get("/sessions/{session_id}/artifacts/{filename}/versions")
+async def list_artifact_versions(
+    session_id: int,
+    filename: str,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """列出某个 filename 的所有历史版本（按 version 降序）。"""
     await _load_session_or_404(db, session_id, ctx)
     res = await db.execute(
         select(AIChatArtifact)
@@ -518,12 +550,6 @@ async def get_artifact(
             AIChatArtifact.filename == filename,
         )
         .order_by(desc(AIChatArtifact.version))
-        .limit(1)
     )
-    a = res.scalar_one_or_none()
-    if not a:
-        raise HTTPException(status_code=404, detail="产出物不存在")
-    return {
-        **_artifact_to_dict(a),
-        "content": a.content,
-    }
+    items = res.scalars().all()
+    return {"versions": [_artifact_to_dict(a) for a in items]}

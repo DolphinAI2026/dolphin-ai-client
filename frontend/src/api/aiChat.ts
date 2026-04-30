@@ -95,8 +95,12 @@ export const aiChatApi = {
   listArtifacts(id: number): Promise<{ artifacts: AIChatArtifact[] }> {
     return request.get<any, { artifacts: AIChatArtifact[] }>(`/ai-chat/sessions/${id}/artifacts`)
   },
-  getArtifact(id: number, filename: string): Promise<AIChatArtifact> {
-    return request.get<any, AIChatArtifact>(`/ai-chat/sessions/${id}/artifacts/${encodeURIComponent(filename)}`)
+  getArtifact(id: number, filename: string, version?: number): Promise<AIChatArtifact> {
+    const v = version != null ? `?version=${version}` : ''
+    return request.get<any, AIChatArtifact>(`/ai-chat/sessions/${id}/artifacts/${encodeURIComponent(filename)}${v}`)
+  },
+  listArtifactVersions(id: number, filename: string): Promise<{ versions: AIChatArtifact[] }> {
+    return request.get<any, { versions: AIChatArtifact[] }>(`/ai-chat/sessions/${id}/artifacts/${encodeURIComponent(filename)}/versions`)
   },
   /**
    * SSE 发送消息 — 直接 fetch + 流式读 ReadableStream，支持 abort
