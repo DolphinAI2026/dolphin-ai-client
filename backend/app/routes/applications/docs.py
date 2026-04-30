@@ -66,14 +66,98 @@ from ._helpers import (  # noqa: F401
 )
 
 
-def _safe_code_from_name(name: str, *, suffix: str = "field") -> str:
+# 常见中文字段名 → 英文 snake_case 词根。命中后会再拼模型业务前缀。
+# 不在表里的中文名才走 hash 兜底，避免出现 field_e0361480 这种纯哈希。
+_CN_FIELD_NAME_TO_CODE: dict[str, str] = {
+    "备注": "remark",
+    "说明": "description",
+    "描述": "description",
+    "名称": "name",
+    "标题": "title",
+    "编码": "code",
+    "编号": "no",
+    "类型": "type",
+    "状态": "status",
+    "等级": "level",
+    "级别": "level",
+    "数量": "quantity",
+    "金额": "amount",
+    "总额": "total",
+    "单价": "price",
+    "价格": "price",
+    "费用": "fee",
+    "日期": "date",
+    "时间": "time",
+    "创建时间": "created_time",
+    "更新时间": "updated_time",
+    "开始时间": "start_time",
+    "结束时间": "end_time",
+    "联系人": "contact",
+    "联系电话": "phone",
+    "电话": "phone",
+    "手机号": "mobile",
+    "手机": "mobile",
+    "邮箱": "email",
+    "地址": "address",
+    "部门": "dept",
+    "公司": "company",
+    "客户": "customer",
+    "供应商": "supplier",
+    "产品": "product",
+    "原因": "reason",
+    "意见": "comment",
+    "审核结果": "audit_result",
+    "审批意见": "approval_comment",
+    "附件": "attachment",
+    "图片": "image",
+    "文件": "file",
+    "负责人": "owner",
+    "申请人": "applicant",
+    "审批人": "approver",
+    "经办人": "handler",
+    "操作人": "operator",
+    "创建人": "creator",
+    "归属": "belong",
+    "优先级": "priority",
+    "数据范围": "data_scope",
+    "权限": "permission",
+}
+
+
+def _safe_code_from_name(
+    name: str,
+    *,
+    model_code: str = "",
+    suffix: str = "field",
+) -> str:
+    """从字段名生成合规 snake_case 编码。
+
+    优先级：
+      1. 名字本身就是 ASCII（"remark"）→ 直接 snake_case
+      2. 中文字段名命中映射表（"备注" → "remark"）→ 拼模型业务前缀避免与平台保留短名冲突
+      3. 全是 ASCII 但被 strip 成空 / 中文未命中 → 走 SHA1 兜底（仍带业务前缀）
+    """
     import hashlib
 
-    ascii_code = re.sub(r"[^a-zA-Z0-9_]+", "_", (name or "").strip()).strip("_").lower()
+    raw = (name or "").strip()
+    ascii_code = re.sub(r"[^a-zA-Z0-9_]+", "_", raw).strip("_").lower()
+    model_prefix = re.sub(r"[^a-z0-9]+", "_", str(model_code or "").lower()).strip("_")
+
     if ascii_code:
+        # 名字主体已是英文：保留原样，必要时由 lowcode_standards.safe_field_code 再加前缀避保留字
         return ascii_code[:48]
-    digest = hashlib.sha1((name or suffix).encode("utf-8")).hexdigest()[:8]
-    return f"{suffix}_{digest}"
+
+    # 中文名：先查映射，命中就拼业务前缀
+    mapped = _CN_FIELD_NAME_TO_CODE.get(raw)
+    if mapped:
+        if model_prefix:
+            return f"{model_prefix}_{mapped}"[:48]
+        return mapped[:48]
+
+    # 完全没法翻译：用 hash 兜底，但仍带业务前缀和语义后缀
+    digest = hashlib.sha1((raw or suffix).encode("utf-8")).hexdigest()[:6]
+    base = f"{model_prefix}_{suffix}" if model_prefix else suffix
+    return f"{base}_{digest}"[:48]
 
 
 def _infer_update_field_type(name: str, instruction: str) -> str:
@@ -335,6 +419,12 @@ def _try_apply_simple_add_field_update(current_config: dict, instruction: str) -
     if not target_model:
         return None
 
+    target_model_code = str(
+        target_model.get("code")
+        or target_model.get("modelCode")
+        or target_model.get("model_code")
+        or ""
+    )
     fields = target_model.setdefault("fields", [])
     existing_codes = {str(field.get("code") or field.get("fieldCode") or field.get("field_code") or "") for field in fields if isinstance(field, dict)}
     existing_names = {str(field.get("name") or field.get("fieldName") or field.get("field_name") or "") for field in fields if isinstance(field, dict)}
@@ -342,7 +432,7 @@ def _try_apply_simple_add_field_update(current_config: dict, instruction: str) -
     for name in field_names:
         if name in existing_names:
             continue
-        base_code = _safe_code_from_name(name)
+        base_code = _safe_code_from_name(name, model_code=target_model_code)
         code = base_code
         index = 2
         while code in existing_codes:
@@ -1225,6 +1315,14 @@ async def draft_doc_update(
                     content=f"【更新应用】{instruction}",
                 ))
                 await db.commit()
+
+        # 把这个 conversation 绑到 app 上：刷新页面后 onMounted 用 app_id 加载
+        # 应用时能从 app.conversation_id 找回这次更新的完整对话历史，
+        # 否则每次更新都创建一个新 Conversation 但没回写到 Application，
+        # 用户看到的就是空白或上一次的旧对话。
+        if conversation and app.conversation_id != conversation.id:
+            app.conversation_id = conversation.id
+            await db.commit()
 
     if _is_trivial_non_update_message(instruction):
         assistant_reply = "我在。你可以直接描述要调整的字段、表单、权限、流程，或者上传新版 Markdown 设计文档。"

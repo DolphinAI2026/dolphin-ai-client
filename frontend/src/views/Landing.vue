@@ -65,6 +65,13 @@
             </div>
 
             <div class="composer-body">
+              <div v-if="landingMode === 'chat' && pendingChatFiles.length" class="composer-attach-list">
+                <span v-for="(f, idx) in pendingChatFiles" :key="idx" class="attach-chip">
+                  <span class="attach-chip-icon">{{ /\.(png|jpe?g|gif|webp)$/i.test(f.name) ? '🖼️' : '📄' }}</span>
+                  <span class="attach-chip-name">{{ f.name }}</span>
+                  <button class="attach-chip-x" type="button" @click="pendingChatFiles.splice(idx, 1)" aria-label="移除">×</button>
+                </span>
+              </div>
               <textarea
                 ref="landingTextareaRef"
                 v-model="landingInput"
@@ -79,7 +86,8 @@
               <button v-if="landingMode === 'cowork'" class="chip" type="button" @click="showImportDialog = true">引用项目</button>
               <button v-if="landingMode === 'cowork'" class="chip template-chip" type="button" @click="openTemplateFromComposer">文档模板</button>
               <button v-else-if="landingMode === 'code'" class="chip" type="button" @click="navigateTo('/coding?type=apaas-custom-dev')">选择应用</button>
-              <button v-else class="chip" type="button" @click="navigateTo('/vibe-coding/new')">导入 Git 仓库</button>
+              <button v-else-if="landingMode === 'online'" class="chip" type="button" @click="navigateTo('/vibe-coding/new')">导入 Git 仓库</button>
+              <button v-else class="chip" type="button" @click="chatFilesInputRef?.click()">📎 附加附件</button>
 
               <div class="toolbar-spacer"></div>
 
@@ -99,6 +107,7 @@
         </section>
 
         <input ref="prdInputRef" type="file" accept=".md,.markdown,.txt,.pdf,.doc,.docx" hidden @change="handleLandingDocUpload" />
+        <input ref="chatFilesInputRef" type="file" multiple hidden @change="handleChatFilesSelected" />
         <div v-if="landingNotice" class="landing-toast">{{ landingNotice }}</div>
       </div>
     </main>
@@ -228,6 +237,21 @@ const PENDING_CODING_KEY = 'ai_builder_pending_coding'
 
 const landingModeList: LandingModeConfig[] = [
   {
+    key: 'chat',
+    label: 'Chat',
+    zh: '需求梳理',
+    tagline: 'AI 帮你想清楚',
+    titleSuffix: '把模糊想法聊成结构化设计文档',
+    eyebrow: 'APAAS CHAT AI · DESIGN',
+    desc: '上传材料、连续追问、读表算数据；AI 主动澄清边界并产出可直接交给 Builder 的设计文档。',
+    color: 'oklch(60% 0.16 220)',
+    colorSoft: 'oklch(96% 0.03 220)',
+    colorInk: 'oklch(42% 0.15 220)',
+    icon: '💬',
+    placeholder: '说说你想搭什么。例如：我们要做一个供应商质量管理系统，覆盖来料检验、不合格处理、整改跟踪…我有几份参考资料想一起聊。',
+    cta: '开始聊需求',
+  },
+  {
     key: 'cowork',
     label: 'Builder',
     zh: '智能搭建',
@@ -293,12 +317,14 @@ const templateCache = new Map<string, TemplateDetail>()
 const builderModelOptions = ref<BuilderModelOption[]>([])
 const builderModelLoading = ref(false)
 const selectedLandingModelId = ref<number | null>(null)
-const landingMode = ref<LandingModeKey>('cowork')
+const landingMode = ref<LandingModeKey>('chat')
 const landingInput = ref('')
 const landingDetail = ref<LandingDetailMode>('auto')
 const landingNotice = ref('')
 const landingTextareaRef = ref<HTMLTextAreaElement | null>(null)
 const prdInputRef = ref<HTMLInputElement | null>(null)
+const chatFilesInputRef = ref<HTMLInputElement | null>(null)
+const pendingChatFiles = ref<File[]>([])
 
 const currentLandingMode = computed<LandingModeConfig>(() => (
   landingModeList.find(item => item.key === landingMode.value) ?? fallbackLandingMode
@@ -357,14 +383,31 @@ function handleLandingDocUpload(event: Event) {
   router.push({ path: '/chat', query: { mode: 'requirements' } })
 }
 
+function handleChatFilesSelected(e: Event) {
+  const input = e.target as HTMLInputElement
+  if (!input.files) return
+  pendingChatFiles.value.push(...Array.from(input.files))
+  input.value = ''
+}
+
 async function submitLanding() {
   const prompt = landingInput.value.trim()
-  if (!prompt) {
+  if (!prompt && !(landingMode.value === 'chat' && pendingChatFiles.value.length)) {
     ElMessage.warning('请先输入你要做什么')
     return
   }
 
   previewStore.pendingBuilderModelId = selectedLandingModelId.value
+
+  if (landingMode.value === 'chat') {
+    // 把附件交给 store，AIChatPage 建会话后会自动 upload 到该会话
+    if (pendingChatFiles.value.length) {
+      previewStore.pendingAiChatFiles = pendingChatFiles.value.slice()
+      pendingChatFiles.value = []
+    }
+    await router.push({ path: '/ai-chat', query: prompt ? { prompt } : {} })
+    return
+  }
 
   if (landingMode.value === 'online') {
     await router.push({ path: '/vibe-coding/new', query: { prompt } })
@@ -1074,6 +1117,48 @@ onMounted(loadApps)
   border-color: color-mix(in srgb, var(--landing-mode-color) 28%, #d8dee8);
   background: color-mix(in srgb, var(--landing-mode-soft) 66%, #fff);
 }
+
+.chip-hint {
+  font-size: 11px;
+  color: #98a2b3;
+  user-select: none;
+}
+
+.composer-attach-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 12px 0;
+}
+.attach-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--landing-mode-soft);
+  border: 0.5px solid color-mix(in srgb, var(--landing-mode-color) 30%, #d8dee8);
+  color: var(--landing-mode-ink);
+  padding: 2px 6px 2px 8px;
+  border-radius: 5px;
+  font-size: 11px;
+  max-width: 220px;
+}
+.attach-chip-icon { font-size: 11px; }
+.attach-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attach-chip-x {
+  appearance: none;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 0 2px;
+  margin-left: 2px;
+  opacity: 0.6;
+}
+.attach-chip-x:hover { opacity: 1; }
 
 .toolbar-spacer {
   flex: 1;
@@ -2227,6 +2312,18 @@ html[data-theme="dark"] .landing {
 html[data-theme="dark"] .landing-topbar {
   background: rgba(9, 11, 16, 0.96) !important;
   border-bottom-color: rgba(148, 163, 184, 0.14) !important;
+}
+
+html[data-theme="dark"] .landing-admin-actions button {
+  background: rgba(17, 19, 24, 0.86) !important;
+  border-color: rgba(148, 163, 184, 0.18) !important;
+  color: rgba(226, 232, 240, 0.82) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04) !important;
+}
+html[data-theme="dark"] .landing-admin-actions button:hover {
+  background: rgba(26, 29, 36, 0.96) !important;
+  border-color: rgba(124, 140, 255, 0.36) !important;
+  color: rgba(248, 250, 252, 0.94) !important;
 }
 
 html[data-theme="dark"] .landing-breadcrumbs {

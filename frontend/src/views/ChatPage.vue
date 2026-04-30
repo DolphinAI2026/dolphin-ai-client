@@ -34,13 +34,13 @@
         </div>
       </template>
       <template #actions>
+        <!-- 面板关闭时：顶部展示一个"展开产物面板"按钮；面板打开时由 SPEC 行内 .preview-panel-collapse 关闭，此处隐藏（合并成同一个 toggle） -->
         <button
-          v-if="showBuilderArtifactToggle"
+          v-if="showBuilderArtifactToggle && !showAnyBuilderArtifactPanel"
           class="builder-top-action artifact icon-only"
           type="button"
-          :aria-pressed="showAnyBuilderArtifactPanel"
-          :aria-label="showAnyBuilderArtifactPanel ? '收起产物面板' : '打开产物面板'"
-          :title="showAnyBuilderArtifactPanel ? '收起产物面板' : '打开产物面板'"
+          aria-label="打开产物面板"
+          title="打开产物面板"
           @click="toggleArtifactPanel"
         >
           <span class="builder-top-action-icon" aria-hidden="true">
@@ -50,6 +50,7 @@
             </svg>
           </span>
         </button>
+        <!-- 创建过程按钮已下移到 SPEC 行的 preview-side-actions（更贴近上下文）；这里只保留首次部署/无应用兜底 -->
         <button
           v-if="showStartDeployButton"
           class="builder-top-action primary"
@@ -59,16 +60,7 @@
         >
           部署到预览
         </button>
-        <button
-          v-else-if="showBuildHistoryButton"
-          class="builder-top-action primary"
-          type="button"
-          @click="openDeployPanel"
-          :disabled="assembling || generating || deployRunningAll || deployExecuting !== null"
-        >
-          创建过程
-        </button>
-        <button v-else class="builder-top-action primary" type="button" @click="router.push('/devops')">
+        <button v-else-if="!showBuildHistoryButton" class="builder-top-action primary" type="button" @click="router.push('/devops')">
           运行流水线
         </button>
         <button
@@ -178,6 +170,13 @@
           </div>
         </div>
         <template v-else>
+          <!-- Claude 风格：先纯对话。AI 判定需求收集足够（SPEC phase 离开 gathering）会自动展开三栏 -->
+          <div v-if="useSpecMode && !specPanelExpanded" class="spec-cta-banner" role="note">
+            <div class="spec-cta-text">
+              <span class="spec-cta-icon" aria-hidden="true">💬</span>
+              <span>告诉我你想搭建什么。我会先帮你梳理需求，准备好就自动生成设计文档。</span>
+            </div>
+          </div>
           <section v-if="showBuilderSpecBrief" class="builder-spec-brief" aria-label="当前 SPEC 摘要">
             <div class="builder-spec-brief-main">
               <span class="builder-spec-kicker">当前 SPEC</span>
@@ -214,8 +213,11 @@
               <div class="bubble-row assistant">
                 <div class="assistant-avatar" aria-hidden="true">AI</div>
                 <div class="bubble-inner">
-                  <div class="bubble-content assistant">
+                  <div class="bubble-content assistant typing-with-meta">
                     <span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span>
+                    <span v-if="sendingMessage && pendingDurationSec > 0" class="typing-meta">
+                      AI 思考中 · {{ pendingDurationSec }}s
+                    </span>
                   </div>
                 </div>
               </div>
@@ -282,6 +284,7 @@
                   <input
                     ref="chatImageInputRef"
                     type="file"
+                    multiple
                     @change="handleChatImageChange"
                     style="display:none"
                   />
@@ -297,18 +300,33 @@
                   @input="autoResizeTextarea"
                   @paste="handleComposerPaste"
                 ></textarea>
-                <button class="send-btn" :class="{ disabled: !canSendMessage }" @click="sendMessage">
+                <button
+                  v-if="sendingMessage"
+                  class="send-btn stop-btn"
+                  type="button"
+                  @click="stopSending"
+                  title="中断"
+                >
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><rect x="3" y="3" width="8" height="8" rx="1.5"/></svg>
+                </button>
+                <button v-else class="send-btn" :class="{ disabled: !canSendMessage }" @click="sendMessage">
                   <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M14 2L7 9M14 2l-4.5 12-2-5.5L2 6.5 14 2z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
                 </button>
               </div>
-              <div v-if="pendingChatAttachment" class="chat-attachment-preview">
-                <img v-if="pendingChatAttachment.kind === 'image'" class="chat-attachment-preview-image" :src="pendingChatAttachment.previewUrl" :alt="pendingChatAttachment.file.name" />
-                <div v-else class="chat-attachment-preview-file">📄</div>
-                <div class="chat-attachment-preview-meta">
-                  <div class="chat-attachment-preview-name">{{ pendingChatAttachment.file.name }}</div>
-                  <div class="chat-attachment-preview-tip">{{ pendingChatAttachment.kind === 'image' ? '发送后会带着这张图片一起参与对话' : '发送后会带着这个附件一起参与对话' }}</div>
+              <div v-if="pendingChatAttachments.length > 0" class="chat-attachment-preview-list">
+                <div
+                  v-for="(att, idx) in pendingChatAttachments"
+                  :key="idx"
+                  class="chat-attachment-preview"
+                >
+                  <img v-if="att.kind === 'image'" class="chat-attachment-preview-image" :src="att.previewUrl" :alt="att.file.name" />
+                  <div v-else class="chat-attachment-preview-file">📄</div>
+                  <div class="chat-attachment-preview-meta">
+                    <div class="chat-attachment-preview-name">{{ att.file.name }}</div>
+                    <div class="chat-attachment-preview-tip">{{ att.kind === 'image' ? '将随消息一起发送' : '将随消息一起发送' }}</div>
+                  </div>
+                  <button class="chat-attachment-remove" type="button" @click="removePendingChatAttachmentAt(idx)" aria-label="移除附件">×</button>
                 </div>
-                <button class="chat-attachment-remove" type="button" @click="clearPendingChatAttachment" aria-label="移除附件">×</button>
               </div>
             </div>
           </div>
@@ -379,6 +397,14 @@
               @click="publishCurrentApp"
               :disabled="publishingApp || isAppOnline"
             >{{ publishingApp ? '上线中...' : isAppOnline ? '已上线' : '上线应用' }}</button>
+            <button
+              v-if="showBuildHistoryButton"
+              class="preview-side-cta secondary"
+              type="button"
+              @click="openDeployPanel"
+              :disabled="assembling || generating || deployRunningAll || deployExecuting !== null"
+              title="查看创建过程 / 重试失败步骤"
+            >创建过程</button>
             <button
               class="preview-panel-collapse"
               type="button"
@@ -771,7 +797,20 @@
             <div v-if="isUpdateExecutionMode && currentUpdateExecutionLabel" class="deploy-current-step">{{ currentUpdateExecutionLabel }}</div>
             <div v-else-if="currentDeployStep" class="deploy-current-step">{{ currentDeployStep.label }}</div>
           </div>
-          <button v-if="!isUpdateReviewMode && !isUpdateExecutionMode" class="deploy-close" @click="deployOpen = false" aria-label="关闭部署面板">×</button>
+          <div class="deploy-header-actions">
+            <button
+              v-if="canRetryAllDeploy"
+              class="deploy-retry-all-btn"
+              type="button"
+              :disabled="deployRunningAll || deployExecuting !== null"
+              @click="deployRetryAll"
+              title="重置失败步骤并继续执行所有未完成步骤"
+            >
+              <span class="deploy-retry-all-icon" aria-hidden="true">↻</span>
+              一键重跑
+            </button>
+            <button v-if="!isUpdateReviewMode && !isUpdateExecutionMode" class="deploy-close" @click="deployOpen = false" aria-label="关闭部署面板">×</button>
+          </div>
         </div>
         <div v-if="isUpdateExecutionMode" class="deploy-progress">
           <div class="dp-track"><div class="dp-fill" :style="{ width: `${updateExecutionPercent}%` }"></div></div>
@@ -1247,6 +1286,7 @@ const showBuilderArtifactPanel = computed(() =>
 const showSpecArtifactPanel = computed(() =>
   artifactPanelVisible.value &&
   useSpecMode.value &&
+  specPanelExpanded.value &&
   !embedMode.value &&
   (!SHOW_PLATFORM_CONFIG || activeView.value === 'builder')
 )
@@ -1274,7 +1314,10 @@ const showDeployProgressInline = computed(() => deploySteps.value.length > 0 || 
 const showDeploySidebar = computed(() =>
   isUpdateReviewMode.value ||
   isUpdateExecutionMode.value ||
-  !isPlatformDeployed.value
+  !isPlatformDeployed.value ||
+  // 已部署的应用：用户点「创建过程」回看历史步骤时也要让 sidebar 出现。
+  // 否则 openDeployPanel() 把 deployOpen 设 true 后这个 aside 仍未渲染，按钮看着没反应。
+  deployOpen.value
 )
 const showViewSwitcher = computed(() =>
   !!existingAppId.value && (
@@ -1846,8 +1889,33 @@ const inputText = ref('')
 const isTyping = ref(false)
 const sendingMessage = ref(false)
 const streamingAssistantMessageId = ref<number | null>(null)
-const pendingChatAttachment = ref<{ file: File; kind: 'image' | 'file'; previewUrl: string } | null>(null)
-const canSendMessage = computed(() => (!!inputText.value.trim() || !!pendingChatAttachment.value) && !sendingMessage.value)
+type PendingChatAttachment = { file: File; kind: 'image' | 'file'; previewUrl: string }
+const pendingChatAttachments = ref<PendingChatAttachment[]>([])
+const canSendMessage = computed(() => (!!inputText.value.trim() || pendingChatAttachments.value.length > 0) && !sendingMessage.value)
+
+// AI 工作中状态 + 中断 — 让用户随时知道 AI 在干活、且能停下来
+const currentAbortController = ref<AbortController | null>(null)
+const pendingDurationSec = ref(0)
+let _pendingDurationTimer: ReturnType<typeof setInterval> | null = null
+watch(sendingMessage, (val) => {
+  if (_pendingDurationTimer) {
+    clearInterval(_pendingDurationTimer)
+    _pendingDurationTimer = null
+  }
+  pendingDurationSec.value = 0
+  if (val) {
+    _pendingDurationTimer = setInterval(() => {
+      pendingDurationSec.value += 1
+    }, 1000)
+  }
+})
+const stopSending = () => {
+  currentAbortController.value?.abort()
+  currentAbortController.value = null
+  isTyping.value = false
+  sendingMessage.value = false
+  streamingAssistantMessageId.value = null
+}
 
 const escapeHtml = (value: string) => String(value || '')
   .replace(/&/g, '&amp;')
@@ -1858,34 +1926,36 @@ const escapeHtml = (value: string) => String(value || '')
 
 const buildUserChatAttachmentContent = (
   text: string,
-  attachment: { file: File; kind: 'image' | 'file'; previewUrl: string }
+  attachments: PendingChatAttachment[]
 ) => {
   const parts: string[] = []
   if (text.trim()) parts.push(escapeHtml(text.trim()))
-  if (attachment.kind === 'image') {
-    parts.push(
-      `<div class="chat-inline-upload">
-      <div class="chat-inline-upload-head">
-        <span class="chat-inline-upload-badge">截图</span>
-        <span class="chat-inline-upload-name">${escapeHtml(attachment.file.name)}</span>
-      </div>
-      <img class="chat-inline-upload-image" src="${attachment.previewUrl}" alt="${escapeHtml(attachment.file.name)}" />
-      <div class="chat-inline-upload-foot">发送后会带着这张图片一起参与对话</div>
-    </div>`
-    )
-  } else {
-    parts.push(
-      `<div class="chat-inline-upload file">
+  for (const attachment of attachments) {
+    if (attachment.kind === 'image') {
+      parts.push(
+        `<div class="chat-inline-upload">
         <div class="chat-inline-upload-head">
-          <span class="chat-inline-upload-badge">附件</span>
+          <span class="chat-inline-upload-badge">截图</span>
           <span class="chat-inline-upload-name">${escapeHtml(attachment.file.name)}</span>
         </div>
-        <div class="chat-inline-upload-file-row">
-          <span class="chat-inline-upload-file-icon">📄</span>
-          <span class="chat-inline-upload-file-tip">发送后会带着这个附件一起参与对话</span>
-        </div>
+        <img class="chat-inline-upload-image" src="${attachment.previewUrl}" alt="${escapeHtml(attachment.file.name)}" />
+        <div class="chat-inline-upload-foot">发送后会带着这张图片一起参与对话</div>
       </div>`
-    )
+      )
+    } else {
+      parts.push(
+        `<div class="chat-inline-upload file">
+          <div class="chat-inline-upload-head">
+            <span class="chat-inline-upload-badge">附件</span>
+            <span class="chat-inline-upload-name">${escapeHtml(attachment.file.name)}</span>
+          </div>
+          <div class="chat-inline-upload-file-row">
+            <span class="chat-inline-upload-file-icon">📄</span>
+            <span class="chat-inline-upload-file-tip">发送后会带着这个附件一起参与对话</span>
+          </div>
+        </div>`
+      )
+    }
   }
   return parts.join('\n\n')
 }
@@ -1894,12 +1964,18 @@ const triggerChatImageUpload = () => {
   chatImageInputRef.value?.click()
 }
 
-const clearPendingChatAttachment = () => {
-  if (pendingChatAttachment.value?.previewUrl) {
-    URL.revokeObjectURL(pendingChatAttachment.value.previewUrl)
+const clearPendingChatAttachments = () => {
+  for (const att of pendingChatAttachments.value) {
+    if (att.previewUrl) URL.revokeObjectURL(att.previewUrl)
   }
-  pendingChatAttachment.value = null
+  pendingChatAttachments.value = []
   if (chatImageInputRef.value) chatImageInputRef.value.value = ''
+}
+
+const removePendingChatAttachmentAt = (index: number) => {
+  const removed = pendingChatAttachments.value[index]
+  if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl)
+  pendingChatAttachments.value.splice(index, 1)
 }
 
 const attachPendingAttachmentFile = (file: File, kind: 'image' | 'file') => {
@@ -1908,33 +1984,33 @@ const attachPendingAttachmentFile = (file: File, kind: 'image' | 'file') => {
     ElMessage.warning(kind === 'image' ? '图片大小请控制在 10MB 以内' : '附件大小请控制在 20MB 以内')
     return false
   }
-  clearPendingChatAttachment()
-  pendingChatAttachment.value = {
+  pendingChatAttachments.value.push({
     file,
     kind,
     previewUrl: kind === 'image' ? URL.createObjectURL(file) : '',
-  }
+  })
   return true
 }
 
 const handleChatImageChange = (event: Event) => {
   const target = event.target as HTMLInputElement
-  const file = target.files?.[0]
-  if (!file) return
-  const lowerName = file.name.toLowerCase()
+  const fileList = Array.from(target.files || [])
+  if (fileList.length === 0) return
 
-  if (lowerName.endsWith('.md') || lowerName.endsWith('.markdown')) {
-    handleDocUpload(event)
-    return
+  // 单 .md 走老的 doc upload 流程（保留 standard-doc 标准化检测路径）
+  if (fileList.length === 1) {
+    const onlyFile = fileList[0]
+    const lowerName = onlyFile.name.toLowerCase()
+    if (lowerName.endsWith('.md') || lowerName.endsWith('.markdown')) {
+      handleDocUpload(event)
+      return
+    }
   }
 
-  if (file.type.startsWith('image/')) {
-    attachPendingAttachmentFile(file, 'image')
-    target.value = ''
-    return
+  for (const f of fileList) {
+    const kind = f.type.startsWith('image/') ? 'image' : 'file'
+    attachPendingAttachmentFile(f, kind)
   }
-
-  attachPendingAttachmentFile(file, 'file')
   target.value = ''
 }
 
@@ -2818,6 +2894,32 @@ const generating = ref(false)
 const isRequirementsMode = computed(() => currentAgent.value === 'requirements')
 // 独立需求会话进入 SPEC 画布；已有应用详情固定使用构建预览，避免异步历史会话把页面切走。
 const useSpecMode = computed(() => currentAgent.value === 'requirements' && !existingAppId.value)
+// SPEC 三栏布局是否已展开（默认 false：先 Claude 风格纯对话）
+// 与 useSpecMode 解耦：useSpecMode=true 时后端依然走 SPEC 状态机，只是前端默认收起 panel
+// AI 自主判定信号（任一满足即展开）：
+//   1. SPEC phase 离开 gathering（LLM 调了 transition_phase 工具）
+//   2. spec 实质内容已被填充（goal/objects/roles/dicts 任一非空 → bootstrap_from_doc 已写入数据）
+//   3. doc_pipeline 已把解析结果推到 store.preview（上传 md 时 specStore 还没建好的兜底信号）
+const specPanelExpanded = ref(false)
+const specHasMaterialContent = computed(() => {
+  const s = specStore.current
+  if (!s) return false
+  return !!s.goal
+    || (Array.isArray(s.objects) && s.objects.length > 0)
+    || (Array.isArray(s.roles) && s.roles.length > 0)
+    || (Array.isArray(s.dicts) && s.dicts.length > 0)
+})
+watch(
+  [() => specStore.phase, specHasMaterialContent, hasStructuredPreviewData],
+  ([newPhase, hasContent, hasPreview]) => {
+    if (specPanelExpanded.value || !useSpecMode.value) return
+    const phaseAdvanced = !!newPhase && newPhase !== 'gathering'
+    if (phaseAdvanced || hasContent || hasPreview) {
+      specPanelExpanded.value = true
+    }
+  },
+  { immediate: true },
+)
 const docResultForCard = ref<any>(null)       // doc_result JSON for DesignDocCard
 const generatingDoc = ref(false)               // 正在生成设计文档
 const confirmingDoc = ref(false)               // 正在确认转换配置
@@ -3902,6 +4004,14 @@ const activeConflict = ref<ConflictState | null>(null)
 const deployDoneCount = computed(() => deploySteps.value.filter(s => s.status === 'completed').length)
 const deployPercent = computed(() => deploySteps.value.length ? Math.round(deployDoneCount.value / deploySteps.value.length * 100) : 0)
 const deployAllDone = computed(() => deploySteps.value.length > 0 && deployDoneCount.value === deploySteps.value.length)
+const canRetryAllDeploy = computed(() =>
+  deployOpen.value
+  && !isUpdateReviewMode.value
+  && !isUpdateExecutionMode.value
+  && deploySteps.value.length > 0
+  && !deployAllDone.value
+  && deploySteps.value.some(s => s.status === 'error' || s.status !== 'completed')
+)
 const currentDeployStep = computed(() =>
   deploySteps.value.find(step => step.key === deployExecuting.value) || null
 )
@@ -4232,6 +4342,17 @@ async function deployRedo(key: string) {
   await applicationApi.resetStep(deployAppId.value, key)
   await loadDeployStatus()
   await deployExec(key)
+}
+
+// 一键重跑：把所有 error 步骤 reset 掉，然后从未完成步骤继续往下跑
+async function deployRetryAll() {
+  if (!deployAppId.value || deployRunningAll.value || deployExecuting.value !== null) return
+  const erroredKeys = deploySteps.value.filter(s => s.status === 'error').map(s => s.key)
+  for (const key of erroredKeys) {
+    try { await applicationApi.resetStep(deployAppId.value, key) } catch { /* ignore */ }
+  }
+  if (erroredKeys.length) await loadDeployStatus()
+  await deployRunAll()
 }
 
 async function deployRunAll() {
@@ -5826,8 +5947,11 @@ const submitApplicationUpdateMessage = async (
     return
   }
 
-  const progressMsgId = Date.now()
-    messages.push({
+  // 用 Date.now()+随机后缀避免和 sendMessage 里刚刚 push 的 user 消息撞 id
+  // （两个 push 在同一 ms 内时，下面 messages.find(msg.id === progressMsgId)
+  //  会命中 user 消息并把它的 content 覆盖成 AI summary，相当于"用户消息没了"）
+  const progressMsgId = Date.now() + Math.floor(Math.random() * 10000) + 1
+  messages.push({
     id: progressMsgId,
     role: 'assistant',
     agent: 'builder',
@@ -5852,7 +5976,7 @@ const submitApplicationUpdateMessage = async (
     })
 
     if (result?.actionable_update === false || result?.type === 'assistant_reply') {
-      const progressMsg = messages.find(msg => msg.id === progressMsgId)
+      const progressMsg = messages.find(msg => msg.id === progressMsgId && msg.role === "assistant")
       if (progressMsg) {
         progressMsg.content = result.message || result.summary || '我理解了。你可以继续补充要调整的业务范围、字段、表单、权限或流程。'
       }
@@ -5879,7 +6003,7 @@ const submitApplicationUpdateMessage = async (
       }
       applyChangePlanState(planPayload)
       await fetchDocVersions()
-      const progressMsg = messages.find(msg => msg.id === progressMsgId)
+      const progressMsg = messages.find(msg => msg.id === progressMsgId && msg.role === "assistant")
       if (progressMsg) {
         const actionCount = Array.isArray(planPayload.actions) ? planPayload.actions.length : changePlanTotalCount.value
         progressMsg.content = `${result.summary || '已生成本次配置变更计划。'}\n\n右侧已更新 SPEC，并识别出 ${actionCount || 0} 项可执行变更。确认后点击「执行更新」同步到平台。`
@@ -5891,7 +6015,7 @@ const submitApplicationUpdateMessage = async (
       throw new Error('后端未返回新版 SPEC 内容')
     }
 
-    const progressMsg = messages.find(msg => msg.id === progressMsgId)
+    const progressMsg = messages.find(msg => msg.id === progressMsgId && msg.role === "assistant")
     if (progressMsg) {
       progressMsg.content = `${result.summary || '新版 SPEC 已生成'}\n\n正在生成配置变更计划...`
     }
@@ -5906,7 +6030,7 @@ const submitApplicationUpdateMessage = async (
       forceNewConversation: false,
     })
   } catch (error: any) {
-    const progressMsg = messages.find(msg => msg.id === progressMsgId)
+    const progressMsg = messages.find(msg => msg.id === progressMsgId && msg.role === "assistant")
     if (progressMsg) {
       progressMsg.content = `更新分析失败：${error?.response?.data?.detail || error?.message || '请稍后重试'}`
     }
@@ -5920,15 +6044,19 @@ const submitApplicationUpdateMessage = async (
 const sendMessage = async () => {
   if (!canSendMessage.value || sendingMessage.value) return
   sendingMessage.value = true
+  // 新建本轮请求的 AbortController；用户点中断按钮 → controller.abort() → 所有 fetch 立即终止
+  currentAbortController.value = new AbortController()
+  const abortSignal = currentAbortController.value.signal
   const text = inputText.value.trim()
-  const attachmentPayload = pendingChatAttachment.value
+  const attachmentPayloads = pendingChatAttachments.value.slice()
   inputText.value = ''
-  pendingChatAttachment.value = null
+  pendingChatAttachments.value = []
+  if (chatImageInputRef.value) chatImageInputRef.value.value = ''
   messages.push({
     id: Date.now(),
     role: 'user',
-    content: attachmentPayload
-      ? buildUserChatAttachmentContent(text, attachmentPayload)
+    content: attachmentPayloads.length > 0
+      ? buildUserChatAttachmentContent(text, attachmentPayloads)
       : text,
     created_at: ''
   })
@@ -5959,7 +6087,8 @@ const sendMessage = async () => {
   }
 
   if (isApplicationUpdateMessage) {
-    await submitApplicationUpdateMessage(text, attachmentPayload)
+    // 应用更新流程暂只支持单个附件（保留旧 API 签名），多文件场景取第一个
+    await submitApplicationUpdateMessage(text, attachmentPayloads[0] || null)
     sendingMessage.value = false
     if (chatImageInputRef.value) {
       chatImageInputRef.value.value = ''
@@ -5996,7 +6125,7 @@ const sendMessage = async () => {
   }
 
   const shouldStartBuildFromChat = !isRequirementsMode.value
-    && !attachmentPayload
+    && attachmentPayloads.length === 0
     && isBuildStartIntent(text)
     && hasPreviewContent.value
     && !deployAllDone.value
@@ -6018,7 +6147,7 @@ const sendMessage = async () => {
     return
   }
 
-  const shouldSwitchToBuilder = !(attachmentPayload?.kind === 'image')
+  const shouldSwitchToBuilder = !attachmentPayloads.some(a => a.kind === 'image')
     && (parseReady.value || !!existingAppId.value || hasPreviewContent.value)
     && currentAgent.value === 'requirements'
     && !specStore.current
@@ -6039,11 +6168,14 @@ const sendMessage = async () => {
   // 调用后端API
   try {
     const token = localStorage.getItem('token')
-    const response = attachmentPayload
+    const response = attachmentPayloads.length > 0
       ? await (() => {
           const formData = new FormData()
           formData.append('message', text)
-          formData.append('file', attachmentPayload.file)
+          // 多文件：每个 attachment 都 append 同名 'files'，FastAPI 会收成 List[UploadFile]
+          for (const att of attachmentPayloads) {
+            formData.append('files', att.file)
+          }
           formData.append('conversation_id', String(conversationId.value))
           if (incrementalConfigPayload) {
             formData.append('current_config', JSON.stringify(incrementalConfigPayload))
@@ -6061,7 +6193,8 @@ const sendMessage = async () => {
           return fetch(url, {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${token}` },
-            body: formData
+            body: formData,
+            signal: abortSignal,
           })
         })()
       : await (() => {
@@ -6076,7 +6209,8 @@ const sendMessage = async () => {
           return fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-            body: JSON.stringify(body)
+            body: JSON.stringify(body),
+            signal: abortSignal,
           })
         })()
 
@@ -6298,12 +6432,19 @@ const sendMessage = async () => {
       replaceOrAppendAssistantMessage('当前模型没有返回内容，请切换模型后再试一次。')
     }
   } catch (error) {
-    console.error('Send error:', error)
-    replaceOrAppendAssistantMessage('发送失败，请重试。')
+    // 用户主动中断 → AbortError，不当作"发送失败"显示红字
+    if ((error as Error)?.name === 'AbortError') {
+      replaceOrAppendAssistantMessage('已中断本次回复。')
+    } else {
+      console.error('Send error:', error)
+      replaceOrAppendAssistantMessage('发送失败，请重试。')
+    }
   } finally {
     streamingAssistantMessageId.value = null
     sendingMessage.value = false
-    if (!pendingChatAttachment.value && chatImageInputRef.value) {
+    isTyping.value = false
+    currentAbortController.value = null
+    if (pendingChatAttachments.value.length === 0 && chatImageInputRef.value) {
       chatImageInputRef.value.value = ''
     }
   }
@@ -7331,8 +7472,30 @@ const normalizeLoadedAssistantContent = (input: string) => {
   return cleaned
 }
 
+// 把后端拼接的 user message 里的 `[上传文件：X]\n\n<full content>` 折叠成 chip：
+// 只展示文件名 chip，不展示完整正文（LLM 后续对话仍能从 DB 原文读到内容）
+const formatUserAttachmentBlocks = (text: string): string => {
+  const markerRe = /\[上传(文件|截图)：([^\]]+?)\]/g
+  const markers: { type: '文件' | '截图'; name: string; start: number }[] = []
+  let m: RegExpExecArray | null
+  while ((m = markerRe.exec(text)) !== null) {
+    markers.push({ type: m[1] as '文件' | '截图', name: m[2], start: m.index })
+  }
+  if (markers.length === 0) return text
+  const userText = text.slice(0, markers[0].start).replace(/\s+$/, '')
+  const chipsHtml = markers.map(mk => {
+    const icon = mk.type === '截图' ? '🖼️' : '📄'
+    const cls = mk.type === '截图' ? 'msg-attachment-chip image' : 'msg-attachment-chip file'
+    const safeName = escapeHtml(mk.name)
+    return `<span class="${cls}" title="${safeName}"><span class="msg-attachment-icon" aria-hidden="true">${icon}</span><span class="msg-attachment-name">${safeName}</span></span>`
+  }).join('')
+  // 用 block 包裹 chip 列表，紧跟 userText 之后；不用换行符避免被外层 \n→<br> 拉开
+  return userText + `<div class="msg-attachment-list">${chipsHtml}</div>`
+}
+
 const formatContent = (t: string) => {
-  const text = getRenderableContentText(t)
+  let text = getRenderableContentText(t)
+  text = formatUserAttachmentBlocks(text)
   return text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>').replace(/• /g, '<span style="color:#818cf8;margin-right:4px">•</span> ')
 }
 
@@ -7655,7 +7818,7 @@ onMounted(async () => {
       })
       scrollToBottom()
       await generateDocInBackground()
-      const progressMsg = messages.find(msg => msg.id === progressMsgId)
+      const progressMsg = messages.find(msg => msg.id === progressMsgId && msg.role === "assistant")
       if (progressMsg) {
         progressMsg.content = parseReady.value
           ? '设计文档已生成，完整内容请查看右侧预览。'
@@ -7804,7 +7967,7 @@ watch(() => route.query.view, (nextView) => {
 })
 
 onBeforeUnmount(() => {
-  clearPendingChatAttachment()
+  clearPendingChatAttachments()
   clearPlatformIframeRepairTimer()
 })
 
@@ -8677,13 +8840,74 @@ watch(conversationId, (id) => {
 }
 .send-btn.disabled { opacity: 0.2; cursor: not-allowed; }
 .send-btn:hover:not(.disabled) { opacity: 0.92; transform: translateY(-1px); box-shadow: 0 14px 24px rgba(92, 115, 255, 0.28); }
+/* 中断按钮：sendingMessage=true 时替代发送按钮，红色，让用户感觉"按下就停" */
+.send-btn.stop-btn {
+  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+  box-shadow: 0 6px 14px rgba(239, 68, 68, 0.22);
+}
+.send-btn.stop-btn:hover { box-shadow: 0 14px 24px rgba(239, 68, 68, 0.32); transform: translateY(-1px); }
+/* AI 工作中状态：dots + 倒计时 */
+.typing-with-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+}
+.typing-meta {
+  font-size: 12px;
+  color: var(--t-text-muted);
+  letter-spacing: 0.2px;
+}
+.chat-attachment-preview-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 2px 8px 8px;
+}
+
+/* 历史消息里附件展示成 Claude 风格紧凑 pill — 文件名 + 图标，不展示正文 */
+.msg-attachment-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+}
+.msg-attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px 5px 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  font-size: 12.5px;
+  line-height: 1.3;
+  width: fit-content;
+  max-width: 100%;
+  color: inherit;
+}
+.msg-attachment-chip .msg-attachment-icon {
+  font-size: 14px;
+  line-height: 1;
+  opacity: 0.85;
+}
+.msg-attachment-chip .msg-attachment-name {
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 280px;
+}
+html[data-theme="light"] .msg-attachment-chip {
+  background: rgba(15, 23, 42, 0.05);
+  border-color: rgba(15, 23, 42, 0.1);
+}
 .chat-attachment-preview {
   position: relative;
   z-index: 1;
   display: flex;
   align-items: center;
   gap: 10px;
-  margin: 2px 8px 8px;
   padding: 8px 10px;
   border-radius: 12px;
   background: rgba(99, 102, 241, 0.08);
@@ -10569,6 +10793,25 @@ watch(conversationId, (id) => {
 }
 .deploy-close { all: unset; cursor: pointer; color: var(--t-text-muted); font-size: 16px; padding: 4px; transition: color 0.2s; }
 .deploy-close:hover { color: var(--t-text-secondary); }
+.deploy-header-actions { display: flex; align-items: center; gap: 8px; }
+.deploy-retry-all-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  background: var(--t-brand-soft, rgba(90, 120, 255, 0.12));
+  color: var(--t-brand, #5a78ff);
+  border: 1px solid var(--t-brand-border, rgba(90, 120, 255, 0.35));
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.deploy-retry-all-btn:hover:not(:disabled) {
+  background: var(--t-brand-soft-strong, rgba(90, 120, 255, 0.2));
+  border-color: var(--t-brand, #5a78ff);
+}
+.deploy-retry-all-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.deploy-retry-all-icon { font-size: 13px; line-height: 1; }
 
 .deploy-progress { padding: 0 16px 8px; display: flex; align-items: center; gap: 8px; }
 .dp-track { flex: 1; height: 3px; background: var(--t-border-subtle); border-radius: 2px; overflow: hidden; }
@@ -10651,13 +10894,13 @@ watch(conversationId, (id) => {
 }
 .dg-hd { display: flex; align-items: center; gap: 6px; padding: 10px 14px; background: var(--t-bg-subtle); font-size: 12px; }
 .dg.current .dg-hd {
-  background: linear-gradient(180deg, rgba(242, 246, 255, 0.96), rgba(247, 249, 255, 0.9));
+  background: linear-gradient(180deg, var(--t-brand-subtle), color-mix(in srgb, var(--t-brand) 5%, transparent));
 }
 .update-review-groups {
   padding-top: 4px;
 }
 .dg.update .dg-hd {
-  background: linear-gradient(180deg, rgba(242, 246, 255, 0.96), rgba(247, 249, 255, 0.9));
+  background: linear-gradient(180deg, var(--t-brand-subtle), color-mix(in srgb, var(--t-brand) 5%, transparent));
 }
 .dg-icon { font-size: 13px; }
 .dg-name { font-weight: 600; color: var(--t-text-primary); flex: 1; }
@@ -11534,6 +11777,37 @@ watch(conversationId, (id) => {
   border-radius: 12px;
   background: #fff;
 }
+
+/* SPEC 入口提示 — 默认状态先 Claude 风格纯对话；AI 判定需求清晰后 SPEC 三栏自动展开 */
+.spec-cta-banner {
+  width: min(100%, 780px);
+  margin: 14px auto 4px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-radius: 10px;
+  background: rgba(79, 110, 247, 0.06);
+  border: 1px solid rgba(79, 110, 247, 0.18);
+}
+.spec-cta-text {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #5a6680;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.spec-cta-icon {
+  font-size: 16px;
+  line-height: 1;
+  opacity: 0.85;
+}
+html[data-theme="dark"] .spec-cta-banner {
+  background: rgba(79, 110, 247, 0.08);
+  border-color: rgba(79, 110, 247, 0.25);
+}
+html[data-theme="dark"] .spec-cta-text { color: #b8c0d6; }
 
 .builder-content.artifacts-hidden .builder-spec-brief-main {
   min-width: 190px;

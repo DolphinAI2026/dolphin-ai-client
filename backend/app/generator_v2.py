@@ -180,17 +180,56 @@ def _build_permission_groups_for_form_config(
 _STATE_CHANGED_MARKERS = ("页面状态已改变", "无法保存")
 
 
+def _force_form_identity(
+    form_config: dict,
+    *,
+    form_name: str,
+    form_code: str,
+    all_model_codes: List[str],
+) -> None:
+    """save_form_config 前强制覆盖表单标识字段。
+
+    平台 query_detail_page_config 在某些时机会返回 formName="我的待办"（默认占位值）。
+    如果直接把这份配置存回去，会把建表时设置的真实表单名抹掉，所有表单都变成"我的待办"。
+    """
+    if not isinstance(form_config, dict):
+        return
+    desired_name = str(form_name or "").strip()
+    desired_code = str(form_code or "").strip()
+    desired_models = [str(c).strip() for c in (all_model_codes or []) if str(c).strip()]
+
+    def _apply(target: dict) -> None:
+        if not isinstance(target, dict):
+            return
+        if desired_name:
+            target["formName"] = desired_name
+        if desired_code:
+            target["formCode"] = desired_code
+        if desired_models:
+            target["allModelCodes"] = desired_models
+
+    _apply(form_config)
+    _apply(form_config.get("simpleFormConfig", {}))
+
+
 async def _sync_form_permissions_to_form_config(
     client: APaaSClient,
     app_id: str,
     form_id: str,
     rules: List[dict],
     role_code_map: Dict[str, dict],
+    form_name: str = "",
+    form_code: str = "",
+    all_model_codes: Optional[List[str]] = None,
 ) -> None:
     """回写表单权限到 formConfig。
 
     平台在并发场景下可能返回"当前页面状态已改变，无法保存"——此时重查再存一次，
     单次重试足以覆盖常见瞬时冲突；仍失败则把最新异常抛出（由调用方的 except 兜底）。
+
+    重要：query_detail_page_config 返回的 formName 可能被平台覆盖成默认占位"我的待办"，
+    save 前必须把建表时确定的 form_name/form_code/all_model_codes 强制写回去，
+    否则所有表单的名字都会变成"我的待办"（参见 step_executor.py 同名函数注释）。
     """
     last_exc: Exception | None = None
     for attempt in range(2):
@@ -202,9 +241,16 @@ async def _sync_form_permissions_to_form_config(
         form_config["permissionGroups"] = permission_groups
         form_config["advancedPermissionGroups"] = advanced_groups
         form_config["operationPermissionGroups"] = operation_groups
+        _force_form_identity(
+            form_config,
+            form_name=form_name,
+            form_code=form_code,
+            all_model_codes=all_model_codes or [],
+        )
         logger.info(
-            "save_form_config reason: 回写表单权限 (formId=%s, permissionGroups=%s, advanced=%s, operation=%s, attempt=%s)",
+            "save_form_config reason: 回写表单权限 (formId=%s, formName=%s, permissionGroups=%s, advanced=%s, operation=%s, attempt=%s)",
             form_id,
+            form_name or "<unknown>",
             len(permission_groups),
             len(advanced_groups),
             len(operation_groups),
@@ -725,7 +771,15 @@ def _build_permission_payload_for_form(
         "operationPermissionGroups": op_groups,
         "dataPermissionGroups": data_groups,
     }
-    sync_job = {"form_id": form_id, "rules": user_perm["rules"]}
+    # 把建表时的表单名/编码/绑定模型一起传出去，让权限回写阶段能在 save_form_config
+    # 前把这些字段重新覆盖到 form_config 上，避免被平台默认值"我的待办"抹掉。
+    sync_job = {
+        "form_id": form_id,
+        "rules": user_perm["rules"],
+        "form_name": form_result.get("formName", ""),
+        "form_code": form_code,
+        "all_model_codes": list(form_result.get("allModelCodes") or []),
+    }
     return perm_payload, sync_job
 
 
@@ -745,6 +799,9 @@ async def _apply_permissions_and_sync(
             form_id=job["form_id"],
             rules=job["rules"],
             role_code_map=role_code_map,
+            form_name=job.get("form_name", ""),
+            form_code=job.get("form_code", ""),
+            all_model_codes=job.get("all_model_codes", []),
         )
 
 
