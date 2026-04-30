@@ -41,8 +41,12 @@ _WORKFLOW_SUBSECTION_RE = re.compile(
     r"^###\s+(.+?)\s*[（(]关联表单[：:]\s*(.+?)[）)]\s*$"
 )
 
-# 章节标题：## N、章节名 或 ## 章节名
-_SECTION_HEADER_RE = re.compile(r"^##\s+(?:[一二三四五六七八九十]+[、.]?\s*)?(.+)$")
+# 章节标题：兼容 # / ## / ### 三种层级——markdown 语义上都是标题，没必要卡死
+# 用 negative lookahead 排除 "### 4.1 模型定义" / "### 3.1 启用状态" 这种
+# 阿拉伯数字小数点格式的子章节，避免它们被误当成主章节切分点（会截断父章节内容）
+_SECTION_HEADER_RE = re.compile(
+    r"^#{1,3}\s+(?!\d+\.\d)(?:[一二三四五六七八九十]+[、.]?\s*)?(.+)$"
+)
 
 
 def _match_section_key(title: str) -> Optional[str]:
@@ -133,15 +137,19 @@ def split_subsections(section_text: str) -> List[Tuple[str, Optional[str], Optio
 
 
 def detect_section_headers(text: str) -> List[Tuple[str, bool]]:
-    """检测所有二级标题，返回 [(title, is_standard_format)]
+    """检测所有顶层标题（# / ## / ###），返回 [(title, is_standard_format)]
 
-    用于标准度检测。
+    用于标准度检测。任意层级 + "中文数字、章节名" 都算标准格式。
     """
     results = []
-    standard_re = re.compile(r"^##\s+[一二三四五六七八九十]+[、.]\s*.+$")
-    header_re = re.compile(r"^##\s+.+$")
+    # 标准格式：含"一、二、三..."中文数字编号（任意层级）
+    standard_re = re.compile(r"^#{1,3}\s+[一二三四五六七八九十]+[、.]\s*.+$")
+    # 任意层级标题；过滤掉 N.M（阿拉伯数字小数点）这种子章节，否则会把
+    # ### 4.1 / ### 5.2 也算到主章节里，分母变大稀释 standard 比例
+    header_re = re.compile(r"^#{1,3}\s+.+$")
+    subsection_re = re.compile(r"^#{1,3}\s+\d+\.\d+")
     for line in text.splitlines():
-        if header_re.match(line):
+        if header_re.match(line) and not subsection_re.match(line):
             is_standard = bool(standard_re.match(line))
             results.append((line.strip(), is_standard))
     return results
