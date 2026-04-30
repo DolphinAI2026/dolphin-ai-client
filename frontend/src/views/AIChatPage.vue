@@ -753,6 +753,11 @@ type TLItem =
 // 把同名连续 ≥2 次的 tool calls 折叠成一个 group
 function collapseTools(tcs: AIChatToolCall[]): TLItem[] {
   const out: TLItem[] = []
+  // 累计同 filename 的 write_artifact 第几次（用于挑对应版本的 artifact）。
+  // 之前用 artifacts.find(filename) 总是返回第一个匹配 → 多次 write 后所有
+  // inline 卡片都显示同一个版本。改为按调用顺序对齐 version：
+  // 第 N 次成功 write_artifact（同名）→ artifacts 里 version 第 N 大的那一条。
+  const seenWriteForFile: Record<string, number> = {}
   let i = 0
   while (i < tcs.length) {
     let j = i + 1
@@ -767,8 +772,13 @@ function collapseTools(tcs: AIChatToolCall[]): TLItem[] {
     if (last && last.tool_name === 'write_artifact' && last.status === 'success') {
       const fname = last.args_json?.filename
       if (fname) {
-        // 取该文件最近一次产出（artifacts 已按 updated_at desc）
-        const art = artifacts.value.find(a => a.filename === fname)
+        seenWriteForFile[fname] = (seenWriteForFile[fname] || 0) + 1
+        const writeIdx = seenWriteForFile[fname]  // 1-based
+        // 该 filename 所有版本按 version 升序，取第 writeIdx 个
+        const versions = artifacts.value
+          .filter(a => a.filename === fname)
+          .sort((a, b) => a.version - b.version)
+        const art = versions[writeIdx - 1] || versions[versions.length - 1]
         if (art) {
           out.push({ kind: 'artifact_card', artifact: art, ts: 0 })
         }

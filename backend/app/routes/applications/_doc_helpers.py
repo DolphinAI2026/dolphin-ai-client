@@ -314,7 +314,13 @@ def _normalize_doc_data_type(raw_type: Any, field_name: str = "") -> str:
             "时间": "datetime",
             "金额": "decimal",
             "数字": "int",
-            "附件上传": "text",
+            # 附件存的是文件 URL/路径字符串，长度可控（≤ 1000 字符），用 varchar
+            # 不用 text（text 是 long blob，索引/where 都不友好）
+            "附件上传": "varchar",
+            # 数据单选 / 数据选择 / 关联表单 存的是被引用记录的编码字符串，varchar
+            "数据单选": "varchar",
+            "数据选择": "varchar",
+            "关联表单": "varchar",
             "人员选择": "varchar",
             "部门选择": "varchar",
             "开关": "int",

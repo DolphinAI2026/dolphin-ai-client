@@ -206,6 +206,17 @@
                 <div v-if="msg.role === 'assistant'" class="assistant-avatar" aria-hidden="true">AI</div>
                 <div class="bubble-inner" :class="{ 'welcome-bubble': msg.role === 'assistant' && msg.content === BUILDER_WELCOME_MESSAGE }">
                   <div class="bubble-content" :class="msg.role" v-html="formatContent(msg.content)"></div>
+                  <!-- 消息附带的 action 按钮组（如 DOC_NOT_STANDARD 错误的"返回 AI-Chat"）-->
+                  <div v-if="(msg as any).actions?.length" class="bubble-actions">
+                    <button
+                      v-for="(action, ai) in (msg as any).actions"
+                      :key="ai"
+                      type="button"
+                      class="bubble-action-btn"
+                      :class="action.type"
+                      @click="handleMessageAction(action)"
+                    >{{ action.label }}</button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -4852,8 +4863,10 @@ const uploadDocFile = async (file: File) => {
           if (sigs) lines.push(`- 各项评分：${sigs}`)
         }
         lines.push('')
-        lines.push('请回 **AI-Chat** 让助手按标准 6 章规范重写文档后再上传到 Builder。')
-        throw new Error(lines.join('\n'))
+        lines.push('点下方按钮直接返回 AI-Chat 让助手按标准 6 章规范重写文档。')
+        const e: any = new Error(lines.join('\n'))
+        e._docNotStandardDetail = detail
+        throw e
       }
       throw new Error(typeof detail === 'string' ? detail : '文档上传失败')
     }
@@ -5152,9 +5165,18 @@ const uploadDocFile = async (file: File) => {
         pmsg.content = buildProgressContent(true)
       }
     } else if (pmsg) {
-      pmsg.content += `\n\n❌ 解析失败: ${err?.message || '未知错误'}`
+      pmsg.content += `\n\n${err?.message || '❌ 解析失败：未知错误'}`
+      if (err?._docNotStandardDetail) {
+        ;(pmsg as any).actions = [
+          { kind: 'back-to-aichat', type: 'primary', label: '↩ 返回 AI-Chat 修订文档' },
+        ]
+      }
     } else {
-      messages.push({ id: Date.now(), role: 'assistant', agent: 'builder', content: `文档解析失败: ${err?.message || '未知错误'}`, created_at: '' })
+      const newMsg: any = { id: Date.now(), role: 'assistant', agent: 'builder', content: `文档解析失败: ${err?.message || '未知错误'}`, created_at: '' }
+      if (err?._docNotStandardDetail) {
+        newMsg.actions = [{ kind: 'back-to-aichat', type: 'primary', label: '↩ 返回 AI-Chat 修订文档' }]
+      }
+      messages.push(newMsg)
     }
     isDocParsing.value = false
   }
@@ -5330,8 +5352,10 @@ const handleDocVersionUpload = async (file: File, appId: number, options: DocVer
           if (sigs) lines.push(`- 各项评分：${sigs}`)
         }
         lines.push('')
-        lines.push('请回 **AI-Chat** 让助手按标准 6 章规范重写文档后再上传到 Builder。')
-        throw new Error(lines.join('\n'))
+        lines.push('点下方按钮直接返回 AI-Chat 让助手按标准 6 章规范重写文档。')
+        const e: any = new Error(lines.join('\n'))
+        e._docNotStandardDetail = detail
+        throw e
       }
       throw new Error(typeof detail === 'string' ? detail : '文档上传失败')
     }
@@ -5500,14 +5524,23 @@ const handleDocVersionUpload = async (file: File, appId: number, options: DocVer
     const pmsg = messages.find(m => m.id === progressMsgId)
     if (pmsg) {
       pmsg.content = `❌ ${buildUpdateProgressContent(false, `文档变更分析失败：${err?.message || '未知错误'}`)}`
+      if (err?._docNotStandardDetail) {
+        ;(pmsg as any).actions = [
+          { kind: 'back-to-aichat', type: 'primary', label: '↩ 返回 AI-Chat 修订文档' },
+        ]
+      }
     } else {
-      messages.push({
+      const newMsg: any = {
         id: Date.now(),
         role: 'assistant',
         agent: 'builder',
         content: `文档变更分析失败: ${err?.message || '未知错误'}`,
         created_at: ''
-      })
+      }
+      if (err?._docNotStandardDetail) {
+        newMsg.actions = [{ kind: 'back-to-aichat', type: 'primary', label: '↩ 返回 AI-Chat 修订文档' }]
+      }
+      messages.push(newMsg)
     }
   }
   scrollToBottom()
@@ -6963,6 +6996,14 @@ const formatContent = (t: string) => {
   return text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>').replace(/• /g, '<span style="color:#818cf8;margin-right:4px">•</span> ')
 }
 
+// 处理消息附带的 action 按钮点击（DOC_NOT_STANDARD 错误的"返回 AI-Chat"等）
+function handleMessageAction(action: { kind?: string; label?: string }) {
+  if (!action) return
+  if (action.kind === 'back-to-aichat') {
+    router.push({ path: '/ai-chat' })
+  }
+}
+
 onMounted(async () => {
   store.showConnectModal = false
   const initialPrompt = typeof route.query.prompt === 'string' ? route.query.prompt : ''
@@ -7985,6 +8026,38 @@ watch(conversationId, (id) => {
 .bubble-row.user { justify-content: flex-end; width: 100%; }
 .bubble-row.assistant { width: 100%; }
 .bubble-inner { max-width: 80%; }
+.bubble-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 0 4px;
+}
+.bubble-action-btn {
+  appearance: none;
+  border: 1px solid color-mix(in srgb, var(--t-brand, #5a78ff) 30%, transparent);
+  background: color-mix(in srgb, var(--t-brand, #5a78ff) 10%, transparent);
+  color: var(--t-brand, #5a78ff);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 6px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, transform 0.05s;
+}
+.bubble-action-btn:hover {
+  background: color-mix(in srgb, var(--t-brand, #5a78ff) 20%, transparent);
+  border-color: color-mix(in srgb, var(--t-brand, #5a78ff) 50%, transparent);
+}
+.bubble-action-btn:active { transform: translateY(1px); }
+.bubble-action-btn.primary {
+  background: var(--t-brand, #5a78ff);
+  color: #fff;
+  border-color: transparent;
+}
+.bubble-action-btn.primary:hover {
+  background: color-mix(in srgb, var(--t-brand, #5a78ff) 88%, black);
+}
 .chat-bubble.assistant .bubble-inner {
   max-width: min(720px, calc(100% - 36px));
 }
