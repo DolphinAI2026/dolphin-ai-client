@@ -16,9 +16,23 @@
           >«</button>
         </div>
         <button class="new-btn" @click="onCreateSession">+ 新会话</button>
+        <!-- 模式分组 tab：全部 / Chat / Cowork -->
+        <div class="session-filter-tabs">
+          <button
+            v-for="tab in sessionFilterTabs"
+            :key="tab.key"
+            class="filter-tab"
+            :class="{ active: sessionsFilter === tab.key }"
+            @click="sessionsFilter = tab.key"
+            :title="tab.title"
+          >
+            <span>{{ tab.label }}</span>
+            <span class="filter-tab-count">{{ tab.count }}</span>
+          </button>
+        </div>
         <div class="session-list">
           <div
-            v-for="s in sessions"
+            v-for="s in filteredSessions"
             :key="s.id"
             class="session-item"
             :class="{ active: currentSessionId === s.id }"
@@ -30,7 +44,9 @@
             <button class="session-menu-btn" @click.stop="onRenameSession(s)" title="重命名">✎</button>
             <button class="session-menu-btn danger" @click.stop="onDeleteSession(s)" title="删除">×</button>
           </div>
-          <div v-if="sessions.length === 0" class="empty-hint">还没有会话，点上面新建一个</div>
+          <div v-if="filteredSessions.length === 0" class="empty-hint">
+            {{ sessionsFilter === 'all' ? '还没有会话，点上面新建一个' : `还没有 ${sessionsFilter === 'cowork' ? 'Cowork' : 'Chat'} 模式的会话` }}
+          </div>
         </div>
         <div class="aside-foot">
           <button class="back-btn" @click="$router.push('/apps')">← 返回应用</button>
@@ -415,6 +431,24 @@ const router = useRouter()
 const sessions = ref<AIChatSession[]>([])
 const currentSession = ref<AIChatSession | null>(null)
 const currentSessionId = computed(() => currentSession.value?.id ?? null)
+
+// 会话列表分组 tab：all / chat / cowork
+type SessionFilter = 'all' | 'chat' | 'cowork'
+const sessionsFilter = ref<SessionFilter>('all')
+const sessionFilterTabs = computed<Array<{ key: SessionFilter; label: string; title: string; count: number }>>(() => {
+  const chatCount = sessions.value.filter(s => (s.mode || 'chat') !== 'cowork').length
+  const coworkCount = sessions.value.filter(s => s.mode === 'cowork').length
+  return [
+    { key: 'all', label: '全部', title: '所有会话', count: sessions.value.length },
+    { key: 'chat', label: '💬 Chat', title: '从零理需求的对话', count: chatCount },
+    { key: 'cowork', label: '📂 Cowork', title: '批量材料整合', count: coworkCount },
+  ]
+})
+const filteredSessions = computed(() => {
+  if (sessionsFilter.value === 'all') return sessions.value
+  if (sessionsFilter.value === 'cowork') return sessions.value.filter(s => s.mode === 'cowork')
+  return sessions.value.filter(s => (s.mode || 'chat') !== 'cowork')
+})
 const messages = ref<AIChatMessage[]>([])
 const toolCalls = ref<AIChatToolCall[]>([])
 const attachments = ref<AIChatAttachment[]>([])
@@ -1453,6 +1487,52 @@ onMounted(async () => {
   padding: 8px 12px; border-radius: 8px; font-size: 13px; cursor: pointer; text-align: left;
 }
 .new-btn:hover { background: var(--ac-border-faint); }
+
+.session-filter-tabs {
+  display: flex;
+  gap: 4px;
+  margin: 8px 0 6px;
+  padding: 3px;
+  background: var(--ac-border-faint);
+  border-radius: 8px;
+}
+.filter-tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 5px 6px;
+  border: 0;
+  background: transparent;
+  color: var(--ac-text-mute);
+  font-size: 11.5px;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+.filter-tab:hover { color: var(--ac-text); }
+.filter-tab.active {
+  background: var(--ac-panel);
+  color: var(--ac-text);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+}
+.filter-tab-count {
+  font-size: 10px;
+  color: var(--ac-text-faint);
+  background: var(--ac-border);
+  padding: 0 5px;
+  border-radius: 8px;
+  line-height: 14px;
+  min-width: 14px;
+  text-align: center;
+}
+.filter-tab.active .filter-tab-count {
+  background: color-mix(in srgb, var(--ac-brand) 16%, transparent);
+  color: var(--ac-brand);
+}
+
 .session-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
 .session-item {
   padding: 7px 10px; border-radius: 6px; color: var(--ac-text-mute); cursor: pointer; font-size: 13px;
