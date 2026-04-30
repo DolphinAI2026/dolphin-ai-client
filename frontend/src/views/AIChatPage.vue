@@ -24,13 +24,19 @@
             <el-dropdown-menu>
               <el-dropdown-item command="chat">
                 <div class="new-session-option">
-                  <div class="new-session-option-title">💬 Chat 会话</div>
+                  <div class="new-session-option-title">
+                    <el-icon class="mode-icon chat"><ChatDotRound /></el-icon>
+                    <span>Chat 会话</span>
+                  </div>
                   <div class="new-session-option-hint">从零对话理需求</div>
                 </div>
               </el-dropdown-item>
               <el-dropdown-item command="cowork">
                 <div class="new-session-option">
-                  <div class="new-session-option-title">📂 Cowork 会话</div>
+                  <div class="new-session-option-title">
+                    <el-icon class="mode-icon cowork"><Folder /></el-icon>
+                    <span>Cowork 会话</span>
+                  </div>
                   <div class="new-session-option-hint">批量材料整合成标准 md</div>
                 </div>
               </el-dropdown-item>
@@ -47,6 +53,8 @@
             @click="sessionsFilter = tab.key"
             :title="tab.title"
           >
+            <el-icon v-if="tab.key === 'chat'" class="filter-tab-icon"><ChatDotRound /></el-icon>
+            <el-icon v-else-if="tab.key === 'cowork'" class="filter-tab-icon"><Folder /></el-icon>
             <span>{{ tab.label }}</span>
             <span class="filter-tab-count">{{ tab.count }}</span>
           </button>
@@ -60,7 +68,7 @@
             @click="loadSession(s.id)"
             :title="`${s.title}${s.mode === 'cowork' ? '（Cowork 协作整合模式）' : ''}`"
           >
-            <span v-if="s.mode === 'cowork'" class="session-mode-badge cowork" title="Cowork 协作整合模式">📂</span>
+            <el-icon v-if="s.mode === 'cowork'" class="session-mode-badge cowork" title="Cowork 协作整合模式"><Folder /></el-icon>
             <span class="session-name">{{ s.title }}</span>
             <button class="session-menu-btn" @click.stop="onRenameSession(s)" title="重命名">✎</button>
             <button class="session-menu-btn danger" @click.stop="onDeleteSession(s)" title="删除">×</button>
@@ -107,8 +115,12 @@
             @keydown.enter="saveTitle"
           />
           <span v-else-if="currentSession" @dblclick="startEditTitle" :title="'双击重命名'">
-            <span v-if="currentSession.mode === 'cowork'" class="header-mode-badge cowork">📂 Cowork</span>
-            <span v-else class="header-mode-badge chat">💬 Chat</span>
+            <span v-if="currentSession.mode === 'cowork'" class="header-mode-badge cowork">
+              <el-icon><Folder /></el-icon><span>Cowork</span>
+            </span>
+            <span v-else class="header-mode-badge chat">
+              <el-icon><ChatDotRound /></el-icon><span>Chat</span>
+            </span>
             {{ currentSession.title }}
           </span>
           <span v-else class="title-placeholder">未选择会话</span>
@@ -128,7 +140,7 @@
       <div class="messages" ref="messagesRef">
         <div v-if="!currentSession" class="welcome">
           <template v-if="incomingMode === 'cowork'">
-            <h2>📂 协作整合材料</h2>
+            <h2><el-icon class="welcome-icon"><Folder /></el-icon> 协作整合材料</h2>
             <p>把你的所有材料（PDF / Word / Excel / 截图 / 现有文档）拖进来，AI 会先并行读完所有附件，给出综合摘要 + 批量澄清问题，然后产出符合 Builder 规范的标准设计文档。</p>
           </template>
           <template v-else>
@@ -439,6 +451,7 @@ import { usePreviewStore } from '@/stores/preview'
 import { useThemeStore } from '@/stores/theme'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { ChatDotRound, Folder } from '@element-plus/icons-vue'
 
 const previewStore = usePreviewStore()
 const themeStore = useThemeStore()
@@ -461,8 +474,8 @@ const sessionFilterTabs = computed<Array<{ key: SessionFilter; label: string; ti
   const coworkCount = sessions.value.filter(s => s.mode === 'cowork').length
   return [
     { key: 'all', label: '全部', title: '所有会话', count: sessions.value.length },
-    { key: 'chat', label: '💬 Chat', title: '从零理需求的对话', count: chatCount },
-    { key: 'cowork', label: '📂 Cowork', title: '批量材料整合', count: coworkCount },
+    { key: 'chat', label: 'Chat', title: '从零理需求的对话', count: chatCount },
+    { key: 'cowork', label: 'Cowork', title: '批量材料整合', count: coworkCount },
   ]
 })
 const filteredSessions = computed(() => {
@@ -1599,14 +1612,15 @@ onMounted(async () => {
 .session-item.active { background: var(--ac-btn); color: var(--ac-text); }
 .session-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-mode-badge {
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1;
   flex-shrink: 0;
-}
-.session-mode-badge.cowork {
-  filter: hue-rotate(-15deg);  /* 让 📂 表情更偏暖橙，跟 chat 视觉区分 */
+  color: #c2630b;
 }
 .header-mode-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: 11px;
   font-weight: 600;
   padding: 2px 8px;
@@ -1614,6 +1628,9 @@ onMounted(async () => {
   margin-right: 8px;
   vertical-align: middle;
   letter-spacing: 0.3px;
+}
+.header-mode-badge .el-icon {
+  font-size: 12px;
 }
 .header-mode-badge.cowork {
   background: color-mix(in srgb, #f59e0b 18%, transparent);
@@ -1624,6 +1641,26 @@ onMounted(async () => {
   background: color-mix(in srgb, var(--ac-brand) 14%, transparent);
   color: var(--ac-brand);
   border: 1px solid color-mix(in srgb, var(--ac-brand) 28%, transparent);
+}
+.welcome-icon {
+  vertical-align: -3px;
+  margin-right: 4px;
+  color: #c2630b;
+}
+.mode-icon {
+  font-size: 14px;
+  margin-right: 6px;
+  vertical-align: -2px;
+}
+.mode-icon.chat { color: var(--el-color-primary, #409eff); }
+.mode-icon.cowork { color: #c2630b; }
+.new-session-option-title {
+  display: flex;
+  align-items: center;
+}
+.filter-tab-icon {
+  font-size: 12px;
+  margin-right: 2px;
 }
 .session-menu-btn {
   appearance: none;

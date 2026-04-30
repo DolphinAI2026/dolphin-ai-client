@@ -72,7 +72,7 @@
           </div>
 
           <div
-            v-for="app in filteredApps"
+            v-for="app in pagedApps"
             :key="app.id"
             class="apps-row"
             role="button"
@@ -155,7 +155,7 @@
 
         <div v-else class="apps-card-grid">
           <article
-            v-for="app in filteredApps"
+            v-for="app in pagedApps"
             :key="app.id"
             class="apps-card"
             @click="openApp(app)"
@@ -199,6 +199,18 @@
             </div>
           </article>
         </div>
+
+        <!-- 分页：超过 1 页才显示，列表 / 卡片视图共用 -->
+        <div v-if="filteredApps.length > PAGE_SIZE" class="apps-pagination">
+          <el-pagination
+            v-model:current-page="currentPage"
+            :page-size="PAGE_SIZE"
+            :total="filteredApps.length"
+            layout="total, prev, pager, next, jumper"
+            background
+            small
+          />
+        </div>
       </section>
     </main>
 
@@ -227,7 +239,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { Delete, Grid, Link as LinkIcon, List, MoreFilled, Plus, Promotion, UserFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -280,6 +292,20 @@ const filteredApps = computed(() => {
   return [...apps.value]
     .filter(app => matchesTab(app, activeTab.value))
     .sort((a, b) => appTimeMs(b.updated_at || b.created_at) - appTimeMs(a.updated_at || a.created_at))
+})
+
+// 分页：每页 10 个，切换 tab 时自动回第 1 页
+const PAGE_SIZE = 10
+const currentPage = ref(1)
+const pagedApps = computed(() => {
+  const start = (currentPage.value - 1) * PAGE_SIZE
+  return filteredApps.value.slice(start, start + PAGE_SIZE)
+})
+watch(activeTab, () => { currentPage.value = 1 })
+// filteredApps 数量缩到当前页之外（比如删了某个 app）→ 回到合法页
+watch(filteredApps, list => {
+  const lastPage = Math.max(1, Math.ceil(list.length / PAGE_SIZE))
+  if (currentPage.value > lastPage) currentPage.value = lastPage
 })
 
 const deployedCount = computed(() => apps.value.filter(app => appStage(app).group === 'deployed').length)
@@ -632,6 +658,12 @@ async function removeAppMember(userId: number) {
   background: linear-gradient(135deg, #8a96ff, #6273ff) !important;
   border-color: rgba(181, 190, 255, 0.62) !important;
   color: #ffffff !important;
+}
+
+.apps-pagination {
+  display: flex;
+  justify-content: flex-end;
+  padding: 16px 4px 4px;
 }
 
 .apps-page {

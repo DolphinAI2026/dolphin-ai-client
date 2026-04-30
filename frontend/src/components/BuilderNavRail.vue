@@ -97,7 +97,17 @@ const activeKey = computed(() => {
 const userInitial = computed(() => (userStore.user?.username || 'A').slice(0, 1).toUpperCase())
 
 function go(path: string) {
-  router.push(path)
+  // 1. 已经在目标路径就跳过，避免 NavigationDuplicated 触发 unhandled rejection
+  //    导致后续 click 事件被 vue-router 静默吞掉（用户体验：点不动）
+  // 2. 异步路由跳转加 catch 兜底，处理 NavigationCancelled / Aborted（用户快速连点
+  //    /路由 beforeEach 主动 abort 时不抛错到全局）
+  if (route.fullPath === path || route.path === path) return
+  router.push(path).catch((err: any) => {
+    const name = err?.name || ''
+    if (!/Navigation(Duplicated|Cancelled|Aborted)/.test(name)) {
+      console.warn('[nav] router.push failed:', err)
+    }
+  })
 }
 
 function openCommand() {
