@@ -8,7 +8,7 @@ os.environ.setdefault("JWT_SECRET_KEY", "test-secret")
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
 
-from app.routes.requirements import is_valid_doc_result, normalize_doc_result
+from app.routes.applications._doc_helpers import is_valid_doc_result, normalize_doc_result
 
 
 def test_normalize_doc_result_completes_missing_spec_sections():

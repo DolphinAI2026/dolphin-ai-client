@@ -100,6 +100,11 @@ async def init_db():
             "ALTER TABLE conversations ADD COLUMN coding_phase VARCHAR(32)",
             "ALTER TABLE conversations ADD COLUMN coding_active_brainstorm_session_id VARCHAR(64)",
             "ALTER TABLE conversations ADD COLUMN coding_active_coding_session_id VARCHAR(64)",
+            # AIChat 工作模式：chat（从零理需求）/ cowork（批量材料整合）
+            "ALTER TABLE ai_chat_sessions ADD COLUMN mode VARCHAR(20) NOT NULL DEFAULT 'chat'",
+            # AIChat 工具调用：存 LLM 返回的原始 call id，跨轮 history 重建用
+            "ALTER TABLE ai_chat_tool_calls ADD COLUMN provider_call_id VARCHAR(120)",
+            "CREATE INDEX IF NOT EXISTS ix_ai_chat_tool_calls_provider_call_id ON ai_chat_tool_calls(provider_call_id)",
         ]:
             try:
                 await conn.execute(text(stmt))

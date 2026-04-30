@@ -154,13 +154,6 @@ const router = createRouter({
       meta: { requiresAuth: true, requiresTenantAdmin: true, navExpanded: true }
     },
     {
-      path: '/requirements/:id?',
-      name: 'Requirements',
-      // 重定向到 ChatPage 的 requirements 模式
-      redirect: () => ({ path: '/chat', query: { mode: 'requirements' } }),
-      meta: { requiresAuth: true }
-    },
-    {
       path: '/generate/:id?',
       name: 'Generate',
       // 重定向到 ChatPage 并自动打开部署面板

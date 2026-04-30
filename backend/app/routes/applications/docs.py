@@ -604,7 +604,7 @@ async def _classify_update_request_with_llm(
     current_config: dict,
 ) -> dict:
     """Use the tenant builder model to decide whether a chat turn is an app update."""
-    from app.routes.requirements import _complete_with_config, extract_json
+    from app.routes.applications._doc_helpers import _complete_with_config, extract_json
 
     context_summary = _build_update_context_summary(current_config, current_doc)
     messages = [
@@ -800,6 +800,36 @@ async def _persist_doc_upload(
         doc_msg = '```doc_raw\n' + json.dumps({"filename": fname, "raw_content": text}, ensure_ascii=False) + '\n```'
         session.add(Message(conversation_id=conv_id, role="system", content=doc_msg))
 
+        # ── 用户可见的上传/解析记录（增量模式也写一对，作为本次上传的 audit trail）──
+        # 之前只写 4 条 system message，前端 ChatPage 加载时会全部过滤掉，
+        # 导致 "?app_id=N" 重新进入时左侧聊天区为空。
+        forms_count = len(data.get("forms", []) or [])
+        permissions_count = len(data.get("permissions", []) or [])
+        score = parse_meta.get("standard_score") if isinstance(parse_meta, dict) else None
+        fallback_used = parse_meta.get("fallback_used") if isinstance(parse_meta, dict) else False
+        score_hint = ""
+        if isinstance(score, (int, float)):
+            if fallback_used:
+                score_hint = f"（标准度 {int(score)}/100，已自动智能补齐）"
+            else:
+                score_hint = f"（标准度 {int(score)}/100，纯代码解析无 LLM 调用）"
+        action_verb = "增量更新" if is_incremental else "解析完成"
+        session.add(Message(
+            conversation_id=conv_id,
+            role="user",
+            content=f"📄 上传设计文档：{fname}",
+        ))
+        session.add(Message(
+            conversation_id=conv_id,
+            role="assistant",
+            content=(
+                f"✅ 文档{action_verb}{score_hint}\n\n"
+                f"已识别 **{models_count}** 个数据模型、**{roles_count}** 个角色、"
+                f"**{dicts_count}** 个字典、**{forms_count}** 个表单、**{permissions_count}** 项权限。\n\n"
+                f"请检查右侧 SPEC 预览，确认无误后点击右上方「开始构建」部署到平台。"
+            ),
+        ))
+
         # 自动保存 DocumentVersion（conversation_id 关联，application_id 待后续绑定）
         import hashlib
         # 检查同一 conversation 下已有版本号
@@ -986,12 +1016,42 @@ async def upload_doc_with_conversation(
     - event: done / data: {"conversation_id":N, "preview":{...}} — 完成
     - event: error / data: {"message": "..."} — 失败
     """
-    if not file.filename or not file.filename.endswith('.md'):
-        raise HTTPException(status_code=400, detail="仅支持 .md 格式文件")
+    fname = file.filename or ""
+    ext = fname.lower().rsplit('.', 1)[-1] if '.' in fname else ''
+    if not fname or ext not in {'md', 'markdown'}:
+        raise HTTPException(
+            status_code=400,
+            detail="Builder 仅接受标准设计文档（.md / .markdown）。请回 AI-Chat 把材料整理成标准设计文档后再上传。",
+        )
 
     content = await file.read()
-    text = content.decode('utf-8')
-    fname = file.filename or ""
+    text = content.decode('utf-8', errors='ignore')
+
+    # ── 前置严格校验：必须达到标准度 90 分（A 严格门槛）──────────────────
+    # AI-Chat 输出的标准 md 通常 95+；用户手写文档稍有偏差就被打回，
+    # 引导回 AI-Chat 修订，而不是 Builder 端做"AI 化标准化"兜底。
+    # 注意：detect 前要先剥模板附属章节（"使用说明"等），跟 doc_pipeline 保持一致
+    # 的预处理顺序，否则同一份文档在 upload 入口和 pipeline 里的评分会有偏差。
+    from app.doc_pipeline import _strip_template_scaffolding
+    from app.doc_standard_detector import detect as detect_standard
+    detection = detect_standard(_strip_template_scaffolding(text))
+    standard_score = detection.get("score", 0)
+    if standard_score < 90:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "DOC_NOT_STANDARD",
+                "message": (
+                    f"文档标准度 {standard_score}/100，未达到 90 分门槛。"
+                    f"请回 AI-Chat 让助手把文档调整成标准格式后再上传。"
+                ),
+                "score": standard_score,
+                "level": detection.get("level"),
+                "missing_sections": detection.get("missing_sections", []),
+                "weak_sections": detection.get("weak_sections", []),
+                "signals": detection.get("signals", {}),
+            },
+        )
 
     # 把 db session 相关的值先存好
     user_id = current_user.id
@@ -1371,7 +1431,7 @@ async def draft_doc_update(
     if doc_llm_cfg:
         doc_llm_cfg = {**doc_llm_cfg, "max_tokens": 8000}
 
-    from app.routes.requirements import (
+    from app.routes.applications._doc_helpers import (
         GENERATE_DOC_PROMPT,
         _complete_with_config,
         _repair_doc_json,

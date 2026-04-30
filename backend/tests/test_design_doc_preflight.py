@@ -1,5 +1,5 @@
 from app.doc_standard_parser import parse
-from app.routes.requirements import json_to_markdown, normalize_doc_result
+from app.routes.applications._doc_helpers import json_to_markdown, normalize_doc_result
 from app.services.design_doc_preflight import validate_design_doc_preflight
 
 

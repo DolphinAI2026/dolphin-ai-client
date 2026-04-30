@@ -87,8 +87,14 @@
       <!-- 消息流 -->
       <div class="messages" ref="messagesRef">
         <div v-if="!currentSession" class="welcome">
-          <h2>👋 欢迎使用 AI Chat</h2>
-          <p>新建一个会话，上传材料，让 AI 帮你梳理需求并生成设计文档。</p>
+          <template v-if="incomingMode === 'cowork'">
+            <h2>📂 协作整合材料</h2>
+            <p>把你的所有材料（PDF / Word / Excel / 截图 / 现有文档）拖进来，AI 会先并行读完所有附件，给出综合摘要 + 批量澄清问题，然后产出符合 Builder 规范的标准设计文档。</p>
+          </template>
+          <template v-else>
+            <h2>👋 欢迎使用 AI Chat</h2>
+            <p>新建一个会话，上传材料，让 AI 帮你梳理需求并生成设计文档。</p>
+          </template>
         </div>
         <template v-else>
           <div v-for="(item, idx) in renderTimeline" :key="idx" class="timeline-item">
@@ -246,7 +252,7 @@
           </div>
 
           <!-- 流式中 typing 指示（仅在没在 stream 输出时显示，避免和 streaming 重影） -->
-          <div v-if="isSending && !lastEventIsAsk && !streamingText" class="msg assistant">
+          <div v-if="isSending && !lastEventIsAsk && !streamingText" class="msg assistant thinking-row">
             <div class="ai-avatar pulsing">AI</div>
             <div class="bubble thinking-bubble">
               <span class="dots"><span></span><span></span><span></span></span>
@@ -1172,7 +1178,7 @@ async function sendArtifactToBuilder() {
     content: activeArtifactContent.value,
   }
   ElMessage.success('已发送，正在打开 Builder...')
-  await router.push({ path: '/chat', query: { mode: 'requirements', from: 'aichat' } })
+  await router.push({ path: '/chat', query: { from: 'aichat' } })
 }
 
 // inline 卡片的"→ Builder"：拿对应文件最新版本内容，再 push 到 pendingMarkdown
@@ -1186,7 +1192,7 @@ async function sendArtifactToBuilderByName(filename: string) {
     }
     previewStore.pendingMarkdown = { filename, content: detail.content }
     ElMessage.success('已发送，正在打开 Builder...')
-    await router.push({ path: '/chat', query: { mode: 'requirements', from: 'aichat' } })
+    await router.push({ path: '/chat', query: { from: 'aichat' } })
   } catch (e) {
     console.error(e)
     ElMessage.error('加载设计文档失败')
@@ -1215,6 +1221,12 @@ function scrollBottom() {
   if (el) el.scrollTop = el.scrollHeight
 }
 
+// 当前路由进来的 mode（影响欢迎语 / 默认开场提示）
+const incomingMode = computed(() => {
+  const m = typeof route.query.mode === 'string' ? route.query.mode : ''
+  return m === 'cowork' ? 'cowork' : 'chat'
+})
+
 // ── Lifecycle ──
 
 onMounted(async () => {
@@ -1226,9 +1238,13 @@ onMounted(async () => {
   // 从 Landing 页带过来的首条 prompt + 可选附件：建会话 → 上传附件 → 把 prompt 发出去
   const incomingPrompt = typeof route.query.prompt === 'string' ? route.query.prompt.trim() : ''
   const incomingFiles = (previewStore.pendingAiChatFiles || []).slice()
-  if (!currentSession.value && (incomingPrompt || incomingFiles.length)) {
+  const incomingFromCowork = incomingMode.value === 'cowork'
+  if (!currentSession.value && (incomingPrompt || incomingFiles.length || incomingFromCowork)) {
     try {
-      const created = await aiChatApi.createSession({ selected_llm_config_id: selectedLlmId.value })
+      const created = await aiChatApi.createSession({
+        selected_llm_config_id: selectedLlmId.value,
+        ...(incomingFromCowork ? { mode: 'cowork' as const } : {}),
+      })
       sessions.value.unshift(created)
       await loadSession(created.id)
       // 把 Landing 带过来的附件搬进 pendingFiles，让 onSend 一并处理
@@ -1236,12 +1252,17 @@ onMounted(async () => {
         pendingFiles.value.push(...incomingFiles)
         previewStore.pendingAiChatFiles = []
       }
-      inputText.value = incomingPrompt
+      // cowork 模式：用户已经传了材料，给一句默认开场让 agent 自动开始消化
+      if (incomingFromCowork && !incomingPrompt && pendingFiles.value.length) {
+        inputText.value = '材料都在附件里了，请按 cowork 流程：先并行读完所有附件，给我综合摘要 + 批量澄清问题。'
+      } else {
+        inputText.value = incomingPrompt
+      }
       // 清掉 query 防止刷新时再发一次
       router.replace({ path: `/ai-chat/${created.id}` })
       await nextTick()
       // 没文字也允许发：onSend 内部会把附件 upload 当成首条消息上下文
-      if (incomingPrompt || pendingFiles.value.length) onSend()
+      if (inputText.value || pendingFiles.value.length) onSend()
     } catch (e) {
       console.error('从 Landing 进入 AI Chat 失败', e)
       ElMessage.error('创建会话失败')
@@ -1707,6 +1728,12 @@ onMounted(async () => {
 .dots span:nth-child(3) { animation-delay: -0.32s; }
 @keyframes pulse { 0%,80%,100% { opacity: 0.3; transform: scale(0.85); } 40% { opacity: 1; transform: scale(1); } }
 .typing-meta { color: var(--ac-text-faint); font-size: 12px; margin-left: 10px; }
+
+/* AI 思考状态：整行水平居中，让"还在工作"这个全局状态更聚焦 */
+.msg.assistant.thinking-row {
+  justify-content: center;
+  align-items: center;
+}
 
 /* AI 思考状态：醒目的 bubble，让用户清楚 AI 没断 */
 .thinking-bubble {

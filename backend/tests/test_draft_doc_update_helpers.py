@@ -1,7 +1,7 @@
 import pytest
 from types import SimpleNamespace
 
-from app.routes import requirements
+from app.routes.applications import _doc_helpers
 from app.routes.applications.docs import (
     _build_update_context_summary,
     _classify_update_request_with_llm,
@@ -136,7 +136,7 @@ async def test_update_intent_classification_uses_llm_response(monkeypatch):
         assert "用户消息" in messages[-1]["content"]
         return '{"action":"answer","actionable_update":false,"normalized_instruction":"","assistant_reply":"我在，可以继续说要改哪里。","confidence":0.91}'
 
-    monkeypatch.setattr(requirements, "_complete_with_config", fake_complete_with_config)
+    monkeypatch.setattr(_doc_helpers, "_complete_with_config", fake_complete_with_config)
 
     result = await _classify_update_request_with_llm(
         {"api_key": "test", "base_url": "http://example.test/v1", "model": "test"},

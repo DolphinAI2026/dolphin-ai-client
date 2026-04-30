@@ -76,12 +76,29 @@ _DEFAULT_APP_NAMES = {"业务应用", "应用", "未命名应用", ""}
 def _infer_app_name_from_doc(text: str, filename: str = "") -> str:
     """从文档正文或文件名里推断应用名称。
 
-    策略：
-      1. 扫文档正文，取第一行包含"系统"或"应用"且 ≤ 32 字的行作为应用名；
-         跳过常见的章节/目录噪声（"设计说明书"、"修订记录"、"目录"、"功能设计"）。
-      2. 命中不到时退回文件名（剥掉常见后缀 / 分隔符）。
+    A 严格模式下文档必为标准 md（首行 `# 应用名`），首选直接取一级标题。
+    保留旧的"含'系统'/'应用'"启发式兜底，应对极少数应用名不在 # 标题里的场景。
     返回空串表示推断失败，由调用方决定兜底值。
     """
+    # 1. 取首个一级标题（标准 md 第一行就是 `# 应用名`）
+    for line in (text or "").splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("# ") and not stripped.startswith("## "):
+            cleaned = stripped[2:].strip()
+            # 剥掉常见的"…标准设计文档/功能设计文档"等尾缀
+            for suffix in ("标准设计文档", "功能设计文档", "设计文档", "需求文档", "配置文档"):
+                if cleaned.endswith(suffix):
+                    cleaned = cleaned[: -len(suffix)].strip()
+                    break
+            if cleaned and not any(
+                token in cleaned for token in ("设计说明书", "修订记录", "目录")
+            ):
+                return cleaned[:48]
+            break  # 首个 # 命中过就不再扫其它行（避免取到子章节）
+
+    # 2. 兜底：扫含"系统"/"应用"的短行
     for line in (text or "").splitlines():
         stripped = line.strip()
         if not stripped:
@@ -94,6 +111,7 @@ def _infer_app_name_from_doc(text: str, filename: str = "") -> str:
         if len(cleaned) <= 32 and ("系统" in cleaned or "应用" in cleaned):
             return cleaned
 
+    # 3. 退回文件名
     name = (filename or "").replace('.md', '').replace('-', ' ').replace('_', ' ')
     for suffix in ('功能设计', '设计文档', '需求文档', '设计', '配置文档'):
         name = name.replace(suffix, '')

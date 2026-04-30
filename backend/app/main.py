@@ -33,7 +33,6 @@ from app.routes import (
     preferences,
     projects,
     proposals,
-    requirements,
     spec,
     sse,
     templates,
@@ -128,7 +127,6 @@ app.include_router(templates.router, prefix="/api")
 app.include_router(platform_envs.router, prefix="/api")
 app.include_router(llm_configs.router, prefix="/api")
 app.include_router(browser.router, prefix="/api")
-app.include_router(requirements.router, prefix="/api")
 app.include_router(harness.router, prefix="/api")
 app.include_router(spec.router, prefix="/api")
 app.include_router(sse.router, prefix="/api")

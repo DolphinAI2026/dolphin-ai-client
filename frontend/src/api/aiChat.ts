@@ -4,6 +4,8 @@ export interface AIChatSession {
   id: number
   title: string
   status: string
+  /** 工作模式：'chat'（从零理需求）/ 'cowork'（批量材料整合） */
+  mode?: 'chat' | 'cowork' | string
   selected_llm_config_id: number | null
   workspace_dir: string | null
   created_at: string | null
@@ -70,7 +72,7 @@ export const aiChatApi = {
   listSessions(): Promise<{ sessions: AIChatSession[] }> {
     return request.get<any, { sessions: AIChatSession[] }>('/ai-chat/sessions')
   },
-  createSession(body: { title?: string; selected_llm_config_id?: number | null }): Promise<AIChatSession> {
+  createSession(body: { title?: string; selected_llm_config_id?: number | null; mode?: 'chat' | 'cowork' }): Promise<AIChatSession> {
     return request.post<any, AIChatSession>('/ai-chat/sessions', body)
   },
   getSession(id: number): Promise<AIChatSessionDetail> {

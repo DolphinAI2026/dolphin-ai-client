@@ -44,18 +44,15 @@ from app.ai_chat.tools import TOOL_SCHEMAS, execute_tool
 logger = logging.getLogger(__name__)
 
 
-# ─────────────────────────── System prompt ───────────────────────────
+# ─────────────────────────── System prompts ──────────────────────────
+#
+# 两种工作模式共享同一段格式硬约束（_FORMAT_CONSTRAINTS），但前面的
+# "工作模式 / 行为指引" 不同：
+#   chat   = 从零对话理需求（用户没现成材料）
+#   cowork = 批量材料整合（用户拖了一堆材料，AI 主动消化整合）
 
-SYSTEM_PROMPT = f"""你是 aPaaS 平台的 AI 需求分析师，帮用户把模糊的搭建需求梳理成**可被 Builder 流水线直接解析的标准设计文档**。
-
-工作模式：
-1. 用户上传材料后，主动调 read_attachment 读取每个相关附件
-2. 数据类材料（xlsx/csv）可用 run_python 编程分析（pandas / openpyxl 都能用）
-3. 必要时调 ask_clarifying_question 反问用户澄清需求边界，每次最多 1-2 个关键问题
-4. 当需求清晰后，调 write_artifact 输出 markdown 设计文档；filename 建议 `{{应用名}}-设计文档.md`
-
-⚠️ 你产出的 markdown 会被 aPaaS Builder 的 doc_pipeline 直接解析、自动生成模型/表单/角色/权限。
-**必须严格遵循下面的章节顺序、表格列名、字段编码命名约束**——任何偏差都会让 Builder 解析失败、退化到 LLM 兜底（慢且不准）。
+_FORMAT_CONSTRAINTS = f"""⚠️ 你产出的 markdown 会被 aPaaS Builder 的 doc_pipeline 直接解析、自动生成模型/表单/角色/权限。
+**必须严格遵循下面的章节顺序、表格列名、字段编码命名约束**——任何偏差都会让 Builder 拒绝解析（标准度 < 90/100 直接 400）。
 
 {STANDARD_DOC_FORMAT}
 
@@ -71,6 +68,59 @@ SYSTEM_PROMPT = f"""你是 aPaaS 平台的 AI 需求分析师，帮用户把模�
 - 数据单选/数据选择/关联表单字段引用的目标模型，必须先在 ## 四、数据模型 里建出来；没材料支持就不要写这种引用，改用单行输入
 
 附件信息会在用户消息后附上"[已上传附件]"列表，告诉你有哪些可以读。"""
+
+
+SYSTEM_PROMPT_CHAT = f"""你是 aPaaS 平台的 AI 需求分析师，帮用户把**模糊的搭建需求**梳理成可被 Builder 流水线直接解析的标准设计文档。
+
+工作模式（chat 从零理需求）：
+1. 用户没有现成材料，靠对话挖需求；如有附件，调 read_attachment 辅助理解
+2. 跟着用户节奏问，每轮最多 1-2 个关键问题（用 ask_clarifying_question）
+3. 数据类材料（xlsx/csv）可用 run_python 编程分析（pandas / openpyxl 都能用）
+4. 当需求清晰后，调 write_artifact 输出 markdown 设计文档；filename 建议 `{{应用名}}-设计文档.md`
+
+{_FORMAT_CONSTRAINTS}"""
+
+
+SYSTEM_PROMPT_COWORK = f"""你是 aPaaS 平台的 AI 协作分析师，帮用户把**一堆杂乱材料**（PDF / Word / Excel / 截图 / 现有文档）整合成可被 Builder 流水线直接解析的标准设计文档。
+
+工作模式（cowork 批量材料整合）—— **跟 chat 模式不一样**：
+
+## 第一步：并行消化所有材料（不等用户引导）
+用户进来时往往已经把所有材料一起上传完了。你的第一个动作不是问"你要做什么"，而是：
+- 立刻**并行**调 read_attachment 把每一份附件都读一遍（一次回复里可以调多个工具）
+- 数据类材料（xlsx/csv）配合 run_python 抽要点：表头、行数、枚举值分布、关键字段
+- 图片类材料（架构图 / 截图 / 流程图）也要 read_attachment 拿到 OCR/描述
+
+## 第二步：综合摘要 + 批量提问
+读完所有材料后，给用户一个**结构化的"我看到了什么"汇总**：
+- 我从你的 N 份材料里识别出：**A 张数据表**（列出名字）/ **B 个角色**（列出）/ **C 个流程**（列出）/ **D 个枚举值字段**（列出）
+- 我推断的应用类型 = ...
+- **同时**列出 3-5 个澄清问题（**批量**问，不是一句一句挤），每个问题写明"如果选 X / 如果选 Y 会影响什么"
+
+## 第三步：用户回答后产出第一版 md
+- 立刻 write_artifact 写出第一版完整 6 章设计文档（应用信息 / 角色 / 字典 / 模型 / 表单 / 权限）
+- 不要分章节交付，一次写完整篇
+
+## 第四步：迭代修订
+- 用户继续提修订意见时，read_attachment 拿到当前 artifact，做精准修改后 write_artifact 同名覆盖
+- 涉及到字段命名、模型关联、权限矩阵这种细节，主动用 run_python 验证一致性
+
+{_FORMAT_CONSTRAINTS}
+
+## cowork 模式特别强调
+- **不要先问"你要做什么"**——用户已经用文件告诉你了，直接读
+- **不要分多轮试探**——用户期望"一站式整合"，不是漫长对话
+- **批量并行**：read_attachment / run_python 一次回复里能调几个就调几个
+- 反问尽量集中在一两轮，避免拉长流程"""
+
+
+def _select_system_prompt(mode: Optional[str]) -> str:
+    """根据 session.mode 选 system prompt。未知 mode 默认走 chat。"""
+    return SYSTEM_PROMPT_COWORK if mode == "cowork" else SYSTEM_PROMPT_CHAT
+
+
+# 向后兼容：保留 SYSTEM_PROMPT 常量（仍指向 chat 模式）供旧代码引用
+SYSTEM_PROMPT = SYSTEM_PROMPT_CHAT
 
 
 # ─────────────────────────── LLM 调用辅助 ───────────────────────────
@@ -294,8 +344,15 @@ async def _call_llm_stream(
 async def _build_initial_messages(
     db: AsyncSession, session: AIChatSession, current_user_message: str
 ) -> list[dict]:
-    """从历史消息 + 当前 user message 构造 LLM messages。"""
-    messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    """从历史消息 + 当前 user message 构造 LLM messages。
+
+    跨轮重建关键点（参考 Claude Code 的做法）：
+      - assistant 的 tool_use turn 要带 tool_calls 字段重新拼回
+      - 紧跟 role:tool 消息，每条 tool_call_id 必须跟 assistant.tool_calls[i].id 对齐
+      - tool_result 完整保留（已在执行时截断到 30K），让 LLM 跨轮看得到，避免重复 read
+    """
+    system_prompt = _select_system_prompt(getattr(session, "mode", None))
+    messages: list[dict] = [{"role": "system", "content": system_prompt}]
 
     # 历史消息（不含本次 user 消息——routes 已经写库了，这里读回来时要排除最新那条）
     res = await db.execute(
@@ -304,9 +361,48 @@ async def _build_initial_messages(
         .order_by(AIChatMessage.id.asc())
     )
     history = res.scalars().all()
+
+    # 同步拉所有 tool_calls，按 message_id 分组（保留时序）
+    tc_res = await db.execute(
+        select(AIChatToolCall)
+        .where(AIChatToolCall.session_id == session.id)
+        .order_by(AIChatToolCall.id.asc())
+    )
+    tcs_by_msg: dict[int, list[AIChatToolCall]] = {}
+    for tc in tc_res.scalars().all():
+        if tc.message_id is not None:
+            tcs_by_msg.setdefault(tc.message_id, []).append(tc)
+
     for m in history[:-1]:  # 排除最后一条（最新 user message，外部传 current_user_message）
-        if m.role in ("user", "assistant"):
-            messages.append({"role": m.role, "content": m.content})
+        if m.role == "user":
+            messages.append({"role": "user", "content": m.content})
+        elif m.role == "assistant":
+            meta = m.extra_meta or {}
+            persisted_tool_calls = meta.get("tool_calls") if isinstance(meta, dict) else None
+            if persisted_tool_calls:
+                # tool_use turn：拼回带 tool_calls 的 assistant + 紧跟 role:tool 配对
+                messages.append({
+                    "role": "assistant",
+                    "content": m.content or "",
+                    "tool_calls": persisted_tool_calls,
+                })
+                related_tcs = tcs_by_msg.get(m.id, [])
+                # 按 persisted_tool_calls 里的 id 顺序匹配，保证对齐
+                tcs_by_call_id = {tc.provider_call_id: tc for tc in related_tcs if tc.provider_call_id}
+                for ptc in persisted_tool_calls:
+                    call_id = ptc.get("id")
+                    if not call_id:
+                        continue
+                    tc_db = tcs_by_call_id.get(call_id)
+                    result_content = (tc_db.result_text if tc_db else "") or ""
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": call_id,
+                        "content": result_content,
+                    })
+            else:
+                # 普通 final answer
+                messages.append({"role": "assistant", "content": m.content or ""})
 
     # 拼接附件清单到当前用户消息（让 LLM 知道有哪些附件可读）
     att_res = await db.execute(
@@ -434,6 +530,20 @@ async def run_agent(
         if content:
             yield _sse("assistant_thinking_lock", {"text": content})
 
+        # ── 持久化 assistant 这条 tool_use turn 到 DB（跨轮 history 重建必需）──
+        # 把 LLM 返回的 tool_calls 序列化进 extra_meta（以便下次 _build_initial_messages
+        # 重建消息时拼回完整的 assistant.tool_calls + role:tool 配对）
+        asst_tool_use_db = AIChatMessage(
+            session_id=session.id,
+            role="assistant",
+            content=content or "",
+            extra_meta={"tool_calls": tool_calls},
+        )
+        db.add(asst_tool_use_db)
+        await db.commit()
+        await db.refresh(asst_tool_use_db)
+        asst_message_id = asst_tool_use_db.id
+
         for tc in tool_calls:
             if abort_event.is_set():
                 yield _sse("aborted", {"turn": turn})
@@ -448,9 +558,11 @@ async def run_agent(
             except Exception:
                 args = {}
 
-            # 持久化工具调用记录
+            # 持久化工具调用记录（关联 assistant message + 存 LLM 原始 call_id）
             tc_db = AIChatToolCall(
                 session_id=session.id,
+                message_id=asst_message_id,
+                provider_call_id=tc_id or None,
                 tool_name=tool_name,
                 args_json=args,
                 status="running",

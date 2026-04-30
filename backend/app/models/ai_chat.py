@@ -35,6 +35,9 @@ class AIChatSession(Base):
     title: Mapped[str] = mapped_column(String(200), default="新会话", nullable=False)
     # active / running / paused / completed / archived
     status: Mapped[str] = mapped_column(String(20), default="active", nullable=False)
+    # 工作模式：'chat'（从零理需求）/ 'cowork'（批量材料整合）
+    # 影响 agent.py 选用哪套 SYSTEM_PROMPT
+    mode: Mapped[str] = mapped_column(String(20), default="chat", nullable=False)
     # 用户选择的 LLM 配置（拉自 llm_configs.options，purpose='all'）
     selected_llm_config_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     # workspace 目录路径（per-session tmp 目录，用于 run_python 的 cwd + 附件存储）
@@ -75,6 +78,9 @@ class AIChatToolCall(Base):
         Integer, ForeignKey("ai_chat_messages.id", ondelete="SET NULL"), nullable=True, index=True
     )
     tool_name: Mapped[str] = mapped_column(String(80), nullable=False)
+    # LLM 返回的原始 tool_call id（OpenAI/Anthropic 的 "call_xyz"），跨轮重建
+    # messages 时用来对齐 assistant.tool_calls 和 role:tool 的 tool_call_id
+    provider_call_id: Mapped[Optional[str]] = mapped_column(String(120), nullable=True, index=True)
     args_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     result_text: Mapped[Optional[str]] = mapped_column(BigText, nullable=True)
     # pending / running / success / error / aborted

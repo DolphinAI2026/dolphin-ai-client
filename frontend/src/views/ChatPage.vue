@@ -285,6 +285,7 @@
                     ref="chatImageInputRef"
                     type="file"
                     multiple
+                    accept=".md,.markdown,image/*"
                     @change="handleChatImageChange"
                     style="display:none"
                   />
@@ -932,7 +933,7 @@
     <!-- Modals (在 chat-page 根元素下) -->
     <ConnectModal v-model="store.showConnectModal" />
     <EnvSelectModal v-model="showEnvSelect" @selected="onEnvSelected" />
-    <input ref="docVersionInputRef" type="file" accept=".md,text/markdown" hidden @change="handleDocVersionInputChange" />
+    <input ref="docVersionInputRef" type="file" accept=".md,.markdown" hidden @change="handleDocVersionInputChange" />
     <input ref="reparseInputRef" type="file" accept=".md,.pdf,.docx,.doc,.txt,.markdown" hidden @change="handleReparseInputChange" />
     <el-dialog v-model="docVersionPreviewVisible" :title="docVersionPreviewTitle" width="860px" class="doc-preview-dialog" destroy-on-close>
       <div v-if="docVersionPreviewStructuredResult" class="doc-preview-body structured-doc-host">
@@ -1118,7 +1119,6 @@ import WorkbenchShell from '@/components/WorkbenchShell.vue'
 import StructuredDocRenderer from '@/components/StructuredDocRenderer.vue'
 import StructuredDocDiffRenderer from '@/components/StructuredDocDiffRenderer.vue'
 import { llmConfigApi, type BuilderModelOption } from '@/api/llmConfig'
-import { requirementsApi } from '@/api/requirements'
 import { convertConfig } from '@/api/conversation'
 import { buildStructuredDocFromPreviewConfig } from '@/utils/structuredDoc'
 import { computeStructuredDocDiff } from '@/utils/structuredDocDiff'
@@ -4716,6 +4716,16 @@ const startGenerateWithEnv = async (envId: number) => {
 }
 
 const uploadDocFile = async (file: File) => {
+  // A 严格模式：Builder 只接受 .md/.markdown 标准设计文档。
+  // 其它格式直接拦下，引导用户回 AI-Chat 把文档整理成标准格式。
+  const lowerName = file.name.toLowerCase()
+  if (!/\.(md|markdown)$/.test(lowerName)) {
+    ElMessage.error({
+      message: 'Builder 只接受 .md / .markdown 标准设计文档。请回 AI-Chat 把文档整理成标准格式。',
+      duration: 5000,
+    })
+    return
+  }
   const fileText = await file.text()
   resetPreviewForNewParse()
   const codeFromDoc = extractAppCodeFromText(fileText)
@@ -4801,8 +4811,7 @@ const uploadDocFile = async (file: File) => {
       formData.append('conversation_id', String(conversationId.value))
     }
 
-    // 先本地读文档头部推断应用名，立即填进 store。
-    // 否则大文档会走后端 AI 兜底（3-5 分钟），期间界面应用名会空。
+    // 先本地读文档头部推断应用名，立即填进 store（标准 md 首行就是 # 应用名）。
     // 后端 SSE done 返回真值时 setAppName 会用后端结果覆盖（setter 会过滤默认值）。
     try {
       const head = await file.slice(0, 8192).text()
@@ -4817,8 +4826,36 @@ const uploadDocFile = async (file: File) => {
     })
 
     if (!response.ok) {
-      const err = await response.json().catch(() => ({ detail: '请求失败' }))
-      throw new Error(err.detail || '文档上传失败')
+      const errBody = await response.json().catch(() => ({ detail: '请求失败' }))
+      const detail = errBody.detail
+      if (detail && typeof detail === 'object' && detail.code === 'DOC_NOT_STANDARD') {
+        const lines = [
+          `❌ **文档标准度 ${detail.score}/100，未达到 90 分门槛**`,
+        ]
+        if (Array.isArray(detail.missing_sections) && detail.missing_sections.length) {
+          lines.push(`- 缺少章节：${detail.missing_sections.join('、')}`)
+        }
+        if (Array.isArray(detail.weak_sections) && detail.weak_sections.length) {
+          lines.push(`- 待加强章节：${detail.weak_sections.join('、')}`)
+        }
+        if (detail.signals && typeof detail.signals === 'object') {
+          const sigLabel: Record<string, string> = {
+            section_coverage: '章节覆盖',
+            header_format: '标题格式',
+            table_header_match: '表头匹配',
+            code_compliance: '编码合规',
+            ref_integrity: '引用完整',
+          }
+          const sigs = Object.entries(detail.signals)
+            .map(([k, v]) => `${sigLabel[k] || k} ${Math.round(Number(v) * 100)}%`)
+            .join(' · ')
+          if (sigs) lines.push(`- 各项评分：${sigs}`)
+        }
+        lines.push('')
+        lines.push('请回 **AI-Chat** 让助手按标准 6 章规范重写文档后再上传到 Builder。')
+        throw new Error(lines.join('\n'))
+      }
+      throw new Error(typeof detail === 'string' ? detail : '文档上传失败')
     }
 
     const reader = response.body?.getReader()
@@ -5267,8 +5304,36 @@ const handleDocVersionUpload = async (file: File, appId: number, options: DocVer
     })
 
     if (!response.ok) {
-      const err = await response.json().catch(() => ({ detail: '请求失败' }))
-      throw new Error(err.detail || '文档上传失败')
+      const errBody = await response.json().catch(() => ({ detail: '请求失败' }))
+      const detail = errBody.detail
+      if (detail && typeof detail === 'object' && detail.code === 'DOC_NOT_STANDARD') {
+        const lines = [
+          `❌ **文档标准度 ${detail.score}/100，未达到 90 分门槛**`,
+        ]
+        if (Array.isArray(detail.missing_sections) && detail.missing_sections.length) {
+          lines.push(`- 缺少章节：${detail.missing_sections.join('、')}`)
+        }
+        if (Array.isArray(detail.weak_sections) && detail.weak_sections.length) {
+          lines.push(`- 待加强章节：${detail.weak_sections.join('、')}`)
+        }
+        if (detail.signals && typeof detail.signals === 'object') {
+          const sigLabel: Record<string, string> = {
+            section_coverage: '章节覆盖',
+            header_format: '标题格式',
+            table_header_match: '表头匹配',
+            code_compliance: '编码合规',
+            ref_integrity: '引用完整',
+          }
+          const sigs = Object.entries(detail.signals)
+            .map(([k, v]) => `${sigLabel[k] || k} ${Math.round(Number(v) * 100)}%`)
+            .join(' · ')
+          if (sigs) lines.push(`- 各项评分：${sigs}`)
+        }
+        lines.push('')
+        lines.push('请回 **AI-Chat** 让助手按标准 6 章规范重写文档后再上传到 Builder。')
+        throw new Error(lines.join('\n'))
+      }
+      throw new Error(typeof detail === 'string' ? detail : '文档上传失败')
     }
 
     const reader = response.body?.getReader()
@@ -5807,24 +5872,6 @@ const looksLikeGeneratedDesignDoc = (input: string) => {
   )
 }
 
-const getRequirementsSemanticAction = (text: string): 'generate_doc' | 'build' | null => {
-  if (!isRequirementsMode.value || (!isConfirmationIntent(text) && !isBuildStartIntent(text))) return null
-
-  const lastAssistant = [...messages].reverse().find((msg) => msg.role === 'assistant')
-  const assistantContent = String(lastAssistant?.content || '')
-  const hasDocReady = !!docResultForCard.value
-    || !!latestDocContent.value.trim()
-    || !!chatGeneratedDocContent.value
-    || hasStructuredPreviewData.value
-
-  if (assistantContent.includes('请确认操作') || assistantContent.includes('点击下方按钮') || assistantContent.includes('生成结构化的功能设计文档')) {
-    return hasDocReady ? 'build' : 'generate_doc'
-  }
-
-  if (hasDocReady) return 'build'
-  return 'generate_doc'
-}
-
 const createConversation = async () => {
   const agentTypeForCreate = currentAgent.value as ConversationCreate['agent_type']
   try {
@@ -6096,34 +6143,6 @@ const sendMessage = async () => {
     return
   }
 
-  const semanticAction = getRequirementsSemanticAction(text)
-  if (semanticAction) {
-    isTyping.value = false
-    if (semanticAction === 'build') {
-      messages.push({
-        id: Date.now(),
-        role: 'assistant',
-        agent: 'requirements',
-        content: '收到确认，正在开始生成应用配置。',
-        created_at: ''
-      })
-      scrollToBottom()
-      await triggerFullBuildPipeline()
-    } else {
-      messages.push({
-        id: Date.now(),
-        role: 'assistant',
-        agent: 'requirements',
-        content: '收到确认，正在为你生成设计文档并同步到右侧预览。',
-        created_at: ''
-      })
-      scrollToBottom()
-      await generateDocInBackground()
-    }
-    sendingMessage.value = false
-    return
-  }
-
   const shouldStartBuildFromChat = !isRequirementsMode.value
     && attachmentPayloads.length === 0
     && isBuildStartIntent(text)
@@ -6376,48 +6395,14 @@ const sendMessage = async () => {
             if (lastMsg && lastMsg.id === STREAMING_ASSISTANT_ID) lastMsg.id = Date.now()
             streamingAssistantMessageId.value = null
             isTyping.value = false
-            if (isRequirementsMode.value) {
-              const hasBuildTrigger = assistantContent.includes('<!-- TRIGGER_BUILD -->')
-              const hasDesignComplete = assistantContent.includes('<!-- DESIGN_COMPLETE -->')
-              const hasGeneratedDocBody = looksLikeGeneratedDesignDoc(assistantContent)
-              if (hasBuildTrigger || hasDesignComplete || hasGeneratedDocBody) {
-                const fullDocContent = assistantContent
-                  .replace('<!-- TRIGGER_BUILD -->', '')
-                  .replace('<!-- DESIGN_COMPLETE -->', '')
-                  .trim()
-                if (fullDocContent) {
-                  latestDocContent.value = fullDocContent
-                }
-                const compactDocMessage = hasBuildTrigger
-                  ? '需求已确认，完整设计文档已同步到右侧，正在准备开始构建。'
-                  : '设计文档已生成，完整内容请查看右侧预览。'
-                if (lastMsg) {
-                  lastMsg.content = compactDocMessage
-                } else {
-                  messages.push({
-                    id: Date.now(),
-                    role: 'assistant',
-                    agent: currentAgent.value,
-                    content: compactDocMessage,
-                    created_at: ''
-                  })
-                }
-                if (hasBuildTrigger) {
-                  triggerFullBuildPipeline()
-                } else if (hasDesignComplete) {
-                  generateDocInBackground()
-                }
-              }
-            } else {
-              // 服务端已推送合并后的 config，跳过客户端重提取，避免 patch 二次应用
-              const patchApplied = serverConfigReceived ? false : await extractPatchData(assistantContent)
-              if (!patchApplied && !serverConfigReceived) extractPreviewData(assistantContent)
-              if (!store.currentApp && assistantContent.length > 50) {
-                const appNameMatch = assistantContent.match(/搭建.*?[**](.+?)[**]/)
-                if (appNameMatch) {
-                  store.setAppName(appNameMatch[1])
-                  store.currentApp = { status: 'talking' }
-                }
+            // 服务端已推送合并后的 config，跳过客户端重提取，避免 patch 二次应用
+            const patchApplied = serverConfigReceived ? false : await extractPatchData(assistantContent)
+            if (!patchApplied && !serverConfigReceived) extractPreviewData(assistantContent)
+            if (!store.currentApp && assistantContent.length > 50) {
+              const appNameMatch = assistantContent.match(/搭建.*?[**](.+?)[**]/)
+              if (appNameMatch) {
+                store.setAppName(appNameMatch[1])
+                store.currentApp = { status: 'talking' }
               }
             }
           }
@@ -6447,527 +6432,6 @@ const sendMessage = async () => {
     if (pendingChatAttachments.value.length === 0 && chatImageInputRef.value) {
       chatImageInputRef.value.value = ''
     }
-  }
-}
-
-const appendValidationRequiredMessage = (payload: any, replaceMessageId?: number) => {
-  const message = payload?.assistant_message
-    || payload?.validation?.assistant_message
-    || '设计文档预检发现编码冲突，请先补充新的编码后再生成。'
-  const target = replaceMessageId ? messages.find(m => m.id === replaceMessageId) : null
-  if (target) {
-    target.content = message
-    target.agent = 'requirements'
-  } else {
-    messages.push({
-      id: Date.now(),
-      role: 'assistant',
-      agent: 'requirements',
-      content: message,
-      created_at: '',
-    })
-  }
-  ElMessage.warning('需要先确认编码后再生成设计文档')
-  scrollToBottom()
-}
-
-// ── Requirements: 完整生成流程（用户确认后触发） ──
-// generate-doc → convert-config → create app → show deploy panel
-const triggerFullBuildPipeline = async () => {
-  if (!conversationId.value || generatingDoc.value) return
-  generatingDoc.value = true
-
-  // 添加进度消息
-  const progressMsgId = Date.now()
-  messages.push({
-    id: progressMsgId,
-    role: 'assistant',
-    agent: 'requirements',
-    content: '⏳ 正在解析需求，生成应用配置...',
-    created_at: '',
-  })
-  scrollToBottom()
-
-  try {
-    // Step 1: Generate structured JSON from conversation
-    const token = localStorage.getItem('token') || ''
-    const url = requirementsApi.generateDocUrl(conversationId.value)
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    })
-    if (!response.ok) throw new Error(`生成文档失败: HTTP ${response.status}`)
-
-    const reader = response.body?.getReader()
-    if (!reader) throw new Error('无法读取响应流')
-    const decoder = new TextDecoder()
-    let buffer = ''
-    let docResult: any = null
-    let validationPayload: any = null
-
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n')
-      buffer = lines.pop() || ''
-      for (const line of lines) {
-        if (line.startsWith('data:')) {
-          try {
-            const data = JSON.parse(line.slice(5).trim())
-            if (data.needs_user_input || data.validation?.needs_user_input) {
-              validationPayload = data
-              continue
-            }
-            if (data.doc_result) docResult = data.doc_result
-          } catch { /* ignore */ }
-        }
-      }
-    }
-
-    if (validationPayload) {
-      appendValidationRequiredMessage(validationPayload, progressMsgId)
-      return
-    }
-
-    if (!docResult) throw new Error('未能生成设计文档')
-
-    // Update progress
-    const pMsg = messages.find(m => m.id === progressMsgId)
-    if (pMsg) pMsg.content = '⏳ 正在转换为应用配置...'
-    scrollToBottom()
-
-    // Step 2: Convert AnalysisResult → AppConfig
-    const appConfig = await convertConfig(docResult)
-    const previewPayload = buildGeneratedPreviewPayload(appConfig, docResult)
-    syncCustomDevelopmentFromDocResult(docResult)
-
-    // Step 3: Switch to builder mode
-    await conversationApi.updateAgentType(conversationId.value, 'builder')
-    currentAgent.value = 'builder'
-
-    // Step 4: Populate preview store
-    store.preview = {
-      appName: previewPayload.appName || '',
-      roles: previewPayload.roles || [],
-      dicts: previewPayload.dicts || [],
-      models: previewPayload.models || [],
-      forms: previewPayload.forms || [],
-      workflows: previewPayload.workflows || [],
-      permissions: previewPayload.permissions || [],
-      custom_development: previewPayload.custom_development || [],
-    }
-    ;(store.preview as any).flows = previewPayload.flows || []
-    syncCustomDevelopmentFromDocResult(docResult)
-    parsedAppCode.value = previewPayload.appCode || ''
-    parseReady.value = true
-
-    // Step 5: Create application
-    const appCode = previewPayload.appCode || buildAppCode(previewPayload.appName || '新应用')
-    const payload = {
-      conversation_id: conversationId.value,
-      project_id: activeProjectId.value,
-      app_name: previewPayload.appName || '新应用',
-      app_code: appCode,
-      config_preview: { type: 'preview', data: previewPayload },
-    }
-    const created = await applicationApi.create(payload)
-    existingAppId.value = created.id
-    store.setAppName(previewPayload.appName)
-    store.currentApp = { status: 'ready' }
-
-    // Step 6: Update progress message
-    if (pMsg) {
-      pMsg.content = `✅ 应用配置已生成！\n\n已提取 **${previewPayload.models?.length || 0}** 个数据模型、**${previewPayload.dicts?.length || 0}** 个字典、**${previewPayload.roles?.length || 0}** 个角色。\n\n点击右侧「▶ 一键执行」将应用部署到平台。`
-      pMsg.agent = 'builder'
-    }
-
-    // Step 7: Update URL and show deploy panel
-    router.replace({
-      path: `/chat/${conversationId.value}`,
-      query: {
-        app_id: String(created.id),
-        ...(activeProjectId.value ? { project_id: String(activeProjectId.value) } : {}),
-      },
-    })
-    fetchConversationList()
-    scrollToBottom()
-
-    ElMessage.success('应用配置生成完成！')
-  } catch (e: any) {
-    const pMsg = messages.find(m => m.id === progressMsgId)
-    if (pMsg) pMsg.content = `❌ 生成失败: ${e.message || '未知错误'}。请重试。`
-    ElMessage.error('生成失败: ' + (e.message || '未知错误'))
-  } finally {
-    generatingDoc.value = false
-    scrollToBottom()
-  }
-}
-
-// ── Requirements: 后台生成结构化 JSON（AI 输出可读文档后自动触发） ──
-const generateDocInBackground = async () => {
-  if (!conversationId.value || generatingDoc.value) return
-  generatingDoc.value = true
-
-  const token = localStorage.getItem('token') || ''
-  const url = requirementsApi.generateDocUrl(conversationId.value)
-
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    })
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
-
-    const reader = response.body?.getReader()
-    if (!reader) throw new Error('无法读取响应流')
-    const decoder = new TextDecoder()
-    let buffer = ''
-    let validationPayload: any = null
-
-    // 容忍 SSE 尾部假阳性 network error：只要 docResultForCard 拿到就不算失败
-    try {
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() || ''
-
-        for (const line of lines) {
-          if (line.startsWith('data:')) {
-            const dataStr = line.slice(5).trim()
-            if (!dataStr) continue
-            try {
-              const data = JSON.parse(dataStr)
-              if (data.needs_user_input || data.validation?.needs_user_input) {
-                validationPayload = data
-                continue
-              }
-              if (data.doc_result) {
-                docResultForCard.value = data.doc_result
-              }
-            } catch { /* ignore */ }
-          }
-        }
-      }
-    } catch (streamErr: any) {
-      if (docResultForCard.value) {
-        console.warn('[SSE] doc_result 已到达，忽略尾部假阳性:', streamErr?.message)
-      } else {
-        throw streamErr
-      }
-    }
-
-    if (validationPayload) {
-      appendValidationRequiredMessage(validationPayload)
-      return
-    }
-
-    if (docResultForCard.value) {
-      const appConfig = await convertConfig(docResultForCard.value)
-      const previewPayload = buildGeneratedPreviewPayload(appConfig, docResultForCard.value)
-      syncCustomDevelopmentFromDocResult(docResultForCard.value)
-      // 逐字段赋值而不是整体替换，保证 Pinia 响应式追踪到变化
-      store.preview.appName = previewPayload.appName || ''
-      store.preview.roles = previewPayload.roles || []
-      store.preview.dicts = previewPayload.dicts || []
-      store.preview.models = previewPayload.models || []
-      store.preview.forms = previewPayload.forms || []
-      store.preview.workflows = previewPayload.workflows || []
-      store.preview.permissions = previewPayload.permissions || []
-      ;(store.preview as any).flows = previewPayload.flows || []
-      ;(store.preview as any).custom_development = previewPayload.custom_development || []
-      if (previewPayload.appCode) {
-        parsedAppCode.value = previewPayload.appCode
-      }
-      if (previewPayload.appName) {
-        store.setAppName(previewPayload.appName)
-        if (!store.currentApp) {
-          store.currentApp = { status: 'draft' }
-        }
-      }
-      parseReady.value = true
-      if (!existingAppId.value && store.preview.appName) {
-        try {
-          const result = await applicationApi.autoCreate({
-            app_name: store.preview.appName,
-            config_preview: { type: 'preview', data: previewPayload },
-            conversation_id: conversationId.value,
-            project_id: activeProjectId.value,
-          })
-          existingAppId.value = result.app_id
-          loadedAppCode.value = result.app_code || ''
-          parsedAppCode.value = result.app_code || parsedAppCode.value
-          router.replace({
-            path: `/chat/${conversationId.value}`,
-            query: {
-              ...route.query,
-              app_id: String(result.app_id),
-              ...(activeProjectId.value ? { project_id: String(activeProjectId.value) } : {}),
-            },
-          })
-          await fetchDocVersions()
-          fetchConversationList()
-        } catch (error) {
-          console.warn('自动创建草稿应用失败:', error)
-        }
-      }
-      // 有 preview 数据后切到 builder 模式，showBuilderPreview 才能过
-      if (currentAgent.value === 'requirements' && store.preview.models.length > 0) {
-        currentAgent.value = 'builder'
-      }
-      syncCurrentDocFromPreview('当前生成的设计文档', buildDocMarkdownFromPreview({
-        ...previewPayload,
-      }))
-      scrollToBottom()
-    }
-  } catch (e: any) {
-    console.error('Background doc generation failed:', e)
-    ElMessage.error('配置生成失败，请重新描述需求后重试。')
-  } finally {
-    generatingDoc.value = false
-  }
-}
-
-// ── Requirements: 流式生成设计文档（作为对话消息） ──
-const generateDocInChat = async () => {
-  if (!conversationId.value || generatingDoc.value) return
-  generatingDoc.value = true
-  docResultForCard.value = null
-  isTyping.value = true
-  scrollToBottom()
-
-  const token = localStorage.getItem('token') || ''
-  const url = requirementsApi.generateDocChatUrl(conversationId.value)
-
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    })
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
-
-    const reader = response.body?.getReader()
-    if (!reader) throw new Error('无法读取响应流')
-    const decoder = new TextDecoder()
-    let buffer = ''
-    const progressMessageId = Date.now()
-    let hasInsertedProgressMessage = false
-    let validationPayload: any = null
-
-    // 包住 read 循环，SSE 尾部 "network error" 假阳性不要打断后面的 store 灌数据。
-    // 只要 docResultForCard 已拿到，就算 reader 抛错也认为是成功，继续走。
-    try {
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() || ''
-
-        for (const line of lines) {
-          if (line.startsWith('event:')) {
-            // event line handled below via data
-          } else if (line.startsWith('data:')) {
-            const dataStr = line.slice(5).trim()
-            if (!dataStr) continue
-            try {
-              const data = JSON.parse(dataStr)
-              if (data.needs_user_input || data.validation?.needs_user_input) {
-                validationPayload = data
-                isTyping.value = false
-                if (!hasInsertedProgressMessage) {
-                  messages.push({
-                    id: progressMessageId,
-                    role: 'assistant',
-                    agent: 'requirements',
-                    content: data.assistant_message || data.validation?.assistant_message || '设计文档预检发现编码冲突，请先补充新的编码后再生成。',
-                    created_at: ''
-                  })
-                  hasInsertedProgressMessage = true
-                } else {
-                  const progressMsg = messages.find((msg) => msg.id === progressMessageId)
-                  if (progressMsg) {
-                    progressMsg.content = data.assistant_message || data.validation?.assistant_message || progressMsg.content
-                  }
-                }
-                continue
-              }
-              // Phase 1: streaming text content
-              if (data.content) {
-                isTyping.value = false
-                if (!hasInsertedProgressMessage) {
-                  messages.push({
-                    id: progressMessageId,
-                    role: 'assistant',
-                    agent: 'requirements',
-                    content: '正在整理设计文档，完整内容会直接显示在右侧预览区。',
-                    created_at: ''
-                  })
-                  hasInsertedProgressMessage = true
-                }
-                scrollToBottom()
-              }
-              // Phase 2: structured JSON result
-              if (data.doc_result) {
-                docResultForCard.value = data.doc_result
-                const progressMsg = messages.find((msg) => msg.id === progressMessageId)
-                if (progressMsg) {
-                  progressMsg.content = '设计文档已生成，完整内容请查看右侧预览。'
-                } else {
-                  messages.push({
-                    id: progressMessageId,
-                    role: 'assistant',
-                    agent: 'requirements',
-                    content: '设计文档已生成，完整内容请查看右侧预览。',
-                    created_at: ''
-                  })
-                }
-              }
-            } catch { /* ignore */ }
-          }
-        }
-      }
-    } catch (streamErr: any) {
-      if (docResultForCard.value) {
-        console.warn('[SSE] 设计文档已到达，忽略尾部假阳性:', streamErr?.message)
-      } else {
-        throw streamErr
-      }
-    }
-
-    isTyping.value = false
-    if (validationPayload) {
-      appendValidationRequiredMessage(validationPayload, progressMessageId)
-      return
-    }
-    if (!docResultForCard.value) {
-      messages.push({ id: Date.now(), role: 'assistant', agent: 'requirements', content: '设计文档生成失败，请重试。', created_at: '' })
-    } else {
-      try {
-        const appConfig = await convertConfig(docResultForCard.value)
-        const previewPayload = buildGeneratedPreviewPayload(appConfig, docResultForCard.value)
-        syncCustomDevelopmentFromDocResult(docResultForCard.value)
-        // 逐字段赋值而不是整体替换，保证 Pinia 响应式追踪
-        store.preview.appName = previewPayload.appName || ''
-        store.preview.roles = previewPayload.roles || []
-        store.preview.dicts = previewPayload.dicts || []
-        store.preview.models = previewPayload.models || []
-        store.preview.forms = previewPayload.forms || []
-        store.preview.workflows = previewPayload.workflows || []
-        store.preview.permissions = previewPayload.permissions || []
-        ;(store.preview as any).flows = previewPayload.flows || []
-        ;(store.preview as any).custom_development = previewPayload.custom_development || []
-        if (previewPayload.appCode) {
-          parsedAppCode.value = previewPayload.appCode
-        }
-        if (previewPayload.appName) {
-          store.setAppName(previewPayload.appName)
-          if (!store.currentApp) {
-            store.currentApp = { status: 'draft' }
-          }
-        }
-        parseReady.value = true
-        // 有 preview 数据后切到 builder 模式
-        if (currentAgent.value === 'requirements' && store.preview.models.length > 0) {
-          currentAgent.value = 'builder'
-        }
-        syncCurrentDocFromPreview('当前生成的设计文档', buildDocMarkdownFromPreview({
-          ...previewPayload,
-        }))
-      } catch (error) {
-        console.error('Sync generated doc preview failed:', error)
-      }
-    }
-    scrollToBottom()
-  } catch (e: any) {
-    isTyping.value = false
-    ElMessage.error('生成失败: ' + (e.message || '未知错误'))
-    messages.push({ id: Date.now(), role: 'assistant', agent: 'requirements', content: '生成失败，请重试。', created_at: '' })
-  } finally {
-    generatingDoc.value = false
-    scrollToBottom()
-  }
-}
-
-// ── Requirements: 确认设计文档 → 转换为 AppConfig → 切换到 builder 模式 ──
-const confirmDocAndBuild = async () => {
-  if (!docResultForCard.value || !conversationId.value) return
-  confirmingDoc.value = true
-
-  try {
-    // Step 1: Convert AnalysisResult → AppConfig (no LLM)
-    const appConfig = await convertConfig(docResultForCard.value)
-    const previewPayload = buildGeneratedPreviewPayload(appConfig, docResultForCard.value)
-    syncCustomDevelopmentFromDocResult(docResultForCard.value)
-
-    // Step 2: Switch conversation to builder mode
-    await conversationApi.updateAgentType(conversationId.value, 'builder')
-    currentAgent.value = 'builder'
-
-    // Step 3: Populate preview store
-    store.preview = {
-      appName: previewPayload.appName || '',
-      roles: previewPayload.roles || [],
-      dicts: previewPayload.dicts || [],
-      models: previewPayload.models || [],
-      forms: previewPayload.forms || [],
-      workflows: previewPayload.workflows || [],
-      permissions: previewPayload.permissions || [],
-      custom_development: previewPayload.custom_development || [],
-    }
-    ;(store.preview as any).flows = previewPayload.flows || []
-    syncCustomDevelopmentFromDocResult(docResultForCard.value)
-    parsedAppCode.value = previewPayload.appCode || ''
-    parseReady.value = true
-    syncCurrentDocFromPreview('当前生成的设计文档', buildDocMarkdownFromPreview({
-      ...previewPayload,
-    }))
-
-    // Step 4: Create/update application record
-    const appCode = previewPayload.appCode || buildAppCode(previewPayload.appName || '新应用')
-    const payload = {
-      conversation_id: conversationId.value,
-      project_id: activeProjectId.value,
-      app_name: previewPayload.appName || '新应用',
-      app_code: appCode,
-      config_preview: { type: 'preview', data: previewPayload },
-    }
-    const created = await applicationApi.create(payload)
-    existingAppId.value = created.id
-    store.setAppName(appConfig.appName)
-    store.currentApp = { status: 'ready' }
-
-    // Step 5: Add confirmation message
-    messages.push({
-      id: Date.now(),
-      role: 'assistant',
-      agent: 'builder',
-      content: `配置已就绪！已提取 ${appConfig.models?.length || 0} 个模型、${appConfig.dicts?.length || 0} 个字典、${appConfig.roles?.length || 0} 个角色。正在开始生成...`,
-      created_at: '',
-    })
-
-    docResultForCard.value = null  // Clear card
-    scrollToBottom()
-
-    // Update URL
-    router.replace({
-      path: `/chat/${conversationId.value}`,
-      query: {
-        app_id: String(created.id),
-        ...(activeProjectId.value ? { project_id: String(activeProjectId.value) } : {}),
-      },
-    })
-    fetchConversationList()
-
-    // 自动触发生成流程（合并为一步）
-    await nextTick()
-    await startDeployFlow()
-  } catch (e: any) {
-    ElMessage.error('转换失败: ' + (e.message || '未知错误'))
-  } finally {
-    confirmingDoc.value = false
   }
 }
 
@@ -7499,70 +6963,9 @@ const formatContent = (t: string) => {
   return text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>').replace(/• /g, '<span style="color:#818cf8;margin-right:4px">•</span> ')
 }
 
-let pendingInitialConversationPromise: Promise<void> | null = null
-
-const ensureFreshRequirementsConversation = async (initialMessage = '') => {
-  if (conversationId.value || existingAppId.value || store.pendingMarkdown || store.pendingFile) return
-
-  if (pendingInitialConversationPromise) {
-    await pendingInitialConversationPromise
-    return
-  }
-
-  resetConversationWorkspace()
-  currentAgent.value = 'requirements'
-  resetMessagesToWelcome()
-
-  pendingInitialConversationPromise = (async () => {
-    try {
-      // Phase β: create Spec first so the conversation is bound to it from message #1
-      let newSpecId: string | null = null
-      try {
-        newSpecId = await specStore.create(null)
-      } catch (e) {
-        console.warn('Failed to create spec, proceeding without spec_id', e)
-      }
-      const data = await conversationApi.create({
-        agent_type: 'requirements',
-        ...(newSpecId ? { spec_id: newSpecId } : {}),
-        ...(initialMessage.trim() ? { initial_message: initialMessage.trim() } : {}),
-        ...(selectedBuilderModelId.value != null ? { selected_llm_config_id: selectedBuilderModelId.value } : {}),
-      }) as any
-      if (newSpecId) {
-        try {
-          await specStore.load(newSpecId)
-        } catch (e) {
-          console.warn('Failed to load spec into store', e)
-        }
-      }
-      conversationId.value = data.id
-      selectedConversationId.value = data.id
-      currentAgent.value = 'requirements'
-      router.replace(`/chat/${data.id}`)
-      resetMessagesToWelcome()
-      if (initialMessage.trim()) {
-        messages.push({
-          id: Date.now(),
-          role: 'user',
-          content: initialMessage.trim(),
-          created_at: '',
-        })
-      }
-    } catch (e) {
-      console.error('初始化对话失败', e)
-    }
-  })().finally(() => {
-    pendingInitialConversationPromise = null
-  })
-
-  await pendingInitialConversationPromise
-}
-
 onMounted(async () => {
   store.showConnectModal = false
   const initialPrompt = typeof route.query.prompt === 'string' ? route.query.prompt : ''
-  const shouldDirectGenerateInitialSpec = initialPrompt.trim().length > 80
-    && (route.query.mode === 'requirements' || route.query.mode === undefined)
 
   // ── 防状态残留：从其他页面（Landing 等）进来时，如果路由里既没 app_id
   // 也没 conversation id，说明是"全新对话"场景，必须先清掉上一次挂在 store
@@ -7800,35 +7203,10 @@ onMounted(async () => {
     }
   }
 
-  // ── 新对话：自动进入 requirements 模式 ──
-  // 只有真正“新建会话”时才创建 requirements，对已有 app 不要覆盖恢复结果
-  if (!conversationId.value && !existingAppId.value && !store.pendingMarkdown && !store.pendingFile && shouldDirectGenerateInitialSpec) {
-    await ensureFreshRequirementsConversation(shouldDirectGenerateInitialSpec ? initialPrompt : '')
-  }
-
-  if (initialPrompt && !appParsedMode.value) {
-    if (shouldDirectGenerateInitialSpec && conversationId.value) {
-      const progressMsgId = Date.now()
-      messages.push({
-        id: progressMsgId,
-        role: 'assistant',
-        agent: 'requirements',
-        content: '收到完整需求，正在生成结构化 SPEC 并同步到右侧预览。',
-        created_at: '',
-      })
-      scrollToBottom()
-      await generateDocInBackground()
-      const progressMsg = messages.find(msg => msg.id === progressMsgId && msg.role === "assistant")
-      if (progressMsg) {
-        progressMsg.content = parseReady.value
-          ? '设计文档已生成，完整内容请查看右侧预览。'
-          : '结构化 SPEC 生成未完成，请补充需求后重试。'
-      }
-    } else {
-      inputText.value = initialPrompt
-      await nextTick()
-      await sendMessage()
-    }
+  if (initialPrompt && !appParsedMode.value && !store.pendingMarkdown && !store.pendingFile) {
+    inputText.value = initialPrompt
+    await nextTick()
+    await sendMessage()
   }
 
   // 从需求分析页带过来的 markdown 文档

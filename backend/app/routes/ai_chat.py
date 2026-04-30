@@ -48,6 +48,8 @@ router = APIRouter(prefix="/ai-chat", tags=["ai-chat"])
 class CreateSessionRequest(BaseModel):
     title: Optional[str] = None
     selected_llm_config_id: Optional[int] = None
+    # 工作模式：'chat'（从零理需求）/ 'cowork'（批量材料整合）
+    mode: Optional[str] = None
 
 
 class UpdateSessionRequest(BaseModel):
@@ -92,6 +94,7 @@ def _session_to_dict(s: AIChatSession) -> dict:
         "id": s.id,
         "title": s.title,
         "status": s.status,
+        "mode": getattr(s, "mode", None) or "chat",
         "selected_llm_config_id": s.selected_llm_config_id,
         "workspace_dir": s.workspace_dir,
         "created_at": s.created_at.isoformat() if s.created_at else None,
@@ -223,6 +226,7 @@ async def create_session(
         user_id=ctx.user.id,
         title=body.title or "新会话",
         selected_llm_config_id=body.selected_llm_config_id,
+        mode="cowork" if body.mode == "cowork" else "chat",
         status="active",
     )
     db.add(s)
@@ -247,7 +251,18 @@ async def get_session(
         .where(AIChatMessage.session_id == session_id)
         .order_by(AIChatMessage.id.asc())
     )
-    messages = msgs_res.scalars().all()
+    all_messages = msgs_res.scalars().all()
+    # 过滤掉 tool_use turn 的 assistant 消息（content 空 + extra_meta.tool_calls 非空）：
+    # 这些是 LLM history 重建用的占位记录，不是给用户看的。前端的工具调用渲染基于
+    # tool_calls 数组单独完成，不需要这条 assistant 占位。
+    def _is_tool_use_placeholder(m: AIChatMessage) -> bool:
+        if m.role != "assistant":
+            return False
+        if (m.content or "").strip():
+            return False
+        meta = m.extra_meta if isinstance(m.extra_meta, dict) else None
+        return bool(meta and meta.get("tool_calls"))
+    messages = [m for m in all_messages if not _is_tool_use_placeholder(m)]
 
     tool_res = await db.execute(
         select(AIChatToolCall)

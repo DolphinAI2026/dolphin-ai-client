@@ -4,7 +4,7 @@ from app.routes.applications._helpers import (
     _is_valid_app_code as route_is_valid_app_code,
     _normalize_app_code as normalize_route_app_code,
 )
-from app.routes.requirements import _infer_unified_app_code, _normalize_doc_app_info
+from app.routes.applications._doc_helpers import _infer_unified_app_code, _normalize_doc_app_info
 from app.services.config_converter import convert_analysis_to_app_config
 
 

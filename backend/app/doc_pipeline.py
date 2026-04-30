@@ -143,15 +143,15 @@ async def parse_document(
 
     Args:
         text: markdown 原文
-        llm_cfg: tenant 级 LLM 配置
+        llm_cfg: tenant 级 LLM 配置（保留参数以兼容旧调用方，当前不再使用）
         on_progress: 进度回调 async def(msg: str)
-        strict: True 时禁用所有 LLM 兜底（模块修复 / 全量 AI / validator 兜底）。
-            纯代码解析失败即抛 DocNotStandardError。用于"更新比对"等要求 parse
-            结果确定性的场景。
+        strict: 历史参数，保留接口兼容；A 严格模式下默认行为已等同于 strict=True
+            （任何解析失败都抛 DocNotStandardError，不再做 LLM 兜底）。
 
     Returns:
         {"type": "preview", "data": {...}, "parse_meta": {...}}
     """
+    del llm_cfg, strict  # 保留签名兼容；当前实现不再使用
 
     async def progress(msg: str, *, batch=None):
         if on_progress:
@@ -198,8 +198,11 @@ async def parse_document(
         failed_list = ', '.join(result.failed_modules)
         await progress(f"[skeleton] 部分模块需要智能修复：{failed_list}")
 
-    # strict 模式：任何解析失败都直接抛，不走 LLM 兜底
-    if strict and result.failed_modules:
+    # ── 纯代码解析路径（A 严格模式：上游已校验 score>=90，不再走 LLM 兜底）──
+    # 上传入口的 detect() 已经把不标准文档挡在外面；走到这里的文档基本都能纯代码
+    # 解析。如果仍有失败模块或校验不通过，直接抛 DocNotStandardError 让上游展示
+    # 错误并引导用户回 AI-Chat 修订文档，而不是在 Builder 端做 AI 兜底。
+    if result.failed_modules:
         raise DocNotStandardError(
             failed_modules=result.failed_modules,
             errors=result.errors,
@@ -207,57 +210,7 @@ async def parse_document(
             decision=decision,
         )
 
-    # 大文档优先保持单一 canonical config 源头。
-    # 若规则解析后仍有失败模块，则直接切到分块 AI 兜底，避免把整篇超长文档再次塞进模块修复 prompt。
-    if is_large_doc and result.failed_modules and _FALLBACK_TO_AI:
-        await progress("[skeleton] 大文档存在未解析模块，切换到分块智能解析...")
-        return await _fallback_ai_parse(
-            text,
-            llm_cfg,
-            on_progress,
-            parse_meta={
-                "standard_score": score,
-                "standard_level": detection.get("level"),
-                "decision": decision,
-                "fallback_used": True,
-                "large_doc": True,
-                "large_doc_strategy": "chunked_ai_fallback",
-            },
-        )
-
-    # ── Step 3: 统一走模块级 LLM 修复（不再走 AI 全量兜底）────
-    # 即使纯代码解析全部失败，也按模块并行调 LLM，比全量快
-    if result.failed_modules:
-        failed_list = ', '.join(result.failed_modules)
-        if decision == "rewrite_first":
-            await progress(f"[skeleton] 文档标准度较低（{score}分），按模块智能解析：{failed_list}")
-        else:
-            await progress(f"[skeleton] 修复非标准模块：{failed_list}")
-        result = await _fix_failed_modules(text, result, llm_cfg, progress_cb=progress)
-        # 修复完成后推送新修复的模块
-        await _push_module_if_ready("roles", "roles", result.config.get("roles", []))
-        await _push_module_if_ready("dicts", "dicts", result.config.get("dicts", []))
-        await _push_module_if_ready("models", "models", result.config.get("models", []))
-        await _push_module_if_ready("forms", "forms", result.config.get("forms", []))
-        await _push_module_if_ready("permissions", "permissions", result.config.get("permissions", []))
-
-    # ── Step 4: 关键模块仍然失败，最后才降级到全量 AI 解析 ────
-    if result.has_critical_failure and _FALLBACK_TO_AI:
-        await progress("[skeleton] 模块修复未成功，启用全量智能解析兜底...")
-        return await _fallback_ai_parse(
-            text,
-            llm_cfg,
-            on_progress,
-            parse_meta={
-                "standard_score": score,
-                "standard_level": detection.get("level"),
-                "decision": decision,
-                "fallback_used": True,
-                "large_doc": is_large_doc,
-            },
-        )
-
-    # ── Step 6: 校验 & 修复 config ───────────────────────────
+    # ── 校验 & 规范化 config ───────────────────────────────────
     await progress("[complete] 校验配置结构...")
     try:
         cleaned, warnings = validate_full_config(result.config)
@@ -266,27 +219,12 @@ async def parse_document(
             result.errors.extend(warnings)
     except ValueError as e:
         logger.error(f"config 校验失败: {e}")
-        if strict:
-            raise DocNotStandardError(
-                failed_modules=["config_validator"],
-                errors=[str(e)],
-                score=score,
-                decision=decision,
-            ) from e
-        if _FALLBACK_TO_AI:
-            await progress("配置校验失败，启用智能解析兜底...")
-            return await _fallback_ai_parse(
-                text,
-                llm_cfg,
-                on_progress,
-                parse_meta={
-                    "standard_score": score,
-                    "standard_level": detection.get("level"),
-                    "decision": decision,
-                    "fallback_used": True,
-                    "large_doc": is_large_doc,
-                },
-            )
+        raise DocNotStandardError(
+            failed_modules=["config_validator"],
+            errors=[str(e)],
+            score=score,
+            decision=decision,
+        ) from e
 
     await progress("解析完成")
 
@@ -298,9 +236,8 @@ async def parse_document(
             "standard_level": detection.get("level"),
             "decision": decision,
             "large_doc": is_large_doc,
-            "large_doc_strategy": "rules_then_module_fix",
-            "fixed_modules": sorted(result.failed_modules),
-            "errors": result.errors[:20],  # 最多返回20条
+            "fixed_modules": [],
+            "errors": result.errors[:20],
         },
     }
 
