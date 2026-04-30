@@ -548,6 +548,18 @@ const transientItems = ref<TransientItem[]>([])
 
 // 当前正在流式输出的助手内容（assistant_delta 累积）
 const streamingText = ref('')
+
+// LLM 正在流式生成 tool_calls 参数时的累积状态（按 tool index 分组）。
+// tool_call_delta 阶段（LLM 还在流参数）→ 这里有数据；
+// tool_call_start 之后（后端开始执行）→ 对应 index 被清掉。
+type StreamingTool = { index: number; name: string; argumentsSoFar: string }
+const streamingTools = ref<Record<number, StreamingTool>>({})
+// 计算当前正在流式生成参数的 tool（取 index 最小的、有 name 的那个）
+const activeStreamingTool = computed<StreamingTool | null>(() => {
+  const list = Object.values(streamingTools.value).filter(t => t.name)
+  if (!list.length) return null
+  return list.sort((a, b) => a.index - b.index)[0]
+})
 // pending 队列 + 节流：兼容"假流式"LLM（一次性把全部内容吐回来）
 // 把字符按 ~80 chars/sec 平滑显示，看起来像真在打字
 const pendingChars = ref<string[]>([])
@@ -781,6 +793,17 @@ const canSend = computed(() => !isSending.value && (!!inputText.value.trim() || 
 // 等待状态文案：随时间变化，避免用户以为断了
 const thinkingLabel = computed(() => {
   const s = durationSec.value
+  // 优先：LLM 正在流式生成工具参数
+  const streamingTool = activeStreamingTool.value
+  if (streamingTool) {
+    const charsSoFar = streamingTool.argumentsSoFar.length
+    // 试着抽出 filename 让用户知道在写哪个文件
+    let suffix = ''
+    const filenameMatch = streamingTool.argumentsSoFar.match(/"filename"\s*:\s*"([^"]+)"/)
+    if (filenameMatch) suffix = `《${filenameMatch[1]}》`
+    return `AI 正在生成 ${streamingTool.name}${suffix} 参数（已 ${charsSoFar} 字）`
+  }
+  // 后端正在执行某个工具
   if (toolCalls.value.some(t => t.status === 'running')) {
     const running = toolCalls.value.find(t => t.status === 'running')!
     return `正在执行 ${running.tool_name}…`
@@ -932,6 +955,7 @@ async function onSend() {
   isSending.value = true
   transientItems.value = []
   streamingText.value = ''
+  streamingTools.value = {}
   pendingChars.value = []
   pendingFinalMessage.value = null
   stopDrain()
@@ -1005,6 +1029,8 @@ function handleSseEvent(eventName: string, data: any) {
         transientItems.value.push({ kind: 'thinking', text: streamingText.value, ts: Date.now() })
         streamingText.value = ''
       }
+      // 该 tool 开始执行 → 从 streamingTools 移除（参数已生成完）
+      streamingTools.value = {}
       const tc: AIChatToolCall = {
         id: data.id,
         session_id: currentSession.value?.id || 0,
@@ -1021,9 +1047,17 @@ function handleSseEvent(eventName: string, data: any) {
       toolCalls.value.push(tc)
       break
     }
-    case 'tool_call_delta':
-      // 工具参数还在生成中（暂未利用，留给未来"参数预览"特性）
+    case 'tool_call_delta': {
+      // LLM 正在流式生成 tool_calls 的参数。把 arguments_so_far 累积到 streamingTools，
+      // 让 thinkingLabel 能展示进度（"AI 正在生成 write_artifact《xxx-设计文档.md》参数（已 2543 字）"）
+      const idx = data.index ?? 0
+      const cur = streamingTools.value[idx] || { index: idx, name: '', argumentsSoFar: '' }
+      if (data.name) cur.name = data.name
+      // arguments_so_far 是后端累计的完整字符串，直接覆盖即可
+      if (typeof data.arguments_so_far === 'string') cur.argumentsSoFar = data.arguments_so_far
+      streamingTools.value = { ...streamingTools.value, [idx]: cur }
       break
+    }
     case 'tool_call_end': {
       const found = toolCalls.value.find(t => t.id === data.id)
       if (found) {
