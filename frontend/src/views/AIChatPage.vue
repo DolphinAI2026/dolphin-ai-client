@@ -23,8 +23,9 @@
             class="session-item"
             :class="{ active: currentSessionId === s.id }"
             @click="loadSession(s.id)"
-            :title="s.title"
+            :title="`${s.title}${s.mode === 'cowork' ? '（Cowork 协作整合模式）' : ''}`"
           >
+            <span v-if="s.mode === 'cowork'" class="session-mode-badge cowork" title="Cowork 协作整合模式">📂</span>
             <span class="session-name">{{ s.title }}</span>
             <button class="session-menu-btn" @click.stop="onRenameSession(s)" title="重命名">✎</button>
             <button class="session-menu-btn danger" @click.stop="onDeleteSession(s)" title="删除">×</button>
@@ -69,6 +70,8 @@
             @keydown.enter="saveTitle"
           />
           <span v-else-if="currentSession" @dblclick="startEditTitle" :title="'双击重命名'">
+            <span v-if="currentSession.mode === 'cowork'" class="header-mode-badge cowork">📂 Cowork</span>
+            <span v-else class="header-mode-badge chat">💬 Chat</span>
             {{ currentSession.title }}
           </span>
           <span v-else class="title-placeholder">未选择会话</span>
@@ -1425,6 +1428,33 @@ onMounted(async () => {
 .session-item:hover { background: var(--ac-border-faint); }
 .session-item.active { background: var(--ac-btn); color: var(--ac-text); }
 .session-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-mode-badge {
+  font-size: 12px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.session-mode-badge.cowork {
+  filter: hue-rotate(-15deg);  /* 让 📂 表情更偏暖橙，跟 chat 视觉区分 */
+}
+.header-mode-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 10px;
+  margin-right: 8px;
+  vertical-align: middle;
+  letter-spacing: 0.3px;
+}
+.header-mode-badge.cowork {
+  background: color-mix(in srgb, #f59e0b 18%, transparent);
+  color: #c2630b;
+  border: 1px solid color-mix(in srgb, #f59e0b 30%, transparent);
+}
+.header-mode-badge.chat {
+  background: color-mix(in srgb, var(--ac-brand) 14%, transparent);
+  color: var(--ac-brand);
+  border: 1px solid color-mix(in srgb, var(--ac-brand) 28%, transparent);
+}
 .session-menu-btn {
   appearance: none;
   background: transparent;
