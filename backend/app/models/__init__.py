@@ -288,3 +288,12 @@ from app.models.ai_chat import (  # noqa: E402, F401
     AIChatAttachment,
     AIChatArtifact,
 )
+
+
+# Vibe Coding（全代码）模块 — 注册 ORM mapping
+from app.models.vibe_coding import (  # noqa: E402, F401
+    VibeCodingThread,
+    VibeCodingMessage,
+    VibeCodingToolCall,
+    VibeCodingWorkspaceMember,
+)

@@ -36,6 +36,7 @@ from app.routes import (
     spec,
     sse,
     templates,
+    vibe_coding_chat,
     work_state,
 )
 
@@ -76,6 +77,25 @@ async def lifespan(app: FastAPI):
     import asyncio as _asyncio
     from app.coding.workspace import WorkspaceManager as _WM
     _asyncio.create_task(_WM().prewarm_template_deps())
+
+    # Vibe Coding 沙箱容器空闲回收 — 周期性 stop 长时间无活跃的容器（保留容器，下次 start 复用）
+    async def _vibe_reap_loop():
+        from app.vibe_coding.docker_runtime import get_runtime as _get_rt
+        import logging as _logging
+        _log = _logging.getLogger("vibe_coding.reaper")
+        while True:
+            await _asyncio.sleep(300)  # 5 分钟扫一次
+            try:
+                rt = _get_rt()
+                if not await rt.is_available():
+                    continue
+                stopped = await rt.reap_idle()
+                if stopped:
+                    _log.info("Reaped %d idle sandbox(es): %s", len(stopped), stopped)
+            except Exception as exc:
+                _log.warning("vibe reaper iteration failed: %s", exc)
+
+    _asyncio.create_task(_vibe_reap_loop())
 
     yield
     # 关闭时清理资源
@@ -142,6 +162,7 @@ app.include_router(preferences.router, prefix="/api")
 app.include_router(work_state.router, prefix="/api")
 app.include_router(online_coding.router, prefix="/api")
 app.include_router(online_coding_runtime.router, prefix="/api")
+app.include_router(vibe_coding_chat.router, prefix="/api")
 # 平台代理路由注册在根路径（/platform/... 和 /backend/... 需要直接匹配）
 app.include_router(platform_proxy.router)
 

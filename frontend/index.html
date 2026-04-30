@@ -5,9 +5,8 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>aPaaS Builder AI</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <!-- 字体栈走系统兜底：Google Fonts 在国内访问超时（fonts.googleapis.com 被墙），
+         会让首屏白屏 30 秒。如果未来想用 Inter，可以走 @fontsource/inter 把字体打进 bundle。 -->
     <script>
       // Prevent flash of wrong theme (FOWT)
       ;(function() {

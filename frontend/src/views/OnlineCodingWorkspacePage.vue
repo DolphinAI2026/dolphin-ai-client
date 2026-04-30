@@ -1,6 +1,46 @@
 <template>
-  <BuilderFrame :breadcrumbs="[{ label: 'Vibe Coding' }]">
+  <BuilderFrame :breadcrumbs="topBreadcrumbs">
     <template #actions>
+      <!-- 工作区已就绪时：把 view-toggle / IDE 控件 / 清空对话 都合并到顶部一行，省掉副 toolbar -->
+      <template v-if="isRepoReady && workspace?.id">
+        <span v-if="workspace.id" class="oc-id-chip-top">{{ workspace.id }}</span>
+        <div class="oc-view-toggle-top">
+          <button
+            type="button"
+            class="oc-view-tab-top"
+            :class="{ active: activeView === 'chat' }"
+            @click="activeView = 'chat'"
+          >
+            <el-icon><ChatDotRound /></el-icon>
+            <span>对话</span>
+          </button>
+          <button
+            type="button"
+            class="oc-view-tab-top"
+            :class="{ active: activeView === 'ide' }"
+            @click="activeView = 'ide'"
+          >
+            <el-icon><Monitor /></el-icon>
+            <span>IDE</span>
+          </button>
+        </div>
+        <!-- 对话视图：split preview 切换按钮（agent 起 dev server 后才显示）-->
+        <button
+          v-if="activeView === 'chat' && previewLinks.length"
+          class="oc-top-btn"
+          :class="{ active: previewOpen }"
+          type="button"
+          @click="togglePreviewPanel"
+          :title="previewOpen ? '关闭预览面板' : `打开预览面板（${previewLinks.length} 个端口）`"
+        >
+          <el-icon><Monitor /></el-icon>
+          <span>预览</span>
+          <span v-if="previewLinks.length > 1" class="oc-preview-badge">{{ previewLinks.length }}</span>
+        </button>
+        <!-- IDE 视图：彻底通过对话让 agent 启停服务，不再保留"实验预览/重载 IDE"快捷按钮 -->
+        <!-- code-server iframe 自带刷新（⌘R）+ 命令面板，已经够用 -->
+        <!-- 旧的 oc-runtime-panel/runtimeRunning 只对 host 模式 vue-cli 有效，docker 沙箱时间线下不再使用 -->
+      </template>
       <button class="oc-top-btn" type="button" @click="goWorkspaceList">
         <el-icon><ArrowLeft /></el-icon>
         <span>工作区列表</span>
@@ -15,18 +55,18 @@
           <div class="oc-panel-head">
             <div>
               <span class="oc-kicker">VIBE CODING</span>
-              <strong>绑定 Git 仓库</strong>
-              <span>当前阶段先完成仓库接入，导入成功后直接进入代码 IDE。</span>
+              <strong>新建 Vibe Coding 工作区</strong>
+              <span>对话式全代码开发——AI 给方案建议，你拍板，沙箱里跑代码。</span>
             </div>
-            <em class="oc-stage discovery">Git 接入</em>
+            <em class="oc-stage discovery">{{ repoUrl.trim() ? 'Git 接入' : '从零开始' }}</em>
           </div>
 
           <div class="oc-git-note">
-            先把仓库读进工作区。Vibe Coding 的对话式全代码开发等沙箱执行链路稳定后再开放，避免现在这层半成品流程干扰验证。
+            可选：导入已有 Git 仓库，AI 在仓库基础上增改；留空则建空工作区，AI 从零脚手架开始搭。<strong>Git 不是前置项，可以开发完再提交。</strong>
           </div>
 
           <label class="oc-field">
-            <span>Git 仓库地址</span>
+            <span>Git 仓库地址（可选）</span>
             <input v-model="repoUrl" placeholder="https://github.com/org/repo.git" />
           </label>
           <label class="oc-field">
@@ -34,16 +74,16 @@
             <textarea
               v-model="taskInput"
               rows="4"
-              placeholder="可选。写清楚这次打开 IDE 后要处理的代码任务。"
+              placeholder="例如：搭一个 CRM 系统 / 做个博客 / 写一个 todo app"
             ></textarea>
           </label>
 
-          <div class="oc-auth-tabs">
+          <div v-if="repoUrl.trim()" class="oc-auth-tabs">
             <button type="button" :class="{ active: authMode === 'public' }" @click="authMode = 'public'">公开仓库</button>
             <button type="button" :class="{ active: authMode === 'token' }" @click="authMode = 'token'">Token 授权</button>
           </div>
 
-          <div v-if="authMode === 'token'" class="oc-token-grid">
+          <div v-if="repoUrl.trim() && authMode === 'token'" class="oc-token-grid">
             <label class="oc-field">
               <span>Git 用户名</span>
               <input v-model="gitUsername" placeholder="x-access-token" />
@@ -58,58 +98,30 @@
             {{ workspace.import_error }}
           </div>
 
-          <button class="oc-primary oc-repo-action" type="button" :disabled="submitting || !repoUrl.trim()" @click="submitWorkspace">
+          <button
+            class="oc-primary oc-repo-action"
+            type="button"
+            :disabled="submitting || (!repoUrl.trim() && !taskInput.trim())"
+            @click="submitWorkspace"
+          >
             <el-icon :class="{ spin: submitting }"><Refresh /></el-icon>
-            <span>{{ submitting ? '导入中...' : workspace ? '重新导入并打开 IDE' : '导入仓库并打开 IDE' }}</span>
+            <span>
+              {{
+                submitting
+                  ? (repoUrl.trim() ? '导入中...' : '创建中...')
+                  : workspace
+                    ? '重新导入并打开 IDE'
+                    : repoUrl.trim()
+                      ? '导入仓库并打开 IDE'
+                      : '直接打开 IDE 开始对话开发'
+              }}
+            </span>
           </button>
         </section>
       </section>
 
       <template v-else>
-        <section class="oc-ide-toolbar">
-          <div class="oc-ide-context">
-            <span class="oc-status-dot"></span>
-            <strong>{{ workspaceTitle }}</strong>
-            <span>{{ workspace?.branch || 'main' }}</span>
-            <span v-if="workspace?.id">{{ workspace.id }}</span>
-          </div>
-          <div class="oc-ide-actions">
-            <span v-if="showPreviewPanel || runtimeRunning || runtimeBusy" class="oc-runtime-pill" :class="runtimeStatusClass">
-              {{ runtimeStatusLabel }}
-            </span>
-            <button
-              v-if="showPreviewPanel || runtimeRunning || runtimeBusy"
-              class="oc-secondary"
-              type="button"
-              :disabled="runtimeBusy"
-              @click="refreshPreviewRuntimeStatus(true)"
-            >
-              <el-icon :class="{ spin: runtimeLogsLoading }"><Refresh /></el-icon>
-              <span>运行状态</span>
-            </button>
-            <button
-              v-if="!runtimeRunning"
-              class="oc-secondary"
-              type="button"
-              :disabled="runtimeStartDisabled"
-              @click="startPreviewRuntime"
-            >
-              <el-icon :class="{ spin: runtimeBusy }"><Monitor /></el-icon>
-              <span>{{ runtimeBusy ? '启动中' : '实验预览' }}</span>
-            </button>
-            <button v-else class="oc-secondary danger" type="button" :disabled="runtimeBusy" @click="stopPreviewRuntime">
-              <span>停止预览</span>
-            </button>
-            <button class="oc-icon-btn" type="button" :disabled="!runtimePreviewUrl" title="打开预览" @click="openPreviewWindow">
-              <el-icon><TopRight /></el-icon>
-            </button>
-            <button class="oc-icon-btn" type="button" :disabled="openingIde" title="重新加载 IDE" @click="() => openIde(false)">
-              <el-icon :class="{ spin: openingIde }"><Refresh /></el-icon>
-            </button>
-          </div>
-        </section>
-
-        <section v-if="showPreviewPanel" class="oc-runtime-panel">
+        <section v-if="activeView === 'ide' && showPreviewPanel" class="oc-runtime-panel">
           <div class="oc-runtime-main">
             <div>
               <strong>预览沙箱</strong>
@@ -127,20 +139,82 @@
           <div v-if="runtimeError" class="oc-runtime-error">{{ runtimeError }}</div>
         </section>
 
-        <section class="oc-ide-pane">
-          <iframe
-            v-if="ideUrl"
-            :key="ideUrl"
-            :src="ideUrl"
-            class="oc-ide-frame"
-            allow="clipboard-read; clipboard-write"
-            @load="ideLoaded = true"
-            @error="ideLoadError = 'Web IDE 加载失败'"
-          ></iframe>
-          <div v-if="!ideLoaded" class="oc-ide-loading">
-            <strong>{{ ideLoadError || '正在加载 Web IDE...' }}</strong>
-            <button v-if="ideLoadError" type="button" @click="() => openIde()">重新加载</button>
-          </div>
+        <section class="oc-workspace-body">
+          <!-- chat & ide 都常驻 DOM（v-show 而非 v-if），切换时 IDE iframe 不重载、chat 状态不丢 -->
+          <section class="oc-chat-pane" v-show="activeView === 'chat'">
+            <div class="oc-chat-split" :class="{ 'has-preview': previewOpen }">
+              <div class="oc-chat-side">
+                <VibeChatPanel
+                  v-if="workspace?.id"
+                  ref="chatPanelRef"
+                  :workspace-id="workspace.id"
+                  wide
+                  @workspace-changed="onChatWorkspaceChanged"
+                  @open-preview="onOpenPreview"
+                  @ports-updated="onPortsUpdated"
+                />
+              </div>
+              <div
+                v-if="previewOpen"
+                class="oc-preview-side"
+                :style="{ flexBasis: previewWidth + 'px' }"
+              >
+                <div
+                  class="oc-preview-resizer"
+                  @mousedown="startPreviewResize"
+                  title="拖动调整宽度"
+                ></div>
+                <header class="oc-preview-head">
+                  <select
+                    v-model="previewActiveUrl"
+                    class="oc-preview-url-select"
+                    v-if="previewLinks.length > 1"
+                  >
+                    <option v-for="link in previewLinks" :key="link.url" :value="link.url">
+                      {{ link.label }}
+                    </option>
+                  </select>
+                  <span v-else class="oc-preview-url-static">{{ previewActiveUrl }}</span>
+                  <div class="oc-preview-actions">
+                    <button class="oc-preview-icon-btn" @click="reloadPreview" title="刷新">↻</button>
+                    <a
+                      :href="previewActiveUrl"
+                      target="_blank"
+                      rel="noreferrer"
+                      class="oc-preview-icon-btn"
+                      title="在新窗口打开"
+                    >↗</a>
+                    <button
+                      class="oc-preview-icon-btn"
+                      @click="previewOpen = false"
+                      title="关闭"
+                    >×</button>
+                  </div>
+                </header>
+                <iframe
+                  v-if="previewActiveUrl"
+                  :key="previewIframeKey"
+                  :src="previewActiveUrl"
+                  class="oc-preview-frame"
+                ></iframe>
+              </div>
+            </div>
+          </section>
+          <section class="oc-ide-pane" v-show="activeView === 'ide'">
+            <iframe
+              v-if="ideUrl"
+              :key="ideUrl"
+              :src="ideUrl"
+              class="oc-ide-frame"
+              allow="clipboard-read; clipboard-write"
+              @load="ideLoaded = true"
+              @error="ideLoadError = 'Web IDE 加载失败'"
+            ></iframe>
+            <div v-if="!ideLoaded" class="oc-ide-loading">
+              <strong>{{ ideLoadError || '正在加载 Web IDE...' }}</strong>
+              <button v-if="ideLoadError" type="button" @click="() => openIde()">重新加载</button>
+            </div>
+          </section>
         </section>
       </template>
     </main>
@@ -155,12 +229,14 @@ import {
   ArrowLeft,
   ChatDotRound,
   CircleCheck,
+  Delete,
   Monitor,
   Refresh,
   TopRight,
 } from '@element-plus/icons-vue'
 import BuilderFrame from '@/components/BuilderFrame.vue'
 import CodingStreamMessages from '@/components/coding/CodingStreamMessages.vue'
+import VibeChatPanel from '@/components/vibe-coding/VibeChatPanel.vue'
 import {
   onlineCodingApi,
   type OnlineCodingWorkspace,
@@ -175,6 +251,76 @@ type DevStage = 'discovery' | 'spec' | 'confirmed' | 'building' | 'ready'
 const route = useRoute()
 const router = useRouter()
 const themeStore = useThemeStore()
+// chat 面板的 ref — 让顶部 actions 能取到 thread.title 并触发清空
+const chatPanelRef = ref<any>(null)
+
+// 顶部面包屑：'Vibe Coding / {对话标题}'（chat 视图）或 'Vibe Coding / {workspace 名}'（ide 视图）
+const topBreadcrumbs = computed<Array<{ label: string; to?: string }>>(() => {
+  const crumbs: Array<{ label: string; to?: string }> = [
+    { label: 'Vibe Coding', to: '/vibe-coding' },
+  ]
+  // chat 视图下用 thread title（已在 chat panel 中可编辑）
+  if (chatPanelRef.value?.thread?.title) {
+    crumbs.push({ label: chatPanelRef.value.thread.title })
+  } else if (workspace.value) {
+    crumbs.push({ label: workspaceTitle.value })
+  }
+  return crumbs
+})
+
+// ─── Split preview panel ───
+type PreviewLink = { containerPort: number; hostPort?: number; url: string; label: string }
+const previewOpen = ref(false)
+const previewActiveUrl = ref('')
+const previewWidth = ref(540)
+const previewIframeKey = ref(0)
+// 收集到目前为止 chat panel emit 过的 preview links（保持菜单可切换）
+const previewLinks = ref<PreviewLink[]>([])
+
+function onOpenPreview(link: PreviewLink) {
+  previewOpen.value = true
+  previewActiveUrl.value = link.url
+}
+
+function onPortsUpdated(links: PreviewLink[]) {
+  previewLinks.value = links
+  // 已有 active URL 但端口列表更新了，确保 active URL 仍在列表里；否则切到第一个
+  if (links.length && previewActiveUrl.value) {
+    const stillThere = links.find((l) => l.url === previewActiveUrl.value)
+    if (!stillThere) previewActiveUrl.value = links[0].url
+  }
+}
+
+function reloadPreview() {
+  previewIframeKey.value += 1
+}
+
+function togglePreviewPanel() {
+  if (previewOpen.value) {
+    previewOpen.value = false
+  } else {
+    previewOpen.value = true
+    if (!previewActiveUrl.value && previewLinks.value.length) {
+      previewActiveUrl.value = previewLinks.value[0].url
+    }
+  }
+}
+
+function startPreviewResize(e: MouseEvent) {
+  e.preventDefault()
+  const startX = e.clientX
+  const startW = previewWidth.value
+  const onMove = (ev: MouseEvent) => {
+    const dx = startX - ev.clientX
+    previewWidth.value = Math.min(Math.max(360, startW + dx), 1000)
+  }
+  const onUp = () => {
+    window.removeEventListener('mousemove', onMove)
+    window.removeEventListener('mouseup', onUp)
+  }
+  window.addEventListener('mousemove', onMove)
+  window.addEventListener('mouseup', onUp)
+}
 
 const loading = ref(true)
 const submitting = ref(false)
@@ -226,8 +372,9 @@ function routePromptText() {
 }
 
 function isWorkspaceReady(current?: OnlineCodingWorkspace | null) {
-  if (!current || current.status !== 'repo_imported') return false
-  return (current.file_count || current.files?.length || 0) > 0
+  // 只要 workspace 进入 repo_imported 状态（无论是真有 git 仓库还是无 git 空目录）就让 IDE + chat 接管
+  if (!current) return false
+  return current.status === 'repo_imported'
 }
 
 const isRepoReady = computed(() => isWorkspaceReady(workspace.value))
@@ -353,6 +500,17 @@ async function loadFromRoute() {
     seedImportStream()
   } finally {
     loading.value = false
+  }
+}
+
+/** Vibe Chat 工具改了文件 — 重新拉一次 workspace 元数据更新 file_count 等。 */
+async function onChatWorkspaceChanged() {
+  if (!workspace.value?.id) return
+  try {
+    const refreshed = await onlineCodingApi.getWorkspace(workspace.value.id)
+    workspace.value = refreshed
+  } catch {
+    /* ignore — 不影响 chat 体验 */
   }
 }
 
@@ -1324,10 +1482,17 @@ function goWorkspaceList() {
 }
 
 .oc-page.is-ide-view {
-  min-height: calc(100vh - 64px);
+  flex: 1 1 auto;
+  min-height: 0;
   padding: 0;
-  background: #0d1117;
+  background: #ffffff;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+:global(html[data-theme="dark"]) .oc-page.is-ide-view {
+  background: #0d1117;
 }
 
 .oc-studio-header {
@@ -1366,15 +1531,33 @@ function goWorkspaceList() {
 }
 
 .oc-ide-toolbar {
+  --toolbar-bg: #ffffff;
+  --toolbar-border: #d0d7de;
+  --toolbar-text: #1f2328;
+  --toolbar-text-muted: #57606a;
+  --toolbar-chip-bg: #f6f8fa;
+  --toolbar-chip-border: #d0d7de;
+  --toolbar-chip-text: #57606a;
+
   height: 48px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  background: #0d1117;
-  color: rgba(226, 232, 240, 0.88);
+  border-bottom: 1px solid var(--toolbar-border);
+  background: var(--toolbar-bg);
+  color: var(--toolbar-text);
   padding: 0 16px;
+}
+
+:global(html[data-theme="dark"]) .oc-ide-toolbar {
+  --toolbar-bg: #0d1117;
+  --toolbar-border: rgba(240, 246, 252, 0.1);
+  --toolbar-text: #c9d1d9;
+  --toolbar-text-muted: #8b949e;
+  --toolbar-chip-bg: rgba(148, 163, 184, 0.08);
+  --toolbar-chip-border: rgba(148, 163, 184, 0.16);
+  --toolbar-chip-text: rgba(203, 213, 225, 0.72);
 }
 
 .oc-ide-context,
@@ -1390,7 +1573,7 @@ function goWorkspaceList() {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: rgba(248, 250, 252, 0.94);
+  color: var(--toolbar-text);
   font-size: 14px;
   font-weight: 780;
 }
@@ -1399,10 +1582,10 @@ function goWorkspaceList() {
   min-height: 24px;
   display: inline-flex;
   align-items: center;
-  border: 1px solid rgba(148, 163, 184, 0.16);
+  border: 1px solid var(--toolbar-chip-border);
   border-radius: 999px;
-  background: rgba(148, 163, 184, 0.08);
-  color: rgba(203, 213, 225, 0.72);
+  background: var(--toolbar-chip-bg);
+  color: var(--toolbar-chip-text);
   padding: 0 8px;
   font-size: 11px;
   font-weight: 700;
@@ -1418,23 +1601,23 @@ function goWorkspaceList() {
 
 .oc-ide-toolbar .oc-secondary {
   min-height: 32px;
-  border-color: rgba(148, 163, 184, 0.18);
-  background: rgba(255, 255, 255, 0.06);
-  color: rgba(226, 232, 240, 0.86);
+  border-color: var(--toolbar-chip-border);
+  background: var(--toolbar-chip-bg);
+  color: var(--toolbar-text);
 }
 
 .oc-ide-toolbar .oc-secondary.danger {
-  color: #fecaca;
+  color: #cf222e;
 }
 
-.oc-icon-btn {
+.oc-ide-toolbar .oc-icon-btn {
   width: 32px;
   height: 32px;
   padding: 0;
   border-radius: 9px;
-  border-color: rgba(148, 163, 184, 0.18);
-  background: rgba(255, 255, 255, 0.06);
-  color: rgba(226, 232, 240, 0.78);
+  border-color: var(--toolbar-chip-border);
+  background: var(--toolbar-chip-bg);
+  color: var(--toolbar-text-muted);
 }
 
 .oc-icon-btn:hover:not(:disabled),
@@ -1801,18 +1984,307 @@ function goWorkspaceList() {
   font-size: 12px;
 }
 
-.oc-ide-pane {
-  width: 100%;
-  height: calc(100vh - 112px);
-  min-height: 460px;
-  margin: 0;
+.oc-workspace-body {
   position: relative;
-  overflow: hidden;
-  background: #111827;
+  width: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
+  background: #ffffff;
 }
 
-.oc-page.is-ide-view.has-preview-panel .oc-ide-pane {
-  height: calc(100vh - 184px);
+:global(html[data-theme="dark"]) .oc-workspace-body {
+  background: #0d1117;
+}
+
+.oc-chat-pane,
+.oc-ide-pane {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.oc-chat-pane {
+  background: transparent;  /* 让 VibeChatPanel 内部 var(--vc-bg) 决定 */
+}
+
+.oc-chat-split {
+  display: flex;
+  width: 100%;
+  height: 100%;
+}
+.oc-chat-side {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  position: relative;
+}
+.oc-preview-side {
+  position: relative;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: #ffffff;
+  border-left: 1px solid rgba(15, 23, 42, 0.10);
+  overflow: hidden;
+}
+:global(html[data-theme="dark"]) .oc-preview-side {
+  background: #0a0a0c;
+  border-left-color: rgba(255, 255, 255, 0.06);
+}
+.oc-preview-resizer {
+  position: absolute;
+  left: -3px;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: ew-resize;
+  z-index: 5;
+}
+.oc-preview-resizer:hover {
+  background: rgba(90, 120, 255, 0.4);
+}
+.oc-preview-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.10);
+  background: #f7f8fa;
+  font-size: 12px;
+}
+:global(html[data-theme="dark"]) .oc-preview-head {
+  background: #111114;
+  border-bottom-color: rgba(255, 255, 255, 0.06);
+  color: #e8eaed;
+}
+.oc-preview-url-select {
+  flex: 1 1 auto;
+  background: #ffffff;
+  border: 1px solid rgba(15, 23, 42, 0.18);
+  color: #0f172a;
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  outline: none;
+  font-family: ui-monospace, Menlo, monospace;
+  min-width: 0;
+}
+:global(html[data-theme="dark"]) .oc-preview-url-select {
+  background: #16171b;
+  border-color: rgba(255, 255, 255, 0.10);
+  color: #e8eaed;
+}
+.oc-preview-url-static {
+  flex: 1 1 auto;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 12px;
+  color: #475569;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+:global(html[data-theme="dark"]) .oc-preview-url-static {
+  color: #a1a4ad;
+}
+.oc-preview-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.oc-preview-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 5px;
+  color: #475569;
+  text-decoration: none;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+.oc-preview-icon-btn:hover {
+  background: rgba(15, 23, 42, 0.06);
+  color: #0f172a;
+}
+:global(html[data-theme="dark"]) .oc-preview-icon-btn {
+  color: #a1a4ad;
+}
+:global(html[data-theme="dark"]) .oc-preview-icon-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #e8eaed;
+}
+.oc-preview-frame {
+  flex: 1 1 auto;
+  width: 100%;
+  border: 0;
+  background: #ffffff;
+}
+:global(html[data-theme="dark"]) .oc-preview-frame {
+  background: #ffffff;  /* 用户应用大概率是白底，强制亮 */
+}
+
+.oc-ide-pane {
+  background: #1e1e1e;  /* code-server iframe 背景兜底，code-server 自己有主题 */
+}
+
+/* BuilderFrame actions slot 内的版本 — 跟 BuilderTopBar 风格协调 */
+.oc-id-chip-top {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(116, 128, 171, 0.18);
+  background: rgba(116, 128, 171, 0.06);
+  color: #6b7280;
+  font-size: 11px;
+  font-weight: 700;
+  font-family: ui-monospace, Menlo, monospace;
+  letter-spacing: 0.3px;
+}
+:global(html[data-theme="dark"]) .oc-id-chip-top {
+  border-color: rgba(255, 255, 255, 0.10);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(226, 232, 240, 0.7);
+}
+.oc-view-toggle-top {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  background: rgba(116, 128, 171, 0.08);
+  border: 1px solid rgba(116, 128, 171, 0.16);
+  border-radius: 8px;
+}
+:global(html[data-theme="dark"]) .oc-view-toggle-top {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+.oc-view-tab-top {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 12px;
+  border: none;
+  background: transparent;
+  color: #6b7280;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.oc-view-tab-top:hover:not(.active) {
+  color: #1f2937;
+}
+:global(html[data-theme="dark"]) .oc-view-tab-top {
+  color: rgba(226, 232, 240, 0.6);
+}
+:global(html[data-theme="dark"]) .oc-view-tab-top:hover:not(.active) {
+  color: #e8eaed;
+}
+.oc-view-tab-top.active {
+  background: rgba(9, 105, 218, 0.12);
+  color: #0969da;
+}
+:global(html[data-theme="dark"]) .oc-view-tab-top.active {
+  background: rgba(88, 166, 255, 0.16);
+  color: #58a6ff;
+}
+.oc-view-tab-top .el-icon {
+  font-size: 12px;
+}
+
+/* "预览" 按钮 active 状态高亮 + badge */
+.oc-top-btn.active {
+  background: rgba(9, 105, 218, 0.12);
+  border-color: #0969da;
+  color: #0969da;
+}
+:global(html[data-theme="dark"]) .oc-top-btn.active {
+  background: rgba(88, 166, 255, 0.16);
+  border-color: #58a6ff;
+  color: #58a6ff;
+}
+.oc-preview-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: #0969da;
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 600;
+  margin-left: 2px;
+}
+:global(html[data-theme="dark"]) .oc-preview-badge {
+  background: #58a6ff;
+  color: #0d1117;
+}
+
+/* 顶部 segmented 切换器（响应主题） */
+.oc-view-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  background: var(--toolbar-chip-bg);
+  border: 1px solid var(--toolbar-chip-border);
+  border-radius: 8px;
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.oc-view-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 14px;
+  border: none;
+  background: transparent;
+  color: var(--toolbar-text-muted);
+  font-size: 12.5px;
+  font-weight: 500;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.oc-view-tab:hover:not(.active) {
+  color: var(--toolbar-text);
+}
+
+.oc-view-tab.active {
+  background: rgba(9, 105, 218, 0.12);
+  color: #0969da;
+}
+
+:global(html[data-theme="dark"]) .oc-view-tab.active {
+  background: rgba(88, 166, 255, 0.16);
+  color: #58a6ff;
+}
+
+.oc-view-tab .el-icon {
+  font-size: 13px;
+}
+
+/* toolbar 让出居中空间给 view-toggle，原 left/right 内容贴边 */
+.oc-ide-toolbar {
+  position: relative;
 }
 
 .oc-ide-frame {

@@ -815,11 +815,11 @@ async def create_online_coding_workspace(
 
     workspace_id = f"oc_{uuid.uuid4().hex[:12]}"
     now = _now_iso()
-    ws_dir = _workspace_dir(workspace_id, repo_url, task or "导入仓库后补充开发任务")
+    ws_dir = _workspace_dir(workspace_id, repo_url, task or "无 Git 工作区")
     meta = {
         "id": workspace_id,
         "repo_url": repo_url,
-        "task": task or "导入仓库后补充开发任务",
+        "task": task or "无 Git 工作区",
         "user_id": ctx.user.id,
         "tenant_id": ctx.tenant_id,
         "status": "created",
@@ -834,6 +834,11 @@ async def create_online_coding_workspace(
             meta,
             git_auth=_git_auth_from_request(req.git_username, req.git_token),
         )
+    else:
+        # 无 Git 模式：建空 repo/ 目录 + 标记 ready，让 Vibe Coding 对话直接接管
+        _repo_path(ws_dir).mkdir(parents=True, exist_ok=True)
+        meta = _mark_empty_repo_import(meta)
+        _write_workspace(ws_dir, meta)
     return _public_workspace(meta)
 
 
@@ -900,6 +905,19 @@ async def delete_online_coding_workspace(
     ws_dir, meta = _find_workspace_dir(workspace_id)
     if meta.get("user_id") != ctx.user.id:
         raise HTTPException(status_code=403, detail="无权访问该 Vibe Coding 工作区")
+
+    # 先清掉 Vibe Coding 沙箱容器（如果有）— 否则删了挂载点容器变孤儿
+    try:
+        from app.vibe_coding.docker_runtime import get_runtime as _get_rt
+        rt = _get_rt()
+        if await rt.is_available():
+            await rt.remove(workspace_id, force=True)
+    except Exception as exc:  # 容器层失败不应该挡住目录删除
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "Failed to remove vibe sandbox container for %s: %s", workspace_id, exc
+        )
+
     shutil.rmtree(ws_dir, ignore_errors=True)
     return {"ok": True}
 
