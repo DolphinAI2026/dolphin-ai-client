@@ -10,6 +10,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from app.app_code import APP_CODE_RULE_TEXT, is_valid_app_code, normalize_app_code
 from app.doc_section_splitter import split_sections
 from app.doc_table_parser import parse_table
 from app.doc_parsers import roles as roles_parser
@@ -168,5 +169,19 @@ def _parse_app_info(section_text: str, result: ParseResult) -> tuple[str, str]:
         app_name = "未命名应用"
     if not app_code:
         result.errors.append("应用信息：缺少应用编码")
+        return app_name, app_code
+
+    # 规范化 appCode：AI 经常写成 snake_case 或超长，这里自动清洗成平台合法值
+    if not is_valid_app_code(app_code):
+        normalized = normalize_app_code(app_code)
+        if normalized and normalized != app_code:
+            result.errors.append(
+                f"应用编码 '{app_code}' 不合规，已自动规范为 '{normalized}'。{APP_CODE_RULE_TEXT}"
+            )
+            app_code = normalized
+        elif not normalized:
+            result.errors.append(
+                f"应用编码 '{app_code}' 不合规且无法自动规范化。{APP_CODE_RULE_TEXT}"
+            )
 
     return app_name, app_code

@@ -91,7 +91,7 @@ def parse(
         # 兼容 "表单名称" 和 "表单编码" 两种列名
         form_name = (row.get("表单名称") or row.get("表单编码") or "").strip()
         role_code = row.get("角色编码", "").strip()
-        data_scope_raw = row.get("数据范围", "全公司").strip()
+        data_scope_raw = row.get("数据范围", "全部数据").strip()
 
         if not form_name:
             errors.append(f"权限配置：某行缺少表单名称，已跳过")
