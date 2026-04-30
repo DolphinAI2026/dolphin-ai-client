@@ -25,6 +25,11 @@ DESKTOP_API_DEBUG_LOG = Path.home() / "Desktop" / "apaas_api_debug.log"
 # 如果未来平台端扩容/收紧了速率限制，调整这个常量即可。
 QUERY_MODEL_FIELDS_CONCURRENCY = 10
 
+# 单次 APaaS HTTP 调用超时（秒）。原默认 60s 在大表单（>50 字段 / 复杂 detail page）
+# 经常被卡断，但平台其实会异步把保存做完——前端看到 "timeout exceeded" 失败、
+# 刷新后却发现表单已建好。180s 给大 payload 留出余量。慢节点可继续上调。
+APAAS_HTTP_TIMEOUT = 180.0
+
 # ---------------------------------------------------------------------------
 # API 调用日志收集器（线程安全）
 # ---------------------------------------------------------------------------
@@ -327,7 +332,7 @@ class APaaSClient:
         _log_request("POST", url, payload)
         start = time.time()
 
-        async with httpx.AsyncClient(verify=False, timeout=60.0) as client:
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
             response = await client.post(
                 url,
                 headers=self._get_headers(app_id=app_id),
@@ -409,7 +414,7 @@ class APaaSClient:
         _log_request("POST", url, payload)
         start = time.time()
 
-        async with httpx.AsyncClient(verify=False, timeout=60.0) as client:
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
             headers = self._get_headers(app_id)
             response = await client.post(url, headers=headers, json=payload)
             elapsed_ms = (time.time() - start) * 1000
@@ -466,7 +471,7 @@ class APaaSClient:
         _log_request("POST", url, payload)
         start = time.time()
 
-        async with httpx.AsyncClient(verify=False, timeout=60.0) as client:
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
             response = await client.post(url, headers=self._get_headers(app_id), json=payload)
             elapsed_ms = (time.time() - start) * 1000
             response.raise_for_status()
@@ -558,7 +563,7 @@ class APaaSClient:
         _log_request("POST", url, payload, params=params)
         start = time.time()
 
-        async with httpx.AsyncClient(verify=False, timeout=60.0) as client:
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
             response = await client.post(url, headers=self._get_headers(app_id), params=params, json=payload)
             elapsed_ms = (time.time() - start) * 1000
             response.raise_for_status()
@@ -627,7 +632,7 @@ class APaaSClient:
         }
         _log_request("POST", url, payload, params=params)
         start = time.time()
-        async with httpx.AsyncClient(verify=False, timeout=60.0) as client:
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
             response = await client.post(url, headers=self._get_headers(), params=params, json=payload)
             elapsed_ms = (time.time() - start) * 1000
             response.raise_for_status()
@@ -676,7 +681,7 @@ class APaaSClient:
         _log_request("POST", url, payload, params=params)
         start = time.time()
 
-        async with httpx.AsyncClient(verify=False, timeout=60.0) as client:
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
             response = await client.post(url, headers=self._get_headers(app_id), params=params, json=payload)
             elapsed_ms = (time.time() - start) * 1000
             response.raise_for_status()
@@ -700,7 +705,7 @@ class APaaSClient:
         _log_request("POST", url, payload)
         start = time.time()
 
-        async with httpx.AsyncClient(verify=False, timeout=60.0) as client:
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
             response = await client.post(url, headers=self._get_headers(app_id), json=payload)
             elapsed_ms = (time.time() - start) * 1000
             response.raise_for_status()
@@ -721,7 +726,7 @@ class APaaSClient:
         _log_request("POST", url, payload)
         start = time.time()
 
-        async with httpx.AsyncClient(verify=False, timeout=60.0) as client:
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
             response = await client.post(url, headers=self._get_headers(app_id), json=payload)
             elapsed_ms = (time.time() - start) * 1000
             response.raise_for_status()
@@ -754,7 +759,7 @@ class APaaSClient:
         _log_request("POST", url, payload)
         start = time.time()
 
-        async with httpx.AsyncClient(verify=False, timeout=60.0) as client:
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
             response = await client.post(url, headers=self._get_headers(app_id), json=payload)
             elapsed_ms = (time.time() - start) * 1000
             response.raise_for_status()
@@ -844,7 +849,7 @@ class APaaSClient:
         _log_request("POST", url, payload)
         start = time.time()
 
-        async with httpx.AsyncClient(verify=False, timeout=60.0) as client:
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
             response = await client.post(url, headers=self._get_headers(app_id), json=payload)
             elapsed_ms = (time.time() - start) * 1000
             response.raise_for_status()
@@ -864,7 +869,7 @@ class APaaSClient:
         _log_request("POST", url, payload)
         start = time.time()
 
-        async with httpx.AsyncClient(verify=False, timeout=60.0) as client:
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
             response = await client.post(url, headers=self._get_headers(app_id), json=payload)
             elapsed_ms = (time.time() - start) * 1000
             response.raise_for_status()
@@ -884,7 +889,7 @@ class APaaSClient:
         _log_request("GET", url)
         start = time.time()
 
-        async with httpx.AsyncClient(verify=False, timeout=60.0) as client:
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
             response = await client.get(url, headers=self._get_headers(app_id))
             elapsed_ms = (time.time() - start) * 1000
             response.raise_for_status()
@@ -915,7 +920,7 @@ class APaaSClient:
         _log_request("GET", url)
         start = time.time()
 
-        async with httpx.AsyncClient(verify=False, timeout=60.0) as client:
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
             response = await client.get(url, headers=self._get_headers(app_id))
             elapsed_ms = (time.time() - start) * 1000
             response.raise_for_status()
@@ -944,7 +949,7 @@ class APaaSClient:
         _log_request("POST", url, form_config)
         start = time.time()
 
-        async with httpx.AsyncClient(verify=False, timeout=60.0) as client:
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
             response = await client.post(url, headers=self._get_headers(app_id), json=form_config)
             elapsed_ms = (time.time() - start) * 1000
             response.raise_for_status()

@@ -3,7 +3,7 @@ import json
 import os
 import re
 import tempfile
-from typing import Annotated, Optional
+from typing import Annotated, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, File, Form, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -816,7 +816,8 @@ async def send_message_with_file(
     db: Annotated[AsyncSession, Depends(get_db)],
     conversation_id: int = Form(...),
     message: str = Form(default=""),
-    file: Optional[UploadFile] = File(default=None),
+    files: List[UploadFile] = File(default=[]),
+    file: Optional[UploadFile] = File(default=None),  # legacy 单文件兼容字段
     current_config: str = Form(default=""),
     application_id: Optional[int] = Form(default=None),
 ):
@@ -840,41 +841,76 @@ async def send_message_with_file(
     if not conversation:
         raise HTTPException(status_code=404, detail="对话不存在")
 
-    image_data_url = ""
-    file_content = ""
-    file_name = ""
-    route_to_pipeline = False  # 是否把文件路由到 doc_pipeline
-    doc_score = 0  # 文档标准度（γ 分支也会用到）
+    # 兼容 legacy 单 file 字段：补到 files 列表
+    all_files: list[UploadFile] = list(files or [])
+    if file and file.filename and not any(f.filename == file.filename for f in all_files):
+        all_files.append(file)
 
-    if file and file.filename:
-        file_name = file.filename
-        ext = os.path.splitext(file_name)[1].lower()
+    image_data_url = ""        # 兼容下游：保留首张图（多图场景暂时取第一张）
+    file_content = ""          # 多文档合并后的文本
+    file_name = ""             # 单文件 → 文件名；多文件 → "文件A、文件B 等 N 个文件"
+    file_names: list[str] = []  # 所有上传的文件名列表
+    image_names: list[str] = []
+    doc_segments: list[str] = []  # 每个文档独立段（后端拼接时加文件名分隔）
+    route_to_pipeline = False
+    doc_score = 0
+
+    for upload in all_files:
+        if not upload or not upload.filename:
+            continue
+        upload_name = upload.filename
+        file_names.append(upload_name)
+        ext = os.path.splitext(upload_name)[1].lower()
         if ext in _IMAGE_EXTS:
-            raw = await file.read()
-            mime = _MIME_MAP.get(ext, "image/png")
-            b64 = base64.b64encode(raw).decode()
-            image_data_url = f"data:{mime};base64,{b64}"
+            image_names.append(upload_name)
+            if not image_data_url:  # 多图暂时只把第一张作为 data URL 给 LLM（vision 多图待后续扩展）
+                raw = await upload.read()
+                mime = _MIME_MAP.get(ext, "image/png")
+                b64 = base64.b64encode(raw).decode()
+                image_data_url = f"data:{mime};base64,{b64}"
         else:
-            file_content = await _parse_uploaded_document(file)
-            # 对文档文件做标准度检测；分数 >=60 且没有 spec_id 时走 pipeline
-            if file_content and conversation.agent_type in {"builder", "requirements"}:
-                try:
-                    from app.doc_standard_detector import detect as _detect_doc
-                    doc_score = _detect_doc(file_content).get("score", 0)
-                    if doc_score >= 60:
-                        route_to_pipeline = True
-                except Exception:
-                    pass
+            parsed = await _parse_uploaded_document(upload)
+            if parsed:
+                doc_segments.append(f"## 文件：{upload_name}\n\n{parsed}")
 
-    if not message.strip() and not image_data_url and not file_name:
+    # 合并多文档为单一 file_content（保留 doc_pipeline / SpecAgent.bootstrap_from_doc 接口不变）
+    if doc_segments:
+        file_content = "\n\n---\n\n".join(doc_segments)
+        if conversation.agent_type in {"builder", "requirements"}:
+            try:
+                from app.doc_standard_detector import detect as _detect_doc
+                doc_score = _detect_doc(file_content).get("score", 0)
+                # 仅单文档 + 高标准度时才走 doc_pipeline（多文档场景退化为普通对话+SPEC bootstrap）
+                if doc_score >= 60 and len(doc_segments) == 1:
+                    route_to_pipeline = True
+            except Exception:
+                pass
+
+    # 选定下游用的"主"文件名展示
+    if file_names:
+        if len(file_names) == 1:
+            file_name = file_names[0]
+        else:
+            file_name = f"{file_names[0]} 等 {len(file_names)} 个文件"
+
+    if not message.strip() and not image_data_url and not file_names:
         raise HTTPException(status_code=400, detail="消息不能为空")
 
     db_content = message.strip()
-    if file_content and not route_to_pipeline:
-        db_content = f"{db_content}\n\n[上传文件：{file_name}]\n\n{file_content}".strip()
-    elif file_name:
-        tag = "上传截图" if image_data_url else "上传文件"
-        db_content = f"{db_content}\n\n[{tag}：{file_name}]".strip()
+    # 拼接到 message content：每个文件单独一个 block，便于历史会话回溯
+    if doc_segments and not route_to_pipeline:
+        for name, seg in zip([n for n in file_names if n not in image_names], doc_segments):
+            db_content = f"{db_content}\n\n[上传文件：{name}]\n\n{seg.split(chr(10) + chr(10), 1)[1] if chr(10) + chr(10) in seg else seg}"
+        for img_name in image_names:
+            db_content = f"{db_content}\n\n[上传截图：{img_name}]"
+        db_content = db_content.strip()
+    elif file_names:
+        # 走 pipeline 或仅图片场景：只标注文件名，不嵌完整内容（pipeline 会单独处理）
+        for img_name in image_names:
+            db_content = f"{db_content}\n\n[上传截图：{img_name}]"
+        for name in [n for n in file_names if n not in image_names]:
+            db_content = f"{db_content}\n\n[上传文件：{name}]"
+        db_content = db_content.strip()
 
     db.add(Message(conversation_id=conversation.id, role="user", content=db_content))
     await db.commit()
