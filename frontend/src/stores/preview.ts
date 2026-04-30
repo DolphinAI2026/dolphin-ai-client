@@ -16,6 +16,7 @@ export const usePreviewStore = defineStore('preview', () => {
   const pendingFile = ref<File | null>(null)  // 从 Landing 页带过来的待解析文件
   const pendingBuilderModelId = ref<number | null>(null)  // 从 Landing 页带到 Chat 的 builder 模型
   const pendingMarkdown = ref<{ filename: string; content: string } | null>(null)  // 从需求分析页带到 Chat 的设计文档
+  const pendingAiChatFiles = ref<File[]>([])  // 从 Landing 页 Chat 模式带过来的多文件附件，进入 AIChatPage 后上传
   const showChangePlan = ref(false)
   const changePlan = ref<any | null>(null)
 
@@ -92,7 +93,7 @@ export const usePreviewStore = defineStore('preview', () => {
   }
 
   return {
-    currentApp, previewTab, previewFormIdx, connected, showConnectModal, pendingFile, pendingBuilderModelId, pendingMarkdown, showChangePlan, changePlan,
+    currentApp, previewTab, previewFormIdx, connected, showConnectModal, pendingFile, pendingBuilderModelId, pendingMarkdown, pendingAiChatFiles, showChangePlan, changePlan,
     preview, genProgress,
     resetGenProgress, reset, setAppName
   }

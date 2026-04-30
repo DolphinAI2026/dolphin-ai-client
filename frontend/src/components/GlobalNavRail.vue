@@ -46,6 +46,12 @@
               <rect x="2" y="7" width="8" height="2" rx="1" />
               <rect x="2" y="11" width="10" height="2" rx="1" />
             </svg>
+            <svg v-else-if="item.key === 'ai-chat'" class="nav-icon" viewBox="0 0 16 16" fill="none">
+              <path d="M2.5 3.5h11a1 1 0 011 1v6a1 1 0 01-1 1H6.5l-3 2.5v-2.5h-1a1 1 0 01-1-1v-6a1 1 0 011-1z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" />
+              <circle cx="5.5" cy="7.5" r="0.7" fill="currentColor" />
+              <circle cx="8" cy="7.5" r="0.7" fill="currentColor" />
+              <circle cx="10.5" cy="7.5" r="0.7" fill="currentColor" />
+            </svg>
             <svg v-else class="nav-icon" viewBox="0 0 16 16" fill="none">
               <path d="M4.5 5L2 8l2.5 3M11.5 5L14 8l-2.5 3M9.5 4l-3 8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
             </svg>
@@ -99,6 +105,7 @@
     </div>
 
     <div class="sidebar-bottom">
+      <ThemeToggle class="sidebar-theme-toggle" />
       <el-dropdown trigger="click" @command="handleUserCommand" class="user-dropdown">
         <button class="user-row" :title="userStore.user?.username || 'admin'">
           <span class="user-avatar">{{ userInitial }}</span>
@@ -119,6 +126,7 @@ import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
 import { useUserStore } from '@/stores/user'
+import ThemeToggle from '@/components/ThemeToggle.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -127,6 +135,7 @@ const expanded = ref(true)
 
 const primaryNavItems = [
   { key: 'home', label: 'AI Builder', path: '/' },
+  { key: 'ai-chat', label: 'AI Chat', path: '/ai-chat' },
 ]
 
 const workspaceNavItems = [
@@ -143,6 +152,7 @@ const adminNavItems = computed(() =>
 )
 
 const activeKey = computed(() => {
+  if (route.path.startsWith('/ai-chat')) return 'ai-chat'
   if (route.path === '/' || route.path.startsWith('/apps')) return 'home'
   if (route.path.startsWith('/coding')) return 'coding'
   if (route.path.startsWith('/platform-envs')) return 'env'
@@ -345,6 +355,16 @@ async function handleUserCommand(command: string | number | object) {
   margin-top: auto;
   padding: 10px 10px;
   border-top: 1px solid rgba(125, 132, 181, 0.16);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sidebar-theme-toggle {
+  align-self: flex-start;
+}
+.global-nav-rail.collapsed .sidebar-theme-toggle {
+  align-self: center;
 }
 
 .user-dropdown {

@@ -50,10 +50,11 @@ import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
 import {
-  ChatDotRound,
+  ChatLineRound,
   Connection,
   Grid,
   HomeFilled,
+  MagicStick,
   Monitor,
   Promotion,
   Search,
@@ -70,7 +71,8 @@ const userStore = useUserStore()
 const navItems = computed(() => [
   { key: 'home', label: '首页', path: '/', icon: HomeFilled },
   { key: 'apps', label: '应用', path: '/apps', icon: Grid },
-  { key: 'chat', label: 'AI-Builder', path: '/chat', icon: ChatDotRound },
+  { key: 'ai-chat', label: 'AI Chat', path: '/ai-chat', icon: ChatLineRound },
+  { key: 'chat', label: 'AI-Builder', path: '/chat', icon: MagicStick },
   { key: 'ide', label: 'IDE', path: '/coding', icon: Monitor },
   { key: 'online-coding', label: 'Vibe Coding', path: '/vibe-coding', icon: Connection },
   { key: 'devops', label: 'DevOps', path: '/devops', icon: Promotion },
@@ -80,6 +82,7 @@ const navItems = computed(() => [
 
 const activeKey = computed(() => {
   if (route.path === '/') return 'home'
+  if (route.path.startsWith('/ai-chat')) return 'ai-chat'
   if (route.path.startsWith('/apps') || route.path.startsWith('/project')) return 'apps'
   if (route.path.startsWith('/chat')) return 'chat'
   if (route.path.startsWith('/vibe-coding') || route.path.startsWith('/online-coding')) return 'online-coding'

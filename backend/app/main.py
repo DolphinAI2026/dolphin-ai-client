@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from app.config import settings, APP_TITLE, APP_DESCRIPTION, APP_VERSION
 from app.database import init_db
 from app.routes import (
+    ai_chat,
     apaas,
     application_members,
     applications,
@@ -116,6 +117,7 @@ app.add_middleware(
 app.include_router(auth.router, prefix="/api")
 app.include_router(conversations.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")
+app.include_router(ai_chat.router, prefix="/api")
 app.include_router(applications.router, prefix="/api")
 app.include_router(apaas.router, prefix="/api")
 app.include_router(generation_steps.router, prefix="/api")

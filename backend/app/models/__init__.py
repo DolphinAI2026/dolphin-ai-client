@@ -278,3 +278,13 @@ class ApiCallLog(Base):
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     elapsed_ms: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+# AIChat 模块 — 注册 ORM mapping
+from app.models.ai_chat import (  # noqa: E402, F401
+    AIChatSession,
+    AIChatMessage,
+    AIChatToolCall,
+    AIChatAttachment,
+    AIChatArtifact,
+)
