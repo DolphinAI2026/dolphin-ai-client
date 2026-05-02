@@ -86,6 +86,12 @@
               <td>
                 <div class="sb-row-actions">
                   <button
+                    v-if="s.container_status !== 'running'"
+                    class="sb-btn sm primary"
+                    @click="onStart(s)"
+                    :disabled="busyMap[s.workspace_id]"
+                  >启动</button>
+                  <button
                     v-if="s.container_status === 'running'"
                     class="sb-btn sm"
                     @click="onStop(s)"
@@ -195,6 +201,19 @@ async function fetchList() {
     ElMessage.error(e?.response?.data?.detail || e?.message || '加载失败')
   } finally {
     loading.value = false
+  }
+}
+
+async function onStart(s: SandboxInfo) {
+  busyMap.value[s.workspace_id] = true
+  try {
+    await sandboxApi.start(s.workspace_id)
+    ElMessage.success('已启动')
+    await fetchList()
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || e?.message || '启动失败')
+  } finally {
+    busyMap.value[s.workspace_id] = false
   }
 }
 
@@ -374,6 +393,20 @@ watch(autoRefresh, () => {
 }
 .sb-btn.danger:hover:not(:disabled) {
   background: rgba(239, 68, 68, 0.06);
+}
+.sb-btn.primary {
+  color: #15803d;
+  border-color: rgba(34, 197, 94, 0.36);
+}
+.sb-btn.primary:hover:not(:disabled) {
+  background: rgba(34, 197, 94, 0.08);
+}
+.sandbox-page.theme-dark .sb-btn.primary {
+  color: #4ade80;
+  border-color: rgba(34, 197, 94, 0.42);
+}
+.sandbox-page.theme-dark .sb-btn.primary:hover:not(:disabled) {
+  background: rgba(34, 197, 94, 0.10);
 }
 
 .sb-table-wrap {

@@ -172,6 +172,26 @@ def _check_sandbox_access(ws_id: str, ctx: AuthContext) -> dict:
     raise HTTPException(status_code=403, detail="无权操作该 sandbox")
 
 
+@router.post("/{workspace_id}/start")
+async def start_sandbox(
+    workspace_id: str,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+):
+    """启动 sandbox 容器（不存在则新建，exited 则 start 复用）。"""
+    _check_sandbox_access(workspace_id, ctx)
+    rt = get_docker_runtime()
+    if not await rt.is_available():
+        raise HTTPException(status_code=503, detail="docker runtime 不可用")
+    ws_dir, _ = _find_workspace_dir(workspace_id)
+    repo_dir = ws_dir / "repo"
+    repo_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        await rt.ensure_container(workspace_id, repo_dir)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=f"启动失败: {exc}")
+    return {"ok": True, "workspace_id": workspace_id, "status": "running"}
+
+
 @router.post("/{workspace_id}/stop")
 async def stop_sandbox(
     workspace_id: str,
