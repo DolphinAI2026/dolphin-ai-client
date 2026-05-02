@@ -274,6 +274,36 @@ class DockerRuntime:
                     continue
         return result
 
+    async def listening_ports(self, workspace_id: str) -> set[int]:
+        """容器内**真正在 LISTEN** 的 TCP 端口集合（IPv4 + IPv6）。
+
+        通过读 /proc/net/tcp{,6}（最 portable，镜像不需要 ss/netstat）解析：
+        每行 parts[1] 是 `local_addr:port`（hex），parts[3] 是 state（0A = TCP_LISTEN）。
+        给 /sandbox/ports 用：跟 all_host_ports 取交集 → 过滤死端口。
+        """
+        name = self.container_name(workspace_id)
+        ok, out, _ = await self._run(
+            ["docker", "exec", name, "sh", "-c", "cat /proc/net/tcp /proc/net/tcp6 2>/dev/null"],
+            timeout=5,
+        )
+        if not ok:
+            return set()
+        ports: set[int] = set()
+        for line in out.splitlines():
+            parts = line.split()
+            if len(parts) < 4 or parts[3] != "0A":
+                continue
+            local = parts[1]
+            if ":" not in local:
+                continue
+            try:
+                port = int(local.rsplit(":", 1)[-1], 16)
+            except ValueError:
+                continue
+            if port > 0:
+                ports.add(port)
+        return ports
+
     # ─────────────────────────── Idle reaping ───────────────────────────
 
     def _touch(self, workspace_id: str) -> None:

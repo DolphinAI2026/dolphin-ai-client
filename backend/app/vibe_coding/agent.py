@@ -467,6 +467,7 @@ async def run_agent(
                 yield _sse("todos_updated", {"todos": thread.todos or []})
 
             # run_command 后查一下 docker 沙箱端口映射 — agent 起 dev server 后前端可以立刻显示预览链接
+            # 只推「既映射又监听」的端口，避免前端列出死链接
             if tool_name == "run_command" and tc_db.status == "success":
                 try:
                     from app.vibe_coding.docker_runtime import get_runtime as _get_docker_runtime
@@ -474,7 +475,9 @@ async def run_agent(
                     if await _rt.is_available():
                         _status = await _rt.container_status(thread.workspace_id)
                         if _status == "running":
-                            _ports = await _rt.all_host_ports(thread.workspace_id)
+                            _mapped = await _rt.all_host_ports(thread.workspace_id)
+                            _listening = await _rt.listening_ports(thread.workspace_id)
+                            _ports = {cp: hp for cp, hp in _mapped.items() if cp in _listening}
                             yield _sse("sandbox_ports_updated", {"ports": _ports})
                 except Exception:
                     pass  # docker 不可用不影响主流程

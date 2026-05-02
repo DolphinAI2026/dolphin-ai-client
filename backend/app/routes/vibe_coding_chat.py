@@ -381,12 +381,15 @@ async def get_sandbox_ports(
     status = await rt.container_status(workspace_id)
     if status != "running":
         return {"runtime": "docker", "ports": {}, "running": False, "status": status}
-    ports = await rt.all_host_ports(workspace_id)
+    mapped = await rt.all_host_ports(workspace_id)
+    listening = await rt.listening_ports(workspace_id)
+    # 只列「既映射到 host，又有进程在容器内监听」的端口 — 避免前端列出死链接
+    ports = {cp: hp for cp, hp in mapped.items() if cp in listening}
     return {
         "runtime": "docker",
         "running": True,
         "status": status,
-        "ports": ports,  # {6173: 55000, 6300: 55001, ...}
+        "ports": ports,  # {6173: 55000, 6300: 55001, ...}（已过滤死端口）
     }
 
 
