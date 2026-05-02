@@ -15,7 +15,8 @@ aPaaS Builder AI 是一个面向应用搭建的 AI 协作平台，把"从需求�
 | **AI 对话** | `/ai-chat` | 用对话和 AI 一起梳理需求 / 整合材料 → 产出标准设计文档 |
 | **AI 搭建** | `/chat` | 把设计文档喂给 AI → 生成 SPEC / 模型 / 表单 / 流程 → 部署到平台 |
 | **AI 编码** | `/coding` | 让 AI 写自开发组件 / 页面 / 接口（睿鲸 IDE）|
-| **Vibe Coding** | `/vibe-coding` | 全代码沙箱：AI 直接搭 Vue + Express 应用，Docker 隔离运行 |
+| **Vibe Coding** | `/vibe-coding` | 全代码沙箱：AI 直接搭 Vue + Express 应用，Docker / Podman 隔离运行 |
+| **沙箱监控** | `/vibe-coding/sandboxes` | 管理跑着的 Vibe Coding 沙箱容器（启动 / 停止 / 删除），按角色分级权限 |
 | DevOps | `/devops` | 提案 / 审批 / Apply / Git 同步 / 环境拓扑 |
 | 设置 | `/platform-envs` | LLM 模型 / 平台环境 / 成员管理 |
 
