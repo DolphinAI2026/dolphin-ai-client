@@ -113,6 +113,7 @@
             </svg>
           </button>
           <input ref="fileInputRef" type="file" hidden multiple accept="image/*,.pdf,.txt,.md,.json,.csv,.log" @change="onFilePick" />
+          <VoiceInputButton v-model="input" />
           <textarea
             v-model="input"
             class="textarea"
@@ -154,6 +155,7 @@ import { computed, onMounted, ref, watch, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useThemeStore } from '@/stores/theme'
 import AgentConversation from '@/components/common/AgentConversation.vue'
+import VoiceInputButton from '@/components/common/VoiceInputButton.vue'
 import type { AgentMessage, AgentToolPayload } from '@/components/common/agent-conversation/types'
 import {
   vibeCodingChatApi,

@@ -457,6 +457,7 @@
               >
                 <el-icon :size="16"><Paperclip /></el-icon>
               </el-button>
+              <VoiceInputButton v-model="userInput" />
               <el-input
                 v-model="userInput"
                 type="textarea"
@@ -588,6 +589,7 @@ import EnvSelectModal from '@/components/EnvSelectModal.vue'
 import FileCard from '@/components/FileCard.vue'
 import SessionSidebar, { type SessionItem as SidebarSessionItem } from '@/components/common/SessionSidebar.vue'
 import AgentConversation from '@/components/common/AgentConversation.vue'
+import VoiceInputButton from '@/components/common/VoiceInputButton.vue'
 import type { AgentMessage } from '@/components/common/agent-conversation/types'
 import { useCodingModel } from './coding/useCodingModel'
 import { useStreamMessages, renderMarkdown } from './coding/useStreamMessages'

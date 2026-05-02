@@ -123,6 +123,7 @@
               hidden
               @change="onFilesSelected"
             />
+            <VoiceInputButton v-model="inputText" />
             <textarea
               v-model="inputText"
               class="textarea"
@@ -254,6 +255,7 @@ import { useThemeStore } from '@/stores/theme'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
 import SessionSidebar, { type SessionItem, type SessionTab, type NewSessionOption } from '@/components/common/SessionSidebar.vue'
 import AgentConversation from '@/components/common/AgentConversation.vue'
+import VoiceInputButton from '@/components/common/VoiceInputButton.vue'
 import type { AgentMessage } from '@/components/common/agent-conversation/types'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ChatDotRound, Folder } from '@element-plus/icons-vue'

@@ -319,6 +319,7 @@
                   />
                   <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M15.5 8.5l-6.4 6.4a3.5 3.5 0 01-5-5l6.4-6.4a2.2 2.2 0 013.1 3.1L7.2 13a.9.9 0 01-1.3-1.3l5.5-5.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
                 </label>
+                <VoiceInputButton v-model="inputText" />
                 <textarea
                   v-model="inputText"
                   @keydown.enter.exact.prevent="sendMessage"
@@ -1120,6 +1121,7 @@ import { incrementalApi, type DiffResponse, type ExecuteResponse } from '@/api/i
 import { conversationApi, type ConversationWithApp } from '@/api/conversation'
 import ConnectModal from '@/components/ConnectModal.vue'
 import EnvSelectModal from '@/components/EnvSelectModal.vue'
+import VoiceInputButton from '@/components/common/VoiceInputButton.vue'
 import { platformEnvApi } from '@/api/platformEnv'
 import request from '@/utils/request'
 import { isApaasTokenError, handleError } from '@/utils/errorHandler'
