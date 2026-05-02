@@ -277,11 +277,26 @@ const PORT_LABELS: Record<number, string> = {
   6500: '附加端口',
 }
 
+// 子域名前缀基底：默认空（dev 模式用 localhost），通过 VITE_SANDBOX_PREVIEW_BASE
+// 配成 ".dfy.definesys.cn" 时拼成 https://p{hostPort}.dfy.definesys.cn/，
+// 让 nginx 用 server_name 正则路由到对应 host 端口（podman 自动分配的）。
+// 见 deploy/nginx/vibe-preview.conf.example
+const SANDBOX_PREVIEW_BASE: string = import.meta.env.VITE_SANDBOX_PREVIEW_BASE || ''
+
+function buildPreviewUrl(hostPort: number): string {
+  if (SANDBOX_PREVIEW_BASE) {
+    // 线上：通过 nginx 子域名反代（避免 mixed content + 解决远端不可达）
+    return `https://p${hostPort}${SANDBOX_PREVIEW_BASE}/`
+  }
+  // 本地 dev：浏览器跟容器在同机，localhost 能直接通
+  return `http://localhost:${hostPort}`
+}
+
 const previewLinks = computed(() => {
   return Object.entries(sandboxPorts.value)
     .map(([containerPort, hostPort]) => ({
       containerPort: Number(containerPort),
-      url: `http://localhost:${hostPort}`,
+      url: buildPreviewUrl(Number(hostPort)),
       label: `${PORT_LABELS[Number(containerPort)] || `端口 ${containerPort}`} → :${hostPort}`,
     }))
     .sort((a, b) => a.containerPort - b.containerPort)
