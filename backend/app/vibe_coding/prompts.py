@@ -82,6 +82,10 @@ export default defineConfig({
     host: '0.0.0.0',
     port: 6173,
     strictPort: true,
+    // ⚠️ vite 5+ 默认拒绝非 localhost 的 host 头（防 DNS rebinding）；
+    // sandbox 用户通过 https://p<port>.vibe-first.cn/ 访问，必须列入白名单。
+    // 用 ".vibe-first.cn" 通配前缀（vite 语法：以 . 开头匹配所有子域）
+    allowedHosts: ['.vibe-first.cn', '.dfy.definesys.cn'],
     proxy: {
       '/api':       { target: 'http://localhost:6300', changeOrigin: true },
       '/socket.io': { target: 'http://localhost:6300', changeOrigin: true, ws: true },  // WebSocket 必须 ws: true
@@ -102,7 +106,9 @@ async rewrites() {
 }
 ```
 
-调试 tip：用户报"连接中…"/"Cannot connect"时，第一时间查 `vite.config.ts` 的 proxy 配置 + 前端代码有没有写死 host:port，**不要**去改 `window.location.hostname` 拼接。
+调试 tip：
+- 用户报"连接中…"/"Cannot connect"时，第一时间查 `vite.config.ts` 的 proxy 配置 + 前端代码有没有写死 host:port，**不要**去改 `window.location.hostname` 拼接。
+- 用户报 `Blocked request. This host (...) is not allowed`：vite.config.ts 里 `server.allowedHosts` 没包含访问域，加 `'.vibe-first.cn'` 通配。
 
 ### ⚠️ 命令调用要凝练（避免对话流变成日志）
 agent 跑命令时**优先一条命令解决多步**，不要拆成 4-5 条 run_command 反复确认。例：
