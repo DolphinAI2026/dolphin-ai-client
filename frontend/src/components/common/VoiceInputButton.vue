@@ -26,6 +26,7 @@
 
 <script setup lang="ts">
 import { onMounted, onBeforeUnmount, ref } from 'vue'
+import { ElMessage } from 'element-plus'
 
 /**
  * 语音输入按钮 — 浏览器原生 webkitSpeechRecognition，无外部依赖。
@@ -99,10 +100,24 @@ function init() {
       }
     }
     recognition.onerror = (e: any) => {
-      const msg = e?.error || 'unknown'
-      console.warn('[VoiceInputButton] error', msg)
+      const code = String(e?.error || 'unknown')
+      console.warn('[VoiceInputButton] SpeechRecognition error:', code, e)
       recording.value = false
-      emit('error', String(msg))
+      // 给用户具体的提示 — 不同 error 对应不同根因
+      const msgMap: Record<string, string> = {
+        'network': '语音识别网络失败：浏览器原生 API 实际调 Google 服务器，国内网络通常无法访问。建议换用其他方案（联系开发）',
+        'not-allowed': '麦克风权限被拒绝。请在浏览器地址栏点击锁标 → 网站设置 → 允许麦克风',
+        'service-not-allowed': '浏览器禁止了语音识别服务。可能是 HTTP 站点（必须 HTTPS）或浏览器策略限制',
+        'no-speech': '没听到说话内容，请再试一次',
+        'aborted': '',  // 用户主动取消，不弹
+        'audio-capture': '没检测到麦克风设备',
+        'language-not-supported': '当前语言不支持',
+        'bad-grammar': '语音识别语法错误',
+      }
+      const tip = msgMap[code]
+      if (tip) ElMessage.warning(tip)
+      else if (code !== 'unknown') ElMessage.warning(`语音识别失败：${code}`)
+      emit('error', code)
     }
     recognition.onend = () => {
       recording.value = false
