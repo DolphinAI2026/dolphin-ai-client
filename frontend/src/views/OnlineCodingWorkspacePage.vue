@@ -52,9 +52,9 @@
         :new-label="'+ 新建工作区'"
         collapse-key="vibe:aside-collapsed"
         :empty-hint="'还没有工作区，点上面新建一个'"
-        :enable-rename="false"
         @select="onSidebarVibeSelect"
         @create="onSidebarVibeCreate"
+        @rename="onSidebarVibeRename"
         @delete="onSidebarVibeDelete"
       />
     <main class="oc-page builder-page is-ide-view" :class="{ 'has-preview-panel': showPreviewPanel }">
@@ -468,6 +468,43 @@ async function onSidebarVibeCreate() {
     ElMessage.error(`创建工作区失败：${err?.response?.data?.detail || err?.message || err}`)
   }
 }
+async function onSidebarVibeRename(s: SidebarSessionItem) {
+  const ws = sidebarVibeWorkspaces.value.find(w => w.id === String(s.id))
+  const currentTitle = ws ? vibeWorkspaceTitle(ws) : String(s.title || '')
+  try {
+    const { value: newName } = await ElMessageBox.prompt(
+      '给这个工作区起一个新名字',
+      '重命名工作区',
+      {
+        confirmButtonText: '保存',
+        cancelButtonText: '取消',
+        inputValue: currentTitle,
+        inputPlaceholder: '比如：五子棋小程序',
+        inputValidator: (v: string) => {
+          const trimmed = (v || '').trim()
+          if (!trimmed) return '名字不能为空'
+          if (trimmed.length > 60) return '名字不超过 60 字'
+          return true
+        },
+      },
+    )
+    const trimmed = (newName || '').trim()
+    if (!trimmed) return
+    const updated = await onlineCodingApi.updateSpec(String(s.id), { task: trimmed })
+    // 同步刷新本地 workspaces 列表 + 当前选中 workspace 视图
+    sidebarVibeWorkspaces.value = sidebarVibeWorkspaces.value.map(w =>
+      w.id === updated.id ? updated : w,
+    )
+    if (workspace.value?.id === updated.id) {
+      workspace.value = updated
+      taskInput.value = updated.task || taskInput.value
+    }
+    ElMessage.success('已重命名')
+  } catch {
+    /* user cancelled */
+  }
+}
+
 async function onSidebarVibeDelete(s: SidebarSessionItem) {
   try {
     await ElMessageBox.confirm(`移除工作区「${s.title}」？此操作会清理本地副本。`, '移除工作区', {
@@ -2125,9 +2162,9 @@ function fileName(filePath: string) {
   font-size: 12px;
 }
 :global(html[data-theme="dark"]) .oc-preview-head {
-  background: #111114;
-  border-bottom-color: rgba(255, 255, 255, 0.06);
-  color: #e8eaed;
+  background: #111318 !important;
+  border-bottom-color: rgba(148, 163, 184, 0.14) !important;
+  color: rgba(226, 232, 240, 0.86) !important;
 }
 .oc-preview-url-select {
   flex: 1 1 auto;
@@ -2142,9 +2179,9 @@ function fileName(filePath: string) {
   min-width: 0;
 }
 :global(html[data-theme="dark"]) .oc-preview-url-select {
-  background: #16171b;
-  border-color: rgba(255, 255, 255, 0.10);
-  color: #e8eaed;
+  background: rgba(255, 255, 255, 0.04) !important;
+  border-color: rgba(148, 163, 184, 0.18) !important;
+  color: rgba(226, 232, 240, 0.86) !important;
 }
 .oc-preview-url-static {
   flex: 1 1 auto;
@@ -2156,7 +2193,7 @@ function fileName(filePath: string) {
   white-space: nowrap;
 }
 :global(html[data-theme="dark"]) .oc-preview-url-static {
-  color: #a1a4ad;
+  color: rgba(226, 232, 240, 0.7) !important;
 }
 .oc-preview-actions {
   display: flex;
@@ -2183,11 +2220,11 @@ function fileName(filePath: string) {
   color: #0f172a;
 }
 :global(html[data-theme="dark"]) .oc-preview-icon-btn {
-  color: #a1a4ad;
+  color: rgba(226, 232, 240, 0.7) !important;
 }
 :global(html[data-theme="dark"]) .oc-preview-icon-btn:hover {
-  background: rgba(255, 255, 255, 0.06);
-  color: #e8eaed;
+  background: rgba(255, 255, 255, 0.08) !important;
+  color: rgba(226, 232, 240, 0.95) !important;
 }
 .oc-preview-frame {
   flex: 1 1 auto;
@@ -2279,9 +2316,9 @@ function fileName(filePath: string) {
   color: #0969da;
 }
 :global(html[data-theme="dark"]) .oc-top-btn.active {
-  background: rgba(88, 166, 255, 0.16);
-  border-color: #58a6ff;
-  color: #58a6ff;
+  background: rgba(88, 166, 255, 0.10);
+  border-color: rgba(88, 166, 255, 0.36);
+  color: #79b8ff;
 }
 .oc-preview-badge {
   display: inline-flex;
