@@ -56,6 +56,7 @@ import {
   HomeFilled,
   MagicStick,
   Monitor,
+  Odometer,
   Promotion,
   Search,
   Setting,
@@ -75,6 +76,7 @@ const navItems = computed(() => [
   { key: 'chat', label: 'AI 搭建', path: '/chat', icon: MagicStick },
   { key: 'ide', label: 'AI 编码', path: '/coding', icon: Monitor },
   { key: 'online-coding', label: 'Vibe Coding', path: '/vibe-coding', icon: Connection },
+  { key: 'sandboxes', label: '沙箱监控', path: '/vibe-coding/sandboxes', icon: Odometer },
   { key: 'devops', label: 'DevOps', path: '/devops', icon: Promotion },
   ...(userStore.isTenantAdmin ? [{ key: 'members', label: '成员管理', path: '/tenant-users', icon: UserFilled }] : []),
   { key: 'settings', label: '设置', path: '/platform-envs?tab=llm', icon: Setting },
@@ -85,6 +87,7 @@ const activeKey = computed(() => {
   if (route.path.startsWith('/ai-chat')) return 'ai-chat'
   if (route.path.startsWith('/apps') || route.path.startsWith('/project')) return 'apps'
   if (route.path.startsWith('/chat')) return 'chat'
+  if (route.path.startsWith('/vibe-coding/sandboxes')) return 'sandboxes'
   if (route.path.startsWith('/vibe-coding') || route.path.startsWith('/online-coding')) return 'online-coding'
   if (route.path.startsWith('/coding') && route.query.type === 'full-code') return 'online-coding'
   if (route.path.startsWith('/ide') || route.path.startsWith('/coding')) return 'ide'
