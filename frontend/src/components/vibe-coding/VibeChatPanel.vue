@@ -113,7 +113,7 @@
             </svg>
           </button>
           <input ref="fileInputRef" type="file" hidden multiple accept="image/*,.pdf,.txt,.md,.json,.csv,.log" @change="onFilePick" />
-          <VoiceInputButton v-model="input" />
+          <VoiceInputButton v-model="input" :llm-config-id="thread.selected_llm_config_id" />
           <textarea
             v-model="input"
             class="textarea"

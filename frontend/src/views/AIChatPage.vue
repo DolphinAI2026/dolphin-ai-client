@@ -123,7 +123,7 @@
               hidden
               @change="onFilesSelected"
             />
-            <VoiceInputButton v-model="inputText" />
+            <VoiceInputButton v-model="inputText" :llm-config-id="selectedLlmId" />
             <textarea
               v-model="inputText"
               class="textarea"

@@ -38,6 +38,7 @@ from app.routes import (
     sse,
     templates,
     vibe_coding_chat,
+    voice,
     work_state,
 )
 
@@ -165,6 +166,7 @@ app.include_router(online_coding.router, prefix="/api")
 app.include_router(online_coding_runtime.router, prefix="/api")
 app.include_router(vibe_coding_chat.router, prefix="/api")
 app.include_router(help_assistant.router, prefix="/api")
+app.include_router(voice.router, prefix="/api")
 # 平台代理路由注册在根路径（/platform/... 和 /backend/... 需要直接匹配）
 app.include_router(platform_proxy.router)
 

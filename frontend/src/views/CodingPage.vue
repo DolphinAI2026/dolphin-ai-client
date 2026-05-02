@@ -457,7 +457,7 @@
               >
                 <el-icon :size="16"><Paperclip /></el-icon>
               </el-button>
-              <VoiceInputButton v-model="userInput" />
+              <VoiceInputButton v-model="userInput" :llm-config-id="selectedCodingModelOption?.id ?? null" />
               <el-input
                 v-model="userInput"
                 type="textarea"

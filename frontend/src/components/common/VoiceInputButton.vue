@@ -3,11 +3,12 @@
     v-if="supported"
     type="button"
     class="voice-input-btn"
-    :class="{ recording }"
-    :title="recording ? '停止录音' : '语音输入（中文）'"
+    :class="{ recording, loading: transcribing }"
+    :title="buttonTitle"
+    :disabled="transcribing"
     @click="toggle"
   >
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+    <svg v-if="!transcribing" width="16" height="16" viewBox="0 0 16 16" fill="none">
       <path
         d="M8 1.5a2.5 2.5 0 00-2.5 2.5v4a2.5 2.5 0 005 0V4A2.5 2.5 0 008 1.5z"
         stroke="currentColor"
@@ -20,143 +21,230 @@
         stroke-linecap="round"
       />
     </svg>
+    <svg v-else class="spin" width="14" height="14" viewBox="0 0 14 14" fill="none">
+      <circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.6" stroke-dasharray="8 8" />
+    </svg>
     <span v-if="recording" class="voice-pulse" aria-hidden="true"></span>
   </button>
 </template>
 
 <script setup lang="ts">
-import { onMounted, onBeforeUnmount, ref } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
 import { ElMessage } from 'element-plus'
+import request from '@/utils/request'
 
 /**
- * 语音输入按钮 — 浏览器原生 webkitSpeechRecognition，无外部依赖。
+ * 语音输入按钮 — MediaRecorder 录音 + 后端 STT 中转。
+ *
+ * 流程：
+ *   1. 点击 → getUserMedia 拿麦克风 → MediaRecorder 录 webm/opus
+ *   2. 再点击 / 自动 30s 上限 → 停止录音 → POST /api/voice/transcribe
+ *   3. 后端复用 LLMConfig 凭证调 OpenAI 兼容 Whisper API → 返回文本
+ *   4. 文本按 mode 合并到 v-model
  *
  * 用法：
- *   <VoiceInputButton v-model="inputText" />
- *   或：<VoiceInputButton @transcript="(t) => inputText += t" />
+ *   <VoiceInputButton v-model="inputText" :llm-config-id="selectedLlmId" />
  *
  * 限制：
- *   - 浏览器需支持 SpeechRecognition（Chrome/Edge 系；Safari 部分支持）
- *   - 部署到 HTTPS 才能用麦克风（浏览器安全限制；localhost 例外）
- *   - 不支持时按钮自动隐藏
+ *   - 浏览器需支持 MediaRecorder（现代浏览器都支持）
+ *   - 必须 HTTPS 或 localhost（getUserMedia 安全限制）
+ *   - 后端 LLM 必须支持 Whisper 协议（OneAPI / FastGPT / OpenAI 直连等）
  */
 const props = withDefaults(
   defineProps<{
-    /** 双向绑定输入框文本（识别到 final text 时按 mode 合并） */
     modelValue?: string
-    /** 识别语言，默认中文 */
-    lang?: string
-    /** 合并模式：append=拼到末尾；replace=直接覆盖；none=不动 modelValue（仅 emit transcript） */
+    /** 当前对话选的 LLMConfig.id（不传时后端用租户默认） */
+    llmConfigId?: number | null
+    /** 识别语言，ISO-639-1：zh / en / ja 等 */
+    language?: string
+    /** STT 模型名，默认 whisper-1（OpenAI 标准，OneAPI 类网关一般也认） */
+    model?: string
+    /** 合并模式：append=拼到末尾；replace=覆盖；none=仅 emit */
     mode?: 'append' | 'replace' | 'none'
+    /** 录音时长上限（秒，默认 60） */
+    maxDurationSec?: number
   }>(),
   {
     modelValue: '',
-    lang: 'zh-CN',
+    llmConfigId: null,
+    language: 'zh',
+    model: 'whisper-1',
     mode: 'append',
+    maxDurationSec: 60,
   },
 )
 
 const emit = defineEmits<{
   (e: 'update:modelValue', value: string): void
-  /** 识别到一段最终文本时 emit（无论 mode） */
   (e: 'transcript', text: string): void
   (e: 'start'): void
   (e: 'end'): void
   (e: 'error', error: string): void
 }>()
 
-type SpeechRecognitionLike = any
-const supported = ref(false)
+const supported = ref(typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia && !!(window as any).MediaRecorder)
 const recording = ref(false)
-let recognition: SpeechRecognitionLike | null = null
+const transcribing = ref(false)
 
-function init() {
-  const w = window as any
-  const SR = w.SpeechRecognition || w.webkitSpeechRecognition
-  if (!SR) {
-    supported.value = false
+let mediaRecorder: MediaRecorder | null = null
+let mediaStream: MediaStream | null = null
+let chunks: Blob[] = []
+let stopTimer: ReturnType<typeof setTimeout> | null = null
+
+const buttonTitle = computed(() => {
+  if (transcribing.value) return '识别中…'
+  if (recording.value) return '点击停止录音'
+  return '语音输入（点击开始说话）'
+})
+
+function pickMimeType(): string {
+  const candidates = [
+    'audio/webm;codecs=opus',
+    'audio/webm',
+    'audio/ogg;codecs=opus',
+    'audio/mp4',
+  ]
+  for (const t of candidates) {
+    if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(t)) return t
+  }
+  return ''
+}
+
+async function startRecording() {
+  if (recording.value || transcribing.value) return
+  try {
+    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true })
+  } catch (e: any) {
+    const name = e?.name || ''
+    if (name === 'NotAllowedError') {
+      ElMessage.warning('麦克风权限被拒绝。请在浏览器地址栏点锁标 → 允许麦克风')
+    } else if (name === 'NotFoundError') {
+      ElMessage.warning('没检测到麦克风设备')
+    } else {
+      ElMessage.error(`无法启动麦克风: ${e?.message || name}`)
+    }
+    emit('error', name || 'getUserMedia-failed')
     return
   }
+
+  const mime = pickMimeType()
   try {
-    recognition = new SR()
-    recognition.lang = props.lang
-    recognition.continuous = false
-    recognition.interimResults = true
-    recognition.onresult = (event: any) => {
-      let finalText = ''
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const res = event.results[i]
-        if (res.isFinal) finalText += res[0].transcript
-      }
-      if (finalText) {
-        const cleaned = finalText.trim()
-        emit('transcript', cleaned)
-        if (props.mode === 'append') {
-          const next = props.modelValue ? `${props.modelValue} ${cleaned}` : cleaned
-          emit('update:modelValue', next)
-        } else if (props.mode === 'replace') {
-          emit('update:modelValue', cleaned)
-        }
-      }
+    mediaRecorder = new MediaRecorder(mediaStream, mime ? { mimeType: mime } : undefined)
+  } catch (e: any) {
+    ElMessage.error(`MediaRecorder 初始化失败: ${e?.message || e}`)
+    cleanup()
+    emit('error', 'recorder-init-failed')
+    return
+  }
+
+  chunks = []
+  mediaRecorder.ondataavailable = (ev) => {
+    if (ev.data && ev.data.size > 0) chunks.push(ev.data)
+  }
+  mediaRecorder.onstop = () => {
+    void uploadAndTranscribe()
+  }
+  mediaRecorder.start()
+  recording.value = true
+  emit('start')
+
+  // 自动停止：超过上限时间
+  stopTimer = setTimeout(() => {
+    if (recording.value) {
+      ElMessage.info(`已达录音时长上限 ${props.maxDurationSec}s，自动停止`)
+      stopRecording()
     }
-    recognition.onerror = (e: any) => {
-      const code = String(e?.error || 'unknown')
-      console.warn('[VoiceInputButton] SpeechRecognition error:', code, e)
-      recording.value = false
-      // 给用户具体的提示 — 不同 error 对应不同根因
-      const msgMap: Record<string, string> = {
-        'network': '语音识别网络失败：浏览器原生 API 实际调 Google 服务器，国内网络通常无法访问。建议换用其他方案（联系开发）',
-        'not-allowed': '麦克风权限被拒绝。请在浏览器地址栏点击锁标 → 网站设置 → 允许麦克风',
-        'service-not-allowed': '浏览器禁止了语音识别服务。可能是 HTTP 站点（必须 HTTPS）或浏览器策略限制',
-        'no-speech': '没听到说话内容，请再试一次',
-        'aborted': '',  // 用户主动取消，不弹
-        'audio-capture': '没检测到麦克风设备',
-        'language-not-supported': '当前语言不支持',
-        'bad-grammar': '语音识别语法错误',
-      }
-      const tip = msgMap[code]
-      if (tip) ElMessage.warning(tip)
-      else if (code !== 'unknown') ElMessage.warning(`语音识别失败：${code}`)
-      emit('error', code)
+  }, props.maxDurationSec * 1000)
+}
+
+function stopRecording() {
+  if (!recording.value) return
+  if (stopTimer) {
+    clearTimeout(stopTimer)
+    stopTimer = null
+  }
+  recording.value = false
+  try {
+    mediaRecorder?.stop()
+  } catch { /* ignore */ }
+  // mediaStream 在 onstop → uploadAndTranscribe 完成后再 cleanup
+}
+
+function cleanup() {
+  if (mediaStream) {
+    mediaStream.getTracks().forEach(t => { try { t.stop() } catch {} })
+    mediaStream = null
+  }
+  mediaRecorder = null
+  chunks = []
+  if (stopTimer) {
+    clearTimeout(stopTimer)
+    stopTimer = null
+  }
+}
+
+async function uploadAndTranscribe() {
+  const mime = mediaRecorder?.mimeType || 'audio/webm'
+  const blob = new Blob(chunks, { type: mime })
+  cleanup()
+
+  if (blob.size < 1024) {
+    ElMessage.warning('录音太短，请重试')
+    emit('end')
+    return
+  }
+
+  transcribing.value = true
+  try {
+    const ext = mime.includes('mp4') ? 'mp4' : mime.includes('ogg') ? 'ogg' : 'webm'
+    const filename = `voice-${Date.now()}.${ext}`
+    const form = new FormData()
+    form.append('audio', blob, filename)
+    form.append('language', props.language)
+    form.append('model', props.model)
+    if (props.llmConfigId != null) form.append('selected_llm_config_id', String(props.llmConfigId))
+
+    const data = await request.post<any, { text: string }>('/voice/transcribe', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 90_000,
+    })
+    const text = (data?.text || '').trim()
+    if (!text) {
+      ElMessage.warning('没识别出内容，请说大声一点再试')
+      return
     }
-    recognition.onend = () => {
-      recording.value = false
-      emit('end')
+    emit('transcript', text)
+    if (props.mode === 'append') {
+      const next = props.modelValue ? `${props.modelValue} ${text}` : text
+      emit('update:modelValue', next)
+    } else if (props.mode === 'replace') {
+      emit('update:modelValue', text)
     }
-    supported.value = true
-  } catch (e) {
-    console.warn('[VoiceInputButton] init failed', e)
-    supported.value = false
-    recognition = null
+  } catch (e: any) {
+    const detail = e?.response?.data?.detail || e?.message || '语音识别失败'
+    ElMessage.error(detail)
+    emit('error', String(detail))
+  } finally {
+    transcribing.value = false
+    emit('end')
   }
 }
 
 function toggle() {
-  if (!recognition) return
+  if (transcribing.value) return
   if (recording.value) {
-    try { recognition.stop() } catch { /* ignore */ }
-    recording.value = false
-    return
-  }
-  try {
-    recognition.start()
-    recording.value = true
-    emit('start')
-  } catch (e) {
-    // 在 start 报 InvalidStateError 时忽略
-    recording.value = false
+    stopRecording()
+  } else {
+    void startRecording()
   }
 }
 
-onMounted(init)
 onBeforeUnmount(() => {
-  if (recognition && recording.value) {
-    try { recognition.stop() } catch { /* ignore */ }
-  }
-  recognition = null
+  stopRecording()
+  cleanup()
 })
 
-defineExpose({ toggle, recording, supported })
+defineExpose({ toggle, recording, transcribing, supported })
 </script>
 
 <style scoped>
@@ -175,13 +263,20 @@ defineExpose({ toggle, recording, supported })
   transition: background 0.14s, color 0.14s;
   flex-shrink: 0;
 }
-.voice-input-btn:hover {
+.voice-input-btn:hover:not(:disabled) {
   background: var(--t-bg-soft, rgba(15, 23, 42, 0.06));
   color: var(--t-text-secondary, #475569);
+}
+.voice-input-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
 }
 .voice-input-btn.recording {
   color: #ef4444;
   background: rgba(239, 68, 68, 0.1);
+}
+.voice-input-btn.loading {
+  color: var(--t-brand, #6366f1);
 }
 .voice-pulse {
   position: absolute;
@@ -191,8 +286,14 @@ defineExpose({ toggle, recording, supported })
   animation: voice-pulse 1.2s ease-out infinite;
   pointer-events: none;
 }
+.spin {
+  animation: voice-spin 0.9s linear infinite;
+}
 @keyframes voice-pulse {
   0% { transform: scale(0.85); opacity: 0.7; }
   100% { transform: scale(1.4); opacity: 0; }
+}
+@keyframes voice-spin {
+  to { transform: rotate(360deg); }
 }
 </style>
