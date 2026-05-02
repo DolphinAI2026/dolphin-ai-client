@@ -156,15 +156,22 @@ class DockerRuntime:
         return name
 
     def _port_args(self, ports: Optional[list[int]]) -> list[str]:
-        """把端口段映射到 host 上 — host 端写 0 让 docker 自动分配。
+        """把端口段映射到 host 上 — 用 docker/podman 都支持的"短格式 -p <containerPort>"
+        让 host 自动分配可用端口。
 
         默认映射 vibe 专用段中常用的几个（6173/6300/6400），
         agent 用其他端口时可以扩展（v1 暂时这几个够用）。
+
+        ⚠️ 不要用 "-p 0:6173" 写法 — Docker Engine 接受（host=0 自动分配），
+        但 podman 严格校验 host port ∈ [1, 65535] 会报
+        `parsing host port: port numbers must be between 1 and 65535, got 0`。
+        阿里云 Linux 的 docker 命令是 podman shim，必须用短格式。
         """
         default_ports = ports or [6173, 6300, 6400, 6500]
         args: list[str] = []
         for p in default_ports:
-            args.extend(["-p", f"0:{p}"])
+            # 短格式：只给 containerPort，host port 由 docker/podman 自动分配
+            args.extend(["-p", str(p)])
         return args
 
     async def stop(self, workspace_id: str, *, timeout: int = 10) -> bool:
