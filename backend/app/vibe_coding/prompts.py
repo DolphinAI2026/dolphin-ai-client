@@ -65,6 +65,45 @@ http_check 工具是在**容器内**执行 curl，所以直接用容器内端口
   - `http_check http://localhost:6173`（容器内自检 vite）
   - `http_check http://localhost:6300/api/health`（容器内自检 API）
 
+### ⚠️⚠️ 前后端通信（最易踩坑，必看）
+前端 JS **运行在用户浏览器（host）**，后端跑在 docker 容器内。这意味着：
+
+- **浏览器里写死 `localhost:6300` ❌** — `localhost` 指用户本机，不是容器，连不上
+- **拼 `window.location.hostname + ':6300'` ❌** — 容器内 6300 映射到 host 的端口**是动态的**（每个 workspace 不同、每次重启可能变），写死端口必错
+- **拼 `+ ':6173'` 也 ❌** — 同上
+
+**唯一正确做法：前端用相对路径，dev server 的 proxy 把请求转发到容器内后端。**
+
+vite + Vue/React 项目（`vite.config.ts`）：
+```ts
+export default defineConfig({
+  plugins: [vue()],
+  server: {
+    host: '0.0.0.0',
+    port: 6173,
+    strictPort: true,
+    proxy: {
+      '/api':       { target: 'http://localhost:6300', changeOrigin: true },
+      '/socket.io': { target: 'http://localhost:6300', changeOrigin: true, ws: true },  // WebSocket 必须 ws: true
+    },
+  },
+})
+```
+
+前端业务代码：
+- HTTP：`fetch('/api/rooms')`、`axios.get('/api/health')` — 用相对路径
+- Socket.IO：`io()` 或 `io({ path: '/socket.io' })` — 默认连同源，自动走 proxy
+- **不要**：`fetch('http://localhost:6300/...')`、`io('http://localhost:6300')`、`io(\`${window.location.protocol}//${window.location.hostname}:6300\`)`
+
+Next.js 项目用 `next.config.js` 的 `rewrites()`：
+```js
+async rewrites() {
+  return [{ source: '/api/:path*', destination: 'http://localhost:6300/api/:path*' }]
+}
+```
+
+调试 tip：用户报"连接中…"/"Cannot connect"时，第一时间查 `vite.config.ts` 的 proxy 配置 + 前端代码有没有写死 host:port，**不要**去改 `window.location.hostname` 拼接。
+
 ### ⚠️ 命令调用要凝练（避免对话流变成日志）
 agent 跑命令时**优先一条命令解决多步**，不要拆成 4-5 条 run_command 反复确认。例：
 
