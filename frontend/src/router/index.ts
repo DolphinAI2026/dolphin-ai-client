@@ -59,6 +59,12 @@ const router = createRouter({
       redirect: '/vibe-coding',
     },
     {
+      path: '/vibe-coding/sandboxes',
+      name: 'SandboxMonitor',
+      component: () => import('@/views/SandboxMonitorPage.vue'),
+      meta: { requiresAuth: true, navExpanded: true }
+    },
+    {
       path: '/vibe-coding/workspaces/:id',
       name: 'OnlineCodingWorkspace',
       component: () => import('@/views/OnlineCodingWorkspacePage.vue'),

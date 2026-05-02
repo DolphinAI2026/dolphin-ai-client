@@ -147,6 +147,7 @@ const adminNavItems = computed(() =>
     ? [
         { key: 'env', label: '平台环境', path: '/platform-envs' },
         { key: 'users', label: '组织用户', path: '/tenant-users' },
+        { key: 'sandboxes', label: '沙箱监控', path: '/vibe-coding/sandboxes' },
       ]
     : []
 )
@@ -157,6 +158,7 @@ const activeKey = computed(() => {
   if (route.path.startsWith('/coding')) return 'coding'
   if (route.path.startsWith('/platform-envs')) return 'env'
   if (route.path.startsWith('/tenant-users')) return 'users'
+  if (route.path.startsWith('/vibe-coding/sandboxes')) return 'sandboxes'
   return 'home'
 })
 
