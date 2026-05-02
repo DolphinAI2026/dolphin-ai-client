@@ -314,48 +314,56 @@ type TimelineItem =
   | { kind: 'tool'; key: string; tool: VibeChatToolCall & { expanded?: boolean } }
   | { kind: 'ask'; key: string; question: string; options: string[] }
 
+function tsOf(s: string | null | undefined): number {
+  if (!s) return 0
+  const t = Date.parse(s)
+  return Number.isNaN(t) ? 0 : t
+}
+
 const timeline = computed<TimelineItem[]>(() => {
-  const items: TimelineItem[] = []
-  const tcByMessageId = new Map<number, (VibeChatToolCall & { expanded?: boolean })[]>()
-  for (const t of toolCalls.value) {
-    if (t.message_id != null) {
-      const arr = tcByMessageId.get(t.message_id) || []
-      arr.push(t)
-      tcByMessageId.set(t.message_id, arr)
-    }
-  }
-  const renderedToolIds = new Set<number>()
+  // 把 messages + tool_calls 按时间戳交错排（mirror AIChatPage 做法）—
+  // 旧实现是先列完所有 msg 再追加未关联 tool，SSE 实时跑时所有 tool 都堆在末尾，对话顺序错乱。
+  type Sortable =
+    | { ts: number; seq: number; kind: 'msg'; m: VibeChatMessage }
+    | { ts: number; seq: number; kind: 'tc'; t: VibeChatToolCall & { expanded?: boolean } }
+  const sortable: Sortable[] = []
   for (const m of messages.value) {
-    const isToolUsePlaceholder =
-      m.role === 'assistant' &&
-      !(m.content || '').trim() &&
-      m.extra_meta?.tool_calls
-    if (m.role === 'user') {
-      const att = (m.extra_meta?.attachments as any[]) || []
-      items.push({
-        kind: 'user',
-        key: `m${m.id}`,
-        content: m.content,
-        attachments: att.length ? att : undefined,
-      })
-    } else if (m.role === 'assistant') {
-      if (!isToolUsePlaceholder && m.content) {
-        items.push({ kind: 'assistant', key: `m${m.id}`, content: m.content })
-      }
-      const tcs = tcByMessageId.get(m.id) || []
-      for (const t of tcs) {
-        items.push({ kind: 'tool', key: `t${t.id}`, tool: t })
-        renderedToolIds.add(t.id)
-      }
-    }
+    sortable.push({ ts: tsOf(m.created_at), seq: m.id, kind: 'msg', m })
   }
-  // 把所有还没渲染的 tool（包括 message_id=null 的 orphan + 父 assistant 消息还没在前端落地的）
-  // 按 push 顺序追加在末尾——SSE 实时跑 agent 时 99% 工具调用走这条
   for (const t of toolCalls.value) {
-    if (!renderedToolIds.has(t.id)) {
-      items.push({ kind: 'tool', key: `t${t.id}`, tool: t })
+    sortable.push({ ts: tsOf(t.started_at), seq: t.id, kind: 'tc', t })
+  }
+  sortable.sort((a, b) => {
+    if (a.ts !== b.ts) return a.ts - b.ts
+    // 同 ts 时 msg 优先于 tool（确保 user 消息在它触发的工具之前），再按 seq(id)
+    if (a.kind !== b.kind) return a.kind === 'msg' ? -1 : 1
+    return a.seq - b.seq
+  })
+
+  const items: TimelineItem[] = []
+  for (const it of sortable) {
+    if (it.kind === 'msg') {
+      const m = it.m
+      const isToolUsePlaceholder =
+        m.role === 'assistant' && !(m.content || '').trim() && m.extra_meta?.tool_calls
+      if (m.role === 'user') {
+        const att = (m.extra_meta?.attachments as any[]) || []
+        items.push({
+          kind: 'user',
+          key: `m${m.id}`,
+          content: m.content,
+          attachments: att.length ? att : undefined,
+        })
+      } else if (m.role === 'assistant') {
+        if (!isToolUsePlaceholder && m.content) {
+          items.push({ kind: 'assistant', key: `m${m.id}`, content: m.content })
+        }
+      }
+    } else {
+      items.push({ kind: 'tool', key: `t${it.t.id}`, tool: it.t })
     }
   }
+
   if (pendingAsk.value && !pendingAsk.value.answered) {
     items.push({
       kind: 'ask',
