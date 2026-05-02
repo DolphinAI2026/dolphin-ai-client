@@ -64,10 +64,23 @@ class DockerRuntime:
     # ─────────────────────────── 可用性探测 ───────────────────────────
 
     async def is_available(self) -> bool:
-        """检查 docker daemon + 镜像。任意一项失败就返回 False，调用方 fallback 到 host。"""
-        ok, _, _ = await self._run(["docker", "info", "--format", "{{.ServerVersion}}"], timeout=5)
-        if not ok:
-            return False
+        """检查 docker（或兼容的 podman shim） + 镜像。任意一项失败就返回 False，调用方 fallback 到 host。
+
+        兼容性：
+        - Docker Engine：`docker info` 输出含 ServerVersion 字段
+        - Podman shim（阿里云 Linux 等默认）：`docker info` 输出格式不同，没有 ServerVersion 字段
+          → 改用 `docker version --format {{.Server.Version}}` 双方都支持的字段
+        - 极端 fallback：直接 `docker info`（不带 --format）只看退出码
+        """
+        # version --format 在 docker / podman 都能拿到 server 版本（docker.Server.Version, podman 也填这字段）
+        ok, out, _ = await self._run(
+            ["docker", "version", "--format", "{{.Server.Version}}"], timeout=5
+        )
+        if not ok or not out.strip():
+            # 兜底：只要 `docker info` 能跑通就认；过滤 podman 的 stderr 提示
+            ok, _, _ = await self._run(["docker", "info"], timeout=5)
+            if not ok:
+                return False
         ok, out, _ = await self._run(
             ["docker", "image", "inspect", IMAGE, "--format", "{{.Id}}"], timeout=5
         )
