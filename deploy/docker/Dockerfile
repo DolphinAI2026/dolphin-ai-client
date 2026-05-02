@@ -80,6 +80,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get purge -y --auto-remove build-essential \
     && rm -rf /var/lib/apt/lists/*
 
+# --- docker CLI（仅 client，不带 daemon）---------------------
+# 后端要起 vibe-coding 沙箱容器（vibe-sandbox:latest），通过挂载
+# host /var/run/docker.sock 复用 host docker daemon。从官方静态二进制
+# 装最稳，跟 apt 源/dockerd 都解耦。
+ARG DOCKER_CLI_VERSION=24.0.7
+RUN set -eux; \
+    arch=$(dpkg --print-architecture); \
+    case "$arch" in \
+      amd64) docker_arch=x86_64 ;; \
+      arm64) docker_arch=aarch64 ;; \
+      *) echo "unsupported arch: $arch" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://download.docker.com/linux/static/stable/${docker_arch}/docker-${DOCKER_CLI_VERSION}.tgz" -o /tmp/docker.tgz; \
+    tar -xzC /tmp -f /tmp/docker.tgz; \
+    install -m 0755 /tmp/docker/docker /usr/local/bin/docker; \
+    rm -rf /tmp/docker /tmp/docker.tgz; \
+    docker --version
+
 # --- code-server --------------------------------------------
 # 用官方 release tarball 装，比 install.sh 可靠（install.sh 在最小化镜像里
 # 会静默失败，且 exit code 为 0 会骗过 Docker 缓存）
@@ -130,10 +148,10 @@ RUN rm -rf /app/backend/.env /app/backend/.venv /app/backend/venv \
 COPY --from=frontend-builder /build/frontend/dist /app/frontend/dist
 
 # --- 挂载点 & 目录 ------------------------------------------
-# workspaces 是唯一的持久化 volume；npm-cache 放在 workspaces 下，
-# 日志直接写 stdout/stderr 不落盘。
-RUN mkdir -p /root/apaas-builder/workspaces \
-             /etc/supervisor/conf.d
+# workspaces 卷由 compose 在运行时挂入（路径由 ${APAAS_WORKSPACE_ROOT} 决定，
+# 默认 /data/apaas/workspaces，host 跟容器内路径一致以兼容 vibe-sandbox 子容器）。
+# 这里只创建 supervisor 配置目录。
+RUN mkdir -p /etc/supervisor/conf.d
 
 # --- supervisord + entrypoint ------------------------------
 COPY deploy/docker/supervisord.conf /etc/supervisor/supervisord.conf

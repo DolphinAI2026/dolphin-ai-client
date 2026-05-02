@@ -12,14 +12,19 @@
 #   docker compose logs -f
 #
 # 挂载点设计：
-#   - 只挂一个持久化 volume：workspaces（npm-cache 放在它下面）
+#   - workspaces 持久化卷：host 路径跟容器内路径**保持一致**（关键！）
+#     —— 后端起 vibe-sandbox 子容器时通过挂载的 /var/run/docker.sock 调 host docker，
+#     所以传给 docker run 的 -v 路径必须是 host 文件系统能找到的路径。
+#     两边一致 → 后端代码 / host docker 看到的 path 相同，sandbox 才能挂上 workspace。
+#   - /var/run/docker.sock 挂载：让后端容器能调 host docker 起 sandbox 容器（DinD）
 #   - .env 只读挂载
 #   - 前端 dist 直接打进镜像，不再共享卷
 #   - 日志走 docker logs（stdout/stderr），不落盘
 #
 # 前提：
 #   - 宿主机建好 ${WORKSPACES_DIR} 目录
-#   - ${BACKEND_ENV_FILE} 已写好
+#   - 宿主机预先 build vibe-sandbox 镜像：docker build -t vibe-sandbox:latest <repo>/docker/vibe-sandbox/
+#   - ${BACKEND_ENV_FILE} 已写好（必须设 APAAS_WORKSPACE_ROOT=${WORKSPACES_DIR}）
 #   - 外置 MySQL 可达（DATABASE_URL 在 .env 里）
 
 services:
@@ -41,10 +46,16 @@ services:
     environment:
       PORT: ${PORT:-8003}
       CODE_SERVER_PORT: ${CODE_SERVER_PORT:-8080}
+      # 后端代码读这个变量决定 workspace 根目录；必须等于 host 路径
+      # （sandbox 容器是 host docker 启的，docker run -v 用的是 host 路径）
+      APAAS_WORKSPACE_ROOT: ${WORKSPACES_DIR:-/data/apaas/workspaces}
 
     volumes:
-      # 唯一持久化卷（workspaces + npm-cache 都在这里）
-      - ${WORKSPACES_DIR:-/data/apaas/workspaces}:/root/apaas-builder/workspaces
+      # workspaces 卷 — host 跟容器内**路径一致**，让后端 docker_runtime 计算的
+      # host_workspace_dir 能直接传给 host docker 起 sandbox
+      - ${WORKSPACES_DIR:-/data/apaas/workspaces}:${WORKSPACES_DIR:-/data/apaas/workspaces}
+      # docker.sock — 让后端调 host docker 起 vibe-sandbox 容器（DinD）
+      - /var/run/docker.sock:/var/run/docker.sock
       # .env 只读挂载
       - ${BACKEND_ENV_FILE:-/data/apaas/backend.env}:/app/backend/.env:ro
 
