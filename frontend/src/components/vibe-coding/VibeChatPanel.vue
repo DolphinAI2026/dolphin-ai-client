@@ -7,98 +7,59 @@
     <!-- header / preview / 清空 都挪到顶部 BuilderFrame actions slot 里了，节省空间 -->
 
     <!-- ─── Messages timeline ──────────────────────────── -->
-    <section ref="scrollEl" class="messages">
-      <template v-for="item in timeline" :key="item.key">
-        <!-- user -->
-        <div v-if="item.kind === 'user'" class="msg msg-user">
-          <div class="msg-bubble">
-            <div v-if="item.attachments && item.attachments.length" class="msg-attaches">
-              <span v-for="(a, i) in item.attachments" :key="i" class="msg-attach-chip">
-                {{ a.kind === 'image' ? '🖼' : '📄' }} {{ a.filename }}
-              </span>
-            </div>
-            <div v-html="renderMd(item.content)"></div>
-          </div>
-        </div>
-
-        <!-- assistant 文本（无气泡，纯 markdown） -->
-        <div v-else-if="item.kind === 'assistant'" class="msg msg-assistant">
-          <div class="msg-bubble" v-html="renderMd(item.content)"></div>
-        </div>
-
-        <!-- 工具调用卡片 -->
-        <div v-else-if="item.kind === 'tool'" class="tool-card" :class="`tool-${item.tool.status}`">
-          <div class="tool-header" @click="item.tool.expanded = !item.tool.expanded">
-            <span class="tool-icon">{{ toolIcon(item.tool.tool_name) }}</span>
-            <span class="tool-name">{{ humanToolName(item.tool.tool_name) }}</span>
-            <span class="tool-summary">{{ summarizeArgs(item.tool) }}</span>
+    <AgentConversation
+      ref="conversationRef"
+      :messages="agentMessages"
+      :tool-grouping="true"
+      :empty-title="emptyPrompt"
+      empty-hint=""
+      @answer-ask="(opt) => answerAsk(opt)"
+    >
+      <template #tool-renderer="{ tool }">
+        <div class="tool-card" :class="`tool-${tool.status}`">
+          <div class="tool-header" @click="toggleVibeTool(Number(tool.id))">
+            <span class="tool-icon">{{ toolIcon(tool.name) }}</span>
+            <span class="tool-name">{{ humanToolName(tool.name) }}</span>
+            <span class="tool-summary">{{ tool.argsBrief }}</span>
             <span class="tool-status">
-              <span v-if="item.tool.status === 'running'" class="dot dot-running" />
-              <span v-else-if="item.tool.status === 'success'" class="dot dot-ok">✓</span>
+              <span v-if="tool.status === 'running'" class="dot dot-running" />
+              <span v-else-if="tool.status === 'success'" class="dot dot-ok">✓</span>
               <span v-else class="dot dot-err">✗</span>
-              <span v-if="item.tool.duration_ms" class="duration">{{ item.tool.duration_ms }}ms</span>
+              <span v-if="tool.duration_ms" class="duration">{{ tool.duration_ms }}ms</span>
             </span>
           </div>
-          <div v-if="item.tool.expanded" class="tool-body">
-            <!-- 写文件 / 编辑文件：路径 + 代码预览 -->
-            <template v-if="['write_file', 'edit_file'].includes(item.tool.tool_name)">
-              <div class="tool-path">📄 {{ item.tool.args_json.path }}</div>
-              <pre class="tool-code"><code>{{ writeFilePreview(item.tool) }}</code></pre>
+          <div v-if="vibeToolExpanded[Number(tool.id)]" class="tool-body">
+            <template v-if="['write_file', 'edit_file'].includes(tool.name)">
+              <div class="tool-path">📄 {{ tool.args?.path }}</div>
+              <pre class="tool-code"><code>{{ writeFilePreviewArgs(tool) }}</code></pre>
             </template>
-            <!-- 运行命令 -->
-            <template v-else-if="item.tool.tool_name === 'run_command'">
-              <pre class="tool-cmd"><span class="cmd-prompt">$</span> {{ item.tool.args_json.command }}</pre>
-              <pre v-if="item.tool.result_text" class="tool-result">{{ item.tool.result_text }}</pre>
-              <div v-else-if="item.tool.status === 'running'" class="tool-running-tip">命令运行中…</div>
+            <template v-else-if="tool.name === 'run_command'">
+              <pre class="tool-cmd"><span class="cmd-prompt">$</span> {{ tool.args?.command }}</pre>
+              <pre v-if="tool.result" class="tool-result">{{ tool.result }}</pre>
+              <div v-else-if="tool.status === 'running'" class="tool-running-tip">命令运行中…</div>
             </template>
-            <!-- 读文件 -->
-            <template v-else-if="item.tool.tool_name === 'read_file'">
-              <div class="tool-path">📄 {{ item.tool.args_json.path }}</div>
-              <pre v-if="item.tool.result_text" class="tool-result">{{ item.tool.result_text }}</pre>
+            <template v-else-if="tool.name === 'read_file'">
+              <div class="tool-path">📄 {{ tool.args?.path }}</div>
+              <pre v-if="tool.result" class="tool-result">{{ tool.result }}</pre>
             </template>
-            <!-- TODO write —— 显示 todo 数组 -->
-            <template v-else-if="item.tool.tool_name === 'todo_write'">
+            <template v-else-if="tool.name === 'todo_write'">
               <ol class="tool-todos">
-                <li v-for="t in (item.tool.args_json.todos || [])" :key="t.id" :class="`todo-st-${t.status}`">
+                <li v-for="t in (tool.args?.todos || [])" :key="t.id" :class="`todo-st-${t.status}`">
                   <span class="tool-todo-mark">{{ t.status === 'completed' ? '✓' : t.status === 'in_progress' ? '▸' : '○' }}</span>
                   {{ t.content }}
                 </li>
               </ol>
             </template>
-            <!-- 其他：直接 dump result -->
-            <pre v-else-if="item.tool.result_text" class="tool-result">{{ item.tool.result_text }}</pre>
-            <div v-else-if="item.tool.status === 'running'" class="tool-running-tip">执行中…</div>
-          </div>
-        </div>
-
-        <!-- ask_user 问题卡 -->
-        <div v-else-if="item.kind === 'ask'" class="ask-card">
-          <div class="ask-q" v-html="renderMd(item.question)"></div>
-          <div v-if="item.options && item.options.length" class="ask-options">
-            <button
-              v-for="(opt, i) in item.options"
-              :key="i"
-              class="ask-option-btn"
-              @click="answerAsk(opt)"
-              :disabled="running"
-            >{{ opt }}</button>
+            <pre v-else-if="tool.result" class="tool-result">{{ tool.result }}</pre>
+            <div v-else-if="tool.status === 'running'" class="tool-running-tip">执行中…</div>
           </div>
         </div>
       </template>
 
-      <!-- streaming assistant draft -->
-      <div v-if="streamingAssistant" class="msg msg-assistant">
-        <div class="msg-bubble" v-html="renderMd(streamingAssistant)"></div>
-        <span class="cursor-blink">▌</span>
-      </div>
-
-      <div v-if="errorBanner" class="error-banner">⚠ {{ errorBanner }}</div>
-
-      <!-- 空状态 -->
-      <div v-if="isEmpty && !running" class="empty-state">
-        <div class="empty-title">{{ emptyPrompt }}</div>
-      </div>
-    </section>
+      <template #list-suffix>
+        <div v-if="errorBanner" class="error-banner">⚠ {{ errorBanner }}</div>
+      </template>
+    </AgentConversation>
 
     <!-- ─── Input area（参考 ai-chat: input-card 单容器） ─── -->
     <footer class="input-area">
@@ -191,9 +152,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ChatLineRound, Delete } from '@element-plus/icons-vue'
-import { marked } from 'marked'
 import { useThemeStore } from '@/stores/theme'
+import AgentConversation from '@/components/common/AgentConversation.vue'
+import type { AgentMessage, AgentToolPayload } from '@/components/common/agent-conversation/types'
 import {
   vibeCodingChatApi,
   type VibeChatThread,
@@ -201,8 +162,6 @@ import {
   type VibeChatToolCall,
   type VibeChatLLMConfig,
 } from '@/api/vibeCodingChat'
-
-marked.setOptions({ breaks: true, gfm: true })
 
 const props = withDefaults(
   defineProps<{
@@ -329,15 +288,12 @@ const previewLinks = computed(() => {
 const todoCompletedCount = computed(() =>
   (thread.value.todos || []).filter((t) => t.status === 'completed').length,
 )
-const isEmpty = computed(
-  () => messages.value.length === 0 && !streamingAssistant.value && !pendingAsk.value,
-)
 const emptyPrompt = computed(() => {
   const t = (thread.value.title || '').trim()
   return t && t !== '新对话' ? `我们该在 ${t} 中做什么？` : '今天想搭点什么？'
 })
 
-const scrollEl = ref<HTMLElement | null>(null)
+const conversationRef = ref<{ scrollToBottom: (force?: boolean) => Promise<void> } | null>(null)
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
 let abortCtl: AbortController | null = null
 
@@ -411,18 +367,67 @@ const timeline = computed<TimelineItem[]>(() => {
   return items
 })
 
-function renderMd(text: string): string {
-  if (!text) return ''
-  try {
-    return marked.parse(text) as string
-  } catch {
-    return escapeHtml(text)
-  }
+// AgentConversation 公共契约映射
+const vibeToolExpanded = ref<Record<number, boolean>>({})
+function toggleVibeTool(id: number) {
+  vibeToolExpanded.value[id] = !vibeToolExpanded.value[id]
+}
+function writeFilePreviewArgs(tool: AgentToolPayload): string {
+  const a = tool.args || {}
+  const content = tool.name === 'edit_file' ? (a.new_string || '') : (a.content || '')
+  if (!content) return '（暂无内容）'
+  const lines = content.split('\n')
+  if (lines.length <= 40) return content
+  return lines.slice(0, 40).join('\n') + `\n\n... 还有 ${lines.length - 40} 行`
 }
 
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
-}
+const agentMessages = computed<AgentMessage[]>(() => {
+  const out: AgentMessage[] = []
+  const mapStatus = (s: string): 'pending' | 'running' | 'success' | 'error' =>
+    (s === 'aborted' ? 'error' : (s as any)) || 'pending'
+  for (const item of timeline.value) {
+    if (item.kind === 'user') {
+      out.push({
+        id: item.key,
+        kind: 'user',
+        content: item.content,
+        attachments: item.attachments?.length
+          ? item.attachments.map((a, i) => ({
+              id: i,
+              kind: a.kind === 'image' ? 'image' : 'file',
+              filename: a.filename,
+            }))
+          : undefined,
+      })
+    } else if (item.kind === 'assistant') {
+      out.push({ id: item.key, kind: 'assistant', content: item.content })
+    } else if (item.kind === 'tool') {
+      out.push({
+        id: item.key,
+        kind: 'tool',
+        tool: {
+          id: item.tool.id,
+          name: item.tool.tool_name,
+          args: item.tool.args_json,
+          argsBrief: summarizeArgs(item.tool),
+          result: item.tool.result_text || undefined,
+          status: mapStatus(item.tool.status),
+          duration_ms: item.tool.duration_ms ?? undefined,
+        },
+      })
+    } else if (item.kind === 'ask') {
+      out.push({
+        id: item.key,
+        kind: 'ask',
+        ask: { question: item.question, options: item.options },
+      })
+    }
+  }
+  if (streamingAssistant.value) {
+    out.push({ id: 'streaming', kind: 'streaming', content: streamingAssistant.value, streaming: true })
+  }
+  return out
+})
 
 function toolIcon(name: string): string {
   const map: Record<string, string> = {
@@ -452,16 +457,6 @@ function humanToolName(name: string): string {
     ask_clarifying_question: '澄清提问',
   }
   return map[name] || name
-}
-
-function writeFilePreview(t: VibeChatToolCall): string {
-  const a = t.args_json || {}
-  const content = t.tool_name === 'edit_file' ? (a.new_string || '') : (a.content || '')
-  if (!content) return '（暂无内容）'
-  // 只展示前 40 行，避免单卡过高
-  const lines = content.split('\n')
-  if (lines.length <= 40) return content
-  return lines.slice(0, 40).join('\n') + `\n\n... 还有 ${lines.length - 40} 行`
 }
 
 function summarizeArgs(t: VibeChatToolCall): string {
@@ -572,7 +567,7 @@ async function onClearThread() {
 
 async function scrollToBottom() {
   await nextTick()
-  if (scrollEl.value) scrollEl.value.scrollTop = scrollEl.value.scrollHeight
+  await conversationRef.value?.scrollToBottom(true)
 }
 
 async function answerAsk(option: string) {

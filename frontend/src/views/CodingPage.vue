@@ -337,128 +337,94 @@
 
         <!-- Stream Pane (对话流视图 - Chat 模式) -->
         <div v-else-if="activeView === 'chat'" class="stream-pane">
-          <div class="stream-messages" ref="streamContainerRef">
-            <div
-              v-for="(msg, idx) in streamMessages"
-              :key="idx"
-              class="stream-msg"
-              :class="'msg-' + msg.type"
-            >
-              <!-- 用户消息 -->
-              <template v-if="msg.type === 'user'">
-                <div class="msg-user-bubble user-markdown markdown-body" v-html="renderMarkdown(msg.content)"></div>
-              </template>
-
-              <!-- AI 显式消息（brainstorm 提案等，始终展开，Markdown 渲染） -->
-              <template v-else-if="msg.type === 'message'">
-                <div class="msg-ai-message">
-                  <div class="ai-message-body markdown-body" v-html="renderMarkdown(msg.content)"></div>
-                </div>
-              </template>
-
-              <!-- AI 思考过程（可折叠） -->
-              <template v-else-if="msg.type === 'thinking'">
-                <div class="msg-thinking-card" :class="{ 'is-collapsed': msg.collapsed }">
-                  <div class="thinking-card-header" @click="msg.collapsed = !msg.collapsed">
-                    <svg class="thinking-card-icon" viewBox="0 0 16 16" fill="none">
-                      <circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.2"/>
-                      <path d="M8 5v3.5l2 1.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+          <AgentConversation
+            :messages="agentMessages"
+            :typing="isStreaming"
+            empty-title=""
+            empty-hint=""
+          >
+            <template #custom="{ message }">
+              <template v-if="streamCustom(message)?.sm">
+                <!-- thinking -->
+                <template v-if="streamCustom(message).sm.type === 'thinking'">
+                  <div class="msg-thinking-card" :class="{ 'is-collapsed': streamCustom(message).sm.collapsed }">
+                    <div class="thinking-card-header" @click="streamCustom(message).sm.collapsed = !streamCustom(message).sm.collapsed">
+                      <svg class="thinking-card-icon" viewBox="0 0 16 16" fill="none">
+                        <circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.2"/>
+                        <path d="M8 5v3.5l2 1.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                      </svg>
+                      <span class="thinking-card-label">思考过程</span>
+                      <span class="thinking-card-chars">{{ streamCustom(message).sm.content.length }} 字</span>
+                      <svg class="thinking-card-chevron" :class="{ rotated: !streamCustom(message).sm.collapsed }" viewBox="0 0 16 16" fill="none">
+                        <path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                      </svg>
+                    </div>
+                    <div v-show="!streamCustom(message).sm.collapsed" class="thinking-card-body">
+                      <span class="thinking-text markdown-body" v-html="renderMarkdown(streamCustom(message).sm.content)"></span>
+                      <span v-if="streamCustom(message).isLast && isStreaming" class="thinking-cursor">|</span>
+                    </div>
+                  </div>
+                </template>
+                <!-- status -->
+                <template v-else-if="streamCustom(message).sm.type === 'status'">
+                  <div v-if="streamCustom(message).sm.stepDone" class="msg-step-badge">
+                    <svg class="step-badge-icon" viewBox="0 0 16 16" fill="none">
+                      <circle cx="8" cy="8" r="7" fill="currentColor" opacity="0.15"/>
+                      <path d="M5 8l2.5 2.5L11 5.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
                     </svg>
-                    <span class="thinking-card-label">思考过程</span>
-                    <span class="thinking-card-chars">{{ msg.content.length }} 字</span>
-                    <svg class="thinking-card-chevron" :class="{ rotated: !msg.collapsed }" viewBox="0 0 16 16" fill="none">
-                      <path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-                    </svg>
+                    <span>{{ streamCustom(message).sm.content }}</span>
                   </div>
-                  <div v-show="!msg.collapsed" class="thinking-card-body">
-                    <span class="thinking-text markdown-body" v-html="renderMarkdown(msg.content)"></span>
-                    <span v-if="idx === streamMessages.length - 1 && isStreaming" class="thinking-cursor">|</span>
+                  <div v-else class="msg-status" :class="{ 'status-progress': streamCustom(message).sm.content.endsWith('...') }">
+                    <span class="status-content">{{ streamCustom(message).sm.content }}</span>
                   </div>
-                </div>
-              </template>
-
-              <!-- 状态消息 -->
-              <template v-else-if="msg.type === 'status' && !msg.hidden">
-                <!-- 步骤完成 badge 芯片 -->
-                <div v-if="msg.stepDone" class="msg-step-badge">
-                  <svg class="step-badge-icon" viewBox="0 0 16 16" fill="none">
-                    <circle cx="8" cy="8" r="7" fill="currentColor" opacity="0.15"/>
-                    <path d="M5 8l2.5 2.5L11 5.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-                  </svg>
-                  <span>{{ msg.content }}</span>
-                </div>
-                <!-- 普通状态文字 -->
-                <div v-else class="msg-status" :class="{ 'status-progress': msg.content.endsWith('...') }">
-                  <span class="status-content">{{ msg.content }}</span>
-                </div>
-              </template>
-
-              <!-- 文件写入 / 文件编辑 -->
-              <template v-else-if="msg.type === 'file_write' || msg.type === 'file_edit'">
-                <FileCard
-                  :action="msg.type === 'file_write' ? 'write' : 'edit'"
-                  :file-name="msg.fileName"
-                  :file-content="msg.fileContent"
-                  :collapsed="msg.collapsed"
-                  @toggle="msg.collapsed = !msg.collapsed"
-                />
-              </template>
-
-              <!-- 工具调用（读文件/扫描/搜索等，含可折叠结果） -->
-              <template v-else-if="msg.type === 'tool'">
-                <div class="msg-tool-row" :class="{ 'has-result': msg.result }">
-                  <div class="tool-row-header" @click="msg.result && (msg.resultCollapsed = !msg.resultCollapsed)">
-                    <span class="tool-row-text">{{ msg.content }}</span>
-                    <svg v-if="msg.result" class="tool-row-chevron" :class="{ rotated: !msg.resultCollapsed }" viewBox="0 0 16 16" fill="none">
-                      <path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-                    </svg>
+                </template>
+                <!-- file_write / file_edit -->
+                <template v-else-if="['file_write', 'file_edit'].includes(streamCustom(message).sm.type)">
+                  <FileCard
+                    :action="streamCustom(message).sm.type === 'file_write' ? 'write' : 'edit'"
+                    :file-name="streamCustom(message).sm.fileName"
+                    :file-content="streamCustom(message).sm.fileContent"
+                    :collapsed="streamCustom(message).sm.collapsed"
+                    @toggle="streamCustom(message).sm.collapsed = !streamCustom(message).sm.collapsed"
+                  />
+                </template>
+                <!-- tool -->
+                <template v-else-if="streamCustom(message).sm.type === 'tool'">
+                  <div class="msg-tool-row" :class="{ 'has-result': streamCustom(message).sm.result }">
+                    <div class="tool-row-header" @click="streamCustom(message).sm.result && (streamCustom(message).sm.resultCollapsed = !streamCustom(message).sm.resultCollapsed)">
+                      <span class="tool-row-text">{{ streamCustom(message).sm.content }}</span>
+                      <svg v-if="streamCustom(message).sm.result" class="tool-row-chevron" :class="{ rotated: !streamCustom(message).sm.resultCollapsed }" viewBox="0 0 16 16" fill="none">
+                        <path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                      </svg>
+                    </div>
+                    <div v-if="streamCustom(message).sm.result && !streamCustom(message).sm.resultCollapsed" class="tool-row-result">
+                      <pre>{{ streamCustom(message).sm.result }}</pre>
+                    </div>
                   </div>
-                  <div v-if="msg.result && !msg.resultCollapsed" class="tool-row-result">
-                    <pre>{{ msg.result }}</pre>
+                </template>
+                <!-- command -->
+                <template v-else-if="streamCustom(message).sm.type === 'command'">
+                  <div class="msg-command-card">
+                    <div class="command-card-header">
+                      <span class="command-prompt">$</span>
+                      <span class="command-text">{{ streamCustom(message).sm.content.split('\n')[0] }}</span>
+                    </div>
+                    <pre v-if="streamCustom(message).sm.content.includes('\n')" class="command-output">{{ streamCustom(message).sm.content.split('\n').slice(1).join('\n') }}</pre>
                   </div>
-                </div>
+                </template>
               </template>
+            </template>
 
-              <!-- 命令执行 -->
-              <template v-else-if="msg.type === 'command'">
-                <div class="msg-command-card">
-                  <div class="command-card-header">
-                    <span class="command-prompt">$</span>
-                    <span class="command-text">{{ msg.content.split('\n')[0] }}</span>
-                  </div>
-                  <pre v-if="msg.content.includes('\n')" class="command-output">{{ msg.content.split('\n').slice(1).join('\n') }}</pre>
-                </div>
-              </template>
-
-              <!-- 错误 -->
-              <template v-else-if="msg.type === 'error'">
-                <div class="msg-error-row">
-                  <svg class="error-row-icon" viewBox="0 0 16 16" fill="none">
-                    <circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.4"/>
-                    <path d="M8 5v3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-                    <circle cx="8" cy="11" r="0.75" fill="currentColor"/>
-                  </svg>
-                  <span class="error-row-text">{{ msg.content }}</span>
-                </div>
-              </template>
-            </div>
-
-            <!-- 流式加载指示器 -->
-            <div v-if="isStreaming" class="stream-loading">
-              <span class="stream-dot"></span>
-              <span class="stream-dot"></span>
-              <span class="stream-dot"></span>
-            </div>
-
-            <!-- 完成后的操作区域 -->
-            <div v-if="!isStreaming && pendingIdeUrl" class="stream-actions">
-              <button class="open-ide-btn" @click="openPendingIde">
-                <span class="ide-btn-icon">&#x1F4BB;</span>
-                打开代码编辑器
-              </button>
-              <span class="stream-actions-hint">在编辑器中查看和修改 AI 生成的代码</span>
-            </div>
-          </div>
+            <template #list-suffix>
+              <div v-if="!isStreaming && pendingIdeUrl" class="stream-actions">
+                <button class="open-ide-btn" @click="openPendingIde">
+                  <span class="ide-btn-icon">&#x1F4BB;</span>
+                  打开代码编辑器
+                </button>
+                <span class="stream-actions-hint">在编辑器中查看和修改 AI 生成的代码</span>
+              </div>
+            </template>
+          </AgentConversation>
 
           <!-- Chat 底部输入框（非流式时可用） -->
           <div v-if="!isStreaming" class="chat-input-bar">
@@ -621,6 +587,8 @@ import BuilderFrame from '@/components/BuilderFrame.vue'
 import EnvSelectModal from '@/components/EnvSelectModal.vue'
 import FileCard from '@/components/FileCard.vue'
 import SessionSidebar, { type SessionItem as SidebarSessionItem } from '@/components/common/SessionSidebar.vue'
+import AgentConversation from '@/components/common/AgentConversation.vue'
+import type { AgentMessage } from '@/components/common/agent-conversation/types'
 import { useCodingModel } from './coding/useCodingModel'
 import { useStreamMessages, renderMarkdown } from './coding/useStreamMessages'
 import { useIdeManager } from './coding/useIdeManager'
@@ -783,6 +751,38 @@ const {
 const openingWsId = ref<string | null>(null)
 /** 正在删除的工作区 id */
 const deletingWsId = ref<string | null>(null)
+
+// ── AgentConversation 公共契约映射（保留 streamMessages 原 reactive 对象，slot 直接引用 meta.streamMsg） ──
+const agentMessages = computed<AgentMessage[]>(() => {
+  const list = streamMessages.value
+  const out: AgentMessage[] = []
+  for (let i = 0; i < list.length; i++) {
+    const msg = list[i]!
+    if (msg.type === 'status' && msg.hidden) continue
+    if (msg.type === 'user') {
+      out.push({ id: 'sm' + i, kind: 'user', content: msg.content })
+    } else if (msg.type === 'message') {
+      out.push({ id: 'sm' + i, kind: 'assistant', content: msg.content })
+    } else if (msg.type === 'error') {
+      out.push({ id: 'sm' + i, kind: 'error', content: msg.content })
+    } else {
+      // thinking / status / file_write / file_edit / tool / command — 走 #custom slot
+      const isLast = i === list.length - 1
+      out.push({
+        id: 'sm' + i,
+        kind: 'custom',
+        meta: { streamMsg: msg, isLast },
+      })
+    }
+  }
+  return out
+})
+
+// 把 AgentMessage.meta 解出 streamMsg + isLast — 给 #custom slot 用（避开 TS 严格检查）
+function streamCustom(message: AgentMessage): { sm: any; isLast: boolean } {
+  const meta = (message.meta || {}) as { streamMsg?: any; isLast?: boolean }
+  return { sm: meta.streamMsg || {}, isLast: !!meta.isLast }
+}
 
 // ── 左侧 SessionSidebar 适配 ──
 const sidebarCodingItems = computed<SidebarSessionItem[]>(() =>

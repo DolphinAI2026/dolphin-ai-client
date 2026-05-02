@@ -1,5 +1,5 @@
 <template>
-  <div class="agent-conversation" :class="{ 'theme-dark': themeStore.isDark }" ref="rootRef">
+  <div class="agent-conversation" :class="{ 'theme-dark': themeStore.isDark }">
     <div class="ac-list" ref="listRef" @scroll="onScroll">
       <slot name="list-prefix" />
 
@@ -17,22 +17,22 @@
         <div v-if="isGroup(item)" class="ac-row assistant">
           <div class="ac-avatar tool">⚒</div>
           <div class="ac-bubble process">
-            <div class="ac-tool-group" :class="{ expanded: groupExpanded[item.id], running: groupRunning(item) }">
-              <div class="ac-tool-head" @click="toggleGroup(item.id)">
+            <div class="ac-tool-group" :class="{ expanded: isGroupOpen(item.id, item), running: groupRunning(item) }">
+              <div class="ac-tool-head" @click="toggleGroup(item.id, item)">
                 <span class="ac-tool-icon">{{ toolIcon(item.name) }}</span>
                 <span class="ac-tool-name">{{ item.name }}</span>
                 <span class="ac-group-count">×{{ item.tools.length }}</span>
                 <span class="ac-tool-args">{{ groupSummary(item) }}</span>
                 <span class="ac-tool-toggle">▶</span>
               </div>
-              <div v-if="groupExpanded[item.id]" class="ac-group-body">
+              <div v-if="isGroupOpen(item.id, item)" class="ac-group-body">
                 <ToolCard
                   v-for="t in item.tools"
                   :key="(t.id ?? t.name) + ''"
                   :tool="t"
                   mini
-                  :expanded="!!toolExpanded[String(t.id ?? '')]"
-                  @toggle="toggleTool(String(t.id ?? ''))"
+                  :expanded="isToolOpen(String(t.id ?? ''), t)"
+                  @toggle="toggleTool(String(t.id ?? ''), t)"
                 />
               </div>
             </div>
@@ -81,8 +81,8 @@
               <slot name="tool-renderer" :tool="item.tool" :message="item">
                 <ToolCard
                   :tool="item.tool"
-                  :expanded="!!toolExpanded[String(item.tool.id ?? item.id)]"
-                  @toggle="toggleTool(String(item.tool.id ?? item.id))"
+                  :expanded="isToolOpen(String(item.tool.id ?? item.id), item.tool)"
+                  @toggle="toggleTool(String(item.tool.id ?? item.id), item.tool)"
                 />
               </slot>
             </div>
@@ -146,12 +146,14 @@
 
       <!-- typing indicator -->
       <div v-if="typing" class="ac-row assistant">
-        <div class="ac-avatar">AI</div>
-        <div class="ac-bubble">
-          <div class="ac-typing">
-            <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+        <slot name="typing">
+          <div class="ac-avatar">AI</div>
+          <div class="ac-bubble">
+            <div class="ac-typing">
+              <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+            </div>
           </div>
-        </div>
+        </slot>
       </div>
 
       <slot name="list-suffix" />
@@ -166,7 +168,7 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { marked } from 'marked'
 import { useThemeStore } from '@/stores/theme'
 import ToolCard from './agent-conversation/ToolCard.vue'
-import type { AgentMessage, AgentToolGroup, AgentTimelineItem } from './agent-conversation/types'
+import type { AgentMessage, AgentToolPayload, AgentToolGroup, AgentTimelineItem } from './agent-conversation/types'
 
 marked.setOptions({ breaks: true, gfm: true })
 
@@ -178,6 +180,8 @@ const props = withDefaults(defineProps<{
   toolGrouping?: boolean
   /** 自动滚到底（用户主动向上滚则暂停） */
   autoScroll?: boolean
+  /** running 状态的工具/分组默认展开（用户显式收起后保持收起） */
+  defaultOpenRunning?: boolean
   emptyTitle?: string
   emptyHint?: string
 }>(), {
@@ -185,6 +189,7 @@ const props = withDefaults(defineProps<{
   loading: false,
   toolGrouping: false,
   autoScroll: true,
+  defaultOpenRunning: true,
 })
 
 defineEmits<{
@@ -194,16 +199,27 @@ defineEmits<{
 }>()
 
 const themeStore = useThemeStore()
-const rootRef = ref<HTMLElement>()
 const listRef = ref<HTMLElement>()
 
-const toolExpanded = ref<Record<string, boolean>>({})
-const groupExpanded = ref<Record<string, boolean>>({})
-function toggleTool(id: string) {
-  toolExpanded.value[id] = !toolExpanded.value[id]
+// 三态：'open' / 'closed' / undefined（未显式设置，按默认规则决定）
+const toolState = ref<Record<string, 'open' | 'closed'>>({})
+const groupState = ref<Record<string, 'open' | 'closed'>>({})
+
+function isToolOpen(id: string, tool?: AgentToolPayload): boolean {
+  const explicit = toolState.value[id]
+  if (explicit) return explicit === 'open'
+  return !!props.defaultOpenRunning && tool?.status === 'running'
 }
-function toggleGroup(id: string) {
-  groupExpanded.value[id] = !groupExpanded.value[id]
+function isGroupOpen(id: string, group?: AgentToolGroup): boolean {
+  const explicit = groupState.value[id]
+  if (explicit) return explicit === 'open'
+  return !!props.defaultOpenRunning && !!group && groupRunning(group)
+}
+function toggleTool(id: string, tool?: AgentToolPayload) {
+  toolState.value[id] = isToolOpen(id, tool) ? 'closed' : 'open'
+}
+function toggleGroup(id: string, group?: AgentToolGroup) {
+  groupState.value[id] = isGroupOpen(id, group) ? 'closed' : 'open'
 }
 
 // ── 把同名连续 tool 折叠成 tool_group ──
@@ -320,8 +336,8 @@ onMounted(() => {
 
 defineExpose({
   scrollToBottom,
-  expandTool: (id: string | number) => { toolExpanded.value[String(id)] = true },
-  collapseAllTools: () => { toolExpanded.value = {} },
+  expandTool: (id: string | number) => { toolState.value[String(id)] = 'open' },
+  collapseAllTools: () => { toolState.value = {} },
 })
 </script>
 

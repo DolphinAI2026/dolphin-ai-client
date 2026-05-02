@@ -245,7 +245,6 @@ import {
   TopRight,
 } from '@element-plus/icons-vue'
 import BuilderFrame from '@/components/BuilderFrame.vue'
-import CodingStreamMessages from '@/components/coding/CodingStreamMessages.vue'
 import VibeChatPanel from '@/components/vibe-coding/VibeChatPanel.vue'
 import SessionSidebar, { type SessionItem as SidebarSessionItem } from '@/components/common/SessionSidebar.vue'
 import { ElMessageBox } from 'element-plus'

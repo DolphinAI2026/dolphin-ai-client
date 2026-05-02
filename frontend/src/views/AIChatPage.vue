@@ -60,181 +60,48 @@
       </header>
 
       <!-- 消息流 -->
-      <div class="messages" ref="messagesRef">
-        <div v-if="!currentSession" class="welcome">
-          <template v-if="incomingMode === 'cowork'">
-            <h2><el-icon class="welcome-icon"><Folder /></el-icon> 协作整合材料</h2>
-            <p>把你的所有材料（PDF / Word / Excel / 截图 / 现有文档）拖进来，AI 会先并行读完所有附件，给出综合摘要 + 批量澄清问题，然后产出符合 Builder 规范的标准设计文档。</p>
-          </template>
-          <template v-else>
-            <h2>👋 欢迎使用 AI Chat</h2>
-            <p>新建一个会话，上传材料，让 AI 帮你梳理需求并生成设计文档。</p>
-          </template>
-        </div>
+      <AgentConversation
+        v-if="currentSession"
+        :messages="agentMessages"
+        :typing="isSending && !lastEventIsAsk && !streamingText"
+        :tool-grouping="true"
+        @answer-ask="onAgentAnswerAsk"
+      >
+        <template #artifact="{ artifact }">
+          <div class="artifact-card" @click="openArtifactInPanel(artifact.raw)">
+            <div class="art-card-head">
+              <span class="art-card-icon">📄</span>
+              <span class="art-card-name">{{ artifact.filename }}</span>
+              <span class="art-card-version">v{{ artifact.version }}</span>
+              <button
+                v-if="isMarkdownArtifact(artifact.raw)"
+                class="art-card-handoff"
+                type="button"
+                @click.stop="sendArtifactToBuilderByName(artifact.filename)"
+                title="把这份设计文档交给 Builder 自动搭建"
+              >→ Builder</button>
+              <span class="art-card-arrow">›</span>
+            </div>
+            <div class="art-card-preview" v-if="artifact.preview">{{ artifact.preview }}</div>
+          </div>
+        </template>
+        <template #typing>
+          <div class="ai-avatar pulsing">AI</div>
+          <div class="bubble thinking-bubble">
+            <span class="dots"><span></span><span></span><span></span></span>
+            <span class="thinking-label">{{ thinkingLabel }}</span>
+            <span class="thinking-secs" v-if="durationSec > 0">{{ durationSec }}s</span>
+          </div>
+        </template>
+      </AgentConversation>
+      <div v-else class="welcome">
+        <template v-if="incomingMode === 'cowork'">
+          <h2><el-icon class="welcome-icon"><Folder /></el-icon> 协作整合材料</h2>
+          <p>把你的所有材料（PDF / Word / Excel / 截图 / 现有文档）拖进来，AI 会先并行读完所有附件，给出综合摘要 + 批量澄清问题，然后产出符合 Builder 规范的标准设计文档。</p>
+        </template>
         <template v-else>
-          <div v-for="(item, idx) in renderTimeline" :key="idx" class="timeline-item">
-            <!-- user message -->
-            <div v-if="item.kind === 'msg' && item.msg.role === 'user'" class="msg user">
-              <div class="bubble">
-                <div class="msg-text">{{ item.msg.content }}</div>
-                <div v-if="userMessageAttachments(item.msg).length" class="attach-chips">
-                  <span v-for="a in userMessageAttachments(item.msg)" :key="a.id" class="attach-chip">
-                    <span class="icon">{{ a.kind === 'image' ? '🖼️' : '📄' }}</span>
-                    <span class="name">{{ a.filename }}</span>
-                  </span>
-                </div>
-              </div>
-            </div>
-            <!-- assistant message -->
-            <div v-else-if="item.kind === 'msg' && item.msg.role === 'assistant'" class="msg assistant">
-              <div class="ai-avatar">AI</div>
-              <div class="bubble">
-                <div class="msg-text" v-html="renderMd(item.msg.content)"></div>
-              </div>
-            </div>
-            <!-- tool call -->
-            <div v-else-if="item.kind === 'tool'" class="msg assistant process">
-              <div class="ai-avatar tool">⚒</div>
-              <div class="bubble" style="flex: 1">
-                <div
-                  class="tool-call"
-                  :class="{ expanded: isToolBodyOpen(item.tool), running: item.tool.status === 'running' }"
-                >
-                  <div class="tool-head" @click="toggleTool(item.tool.id)">
-                    <span class="tool-icon">{{ toolIcon(item.tool.tool_name) }}</span>
-                    <span class="tool-name">{{ item.tool.tool_name }}</span>
-                    <span class="tool-args" v-if="toolArgsBrief(item.tool)">{{ toolArgsBrief(item.tool) }}</span>
-                    <span class="tool-duration" v-if="item.tool.duration_ms">{{ (item.tool.duration_ms / 1000).toFixed(1) }}s</span>
-                    <span class="tool-status" :class="item.tool.status">{{ statusGlyph(item.tool.status) }}</span>
-                    <span class="tool-toggle">▶</span>
-                  </div>
-                  <div class="tool-body" v-if="isToolBodyOpen(item.tool)">
-                    <div class="tool-section" v-if="item.tool.args_json">
-                      <div class="tool-section-label">参数</div>
-                      <pre>{{ JSON.stringify(item.tool.args_json, null, 2) }}</pre>
-                    </div>
-                    <div class="tool-section" v-if="item.tool.result_text">
-                      <div class="tool-section-label">输出</div>
-                      <pre>{{ item.tool.result_text }}</pre>
-                    </div>
-                    <div class="tool-section running-hint" v-else-if="item.tool.status === 'running'">
-                      <span class="dots"><span></span><span></span><span></span></span>
-                      <span>执行中…</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <!-- tool group (连续同名工具折叠) -->
-            <div v-else-if="item.kind === 'tool_group'" class="msg assistant process">
-              <div class="ai-avatar tool">⚒</div>
-              <div class="bubble" style="flex: 1">
-                <div
-                  class="tool-group"
-                  :class="{
-                    expanded: isGroupOpen(item.tools),
-                    running: item.tools.some(t => t.status === 'running'),
-                  }"
-                >
-                  <div class="group-head" @click="toggleGroup(item.tools[0].id)">
-                    <span class="tool-icon">{{ toolIcon(item.tools[0].tool_name) }}</span>
-                    <span class="tool-name">{{ item.tools[0].tool_name }}</span>
-                    <span class="group-count">×{{ item.tools.length }}</span>
-                    <span class="tool-args">{{ groupSummary(item.tools) }}</span>
-                    <span class="tool-toggle">▶</span>
-                  </div>
-                  <div class="group-body" v-if="isGroupOpen(item.tools)">
-                    <div
-                      v-for="tool in item.tools"
-                      :key="tool.id"
-                      class="tool-call mini"
-                      :class="{ expanded: isToolBodyOpen(tool), running: tool.status === 'running' }"
-                    >
-                      <div class="tool-head" @click="toggleTool(tool.id)">
-                        <span class="tool-args">{{ toolArgsBrief(tool) }}</span>
-                        <span class="tool-duration" v-if="tool.duration_ms">{{ (tool.duration_ms / 1000).toFixed(1) }}s</span>
-                        <span class="tool-status" :class="tool.status">{{ statusGlyph(tool.status) }}</span>
-                        <span class="tool-toggle">▶</span>
-                      </div>
-                      <div class="tool-body" v-if="isToolBodyOpen(tool)">
-                        <div class="tool-section" v-if="tool.args_json">
-                          <div class="tool-section-label">参数</div>
-                          <pre>{{ JSON.stringify(tool.args_json, null, 2) }}</pre>
-                        </div>
-                        <div class="tool-section" v-if="tool.result_text">
-                          <div class="tool-section-label">输出</div>
-                          <pre>{{ tool.result_text }}</pre>
-                        </div>
-                        <div class="tool-section running-hint" v-else-if="tool.status === 'running'">
-                          <span class="dots"><span></span><span></span><span></span></span>
-                          <span>执行中…</span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <!-- ask_user card -->
-            <div v-else-if="item.kind === 'ask'" class="msg assistant">
-              <div class="ai-avatar">?</div>
-              <div class="bubble">
-                <div class="ask-card">
-                  <div class="ask-q">{{ item.ask.question }}</div>
-                  <div class="ask-options" v-if="item.ask.options?.length">
-                    <button v-for="opt in item.ask.options" :key="opt" class="ask-opt" @click="onAnswerAsk(opt)">{{ opt }}</button>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <!-- 思考（已锁定） -->
-            <div v-else-if="item.kind === 'thinking'" class="msg assistant">
-              <div class="ai-avatar thinking">…</div>
-              <div class="bubble">
-                <div class="thinking-text" v-html="renderMd(item.text)"></div>
-              </div>
-            </div>
-            <!-- 流式中：实时拼接的 assistant 文本 -->
-            <div v-else-if="item.kind === 'streaming'" class="msg assistant">
-              <div class="ai-avatar">AI</div>
-              <div class="bubble">
-                <div class="msg-text" v-html="renderMd(item.text)"></div>
-                <span class="cursor-blink"></span>
-              </div>
-            </div>
-            <!-- 设计文档 inline 卡片（codex 风格） -->
-            <div v-else-if="item.kind === 'artifact_card'" class="msg assistant process">
-              <div class="ai-avatar tool">📄</div>
-              <div class="bubble" style="flex: 1">
-                <div class="artifact-card" @click="openArtifactInPanel(item.artifact)">
-                  <div class="art-card-head">
-                    <span class="art-card-icon">📄</span>
-                    <span class="art-card-name">{{ item.artifact.filename }}</span>
-                    <span class="art-card-version">v{{ item.artifact.version }}</span>
-                    <button
-                      v-if="isMarkdownArtifact(item.artifact)"
-                      class="art-card-handoff"
-                      type="button"
-                      @click.stop="sendArtifactToBuilderByName(item.artifact.filename)"
-                      title="把这份设计文档交给 Builder 自动搭建"
-                    >→ Builder</button>
-                    <span class="art-card-arrow">›</span>
-                  </div>
-                  <div class="art-card-preview" v-if="item.artifact.preview">{{ item.artifact.preview }}</div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- 流式中 typing 指示（仅在没在 stream 输出时显示，避免和 streaming 重影） -->
-          <div v-if="isSending && !lastEventIsAsk && !streamingText" class="msg assistant thinking-row">
-            <div class="ai-avatar pulsing">AI</div>
-            <div class="bubble thinking-bubble">
-              <span class="dots"><span></span><span></span><span></span></span>
-              <span class="thinking-label">{{ thinkingLabel }}</span>
-              <span class="thinking-secs" v-if="durationSec > 0">{{ durationSec }}s</span>
-            </div>
-          </div>
+          <h2>👋 欢迎使用 AI Chat</h2>
+          <p>新建一个会话，上传材料，让 AI 帮你梳理需求并生成设计文档。</p>
         </template>
       </div>
 
@@ -386,6 +253,8 @@ import { usePreviewStore } from '@/stores/preview'
 import { useThemeStore } from '@/stores/theme'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
 import SessionSidebar, { type SessionItem, type SessionTab, type NewSessionOption } from '@/components/common/SessionSidebar.vue'
+import AgentConversation from '@/components/common/AgentConversation.vue'
+import type { AgentMessage } from '@/components/common/agent-conversation/types'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ChatDotRound, Folder } from '@element-plus/icons-vue'
 
@@ -509,64 +378,6 @@ function startAsideResize(e: MouseEvent) {
   document.body.style.userSelect = 'none'
 }
 
-const expandedTools = ref<Set<number>>(new Set())
-const collapsedTools = ref<Set<number>>(new Set())
-const toggleTool = (id: number) => {
-  // running 工具默认展开；点击 = 收起。其余工具默认收起；点击 = 展开。
-  if (expandedTools.value.has(id)) {
-    expandedTools.value.delete(id)
-    collapsedTools.value.add(id)
-  } else if (collapsedTools.value.has(id)) {
-    collapsedTools.value.delete(id)
-    expandedTools.value.add(id)
-  } else {
-    expandedTools.value.add(id)
-  }
-  expandedTools.value = new Set(expandedTools.value)
-  collapsedTools.value = new Set(collapsedTools.value)
-}
-const isToolBodyOpen = (tc: AIChatToolCall): boolean => {
-  if (expandedTools.value.has(tc.id)) return true
-  if (collapsedTools.value.has(tc.id)) return false
-  return tc.status === 'running'
-}
-const expandedGroups = ref<Set<number>>(new Set())
-const collapsedGroups = ref<Set<number>>(new Set())
-const toggleGroup = (gid: number) => {
-  if (expandedGroups.value.has(gid)) {
-    expandedGroups.value.delete(gid)
-    collapsedGroups.value.add(gid)
-  } else if (collapsedGroups.value.has(gid)) {
-    collapsedGroups.value.delete(gid)
-    expandedGroups.value.add(gid)
-  } else {
-    expandedGroups.value.add(gid)
-  }
-  expandedGroups.value = new Set(expandedGroups.value)
-  collapsedGroups.value = new Set(collapsedGroups.value)
-}
-const isGroupOpen = (tools: AIChatToolCall[]): boolean => {
-  const gid = tools[0].id
-  if (expandedGroups.value.has(gid)) return true
-  if (collapsedGroups.value.has(gid)) return false
-  return tools.some(t => t.status === 'running')
-}
-const groupSummary = (tools: AIChatToolCall[]): string => {
-  const n = tools.length
-  if (tools[0].tool_name === 'read_attachment') {
-    const names = tools.map(t => t.args_json?.filename).filter(Boolean)
-    if (names.length <= 2) return names.join(', ')
-    return `${names.slice(0, 2).join(', ')} 等 ${n} 个文件`
-  }
-  if (tools[0].tool_name === 'run_python') {
-    return `${n} 段 Python 代码`
-  }
-  if (tools[0].tool_name === 'write_artifact') {
-    return tools.map(t => t.args_json?.filename).filter(Boolean).join(', ')
-  }
-  return `${n} 次调用`
-}
-
 // 临时存储 ask_user / thinking / artifact_card（流式过程中产生但未持久化的）
 type TransientItem =
   | { kind: 'ask'; ask: { question: string; options: string[]; tc_id: number } }
@@ -674,15 +485,6 @@ const renderMd = (text: string): string => {
   }
 }
 
-const toolIcon = (name: string): string => {
-  return ({
-    read_attachment: '📖',
-    run_python: '🐍',
-    write_artifact: '✏️',
-    ask_clarifying_question: '❓',
-  } as any)[name] || '⚒️'
-}
-
 const toolArgsBrief = (tc: AIChatToolCall): string => {
   const a = tc.args_json || {}
   if (tc.tool_name === 'read_attachment') return a.filename || ''
@@ -690,14 +492,6 @@ const toolArgsBrief = (tc: AIChatToolCall): string => {
   if (tc.tool_name === 'run_python') return (a.code || '').slice(0, 60).replace(/\n/g, ' ') + '…'
   if (tc.tool_name === 'ask_clarifying_question') return a.question?.slice(0, 80) || ''
   return ''
-}
-
-const statusGlyph = (status: string): string => ({ success: '✓', error: '✗', running: '…', pending: '○', aborted: '⨯' } as any)[status] || ''
-
-const formatBytes = (n: number): string => {
-  if (n < 1024) return `${n} B`
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
-  return `${(n / 1024 / 1024).toFixed(2)} MB`
 }
 
 // 把 messages + tool_calls + transient 按时间合成一条线
@@ -816,6 +610,78 @@ const renderTimeline = computed<TLItem[]>(() => {
   if (streamingText.value) items.push({ kind: 'streaming', text: streamingText.value })
   return items
 })
+
+// 把 renderTimeline 映射成 AgentConversation 公共消息契约
+const agentMessages = computed<AgentMessage[]>(() => {
+  const out: AgentMessage[] = []
+  const mapStatus = (s: string): 'pending' | 'running' | 'success' | 'error' =>
+    (s === 'aborted' ? 'error' : (s as any)) || 'pending'
+  const mapTool = (tc: AIChatToolCall) => ({
+    id: tc.id,
+    name: tc.tool_name,
+    args: tc.args_json,
+    argsBrief: toolArgsBrief(tc),
+    result: tc.result_text || undefined,
+    status: mapStatus(tc.status),
+    duration_ms: tc.duration_ms ?? undefined,
+  })
+  for (const item of renderTimeline.value) {
+    if (item.kind === 'msg' && item.msg.role === 'user') {
+      const atts = userMessageAttachments(item.msg)
+      out.push({
+        id: 'm' + item.msg.id,
+        kind: 'user',
+        content: item.msg.content,
+        attachments: atts.length
+          ? atts.map(a => ({ id: a.id, kind: (a.kind === 'image' ? 'image' : 'file') as 'image' | 'file', filename: a.filename }))
+          : undefined,
+      })
+    } else if (item.kind === 'msg' && item.msg.role === 'assistant') {
+      if (item.msg.content) {
+        out.push({ id: 'm' + item.msg.id, kind: 'assistant', content: item.msg.content })
+      }
+    } else if (item.kind === 'tool') {
+      out.push({ id: 't' + item.tool.id, kind: 'tool', tool: mapTool(item.tool) })
+    } else if (item.kind === 'tool_group') {
+      // 把 group 拆开成单条 tool — AgentConversation 内部按需 re-group
+      // 但 AIChatPage 已经预先 collapseTools 了，这里直接传成 group 的"展开形式"
+      // 让 AgentConversation 用 toolGrouping=false 时按单条渲染（连续同名也会单条显示）
+      // 为了保持 group 视觉，我们手动构造一条 group：用 kind='custom' 不行，
+      // 干脆把 toolGrouping 打开 → 但那要求所有同名 tool 连续才会被合并
+      // AIChat 的 collapseTools 保证了 group 内 tool 是连续的，传单条 + toolGrouping=true 即可
+      for (const t of item.tools) {
+        out.push({ id: 't' + t.id, kind: 'tool', tool: mapTool(t) })
+      }
+    } else if (item.kind === 'ask') {
+      out.push({
+        id: 'ask' + item.ask.tc_id,
+        kind: 'ask',
+        ask: { question: item.ask.question, options: item.ask.options },
+      })
+    } else if (item.kind === 'thinking') {
+      out.push({ id: 'tk' + item.ts, kind: 'thinking', thinking: { text: item.text, locked: true } })
+    } else if (item.kind === 'artifact_card') {
+      out.push({
+        id: 'art' + item.artifact.id,
+        kind: 'artifact',
+        artifact: {
+          id: item.artifact.id,
+          filename: item.artifact.filename,
+          version: item.artifact.version,
+          preview: item.artifact.preview || undefined,
+          raw: item.artifact,
+        },
+      })
+    } else if (item.kind === 'streaming') {
+      out.push({ id: 'streaming', kind: 'streaming', content: item.text, streaming: true })
+    }
+  }
+  return out
+})
+
+function onAgentAnswerAsk(option: string) {
+  onAnswerAsk(option)
+}
 
 const lastEventIsAsk = computed(() => {
   // 最后一次工具调用是 ask_clarifying_question success → AI 在等用户回答
