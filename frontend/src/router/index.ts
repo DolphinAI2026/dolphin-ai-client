@@ -49,7 +49,7 @@ const router = createRouter({
     {
       path: '/vibe-coding',
       name: 'OnlineCoding',
-      component: () => import('@/views/OnlineCodingPage.vue'),
+      component: () => import('@/views/OnlineCodingWorkspacePage.vue'),
       meta: { requiresAuth: true, navExpanded: true }
     },
     {

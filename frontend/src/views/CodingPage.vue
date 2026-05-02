@@ -1,5 +1,5 @@
 <template>
-  <BuilderFrame :breadcrumbs="[{ label: '睿鲸AI Coding' }]" :class="{ 'is-embedded': embedMode }">
+  <BuilderFrame :breadcrumbs="[]" :class="{ 'is-embedded': embedMode }">
     <!-- Env Picker Dialog -->
     <el-dialog v-model="showEnvPicker" title="选择调试平台环境" width="500px" :append-to-body="true">
       <div v-if="platformEnvs.length === 0" style="text-align:center;color:#999;padding:20px;">
@@ -29,6 +29,20 @@
     </el-dialog>
 
     <div class="coding-body">
+      <SessionSidebar
+        v-if="!embedMode && !embeddedAppId"
+        module-name="AI 编码"
+        brand-color="#6366f1"
+        :sessions="sidebarCodingItems"
+        :active-id="sidebarCodingActiveId"
+        :new-label="'+ 新建组件'"
+        collapse-key="coding:aside-collapsed"
+        :empty-hint="'还没有组件，点上面新建一个'"
+        @select="onSidebarCodingSelect"
+        @create="onSidebarCodingCreate"
+        @delete="onSidebarCodingDelete"
+        :enable-rename="false"
+      />
       <!-- Main Content: Welcome or IDE -->
       <div class="main-content">
         <!-- 非嵌入模式顶部工具栏：返回 + Chat/IDE 切换 -->
@@ -606,6 +620,7 @@ import { useThemeStore } from '@/stores/theme'
 import BuilderFrame from '@/components/BuilderFrame.vue'
 import EnvSelectModal from '@/components/EnvSelectModal.vue'
 import FileCard from '@/components/FileCard.vue'
+import SessionSidebar, { type SessionItem as SidebarSessionItem } from '@/components/common/SessionSidebar.vue'
 import { useCodingModel } from './coding/useCodingModel'
 import { useStreamMessages, renderMarkdown } from './coding/useStreamMessages'
 import { useIdeManager } from './coding/useIdeManager'
@@ -768,6 +783,54 @@ const {
 const openingWsId = ref<string | null>(null)
 /** 正在删除的工作区 id */
 const deletingWsId = ref<string | null>(null)
+
+// ── 左侧 SessionSidebar 适配 ──
+const sidebarCodingItems = computed<SidebarSessionItem[]>(() =>
+  (existingWorkspaces.value || []).map((ws: any) => ({
+    id: ws.id,
+    title: workspaceDisplayName(ws) || ws.id,
+    meta: workspaceCodeName(ws) || undefined,
+  }))
+)
+const sidebarCodingActiveId = computed<string | null>(() => codingStore.workspace?.id || null)
+
+async function onSidebarCodingSelect(id: string | number) {
+  const wsId = String(id)
+  if (sidebarCodingActiveId.value === wsId) return
+  if (openingWsId.value) return
+  openingWsId.value = wsId
+  try {
+    await openWorkspaceById(wsId)
+  } finally {
+    openingWsId.value = null
+  }
+}
+function onSidebarCodingCreate() {
+  startNewWorkspace()
+}
+async function onSidebarCodingDelete(s: SidebarSessionItem) {
+  const target = (existingWorkspaces.value || []).find((w: any) => w.id === s.id)
+  if (!target) return
+  try {
+    await ElMessageBox.confirm(`删除组件「${s.title}」吗？该工作区会一并清理。`, '删除组件', {
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      type: 'warning',
+      confirmButtonClass: 'el-button--danger',
+    })
+    deletingWsId.value = target.id
+    await codingApi.deleteWorkspace(target.id)
+    allWorkspaces.value = allWorkspaces.value.filter((w: any) => w.id !== target.id)
+    if (codingStore.workspace?.id === target.id) {
+      startNewWorkspace()
+    }
+    ElMessage.success('已删除')
+  } catch {
+    /* user cancelled */
+  } finally {
+    deletingWsId.value = null
+  }
+}
 
 const embeddedPanelCollapsed = ref(false)
 
@@ -1079,7 +1142,8 @@ async function openWorkspaceById(wsId: string) {
       const { ide_url } = await codingApi.getIdeUrl(ws.id, workspaceConversation.conversation_id, themeStore.mode)
       setWebIdeAvailable()
       await setIdeUrl(ide_url)
-      activeView.value = 'ide'
+      // 打开工作区默认进 chat 视图，IDE 由用户自己切（避免一进来就被 IDE iframe 接管屏幕）
+      activeView.value = 'chat'
     } catch (error: any) {
       if (isIdeUnavailableError(error)) {
         notifyWebIdeUnavailable('当前环境未配置 Web IDE，已进入对话开发模式')

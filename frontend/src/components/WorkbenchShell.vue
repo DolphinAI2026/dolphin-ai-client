@@ -5,6 +5,7 @@
       <slot />
     </div>
     <BuilderCommandPalette />
+    <HelpAssistant v-if="showNav" />
   </div>
 </template>
 
@@ -13,6 +14,7 @@ import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import BuilderNavRail from '@/components/BuilderNavRail.vue'
 import BuilderCommandPalette from '@/components/BuilderCommandPalette.vue'
+import HelpAssistant from '@/components/HelpAssistant.vue'
 
 const route = useRoute()
 const showNav = computed(() => route.query.embed_nav !== '0')

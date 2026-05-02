@@ -71,9 +71,9 @@ const userStore = useUserStore()
 const navItems = computed(() => [
   { key: 'home', label: '首页', path: '/', icon: HomeFilled },
   { key: 'apps', label: '应用', path: '/apps', icon: Grid },
-  { key: 'ai-chat', label: 'AI Chat', path: '/ai-chat', icon: ChatLineRound },
-  { key: 'chat', label: 'AI-Builder', path: '/chat', icon: MagicStick },
-  { key: 'ide', label: 'IDE', path: '/coding', icon: Monitor },
+  { key: 'ai-chat', label: 'AI 对话', path: '/ai-chat', icon: ChatLineRound },
+  { key: 'chat', label: 'AI 搭建', path: '/chat', icon: MagicStick },
+  { key: 'ide', label: 'AI 编码', path: '/coding', icon: Monitor },
   { key: 'online-coding', label: 'Vibe Coding', path: '/vibe-coding', icon: Connection },
   { key: 'devops', label: 'DevOps', path: '/devops', icon: Promotion },
   ...(userStore.isTenantAdmin ? [{ key: 'members', label: '成员管理', path: '/tenant-users', icon: UserFilled }] : []),

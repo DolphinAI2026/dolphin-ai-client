@@ -1,5 +1,22 @@
 <template>
   <WorkbenchShell>
+  <div class="chat-page-shell">
+    <SessionSidebar
+      v-if="!embedMode"
+      module-name="AI 搭建"
+      brand-color="#8b5cf6"
+      :sessions="sidebarSessionItems"
+      :active-id="sidebarActiveAppId"
+      :new-label="'+ 新建应用'"
+      back-route="/apps"
+      back-label="返回应用"
+      collapse-key="aibuilder:aside-collapsed"
+      :empty-hint="'还没有应用，点上面新建一个'"
+      @select="onSidebarSelectApp"
+      @create="onSidebarCreateApp"
+      @rename="onSidebarRenameApp"
+      @delete="onSidebarDeleteApp"
+    />
   <div class="chat-page">
     <TopBar v-if="!embedMode" title="" show-back :show-home="false" back-to="/apps">
       <template #center>
@@ -1086,6 +1103,7 @@
       </template>
     </el-dialog>
   </div><!-- /chat-page -->
+  </div><!-- /chat-page-shell -->
   </WorkbenchShell>
 </template>
 
@@ -1127,6 +1145,7 @@ import { buildPlatformProxyEntryUrl, repairPlatformIframe } from '@/utils/platfo
 import type { ConversationCreate, Message } from '@/types'
 import TopBar from '@/components/TopBar.vue'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
+import SessionSidebar, { type SessionItem as SidebarSessionItem } from '@/components/common/SessionSidebar.vue'
 import StructuredDocRenderer from '@/components/StructuredDocRenderer.vue'
 import StructuredDocDiffRenderer from '@/components/StructuredDocDiffRenderer.vue'
 import { llmConfigApi, type BuilderModelOption } from '@/api/llmConfig'
@@ -1146,6 +1165,90 @@ const activeProjectId = computed(() => {
   const parsed = Number(raw)
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined
 })
+
+// ── 左侧 SessionSidebar：列出当前用户的应用作为"会话"列表 ──
+const sidebarApps = ref<any[]>([])
+const sidebarLoadedOnce = ref(false)
+async function loadSidebarApps() {
+  try {
+    const apps = await applicationApi.list({ include_remote: false }) as any[]
+    sidebarApps.value = Array.isArray(apps) ? apps : []
+    sidebarLoadedOnce.value = true
+  } catch (e) {
+    // 静默失败：sidebar 是辅助导航，不应阻塞主流程
+    sidebarLoadedOnce.value = true
+  }
+}
+const sidebarActiveAppId = computed<number | null>(() => {
+  const raw = route.query.app_id || route.params.id
+  const v = Array.isArray(raw) ? raw[0] : raw
+  const parsed = Number(v)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+})
+const sidebarSessionItems = computed<SidebarSessionItem[]>(() =>
+  sidebarApps.value.map(app => ({
+    id: app.id,
+    title: app.app_name || app.name || `应用 #${app.id}`,
+    meta: app.app_code || app.code || undefined,
+  }))
+)
+// 与 Apps.vue 的 appWorkspaceQuery 对齐：已生成应用进 SPEC/Update 工作台，否则进搭建会话
+function buildSidebarAppQuery(app: any): Record<string, string> {
+  const appId = String(app.id)
+  const isGenerated = !!(app.apaas_app_id || app.local_status === 'completed' || app.status === 'completed')
+  if (isGenerated) return { app_id: appId, tab: 'spec', workspace: 'update' }
+  return { app_id: appId }
+}
+function onSidebarSelectApp(id: string | number) {
+  const appId = Number(id)
+  if (!Number.isFinite(appId) || appId <= 0) return
+  if (sidebarActiveAppId.value === appId) return
+  const target = sidebarApps.value.find(a => Number(a.id) === appId)
+  if (!target) return
+  router.push({ path: '/chat', query: buildSidebarAppQuery(target) }).catch(() => {})
+}
+function onSidebarCreateApp() {
+  router.push({ path: '/chat' }).catch(() => {})
+}
+async function onSidebarRenameApp(s: SidebarSessionItem) {
+  try {
+    const { value } = await ElMessageBox.prompt('重命名应用', '编辑名称', {
+      inputValue: s.title,
+      confirmButtonText: '保存',
+      cancelButtonText: '取消',
+      inputValidator: v => (v && v.trim().length > 0 ? true : '名称不能为空'),
+    })
+    const newName = String(value || '').trim()
+    const target = sidebarApps.value.find(x => x.id === Number(s.id))
+    if (!target) return
+    await applicationApi.update(Number(s.id), {
+      app_name: newName,
+      app_code: target.app_code || target.code || '',
+    })
+    target.app_name = newName
+    ElMessage.success('已重命名')
+  } catch {
+    /* user cancelled */
+  }
+}
+async function onSidebarDeleteApp(s: SidebarSessionItem) {
+  try {
+    await ElMessageBox.confirm(`确认删除应用「${s.title}」吗？此操作不可撤销。`, '删除应用', {
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      type: 'warning',
+      confirmButtonClass: 'el-button--danger',
+    })
+    await applicationApi.delete(Number(s.id))
+    sidebarApps.value = sidebarApps.value.filter(x => x.id !== Number(s.id))
+    if (sidebarActiveAppId.value === Number(s.id)) {
+      router.push({ path: '/chat' }).catch(() => {})
+    }
+    ElMessage.success('已删除')
+  } catch {
+    /* user cancelled */
+  }
+}
 const store = usePreviewStore()
 const userStore = useUserStore()
 const specStore = useSpecStore()
@@ -7007,6 +7110,8 @@ function handleMessageAction(action: { kind?: string; label?: string }) {
 onMounted(async () => {
   store.showConnectModal = false
   const initialPrompt = typeof route.query.prompt === 'string' ? route.query.prompt : ''
+  // 加载左侧 sidebar 应用列表（不阻塞主流程）
+  if (!embedMode.value) loadSidebarApps()
 
   // ── 防状态残留：从其他页面（Landing 等）进来时，如果路由里既没 app_id
   // 也没 conversation id，说明是"全新对话"场景，必须先清掉上一次挂在 store
@@ -7448,7 +7553,8 @@ watch(conversationId, (id) => {
    See theme definition for variable values.
    ══════════════════════════════════════════════ */
 
-.chat-page { height: 100vh; display: flex; flex-direction: column; background: var(--t-bg-base); color: var(--t-text-primary); }
+.chat-page-shell { height: 100vh; display: flex; flex-direction: row; min-width: 0; min-height: 0; }
+.chat-page { flex: 1; min-width: 0; height: 100%; display: flex; flex-direction: column; background: var(--t-bg-base); color: var(--t-text-primary); }
 
 /* ── 导航栏 ── */
 /* ── 精简顶栏 ── */

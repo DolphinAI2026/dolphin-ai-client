@@ -94,6 +94,7 @@ export interface MergedApplication {
   apaas_app_id?: string
   apaas_url?: string
   conversation_id?: number
+  canonical_spec_id?: string | null
   models: number
   forms: number
   roles: number

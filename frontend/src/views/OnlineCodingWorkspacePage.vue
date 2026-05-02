@@ -41,12 +41,22 @@
         <!-- code-server iframe 自带刷新（⌘R）+ 命令面板，已经够用 -->
         <!-- 旧的 oc-runtime-panel/runtimeRunning 只对 host 模式 vue-cli 有效，docker 沙箱时间线下不再使用 -->
       </template>
-      <button class="oc-top-btn" type="button" @click="goWorkspaceList">
-        <el-icon><ArrowLeft /></el-icon>
-        <span>工作区列表</span>
-      </button>
     </template>
 
+    <div class="oc-shell-row">
+      <SessionSidebar
+        module-name="Vibe Coding"
+        brand-color="#0ea5e9"
+        :sessions="sidebarVibeItems"
+        :active-id="sidebarVibeActiveId"
+        :new-label="'+ 新建工作区'"
+        collapse-key="vibe:aside-collapsed"
+        :empty-hint="'还没有工作区，点上面新建一个'"
+        :enable-rename="false"
+        @select="onSidebarVibeSelect"
+        @create="onSidebarVibeCreate"
+        @delete="onSidebarVibeDelete"
+      />
     <main class="oc-page builder-page is-ide-view" :class="{ 'has-preview-panel': showPreviewPanel }">
       <div v-if="loading" class="oc-loading">加载 Vibe Coding 工作区...</div>
 
@@ -218,6 +228,7 @@
         </section>
       </template>
     </main>
+    </div><!-- /.oc-shell-row -->
   </BuilderFrame>
 </template>
 
@@ -226,7 +237,6 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
-  ArrowLeft,
   ChatDotRound,
   CircleCheck,
   Delete,
@@ -237,6 +247,8 @@ import {
 import BuilderFrame from '@/components/BuilderFrame.vue'
 import CodingStreamMessages from '@/components/coding/CodingStreamMessages.vue'
 import VibeChatPanel from '@/components/vibe-coding/VibeChatPanel.vue'
+import SessionSidebar, { type SessionItem as SidebarSessionItem } from '@/components/common/SessionSidebar.vue'
+import { ElMessageBox } from 'element-plus'
 import {
   onlineCodingApi,
   type OnlineCodingWorkspace,
@@ -254,12 +266,9 @@ const themeStore = useThemeStore()
 // chat 面板的 ref — 让顶部 actions 能取到 thread.title 并触发清空
 const chatPanelRef = ref<any>(null)
 
-// 顶部面包屑：'Vibe Coding / {对话标题}'（chat 视图）或 'Vibe Coding / {workspace 名}'（ide 视图）
+// 顶部面包屑：sidebar 已显示模块名"Vibe Coding"，breadcrumb 只显示具体工作区/对话名（避免重复）
 const topBreadcrumbs = computed<Array<{ label: string; to?: string }>>(() => {
-  const crumbs: Array<{ label: string; to?: string }> = [
-    { label: 'Vibe Coding', to: '/vibe-coding' },
-  ]
-  // chat 视图下用 thread title（已在 chat panel 中可编辑）
+  const crumbs: Array<{ label: string; to?: string }> = []
   if (chatPanelRef.value?.thread?.title) {
     crumbs.push({ label: chatPanelRef.value.thread.title })
   } else if (workspace.value) {
@@ -456,7 +465,10 @@ const showPreviewPanel = computed(() => (
   Boolean(runtimePreviewUrl.value)
 ))
 
-onMounted(loadFromRoute)
+onMounted(() => {
+  loadFromRoute()
+  loadSidebarVibeWorkspaces()
+})
 
 watch(
   () => [route.params.id, route.query.view, route.query.prompt],
@@ -464,6 +476,60 @@ watch(
     void loadFromRoute()
   },
 )
+
+// ── 左侧 SessionSidebar：Vibe Coding 工作区列表 ──
+const sidebarVibeWorkspaces = ref<OnlineCodingWorkspace[]>([])
+async function loadSidebarVibeWorkspaces() {
+  try {
+    const list = await onlineCodingApi.listWorkspaces()
+    sidebarVibeWorkspaces.value = Array.isArray(list) ? list : []
+  } catch {
+    /* 静默失败，sidebar 是辅助导航 */
+  }
+}
+function vibeWorkspaceTitle(ws: OnlineCodingWorkspace): string {
+  const repo = (ws.repo_url || '').trim().replace(/\/+$/, '')
+  if (repo) {
+    const last = repo.split('/').filter(Boolean).pop() || ''
+    return last.replace(/\.git$/i, '') || ws.id
+  }
+  const task = (ws.task || '').trim()
+  return task ? (task.length > 24 ? task.slice(0, 24) + '…' : task) : ws.id
+}
+const sidebarVibeItems = computed<SidebarSessionItem[]>(() =>
+  sidebarVibeWorkspaces.value.map(ws => ({
+    id: ws.id,
+    title: vibeWorkspaceTitle(ws),
+    meta: ws.status === 'repo_imported' ? '已导入' : ws.status === 'import_failed' ? '需处理' : '待导入',
+  }))
+)
+const sidebarVibeActiveId = computed<string | null>(() => workspace.value?.id || null)
+function onSidebarVibeSelect(id: string | number) {
+  const wid = String(id)
+  if (sidebarVibeActiveId.value === wid) return
+  router.push(`/vibe-coding/workspaces/${wid}`).catch(() => {})
+}
+function onSidebarVibeCreate() {
+  router.push('/vibe-coding/new').catch(() => {})
+}
+async function onSidebarVibeDelete(s: SidebarSessionItem) {
+  try {
+    await ElMessageBox.confirm(`移除工作区「${s.title}」？此操作会清理本地副本。`, '移除工作区', {
+      confirmButtonText: '移除',
+      cancelButtonText: '取消',
+      type: 'warning',
+      confirmButtonClass: 'el-button--danger',
+    })
+    await onlineCodingApi.deleteWorkspace(String(s.id))
+    sidebarVibeWorkspaces.value = sidebarVibeWorkspaces.value.filter(w => w.id !== String(s.id))
+    if (workspace.value?.id === String(s.id)) {
+      router.push('/vibe-coding').catch(() => {})
+    }
+    ElMessage.success('已移除')
+  } catch {
+    /* user cancelled */
+  }
+}
 
 async function loadFromRoute() {
   const id = routeWorkspaceId.value
@@ -491,6 +557,10 @@ async function loadFromRoute() {
     if (isWorkspaceReady(loaded)) {
       await prepareStudio()
       await openIde(false)
+      // 尊重 URL ?view=ide：用户从 IDE 视图退出/刷新进来时仍回 IDE
+      if (route.query.view === 'ide') {
+        activeView.value = 'ide'
+      }
     } else {
       resetRuntimeState()
       seedImportStream(loaded)
@@ -598,7 +668,8 @@ async function submitWorkspace() {
 async function prepareStudio() {
   const current = workspace.value
   if (!current) return
-  activeView.value = 'ide'
+  // 默认进 chat 视图，IDE 由用户主动切
+  activeView.value = 'chat'
   specConfirmed.value = Boolean(current.spec_confirmed)
   specDraft.value = current.spec_draft || buildSpecDraft(current.task || '待补充开发目标')
   devStage.value = specConfirmed.value ? 'confirmed' : current.task ? 'spec' : 'discovery'
@@ -760,8 +831,10 @@ async function openIde(syncRoute = true) {
   try {
     const result = await onlineCodingApi.getIdeUrl(current.id, themeStore.mode)
     ideUrl.value = result.ide_url
-    activeView.value = 'ide'
+    // 仅在用户主动调用（syncRoute=true）时切到 IDE 视图；
+    // loadFromRoute 等"预加载 ide_url"场景保持 chat 视图。
     if (syncRoute) {
+      activeView.value = 'ide'
       await router.replace({ path: `/vibe-coding/workspaces/${current.id}`, query: { view: 'ide' } })
     }
   } catch (error: any) {
@@ -1174,17 +1247,24 @@ function shortPath(pathName: string) {
 function fileName(filePath: string) {
   return filePath.split('/').pop() || filePath
 }
-
-function goWorkspaceList() {
-  router.push('/vibe-coding')
-}
 </script>
 
 <style scoped>
+.oc-shell-row {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  min-width: 0;
+  min-height: 0;
+}
 .oc-page {
+  flex: 1;
+  min-width: 0;
   min-height: calc(100vh - 64px);
   padding: 22px;
-  background: #f6f8fc;
+  background: var(--t-bg-base, #f6f8fc);
+  color: var(--t-text-primary);
+  overflow: auto;
 }
 
 .oc-loading {
@@ -1288,7 +1368,7 @@ function goWorkspaceList() {
 }
 
 .oc-field span {
-  color: #475569;
+  color: var(--t-text-secondary, #475569);
   font-size: 12px;
   font-weight: 760;
 }
@@ -1298,11 +1378,11 @@ function goWorkspaceList() {
 .oc-composer textarea,
 .oc-spec-editor {
   width: 100%;
-  border: 1px solid rgba(116, 128, 171, 0.18);
+  border: 1px solid var(--t-border-subtle, rgba(116, 128, 171, 0.18));
   border-radius: 12px;
   outline: none;
-  background: #fff;
-  color: #111827;
+  background: var(--t-bg-input, #fff);
+  color: var(--t-text-primary, #111827);
   font-family: inherit;
   font-size: 14px;
   line-height: 1.55;
@@ -1388,24 +1468,25 @@ function goWorkspaceList() {
   display: grid;
   place-items: center;
   padding: 32px;
-  background: #f6f8fc;
+  background: var(--t-bg-base, #f6f8fc);
 }
 
 .oc-git-card {
   width: min(720px, 100%);
-  border: 1px solid rgba(116, 128, 171, 0.16);
+  border: 1px solid var(--t-border-subtle, rgba(116, 128, 171, 0.16));
   border-radius: 16px;
-  background: rgba(255, 255, 255, 0.98);
-  box-shadow: 0 18px 48px rgba(38, 48, 84, 0.08);
+  background: var(--t-bg-elevated, #fff);
+  color: var(--t-text-primary);
+  box-shadow: var(--t-shadow-md, 0 18px 48px rgba(38, 48, 84, 0.08));
   padding: 20px;
 }
 
 .oc-git-note {
   margin: 16px 0 18px;
-  border: 1px solid rgba(83, 109, 254, 0.14);
+  border: 1px solid var(--t-brand-subtle, rgba(83, 109, 254, 0.14));
   border-radius: 12px;
-  background: rgba(83, 109, 254, 0.06);
-  color: #526179;
+  background: var(--t-brand-subtle, rgba(83, 109, 254, 0.06));
+  color: var(--t-text-secondary, #526179);
   padding: 12px 14px;
   font-size: 13px;
   line-height: 1.65;
@@ -1485,14 +1566,10 @@ function goWorkspaceList() {
   flex: 1 1 auto;
   min-height: 0;
   padding: 0;
-  background: #ffffff;
+  background: var(--t-bg-base, #ffffff);
   overflow: hidden;
   display: flex;
   flex-direction: column;
-}
-
-:global(html[data-theme="dark"]) .oc-page.is-ide-view {
-  background: #0d1117;
 }
 
 .oc-studio-header {
@@ -2452,4 +2529,5 @@ function goWorkspaceList() {
   border-color: #eef2ff;
   color: #111318;
 }
+
 </style>

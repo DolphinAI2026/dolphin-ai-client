@@ -34,7 +34,9 @@ logger = logging.getLogger(__name__)
 class PromoteRequest(BaseModel):
     title: str
     description: Optional[str] = None
-    draft_spec_id: str  # 必填：要 promote 的 personal draft
+    # 显式指定 draft 时填；不填则后端自动用 application 当前 spec_id
+    # （前提：application.spec_id 存在且不等于 canonical_spec_id）
+    draft_spec_id: Optional[str] = None
 
 
 class UpdateProposalRequest(BaseModel):
@@ -72,8 +74,38 @@ async def promote_to_proposal(
         minimum_role="contributor",
     )
 
+    # 解析 draft_spec_id：优先用前端显式传入；否则查 application 最新 draft（kind='draft' 按 created_at 倒序）
+    # —— 让 DevOps 这种没有"打开 SPEC 编辑器"上下文的入口也能直接 promote
+    effective_draft_id = req.draft_spec_id
+    if not effective_draft_id:
+        from app.models.spec import Spec as SpecORM
+        latest_draft_stmt = (
+            select(SpecORM)
+            .where(
+                SpecORM.application_id == application_id,
+                SpecORM.tenant_id == ctx.tenant_id,
+                SpecORM.kind == "draft",
+            )
+            .order_by(SpecORM.created_at.desc())
+            .limit(1)
+        )
+        latest_draft = (await db.execute(latest_draft_stmt)).scalar_one_or_none()
+        if latest_draft:
+            effective_draft_id = latest_draft.id
+
+    if not effective_draft_id:
+        raise HTTPException(
+            422,
+            "当前应用没有可 promote 的 draft，请先在 AI 搭建里编辑 SPEC",
+        )
+    if app.canonical_spec_id and effective_draft_id == app.canonical_spec_id:
+        raise HTTPException(
+            422,
+            "draft 与已 apply 的 canonical 一致，没有可发布的变更",
+        )
+
     # 验证 draft 存在且属于当前 tenant
-    draft = await load_spec(db, req.draft_spec_id, tenant_id=ctx.tenant_id)
+    draft = await load_spec(db, effective_draft_id, tenant_id=ctx.tenant_id)
     if not draft:
         raise HTTPException(404, "draft spec 不存在")
 
@@ -158,6 +190,49 @@ async def _load_proposal_or_404(db: AsyncSession, proposal_id: str):
     if not pv:
         raise HTTPException(404, "提案不存在")
     return pv
+
+
+@prop_router.get("")
+async def list_all_proposals(
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    status: Optional[str] = None,
+    actionable: bool = False,
+):
+    """跨应用列出当前 tenant 的所有 proposal（DevOps 审批中心用）。
+
+    - `status` 精确过滤单个状态
+    - `actionable=true` 等价于 status IN (open, changes_requested, approved, apply_failed)
+      —— 即所有需要"有人推一把"的状态
+    """
+    actionable_states = ("open", "changes_requested", "approved", "apply_failed")
+    stmt = (
+        select(ChangeProposal, Application.app_name, Application.app_code)
+        .join(Application, Application.id == ChangeProposal.application_id)
+        .where(Application.tenant_id == ctx.tenant_id)
+    )
+    if status:
+        stmt = stmt.where(ChangeProposal.status == status)
+    elif actionable:
+        stmt = stmt.where(ChangeProposal.status.in_(actionable_states))
+    stmt = stmt.order_by(ChangeProposal.created_at.desc())
+    rows = (await db.execute(stmt)).all()
+    return [
+        {
+            "id": p.id,
+            "application_id": p.application_id,
+            "app_name": app_name,
+            "app_code": app_code,
+            "title": p.title,
+            "status": p.status,
+            "created_by": p.created_by,
+            "created_at": p.created_at.isoformat() if p.created_at else None,
+            "applied_at": p.applied_at.isoformat() if p.applied_at else None,
+            "draft_spec_id": p.draft_spec_id,
+            "base_canonical_spec_id": p.base_canonical_spec_id,
+        }
+        for (p, app_name, app_code) in rows
+    ]
 
 
 @prop_router.get("/{proposal_id}")

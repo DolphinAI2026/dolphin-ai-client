@@ -5,103 +5,26 @@
     :class="[themeStore.isDark ? 'theme-dark' : 'theme-light', { 'aside-collapsed': asideCollapsed }]"
   >
     <!-- ═══════ 左侧 sessions ═══════ -->
-    <aside class="aside-left">
-      <template v-if="!asideCollapsed">
-        <div class="aside-head">
-          <div class="brand"><span class="brand-dot"></span>AI Chat</div>
-          <button
-            class="aside-toggle"
-            @click="setAsideCollapsed(true)"
-            title="收起会话列表"
-          >«</button>
-        </div>
-        <el-dropdown trigger="click" placement="bottom-start" @command="onCreateSession">
-          <button class="new-btn">
-            <span>+ 新会话</span>
-            <span class="new-btn-caret">▾</span>
-          </button>
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item command="chat">
-                <div class="new-session-option">
-                  <div class="new-session-option-title">
-                    <el-icon class="mode-icon chat"><ChatDotRound /></el-icon>
-                    <span>Chat 会话</span>
-                  </div>
-                  <div class="new-session-option-hint">从零对话理需求</div>
-                </div>
-              </el-dropdown-item>
-              <el-dropdown-item command="cowork">
-                <div class="new-session-option">
-                  <div class="new-session-option-title">
-                    <el-icon class="mode-icon cowork"><Folder /></el-icon>
-                    <span>Cowork 会话</span>
-                  </div>
-                  <div class="new-session-option-hint">批量材料整合成标准 md</div>
-                </div>
-              </el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
-        <!-- 模式分组 tab：全部 / Chat / Cowork -->
-        <div class="session-filter-tabs">
-          <button
-            v-for="tab in sessionFilterTabs"
-            :key="tab.key"
-            class="filter-tab"
-            :class="{ active: sessionsFilter === tab.key }"
-            @click="sessionsFilter = tab.key"
-            :title="tab.title"
-          >
-            <el-icon v-if="tab.key === 'chat'" class="filter-tab-icon"><ChatDotRound /></el-icon>
-            <el-icon v-else-if="tab.key === 'cowork'" class="filter-tab-icon"><Folder /></el-icon>
-            <span>{{ tab.label }}</span>
-            <span class="filter-tab-count">{{ tab.count }}</span>
-          </button>
-        </div>
-        <div class="session-list">
-          <div
-            v-for="s in filteredSessions"
-            :key="s.id"
-            class="session-item"
-            :class="{ active: currentSessionId === s.id }"
-            @click="loadSession(s.id)"
-            :title="`${s.title}${s.mode === 'cowork' ? '（Cowork 协作整合模式）' : ''}`"
-          >
-            <el-icon v-if="s.mode === 'cowork'" class="session-mode-badge cowork" title="Cowork 协作整合模式"><Folder /></el-icon>
-            <span class="session-name">{{ s.title }}</span>
-            <button class="session-menu-btn" @click.stop="onRenameSession(s)" title="重命名">✎</button>
-            <button class="session-menu-btn danger" @click.stop="onDeleteSession(s)" title="删除">×</button>
-          </div>
-          <div v-if="filteredSessions.length === 0" class="empty-hint">
-            {{ sessionsFilter === 'all' ? '还没有会话，点上面新建一个' : `还没有 ${sessionsFilter === 'cowork' ? 'Cowork' : 'Chat'} 模式的会话` }}
-          </div>
-        </div>
-        <div class="aside-foot">
-          <button class="back-btn" @click="$router.push('/apps')">← 返回应用</button>
-        </div>
-      </template>
-      <template v-else>
-        <div class="aside-rail">
-          <button
-            class="rail-btn"
-            @click="setAsideCollapsed(false)"
-            title="展开会话列表"
-          >»</button>
-          <button
-            class="rail-btn"
-            @click="onCreateSession('chat')"
-            title="新建 Chat 会话（展开侧栏可选 Cowork）"
-          >+</button>
-          <div class="rail-spacer"></div>
-          <button
-            class="rail-btn"
-            @click="$router.push('/apps')"
-            title="返回应用"
-          >←</button>
-        </div>
-      </template>
-    </aside>
+    <SessionSidebar
+      module-name="AI 对话"
+      brand-color="#f59e0b"
+      :sessions="sessionItems"
+      :active-id="currentSessionId"
+      :tabs="sidebarTabs"
+      :active-tab-key="sessionsFilter"
+      :new-options="newSessionOptions"
+      :collapsible="true"
+      collapse-key="aichat:aside-collapsed"
+      back-route="/apps"
+      back-label="返回应用"
+      :empty-hint="sessionsFilter === 'all' ? '还没有会话，点上面新建一个' : `还没有 ${sessionsFilter === 'cowork' ? 'Cowork' : 'Chat'} 模式的会话`"
+      @select="(id) => loadSession(Number(id))"
+      @create-with-option="(cmd) => onCreateSession(cmd)"
+      @rename="(s) => onRenameSession(sessionsById.get(Number(s.id)) as AIChatSession)"
+      @delete="(s) => onDeleteSession(sessionsById.get(Number(s.id)) as AIChatSession)"
+      @tab-change="(k) => (sessionsFilter = k as SessionFilter)"
+      @collapse-change="(v) => (asideCollapsed = v)"
+    />
 
     <!-- ═══════ 中间 chat ═══════ -->
     <main class="chat-main">
@@ -462,6 +385,7 @@ import { llmConfigApi, type BuilderModelOption } from '@/api/llmConfig'
 import { usePreviewStore } from '@/stores/preview'
 import { useThemeStore } from '@/stores/theme'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
+import SessionSidebar, { type SessionItem, type SessionTab, type NewSessionOption } from '@/components/common/SessionSidebar.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ChatDotRound, Folder } from '@element-plus/icons-vue'
 
@@ -495,6 +419,35 @@ const filteredSessions = computed(() => {
   if (sessionsFilter.value === 'cowork') return sessions.value.filter(s => s.mode === 'cowork')
   return sessions.value.filter(s => (s.mode || 'chat') !== 'cowork')
 })
+
+// SessionSidebar 适配
+const sessionItems = computed<SessionItem[]>(() =>
+  filteredSessions.value.map(s => ({
+    id: s.id,
+    title: s.title,
+    badgeIcon: s.mode === 'cowork' ? Folder : undefined,
+    badgeLabel: s.mode === 'cowork' ? 'Cowork 协作整合模式' : undefined,
+    badgeTone: s.mode === 'cowork' ? 'cowork' : undefined,
+  }))
+)
+const sessionsById = computed(() => {
+  const m = new Map<number, AIChatSession>()
+  sessions.value.forEach(s => m.set(s.id, s))
+  return m
+})
+const sidebarTabs = computed<SessionTab[]>(() =>
+  sessionFilterTabs.value.map(t => ({
+    key: t.key,
+    label: t.label,
+    title: t.title,
+    count: t.count,
+    icon: t.key === 'chat' ? ChatDotRound : t.key === 'cowork' ? Folder : undefined,
+  }))
+)
+const newSessionOptions: NewSessionOption[] = [
+  { command: 'chat', title: 'Chat 会话', hint: '从零对话理需求', icon: ChatDotRound },
+  { command: 'cowork', title: 'Cowork 会话', hint: '批量材料整合成标准 md', icon: Folder },
+]
 const messages = ref<AIChatMessage[]>([])
 const toolCalls = ref<AIChatToolCall[]>([])
 const attachments = ref<AIChatAttachment[]>([])
@@ -522,13 +475,8 @@ watch(isSending, val => {
 // 右栏设计文档默认收起，有新文档时自动展开一次
 const artifactsPanelOpen = ref(false)
 
-// 左栏会话列表的折叠状态（localStorage 持久化）
-const ASIDE_COLLAPSED_KEY = 'aichat:aside-collapsed'
-const asideCollapsed = ref<boolean>(localStorage.getItem(ASIDE_COLLAPSED_KEY) === '1')
-function setAsideCollapsed(v: boolean) {
-  asideCollapsed.value = v
-  try { localStorage.setItem(ASIDE_COLLAPSED_KEY, v ? '1' : '0') } catch { /* ignore */ }
-}
+// 左栏会话列表的折叠状态（容器 grid 用，SessionSidebar 自管 localStorage）
+const asideCollapsed = ref<boolean>(localStorage.getItem('aichat:aside-collapsed') === '1')
 
 // 右栏宽度（拖拽 + localStorage 持久化）
 const ASIDE_RIGHT_WIDTH_KEY = 'aichat:aside-right-width'
@@ -1543,138 +1491,6 @@ onMounted(async () => {
 .input-foot .hint { color: var(--ac-text-faint); font-size: 11.5px; }
 .input-foot .timer { color: var(--ac-brand); }
 
-/* ─── Aside left ─── */
-.aside-left {
-  background: var(--ac-panel);
-  border-right: 1px solid var(--ac-border);
-  display: flex;
-  flex-direction: column;
-  padding: 16px 12px;
-  gap: 12px;
-  overflow: hidden;
-}
-.ai-chat-app.aside-collapsed .aside-left {
-  padding: 12px 4px;
-  gap: 6px;
-}
-.aside-head {
-  display: flex; align-items: center; justify-content: space-between; gap: 4px;
-}
-.aside-toggle {
-  appearance: none; background: transparent; border: none; color: var(--ac-text-faint);
-  font-size: 14px; cursor: pointer; padding: 2px 8px; border-radius: 5px;
-  line-height: 1; flex-shrink: 0;
-}
-.aside-toggle:hover { background: var(--ac-border-faint); color: var(--ac-text); }
-.aside-rail {
-  display: flex; flex-direction: column; align-items: center; gap: 6px; height: 100%;
-}
-.rail-spacer { flex: 1; }
-.rail-btn {
-  width: 32px; height: 32px;
-  background: transparent; border: 1px solid transparent; color: var(--ac-text-mute);
-  border-radius: 6px; cursor: pointer; font-size: 14px;
-  display: grid; place-items: center; line-height: 1;
-  transition: all 0.12s;
-}
-.rail-btn:hover { background: var(--ac-border-faint); color: var(--ac-text); border-color: var(--ac-border); }
-.brand { display: flex; align-items: center; gap: 8px; padding: 4px 8px; font-weight: 600; }
-.brand-dot { width: 8px; height: 8px; background: #f0824a; border-radius: 2px; }
-.new-btn {
-  background: var(--ac-btn); border: 1px solid var(--ac-border); color: var(--ac-text);
-  padding: 8px 12px; border-radius: 8px; font-size: 13px; cursor: pointer; text-align: left;
-}
-.new-btn:hover { background: var(--ac-border-faint); }
-.new-btn {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  gap: 6px;
-}
-.new-btn-caret {
-  color: var(--ac-text-faint);
-  font-size: 11px;
-  margin-left: auto;
-  transform: translateY(-1px);
-}
-.new-session-option {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 2px 0;
-  min-width: 180px;
-}
-.new-session-option-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--el-text-color-primary, #1f2937);
-}
-.new-session-option-hint {
-  font-size: 11.5px;
-  color: var(--el-text-color-secondary, #6b7280);
-}
-
-.session-filter-tabs {
-  display: flex;
-  gap: 4px;
-  margin: 8px 0 6px;
-  padding: 3px;
-  background: var(--ac-border-faint);
-  border-radius: 8px;
-}
-.filter-tab {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  padding: 5px 6px;
-  border: 0;
-  background: transparent;
-  color: var(--ac-text-mute);
-  font-size: 11.5px;
-  border-radius: 5px;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-  white-space: nowrap;
-}
-.filter-tab:hover { color: var(--ac-text); }
-.filter-tab.active {
-  background: var(--ac-panel);
-  color: var(--ac-text);
-  box-shadow: 0 1px 2px rgba(0,0,0,0.06);
-}
-.filter-tab-count {
-  font-size: 10px;
-  color: var(--ac-text-faint);
-  background: var(--ac-border);
-  padding: 0 5px;
-  border-radius: 8px;
-  line-height: 14px;
-  min-width: 14px;
-  text-align: center;
-}
-.filter-tab.active .filter-tab-count {
-  background: color-mix(in srgb, var(--ac-brand) 16%, transparent);
-  color: var(--ac-brand);
-}
-
-.session-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
-.session-item {
-  padding: 7px 10px; border-radius: 6px; color: var(--ac-text-mute); cursor: pointer; font-size: 13px;
-  display: flex; align-items: center; gap: 4px;
-  position: relative;
-}
-.session-item:hover { background: var(--ac-border-faint); }
-.session-item.active { background: var(--ac-btn); color: var(--ac-text); }
-.session-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.session-mode-badge {
-  font-size: 13px;
-  line-height: 1;
-  flex-shrink: 0;
-  color: #c2630b;
-}
 .header-mode-badge {
   display: inline-flex;
   align-items: center;
@@ -1705,21 +1521,6 @@ onMounted(async () => {
   margin-right: 4px;
   color: #c2630b;
 }
-.mode-icon {
-  font-size: 14px;
-  margin-right: 6px;
-  vertical-align: -2px;
-}
-.mode-icon.chat { color: var(--el-color-primary, #409eff); }
-.mode-icon.cowork { color: #c2630b; }
-.new-session-option-title {
-  display: flex;
-  align-items: center;
-}
-.filter-tab-icon {
-  font-size: 12px;
-  margin-right: 2px;
-}
 .art-version-select {
   appearance: none;
   background: var(--ac-btn);
@@ -1735,27 +1536,6 @@ onMounted(async () => {
   background-position: right 6px center;
 }
 .art-version-select:hover { border-color: var(--ac-border-strong); }
-.session-menu-btn {
-  appearance: none;
-  background: transparent;
-  border: none;
-  color: var(--ac-text-faint);
-  font-size: 13px;
-  cursor: pointer;
-  padding: 2px 5px;
-  border-radius: 4px;
-  opacity: 0;
-  transition: opacity 0.15s, background 0.15s, color 0.15s;
-  flex-shrink: 0;
-}
-.session-item:hover .session-menu-btn { opacity: 1; }
-.session-menu-btn:hover { background: var(--ac-border-strong); color: var(--ac-text); }
-.session-menu-btn.danger:hover { background: rgba(248,113,113,0.18); color: #f87171; }
-.empty-hint { color: var(--ac-text-faint); font-size: 12.5px; padding: 12px 8px; }
-.aside-foot { padding-top: 12px; border-top: 1px solid var(--ac-border); }
-.back-btn { background: transparent; border: none; color: var(--ac-text-mute); cursor: pointer; font-size: 12.5px; }
-.back-btn:hover { color: var(--ac-text); }
-
 /* ─── Chat main ─── */
 .chat-main { display: flex; flex-direction: column; overflow: hidden; }
 .chat-header {

@@ -23,6 +23,7 @@ from app.routes import (
     git_connection,
     git_webhook,
     harness,
+    help_assistant,
     incremental_update,
     llm_configs,
     marketplace,
@@ -163,6 +164,7 @@ app.include_router(work_state.router, prefix="/api")
 app.include_router(online_coding.router, prefix="/api")
 app.include_router(online_coding_runtime.router, prefix="/api")
 app.include_router(vibe_coding_chat.router, prefix="/api")
+app.include_router(help_assistant.router, prefix="/api")
 # 平台代理路由注册在根路径（/platform/... 和 /backend/... 需要直接匹配）
 app.include_router(platform_proxy.router)
 

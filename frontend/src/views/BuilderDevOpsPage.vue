@@ -2,18 +2,31 @@
   <BuilderFrame :breadcrumbs="[{ label: 'DevOps' }, { label: currentLabel }]">
     <main class="builder-page devops-page">
       <div class="devops-shell">
-        <aside class="devops-side" aria-label="DevOps 导航">
-          <div class="side-eyebrow">DevOps</div>
+        <aside
+          class="devops-side"
+          :class="{ collapsed: sideCollapsed }"
+          aria-label="DevOps 导航"
+        >
+          <div class="side-head">
+            <div v-if="!sideCollapsed" class="side-eyebrow">DevOps</div>
+            <button
+              class="side-collapse-btn"
+              type="button"
+              :title="sideCollapsed ? '展开导航' : '收起导航'"
+              @click="toggleSide"
+            >{{ sideCollapsed ? '»' : '«' }}</button>
+          </div>
           <button
             v-for="item in nav"
             :key="item.key"
             class="side-link"
             :class="{ active: active === item.key }"
             type="button"
+            :title="sideCollapsed ? `${item.label} — ${item.description}` : ''"
             @click="selectTab(item.key)"
           >
             <component :is="item.icon" class="side-icon" />
-            <span class="side-copy">
+            <span v-if="!sideCollapsed" class="side-copy">
               <strong>{{ item.label }}</strong>
               <small>{{ item.description }}</small>
             </span>
@@ -29,14 +42,35 @@
               <p>{{ currentDescription }}</p>
             </div>
             <div class="header-actions">
-              <label v-if="appOptions.length" class="app-select">
+              <label class="app-select">
                 <span>应用</span>
-                <select v-model.number="selectedApplicationId" @change="onAppChange">
+                <select
+                  v-if="appOptions.length"
+                  v-model.number="selectedApplicationId"
+                  @change="onAppChange"
+                >
                   <option v-for="app in appOptions" :key="app.id" :value="app.id">
                     {{ app.app_name }}
                   </option>
                 </select>
+                <button
+                  v-else
+                  class="devops-button ghost"
+                  type="button"
+                  @click="$router.push('/chat')"
+                  title="去 AI 搭建创建第一个应用"
+                >+ 创建应用</button>
               </label>
+              <button
+                v-if="selectedApplicationId"
+                class="devops-button primary"
+                type="button"
+                :disabled="creatingProposal || !canCreateProposal"
+                @click="openCreateProposal"
+                title="把最新 draft SPEC 作为提案发布（无 draft 时会提示）"
+              >
+                {{ creatingProposal ? '创建中…' : '+ 创建提案' }}
+              </button>
               <button class="devops-button ghost" type="button" :disabled="loading" @click="refreshAll">
                 <Refresh />
                 {{ loading ? '刷新中' : '刷新' }}
@@ -54,6 +88,22 @@
               <span class="summary-label">当前应用</span>
               <strong>{{ selectedAppName }}</strong>
               <p>{{ selectedAppMeta }}</p>
+              <div v-if="selectedApp" class="card-quick-links">
+                <button class="quick-link" type="button" @click="goToBuilder" title="去 AI 搭建编辑 SPEC">
+                  编辑 SPEC →
+                </button>
+                <button class="quick-link" type="button" @click="goToApps" title="返回应用列表">
+                  应用列表 →
+                </button>
+                <a
+                  v-if="selectedApp.apaas_url"
+                  :href="selectedApp.apaas_url"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="quick-link"
+                  title="在平台打开"
+                >平台 ↗</a>
+              </div>
             </article>
             <article class="summary-card">
               <span class="summary-label">待处理提案</span>
@@ -383,12 +433,38 @@
                   管理环境
                 </button>
               </article>
-              <article v-for="env in demoEnvironments" :key="env.key" class="devops-panel env-card">
+              <article v-if="platformEnvs.length === 0 && !loadingEnvs" class="devops-panel env-card env-empty">
+                <strong>当前 tenant 暂无平台环境</strong>
+                <p>到「设置 → 环境」添加得帆云平台地址 + 凭证后，应用就能部署到这些环境。</p>
+                <button class="devops-button" type="button" @click="router.push('/platform-envs?tab=envs')">
+                  添加环境
+                </button>
+              </article>
+              <article
+                v-for="env in platformEnvs"
+                :key="env.id"
+                class="devops-panel env-card"
+                :class="{ active: env.is_default }"
+              >
                 <div class="env-title">
-                  <strong>{{ env.name }}</strong>
-                  <span class="builder-dot" :class="{ warn: env.status === 'approval', ok: env.status === 'healthy' }" />
+                  <strong>{{ env.env_name }}</strong>
+                  <span
+                    class="builder-dot"
+                    :class="{
+                      ok: env.status === 'connected',
+                      warn: env.status !== 'connected',
+                    }"
+                    :title="env.status"
+                  />
                 </div>
-                <p>{{ env.version }} · {{ env.apps }} apps · {{ env.status }}</p>
+                <p>
+                  <code class="env-url">{{ env.base_url }}</code>
+                </p>
+                <p class="env-meta">
+                  {{ env.is_default ? '默认环境' : '' }}
+                  <span v-if="env.is_default && env.status === 'connected'"> · </span>
+                  {{ env.status === 'connected' ? '已连接' : '未连接' }}
+                </p>
               </article>
             </section>
           </template>
@@ -397,35 +473,86 @@
             <section class="devops-panel">
               <div class="panel-head">
                 <div>
-                  <span class="panel-kicker">Approvals</span>
+                  <span class="panel-kicker">Approvals · 全租户</span>
                   <h2>审批中心</h2>
                 </div>
-                <span class="panel-count">{{ approvalRows.length }} 条</span>
+                <div class="panel-actions">
+                  <span class="panel-count">{{ approvalRows.length }} 条</span>
+                  <button
+                    class="devops-button ghost"
+                    type="button"
+                    :disabled="loadingApprovals"
+                    @click="loadApprovals"
+                  >{{ loadingApprovals ? '刷新中…' : '刷新' }}</button>
+                </div>
               </div>
               <div v-if="approvalRows.length" class="approval-list">
                 <button
                   v-for="proposal in approvalRows"
                   :key="proposal.id"
-                  class="approval-row"
+                  class="approval-row global"
                   type="button"
                   @click="goToProposal(proposal.id)"
                 >
                   <span class="status-badge" :class="`status-${proposal.status}`">
                     {{ STATUS_DISPLAY_NAMES[proposal.status] || proposal.status }}
                   </span>
-                  <strong>{{ proposal.title }}</strong>
-                  <small>{{ formatDate(proposal.created_at) }}</small>
+                  <div class="approval-row-main">
+                    <strong>{{ proposal.title }}</strong>
+                    <small>
+                      <span v-if="proposal.app_name" class="approval-app">{{ proposal.app_name }}</span>
+                      <span>{{ formatDate(proposal.created_at) }}</span>
+                    </small>
+                  </div>
                 </button>
+              </div>
+              <div v-else-if="loadingApprovals" class="empty-state">
+                <strong>正在加载…</strong>
               </div>
               <div v-else class="empty-state">
                 <strong>没有待处理审批</strong>
-                <p>待评审、需修改和已批准但未 apply 的 proposal 会集中出现在这里。</p>
+                <p>当前 tenant 下还没有待评审、需修改或已批准未 apply 的提案。在左侧任一应用「+ 创建提案」即可看到。</p>
               </div>
             </section>
           </template>
         </section>
       </div>
     </main>
+
+    <!-- 创建提案 dialog -->
+    <BaseDialog
+      :visible="proposalDialogVisible"
+      title="创建提案"
+      :confirm-text="creatingProposal ? '创建中…' : '创建提案'"
+      cancel-text="取消"
+      @confirm="submitCreateProposal"
+      @cancel="closeCreateProposalDialog"
+    >
+      <p class="dialog-hint">
+        把当前应用最新的 SPEC draft 作为提案发布。后端会自动跑第一道门校验，校验通过即进入审批流程。
+      </p>
+      <label class="dialog-field">
+        <span>提案标题</span>
+        <input
+          v-model="proposalForm.title"
+          class="dialog-input"
+          placeholder="如：为 X 模块加 Y 字段"
+          maxlength="200"
+          :disabled="creatingProposal"
+          @keydown.enter="submitCreateProposal"
+        />
+      </label>
+      <label class="dialog-field">
+        <span>简要说明（可选）</span>
+        <textarea
+          v-model="proposalForm.description"
+          class="dialog-input dialog-textarea"
+          placeholder="说一下这次变更的目的、影响范围或验收点"
+          rows="4"
+          :disabled="creatingProposal"
+        ></textarea>
+      </label>
+    </BaseDialog>
   </BuilderFrame>
 </template>
 
@@ -445,9 +572,10 @@ import {
   Warning,
 } from '@element-plus/icons-vue'
 import BuilderFrame from '@/components/BuilderFrame.vue'
-import { demoEnvironments } from '@/data/builderMock'
+import BaseDialog from '@/components/BaseDialog.vue'
 import { applicationApi } from '@/api/application'
 import { gitConnectionApi, type DriftStatus } from '@/api/gitConnection'
+import { platformEnvApi, type PlatformEnv } from '@/api/platformEnv'
 import { proposalsApi } from '@/api/proposals'
 import type { MergedApplication } from '@/types'
 import { type ProposalStatus, type ProposalSummary, STATUS_DISPLAY_NAMES } from '@/types/proposal'
@@ -548,15 +676,18 @@ const selectedAppMeta = computed(() => {
 })
 
 const hasGitRepo = computed(() => Boolean(selectedApp.value?.git_repo_url))
+/** 能否创建提案：选中应用即可（draft 是否存在由后端 promote 时校验，无 draft 返回 422 由前端 toast 提示） */
+const canCreateProposal = computed(() => Boolean(selectedApp.value))
 const openReviewCount = computed(() => proposals.value.filter(p => p.status === 'open').length)
 const approvedCount = computed(() => proposals.value.filter(p => p.status === 'approved').length)
 const appliedCount = computed(() => proposals.value.filter(p => p.status === 'applied').length)
 const actionableProposalCount = computed(() =>
   proposals.value.filter(p => ['open', 'changes_requested', 'approved', 'apply_failed'].includes(p.status)).length
 )
-const approvalRows = computed(() =>
-  proposals.value.filter(p => ['open', 'changes_requested', 'approved', 'apply_failed'].includes(p.status))
-)
+/** 全局待处理审批（跨应用，actionable=true）；进入 approvals tab 自动加载 */
+const globalApprovals = ref<Array<ProposalSummary & { application_id: number; app_name?: string; app_code?: string }>>([])
+const loadingApprovals = ref(false)
+const approvalRows = computed(() => globalApprovals.value)
 
 const filteredProposals = computed(() => {
   const rows = statusFilter.value === 'all'
@@ -802,6 +933,36 @@ async function loadProposals() {
   proposals.value = await proposalsApi.list(selectedApplicationId.value)
 }
 
+/** 平台环境列表（环境拓扑 tab 用） */
+const platformEnvs = ref<PlatformEnv[]>([])
+const loadingEnvs = ref(false)
+async function loadPlatformEnvs() {
+  loadingEnvs.value = true
+  try {
+    const list = await platformEnvApi.list()
+    platformEnvs.value = Array.isArray(list) ? list : []
+  } catch (error) {
+    console.error('Load platform envs failed', error)
+    platformEnvs.value = []
+  } finally {
+    loadingEnvs.value = false
+  }
+}
+
+/** 跨应用审批中心：拉所有 actionable 的提案 */
+async function loadApprovals() {
+  loadingApprovals.value = true
+  try {
+    const list = await proposalsApi.listAll({ actionable: true })
+    globalApprovals.value = Array.isArray(list) ? list : []
+  } catch (error) {
+    console.error('Load approvals failed', error)
+    globalApprovals.value = []
+  } finally {
+    loadingApprovals.value = false
+  }
+}
+
 async function loadDriftStatus() {
   if (!selectedApplicationId.value || !hasGitRepo.value) {
     driftStatus.value = null
@@ -851,6 +1012,66 @@ async function initRepo() {
   }
 }
 
+const creatingProposal = ref(false)
+
+// 左侧二级导航收起（与 SessionSidebar 体验一致）
+const SIDE_COLLAPSED_KEY = 'devops:side-collapsed'
+const sideCollapsed = ref<boolean>(localStorage.getItem(SIDE_COLLAPSED_KEY) === '1')
+function toggleSide() {
+  sideCollapsed.value = !sideCollapsed.value
+  try { localStorage.setItem(SIDE_COLLAPSED_KEY, sideCollapsed.value ? '1' : '0') } catch { /* ignore */ }
+}
+
+/** 创建提案：BaseDialog 单页表单 — 同屏填 title + description */
+const proposalDialogVisible = ref(false)
+const proposalForm = ref({ title: '', description: '' })
+
+function openCreateProposal() {
+  if (!selectedApplicationId.value) {
+    ElMessage.warning('请先选择应用')
+    return
+  }
+  proposalForm.value = {
+    title: `${selectedAppName.value} - 变更提案`,
+    description: '',
+  }
+  proposalDialogVisible.value = true
+}
+
+function closeCreateProposalDialog() {
+  if (creatingProposal.value) return
+  proposalDialogVisible.value = false
+}
+
+async function submitCreateProposal() {
+  if (creatingProposal.value || !selectedApplicationId.value) return
+  const title = proposalForm.value.title.trim()
+  if (!title) {
+    ElMessage.warning('标题不能为空')
+    return
+  }
+  const description = proposalForm.value.description.trim()
+  creatingProposal.value = true
+  try {
+    const res = await proposalsApi.promote(selectedApplicationId.value, {
+      title,
+      description: description || undefined,
+    })
+    proposalDialogVisible.value = false
+    ElMessage.success(`提案已创建（${STATUS_DISPLAY_NAMES[res.status] || res.status}）`)
+    selectTab('proposals')
+    await loadProposals()
+    if (res.id) {
+      router.push(`/proposals/${res.id}`).catch(() => {})
+    }
+  } catch (error: any) {
+    const detail = error?.response?.data?.detail
+    ElMessage.error(detail || error?.message || '提案创建失败')
+  } finally {
+    creatingProposal.value = false
+  }
+}
+
 function onAppChange() {
   if (!ready.value) return
   syncQuery({ application_id: selectedApplicationId.value ? String(selectedApplicationId.value) : '' })
@@ -872,8 +1093,26 @@ function goToProjectGit() {
   router.push(`/project/${selectedProjectId.value}/git`)
 }
 
+function goToBuilder() {
+  if (!selectedApplicationId.value) return
+  const app = selectedApp.value
+  const isGenerated = !!(app?.apaas_app_id || app?.local_status === 'completed' || app?.status === 'completed')
+  const query: Record<string, string> = { app_id: String(selectedApplicationId.value) }
+  if (isGenerated) {
+    query.tab = 'spec'
+    query.workspace = 'update'
+  }
+  router.push({ path: '/chat', query }).catch(() => {})
+}
+
+function goToApps() {
+  router.push('/apps').catch(() => {})
+}
+
 watch(active, tab => {
   syncQuery({ tab })
+  if (tab === 'approvals') loadApprovals()
+  if (tab === 'envs') loadPlatformEnvs()
 })
 
 watch(() => route.query.tab, value => {
@@ -889,16 +1128,42 @@ watch(selectedApplicationId, () => {
 
 onMounted(async () => {
   loading.value = true
+  // 1) 先单独加载应用列表 — 失败时区分"后端未连接 vs 接口报错"，不阻塞页面渲染
   try {
     await loadApps()
-    ready.value = true
-    await refreshCurrentApp()
-  } catch (error) {
-    console.error('Load DevOps page failed', error)
-    ElMessage.error('加载 DevOps 数据失败')
-  } finally {
-    loading.value = false
+  } catch (error: any) {
+    console.error('Load applications failed', error)
+    const status = error?.response?.status
+    const detail = error?.response?.data?.detail
+    if (!status) {
+      ElMessage.error({
+        message: '后端未连接 — 请确认 backend dev server 已启动',
+        duration: 5000,
+      })
+    } else if (status >= 500) {
+      ElMessage.error({
+        message: `后端报错（${status}）：${detail || '请查看 backend 日志'}`,
+        duration: 5000,
+      })
+    } else {
+      ElMessage.warning(detail || `加载应用列表失败（${status}）`)
+    }
+    appOptions.value = []
+    appsCache.value = []
   }
+  ready.value = true
+  // 全局审批中心数据后台拉，无需阻塞
+  loadApprovals()
+  // 2) 选了应用才尝试加载 proposal/git；失败也不阻塞主流程
+  if (selectedApplicationId.value) {
+    try {
+      await refreshCurrentApp()
+    } catch (error) {
+      console.error('Refresh current app failed', error)
+      ElMessage.warning('该应用的提案/Git 数据加载失败，可点右上角刷新重试')
+    }
+  }
+  loading.value = false
 })
 </script>
 
@@ -917,9 +1182,57 @@ onMounted(async () => {
 
 .devops-side {
   min-height: calc(100vh - 118px);
-  padding: 22px 12px;
+  padding: 14px 12px;
   background: color-mix(in srgb, var(--b-panel) 74%, var(--b-bg-sub));
   border-right: 1px solid var(--b-line);
+  width: 240px;
+  flex-shrink: 0;
+  transition: width 0.18s ease;
+}
+.devops-side.collapsed {
+  width: 60px;
+  padding: 14px 8px;
+}
+.side-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  padding: 0 6px;
+}
+.side-collapse-btn {
+  background: transparent;
+  border: none;
+  color: var(--b-text-faint);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+  line-height: 1;
+}
+.side-collapse-btn:hover {
+  background: color-mix(in srgb, var(--b-text) 6%, transparent);
+  color: var(--b-text);
+}
+.devops-side.collapsed .side-head {
+  justify-content: center;
+}
+.devops-side.collapsed .side-link {
+  grid-template-columns: 20px auto;
+  padding: 10px 8px;
+  min-height: 44px;
+  justify-content: center;
+}
+.devops-side.collapsed .nav-count {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  min-width: 16px;
+  height: 16px;
+  font-size: 10px;
+}
+.devops-side.collapsed .side-link {
+  position: relative;
 }
 
 .side-eyebrow,
@@ -1162,6 +1475,33 @@ onMounted(async () => {
   line-height: 1.5;
 }
 
+.card-quick-links {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.card-quick-links .quick-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 9px;
+  border: 1px solid var(--b-line);
+  border-radius: 999px;
+  background: var(--b-panel);
+  color: var(--b-text-muted);
+  font-size: 11px;
+  cursor: pointer;
+  text-decoration: none;
+  transition: border-color 0.14s, color 0.14s, background 0.14s;
+}
+.card-quick-links .quick-link:hover {
+  border-color: var(--b-brand);
+  color: var(--b-brand-ink);
+  background: var(--b-brand-soft);
+}
+
 .overview-layout,
 .git-layout {
   display: grid;
@@ -1294,6 +1634,33 @@ onMounted(async () => {
 
 .activity-row {
   grid-template-columns: 10px minmax(0, 1fr);
+}
+
+.approval-row.global {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+.approval-row-main {
+  min-width: 0;
+}
+.approval-row-main small {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+}
+.approval-app {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--b-brand-soft);
+  color: var(--b-brand-ink);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.panel-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .activity-row:hover,
@@ -1685,6 +2052,33 @@ onMounted(async () => {
   gap: 10px;
 }
 
+.env-card.active {
+  border-color: color-mix(in srgb, var(--b-brand) 30%, var(--b-line));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--b-brand) 12%, transparent);
+}
+.env-card.env-empty {
+  background: var(--b-bg-sub);
+  border-style: dashed;
+}
+.env-url {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 1px 8px;
+  border-radius: 6px;
+  background: var(--b-bg-sub);
+  color: var(--b-text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+}
+.env-meta {
+  margin-top: 4px !important;
+  font-size: 11.5px !important;
+  color: var(--b-text-faint) !important;
+}
+
 .env-title strong {
   color: var(--b-text);
 }
@@ -1762,5 +2156,54 @@ onMounted(async () => {
   .approval-row {
     grid-template-columns: 1fr;
   }
+}
+
+/* ── 创建提案 dialog 表单样式 ── */
+.dialog-hint {
+  margin: 0 0 14px;
+  padding: 9px 12px;
+  background: var(--b-brand-soft, rgba(99, 102, 241, 0.07));
+  border: 1px solid color-mix(in srgb, var(--b-brand) 18%, transparent);
+  border-radius: 8px;
+  color: var(--b-text-muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.dialog-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 12px;
+}
+.dialog-field span {
+  color: var(--b-text);
+  font-size: 12px;
+  font-weight: 700;
+}
+.dialog-input {
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid var(--b-line);
+  border-radius: 8px;
+  background: var(--b-panel);
+  color: var(--b-text);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  outline: none;
+  transition: border-color 0.14s, box-shadow 0.14s;
+}
+.dialog-input:focus {
+  border-color: color-mix(in srgb, var(--b-brand) 50%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--b-brand) 18%, transparent);
+}
+.dialog-input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.dialog-textarea {
+  resize: vertical;
+  min-height: 90px;
+  font-family: inherit;
 }
 </style>
