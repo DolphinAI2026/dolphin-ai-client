@@ -74,7 +74,15 @@
           :title="item.label"
           @click="navigateTo(item.path)"
         >
-          <svg class="nav-icon" viewBox="0 0 16 16" fill="none">
+          <svg v-if="item.key === 'sandboxes'" class="nav-icon" viewBox="0 0 16 16" fill="none">
+            <rect x="2" y="3" width="12" height="3" rx="0.6" stroke="currentColor" stroke-width="1.3" />
+            <rect x="2" y="7" width="12" height="3" rx="0.6" stroke="currentColor" stroke-width="1.3" />
+            <rect x="2" y="11" width="12" height="2" rx="0.6" stroke="currentColor" stroke-width="1.3" />
+            <circle cx="4.5" cy="4.5" r="0.6" fill="currentColor" />
+            <circle cx="4.5" cy="8.5" r="0.6" fill="currentColor" />
+            <circle cx="4.5" cy="12" r="0.6" fill="currentColor" />
+          </svg>
+          <svg v-else class="nav-icon" viewBox="0 0 16 16" fill="none">
             <path d="M4.5 5L2 8l2.5 3M11.5 5L14 8l-2.5 3M9.5 4l-3 8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
           </svg>
           <span class="nav-label">{{ item.label }}</span>
@@ -140,6 +148,7 @@ const primaryNavItems = [
 
 const workspaceNavItems = [
   { key: 'coding', label: '开发工作区', path: '/coding' },
+  { key: 'sandboxes', label: '沙箱监控', path: '/vibe-coding/sandboxes' },
 ]
 
 const adminNavItems = computed(() =>
@@ -147,7 +156,6 @@ const adminNavItems = computed(() =>
     ? [
         { key: 'env', label: '平台环境', path: '/platform-envs' },
         { key: 'users', label: '组织用户', path: '/tenant-users' },
-        { key: 'sandboxes', label: '沙箱监控', path: '/vibe-coding/sandboxes' },
       ]
     : []
 )
