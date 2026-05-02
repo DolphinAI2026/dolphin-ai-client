@@ -15,12 +15,12 @@ map $http_upgrade $vibe_conn_upgrade {
 #   2. nginx -t && systemctl reload nginx
 #
 # 前提：
-#   - DNS *.dfy.definesys.cn 通配解析到本机 ECS
-#   - SSL 通配证书 *.dfy.definesys.cn 已就位（跟 agent.dfy.definesys.cn 共用）
-#   - 前端 build 时设了 VITE_SANDBOX_PREVIEW_BASE=.dfy.definesys.cn
+#   - DNS *.vibe-first.cn 通配解析到本机 ECS
+#   - SSL 通配证书 *.vibe-first.cn 放在 /etc/nginx/ssl/vibe-first.cn/
+#   - 前端 build 时设了 VITE_SANDBOX_PREVIEW_BASE=.vibe-first.cn
 #
-# 子域名格式：p<host_port>.dfy.definesys.cn
-#   例：podman 把容器内 6173 映射到 host 38451 → 浏览器请求 https://p38451.dfy.definesys.cn/
+# 子域名格式：p<host_port>.vibe-first.cn
+#   例：podman 把容器内 6173 映射到 host 38451 → 浏览器请求 https://p38451.vibe-first.cn/
 #       nginx 解析 host 头中的 38451，proxy_pass http://127.0.0.1:38451
 #
 # 安全：
@@ -31,11 +31,11 @@ map $http_upgrade $vibe_conn_upgrade {
 
 server {
     listen 443 ssl http2;
-    server_name ~^p(?<vibe_port>\d+)\.dfy\.definesys\.cn$;
+    server_name ~^p(?<vibe_port>\d+)\.vibe-first\.cn$;
 
-    # 复用 *.dfy.definesys.cn 通配证书（跟 agent.dfy.definesys.cn 共用）
-    ssl_certificate     /etc/nginx/ssl/agent.dfy.definesys.cn/fullchain.pem;
-    ssl_certificate_key /etc/nginx/ssl/agent.dfy.definesys.cn/privkey.pem;
+    # *.vibe-first.cn 通配证书
+    ssl_certificate     /etc/nginx/ssl/vibe-first.cn/fullchain.pem;
+    ssl_certificate_key /etc/nginx/ssl/vibe-first.cn/privkey.pem;
     ssl_protocols       TLSv1.2 TLSv1.3;
 
     # 端口区间校验：只接 30000-65999（podman 默认随机分配段）
@@ -78,6 +78,41 @@ server {
         internal;
         default_type text/plain;
         return 502 "vibe-preview: 沙箱端口 $vibe_port 暂不可达 — 容器是否在跑？\n";
+    }
+}
+
+# 向后兼容：临时保留 *.dfy.definesys.cn 子域路由（hosts 测试用）
+# 等用户全部切到 vibe-first.cn 后可以删
+server {
+    listen 443 ssl http2;
+    server_name ~^p(?<vibe_port_old>\d+)\.dfy\.definesys\.cn$;
+
+    ssl_certificate     /etc/nginx/ssl/agent.dfy.definesys.cn/fullchain.pem;
+    ssl_certificate_key /etc/nginx/ssl/agent.dfy.definesys.cn/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+
+    set $valid_old 0;
+    if ($vibe_port_old ~ "^([3-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$") {
+        set $valid_old 1;
+    }
+    if ($valid_old = 0) {
+        return 403 "vibe-preview: port out of range\n";
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:$vibe_port_old;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade    $http_upgrade;
+        proxy_set_header Connection $vibe_conn_upgrade;
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+        proxy_buffering    off;
+        proxy_cache        off;
+        client_max_body_size 50m;
     }
 }
 
