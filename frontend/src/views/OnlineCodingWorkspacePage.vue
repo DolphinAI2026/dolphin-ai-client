@@ -61,73 +61,21 @@
       <div v-if="loading" class="oc-loading">加载 Vibe Coding 工作区...</div>
 
       <section v-else-if="!isRepoReady" class="oc-git-shell">
-        <section class="oc-git-card">
-          <div class="oc-panel-head">
-            <div>
-              <span class="oc-kicker">VIBE CODING</span>
-              <strong>新建 Vibe Coding 工作区</strong>
-              <span>对话式全代码开发——AI 给方案建议，你拍板，沙箱里跑代码。</span>
-            </div>
-            <em class="oc-stage discovery">{{ repoUrl.trim() ? 'Git 接入' : '从零开始' }}</em>
-          </div>
-
-          <div class="oc-git-note">
-            可选：导入已有 Git 仓库，AI 在仓库基础上增改；留空则建空工作区，AI 从零脚手架开始搭。<strong>Git 不是前置项，可以开发完再提交。</strong>
-          </div>
-
-          <label class="oc-field">
-            <span>Git 仓库地址（可选）</span>
-            <input v-model="repoUrl" placeholder="https://github.com/org/repo.git" />
-          </label>
-          <label class="oc-field">
-            <span>开发目标</span>
-            <textarea
-              v-model="taskInput"
-              rows="4"
-              placeholder="例如：搭一个 CRM 系统 / 做个博客 / 写一个 todo app"
-            ></textarea>
-          </label>
-
-          <div v-if="repoUrl.trim()" class="oc-auth-tabs">
-            <button type="button" :class="{ active: authMode === 'public' }" @click="authMode = 'public'">公开仓库</button>
-            <button type="button" :class="{ active: authMode === 'token' }" @click="authMode = 'token'">Token 授权</button>
-          </div>
-
-          <div v-if="repoUrl.trim() && authMode === 'token'" class="oc-token-grid">
-            <label class="oc-field">
-              <span>Git 用户名</span>
-              <input v-model="gitUsername" placeholder="x-access-token" />
-            </label>
-            <label class="oc-field">
-              <span>Git Token</span>
-              <input v-model="gitToken" type="password" placeholder="GitHub / GitLab Token" />
-            </label>
-          </div>
-
+        <div class="oc-git-card oc-empty-card">
+          <span class="oc-kicker">VIBE CODING</span>
+          <h2 class="oc-empty-title">点左侧「+ 新建工作区」开始</h2>
+          <p class="oc-empty-desc">
+            对话式全代码开发：进入工作区后直接描述你想做什么，AI 在沙箱里跑代码、装依赖、起服务。
+          </p>
+          <ul class="oc-empty-tips">
+            <li>想接现有仓库？跟 AI 说 <code>先 clone https://github.com/xxx</code></li>
+            <li>写完想 push？跟 AI 说 <code>提交到我的仓库</code>（首次需要配置凭证）</li>
+            <li>不需要 Git？直接开聊，AI 从零脚手架开始搭</li>
+          </ul>
           <div v-if="workspace?.import_error" class="oc-error">
             {{ workspace.import_error }}
           </div>
-
-          <button
-            class="oc-primary oc-repo-action"
-            type="button"
-            :disabled="submitting || (!repoUrl.trim() && !taskInput.trim())"
-            @click="submitWorkspace"
-          >
-            <el-icon :class="{ spin: submitting }"><Refresh /></el-icon>
-            <span>
-              {{
-                submitting
-                  ? (repoUrl.trim() ? '导入中...' : '创建中...')
-                  : workspace
-                    ? '重新导入并打开 IDE'
-                    : repoUrl.trim()
-                      ? '导入仓库并打开 IDE'
-                      : '直接打开 IDE 开始对话开发'
-              }}
-            </span>
-          </button>
-        </section>
+        </div>
       </section>
 
       <template v-else>
@@ -508,8 +456,17 @@ function onSidebarVibeSelect(id: string | number) {
   if (sidebarVibeActiveId.value === wid) return
   router.push(`/vibe-coding/workspaces/${wid}`).catch(() => {})
 }
-function onSidebarVibeCreate() {
-  router.push('/vibe-coding/new').catch(() => {})
+async function onSidebarVibeCreate() {
+  // 对话驱动：不弹表单，直接 API 创建空 workspace（后端 task or '无 Git 工作区' 兜底，
+  // 立刻进 repo_imported 状态），跳到对话区让用户描述需求。
+  // 想接现有 git 仓库的话在对话里跟 AI 说 "先 clone xxx" 即可。
+  try {
+    const created = await onlineCodingApi.createWorkspace({ task: '新建工作区' })
+    sidebarVibeWorkspaces.value = [created, ...sidebarVibeWorkspaces.value.filter(w => w.id !== created.id)]
+    router.push(`/vibe-coding/workspaces/${created.id}`).catch(() => {})
+  } catch (err: any) {
+    ElMessage.error(`创建工作区失败：${err?.response?.data?.detail || err?.message || err}`)
+  }
 }
 async function onSidebarVibeDelete(s: SidebarSessionItem) {
   try {
@@ -1478,6 +1435,41 @@ function fileName(filePath: string) {
   color: var(--t-text-primary);
   box-shadow: var(--t-shadow-md, 0 18px 48px rgba(38, 48, 84, 0.08));
   padding: 20px;
+}
+
+.oc-empty-card .oc-empty-title {
+  margin: 12px 0 6px;
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--t-text-primary);
+}
+.oc-empty-card .oc-empty-desc {
+  margin: 0 0 14px;
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--t-text-secondary, #526179);
+}
+.oc-empty-card .oc-empty-tips {
+  list-style: none;
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--t-bg-soft, rgba(15, 23, 42, 0.04));
+  font-size: 13px;
+  line-height: 1.85;
+  color: var(--t-text-secondary, #526179);
+}
+.oc-empty-card .oc-empty-tips li {
+  padding-left: 0;
+}
+.oc-empty-card .oc-empty-tips code {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--t-bg-elevated, #fff);
+  border: 1px solid var(--t-border-subtle, rgba(116, 128, 171, 0.16));
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: var(--t-brand, #536dfe);
 }
 
 .oc-git-note {

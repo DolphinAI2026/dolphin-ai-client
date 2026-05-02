@@ -53,10 +53,10 @@ const router = createRouter({
       meta: { requiresAuth: true, navExpanded: true }
     },
     {
+      // 对话驱动：新建工作区不再弹表单，sidebar 直接 API 创建后跳 workspaces/:id；
+      // 旧 URL 访问时回到工作区列表
       path: '/vibe-coding/new',
-      name: 'OnlineCodingNew',
-      component: () => import('@/views/OnlineCodingWorkspacePage.vue'),
-      meta: { requiresAuth: true, navExpanded: true }
+      redirect: '/vibe-coding',
     },
     {
       path: '/vibe-coding/workspaces/:id',
@@ -173,7 +173,7 @@ router.beforeEach(async (to, _from, next) => {
     const workspaceId = rawId ? String(rawId) : ''
     const rawView = Array.isArray(to.query.online_view) ? to.query.online_view[0] : to.query.online_view
     next({
-      path: workspaceId ? `/vibe-coding/workspaces/${workspaceId}` : '/vibe-coding/new',
+      path: workspaceId ? `/vibe-coding/workspaces/${workspaceId}` : '/vibe-coding',
       query: rawView === 'ide' ? { view: 'ide' } : {},
     })
     return
