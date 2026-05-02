@@ -24,7 +24,7 @@ export const sandboxApi = {
     return request.get<any, SandboxListResponse>('/online-coding/sandboxes')
   },
   start(workspaceId: string) {
-    return request.post<any, { ok: boolean; status: string }>(`/online-coding/sandboxes/${workspaceId}/start`)
+    return request.post<any, { ok: boolean; status: string; restored_commands?: string[] }>(`/online-coding/sandboxes/${workspaceId}/start`)
   },
   stop(workspaceId: string) {
     return request.post<any, { ok: boolean; status: string }>(`/online-coding/sandboxes/${workspaceId}/stop`)

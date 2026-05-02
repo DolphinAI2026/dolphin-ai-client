@@ -207,8 +207,15 @@ async function fetchList() {
 async function onStart(s: SandboxInfo) {
   busyMap.value[s.workspace_id] = true
   try {
-    await sandboxApi.start(s.workspace_id)
-    ElMessage.success('已启动')
+    const r = await sandboxApi.start(s.workspace_id)
+    const restored = r?.restored_commands || []
+    if (restored.length) {
+      ElMessage.success(`已启动 — 自动恢复了 ${restored.length} 个后台服务（${restored[0].slice(0, 40)}${restored[0].length > 40 ? '…' : ''}${restored.length > 1 ? ' 等' : ''}）`)
+    } else {
+      ElMessage.success('已启动 — 暂无之前的后台服务记录，需回 chat 让 agent 重新启动 dev server')
+    }
+    // 给容器内服务一点时间起来再刷新
+    setTimeout(() => { fetchList() }, 3000)
     await fetchList()
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.detail || e?.message || '启动失败')

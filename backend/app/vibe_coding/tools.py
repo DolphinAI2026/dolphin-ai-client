@@ -36,6 +36,35 @@ from app.vibe_coding.workspace import find_workspace, get_repo_dir, resolve_path
 logger = logging.getLogger(__name__)
 
 
+def _record_background_command(workspace_id: str, command: str, log_rel: str) -> None:
+    """记录 agent 后台启动的命令到 workspace meta。
+
+    用途：沙箱监控页"启动"按钮重启 sandbox 时，从这里读出命令逐条 docker exec 重跑，
+    自动恢复 dev server 等常驻服务。
+
+    去重逻辑：同一条 command 已存在则**移到末尾**（避免列表无限膨胀），用 list 保序。
+    """
+    from app.routes.online_coding import _find_workspace_dir, _write_workspace
+
+    try:
+        ws_dir, meta = _find_workspace_dir(workspace_id)
+    except Exception:
+        return
+    bg = meta.get("bg_commands") or []
+    # 去重：同 command 已有则删旧
+    bg = [b for b in bg if b.get("command") != command]
+    bg.append({
+        "command": command,
+        "log_path": log_rel,
+        "started_at": time.time(),
+    })
+    # 上限 16 条防膨胀
+    if len(bg) > 16:
+        bg = bg[-16:]
+    meta["bg_commands"] = bg
+    _write_workspace(ws_dir, meta)
+
+
 # 进程内缓存：本会话期间检测到的 runtime（'docker' / 'host'），避免每次工具调用都探测 docker daemon
 _runtime_cache: dict[str, str] = {}
 
@@ -499,6 +528,11 @@ async def _run_command_docker(
             await rt.exec_background(thread.workspace_id, cmd, log_path=log_rel)
         except RuntimeError as exc:
             return _err(f"容器内后台启动失败: {exc}")
+        # 记到 workspace meta — 沙箱监控页面"启动"按钮重启 sandbox 时自动恢复这些后台服务
+        try:
+            _record_background_command(thread.workspace_id, cmd, log_rel)
+        except Exception as e:
+            logger.warning("记录后台命令失败 (workspace=%s): %s", thread.workspace_id, e)
         return (
             f"已在容器内 detach 后台启动，日志: {log_rel}\n"
             f"等 3-5 秒后用 run_command 'sleep 4 && tail -n 50 {log_rel}' 看启动是否成功。\n"

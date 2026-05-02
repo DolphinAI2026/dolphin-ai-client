@@ -177,19 +177,44 @@ async def start_sandbox(
     workspace_id: str,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
 ):
-    """启动 sandbox 容器（不存在则新建，exited 则 start 复用）。"""
+    """启动 sandbox 容器（不存在则新建，exited 则 start 复用）。
+
+    增强：启动后自动恢复上次记录的 background dev 命令（来自 meta.bg_commands），
+    让"停了又启"无需用户手动让 agent 再跑一次 npm run dev。
+    """
     _check_sandbox_access(workspace_id, ctx)
     rt = get_docker_runtime()
     if not await rt.is_available():
         raise HTTPException(status_code=503, detail="docker runtime 不可用")
-    ws_dir, _ = _find_workspace_dir(workspace_id)
+    ws_dir, meta = _find_workspace_dir(workspace_id)
     repo_dir = ws_dir / "repo"
     repo_dir.mkdir(parents=True, exist_ok=True)
     try:
         await rt.ensure_container(workspace_id, repo_dir)
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=f"启动失败: {exc}")
-    return {"ok": True, "workspace_id": workspace_id, "status": "running"}
+
+    # 自动恢复上次的 background 命令（dev server 等）
+    restored: list[str] = []
+    bg_commands = meta.get("bg_commands") or []
+    for entry in bg_commands:
+        cmd = entry.get("command")
+        if not cmd:
+            continue
+        # 用新的 log 路径避免覆盖历史
+        import time as _t
+        log_rel = f".vibe-logs/dev-{int(_t.time())}.log"
+        try:
+            await rt.exec_background(workspace_id, cmd, log_path=log_rel)
+            restored.append(cmd)
+        except Exception as e:
+            logger.warning("恢复 bg 命令失败 (ws=%s, cmd=%s): %s", workspace_id, cmd, e)
+    return {
+        "ok": True,
+        "workspace_id": workspace_id,
+        "status": "running",
+        "restored_commands": restored,
+    }
 
 
 @router.post("/{workspace_id}/stop")
