@@ -13,8 +13,42 @@
         </div>
       </div>
 
+      <div class="tenant-users-filter">
+        <el-input
+          v-model="filterQ"
+          placeholder="按用户名搜索"
+          clearable
+          style="width: 240px"
+        />
+        <el-select
+          v-if="isPlatformAdmin"
+          v-model="filterTenant"
+          filterable
+          clearable
+          placeholder="按所属组织过滤"
+          style="width: 220px"
+        >
+          <el-option
+            v-for="opt in tenantFilterOptions"
+            :key="opt.value"
+            :label="`${opt.label}（${opt.count}）`"
+            :value="opt.value"
+          />
+        </el-select>
+        <el-select v-model="filterRole" clearable placeholder="按权限视图过滤" style="width: 180px">
+          <el-option label="平台超级管理员" value="platform_admin" />
+          <el-option label="租户管理员" value="tenant_admin" />
+          <el-option label="开发者" value="developer" />
+          <el-option label="查看者" value="viewer" />
+          <el-option label="普通成员" value="member" />
+        </el-select>
+        <span class="tenant-users-summary">
+          共 {{ filteredUsers.length }} 条{{ filteredUsers.length !== users.length ? `（已从 ${users.length} 条过滤）` : '' }}
+        </span>
+      </div>
+
       <div class="tenant-users-panel">
-        <el-table v-loading="loading" :data="users" stripe>
+        <el-table v-loading="loading" :data="pagedUsers" stripe>
           <el-table-column prop="username" label="用户名" min-width="180" />
           <el-table-column v-if="isPlatformAdmin" label="所属组织" min-width="220">
             <template #default="{ row }">
@@ -64,6 +98,17 @@
             </template>
           </el-table-column>
         </el-table>
+
+        <div class="tenant-users-pager">
+          <el-pagination
+            v-model:current-page="currentPage"
+            v-model:page-size="pageSize"
+            :total="filteredUsers.length"
+            :page-sizes="[10, 20, 50, 100]"
+            layout="total, sizes, prev, pager, next, jumper"
+            background
+          />
+        </div>
       </div>
 
       <el-dialog v-model="dialogVisible" :title="isPlatformAdmin ? '添加平台账号' : '添加用户到当前组织'" width="480px">
@@ -115,7 +160,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import BuilderFrame from '@/components/BuilderFrame.vue'
 import { authApi, type TenantAdminItem, type TenantRoleOption, type TenantUser } from '@/api/auth'
@@ -142,6 +187,54 @@ const inviteForm = ref<{
 // 仅 platform_admin 用：account 添加时可选关联租户
 const availableTenants = ref<TenantAdminItem[]>([])
 const tenantsLoading = ref(false)
+
+// 列表过滤 + 分页
+const filterQ = ref('')
+const filterTenant = ref('')
+const filterRole = ref('')
+const currentPage = ref(1)
+const pageSize = ref(20)
+
+// 提取所有出现过的"所属组织"做下拉选项（按出现次数排序，每个组织带计数）
+const tenantFilterOptions = computed(() => {
+  const counts = new Map<string, number>()
+  for (const u of users.value) {
+    const summary = (u.tenant_summary || u.tenant_name || '').trim()
+    if (!summary) continue
+    // 一个用户可能属多个组织（"体验租户、白客松比赛"），按顿号拆开
+    for (const name of summary.split(/[、,，]/).map((s) => s.trim()).filter(Boolean)) {
+      counts.set(name, (counts.get(name) || 0) + 1)
+    }
+  }
+  return Array.from(counts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .map(([label, count]) => ({ label, value: label, count }))
+})
+
+const filteredUsers = computed(() => {
+  const q = filterQ.value.trim().toLowerCase()
+  const tenant = filterTenant.value.trim()
+  const role = filterRole.value.trim()
+  return users.value.filter((u) => {
+    if (q && !u.username.toLowerCase().includes(q)) return false
+    if (tenant) {
+      const summary = (u.tenant_summary || u.tenant_name || '')
+      if (!summary.includes(tenant)) return false
+    }
+    if (role && u.tenant_role !== role) return false
+    return true
+  })
+})
+
+const pagedUsers = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  return filteredUsers.value.slice(start, start + pageSize.value)
+})
+
+// 过滤变化时回到第一页
+watch([filterQ, filterTenant, filterRole, pageSize], () => {
+  currentPage.value = 1
+})
 
 async function loadTenantOptions() {
   if (!isPlatformAdmin.value) return
@@ -354,5 +447,23 @@ onMounted(() => {
   font-size: 12px;
   color: var(--b-text-muted, #999);
   line-height: 1.5;
+}
+
+.tenant-users-filter {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.tenant-users-summary {
+  font-size: 12px;
+  color: var(--b-text-muted, #999);
+  margin-left: auto;
+}
+.tenant-users-pager {
+  display: flex;
+  justify-content: flex-end;
+  padding: 16px 8px 4px;
 }
 </style>
