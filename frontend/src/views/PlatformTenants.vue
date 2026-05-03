@@ -184,11 +184,58 @@
             </dl>
           </div>
 
-          <div class="detail-section detail-muted-tip">
-            成员管理在下一版做（v2 第 3 波）。临时可切到该租户后到「组织用户」加成员。
+          <div class="detail-section">
+            <div class="detail-section-header">
+              <h4>成员（{{ detailMembers.length }}）</h4>
+              <el-button size="small" type="primary" @click="openAddMember">添加成员</el-button>
+            </div>
+            <div v-if="detailMembersLoading" class="detail-muted">加载中…</div>
+            <ul v-else-if="detailMembers.length > 0" class="member-list">
+              <li v-for="m in detailMembers" :key="m.user_id" class="member-row">
+                <div class="member-info">
+                  <span class="member-username">{{ m.username }}</span>
+                  <span class="member-meta">
+                    <el-tag size="small" :type="memberRoleTag(m.tenant_role)">{{ memberRoleLabel(m.tenant_role) }}</el-tag>
+                    <span v-if="m.is_platform_admin" class="member-platform">平台管理员</span>
+                    <span v-if="!m.is_active" class="member-inactive">已禁用</span>
+                  </span>
+                </div>
+                <el-button
+                  link
+                  type="danger"
+                  size="small"
+                  @click="confirmRemoveMember(m)"
+                >移除</el-button>
+              </li>
+            </ul>
+            <div v-else class="detail-muted">该租户还没有成员，点「添加成员」加入第一个用户。</div>
           </div>
         </div>
       </el-drawer>
+
+      <!-- 添加成员对话框 -->
+      <el-dialog v-model="addMemberVisible" :title="`添加成员到 ${detailTarget?.tenant_name || ''}`" width="440px">
+        <el-form :model="addMemberForm" label-position="top">
+          <el-form-item label="用户名" required>
+            <el-input v-model="addMemberForm.username" placeholder="已有账号直接加入；账号不存在时会新建" maxlength="64" />
+          </el-form-item>
+          <el-form-item label="初始密码">
+            <el-input v-model="addMemberForm.password" type="password" show-password placeholder="仅当账号不存在时需要填写" />
+          </el-form-item>
+          <el-form-item label="角色">
+            <el-select v-model="addMemberForm.role_code" style="width: 100%">
+              <el-option label="租户管理员（admin）" value="admin" />
+              <el-option label="开发者（R_developer）" value="R_developer" />
+              <el-option label="只读（R_viewer）" value="R_viewer" />
+              <el-option label="普通成员（member）" value="member" />
+            </el-select>
+          </el-form-item>
+        </el-form>
+        <template #footer>
+          <el-button @click="addMemberVisible = false">取消</el-button>
+          <el-button type="primary" :loading="memberSaving" @click="submitAddMember">添加</el-button>
+        </template>
+      </el-dialog>
     </div>
   </BuilderFrame>
 </template>
@@ -201,6 +248,8 @@ import {
   authApi,
   type TenantAdminItem,
   type TenantCreatePayload,
+  type TenantMemberAddPayload,
+  type TenantMemberItem,
   type TenantUpdatePayload,
   type TenantUsage,
 } from '@/api/auth'
@@ -233,6 +282,17 @@ const detailVisible = ref(false)
 const detailTarget = ref<TenantAdminItem | null>(null)
 const detailUsage = ref<TenantUsage | null>(null)
 const detailLoading = ref(false)
+
+// 成员
+const detailMembers = ref<TenantMemberItem[]>([])
+const detailMembersLoading = ref(false)
+const addMemberVisible = ref(false)
+const memberSaving = ref(false)
+const addMemberForm = ref<TenantMemberAddPayload>({
+  username: '',
+  password: '',
+  role_code: 'R_developer',
+})
 
 async function load() {
   loading.value = true
@@ -320,14 +380,89 @@ async function openDetail(row: TenantAdminItem) {
   detailTarget.value = row
   detailVisible.value = true
   detailUsage.value = null
+  detailMembers.value = []
   detailLoading.value = true
+  detailMembersLoading.value = true
   try {
-    detailUsage.value = await authApi.getTenantUsage(row.id)
+    const [usage, members] = await Promise.all([
+      authApi.getTenantUsage(row.id),
+      authApi.listTenantMembers(row.id),
+    ])
+    detailUsage.value = usage
+    detailMembers.value = members
   } catch (err: any) {
     ElMessage.error(err?.message || '加载详情失败')
   } finally {
     detailLoading.value = false
+    detailMembersLoading.value = false
   }
+}
+
+function openAddMember() {
+  addMemberForm.value = { username: '', password: '', role_code: 'R_developer' }
+  addMemberVisible.value = true
+}
+
+async function submitAddMember() {
+  if (!detailTarget.value) return
+  if (!addMemberForm.value.username?.trim()) {
+    ElMessage.warning('请输入用户名'); return
+  }
+  memberSaving.value = true
+  try {
+    const m = await authApi.addTenantMember(detailTarget.value.id, addMemberForm.value)
+    // 已有就替换、新增就追加
+    const idx = detailMembers.value.findIndex((x) => x.user_id === m.user_id)
+    if (idx >= 0) detailMembers.value[idx] = m
+    else detailMembers.value.push(m)
+    addMemberVisible.value = false
+    ElMessage.success(`成员「${m.username}」已加入`)
+    // 同步刷新 usage（成员数变了）
+    if (detailTarget.value) {
+      detailUsage.value = await authApi.getTenantUsage(detailTarget.value.id)
+    }
+  } catch (err: any) {
+    ElMessage.error(err?.message || '添加成员失败')
+  } finally {
+    memberSaving.value = false
+  }
+}
+
+async function confirmRemoveMember(m: TenantMemberItem) {
+  if (!detailTarget.value) return
+  try {
+    await ElMessageBox.confirm(
+      `把成员「${m.username}」从租户「${detailTarget.value.tenant_name}」移除？该用户的账号本身不会被删，只是失去该租户的访问。`,
+      '移除成员',
+      { type: 'warning', confirmButtonText: '移除', cancelButtonText: '取消' },
+    )
+  } catch { return }
+  try {
+    await authApi.removeTenantMember(detailTarget.value.id, m.user_id)
+    detailMembers.value = detailMembers.value.filter((x) => x.user_id !== m.user_id)
+    ElMessage.success('已移除')
+    if (detailTarget.value) {
+      detailUsage.value = await authApi.getTenantUsage(detailTarget.value.id)
+    }
+  } catch (err: any) {
+    ElMessage.error(err?.message || '移除失败')
+  }
+}
+
+function memberRoleLabel(role: string): string {
+  return ({
+    platform_admin: '平台管理员',
+    tenant_admin: '租户管理员',
+    developer: '开发者',
+    viewer: '只读',
+    member: '普通成员',
+  } as Record<string, string>)[role] || role
+}
+function memberRoleTag(role: string): 'primary' | 'success' | 'info' | 'warning' {
+  if (role === 'tenant_admin' || role === 'platform_admin') return 'warning'
+  if (role === 'developer') return 'success'
+  if (role === 'viewer') return 'info'
+  return 'primary'
 }
 
 async function toggleStatus(row: TenantAdminItem, val: boolean) {
@@ -494,11 +629,62 @@ onMounted(load)
   color: var(--t-text-muted);
   font-size: 13px;
 }
-.detail-muted-tip {
+.detail-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid var(--t-border-subtle);
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+}
+.detail-section-header h4 {
+  margin: 0;
+  border: 0;
+  padding: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--t-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.member-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.member-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--t-border-subtle);
+}
+.member-row:last-child { border-bottom: 0; }
+.member-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.member-username {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--t-text-primary);
+}
+.member-meta {
+  display: flex;
+  gap: 6px;
+  align-items: center;
   font-size: 12px;
   color: var(--t-text-muted);
-  background: var(--t-bg-input);
-  padding: 10px 12px;
-  border-radius: 6px;
+}
+.member-platform {
+  font-weight: 500;
+  color: #f0a020;
+}
+.member-inactive {
+  color: #d33;
 }
 </style>

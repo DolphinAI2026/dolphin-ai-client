@@ -10,13 +10,17 @@ from app.models import User
 from app.models.tenant import Tenant, UserTenant
 from app.routes.auth import (
     TenantCreateRequest,
+    TenantMemberAddRequest,
     TenantStatusRequest,
     TenantSwitchRequest,
     TenantUpdateRequest,
+    add_tenant_member,
     create_new_tenant,
     delete_tenant,
     list_all_tenants,
     list_my_tenants,
+    list_tenant_members,
+    remove_tenant_member,
     switch_tenant,
     update_tenant,
     update_tenant_status,
@@ -249,4 +253,93 @@ async def test_delete_blocks_when_tenant_is_current(db_session):
 
     with pytest.raises(HTTPException) as exc:
         await delete_tenant(created.id, ctx_self, db_session)
+    assert exc.value.status_code == 400
+
+
+async def _seed_admin_with_default_tenant(db_session, *, tenant_code="d1"):
+    from app.models.tenant import Role
+    tenant = Tenant(tenant_name="D", tenant_code=tenant_code, status=1)
+    db_session.add(tenant)
+    await db_session.flush()
+    # 给 tenant 建一个 admin role（add_tenant_member fallback 找它）
+    role = Role(
+        tenant_id=tenant.id,
+        role_name="Admin",
+        role_code="admin",
+        permissions={"*": True},
+        is_system=True,
+    )
+    db_session.add(role)
+    admin = User(
+        username=f"sa_{tenant_code}",
+        hashed_password=get_password_hash("x"),
+        is_active=True,
+        is_platform_admin=True,
+    )
+    db_session.add(admin)
+    await db_session.flush()
+    return tenant, admin, role
+
+
+@pytest.mark.asyncio
+async def test_add_tenant_member_creates_user_and_membership(db_session):
+    tenant, admin, role = await _seed_admin_with_default_tenant(db_session, tenant_code="dm1")
+    ctx = AuthContext(user=admin, tenant_id=0, tenant_role="platform_admin", org_permissions={"*": True})
+
+    m = await add_tenant_member(
+        tenant.id,
+        TenantMemberAddRequest(username="alice_new", password="pw123", role_code="admin"),
+        ctx,
+        db_session,
+    )
+    assert m.username == "alice_new"
+    assert m.role_code == "admin"
+
+    members = await list_tenant_members(tenant.id, ctx, db_session)
+    assert any(x.username == "alice_new" for x in members)
+
+
+@pytest.mark.asyncio
+async def test_add_tenant_member_existing_user_no_password_required(db_session):
+    tenant, admin, role = await _seed_admin_with_default_tenant(db_session, tenant_code="dm2")
+    ctx = AuthContext(user=admin, tenant_id=0, tenant_role="platform_admin", org_permissions={"*": True})
+
+    # 已存在用户
+    existing = User(username="bob", hashed_password=get_password_hash("x"), is_active=True)
+    db_session.add(existing)
+    await db_session.flush()
+
+    m = await add_tenant_member(
+        tenant.id,
+        TenantMemberAddRequest(username="bob"),  # 不传 password
+        ctx, db_session,
+    )
+    assert m.username == "bob"
+
+
+@pytest.mark.asyncio
+async def test_remove_tenant_member_works(db_session):
+    tenant, admin, role = await _seed_admin_with_default_tenant(db_session, tenant_code="dm3")
+    ctx = AuthContext(user=admin, tenant_id=0, tenant_role="platform_admin", org_permissions={"*": True})
+
+    m = await add_tenant_member(
+        tenant.id,
+        TenantMemberAddRequest(username="charlie", password="x"),
+        ctx, db_session,
+    )
+
+    res = await remove_tenant_member(tenant.id, m.user_id, ctx, db_session)
+    assert res["ok"] is True
+
+    members = await list_tenant_members(tenant.id, ctx, db_session)
+    assert all(x.user_id != m.user_id for x in members)
+
+
+@pytest.mark.asyncio
+async def test_remove_self_from_current_tenant_blocked(db_session):
+    tenant, admin, role = await _seed_admin_with_default_tenant(db_session, tenant_code="dm4")
+    ctx = AuthContext(user=admin, tenant_id=tenant.id, tenant_role="platform_admin", org_permissions={"*": True})
+
+    with pytest.raises(HTTPException) as exc:
+        await remove_tenant_member(tenant.id, admin.id, ctx, db_session)
     assert exc.value.status_code == 400

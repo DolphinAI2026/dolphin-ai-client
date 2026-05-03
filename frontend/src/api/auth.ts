@@ -69,6 +69,24 @@ export interface TenantUsage {
   members: number
 }
 
+export interface TenantMemberItem {
+  user_id: number
+  username: string
+  is_active: boolean
+  is_platform_admin: boolean
+  tenant_role: string
+  role_code?: string | null
+  role_name?: string | null
+  joined_at?: string | null
+  is_default: boolean
+}
+
+export interface TenantMemberAddPayload {
+  username: string
+  password?: string
+  role_code?: string
+}
+
 export interface TenantUpdatePayload {
   tenant_name?: string
   plan_type?: 'free' | 'pro' | 'enterprise'
@@ -120,6 +138,18 @@ export const authApi = {
 
   getTenantUsage(tenantId: number) {
     return request.get<any, TenantUsage>(`/auth/tenants/${tenantId}/usage`)
+  },
+
+  listTenantMembers(tenantId: number) {
+    return request.get<any, TenantMemberItem[]>(`/auth/tenants/${tenantId}/members`)
+  },
+
+  addTenantMember(tenantId: number, data: TenantMemberAddPayload) {
+    return request.post<any, TenantMemberItem>(`/auth/tenants/${tenantId}/members`, data)
+  },
+
+  removeTenantMember(tenantId: number, userId: number) {
+    return request.delete<any, { ok: boolean }>(`/auth/tenants/${tenantId}/members/${userId}`)
   },
 
   getMe() {

@@ -486,6 +486,177 @@ async def update_tenant(
     return _tenant_admin_item(t, int(cnt))
 
 
+class TenantMemberAddRequest(BaseModel):
+    username: str
+    password: Optional[str] = None
+    role_code: Optional[str] = None  # 默认 R_developer
+
+
+class TenantMemberItem(BaseModel):
+    user_id: int
+    username: str
+    is_active: bool
+    is_platform_admin: bool
+    tenant_role: str  # tenant_admin / developer / viewer / member
+    role_code: Optional[str] = None
+    role_name: Optional[str] = None
+    joined_at: Optional[str] = None
+    is_default: bool = False
+
+
+def _serialize_tenant_member(
+    user: User, membership: UserTenant, role: Optional[Role]
+) -> TenantMemberItem:
+    tenant_role, role_name, _perms = _resolve_tenant_role(role)
+    return TenantMemberItem(
+        user_id=user.id,
+        username=user.username,
+        is_active=user.is_active,
+        is_platform_admin=user.is_platform_admin,
+        tenant_role=tenant_role,
+        role_code=role.role_code if role else None,
+        role_name=role_name,
+        joined_at=membership.joined_at.isoformat() if membership.joined_at else None,
+        is_default=bool(membership.is_default),
+    )
+
+
+@router.get("/tenants/{tenant_id}/members", response_model=list[TenantMemberItem])
+async def list_tenant_members(
+    tenant_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """列出指定租户的成员（仅平台管理员）。"""
+    _require_platform_admin(ctx)
+    # tenant 存在性
+    tenant = (await db.execute(select(Tenant).where(Tenant.id == tenant_id))).scalar_one_or_none()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="租户不存在")
+
+    rows = (
+        await db.execute(
+            select(UserTenant, User, Role)
+            .join(User, User.id == UserTenant.user_id)
+            .outerjoin(Role, Role.id == UserTenant.role_id)
+            .where(UserTenant.tenant_id == tenant_id, UserTenant.status == 1)
+            .order_by(UserTenant.joined_at.asc())
+        )
+    ).all()
+    return [_serialize_tenant_member(user, m, role) for m, user, role in rows]
+
+
+@router.post("/tenants/{tenant_id}/members", response_model=TenantMemberItem)
+async def add_tenant_member(
+    tenant_id: int,
+    data: TenantMemberAddRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """跨租户给指定租户加成员（仅平台管理员）。
+
+    若用户名不存在则用 password 新建账号；已存在则只建/激活 UserTenant 关系。
+    role_code 默认 R_developer，可传 R_tenant_admin / R_developer / R_viewer / member。
+    """
+    _require_platform_admin(ctx)
+
+    tenant = (await db.execute(select(Tenant).where(Tenant.id == tenant_id))).scalar_one_or_none()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="租户不存在")
+
+    username = (data.username or "").strip()
+    if not username:
+        raise HTTPException(status_code=400, detail="用户名不能为空")
+
+    role_code = (data.role_code or "R_developer").strip() or "R_developer"
+    role = (
+        await db.execute(
+            select(Role).where(Role.tenant_id == tenant_id, Role.role_code == role_code)
+        )
+    ).scalar_one_or_none()
+    if not role:
+        # 找不到该 tenant 的同 code 角色，回退到 admin（任 tenant 创建时有种 admin）
+        role = (
+            await db.execute(
+                select(Role).where(Role.tenant_id == tenant_id, Role.role_code == "admin")
+            )
+        ).scalar_one_or_none()
+    if not role:
+        raise HTTPException(status_code=404, detail="该租户未配置角色，请先创建角色")
+
+    user = (await db.execute(select(User).where(User.username == username))).scalar_one_or_none()
+    if not user:
+        if not data.password:
+            raise HTTPException(status_code=400, detail="用户不存在，请提供初始密码创建账号")
+        user = User(username=username, hashed_password=get_password_hash(data.password), is_active=True)
+        db.add(user)
+        await db.flush()
+
+    membership = (
+        await db.execute(
+            select(UserTenant).where(
+                UserTenant.user_id == user.id, UserTenant.tenant_id == tenant_id
+            )
+        )
+    ).scalar_one_or_none()
+    if membership:
+        membership.status = 1
+        membership.role_id = role.id
+    else:
+        # 用户没有任何 active membership 时把这条设为 default
+        existing_default = (
+            await db.execute(
+                select(UserTenant).where(
+                    UserTenant.user_id == user.id, UserTenant.status == 1
+                )
+            )
+        ).scalars().all()
+        membership = UserTenant(
+            user_id=user.id,
+            tenant_id=tenant_id,
+            role_id=role.id,
+            is_default=not existing_default,
+            status=1,
+        )
+        db.add(membership)
+
+    await db.commit()
+    await db.refresh(membership)
+    return _serialize_tenant_member(user, membership, role)
+
+
+@router.delete("/tenants/{tenant_id}/members/{user_id}")
+async def remove_tenant_member(
+    tenant_id: int,
+    user_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """把成员从租户移除（仅平台管理员）。
+
+    硬删 UserTenant 行（不是软删）；不动 User 账号本身。
+    保护：不能把自己从当前激活租户移除。
+    """
+    _require_platform_admin(ctx)
+
+    if ctx.user.id == user_id and ctx.tenant_id == tenant_id:
+        raise HTTPException(status_code=400, detail="不能把自己从当前激活的租户中移除")
+
+    membership = (
+        await db.execute(
+            select(UserTenant).where(
+                UserTenant.user_id == user_id, UserTenant.tenant_id == tenant_id
+            )
+        )
+    ).scalar_one_or_none()
+    if not membership:
+        raise HTTPException(status_code=404, detail="该用户不是该租户成员")
+
+    await db.delete(membership)
+    await db.commit()
+    return {"ok": True, "tenant_id": tenant_id, "user_id": user_id}
+
+
 @router.delete("/tenants/{tenant_id}")
 async def delete_tenant(
     tenant_id: int,
