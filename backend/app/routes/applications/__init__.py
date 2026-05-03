@@ -477,6 +477,10 @@ async def create_application(
             minimum_role="member",
         )
 
+    # 租户应用数配额
+    from app.tenant_quota import assert_tenant_quota
+    await assert_tenant_quota(db, ctx.tenant_id, "applications")
+
     if data.canonical_spec_id:
         from app.builder_spec.persistence import load_spec
         spec = await load_spec(db, data.canonical_spec_id, tenant_id=ctx.tenant_id)
@@ -684,6 +688,10 @@ async def auto_create_application(
             tenant_id=ctx.tenant_id,
             minimum_role="member",
         )
+
+    # 租户应用数配额（auto-create 走到这里说明确认要新建）
+    from app.tenant_quota import assert_tenant_quota
+    await assert_tenant_quota(db, ctx.tenant_id, "applications")
 
     # 生成 app_code：优先使用解析文档中的 appCode
     import hashlib
@@ -898,6 +906,8 @@ async def import_from_platform(
         return _enrich(existing_app)
 
     # 7. 创建本地 Application 记录
+    from app.tenant_quota import assert_tenant_quota
+    await assert_tenant_quota(db, ctx.tenant_id, "applications")
     config_str = _dump_preview_config(config)
     new_app = Application(
         user_id=ctx.user.id,

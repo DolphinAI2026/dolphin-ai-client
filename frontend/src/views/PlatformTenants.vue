@@ -26,7 +26,15 @@
             </template>
           </el-table-column>
           <el-table-column prop="member_count" label="成员数" width="90" align="right" />
-          <el-table-column prop="max_applications" label="应用上限" width="100" align="right" />
+          <el-table-column label="配额（应用 / 工作区 / 组件）" min-width="200" align="center">
+            <template #default="{ row }">
+              <span class="quota-cell">
+                {{ row.max_applications }} <span class="quota-sep">/</span>
+                {{ row.max_workspaces }} <span class="quota-sep">/</span>
+                {{ row.max_components }}
+              </span>
+            </template>
+          </el-table-column>
           <el-table-column label="状态" width="120">
             <template #default="{ row }">
               <el-switch
@@ -71,8 +79,14 @@
               <el-option label="Enterprise" value="enterprise" />
             </el-select>
           </el-form-item>
-          <el-form-item label="应用数量上限">
+          <el-form-item label="低代码应用数量上限">
             <el-input-number v-model="form.max_applications" :min="1" :max="10000" :step="10" style="width: 100%" />
+          </el-form-item>
+          <el-form-item label="Vibe Coding 工作区数量上限">
+            <el-input-number v-model="form.max_workspaces" :min="0" :max="10000" :step="5" style="width: 100%" />
+          </el-form-item>
+          <el-form-item label="自开发组件数量上限">
+            <el-input-number v-model="form.max_components" :min="0" :max="10000" :step="10" style="width: 100%" />
           </el-form-item>
           <el-form-item label="联系人姓名">
             <el-input v-model="form.contact_name" maxlength="64" />
@@ -105,6 +119,8 @@ const form = ref<TenantCreatePayload>({
   tenant_code: '',
   plan_type: 'free',
   max_applications: 100,
+  max_workspaces: 50,
+  max_components: 100,
   contact_name: '',
   contact_email: '',
 })
@@ -126,6 +142,8 @@ function openCreate() {
     tenant_code: '',
     plan_type: 'free',
     max_applications: 100,
+    max_workspaces: 50,
+    max_components: 100,
     contact_name: '',
     contact_email: '',
   }
@@ -226,5 +244,13 @@ onMounted(load)
 }
 .tenant-muted {
   color: var(--t-text-muted);
+}
+.quota-cell {
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+}
+.quota-sep {
+  color: var(--t-text-muted);
+  margin: 0 2px;
 }
 </style>

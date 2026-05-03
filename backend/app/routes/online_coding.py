@@ -836,6 +836,7 @@ def _public_workspace(meta: dict) -> OnlineCodingWorkspace:
 async def create_online_coding_workspace(
     req: OnlineCodingCreateRequest,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ):
     repo_url = (req.repo_url or "").strip() or None
     task = (req.task or "").strip()
@@ -843,6 +844,10 @@ async def create_online_coding_workspace(
         raise HTTPException(status_code=400, detail="请填写 Git 仓库地址或开发任务")
     if repo_url:
         repo_url = _validate_repo_url(repo_url)
+
+    # 租户 workspace 数配额
+    from app.tenant_quota import assert_tenant_quota
+    await assert_tenant_quota(db, ctx.tenant_id, "workspaces")
 
     workspace_id = f"oc_{uuid.uuid4().hex[:12]}"
     now = _now_iso()

@@ -198,6 +198,10 @@ async def publish_component(
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=400, detail=f"组件代码 '{req.code}' 已被使用")
 
+    # 租户组件数配额
+    from app.tenant_quota import assert_tenant_quota
+    await assert_tenant_quota(db, ctx.tenant_id, "components")
+
     # 打包工作区 src 目录为 zip
     src_dir = ws_path / "src"
     if not src_dir.exists():

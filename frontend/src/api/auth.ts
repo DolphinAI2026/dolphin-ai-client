@@ -37,6 +37,8 @@ export interface TenantAdminItem {
   tenant_code: string
   plan_type: string
   max_applications: number
+  max_workspaces: number
+  max_components: number
   status: number
   contact_name?: string | null
   contact_email?: string | null
@@ -49,8 +51,22 @@ export interface TenantCreatePayload {
   tenant_code: string
   plan_type?: 'free' | 'pro' | 'enterprise'
   max_applications?: number
+  max_workspaces?: number
+  max_components?: number
   contact_name?: string | null
   contact_email?: string | null
+}
+
+export interface TenantUsageQuota {
+  used: number
+  max: number
+}
+
+export interface TenantUsage {
+  applications: TenantUsageQuota
+  workspaces: TenantUsageQuota
+  components: TenantUsageQuota
+  members: number
 }
 
 export const authApi = {
@@ -80,6 +96,10 @@ export const authApi = {
 
   updateTenantStatus(tenantId: number, status: 0 | 1) {
     return request.put<any, TenantAdminItem>(`/auth/tenants/${tenantId}/status`, { status })
+  },
+
+  getTenantUsage(tenantId: number) {
+    return request.get<any, TenantUsage>(`/auth/tenants/${tenantId}/usage`)
   },
 
   getMe() {

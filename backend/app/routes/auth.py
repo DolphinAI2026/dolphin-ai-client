@@ -303,6 +303,8 @@ class TenantCreateRequest(BaseModel):
     tenant_code: str
     plan_type: str = "free"
     max_applications: int = 10
+    max_workspaces: int = 20
+    max_components: int = 50
     contact_name: Optional[str] = None
     contact_email: Optional[str] = None
 
@@ -317,6 +319,8 @@ class TenantAdminItem(BaseModel):
     tenant_code: str
     plan_type: str
     max_applications: int
+    max_workspaces: int
+    max_components: int
     status: int
     contact_name: Optional[str] = None
     contact_email: Optional[str] = None
@@ -331,6 +335,8 @@ def _tenant_admin_item(t: Tenant, member_count: int) -> TenantAdminItem:
         tenant_code=t.tenant_code,
         plan_type=t.plan_type,
         max_applications=t.max_applications,
+        max_workspaces=t.max_workspaces,
+        max_components=t.max_components,
         status=t.status,
         contact_name=t.contact_name,
         contact_email=t.contact_email,
@@ -386,6 +392,10 @@ async def create_new_tenant(
         raise HTTPException(status_code=400, detail="plan_type 仅支持 free/pro/enterprise")
     if data.max_applications < 1 or data.max_applications > 10000:
         raise HTTPException(status_code=400, detail="max_applications 范围 1-10000")
+    if data.max_workspaces < 0 or data.max_workspaces > 10000:
+        raise HTTPException(status_code=400, detail="max_workspaces 范围 0-10000")
+    if data.max_components < 0 or data.max_components > 10000:
+        raise HTTPException(status_code=400, detail="max_components 范围 0-10000")
 
     existing = (
         await db.execute(select(Tenant).where(Tenant.tenant_code == code))
@@ -398,6 +408,8 @@ async def create_new_tenant(
         tenant_code=code,
         plan_type=data.plan_type,
         max_applications=data.max_applications,
+        max_workspaces=data.max_workspaces,
+        max_components=data.max_components,
         status=1,
         contact_name=(data.contact_name or "").strip() or None,
         contact_email=(data.contact_email or "").strip() or None,
@@ -406,6 +418,18 @@ async def create_new_tenant(
     await db.commit()
     await db.refresh(t)
     return _tenant_admin_item(t, 0)
+
+
+@router.get("/tenants/{tenant_id}/usage")
+async def get_tenant_usage_endpoint(
+    tenant_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """返回某租户的资源使用情况（仅平台管理员）。"""
+    _require_platform_admin(ctx)
+    from app.tenant_quota import get_tenant_usage as _get_usage
+    return await _get_usage(db, tenant_id)
 
 
 @router.put("/tenants/{tenant_id}/status", response_model=TenantAdminItem)

@@ -16,6 +16,8 @@ class Tenant(Base):
     tenant_code: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
     plan_type: Mapped[str] = mapped_column(String(32), default="free", nullable=False)  # free/pro/enterprise
     max_applications: Mapped[int] = mapped_column(Integer, default=10, nullable=False)
+    max_workspaces: Mapped[int] = mapped_column(Integer, default=20, nullable=False)  # vibe-coding 工作区配额
+    max_components: Mapped[int] = mapped_column(Integer, default=50, nullable=False)  # 自开发组件配额
     status: Mapped[int] = mapped_column(Integer, default=1, nullable=False)  # 1=active, 0=disabled
     contact_name: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     contact_email: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
