@@ -202,6 +202,7 @@ async def get_online_coding_preview_runtime_logs(
 async def proxy_online_coding_preview(
     workspace_id: str,
     request: Request,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
     preview_path: str = "",
     port: Optional[int] = Query(default=None),
 ):
@@ -210,7 +211,11 @@ async def proxy_online_coding_preview(
     This is intentionally minimal for the internal process runner. The
     production Docker/K8s runner should replace this with a signed URL or
     ingress/subdomain based proxy.
+
+    生产环境实际走 *.vibe-first.cn 子域反代到 sandbox 容器，不再用此端点；
+    保留是为了本地 LocalPreviewRuntime 兼容。鉴权要求登录用户且为 workspace 所有者。
     """
+    _get_online_repo_for_user(workspace_id, ctx)
     state = _get_preview_runtime(request).status(workspace_id)
     if state.status != PreviewRuntimeStatus.RUNNING or not state.port:
         raise HTTPException(status_code=404, detail="预览服务未运行")

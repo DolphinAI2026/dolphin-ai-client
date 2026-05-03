@@ -1,14 +1,30 @@
-"""模板管理 API — 基于文件系统的 MD 设计文档模板"""
+"""模板管理 API — 基于文件系统的 MD 设计文档模板。
+
+权限：
+- 模板是平台级共享资源（所有租户可读），所以读操作仅要求登录态
+- 写操作（create/update/delete/upload）限 platform_admin
+"""
 
 from datetime import datetime
 import re
 from pathlib import Path
-from typing import Optional
+from typing import Annotated, Optional
 
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
 from pydantic import BaseModel
 
+from app.deps import AuthContext, get_auth_context
+
 router = APIRouter(prefix="/templates", tags=["模板管理"])
+
+
+def _require_platform_admin(ctx: AuthContext) -> None:
+    if ctx.tenant_role == "platform_admin" or ctx.user.is_platform_admin:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="仅平台管理员可管理模板",
+    )
 
 # 模板目录
 TEMPLATES_DIR = Path(__file__).parent.parent.parent / "templates"
@@ -104,14 +120,19 @@ def _scan_templates() -> list[dict]:
 
 
 @router.get("")
-async def list_templates():
-    """获取模板列表"""
+async def list_templates(
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+):
+    """获取模板列表（仅登录用户）"""
     return _scan_templates()
 
 
 @router.get("/{code}")
-async def get_template(code: str):
-    """获取指定模板的完整 MD 内容"""
+async def get_template(
+    code: str,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+):
+    """获取指定模板的完整 MD 内容（仅登录用户）"""
     if not TEMPLATES_DIR.exists():
         raise HTTPException(status_code=404, detail="模板目录不存在")
 
@@ -166,8 +187,12 @@ class TemplateUpdateRequest(BaseModel):
 
 
 @router.post("")
-async def create_template(req: TemplateCreateRequest):
-    """创建新模板"""
+async def create_template(
+    req: TemplateCreateRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+):
+    """创建新模板（仅平台管理员）"""
+    _require_platform_admin(ctx)
     TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
 
     code = _sanitize_code(req.code)
@@ -186,8 +211,13 @@ async def create_template(req: TemplateCreateRequest):
 
 
 @router.put("/{code}")
-async def update_template(code: str, req: TemplateUpdateRequest):
-    """更新模板"""
+async def update_template(
+    code: str,
+    req: TemplateUpdateRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+):
+    """更新模板（仅平台管理员）"""
+    _require_platform_admin(ctx)
     if not TEMPLATES_DIR.exists():
         raise HTTPException(status_code=404, detail="模板目录不存在")
 
@@ -215,8 +245,12 @@ async def update_template(code: str, req: TemplateUpdateRequest):
 
 
 @router.delete("/{code}")
-async def delete_template(code: str):
-    """删除模板"""
+async def delete_template(
+    code: str,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+):
+    """删除模板（仅平台管理员）"""
+    _require_platform_admin(ctx)
     if not TEMPLATES_DIR.exists():
         raise HTTPException(status_code=404, detail="模板目录不存在")
 
@@ -230,8 +264,12 @@ async def delete_template(code: str):
 
 
 @router.post("/upload")
-async def upload_template(file: UploadFile = File(...)):
-    """上传 MD 文件作为模板"""
+async def upload_template(
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    file: UploadFile = File(...),
+):
+    """上传 MD 文件作为模板（仅平台管理员）"""
+    _require_platform_admin(ctx)
     if not file.filename or not file.filename.endswith('.md'):
         raise HTTPException(status_code=400, detail="仅支持 .md 文件")
 

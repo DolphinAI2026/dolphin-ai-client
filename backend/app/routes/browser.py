@@ -20,7 +20,11 @@ router = APIRouter(prefix="/coding/workspace/{ws_id}/browser", tags=["browser"])
 # ---------- Auth ----------
 
 def _verify_token(ws_id: str, token: str):
-    """复用 IDE access token 验证"""
+    """验证 IDE access token，并校验 token 中 user/tenant 与 workspace meta 一致。
+
+    多一道 user/tenant 校验是为了防止：用户从租户 A 签出的 ide_access token，
+    在租户 A 被踢出后仍能在 token 8h 有效期内访问该 workspace。
+    """
     from jose import jwt, JWTError
     try:
         payload = jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
@@ -28,6 +32,25 @@ def _verify_token(ws_id: str, token: str):
         raise HTTPException(status_code=401, detail="无效或已过期的访问令牌")
     if payload.get("type") != "ide_access" or payload.get("ws") != ws_id:
         raise HTTPException(status_code=403, detail="访问令牌与当前工作区不匹配")
+
+    # 反查 workspace meta，比对 user/tenant
+    try:
+        from app.routes.online_coding import _find_workspace_dir
+        _, meta = _find_workspace_dir(ws_id)
+    except HTTPException:
+        meta = None
+    if meta is not None:
+        token_user = payload.get("sub")
+        token_tenant = payload.get("tid")
+        meta_user = meta.get("user_id")
+        meta_tenant = meta.get("tenant_id")
+        try:
+            if token_user is not None and meta_user is not None and int(token_user) != int(meta_user):
+                raise HTTPException(status_code=403, detail="访问令牌与当前工作区用户不匹配")
+            if token_tenant is not None and meta_tenant is not None and int(token_tenant) != int(meta_tenant):
+                raise HTTPException(status_code=403, detail="访问令牌与当前工作区租户不匹配")
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=401, detail="无效的访问令牌内容")
     return payload
 
 
