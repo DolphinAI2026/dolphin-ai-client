@@ -17,13 +17,26 @@ import json
 import logging
 import os
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import httpx
 from jose import jwt
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 from app.config import settings
+
+# pydantic-settings 加载的是 settings.env_var；我们直接读 os.environ 的 MCP_API_KEYS。
+# 显式 load .env 兜底（生产 nohup 启动时 source .env 不一定继承环境变量）
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _backend_dir = Path(__file__).resolve().parent.parent  # backend/
+    _env_path = _backend_dir / ".env"
+    if _env_path.exists():
+        _load_dotenv(str(_env_path), override=False)
+except Exception:
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -159,6 +172,17 @@ async def _api_call_sse_collect(
 # ─────────────────────── FastMCP 实例 ───────────────────────
 
 
+# DNS rebinding 保护：默认开启时 allowed_hosts 空会拒所有 Host，必须显式列允许域名。
+# MCP_ALLOWED_HOSTS 环境变量逗号分隔；不配则关闭保护（部署在反代后已经有 CSRF/auth 兜底）
+_allowed_hosts = [h.strip() for h in (os.getenv("MCP_ALLOWED_HOSTS") or "").split(",") if h.strip()]
+if _allowed_hosts:
+    _security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=_allowed_hosts,
+    )
+else:
+    _security = TransportSecuritySettings(enable_dns_rebinding_protection=False)
+
 mcp = FastMCP(
     "apaas-builder-ai",
     instructions=(
@@ -167,6 +191,13 @@ mcp = FastMCP(
         "查询应用列表与详情，预览 / 执行变更计划。"
         "调用每个工具都要带 tenant_id 和 user_id（由得小帆配置注入到 body 根级）。"
     ),
+    transport_security=_security,
+    # stateless 模式：server 不跟踪 mcp-session-id，每个 POST 自包含。
+    # dolphin 等 agent 平台的 streamable HTTP client 不可靠传递 session id，
+    # 默认 stateful 会在第二个 request 报 400 Missing session ID。
+    stateless_http=True,
+    # JSON 响应（非 SSE 流），dolphin 解析更稳定
+    json_response=True,
 )
 
 
