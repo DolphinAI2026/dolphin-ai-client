@@ -180,11 +180,11 @@ try:
     from app.mcp_server import mcp as _mcp_server, is_valid_api_key as _mcp_is_valid_api_key
 
     class _McpAuthMiddleware:
-        """ASGI 中间件：拦截进入 mcp.sse_app() 的请求，校验 Authorization Bearer。
+        """ASGI 中间件：校验 Authorization: Bearer <MCP_API_KEY>（或 ?api_key=xxx）。
 
-        允许两种来源：
-        - 标准请求头 Authorization: Bearer <key>
-        - SSE 特殊：浏览器/部分 SSE client 不便加 header 时，可走 query ?api_key=xxx
+        生产 nginx 反代 /ai-builder/api/* → :8003/api/*，要让 MCP advertise 的 message
+        endpoint 包含 /ai-builder 前缀，靠 uvicorn 启动参数 --root-path=/ai-builder
+        （ASGI 标准做法），这里中间件不动 scope。
         """
 
         def __init__(self, app):
