@@ -3006,6 +3006,22 @@ const conversationId = ref<number | null>(null)
 const existingAppId = ref<number | null>(null)  // 从"继续完善"进来时，关联的已有应用ID
 const generating = ref(false)
 
+// 从 AIChat 跳过来时记录来源 (session_id, filename)；建应用成功后写 localStorage dedup 缓存，
+// 同来源再点 → Builder 不会重复建
+const pendingMdSource = ref<{ sessionId: number | string | null; filename: string } | null>(null)
+const MD_TO_BUILDER_CACHE_KEY = 'mdToBuilderAppMap'
+function recordMdToBuilderCache(appId: number | null | undefined) {
+  if (!appId || !pendingMdSource.value || !pendingMdSource.value.sessionId) return
+  const { sessionId, filename } = pendingMdSource.value
+  pendingMdSource.value = null
+  try {
+    const raw = localStorage.getItem(MD_TO_BUILDER_CACHE_KEY)
+    const map = raw ? JSON.parse(raw) : {}
+    map[`${sessionId}::${filename}`] = appId
+    localStorage.setItem(MD_TO_BUILDER_CACHE_KEY, JSON.stringify(map))
+  } catch { /* ignore */ }
+}
+
 // ── Requirements mode ──
 const isRequirementsMode = computed(() => currentAgent.value === 'requirements')
 // 独立需求会话进入 SPEC 画布；已有应用详情固定使用构建预览，避免异步历史会话把页面切走。
@@ -5182,6 +5198,9 @@ const uploadDocFile = async (file: File) => {
           parsedAppCode.value = result.app_code || ''
           parsedAppCode.value = result.app_code || loadedAppCode.value || ''
           router.replace({ query: { ...route.query, app_id: String(result.app_id) } })
+          // 来自 AIChat 的 → Builder 入口：把 (session+filename) → app_id 写本地缓存，
+          // 同一来源再点 → Builder 直接跳已有应用，不重复建
+          recordMdToBuilderCache(result.app_id)
           console.log(`Doc upload auto-created app: id=${result.app_id}, is_new=${result.is_new}`)
         } catch (e) {
           console.warn('文档上传后自动创建应用失败:', e)
@@ -5227,6 +5246,7 @@ const uploadDocFile = async (file: File) => {
           loadedAppCode.value = result.app_code || ''
           parsedAppCode.value = result.app_code || ''
           router.replace({ query: { ...route.query, app_id: String(result.app_id) } })
+          recordMdToBuilderCache(result.app_id)
         } catch (e) {
           console.warn('兜底模式创建应用失败:', e)
         }
@@ -7361,6 +7381,11 @@ onMounted(async () => {
   if (store.pendingMarkdown) {
     const pending = store.pendingMarkdown
     store.pendingMarkdown = null
+    // 记录来源（session+filename），uploadDocFile 建好应用后写本地 dedup 缓存
+    pendingMdSource.value = {
+      sessionId: pending.sourceSessionId ?? null,
+      filename: pending.filename,
+    }
     resetConversationWorkspace()
     resetMessagesToWelcome()
     const file = new File([pending.content], pending.filename, { type: 'text/markdown' })

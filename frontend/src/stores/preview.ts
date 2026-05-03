@@ -15,7 +15,8 @@ export const usePreviewStore = defineStore('preview', () => {
   const showConnectModal = ref(false)
   const pendingFile = ref<File | null>(null)  // 从 Landing 页带过来的待解析文件
   const pendingBuilderModelId = ref<number | null>(null)  // 从 Landing 页带到 Chat 的 builder 模型
-  const pendingMarkdown = ref<{ filename: string; content: string } | null>(null)  // 从需求分析页带到 Chat 的设计文档
+  // 从需求分析页带到 Chat 的设计文档；sourceSessionId 用于建应用后回写 (session+filename)→app_id 缓存防重复建
+  const pendingMarkdown = ref<{ filename: string; content: string; sourceSessionId?: number | string | null } | null>(null)
   const pendingAiChatFiles = ref<File[]>([])  // 从 Landing 页 Chat 模式带过来的多文件附件，进入 AIChatPage 后上传
   const showChangePlan = ref(false)
   const changePlan = ref<any | null>(null)

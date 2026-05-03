@@ -1154,13 +1154,39 @@ async function rewriteArtifactToSpec() {
   onSend()
 }
 
+// localStorage 缓存：(session_id + artifact filename) → 已建 application id
+// 同一个 md → Builder 重复点不再重复建应用，直接跳已有应用的 SPEC 工作台
+const MD_TO_APP_CACHE_KEY = 'mdToBuilderAppMap'
+
+function readMdToAppCache(): Record<string, number> {
+  try {
+    const raw = localStorage.getItem(MD_TO_APP_CACHE_KEY)
+    return raw ? JSON.parse(raw) : {}
+  } catch { return {} }
+}
+function getCachedAppId(sessionId: number | string, filename: string): number | null {
+  const map = readMdToAppCache()
+  const id = map[`${sessionId}::${filename}`]
+  return typeof id === 'number' && id > 0 ? id : null
+}
+
 // 把右侧当前打开的设计文档送到 Builder：复用 store.pendingMarkdown 通道，
 // ChatPage 的 onMounted 会自动把它当成 upload doc 处理。
 async function sendArtifactToBuilder() {
   if (!canSendArtifactToBuilder.value) return
+  // 已建过同名 → 直接跳应用，不重复 upload
+  if (currentSession.value) {
+    const cachedId = getCachedAppId(currentSession.value.id, activeArtifactName.value)
+    if (cachedId) {
+      ElMessage.success('已找到此设计文档对应的应用，正在打开...')
+      await router.push({ path: '/chat', query: { app_id: String(cachedId), from: 'aichat' } })
+      return
+    }
+  }
   previewStore.pendingMarkdown = {
     filename: activeArtifactName.value,
     content: activeArtifactContent.value,
+    sourceSessionId: currentSession.value?.id,
   }
   ElMessage.success('已发送，正在打开 Builder...')
   await router.push({ path: '/chat', query: { from: 'aichat' } })
@@ -1169,13 +1195,24 @@ async function sendArtifactToBuilder() {
 // inline 卡片的"→ Builder"：拿对应文件最新版本内容，再 push 到 pendingMarkdown
 async function sendArtifactToBuilderByName(filename: string) {
   if (!currentSession.value) return
+  // 已建过同名 → 直接跳应用，不重复 upload
+  const cachedId = getCachedAppId(currentSession.value.id, filename)
+  if (cachedId) {
+    ElMessage.success('已找到此设计文档对应的应用，正在打开...')
+    await router.push({ path: '/chat', query: { app_id: String(cachedId), from: 'aichat' } })
+    return
+  }
   try {
     const detail = await aiChatApi.getArtifact(currentSession.value.id, filename)
     if (!detail.content) {
       ElMessage.warning('设计文档为空')
       return
     }
-    previewStore.pendingMarkdown = { filename, content: detail.content }
+    previewStore.pendingMarkdown = {
+      filename,
+      content: detail.content,
+      sourceSessionId: currentSession.value.id,
+    }
     ElMessage.success('已发送，正在打开 Builder...')
     await router.push({ path: '/chat', query: { from: 'aichat' } })
   } catch (e) {

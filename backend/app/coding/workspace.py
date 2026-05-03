@@ -2445,10 +2445,14 @@ const resultPath = '{str(result_json_path)}'
                         continue
                 elif meta.get("user_id") != user_id:
                     continue
-                # 租户隔离：当前激活租户 ≠ workspace 所属租户时直接过滤
+                # 租户隔离：meta.tenant_id 不匹配时过滤
+                # meta 没 tenant_id 字段（老数据未迁移）也按"非匹配"严格处理，
+                # 避免迁移期间漏过滤；线上跑迁移脚本回填后所有 meta 都有 tenant_id
                 if tenant_id is not None:
                     meta_tenant = meta.get("tenant_id")
-                    if meta_tenant is not None and int(meta_tenant) != int(tenant_id):
+                    if meta_tenant is None:
+                        continue
+                    if int(meta_tenant) != int(tenant_id):
                         continue
 
                 ws_id = str(meta.get("id") or d.name)
