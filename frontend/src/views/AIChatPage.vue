@@ -51,6 +51,19 @@
         </div>
         <div class="header-actions">
           <button
+            v-if="boundAppId"
+            class="apply-md-btn"
+            :disabled="applyingMdToBuilder"
+            @click="applyMdToBuilder"
+            title="把当前对话产出的最新 md 应用到 Builder（生成新版变更计划）"
+          >{{ applyingMdToBuilder ? '应用中...' : '📥 应用最新 md 到 Builder' }}</button>
+          <button
+            v-if="boundAppId"
+            class="back-app-btn"
+            @click="router.push({ path: '/chat', query: { app_id: String(boundAppId) } })"
+            title="返回 Builder 应用页"
+          >← 返回应用</button>
+          <button
             v-if="artifacts.length > 0"
             class="artifacts-toggle"
             :class="{ active: artifactsPanelOpen }"
@@ -1252,29 +1265,52 @@ const incomingMode = computed(() => {
 
 // ── Lifecycle ──
 
-// 嵌入模式：从 ChatPage 应用页 iframe 进来，绑定指定 application 的 chat session。
-// 双保险：query 没传到时，window.self!==window.top 也算嵌入（iframe 内永远收起 sidebar）
-function isInIframeAIChat(): boolean {
-  if (typeof window === 'undefined') return false
-  try { return window.self !== window.top } catch { return true }
-}
-const isEmbeddedAppChat = computed(() =>
-  String(route.query.embed || '') === 'app_chat' || isInIframeAIChat(),
-)
+// 应用调整跳转模式：query.app_id 存在 → 这个 session 绑定具体 application，
+// 顶部显示「应用最新 md 到 Builder」按钮。AI-Chat 仍走完整布局，不再嵌入到 iframe。
+const boundAppId = ref<number | null>(null)
 const embedAppId = computed(() => {
   const v = route.query.app_id
   const n = Number(Array.isArray(v) ? v[0] : v)
   return Number.isFinite(n) && n > 0 ? n : null
 })
+// 兼容旧的 isEmbeddedAppChat 引用：现在永远 false（不再有 iframe 嵌入）
+const isEmbeddedAppChat = computed(() => false)
+const applyingMdToBuilder = ref(false)
+
+async function applyMdToBuilder() {
+  if (!boundAppId.value || applyingMdToBuilder.value) return
+  applyingMdToBuilder.value = true
+  try {
+    const { applicationApi } = await import('@/api/application')
+    const res = await applicationApi.syncMdFromChat(boundAppId.value)
+    if (!res.content?.trim()) {
+      ElMessage.warning('对话里还没有可应用的 md，请先让 AI 用 write_artifact 写出新版设计文档')
+      return
+    }
+    ElMessage.success(`已拉取「${res.artifact_filename}」(v${res.artifact_version})，正在跳回 Builder...`)
+    // 把 md 内容存到 sessionStorage，让 ChatPage onMounted 时拿到走 upload-doc-version 流程
+    const aid = boundAppId.value
+    sessionStorage.setItem(`pending_md_for_app_${aid}`, JSON.stringify({
+      filename: res.artifact_filename,
+      content: res.content,
+    }))
+    router.push({ path: '/chat', query: { app_id: String(aid), apply_md: '1' } })
+  } catch (err: any) {
+    ElMessage.error(err?.response?.data?.detail || err?.message || '应用 md 失败')
+  } finally {
+    applyingMdToBuilder.value = false
+  }
+}
 
 onMounted(async () => {
   await Promise.all([loadSessions(), loadLlmOptions()])
 
-  // 嵌入模式（应用对话调整）：用 ensure 拿/建该 app 绑定的 session
-  if (isEmbeddedAppChat.value && embedAppId.value) {
+  // 应用调整跳转模式：query.app_id 存在 → ensure 应用绑定 session 并选中
+  if (embedAppId.value) {
     try {
       const { applicationApi } = await import('@/api/application')
       const ensured = await applicationApi.ensureChatSession(embedAppId.value)
+      boundAppId.value = embedAppId.value
       // sessions 列表里没有就追加（ensure 接口建的 session 不在 listSessions 缓存里）
       if (!sessions.value.find((s) => s.id === ensured.session_id)) {
         await loadSessions()
@@ -1282,7 +1318,7 @@ onMounted(async () => {
       await loadSession(ensured.session_id)
       return
     } catch (e) {
-      console.error('嵌入模式建立应用 chat 会话失败:', e)
+      console.error('建立应用绑定 chat 会话失败:', e)
     }
   }
 
@@ -1386,6 +1422,42 @@ onMounted(async () => {
 /* .aside-right 宽度由 inline style + 拖拽控制；最小宽度交给 JS clamp 处理 */
 
 /* artifacts toggle 按钮 */
+.apply-md-btn {
+  appearance: none;
+  border: 0;
+  height: 30px;
+  padding: 0 14px;
+  border-radius: 7px;
+  background: var(--ac-brand);
+  color: #fff;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+.apply-md-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--ac-brand) 88%, black);
+}
+.apply-md-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.back-app-btn {
+  appearance: none;
+  background: var(--ac-input);
+  border: 1px solid var(--ac-border-strong);
+  color: var(--ac-text-mute);
+  padding: 5px 12px;
+  border-radius: 6px;
+  font-size: 12.5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.back-app-btn:hover {
+  color: var(--ac-text);
+}
+
 .artifacts-toggle {
   appearance: none;
   background: var(--ac-input);
