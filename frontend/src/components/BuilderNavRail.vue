@@ -32,13 +32,32 @@
 
     <ThemeToggle class="builder-nav-theme" />
 
-    <el-dropdown trigger="click" @command="handleUserCommand">
+    <el-dropdown
+      trigger="click"
+      popper-class="builder-nav-user-dropdown"
+      @command="handleUserCommand"
+      @visible-change="onUserDropdownVisibleChange"
+    >
       <button class="builder-nav-avatar" :title="userStore.user?.username || 'admin'">
         {{ userInitial }}
       </button>
       <template #dropdown>
         <el-dropdown-menu>
-          <el-dropdown-item command="logout">退出登录</el-dropdown-item>
+          <li class="user-current-tenant" v-if="userStore.tenantName">
+            <span class="user-current-tenant-label">当前租户</span>
+            <span class="user-current-tenant-value">{{ userStore.tenantName }}</span>
+          </li>
+          <template v-if="switchableTenants.length > 0">
+            <li class="user-tenants-section-label">切换租户</li>
+            <el-dropdown-item
+              v-for="t in switchableTenants"
+              :key="t.tenant_id"
+              :command="`switch:${t.tenant_id}`"
+            >
+              <span class="user-tenant-name">{{ t.tenant_name }}</span>
+            </el-dropdown-item>
+          </template>
+          <el-dropdown-item command="logout" divided>退出登录</el-dropdown-item>
         </el-dropdown-menu>
       </template>
     </el-dropdown>
@@ -57,11 +76,13 @@ import {
   MagicStick,
   Monitor,
   Odometer,
+  OfficeBuilding,
   Promotion,
   Search,
   Setting,
   UserFilled,
 } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 import { useUserStore } from '@/stores/user'
 import ThemeToggle from '@/components/ThemeToggle.vue'
 
@@ -79,6 +100,7 @@ const navItems = computed(() => [
   { key: 'sandboxes', label: '沙箱监控', path: '/vibe-coding/sandboxes', icon: Odometer },
   { key: 'devops', label: 'DevOps', path: '/devops', icon: Promotion },
   ...(userStore.isTenantAdmin ? [{ key: 'members', label: '成员管理', path: '/tenant-users', icon: UserFilled }] : []),
+  ...(userStore.isPlatformAdmin ? [{ key: 'tenants', label: '租户管理', path: '/admin/tenants', icon: OfficeBuilding }] : []),
   { key: 'settings', label: '设置', path: '/platform-envs?tab=llm', icon: Setting },
 ])
 
@@ -93,9 +115,20 @@ const activeKey = computed(() => {
   if (route.path.startsWith('/ide') || route.path.startsWith('/coding')) return 'ide'
   if (route.path.startsWith('/devops')) return 'devops'
   if (route.path.startsWith('/tenant-users')) return 'members'
+  if (route.path.startsWith('/admin/tenants')) return 'tenants'
   if (route.path.startsWith('/settings') || route.path.startsWith('/platform-envs')) return 'settings'
   return 'home'
 })
+
+const switchableTenants = computed(() =>
+  userStore.availableTenants.filter((t) => t.tenant_id !== userStore.tenantId)
+)
+
+async function onUserDropdownVisibleChange(visible: boolean) {
+  if (visible) {
+    await userStore.fetchAvailableTenants()
+  }
+}
 
 const userInitial = computed(() => (userStore.user?.username || 'A').slice(0, 1).toUpperCase())
 
@@ -118,6 +151,18 @@ function openCommand() {
 }
 
 async function handleUserCommand(command: string | number | object) {
+  if (typeof command === 'string' && command.startsWith('switch:')) {
+    const targetId = Number(command.slice('switch:'.length))
+    if (!targetId || targetId === userStore.tenantId) return
+    try {
+      await userStore.switchTenant(targetId)
+      ElMessage.success(`已切换到「${userStore.tenantName || '新租户'}」`)
+      router.go(0)
+    } catch (e: any) {
+      ElMessage.error(e?.message || '切换租户失败')
+    }
+    return
+  }
   if (command !== 'logout') return
   try {
     await ElMessageBox.confirm('确认退出当前账号吗？', '退出登录', {
@@ -132,3 +177,34 @@ async function handleUserCommand(command: string | number | object) {
   }
 }
 </script>
+
+<style>
+.builder-nav-user-dropdown .user-current-tenant {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 16px 6px;
+  cursor: default;
+}
+.builder-nav-user-dropdown .user-current-tenant-label,
+.builder-nav-user-dropdown .user-tenants-section-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--el-text-color-placeholder);
+}
+.builder-nav-user-dropdown .user-current-tenant-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
+.builder-nav-user-dropdown .user-tenants-section-label {
+  list-style: none;
+  padding: 6px 16px 2px;
+  cursor: default;
+}
+.builder-nav-user-dropdown .user-tenant-name {
+  font-size: 13px;
+}
+</style>
