@@ -12,6 +12,7 @@ declare global {
       close?: () => void
       toggle?: () => void
     }
+    __dolphinInited?: boolean
   }
 }
 
@@ -21,11 +22,10 @@ const AGENT = import.meta.env.VITE_DOLPHIN_AGENT_CODE || '77acab2f6f'
 const JWT = import.meta.env.VITE_DOLPHIN_JWT
 const TENANT = import.meta.env.VITE_DOLPHIN_TENANT_ID
 
-let bootStarted = false
-
 function bootOnce() {
-  if (bootStarted) return
-  bootStarted = true
+  // window 级单例：跨 HMR / 跨组件实例都只 init 一次，避免 dolphin SDK 把浮窗挂多份
+  if (window.__dolphinInited) return
+  window.__dolphinInited = true
 
   const init = () => {
     if (!window.DolphinAgent) return
