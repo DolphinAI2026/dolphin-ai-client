@@ -54,9 +54,9 @@ const router = createRouter({
     },
     {
       // 对话驱动：新建工作区不再弹表单，sidebar 直接 API 创建后跳 workspaces/:id；
-      // 旧 URL 访问时回到工作区列表
+      // 旧 URL 访问时回到工作区列表 — 保留 query（autocreate / prompt 等）
       path: '/vibe-coding/new',
-      redirect: '/vibe-coding',
+      redirect: to => ({ path: '/vibe-coding', query: to.query }),
     },
     {
       path: '/vibe-coding/sandboxes',

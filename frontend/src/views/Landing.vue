@@ -252,6 +252,7 @@ interface LandingModeConfig {
 }
 
 const PENDING_CODING_KEY = 'ai_builder_pending_coding'
+const PENDING_VIBE_PROMPT_KEY = 'vibe_coding_pending_prompt'
 
 const landingModeList: LandingModeConfig[] = [
   {
@@ -451,7 +452,10 @@ async function submitLanding() {
   }
 
   if (landingMode.value === 'online') {
-    await router.push({ path: '/vibe-coding/new', query: { prompt } })
+    // 把完整 prompt 暂存到 sessionStorage，跳到 vibe coding 列表页带 autocreate=1
+    // OnlineCodingWorkspacePage 检测到会自动建 workspace + 把 prompt 缓存供 chat 首发
+    sessionStorage.setItem(PENDING_VIBE_PROMPT_KEY, prompt)
+    await router.push({ path: '/vibe-coding', query: { autocreate: '1' } })
     return
   }
 

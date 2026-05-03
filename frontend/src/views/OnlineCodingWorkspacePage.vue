@@ -412,8 +412,40 @@ const showPreviewPanel = computed(() => (
   Boolean(runtimePreviewUrl.value)
 ))
 
-onMounted(() => {
-  loadFromRoute()
+const PENDING_VIBE_PROMPT_KEY = 'vibe_coding_pending_prompt'
+
+async function maybeAutoCreateFromPendingPrompt(): Promise<boolean> {
+  // 从 Landing 跳过来时 query 带 autocreate=1，把 sessionStorage 暂存的 prompt
+  // 转成「task 标题（首行截断）+ 首条 chat message」一气呵成开局
+  if (route.query.autocreate !== '1' || route.params.id) return false
+  const pending = sessionStorage.getItem(PENDING_VIBE_PROMPT_KEY) || ''
+  sessionStorage.removeItem(PENDING_VIBE_PROMPT_KEY)
+  if (!pending.trim()) {
+    // 没找到 prompt，把 query 清干净避免反复触发
+    await router.replace({ path: '/vibe-coding' }).catch(() => {})
+    return false
+  }
+  const taskTitle = (pending.split(/\n/)[0] || '').trim().slice(0, 60) || '新建工作区'
+  try {
+    const created = await onlineCodingApi.createWorkspace({ task: taskTitle })
+    // 把完整 prompt 留给 VibeChatPanel mount 后自动 send
+    sessionStorage.setItem(`vibe_pending_prompt_${created.id}`, pending)
+    sidebarVibeWorkspaces.value = [created, ...sidebarVibeWorkspaces.value.filter(w => w.id !== created.id)]
+    await router.replace(`/vibe-coding/workspaces/${created.id}`).catch(() => {})
+    return true
+  } catch (err: any) {
+    ElMessage.error(`创建工作区失败：${err?.response?.data?.detail || err?.message || err}`)
+    await router.replace({ path: '/vibe-coding' }).catch(() => {})
+    return false
+  }
+}
+
+onMounted(async () => {
+  // 优先处理 Landing 跳过来的 autocreate；否则按常规加载
+  const handled = await maybeAutoCreateFromPendingPrompt()
+  if (!handled) {
+    loadFromRoute()
+  }
   loadSidebarVibeWorkspaces()
 })
 

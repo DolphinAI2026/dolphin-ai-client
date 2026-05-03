@@ -761,7 +761,22 @@ onMounted(async () => {
     await Promise.all([loadThread(), loadLLMConfigs(), loadSandboxPorts()])
   }
   await nextTick(autosizeTextarea)
+  // Landing 自动建工作区时把 prompt 暂存在 sessionStorage，这里取出自动 send 首条
+  await maybeSendPendingPrompt()
 })
+
+async function maybeSendPendingPrompt() {
+  if (!props.workspaceId) return
+  const key = `vibe_pending_prompt_${props.workspaceId}`
+  const pending = sessionStorage.getItem(key)
+  if (!pending) return
+  sessionStorage.removeItem(key)
+  // 已有历史消息（thread 里有过对话）就不重发，避免误触
+  if (messages.value.length > 0) return
+  input.value = pending
+  await nextTick()
+  await onSend()
+}
 
 // 暴露给父组件 — 让 oc-ide-toolbar 显示 thread.title 并触发清空
 defineExpose({
