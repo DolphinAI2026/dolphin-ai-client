@@ -231,28 +231,60 @@ except Exception as exc:
 
 
 # 平台插件资源中间件：/{32位hex}/... → 代理到平台
+# SSE 防缓冲 middleware：text/event-stream 响应自动注入 X-Accel-Buffering: no
+#
+# 注意：这两个原本用 @app.middleware("http")（即 BaseHTTPMiddleware）实现，
+# 但 BaseHTTPMiddleware 的 call_next buffering 跟流式 SSE 不兼容，会切断 MCP
+# 服务器的 message 流（dolphin agent 拿不到 tools/list 响应）。
+# 改成纯 ASGI middleware 后，对所有 mount（包括 /api/mcp）都安全透传。
 import re as _re
+from starlette.requests import Request as _StarletteRequest
 _PLUGIN_HASH_RE = _re.compile(r'^/[0-9a-f]{32}/')
 
-@app.middleware("http")
-async def plugin_asset_middleware(request, call_next):
-    if _PLUGIN_HASH_RE.match(request.url.path):
-        from app.routes.platform_proxy import handle_plugin_asset_request
-        return await handle_plugin_asset_request(request)
-    return await call_next(request)
+
+class _PluginAssetAsgiMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and _PLUGIN_HASH_RE.match(scope.get("path", "")):
+            from app.routes.platform_proxy import handle_plugin_asset_request
+            request = _StarletteRequest(scope, receive=receive)
+            response = await handle_plugin_asset_request(request)
+            await response(scope, receive, send)
+            return
+        await self.app(scope, receive, send)
 
 
-# SSE 防缓冲 middleware：所有 text/event-stream 响应自动注入 header，
-# 避免 nginx / 反向代理缓冲导致前端看不到增量 + 中途断连报 "network error"。
-# 对 EventSourceResponse 兜底（nginx 的 proxy_buffering off 失效时仍可生效）。
-@app.middleware("http")
-async def sse_no_buffering_middleware(request, call_next):
-    response = await call_next(request)
-    content_type = response.headers.get("content-type", "")
-    if content_type.startswith("text/event-stream"):
-        response.headers["X-Accel-Buffering"] = "no"
-        response.headers["Cache-Control"] = "no-cache, no-transform"
-    return response
+class _SseNoBufferingAsgiMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+
+        async def _wrapped_send(message):
+            if message.get("type") == "http.response.start":
+                headers = list(message.get("headers", []))
+                content_type = b""
+                for k, v in headers:
+                    if k.lower() == b"content-type":
+                        content_type = v
+                        break
+                if content_type.startswith(b"text/event-stream"):
+                    headers = [(k, v) for k, v in headers if k.lower() not in (b"x-accel-buffering", b"cache-control")]
+                    headers.append((b"x-accel-buffering", b"no"))
+                    headers.append((b"cache-control", b"no-cache, no-transform"))
+                    message = dict(message)
+                    message["headers"] = headers
+            await send(message)
+
+        await self.app(scope, receive, _wrapped_send)
+
+
+app.add_middleware(_SseNoBufferingAsgiMiddleware)
+app.add_middleware(_PluginAssetAsgiMiddleware)
 
 
 # 静态文件（浏览器预览页面等）
