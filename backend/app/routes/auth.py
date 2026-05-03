@@ -253,6 +253,77 @@ async def select_tenant(
     return Token(access_token=access_token)
 
 
+class TenantSwitchRequest(BaseModel):
+    tenant_id: int
+
+
+@router.post("/switch-tenant", response_model=Token)
+async def switch_tenant(
+    data: TenantSwitchRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """已登录用户切换 active tenant，签发携带新 tid 的 JWT。
+
+    平台管理员可以切到任意 active 租户；普通用户仅限自己 active membership。
+    """
+    if ctx.user.is_platform_admin:
+        tenant = (
+            await db.execute(
+                select(Tenant).where(Tenant.id == data.tenant_id, Tenant.status == 1)
+            )
+        ).scalar_one_or_none()
+        if not tenant:
+            raise HTTPException(status_code=404, detail="租户不存在或未启用")
+    else:
+        membership = (
+            await db.execute(
+                select(UserTenant).where(
+                    UserTenant.user_id == ctx.user.id,
+                    UserTenant.tenant_id == data.tenant_id,
+                    UserTenant.status == 1,
+                )
+            )
+        ).scalar_one_or_none()
+        if not membership:
+            raise HTTPException(status_code=403, detail="你不是该租户的成员")
+
+    access_token = create_access_token(data={"sub": ctx.user.id}, tenant_id=data.tenant_id)
+    return Token(access_token=access_token)
+
+
+@router.get("/me/tenants", response_model=list[TenantOption])
+async def list_my_tenants(
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """返回当前用户可切换的租户列表（用于顶栏 dropdown）。"""
+    if ctx.user.is_platform_admin:
+        rows = (
+            await db.execute(
+                select(Tenant)
+                .where(Tenant.status == 1)
+                .order_by(Tenant.tenant_name.asc())
+            )
+        ).scalars().all()
+    else:
+        rows = (
+            await db.execute(
+                select(Tenant)
+                .join(UserTenant, UserTenant.tenant_id == Tenant.id)
+                .where(
+                    UserTenant.user_id == ctx.user.id,
+                    UserTenant.status == 1,
+                )
+                .order_by(Tenant.tenant_name.asc())
+            )
+        ).scalars().all()
+    return [
+        TenantOption(tenant_id=t.id, tenant_name=t.tenant_name, tenant_code=t.tenant_code)
+        for t in rows
+    ]
+
+
 @router.get("/users")
 async def list_users(ctx: Annotated[AuthContext, Depends(get_auth_context)], db: Annotated[AsyncSession, Depends(get_db)]):
     """获取同租户下的所有用户（用于团队成员选择）"""

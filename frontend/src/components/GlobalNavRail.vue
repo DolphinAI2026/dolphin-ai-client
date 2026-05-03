@@ -114,13 +114,27 @@
 
     <div class="sidebar-bottom">
       <ThemeToggle class="sidebar-theme-toggle" />
-      <el-dropdown trigger="click" @command="handleUserCommand" class="user-dropdown">
+      <el-dropdown trigger="click" @command="handleUserCommand" @visible-change="onUserDropdownVisibleChange" class="user-dropdown">
         <button class="user-row" :title="userStore.user?.username || 'admin'">
           <span class="user-avatar">{{ userInitial }}</span>
           <span class="user-name">{{ userStore.user?.username || 'admin' }}</span>
         </button>
         <template #dropdown>
           <el-dropdown-menu>
+            <li class="user-current-tenant" v-if="userStore.tenantName">
+              <span class="user-current-tenant-label">当前租户</span>
+              <span class="user-current-tenant-value">{{ userStore.tenantName }}</span>
+            </li>
+            <template v-if="switchableTenants.length > 0">
+              <li class="user-tenants-section-label">切换租户</li>
+              <el-dropdown-item
+                v-for="t in switchableTenants"
+                :key="t.tenant_id"
+                :command="`switch:${t.tenant_id}`"
+              >
+                <span class="user-tenant-name">{{ t.tenant_name }}</span>
+              </el-dropdown-item>
+            </template>
             <el-dropdown-item command="logout" divided>退出登录</el-dropdown-item>
           </el-dropdown-menu>
         </template>
@@ -132,7 +146,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useUserStore } from '@/stores/user'
 import ThemeToggle from '@/components/ThemeToggle.vue'
 
@@ -185,7 +199,30 @@ function navigateTo(path: string) {
   router.push(path)
 }
 
+const switchableTenants = computed(() =>
+  userStore.availableTenants.filter((t) => t.tenant_id !== userStore.tenantId)
+)
+
+async function onUserDropdownVisibleChange(visible: boolean) {
+  if (visible) {
+    await userStore.fetchAvailableTenants()
+  }
+}
+
 async function handleUserCommand(command: string | number | object) {
+  if (typeof command === 'string' && command.startsWith('switch:')) {
+    const targetId = Number(command.slice('switch:'.length))
+    if (!targetId || targetId === userStore.tenantId) return
+    try {
+      await userStore.switchTenant(targetId)
+      ElMessage.success(`已切换到「${userStore.tenantName || '新租户'}」`)
+      // 重载当前页面，让所有数据按新租户重新拉
+      router.go(0)
+    } catch (e: any) {
+      ElMessage.error(e?.message || '切换租户失败')
+    }
+    return
+  }
   if (command === 'logout') {
     try {
       await ElMessageBox.confirm('确认退出当前账号吗？', '退出登录', {
@@ -415,6 +452,38 @@ async function handleUserCommand(command: string | number | object) {
 .user-name {
   font-size: 13px;
   color: var(--color-text-secondary);
+}
+
+.user-current-tenant {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 16px 6px;
+  cursor: default;
+}
+.user-current-tenant-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-tertiary, #999);
+}
+.user-current-tenant-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-primary, #20253f);
+}
+.user-tenants-section-label {
+  list-style: none;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-tertiary, #999);
+  padding: 6px 16px 2px;
+  cursor: default;
+}
+.user-tenant-name {
+  font-size: 13px;
 }
 
 .global-nav-rail.collapsed .sidebar-logo {

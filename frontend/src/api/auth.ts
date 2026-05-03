@@ -1,5 +1,5 @@
 import request from '@/utils/request'
-import type { LoginRequest, Token, User, LoginResponse, TenantSelectRequest } from '@/types'
+import type { LoginRequest, Token, User, LoginResponse, TenantSelectRequest, TenantOption } from '@/types'
 
 export interface TenantRoleOption {
   id: number
@@ -38,6 +38,14 @@ export const authApi = {
 
   selectTenant(data: TenantSelectRequest) {
     return request.post<any, Token>('/auth/select-tenant', data)
+  },
+
+  switchTenant(tenantId: number) {
+    return request.post<any, Token>('/auth/switch-tenant', { tenant_id: tenantId })
+  },
+
+  listMyTenants() {
+    return request.get<any, TenantOption[]>('/auth/me/tenants')
   },
 
   getMe() {

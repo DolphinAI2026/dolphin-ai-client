@@ -1,11 +1,12 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { authApi } from '@/api/auth'
-import type { User } from '@/types'
+import type { User, TenantOption } from '@/types'
 
 export const useUserStore = defineStore('user', () => {
   const user = ref<User | null>(null)
   const token = ref<string | null>(localStorage.getItem('token'))
+  const availableTenants = ref<TenantOption[]>([])
 
   // 多租户状态
   const tenantId = computed(() => user.value?.tenant_id || null)
@@ -68,11 +69,20 @@ export const useUserStore = defineStore('user', () => {
     await fetchUser()
   }
 
-  const switchTenant = async (_tenantId: number) => {
-    // 切换租户 — 重新登录到新租户
-    // 前端简化实现：清除当前 token，让用户重新登录
-    // 完整实现需要后端提供 switch-tenant 接口
-    clearToken()
+  const fetchAvailableTenants = async () => {
+    try {
+      availableTenants.value = await authApi.listMyTenants()
+    } catch {
+      availableTenants.value = []
+    }
+    return availableTenants.value
+  }
+
+  const switchTenant = async (targetTenantId: number) => {
+    if (targetTenantId === tenantId.value) return
+    const res = await authApi.switchTenant(targetTenantId)
+    setToken(res.access_token)
+    await fetchUser()
   }
 
   const logout = () => {
@@ -82,6 +92,7 @@ export const useUserStore = defineStore('user', () => {
   return {
     user,
     token,
+    availableTenants,
     tenantId,
     tenantName,
     tenantRole,
@@ -94,6 +105,7 @@ export const useUserStore = defineStore('user', () => {
     login,
     selectTenant,
     switchTenant,
+    fetchAvailableTenants,
     logout
   }
 })
