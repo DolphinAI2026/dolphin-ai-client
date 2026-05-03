@@ -949,6 +949,67 @@ async def set_my_default_tenant(
     return {"ok": True, "tenant_id": data.tenant_id, "stored": True}
 
 
+class ResetPasswordRequest(BaseModel):
+    new_password: str
+
+
+@router.post("/users/{user_id}/reset-password")
+async def admin_reset_user_password(
+    user_id: int,
+    data: ResetPasswordRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """管理员代用户重置密码。
+
+    权限：
+    - 平台管理员：可重置任意账号（自己除外，自己改密码请走个人设置）
+    - 租户管理员：只能重置当前租户的成员，且不能重置平台管理员账号（防越权）
+    - 其他角色：403
+
+    新密码限制：6-128 位。重置后旧密码立即失效，但已签发的 JWT 会在过期前继续可用。
+    """
+    new_pw = (data.new_password or "").strip()
+    if len(new_pw) < 6 or len(new_pw) > 128:
+        raise HTTPException(status_code=400, detail="密码长度需在 6-128 位之间")
+
+    if user_id == ctx.user.id:
+        raise HTTPException(status_code=400, detail="请使用个人设置修改自己的密码")
+
+    target = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+    if not target:
+        raise HTTPException(status_code=404, detail="账号不存在")
+
+    is_platform_admin = ctx.user.is_platform_admin or ctx.tenant_role == "platform_admin"
+    if is_platform_admin:
+        pass  # 通过
+    elif ctx.tenant_role == "tenant_admin":
+        # 只能改本租户成员，且不能改平台管理员
+        if target.is_platform_admin:
+            raise HTTPException(status_code=403, detail="租户管理员不能重置平台管理员密码")
+        membership = (
+            await db.execute(
+                select(UserTenant).where(
+                    UserTenant.user_id == user_id,
+                    UserTenant.tenant_id == ctx.tenant_id,
+                    UserTenant.status == 1,
+                )
+            )
+        ).scalar_one_or_none()
+        if not membership:
+            raise HTTPException(status_code=403, detail="该用户不是当前租户成员")
+    else:
+        raise HTTPException(status_code=403, detail="没有重置密码权限")
+
+    target.hashed_password = get_password_hash(new_pw)
+    await db.commit()
+    logger.info(
+        "admin_reset_password by user_id=%s tenant_id=%s on target_user_id=%s",
+        ctx.user.id, ctx.tenant_id, user_id,
+    )
+    return {"ok": True, "user_id": user_id, "username": target.username}
+
+
 @router.get("/platform-users")
 async def list_platform_users(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],

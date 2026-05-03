@@ -223,5 +223,12 @@ export const authApi = {
 
   inviteTenantUser(data: { username: string; password?: string; role_code?: string; tenant_id?: number }) {
     return request.post<any, TenantUser>('/auth/tenant-users/invite', data)
+  },
+
+  resetUserPassword(userId: number, newPassword: string) {
+    return request.post<any, { ok: boolean; user_id: number; username: string }>(
+      `/auth/users/${userId}/reset-password`,
+      { new_password: newPassword },
+    )
   }
 }

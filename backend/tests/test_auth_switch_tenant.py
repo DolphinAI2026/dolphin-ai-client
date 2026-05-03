@@ -9,6 +9,7 @@ from app.deps import AuthContext
 from app.models import User
 from app.models.tenant import Tenant, UserTenant
 from app.routes.auth import (
+    ResetPasswordRequest,
     TenantCreateRequest,
     TenantMemberAddRequest,
     TenantMemberRoleUpdateRequest,
@@ -16,6 +17,7 @@ from app.routes.auth import (
     TenantSwitchRequest,
     TenantUpdateRequest,
     add_tenant_member,
+    admin_reset_user_password,
     create_new_tenant,
     delete_tenant,
     list_all_tenants,
@@ -394,3 +396,106 @@ async def test_remove_self_from_current_tenant_blocked(db_session):
     with pytest.raises(HTTPException) as exc:
         await remove_tenant_member(tenant.id, admin.id, ctx, db_session)
     assert exc.value.status_code == 400
+
+
+# ─────────────────────── reset password ───────────────────────
+
+
+@pytest.mark.asyncio
+async def test_platform_admin_can_reset_any_password(db_session):
+    from app.auth import verify_password
+    admin = User(username="root_pw", hashed_password=get_password_hash("x"), is_active=True, is_platform_admin=True)
+    target = User(username="bob_pw", hashed_password=get_password_hash("oldpw"), is_active=True)
+    db_session.add_all([admin, target])
+    await db_session.flush()
+
+    ctx = AuthContext(user=admin, tenant_id=0, tenant_role="platform_admin", org_permissions={"*": True})
+    res = await admin_reset_user_password(
+        target.id, ResetPasswordRequest(new_password="newpw123"), ctx, db_session,
+    )
+    assert res["ok"] is True
+    await db_session.refresh(target)
+    assert verify_password("newpw123", target.hashed_password)
+
+
+@pytest.mark.asyncio
+async def test_reset_password_too_short_rejected(db_session):
+    admin = User(username="root_pw_short", hashed_password=get_password_hash("x"), is_active=True, is_platform_admin=True)
+    target = User(username="bob_pw_short", hashed_password=get_password_hash("oldpw"), is_active=True)
+    db_session.add_all([admin, target])
+    await db_session.flush()
+    ctx = AuthContext(user=admin, tenant_id=0, tenant_role="platform_admin", org_permissions={"*": True})
+
+    with pytest.raises(HTTPException) as exc:
+        await admin_reset_user_password(
+            target.id, ResetPasswordRequest(new_password="123"), ctx, db_session,
+        )
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_reset_self_password_blocked(db_session):
+    admin = User(username="root_self", hashed_password=get_password_hash("x"), is_active=True, is_platform_admin=True)
+    db_session.add(admin)
+    await db_session.flush()
+    ctx = AuthContext(user=admin, tenant_id=0, tenant_role="platform_admin", org_permissions={"*": True})
+
+    with pytest.raises(HTTPException) as exc:
+        await admin_reset_user_password(
+            admin.id, ResetPasswordRequest(new_password="newpw123"), ctx, db_session,
+        )
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_tenant_admin_cannot_reset_platform_admin_password(db_session):
+    tenant_admin = User(username="ta_pw", hashed_password=get_password_hash("x"), is_active=True)
+    platform_admin = User(username="pa_pw", hashed_password=get_password_hash("x"), is_active=True, is_platform_admin=True)
+    db_session.add_all([tenant_admin, platform_admin])
+    await db_session.flush()
+
+    ctx = AuthContext(user=tenant_admin, tenant_id=1, tenant_role="tenant_admin", org_permissions={})
+    with pytest.raises(HTTPException) as exc:
+        await admin_reset_user_password(
+            platform_admin.id, ResetPasswordRequest(new_password="newpw123"), ctx, db_session,
+        )
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_tenant_admin_can_reset_member_in_same_tenant(db_session):
+    from app.models.tenant import Role
+    tenant = Tenant(tenant_name="T_pw", tenant_code="t_pw", status=1)
+    db_session.add(tenant)
+    await db_session.flush()
+    role = Role(tenant_id=tenant.id, role_name="Dev", role_code="R_developer", permissions={}, is_system=False)
+    db_session.add(role)
+    await db_session.flush()
+
+    ta = User(username="ta_ok", hashed_password=get_password_hash("x"), is_active=True)
+    member = User(username="m_ok", hashed_password=get_password_hash("x"), is_active=True)
+    db_session.add_all([ta, member])
+    await db_session.flush()
+    db_session.add(UserTenant(user_id=member.id, tenant_id=tenant.id, role_id=role.id, status=1))
+    await db_session.flush()
+
+    ctx = AuthContext(user=ta, tenant_id=tenant.id, tenant_role="tenant_admin", org_permissions={})
+    res = await admin_reset_user_password(
+        member.id, ResetPasswordRequest(new_password="newpw123"), ctx, db_session,
+    )
+    assert res["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_normal_user_cannot_reset_password(db_session):
+    me = User(username="normie", hashed_password=get_password_hash("x"), is_active=True)
+    target = User(username="t_normie", hashed_password=get_password_hash("x"), is_active=True)
+    db_session.add_all([me, target])
+    await db_session.flush()
+
+    ctx = AuthContext(user=me, tenant_id=1, tenant_role="developer", org_permissions={})
+    with pytest.raises(HTTPException) as exc:
+        await admin_reset_user_password(
+            target.id, ResetPasswordRequest(new_password="newpw123"), ctx, db_session,
+        )
+    assert exc.value.status_code == 403

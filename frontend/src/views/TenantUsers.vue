@@ -97,6 +97,18 @@
               {{ formatDate(row.joined_at || row.created_at) }}
             </template>
           </el-table-column>
+          <el-table-column label="操作" width="120" fixed="right">
+            <template #default="{ row }">
+              <el-button
+                v-if="canResetPassword(row)"
+                link
+                type="primary"
+                size="small"
+                @click="openResetPwd(row)"
+              >重置密码</el-button>
+              <span v-else class="row-action-disabled">-</span>
+            </template>
+          </el-table-column>
         </el-table>
 
         <div class="tenant-users-pager">
@@ -110,6 +122,38 @@
           />
         </div>
       </div>
+
+      <!-- 重置密码对话框 -->
+      <el-dialog v-model="resetPwdVisible" :title="`重置密码 — ${resetPwdTarget?.username || ''}`" width="420px">
+        <el-form label-position="top">
+          <el-form-item label="新密码" required>
+            <el-input
+              v-model="resetPwdForm.new_password"
+              type="password"
+              show-password
+              placeholder="6-128 位"
+              maxlength="128"
+            />
+          </el-form-item>
+          <el-form-item label="确认新密码" required>
+            <el-input
+              v-model="resetPwdForm.confirm"
+              type="password"
+              show-password
+              placeholder="再输一遍"
+              maxlength="128"
+            />
+          </el-form-item>
+          <div class="form-hint">
+            重置后旧密码立即失效；用户已签发的登录会话在 token 过期前仍可继续使用。
+            请通过安全渠道把新密码告诉本人。
+          </div>
+        </el-form>
+        <template #footer>
+          <el-button @click="resetPwdVisible = false">取消</el-button>
+          <el-button type="primary" :loading="resetPwdSaving" @click="submitResetPwd">确认重置</el-button>
+        </template>
+      </el-dialog>
 
       <el-dialog v-model="dialogVisible" :title="isPlatformAdmin ? '添加平台账号' : '添加用户到当前组织'" width="480px">
         <el-form :model="inviteForm" label-position="top">
@@ -194,6 +238,49 @@ const filterTenant = ref('')
 const filterRole = ref('')
 const currentPage = ref(1)
 const pageSize = ref(20)
+
+// 重置密码对话框
+const resetPwdVisible = ref(false)
+const resetPwdTarget = ref<TenantUser | null>(null)
+const resetPwdSaving = ref(false)
+const resetPwdForm = ref({ new_password: '', confirm: '' })
+
+function canResetPassword(row: TenantUser): boolean {
+  // 不能改自己（自己改密码走个人设置）
+  if (row.id === userStore.user?.id) return false
+  if (isPlatformAdmin.value) return true
+  // tenant_admin 不能改平台管理员
+  if (row.is_platform_admin) return false
+  // tenant_admin 才有权（普通成员看不到这页一般）
+  return userStore.tenantRole === 'tenant_admin'
+}
+
+function openResetPwd(row: TenantUser) {
+  resetPwdTarget.value = row
+  resetPwdForm.value = { new_password: '', confirm: '' }
+  resetPwdVisible.value = true
+}
+
+async function submitResetPwd() {
+  if (!resetPwdTarget.value) return
+  const pw = resetPwdForm.value.new_password.trim()
+  if (pw.length < 6 || pw.length > 128) {
+    ElMessage.warning('密码长度需在 6-128 位之间'); return
+  }
+  if (pw !== resetPwdForm.value.confirm.trim()) {
+    ElMessage.warning('两次输入的密码不一致'); return
+  }
+  resetPwdSaving.value = true
+  try {
+    await authApi.resetUserPassword(resetPwdTarget.value.id, pw)
+    resetPwdVisible.value = false
+    ElMessage.success(`「${resetPwdTarget.value.username}」密码已重置，请通过安全渠道告知用户`)
+  } catch (err: any) {
+    ElMessage.error(err?.response?.data?.detail || err?.message || '重置失败')
+  } finally {
+    resetPwdSaving.value = false
+  }
+}
 
 // 提取所有出现过的"所属组织"做下拉选项（按出现次数排序，每个组织带计数）
 const tenantFilterOptions = computed(() => {
@@ -465,5 +552,9 @@ onMounted(() => {
   display: flex;
   justify-content: flex-end;
   padding: 16px 8px 4px;
+}
+.row-action-disabled {
+  color: var(--b-text-muted, #999);
+  font-size: 12px;
 }
 </style>
