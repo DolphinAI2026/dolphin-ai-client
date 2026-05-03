@@ -1,5 +1,21 @@
 <template>
   <div class="dolphin-agent-embed">
+    <!-- 当前应用上下文提示条 — dolphin embed 不接受外部 system context 注入，
+         所以在 iframe 上方显示当前编辑应用，用户一键 copy 到剪贴板 -->
+    <div v-if="appId" class="dolphin-ctx-bar">
+      <span class="ctx-icon" aria-hidden="true">📌</span>
+      <span class="ctx-text">
+        当前在编辑 <strong>{{ appName || `应用 #${appId}` }}</strong>
+        <code>#{{ appId }}</code>
+      </span>
+      <button
+        type="button"
+        class="ctx-copy-btn"
+        :title="copyButtonTitle"
+        @click="copyContext"
+      >{{ copyState }}</button>
+    </div>
+
     <iframe
       v-if="iframeSrc"
       ref="iframeRef"
@@ -83,6 +99,7 @@ onBeforeUnmount(() => {
 })
 
 // 应用切换时不重建 iframe，只通过 postMessage 通知 dolphin 上下文变化
+// （dolphin embed 当前可能不响应 type=context，但留着 future-proof）
 watch(() => [props.appId, props.appName], () => {
   if (!cfg.value || !iframeRef.value?.contentWindow) return
   const origin = new URL(cfg.value.server_url).origin
@@ -92,6 +109,22 @@ watch(() => [props.appId, props.appName], () => {
     app_name: props.appName || '',
   }, origin)
 })
+
+// 上下文复制：把 "当前编辑应用 #X (Y)" copy 到剪贴板，方便用户直接粘贴到对话
+const copyState = ref('复制上下文')
+const copyButtonTitle = computed(() => '点击复制 "当前应用 #X (名字)" 到剪贴板，发给 AI 助手时粘贴一下即可。')
+async function copyContext() {
+  if (!props.appId) return
+  const ctx = `当前编辑应用 #${props.appId}（${props.appName || '未命名'}），请基于这个应用回答。`
+  try {
+    await navigator.clipboard.writeText(ctx)
+    copyState.value = '已复制 ✓'
+    setTimeout(() => { copyState.value = '复制上下文' }, 1500)
+  } catch {
+    copyState.value = '复制失败'
+    setTimeout(() => { copyState.value = '复制上下文' }, 1500)
+  }
+}
 </script>
 
 <style scoped>
@@ -102,6 +135,59 @@ watch(() => [props.appId, props.appName], () => {
   background: var(--b-bg, #fff);
   display: flex;
   flex-direction: column;
+}
+
+.dolphin-ctx-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: linear-gradient(135deg, #f3eefe 0%, #e9deff 100%);
+  border-bottom: 1px solid #c4b5fd;
+  font-size: 12px;
+  color: #4c1d95;
+  flex-shrink: 0;
+}
+
+.dolphin-ctx-bar .ctx-icon {
+  font-size: 14px;
+}
+
+.dolphin-ctx-bar .ctx-text {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dolphin-ctx-bar .ctx-text strong {
+  font-weight: 600;
+  margin: 0 2px;
+}
+
+.dolphin-ctx-bar .ctx-text code {
+  background: rgba(124, 58, 237, 0.12);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 11px;
+  margin-left: 2px;
+}
+
+.dolphin-ctx-bar .ctx-copy-btn {
+  border: 1px solid #c4b5fd;
+  background: #fff;
+  color: #6d28d9;
+  padding: 3px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.dolphin-ctx-bar .ctx-copy-btn:hover {
+  background: #f3eefe;
+  border-color: #a78bfa;
 }
 
 .dolphin-agent-iframe {
