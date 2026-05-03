@@ -274,10 +274,9 @@
                     style="width: 130px"
                     @change="(val: string) => changeMemberRole(m, val)"
                   >
-                    <el-option label="租户管理员" value="admin" />
+                    <el-option label="租户管理员" value="R_tenant_admin" />
                     <el-option label="开发者" value="R_developer" />
-                    <el-option label="只读" value="R_viewer" />
-                    <el-option label="普通成员" value="member" />
+                    <el-option label="查看者" value="R_viewer" />
                   </el-select>
                   <el-button
                     link
@@ -304,10 +303,9 @@
           </el-form-item>
           <el-form-item label="角色">
             <el-select v-model="addMemberForm.role_code" style="width: 100%">
-              <el-option label="租户管理员（admin）" value="admin" />
+              <el-option label="租户管理员（R_tenant_admin）" value="R_tenant_admin" />
               <el-option label="开发者（R_developer）" value="R_developer" />
-              <el-option label="只读（R_viewer）" value="R_viewer" />
-              <el-option label="普通成员（member）" value="member" />
+              <el-option label="查看者（R_viewer）" value="R_viewer" />
             </el-select>
           </el-form-item>
         </el-form>

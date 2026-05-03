@@ -441,6 +441,9 @@ async def create_new_tenant(
         contact_email=(data.contact_email or "").strip() or None,
     )
     db.add(t)
+    await db.flush()  # 拿到 t.id 后顺手种默认角色（管理员 / 开发者 / 查看者）
+    from app.seed_data import seed_default_roles
+    await seed_default_roles(db, t.id, commit=False)
     await db.commit()
     await db.refresh(t)
     return _tenant_admin_item(t, 0)
@@ -591,12 +594,15 @@ async def add_tenant_member(
         )
     ).scalar_one_or_none()
     if not role:
-        # 找不到该 tenant 的同 code 角色，回退到 admin（任 tenant 创建时有种 admin）
-        role = (
-            await db.execute(
-                select(Role).where(Role.tenant_id == tenant_id, Role.role_code == "admin")
-            )
-        ).scalar_one_or_none()
+        # 找不到该 tenant 的同 code 角色，按优先级回退（兼容 init_db 种的 admin / 新版 seed 种的 R_tenant_admin）
+        for fallback in ("R_developer", "R_tenant_admin", "admin"):
+            role = (
+                await db.execute(
+                    select(Role).where(Role.tenant_id == tenant_id, Role.role_code == fallback)
+                )
+            ).scalar_one_or_none()
+            if role:
+                break
     if not role:
         raise HTTPException(status_code=404, detail="该租户未配置角色，请先创建角色")
 
