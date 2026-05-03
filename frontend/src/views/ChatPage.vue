@@ -6105,6 +6105,69 @@ const ensureApplicationUpdateConversation = async () => {
   }
 }
 
+/**
+ * 流式调用 draft-doc-update-stream：
+ * - thinking 事件 → 调 onThinking 实时更新进度文案
+ * - result 事件 → 拿到原 JSON（与同步版结构完全一致）
+ * - error 事件 → 抛错让上层 catch
+ * 体验对齐 ai-chat / vibe-coding：首字节 1s 内出，全程有 AI 在做什么的反馈
+ */
+async function streamDraftDocUpdate(
+  appId: number,
+  payload: { instruction: string; conversation_id?: number | null; selected_llm_config_id?: number | null; current_doc?: string },
+  onThinking: (text: string) => void,
+): Promise<any> {
+  const token = localStorage.getItem('token') || ''
+  const url = `${API_PREFIX}/applications/${appId}/draft-doc-update-stream`
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+    body: JSON.stringify(payload),
+    signal: currentAbortController.value?.signal,
+  })
+  if (!response.ok) {
+    let detail: any = ''
+    try { detail = (await response.json())?.detail } catch { /* ignore */ }
+    throw new Error(typeof detail === 'string' && detail ? detail : `请求失败 ${response.status}`)
+  }
+  const reader = response.body?.getReader()
+  if (!reader) throw new Error('无法读取响应流')
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let currentEvent = ''
+  let resolved: any = null
+  let errorDetail: string | null = null
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (value) buffer += decoder.decode(value, { stream: !done })
+    const lines = buffer.split('\n')
+    buffer = done ? '' : (lines.pop() || '')
+    for (const rawLine of lines) {
+      const line = rawLine.trimEnd()
+      if (!line) { currentEvent = ''; continue }
+      if (line.startsWith('event:')) { currentEvent = line.slice(6).trim(); continue }
+      if (!line.startsWith('data:')) continue
+      const dataStr = line.startsWith('data: ') ? line.slice(6) : line.slice(5)
+      if (!dataStr.trim()) continue
+      try {
+        const parsed = JSON.parse(dataStr)
+        if (currentEvent === 'thinking') {
+          onThinking(String(parsed.data || '正在处理...'))
+        } else if (currentEvent === 'result') {
+          resolved = parsed
+        } else if (currentEvent === 'error') {
+          errorDetail = String(parsed.data || '响应失败')
+        }
+      } catch (err) { console.warn('SSE parse failed', err) }
+    }
+    if (done) break
+  }
+  if (errorDetail) throw new Error(errorDetail)
+  if (resolved === null) throw new Error('未收到结果事件')
+  return resolved
+}
+
 const submitApplicationUpdateMessage = async (
   text: string,
   attachmentPayload: { file: File; kind: 'image' | 'file'; previewUrl: string } | null
@@ -6173,11 +6236,15 @@ const submitApplicationUpdateMessage = async (
       buildDocMarkdownFromPreview(currentPreviewConfigPayload.value)
     ).trim()
     const shouldSendInlineDoc = docVersions.value.length === 0 && currentDoc.length > 0 && currentDoc.length <= 12000
-    const result = await applicationApi.draftDocUpdate(existingAppId.value, {
+    const result = await streamDraftDocUpdate(existingAppId.value, {
       instruction,
       conversation_id: conversationId.value,
       selected_llm_config_id: selectedBuilderModelId.value,
       ...(shouldSendInlineDoc ? { current_doc: currentDoc } : {}),
+    }, (thinkingText) => {
+      // 流式 thinking 事件 → 实时更新进度 message，让用户看到 AI 正在做什么
+      const progressMsg = messages.find(msg => msg.id === progressMsgId && msg.role === 'assistant')
+      if (progressMsg) progressMsg.content = thinkingText
     })
 
     if (result?.actionable_update === false || result?.type === 'assistant_reply') {

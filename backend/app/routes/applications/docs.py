@@ -1716,6 +1716,63 @@ async def draft_doc_update(
         raise HTTPException(status_code=500, detail=f"生成新版 SPEC 失败: {str(e)}")
 
 
+@router.post("/{app_id}/draft-doc-update-stream")
+async def draft_doc_update_stream(
+    app_id: int,
+    body: DraftDocUpdateRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)] = None,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+):
+    """SSE 流式版 draft-doc-update。
+
+    底层复用同步 `draft_doc_update` 全部逻辑，外层用 SSE：
+    - 立刻推 `thinking: 正在理解你的诉求...` 让 UI 1s 内出反馈
+    - 后台 task 跑原函数；定时推阶段性 thinking 文案，避免用户面对静止界面 30-60s
+    - 完成后推 `result: <原 JSON>` + `done`；失败推 `error`
+    与其他模块（vibe-coding / ai-chat）的事件协议保持一致：thinking / result / done / error
+    """
+    import asyncio
+    import json as _json
+
+    async def event_gen():
+        yield {"event": "thinking", "data": _json.dumps({"data": "正在理解你的诉求..."}, ensure_ascii=False)}
+
+        # 进度文案脚本：(elapsed_threshold_seconds, thinking_text)
+        progress_script = [
+            (3, "正在对照当前 SPEC 分析变更范围..."),
+            (8, "正在重写设计文档（这一步通常 10-30 秒）..."),
+            (25, "文档较大或模型较慢，请再耐心等等..."),
+            (60, "已经超过 1 分钟，依然在处理中..."),
+        ]
+
+        task = asyncio.create_task(draft_doc_update(app_id, body, ctx, db))
+        idx = 0
+        elapsed = 0.0
+        try:
+            while not task.done():
+                try:
+                    await asyncio.wait_for(asyncio.shield(task), timeout=2.0)
+                except asyncio.TimeoutError:
+                    pass
+                elapsed += 2.0
+                while idx < len(progress_script) and progress_script[idx][0] <= elapsed:
+                    yield {"event": "thinking", "data": _json.dumps({"data": progress_script[idx][1]}, ensure_ascii=False)}
+                    idx += 1
+            result = task.result()
+        except HTTPException as exc:
+            yield {"event": "error", "data": _json.dumps({"data": str(exc.detail), "status": exc.status_code}, ensure_ascii=False)}
+            return
+        except Exception as exc:
+            logger.exception("draft_doc_update_stream 内部失败 app_id=%s", app_id)
+            yield {"event": "error", "data": _json.dumps({"data": f"AI 响应失败：{exc}"}, ensure_ascii=False)}
+            return
+
+        yield {"event": "result", "data": _json.dumps(result, ensure_ascii=False, default=str)}
+        yield {"event": "done", "data": _json.dumps({"summary": result.get("summary") if isinstance(result, dict) else None}, ensure_ascii=False)}
+
+    return EventSourceResponse(event_gen())
+
+
 @router.post("/{app_id}/upload-doc-version")
 async def upload_doc_version(
     app_id: int,
