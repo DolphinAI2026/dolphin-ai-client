@@ -57,6 +57,7 @@ async def get_dolphin_config(
     return {
         "server_url": settings.dolphin_server_url,
         "agent_code": settings.dolphin_agent_code,
+        "app_adjust_agent_code": settings.dolphin_app_adjust_agent_code,
         "tenant_id": settings.dolphin_tenant_id,
         "access_token": access_token,
     }

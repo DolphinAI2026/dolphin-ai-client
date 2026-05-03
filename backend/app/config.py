@@ -99,7 +99,8 @@ class Settings(BaseSettings):
     # 当前 trial 版没有 token-exchange API，所有 ai-builder 用户共用一个 service token；
     # 待 dolphin 提供 user-impersonate API 后，dolphin_sso 路由切换到按 user 颁发短期 token。
     dolphin_server_url: str = "https://dolphin-trial.definesys.cn"
-    dolphin_agent_code: str = ""  # 默认嵌入的 agent code（HelpAssistant 用）
+    dolphin_agent_code: str = ""  # HelpAssistant 浮窗的"产品答疑助手"
+    dolphin_app_adjust_agent_code: str = ""  # 应用详情页"AI 调整应用"按钮用的"应用调整助手"
     dolphin_tenant_id: str = "default"
     dolphin_service_token: str = ""  # 后端持有的 dolphin admin/service JWT，永远不下发到前端 build
 

@@ -51,6 +51,16 @@
         </div>
       </template>
       <template #actions>
+        <!-- AI 调整应用：跳到 dolphin 应用调整助手（独立 agent，挂 8 个 MCP 工具） -->
+        <button
+          v-if="builderCurrentAppId"
+          class="builder-top-action"
+          type="button"
+          title="跟 AI 对话调整这个应用（dolphin 应用调整助手）"
+          @click="openDolphinAppAdjustChat"
+        >
+          <span style="margin-right: 4px;">🤖</span>AI 调整
+        </button>
         <!-- 面板关闭时：顶部展示一个"展开产物面板"按钮；面板打开时由 SPEC 行内 .preview-panel-collapse 关闭，此处隐藏（合并成同一个 toggle） -->
         <button
           v-if="showBuilderArtifactToggle && !showAnyBuilderArtifactPanel"
@@ -1287,6 +1297,36 @@ const readyForGenerate = computed(() => !!store.currentApp && parseReady.value)
 const appParsedMode = computed(() => route.query.app_mode === 'parsed')
 // 应用名统一从 store.preview.appName 读；为空就空着，不再回填默认占位
 const builderAppDisplayName = computed(() => store.preview.appName || '')
+// 当前正在编辑的 app id（来自 URL ?app_id=X 或 ?conversation_id=…）— "AI 调整应用"按钮用
+const builderCurrentAppId = computed<number | null>(() => {
+  const fromQuery = Number(route.query.app_id)
+  if (Number.isFinite(fromQuery) && fromQuery > 0) return fromQuery
+  if (existingAppId.value && existingAppId.value > 0) return existingAppId.value
+  const fromStore = Number((store.currentApp as any)?.id)
+  if (Number.isFinite(fromStore) && fromStore > 0) return fromStore
+  return null
+})
+
+// 打开 dolphin "应用调整助手"chat 页（带 app_id 上下文）
+async function openDolphinAppAdjustChat() {
+  const appId = builderCurrentAppId.value
+  if (!appId) return
+  try {
+    const cfg = await request.get<unknown, {
+      server_url: string
+      app_adjust_agent_code: string
+    }>('/dolphin/config')
+    if (!cfg?.app_adjust_agent_code) {
+      ElMessage.warning('Dolphin 应用调整助手未配置（缺 DOLPHIN_APP_ADJUST_AGENT_CODE）')
+      return
+    }
+    const url = `${cfg.server_url}/agent/${cfg.app_adjust_agent_code}/chat?app_id=${appId}&app_name=${encodeURIComponent(builderAppDisplayName.value || '')}`
+    window.open(url, '_blank', 'noopener,noreferrer')
+  } catch (err) {
+    console.warn('[openDolphinAppAdjustChat] failed', err)
+    ElMessage.error('打开 AI 调整助手失败')
+  }
+}
 const chatGeneratedDocContent = computed(() => {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const msg = messages[i]
