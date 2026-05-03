@@ -9659,9 +9659,11 @@ html[data-theme="light"] .msg-attachment-chip {
   padding: 16px 20px 20px;
 }
 .doc-preview-body {
-  max-height: 70vh; overflow-y: auto; padding: 16px;
+  max-height: 70vh; overflow-y: auto; overflow-x: auto; padding: 16px;
   font-size: 13px; line-height: 1.7; color: var(--t-text-primary);
   background: var(--t-bg-base); border-radius: 8px;
+  /* 让内容跟随容器宽度自适应，表格变窄时按列宽换行而不是被裁掉 */
+  width: 100%; min-width: 0; box-sizing: border-box;
 }
 .doc-preview-body.fullscreen {
   max-height: none;
@@ -9679,12 +9681,19 @@ html[data-theme="light"] .msg-attachment-chip {
 .doc-preview-body :deep(pre) { background: var(--t-border-subtle); padding: 12px; border-radius: 8px; overflow-x: auto; }
 .doc-preview-body :deep(.doc-table-scroll) { width: 100%; overflow-x: auto; margin: 10px 0; }
 .doc-preview-body :deep(table) {
-  width: max-content;
-  min-width: 100%;
+  /* table-layout: fixed + width: 100% 让表格随容器宽度自适应；
+     列宽过窄时由 word-break 让单元格内容换行而不是横向溢出 */
+  width: 100%;
+  max-width: 100%;
   border-collapse: collapse;
   margin: 0;
   font-size: 12px;
-  table-layout: auto;
+  table-layout: fixed;
+}
+.doc-preview-body :deep(table td),
+.doc-preview-body :deep(table th) {
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 .doc-preview-body :deep(th) {
   background: var(--t-brand-subtle);
@@ -11698,7 +11707,7 @@ html[data-theme="dark"] .spec-cta-text { color: #b8c0d6; }
 }
 
 .spec-overview-panel {
-  max-width: 880px;
+  max-width: 1280px;
   width: 100%;
   margin: 0 auto;
   padding: 18px;
@@ -11706,6 +11715,8 @@ html[data-theme="dark"] .spec-cta-text { color: #b8c0d6; }
   border-radius: 8px;
   background: #fff;
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+  box-sizing: border-box;
+  min-width: 0;
 }
 
 .spec-overview-head {
@@ -11855,13 +11866,17 @@ html[data-theme="dark"] .spec-cta-text { color: #b8c0d6; }
 }
 
 .doc-version-content.expanded.doc-preview-body {
-  max-width: 880px;
+  /* 跟随 preview-side 宽度自适应；超宽屏才限到 1280 保阅读舒适度 */
+  width: 100%;
+  max-width: 1280px;
   margin: 0 auto;
-  padding: 28px 34px;
+  padding: 28px clamp(16px, 3vw, 34px);
   border-radius: 8px;
   border: 1px solid #dbe2ea;
   background: #fff;
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+  box-sizing: border-box;
+  min-width: 0;
 }
 
 .builder-canvas-panel {
