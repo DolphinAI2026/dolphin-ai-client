@@ -51,15 +51,23 @@
         </div>
       </template>
       <template #actions>
-        <!-- AI 调整应用：内嵌抽屉（自建 LLM + MCP tool loop，绕开 dolphin 编排黑盒） -->
+        <!-- AI 调整应用：跳转到 dolphin 应用调整助手完整 chat 页面（带历史/记忆/项目管理） -->
         <button
           v-if="builderCurrentAppId"
-          class="builder-top-action"
+          class="builder-top-action ai-adjust-action"
           type="button"
-          title="跟 AI 对话调整这个应用"
-          @click="appAdjustDrawerVisible = !appAdjustDrawerVisible"
+          title="打开完整 AI 对话页（dolphin 应用调整助手）"
+          @click="openDolphinFullChat"
         >
-          <span style="margin-right: 4px;">🤖</span>AI 调整
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" style="margin-right: 5px;" aria-hidden="true">
+            <rect x="3.5" y="5" width="9" height="7" rx="1.5" stroke="currentColor" stroke-width="1.3"/>
+            <circle cx="6.2" cy="8.4" r="0.9" fill="currentColor"/>
+            <circle cx="9.8" cy="8.4" r="0.9" fill="currentColor"/>
+            <path d="M8 5V3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+            <circle cx="8" cy="2.5" r="0.7" fill="currentColor"/>
+            <path d="M2 9v1.5M14 9v1.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+          </svg>
+          AI 调整
         </button>
         <!-- 面板关闭时：顶部展示一个"展开产物面板"按钮；面板打开时由 SPEC 行内 .preview-panel-collapse 关闭，此处隐藏（合并成同一个 toggle） -->
         <button
@@ -180,6 +188,14 @@
       >
       <!-- 左侧对话区 -->
       <div v-if="showBuilderChatSide" class="chat-side">
+        <!-- ★ Dolphin Agent 嵌入版本：左侧对话由 dolphin a73e75cd81 (应用调整助手) 接管 -->
+        <DolphinAgentEmbed
+          v-if="useDolphinChat"
+          :app-id="builderCurrentAppId"
+          :app-name="builderAppDisplayName"
+          title="AI-Builder 应用调整助手"
+        />
+        <template v-else>
         <div v-if="appParsedMode" class="doc-view-wrap">
           <div class="doc-view-head">
             <div class="doc-view-title">功能设计文档</div>
@@ -373,6 +389,7 @@
           </div>
 
         </div>
+        </template>
       </div>
 
       <div v-if="showBuilderArtifactPanel" class="preview-side builder-result-side">
@@ -1135,13 +1152,6 @@
     />
   </el-drawer>
 
-  <!-- AI 调整抽屉（自建 LLM + MCP tool loop） -->
-  <AppAdjustDrawer
-    v-if="builderCurrentAppId"
-    v-model="appAdjustDrawerVisible"
-    :app-id="builderCurrentAppId"
-    :app-name="builderAppDisplayName"
-  />
   </WorkbenchShell>
 </template>
 
@@ -1185,7 +1195,7 @@ import type { ConversationCreate, Message } from '@/types'
 import TopBar from '@/components/TopBar.vue'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
 import AppChatPanel from '@/components/AppChatPanel.vue'
-import AppAdjustDrawer from '@/components/AppAdjustDrawer.vue'
+import DolphinAgentEmbed from '@/components/DolphinAgentEmbed.vue'
 import SessionSidebar, { type SessionItem as SidebarSessionItem } from '@/components/common/SessionSidebar.vue'
 import StructuredDocRenderer from '@/components/StructuredDocRenderer.vue'
 import StructuredDocDiffRenderer from '@/components/StructuredDocDiffRenderer.vue'
@@ -1316,8 +1326,30 @@ const builderCurrentAppId = computed<number | null>(() => {
   return null
 })
 
-// AI 调整抽屉开关（内嵌 LLM + MCP tool loop，组件 AppAdjustDrawer）
-const appAdjustDrawerVisible = ref(false)
+// 左侧对话区是否用 dolphin agent (a73e75cd81) 接管 — true 走 dolphin iframe，false 走原 SPEC chat
+const useDolphinChat = ref(true)
+
+// "AI 调整" 按钮：新窗口打开 dolphin 完整 chat 页（享受 dolphin 完整对话/历史/记忆/项目管理）
+async function openDolphinFullChat() {
+  const appId = builderCurrentAppId.value
+  if (!appId) return
+  try {
+    const cfg = await request.get<unknown, {
+      server_url: string
+      app_adjust_agent_code: string
+    }>('/dolphin/config')
+    const code = cfg?.app_adjust_agent_code
+    if (!code) {
+      ElMessage.warning('Dolphin 应用调整助手未配置')
+      return
+    }
+    const url = `${cfg.server_url}/agent/${code}/chat?app_id=${appId}&app_name=${encodeURIComponent(builderAppDisplayName.value || '')}`
+    window.open(url, '_blank', 'noopener,noreferrer')
+  } catch (err) {
+    console.warn('[openDolphinFullChat] failed', err)
+    ElMessage.error('打开 AI 调整助手失败')
+  }
+}
 const chatGeneratedDocContent = computed(() => {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const msg = messages[i]
@@ -11303,6 +11335,17 @@ html[data-theme="light"] .msg-attachment-chip {
 .builder-top-action.ghost {
   background: #fff;
   color: #111827;
+}
+
+.builder-top-action.ai-adjust-action {
+  background: linear-gradient(135deg, #f3eefe 0%, #e9deff 100%);
+  border-color: #c4b5fd;
+  color: #6d28d9;
+}
+
+.builder-top-action.ai-adjust-action:hover {
+  background: linear-gradient(135deg, #e9deff 0%, #d6c2fc 100%);
+  border-color: #a78bfa;
 }
 
 .builder-top-action.primary {

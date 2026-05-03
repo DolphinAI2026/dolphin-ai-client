@@ -116,7 +116,14 @@
                 title="AI 调整这个应用"
                 @click="openAiAdjust(app)"
               >
-                🤖
+                <svg viewBox="0 0 16 16" width="15" height="15" fill="none" aria-hidden="true">
+                  <rect x="3.5" y="5" width="9" height="7" rx="1.5" stroke="currentColor" stroke-width="1.4"/>
+                  <circle cx="6.2" cy="8.4" r="0.9" fill="currentColor"/>
+                  <circle cx="9.8" cy="8.4" r="0.9" fill="currentColor"/>
+                  <path d="M8 5V3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+                  <circle cx="8" cy="2.5" r="0.8" fill="currentColor"/>
+                  <path d="M2 9v1.5M14 9v1.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+                </svg>
               </button>
               <button
                 v-if="canOpenPlatform(app)"
@@ -199,7 +206,16 @@
               <small>{{ latestHistoryMeta(app) }}</small>
             </button>
             <div class="apps-card-actions" @click.stop>
-              <button class="apps-mini-action ai-adjust" type="button" @click="openAiAdjust(app)">🤖 AI 调整</button>
+              <button class="apps-mini-action ai-adjust" type="button" @click="openAiAdjust(app)">
+                <svg viewBox="0 0 16 16" width="13" height="13" fill="none" style="margin-right: 3px; vertical-align: -2px;" aria-hidden="true">
+                  <rect x="3.5" y="5" width="9" height="7" rx="1.5" stroke="currentColor" stroke-width="1.4"/>
+                  <circle cx="6.2" cy="8.4" r="0.9" fill="currentColor"/>
+                  <circle cx="9.8" cy="8.4" r="0.9" fill="currentColor"/>
+                  <path d="M8 5V3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+                  <circle cx="8" cy="2.5" r="0.8" fill="currentColor"/>
+                </svg>
+                AI 调整
+              </button>
               <button class="apps-mini-action" type="button" @click="openAppInChat(app)">对话</button>
               <button v-if="canOpenPlatform(app)" class="apps-mini-action" type="button" @click="openInPlatform(app)">平台</button>
               <button v-if="canDeployApp(app)" class="apps-mini-action primary" type="button" @click="deployApp(app)">生成</button>
@@ -245,13 +261,6 @@
       </div>
     </div>
 
-    <!-- AI 调整应用抽屉（自建 LLM + MCP tool loop） -->
-    <AppAdjustDrawer
-      v-if="aiAdjustApp"
-      v-model="aiAdjustOpen"
-      :app-id="aiAdjustApp.id"
-      :app-name="aiAdjustApp.app_name || ''"
-    />
   </BuilderFrame>
 </template>
 
@@ -266,7 +275,6 @@ import { authApi } from '@/api/auth'
 import { conversationApi, type ConversationWithApp } from '@/api/conversation'
 import BuilderFrame from '@/components/BuilderFrame.vue'
 import MembersPanel from '@/components/MembersPanel.vue'
-import AppAdjustDrawer from '@/components/AppAdjustDrawer.vue'
 import type { MergedApplication } from '@/types'
 import { buildPlatformProxyEntryUrl } from '@/utils/platformIframe'
 import { useUserStore } from '@/stores/user'
@@ -425,12 +433,9 @@ function openAppInChat(app: MergedApplication) {
   router.push({ path: '/chat', query: appWorkspaceQuery(app) })
 }
 
-// AI 调整应用 — 在列表页直接打开抽屉，不用进编辑页
-const aiAdjustOpen = ref(false)
-const aiAdjustApp = ref<MergedApplication | null>(null)
-function openAiAdjust(app: MergedApplication) {
-  aiAdjustApp.value = app
-  aiAdjustOpen.value = true
+// AI 调整应用 — 直接跳进应用编辑页（左侧已是 dolphin agent inline 嵌入）
+async function openAiAdjust(app: MergedApplication) {
+  router.push({ path: '/chat', query: appWorkspaceQuery(app) })
 }
 
 function canDeployApp(app: MergedApplication) {
