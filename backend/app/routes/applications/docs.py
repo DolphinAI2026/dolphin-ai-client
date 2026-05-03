@@ -602,8 +602,13 @@ async def _classify_update_request_with_llm(
     instruction: str,
     current_doc: str,
     current_config: dict,
+    recent_dialogue: str = "",
 ) -> dict:
-    """Use the tenant builder model to decide whether a chat turn is an app update."""
+    """Use the tenant builder model to decide whether a chat turn is an app update.
+
+    recent_dialogue：最近几轮对话的纯文本，让 LLM 能理解 followup 短指令
+    （如「那你帮我改一下」「嗯改吧」）的真实意图——这种 message 单独看会被误判 clarify。
+    """
     from app.routes.applications._doc_helpers import _complete_with_config, extract_json
 
     context_summary = _build_update_context_summary(current_config, current_doc)
@@ -617,9 +622,13 @@ async def _classify_update_request_with_llm(
                 "action 只能是 update、answer、clarify。"
                 "当用户明确要求新增、删除、修改、调整字段、表单、模型、页面、权限、流程、数据字典、报表、接口或自开发内容时，"
                 "action=update 且 actionable_update=true，并把 normalized_instruction 写成可执行的变更描述。"
-                "当用户只是寒暄、测试、询问当前能力、问下一步怎么做，或信息不足无法动配置时，action=answer 或 clarify，"
-                "actionable_update=false，并用 assistant_reply 自然回复或追问。"
-                "如果用户只说新增某个管理功能/模块/页面，但没有给出字段、关联关系、角色权限或流程，优先 action=clarify。"
+                "**关键：必须结合「最近对话历史」一起判断意图**。如果用户当前消息很短（如「那你帮我改一下」「嗯改吧」「可以」「动手吧」等），"
+                "但最近历史里已经讨论过具体要改什么（比如刚刚说「线索来源应该改成数据字典」），"
+                "就要把历史里的具体诉求合并到 normalized_instruction，action=update / actionable_update=true。"
+                "不要要求用户重复已经说过的事。"
+                "当用户只是寒暄、测试、询问当前能力、问下一步怎么做，或信息确实不足（历史也没说明白）时，"
+                "action=answer 或 clarify，actionable_update=false，并用 assistant_reply 自然回复或追问。"
+                "如果用户只说新增某个管理功能/模块/页面但没有给出字段、关联关系、角色权限或流程，优先 action=clarify。"
                 "不要把闲聊强行解释成应用变更，也不要凭空生成不存在的更新。"
             ),
         },
@@ -629,11 +638,17 @@ async def _classify_update_request_with_llm(
 当前应用配置摘要：
 {json.dumps(context_summary, ensure_ascii=False)}
 
-用户消息：
+最近对话历史（按时间顺序，越往下越新）：
+{recent_dialogue or "（无历史记录，仅基于当前消息判断）"}
+
+用户消息（最新一条）：
 {instruction}
 
-请输出 JSON，例如：
-{{"action":"clarify","actionable_update":false,"normalized_instruction":"","assistant_reply":"...","confidence":0.82}}
+请综合「最近对话历史 + 用户当前消息」输出 JSON：
+- 如果最新消息是 followup 短指令（如「那你帮我改一下」），把历史中讨论过的具体诉求合并写到 normalized_instruction
+- 否则按消息字面意思判断
+示例：
+{{"action":"update","actionable_update":true,"normalized_instruction":"将线索来源字段从单行输入改为数据字典选择...","assistant_reply":"","confidence":0.86}}
 """,
         },
     ]
@@ -1456,12 +1471,36 @@ async def draft_doc_update(
                 "confidence": 0.72,
             }
         elif doc_llm_cfg:
+            # 拉最近对话历史让分类 LLM 能理解 followup 短指令的真实意图
+            recent_dialogue = ""
+            if conversation:
+                recent_rows = (
+                    await db.execute(
+                        select(Message)
+                        .where(Message.conversation_id == conversation.id)
+                        .order_by(Message.id.desc())
+                        .limit(10)
+                    )
+                ).scalars().all()
+                # 翻回时间正序、过滤掉刚加进来的当前 instruction 自己
+                recent_rows = list(reversed(recent_rows))
+                lines: list[str] = []
+                for m in recent_rows:
+                    content = (m.content or "").strip()
+                    if not content: continue
+                    if m.role == "user" and content.endswith(instruction): continue
+                    role_label = "用户" if m.role == "user" else "AI"
+                    snippet = content if len(content) <= 400 else content[:400] + "..."
+                    lines.append(f"{role_label}：{snippet}")
+                recent_dialogue = "\n".join(lines[-8:])  # 最多 8 行
+
             update_intent = await _classify_update_request_with_llm(
                 doc_llm_cfg,
                 app_name=app_name,
                 instruction=instruction,
                 current_doc=current_doc_text,
                 current_config=current_config,
+                recent_dialogue=recent_dialogue,
             )
         else:
             assistant_reply = "当前没有可用的模型配置，无法分析复杂更新。你可以先切换/测试可用模型，或直接描述明确字段变更，例如“给会议主表新增备注字段”。"
@@ -1738,11 +1777,13 @@ async def draft_doc_update_stream(
         yield {"event": "thinking", "data": _json.dumps({"data": "正在理解你的诉求..."}, ensure_ascii=False)}
 
         # 进度文案脚本：(elapsed_threshold_seconds, thinking_text)
+        # 用通用文案而不是声称"在做某件具体的事"——LLM 实际可能在分类、判断 clarify
+        # 而非真的在重写文档；推确定的事件等后端真正改流式时再细化
         progress_script = [
-            (3, "正在对照当前 SPEC 分析变更范围..."),
-            (8, "正在重写设计文档（这一步通常 10-30 秒）..."),
-            (25, "文档较大或模型较慢，请再耐心等等..."),
-            (60, "已经超过 1 分钟，依然在处理中..."),
+            (3, "AI 正在分析你的诉求..."),
+            (10, "AI 正在生成回复，请稍候..."),
+            (30, "处理时间较长，依然在生成中..."),
+            (60, "已经超过 1 分钟，仍在处理..."),
         ]
 
         task = asyncio.create_task(draft_doc_update(app_id, body, ctx, db))
