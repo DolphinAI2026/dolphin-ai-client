@@ -111,6 +111,14 @@
 
             <div class="apps-row-actions" @click.stop>
               <button
+                class="apps-icon-btn ai-adjust"
+                type="button"
+                title="AI 调整这个应用"
+                @click="openAiAdjust(app)"
+              >
+                🤖
+              </button>
+              <button
                 v-if="canOpenPlatform(app)"
                 class="apps-icon-btn"
                 type="button"
@@ -191,6 +199,7 @@
               <small>{{ latestHistoryMeta(app) }}</small>
             </button>
             <div class="apps-card-actions" @click.stop>
+              <button class="apps-mini-action ai-adjust" type="button" @click="openAiAdjust(app)">🤖 AI 调整</button>
               <button class="apps-mini-action" type="button" @click="openAppInChat(app)">对话</button>
               <button v-if="canOpenPlatform(app)" class="apps-mini-action" type="button" @click="openInPlatform(app)">平台</button>
               <button v-if="canDeployApp(app)" class="apps-mini-action primary" type="button" @click="deployApp(app)">生成</button>
@@ -235,6 +244,14 @@
         />
       </div>
     </div>
+
+    <!-- AI 调整应用抽屉（自建 LLM + MCP tool loop） -->
+    <AppAdjustDrawer
+      v-if="aiAdjustApp"
+      v-model="aiAdjustOpen"
+      :app-id="aiAdjustApp.id"
+      :app-name="aiAdjustApp.app_name || ''"
+    />
   </BuilderFrame>
 </template>
 
@@ -249,6 +266,7 @@ import { authApi } from '@/api/auth'
 import { conversationApi, type ConversationWithApp } from '@/api/conversation'
 import BuilderFrame from '@/components/BuilderFrame.vue'
 import MembersPanel from '@/components/MembersPanel.vue'
+import AppAdjustDrawer from '@/components/AppAdjustDrawer.vue'
 import type { MergedApplication } from '@/types'
 import { buildPlatformProxyEntryUrl } from '@/utils/platformIframe'
 import { useUserStore } from '@/stores/user'
@@ -405,6 +423,14 @@ function openApp(app: MergedApplication) {
 function openAppInChat(app: MergedApplication) {
   // 备选：直达老 ChatPage（保留为 mini-action / 兼容入口）。
   router.push({ path: '/chat', query: appWorkspaceQuery(app) })
+}
+
+// AI 调整应用 — 在列表页直接打开抽屉，不用进编辑页
+const aiAdjustOpen = ref(false)
+const aiAdjustApp = ref<MergedApplication | null>(null)
+function openAiAdjust(app: MergedApplication) {
+  aiAdjustApp.value = app
+  aiAdjustOpen.value = true
 }
 
 function canDeployApp(app: MergedApplication) {
@@ -1056,6 +1082,24 @@ async function removeAppMember(userId: number) {
 
 .apps-icon-btn.muted {
   color: var(--b-text-faint);
+}
+
+.apps-icon-btn.ai-adjust {
+  font-size: 16px;
+  color: #7c3aed;
+}
+
+.apps-icon-btn.ai-adjust:hover {
+  background: #f3eefe;
+}
+
+.apps-mini-action.ai-adjust {
+  color: #7c3aed;
+  border-color: #d9d4f5;
+}
+
+.apps-mini-action.ai-adjust:hover {
+  background: #f3eefe;
 }
 
 .apps-card-grid {
