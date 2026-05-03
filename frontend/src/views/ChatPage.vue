@@ -399,9 +399,9 @@
             <button
               v-if="showUpdateButton"
               class="preview-side-cta secondary"
-              @click="gotoAiChatForUpdate"
+              @click="openAppChatDrawer"
               :disabled="updatingDocVersion || executingChangePlan || sendingMessage"
-              title="跳到 AI Chat 用对话改 md，改完一键应用回 Builder"
+              title="在右侧抽屉里跟 AI 改 md，改完一键应用到 Builder"
             >💬 用 AI 调整应用</button>
             <button
               v-if="showExecuteUpdateButton"
@@ -1106,6 +1106,24 @@
     </el-dialog>
   </div><!-- /chat-page -->
   </div><!-- /chat-page-shell -->
+
+  <!-- 用 AI 调整应用：右侧抽屉嵌 AppChatPanel（同 Vue 实例 / 同主题，不跳页不 iframe） -->
+  <el-drawer
+    v-model="appChatDrawerOpen"
+    direction="rtl"
+    size="62%"
+    :with-header="false"
+    :destroy-on-close="false"
+    class="app-chat-drawer"
+  >
+    <AppChatPanel
+      :visible="appChatDrawerOpen"
+      :app-id="existingAppId"
+      :app-name="store.preview.appName || ''"
+      @close="appChatDrawerOpen = false"
+      @applied="onAppChatPanelApplied"
+    />
+  </el-drawer>
   </WorkbenchShell>
 </template>
 
@@ -1148,6 +1166,7 @@ import { buildPlatformProxyEntryUrl, repairPlatformIframe } from '@/utils/platfo
 import type { ConversationCreate, Message } from '@/types'
 import TopBar from '@/components/TopBar.vue'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
+import AppChatPanel from '@/components/AppChatPanel.vue'
 import SessionSidebar, { type SessionItem as SidebarSessionItem } from '@/components/common/SessionSidebar.vue'
 import StructuredDocRenderer from '@/components/StructuredDocRenderer.vue'
 import StructuredDocDiffRenderer from '@/components/StructuredDocDiffRenderer.vue'
@@ -3008,36 +3027,27 @@ const existingAppId = ref<number | null>(null)  // 从"继续完善"进来时，
 const generating = ref(false)
 
 // AI-Builder 模块定位：基于文档生成/更新应用
-// 想用对话调整应用时跳到 AI-Chat 主页（独立页面，不嵌入），改完点顶部按钮把最新 md
-// 同步回 Builder 走 upload-doc-version 流程。
-function gotoAiChatForUpdate() {
+// 用 AI 调整应用：在 Builder 同页内打开右侧抽屉装 AppChatPanel（同 Vue 实例 / 同主题，
+// 不跳页不 iframe）。改完点抽屉里「应用最新 md 到 Builder」→ 走 upload-doc-version
+const appChatDrawerOpen = ref(false)
+function openAppChatDrawer() {
   if (!existingAppId.value) return
-  router.push({ path: '/ai-chat', query: { app_id: String(existingAppId.value) } })
+  appChatDrawerOpen.value = true
 }
-
-// 从 ai-chat 跳回带 apply_md=1：拿 sessionStorage 里的 md 走 upload-doc-version
-async function maybeApplyPendingMdFromChat() {
-  if (route.query.apply_md !== '1' || !existingAppId.value) return
-  const aid = existingAppId.value
-  const key = `pending_md_for_app_${aid}`
-  const raw = sessionStorage.getItem(key)
-  if (!raw) return
-  sessionStorage.removeItem(key)
+async function onAppChatPanelApplied(payload: { filename: string; content: string }) {
+  if (!existingAppId.value || !payload.content?.trim()) return
+  appChatDrawerOpen.value = false
+  const file = new File([payload.content], payload.filename || `${store.preview.appName || 'app'}-设计文档.md`, {
+    type: 'text/markdown',
+  })
   try {
-    const { filename, content } = JSON.parse(raw) as { filename: string; content: string }
-    if (!content?.trim()) return
-    const file = new File([content], filename || `${store.preview.appName || 'app'}-设计文档.md`, {
-      type: 'text/markdown',
-    })
-    await handleDocVersionUpload(file, aid, {
+    await handleDocVersionUpload(file, existingAppId.value, {
       userMessageContent: '从 AI 对话拉取最新设计文档并应用',
       title: '应用最新 md',
       forceNewConversation: false,
     })
-    // 清掉 query 防刷新重复触发
-    router.replace({ query: { ...route.query, apply_md: undefined } })
-  } catch (err) {
-    console.warn('应用 md 失败：', err)
+  } catch (err: any) {
+    ElMessage.error(`应用失败：${err?.response?.data?.detail || err?.message || err}`)
   }
 }
 
@@ -7517,9 +7527,6 @@ onMounted(async () => {
 
   // 加载应用计数
   fetchAppCount()
-
-  // 从 ai-chat 跳回 + apply_md=1：自动拉 md 走 upload-doc-version
-  await maybeApplyPendingMdFromChat()
 })
 
 // ── 监听 route.query.app_id 变化，实现侧栏点击切换应用 ──
