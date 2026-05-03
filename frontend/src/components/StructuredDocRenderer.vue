@@ -833,12 +833,17 @@ function displayComponentType(component: any) {
   overflow-x: auto;
   border: 1px solid rgba(164, 181, 229, 0.22);
   background: rgba(255, 255, 255, 0.42);
+  /* 让 wrap 自身可独立横向滚动（防止外层把它撑出去） */
+  max-width: 100%;
 }
 
 .doc-table {
-  width: 100%;
+  /* 让表格宽度由内容决定（多列时不挤压列名）；
+     列少 + 容器宽时通过 min-width: 100% 撑满 */
+  width: max-content;
+  min-width: 100%;
   border-collapse: collapse;
-  min-width: 420px;
+  table-layout: auto;
 }
 
 .doc-table th,
@@ -849,6 +854,10 @@ function displayComponentType(component: any) {
   vertical-align: top;
   font-size: 13px;
   line-height: 1.4;
+  /* 默认每个单元格至少 80px 让中文列名能放下；超长内容自动换行 */
+  min-width: 80px;
+  white-space: normal;
+  overflow-wrap: break-word;
 }
 
 .doc-table th {

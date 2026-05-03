@@ -9706,19 +9706,20 @@ html[data-theme="light"] .msg-attachment-chip {
 .doc-preview-body :deep(pre) { background: var(--t-border-subtle); padding: 12px; border-radius: 8px; overflow-x: auto; }
 .doc-preview-body :deep(.doc-table-scroll) { width: 100%; overflow-x: auto; margin: 10px 0; }
 .doc-preview-body :deep(table) {
-  /* table-layout: fixed + width: 100% 让表格随容器宽度自适应；
-     列宽过窄时由 word-break 让单元格内容换行而不是横向溢出 */
-  width: 100%;
-  max-width: 100%;
+  /* 表格按内容撑（避免列数多时挤压到列名重叠）；超出容器宽度时由
+     .doc-preview-body 父级 overflow-x: auto 横向滚动 */
+  width: max-content;
+  min-width: 100%;
   border-collapse: collapse;
   margin: 0;
   font-size: 12px;
-  table-layout: fixed;
+  table-layout: auto;
 }
 .doc-preview-body :deep(table td),
 .doc-preview-body :deep(table th) {
-  word-break: break-word;
-  overflow-wrap: anywhere;
+  /* 单元格内容默认按词换行；中文/编码不强制 break-word 避免被撕开 */
+  white-space: normal;
+  overflow-wrap: break-word;
 }
 .doc-preview-body :deep(th) {
   background: var(--t-brand-subtle);
