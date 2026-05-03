@@ -141,6 +141,8 @@ class InviteTenantUserRequest(BaseModel):
     username: str
     password: Optional[str] = None
     role_code: Optional[str] = None
+    # platform_admin 调用时可选：把账号同步加入指定租户（避免建出"孤儿账号"）
+    tenant_id: Optional[int] = None
 
 
 @router.post("/login", response_model=LoginResponse)
@@ -947,6 +949,31 @@ async def set_my_default_tenant(
     return {"ok": True, "tenant_id": data.tenant_id, "stored": True}
 
 
+@router.get("/platform-users")
+async def list_platform_users(
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """列出全平台 active 账号（仅平台管理员），供「租户管理 → 加成员」从已有账号里选。
+
+    返回精简：id / username / is_platform_admin。不返密码 hash。
+    """
+    _require_platform_admin(ctx)
+    rows = (
+        await db.execute(
+            select(User).where(User.is_active == True).order_by(User.username.asc())
+        )
+    ).scalars().all()
+    return [
+        {
+            "id": u.id,
+            "username": u.username,
+            "is_platform_admin": u.is_platform_admin,
+        }
+        for u in rows
+    ]
+
+
 @router.get("/me/tenants", response_model=list[TenantOption])
 async def list_my_tenants(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
@@ -1089,6 +1116,53 @@ async def invite_tenant_user(
             if role_code == "platform_admin":
                 user.is_platform_admin = True
         user.is_active = True
+
+        # 可选：把账号同时加到指定租户（避免"建出来但不属于任何组织"的孤儿账号）
+        if req.tenant_id:
+            target_tenant = (
+                await db.execute(select(Tenant).where(Tenant.id == req.tenant_id))
+            ).scalar_one_or_none()
+            if not target_tenant:
+                raise HTTPException(status_code=404, detail="指定的租户不存在")
+            # 找该租户的默认开发者角色（兼容老 init_db 的 R_tenant_admin 和新 seed 的 R_developer）
+            tenant_role = (
+                await db.execute(
+                    select(Role)
+                    .where(Role.tenant_id == req.tenant_id)
+                    .where(Role.role_code.in_(["R_developer", "R_tenant_admin", "admin"]))
+                    .order_by(Role.role_code.asc())
+                )
+            ).scalar_one_or_none()
+            if tenant_role:
+                existing = (
+                    await db.execute(
+                        select(UserTenant).where(
+                            UserTenant.user_id == user.id,
+                            UserTenant.tenant_id == req.tenant_id,
+                        )
+                    )
+                ).scalar_one_or_none()
+                if existing:
+                    existing.status = 1
+                    existing.role_id = tenant_role.id
+                else:
+                    has_default = (
+                        await db.execute(
+                            select(UserTenant).where(
+                                UserTenant.user_id == user.id, UserTenant.status == 1
+                            )
+                        )
+                    ).scalars().first() is not None
+                    db.add(
+                        UserTenant(
+                            user_id=user.id,
+                            tenant_id=req.tenant_id,
+                            role_id=tenant_role.id,
+                            is_default=not has_default,
+                            status=1,
+                        )
+                    )
+
         await db.commit()
         await db.refresh(user)
         memberships = await _load_user_memberships(db, [user.id])

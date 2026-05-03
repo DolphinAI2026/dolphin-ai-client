@@ -105,6 +105,12 @@ export interface TenantMemberAddPayload {
   role_code?: string
 }
 
+export interface PlatformUserItem {
+  id: number
+  username: string
+  is_platform_admin: boolean
+}
+
 export interface TenantUpdatePayload {
   tenant_name?: string
   max_applications?: number
@@ -133,6 +139,10 @@ export const authApi = {
 
   listAllTenants(params?: { q?: string; status?: 0 | 1 }) {
     return request.get<any, TenantAdminItem[]>('/auth/tenants', { params })
+  },
+
+  listPlatformUsers() {
+    return request.get<any, PlatformUserItem[]>('/auth/platform-users')
   },
 
   getTenantDashboard() {
@@ -211,7 +221,7 @@ export const authApi = {
     return request.put<any, TenantUser>(`/auth/tenant-users/${userId}/role`, { role_code: roleCode })
   },
 
-  inviteTenantUser(data: { username: string; password?: string; role_code?: string }) {
+  inviteTenantUser(data: { username: string; password?: string; role_code?: string; tenant_id?: number }) {
     return request.post<any, TenantUser>('/auth/tenant-users/invite', data)
   }
 }

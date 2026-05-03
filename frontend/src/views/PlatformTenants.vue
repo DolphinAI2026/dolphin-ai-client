@@ -272,14 +272,34 @@
         </div>
       </el-drawer>
 
-      <!-- 添加成员对话框 -->
-      <el-dialog v-model="addMemberVisible" :title="`添加成员到 ${detailTarget?.tenant_name || ''}`" width="440px">
+      <!-- 添加成员对话框：从已有平台账号选；选不到才允许新建 -->
+      <el-dialog v-model="addMemberVisible" :title="`添加成员到 ${detailTarget?.tenant_name || ''}`" width="460px">
         <el-form :model="addMemberForm" label-position="top">
-          <el-form-item label="用户名" required>
-            <el-input v-model="addMemberForm.username" placeholder="已有账号直接加入；账号不存在时会新建" maxlength="64" />
+          <el-form-item label="选择账号" required>
+            <el-select
+              v-model="addMemberForm.username"
+              filterable
+              :allow-create="addMemberAllowCreate"
+              :placeholder="addMemberAllowCreate ? '搜索已有账号或输入新账号名' : '搜索已有账号'"
+              style="width: 100%"
+              :loading="platformUsersLoading"
+            >
+              <el-option
+                v-for="u in availablePlatformUsers"
+                :key="u.id"
+                :label="u.username"
+                :value="u.username"
+              >
+                <span>{{ u.username }}</span>
+                <span v-if="u.is_platform_admin" class="member-platform" style="margin-left:8px;">平台管理员</span>
+              </el-option>
+            </el-select>
+            <div class="form-hint">
+              <el-checkbox v-model="addMemberAllowCreate">列表里没有？允许新建账号</el-checkbox>
+            </div>
           </el-form-item>
-          <el-form-item label="初始密码">
-            <el-input v-model="addMemberForm.password" type="password" show-password placeholder="仅当账号不存在时需要填写" />
+          <el-form-item v-if="addMemberAllowCreate && !isExistingUsername" label="初始密码" required>
+            <el-input v-model="addMemberForm.password" type="password" show-password placeholder="新建账号必填" />
           </el-form-item>
           <el-form-item label="角色">
             <el-select v-model="addMemberForm.role_code" style="width: 100%">
@@ -302,8 +322,10 @@
 import { onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import BuilderFrame from '@/components/BuilderFrame.vue'
+import { computed } from 'vue'
 import {
   authApi,
+  type PlatformUserItem,
   type TenantAdminItem,
   type TenantCreatePayload,
   type TenantDashboard,
@@ -359,6 +381,19 @@ const addMemberForm = ref<TenantMemberAddPayload>({
   password: '',
   role_code: 'R_developer',
 })
+const addMemberAllowCreate = ref(false)
+const platformUsers = ref<PlatformUserItem[]>([])
+const platformUsersLoading = ref(false)
+
+// 已经是当前租户成员的账号不重复展示
+const availablePlatformUsers = computed(() => {
+  const memberSet = new Set(detailMembers.value.map((m) => m.username))
+  return platformUsers.value.filter((u) => !memberSet.has(u.username))
+})
+
+const isExistingUsername = computed(() =>
+  platformUsers.value.some((u) => u.username === addMemberForm.value.username)
+)
 
 async function load() {
   loading.value = true
@@ -491,15 +526,29 @@ async function openDetail(row: TenantAdminItem) {
   }
 }
 
-function openAddMember() {
+async function openAddMember() {
   addMemberForm.value = { username: '', password: '', role_code: 'R_developer' }
+  addMemberAllowCreate.value = false
   addMemberVisible.value = true
+  // 拉平台账号列表（去掉已加入本租户的）
+  platformUsersLoading.value = true
+  try {
+    platformUsers.value = await authApi.listPlatformUsers()
+  } catch {
+    platformUsers.value = []
+  } finally {
+    platformUsersLoading.value = false
+  }
 }
 
 async function submitAddMember() {
   if (!detailTarget.value) return
   if (!addMemberForm.value.username?.trim()) {
-    ElMessage.warning('请输入用户名'); return
+    ElMessage.warning('请选择或输入用户名'); return
+  }
+  // 新建账号必须有密码（已存在账号后端不要求密码）
+  if (addMemberAllowCreate.value && !isExistingUsername.value && !addMemberForm.value.password?.trim()) {
+    ElMessage.warning('新建账号需要填写初始密码'); return
   }
   memberSaving.value = true
   try {
@@ -858,5 +907,10 @@ onMounted(() => {
   padding: 1px 6px;
   border-radius: 8px;
   vertical-align: middle;
+}
+.form-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--t-text-muted);
 }
 </style>

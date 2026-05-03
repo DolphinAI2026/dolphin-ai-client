@@ -2,7 +2,7 @@
   <BuilderFrame :breadcrumbs="[{ label: '设置' }, { label: '成员管理' }]">
     <template #actions>
       <el-button @click="loadAll" :loading="loading">刷新</el-button>
-      <el-button type="primary" @click="dialogVisible = true">添加用户</el-button>
+      <el-button type="primary" @click="openInviteDialog">添加用户</el-button>
     </template>
     <div class="tenant-users-page builder-page">
       <div class="tenant-users-header">
@@ -66,7 +66,7 @@
         </el-table>
       </div>
 
-      <el-dialog v-model="dialogVisible" :title="isPlatformAdmin ? '添加平台账号' : '添加用户到当前组织'" width="460px">
+      <el-dialog v-model="dialogVisible" :title="isPlatformAdmin ? '添加平台账号' : '添加用户到当前组织'" width="480px">
         <el-form :model="inviteForm" label-position="top">
           <el-form-item label="用户名" required>
             <el-input v-model="inviteForm.username" placeholder="输入已有用户名，例如 mars；账号不存在时会新建" />
@@ -74,7 +74,7 @@
           <el-form-item label="初始密码">
             <el-input v-model="inviteForm.password" type="password" show-password placeholder="仅当账号不存在时需要填写" />
           </el-form-item>
-          <el-form-item label="组织角色">
+          <el-form-item label="平台角色">
             <el-select v-model="inviteForm.role_code" style="width: 100%">
               <el-option
                 v-for="role in roles"
@@ -83,6 +83,26 @@
                 :value="role.role_code"
               />
             </el-select>
+          </el-form-item>
+          <el-form-item v-if="isPlatformAdmin" label="加入到租户（可选）">
+            <el-select
+              v-model="inviteForm.tenant_id"
+              filterable
+              clearable
+              placeholder="不选则只建账号、不绑组织（用户登录后看不到任何业务）"
+              style="width: 100%"
+              :loading="tenantsLoading"
+            >
+              <el-option
+                v-for="t in availableTenants"
+                :key="t.id"
+                :label="`${t.tenant_name}（${t.tenant_code}）`"
+                :value="t.id"
+              />
+            </el-select>
+            <div class="form-hint">
+              选了租户后，账号会自动以「开发者」角色加入；之后可在「租户管理 → 详情」里改角色。
+            </div>
           </el-form-item>
         </el-form>
         <template #footer>
@@ -98,7 +118,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import BuilderFrame from '@/components/BuilderFrame.vue'
-import { authApi, type TenantRoleOption, type TenantUser } from '@/api/auth'
+import { authApi, type TenantAdminItem, type TenantRoleOption, type TenantUser } from '@/api/auth'
 import { useUserStore } from '@/stores/user'
 
 const userStore = useUserStore()
@@ -107,11 +127,33 @@ const saving = ref(false)
 const users = ref<TenantUser[]>([])
 const roles = ref<TenantRoleOption[]>([])
 const dialogVisible = ref(false)
-const inviteForm = ref({
+const inviteForm = ref<{
+  username: string
+  password: string
+  role_code: string
+  tenant_id?: number
+}>({
   username: '',
   password: '',
   role_code: 'R_developer',
+  tenant_id: undefined,
 })
+
+// 仅 platform_admin 用：account 添加时可选关联租户
+const availableTenants = ref<TenantAdminItem[]>([])
+const tenantsLoading = ref(false)
+
+async function loadTenantOptions() {
+  if (!isPlatformAdmin.value) return
+  tenantsLoading.value = true
+  try {
+    availableTenants.value = await authApi.listAllTenants({ status: 1 })
+  } catch {
+    availableTenants.value = []
+  } finally {
+    tenantsLoading.value = false
+  }
+}
 const isPlatformAdmin = computed(() => userStore.tenantRole === 'platform_admin')
 const pageTitle = computed(() => isPlatformAdmin.value ? '账号管理' : '成员管理')
 const pageDesc = computed(() =>
@@ -187,6 +229,17 @@ async function updateStatus(user: TenantUser, enabled: boolean) {
   }
 }
 
+function openInviteDialog() {
+  inviteForm.value = {
+    username: '',
+    password: '',
+    role_code: isPlatformAdmin.value ? 'normal_user' : 'R_developer',
+    tenant_id: undefined,
+  }
+  dialogVisible.value = true
+  loadTenantOptions()
+}
+
 async function inviteUser() {
   if (!inviteForm.value.username.trim()) {
     ElMessage.warning('请输入用户名')
@@ -198,6 +251,7 @@ async function inviteUser() {
       username: inviteForm.value.username.trim(),
       password: inviteForm.value.password.trim() || undefined,
       role_code: inviteForm.value.role_code,
+      tenant_id: isPlatformAdmin.value ? inviteForm.value.tenant_id : undefined,
     })
     users.value = [...users.value.filter(item => item.id !== created.id), created]
     dialogVisible.value = false
@@ -205,9 +259,14 @@ async function inviteUser() {
       username: '',
       password: '',
       role_code: isPlatformAdmin.value ? 'normal_user' : roles.value[0]?.role_code || 'R_developer',
+      tenant_id: undefined,
     }
     await loadAll()
-    ElMessage.success('用户已加入当前组织')
+    if (isPlatformAdmin.value && inviteForm.value.tenant_id) {
+      ElMessage.success('账号已创建并加入指定租户')
+    } else {
+      ElMessage.success('用户已加入当前组织')
+    }
   } catch (error: any) {
     ElMessage.error(error.message || '添加用户失败')
   } finally {
@@ -288,5 +347,12 @@ onMounted(() => {
   border-radius: 7px;
   font-size: 12px;
   font-weight: 700;
+}
+
+.form-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--b-text-muted, #999);
+  line-height: 1.5;
 }
 </style>

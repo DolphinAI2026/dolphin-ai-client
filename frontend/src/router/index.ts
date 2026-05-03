@@ -232,4 +232,22 @@ router.beforeEach(async (to, _from, next) => {
   }
 })
 
+// 部署后老 tab 引用旧 index.html，里面 import 的 chunk hash 已被新 build 覆盖：
+// 切路由时 dynamic import 404 → 用户卡死。这里捕获该错误自动 reload 一次拿新 index.html。
+// sessionStorage 标志位防止 reload 后还失败导致死循环。
+router.onError((error) => {
+  const msg = (error && (error as Error).message) || ''
+  if (/Failed to fetch dynamically imported module|Importing a module script failed|Loading chunk \S+ failed/.test(msg)) {
+    if (!sessionStorage.getItem('__chunk_reload_attempted')) {
+      sessionStorage.setItem('__chunk_reload_attempted', String(Date.now()))
+      window.location.reload()
+    }
+  }
+})
+
+// reload 之后清掉标志位（10 秒后），让下次部署也能再触发
+if (typeof window !== 'undefined') {
+  setTimeout(() => sessionStorage.removeItem('__chunk_reload_attempted'), 10_000)
+}
+
 export default router
