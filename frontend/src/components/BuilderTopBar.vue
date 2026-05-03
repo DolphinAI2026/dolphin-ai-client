@@ -19,6 +19,14 @@
 
     <div class="builder-topbar-spacer" />
 
+    <span v-if="userStore.tenantName" class="builder-current-tenant" :title="`当前激活租户：${userStore.tenantName}`">
+      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <rect x="2" y="3" width="5" height="11" rx="1" stroke="currentColor" stroke-width="1.4" />
+        <rect x="9" y="6" width="5" height="8" rx="1" stroke="currentColor" stroke-width="1.4" />
+      </svg>
+      {{ userStore.tenantName }}
+    </span>
+
     <button class="builder-global-search" type="button" @click="commandOpen = true">
       <Search />
       <span>搜索应用、仓库、模型、对话...</span>
@@ -59,6 +67,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import { useUserStore } from '@/stores/user'
+
+const userStore = useUserStore()
 import {
   ArrowRight,
   ChatDotRound,

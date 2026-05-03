@@ -259,6 +259,29 @@ html[data-theme="dark"] {
   flex: 1;
 }
 
+.builder-current-tenant {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 10px;
+  margin-right: 8px;
+  border: 1px solid var(--b-line);
+  border-radius: 999px;
+  background: var(--b-panel-soft);
+  color: var(--b-text);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.builder-current-tenant svg {
+  flex-shrink: 0;
+  color: var(--b-text-muted);
+}
+
 .builder-global-search {
   height: 28px;
   min-width: 260px;

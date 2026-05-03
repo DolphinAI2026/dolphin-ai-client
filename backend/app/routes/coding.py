@@ -1967,7 +1967,9 @@ async def list_workspaces(
     project_ids = {row[0] for row in owned_result.all()}
     project_ids.update(row[0] for row in member_result.all())
 
-    workspaces = workspace_mgr.list_accessible_workspaces(ctx.user.id, list(project_ids))
+    workspaces = workspace_mgr.list_accessible_workspaces(
+        ctx.user.id, list(project_ids), tenant_id=ctx.tenant_id
+    )
     decorated: list[dict[str, Any]] = []
     for ws in workspaces:
         project_id = ws.get("project_id")

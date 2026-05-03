@@ -2421,8 +2421,17 @@ const resultPath = '{str(result_json_path)}'
             ),
         )
 
-    def list_accessible_workspaces(self, user_id: int, project_ids: list[int] | None = None) -> list:
-        """列出用户可访问的工作区：个人工作区 + 有权限的项目工作区。"""
+    def list_accessible_workspaces(
+        self,
+        user_id: int,
+        project_ids: list[int] | None = None,
+        tenant_id: int | None = None,
+    ) -> list:
+        """列出用户可访问的工作区：个人工作区 + 有权限的项目工作区。
+
+        tenant_id 不为 None 时强制过滤：只返回 meta.tenant_id 匹配的 workspace。
+        老 workspace 没 tenant_id 字段时按 user_id 兜底放行（避免吞掉历史数据）。
+        """
         allowed_projects = set(project_ids or [])
         results_by_id: dict[str, dict] = {}
         if not any(root.exists() for root in WORKSPACE_SEARCH_ROOTS):
@@ -2436,6 +2445,11 @@ const resultPath = '{str(result_json_path)}'
                         continue
                 elif meta.get("user_id") != user_id:
                     continue
+                # 租户隔离：当前激活租户 ≠ workspace 所属租户时直接过滤
+                if tenant_id is not None:
+                    meta_tenant = meta.get("tenant_id")
+                    if meta_tenant is not None and int(meta_tenant) != int(tenant_id):
+                        continue
 
                 ws_id = str(meta.get("id") or d.name)
                 existing = results_by_id.get(ws_id)

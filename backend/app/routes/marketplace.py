@@ -104,8 +104,12 @@ async def list_components(
     category: Optional[str] = Query(None, description="分类筛选"),
     sort: Optional[str] = Query("latest", description="排序: latest / popular"),
 ):
-    """列出/搜索市场组件"""
-    query = select(MarketplaceComponent)
+    """列出/搜索市场组件（按当前租户隔离）。
+
+    ToB 私有化部署场景下组件是租户私有资产，不跨租户共享；
+    平台管理员看自己当前激活租户的组件，要看别租户请先切过去。
+    """
+    query = select(MarketplaceComponent).where(MarketplaceComponent.tenant_id == ctx.tenant_id)
 
     # 关键词搜索
     if keyword:
@@ -147,10 +151,13 @@ async def list_my_components(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """列出当前用户发布的组件"""
+    """列出当前用户在当前租户发布的组件（双重过滤：author + tenant）"""
     result = await db.execute(
         select(MarketplaceComponent)
-        .where(MarketplaceComponent.author_id == ctx.user.id)
+        .where(
+            MarketplaceComponent.author_id == ctx.user.id,
+            MarketplaceComponent.tenant_id == ctx.tenant_id,
+        )
         .order_by(desc(MarketplaceComponent.published_at))
     )
     components = result.scalars().all()
@@ -165,7 +172,10 @@ async def get_component(
 ):
     """获取组件详情"""
     result = await db.execute(
-        select(MarketplaceComponent).where(MarketplaceComponent.id == component_id)
+        select(MarketplaceComponent).where(
+            MarketplaceComponent.id == component_id,
+            MarketplaceComponent.tenant_id == ctx.tenant_id,
+        )
     )
     comp = result.scalar_one_or_none()
     if not comp:
@@ -250,7 +260,10 @@ async def download_component(
 ):
     """下载组件 zip 包"""
     result = await db.execute(
-        select(MarketplaceComponent).where(MarketplaceComponent.id == component_id)
+        select(MarketplaceComponent).where(
+            MarketplaceComponent.id == component_id,
+            MarketplaceComponent.tenant_id == ctx.tenant_id,
+        )
     )
     comp = result.scalar_one_or_none()
     if not comp:
@@ -278,7 +291,10 @@ async def unpublish_component(
 ):
     """下架组件（仅作者可操作）"""
     result = await db.execute(
-        select(MarketplaceComponent).where(MarketplaceComponent.id == component_id)
+        select(MarketplaceComponent).where(
+            MarketplaceComponent.id == component_id,
+            MarketplaceComponent.tenant_id == ctx.tenant_id,
+        )
     )
     comp = result.scalar_one_or_none()
     if not comp:
