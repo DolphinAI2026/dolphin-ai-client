@@ -1252,8 +1252,15 @@ const incomingMode = computed(() => {
 
 // ── Lifecycle ──
 
-// 嵌入模式：从 ChatPage 应用页 iframe 进来，绑定指定 application 的 chat session
-const isEmbeddedAppChat = computed(() => String(route.query.embed || '') === 'app_chat')
+// 嵌入模式：从 ChatPage 应用页 iframe 进来，绑定指定 application 的 chat session。
+// 双保险：query 没传到时，window.self!==window.top 也算嵌入（iframe 内永远收起 sidebar）
+function isInIframeAIChat(): boolean {
+  if (typeof window === 'undefined') return false
+  try { return window.self !== window.top } catch { return true }
+}
+const isEmbeddedAppChat = computed(() =>
+  String(route.query.embed || '') === 'app_chat' || isInIframeAIChat(),
+)
 const embedAppId = computed(() => {
   const v = route.query.app_id
   const n = Number(Array.isArray(v) ? v[0] : v)

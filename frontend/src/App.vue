@@ -7,11 +7,17 @@ import { useUserStore } from '@/stores/user'
 const route = useRoute()
 const userStore = useUserStore()
 
-// 助手浮窗在顶层挂一次（路由切换不重新挂）：登录前 / 嵌入模式不显示
+// 助手浮窗在顶层挂一次（路由切换不重新挂）：登录前 / 嵌入模式 / iframe 内都不挂
+function isInIframe(): boolean {
+  if (typeof window === 'undefined') return false
+  try { return window.self !== window.top } catch { return true }
+}
 const showAssistant = computed(() => {
   if (!userStore.token) return false
   if (route.path === '/login' || route.path === '/tenant-select') return false
   if (route.query.embed_nav === '0') return false
+  if (route.query.embed === 'app_chat') return false
+  if (isInIframe()) return false
   return true
 })
 </script>
