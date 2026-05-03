@@ -51,13 +51,13 @@
         </div>
       </template>
       <template #actions>
-        <!-- AI 调整应用：跳到 dolphin 应用调整助手（独立 agent，挂 8 个 MCP 工具） -->
+        <!-- AI 调整应用：内嵌抽屉（自建 LLM + MCP tool loop，绕开 dolphin 编排黑盒） -->
         <button
           v-if="builderCurrentAppId"
           class="builder-top-action"
           type="button"
-          title="跟 AI 对话调整这个应用（dolphin 应用调整助手）"
-          @click="openDolphinAppAdjustChat"
+          title="跟 AI 对话调整这个应用"
+          @click="appAdjustDrawerVisible = !appAdjustDrawerVisible"
         >
           <span style="margin-right: 4px;">🤖</span>AI 调整
         </button>
@@ -1134,6 +1134,14 @@
       @applied="onAppChatPanelApplied"
     />
   </el-drawer>
+
+  <!-- AI 调整抽屉（自建 LLM + MCP tool loop） -->
+  <AppAdjustDrawer
+    v-if="builderCurrentAppId"
+    v-model="appAdjustDrawerVisible"
+    :app-id="builderCurrentAppId"
+    :app-name="builderAppDisplayName"
+  />
   </WorkbenchShell>
 </template>
 
@@ -1177,6 +1185,7 @@ import type { ConversationCreate, Message } from '@/types'
 import TopBar from '@/components/TopBar.vue'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
 import AppChatPanel from '@/components/AppChatPanel.vue'
+import AppAdjustDrawer from '@/components/AppAdjustDrawer.vue'
 import SessionSidebar, { type SessionItem as SidebarSessionItem } from '@/components/common/SessionSidebar.vue'
 import StructuredDocRenderer from '@/components/StructuredDocRenderer.vue'
 import StructuredDocDiffRenderer from '@/components/StructuredDocDiffRenderer.vue'
@@ -1307,26 +1316,8 @@ const builderCurrentAppId = computed<number | null>(() => {
   return null
 })
 
-// 打开 dolphin "应用调整助手"chat 页（带 app_id 上下文）
-async function openDolphinAppAdjustChat() {
-  const appId = builderCurrentAppId.value
-  if (!appId) return
-  try {
-    const cfg = await request.get<unknown, {
-      server_url: string
-      app_adjust_agent_code: string
-    }>('/dolphin/config')
-    if (!cfg?.app_adjust_agent_code) {
-      ElMessage.warning('Dolphin 应用调整助手未配置（缺 DOLPHIN_APP_ADJUST_AGENT_CODE）')
-      return
-    }
-    const url = `${cfg.server_url}/agent/${cfg.app_adjust_agent_code}/chat?app_id=${appId}&app_name=${encodeURIComponent(builderAppDisplayName.value || '')}`
-    window.open(url, '_blank', 'noopener,noreferrer')
-  } catch (err) {
-    console.warn('[openDolphinAppAdjustChat] failed', err)
-    ElMessage.error('打开 AI 调整助手失败')
-  }
-}
+// AI 调整抽屉开关（内嵌 LLM + MCP tool loop，组件 AppAdjustDrawer）
+const appAdjustDrawerVisible = ref(false)
 const chatGeneratedDocContent = computed(() => {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const msg = messages[i]
