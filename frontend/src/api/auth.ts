@@ -69,6 +69,26 @@ export interface TenantUsage {
   members: number
 }
 
+export interface TenantDashboardNearLimit {
+  tenant_id: number
+  tenant_name: string
+  resource: 'applications' | 'workspaces' | 'components'
+  used: number
+  max: number
+  ratio: number
+}
+
+export interface TenantDashboard {
+  tenants_active: number
+  totals: {
+    applications: TenantUsageQuota
+    workspaces: TenantUsageQuota
+    components: TenantUsageQuota
+    members: number
+  }
+  near_limit: TenantDashboardNearLimit[]
+}
+
 export interface TenantMemberItem {
   user_id: number
   username: string
@@ -114,8 +134,19 @@ export const authApi = {
     return request.get<any, TenantOption[]>('/auth/me/tenants')
   },
 
-  listAllTenants() {
-    return request.get<any, TenantAdminItem[]>('/auth/tenants')
+  listAllTenants(params?: { q?: string; status?: 0 | 1 }) {
+    return request.get<any, TenantAdminItem[]>('/auth/tenants', { params })
+  },
+
+  getTenantDashboard() {
+    return request.get<any, TenantDashboard>('/auth/tenants/dashboard')
+  },
+
+  setMyDefaultTenant(tenantId: number) {
+    return request.put<any, { ok: boolean; tenant_id: number; stored: boolean }>(
+      '/auth/me/default-tenant',
+      { tenant_id: tenantId },
+    )
   },
 
   createTenant(data: TenantCreatePayload) {

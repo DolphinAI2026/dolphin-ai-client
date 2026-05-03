@@ -12,6 +12,65 @@
         </div>
       </div>
 
+      <!-- Dashboard 卡片区 -->
+      <div v-if="dashboard" class="dashboard-grid">
+        <div class="dashboard-card">
+          <div class="dashboard-card-label">活跃租户</div>
+          <div class="dashboard-card-value">{{ dashboard.tenants_active }}</div>
+        </div>
+        <div class="dashboard-card">
+          <div class="dashboard-card-label">低代码应用</div>
+          <div class="dashboard-card-value">
+            {{ dashboard.totals.applications.used }}
+            <span class="dashboard-card-suffix">/ {{ dashboard.totals.applications.max }}</span>
+          </div>
+        </div>
+        <div class="dashboard-card">
+          <div class="dashboard-card-label">Vibe Coding 工作区</div>
+          <div class="dashboard-card-value">
+            {{ dashboard.totals.workspaces.used }}
+            <span class="dashboard-card-suffix">/ {{ dashboard.totals.workspaces.max }}</span>
+          </div>
+        </div>
+        <div class="dashboard-card">
+          <div class="dashboard-card-label">自开发组件</div>
+          <div class="dashboard-card-value">
+            {{ dashboard.totals.components.used }}
+            <span class="dashboard-card-suffix">/ {{ dashboard.totals.components.max }}</span>
+          </div>
+        </div>
+        <div class="dashboard-card">
+          <div class="dashboard-card-label">成员（活跃）</div>
+          <div class="dashboard-card-value">{{ dashboard.totals.members }}</div>
+        </div>
+      </div>
+
+      <div v-if="dashboard?.near_limit?.length" class="near-limit-banner">
+        <strong>⚠ {{ dashboard.near_limit.length }} 个租户接近配额上限：</strong>
+        <span v-for="(item, idx) in dashboard.near_limit.slice(0, 5)" :key="`${item.tenant_id}-${item.resource}`">
+          {{ idx > 0 ? '、' : '' }}
+          <a class="near-limit-link" @click="jumpTenant(item.tenant_id)">{{ item.tenant_name }}</a>
+          ({{ resourceLabel(item.resource) }} {{ item.used }}/{{ item.max }})
+        </span>
+      </div>
+
+      <!-- 搜索栏 -->
+      <div class="filter-bar">
+        <el-input
+          v-model="filterQ"
+          placeholder="按名称 / 编码搜索"
+          clearable
+          style="width: 280px"
+          @clear="load"
+          @keyup.enter="load"
+        />
+        <el-select v-model="filterStatus" placeholder="全部状态" clearable style="width: 160px" @change="load">
+          <el-option label="只看启用" :value="1" />
+          <el-option label="只看禁用" :value="0" />
+        </el-select>
+        <el-button @click="load" :loading="loading">应用筛选</el-button>
+      </div>
+
       <div class="platform-tenants-panel">
         <el-table
           v-loading="loading"
@@ -65,10 +124,16 @@
               {{ formatDate(row.created_at) }}
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="170" fixed="right">
+          <el-table-column label="操作" width="220" fixed="right">
             <template #default="{ row }">
               <el-button link type="primary" size="small" @click.stop="openEdit(row)">编辑</el-button>
               <el-button link type="primary" size="small" @click.stop="openDetail(row)">详情</el-button>
+              <el-button
+                link
+                size="small"
+                :disabled="row.id === userStore.tenantId"
+                @click.stop="setDefault(row)"
+              >设为默认</el-button>
               <el-button link type="danger" size="small" @click.stop="confirmDelete(row)">删除</el-button>
             </template>
           </el-table-column>
@@ -248,16 +313,25 @@ import {
   authApi,
   type TenantAdminItem,
   type TenantCreatePayload,
+  type TenantDashboard,
   type TenantMemberAddPayload,
   type TenantMemberItem,
   type TenantUpdatePayload,
   type TenantUsage,
 } from '@/api/auth'
 import UsageBar from '@/components/UsageBar.vue'
+import { useUserStore } from '@/stores/user'
+
+const userStore = useUserStore()
 
 const loading = ref(false)
 const saving = ref(false)
 const tenants = ref<TenantAdminItem[]>([])
+
+// 筛选 & dashboard
+const filterQ = ref('')
+const filterStatus = ref<0 | 1 | null>(null)
+const dashboard = ref<TenantDashboard | null>(null)
 
 // 创建
 const createVisible = ref(false)
@@ -297,12 +371,41 @@ const addMemberForm = ref<TenantMemberAddPayload>({
 async function load() {
   loading.value = true
   try {
-    tenants.value = await authApi.listAllTenants()
+    const params: { q?: string; status?: 0 | 1 } = {}
+    if (filterQ.value.trim()) params.q = filterQ.value.trim()
+    if (filterStatus.value === 0 || filterStatus.value === 1) params.status = filterStatus.value
+    tenants.value = await authApi.listAllTenants(params)
   } catch (err: any) {
     ElMessage.error(err?.message || '加载租户失败')
   } finally {
     loading.value = false
   }
+}
+
+async function loadDashboard() {
+  try {
+    dashboard.value = await authApi.getTenantDashboard()
+  } catch {
+    dashboard.value = null
+  }
+}
+
+async function setDefault(row: TenantAdminItem) {
+  try {
+    await authApi.setMyDefaultTenant(row.id)
+    ElMessage.success(`「${row.tenant_name}」已设为你的默认租户（下次登录自动进入）`)
+  } catch (err: any) {
+    ElMessage.error(err?.message || '设为默认失败')
+  }
+}
+
+function jumpTenant(tenantId: number) {
+  const row = tenants.value.find((t) => t.id === tenantId)
+  if (row) openDetail(row)
+}
+
+function resourceLabel(r: string): string {
+  return ({ applications: '应用', workspaces: '工作区', components: '组件' } as Record<string, string>)[r] || r
 }
 
 function openCreate() {
@@ -533,7 +636,10 @@ function formatDate(value?: string | null): string {
   }
 }
 
-onMounted(load)
+onMounted(() => {
+  load()
+  loadDashboard()
+})
 </script>
 
 <style scoped>
@@ -556,6 +662,63 @@ onMounted(load)
   font-size: 13px;
   margin: 0;
 }
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.dashboard-card {
+  background: var(--t-bg-panel);
+  border: 1px solid var(--t-border-subtle);
+  border-radius: 10px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.dashboard-card-label {
+  font-size: 12px;
+  color: var(--t-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.dashboard-card-value {
+  font-size: 22px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--t-text-primary);
+}
+.dashboard-card-suffix {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--t-text-muted);
+  margin-left: 4px;
+}
+
+.near-limit-banner {
+  margin-bottom: 16px;
+  padding: 10px 14px;
+  background: rgba(240, 160, 32, 0.1);
+  border: 1px solid rgba(240, 160, 32, 0.4);
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--t-text-primary);
+}
+.near-limit-link {
+  color: #c47c00;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.near-limit-link:hover { color: #d33; }
+
+.filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
 .platform-tenants-panel {
   background: var(--t-bg-panel);
   border: 1px solid var(--t-border-subtle);

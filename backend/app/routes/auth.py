@@ -359,17 +359,33 @@ def _tenant_admin_item(t: Tenant, member_count: int) -> TenantAdminItem:
 async def list_all_tenants(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    q: Optional[str] = None,
+    status: Optional[int] = None,
 ):
-    """列出所有租户（仅平台管理员），含 member_count。"""
+    """列出所有租户（仅平台管理员），含 member_count。
+
+    - q：模糊匹配 tenant_name / tenant_code（不区分大小写）
+    - status：1=只看启用 / 0=只看禁用 / 不传=全部
+    """
     _require_platform_admin(ctx)
 
-    from sqlalchemy import func as sql_func
+    from sqlalchemy import func as sql_func, or_
 
-    rows = (
-        await db.execute(
-            select(Tenant).order_by(Tenant.created_at.desc(), Tenant.id.desc())
-        )
-    ).scalars().all()
+    stmt = select(Tenant).order_by(Tenant.created_at.desc(), Tenant.id.desc())
+    if q:
+        keyword = q.strip().lower()
+        if keyword:
+            pattern = f"%{keyword}%"
+            stmt = stmt.where(
+                or_(
+                    sql_func.lower(Tenant.tenant_name).like(pattern),
+                    sql_func.lower(Tenant.tenant_code).like(pattern),
+                )
+            )
+    if status in (0, 1):
+        stmt = stmt.where(Tenant.status == status)
+
+    rows = (await db.execute(stmt)).scalars().all()
 
     counts_rows = (
         await db.execute(
@@ -752,6 +768,111 @@ async def update_tenant_status(
         )
     ).scalar() or 0
     return _tenant_admin_item(t, int(cnt))
+
+
+@router.get("/tenants/dashboard")
+async def tenant_dashboard(
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """平台总览（仅平台管理员）：所有租户的资源/配额聚合 + Top N 接近上限的租户。"""
+    _require_platform_admin(ctx)
+    from app.tenant_quota import get_tenant_usage as _usage
+
+    rows = (
+        await db.execute(
+            select(Tenant)
+            .where(Tenant.status == 1)
+            .order_by(Tenant.created_at.asc(), Tenant.id.asc())
+        )
+    ).scalars().all()
+
+    total_apps = total_workspaces = total_components = total_members = 0
+    cap_apps = cap_workspaces = cap_components = 0
+    near_limit: list[dict] = []
+
+    for t in rows:
+        u = await _usage(db, t.id)
+        apps_used = u["applications"]["used"]
+        ws_used = u["workspaces"]["used"]
+        comps_used = u["components"]["used"]
+
+        total_apps += apps_used
+        total_workspaces += ws_used
+        total_components += comps_used
+        total_members += u["members"]
+        cap_apps += t.max_applications
+        cap_workspaces += t.max_workspaces
+        cap_components += t.max_components
+
+        # 任一资源 >= 80% 视为预警
+        for k, used, mx in (
+            ("applications", apps_used, t.max_applications),
+            ("workspaces", ws_used, t.max_workspaces),
+            ("components", comps_used, t.max_components),
+        ):
+            if mx > 0 and used / mx >= 0.8:
+                near_limit.append(
+                    {
+                        "tenant_id": t.id,
+                        "tenant_name": t.tenant_name,
+                        "resource": k,
+                        "used": used,
+                        "max": mx,
+                        "ratio": round(used / mx, 3),
+                    }
+                )
+
+    near_limit.sort(key=lambda x: -x["ratio"])
+    return {
+        "tenants_active": len(rows),
+        "totals": {
+            "applications": {"used": total_apps, "max": cap_apps},
+            "workspaces": {"used": total_workspaces, "max": cap_workspaces},
+            "components": {"used": total_components, "max": cap_components},
+            "members": total_members,
+        },
+        "near_limit": near_limit[:10],
+    }
+
+
+@router.put("/me/default-tenant")
+async def set_my_default_tenant(
+    data: TenantSwitchRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """把指定租户标记为当前用户的默认租户（登录时自动落到这里）。
+
+    用户必须是该租户的 active 成员；调用会清掉其他 membership 的 is_default。
+    平台管理员若没有 membership 也允许（fallback：什么都不做，因为 platform_admin
+    登录走的是 resolve_default_tenant_id_for_user，没 membership 时本身就走 fallback）。
+    """
+    membership = (
+        await db.execute(
+            select(UserTenant).where(
+                UserTenant.user_id == ctx.user.id,
+                UserTenant.tenant_id == data.tenant_id,
+                UserTenant.status == 1,
+            )
+        )
+    ).scalar_one_or_none()
+    if not membership:
+        if not ctx.user.is_platform_admin:
+            raise HTTPException(status_code=403, detail="你不是该租户的成员")
+        # 平台管理员无 membership 也允许，但实际上不存数据库（platform_admin 登录靠
+        # resolve_default_tenant_id_for_user 自然 fallback），这里直接返回 ok
+        return {"ok": True, "tenant_id": data.tenant_id, "stored": False}
+
+    # 清其他 default 标记
+    await db.execute(
+        UserTenant.__table__.update()
+        .where(UserTenant.user_id == ctx.user.id, UserTenant.id != membership.id)
+        .values(is_default=False)
+    )
+    membership.is_default = True
+    await db.commit()
+    return {"ok": True, "tenant_id": data.tenant_id, "stored": True}
 
 
 @router.get("/me/tenants", response_model=list[TenantOption])
