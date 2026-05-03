@@ -11,6 +11,7 @@ from app.models.tenant import Tenant, UserTenant
 from app.routes.auth import (
     TenantCreateRequest,
     TenantMemberAddRequest,
+    TenantMemberRoleUpdateRequest,
     TenantStatusRequest,
     TenantSwitchRequest,
     TenantUpdateRequest,
@@ -23,6 +24,7 @@ from app.routes.auth import (
     remove_tenant_member,
     switch_tenant,
     update_tenant,
+    update_tenant_member_role,
     update_tenant_status,
 )
 
@@ -333,6 +335,56 @@ async def test_remove_tenant_member_works(db_session):
 
     members = await list_tenant_members(tenant.id, ctx, db_session)
     assert all(x.user_id != m.user_id for x in members)
+
+
+@pytest.mark.asyncio
+async def test_update_tenant_member_role_changes_role(db_session):
+    from app.models.tenant import Role
+    tenant, admin, _admin_role = await _seed_admin_with_default_tenant(db_session, tenant_code="r1")
+    # 加一个 dev role
+    dev_role = Role(tenant_id=tenant.id, role_name="Dev", role_code="R_developer", permissions={}, is_system=False)
+    db_session.add(dev_role)
+    await db_session.flush()
+
+    ctx = AuthContext(user=admin, tenant_id=0, tenant_role="platform_admin", org_permissions={"*": True})
+    m = await add_tenant_member(
+        tenant.id,
+        TenantMemberAddRequest(username="dave", password="x", role_code="admin"),
+        ctx, db_session,
+    )
+    assert m.role_code == "admin"
+
+    updated = await update_tenant_member_role(
+        tenant.id, m.user_id,
+        TenantMemberRoleUpdateRequest(role_code="R_developer"),
+        ctx, db_session,
+    )
+    assert updated.role_code == "R_developer"
+
+
+@pytest.mark.asyncio
+async def test_self_demote_from_current_admin_blocked(db_session):
+    from app.models.tenant import Role
+    tenant, admin, _ = await _seed_admin_with_default_tenant(db_session, tenant_code="r2")
+    Role_dev = Role(tenant_id=tenant.id, role_name="Dev", role_code="R_developer", permissions={}, is_system=False)
+    db_session.add(Role_dev)
+    # 给 admin 自己加 admin 角色 + membership
+    ctx_other = AuthContext(user=admin, tenant_id=0, tenant_role="platform_admin", org_permissions={"*": True})
+    await add_tenant_member(
+        tenant.id,
+        TenantMemberAddRequest(username=admin.username, role_code="admin"),
+        ctx_other, db_session,
+    )
+
+    # 现在 ctx 切到当前 tenant
+    ctx_self = AuthContext(user=admin, tenant_id=tenant.id, tenant_role="platform_admin", org_permissions={"*": True})
+    with pytest.raises(HTTPException) as exc:
+        await update_tenant_member_role(
+            tenant.id, admin.id,
+            TenantMemberRoleUpdateRequest(role_code="R_developer"),
+            ctx_self, db_session,
+        )
+    assert exc.value.status_code == 400
 
 
 @pytest.mark.asyncio

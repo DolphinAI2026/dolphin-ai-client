@@ -258,19 +258,34 @@
             <ul v-else-if="detailMembers.length > 0" class="member-list">
               <li v-for="m in detailMembers" :key="m.user_id" class="member-row">
                 <div class="member-info">
-                  <span class="member-username">{{ m.username }}</span>
+                  <span class="member-username">
+                    {{ m.username }}
+                    <span v-if="m.is_default" class="member-default" title="该用户的默认租户">默认</span>
+                  </span>
                   <span class="member-meta">
-                    <el-tag size="small" :type="memberRoleTag(m.tenant_role)">{{ memberRoleLabel(m.tenant_role) }}</el-tag>
                     <span v-if="m.is_platform_admin" class="member-platform">平台管理员</span>
                     <span v-if="!m.is_active" class="member-inactive">已禁用</span>
                   </span>
                 </div>
-                <el-button
-                  link
-                  type="danger"
-                  size="small"
-                  @click="confirmRemoveMember(m)"
-                >移除</el-button>
+                <div class="member-actions">
+                  <el-select
+                    :model-value="m.role_code || ''"
+                    size="small"
+                    style="width: 130px"
+                    @change="(val: string) => changeMemberRole(m, val)"
+                  >
+                    <el-option label="租户管理员" value="admin" />
+                    <el-option label="开发者" value="R_developer" />
+                    <el-option label="只读" value="R_viewer" />
+                    <el-option label="普通成员" value="member" />
+                  </el-select>
+                  <el-button
+                    link
+                    type="danger"
+                    size="small"
+                    @click="confirmRemoveMember(m)"
+                  >移除</el-button>
+                </div>
               </li>
             </ul>
             <div v-else class="detail-muted">该租户还没有成员，点「添加成员」加入第一个用户。</div>
@@ -528,6 +543,18 @@ async function submitAddMember() {
     ElMessage.error(err?.message || '添加成员失败')
   } finally {
     memberSaving.value = false
+  }
+}
+
+async function changeMemberRole(m: TenantMemberItem, roleCode: string) {
+  if (!detailTarget.value || !roleCode || roleCode === m.role_code) return
+  try {
+    const updated = await authApi.updateTenantMemberRole(detailTarget.value.id, m.user_id, roleCode)
+    const idx = detailMembers.value.findIndex((x) => x.user_id === updated.user_id)
+    if (idx >= 0) detailMembers.value[idx] = updated
+    ElMessage.success(`「${updated.username}」角色已改为${memberRoleLabel(updated.tenant_role)}`)
+  } catch (err: any) {
+    ElMessage.error(err?.response?.data?.detail || err?.message || '改角色失败')
   }
 }
 
@@ -849,5 +876,21 @@ onMounted(() => {
 }
 .member-inactive {
   color: #d33;
+}
+.member-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.member-default {
+  display: inline-block;
+  margin-left: 4px;
+  font-size: 10px;
+  font-weight: 500;
+  color: #4f46e5;
+  background: rgba(79, 70, 229, 0.1);
+  padding: 1px 6px;
+  border-radius: 8px;
+  vertical-align: middle;
 }
 </style>

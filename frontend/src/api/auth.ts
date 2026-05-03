@@ -183,6 +183,13 @@ export const authApi = {
     return request.delete<any, { ok: boolean }>(`/auth/tenants/${tenantId}/members/${userId}`)
   },
 
+  updateTenantMemberRole(tenantId: number, userId: number, roleCode: string) {
+    return request.put<any, TenantMemberItem>(
+      `/auth/tenants/${tenantId}/members/${userId}/role`,
+      { role_code: roleCode },
+    )
+  },
+
   getMe() {
     return request.get<any, User>('/auth/me')
   },

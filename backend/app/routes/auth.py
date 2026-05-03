@@ -641,6 +641,70 @@ async def add_tenant_member(
     return _serialize_tenant_member(user, membership, role)
 
 
+class TenantMemberRoleUpdateRequest(BaseModel):
+    role_code: str
+
+
+@router.put("/tenants/{tenant_id}/members/{user_id}/role", response_model=TenantMemberItem)
+async def update_tenant_member_role(
+    tenant_id: int,
+    user_id: int,
+    data: TenantMemberRoleUpdateRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """改租户内某个成员的角色（仅平台管理员）。
+
+    防呆：不能把自己（当前激活租户里）从管理员降级成普通成员，避免锁死。
+    """
+    _require_platform_admin(ctx)
+
+    role_code = (data.role_code or "").strip()
+    if not role_code:
+        raise HTTPException(status_code=400, detail="role_code 不能为空")
+
+    # 查 membership
+    res = await db.execute(
+        select(UserTenant, User)
+        .join(User, User.id == UserTenant.user_id)
+        .where(UserTenant.user_id == user_id, UserTenant.tenant_id == tenant_id)
+    )
+    row = res.one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail="该用户不是该租户成员")
+    membership, user = row
+
+    # 查 role
+    role = (
+        await db.execute(
+            select(Role).where(Role.tenant_id == tenant_id, Role.role_code == role_code)
+        )
+    ).scalar_one_or_none()
+    if not role:
+        raise HTTPException(status_code=404, detail=f"该租户下没有角色 '{role_code}'")
+
+    # 防呆：不能把自己从当前激活的租户管理员降级（避免操作完发现自己没权限）
+    if (
+        ctx.user.id == user_id
+        and ctx.tenant_id == tenant_id
+        and role_code not in ("admin", "R_tenant_admin")
+    ):
+        # 看一下被改的当前角色是不是 admin
+        old_role = (
+            await db.execute(select(Role).where(Role.id == membership.role_id))
+        ).scalar_one_or_none()
+        if old_role and old_role.role_code in ("admin", "R_tenant_admin"):
+            raise HTTPException(
+                status_code=400,
+                detail="不能把自己从当前激活租户的管理员降级，请先切换租户后再改",
+            )
+
+    membership.role_id = role.id
+    await db.commit()
+    await db.refresh(membership)
+    return _serialize_tenant_member(user, membership, role)
+
+
 @router.delete("/tenants/{tenant_id}/members/{user_id}")
 async def remove_tenant_member(
     tenant_id: int,
