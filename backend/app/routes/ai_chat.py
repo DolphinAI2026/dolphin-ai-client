@@ -221,11 +221,18 @@ async def create_session(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
+    selected_llm_config_id: Optional[int] = None
+    if body.selected_llm_config_id is not None and body.selected_llm_config_id > 0:
+        from app.routes.llm_configs import get_active_llm_config_by_id
+        cfg = await get_active_llm_config_by_id(db, ctx.tenant_id, body.selected_llm_config_id)
+        if not cfg:
+            raise HTTPException(status_code=400, detail="所选模型不可用或不属于当前租户")
+        selected_llm_config_id = cfg.id
     s = AIChatSession(
         tenant_id=ctx.tenant_id,
         user_id=ctx.user.id,
         title=body.title or "新会话",
-        selected_llm_config_id=body.selected_llm_config_id,
+        selected_llm_config_id=selected_llm_config_id,
         mode="cowork" if body.mode == "cowork" else "chat",
         status="active",
     )
@@ -325,7 +332,14 @@ async def update_session(
     if body.title is not None:
         s.title = body.title
     if body.selected_llm_config_id is not None:
-        s.selected_llm_config_id = body.selected_llm_config_id
+        if body.selected_llm_config_id > 0:
+            from app.routes.llm_configs import get_active_llm_config_by_id
+            cfg = await get_active_llm_config_by_id(db, ctx.tenant_id, body.selected_llm_config_id)
+            if not cfg:
+                raise HTTPException(status_code=400, detail="所选模型不可用或不属于当前租户")
+            s.selected_llm_config_id = cfg.id
+        else:
+            s.selected_llm_config_id = None
     if body.status is not None:
         s.status = body.status
     await db.commit()

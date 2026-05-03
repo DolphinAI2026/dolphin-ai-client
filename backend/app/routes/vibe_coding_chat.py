@@ -222,7 +222,14 @@ async def update_thread(
         thread.title = body.title
     if body.selected_llm_config_id is not None:
         # 0 / 负数 → 视为清空
-        thread.selected_llm_config_id = body.selected_llm_config_id if body.selected_llm_config_id > 0 else None
+        if body.selected_llm_config_id > 0:
+            from app.routes.llm_configs import get_active_llm_config_by_id
+            cfg = await get_active_llm_config_by_id(db, ctx.tenant_id, body.selected_llm_config_id)
+            if not cfg:
+                raise HTTPException(status_code=400, detail="所选模型不可用或不属于当前租户")
+            thread.selected_llm_config_id = cfg.id
+        else:
+            thread.selected_llm_config_id = None
     await db.commit()
     await db.refresh(thread)
     return _thread_to_dict(thread)

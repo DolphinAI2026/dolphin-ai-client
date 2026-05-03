@@ -517,6 +517,25 @@ async def list_llm_configs_for_purpose(db: AsyncSession, tenant_id: int, purpose
     return exact + [row for row in shared if row.id not in {item.id for item in exact}]
 
 
+async def get_active_llm_config_by_id(
+    db: AsyncSession,
+    tenant_id: int,
+    config_id: int,
+) -> Optional[LLMConfig]:
+    """按 id 查 active LLM 配置，并校验属于当前 tenant；不限 purpose。
+
+    用于 vibe_coding / ai_chat 这类不限 purpose 的会话级 selected_llm_config_id 校验。
+    """
+    result = await db.execute(
+        select(LLMConfig).where(
+            LLMConfig.id == config_id,
+            LLMConfig.tenant_id == tenant_id,
+            LLMConfig.status == "active",
+        )
+    )
+    return result.scalar_one_or_none()
+
+
 async def get_active_llm_config_by_id_for_purpose(
     db: AsyncSession,
     tenant_id: int,
