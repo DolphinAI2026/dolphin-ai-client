@@ -165,14 +165,17 @@ const workspaceNavItems = [
   { key: 'sandboxes', label: '沙箱监控', path: '/vibe-coding/sandboxes' },
 ]
 
-const adminNavItems = computed(() =>
-  userStore.isTenantAdmin
-    ? [
-        { key: 'env', label: '平台环境', path: '/platform-envs' },
-        { key: 'users', label: '组织用户', path: '/tenant-users' },
-      ]
-    : []
-)
+const adminNavItems = computed(() => {
+  const items: { key: string; label: string; path: string }[] = []
+  if (userStore.isTenantAdmin) {
+    items.push({ key: 'env', label: '平台环境', path: '/platform-envs' })
+    items.push({ key: 'users', label: '组织用户', path: '/tenant-users' })
+  }
+  if (userStore.isPlatformAdmin) {
+    items.push({ key: 'tenants', label: '租户管理', path: '/admin/tenants' })
+  }
+  return items
+})
 
 const activeKey = computed(() => {
   if (route.path.startsWith('/ai-chat')) return 'ai-chat'
@@ -180,6 +183,7 @@ const activeKey = computed(() => {
   if (route.path.startsWith('/coding')) return 'coding'
   if (route.path.startsWith('/platform-envs')) return 'env'
   if (route.path.startsWith('/tenant-users')) return 'users'
+  if (route.path.startsWith('/admin/tenants')) return 'tenants'
   if (route.path.startsWith('/vibe-coding/sandboxes')) return 'sandboxes'
   return 'home'
 })

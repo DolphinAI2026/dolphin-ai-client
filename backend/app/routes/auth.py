@@ -292,6 +292,152 @@ async def switch_tenant(
     return Token(access_token=access_token)
 
 
+def _require_platform_admin(ctx: AuthContext) -> None:
+    if ctx.user.is_platform_admin or ctx.tenant_role == "platform_admin":
+        return
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="仅平台管理员可执行此操作")
+
+
+class TenantCreateRequest(BaseModel):
+    tenant_name: str
+    tenant_code: str
+    plan_type: str = "free"
+    max_applications: int = 10
+    contact_name: Optional[str] = None
+    contact_email: Optional[str] = None
+
+
+class TenantStatusRequest(BaseModel):
+    status: int  # 1=active, 0=disabled
+
+
+class TenantAdminItem(BaseModel):
+    id: int
+    tenant_name: str
+    tenant_code: str
+    plan_type: str
+    max_applications: int
+    status: int
+    contact_name: Optional[str] = None
+    contact_email: Optional[str] = None
+    member_count: int = 0
+    created_at: Optional[str] = None
+
+
+def _tenant_admin_item(t: Tenant, member_count: int) -> TenantAdminItem:
+    return TenantAdminItem(
+        id=t.id,
+        tenant_name=t.tenant_name,
+        tenant_code=t.tenant_code,
+        plan_type=t.plan_type,
+        max_applications=t.max_applications,
+        status=t.status,
+        contact_name=t.contact_name,
+        contact_email=t.contact_email,
+        member_count=member_count,
+        created_at=t.created_at.isoformat() if t.created_at else None,
+    )
+
+
+@router.get("/tenants", response_model=list[TenantAdminItem])
+async def list_all_tenants(
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """列出所有租户（仅平台管理员），含 member_count。"""
+    _require_platform_admin(ctx)
+
+    from sqlalchemy import func as sql_func
+
+    rows = (
+        await db.execute(
+            select(Tenant).order_by(Tenant.created_at.desc(), Tenant.id.desc())
+        )
+    ).scalars().all()
+
+    counts_rows = (
+        await db.execute(
+            select(UserTenant.tenant_id, sql_func.count(UserTenant.id))
+            .where(UserTenant.status == 1)
+            .group_by(UserTenant.tenant_id)
+        )
+    ).all()
+    count_map = {tid: cnt for tid, cnt in counts_rows}
+
+    return [_tenant_admin_item(t, count_map.get(t.id, 0)) for t in rows]
+
+
+@router.post("/tenants", response_model=TenantAdminItem)
+async def create_new_tenant(
+    data: TenantCreateRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """新建租户（仅平台管理员）。"""
+    _require_platform_admin(ctx)
+
+    name = (data.tenant_name or "").strip()
+    code = (data.tenant_code or "").strip().lower()
+    if not name:
+        raise HTTPException(status_code=400, detail="租户名称不能为空")
+    if not code or not all(ch.isalnum() or ch in "_-" for ch in code):
+        raise HTTPException(status_code=400, detail="租户编码仅支持小写字母、数字、_、-")
+    if data.plan_type not in {"free", "pro", "enterprise"}:
+        raise HTTPException(status_code=400, detail="plan_type 仅支持 free/pro/enterprise")
+    if data.max_applications < 1 or data.max_applications > 10000:
+        raise HTTPException(status_code=400, detail="max_applications 范围 1-10000")
+
+    existing = (
+        await db.execute(select(Tenant).where(Tenant.tenant_code == code))
+    ).scalar_one_or_none()
+    if existing:
+        raise HTTPException(status_code=409, detail=f"租户编码 '{code}' 已存在")
+
+    t = Tenant(
+        tenant_name=name,
+        tenant_code=code,
+        plan_type=data.plan_type,
+        max_applications=data.max_applications,
+        status=1,
+        contact_name=(data.contact_name or "").strip() or None,
+        contact_email=(data.contact_email or "").strip() or None,
+    )
+    db.add(t)
+    await db.commit()
+    await db.refresh(t)
+    return _tenant_admin_item(t, 0)
+
+
+@router.put("/tenants/{tenant_id}/status", response_model=TenantAdminItem)
+async def update_tenant_status(
+    tenant_id: int,
+    data: TenantStatusRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """启用 / 禁用租户（仅平台管理员）。被禁用的租户成员仍可见但无法切入。"""
+    _require_platform_admin(ctx)
+
+    if data.status not in (0, 1):
+        raise HTTPException(status_code=400, detail="status 仅支持 0 或 1")
+
+    t = (await db.execute(select(Tenant).where(Tenant.id == tenant_id))).scalar_one_or_none()
+    if not t:
+        raise HTTPException(status_code=404, detail="租户不存在")
+    t.status = data.status
+    await db.commit()
+    await db.refresh(t)
+
+    from sqlalchemy import func as sql_func
+    cnt = (
+        await db.execute(
+            select(sql_func.count(UserTenant.id))
+            .where(UserTenant.tenant_id == t.id, UserTenant.status == 1)
+        )
+    ).scalar() or 0
+    return _tenant_admin_item(t, int(cnt))
+
+
 @router.get("/me/tenants", response_model=list[TenantOption])
 async def list_my_tenants(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],

@@ -24,6 +24,8 @@ export const useUserStore = defineStore('user', () => {
     tenantRole.value === 'platform_admin' || tenantRole.value === 'tenant_admin'
   )
 
+  const isPlatformAdmin = computed(() => tenantRole.value === 'platform_admin')
+
   const setToken = (newToken: string) => {
     token.value = newToken
     localStorage.setItem('token', newToken)
@@ -99,6 +101,7 @@ export const useUserStore = defineStore('user', () => {
     orgPermissions,
     hasPermission,
     isTenantAdmin,
+    isPlatformAdmin,
     setToken,
     clearToken,
     fetchUser,

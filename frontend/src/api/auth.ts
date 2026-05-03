@@ -31,6 +31,28 @@ export interface ActiveTenantUser {
   username: string
 }
 
+export interface TenantAdminItem {
+  id: number
+  tenant_name: string
+  tenant_code: string
+  plan_type: string
+  max_applications: number
+  status: number
+  contact_name?: string | null
+  contact_email?: string | null
+  member_count: number
+  created_at?: string | null
+}
+
+export interface TenantCreatePayload {
+  tenant_name: string
+  tenant_code: string
+  plan_type?: 'free' | 'pro' | 'enterprise'
+  max_applications?: number
+  contact_name?: string | null
+  contact_email?: string | null
+}
+
 export const authApi = {
   login(data: LoginRequest) {
     return request.post<any, LoginResponse>('/auth/login', data)
@@ -46,6 +68,18 @@ export const authApi = {
 
   listMyTenants() {
     return request.get<any, TenantOption[]>('/auth/me/tenants')
+  },
+
+  listAllTenants() {
+    return request.get<any, TenantAdminItem[]>('/auth/tenants')
+  },
+
+  createTenant(data: TenantCreatePayload) {
+    return request.post<any, TenantAdminItem>('/auth/tenants', data)
+  },
+
+  updateTenantStatus(tenantId: number, status: 0 | 1) {
+    return request.put<any, TenantAdminItem>(`/auth/tenants/${tenantId}/status`, { status })
   },
 
   getMe() {

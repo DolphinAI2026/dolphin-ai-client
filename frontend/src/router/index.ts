@@ -160,6 +160,12 @@ const router = createRouter({
       meta: { requiresAuth: true, requiresTenantAdmin: true, navExpanded: true }
     },
     {
+      path: '/admin/tenants',
+      name: 'PlatformTenants',
+      component: () => import('@/views/PlatformTenants.vue'),
+      meta: { requiresAuth: true, requiresPlatformAdmin: true, navExpanded: true }
+    },
+    {
       path: '/generate/:id?',
       name: 'Generate',
       // 重定向到 ChatPage 并自动打开部署面板
@@ -210,6 +216,11 @@ router.beforeEach(async (to, _from, next) => {
   }
 
   if (to.meta.requiresTenantAdmin && !userStore.isTenantAdmin) {
+    next('/')
+    return
+  }
+
+  if (to.meta.requiresPlatformAdmin && !userStore.isPlatformAdmin) {
     next('/')
     return
   }

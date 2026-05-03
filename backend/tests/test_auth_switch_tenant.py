@@ -1,4 +1,4 @@
-"""租户切换接口测试 — switch-tenant + me/tenants。"""
+"""租户切换接口测试 — switch-tenant + me/tenants + 租户管理 CRUD。"""
 import pytest
 from jose import jwt
 from fastapi import HTTPException
@@ -9,9 +9,14 @@ from app.deps import AuthContext
 from app.models import User
 from app.models.tenant import Tenant, UserTenant
 from app.routes.auth import (
+    TenantCreateRequest,
+    TenantStatusRequest,
     TenantSwitchRequest,
+    create_new_tenant,
+    list_all_tenants,
     list_my_tenants,
     switch_tenant,
+    update_tenant_status,
 )
 
 
@@ -109,3 +114,57 @@ async def test_list_my_tenants_returns_only_active_memberships(db_session):
     res = await list_my_tenants(ctx, db_session)
     ids = sorted(t.tenant_id for t in res)
     assert ids == sorted([tenants[0].id, tenants[1].id])
+
+
+@pytest.mark.asyncio
+async def test_create_tenant_requires_platform_admin(db_session):
+    user, _ = await _seed_user_and_tenants(db_session, num_tenants=1, member_indices=[0])
+    ctx = AuthContext(user=user, tenant_id=1, tenant_role="member", org_permissions={})
+
+    with pytest.raises(HTTPException) as exc:
+        await create_new_tenant(
+            TenantCreateRequest(tenant_name="X", tenant_code="x"),
+            ctx,
+            db_session,
+        )
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_create_and_toggle_tenant(db_session):
+    admin = User(
+        username="root",
+        hashed_password=get_password_hash("secret"),
+        is_active=True,
+        is_platform_admin=True,
+    )
+    db_session.add(admin)
+    await db_session.flush()
+    ctx = AuthContext(user=admin, tenant_id=0, tenant_role="platform_admin", org_permissions={"*": True})
+
+    created = await create_new_tenant(
+        TenantCreateRequest(tenant_name="Acme", tenant_code="acme", plan_type="pro", max_applications=50),
+        ctx,
+        db_session,
+    )
+    assert created.tenant_code == "acme"
+    assert created.status == 1
+
+    # 重复 code 应 409
+    with pytest.raises(HTTPException) as exc:
+        await create_new_tenant(
+            TenantCreateRequest(tenant_name="Other", tenant_code="acme"),
+            ctx,
+            db_session,
+        )
+    assert exc.value.status_code == 409
+
+    # toggle status
+    disabled = await update_tenant_status(
+        created.id, TenantStatusRequest(status=0), ctx, db_session
+    )
+    assert disabled.status == 0
+
+    # list 包含
+    listed = await list_all_tenants(ctx, db_session)
+    assert any(t.id == created.id for t in listed)
