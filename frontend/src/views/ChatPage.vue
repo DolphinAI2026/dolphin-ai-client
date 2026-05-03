@@ -3030,9 +3030,11 @@ const useEmbeddedAppChat = computed(() =>
 const embeddedAppChatUrl = computed(() => {
   const aid = existingAppId.value
   if (!aid) return ''
-  // 同源 iframe；?embed=app_chat 让 AIChatPage 隐藏 sidebar；?app_id 让它自动 ensure session
-  // BASE_URL 已经处理 /ai-builder/ 路径前缀
-  return `${import.meta.env.BASE_URL}ai-chat?embed=app_chat&app_id=${aid}`
+  // 同源 iframe：
+  //   embed=app_chat → AIChatPage 隐藏 SessionSidebar + 自动 ensure 应用绑定 session
+  //   embed_nav=0    → WorkbenchShell 隐藏左侧 NavRail（iframe 内不再出现主导航）
+  //   app_id=X       → AIChatPage 拿来调 ensureChatSession(X)
+  return `${import.meta.env.BASE_URL}ai-chat?embed=app_chat&embed_nav=0&app_id=${aid}`
 })
 const applyingMdFromChat = ref(false)
 

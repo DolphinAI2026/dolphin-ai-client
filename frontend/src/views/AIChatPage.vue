@@ -1,5 +1,5 @@
 <template>
-  <component :is="isEmbeddedAppChat ? 'div' : WorkbenchShell" class="ai-chat-shell-host">
+  <WorkbenchShell>
   <div
     class="ai-chat-app"
     :class="[themeStore.isDark ? 'theme-dark' : 'theme-light', { 'aside-collapsed': asideCollapsed, 'is-embedded': isEmbeddedAppChat }]"
@@ -242,7 +242,7 @@
       </div>
     </aside>
   </div>
-  </component>
+  </WorkbenchShell>
 </template>
 
 <script setup lang="ts">
