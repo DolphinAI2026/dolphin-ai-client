@@ -1,3 +1,4 @@
+import logging
 from typing import Annotated, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -20,6 +21,8 @@ from app.deps import (
 from app.config import settings
 from app.error_messages import SELECT_TOKEN_INVALID, SELECT_TOKEN_EXPIRED
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["认证"])
 
@@ -441,9 +444,15 @@ async def create_new_tenant(
         contact_email=(data.contact_email or "").strip() or None,
     )
     db.add(t)
-    await db.flush()  # 拿到 t.id 后顺手种默认角色（管理员 / 开发者 / 查看者）
-    from app.seed_data import seed_default_roles
+    await db.flush()  # 拿到 t.id 后顺手种默认角色 + 内置 LLM 配置
+    from app.seed_data import seed_default_roles, sync_builtin_llm_configs
     await seed_default_roles(db, t.id, commit=False)
+    # 给新租户种内置 LLM（否则租户成员一进 AI 搭建/聊天就提示"未配置可用模型"）
+    try:
+        await sync_builtin_llm_configs(db, tenant_ids=[t.id], commit=False)
+    except Exception as exc:
+        # 内置模型种子失败不阻断租户创建（环境变量可能没配）
+        logger.warning("sync_builtin_llm_configs failed for new tenant %s: %s", t.id, exc)
     await db.commit()
     await db.refresh(t)
     return _tenant_admin_item(t, 0)
