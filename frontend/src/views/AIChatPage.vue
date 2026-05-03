@@ -1,11 +1,12 @@
 <template>
-  <WorkbenchShell>
+  <component :is="isEmbeddedAppChat ? 'div' : WorkbenchShell" class="ai-chat-shell-host">
   <div
     class="ai-chat-app"
-    :class="[themeStore.isDark ? 'theme-dark' : 'theme-light', { 'aside-collapsed': asideCollapsed }]"
+    :class="[themeStore.isDark ? 'theme-dark' : 'theme-light', { 'aside-collapsed': asideCollapsed, 'is-embedded': isEmbeddedAppChat }]"
   >
-    <!-- ═══════ 左侧 sessions ═══════ -->
+    <!-- ═══════ 左侧 sessions（嵌入模式隐藏） ═══════ -->
     <SessionSidebar
+      v-if="!isEmbeddedAppChat"
       module-name="AI 对话"
       brand-color="#f59e0b"
       :sessions="sessionItems"
@@ -1251,8 +1252,33 @@ const incomingMode = computed(() => {
 
 // ── Lifecycle ──
 
+// 嵌入模式：从 ChatPage 应用页 iframe 进来，绑定指定 application 的 chat session
+const isEmbeddedAppChat = computed(() => String(route.query.embed || '') === 'app_chat')
+const embedAppId = computed(() => {
+  const v = route.query.app_id
+  const n = Number(Array.isArray(v) ? v[0] : v)
+  return Number.isFinite(n) && n > 0 ? n : null
+})
+
 onMounted(async () => {
   await Promise.all([loadSessions(), loadLlmOptions()])
+
+  // 嵌入模式（应用对话调整）：用 ensure 拿/建该 app 绑定的 session
+  if (isEmbeddedAppChat.value && embedAppId.value) {
+    try {
+      const { applicationApi } = await import('@/api/application')
+      const ensured = await applicationApi.ensureChatSession(embedAppId.value)
+      // sessions 列表里没有就追加（ensure 接口建的 session 不在 listSessions 缓存里）
+      if (!sessions.value.find((s) => s.id === ensured.session_id)) {
+        await loadSessions()
+      }
+      await loadSession(ensured.session_id)
+      return
+    } catch (e) {
+      console.error('嵌入模式建立应用 chat 会话失败:', e)
+    }
+  }
+
   const idParam = route.params.id ? Number(route.params.id) : null
   if (idParam) {
     await loadSession(idParam)
@@ -1313,6 +1339,14 @@ onMounted(async () => {
 }
 .ai-chat-app.aside-collapsed {
   grid-template-columns: 44px 1fr auto;
+}
+/* 嵌入模式（应用对话调整 iframe）：隐藏 sidebar，主区铺满 */
+.ai-chat-app.is-embedded {
+  grid-template-columns: 1fr auto;
+  height: 100%;
+}
+.ai-chat-shell-host {
+  display: contents;
 }
 
 .ai-chat-app.theme-dark {

@@ -168,8 +168,24 @@
           'artifacts-hidden': !showAnyBuilderArtifactPanel
         }"
       >
-      <!-- 左侧对话区 -->
-      <div v-if="showBuilderChatSide" class="chat-side">
+      <!-- 左侧对话区：已部署应用做调整时，把旧的"应用更新对话"换成内嵌 ai-chat
+           （UED 跟 ai-chat 完全一致：流式 + 工具调用展示 + write_artifact 改 md）。
+           完成后点顶部「应用最新 md 到 Builder」一键拉新版 md → 走 upload-doc-version。 -->
+      <div v-if="showBuilderChatSide && useEmbeddedAppChat" class="chat-side embedded-app-chat-wrap">
+        <div class="embedded-app-chat-toolbar">
+          <div class="embedded-app-chat-hint">
+            在下面对话里让 AI 修改设计文档（AI 会用 write_artifact 写新版 md）。改完点右边按钮把最新 md 应用到 Builder。
+          </div>
+          <button
+            class="embedded-app-chat-apply"
+            type="button"
+            :disabled="applyingMdFromChat"
+            @click="applyMdFromChat"
+          >{{ applyingMdFromChat ? '应用中...' : '📥 应用最新 md 到 Builder' }}</button>
+        </div>
+        <iframe :src="embeddedAppChatUrl" class="embedded-app-chat-iframe" />
+      </div>
+      <div v-else-if="showBuilderChatSide" class="chat-side">
         <div v-if="appParsedMode" class="doc-view-wrap">
           <div class="doc-view-head">
             <div class="doc-view-title">功能设计文档</div>
@@ -3005,6 +3021,47 @@ const removeDict = (idx: number) => {
 const conversationId = ref<number | null>(null)
 const existingAppId = ref<number | null>(null)  // 从"继续完善"进来时，关联的已有应用ID
 const generating = ref(false)
+
+// 应用对话调整改用 ai-chat 嵌入模式（已部署应用且有 app_id 时启用）：
+// 老的 draft-doc-update 流被嵌入 ai-chat 替换，UED 跟主 ai-chat 完全一致
+const useEmbeddedAppChat = computed(() =>
+  !!existingAppId.value && isPlatformDeployed.value
+)
+const embeddedAppChatUrl = computed(() => {
+  const aid = existingAppId.value
+  if (!aid) return ''
+  // 同源 iframe；?embed=app_chat 让 AIChatPage 隐藏 sidebar；?app_id 让它自动 ensure session
+  // BASE_URL 已经处理 /ai-builder/ 路径前缀
+  return `${import.meta.env.BASE_URL}ai-chat?embed=app_chat&app_id=${aid}`
+})
+const applyingMdFromChat = ref(false)
+
+async function applyMdFromChat() {
+  if (!existingAppId.value || applyingMdFromChat.value) return
+  applyingMdFromChat.value = true
+  try {
+    const { applicationApi } = await import('@/api/application')
+    const res = await applicationApi.syncMdFromChat(existingAppId.value)
+    if (!res.content?.trim()) {
+      ElMessage.warning('对话里还没有可应用的 md，请先让 AI 用 write_artifact 写出新版设计文档')
+      return
+    }
+    // 把内容包成 File，复用现有上传新版 md 逻辑（解析 → 变更计划 → 审查界面）
+    const file = new File([res.content], res.artifact_filename || `${store.preview.appName || 'app'}-设计文档.md`, {
+      type: 'text/markdown',
+    })
+    await handleDocVersionUpload(file, existingAppId.value, {
+      userMessageContent: '从 AI 对话拉取最新设计文档并应用',
+      title: '应用最新 md',
+      forceNewConversation: false,
+    })
+    ElMessage.success(`已拉取「${res.artifact_filename}」(v${res.artifact_version}) 并生成变更计划`)
+  } catch (err: any) {
+    ElMessage.error(err?.response?.data?.detail || err?.message || '应用 md 失败')
+  } finally {
+    applyingMdFromChat.value = false
+  }
+}
 
 // 从 AIChat 跳过来时记录来源 (session_id, filename)；建应用成功后写 localStorage dedup 缓存，
 // 同来源再点 → Builder 不会重复建
@@ -7859,6 +7916,54 @@ watch(conversationId, (id) => {
   min-width: 320px;
   background: linear-gradient(180deg, rgba(242, 246, 255, 0.55), rgba(239, 244, 255, 0.68));
 }
+
+/* 应用对话调整：嵌入 ai-chat iframe 模式 */
+.embedded-app-chat-wrap {
+  background: var(--t-bg-base);
+  padding: 0;
+}
+.embedded-app-chat-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--t-border-subtle);
+  background: var(--t-bg-panel);
+  flex-shrink: 0;
+}
+.embedded-app-chat-hint {
+  flex: 1;
+  font-size: 12px;
+  color: var(--t-text-muted);
+  line-height: 1.5;
+}
+.embedded-app-chat-apply {
+  flex-shrink: 0;
+  height: 30px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--t-brand, #5a78ff);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.embedded-app-chat-apply:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.embedded-app-chat-apply:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--t-brand, #5a78ff) 88%, black);
+}
+.embedded-app-chat-iframe {
+  flex: 1;
+  width: 100%;
+  border: 0;
+  background: var(--t-bg-base);
+}
+
 .builder-workbench {
   padding: 0 14px 8px;
   display: flex;

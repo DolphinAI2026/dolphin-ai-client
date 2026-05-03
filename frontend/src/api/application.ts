@@ -96,6 +96,20 @@ export const applicationApi = {
     return request.get<any, any>(`/applications/${appId}/change-plans/${planId}`)
   },
 
+  /** 获取/创建 application 绑定的 ai_chat session（首次调用会自动注入应用最新 md 作为 artifact） */
+  ensureChatSession(appId: number) {
+    return request.post<any, { session_id: number; title: string; is_new: boolean; artifact_filename?: string | null }>(
+      `/applications/${appId}/chat-session/ensure`,
+    )
+  },
+
+  /** 从绑定 chat session 拉最新 md artifact 内容（前端拿到再调 upload-doc-version 上传） */
+  syncMdFromChat(appId: number) {
+    return request.post<any, { ok: boolean; artifact_filename: string; artifact_version: number; content: string }>(
+      `/applications/${appId}/sync-from-chat-md`,
+    )
+  },
+
   /** 更新用户勾选 */
   updateSelections(appId: number, planId: number, selections: Record<string, boolean>) {
     return request.put<any, any>(`/applications/${appId}/change-plans/${planId}/selections`, { selections })

@@ -1451,3 +1451,158 @@ async def patch_application_default_mode(
     app.default_mode = req.default_mode
     await db.commit()
     return {"application_id": app.id, "default_mode": app.default_mode}
+
+
+# ─────────────────────── App ↔ AI Chat session 绑定 ───────────────────────
+
+
+@router.post("/{app_id}/chat-session/ensure")
+async def ensure_app_chat_session(
+    app_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """获取或创建 application 绑定的 ai_chat_session。
+
+    首次调用：建一个 ai_chat_session（mode=chat），把应用最新 md 作为 artifact
+    注入（filename=`{app_name}-设计文档.md`），让 AI 在对话里能直接 read/write 这份文档。
+    回写 application.ai_chat_session_id；后续调用直接复用同一 session。
+    """
+    from app.models import DocumentVersion
+    from app.models.ai_chat import AIChatArtifact, AIChatSession
+
+    res = await db.execute(
+        select(Application).where(
+            Application.id == app_id, Application.tenant_id == ctx.tenant_id
+        )
+    )
+    app = res.scalar_one_or_none()
+    if not app:
+        raise HTTPException(status_code=404, detail="应用不存在")
+    await check_resource_permission(ctx, db, app, "application", Action.EDIT)
+
+    # 已绑就直接返回
+    if app.ai_chat_session_id:
+        existing = (
+            await db.execute(
+                select(AIChatSession).where(AIChatSession.id == app.ai_chat_session_id)
+            )
+        ).scalar_one_or_none()
+        if existing and existing.tenant_id == ctx.tenant_id:
+            return {
+                "session_id": existing.id,
+                "title": existing.title,
+                "is_new": False,
+            }
+        # session 被删了或属其他租户：清掉重新建
+        app.ai_chat_session_id = None
+
+    session = AIChatSession(
+        tenant_id=ctx.tenant_id,
+        user_id=ctx.user.id,
+        title=f"调整应用：{app.app_name or app.app_code or app_id}",
+        mode="chat",
+        status="active",
+    )
+    db.add(session)
+    await db.flush()
+
+    # 注入应用最新 md 作为初始 artifact
+    latest_doc = (
+        await db.execute(
+            select(DocumentVersion)
+            .where(DocumentVersion.application_id == app.id)
+            .order_by(DocumentVersion.version.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    initial_md = ""
+    if latest_doc:
+        try:
+            from app.routes.applications._doc_helpers import _ensure_doc_version_rendered_content as _render_md
+            initial_md = await _render_md(db, app, latest_doc)
+        except Exception:
+            initial_md = ""
+    if not initial_md and app.config_preview:
+        # fallback：从 config_preview 渲染 md
+        try:
+            from app.routes.applications._doc_helpers import _render_doc_content_from_config as _render_from_cfg
+            initial_md = _render_from_cfg(loads_if_str(app.config_preview)) or ""
+        except Exception:
+            initial_md = ""
+
+    artifact_filename = f"{app.app_name or app.app_code or 'app'}-设计文档.md"
+    if initial_md.strip():
+        db.add(
+            AIChatArtifact(
+                session_id=session.id,
+                filename=artifact_filename,
+                format="md",
+                content=initial_md,
+                version=1,
+            )
+        )
+
+    app.ai_chat_session_id = session.id
+    await db.commit()
+    await db.refresh(session)
+
+    return {
+        "session_id": session.id,
+        "title": session.title,
+        "is_new": True,
+        "artifact_filename": artifact_filename if initial_md.strip() else None,
+    }
+
+
+@router.post("/{app_id}/sync-from-chat-md")
+async def sync_app_from_chat_md(
+    app_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """从绑定的 ai_chat session 拉最新 md artifact，走 upload-doc-version 流程更新应用。
+
+    返回 doc-version 创建结果（version_id / change_plan_id 等），前端拿到后跟原"上传新版 md"
+    一样进入变更预览/审查界面。
+    """
+    from app.models.ai_chat import AIChatArtifact
+
+    res = await db.execute(
+        select(Application).where(
+            Application.id == app_id, Application.tenant_id == ctx.tenant_id
+        )
+    )
+    app = res.scalar_one_or_none()
+    if not app:
+        raise HTTPException(status_code=404, detail="应用不存在")
+    await check_resource_permission(ctx, db, app, "application", Action.EDIT)
+
+    if not app.ai_chat_session_id:
+        raise HTTPException(status_code=400, detail="应用还未绑定 AI Chat 会话，请先在对话中产生设计文档")
+
+    # 拉最新 md artifact（按 updated_at desc，filter md）
+    art = (
+        await db.execute(
+            select(AIChatArtifact)
+            .where(AIChatArtifact.session_id == app.ai_chat_session_id)
+            .where(AIChatArtifact.format == "md")
+            .order_by(AIChatArtifact.updated_at.desc(), AIChatArtifact.version.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if not art or not art.content.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="对话里还没有可应用的 md 设计文档；请先让 AI 用 write_artifact 产出 / 修改设计文档",
+        )
+
+    return {
+        "ok": True,
+        "artifact_filename": art.filename,
+        "artifact_version": art.version,
+        "content": art.content,
+        # 前端拿到 content 后调既有的 upload-doc-version 接口（FormData 上传 md）走完整变更流
+        "next_step": "POST /applications/{app_id}/upload-doc-version with file=this content",
+    }

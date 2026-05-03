@@ -211,6 +211,8 @@ class Application(Base):
     team_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("teams.id"), nullable=True, index=True)
     created_by: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     conversation_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    # 应用对话调整迁到 ai_chat 引擎后绑定的 session id；由 chat-session/ensure 接口创建
+    ai_chat_session_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     project_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)  # 过渡字段，兼容旧 Project
     platform_env_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("platform_envs.id"), nullable=True, index=True)
 
