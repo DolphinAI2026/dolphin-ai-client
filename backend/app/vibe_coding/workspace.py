@@ -14,13 +14,17 @@ def _online_coding_helpers():
 
 
 def find_workspace(workspace_id: str) -> Optional[tuple[Path, dict]]:
-    """根据 workspace_id 查找目录与 meta，找不到返回 None（不抛异常）。"""
+    """根据 workspace_id 查找目录与 meta，找不到返回 None（不抛异常）。
+
+    扫描覆盖新路径 {root}/{tenant_id}/<ws> 与老路径 {root}/<ws>。
+    """
     oc = _online_coding_helpers()
     oc.ONLINE_CODING_ROOT.mkdir(parents=True, exist_ok=True)
-    for ws_dir in oc.ONLINE_CODING_ROOT.iterdir():
-        if not ws_dir.is_dir() or not oc._meta_path(ws_dir).exists():
+    for ws_dir in oc._iter_workspace_meta_dirs():
+        try:
+            meta = oc._read_workspace(ws_dir)
+        except Exception:
             continue
-        meta = oc._read_workspace(ws_dir)
         if meta.get("id") == workspace_id:
             return ws_dir, meta
     return None

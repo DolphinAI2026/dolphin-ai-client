@@ -24,7 +24,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.deps import AuthContext, get_auth_context
 from app.models import User
-from app.routes.online_coding import ONLINE_CODING_ROOT, _find_workspace_dir, _meta_path
+from app.routes.online_coding import (
+    ONLINE_CODING_ROOT,
+    _find_workspace_dir,
+    _iter_workspace_meta_dirs,
+    _meta_path,
+)
 from app.vibe_coding.docker_runtime import get_runtime as get_docker_runtime
 
 logger = logging.getLogger(__name__)
@@ -52,18 +57,13 @@ class SandboxListResponse(BaseModel):
 
 
 def _scan_workspaces() -> list[dict]:
-    """扫所有 workspace meta（不过滤）。"""
+    """扫所有 workspace meta（不过滤），递归含 tenant 子目录。"""
     if not ONLINE_CODING_ROOT.exists():
         return []
     items: list[dict] = []
-    for ws_dir in ONLINE_CODING_ROOT.iterdir():
-        if not ws_dir.is_dir():
-            continue
-        meta_p = _meta_path(ws_dir)
-        if not meta_p.exists():
-            continue
+    for ws_dir in _iter_workspace_meta_dirs():
         try:
-            meta = json.loads(meta_p.read_text(encoding="utf-8"))
+            meta = json.loads(_meta_path(ws_dir).read_text(encoding="utf-8"))
             items.append(meta)
         except Exception:
             continue

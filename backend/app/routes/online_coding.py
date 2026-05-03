@@ -161,8 +161,14 @@ def _workspace_slug(repo_url: Optional[str], task: str) -> str:
     return (source or "full-code-workspace")[:48]
 
 
-def _workspace_dir(workspace_id: str, repo_url: Optional[str], task: str) -> Path:
-    return ONLINE_CODING_ROOT / f"{_workspace_slug(repo_url, task)}__{workspace_id}"
+def _tenant_root(tenant_id: int) -> Path:
+    """返回租户专属的 workspace 根目录。"""
+    return ONLINE_CODING_ROOT / str(int(tenant_id))
+
+
+def _workspace_dir(workspace_id: str, tenant_id: int, repo_url: Optional[str], task: str) -> Path:
+    """新建 workspace 路径：始终走 {root}/{tenant_id}/{slug}__{ws_id}（租户隔离）。"""
+    return _tenant_root(tenant_id) / f"{_workspace_slug(repo_url, task)}__{workspace_id}"
 
 
 def _meta_path(ws_dir: Path) -> Path:
@@ -171,6 +177,30 @@ def _meta_path(ws_dir: Path) -> Path:
 
 def _repo_path(ws_dir: Path) -> Path:
     return ws_dir / "repo"
+
+
+def _iter_workspace_meta_dirs():
+    """遍历所有合法的 workspace 目录。
+
+    优先扫新路径 {root}/{tenant_id}/<ws_dir>（tenant_id 为纯数字目录名），
+    回退兼容老路径 {root}/<ws_dir>（迁移脚本跑完后老路径应为空）。
+
+    会跳过 `.preview-runtime` 等隐藏 / 非 workspace 目录。
+    """
+    if not ONLINE_CODING_ROOT.exists():
+        return
+    for entry in ONLINE_CODING_ROOT.iterdir():
+        if not entry.is_dir() or entry.name.startswith("."):
+            continue
+        # 新路径：tenant 子目录（数字）下的 ws
+        if entry.name.isdigit():
+            for ws_dir in entry.iterdir():
+                if ws_dir.is_dir() and _meta_path(ws_dir).exists():
+                    yield ws_dir
+            continue
+        # 老路径：直接挂在 root 下的 ws（待迁移）
+        if _meta_path(entry).exists():
+            yield entry
 
 
 def _resolve_repo_file(repo_dir: Path, file_path: str) -> Path:
@@ -737,10 +767,11 @@ async def _import_repository(
 
 def _find_workspace_dir(workspace_id: str) -> tuple[Path, dict]:
     ONLINE_CODING_ROOT.mkdir(parents=True, exist_ok=True)
-    for ws_dir in ONLINE_CODING_ROOT.iterdir():
-        if not ws_dir.is_dir() or not _meta_path(ws_dir).exists():
+    for ws_dir in _iter_workspace_meta_dirs():
+        try:
+            meta = _read_workspace(ws_dir)
+        except HTTPException:
             continue
-        meta = _read_workspace(ws_dir)
         if meta.get("id") == workspace_id:
             return ws_dir, meta
     raise HTTPException(status_code=404, detail="Vibe Coding 工作区不存在")
@@ -815,7 +846,7 @@ async def create_online_coding_workspace(
 
     workspace_id = f"oc_{uuid.uuid4().hex[:12]}"
     now = _now_iso()
-    ws_dir = _workspace_dir(workspace_id, repo_url, task or "无 Git 工作区")
+    ws_dir = _workspace_dir(workspace_id, ctx.tenant_id, repo_url, task or "无 Git 工作区")
     meta = {
         "id": workspace_id,
         "repo_url": repo_url,
@@ -873,9 +904,7 @@ async def list_online_coding_workspaces(
 ):
     ONLINE_CODING_ROOT.mkdir(parents=True, exist_ok=True)
     items: list[OnlineCodingWorkspace] = []
-    for ws_dir in ONLINE_CODING_ROOT.iterdir():
-        if not ws_dir.is_dir() or not _meta_path(ws_dir).exists():
-            continue
+    for ws_dir in _iter_workspace_meta_dirs():
         try:
             meta = json.loads(_meta_path(ws_dir).read_text(encoding="utf-8"))
         except Exception:
