@@ -313,6 +313,16 @@ class TenantStatusRequest(BaseModel):
     status: int  # 1=active, 0=disabled
 
 
+class TenantUpdateRequest(BaseModel):
+    tenant_name: Optional[str] = None
+    plan_type: Optional[str] = None
+    max_applications: Optional[int] = None
+    max_workspaces: Optional[int] = None
+    max_components: Optional[int] = None
+    contact_name: Optional[str] = None
+    contact_email: Optional[str] = None
+
+
 class TenantAdminItem(BaseModel):
     id: int
     tenant_name: str
@@ -418,6 +428,117 @@ async def create_new_tenant(
     await db.commit()
     await db.refresh(t)
     return _tenant_admin_item(t, 0)
+
+
+@router.put("/tenants/{tenant_id}", response_model=TenantAdminItem)
+async def update_tenant(
+    tenant_id: int,
+    data: TenantUpdateRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """编辑租户基本信息（仅平台管理员）。tenant_code 一旦创建不可改。"""
+    _require_platform_admin(ctx)
+
+    t = (
+        await db.execute(select(Tenant).where(Tenant.id == tenant_id))
+    ).scalar_one_or_none()
+    if not t:
+        raise HTTPException(status_code=404, detail="租户不存在")
+
+    if data.tenant_name is not None:
+        name = data.tenant_name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="租户名称不能为空")
+        t.tenant_name = name
+
+    if data.plan_type is not None:
+        if data.plan_type not in {"free", "pro", "enterprise"}:
+            raise HTTPException(status_code=400, detail="plan_type 仅支持 free/pro/enterprise")
+        t.plan_type = data.plan_type
+
+    for field, low, high in (
+        ("max_applications", 1, 10000),
+        ("max_workspaces", 0, 10000),
+        ("max_components", 0, 10000),
+    ):
+        val = getattr(data, field)
+        if val is not None:
+            if val < low or val > high:
+                raise HTTPException(status_code=400, detail=f"{field} 范围 {low}-{high}")
+            setattr(t, field, val)
+
+    if data.contact_name is not None:
+        t.contact_name = data.contact_name.strip() or None
+    if data.contact_email is not None:
+        t.contact_email = data.contact_email.strip() or None
+
+    await db.commit()
+    await db.refresh(t)
+
+    from sqlalchemy import func as sql_func
+    cnt = (
+        await db.execute(
+            select(sql_func.count(UserTenant.id))
+            .where(UserTenant.tenant_id == t.id, UserTenant.status == 1)
+        )
+    ).scalar() or 0
+    return _tenant_admin_item(t, int(cnt))
+
+
+@router.delete("/tenants/{tenant_id}")
+async def delete_tenant(
+    tenant_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    force: bool = False,
+):
+    """删除租户（仅平台管理员）。
+
+    安全规则：
+    - 默认 force=false：租户内有应用/工作区/组件/成员任一时，返 409 列出残留资源数，
+      要求平台管理员先清理或显式 force。
+    - force=true：级联删除应用 + 组件 + 成员关系（DB 层 ON DELETE CASCADE）；
+      Vibe Coding workspace 的文件系统目录不会自动删，需平台管理员后续手动清理。
+    """
+    _require_platform_admin(ctx)
+
+    t = (
+        await db.execute(select(Tenant).where(Tenant.id == tenant_id))
+    ).scalar_one_or_none()
+    if not t:
+        raise HTTPException(status_code=404, detail="租户不存在")
+
+    # 不能删除自己当前激活的租户（避免删完自己也踢出来）
+    if ctx.tenant_id == tenant_id:
+        raise HTTPException(
+            status_code=400, detail="不能删除当前激活的租户，请先切到其他租户后再删除"
+        )
+
+    # 收集残留资源数
+    from app.tenant_quota import get_tenant_usage
+    usage = await get_tenant_usage(db, tenant_id)
+    residual = {
+        "applications": usage["applications"]["used"],
+        "workspaces": usage["workspaces"]["used"],
+        "components": usage["components"]["used"],
+        "members": usage["members"],
+    }
+    has_data = any(v > 0 for v in residual.values())
+
+    if has_data and not force:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": f"租户「{t.tenant_name}」尚有数据未清理，无法直接删除",
+                "residual": residual,
+                "hint": "确认要级联删除请加 ?force=true 重试；workspace 文件需手动清理 _online_coding/<tenant_id>/",
+            },
+        )
+
+    await db.delete(t)
+    await db.commit()
+    return {"ok": True, "deleted_tenant_id": tenant_id, "residual": residual}
 
 
 @router.get("/tenants/{tenant_id}/usage")

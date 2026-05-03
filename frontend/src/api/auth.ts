@@ -69,6 +69,16 @@ export interface TenantUsage {
   members: number
 }
 
+export interface TenantUpdatePayload {
+  tenant_name?: string
+  plan_type?: 'free' | 'pro' | 'enterprise'
+  max_applications?: number
+  max_workspaces?: number
+  max_components?: number
+  contact_name?: string | null
+  contact_email?: string | null
+}
+
 export const authApi = {
   login(data: LoginRequest) {
     return request.post<any, LoginResponse>('/auth/login', data)
@@ -96,6 +106,16 @@ export const authApi = {
 
   updateTenantStatus(tenantId: number, status: 0 | 1) {
     return request.put<any, TenantAdminItem>(`/auth/tenants/${tenantId}/status`, { status })
+  },
+
+  updateTenant(tenantId: number, data: TenantUpdatePayload) {
+    return request.put<any, TenantAdminItem>(`/auth/tenants/${tenantId}`, data)
+  },
+
+  deleteTenant(tenantId: number, force = false) {
+    return request.delete<any, { ok: boolean; deleted_tenant_id: number; residual: Record<string, number> }>(
+      `/auth/tenants/${tenantId}${force ? '?force=true' : ''}`,
+    )
   },
 
   getTenantUsage(tenantId: number) {

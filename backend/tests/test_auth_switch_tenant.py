@@ -12,10 +12,13 @@ from app.routes.auth import (
     TenantCreateRequest,
     TenantStatusRequest,
     TenantSwitchRequest,
+    TenantUpdateRequest,
     create_new_tenant,
+    delete_tenant,
     list_all_tenants,
     list_my_tenants,
     switch_tenant,
+    update_tenant,
     update_tenant_status,
 )
 
@@ -168,3 +171,82 @@ async def test_create_and_toggle_tenant(db_session):
     # list 包含
     listed = await list_all_tenants(ctx, db_session)
     assert any(t.id == created.id for t in listed)
+
+
+@pytest.mark.asyncio
+async def test_update_tenant_changes_fields(db_session):
+    admin = User(
+        username="root2",
+        hashed_password=get_password_hash("secret"),
+        is_active=True,
+        is_platform_admin=True,
+    )
+    db_session.add(admin)
+    await db_session.flush()
+    ctx = AuthContext(user=admin, tenant_id=0, tenant_role="platform_admin", org_permissions={"*": True})
+
+    created = await create_new_tenant(
+        TenantCreateRequest(tenant_name="A", tenant_code="aaa1"),
+        ctx, db_session,
+    )
+
+    updated = await update_tenant(
+        created.id,
+        TenantUpdateRequest(tenant_name="A2", plan_type="pro", max_workspaces=99),
+        ctx, db_session,
+    )
+    assert updated.tenant_name == "A2"
+    assert updated.plan_type == "pro"
+    assert updated.max_workspaces == 99
+    # tenant_code 不可改
+    assert updated.tenant_code == "aaa1"
+
+
+@pytest.mark.asyncio
+async def test_delete_empty_tenant_works(db_session, monkeypatch):
+    # 测试 db 与本地真实 _online_coding/<tenant_id>/ 冲突时（SQLite autoincrement 从 1 起）
+    # 会误把真实 workspace 计入新建 tenant，要 mock 掉文件系统扫描
+    from app import tenant_quota
+    monkeypatch.setattr(tenant_quota, "_count_workspaces", lambda _tid: 0)
+
+    admin = User(
+        username="root3",
+        hashed_password=get_password_hash("secret"),
+        is_active=True,
+        is_platform_admin=True,
+    )
+    db_session.add(admin)
+    await db_session.flush()
+    ctx = AuthContext(user=admin, tenant_id=0, tenant_role="platform_admin", org_permissions={"*": True})
+    created = await create_new_tenant(
+        TenantCreateRequest(tenant_name="B", tenant_code="bbb1"),
+        ctx, db_session,
+    )
+
+    res = await delete_tenant(created.id, ctx, db_session, force=False)
+    assert res["ok"] is True
+    assert res["deleted_tenant_id"] == created.id
+
+
+@pytest.mark.asyncio
+async def test_delete_blocks_when_tenant_is_current(db_session):
+    admin = User(
+        username="root4",
+        hashed_password=get_password_hash("secret"),
+        is_active=True,
+        is_platform_admin=True,
+    )
+    db_session.add(admin)
+    await db_session.flush()
+
+    # 用 admin 创建一个 tenant 并把 ctx.tenant_id 指向它（模拟"当前激活"）
+    ctx_other = AuthContext(user=admin, tenant_id=0, tenant_role="platform_admin", org_permissions={"*": True})
+    created = await create_new_tenant(
+        TenantCreateRequest(tenant_name="C", tenant_code="ccc1"),
+        ctx_other, db_session,
+    )
+    ctx_self = AuthContext(user=admin, tenant_id=created.id, tenant_role="platform_admin", org_permissions={"*": True})
+
+    with pytest.raises(HTTPException) as exc:
+        await delete_tenant(created.id, ctx_self, db_session)
+    assert exc.value.status_code == 400
