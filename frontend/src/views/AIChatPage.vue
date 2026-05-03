@@ -242,7 +242,7 @@
       </div>
     </aside>
   </div>
-  </WorkbenchShell>
+  </component>
 </template>
 
 <script setup lang="ts">
