@@ -95,6 +95,14 @@ class Settings(BaseSettings):
     dolphin_api_key: str = ""
     dolphin_model: str = "gpt-5.5"
 
+    # Dolphin Agent 平台 SSO（HelpAssistant + 内嵌 chat 用）
+    # 当前 trial 版没有 token-exchange API，所有 ai-builder 用户共用一个 service token；
+    # 待 dolphin 提供 user-impersonate API 后，dolphin_sso 路由切换到按 user 颁发短期 token。
+    dolphin_server_url: str = "https://dolphin-trial.definesys.cn"
+    dolphin_agent_code: str = ""  # 默认嵌入的 agent code（HelpAssistant 用）
+    dolphin_tenant_id: str = "default"
+    dolphin_service_token: str = ""  # 后端持有的 dolphin admin/service JWT，永远不下发到前端 build
+
     # Vibe Coding 运行时
     # - "auto"   : docker daemon + vibe-sandbox 镜像可用就走 docker；否则 fallback host
     # - "docker" : 强制 docker，不可用直接报错（生产环境用）
