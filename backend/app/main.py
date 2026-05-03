@@ -173,6 +173,63 @@ app.include_router(sandboxes.router, prefix="/api")
 app.include_router(platform_proxy.router)
 
 
+# ─────────────────────── MCP Server ───────────────────────
+# 把 ai-builder 应用领域能力封装为 MCP 工具暴露给得小帆等 agent 平台。
+# 详见 backend/app/mcp_server.py
+try:
+    from app.mcp_server import mcp as _mcp_server, is_valid_api_key as _mcp_is_valid_api_key
+
+    class _McpAuthMiddleware:
+        """ASGI 中间件：拦截进入 mcp.sse_app() 的请求，校验 Authorization Bearer。
+
+        允许两种来源：
+        - 标准请求头 Authorization: Bearer <key>
+        - SSE 特殊：浏览器/部分 SSE client 不便加 header 时，可走 query ?api_key=xxx
+        """
+
+        def __init__(self, app):
+            self.app = app
+
+        async def __call__(self, scope, receive, send):
+            if scope["type"] != "http":
+                await self.app(scope, receive, send)
+                return
+            headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
+            auth = headers.get("authorization", "")
+            api_key = ""
+            if auth.lower().startswith("bearer "):
+                api_key = auth[7:].strip()
+            if not api_key:
+                # fallback: query string
+                qs = scope.get("query_string", b"").decode()
+                for part in qs.split("&"):
+                    if part.startswith("api_key="):
+                        api_key = part[len("api_key="):]
+                        break
+            if not _mcp_is_valid_api_key(api_key):
+                await send({
+                    "type": "http.response.start",
+                    "status": 401,
+                    "headers": [(b"content-type", b"application/json; charset=utf-8")],
+                })
+                await send({
+                    "type": "http.response.body",
+                    "body": b'{"error":"unauthorized: invalid or missing MCP API key"}',
+                })
+                return
+            await self.app(scope, receive, send)
+
+    # 不传 mount_path 给 sse_app —— starlette mount 会通过 ASGI scope.root_path
+    # 自动给 client 拼上 /api/mcp 前缀。传了反而双前缀（/api/mcp/api/mcp/messages/）。
+    _mcp_app = _mcp_server.sse_app()
+    app.mount("/api/mcp", _McpAuthMiddleware(_mcp_app))
+    import logging as _logging
+    _logging.getLogger(__name__).info("MCP server mounted at /api/mcp/sse")
+except Exception as exc:
+    import logging as _logging
+    _logging.getLogger(__name__).warning("MCP server 启用失败（不影响主应用）：%s", exc)
+
+
 # 平台插件资源中间件：/{32位hex}/... → 代理到平台
 import re as _re
 _PLUGIN_HASH_RE = _re.compile(r'^/[0-9a-f]{32}/')
