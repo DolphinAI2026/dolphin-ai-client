@@ -46,6 +46,18 @@ from app.routes import (
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 启动 MCP server 的 session manager — Streamable HTTP transport 在 mount 模式下
+    # 父 app lifespan 不会自动透传到子 ASGI，需要手动运行 session_manager。
+    # 用 AsyncExitStack 跟主 lifespan 生命周期对齐。
+    from contextlib import AsyncExitStack
+    _exit_stack = AsyncExitStack()
+    try:
+        from app.mcp_server import mcp as _mcp_for_lifespan
+        await _exit_stack.enter_async_context(_mcp_for_lifespan.session_manager.run())
+    except Exception as _exc:
+        import logging as _logging
+        _logging.getLogger(__name__).warning("MCP session manager 启动失败：%s", _exc)
+
     # 启动时杀掉所有残留的 vibe-serve.js 进程（清理上次后端退出留下的孤儿进程）
     subprocess.run(["pkill", "-f", "vibe-serve.js"], capture_output=True)
 
@@ -104,6 +116,7 @@ async def lifespan(app: FastAPI):
     # 关闭时清理资源
     from app.coding.browser_service import BrowserService
     await BrowserService.get_instance().stop()
+    await _exit_stack.aclose()
 
 
 app = FastAPI(
@@ -219,12 +232,18 @@ try:
                 return
             await self.app(scope, receive, send)
 
-    # 不传 mount_path 给 sse_app —— starlette mount 会通过 ASGI scope.root_path
-    # 自动给 client 拼上 /api/mcp 前缀。传了反而双前缀（/api/mcp/api/mcp/messages/）。
-    _mcp_app = _mcp_server.sse_app()
-    app.mount("/api/mcp", _McpAuthMiddleware(_mcp_app))
+    # dolphin 等现代 agent 平台用 Streamable HTTP transport（POST 单一 endpoint），
+    # 不再支持老 HTTP+SSE。Streamable 是首选；保留 legacy SSE 给老 client 兜底。
+    _mcp_streamable = _mcp_server.streamable_http_app()
+    _mcp_sse = _mcp_server.sse_app()
+    # streamable_http_app 内 path 是 /mcp → 公开 URL: /api/mcp/mcp
+    app.mount("/api/mcp", _McpAuthMiddleware(_mcp_streamable))
+    # legacy SSE 单独前缀（同 /api/mcp 会被前面的 mount 屏蔽）
+    app.mount("/api/mcp-legacy", _McpAuthMiddleware(_mcp_sse))
     import logging as _logging
-    _logging.getLogger(__name__).info("MCP server mounted at /api/mcp/sse")
+    _logging.getLogger(__name__).info(
+        "MCP server mounted: streamable=/api/mcp/mcp, legacy_sse=/api/mcp-legacy/sse"
+    )
 except Exception as exc:
     import logging as _logging
     _logging.getLogger(__name__).warning("MCP server 启用失败（不影响主应用）：%s", exc)
