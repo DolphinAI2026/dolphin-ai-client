@@ -304,7 +304,6 @@ def _require_platform_admin(ctx: AuthContext) -> None:
 class TenantCreateRequest(BaseModel):
     tenant_name: str
     tenant_code: str
-    plan_type: str = "free"
     max_applications: int = 10
     max_workspaces: int = 20
     max_components: int = 50
@@ -318,7 +317,6 @@ class TenantStatusRequest(BaseModel):
 
 class TenantUpdateRequest(BaseModel):
     tenant_name: Optional[str] = None
-    plan_type: Optional[str] = None
     max_applications: Optional[int] = None
     max_workspaces: Optional[int] = None
     max_components: Optional[int] = None
@@ -327,10 +325,14 @@ class TenantUpdateRequest(BaseModel):
 
 
 class TenantAdminItem(BaseModel):
+    """租户管理列表项。
+
+    plan_type 字段已废弃（ToB 私有化部署不需要 SaaS 风格的订阅档），DB 列保留默认 free
+    向后兼容，新接口不再返。资源限制全部走 max_applications/max_workspaces/max_components。
+    """
     id: int
     tenant_name: str
     tenant_code: str
-    plan_type: str
     max_applications: int
     max_workspaces: int
     max_components: int
@@ -346,7 +348,6 @@ def _tenant_admin_item(t: Tenant, member_count: int) -> TenantAdminItem:
         id=t.id,
         tenant_name=t.tenant_name,
         tenant_code=t.tenant_code,
-        plan_type=t.plan_type,
         max_applications=t.max_applications,
         max_workspaces=t.max_workspaces,
         max_components=t.max_components,
@@ -417,8 +418,6 @@ async def create_new_tenant(
         raise HTTPException(status_code=400, detail="租户名称不能为空")
     if not code or not all(ch.isalnum() or ch in "_-" for ch in code):
         raise HTTPException(status_code=400, detail="租户编码仅支持小写字母、数字、_、-")
-    if data.plan_type not in {"free", "pro", "enterprise"}:
-        raise HTTPException(status_code=400, detail="plan_type 仅支持 free/pro/enterprise")
     if data.max_applications < 1 or data.max_applications > 10000:
         raise HTTPException(status_code=400, detail="max_applications 范围 1-10000")
     if data.max_workspaces < 0 or data.max_workspaces > 10000:
@@ -435,7 +434,6 @@ async def create_new_tenant(
     t = Tenant(
         tenant_name=name,
         tenant_code=code,
-        plan_type=data.plan_type,
         max_applications=data.max_applications,
         max_workspaces=data.max_workspaces,
         max_components=data.max_components,
@@ -479,11 +477,6 @@ async def update_tenant(
         if not name:
             raise HTTPException(status_code=400, detail="租户名称不能为空")
         t.tenant_name = name
-
-    if data.plan_type is not None:
-        if data.plan_type not in {"free", "pro", "enterprise"}:
-            raise HTTPException(status_code=400, detail="plan_type 仅支持 free/pro/enterprise")
-        t.plan_type = data.plan_type
 
     for field, low, high in (
         ("max_applications", 1, 10000),

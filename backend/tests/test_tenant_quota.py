@@ -16,7 +16,6 @@ async def _seed_tenant(db_session, *, max_apps=2, max_ws=2, max_comps=2):
     t = Tenant(
         tenant_name="QuotaTest",
         tenant_code=f"qt_{id(db_session)}",
-        plan_type="free",
         max_applications=max_apps,
         max_workspaces=max_ws,
         max_components=max_comps,

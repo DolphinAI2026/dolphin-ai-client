@@ -152,7 +152,7 @@ async def test_create_and_toggle_tenant(db_session):
     ctx = AuthContext(user=admin, tenant_id=0, tenant_role="platform_admin", org_permissions={"*": True})
 
     created = await create_new_tenant(
-        TenantCreateRequest(tenant_name="Acme", tenant_code="acme", plan_type="pro", max_applications=50),
+        TenantCreateRequest(tenant_name="Acme", tenant_code="acme", max_applications=50),
         ctx,
         db_session,
     )
@@ -198,11 +198,10 @@ async def test_update_tenant_changes_fields(db_session):
 
     updated = await update_tenant(
         created.id,
-        TenantUpdateRequest(tenant_name="A2", plan_type="pro", max_workspaces=99),
+        TenantUpdateRequest(tenant_name="A2", max_workspaces=99),
         ctx, db_session,
     )
     assert updated.tenant_name == "A2"
-    assert updated.plan_type == "pro"
     assert updated.max_workspaces == 99
     # tenant_code 不可改
     assert updated.tenant_code == "aaa1"

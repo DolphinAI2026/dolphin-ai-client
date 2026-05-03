@@ -86,11 +86,6 @@
               <code class="tenant-code">{{ row.tenant_code }}</code>
             </template>
           </el-table-column>
-          <el-table-column prop="plan_type" label="套餐" width="100">
-            <template #default="{ row }">
-              <el-tag size="small" :type="planTagType(row.plan_type)">{{ planLabel(row.plan_type) }}</el-tag>
-            </template>
-          </el-table-column>
           <el-table-column prop="member_count" label="成员数" width="80" align="right" />
           <el-table-column label="配额（应用 / 工作区 / 组件）" min-width="200" align="center">
             <template #default="{ row }">
@@ -149,13 +144,6 @@
           <el-form-item label="租户编码" required>
             <el-input v-model="createForm.tenant_code" placeholder="小写字母、数字、_、- ，唯一不可改" maxlength="64" />
           </el-form-item>
-          <el-form-item label="套餐">
-            <el-select v-model="createForm.plan_type" style="width: 100%">
-              <el-option label="Free" value="free" />
-              <el-option label="Pro" value="pro" />
-              <el-option label="Enterprise" value="enterprise" />
-            </el-select>
-          </el-form-item>
           <el-form-item label="低代码应用数量上限">
             <el-input-number v-model="createForm.max_applications" :min="1" :max="10000" :step="10" style="width: 100%" />
           </el-form-item>
@@ -186,13 +174,6 @@
           </el-form-item>
           <el-form-item label="租户编码（不可改）">
             <el-input :model-value="editTarget?.tenant_code" disabled />
-          </el-form-item>
-          <el-form-item label="套餐">
-            <el-select v-model="editForm.plan_type" style="width: 100%">
-              <el-option label="Free" value="free" />
-              <el-option label="Pro" value="pro" />
-              <el-option label="Enterprise" value="enterprise" />
-            </el-select>
           </el-form-item>
           <el-form-item label="低代码应用数量上限">
             <el-input-number v-model="editForm.max_applications" :min="1" :max="10000" :step="10" style="width: 100%" />
@@ -241,7 +222,6 @@
           <div class="detail-section">
             <h4>基本信息</h4>
             <dl class="detail-dl">
-              <dt>套餐</dt><dd>{{ planLabel(detailTarget.plan_type) }}</dd>
               <dt>状态</dt><dd>{{ detailTarget.status === 1 ? '启用' : '已禁用' }}</dd>
               <dt>联系人</dt><dd>{{ detailTarget.contact_name || '-' }}</dd>
               <dt>邮箱</dt><dd>{{ detailTarget.contact_email || '-' }}</dd>
@@ -351,7 +331,6 @@ const createVisible = ref(false)
 const createForm = ref<TenantCreatePayload>({
   tenant_name: '',
   tenant_code: '',
-  plan_type: 'free',
   max_applications: 100,
   max_workspaces: 50,
   max_components: 100,
@@ -425,7 +404,6 @@ function openCreate() {
   createForm.value = {
     tenant_name: '',
     tenant_code: '',
-    plan_type: 'free',
     max_applications: 100,
     max_workspaces: 50,
     max_components: 100,
@@ -459,7 +437,6 @@ function openEdit(row: TenantAdminItem) {
   editTarget.value = row
   editForm.value = {
     tenant_name: row.tenant_name,
-    plan_type: row.plan_type as any,
     max_applications: row.max_applications,
     max_workspaces: row.max_workspaces,
     max_components: row.max_components,
@@ -641,15 +618,6 @@ async function confirmDelete(row: TenantAdminItem) {
       ElMessage.error(err?.message || '删除失败')
     }
   }
-}
-
-function planLabel(plan: string): string {
-  return ({ free: 'Free', pro: 'Pro', enterprise: 'Enterprise' } as Record<string, string>)[plan] || plan
-}
-function planTagType(plan: string): 'info' | 'success' | 'warning' {
-  if (plan === 'enterprise') return 'warning'
-  if (plan === 'pro') return 'success'
-  return 'info'
 }
 
 function formatDate(value?: string | null): string {

@@ -35,7 +35,6 @@ export interface TenantAdminItem {
   id: number
   tenant_name: string
   tenant_code: string
-  plan_type: string
   max_applications: number
   max_workspaces: number
   max_components: number
@@ -49,7 +48,6 @@ export interface TenantAdminItem {
 export interface TenantCreatePayload {
   tenant_name: string
   tenant_code: string
-  plan_type?: 'free' | 'pro' | 'enterprise'
   max_applications?: number
   max_workspaces?: number
   max_components?: number
@@ -109,7 +107,6 @@ export interface TenantMemberAddPayload {
 
 export interface TenantUpdatePayload {
   tenant_name?: string
-  plan_type?: 'free' | 'pro' | 'enterprise'
   max_applications?: number
   max_workspaces?: number
   max_components?: number
