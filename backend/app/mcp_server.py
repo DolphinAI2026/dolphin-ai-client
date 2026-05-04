@@ -85,6 +85,22 @@ def _resolve_identity(tenant_id: int | None, user_id: int | None) -> tuple[int, 
     return int(tenant_id), int(user_id)
 
 
+def _resolve_app_id(app_id: int | None, user_id: int) -> tuple[int, str]:
+    """工具收到 app_id=None 时，从 current_app 模块拿用户当前编辑的应用。
+    返回 (app_id, app_name)。"""
+    if app_id and app_id > 0:
+        return int(app_id), ""
+    # 延迟 import，避免循环依赖
+    from app.routes.current_app import get_current_app_for_user
+    rec = get_current_app_for_user(int(user_id))
+    if not rec:
+        raise ValueError(
+            "未指定 app_id，且后端没有用户当前编辑应用的状态。"
+            "请告诉助手具体的应用 ID（数字），或先在 ai-builder UI 打开某个应用。"
+        )
+    return rec
+
+
 async def _api_call(
     method: str,
     path: str,
@@ -314,12 +330,15 @@ async def list_my_applications(
 
 @mcp.tool()
 async def get_application(
-    app_id: int,
+    app_id: int = 0,
     tenant_id: int = 0,
     user_id: int = 0,
 ) -> dict:
-    """查看指定应用的详情：基础信息、状态、当前文档版本、配置摘要。"""
+    """查看指定应用的详情：基础信息、状态、当前文档版本、配置摘要。
+
+    app_id 可省略（=0）：自动用 ai-builder 中用户当前编辑的应用。"""
     tid, uid = _resolve_identity(tenant_id, user_id)
+    app_id, _ = _resolve_app_id(app_id, uid)
     res = await _api_call("GET", f"/applications/{app_id}", tenant_id=tid, user_id=uid)
     return {
         "ok": True,
@@ -336,18 +355,20 @@ async def get_application(
 
 @mcp.tool()
 async def update_app_from_doc(
-    app_id: int,
     md_content: str,
+    app_id: int = 0,
     tenant_id: int = 0,
     user_id: int = 0,
 ) -> dict:
     """上传新版 markdown 设计文档作为应用 vN+1 版，自动 diff 出变更计划返回。
 
+    app_id 可省略（=0）：自动用 ai-builder 中用户当前编辑的应用。
     用户拿到 change_plan_id 后可以审查，然后调 execute_change_plan 真正执行。
 
     返回 { version, change_plan_id, summary（变更摘要：新增/修改/删除统计）}。
     """
     tid, uid = _resolve_identity(tenant_id, user_id)
+    app_id, _ = _resolve_app_id(app_id, uid)
     files = {"file": (f"app-{app_id}-doc.md", md_content.encode("utf-8"), "text/markdown")}
     sse = await _api_call_sse_collect(
         "POST",
@@ -371,16 +392,18 @@ async def update_app_from_doc(
 
 @mcp.tool()
 async def get_change_plan(
-    app_id: int,
     plan_id: int,
+    app_id: int = 0,
     tenant_id: int = 0,
     user_id: int = 0,
 ) -> dict:
     """查看变更计划详情：包含所有 actions（新增/修改/删除的角色、字典、模型、表单、权限）。
 
+    app_id 可省略（=0）：自动用当前编辑应用。
     用户决策"是否执行"前应该读这个 plan。
     """
     tid, uid = _resolve_identity(tenant_id, user_id)
+    app_id, _ = _resolve_app_id(app_id, uid)
     res = await _api_call(
         "GET", f"/applications/{app_id}/change-plans/{plan_id}", tenant_id=tid, user_id=uid
     )
@@ -389,16 +412,18 @@ async def get_change_plan(
 
 @mcp.tool()
 async def execute_change_plan(
-    app_id: int,
     plan_id: int,
+    app_id: int = 0,
     tenant_id: int = 0,
     user_id: int = 0,
 ) -> dict:
     """执行变更计划：把 plan 里所有 actions 落到底层（创建/修改/删除模型、表单、权限等）。
 
+    app_id 可省略（=0）：自动用当前编辑应用。
     这是真正"动手"的工具，调用前请确认用户已经审过 change plan。
     """
     tid, uid = _resolve_identity(tenant_id, user_id)
+    app_id, _ = _resolve_app_id(app_id, uid)
     sse = await _api_call_sse_collect(
         "POST",
         f"/applications/{app_id}/change-plans/{plan_id}/execute",
@@ -418,11 +443,14 @@ async def execute_change_plan(
 
 @mcp.tool()
 async def publish_application(
-    app_id: int,
+    app_id: int = 0,
     tenant_id: int = 0,
     user_id: int = 0,
 ) -> dict:
-    """把应用上线：同步当前配置到底层 aPaaS 平台，让真实用户可访问。"""
+    """把应用上线：同步当前配置到底层 aPaaS 平台，让真实用户可访问。
+
+    app_id 可省略（=0）：自动用当前编辑应用。"""
     tid, uid = _resolve_identity(tenant_id, user_id)
+    app_id, _ = _resolve_app_id(app_id, uid)
     res = await _api_call("POST", f"/applications/{app_id}/publish", tenant_id=tid, user_id=uid)
     return {"ok": True, "app_id": app_id, "result": res}

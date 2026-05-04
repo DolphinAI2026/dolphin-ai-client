@@ -20,6 +20,7 @@ from app.routes import (
     coding_v2,
     coding_v2_spec,
     conversations,
+    current_app,
     dolphin_sso,
     generation_steps,
     git_connection,
@@ -186,6 +187,7 @@ app.include_router(voice.router, prefix="/api")
 app.include_router(sandboxes.router, prefix="/api")
 app.include_router(dolphin_sso.router, prefix="/api")
 app.include_router(app_adjust_chat.router, prefix="/api")
+app.include_router(current_app.router, prefix="/api")
 # 平台代理路由注册在根路径（/platform/... 和 /backend/... 需要直接匹配）
 app.include_router(platform_proxy.router)
 

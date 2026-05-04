@@ -1329,6 +1329,22 @@ const builderCurrentAppId = computed<number | null>(() => {
 // 左侧对话区是否用 dolphin agent (a73e75cd81) 接管 — true 走 dolphin iframe，false 走原 SPEC chat
 const useDolphinChat = ref(true)
 
+// 把"当前编辑的应用"上报给后端，让 dolphin agent 调 MCP 工具时不传 app_id 也能拿到
+async function syncCurrentAppToBackend() {
+  const appId = builderCurrentAppId.value
+  if (!appId) return
+  try {
+    await request.post('/builder/current-app', {
+      app_id: appId,
+      app_name: builderAppDisplayName.value || '',
+    })
+  } catch (err) {
+    console.warn('[current-app sync] failed', err)
+  }
+}
+watch(builderCurrentAppId, () => { void syncCurrentAppToBackend() }, { immediate: true })
+watch(builderAppDisplayName, () => { void syncCurrentAppToBackend() })
+
 // "AI 调整" 按钮：新窗口打开 dolphin 完整 chat 页（享受 dolphin 完整对话/历史/记忆/项目管理）
 async function openDolphinFullChat() {
   const appId = builderCurrentAppId.value
