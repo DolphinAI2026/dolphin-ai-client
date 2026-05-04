@@ -334,22 +334,47 @@ async def get_application(
     tenant_id: int = 0,
     user_id: int = 0,
 ) -> dict:
-    """查看指定应用的详情：基础信息、状态、当前文档版本、配置摘要。
+    """查看指定应用的完整详情，**包括当前 SPEC 的 markdown 文档**（含所有字段、表单、权限）。
 
-    app_id 可省略（=0）：自动用 ai-builder 中用户当前编辑的应用。"""
+    app_id 可省略（=0）：自动用 ai-builder 中用户当前编辑的应用。
+
+    返回的 spec_markdown 是当前应用的完整结构化设计文档（6 章节标准格式：
+    应用信息/角色/数据字典/数据模型/表单/权限）。基于它你可以直接做增量改动
+    （加字段/改字段/删字段），不用再问用户'有哪些字段'。
+
+    spec_markdown_source 标识来源：
+    - 'doc_version': 用户上传过设计文档，直接用最新版
+    - 'config_preview_rendered': 应用没设计文档但有 SPEC 配置，从 config 反向渲染
+    - 'empty': 真空白草稿，需要从零写文档
+    """
     tid, uid = _resolve_identity(tenant_id, user_id)
     app_id, _ = _resolve_app_id(app_id, uid)
-    res = await _api_call("GET", f"/applications/{app_id}", tenant_id=tid, user_id=uid)
+    # 拉应用 meta
+    meta = await _api_call("GET", f"/applications/{app_id}", tenant_id=tid, user_id=uid)
+    # 拉 spec markdown（容错）
+    spec_md = ""
+    spec_source = "unknown"
+    spec_version = None
+    try:
+        spec = await _api_call("GET", f"/applications/{app_id}/spec-markdown", tenant_id=tid, user_id=uid)
+        spec_md = (spec or {}).get("markdown") or ""
+        spec_source = (spec or {}).get("source") or "unknown"
+        spec_version = (spec or {}).get("version")
+    except Exception as exc:
+        logger.warning("get_application spec-markdown 拉取失败: %s", exc)
     return {
         "ok": True,
-        "app_id": (res or {}).get("id"),
-        "app_name": (res or {}).get("app_name"),
-        "app_code": (res or {}).get("app_code"),
-        "status": (res or {}).get("status"),
-        "current_doc_version": (res or {}).get("current_doc_version"),
-        "platform_env_id": (res or {}).get("platform_env_id"),
-        "apaas_app_id": (res or {}).get("apaas_app_id"),
+        "app_id": (meta or {}).get("id"),
+        "app_name": (meta or {}).get("app_name"),
+        "app_code": (meta or {}).get("app_code"),
+        "status": (meta or {}).get("status"),
+        "current_doc_version": (meta or {}).get("current_doc_version"),
+        "platform_env_id": (meta or {}).get("platform_env_id"),
+        "apaas_app_id": (meta or {}).get("apaas_app_id"),
         "app_view_url": f"https://agent.dfy.definesys.cn/ai-builder/chat?app_id={app_id}",
+        "spec_markdown": spec_md,
+        "spec_markdown_source": spec_source,
+        "spec_markdown_version": spec_version,
     }
 
 

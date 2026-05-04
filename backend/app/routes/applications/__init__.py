@@ -436,6 +436,91 @@ async def get_application(
     return resp
 
 
+@router.get("/{app_id}/spec-markdown")
+async def get_application_spec_as_markdown(
+    app_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """返回应用当前 SPEC（config_preview）反向渲染的标准 markdown 设计文档。
+
+    给 dolphin agent / 其他 MCP 调用方用：直接把当前应用结构作为 6 章节 md
+    返回，agent 可以基于它增量改字段而不用问用户'有哪些字段'。
+
+    优先级：
+    1) 最新 DocumentVersion.raw_content（如果有）
+    2) 否则用 config_preview 反向渲染（标准 6 章节模板）
+    3) 都没有 → 返回空 + 标志说明这是空白草稿
+    """
+    from sqlalchemy import desc as sa_desc
+    from app.models import DocumentVersion
+    from ._helpers import _render_doc_content_from_config
+
+    result = await db.execute(
+        select(Application).where(
+            Application.id == app_id,
+            Application.tenant_id == ctx.tenant_id,
+        )
+    )
+    app = result.scalar_one_or_none()
+    if not app:
+        raise HTTPException(status_code=404, detail="应用不存在")
+    await check_resource_permission(ctx, db, app, "application", Action.VIEW)
+
+    # 1) 拉最新 doc version
+    doc_result = await db.execute(
+        select(DocumentVersion)
+        .where(DocumentVersion.application_id == app_id)
+        .order_by(sa_desc(DocumentVersion.version))
+        .limit(1)
+    )
+    latest_doc = doc_result.scalar_one_or_none()
+    if latest_doc and latest_doc.raw_content and latest_doc.raw_content.strip():
+        return {
+            "ok": True,
+            "app_id": app_id,
+            "app_name": app.app_name,
+            "app_code": app.app_code,
+            "source": "doc_version",
+            "version": latest_doc.version,
+            "markdown": latest_doc.raw_content,
+        }
+
+    # 2) 反向渲染 config_preview
+    cfg = app.config_preview
+    if cfg:
+        if isinstance(cfg, str):
+            try:
+                import json as _json
+                cfg = _json.loads(cfg)
+            except Exception:
+                cfg = None
+        if cfg:
+            md = _render_doc_content_from_config(app.app_name or "", app.app_code or "", cfg)
+            if md and md.strip():
+                return {
+                    "ok": True,
+                    "app_id": app_id,
+                    "app_name": app.app_name,
+                    "app_code": app.app_code,
+                    "source": "config_preview_rendered",
+                    "version": None,
+                    "markdown": md,
+                }
+
+    # 3) 空白草稿
+    return {
+        "ok": True,
+        "app_id": app_id,
+        "app_name": app.app_name,
+        "app_code": app.app_code,
+        "source": "empty",
+        "version": None,
+        "markdown": "",
+        "note": "应用当前为空白草稿，无设计文档也无现有 SPEC 配置。",
+    }
+
+
 @router.post("", response_model=ApplicationResponse)
 async def create_application(
     data: ApplicationCreate,
