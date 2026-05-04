@@ -331,7 +331,12 @@ async def execute_change_plan(
                         detail = f"{detail}（{platform_client_error}）"
                     sync_errors.append(detail)
                 elif not apaas_app_id:
-                    sync_errors.append("应用尚未关联平台应用，无法执行平台更新")
+                    # 草稿应用（未关联底层平台）：跳过平台同步，只更新本地 SPEC
+                    # （让用户在 ai-builder 中边调边迭代，发布后再同步到底层）
+                    yield {"event": "progress", "data": json.dumps({
+                        "step": "应用为草稿状态，跳过平台同步，仅更新本地设计配置",
+                    }, ensure_ascii=False)}
+                    sync_result = {"message": "草稿应用：仅更新本地配置，未同步到 aPaaS 平台"}
 
             if sync_errors:
                 detail = "；".join([str(err) for err in sync_errors if err]) or "平台同步失败"
