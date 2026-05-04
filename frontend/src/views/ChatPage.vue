@@ -1349,12 +1349,21 @@ watch(() => [route.query.app_id, store.preview.appName], () => {
 })
 
 // dolphin agent 改完应用后右侧不联动 — 轮询应用 updated_at 变了就重新加载 SPEC
+// 注意：不用 watch(builderCurrentAppId, ...) — 直接 ref source 建立 watcher 会
+// 在 setup 同步阶段触发 computed 求值，而 builderCurrentAppId 引用的 existingAppId
+// 在文件后面才声明，会触发 TDZ。改成 polling 内部对比 _lastAppId 检测切换。
+let _lastAppId: number | null = null
 let _lastAppUpdatedAt = ''
 let _appPollTimer: any = null
 async function pollAppForChanges() {
   let appId: number | null = null
   try { appId = builderCurrentAppId.value } catch { return }
   if (!appId || !useDolphinChat.value) return
+  // 切应用 → 重置基线
+  if (appId !== _lastAppId) {
+    _lastAppId = appId
+    _lastAppUpdatedAt = ''
+  }
   try {
     const app: any = await applicationApi.get(appId)
     const updatedAt = String(app?.updated_at || app?.last_updated_at || '')
@@ -1391,8 +1400,6 @@ function startAppPolling() {
 function stopAppPolling() {
   if (_appPollTimer) { clearInterval(_appPollTimer); _appPollTimer = null }
 }
-// 切应用时重置 last_updated 基线
-watch(builderCurrentAppId, () => { _lastAppUpdatedAt = '' })
 
 // "AI 调整" 按钮：新窗口打开 dolphin 完整 chat 页（享受 dolphin 完整对话/历史/记忆/项目管理）
 async function openDolphinFullChat() {
