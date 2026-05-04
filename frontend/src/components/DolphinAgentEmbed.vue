@@ -1,13 +1,18 @@
 <template>
   <div class="dolphin-agent-embed">
-    <!-- 当前应用上下文提示条 — dolphin embed 不接受外部 system context 注入，
-         所以在 iframe 上方显示当前编辑应用，用户一键 copy 到剪贴板 -->
+    <!-- 当前应用上下文提示条 -->
     <div v-if="appId" class="dolphin-ctx-bar">
       <span class="ctx-icon" aria-hidden="true">📌</span>
       <span class="ctx-text">
         当前在编辑 <strong>{{ appName || `应用 #${appId}` }}</strong>
         <code>#{{ appId }}</code>
       </span>
+      <button
+        type="button"
+        class="ctx-fresh-btn"
+        title="清掉 AI 助手的旧对话历史，开新会话（旧对话会话保留在 dolphin 历史里）"
+        @click="newSession"
+      >🔄 新对话</button>
       <button
         type="button"
         class="ctx-copy-btn"
@@ -19,7 +24,7 @@
     <iframe
       v-if="iframeSrc"
       ref="iframeRef"
-      :key="props.appId || 0"
+      :key="`${props.appId || 0}-${sessionNonce}`"
       :src="iframeSrc"
       class="dolphin-agent-iframe"
       :title="title || 'AI 助手'"
@@ -54,6 +59,8 @@ const props = defineProps<{
 
 const cfg = ref<DolphinConfig | null>(null)
 const iframeRef = ref<HTMLIFrameElement | null>(null)
+// 用作 cache-bust，"新对话" 按钮点击时递增让 iframe 重挂载
+const sessionNonce = ref(0)
 
 const iframeSrc = computed(() => {
   if (!cfg.value) return ''
@@ -64,8 +71,20 @@ const iframeSrc = computed(() => {
   // 把当前应用上下文带进 query，dolphin agent 自身可以读到
   if (props.appId) url.searchParams.set('app_id', String(props.appId))
   if (props.appName) url.searchParams.set('app_name', props.appName)
+  // cache bust：sessionNonce 变化时强制 iframe 重新加载（开新会话）
+  if (sessionNonce.value > 0) url.searchParams.set('_n', String(sessionNonce.value))
   return url.toString()
 })
+
+function newSession() {
+  // 1) 通过 postMessage 试探 dolphin 是否支持 type=new_session（future-proof）
+  if (cfg.value && iframeRef.value?.contentWindow) {
+    const origin = new URL(cfg.value.server_url).origin
+    iframeRef.value.contentWindow.postMessage({ type: 'new_session' }, origin)
+  }
+  // 2) 改 nonce → iframe key 变 → 重挂载
+  sessionNonce.value = Date.now()
+}
 
 async function loadConfig() {
   if (!localStorage.getItem('token')) return
@@ -99,16 +118,12 @@ onBeforeUnmount(() => {
   window.removeEventListener('message', onMessage)
 })
 
-// 应用切换时不重建 iframe，只通过 postMessage 通知 dolphin 上下文变化
-// （dolphin embed 当前可能不响应 type=context，但留着 future-proof）
-watch(() => [props.appId, props.appName], () => {
-  if (!cfg.value || !iframeRef.value?.contentWindow) return
-  const origin = new URL(cfg.value.server_url).origin
-  iframeRef.value.contentWindow.postMessage({
-    type: 'context',
-    app_id: props.appId || null,
-    app_name: props.appName || '',
-  }, origin)
+// 应用切换时自动开新会话 — dolphin 后端按 dolphin user 维度复用 session，
+// 不主动 reset 的话切应用后 chat 历史还会带上一个应用的对话上下文
+watch(() => props.appId, (newId, oldId) => {
+  if (oldId && newId && oldId !== newId) {
+    sessionNonce.value = Date.now()
+  }
 })
 
 // 上下文复制：把 "当前编辑应用 #X (Y)" copy 到剪贴板，方便用户直接粘贴到对话
@@ -174,7 +189,8 @@ async function copyContext() {
   margin-left: 2px;
 }
 
-.dolphin-ctx-bar .ctx-copy-btn {
+.dolphin-ctx-bar .ctx-copy-btn,
+.dolphin-ctx-bar .ctx-fresh-btn {
   border: 1px solid #c4b5fd;
   background: #fff;
   color: #6d28d9;
@@ -186,9 +202,14 @@ async function copyContext() {
   flex-shrink: 0;
 }
 
-.dolphin-ctx-bar .ctx-copy-btn:hover {
+.dolphin-ctx-bar .ctx-copy-btn:hover,
+.dolphin-ctx-bar .ctx-fresh-btn:hover {
   background: #f3eefe;
   border-color: #a78bfa;
+}
+
+.dolphin-ctx-bar .ctx-fresh-btn {
+  background: #faf6ff;
 }
 
 .dolphin-agent-iframe {
