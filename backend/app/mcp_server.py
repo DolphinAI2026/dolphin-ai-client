@@ -378,6 +378,50 @@ async def get_application(
     }
 
 
+async def _normalize_md_via_llm(target_md: str, current_spec_md: str) -> str:
+    """LLM 兜底：dolphin agent 给的 md 若不符合严格 6 章节模板，
+    用 LLM 基于 current_spec_md（已知规范）+ target_md（agent 改动后）
+    生成规范化的新版 md。
+
+    避免每次都 LLM 调用 — 调用方仅在 strict parse 失败时才用此兜底。
+    """
+    from app.llm_client import LLMClient
+    llm = LLMClient()
+    prompt = f"""你是 ai-builder 设计文档规范化助手。
+
+输入：
+1. CURRENT — 当前应用规范的 markdown 设计文档（标准 6 章节格式）
+2. TARGET — 用户/AI 期望的新版文档，但格式可能不规范（章节标题/表格列错乱）
+
+任务：
+- 输出规范的新版 markdown，**章节顺序、标题、表格列名严格按 CURRENT 的格式**
+- 应用 TARGET 中的实质改动（加字段/改字段/删字段等）
+- 不要凭空添加 TARGET 没要求的内容
+- 保留 CURRENT 中所有 TARGET 没改动的内容
+
+只输出规范化后的 markdown 全文，不要解释，不要 ```markdown``` 包裹。
+
+=== CURRENT ===
+{current_spec_md}
+
+=== TARGET ===
+{target_md}
+
+=== 输出（规范化新版 markdown）==="""
+    res = await llm.chat_completion(
+        [{"role": "user", "content": prompt}],
+        max_tokens=12000,
+        temperature=0.0,
+    )
+    msg = (res.get("choices") or [{}])[0].get("message") or {}
+    out = (msg.get("content") or "").strip()
+    # 去掉可能的 code fence
+    if out.startswith("```"):
+        lines = out.split("\n")
+        out = "\n".join(lines[1:-1] if lines[-1].startswith("```") else lines[1:])
+    return out.strip() or target_md  # LLM 没出东西就用原始 md
+
+
 @mcp.tool()
 async def update_app_from_doc(
     md_content: str,
@@ -388,20 +432,37 @@ async def update_app_from_doc(
     """上传新版 markdown 设计文档作为应用 vN+1 版，自动 diff 出变更计划返回。
 
     app_id 可省略（=0）：自动用 ai-builder 中用户当前编辑的应用。
-    用户拿到 change_plan_id 后可以审查，然后调 execute_change_plan 真正执行。
+    md_content 不严格符合模板时（章节/表格列差异），后端会自动 LLM 规范化重试一次。
 
-    返回 { version, change_plan_id, summary（变更摘要：新增/修改/删除统计）}。
+    返回 { version, change_plan_id, summary（变更摘要）}。
     """
     tid, uid = _resolve_identity(tenant_id, user_id)
     app_id, _ = _resolve_app_id(app_id, uid)
-    files = {"file": (f"app-{app_id}-doc.md", md_content.encode("utf-8"), "text/markdown")}
-    sse = await _api_call_sse_collect(
-        "POST",
-        f"/applications/{app_id}/upload-doc-version",
-        tenant_id=tid,
-        user_id=uid,
-        files=files,
-    )
+
+    async def _attempt_upload(md: str) -> dict:
+        files = {"file": (f"app-{app_id}-doc.md", md.encode("utf-8"), "text/markdown")}
+        return await _api_call_sse_collect(
+            "POST",
+            f"/applications/{app_id}/upload-doc-version",
+            tenant_id=tid, user_id=uid, files=files,
+        )
+
+    sse = await _attempt_upload(md_content)
+    # strict parse 失败 → 拉 current spec_md 用 LLM 规范化重试一次
+    if sse["errors"]:
+        first_err = str(sse["errors"][-1])
+        if "未按模板规范" in first_err or "DocNotStandardError" in first_err or "解析失败" in first_err:
+            logger.info("严格解析失败，启用 LLM 规范化兜底重试")
+            try:
+                spec = await _api_call("GET", f"/applications/{app_id}/spec-markdown", tenant_id=tid, user_id=uid)
+                current_md = (spec or {}).get("markdown") or ""
+                if current_md:
+                    normalized = await _normalize_md_via_llm(md_content, current_md)
+                    if normalized and normalized != md_content:
+                        sse = await _attempt_upload(normalized)
+            except Exception as exc:
+                logger.warning("LLM 规范化兜底失败: %s", exc)
+
     if sse["errors"]:
         raise RuntimeError(f"上传新版 md 失败：{sse['errors'][-1]}")
     done = sse.get("done") or {}
