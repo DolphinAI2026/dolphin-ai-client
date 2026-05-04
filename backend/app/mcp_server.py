@@ -77,10 +77,21 @@ def _sign_service_token(user_id: int, tenant_id: int, ttl_minutes: int = 15) -> 
 
 
 def _resolve_identity(tenant_id: int | None, user_id: int | None) -> tuple[int, int]:
+    """dolphin 自定义 Body 字段硬编码 (tenant_id=1, user_id=1)，但 ai-builder
+    用户多租户多账号，直接用这俩调内部 API 会跨租户错位（看不到当前用户的应用）。
+
+    从 current_app 反查真实身份覆盖；找不到才用 dolphin 传的兜底。
+    """
+    from app.routes.current_app import get_current_app_for_user
+    rec = get_current_app_for_user(int(user_id) if user_id else 1)
+    if rec:
+        real_uid, real_tid, _, _ = rec
+        return int(real_tid), int(real_uid)
     if not tenant_id or not user_id:
         raise ValueError(
-            "缺少 tenant_id / user_id —— 请在得小帆 MCP 配置「自定义 Body 字段」里加上 "
-            '{"tenant_id": <num>, "user_id": <num>}'
+            "缺少身份信息：dolphin Body 字段未注入 tenant_id/user_id 且 ai-builder 没有"
+            "用户当前应用状态。请在 ai-builder 中打开某个应用页（让前端 sync 状态），"
+            "或在得小帆 MCP 配置「自定义 Body 字段」里加上 tenant_id/user_id。"
         )
     return int(tenant_id), int(user_id)
 
@@ -90,15 +101,15 @@ def _resolve_app_id(app_id: int | None, user_id: int) -> tuple[int, str]:
     返回 (app_id, app_name)。"""
     if app_id and app_id > 0:
         return int(app_id), ""
-    # 延迟 import，避免循环依赖
     from app.routes.current_app import get_current_app_for_user
-    rec = get_current_app_for_user(int(user_id))
+    rec = get_current_app_for_user(int(user_id) if user_id else 1)
     if not rec:
         raise ValueError(
             "未指定 app_id，且后端没有用户当前编辑应用的状态。"
             "请告诉助手具体的应用 ID（数字），或先在 ai-builder UI 打开某个应用。"
         )
-    return rec
+    _, _, real_app_id, real_app_name = rec
+    return int(real_app_id), real_app_name
 
 
 async def _api_call(

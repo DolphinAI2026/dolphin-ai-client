@@ -1319,13 +1319,16 @@ const useDolphinChat = ref(true)
 // 把"当前编辑的应用"上报给后端，让 dolphin agent 调 MCP 工具时不传 app_id 也能拿到
 const currentAppSynced = ref(false)
 async function syncCurrentAppToBackend() {
-  // 注意 builderCurrentAppId 内部引用 existingAppId（在本文件后面才声明），
-  // 所以这个函数不能在 setup 同步阶段调用，只能 onMounted 之后或 watch 触发。
+  // ★ 优先用 URL query 里的 app_id（最权威），不要 fallback 到 builderCurrentAppId
+  // computed —— 它会回退到 store.currentApp，可能是切页前的旧值，导致 dolphin
+  // 收到错误的 ctx app_id。
+  const appIdFromQuery = Number(route.query.app_id)
   let appId: number | null = null
-  try {
-    appId = builderCurrentAppId.value
-  } catch {
-    return  // TDZ 阶段忽略
+  if (Number.isFinite(appIdFromQuery) && appIdFromQuery > 0) {
+    appId = appIdFromQuery
+  } else {
+    // 没 query 就 fallback computed（容错）
+    try { appId = builderCurrentAppId.value } catch { return }
   }
   if (!appId) {
     currentAppSynced.value = false

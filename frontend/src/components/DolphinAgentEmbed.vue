@@ -118,6 +118,9 @@ async function injectAppContext() {
     ctxInjected.value = true
     return
   }
+  // 等 ai-builder backend current_app state 同步好（让 mcp 调用能反查真实租户）
+  // 给 ChatPage 的 syncCurrentAppToBackend 一点时间
+  await new Promise(r => setTimeout(r, 300))
   try {
     await request.post('/dolphin/init-app-context', {
       app_id: props.appId,
