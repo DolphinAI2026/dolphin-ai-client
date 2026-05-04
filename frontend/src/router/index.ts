@@ -29,8 +29,13 @@ const router = createRouter({
       meta: { requiresAuth: true },
       beforeEnter: (to, _from, next) => {
         // dolphin 接管对话后，ChatPage 必须绑定到某个应用才有意义
-        // 没 app_id / conversation_id / deploy_app_id 的话本质是空白页，重定向到应用列表
-        const hasAppCtx = to.query.app_id || to.params.id || to.query.deploy_app_id || to.query.conversation_id
+        // 没 app_id / conversation_id / deploy_app_id / from=upload（Landing 传 md
+        // 创建新应用流程，靠 store.pendingFile，没有 app_id）的话直接重定向应用列表
+        const hasAppCtx = to.query.app_id
+          || to.params.id
+          || to.query.deploy_app_id
+          || to.query.conversation_id
+          || to.query.from === 'upload'
         if (!hasAppCtx) {
           next({ path: '/apps' })
         } else {

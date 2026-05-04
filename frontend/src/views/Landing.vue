@@ -412,9 +412,9 @@ function acceptCoworkFiles(files: File[]) {
   previewStore.pendingBuilderModelId = selectedLandingModelId.value
 
   if (files.length === 1 && /\.(md|markdown)$/i.test(files[0].name)) {
-    // 标准 md 快路：直接进 Builder 解析
+    // 标准 md 快路：直接进 Builder 解析（query.from=upload 让 router 守卫放行）
     previewStore.pendingFile = files[0]
-    router.push({ path: '/chat' })
+    router.push({ path: '/chat', query: { from: 'upload' } })
     return
   }
 
