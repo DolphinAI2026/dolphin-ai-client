@@ -1,7 +1,9 @@
 <template><div class="ha-sdk-host" /></template>
 
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { onMounted, watch } from 'vue'
+import { storeToRefs } from 'pinia'
+import { useUserStore } from '@/stores/user'
 import request from '@/utils/request'
 
 declare global {
@@ -14,6 +16,7 @@ declare global {
       toggle?: () => void
     }
     __dolphinInited?: boolean
+    __dolphinInitedFor?: string  // 当前 init 对应的 ai-builder token，切账号时不一致就 reinit
   }
 }
 
@@ -24,14 +27,22 @@ interface DolphinConfig {
   agent_code: string
   tenant_id: string
   access_token: string
+  dolphin_user_id?: number | null
 }
 
-async function bootOnce() {
-  // window 级单例：跨 HMR / 跨组件实例都只 init 一次，避免 dolphin SDK 把浮窗挂多份
-  if (window.__dolphinInited) return
+async function fetchConfigAndInit() {
+  const aibToken = localStorage.getItem('token') || ''
+  if (!aibToken) return  // 未登录，浮窗等下次
 
-  // ai-builder 登录后向后端拿 dolphin SDK 配置（access_token 不下发到前端 build）
-  if (!localStorage.getItem('token')) return  // 未登录，浮窗等下次
+  // 已经为当前账号 init 过了 — 不重复
+  if (window.__dolphinInited && window.__dolphinInitedFor === aibToken) return
+
+  // 切账号 / 切租户 / token 刷新：先拆掉旧浮窗
+  if (window.__dolphinInited && window.DolphinAgent?.destroy) {
+    try { window.DolphinAgent.destroy() } catch (e) { /* ignore */ }
+  }
+  window.__dolphinInited = false
+  window.__dolphinInitedFor = ''
 
   let cfg: DolphinConfig
   try {
@@ -46,6 +57,7 @@ async function bootOnce() {
   }
 
   window.__dolphinInited = true
+  window.__dolphinInitedFor = aibToken
 
   const init = () => {
     if (!window.DolphinAgent) return
@@ -78,7 +90,14 @@ async function bootOnce() {
   document.body.appendChild(s)
 }
 
-onMounted(() => { void bootOnce() })
+onMounted(() => {
+  void fetchConfigAndInit()
+  // 切账号 / 切租户：user store token 变化 → destroy + 重 init
+  // 浮窗里显示的就是新账号在 dolphin 镜像账号的身份，不再串号
+  const userStore = useUserStore()
+  const { token } = storeToRefs(userStore)
+  watch(token, () => { void fetchConfigAndInit() })
+})
 </script>
 
 <style scoped>
