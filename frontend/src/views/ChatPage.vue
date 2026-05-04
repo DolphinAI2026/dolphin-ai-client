@@ -174,18 +174,14 @@
       >
       <!-- 左侧对话区 -->
       <div v-if="showBuilderChatSide" class="chat-side">
-        <!-- ★ Dolphin Agent 嵌入版本：左侧对话由 dolphin a73e75cd81 (应用调整助手) 接管 -->
-        <!-- 等 currentAppSynced=true 才渲染 iframe，否则 dolphin 调 MCP 时拿不到当前应用 -->
+        <!-- ★ Dolphin Agent 嵌入：左侧对话由 dolphin agent 接管。组件内部自己处理 ctx 注入，
+             父级直接渲染（不再用 currentAppSynced 守门 — 避免 sync 失败时永远空白） -->
         <DolphinAgentEmbed
-          v-if="useDolphinChat && (!builderCurrentAppId || currentAppSynced)"
+          v-if="useDolphinChat"
           :app-id="builderCurrentAppId"
           :app-name="builderAppDisplayName"
           title="AI-Builder 应用调整助手"
         />
-        <div v-else-if="useDolphinChat" class="dolphin-loading-pane">
-          <span class="loading-dot"></span>
-          <span>正在切换上下文…</span>
-        </div>
         <template v-else>
         <div v-if="appParsedMode" class="doc-view-wrap">
           <div class="doc-view-head">

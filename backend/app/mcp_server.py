@@ -387,19 +387,27 @@ async def _normalize_md_via_llm(target_md: str, current_spec_md: str) -> str:
     """
     from app.llm_client import LLMClient
     llm = LLMClient()
-    prompt = f"""你是 ai-builder 设计文档规范化助手。
+    prompt = f"""你是 ai-builder 设计文档规范化助手，输出严格符合 6 章节模板的 markdown。
 
-输入：
-1. CURRENT — 当前应用规范的 markdown 设计文档（标准 6 章节格式）
-2. TARGET — 用户/AI 期望的新版文档，但格式可能不规范（章节标题/表格列错乱）
+## 输入
+- CURRENT：当前应用规范的 markdown（标准 6 章节，作为格式模板）
+- TARGET：AI 助手生成的新版 md（含用户改动，但格式可能错乱）
 
-任务：
-- 输出规范的新版 markdown，**章节顺序、标题、表格列名严格按 CURRENT 的格式**
-- 应用 TARGET 中的实质改动（加字段/改字段/删字段等）
-- 不要凭空添加 TARGET 没要求的内容
-- 保留 CURRENT 中所有 TARGET 没改动的内容
+## 任务
+**先 diff 出 TARGET 相对 CURRENT 的实质改动（新增/修改/删除字段、表单、权限等）**，
+然后基于 CURRENT 的格式：
+1. 完整保留 CURRENT 所有内容
+2. **应用 diff 出的所有改动**（必须保住 TARGET 中比 CURRENT 多/改/少的字段）
+3. 章节顺序、标题、表格列名 = CURRENT 格式
+4. 输出完整的新版 markdown
 
-只输出规范化后的 markdown 全文，不要解释，不要 ```markdown``` 包裹。
+## ⚠️ 关键原则（违反会导致用户改动丢失）
+- **不要丢失** TARGET 中比 CURRENT 多出来的字段、表单、权限行
+- 用户最常见的改动是"加一个字段"，diff 出来 TARGET 比 CURRENT 多一行 → 必须**新版里保留这行**
+- 不能因为 TARGET 格式乱就把改动一起丢掉
+- 如果不确定改动是什么，宁可多保留 TARGET 内容，也不要丢
+
+只输出规范化后的 markdown 全文。不要解释。不要 ```markdown``` 包裹。
 
 === CURRENT ===
 {current_spec_md}
@@ -407,7 +415,7 @@ async def _normalize_md_via_llm(target_md: str, current_spec_md: str) -> str:
 === TARGET ===
 {target_md}
 
-=== 输出（规范化新版 markdown）==="""
+=== 规范化新版 markdown ==="""
     res = await llm.chat_completion(
         [{"role": "user", "content": prompt}],
         max_tokens=12000,

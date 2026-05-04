@@ -16,16 +16,21 @@
     </div>
 
     <iframe
-      v-if="iframeSrc && ctxInjected"
+      v-if="iframeSrc"
       ref="iframeRef"
       :key="props.appId || 0"
       :src="iframeSrc"
       class="dolphin-agent-iframe"
       :title="title || 'AI 助手'"
+      :style="{ opacity: ctxInjected ? 1 : 0.6 }"
     />
     <div v-else class="dolphin-loading">
       <span class="spinner">⟳</span>
-      <span>{{ iframeSrc ? '正在告诉 AI 助手当前应用…' : '加载 AI 助手...' }}</span>
+      <span>加载 AI 助手...</span>
+    </div>
+    <div v-if="iframeSrc && !ctxInjected" class="dolphin-ctx-syncing">
+      <span class="spinner">⟳</span>
+      <span>正在告诉 AI 助手当前应用…</span>
     </div>
   </div>
 </template>
@@ -255,6 +260,22 @@ async function copyContext() {
   gap: 8px;
   color: #8a9099;
   font-size: 14px;
+}
+
+.dolphin-ctx-syncing {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(124, 58, 237, 0.92);
+  color: #fff;
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: 16px;
+  z-index: 10;
 }
 
 .spinner {
