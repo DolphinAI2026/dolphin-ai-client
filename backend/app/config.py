@@ -103,6 +103,11 @@ class Settings(BaseSettings):
     dolphin_app_adjust_agent_code: str = ""  # 应用详情页"AI 调整应用"按钮用的"应用调整助手"
     dolphin_tenant_id: str = "default"
     dolphin_service_token: str = ""  # 后端持有的 dolphin admin/service JWT，永远不下发到前端 build
+    # 是否用 ai-builder 用户在 dolphin 镜像账号的 token 调 chat（每用户独立身份显示）。
+    # 需要 dolphin admin 先把 agent (ad16e01570 / a73e75cd81) 设为 tenant 公开，否则
+    # 镜像用户调 chat send 会报"应用不存在"。默认 False，session 都在 admin 名下，
+    # 靠 project_id 隔离会话历史（u{ai_user_id} 应用 #{app_id}）。
+    dolphin_use_user_token: bool = False
 
     # Vibe Coding 运行时
     # - "auto"   : docker daemon + vibe-sandbox 镜像可用就走 docker；否则 fallback host

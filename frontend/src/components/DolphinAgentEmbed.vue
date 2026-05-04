@@ -58,6 +58,9 @@ const props = defineProps<{
 
 const cfg = ref<DolphinConfig | null>(null)
 const iframeRef = ref<HTMLIFrameElement | null>(null)
+// init-app-context 返回的 dolphin project_id；用来在 iframe URL 上加 ?project_id=
+// 让 dolphin sidebar 只显示该 ai-builder 用户当前 app 的会话历史（跨用户/跨 app 不污染）
+const projectId = ref<number | null>(null)
 
 const iframeSrc = computed(() => {
   if (!cfg.value) return ''
@@ -68,6 +71,7 @@ const iframeSrc = computed(() => {
   // 把当前应用上下文带进 query，dolphin agent 自身可以读到
   if (props.appId) url.searchParams.set('app_id', String(props.appId))
   if (props.appName) url.searchParams.set('app_name', props.appName)
+  if (projectId.value) url.searchParams.set('project_id', String(projectId.value))
   return url.toString()
 })
 
@@ -98,10 +102,11 @@ async function injectAppContext() {
   // 等 ai-builder backend current_app state 同步好（让 mcp 调用能反查真实租户）
   await new Promise(r => setTimeout(r, 300))
   try {
-    await request.post('/dolphin/init-app-context', {
-      app_id: props.appId,
-      app_name: props.appName || '',
-    })
+    const res = await request.post<unknown, { ok: boolean; project_id?: number; session_id?: string }>(
+      '/dolphin/init-app-context',
+      { app_id: props.appId, app_name: props.appName || '' },
+    )
+    if (res?.project_id) projectId.value = res.project_id
   } catch (err) {
     console.warn('[DolphinAgentEmbed] init-app-context failed', err)
   } finally {
@@ -137,6 +142,7 @@ onBeforeUnmount(() => {
 watch(() => props.appId, async (newId, oldId) => {
   if (oldId !== newId) {
     ctxInjected.value = false
+    projectId.value = null  // 强制 iframe URL 在 init-app-context 返回新 project_id 前不带旧值
     await injectAppContext()
   }
 })
