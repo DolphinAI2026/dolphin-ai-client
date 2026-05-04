@@ -79,8 +79,37 @@ async function loadConfig() {
 // 进入或切换应用时，让 backend 帮我们在 dolphin 里开一个含 ctx 的新 session
 // 这样 iframe 加载时 dolphin embed 会 resume 这个新 session，agent 已知道当前应用
 const ctxInjected = ref(false)
+
+// 本地缓存窗口：同一应用 1 小时内不重复 init（避免每次刷新都建新 session）
+const CTX_CACHE_TTL_MS = 60 * 60 * 1000
+function _ctxCacheKey(appId: number) {
+  return `dolphin-ctx-app-${appId}`
+}
+function _isCtxStillFresh(appId: number): boolean {
+  try {
+    const raw = localStorage.getItem(_ctxCacheKey(appId))
+    if (!raw) return false
+    const ts = Number(raw)
+    return !isNaN(ts) && Date.now() - ts < CTX_CACHE_TTL_MS
+  } catch {
+    return false
+  }
+}
+function _markCtxInjected(appId: number) {
+  try {
+    localStorage.setItem(_ctxCacheKey(appId), String(Date.now()))
+  } catch {
+    // ignore quota errors
+  }
+}
+
 async function injectAppContext() {
   if (!props.appId) {
+    ctxInjected.value = true
+    return
+  }
+  // 同 app 1 小时内已 init 过 → 跳过，让 iframe 直接 resume 现有 session
+  if (_isCtxStillFresh(props.appId)) {
     ctxInjected.value = true
     return
   }
@@ -89,6 +118,7 @@ async function injectAppContext() {
       app_id: props.appId,
       app_name: props.appName || '',
     })
+    _markCtxInjected(props.appId)
   } catch (err) {
     console.warn('[DolphinAgentEmbed] init-app-context failed', err)
     // 不阻塞 — 即使失败 iframe 仍能用，只是 agent 第一次问会问应用

@@ -65,6 +65,60 @@ async def get_dolphin_config(
     }
 
 
+# (user_id, app_id) → dolphin project_id 映射，进程内缓存
+# 生产多实例时换 redis；trial 单实例够用
+from threading import RLock as _RLock
+_PROJECT_MAP: dict[tuple[int, int], int] = {}
+_PROJECT_MAP_LOCK = _RLock()
+# dolphin agent code → dolphin agent db_id (用于创建项目)
+# 简化：trial 只用一个 agent (a73e75cd81 → 80)，硬编码兜底
+_DOLPHIN_AGENT_DB_ID_DEFAULT = 80
+
+
+async def _ensure_dolphin_project(
+    *,
+    user_id: int,
+    app_id: int,
+    app_name: str,
+    server_url: str,
+    service_token: str,
+    agent_db_id: int = _DOLPHIN_AGENT_DB_ID_DEFAULT,
+) -> Optional[int]:
+    """返回该 (user, app) 的 dolphin project_id；没有就创建一个。"""
+    key = (int(user_id), int(app_id))
+    with _PROJECT_MAP_LOCK:
+        cached = _PROJECT_MAP.get(key)
+    if cached:
+        return cached
+
+    title = f"应用 #{app_id}"
+    if app_name:
+        title = f"{title} · {app_name}"
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                f"{server_url.rstrip('/')}/api/agents/agent/projects",
+                json={"agent_id": agent_db_id, "name": title[:60]},
+                headers={
+                    "Authorization": f"Bearer {service_token}",
+                    "Content-Type": "application/json",
+                },
+            )
+            if resp.status_code in (200, 201):
+                data = resp.json()
+                pid = data.get("id") or (data.get("data") or {}).get("id")
+                if pid:
+                    with _PROJECT_MAP_LOCK:
+                        _PROJECT_MAP[key] = int(pid)
+                    return int(pid)
+            else:
+                logger.warning("dolphin create project HTTP %d: %s", resp.status_code, resp.text[:200])
+    except Exception as exc:
+        logger.warning("dolphin create project failed: %s", exc)
+    return None
+
+
 class InitContextRequest(BaseModel):
     app_id: int
     app_name: str = ""
@@ -98,15 +152,27 @@ async def init_app_context_session(
         + "请用一句话简短确认上下文已锁定到这个应用。"
     )
 
+    # 给当前 (user, app) 拿/创 dolphin 项目，session 自动归到这个项目下
+    project_id = await _ensure_dolphin_project(
+        user_id=ctx.user.id,
+        app_id=req.app_id,
+        app_name=req.app_name,
+        server_url=settings.dolphin_server_url,
+        service_token=settings.dolphin_service_token,
+    )
+
     url = f"{settings.dolphin_server_url.rstrip('/')}/api/agentChat/agent/run/chat/{agent_code}"
     session_id = ""
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             # dolphin chat send 是流式响应，我们只关心 sessionid header（响应一开始就发）
+            chat_body: dict = {"input": ctx_msg, "budget_preset": "complex"}
+            if project_id:
+                chat_body["project_id"] = project_id
             async with client.stream(
                 "POST",
                 url,
-                json={"input": ctx_msg, "budget_preset": "complex"},
+                json=chat_body,
                 headers={
                     "Authorization": f"Bearer {settings.dolphin_service_token}",
                     "Content-Type": "application/json",
@@ -129,4 +195,4 @@ async def init_app_context_session(
         # 不阻塞前端 — 即使 ctx 注入失败 iframe 仍可正常使用
         return {"ok": False, "error": str(exc)[:200]}
 
-    return {"ok": True, "session_id": session_id, "agent_code": agent_code}
+    return {"ok": True, "session_id": session_id, "agent_code": agent_code, "project_id": project_id}
