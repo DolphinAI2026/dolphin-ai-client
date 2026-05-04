@@ -2535,56 +2535,171 @@ function fileName(filePath: string) {
   background: #0b0f16;
 }
 
-:global(html[data-theme="dark"] .oc-import-main,
-:global(html[data-theme="dark"] .oc-import-side),
-:global(html[data-theme="dark"] .oc-studio-header),
-:global(html[data-theme="dark"] .oc-chat-panel),
-:global(html[data-theme="dark"] .oc-spec-panel),
-:global(html[data-theme="dark"] .oc-context-panel),
-:global(html[data-theme="dark"] .oc-plan-card),
-:global(html[data-theme="dark"] .oc-git-card),
-:global(html[data-theme="dark"] .oc-top-btn),
-:global(html[data-theme="dark"] .oc-secondary),
-:global(html[data-theme="dark"] .oc-mini),
-:global(html[data-theme="dark"] .oc-soft-badge),
-:global(html[data-theme="dark"] .oc-field input),
-:global(html[data-theme="dark"] .oc-field textarea),
-:global(html[data-theme="dark"] .oc-composer textarea),
-:global(html[data-theme="dark"] .oc-spec-editor),
-:global(html[data-theme="dark"] .oc-prompts button),
-:global(html[data-theme="dark"] .oc-file-chips button)) {
+:global(html[data-theme="dark"] .oc-import-main) {
+  background: #111318;
+  border-color: rgba(148, 163, 184, 0.14);
+  color: rgba(226, 232, 240, 0.86);
+  box-shadow: none;
+}
+:global(html[data-theme="dark"] .oc-import-side) {
+  background: #111318;
+  border-color: rgba(148, 163, 184, 0.14);
+  color: rgba(226, 232, 240, 0.86);
+  box-shadow: none;
+}
+:global(html[data-theme="dark"] .oc-studio-header) {
+  background: #111318;
+  border-color: rgba(148, 163, 184, 0.14);
+  color: rgba(226, 232, 240, 0.86);
+  box-shadow: none;
+}
+:global(html[data-theme="dark"] .oc-chat-panel) {
+  background: #111318;
+  border-color: rgba(148, 163, 184, 0.14);
+  color: rgba(226, 232, 240, 0.86);
+  box-shadow: none;
+}
+:global(html[data-theme="dark"] .oc-spec-panel) {
+  background: #111318;
+  border-color: rgba(148, 163, 184, 0.14);
+  color: rgba(226, 232, 240, 0.86);
+  box-shadow: none;
+}
+:global(html[data-theme="dark"] .oc-context-panel) {
+  background: #111318;
+  border-color: rgba(148, 163, 184, 0.14);
+  color: rgba(226, 232, 240, 0.86);
+  box-shadow: none;
+}
+:global(html[data-theme="dark"] .oc-plan-card) {
+  background: #111318;
+  border-color: rgba(148, 163, 184, 0.14);
+  color: rgba(226, 232, 240, 0.86);
+  box-shadow: none;
+}
+:global(html[data-theme="dark"] .oc-git-card) {
+  background: #111318;
+  border-color: rgba(148, 163, 184, 0.14);
+  color: rgba(226, 232, 240, 0.86);
+  box-shadow: none;
+}
+:global(html[data-theme="dark"] .oc-top-btn) {
+  background: #111318;
+  border-color: rgba(148, 163, 184, 0.14);
+  color: rgba(226, 232, 240, 0.86);
+  box-shadow: none;
+}
+:global(html[data-theme="dark"] .oc-secondary) {
+  background: #111318;
+  border-color: rgba(148, 163, 184, 0.14);
+  color: rgba(226, 232, 240, 0.86);
+  box-shadow: none;
+}
+:global(html[data-theme="dark"] .oc-mini) {
+  background: #111318;
+  border-color: rgba(148, 163, 184, 0.14);
+  color: rgba(226, 232, 240, 0.86);
+  box-shadow: none;
+}
+:global(html[data-theme="dark"] .oc-soft-badge) {
+  background: #111318;
+  border-color: rgba(148, 163, 184, 0.14);
+  color: rgba(226, 232, 240, 0.86);
+  box-shadow: none;
+}
+:global(html[data-theme="dark"] .oc-field input) {
+  background: #111318;
+  border-color: rgba(148, 163, 184, 0.14);
+  color: rgba(226, 232, 240, 0.86);
+  box-shadow: none;
+}
+:global(html[data-theme="dark"] .oc-field textarea) {
+  background: #111318;
+  border-color: rgba(148, 163, 184, 0.14);
+  color: rgba(226, 232, 240, 0.86);
+  box-shadow: none;
+}
+:global(html[data-theme="dark"] .oc-composer textarea) {
+  background: #111318;
+  border-color: rgba(148, 163, 184, 0.14);
+  color: rgba(226, 232, 240, 0.86);
+  box-shadow: none;
+}
+:global(html[data-theme="dark"] .oc-spec-editor) {
+  background: #111318;
+  border-color: rgba(148, 163, 184, 0.14);
+  color: rgba(226, 232, 240, 0.86);
+  box-shadow: none;
+}
+:global(html[data-theme="dark"] .oc-prompts button) {
+  background: #111318;
+  border-color: rgba(148, 163, 184, 0.14);
+  color: rgba(226, 232, 240, 0.86);
+  box-shadow: none;
+}
+:global(html[data-theme="dark"] .oc-file-chips button) {
   background: #111318;
   border-color: rgba(148, 163, 184, 0.14);
   color: rgba(226, 232, 240, 0.86);
   box-shadow: none;
 }
 
-:global(html[data-theme="dark"] .oc-import-main h1,
-:global(html[data-theme="dark"] .oc-studio-header h1),
-:global(html[data-theme="dark"] .oc-panel-head strong),
-:global(html[data-theme="dark"] .oc-file-preview summary)) {
+:global(html[data-theme="dark"] .oc-import-main h1) {
+  color: rgba(248, 250, 252, 0.94);
+}
+:global(html[data-theme="dark"] .oc-studio-header h1) {
+  color: rgba(248, 250, 252, 0.94);
+}
+:global(html[data-theme="dark"] .oc-panel-head strong) {
+  color: rgba(248, 250, 252, 0.94);
+}
+:global(html[data-theme="dark"] .oc-file-preview summary) {
   color: rgba(248, 250, 252, 0.94);
 }
 
-:global(html[data-theme="dark"] .oc-import-main p,
-:global(html[data-theme="dark"] .oc-studio-header p),
-:global(html[data-theme="dark"] .oc-panel-head span),
-:global(html[data-theme="dark"] .oc-spec-footer span),
-:global(html[data-theme="dark"] .oc-empty-text)) {
+:global(html[data-theme="dark"] .oc-import-main p) {
+  color: rgba(203, 213, 225, 0.66);
+}
+:global(html[data-theme="dark"] .oc-studio-header p) {
+  color: rgba(203, 213, 225, 0.66);
+}
+:global(html[data-theme="dark"] .oc-panel-head span) {
+  color: rgba(203, 213, 225, 0.66);
+}
+:global(html[data-theme="dark"] .oc-spec-footer span) {
+  color: rgba(203, 213, 225, 0.66);
+}
+:global(html[data-theme="dark"] .oc-empty-text) {
   color: rgba(203, 213, 225, 0.66);
 }
 
-:global(html[data-theme="dark"] .oc-panel-head,
-:global(html[data-theme="dark"] .oc-composer),
-:global(html[data-theme="dark"] .oc-spec-footer),
-:global(html[data-theme="dark"] .oc-file-chips),
-:global(html[data-theme="dark"] .oc-plan-spec-editor)) {
+:global(html[data-theme="dark"] .oc-panel-head) {
+  background: rgba(13, 17, 23, 0.82);
+  border-color: rgba(148, 163, 184, 0.14);
+}
+:global(html[data-theme="dark"] .oc-composer) {
+  background: rgba(13, 17, 23, 0.82);
+  border-color: rgba(148, 163, 184, 0.14);
+}
+:global(html[data-theme="dark"] .oc-spec-footer) {
+  background: rgba(13, 17, 23, 0.82);
+  border-color: rgba(148, 163, 184, 0.14);
+}
+:global(html[data-theme="dark"] .oc-file-chips) {
+  background: rgba(13, 17, 23, 0.82);
+  border-color: rgba(148, 163, 184, 0.14);
+}
+:global(html[data-theme="dark"] .oc-plan-spec-editor) {
   background: rgba(13, 17, 23, 0.82);
   border-color: rgba(148, 163, 184, 0.14);
 }
 
-:global(html[data-theme="dark"] .oc-primary,
-:global(html[data-theme="dark"] .oc-composer-bar > button)) {
+:global(html[data-theme="dark"] .oc-primary) {
+  background: #eef2ff;
+  border-color: #eef2ff;
+  color: #111318;
+}
+:global(html[data-theme="dark"] .oc-composer-bar > button) {
   background: #eef2ff;
   border-color: #eef2ff;
   color: #111318;
