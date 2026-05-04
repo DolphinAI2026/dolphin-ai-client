@@ -52,24 +52,8 @@
         </div>
       </template>
       <template #actions>
-        <!-- AI 调整应用：跳转到 dolphin 应用调整助手完整 chat 页面（带历史/记忆/项目管理） -->
-        <button
-          v-if="builderCurrentAppId"
-          class="builder-top-action ai-adjust-action"
-          type="button"
-          title="打开完整 AI 对话页（dolphin 应用调整助手）"
-          @click="openDolphinFullChat"
-        >
-          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" style="margin-right: 5px;" aria-hidden="true">
-            <rect x="3.5" y="5" width="9" height="7" rx="1.5" stroke="currentColor" stroke-width="1.3"/>
-            <circle cx="6.2" cy="8.4" r="0.9" fill="currentColor"/>
-            <circle cx="9.8" cy="8.4" r="0.9" fill="currentColor"/>
-            <path d="M8 5V3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
-            <circle cx="8" cy="2.5" r="0.7" fill="currentColor"/>
-            <path d="M2 9v1.5M14 9v1.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
-          </svg>
-          AI 调整
-        </button>
+        <!-- "AI 调整" 按钮已删（dolphin embed 是默认入口），"部署到预览" 按钮已删
+             （让 dolphin agent 调 publish_application 工具发布，统一对话 UX）-->
         <!-- 面板关闭时：顶部展示一个"展开产物面板"按钮；面板打开时由 SPEC 行内 .preview-panel-collapse 关闭，此处隐藏（合并成同一个 toggle） -->
         <button
           v-if="showBuilderArtifactToggle && !showAnyBuilderArtifactPanel"
@@ -86,9 +70,10 @@
             </svg>
           </span>
         </button>
-        <!-- 创建过程按钮已下移到 SPEC 行的 preview-side-actions（更贴近上下文）；这里只保留首次部署/无应用兜底 -->
+        <!-- "部署到预览"按钮已删 — dolphin 模式下让 agent 调 publish_application 工具发布。
+             非 dolphin 模式（useDolphinChat=false 时回退老 SPEC chat 流程）保留兜底 -->
         <button
-          v-if="showStartDeployButton"
+          v-if="!useDolphinChat && showStartDeployButton"
           class="builder-top-action primary"
           type="button"
           @click="startDeployFromTopbar"
@@ -96,7 +81,7 @@
         >
           部署到预览
         </button>
-        <button v-else-if="!showBuildHistoryButton" class="builder-top-action primary" type="button" @click="router.push('/devops')">
+        <button v-else-if="!useDolphinChat && !showBuildHistoryButton" class="builder-top-action primary" type="button" @click="router.push('/devops')">
           运行流水线
         </button>
         <button
