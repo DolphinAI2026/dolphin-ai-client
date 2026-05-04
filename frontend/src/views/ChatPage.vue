@@ -1331,7 +1331,14 @@ const useDolphinChat = ref(true)
 
 // 把"当前编辑的应用"上报给后端，让 dolphin agent 调 MCP 工具时不传 app_id 也能拿到
 async function syncCurrentAppToBackend() {
-  const appId = builderCurrentAppId.value
+  // 注意 builderCurrentAppId 内部引用 existingAppId（在本文件后面才声明），
+  // 所以这个函数不能在 setup 同步阶段调用，只能 onMounted 之后或 watch 触发。
+  let appId: number | null = null
+  try {
+    appId = builderCurrentAppId.value
+  } catch {
+    return  // TDZ 阶段忽略
+  }
   if (!appId) return
   try {
     await request.post('/builder/current-app', {
@@ -1342,8 +1349,8 @@ async function syncCurrentAppToBackend() {
     console.warn('[current-app sync] failed', err)
   }
 }
-watch(builderCurrentAppId, () => { void syncCurrentAppToBackend() }, { immediate: true })
-watch(builderAppDisplayName, () => { void syncCurrentAppToBackend() })
+// 不用 immediate:true（会触发 TDZ）；改用普通 watch + onMounted 兜底首次同步
+watch(() => [route.query.app_id, store.preview.appName], () => { void syncCurrentAppToBackend() })
 
 // "AI 调整" 按钮：新窗口打开 dolphin 完整 chat 页（享受 dolphin 完整对话/历史/记忆/项目管理）
 async function openDolphinFullChat() {
@@ -7322,6 +7329,8 @@ function handleMessageAction(action: { kind?: string; label?: string }) {
 
 onMounted(async () => {
   store.showConnectModal = false
+  // 同步当前应用到 backend（让 dolphin agent 通过 user_id 拿到 current app_id）
+  void syncCurrentAppToBackend()
   const initialPrompt = typeof route.query.prompt === 'string' ? route.query.prompt : ''
   // 加载左侧 sidebar 应用列表（不阻塞主流程）
   if (!embedMode.value) loadSidebarApps()
