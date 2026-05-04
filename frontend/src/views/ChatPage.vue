@@ -1,8 +1,9 @@
 <template>
   <WorkbenchShell>
   <div class="chat-page-shell">
+    <!-- dolphin 接管对话后 sidebar 跟 /apps 列表重复，整体隐藏 -->
     <SessionSidebar
-      v-if="!embedMode"
+      v-if="!embedMode && !useDolphinChat"
       module-name="AI 搭建"
       brand-color="#8b5cf6"
       :sessions="sidebarSessionItems"
@@ -28,7 +29,7 @@
             <span>/</span>
             <strong>AI-Builder</strong>
           </div>
-          <div v-if="showViewSwitcher" class="mode-switcher">
+          <div v-if="showViewSwitcher && !useDolphinChat" class="mode-switcher">
             <button class="mode-btn" :class="{ active: activeView === 'builder' }" @click="setActiveView('builder')">
               <span class="mode-btn-icon" aria-hidden="true">
                 <svg viewBox="0 0 16 16" fill="none">
@@ -106,7 +107,7 @@
         >↗</button>
       </template>
     </TopBar>
-    <div v-if="!embedMode" v-show="showBuilderPhaseStrip" class="builder-chat-phase-strip">
+    <div v-if="!embedMode && !useDolphinChat" v-show="showBuilderPhaseStrip" class="builder-chat-phase-strip">
       <div class="builder-chat-agent">
         <span class="builder-chat-agent-dot"></span>
         <span>搭建智能体</span>
@@ -1365,6 +1366,52 @@ watch(() => [route.query.app_id, store.preview.appName], () => {
   currentAppSynced.value = false  // 切应用时立即清，避免旧 sync 状态误用
   void syncCurrentAppToBackend()
 })
+
+// dolphin agent 改完应用后右侧不联动 — 轮询应用 updated_at 变了就重新加载 SPEC
+let _lastAppUpdatedAt = ''
+let _appPollTimer: any = null
+async function pollAppForChanges() {
+  let appId: number | null = null
+  try { appId = builderCurrentAppId.value } catch { return }
+  if (!appId || !useDolphinChat.value) return
+  try {
+    const app: any = await applicationApi.get(appId)
+    const updatedAt = String(app?.updated_at || app?.last_updated_at || '')
+    if (!_lastAppUpdatedAt) {
+      _lastAppUpdatedAt = updatedAt
+      return
+    }
+    if (updatedAt && updatedAt !== _lastAppUpdatedAt) {
+      _lastAppUpdatedAt = updatedAt
+      // SPEC 变了：把 config_preview 重新写进 store.preview，触发右侧面板重渲染
+      const cpRaw = app?.config_preview
+      if (cpRaw) {
+        const cp = typeof cpRaw === 'string' ? JSON.parse(cpRaw) : cpRaw
+        const data = cp?.data || cp
+        if (data && typeof data === 'object') {
+          if (data.appName) store.preview.appName = data.appName
+          if (Array.isArray(data.models)) store.preview.models = data.models
+          if (Array.isArray(data.forms)) store.preview.forms = data.forms
+          if (Array.isArray(data.roles)) (store.preview as any).roles = data.roles
+          if (Array.isArray(data.dicts)) (store.preview as any).dicts = data.dicts
+          if (Array.isArray(data.permissions)) (store.preview as any).permissions = data.permissions
+        }
+      }
+      ElMessage.info({ message: 'AI 助手已更新应用配置，右侧已自动刷新', duration: 2500 })
+    }
+  } catch {
+    // ignore
+  }
+}
+function startAppPolling() {
+  if (_appPollTimer) return
+  _appPollTimer = setInterval(() => { void pollAppForChanges() }, 5000)
+}
+function stopAppPolling() {
+  if (_appPollTimer) { clearInterval(_appPollTimer); _appPollTimer = null }
+}
+// 切应用时重置 last_updated 基线
+watch(builderCurrentAppId, () => { _lastAppUpdatedAt = '' })
 
 // "AI 调整" 按钮：新窗口打开 dolphin 完整 chat 页（享受 dolphin 完整对话/历史/记忆/项目管理）
 async function openDolphinFullChat() {
@@ -7345,6 +7392,8 @@ onMounted(async () => {
   store.showConnectModal = false
   // 同步当前应用到 backend（让 dolphin agent 通过 user_id 拿到 current app_id）
   void syncCurrentAppToBackend()
+  // dolphin 改 SPEC 后右侧自动刷新 — 启动 5s 轮询
+  startAppPolling()
   const initialPrompt = typeof route.query.prompt === 'string' ? route.query.prompt : ''
   // 加载左侧 sidebar 应用列表（不阻塞主流程）
   if (!embedMode.value) loadSidebarApps()
@@ -7734,6 +7783,7 @@ watch(() => route.query.view, (nextView) => {
 onBeforeUnmount(() => {
   clearPendingChatAttachments()
   clearPlatformIframeRepairTimer()
+  stopAppPolling()
 })
 
 watch(activeView, (view) => {
