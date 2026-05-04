@@ -1687,7 +1687,7 @@ function fileName(filePath: string) {
   padding: 0 16px;
 }
 
-:global(html[data-theme="dark"]) .oc-ide-toolbar {
+:global(html[data-theme="dark"] .oc-ide-toolbar) {
   --toolbar-bg: #0d1117;
   --toolbar-border: rgba(240, 246, 252, 0.1);
   --toolbar-text: #c9d1d9;
@@ -2129,7 +2129,7 @@ function fileName(filePath: string) {
   background: #ffffff;
 }
 
-:global(html[data-theme="dark"]) .oc-workspace-body {
+:global(html[data-theme="dark"] .oc-workspace-body) {
   background: #0d1117;
 }
 
@@ -2167,7 +2167,7 @@ function fileName(filePath: string) {
   border-left: 1px solid rgba(15, 23, 42, 0.10);
   overflow: hidden;
 }
-:global(html[data-theme="dark"]) .oc-preview-side {
+:global(html[data-theme="dark"] .oc-preview-side) {
   background: #0a0a0c;
   border-left-color: rgba(255, 255, 255, 0.06);
 }
@@ -2193,7 +2193,7 @@ function fileName(filePath: string) {
   background: #f7f8fa;
   font-size: 12px;
 }
-:global(html[data-theme="dark"]) .oc-preview-head {
+:global(html[data-theme="dark"] .oc-preview-head) {
   background: #111318 !important;
   border-bottom-color: rgba(148, 163, 184, 0.14) !important;
   color: rgba(226, 232, 240, 0.86) !important;
@@ -2210,7 +2210,7 @@ function fileName(filePath: string) {
   font-family: ui-monospace, Menlo, monospace;
   min-width: 0;
 }
-:global(html[data-theme="dark"]) .oc-preview-url-select {
+:global(html[data-theme="dark"] .oc-preview-url-select) {
   background: rgba(255, 255, 255, 0.04) !important;
   border-color: rgba(148, 163, 184, 0.18) !important;
   color: rgba(226, 232, 240, 0.86) !important;
@@ -2224,7 +2224,7 @@ function fileName(filePath: string) {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-:global(html[data-theme="dark"]) .oc-preview-url-static {
+:global(html[data-theme="dark"] .oc-preview-url-static) {
   color: rgba(226, 232, 240, 0.7) !important;
 }
 .oc-preview-actions {
@@ -2251,10 +2251,10 @@ function fileName(filePath: string) {
   background: rgba(15, 23, 42, 0.06);
   color: #0f172a;
 }
-:global(html[data-theme="dark"]) .oc-preview-icon-btn {
+:global(html[data-theme="dark"] .oc-preview-icon-btn) {
   color: rgba(226, 232, 240, 0.7) !important;
 }
-:global(html[data-theme="dark"]) .oc-preview-icon-btn:hover {
+:global(html[data-theme="dark"] .oc-preview-icon-btn:hover) {
   background: rgba(255, 255, 255, 0.08) !important;
   color: rgba(226, 232, 240, 0.95) !important;
 }
@@ -2264,7 +2264,7 @@ function fileName(filePath: string) {
   border: 0;
   background: #ffffff;
 }
-:global(html[data-theme="dark"]) .oc-preview-frame {
+:global(html[data-theme="dark"] .oc-preview-frame) {
   background: #ffffff;  /* 用户应用大概率是白底，强制亮 */
 }
 
@@ -2287,7 +2287,7 @@ function fileName(filePath: string) {
   font-family: ui-monospace, Menlo, monospace;
   letter-spacing: 0.3px;
 }
-:global(html[data-theme="dark"]) .oc-id-chip-top {
+:global(html[data-theme="dark"] .oc-id-chip-top) {
   border-color: rgba(255, 255, 255, 0.10);
   background: rgba(255, 255, 255, 0.04);
   color: rgba(226, 232, 240, 0.7);
@@ -2301,7 +2301,7 @@ function fileName(filePath: string) {
   border: 1px solid rgba(116, 128, 171, 0.16);
   border-radius: 8px;
 }
-:global(html[data-theme="dark"]) .oc-view-toggle-top {
+:global(html[data-theme="dark"] .oc-view-toggle-top) {
   background: rgba(255, 255, 255, 0.04);
   border-color: rgba(255, 255, 255, 0.08);
 }
@@ -2323,17 +2323,17 @@ function fileName(filePath: string) {
 .oc-view-tab-top:hover:not(.active) {
   color: #1f2937;
 }
-:global(html[data-theme="dark"]) .oc-view-tab-top {
+:global(html[data-theme="dark"] .oc-view-tab-top) {
   color: rgba(226, 232, 240, 0.6);
 }
-:global(html[data-theme="dark"]) .oc-view-tab-top:hover:not(.active) {
+:global(html[data-theme="dark"] .oc-view-tab-top:hover:not(.active)) {
   color: #e8eaed;
 }
 .oc-view-tab-top.active {
   background: rgba(9, 105, 218, 0.12);
   color: #0969da;
 }
-:global(html[data-theme="dark"]) .oc-view-tab-top.active {
+:global(html[data-theme="dark"] .oc-view-tab-top.active) {
   background: rgba(88, 166, 255, 0.16);
   color: #58a6ff;
 }
@@ -2347,7 +2347,7 @@ function fileName(filePath: string) {
   border-color: #0969da;
   color: #0969da;
 }
-:global(html[data-theme="dark"]) .oc-top-btn.active {
+:global(html[data-theme="dark"] .oc-top-btn.active) {
   background: rgba(88, 166, 255, 0.10);
   border-color: rgba(88, 166, 255, 0.36);
   color: #79b8ff;
@@ -2366,7 +2366,7 @@ function fileName(filePath: string) {
   font-weight: 600;
   margin-left: 2px;
 }
-:global(html[data-theme="dark"]) .oc-preview-badge {
+:global(html[data-theme="dark"] .oc-preview-badge) {
   background: #58a6ff;
   color: #0d1117;
 }
@@ -2410,7 +2410,7 @@ function fileName(filePath: string) {
   color: #0969da;
 }
 
-:global(html[data-theme="dark"]) .oc-view-tab.active {
+:global(html[data-theme="dark"] .oc-view-tab.active) {
   background: rgba(88, 166, 255, 0.16);
   color: #58a6ff;
 }
@@ -2531,60 +2531,60 @@ function fileName(filePath: string) {
   }
 }
 
-:global(html[data-theme="dark"]) .oc-page {
+:global(html[data-theme="dark"] .oc-page) {
   background: #0b0f16;
 }
 
-:global(html[data-theme="dark"]) .oc-import-main,
-:global(html[data-theme="dark"]) .oc-import-side,
-:global(html[data-theme="dark"]) .oc-studio-header,
-:global(html[data-theme="dark"]) .oc-chat-panel,
-:global(html[data-theme="dark"]) .oc-spec-panel,
-:global(html[data-theme="dark"]) .oc-context-panel,
-:global(html[data-theme="dark"]) .oc-plan-card,
-:global(html[data-theme="dark"]) .oc-git-card,
-:global(html[data-theme="dark"]) .oc-top-btn,
-:global(html[data-theme="dark"]) .oc-secondary,
-:global(html[data-theme="dark"]) .oc-mini,
-:global(html[data-theme="dark"]) .oc-soft-badge,
-:global(html[data-theme="dark"]) .oc-field input,
-:global(html[data-theme="dark"]) .oc-field textarea,
-:global(html[data-theme="dark"]) .oc-composer textarea,
-:global(html[data-theme="dark"]) .oc-spec-editor,
-:global(html[data-theme="dark"]) .oc-prompts button,
-:global(html[data-theme="dark"]) .oc-file-chips button {
+:global(html[data-theme="dark"] .oc-import-main,
+:global(html[data-theme="dark"] .oc-import-side),
+:global(html[data-theme="dark"] .oc-studio-header),
+:global(html[data-theme="dark"] .oc-chat-panel),
+:global(html[data-theme="dark"] .oc-spec-panel),
+:global(html[data-theme="dark"] .oc-context-panel),
+:global(html[data-theme="dark"] .oc-plan-card),
+:global(html[data-theme="dark"] .oc-git-card),
+:global(html[data-theme="dark"] .oc-top-btn),
+:global(html[data-theme="dark"] .oc-secondary),
+:global(html[data-theme="dark"] .oc-mini),
+:global(html[data-theme="dark"] .oc-soft-badge),
+:global(html[data-theme="dark"] .oc-field input),
+:global(html[data-theme="dark"] .oc-field textarea),
+:global(html[data-theme="dark"] .oc-composer textarea),
+:global(html[data-theme="dark"] .oc-spec-editor),
+:global(html[data-theme="dark"] .oc-prompts button),
+:global(html[data-theme="dark"] .oc-file-chips button)) {
   background: #111318;
   border-color: rgba(148, 163, 184, 0.14);
   color: rgba(226, 232, 240, 0.86);
   box-shadow: none;
 }
 
-:global(html[data-theme="dark"]) .oc-import-main h1,
-:global(html[data-theme="dark"]) .oc-studio-header h1,
-:global(html[data-theme="dark"]) .oc-panel-head strong,
-:global(html[data-theme="dark"]) .oc-file-preview summary {
+:global(html[data-theme="dark"] .oc-import-main h1,
+:global(html[data-theme="dark"] .oc-studio-header h1),
+:global(html[data-theme="dark"] .oc-panel-head strong),
+:global(html[data-theme="dark"] .oc-file-preview summary)) {
   color: rgba(248, 250, 252, 0.94);
 }
 
-:global(html[data-theme="dark"]) .oc-import-main p,
-:global(html[data-theme="dark"]) .oc-studio-header p,
-:global(html[data-theme="dark"]) .oc-panel-head span,
-:global(html[data-theme="dark"]) .oc-spec-footer span,
-:global(html[data-theme="dark"]) .oc-empty-text {
+:global(html[data-theme="dark"] .oc-import-main p,
+:global(html[data-theme="dark"] .oc-studio-header p),
+:global(html[data-theme="dark"] .oc-panel-head span),
+:global(html[data-theme="dark"] .oc-spec-footer span),
+:global(html[data-theme="dark"] .oc-empty-text)) {
   color: rgba(203, 213, 225, 0.66);
 }
 
-:global(html[data-theme="dark"]) .oc-panel-head,
-:global(html[data-theme="dark"]) .oc-composer,
-:global(html[data-theme="dark"]) .oc-spec-footer,
-:global(html[data-theme="dark"]) .oc-file-chips,
-:global(html[data-theme="dark"]) .oc-plan-spec-editor {
+:global(html[data-theme="dark"] .oc-panel-head,
+:global(html[data-theme="dark"] .oc-composer),
+:global(html[data-theme="dark"] .oc-spec-footer),
+:global(html[data-theme="dark"] .oc-file-chips),
+:global(html[data-theme="dark"] .oc-plan-spec-editor)) {
   background: rgba(13, 17, 23, 0.82);
   border-color: rgba(148, 163, 184, 0.14);
 }
 
-:global(html[data-theme="dark"]) .oc-primary,
-:global(html[data-theme="dark"]) .oc-composer-bar > button {
+:global(html[data-theme="dark"] .oc-primary,
+:global(html[data-theme="dark"] .oc-composer-bar > button)) {
   background: #eef2ff;
   border-color: #eef2ff;
   color: #111318;
