@@ -94,7 +94,8 @@ const navItems = computed(() => [
   { key: 'home', label: '首页', path: '/', icon: HomeFilled },
   { key: 'apps', label: '应用', path: '/apps', icon: Grid },
   { key: 'ai-chat', label: 'AI 对话', path: '/ai-chat', icon: ChatLineRound },
-  { key: 'chat', label: 'AI 搭建', path: '/chat', icon: MagicStick },
+  // 'AI 搭建' 入口已隐藏 — dolphin 接管对话后默认从'我的应用'进具体应用编辑页
+  // { key: 'chat', label: 'AI 搭建', path: '/chat', icon: MagicStick },
   { key: 'ide', label: 'AI 编码', path: '/coding', icon: Monitor },
   { key: 'online-coding', label: 'Vibe Coding', path: '/vibe-coding', icon: Connection },
   { key: 'sandboxes', label: '沙箱监控', path: '/vibe-coding/sandboxes', icon: Odometer },
