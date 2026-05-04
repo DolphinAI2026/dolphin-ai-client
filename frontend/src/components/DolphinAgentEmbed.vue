@@ -19,6 +19,7 @@
     <iframe
       v-if="iframeSrc"
       ref="iframeRef"
+      :key="props.appId || 0"
       :src="iframeSrc"
       class="dolphin-agent-iframe"
       :title="title || 'AI 助手'"

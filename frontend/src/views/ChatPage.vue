@@ -189,12 +189,17 @@
       <!-- 左侧对话区 -->
       <div v-if="showBuilderChatSide" class="chat-side">
         <!-- ★ Dolphin Agent 嵌入版本：左侧对话由 dolphin a73e75cd81 (应用调整助手) 接管 -->
+        <!-- 等 currentAppSynced=true 才渲染 iframe，否则 dolphin 调 MCP 时拿不到当前应用 -->
         <DolphinAgentEmbed
-          v-if="useDolphinChat"
+          v-if="useDolphinChat && (!builderCurrentAppId || currentAppSynced)"
           :app-id="builderCurrentAppId"
           :app-name="builderAppDisplayName"
           title="AI-Builder 应用调整助手"
         />
+        <div v-else-if="useDolphinChat" class="dolphin-loading-pane">
+          <span class="loading-dot"></span>
+          <span>正在切换上下文…</span>
+        </div>
         <template v-else>
         <div v-if="appParsedMode" class="doc-view-wrap">
           <div class="doc-view-head">
@@ -1330,6 +1335,7 @@ const builderCurrentAppId = computed<number | null>(() => {
 const useDolphinChat = ref(true)
 
 // 把"当前编辑的应用"上报给后端，让 dolphin agent 调 MCP 工具时不传 app_id 也能拿到
+const currentAppSynced = ref(false)
 async function syncCurrentAppToBackend() {
   // 注意 builderCurrentAppId 内部引用 existingAppId（在本文件后面才声明），
   // 所以这个函数不能在 setup 同步阶段调用，只能 onMounted 之后或 watch 触发。
@@ -1339,18 +1345,26 @@ async function syncCurrentAppToBackend() {
   } catch {
     return  // TDZ 阶段忽略
   }
-  if (!appId) return
+  if (!appId) {
+    currentAppSynced.value = false
+    return
+  }
   try {
     await request.post('/builder/current-app', {
       app_id: appId,
       app_name: builderAppDisplayName.value || '',
     })
+    currentAppSynced.value = true
   } catch (err) {
     console.warn('[current-app sync] failed', err)
+    currentAppSynced.value = false
   }
 }
 // 不用 immediate:true（会触发 TDZ）；改用普通 watch + onMounted 兜底首次同步
-watch(() => [route.query.app_id, store.preview.appName], () => { void syncCurrentAppToBackend() })
+watch(() => [route.query.app_id, store.preview.appName], () => {
+  currentAppSynced.value = false  // 切应用时立即清，避免旧 sync 状态误用
+  void syncCurrentAppToBackend()
+})
 
 // "AI 调整" 按钮：新窗口打开 dolphin 完整 chat 页（享受 dolphin 完整对话/历史/记忆/项目管理）
 async function openDolphinFullChat() {
@@ -7958,6 +7972,30 @@ watch(conversationId, (id) => {
   border: 1px solid rgba(128, 145, 255, 0.12);
   background: linear-gradient(180deg, rgba(255,255,255,0.8), rgba(245, 248, 255, 0.86));
   box-shadow: 0 20px 50px rgba(31, 41, 85, 0.06), inset 0 1px 0 rgba(255,255,255,0.75);
+}
+
+.dolphin-loading-pane {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: #8a9099;
+  font-size: 14px;
+  background: var(--b-bg, #fff);
+}
+
+.dolphin-loading-pane .loading-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #7c3aed;
+  animation: pulse-dot 1s ease-in-out infinite;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 0.3; transform: scale(0.8); }
+  50% { opacity: 1; transform: scale(1.1); }
 }
 
 /* ── SPEC three-pane (Phase β) ── */
