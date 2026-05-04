@@ -299,3 +299,17 @@ from app.models.vibe_coding import (  # noqa: E402, F401
     VibeCodingToolCall,
     VibeCodingWorkspaceMember,
 )
+
+
+class DolphinUserLink(Base):
+    """ai-builder 用户 → dolphin trial 租户内对应账号的映射。
+    每个 ai-builder 用户在 dolphin 镜像出独立账号，浮窗 / iframe 用该账号 token，
+    会话历史 / 项目按用户隔离，不再都挂在 dolphin admin 名下。"""
+    __tablename__ = "dolphin_user_links"
+
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), primary_key=True)
+    dolphin_user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    dolphin_username: Mapped[str] = mapped_column(String(80), nullable=False, unique=True)
+    dolphin_password_enc: Mapped[str] = mapped_column(Text, nullable=False)  # Fernet 加密
+    last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

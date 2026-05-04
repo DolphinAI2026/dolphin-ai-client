@@ -5,13 +5,14 @@
 - 之前 token 写在 frontend/.env 的 VITE_DOLPHIN_JWT 里 → 进 build artifact，谁拿到前端代码都能看到
 - 改成：ai-builder 用户登录后向后端要，token 永远不进前端 build
 
-当前实现（trial 限制）：
-- 所有 ai-builder 用户共用一个 dolphin service token（settings.dolphin_service_token）
-- dolphin 那边看到的是同一个 admin 身份；会话历史/quota 不分用户
-- TODO（待 dolphin 提供 user-impersonate / token-exchange API）：
-  按 ai-builder 用户颁发独立的 dolphin 短期 token
+实现：
+- 每个 ai-builder 用户在 dolphin trial 同租户下镜像出独立账号（DolphinUserLink）
+- /dolphin/config 返该用户镜像账号的 access_token —— 浮窗 / iframe 看到独立身份
+- 会话历史 / 项目按用户隔离，不再都挂在 dolphin admin 名下
 
-未来扩展点已经预留：返回结构里只有 access_token，前端不假设它怎么生成的。
+注意：dolphin → ai-builder MCP 调用还是带固定 service_token（自定义 Body 字段
+注入 user_id=1 / tenant_id=1），mcp _resolve_identity 从 current_app slot 反查。
+多 ai-builder 用户并发操作不同应用时，slot 会互相覆盖（trial 限制）。
 """
 from __future__ import annotations
 
@@ -21,9 +22,12 @@ from typing import Annotated, Optional
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.database import get_db
 from app.deps import AuthContext, get_auth_context
+from app.services.dolphin_user import get_user_dolphin_credentials
 
 logger = logging.getLogger(__name__)
 
@@ -33,14 +37,12 @@ router = APIRouter(prefix="/dolphin", tags=["dolphin-sso"])
 @router.get("/config")
 async def get_dolphin_config(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """前端登录后调一次拿 dolphin SDK 初始化所需配置。
 
-    需要 ai-builder 登录态。返回：
-    - server_url：dolphin 平台公网地址
-    - agent_code：默认嵌入的 agent code
-    - tenant_id：dolphin 租户 ID
-    - access_token：dolphin 用户身份 token（当前阶段是 service token）
+    返回当前 ai-builder 用户**在 dolphin 镜像账号**的 access_token —— 浮窗里
+    看到的会话历史、项目都属于这个用户，不会跨用户共享。
     """
     if not settings.dolphin_service_token:
         raise HTTPException(
@@ -48,13 +50,11 @@ async def get_dolphin_config(
             detail="Dolphin SSO 未配置。请在 backend/.env 设置 DOLPHIN_SERVICE_TOKEN。",
         )
 
-    # TODO: 当 dolphin 提供 token-exchange API 时改为：
-    # access_token = await exchange_dolphin_user_token(
-    #     service_token=settings.dolphin_service_token,
-    #     external_user_id=ctx.user.id,
-    #     external_username=ctx.user.username,
-    # )
-    access_token = settings.dolphin_service_token
+    try:
+        access_token, dolphin_uid = await get_user_dolphin_credentials(db, ctx.user)
+    except Exception as exc:
+        logger.error("dolphin 镜像账号颁 token 失败 user=%s: %s", ctx.user.id, exc)
+        raise HTTPException(status_code=502, detail=f"dolphin 镜像账号失败：{str(exc)[:200]}")
 
     return {
         "server_url": settings.dolphin_server_url,
@@ -62,6 +62,7 @@ async def get_dolphin_config(
         "app_adjust_agent_code": settings.dolphin_app_adjust_agent_code,
         "tenant_id": settings.dolphin_tenant_id,
         "access_token": access_token,
+        "dolphin_user_id": dolphin_uid,
     }
 
 
@@ -81,10 +82,14 @@ async def _ensure_dolphin_project(
     app_id: int,
     app_name: str,
     server_url: str,
-    service_token: str,
+    user_token: str,
     agent_db_id: int = _DOLPHIN_AGENT_DB_ID_DEFAULT,
 ) -> Optional[int]:
-    """返回该 (user, app) 的 dolphin project_id；没有就创建一个。"""
+    """返回该 (user, app) 的 dolphin project_id；没有就用该用户的 token 创建。
+
+    用 user_token 而非 service_token 调用 — 这样项目归属该 dolphin 用户名下，
+    侧边栏看到的"项目"只属于自己。
+    """
     key = (int(user_id), int(app_id))
     with _PROJECT_MAP_LOCK:
         cached = _PROJECT_MAP.get(key)
@@ -101,7 +106,7 @@ async def _ensure_dolphin_project(
                 f"{server_url.rstrip('/')}/api/agents/agent/projects",
                 json={"agent_id": agent_db_id, "name": title[:60]},
                 headers={
-                    "Authorization": f"Bearer {service_token}",
+                    "Authorization": f"Bearer {user_token}",
                     "Content-Type": "application/json",
                 },
             )
@@ -129,20 +134,25 @@ class InitContextRequest(BaseModel):
 async def init_app_context_session(
     req: InitContextRequest,
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """前端进 ChatPage 时调一次：用 dolphin service token 在 dolphin agent
-    里发一条隐藏 [系统] ctx 消息，让 dolphin user 的"最近 session"是含
-    上下文的新 session。然后 iframe 加载时 dolphin embed resume 这个
-    session，agent 已经知道当前应用，不会再问"哪个应用"。
+    """前端进 ChatPage 时调一次：用**当前 ai-builder 用户的 dolphin 镜像账号 token**
+    在 dolphin agent 里发一条隐藏 [SYSTEM CTX] 消息 → dolphin 该用户最近 session
+    就是含上下文的新 session。iframe 加载时 dolphin embed resume 这个 session，
+    agent 已经知道当前应用，不会再问"哪个应用"。
 
-    dolphin chat send 不带 sessionid header 时会创建新 session，所以
-    每次进 ChatPage 都开新 session（注入新 ctx），不会污染老对话。
+    每个 ai-builder 用户在 dolphin 是独立账号，session / project 都按用户隔离。
     """
-    if not settings.dolphin_service_token:
-        raise HTTPException(status_code=503, detail="DOLPHIN_SERVICE_TOKEN 未配置")
     agent_code = req.agent_code or settings.dolphin_app_adjust_agent_code
     if not agent_code:
         raise HTTPException(status_code=503, detail="dolphin app_adjust_agent_code 未配置")
+
+    # 拿当前用户在 dolphin 镜像账号的 token（没有就创建）
+    try:
+        user_token, _dolphin_uid = await get_user_dolphin_credentials(db, ctx.user)
+    except Exception as exc:
+        logger.error("init-app-context 颁 dolphin token 失败 user=%s: %s", ctx.user.id, exc)
+        raise HTTPException(status_code=502, detail=f"dolphin 镜像账号失败：{str(exc)[:200]}")
 
     # 构造 ctx 消息 — agent prompt 里教过看到 [SYSTEM CTX] 开头就简短确认不展开
     ctx_msg = (
@@ -159,13 +169,13 @@ async def init_app_context_session(
     from app.routes.current_app import set_current_app as _set_current_app
     _set_current_app(ctx.user.id, ctx.tenant_id, req.app_id, req.app_name)
 
-    # 给当前 (user, app) 拿/创 dolphin 项目，session 自动归到这个项目下
+    # 给当前 (user, app) 拿/创 dolphin 项目（用用户 token，project 归该用户）
     project_id = await _ensure_dolphin_project(
         user_id=ctx.user.id,
         app_id=req.app_id,
         app_name=req.app_name,
         server_url=settings.dolphin_server_url,
-        service_token=settings.dolphin_service_token,
+        user_token=user_token,
     )
 
     url = f"{settings.dolphin_server_url.rstrip('/')}/api/agentChat/agent/run/chat/{agent_code}"
@@ -181,7 +191,7 @@ async def init_app_context_session(
                 url,
                 json=chat_body,
                 headers={
-                    "Authorization": f"Bearer {settings.dolphin_service_token}",
+                    "Authorization": f"Bearer {user_token}",
                     "Content-Type": "application/json",
                     "X-Tenant-Id": settings.dolphin_tenant_id or "default",
                 },
