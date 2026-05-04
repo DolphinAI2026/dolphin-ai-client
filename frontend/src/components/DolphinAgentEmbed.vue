@@ -1,18 +1,12 @@
 <template>
   <div class="dolphin-agent-embed">
-    <!-- 当前应用上下文提示条 -->
+    <!-- 当前应用上下文提示条 — "新对话" 用 dolphin 自带的 sidebar 按钮，不再重复 -->
     <div v-if="appId" class="dolphin-ctx-bar">
       <span class="ctx-icon" aria-hidden="true">📌</span>
       <span class="ctx-text">
         当前在编辑 <strong>{{ appName || `应用 #${appId}` }}</strong>
         <code>#{{ appId }}</code>
       </span>
-      <button
-        type="button"
-        class="ctx-fresh-btn"
-        title="清掉 AI 助手的旧对话历史，开新会话（旧对话会话保留在 dolphin 历史里）"
-        @click="newSession"
-      >🔄 新对话</button>
       <button
         type="button"
         class="ctx-copy-btn"
@@ -24,7 +18,7 @@
     <iframe
       v-if="iframeSrc"
       ref="iframeRef"
-      :key="`${props.appId || 0}-${sessionNonce}`"
+      :key="props.appId || 0"
       :src="iframeSrc"
       class="dolphin-agent-iframe"
       :title="title || 'AI 助手'"
@@ -59,8 +53,6 @@ const props = defineProps<{
 
 const cfg = ref<DolphinConfig | null>(null)
 const iframeRef = ref<HTMLIFrameElement | null>(null)
-// 用作 cache-bust，"新对话" 按钮点击时递增让 iframe 重挂载
-const sessionNonce = ref(0)
 
 const iframeSrc = computed(() => {
   if (!cfg.value) return ''
@@ -71,20 +63,9 @@ const iframeSrc = computed(() => {
   // 把当前应用上下文带进 query，dolphin agent 自身可以读到
   if (props.appId) url.searchParams.set('app_id', String(props.appId))
   if (props.appName) url.searchParams.set('app_name', props.appName)
-  // cache bust：sessionNonce 变化时强制 iframe 重新加载（开新会话）
-  if (sessionNonce.value > 0) url.searchParams.set('_n', String(sessionNonce.value))
   return url.toString()
 })
 
-function newSession() {
-  // 1) 通过 postMessage 试探 dolphin 是否支持 type=new_session（future-proof）
-  if (cfg.value && iframeRef.value?.contentWindow) {
-    const origin = new URL(cfg.value.server_url).origin
-    iframeRef.value.contentWindow.postMessage({ type: 'new_session' }, origin)
-  }
-  // 2) 改 nonce → iframe key 变 → 重挂载
-  sessionNonce.value = Date.now()
-}
 
 async function loadConfig() {
   if (!localStorage.getItem('token')) return
@@ -118,13 +99,9 @@ onBeforeUnmount(() => {
   window.removeEventListener('message', onMessage)
 })
 
-// 应用切换时自动开新会话 — dolphin 后端按 dolphin user 维度复用 session，
-// 不主动 reset 的话切应用后 chat 历史还会带上一个应用的对话上下文
-watch(() => props.appId, (newId, oldId) => {
-  if (oldId && newId && oldId !== newId) {
-    sessionNonce.value = Date.now()
-  }
-})
+// 切应用时不主动 reset session — dolphin sidebar 自带"+ 新建对话"按钮，
+// 历史对话也会列在 sidebar 里，让用户自己决定开新对话还是继续旧对话。
+// （iframe :key=appId 已经在切应用时重挂载，dolphin 会显示对应应用的最近 session）
 
 // 上下文复制：把 "当前编辑应用 #X (Y)" copy 到剪贴板，方便用户直接粘贴到对话
 const copyState = ref('复制上下文')
@@ -189,8 +166,7 @@ async function copyContext() {
   margin-left: 2px;
 }
 
-.dolphin-ctx-bar .ctx-copy-btn,
-.dolphin-ctx-bar .ctx-fresh-btn {
+.dolphin-ctx-bar .ctx-copy-btn {
   border: 1px solid #c4b5fd;
   background: #fff;
   color: #6d28d9;
@@ -202,14 +178,9 @@ async function copyContext() {
   flex-shrink: 0;
 }
 
-.dolphin-ctx-bar .ctx-copy-btn:hover,
-.dolphin-ctx-bar .ctx-fresh-btn:hover {
+.dolphin-ctx-bar .ctx-copy-btn:hover {
   background: #f3eefe;
   border-color: #a78bfa;
-}
-
-.dolphin-ctx-bar .ctx-fresh-btn {
-  background: #faf6ff;
 }
 
 .dolphin-agent-iframe {
