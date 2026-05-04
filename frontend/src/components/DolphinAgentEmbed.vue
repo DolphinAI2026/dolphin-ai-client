@@ -16,7 +16,7 @@
     </div>
 
     <iframe
-      v-if="iframeSrc"
+      v-if="iframeSrc && ctxInjected"
       ref="iframeRef"
       :key="props.appId || 0"
       :src="iframeSrc"
@@ -25,7 +25,7 @@
     />
     <div v-else class="dolphin-loading">
       <span class="spinner">⟳</span>
-      <span>加载 AI 助手...</span>
+      <span>{{ iframeSrc ? '正在告诉 AI 助手当前应用…' : '加载 AI 助手...' }}</span>
     </div>
   </div>
 </template>
@@ -76,6 +76,27 @@ async function loadConfig() {
   }
 }
 
+// 进入或切换应用时，让 backend 帮我们在 dolphin 里开一个含 ctx 的新 session
+// 这样 iframe 加载时 dolphin embed 会 resume 这个新 session，agent 已知道当前应用
+const ctxInjected = ref(false)
+async function injectAppContext() {
+  if (!props.appId) {
+    ctxInjected.value = true
+    return
+  }
+  try {
+    await request.post('/dolphin/init-app-context', {
+      app_id: props.appId,
+      app_name: props.appName || '',
+    })
+  } catch (err) {
+    console.warn('[DolphinAgentEmbed] init-app-context failed', err)
+    // 不阻塞 — 即使失败 iframe 仍能用，只是 agent 第一次问会问应用
+  } finally {
+    ctxInjected.value = true
+  }
+}
+
 // 监听 dolphin iframe 的 ready 消息，发送 auth token
 function onMessage(event: MessageEvent) {
   if (!cfg.value) return
@@ -90,18 +111,23 @@ function onMessage(event: MessageEvent) {
   }, allowedOrigin)
 }
 
-onMounted(() => {
+onMounted(async () => {
   window.addEventListener('message', onMessage)
-  loadConfig()
+  await loadConfig()
+  await injectAppContext()
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('message', onMessage)
 })
 
-// 切应用时不主动 reset session — dolphin sidebar 自带"+ 新建对话"按钮，
-// 历史对话也会列在 sidebar 里，让用户自己决定开新对话还是继续旧对话。
-// （iframe :key=appId 已经在切应用时重挂载，dolphin 会显示对应应用的最近 session）
+// 切应用时重新注入 ctx → iframe 会 resume 新 session（含新 ctx）
+watch(() => props.appId, async (newId, oldId) => {
+  if (oldId !== newId) {
+    ctxInjected.value = false
+    await injectAppContext()
+  }
+})
 
 // 上下文复制：把 "当前编辑应用 #X (Y)" copy 到剪贴板，方便用户直接粘贴到对话
 const copyState = ref('复制上下文')

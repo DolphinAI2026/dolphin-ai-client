@@ -16,9 +16,11 @@
 from __future__ import annotations
 
 import logging
-from typing import Annotated
+from typing import Annotated, Optional
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 
 from app.config import settings
 from app.deps import AuthContext, get_auth_context
@@ -61,3 +63,70 @@ async def get_dolphin_config(
         "tenant_id": settings.dolphin_tenant_id,
         "access_token": access_token,
     }
+
+
+class InitContextRequest(BaseModel):
+    app_id: int
+    app_name: str = ""
+    agent_code: Optional[str] = None  # 默认用 app_adjust_agent_code
+
+
+@router.post("/init-app-context")
+async def init_app_context_session(
+    req: InitContextRequest,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+):
+    """前端进 ChatPage 时调一次：用 dolphin service token 在 dolphin agent
+    里发一条隐藏 [系统] ctx 消息，让 dolphin user 的"最近 session"是含
+    上下文的新 session。然后 iframe 加载时 dolphin embed resume 这个
+    session，agent 已经知道当前应用，不会再问"哪个应用"。
+
+    dolphin chat send 不带 sessionid header 时会创建新 session，所以
+    每次进 ChatPage 都开新 session（注入新 ctx），不会污染老对话。
+    """
+    if not settings.dolphin_service_token:
+        raise HTTPException(status_code=503, detail="DOLPHIN_SERVICE_TOKEN 未配置")
+    agent_code = req.agent_code or settings.dolphin_app_adjust_agent_code
+    if not agent_code:
+        raise HTTPException(status_code=503, detail="dolphin app_adjust_agent_code 未配置")
+
+    # 构造 ctx 消息 — agent prompt 里教过看到 [SYSTEM CTX] 开头就简短确认不展开
+    ctx_msg = (
+        f"[SYSTEM CTX] 用户当前在 ai-builder 编辑应用 #{req.app_id}"
+        + (f"（{req.app_name}）" if req.app_name else "")
+        + "。后续对话中调任何 MCP 工具时不必显式传 app_id，后端会自动用这个应用。"
+        + "请用一句话简短确认上下文已锁定到这个应用。"
+    )
+
+    url = f"{settings.dolphin_server_url.rstrip('/')}/api/agentChat/agent/run/chat/{agent_code}"
+    session_id = ""
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            # dolphin chat send 是流式响应，我们只关心 sessionid header（响应一开始就发）
+            async with client.stream(
+                "POST",
+                url,
+                json={"input": ctx_msg, "budget_preset": "complex"},
+                headers={
+                    "Authorization": f"Bearer {settings.dolphin_service_token}",
+                    "Content-Type": "application/json",
+                    "X-Tenant-Id": settings.dolphin_tenant_id or "default",
+                },
+            ) as resp:
+                session_id = resp.headers.get("sessionid", "")
+                # 消费一段流让 dolphin 真正写 session 历史，但不等完整回复
+                # （限 5s 否则放弃）
+                import asyncio as _asyncio
+                async def _consume():
+                    async for _ in resp.aiter_bytes():
+                        pass
+                try:
+                    await _asyncio.wait_for(_consume(), timeout=5.0)
+                except _asyncio.TimeoutError:
+                    pass
+    except Exception as exc:
+        logger.warning("init-app-context failed: %s", exc)
+        # 不阻塞前端 — 即使 ctx 注入失败 iframe 仍可正常使用
+        return {"ok": False, "error": str(exc)[:200]}
+
+    return {"ok": True, "session_id": session_id, "agent_code": agent_code}
