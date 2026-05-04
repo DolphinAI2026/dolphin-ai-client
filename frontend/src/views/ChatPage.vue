@@ -1376,19 +1376,25 @@ async function pollAppForChanges() {
     }
     if (updatedAt && updatedAt !== _lastAppUpdatedAt) {
       _lastAppUpdatedAt = updatedAt
-      // SPEC 变了：把 config_preview 重新写进 store.preview，触发右侧面板重渲染
+      // SPEC 变了：右侧面板看的是 docVersions（来自 fetchDocVersions），重新拉一遍
+      // 同时 store.preview 也写一遍，让 sidebar/header 等其它读 preview 的地方更新
+      try {
+        await fetchDocVersions()
+      } catch {}
       const cpRaw = app?.config_preview
       if (cpRaw) {
-        const cp = typeof cpRaw === 'string' ? JSON.parse(cpRaw) : cpRaw
-        const data = cp?.data || cp
-        if (data && typeof data === 'object') {
-          if (data.appName) store.preview.appName = data.appName
-          if (Array.isArray(data.models)) store.preview.models = data.models
-          if (Array.isArray(data.forms)) store.preview.forms = data.forms
-          if (Array.isArray(data.roles)) (store.preview as any).roles = data.roles
-          if (Array.isArray(data.dicts)) (store.preview as any).dicts = data.dicts
-          if (Array.isArray(data.permissions)) (store.preview as any).permissions = data.permissions
-        }
+        try {
+          const cp = typeof cpRaw === 'string' ? JSON.parse(cpRaw) : cpRaw
+          const data = cp?.data || cp
+          if (data && typeof data === 'object') {
+            if (data.appName) store.preview.appName = data.appName
+            if (Array.isArray(data.models)) store.preview.models = data.models
+            if (Array.isArray(data.forms)) store.preview.forms = data.forms
+            if (Array.isArray(data.roles)) (store.preview as any).roles = data.roles
+            if (Array.isArray(data.dicts)) (store.preview as any).dicts = data.dicts
+            if (Array.isArray(data.permissions)) (store.preview as any).permissions = data.permissions
+          }
+        } catch {}
       }
       ElMessage.info({ message: 'AI 助手已更新应用配置，右侧已自动刷新', duration: 2500 })
     }

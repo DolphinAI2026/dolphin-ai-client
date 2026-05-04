@@ -81,55 +81,29 @@ async function loadConfig() {
   }
 }
 
-// 进入或切换应用时，让 backend 帮我们在 dolphin 里开一个含 ctx 的新 session
-// 这样 iframe 加载时 dolphin embed 会 resume 这个新 session，agent 已知道当前应用
+// 进入或切换应用时，每次都让 backend 在 dolphin 里开一个含 ctx 的新 session
+// （不缓存）—— dolphin embed iframe resume 的是 dolphin user 最近 session，
+// 跨 app 共享。如果不每次 inject，刷新时 dolphin 会显示其他 app 留下的最近
+// session，用户看到的对话历史就不对了。
+//
+// 历史会话不会丢：dolphin sidebar 历史对话区按 project 归类能看到，用户想
+// 接续旧对话手动点 sidebar 即可。
 const ctxInjected = ref(false)
-
-// 本地缓存窗口：同一应用 1 小时内不重复 init（避免每次刷新都建新 session）
-const CTX_CACHE_TTL_MS = 60 * 60 * 1000
-function _ctxCacheKey(appId: number) {
-  return `dolphin-ctx-app-${appId}`
-}
-function _isCtxStillFresh(appId: number): boolean {
-  try {
-    const raw = localStorage.getItem(_ctxCacheKey(appId))
-    if (!raw) return false
-    const ts = Number(raw)
-    return !isNaN(ts) && Date.now() - ts < CTX_CACHE_TTL_MS
-  } catch {
-    return false
-  }
-}
-function _markCtxInjected(appId: number) {
-  try {
-    localStorage.setItem(_ctxCacheKey(appId), String(Date.now()))
-  } catch {
-    // ignore quota errors
-  }
-}
 
 async function injectAppContext() {
   if (!props.appId) {
     ctxInjected.value = true
     return
   }
-  // 同 app 1 小时内已 init 过 → 跳过，让 iframe 直接 resume 现有 session
-  if (_isCtxStillFresh(props.appId)) {
-    ctxInjected.value = true
-    return
-  }
   // 等 ai-builder backend current_app state 同步好（让 mcp 调用能反查真实租户）
-  // 给 ChatPage 的 syncCurrentAppToBackend 一点时间
   await new Promise(r => setTimeout(r, 300))
   try {
     await request.post('/dolphin/init-app-context', {
       app_id: props.appId,
       app_name: props.appName || '',
     })
-    _markCtxInjected(props.appId)
   } catch (err) {
     console.warn('[DolphinAgentEmbed] init-app-context failed', err)
-    // 不阻塞 — 即使失败 iframe 仍能用，只是 agent 第一次问会问应用
   } finally {
     ctxInjected.value = true
   }
