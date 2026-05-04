@@ -284,8 +284,11 @@ async def send_message(
         raise HTTPException(status_code=400, detail="message 不能为空")
 
     # 处理附件：图片留 data_url 直接喂多模态 LLM；文件落盘 .vibe-attachments/ 让 agent 自己 read
+    # 对 docx/xlsx/pdf/pptx 等二进制文档，额外提取纯文本写到 .vibe-attachments/{name}.txt，
+    # 让 agent 直接 read_file 看里面的内容（不然 LLM 看 raw bytes 没意义）
     attachment_meta: list[dict] = []
     multimodal_for_agent: list[dict] = []  # OpenAI multimodal content 数组（仅当轮）
+    extracted_doc_texts: list[tuple[str, str]] = []  # (filename, text) — 附加到 user message
     if has_attachments:
         from pathlib import Path
         import base64 as _b64
@@ -321,6 +324,31 @@ async def send_message(
                     "path": rel_path,
                     "size": len(raw),
                 }
+                # 二进制文档（docx/xlsx/pdf/pptx等）：提取纯文本写 .txt 方便 agent 读
+                ext = (att.filename.rsplit(".", 1)[-1] if "." in att.filename else "").lower()
+                doc_exts = {"pdf", "docx", "doc", "xlsx", "xls", "pptx", "ppt"}
+                if att.kind != "image" and ext in doc_exts:
+                    try:
+                        from io import BytesIO
+                        from starlette.datastructures import UploadFile as _StarUpload
+                        from app.routes.chat import _parse_uploaded_document as _parse_doc
+                        stub = _StarUpload(filename=att.filename, file=BytesIO(raw))
+                        text = await _parse_doc(stub)
+                        if text and text.strip():
+                            txt_path = attach_dir / f"{fname}.txt"
+                            txt_path.write_text(text, encoding="utf-8")
+                            meta_entry["text_path"] = f".vibe-attachments/{fname}.txt"
+                            # 短文本（< 8KB）直接附到 user message 让 agent 立刻看到
+                            if len(text) < 8000:
+                                extracted_doc_texts.append((att.filename, text))
+                            else:
+                                # 长文档加提示让 agent 主动 read_file
+                                extracted_doc_texts.append((
+                                    att.filename,
+                                    f"[文档过长 {len(text)} 字，已存为 {meta_entry['text_path']}，请用 read_file 读取]",
+                                ))
+                    except Exception as exc:
+                        logger.warning("解析附件文档失败 %s: %s", att.filename, exc)
                 attachment_meta.append(meta_entry)
                 # 仅 image 注入 multimodal content
                 if att.kind == "image":
@@ -328,6 +356,14 @@ async def send_message(
                         "type": "image_url",
                         "image_url": {"url": att.data_url},
                     })
+
+    # 把提取的文档文本拼到 user message 末尾，agent 不需要主动 read_file 就能看
+    if extracted_doc_texts:
+        appended = "\n\n".join(
+            f"---\n📎 附件「{name}」内容：\n```\n{text}\n```"
+            for name, text in extracted_doc_texts
+        )
+        body.message = (body.message or "") + "\n\n" + appended
 
     user_msg = VibeCodingMessage(
         thread_id=thread.id,

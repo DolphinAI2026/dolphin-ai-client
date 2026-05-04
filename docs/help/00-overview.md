@@ -13,7 +13,7 @@ aPaaS Builder AI 是一个面向应用搭建的 AI 协作平台，把"从需求�
 | 首页 | `/` | 入口聚合页（最近项目 / 推荐场景） |
 | 应用 | `/apps` | 我的所有应用列表（local + 平台 remote 合并） |
 | **AI 对话** | `/ai-chat` | 用对话和 AI 一起梳理需求 / 整合材料 → 产出标准设计文档 |
-| **AI 搭建** | `/chat` | 把设计文档喂给 AI → 生成 SPEC / 模型 / 表单 / 流程 → 部署到平台 |
+| **AI 搭建** | `/chat?app_id=X` | 应用编辑页：左栏 AI 助手对话调整应用，右栏实时 SPEC 视图。**入口在「应用」列表里点应用进入**，左侧导航没有单独的"AI 搭建"菜单 |
 | **AI 编码** | `/coding` | 让 AI 写自开发组件 / 页面 / 接口（睿鲸 IDE）|
 | **Vibe Coding** | `/vibe-coding` | 全代码沙箱：AI 直接搭 Vue + Express 应用，Docker / Podman 隔离运行 |
 | **沙箱监控** | `/vibe-coding/sandboxes` | 管理跑着的 Vibe Coding 沙箱容器（启动 / 停止 / 删除），按角色分级权限 |
@@ -25,10 +25,17 @@ aPaaS Builder AI 是一个面向应用搭建的 AI 协作平台，把"从需求�
 不是一个超级 Agent 干所有事，而是 4 段各负其责，可以单独使用，也能串起来：
 
 ```
-需求 ──[AI 对话]──> 设计文档.md ──[AI 搭建]──> SPEC + 配置 ──> 部署到平台
+需求 ──[AI 对话]──> 设计文档.md ──┐
+                                  ├─[首页拖 .md]─> AI 搭建创建新应用
+                                  │
+       已有应用 ──[/apps 点进]──┴─> AI 搭建编辑页
+                                       │ 左栏 dolphin AI 助手对话 + 8 个 MCP 工具
+                                       │ 右栏实时 SPEC 视图（自动联动）
+                                       ▼
+                                   应用更新到底层 aPaaS 平台
                                        │
                                        └──[DevOps]──> 提案 → 审批 → Apply → Git
-                
+
 组件需求 ──[AI 编码]──> 自开发组件代码 ──> aPaaS 平台
 完整应用 ──[Vibe Coding]──> Docker 沙箱里跑的 Vue + Express
 ```

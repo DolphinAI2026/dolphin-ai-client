@@ -112,7 +112,7 @@
               <path d="M11 5L6 10a2 2 0 0 0 2.83 2.83l5.66-5.66a3.5 3.5 0 0 0-4.95-4.95L4.05 7.74a5 5 0 1 0 7.07 7.07L13 13" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
             </svg>
           </button>
-          <input ref="fileInputRef" type="file" hidden multiple accept="image/*,.pdf,.txt,.md,.json,.csv,.log" @change="onFilePick" />
+          <input ref="fileInputRef" type="file" hidden multiple accept="image/*,.pdf,.txt,.md,.json,.csv,.log,.docx,.doc,.xlsx,.xls,.pptx,.ppt,.yaml,.yml,.xml,.html,.htm" @change="onFilePick" />
           <VoiceInputButton v-model="input" :llm-config-id="thread.selected_llm_config_id" />
           <textarea
             v-model="input"
