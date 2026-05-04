@@ -352,6 +352,11 @@ defineExpose({
 .ac-list {
   flex: 1;
   min-height: 0;
+  min-width: 0;
+  /* overflow-x:hidden 防止单条消息里的超长 URL / 无空格字符撑开整个列表，
+     导致整个对话区横向溢出（之前 bug：粘了 600+ 字符的图片直链 URL，
+     一条消息把整个对话流推出屏幕外）*/
+  overflow-x: hidden;
   overflow-y: auto;
   padding: 16px 18px;
   display: flex;
@@ -363,6 +368,8 @@ defineExpose({
   display: flex;
   align-items: flex-start;
   gap: 10px;
+  min-width: 0;
+  max-width: 100%;
 }
 .ac-row.user {
   justify-content: flex-end;
@@ -399,6 +406,7 @@ defineExpose({
 
 .ac-bubble {
   max-width: min(740px, 78%);
+  min-width: 0;
   padding: 10px 14px;
   border-radius: 12px;
   background: var(--t-bg-elevated, #fff);
@@ -407,6 +415,10 @@ defineExpose({
   line-height: 1.6;
   color: var(--t-text-primary);
   position: relative;
+  /* 长 URL / hash / 无空格中英文混合都强制在字符内换行，
+     不允许气泡内容撑破 max-width */
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .ac-bubble.user-bubble {
   background: var(--t-brand-soft, rgba(99, 102, 241, 0.14));
