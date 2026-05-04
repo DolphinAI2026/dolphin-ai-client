@@ -152,6 +152,13 @@ async def init_app_context_session(
         + "请用一句话简短确认上下文已锁定到这个应用。"
     )
 
+    # ★ 关键：先把 current_app state 写好（用本请求的 app_id），保证 mcp 工具调用
+    # 反查时一定拿到当前 app，不依赖前端 ChatPage syncCurrentAppToBackend 的时序。
+    # 否则切 app 时 sync 还在路上，agent 调 mcp 拿到的是上一个 app 的 state，
+    # 跨应用污染（agent 把 A 应用的内容上传到 B 应用）。
+    from app.routes.current_app import set_current_app as _set_current_app
+    _set_current_app(ctx.user.id, ctx.tenant_id, req.app_id, req.app_name)
+
     # 给当前 (user, app) 拿/创 dolphin 项目，session 自动归到这个项目下
     project_id = await _ensure_dolphin_project(
         user_id=ctx.user.id,

@@ -174,14 +174,20 @@
       >
       <!-- 左侧对话区 -->
       <div v-if="showBuilderChatSide" class="chat-side">
-        <!-- ★ Dolphin Agent 嵌入：左侧对话由 dolphin agent 接管。组件内部自己处理 ctx 注入，
-             父级直接渲染（不再用 currentAppSynced 守门 — 避免 sync 失败时永远空白） -->
+        <!-- ★ Dolphin Agent 嵌入：等 backend current_app state 同步完成后才挂载，
+             避免切 app 时 dolphin 拿到旧 app 的 ctx 跨应用污染。
+             5 秒超时兜底，即使 sync 失败也允许加载（init-app-context endpoint
+             内部也会强制写 state，二重保险）。 -->
         <DolphinAgentEmbed
-          v-if="useDolphinChat"
+          v-if="useDolphinChat && (!builderCurrentAppId || currentAppSynced || syncTimeoutFallback)"
           :app-id="builderCurrentAppId"
           :app-name="builderAppDisplayName"
           title="AI-Builder 应用调整助手"
         />
+        <div v-else-if="useDolphinChat" class="dolphin-loading-pane">
+          <span class="loading-dot"></span>
+          <span>正在切换应用上下文…</span>
+        </div>
         <template v-else>
         <div v-if="appParsedMode" class="doc-view-wrap">
           <div class="doc-view-head">
@@ -1318,6 +1324,9 @@ const useDolphinChat = ref(true)
 
 // 把"当前编辑的应用"上报给后端，让 dolphin agent 调 MCP 工具时不传 app_id 也能拿到
 const currentAppSynced = ref(false)
+// 5 秒超时兜底：sync 失败也允许 iframe 加载（init-app-context endpoint 内部
+// 会再写一次 state，所以即使前端 sync 失败 dolphin 也能拿对当前应用）
+const syncTimeoutFallback = ref(false)
 async function syncCurrentAppToBackend() {
   // ★ 优先用 URL query 里的 app_id（最权威），不要 fallback 到 builderCurrentAppId
   // computed —— 它会回退到 store.currentApp，可能是切页前的旧值，导致 dolphin
@@ -1348,7 +1357,10 @@ async function syncCurrentAppToBackend() {
 // 不用 immediate:true（会触发 TDZ）；改用普通 watch + onMounted 兜底首次同步
 watch(() => [route.query.app_id, store.preview.appName], () => {
   currentAppSynced.value = false  // 切应用时立即清，避免旧 sync 状态误用
+  syncTimeoutFallback.value = false
   void syncCurrentAppToBackend()
+  // 5 秒后无论 sync 成败都允许 DolphinAgentEmbed 渲染
+  setTimeout(() => { syncTimeoutFallback.value = true }, 5000)
 })
 
 // dolphin agent 改完应用后右侧不联动 — 轮询应用 updated_at 变了就重新加载 SPEC
