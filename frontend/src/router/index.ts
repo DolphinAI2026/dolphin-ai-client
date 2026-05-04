@@ -26,7 +26,17 @@ const router = createRouter({
       path: '/chat/:id?',
       name: 'Chat',
       component: () => import('@/views/ChatPage.vue'),
-      meta: { requiresAuth: true }
+      meta: { requiresAuth: true },
+      beforeEnter: (to, _from, next) => {
+        // dolphin 接管对话后，ChatPage 必须绑定到某个应用才有意义
+        // 没 app_id / conversation_id / deploy_app_id 的话本质是空白页，重定向到应用列表
+        const hasAppCtx = to.query.app_id || to.params.id || to.query.deploy_app_id || to.query.conversation_id
+        if (!hasAppCtx) {
+          next({ path: '/apps' })
+        } else {
+          next()
+        }
+      }
     },
     {
       path: '/ai-chat/:id?',
