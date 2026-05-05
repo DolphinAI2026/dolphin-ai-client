@@ -2,7 +2,6 @@
 import { computed } from 'vue'
 import { RouterView, useRoute } from 'vue-router'
 import HelpAssistant from '@/components/HelpAssistant.vue'
-import DolphinPrefetcher from '@/components/DolphinPrefetcher.vue'
 import { useUserStore } from '@/stores/user'
 
 const route = useRoute()
@@ -26,8 +25,6 @@ const showAssistant = computed(() => {
 <template>
   <RouterView />
   <HelpAssistant v-if="showAssistant" />
-  <!-- 后台预热 dolphin SPA chunks 进浏览器 cache，让 /requirements-assistant 秒开 -->
-  <DolphinPrefetcher v-if="showAssistant" />
 </template>
 
 <style>
