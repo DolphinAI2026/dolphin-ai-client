@@ -1,17 +1,6 @@
 <template>
   <WorkbenchShell>
     <div class="ra-page">
-      <header class="ra-header">
-        <div class="ra-title">
-          <span class="ra-title-icon">💬</span>
-          <span>AI 需求分析</span>
-        </div>
-        <div class="ra-subtitle">
-          描述你的搭建需求，或拖入材料（PDF / Word / Excel / 截图），AI 会整合成可被 Builder
-          流水线直接解析的标准设计文档。完成后点右侧「→ Builder」一键创建/更新应用。
-        </div>
-      </header>
-
       <div v-if="loading" class="ra-loading">
         <span class="spinner">⟳</span>
         <span>加载 AI 需求分析助手...</span>
@@ -327,28 +316,6 @@ onBeforeUnmount(() => {
   width: 100%;
   height: 100%;
   background: var(--t-bg, #fff);
-}
-.ra-header {
-  padding: 16px 24px 12px;
-  border-bottom: 1px solid var(--t-border-subtle);
-  flex-shrink: 0;
-}
-.ra-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 17px;
-  font-weight: 600;
-  color: var(--t-text-primary);
-}
-.ra-title-icon {
-  font-size: 18px;
-}
-.ra-subtitle {
-  margin-top: 6px;
-  font-size: 13px;
-  color: var(--t-text-secondary);
-  line-height: 1.55;
 }
 .ra-loading,
 .ra-not-configured {
