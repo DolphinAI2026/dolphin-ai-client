@@ -330,8 +330,9 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
 }
-/* DolphinAgentEmbed 作为 column flex item，撑满主轴 */
-.ra-chat-fullwidth > * {
+/* DolphinAgentEmbed 是子组件，scoped CSS 默认不命中其根元素，
+ * 用 :deep() 穿透，让它作为 column flex item 撑满主轴 */
+.ra-chat-fullwidth :deep(> *) {
   flex: 1;
   min-height: 0;
 }
