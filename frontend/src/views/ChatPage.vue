@@ -49,25 +49,25 @@
               <span>辅助搭建</span>
             </button>
           </div>
-          <!-- "查看应用"：应用创建完成后显示在顶部明显位置，新标签页打开 aPaaS 直链
-               （内嵌 iframe 方案历史上经常坏，统一走外链最稳） -->
-          <a
-            v-if="deployAllDone && platformDirectUrl"
+          <!-- "查看应用"：应用部署完成后显示在顶部明显位置；点击在当前页切到
+               aPaaS 平台 inline iframe（走 platform_proxy SSO 免登），不开新标签页
+               以免丢失登录态。复用创建过程面板里同名按钮的 openInPlatform 逻辑。 -->
+          <button
+            v-if="deployAllDone && (store.currentApp?.apaas_app_id || platformDirectUrl)"
+            type="button"
             class="mode-btn mode-btn-link"
-            :href="platformDirectUrl"
-            target="_blank"
-            rel="noopener noreferrer"
-            title="在新标签页打开 aPaaS 平台运行/编辑当前应用"
+            title="在当前页打开 aPaaS 平台查看/运行当前应用"
+            @click="openInPlatform"
           >
             <span class="mode-btn-icon" aria-hidden="true">
               <svg viewBox="0 0 16 16" fill="none">
-                <path d="M9.5 2.5h4v4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
-                <path d="M13.5 2.5L7.5 8.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
-                <path d="M11.5 9v3.5a1.5 1.5 0 0 1-1.5 1.5h-6a1.5 1.5 0 0 1-1.5-1.5v-6A1.5 1.5 0 0 1 4 5h3.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
+                <rect x="2.3" y="3" width="11.4" height="8.4" rx="1.8" stroke="currentColor" stroke-width="1.3" />
+                <path d="M5.2 13h5.6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
+                <path d="M5 6.5l2.5 2 3.5-3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
               </svg>
             </span>
             <span>查看应用</span>
-          </a>
+          </button>
         </div>
       </template>
       <template #actions>
