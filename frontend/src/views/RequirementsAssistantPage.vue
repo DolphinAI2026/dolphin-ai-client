@@ -49,17 +49,43 @@
                 <li>点右下角 <strong>→ Builder</strong> 一键创建 / 更新应用</li>
               </ol>
               <div class="ra-empty-hint">
-                💡 也可以手动粘贴 markdown 到下方输入框（适用于自动抓取出错时的兜底）。
+                💡 没等到也可以直接粘贴 markdown 到编辑框（自动抓取兜底）。
               </div>
+              <textarea
+                v-model="docMd"
+                class="ra-empty-textarea"
+                placeholder="⬇ 在这里粘贴 markdown 设计文档..."
+                spellcheck="false"
+                @input="onUserEdit"
+              />
             </div>
-            <textarea
-              v-model="docMd"
-              class="ra-art-textarea"
-              :class="{ 'has-content': hasDoc }"
-              :placeholder="hasDoc ? '' : '⬇ 自动同步中...或在这里粘贴 markdown 设计文档'"
-              spellcheck="false"
-              @input="onUserEdit"
-            />
+            <div v-else class="ra-art-doc">
+              <div class="ra-art-tabs">
+                <button
+                  class="ra-tab"
+                  :class="{ active: viewMode === 'preview' }"
+                  @click="viewMode = 'preview'"
+                >👁 渲染</button>
+                <button
+                  class="ra-tab"
+                  :class="{ active: viewMode === 'edit' }"
+                  @click="viewMode = 'edit'"
+                >✏️ 编辑</button>
+                <span class="ra-tab-meta">{{ docMd.length }} 字符</span>
+              </div>
+              <div
+                v-if="viewMode === 'preview'"
+                class="ra-art-preview markdown-body"
+                v-html="renderedMd"
+              />
+              <textarea
+                v-else
+                v-model="docMd"
+                class="ra-art-textarea"
+                spellcheck="false"
+                @input="onUserEdit"
+              />
+            </div>
           </div>
 
           <div class="ra-artifact-footer">
@@ -99,12 +125,15 @@
 import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import { marked } from 'marked'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
 import DolphinAgentEmbed from '@/components/DolphinAgentEmbed.vue'
 import ChooseAppTargetDialog from '@/components/ChooseAppTargetDialog.vue'
 import request from '@/utils/request'
 import { applicationApi } from '@/api/application'
 import { usePreviewStore } from '@/stores/preview'
+
+marked.setOptions({ breaks: true, gfm: true })
 
 const router = useRouter()
 const previewStore = usePreviewStore()
@@ -122,6 +151,16 @@ const docFileName = ref('')
 const docScore = ref(0)
 const docPendingId = ref<string | null>(null)
 const docSource = ref<'auto' | 'manual' | ''>('')
+const viewMode = ref<'preview' | 'edit'>('preview')
+
+const renderedMd = computed(() => {
+  if (!docMd.value) return ''
+  try {
+    return marked.parse(docMd.value) as string
+  } catch {
+    return `<pre>${docMd.value}</pre>`
+  }
+})
 
 const hasDoc = computed(() => !!docMd.value.trim())
 const docState = computed<'auto' | 'manual' | 'empty'>(() => {
@@ -497,6 +536,147 @@ onBeforeUnmount(() => {
   background: var(--t-bg, #fff);
   outline: none;
   min-height: 200px;
+}
+.ra-empty-textarea {
+  width: 100%;
+  margin-top: 12px;
+  min-height: 100px;
+  resize: vertical;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 10px;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  background: #fff;
+  color: #1f2937;
+  outline: none;
+}
+.ra-empty-textarea:focus {
+  border-color: #6366f1;
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.15);
+}
+
+/* ── 渲染 / 编辑双模 tabs ── */
+.ra-art-doc {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.ra-art-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 8px;
+  padding: 4px 4px;
+  background: var(--t-bg-input, #f3f4f6);
+  border-radius: 6px;
+}
+.ra-tab {
+  padding: 4px 12px;
+  font-size: 12.5px;
+  border: none;
+  background: transparent;
+  color: var(--t-text-secondary);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.15s;
+}
+.ra-tab:hover { color: var(--t-text-primary); }
+.ra-tab.active {
+  background: var(--t-bg, #fff);
+  color: var(--t-text-primary);
+  font-weight: 500;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+.ra-tab-meta {
+  margin-left: auto;
+  padding-right: 8px;
+  font-size: 11px;
+  color: var(--t-text-muted);
+}
+
+/* ── markdown 渲染区（github-like） ── */
+.ra-art-preview {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px 20px;
+  background: var(--t-bg, #fff);
+  border: 1px solid var(--t-border-subtle);
+  border-radius: 6px;
+  font-size: 13.5px;
+  line-height: 1.7;
+  color: var(--t-text-primary);
+}
+.ra-art-preview :deep(h1) {
+  margin: 0 0 16px;
+  font-size: 22px;
+  font-weight: 700;
+  border-bottom: 2px solid var(--t-border-subtle);
+  padding-bottom: 10px;
+}
+.ra-art-preview :deep(h2) {
+  margin: 22px 0 10px;
+  font-size: 17px;
+  font-weight: 600;
+  color: #1d4ed8;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--t-border-subtle);
+}
+.ra-art-preview :deep(h3) {
+  margin: 16px 0 8px;
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--t-text-primary);
+}
+.ra-art-preview :deep(p) { margin: 8px 0; }
+.ra-art-preview :deep(ul),
+.ra-art-preview :deep(ol) { padding-left: 22px; margin: 6px 0; }
+.ra-art-preview :deep(li) { margin: 3px 0; }
+.ra-art-preview :deep(table) {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 10px 0;
+  font-size: 12.5px;
+}
+.ra-art-preview :deep(th),
+.ra-art-preview :deep(td) {
+  border: 1px solid var(--t-border-subtle, #e5e7eb);
+  padding: 6px 10px;
+  text-align: left;
+}
+.ra-art-preview :deep(th) {
+  background: var(--t-bg-input, #f9fafb);
+  font-weight: 600;
+}
+.ra-art-preview :deep(tr:nth-child(even)) {
+  background: var(--t-bg-subtle, #fafafa);
+}
+.ra-art-preview :deep(code) {
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  background: var(--t-bg-input, #f3f4f6);
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+.ra-art-preview :deep(pre) {
+  background: var(--t-bg-input, #f3f4f6);
+  padding: 10px 12px;
+  border-radius: 4px;
+  overflow-x: auto;
+}
+.ra-art-preview :deep(pre code) {
+  background: transparent;
+  padding: 0;
+}
+.ra-art-preview :deep(blockquote) {
+  border-left: 3px solid #cbd5e1;
+  margin: 8px 0;
+  padding: 4px 12px;
+  color: var(--t-text-secondary);
+  background: var(--t-bg-subtle, #fafafa);
 }
 .ra-art-textarea:focus {
   border-color: #6366f1;
