@@ -23,12 +23,28 @@
       class="dolphin-agent-iframe"
       :title="title || 'AI 助手'"
       :style="{ opacity: ctxInjected ? 1 : 0.6 }"
+      @load="onIframeLoad"
     />
     <div v-else class="dolphin-loading">
       <span class="spinner">⟳</span>
       <span>加载 AI 助手...</span>
     </div>
-    <div v-if="iframeSrc && !ctxInjected" class="dolphin-ctx-syncing">
+    <!-- iframe 加载首屏 mask：dolphin SPA 含多个 chunks 首次 ~10-30s，
+         不显示 mask 用户看到的就是浅蓝空白，体验糟糕。dolphin 发出 ready
+         postMessage 时移除 mask（onMessage 里 set iframeReady=true）。 -->
+    <transition name="dolphin-mask-fade">
+      <div v-if="iframeSrc && !iframeReady" class="dolphin-loading-mask">
+        <div class="dolphin-mask-card">
+          <span class="spinner">⟳</span>
+          <div class="dolphin-mask-title">正在加载 AI 需求分析助手...</div>
+          <div class="dolphin-mask-hint">
+            首次访问需要从 dolphin 加载 SPA chunks，
+            <br />通常 5-30 秒，请稍候
+          </div>
+        </div>
+      </div>
+    </transition>
+    <div v-if="iframeSrc && iframeReady && !ctxInjected" class="dolphin-ctx-syncing">
       <span class="spinner">⟳</span>
       <span>正在告诉 AI 助手当前应用…</span>
     </div>
@@ -114,6 +130,16 @@ async function injectAppContext() {
   }
 }
 
+// iframe load + dolphin "ready" 双重确认 SPA 真的渲染了，再隐藏 loading mask
+const iframeReady = ref(false)
+
+function onIframeLoad() {
+  // load 事件触发 = SPA 入口 module 至少加载完。dolphin 真正可交互可能要再等
+  // postMessage 'ready'，但 load 后给个保底 1.5s 之后强制 hide mask（避免 dolphin
+  // 不发 ready 时 mask 永远在）
+  setTimeout(() => { iframeReady.value = true }, 1500)
+}
+
 // 监听 dolphin iframe 的 ready 消息，发送 auth token
 function onMessage(event: MessageEvent) {
   if (!cfg.value) return
@@ -121,6 +147,7 @@ function onMessage(event: MessageEvent) {
   const allowedOrigin = new URL(cfg.value.server_url).origin
   if (event.origin !== allowedOrigin) return
   if (event.data?.type !== 'ready') return
+  iframeReady.value = true  // 收到 dolphin 真正 ready，可以隐藏 loading mask
   iframeRef.value?.contentWindow?.postMessage({
     type: 'auth',
     token: cfg.value.access_token,
@@ -243,6 +270,50 @@ async function copyContext() {
   gap: 8px;
   color: #8a9099;
   font-size: 14px;
+}
+
+/* iframe 首次加载 mask（覆盖整个 iframe 区） */
+.dolphin-loading-mask {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: linear-gradient(135deg, #f5f3ff 0%, #eff6ff 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 5;
+  pointer-events: auto;
+}
+.dolphin-mask-card {
+  text-align: center;
+  padding: 28px 36px;
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(8px);
+  border-radius: 12px;
+  box-shadow: 0 4px 16px rgba(99, 102, 241, 0.12);
+  border: 1px solid rgba(99, 102, 241, 0.15);
+}
+.dolphin-mask-card .spinner {
+  font-size: 28px;
+  color: #6366f1;
+  display: block;
+  margin: 0 auto 12px;
+}
+.dolphin-mask-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #4338ca;
+  margin-bottom: 8px;
+}
+.dolphin-mask-hint {
+  font-size: 12.5px;
+  color: #6b7280;
+  line-height: 1.6;
+}
+.dolphin-mask-fade-leave-active {
+  transition: opacity 0.4s ease;
+}
+.dolphin-mask-fade-leave-to {
+  opacity: 0;
 }
 
 .dolphin-ctx-syncing {

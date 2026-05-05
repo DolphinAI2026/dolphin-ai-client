@@ -5,6 +5,10 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>aPaaS Builder AI</title>
+    <!-- preconnect dolphin trial：用户进 ai-builder 主页就并行 DNS + TLS 握手，
+         切到 /requirements-assistant 时 iframe 加载省 ~300ms 握手时间 -->
+    <link rel="preconnect" href="https://dolphin-trial.definesys.cn" crossorigin />
+    <link rel="dns-prefetch" href="https://dolphin-trial.definesys.cn" />
     <!-- 字体栈走系统兜底：Google Fonts 在国内访问超时（fonts.googleapis.com 被墙），
          会让首屏白屏 30 秒。如果未来想用 Inter，可以走 @fontsource/inter 把字体打进 bundle。 -->
     <script>
