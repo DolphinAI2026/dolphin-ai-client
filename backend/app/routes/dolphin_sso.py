@@ -22,12 +22,15 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from typing import Annotated, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -86,10 +89,17 @@ from threading import RLock as _RLock
 _PROJECT_MAP: dict[tuple[int, int], int] = {}
 _PROJECT_MAP_LOCK = _RLock()
 # dolphin agent code → dolphin agent db_id (用于创建项目)
-# 实测 dolphin 应用调整助手 agent 的 db id 是 77（之前硬编码 80，POST 项目都
-# silent failed，dolphin sidebar 永远空）。trial 阶段就这一个 agent，先硬编码
-# 77，后续可换成 GET /api/agents/agent/applications/{code} 动态拿 db id。
-_DOLPHIN_AGENT_DB_ID_DEFAULT = 77
+# ChatPage 内嵌的 a73e75cd81 应用调整助手 agent，db_id 是 80（实测 li.l.77
+# sidebar 在 a73e75cd81 iframe 里能看到自己名下 db_id=80 的 project）。
+# 之前误判 80 不行改成 77 — 实际 dolphin POST /projects 不校验 agent_id 真假，
+# 写任何数字都 200 OK 创建 project，但 sidebar 按当前 iframe agent 过滤显示，
+# 用 77 创建的 project 不属于 a73e75cd81，sidebar 永远看不到。改回 80。
+_DOLPHIN_AGENT_DB_ID_DEFAULT = 80
+
+# (user_id, app_id) → asyncio.Lock。第一次进新 app 时并发请求都 db miss，没锁
+# 会 fire 多个 ctx inject 创建多个 session。锁保证同 (user, app) 串行：第一个
+# 拿锁的请求 inject + 写 db；后续等锁释放后 SELECT 直接命中。
+_INJECT_LOCKS: dict[tuple[int, int], asyncio.Lock] = {}
 
 
 async def _ensure_dolphin_project(
@@ -178,6 +188,90 @@ async def _ensure_dolphin_project(
     return None
 
 
+async def _inject_ctx_and_get_session_id(
+    *,
+    agent_code: str,
+    project_id: int,
+    app_id: int,
+    app_name: str,
+    bearer_token: str,
+    server_url: str,
+    tenant_id: str,
+) -> Optional[str]:
+    """同步等 dolphin chat send 响应 header，拿 sessionid 返回；后台消费完整流。
+
+    为什么需要：dolphin → ai-builder mcp 调用恒以 user_id=1 反查全局 slot，多 tab /
+    多用户并发时 slot 会被覆盖。conversation 顶部加一条 SYSTEM CTX 消息后，
+    agent 看消息历史就有锚点，不再依赖会被污染的 slot。
+
+    实现：
+    - client.send(stream=True) 立即返回 response headers（dolphin 在响应一开始
+      就发 sessionid header），不等流体
+    - 拿到 sessionid 主请求立即返回；前端把 session_id 拼到 iframe URL 上
+      让 dolphin embed 加载这个 session（顶部就是 ctx 消息）
+    - 后台 task 消费完整流，让 dolphin 真正把消息写入 session 历史
+    - 主等 sessionid 最长 5s，超时返回 None（前端降级不带 session_id）
+    """
+    msg = (
+        f"[SYSTEM CTX] 当前在 ai-builder 编辑应用 #{app_id}"
+        + (f"（{app_name}）" if app_name else "")
+        + "。后续调任何 mcp 工具时使用这个 app_id；如对话其他地方出现别的应用号请忽略，以本条为准。"
+    )
+    url = f"{server_url.rstrip('/')}/api/agentChat/agent/run/chat/{agent_code}"
+    headers = {
+        "Authorization": f"Bearer {bearer_token}",
+        "Content-Type": "application/json",
+        "X-Tenant-Id": tenant_id or "default",
+    }
+    body = {"input": msg, "project_id": project_id, "budget_preset": "minimal"}
+
+    client = httpx.AsyncClient(timeout=120.0)
+    try:
+        req = client.build_request("POST", url, json=body, headers=headers)
+        # send(stream=True) 等 response headers 但不消费体；拿 sessionid 即可返回
+        resp = await asyncio.wait_for(client.send(req, stream=True), timeout=5.0)
+        if resp.status_code >= 400:
+            logger.warning("ctx inject HTTP %d project=%s app=%s", resp.status_code, project_id, app_id)
+            await resp.aclose()
+            await client.aclose()
+            return None
+        # dolphin 实测在 response header 里返 sessionid（小写）
+        sid = resp.headers.get("sessionid") or resp.headers.get("Sessionid") or None
+
+        async def _drain_in_background():
+            try:
+                async for _ in resp.aiter_bytes():
+                    pass
+            except Exception as exc:
+                logger.warning("ctx inject drain failed: %s", exc)
+            finally:
+                try:
+                    await resp.aclose()
+                except Exception:
+                    pass
+                try:
+                    await client.aclose()
+                except Exception:
+                    pass
+
+        asyncio.create_task(_drain_in_background())
+        return sid
+    except asyncio.TimeoutError:
+        logger.warning("ctx inject sessionid header timeout project=%s app=%s", project_id, app_id)
+        try:
+            await client.aclose()
+        except Exception:
+            pass
+        return None
+    except Exception as exc:
+        logger.warning("ctx inject failed project=%s app=%s: %s", project_id, app_id, exc)
+        try:
+            await client.aclose()
+        except Exception:
+            pass
+        return None
+
+
 class InitContextRequest(BaseModel):
     app_id: int
     app_name: str = ""
@@ -236,4 +330,57 @@ async def init_app_context_session(
         bearer_token=bearer_token,
     )
 
-    return {"ok": True, "agent_code": agent_code, "project_id": project_id}
+    # (user, app) → 固定 dolphin session_id 映射：db 命中直接返回毫秒级；不存在
+    # 才同步等 dolphin chat send 注入 ctx 拿 session_id 写 db。第一次进 app 慢
+    # 1-3s（dolphin 流首个 sessionid header），之后永远 cache 命中。
+    from app.models import DolphinAppSession
+    session_id: Optional[str] = None
+    if project_id:
+        key = (ctx.user.id, req.app_id)
+        lock = _INJECT_LOCKS.setdefault(key, asyncio.Lock())
+        async with lock:
+            result = await db.execute(
+                select(DolphinAppSession).where(
+                    DolphinAppSession.user_id == ctx.user.id,
+                    DolphinAppSession.app_id == req.app_id,
+                )
+            )
+            existing = result.scalar_one_or_none()
+            if existing and existing.dolphin_project_id == project_id:
+                session_id = existing.dolphin_session_id
+            else:
+                sid = await _inject_ctx_and_get_session_id(
+                    agent_code=agent_code,
+                    project_id=project_id,
+                    app_id=req.app_id,
+                    app_name=req.app_name,
+                    bearer_token=bearer_token,
+                    server_url=settings.dolphin_server_url,
+                    tenant_id=settings.dolphin_tenant_id,
+                )
+                if sid:
+                    session_id = sid
+                    if existing:
+                        # project_id 变了（重建过项目），更新映射
+                        existing.dolphin_project_id = project_id
+                        existing.dolphin_session_id = sid
+                    else:
+                        db.add(DolphinAppSession(
+                            user_id=ctx.user.id,
+                            app_id=req.app_id,
+                            dolphin_project_id=project_id,
+                            dolphin_session_id=sid,
+                        ))
+                    try:
+                        await db.commit()
+                    except Exception as exc:
+                        logger.warning("persist dolphin_app_session failed user=%s app=%s: %s",
+                                       ctx.user.id, req.app_id, exc)
+                        await db.rollback()
+
+    return {
+        "ok": True,
+        "agent_code": agent_code,
+        "project_id": project_id,
+        "session_id": session_id,
+    }

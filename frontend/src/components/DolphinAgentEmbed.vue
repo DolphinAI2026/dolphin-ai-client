@@ -79,6 +79,10 @@ const iframeMounted = ref(true)
 // init-app-context 返回的 dolphin project_id；用来在 iframe URL 上加 ?project_id=
 // 让 dolphin sidebar 只显示该 ai-builder 用户当前 app 的会话历史（跨用户/跨 app 不污染）
 const projectId = ref<number | null>(null)
+// init-app-context 返回的 dolphin session_id：含 [SYSTEM CTX] 消息的 session。
+// iframe URL 加 ?session_id=X 让 dolphin embed 强制 resume 这个 session，agent
+// 一进对话就看到 ctx 锚点，不会被 mcp slot 跨用户污染骗到错的 app_id。
+const sessionId = ref<string | null>(null)
 
 const iframeSrc = computed(() => {
   if (!cfg.value) return ''
@@ -90,6 +94,7 @@ const iframeSrc = computed(() => {
   if (props.appId) url.searchParams.set('app_id', String(props.appId))
   if (props.appName) url.searchParams.set('app_name', props.appName)
   if (projectId.value) url.searchParams.set('project_id', String(projectId.value))
+  if (sessionId.value) url.searchParams.set('session_id', sessionId.value)
   return url.toString()
 })
 
@@ -125,6 +130,7 @@ async function injectAppContext() {
       { app_id: props.appId, app_name: props.appName || '' },
     )
     if (res?.project_id) projectId.value = res.project_id
+    if (res?.session_id) sessionId.value = res.session_id
   } catch (err) {
     console.warn('[DolphinAgentEmbed] init-app-context failed', err)
   } finally {
@@ -172,6 +178,7 @@ watch(() => props.appId, async (newId, oldId) => {
   if (oldId !== newId) {
     ctxInjected.value = false
     projectId.value = null  // 强制 iframe URL 在 init-app-context 返回新 project_id 前不带旧值
+    sessionId.value = null  // 同上 — 不能带上一个 app 的 session_id
     await injectAppContext()
   }
 })
@@ -185,6 +192,7 @@ watch(
     iframeMounted.value = false  // unmount iframe
     cfg.value = null
     projectId.value = null
+    sessionId.value = null
     ctxInjected.value = false
     iframeReady.value = false
     await loadConfig()
