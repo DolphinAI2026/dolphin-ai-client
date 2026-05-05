@@ -17,6 +17,9 @@ export const usePreviewStore = defineStore('preview', () => {
   const pendingBuilderModelId = ref<number | null>(null)  // 从 Landing 页带到 Chat 的 builder 模型
   // 从需求分析页带到 Chat 的设计文档；sourceSessionId 用于建应用后回写 (session+filename)→app_id 缓存防重复建
   const pendingMarkdown = ref<{ filename: string; content: string; sourceSessionId?: number | string | null } | null>(null)
+  // 用户在 AIChat → Builder 的"选目标"对话框里选了「更新到 X」时携带；
+  // ChatPage onMounted 看到 appId 与已加载应用一致就走 upload-doc-version 流程
+  const pendingDocUpdate = ref<{ appId: number; filename: string; content: string; sourceSessionId?: number | string | null } | null>(null)
   const pendingAiChatFiles = ref<File[]>([])  // 从 Landing 页 Chat 模式带过来的多文件附件，进入 AIChatPage 后上传
   const showChangePlan = ref(false)
   const changePlan = ref<any | null>(null)
@@ -94,7 +97,7 @@ export const usePreviewStore = defineStore('preview', () => {
   }
 
   return {
-    currentApp, previewTab, previewFormIdx, connected, showConnectModal, pendingFile, pendingBuilderModelId, pendingMarkdown, pendingAiChatFiles, showChangePlan, changePlan,
+    currentApp, previewTab, previewFormIdx, connected, showConnectModal, pendingFile, pendingBuilderModelId, pendingMarkdown, pendingDocUpdate, pendingAiChatFiles, showChangePlan, changePlan,
     preview, genProgress,
     resetGenProgress, reset, setAppName
   }

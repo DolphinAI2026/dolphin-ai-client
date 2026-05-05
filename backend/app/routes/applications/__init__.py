@@ -194,6 +194,56 @@ async def _require_application_permission(
 
 
 
+class MatchByNameItem(BaseModel):
+    id: int
+    app_name: str
+    app_code: str
+    status: str
+    apaas_app_id: Optional[str] = None
+    updated_at: Optional[datetime] = None
+
+
+@router.get("/match-by-name", response_model=List[MatchByNameItem])
+async def match_applications_by_name(
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    app_name_like: str = Query(..., min_length=1, max_length=120),
+    limit: int = Query(5, ge=1, le=20),
+):
+    """按 app_name 模糊匹配本租户内当前用户可见的应用，用于 AI-Chat → Builder
+    的"新建/更新到现有"选择对话框的候选拉取。
+
+    匹配规则：
+    - tenant 隔离 + 用户 access clause（owner / project member / app member / tenant_admin）
+    - app_name 子串（ilike %X%），按 updated_at desc
+    - 不查远程平台（轻量），只返必要字段
+    """
+    keyword = (app_name_like or "").strip()
+    if not keyword:
+        return []
+    stmt = (
+        select(Application)
+        .where(Application.tenant_id == ctx.tenant_id)
+        .where(Application.app_name.ilike(f"%{keyword}%"))
+    )
+    access_clause = _application_access_clause(ctx)
+    if access_clause is not None:
+        stmt = stmt.where(access_clause)
+    stmt = stmt.order_by(desc(Application.updated_at)).limit(limit)
+    rows = (await db.execute(stmt)).scalars().all()
+    return [
+        MatchByNameItem(
+            id=app.id,
+            app_name=app.app_name,
+            app_code=app.app_code,
+            status=app.status,
+            apaas_app_id=app.apaas_app_id,
+            updated_at=app.updated_at,
+        )
+        for app in rows
+    ]
+
+
 @router.get("", response_model=List[MergedAppResponse])
 async def list_applications(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],

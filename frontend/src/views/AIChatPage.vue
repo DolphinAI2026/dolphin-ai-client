@@ -242,6 +242,14 @@
       </div>
     </aside>
   </div>
+  <ChooseAppTargetDialog
+    v-model="chooseDialogVisible"
+    :filename="chooseDialogFilename"
+    :suggested-name="chooseDialogSuggestedName"
+    :candidates="chooseDialogCandidates"
+    :loading="chooseDialogLoading"
+    @confirm="onChooseDialogConfirm"
+  />
   </WorkbenchShell>
 </template>
 
@@ -257,9 +265,11 @@ import WorkbenchShell from '@/components/WorkbenchShell.vue'
 import SessionSidebar, { type SessionItem, type SessionTab, type NewSessionOption } from '@/components/common/SessionSidebar.vue'
 import AgentConversation from '@/components/common/AgentConversation.vue'
 import VoiceInputButton from '@/components/common/VoiceInputButton.vue'
+import ChooseAppTargetDialog from '@/components/ChooseAppTargetDialog.vue'
 import type { AgentMessage } from '@/components/common/agent-conversation/types'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ChatDotRound, Folder } from '@element-plus/icons-vue'
+import { applicationApi } from '@/api/application'
 
 const previewStore = usePreviewStore()
 const themeStore = useThemeStore()
@@ -1171,11 +1181,93 @@ function getCachedAppId(sessionId: number | string, filename: string): number | 
   return typeof id === 'number' && id > 0 ? id : null
 }
 
-// 把右侧当前打开的设计文档送到 Builder：复用 store.pendingMarkdown 通道，
-// ChatPage 的 onMounted 会自动把它当成 upload doc 处理。
+// ── → Builder 选目标对话框 ──
+// 先按推断的 app_name 调 /applications/match-by-name 拉候选，弹框让用户选「新建」或「更新到 X」
+const chooseDialogVisible = ref(false)
+const chooseDialogLoading = ref(false)
+const chooseDialogCandidates = ref<Array<{ id: number; app_name: string; app_code: string; status: string; apaas_app_id?: string | null; updated_at?: string | null }>>([])
+const chooseDialogFilename = ref('')
+const chooseDialogSuggestedName = ref('')
+const chooseDialogContent = ref('')
+const chooseDialogSourceSessionId = ref<number | string | null>(null)
+
+// 从 md 正文里抓 H1（## 之前的第一行 # XXX）当作应用名候选
+function extractAppNameFromMarkdown(md: string): string {
+  if (!md) return ''
+  const m = md.match(/^\s*#\s+([^\n]+?)\s*$/m)
+  if (m) return m[1].trim().slice(0, 60)
+  return ''
+}
+
+// 文件名去掉扩展和"-设计文档"等后缀，作为兜底候选
+function fallbackNameFromFilename(filename: string): string {
+  return (filename || '')
+    .replace(/\.(md|markdown)$/i, '')
+    .replace(/[-_\s]*(设计文档|需求文档|设计说明|需求说明|design|spec)$/i, '')
+    .trim()
+}
+
+async function openChooseDialog(filename: string, content: string, sourceSessionId?: number | string | null) {
+  chooseDialogFilename.value = filename
+  chooseDialogContent.value = content
+  chooseDialogSourceSessionId.value = sourceSessionId ?? null
+  const inferred = extractAppNameFromMarkdown(content) || fallbackNameFromFilename(filename)
+  chooseDialogSuggestedName.value = inferred
+  chooseDialogCandidates.value = []
+  chooseDialogVisible.value = true
+  if (!inferred) return  // 无候选关键词 → 弹框只提供「新建」按钮
+  chooseDialogLoading.value = true
+  try {
+    chooseDialogCandidates.value = await applicationApi.matchByName(inferred, 5)
+  } catch (e) {
+    console.warn('match-by-name failed', e)
+    chooseDialogCandidates.value = []
+  } finally {
+    chooseDialogLoading.value = false
+  }
+}
+
+// 用户选「新建」→ 走原 pendingMarkdown 通道
+function handleChooseNew() {
+  previewStore.pendingMarkdown = {
+    filename: chooseDialogFilename.value,
+    content: chooseDialogContent.value,
+    sourceSessionId: chooseDialogSourceSessionId.value,
+  }
+  ElMessage.success('已发送，正在打开 Builder 创建新应用...')
+  router.push({ path: '/chat', query: { from: 'aichat' } })
+}
+
+// 用户选「更新到 X」→ 走 pendingDocUpdate 通道，并回写本地 dedup cache
+function handleChooseUpdate(appId: number, appName: string) {
+  previewStore.pendingDocUpdate = {
+    appId,
+    filename: chooseDialogFilename.value,
+    content: chooseDialogContent.value,
+    sourceSessionId: chooseDialogSourceSessionId.value,
+  }
+  // 同 source 下次再点 → Builder 直接进这个 app，不再弹框
+  if (chooseDialogSourceSessionId.value) {
+    try {
+      const raw = localStorage.getItem(MD_TO_APP_CACHE_KEY)
+      const map = raw ? JSON.parse(raw) : {}
+      map[`${chooseDialogSourceSessionId.value}::${chooseDialogFilename.value}`] = appId
+      localStorage.setItem(MD_TO_APP_CACHE_KEY, JSON.stringify(map))
+    } catch { /* ignore */ }
+  }
+  ElMessage.success(`正在打开 Builder 更新「${appName}」...`)
+  router.push({ path: '/chat', query: { app_id: String(appId), from: 'aichat' } })
+}
+
+function onChooseDialogConfirm(payload: { mode: 'new' } | { mode: 'update'; appId: number; appName: string }) {
+  if (payload.mode === 'new') handleChooseNew()
+  else handleChooseUpdate(payload.appId, payload.appName)
+}
+
+// 把右侧当前打开的设计文档送到 Builder：先弹"新建/更新"选目标对话框
 async function sendArtifactToBuilder() {
   if (!canSendArtifactToBuilder.value) return
-  // 已建过同名 → 直接跳应用，不重复 upload
+  // 已建过同名 → 直接跳应用，不重复 upload（保持原 dedup 行为）
   if (currentSession.value) {
     const cachedId = getCachedAppId(currentSession.value.id, activeArtifactName.value)
     if (cachedId) {
@@ -1184,19 +1276,16 @@ async function sendArtifactToBuilder() {
       return
     }
   }
-  previewStore.pendingMarkdown = {
-    filename: activeArtifactName.value,
-    content: activeArtifactContent.value,
-    sourceSessionId: currentSession.value?.id,
-  }
-  ElMessage.success('已发送，正在打开 Builder...')
-  await router.push({ path: '/chat', query: { from: 'aichat' } })
+  await openChooseDialog(
+    activeArtifactName.value,
+    activeArtifactContent.value,
+    currentSession.value?.id,
+  )
 }
 
-// inline 卡片的"→ Builder"：拿对应文件最新版本内容，再 push 到 pendingMarkdown
+// inline 卡片的"→ Builder"：拿对应文件最新版本内容，再走选目标对话框
 async function sendArtifactToBuilderByName(filename: string) {
   if (!currentSession.value) return
-  // 已建过同名 → 直接跳应用，不重复 upload
   const cachedId = getCachedAppId(currentSession.value.id, filename)
   if (cachedId) {
     ElMessage.success('已找到此设计文档对应的应用，正在打开...')
@@ -1209,13 +1298,7 @@ async function sendArtifactToBuilderByName(filename: string) {
       ElMessage.warning('设计文档为空')
       return
     }
-    previewStore.pendingMarkdown = {
-      filename,
-      content: detail.content,
-      sourceSessionId: currentSession.value.id,
-    }
-    ElMessage.success('已发送，正在打开 Builder...')
-    await router.push({ path: '/chat', query: { from: 'aichat' } })
+    await openChooseDialog(filename, detail.content, currentSession.value.id)
   } catch (e) {
     console.error(e)
     ElMessage.error('加载设计文档失败')

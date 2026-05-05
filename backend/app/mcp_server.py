@@ -559,3 +559,110 @@ async def publish_application(
     app_id, _ = _resolve_app_id(app_id, uid)
     res = await _api_call("POST", f"/applications/{app_id}/publish", tenant_id=tid, user_id=uid)
     return {"ok": True, "app_id": app_id, "result": res}
+
+
+def _do_validate_builder_doc(md_content: str) -> dict:
+    """validate_builder_doc 的纯函数实现（无 IO，可单独单测）。"""
+    from app.doc_standard_detector import detect
+    from app.doc_pipeline import _strip_template_scaffolding
+
+    if not md_content or not md_content.strip():
+        return {
+            "ok": False,
+            "score": 0,
+            "level": "freeform",
+            "decision": "rewrite_first",
+            "passes_strict": False,
+            "missing_sections": ["应用信息", "角色列表", "数据模型", "权限定义"],
+            "weak_sections": [],
+            "signals": {},
+            "advice": ["md_content 是空的，先把六章节模板写出来再校验。"],
+        }
+
+    cleaned = _strip_template_scaffolding(md_content)
+    result = detect(cleaned)
+    score = int(result.get("score") or 0)
+    missing = result.get("missing_sections") or []
+    weak = result.get("weak_sections") or []
+    signals = result.get("signals") or {}
+
+    advice: list[str] = []
+    if missing:
+        advice.append(
+            f"缺失必填章节：{', '.join(missing)}。补齐 ## 标题 + 标准表格。"
+        )
+    for section in weak:
+        advice.append(
+            f"「{section}」表头不达标：核对该章节表头与 6 章模板（"
+            "应用信息=应用编码/应用名称、角色=角色编码/角色名称、字典选项=选项编码/选项名称、"
+            "模型/表单=字段编码/字段名称、权限=表单名称/角色编码/可查看/可编辑/可删除/数据范围）。"
+        )
+    if (signals.get("code_compliance") or 1.0) < 0.9:
+        advice.append(
+            "编码字段不规范：appCode / 角色编码 / 字段编码 必须英文小写 + 下划线"
+            "（首字符字母，其余 [a-zA-Z0-9_-]）。检查所有'编码'列。"
+        )
+    if (signals.get("ref_integrity") or 1.0) < 0.9:
+        advice.append("引用不闭合：字典编码 / 关联模型编码 必须在文档内已声明。检查模型字段引用。")
+    if (signals.get("header_format") or 1.0) < 0.9:
+        advice.append("章节标题格式：用 ## 一、应用信息 / ## 二、角色列表 ... 的中文数字编号。")
+    # 阈值与后端 docs.py:1054 保持一致：>= 90 通过，< 90 后端会 400 拒收
+    passes = score >= 90 and not missing
+    if passes and score >= 95:
+        advice.append("✅ 标准（≥95），可直接调 generate_app_from_doc / update_app_from_doc。")
+    elif passes:
+        advice.append(
+            f"✅ 通过门槛（{score}/100，≥90 后端可解析）；如想更稳，按上面建议小修后重跑可冲到 95+。"
+        )
+    elif score >= 80:
+        advice.append(
+            f"未达标（{score}/100，门槛 90）：按上面建议修 1-2 处后重跑 validate_builder_doc。"
+        )
+    else:
+        advice.append(
+            f"严重偏离模板（{score}/100，门槛 90）：建议先按 STANDARD_DOC_FORMAT 把六章节骨架补齐再校验。"
+        )
+
+    return {
+        "ok": True,
+        "score": score,
+        "level": result.get("level"),
+        "decision": result.get("decision"),
+        "passes_strict": passes,
+        "missing_sections": missing,
+        "weak_sections": weak,
+        "signals": signals,
+        "advice": advice,
+    }
+
+
+@mcp.tool()
+async def validate_builder_doc(md_content: str) -> dict:
+    """校验一份 markdown 设计文档是否符合 aPaaS Builder 标准（不创建应用、不需要身份）。
+
+    用法：写完 / 改完 md 之后，先调这个工具自检。建议工作流：
+      1. 写完 md → 调 validate_builder_doc
+      2. passes_strict=False → 按 missing_sections / weak_sections / signals / advice 自我修补
+      3. 重复至多 3 轮；仍不通过把问题原文列给用户决定
+      4. passes_strict=True 才把 md 文档输出给用户（或直接用 generate_app_from_doc）
+
+    返回：
+        {
+          "ok": True,
+          "score": 0-100,                   # 综合分
+          "level": "standard|partial|freeform",
+          "decision": "pure_code|hybrid_fallback|rewrite_first",  # 后端会按此走解析路径
+          "passes_strict": bool,            # score >= 95 且无 missing_sections，可直接送 strict 解析
+          "missing_sections": [str],        # 缺的必填章节中文名
+          "weak_sections": [str],           # 表头不达标的章节中文名
+          "signals": {                       # 5 维子项打分（0~1）
+              "section_coverage": ...,       # 必填章节覆盖率（30 分权重）
+              "header_format": ...,          # ## N、名称 标题格式（15 分）
+              "table_header_match": ...,     # 表头与标准 6 章模板匹配率（25 分）
+              "code_compliance": ...,        # 编码字段全英文小写下划线（15 分）
+              "ref_integrity": ...           # 字典/模型引用闭合（15 分）
+          },
+          "advice": [str],                  # 给 agent 的下一步修补建议（人话）
+        }
+    """
+    return _do_validate_builder_doc(md_content)

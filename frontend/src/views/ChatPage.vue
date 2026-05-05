@@ -7665,6 +7665,26 @@ onMounted(async () => {
     await uploadDocFile(file)
   }
 
+  // 从 AIChat → Builder 选目标对话框选了「更新到 X」的：直接走 upload-doc-version 流程
+  // existingAppId 在前面 app_id 加载分支里已 set，这里 sanity check 一下保持一致
+  if (store.pendingDocUpdate && existingAppId.value === store.pendingDocUpdate.appId) {
+    const pending = store.pendingDocUpdate
+    store.pendingDocUpdate = null
+    const file = new File([pending.content], pending.filename, { type: 'text/markdown' })
+    await nextTick()
+    try {
+      await handleDocVersionUpload(file, pending.appId, {
+        userMessageContent: `📄 从 AI-Chat 更新设计文档：${pending.filename}`,
+        title: `更新设计文档：${pending.filename}`,
+      })
+    } catch (e) {
+      console.error('upload-doc-version from aichat failed', e)
+    }
+  } else if (store.pendingDocUpdate) {
+    // app_id 与 pending 不一致（理论不该发生）— 清掉避免下次再误触发
+    store.pendingDocUpdate = null
+  }
+
   // 从 Landing 页带过来的待解析文件
   if (store.pendingFile) {
     const file = store.pendingFile

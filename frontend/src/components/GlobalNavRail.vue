@@ -52,6 +52,12 @@
               <circle cx="8" cy="7.5" r="0.7" fill="currentColor" />
               <circle cx="10.5" cy="7.5" r="0.7" fill="currentColor" />
             </svg>
+            <svg v-else-if="item.key === 'requirements'" class="nav-icon" viewBox="0 0 16 16" fill="none">
+              <rect x="2.5" y="2" width="9" height="12" rx="1.2" stroke="currentColor" stroke-width="1.3" />
+              <path d="M5 5h4M5 7.5h4M5 10h2.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
+              <circle cx="12.4" cy="11.4" r="2.2" fill="none" stroke="currentColor" stroke-width="1.3" />
+              <path d="M11.4 11.4l0.7 0.7L13.4 10.7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
             <svg v-else class="nav-icon" viewBox="0 0 16 16" fill="none">
               <path d="M4.5 5L2 8l2.5 3M11.5 5L14 8l-2.5 3M9.5 4l-3 8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
             </svg>
@@ -144,21 +150,41 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, ref, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useUserStore } from '@/stores/user'
 import ThemeToggle from '@/components/ThemeToggle.vue'
+import request from '@/utils/request'
 
 const router = useRouter()
 const route = useRoute()
 const userStore = useUserStore()
 const expanded = ref(true)
 
-const primaryNavItems = [
-  { key: 'home', label: 'AI Builder', path: '/' },
-  { key: 'ai-chat', label: 'AI Chat', path: '/ai-chat' },
-]
+// AI 需求分析菜单：只在 backend 配了 dolphin_requirements_agent_code 时显示
+const requirementsAgentEnabled = ref(false)
+async function fetchDolphinConfig() {
+  if (!localStorage.getItem('token')) return
+  try {
+    const cfg = await request.get<unknown, { requirements_agent_code?: string }>('/dolphin/config')
+    requirementsAgentEnabled.value = !!cfg?.requirements_agent_code
+  } catch { /* 静默 — 没拿到就不显示菜单 */ }
+}
+onMounted(fetchDolphinConfig)
+// token 变化（切账号 / 切租户）后重新拉一次
+watch(() => userStore.token, fetchDolphinConfig)
+
+const primaryNavItems = computed(() => {
+  const items = [
+    { key: 'home', label: 'AI Builder', path: '/' },
+    { key: 'ai-chat', label: 'AI Chat', path: '/ai-chat' },
+  ]
+  if (requirementsAgentEnabled.value) {
+    items.push({ key: 'requirements', label: 'AI 需求分析', path: '/requirements-assistant' })
+  }
+  return items
+})
 
 const workspaceNavItems = [
   { key: 'coding', label: '开发工作区', path: '/coding' },
@@ -179,6 +205,7 @@ const adminNavItems = computed(() => {
 
 const activeKey = computed(() => {
   if (route.path.startsWith('/ai-chat')) return 'ai-chat'
+  if (route.path.startsWith('/requirements-assistant')) return 'requirements'
   if (route.path === '/' || route.path.startsWith('/apps')) return 'home'
   if (route.path.startsWith('/coding')) return 'coding'
   if (route.path.startsWith('/platform-envs')) return 'env'

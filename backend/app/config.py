@@ -101,6 +101,7 @@ class Settings(BaseSettings):
     dolphin_server_url: str = "https://dolphin-trial.definesys.cn"
     dolphin_agent_code: str = ""  # HelpAssistant 浮窗的"产品答疑助手"
     dolphin_app_adjust_agent_code: str = ""  # 应用详情页"AI 调整应用"按钮用的"应用调整助手"
+    dolphin_requirements_agent_code: str = ""  # AI 需求分析菜单用的"需求分析助手"（chat + cowork 整合）
     dolphin_tenant_id: str = "default"
     dolphin_service_token: str = ""  # 后端持有的 dolphin admin/service JWT，永远不下发到前端 build
     # 是否用 ai-builder 用户在 dolphin 镜像账号的 token 调 chat（每用户独立身份显示）。

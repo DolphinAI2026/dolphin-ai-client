@@ -6,6 +6,13 @@ export const applicationApi = {
   list(params?: { include_remote?: boolean; source_filter?: string }) {
     return request.get<any, MergedApplication[]>('/applications', { params })
   },
+  /** 按 app_name 模糊匹配本租户内当前用户可见的应用。AI-Chat → Builder 选目标弹框使用。 */
+  matchByName(appNameLike: string, limit = 5) {
+    return request.get<any, Array<{ id: number; app_name: string; app_code: string; status: string; apaas_app_id?: string | null; updated_at?: string | null }>>(
+      '/applications/match-by-name',
+      { params: { app_name_like: appNameLike, limit } }
+    )
+  },
   get(id: number) {
     return request.get<any, Application>(`/applications/${id}`)
   },
