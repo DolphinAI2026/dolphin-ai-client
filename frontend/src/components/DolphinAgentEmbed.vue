@@ -18,7 +18,7 @@
     <iframe
       v-if="iframeSrc"
       ref="iframeRef"
-      :key="props.appId || 0"
+      :key="iframeKey"
       :src="iframeSrc"
       class="dolphin-agent-iframe"
       :title="title || 'AI 助手'"
@@ -54,6 +54,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import request from '@/utils/request'
+import { useUserStore } from '@/stores/user'
 
 interface DolphinConfig {
   server_url: string
@@ -72,8 +73,18 @@ const props = defineProps<{
   title?: string
 }>()
 
+const userStore = useUserStore()
 const cfg = ref<DolphinConfig | null>(null)
 const iframeRef = ref<HTMLIFrameElement | null>(null)
+
+// iframe :key — 含 user.id + tenantId + appId，任意一项变都强制 iframe 销毁重建
+// 否则切账号 / 切租户后 dolphin iframe 还用旧用户的镜像 session，污染会话历史
+const iframeKey = computed(() => {
+  const uid = userStore.user?.id || 0
+  const tid = userStore.tenantId || 0
+  const aid = props.appId || 0
+  return `u${uid}-t${tid}-a${aid}`
+})
 // init-app-context 返回的 dolphin project_id；用来在 iframe URL 上加 ?project_id=
 // 让 dolphin sidebar 只显示该 ai-builder 用户当前 app 的会话历史（跨用户/跨 app 不污染）
 const projectId = ref<number | null>(null)
@@ -173,6 +184,21 @@ watch(() => props.appId, async (newId, oldId) => {
     await injectAppContext()
   }
 })
+
+// 切账号 / 切租户时整体重置：iframe 因 iframeKey 变化已自动销毁重建，
+// 但 cfg（含 access_token）需要重新调 /dolphin/config 拿新用户的镜像账号 token
+watch(
+  () => `${userStore.user?.id || 0}::${userStore.tenantId || 0}`,
+  async (newKey, oldKey) => {
+    if (oldKey === undefined || oldKey === newKey) return
+    cfg.value = null
+    projectId.value = null
+    ctxInjected.value = false
+    iframeReady.value = false
+    await loadConfig()
+    await injectAppContext()
+  },
+)
 
 // 上下文复制：把 "当前编辑应用 #X (Y)" copy 到剪贴板，方便用户直接粘贴到对话
 const copyState = ref('复制上下文')
