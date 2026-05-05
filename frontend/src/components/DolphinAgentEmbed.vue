@@ -15,28 +15,33 @@
       >{{ copyState }}</button>
     </div>
 
+    <!-- iframe 等 (无 appId) 或 (有 appId 且 ctx 注入完拿到 project_id) 才渲染。
+         避免先用无 project_id URL 加载一遍 dolphin SPA，等 project_id 到了
+         URL 变更又重新 navigate 加载第二遍 — 实测让首次加载耗时翻倍。 -->
     <iframe
-      v-if="iframeSrc && iframeMounted"
+      v-if="iframeSrc && iframeMounted && (!props.appId || ctxInjected)"
       ref="iframeRef"
       :key="props.appId || 0"
       :src="iframeSrc"
       class="dolphin-agent-iframe"
       :title="title || 'AI 助手'"
-      :style="{ opacity: ctxInjected ? 1 : 0.6 }"
       @load="onIframeLoad"
     />
     <div v-else class="dolphin-loading">
       <span class="spinner">⟳</span>
-      <span>加载 AI 助手...</span>
+      <span>{{ props.appId && !ctxInjected ? '正在锁定应用上下文...' : '加载 ' + (title || 'AI 助手') + '...' }}</span>
     </div>
     <!-- iframe 加载首屏 mask：dolphin SPA 含多个 chunks 首次 ~10-30s，
          不显示 mask 用户看到的就是浅蓝空白，体验糟糕。dolphin 发出 ready
          postMessage 时移除 mask（onMessage 里 set iframeReady=true）。 -->
     <transition name="dolphin-mask-fade">
-      <div v-if="iframeSrc && !iframeReady" class="dolphin-loading-mask">
+      <div
+        v-if="iframeSrc && (!props.appId || ctxInjected) && !iframeReady"
+        class="dolphin-loading-mask"
+      >
         <div class="dolphin-mask-card">
           <span class="spinner">⟳</span>
-          <div class="dolphin-mask-title">正在加载 AI 需求分析助手...</div>
+          <div class="dolphin-mask-title">正在加载 {{ title || 'AI 助手' }}...</div>
           <div class="dolphin-mask-hint">
             首次访问需要从 dolphin 加载 SPA chunks，
             <br />通常 5-30 秒，请稍候
@@ -44,10 +49,6 @@
         </div>
       </div>
     </transition>
-    <div v-if="iframeSrc && iframeReady && !ctxInjected" class="dolphin-ctx-syncing">
-      <span class="spinner">⟳</span>
-      <span>正在告诉 AI 助手当前应用…</span>
-    </div>
   </div>
 </template>
 
