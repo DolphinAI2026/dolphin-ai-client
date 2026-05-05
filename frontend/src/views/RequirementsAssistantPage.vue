@@ -16,9 +16,11 @@
       </div>
 
       <div v-else class="ra-layout">
-        <div class="ra-chat-fullwidth">
-          <DolphinAgentEmbed :agent-code="agentCode" title="AI 需求分析助手" />
-        </div>
+        <DolphinAgentEmbed
+          class="ra-chat-fullwidth"
+          :agent-code="agentCode"
+          title="AI 需求分析助手"
+        />
 
         <!-- 底部 action bar：状态 + 一键 → Builder -->
         <div class="ra-action-bar" :class="{ 'has-doc': hasDoc }">
@@ -324,15 +326,9 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
 }
+/* class 直接挂在 DolphinAgentEmbed 根元素上：scoped attr 通过子组件 root
+ * 转发自然命中；让 iframe 包装层在外层 column flex 里 flex:1 撑开。 */
 .ra-chat-fullwidth {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-/* DolphinAgentEmbed 是子组件，scoped CSS 默认不命中其根元素，
- * 用 :deep() 穿透，让它作为 column flex item 撑满主轴 */
-.ra-chat-fullwidth :deep(> *) {
   flex: 1;
   min-height: 0;
 }
