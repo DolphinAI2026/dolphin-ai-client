@@ -31,6 +31,17 @@
       <span class="spinner">⟳</span>
       <span>{{ props.appId && !ctxInjected ? '正在锁定应用上下文...' : '加载中...' }}</span>
     </div>
+    <!-- iframe 加载首屏 mask：只盖在 iframe 区域，避免用户看到 dolphin 浅蓝空白
+         以为页面坏了。dolphin postMessage 'ready' 或 iframe load 1.5s 后淡出。 -->
+    <transition name="dolphin-mask-fade">
+      <div
+        v-if="iframeSrc && (!props.appId || ctxInjected) && !iframeReady"
+        class="dolphin-loading-mask"
+      >
+        <span class="spinner">⟳</span>
+        <span class="dolphin-mask-title">正在加载 {{ title || 'AI 助手' }}</span>
+      </div>
+    </transition>
   </div>
 </template>
 
@@ -280,45 +291,28 @@ async function copyContext() {
   font-size: 14px;
 }
 
-/* iframe 首次加载 mask（覆盖整个 iframe 区） */
+/* iframe 首次加载 mask：覆盖 iframe，简单 spinner + 标题，不暗示等待时长 */
 .dolphin-loading-mask {
   position: absolute;
   top: 0; left: 0; right: 0; bottom: 0;
-  background: linear-gradient(135deg, #f5f3ff 0%, #eff6ff 100%);
+  background: var(--t-bg, #fff);
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 10px;
   z-index: 5;
   pointer-events: auto;
 }
-.dolphin-mask-card {
-  text-align: center;
-  padding: 28px 36px;
-  background: rgba(255, 255, 255, 0.85);
-  backdrop-filter: blur(8px);
-  border-radius: 12px;
-  box-shadow: 0 4px 16px rgba(99, 102, 241, 0.12);
-  border: 1px solid rgba(99, 102, 241, 0.15);
-}
-.dolphin-mask-card .spinner {
-  font-size: 28px;
+.dolphin-loading-mask .spinner {
+  font-size: 18px;
   color: #6366f1;
-  display: block;
-  margin: 0 auto 12px;
 }
 .dolphin-mask-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: #4338ca;
-  margin-bottom: 8px;
-}
-.dolphin-mask-hint {
-  font-size: 12.5px;
-  color: #6b7280;
-  line-height: 1.6;
+  font-size: 14px;
+  color: var(--t-text-secondary);
 }
 .dolphin-mask-fade-leave-active {
-  transition: opacity 0.4s ease;
+  transition: opacity 0.3s ease;
 }
 .dolphin-mask-fade-leave-to {
   opacity: 0;
