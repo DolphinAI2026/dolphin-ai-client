@@ -20,91 +20,83 @@
           <DolphinAgentEmbed :agent-code="agentCode" title="AI 需求分析助手" />
         </div>
         <div class="ra-artifact-pane">
-          <div class="ra-artifact-header">
-            <span class="ra-art-title">📄 设计文档</span>
-            <span v-if="docState === 'auto'" class="ra-art-badge auto">自动同步 ✓</span>
-            <span v-else-if="docState === 'manual'" class="ra-art-badge manual">手动粘贴</span>
-            <span v-else class="ra-art-badge empty">等待 agent 输出</span>
+          <!-- 状态条 -->
+          <div class="ra-card-status">
+            <span v-if="docState === 'auto'" class="ra-art-badge auto">● 自动同步</span>
+            <span v-else-if="docState === 'manual'" class="ra-art-badge manual">● 手动</span>
+            <span v-else class="ra-art-badge empty">○ 等待 agent</span>
           </div>
 
-          <div class="ra-artifact-meta" v-if="hasDoc">
-            <input
-              v-model="docFileName"
-              class="ra-art-filename"
-              placeholder="文件名（如 sales-order-design.md）"
-            />
-            <span v-if="docScore > 0" class="ra-art-score" :class="docScoreClass">
-              自检 {{ docScore }}/100
-            </span>
-          </div>
-
-          <div class="ra-artifact-body">
-            <div v-if="!hasDoc" class="ra-empty-guide">
-              <div class="ra-empty-icon">⏳</div>
-              <div class="ra-empty-title">等 agent 写完，自动同步到这里</div>
-              <ol class="ra-empty-steps">
-                <li>左侧跟需求分析助手对话，让它产出完整 6 章 markdown 设计文档</li>
-                <li>每 5 秒自动从 dolphin 拉一次最新对话，识别到 markdown 块就自动 fill</li>
-                <li>右上角徽章变绿色「自动同步 ✓」表示拿到了；自检分数也会显示</li>
-                <li>点右下角 <strong>→ Builder</strong> 一键创建 / 更新应用</li>
-              </ol>
-              <div class="ra-empty-hint">
-                💡 没等到也可以直接粘贴 markdown 到编辑框（自动抓取兜底）。
+          <!-- 主卡片 -->
+          <div class="ra-card-main" :class="{ 'is-empty': !hasDoc }">
+            <template v-if="hasDoc">
+              <div class="ra-card-icon">📄</div>
+              <div class="ra-card-filename" :title="docFileName">{{ docFileName }}</div>
+              <div class="ra-card-stats">
+                <span class="ra-card-stat-num">{{ docMd.length }}</span> 字符
+                <span class="ra-card-stat-sep">·</span>
+                <span v-if="docScore > 0" class="ra-card-score" :class="docScoreClass">
+                  自检 <strong>{{ docScore }}</strong>/100
+                </span>
               </div>
+
+              <button
+                class="ra-btn-builder"
+                :disabled="sendingToBuilder"
+                @click="sendToBuilder"
+              >
+                <span class="ra-btn-arrow">→</span>
+                <span>{{ sendingToBuilder ? '处理中...' : 'Builder' }}</span>
+              </button>
+              <div class="ra-card-builder-hint">
+                一键{{ docScore >= 90 ? '建/更新' : '送 Builder' }}应用
+              </div>
+
+              <div class="ra-card-tools">
+                <button class="ra-tool-btn" @click="copyMd" :title="'复制 md 到剪贴板'">
+                  <span>📋</span>{{ copyState }}
+                </button>
+                <button class="ra-tool-btn" @click="downloadMd" title="下载 .md 文件">
+                  <span>⬇</span>下载
+                </button>
+                <button class="ra-tool-btn" @click="showEditor = !showEditor" title="编辑 md 内容">
+                  <span>✏️</span>{{ showEditor ? '收起' : '编辑' }}
+                </button>
+                <button class="ra-tool-btn" @click="clearMd" title="清空当前文档">
+                  <span>🗑</span>清空
+                </button>
+              </div>
+
+              <!-- 编辑区（折叠） -->
               <textarea
+                v-if="showEditor"
                 v-model="docMd"
-                class="ra-empty-textarea"
-                placeholder="⬇ 在这里粘贴 markdown 设计文档..."
+                class="ra-card-editor"
                 spellcheck="false"
                 @input="onUserEdit"
               />
-            </div>
-            <div v-else class="ra-art-doc">
-              <div class="ra-art-tabs">
-                <button
-                  class="ra-tab"
-                  :class="{ active: viewMode === 'preview' }"
-                  @click="viewMode = 'preview'"
-                >👁 渲染</button>
-                <button
-                  class="ra-tab"
-                  :class="{ active: viewMode === 'edit' }"
-                  @click="viewMode = 'edit'"
-                >✏️ 编辑</button>
-                <span class="ra-tab-meta">{{ docMd.length }} 字符</span>
+            </template>
+
+            <template v-else>
+              <div class="ra-card-icon">⏳</div>
+              <div class="ra-empty-cap">等 agent 在左侧写完即可</div>
+              <div class="ra-empty-sub">
+                每 5 秒自动从 dolphin 同步最新 markdown，<br />
+                出现「📄 文件名」+「→ Builder」按钮就可点。
               </div>
-              <div
-                v-if="viewMode === 'preview'"
-                class="ra-art-preview markdown-body"
-                v-html="renderedMd"
-              />
+
+              <button class="ra-tool-btn ra-tool-btn-paste" @click="showEditor = !showEditor">
+                {{ showEditor ? '收起' : '✏️ 手动粘贴 md' }}
+              </button>
               <textarea
-                v-else
+                v-if="showEditor"
                 v-model="docMd"
-                class="ra-art-textarea"
+                class="ra-card-editor"
+                placeholder="⬇ 粘贴 markdown 设计文档..."
                 spellcheck="false"
                 @input="onUserEdit"
               />
-            </div>
-          </div>
-
-          <div class="ra-artifact-footer">
-            <button class="ra-btn-secondary" :disabled="!hasDoc" @click="copyMd">
-              {{ copyState }}
-            </button>
-            <button class="ra-btn-secondary" :disabled="!hasDoc" @click="downloadMd">
-              下载
-            </button>
-            <button class="ra-btn-secondary" :disabled="!hasDoc" @click="clearMd">
-              清空
-            </button>
-            <button
-              class="ra-btn-primary"
-              :disabled="!hasDoc || sendingToBuilder"
-              @click="sendToBuilder"
-            >
-              {{ sendingToBuilder ? '处理中...' : '→ Builder' }}
-            </button>
+            </template>
           </div>
         </div>
       </div>
@@ -125,15 +117,12 @@
 import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { marked } from 'marked'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
 import DolphinAgentEmbed from '@/components/DolphinAgentEmbed.vue'
 import ChooseAppTargetDialog from '@/components/ChooseAppTargetDialog.vue'
 import request from '@/utils/request'
 import { applicationApi } from '@/api/application'
 import { usePreviewStore } from '@/stores/preview'
-
-marked.setOptions({ breaks: true, gfm: true })
 
 const router = useRouter()
 const previewStore = usePreviewStore()
@@ -151,16 +140,7 @@ const docFileName = ref('')
 const docScore = ref(0)
 const docPendingId = ref<string | null>(null)
 const docSource = ref<'auto' | 'manual' | ''>('')
-const viewMode = ref<'preview' | 'edit'>('preview')
-
-const renderedMd = computed(() => {
-  if (!docMd.value) return ''
-  try {
-    return marked.parse(docMd.value) as string
-  } catch {
-    return `<pre>${docMd.value}</pre>`
-  }
-})
+const showEditor = ref(false)
 
 const hasDoc = computed(() => !!docMd.value.trim())
 const docState = computed<'auto' | 'manual' | 'empty'>(() => {
@@ -400,21 +380,186 @@ onBeforeUnmount(() => {
   gap: 0;
 }
 .ra-chat-pane {
-  flex: 0 0 60%;
+  flex: 1;
   min-width: 0;
   border-right: 1px solid var(--t-border-subtle);
   display: flex;
   flex-direction: column;
 }
 .ra-artifact-pane {
-  flex: 1;
+  flex: 0 0 280px;
   min-width: 0;
   display: flex;
   flex-direction: column;
   background: var(--t-bg-subtle, #fafafa);
+  padding: 16px 14px;
+  gap: 12px;
 }
 
-/* ── ArtifactPanel ── */
+/* ── 简化版 ArtifactPanel：状态条 + 大卡片 + 大 → Builder 按钮 ── */
+.ra-card-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.ra-card-main {
+  background: var(--t-bg, #fff);
+  border-radius: 12px;
+  padding: 18px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  border: 1px solid var(--t-border-subtle);
+  flex-shrink: 0;
+}
+.ra-card-main.is-empty {
+  background: linear-gradient(135deg, #f0f4ff, #fafbff);
+  border: 1px dashed #c7d2fe;
+}
+.ra-card-icon {
+  font-size: 32px;
+  margin-bottom: 8px;
+}
+.ra-card-filename {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--t-text-primary);
+  word-break: break-all;
+  max-width: 100%;
+  margin-bottom: 4px;
+  line-height: 1.4;
+}
+.ra-card-stats {
+  font-size: 12px;
+  color: var(--t-text-secondary);
+  margin-bottom: 16px;
+}
+.ra-card-stat-num {
+  font-weight: 600;
+  color: var(--t-text-primary);
+}
+.ra-card-stat-sep {
+  margin: 0 6px;
+  color: #cbd5e1;
+}
+.ra-card-score {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11.5px;
+}
+.ra-card-score.high { color: #047857; background: #d1fae5; }
+.ra-card-score.mid  { color: #b45309; background: #fef3c7; }
+.ra-card-score.low  { color: #b91c1c; background: #fee2e2; }
+.ra-card-score strong { font-size: 13px; }
+
+.ra-btn-builder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  height: 44px;
+  padding: 0 16px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #fff;
+  background: linear-gradient(135deg, #6366f1, #4338ca);
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.18s;
+  box-shadow: 0 2px 6px rgba(67, 56, 202, 0.25);
+}
+.ra-btn-builder:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 10px rgba(67, 56, 202, 0.35);
+}
+.ra-btn-builder:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.ra-btn-arrow {
+  font-size: 17px;
+  font-weight: 400;
+}
+.ra-card-builder-hint {
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: var(--t-text-muted);
+}
+
+.ra-card-tools {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  width: 100%;
+  margin-top: 16px;
+}
+.ra-tool-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 6px 8px;
+  font-size: 12px;
+  border: 1px solid var(--t-border-subtle);
+  background: var(--t-bg, #fff);
+  color: var(--t-text-secondary);
+  border-radius: 5px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.ra-tool-btn:hover {
+  background: var(--t-bg-input);
+  color: var(--t-text-primary);
+}
+.ra-tool-btn span { font-size: 11px; }
+
+.ra-tool-btn-paste {
+  width: 100%;
+  margin-top: 16px;
+  padding: 8px;
+  font-size: 12.5px;
+}
+
+.ra-empty-cap {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--t-text-primary);
+  margin-bottom: 8px;
+}
+.ra-empty-sub {
+  font-size: 12px;
+  color: var(--t-text-secondary);
+  line-height: 1.6;
+}
+
+.ra-card-editor {
+  width: 100%;
+  margin-top: 12px;
+  min-height: 160px;
+  resize: vertical;
+  border: 1px solid var(--t-border-subtle);
+  border-radius: 6px;
+  padding: 10px;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--t-text-primary);
+  background: var(--t-bg, #fff);
+  outline: none;
+}
+.ra-card-editor:focus {
+  border-color: #6366f1;
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.15);
+}
+
+/* 旧 dead 样式留着不影响 */
 .ra-artifact-header {
   display: flex;
   align-items: center;
@@ -429,9 +574,9 @@ onBeforeUnmount(() => {
   flex: 1;
 }
 .ra-art-badge {
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 10px;
+  font-size: 11.5px;
+  padding: 4px 12px;
+  border-radius: 12px;
   font-weight: 500;
 }
 .ra-art-badge.auto {
