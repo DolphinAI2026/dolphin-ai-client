@@ -50,25 +50,54 @@ _LAST_SEEN_MSG_ID: dict[int, str] = {}  # ai_builder_user_id → last assistant 
 # ── markdown 提取正则 ────────────────────────────────────────────────
 # 匹配 ```markdown / ```md / ``` 标题包裹的代码块（DOTALL，非贪婪）
 _MD_BLOCK_RE = re.compile(r"```(?:markdown|md)?\s*\n(.*?)\n```", re.DOTALL | re.IGNORECASE)
+# 匹配 Python `content = """..."""` 或 `content = '''...'''` 中的字符串内容
+# agent 调 execute_skill_python 写沙箱 .md 时，code 字段里 md 全文以这种方式内嵌
+_PY_CONTENT_RE = re.compile(
+    r"""(?:content|md|text|doc)\s*=\s*(?P<q>"{3}|'{3})(?P<body>.*?)(?P=q)""",
+    re.DOTALL,
+)
+
+
+def _looks_like_design_md(body: str) -> bool:
+    """判定一段文本是不是 6 章节设计文档 — 至少含 2 个章节关键词。"""
+    if not body or len(body) < 200:
+        return False
+    keywords = ("应用信息", "角色列表", "数据字典", "数据模型", "表单定义", "权限定义", "权限配置")
+    hits = sum(1 for k in keywords if k in body)
+    return hits >= 2
 
 
 def _extract_md_block(text: str) -> Optional[str]:
     """从一段 assistant 文本里抓 6 章节 markdown 块；找不到返回 None。
 
-    优先策略：找含「一、应用信息」「二、角色列表」等标志的最长块。
+    优先策略：找含「应用信息」「角色列表」等多标志的最长块。
     """
     if not text:
         return None
     candidates: list[str] = []
     for m in _MD_BLOCK_RE.finditer(text):
         body = m.group(1).strip()
-        if body and ("应用信息" in body or "角色列表" in body or "数据模型" in body):
+        if _looks_like_design_md(body):
             candidates.append(body)
     if candidates:
         return max(candidates, key=len)
     # fallback: 整段文本本身可能就是 md（agent 没用 code block 包）
-    if "## 一、应用信息" in text or "应用信息" in text and "角色列表" in text:
+    if _looks_like_design_md(text):
         return text.strip()
+    return None
+
+
+def _extract_md_from_python_code(code: str) -> Optional[str]:
+    """从 execute_skill_python 的 code 字段抽 `content = \"\"\"...\"\"\"` 里的 md。"""
+    if not code:
+        return None
+    candidates: list[str] = []
+    for m in _PY_CONTENT_RE.finditer(code):
+        body = (m.group("body") or "").strip()
+        if _looks_like_design_md(body):
+            candidates.append(body)
+    if candidates:
+        return max(candidates, key=len)
     return None
 
 
@@ -157,21 +186,58 @@ async def _try_extract_md_from_dolphin(
                 if msg.get("role") != "ASSISTANT":
                     continue
                 blocks = msg.get("blocks") or []
-                # 拼所有 TEXT block 的 text
+                # 收集 TEXT block 文本 + TOOLUSE 里 execute_skill_python 的 code/output
                 text_parts: list[str] = []
+                py_codes: list[str] = []
+                py_outputs: list[str] = []
                 file_name_hint = ""
                 for b in blocks:
                     if b.get("type") == "TEXT" and isinstance(b.get("text"), str):
                         text_parts.append(b["text"])
                     elif b.get("type") == "TOOLUSE" and b.get("tool_status") == "COMPLETE":
-                        # 顺便从 execute_skill_python 输出里抓沙箱文件名
+                        if b.get("tool_name") != "execute_skill_python":
+                            continue
                         out = b.get("tool_output") or ""
-                        if isinstance(out, str) and "/workspace/skills/" in out:
-                            fm = re.search(r"/workspace/skills/([^\"\\s,)]+\.md)", out)
+                        # tool_output 可能是 JSON string 或已解析 dict
+                        out_data = out
+                        if isinstance(out, str):
+                            try:
+                                import json as _json
+                                out_data = _json.loads(out)
+                            except Exception:
+                                out_data = {"text": out}
+                        if isinstance(out_data, dict):
+                            inp = out_data.get("input") or {}
+                            if isinstance(inp, dict) and isinstance(inp.get("code"), str):
+                                py_codes.append(inp["code"])
+                            if isinstance(out_data.get("text"), str):
+                                py_outputs.append(out_data["text"])
+                            # artifacts 里抽文件名
+                            artifacts = out_data.get("artifacts") or []
+                            for art in artifacts if isinstance(artifacts, list) else []:
+                                name = (art or {}).get("name") or ""
+                                if name.endswith(".md") and not file_name_hint:
+                                    file_name_hint = name
+                        # fallback：从原始 string 里抽 /workspace/skills/<name>.md
+                        if isinstance(out, str) and not file_name_hint:
+                            fm = re.search(r"/workspace/skills/([^\"\s,)]+\.md)", out)
                             if fm:
                                 file_name_hint = fm.group(1)
+
+                # 抽 md 三级回退：TEXT 块 ```markdown``` → execute_skill_python 的 code → output text
                 full_text = "\n\n".join(text_parts)
                 md = _extract_md_block(full_text)
+                if not md:
+                    for code in py_codes:
+                        md = _extract_md_from_python_code(code)
+                        if md:
+                            break
+                if not md:
+                    for out_text in py_outputs:
+                        md = _extract_md_block(out_text)
+                        if md:
+                            break
+
                 if md:
                     score = (_do_validate_builder_doc(md) or {}).get("score", 0)
                     # 从 md H1 推 file_name；fallback 到沙箱文件名 / 通用
