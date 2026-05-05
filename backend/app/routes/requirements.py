@@ -46,6 +46,14 @@ _AGENT_ID_CACHE: dict[str, int] = {}
 # session_id → 上次拉到的最后一条 assistant message id；用作"消息是否变化"的去重 key
 _LAST_SEEN_MSG_ID: dict[int, str] = {}  # ai_builder_user_id → last assistant message id
 
+# /latest-doc 响应级 cache：(user_id) → (timestamp, response_dict)
+# 30s 内同一用户的轮询直接复用上次响应，不重复打 dolphin 4 个 API。
+# 前端拿到 doc 后会从 5s 降到 30s 轮询，再叠加这层服务端 30s cache，dolphin
+# 端实际负载 ~30s 一次，从 dolphin 视角看只剩下"用户主动停在该页面持续轮询"的
+# 缓慢节奏，不会把 dolphin chat history API 打爆。
+_LATEST_DOC_RESPONSE_CACHE: dict[int, tuple[float, dict]] = {}
+_RESPONSE_CACHE_TTL = 30.0  # 秒
+
 
 # ── markdown 提取正则 ────────────────────────────────────────────────
 # 匹配 ```markdown / ```md / ``` 标题包裹的代码块（DOTALL，非贪婪）
@@ -282,9 +290,15 @@ async def get_latest_requirements_doc(
 
     返回 has_doc=False 时前端右侧面板显示空态（粘贴引导）。
     """
+    # 服务端 30s 节流：同一用户 30s 内复用上次响应，不重复打 dolphin
+    now = time.time()
+    cached_resp = _LATEST_DOC_RESPONSE_CACHE.get(ctx.user.id)
+    if cached_resp and (now - cached_resp[0]) < _RESPONSE_CACHE_TTL:
+        return cached_resp[1]
+
     rec = _peek_requirements_doc(ctx.user.id)
     if rec:
-        return {
+        resp = {
             "has_doc": True,
             "pending_id": rec["pending_id"],
             "file_name": rec["file_name"],
@@ -293,12 +307,16 @@ async def get_latest_requirements_doc(
             "submitted_at": rec.get("submitted_at"),
             "source": rec.get("source") or "mcp",
         }
+        _LATEST_DOC_RESPONSE_CACHE[ctx.user.id] = (now, resp)
+        return resp
 
     # cache miss → fall back 到 dolphin chat 历史抓取
     agent_code = settings.dolphin_requirements_agent_code or ""
     extracted = await _try_extract_md_from_dolphin(db, ctx.user, agent_code)
     if not extracted:
-        return {"has_doc": False}
+        empty_resp = {"has_doc": False}
+        _LATEST_DOC_RESPONSE_CACHE[ctx.user.id] = (now, empty_resp)
+        return empty_resp
 
     msg_id = extracted.get("message_id") or ""
     # 同一消息别再重复"提示用户"（前端 ElMessage.success 在 pending_id 变时弹）
@@ -318,7 +336,7 @@ async def get_latest_requirements_doc(
     _REQUIREMENTS_DOC_CACHE[ctx.user.id] = rec
     _LAST_SEEN_MSG_ID[ctx.user.id] = msg_id
 
-    return {
+    resp = {
         "has_doc": True,
         "pending_id": rec["pending_id"],
         "file_name": rec["file_name"],
@@ -327,6 +345,8 @@ async def get_latest_requirements_doc(
         "submitted_at": rec["submitted_at"],
         "source": rec["source"],
     }
+    _LATEST_DOC_RESPONSE_CACHE[ctx.user.id] = (now, resp)
+    return resp
 
 
 @router.post("/consume-doc/{pending_id}")
@@ -342,8 +362,9 @@ async def consume_requirements_doc(
     rec = _consume_requirements_doc(ctx.user.id, pending_id)
     if not rec:
         raise HTTPException(404, "no pending design doc for this user, or pending_id mismatch")
-    # consume 后清掉 last seen，让用户下次再聊新对话能再被自动抓到
+    # consume 后清掉 last seen + response cache，让用户下次再聊新对话能立刻被抓到
     _LAST_SEEN_MSG_ID.pop(ctx.user.id, None)
+    _LATEST_DOC_RESPONSE_CACHE.pop(ctx.user.id, None)
     return {
         "ok": True,
         "file_name": rec["file_name"],

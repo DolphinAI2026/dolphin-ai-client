@@ -109,8 +109,16 @@ const emptyPlaceholder = computed(() => {
   ].join('\n')
 })
 
-// ── 自动模式：5s 轮询 backend cache ──
+// ── 自动模式：动态频率轮询 backend cache ──
+// - 没拿到 doc：5s 一次（积极找）
+// - 拿到 doc：30s 一次（用户已有内容，定期检查 agent 是否生成新版即可，不再争抢资源）
+const POLL_FAST_MS = 5000
+const POLL_SLOW_MS = 30000
 let pollTimer: number | null = null
+function schedulePoll(intervalMs: number) {
+  if (pollTimer) clearInterval(pollTimer)
+  pollTimer = window.setInterval(pollLatestDoc, intervalMs)
+}
 async function pollLatestDoc() {
   if (!agentCode.value) return
   try {
@@ -121,17 +129,31 @@ async function pollLatestDoc() {
       md_content?: string
       score?: number
     }>('/requirements/latest-doc')
-    if (!res?.has_doc) return
-    // 已是当前展示的版本，跳过
-    if (res.pending_id === docPendingId.value) return
-    // 用户在本地已手动改过且非空 → 不覆盖（避免抢用户输入）
-    if (docSource.value === 'manual' && hasDoc.value) return
+    if (!res?.has_doc) {
+      // 没拿到 → 保持快速轮询
+      if (pollTimer && hasDoc.value === false && docSource.value !== 'manual') {
+        // 已经在快速模式，不动
+      }
+      return
+    }
+    // 已是当前展示的版本，跳过；但拿到了说明 cache 有 doc，可降速
+    if (res.pending_id === docPendingId.value) {
+      schedulePoll(POLL_SLOW_MS)
+      return
+    }
+    // 用户在本地已手动改过且非空 → 不覆盖（避免抢用户输入），同时降速
+    if (docSource.value === 'manual' && hasDoc.value) {
+      schedulePoll(POLL_SLOW_MS)
+      return
+    }
     docMd.value = res.md_content || ''
     docFileName.value = res.file_name || 'design-doc.md'
     docScore.value = res.score || 0
     docPendingId.value = res.pending_id || null
     docSource.value = 'auto'
     ElMessage.success(`AI 已生成新版设计文档（${res.file_name}）`)
+    // 拿到新 doc 后降速轮询（30s 一次足够发现下个版本）
+    schedulePoll(POLL_SLOW_MS)
   } catch (e) {
     // 静默 — 没拿到就保持当前 UI
   }
@@ -266,7 +288,9 @@ onMounted(async () => {
   // 进页就拉一次，之后 5s 轮询
   if (agentCode.value) {
     await pollLatestDoc()
-    pollTimer = window.setInterval(pollLatestDoc, 5000)
+    // 进页第一次 poll 已设置 timer（pollLatestDoc 内部会调 schedulePoll）；
+    // 兜底：如果 pollLatestDoc 没命中任何分支，仍然要起 fast 轮询
+    if (!pollTimer) schedulePoll(POLL_FAST_MS)
   }
 })
 
