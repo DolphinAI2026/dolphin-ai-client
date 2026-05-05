@@ -50,10 +50,24 @@
           </div>
 
           <div class="ra-artifact-body">
+            <div v-if="!hasDoc" class="ra-empty-guide">
+              <div class="ra-empty-icon">📋</div>
+              <div class="ra-empty-title">从左侧 chat 复制 markdown 到这里</div>
+              <ol class="ra-empty-steps">
+                <li>等需求分析助手生成完整 md（含「一、应用信息 ... 六、权限定义」）</li>
+                <li>选中 ```markdown code block 里的内容（不含外层 \`\`\` 包裹）</li>
+                <li>粘贴到下面的输入框</li>
+                <li>点右下角 <strong>→ Builder</strong> 一键创建 / 更新应用</li>
+              </ol>
+              <div class="ra-empty-hint">
+                💡 后续 agent 会自动同步到这里 — 当前因 dolphin 平台工具缓存未完全刷新，先用复制粘贴方式。
+              </div>
+            </div>
             <textarea
               v-model="docMd"
               class="ra-art-textarea"
-              :placeholder="emptyPlaceholder"
+              :class="{ 'has-content': hasDoc }"
+              :placeholder="hasDoc ? '' : '⬇ 在这里粘贴 markdown 设计文档...'"
               spellcheck="false"
             />
           </div>
@@ -458,6 +472,46 @@ onBeforeUnmount(() => {
   min-height: 0;
   padding: 12px 16px;
   display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.ra-empty-guide {
+  background: linear-gradient(135deg, #eff6ff, #f0f9ff);
+  border: 1px dashed #93c5fd;
+  border-radius: 8px;
+  padding: 16px 18px;
+  flex-shrink: 0;
+}
+.ra-empty-icon {
+  font-size: 24px;
+  margin-bottom: 6px;
+}
+.ra-empty-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1e40af;
+  margin-bottom: 10px;
+}
+.ra-empty-steps {
+  margin: 0 0 10px 0;
+  padding-left: 20px;
+  font-size: 12.5px;
+  color: #1e40af;
+  line-height: 1.7;
+}
+.ra-empty-steps strong {
+  color: #4338ca;
+  background: #e0e7ff;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+.ra-empty-hint {
+  font-size: 11.5px;
+  color: #6b7280;
+  border-top: 1px dashed #cbd5e1;
+  padding-top: 8px;
+  line-height: 1.55;
 }
 .ra-art-textarea {
   flex: 1;
@@ -472,6 +526,7 @@ onBeforeUnmount(() => {
   color: var(--t-text-primary);
   background: var(--t-bg, #fff);
   outline: none;
+  min-height: 200px;
 }
 .ra-art-textarea:focus {
   border-color: #6366f1;
