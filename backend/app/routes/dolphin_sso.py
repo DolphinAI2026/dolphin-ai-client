@@ -152,12 +152,18 @@ async def init_app_context_session(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """前端进 ChatPage 时调一次：用**当前 ai-builder 用户的 dolphin 镜像账号 token**
-    在 dolphin agent 里发一条隐藏 [SYSTEM CTX] 消息 → dolphin 该用户最近 session
-    就是含上下文的新 session。iframe 加载时 dolphin embed resume 这个 session，
-    agent 已经知道当前应用，不会再问"哪个应用"。
+    """前端进 ChatPage / 切 app 时调一次：拿/创 dolphin project_id +
+    set_current_app（让后续 mcp 工具调用反查到正确 app）。
 
-    每个 ai-builder 用户在 dolphin 是独立账号，session / project 都按用户隔离。
+    历史版本会主动调 dolphin chat send 注入 [SYSTEM CTX] 消息，但有两个问题：
+    1. 慢：每次切 app 等 dolphin 5 秒流式响应（实际首次 dolphin 慢时 5s 超时）
+    2. 占用：每次进 app 创建一个空 session 累积在 dolphin sidebar 里
+       （用户截图能看到 "[SYSTEM CTX] 用户当前在 ai-builder ..." × N 条）
+
+    新版本：只拿 project_id + set_current_app（毫秒级）。dolphin iframe 用
+    project_id 自动 resume 该 project 最近**真实**会话。agent 不再依赖
+    [SYSTEM CTX] 消息识别上下文 — 通过 mcp 工具的 _resolve_app_id 反查
+    current_app state 也能拿到 app_id（已经支持）。
     """
     if not settings.dolphin_service_token:
         raise HTTPException(status_code=503, detail="DOLPHIN_SERVICE_TOKEN 未配置")
@@ -165,23 +171,15 @@ async def init_app_context_session(
     if not agent_code:
         raise HTTPException(status_code=503, detail="dolphin app_adjust_agent_code 未配置")
 
-    # 选择 chat send 用的 token：开关打开就用用户镜像 token；否则用 service_token
+    # 选择 token：开关打开用用户镜像 token（让 project owner 落到该用户名下）
     use_user_token = bool(getattr(settings, "dolphin_use_user_token", False))
-    chat_token = settings.dolphin_service_token
+    bearer_token = settings.dolphin_service_token
     if use_user_token:
         try:
-            chat_token, _dolphin_uid = await get_user_dolphin_credentials(db, ctx.user)
+            bearer_token, _dolphin_uid = await get_user_dolphin_credentials(db, ctx.user)
         except Exception as exc:
             logger.error("init-app-context 颁 dolphin token 失败 user=%s: %s", ctx.user.id, exc)
-            chat_token = settings.dolphin_service_token  # 降级
-
-    # 构造 ctx 消息 — agent prompt 里教过看到 [SYSTEM CTX] 开头就简短确认不展开
-    ctx_msg = (
-        f"[SYSTEM CTX] 用户当前在 ai-builder 编辑应用 #{req.app_id}"
-        + (f"（{req.app_name}）" if req.app_name else "")
-        + "。后续对话中调任何 MCP 工具时不必显式传 app_id，后端会自动用这个应用。"
-        + "请用一句话简短确认上下文已锁定到这个应用。"
-    )
+            bearer_token = settings.dolphin_service_token  # 降级
 
     # ★ 关键：先把 current_app state 写好（用本请求的 app_id），保证 mcp 工具调用
     # 反查时一定拿到当前 app，不依赖前端 ChatPage syncCurrentAppToBackend 的时序。
@@ -190,47 +188,14 @@ async def init_app_context_session(
     from app.routes.current_app import set_current_app as _set_current_app
     _set_current_app(ctx.user.id, ctx.tenant_id, req.app_id, req.app_name)
 
-    # 给当前 (user, app) 拿/创 dolphin 项目；同 chat token 创建（保证 owner 一致）
+    # 给当前 (user, app) 拿/创 dolphin 项目；iframe URL 带这个 project_id 后
+    # dolphin 会自动 resume 该 project 最近 session（含真实对话历史）
     project_id = await _ensure_dolphin_project(
         user_id=ctx.user.id,
         app_id=req.app_id,
         app_name=req.app_name,
         server_url=settings.dolphin_server_url,
-        bearer_token=chat_token,
+        bearer_token=bearer_token,
     )
 
-    url = f"{settings.dolphin_server_url.rstrip('/')}/api/agentChat/agent/run/chat/{agent_code}"
-    session_id = ""
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            # dolphin chat send 是流式响应，我们只关心 sessionid header（响应一开始就发）
-            chat_body: dict = {"input": ctx_msg, "budget_preset": "complex"}
-            if project_id:
-                chat_body["project_id"] = project_id
-            async with client.stream(
-                "POST",
-                url,
-                json=chat_body,
-                headers={
-                    "Authorization": f"Bearer {chat_token}",
-                    "Content-Type": "application/json",
-                    "X-Tenant-Id": settings.dolphin_tenant_id or "default",
-                },
-            ) as resp:
-                session_id = resp.headers.get("sessionid", "")
-                # 消费一段流让 dolphin 真正写 session 历史，但不等完整回复
-                # （限 5s 否则放弃）
-                import asyncio as _asyncio
-                async def _consume():
-                    async for _ in resp.aiter_bytes():
-                        pass
-                try:
-                    await _asyncio.wait_for(_consume(), timeout=5.0)
-                except _asyncio.TimeoutError:
-                    pass
-    except Exception as exc:
-        logger.warning("init-app-context failed: %s", exc)
-        # 不阻塞前端 — 即使 ctx 注入失败 iframe 仍可正常使用
-        return {"ok": False, "error": str(exc)[:200]}
-
-    return {"ok": True, "session_id": session_id, "agent_code": agent_code, "project_id": project_id}
+    return {"ok": True, "agent_code": agent_code, "project_id": project_id}
