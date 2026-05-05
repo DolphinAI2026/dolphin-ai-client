@@ -40,24 +40,25 @@
 
           <div class="ra-artifact-body">
             <div v-if="!hasDoc" class="ra-empty-guide">
-              <div class="ra-empty-icon">📋</div>
-              <div class="ra-empty-title">从左侧 chat 复制 markdown 到这里</div>
+              <div class="ra-empty-icon">⏳</div>
+              <div class="ra-empty-title">等 agent 写完，自动同步到这里</div>
               <ol class="ra-empty-steps">
-                <li>等需求分析助手生成完整 md（含「一、应用信息 ... 六、权限定义」）</li>
-                <li>选中 ```markdown code block 里的内容（不含外层 \`\`\` 包裹）</li>
-                <li>粘贴到下面的输入框</li>
+                <li>左侧跟需求分析助手对话，让它产出完整 6 章 markdown 设计文档</li>
+                <li>每 5 秒自动从 dolphin 拉一次最新对话，识别到 markdown 块就自动 fill</li>
+                <li>右上角徽章变绿色「自动同步 ✓」表示拿到了；自检分数也会显示</li>
                 <li>点右下角 <strong>→ Builder</strong> 一键创建 / 更新应用</li>
               </ol>
               <div class="ra-empty-hint">
-                💡 后续 agent 会自动同步到这里 — 当前因 dolphin 平台工具缓存未完全刷新，先用复制粘贴方式。
+                💡 也可以手动粘贴 markdown 到下方输入框（适用于自动抓取出错时的兜底）。
               </div>
             </div>
             <textarea
               v-model="docMd"
               class="ra-art-textarea"
               :class="{ 'has-content': hasDoc }"
-              :placeholder="hasDoc ? '' : '⬇ 在这里粘贴 markdown 设计文档...'"
+              :placeholder="hasDoc ? '' : '⬇ 自动同步中...或在这里粘贴 markdown 设计文档'"
               spellcheck="false"
+              @input="onUserEdit"
             />
           </div>
 
@@ -95,7 +96,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, computed, watch } from 'vue'
+import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
@@ -170,14 +171,16 @@ async function pollLatestDoc() {
   }
 }
 
-watch(docMd, (v, oldV) => {
-  // 用户在 textarea 里编辑/粘贴时切到 manual 模式
-  if (oldV && v !== oldV && docSource.value === 'auto') {
+function onUserEdit() {
+  // 用户在 textarea 真正键入/粘贴时调用 — 切到 manual 模式
+  // auto fill 是 ref 直接赋值，不会触发 @input，所以不会被误切
+  if (docSource.value === 'auto') {
     docSource.value = 'manual'
-  } else if (!oldV && v && docSource.value !== 'auto') {
+    docPendingId.value = null  // 用户改了，原 cache 失效
+  } else if (docSource.value === '') {
     docSource.value = 'manual'
   }
-})
+}
 
 // ── 工具栏 actions ──
 const copyState = ref('复制')
