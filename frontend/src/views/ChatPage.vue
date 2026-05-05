@@ -1416,7 +1416,12 @@ async function pollAppForChanges() {
 }
 function startAppPolling() {
   if (_appPollTimer) return
-  _appPollTimer = setInterval(() => { void pollAppForChanges() }, 5000)
+  // 30s 一次：每次 GET /applications/{id} ~17KB，5s 一次太重；agent 改 SPEC
+  // 是低频事件，30s 检测足够。tab 切走时 visibilitychange 会暂停（被动节流）。
+  _appPollTimer = setInterval(() => {
+    if (document.visibilityState !== 'visible') return  // tab 不可见暂停
+    void pollAppForChanges()
+  }, 30000)
 }
 function stopAppPolling() {
   if (_appPollTimer) { clearInterval(_appPollTimer); _appPollTimer = null }
