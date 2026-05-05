@@ -29,26 +29,8 @@
     />
     <div v-else class="dolphin-loading">
       <span class="spinner">⟳</span>
-      <span>{{ props.appId && !ctxInjected ? '正在锁定应用上下文...' : '加载 ' + (title || 'AI 助手') + '...' }}</span>
+      <span>{{ props.appId && !ctxInjected ? '正在锁定应用上下文...' : '加载中...' }}</span>
     </div>
-    <!-- iframe 加载首屏 mask：dolphin SPA 含多个 chunks 首次 ~10-30s，
-         不显示 mask 用户看到的就是浅蓝空白，体验糟糕。dolphin 发出 ready
-         postMessage 时移除 mask（onMessage 里 set iframeReady=true）。 -->
-    <transition name="dolphin-mask-fade">
-      <div
-        v-if="iframeSrc && (!props.appId || ctxInjected) && !iframeReady"
-        class="dolphin-loading-mask"
-      >
-        <div class="dolphin-mask-card">
-          <span class="spinner">⟳</span>
-          <div class="dolphin-mask-title">正在加载 {{ title || 'AI 助手' }}...</div>
-          <div class="dolphin-mask-hint">
-            首次访问需要从 dolphin 加载 SPA chunks，
-            <br />通常 5-30 秒，请稍候
-          </div>
-        </div>
-      </div>
-    </transition>
   </div>
 </template>
 
