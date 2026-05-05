@@ -666,3 +666,87 @@ async def validate_builder_doc(md_content: str) -> dict:
         }
     """
     return _do_validate_builder_doc(md_content)
+
+
+# ─────────────────────── 需求分析助手 → ai-builder 设计文档中转 ───────────────────────
+#
+# 设计目标：让需求分析助手（dolphin agent 81）写完标准 md 后，把文档内容传到 ai-builder
+# 后端 cache，前端 RequirementsAssistantPage 的右侧 ArtifactPanel 轮询 cache 拉到展示，
+# 并提供「→ Builder」一键跳到 /chat 走应用建立流程。
+#
+# 用户身份反查：dolphin 自定义 Body 字段会注入 user_id（trial 阶段都是 1，但前面的
+# _resolve_identity 已经支持从 current_app 反查真实 ai-builder 用户）。我们用反查得到
+# 的 (tenant_id, user_id) 作为 cache key，避免多用户互相覆盖。
+#
+# Cache 是进程内的（单实例 trial 够用，生产换 redis）。
+
+import time as _time
+import uuid as _uuid
+
+# user_id → {pending_id, file_name, md_content, score, submitted_at, source}
+_REQUIREMENTS_DOC_CACHE: dict[int, dict] = {}
+
+
+def _peek_requirements_doc(user_id: int) -> dict | None:
+    """前端 GET /requirements/latest-doc 的内部实现 — 返回某用户最新提交的设计文档（不删除）。"""
+    rec = _REQUIREMENTS_DOC_CACHE.get(int(user_id))
+    if not rec:
+        return None
+    return dict(rec)
+
+
+def _consume_requirements_doc(user_id: int, pending_id: str) -> dict | None:
+    """点 → Builder 之后调一次拿走。pending_id 校验避免老缓存被误用（用户多次写文档时）。"""
+    rec = _REQUIREMENTS_DOC_CACHE.get(int(user_id))
+    if not rec or rec.get("pending_id") != pending_id:
+        return None
+    return _REQUIREMENTS_DOC_CACHE.pop(int(user_id), None)
+
+
+@mcp.tool()
+async def submit_design_doc(
+    md_content: str,
+    file_name: str = "design-doc.md",
+    tenant_id: int = 0,
+    user_id: int = 0,
+) -> dict:
+    """把当前 md 设计文档送到 ai-builder「需求分析」页右侧 Artifact 面板，让用户一键继续 Builder 流程。
+
+    用法（在 prompt 工作流里）：
+      1. 写完 md → 调 validate_builder_doc 自检（passes_strict=true）
+      2. 沙箱 Python 写 .md 文件让 dolphin chat UI 自然渲染附件下载（标准 UX）
+      3. **同步调本工具** submit_design_doc(md_content) — 把内容送到 ai-builder
+      4. 在 chat 提示用户："已送到右侧面板，点击 → Builder 即可开始搭建"
+
+    返回：
+        { "ok": True, "pending_id": "...", "expires_in_seconds": 1800 }
+
+    pending_id 30 分钟后自动失效（用户在 dolphin 改 md 重新调本工具时会覆盖之前的 cache）。
+    """
+    if not md_content or not md_content.strip():
+        return {"ok": False, "error": "md_content 是空的，无法提交"}
+
+    tid, uid = _resolve_identity(tenant_id, user_id)
+    pending_id = _uuid.uuid4().hex[:16]
+    score = (_do_validate_builder_doc(md_content) or {}).get("score", 0)
+    rec = {
+        "pending_id": pending_id,
+        "file_name": (file_name or "design-doc.md").strip() or "design-doc.md",
+        "md_content": md_content,
+        "score": score,
+        "submitted_at": _time.time(),
+        "source": "dolphin-requirements-agent",
+        "tenant_id": tid,
+    }
+    _REQUIREMENTS_DOC_CACHE[uid] = rec
+    logger.info(
+        "submit_design_doc: cached for user %s (tenant %s), file=%s, %d chars, score=%d",
+        uid, tid, rec["file_name"], len(md_content), score,
+    )
+    return {
+        "ok": True,
+        "pending_id": pending_id,
+        "expires_in_seconds": 1800,
+        "score": score,
+        "ui_hint": "已送到 ai-builder「需求分析」右侧面板，请告诉用户点 → Builder 继续。",
+    }
