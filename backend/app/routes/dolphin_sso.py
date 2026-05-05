@@ -99,12 +99,14 @@ async def _ensure_dolphin_project(
     bearer_token: str,
     agent_db_id: int = _DOLPHIN_AGENT_DB_ID_DEFAULT,
 ) -> Optional[int]:
-    """返回该 (user, app) 的 dolphin project_id；没有就创建。
+    """返回该 (user, app) 的 dolphin project_id；先 GET 已有按 name 找，没有才创建。
 
     bearer_token: 调用 dolphin /api/agents/agent/projects 用的 token，决定 project
-    归属（user_token → 该用户；service_token → admin）。trial 阶段 agent 私有，
-    project 用 service_token 创建归 admin；session 也都在 admin 名下，靠 project_id
-    在 sidebar 过滤实现按 ai-builder 用户的会话隔离。
+    归属（user_token → 该用户；service_token → admin）。
+
+    **重要**：之前只用进程内 _PROJECT_MAP cache，backend 重启就丢，重启后第一次
+    进 app 会再次 POST 创建一个新 project，dolphin sidebar 累积 N 个同名 project
+    （每次重启 +1）。修法：先 GET 已有 projects 按 name 精确匹配复用，避免重复。
     """
     key = (int(user_id), int(app_id))
     with _PROJECT_MAP_LOCK:
@@ -115,16 +117,46 @@ async def _ensure_dolphin_project(
     title = f"u{user_id} 应用 #{app_id}"
     if app_name:
         title = f"{title} · {app_name}"
+    title = title[:60]
 
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
+    base_url = server_url.rstrip("/")
+    headers = {
+        "Authorization": f"Bearer {bearer_token}",
+        "Content-Type": "application/json",
+    }
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        # 1. 先 list 已有 projects（按 name 找复用）
+        try:
+            resp = await client.get(
+                f"{base_url}/api/agents/agent/projects",
+                params={"agent_id": agent_db_id, "page": 1, "size": 100},
+                headers=headers,
+            )
+            if resp.status_code == 200:
+                data = resp.json() or {}
+                items = data.get("content") or data.get("items") or data.get("data") or []
+                if isinstance(items, list):
+                    for it in items:
+                        if (it or {}).get("name", "").strip() == title:
+                            pid = (it or {}).get("id")
+                            if pid:
+                                with _PROJECT_MAP_LOCK:
+                                    _PROJECT_MAP[key] = int(pid)
+                                logger.info(
+                                    "dolphin project reused (no create) user=%s app=%s pid=%s",
+                                    user_id, app_id, pid,
+                                )
+                                return int(pid)
+        except Exception as exc:
+            logger.warning("dolphin list projects failed: %s", exc)
+
+        # 2. 没找到才 POST 创建
+        try:
             resp = await client.post(
-                f"{server_url.rstrip('/')}/api/agents/agent/projects",
-                json={"agent_id": agent_db_id, "name": title[:60]},
-                headers={
-                    "Authorization": f"Bearer {bearer_token}",
-                    "Content-Type": "application/json",
-                },
+                f"{base_url}/api/agents/agent/projects",
+                json={"agent_id": agent_db_id, "name": title},
+                headers=headers,
             )
             if resp.status_code in (200, 201):
                 data = resp.json()
@@ -132,11 +164,15 @@ async def _ensure_dolphin_project(
                 if pid:
                     with _PROJECT_MAP_LOCK:
                         _PROJECT_MAP[key] = int(pid)
+                    logger.info(
+                        "dolphin project created user=%s app=%s pid=%s",
+                        user_id, app_id, pid,
+                    )
                     return int(pid)
             else:
                 logger.warning("dolphin create project HTTP %d: %s", resp.status_code, resp.text[:200])
-    except Exception as exc:
-        logger.warning("dolphin create project failed: %s", exc)
+        except Exception as exc:
+            logger.warning("dolphin create project failed: %s", exc)
     return None
 
 
