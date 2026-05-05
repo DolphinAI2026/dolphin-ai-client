@@ -49,6 +49,24 @@
               <span>辅助搭建</span>
             </button>
           </div>
+          <!-- "进入低代码后台"：跳到 aPaaS 平台直链，对当前应用做更深入的低代码搭建 -->
+          <a
+            v-if="platformDirectUrl"
+            class="mode-btn mode-btn-link"
+            :href="platformDirectUrl"
+            target="_blank"
+            rel="noopener noreferrer"
+            title="在 aPaaS 低代码后台直接编辑当前应用（新标签页打开）"
+          >
+            <span class="mode-btn-icon" aria-hidden="true">
+              <svg viewBox="0 0 16 16" fill="none">
+                <rect x="2.3" y="3" width="11.4" height="8.4" rx="1.8" stroke="currentColor" stroke-width="1.3" />
+                <path d="M5.2 13h5.6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
+                <path d="M10.5 5.5l2 2-2 2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+            </span>
+            <span>进入低代码后台</span>
+          </a>
         </div>
       </template>
       <template #actions>
@@ -7959,6 +7977,25 @@ watch(conversationId, (id) => {
   transition: all 0.2s ease;
 }
 .mode-btn:hover { color: var(--t-text-primary); background: rgba(93, 114, 255, 0.06); }
+.mode-btn-link {
+  text-decoration: none;
+  margin-left: 6px;
+  border: 1px solid rgba(124, 58, 237, 0.28);
+  color: #6d28d9;
+}
+.mode-btn-link:hover {
+  background: rgba(124, 58, 237, 0.08);
+  color: #5b21b6;
+  border-color: rgba(124, 58, 237, 0.5);
+}
+html[data-theme="dark"] .mode-btn-link {
+  color: #c4b5fd;
+  border-color: rgba(167, 139, 250, 0.4);
+}
+html[data-theme="dark"] .mode-btn-link:hover {
+  background: rgba(167, 139, 250, 0.14);
+  color: #ddd6fe;
+}
 .mode-btn.active {
   background: linear-gradient(135deg, rgba(255,255,255,0.98), rgba(242, 246, 255, 0.94));
   color: var(--t-brand-text);
