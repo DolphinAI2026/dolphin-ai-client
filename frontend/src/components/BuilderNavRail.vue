@@ -65,12 +65,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
 import {
   ChatLineRound,
   Connection,
+  DocumentChecked,
   Grid,
   HomeFilled,
   MagicStick,
@@ -85,15 +86,31 @@ import {
 import { ElMessage } from 'element-plus'
 import { useUserStore } from '@/stores/user'
 import ThemeToggle from '@/components/ThemeToggle.vue'
+import request from '@/utils/request'
 
 const router = useRouter()
 const route = useRoute()
 const userStore = useUserStore()
 
+// 仅在 backend 配了 dolphin_requirements_agent_code 时显示 'AI 需求分析' 菜单
+const requirementsAgentEnabled = ref(false)
+async function fetchDolphinConfig() {
+  if (!localStorage.getItem('token')) return
+  try {
+    const cfg = await request.get<unknown, { requirements_agent_code?: string }>('/dolphin/config')
+    requirementsAgentEnabled.value = !!cfg?.requirements_agent_code
+  } catch { /* 静默 — 没拿到就不显示菜单 */ }
+}
+onMounted(fetchDolphinConfig)
+watch(() => userStore.token, fetchDolphinConfig)
+
 const navItems = computed(() => [
   { key: 'home', label: '首页', path: '/', icon: HomeFilled },
   { key: 'apps', label: '应用', path: '/apps', icon: Grid },
   { key: 'ai-chat', label: 'AI 对话', path: '/ai-chat', icon: ChatLineRound },
+  ...(requirementsAgentEnabled.value
+    ? [{ key: 'requirements', label: 'AI 需求分析', path: '/requirements-assistant', icon: DocumentChecked }]
+    : []),
   // 'AI 搭建' 入口已隐藏 — dolphin 接管对话后默认从'我的应用'进具体应用编辑页
   // { key: 'chat', label: 'AI 搭建', path: '/chat', icon: MagicStick },
   { key: 'ide', label: 'AI 编码', path: '/coding', icon: Monitor },
@@ -108,6 +125,7 @@ const navItems = computed(() => [
 const activeKey = computed(() => {
   if (route.path === '/') return 'home'
   if (route.path.startsWith('/ai-chat')) return 'ai-chat'
+  if (route.path.startsWith('/requirements-assistant')) return 'requirements'
   if (route.path.startsWith('/apps') || route.path.startsWith('/project')) return 'apps'
   if (route.path.startsWith('/chat')) return 'chat'
   if (route.path.startsWith('/vibe-coding/sandboxes')) return 'sandboxes'
