@@ -86,8 +86,10 @@ from threading import RLock as _RLock
 _PROJECT_MAP: dict[tuple[int, int], int] = {}
 _PROJECT_MAP_LOCK = _RLock()
 # dolphin agent code → dolphin agent db_id (用于创建项目)
-# 简化：trial 只用一个 agent (a73e75cd81 → 80)，硬编码兜底
-_DOLPHIN_AGENT_DB_ID_DEFAULT = 80
+# 实测 dolphin 应用调整助手 agent 的 db id 是 77（之前硬编码 80，POST 项目都
+# silent failed，dolphin sidebar 永远空）。trial 阶段就这一个 agent，先硬编码
+# 77，后续可换成 GET /api/agents/agent/applications/{code} 动态拿 db id。
+_DOLPHIN_AGENT_DB_ID_DEFAULT = 77
 
 
 async def _ensure_dolphin_project(
