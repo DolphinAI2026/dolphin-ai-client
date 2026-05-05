@@ -16,9 +16,9 @@
     </div>
 
     <iframe
-      v-if="iframeSrc"
+      v-if="iframeSrc && iframeMounted"
       ref="iframeRef"
-      :key="iframeKey"
+      :key="props.appId || 0"
       :src="iframeSrc"
       class="dolphin-agent-iframe"
       :title="title || 'AI 助手'"
@@ -77,14 +77,11 @@ const userStore = useUserStore()
 const cfg = ref<DolphinConfig | null>(null)
 const iframeRef = ref<HTMLIFrameElement | null>(null)
 
-// iframe :key — 含 user.id + tenantId + appId，任意一项变都强制 iframe 销毁重建
-// 否则切账号 / 切租户后 dolphin iframe 还用旧用户的镜像 session，污染会话历史
-const iframeKey = computed(() => {
-  const uid = userStore.user?.id || 0
-  const tid = userStore.tenantId || 0
-  const aid = props.appId || 0
-  return `u${uid}-t${tid}-a${aid}`
-})
+// iframeMounted：v-if 控制 iframe 销毁重建。切账号 / 切租户时手动 false→true
+// 切换让 iframe 完全卸载再挂载，避免上一个用户的 SPA state 污染。
+// 不能在 :key 里用 user.id —— user store 异步 hydrate 时 key 会从 'u0' 变 'u1'
+// 触发 iframe 重建一次（多加载一次 dolphin SPA），导致首屏慢。
+const iframeMounted = ref(true)
 // init-app-context 返回的 dolphin project_id；用来在 iframe URL 上加 ?project_id=
 // 让 dolphin sidebar 只显示该 ai-builder 用户当前 app 的会话历史（跨用户/跨 app 不污染）
 const projectId = ref<number | null>(null)
@@ -185,18 +182,20 @@ watch(() => props.appId, async (newId, oldId) => {
   }
 })
 
-// 切账号 / 切租户时整体重置：iframe 因 iframeKey 变化已自动销毁重建，
-// 但 cfg（含 access_token）需要重新调 /dolphin/config 拿新用户的镜像账号 token
+// 切账号 / 切租户：手动 unmount → 重新 loadConfig 拿新镜像 token → 重新 mount。
+// 注意 oldKey 第一次是 undefined（initial fire），要忽略避免首屏多挂载一次。
 watch(
   () => `${userStore.user?.id || 0}::${userStore.tenantId || 0}`,
   async (newKey, oldKey) => {
     if (oldKey === undefined || oldKey === newKey) return
+    iframeMounted.value = false  // unmount iframe
     cfg.value = null
     projectId.value = null
     ctxInjected.value = false
     iframeReady.value = false
     await loadConfig()
     await injectAppContext()
+    iframeMounted.value = true  // remount with fresh src
   },
 )
 
