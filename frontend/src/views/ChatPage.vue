@@ -49,23 +49,24 @@
               <span>辅助搭建</span>
             </button>
           </div>
-          <!-- "进入低代码后台"：跳到 aPaaS 平台直链，对当前应用做更深入的低代码搭建 -->
+          <!-- "查看应用"：应用创建完成后显示在顶部明显位置，新标签页打开 aPaaS 直链
+               （内嵌 iframe 方案历史上经常坏，统一走外链最稳） -->
           <a
-            v-if="platformDirectUrl"
+            v-if="deployAllDone && platformDirectUrl"
             class="mode-btn mode-btn-link"
             :href="platformDirectUrl"
             target="_blank"
             rel="noopener noreferrer"
-            title="在 aPaaS 低代码后台直接编辑当前应用（新标签页打开）"
+            title="在新标签页打开 aPaaS 平台运行/编辑当前应用"
           >
             <span class="mode-btn-icon" aria-hidden="true">
               <svg viewBox="0 0 16 16" fill="none">
-                <rect x="2.3" y="3" width="11.4" height="8.4" rx="1.8" stroke="currentColor" stroke-width="1.3" />
-                <path d="M5.2 13h5.6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
-                <path d="M10.5 5.5l2 2-2 2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
+                <path d="M9.5 2.5h4v4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
+                <path d="M13.5 2.5L7.5 8.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
+                <path d="M11.5 9v3.5a1.5 1.5 0 0 1-1.5 1.5h-6a1.5 1.5 0 0 1-1.5-1.5v-6A1.5 1.5 0 0 1 4 5h3.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
               </svg>
             </span>
-            <span>进入低代码后台</span>
+            <span>查看应用</span>
           </a>
         </div>
       </template>
