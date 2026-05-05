@@ -113,8 +113,15 @@ async def _resolve_agent_id(client: httpx.AsyncClient, agent_code: str) -> Optio
         if r.status_code != 200:
             return None
         data = r.json() or {}
-        aid = data.get("id")
-        if isinstance(aid, int) and aid > 0:
+        # dolphin 返回 id 是字符串 "82"，不是 int — 必须 int() 转换
+        aid_raw = data.get("id")
+        if aid_raw is None:
+            return None
+        try:
+            aid = int(aid_raw)
+        except (TypeError, ValueError):
+            return None
+        if aid > 0:
             _AGENT_ID_CACHE[agent_code] = aid
             return aid
     except Exception as exc:
@@ -224,19 +231,23 @@ async def _try_extract_md_from_dolphin(
                             if fm:
                                 file_name_hint = fm.group(1)
 
-                # 抽 md 三级回退：TEXT 块 ```markdown``` → execute_skill_python 的 code → output text
-                full_text = "\n\n".join(text_parts)
-                md = _extract_md_block(full_text)
-                if not md:
-                    for code in py_codes:
-                        md = _extract_md_from_python_code(code)
-                        if md:
-                            break
-                if not md:
-                    for out_text in py_outputs:
-                        md = _extract_md_block(out_text)
-                        if md:
-                            break
+                # 抽 md：对每个候选源单独 _extract_md_block / _extract_md_from_python_code，
+                # 再按 _looks_like_design_md + 最长选最优。这样既能命中 ```markdown``` 块，
+                # 也能命中"agent 直接贴整段 md 在 TEXT block 里"，还能命中沙箱代码内嵌。
+                md_candidates: list[str] = []
+                for txt in text_parts:
+                    cand = _extract_md_block(txt)
+                    if cand:
+                        md_candidates.append(cand)
+                for code in py_codes:
+                    cand = _extract_md_from_python_code(code)
+                    if cand:
+                        md_candidates.append(cand)
+                for out_text in py_outputs:
+                    cand = _extract_md_block(out_text)
+                    if cand:
+                        md_candidates.append(cand)
+                md = max(md_candidates, key=len) if md_candidates else None
 
                 if md:
                     score = (_do_validate_builder_doc(md) or {}).get("score", 0)
