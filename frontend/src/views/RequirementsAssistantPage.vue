@@ -327,11 +327,13 @@ onBeforeUnmount(() => {
 .ra-chat-fullwidth {
   flex: 1;
   min-height: 0;
-  position: relative;
+  display: flex;
+  flex-direction: column;
 }
-/* 让 DolphinAgentEmbed 自动撑满父级（它内部用 height:100% + flex column） */
+/* DolphinAgentEmbed 作为 column flex item，撑满主轴 */
 .ra-chat-fullwidth > * {
-  height: 100%;
+  flex: 1;
+  min-height: 0;
 }
 .ra-action-bar {
   flex-shrink: 0;
