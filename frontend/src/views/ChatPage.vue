@@ -1164,6 +1164,16 @@
     />
   </el-drawer>
 
+  <!-- dolphin 需求分析助手 deeplink (?from=requirements) 进来后的应用目标选择 -->
+  <ChooseAppTargetDialog
+    v-model="reqDialogVisible"
+    :filename="reqDialogFilename"
+    :suggested-name="reqDialogSuggestedName"
+    :candidates="reqDialogCandidates"
+    :loading="reqDialogLoading"
+    @confirm="handleRequirementsConfirm"
+  />
+
   </WorkbenchShell>
 </template>
 
@@ -1208,6 +1218,7 @@ import TopBar from '@/components/TopBar.vue'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
 import AppChatPanel from '@/components/AppChatPanel.vue'
 import DolphinAgentEmbed from '@/components/DolphinAgentEmbed.vue'
+import ChooseAppTargetDialog from '@/components/ChooseAppTargetDialog.vue'
 import SessionSidebar, { type SessionItem as SidebarSessionItem } from '@/components/common/SessionSidebar.vue'
 import StructuredDocRenderer from '@/components/StructuredDocRenderer.vue'
 import StructuredDocDiffRenderer from '@/components/StructuredDocDiffRenderer.vue'
@@ -7421,6 +7432,90 @@ function handleMessageAction(action: { kind?: string; label?: string }) {
   }
 }
 
+// ── dolphin 需求分析助手 deeplink (?from=requirements) ─────────────────────
+// 用户在 dolphin chat 里点 agent 给的 [→ Builder](deeplink) 链接进来，
+// 立刻从 backend cache 拿 md（agent 已通过 submit_design_doc 工具 push 进去），
+// 弹 ChooseAppTargetDialog 让用户选「新建应用」或「更新到现有应用」。
+const reqDialogVisible = ref(false)
+const reqDialogLoading = ref(false)
+const reqDialogFilename = ref('')
+const reqDialogSuggestedName = ref('')
+const reqDialogCandidates = ref<Array<{ id: number; app_name: string; app_code: string; status: string; apaas_app_id?: string | null; updated_at?: string | null }>>([])
+let reqPendingMd: { filename: string; content: string; pendingId: string | null } | null = null
+
+function _extractAppNameFromMd(md: string): string {
+  if (!md) return ''
+  const m = md.match(/^\s*#\s+([^\n]+?)\s*$/m)
+  if (m) return m[1].trim().slice(0, 60)
+  return ''
+}
+function _fallbackNameFromFilename(filename: string): string {
+  return (filename || '')
+    .replace(/\.(md|markdown)$/i, '')
+    .replace(/[-_\s]*(设计文档|需求文档|设计说明|需求说明|design|spec)$/i, '')
+    .trim()
+}
+
+async function tryLoadFromRequirements() {
+  try {
+    const res = await request.get<unknown, {
+      has_doc?: boolean
+      pending_id?: string
+      file_name?: string
+      md_content?: string
+      score?: number
+    }>('/requirements/latest-doc')
+    if (!res?.has_doc || !res.md_content) {
+      ElMessage.warning('暂无可用的设计文档 — 请回到 dolphin 让需求分析助手重新生成一份')
+      return
+    }
+    const filename = res.file_name || 'design-doc.md'
+    const inferred = _extractAppNameFromMd(res.md_content) || _fallbackNameFromFilename(filename)
+    reqPendingMd = { filename, content: res.md_content, pendingId: res.pending_id || null }
+    reqDialogFilename.value = filename
+    reqDialogSuggestedName.value = inferred
+    reqDialogCandidates.value = []
+    reqDialogVisible.value = true
+    if (inferred) {
+      reqDialogLoading.value = true
+      try {
+        reqDialogCandidates.value = await applicationApi.matchByName(inferred, 5)
+      } catch { /* 列表为空也能用「新建」 */ }
+      reqDialogLoading.value = false
+    }
+  } catch (e) {
+    console.warn('[ChatPage] /requirements/latest-doc failed', e)
+  }
+}
+
+async function handleRequirementsConfirm(payload: { mode: 'new' } | { mode: 'update'; appId: number; appName: string }) {
+  if (!reqPendingMd) return
+  const pending = reqPendingMd
+  reqPendingMd = null
+  // consume cache，避免下次进 ChatPage 又被同一份 md 触发弹窗
+  if (pending.pendingId) {
+    try { await request.post(`/requirements/consume-doc/${pending.pendingId}`) } catch { /* 不阻塞主流程 */ }
+  }
+  const file = new File([pending.content], pending.filename, { type: 'text/markdown' })
+  if (payload.mode === 'new') {
+    resetConversationWorkspace()
+    resetMessagesToWelcome()
+    await nextTick()
+    await uploadDocFile(file)
+  } else {
+    existingAppId.value = payload.appId
+    await nextTick()
+    try {
+      await handleDocVersionUpload(file, payload.appId, {
+        userMessageContent: `📄 从需求分析助手更新设计文档：${pending.filename}`,
+        title: `更新设计文档：${pending.filename}`,
+      })
+    } catch (e) {
+      console.error('[ChatPage] handleDocVersionUpload from requirements deeplink failed', e)
+    }
+  }
+}
+
 onMounted(async () => {
   store.showConnectModal = false
   // 同步当前应用到 backend（让 dolphin agent 通过 user_id 拿到 current app_id）
@@ -7717,6 +7812,11 @@ onMounted(async () => {
     resetMessagesToWelcome()
     await nextTick()
     await uploadDocFile(file)
+  }
+
+  // 从 dolphin 需求分析助手 deeplink 进来 (?from=requirements)：拉 cache 弹选目标对话框
+  if (route.query.from === 'requirements') {
+    await tryLoadFromRequirements()
   }
 
   // 同步对话历史选中

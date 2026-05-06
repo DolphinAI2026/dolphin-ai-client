@@ -710,18 +710,28 @@ async def submit_design_doc(
     tenant_id: int = 0,
     user_id: int = 0,
 ) -> dict:
-    """把当前 md 设计文档送到 ai-builder「需求分析」页右侧 Artifact 面板，让用户一键继续 Builder 流程。
+    """把当前 md 设计文档推送到 ai-builder cache，并返回一条 deeplink — agent 必须把这条
+    deeplink 贴到 chat 里让用户点击，**这是把 md 送到 Builder 的唯一推荐路径**。
 
     用法（在 prompt 工作流里）：
       1. 写完 md → 调 validate_builder_doc 自检（passes_strict=true）
       2. 沙箱 Python 写 .md 文件让 dolphin chat UI 自然渲染附件下载（标准 UX）
-      3. **同步调本工具** submit_design_doc(md_content) — 把内容送到 ai-builder
-      4. 在 chat 提示用户："已送到右侧面板，点击 → Builder 即可开始搭建"
+      3. **调本工具** submit_design_doc(md_content) — 把内容写入 ai-builder 用户 cache
+      4. **把返回值里的 deeplink 用 markdown 链接格式贴在 chat 回复里**，例如：
+         「✅ 已生成 sales-design.md（自检 95/100），[点这里在 Builder 中搭建](deeplink)」
 
     返回：
-        { "ok": True, "pending_id": "...", "expires_in_seconds": 1800 }
+        {
+            "ok": True,
+            "pending_id": "...",         # 30 分钟内有效
+            "expires_in_seconds": 1800,
+            "score": 95,
+            "deeplink": "https://ai-builder.../chat?from=requirements",
+            "ui_hint": "请把 deeplink 用 markdown 链接格式贴给用户，让他点击进 Builder。"
+        }
 
-    pending_id 30 分钟后自动失效（用户在 dolphin 改 md 重新调本工具时会覆盖之前的 cache）。
+    pending_id 30 分钟后自动失效；用户在 dolphin 修改 md 重新调本工具时会覆盖之前的 cache。
+    deeplink 不带 pending_id —— ai-builder 端按当前登录用户从 cache 读最新 md，避免跨用户串号。
     """
     if not md_content or not md_content.strip():
         return {"ok": False, "error": "md_content 是空的，无法提交"}
@@ -743,10 +753,24 @@ async def submit_design_doc(
         "submit_design_doc: cached for user %s (tenant %s), file=%s, %d chars, score=%d",
         uid, tid, rec["file_name"], len(md_content), score,
     )
+
+    # 生成 deeplink — base 留空时 deeplink 为空字符串，agent 应在 chat 里直接贴 md 文件名
+    # 引导用户去 ai-builder 菜单「AI 需求分析」自己拉，但这是退化路径。生产环境务必配置。
+    base = (settings.ai_builder_chat_deeplink_base or "").rstrip("/")
+    deeplink = f"{base}/chat?from=requirements" if base else ""
+
     return {
         "ok": True,
         "pending_id": pending_id,
         "expires_in_seconds": 1800,
         "score": score,
-        "ui_hint": "已送到 ai-builder「需求分析」右侧面板，请告诉用户点 → Builder 继续。",
+        "deeplink": deeplink,
+        "ui_hint": (
+            "请把 deeplink 用 markdown 链接格式贴给用户："
+            f"[点这里在 Builder 中搭建]({deeplink})。用户点了会在新 tab 进 Builder 页，"
+            "自动从 cache 拿到这份 md，弹窗让他选「新建应用」或「更新现有应用」。"
+        ) if deeplink else (
+            "ai-builder 未配置 deeplink base —— 请告诉用户去 ai-builder 菜单「AI 需求分析」"
+            "页面，刷新一下 Builder 跳转面板会自动出现这份 md。"
+        ),
     }

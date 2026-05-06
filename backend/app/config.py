@@ -110,6 +110,15 @@ class Settings(BaseSettings):
     # 靠 project_id 隔离会话历史（u{ai_user_id} 应用 #{app_id}）。
     dolphin_use_user_token: bool = False
 
+    # AI-Builder 自身的对外 chat URL — submit_design_doc MCP 工具用它生成 deeplink。
+    # dolphin 需求分析 agent 把 md push 到 cache 后，工具返回值带
+    # {ai_builder_chat_deeplink_base}/chat?from=requirements，agent 把这条链接
+    # 贴在 chat 里让用户点击；用户点了在新 tab 跳到 ChatPage，自动从 cache 拿
+    # md 走 ChooseAppTargetDialog（新建 / 更新现有应用）。
+    # 留空则不下发 deeplink（agent 仍可通过其它指引让用户跳转）。
+    # 例：https://ai-builder.dfy.definesys.cn
+    ai_builder_chat_deeplink_base: str = ""
+
     # Vibe Coding 运行时
     # - "auto"   : docker daemon + vibe-sandbox 镜像可用就走 docker；否则 fallback host
     # - "docker" : 强制 docker，不可用直接报错（生产环境用）
