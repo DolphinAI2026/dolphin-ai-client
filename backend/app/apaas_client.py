@@ -424,18 +424,87 @@ class APaaSClient:
                 if diag_lines:
                     head = "; ".join(diag_lines[:3])
                     more = f"（共 {len(diag_lines)} 条，详见后端日志）" if len(diag_lines) > 3 else ""
-                    raise Exception(f"{msg} — 疑似真凶: {head}{more}") from exc
-                # 本地表未命中：把完整 fieldCode 列表塞进 message，前端错误条直接展开
-                # 让用户能跟 md / SPEC 显示对比，立刻看出是不是 ai-builder 转换层做了改名
+                    raise Exception(f"{msg} — 疑似真凶（整字段命中保留字表）: {head}{more}") from exc
+
+                # 整字段没命中本地表 → token 级扫描：按 _ 切分 fieldCode 找含保留字 token 的字段
+                # 同时 flag 业务上常见的 apaas 平台疑似内置字段（approver_id / applicant_id / status / type 等
+                # 单 token 字段以及审批流相关字段名）— 这些是历史撞库高频项。
+                # 这里融合 _doc_helpers.py:SYSTEM_FIELD_CODES（已知 apaas 系统列）+ 高频审批流字段。
+                APAAS_BUILTIN_SUSPECTS = {
+                    # 来自 _doc_helpers.SYSTEM_FIELD_CODES 的已知系统列
+                    "id", "pk",
+                    "create_time", "created_at", "update_time", "updated_at",
+                    "create_by", "created_by", "update_by", "updated_by",
+                    "deleted", "deleted_at", "tenant_id", "org_id",
+                    "approval_status", "audit_status", "process_status",
+                    # 审批流模块自动加的字段（典型 apaas 系统级保留，历史撞库高频）
+                    "approver_id", "approver", "applicant_id", "applicant",
+                    "approval_time", "approval_user_id",
+                    "create_user_id", "update_user_id",
+                    "is_deleted", "version",
+                }
+                token_susp: list[str] = []
+                builtin_susp: list[str] = []
+                for dm in payload.get("dataModels", []):
+                    model_name = (dm.get("modelName") or "?").strip()
+                    for f in dm.get("fields", []) or []:
+                        fc = (f.get("fieldCode") or "").strip()
+                        fn = (f.get("fieldName") or fc or "?").strip()
+                        if not fc:
+                            continue
+                        fc_low = fc.lower()
+                        # apaas 内置字段嫌疑
+                        if fc_low in APAAS_BUILTIN_SUSPECTS:
+                            builtin_susp.append(f"模型「{model_name}」字段「{fn}」编码 `{fc}`")
+                            continue
+                        # token 级保留字命中
+                        tokens = fc_low.split("_")
+                        bad_tokens = [t for t in tokens if t in _RESERVED_FIELD_CODES]
+                        if bad_tokens:
+                            token_susp.append(
+                                f"模型「{model_name}」字段「{fn}」编码 `{fc}` 含保留字 token: {','.join(bad_tokens)}"
+                            )
+
                 all_fields_dump = "; ".join(
                     f"{dm.get('modelName')}({dm.get('modelCode')}): "
                     + ", ".join((f.get("fieldCode") or "?") for f in dm.get("fields", []) or [])
                     for dm in payload.get("dataModels", [])
                 )
+                logger.error(
+                    "create_models 失败 — token 扫描结果: 内置嫌疑 %d 条, token 嫌疑 %d 条\n"
+                    "内置嫌疑:\n%s\ntoken 嫌疑:\n%s\n字段列表: [%s]",
+                    len(builtin_susp), len(token_susp),
+                    "\n".join(f"  - {s}" for s in builtin_susp) or "  （无）",
+                    "\n".join(f"  - {s}" for s in token_susp) or "  （无）",
+                    all_fields_dump,
+                )
+
+                # 优先报 apaas 内置嫌疑（命中率最高）
+                if builtin_susp:
+                    head = "; ".join(builtin_susp[:5])
+                    more = f"（共 {len(builtin_susp)} 个）" if len(builtin_susp) > 5 else ""
+                    raise Exception(
+                        f"{msg} — 高度疑似 apaas 内置字段冲突（审批流/系统列）: {head}{more} "
+                        f"— 请回 dolphin 让 agent 把这些字段重命名（如 approver_id → review_user_id 或 "
+                        f"业务前缀化）。**注意**：apaas 审批流模块会自动给业务表加 approver_id / approval_status / "
+                        f"approval_time 等系统列，业务字段不能用同名。"
+                    ) from exc
+
+                if token_susp:
+                    head = "; ".join(token_susp[:3])
+                    more = f"（共 {len(token_susp)} 个）" if len(token_susp) > 3 else ""
+                    raise Exception(
+                        f"{msg} — token 级扫描可疑（按 _ 切分含 SQL/平台保留字 token）: {head}{more} "
+                        f"— 请让 agent 改写 md，避免字段编码以 status/type/code/date/time/note/file/user/no/id 等"
+                        f"单字 token 结尾。完整字段: [{all_fields_dump}]"
+                    ) from exc
+
+                # 都没命中 → apaas 用了我们完全没收录的保留字
                 raise Exception(
-                    f"{msg} — 本地保留字表未命中。实际传给 apaas 的 fieldCode: [{all_fields_dump}] "
-                    f"— 对比前端 SPEC 显示的字段编码看是否一致；不一致说明 ai-builder 转换层改名了，"
-                    f"一致则说明 apaas 平台用了我们没收录的保留字（请把这串字段编码发回研发补 _RESERVED_FIELD_CODES）。"
+                    f"{msg} — 本地保留字表 + token 扫描 + apaas 内置嫌疑都未命中。"
+                    f"实际传给 apaas 的 fieldCode: [{all_fields_dump}] "
+                    f"— 这串字段全规避了本地已知规则，说明 apaas 平台用了我们完全没收录的保留字。"
+                    f"请把这串字段发回研发，配合 server log 反推平台规则补 _RESERVED_FIELD_CODES。"
                 ) from exc
             raise
 
