@@ -745,6 +745,7 @@ class AutoCreateRequest(BaseModel):
     config_preview: dict
     conversation_id: Optional[int] = None
     project_id: Optional[int] = None
+    platform_env_id: Optional[int] = None  # 2026-05-06: 让 MCP / agent 在创建时绑定环境
 
 
 class AutoCreateResponse(BaseModel):
@@ -752,6 +753,8 @@ class AutoCreateResponse(BaseModel):
     app_name: str
     app_code: str
     is_new: bool  # True=新建, False=已存在
+    platform_env_id: Optional[int] = None
+    platform_env_name: Optional[str] = None
 
 
 @router.post("/auto-create", response_model=AutoCreateResponse)
@@ -808,11 +811,21 @@ async def auto_create_application(
                 create_if_missing=not bool(existing.current_doc_version),
             )
             await db.commit()
+            existing_env_name = None
+            if existing.platform_env_id:
+                env_q = await db.execute(
+                    select(PlatformEnv).where(PlatformEnv.id == existing.platform_env_id)
+                )
+                env_obj = env_q.scalar_one_or_none()
+                if env_obj:
+                    existing_env_name = env_obj.env_name
             return AutoCreateResponse(
                 app_id=existing.id,
                 app_name=existing.app_name,
                 app_code=existing.app_code,
                 is_new=False,
+                platform_env_id=existing.platform_env_id,
+                platform_env_name=existing_env_name,
             )
 
     if data.project_id:
@@ -841,6 +854,35 @@ async def auto_create_application(
         preview_data["app_code"] = ascii_code
 
     config_str = _dump_preview_config(data.config_preview)
+
+    # 2026-05-06: 决定 platform_env_id
+    # 优先级：1) 请求里显式传的 → 2) 租户默认 env → 3) 任一 connected env → None（不绑）
+    resolved_env_id: Optional[int] = None
+    if data.platform_env_id:
+        env_check = await db.execute(
+            select(PlatformEnv).where(
+                PlatformEnv.id == data.platform_env_id,
+                PlatformEnv.tenant_id == ctx.tenant_id,
+            )
+        )
+        if env_check.scalar_one_or_none():
+            resolved_env_id = data.platform_env_id
+        else:
+            logger.warning(
+                "auto-create: 请求 platform_env_id=%s 不存在或不属于 tenant=%s，降级 fallback",
+                data.platform_env_id, ctx.tenant_id,
+            )
+    if not resolved_env_id:
+        env_default = await db.execute(
+            select(PlatformEnv).where(
+                PlatformEnv.tenant_id == ctx.tenant_id,
+                PlatformEnv.is_default == True,
+            )
+        )
+        env_obj = env_default.scalar_one_or_none()
+        if env_obj:
+            resolved_env_id = env_obj.id
+
     app = Application(
         user_id=ctx.user.id,
         tenant_id=ctx.tenant_id,
@@ -850,6 +892,7 @@ async def auto_create_application(
         app_name=data.app_name,
         app_code=ascii_code,
         config_preview=config_str,
+        platform_env_id=resolved_env_id,
         status="draft",
     )
     db.add(app)
@@ -879,12 +922,20 @@ async def auto_create_application(
         except Exception as e:
             logger.warning(f"auto-create: link DocumentVersions failed: {e}")
 
-    logger.info(f"auto-create: app_id={app.id}, app_name={app.app_name}")
+    logger.info(f"auto-create: app_id={app.id}, app_name={app.app_name}, env_id={resolved_env_id}")
+    new_env_name = None
+    if resolved_env_id:
+        env_q = await db.execute(select(PlatformEnv).where(PlatformEnv.id == resolved_env_id))
+        env_obj = env_q.scalar_one_or_none()
+        if env_obj:
+            new_env_name = env_obj.env_name
     return AutoCreateResponse(
         app_id=app.id,
         app_name=app.app_name,
         app_code=app.app_code,
         is_new=True,
+        platform_env_id=resolved_env_id,
+        platform_env_name=new_env_name,
     )
 
 

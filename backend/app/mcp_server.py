@@ -258,9 +258,80 @@ async def parse_design_doc(
 
 
 @mcp.tool()
+async def list_platform_envs(
+    tenant_id: int = 0,
+    user_id: int = 0,
+) -> dict:
+    """列出当前租户配置的所有低代码平台环境。
+
+    用法（agent 工作流）：用户首次创建应用前**必须**先调本工具拿环境列表，
+    再让用户确认要部署到哪个环境。绝不假设"默认环境"用户就接受。
+
+    返回示例：
+        {
+          "envs": [
+            {
+              "id": 1,
+              "name": "trial 环境",
+              "base_url": "https://apaas-trial.definesys.cn",
+              "is_default": true,
+              "status": "connected",   # connected | disconnected | unknown
+            },
+            ...
+          ],
+          "default_env_id": 1,
+          "connected_count": 1,
+        }
+
+    Agent 选择策略：
+    - connected_count == 0 → 报错给用户："你还没配置可用的低代码平台环境，
+      请先去 BuilderDevOps 添加，或检查现有环境登录状态。"
+    - connected_count == 1 且唯一 connected 环境 is_default → 直接用，
+      告诉用户"应用会部署到「{name}」"
+    - connected_count > 1 → 列给用户让其选择，等用户回复后用对应 env_id
+      调 generate_app_from_doc(env_id=X)
+    """
+    tid, _uid = _resolve_identity(tenant_id, user_id)
+
+    # 直接 db 查（绕开 /api/platform-envs 的 require_tenant_admin —— MCP service
+    # token 已经验证 tenant_id，且 list 是只读操作，不需要 admin 权限）
+    from app.database import AsyncSessionLocal
+    from app.models import PlatformEnv
+    from sqlalchemy import select
+
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(PlatformEnv)
+            .where(PlatformEnv.tenant_id == tid)
+            .order_by(PlatformEnv.is_default.desc(), PlatformEnv.id.asc())
+        )
+        envs = result.scalars().all()
+
+    items = [
+        {
+            "id": e.id,
+            "name": e.env_name,
+            "base_url": e.base_url,
+            "is_default": bool(e.is_default),
+            "status": e.status,
+        }
+        for e in envs
+    ]
+    default_id = next((e["id"] for e in items if e["is_default"]), None)
+    connected_count = sum(1 for e in items if e["status"] == "connected")
+    return {
+        "ok": True,
+        "envs": items,
+        "default_env_id": default_id,
+        "connected_count": connected_count,
+    }
+
+
+@mcp.tool()
 async def generate_app_from_doc(
     md_content: str,
     app_name: str | None = None,
+    env_id: int = 0,
     tenant_id: int = 0,
     user_id: int = 0,
 ) -> dict:
@@ -271,9 +342,10 @@ async def generate_app_from_doc(
     参数：
     - md_content：标准设计文档全文
     - app_name：可选；不填会从 md 「一、应用信息」推断
+    - env_id：部署到哪个 PlatformEnv。**强烈建议先调 list_platform_envs
+      让用户确认**。0 表示用租户默认环境（fallback：找一个 connected 环境）。
 
-    返回 { app_id, app_name, app_code, status, app_view_url }。app_view_url 是用户在
-    AI-Builder UI 里查看该应用的链接。
+    返回 { app_id, app_name, app_code, status, app_view_url, env: {id, name} }。
     """
     tid, uid = _resolve_identity(tenant_id, user_id)
 
@@ -289,12 +361,15 @@ async def generate_app_from_doc(
     final_app_name = (app_name or preview.get("appName") or "").strip() or "未命名应用"
 
     # 2) auto-create
+    create_body: dict = {"app_name": final_app_name, "config_preview": {"data": preview}}
+    if env_id and env_id > 0:
+        create_body["platform_env_id"] = int(env_id)
     create_res = await _api_call(
         "POST",
         "/applications/auto-create",
         tenant_id=tid,
         user_id=uid,
-        json_body={"app_name": final_app_name, "config_preview": {"data": preview}},
+        json_body=create_body,
     )
     app_id = create_res.get("app_id")
     return {
@@ -304,6 +379,8 @@ async def generate_app_from_doc(
         "app_code": create_res.get("app_code"),
         "is_new": create_res.get("is_new"),
         "status": "draft",
+        "platform_env_id": create_res.get("platform_env_id"),
+        "platform_env_name": create_res.get("platform_env_name"),
         "app_view_url": (
             f"https://agent.dfy.definesys.cn/ai-builder/chat?app_id={app_id}" if app_id else None
         ),
