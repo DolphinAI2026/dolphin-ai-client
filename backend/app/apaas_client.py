@@ -437,19 +437,18 @@ class APaaSClient:
                     "create_by", "created_by", "update_by", "updated_by",
                     "deleted", "deleted_at", "tenant_id", "org_id",
                     "approval_status", "audit_status", "process_status",
-                    # 审批流模块自动加的字段（典型 apaas 系统级保留，历史撞库高频）
+                    # apaas 平台流程模块自动管理的字段 — 业务表单不应该设计这些
+                    # 实测 2026-05-06：approver_id 是真凶。低代码平台自带审批流/审核管理，
+                    # 流程节点会自动注入 approver_id / approval_time / approval_status / approval_note
+                    # 等字段，业务模型 md 里包含这些字段会撞库。
                     "approver_id", "approver", "applicant_id", "applicant",
-                    "approval_time", "approval_user_id",
+                    "approval_time", "approval_note", "approval_user_id",
                     "create_user_id", "update_user_id",
                     "is_deleted", "version",
-                    # apaas 应用实体命名空间 — 平台为每个业务表自动加 application_id 系统列（FK 到父应用）
-                    # 任何业务字段使用同名都会撞库（已实测 2026-05-06）
-                    "application_id", "app_id", "application",
                 }
-                # apaas 应用实体保留前缀 — `application` 是平台父实体命名空间
-                # 任何以 `application_` 开头的 fieldCode 都建议警示（如 application_no / application_status_code 等）
-                # 因为 apaas 可能把整个 `application_*` 命名空间预留给系统使用
-                APAAS_RESERVED_PREFIXES = ("application_", "approval_")
+                # apaas 流程模块保留前缀 — `approval_*` 整个命名空间归平台流程节点管理
+                # 注意：`application_*` **不是**保留前缀（实测确认 application_id 是用户自定义业务字段，没问题）
+                APAAS_RESERVED_PREFIXES = ("approval_",)
                 token_susp: list[str] = []
                 builtin_susp: list[str] = []
                 prefix_susp: list[str] = []
@@ -496,27 +495,29 @@ class APaaSClient:
                     all_fields_dump,
                 )
 
-                # 优先报 apaas 内置嫌疑（命中率最高，含 application_id / approver_id 等审批流/系统列）
+                # 优先报 apaas 内置嫌疑（命中率最高 — approver_id / approval_time / approval_note 等流程字段）
                 if builtin_susp:
                     head = "; ".join(builtin_susp[:5])
                     more = f"（共 {len(builtin_susp)} 个）" if len(builtin_susp) > 5 else ""
                     raise Exception(
-                        f"{msg} — 高度疑似 apaas 内置字段冲突（审批流/系统列）: {head}{more} "
-                        f"— 请回 dolphin 让 agent 把这些字段重命名（如 approver_id → review_user_id 或 "
-                        f"业务前缀化）。**注意**：apaas 平台为每个业务表自动加 application_id / approver_id / "
-                        f"approval_status / approval_time 等系统列（FK 到父应用、审批流模块），业务字段不能用同名。"
+                        f"{msg} — 高度疑似 apaas 平台内置字段冲突: {head}{more} "
+                        f"— **根因**: apaas 低代码平台自带流程管理（审批/审核），"
+                        f"`approver_id` / `approval_time` / `approval_status` / `approval_note` / `applicant_id` "
+                        f"这类字段由平台流程节点自动注入和管理，**业务数据模型不应该设计这些字段**。"
+                        f"请回 dolphin 让 agent 从 md 的数据模型部分**删除**这些审批/流程字段，"
+                        f"流程相关需求改为在 apaas 流程节点配置（不是表单字段）里实现。"
                     ) from exc
 
-                # 二级：apaas 保留前缀（application_* / approval_*）— 整个命名空间被平台占用
+                # 二级：apaas 保留前缀（approval_*）— 整个命名空间被平台流程模块占用
                 if prefix_susp:
                     head = "; ".join(prefix_susp[:5])
                     more = f"（共 {len(prefix_susp)} 个）" if len(prefix_susp) > 5 else ""
                     raise Exception(
-                        f"{msg} — 字段命中 apaas 保留前缀（application_* / approval_*）: {head}{more} "
-                        f"— `application` 是 apaas 父实体命名空间，`approval` 是审批流模块命名空间，"
-                        f"两个前缀下整批字段都可能被平台占用。请回 dolphin 让 agent 改用业务前缀，例如 "
-                        f"`application_no` → `pay_no` / `payment_no`，`application_status_code` → "
-                        f"`pay_status_code`，`approval_note` → `audit_note`。完整字段: [{all_fields_dump}]"
+                        f"{msg} — 字段命中 apaas 流程模块保留前缀（approval_*）: {head}{more} "
+                        f"— **根因**: `approval_*` 整个命名空间由 apaas 流程模块管理（审批人/时间/状态/备注），"
+                        f"业务模型 md 里不应包含这些字段。请回 dolphin 让 agent **删除** `approval_*` 系列字段，"
+                        f"如有审批需求，在应用的「流程配置」节点里设置而不是写到表单字段里。"
+                        f"完整字段: [{all_fields_dump}]"
                     ) from exc
 
                 if token_susp:
