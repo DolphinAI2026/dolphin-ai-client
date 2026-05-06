@@ -25,6 +25,7 @@ from app.config_diff import (
 )
 from app.apaas_client import APaaSClient, _extract_query_params, _log_request, _log_response
 from app.generator_v2 import _extract_fields
+from app.lowcode_standards import safe_field_code
 from app.step_executor import execute_create_form, _apply_form_identity_to_form_config
 
 logger = logging.getLogger(__name__)
@@ -916,9 +917,51 @@ class IncrementalExecutor:
                 logger.exception(f"模型操作失败: {change.name}")
 
     async def _create_model(self, change: ModelChange):
-        """创建模型"""
+        """创建模型 — 增量执行路径
+
+        与 generator_v2 / step_executor 行为对齐：每个字段编码先过 safe_field_code 兜底，
+        避免 status / type / date / time / user 等保留字直接撞 apaas 平台校验报
+        "字段编码与数据库关键字重复"。改名映射会落到 logger.warning + result.warning，
+        用户能在 server log 和返回的 warnings 里看到"原 fieldCode → 实际平台 fieldCode"。
+        """
         model_data = change.new_value or {}
         fields = model_data.get("fields", model_data.get("dataModelFields", []))
+
+        used_codes: set[str] = set()
+        rename_log: list[tuple[str, str, str]] = []  # (field_name, raw_code, safe_code)
+        safe_fields: list[dict] = []
+        for f in fields:
+            raw_code = f.get("fieldCode", f.get("code", "")) or ""
+            field_name = f.get("fieldName", f.get("name", "")) or ""
+            safe_code = safe_field_code(
+                raw_code,
+                model_code=change.code,
+                field_name=field_name,
+                used_codes=used_codes,
+            )
+            if raw_code and safe_code != raw_code:
+                rename_log.append((field_name, raw_code, safe_code))
+            safe_fields.append({
+                "fieldCode": safe_code,
+                "fieldName": field_name,
+                "fieldType": f.get("fieldType", "STRING"),
+                "databaseFieldType": self._field_database_type_value(f),
+                "fieldStatus": "ENABLE",
+                "fieldComment": self._field_comment_value(f),
+                **({"maxLength": self._field_max_length_value(f)} if self._field_max_length_value(f) else {}),
+            })
+
+        if rename_log:
+            summary = "; ".join(f"{n}: `{r}` → `{s}`" for n, r, s in rename_log)
+            logger.warning(
+                "模型「%s」(%s) 字段编码冲突保留字，自动改名 %d 处: %s",
+                change.name, change.code, len(rename_log), summary,
+            )
+            head = "; ".join(f"`{r}`→`{s}`（{n}）" for n, r, s in rename_log[:3])
+            more = f"（共 {len(rename_log)} 处）" if len(rename_log) > 3 else ""
+            self.result.add_warning(
+                f"模型「{change.name}」字段编码自动调整 {len(rename_log)} 处避免保留字冲突: {head}{more}"
+            )
 
         payload = {
             "appId": self.app_id,  # 外层需要 appId
@@ -930,18 +973,7 @@ class IncrementalExecutor:
                 "modelType": "DATABASE",
                 "useScope": self.app_name,
                 "internalResource": True,
-                "fields": [
-                    {
-                        "fieldCode": f.get("fieldCode", f.get("code", "")),
-                        "fieldName": f.get("fieldName", f.get("name", "")),
-                        "fieldType": f.get("fieldType", "STRING"),
-                        "databaseFieldType": self._field_database_type_value(f),
-                        "fieldStatus": "ENABLE",
-                        "fieldComment": self._field_comment_value(f),
-                        **({"maxLength": self._field_max_length_value(f)} if self._field_max_length_value(f) else {})
-                    }
-                    for f in fields
-                ]
+                "fields": safe_fields,
             }]
         }
 
@@ -1012,10 +1044,16 @@ class IncrementalExecutor:
                 logger.exception(f"字段操作失败: {field_change.name}")
 
     async def _create_field(self, model_id: str, change: FieldChange):
-        """创建模型字段"""
+        """创建模型字段 — 单字段添加路径
+
+        与 _create_model 一样过 safe_field_code 兜底。这里 used_codes 只防本次调用
+        内的重名（FieldChange 单个传入，无法预知模型上已有字段），但单字段路径不
+        会有内部重名问题，所以 used_codes 留空集即可——主要靠 safe_field_code 内部
+        的保留字判断 + model_code 前缀兜底。
+        """
         field_data = change.new_value or {}
 
-        # 获取模型编码（平台 API 必填）
+        # 获取模型编码（平台 API 必填，同时 safe_field_code 用 model_code 做改名前缀）
         model_code = change.model_code or ""
         if not model_code:
             remote_models = await self._load_remote_models_by_code()
@@ -1025,12 +1063,28 @@ class IncrementalExecutor:
                     model_code = code
                     break
 
+        raw_code = change.code or ""
+        safe_code = safe_field_code(
+            raw_code,
+            model_code=model_code,
+            field_name=change.name,
+            used_codes=set(),
+        )
+        if raw_code and safe_code != raw_code:
+            logger.warning(
+                "模型字段「%s」编码冲突保留字，自动改名: `%s` → `%s`（模型 %s）",
+                change.name, raw_code, safe_code, model_code,
+            )
+            self.result.add_warning(
+                f"字段「{change.name}」编码自动调整 `{raw_code}` → `{safe_code}` 避免保留字冲突"
+            )
+
         payload = {
             "dataModelId": model_id,
             "modelId": model_id,
             "modelCode": model_code,
             "appId": self.app_id,
-            "fieldCode": change.code,
+            "fieldCode": safe_code,
             "fieldName": change.name,
             "fieldType": field_data.get("fieldType", "STRING"),
             "databaseFieldType": self._field_database_type_value(field_data),
@@ -1041,7 +1095,7 @@ class IncrementalExecutor:
 
         await self._post("/xdap-app/modelField/add", payload)
         self.result.add_success("models", f"模型字段新增: {change.name}")
-        logger.info(f"创建字段成功: {change.name} ({change.code})")
+        logger.info(f"创建字段成功: {change.name} ({safe_code})")
 
     async def _update_field(self, model_id: str, change: FieldChange):
         """更新模型字段
