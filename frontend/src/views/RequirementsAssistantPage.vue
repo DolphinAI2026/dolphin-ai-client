@@ -32,6 +32,15 @@
               <span v-if="docScore > 0" class="ra-bar-score" :class="docScoreClass">
                 自检 {{ docScore }}/100
               </span>
+              <!-- 切到新会话 / 切回旧会话时这里仍是上次 cache 的 md（dolphin embed
+                   切 session 是 iframe 内部行为，外部无法捕获）。点 X 手动清空，
+                   等新会话 agent 写完 md 会自动同步到这里。 -->
+              <button
+                class="ra-bar-clear"
+                type="button"
+                title="切到了别的会话？点这里清空，等新会话 agent 写完 md 会自动同步"
+                @click="resetDocSync"
+              >×</button>
             </template>
             <template v-else>
               <span class="ra-bar-empty">⏳ 等 agent 在上方写完设计文档，会自动同步到下方按钮</span>
@@ -157,6 +166,19 @@ async function pollLatestDoc() {
   } catch (e) {
     // 静默 — 没拿到就保持当前 UI
   }
+}
+
+// dolphin embed 切 session 是 iframe 内部行为，前端跨域无法捕获，所以 bar
+// 不会自动跟着切。让用户主动按 × 重置：清空当前 md + 加快轮询频率，等新
+// session 内 agent 调 submit_design_doc 后 backend cache 更新即同步显示。
+function resetDocSync() {
+  docMd.value = ''
+  docFileName.value = ''
+  docScore.value = 0
+  docPendingId.value = null
+  docSource.value = ''
+  schedulePoll(POLL_FAST_MS)
+  ElMessage.info('已清空，等 agent 在新会话写完会自动同步过来')
 }
 
 function onUserEdit() {
@@ -409,6 +431,25 @@ onBeforeUnmount(() => {
 .ra-bar-score.high { color: #047857; background: #d1fae5; }
 .ra-bar-score.mid  { color: #b45309; background: #fef3c7; }
 .ra-bar-score.low  { color: #b91c1c; background: #fee2e2; }
+.ra-bar-clear {
+  margin-left: 6px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px solid var(--t-border);
+  background: transparent;
+  color: var(--t-text-muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+.ra-bar-clear:hover {
+  background: rgba(239, 68, 68, 0.08);
+  color: #dc2626;
+  border-color: #fca5a5;
+}
 .ra-bar-empty {
   color: var(--t-text-muted);
   font-size: 13px;
