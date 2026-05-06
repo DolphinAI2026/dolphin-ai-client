@@ -442,9 +442,17 @@ class APaaSClient:
                     "approval_time", "approval_user_id",
                     "create_user_id", "update_user_id",
                     "is_deleted", "version",
+                    # apaas 应用实体命名空间 — 平台为每个业务表自动加 application_id 系统列（FK 到父应用）
+                    # 任何业务字段使用同名都会撞库（已实测 2026-05-06）
+                    "application_id", "app_id", "application",
                 }
+                # apaas 应用实体保留前缀 — `application` 是平台父实体命名空间
+                # 任何以 `application_` 开头的 fieldCode 都建议警示（如 application_no / application_status_code 等）
+                # 因为 apaas 可能把整个 `application_*` 命名空间预留给系统使用
+                APAAS_RESERVED_PREFIXES = ("application_", "approval_")
                 token_susp: list[str] = []
                 builtin_susp: list[str] = []
+                prefix_susp: list[str] = []
                 for dm in payload.get("dataModels", []):
                     model_name = (dm.get("modelName") or "?").strip()
                     for f in dm.get("fields", []) or []:
@@ -453,17 +461,25 @@ class APaaSClient:
                         if not fc:
                             continue
                         fc_low = fc.lower()
-                        # apaas 内置字段嫌疑
+                        # apaas 内置字段嫌疑（整字段命中）
                         if fc_low in APAAS_BUILTIN_SUSPECTS:
                             builtin_susp.append(f"模型「{model_name}」字段「{fn}」编码 `{fc}`")
                             continue
-                        # token 级保留字命中
-                        tokens = fc_low.split("_")
-                        bad_tokens = [t for t in tokens if t in _RESERVED_FIELD_CODES]
-                        if bad_tokens:
-                            token_susp.append(
-                                f"模型「{model_name}」字段「{fn}」编码 `{fc}` 含保留字 token: {','.join(bad_tokens)}"
-                            )
+                        # apaas 保留前缀（application_* / approval_*）
+                        for p in APAAS_RESERVED_PREFIXES:
+                            if fc_low.startswith(p):
+                                prefix_susp.append(
+                                    f"模型「{model_name}」字段「{fn}」编码 `{fc}` 命中 apaas 保留前缀 `{p}`"
+                                )
+                                break
+                        else:
+                            # token 级保留字命中（仅当未命中保留前缀时检查，避免重复）
+                            tokens = fc_low.split("_")
+                            bad_tokens = [t for t in tokens if t in _RESERVED_FIELD_CODES]
+                            if bad_tokens:
+                                token_susp.append(
+                                    f"模型「{model_name}」字段「{fn}」编码 `{fc}` 含保留字 token: {','.join(bad_tokens)}"
+                                )
 
                 all_fields_dump = "; ".join(
                     f"{dm.get('modelName')}({dm.get('modelCode')}): "
@@ -471,23 +487,36 @@ class APaaSClient:
                     for dm in payload.get("dataModels", [])
                 )
                 logger.error(
-                    "create_models 失败 — token 扫描结果: 内置嫌疑 %d 条, token 嫌疑 %d 条\n"
-                    "内置嫌疑:\n%s\ntoken 嫌疑:\n%s\n字段列表: [%s]",
-                    len(builtin_susp), len(token_susp),
+                    "create_models 失败 — 扫描结果: 内置嫌疑 %d 条, 保留前缀嫌疑 %d 条, token 嫌疑 %d 条\n"
+                    "内置嫌疑:\n%s\n保留前缀嫌疑:\n%s\ntoken 嫌疑:\n%s\n字段列表: [%s]",
+                    len(builtin_susp), len(prefix_susp), len(token_susp),
                     "\n".join(f"  - {s}" for s in builtin_susp) or "  （无）",
+                    "\n".join(f"  - {s}" for s in prefix_susp) or "  （无）",
                     "\n".join(f"  - {s}" for s in token_susp) or "  （无）",
                     all_fields_dump,
                 )
 
-                # 优先报 apaas 内置嫌疑（命中率最高）
+                # 优先报 apaas 内置嫌疑（命中率最高，含 application_id / approver_id 等审批流/系统列）
                 if builtin_susp:
                     head = "; ".join(builtin_susp[:5])
                     more = f"（共 {len(builtin_susp)} 个）" if len(builtin_susp) > 5 else ""
                     raise Exception(
                         f"{msg} — 高度疑似 apaas 内置字段冲突（审批流/系统列）: {head}{more} "
                         f"— 请回 dolphin 让 agent 把这些字段重命名（如 approver_id → review_user_id 或 "
-                        f"业务前缀化）。**注意**：apaas 审批流模块会自动给业务表加 approver_id / approval_status / "
-                        f"approval_time 等系统列，业务字段不能用同名。"
+                        f"业务前缀化）。**注意**：apaas 平台为每个业务表自动加 application_id / approver_id / "
+                        f"approval_status / approval_time 等系统列（FK 到父应用、审批流模块），业务字段不能用同名。"
+                    ) from exc
+
+                # 二级：apaas 保留前缀（application_* / approval_*）— 整个命名空间被平台占用
+                if prefix_susp:
+                    head = "; ".join(prefix_susp[:5])
+                    more = f"（共 {len(prefix_susp)} 个）" if len(prefix_susp) > 5 else ""
+                    raise Exception(
+                        f"{msg} — 字段命中 apaas 保留前缀（application_* / approval_*）: {head}{more} "
+                        f"— `application` 是 apaas 父实体命名空间，`approval` 是审批流模块命名空间，"
+                        f"两个前缀下整批字段都可能被平台占用。请回 dolphin 让 agent 改用业务前缀，例如 "
+                        f"`application_no` → `pay_no` / `payment_no`，`application_status_code` → "
+                        f"`pay_status_code`，`approval_note` → `audit_note`。完整字段: [{all_fields_dump}]"
                     ) from exc
 
                 if token_susp:
