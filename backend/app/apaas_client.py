@@ -358,13 +358,81 @@ class APaaSClient:
         return await self._post_resource("/common/resource/appDict", dicts, app_id)
 
     async def create_models(self, app_id: str, payload: dict) -> list:
-        """批量创建数据模型 — /common/resource/v2/appModel"""
+        """批量创建数据模型 — /common/resource/v2/appModel
+
+        失败时（尤其平台返回"字段编码与数据库关键字重复"这类无字段名的笼统错误）
+        会自动用 safe_field_code 模拟一遍，找出疑似真凶并把诊断信息塞进 raise 的
+        Exception 里，让上层 add_error 直接冒泡到前端的"创建模型: X 失败"展示。
+        """
         # 调试：打印所有字段编码
         for dm in payload.get("dataModels", []):
             field_codes = [f.get("fieldCode") for f in dm.get("fields", [])]
             logger.info(f"创建模型 {dm.get('modelName')} [{dm.get('modelCode')}] 字段: {field_codes}")
-        result = await self._post_resource("/common/resource/v2/appModel", payload, app_id)
-        return result if isinstance(result, list) else []
+        try:
+            result = await self._post_resource("/common/resource/v2/appModel", payload, app_id)
+            return result if isinstance(result, list) else []
+        except Exception as exc:
+            # apaas 平台对字段编码冲突 / 保留字 / 重名等错误统一返回笼统 message，
+            # 不告诉具体哪个字段。这里用本地保留字表 + safe_field_code 反查找出真凶
+            # 并把诊断信息附在 Exception message 上（前端 add_error 能直接看到）。
+            msg = str(exc)
+            if any(kw in msg for kw in ("关键字", "重复", "字段编码", "reserved", "duplicate")):
+                try:
+                    from app.lowcode_standards import _RESERVED_FIELD_CODES, safe_field_code
+                except Exception:
+                    _RESERVED_FIELD_CODES, safe_field_code = set(), None  # 兜底，没诊断也不能崩
+                diag_lines: list[str] = []
+                # 完整 payload dump 到 server log（方便用户翻日志精确定位）
+                full_dump_lines: list[str] = []
+                for dm in payload.get("dataModels", []):
+                    model_code = (dm.get("modelCode") or "").strip()
+                    model_name = (dm.get("modelName") or "").strip() or "?"
+                    fields = dm.get("fields", []) or []
+                    full_dump_lines.append(
+                        f"  • 模型「{model_name}」({model_code}) 共 {len(fields)} 字段: "
+                        + ", ".join((f.get("fieldCode") or "?") for f in fields)
+                    )
+                    seen: set[str] = set()
+                    for f in fields:
+                        fc = (f.get("fieldCode") or "").strip()
+                        fn = (f.get("fieldName") or "").strip() or fc or "?"
+                        if not fc:
+                            continue
+                        # 1) 本地保留字命中
+                        if fc.lower() in _RESERVED_FIELD_CODES:
+                            suggested = (
+                                safe_field_code(fc, model_code=model_code, field_name=fn, used_codes=set(seen))
+                                if safe_field_code else f"{model_code}_{fc}".strip("_") or fc
+                            )
+                            diag_lines.append(
+                                f"模型「{model_name}」字段「{fn}」编码 `{fc}` 是平台保留字，建议改为 `{suggested}`"
+                            )
+                            seen.add(suggested)
+                            continue
+                        # 2) 模型内字段编码重名
+                        if fc in seen:
+                            diag_lines.append(f"模型「{model_name}」字段编码 `{fc}` 在同一模型内重复出现")
+                        else:
+                            seen.add(fc)
+                logger.error(
+                    "create_models 失败 — 平台返回: %s\n传入字段编码:\n%s\n本地诊断 (%d 条):\n%s",
+                    msg,
+                    "\n".join(full_dump_lines) or "  （payload 为空）",
+                    len(diag_lines),
+                    "\n".join(f"  - {d}" for d in diag_lines) or "  （未在本地保留字表里找到匹配；可能是 modelCode 冲突 / 字段名重复 / 平台特有保留字，请在 server log 中比对完整 fieldCode 列表）",
+                )
+                if diag_lines:
+                    head = "; ".join(diag_lines[:3])
+                    more = f"（共 {len(diag_lines)} 条，详见后端日志）" if len(diag_lines) > 3 else ""
+                    raise Exception(f"{msg} — 疑似真凶: {head}{more}") from exc
+                # 没找到本地匹配也带个 hint，让前端能展开传入字段编码
+                model_codes_dump = ", ".join(
+                    f"{dm.get('modelName')}({dm.get('modelCode')})" for dm in payload.get("dataModels", [])
+                )
+                raise Exception(
+                    f"{msg} — 本地保留字表未命中，请在 server log 比对完整 fieldCode 列表（涉及模型: {model_codes_dump}）"
+                ) from exc
+            raise
 
     async def create_form_config(self, app_id: str, payload: list) -> list:
         """批量创建表单配置 — /common/resource/formConfig"""
