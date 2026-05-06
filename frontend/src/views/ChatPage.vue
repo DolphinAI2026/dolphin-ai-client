@@ -1400,11 +1400,29 @@ watch(() => [route.query.app_id, store.preview.appName], () => {
 let _lastAppId: number | null = null
 let _lastAppUpdatedAt = ''
 let _appPollTimer: any = null
+let _appPollVisHandler: (() => void) | null = null
+
+// onMounted 调用：立刻 fetch 一次拿基线（不等第一次轮询）。原来的"首次轮询建基线"
+// 设计有 bug — 如果 agent 在 mount 后、第一次轮询前改了 SPEC，第一次轮询会把
+// 已经改过的 updated_at 写成基线 → 永远检测不到这次变化（30~60s 后才会感知到下一次变化）。
+// 改成 onMounted 立刻拉一次 baseline，确保 baseline 是"最早可能"的时间点。
+async function primeAppPollingBaseline() {
+  let appId: number | null = null
+  try { appId = builderCurrentAppId.value } catch { return }
+  if (!appId || !useDolphinChat.value) return
+  _lastAppId = appId
+  try {
+    const app: any = await applicationApi.get(appId)
+    _lastAppUpdatedAt = String(app?.updated_at || app?.last_updated_at || '')
+  } catch {
+    _lastAppUpdatedAt = ''
+  }
+}
 async function pollAppForChanges() {
   let appId: number | null = null
   try { appId = builderCurrentAppId.value } catch { return }
   if (!appId || !useDolphinChat.value) return
-  // 切应用 → 重置基线
+  // 切应用 → 重置基线（重新 prime 一次）
   if (appId !== _lastAppId) {
     _lastAppId = appId
     _lastAppUpdatedAt = ''
@@ -1446,15 +1464,29 @@ async function pollAppForChanges() {
 }
 function startAppPolling() {
   if (_appPollTimer) return
-  // 30s 一次：每次 GET /applications/{id} ~17KB，5s 一次太重；agent 改 SPEC
-  // 是低频事件，30s 检测足够。tab 切走时 visibilitychange 会暂停（被动节流）。
+  // 5s 一次：原本是 5s（注释一直写 5s），但代码不知何时被改成 30s 导致用户感觉
+  // "改完不刷新"。GET /applications/{id} ~17KB，5s 一次的带宽 = 3.4 KB/s 完全可以
+  // 接受，agent 改 SPEC 是事件而不是连续流，5s 检测在用户感知边界内。
+  // tab 切走时 visibilitychange 会暂停（被动节流）。
   _appPollTimer = setInterval(() => {
     if (document.visibilityState !== 'visible') return  // tab 不可见暂停
     void pollAppForChanges()
-  }, 30000)
+  }, 5000)
+  // tab 切回前台时立刻补一次轮询 — 否则要等下一个 5s 周期。
+  // 用户从 dolphin admin / 别的 tab 切回来的瞬间最可能想立刻看到右侧最新状态。
+  _appPollVisHandler = () => {
+    if (document.visibilityState === 'visible') {
+      void pollAppForChanges()
+    }
+  }
+  document.addEventListener('visibilitychange', _appPollVisHandler)
 }
 function stopAppPolling() {
   if (_appPollTimer) { clearInterval(_appPollTimer); _appPollTimer = null }
+  if (_appPollVisHandler) {
+    document.removeEventListener('visibilitychange', _appPollVisHandler)
+    _appPollVisHandler = null
+  }
 }
 
 // "AI 调整" 按钮：新窗口打开 dolphin 完整 chat 页（享受 dolphin 完整对话/历史/记忆/项目管理）
@@ -7522,6 +7554,10 @@ onMounted(async () => {
   void syncCurrentAppToBackend()
   // dolphin 改 SPEC 后右侧自动刷新 — 启动 5s 轮询
   startAppPolling()
+  // 立刻拉一次基线 —— 不依赖第一次 5s tick 后才建立 baseline。
+  // 若 agent 在 mount 后、第一次 tick 前改了 SPEC，原来"首次 tick 建基线"逻辑
+  // 会把改过的 updated_at 当成 baseline，永远检测不到这次变化。
+  void primeAppPollingBaseline()
   const initialPrompt = typeof route.query.prompt === 'string' ? route.query.prompt : ''
   // 加载左侧 sidebar 应用列表（不阻塞主流程）
   if (!embedMode.value) loadSidebarApps()
