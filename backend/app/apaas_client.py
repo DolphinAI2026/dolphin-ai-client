@@ -425,12 +425,17 @@ class APaaSClient:
                     head = "; ".join(diag_lines[:3])
                     more = f"（共 {len(diag_lines)} 条，详见后端日志）" if len(diag_lines) > 3 else ""
                     raise Exception(f"{msg} — 疑似真凶: {head}{more}") from exc
-                # 没找到本地匹配也带个 hint，让前端能展开传入字段编码
-                model_codes_dump = ", ".join(
-                    f"{dm.get('modelName')}({dm.get('modelCode')})" for dm in payload.get("dataModels", [])
+                # 本地表未命中：把完整 fieldCode 列表塞进 message，前端错误条直接展开
+                # 让用户能跟 md / SPEC 显示对比，立刻看出是不是 ai-builder 转换层做了改名
+                all_fields_dump = "; ".join(
+                    f"{dm.get('modelName')}({dm.get('modelCode')}): "
+                    + ", ".join((f.get("fieldCode") or "?") for f in dm.get("fields", []) or [])
+                    for dm in payload.get("dataModels", [])
                 )
                 raise Exception(
-                    f"{msg} — 本地保留字表未命中，请在 server log 比对完整 fieldCode 列表（涉及模型: {model_codes_dump}）"
+                    f"{msg} — 本地保留字表未命中。实际传给 apaas 的 fieldCode: [{all_fields_dump}] "
+                    f"— 对比前端 SPEC 显示的字段编码看是否一致；不一致说明 ai-builder 转换层改名了，"
+                    f"一致则说明 apaas 平台用了我们没收录的保留字（请把这串字段编码发回研发补 _RESERVED_FIELD_CODES）。"
                 ) from exc
             raise
 
