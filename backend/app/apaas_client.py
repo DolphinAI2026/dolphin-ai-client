@@ -632,6 +632,171 @@ class APaaSClient:
         )
         return result
 
+    async def update_dict(self, app_id: str, dict_id: str, dict_code: str, dict_name: str,
+                          describe: str = "", multicolor_status: str = "ENABLE") -> dict:
+        """更新字典基本信息（POST /xdap-app/dataDictionary/edit/dataDictionary/fromApp）。"""
+        url = f"{self.base_url}/xdap-app/dataDictionary/edit/dataDictionary/fromApp"
+        payload = {
+            "id": dict_id, "appId": app_id,
+            "dictionaryCode": dict_code, "dictionaryName": dict_name,
+            "dictionaryDescribe": describe,
+            "dictionaryStatus": "ENABLE",
+            "dictionaryMulticolorStatus": multicolor_status,
+            "internalResource": True,
+            "dictionaryNameI18nAssociated": False,
+            "dictionaryNameI18nResourceCode": "",
+            "dictionaryNameI18n": {},
+        }
+        _log_request("POST", url, payload)
+        start = time.time()
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
+            response = await client.post(url, headers=self._get_headers(app_id), json=payload)
+            elapsed_ms = (time.time() - start) * 1000
+            response.raise_for_status()
+            data = response.json()
+            _log_response(url, response.status_code, data, elapsed_ms, request_body=_to_json(payload))
+            if data.get("code") not in ("ok", 200):
+                raise Exception(data.get("message", "更新字典失败"))
+            return data
+
+    async def update_dict_option(self, app_id: str, dict_id: str, option_id: str,
+                                 value_code: str, value_name: str,
+                                 display_order: int = 0, describe: str = "",
+                                 multicolor: str = "#027AFF") -> dict:
+        """更新字典选项（POST /xdap-app/dataDictionary/edit/dictionaryValue/fromApp）。"""
+        url = f"{self.base_url}/xdap-app/dataDictionary/edit/dictionaryValue/fromApp"
+        payload = {
+            "id": option_id, "appId": app_id, "dictionaryId": dict_id,
+            "valueCode": value_code, "valueName": value_name,
+            "valueNameI18nAssociated": False,
+            "valueNameI18nResourceCode": "", "valueNameI18n": {},
+            "displayOrder": display_order, "valueDescribe": describe,
+            "valueStatus": "ENABLE", "valueMulticolor": multicolor,
+        }
+        _log_request("POST", url, payload)
+        start = time.time()
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
+            response = await client.post(url, headers=self._get_headers(app_id), json=payload)
+            elapsed_ms = (time.time() - start) * 1000
+            response.raise_for_status()
+            data = response.json()
+            _log_response(url, response.status_code, data, elapsed_ms, request_body=_to_json(payload))
+            if data.get("code") not in ("ok", 200):
+                raise Exception(data.get("message", "更新字典选项失败"))
+            return data
+
+    async def update_model(self, app_id: str, model_id: str, model_code: str, model_name: str,
+                           app_name: str = "", model_data_source: str = "") -> dict:
+        """更新模型基本信息（POST /xdap-app/dataModel/update）。
+
+        注意：不能改字段，字段走 add_model_field / update_model_field 单独管理。
+        """
+        url = f"{self.base_url}/xdap-app/dataModel/update"
+        payload = {
+            "id": model_id, "appId": app_id,
+            "modelCode": model_code, "modelName": model_name,
+            "modelType": "DATABASE", "modelDataSource": model_data_source,
+            "useScope": app_name, "internalResource": True,
+            "interfaceType": "CUSTOM", "createType": "NEWCREATE",
+            "apiVersion": "V2", "generateType": "NEWCREATE",
+        }
+        _log_request("POST", url, payload)
+        start = time.time()
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
+            response = await client.post(url, headers=self._get_headers(app_id), json=payload)
+            elapsed_ms = (time.time() - start) * 1000
+            response.raise_for_status()
+            data = response.json()
+            _log_response(url, response.status_code, data, elapsed_ms, request_body=_to_json(payload))
+            if data.get("code") not in ("ok", 200):
+                raise Exception(data.get("message", "更新模型失败"))
+            return data
+
+    async def add_model_field(self, app_id: str, model_id: str, model_code: str,
+                              field_code: str, field_name: str,
+                              field_type: str = "STRING",
+                              database_field_type: str = "VARCHAR",
+                              max_length: int = 255,
+                              comment: str = "") -> dict:
+        """给已有模型加一个字段（POST /xdap-app/modelField/add）。
+
+        field_type: STRING / NUM / DATE / DATETIME / BOOLEAN / TEXT / BIG_TEXT 等
+        慎用 application_id / approver_id 等 apaas 保留字 — 平台会 422 拦。
+        """
+        url = f"{self.base_url}/xdap-app/modelField/add"
+        payload = {
+            "dataModelId": model_id, "modelId": model_id,
+            "modelCode": model_code, "appId": app_id,
+            "fieldCode": field_code, "fieldName": field_name,
+            "fieldType": field_type, "databaseFieldType": database_field_type,
+            "fieldStatus": "ENABLE", "fieldComment": comment or "",
+            "maxLength": max_length,
+        }
+        _log_request("POST", url, payload)
+        start = time.time()
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
+            response = await client.post(url, headers=self._get_headers(app_id), json=payload)
+            elapsed_ms = (time.time() - start) * 1000
+            response.raise_for_status()
+            data = response.json()
+            _log_response(url, response.status_code, data, elapsed_ms, request_body=_to_json(payload))
+            if data.get("code") not in ("ok", 200):
+                raise Exception(data.get("message", "添加字段失败"))
+            return data
+
+    async def update_model_field(self, app_id: str, model_id: str, field_id: str,
+                                 field_code: str, field_name: str,
+                                 field_type: str | None = None,
+                                 max_length: int | None = None,
+                                 field_status: str = "ENABLE",
+                                 comment: str | None = None) -> dict:
+        """更新模型字段（POST /xdap-app/modelField/update/fromApp）。
+
+        field_type 改类型时 apaas 行为：可能影响存量数据，建议走"禁用 + 新建"两步
+        （field_status='DISABLE' + add_model_field）。本工具不强制，由 agent 决策。
+
+        field_status='DISABLE' 即"禁用字段"（apaas 不能真删字段，只能禁用）。
+        """
+        url = f"{self.base_url}/xdap-app/modelField/update/fromApp"
+        payload: dict = {
+            "id": field_id, "modelId": model_id, "appId": app_id,
+            "fieldCode": field_code, "fieldName": field_name,
+            "fieldStatus": field_status,
+        }
+        if field_type is not None: payload["fieldType"] = field_type
+        if max_length is not None: payload["maxLength"] = max_length
+        if comment is not None: payload["fieldComment"] = comment
+        _log_request("POST", url, payload)
+        start = time.time()
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
+            response = await client.post(url, headers=self._get_headers(app_id), json=payload)
+            elapsed_ms = (time.time() - start) * 1000
+            response.raise_for_status()
+            data = response.json()
+            _log_response(url, response.status_code, data, elapsed_ms, request_body=_to_json(payload))
+            if data.get("code") not in ("ok", 200):
+                raise Exception(data.get("message", "更新字段失败"))
+            return data
+
+    async def delete_menu(self, app_id: str, menu_id: str, menu_name: str = "") -> dict:
+        """删除菜单（POST /xdap-app/menu/delete/menu）— 普通菜单/表单菜单/自开发菜单都用这个。
+
+        删除表单菜单会联动删表单本身（apaas 内部）。
+        """
+        url = f"{self.base_url}/xdap-app/menu/delete/menu"
+        payload = {"id": menu_id, "appId": app_id, "menuName": menu_name or ""}
+        _log_request("POST", url, payload)
+        start = time.time()
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
+            response = await client.post(url, headers=self._get_headers(app_id), json=payload)
+            elapsed_ms = (time.time() - start) * 1000
+            response.raise_for_status()
+            data = response.json()
+            _log_response(url, response.status_code, data, elapsed_ms, request_body=_to_json(payload))
+            if data.get("code") not in ("ok", 200):
+                raise Exception(data.get("message", "删除菜单失败"))
+            return data
+
     async def update_role(self, app_id: str, role_id: str, role_code: str, role_name: str,
                           app_name: str = "", enable_group_param: str = "DISABLE",
                           role_params: list | None = None) -> dict:

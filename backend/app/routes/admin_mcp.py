@@ -44,10 +44,19 @@ def _classify_tool(name: str) -> tuple[str, str]:
     if name.startswith("list_dev_scene") or name.startswith("get_dev_scene"):
         return ("dev_scene", "自开发场景规范")
 
-    # aPaaS 应用配置精细操作（角色 / 字典 / 模型等 CRUD，不走 SPEC 文档流程）
+    # aPaaS 应用配置精细操作（角色 / 字典 / 字段 / 模型 / 菜单 CRUD，不走 SPEC 文档流程）
     if name in (
+        # 角色
         "list_apaas_app_roles", "create_apaas_app_roles",
         "update_apaas_app_role", "delete_apaas_app_role",
+        # 字典 + 选项
+        "create_apaas_app_dict", "update_apaas_app_dict",
+        "add_apaas_dict_option", "update_apaas_dict_option",
+        # 模型 + 字段
+        "update_apaas_app_model",
+        "add_apaas_model_field", "update_apaas_model_field", "disable_apaas_model_field",
+        # 菜单 + 表单（delete 触发表单删）
+        "create_apaas_form_menu", "delete_apaas_app_menu", "delete_apaas_app_form",
     ):
         return ("apaas_config_edit", "aPaaS 配置精细操作")
 
