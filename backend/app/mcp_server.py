@@ -1785,29 +1785,37 @@ async def create_dev_workspace(
         return {"ok": False, "error_code": "INVALID_PROJECT_NAME", "message": "project_name 不能为空"}
 
     tid, uid = _resolve_identity(tenant_id, user_id)
+    # /coding/workspace/create 实际签名 (CreateWorkspaceRequest):
+    #   project_type / project_name / display_name (可选) / project_id (可选)
+    # 不接 initial_requirement / apaas_app_id / apaas_app_name —— 这些是工具层语义参数，
+    # 拿不到对应字段就先丢弃（后续如果加 application 关联可走 POST /applications/...）
     payload = {
-        "scene_type": scene_type,
+        "project_type": scene_type,  # scene_type 跟 ProjectType 枚举值一致
         "project_name": project_name.strip(),
-        "display_name": display_name.strip() or project_name.strip(),
-        "initial_requirement": initial_requirement or "",
-        "apaas_app_id": apaas_app_id or "",
-        "apaas_app_name": apaas_app_name or "",
+        "display_name": (display_name or "").strip() or project_name.strip(),
     }
-    res = await _api_call("POST", "/coding/workspace/create", tenant_id=tid, user_id=uid, json=payload)
-    if isinstance(res, dict) and res.get("ws_id"):
+    res = await _api_call("POST", "/coding/workspace/create", tenant_id=tid, user_id=uid, json_body=payload)
+    ws_id = (res or {}).get("ws_id") or (res or {}).get("id") or (res or {}).get("workspace_id")
+    if isinstance(res, dict) and ws_id:
         return {
             "ok": True,
-            "ws_id": res["ws_id"],
+            "ws_id": ws_id,
             "scene_type": scene_type,
             "project_name": project_name.strip(),
             "display_name": display_name or project_name,
             "tenant_id": tid,
             "user_id": uid,
             "next_steps": [
-                f"用 get_dev_workspace_status('{res['ws_id']}') 查工作区状态",
+                f"用 get_dev_workspace_status('{ws_id}') 查工作区状态",
                 "用 read_workspace_file / write_workspace_files / edit_workspace_files 写代码",
                 "完成后 run_workspace_command('npm run build') + publish_dev_workspace",
             ],
+            "note_unused_args": (
+                "initial_requirement / apaas_app_id / apaas_app_name 这次未传给底层 endpoint"
+                "（当前 /coding/workspace/create 不接这些字段）；如需要让 vibe_agent "
+                "拿到 brief，请 workspace 创建后用 write_workspace_files 写 .coding-pending-requirement.txt"
+                if (initial_requirement or apaas_app_id or apaas_app_name) else None
+            ),
         }
     return {"ok": False, "error_code": "CREATE_FAILED", "message": "create_workspace 返回异常", "raw": res}
 
