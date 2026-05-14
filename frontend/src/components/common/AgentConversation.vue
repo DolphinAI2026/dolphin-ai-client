@@ -14,8 +14,8 @@
 
       <template v-for="(item, idx) in timeline" :key="itemKey(item, idx)">
         <!-- ─── tool group：连续同名工具折叠 ─── -->
-        <div v-if="isGroup(item)" class="ac-row assistant">
-          <div class="ac-avatar tool">⚒</div>
+        <div v-if="isGroup(item)" class="ac-row assistant tool-row">
+          <div class="ac-avatar-spacer"></div>
           <div class="ac-bubble process">
             <div class="ac-tool-group" :class="{ expanded: isGroupOpen(item.id, item), running: groupRunning(item) }">
               <div class="ac-tool-head" @click="toggleGroup(item.id, item)">
@@ -43,22 +43,28 @@
         <template v-else>
           <!-- user -->
           <div v-if="item.kind === 'user'" class="ac-row user">
-            <div class="ac-bubble user-bubble">
-              <div class="ac-text">{{ item.content }}</div>
-              <div v-if="item.attachments && item.attachments.length" class="ac-attach-chips">
-                <span v-for="a in item.attachments" :key="a.id ?? a.filename" class="ac-attach-chip">
-                  <span class="icon">{{ a.kind === 'image' ? '🖼️' : '📄' }}</span>
-                  <span class="name">{{ a.filename }}</span>
-                </span>
+            <div class="ac-user-wrap">
+              <div class="ac-bubble user-bubble">
+                <div class="ac-text">{{ item.content }}</div>
+                <div v-if="item.attachments && item.attachments.length" class="ac-attach-chips">
+                  <span v-for="a in item.attachments" :key="a.id ?? a.filename" class="ac-attach-chip">
+                    <span class="icon">{{ a.kind === 'image' ? '🖼️' : '📄' }}</span>
+                    <span class="name">{{ a.filename }}</span>
+                  </span>
+                </div>
+                <slot name="user-extra" :message="item" />
               </div>
-              <slot name="user-extra" :message="item" />
+              <div class="ac-user-meta">
+                <span class="ac-user-time" v-if="item.timestamp">{{ formatTime(item.timestamp) }}</span>
+              </div>
             </div>
+            <div class="ac-user-tag">我</div>
           </div>
 
-          <!-- assistant -->
+          <!-- assistant — dolphin 风格：方形蓝头像 + 无气泡 markdown 直渲 -->
           <div v-else-if="item.kind === 'assistant' || item.kind === 'streaming'" class="ac-row assistant">
-            <div class="ac-avatar">AI</div>
-            <div class="ac-bubble">
+            <div class="ac-avatar brand">A</div>
+            <div class="ac-bubble assistant-naked">
               <div class="ac-text" v-html="renderMd(item.content || '')"></div>
               <span v-if="item.kind === 'streaming' || item.streaming" class="ac-cursor"></span>
             </div>
@@ -74,9 +80,9 @@
             </div>
           </div>
 
-          <!-- tool -->
-          <div v-else-if="item.kind === 'tool' && item.tool" class="ac-row assistant">
-            <div class="ac-avatar tool">⚒</div>
+          <!-- tool — dolphin 风格：无独立头像，工具卡左缩进与 AI 头像对齐 -->
+          <div v-else-if="item.kind === 'tool' && item.tool" class="ac-row assistant tool-row">
+            <div class="ac-avatar-spacer"></div>
             <div class="ac-bubble process">
               <slot name="tool-renderer" :tool="item.tool" :message="item">
                 <ToolCard
@@ -147,11 +153,9 @@
       <!-- typing indicator -->
       <div v-if="typing" class="ac-row assistant">
         <slot name="typing">
-          <div class="ac-avatar">AI</div>
-          <div class="ac-bubble">
-            <div class="ac-typing">
-              <span class="dot"></span><span class="dot"></span><span class="dot"></span>
-            </div>
+          <!-- dolphin 风格：8-bit 像素小怪兽（CSS box-shadow 拼），不带 ac-avatar / ac-bubble -->
+          <div class="ac-pixel-monster" aria-label="AI 思考中">
+            <div class="ac-pixel-monster-grid"></div>
           </div>
         </slot>
       </div>
@@ -293,6 +297,19 @@ function renderMd(text: string): string {
   }
 }
 
+function formatTime(ts: number | string | undefined): string {
+  if (!ts) return ''
+  try {
+    const d = typeof ts === 'number' ? new Date(ts) : new Date(ts)
+    if (Number.isNaN(d.getTime())) return ''
+    const hh = String(d.getHours()).padStart(2, '0')
+    const mm = String(d.getMinutes()).padStart(2, '0')
+    return `${hh}:${mm}`
+  } catch {
+    return ''
+  }
+}
+
 function toolIcon(name: string): string {
   const n = (name || '').toLowerCase()
   if (n.includes('read') || n.includes('cat')) return '📖'
@@ -382,14 +399,27 @@ defineExpose({
   flex-shrink: 0;
   width: 28px;
   height: 28px;
-  border-radius: 8px;
-  background: var(--t-brand-soft, rgba(99, 102, 241, 0.16));
-  color: var(--t-brand, #6366f1);
+  border-radius: 6px;
+  background: var(--t-brand-soft, rgba(59, 130, 246, 0.14));
+  color: var(--t-brand, #3b82f6);
   font-size: 11px;
   font-weight: 700;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+}
+/* dolphin 风格：assistant 蓝色实底白字方形头像 'A' */
+.ac-avatar.brand {
+  background: #3b82f6 !important;
+  color: #fff !important;
+  font-size: 13px;
+  font-weight: 700;
+}
+/* 工具行不显头像，用 spacer 占位让 ToolCard 左缘跟 AI 消息文本左缘对齐 */
+.ac-avatar-spacer {
+  flex-shrink: 0;
+  width: 28px;
+  height: 1px;
 }
 .ac-avatar.tool {
   background: rgba(245, 158, 11, 0.16);
@@ -415,15 +445,23 @@ defineExpose({
   line-height: 1.6;
   color: var(--t-text-primary);
   position: relative;
-  /* 长 URL / hash / 无空格中英文混合都强制在字符内换行，
-     不允许气泡内容撑破 max-width */
   overflow-wrap: anywhere;
   word-break: break-word;
 }
+/* dolphin 风格：assistant 消息无气泡 — markdown 直接渲染在背景上 */
+.ac-bubble.assistant-naked {
+  background: transparent;
+  border-color: transparent;
+  padding: 4px 0 0;
+  max-width: min(880px, 92%);
+}
+/* dolphin 风格：user 消息浅灰圆角小气泡 */
 .ac-bubble.user-bubble {
-  background: var(--t-brand-soft, rgba(99, 102, 241, 0.14));
-  border-color: rgba(99, 102, 241, 0.22);
+  background: rgba(116, 128, 171, 0.10);
+  border-color: transparent;
   color: var(--t-text-primary);
+  padding: 8px 14px;
+  border-radius: 14px;
 }
 .ac-bubble.process {
   background: transparent;
@@ -435,6 +473,72 @@ defineExpose({
 .ac-bubble.error {
   background: rgba(239, 68, 68, 0.08);
   border-color: rgba(239, 68, 68, 0.24);
+}
+
+/* dolphin 风格：user 消息右侧"我"标签 + 下方时间戳 */
+.ac-user-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  max-width: min(620px, 75%);
+}
+.ac-user-meta {
+  margin-top: 4px;
+  font-size: 11px;
+  color: rgba(116, 128, 171, 0.7);
+  padding-right: 4px;
+}
+.ac-user-tag {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 14px;
+  background: rgba(116, 128, 171, 0.14);
+  color: rgba(116, 128, 171, 0.85);
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+}
+
+/* 像素风 8-bit 小怪兽（流式生成中标志） */
+.ac-pixel-monster {
+  width: 100%;
+  display: flex;
+  justify-content: flex-start;
+  padding: 4px 0 4px 38px;
+}
+.ac-pixel-monster-grid {
+  width: 4px;
+  height: 4px;
+  background: transparent;
+  /* 14x14 像素网格，蓝色色块拼成"小怪兽"轮廓 + 触角 + 眼睛 */
+  /* 每个 box-shadow 是一个像素 (x_off y_off color)，scale = 4px */
+  box-shadow:
+    /* 触角 row -2 */
+    16px -8px #3b82f6, 36px -8px #3b82f6,
+    /* 触角 row -1 */
+    16px -4px #3b82f6, 36px -4px #3b82f6,
+    /* row 0 — 头顶 */
+    8px 0 #3b82f6, 12px 0 #3b82f6, 16px 0 #3b82f6, 20px 0 #3b82f6, 24px 0 #3b82f6, 28px 0 #3b82f6, 32px 0 #3b82f6, 36px 0 #3b82f6, 40px 0 #3b82f6, 44px 0 #3b82f6,
+    /* row 1 */
+    4px 4px #3b82f6, 8px 4px #3b82f6, 12px 4px #3b82f6, 16px 4px #3b82f6, 20px 4px #3b82f6, 24px 4px #3b82f6, 28px 4px #3b82f6, 32px 4px #3b82f6, 36px 4px #3b82f6, 40px 4px #3b82f6, 44px 4px #3b82f6, 48px 4px #3b82f6,
+    /* row 2 — 眼睛区 */
+    0 8px #3b82f6, 4px 8px #3b82f6, 8px 8px #1e293b, 12px 8px #1e293b, 16px 8px #3b82f6, 20px 8px #3b82f6, 24px 8px #3b82f6, 28px 8px #3b82f6, 32px 8px #1e293b, 36px 8px #1e293b, 40px 8px #3b82f6, 44px 8px #3b82f6, 48px 8px #3b82f6, 52px 8px #3b82f6,
+    /* row 3 */
+    0 12px #3b82f6, 4px 12px #3b82f6, 8px 12px #1e293b, 12px 12px #1e293b, 16px 12px #3b82f6, 20px 12px #3b82f6, 24px 12px #3b82f6, 28px 12px #3b82f6, 32px 12px #1e293b, 36px 12px #1e293b, 40px 12px #3b82f6, 44px 12px #3b82f6, 48px 12px #3b82f6, 52px 12px #3b82f6,
+    /* row 4 */
+    0 16px #3b82f6, 4px 16px #3b82f6, 8px 16px #3b82f6, 12px 16px #3b82f6, 16px 16px #3b82f6, 20px 16px #3b82f6, 24px 16px #3b82f6, 28px 16px #3b82f6, 32px 16px #3b82f6, 36px 16px #3b82f6, 40px 16px #3b82f6, 44px 16px #3b82f6, 48px 16px #3b82f6, 52px 16px #3b82f6,
+    /* row 5 — 腿外撇 */
+    0 20px #3b82f6, 4px 20px #3b82f6, 12px 20px #3b82f6, 16px 20px #3b82f6, 20px 20px #3b82f6, 24px 20px #3b82f6, 28px 20px #3b82f6, 32px 20px #3b82f6, 36px 20px #3b82f6, 40px 20px #3b82f6, 48px 20px #3b82f6, 52px 20px #3b82f6,
+    /* row 6 — 腿尖 */
+    0 24px #3b82f6, 8px 24px #3b82f6, 44px 24px #3b82f6, 52px 24px #3b82f6;
+  animation: ac-pixel-bounce 1.2s ease-in-out infinite;
+}
+@keyframes ac-pixel-bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
 }
 
 .ac-text :deep(p) { margin: 0 0 6px; }

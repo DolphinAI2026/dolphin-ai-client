@@ -117,7 +117,7 @@
             <textarea
               v-model="inputText"
               class="textarea"
-              :placeholder="isSending ? 'AI 正在工作中…' : '描述需求、追问或要求修改设计文档'"
+              :placeholder="isSending ? '生成中 · 可继续输入，发送将进入队列等待' : '描述需求、追问或要求修改设计文档'"
               rows="1"
               ref="textareaRef"
               @keydown.enter.exact.prevent="onSend"
@@ -1903,13 +1903,23 @@ onMounted(async () => {
 }
 .textarea::placeholder { color: var(--ac-text-faint); }
 .send-btn {
-  width: 32px; height: 32px; border-radius: 8px; background: var(--ac-brand);
-  border: none; color: var(--ac-text); cursor: pointer; display: grid; place-items: center;
+  width: 34px; height: 34px; border-radius: 50%; background: #3b82f6;
+  border: none; color: #fff; cursor: pointer; display: grid; place-items: center;
   flex-shrink: 0; transition: all 0.15s;
+  box-shadow: 0 2px 6px rgba(59, 130, 246, 0.3);
 }
-.send-btn:hover:not(:disabled) { transform: translateY(-1px); }
-.send-btn:disabled { opacity: 0.3; cursor: not-allowed; }
-.send-btn.stop { background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); }
+.send-btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 3px 10px rgba(59, 130, 246, 0.4); }
+.send-btn:disabled { opacity: 0.35; cursor: not-allowed; box-shadow: none; }
+.send-btn.stop {
+  background: #ef4444;
+  box-shadow: 0 2px 6px rgba(239, 68, 68, 0.35);
+  animation: send-btn-pulse 1.4s ease-in-out infinite;
+}
+.send-btn.stop:hover { box-shadow: 0 3px 10px rgba(239, 68, 68, 0.5); }
+@keyframes send-btn-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+}
 
 /* ─── Aside right (codex-style file viewer) ─── */
 .aside-right {

@@ -1,15 +1,21 @@
 <template>
+  <!-- dolphin 风格：一行 inline 极简卡片
+       已完成 · 调用 list_apaas_apps_in_env · 工具调用 · 3.4s › -->
   <div
     class="tool-card"
     :class="{ expanded, mini, [`status-${tool.status}`]: true }"
   >
     <div class="tc-head" @click="$emit('toggle')">
-      <span v-if="!mini" class="tc-icon">{{ icon }}</span>
-      <span v-if="!mini" class="tc-name">{{ tool.name }}</span>
-      <span class="tc-args" v-if="brief">{{ brief }}</span>
+      <span class="tc-status-label" :class="tool.status">{{ statusLabel }}</span>
+      <span class="tc-sep">·</span>
+      <span class="tc-verb">{{ verbLabel }}</span>
+      <span class="tc-name">{{ tool.name }}</span>
+      <span v-if="brief" class="tc-args">{{ brief }}</span>
+      <span class="tc-spacer"></span>
+      <span class="tc-meta">工具调用</span>
+      <span v-if="tool.duration_ms" class="tc-sep">·</span>
       <span v-if="tool.duration_ms" class="tc-duration">{{ (tool.duration_ms / 1000).toFixed(1) }}s</span>
-      <span class="tc-status" :class="tool.status">{{ statusGlyph }}</span>
-      <span class="tc-toggle">▶</span>
+      <span class="tc-toggle">›</span>
     </div>
     <div class="tc-body" v-if="expanded">
       <div class="tc-section" v-if="tool.args && !tool.argsBrief">
@@ -71,6 +77,31 @@ const statusGlyph = computed(() => {
   }
 })
 
+// dolphin 风格状态文字标签（不是图标）
+const statusLabel = computed(() => {
+  switch (props.tool.status) {
+    case 'success': return '已完成'
+    case 'error': return '失败'
+    case 'running': return '执行中'
+    case 'pending': return '准备中'
+    default: return ''
+  }
+})
+
+// 按工具名前缀推断动作动词（"调用 / 读取 / 写入 / 执行"），dolphin 风格"已完成 · 读取 SKILL.md · 文件读取"
+const verbLabel = computed(() => {
+  const n = (props.tool.name || '').toLowerCase()
+  if (n.startsWith('read') || n.includes('_read')) return '读取'
+  if (n.startsWith('write') || n.includes('_write')) return '写入'
+  if (n.startsWith('edit') || n.includes('_edit')) return '编辑'
+  if (n.startsWith('run') || n.includes('_run') || n.includes('exec') || n.includes('command')) return '执行'
+  if (n.startsWith('list') || n.startsWith('query') || n.startsWith('get_') || n.startsWith('search')) return '查询'
+  if (n.startsWith('check') || n.startsWith('validate')) return '校验'
+  if (n.startsWith('create') || n.startsWith('generate')) return '创建'
+  if (n.startsWith('deploy') || n.startsWith('publish') || n.startsWith('upload')) return '发布'
+  return '调用'
+})
+
 function formatArgs(args: any): string {
   if (typeof args === 'string') return args
   try {
@@ -82,72 +113,100 @@ function formatArgs(args: any): string {
 </script>
 
 <style scoped>
+/* dolphin 风格：极简一行 inline 横条卡片 */
 .tool-card {
-  border: 1px solid var(--t-border-soft, rgba(116, 128, 171, 0.18));
-  border-radius: 10px;
-  background: var(--t-bg-elevated, #fff);
+  border: 1px solid rgba(116, 128, 171, 0.14);
+  border-radius: 999px;
+  background: rgba(116, 128, 171, 0.04);
   overflow: hidden;
   font-size: 12.5px;
-  max-width: 720px;
+  max-width: 100%;
+  display: inline-flex;
+  flex-direction: column;
+  transition: border-color 0.15s, background 0.15s;
 }
-.tool-card.mini {
-  border-radius: 6px;
-  font-size: 11.5px;
+.tool-card.expanded {
+  border-radius: 12px;
+  background: rgba(116, 128, 171, 0.06);
 }
+.tool-card.mini { font-size: 11.5px; }
 .tool-card.status-running {
-  border-color: rgba(245, 158, 11, 0.4);
+  border-color: rgba(59, 130, 246, 0.28);
+  background: rgba(59, 130, 246, 0.05);
 }
 .tool-card.status-error {
-  border-color: rgba(239, 68, 68, 0.4);
+  border-color: rgba(239, 68, 68, 0.32);
   background: rgba(239, 68, 68, 0.04);
 }
 
 .tc-head {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
+  gap: 6px;
+  padding: 5px 14px;
   cursor: pointer;
+  white-space: nowrap;
 }
-.tool-card.mini .tc-head {
-  padding: 5px 10px;
+.tc-head:hover { background: rgba(59, 130, 246, 0.05); }
+
+.tc-status-label {
+  font-size: 12px;
+  font-weight: 600;
 }
-.tc-head:hover {
-  background: rgba(99, 102, 241, 0.05);
+.tc-status-label.success { color: #16a34a; }
+.tc-status-label.error { color: #dc2626; }
+.tc-status-label.running { color: #3b82f6; }
+.tc-status-label.pending { color: rgba(116, 128, 171, 0.85); }
+
+.tc-sep {
+  color: rgba(116, 128, 171, 0.5);
+  font-size: 11px;
+  margin: 0 2px;
+}
+.tc-verb {
+  color: rgba(31, 41, 55, 0.7);
+  font-size: 12px;
 }
 .tc-name {
   font-weight: 600;
-  color: var(--t-text-primary);
+  color: var(--t-text-primary, #1f2937);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
 }
 .tc-args {
-  flex: 1;
-  color: var(--t-text-muted);
+  color: rgba(116, 128, 171, 0.85);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11.5px;
+  font-size: 11px;
+  margin-left: 4px;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
+  max-width: 220px;
+}
+.tc-spacer { flex: 1; min-width: 8px; }
+.tc-meta {
+  color: rgba(116, 128, 171, 0.85);
+  font-size: 11.5px;
 }
 .tc-duration {
-  font-size: 10.5px;
-  color: var(--t-text-muted);
+  font-size: 11.5px;
+  color: rgba(116, 128, 171, 0.85);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
+.tc-toggle {
+  font-size: 14px;
+  color: rgba(116, 128, 171, 0.7);
+  transition: transform 0.18s;
+  margin-left: 4px;
+}
+.tool-card.expanded .tc-toggle { transform: rotate(90deg); }
+
+/* 老的圆点状态 + 黄色 emoji icon 都不再用，但保留 .tc-status 兼容 */
 .tc-status {
   font-size: 12px;
   width: 14px;
   text-align: center;
+  display: none;
 }
-.tc-status.success { color: #16a34a; }
-.tc-status.error { color: #dc2626; }
-.tc-status.running { color: #f59e0b; animation: tc-spin 1s linear infinite; display: inline-block; }
-.tc-status.pending { color: var(--t-text-muted); }
-.tc-toggle {
-  font-size: 9px;
-  color: var(--t-text-muted);
-  transition: transform 0.18s;
-}
-.tool-card.expanded .tc-toggle { transform: rotate(90deg); }
 
 .tc-body {
   padding: 0 12px 10px;
