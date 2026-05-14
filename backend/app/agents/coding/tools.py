@@ -30,17 +30,45 @@ logger = logging.getLogger(__name__)
 
 
 async def _resolve_platform_env_id(ctx: AgentContext) -> int | None:
-    """从 ctx.conversation_id → Conversation.application_id → Application.platform_env_id"""
-    if not ctx.conversation_id:
-        return None
+    """3 级 fallback 拿 platform_env_id：
+      1. ctx.extra['platform_env_id']（pipeline 显式注入，最高优先）
+      2. ctx.conversation → application（如果该 conversation 已绑应用，且应用配了 env）
+      3. 租户默认 platform_env（PlatformEnv where tenant_id=ctx.tenant_id and is_default=True）
+    AI Coding 当前 conversation/workspace 没强绑 platform_env_id，所以 tenant 默认是兜底。
+    """
+    explicit = ctx.extra.get("platform_env_id") if isinstance(ctx.extra, dict) else None
+    if explicit:
+        return int(explicit)
+
     from app.database import AsyncSessionLocal
-    from app.models import Conversation, Application
+    from app.models import Conversation, Application, PlatformEnv
+    from sqlalchemy import select
+
     async with AsyncSessionLocal() as db:
-        conv = await db.get(Conversation, ctx.conversation_id)
-        if not conv or not conv.application_id:
-            return None
-        app = await db.get(Application, conv.application_id)
-        return app.platform_env_id if app else None
+        # path 2: conversation → application
+        if ctx.conversation_id:
+            try:
+                conv = await db.get(Conversation, ctx.conversation_id)
+                if conv and getattr(conv, "application_id", None):
+                    app = await db.get(Application, conv.application_id)
+                    if app and app.platform_env_id:
+                        return int(app.platform_env_id)
+            except Exception:
+                logger.debug("conversation→app lookup failed, fallback to tenant default", exc_info=True)
+
+        # path 3: tenant 默认 env
+        if ctx.tenant_id:
+            res = await db.execute(
+                select(PlatformEnv).where(
+                    PlatformEnv.tenant_id == ctx.tenant_id,
+                    PlatformEnv.is_default == True,  # noqa: E712
+                ).limit(1)
+            )
+            env = res.scalar_one_or_none()
+            if env:
+                return int(env.id)
+
+    return None
 
 
 def _resolve_workspace_path(ctx: AgentContext) -> Path:
