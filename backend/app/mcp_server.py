@@ -2150,14 +2150,71 @@ async def publish_dev_workspace(
                 "hint": "调 lint_apaas_backend_workspace 看全部 findings 详情",
             }
 
-    res = await _api_call(
-        "POST", f"/coding/workspace/{ws_id}/upload-to-platform",
-        tenant_id=tid, user_id=uid, json_body={"env_id": env_id},
-        timeout=600.0,  # build + upload 可能耗时
-    )
+    try:
+        res = await _api_call(
+            "POST", f"/coding/workspace/{ws_id}/upload-to-platform",
+            tenant_id=tid, user_id=uid, json_body={"env_id": env_id},
+            timeout=600.0,  # build + upload 可能耗时
+        )
+    except Exception as exc:
+        # _api_call HTTP 4xx/5xx 时 raise — detail 里可能含 build / upload 失败原因，
+        # 按关键词分类成 error_code 让 agent 知道下一步做什么。
+        detail = str(exc)
+        return _classify_publish_failure(ws_id, env_id, detail)
+
     if isinstance(res, dict):
         return {"ok": True, "ws_id": ws_id, "env_id": env_id, **res}
     return {"ok": False, "error_code": "UPLOAD_FAILED", "raw": res}
+
+
+def _classify_publish_failure(ws_id: str, env_id: int, detail: str) -> dict:
+    """publish 失败时按 detail 字符串里的 keyword 分类。
+
+    跟 workspace.diagnose_build_failure 的 error_code 对齐 — agent 拿到同一套码可
+    决定动作（去查 settings.xml / 改 JDK / 调 doctor / 调 lint 等）。
+    """
+    d = detail or ""
+    error_code, hint = "UPLOAD_FAILED", None
+
+    if "401 Unauthorized" in d or "Authentication failed" in d:
+        error_code = "MVN_AUTH_FAIL"
+        hint = "Maven Nexus 认证失败 — 调 doctor_apaas_backend_workspace 看 settings.xml 配置"
+    elif "Could not resolve dependencies" in d or "Could not find artifact" in d:
+        error_code = "MVN_DEPS_RESOLVE_FAIL"
+        hint = "依赖拉不到 — 调 doctor_apaas_backend_workspace 排查 pom <repositories> + settings.xml"
+    elif "The requested profile" in d and "could not be activated" in d:
+        error_code = "MVN_PROFILE_NOT_FOUND"
+        hint = "-P lib profile 不存在 — 调 init_apaas_backend_workspace 重写 pom"
+    elif "source release" in d and "requires target release" in d:
+        error_code = "MVN_JDK_MISMATCH"
+        hint = "JDK 版本不匹配 — JAVA_HOME 切 JDK 8"
+    elif ("COMPILATION ERROR" in d or "cannot find symbol" in d
+            or "package does not exist" in d):
+        error_code = "MVN_COMPILE_FAIL"
+        hint = "Java 编译错 — 先调 lint_apaas_backend_workspace 看代码问题"
+    elif "BUILD FAILURE" in d or "Failed to execute goal" in d:
+        error_code = "MVN_BUILD_FAILURE"
+        hint = "Maven BUILD FAILURE — 调 doctor_apaas_backend_workspace 排查环境配置"
+    elif "Failed to compile" in d or "[eslint]" in d:
+        error_code = "FE_COMPILE_FAIL"
+        hint = "前端编译失败 — 看 eslint / TS 错"
+    elif "构建失败" in d:
+        error_code = "BUILD_FAILED"
+        hint = "构建失败但未识别具体原因 — 调 doctor 体检 + 看 backend log 完整错"
+
+    return {
+        "ok": False,
+        "error_code": error_code,
+        "ws_id": ws_id,
+        "env_id": env_id,
+        "message": detail[:1000],
+        "hint": hint,
+        "next_step": (
+            "调 doctor_apaas_backend_workspace 看打包前置问题；"
+            "调 lint_apaas_backend_workspace 看代码问题；"
+            "都没问题再看 backend log /tmp/apaas-backend.log 完整错"
+        ),
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -3844,5 +3901,281 @@ async def lint_apaas_backend_workspace(
             "全部通过 — 可以 publish_dev_workspace"
             if len(fatal) == 0
             else f"有 {len(fatal)} 个 fatal 问题必须修；其他 warn 看情况"
+        ),
+    }
+
+
+# ─── doctor_apaas_backend_workspace ───────────────────────────────────────
+# 打包前置体检 — 不实际跑 mvn，只做静态环境/配置检查，3 秒内出结果。
+# 治"我同事打包不成功" — 各种原因（mvn 没装 / settings.xml 没配 / pom 缺
+# repositories / 用了旧 papaas 版本 / JDK 不对）一次性查清。
+
+import os as _os_doctor
+import shutil as _shutil_doctor
+import subprocess as _sp_doctor
+from pathlib import Path as _Path_doctor
+
+
+def _doctor_check_mvn() -> dict:
+    """检查 mvn 是否在 PATH + 拿版本。"""
+    mvn = _shutil_doctor.which("mvn")
+    if not mvn:
+        return {
+            "ok": False, "severity": "fatal", "check": "mvn",
+            "message": "mvn 不在 PATH",
+            "hint": "装 Maven 或者把 mvn 加到 PATH。Mac 用 brew install maven。",
+        }
+    try:
+        result = _sp_doctor.run([mvn, "-v"], capture_output=True, text=True, timeout=10)
+        ver_line = (result.stdout or result.stderr).split("\n")[0]
+        return {
+            "ok": True, "severity": "info", "check": "mvn",
+            "message": f"mvn 可用：{ver_line.strip()}",
+            "mvn_path": mvn,
+        }
+    except Exception as e:
+        return {
+            "ok": False, "severity": "warn", "check": "mvn",
+            "message": f"mvn 找到但执行失败：{e}",
+        }
+
+
+def _doctor_check_java() -> dict:
+    """检查 java -version 拿 JDK 主版本。aPaaS 模版包推荐 Java 8。"""
+    java = _shutil_doctor.which("java")
+    if not java:
+        return {
+            "ok": False, "severity": "fatal", "check": "java",
+            "message": "java 不在 PATH",
+            "hint": "装 JDK 8 (推荐) — Mac: brew install openjdk@8",
+        }
+    try:
+        result = _sp_doctor.run([java, "-version"], capture_output=True, text=True, timeout=10)
+        ver_str = result.stderr or result.stdout
+        # 解析 "openjdk version \"1.8.0_xxx\"" 或 "openjdk version \"17.0.x\""
+        import re as _re_d
+        m = _re_d.search(r'version\s+"([\d._]+)"', ver_str)
+        if not m:
+            return {
+                "ok": False, "severity": "warn", "check": "java",
+                "message": f"无法解析 java 版本：{ver_str[:200]}",
+            }
+        v = m.group(1)
+        major = v.split(".")[0]
+        if major == "1":
+            major = v.split(".")[1]  # 1.8.0 → 8
+        major_int = int(major)
+        if major_int == 8:
+            return {"ok": True, "severity": "info", "check": "java",
+                    "message": f"Java 8 ✓ ({v})"}
+        if major_int <= 17:
+            return {
+                "ok": True, "severity": "warn", "check": "java",
+                "message": f"Java {major_int} ({v}) — 模版包推荐 Java 8，{major_int} 可能跑通但有兼容风险",
+                "hint": "建议 JAVA_HOME 切到 JDK 8 跑 mvn package",
+            }
+        return {
+            "ok": False, "severity": "fatal", "check": "java",
+            "message": f"Java {major_int} ({v}) — 不支持，aPaaS 模版包要求 Java 8",
+            "hint": "JAVA_HOME 切 JDK 8 (brew install openjdk@8)",
+        }
+    except Exception as e:
+        return {
+            "ok": False, "severity": "warn", "check": "java",
+            "message": f"java 找到但执行失败：{e}",
+        }
+
+
+def _doctor_check_settings_xml() -> dict:
+    """检查 ~/.m2/settings.xml 是否配 dcloud-public 认证。"""
+    settings = _Path_doctor.home() / ".m2" / "settings.xml"
+    if not settings.exists():
+        return {
+            "ok": False, "severity": "fatal", "check": "settings.xml",
+            "message": "~/.m2/settings.xml 不存在",
+            "hint": (
+                "建文件加上 dcloud-public server 认证 + mirror。模版见 "
+                "docs/skills/apaas-backend-dev.md 或 aPaaS-后端自开发模版包打包规范.md 第五节"
+            ),
+        }
+    try:
+        content = settings.read_text(encoding="utf-8")
+    except Exception as e:
+        return {
+            "ok": False, "severity": "warn", "check": "settings.xml",
+            "message": f"~/.m2/settings.xml 存在但读不了：{e}",
+        }
+
+    has_server = "dcloud-public" in content
+    has_mirror = "registry.dfy.definesys.cn" in content
+    if not has_server:
+        return {
+            "ok": False, "severity": "fatal", "check": "settings.xml",
+            "message": "~/.m2/settings.xml 里没找到 dcloud-public server 配置",
+            "hint": (
+                "<servers><server><id>dcloud-public</id>"
+                "<username>dcloud-public</username><password>dcloud-public</password>"
+                "</server></servers>"
+            ),
+        }
+    if not has_mirror:
+        return {
+            "ok": True, "severity": "warn", "check": "settings.xml",
+            "message": "有 dcloud-public server，但没找到 mirrorOf 配置（可能依赖 pom 里的 <repositories>）",
+            "hint": (
+                "推荐加 <mirror><id>dcloud-public</id><mirrorOf>*,!central</mirrorOf>"
+                "<url>https://registry.dfy.definesys.cn/repository/maven-public/</url></mirror>"
+            ),
+        }
+    return {
+        "ok": True, "severity": "info", "check": "settings.xml",
+        "message": "~/.m2/settings.xml 配 dcloud-public server + mirror ✓",
+    }
+
+
+def _doctor_check_pom(ws_path) -> dict:
+    """检查 pom.xml 关键字段：repositories / lib profile / papaas.version / motor-spring-boot-starter。"""
+    pom = ws_path / "pom.xml"
+    if not pom.exists():
+        return {
+            "ok": False, "severity": "fatal", "check": "pom.xml",
+            "message": "workspace 下没有 pom.xml",
+            "hint": "调 init_apaas_backend_workspace 生成标准 pom",
+        }
+    try:
+        content = pom.read_text(encoding="utf-8")
+    except Exception as e:
+        return {
+            "ok": False, "severity": "fatal", "check": "pom.xml",
+            "message": f"pom.xml 读不了：{e}",
+        }
+
+    issues = []
+    if "registry.dfy.definesys.cn" not in content:
+        issues.append({
+            "severity": "warn", "field": "<repositories>",
+            "message": "pom 没配 <repositories> 指向 dcloud-public Nexus；"
+                       "如果 settings.xml 里有 mirror 也能拿到，否则会失败",
+        })
+    if "<id>lib</id>" not in content:
+        issues.append({
+            "severity": "fatal", "field": "lib profile",
+            "message": "pom 缺 lib profile — `mvn -P lib` 必报 The requested profile "
+                       "\"lib\" could not be activated",
+            "hint": "调 init_apaas_backend_workspace 重写 pom",
+        })
+    if "<papaas.version>" not in content:
+        issues.append({
+            "severity": "warn", "field": "papaas.version",
+            "message": "pom 没定义 <papaas.version> property",
+        })
+    elif "4.1.1-rc" not in content and "<papaas.version>" in content:
+        # 提示版本可能旧
+        issues.append({
+            "severity": "warn", "field": "papaas.version",
+            "message": "papaas 版本不是 4.1.1-rc — 旧版本 (3.2.x) 上传后 404",
+            "hint": "改 <papaas.version>4.1.1-rc</papaas.version>",
+        })
+    if "motor-spring-boot-starter" not in content:
+        issues.append({
+            "severity": "fatal", "field": "motor-spring-boot-starter",
+            "message": "pom 缺 motor-spring-boot-starter — 4.1.1-rc 模版包必备",
+        })
+
+    if not issues:
+        return {
+            "ok": True, "severity": "info", "check": "pom.xml",
+            "message": "pom.xml 关键字段齐全 ✓ (repositories / lib profile / papaas 4.1.1-rc / motor)",
+        }
+
+    fatal_issues = [i for i in issues if i["severity"] == "fatal"]
+    return {
+        "ok": len(fatal_issues) == 0,
+        "severity": "fatal" if fatal_issues else "warn",
+        "check": "pom.xml",
+        "message": f"pom.xml {len(issues)} 个问题（{len(fatal_issues)} fatal）",
+        "issues": issues,
+    }
+
+
+def _doctor_check_app_class_location(ws_path) -> dict:
+    """检查 @SpringBootApplication 是否误放 src/main（坑 7 死亡坑）。"""
+    main_dir = ws_path / "src" / "main" / "java"
+    if not main_dir.exists():
+        return {
+            "ok": True, "severity": "info", "check": "app_class_location",
+            "message": "src/main/java 不存在 — 跳过此检查",
+        }
+    offenders = []
+    for path in main_dir.rglob("*.java"):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        if "@SpringBootApplication" in text:
+            offenders.append(str(path.relative_to(ws_path)))
+    if offenders:
+        return {
+            "ok": False, "severity": "fatal", "check": "app_class_location",
+            "message": f"src/main/java 下有 {len(offenders)} 个 @SpringBootApplication（坑 7）",
+            "offenders": offenders,
+            "hint": "移到 src/test/java，否则 aPaaS 发布卡死「上线中」无报错",
+        }
+    return {
+        "ok": True, "severity": "info", "check": "app_class_location",
+        "message": "启动类位置 ✓ (src/main 下无 @SpringBootApplication)",
+    }
+
+
+@mcp.tool()
+async def doctor_apaas_backend_workspace(
+    ws_id: str,
+    tenant_id: int = 0,
+    user_id: int = 0,
+) -> dict:
+    """打包前置体检 — 不实际跑 mvn，3 秒内出结果。
+
+    治"我同事打包不成功"系列问题。一次性检查 5 项：
+      1. mvn 在不在 PATH（mvn）
+      2. java 版本是否兼容（推荐 Java 8）
+      3. ~/.m2/settings.xml 是否配 dcloud-public Nexus 认证
+      4. pom.xml 关键字段（repositories / lib profile / papaas 4.1.1-rc / motor）
+      5. @SpringBootApplication 没误放 src/main（防坑 7 发布卡死）
+
+    返回 {ok, fatal_count, warn_count, checks: [...]}
+    - ok=true 才能安全打包；fatal_count>0 必修
+    - 每条 check 含 hint，告诉怎么修
+    """
+    if ws_id.startswith("oc_"):
+        return {"ok": False, "error_code": "WRONG_WS_TYPE",
+                "message": "doctor_apaas_backend_workspace 只用于 AI Coding workspace"}
+
+    tid, uid = _resolve_identity(tenant_id, user_id)
+    ws_path, err = _resolve_workspace_path(ws_id, tid, uid)
+    if err:
+        return err
+
+    checks = [
+        _doctor_check_mvn(),
+        _doctor_check_java(),
+        _doctor_check_settings_xml(),
+        _doctor_check_pom(ws_path),
+        _doctor_check_app_class_location(ws_path),
+    ]
+
+    fatal = [c for c in checks if c.get("severity") == "fatal"]
+    warn = [c for c in checks if c.get("severity") == "warn"]
+
+    return {
+        "ok": len(fatal) == 0,
+        "ws_id": ws_id,
+        "fatal_count": len(fatal),
+        "warn_count": len(warn),
+        "info_count": sum(1 for c in checks if c.get("severity") == "info"),
+        "checks": checks,
+        "next_step": (
+            "✓ 全 fatal 检查通过，可以 publish_dev_workspace"
+            if len(fatal) == 0
+            else f"先修 {len(fatal)} 个 fatal 问题（看每个 check 的 hint）"
         ),
     }

@@ -662,11 +662,24 @@ class WorkspaceManager:
         stderr_text = self._clean_build_output(stderr.decode("utf-8", errors="replace"))
 
         markers = (
+            # 前端 build markers
             "Failed to compile",
             "[eslint]",
             "ERROR  Failed to compile",
             "Error: Build failed with errors.",
             "error  ",
+            # Maven build markers（2026-05-14 加，治后端打包失败诊断）
+            "[ERROR] BUILD FAILURE",
+            "[ERROR] Failed to execute goal",
+            "Could not resolve dependencies",
+            "Could not find artifact",
+            "401 Unauthorized",
+            "Authentication failed",
+            "COMPILATION ERROR",
+            "package does not exist",
+            "cannot find symbol",
+            "source release",  # JDK 版本不匹配："source release 1.8 requires ..."
+            "The requested profile",
         )
 
         def _focus(text: str) -> str:
@@ -685,6 +698,87 @@ class WorkspaceManager:
             if candidate:
                 return candidate[:limit]
         return "构建失败"
+
+    def diagnose_build_failure(self, stdout: bytes, stderr: bytes) -> dict:
+        """结构化诊断 build 失败：error_code + hint + summary + raw tail。
+
+        给 MCP 工具用，方便 agent 拿到精准 error_code 决定下一步动作（重试 /
+        改 settings.xml / 改 JDK / 改 pom），不必每次让 LLM 看大块日志自己猜。
+
+        error_code 取值：
+          - MVN_NOT_FOUND          mvn 命令不在 PATH（_run_backend_build_process 早已处理）
+          - MVN_AUTH_FAIL          Nexus 401 / Authentication failed → 配 ~/.m2/settings.xml
+          - MVN_DEPS_RESOLVE_FAIL  依赖拿不到 → settings.xml / pom <repositories> / 网络
+          - MVN_PROFILE_NOT_FOUND  -P lib profile 在 pom 里找不到
+          - MVN_JDK_MISMATCH       source release X requires target release X
+          - MVN_COMPILE_FAIL       编译错（缺类 / lombok / 注解处理器）
+          - MVN_BUILD_FAILURE      BUILD FAILURE 但没匹配到上面任何一种
+          - FE_COMPILE_FAIL        前端编译失败（eslint / Failed to compile）
+          - UNKNOWN                没匹配到 marker
+        """
+        stdout_text = self._clean_build_output(stdout.decode("utf-8", errors="replace"))
+        stderr_text = self._clean_build_output(stderr.decode("utf-8", errors="replace"))
+        combined = stdout_text + "\n" + stderr_text
+
+        # 优先级从具体到通用（顺序敏感）
+        if "401 Unauthorized" in combined or "Authentication failed for" in combined:
+            code = "MVN_AUTH_FAIL"
+            hint = (
+                "Maven Nexus 仓库认证失败。配置 ~/.m2/settings.xml，加上 dcloud-public "
+                "server 认证（username/password 都是 dcloud-public）和 mirror 把所有请求"
+                "劫持到 maven-public。详见 docs/skills/apaas-backend-dev.md。"
+            )
+        elif "Could not resolve dependencies" in combined or "Could not find artifact" in combined:
+            code = "MVN_DEPS_RESOLVE_FAIL"
+            hint = (
+                "依赖拉不到。三件事：(1) 看 pom.xml 是否含 <repositories> 指向 "
+                "https://registry.dfy.definesys.cn/repository/maven-public/ ; (2) "
+                "~/.m2/settings.xml 是否配 dcloud-public 认证；(3) 看是不是网络/代理"
+                "拦了，先 mvn -X 看完整 URL。"
+            )
+        elif "The requested profile" in combined and "could not be activated" in combined:
+            code = "MVN_PROFILE_NOT_FOUND"
+            hint = (
+                "-P lib profile 在 pom.xml 里不存在。检查 pom <profiles> 节点是否含 "
+                "<profile><id>lib</id>... 直接用 init_apaas_backend_workspace 重写一份"
+                "标准 pom 最稳。"
+            )
+        elif "source release" in combined and "requires target release" in combined:
+            code = "MVN_JDK_MISMATCH"
+            hint = (
+                "JDK 版本和 pom <maven.compiler.source/target> 不匹配。aPaaS 模版包"
+                "要求 Java 8（<source>8</source>）。检查 `java -version`，必要时 "
+                "JAVA_HOME 切到 JDK 8。"
+            )
+        elif "COMPILATION ERROR" in combined or "cannot find symbol" in combined \
+                or "package does not exist" in combined:
+            code = "MVN_COMPILE_FAIL"
+            hint = (
+                "Java 编译错。常见：(1) lombok 注解处理器没启用（IDE / mvn 都得有 "
+                "lombok 依赖 + processor）；(2) import 写错；(3) 漏依赖 — 看具体 "
+                "'cannot find symbol' 是哪个类。"
+            )
+        elif "[ERROR] BUILD FAILURE" in combined or "[ERROR] Failed to execute goal" in combined:
+            code = "MVN_BUILD_FAILURE"
+            hint = "Maven BUILD FAILURE。看 stderr 末尾详细错（看 raw_tail 字段）。"
+        elif any(m in combined for m in ("Failed to compile", "[eslint]",
+                                          "Error: Build failed with errors.")):
+            code = "FE_COMPILE_FAIL"
+            hint = "前端编译失败 — 看 eslint / TS 错。"
+        else:
+            code = "UNKNOWN"
+            hint = "没匹配到已知失败模式，看 raw_tail 原始日志。"
+
+        # raw_tail：最后 30 行（给 LLM 进一步看）
+        tail_lines = (combined.strip().split("\n"))[-30:]
+        raw_tail = "\n".join(tail_lines)
+
+        return {
+            "error_code": code,
+            "hint": hint,
+            "summary": self._summarize_build_failure(stdout, stderr, limit=600),
+            "raw_tail": raw_tail[:2000],
+        }
 
     async def _run_backend_build_process(self, cwd: Path) -> tuple[int, bytes, bytes]:
         mvnw = cwd / "mvnw"

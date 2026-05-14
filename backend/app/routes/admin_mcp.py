@@ -38,7 +38,8 @@ def _classify_tool(name: str) -> tuple[str, str]:
        name.startswith("grep_workspace") or name.startswith("run_workspace") or \
        name in ("create_dev_workspace", "get_dev_workspace_status",
                 "save_dev_spec", "import_zip_to_workspace", "publish_dev_workspace",
-                "init_apaas_backend_workspace", "lint_apaas_backend_workspace"):
+                "init_apaas_backend_workspace", "lint_apaas_backend_workspace",
+                "doctor_apaas_backend_workspace"):
         return ("workspace_dev", "Workspace 自开发 (AI Coding)")
 
     # 场景 / 规范
