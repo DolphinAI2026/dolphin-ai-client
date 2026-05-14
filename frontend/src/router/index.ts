@@ -159,6 +159,12 @@ const router = createRouter({
       meta: { requiresAuth: true, navExpanded: true }
     },
     {
+      path: '/admin/mcp',
+      name: 'McpTools',
+      component: () => import('@/views/McpToolsPage.vue'),
+      meta: { requiresAuth: true, navExpanded: true }
+    },
+    {
       path: '/work/:appId',
       name: 'WorkspaceShell',
       redirect: to => ({ path: '/chat', query: { app_id: String(to.params.appId) } }),

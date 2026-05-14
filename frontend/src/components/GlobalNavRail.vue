@@ -200,6 +200,8 @@ const adminNavItems = computed(() => {
   if (userStore.isPlatformAdmin) {
     items.push({ key: 'tenants', label: '租户管理', path: '/admin/tenants' })
   }
+  // MCP 工具浏览 — 所有登录用户都能看（让开发者快速知道暴露了什么）
+  items.push({ key: 'mcp', label: 'MCP 工具', path: '/admin/mcp' })
   return items
 })
 

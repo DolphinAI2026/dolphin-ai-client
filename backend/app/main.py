@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from app.config import settings, APP_TITLE, APP_DESCRIPTION, APP_VERSION
 from app.database import init_db
 from app.routes import (
+    admin_mcp,
     ai_chat,
     apaas,
     application_members,
@@ -190,6 +191,7 @@ app.include_router(dolphin_sso.router, prefix="/api")
 app.include_router(requirements.router, prefix="/api")
 app.include_router(app_adjust_chat.router, prefix="/api")
 app.include_router(current_app.router, prefix="/api")
+app.include_router(admin_mcp.router, prefix="/api")
 # 平台代理路由注册在根路径（/platform/... 和 /backend/... 需要直接匹配）
 app.include_router(platform_proxy.router)
 
