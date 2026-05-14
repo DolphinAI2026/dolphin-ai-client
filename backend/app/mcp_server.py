@@ -864,15 +864,75 @@ async def submit_design_doc(
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+def _looks_like_apaas_401(message: str | None) -> bool:
+    """识别 apaas-trial 平台 401 token 过期错误。
+
+    背景：error_messages.is_apaas_token_error 用中文 markers（"Token已过期" 等），
+    但 apaas-trial 实际 401 response 不含中文 — httpx raise_for_status 生成
+    "Client error '401 ' for url 'https://.../xdap-app/...'"。这里按结构特征兜底。
+    """
+    if not message:
+        return False
+    return "401" in message and (
+        "apaas" in message.lower() or "xdap-app" in message or ".definesys.cn" in message
+    )
+
+
+async def _refresh_apaas_env_token(env_id: int) -> bool:
+    """token 过期自愈 — 用 platform_envs[env_id].username/password_enc 重 login。
+
+    绕开 /platform-envs/{env_id}/login HTTP endpoint（那个需要 tenant_admin auth），
+    在同进程内直接调 APaaSClient.login() 写回 env.token。
+    """
+    from sqlalchemy import select
+    from app.crypto import decrypt_password
+    from app.database import AsyncSessionLocal
+    from app.models import PlatformEnv
+    from app.apaas_client import APaaSClient
+
+    async with AsyncSessionLocal() as db:
+        res = await db.execute(select(PlatformEnv).where(PlatformEnv.id == env_id))
+        env = res.scalar_one_or_none()
+        if not env or not env.username or not env.password_enc:
+            return False
+        try:
+            password = decrypt_password(env.password_enc)
+            client = APaaSClient(base_url=env.base_url, tenant_id=env.platform_tenant_id)
+            login_result = await client.login(env.username, password)
+            token = ((login_result or {}).get("token") or "").strip()
+            if not token:
+                return False
+            env.token = token
+            env.status = "connected"
+            await db.commit()
+            return True
+        except Exception:
+            await db.rollback()
+            return False
+
+
 async def _call_apaas_platform_tool(name: str, args: dict, env_id: int) -> dict:
-    """统一桥接平台类 apaas 工具：调 executor → JSON 解析为 dict。"""
+    """统一桥接平台类 apaas 工具：调 executor → JSON 解析为 dict。
+
+    含 token 过期自愈：apaas-trial 401 → 自动刷 platform_envs[env_id].token → retry 一次。
+    """
     from app.coding.apaas_tools import APAAS_TOOL_EXECUTORS_PLATFORM
     from app.database import AsyncSessionLocal
     executor = APAAS_TOOL_EXECUTORS_PLATFORM.get(name)
     if not executor:
         return {"ok": False, "error_code": "UNKNOWN_TOOL", "message": f"未知工具 {name}"}
-    async with AsyncSessionLocal() as db:
-        result_str = await executor(args, env_id, db)
+
+    async def _run_once() -> str:
+        async with AsyncSessionLocal() as db:
+            return await executor(args, env_id, db)
+
+    result_str = await _run_once()
+
+    # token 自愈：apaas-trial 401 没中文 markers，按结构识别 → 刷 token retry 一次
+    if _looks_like_apaas_401(result_str):
+        if await _refresh_apaas_env_token(env_id):
+            result_str = await _run_once()
+
     try:
         return json.loads(result_str)
     except json.JSONDecodeError:
