@@ -19,6 +19,10 @@ router = APIRouter(prefix="/admin/mcp", tags=["admin-mcp"])
 
 def _classify_tool(name: str) -> tuple[str, str]:
     """按名字前缀 / 关键词粗分类。返回 (category_key, category_label)。"""
+    # Vibe Coding 全代码开发（layer 3 — 从零搭独立项目，跟 aPaaS 无关）
+    if name.startswith("vibe_"):
+        return ("vibe_coding", "Vibe Coding 全代码")
+
     # 自开发发布（aPaaS 平台侧 - 上传/关联/重发）
     if name in (
         "enable_apaas_self_dev_config", "list_apaas_app_dev_kits",
@@ -28,13 +32,13 @@ def _classify_tool(name: str) -> tuple[str, str]:
     ):
         return ("self_dev_publish", "aPaaS 自开发发布")
 
-    # Workspace 自开发（本地 ai-builder 工作区文件 / 命令）
+    # Workspace 自开发（AI Coding 二次开发，跟 vibe_coding 独立的另一套 workspace）
     if name.startswith("read_workspace") or name.startswith("write_workspace") or \
        name.startswith("edit_workspace") or name.startswith("glob_workspace") or \
        name.startswith("grep_workspace") or name.startswith("run_workspace") or \
        name in ("create_dev_workspace", "get_dev_workspace_status",
                 "save_dev_spec", "import_zip_to_workspace", "publish_dev_workspace"):
-        return ("workspace_dev", "Workspace 自开发")
+        return ("workspace_dev", "Workspace 自开发 (AI Coding)")
 
     # 场景 / 规范
     if name.startswith("list_dev_scene") or name.startswith("get_dev_scene"):
