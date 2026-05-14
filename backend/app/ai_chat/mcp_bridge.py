@@ -35,7 +35,13 @@ logger = logging.getLogger(__name__)
 
 
 _LOADED: Optional[dict] = None
-_BASE_URL = "http://127.0.0.1:8000/api/mcp/mcp"
+# 默认连同进程 backend (uvicorn :8003 + FastMCP mount 在 /api/mcp/mcp)。
+# 之前 hardcode 8000 是历史遗留 — 撞 k8s ming pod connection refused，LLM 拿不到任何
+# MCP 工具，只剩 4 个 ai_chat 内置 base 工具，体验上像"工具被屏蔽"。
+_BASE_URL = os.getenv(
+    "MCP_INTERNAL_BASE",
+    "http://127.0.0.1:8003/api/mcp/mcp",
+)
 
 # 黑名单：这里曾有 4 个 stub 工具被屏蔽，现在全部已 ship 真实现，清空
 _STUB_TOOLS: set[str] = set()
