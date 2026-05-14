@@ -758,6 +758,22 @@ async function loadLlmOptions() {
 }
 
 async function loadSession(id: number) {
+  // 切到不同 session 之前，先 abort 进行中的 SSE — 否则旧 stream 的 chunk 会继续
+  // 通过 handleSseEvent 写到 transientItems / streamingText，造成"新会话主区显示
+  // 旧会话尾巴消息"的串会话错觉（DB 实际是干净的）。
+  if (currentSession.value && currentSession.value.id !== id) {
+    if (currentAbort.value) {
+      try { currentAbort.value.abort() } catch { /* ignore */ }
+      currentAbort.value = null
+    }
+    transientItems.value = []
+    streamingText.value = ''
+    streamingTools.value = {}
+    pendingChars.value = []
+    pendingFinalMessage.value = null
+    stopDrain()
+    isSending.value = false
+  }
   try {
     const data = await aiChatApi.getSession(id)
     currentSession.value = data.session
