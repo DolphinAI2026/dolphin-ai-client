@@ -2384,3 +2384,164 @@ async def vibe_http_check(
     """
     return await _call_vibe_executor("execute_http_check", {"url": url},
                                      ws_id, tenant_id, user_id)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# aPaaS 应用配置精细操作（角色 CRUD）
+#
+# 跟 SPEC 文档流程（update_app_from_doc → execute_change_plan）的区别：
+# 这些工具是**直接对话式精细操作**，agent 可以在跟用户聊天时直接增删改查应用元素，
+# 不必走"写新版 md → diff → 执行"流程。适合用户说"加个 XX 角色"这种增量需求。
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@mcp.tool()
+async def list_apaas_app_roles(env_id: int, apaas_app_id: str, keyword: str = "") -> dict:
+    """列指定 aPaaS 应用的角色清单（含 roleId / roleCode / roleName / 启用状态）。
+
+    可选 keyword 模糊过滤。返回的 roleId 给后续 update / delete / 加成员用。
+    """
+    if not apaas_app_id.strip():
+        return {"ok": False, "error_code": "INVALID_APAAS_APP_ID", "message": "apaas_app_id 必填"}
+    ok, raw = await _with_client(
+        env_id, "列角色",
+        lambda c: c.query_roles(apaas_app_id.strip(), keyword=keyword or ""),
+    )
+    if not ok:
+        return raw
+    roles = []
+    for r in (raw or []):
+        if not isinstance(r, dict):
+            continue
+        roles.append({
+            "role_id": str(r.get("id") or r.get("roleId") or ""),
+            "role_code": str(r.get("roleCode") or r.get("code") or ""),
+            "role_name": str(r.get("roleName") or r.get("name") or ""),
+            "use_scope": str(r.get("useScope") or ""),
+            "internal_resource": bool(r.get("internalResource", False)),
+            "enable_group_param": str(r.get("enableGroupParam") or "DISABLE"),
+        })
+    return {
+        "ok": True, "env_id": env_id, "apaas_app_id": apaas_app_id.strip(),
+        "roles": roles, "total": len(roles),
+    }
+
+
+@mcp.tool()
+async def create_apaas_app_roles(env_id: int, apaas_app_id: str, roles: list) -> dict:
+    """批量创建 aPaaS 应用角色（不走 SPEC 文档流程，直接调 apaas 平台）。
+
+    入参 roles 数组每项至少含 {role_code: str, role_name: str}，可选：
+      use_scope (str)         角色作用域，默认应用名
+      internal_resource (bool) 是否系统资源，默认 true
+      enable_group_param (str) DISABLE / ENABLE，默认 DISABLE
+      role_params (list)       角色参数定义（高级，一般留空）
+
+    示例：roles=[{"role_code":"reviewer","role_name":"审批人"},
+                {"role_code":"admin","role_name":"管理员"}]
+
+    跟"走 SPEC 文档 update_app_from_doc + execute_change_plan"的区别：
+      - 这个：直接对话场景"加 X 角色"，一步建好
+      - SPEC 流程：用户给完整新版 md，自动 diff 出所有变更（适合大改）
+
+    创建后调 publish_application 或 republish_apaas_app 让用户能看到。
+    """
+    if not apaas_app_id.strip():
+        return {"ok": False, "error_code": "INVALID_APAAS_APP_ID", "message": "apaas_app_id 必填"}
+    if not roles or not isinstance(roles, list):
+        return {"ok": False, "error_code": "INVALID_ROLES", "message": "roles 必须是非空数组"}
+    # 规整 payload 到 apaas 平台需要的字段（驼峰）
+    payload_roles = []
+    for r in roles:
+        if not isinstance(r, dict):
+            continue
+        code = (r.get("role_code") or r.get("roleCode") or "").strip()
+        name = (r.get("role_name") or r.get("roleName") or "").strip()
+        if not code or not name:
+            return {"ok": False, "error_code": "INVALID_ROLE_ITEM",
+                    "message": f"每个 role 必须有 role_code + role_name；问题项：{r}"}
+        payload_roles.append({
+            "roleCode": code,
+            "roleName": name,
+            "useScope": r.get("use_scope") or r.get("useScope") or "",
+            "internalResource": bool(r.get("internal_resource", r.get("internalResource", True))),
+            "enableGroupParam": r.get("enable_group_param") or r.get("enableGroupParam") or "DISABLE",
+            "roleParams": r.get("role_params") or r.get("roleParams") or [],
+        })
+
+    ok, raw = await _with_client(
+        env_id, "批量建角色",
+        lambda c: c.create_roles(apaas_app_id.strip(), payload_roles),
+    )
+    if not ok:
+        return raw
+    return {
+        "ok": True, "env_id": env_id, "apaas_app_id": apaas_app_id.strip(),
+        "created_count": len(payload_roles),
+        "roles_summary": [{"role_code": r["roleCode"], "role_name": r["roleName"]} for r in payload_roles],
+        "next_step": "调 publish_application(app_id) 或 republish_apaas_app(env_id, apaas_app_id) 让角色生效",
+    }
+
+
+@mcp.tool()
+async def update_apaas_app_role(
+    env_id: int, apaas_app_id: str, role_id: str,
+    role_code: str = "", role_name: str = "",
+    app_name: str = "", enable_group_param: str = "DISABLE",
+    role_params: list | None = None,
+) -> dict:
+    """更新单个 aPaaS 角色（不走 SPEC，直接对话改）。
+
+    先调 list_apaas_app_roles 拿到 role_id，再调本工具改 role_code / role_name 等。
+    role_code / role_name 留空时不强制改但 apaas 要求每次 edit 都传全字段 — 留空会拿现值不便。
+    建议：先 list 找到要改的角色 → 把 role_code/role_name/role_id 一起传入。
+    """
+    if not (apaas_app_id.strip() and role_id.strip()):
+        return {"ok": False, "error_code": "INVALID_PARAMS",
+                "message": "apaas_app_id + role_id 必填"}
+    if not (role_code.strip() and role_name.strip()):
+        return {"ok": False, "error_code": "INVALID_PARAMS",
+                "message": "role_code + role_name 必填（apaas edit 接口要求全字段）— 先 list 拿现值"}
+
+    ok, raw = await _with_client(
+        env_id, "更新角色",
+        lambda c: c.update_role(
+            apaas_app_id.strip(), role_id.strip(),
+            role_code.strip(), role_name.strip(),
+            app_name=app_name,
+            enable_group_param=enable_group_param,
+            role_params=role_params or [],
+        ),
+    )
+    if not ok:
+        return raw
+    return {
+        "ok": True, "env_id": env_id, "apaas_app_id": apaas_app_id.strip(),
+        "role_id": role_id.strip(), "role_code": role_code, "role_name": role_name,
+        "message": f"角色「{role_name}」({role_code}) 已更新",
+        "next_step": "调 republish_apaas_app 让变更生效",
+    }
+
+
+@mcp.tool()
+async def delete_apaas_app_role(env_id: int, apaas_app_id: str, role_id: str) -> dict:
+    """删除单个 aPaaS 角色（不走 SPEC 直接删）。
+
+    ⚠️ 慎用：删除前用 list_apaas_app_roles 确认 role_id 对的；删除后已绑该角色的成员
+    在 apaas 平台上的访问会受影响。
+    """
+    if not (apaas_app_id.strip() and role_id.strip()):
+        return {"ok": False, "error_code": "INVALID_PARAMS",
+                "message": "apaas_app_id + role_id 必填"}
+    ok, raw = await _with_client(
+        env_id, "删除角色",
+        lambda c: c.delete_role(apaas_app_id.strip(), role_id.strip()),
+    )
+    if not ok:
+        return raw
+    return {
+        "ok": True, "env_id": env_id, "apaas_app_id": apaas_app_id.strip(),
+        "role_id": role_id.strip(),
+        "message": f"角色 role_id={role_id} 已删除",
+        "next_step": "调 republish_apaas_app 让变更生效",
+    }

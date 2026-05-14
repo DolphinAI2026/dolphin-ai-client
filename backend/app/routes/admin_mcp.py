@@ -44,6 +44,13 @@ def _classify_tool(name: str) -> tuple[str, str]:
     if name.startswith("list_dev_scene") or name.startswith("get_dev_scene"):
         return ("dev_scene", "自开发场景规范")
 
+    # aPaaS 应用配置精细操作（角色 / 字典 / 模型等 CRUD，不走 SPEC 文档流程）
+    if name in (
+        "list_apaas_app_roles", "create_apaas_app_roles",
+        "update_apaas_app_role", "delete_apaas_app_role",
+    ):
+        return ("apaas_config_edit", "aPaaS 配置精细操作")
+
     # aPaaS 平台内省（元数据查询）
     if name.startswith("list_apaas_") or name.startswith("get_apaas_") or \
        name.startswith("check_app_") or name.startswith("validate_apaas_"):

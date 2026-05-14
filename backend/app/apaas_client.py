@@ -632,6 +632,55 @@ class APaaSClient:
         )
         return result
 
+    async def update_role(self, app_id: str, role_id: str, role_code: str, role_name: str,
+                          app_name: str = "", enable_group_param: str = "DISABLE",
+                          role_params: list | None = None) -> dict:
+        """更新单个角色（POST /xdap-app/roles/edit/role）。
+
+        参考 incremental_executor._update_role 的真实 endpoint 调用。
+        """
+        url = f"{self.base_url}/xdap-app/roles/edit/role"
+        payload = {
+            "roleId": role_id,
+            "appId": app_id,
+            "roleCode": role_code,
+            "roleName": role_name,
+            "useScope": app_name or "",
+            "internalResource": True,
+            "enableGroupParam": enable_group_param,
+            "roleNameI18nAssociated": False,
+            "roleNameI18nResourceCode": "",
+            "roleNameI18n": {},
+            "roleParams": role_params or [],
+        }
+        _log_request("POST", url, payload)
+        start = time.time()
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
+            response = await client.post(url, headers=self._get_headers(app_id), json=payload)
+            elapsed_ms = (time.time() - start) * 1000
+            response.raise_for_status()
+            data = response.json()
+            _log_response(url, response.status_code, data, elapsed_ms, request_body=_to_json(payload))
+            if data.get("code") not in ("ok", 200):
+                raise Exception(data.get("message", "更新角色失败"))
+            return data
+
+    async def delete_role(self, app_id: str, role_id: str) -> dict:
+        """删除单个角色（POST /xdap-app/roles/delete/role）。"""
+        url = f"{self.base_url}/xdap-app/roles/delete/role"
+        payload = {"roleId": role_id}
+        _log_request("POST", url, payload)
+        start = time.time()
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
+            response = await client.post(url, headers=self._get_headers(app_id), json=payload)
+            elapsed_ms = (time.time() - start) * 1000
+            response.raise_for_status()
+            data = response.json()
+            _log_response(url, response.status_code, data, elapsed_ms, request_body=_to_json(payload))
+            if data.get("code") not in ("ok", 200):
+                raise Exception(data.get("message", "删除角色失败"))
+            return data
+
     async def query_roles(self, app_id: str, keyword: str = "") -> list:
         """查询应用角色列表"""
         url = f"{self.base_url}/xdap-app/roles/query/rolesList"
