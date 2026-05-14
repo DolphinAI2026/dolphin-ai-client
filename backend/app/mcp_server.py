@@ -2867,9 +2867,14 @@ def _build_perm_payload_from_simple_rules(
     operation_groups = []
 
     for rule in rules:
+        # 2026-05-14 实测纠正：apaas 平台 advancedPermissionGroups 返回的角色类型是
+        # "ROLE_USER"，写入用 "ROLE" 平台会接受但读回是 "ROLE_USER"，导致下次 set
+        # 时白名单不匹配。统一用 "ROLE_USER"，并把 "ROLE" 当 alias 自动 normalize。
         subj_type = str(rule.get("subject_type") or "").strip().upper()
-        if subj_type not in ("ROLE", "ALL_USER", "USER", "DEPT"):
-            subj_type = "ROLE"
+        if subj_type == "ROLE":
+            subj_type = "ROLE_USER"  # alias normalize
+        if subj_type not in ("ROLE_USER", "ALL_USER", "USER", "DEPT"):
+            subj_type = "ROLE_USER"
 
         if subj_type == "ALL_USER":
             subj_value = ""  # 平台规定：ALL_USER 时 permissionObjectValue 必须空串
@@ -2954,7 +2959,7 @@ async def set_apaas_form_permissions(
     rules 数组示例：
         [
           {
-            "subject_type": "ROLE",
+            "subject_type": "ROLE_USER",
             "subject_value": "<role_id>",
             "subject_name": "管理员",
             "actions": ["view","add","edit","delete","import","draft"],
@@ -2967,8 +2972,20 @@ async def set_apaas_form_permissions(
           }
         ]
 
+    subject_type 取值（apaas 平台实测）：
+      - "ROLE_USER" — 角色（"ROLE" 也接受，会 alias 成 "ROLE_USER"）
+      - "ALL_USER"  — 全部人员（subject_value 留空）
+      - "USER"      — 具体用户
+      - "DEPT"      — 具体部门
+
     actions 取值：view / add / edit / delete / import / draft，或者 ["all"] 表示全开
-    range_type 取值：ALL（全部数据）/ SELF（本人）/ DEPT（本部门）/ SUB_DEPT（本部门及下级）
+
+    range_type 常见取值（透传给 apaas，不做白名单限制）：
+      - "ALL"                         — 全部数据
+      - "SELF"                        — 本人
+      - "CURRENT_USER_DEPT"           — 本部门
+      - "CURRENT_USER_DEPT_LOW_LEVEL" — 本部门及下级
+      - 其他高级取值参考 apaas 平台文档
 
     role_id 怎么拿：先调 list_apaas_app_roles 拿 role.id 字段。
     """
