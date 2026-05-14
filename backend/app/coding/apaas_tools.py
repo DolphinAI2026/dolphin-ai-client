@@ -113,7 +113,15 @@ async def _list_apaas_app_menus(args: dict, platform_env_id: int, db: AsyncSessi
     except Exception as exc:
         return _err(f"查询菜单失败: {exc}")
 
-    def flatten(nodes, parent_path="", depth=0, out=None):
+    def flatten(nodes, parent_path="", parent_id="", depth=0, out=None):
+        """递归扁平化 apaas 平台菜单树。
+
+        2026-05-14 修：apaas 平台 GET /menu/query/allAppMenu 实际返回的嵌套字段
+        是 `submenus`（看真实 response：GROUP 节点下的子菜单挂在 submenus 数组
+        里，深度最多 3 层 — GROUP → GROUP → MENU/MODEL/REPORT）。
+        老版本只看 `children` 永远拿不到子菜单，导致 agent 看到顶层全是 GROUP
+        且 form_id 全空，误判「菜单权限不可见」。
+        """
         if out is None:
             out = []
         for n in nodes or []:
@@ -121,18 +129,27 @@ async def _list_apaas_app_menus(args: dict, platform_env_id: int, db: AsyncSessi
                 continue
             name = str(n.get("menuName") or n.get("name") or "")
             path = f"{parent_path}/{name}" if parent_path else name
+            # apaas 真实嵌套字段是 submenus；其他几个作 fallback 兼容
+            children = (n.get("submenus") or n.get("children")
+                        or n.get("subMenus") or n.get("menuList") or [])
+            menu_id = str(n.get("id") or n.get("menuId") or "")
             out.append({
-                "menu_id": str(n.get("id") or ""),
+                "menu_id": menu_id,
                 "menu_name": name,
                 "path": path,
                 "depth": depth,
+                "parent_id": parent_id,
                 "menu_type": str(n.get("menuType") or ""),
+                "menu_model_type": str(n.get("menuModelType") or ""),
                 "form_id": str(n.get("formId") or ""),
                 "form_code": str(n.get("formCode") or ""),
+                "datasource_id": str(n.get("datasourceId") or ""),
+                "has_children": bool(children),
+                "menu_order": n.get("menuOrder", 0),
+                "is_effective": bool(n.get("isEffective", True)),
             })
-            children = n.get("children") or []
             if children:
-                flatten(children, path, depth + 1, out)
+                flatten(children, path, menu_id, depth + 1, out)
         return out
 
     flat = flatten(menus)
