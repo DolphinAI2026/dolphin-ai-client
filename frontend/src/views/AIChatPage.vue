@@ -18,8 +18,9 @@
       collapse-key="aichat:aside-collapsed"
       back-route="/apps"
       back-label="返回应用"
-      :empty-hint="sessionsFilter === 'all' ? '还没有会话，点上面新建一个' : `还没有 ${sessionsFilter === 'cowork' ? 'Cowork' : 'Chat'} 模式的会话`"
+      empty-hint="还没有会话，点上面新建一个"
       @select="(id) => loadSession(Number(id))"
+      @create="() => onCreateSession()"
       @create-with-option="(cmd) => onCreateSession(cmd)"
       @rename="(s) => onRenameSession(sessionsById.get(Number(s.id)) as AIChatSession)"
       @delete="(s) => onDeleteSession(sessionsById.get(Number(s.id)) as AIChatSession)"
@@ -39,12 +40,6 @@
             @keydown.enter="saveTitle"
           />
           <span v-else-if="currentSession" @dblclick="startEditTitle" :title="'双击重命名'">
-            <span v-if="currentSession.mode === 'cowork'" class="header-mode-badge cowork">
-              <el-icon><Folder /></el-icon><span>Cowork</span>
-            </span>
-            <span v-else class="header-mode-badge chat">
-              <el-icon><ChatDotRound /></el-icon><span>Chat</span>
-            </span>
             {{ currentSession.title }}
           </span>
           <span v-else class="title-placeholder">未选择会话</span>
@@ -96,14 +91,8 @@
         </template>
       </AgentConversation>
       <div v-else class="welcome">
-        <template v-if="incomingMode === 'cowork'">
-          <h2><el-icon class="welcome-icon"><Folder /></el-icon> 协作整合材料</h2>
-          <p>把你的所有材料（PDF / Word / Excel / 截图 / 现有文档）拖进来，AI 会先并行读完所有附件，给出综合摘要 + 批量澄清问题，然后产出符合 Builder 规范的标准设计文档。</p>
-        </template>
-        <template v-else>
-          <h2>👋 欢迎使用 AI Chat</h2>
-          <p>新建一个会话，上传材料，让 AI 帮你梳理需求并生成设计文档。</p>
-        </template>
+        <h2>👋 AI Chat</h2>
+        <p>新建一个会话，**直接描述需求**或者**上传材料**（PDF / Word / Excel / 截图 / 现有文档），AI 会帮你梳理需求并生成符合 Builder 规范的标准设计文档。还能调 aPaaS 平台工具查应用 / 生成应用 / 校验文档等。</p>
       </div>
 
       <!-- 输入区 -->
@@ -268,7 +257,7 @@ import VoiceInputButton from '@/components/common/VoiceInputButton.vue'
 import ChooseAppTargetDialog from '@/components/ChooseAppTargetDialog.vue'
 import type { AgentMessage } from '@/components/common/agent-conversation/types'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ChatDotRound, Folder } from '@element-plus/icons-vue'
+// chat / cowork mode 已合并 — ChatDotRound / Folder 已无引用
 import { applicationApi } from '@/api/application'
 
 const previewStore = usePreviewStore()
@@ -284,32 +273,17 @@ const sessions = ref<AIChatSession[]>([])
 const currentSession = ref<AIChatSession | null>(null)
 const currentSessionId = computed(() => currentSession.value?.id ?? null)
 
-// 会话列表分组 tab：all / chat / cowork
+// chat / cowork mode 已合并 — 单一模式入口（agent 看附件情况自动切流程）
+// 保留 SessionFilter 类型只是为了下面 onCreateSession 签名兼容；实际不再筛选。
 type SessionFilter = 'all' | 'chat' | 'cowork'
 const sessionsFilter = ref<SessionFilter>('all')
-const sessionFilterTabs = computed<Array<{ key: SessionFilter; label: string; title: string; count: number }>>(() => {
-  const chatCount = sessions.value.filter(s => (s.mode || 'chat') !== 'cowork').length
-  const coworkCount = sessions.value.filter(s => s.mode === 'cowork').length
-  return [
-    { key: 'all', label: '全部', title: '所有会话', count: sessions.value.length },
-    { key: 'chat', label: 'Chat', title: '从零理需求的对话', count: chatCount },
-    { key: 'cowork', label: 'Cowork', title: '批量材料整合', count: coworkCount },
-  ]
-})
-const filteredSessions = computed(() => {
-  if (sessionsFilter.value === 'all') return sessions.value
-  if (sessionsFilter.value === 'cowork') return sessions.value.filter(s => s.mode === 'cowork')
-  return sessions.value.filter(s => (s.mode || 'chat') !== 'cowork')
-})
+const filteredSessions = computed(() => sessions.value)
 
 // SessionSidebar 适配
 const sessionItems = computed<SessionItem[]>(() =>
   filteredSessions.value.map(s => ({
     id: s.id,
     title: s.title,
-    badgeIcon: s.mode === 'cowork' ? Folder : undefined,
-    badgeLabel: s.mode === 'cowork' ? 'Cowork 协作整合模式' : undefined,
-    badgeTone: s.mode === 'cowork' ? 'cowork' : undefined,
   }))
 )
 const sessionsById = computed(() => {
@@ -317,19 +291,10 @@ const sessionsById = computed(() => {
   sessions.value.forEach(s => m.set(s.id, s))
   return m
 })
-const sidebarTabs = computed<SessionTab[]>(() =>
-  sessionFilterTabs.value.map(t => ({
-    key: t.key,
-    label: t.label,
-    title: t.title,
-    count: t.count,
-    icon: t.key === 'chat' ? ChatDotRound : t.key === 'cowork' ? Folder : undefined,
-  }))
-)
-const newSessionOptions: NewSessionOption[] = [
-  { command: 'chat', title: 'Chat 会话', hint: '从零对话理需求', icon: ChatDotRound },
-  { command: 'cowork', title: 'Cowork 会话', hint: '批量材料整合成标准 md', icon: Folder },
-]
+// chat / cowork 已合并 — 不再提供 tab 筛选
+const sidebarTabs = computed<SessionTab[]>(() => [])
+// 不再提供模式选择菜单 — 单个 "新建会话" 按钮直接建
+const newSessionOptions: NewSessionOption[] = []
 const messages = ref<AIChatMessage[]>([])
 const toolCalls = ref<AIChatToolCall[]>([])
 const attachments = ref<AIChatAttachment[]>([])
@@ -846,15 +811,13 @@ async function onDeleteSession(s: AIChatSession) {
   }
 }
 
-async function onCreateSession(mode: SessionFilter | string = 'chat') {
-  const targetMode: 'chat' | 'cowork' = mode === 'cowork' ? 'cowork' : 'chat'
+async function onCreateSession(_mode?: SessionFilter | string) {
+  // chat / cowork mode 已合并 — 后端字段保留但不再区分行为，统一建一个会话即可
   const s = await aiChatApi.createSession({
     selected_llm_config_id: selectedLlmId.value,
-    mode: targetMode,
+    mode: 'chat',
   })
   sessions.value.unshift(s)
-  // 切换 tab 到对应模式，让新建的会话出现在视野里
-  sessionsFilter.value = targetMode
   await loadSession(s.id)
 }
 
@@ -1343,12 +1306,6 @@ function scrollBottom() {
   if (el) el.scrollTop = el.scrollHeight
 }
 
-// 当前路由进来的 mode（影响欢迎语 / 默认开场提示）
-const incomingMode = computed(() => {
-  const m = typeof route.query.mode === 'string' ? route.query.mode : ''
-  return m === 'cowork' ? 'cowork' : 'chat'
-})
-
 // ── Lifecycle ──
 
 // 兼容旧 SFC template 中的 isEmbeddedAppChat 引用（AI-Builder 应用调整改抽屉嵌入，
@@ -1366,12 +1323,10 @@ onMounted(async () => {
   // 从 Landing 页带过来的首条 prompt + 可选附件：建会话 → 上传附件 → 把 prompt 发出去
   const incomingPrompt = typeof route.query.prompt === 'string' ? route.query.prompt.trim() : ''
   const incomingFiles = (previewStore.pendingAiChatFiles || []).slice()
-  const incomingFromCowork = incomingMode.value === 'cowork'
-  if (!currentSession.value && (incomingPrompt || incomingFiles.length || incomingFromCowork)) {
+  if (!currentSession.value && (incomingPrompt || incomingFiles.length)) {
     try {
       const created = await aiChatApi.createSession({
         selected_llm_config_id: selectedLlmId.value,
-        ...(incomingFromCowork ? { mode: 'cowork' as const } : {}),
       })
       sessions.value.unshift(created)
       await loadSession(created.id)
@@ -1380,9 +1335,10 @@ onMounted(async () => {
         pendingFiles.value.push(...incomingFiles)
         previewStore.pendingAiChatFiles = []
       }
-      // cowork 模式：用户已经传了材料，给一句默认开场让 agent 自动开始消化
-      if (incomingFromCowork && !incomingPrompt && pendingFiles.value.length) {
-        inputText.value = '材料都在附件里了，请按 cowork 流程：先并行读完所有附件，给我综合摘要 + 批量澄清问题。'
+      // 有附件无 prompt → 给 agent 一句默认开场（让它并行读附件 + 给综合摘要）
+      // 这是统一 prompt 后的自适应行为，不再依赖 mode 字段
+      if (!incomingPrompt && pendingFiles.value.length) {
+        inputText.value = '材料都在附件里了，请先并行读完所有附件，给我综合摘要 + 关键澄清问题。'
       } else {
         inputText.value = incomingPrompt
       }
