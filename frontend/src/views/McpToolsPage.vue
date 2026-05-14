@@ -95,13 +95,18 @@
               </div>
             </div>
 
-            <button
-              v-if="tool.description"
-              class="mcp-expand-btn"
-              @click="expanded[tool.name] = !expanded[tool.name]"
-            >
-              {{ expanded[tool.name] ? '收起描述 ▲' : '展开详情 ▼' }}
-            </button>
+            <div class="mcp-card-actions">
+              <button
+                v-if="tool.description"
+                class="mcp-expand-btn"
+                @click="expanded[tool.name] = !expanded[tool.name]"
+              >
+                {{ expanded[tool.name] ? '收起描述 ▲' : '展开详情 ▼' }}
+              </button>
+              <button class="mcp-try-btn" @click="openTryDialog(tool)" title="在线试调这个工具">
+                ⚡ 试调
+              </button>
+            </div>
 
             <pre v-if="expanded[tool.name] && tool.description" class="mcp-desc">{{ tool.description }}</pre>
 
@@ -112,6 +117,51 @@
           </article>
         </section>
       </template>
+
+      <!-- 在线试调对话框 -->
+      <div v-if="tryDialog.open" class="mcp-try-modal" @click.self="closeTryDialog">
+        <div class="mcp-try-card">
+          <header class="mcp-try-header">
+            <div>
+              <h3>⚡ 试调 <code>{{ tryDialog.tool?.name }}</code></h3>
+              <p>{{ tryDialog.tool?.title }}</p>
+            </div>
+            <button class="mcp-try-close" @click="closeTryDialog">✕</button>
+          </header>
+
+          <section class="mcp-try-body">
+            <label class="mcp-try-label">
+              入参 JSON（必填字段：
+              <span v-for="p in tryDialog.tool?.params.filter(x => x.required) || []" :key="p.name" class="mcp-required-chip">
+                {{ p.name }}: {{ p.type }}
+              </span>
+              <span v-if="!tryDialog.tool?.params.some(p => p.required)" class="mcp-required-empty">无必填</span>
+              ）
+            </label>
+            <textarea
+              v-model="tryDialog.argsText"
+              class="mcp-try-input"
+              :placeholder="tryDialog.placeholder"
+              spellcheck="false"
+            ></textarea>
+
+            <div class="mcp-try-actions">
+              <button class="mcp-try-run" :disabled="tryDialog.running" @click="runTry">
+                {{ tryDialog.running ? '执行中...' : '▶ 执行' }}
+              </button>
+              <button class="mcp-try-cancel" @click="closeTryDialog">取消</button>
+            </div>
+
+            <div v-if="tryDialog.result" class="mcp-try-result">
+              <header :class="['mcp-try-result-header', tryDialog.result.ok ? 'ok' : 'err']">
+                {{ tryDialog.result.ok ? '✓ 成功' : '✗ 失败' }}
+                <span class="mcp-try-cost">{{ tryDialog.result.elapsed_ms }}ms</span>
+              </header>
+              <pre class="mcp-try-result-body">{{ tryDialog.resultText }}</pre>
+            </div>
+          </section>
+        </div>
+      </div>
     </main>
   </BuilderFrame>
 </template>
@@ -158,6 +208,85 @@ const serverInfo = ref<{ name: string; transport: string; endpoint: string; auth
 const activeCategory = ref<string>('all')
 const search = ref('')
 const expanded = ref<Record<string, boolean>>({})
+
+// 在线试调 dialog 状态
+interface TryDialogState {
+  open: boolean
+  tool: McpTool | null
+  argsText: string
+  placeholder: string
+  running: boolean
+  result: { ok: boolean; elapsed_ms: number } | null
+  resultText: string
+}
+const tryDialog = ref<TryDialogState>({
+  open: false,
+  tool: null,
+  argsText: '{}',
+  placeholder: '{}',
+  running: false,
+  result: null,
+  resultText: '',
+})
+
+function openTryDialog(tool: McpTool) {
+  // 给 args 准备一份初始模板（必填字段填示例值）
+  const tpl: Record<string, any> = {}
+  for (const p of tool.params) {
+    if (!p.required) continue
+    if (p.type === 'integer' || p.type === 'number') tpl[p.name] = 0
+    else if (p.type === 'boolean') tpl[p.name] = false
+    else if (p.type === 'array') tpl[p.name] = []
+    else if (p.type === 'object') tpl[p.name] = {}
+    else tpl[p.name] = ''
+  }
+  tryDialog.value = {
+    open: true,
+    tool,
+    argsText: JSON.stringify(tpl, null, 2),
+    placeholder: JSON.stringify(tpl, null, 2),
+    running: false,
+    result: null,
+    resultText: '',
+  }
+}
+
+function closeTryDialog() {
+  tryDialog.value.open = false
+}
+
+async function runTry() {
+  const tool = tryDialog.value.tool
+  if (!tool) return
+  tryDialog.value.running = true
+  tryDialog.value.result = null
+  tryDialog.value.resultText = ''
+  let args: any
+  try {
+    args = JSON.parse(tryDialog.value.argsText || '{}')
+  } catch (e: any) {
+    tryDialog.value.running = false
+    tryDialog.value.result = { ok: false, elapsed_ms: 0 }
+    tryDialog.value.resultText = `JSON 解析失败: ${e?.message || e}`
+    return
+  }
+  const t0 = Date.now()
+  try {
+    const data = await request.post<any, any>('/builder/invoke-mcp', {
+      tool_name: tool.name,
+      args,
+    })
+    const elapsed = Date.now() - t0
+    tryDialog.value.result = { ok: !!data?.ok, elapsed_ms: elapsed }
+    tryDialog.value.resultText = JSON.stringify(data, null, 2)
+  } catch (e: any) {
+    const elapsed = Date.now() - t0
+    tryDialog.value.result = { ok: false, elapsed_ms: elapsed }
+    tryDialog.value.resultText = `请求失败: ${e?.response?.data?.detail || e?.message || e}`
+  } finally {
+    tryDialog.value.running = false
+  }
+}
 
 const filteredTools = computed(() => {
   let list = tools.value
@@ -351,8 +480,13 @@ onMounted(async () => {
 }
 .mcp-param-type { color: #9ca3af; font-weight: 400; }
 
+.mcp-card-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
 .mcp-expand-btn {
-  align-self: flex-start;
   padding: 4px 8px;
   font-size: 11px;
   color: #6b7280;
@@ -361,6 +495,152 @@ onMounted(async () => {
   cursor: pointer;
 }
 .mcp-expand-btn:hover { color: #6366f1; }
+.mcp-try-btn {
+  padding: 4px 12px;
+  font-size: 11px;
+  color: #fff;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 600;
+  transition: transform 0.1s, box-shadow 0.2s;
+}
+.mcp-try-btn:hover { transform: translateY(-1px); box-shadow: 0 2px 6px rgba(99,102,241,0.3); }
+.mcp-try-btn:active { transform: translateY(0); }
+
+/* 试调对话框 */
+.mcp-try-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9000;
+  backdrop-filter: blur(2px);
+}
+.mcp-try-card {
+  width: 720px;
+  max-width: 92vw;
+  max-height: 88vh;
+  background: #fff;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.25);
+  overflow: hidden;
+}
+.mcp-try-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 18px 22px;
+  border-bottom: 1px solid #eef0f6;
+}
+.mcp-try-header h3 { margin: 0; font-size: 15px; }
+.mcp-try-header h3 code {
+  font-family: ui-monospace, Menlo, monospace;
+  color: #6366f1;
+  font-size: 14px;
+  background: rgba(99,102,241,0.08);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+.mcp-try-header p { margin: 4px 0 0; font-size: 12px; color: #6b7280; }
+.mcp-try-close {
+  background: none;
+  border: none;
+  font-size: 18px;
+  color: #94a3b8;
+  cursor: pointer;
+  padding: 0;
+}
+.mcp-try-body {
+  padding: 18px 22px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.mcp-try-label {
+  font-size: 12px;
+  color: #374151;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.mcp-required-chip {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 11px;
+  background: rgba(99, 102, 241, 0.1);
+  color: #6366f1;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 600;
+}
+.mcp-required-empty { color: #9ca3af; font-style: italic; }
+.mcp-try-input {
+  width: 100%;
+  min-height: 160px;
+  padding: 10px 14px;
+  border: 1px solid #e1e4ec;
+  border-radius: 8px;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 12px;
+  resize: vertical;
+  outline: none;
+}
+.mcp-try-input:focus { border-color: #6366f1; }
+.mcp-try-actions { display: flex; gap: 8px; }
+.mcp-try-run {
+  padding: 8px 22px;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+}
+.mcp-try-run:disabled { opacity: 0.5; cursor: not-allowed; }
+.mcp-try-cancel {
+  padding: 8px 16px;
+  background: #f3f4f6;
+  border: none;
+  border-radius: 8px;
+  color: #374151;
+  font-size: 13px;
+  cursor: pointer;
+}
+.mcp-try-result {
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #e1e4ec;
+}
+.mcp-try-result-header {
+  padding: 8px 14px;
+  font-weight: 600;
+  font-size: 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.mcp-try-result-header.ok { background: rgba(34, 197, 94, 0.1); color: #16a34a; }
+.mcp-try-result-header.err { background: rgba(239, 68, 68, 0.1); color: #dc2626; }
+.mcp-try-cost { font-family: ui-monospace, Menlo, monospace; font-weight: 400; }
+.mcp-try-result-body {
+  margin: 0;
+  padding: 14px 18px;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 12px;
+  background: #fafbfc;
+  max-height: 280px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
 
 .mcp-desc {
   font-size: 12px;

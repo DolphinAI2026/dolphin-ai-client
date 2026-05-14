@@ -11,6 +11,7 @@ from app.routes import (
     admin_mcp,
     ai_chat,
     apaas,
+    builder_mcp,
     application_members,
     applications,
     auth,
@@ -192,6 +193,7 @@ app.include_router(requirements.router, prefix="/api")
 app.include_router(app_adjust_chat.router, prefix="/api")
 app.include_router(current_app.router, prefix="/api")
 app.include_router(admin_mcp.router, prefix="/api")
+app.include_router(builder_mcp.router, prefix="/api")
 # 平台代理路由注册在根路径（/platform/... 和 /backend/... 需要直接匹配）
 app.include_router(platform_proxy.router)
 
