@@ -1055,6 +1055,59 @@ class APaaSClient:
                 return menus
             return []
 
+    async def query_form_views(self, app_id: str, form_id: str) -> list:
+        """查询表单的列表视图清单（拿 tabId）。
+
+        endpoint: GET /xdap-app/form/query/listPageViewIdsByFormId
+        返回: [{tabId, tabName/name}, ...]
+        listPageBusinessData 接口必须传 tabId，所以这是数据查询前置必调接口。
+
+        合并自 auth-refactor-phase-1 — 给 ai-chat/cowork 提供"获取应用表单视图"能力。
+        """
+        ts = self._get_timestamp()
+        url = f"{self.base_url}/xdap-app/form/query/listPageViewIdsByFormId"
+        params = {"formId": form_id, "appId": app_id, "timestamp": ts}
+        _log_request("GET", url, params=params)
+        start = time.time()
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
+            response = await client.get(url, headers=self._get_headers(app_id), params=params)
+            elapsed_ms = (time.time() - start) * 1000
+            response.raise_for_status()
+            data = response.json()
+            _log_response(url, response.status_code, data, elapsed_ms, method="GET")
+            if data.get("code") != "ok":
+                return []
+            views = data.get("data") or data.get("table") or []
+            return views if isinstance(views, list) else []
+
+    async def query_form_components(self, app_id: str, form_id: str) -> list:
+        """查询表单的所有组件配置（uuid → label 映射 + 下拉选项）。
+
+        endpoint: GET /xdap-app/formConfig/query/listAllComponents
+        返回: [{uuid, label, componentType, boCode, businessObjectComponentType,
+                chooseOptions?, dictionaryChooseOptions?}, ...]
+
+        关键用途：listPageBusinessData 返回的行数据 key 是 component uuid（不是
+        字段名）。前端 vue 写表头 / 渲染下拉时必须用本接口的映射。
+
+        合并自 auth-refactor-phase-1。
+        """
+        ts = self._get_timestamp()
+        url = f"{self.base_url}/xdap-app/formConfig/query/listAllComponents"
+        params = {"formId": form_id, "appId": app_id, "timestamp": ts}
+        _log_request("GET", url, params=params)
+        start = time.time()
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
+            response = await client.get(url, headers=self._get_headers(app_id), params=params)
+            elapsed_ms = (time.time() - start) * 1000
+            response.raise_for_status()
+            data = response.json()
+            _log_response(url, response.status_code, data, elapsed_ms, method="GET")
+            if data.get("code") != "ok":
+                return []
+            comps = data.get("data") or data.get("table") or []
+            return comps if isinstance(comps, list) else []
+
     async def query_form_config(self, app_id: str, form_id: str) -> dict:
         """查询表单的完整配置"""
         url = f"{self.base_url}/xdap-app/v2/form/query/formContext?formId={form_id}"
