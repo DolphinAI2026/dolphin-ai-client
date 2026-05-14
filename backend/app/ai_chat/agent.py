@@ -543,7 +543,14 @@ async def run_agent(
                 yield _sse("done", {"ok": False, "aborted": True})
                 return
         except httpx.HTTPStatusError as e:
-            yield _sse("error", {"error": f"LLM 调用失败 {e.response.status_code}: {e.response.text[:300]}"})
+            # 流式 response 必须 aread 才能拿 .text；老代码直接 .text 会被
+            # httpx 抛 ResponseNotRead 把真错盖住（2026-05-14 修）
+            try:
+                await e.response.aread()
+                detail = e.response.text[:300]
+            except Exception:
+                detail = "(响应体读取失败)"
+            yield _sse("error", {"error": f"LLM 调用失败 {e.response.status_code}: {detail}"})
             yield _sse("done", {"ok": False})
             return
         except Exception as e:

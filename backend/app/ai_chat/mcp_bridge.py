@@ -115,15 +115,18 @@ async def get_tool_schemas_openai() -> list[dict]:
 
 
 def _strip_identity_params(schema: dict) -> dict:
-    """从 JSON Schema 里剥掉 tenant_id / user_id 字段，让 LLM 看不到。"""
+    """从 JSON Schema 里剥掉 tenant_id / user_id 字段，让 LLM 看不到。
+
+    properties 字段必须保留（即使是空 {}）— 某些 LLM API 严格校验 type=object
+    必须带 properties 键，否则 400 Bad Request（2026-05-14 实测 omnigate 这条）。
+    """
     if not isinstance(schema, dict):
         return schema
     out = {k: v for k, v in schema.items() if k != "properties" and k != "required"}
     props = (schema.get("properties") or {}).copy()
     for hidden in ("tenant_id", "user_id"):
         props.pop(hidden, None)
-    if props:
-        out["properties"] = props
+    out["properties"] = props  # 永远保留 properties 键，即使是空 {}
     required = schema.get("required") or []
     required = [r for r in required if r not in ("tenant_id", "user_id")]
     if required:
