@@ -534,6 +534,13 @@ defineExpose({
   color: var(--t-text-primary);
   padding: 8px 14px;
   border-radius: 14px;
+  /* 覆盖 .ac-bubble 默认的 anywhere/break-word（那个是为 AI 长 URL/hash 设的） */
+  /* user 短文本"111"被强制单字符断成竖排 → 改回标准换行 */
+  word-break: normal;
+  overflow-wrap: break-word;
+  white-space: pre-wrap;
+  width: fit-content;
+  max-width: 100%;
 }
 .ac-bubble.process {
   background: transparent;
@@ -553,6 +560,9 @@ defineExpose({
   flex-direction: column;
   align-items: flex-end;
   max-width: min(620px, 75%);
+  /* 关键：不让 wrap 被父 flex row 压缩到子内容最小宽度（否则"1"会一个字一行）*/
+  flex-shrink: 1;
+  min-width: 0;
 }
 .ac-user-meta {
   margin-top: 4px;
@@ -630,6 +640,54 @@ defineExpose({
 .ac-text :deep(ul), .ac-text :deep(ol) {
   margin: 6px 0;
   padding-left: 22px;
+}
+
+/* markdown 表格样式 — 之前缺，列粘一起没法看 */
+.ac-text :deep(table) {
+  border-collapse: collapse;
+  margin: 10px 0;
+  font-size: 12.5px;
+  width: auto;
+  max-width: 100%;
+}
+.ac-text :deep(table th),
+.ac-text :deep(table td) {
+  border: 1px solid rgba(116, 128, 171, 0.20);
+  padding: 6px 12px;
+  text-align: left;
+  vertical-align: top;
+  white-space: nowrap;
+}
+.ac-text :deep(table th) {
+  background: rgba(116, 128, 171, 0.06);
+  font-weight: 600;
+  color: rgba(31, 41, 55, 0.95);
+}
+.ac-text :deep(table tr:nth-child(even) td) {
+  background: rgba(116, 128, 171, 0.025);
+}
+/* markdown blockquote 样式 */
+.ac-text :deep(blockquote) {
+  margin: 8px 0;
+  padding: 6px 12px;
+  border-left: 3px solid rgba(59, 130, 246, 0.5);
+  background: rgba(59, 130, 246, 0.04);
+  color: rgba(75, 85, 99, 0.95);
+}
+.ac-text :deep(blockquote p) { margin: 0; }
+/* markdown headings — h2/h3 之间留点呼吸 */
+.ac-text :deep(h1), .ac-text :deep(h2), .ac-text :deep(h3) {
+  margin: 14px 0 6px;
+  font-weight: 600;
+}
+.ac-text :deep(h2) { font-size: 15px; }
+.ac-text :deep(h3) { font-size: 14px; }
+.ac-text :deep(h2:first-child), .ac-text :deep(h3:first-child) { margin-top: 0; }
+/* 行内 code */
+.ac-text :deep(code:not(pre code)) {
+  background: rgba(116, 128, 171, 0.10);
+  padding: 1px 6px;
+  border-radius: 4px;
 }
 
 .ac-cursor {
