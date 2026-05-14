@@ -39,7 +39,7 @@ from app.models import (
     AIChatArtifact,
     LLMConfig,
 )
-from app.ai_chat.tools import TOOL_SCHEMAS, execute_tool
+from app.ai_chat.tools import TOOL_SCHEMAS, execute_tool, get_all_tool_schemas
 
 logger = logging.getLogger(__name__)
 
@@ -455,6 +455,10 @@ async def run_agent(
 
     asked_user = False  # 一旦 ask_user，loop 提前退出
 
+    # 每个 session 的第一轮拉一次合并 schemas（base 4 + MCP bridge 注入的 N 个）
+    # 这是 lazy 设计 — backend 启动时 MCP 可能还没 ready，所以放在 turn loop 外的第一次调用
+    tool_schemas = await get_all_tool_schemas()
+
     for turn in range(MAX_TURNS):
         if abort_event.is_set():
             yield _sse("aborted", {"turn": turn})
@@ -464,7 +468,7 @@ async def run_agent(
         # 流式调用 LLM，逐 token 把 content_delta 推给前端
         assistant_msg: Optional[dict] = None
         try:
-            async for chunk in _call_llm_stream(cfg, messages, TOOL_SCHEMAS, abort_event):
+            async for chunk in _call_llm_stream(cfg, messages, tool_schemas, abort_event):
                 if chunk["type"] == "content_delta":
                     yield _sse("assistant_delta", {"text": chunk["text"]})
                 elif chunk["type"] == "tool_call_delta":

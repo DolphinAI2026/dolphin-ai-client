@@ -274,13 +274,48 @@ TOOL_HANDLERS = {
 }
 
 
+# 原 4 个 base 工具的 schemas（保持原有 TOOL_SCHEMAS 引用名兼容老代码）
+BASE_TOOL_SCHEMAS = TOOL_SCHEMAS
+
+
+async def get_all_tool_schemas() -> list[dict]:
+    """合并 base 4 + MCP bridge 工具。MCP 不可用时退化到 base 4。
+
+    每次 agent turn 开始时调用——让"装上新 MCP 工具立即可用"，不用重启 backend。
+    """
+    from app.ai_chat.mcp_bridge import get_tool_schemas_openai
+    try:
+        mcp_schemas = await get_tool_schemas_openai()
+    except Exception as e:
+        # MCP 不可用不影响 base 工具
+        import logging as _log
+        _log.getLogger(__name__).warning("MCP bridge 加载失败，退化到 base 4 工具：%s", e)
+        mcp_schemas = []
+    return BASE_TOOL_SCHEMAS + mcp_schemas
+
+
 async def execute_tool(
     tool_name: str, args: dict, session: AIChatSession, db: AsyncSession
 ) -> str:
+    """工具 dispatcher：base 工具走本地 handler；其他兜底走 MCP HTTP bridge。
+
+    自动塞 session.tenant_id / session.user_id 给 MCP（很多 MCP 工具签名隐式接受
+    tenant_id / user_id 做 fallback admin）。
+    """
     handler = TOOL_HANDLERS.get(tool_name)
-    if not handler:
-        return f"错误：未知工具 '{tool_name}'"
-    try:
-        return await handler(args, session, db)
-    except Exception as e:
-        return f"错误：工具 '{tool_name}' 执行异常 - {e}"
+    if handler:
+        try:
+            return await handler(args, session, db)
+        except Exception as e:
+            return f"错误：工具 '{tool_name}' 执行异常 - {e}"
+
+    # 兜底：尝试通过 MCP bridge 调本机 MCP server
+    from app.ai_chat.mcp_bridge import list_mcp_tool_names_cached, call_tool as _mcp_call
+    if tool_name in list_mcp_tool_names_cached():
+        return await _mcp_call(
+            tool_name, args,
+            tenant_id=int(getattr(session, "tenant_id", 0) or 0),
+            user_id=int(getattr(session, "user_id", 0) or 0),
+        )
+
+    return f"错误：未知工具 '{tool_name}'"
