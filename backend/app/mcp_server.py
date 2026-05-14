@@ -851,3 +851,177 @@ async def submit_design_doc(
             "页面，刷新一下 Builder 跳转面板会自动出现这份 md。"
         ),
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# aPaaS 平台内省工具集（11 个）— 复用 backend/app/coding/apaas_tools.py 实现
+#
+# 设计：
+# - 工具实现在 coding/apaas_tools.py（双消费方：AI Coding agent 内部 + 本 MCP 外部）
+# - 这一层是给外部 agent（dolphin / Claude / Cursor）的薄壳子
+# - 每个工具显式接 env_id 参数（让 caller 自己决定调哪个 aPaaS 环境）
+# - workspace 类的 read_attachment / write_artifact 不外暴（caller 没 workspace 上下文）
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+async def _call_apaas_platform_tool(name: str, args: dict, env_id: int) -> dict:
+    """统一桥接平台类 apaas 工具：调 executor → JSON 解析为 dict。"""
+    from app.coding.apaas_tools import APAAS_TOOL_EXECUTORS_PLATFORM
+    from app.database import AsyncSessionLocal
+    executor = APAAS_TOOL_EXECUTORS_PLATFORM.get(name)
+    if not executor:
+        return {"ok": False, "error_code": "UNKNOWN_TOOL", "message": f"未知工具 {name}"}
+    async with AsyncSessionLocal() as db:
+        result_str = await executor(args, env_id, db)
+    try:
+        return json.loads(result_str)
+    except json.JSONDecodeError:
+        # apaas_tools 失败约定以 'Error:' 开头返字符串
+        return {"ok": False, "error_code": "APAAS_TOOL_ERROR", "message": result_str}
+
+
+@mcp.tool()
+async def list_apaas_apps_in_env(env_id: int) -> dict:
+    """列指定 aPaaS 环境下所有应用（含 apaas_app_id / app_code / app_name / status）。
+
+    使用场景：做应用二次开发或数据查询前的入口工具——先调它定位你要操作的应用，
+    再用拿到的 apaas_app_id 调下游 list_apaas_app_menus / _app_models 等。
+
+    使用前需要知道 env_id（一般通过 list_platform_envs 拿）。
+    """
+    return await _call_apaas_platform_tool("list_apaas_apps", {}, env_id)
+
+
+@mcp.tool()
+async def list_apaas_app_menus(env_id: int, apaas_app_id: str) -> dict:
+    """列指定应用的菜单树（含每个菜单关联的 form_id / form_code）。
+
+    使用场景：拿到 apaas_app_id 后，要找应用里的表单入口时调用。
+    返回的菜单含 form_id —— 下一步可用 list_apaas_form_views 拿 tab_id、
+    list_apaas_form_components 拿字段 uuid 映射。
+
+    返回结构含 menu_id / menu_name / path / depth / menu_type / form_id / form_code。
+    """
+    return await _call_apaas_platform_tool(
+        "list_apaas_app_menus", {"apaas_app_id": apaas_app_id}, env_id,
+    )
+
+
+@mcp.tool()
+async def list_apaas_form_views(env_id: int, apaas_app_id: str, form_id: str) -> dict:
+    """列指定表单的所有视图（拿 tab_id）。
+
+    使用场景：listPageBusinessData 接口必须传 tab_id（一个表单常有多个视图：
+    全部数据 / 我的工单 / 待审批 等），所以是查表单数据的**前置必调**步骤。
+
+    返回 views 数组（含 tab_id / tab_name）+ default_tab_id（视图列表第一个）。
+    """
+    return await _call_apaas_platform_tool(
+        "list_apaas_form_views",
+        {"apaas_app_id": apaas_app_id, "form_id": form_id},
+        env_id,
+    )
+
+
+@mcp.tool()
+async def list_apaas_form_components(env_id: int, apaas_app_id: str, form_id: str) -> dict:
+    """列指定表单的所有组件（uuid → label 映射 + 下拉选项 + 字典选项）。
+
+    使用场景：listPageBusinessData 返回行数据 key 是 component uuid（不是字段名），
+    所以前端 vue 写表头 / 渲染下拉时**必须**用本接口的映射。
+
+    返回 components 数组，每项含 uuid / label / component_type / bo_code / required
+    / choose_options（普通下拉）/ dictionary_choose_options（字典下拉）。
+    """
+    return await _call_apaas_platform_tool(
+        "list_apaas_form_components",
+        {"apaas_app_id": apaas_app_id, "form_id": form_id},
+        env_id,
+    )
+
+
+@mcp.tool()
+async def list_apaas_app_models(env_id: int, apaas_app_id: str, with_fields: bool = True) -> dict:
+    """列指定应用下所有数据模型 + 字段定义。
+
+    使用场景：做表单/页面开发时需要知道数据结构，比 list_apaas_form_components
+    更底层（form 层是组件 uuid，model 层是 modelCode / boCode / dataType）。
+
+    with_fields=False 时只列模型骨架不展开字段（省 token）。
+    返回 models 数组，每项含 model_id / model_code / model_name / fields[]。
+    """
+    return await _call_apaas_platform_tool(
+        "list_apaas_app_models",
+        {"apaas_app_id": apaas_app_id, "with_fields": with_fields},
+        env_id,
+    )
+
+
+@mcp.tool()
+async def list_apaas_app_dicts(env_id: int, apaas_app_id: str, with_options: bool = True) -> dict:
+    """列指定应用下所有数据字典（下拉/单选选项的来源）。
+
+    使用场景：表单字段引用了 dict_code 时，要拿真实选项列表渲染下拉框。
+    with_options=False 时只列字典骨架（dict_code / dict_name），True 时回填 options[]。
+    """
+    return await _call_apaas_platform_tool(
+        "list_apaas_app_dicts",
+        {"apaas_app_id": apaas_app_id, "with_options": with_options},
+        env_id,
+    )
+
+
+@mcp.tool()
+async def get_apaas_app_overview(env_id: int, apaas_app_id: str) -> dict:
+    """精简版应用全貌：模型清单 + 字典清单（不带字段/选项详情）。
+
+    使用场景：快速知道应用「有什么」再决定深挖，比 list_apaas_app_models 省 token。
+    返回 models / dicts / models_total / dicts_total。
+    """
+    return await _call_apaas_platform_tool(
+        "get_apaas_app_overview", {"apaas_app_id": apaas_app_id}, env_id,
+    )
+
+
+@mcp.tool()
+async def list_apaas_models_in_env(env_id: int) -> dict:
+    """列指定环境内所有模型（跨应用，含 modelCode + appCode）。
+
+    使用场景：创建新模型前查重避免撞名（aPaaS 平台 modelCode 同租户内唯一）。
+    """
+    return await _call_apaas_platform_tool("list_apaas_models_in_env", {}, env_id)
+
+
+@mcp.tool()
+async def check_app_code_conflict(env_id: int, app_code: str) -> dict:
+    """查 app_code 是否被占用（部署前预检）。
+
+    使用场景：用户决定新应用 app_code 前，先调本工具确认不撞名。
+    返回 conflict (bool) + occupants (已用此 code 的应用列表)。
+    """
+    return await _call_apaas_platform_tool(
+        "check_app_code_conflict", {"app_code": app_code}, env_id,
+    )
+
+
+@mcp.tool()
+async def get_apaas_doc_template_spec() -> dict:
+    """拿 aPaaS Builder 设计文档官方标准（章节 / 表头 / 命名规则 / 字段类型）。
+
+    使用场景：写 md 设计文档前先调它对齐标准 — 避免 ai-builder 解析失败。
+    无需 env_id，纯静态返回（schema 是 ai-builder 内置的）。
+    """
+    return await _call_apaas_platform_tool("get_doc_template_spec", {}, 0)
+
+
+@mcp.tool()
+async def validate_apaas_builder_doc(md_content: str) -> dict:
+    """轻量校验 markdown 是否符合 aPaaS Builder 标准（不创建应用、不打远端）。
+
+    使用场景：用户产出 md 后，提交给 ai-builder 前先用本工具自检
+    missing_sections / reserved_field_hits，避免反复改。
+    无需 env_id，纯逻辑校验。
+    """
+    return await _call_apaas_platform_tool(
+        "validate_builder_doc", {"md_content": md_content}, 0,
+    )
