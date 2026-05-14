@@ -64,9 +64,21 @@
           <!-- assistant — dolphin 风格：方形蓝头像 + 无气泡 markdown 直渲 -->
           <div v-else-if="item.kind === 'assistant' || item.kind === 'streaming'" class="ac-row assistant">
             <div class="ac-avatar brand">A</div>
-            <div class="ac-bubble assistant-naked">
-              <div class="ac-text" v-html="renderMd(item.content || '')"></div>
-              <span v-if="item.kind === 'streaming' || item.streaming" class="ac-cursor"></span>
+            <div class="ac-assistant-wrap">
+              <div class="ac-bubble assistant-naked">
+                <div class="ac-text" v-html="renderMd(item.content || '')"></div>
+                <span v-if="item.kind === 'streaming' || item.streaming" class="ac-cursor"></span>
+              </div>
+              <!-- 流式完成才显示反馈按钮（避免还在生成就被复制）-->
+              <div
+                v-if="item.kind === 'assistant' && !item.streaming && (item.content || '').trim().length > 0"
+                class="ac-feedback"
+              >
+                <button class="ac-fb-btn" :title="'复制'" @click="onCopyMessage(item)">
+                  {{ copiedId === (item.id ?? '') ? '✓' : '📋' }}
+                </button>
+                <button class="ac-fb-btn" :title="'反馈：回复不准确'" @click="$emit('feedback', item)">👎</button>
+              </div>
             </div>
           </div>
 
@@ -200,7 +212,29 @@ defineEmits<{
   (e: 'answer-ask', option: string, message: AgentMessage): void
   (e: 'open-artifact', artifact: any, message: AgentMessage): void
   (e: 'scroll', payload: { atBottom: boolean; scrollTop: number }): void
+  (e: 'feedback', message: AgentMessage): void
 }>()
+
+const copiedId = ref<string | number | ''>('')
+async function onCopyMessage(item: AgentMessage) {
+  const text = (item.content || '').trim()
+  if (!text) return
+  try {
+    await navigator.clipboard.writeText(text)
+  } catch {
+    // 老浏览器降级：execCommand
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.style.position = 'fixed'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    ta.select()
+    try { document.execCommand('copy') } catch { /* ignore */ }
+    document.body.removeChild(ta)
+  }
+  copiedId.value = item.id ?? ''
+  setTimeout(() => { if (copiedId.value === (item.id ?? '')) copiedId.value = '' }, 1500)
+}
 
 const themeStore = useThemeStore()
 const listRef = ref<HTMLElement>()
@@ -420,6 +454,44 @@ defineExpose({
   flex-shrink: 0;
   width: 28px;
   height: 1px;
+}
+
+/* dolphin 风格：assistant 消息 hover 时下方出现反馈按钮 */
+.ac-assistant-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+  flex: 1;
+}
+.ac-feedback {
+  display: flex;
+  gap: 4px;
+  margin-top: 6px;
+  opacity: 0;
+  transition: opacity 0.18s;
+}
+.ac-row.assistant:hover .ac-feedback {
+  opacity: 1;
+}
+.ac-fb-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: rgba(116, 128, 171, 0.7);
+  font-size: 13px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+}
+.ac-fb-btn:hover {
+  background: rgba(116, 128, 171, 0.08);
+  color: rgba(31, 41, 55, 0.9);
+  border-color: rgba(116, 128, 171, 0.18);
 }
 .ac-avatar.tool {
   background: rgba(245, 158, 11, 0.16);

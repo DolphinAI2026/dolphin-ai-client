@@ -97,6 +97,12 @@
 
       <!-- 输入区 -->
       <div class="input-area" v-if="currentSession">
+        <!-- 排队中提示卡（dolphin 风格：流式中输入第二条消息会进队列） -->
+        <div v-if="pendingQueue.length > 0" class="queue-banner">
+          <span class="queue-icon">🕐</span>
+          <span class="queue-text">{{ pendingQueue.length }} 条消息排队中 · 当前回复结束后自动发送</span>
+          <button class="queue-clear" @click="pendingQueue = []" title="清空队列">×</button>
+        </div>
         <div class="input-card">
           <div class="input-attaches" v-if="pendingFiles.length">
             <span v-for="(f, i) in pendingFiles" :key="i" class="input-chip">
@@ -279,13 +285,34 @@ type SessionFilter = 'all' | 'chat' | 'cowork'
 const sessionsFilter = ref<SessionFilter>('all')
 const filteredSessions = computed(() => sessions.value)
 
-// SessionSidebar 适配
-const sessionItems = computed<SessionItem[]>(() =>
-  filteredSessions.value.map(s => ({
+// 按更新时间分组：今天 / 昨天 / 7 天内 / 更早（dolphin 风格 sidebar）
+function _timeGroup(iso: string | null | undefined): string {
+  if (!iso) return '更早'
+  const t = new Date(iso).getTime()
+  if (Number.isNaN(t)) return '更早'
+  const now = new Date()
+  const today0 = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+  const dayMs = 24 * 60 * 60 * 1000
+  if (t >= today0) return '今天'
+  if (t >= today0 - dayMs) return '昨天'
+  if (t >= today0 - 7 * dayMs) return '7 天内'
+  return '更早'
+}
+
+// SessionSidebar 适配 — 加 group 字段触发 SessionSidebar 的分组渲染
+const sessionItems = computed<SessionItem[]>(() => {
+  // 按 updated_at 倒序（最新在前）
+  const sorted = [...filteredSessions.value].sort((a, b) => {
+    const ta = new Date(a.updated_at || a.created_at || 0).getTime()
+    const tb = new Date(b.updated_at || b.created_at || 0).getTime()
+    return tb - ta
+  })
+  return sorted.map(s => ({
     id: s.id,
     title: s.title,
+    group: _timeGroup(s.updated_at || s.created_at),
   }))
-)
+})
 const sessionsById = computed(() => {
   const m = new Map<number, AIChatSession>()
   sessions.value.forEach(s => m.set(s.id, s))
@@ -835,8 +862,20 @@ function onFilesSelected(e: Event) {
   input.value = ''
 }
 
+// dolphin 风格：流式中可继续输入，按 Enter 进入队列等待
+const pendingQueue = ref<string[]>([])
+
 async function onSend() {
-  if (!currentSession.value || !canSend.value) return
+  if (!currentSession.value) return
+  // 流式中按发送 → 进队列（仅文字，不带附件 — 附件场景太复杂留待后续）
+  if (isSending.value) {
+    const txt = inputText.value.trim()
+    if (!txt) return
+    pendingQueue.value.push(txt)
+    inputText.value = ''
+    return
+  }
+  if (!canSend.value) return
   const text = inputText.value.trim()
   inputText.value = ''
   // 上传附件
@@ -890,6 +929,14 @@ async function onSend() {
     streamingText.value = ''
     // 重新拉一次 session 拿到完整持久化数据（messages + tool_calls + artifacts）
     if (currentSession.value) await loadSession(currentSession.value.id)
+    // 队列消费：上一轮跑完后，把队列里第一条自动发出去
+    if (pendingQueue.value.length > 0) {
+      const next = pendingQueue.value.shift()!
+      inputText.value = next
+      // 给 UI 一帧透气，让用户看见自动发送的过程
+      await new Promise(r => setTimeout(r, 200))
+      onSend()
+    }
   }
 }
 
@@ -1874,6 +1921,36 @@ onMounted(async () => {
 
 /* ─── Input area ─── */
 .input-area { border-top: 1px solid var(--ac-border); padding: 16px 24px 20px; }
+
+/* dolphin 风格队列提示卡 */
+.queue-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  margin-bottom: 8px;
+  background: rgba(59, 130, 246, 0.06);
+  border: 1px solid rgba(59, 130, 246, 0.18);
+  border-radius: 10px;
+  font-size: 12.5px;
+  color: rgba(31, 41, 55, 0.85);
+}
+.queue-icon { font-size: 13px; }
+.queue-text { flex: 1; }
+.queue-clear {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(116, 128, 171, 0.12);
+  color: rgba(116, 128, 171, 0.85);
+  cursor: pointer;
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.queue-clear:hover { background: rgba(116, 128, 171, 0.2); }
 .input-card {
   max-width: 760px; margin: 0 auto;
   background: var(--ac-input); border: 1px solid var(--ac-border-strong); border-radius: 14px; padding: 8px;

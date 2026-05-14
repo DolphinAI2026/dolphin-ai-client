@@ -62,40 +62,43 @@
         </button>
       </div>
 
-      <!-- 会话列表 -->
+      <!-- 会话列表（dolphin 风格按 group 分组渲染；group 字段缺失时退化为平铺）-->
       <div class="session-list">
         <slot name="list-prefix" />
-        <div
-          v-for="s in sessions"
-          :key="s.id"
-          class="session-item"
-          :class="{ active: activeId === s.id }"
-          @click="$emit('select', s.id)"
-          :title="s.title + (s.meta ? ' — ' + s.meta : '')"
-        >
-          <el-icon
-            v-if="s.badgeIcon"
-            class="session-badge"
-            :class="`tone-${s.badgeTone || 'default'}`"
-            :title="s.badgeLabel"
+        <template v-for="(grp, gi) in groupedSessions" :key="`g-${gi}-${grp.label}`">
+          <div v-if="grp.label" class="session-group-title">{{ grp.label }}</div>
+          <div
+            v-for="s in grp.items"
+            :key="s.id"
+            class="session-item"
+            :class="{ active: activeId === s.id }"
+            @click="$emit('select', s.id)"
+            :title="s.title + (s.meta ? ' — ' + s.meta : '')"
           >
-            <component :is="s.badgeIcon" />
-          </el-icon>
-          <span class="session-name">{{ s.title }}</span>
-          <span v-if="s.meta" class="session-meta">{{ s.meta }}</span>
-          <button
-            v-if="enableRename !== false"
-            class="session-menu-btn"
-            @click.stop="$emit('rename', s)"
-            title="重命名"
-          >✎</button>
-          <button
-            v-if="enableDelete !== false"
-            class="session-menu-btn danger"
-            @click.stop="$emit('delete', s)"
-            title="删除"
-          >×</button>
-        </div>
+            <el-icon
+              v-if="s.badgeIcon"
+              class="session-badge"
+              :class="`tone-${s.badgeTone || 'default'}`"
+              :title="s.badgeLabel"
+            >
+              <component :is="s.badgeIcon" />
+            </el-icon>
+            <span class="session-name">{{ s.title }}</span>
+            <span v-if="s.meta" class="session-meta">{{ s.meta }}</span>
+            <button
+              v-if="enableRename !== false"
+              class="session-menu-btn"
+              @click.stop="$emit('rename', s)"
+              title="重命名"
+            >✎</button>
+            <button
+              v-if="enableDelete !== false"
+              class="session-menu-btn danger"
+              @click.stop="$emit('delete', s)"
+              title="删除"
+            >×</button>
+          </div>
+        </template>
         <div v-if="sessions.length === 0" class="empty-hint">
           {{ emptyHint || '还没有会话，点上面新建一个' }}
         </div>
@@ -141,6 +144,9 @@ export interface SessionItem {
   badgeLabel?: string
   badgeTone?: 'cowork' | 'chat' | 'success' | 'danger' | 'default' | string
   meta?: string
+  // 分组标签（dolphin 风格：今天/昨天/7 天内/更早）。同 group 的 session 会聚在一起渲染。
+  // 不传则不分组（渲染为单一平铺列表）。
+  group?: string
 }
 
 export interface SessionTab {
@@ -191,6 +197,23 @@ const emit = defineEmits<{
 }>()
 
 const router = useRouter()
+
+// 按 group 字段聚合 sessions；group 缺失时全归一个 "" 标签组（不显标题，等价平铺）
+const groupedSessions = computed<Array<{ label: string; items: SessionItem[] }>>(() => {
+  const list = props.sessions
+  // 保留输入顺序：用 Map 记录 group 出现顺序
+  const map = new Map<string, SessionItem[]>()
+  for (const s of list) {
+    const key = s.group || ''
+    if (!map.has(key)) map.set(key, [])
+    map.get(key)!.push(s)
+  }
+  const out: Array<{ label: string; items: SessionItem[] }> = []
+  for (const [k, items] of map) {
+    out.push({ label: k, items })
+  }
+  return out
+})
 
 const collapsible = computed(() => props.collapsible !== false)
 const storageKey = computed(() => props.collapseKey || 'session-sidebar:collapsed')
@@ -405,6 +428,15 @@ function onBack() {
   flex-direction: column;
   gap: 2px;
 }
+/* dolphin 风格：分组标题（"今天" / "昨天" / "7 天内" / "更早"） */
+.session-group-title {
+  font-size: 11px;
+  color: rgba(116, 128, 171, 0.7);
+  font-weight: 600;
+  padding: 10px 12px 4px;
+  letter-spacing: 0.04em;
+}
+.session-group-title:first-child { padding-top: 4px; }
 .session-item {
   display: flex;
   align-items: center;
