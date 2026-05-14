@@ -1873,3 +1873,256 @@ async def publish_dev_workspace(ws_id: str, env_id: int = 0, tenant_id: int = 0,
         "ws_id": ws_id,
         "next_tools": ["run_workspace_command", "attach_dev_packages_to_apaas_app", "republish_apaas_app"],
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Vibe Coding 工具集（11 个）— 平行于 layer 2 的 11 个 workspace 工具
+# 操作 Vibe Coding workspace（id 格式 oc_xxx，跟 layer 2 的 1_xxx 完全独立）
+#
+# 用途：让 dolphin / Claude 等外部 agent 能接入 vibe-coding 的"从零搭独立项目"能力，
+# 跟 aPaaS 无关，纯通用 IDE 开发。
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+async def _resolve_vibe_thread(ws_id: str, tid: int, uid: int):
+    """从 ws_id 解析出 VibeCodingThread + 已开的 db session。
+
+    返回 (thread, db_session_ctx, error_dict)；ctx 失败时为 None。
+    调用方负责把 ctx 用 async with 包起来，结束时 close。
+
+    实际用法（避免泄漏）：
+        gen = _resolve_vibe_thread_ctx(...)
+        async for thread, db in gen:
+            ...
+    """
+    # 这版直接返回构造好的 thread + new db session — 调用方走完 release
+    from app.database import AsyncSessionLocal
+    from app.models import VibeCodingThread
+    from app.vibe_coding.workspace import find_workspace
+    from sqlalchemy import select
+
+    found = find_workspace(ws_id)
+    if not found:
+        return None, None, {"ok": False, "error_code": "WORKSPACE_NOT_FOUND",
+                            "message": f"Vibe Coding workspace {ws_id} 不存在"}
+    _, meta = found
+    meta_tid = meta.get("tenant_id")
+    if meta_tid is not None and int(meta_tid) != int(tid):
+        return None, None, {"ok": False, "error_code": "TENANT_MISMATCH",
+                            "message": f"workspace 不属于当前租户"}
+    db = AsyncSessionLocal()
+    res = await db.execute(select(VibeCodingThread).where(VibeCodingThread.workspace_id == ws_id))
+    thread = res.scalar_one_or_none()
+    if not thread:
+        # 用户没进过 chat → 没建 thread → 临时建一条（owner=uid，title 用 task 兜底）
+        thread = VibeCodingThread(
+            workspace_id=ws_id,
+            tenant_id=int(meta_tid or tid),
+            owner_user_id=int(meta.get("user_id") or uid),
+            title=(meta.get("task") or "MCP 接入"),
+            status="active",
+        )
+        db.add(thread)
+        await db.commit()
+        await db.refresh(thread)
+    return thread, db, None
+
+
+async def _call_vibe_executor(executor_name: str, args: dict, ws_id: str, tenant_id: int, user_id: int) -> dict:
+    """统一桥接 — 拿 thread + db → 调 vibe_coding.tools 的 execute_* → 包装 ok/error。"""
+    from app.vibe_coding import tools as _vibe_tools
+    executor = getattr(_vibe_tools, executor_name, None)
+    if not executor:
+        return {"ok": False, "error_code": "UNKNOWN_EXECUTOR", "message": f"未知 executor {executor_name}"}
+    tid, uid = _resolve_identity(tenant_id, user_id)
+    thread, db, err = await _resolve_vibe_thread(ws_id, tid, uid)
+    if err:
+        return err
+    try:
+        result_text = await executor(args or {}, thread, db)
+    except Exception as exc:
+        logger.exception("vibe tool %s failed", executor_name)
+        try: await db.close()
+        except Exception: pass
+        return {"ok": False, "error_code": "VIBE_TOOL_ERROR", "message": str(exc)}
+    try: await db.close()
+    except Exception: pass
+    if isinstance(result_text, str) and result_text.startswith("Error:"):
+        return {"ok": False, "error_code": "VIBE_TOOL_FAILED", "message": result_text, "ws_id": ws_id}
+    return {"ok": True, "ws_id": ws_id, "result": result_text}
+
+
+@mcp.tool()
+async def vibe_create_workspace(
+    task: str,
+    repo_url: str = "",
+    tenant_id: int = 0,
+    user_id: int = 0,
+) -> dict:
+    """在 Vibe Coding（纯自开发 / 通用 IDE）下创建一个新工作区。
+
+    跟 create_dev_workspace 区别：
+      - 这是 layer 3 vibe-coding（从零搭独立项目，跟 aPaaS 无关）
+      - create_dev_workspace 是 layer 2 aPaaS 二开（必须绑 platform_env + scene_type）
+
+    入参：
+      task     开发任务一句话描述（写到 workspace meta，agent 用作开场理解）
+      repo_url 可选 — 传则从 Git clone 进 workspace；不传则建空目录让 agent 脚手架
+
+    返回 {ok, ws_id, task, repo_url, next_steps[]}；ws_id 格式 'oc_xxxxxx'。
+    """
+    if not task.strip() and not repo_url.strip():
+        return {"ok": False, "error_code": "INVALID_PARAMS", "message": "task 和 repo_url 至少传一个"}
+    tid, uid = _resolve_identity(tenant_id, user_id)
+    payload = {"task": task.strip(), "repo_url": repo_url.strip() or None}
+    res = await _api_call("POST", "/online-coding/workspaces",
+                          tenant_id=tid, user_id=uid, json_body=payload)
+    if isinstance(res, dict) and (res.get("id") or "").startswith("oc_"):
+        ws_id = res["id"]
+        return {
+            "ok": True,
+            "ws_id": ws_id,
+            "task": task.strip(),
+            "repo_url": repo_url.strip() or None,
+            "status": res.get("status"),
+            "next_steps": [
+                f"vibe_get_workspace_status('{ws_id}') 查状态",
+                f"vibe_read_file / vibe_write_file / vibe_run_command 操作文件",
+                f"vibe_todo_write 维护 TODO；vibe_http_check 起服务后健康检查",
+            ],
+        }
+    return {"ok": False, "error_code": "CREATE_FAILED", "message": "创建 vibe workspace 失败",
+            "raw": res}
+
+
+@mcp.tool()
+async def vibe_get_workspace_status(ws_id: str, tenant_id: int = 0, user_id: int = 0) -> dict:
+    """查询 Vibe Coding workspace 状态（status / file_count / files / 沙箱状态等）。
+
+    入参：ws_id 必须以 'oc_' 开头（vibe-coding workspace ID 格式）
+    """
+    if not ws_id.startswith("oc_"):
+        return {"ok": False, "error_code": "INVALID_WS_ID",
+                "message": f"ws_id 必须以 'oc_' 开头（这是 vibe-coding workspace 格式）"}
+    tid, uid = _resolve_identity(tenant_id, user_id)
+    res = await _api_call("GET", f"/online-coding/workspaces/{ws_id}",
+                          tenant_id=tid, user_id=uid)
+    return res if isinstance(res, dict) else {"ok": False, "raw": res}
+
+
+@mcp.tool()
+async def vibe_read_file(
+    ws_id: str, path: str, offset: int = 0, limit: int = 0,
+    tenant_id: int = 0, user_id: int = 0,
+) -> dict:
+    """读 Vibe Coding workspace 内某个文件的文本内容。
+
+    入参：
+      ws_id   workspace ID（oc_xxx）
+      path    相对路径（如 'src/page.vue'）
+      offset  起始行（1-based，0=从头）
+      limit   读取行数上限（0=全部）
+    """
+    args = {"path": path}
+    if offset > 0: args["offset"] = offset
+    if limit > 0: args["limit"] = limit
+    return await _call_vibe_executor("execute_read_file", args, ws_id, tenant_id, user_id)
+
+
+@mcp.tool()
+async def vibe_write_file(
+    ws_id: str, path: str, content: str,
+    tenant_id: int = 0, user_id: int = 0,
+) -> dict:
+    """把文本完整写入 Vibe Coding workspace 内某个文件（覆盖式）。目录不存在自动建。"""
+    return await _call_vibe_executor(
+        "execute_write_file", {"path": path, "content": content},
+        ws_id, tenant_id, user_id,
+    )
+
+
+@mcp.tool()
+async def vibe_edit_file(
+    ws_id: str, path: str, old_string: str, new_string: str,
+    replace_all: bool = False,
+    tenant_id: int = 0, user_id: int = 0,
+) -> dict:
+    """精确字符串替换 Vibe Coding workspace 内某个文件。old_string 必须唯一匹配，
+    除非 replace_all=true。比 write_file 更安全（不会误覆盖未读部分）。"""
+    return await _call_vibe_executor(
+        "execute_edit_file",
+        {"path": path, "old_string": old_string, "new_string": new_string, "replace_all": replace_all},
+        ws_id, tenant_id, user_id,
+    )
+
+
+@mcp.tool()
+async def vibe_glob(ws_id: str, pattern: str, tenant_id: int = 0, user_id: int = 0) -> dict:
+    """按 glob pattern 列 Vibe Coding workspace 文件（如 '**/*.vue' / 'src/**/*.ts'）。
+    结果按修改时间倒序，最多 200 条。"""
+    return await _call_vibe_executor("execute_glob", {"pattern": pattern},
+                                     ws_id, tenant_id, user_id)
+
+
+@mcp.tool()
+async def vibe_grep(
+    ws_id: str, pattern: str, path: str = "", glob: str = "",
+    ignore_case: bool = False,
+    tenant_id: int = 0, user_id: int = 0,
+) -> dict:
+    """在 Vibe Coding workspace 内 grep 搜索（Python re 语法）。
+
+    入参：
+      pattern      正则表达式
+      path         限定子目录（可选）
+      glob         限定文件类型 glob（如 '*.py'，可选）
+      ignore_case  大小写不敏感
+    """
+    args = {"pattern": pattern, "ignore_case": ignore_case}
+    if path: args["path"] = path
+    if glob: args["glob"] = glob
+    return await _call_vibe_executor("execute_grep", args, ws_id, tenant_id, user_id)
+
+
+@mcp.tool()
+async def vibe_run_command(
+    ws_id: str, command: str,
+    tenant_id: int = 0, user_id: int = 0,
+) -> dict:
+    """在 Vibe Coding workspace 内跑 shell 命令（如 'npm install' / 'npm run dev'）。
+
+    跑在 docker 沙箱里（端口段：6173 前端 / 6300 后端 / 6400 / 6500 备用）；
+    跑后台服务用 run_in_background。
+    """
+    return await _call_vibe_executor("execute_run_command", {"command": command},
+                                     ws_id, tenant_id, user_id)
+
+
+@mcp.tool()
+async def vibe_todo_write(
+    ws_id: str, todos: list,
+    tenant_id: int = 0, user_id: int = 0,
+) -> dict:
+    """更新 Vibe Coding workspace 的 TODO 列表（agent 拆任务用）。
+
+    todos 数组每项 {id: str, content: str, status: 'pending'|'in_progress'|'completed'}。
+    同时只能有一个 in_progress；前端会渲染成 checklist。
+    """
+    return await _call_vibe_executor("execute_todo_write", {"todos": todos},
+                                     ws_id, tenant_id, user_id)
+
+
+@mcp.tool()
+async def vibe_http_check(
+    ws_id: str, url: str,
+    tenant_id: int = 0, user_id: int = 0,
+) -> dict:
+    """HTTP 检查 Vibe Coding workspace 内服务的健康状态（agent 起 dev server 后用）。
+
+    入参：
+      url    完整 URL（如 'http://localhost:6173' / 'http://localhost:6300/api/health'）
+
+    返回 status_code / body 前 1000 字 / 错误信息（连不上 / 超时等）。
+    """
+    return await _call_vibe_executor("execute_http_check", {"url": url},
+                                     ws_id, tenant_id, user_id)
