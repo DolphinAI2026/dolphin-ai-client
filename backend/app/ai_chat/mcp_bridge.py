@@ -37,14 +37,8 @@ logger = logging.getLogger(__name__)
 _LOADED: Optional[dict] = None
 _BASE_URL = "http://127.0.0.1:8000/api/mcp/mcp"
 
-# 黑名单：这几个工具是 stub，LLM 调了只会拿到 NOT_IMPLEMENTED 提示，反而误导
-# 等真正实现后再去掉
-_STUB_TOOLS = {
-    "upload_external_zip_to_apaas",
-    "save_dev_spec",
-    "import_zip_to_workspace",
-    "publish_dev_workspace",
-}
+# 黑名单：这里曾有 4 个 stub 工具被屏蔽，现在全部已 ship 真实现，清空
+_STUB_TOOLS: set[str] = set()
 
 
 def _get_api_key() -> Optional[str]:

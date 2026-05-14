@@ -1501,40 +1501,131 @@ async def upload_external_zip_to_apaas(
     file_type: str,
     description: str = "",
     apaas_app_id: str = "",
+    tenant_id: int = 0,
+    user_id: int = 0,
 ) -> dict:
-    """直接上传一个外部 zip 到 apaas 平台（不走 workspace），覆盖 V2.6 全 12 类 fileType。
+    """直接上传一个外部 zip 到 apaas 平台 — 内部走 multipart upload + 智能查重 update/create。
 
-    ⚠️ 当前版本是简化 stub — 完整流程（base64 解码 + multipart upload + 自动判断
-    update/create + auto-attach to app）正在迁移中。建议先用 publish_dev_workspace。
+    用例：用户已经在别处 build 好一个 zip，让 agent 直接上传，不必先解压到 workspace。
 
-    入参：env_id / file_name / file_content_b64 / file_type / description / apaas_app_id（可选）
+    流程（一次完成）：
+      1. base64 解码 zip
+      2. 调 apaas selfdevelopment/query/allDevelopmentKit 按 fileName 查重
+      3. 命中 → /selfdevelopment/update/developmentKit（替换同名）；
+         没命中 → /selfdevelopment/add/developmentKit（新建）
+      4. 可选：传 apaas_app_id 时自动 attach 到应用 + 提示需要 republish
+
+    入参：
+      env_id            平台环境 ID
+      file_name         zip 文件名（含 .zip 后缀），平台拿来做查重 + 显示
+      file_content_b64  zip base64 编码内容（不带 data: 前缀，建议 < 8MB）
+      file_type         V2.6 全 12 类（FRONTENGINE / FRONTCOMPONENT / DEPORTAL_SELF_PACKAGE 等）
+      description       可选平台侧描述
+      apaas_app_id      可选 — 传则上传后自动 attach 到应用
+
+    返回 {ok, action: 'update'|'create', kit_id, file_name, attached_to_app, message}
     """
+    import base64 as _b64
+
     valid_ft = (file_type or "").strip().upper()
     if valid_ft not in _PLATFORM_FILE_TYPES_V2_6:
-        return {
-            "ok": False, "error_code": "INVALID_FILE_TYPE",
-            "message": f"file_type '{file_type}' 不在 V2.6 全 12 类里",
-            "supported_file_types": _PLATFORM_FILE_TYPES_V2_6,
-        }
-    if not file_name.strip() or "/" in file_name or "\\" in file_name:
+        return {"ok": False, "error_code": "INVALID_FILE_TYPE",
+                "message": f"file_type '{file_type}' 不在 V2.6 全 12 类里",
+                "supported_file_types": _PLATFORM_FILE_TYPES_V2_6}
+    fname = file_name.strip()
+    if not fname or "/" in fname or "\\" in fname:
         return {"ok": False, "error_code": "INVALID_FILE_NAME",
                 "message": "file_name 只能是文件名，不能含路径分隔符"}
     if not file_content_b64.strip():
         return {"ok": False, "error_code": "EMPTY_CONTENT", "message": "file_content_b64 不能为空"}
+    try:
+        zip_bytes = _b64.b64decode(file_content_b64, validate=False)
+    except Exception as exc:
+        return {"ok": False, "error_code": "B64_DECODE_FAILED", "message": str(exc)}
+    if not zip_bytes.startswith(b"PK"):
+        return {"ok": False, "error_code": "NOT_A_ZIP", "message": "解码后内容不是 zip（缺 PK 头）"}
+    if len(zip_bytes) > 20 * 1024 * 1024:
+        return {"ok": False, "error_code": "ZIP_TOO_LARGE", "message": f"zip {len(zip_bytes)} bytes > 20MB"}
+
+    # 拿 apaas client + token
+    from app.coding.apaas_tools import _get_apaas_client
+    from app.database import AsyncSessionLocal
+    import httpx
+    async with AsyncSessionLocal() as db:
+        try:
+            client = await _get_apaas_client(env_id, db)
+        except Exception as exc:
+            return {"ok": False, "error_code": "ENV_NOT_READY", "message": str(exc), "env_id": env_id}
+
+        # Step 1: 查重
+        try:
+            kits = await client.query_app_dev_kits("", file_name=fname.replace(".zip", ""))
+        except Exception as exc:
+            return {"ok": False, "error_code": "QUERY_FAILED", "message": str(exc)}
+        existing = next((k for k in (kits or [])
+                         if isinstance(k, dict) and (k.get("fileName") == fname)), None)
+        action = "update" if existing else "create"
+        existing_id = (existing or {}).get("id")
+
+        # Step 2: multipart upload
+        ts = client._get_timestamp()
+        upload_path = (
+            "/xdap-app/selfdevelopment/update/developmentKit" if action == "update"
+            else "/xdap-app/selfdevelopment/add/developmentKit"
+        )
+        url = f"{client.base_url}{upload_path}"
+        form_data = {
+            "fileName": fname,
+            "fileType": valid_ft,
+            "description": description or "",
+        }
+        if action == "update" and existing_id:
+            form_data["id"] = str(existing_id)
+        files = {"file": (fname, zip_bytes, "application/zip")}
+        try:
+            async with httpx.AsyncClient(verify=False, timeout=120.0) as h:
+                resp = await h.post(
+                    url,
+                    headers={k: v for k, v in client._get_headers().items() if k != "Content-Type"},
+                    params={"timestamp": ts},
+                    data=form_data,
+                    files=files,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+        except Exception as exc:
+            return {"ok": False, "error_code": "UPLOAD_FAILED",
+                    "message": str(exc), "action": action}
+        if data.get("code") not in ("ok", 200):
+            return {"ok": False, "error_code": "APAAS_UPLOAD_REJECTED",
+                    "message": data.get("message", "apaas 拒绝上传"), "raw": data}
+        # apaas 不同接口返结构略有差异
+        result = data.get("data") or {}
+        new_kit_id = str(result.get("id") or existing_id or "")
+
+        # Step 3: 可选 auto-attach to app
+        attached = False
+        if apaas_app_id and new_kit_id:
+            try:
+                await client.attach_apaas_source_relation(apaas_app_id, object_ids=[new_kit_id])
+                attached = True
+            except Exception as exc:
+                logger.warning("auto attach failed: %s", exc)
 
     return {
-        "ok": False,
-        "error_code": "NOT_IMPLEMENTED",
-        "message": (
-            "upload_external_zip_to_apaas 暂未在本分支实现（需要 multipart upload + "
-            "智能 update/create 切换 + auto-attach）。"
-            "建议改用 publish_dev_workspace，或先 attach_dev_packages_to_apaas_app + "
-            "republish_apaas_app 替代。"
-        ),
+        "ok": True,
         "env_id": env_id,
-        "file_name": file_name.strip(),
+        "action": action,
+        "kit_id": new_kit_id,
+        "file_name": fname,
         "file_type": valid_ft,
-        "supported_file_types": _PLATFORM_FILE_TYPES_V2_6,
+        "size_bytes": len(zip_bytes),
+        "attached_to_app": attached,
+        "apaas_app_id": apaas_app_id or None,
+        "message": (
+            f"{'更新' if action == 'update' else '新建'} {fname} 成功"
+            + (f"，已自动关联到应用 {apaas_app_id}（记得 republish_apaas_app 让组件生效）" if attached else "")
+        ),
     }
 
 
@@ -1821,58 +1912,225 @@ async def create_dev_workspace(
 
 
 @mcp.tool()
-async def save_dev_spec(ws_id: str, spec_md: str, mockup_html: str = "", tenant_id: int = 0, user_id: int = 0) -> dict:
-    """Phase 1 必调：落盘双产物（技术 SPEC + 业务可视 HTML mockup），返回 spec_token + preview_url。
+async def save_dev_spec(
+    ws_id: str,
+    project_name: str,
+    spec_md: str,
+    mockup_html: str = "",
+    tenant_id: int = 0,
+    user_id: int = 0,
+) -> dict:
+    """Phase 1 必调：落盘双产物（技术 SPEC + 业务可视 HTML mockup）到 workspace。
 
-    ⚠️ 当前版本是 stub — 完整实现涉及 ai-builder 的 spec_token 系统 + dev-spec
-    preview 链路。先用 write_workspace_files 把 spec.md 写到 workspace 根目录。
+    落到 workspace `.dev-spec/<project_name>/` 目录：
+      spec.md      技术 SPEC（给 LLM 看，含 form_id / tab_id / uuid 真值）
+      mockup.html  业务可视 HTML mockup（给用户审，单文件 CDN 引 echarts/element-ui）
+
+    流程：
+      1. 调元数据工具拿完 form_views / form_components 等
+      2. 写 spec_md（技术）和 mockup_html（业务，看板/列表场景必填）
+      3. 调本工具一次落两份盘
+      4. 给用户业务摘要 + spec_md 关键片段（用 markdown 代码块展示）
+      5. 等用户表态 OK 后继续 write_workspace_files 写代码
+
+    入参：
+      ws_id         workspace ID（AI Coding 'X_xxx' 或 Vibe 'oc_xxx' 都行）
+      project_name  英文短名（kebab-case），决定 .dev-spec 子目录
+      spec_md       技术 SPEC markdown（至少 100 字符）
+      mockup_html   业务 HTML（可选；看板类强烈建议）
+
+    返回 {ok, ws_id, project_name, spec_path, mockup_path?, preview_path}
     """
-    return {
-        "ok": False, "error_code": "NOT_IMPLEMENTED",
-        "message": (
-            "save_dev_spec 暂未在本分支实现。临时方案："
-            "用 write_workspace_files 把 spec.md 写到 workspace 根目录，"
-            "用户可在 ai-builder /coding 页面手动预览。"
-        ),
+    import re as _re
+    from pathlib import Path
+    if not _re.match(r"^[a-zA-Z0-9_\-]+$", project_name):
+        return {"ok": False, "error_code": "INVALID_PROJECT_NAME",
+                "message": "project_name 只能含 字母/数字/_/-"}
+    if not spec_md or len(spec_md.strip()) < 100:
+        return {"ok": False, "error_code": "SPEC_TOO_SHORT",
+                "message": f"spec_md 太短 ({len(spec_md.strip())} 字符)，至少 100 字符"}
+    tid, uid = _resolve_identity(tenant_id, user_id)
+
+    # 同时支持 AI Coding workspace 和 Vibe Coding workspace
+    if ws_id.startswith("oc_"):
+        # Vibe workspace: 走 online_coding._find_workspace_dir
+        from app.routes.online_coding import _find_workspace_dir
+        try:
+            ws_dir, _meta = _find_workspace_dir(ws_id)
+            repo_dir = ws_dir / "repo"
+            repo_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            return {"ok": False, "error_code": "WORKSPACE_NOT_FOUND",
+                    "message": f"vibe workspace {ws_id} 找不到: {exc}"}
+    else:
+        # AI Coding workspace: WorkspaceManager
+        from app.coding.workspace import WorkspaceManager
+        try:
+            repo_dir = WorkspaceManager().get_workspace_path(ws_id)
+        except FileNotFoundError:
+            return {"ok": False, "error_code": "WORKSPACE_NOT_FOUND",
+                    "message": f"workspace {ws_id} 找不到"}
+
+    spec_root = repo_dir / ".dev-spec" / project_name
+    spec_root.mkdir(parents=True, exist_ok=True)
+    spec_path = spec_root / "spec.md"
+    spec_path.write_text(spec_md, encoding="utf-8")
+
+    out: dict[str, Any] = {
+        "ok": True,
         "ws_id": ws_id,
+        "project_name": project_name,
+        "spec_path": f".dev-spec/{project_name}/spec.md",
+        "spec_bytes": len(spec_md.encode("utf-8")),
+        "preview_path": f".dev-spec/{project_name}/",
+        "next_steps": [
+            "用 read_workspace_file 读 .dev-spec/<project>/spec.md 拿回内容（供下次迭代）",
+            "在 chat 里给用户业务摘要 + 等用户确认",
+            "确认后 → write_workspace_files / vibe_write_file 开始写代码",
+        ],
+    }
+    if mockup_html.strip():
+        mockup_path = spec_root / "mockup.html"
+        mockup_path.write_text(mockup_html, encoding="utf-8")
+        out["mockup_path"] = f".dev-spec/{project_name}/mockup.html"
+        out["mockup_bytes"] = len(mockup_html.encode("utf-8"))
+        out["has_mockup"] = True
+    return out
+
+
+@mcp.tool()
+async def import_zip_to_workspace(
+    task: str,
+    zip_b64: str,
+    project_name: str = "",
+    tenant_id: int = 0,
+    user_id: int = 0,
+) -> dict:
+    """把外部 zip（base64）解压成新的 Vibe Coding workspace（不绑 aPaaS）。
+
+    用例：二次开发场景接现有项目，用户提供项目 zip。
+
+    入参：
+      task         workspace 一句话任务（写到 meta）
+      zip_b64      zip 文件 base64 编码（不带 data: 前缀，建议 < 8MB）
+      project_name 可选 — 解压后的根目录名
+
+    返回 {ok, ws_id, file_count, files_sample, task}
+    """
+    import base64 as _b64
+    import io
+    import zipfile
+
+    if not zip_b64.strip():
+        return {"ok": False, "error_code": "EMPTY_ZIP", "message": "zip_b64 不能为空"}
+
+    # 解码 base64
+    try:
+        raw = _b64.b64decode(zip_b64, validate=False)
+    except Exception as exc:
+        return {"ok": False, "error_code": "B64_DECODE_FAILED", "message": str(exc)}
+    if len(raw) > 20 * 1024 * 1024:
+        return {"ok": False, "error_code": "ZIP_TOO_LARGE",
+                "message": f"zip 解码后 {len(raw)} bytes > 20MB"}
+
+    # 解析 zip 结构（先校验合法 + 列文件）
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(raw), "r")
+        names = zf.namelist()
+    except zipfile.BadZipFile:
+        return {"ok": False, "error_code": "BAD_ZIP", "message": "不是合法的 zip 文件"}
+
+    # 先建一个新 vibe workspace
+    tid, uid = _resolve_identity(tenant_id, user_id)
+    create_payload = {"task": task or "导入 zip 项目", "repo_url": None}
+    res = await _api_call("POST", "/online-coding/workspaces",
+                          tenant_id=tid, user_id=uid, json_body=create_payload)
+    if not isinstance(res, dict) or not (res.get("id") or "").startswith("oc_"):
+        return {"ok": False, "error_code": "WS_CREATE_FAILED",
+                "message": "创建 workspace 失败", "raw": res}
+    ws_id = res["id"]
+
+    # 解压到 workspace/repo
+    from app.routes.online_coding import _find_workspace_dir
+    try:
+        ws_dir, _meta = _find_workspace_dir(ws_id)
+        repo_dir = ws_dir / "repo"
+        repo_dir.mkdir(parents=True, exist_ok=True)
+    except Exception as exc:
+        return {"ok": False, "error_code": "WS_RESOLVE_FAILED", "message": str(exc), "ws_id": ws_id}
+
+    # 安全解压（防 zip slip）
+    safe_count = 0
+    for member in zf.namelist():
+        # 拒绝绝对路径 / 包含 ..
+        if member.startswith("/") or ".." in member.split("/"):
+            continue
+        # 拒绝以 / 开头的成员
+        target = (repo_dir / member).resolve()
+        try:
+            target.relative_to(repo_dir.resolve())
+        except ValueError:
+            continue  # 越界
+        if member.endswith("/"):
+            target.mkdir(parents=True, exist_ok=True)
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with zf.open(member) as src, open(target, "wb") as dst:
+            dst.write(src.read())
+        safe_count += 1
+
+    return {
+        "ok": True,
+        "ws_id": ws_id,
+        "task": task,
+        "file_count": safe_count,
+        "files_sample": names[:10],
+        "next_steps": [
+            f"vibe_get_workspace_status('{ws_id}') 看完整状态",
+            f"vibe_glob('{ws_id}', 'package.json') 找入口配置",
+            "看完代码后用 vibe_run_command('npm install') 装依赖",
+        ],
     }
 
 
 @mcp.tool()
-async def import_zip_to_workspace(scene_type: str, project_name: str, zip_b64: str, tenant_id: int = 0, user_id: int = 0) -> dict:
-    """把外部 zip（base64）解压成新 workspace，给二次开发场景用。
+async def publish_dev_workspace(
+    ws_id: str,
+    env_id: int,
+    tenant_id: int = 0,
+    user_id: int = 0,
+) -> dict:
+    """把 AI Coding workspace build 产物部署到 aPaaS 平台。
 
-    ⚠️ 当前版本是 stub — 完整实现涉及 base64 解码 + zip 安全解压 + 脚手架合并。
-    建议改用 create_dev_workspace + write_workspace_files。
+    内部调 POST /coding/workspace/{ws_id}/upload-to-platform，
+    后端自动：build → 打 zip → upload to apaas → 查重判 update/create。
+    上传成功后再用 attach_dev_packages_to_apaas_app + republish_apaas_app 让组件生效。
+
+    ⚠️ 仅支持 AI Coding workspace（'X_xxx' 格式）。Vibe Coding workspace ('oc_xxx') 不绑
+    aPaaS 平台，无需 publish；如需上传到 apaas 应自己用 vibe_run_command 打 zip
+    再用 upload_external_zip_to_apaas（实现中）。
+
+    入参：
+      ws_id  AI Coding workspace ID (不以 'oc_' 开头)
+      env_id 平台环境 ID（apaas 部署目标）
+
+    返回 internal endpoint 原样响应 — 含 uploaded_kits / errors 等
     """
-    return {
-        "ok": False, "error_code": "NOT_IMPLEMENTED",
-        "message": (
-            "import_zip_to_workspace 暂未在本分支实现。临时方案："
-            "用 create_dev_workspace 起新 workspace，然后 write_workspace_files 批量写入。"
-        ),
-    }
-
-
-@mcp.tool()
-async def publish_dev_workspace(ws_id: str, env_id: int = 0, tenant_id: int = 0, user_id: int = 0) -> dict:
-    """把自开发 workspace build 产物部署到 aPaaS 平台。
-
-    ⚠️ 当前版本是 stub — 完整链路：build → 打 zip → upload_zip → attach_to_app → republish。
-    临时方案：分步调 run_workspace_command('npm run build') → 用户在 ai-builder UI
-    点"上传组件包"按钮（CodingPage.vue 有这个），后端走 codingApi.uploadToPlatform。
-    """
-    return {
-        "ok": False, "error_code": "NOT_IMPLEMENTED",
-        "message": (
-            "publish_dev_workspace 暂未在本分支实现。完整链路较长，临时方案："
-            "1) run_workspace_command('npm run build')  "
-            "2) 用户在 ai-builder /coding 页面点'上传组件包'按钮（自动 enable_self_dev_config + attach + republish）  "
-            "或者：3) 手工调 attach_dev_packages_to_apaas_app + republish_apaas_app"
-        ),
-        "ws_id": ws_id,
-        "next_tools": ["run_workspace_command", "attach_dev_packages_to_apaas_app", "republish_apaas_app"],
-    }
+    if ws_id.startswith("oc_"):
+        return {"ok": False, "error_code": "WRONG_WS_TYPE",
+                "message": "publish_dev_workspace 只支持 AI Coding workspace（非 oc_ 前缀）。"
+                           "Vibe workspace 请自己 zip + 用 upload_external_zip_to_apaas"}
+    if not env_id:
+        return {"ok": False, "error_code": "INVALID_ENV_ID", "message": "env_id 必填"}
+    tid, uid = _resolve_identity(tenant_id, user_id)
+    res = await _api_call(
+        "POST", f"/coding/workspace/{ws_id}/upload-to-platform",
+        tenant_id=tid, user_id=uid, json_body={"env_id": env_id},
+        timeout=600.0,  # build + upload 可能耗时
+    )
+    if isinstance(res, dict):
+        return {"ok": True, "ws_id": ws_id, "env_id": env_id, **res}
+    return {"ok": False, "error_code": "UPLOAD_FAILED", "raw": res}
 
 
 # ═══════════════════════════════════════════════════════════════════════════
