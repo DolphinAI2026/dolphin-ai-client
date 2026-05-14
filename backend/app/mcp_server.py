@@ -2765,3 +2765,387 @@ async def delete_apaas_app_form(env_id: int, apaas_app_id: str, form_menu_id: st
         return raw
     return {"ok": True, "message": f"表单「{form_name}」(menu_id={form_menu_id}) 已删除",
             "next_step": "调 republish_apaas_app 让变更生效"}
+
+
+# ─── 权限矩阵 CRUD ──────────────────────────────────────────────────────────
+# apaas 平台只有两条权限 API：
+#   读：GET /xdap-app/formConfig/query/detailPageConfigById  → 含 advanced/operation Groups
+#   写：POST /common/resource/formPermission                  → 全量覆盖该 form 的权限
+# 所以不存在 update_one / delete_one 单条权限，只有"列出 + 覆盖式 set"两个语义。
+
+def _simplify_perm_object(perm_obj: dict) -> dict:
+    """精简 advanced/operation Group 里 permissionObjects[0]，给 list 工具的 output。"""
+    if not perm_obj:
+        return {}
+    return {
+        "subject_type": perm_obj.get("permissionObjectType"),  # ROLE / ALL_USER / USER / DEPT
+        "subject_value": perm_obj.get("permissionObjectValue"),  # role_id / "" / user_id / dept_id
+        "subject_name": perm_obj.get("permissionObjectDisplayName"),
+        "range_type": (perm_obj.get("permissionRange") or {}).get("rangeType"),
+    }
+
+
+@mcp.tool()
+async def list_apaas_form_permissions(env_id: int, apaas_app_id: str, form_id: str) -> dict:
+    """列出某个表单的权限矩阵（含数据权限组 + 操作权限组）。
+
+    底层调 query_detail_page_config，返回简化后的权限视图：
+      - data_permissions: 数据权限组（查看 / 编辑 / 删除），每组一个 subject
+      - operation_permissions: 操作权限组（新增 / 导入 / 暂存 / 批量等），每组一个 subject
+
+    用法：先 list_apaas_app_forms 拿 form_id，再调本工具读现状，最后调
+    set_apaas_form_permissions 覆盖式写入。
+    """
+    if not (apaas_app_id.strip() and form_id.strip()):
+        return {"ok": False, "error_code": "INVALID_PARAMS", "message": "apaas_app_id+form_id 都必填"}
+    ok, raw = await _with_client(env_id, "查表单权限",
+        lambda c: c.query_detail_page_config(apaas_app_id.strip(), form_id.strip()))
+    if not ok:
+        return raw
+
+    advanced = raw.get("advancedPermissionGroups") or []
+    operation = raw.get("operationPermissionGroups") or []
+
+    data_perms = []
+    for g in advanced:
+        op_type = g.get("permissionOperationType") or {}
+        subj = (g.get("permissionObjects") or [{}])[0]
+        data_perms.append({
+            "permission_name": g.get("permissionName"),
+            "subject": _simplify_perm_object(subj),
+            "can_view": bool(op_type.get("queryPermission")),
+            "can_edit": bool(op_type.get("updatePermission")),
+            "can_delete": bool(op_type.get("deletePermission")),
+        })
+
+    op_perms = []
+    for g in operation:
+        op_type = g.get("permissionOperationType") or {}
+        subj = (g.get("permissionObjects") or [{}])[0]
+        op_perms.append({
+            "permission_name": g.get("permissionName"),
+            "subject": _simplify_perm_object(subj),
+            "can_add": bool(op_type.get("addPermission")),
+            "can_import": bool(op_type.get("importPermission")),
+            "can_draft": bool(op_type.get("temporaryStoragePermission")),
+            "can_copy_add": bool(op_type.get("copyAddPermission")),
+            "can_batch_delete": bool(op_type.get("batchDeletePermission")),
+            "can_batch_reject": bool(op_type.get("batchRejectPermission")),
+            "can_batch_agree": bool(op_type.get("batchAgreePermission")),
+            "can_share_form": bool(op_type.get("shareFormPermission")),
+        })
+
+    return {
+        "ok": True,
+        "form_id": form_id,
+        "data_permissions": data_perms,
+        "operation_permissions": op_perms,
+        "data_count": len(data_perms),
+        "operation_count": len(op_perms),
+        "hint": "改权限调 set_apaas_form_permissions（覆盖式写入，传完整 rules）",
+    }
+
+
+def _build_perm_payload_from_simple_rules(
+    app_id: str,
+    form_code: str,
+    form_id: str,
+    rules: list,
+) -> dict:
+    """把 LLM 友好的 rules 数组转成 formPermission API 的标准 payload。
+
+    rules item 示例：
+        {
+          "subject_type": "ROLE" | "ALL_USER",
+          "subject_value": "<role_id>",     # ROLE 时必填；ALL_USER 时忽略
+          "subject_name": "管理员",          # 仅用于 permissionName 显示
+          "actions": ["view","add","edit","delete","import","draft"],
+          "range_type": "ALL"               # 可选，默认 ALL；其他：SELF/DEPT/SUB_DEPT
+        }
+    """
+    data_groups = []
+    operation_groups = []
+
+    for rule in rules:
+        subj_type = str(rule.get("subject_type") or "").strip().upper()
+        if subj_type not in ("ROLE", "ALL_USER", "USER", "DEPT"):
+            subj_type = "ROLE"
+
+        if subj_type == "ALL_USER":
+            subj_value = ""  # 平台规定：ALL_USER 时 permissionObjectValue 必须空串
+            subj_name = rule.get("subject_name") or "全部人员"
+        else:
+            subj_value = str(rule.get("subject_value") or "").strip()
+            subj_name = rule.get("subject_name") or subj_value
+
+        actions = [a.strip().lower() for a in (rule.get("actions") or []) if a]
+        all_ = "all" in actions
+        can_view = all_ or "view" in actions
+        can_add = all_ or "add" in actions
+        can_edit = all_ or "edit" in actions or "update" in actions
+        can_delete = all_ or "delete" in actions
+        can_import = all_ or "import" in actions
+        can_draft = all_ or "draft" in actions or "temporary" in actions
+
+        range_type = str(rule.get("range_type") or "ALL").strip().upper()
+
+        data_groups.append({
+            "permissionName": f"{subj_name}权限",
+            "permissionDescribe": "",
+            "permissionOperationType": {
+                "queryPermission": can_view,
+                "updatePermission": can_edit,
+                "deletePermission": can_delete,
+            },
+            "permissionObjects": [{
+                "permissionObjectType": subj_type,
+                "permissionObjectValue": subj_value,
+                "permissionObjectDisplayName": subj_name,
+                "permissionRange": {"rangeType": range_type},
+            }],
+        })
+
+        if any((can_add, can_import, can_draft)):
+            operation_groups.append({
+                "permissionName": f"{subj_name}操作权限",
+                "permissionDescribe": "",
+                "permissionOperationType": {
+                    "temporaryStoragePermission": can_draft,
+                    "addPermission": can_add,
+                    "importPermission": can_import,
+                    "copyAddPermission": False,
+                    "batchDeletePermission": False,
+                    "batchRejectPermission": False,
+                    "batchAgreePermission": False,
+                    "shareFormPermission": False,
+                },
+                "permissionObjects": [{
+                    "permissionObjectType": subj_type,
+                    "permissionObjectValue": subj_value,
+                    "permissionObjectDisplayName": subj_name,
+                    "permissionRange": {"rangeType": range_type},
+                }],
+            })
+
+    return {
+        "formCode": form_code,
+        "appId": app_id,
+        "tenantId": "",
+        "formId": form_id,
+        "operationPermissionGroups": operation_groups,
+        "dataPermissionGroups": data_groups,
+    }
+
+
+@mcp.tool()
+async def set_apaas_form_permissions(
+    env_id: int,
+    apaas_app_id: str,
+    form_id: str,
+    form_code: str,
+    rules: list,
+) -> dict:
+    """覆盖式设置某个表单的权限矩阵（一次调用替换该表单的所有权限）。
+
+    ⚠️ 覆盖式 — apaas 平台 formPermission API 是按 form_id 全量替换的：
+      - rules 里没列的 subject（角色 / ALL_USER），权限会被清空
+      - 想增量改：先 list_apaas_form_permissions 读现状，合并后再 set
+
+    rules 数组示例：
+        [
+          {
+            "subject_type": "ROLE",
+            "subject_value": "<role_id>",
+            "subject_name": "管理员",
+            "actions": ["view","add","edit","delete","import","draft"],
+            "range_type": "ALL"
+          },
+          {
+            "subject_type": "ALL_USER",
+            "actions": ["view"],
+            "range_type": "SELF"
+          }
+        ]
+
+    actions 取值：view / add / edit / delete / import / draft，或者 ["all"] 表示全开
+    range_type 取值：ALL（全部数据）/ SELF（本人）/ DEPT（本部门）/ SUB_DEPT（本部门及下级）
+
+    role_id 怎么拿：先调 list_apaas_app_roles 拿 role.id 字段。
+    """
+    if not (apaas_app_id.strip() and form_id.strip() and form_code.strip()):
+        return {"ok": False, "error_code": "INVALID_PARAMS",
+                "message": "apaas_app_id+form_id+form_code 都必填（form_code 从 list_apaas_app_forms 拿）"}
+    if not isinstance(rules, list) or not rules:
+        return {"ok": False, "error_code": "INVALID_RULES",
+                "message": "rules 必须是非空数组；想清空所有权限请显式传 [{subject_type:'ALL_USER',actions:[]}]"}
+
+    payload = _build_perm_payload_from_simple_rules(
+        app_id=apaas_app_id.strip(),
+        form_code=form_code.strip(),
+        form_id=form_id.strip(),
+        rules=rules,
+    )
+    ok, raw = await _with_client(env_id, "设表单权限",
+        lambda c: c.create_form_permissions(apaas_app_id.strip(), [payload]))
+    if not ok:
+        return raw
+    return {
+        "ok": True,
+        "form_id": form_id,
+        "data_groups_count": len(payload["dataPermissionGroups"]),
+        "operation_groups_count": len(payload["operationPermissionGroups"]),
+        "message": "表单权限已覆盖写入（apaas 平台运行时立即生效，不需要 republish）",
+    }
+
+
+# ─── 应用访问授权 ──────────────────────────────────────────────────────────
+# 应用层"谁能看到这个应用"的开关，跟表单 / 数据权限独立：
+#   ALL  — 开放给租户内全员（最常用，部署完不开就所有人看不见）
+#   ROLE — 只给指定角色（object_ids = role_id 列表）
+#   USER — 只给指定用户（object_ids = user_id 列表）
+#   DEPT — 只给指定部门（object_ids = dept_id 列表）
+# 平台没有 query 接口，只能 set；一次只能一种 type（混合得调多次）。
+
+@mcp.tool()
+async def set_apaas_app_access(
+    env_id: int,
+    apaas_app_id: str,
+    object_type: str = "ALL",
+    object_ids: list = None,
+) -> dict:
+    """设置应用访问授权（控制"谁能进这个应用"，覆盖式）。
+
+    ⚠️ 应用部署完默认**不开放访问**，所有人都看不见 — 必须显式调一次本工具。
+
+    object_type:
+      - "ALL"  — 开放给租户内全部用户（推荐；object_ids 留空 / 留 []）
+      - "ROLE" — 只给指定角色（object_ids = list_apaas_app_roles 拿到的 role.id 列表）
+      - "USER" — 只给指定用户（object_ids = user_id 列表）
+      - "DEPT" — 只给指定部门（object_ids = dept_id 列表）
+
+    覆盖式：本调用替换该应用之前的所有访问授权。
+
+    平台限制：一次调用只能传一种 object_type；想混合（如管理员 ROLE + 几个具体 USER）
+    得分两次调用，但实际上 apaas 后调会覆盖先调 — 这种场景没法实现，建议用 ROLE。
+    """
+    if not apaas_app_id.strip():
+        return {"ok": False, "error_code": "INVALID_PARAMS", "message": "apaas_app_id 必填"}
+
+    obj_type = (object_type or "ALL").strip().upper()
+    if obj_type not in ("ALL", "ROLE", "USER", "DEPT"):
+        return {
+            "ok": False, "error_code": "INVALID_OBJECT_TYPE",
+            "message": f"object_type 必须是 ALL/ROLE/USER/DEPT 之一，收到 {object_type}",
+        }
+
+    ids = [str(x).strip() for x in (object_ids or []) if str(x).strip()]
+    if obj_type != "ALL" and not ids:
+        return {
+            "ok": False, "error_code": "MISSING_OBJECT_IDS",
+            "message": f"object_type={obj_type} 时 object_ids 必填，至少传 1 个 id",
+        }
+
+    ok, raw = await _with_client(env_id, "设应用访问授权",
+        lambda c: c.save_app_access(apaas_app_id.strip(), obj_type, ids))
+    if not ok:
+        return raw
+    return {
+        "ok": True,
+        "apaas_app_id": apaas_app_id,
+        "object_type": obj_type,
+        "object_ids_count": len(ids),
+        "message": f"应用访问授权已设为 {obj_type}"
+                   + (f"（{len(ids)} 个对象）" if ids else "（全员可见）"),
+    }
+
+
+# ─── 表单单组件 update ─────────────────────────────────────────────────────
+# 微调单个字段的 label / required / placeholder / defaultValue / 选项之类，
+# 不用走 SPEC 文档流。底层走 query_form_config → 改 → save_form_config 全量回写。
+
+# 常用 updates 字段（白名单提示给 LLM，但不强制 — apaas 组件 schema 字段还有不少）
+_FORM_COMPONENT_COMMON_FIELDS = (
+    "label", "required", "placeholder", "defaultValue",
+    "chooseOptions", "dictionaryChooseOptions", "multicolor",
+    "readonly", "hidden", "description", "tooltip",
+    "minValue", "maxValue", "maxLength",
+)
+
+
+@mcp.tool()
+async def update_apaas_form_component(
+    env_id: int,
+    apaas_app_id: str,
+    form_id: str,
+    component_label: str,
+    updates: dict,
+) -> dict:
+    """微调表单中某个组件的属性（按 label 精确匹配，单组件 update）。
+
+    底层：query_form_config → 找 label == component_label 的组件 → updates dict
+    merge 进去 → save_form_config 全量回写。
+
+    component_label 必须**精确匹配**组件当前的 label（区分大小写、空格敏感）；
+    匹配不上会 NOT_FOUND，不模糊匹配。
+
+    常用 updates 字段：
+      - label: 改组件标题（"申请人" → "提单人"）
+      - required: bool，是否必填
+      - placeholder: str，占位提示
+      - defaultValue: 默认值
+      - readonly: bool
+      - hidden: bool（隐藏字段，apaas 运行时不显示）
+      - description / tooltip: 提示文案
+      - chooseOptions: list，单选/多选/复选框选项
+      - dictionaryChooseOptions: list，字典选项（{value, label, code}）
+      - multicolor: bool，字典选项是否多色
+      - maxLength / minValue / maxValue: 输入限制
+
+    注意：
+      - componentType（组件类型）一般不要改 — 改了往往导致数据迁移问题
+      - modelField（绑定的模型字段 code）也别动 — 跟模型 field 强关联
+      - 不需要 republish，apaas 平台实时生效
+    """
+    if not (apaas_app_id.strip() and form_id.strip() and component_label.strip()):
+        return {
+            "ok": False, "error_code": "INVALID_PARAMS",
+            "message": "apaas_app_id+form_id+component_label 都必填",
+        }
+    if not isinstance(updates, dict) or not updates:
+        return {
+            "ok": False, "error_code": "INVALID_UPDATES",
+            "message": "updates 必须是非空 dict",
+        }
+
+    # 软提示：updates 里如果有不常见字段，提醒 LLM
+    unknown_fields = [k for k in updates.keys() if k not in _FORM_COMPONENT_COMMON_FIELDS]
+
+    ok, raw = await _with_client(env_id, "改表单组件",
+        lambda c: c.update_form_component(
+            apaas_app_id.strip(), form_id.strip(), component_label.strip(), updates,
+        ))
+    if not ok:
+        # apaas_client 找不到组件时 raise，被 _with_client 包装成 APAAS_CALL_FAILED
+        # 这里把 message 改成更精确的提示
+        if "未找到标签为" in str(raw.get("message", "")):
+            return {
+                "ok": False, "error_code": "COMPONENT_NOT_FOUND",
+                "message": f"表单 {form_id} 没有 label='{component_label}' 的组件；"
+                           f"先调 list_apaas_form_components 看现有 label",
+                "hint": "label 必须精确匹配（区分空格 / 标点 / 大小写）",
+            }
+        return raw
+
+    result = {
+        "ok": True,
+        "form_id": form_id,
+        "component_label": component_label,
+        "updated_fields": list(updates.keys()),
+        "message": f"组件「{component_label}」已更新 {len(updates)} 个字段（实时生效）",
+    }
+    if unknown_fields:
+        result["warning"] = (
+            f"updates 里有 {len(unknown_fields)} 个非常见字段：{unknown_fields}；"
+            f"已传给 apaas 但不保证生效，常见字段见 docstring"
+        )
+    return result
