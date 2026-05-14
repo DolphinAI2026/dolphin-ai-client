@@ -3314,3 +3314,204 @@ async def query_apaas_business_data(
         "items": items,
         "raw_keys": list(raw.keys()),
     }
+
+
+# ─── 流程 BPMN（写入式）─────────────────────────────────────────────────
+# apaas 平台没暴露按 app 维度 list 流程的 endpoint（实测 6 个候选 path 全 404
+# / 405），所以本块只做 write — 按 menu_id 维度覆盖式 set。每个 form 菜单
+# 最多 1 个流程，所以"覆盖"不会误伤别的流程。
+#
+# 抽自 step_executor.py:2200-2300 的 BPMN 构造逻辑，保留 LLM 友好 stages 数组
+# 输入 → 平台 nodes/edges/bpmn 输出。
+
+# 最小 BPMN XML 骨架（apaas 平台自己根据 nodes/edges 重建完整 BPMN）
+_BPMN_MIN_XML = (
+    '<?xml version="1.0" encoding="UTF-8"?>'
+    '<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" '
+    'xmlns:activiti="http://activiti.org/bpmn" '
+    'id="Definitions_1" targetNamespace="http://bpmn.io/schema/bpmn">'
+    '<process id="Process_1" isExecutable="true">'
+    '<startEvent id="START" name="开始"/>'
+    '<endEvent id="END" name="结束"/>'
+    '</process></definitions>'
+)
+
+# 节点用的固定按钮模板
+_APPROVE_BUTTONS = [
+    {"buttonCode": "APPROVE", "buttonName": "同意", "buttonLabel": "同意",
+     "buttonStatus": True, "buttonStyle": "primary", "buttonLabelI18nAssociated": False},
+    {"buttonCode": "REJECT", "buttonName": "拒绝", "buttonLabel": "拒绝",
+     "buttonStatus": True, "buttonStyle": "primary", "buttonLabelI18nAssociated": False},
+]
+_START_BUTTONS = [
+    {"buttonCode": "NORMAL_TERMINATE", "buttonName": "终止", "buttonLabel": "终止",
+     "buttonStatus": False, "buttonStyle": "primary", "buttonLabelI18nAssociated": False},
+    {"buttonCode": "RESTART", "buttonName": "重新提交", "buttonLabel": "重新提交",
+     "buttonStatus": False, "buttonStyle": "primary", "buttonLabelI18nAssociated": False},
+    {"buttonCode": "WITHDRAW", "buttonName": "撤回", "buttonLabel": "撤回",
+     "buttonStatus": False, "buttonStyle": "primary", "buttonLabelI18nAssociated": False,
+     "withdrawalType": "NEXT_NODE", "withdrawalList": []},
+]
+_COMMENT_CONFIG = {"required": False, "attachmentUpload": True, "requiredBtns": [], "show": True}
+_PHRASE_CONFIG = {"handleType": "INPUT_TYPE", "phrase": "", "status": False}
+
+
+def _make_bpmn_node(node_id: str, title: str, ntype: str, y: float, approvers=None) -> dict:
+    """构造单个 BPMN node — 同 step_executor._make_node 的逻辑。"""
+    n = {
+        "id": node_id, "nodeId": node_id, "timeBoudries": [],
+        "width": "64.0" if ntype in ("START", "END") else "122.0",
+        "height": "64.0" if ntype in ("START", "END") else "48.0",
+        "x": 372.0, "y": y,
+        "data": {
+            "nodeId": node_id, "title": title, "type": ntype,
+            "enableComponentPermission": True, "titleI18nAssociated": False,
+            "approveCommentConfig": _COMMENT_CONFIG, "approvePhraseConfig": _PHRASE_CONFIG,
+            "remindList": [], "processEventStatus": False, "saveFlag": True,
+        },
+    }
+    if ntype == "START":
+        n["data"]["formButtons"] = _START_BUTTONS
+    elif ntype == "APPROVE":
+        n["data"]["approveType"] = "SINGLE"
+        n["data"]["approveButtons"] = _APPROVE_BUTTONS
+        n["data"]["approvers"] = approvers or []
+    return n
+
+
+def _build_bpmn_payload_from_stages(menu_id: str, name: str, code: str, stages: list) -> dict:
+    """把 LLM 友好的 stages 数组转成 apaas processConfig API 的 payload。
+
+    stages: [{name, approver_type ROLE|SUBMITTER|USER, approver_code, approver_name?}]
+    """
+    nodes = [
+        _make_bpmn_node("START", "开始", "START", 32.0),
+        _make_bpmn_node("START_HIDDEN", "发起申请", "APPROVE", 128.0,
+                        [{"approverType": "SUBMITTER",
+                          "approverName": "表单提交人",
+                          "approverCode": "SUBMITTER"}]),
+    ]
+
+    y_pos = 224.0
+    for idx, stage in enumerate(stages, start=1):
+        approver_type = (stage.get("approver_type") or "ROLE").strip().upper()
+        approver_code = str(stage.get("approver_code") or "").strip()
+        approver_name = (stage.get("approver_name") or stage.get("name")
+                         or approver_code).strip()
+
+        if approver_type == "SUBMITTER":
+            approvers = [{"approverType": "SUBMITTER",
+                          "approverName": "表单提交人", "approverCode": "SUBMITTER"}]
+        elif approver_type in ("ROLE", "ROLE_USER"):
+            approvers = [{"approverType": "ROLE",
+                          "approverName": approver_name,
+                          "approverCode": approver_code}]
+        elif approver_type == "USER":
+            approvers = [{"approverType": "USER",
+                          "approverName": approver_name,
+                          "approverCode": approver_code}]
+        else:
+            # 兜底
+            approvers = [{"approverType": "ROLE",
+                          "approverName": approver_name,
+                          "approverCode": approver_code or "default"}]
+
+        stage_name = stage.get("name") or f"审批 {idx}"
+        nodes.append(_make_bpmn_node(f"UserTask_{idx}", stage_name, "APPROVE", y_pos, approvers))
+        y_pos += 96.0
+
+    nodes.append(_make_bpmn_node("END", "结束", "END", y_pos))
+
+    # 顺序连边
+    edges = []
+    for i in range(len(nodes) - 1):
+        edges.append({
+            "id": f"SequenceFlow_{nodes[i+1]['id']}",
+            "source": nodes[i]["id"],
+            "target": nodes[i+1]["id"],
+            "data": {"titleI18nAssociated": False},
+        })
+
+    return {
+        "appId": "",  # client 会从 header xdapappid 拿
+        "menuId": menu_id,
+        "processCode": code,
+        "processName": name,
+        "bpmn": _BPMN_MIN_XML,
+        "nodes": nodes,
+        "edges": edges,
+    }
+
+
+@mcp.tool()
+async def set_apaas_app_process(
+    env_id: int,
+    apaas_app_id: str,
+    menu_id: str,
+    process_name: str,
+    process_code: str,
+    stages: list,
+) -> dict:
+    """给某个表单菜单设置审批流程（按 menu_id 覆盖式 set，每个 form 菜单最多 1 流程）。
+
+    ⚠️ apaas 平台没暴露 list 流程的 endpoint — 这工具是「写盲」（不知道改前现状）。
+    每个表单菜单最多 1 个流程，所以覆盖只影响这个 menu 自己的流程，不动其他 form。
+
+    stages 数组每项：
+      - name: 阶段名（"部门主管审批"）
+      - approver_type: ROLE / SUBMITTER / USER（最常 ROLE）
+      - approver_code: 审批人 code（ROLE 时是 roleCode；USER 时是 userId）
+      - approver_name: 显示名（可选，默认用 name）
+
+    示例 — 请假审批 2 级：
+        stages=[
+            {"name":"部门主管审批","approver_type":"ROLE","approver_code":"manager"},
+            {"name":"HR 审批","approver_type":"ROLE","approver_code":"hr"}
+        ]
+
+    工具自动加 START / START_HIDDEN（发起申请） / END 三个固定节点，
+    stages 串成 UserTask_1 → UserTask_2 → ... 顺序审批；想分支 / 会签等高级
+    场景请走 SPEC 文档流 + apaas 平台 UI 改。
+
+    menu_id 怎么拿：先 list_apaas_app_menus 看现有菜单，找 form_id 不空的那行。
+
+    approver_code 怎么拿：
+      - ROLE 时：先 list_apaas_app_roles 拿 role.roleCode（注意是 code 不是 id）
+      - USER 时：apaas 用户 id（暂没暴露 list_users 工具，得平台 UI 看）
+    """
+    if not (apaas_app_id.strip() and menu_id.strip() and
+            process_name.strip() and process_code.strip()):
+        return {
+            "ok": False, "error_code": "INVALID_PARAMS",
+            "message": "apaas_app_id+menu_id+process_name+process_code 都必填",
+        }
+    if not isinstance(stages, list) or not stages:
+        return {
+            "ok": False, "error_code": "INVALID_STAGES",
+            "message": "stages 必须是非空数组（至少 1 个审批阶段）",
+        }
+
+    payload = _build_bpmn_payload_from_stages(
+        menu_id=menu_id.strip(),
+        name=process_name.strip(),
+        code=process_code.strip(),
+        stages=stages,
+    )
+    payload["appId"] = apaas_app_id.strip()  # client 拼 header 时也要
+
+    ok, raw = await _with_client(env_id, "设流程",
+        lambda c: c.save_process_config(apaas_app_id.strip(), payload))
+    if not ok:
+        return raw
+
+    return {
+        "ok": True,
+        "menu_id": menu_id,
+        "process_name": process_name,
+        "process_code": process_code,
+        "stages_count": len(stages),
+        "nodes_count": len(payload["nodes"]),
+        "message": (f"流程「{process_name}」已设到菜单 {menu_id}："
+                    f"{len(stages)} 个审批阶段（含 START / END / 提交人 3 个固定节点）"),
+        "next_step": "调 republish_apaas_app 让运行时生效（重新发布应用）",
+    }

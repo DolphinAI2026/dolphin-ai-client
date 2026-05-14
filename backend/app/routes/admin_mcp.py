@@ -70,6 +70,10 @@ def _classify_tool(name: str) -> tuple[str, str]:
     if name == "query_apaas_business_data":
         return ("apaas_business_data", "aPaaS 业务数据")
 
+    # 流程 BPMN（写盲，apaas 没暴露 list endpoint）
+    if name == "set_apaas_app_process":
+        return ("apaas_process", "aPaaS 审批流程")
+
     # aPaaS 平台内省（元数据查询）
     if name.startswith("list_apaas_") or name.startswith("get_apaas_") or \
        name.startswith("check_app_") or name.startswith("validate_apaas_"):
