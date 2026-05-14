@@ -90,6 +90,10 @@ async def get_tool_schemas_openai() -> list[dict]:
     """把 MCP 的工具元信息转成 OpenAI tool calling 格式 schema 数组。
 
     过滤掉 stub 工具，避免 LLM 误调拿到 NOT_IMPLEMENTED。
+
+    剥掉 tenant_id / user_id 字段不暴露给 LLM — 这俩是后端身份字段，由
+    ai_chat dispatcher 从 session 注入；让 LLM 看到反而会自作主张填 0
+    导致工具内部身份解析失败（2026-05-14 修）。
     """
     loaded = await ensure_loaded()
     out = []
@@ -97,14 +101,33 @@ async def get_tool_schemas_openai() -> list[dict]:
         name = t.get("name")
         if not name or name in _STUB_TOOLS:
             continue
+        input_schema = t.get("inputSchema") or {"type": "object", "properties": {}}
+        cleaned_schema = _strip_identity_params(input_schema)
         out.append({
             "type": "function",
             "function": {
                 "name": name,
                 "description": (t.get("description") or "")[:1024],
-                "parameters": t.get("inputSchema") or {"type": "object", "properties": {}},
+                "parameters": cleaned_schema,
             },
         })
+    return out
+
+
+def _strip_identity_params(schema: dict) -> dict:
+    """从 JSON Schema 里剥掉 tenant_id / user_id 字段，让 LLM 看不到。"""
+    if not isinstance(schema, dict):
+        return schema
+    out = {k: v for k, v in schema.items() if k != "properties" and k != "required"}
+    props = (schema.get("properties") or {}).copy()
+    for hidden in ("tenant_id", "user_id"):
+        props.pop(hidden, None)
+    if props:
+        out["properties"] = props
+    required = schema.get("required") or []
+    required = [r for r in required if r not in ("tenant_id", "user_id")]
+    if required:
+        out["required"] = required
     return out
 
 
@@ -131,12 +154,15 @@ async def call_tool(tool_name: str, args: dict, tenant_id: int = 0, user_id: int
             "message": "MCP_API_KEYS 未配置",
         })
 
-    # 自动塞身份（很多工具都有 tenant_id / user_id 隐式参数，默认 0 会 fallback admin）
+    # 自动塞身份 — 强制覆盖。
+    # 2026-05-14 修：之前用 `if 'tenant_id' not in enriched` 软合并，结果 LLM 看
+    # 工具 schema 里有 tenant_id/user_id 字段，自作主张填 0 → 我们这边不敢覆盖 →
+    # MCP 工具内部 _resolve_identity(0, 0) 报"缺少身份信息" → agent hallucinate
+    # 说"系统没注入身份"误导用户。
+    # 这俩是后端身份字段，**永远不让 LLM 决定**，session 给啥就用啥。
     enriched = {**(args or {})}
-    if "tenant_id" not in enriched:
-        enriched["tenant_id"] = tenant_id
-    if "user_id" not in enriched:
-        enriched["user_id"] = user_id
+    enriched["tenant_id"] = tenant_id
+    enriched["user_id"] = user_id
 
     body = {
         "jsonrpc": "2.0", "id": 1,
