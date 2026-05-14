@@ -3166,3 +3166,151 @@ async def update_apaas_form_component(
             f"已传给 apaas 但不保证生效，常见字段见 docstring"
         )
     return result
+
+
+# ─── 字典 disable（补 CRUD 的 D）─────────────────────────────────────────
+# apaas 平台没真 delete，"禁用"是终态（运行时不再可选，但历史数据保留引用）。
+# 配套 incremental_executor._disable_dict / _disable_dict_option 用的 GET 接口。
+
+@mcp.tool()
+async def disable_apaas_app_dict(env_id: int, apaas_app_id: str, dict_id: str, dict_name: str = "") -> dict:
+    """禁用应用字典（apaas 没真 delete，禁用是终态）。
+
+    ⚠️ 禁用后：
+      - 运行时表单上该字典作为下拉选项不再可选
+      - 已存在的业务数据里引用此字典的字段保留原值不动
+      - 不可逆 — apaas 没暴露"重新启用"接口（如果有需求再单独加 enable）
+
+    dict_id 怎么拿：先调 list_apaas_app_dicts 看现有字典 + id。
+    """
+    if not (apaas_app_id.strip() and dict_id.strip()):
+        return {"ok": False, "error_code": "INVALID_PARAMS", "message": "apaas_app_id+dict_id 都必填"}
+    ok, raw = await _with_client(env_id, "禁用字典",
+        lambda c: c.disable_dict(apaas_app_id.strip(), dict_id.strip()))
+    if not ok:
+        return raw
+    return {
+        "ok": True,
+        "dict_id": dict_id,
+        "message": f"字典「{dict_name or dict_id}」已禁用（运行时不可选，历史数据保留）",
+    }
+
+
+@mcp.tool()
+async def disable_apaas_dict_option(
+    env_id: int,
+    apaas_app_id: str,
+    option_id: str,
+    option_name: str = "",
+) -> dict:
+    """禁用字典里某个选项（apaas 没真 delete，禁用是终态）。
+
+    用法：先调 list_apaas_app_dicts 拿字典 → 看 options 列表 → 拿到要禁用的
+    option.id 传进来。
+
+    禁用后选项不再出现在新建表单下拉里，已选过此值的历史数据保留。
+    """
+    if not (apaas_app_id.strip() and option_id.strip()):
+        return {"ok": False, "error_code": "INVALID_PARAMS", "message": "apaas_app_id+option_id 都必填"}
+    ok, raw = await _with_client(env_id, "禁用字典选项",
+        lambda c: c.disable_dict_option(apaas_app_id.strip(), option_id.strip()))
+    if not ok:
+        return raw
+    return {
+        "ok": True,
+        "option_id": option_id,
+        "message": f"字典选项「{option_name or option_id}」已禁用",
+    }
+
+
+# ─── 业务数据查询（运行时 data，dolphin agent 看数据）──────────────────────
+# 之前所有 apaas 工具都在搭建层（角色 / 字典 / 模型 / 表单 / 权限 / 菜单），
+# 没工具能看运行时数据 — 用户在「请假申请」表单提交的具体请假记录。
+# 这是 dolphin agent 「我帮你查上周的请假情况」类对话的前置能力。
+#
+# 现阶段只暴露**只读**。写入（saveFormData）暂搁 — 风险高，得单独权限设计。
+
+@mcp.tool()
+async def query_apaas_business_data(
+    env_id: int,
+    apaas_app_id: str,
+    form_id: str,
+    tab_id: str = "",
+    page: int = 1,
+    page_size: int = 20,
+) -> dict:
+    """查询某表单的运行时业务数据（用户提交的数据行，分页）。
+
+    底层调 POST /xdap-app/business/v2/query/listPageBusinessData — 跟 apaas
+    平台表单"列表页"页面背后的真接口一致。
+
+    tab_id（表单视图 id）必填：tab_id="" 时本工具会自动调 list_apaas_form_views
+    拿默认 tab，省一步；想指定特定视图请显式传 tab_id。
+
+    返回：
+      - items: 数据行数组（每行 dict，key 是字段 uuid，value 是字段值）
+      - total: 总行数
+      - page / page_size: 当前页
+      - raw_keys: apaas 平台返回的原始 dict keys（调试用）
+
+    ⚠️ 只读，不支持写入。
+    ⚠️ page_size 上限 200。
+    ⚠️ 不支持 filter / sort — 想筛过滤拿到一页后客户端 in-memory 筛。
+    """
+    if not (apaas_app_id.strip() and form_id.strip()):
+        return {"ok": False, "error_code": "INVALID_PARAMS", "message": "apaas_app_id+form_id 都必填"}
+
+    page = max(1, int(page or 1))
+    page_size = max(1, min(200, int(page_size or 20)))
+
+    # 1) tab_id 没传时自动拿默认 tab
+    resolved_tab = (tab_id or "").strip()
+    if not resolved_tab:
+        ok_v, views_raw = await _with_client(env_id, "拿表单默认 tab",
+            lambda c: c.query_form_views(apaas_app_id.strip(), form_id.strip()))
+        if not ok_v:
+            return {
+                "ok": False, "error_code": "TAB_ID_AUTO_RESOLVE_FAILED",
+                "message": f"未传 tab_id 且自动拿默认 tab 失败：{views_raw.get('message')}",
+                "hint": "显式传 tab_id（先调 list_apaas_form_views 拿）",
+            }
+        views = views_raw if isinstance(views_raw, list) else (views_raw or {}).get("views") or []
+        # 找 isDefault / 取第一个
+        default_tab = next((v for v in views if v.get("isDefault") or v.get("default")), None) or (views[0] if views else None)
+        if not default_tab:
+            return {
+                "ok": False, "error_code": "NO_DEFAULT_TAB",
+                "message": f"表单 {form_id} 没有视图（tab），无法查业务数据",
+            }
+        resolved_tab = str(default_tab.get("id") or default_tab.get("tabId") or "").strip()
+        if not resolved_tab:
+            return {
+                "ok": False, "error_code": "NO_DEFAULT_TAB",
+                "message": "默认视图缺 id 字段",
+                "hint": f"raw default_tab keys: {list(default_tab.keys()) if isinstance(default_tab, dict) else 'not dict'}",
+            }
+
+    # 2) 真查
+    ok, raw = await _with_client(env_id, "查业务数据",
+        lambda c: c.query_business_data(
+            apaas_app_id.strip(), form_id.strip(), resolved_tab,
+            page=page, page_size=page_size,
+        ))
+    if not ok:
+        return raw
+
+    # apaas v2 接口返回 schema：{code, message, total, table:[...]}
+    # `table` 才是数据数组（不是 data / items / records，2026-05-14 实测）
+    items = raw.get("table") or raw.get("data") or raw.get("records") or raw.get("items") or []
+    total = raw.get("total") or raw.get("totalCount") or len(items)
+    return {
+        "ok": True,
+        "form_id": form_id,
+        "tab_id": resolved_tab,
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "items_count": len(items),
+        "items": items,
+        "raw_keys": list(raw.keys()),
+    }

@@ -1346,6 +1346,99 @@ class APaaSClient:
         """查询应用所有菜单详情（字段比 manageAppMenu 更完整）"""
         return await self._post_resource("/menu/query/allAppMenu", {"appId": app_id}, app_id)
 
+    async def disable_dict(self, app_id: str, dict_id: str) -> dict:
+        """禁用字典（apaas 没真 delete，禁用是终态）。
+
+        GET /xdap-app/dataDictionary/disable/dataDictionary?id=...
+        """
+        url = f"{self.base_url}/xdap-app/dataDictionary/disable/dataDictionary?id={dict_id}"
+        _log_request("GET", url)
+        start = time.time()
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
+            response = await client.get(url, headers=self._get_headers(app_id))
+            elapsed_ms = (time.time() - start) * 1000
+            response.raise_for_status()
+            data = response.json()
+            _log_response(url, response.status_code, data, elapsed_ms, method="GET")
+            if data.get("code") not in ("ok", 200):
+                raise Exception(data.get("message", "禁用字典失败"))
+            logger.info(f"禁用字典成功: dict_id={dict_id}")
+            return data
+
+    async def disable_dict_option(self, app_id: str, option_id: str) -> dict:
+        """禁用字典选项（apaas 没真 delete）。
+
+        GET /xdap-app/dataDictionary/disable/dictionaryValue?id=...
+        """
+        url = f"{self.base_url}/xdap-app/dataDictionary/disable/dictionaryValue?id={option_id}"
+        _log_request("GET", url)
+        start = time.time()
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
+            response = await client.get(url, headers=self._get_headers(app_id))
+            elapsed_ms = (time.time() - start) * 1000
+            response.raise_for_status()
+            data = response.json()
+            _log_response(url, response.status_code, data, elapsed_ms, method="GET")
+            if data.get("code") not in ("ok", 200):
+                raise Exception(data.get("message", "禁用字典选项失败"))
+            logger.info(f"禁用字典选项成功: option_id={option_id}")
+            return data
+
+    async def query_business_data(
+        self,
+        app_id: str,
+        form_id: str,
+        tab_id: str,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> dict:
+        """查询表单运行时业务数据（用户提交的应用数据行，分页）。
+
+        POST /xdap-app/business/v2/query/listPageBusinessData
+        （这是表单"列表页"页面背后的真接口，跟 dev_scene_runtime_api.py 里
+         给自开发包用的写法一致）
+
+        参数：
+          - formId / tabId 必传（tabId 即表单视图 id，调 query_form_views 拿默认 tab）
+          - page / pageSize 默认 1 / 20，pageSize 上限 200
+          - appId 不传（走 header xdapappid，平台自己拿）
+        """
+        url = f"{self.base_url}/xdap-app/business/v2/query/listPageBusinessData"
+        payload = {
+            "formId": form_id,
+            "tabId": tab_id,
+            "page": int(page),
+            "pageSize": int(page_size),
+            "selectorFilterConditionList": [],
+            "filterConditionGroup": [],
+            "orders": [],
+            "type": "initialize",
+        }
+        _log_request("POST", url, payload)
+        start = time.time()
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
+            response = await client.post(url, headers=self._get_headers(app_id), json=payload)
+            elapsed_ms = (time.time() - start) * 1000
+            try:
+                data = response.json()
+            except Exception:
+                body_preview = response.text[:500] if response.text else "(empty body)"
+                _log_response(url, response.status_code, {"raw_body_preview": body_preview},
+                              elapsed_ms, method="POST", request_body=_to_json(payload))
+                raise Exception(
+                    f"查询业务数据失败（HTTP {response.status_code}，非 JSON 响应）：{body_preview}"
+                )
+
+            _log_response(url, response.status_code, data, elapsed_ms, method="POST",
+                          request_body=_to_json(payload))
+
+            if response.status_code >= 400 or data.get("code") not in ("ok", 200):
+                raise Exception(
+                    f"查询业务数据失败 (HTTP {response.status_code}, code={data.get('code')}): "
+                    f"{data.get('message') or data.get('msg') or 'unknown'} | full={_to_json(data)[:300]}"
+                )
+            return data  # 平台直接返 {code, data:[...], total:N}，不嵌套
+
     async def resolve_default_menu_datasource(self, app_id: str, form_id: str = "") -> tuple[str, str]:
         """解析应用菜单默认数据源绑定信息"""
         resolved_form_id = str(form_id or "").strip()

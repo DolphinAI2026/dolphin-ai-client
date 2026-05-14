@@ -61,8 +61,14 @@ def _classify_tool(name: str) -> tuple[str, str]:
         "list_apaas_form_permissions", "set_apaas_form_permissions",
         # 应用访问授权 + 单组件 update
         "set_apaas_app_access", "update_apaas_form_component",
+        # 字典 / 选项 disable（apaas 没真 delete）
+        "disable_apaas_app_dict", "disable_apaas_dict_option",
     ):
         return ("apaas_config_edit", "aPaaS 配置精细操作")
+
+    # 业务数据（运行时数据查询，跟搭建层不一样）
+    if name == "query_apaas_business_data":
+        return ("apaas_business_data", "aPaaS 业务数据")
 
     # aPaaS 平台内省（元数据查询）
     if name.startswith("list_apaas_") or name.startswith("get_apaas_") or \
