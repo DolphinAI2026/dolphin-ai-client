@@ -18,17 +18,49 @@ router = APIRouter(prefix="/admin/mcp", tags=["admin-mcp"])
 
 
 def _classify_tool(name: str) -> tuple[str, str]:
-    """按名字前缀粗分类。返回 (category_key, category_label)。"""
-    if name.startswith("list_apaas_") or name.startswith("get_apaas_") or name.startswith("check_app_") or name.startswith("validate_apaas_"):
+    """按名字前缀 / 关键词粗分类。返回 (category_key, category_label)。"""
+    # 自开发发布（aPaaS 平台侧 - 上传/关联/重发）
+    if name in (
+        "enable_apaas_self_dev_config", "list_apaas_app_dev_kits",
+        "attach_dev_packages_to_apaas_app", "republish_apaas_app",
+        "create_apaas_self_dev_menu", "list_apaas_resource_pool_kits",
+        "upload_external_zip_to_apaas",
+    ):
+        return ("self_dev_publish", "aPaaS 自开发发布")
+
+    # Workspace 自开发（本地 ai-builder 工作区文件 / 命令）
+    if name.startswith("read_workspace") or name.startswith("write_workspace") or \
+       name.startswith("edit_workspace") or name.startswith("glob_workspace") or \
+       name.startswith("grep_workspace") or name.startswith("run_workspace") or \
+       name in ("create_dev_workspace", "get_dev_workspace_status",
+                "save_dev_spec", "import_zip_to_workspace", "publish_dev_workspace"):
+        return ("workspace_dev", "Workspace 自开发")
+
+    # 场景 / 规范
+    if name.startswith("list_dev_scene") or name.startswith("get_dev_scene"):
+        return ("dev_scene", "自开发场景规范")
+
+    # aPaaS 平台内省（元数据查询）
+    if name.startswith("list_apaas_") or name.startswith("get_apaas_") or \
+       name.startswith("check_app_") or name.startswith("validate_apaas_"):
         return ("apaas_introspect", "aPaaS 平台内省")
+
+    # 文档解析 / 校验
     if name in ("parse_design_doc", "submit_design_doc", "validate_builder_doc"):
         return ("doc", "文档解析 / 校验")
-    if name in ("generate_app_from_doc", "list_my_applications", "get_application",
-                "update_app_from_doc", "get_change_plan", "execute_change_plan",
-                "publish_application"):
+
+    # 应用生命周期（创建 / 部署 / 发布 / 变更计划）
+    if name in (
+        "generate_app_from_doc", "list_my_applications", "get_application",
+        "update_app_from_doc", "get_change_plan", "execute_change_plan",
+        "deploy_application", "publish_application",
+    ):
         return ("app_lifecycle", "应用生命周期")
+
+    # 平台环境
     if name == "list_platform_envs":
         return ("env", "平台环境")
+
     return ("other", "其他")
 
 

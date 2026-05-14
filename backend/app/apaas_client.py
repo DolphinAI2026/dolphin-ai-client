@@ -663,6 +663,191 @@ class APaaSClient:
                 return app
         return {}
 
+    # ─── 自开发资源相关 5 个方法（合并自 auth-refactor-phase-1）─────────────
+
+    async def enable_self_dev_config(self, app_id: str, status: str = "ENABLE") -> dict:
+        """开启 / 关闭应用的自开发配置开关。
+
+        endpoint: GET /xdap-app/sourceRelation/update
+        status: 'ENABLE' | 'DISABLE'
+
+        前端入口：apaas 平台「应用详情 → 高级设置 → 自开发配置」开关。
+        开启后才能调 attach_apaas_source_relation 把自开发包关联到应用。
+        """
+        url = f"{self.base_url}/xdap-app/sourceRelation/update"
+        params = {"timestamp": self._get_timestamp(), "appId": app_id, "status": status}
+        _log_request("GET", url, params=params)
+        start = time.time()
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
+            response = await client.get(url, headers=self._get_headers(app_id), params=params)
+            elapsed_ms = (time.time() - start) * 1000
+            response.raise_for_status()
+            data = response.json()
+            _log_response(url, response.status_code, data, elapsed_ms)
+            if data.get("code") not in ("ok", 200):
+                raise Exception(data.get("message", f"开启自开发配置失败 (status={status})"))
+            logger.info(f"应用自开发配置 {status}: app_id={app_id}")
+            return data
+
+    async def query_app_dev_kits(
+        self,
+        app_id: str,
+        file_name: str = "",
+        file_type: str = "",
+        page_size: int = 50,
+    ) -> list:
+        """列出当前租户下可关联的自开发包（zip）— 含 id / fileName / fileType / size。
+
+        endpoint: POST /xdap-app/selfdevelopment/query/allDevelopmentKit
+        body: {"keyWord": "<filename or prefix>", "page": 1, "pageSize": N}
+
+        attach_apaas_source_relation 需要 zip 的 **id**，所以先调本方法做
+        fileName → id 反查；调用方按 fileName 精准匹配。
+        """
+        url = f"{self.base_url}/xdap-app/selfdevelopment/query/allDevelopmentKit"
+        payload = {"keyWord": file_name or "", "page": 1, "pageSize": page_size}
+        _log_request("POST", url, payload)
+        start = time.time()
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
+            response = await client.post(url, headers=self._get_headers(app_id), json=payload)
+            elapsed_ms = (time.time() - start) * 1000
+            response.raise_for_status()
+            data = response.json()
+            _log_response(url, response.status_code, data, elapsed_ms, request_body=_to_json(payload))
+            if data.get("code") != "ok":
+                return []
+            kits = data.get("table") or (data.get("data") or {}).get("list") or []
+            return kits if isinstance(kits, list) else []
+
+    async def attach_apaas_source_relation(
+        self,
+        app_id: str,
+        object_ids: list[str],
+        object_type: str = "DEVELOPMENT_KIT",
+    ) -> dict:
+        """把已上传到平台的自开发包关联到应用的「自开发资源」。
+
+        endpoint: POST /xdap-app/apaasSourceRelation/save
+
+        前置：app 必须先开 enable_self_dev_config(ENABLE)，否则 save 后看不到。
+        后续：要看到组件生效，必须 deploy_app 重发版本（自开发变更不立即生效）。
+        """
+        if not object_ids:
+            raise ValueError("object_ids 不能为空")
+        url = f"{self.base_url}/xdap-app/apaasSourceRelation/save"
+        params = {"timestamp": self._get_timestamp()}
+        payload = {
+            "objectType": object_type,
+            "appId": app_id,
+            "objectIds": [str(i) for i in object_ids],
+        }
+        _log_request("POST", url, payload, params=params)
+        start = time.time()
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
+            response = await client.post(
+                url, headers=self._get_headers(app_id), params=params, json=payload,
+            )
+            elapsed_ms = (time.time() - start) * 1000
+            response.raise_for_status()
+            data = response.json()
+            _log_response(url, response.status_code, data, elapsed_ms, request_body=_to_json(payload))
+            if data.get("code") not in ("ok", 200):
+                raise Exception(data.get("message", "保存自开发资源关联失败"))
+            logger.info(f"自开发资源关联保存成功: app_id={app_id} ids={object_ids}")
+            return data
+
+    async def save_app_access(
+        self,
+        app_id: str,
+        object_type: str = "ALL",
+        object_ids: list[str] | None = None,
+    ) -> dict:
+        """配置应用访问对象（即"谁能进这个应用"）。
+
+        平台默认应用部署完不开放访问，必须显式调一次。
+
+        object_type:
+          - "ALL"：开放给租户内全部用户（推荐，object_ids 留空）
+          - "ROLE" / "DEPT" / "USER"：object_ids 填具体 id 列表
+        """
+        url = f"{self.base_url}/xdap-app/appAccess/save"
+        params = {"timestamp": self._get_timestamp()}
+        payload = {
+            "appId": str(app_id),
+            "objectType": object_type,
+            "objectIds": list(object_ids or []),
+        }
+        _log_request("POST", url, payload, params=params)
+        start = time.time()
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
+            response = await client.post(
+                url, headers=self._get_headers(app_id=app_id),
+                params=params, json=payload,
+            )
+            elapsed_ms = (time.time() - start) * 1000
+            response.raise_for_status()
+            data = response.json()
+            _log_response(url, response.status_code, data, elapsed_ms, method="POST", request_body=_to_json(payload))
+            if data.get("code") not in ("ok", 200):
+                raise Exception(data.get("message", "配置应用访问权限失败"))
+            logger.info(f"应用访问权限已开放: app_id={app_id}, object_type={object_type}")
+            return data.get("data") or {"ok": True}
+
+    async def create_self_dev_menu(
+        self,
+        app_id: str,
+        menu_name: str,
+        link_url: str,
+        parent_id: str = "",
+        menu_icon: str = "userInfo",
+        icon_color: str = "#027AFF",
+        menu_display: str = "PC",
+        menu_order: int | None = None,
+    ) -> dict:
+        """创建自开发页面菜单 — POST /menu/save/menu (menuType=CUSTOM)。
+
+        跟 create_menu 区别：
+          - menuType: "CUSTOM"（自开发） vs "MENU/MODEL"（普通表单菜单）
+          - linkUrl: "apaas-custom-xxx"（自开发组件注册名） vs formId
+        """
+        url = f"{self.base_url}/xdap-app/menu/save/menu"
+        payload = {
+            "appId": app_id,
+            "menuName": menu_name,
+            "menuNameI18nResourceCode": "",
+            "menuNameI18nAssociated": False,
+            "menuNameI18n": {},
+            "menuIcon": menu_icon,
+            "datasourceId": "",
+            "datasourceName": "",
+            "menuModelType": "DATABASE",
+            "menuDisplay": menu_display,
+            "iconColor": icon_color,
+            "cusIconStatus": "DISABLE",
+            "newWindowStatus": "DISABLE",
+            "menuCustomIcon": "",
+            "linkUrl": link_url,
+            "menuType": "CUSTOM",
+        }
+        if parent_id:
+            payload["parentId"] = str(parent_id)
+        if menu_order is not None:
+            payload["menuOrder"] = int(menu_order)
+        _log_request("POST", url, payload)
+        start = time.time()
+        async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
+            response = await client.post(url, headers=self._get_headers(app_id), json=payload)
+            elapsed_ms = (time.time() - start) * 1000
+            response.raise_for_status()
+            data = response.json()
+            _log_response(url, response.status_code, data, elapsed_ms, request_body=_to_json(payload))
+            if data.get("code") not in ("ok", 200):
+                raise Exception(data.get("message", "创建自开发菜单失败"))
+            logger.info(f"自开发菜单创建成功: app_id={app_id} name={menu_name}")
+            return data
+
+    # ─── /自开发资源 ─────────────────────────────────────────────────
+
     async def deploy_app(self, app_id: str, version: str, abstract: str = "") -> dict:
         """发布应用
 
