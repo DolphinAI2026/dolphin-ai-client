@@ -1,0 +1,6 @@
+30. [GET] https://dolphin-trial.definesys.cn/runtime-config.json => [200] 
+47. [GET] https://dolphin-trial.definesys.cn/runtime-config.json => [200] 
+49. [GET] https://dolphin-trial.definesys.cn/api/agentChat/agent/run/runtime/76b2b8cecc => [404] 
+58. [GET] https://dolphin-trial.definesys.cn/api/agentChat/agent/run/runtime/76b2b8cecc => [404] 
+
+Note: 41 static requests not shown, run with "static" option to see them.

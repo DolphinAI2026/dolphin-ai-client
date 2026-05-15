@@ -1661,10 +1661,11 @@ const showBuilderPhaseStrip = computed(() =>
   !useSpecMode.value &&
   showAnyBuilderArtifactPanel.value
 )
-const showBuilderChatSide = computed(() =>
-  !embedMode.value &&
-  (!SHOW_PLATFORM_CONFIG || activeView.value === 'builder')
-)
+// 2026-05-15 按 [[arch_decision_mcp_provider_2026_05_14]] "不再深度融合 ai_chat 等
+// 内置 agent" 决策砍掉左侧 AI 助手对话区（DolphinAgentEmbed iframe）：用户只需点
+// 右上角"开始构建"按钮即可。右侧 SPEC 区因 .single-pane class 自动 full-width。
+// 老 computed 逻辑保留作 ref，下次彻底砍 chat-side block 时一并清。
+const showBuilderChatSide = computed(() => false)
 const showBuilderComposer = computed(() => showBuilderChatSide.value)
 const showDeployProgressInline = computed(() => deploySteps.value.length > 0 || deployOpen.value || isPlatformDeployed.value)
 // 用户已决定废弃 "已部署应用版本化视图"：右侧永远显示文档（单文档或 diff），
