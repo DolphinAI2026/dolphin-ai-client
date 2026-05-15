@@ -58,7 +58,16 @@ RUN npm run build \
 
 
 # ------------------------------------------------------------
-# stage 3: 运行时镜像
+# stage 3: JDK runtimes for backend packaging
+#   - aPaaS 4.x: JDK 8 / Java 1.8
+#   - aPaaS 5.x: JDK 17
+# ------------------------------------------------------------
+FROM eclipse-temurin:8-jdk-jammy AS jdk8
+FROM eclipse-temurin:17-jdk-jammy AS jdk17
+
+
+# ------------------------------------------------------------
+# stage 4: 运行时镜像
 #   - Python 3.11 + 后端依赖
 #   - Node 20（工作区 npm run serve 用）
 #   - Playwright Chromium
@@ -75,26 +84,31 @@ ENV DEBIAN_FRONTEND=noninteractive \
     NODE_MAJOR=20 \
     CODE_SERVER_VERSION=4.112.0
 
-# --- 系统依赖 + Node 20 ------------------------------------
+# --- 系统依赖 + Node 20 + Maven (XHH e7bcb00 cherry-pick) ----
 # 注：未安装 Chromium 运行时依赖。playwright Python 包会装（import 需要），
 # 但不下载浏览器二进制。如果将来真的要启用 /api/coding/.../browser 端点，
 # 在运行中的容器里执行：
 #   docker exec apaas-builder playwright install --with-deps chromium
 # 或取消下方 RUN playwright install 那行的注释并重建镜像。
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        curl ca-certificates gnupg git procps rsync \
-        supervisor \
-        build-essential \
-    && mkdir -p /etc/apt/keyrings \
-    && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
-        | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
-    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" \
-        > /etc/apt/sources.list.d/nodesource.list \
-    && apt-get update && apt-get install -y --no-install-recommends nodejs \
-    && apt-get purge -y --auto-remove build-essential \
-    && rm -rf /var/lib/apt/lists/*
+RUN set -eux; \
+    sed -i 's|deb.debian.org|mirrors.aliyun.com|g; s|security.debian.org|mirrors.aliyun.com|g' \
+        /etc/apt/sources.list.d/debian.sources 2>/dev/null \
+    || sed -i 's|deb.debian.org|mirrors.aliyun.com|g; s|security.debian.org|mirrors.aliyun.com|g' \
+        /etc/apt/sources.list; \
+    echo 'Acquire::Retries "10";' > /etc/apt/apt.conf.d/80-retries; \
+    echo 'Acquire::http::Timeout "60";' >> /etc/apt/apt.conf.d/80-retries; \
+    apt_run() { for i in 1 2 3 4 5; do apt-get update && apt-get install -y --no-install-recommends "$@" && return 0; echo "[apt] retry $i in 10s..."; sleep 10; rm -rf /var/lib/apt/lists/*; done; return 1; }; \
+    apt_run curl ca-certificates gnupg git procps rsync supervisor build-essential maven; \
+    mkdir -p /etc/apt/keyrings; \
+    curl -fsSL --retry 5 --retry-delay 5 https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+        | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg; \
+    echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" \
+        > /etc/apt/sources.list.d/nodesource.list; \
+    apt_run nodejs; \
+    apt-get purge -y --auto-remove build-essential; \
+    rm -rf /var/lib/apt/lists/*
 
-# --- docker CLI（仅 client，不带 daemon）---------------------
+# --- docker CLI（仅 client，不带 daemon）—— mars 独有，vibe-coding 沙箱要 ---
 # 后端要起 vibe-coding 沙箱容器（vibe-sandbox:latest），通过挂载
 # host /var/run/docker.sock 复用 host docker daemon。从官方静态二进制
 # 装最稳，跟 apt 源/dockerd 都解耦。
@@ -111,6 +125,36 @@ RUN set -eux; \
     install -m 0755 /tmp/docker/docker /usr/local/bin/docker; \
     rm -rf /tmp/docker /tmp/docker.tgz; \
     docker --version
+
+COPY --from=jdk8 /opt/java/openjdk /opt/jdk8
+COPY --from=jdk17 /opt/java/openjdk /opt/jdk17
+
+# Default to JDK 17. The mvn wrapper below switches to JDK 8 when pom.xml
+# declares Java 1.8 / 8.
+ENV JAVA_HOME=/opt/jdk17
+ENV PATH="${JAVA_HOME}/bin:${PATH}"
+
+RUN cat > /usr/local/bin/mvn <<'EOF' \
+    && chmod +x /usr/local/bin/mvn \
+    && java -version \
+    && /opt/jdk8/bin/java -version \
+    && /opt/jdk17/bin/java -version \
+    && mvn -version
+#!/bin/sh
+set -eu
+
+POM="${PWD}/pom.xml"
+if [ -f "$POM" ]; then
+  if grep -Eq '<(java.version|maven.compiler.source|maven.compiler.target|source|target)>[[:space:]]*(1\.8|8)[[:space:]]*</' "$POM"; then
+    export JAVA_HOME=/opt/jdk8
+  elif grep -Eq '<(java.version|maven.compiler.source|maven.compiler.target|source|target)>[[:space:]]*17[[:space:]]*</' "$POM"; then
+    export JAVA_HOME=/opt/jdk17
+  fi
+fi
+
+export PATH="$JAVA_HOME/bin:$PATH"
+exec /usr/bin/mvn "$@"
+EOF
 
 # --- code-server --------------------------------------------
 # 用官方 release tarball 装，比 install.sh 可靠（install.sh 在最小化镜像里
