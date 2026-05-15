@@ -3,18 +3,9 @@
 # 详见 DEPLOY_CONTAINER.md
 # ============================================================
 
-# ------------------------------------------------------------
-# stage 0a: JDK 8 源（低代码自开发 Spring Boot 后端构建用）
-#   - aPaaS 平台原生 Java 8，保持 ai-coding 工作区 mvn package 产物
-#     字节码版本和线上 apaas 应用服务一致
-#   - 仅作为 COPY 源，不进 runtime classpath
-# ------------------------------------------------------------
-FROM eclipse-temurin:8-jdk-jammy AS jdk8-source
-
-# ------------------------------------------------------------
-# stage 0b: Maven 源
-# ------------------------------------------------------------
-FROM maven:3.9-eclipse-temurin-8 AS maven-source
+# 2026-05-18: 砍 stage 0a/0b（jdk8-source / maven-source）—— 被 stage 3 的
+# jdk8 + jdk17 + maven-bin 替代（XHH e7bcb00 + dcec96c cherry-pick），
+# mvn wrapper 按 pom.xml 自动 JDK 8/17 切换。
 
 
 # ------------------------------------------------------------
@@ -64,6 +55,7 @@ RUN npm run build \
 # ------------------------------------------------------------
 FROM eclipse-temurin:8-jdk-jammy AS jdk8
 FROM eclipse-temurin:17-jdk-jammy AS jdk17
+FROM maven:3.9.9-eclipse-temurin-17 AS maven-bin
 
 
 # ------------------------------------------------------------
@@ -98,7 +90,7 @@ RUN set -eux; \
     echo 'Acquire::Retries "10";' > /etc/apt/apt.conf.d/80-retries; \
     echo 'Acquire::http::Timeout "60";' >> /etc/apt/apt.conf.d/80-retries; \
     apt_run() { for i in 1 2 3 4 5; do apt-get update && apt-get install -y --no-install-recommends "$@" && return 0; echo "[apt] retry $i in 10s..."; sleep 10; rm -rf /var/lib/apt/lists/*; done; return 1; }; \
-    apt_run curl ca-certificates gnupg git procps rsync supervisor build-essential maven; \
+    apt_run curl ca-certificates gnupg git procps rsync supervisor build-essential; \
     mkdir -p /etc/apt/keyrings; \
     curl -fsSL --retry 5 --retry-delay 5 https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
         | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg; \
@@ -128,11 +120,13 @@ RUN set -eux; \
 
 COPY --from=jdk8 /opt/java/openjdk /opt/jdk8
 COPY --from=jdk17 /opt/java/openjdk /opt/jdk17
+COPY --from=maven-bin /usr/share/maven /opt/maven
 
 # Default to JDK 17. The mvn wrapper below switches to JDK 8 when pom.xml
 # declares Java 1.8 / 8.
 ENV JAVA_HOME=/opt/jdk17
-ENV PATH="${JAVA_HOME}/bin:${PATH}"
+ENV MAVEN_HOME=/opt/maven
+ENV PATH="${JAVA_HOME}/bin:${MAVEN_HOME}/bin:${PATH}"
 
 RUN cat > /usr/local/bin/mvn <<'EOF' \
     && chmod +x /usr/local/bin/mvn \
@@ -153,7 +147,7 @@ if [ -f "$POM" ]; then
 fi
 
 export PATH="$JAVA_HOME/bin:$PATH"
-exec /usr/bin/mvn "$@"
+exec /opt/maven/bin/mvn "$@"
 EOF
 
 # --- code-server --------------------------------------------
@@ -216,18 +210,8 @@ COPY deploy/docker/supervisord.conf /etc/supervisor/supervisord.conf
 COPY deploy/docker/entrypoint.sh    /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
-# --- Java 8 + Maven (低代码自开发组件构建用) ------------------
-# ai-coding (/api/coding/...) 工作区在 ming pod 内直接 shell exec，
-# aPaaS 自开发组件后端是 Spring Boot → mvn package 必须 JDK + Maven。
-# 走 multi-stage COPY（不依赖 apt 源，layer 可缓存）；Eclipse Temurin 1.8.0_492。
-# 放最末尾——保证前面所有 base layer cache hit，rebuild 时只新增 ~165 MB 两个 layer
-# 而不是冲掉 code-server / pip install 等 GB 级 layer 重新 push。
-COPY --from=jdk8-source /opt/java/openjdk /opt/java/openjdk
-COPY --from=maven-source /usr/share/maven /usr/share/maven
-ENV JAVA_HOME=/opt/java/openjdk \
-    MAVEN_HOME=/usr/share/maven \
-    PATH=/opt/java/openjdk/bin:/usr/share/maven/bin:$PATH
-RUN java -version && mvn -version | head -2
+# 2026-05-18: JDK 8 + Maven 老块迁移到上方 stage 3 + mvn wrapper（XHH cherry-pick）
+# 老 ENV JAVA_HOME=/opt/java/openjdk 会覆盖 wrapper 的 JAVA_HOME=/opt/jdk17，删干净
 
 # host 网络下无需 EXPOSE，但保留作为文档说明
 # 实际监听端口由 PORT / CODE_SERVER_PORT 环境变量控制，默认 8003/8080
