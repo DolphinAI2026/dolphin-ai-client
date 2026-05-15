@@ -20,3 +20,7 @@ pytest-asyncio>=0.23.0
 
 # MCP server (used by app/mcp_server.py — 暴露应用领域能力给 dolphin / 其他 agent 平台)
 mcp[cli]>=1.27.0
+
+# K8s python client (used by app/vibe_coding/k8s_runtime.py — vibe-coding pod-per-workspace 沙箱)
+# 2026-05-15 加：vibe-coding 从 docker container 迁 K8s 原生，需要 K8s API 操作 Pod/Service
+kubernetes-asyncio>=31.0.0

@@ -78,7 +78,10 @@ RUN if [ -n "${APT_MIRROR}" ]; then \
 RUN corepack enable && corepack prepare pnpm@latest --activate
 
 # uv（Astral 出的 python 包管理，比 pip 快 10x）
-RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
+# 注：astral.sh 在 build 环境可能被墙，走 PyPI 国内镜像稳定（已配 PIP_INDEX_URL=tsinghua）。
+# 装到系统 python，命令在 /usr/local/bin/uv（pip 的 entry_points 行为）。
+RUN pip3 install --no-cache-dir --break-system-packages uv \
+    && uv --version
 
 # 国内镜像加速兜底（agent 装包失败时有 fallback）
 RUN npm config set registry "${NPM_REGISTRY}" --location=global \

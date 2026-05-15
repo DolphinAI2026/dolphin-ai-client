@@ -1,0 +1,60 @@
+# RBAC for ming pod to manage vibe-sandbox Pods / Services / Ingresses
+# 用于 backend/app/vibe_coding/k8s_runtime.py 调用 K8s API 创建沙箱 Pod
+# 设计文档: docs/vibe-k8s-migration/00-design.md
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vibe-sandbox-manager
+  namespace: apaas-builder
+  labels:
+    app: apaas-builder
+    component: vibe-sandbox-rbac
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: vibe-sandbox-manager
+  namespace: apaas-builder
+  labels:
+    app: apaas-builder
+    component: vibe-sandbox-rbac
+rules:
+  # Pod 生命周期 — create/get/delete/watch sandbox Pods
+  # exec 子资源用于 vibe_run_command (类似 kubectl exec)
+  # log 子资源用于查询 background command 输出
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "create", "delete", "watch", "patch"]
+  - apiGroups: [""]
+    resources: ["pods/exec", "pods/log", "pods/status"]
+    verbs: ["get", "create"]
+  # Service — 每个 Pod 对应一个 ClusterIP Service 让 Ingress 能路由到
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "create", "delete", "patch"]
+  # 方案 A（通配 + server-snippet）下不需要动态 Ingress，但保留权限以备方案 B 回退
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "create", "delete", "patch"]
+  # PVC — 共享 apaas-workspaces-ming 不需要创建新 PVC，但 get 权限用于校验存在
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: vibe-sandbox-manager
+  namespace: apaas-builder
+  labels:
+    app: apaas-builder
+    component: vibe-sandbox-rbac
+subjects:
+  - kind: ServiceAccount
+    name: vibe-sandbox-manager
+    namespace: apaas-builder
+roleRef:
+  kind: Role
+  name: vibe-sandbox-manager
+  apiGroup: rbac.authorization.k8s.io

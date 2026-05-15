@@ -70,18 +70,36 @@ _runtime_cache: dict[str, str] = {}
 
 
 async def _resolve_runtime(workspace_id: str) -> str:
-    """根据 settings.vibe_coding_runtime 选择 docker 或 host。
-    auto 模式下检测一次就缓存，避免每次都问 docker daemon。
+    """根据 settings.vibe_coding_runtime 选择 k8s / docker / host。
+    auto 模式下检测一次就缓存，避免每次都跨 API 探测。
+
+    优先级（2026-05-15 重排）：
+    - 显式 "k8s" / "docker" / "host" — 强制用对应 runtime
+    - "auto" — 优先 k8s（in-cluster 环境）→ docker（本机有 daemon）→ host（兜底）
     """
     mode = (settings.vibe_coding_runtime or "auto").lower()
     if mode == "host":
         return "host"
     if mode == "docker":
         return "docker"
+    if mode == "k8s":
+        return "k8s"
     # auto
     cached = _runtime_cache.get(workspace_id)
     if cached:
         return cached
+    # 优先 K8s（k8s_runtime 自身没装 kubernetes-asyncio 时 is_available 会优雅返 False）
+    try:
+        from app.vibe_coding.k8s_runtime import get_k8s_runtime
+        k8s_rt = get_k8s_runtime()
+        if await k8s_rt.is_available():
+            _runtime_cache[workspace_id] = "k8s"
+            return "k8s"
+    except ImportError:
+        # kubernetes-asyncio 没装 — 继续 fallback
+        pass
+    except Exception as e:
+        logger.debug("k8s runtime probe failed (fallback): %s", e)
     rt = get_docker_runtime()
     if await rt.is_available():
         _runtime_cache[workspace_id] = "docker"
@@ -507,6 +525,8 @@ async def execute_run_command(args: dict, thread: VibeCodingThread, db: AsyncSes
     runtime = await _resolve_runtime(thread.workspace_id)
     if runtime == "docker":
         return await _run_command_docker(thread, repo, cmd, timeout=timeout, background=background)
+    if runtime == "k8s":
+        return await _run_command_k8s(thread, repo, cmd, timeout=timeout, background=background)
     return await _run_command_host(thread, repo, cmd, timeout=timeout, background=background)
 
 
@@ -540,6 +560,59 @@ async def _run_command_docker(
         )
 
     result = await rt.exec(thread.workspace_id, cmd, timeout=timeout)
+    if result.timed_out:
+        return _err(f"执行超时（{timeout} 秒）")
+
+    parts: list[str] = []
+    if result.stdout:
+        parts.append(f"[stdout]\n{result.stdout.rstrip()}")
+    if result.stderr:
+        parts.append(f"[stderr]\n{result.stderr.rstrip()}")
+    parts.append(f"[exit code: {result.returncode}]")
+    return _truncate("\n\n".join(parts))
+
+
+async def _run_command_k8s(
+    thread: VibeCodingThread, repo: Path, cmd: str, *, timeout: int, background: bool
+) -> str:
+    """通过 K8s exec API 在 vibe-sandbox-{ws_id} Pod 内执行。
+
+    跟 _run_command_docker 同结构，差异：
+    - 用 KubernetesRuntime 而非 DockerRuntime
+    - ensure_container 多接 tenant_id 让 PVC subPath 隔离
+    - host_workspace_dir 参数对 K8s 无意义（subPath 由 ws_id 决定），但保留对齐签名
+    """
+    from app.vibe_coding.k8s_runtime import get_k8s_runtime
+    rt = get_k8s_runtime()
+    try:
+        await rt.ensure_container(
+            thread.workspace_id,
+            repo,
+            tenant_id=thread.tenant_id or 1,
+        )
+    except Exception as exc:
+        return _err(f"K8s 沙箱启动失败: {exc}")
+
+    if background:
+        ts = int(time.time())
+        log_rel = f".vibe-logs/dev-{ts}.log"
+        try:
+            await rt.exec_background(thread.workspace_id, cmd.split() if isinstance(cmd, str) else cmd, log_path=log_rel, cwd="/workspace")
+        except Exception as exc:
+            return _err(f"K8s 沙箱内后台启动失败: {exc}")
+        try:
+            _record_background_command(thread.workspace_id, cmd, log_rel)
+        except Exception as e:
+            logger.warning("记录后台命令失败 (workspace=%s): %s", thread.workspace_id, e)
+        return (
+            f"已在 K8s 沙箱内 detach 后台启动，日志: {log_rel}\n"
+            f"等 3-5 秒后用 run_command 'sleep 4 && tail -n 50 {log_rel}' 看启动是否成功。\n"
+            f"再用 http_check 验证服务真起来了。"
+        )
+
+    # 前台 exec — K8s exec 命令是 list[str]，shell 命令包成 sh -c
+    cmd_list = ["sh", "-c", cmd] if isinstance(cmd, str) else list(cmd)
+    result = await rt.exec(thread.workspace_id, cmd_list, timeout=timeout, cwd="/workspace")
     if result.timed_out:
         return _err(f"执行超时（{timeout} 秒）")
 
