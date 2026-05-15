@@ -4,6 +4,20 @@
 # ============================================================
 
 # ------------------------------------------------------------
+# stage 0a: JDK 8 源（低代码自开发 Spring Boot 后端构建用）
+#   - aPaaS 平台原生 Java 8，保持 ai-coding 工作区 mvn package 产物
+#     字节码版本和线上 apaas 应用服务一致
+#   - 仅作为 COPY 源，不进 runtime classpath
+# ------------------------------------------------------------
+FROM eclipse-temurin:8-jdk-jammy AS jdk8-source
+
+# ------------------------------------------------------------
+# stage 0b: Maven 源
+# ------------------------------------------------------------
+FROM maven:3.9-eclipse-temurin-8 AS maven-source
+
+
+# ------------------------------------------------------------
 # stage 1: 构建前端（Vite）
 # ------------------------------------------------------------
 FROM node:20-bookworm-slim AS frontend-builder
@@ -157,6 +171,19 @@ RUN mkdir -p /etc/supervisor/conf.d
 COPY deploy/docker/supervisord.conf /etc/supervisor/supervisord.conf
 COPY deploy/docker/entrypoint.sh    /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# --- Java 8 + Maven (低代码自开发组件构建用) ------------------
+# ai-coding (/api/coding/...) 工作区在 ming pod 内直接 shell exec，
+# aPaaS 自开发组件后端是 Spring Boot → mvn package 必须 JDK + Maven。
+# 走 multi-stage COPY（不依赖 apt 源，layer 可缓存）；Eclipse Temurin 1.8.0_492。
+# 放最末尾——保证前面所有 base layer cache hit，rebuild 时只新增 ~165 MB 两个 layer
+# 而不是冲掉 code-server / pip install 等 GB 级 layer 重新 push。
+COPY --from=jdk8-source /opt/java/openjdk /opt/java/openjdk
+COPY --from=maven-source /usr/share/maven /usr/share/maven
+ENV JAVA_HOME=/opt/java/openjdk \
+    MAVEN_HOME=/usr/share/maven \
+    PATH=/opt/java/openjdk/bin:/usr/share/maven/bin:$PATH
+RUN java -version && mvn -version | head -2
 
 # host 网络下无需 EXPOSE，但保留作为文档说明
 # 实际监听端口由 PORT / CODE_SERVER_PORT 环境变量控制，默认 8003/8080

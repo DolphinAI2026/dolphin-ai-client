@@ -883,6 +883,55 @@ async def auto_create_application(
         if env_obj:
             resolved_env_id = env_obj.id
 
+    # 🛡️ 2026-05-15 防 retry storm：dolphin agent 通过 MCP 工具
+    # generate_app_from_doc 调本 endpoint 时不传 conversation_id（工具源码 v2
+    # mcp_server.py:1978 create_body 没该字段），撞失败后 dolphin omnigate 自动
+    # retry → 每次都进 INSERT 新行 — 实测一次 4 分钟内 13 行 dcs-service 失败
+    # 占位。这里按 (tenant_id, app_code) 在 5 分钟窗口内复用最近一条 failed/draft
+    # apaas_app_id 为空的占位行。conversation_id 模式不受影响（上面已 return）。
+    if not data.conversation_id:
+        from datetime import datetime, timedelta
+        dedup_cutoff = datetime.utcnow() - timedelta(minutes=5)
+        recent = await db.execute(
+            select(Application).where(
+                Application.tenant_id == ctx.tenant_id,
+                Application.app_code == ascii_code,
+                Application.status.in_(("draft", "failed")),
+                Application.apaas_app_id.is_(None),
+                Application.created_at > dedup_cutoff,
+            ).order_by(Application.id.desc()).limit(1)
+        )
+        existing_failed = recent.scalar_one_or_none()
+        if existing_failed:
+            existing_failed.app_name = data.app_name
+            existing_failed.config_preview = config_str
+            if resolved_env_id:
+                existing_failed.platform_env_id = resolved_env_id
+            existing_failed.status = "draft"  # 重置让上游继续走部署链路
+            await db.commit()
+            logger.info(
+                "auto-create dedup: reusing app_id=%s (app_code=%s, prior_status=%s, "
+                "created_at=%s) — anti retry-storm 2026-05-15",
+                existing_failed.id, ascii_code,
+                existing_failed.status, existing_failed.created_at,
+            )
+            new_env_name_d = None
+            if resolved_env_id:
+                env_q_d = await db.execute(
+                    select(PlatformEnv).where(PlatformEnv.id == resolved_env_id)
+                )
+                env_obj_d = env_q_d.scalar_one_or_none()
+                if env_obj_d:
+                    new_env_name_d = env_obj_d.env_name
+            return AutoCreateResponse(
+                app_id=existing_failed.id,
+                app_name=existing_failed.app_name,
+                app_code=existing_failed.app_code,
+                is_new=False,
+                platform_env_id=resolved_env_id,
+                platform_env_name=new_env_name_d,
+            )
+
     app = Application(
         user_id=ctx.user.id,
         tenant_id=ctx.tenant_id,
