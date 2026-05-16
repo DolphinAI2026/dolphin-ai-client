@@ -1,18 +1,23 @@
 # 当前状态（STATE.md）
 
-> 更新时间：2026-05-16（夜 — ai-chat 切流 v2 + 3 UX fix + 92→82 工具裁剪 完结）
+> 更新时间：2026-05-17 凌晨（双开发者冲突最终决策 — **以 xhh 为准**）
 > 维护规则：每次重大上线 / 决策后追加；只写 fact，不写 plan。
 > 关系：`README.md` 是入门文档（已过期）；`PLAN.md` 是治理目标（Phase 1+ 未启动）；**本文件是现状的 source of truth**。
 
 ## TL;DR
 
-ai-builder 当前定位是 **MCP 工具供应商**，对接 dolphin 作为 agent 运营平台。**ai-chat 是产品保留功能**（5/16 晚拍板修正），不再视为过渡形态。生产部署完全在公司 KubeSphere k8s，**3 个 deployment 跑 MCP**（5/16 晚摸清拓扑发现实际比之前 STATE 描述多 1 个）：
+ai-builder 当前定位是 **MCP 工具供应商**，对接 dolphin 作为 agent 运营平台。**ai-chat 是产品保留功能**（5/16 晚拍板修正），不再视为过渡形态。生产部署完全在公司 KubeSphere k8s，**3 个 deployment 跑 MCP**：
 
 - `apaas-builder/apaas-builder-ming`（本 repo） — backend + frontend + admin SPA + 内置 `mcp_server.py` 80 工具。**5/16 晚切流后 ai-chat loopback 也不再用本机 80 工具**，改走 v2 svc → 本机 mcp_server.py 实际无 caller，**可以进入退役**
-- `apaas-builder/apaas-builder-mcp-server`（独立 repo `apaas-builder-mcp-server`，**ming 内 admin SPA + ai-chat 切流后的真实 backend**） — 5/16 夜升 `:20260516-e35cca2-deterministic-md` image 后 **81 工具**（92 - 删 10 - 隐藏 check_model_codes 1 个，避免 LLM 篡改 md modelCode）
-- `apaas-mcp-server/apaas-mcp-server-v2`（同 repo 不同 ns，**dolphin agent 公网 `/mcp-server-v2/*` 入口**） — 跑 `:20260515-user-token` 68 工具，**比 apaas-builder ns 那个落后**，下次 sync
+- `apaas-builder/apaas-builder-mcp-server`（独立 repo `apaas-builder-mcp-server`，**ming 内 admin SPA + ai-chat 切流后的真实 backend**） — **5/17 凌晨当前生产跑 xhh 推的 `:20260517-0018-mcp-metadata-amd64`，33 工具，强制 draft 流程独主，admin SPA 重写**（5/17 凌晨决策：以 xhh 为准 — 我 5/16 夜推的 81-工具 `:20260516-e35cca2-deterministic-md` 废）
+- `apaas-mcp-server/apaas-mcp-server-v2`（同 repo 不同 ns，**dolphin agent 公网 `/mcp-server-v2/*` 入口**） — 跑 `:20260515-user-token` 68 工具
 
-4 个客户租户共享 3 个 dolphin agent，全在线。**ai-chat 切流后两边主 source of truth 收敛到 v2 repo**，dual repo drift 痛点缓解但未消除（68 vs 82 仍 drift 等下次同步）。
+⚠️ **双 db 命名倒挂**（5/15 撞过，今晚 debug 又忘记）：
+- `apaas-builder/apaas-builder-mcp-server` pod 用 db `apaas_builder_mcp_server`（带后缀）
+- `apaas-mcp-server/apaas-mcp-server-v2` pod 用 db **`apaas_builder`**（不带 _mcp_server 后缀）
+- 同一个 app_code 可能在两个 db 各创建一个应用（id 不同），互不感知
+
+4 个客户租户共享 3 个 dolphin agent，全在线。
 
 ## 一、当前部署（事实）
 
@@ -34,7 +39,7 @@ ai-builder 当前定位是 **MCP 工具供应商**，对接 dolphin 作为 agent
 | Deployment | Namespace | Image | 备注 |
 |---|---|---|---|
 | `apaas-builder-ming` | `apaas-builder` | `hub.dfy.definesys.cn/ai-builder/apaas-builder:20260516-uxfix` | HEAD `def942c`（含 3 UX fix + ai-chat v2 切流配置） |
-| `apaas-builder-mcp-server` | `apaas-builder` | `hub.dfy.definesys.cn/ai-builder/apaas-builder-mcp-server:20260516-e35cca2-deterministic-md` | **81 工具**（v2 repo HEAD `e35cca2`：删 10 工具 → 修 9 docstring → 隐藏 check_model_codes）。**tag 用 commit hash 后缀防覆盖**。registry: `hub.dfy.definesys.cn/ai-builder/` |
+| `apaas-builder-mcp-server` | `apaas-builder` | `hub.dfy.definesys.cn/ai-builder/apaas-builder-mcp-server:20260517-0018-mcp-metadata-amd64` | **33 工具**（v2 repo `main` HEAD `41adef5`，xhh 推送）。强制 draft 流程独主 / strict end-user identity auth / admin SPA 重写含 CallLogs+McpServices+McpTester+Login。**5/17 凌晨决策：以 xhh 为准** — 我 feat 分支 81-工具版废。 |
 | `apaas-mcp-server-v2` | `apaas-mcp-server` | `hub-snapshots.dfy.definesys.cn/mars/apaas-builder-mcp-server:20260515-user-token` | **68 工具，跟 apaas-builder ns 那个 drift**。registry: `hub-snapshots.dfy.definesys.cn/mars/`。dolphin agent 公网入口走它，**下次 sync 升 `:20260516-port-15-crud` (该 tag 已 cross-push 到这个 registry，待命)** |
 | `apaas-mcp-server` | `apaas-mcp-server` | (v1, 历史遗留) | 老 deployment，未确认是否还有 client |
 
@@ -79,18 +84,23 @@ ai-builder 当前定位是 **MCP 工具供应商**，对接 dolphin 作为 agent
 
 2. **ai-chat 跟 dolphin 调同一批 MCP 工具**（2026-05-16 晚）
    - 实现层：ai-chat 通过 `MCP_INTERNAL_BASE=http://apaas-builder-mcp-server:8004/api/mcp/mcp` 走 v2 svc
-   - 不再调本机 `mcp_server.py` 80 工具，两边收敛到 v2 repo 92 工具
-   - dual repo 同步痛点缓解；本机 `mcp_server.py` 4241 行可退役
+   - 不再调本机 `mcp_server.py` 80 工具
 
-3. **vibe-coding 用 K8s pod-per-workspace**（2026-05-15）
+3. **MCP 工具集以 xhh `main` 分支为准**（2026-05-17 凌晨决策）
+   - 5/16 我做的 81-工具 feat 分支方向作废
+   - xhh main 33 工具 + 强制 draft 流程独主 + strict auth 是新主线
+   - 详见第五点七节
+   - **方向反复变是协作问题**，不是技术决策反复 — 见五点七节 P0 行动项
+
+4. **vibe-coding 用 K8s pod-per-workspace**（2026-05-15）
    - 设计稿：`docs/vibe-k8s-migration/00-design.md`
    - 不修补 docker 路线（老 ECS 已死，不恢复）
 
-4. **多租户身份 1:1:1 强绑**（2026-05-13）
+5. **多租户身份 1:1:1 强绑**（2026-05-13）
    - ai-builder tenant ↔ aPaaS 租户 ↔ dolphin customerName 严格 1 对 1
    - 切租户 = 切真实 aPaaS 租户落地
 
-5. **mcp-server-v2 是新主线**（2026-05-11 立项 / 5-14 切流 / 5-16 晚 ai-chat 也切流）
+6. **mcp-server-v2 是新主线**（2026-05-11 立项 / 5-14 切流 / 5-16 晚 ai-chat 也切流）
    - 本 repo `mcp_server.py` 4241 行 + 80 工具是历史遗留，**5/16 晚后无任何 caller**
 
 ## 四、代码层：活 / 过渡 / 死
@@ -230,6 +240,57 @@ ai-builder 当前定位是 **MCP 工具供应商**，对接 dolphin 作为 agent
 - 工具 description 不要写"建议 agent 做 X"这种 vague guidance，LLM 会泛化执行；要写硬规则
 - 凡是涉及 md→app 转换的工具，docstring 必须强调"deterministic / 1:1 / 禁止 agent 篡改"
 
+## 五点七、5/17 凌晨：双开发者并行冲突的最终决策（以 xhh 为准）
+
+**真相**：5/16 下午 + 凌晨两次"v2 image 被覆盖"事故的真凶**不是 CI / 不是另一个 Claude session / 不是 image 系统问题**，是**真人开发者 xhh**（commit author `admin@xhhMacBook-Air.local`）在 v2 repo `main` 分支并行做完整反向设计，互不通气。
+
+**两条线对比**：
+
+| | 我（Claude session, 用户 22:00 拍板）| xhh（main 分支）|
+|---|---|---|
+| v2 repo 分支 | `feat/mcp-tools-batch-2026-05-14` | `main` |
+| 工具集 | 81（92 - 10 删 - 1 隐藏）| **33**（精简 70%）|
+| draft 流程（save_design_draft / promote 等）| ❌ **删了**（按用户 22:00 决策）| ✅ **强制主流程**（删了 generate_app_from_doc）|
+| 老 change_plan（update_app_from_doc 等）| ✅ 保留 dolphin 主路径 | ❌ 删了 |
+| aPaaS 精细 CRUD 15 个 | ✅ 我今天 port 进来 | ❌ 完全没 |
+| vibe sandbox 9 个 | ✅ 保留 | ❌ 删了 |
+| check_model_codes | ❌ 我隐藏（防 LLM 篡改 md）| ❌ 也没暴露（一致）|
+| md 1:1 铁律 | ✅ 我加在 generate_app_from_doc docstring | ❌ generate_app_from_doc 本身就删了 |
+| auth | soft（MCP_API_KEY pass）| **strict**（必须 end-user identity 否则 401）|
+| admin SPA | 老版本 | **重写**（CallLogs / McpServices / McpTester / Login 4 个新页面）|
+
+**双方都各 5+ 个 commit 在并行 push image 覆盖对方**：
+- 15:00 我推 `:port-15-crud` (92 工具) → 17:45 xhh 推 `:1745-prune-tools` (33 工具) 覆盖
+- 22:39 我推 `:e35cca2-deterministic-md` (81 工具) → 5/17 00:18 xhh 推 `:0018-mcp-metadata-amd64` (33 工具) 覆盖
+
+**5/17 凌晨用户拍板**：**以 xhh 为准**。
+- v2 repo `feat/mcp-tools-batch-2026-05-14` 分支 4 个 commit（d8561ae port 15 / 2ac7c47 prune 10 / bcf117a 修 docstring / e35cca2 隐藏 check + md 1:1）方向**全废**
+- 生产保持 xhh 的 33 工具 + draft 独主版本
+- xhh 重写的 admin SPA（CallLogs / McpServices / McpTester / Login）成为新主线
+
+**我今晚 ai-builder-ai repo 6 个 commit 的去留**：
+- ✅ 保留 `e531487 feat(ai-chat): 切流 v2 bridge env 解耦`（跨 repo，不冲突 xhh）
+- ✅ 保留 `def942c fix(ai-chat): 3 UX 痛点（duration / SSE chunk / auto-scroll）`（前端 ChatPage / AgentConversation，不冲突）
+- ✅ 保留 `00fba76 fix(generate): SSE /generate 走 platform_envs.token`（ming backend bug fix，跟 xhh 路线不冲突）
+- ⚠️ STATE.md 3 个 docs commit（`3aeb754` / `2e1e053` / `428118e`）描述被覆盖的方向，**被本节替代**
+- 这些 ming 改动都在 `:20260516-uxfix` / `:20260516-00fba76-deploy-env-token` image 里跑着
+
+**根本问题（P0）**：
+- 没有**协作流程**让两人知道对方在做什么 — PR review / Slack 通知 / 站会都没
+- 两人都直接往 main / feat 分支推 + 直接 push image set deployment image，没 GitOps 锁
+- 这种情况 trial 阶段还行（两个 trial 应用），生产规模化必定爆
+
+**5/17 上午行动项（用户负责）**：
+1. 跟 xhh 当面同步：明确 ai-builder MCP server 主线设计方向（强制 draft / 还是删 draft 留 generate_app_from_doc / 还是 hybrid）
+2. 商定**唯一一条 main 分支** + PR review 流程
+3. v2 deployment 加 GitOps 锁防绕过 PR 直接 set image
+4. 我 ming repo 的 commit (`e531487` / `def942c` / `00fba76`) 看 xhh 是否接受，决定是否 merge / 是否 deploy
+
+**应用其实创建成功了**（用户发现的 28/28 SPEC 完成 + apaas_app_id 已分配）：
+- `apaas_builder` db (xhh 那边) 有 app id=60 售后服务系统 status=completed
+- `apaas_builder_mcp_server` db (我这边) 有 app id=74 售后服务系统 status=completed apaas_app_id=843747208942583808
+- 两边主流程实际都 work，只是创建路径不同（xhh 走 save_design_draft → promote / 我走 generate_app_from_doc）
+
 ## 六、进行中（mid-flight）
 
 ### K8s pod-per-workspace 迁移（vibe-coding 沙箱）
@@ -264,7 +325,7 @@ ai-builder 当前定位是 **MCP 工具供应商**，对接 dolphin 作为 agent
 
 - **`DOLPHIN_SERVICE_TOKEN` 2026-08-30 过期**
 - **ming workspaces 不在 PVC**：`/root/apaas-builder/workspaces/` 是容器 overlay，restart 丢
-- **🆕 5/16 晚 image 覆盖事故**：`apaas-builder-mcp-server` deployment 没有 GitOps 锁，任何 session/人 set image 立即生效覆盖。需要：(1) 制定 push 流程规范（git tag 必带 commit hash 后缀）；(2) 考虑 ArgoCD / FluxCD 锁定 deployment image 来自 git；(3) `mcp-server-config` secret 的 ALLOWED_HOSTS 已加内部短名 6 个（5/16 晚），不需要再补
+- **🆕 5/17 凌晨：双开发者协作流程缺失**（详见五点七节）：mars + xhh 并行做反向设计互不通气。今天踩过两次"image 反复覆盖"，下次必复发。**用户需跟 xhh 同步**：(1) 唯一 main 分支 + PR review；(2) v2 deployment GitOps 锁防绕过 PR set image；(3) 设计方向定一个主线（强制 draft / 删 draft / hybrid）
 
 ### 🟡 P1
 
@@ -300,9 +361,8 @@ ai-builder 当前定位是 **MCP 工具供应商**，对接 dolphin 作为 agent
 | 一般 bug fix / 改功能 | 看本文件 → 确认改的不是过渡/死代码 → 改 → **必要时同步 mcp-server-v2 repo** |
 | 大架构动作 | 先确认第三节"锁定决策"是否仍 hold → 没翻案就照决策走 |
 | vibe-coding K8s 收尾 | 看 `docs/vibe-k8s-migration/00-design.md` → WIP 在 `k8s_runtime.py` + `61-vibe-ingress.yaml` |
-| **要改 v2 image** | **先 `kubectl -n apaas-builder get deployment apaas-builder-mcp-server -o jsonpath='{.spec.template.spec.containers[0].image}'` 看当前 tag，再决定改不改**（5/16 晚被覆盖过一次）。**新 tag 规范**：`:YYYYMMDD-<git_short_sha>-<topic>`（5/16 夜起强制） |
+| **要改 v2 image / 推 v2 commit** | **先跟 xhh 同步！** 5/17 凌晨决策：v2 main 以 xhh 为准。不要直接往 main 推 + 不要 set image 不通过 PR。否则会撞 5/16 反复覆盖故障 |
 | ai-chat UX 进一步优化 | 5/16 已修 duration/chunk/scroll 3 个 P1。剩 P0 LLM 首轮推理 14s 是 admin UI 换模型动作（gpt-5.5 → gpt-4o-mini / haiku-3.5） |
-| sync v2 公网入口 image | `apaas-mcp-server/apaas-mcp-server-v2` 还跑 68 工具 stale 版，dolphin agent 公网入口看不到 82 工具新版。需 build v2 image 也 push hub-snapshots/mars + set image |
 
 ## 关联资源
 
