@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from datetime import datetime
 from typing import AsyncIterator, Optional
 
@@ -521,12 +522,43 @@ async def run_agent(
             return
 
         # 流式调用 LLM，逐 token 把 content_delta 推给前端
+        # 2026-05-16：合并细碎 chunk —— LLM 每个汉字一个 content_delta，前端每收一个
+        # 就 Vue reactive + markdown re-render，累积起来卡顿。这里 buffer 到 ≥20 字符
+        # 或 ≥40ms 才 flush，把几百 event 压成几十个。tool_call_delta / done 之前必须
+        # 先 flush 剩余 buffer，保证次序正确（assistant 文字早于 tool_call chip）。
         assistant_msg: Optional[dict] = None
+        _delta_buf: list[str] = []
+        _delta_buf_len = 0
+        _delta_last_flush = time.monotonic()
+        DELTA_FLUSH_CHARS = 20
+        DELTA_FLUSH_MS = 0.04
+
+        def _drain_delta() -> Optional[dict]:
+            nonlocal _delta_buf, _delta_buf_len, _delta_last_flush
+            if not _delta_buf:
+                return None
+            text = "".join(_delta_buf)
+            _delta_buf = []
+            _delta_buf_len = 0
+            _delta_last_flush = time.monotonic()
+            return _sse("assistant_delta", {"text": text})
+
         try:
             async for chunk in _call_llm_stream(cfg, messages, tool_schemas, abort_event):
                 if chunk["type"] == "content_delta":
-                    yield _sse("assistant_delta", {"text": chunk["text"]})
+                    _delta_buf.append(chunk["text"])
+                    _delta_buf_len += len(chunk["text"])
+                    if (
+                        _delta_buf_len >= DELTA_FLUSH_CHARS
+                        or (time.monotonic() - _delta_last_flush) >= DELTA_FLUSH_MS
+                    ):
+                        evt = _drain_delta()
+                        if evt is not None:
+                            yield evt
                 elif chunk["type"] == "tool_call_delta":
+                    evt = _drain_delta()
+                    if evt is not None:
+                        yield evt
                     yield _sse(
                         "tool_call_delta",
                         {
@@ -536,6 +568,9 @@ async def run_agent(
                         },
                     )
                 elif chunk["type"] == "done":
+                    evt = _drain_delta()
+                    if evt is not None:
+                        yield evt
                     assistant_msg = chunk["message"]
             if assistant_msg is None:
                 # 流被外部 abort 了
@@ -625,6 +660,10 @@ async def run_agent(
                 args = {}
 
             # 持久化工具调用记录（关联 assistant message + 存 LLM 原始 call_id）
+            # 用 monotonic 算 duration — MySQL DATETIME(0) round 到秒导致 refresh 后
+            # started_at 跟 in-memory ended_at 算差出负数 (2026-05-16 实测 -58ms bug)
+            _start_mono = time.monotonic()
+            _start_dt = datetime.utcnow()
             tc_db = AIChatToolCall(
                 session_id=session.id,
                 message_id=asst_message_id,
@@ -632,7 +671,7 @@ async def run_agent(
                 tool_name=tool_name,
                 args_json=args,
                 status="running",
-                started_at=datetime.utcnow(),
+                started_at=_start_dt,
             )
             db.add(tc_db)
             await db.commit()
@@ -641,7 +680,7 @@ async def run_agent(
                 "id": tc_db.id,
                 "tool_name": tool_name,
                 "args": args,
-                "started_at": tc_db.started_at.isoformat() if tc_db.started_at else None,
+                "started_at": _start_dt.isoformat(),
             })
 
             # 执行
@@ -656,8 +695,7 @@ async def run_agent(
                 result_text = tc_db.result_text
 
             tc_db.ended_at = datetime.utcnow()
-            if tc_db.started_at:
-                tc_db.duration_ms = int((tc_db.ended_at - tc_db.started_at).total_seconds() * 1000)
+            tc_db.duration_ms = int((time.monotonic() - _start_mono) * 1000)
             await db.commit()
             await db.refresh(tc_db)
 

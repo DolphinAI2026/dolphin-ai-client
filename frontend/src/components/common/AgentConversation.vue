@@ -180,7 +180,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { marked } from 'marked'
 import { useThemeStore } from '@/stores/theme'
 import ToolCard from './agent-conversation/ToolCard.vue'
@@ -381,8 +381,37 @@ watch(() => props.typing, () => {
   if (props.typing) scrollToBottom()
 })
 
+// 2026-05-16：监听最后一条消息 content / tool result / thinking 长度变化 ——
+// SSE 流式 append assistant_delta 时 messages.length 不变（只是某条 message.content
+// 在长大），原来的 length watch 触发不到，导致流式过程中 scroll 不跟。
+watch(
+  () => {
+    const arr = props.messages
+    if (!arr.length) return 0
+    const last = arr[arr.length - 1]
+    const c = typeof last.content === 'string' ? last.content.length : 0
+    const t = last.thinking?.text?.length || 0
+    const r = last.tool?.result?.length || 0
+    return c + t + r
+  },
+  () => { scrollToBottom() },
+)
+
+// ResizeObserver 兜底 —— 哪怕上面 watch 漏触发（比如自定义 slot 渲染高度变化），
+// listRef 高度增长就跟着 scroll，保证流式内容永远可见。
+let resizeObserver: ResizeObserver | null = null
+
 onMounted(() => {
   scrollToBottom(true)
+  if (listRef.value && typeof ResizeObserver !== 'undefined') {
+    resizeObserver = new ResizeObserver(() => { scrollToBottom() })
+    resizeObserver.observe(listRef.value)
+  }
+})
+
+onBeforeUnmount(() => {
+  resizeObserver?.disconnect()
+  resizeObserver = null
 })
 
 defineExpose({
