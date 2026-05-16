@@ -38,6 +38,11 @@ _LOADED: Optional[dict] = None
 # 默认连同进程 backend (uvicorn :8003 + FastMCP mount 在 /api/mcp/mcp)。
 # 之前 hardcode 8000 是历史遗留 — 撞 k8s ming pod connection refused，LLM 拿不到任何
 # MCP 工具，只剩 4 个 ai_chat 内置 base 工具，体验上像"工具被屏蔽"。
+#
+# 切 v2 灰度（2026-05-16）：k8s ming pod secret 配
+#   MCP_INTERNAL_BASE=http://apaas-builder-mcp-server:8004/api/mcp/mcp
+#   MCP_BRIDGE_AUTH_KEY=<v2 的 MCP_API_KEYS 首段>
+# 不配 = 走本机 loopback（兜底）；回滚直接 unset 两个 env 不改代码。
 _BASE_URL = os.getenv(
     "MCP_INTERNAL_BASE",
     "http://127.0.0.1:8003/api/mcp/mcp",
@@ -48,7 +53,11 @@ _STUB_TOOLS: set[str] = set()
 
 
 def _get_api_key() -> Optional[str]:
-    raw = os.getenv("MCP_API_KEYS", "").strip()
+    # MCP_BRIDGE_AUTH_KEY 单独配置 outbound 鉴权，跟 ming 自己 mcp_server 的入站
+    # 鉴权 MCP_API_KEYS 解耦 — 切 v2 时 BASE 指 v2 svc，AUTH_KEY 必须配 v2 的 key
+    # 而不能复用本机的 MCP_API_KEYS（否则两边 secret 体系串了）。
+    raw = (os.getenv("MCP_BRIDGE_AUTH_KEY", "").strip()
+           or os.getenv("MCP_API_KEYS", "").strip())
     if raw:
         return raw.split(",")[0].strip()
     return None

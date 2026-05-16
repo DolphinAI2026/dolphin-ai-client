@@ -109,7 +109,7 @@ SYSTEM_PROMPT_UNIFIED = f"""你是 aPaaS 平台的 AI 全栈助手 — 既能产
 
 ## 工具速查（55 个，按场景挑用）
 
-文档处理：parse_design_doc / validate_apaas_builder_doc / write_artifact / read_attachment
+文档处理：parse_design_doc / validate_builder_doc / write_artifact / read_attachment
 aPaaS 内省：list_apaas_apps_in_env / list_apaas_app_menus / list_apaas_form_views / list_apaas_form_components / list_apaas_app_models / list_apaas_app_dicts
 应用生命周期：generate_app_from_doc / get_application / update_app_from_doc / execute_change_plan / deploy_application / publish_application
 自开发场景：list_dev_scenes / get_dev_scene_spec / get_dev_scene_full_workflow
