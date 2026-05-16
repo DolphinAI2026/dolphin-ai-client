@@ -25,11 +25,18 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin/mcp", tags=["admin-mcp"])
 
 # v2 svc 集群内 DNS：apaas-builder-mcp-server.apaas-builder.svc:8004
-# 短名 apaas-builder-mcp-server:8004 在同 namespace 内可达
+# 短名 apaas-builder-mcp-server:8004 在同 namespace 内可达。
+# v2 把工具拆 4 个 FastMCP 实例 mount 到不同 path（main + design 是
+# 真正独立工具集；builder/coding 是 main 的子集 split 给不同 agent；vibe 暂空）。
+# admin 视图 union main + design 拿全集（builder/coding 子集会自动去重）。
 _V2_BASE = os.getenv(
     "MCP_V2_INTERNAL_BASE",
-    "http://apaas-builder-mcp-server:8004/api/mcp/mcp",
+    "http://apaas-builder-mcp-server:8004",
 )
+_V2_TOOL_PATHS = [
+    "/api/mcp/mcp",          # main FastMCP — 应用生命周期 / workspace / 自开发 / 内省
+    "/api/mcp-design/mcp",   # 独立 design FastMCP — design system / principle 4 工具
+]
 # v2 TrustedHostMiddleware 只放行公网域名 host header，集群内调用必须显式带上
 _V2_HOST = os.getenv("MCP_V2_HOST", "agent.dfy.definesys.cn")
 
@@ -139,28 +146,54 @@ def _classify_tool(name: str) -> tuple[str, str]:
     return ("other", "其他")
 
 
+def _parse_mcp_response(body: str) -> dict:
+    """v2 streamable HTTP 可能返 SSE frame（`data: <json>`）或纯 JSON。统一 parse。"""
+    import json as _json
+    raw = body
+    if "data:" in raw:
+        for line in raw.split("\n"):
+            line = line.strip()
+            if line.startswith("data:"):
+                raw = line[5:].strip()
+                break
+    return _json.loads(raw)
+
+
+async def _fetch_tools_from(path: str) -> list[dict]:
+    async with httpx.AsyncClient(timeout=30.0) as cli:
+        resp = await cli.post(
+            f"{_V2_BASE.rstrip('/')}{path}",
+            headers=_v2_headers(),
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+        )
+    if resp.status_code != 200:
+        raise HTTPException(
+            status_code=502,
+            detail=f"v2 MCP tools/list 失败 path={path} ({resp.status_code}): {resp.text[:300]}",
+        )
+    data = _parse_mcp_response(resp.text)
+    return (data.get("result") or {}).get("tools") or []
+
+
 @router.get("/tools")
 async def list_mcp_tools(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
 ):
     """列出线上 dolphin 实际在调的 v2 MCP server 暴露的所有工具。
 
-    走集群内 HTTP proxy 调 v2 `tools/list`，跟 dolphin 看到的列表完全一致。
+    走集群内 HTTP proxy 调 v2 `tools/list`，合并 main + design 两个 endpoint
+    （builder/coding 子集是 main 的子集，会自动去重）。
     """
+    seen: set[str] = set()
+    tools_raw: list[dict] = []
     try:
-        async with httpx.AsyncClient(timeout=30.0) as cli:
-            resp = await cli.post(
-                _V2_BASE,
-                headers=_v2_headers(),
-                json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
-            )
-        if resp.status_code != 200:
-            raise HTTPException(
-                status_code=502,
-                detail=f"v2 MCP tools/list 失败 ({resp.status_code}): {resp.text[:300]}",
-            )
-        data = resp.json()
-        tools_raw = (data.get("result") or {}).get("tools") or []
+        for path in _V2_TOOL_PATHS:
+            for t in await _fetch_tools_from(path):
+                name = t.get("name") or ""
+                if not name or name in seen:
+                    continue
+                seen.add(name)
+                tools_raw.append(t)
     except HTTPException:
         raise
     except Exception as exc:
@@ -211,9 +244,9 @@ async def list_mcp_tools(
         "tools": result,
         "categories": list(by_category.values()),
         "server_info": {
-            "name": "apaas-builder-mcp-server (v2)",
+            "name": "apaas-builder-mcp-server (v2, main + design)",
             "transport": "Streamable HTTP (proxied)",
-            "endpoint": "/mcp-server-v2/api/mcp/mcp (上游)",
+            "endpoint": "/mcp-server-v2/api/mcp/mcp (上游, dolphin 同款)",
             "auth_method": "Bearer (MCP_API_KEYS)",
         },
     }
