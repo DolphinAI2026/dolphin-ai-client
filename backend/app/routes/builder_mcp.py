@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from pathlib import Path
 from typing import Annotated, Any
 
 import httpx
@@ -19,6 +20,15 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.deps import AuthContext, get_auth_context
+
+# pydantic-settings 不 export 到 os.environ；显式 load .env 兜底
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _env_path = Path(__file__).resolve().parent.parent.parent / ".env"  # backend/.env
+    if _env_path.exists():
+        _load_dotenv(str(_env_path), override=False)
+except Exception:
+    pass
 
 logger = logging.getLogger(__name__)
 
