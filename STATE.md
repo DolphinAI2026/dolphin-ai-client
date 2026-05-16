@@ -9,7 +9,7 @@
 ai-builder 当前定位是 **MCP 工具供应商**，对接 dolphin 作为 agent 运营平台。**ai-chat 是产品保留功能**（5/16 晚拍板修正），不再视为过渡形态。生产部署完全在公司 KubeSphere k8s，**3 个 deployment 跑 MCP**（5/16 晚摸清拓扑发现实际比之前 STATE 描述多 1 个）：
 
 - `apaas-builder/apaas-builder-ming`（本 repo） — backend + frontend + admin SPA + 内置 `mcp_server.py` 80 工具。**5/16 晚切流后 ai-chat loopback 也不再用本机 80 工具**，改走 v2 svc → 本机 mcp_server.py 实际无 caller，**可以进入退役**
-- `apaas-builder/apaas-builder-mcp-server`（独立 repo `apaas-builder-mcp-server`，**ming 内 admin SPA + ai-chat 切流后的真实 backend**） — 5/16 夜升 `:20260516-2ac7c47-prune-10` image 后 **82 工具**（92 - 删 10 个 dolphin 不用工具）
+- `apaas-builder/apaas-builder-mcp-server`（独立 repo `apaas-builder-mcp-server`，**ming 内 admin SPA + ai-chat 切流后的真实 backend**） — 5/16 夜升 `:20260516-e35cca2-deterministic-md` image 后 **81 工具**（92 - 删 10 - 隐藏 check_model_codes 1 个，避免 LLM 篡改 md modelCode）
 - `apaas-mcp-server/apaas-mcp-server-v2`（同 repo 不同 ns，**dolphin agent 公网 `/mcp-server-v2/*` 入口**） — 跑 `:20260515-user-token` 68 工具，**比 apaas-builder ns 那个落后**，下次 sync
 
 4 个客户租户共享 3 个 dolphin agent，全在线。**ai-chat 切流后两边主 source of truth 收敛到 v2 repo**，dual repo drift 痛点缓解但未消除（68 vs 82 仍 drift 等下次同步）。
@@ -34,7 +34,7 @@ ai-builder 当前定位是 **MCP 工具供应商**，对接 dolphin 作为 agent
 | Deployment | Namespace | Image | 备注 |
 |---|---|---|---|
 | `apaas-builder-ming` | `apaas-builder` | `hub.dfy.definesys.cn/ai-builder/apaas-builder:20260516-uxfix` | HEAD `def942c`（含 3 UX fix + ai-chat v2 切流配置） |
-| `apaas-builder-mcp-server` | `apaas-builder` | `hub.dfy.definesys.cn/ai-builder/apaas-builder-mcp-server:20260516-2ac7c47-prune-10` | **82 工具**（v2 repo HEAD `2ac7c47` 删了 10 个 dolphin 不在用工具）。**新 tag 规范用 commit hash 后缀防覆盖**。registry: `hub.dfy.definesys.cn/ai-builder/` |
+| `apaas-builder-mcp-server` | `apaas-builder` | `hub.dfy.definesys.cn/ai-builder/apaas-builder-mcp-server:20260516-e35cca2-deterministic-md` | **81 工具**（v2 repo HEAD `e35cca2`：删 10 工具 → 修 9 docstring → 隐藏 check_model_codes）。**tag 用 commit hash 后缀防覆盖**。registry: `hub.dfy.definesys.cn/ai-builder/` |
 | `apaas-mcp-server-v2` | `apaas-mcp-server` | `hub-snapshots.dfy.definesys.cn/mars/apaas-builder-mcp-server:20260515-user-token` | **68 工具，跟 apaas-builder ns 那个 drift**。registry: `hub-snapshots.dfy.definesys.cn/mars/`。dolphin agent 公网入口走它，**下次 sync 升 `:20260516-port-15-crud` (该 tag 已 cross-push 到这个 registry，待命)** |
 | `apaas-mcp-server` | `apaas-mcp-server` | (v1, 历史遗留) | 老 deployment，未确认是否还有 client |
 
@@ -167,7 +167,15 @@ ai-builder 当前定位是 **MCP 工具供应商**，对接 dolphin 作为 agent
 
 **保留作 dolphin 主流程**：`submit_design_doc` / `update_app_from_doc` / `execute_change_plan` / `get_change_plan`（dolphin agent prompt 结构性改动主路径，**重度引用不能删**）。
 
-**drift 现状**：`apaas-builder/apaas-builder-mcp-server` (82 工具) vs `apaas-mcp-server/apaas-mcp-server-v2` (68 工具，dolphin 公网入口仍走它) — 待下次 sync
+**5/16 夜再砍 1 个到 81**（commit `e35cca2`）：实测 LLM 看到 `check_model_codes` 独立工具就**预防式**改 md 里 modelCode（用户 md 写 `customer` → LLM 传 `service_customer` 给 check 拿到 no_conflict → 应用 modelCode 跟 md diverge）。修复：
+
+- 去掉 `check_model_codes` 上的 `@mcp.tool()` 装饰器（LLM 看不见）
+- 函数保留作 `generate_app_from_doc` 内部预检（其内部已有等价 `_APAAS_RESERVED_MODEL_PREFIXES` 检查逻辑）
+- `generate_app_from_doc` docstring 加铁律：**md 内容 1:1 映射，agent 禁止预防式改任何 code 名**
+
+**设计原则锁定（用户 5/16 夜拍板）**：md→app 走 deterministic 程序，不让 LLM 干预决策。LLM 角色 = 陪用户写 md；写完点"生成" → 整条链路纯程序。
+
+**drift 现状**：`apaas-builder/apaas-builder-mcp-server` (81 工具) vs `apaas-mcp-server/apaas-mcp-server-v2` (68 工具，dolphin 公网入口仍走它) — 待下次 sync
 
 **典型漏同步案例**（保留为教训）：
 
@@ -190,7 +198,37 @@ ai-builder 当前定位是 **MCP 工具供应商**，对接 dolphin 作为 agent
 **防御措施 P0**：
 - v2 deployment 加 protection annotation 或者 GitOps 锁，防止单方面 set image
 - 下次 push image **必带 git commit hash 在 tag**（`:20260516-abc1234-feat`），看 tag 就知道来源
-- ✅ **5/16 夜已实施**：`:20260516-2ac7c47-prune-10` 是首个按规范命名的 tag，commit `2ac7c47` 可追溯
+- ✅ **5/16 夜已实施**：从 `:20260516-2ac7c47-prune-10` 起所有 tag 带 commit hash 可追溯
+
+## 五点六、5/16 夜连环 3 故障链（重要教训）
+
+**因果**：今晚做"prune 10 工具"动作 → 没想到连环触发 3 个故障：
+
+```
+故障 1: 删工具时漏更新 docstring
+  ⤵ 9 个核心工具 docstring 仍写 [DEPRECATED] + 引用已删工具
+  ⤵ LLM 看主流程"全废"就 hallucinate 兜底 "没有开放接口"
+  → fix: commit bcf117a 修 9 工具 docstring
+
+故障 2: mcp_bridge 进程内 cache 无 TTL
+  ⤵ ming 进程内 _LOADED dict 一加载就持久
+  ⤵ v2 升级 ming 不重启 → ai-chat agent 仍看老工具集（含 [DEPRECATED] 标记）
+  → fix: kubectl rollout restart ming，进程重启清空 cache（治标）
+  → 未做: mcp_bridge 加 5min TTL invalidate（治本，P2 留尾）
+
+故障 3: check_model_codes 工具引诱 LLM 改 md
+  ⤵ 工具 description 写"建议加业务前缀"
+  ⤵ LLM 解读为"全部 modelCode 都加前缀避免冲突"
+  ⤵ 用户 md 写 customer → LLM 传 service_customer → 应用 modelCode 跟 md diverge
+  → fix: commit e35cca2 去掉 @mcp.tool() 装饰器隐藏，generate_app_from_doc
+         docstring 加铁律"md 1:1 映射"
+```
+
+**关键教训**：
+- 删工具时**必须 grep** `[DEPRECATED]` + 该工具名在所有 docstring/comment/error_message 的引用，同步清
+- mcp_bridge cache TTL P2 留尾
+- 工具 description 不要写"建议 agent 做 X"这种 vague guidance，LLM 会泛化执行；要写硬规则
+- 凡是涉及 md→app 转换的工具，docstring 必须强调"deterministic / 1:1 / 禁止 agent 篡改"
 
 ## 六、进行中（mid-flight）
 
@@ -244,6 +282,7 @@ ai-builder 当前定位是 **MCP 工具供应商**，对接 dolphin 作为 agent
 - admin UI 编辑租户 `update_tenant` 会新建 `platform_envs` 行而非 update
 - fudan 用户账号未建
 - mcp-server-v2 admin SPA UI 表单缺 alias 字段（ai-builder repo 已有，未移植 v2）
+- **🆕 `mcp_bridge._LOADED` cache 无 TTL**（5/16 夜故障 2 教训）：进程内全局变量，v2 升级后 ming 不重启就一直 stale；加 5 min TTL invalidate（force_reload if elapsed > 5min）治本
 
 ### 🟢 P3 — 代码整洁（trial 阶段不动）
 
