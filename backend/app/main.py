@@ -18,7 +18,6 @@ from app.routes import (
     browser,
     chat,
     coding,
-    app_adjust_chat,
     coding_v2,
     coding_v2_spec,
     conversations,
@@ -190,7 +189,6 @@ app.include_router(voice.router, prefix="/api")
 app.include_router(sandboxes.router, prefix="/api")
 app.include_router(dolphin_sso.router, prefix="/api")
 app.include_router(requirements.router, prefix="/api")
-app.include_router(app_adjust_chat.router, prefix="/api")
 app.include_router(current_app.router, prefix="/api")
 app.include_router(admin_mcp.router, prefix="/api")
 app.include_router(builder_mcp.router, prefix="/api")
