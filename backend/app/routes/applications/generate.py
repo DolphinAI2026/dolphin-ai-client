@@ -18,7 +18,7 @@ from sse_starlette.sse import EventSourceResponse
 from jose import JWTError, jwt
 
 from app.database import get_db
-from app.models import User, Application
+from app.models import User, Application, PlatformEnv
 from app.deps import get_auth_context, AuthContext
 from app.config import settings
 from app.json_utils import loads_if_str
@@ -73,11 +73,33 @@ async def generate_application(
         raise HTTPException(status_code=404, detail="应用不存在")
     if not app.config_preview:
         raise HTTPException(status_code=400, detail="应用配置为空")
-    if not current_user.apaas_token:
-        raise HTTPException(status_code=400, detail="未连接得帆云平台，请先在设置中连接APaaS平台")
+
+    # 2026-05-16 夜：从 application.platform_env_id 查 platform_envs.token，不再
+    # 走 user.apaas_token 老链路 — 老链路只对"用户手动在 admin 连过 apaas"的账户
+    # work，ai-chat/dolphin 切流后 admin 账户的 apaas_token 是过期 SQL workaround 塞的。
+    # 新链路：应用绑 env_id (FK)，token 从 platform_envs 读，env 刷新 token 自动跟。
+    if not app.platform_env_id:
+        raise HTTPException(
+            status_code=400,
+            detail="应用未关联平台环境（platform_env_id 空），请在 admin 给应用绑定 env"
+        )
+    env_result = await db.execute(
+        select(PlatformEnv).where(PlatformEnv.id == app.platform_env_id)
+    )
+    env_obj = env_result.scalar_one_or_none()
+    if not env_obj or not env_obj.token:
+        raise HTTPException(
+            status_code=400,
+            detail=f"应用关联的 env (id={app.platform_env_id}) 没有可用 token，"
+                   f"请在 admin 重连环境刷新 token"
+        )
 
     config = loads_if_str(app.config_preview)
-    client = APaaSClient(base_url=current_user.apaas_base_url, tenant_id=current_user.apaas_tenant_id, token=current_user.apaas_token)
+    client = APaaSClient(
+        base_url=env_obj.base_url,
+        tenant_id=env_obj.platform_tenant_id,
+        token=env_obj.token,
+    )
     # 记住已有的 apaas_app_id（SSE generator 需要自己的 session）
     existing_apaas_app_id = app.apaas_app_id
 
