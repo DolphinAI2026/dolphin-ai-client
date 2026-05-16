@@ -1,17 +1,18 @@
 # 当前状态（STATE.md）
 
-> 更新时间：2026-05-16
+> 更新时间：2026-05-16（晚 — ai-chat 切流 v2 + 3 UX fix 上线后）
 > 维护规则：每次重大上线 / 决策后追加；只写 fact，不写 plan。
 > 关系：`README.md` 是入门文档（已过期）；`PLAN.md` 是治理目标（Phase 1+ 未启动）；**本文件是现状的 source of truth**。
 
 ## TL;DR
 
-ai-builder 当前定位是 **MCP 工具供应商**，对接 dolphin 作为 agent 运营平台。生产部署完全在公司 KubeSphere k8s，两个 pod：
+ai-builder 当前定位是 **MCP 工具供应商**，对接 dolphin 作为 agent 运营平台。**ai-chat 是产品保留功能**（5/16 晚拍板修正），不再视为过渡形态。生产部署完全在公司 KubeSphere k8s，**3 个 deployment 跑 MCP**（5/16 晚摸清拓扑发现实际比之前 STATE 描述多 1 个）：
 
-- `apaas-builder-ming`（本 repo） — backend + frontend + admin SPA + 内置 `mcp_server.py` 80 工具，**目前仅 ai-chat loopback 在用**
-- `apaas-builder-mcp-server-v2`（独立 repo） — 5 个 FastMCP 实例合并暴露 71 工具，dolphin agent 实际入口
+- `apaas-builder/apaas-builder-ming`（本 repo） — backend + frontend + admin SPA + 内置 `mcp_server.py` 80 工具。**5/16 晚切流后 ai-chat loopback 也不再用本机 80 工具**，改走 v2 svc → 本机 mcp_server.py 实际无 caller，**可以进入退役**
+- `apaas-builder/apaas-builder-mcp-server`（独立 repo `apaas-builder-mcp-server`，**ming 内 admin SPA + ai-chat 切流后的真实 backend**） — 5/16 晚升 `:20260516-port-15-crud` image 后 **92 工具**（main 83 + design 4 + vibe 9，去重后 92）
+- `apaas-mcp-server/apaas-mcp-server-v2`（同 repo 不同 ns，**dolphin agent 公网 `/mcp-server-v2/*` 入口**） — 跑 `:20260515-user-token` 68 工具，**比 apaas-builder ns 那个落后**，下次 sync
 
-4 个客户租户共享 3 个 dolphin agent，全在线。两个 MCP server 在 53 个工具上重复（双向漏同步是当前最痛的运维 bug 源）。
+4 个客户租户共享 3 个 dolphin agent，全在线。**ai-chat 切流后两边主 source of truth 收敛到 v2 repo**，dual repo drift 痛点缓解但未消除（68 vs 92 仍 drift 等下次同步）。
 
 ## 一、当前部署（事实）
 
@@ -20,21 +21,22 @@ ai-builder 当前定位是 **MCP 工具供应商**，对接 dolphin 作为 agent
 | 域名 / 路径 | 现状 | 后端 |
 |---|---|---|
 | `agent.dfy.definesys.cn/ai-builder/*` | **公网主入口** | ming pod (backend + frontend) |
-| `agent.dfy.definesys.cn/mcp-server-v2/*` | **dolphin agent 实际调** | mcp-server-v2 pod (FastMCP) |
-| `agent.dfy.definesys.cn/mcp-server/*` | v1 alias，已 stale | 同 v2 pod |
-| `agent.dfy.definesys.cn/ai-builder/api/mcp/mcp` | 公网仍 listen 401，dolphin 已不走 | ming pod 内置 mcp |
+| `agent.dfy.definesys.cn/mcp-server-v2/*` | **dolphin agent 实际调** | `apaas-mcp-server/apaas-mcp-server-v2` (68 工具，落后版) |
+| `agent.dfy.definesys.cn/mcp-server/*` | **5/16 实测：不是 v2 alias**，是独立 deployment | `apaas-builder/apaas-builder-mcp-server` (92 工具) |
+| `agent.dfy.definesys.cn/ai-builder/api/mcp/mcp` | 公网仍 listen 401。**5/16 晚 ai-chat 切流后内置 mcp 实际无 caller** | ming pod 内置 mcp (4241 行 80 工具，可退役) |
 | `df-aigc.dfy.definesys.cn/*` | StatefulSet `apaas-builder-0`，跑 stale image | df-aigc 团队不归本项目 |
 | `*.vibe-first.cn` | DNS 仍指老阿里云 ECS，已断 | 待 K8s 迁移落地 |
 
-阿里云 ECS `39.103.201.110` 还活作公网入口反代 + 24-48h 热备，不是业务跑在那。
+阿里云 ECS `39.103.201.110` 还活作公网入口反代 + 24-48h 热备，不是业务跑在那。**注**：今天实测 SSH 22 端口 banner timeout（sshd hang 或 fail2ban），上次确认 work 的 5/15 之后状态可能变了。
 
-### Pod / 最新 image
+### Pod / 最新 image（5/16 晚实测）
 
-| Pod | Image | 备注 |
-|---|---|---|
-| `apaas-builder-ming` | `hub.dfy.definesys.cn/ai-builder/apaas-builder:20260516-admin-mcp-dotenv` | 当前 HEAD `692c361` |
-| `apaas-builder-mcp-server-v2` | `:20260514-v2` + user-token 补丁 `:20260515-user-token` | 独立 repo |
-| `apaas-builder-mcp-server` (同 deploy 别名) | `:20260516-templatetype-fix` | |
+| Deployment | Namespace | Image | 备注 |
+|---|---|---|---|
+| `apaas-builder-ming` | `apaas-builder` | `hub.dfy.definesys.cn/ai-builder/apaas-builder:20260516-uxfix` | HEAD `def942c`（含 3 UX fix + ai-chat v2 切流配置） |
+| `apaas-builder-mcp-server` | `apaas-builder` | `hub.dfy.definesys.cn/ai-builder/apaas-builder-mcp-server:20260516-port-15-crud` | **92 工具**，是 v2 repo HEAD + 我新加 15 CRUD。**之前生产跑的 `:20260516-1319-builder-api-links` 是某 session WIP 未提交混血 image (35 工具)，已被覆盖**。registry: `hub.dfy.definesys.cn/ai-builder/` |
+| `apaas-mcp-server-v2` | `apaas-mcp-server` | `hub-snapshots.dfy.definesys.cn/mars/apaas-builder-mcp-server:20260515-user-token` | **68 工具，跟 apaas-builder ns 那个 drift**。registry: `hub-snapshots.dfy.definesys.cn/mars/`。dolphin agent 公网入口走它，**下次 sync 升 `:20260516-port-15-crud` (该 tag 已 cross-push 到这个 registry，待命)** |
+| `apaas-mcp-server` | `apaas-mcp-server` | (v1, 历史遗留) | 老 deployment，未确认是否还有 client |
 
 ### MySQL
 
@@ -70,20 +72,26 @@ ai-builder 当前定位是 **MCP 工具供应商**，对接 dolphin 作为 agent
 ## 三、架构决策（锁定，不要翻案）
 
 1. **ai-builder = MCP 工具供应商；dolphin = agent 运营平台**（2026-05-14）
-   - 不再演进 AIChatPage / VibeChatPanel / CodingPage 内置对话
+   - **ai-chat 是产品保留功能**（5-16 晚拍板修正之前"不再演进"判断）
+   - VibeChatPanel / CodingPage 内置对话仍是过渡形态
    - 不在 ai-builder 复刻 dolphin agent 能力
    - 不做双向集成幻想
 
-2. **vibe-coding 用 K8s pod-per-workspace**（2026-05-15）
+2. **ai-chat 跟 dolphin 调同一批 MCP 工具**（2026-05-16 晚）
+   - 实现层：ai-chat 通过 `MCP_INTERNAL_BASE=http://apaas-builder-mcp-server:8004/api/mcp/mcp` 走 v2 svc
+   - 不再调本机 `mcp_server.py` 80 工具，两边收敛到 v2 repo 92 工具
+   - dual repo 同步痛点缓解；本机 `mcp_server.py` 4241 行可退役
+
+3. **vibe-coding 用 K8s pod-per-workspace**（2026-05-15）
    - 设计稿：`docs/vibe-k8s-migration/00-design.md`
    - 不修补 docker 路线（老 ECS 已死，不恢复）
 
-3. **多租户身份 1:1:1 强绑**（2026-05-13）
+4. **多租户身份 1:1:1 强绑**（2026-05-13）
    - ai-builder tenant ↔ aPaaS 租户 ↔ dolphin customerName 严格 1 对 1
    - 切租户 = 切真实 aPaaS 租户落地
 
-4. **mcp-server-v2 是新主线**（2026-05-11 立项 / 5-14 切流）
-   - 本 repo `mcp_server.py` 4241 行 + 80 工具是历史遗留
+5. **mcp-server-v2 是新主线**（2026-05-11 立项 / 5-14 切流 / 5-16 晚 ai-chat 也切流）
+   - 本 repo `mcp_server.py` 4241 行 + 80 工具是历史遗留，**5/16 晚后无任何 caller**
 
 ## 四、代码层：活 / 过渡 / 死
 
@@ -105,18 +113,25 @@ ai-builder 当前定位是 **MCP 工具供应商**，对接 dolphin 作为 agent
 
 ### ⏸️ 过渡形态（已废，等 K8s 迁移端到端稳定 ≥ 1 周后一次清）
 
-🔒 **A 方案锁定（2026-05-16）**：跟 5-14 锁定决策一致 — ai-chat 内置对话不再演进，整条链路待 K8s 收尾后一次性 PR 清掉（净删 ~6000 行）。
+🔓 **5-16 晚修正**：ai-chat **保留为产品功能**，不再视为过渡。但实现已切流 v2 svc，本机 `mcp_server.py` 无 caller 可单独退役。
 
-后端：
-- `mcp_server.py` 4241 行 + 80 工具（删它前提：ai-chat / mcp_bridge 也删）
-- `routes/ai_chat.py` + `ai_chat/mcp_bridge.py` + `ai_chat/` 整目录
+后端可退役（5/16 晚 ai-chat 切流后，**这些都无任何 caller**）：
+- `mcp_server.py` 4241 行 + 80 工具（ai-chat 切流后 loopback 不再调）
 - `routes/vibe_coding_chat.py`
 - `routes/online_coding.py` + `routes/online_coding_runtime.py`（前端已 redirect /vibe-coding/*，后端命名 stale）
 
-前端：
-- `views/AIChatPage.vue` + `components/HelpAssistant.vue`
+后端**仍活**（ai-chat 保留）：
+- `routes/ai_chat.py` + `ai_chat/mcp_bridge.py` + `ai_chat/agent.py` + `ai_chat/tools.py`
+
+前端可退役：
 - `views/CodingPage.vue`（旧 SPEC 双栏，已被 ChatPage 覆盖）
-- `router/index.ts` 里 `/ai-chat/:id?` `/coding` 路由 + `main.py` 路由注册
+- `components/HelpAssistant.vue`
+- `router/index.ts` 里 `/coding` 路由 + `main.py` 路由注册
+
+前端**仍活**（ai-chat 保留）：
+- `views/AIChatPage.vue`
+- `components/common/AgentConversation.vue`（5/16 晚加 ResizeObserver + content watch）
+- `router/index.ts` 里 `/ai-chat/:id?` 路由
 
 ### ❓ 死代码（删之前先 grep 引用）
 
@@ -130,16 +145,40 @@ ai-builder 当前定位是 **MCP 工具供应商**，对接 dolphin 作为 agent
 - `routes/app_adjust_chat.py` (-371 行)
 - `components/AppAdjustDrawer.vue` (-594 行)
 
-## 五、双 MCP server 53 工具重复（最痛运维 bug 源）
+## 五、MCP 工具 drift（5/16 晚部分收敛）
 
-- ai-builder-ai 独有 **27 个**（含 vibe_* 10 个老 host docker 工具 + aPaaS 精细 CRUD 16）
-- v2 独有 **24 个**（含 draft 流程 5 / handoff 2 / 救援 / lookup 等新工具）
-- 重叠 **53 个** — 每次 bug 修要改两个 repo
+**5/16 晚切流前**：
+- ai-builder-ai mcp_server.py 独有 27（含 vibe_* 10 老 docker + aPaaS 精细 CRUD 15 + 2 其他）
+- v2 独有 28（含 draft 流程 5 / handoff 2 / 救援 / lookup 等）
+- 重叠 53 — 每次 bug 修要改两个 repo
 
-**典型漏同步案例**：
+**5/16 晚切流后**：
+- ai-chat 切走 v2 svc，ai-builder-ai mcp_server.py 80 工具**无 caller 可退役**
+- 把 15 个 aPaaS CRUD port 到 v2（commit `d8561ae`），v2 升到 **92 工具**
+- 剩 vibe_* 10 个老 docker 工具不 port（K8s 迁移要废）
+- **drift 主战场转移**：现在是 `apaas-builder/apaas-builder-mcp-server` (92 工具) vs `apaas-mcp-server/apaas-mcp-server-v2` (68 工具，dolphin 公网入口仍走它) — 待下次 sync
+
+**典型漏同步案例**（保留为教训）：
 
 - 5/16 `_get_build_output_dir` PAGE_CUSTOM_DEV：v2 早修，ai-builder-ai 漏改 → 误报 BUILD_FAILED
 - 5/15 token 自愈 wrapper：ai-builder-ai 改了，v2 没移植 → admin token 过期要手动 db update
+
+## 五点五、5/16 晚 image 覆盖事故（教训）
+
+**事件**：下午 15:00 我推 `apaas-builder-mcp-server:20260516-port-15-crud`（92 工具，soft auth — MCP_API_KEY 通过即 pass，user identity optional）。**17:45 另一个 session 推 `:20260516-1745-prune-tools`** 覆盖：33 工具（砍 60+ 个）+ strict auth（MCP_API_KEY 通过后**必须**有 end-user identity header 否则 401）。
+
+**后果**：ai-chat + admin /mcp 全 401 一直到 22:30 我发现并回滚。
+
+**回滚动作**：`kubectl -n apaas-builder set image deployment/apaas-builder-mcp-server mcp-server=hub.dfy.definesys.cn/ai-builder/apaas-builder-mcp-server:20260516-port-15-crud` → 92 工具 + soft auth 恢复。
+
+**未解决**：
+- `:20260516-1745-prune-tools` 来源不明（git history 找不到，可能其它 session / 手动 build / CI）
+- 17:45 那个版本的"strict auth + 砍工具"方向其实是正确长期方向（5/14 commit `feat(auth): dolphin aPaaS-Token header 用户身份穿透` 的延续）—— 但**当时没改 ai-chat mcp_bridge / admin_mcp.py / builder_mcp.py 三处 caller 同步注入 user identity**，所以推上去就炸
+- **下次再做 strict auth 切换前必须先改 caller 端 3 处**：mcp_bridge.py / admin_mcp.py / builder_mcp.py 加 user JWT 注入
+
+**防御措施 P0**：
+- v2 deployment 加 protection annotation 或者 GitOps 锁，防止单方面 set image
+- 下次 push image **必带 git commit hash 在 tag**（`:20260516-abc1234-feat`），看 tag 就知道来源
 
 ## 六、进行中（mid-flight）
 
@@ -160,13 +199,14 @@ ai-builder 当前定位是 **MCP 工具供应商**，对接 dolphin 作为 agent
   - 端到端测试
 - 跑通后整文件删 `docker_runtime.py`
 
-### ai-chat 路线决策（卡总闸）
+### ai-chat 路线 ✅ 已决（5/16 晚）
 
-只要决策出来，后面可一口气清掉 ~5000 行代码（`mcp_server.py` 4241 + `routes/ai_chat.py` + `views/AIChatPage.vue` + `HelpAssistant.vue` + `ai_chat/mcp_bridge.py`）。
+**B 方案落地**：ai-chat 是产品保留功能，走 v2 svc。3 个 UX fix 上线：
+- backend `agent.py`: `time.monotonic()` 算 duration（修 -0.1s 负值 bug）
+- backend `agent.py`: SSE buffer 20 字符 / 40ms flush（合并细碎 chunk）
+- frontend `AgentConversation.vue`: ResizeObserver + last-message-content watch（流式自动 scroll）
 
-选项：
-- **A. 彻底废 ai-chat**：清完。dolphin 是唯一对话入口。
-- **B. ai-chat 迁 v2**：改 `mcp_bridge.py` 走外部 v2 svc，保留 ai-chat 作为本地调试 / 对外演示用。但 v2 缺 11 个 ai-builder-ai 独有的查询工具，迁前要先并 v2。
+可退役（无 caller）：本机 `mcp_server.py` 4241 行 + `routes/online_coding.py` + `routes/vibe_coding_chat.py`。等观察 1 周再清。
 
 ## 七、已知问题 / 留尾
 
@@ -174,6 +214,7 @@ ai-builder 当前定位是 **MCP 工具供应商**，对接 dolphin 作为 agent
 
 - **`DOLPHIN_SERVICE_TOKEN` 2026-08-30 过期**
 - **ming workspaces 不在 PVC**：`/root/apaas-builder/workspaces/` 是容器 overlay，restart 丢
+- **🆕 5/16 晚 image 覆盖事故**：`apaas-builder-mcp-server` deployment 没有 GitOps 锁，任何 session/人 set image 立即生效覆盖。需要：(1) 制定 push 流程规范（git tag 必带 commit hash 后缀）；(2) 考虑 ArgoCD / FluxCD 锁定 deployment image 来自 git；(3) `mcp-server-config` secret 的 ALLOWED_HOSTS 已加内部短名 6 个（5/16 晚），不需要再补
 
 ### 🟡 P1
 
@@ -208,7 +249,9 @@ ai-builder 当前定位是 **MCP 工具供应商**，对接 dolphin 作为 agent
 | 一般 bug fix / 改功能 | 看本文件 → 确认改的不是过渡/死代码 → 改 → **必要时同步 mcp-server-v2 repo** |
 | 大架构动作 | 先确认第三节"锁定决策"是否仍 hold → 没翻案就照决策走 |
 | vibe-coding K8s 收尾 | 看 `docs/vibe-k8s-migration/00-design.md` → WIP 在 `k8s_runtime.py` + `61-vibe-ingress.yaml` |
-| ai-chat 路线决策（卡总闸） | 见第六节，需要用户拍板 |
+| **要改 v2 image** | **先 `kubectl -n apaas-builder get deployment apaas-builder-mcp-server -o jsonpath='{.spec.template.spec.containers[0].image}'` 看当前 tag，再决定改不改**（5/16 晚被覆盖过一次）|
+| ai-chat UX 进一步优化 | 5/16 已修 duration/chunk/scroll 3 个 P1。剩 P0 LLM 首轮推理 14s 是 admin UI 换模型动作（gpt-5.5 → gpt-4o-mini / haiku-3.5） |
+| sync v2 公网入口 image | `apaas-mcp-server/apaas-mcp-server-v2` 还跑 68 工具 stale 版，hub-snapshots/mars 已有 `:20260516-port-15-crud` 92 工具版待命，跑 `kubectl -n apaas-mcp-server set image deployment/apaas-mcp-server-v2 ... ` 即可 |
 
 ## 关联资源
 
