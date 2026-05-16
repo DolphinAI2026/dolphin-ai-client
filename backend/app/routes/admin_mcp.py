@@ -1,27 +1,67 @@
 """Admin: MCP 工具浏览 API。
 
-给前端 /admin/mcp 页面用 — 列出当前 MCP server 暴露的所有工具。
-不涉及调用 / 写入 / Key 管理，纯只读，给开发/运营浏览看。
+给前端 /admin/mcp 页面用 — 列出**线上 dolphin 实际在调**的 MCP server (v2) 暴露的所有工具。
 
-后续阶段会扩到：服务管理 (多 service) / API Key 管理 / 调用日志 / 在线调试。
+2026-05-16 起改为 proxy 模式：不再 list ai-builder-ai 自己 backend 进程内嵌的
+mcp_server.py 的工具（80 个），而是 HTTP 调集群内 v2 svc 拿真实 77 工具。
+
+原因：双 mcp server 并存（[[mcp-dual-servers-analysis-2026-05-16]]），admin 看本机
+mcp 跟 dolphin 实际用的 v2 不一致 → 看到 vibe_* 老 host docker 工具 / apaas 精细
+CRUD 16 个会以为 dolphin 能调，实际不能。改 proxy 后 admin 视图跟 dolphin 一致。
 """
 from __future__ import annotations
 
-import re
+import logging
+import os
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+import httpx
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.deps import AuthContext, get_auth_context
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/admin/mcp", tags=["admin-mcp"])
+
+# v2 svc 集群内 DNS：apaas-builder-mcp-server.apaas-builder.svc:8004
+# 短名 apaas-builder-mcp-server:8004 在同 namespace 内可达
+_V2_BASE = os.getenv(
+    "MCP_V2_INTERNAL_BASE",
+    "http://apaas-builder-mcp-server:8004/api/mcp/mcp",
+)
+# v2 TrustedHostMiddleware 只放行公网域名 host header，集群内调用必须显式带上
+_V2_HOST = os.getenv("MCP_V2_HOST", "agent.dfy.definesys.cn")
+
+
+def _v2_api_key() -> str:
+    """v2 MCP_API_KEYS 跟本机共享同一份 env，取第一个 key 用。"""
+    raw = (os.getenv("MCP_API_KEYS") or "").strip()
+    if not raw:
+        return ""
+    return raw.split(",")[0].strip()
+
+
+def _v2_headers() -> dict:
+    key = _v2_api_key()
+    if not key:
+        raise HTTPException(
+            status_code=500,
+            detail="MCP_API_KEYS env 未配置，admin /mcp 无法调 v2 MCP",
+        )
+    return {
+        "Host": _V2_HOST,
+        "Authorization": f"Bearer {key}",
+        "Accept": "application/json, text/event-stream",
+        "Content-Type": "application/json",
+    }
 
 
 def _classify_tool(name: str) -> tuple[str, str]:
     """按名字前缀 / 关键词粗分类。返回 (category_key, category_label)。"""
-    # Vibe Coding 全代码开发（layer 3 — 从零搭独立项目，跟 aPaaS 无关）
+    # Vibe Coding K8s sandbox（v2 新版）
     if name.startswith("vibe_"):
-        return ("vibe_coding", "Vibe Coding 全代码")
+        return ("vibe_coding", "Vibe Coding K8s 沙箱")
 
     # 自开发发布（aPaaS 平台侧 - 上传/关联/重发）
     if name in (
@@ -32,64 +72,63 @@ def _classify_tool(name: str) -> tuple[str, str]:
     ):
         return ("self_dev_publish", "aPaaS 自开发发布")
 
-    # Workspace 自开发（AI Coding 二次开发，跟 vibe_coding 独立的另一套 workspace）
+    # Workspace 自开发（AI Coding 二次开发）
     if name.startswith("read_workspace") or name.startswith("write_workspace") or \
        name.startswith("edit_workspace") or name.startswith("glob_workspace") or \
        name.startswith("grep_workspace") or name.startswith("run_workspace") or \
        name in ("create_dev_workspace", "get_dev_workspace_status",
                 "save_dev_spec", "import_zip_to_workspace", "publish_dev_workspace",
                 "init_apaas_backend_workspace", "lint_apaas_backend_workspace",
-                "doctor_apaas_backend_workspace"):
+                "doctor_apaas_backend_workspace", "build_dev_workspace"):
         return ("workspace_dev", "Workspace 自开发 (AI Coding)")
 
     # 场景 / 规范
     if name.startswith("list_dev_scene") or name.startswith("get_dev_scene"):
         return ("dev_scene", "自开发场景规范")
 
-    # aPaaS 应用配置精细操作（角色 / 字典 / 字段 / 模型 / 菜单 / 权限 CRUD，不走 SPEC 文档流程）
+    # Draft 工作流（v2 新流程）
     if name in (
-        # 角色
-        "list_apaas_app_roles", "create_apaas_app_roles",
-        "update_apaas_app_role", "delete_apaas_app_role",
-        # 字典 + 选项
-        "create_apaas_app_dict", "update_apaas_app_dict",
-        "add_apaas_dict_option", "update_apaas_dict_option",
-        # 模型 + 字段
-        "update_apaas_app_model",
-        "add_apaas_model_field", "update_apaas_model_field", "disable_apaas_model_field",
-        # 菜单 + 表单（delete 触发表单删）
-        "create_apaas_form_menu", "delete_apaas_app_menu", "delete_apaas_app_form",
-        # 权限矩阵（覆盖式 set + list）
-        "list_apaas_form_permissions", "set_apaas_form_permissions",
-        # 应用访问授权 + 单组件 update
-        "set_apaas_app_access", "update_apaas_form_component",
-        # 字典 / 选项 disable（apaas 没真 delete）
+        "save_design_draft", "patch_design_draft", "get_draft_summary",
+        "apply_draft_to_live_app", "promote_draft_to_app", "save_app_design_doc",
+    ):
+        return ("draft_workflow", "Draft 工作流")
+
+    # 跨 agent 接力
+    if name in ("handoff_to_builder", "handoff_to_coding"):
+        return ("agent_handoff", "跨 Agent 接力")
+
+    # 救援工具
+    if name in ("force_regenerate_apaas_app", "grant_app_access"):
+        return ("rescue", "应用救援")
+
+    # aPaaS 配置精细操作（CRUD）
+    if name in (
+        "set_apaas_app_access", "set_apaas_app_process",
+        "set_apaas_form_permissions", "update_apaas_form_component",
         "disable_apaas_app_dict", "disable_apaas_dict_option",
     ):
         return ("apaas_config_edit", "aPaaS 配置精细操作")
 
-    # 业务数据（运行时数据查询，跟搭建层不一样）
+    # 业务数据
     if name == "query_apaas_business_data":
         return ("apaas_business_data", "aPaaS 业务数据")
 
-    # 流程 BPMN（写盲，apaas 没暴露 list endpoint）
-    if name == "set_apaas_app_process":
-        return ("apaas_process", "aPaaS 审批流程")
-
     # aPaaS 平台内省（元数据查询）
     if name.startswith("list_apaas_") or name.startswith("get_apaas_") or \
-       name.startswith("check_app_") or name.startswith("validate_apaas_"):
+       name.startswith("check_app_") or name.startswith("validate_"):
         return ("apaas_introspect", "aPaaS 平台内省")
 
     # 文档解析 / 校验
-    if name in ("parse_design_doc", "submit_design_doc", "validate_builder_doc"):
+    if name in ("parse_design_doc", "submit_design_doc"):
         return ("doc", "文档解析 / 校验")
 
-    # 应用生命周期（创建 / 部署 / 发布 / 变更计划）
+    # 应用生命周期
     if name in (
         "generate_app_from_doc", "list_my_applications", "get_application",
         "update_app_from_doc", "get_change_plan", "execute_change_plan",
-        "deploy_application", "publish_application",
+        "deploy_application", "publish_application", "list_apaas_apps",
+        "lookup_user_by_username", "get_recent_app_context",
+        "check_model_codes", "check_app_code_conflict",
     ):
         return ("app_lifecycle", "应用生命周期")
 
@@ -104,23 +143,38 @@ def _classify_tool(name: str) -> tuple[str, str]:
 async def list_mcp_tools(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
 ):
-    """列出 MCP server 暴露的所有工具（name / description / inputSchema / 分类）。
+    """列出线上 dolphin 实际在调的 v2 MCP server 暴露的所有工具。
 
-    任何登录用户都能看（信息是公开的工具清单，不涉及租户隔离数据）。
+    走集群内 HTTP proxy 调 v2 `tools/list`，跟 dolphin 看到的列表完全一致。
     """
-    from app.mcp_server import mcp
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as cli:
+            resp = await cli.post(
+                _V2_BASE,
+                headers=_v2_headers(),
+                json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+            )
+        if resp.status_code != 200:
+            raise HTTPException(
+                status_code=502,
+                detail=f"v2 MCP tools/list 失败 ({resp.status_code}): {resp.text[:300]}",
+            )
+        data = resp.json()
+        tools_raw = (data.get("result") or {}).get("tools") or []
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("admin /mcp/tools proxy 调 v2 异常")
+        raise HTTPException(status_code=502, detail=f"v2 MCP 不可达: {exc}")
 
-    tools = await mcp.list_tools()
     result = []
-    for t in tools:
-        name = t.name
+    for t in tools_raw:
+        name = t.get("name") or ""
         cat_key, cat_label = _classify_tool(name)
-        # 拆 description 为标题 + 详情段（取第一行作为标题）
-        full_desc = (t.description or "").strip()
+        full_desc = (t.get("description") or "").strip()
         first_line = full_desc.split("\n")[0].strip()
         rest = full_desc[len(first_line):].lstrip("\n")
-        schema = t.inputSchema or {}
-        # 提取参数列表（给前端表格用）
+        schema = t.get("inputSchema") or {}
         properties = schema.get("properties") or {}
         required = set(schema.get("required") or [])
         params = []
@@ -144,7 +198,6 @@ async def list_mcp_tools(
             "required_count": len(required),
         })
 
-    # 分组聚合（按 category）
     by_category: dict[str, dict] = {}
     for t in result:
         key = t["category_key"]
@@ -158,9 +211,9 @@ async def list_mcp_tools(
         "tools": result,
         "categories": list(by_category.values()),
         "server_info": {
-            "name": getattr(mcp, "name", "apaas-builder-ai"),
-            "transport": "Streamable HTTP",
-            "endpoint": "/api/mcp/mcp",
+            "name": "apaas-builder-mcp-server (v2)",
+            "transport": "Streamable HTTP (proxied)",
+            "endpoint": "/mcp-server-v2/api/mcp/mcp (上游)",
             "auth_method": "Bearer (MCP_API_KEYS)",
         },
     }
