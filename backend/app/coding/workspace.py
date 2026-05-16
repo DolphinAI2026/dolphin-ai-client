@@ -598,7 +598,7 @@ class WorkspaceManager:
         )
         if template_type == "FORM_COMPONENT":
             return ws_path / output_name
-        if template_type in {"MENU_PAGE", "FORM_PAGE", "PAGE_LAYOUT", "LIST_VIEW"}:
+        if template_type in {"MENU_PAGE", "FORM_PAGE", "PAGE_CUSTOM_DEV", "PAGE_LAYOUT", "LIST_VIEW"}:
             return ws_path / output_name
         if template_type in {"FRONTEND_PLUGIN", "PLUGIN"}:
             return self._get_frontend_plugin_output_dir(ws_path, apaas_config)
