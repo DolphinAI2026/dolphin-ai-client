@@ -1,6 +1,6 @@
 # 当前状态（STATE.md）
 
-> 更新时间：2026-05-16（晚 — ai-chat 切流 v2 + 3 UX fix 上线后）
+> 更新时间：2026-05-16（夜 — ai-chat 切流 v2 + 3 UX fix + 92→82 工具裁剪 完结）
 > 维护规则：每次重大上线 / 决策后追加；只写 fact，不写 plan。
 > 关系：`README.md` 是入门文档（已过期）；`PLAN.md` 是治理目标（Phase 1+ 未启动）；**本文件是现状的 source of truth**。
 
@@ -9,10 +9,10 @@
 ai-builder 当前定位是 **MCP 工具供应商**，对接 dolphin 作为 agent 运营平台。**ai-chat 是产品保留功能**（5/16 晚拍板修正），不再视为过渡形态。生产部署完全在公司 KubeSphere k8s，**3 个 deployment 跑 MCP**（5/16 晚摸清拓扑发现实际比之前 STATE 描述多 1 个）：
 
 - `apaas-builder/apaas-builder-ming`（本 repo） — backend + frontend + admin SPA + 内置 `mcp_server.py` 80 工具。**5/16 晚切流后 ai-chat loopback 也不再用本机 80 工具**，改走 v2 svc → 本机 mcp_server.py 实际无 caller，**可以进入退役**
-- `apaas-builder/apaas-builder-mcp-server`（独立 repo `apaas-builder-mcp-server`，**ming 内 admin SPA + ai-chat 切流后的真实 backend**） — 5/16 晚升 `:20260516-port-15-crud` image 后 **92 工具**（main 83 + design 4 + vibe 9，去重后 92）
+- `apaas-builder/apaas-builder-mcp-server`（独立 repo `apaas-builder-mcp-server`，**ming 内 admin SPA + ai-chat 切流后的真实 backend**） — 5/16 夜升 `:20260516-2ac7c47-prune-10` image 后 **82 工具**（92 - 删 10 个 dolphin 不用工具）
 - `apaas-mcp-server/apaas-mcp-server-v2`（同 repo 不同 ns，**dolphin agent 公网 `/mcp-server-v2/*` 入口**） — 跑 `:20260515-user-token` 68 工具，**比 apaas-builder ns 那个落后**，下次 sync
 
-4 个客户租户共享 3 个 dolphin agent，全在线。**ai-chat 切流后两边主 source of truth 收敛到 v2 repo**，dual repo drift 痛点缓解但未消除（68 vs 92 仍 drift 等下次同步）。
+4 个客户租户共享 3 个 dolphin agent，全在线。**ai-chat 切流后两边主 source of truth 收敛到 v2 repo**，dual repo drift 痛点缓解但未消除（68 vs 82 仍 drift 等下次同步）。
 
 ## 一、当前部署（事实）
 
@@ -22,7 +22,7 @@ ai-builder 当前定位是 **MCP 工具供应商**，对接 dolphin 作为 agent
 |---|---|---|
 | `agent.dfy.definesys.cn/ai-builder/*` | **公网主入口** | ming pod (backend + frontend) |
 | `agent.dfy.definesys.cn/mcp-server-v2/*` | **dolphin agent 实际调** | `apaas-mcp-server/apaas-mcp-server-v2` (68 工具，落后版) |
-| `agent.dfy.definesys.cn/mcp-server/*` | **5/16 实测：不是 v2 alias**，是独立 deployment | `apaas-builder/apaas-builder-mcp-server` (92 工具) |
+| `agent.dfy.definesys.cn/mcp-server/*` | **5/16 实测：不是 v2 alias**，是独立 deployment | `apaas-builder/apaas-builder-mcp-server` (82 工具，5/16 夜裁剪) |
 | `agent.dfy.definesys.cn/ai-builder/api/mcp/mcp` | 公网仍 listen 401。**5/16 晚 ai-chat 切流后内置 mcp 实际无 caller** | ming pod 内置 mcp (4241 行 80 工具，可退役) |
 | `df-aigc.dfy.definesys.cn/*` | StatefulSet `apaas-builder-0`，跑 stale image | df-aigc 团队不归本项目 |
 | `*.vibe-first.cn` | DNS 仍指老阿里云 ECS，已断 | 待 K8s 迁移落地 |
@@ -34,7 +34,7 @@ ai-builder 当前定位是 **MCP 工具供应商**，对接 dolphin 作为 agent
 | Deployment | Namespace | Image | 备注 |
 |---|---|---|---|
 | `apaas-builder-ming` | `apaas-builder` | `hub.dfy.definesys.cn/ai-builder/apaas-builder:20260516-uxfix` | HEAD `def942c`（含 3 UX fix + ai-chat v2 切流配置） |
-| `apaas-builder-mcp-server` | `apaas-builder` | `hub.dfy.definesys.cn/ai-builder/apaas-builder-mcp-server:20260516-port-15-crud` | **92 工具**，是 v2 repo HEAD + 我新加 15 CRUD。**之前生产跑的 `:20260516-1319-builder-api-links` 是某 session WIP 未提交混血 image (35 工具)，已被覆盖**。registry: `hub.dfy.definesys.cn/ai-builder/` |
+| `apaas-builder-mcp-server` | `apaas-builder` | `hub.dfy.definesys.cn/ai-builder/apaas-builder-mcp-server:20260516-2ac7c47-prune-10` | **82 工具**（v2 repo HEAD `2ac7c47` 删了 10 个 dolphin 不在用工具）。**新 tag 规范用 commit hash 后缀防覆盖**。registry: `hub.dfy.definesys.cn/ai-builder/` |
 | `apaas-mcp-server-v2` | `apaas-mcp-server` | `hub-snapshots.dfy.definesys.cn/mars/apaas-builder-mcp-server:20260515-user-token` | **68 工具，跟 apaas-builder ns 那个 drift**。registry: `hub-snapshots.dfy.definesys.cn/mars/`。dolphin agent 公网入口走它，**下次 sync 升 `:20260516-port-15-crud` (该 tag 已 cross-push 到这个 registry，待命)** |
 | `apaas-mcp-server` | `apaas-mcp-server` | (v1, 历史遗留) | 老 deployment，未确认是否还有 client |
 
@@ -156,7 +156,18 @@ ai-builder 当前定位是 **MCP 工具供应商**，对接 dolphin 作为 agent
 - ai-chat 切走 v2 svc，ai-builder-ai mcp_server.py 80 工具**无 caller 可退役**
 - 把 15 个 aPaaS CRUD port 到 v2（commit `d8561ae`），v2 升到 **92 工具**
 - 剩 vibe_* 10 个老 docker 工具不 port（K8s 迁移要废）
-- **drift 主战场转移**：现在是 `apaas-builder/apaas-builder-mcp-server` (92 工具) vs `apaas-mcp-server/apaas-mcp-server-v2` (68 工具，dolphin 公网入口仍走它) — 待下次 sync
+
+**5/16 夜裁剪到 82**（commit `2ac7c47`）：发现 92 里有冗余 + dolphin agent prompt audit 后删 10 工具：
+
+| 删除 | 数量 | 理由 |
+|---|---|---|
+| `save_design_draft` / `patch_design_draft` / `save_app_design_doc` / `apply_draft_to_live_app` / `promote_draft_to_app` / `get_draft_summary` | 6 | 新 draft 流程 — pricing doc 估过但 dolphin agent prompt 没切，推翻"未来主流程"plan |
+| `handoff_to_builder` / `handoff_to_coding` | 2 | 跨 agent 接力 — dolphin prompt 完全没引用 |
+| `lookup_user_by_username` / `grant_app_access` | 2 | 用户授权管理 — dolphin prompt 完全没引用 |
+
+**保留作 dolphin 主流程**：`submit_design_doc` / `update_app_from_doc` / `execute_change_plan` / `get_change_plan`（dolphin agent prompt 结构性改动主路径，**重度引用不能删**）。
+
+**drift 现状**：`apaas-builder/apaas-builder-mcp-server` (82 工具) vs `apaas-mcp-server/apaas-mcp-server-v2` (68 工具，dolphin 公网入口仍走它) — 待下次 sync
 
 **典型漏同步案例**（保留为教训）：
 
@@ -179,6 +190,7 @@ ai-builder 当前定位是 **MCP 工具供应商**，对接 dolphin 作为 agent
 **防御措施 P0**：
 - v2 deployment 加 protection annotation 或者 GitOps 锁，防止单方面 set image
 - 下次 push image **必带 git commit hash 在 tag**（`:20260516-abc1234-feat`），看 tag 就知道来源
+- ✅ **5/16 夜已实施**：`:20260516-2ac7c47-prune-10` 是首个按规范命名的 tag，commit `2ac7c47` 可追溯
 
 ## 六、进行中（mid-flight）
 
@@ -249,9 +261,9 @@ ai-builder 当前定位是 **MCP 工具供应商**，对接 dolphin 作为 agent
 | 一般 bug fix / 改功能 | 看本文件 → 确认改的不是过渡/死代码 → 改 → **必要时同步 mcp-server-v2 repo** |
 | 大架构动作 | 先确认第三节"锁定决策"是否仍 hold → 没翻案就照决策走 |
 | vibe-coding K8s 收尾 | 看 `docs/vibe-k8s-migration/00-design.md` → WIP 在 `k8s_runtime.py` + `61-vibe-ingress.yaml` |
-| **要改 v2 image** | **先 `kubectl -n apaas-builder get deployment apaas-builder-mcp-server -o jsonpath='{.spec.template.spec.containers[0].image}'` 看当前 tag，再决定改不改**（5/16 晚被覆盖过一次）|
+| **要改 v2 image** | **先 `kubectl -n apaas-builder get deployment apaas-builder-mcp-server -o jsonpath='{.spec.template.spec.containers[0].image}'` 看当前 tag，再决定改不改**（5/16 晚被覆盖过一次）。**新 tag 规范**：`:YYYYMMDD-<git_short_sha>-<topic>`（5/16 夜起强制） |
 | ai-chat UX 进一步优化 | 5/16 已修 duration/chunk/scroll 3 个 P1。剩 P0 LLM 首轮推理 14s 是 admin UI 换模型动作（gpt-5.5 → gpt-4o-mini / haiku-3.5） |
-| sync v2 公网入口 image | `apaas-mcp-server/apaas-mcp-server-v2` 还跑 68 工具 stale 版，hub-snapshots/mars 已有 `:20260516-port-15-crud` 92 工具版待命，跑 `kubectl -n apaas-mcp-server set image deployment/apaas-mcp-server-v2 ... ` 即可 |
+| sync v2 公网入口 image | `apaas-mcp-server/apaas-mcp-server-v2` 还跑 68 工具 stale 版，dolphin agent 公网入口看不到 82 工具新版。需 build v2 image 也 push hub-snapshots/mars + set image |
 
 ## 关联资源
 
