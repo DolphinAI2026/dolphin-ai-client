@@ -1,11 +1,36 @@
-# Vibe-coding 沙箱 *.vibe-first.cn 通配 Ingress
-# 方案 A：单 Ingress + server-snippet 按 Host header 路由到 vibe-svc-{ws_id}
-#   优点：减少 K8s object 数（不为每个 workspace 创 Ingress）
-#   缺点：依赖 nginx-ingress 的 server-snippet 注解兼容性
-# 设计文档: docs/vibe-k8s-migration/00-design.md
+# Vibe-coding 沙箱 Ingress — 方案 B 占位（per-workspace 动态 Ingress）
+#
+# ⚠️ 历史：本文件最初实现方案 A（通配 `*.vibe-first.cn` + server-snippet/
+#    configuration-snippet 提取 ws_id 动态 proxy_pass）。2026-05-15 该方案
+#    撞 nginx "if is evil" 限制 — proxy_* directive 不允许在 if-block 内，
+#    nginx config gen [emerg]，4 个 ingress-nginx controller pod 全跑 stale
+#    config，公网 504。当时 `kubectl delete ingress vibe-sandboxes` 救场。
+#
+#    详情：memory `handoff_2026_05_15_late.md` 第 1 件事 +
+#         docs/vibe-k8s-migration/00-design.md 第 154 行 "撞兼容性切方案 B"。
+#
+# 方案 B：每个 workspace 由 `backend/app/vibe_coding/k8s_runtime.py` 在
+#        `ensure_container()` 中动态创建一个独立 Ingress object，
+#        host = `{ws_id}.vibe-first.cn`，backend 直接指向对应 Service。
+#        删除 workspace 时同步 delete Ingress。
+#
+#        优点：避开 if-is-evil 兼容性问题，每个 ingress 是简单 path-based
+#             proxy_pass。
+#        缺点：ingress object 数量随 workspace 线性增长（trial 阶段 <100
+#             可接受）。
+#
+# TODO（k8s_runtime.py）：
+#   - 加 `_ensure_ingress(ws_id)` 方法
+#   - 加 `_delete_ingress(ws_id)` 方法
+#   - `ensure_container()` 末尾调用 _ensure_ingress
+#   - `remove()` 调用 _delete_ingress
+#   - RBAC 已含 ingress create/delete 权限（deploy/k8s/60-vibe-rbac.yaml）
+#
+# 本文件保留 placeholder Service 不删 — k8s_runtime.py 测试期可能引用为
+# fallback；待 ingress 动态化落地后再决定是否清理本文件。
 ---
-# 占位 Service — Ingress backend 必须引用 valid service object，K8s API 才接受
-# 实际不路由到这里（server-snippet 已经接管）
+# Placeholder Service — 不路由任何流量，仅作 k8s_runtime.py 单测 fallback
+# headless ClusterIP=None 不占 IP
 apiVersion: v1
 kind: Service
 metadata:
@@ -16,73 +41,10 @@ metadata:
     component: vibe-ingress-placeholder
 spec:
   type: ClusterIP
-  clusterIP: None  # headless — 不需要分配 ClusterIP
+  clusterIP: None
   selector:
-    # 故意不匹配任何 pod —— 这个 service 本来就不该被命中
-    workspace-id: __placeholder_never_match__
+    workspace-id: placeholder-never-match
   ports:
     - name: vite
       port: 6173
       targetPort: 6173
----
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: vibe-sandboxes
-  namespace: apaas-builder
-  labels:
-    app: vibe-sandbox
-  annotations:
-    # SSE / WebSocket / 长连接友好
-    nginx.ingress.kubernetes.io/proxy-buffering: "off"
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
-    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
-    # 关键：用 server-snippet 提取子域名作 workspace_id，proxy_pass 到对应 Service
-    # 这覆盖默认 backend，让 ingress 行为=按 Host 路由
-    nginx.ingress.kubernetes.io/server-snippet: |
-      # 从 *.vibe-first.cn 中提取 workspace_id
-      set $vibe_ws_id "";
-      if ($host ~* "^([a-z0-9-]+)\.vibe-first\.cn$") {
-        set $vibe_ws_id $1;
-      }
-      # 占位 — 真实 location 在 configuration-snippet 里改写
-    nginx.ingress.kubernetes.io/configuration-snippet: |
-      if ($vibe_ws_id != "") {
-        # 改写 upstream 到对应 workspace 的 Service
-        # 走 K8s DNS：vibe-svc-{ws_id}.apaas-builder.svc.cluster.local:6173
-        set $vibe_upstream "vibe-svc-${vibe_ws_id}.apaas-builder.svc.cluster.local:6173";
-        proxy_pass http://$vibe_upstream;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        # 关键：上游沙箱 Pod 可能没起来（用户没运行 npm run dev），
-        # 50x 时返友好提示而不是默认 nginx 502 页面
-        proxy_intercept_errors on;
-        error_page 502 503 504 /__vibe_no_sandbox__;
-        break;
-      }
-    # 友好错误页（沙箱 Pod 未启动 / dev server 没起）
-    nginx.ingress.kubernetes.io/server-snippet-extra: |
-      location = /__vibe_no_sandbox__ {
-        internal;
-        default_type text/html;
-        return 503 '<html><body style="font-family:sans-serif;padding:40px;text-align:center;color:#666"><h2>Vibe Sandbox 未就绪</h2><p>请在 ai-builder 中调用 <code>vibe_run_command</code> 启动 dev server，或检查 workspace 是否存在。</p></body></html>';
-      }
-spec:
-  ingressClassName: nginx
-  rules:
-    - host: "*.vibe-first.cn"
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: vibe-sandbox-placeholder
-                port:
-                  number: 6173
