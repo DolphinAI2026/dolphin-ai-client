@@ -447,7 +447,6 @@ ai-chat 5/17 凌晨从 v2 切回 ming loopback（撤销 5/16 晚切流决策）�
 - 11 个 doc_* 模块 + 7 个 config_* 模块迭代痕迹
 - `.serena/` 未加 .gitignore
 - `routes/admin_mcp.py:6` 注释还写"77 工具"，5/16 union main+design 后实际 71（stale 注释，不影响逻辑）
-- **🆕 Element Plus 2.x el-drawer 历史 custom-class 写法残留**：仓库里搜 `custom-class.*drawer`，全部改 `body-class` / `header-class`（5/17 中午只修了 CodingPage 3 处）
 
 ## 八、下次接手第一步
 
