@@ -1580,6 +1580,71 @@ watch(() => route.path, () => {
   border-bottom: 1px solid var(--t-border-subtle);
 }
 
+/* 2026-05-17 B 重构: canvas-actions 替代 content-view-toggle-bar */
+.canvas-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px 8px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--t-border-subtle);
+  background: var(--t-bg-canvas, transparent);
+}
+
+.canvas-actions-back {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--t-border-subtle);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--t-text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.canvas-actions-back:hover {
+  background: var(--t-bg-elevated);
+  color: var(--t-text-primary);
+}
+
+.canvas-actions-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.canvas-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--t-border-subtle);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--t-text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.canvas-action-btn:hover:not(:disabled) {
+  background: var(--t-bg-elevated);
+  color: var(--t-text-primary);
+  border-color: var(--t-brand-primary, #646cff);
+}
+.canvas-action-btn:disabled,
+.canvas-action-btn.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.canvas-action-label {
+  line-height: 1;
+}
+
 .toggle-bar-back-btn {
   display: flex;
   align-items: center;

@@ -36,16 +36,18 @@ logger = logging.getLogger(__name__)
 
 _LOADED: Optional[dict] = None
 # 默认连同进程 backend (uvicorn :8003 + FastMCP mount 在 /api/mcp/mcp)。
-# 之前 hardcode 8000 是历史遗留 — 撞 k8s ming pod connection refused，LLM 拿不到任何
-# MCP 工具，只剩 4 个 ai_chat 内置 base 工具，体验上像"工具被屏蔽"。
 #
-# 切 v2 灰度（2026-05-16）：k8s ming pod secret 配
-#   MCP_INTERNAL_BASE=http://apaas-builder-mcp-server:8004/api/mcp/mcp
-#   MCP_BRIDGE_AUTH_KEY=<v2 的 MCP_API_KEYS 首段>
-# 不配 = 走本机 loopback（兜底）；回滚直接 unset 两个 env 不改代码。
-_BASE_URL = os.getenv(
-    "MCP_INTERNAL_BASE",
-    "http://127.0.0.1:8003/api/mcp/mcp",
+# 2026-05-17：拆出独立 env MCP_BRIDGE_BASE_URL，跟 mcp_server.py 的
+# MCP_INTERNAL_BASE 解耦：
+#   - mcp_bridge (ai-chat 调 MCP):  MCP_BRIDGE_BASE_URL  含 /mcp/mcp 完整端点
+#   - mcp_server (工具调 backend):  MCP_INTERNAL_BASE    只 /api 根路径
+# 之前两者共用一个 env，配 /api/mcp/mcp 后 mcp_server 调 /coding/* 时拼成
+# /api/mcp/mcp/coding/* 撞 MCP key 校验 401（create_dev_workspace 故障实证）。
+# 兼容老 env：BRIDGE 没配时 fallback MCP_INTERNAL_BASE（向后兼容）。
+_BASE_URL = (
+    os.getenv("MCP_BRIDGE_BASE_URL", "").strip()
+    or os.getenv("MCP_INTERNAL_BASE", "").strip()
+    or "http://127.0.0.1:8003/api/mcp/mcp"
 )
 
 # 黑名单：这里曾有 4 个 stub 工具被屏蔽，现在全部已 ship 真实现，清空
