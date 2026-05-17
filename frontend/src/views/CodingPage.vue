@@ -76,8 +76,10 @@
           </div>
         </div>
 
-        <!-- Welcome State (Codex-like command center) - 2026-05-17 B 重构：去掉 ideUrl 阻塞 -->
-        <div v-if="!isStreaming && streamMessages.length === 0" class="welcome-pane">
+        <!-- Welcome State (Codex-like command center) - 2026-05-17 B 重构：
+             去掉 ideUrl 阻塞 + 加 !codingStore.workspace 兜底（选了 ws 后即使 streamMessages 空也要进 chat 视图，
+             不再 Welcome 永远显示 regression） -->
+        <div v-if="!isStreaming && streamMessages.length === 0 && !codingStore.workspace" class="welcome-pane">
           <div class="welcome-inner" :style="codingLandingVars">
 
             <section class="qc-section coding-command-center">
@@ -459,12 +461,13 @@
 
       </div>
 
-      <!-- 2026-05-17 B 重构：IDE iframe 改右侧抽屉，不再独占主区 -->
+      <!-- 2026-05-17 B 重构：IDE iframe 全屏抽屉 (size=100% 用户拍板 — 80% 露左 NavRail 干扰) -->
       <el-drawer
         v-model="ideDrawerOpen"
         title="IDE 编辑器"
         direction="rtl"
-        size="65%"
+        size="100%"
+        custom-class="coding-ide-drawer"
         :append-to-body="true"
         :destroy-on-close="false"
       >
@@ -495,7 +498,7 @@
       </el-drawer>
 
       <!-- 文件抽屉：显示 workspace 文件列表 (P0 留 stub，P1 接 ws files API) -->
-      <el-drawer v-model="filesDrawerOpen" title="工作区文件" direction="rtl" size="40%" :append-to-body="true">
+      <el-drawer v-model="filesDrawerOpen" title="工作区文件" direction="rtl" size="40%" custom-class="coding-files-drawer" :append-to-body="true">
         <div class="files-drawer-body">
           <p style="color:#999;font-size:13px;padding:16px;">
             📋 文件浏览 MVP — 当前展示 workspace 元信息，详细文件树后续接入。
@@ -511,7 +514,7 @@
       </el-drawer>
 
       <!-- 设置抽屉：workspace 操作 (删除 / 同步 / 下载等) -->
-      <el-drawer v-model="editDrawerOpen" title="工作区设置" direction="rtl" size="40%" :append-to-body="true">
+      <el-drawer v-model="editDrawerOpen" title="工作区设置" direction="rtl" size="40%" custom-class="coding-edit-drawer" :append-to-body="true">
         <div class="edit-drawer-body" style="padding:16px;display:flex;flex-direction:column;gap:12px;">
           <button v-if="codingStore.workspace" class="canvas-action-btn" :disabled="isDownloading" @click="downloadCode">
             <el-icon :size="14"><Download /></el-icon>
@@ -3719,6 +3722,27 @@ watch(() => route.path, () => {
   flex: 1;
   overflow: hidden;
   position: relative;
+  /* 2026-05-17: 抽屉化后 parent (el-drawer body) 不是 flex container，需绝对 100% 高 */
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+/* 2026-05-17 el-drawer 全局 override: IDE 抽屉 body padding 0 让 iframe 占满 */
+:deep(.el-drawer__body) {
+  padding: 0 !important;
+  display: flex;
+  flex-direction: column;
+}
+:deep(.el-drawer.coding-ide-drawer .el-drawer__body),
+:deep(.el-drawer.coding-files-drawer .el-drawer__body),
+:deep(.el-drawer.coding-edit-drawer .el-drawer__body) {
+  padding: 0 !important;
+}
+:deep(.el-drawer.coding-ide-drawer .el-drawer__body > div),
+:deep(.el-drawer.coding-ide-drawer .el-drawer__body iframe) {
+  width: 100%;
+  height: 100%;
 }
 .ide-loading-overlay {
   position: absolute;

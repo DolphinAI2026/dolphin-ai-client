@@ -1076,6 +1076,7 @@ async def create_workspace(
         display_name=req.display_name,
         user_id=ctx.user.id,
         project_id=req.project_id,
+        tenant_id=ctx.tenant_id,
     )
     meta["files"] = workspace_mgr.list_files(meta["id"])
     return _decorate_workspace_access(meta, access_role)

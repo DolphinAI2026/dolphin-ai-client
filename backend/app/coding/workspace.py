@@ -869,6 +869,7 @@ class WorkspaceManager:
         user_id: int,
         project_id: Optional[int] = None,
         display_name: Optional[str] = None,
+        tenant_id: Optional[int] = None,
     ) -> dict:
         """创建新工作区并生成脚手架"""
         # 规范化项目名
@@ -883,7 +884,8 @@ class WorkspaceManager:
 
         ws_path.mkdir(parents=True)
 
-        # 写入 workspace 元信息
+        # 写入 workspace 元信息（2026-05-17 加 tenant_id — 没写的话 list_accessible_workspaces
+        # 严格过滤会把整个 ws 隐藏掉，用户在 /coding 看不到 ai-chat 新建的 ws。
         meta = {
             "id": ws_id,
             "folder_name": folder_name,
@@ -892,6 +894,7 @@ class WorkspaceManager:
             "project_name": safe_name,
             "display_name": resolved_display_name,
             "user_id": user_id,
+            "tenant_id": tenant_id,
             "status": WorkspaceStatus.CREATING.value,
         }
         (ws_path / ".workspace.json").write_text(
@@ -2539,15 +2542,14 @@ const resultPath = '{str(result_json_path)}'
                         continue
                 elif meta.get("user_id") != user_id:
                     continue
-                # 租户隔离：meta.tenant_id 不匹配时过滤
-                # meta 没 tenant_id 字段（老数据未迁移）也按"非匹配"严格处理，
-                # 避免迁移期间漏过滤；线上跑迁移脚本回填后所有 meta 都有 tenant_id
+                # 租户隔离：meta.tenant_id 匹配时通过；缺失时按 user_id 兜底放行
+                # (2026-05-17 修：原代码 strict continue 跟 docstring "按 user_id 兜底放行" 不一致，
+                # 导致 ai-chat 通过 MCP 创建的 ws 因 meta 缺 tenant_id 字段全部不可见)
                 if tenant_id is not None:
                     meta_tenant = meta.get("tenant_id")
-                    if meta_tenant is None:
+                    if meta_tenant is not None and int(meta_tenant) != int(tenant_id):
                         continue
-                    if int(meta_tenant) != int(tenant_id):
-                        continue
+                    # meta_tenant is None → 已通过 user_id 校验（上面 line 2540），放行
 
                 ws_id = str(meta.get("id") or d.name)
                 existing = results_by_id.get(ws_id)
