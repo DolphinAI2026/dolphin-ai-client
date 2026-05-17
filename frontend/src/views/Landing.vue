@@ -64,59 +64,44 @@
               </span>
             </div>
 
-            <div class="composer-body">
-              <!-- cowork 模式：多文件 dropzone，按格式自动分流 -->
-              <div
-                v-if="landingMode === 'cowork'"
-                class="composer-dropzone"
-                :class="{ 'is-dragover': isCoworkDragover }"
-                role="button"
-                tabindex="0"
-                @click="prdInputRef?.click()"
-                @keydown.enter.prevent="prdInputRef?.click()"
-                @keydown.space.prevent="prdInputRef?.click()"
-                @dragenter.prevent="isCoworkDragover = true"
-                @dragover.prevent="isCoworkDragover = true"
-                @dragleave.prevent="isCoworkDragover = false"
-                @drop.prevent="handleCoworkDrop"
-              >
-                <div class="dropzone-icon">📂</div>
-                <div class="dropzone-title">点击或拖拽材料到此处</div>
-                <div class="dropzone-hint">
-                  <strong>.md 标准文档</strong> → 直接进 Builder 生成 SPEC<br>
-                  <strong>PDF / Word / Excel / 图片</strong> → 进 AI 协作模式整合成标准文档
-                </div>
+            <div class="composer-body"
+                 :class="{ 'is-dragover': landingMode === 'chat' && isCoworkDragover }"
+                 @dragenter.prevent="landingMode === 'chat' && (isCoworkDragover = true)"
+                 @dragover.prevent="landingMode === 'chat' && (isCoworkDragover = true)"
+                 @dragleave.prevent="isCoworkDragover = false"
+                 @drop.prevent="landingMode === 'chat' && handleCoworkDrop($event)">
+              <div v-if="landingMode === 'chat' && pendingChatFiles.length" class="composer-attach-list">
+                <span v-for="(f, idx) in pendingChatFiles" :key="idx" class="attach-chip">
+                  <span class="attach-chip-icon">{{ /\.(png|jpe?g|gif|webp)$/i.test(f.name) ? '🖼️' : '📄' }}</span>
+                  <span class="attach-chip-name">{{ f.name }}</span>
+                  <button class="attach-chip-x" type="button" @click="pendingChatFiles.splice(idx, 1)" aria-label="移除">×</button>
+                </span>
               </div>
-
-              <!-- 其他模式保留 textarea -->
-              <template v-else>
-                <div v-if="landingMode === 'chat' && pendingChatFiles.length" class="composer-attach-list">
-                  <span v-for="(f, idx) in pendingChatFiles" :key="idx" class="attach-chip">
-                    <span class="attach-chip-icon">{{ /\.(png|jpe?g|gif|webp)$/i.test(f.name) ? '🖼️' : '📄' }}</span>
-                    <span class="attach-chip-name">{{ f.name }}</span>
-                    <button class="attach-chip-x" type="button" @click="pendingChatFiles.splice(idx, 1)" aria-label="移除">×</button>
-                  </span>
-                </div>
-                <textarea
-                  ref="landingTextareaRef"
-                  v-model="landingInput"
-                  class="composer-input"
-                  :placeholder="currentLandingMode.placeholder"
-                  @keydown="handleLandingKeydown"
-                ></textarea>
-              </template>
+              <textarea
+                ref="landingTextareaRef"
+                v-model="landingInput"
+                class="composer-input"
+                :placeholder="currentLandingMode.placeholder"
+                @keydown="handleLandingKeydown"
+              ></textarea>
+              <div v-if="landingMode === 'chat'" class="composer-drop-hint">
+                📂 拖文件到此处或点 📎 选附件 — 单 .md 直进 Builder 秒级 SPEC，其它走 AI 整合
+              </div>
             </div>
 
             <div class="composer-toolbar">
-              <button v-if="landingMode === 'cowork'" class="chip" type="button" @click="showImportDialog = true">引用项目</button>
-              <button v-if="landingMode === 'cowork'" class="chip template-chip" type="button" @click="openTemplateFromComposer">文档模板</button>
+              <template v-if="landingMode === 'chat'">
+                <button class="chip" type="button" @click="chatFilesInputRef?.click()">📎 附加附件</button>
+                <button class="chip" type="button" @click="prdInputRef?.click()">📂 上传文档</button>
+                <button class="chip" type="button" @click="showImportDialog = true">引用项目</button>
+                <button class="chip template-chip" type="button" @click="openTemplateFromComposer">文档模板</button>
+              </template>
               <button v-else-if="landingMode === 'code'" class="chip" type="button" @click="navigateTo('/coding?type=apaas-custom-dev')">选择应用</button>
               <button v-else-if="landingMode === 'online'" class="chip" type="button" @click="navigateTo('/vibe-coding/new')">导入 Git 仓库</button>
-              <button v-else class="chip" type="button" @click="chatFilesInputRef?.click()">📎 附加附件</button>
 
               <div class="toolbar-spacer"></div>
 
-              <button v-if="landingMode !== 'cowork'" class="landing-submit" type="button" :disabled="!landingInput.trim()" @click="submitLanding">
+              <button class="landing-submit" type="button" :disabled="!landingInput.trim() && !(landingMode === 'chat' && pendingChatFiles.length)" @click="submitLanding">
                 <span>↗</span>
                 {{ currentLandingMode.cta }}
                 <span class="submit-kbd">⌘↵</span>
@@ -233,7 +218,10 @@ interface TemplateDetail extends TemplateFile {
   content: string
 }
 
-type LandingModeKey = 'chat' | 'cowork' | 'code' | 'online'
+// 2026-05-17: 合并 chat / cowork — AIChatPage 底层早已合并，Landing 表层之前
+// 分两个 mode 是历史遗留 UI。chat 是文字主、cowork 是文件主，agent 看附件情况
+// 自动切流程，统一入口 UX 更清晰。
+type LandingModeKey = 'chat' | 'code' | 'online'
 
 interface LandingModeConfig {
   key: LandingModeKey
@@ -257,33 +245,18 @@ const PENDING_VIBE_PROMPT_KEY = 'vibe_coding_pending_prompt'
 const landingModeList: LandingModeConfig[] = [
   {
     key: 'chat',
-    label: 'Chat',
-    zh: '需求梳理',
-    tagline: 'AI 帮你想清楚',
-    titleSuffix: '把模糊想法聊成结构化设计文档',
-    eyebrow: 'APAAS CHAT AI · DESIGN',
-    desc: '上传材料、连续追问、读表算数据；AI 主动澄清边界并产出可直接交给 Builder 的设计文档。',
+    label: 'AI 对话',
+    zh: '需求梳理 / 文档整合',
+    tagline: '把想法或材料给 AI',
+    titleSuffix: '聊清楚 → 整理成结构化设计文档 → 直进 Builder 建应用',
+    eyebrow: 'APAAS CHAT AI · DESIGN + BUILD',
+    desc: '直接打字描述需求，或者拖材料（PDF / Word / Excel / 截图 / .md 标准文档），AI 会梳理 → 整合 → 产出 6 章节设计文档。单 .md 直接走 Builder 快路秒生 SPEC。',
     color: 'oklch(60% 0.16 220)',
     colorSoft: 'oklch(96% 0.03 220)',
     colorInk: 'oklch(42% 0.15 220)',
     icon: '💬',
-    placeholder: '说说你想搭什么。例如：我们要做一个供应商质量管理系统，覆盖来料检验、不合格处理、整改跟踪…我有几份参考资料想一起聊。',
+    placeholder: '说说你想搭什么，或者直接把材料拖进来。例如：我们要做一个供应商质量管理系统，这里有几份参考文档…',
     cta: '开始聊需求',
-  },
-  {
-    key: 'cowork',
-    label: 'Builder',
-    zh: '智能搭建',
-    tagline: '上传标准设计文档，秒级生成 SPEC',
-    titleSuffix: '上传 .md 标准文档，纯代码解析',
-    eyebrow: 'APAAS BUILDER AI · V3',
-    desc: '只接受 AI-Chat 输出的标准 .md 设计文档：Builder 严格按 6 章规范解析，毫秒级生成 SPEC，零 LLM 兜底。需求梳理 / 文档撰写请去 Chat 模式。',
-    color: 'oklch(55% 0.18 268)',
-    colorSoft: 'oklch(96% 0.03 268)',
-    colorInk: 'oklch(45% 0.18 268)',
-    icon: '▣',
-    placeholder: '点右下角「选择文档」上传标准 .md 文件（必须是 AI-Chat 出的、含 6 章节规范）。这里可选补充上下文（重点字段、权限边界）。',
-    cta: '选择文档',
   },
   {
     key: 'code',
@@ -407,8 +380,8 @@ function handleCoworkDrop(event: DragEvent) {
 }
 
 function acceptCoworkFiles(files: File[]) {
-  // 按格式分流：单个 .md → Builder 直传快路；其它（含多文件） → AI-Chat cowork 模式
-  landingMode.value = 'cowork'
+  // 2026-05-17: chat / cowork 合并后保留这个名字（被多处 callback 引用），
+  // 行为不变：单 .md → Builder 直传快路；其它（含多文件） → AI-Chat 整合。
   previewStore.pendingBuilderModelId = selectedLandingModelId.value
 
   if (files.length === 1 && /\.(md|markdown)$/i.test(files[0].name)) {
@@ -418,7 +391,7 @@ function acceptCoworkFiles(files: File[]) {
     return
   }
 
-  // 其它格式（或多文件）→ AI-Chat cowork 模式整合
+  // 其它格式（或多文件）→ AI-Chat 自动整合（mode=cowork 仅作底层 hint）
   previewStore.pendingAiChatFiles = files
   router.push({ path: '/ai-chat', query: { mode: 'cowork' } })
 }
@@ -1096,6 +1069,23 @@ onMounted(loadApps)
   position: relative;
   z-index: 1;
   padding: 14px 16px 10px;
+  border-radius: 12px;
+  transition: background-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.composer-body.is-dragover {
+  background-color: var(--landing-mode-soft, oklch(96% 0.03 220));
+  box-shadow: inset 0 0 0 2px var(--landing-mode-color, oklch(60% 0.16 220));
+}
+
+.composer-drop-hint {
+  margin-top: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: #98a2b3;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.02);
+  user-select: none;
 }
 
 .composer-input {
