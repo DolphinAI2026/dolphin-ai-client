@@ -43,47 +43,41 @@
         @delete="onSidebarCodingDelete"
         :enable-rename="false"
       />
-      <!-- Main Content: Welcome or IDE -->
+      <!-- Main Content: 对话流 (B 重构 2026-05-17): 合并 Welcome / Chat / IDE -->
       <div class="main-content">
-        <!-- 非嵌入模式顶部工具栏：返回 + Chat/IDE 切换 -->
+        <!-- 顶右工具抽屉按钮 (替代 view-toggle-bar): 文件 / IDE / 编辑 -->
         <div
           v-if="!embeddedAppId && (ideUrl || streamMessages.length > 0)"
-          class="content-view-toggle-bar"
+          class="canvas-actions"
         >
-          <!-- 左：返回首页 -->
-          <button class="toggle-bar-back-btn" @click="startNewWorkspace" title="返回首页">
-            <el-icon :size="16"><ArrowLeft /></el-icon>
+          <button class="canvas-actions-back" @click="startNewWorkspace" title="返回首页">
+            <el-icon :size="14"><ArrowLeft /></el-icon>
             <span>返回</span>
           </button>
-
-          <!-- 中：Chat / IDE 切换 -->
-          <div class="view-toggle">
-            <button
-              class="view-toggle-btn"
-              :class="{ active: activeView === 'chat' }"
-              @click="activeView = 'chat'"
-            >
-              <el-icon :size="13"><ChatDotRound /></el-icon>
-              <span class="view-toggle-label">对话</span>
+          <div class="canvas-actions-right">
+            <button class="canvas-action-btn" @click="filesDrawerOpen = true" title="文件">
+              <span>📋</span>
+              <span class="canvas-action-label">文件</span>
             </button>
             <button
-              class="view-toggle-btn"
-              :class="{ active: activeView === 'ide', disabled: !canOpenIdeView }"
+              class="canvas-action-btn"
+              :class="{ disabled: !canOpenIdeView }"
               :disabled="!canOpenIdeView"
-              :title="webIdeUnavailable ? '当前环境未配置 Web IDE' : 'IDE'"
-              @click="switchToIdeView"
+              :title="webIdeUnavailable ? '当前环境未配置 Web IDE' : 'IDE 编辑器'"
+              @click="openIdeDrawer"
             >
               <el-icon :size="13"><Monitor /></el-icon>
-              <span class="view-toggle-label">IDE</span>
+              <span class="canvas-action-label">IDE</span>
+            </button>
+            <button class="canvas-action-btn" @click="editDrawerOpen = true" title="设置">
+              <span>⚙️</span>
+              <span class="canvas-action-label">设置</span>
             </button>
           </div>
-
-          <!-- 右：占位，保持切换居中 -->
-          <div class="toggle-bar-placeholder"></div>
         </div>
 
-        <!-- Welcome State (Codex-like command center) -->
-        <div v-if="!ideUrl && !isStreaming && streamMessages.length === 0" class="welcome-pane">
+        <!-- Welcome State (Codex-like command center) - 2026-05-17 B 重构：去掉 ideUrl 阻塞 -->
+        <div v-if="!isStreaming && streamMessages.length === 0" class="welcome-pane">
           <div class="welcome-inner" :style="codingLandingVars">
 
             <section class="qc-section coding-command-center">
@@ -148,29 +142,7 @@
                     title="附加文件"
                   >📎</button>
 
-                  <!-- 类型选择（替代外面的 tab pills） -->
-                  <el-popover placement="bottom-start" trigger="click" :width="180">
-                    <template #reference>
-                      <button type="button" class="qc-chip qc-chip-type" title="项目类型">
-                        <span>{{ activeSceneCategoryIcon }}</span>
-                        <span>{{ activeSceneCategoryLabel }}</span>
-                        <el-icon><ArrowDown /></el-icon>
-                      </button>
-                    </template>
-                    <div class="qc-type-panel">
-                      <button
-                        v-for="cat in sceneCategories"
-                        :key="cat.key"
-                        type="button"
-                        class="qc-type-option"
-                        :class="{ 'is-active': activeSceneCategory === cat.key }"
-                        @click="activeSceneCategory = cat.key"
-                      >
-                        <span>{{ cat.icon }}</span>
-                        <span>{{ cat.label }}</span>
-                      </button>
-                    </div>
-                  </el-popover>
+                  <!-- 2026-05-17 C 改造: 删项目类型 chip (默认 PC 组件，agent 看 prompt 自动推断) -->
 
                   <!-- 模型选择 -->
                   <el-popover
@@ -335,8 +307,8 @@
           </div>
         </div>
 
-        <!-- Stream Pane (对话流视图 - Chat 模式) -->
-        <div v-else-if="activeView === 'chat'" class="stream-pane">
+        <!-- Stream Pane (对话流视图 - 2026-05-17 B 重构：永远显示，IDE/文件改抽屉) -->
+        <div v-else class="stream-pane">
           <AgentConversation
             :messages="agentMessages"
             :typing="isStreaming"
@@ -485,8 +457,18 @@
           </div>
         </div>
 
-        <!-- IDE State (with loading overlay) -->
-        <div v-else class="ide-pane">
+      </div>
+
+      <!-- 2026-05-17 B 重构：IDE iframe 改右侧抽屉，不再独占主区 -->
+      <el-drawer
+        v-model="ideDrawerOpen"
+        title="IDE 编辑器"
+        direction="rtl"
+        size="65%"
+        :append-to-body="true"
+        :destroy-on-close="false"
+      >
+        <div class="ide-pane">
           <iframe
             v-if="ideUrl"
             :key="ideUrl"
@@ -496,7 +478,6 @@
             @load="onIdeFrameLoad"
             @error="onIdeFrameError"
           ></iframe>
-          <!-- Loading overlay — stays until iframe fires load event -->
           <div v-if="!ideLoaded" class="ide-loading-overlay">
             <div class="ide-loading-content">
               <template v-if="ideLoadError">
@@ -511,7 +492,51 @@
             </div>
           </div>
         </div>
-      </div>
+      </el-drawer>
+
+      <!-- 文件抽屉：显示 workspace 文件列表 (P0 留 stub，P1 接 ws files API) -->
+      <el-drawer v-model="filesDrawerOpen" title="工作区文件" direction="rtl" size="40%" :append-to-body="true">
+        <div class="files-drawer-body">
+          <p style="color:#999;font-size:13px;padding:16px;">
+            📋 文件浏览 MVP — 当前展示 workspace 元信息，详细文件树后续接入。
+          </p>
+          <div v-if="codingStore.workspace" style="padding:0 16px;">
+            <div style="margin-bottom:12px;"><strong>名称：</strong>{{ codingStore.workspace.display_name || codingStore.workspace.name }}</div>
+            <div style="margin-bottom:12px;"><strong>类型：</strong>{{ codingStore.workspace.project_type }}</div>
+            <div style="margin-bottom:12px;"><strong>关联应用：</strong>{{ codingStore.workspace.apaas_app_name || '-' }}</div>
+            <div style="margin-bottom:12px;"><strong>更新时间：</strong>{{ codingStore.workspace.updated_at }}</div>
+          </div>
+          <div v-else style="padding:16px;color:#999;">还没有打开工作区</div>
+        </div>
+      </el-drawer>
+
+      <!-- 设置抽屉：workspace 操作 (删除 / 同步 / 下载等) -->
+      <el-drawer v-model="editDrawerOpen" title="工作区设置" direction="rtl" size="40%" :append-to-body="true">
+        <div class="edit-drawer-body" style="padding:16px;display:flex;flex-direction:column;gap:12px;">
+          <button v-if="codingStore.workspace" class="canvas-action-btn" :disabled="isDownloading" @click="downloadCode">
+            <el-icon :size="14"><Download /></el-icon>
+            <span>下载源码 zip</span>
+          </button>
+          <button
+            v-if="codingStore.workspace && currentAppGitRepoUrl"
+            class="canvas-action-btn"
+            :disabled="syncingToRepo"
+            @click="onSyncToRepo"
+          >
+            <span>{{ syncingToRepo ? '同步中...' : 'Sync 到关联 Git 仓库' }}</span>
+          </button>
+          <button
+            v-if="codingStore.workspace && canDeleteWorkspace(codingStore.workspace)"
+            class="canvas-action-btn"
+            style="color:#ef4444;"
+            @click="deleteCurrentWorkspace"
+          >
+            <el-icon :size="14"><Delete /></el-icon>
+            <span>删除工作区</span>
+          </button>
+          <div v-if="!codingStore.workspace" style="color:#999;">还没有打开工作区</div>
+        </div>
+      </el-drawer>
 
       <!-- 嵌入模式：右侧可收起工具面板 -->
       <aside v-if="embeddedAppId" class="embedded-panel" :class="{ collapsed: embeddedPanelCollapsed }">
@@ -632,6 +657,23 @@ const {
   retryIdeLoad,
   openPendingIde,
 } = useIdeManager()
+
+// 2026-05-17 B 重构：抽屉式 IDE / 文件 / 设置 (替代独立 view-toggle)
+const ideDrawerOpen = ref(false)
+const filesDrawerOpen = ref(false)
+const editDrawerOpen = ref(false)
+
+async function openIdeDrawer() {
+  // 没 ideUrl 先 fetch (复用 switchToIdeView 老逻辑)，然后弹抽屉
+  if (!ideUrl.value && !pendingIdeUrl.value) {
+    await switchToIdeView()  // 内部会 set ideUrl
+  } else if (pendingIdeUrl.value) {
+    await openPendingIde()
+  }
+  if (ideUrl.value) {
+    ideDrawerOpen.value = true
+  }
+}
 
 const webIdeUnavailable = ref(false)
 const ideUnavailableNotified = ref(false)
