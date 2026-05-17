@@ -1,6 +1,6 @@
 # 当前状态（STATE.md）
 
-> 更新时间：2026-05-17 凌晨（**双轨分工最终架构**：mars 对内 / xhh 对外）
+> 更新时间：2026-05-17 中午（**ee3d508 IDE 抽屉 padding 修复上线**）
 > 维护规则：每次重大上线 / 决策后追加；只写 fact，不写 plan。
 > 关系：`README.md` 是入门文档（已过期）；`PLAN.md` 是治理目标（Phase 1+ 未启动）；**本文件是现状的 source of truth**。
 
@@ -19,7 +19,7 @@ ai-chat 5/17 凌晨从 v2 切回 ming loopback（撤销 5/16 晚切流决策）�
 
 3 个 MCP deployment 仍然存在但分工清晰：
 
-- `apaas-builder/apaas-builder-ming`（本 repo） — backend + frontend + admin SPA + **内置 `mcp_server.py` 80 工具（ai-chat 主用）**。当前 image `:20260516-00fba76-deploy-env-token`
+- `apaas-builder/apaas-builder-ming`（本 repo） — backend + frontend + admin SPA + **内置 `mcp_server.py` 80 工具（ai-chat 主用）**。当前 image `:20260517-ee3d508-drawer-padding-fix`
 - `apaas-builder/apaas-builder-mcp-server`（**xhh 主线**） — 当前 `:20260517-0018-mcp-metadata-amd64`，33 工具 strict auth，给 ming 内部 admin SPA proxy 和 dolphin 公网入口用
 - `apaas-mcp-server/apaas-mcp-server-v2`（**xhh 主线**） — `:20260515-user-token` 68 工具，dolphin agent 公网 `/mcp-server-v2/*` 入口
 
@@ -45,11 +45,11 @@ ai-chat 5/17 凌晨从 v2 切回 ming loopback（撤销 5/16 晚切流决策）�
 
 阿里云 ECS `39.103.201.110` 还活作公网入口反代 + 24-48h 热备，不是业务跑在那。**注**：今天实测 SSH 22 端口 banner timeout（sshd hang 或 fail2ban），上次确认 work 的 5/15 之后状态可能变了。
 
-### Pod / 最新 image（5/16 晚实测）
+### Pod / 最新 image（5/17 中午实测）
 
 | Deployment | Namespace | Image | 备注 |
 |---|---|---|---|
-| `apaas-builder-ming` | `apaas-builder` | `hub.dfy.definesys.cn/ai-builder/apaas-builder:20260516-uxfix` | HEAD `def942c`（含 3 UX fix + ai-chat v2 切流配置） |
+| `apaas-builder-ming` | `apaas-builder` | `hub.dfy.definesys.cn/ai-builder/apaas-builder:20260517-ee3d508-drawer-padding-fix` | HEAD `ee3d508`（IDE 抽屉 padding 修复）。**3 处 image 全同步**：apaas-builder + web=nginx:alpine + initContainer `copy-frontend-dist` |
 | `apaas-builder-mcp-server` | `apaas-builder` | `hub.dfy.definesys.cn/ai-builder/apaas-builder-mcp-server:20260517-0018-mcp-metadata-amd64` | **33 工具**（v2 repo `main` HEAD `41adef5`，xhh 推送）。强制 draft 流程独主 / strict end-user identity auth / admin SPA 重写含 CallLogs+McpServices+McpTester+Login。**5/17 凌晨决策：以 xhh 为准** — 我 feat 分支 81-工具版废。 |
 | `apaas-mcp-server-v2` | `apaas-mcp-server` | `hub-snapshots.dfy.definesys.cn/mars/apaas-builder-mcp-server:20260515-user-token` | **68 工具，跟 apaas-builder ns 那个 drift**。registry: `hub-snapshots.dfy.definesys.cn/mars/`。dolphin agent 公网入口走它，**下次 sync 升 `:20260516-port-15-crud` (该 tag 已 cross-push 到这个 registry，待命)** |
 | `apaas-mcp-server` | `apaas-mcp-server` | (v1, 历史遗留) | 老 deployment，未确认是否还有 client |
@@ -352,6 +352,39 @@ ai-chat 5/17 凌晨从 v2 切回 ming loopback（撤销 5/16 晚切流决策）�
 - ✅ 保留 5/16 夜 `generate.py` 走 platform_envs 修法 — ming backend bug fix
 - ✅ 保留双 db 命名倒挂的记录（重要历史事实）
 
+## 五点九、5/17 中午 IDE 抽屉 padding 修复 + 部署 3 坑（ee3d508）
+
+**用户反馈**："全屏吧" — 5/17 凌晨 B 重构后的 IDE 抽屉 80% size 露出左 NavRail，要求 100% 全屏。改 `size="100%"` 后实测发现 iframe 仍 1472×694 而不是 1512×734，**3 层失败**全部踩了一遍。
+
+```
+失败 1: Element Plus 2.x 砍掉 custom-class prop
+  ⤵ 我写 custom-class="coding-ide-drawer"，类名根本没出现在 DOM 上
+  ⤵ `:deep(.el-drawer.coding-ide-drawer .el-drawer__body)` 全部失配
+  → fix: 改用 body-class prop（EP 2.13.5 原生支持，直接打类到 .el-drawer__body）
+
+失败 2: append-to-body=true 让 scoped CSS 触不到
+  ⤵ drawer teleport 到 <body> 外，scoped CSS 边界外
+  ⤵ `:deep()` 即使有 body-class 也碰不上
+  → fix: 规则迁到非 scoped <style> 全局块
+
+失败 3: kubectl set image 只动 containers 没动 initContainers
+  ⤵ initContainer `copy-frontend-dist` 还跑 5dec1b7 旧 image
+  ⤵ 它负责把 /app/frontend/dist/ 拷到共享 volume 给 nginx serve
+  ⤵ 旧 image 里 frontend bundle 是 CodingPage-Ce4Sb-P0.js（旧 hash），新代码完全没上线
+  → fix: kubectl set image 单独再跑一次 copy-frontend-dist=新tag
+  → 副作用：第一次 set image 把 web 容器（应该是 nginx:alpine）也覆盖成 apaas-builder image
+            → uvicorn crashloop 撑不起 readiness → 卡 0/1 ready 3 分钟
+            → 再 set image web=nginx:alpine 回滚才上来
+```
+
+**关键教训**：
+- **Element Plus 2.x el-drawer custom-class 已删，用 `body-class` / `header-class` / `footer-class`**（EP 2.13.5 原生支持）
+- **append-to-body 抽屉的 CSS 必须放非 scoped `<style>`**（teleport 到 body 外，scoped 边界外）
+- **kubectl set image 必须涵盖 initContainers**：单文件 `kubectl set image deploy/X container=tag initContainer=tag`（多个 image 同次）
+- **kubectl set image 别误改 web=nginx:alpine 那种异构容器**：apaas-builder-ming 是 2 容器 + 1 init 容器结构（apaas-builder=python / web=nginx / copy-frontend-dist=python），同名容器不代表同 image
+
+**部署链路最终就位**：本地 `ee3d508` → GitHub `local/cleanup-2026-05-16` 已 push → hub.dfy `ai-builder/apaas-builder:20260517-ee3d508-drawer-padding-fix` → ming pod 2/2 Ready。IDE 抽屉浏览器实测 1512×734 全屏 ✓。
+
 ## 六、进行中（mid-flight）
 
 ### K8s pod-per-workspace 迁移（vibe-coding 沙箱）
@@ -414,6 +447,7 @@ ai-chat 5/17 凌晨从 v2 切回 ming loopback（撤销 5/16 晚切流决策）�
 - 11 个 doc_* 模块 + 7 个 config_* 模块迭代痕迹
 - `.serena/` 未加 .gitignore
 - `routes/admin_mcp.py:6` 注释还写"77 工具"，5/16 union main+design 后实际 71（stale 注释，不影响逻辑）
+- **🆕 Element Plus 2.x el-drawer 历史 custom-class 写法残留**：仓库里搜 `custom-class.*drawer`，全部改 `body-class` / `header-class`（5/17 中午只修了 CodingPage 3 处）
 
 ## 八、下次接手第一步
 
@@ -423,6 +457,7 @@ ai-chat 5/17 凌晨从 v2 切回 ming loopback（撤销 5/16 晚切流决策）�
 | 大架构动作 | 先确认第三节"锁定决策"是否仍 hold → 没翻案就照决策走 |
 | vibe-coding K8s 收尾 | 看 `docs/vibe-k8s-migration/00-design.md` → WIP 在 `k8s_runtime.py` + `61-vibe-ingress.yaml` |
 | **要改 ai-chat 工具集 / 行为** | 改 `apaas-builder-ai/backend/app/mcp_server.py` 或 `ai_chat/` 目录 → ming image rebuild + push hub.dfy + set image `apaas-builder-ming`。**完全不动 xhh 的 v2 svc** |
+| **改前端 ming 部署** | `kubectl set image deploy/apaas-builder-ming apaas-builder=<tag> copy-frontend-dist=<tag>` — 必须同时改 initContainer，否则 nginx 仍 serve 旧 bundle（5/17 中午撞过这坑）。**别动 web=nginx:alpine** |
 | **要改 v2 svc / 给 dolphin 加工具** | **跟 xhh 同步**，他主导 `apaas-builder-mcp-server` repo main + 自己 deploy。你不要直接动 |
 | ai-chat UX 进一步优化 | 5/16 已修 duration/chunk/scroll 3 个 P1。剩 P0 LLM 首轮推理 14s 是 admin UI 换模型动作（gpt-5.5 → gpt-4o-mini / haiku-3.5） |
 
