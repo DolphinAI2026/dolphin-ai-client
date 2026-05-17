@@ -461,13 +461,15 @@
 
       </div>
 
-      <!-- 2026-05-17 B 重构：IDE iframe 全屏抽屉 (size=100% 用户拍板 — 80% 露左 NavRail 干扰) -->
+      <!-- 2026-05-17 B 重构：IDE iframe 全屏抽屉 (size=100% 用户拍板 — 80% 露左 NavRail 干扰)
+           Element Plus 2.x 砍掉 custom-class，用 body-class 直接打类到 .el-drawer__body —
+           append-to-body=true teleport 到 body 后 scoped CSS 失效，必须配合 <style>（非 scoped）规则。 -->
       <el-drawer
         v-model="ideDrawerOpen"
         title="IDE 编辑器"
         direction="rtl"
         size="100%"
-        custom-class="coding-ide-drawer"
+        body-class="coding-ide-drawer-body"
         :append-to-body="true"
         :destroy-on-close="false"
       >
@@ -498,7 +500,7 @@
       </el-drawer>
 
       <!-- 文件抽屉：显示 workspace 文件列表 (P0 留 stub，P1 接 ws files API) -->
-      <el-drawer v-model="filesDrawerOpen" title="工作区文件" direction="rtl" size="40%" custom-class="coding-files-drawer" :append-to-body="true">
+      <el-drawer v-model="filesDrawerOpen" title="工作区文件" direction="rtl" size="40%" body-class="coding-files-drawer-body" :append-to-body="true">
         <div class="files-drawer-body">
           <p style="color:#999;font-size:13px;padding:16px;">
             📋 文件浏览 MVP — 当前展示 workspace 元信息，详细文件树后续接入。
@@ -514,7 +516,7 @@
       </el-drawer>
 
       <!-- 设置抽屉：workspace 操作 (删除 / 同步 / 下载等) -->
-      <el-drawer v-model="editDrawerOpen" title="工作区设置" direction="rtl" size="40%" custom-class="coding-edit-drawer" :append-to-body="true">
+      <el-drawer v-model="editDrawerOpen" title="工作区设置" direction="rtl" size="40%" body-class="coding-edit-drawer-body" :append-to-body="true">
         <div class="edit-drawer-body" style="padding:16px;display:flex;flex-direction:column;gap:12px;">
           <button v-if="codingStore.workspace" class="canvas-action-btn" :disabled="isDownloading" @click="downloadCode">
             <el-icon :size="14"><Download /></el-icon>
@@ -3728,22 +3730,8 @@ watch(() => route.path, () => {
   min-height: 0;
 }
 
-/* 2026-05-17 el-drawer 全局 override: IDE 抽屉 body padding 0 让 iframe 占满 */
-:deep(.el-drawer__body) {
-  padding: 0 !important;
-  display: flex;
-  flex-direction: column;
-}
-:deep(.el-drawer.coding-ide-drawer .el-drawer__body),
-:deep(.el-drawer.coding-files-drawer .el-drawer__body),
-:deep(.el-drawer.coding-edit-drawer .el-drawer__body) {
-  padding: 0 !important;
-}
-:deep(.el-drawer.coding-ide-drawer .el-drawer__body > div),
-:deep(.el-drawer.coding-ide-drawer .el-drawer__body iframe) {
-  width: 100%;
-  height: 100%;
-}
+/* 2026-05-17 IDE 抽屉规则已迁到下方非 scoped <style>：
+   append-to-body=true 让 drawer teleport 到 body 外，scoped CSS 触不到。 */
 .ide-loading-overlay {
   position: absolute;
   inset: 0;
@@ -3898,6 +3886,26 @@ watch(() => route.path, () => {
 </style>
 
 <style>
+/* 2026-05-17 IDE / 文件 / 设置抽屉 body padding 0：
+   append-to-body=true → 必须用全局（非 scoped）CSS。
+   body-class prop 把这些类直接打到 .el-drawer__body 上。 */
+.coding-ide-drawer-body,
+.coding-files-drawer-body,
+.coding-edit-drawer-body {
+  padding: 0 !important;
+  display: flex !important;
+  flex-direction: column;
+  overflow: hidden;
+}
+.coding-ide-drawer-body > .ide-pane,
+.coding-ide-drawer-body > .ide-pane > iframe {
+  width: 100% !important;
+  height: 100% !important;
+  flex: 1 1 auto;
+  min-height: 0;
+  border: 0;
+}
+
 html[data-theme="dark"] .coding-page,
 html[data-theme="dark"] .coding-body,
 html[data-theme="dark"] .main-content,
