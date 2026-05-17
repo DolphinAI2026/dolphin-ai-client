@@ -84,9 +84,7 @@
                 :placeholder="currentLandingMode.placeholder"
                 @keydown="handleLandingKeydown"
               ></textarea>
-              <div v-if="landingMode === 'chat'" class="composer-drop-hint">
-                📂 拖文件到此处或点 📎 选附件 — 单 .md 直进 Builder 秒级 SPEC，其它走 AI 整合
-              </div>
+              <!-- 2026-05-17: 砍掉跟 desc 重复的 drop-hint，材料类型已在 brand-sub 说明 -->
             </div>
 
             <div class="composer-toolbar">
@@ -247,15 +245,15 @@ const landingModeList: LandingModeConfig[] = [
     key: 'chat',
     label: 'AI 对话',
     zh: '需求梳理 / 文档整合',
-    tagline: '把想法或材料给 AI',
-    titleSuffix: '聊清楚 → 整理成结构化设计文档 → 直进 Builder 建应用',
+    tagline: '把想法 / 材料给 AI',
+    titleSuffix: '整理成设计文档，直进 Builder',
     eyebrow: 'APAAS CHAT AI · DESIGN + BUILD',
-    desc: '直接打字描述需求，或者拖材料（PDF / Word / Excel / 截图 / .md 标准文档），AI 会梳理 → 整合 → 产出 6 章节设计文档。单 .md 直接走 Builder 快路秒生 SPEC。',
+    desc: '支持 PDF / Word / Excel / 截图 / .md，单 .md 直接走 Builder 秒级生成。',
     color: 'oklch(60% 0.16 220)',
     colorSoft: 'oklch(96% 0.03 220)',
     colorInk: 'oklch(42% 0.15 220)',
     icon: '💬',
-    placeholder: '说说你想搭什么，或者直接把材料拖进来。例如：我们要做一个供应商质量管理系统，这里有几份参考文档…',
+    placeholder: '描述你想做的应用，或把材料拖进来…',
     cta: '开始聊需求',
   },
   {
@@ -265,7 +263,7 @@ const landingModeList: LandingModeConfig[] = [
     tagline: 'AI 帮你做二开',
     titleSuffix: '把需求变成平台组件、页面和接口',
     eyebrow: 'RUIJING AI CODING',
-    desc: '面向得帆低代码开发扩展：描述组件、页面、接口或脚本，AI 创建模板工作区并辅助构建、上传和发布。',
+    desc: '面向得帆低代码扩展：描述组件 / 页面 / 接口，AI 创建工作区辅助构建。',
     color: 'oklch(62% 0.15 185)',
     colorSoft: 'oklch(96% 0.03 185)',
     colorInk: 'oklch(42% 0.14 185)',
@@ -280,7 +278,7 @@ const landingModeList: LandingModeConfig[] = [
     tagline: 'AI 帮你改全代码',
     titleSuffix: '导入 Git 仓库，在云工作区里开发',
     eyebrow: 'VIBE CODING · CLOUD WORKSPACE',
-    desc: '面向完整代码仓库：导入 GitHub/GitLab 项目，AI 在沙箱里读代码、改代码、跑测试、开预览并提交 PR。',
+    desc: '导入 GitHub / GitLab 项目，AI 在沙箱里改代码、跑测试、开 PR。',
     color: 'oklch(60% 0.18 292)',
     colorSoft: 'oklch(96% 0.035 292)',
     colorInk: 'oklch(45% 0.18 292)',
