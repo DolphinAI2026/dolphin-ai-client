@@ -83,8 +83,10 @@
             >
               <component :is="s.badgeIcon" />
             </el-icon>
-            <span class="session-name">{{ s.title }}</span>
-            <span v-if="s.meta" class="session-meta">{{ s.meta }}</span>
+            <div class="session-text">
+              <span class="session-name">{{ s.title }}</span>
+              <span v-if="s.meta" class="session-meta">{{ s.meta }}</span>
+            </div>
             <button
               v-if="enableRename !== false"
               class="session-menu-btn"
@@ -467,17 +469,27 @@ function onBack() {
 .session-badge.tone-success { color: #16a34a; }
 .session-badge.tone-danger { color: #dc2626; }
 
-.session-name {
+/* 2026-05-17: 改 2 行竖排 — 显示名为主 / 包名为辅，
+   修原 flex-shrink:0 把 form-page-xxx 优先撑大、把用户友好名挤成 1-3 字 ellipsis 的反向 bug */
+.session-text {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.session-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .session-meta {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--t-text-muted);
-  flex-shrink: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 .session-menu-btn {
   visibility: hidden;
