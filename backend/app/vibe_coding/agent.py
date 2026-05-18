@@ -184,7 +184,16 @@ async def _build_initial_messages(
     - 通过 provider_call_id 对齐 assistant.tool_calls[i].id
     - 当前 user message 单独传入，因为外部 routes 写库后不希望重读最新一条
     """
-    messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    # Phase D: prefer DB-stored prompt for agent_id='vibe' so admins can edit
+    # the Vibe Coding system prompt via /agents UI; fall back to the hardcoded
+    # SYSTEM_PROMPT (lazy seed inside resolve_prompt populates on first call).
+    from app.services.prompt_resolver import resolve_prompt
+    system_prompt = await resolve_prompt(
+        db, thread.tenant_id,
+        agent_id="vibe", phase="default",
+        fallback=SYSTEM_PROMPT,
+    )
+    messages: list[dict] = [{"role": "system", "content": system_prompt}]
 
     res = await db.execute(
         select(VibeCodingMessage)

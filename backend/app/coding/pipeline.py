@@ -1652,6 +1652,16 @@ async def run_coding_pipeline(
         )
         _coding_llm = LLMClient(api_key=_api_key, base_url=_base_url, model=_cfg_model)
 
+        # Phase D: prefer DB-stored prompt for agent_id='whale' (Coding), fall
+        # back to AGENT_SYSTEM_PROMPT when the row is missing (lazy seed inside
+        # resolve_prompt will populate on first call per tenant).
+        from app.services.prompt_resolver import resolve_prompt
+        _coding_system_prompt = await resolve_prompt(
+            db, params.tenant_id,
+            agent_id="whale", phase="default",
+            fallback=AGENT_SYSTEM_PROMPT,
+        )
+
         _coding_ctx = AgentContext(
             session_id=f"cs_{ws_id}",
             conversation_id=conversation_id or 0,
@@ -1659,7 +1669,7 @@ async def run_coding_pipeline(
             tenant_id=params.tenant_id,
             model=_cfg_model,
             workspace_id=ws_id,
-            input={"system_prompt": AGENT_SYSTEM_PROMPT},
+            input={"system_prompt": _coding_system_prompt},
             publisher=InMemoryEventPublisher(),   # adapter 会 wrap 成 queue publisher
             trace_writer=InMemoryTraceWriter(),   # Stage 4 后接 DB
             llm_client=_coding_llm,
