@@ -2838,7 +2838,12 @@ const restoreActiveViewForApp = async (app: any) => {
   if (!requestedView && localStorage.getItem(storageKey) === 'coding') {
     localStorage.removeItem(storageKey)
   }
-  activeView.value = requestedView === 'platform' ? 'platform' : 'builder'
+  // 2026-05-19 post-deploy 默认进 platform iframe（中间区域），避免空白黑屏；
+  // 仅当显式 ?view=builder 才回到 builder 视图。
+  activeView.value = requestedView === 'builder' ? 'builder' : 'platform'
+  if (activeView.value === 'platform' && existingAppId.value) {
+    loadPlatformUrl()
+  }
 }
 
 // 字段类型图标映射（兜底，防止后端返回中文导致竖排）
