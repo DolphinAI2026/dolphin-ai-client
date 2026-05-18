@@ -12,141 +12,39 @@
   backend `/api/industry-packs` lands. See P2 plan.
 -->
 <script setup lang="ts">
-import { ref, computed, reactive } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
 import ShellTopBar from '@/components/v2/ShellTopBar.vue'
+import { useIndustryStore } from '@/stores/industry'
+import type {
+  IndustryPack,
+  OntologyEntity,
+  OntologyRelation,
+} from '@/api/industry'
 
-type Tone = 'amber' | 'sky' | 'emerald' | 'rose' | 'brand'
-
-interface IndustryPack {
-  id: string
-  name: string
-  code: string
-  tone: Tone
-  version: string
-  installed: boolean
-  default?: boolean
-  summary: string
-  stats: { entities: number; relations: number; workflows: number; dicts: number; forms: number; roles: number }
-  adopted: string[]
-  maintainer: string
-  updated: string
-}
-interface OntoEntity {
-  code: string
-  name: string
-  fields: number
-  x: number
-  y: number
-  tone: Tone
-  hot?: boolean
-}
-interface OntoRelation {
-  from: string
-  to: string
-  label: string
-}
-interface OntoWorkflow { name: string; nodes: number; sla: string }
-interface OntoDict { code: string; name: string; items: number }
-
-// Seed data — verbatim from $DESIGN_SRC/data.js (lines 785-861).
-// Inline until `/api/industry-packs` backend exists.
-const INDUSTRY_PACKS = reactive<IndustryPack[]>([
-  {
-    id: 'pkg-mfg', name: '制造装备', code: 'manufacturing', tone: 'amber',
-    version: 'v2.1', installed: true, default: true,
-    summary: '面向离散制造与连续生产，覆盖订单 → 计划 → 派工 → 质检 → 入库全链路。',
-    stats: { entities: 12, relations: 30, workflows: 8, dicts: 24, forms: 18, roles: 6 },
-    adopted: ['生产工单调度', '资产管理系统', '某汽车制造客户'],
-    maintainer: '得帆云 · 行业卓越中心',
-    updated: '5/14',
-  },
-  {
-    id: 'pkg-crm', name: '客户运营', code: 'crm-ops', tone: 'sky',
-    version: 'v3.0', installed: true, default: false,
-    summary: '客户 360 + 商机 + 工单 + SLA + 回访的完整对象图谱。',
-    stats: { entities: 9, relations: 22, workflows: 6, dicts: 18, forms: 14, roles: 5 },
-    adopted: ['客户工单中心', '某连锁零售客户'],
-    maintainer: '得帆云 · 客户成功部',
-    updated: '5/12',
-  },
-  {
-    id: 'pkg-logi', name: '智慧物流', code: 'logistics', tone: 'emerald',
-    version: 'v1.4', installed: false,
-    summary: '运单 / 仓配 / 路由 / 异常处理，含 GIS 字段类型与司机签收节点。',
-    stats: { entities: 11, relations: 26, workflows: 7, dicts: 21, forms: 15, roles: 5 },
-    adopted: ['某物流客户（试用）'],
-    maintainer: '物流行业小组',
-    updated: '5/03',
-  },
-  {
-    id: 'pkg-govt', name: '政企服务', code: 'govt-svc', tone: 'rose',
-    version: 'v0.9', installed: false,
-    summary: '事项审批、办件流转、政务字典（行政区划 / 事项分类标准编码）。',
-    stats: { entities: 8, relations: 16, workflows: 5, dicts: 36, forms: 12, roles: 6 },
-    adopted: [],
-    maintainer: '政企行业小组（Beta）',
-    updated: '4/28',
-  },
-])
-
-const INDUSTRY_ONTOLOGY: {
-  pack: string
-  entities: OntoEntity[]
-  relations: OntoRelation[]
-  workflows: OntoWorkflow[]
-  dictHighlight: OntoDict[]
-} = {
-  pack: 'pkg-mfg',
-  entities: [
-    { code: 'work_order',  name: '生产工单',     fields: 18, x: 50,  y: 50,  hot: true,  tone: 'brand' },
-    { code: 'bom',         name: 'BOM 物料清单', fields: 12, x: 50,  y: 220, tone: 'brand' },
-    { code: 'process',     name: '工序',         fields: 8,  x: 260, y: 50,  tone: 'brand' },
-    { code: 'workshop',    name: '车间',         fields: 6,  x: 260, y: 220, tone: 'sky' },
-    { code: 'machine',     name: '设备',         fields: 14, x: 260, y: 380, tone: 'sky' },
-    { code: 'operator',    name: '操作工',       fields: 10, x: 470, y: 220, tone: 'amber' },
-    { code: 'qc_record',   name: '质检记录',     fields: 11, x: 470, y: 50,  tone: 'rose' },
-    { code: 'material',    name: '原材料',       fields: 9,  x: 50,  y: 380, tone: 'brand' },
-    { code: 'fg_inv',      name: '成品库存',     fields: 8,  x: 470, y: 380, tone: 'emerald' },
-  ],
-  relations: [
-    { from: 'work_order', to: 'bom',       label: 'consumes' },
-    { from: 'work_order', to: 'process',   label: 'has steps' },
-    { from: 'process',    to: 'workshop',  label: 'runs in' },
-    { from: 'process',    to: 'machine',   label: 'uses' },
-    { from: 'machine',    to: 'operator',  label: 'operated by' },
-    { from: 'work_order', to: 'qc_record', label: 'inspected by' },
-    { from: 'bom',        to: 'material',  label: 'composed of' },
-    { from: 'work_order', to: 'fg_inv',    label: 'produces' },
-  ],
-  workflows: [
-    { name: '工单发起 → 计划排程',      nodes: 4, sla: '24h' },
-    { name: '车间派工 → 工序确认',      nodes: 5, sla: '4h'  },
-    { name: '在制品转序 → 质检',        nodes: 6, sla: '2h'  },
-    { name: '成品入库 → 工单关闭',      nodes: 4, sla: '24h' },
-    { name: '异常停机 → 修复 → 复工',   nodes: 7, sla: '60min' },
-  ],
-  dictHighlight: [
-    { code: 'wo_status',     name: '工单状态', items: 8 },
-    { code: 'qc_result',     name: '质检结果', items: 5 },
-    { code: 'machine_state', name: '设备状态', items: 6 },
-    { code: 'priority',      name: '优先级',   items: 4 },
-  ],
-}
+const store = useIndustryStore()
 
 const selectedId = ref<string>('pkg-mfg')
+
+// Fallback empty pack — keeps template typesafe before the first fetch resolves.
+const EMPTY_PACK: IndustryPack = {
+  id: '', name: '', code: '', tone: 'brand', version: '',
+  installed: false, default: false, summary: '',
+  stats: { entities: 0, relations: 0, workflows: 0, dicts: 0, forms: 0, roles: 0 },
+  adopted: [], maintainer: '', updated: '',
+}
+
 const cur = computed<IndustryPack>(
-  () => INDUSTRY_PACKS.find(p => p.id === selectedId.value) || INDUSTRY_PACKS[0]
+  () => store.packs.find(p => p.id === selectedId.value) || store.packs[0] || EMPTY_PACK
 )
-const ont = INDUSTRY_ONTOLOGY
-const installedCount = computed(() => INDUSTRY_PACKS.filter(p => p.installed).length)
+const ont = computed(() => store.getOntology(selectedId.value))
 
 // Resolve entity helper for SVG relations
-function findEntity(code: string): OntoEntity | undefined {
-  return ont.entities.find(e => e.code === code)
+function findEntity(code: string): OntologyEntity | undefined {
+  return ont.value.entities.find(e => e.code === code)
 }
-function relMid(r: OntoRelation): { x1: number; y1: number; x2: number; y2: number; mx: number; my: number } | null {
+function relMid(r: OntologyRelation): { x1: number; y1: number; x2: number; y2: number; mx: number; my: number } | null {
   const f = findEntity(r.from)
   const t = findEntity(r.to)
   if (!f || !t) return null
@@ -155,15 +53,33 @@ function relMid(r: OntoRelation): { x1: number; y1: number; x2: number; y2: numb
   return { x1, y1, x2, y2, mx: (x1 + x2) / 2, my: (y1 + y2) / 2 }
 }
 
+onMounted(async () => {
+  await store.fetchPacks()
+  // Prefer the default pack as the initial selection; fall back to first.
+  const def = store.packs.find(p => p.default) || store.packs[0]
+  if (def) selectedId.value = def.id
+  if (selectedId.value) await store.fetchOntology(selectedId.value)
+})
+
+// Lazy-fetch ontology when the user clicks a different pack
+watch(selectedId, async (id) => {
+  if (!id) return
+  if (store.ontologyByPack[id]) return  // already cached
+  await store.fetchOntology(id)
+})
+
 function onImportZip() { ElMessage.info('企业包导入功能即将上线') }
 function onDeriveNew()  { ElMessage.info('派生新包向导即将上线') }
 function onExportZip()  { ElMessage.info(`正在导出 ${cur.value.name} ${cur.value.version}...`) }
 function onDerivePack() { ElMessage.info('派生企业包向导即将上线') }
-function onInstall() {
-  if (cur.value.installed) return
-  const pack = INDUSTRY_PACKS.find(p => p.id === cur.value.id)
-  if (pack) pack.installed = true
-  ElMessage.success(`${cur.value.name} ${cur.value.version} 已安装到当前租户（mock，暂未持久化）`)
+async function onInstall() {
+  if (cur.value.installed || !cur.value.id) return
+  const ok = await store.install(cur.value.id)
+  if (ok) {
+    ElMessage.success(`${cur.value.name} ${cur.value.version} 已安装到当前租户`)
+  } else {
+    ElMessage.error(store.error || '安装失败')
+  }
 }
 function onBrowseCommunity() { ElMessage.info('社区包浏览即将上线') }
 
@@ -250,11 +166,11 @@ function renderIcon(name: string, size = 16) {
         <!-- Pack list -->
         <div class="section-head">
           <div class="section-title">
-            行业包 <span class="section-title-count">{{ INDUSTRY_PACKS.length }}</span>
+            行业包 <span class="section-title-count">{{ store.packs.length }}</span>
           </div>
           <div style="display: flex; gap: 8px; align-items: center;">
             <span class="badge badge-emerald">
-              <span class="badge-dot" />已安装 {{ installedCount }}
+              <span class="badge-dot" />已安装 {{ store.installedCount }}
             </span>
             <button class="section-action" @click="onBrowseCommunity">浏览社区包 →</button>
           </div>
@@ -262,7 +178,7 @@ function renderIcon(name: string, size = 16) {
 
         <div class="industry-pack-grid">
           <button
-            v-for="p in INDUSTRY_PACKS"
+            v-for="p in store.packs"
             :key="p.id"
             class="industry-pack-card"
             :class="{ 'is-selected': selectedId === p.id }"
