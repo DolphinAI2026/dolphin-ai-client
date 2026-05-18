@@ -45,6 +45,20 @@ const statusLabel: Record<string, string> = {
   prod: '已部署生产',
   archived: '归档',
 }
+
+/** doc_type chip — 标在 SPEC head 的应用名旁边，让用户立刻看出"这是 SPEC 还是别的"。 */
+const docTypeLabel: Record<string, string> = {
+  spec: '📐 SPEC 标准设计',
+  self_dev_package: '📦 自开发包',
+  page_design: '🎨 页面设计',
+  general: '📄 通用文档',
+}
+const docTypeBadgeClass: Record<string, string> = {
+  spec: 'badge-brand',
+  self_dev_package: 'badge-amber',
+  page_design: 'badge-sky',
+  general: 'badge-outline',
+}
 </script>
 
 <template>
@@ -90,7 +104,13 @@ const statusLabel: Record<string, string> = {
             <div class="card card-pad">
               <div class="spec-head">
                 <div>
-                  <div class="spec-head-app">{{ selected.app_name }}</div>
+                  <div class="spec-head-app">
+                    {{ selected.app_name }}
+                    <span
+                      class="badge doc-type-chip"
+                      :class="docTypeBadgeClass[selected.doc_type || 'spec']"
+                    >{{ docTypeLabel[selected.doc_type || 'spec'] }}</span>
+                  </div>
                   <div class="spec-head-sub">最新 v{{ selected.latest }} · {{ selected.origin }}</div>
                 </div>
                 <div class="spec-head-actions">
@@ -115,13 +135,29 @@ const statusLabel: Record<string, string> = {
                 </li>
               </ol>
 
-              <div class="section-head"><div class="section-title">章节</div></div>
-              <div class="spec-sections-grid">
-                <div v-for="sec in selected.sections" :key="sec.name" class="spec-section-card">
-                  <div class="spec-section-name">{{ sec.name }}</div>
-                  <div class="spec-section-count">{{ sec.count }}</div>
+              <!-- doc_type='spec' 显示 SPEC 6 章节统计；其他类型显示 outline 大纲 -->
+              <template v-if="(selected.doc_type || 'spec') === 'spec'">
+                <div class="section-head"><div class="section-title">章节</div></div>
+                <div class="spec-sections-grid">
+                  <div v-for="sec in selected.sections" :key="sec.name" class="spec-section-card">
+                    <div class="spec-section-name">{{ sec.name }}</div>
+                    <div class="spec-section-count">{{ sec.count }}</div>
+                  </div>
                 </div>
-              </div>
+              </template>
+              <template v-else>
+                <div class="section-head">
+                  <div class="section-title">文档大纲</div>
+                  <div class="section-hint">此文档非标准 SPEC，不参与 6 章节解析。</div>
+                </div>
+                <ul v-if="selected.outline && selected.outline.length > 0" class="outline-list">
+                  <li v-for="(t, i) in selected.outline" :key="i" class="outline-item">
+                    <span class="outline-idx">{{ i + 1 }}</span>
+                    <span class="outline-title">{{ t }}</span>
+                  </li>
+                </ul>
+                <div v-else class="md-excerpt-empty">未抽取到二级标题</div>
+              </template>
 
               <div class="section-head"><div class="section-title">Markdown 摘录</div></div>
               <pre v-if="selected.excerpt" class="md-excerpt"><code>{{ selected.excerpt }}</code></pre>
@@ -177,6 +213,12 @@ const statusLabel: Record<string, string> = {
 .spec-section-card { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
 .spec-section-name { font-size: 12px; color: var(--text-2); }
 .spec-section-count { font-size: 17px; font-weight: 600; color: var(--text); letter-spacing: -0.01em; margin-top: 2px; }
+.section-hint { font-size: 11.5px; color: var(--text-3); margin-top: 2px; }
+.doc-type-chip { margin-left: 10px; height: 22px; padding: 0 8px; font-size: 11.5px; vertical-align: middle; }
+.outline-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.outline-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; font-size: 13px; color: var(--text); }
+.outline-idx { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 5px; background: var(--surface-3); color: var(--text-3); font-size: 11px; font-family: var(--d-font-mono); }
+.outline-title { color: var(--text); }
 .md-excerpt { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; overflow-x: auto; color: var(--code-text); font-family: var(--d-font-mono); font-size: 11.5px; line-height: 1.5; }
 .md-excerpt-empty { font-size: 12px; color: var(--text-3); padding: 8px 0; }
 .spec-empty { font-size: 12.5px; color: var(--text-3); padding: 16px 8px; text-align: center; }

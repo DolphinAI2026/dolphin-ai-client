@@ -47,6 +47,14 @@ class SpecListItem(BaseModel):
     versions: list[SpecVersionItem]
     sections: list[SpecSection]
     excerpt: str = ""
+    # doc_type 区分文档类型，前端据此决定渲染章节统计 (sections) 还是 outline 大纲：
+    #   'spec'              — 标准 SPEC 6 章节（数据模型 / 表单 / 流程 / 角色 / 字典）
+    #   'self_dev_package'  — 自开发包说明 (package.json / 工程结构 / vue / 组件)
+    #   'page_design'       — 页面/看板/布局设计稿（非 SPEC）
+    #   'general'           — 兜底，含不到任何 SPEC 关键词的普通文档
+    doc_type: str = "spec"
+    # 非 spec 文档显示 outline（## 二级标题前 8 条），spec 文档为空 list
+    outline: list[str] = []
 
 
 class SpecListResponse(BaseModel):
@@ -120,6 +128,71 @@ def _parse_sections(md: str) -> list[SpecSection]:
     ]
 
 
+# 文档类型识别关键词（小写匹配）
+# 顺序判定：先 spec（最强信号），再 self_dev_package，再 page_design，否则 general
+_SPEC_KEYWORDS = [
+    "数据模型", "数据表", "实体设计", "业务对象",
+    "数据字典", "字典", "角色列表", "角色权限",
+    "应用编码", "app_code", "应用编号",
+]
+_SELF_DEV_PACKAGE_KEYWORDS = [
+    "自开发", "package.json", "工程结构", "目录结构",
+    "vue.config", "main.ts", "src/components",
+    "前端工程", "前端包", "自开发包", "npm install",
+    "pnpm install", "yarn install", "df-apaas-cli",
+]
+_PAGE_DESIGN_KEYWORDS = [
+    "看板", "页面布局", "页面设计", "组件布局",
+    "首页设计", "原型", "线框", "wireframe",
+    "ui 设计", "ui设计", "页面结构", "卡片布局",
+]
+
+
+def _detect_doc_type(md: str) -> str:
+    """根据 markdown 内容关键词组识别文档类型。
+
+    返回 'spec' / 'self_dev_package' / 'page_design' / 'general' 之一。
+    判定优先级：spec（最强信号，2+ 关键词命中）> self_dev_package > page_design > general。
+    """
+    if not md:
+        return "general"
+    low = md.lower()
+
+    spec_hits = sum(1 for k in _SPEC_KEYWORDS if k.lower() in low)
+    # 至少命中 2 个 SPEC 关键词才算 SPEC（避免单一"角色"误判）
+    if spec_hits >= 2:
+        return "spec"
+
+    self_dev_hits = sum(1 for k in _SELF_DEV_PACKAGE_KEYWORDS if k.lower() in low)
+    if self_dev_hits >= 1:
+        return "self_dev_package"
+
+    page_hits = sum(1 for k in _PAGE_DESIGN_KEYWORDS if k.lower() in low)
+    if page_hits >= 1:
+        return "page_design"
+
+    return "general"
+
+
+def _extract_outline(md: str, limit: int = 8) -> list[str]:
+    """提取 markdown 二级标题 `^##\\s+...` 前 `limit` 条作为 outline 大纲。
+
+    用于非 SPEC 文档替代 5 章节统计的展示。剥掉 `#` 前缀和序号前缀。
+    """
+    if not md:
+        return []
+    out: list[str] = []
+    for m in re.finditer(r"^\s*##\s+(.+?)\s*$", md, flags=re.MULTILINE):
+        title = m.group(1).strip()
+        # 剥掉常见序号前缀：`一、` `1.` `1)` 之类
+        title = re.sub(r"^(?:[一二三四五六七八九十]+[、.\)]\s*|\d+[、.\)]\s*)", "", title)
+        if title:
+            out.append(title)
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _strip_app_name(filename: str) -> str:
     """`人才管理系统设计文档.md` → `人才管理系统` (best-effort)."""
     base = re.sub(r"\.md$", "", filename, flags=re.IGNORECASE)
@@ -163,8 +236,16 @@ async def list_specs(
         latest_art, latest_sess = items[0]
 
         app_name = _strip_app_name(filename)
-        sections = _parse_sections(latest_art.content)
-        excerpt = (latest_art.content or "")[:1500]
+        md_content = latest_art.content or ""
+        doc_type = _detect_doc_type(md_content)
+        # SPEC 文档算 6 章节统计；非 SPEC 不算（避免 0/0/0/0/0 误显示丢东西），改给 outline
+        if doc_type == "spec":
+            sections = _parse_sections(md_content)
+            outline: list[str] = []
+        else:
+            sections = []
+            outline = _extract_outline(md_content)
+        excerpt = md_content[:1500]
 
         versions: list[SpecVersionItem] = []
         for i, (art, sess) in enumerate(items):
@@ -194,6 +275,8 @@ async def list_specs(
             versions=versions,
             sections=sections,
             excerpt=excerpt,
+            doc_type=doc_type,
+            outline=outline,
         ))
 
     return SpecListResponse(specs=out, total=len(out))

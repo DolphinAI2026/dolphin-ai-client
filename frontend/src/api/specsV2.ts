@@ -19,6 +19,9 @@ export interface SpecSection {
   count: number
 }
 
+/** doc_type 区分文档类型，前端据此决定渲染 sections 还是 outline。 */
+export type SpecDocType = 'spec' | 'self_dev_package' | 'page_design' | 'general'
+
 export interface SpecListItem {
   id: string
   app_id: number
@@ -30,6 +33,10 @@ export interface SpecListItem {
   versions: SpecVersionItem[]
   sections: SpecSection[]
   excerpt: string
+  /** 'spec' 走 6 章节统计；其他类型走 outline */
+  doc_type?: SpecDocType
+  /** 非 spec 文档的二级标题大纲，前 8 条 */
+  outline?: string[]
 }
 
 export interface SpecListResponse {
