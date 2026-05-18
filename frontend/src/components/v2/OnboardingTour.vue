@@ -1,8 +1,38 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 
-const STORAGE_KEY = 'aPaaS:seenOnboarding'
+// New canonical key. Old key 'aPaaS:seenOnboarding' was inconsistent across
+// browsers (some users reported tour re-popping every refresh). Migrating to
+// a plain ASCII key + defensive try/catch (incognito / Safari ITP / quota
+// errors silently broke setItem in some environments).
+const STORAGE_KEY = 'apaas-onboarding-dismissed-v2'
+const LEGACY_STORAGE_KEY = 'aPaaS:seenOnboarding'
 
+function isDismissed(): boolean {
+  try {
+    if (localStorage.getItem(STORAGE_KEY) === '1') return true
+    // Migrate legacy users who already dismissed once
+    if (localStorage.getItem(LEGACY_STORAGE_KEY) === '1') {
+      try { localStorage.setItem(STORAGE_KEY, '1') } catch { /* ignore */ }
+      return true
+    }
+    return false
+  } catch {
+    // localStorage unavailable (private mode etc.) — treat as dismissed so
+    // we don't pop the overlay every refresh.
+    return true
+  }
+}
+
+function markDismissed() {
+  try {
+    localStorage.setItem(STORAGE_KEY, '1')
+    localStorage.setItem(LEGACY_STORAGE_KEY, '1')
+  } catch { /* ignore */ }
+}
+
+// Default closed. Only open if NOT dismissed — checked synchronously in
+// onMounted so async data fetch can never accidentally flip it open.
 const visible = ref(false)
 const step = ref(0) // 0, 1, 2
 
@@ -30,8 +60,9 @@ const ROLES = [
 ]
 
 onMounted(async () => {
-  // Open if never seen
-  if (localStorage.getItem(STORAGE_KEY) !== '1') {
+  // Open if never seen — check synchronously BEFORE any await so the
+  // visibility decision can't be affected by the async data fetch below.
+  if (!isDismissed()) {
     visible.value = true
   }
   // Fetch real counts for concept cards (silent fail — counts stay 0 / "—")
@@ -51,7 +82,8 @@ onMounted(async () => {
 })
 
 function close() {
-  localStorage.setItem(STORAGE_KEY, '1')
+  // Persist BEFORE hiding so a refresh mid-animation still counts as dismissed.
+  markDismissed()
   visible.value = false
 }
 function next() {
@@ -62,6 +94,8 @@ function back() {
   if (step.value > 0) step.value--
 }
 
+// Expose `open()` so a future "重新介绍" button can force-show without
+// clearing the flag. Does NOT auto-mark dismissed — user must click 跳过/完成.
 defineExpose({ open: () => { step.value = 0; visible.value = true } })
 </script>
 
