@@ -1350,10 +1350,9 @@ const builderCurrentAppId = computed<number | null>(() => {
 })
 
 // 左侧对话区是否用 dolphin agent (a73e75cd81) 接管 — true 走 dolphin iframe，false 走原 SPEC chat
-// 2026-05-18: AI-Chat → Builder 链路 (from=aichat) 默认走 local chat 不走 dolphin —
-// 因为文档上传进度 / 解析进度 / auto-create 应用消息都 push 在 local messages array
-// 走 dolphin iframe 会让用户看不到这些反馈，误以为"文档没传过去"。
-const useDolphinChat = ref(route.query.from !== 'aichat' && route.query.from !== 'upload')
+// 注：showBuilderChatSide=false 时整个 chat-side 块都不显示，这个 ref 当前无效。
+// 保留 ref 因为别处（如顶上按钮 v-if）还在用它判断"是不是 dolphin 模式"。
+const useDolphinChat = ref(true)
 
 // 把"当前编辑的应用"上报给后端，让 dolphin agent 调 MCP 工具时不传 app_id 也能拿到
 const currentAppSynced = ref(false)
@@ -1664,12 +1663,13 @@ const showBuilderPhaseStrip = computed(() =>
   !useSpecMode.value &&
   showAnyBuilderArtifactPanel.value
 )
-// 2026-05-18 撤销 5/15 "砍左侧 chat side" 决策：用户从 AI-Chat → Builder 跳过来
-// 后看不见上传进度 + 解析告警 + auto-create 应用消息，误以为"文档没传过去"。
-// chat 面板是 AI-Chat → Builder 链路必要可视化，恢复显示。
-// useDolphinChat 默认 true → 显示 DolphinAgentEmbed；为 false 时也显示老 SPEC chat（fallback）。
-const showBuilderChatSide = computed(() => !embedMode.value)
-const showBuilderComposer = computed(() => showBuilderChatSide.value && !useDolphinChat.value)
+// 2026-05-15 按 [[arch_decision_mcp_provider_2026_05_14]] "不再深度融合 ai_chat 等
+// 内置 agent" 决策砍掉左侧 AI 助手对话区（DolphinAgentEmbed iframe）：用户只需点
+// 右上角"开始构建"按钮即可。右侧 SPEC 区因 .single-pane class 自动 full-width。
+// 老 computed 逻辑保留作 ref，下次彻底砍 chat-side block 时一并清。
+// 2026-05-18 撤销 cf75367 "恢复 chat panel" — 用户拍板 md 预览区不要 AI 助手。
+const showBuilderChatSide = computed(() => false)
+const showBuilderComposer = computed(() => showBuilderChatSide.value)
 const showDeployProgressInline = computed(() => deploySteps.value.length > 0 || deployOpen.value || isPlatformDeployed.value)
 // 用户已决定废弃 "已部署应用版本化视图"：右侧永远显示文档（单文档或 diff），
 // 不再区分 showDeployedVersionedView 模式。保留此处常量以便语义搜索，
