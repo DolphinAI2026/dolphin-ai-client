@@ -5,6 +5,7 @@
       <slot />
     </div>
     <BuilderCommandPalette />
+    <OnboardingTour />
     <!-- HelpAssistant 已抬到 App.vue 顶层挂一次，避免随路由切换重复 init -->
   </div>
 </template>
@@ -14,6 +15,7 @@ import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import RailSidebar from '@/components/v2/RailSidebar.vue'
 import BuilderCommandPalette from '@/components/BuilderCommandPalette.vue'
+import OnboardingTour from '@/components/v2/OnboardingTour.vue'
 import { useThemeStore } from '@/stores/theme'
 
 const route = useRoute()
