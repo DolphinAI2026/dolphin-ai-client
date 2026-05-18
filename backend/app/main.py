@@ -31,6 +31,7 @@ from app.routes import (
     incremental_update,
     llm_configs,
     marketplace,
+    mcp_hub,
     online_coding,
     online_coding_runtime,
     platform_envs,
@@ -192,6 +193,7 @@ app.include_router(requirements.router, prefix="/api")
 app.include_router(current_app.router, prefix="/api")
 app.include_router(admin_mcp.router, prefix="/api")
 app.include_router(builder_mcp.router, prefix="/api")
+app.include_router(mcp_hub.router)
 # 平台代理路由注册在根路径（/platform/... 和 /backend/... 需要直接匹配）
 app.include_router(platform_proxy.router)
 
