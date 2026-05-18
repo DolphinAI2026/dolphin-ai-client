@@ -1,6 +1,10 @@
 <template>
   <BuilderFrame :breadcrumbs="[{ label: '应用' }]">
     <template #actions>
+      <button class="btn btn-secondary apps-new-btn" type="button" @click="importDialogOpen = true">
+        <el-icon><Download /></el-icon>
+        <span>导入应用</span>
+      </button>
       <button class="btn btn-primary apps-new-btn" type="button" @click="router.push('/')">
         <el-icon><Plus /></el-icon>
         <span>新建应用</span>
@@ -243,6 +247,9 @@
       </section>
     </main>
 
+    <!-- 导入应用弹窗 — 入口在顶栏 actions 槽 -->
+    <ImportAppDialog v-model="importDialogOpen" @imported="refreshApps" />
+
     <!-- Phase A: 成员管理弹窗 -->
     <div v-if="membersDialogApp" class="modal-backdrop" @click.self="membersDialogApp = null">
       <div class="modal modal-large" @click.stop>
@@ -271,13 +278,14 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { Delete, Grid, Link as LinkIcon, List, MoreFilled, Plus, Promotion, UserFilled } from '@element-plus/icons-vue'
+import { Delete, Download, Grid, Link as LinkIcon, List, MoreFilled, Plus, Promotion, UserFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { handleError } from '@/utils/errorHandler'
 import { applicationApi } from '@/api/application'
 import { authApi } from '@/api/auth'
 import { conversationApi, type ConversationWithApp } from '@/api/conversation'
 import BuilderFrame from '@/components/BuilderFrame.vue'
+import ImportAppDialog from '@/components/ImportAppDialog.vue'
 import MembersPanel from '@/components/MembersPanel.vue'
 import type { MergedApplication } from '@/types'
 import { buildPlatformProxyEntryUrl } from '@/utils/platformIframe'
@@ -301,6 +309,7 @@ const appHistoryMap = ref<Record<number, ConversationWithApp[]>>({})
 const loading = ref(true)
 const activeTab = ref<AppTab>('all')
 const viewMode = ref<ViewMode>('list')
+const importDialogOpen = ref(false)
 
 const tabDefinitions: Array<{ label: string; value: AppTab }> = [
   { label: '全部', value: 'all' },
@@ -586,7 +595,8 @@ async function confirmDelete(app: MergedApplication) {
   }
 }
 
-onMounted(async () => {
+async function refreshApps() {
+  loading.value = true
   try {
     const [list, conversations] = await Promise.all([
       applicationApi.list({ include_remote: false }),
@@ -599,7 +609,9 @@ onMounted(async () => {
   } finally {
     loading.value = false
   }
-})
+}
+
+onMounted(() => { refreshApps() })
 
 // ---- Phase A: Application member management ----
 const membersDialogApp = ref<{ id: number; app_name: string } | null>(null)
@@ -1398,6 +1410,17 @@ async function removeAppMember(userId: number) {
 .btn-primary:hover {
   filter: brightness(1.06);
   box-shadow: 0 6px 16px rgba(91, 91, 214, 0.18);
+}
+
+.btn-secondary {
+  background: var(--surface, var(--b-panel));
+  color: var(--text, var(--b-text));
+  border-color: var(--border, var(--b-line));
+}
+
+.btn-secondary:hover {
+  background: var(--b-bg-sub);
+  border-color: var(--b-line-strong);
 }
 
 .apps-new-btn {
