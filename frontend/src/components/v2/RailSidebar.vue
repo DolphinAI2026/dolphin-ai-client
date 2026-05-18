@@ -51,7 +51,7 @@ const NAV = computed<NavGroup[]>(() => [
   { group: '搭建', items: [
     { key: 'home',     label: '新建',            icon: 'home',  path: '/' },
     { key: 'apps',     label: '应用',            icon: 'apps',  path: '/apps', badge: appCount.value || undefined },
-    { key: 'chat',     label: '睿鲸 AI Builder', icon: 'chat',  path: '/chat' },
+    { key: 'chat',     label: '睿鲸 AI Builder', icon: 'chat',  path: '/ai-chat?mode=requirements' },
   ]},
   { group: '开发', items: [
     { key: 'coding', label: '睿鲸 AI Coding', icon: 'whale', path: '/coding', badge: codingWorkspaceCount.value || undefined },
@@ -71,8 +71,10 @@ const NAV = computed<NavGroup[]>(() => [
 ])
 
 const isActive = (path: string) => {
-  if (path === '/') return route.path === '/'
-  return route.path === path || route.path.startsWith(path + '/')
+  // Strip query string for path comparison (e.g. '/ai-chat?mode=requirements' → '/ai-chat')
+  const basePath = path.split('?')[0]
+  if (basePath === '/') return route.path === '/'
+  return route.path === basePath || route.path.startsWith(basePath + '/')
 }
 const userName = computed(() => user.user?.username || '未登录')
 const tenantName = computed(() => user.user?.tenant_name || '得帆云示例租户')

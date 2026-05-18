@@ -23,6 +23,7 @@ const CRUMB_LABELS: Record<string, string> = {
   '/': '新建',
   '/apps': '应用',
   '/chat': '睿鲸 AI Builder',
+  '/ai-chat': '睿鲸 AI Builder',
   '/coding': '睿鲸 AI Coding',
   '/vibe': 'Vibe Coding',
   '/vibe-coding': 'Vibe Coding',
