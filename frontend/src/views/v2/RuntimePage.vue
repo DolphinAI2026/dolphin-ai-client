@@ -12,33 +12,19 @@
   See docs/superpowers/plans/2026-05-18-apaas-builder-redesign-p0-p1.md (P2 — Task #10).
 -->
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
 import ShellTopBar from '@/components/v2/ShellTopBar.vue'
+import { useRuntimeSandboxStore } from '@/stores/sandbox'
+import type { RuntimeSandbox } from '@/api/sandbox'
 
-type SandboxStatus = 'active' | 'idle' | 'recycling'
 type PipelineStatus = 'running' | 'success' | 'failed' | 'pending' | 'skip'
 type EnvId = 'dev' | 'test' | 'prod'
 
-interface Sandbox {
-  id: string
-  name: string
-  workspace: string
-  flavor: '睿鲸' | 'Vibe'
-  user: string
-  cpu: number
-  cpuMax: number
-  mem: number
-  memMax: number
-  disk: number
-  idle: string
-  status: SandboxStatus
-  ttl: string
-  created: string
-  image: string
-}
+// Sandbox type now comes from `@/api/sandbox` (`RuntimeSandbox`). Replaced
+// inline `Sandbox` interface and `SANDBOXES` seed array — see useRuntimeSandboxStore below.
 
 interface PipelineStage {
   name: string
@@ -90,34 +76,9 @@ interface Deployment {
   error?: string
 }
 
-// Seed data — verbatim from $DESIGN_SRC/data.js (lines 608-731).
-const SANDBOXES: Sandbox[] = [
-  {
-    id: 'sbx-7f3a', name: '差旅报销表单', workspace: 'ws-1', flavor: '睿鲸',
-    user: 'marshub', cpu: 1.2, cpuMax: 2, mem: 1.8, memMax: 4, disk: 0.6,
-    idle: '0 min', status: 'active', ttl: '剩余 1h 58m', created: '今天 14:22', image: 'node:20-alpine + apaas-bridge',
-  },
-  {
-    id: 'sbx-2b1c', name: 'apaas-builder-ai · frontend', workspace: 'vibe', flavor: 'Vibe',
-    user: 'marshub', cpu: 0.4, cpuMax: 4, mem: 3.1, memMax: 8, disk: 2.4,
-    idle: '0 min', status: 'active', ttl: '剩余 47 min', created: '今天 13:50', image: 'code-server 4.112.0',
-  },
-  {
-    id: 'sbx-9e44', name: '客户工单看板', workspace: 'ws-2', flavor: '睿鲸',
-    user: 'marshub', cpu: 0.0, cpuMax: 2, mem: 0.4, memMax: 4, disk: 0.3,
-    idle: '12 min', status: 'idle', ttl: '剩余 1h 48m', created: '今天 10:10', image: 'node:20-alpine + apaas-bridge',
-  },
-  {
-    id: 'sbx-c821', name: '资产分类树选择器', workspace: 'ws-3', flavor: '睿鲸',
-    user: '李宁', cpu: 0.0, cpuMax: 2, mem: 0.0, memMax: 4, disk: 0.5,
-    idle: '4h 02m', status: 'recycling', ttl: '即将回收', created: '昨天 18:21', image: 'node:20-alpine + apaas-bridge',
-  },
-  {
-    id: 'sbx-d115', name: '审批流时间线组件', workspace: 'ws-x', flavor: '睿鲸',
-    user: '周航', cpu: 1.8, cpuMax: 2, mem: 3.4, memMax: 4, disk: 0.9,
-    idle: '0 min', status: 'active', ttl: '剩余 26 min', created: '今天 13:14', image: 'node:20-alpine + apaas-bridge',
-  },
-]
+// Sandboxes: real backend (Pinia store) — replaces the inline SANDBOXES seed.
+const sandboxStore = useRuntimeSandboxStore()
+onMounted(() => sandboxStore.fetchSandboxes())
 
 const PIPELINES: Pipeline[] = [
   {
@@ -227,12 +188,13 @@ const cur = computed<Pipe>(
 
 // ─── Stats strip ─────────────────────────────────────────────────────────
 const stats = computed(() => {
-  const activeSb = SANDBOXES.filter(s => s.status === 'active').length
+  const activeSb = sandboxStore.activeCount
+  const totalSb = sandboxStore.total
   const failedRuns = PIPELINES.filter(p => p.status === 'failed').length
   const runningRuns = PIPELINES.filter(p => p.status === 'running').length
   const todayDeps = DEPLOYMENTS.filter(d => !d.time.includes('/') && !d.time.includes('昨天')).length
   return [
-    { label: '运行中沙箱', v: String(activeSb), sub: `共 ${SANDBOXES.length} 个 · 平均空闲 18 min`, tone: 'ok' as const, icon: 'check' },
+    { label: '运行中沙箱', v: String(activeSb), sub: `共 ${totalSb} 个`, tone: 'ok' as const, icon: 'check' },
     { label: '今日构建',   v: String(PIPELINES.length), sub: `${failedRuns} 失败 · ${runningRuns} 进行中`, tone: 'brand' as const, icon: 'zap' },
     { label: '今日部署',   v: String(todayDeps), sub: '生产 1 · 测试 2', tone: 'info' as const, icon: 'cloud' },
     { label: '生产健康度', v: '99.8%', sub: '过去 7 天', tone: 'warn' as const, icon: 'shield' },
@@ -264,12 +226,12 @@ function resourcePct(value: number): string {
 }
 
 interface StatusMeta { label: string; cls: string }
-function sandboxStatusMeta(s: SandboxStatus): StatusMeta {
+function sandboxStatusMeta(s: RuntimeSandbox['status']): StatusMeta {
   return ({
     active:    { label: '运行中', cls: 'badge-emerald' },
     idle:      { label: '空闲',   cls: 'badge-amber' },
     recycling: { label: '回收中', cls: 'badge-rose' },
-  } as Record<SandboxStatus, StatusMeta>)[s]
+  } as Record<RuntimeSandbox['status'], StatusMeta>)[s]
 }
 
 function pipelineStatusMeta(s: string): StatusMeta {
@@ -288,7 +250,7 @@ function notImpl(action: string) {
   ElMessage.info(`${action} 即将上线`)
 }
 
-function onOpenSandbox(sbx: Sandbox) {
+function onOpenSandbox(sbx: RuntimeSandbox) {
   if (sbx.flavor === 'Vibe') {
     router.push('/vibe')
   } else {
@@ -322,12 +284,12 @@ function renderIcon(name: string, size = 16) {
   return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`
 }
 
-const TABS = [
-  { k: 'sandboxes' as const, l: '沙箱',     c: SANDBOXES.length,    ic: 'cloud' },
+const TABS = computed(() => [
+  { k: 'sandboxes' as const, l: '沙箱',     c: sandboxStore.total,  ic: 'cloud' },
   { k: 'pipelines' as const, l: '流水线',   c: PIPELINES.length,    ic: 'zap' },
   { k: 'envs'      as const, l: '平台环境', c: ENVIRONMENTS.length, ic: 'admin' },
   { k: 'history'   as const, l: '部署历史', c: DEPLOYMENTS.length,  ic: 'book' },
-]
+])
 
 // Failure log content for the selected run (lifted verbatim from design source).
 const FAILURE_LOG = `  ▸ npm run build:component --name=客户工单看板
@@ -413,7 +375,7 @@ const FAILURE_LOG = `  ▸ npm run build:component --name=客户工单看板
               <div style="width: 110px; text-align: right;">操作</div>
             </div>
             <div
-              v-for="s in SANDBOXES"
+              v-for="s in sandboxStore.sandboxes"
               :key="s.id"
               class="rt-table-row"
             >
@@ -437,15 +399,15 @@ const FAILURE_LOG = `  ▸ npm run build:component --name=客户工单看板
                 <!-- Resource bars (inline ResourceBar component) -->
                 <div class="rt-resbar">
                   <div class="rt-resbar-track">
-                    <div :class="['rt-resbar-fill', `rt-resbar-${resourceTone(s.cpu / s.cpuMax)}`]" :style="{ width: resourcePct(s.cpu / s.cpuMax) }" />
+                    <div :class="['rt-resbar-fill', `rt-resbar-${resourceTone(s.cpu / s.cpu_max)}`]" :style="{ width: resourcePct(s.cpu / s.cpu_max) }" />
                   </div>
-                  <div class="rt-resbar-label">{{ s.cpu.toFixed(1) }} / {{ s.cpuMax }} vCPU</div>
+                  <div class="rt-resbar-label">{{ s.cpu.toFixed(1) }} / {{ s.cpu_max }} vCPU</div>
                 </div>
                 <div class="rt-resbar is-small">
                   <div class="rt-resbar-track">
-                    <div :class="['rt-resbar-fill', `rt-resbar-${resourceTone(s.mem / s.memMax)}`]" :style="{ width: resourcePct(s.mem / s.memMax) }" />
+                    <div :class="['rt-resbar-fill', `rt-resbar-${resourceTone(s.mem / s.mem_max)}`]" :style="{ width: resourcePct(s.mem / s.mem_max) }" />
                   </div>
-                  <div class="rt-resbar-label">{{ s.mem.toFixed(1) }} / {{ s.memMax }} GB</div>
+                  <div class="rt-resbar-label">{{ s.mem.toFixed(1) }} / {{ s.mem_max }} GB</div>
                 </div>
                 <div class="rt-resbar is-small is-dim">
                   <div class="rt-resbar-track">
