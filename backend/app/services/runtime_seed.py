@@ -153,8 +153,13 @@ def _deployments(tenant_id: int, now: datetime, yesterday: datetime) -> list[Dep
 
 
 async def seed_runtime_for_tenant(db: AsyncSession, tenant_id: int) -> None:
-    """Idempotent: only inserts if no pipeline/deployment rows exist for this tenant."""
-    existing_pipe = (
+    """DISABLED 2026-05-19 — user requested clean slate.
+
+    To re-enable, remove the early return below. Sample pipeline_runs +
+    deployment_history data is preserved as constants in this file.
+    """
+    return  # no-op; lazy seed disabled
+    existing_pipe = (  # type: ignore[unreachable]
         await db.execute(
             select(PipelineRun).where(PipelineRun.tenant_id == tenant_id).limit(1)
         )

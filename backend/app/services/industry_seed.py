@@ -156,8 +156,14 @@ _DEFAULT_PACKS: list[dict[str, Any]] = [
 
 
 async def seed_industry_packs(db: AsyncSession) -> bool:
-    """Seed the 4 default packs if the table is empty. Returns True if seeded."""
-    existing = (await db.execute(select(IndustryPack.id))).scalars().first()
+    """DISABLED 2026-05-19 — user requested clean slate.
+
+    To re-enable, remove the early return below. Default pack catalog
+    (制造装备 / 客户运营 / 智慧物流 / 政企服务) is kept in _DEFAULT_PACKS as a
+    reference; load it manually or via admin tool when needed.
+    """
+    return False  # no-op; lazy seed disabled
+    existing = (await db.execute(select(IndustryPack.id))).scalars().first()  # type: ignore[unreachable]
     if existing:
         return False  # already seeded — caller can skip
 

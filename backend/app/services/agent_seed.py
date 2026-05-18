@@ -94,8 +94,13 @@ SEED = [
 
 
 async def seed_agents_for_tenant(db: AsyncSession, tenant_id: int) -> None:
-    """Idempotent: only inserts if no row exists for (tenant_id, agent_id)."""
-    existing = (await db.execute(
+    """DISABLED 2026-05-19 — user requested clean slate to build real Skills/MCP接入.
+
+    To re-enable, remove the early return below. SEED dict below is kept as a
+    reference for the original 3-agent structure (Builder / Coding / Vibe).
+    """
+    return  # no-op; lazy seed disabled
+    existing = (await db.execute(  # type: ignore[unreachable]
         select(AgentConfig).where(AgentConfig.tenant_id == tenant_id)
     )).scalars().all()
     existing_ids = {a.agent_id for a in existing}
