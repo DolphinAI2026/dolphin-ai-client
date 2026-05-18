@@ -173,5 +173,34 @@ export const applicationApi = {
   /** 编码冲突修复 */
   resolveConflict(appId: number, data: { step: string; model_name: string; old_code: string; new_code: string }) {
     return request.post<any, any>(`/applications/${appId}/resolve-conflict`, data)
-  }
+  },
+
+  // ============================================================
+  // Plan C (2026-05-19): 从 ai_chat artifact 触发部署
+  // AIChatPage 用户点 🚀 → DeployConfirmModal → 调本方法 → 后端
+  // 解析 md + 建 Application 占位行 + 返回 task_id 让前端轮询
+  // ============================================================
+
+  /** 从 artifact (md 设计文档) 触发应用部署 — 返回 task_id 让前端轮询 */
+  deployFromArtifact(data: {
+    artifact_id: number
+    env: 'dev' | 'test' | 'prod'
+    app_code?: string
+    platform_env_id?: number
+  }) {
+    return request.post<any, { task_id: string; app_id: number; sse_url: string }>(
+      '/applications/deploy-from-artifact', data
+    )
+  },
+
+  /** 轮询部署状态（粗粒度 — 真细节进度走 SSE sse_url） */
+  getDeployStatus(taskId: string) {
+    return request.get<any, {
+      done: boolean
+      phase: string  // draft / generating / completed / failed
+      progress: number
+      error: string | null
+      app_id: number | null
+    }>(`/applications/deploy-status/${taskId}`)
+  },
 }
