@@ -9,9 +9,7 @@ const router = useRouter()
 const store = useProjectStore()
 
 onMounted(() => {
-  // fetchProjects() will be added to the store in Task 3.4; until then the store
-  // ships seed data and this no-ops.
-  // store.fetchProjects()
+  store.fetchProjects()
 })
 
 const stageClass: Record<string, string> = {
@@ -41,7 +39,10 @@ function newProject() { /* P2: open project create modal */ }
           </button>
         </div>
 
-        <div class="proj-grid">
+        <div v-if="store.loading && !store.projects.length" class="proj-empty">加载中…</div>
+        <div v-else-if="store.error && !store.projects.length" class="proj-empty proj-empty-error">加载项目失败：{{ store.error }}</div>
+        <div v-else-if="!store.projects.length" class="proj-empty">暂无项目，点击右上角“新建项目”开始。</div>
+        <div v-else class="proj-grid">
           <button v-for="p in store.projects" :key="p.id" class="card card-interactive proj-card" @click="open(p)">
             <div class="proj-card-head">
               <div class="proj-card-bar" />
@@ -78,6 +79,8 @@ function newProject() { /* P2: open project create modal */ }
 .btn-primary { background: var(--brand); color: #fff; box-shadow: 0 1px 2px rgba(28, 21, 73, 0.16), inset 0 -1px 0 rgba(0, 0, 0, 0.15); }
 .btn-primary:hover { background: var(--brand-hover); box-shadow: 0 2px 6px var(--brand-ring); }
 .proj-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+.proj-empty { padding: 48px 16px; text-align: center; font-size: 13px; color: var(--text-3); border: 1px dashed var(--border); border-radius: 12px; background: var(--surface); }
+.proj-empty-error { color: var(--danger, #c44); border-color: var(--danger, #c44); }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-xs); padding: 18px; text-align: left; cursor: pointer; font-family: inherit; color: var(--text); width: 100%; }
 .card-interactive { transition: border-color 0.14s, box-shadow 0.14s, transform 0.14s; }
 .card-interactive:hover { border-color: var(--border-strong); box-shadow: var(--shadow-md); }

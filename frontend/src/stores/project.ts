@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
+import { projectsApi, type Project as ApiProject } from '@/api/projects'
 
 export interface Project {
   id: string
@@ -16,14 +17,28 @@ export interface Project {
 
 const STORAGE_KEY = 'aPaaS:currentProjectId'
 
+function mapApiProject(p: ApiProject): Project {
+  const connected = !!p.platform_connected
+  return {
+    id: String(p.id),
+    name: p.name,
+    customerName: p.description || p.platform_app_name || '—',
+    stage: connected ? '已上线' : '设计中',
+    progress: connected ? 100 : 30,
+    appCount: 0,
+    deployCount: 0,
+    memberCount: 0,
+    envCount: connected ? 1 : 0,
+    industryPackId: null,
+  }
+}
+
 export const useProjectStore = defineStore('project', () => {
-  const projects = ref<Project[]>([
-    { id: 'p-default',  name: '得帆云示例租户',  customerName: '内部演示', stage: '已上线', progress: 100, appCount: 6,  deployCount: 12, memberCount: 4, envCount: 3, industryPackId: null },
-    { id: 'p-auto',     name: '某汽车制造客户',  customerName: '汽车制造业', stage: '开发中', progress: 62,  appCount: 4,  deployCount: 9,  memberCount: 6, envCount: 3, industryPackId: 'pack-mfg' },
-    { id: 'p-retail',   name: '某连锁零售客户',  customerName: '连锁零售业', stage: '测试中', progress: 78,  appCount: 7,  deployCount: 14, memberCount: 5, envCount: 3, industryPackId: 'pack-ops' },
-    { id: 'p-logistic', name: '某物流客户',      customerName: '物流业',     stage: '设计中', progress: 24,  appCount: 2,  deployCount: 1,  memberCount: 3, envCount: 2, industryPackId: null },
-  ])
-  const currentProjectId = ref<string>(localStorage.getItem(STORAGE_KEY) ?? 'p-default')
+  const projects = ref<Project[]>([])
+  const currentProjectId = ref<string>(localStorage.getItem(STORAGE_KEY) ?? '')
+  const loading = ref(false)
+  const error = ref<string | null>(null)
+  let fetched = false
 
   const currentProject = computed<Project | null>(
     () => projects.value.find(p => p.id === currentProjectId.value) ?? projects.value[0] ?? null,
@@ -34,9 +49,43 @@ export const useProjectStore = defineStore('project', () => {
     localStorage.setItem(STORAGE_KEY, id)
   }
 
+  async function fetchProjects(force = false) {
+    if (fetched && !force) return
+    loading.value = true
+    error.value = null
+    try {
+      const raw = await projectsApi.list()
+      const list: ApiProject[] = Array.isArray(raw)
+        ? raw
+        : ((raw as any)?.items || (raw as any)?.projects || [])
+      projects.value = list.map(mapApiProject)
+      fetched = true
+      // If currentProjectId no longer matches any project, reset to first (or empty)
+      if (!projects.value.find(p => p.id === currentProjectId.value)) {
+        const nextId = projects.value[0]?.id ?? ''
+        currentProjectId.value = nextId
+        if (nextId) localStorage.setItem(STORAGE_KEY, nextId)
+        else localStorage.removeItem(STORAGE_KEY)
+      }
+    } catch (e: any) {
+      error.value = e?.message || 'fetch projects failed'
+    } finally {
+      loading.value = false
+    }
+  }
+
   function setProjects(next: Project[]) {
     projects.value = next
   }
 
-  return { projects, currentProjectId, currentProject, setCurrent, setProjects }
+  return {
+    projects,
+    currentProjectId,
+    currentProject,
+    loading,
+    error,
+    setCurrent,
+    fetchProjects,
+    setProjects,
+  }
 })

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useProjectStore } from '@/stores/project'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
@@ -11,6 +11,10 @@ const store = useProjectStore()
 const activeTab = ref<'overview' | 'apps' | 'members' | 'industry' | 'env'>('overview')
 
 const project = computed(() => store.projects.find(p => p.id === route.params.id))
+
+onMounted(async () => {
+  if (!store.projects.length) await store.fetchProjects()
+})
 
 watch(() => route.params.id, (id) => {
   if (typeof id === 'string') store.setCurrent(id)
