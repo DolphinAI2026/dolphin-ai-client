@@ -9,6 +9,7 @@ from app.config import settings, APP_TITLE, APP_DESCRIPTION, APP_VERSION
 from app.database import init_db
 from app.routes import (
     admin_mcp,
+    agents_config,
     ai_chat,
     apaas,
     builder_mcp,
@@ -29,6 +30,7 @@ from app.routes import (
     harness,
     help_assistant,
     incremental_update,
+    industry,
     llm_configs,
     marketplace,
     mcp_hub,
@@ -40,8 +42,10 @@ from app.routes import (
     projects,
     proposals,
     requirements,
+    runtime_v2,
     sandboxes,
     spec,
+    specs_v2,
     sse,
     templates,
     vibe_coding_chat,
@@ -194,6 +198,11 @@ app.include_router(current_app.router, prefix="/api")
 app.include_router(admin_mcp.router, prefix="/api")
 app.include_router(builder_mcp.router, prefix="/api")
 app.include_router(mcp_hub.router)
+# V2 redesign routes — agents config / industry packs / SPEC list / runtime pipelines+deployments
+app.include_router(agents_config.router, prefix="/api")
+app.include_router(industry.router, prefix="/api")
+app.include_router(specs_v2.router, prefix="/api")
+app.include_router(runtime_v2.router, prefix="/api")
 # 平台代理路由注册在根路径（/platform/... 和 /backend/... 需要直接匹配）
 app.include_router(platform_proxy.router)
 

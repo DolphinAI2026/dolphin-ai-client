@@ -301,6 +301,23 @@ from app.models.vibe_coding import (  # noqa: E402, F401
 )
 
 
+# V2 redesign — agent configs / industry packs / runtime pipelines + deployments
+from app.models.agent_config import (  # noqa: E402, F401
+    AgentConfig,
+    AgentSkill,
+    AgentMcpBinding,
+    AgentKnowledgeBinding,
+)
+from app.models.industry import (  # noqa: E402, F401
+    IndustryPack,
+    IndustryPackInstall,
+)
+from app.models.runtime_v2 import (  # noqa: E402, F401
+    PipelineRun,
+    DeploymentHistory,
+)
+
+
 class DolphinUserLink(Base):
     """ai-builder 用户 → dolphin trial 租户内对应账号的映射。
     每个 ai-builder 用户在 dolphin 镜像出独立账号，浮窗 / iframe 用该账号 token，
