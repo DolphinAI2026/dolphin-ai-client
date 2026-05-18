@@ -1,60 +1,36 @@
 <!-- frontend/src/views/v2/SpecsPage.vue -->
 <!--
-  Seed data until backend `api/specs.ts` exists. Backend SPEC versioning is
-  out-of-scope for the P0+P1 plan — this page renders local seed so that
-  the sidebar entry never 404s and design review can validate the layout.
-  See docs/superpowers/plans/2026-05-18-apaas-builder-redesign-p0-p1.md
-  (Task 6.1).
+  Wired to /api/specs-v2 — one synthetic v1 SPEC per Application in the
+  tenant. Real multi-version + diff comes in a follow-up. Backend route:
+  backend/app/routes/specs_v2.py.
 -->
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
 import ShellTopBar from '@/components/v2/ShellTopBar.vue'
+import { useSpecsV2Store } from '@/stores/specsV2'
+import type { SpecListItem } from '@/api/specsV2'
 
-interface SpecVersion {
-  v: number
-  status: 'draft' | 'test' | 'prod' | 'archived'
-  note: string
-  author: string
-  date: string
-}
-interface Spec {
-  id: string
-  appName: string
-  latest: number
-  diff: { add: number; mod: number }
-  origin: string
-  versions: SpecVersion[]
-  sections: { name: string; count: number }[]
-  excerpt: string
-}
+const store = useSpecsV2Store()
+const selectedId = ref<string | null>(null)
 
-const specs = ref<Spec[]>([
-  {
-    id: 's1',
-    appName: '资产管理系统',
-    latest: 3,
-    diff: { add: 2, mod: 4 },
-    origin: '基于 标准模板 + 制造装备包 v2.1',
-    versions: [
-      { v: 3, status: 'draft', note: '加保修截止日期 / 采购来源', author: 'mars', date: '2026-05-18' },
-      { v: 2, status: 'test', note: '加财务审批分支', author: 'mars', date: '2026-05-15' },
-      { v: 1, status: 'prod', note: '首版上线', author: '陈青羽', date: '2026-05-08' },
-      { v: 0, status: 'archived', note: '初稿（已归档）', author: 'mars', date: '2026-05-02' },
-    ],
-    sections: [
-      { name: '需求摘要', count: 1 },
-      { name: '数据模型', count: 6 },
-      { name: '表单', count: 6 },
-      { name: '流程', count: 2 },
-      { name: '角色权限', count: 3 },
-      { name: '字典', count: 6 },
-    ],
-    excerpt:
-      '| 字段 | 类型 | 必填 | 备注 |\n|---|---|---|---|\n| 资产名称 | String(120) | 是 | |\n| 保修截止 | Date | 否 | NEW |',
+onMounted(async () => {
+  await store.fetchSpecs()
+})
+
+// Keep selected pinned to the first spec by default; user can change.
+watch(
+  () => store.specs,
+  (next) => {
+    if (!selectedId.value && next.length > 0) selectedId.value = next[0].id
   },
-])
-const selected = ref<Spec | null>(specs.value[0])
+  { immediate: true },
+)
+
+const selected = computed<SpecListItem | null>(() => {
+  if (!selectedId.value) return store.specs[0] ?? null
+  return store.specs.find(s => s.id === selectedId.value) ?? (store.specs[0] ?? null)
+})
 
 const ORIGIN_STEPS = ['标准模板', '行业知识库', '睿鲸 AI Builder 对话产出', '部署到 aPaaS 平台']
 const statusBadgeClass: Record<string, string> = {
@@ -91,18 +67,20 @@ const statusLabel: Record<string, string> = {
 
         <div class="specs-layout">
           <aside class="specs-list">
+            <div v-if="store.loading && store.specs.length === 0" class="spec-empty">加载中…</div>
+            <div v-else-if="!store.loading && store.specs.length === 0" class="spec-empty">暂无 SPEC</div>
             <button
-              v-for="s in specs"
+              v-for="s in store.specs"
               :key="s.id"
               class="spec-row"
               :class="{ active: selected?.id === s.id }"
-              @click="selected = s"
+              @click="selectedId = s.id"
             >
-              <div class="spec-row-name">{{ s.appName }}</div>
+              <div class="spec-row-name">{{ s.app_name }}</div>
               <div class="spec-row-meta">
                 <span class="badge badge-brand">v{{ s.latest }}</span>
-                <span class="badge badge-emerald">+{{ s.diff.add }}</span>
-                <span class="badge badge-amber">~{{ s.diff.mod }}</span>
+                <span class="badge badge-emerald">+{{ s.diff_add }}</span>
+                <span class="badge badge-amber">~{{ s.diff_mod }}</span>
               </div>
               <div class="spec-row-origin">{{ s.origin }}</div>
             </button>
@@ -112,7 +90,7 @@ const statusLabel: Record<string, string> = {
             <div class="card card-pad">
               <div class="spec-head">
                 <div>
-                  <div class="spec-head-app">{{ selected.appName }}</div>
+                  <div class="spec-head-app">{{ selected.app_name }}</div>
                   <div class="spec-head-sub">最新 v{{ selected.latest }} · {{ selected.origin }}</div>
                 </div>
                 <div class="spec-head-actions">
@@ -146,7 +124,8 @@ const statusLabel: Record<string, string> = {
               </div>
 
               <div class="section-head"><div class="section-title">Markdown 摘录</div></div>
-              <pre class="md-excerpt"><code>{{ selected.excerpt }}</code></pre>
+              <pre v-if="selected.excerpt" class="md-excerpt"><code>{{ selected.excerpt }}</code></pre>
+              <div v-else class="md-excerpt-empty">尚无摘录</div>
             </div>
           </main>
         </div>
@@ -199,6 +178,8 @@ const statusLabel: Record<string, string> = {
 .spec-section-name { font-size: 12px; color: var(--text-2); }
 .spec-section-count { font-size: 17px; font-weight: 600; color: var(--text); letter-spacing: -0.01em; margin-top: 2px; }
 .md-excerpt { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; overflow-x: auto; color: var(--code-text); font-family: var(--d-font-mono); font-size: 11.5px; line-height: 1.5; }
+.md-excerpt-empty { font-size: 12px; color: var(--text-3); padding: 8px 0; }
+.spec-empty { font-size: 12.5px; color: var(--text-3); padding: 16px 8px; text-align: center; }
 .badge { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 7px; border-radius: 5px; font-size: 11px; font-weight: 500; background: var(--surface-3); color: var(--text-2); border: 1px solid transparent; margin-left: 6px; }
 .spec-row-meta .badge { margin-left: 0; }
 .badge-brand { background: var(--brand-soft); color: var(--brand-text); }
