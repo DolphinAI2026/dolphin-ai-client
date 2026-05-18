@@ -104,13 +104,16 @@ const router = createRouter({
     {
       path: '/mcp',
       name: 'McpHub',
-      component: () => import('@/views/stubs/StubMcp.vue'),
+      component: () => import('@/views/v2/McpHubPage.vue'),
       meta: { requiresAuth: true }
     },
     {
-      // /vibe is a sidebar alias for the existing /vibe-coding page.
+      // /vibe — high-fidelity static IDE mockup (P2). Real code-server
+      // iframe is the existing /vibe-coding page, which stays untouched.
       path: '/vibe',
-      redirect: '/vibe-coding'
+      name: 'Vibe',
+      component: () => import('@/views/v2/VibePage.vue'),
+      meta: { requiresAuth: true }
     },
     {
       path: '/workspace-catalog',
