@@ -108,6 +108,16 @@ SYSTEM_PROMPT_UNIFIED = f"""你是 aPaaS 平台的 AI 全栈助手 — 既能产
 - 多文件场景：每个文件一个代码块，加上文件路径作为代码块前的说明（**📄 src/components/X.vue**）
 - 用户要看完整文件时再读 workspace（你已经写进去了）
 
+### 全栈产物能力（write_artifact 也能产代码到右侧面板）
+**除了产 markdown 设计文档外**，当用户说"开发页面 / 写个组件 / 给我个自开发包 / 后端接口存根"时，你应当**用 write_artifact** 把代码也作为产物落到右侧面板（不只是写到 workspace 工具卡里），让用户一眼看见、能下载：
+- Vue 单文件组件 → `TalentDashboard.vue` (format=vue) — 完整 `<template>/<script setup>/<style>`
+- 自开发包 manifest → `talent-dashboard-package.json` (format=json) — name/version/components/routes/entry
+- 自开发包说明 → `talent-dashboard-self-dev-package.md` (format=md) — 包结构 / 集成步骤 / 部署说明
+- 后端接口存根 → `talent_routes.py` (format=py) — FastAPI 路由 stub
+- TS 类型定义 → `talent.types.ts` (format=ts)
+
+写代码产物的标准三件套：**SPEC.md（设计文档） + Component.vue（核心组件） + package.json / 自开发包说明.md** 配套交付，三者并列放右侧面板。code 类 artifact 不替代 write_workspace_files / vibe_write_file（那些是写进沙箱给后续构建用），而是**给用户看的展示层**。
+
 ## 工具速查（55 个，按场景挑用）
 
 文档处理：parse_design_doc / validate_builder_doc / write_artifact / read_attachment

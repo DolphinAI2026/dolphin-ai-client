@@ -76,14 +76,14 @@ TOOL_SCHEMAS: list[dict] = [
             "description": (
                 "把一段文本写为产出物（默认 markdown），用户能在右侧面板看到。"
                 "如果同名文件已存在，会自动 version+1 保留历史版本。"
-                "典型用法：写设计文档、写分析报告。"
+                "典型用法：写设计文档、写分析报告、写 Vue 组件 / TS / 自开发包 manifest 等代码文件。"
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "filename": {
                         "type": "string",
-                        "description": "产出物文件名，例如 '设计文档.md'",
+                        "description": "产出物文件名，例如 '设计文档.md' / 'TalentDashboard.vue' / 'talent-package.json'",
                     },
                     "content": {
                         "type": "string",
@@ -91,8 +91,13 @@ TOOL_SCHEMAS: list[dict] = [
                     },
                     "format": {
                         "type": "string",
-                        "enum": ["md", "json", "txt", "html", "py"],
-                        "description": "格式（默认 md）",
+                        "enum": [
+                            "md", "json", "txt", "html", "py",
+                            "vue", "ts", "js", "jsx", "tsx",
+                            "css", "scss", "yaml", "yml", "sh",
+                            "xml", "sql"
+                        ],
+                        "description": "格式（默认 md）；写 Vue 组件用 vue，写 TS 用 ts，写自开发包 manifest 用 json",
                     },
                 },
                 "required": ["filename", "content"],
