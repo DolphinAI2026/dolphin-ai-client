@@ -20,160 +20,68 @@ import ShellTopBar from '@/components/v2/ShellTopBar.vue'
 import { useRuntimeSandboxStore } from '@/stores/sandbox'
 import type { RuntimeSandbox } from '@/api/sandbox'
 import { useRuntimeEnvStore } from '@/stores/runtimeEnv'
-
-type PipelineStatus = 'running' | 'success' | 'failed' | 'pending' | 'skip'
-type EnvId = 'dev' | 'test' | 'prod'
+import { useRuntimePipelineStore } from '@/stores/runtimePipeline'
+import { useRuntimeDeploymentStore } from '@/stores/runtimeDeployment'
+import type { PipelineRun } from '@/api/runtimePipeline'
 
 // Sandbox type now comes from `@/api/sandbox` (`RuntimeSandbox`). Replaced
 // inline `Sandbox` interface and `SANDBOXES` seed array — see useRuntimeSandboxStore below.
 
-interface PipelineStage {
-  name: string
-  status: PipelineStatus
-  durationS: number
-  error?: string
-}
-
-interface Pipeline {
-  id: string
-  name: string
-  source: string
-  trigger: string
-  user: string
-  time: string
-  durationS: number
-  status: PipelineStatus
-  branch?: string
-  commit?: string
-  env?: EnvId
-  stages: PipelineStage[]
-}
+// Pipeline + PipelineStage types now come from `@/api/runtimePipeline`
+// (snake_case `duration_s`). Inline `Pipeline`/`PipelineStage` interfaces +
+// `PIPELINES` seed array removed — see useRuntimePipelineStore below.
 
 // Environment type now comes from `@/api/runtimeEnv` (`RuntimeEnv`). Replaced
 // inline `Environment` interface + `ENVIRONMENTS` seed array — see
 // useRuntimeEnvStore below.
 
-interface Deployment {
-  id: string
-  app: string
-  appCode: string
-  env: EnvId
-  version: string
-  user: string
-  time: string
-  status: PipelineStatus
-  changes: string
-  duration: string
-  error?: string
-}
+// Deployment type now comes from `@/api/runtimeDeployment` (snake_case
+// `app_code`). Inline `Deployment` interface + `DEPLOYMENTS` seed array
+// removed — see useRuntimeDeploymentStore below.
 
 // Sandboxes: real backend (Pinia store) — replaces the inline SANDBOXES seed.
 const sandboxStore = useRuntimeSandboxStore()
 // Environments: real backend (Pinia store) — replaces the inline ENVIRONMENTS seed.
 const envStore = useRuntimeEnvStore()
+// Pipelines + Deployments: real backend (Pinia store) — replaces the inline
+// PIPELINES + DEPLOYMENTS seed arrays. Backed by /api/runtime/{pipelines,deployments}.
+const pipelineStore = useRuntimePipelineStore()
+const deploymentStore = useRuntimeDeploymentStore()
 onMounted(() => {
   sandboxStore.fetchSandboxes()
   envStore.fetchEnvironments()
+  pipelineStore.fetchPipelines()
+  deploymentStore.fetchDeployments()
 })
 
-const PIPELINES: Pipeline[] = [
-  {
-    id: 'run-1284', name: '差旅报销表单', source: '睿鲸 · ws-1', trigger: '自动', user: 'AI',
-    time: '14:22', durationS: 0, status: 'running', branch: 'apaas-form-component',
-    stages: [
-      { name: 'Lint', status: 'done' as unknown as PipelineStatus, durationS: 4 },
-      { name: 'Build UMD', status: 'done' as unknown as PipelineStatus, durationS: 23 },
-      { name: 'Unit Test', status: 'running', durationS: 12 },
-      { name: 'E2E', status: 'pending', durationS: 0 },
-      { name: '发布到组件市场', status: 'pending', durationS: 0 },
-    ],
-  },
-  {
-    id: 'run-1283', name: '资产管理系统 · 增量部署', source: '智能搭建 · 资产管理系统', trigger: '手动', user: 'marshub',
-    time: '13:58', durationS: 142, status: 'success', env: 'test',
-    stages: [
-      { name: '解析 diff', status: 'done' as unknown as PipelineStatus, durationS: 8 },
-      { name: '校验配置', status: 'done' as unknown as PipelineStatus, durationS: 14 },
-      { name: '调用 aPaaS API', status: 'done' as unknown as PipelineStatus, durationS: 96 },
-      { name: '回归校验', status: 'done' as unknown as PipelineStatus, durationS: 24 },
-    ],
-  },
-  {
-    id: 'run-1282', name: 'apaas-builder-ai · frontend', source: 'Vibe · sbx-2b1c · main', trigger: 'git push', user: 'marshub',
-    time: '13:32', durationS: 86, status: 'success', branch: 'main', commit: 'a3f9b21',
-    stages: [
-      { name: 'Lint', status: 'done' as unknown as PipelineStatus, durationS: 6 },
-      { name: 'Build (vite)', status: 'done' as unknown as PipelineStatus, durationS: 42 },
-      { name: 'Unit Test', status: 'done' as unknown as PipelineStatus, durationS: 18 },
-      { name: '部署到 staging', status: 'done' as unknown as PipelineStatus, durationS: 20 },
-    ],
-  },
-  {
-    id: 'run-1281', name: '客户工单看板', source: '睿鲸 · ws-2', trigger: '自动', user: 'AI',
-    time: '10:48', durationS: 67, status: 'failed', branch: 'apaas-form-page',
-    stages: [
-      { name: 'Lint', status: 'done' as unknown as PipelineStatus, durationS: 5 },
-      { name: 'Build UMD', status: 'failed', durationS: 62, error: 'SyntaxError: Unexpected token (form-list/index.vue:48)' },
-      { name: 'Unit Test', status: 'skip', durationS: 0 },
-      { name: '发布到组件市场', status: 'skip', durationS: 0 },
-    ],
-  },
-  {
-    id: 'run-1280', name: '生产工单调度 · 全量部署', source: '智能搭建', trigger: '手动', user: 'marshub',
-    time: '昨天 18:14', durationS: 312, status: 'success', env: 'prod',
-    stages: [
-      { name: '解析配置', status: 'done' as unknown as PipelineStatus, durationS: 12 },
-      { name: '校验', status: 'done' as unknown as PipelineStatus, durationS: 8 },
-      { name: '调用 aPaaS API', status: 'done' as unknown as PipelineStatus, durationS: 268 },
-      { name: '回归校验', status: 'done' as unknown as PipelineStatus, durationS: 24 },
-    ],
-  },
-  {
-    id: 'run-1279', name: '人员选择组件 v3.2.1', source: '睿鲸 · 王琪', trigger: '手动', user: '王琪',
-    time: '昨天 16:02', durationS: 88, status: 'success', branch: 'apaas-form-component',
-    stages: [
-      { name: 'Lint', status: 'done' as unknown as PipelineStatus, durationS: 4 },
-      { name: 'Build UMD', status: 'done' as unknown as PipelineStatus, durationS: 28 },
-      { name: 'Unit Test', status: 'done' as unknown as PipelineStatus, durationS: 32 },
-      { name: 'E2E', status: 'done' as unknown as PipelineStatus, durationS: 14 },
-      { name: '发布到组件市场', status: 'done' as unknown as PipelineStatus, durationS: 10 },
-    ],
-  },
-]
-
-const DEPLOYMENTS: Deployment[] = [
-  { id: 'dep-209', app: '资产管理系统', appCode: 'asset_mgr',    env: 'test', version: 'v1.4.3', user: 'marshub', time: '14:24', status: 'success', changes: '增量：+ 报废审批节点 · 字段 +2', duration: '2m 22s' },
-  { id: 'dep-208', app: '差旅报销表单', appCode: 'asset_mgr',    env: 'prod', version: 'v0.9.4', user: 'AI',      time: '13:32', status: 'success', changes: '组件发布：v0.9.4', duration: '1m 46s' },
-  { id: 'dep-207', app: '客户工单中心', appCode: 'cs_ticket',    env: 'test', version: 'v2.1.0', user: 'marshub', time: '09:08', status: 'success', changes: '调整 SLA 字段', duration: '1m 12s' },
-  { id: 'dep-206', app: '生产工单调度', appCode: 'mfg_work',     env: 'prod', version: 'v1.0.0', user: 'marshub', time: '昨天',  status: 'success', changes: '首次全量部署', duration: '5m 12s' },
-  { id: 'dep-205', app: '客户工单看板', appCode: 'ws-2',         env: 'test', version: 'v0.0.1', user: 'AI',      time: '昨天',  status: 'failed',  changes: '组件构建失败', duration: '1m 07s', error: 'SyntaxError' },
-  { id: 'dep-204', app: '资产管理系统', appCode: 'asset_mgr',    env: 'prod', version: 'v1.4.2', user: 'marshub', time: '5/16',  status: 'success', changes: '增量：+ 盘点结果字典', duration: '2m 08s' },
-  { id: 'dep-203', app: '合同审批',     appCode: 'contract_v3',  env: 'dev',  version: 'v0.1.0', user: 'marshub', time: '5/15',  status: 'success', changes: '草稿试部署', duration: '0m 58s' },
-]
-
-// `done` is a PipelineStage-only status not in the PipelineStatus union — use a relaxed type.
-type StageStatus = PipelineStatus | 'done'
-type Stage = Omit<PipelineStage, 'status'> & { status: StageStatus }
-type Pipe = Omit<Pipeline, 'stages'> & { stages: Stage[] }
+// Pipeline stage statuses come straight from the backend as plain strings
+// ('done' / 'running' / 'failed' / 'pending' / 'skip'). No local type needed.
 
 const router = useRouter()
 
 const tab = ref<'sandboxes' | 'pipelines' | 'envs' | 'history'>('sandboxes')
-const selectedRunId = ref<string>(PIPELINES[0].id)
-const cur = computed<Pipe>(
-  () => (PIPELINES as unknown as Pipe[]).find(p => p.id === selectedRunId.value) || (PIPELINES as unknown as Pipe[])[0]
-)
+const selectedRunId = ref<string>('')
+// Auto-select the first pipeline once the store finishes its first fetch.
+const cur = computed<PipelineRun | null>(() => {
+  const list = pipelineStore.pipelines
+  if (!list.length) return null
+  const hit = list.find(p => p.id === selectedRunId.value)
+  return hit || list[0]
+})
 
 // ─── Stats strip ─────────────────────────────────────────────────────────
 const stats = computed(() => {
   const activeSb = sandboxStore.activeCount
   const totalSb = sandboxStore.total
-  const failedRuns = PIPELINES.filter(p => p.status === 'failed').length
-  const runningRuns = PIPELINES.filter(p => p.status === 'running').length
-  const todayDeps = DEPLOYMENTS.filter(d => !d.time.includes('/') && !d.time.includes('昨天')).length
+  const pipes = pipelineStore.pipelines
+  const deps = deploymentStore.deployments
+  const failedRuns = pipes.filter(p => p.status === 'failed').length
+  const runningRuns = pipes.filter(p => p.status === 'running').length
+  // Today = backend formatted time is "HH:MM" only (no "/" no "昨天").
+  const todayDeps = deps.filter(d => d.time && !d.time.includes('/') && !d.time.includes('昨天')).length
   return [
     { label: '运行中沙箱', v: String(activeSb), sub: `共 ${totalSb} 个`, tone: 'ok' as const, icon: 'check' },
-    { label: '今日构建',   v: String(PIPELINES.length), sub: `${failedRuns} 失败 · ${runningRuns} 进行中`, tone: 'brand' as const, icon: 'zap' },
+    { label: '今日构建',   v: String(pipes.length), sub: `${failedRuns} 失败 · ${runningRuns} 进行中`, tone: 'brand' as const, icon: 'zap' },
     { label: '今日部署',   v: String(todayDeps), sub: '生产 1 · 测试 2', tone: 'info' as const, icon: 'cloud' },
     { label: '生产健康度', v: '99.8%', sub: '过去 7 天', tone: 'warn' as const, icon: 'shield' },
   ]
@@ -263,10 +171,10 @@ function renderIcon(name: string, size = 16) {
 }
 
 const TABS = computed(() => [
-  { k: 'sandboxes' as const, l: '沙箱',     c: sandboxStore.total,           ic: 'cloud' },
-  { k: 'pipelines' as const, l: '流水线',   c: PIPELINES.length,             ic: 'zap' },
-  { k: 'envs'      as const, l: '平台环境', c: envStore.environments.length, ic: 'admin' },
-  { k: 'history'   as const, l: '部署历史', c: DEPLOYMENTS.length,           ic: 'book' },
+  { k: 'sandboxes' as const, l: '沙箱',     c: sandboxStore.total,                    ic: 'cloud' },
+  { k: 'pipelines' as const, l: '流水线',   c: pipelineStore.pipelines.length,        ic: 'zap' },
+  { k: 'envs'      as const, l: '平台环境', c: envStore.environments.length,          ic: 'admin' },
+  { k: 'history'   as const, l: '部署历史', c: deploymentStore.deployments.length,    ic: 'book' },
 ])
 
 // Failure log content for the selected run (lifted verbatim from design source).
@@ -425,7 +333,7 @@ const FAILURE_LOG = `  ▸ npm run build:component --name=客户工单看板
               <div style="width: 80px;">状态</div>
             </div>
             <button
-              v-for="p in PIPELINES"
+              v-for="p in pipelineStore.pipelines"
               :key="p.id"
               :class="['rt-table-row', 'rt-pipe-row', { active: selectedRunId === p.id }]"
               @click="selectedRunId = p.id"
@@ -458,7 +366,7 @@ const FAILURE_LOG = `  ▸ npm run build:component --name=客户工单看板
               </div>
               <div style="width: 72px; font-size: 11px; color: var(--text-3);" class="truncate">{{ p.source }}</div>
               <div style="width: 64px; font-size: 12px; color: var(--text-2); text-align: right;" class="mono">
-                {{ p.durationS > 0 ? formatDuration(p.durationS) : '—' }}
+                {{ p.duration_s > 0 ? formatDuration(p.duration_s) : '—' }}
               </div>
               <div style="width: 80px;">
                 <span :class="['badge', pipelineStatusMeta(p.status).cls]">
@@ -470,72 +378,77 @@ const FAILURE_LOG = `  ▸ npm run build:component --name=客户工单看板
 
           <!-- Run detail -->
           <div class="card card-pad rt-run-detail">
-            <div class="rt-run-head">
-              <div>
-                <div class="rt-run-title">
-                  {{ cur.name }}
-                  <span class="mono rt-run-id">#{{ cur.id.replace('run-', '') }}</span>
-                </div>
-                <div style="font-size: 12px; color: var(--text-3); margin-top: 4px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap;">
-                  <span :class="['badge', pipelineStatusMeta(cur.status).cls]">
-                    <span class="badge-dot" />{{ pipelineStatusMeta(cur.status).label }}
-                  </span>
-                  <span>·</span>
-                  <span>{{ cur.source }}</span>
-                  <span>·</span>
-                  <span>由 <b>{{ cur.user }}</b> {{ cur.trigger === '自动' ? '自动触发' : '手动触发' }}</span>
-                  <span>·</span>
-                  <span>{{ cur.time }}</span>
-                </div>
-              </div>
-              <div style="display: flex; gap: 6px;">
-                <button class="btn btn-secondary btn-sm" @click="notImpl('查看日志')">
-                  <span class="icon" v-html="renderIcon('book', 12)" /> 查看日志
-                </button>
-                <button v-if="cur.status === 'failed'" class="btn btn-primary btn-sm" @click="notImpl('重试')">
-                  <span class="icon" v-html="renderIcon('refresh', 12)" /> 重试
-                </button>
-              </div>
-            </div>
-
-            <!-- Stage chain -->
-            <div class="rt-stages">
-              <template v-for="(s, i) in cur.stages" :key="i">
-                <div :class="['rt-stage', `rt-stage-${s.status}`]">
-                  <div class="rt-stage-dot">
-                    <span v-if="s.status === 'done'" v-html="renderIcon('check', 11)" />
-                    <span v-else-if="s.status === 'running'" class="coding-tab-spinner" />
-                    <span v-else-if="s.status === 'failed'" style="font-weight: 700; font-size: 12px;">!</span>
-                    <span v-else style="width: 5px; height: 5px; border-radius: 50%; background: currentColor; display: block;" />
+            <template v-if="cur">
+              <div class="rt-run-head">
+                <div>
+                  <div class="rt-run-title">
+                    {{ cur.name }}
+                    <span class="mono rt-run-id">#{{ cur.id.replace('run-', '') }}</span>
                   </div>
-                  <div class="rt-stage-body">
-                    <div class="rt-stage-name">{{ s.name }}</div>
-                    <div class="rt-stage-dur mono">
-                      <template v-if="s.status === 'done'">{{ formatDuration(s.durationS) }}</template>
-                      <template v-else-if="s.status === 'running'">{{ formatDuration(s.durationS) }} …</template>
-                      <template v-else-if="s.status === 'failed'">{{ formatDuration(s.durationS) }}</template>
-                      <template v-else-if="s.status === 'skip'">已跳过</template>
-                      <template v-else>—</template>
+                  <div style="font-size: 12px; color: var(--text-3); margin-top: 4px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap;">
+                    <span :class="['badge', pipelineStatusMeta(cur.status).cls]">
+                      <span class="badge-dot" />{{ pipelineStatusMeta(cur.status).label }}
+                    </span>
+                    <span>·</span>
+                    <span>{{ cur.source }}</span>
+                    <span>·</span>
+                    <span>由 <b>{{ cur.user }}</b> {{ cur.trigger === '自动' ? '自动触发' : '手动触发' }}</span>
+                    <span>·</span>
+                    <span>{{ cur.time }}</span>
+                  </div>
+                </div>
+                <div style="display: flex; gap: 6px;">
+                  <button class="btn btn-secondary btn-sm" @click="notImpl('查看日志')">
+                    <span class="icon" v-html="renderIcon('book', 12)" /> 查看日志
+                  </button>
+                  <button v-if="cur.status === 'failed'" class="btn btn-primary btn-sm" @click="notImpl('重试')">
+                    <span class="icon" v-html="renderIcon('refresh', 12)" /> 重试
+                  </button>
+                </div>
+              </div>
+
+              <!-- Stage chain -->
+              <div class="rt-stages">
+                <template v-for="(s, i) in cur.stages" :key="i">
+                  <div :class="['rt-stage', `rt-stage-${s.status}`]">
+                    <div class="rt-stage-dot">
+                      <span v-if="s.status === 'done'" v-html="renderIcon('check', 11)" />
+                      <span v-else-if="s.status === 'running'" class="coding-tab-spinner" />
+                      <span v-else-if="s.status === 'failed'" style="font-weight: 700; font-size: 12px;">!</span>
+                      <span v-else style="width: 5px; height: 5px; border-radius: 50%; background: currentColor; display: block;" />
                     </div>
-                    <div v-if="s.error" class="rt-stage-error mono">{{ s.error }}</div>
+                    <div class="rt-stage-body">
+                      <div class="rt-stage-name">{{ s.name }}</div>
+                      <div class="rt-stage-dur mono">
+                        <template v-if="s.status === 'done'">{{ formatDuration(s.duration_s) }}</template>
+                        <template v-else-if="s.status === 'running'">{{ formatDuration(s.duration_s) }} …</template>
+                        <template v-else-if="s.status === 'failed'">{{ formatDuration(s.duration_s) }}</template>
+                        <template v-else-if="s.status === 'skip'">已跳过</template>
+                        <template v-else>—</template>
+                      </div>
+                      <div v-if="s.error" class="rt-stage-error mono">{{ s.error }}</div>
+                    </div>
                   </div>
-                </div>
-                <div v-if="i < cur.stages.length - 1" class="rt-stage-conn" />
-              </template>
-            </div>
+                  <div v-if="i < cur.stages.length - 1" class="rt-stage-conn" />
+                </template>
+              </div>
 
-            <div v-if="cur.status === 'failed'" class="rt-log">
-              <div class="rt-log-head">
-                <span class="icon" style="color: var(--rose);" v-html="renderIcon('bell', 12)" />
-                <span>构建失败 · 关键日志</span>
-                <button class="section-action" style="margin-left: auto;" @click="notImpl('查看完整日志')">查看完整日志 →</button>
+              <div v-if="cur.status === 'failed'" class="rt-log">
+                <div class="rt-log-head">
+                  <span class="icon" style="color: var(--rose);" v-html="renderIcon('bell', 12)" />
+                  <span>构建失败 · 关键日志</span>
+                  <button class="section-action" style="margin-left: auto;" @click="notImpl('查看完整日志')">查看完整日志 →</button>
+                </div>
+                <pre class="rt-log-body mono">{{ FAILURE_LOG }}</pre>
+                <div class="rt-log-foot">
+                  <span style="font-size: 11px; color: var(--text-3);">提示：你可以在</span>
+                  <button class="landing-pill" @click="onOpenCodingWorkspace">睿鲸 ws-2 工作区</button>
+                  <span style="font-size: 11px; color: var(--text-3);">里让 AI 修复并重新生成</span>
+                </div>
               </div>
-              <pre class="rt-log-body mono">{{ FAILURE_LOG }}</pre>
-              <div class="rt-log-foot">
-                <span style="font-size: 11px; color: var(--text-3);">提示：你可以在</span>
-                <button class="landing-pill" @click="onOpenCodingWorkspace">睿鲸 ws-2 工作区</button>
-                <span style="font-size: 11px; color: var(--text-3);">里让 AI 修复并重新生成</span>
-              </div>
+            </template>
+            <div v-else style="font-size: 12px; color: var(--text-3); padding: 24px 0; text-align: center;">
+              {{ pipelineStore.loading ? '正在加载流水线…' : '暂无流水线记录' }}
             </div>
           </div>
         </div>
@@ -630,14 +543,14 @@ const FAILURE_LOG = `  ▸ npm run build:component --name=客户工单看板
               <div style="width: 100px; text-align: right;">操作</div>
             </div>
             <div
-              v-for="d in DEPLOYMENTS"
+              v-for="d in deploymentStore.deployments"
               :key="d.id"
               class="rt-table-row"
             >
               <div style="flex: 1.3; min-width: 0;">
                 <div class="rt-row-name" style="font-weight: 500;">{{ d.app }}</div>
                 <div class="rt-row-meta">
-                  <span class="mono">{{ d.appCode }}</span>
+                  <span class="mono">{{ d.app_code }}</span>
                   <span>·</span>
                   <span class="mono">{{ d.id }}</span>
                   <span>·</span>
