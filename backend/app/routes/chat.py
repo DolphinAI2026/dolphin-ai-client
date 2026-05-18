@@ -686,7 +686,13 @@ async def send_message(
                     yield {"event": "thinking", "data": json.dumps(
                         {"type": "thinking", "data": "正在分析你的回复..."},
                         ensure_ascii=False)}
-                    async for ev in agent.run(spec, user_message=effective_message, history=history):
+                    async for ev in agent.run(
+                        spec,
+                        user_message=effective_message,
+                        history=history,
+                        db=db,
+                        tenant_id=ctx.tenant_id,
+                    ):
                         if ev.kind == "assistant_delta":
                             last_assistant_text += ev.text or ""
                             yield {"event": "message", "data": json.dumps(
@@ -981,6 +987,8 @@ async def send_message_with_file(
                         doc_text=file_content,
                         silent=silent,
                         diff_only=diff_only,
+                        db=db,
+                        tenant_id=ctx.tenant_id,
                     ):
                         if ev.kind == "assistant_delta":
                             last_text += ev.text or ""

@@ -794,6 +794,8 @@ async def _try_build_spec_agent_stream_response(
                     spec,
                     doc_text=v2_doc_text,
                     diff_only=True,
+                    db=session,
+                    tenant_id=tenant_id,
                 ):
                     if ev.kind == "assistant_delta":
                         yield {"event": "message", "data": json.dumps(

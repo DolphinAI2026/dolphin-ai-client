@@ -7,12 +7,18 @@ filesystem/workspace concerns; tool dispatch is pure SPEC mutation.
 
 from __future__ import annotations
 import json
+import logging
 import httpx
 from dataclasses import dataclass
-from typing import AsyncIterator, Optional
+from typing import TYPE_CHECKING, AsyncIterator, Optional
 
 from app.builder_spec.schema import Spec, Phase
 from app.builder_spec.tools import TOOL_DEFINITIONS, dispatch_tool, ToolError
+
+if TYPE_CHECKING:  # avoid hard dep at import time / in tests
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+logger = logging.getLogger(__name__)
 
 
 SPEC_GATHERING_PROMPT = """你是 aPaaS 业务分析师。当前 SPEC 状态：
@@ -149,15 +155,101 @@ SPEC_BOOTSTRAP_DIFF_PROMPT = """你正在基于已存在的 SPEC 应用文档增
 """
 
 
-def build_prompt(spec: Spec) -> str:
-    summary = _summarize_spec(spec)
+def _phase_key_for_spec(spec: Spec) -> str:
+    """Map Spec.phase → agent_prompts.phase column value.
+
+    Mirrors build_prompt's branching. GENERATING/READY both use the
+    revision prompt (post-draft maintenance).
+    """
     if spec.phase == Phase.GATHERING:
-        return SPEC_GATHERING_PROMPT.format(spec_summary=summary)
+        return "gathering"
     if spec.phase == Phase.DRAFTING:
-        return SPEC_DRAFTING_PROMPT.format(spec_summary=summary)
+        return "drafting"
     if spec.phase in {Phase.GENERATING, Phase.READY}:
-        return SPEC_REVISION_PROMPT.format(spec_summary=summary)
+        return "revision"
     raise ValueError(f"Unsupported SpecAgent phase={spec.phase.value}")
+
+
+def _module_prompt_for_phase(phase_key: str) -> str:
+    """Look up the in-module fallback template for a phase key."""
+    name = f"SPEC_{phase_key.upper()}_PROMPT"
+    val = globals().get(name)
+    if isinstance(val, str):
+        return val
+    # Last-resort fallback (should never hit in practice — phase_key
+    # comes from _phase_key_for_spec which only emits known names).
+    return SPEC_GATHERING_PROMPT
+
+
+def build_prompt(spec: Spec) -> str:
+    """Synchronous module-constant prompt. Kept for tests / no-DB callers."""
+    summary = _summarize_spec(spec)
+    return _module_prompt_for_phase(_phase_key_for_spec(spec)).format(spec_summary=summary)
+
+
+async def _resolve_prompt_template(
+    phase_key: str,
+    *,
+    db: Optional["AsyncSession"] = None,
+    tenant_id: Optional[int] = None,
+) -> str:
+    """Resolve raw prompt template for a phase key.
+
+    Order:
+      1. agent_prompts row (tenant_id, agent_id='builder', phase=phase_key) — if found.
+      2. Module constant SPEC_<PHASE_KEY>_PROMPT — fallback.
+
+    On first call for a tenant with no rows, lazy-seeds module constants
+    into agent_prompts so admin UI can edit them.
+    """
+    if db is None or tenant_id is None:
+        return _module_prompt_for_phase(phase_key)
+
+    from sqlalchemy import select
+    from app.models.agent_prompt import AgentPrompt
+
+    # Lazy-seed if no rows exist for this (tenant, agent='builder')
+    try:
+        has_any = (await db.execute(
+            select(AgentPrompt).where(
+                AgentPrompt.tenant_id == tenant_id,
+                AgentPrompt.agent_id == "builder",
+            ).limit(1)
+        )).scalar_one_or_none()
+        if not has_any:
+            from app.services.agent_prompt_seed import seed_agent_prompts_for_tenant
+            await seed_agent_prompts_for_tenant(db, tenant_id)
+
+        row = (await db.execute(
+            select(AgentPrompt).where(
+                AgentPrompt.tenant_id == tenant_id,
+                AgentPrompt.agent_id == "builder",
+                AgentPrompt.phase == phase_key,
+            )
+        )).scalar_one_or_none()
+        if row and row.template:
+            return row.template
+    except Exception as e:
+        logger.warning(
+            "agent_prompts DB lookup failed (tenant=%s phase=%s): %s — using module fallback",
+            tenant_id, phase_key, e,
+        )
+
+    return _module_prompt_for_phase(phase_key)
+
+
+async def build_prompt_async(
+    spec: Spec,
+    *,
+    db: Optional["AsyncSession"] = None,
+    tenant_id: Optional[int] = None,
+) -> str:
+    """Async version of build_prompt that prefers DB rows over module constants."""
+    summary = _summarize_spec(spec)
+    template = await _resolve_prompt_template(
+        _phase_key_for_spec(spec), db=db, tenant_id=tenant_id,
+    )
+    return template.format(spec_summary=summary)
 
 
 def _summarize_spec(spec: Spec) -> str:
@@ -224,13 +316,19 @@ class SpecAgent:
         spec: Spec,
         user_message: str,
         history: Optional[list[dict]] = None,
+        *,
+        db: Optional["AsyncSession"] = None,
+        tenant_id: Optional[int] = None,
     ) -> AsyncIterator[SpecAgentEvent]:
         """Drive one LLM turn-loop over the SPEC. Yields events; mutates spec in place.
 
         history: optional prior conversation messages [{"role": ..., "content": ...}]
+        db / tenant_id: when both supplied, prompt is resolved from agent_prompts
+            DB rows (admin-editable); otherwise the module SPEC_*_PROMPT constants
+            are used. Tests omit db/tenant — keeps backward compatibility.
         """
         history = history or []
-        system_prompt = build_prompt(spec)
+        system_prompt = await build_prompt_async(spec, db=db, tenant_id=tenant_id)
         messages: list[dict] = [
             {"role": "system", "content": system_prompt},
             *history,
@@ -357,6 +455,8 @@ class SpecAgent:
         *,
         silent: bool = False,
         diff_only: bool = False,
+        db: Optional["AsyncSession"] = None,
+        tenant_id: Optional[int] = None,
     ) -> AsyncIterator[SpecAgentEvent]:
         """Drive the LLM to populate (or diff-update) a SPEC from a document.
 
@@ -364,16 +464,27 @@ class SpecAgent:
         - silent=True: doc is authoritative; LLM auto-confirms + jumps to Phase.READY
         - silent=False, diff_only=False: doc is a draft; LLM populates with confirmed=false, transitions to drafting
         - diff_only=True: doc is a V2 increment; LLM applies diff against existing spec, transitions to drafting
+
+        db / tenant_id: when both supplied, the bootstrap prompt is resolved
+        from agent_prompts DB rows (admin-editable); otherwise the module
+        SPEC_BOOTSTRAP_* constants are used.
         """
         if diff_only:
-            system_prompt = SPEC_BOOTSTRAP_DIFF_PROMPT.format(
+            phase_key = "bootstrap_diff"
+        elif silent:
+            phase_key = "bootstrap_silent"
+        else:
+            phase_key = "bootstrap_interactive"
+        template = await _resolve_prompt_template(
+            phase_key, db=db, tenant_id=tenant_id,
+        )
+        if diff_only:
+            system_prompt = template.format(
                 spec_summary=_summarize_spec(spec),
                 doc_text=doc_text,
             )
-        elif silent:
-            system_prompt = SPEC_BOOTSTRAP_SILENT_PROMPT.format(doc_text=doc_text)
         else:
-            system_prompt = SPEC_BOOTSTRAP_INTERACTIVE_PROMPT.format(doc_text=doc_text)
+            system_prompt = template.format(doc_text=doc_text)
 
         user_msg = "请按上述指令处理文档。" if not diff_only else "请应用 V2 文档的差异。"
         messages: list[dict] = [
