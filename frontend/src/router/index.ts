@@ -63,6 +63,49 @@ const router = createRouter({
       component: () => import('@/views/Apps.vue'),
       meta: { requiresAuth: true }
     },
+    // P0 stub routes — full pages land in P2; these exist so the v2 sidebar
+    // never 404s. See docs/superpowers/plans/2026-05-18-apaas-builder-redesign-p0-p1.md.
+    {
+      path: '/projects',
+      name: 'Projects',
+      component: () => import('@/views/stubs/StubProjects.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/agents',
+      name: 'Agents',
+      component: () => import('@/views/stubs/StubAgents.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/specs',
+      name: 'Specs',
+      component: () => import('@/views/stubs/StubSpecs.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/industry',
+      name: 'Industry',
+      component: () => import('@/views/stubs/StubIndustry.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/runtime',
+      name: 'Runtime',
+      component: () => import('@/views/stubs/StubRuntime.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/mcp',
+      name: 'McpHub',
+      component: () => import('@/views/stubs/StubMcp.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
+      // /vibe is a sidebar alias for the existing /vibe-coding page.
+      path: '/vibe',
+      redirect: '/vibe-coding'
+    },
     {
       path: '/workspace-catalog',
       name: 'WorkspaceCatalog',
