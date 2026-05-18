@@ -202,19 +202,41 @@ async function onSave() {
   }
 }
 function onAddSkill() {
-  ElMessage.info('Skill 库选择即将上线')
+  // Scroll the catalog into view so user knows where the "+" buttons live.
+  const el = document.querySelector('.agent-catalog')
+  if (el) (el as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'start' })
+  else ElMessage.info('请滚动到下方"可用 Skill 库"点击 + 添加')
 }
-function onRemoveSkill(s: { code: string; name: string; desc: string }) {
-  ElMessage.info(`Skill「${s.name}」已移除（mock，暂未持久化）`)
+async function onRemoveSkill(s: { code: string; name: string; desc: string }) {
+  if (!cur.value.id || !agentsStore.agents.length) {
+    ElMessage.warning('Agent 列表尚未加载完成')
+    return
+  }
+  try {
+    await agentsStore.removeSkillBinding(cur.value.id, s.code)
+    ElMessage.success(`已移除 Skill「${s.name}」`)
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || e?.message || '移除失败')
+  }
 }
-function onRemoveMcp(m: McpServer) {
-  ElMessage.info(`MCP「${m.name}」已解绑（mock，暂未持久化）`)
+async function onRemoveMcp(m: McpServer) {
+  if (!cur.value.id || !agentsStore.agents.length) {
+    ElMessage.warning('Agent 列表尚未加载完成')
+    return
+  }
+  try {
+    await agentsStore.removeMcpBinding(cur.value.id, m.id)
+    ElMessage.success(`已解绑 MCP「${m.name}」`)
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || e?.message || '解绑失败')
+  }
 }
 function onRemoveKnowledge(p: IndustryPack) {
-  ElMessage.info(`行业包「${p.name}」已移除（mock，暂未持久化）`)
+  // Knowledge bindings UI lives on the Industry page — point users there.
+  ElMessage.info(`请在「行业知识库」页面管理${p.name}`)
 }
 function onRemoveSpecTemplate(t: string) {
-  ElMessage.info(`SPEC 模板「${t}」已移除（mock，暂未持久化）`)
+  ElMessage.info(`SPEC 模板「${t}」管理待上线`)
 }
 function gotoMcp() { router.push('/mcp') }
 function gotoIndustry() { router.push('/industry') }
@@ -244,8 +266,25 @@ const catalogGroups = computed<Array<{ category: string; label: string; skills: 
   }
   return out
 })
-function onAddCatalogSkill(s: SkillCatalogItem) {
-  ElMessage.info(`已添加「${s.name}」(mock，待 binding API)`)
+// Set of codes already bound to the currently selected agent — used to
+// disable the "+" button on catalog rows (and to short-circuit duplicate POST).
+const boundSkillCodes = computed<Set<string>>(() => new Set(cur.value.skills.map(s => s.code)))
+
+async function onAddCatalogSkill(s: SkillCatalogItem) {
+  if (!cur.value.id || !agentsStore.agents.length) {
+    ElMessage.warning('Agent 列表尚未加载完成')
+    return
+  }
+  if (boundSkillCodes.value.has(s.code)) {
+    ElMessage.info(`「${s.name}」已绑定到当前 Agent`)
+    return
+  }
+  try {
+    await agentsStore.addSkillBinding(cur.value.id, s.code)
+    ElMessage.success(`已添加 Skill「${s.name}」`)
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || e?.message || '添加失败')
+  }
 }
 
 onMounted(async () => {
@@ -255,8 +294,9 @@ onMounted(async () => {
     skillCatalogStore.fetchCatalog(),
   ])
   // Default-select first agent if `builder` not present.
-  if (agentsStore.agents.length && !agentsStore.agents.find(a => a.id === selectedId.value)) {
-    selectedId.value = agentsStore.agents[0].id
+  const first = agentsStore.agents[0]
+  if (first && !agentsStore.agents.find(a => a.id === selectedId.value)) {
+    selectedId.value = first.id
   }
 })
 
@@ -331,6 +371,10 @@ const knowledgeEmptyHint = computed(() =>
             </button>
             <div v-if="agentsStore.loading && !agentsStore.agents.length" class="agent-empty">
               加载中…
+            </div>
+            <div v-else-if="!agentsStore.agents.length" class="agent-empty agent-empty-notice">
+              尚未创建智能体配置<br>
+              <span class="agent-empty-hint">首次访问任意 Agent 入口（智能搭建 / 代码 / Vibe）会自动初始化</span>
             </div>
 
             <div class="agent-help">
@@ -437,7 +481,12 @@ const knowledgeEmptyHint = computed(() =>
                         <code class="mono agent-skill-code">{{ s.code }}</code>
                         <span class="agent-skill-name">{{ s.name }}</span>
                         <span v-if="s.is_async" class="badge">async</span>
-                        <button class="icon-btn icon-btn-sm catalog-add-btn" title="添加到当前 Agent" @click="onAddCatalogSkill(s)">+</button>
+                        <button
+                        class="icon-btn icon-btn-sm catalog-add-btn"
+                        :title="boundSkillCodes.has(s.code) ? '已绑定' : '添加到当前 Agent'"
+                        :disabled="boundSkillCodes.has(s.code) || !agentsStore.agents.length"
+                        @click="onAddCatalogSkill(s)"
+                      >{{ boundSkillCodes.has(s.code) ? '✓' : '+' }}</button>
                       </div>
                       <div class="agent-skill-desc">{{ s.desc }}</div>
                       <div class="agent-catalog-path mono">{{ s.callable_path }}</div>
@@ -705,6 +754,20 @@ const knowledgeEmptyHint = computed(() =>
 .catalog-add-btn {
   margin-left: auto; font-size: 13px; font-weight: 600;
 }
+.catalog-add-btn:disabled {
+  cursor: not-allowed; color: var(--emerald, #10A37F);
+  background: var(--surface-3); opacity: 0.7;
+}
+.catalog-add-btn:disabled:hover {
+  background: var(--surface-3); color: var(--emerald, #10A37F);
+}
+
+.agent-empty-notice {
+  border: 1px dashed var(--border-strong); border-radius: 10px;
+  padding: 16px 14px; background: var(--surface-2);
+  line-height: 1.6;
+}
+.agent-empty-hint { font-size: 11px; color: var(--text-4); }
 
 /* MCP rows */
 .agent-mcps { display: flex; flex-direction: column; gap: 8px; }
