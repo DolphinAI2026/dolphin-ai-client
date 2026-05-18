@@ -1,17 +1,17 @@
 <template>
   <BuilderFrame :breadcrumbs="[{ label: '应用' }]">
     <template #actions>
-      <button class="apps-create-btn" type="button" @click="router.push('/')">
+      <button class="btn btn-primary apps-new-btn" type="button" @click="router.push('/')">
         <el-icon><Plus /></el-icon>
         <span>新建应用</span>
       </button>
     </template>
 
     <main class="apps-page builder-page">
-      <section class="apps-header">
+      <section class="apps-header page-head">
         <div>
-          <h1>我的应用</h1>
-          <p>{{ appsSummary }}</p>
+          <h1 class="page-title">我的应用</h1>
+          <p class="page-subtitle">{{ appsSummary }}</p>
         </div>
       </section>
 
@@ -56,10 +56,14 @@
 
       <section class="apps-content" :class="`is-${viewMode}`">
         <div v-if="loading" class="apps-state">加载中...</div>
-        <div v-else-if="filteredApps.length === 0" class="apps-state">
+        <div v-else-if="filteredApps.length === 0" class="apps-state apps-empty-v2">
           <span class="apps-state-icon">ap</span>
           <strong>暂无应用</strong>
           <span>从首页新建应用后，会在这里继续构建、部署和查看历史对话。</span>
+          <button class="btn btn-primary btn-sm apps-empty-cta" type="button" @click="router.push('/')">
+            <el-icon><Plus /></el-icon>
+            <span>新建应用</span>
+          </button>
         </div>
 
         <div v-else-if="viewMode === 'list'" class="apps-table">
@@ -1335,5 +1339,80 @@ async function removeAppMember(userId: number) {
 .builder-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* --- v2 visual refresh: header + empty state + primary button (Task 6.2). Logic untouched. --- */
+.page-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 6px;
+}
+
+.page-title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  color: var(--text, var(--b-text));
+}
+
+.page-subtitle {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--text-2, var(--b-text-muted));
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 14px;
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text, var(--b-text));
+  transition: filter 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.btn-sm {
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+  border-radius: 6px;
+}
+
+.btn-primary {
+  background: var(--brand, #5b5bd6);
+  color: #fff;
+}
+
+.btn-primary:hover {
+  filter: brightness(1.06);
+  box-shadow: 0 6px 16px rgba(91, 91, 214, 0.18);
+}
+
+.apps-new-btn {
+  /* Sit in BuilderFrame's #actions slot — sized to match the existing topbar height. */
+  height: 32px;
+}
+
+.apps-empty-v2 {
+  border-style: dashed;
+  border-color: var(--border-strong, var(--b-line-strong));
+  background: var(--surface, var(--b-panel));
+  padding: 32px 24px;
+}
+
+.apps-empty-cta {
+  margin-top: 14px;
 }
 </style>
