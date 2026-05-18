@@ -3,7 +3,6 @@ import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useThemeStore } from '@/stores/theme'
 import { useUserStore } from '@/stores/user'
-import ProjectSwitcher from './ProjectSwitcher.vue'
 
 interface BreadcrumbItem {
   label: string
@@ -22,7 +21,6 @@ const user = useUserStore()
 
 const CRUMB_LABELS: Record<string, string> = {
   '/': '新建',
-  '/projects': '项目',
   '/apps': '应用',
   '/chat': '睿鲸 AI Builder',
   '/coding': '睿鲸 AI Coding',
@@ -62,7 +60,6 @@ const isDark = computed(() => theme.mode === 'dark')
 
 <template>
   <div class="topbar">
-    <ProjectSwitcher />
     <div class="topbar-crumb">
       <span>aPaaS Builder</span>
       <template v-if="hasCustomCrumbs">

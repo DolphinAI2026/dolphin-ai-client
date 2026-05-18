@@ -2,7 +2,6 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
-import { useProjectStore } from '@/stores/project'
 import { useMcpStore } from '@/stores/mcp'
 import { useRuntimeDeploymentStore } from '@/stores/runtimeDeployment'
 
@@ -13,7 +12,6 @@ defineProps<{ collapsed?: boolean }>()
 const route = useRoute()
 const router = useRouter()
 const user = useUserStore()
-const projectStore = useProjectStore()
 const mcpStore = useMcpStore()
 const runtimeStore = useRuntimeDeploymentStore()
 
@@ -24,9 +22,6 @@ const codingWorkspaceCount = ref<number | undefined>(undefined)
 onMounted(async () => {
   // Hydrate stores that aren't already loaded. Use optional chaining so missing
   // actions (e.g. when a sibling agent hasn't added it yet) don't crash the rail.
-  if (!projectStore.projects.length) {
-    try { await (projectStore as any).fetchProjects?.() } catch { /* badge stays 0 → hidden */ }
-  }
   if (!mcpStore.servers.length) {
     try { await (mcpStore as any).fetchServers?.() } catch { /* badge stays 0 → hidden */ }
   }
@@ -55,7 +50,6 @@ onMounted(async () => {
 const NAV = computed<NavGroup[]>(() => [
   { group: '搭建', items: [
     { key: 'home',     label: '新建',            icon: 'home',  path: '/' },
-    { key: 'projects', label: '项目',            icon: 'bldg',  path: '/projects', badge: projectStore.projects.length || undefined },
     { key: 'apps',     label: '应用',            icon: 'apps',  path: '/apps', badge: appCount.value || undefined },
     { key: 'chat',     label: '睿鲸 AI Builder', icon: 'chat',  path: '/chat' },
   ]},

@@ -65,18 +65,9 @@ const router = createRouter({
     },
     // P0 stub routes — full pages land in P2; these exist so the v2 sidebar
     // never 404s. See docs/superpowers/plans/2026-05-18-apaas-builder-redesign-p0-p1.md.
-    {
-      path: '/projects',
-      name: 'Projects',
-      component: () => import('@/views/v2/ProjectsPage.vue'),
-      meta: { requiresAuth: true }
-    },
-    {
-      path: '/projects/:id',
-      name: 'ProjectDetail',
-      component: () => import('@/views/v2/ProjectDetailPage.vue'),
-      meta: { requiresAuth: true }
-    },
+    // /projects v2 was deleted — the underlying Project table had no real
+    // progress/stage fields, so the page surfaced fake 0% / 0 apps / 0 deploys
+    // rows. Real per-app project page still lives at /project/:id (singular).
     {
       path: '/agents',
       name: 'Agents',
