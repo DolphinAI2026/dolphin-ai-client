@@ -13,6 +13,7 @@ import ShellTopBar from '@/components/v2/ShellTopBar.vue'
 import { usePreviewStore } from '@/stores/preview'
 import { conversationApi, type ConversationWithApp } from '@/api/conversation'
 import { applicationApi } from '@/api/application'
+import { industryApi } from '@/api/industry'
 
 const router = useRouter()
 const previewStore = usePreviewStore()
@@ -58,9 +59,10 @@ function buildFallbackAppsFromConversations(list: ConversationWithApp[]) {
 }
 
 async function loadLanding() {
-  const [conversations, apps] = await Promise.all([
+  const [conversations, apps, industryPacks] = await Promise.all([
     conversationApi.listWithApps({ agent_type: 'builder' }).catch(() => [] as ConversationWithApp[]),
     applicationApi.list({ include_remote: true }).catch(() => [] as any[]),
+    industryApi.listPacks().catch(() => ({ packs: [] as any[] })),
   ])
 
   const appRecords = Array.isArray(apps)
@@ -93,15 +95,16 @@ async function loadLanding() {
   // - apps: total app count
   // - specs: total conversation count (each builder conversation produces SPEC iterations)
   // - deploys: sum of deploy counts across apps (apaas_app_id != null implies deployed)
-  // - packs: industry packs — no API yet, use seed
+  // - packs: industry packs from /industry/packs (defaults 0 if API down)
   const deployedCount = Array.isArray(apps)
     ? apps.filter((app: any) => app?.apaas_app_id).length
     : 0
+  const packsCount = ((industryPacks as any)?.packs || []).length
   stats.value = {
     apps: sourceApps.length,
     specs: conversations.length,
     deploys: deployedCount,
-    packs: 4,  // stub: industry packs catalog not yet wired
+    packs: packsCount,
   }
 }
 

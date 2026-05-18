@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 
 const STORAGE_KEY = 'aPaaS:seenOnboarding'
 
 const visible = ref(false)
 const step = ref(0) // 0, 1, 2
+
+const counts = ref({ apps: 0, specs: 0, industry: 0, marketplace: 0 })
 
 const FLOW_STEPS = [
   { n: '01', label: '描述需求',     tone: 'ai',     desc: '在首页输入业务需求或上传 .md 设计文档' },
@@ -13,12 +15,12 @@ const FLOW_STEPS = [
   { n: '04', label: '部署上线',     tone: 'amber',  desc: '一键部署到得帆云 dev / test / prod 环境' },
 ]
 
-const CONCEPTS = [
-  { name: '应用',         desc: '一个完整的 aPaaS 应用，含模型 / 表单 / 流程 / 权限',  icon: 'apps',     count: '~6 个' },
-  { name: 'SPEC',         desc: '设计文档，AI Builder 对话产生的中间产物，可版本管理', icon: 'doc',      count: '~17 版本' },
-  { name: '行业知识库',   desc: '行业最佳实践沉淀的可复用「行业包」，含业务对象图谱',  icon: 'industry', count: '~4 包' },
-  { name: '组件市场',     desc: '睿鲸 AI Coding 产出的低代码组件 / 页面 / 接口',       icon: 'store',    count: '~32 个' },
-]
+const CONCEPTS = computed(() => [
+  { name: '应用',         desc: '一个完整的 aPaaS 应用，含模型 / 表单 / 流程 / 权限',  icon: 'apps',     count: counts.value.apps > 0 ? `${counts.value.apps} 个` : '—' },
+  { name: 'SPEC',         desc: '设计文档，AI Builder 对话产生的中间产物，可版本管理', icon: 'doc',      count: counts.value.specs > 0 ? `${counts.value.specs} 版本` : '—' },
+  { name: '行业知识库',   desc: '行业最佳实践沉淀的可复用「行业包」，含业务对象图谱',  icon: 'industry', count: counts.value.industry > 0 ? `${counts.value.industry} 包` : '—' },
+  { name: '组件市场',     desc: '睿鲸 AI Coding 产出的低代码组件 / 页面 / 接口',       icon: 'store',    count: counts.value.marketplace > 0 ? `${counts.value.marketplace} 个` : '—' },
+])
 
 const ROLES = [
   { id: 'business', name: '业务顾问',     tone: 'ai',      desc: '描述需求 → SPEC → 部署',         positions: '实施顾问 / 产品经理',         path: '睿鲸 AI Builder',     recommended: false },
@@ -27,10 +29,24 @@ const ROLES = [
   { id: 'admin',    name: '平台管理员',   tone: 'rose',    desc: '运行与发布 + 平台管理',         positions: '运维 / IT 负责人',           path: '运行与发布 · 平台管理', recommended: false },
 ]
 
-onMounted(() => {
+onMounted(async () => {
   // Open if never seen
   if (localStorage.getItem(STORAGE_KEY) !== '1') {
     visible.value = true
+  }
+  // Fetch real counts for concept cards (silent fail — counts stay 0 / "—")
+  try {
+    const [apps, specs, industry] = await Promise.all([
+      (await import('@/api/application')).applicationApi.list?.({ include_remote: false } as any).catch(() => []),
+      (await import('@/api/specsV2')).specsV2Api.list().catch(() => ({ specs: [], total: 0 })),
+      (await import('@/api/industry')).industryApi.listPacks().catch(() => ({ packs: [] })),
+    ])
+    counts.value.apps = Array.isArray(apps) ? apps.length : ((apps as any)?.items?.length || (apps as any)?.total || 0)
+    counts.value.specs = (specs as any)?.total || (specs as any)?.specs?.length || 0
+    counts.value.industry = ((industry as any)?.packs || []).length
+    counts.value.marketplace = 0  // no marketplace count API yet
+  } catch {
+    // silent fail — counts stay 0
   }
 })
 
