@@ -8125,14 +8125,14 @@ watch(conversationId, (id) => {
    ChatConversationList + <main class="chat-main"> (existing chat-page-shell)
    + AppBlueprintPanel. Existing layout inside .chat-page-shell unchanged. */
 .chat-shell { display: flex; height: 100%; min-height: 0; background: var(--bg-app); }
-.chat-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.chat-main { flex: 1; min-width: 0; min-height: 0; height: 100%; display: flex; flex-direction: column; overflow: hidden; }
 /* ══════════════════════════════════════════════
    Theme — uses CSS custom properties (var(--t-*))
    for light/dark theme support.
    See theme definition for variable values.
    ══════════════════════════════════════════════ */
 
-.chat-page-shell { height: 100%; display: flex; flex-direction: row; min-width: 0; min-height: 0; }
+.chat-page-shell { flex: 1; height: 100%; display: flex; flex-direction: row; min-width: 0; min-height: 0; }
 .chat-page { flex: 1; min-width: 0; height: 100%; display: flex; flex-direction: column; background: var(--t-bg-base); color: var(--t-text-primary); }
 
 /* ── 导航栏 ── */
