@@ -141,6 +141,18 @@ function renderIcon(name: string, size = 16): string {
           加载中...
         </div>
 
+        <!-- Dev mode banner: shown when no servers connected but catalog has entries. -->
+        <div
+          v-if="!mcpStore.loading && mcpStore.connectedCount === 0 && mcpStore.servers.length > 0"
+          class="mcp-dev-banner"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M18 18a4 4 0 0 0 0-8 6 6 0 0 0-12 1 4 4 0 0 0 0 8z" />
+            <path d="M9 12l2 2 4-4" />
+          </svg>
+          <span>本地 dev 模式无法访问生产 cluster — 显示的 MCP server 是 catalog 占位。生产环境会自动连接 dolphin v2 cluster。</span>
+        </div>
+
         <!-- Summary cards -->
         <div class="mcp-summary">
           <div v-for="s in stats" :key="s.label" class="mcp-summary-card">
@@ -192,6 +204,9 @@ function renderIcon(name: string, size = 16): string {
               </div>
               <div v-if="m.status === 'error'" class="mcp-list-error">
                 <span class="icon" v-html="renderIcon('bell', 11)" /> {{ m.error }}
+              </div>
+              <div v-else-if="m.status === 'disabled' && m.error" class="mcp-list-dev-notice">
+                {{ m.error }}
               </div>
               <div class="mcp-list-foot">
                 <span class="badge badge-outline mono" style="text-transform: uppercase; font-size: 10px;">{{ m.transport }}</span>
@@ -249,6 +264,15 @@ function renderIcon(name: string, size = 16): string {
                   建议：检查本地 bridge 进程，或切换至备用 endpoint。
                 </div>
               </div>
+            </div>
+
+            <div v-else-if="current.status === 'disabled'" class="mcp-detail-dev-notice">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10" />
+                <line x1="12" y1="8" x2="12" y2="12" />
+                <circle cx="12" cy="16" r="0.5" />
+              </svg>
+              <span>{{ current.error || '本地未接入 v2 MCP cluster' }}</span>
             </div>
 
             <div class="mcp-detail-grid">
@@ -344,6 +368,33 @@ function renderIcon(name: string, size = 16): string {
   font-size: 13px; color: var(--text-3);
   padding: 18px 0; text-align: center;
 }
+
+.mcp-dev-banner {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px;
+  background: var(--ai-soft, var(--sky-bg)); color: var(--ai-text, var(--sky));
+  border: 1px solid var(--ai-soft-2, var(--sky-bg)); border-radius: 10px;
+  margin-bottom: 16px;
+  font-size: 12.5px; line-height: 1.55;
+}
+.mcp-dev-banner svg { flex-shrink: 0; }
+
+.mcp-list-dev-notice {
+  font-size: 11.5px; color: var(--text-3);
+  background: var(--surface-3); padding: 4px 8px; border-radius: 6px;
+  display: inline-flex; align-items: center; gap: 4px;
+  margin-left: 18px;
+}
+
+.mcp-detail-dev-notice {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 14px;
+  background: var(--surface-3); color: var(--text-3);
+  border-left: 3px solid var(--text-4);
+  border-radius: 6px;
+  margin-top: 12px; font-size: 12px;
+}
+.mcp-detail-dev-notice svg { flex-shrink: 0; }
 
 /* Buttons */
 .btn {
