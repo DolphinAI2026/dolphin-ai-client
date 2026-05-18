@@ -1,19 +1,15 @@
 <template>
-  <div class="marketplace-page">
-    <TopBar title="组件市场" show-back>
-      <template #center>
-        <el-tag size="small" type="warning">Beta</el-tag>
-      </template>
-      <template #actions>
-        <el-button size="small" @click="showMyComponents = !showMyComponents" class="mp-btn">
-          {{ showMyComponents ? '浏览市场' : '我的发布' }}
-        </el-button>
-        <el-button size="small" @click="$router.push('/coding')" class="mp-btn">
-          <el-icon><Monitor /></el-icon> Vibe Coding
-        </el-button>
-      </template>
-    </TopBar>
+  <BuilderFrame :breadcrumbs="[{ label: '组件市场' }]">
+    <template #actions>
+      <button class="btn btn-secondary mp-action-btn" type="button" @click="showMyComponents = !showMyComponents">
+        {{ showMyComponents ? '浏览市场' : '我的发布' }}
+      </button>
+      <button class="btn btn-secondary mp-action-btn" type="button" @click="$router.push('/coding')">
+        <el-icon><Monitor /></el-icon><span>Vibe Coding</span>
+      </button>
+    </template>
 
+    <main class="marketplace-page builder-page" data-design="v2">
     <!-- Search & Filters -->
     <div class="mp-toolbar">
       <el-input
@@ -128,17 +124,17 @@
         </div>
       </div>
     </el-dialog>
-  </div>
+    </main>
+  </BuilderFrame>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowLeft, Monitor, Search, Download } from '@element-plus/icons-vue'
+import { Monitor, Search, Download } from '@element-plus/icons-vue'
 import { marketplaceApi, type MarketplaceComponent } from '@/api/marketplace'
 import { useUserStore } from '@/stores/user'
-import ThemeToggle from '@/components/ThemeToggle.vue'
-import TopBar from '@/components/TopBar.vue'
+import BuilderFrame from '@/components/BuilderFrame.vue'
 
 const userStore = useUserStore()
 const currentUserId = computed(() => userStore.user?.id)
@@ -244,73 +240,39 @@ onMounted(() => loadComponents())
 
 <style scoped>
 /* ============ Layout ============ */
+/* Wrapped in BuilderFrame → fills the workbench main area, not 100vh. */
 .marketplace-page {
-  height: 100vh;
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  background: var(--t-bg-base);
-  color: var(--t-text-primary);
+  background: var(--surface);
+  color: var(--text);
 }
 
-/* ============ Header ============ */
-.mp-header {
-  display: flex;
+/* Page-level action buttons forwarded into ShellTopBar's #actions slot.
+   Sized to match the v2 topbar height + token-driven so they look the
+   same as Apps.vue's 导入应用 / 新建应用 buttons. */
+.mp-action-btn {
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 8px 20px;
-  border-bottom: 1px solid var(--t-border-subtle);
-  background: var(--t-bg-panel);
-  height: 52px;
-  flex-shrink: 0;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  transition: border-color 0.12s, background 0.12s, color 0.12s;
 }
-
-.mp-header-left {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.mp-header-left :deep(.el-button) {
-  color: var(--t-text-secondary);
-}
-.mp-header-left :deep(.el-button:hover) {
-  color: var(--t-text-primary);
-}
-
-.mp-title {
-  font-size: 16px;
-  font-weight: 700;
-  background: var(--t-brand-gradient);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  margin: 0;
-  letter-spacing: 0.02em;
-}
-
-.mp-header-left :deep(.el-tag) {
-  background: var(--t-brand-subtle);
-  border-color: var(--t-brand-glow);
-  color: var(--t-brand-light);
-}
-
-.mp-header-right {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.mp-btn {
-  border: 1px solid var(--t-border-subtle) !important;
-  background: var(--t-bg-elevated) !important;
-  color: var(--t-text-secondary) !important;
-  border-radius: 8px !important;
-  transition: all 0.2s ease !important;
-}
-
-.mp-btn:hover {
-  border-color: var(--t-brand-glow) !important;
-  background: var(--t-brand-subtle) !important;
-  color: var(--t-text-primary) !important;
+.mp-action-btn:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+  background: var(--surface-2);
 }
 
 /* ============ Toolbar ============ */
@@ -319,8 +281,8 @@ onMounted(() => loadComponents())
   align-items: center;
   gap: 12px;
   padding: 16px 24px;
-  border-bottom: 1px solid var(--t-border-subtle);
-  background: var(--t-bg-base);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
 }
 
 .mp-search {
