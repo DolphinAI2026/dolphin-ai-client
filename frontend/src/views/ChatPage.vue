@@ -7580,6 +7580,32 @@ onMounted(async () => {
     currentAgent.value = 'requirements'
   }
 
+  // 2026-05-18: 把 pendingMarkdown / pendingFile / pendingDocUpdate 处理提前
+  // 到 onMounted 最早 — 文档上传不应该等 /apaas/status 和 loadBuilderModelOptions
+  // 拖慢，否则用户从 AI-Chat → Builder 跳过来后看见空白页面以为坏了。
+  // pendingDocUpdate 依赖 existingAppId（在下方 app_id 分支里 set），所以留在原位。
+  if (store.pendingMarkdown) {
+    const pending = store.pendingMarkdown
+    store.pendingMarkdown = null
+    pendingMdSource.value = {
+      sessionId: pending.sourceSessionId ?? null,
+      filename: pending.filename,
+    }
+    resetConversationWorkspace()
+    resetMessagesToWelcome()
+    const file = new File([pending.content], pending.filename, { type: 'text/markdown' })
+    await nextTick()
+    // 不 await — 让 uploadDocFile 在后台跑，剩余 onMounted 继续（模型列表、apaas status 等）
+    uploadDocFile(file).catch(e => console.error('uploadDocFile from aichat failed:', e))
+  } else if (store.pendingFile) {
+    const file = store.pendingFile
+    store.pendingFile = null
+    resetConversationWorkspace()
+    resetMessagesToWelcome()
+    await nextTick()
+    uploadDocFile(file).catch(e => console.error('uploadDocFile from landing failed:', e))
+  }
+
   // 检查平台连接状态
   try {
     const token = localStorage.getItem('token')
@@ -7805,21 +7831,8 @@ onMounted(async () => {
     await sendMessage()
   }
 
-  // 从需求分析页带过来的 markdown 文档
-  if (store.pendingMarkdown) {
-    const pending = store.pendingMarkdown
-    store.pendingMarkdown = null
-    // 记录来源（session+filename），uploadDocFile 建好应用后写本地 dedup 缓存
-    pendingMdSource.value = {
-      sessionId: pending.sourceSessionId ?? null,
-      filename: pending.filename,
-    }
-    resetConversationWorkspace()
-    resetMessagesToWelcome()
-    const file = new File([pending.content], pending.filename, { type: 'text/markdown' })
-    await nextTick()
-    await uploadDocFile(file)
-  }
+  // pendingMarkdown / pendingFile 处理已提前到 onMounted 最早（见上方）。
+  // 这里只留 pendingDocUpdate（依赖 existingAppId 已 set 才能走）。
 
   // 从 AIChat → Builder 选目标对话框选了「更新到 X」的：直接走 upload-doc-version 流程
   // existingAppId 在前面 app_id 加载分支里已 set，这里 sanity check 一下保持一致
@@ -7841,15 +7854,7 @@ onMounted(async () => {
     store.pendingDocUpdate = null
   }
 
-  // 从 Landing 页带过来的待解析文件
-  if (store.pendingFile) {
-    const file = store.pendingFile
-    store.pendingFile = null
-    resetConversationWorkspace()
-    resetMessagesToWelcome()
-    await nextTick()
-    await uploadDocFile(file)
-  }
+  // pendingFile 处理已提前到 onMounted 最早（见上方）。
 
   // 从 dolphin 需求分析助手 deeplink 进来 (?from=requirements)：拉 cache 弹选目标对话框
   if (route.query.from === 'requirements') {
