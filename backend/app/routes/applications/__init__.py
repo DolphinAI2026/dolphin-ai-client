@@ -2145,11 +2145,53 @@ class ConfigChatReq(BaseModel):
     history: list[dict] = []  # 之前的对话 [{role: 'user'|'assistant', content: str}]
 
 
+class ConfigChatToolTrace(BaseModel):
+    tool_name: str
+    args: dict
+    ok: bool
+    summary: str  # 200 字以内的结果摘要 (给前端 chip 用)
+
+
 class ConfigChatResp(BaseModel):
     reply: str  # AI 自然语言回复 (给用户看的解释)
     change_plan: dict | None = None  # 草拟的 ChangePlan 结构，None 表示未生成
     requires_confirmation: bool = False  # true 时前端要弹 diff 卡 + 确认按钮
     actions_summary: list[str] = []  # 人话变更点 ["人员档案: 电话 改为必填"]
+    tool_trace: list[ConfigChatToolTrace] = []  # 本轮 agent loop 调过的工具痕迹
+
+
+# 2026-05-19：配置助手能用的 MCP 工具白名单。
+# 原则：「读取 apaas 真实状态」+「单字段/单菜单/单角色级精细修改」全放进来，
+# 不放整模型 CRUD（避免一调就给用户结构性大改）/不放 deploy 类（review 后另走链路）/
+# 不放 workspace 类（这是部署后 panel，不该碰本地 workspace）。
+_CONFIG_CHAT_TOOL_WHITELIST: set[str] = {
+    # —— 读取类 ——（agent 第一步几乎都要拉真实结构对齐用户问的"哪个模型/字段"）
+    "list_apaas_apps_in_env",
+    "get_apaas_app_overview",
+    "list_apaas_app_models",
+    "list_apaas_app_menus",
+    "list_apaas_form_views",
+    "list_apaas_form_components",
+    "list_apaas_form_permissions",
+    "list_apaas_app_dicts",
+    "list_apaas_models_in_env",
+    "list_apaas_app_roles",
+    # —— 查重 / 防冲突 ——
+    "check_app_code_conflict",
+    # —— 字段级精细修改 —— (单字段 required / 名称 / 类型 / 字典等，最常用)
+    "add_apaas_model_field",
+    "update_apaas_model_field",
+    "disable_apaas_model_field",
+    # —— 字典 / 选项 ——
+    "create_apaas_app_dict",
+    "update_apaas_app_dict",
+    "add_apaas_dict_option",
+    "update_apaas_dict_option",
+    # —— 角色 ——
+    "create_apaas_app_roles",
+    "update_apaas_app_role",
+    "delete_apaas_app_role",
+}
 
 
 @router.post("/{app_id}/config-chat", response_model=ConfigChatResp)
@@ -2159,7 +2201,12 @@ async def config_chat(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """部署后配置助手 — 把用户自然语言转成 ChangePlan 草案 (review 后另走 apply)。"""
+    """部署后配置助手 — 接入 MCP 工具 + 完整 SPEC 上下文。
+
+    Agent loop（最多 5 轮）：
+      LLM → tool_calls → mcp_bridge.call_tool → tool_result → 再 LLM …
+    直到 LLM 返回纯文本（不带 tool_calls）或达到上限。
+    """
     # 1. 加载 application + 校验租户
     result = await db.execute(
         select(Application).where(
@@ -2172,26 +2219,39 @@ async def config_chat(
         raise HTTPException(status_code=404, detail="应用不存在")
     await _require_application_permission(ctx, db, app, Action.VIEW)
 
-    # 2. 拼 SPEC 上下文 (markdown 截选，控制 prompt 体积)
-    spec_ctx_md = ""
-    if app.requirement_doc:
-        spec_ctx_md = app.requirement_doc[:3000]
-    elif app.config_preview:
-        # config_preview 是 JSON，截前 2000 字符做参考
-        spec_ctx_md = f"[config_preview JSON 片段]\n{app.config_preview[:2000]}"
+    log = logging.getLogger(__name__)
 
-    # 3. 拉租户 LLM 配置 (用现有 _resolve_builder_llm_cfg helper)
+    # 2. 加载完整 SPEC。优先级：canonical_spec.payload → config_preview JSON → requirement_doc
+    # 之前只截 3000 字符 markdown，模型/字段 code 都被截掉了 → AI 看不见真实结构。
+    spec_ctx_text = ""
+    spec_source = "none"
+    try:
+        from app.models.spec import Spec as _Spec  # 局部 import 避顶层循环
+        if app.canonical_spec_id:
+            spec_row = (await db.execute(
+                select(_Spec).where(_Spec.id == app.canonical_spec_id)
+            )).scalar_one_or_none()
+            if spec_row and spec_row.payload:
+                spec_ctx_text = json.dumps(spec_row.payload, ensure_ascii=False)[:12000]
+                spec_source = f"canonical_spec_id={spec_row.id}"
+    except Exception as exc:  # noqa: BLE001
+        log.warning("config_chat: load canonical spec failed: %r", exc)
+    if not spec_ctx_text and app.config_preview:
+        spec_ctx_text = app.config_preview[:12000]
+        spec_source = "config_preview"
+    if not spec_ctx_text and app.requirement_doc:
+        spec_ctx_text = app.requirement_doc[:12000]
+        spec_source = "requirement_doc"
+
+    # 3. 拉租户 LLM 配置
     try:
         cfg = await _resolve_builder_llm_cfg(
             db, ctx.tenant_id, conversation_id=app.conversation_id
         )
     except Exception as exc:  # noqa: BLE001
-        logging.getLogger(__name__).warning(
-            "config_chat: resolve_builder_llm_cfg failed: %r", exc
-        )
+        log.warning("config_chat: resolve_builder_llm_cfg failed: %r", exc)
         cfg = None
     if not cfg:
-        # LLM 没配 — 走 stub 模式，前端能联调
         return ConfigChatResp(
             reply=(
                 f"已收到你的需求:「{payload.message}」。\n\n"
@@ -2203,34 +2263,59 @@ async def config_chat(
             actions_summary=[],
         )
 
-    # 4. 构造 prompt + 调 LLM
+    # 4. 拉 MCP 工具（白名单过滤）
+    tool_schemas: list[dict] = []
+    try:
+        from app.ai_chat import mcp_bridge as _bridge
+        all_schemas = await _bridge.get_tool_schemas_openai()
+        tool_schemas = [
+            s for s in all_schemas
+            if s.get("function", {}).get("name") in _CONFIG_CHAT_TOOL_WHITELIST
+        ]
+        log.info(
+            "config_chat: loaded %d MCP tools (whitelist=%d)",
+            len(tool_schemas), len(_CONFIG_CHAT_TOOL_WHITELIST),
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("config_chat: mcp_bridge load failed: %r", exc)
+        tool_schemas = []
+
+    # 5. 构造 SYSTEM prompt
+    env_id_hint = app.platform_env_id or "(未绑定 platform_env)"
+    apaas_app_id_hint = app.apaas_app_id or "(未部署到 apaas)"
     system_prompt = (
-        "你是 aPaaS 应用的「配置调整助手」。当前应用:\n"
+        "你是 aPaaS 应用的「配置调整助手」（部署后的精细化配置编辑器）。\n\n"
+        "## 当前应用上下文\n"
         f"- app_name: {app.app_name}\n"
         f"- app_code: {app.app_code}\n"
-        f"- apaas_app_id: {app.apaas_app_id or '(未部署)'}\n\n"
-        "当前 SPEC (markdown 截选):\n"
-        "```markdown\n"
-        f"{spec_ctx_md or '(暂无 SPEC，应用可能是从 apaas 直接导入)'}\n"
+        f"- apaas_app_id: {apaas_app_id_hint}   ← 调 apaas 类工具时用这个\n"
+        f"- platform_env_id: {env_id_hint}      ← 调 apaas 类工具的 env_id 参数用这个\n\n"
+        "## 完整 SPEC（结构化 JSON 或 markdown，可直接搜索模型/字段 code）\n"
+        f"[source: {spec_source}]\n"
+        "```\n"
+        f"{spec_ctx_text or '(应用暂无 SPEC，请先用工具拉真实结构)'}\n"
         "```\n\n"
-        "用户会用自然语言描述想做的调整。你的任务:\n"
-        "1. 先用人话告诉用户你理解的意图，明确具体改哪个模型/字段/枚举/角色。\n"
-        "2. 如果是清晰的字段/枚举/角色调整 (add_field / modify_field / "
-        "add_role / add_dict_item / change_required 等)，**在回复末尾**给出一个 "
-        "```json 代码块，结构如下:\n"
+        "## 工作方式\n"
+        "1. **优先用工具拉真实状态**：用户提到「模型 / 字段 / 菜单 / 角色 / 字典」时，"
+        "**先调读取类工具**（list_apaas_app_models / list_apaas_app_menus / "
+        "list_apaas_app_roles / list_apaas_app_dicts 等）拿到当前 apaas 真实结构。"
+        "**不要凭 SPEC 想象** — SPEC 跟 apaas 真实状态可能有漂移。\n"
+        "2. **明确意图后才动手**：调用「修改类」工具（update_apaas_model_field / "
+        "add_apaas_dict_option / create_apaas_app_roles 等）前，先用人话告诉用户你打算改啥，"
+        "等用户在下一轮确认（或直接看你描述的改动）。如果是单字段微调，可以直接改并报告结果。\n"
+        "3. **缺信息就反问**：用户说「把电话改成必填」但有多个模型都有「电话」字段时，"
+        "先列出候选让用户选。\n"
+        "4. **返回格式**：完成后，如果做了实际变更，**在回复末尾**给出 ```json 代码块：\n"
         "   {\n"
-        '     "summary": ["人话变更点 1", "人话变更点 2"],\n'
+        '     "summary": ["人员档案.手机号 → 必填"],\n'
         '     "actions": [\n'
-        '       {"type": "modify_field", "model": "...", "field": "...", '
-        '"changes": {"required": true}}\n'
+        '       {"type": "update_field", "model": "...", "field": "...", "changes": {"required": true}}\n'
         "     ]\n"
         "   }\n"
-        "3. 如果改动太大、跨多模块或缺信息，**不**输出 json，只用自然语言反问澄清。\n"
-        "4. 不要编造 SPEC 里没有的模型/字段名。如果用户提到的实体在 SPEC 里没找到，明确指出。"
+        "   只读问答（如「列出当前菜单」）不需要 json 块。"
     )
 
     messages: list[dict] = [{"role": "system", "content": system_prompt}]
-    # 限制 history 长度，最多保留最近 8 轮
     for turn in (payload.history or [])[-8:]:
         role = turn.get("role")
         content = turn.get("content")
@@ -2238,40 +2323,119 @@ async def config_chat(
             messages.append({"role": role, "content": content})
     messages.append({"role": "user", "content": payload.message})
 
+    # 6. Agent loop — 最多 5 轮 tool_call
+    tool_trace: list[ConfigChatToolTrace] = []
+    reply = ""
+    MAX_TURNS = 5
     try:
         llm = LLMClient(
             api_key=cfg["api_key"],
             base_url=cfg["base_url"],
             model=cfg["model"],
         )
-        llm_resp = await llm.chat_completion(
-            messages,
-            max_tokens=cfg.get("max_tokens", 4096),
-            temperature=0.3,
-        )
-        # chat_completion 返 OpenAI 风格: {choices: [{message: {content: ...}}]}
-        reply = ""
-        try:
-            reply = llm_resp["choices"][0]["message"]["content"] or ""
-        except (KeyError, IndexError, TypeError):
-            reply = ""
+        from app.ai_chat import mcp_bridge as _bridge
+
+        for turn_idx in range(MAX_TURNS):
+            llm_resp = await llm.chat_completion(
+                messages,
+                max_tokens=cfg.get("max_tokens", 4096),
+                temperature=0.3,
+                tools=tool_schemas if tool_schemas else None,
+                tool_choice="auto" if tool_schemas else None,
+            )
+            try:
+                msg = llm_resp["choices"][0]["message"]
+            except (KeyError, IndexError, TypeError):
+                msg = {}
+            content = (msg.get("content") or "").strip()
+            tool_calls = msg.get("tool_calls") or []
+
+            # 把 assistant 这轮塞回 messages（带 tool_calls，方便下一轮 LLM 看到它自己调过啥）
+            messages.append({
+                "role": "assistant",
+                "content": content,
+                "tool_calls": tool_calls if tool_calls else None,
+            })
+
+            # 没有工具调用 → 终止
+            if not tool_calls:
+                reply = content
+                break
+
+            # 有工具调用 → 逐个执行 + 喂回
+            for tc in tool_calls:
+                tc_id = tc.get("id") or ""
+                fn = tc.get("function") or {}
+                tool_name = fn.get("name") or ""
+                try:
+                    tc_args = json.loads(fn.get("arguments") or "{}")
+                except Exception:
+                    tc_args = {}
+
+                if tool_name not in _CONFIG_CHAT_TOOL_WHITELIST:
+                    # 严格白名单：LLM 调没暴露的工具直接拒
+                    result_text = json.dumps({
+                        "ok": False,
+                        "error_code": "TOOL_NOT_ALLOWED",
+                        "message": f"工具 {tool_name} 不在配置助手白名单内",
+                    }, ensure_ascii=False)
+                    ok_flag = False
+                else:
+                    try:
+                        result_text = await _bridge.call_tool(
+                            tool_name,
+                            tc_args,
+                            tenant_id=ctx.tenant_id,
+                            user_id=ctx.user.id,
+                        )
+                        try:
+                            parsed = json.loads(result_text)
+                            ok_flag = bool(parsed.get("ok", True)) if isinstance(parsed, dict) else True
+                        except Exception:
+                            ok_flag = True
+                    except Exception as exc:  # noqa: BLE001
+                        result_text = json.dumps({
+                            "ok": False,
+                            "error_code": "BRIDGE_EXCEPTION",
+                            "message": str(exc),
+                        }, ensure_ascii=False)
+                        ok_flag = False
+
+                # trace 给前端展示
+                summary = result_text[:200] + ("..." if len(result_text) > 200 else "")
+                tool_trace.append(ConfigChatToolTrace(
+                    tool_name=tool_name,
+                    args=tc_args,
+                    ok=ok_flag,
+                    summary=summary,
+                ))
+
+                # 喂回 LLM（必须用 tool role + tool_call_id 对齐）
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc_id,
+                    "content": result_text[:4000],  # 控制单条 tool_result 体积
+                })
+        else:
+            # 跑完 5 轮还没收敛 — 取最后一次 assistant content
+            reply = reply or "（已达到工具调用上限 5 轮，可能还需要进一步确认）"
     except Exception as exc:  # noqa: BLE001
-        import logging
-        logging.getLogger(__name__).warning("config_chat LLM call failed: %r", exc)
+        log.warning("config_chat agent loop failed: %r", exc)
         return ConfigChatResp(
             reply=(
                 f"已收到你的需求:「{payload.message}」。\n\n"
-                f"调用 LLM 时出错: {exc!s}\n请稍后重试，或联系管理员检查模型配置。"
+                f"调用 LLM 或工具时出错: {exc!s}\n请稍后重试，或联系管理员检查模型配置。"
             ),
             change_plan=None,
             requires_confirmation=False,
             actions_summary=[],
+            tool_trace=tool_trace,
         )
 
     if not reply.strip():
         reply = "我没完全理解你的诉求，可以再描述详细点吗？例如:「把『员工档案』模型的『手机号』字段改成必填」。"
 
-    # 5. 从 reply 抽 ```json 块 (LLM 按 prompt 约定输出)
+    # 7. 从 reply 抽 ```json 块
     change_plan: dict | None = None
     actions_summary: list[str] = []
     m = re.search(r"```json\s*(.*?)\s*```", reply, flags=re.DOTALL)
@@ -2284,7 +2448,6 @@ async def config_chat(
                 if isinstance(summary, list):
                     actions_summary = [str(s) for s in summary if s]
         except (json.JSONDecodeError, ValueError):
-            # LLM 出的 json 不合法 — 不抛错，让 reply 自然显示
             pass
 
     return ConfigChatResp(
@@ -2292,4 +2455,5 @@ async def config_chat(
         change_plan=change_plan,
         requires_confirmation=bool(change_plan),
         actions_summary=actions_summary,
+        tool_trace=tool_trace,
     )

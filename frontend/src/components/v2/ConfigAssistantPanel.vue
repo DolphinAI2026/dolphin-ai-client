@@ -29,7 +29,11 @@ export function renderMd(s: string): string {
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { configChatApi, type ChangePlanPreview } from '@/api/configChat'
+import {
+  configChatApi,
+  type ChangePlanPreview,
+  type ConfigChatToolTrace,
+} from '@/api/configChat'
 
 const props = defineProps<{
   applicationId: number
@@ -42,6 +46,7 @@ interface ChatMsg {
   content: string
   change_plan?: ChangePlanPreview | null
   actions_summary?: string[]
+  tool_trace?: ConfigChatToolTrace[]
 }
 
 const messages = ref<ChatMsg[]>([])
@@ -85,6 +90,7 @@ async function send() {
       content: resp.reply,
       change_plan: resp.change_plan,
       actions_summary: resp.actions_summary,
+      tool_trace: resp.tool_trace,
     })
     scrollToBottom()
   } catch (e: any) {
@@ -160,6 +166,20 @@ function pickExample(text: string) {
         :class="`ca-msg-${m.role}`"
       >
         <div class="ca-bubble">
+          <div
+            v-if="m.role === 'assistant' && m.tool_trace && m.tool_trace.length"
+            class="ca-tool-chips"
+          >
+            <span
+              v-for="(t, i) in m.tool_trace"
+              :key="i"
+              class="ca-tool-chip"
+              :class="t.ok ? 'ca-tool-chip-ok' : 'ca-tool-chip-err'"
+              :title="t.summary"
+            >
+              {{ t.ok ? '✓' : '✗' }} {{ t.tool_name }}
+            </span>
+          </div>
           <div class="ca-bubble-text" v-html="renderMd(m.content)" />
           <div v-if="m.change_plan" class="ca-change-card">
             <div class="ca-change-title">📋 提议的变更</div>
@@ -330,6 +350,35 @@ function pickExample(text: string) {
   border-radius: 4px;
   font-family: var(--d-font-mono);
   font-size: 11.5px;
+}
+
+/* tool_trace chips — 让用户看见 AI 真调了哪些 MCP 工具 */
+.ca-tool-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.ca-tool-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 10px;
+  font-family: var(--d-font-mono);
+  font-size: 10.5px;
+  line-height: 1.6;
+  border: 1px solid transparent;
+  cursor: default;
+}
+.ca-tool-chip-ok {
+  background: rgba(29, 137, 168, 0.08);
+  color: var(--ai-strong, #1d89a8);
+  border-color: rgba(29, 137, 168, 0.2);
+}
+.ca-tool-chip-err {
+  background: rgba(220, 38, 38, 0.08);
+  color: #b91c1c;
+  border-color: rgba(220, 38, 38, 0.2);
 }
 
 .ca-change-card {

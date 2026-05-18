@@ -30,11 +30,23 @@ export interface ChangePlanPreview {
   [k: string]: any
 }
 
+/**
+ * Tool trace — 2026-05-19 backend agent loop 调过的 MCP 工具痕迹。
+ * 前端展示为 chip 让用户看见 AI 真在干活（拉了哪个真实结构 / 改了啥）。
+ */
+export interface ConfigChatToolTrace {
+  tool_name: string
+  args: Record<string, any>
+  ok: boolean
+  summary: string
+}
+
 export interface ConfigChatResp {
   reply: string
   change_plan: ChangePlanPreview | null
   requires_confirmation: boolean
   actions_summary: string[]
+  tool_trace?: ConfigChatToolTrace[]
 }
 
 export const configChatApi = {
