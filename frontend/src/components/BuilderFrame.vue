@@ -1,14 +1,12 @@
 <template>
   <WorkbenchShell>
     <section class="builder-view">
-      <BuilderTopBar :breadcrumbs="breadcrumbs">
-        <template v-if="$slots.center" #center>
-          <slot name="center" />
-        </template>
-        <template v-if="$slots.actions" #actions>
-          <slot name="actions" />
-        </template>
-      </BuilderTopBar>
+      <ShellTopBar />
+      <!-- Legacy slots `center` / `actions` and the `breadcrumbs` prop are
+           preserved on the API to avoid breaking the ~10 pages that wrap
+           themselves in BuilderFrame, but ShellTopBar (v2) replaces the
+           BuilderTopBar visual. Slots are no-ops in v2 chrome until Session 5+
+           rebuilds the per-page action surfaces. -->
       <slot />
     </section>
   </WorkbenchShell>
@@ -16,7 +14,7 @@
 
 <script setup lang="ts">
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
-import BuilderTopBar from '@/components/BuilderTopBar.vue'
+import ShellTopBar from '@/components/v2/ShellTopBar.vue'
 
 defineProps<{
   breadcrumbs: Array<{ label: string; to?: string }>
