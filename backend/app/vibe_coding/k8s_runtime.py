@@ -450,7 +450,7 @@ class KubernetesRuntime:
             # 简化：stderr 含 "command terminated" / "exit code N" 解析；否则默认 0
             stderr_text = "".join(stderr_buf)
             stdout_text = "".join(stdout_buf)
-            returncode = _parse_exit_code(stderr_text)
+            returncode = _parse_exit_code(stderr_text, stdout_text)
             return ExecResult(
                 returncode=returncode,
                 stdout=stdout_text,
@@ -677,16 +677,24 @@ def _wrap_cmd(
     return ["sh", "-c", " ".join(parts)]
 
 
-def _parse_exit_code(stderr: str) -> int:
+def _parse_exit_code(stderr: str, stdout: str = "") -> int:
     """K8s exec 不直接给 exit code — 从 stderr 解析。
     典型格式：'command terminated with exit code 1'。没解析到默认 0（即"成功"）。
+
+    2026-05-18: 加 evicted/NotFound 关键字识别。注意不能用"stderr+stdout 全空"
+    判失败 — 成功的 `touch foo` / `mkdir -p` 之类本来就 silent。pod 是否真 Running
+    应在调用方 _run_command_k8s 用 container_status pre-flight 校验。
     """
     import re
-    m = re.search(r"exit code (\d+)", stderr or "")
+    s = stderr or ""
+    m = re.search(r"exit code (\d+)", s)
     if m:
         return int(m.group(1))
-    if "command terminated" in (stderr or "").lower():
+    low = s.lower()
+    if "command terminated" in low:
         return 1
+    if "container not found" in low or "is not running" in low or "container not in" in low:
+        return -1
     return 0
 
 

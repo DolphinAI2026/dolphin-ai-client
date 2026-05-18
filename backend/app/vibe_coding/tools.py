@@ -526,6 +526,28 @@ async def execute_run_command(args: dict, thread: VibeCodingThread, db: AsyncSes
     if runtime == "docker":
         return await _run_command_docker(thread, repo, cmd, timeout=timeout, background=background)
     if runtime == "k8s":
+        # 2026-05-18: exec 前主动 probe Pod 是否真 Running — 修 evicted pod 假装 exit 0
+        # 的 bug。节点 MemoryPressure 时 Pod 被 SIGKILL 后 phase=Failed，但 K8s
+        # exec websocket 仍可能"连接成功立即 EOF"，agent 当成命令跑通造 hallucinate。
+        from app.vibe_coding.k8s_runtime import get_k8s_runtime
+        rt = get_k8s_runtime()
+        try:
+            status = await rt.container_status(thread.workspace_id)
+        except Exception:
+            status = None
+        if status != "running" and status is not None:
+            # exited / failed / evicted — 让 ensure_container 走删+重建逻辑后再判一次
+            try:
+                await rt.ensure_container(thread.workspace_id, repo, tenant_id=thread.tenant_id or 1)
+            except Exception as exc:
+                return _err(f"K8s 沙箱 Pod 异常无法重建（节点可能内存压力）: {exc}")
+            status = await rt.container_status(thread.workspace_id)
+            if status != "running":
+                return _err(
+                    f"K8s 沙箱 Pod 未进入 Running（当前状态: {status or 'NotFound'}）。"
+                    f"常见原因：节点内存压力 (kubectl describe node 看 MemoryPressure)。"
+                    f"沙箱重建失败前不要假装命令跑过了。"
+                )
         return await _run_command_k8s(thread, repo, cmd, timeout=timeout, background=background)
     return await _run_command_host(thread, repo, cmd, timeout=timeout, background=background)
 
