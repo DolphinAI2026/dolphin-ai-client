@@ -3,13 +3,16 @@
 
 `GET /api/agents` lazy-seeds the 3 default agents on first read for a tenant.
 `PUT /api/agents/{agent_id}` updates model / system_prompt.
-`POST /api/agents/{agent_id}/skills`   bind a skill from agent_skill_catalog.
-`DELETE /api/agents/{agent_id}/skills/{code}` unbind a skill.
-`POST /api/agents/{agent_id}/mcps`     bind an MCP server.
-`DELETE /api/agents/{agent_id}/mcps/{mcp_id}` unbind an MCP server.
 
 Router prefix here is `/agents` — `app.include_router(..., prefix="/api")` in
 main.py adds the `/api` segment.
+
+NOTE (2026-05-19 revert): Skill/MCP binding endpoints removed. The bound
+skill list is conceptually wrong as a DB-editable artifact: each agent's
+real tools are hardcoded in `builder_spec/tools.py` / `coding/tools.py` and
+`agent_skill_catalog` exposed orchestration-layer skills (create_app etc)
+that aren't agent-loop tools. The Skills/MCP rows on the page are now
+read-only (sourced from `cur.skills` / `cur.mcps` on the server response).
 """
 from __future__ import annotations
 from typing import Annotated, Optional
@@ -24,7 +27,6 @@ from app.deps import get_auth_context, AuthContext
 from app.models.agent_config import (
     AgentConfig, AgentSkill, AgentMcpBinding, AgentKnowledgeBinding,
 )
-from app.models.skill_catalog import AgentSkillCatalog
 from app.services.agent_seed import seed_agents_for_tenant
 
 router = APIRouter(prefix="/agents", tags=["agents-v2"])
@@ -67,14 +69,6 @@ class AgentListResp(BaseModel):
 class AgentUpdateReq(BaseModel):
     model: Optional[str] = None
     system_prompt: Optional[str] = None
-
-
-class SkillAddReq(BaseModel):
-    code: str  # references agent_skill_catalog.code
-
-
-class McpAddReq(BaseModel):
-    mcp_id: str  # references mcp_hub server id
 
 
 def _to_resp(
@@ -172,119 +166,4 @@ async def update_agent(
     await db.commit()
     await db.refresh(cfg)
 
-    return await _build_agent_resp(cfg, db)
-
-
-@router.post("/{agent_id}/skills", response_model=AgentConfigResp)
-async def add_skill(
-    agent_id: str,
-    payload: SkillAddReq,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
-    db: Annotated[AsyncSession, Depends(get_db)],
-):
-    """Bind a skill (from agent_skill_catalog) to an agent."""
-    cfg = await _get_agent_or_404(agent_id, ctx.tenant_id, db)
-
-    # Look up the catalog row for canonical name/desc.
-    catalog_row = (await db.execute(
-        select(AgentSkillCatalog).where(AgentSkillCatalog.code == payload.code)
-    )).scalar_one_or_none()
-    if not catalog_row:
-        raise HTTPException(status_code=404, detail=f"skill {payload.code} not in catalog")
-
-    # Check for duplicate binding.
-    existing = (await db.execute(
-        select(AgentSkill).where(
-            AgentSkill.agent_config_id == cfg.id,
-            AgentSkill.code == payload.code,
-        )
-    )).scalar_one_or_none()
-    if existing:
-        raise HTTPException(status_code=409, detail=f"skill {payload.code} already bound")
-
-    # Append at end (next order_idx).
-    current = (await db.execute(
-        select(AgentSkill).where(AgentSkill.agent_config_id == cfg.id)
-    )).scalars().all()
-    db.add(AgentSkill(
-        agent_config_id=cfg.id,
-        code=catalog_row.code,
-        name=catalog_row.name,
-        desc=catalog_row.desc or "",
-        order_idx=len(current),
-    ))
-    await db.commit()
-    return await _build_agent_resp(cfg, db)
-
-
-@router.delete("/{agent_id}/skills/{code}", response_model=AgentConfigResp)
-async def remove_skill(
-    agent_id: str,
-    code: str,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
-    db: Annotated[AsyncSession, Depends(get_db)],
-):
-    """Unbind a skill from an agent."""
-    cfg = await _get_agent_or_404(agent_id, ctx.tenant_id, db)
-    row = (await db.execute(
-        select(AgentSkill).where(
-            AgentSkill.agent_config_id == cfg.id,
-            AgentSkill.code == code,
-        )
-    )).scalar_one_or_none()
-    if not row:
-        raise HTTPException(status_code=404, detail=f"skill {code} not bound")
-    await db.delete(row)
-    await db.commit()
-    return await _build_agent_resp(cfg, db)
-
-
-@router.post("/{agent_id}/mcps", response_model=AgentConfigResp)
-async def add_mcp(
-    agent_id: str,
-    payload: McpAddReq,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
-    db: Annotated[AsyncSession, Depends(get_db)],
-):
-    """Bind an MCP server to an agent."""
-    cfg = await _get_agent_or_404(agent_id, ctx.tenant_id, db)
-    existing = (await db.execute(
-        select(AgentMcpBinding).where(
-            AgentMcpBinding.agent_config_id == cfg.id,
-            AgentMcpBinding.mcp_id == payload.mcp_id,
-        )
-    )).scalar_one_or_none()
-    if existing:
-        raise HTTPException(status_code=409, detail=f"mcp {payload.mcp_id} already bound")
-    bindings = (await db.execute(
-        select(AgentMcpBinding).where(AgentMcpBinding.agent_config_id == cfg.id)
-    )).scalars().all()
-    db.add(AgentMcpBinding(
-        agent_config_id=cfg.id,
-        mcp_id=payload.mcp_id,
-        order_idx=len(bindings),
-    ))
-    await db.commit()
-    return await _build_agent_resp(cfg, db)
-
-
-@router.delete("/{agent_id}/mcps/{mcp_id}", response_model=AgentConfigResp)
-async def remove_mcp(
-    agent_id: str,
-    mcp_id: str,
-    ctx: Annotated[AuthContext, Depends(get_auth_context)],
-    db: Annotated[AsyncSession, Depends(get_db)],
-):
-    """Unbind an MCP server from an agent."""
-    cfg = await _get_agent_or_404(agent_id, ctx.tenant_id, db)
-    row = (await db.execute(
-        select(AgentMcpBinding).where(
-            AgentMcpBinding.agent_config_id == cfg.id,
-            AgentMcpBinding.mcp_id == mcp_id,
-        )
-    )).scalar_one_or_none()
-    if not row:
-        raise HTTPException(status_code=404, detail=f"mcp {mcp_id} not bound")
-    await db.delete(row)
-    await db.commit()
     return await _build_agent_resp(cfg, db)
