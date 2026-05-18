@@ -1471,21 +1471,24 @@ async def run_coding_pipeline(
         # ---- Step 2: 创建/恢复对话（不创建工作区，workspace_id 此时可为 None）----
         # 工作区创建延迟到"用户确认 brainstorm 后"或"非 brainstorm 场景的首次进入"。
         # brainstorm 阶段（abort / revise）若工作区还未创建，磁盘零落地、无 stale 残留。
-        if not is_iteration:
-            if not conversation_id:
-                coding_conversation = Conversation(
-                    title=params.message[:50], user_id=params.user_id,
-                    tenant_id=params.tenant_id, agent_type="coding",
-                    workspace_id=None, selected_llm_config_id=effective_model_config_id,
-                )
-                db.add(coding_conversation)
-                await db.commit()
-                await db.refresh(coding_conversation)
-                conversation_id = coding_conversation.id
-            elif coding_conversation and params.selected_model is not None:
-                coding_conversation.selected_llm_config_id = effective_model_config_id
-                await db.commit()
-                await db.refresh(coding_conversation)
+        # 2026-05-19 不管是新建还是迭代（is_iteration=True 也算），conversation_id 为空时
+        # 必须创建一条 Conversation，否则下面 save_coding_message 撞 NULL constraint。
+        # 之前 `if not is_iteration` 包住创建逻辑导致 ws_id 存在但 conv 为 None 时直接挂。
+        if not conversation_id:
+            coding_conversation = Conversation(
+                title=params.message[:50], user_id=params.user_id,
+                tenant_id=params.tenant_id, agent_type="coding",
+                workspace_id=ws_id if is_iteration else None,
+                selected_llm_config_id=effective_model_config_id,
+            )
+            db.add(coding_conversation)
+            await db.commit()
+            await db.refresh(coding_conversation)
+            conversation_id = coding_conversation.id
+        elif coding_conversation and params.selected_model is not None:
+            coding_conversation.selected_llm_config_id = effective_model_config_id
+            await db.commit()
+            await db.refresh(coding_conversation)
 
         await save_coding_message(db, conversation_id, "user", params.message)
 
