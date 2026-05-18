@@ -13,10 +13,8 @@ import { ElMessage } from 'element-plus'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
 import ShellTopBar from '@/components/v2/ShellTopBar.vue'
 import { useAgentsStore } from '@/stores/agents'
-import { useSkillCatalogStore } from '@/stores/skillCatalog'
 import { llmConfigApi } from '@/api/llmConfig'
 import type { AgentConfig as ApiAgentConfig } from '@/api/agents'
-import type { SkillCatalogItem } from '@/api/skillCatalog'
 
 interface McpServer {
   id: string
@@ -71,7 +69,6 @@ const INDUSTRY_PACKS: IndustryPack[] = [
 
 const router = useRouter()
 const agentsStore = useAgentsStore()
-const skillCatalogStore = useSkillCatalogStore()
 
 // Fallback empty agent so the template never blows up while the first
 // list() request is in-flight (or fails). Once the store has data, `cur`
@@ -201,97 +198,13 @@ async function onSave() {
     saving.value = false
   }
 }
-function onAddSkill() {
-  // Scroll the catalog into view so user knows where the "+" buttons live.
-  const el = document.querySelector('.agent-catalog')
-  if (el) (el as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'start' })
-  else ElMessage.info('请滚动到下方"可用 Skill 库"点击 + 添加')
-}
-async function onRemoveSkill(s: { code: string; name: string; desc: string }) {
-  if (!cur.value.id || !agentsStore.agents.length) {
-    ElMessage.warning('Agent 列表尚未加载完成')
-    return
-  }
-  try {
-    await agentsStore.removeSkillBinding(cur.value.id, s.code)
-    ElMessage.success(`已移除 Skill「${s.name}」`)
-  } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail || e?.message || '移除失败')
-  }
-}
-async function onRemoveMcp(m: McpServer) {
-  if (!cur.value.id || !agentsStore.agents.length) {
-    ElMessage.warning('Agent 列表尚未加载完成')
-    return
-  }
-  try {
-    await agentsStore.removeMcpBinding(cur.value.id, m.id)
-    ElMessage.success(`已解绑 MCP「${m.name}」`)
-  } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail || e?.message || '解绑失败')
-  }
-}
-function onRemoveKnowledge(p: IndustryPack) {
-  // Knowledge bindings UI lives on the Industry page — point users there.
-  ElMessage.info(`请在「行业知识库」页面管理${p.name}`)
-}
-function onRemoveSpecTemplate(t: string) {
-  ElMessage.info(`SPEC 模板「${t}」管理待上线`)
-}
 function gotoMcp() { router.push('/mcp') }
 function gotoIndustry() { router.push('/industry') }
-
-// Catalog: groupings + display labels
-const CATEGORY_LABEL: Record<string, string> = {
-  platform: '平台 CRUD',
-  component: '组件构建',
-  orchestrator: '编排',
-  general: '通用',
-}
-const catalogGroups = computed<Array<{ category: string; label: string; skills: SkillCatalogItem[] }>>(() => {
-  const map = skillCatalogStore.byCategory
-  const order = ['platform', 'component', 'orchestrator', 'general']
-  const seen = new Set<string>()
-  const out: Array<{ category: string; label: string; skills: SkillCatalogItem[] }> = []
-  for (const k of order) {
-    if (map[k]?.length) {
-      out.push({ category: k, label: CATEGORY_LABEL[k] || k, skills: map[k] })
-      seen.add(k)
-    }
-  }
-  for (const k of Object.keys(map)) {
-    if (!seen.has(k) && map[k]?.length) {
-      out.push({ category: k, label: CATEGORY_LABEL[k] || k, skills: map[k] })
-    }
-  }
-  return out
-})
-// Set of codes already bound to the currently selected agent — used to
-// disable the "+" button on catalog rows (and to short-circuit duplicate POST).
-const boundSkillCodes = computed<Set<string>>(() => new Set(cur.value.skills.map(s => s.code)))
-
-async function onAddCatalogSkill(s: SkillCatalogItem) {
-  if (!cur.value.id || !agentsStore.agents.length) {
-    ElMessage.warning('Agent 列表尚未加载完成')
-    return
-  }
-  if (boundSkillCodes.value.has(s.code)) {
-    ElMessage.info(`「${s.name}」已绑定到当前 Agent`)
-    return
-  }
-  try {
-    await agentsStore.addSkillBinding(cur.value.id, s.code)
-    ElMessage.success(`已添加 Skill「${s.name}」`)
-  } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail || e?.message || '添加失败')
-  }
-}
 
 onMounted(async () => {
   await Promise.all([
     agentsStore.fetchAgents(),
     loadRealModels(),
-    skillCatalogStore.fetchCatalog(),
   ])
   // Default-select first agent if `builder` not present.
   const first = agentsStore.agents[0]
@@ -434,69 +347,27 @@ const knowledgeEmptyHint = computed(() =>
               </div>
             </div>
 
-            <!-- Skills card -->
+            <!-- Skills card (read-only — tools are coupled to agent runtime, not DB-editable) -->
             <div class="card card-pad">
               <div class="agent-section-head">
                 <span>Skills <span class="agent-section-count">{{ cur.skills.length }} 已挂载</span></span>
-                <span title="Skill 是带描述的可调用能力包，会作为 system 上下文喂给模型">
+                <span title="Skill 描述会作为 system 上下文喂给模型；实际工具集由 agent 运行时（builder_spec / coding）决定，此处只读">
                   <span class="term-mark">?</span>
                 </span>
-                <button class="section-action section-action-trailing" @click="onAddSkill">从 Skill 库添加 →</button>
               </div>
               <div class="agent-skills">
                 <div v-for="s in cur.skills" :key="s.code" class="agent-skill">
                   <div class="agent-skill-head">
                     <code class="mono agent-skill-code">{{ s.code }}</code>
                     <span class="agent-skill-name">{{ s.name }}</span>
-                    <button class="icon-btn icon-btn-sm" title="移除" @click="onRemoveSkill(s)" v-html="renderIcon('trash', 11)" />
                   </div>
                   <div class="agent-skill-desc">{{ s.desc }}</div>
                 </div>
+                <div v-if="cur.skills.length === 0" class="agent-empty">此 Agent 暂无 Skill 描述</div>
               </div>
             </div>
 
-            <!-- Skill catalog card — Phase B: real callable skills from app/skills/ -->
-            <div class="card card-pad">
-              <div class="agent-section-head">
-                <span>可用 Skill 库 <span class="agent-section-count">{{ skillCatalogStore.skills.length }} 个</span></span>
-                <span title="来自 backend/app/skills/ 真实可调用函数（lazy-discover）">
-                  <span class="term-mark">?</span>
-                </span>
-              </div>
-              <div v-if="skillCatalogStore.loading && !skillCatalogStore.skills.length" class="agent-empty">
-                正在扫描 Skill 库…
-              </div>
-              <div v-else-if="!skillCatalogStore.skills.length" class="agent-empty">
-                Skill 库为空（后端未发现可调用 skill）
-              </div>
-              <div v-else class="agent-catalog">
-                <div v-for="grp in catalogGroups" :key="grp.category" class="agent-catalog-group">
-                  <div class="agent-catalog-group-head">
-                    {{ grp.label }}
-                    <span class="agent-section-count">{{ grp.skills.length }}</span>
-                  </div>
-                  <div class="agent-catalog-items">
-                    <div v-for="s in grp.skills" :key="s.code" class="agent-catalog-item">
-                      <div class="agent-catalog-head">
-                        <code class="mono agent-skill-code">{{ s.code }}</code>
-                        <span class="agent-skill-name">{{ s.name }}</span>
-                        <span v-if="s.is_async" class="badge">async</span>
-                        <button
-                        class="icon-btn icon-btn-sm catalog-add-btn"
-                        :title="boundSkillCodes.has(s.code) ? '已绑定' : '添加到当前 Agent'"
-                        :disabled="boundSkillCodes.has(s.code) || !agentsStore.agents.length"
-                        @click="onAddCatalogSkill(s)"
-                      >{{ boundSkillCodes.has(s.code) ? '✓' : '+' }}</button>
-                      </div>
-                      <div class="agent-skill-desc">{{ s.desc }}</div>
-                      <div class="agent-catalog-path mono">{{ s.callable_path }}</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <!-- MCPs card -->
+            <!-- MCPs card (read-only) -->
             <div class="card card-pad">
               <div class="agent-section-head">
                 <span>挂载的 MCP <span class="agent-section-count">{{ curMcps.length }}</span></span>
@@ -519,13 +390,12 @@ const knowledgeEmptyHint = computed(() =>
                       <span class="mono">{{ m.code }}</span> · {{ m.tools }} 工具 · v{{ m.version }}
                     </div>
                   </div>
-                  <button class="icon-btn icon-btn-sm" title="解绑" @click="onRemoveMcp(m)" v-html="renderIcon('trash', 11)" />
                 </div>
                 <div v-if="curMcps.length === 0" class="agent-empty">此 Agent 暂未挂载任何 MCP</div>
               </div>
             </div>
 
-            <!-- Knowledge card -->
+            <!-- Knowledge card (read-only) -->
             <div class="card card-pad">
               <div class="agent-section-head">
                 <span>知识源
@@ -550,7 +420,6 @@ const knowledgeEmptyHint = computed(() =>
                       {{ pk.stats.entities }} 业务对象 · {{ pk.stats.workflows }} 流程 · {{ pk.stats.dicts }} 字典
                     </div>
                   </div>
-                  <button class="icon-btn icon-btn-sm" title="移除" @click="onRemoveKnowledge(pk)" v-html="renderIcon('trash', 11)" />
                 </div>
                 <div v-for="t in cur.knowledge.spec_templates" :key="t" class="agent-know-row">
                   <div class="know-icon know-icon-doc" v-html="renderIcon('doc', 13)" />
@@ -558,7 +427,6 @@ const knowledgeEmptyHint = computed(() =>
                     <div class="agent-know-name mono">{{ t }}</div>
                     <div class="agent-know-stats">SPEC 模板</div>
                   </div>
-                  <button class="icon-btn icon-btn-sm" title="移除" @click="onRemoveSpecTemplate(t)" v-html="renderIcon('trash', 11)" />
                 </div>
               </div>
               <div v-else class="agent-empty">
@@ -733,34 +601,6 @@ const knowledgeEmptyHint = computed(() =>
 }
 .agent-skill-name { font-size: 12.5px; font-weight: 600; color: var(--text); }
 .agent-skill-desc { font-size: 11.5px; color: var(--text-2); margin-top: 4px; line-height: 1.55; }
-
-/* Skill catalog */
-.agent-catalog { display: flex; flex-direction: column; gap: 14px; }
-.agent-catalog-group { display: flex; flex-direction: column; gap: 8px; }
-.agent-catalog-group-head {
-  font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
-  color: var(--text-3); text-transform: uppercase;
-  display: flex; align-items: center; gap: 6px;
-}
-.agent-catalog-items { display: flex; flex-direction: column; gap: 6px; }
-.agent-catalog-item {
-  background: var(--surface-2); border: 1px solid var(--border);
-  border-radius: 8px; padding: 8px 10px;
-}
-.agent-catalog-head { display: flex; align-items: center; gap: 8px; }
-.agent-catalog-path {
-  margin-top: 4px; font-size: 10.5px; color: var(--text-4);
-}
-.catalog-add-btn {
-  margin-left: auto; font-size: 13px; font-weight: 600;
-}
-.catalog-add-btn:disabled {
-  cursor: not-allowed; color: var(--emerald, #10A37F);
-  background: var(--surface-3); opacity: 0.7;
-}
-.catalog-add-btn:disabled:hover {
-  background: var(--surface-3); color: var(--emerald, #10A37F);
-}
 
 .agent-empty-notice {
   border: 1px dashed var(--border-strong); border-radius: 10px;

@@ -27,39 +27,8 @@ export const useAgentsStore = defineStore('agents', () => {
     return updated
   }
 
-  function _replaceAgent(updated: AgentConfig) {
-    const idx = agents.value.findIndex(a => a.id === updated.id)
-    if (idx >= 0) agents.value[idx] = updated
-  }
-
-  async function addSkillBinding(agentId: string, code: string) {
-    const updated = await agentsApi.addSkill(agentId, code)
-    _replaceAgent(updated)
-    return updated
-  }
-
-  async function removeSkillBinding(agentId: string, code: string) {
-    const updated = await agentsApi.removeSkill(agentId, code)
-    _replaceAgent(updated)
-    return updated
-  }
-
-  async function addMcpBinding(agentId: string, mcpId: string) {
-    const updated = await agentsApi.addMcp(agentId, mcpId)
-    _replaceAgent(updated)
-    return updated
-  }
-
-  async function removeMcpBinding(agentId: string, mcpId: string) {
-    const updated = await agentsApi.removeMcp(agentId, mcpId)
-    _replaceAgent(updated)
-    return updated
-  }
-
   return {
     agents, loading, error,
     fetchAgents, saveAgent,
-    addSkillBinding, removeSkillBinding,
-    addMcpBinding, removeMcpBinding,
   }
 })
