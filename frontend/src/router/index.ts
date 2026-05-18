@@ -86,7 +86,7 @@ const router = createRouter({
     {
       path: '/specs',
       name: 'Specs',
-      component: () => import('@/views/stubs/StubSpecs.vue'),
+      component: () => import('@/views/v2/SpecsPage.vue'),
       meta: { requiresAuth: true }
     },
     {
