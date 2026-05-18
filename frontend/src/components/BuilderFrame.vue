@@ -1,12 +1,17 @@
 <template>
   <WorkbenchShell>
     <section class="builder-view">
-      <ShellTopBar />
-      <!-- Legacy slots `center` / `actions` and the `breadcrumbs` prop are
-           preserved on the API to avoid breaking the ~10 pages that wrap
-           themselves in BuilderFrame, but ShellTopBar (v2) replaces the
-           BuilderTopBar visual. Slots are no-ops in v2 chrome until Session 5+
-           rebuilds the per-page action surfaces. -->
+      <!-- Forward both the page breadcrumbs and the #actions slot into the v2
+           topbar so the 7 pages that already wrap themselves in BuilderFrame
+           (Apps / TenantUsers / PlatformTenants / PlatformEnvs / McpToolsPage /
+           OnlineCodingPage / OnlineCodingWorkspacePage) keep their action
+           buttons / chips / workspace toolbars rendered in the topbar. -->
+      <!-- NOTE: the legacy `#center` slot is intentionally NOT forwarded —
+           grep confirms only TopBar-based pages (ChatPage / MarketplacePage)
+           consume `#center`, never BuilderFrame, so there is nothing to wire. -->
+      <ShellTopBar :breadcrumbs="breadcrumbs">
+        <template #actions><slot name="actions" /></template>
+      </ShellTopBar>
       <slot />
     </section>
   </WorkbenchShell>

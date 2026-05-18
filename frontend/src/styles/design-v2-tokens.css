@@ -145,3 +145,29 @@
   --ai-soft-2: rgba(91, 187, 215, 0.18);
   --ai-ring: rgba(91, 187, 215, 0.30);
 }
+
+/* Status badges. Used by ProjectSwitcher stage chips today and reusable for
+   Sessions 3-6 (Projects list cards, Specs status, Apps refresh chips). Scoped
+   under [data-design="v2"] so the legacy chrome remains untouched. */
+[data-design="v2"] .badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0;
+  background: var(--surface-3);
+  color: var(--text-2);
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+[data-design="v2"] .badge-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+[data-design="v2"] .badge-brand { background: var(--brand-soft); color: var(--brand-text); }
+[data-design="v2"] .badge-emerald { background: var(--emerald-bg); color: var(--emerald); }
+[data-design="v2"] .badge-amber { background: var(--amber-bg); color: var(--amber); }
+[data-design="v2"] .badge-rose { background: var(--rose-bg); color: var(--rose); }
+[data-design="v2"] .badge-sky { background: var(--sky-bg); color: var(--sky); }
+[data-design="v2"] .badge-outline { background: transparent; border-color: var(--border-strong); color: var(--text-2); }

@@ -4,6 +4,16 @@ import { useRoute, useRouter } from 'vue-router'
 import { useThemeStore } from '@/stores/theme'
 import ProjectSwitcher from './ProjectSwitcher.vue'
 
+interface BreadcrumbItem {
+  label: string
+  to?: string
+  href?: string
+}
+
+const props = defineProps<{
+  breadcrumbs?: BreadcrumbItem[]
+}>()
+
 const route = useRoute()
 const router = useRouter()
 const theme = useThemeStore()
@@ -31,6 +41,12 @@ const crumbCurrent = computed(() => {
   return CRUMB_LABELS[segs[0]] ?? '页面'
 })
 
+// Pages that wrap themselves in BuilderFrame can pass an explicit breadcrumb
+// array (e.g. `:breadcrumbs="[{ label: '设置' }, { label: '成员管理' }]"`).
+// When non-empty, prefer those over the route-derived label so per-page
+// hierarchy (e.g. 设置 / 成员管理) is preserved.
+const hasCustomCrumbs = computed(() => Array.isArray(props.breadcrumbs) && props.breadcrumbs.length > 0)
+
 // Dispatches the event BuilderCommandPalette.vue listens for (see its
 // onMounted -> window.addEventListener('builder:open-command', show)).
 function openCmdK() {
@@ -47,14 +63,31 @@ const isDark = computed(() => theme.mode === 'dark')
     <ProjectSwitcher />
     <div class="topbar-crumb">
       <span>aPaaS Builder</span>
-      <span class="topbar-crumb-sep">/</span>
-      <span class="topbar-crumb-current">{{ crumbCurrent }}</span>
+      <template v-if="hasCustomCrumbs">
+        <template v-for="(item, idx) in (props.breadcrumbs as BreadcrumbItem[])" :key="idx">
+          <span class="topbar-crumb-sep">/</span>
+          <span
+            :class="idx === (props.breadcrumbs as BreadcrumbItem[]).length - 1 ? 'topbar-crumb-current' : 'topbar-crumb-mid'"
+          >{{ item.label }}</span>
+        </template>
+      </template>
+      <template v-else>
+        <span class="topbar-crumb-sep">/</span>
+        <span class="topbar-crumb-current">{{ crumbCurrent }}</span>
+      </template>
     </div>
     <button class="topbar-search" @click="openCmdK">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
       <span>搜索 · 跳转 · 操作</span>
       <span class="topbar-search-kbd">⌘K</span>
     </button>
+    <!-- Per-page action surface. BuilderFrame forwards its `#actions` slot here
+         so pages (Apps / TenantUsers / PlatformTenants / PlatformEnvs /
+         McpToolsPage / OnlineCodingPage / OnlineCodingWorkspacePage) keep
+         their toolbars rendered in the topbar. -->
+    <div class="topbar-page-actions">
+      <slot name="actions" />
+    </div>
     <div class="topbar-actions">
       <button class="topbar-action" @click="router.push('/tenant-users')">成员管理</button>
       <button class="topbar-action" @click="router.push('/platform-envs')">平台环境</button>
@@ -74,7 +107,13 @@ const isDark = computed(() => theme.mode === 'dark')
 .topbar { display: flex; align-items: center; gap: 12px; padding: 0 20px; height: 48px; background: var(--surface); border-bottom: 1px solid var(--border); position: relative; z-index: 5; }
 .topbar-crumb { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-2); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .topbar-crumb-sep { color: var(--text-4); }
+.topbar-crumb-mid { color: var(--text-2); }
 .topbar-crumb-current { color: var(--text); font-weight: 600; }
+/* Holds per-page action buttons forwarded from BuilderFrame's #actions slot.
+   Sits between the search input and the global icon cluster so page-level
+   buttons (e.g. "新建应用", workspace view-toggle) stay visually grouped. */
+.topbar-page-actions { display: flex; align-items: center; gap: 6px; }
+.topbar-page-actions:empty { display: none; }
 .topbar-search { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); color: var(--text-3); font-size: 12.5px; cursor: pointer; min-width: 240px; transition: border-color 0.12s, background 0.12s; font-family: inherit; }
 .topbar-search:hover { border-color: var(--border-strong); background: var(--surface); }
 .topbar-search-kbd { margin-left: auto; display: inline-flex; align-items: center; gap: 2px; font-family: var(--d-font-mono); font-size: 10.5px; color: var(--text-3); padding: 1px 5px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); }
