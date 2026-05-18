@@ -26,6 +26,6 @@ export interface McpServerListResponse {
 
 export const mcpApi = {
   listServers(): Promise<McpServerListResponse> {
-    return request({ url: '/api/mcp-hub/servers', method: 'get' }).then(r => r.data)
+    return request({ url: '/mcp-hub/servers', method: 'get' }) as unknown as Promise<McpServerListResponse>
   },
 }

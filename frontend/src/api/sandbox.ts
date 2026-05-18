@@ -27,6 +27,6 @@ export interface RuntimeSandboxListResponse {
 
 export const runtimeSandboxApi = {
   list(): Promise<RuntimeSandboxListResponse> {
-    return request({ url: '/online-coding/sandboxes/v2/runtime', method: 'get' }).then(r => r.data)
+    return request({ url: '/online-coding/sandboxes/v2/runtime', method: 'get' }) as unknown as Promise<RuntimeSandboxListResponse>
   },
 }
