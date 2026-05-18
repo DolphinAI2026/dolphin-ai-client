@@ -36,7 +36,9 @@ IMAGE = os.getenv(
     # POST /v2/token 不签 token → buildkit/crane 撞 EOF。apaas-builder repo 已存在
     # 能 push（GET token endpoint 通），用同 repo + 不同 tag 区分 image。
     # 下次让 hub.dfy admin 建 ai-builder/vibe-sandbox 后改回 latest。
-    "hub.dfy.definesys.cn/ai-builder/apaas-builder:vibe-sandbox-20260515",
+    # 2026-05-18 上线："vibe-sandbox-20260515" tag 实际从未 push 到 registry
+    # （pod ImagePullBackOff），新 build vibe-sandbox-20260518 含 node20+python3+pnpm+uv。
+    "hub.dfy.definesys.cn/ai-builder/apaas-builder:vibe-sandbox-20260518",
 )
 POD_PREFIX = "vibe-sandbox-"
 SVC_PREFIX = "vibe-svc-"
@@ -144,6 +146,16 @@ class KubernetesRuntime:
     def svc_name(self, workspace_id: str) -> str:
         return f"{SVC_PREFIX}{workspace_id}".lower().replace("_", "-")[:63]
 
+    def ingress_name(self, workspace_id: str) -> str:
+        return f"vibe-ws-{workspace_id}".lower().replace("_", "-")[:63]
+
+    def ingress_host(self, workspace_id: str) -> str:
+        """公网预览域名 — 阿里云 *.vibe-first.cn 通配指 39.103.201.110 反代到 ingress-nginx。
+        DNS 也要保证子域名只包含 a-z0-9- 且首尾非 -（K8s svc 命名规范一致）。
+        """
+        sub = workspace_id.lower().replace("_", "-").strip("-")
+        return f"{sub}.vibe-first.cn"
+
     async def container_status(self, workspace_id: str) -> Optional[str]:
         """返回 Pod phase，跟 DockerRuntime 的 container_status 对齐：
         Running → "running"，Pending → "created"，Succeeded/Failed → "exited"，None → 不存在
@@ -203,8 +215,9 @@ class KubernetesRuntime:
         status = await self.container_status(workspace_id)
         if status == "running":
             self._touch(workspace_id)
-            # 顺手确保 svc 还在（Pod 重建后 svc 可能也没）
+            # 顺手确保 svc + ingress 还在（Pod 重建后可能也没）
             await self._ensure_service(workspace_id)
+            await self._ensure_ingress(workspace_id)
             return name
 
         # exited 或 unknown 状态：删了重建
@@ -234,8 +247,9 @@ class KubernetesRuntime:
                     else:
                         raise
 
-        # 确保 Service 也在
+        # 确保 Service + Ingress 也在
         await self._ensure_service(workspace_id)
+        await self._ensure_ingress(workspace_id)
 
         # 等 Pod 进 Running（最多 POD_READY_TIMEOUT_SEC）
         ready = await self._wait_pod_running(workspace_id, timeout=POD_READY_TIMEOUT_SEC)
@@ -283,59 +297,98 @@ class KubernetesRuntime:
                     raise
 
 
-    # TODO(vibe-k8s-migration 切方案 B)：加 _ensure_ingress / _delete_ingress
-    #
-    # 背景：原计划走通配 *.vibe-first.cn 单 Ingress + server-snippet 动态 upstream
-    # （deploy/k8s/61-vibe-ingress.yaml 老版本）。2026-05-15 撞 nginx "if is evil"
-    # 限制瘫了整个 ingress-nginx 集群，被 kubectl delete 救场。设计文档
-    # （docs/vibe-k8s-migration/00-design.md L154）明确建议"撞兼容性切方案 B"。
-    #
-    # 方案 B：每个 workspace 创建一条独立 Ingress object：
-    #
-    #     async def _ensure_ingress(self, workspace_id: str) -> None:
-    #         from kubernetes_asyncio import client as k8s_client
-    #         host = f"{workspace_id}.vibe-first.cn"
-    #         svc_name = self.svc_name(workspace_id)
-    #         ingress_spec = k8s_client.V1Ingress(
-    #             metadata=k8s_client.V1ObjectMeta(
-    #                 name=f"vibe-ws-{workspace_id}",
-    #                 namespace=NAMESPACE,
-    #                 labels={"app": "vibe-sandbox", "workspace-id": workspace_id},
-    #                 annotations={
-    #                     "nginx.ingress.kubernetes.io/proxy-buffering": "off",
-    #                     "nginx.ingress.kubernetes.io/proxy-read-timeout": "3600",
-    #                     "nginx.ingress.kubernetes.io/proxy-send-timeout": "3600",
-    #                 },
-    #             ),
-    #             spec=k8s_client.V1IngressSpec(
-    #                 ingress_class_name="nginx",
-    #                 rules=[k8s_client.V1IngressRule(
-    #                     host=host,
-    #                     http=k8s_client.V1HTTPIngressRuleValue(paths=[
-    #                         k8s_client.V1HTTPIngressPath(
-    #                             path="/", path_type="Prefix",
-    #                             backend=k8s_client.V1IngressBackend(
-    #                                 service=k8s_client.V1IngressServiceBackend(
-    #                                     name=svc_name,
-    #                                     port=k8s_client.V1ServiceBackendPort(number=PRIMARY_PREVIEW_PORT),
-    #                                 ),
-    #                             ),
-    #                         ),
-    #                     ]),
-    #                 )],
-    #             ),
-    #         )
-    #         async with k8s_client.ApiClient() as api:
-    #             net = k8s_client.NetworkingV1Api(api)
-    #             try:
-    #                 await net.create_namespaced_ingress(namespace=NAMESPACE, body=ingress_spec)
-    #             except ApiException as e:
-    #                 if e.status != 409:
-    #                     raise
-    #
-    # 调用点：在 ensure_container() 末尾 + _ensure_service() 之后；
-    # 配套 _delete_ingress() 在 remove() 里调用。
-    # RBAC 已含 ingresses create/delete 权限（deploy/k8s/60-vibe-rbac.yaml）。
+    async def _ensure_ingress(self, workspace_id: str) -> None:
+        """方案 B per-workspace Ingress（2026-05-18 实装）。
+
+        host=<ws>.vibe-first.cn → service vibe-svc-<ws>:6173 (PRIMARY_PREVIEW_PORT)。
+        HTTP only — TLS 等 wildcard cert secret 接入再加 spec.tls。
+        idempotent — 已存在直接返回 (409)。
+        """
+        from kubernetes_asyncio import client as k8s_client
+        from kubernetes_asyncio.client.rest import ApiException
+
+        host = self.ingress_host(workspace_id)
+        name = self.ingress_name(workspace_id)
+        svc = self.svc_name(workspace_id)
+
+        annotations = {
+            # dev server WebSocket（vite HMR / next-router）会用 long-lived 连接 + chunked
+            # 必须关 buffering + 拉长 read/send timeout，否则 hot reload 卡顿
+            "nginx.ingress.kubernetes.io/proxy-buffering": "off",
+            "nginx.ingress.kubernetes.io/proxy-read-timeout": "3600",
+            "nginx.ingress.kubernetes.io/proxy-send-timeout": "3600",
+            # vite / webpack-dev-server 头部包含 X-Forwarded-Host 等，必须透传
+            "nginx.ingress.kubernetes.io/configuration-snippet": (
+                "proxy_set_header X-Forwarded-Proto $scheme;\n"
+                "proxy_set_header X-Forwarded-Host $host;\n"
+            ),
+        }
+        # TLS：vibe-first.cn wildcard cert secret 接入后会自动 enable
+        tls_secret = os.getenv("VIBE_INGRESS_TLS_SECRET", "").strip()
+
+        ingress_spec = k8s_client.V1Ingress(
+            metadata=k8s_client.V1ObjectMeta(
+                name=name,
+                namespace=NAMESPACE,
+                labels={"app": "vibe-sandbox", "workspace-id": workspace_id},
+                annotations=annotations,
+            ),
+            spec=k8s_client.V1IngressSpec(
+                ingress_class_name="nginx",
+                rules=[k8s_client.V1IngressRule(
+                    host=host,
+                    http=k8s_client.V1HTTPIngressRuleValue(paths=[
+                        k8s_client.V1HTTPIngressPath(
+                            path="/",
+                            path_type="Prefix",
+                            backend=k8s_client.V1IngressBackend(
+                                service=k8s_client.V1IngressServiceBackend(
+                                    name=svc,
+                                    port=k8s_client.V1ServiceBackendPort(number=PRIMARY_PREVIEW_PORT),
+                                ),
+                            ),
+                        ),
+                    ]),
+                )],
+                tls=([k8s_client.V1IngressTLS(hosts=[host], secret_name=tls_secret)]
+                     if tls_secret else None),
+            ),
+        )
+
+        async with k8s_client.ApiClient() as api:
+            net = k8s_client.NetworkingV1Api(api)
+            try:
+                await net.create_namespaced_ingress(namespace=NAMESPACE, body=ingress_spec)
+                logger.info("created Ingress %s for host %s → svc %s", name, host, svc)
+            except ApiException as e:
+                if e.status == 409:
+                    # 已存在 — patch 更新（svc 改名了的话能跟上）
+                    try:
+                        await net.patch_namespaced_ingress(
+                            name=name, namespace=NAMESPACE, body=ingress_spec
+                        )
+                    except ApiException as patch_e:
+                        if patch_e.status != 404:
+                            logger.warning("patch_ingress %s failed: %s", name, patch_e)
+                else:
+                    raise
+
+    async def _delete_ingress(self, workspace_id: str) -> bool:
+        from kubernetes_asyncio import client as k8s_client
+        from kubernetes_asyncio.client.rest import ApiException
+
+        async with k8s_client.ApiClient() as api:
+            net = k8s_client.NetworkingV1Api(api)
+            try:
+                await net.delete_namespaced_ingress(
+                    name=self.ingress_name(workspace_id), namespace=NAMESPACE
+                )
+                return True
+            except ApiException as e:
+                if e.status == 404:
+                    return False
+                logger.warning("delete_ingress %s failed: %s", workspace_id, e)
+                return False
 
     async def _delete_pod(self, workspace_id: str) -> bool:
         """删 Pod（保留 Service 以便 resume 时复用）。"""
@@ -364,11 +417,12 @@ class KubernetesRuntime:
         return ok
 
     async def remove(self, workspace_id: str, *, force: bool = True) -> bool:
-        """删 Pod + 删 Service（不删 PVC subPath 数据 — 用户数据用文件级 API 单独清理）。"""
+        """删 Pod + Service + Ingress（不删 PVC subPath 数据 — 用户数据用文件级 API 单独清理）。"""
         from kubernetes_asyncio import client as k8s_client
         from kubernetes_asyncio.client.rest import ApiException
 
         await self._delete_pod(workspace_id)
+        await self._delete_ingress(workspace_id)
         async with k8s_client.ApiClient() as api:
             core = k8s_client.CoreV1Api(api)
             try:

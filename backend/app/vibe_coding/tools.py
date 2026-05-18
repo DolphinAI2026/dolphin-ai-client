@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models import VibeCodingThread
 from app.vibe_coding.docker_runtime import get_runtime as get_docker_runtime
+from app.vibe_coding.k8s_runtime import PRIMARY_PREVIEW_PORT
 from app.vibe_coding.workspace import find_workspace, get_repo_dir, resolve_path
 
 logger = logging.getLogger(__name__)
@@ -626,10 +627,12 @@ async def _run_command_k8s(
             _record_background_command(thread.workspace_id, cmd, log_rel)
         except Exception as e:
             logger.warning("记录后台命令失败 (workspace=%s): %s", thread.workspace_id, e)
+        public_url = f"http://{rt.ingress_host(thread.workspace_id)}"
         return (
             f"已在 K8s 沙箱内 detach 后台启动，日志: {log_rel}\n"
             f"等 3-5 秒后用 run_command 'sleep 4 && tail -n 50 {log_rel}' 看启动是否成功。\n"
-            f"再用 http_check 验证服务真起来了。"
+            f"再用 http_check http://localhost:{PRIMARY_PREVIEW_PORT} 验证服务起在 pod 内。\n"
+            f"用户浏览器入口: {public_url} (vibe-first.cn 通配 → ingress 路由到 pod {PRIMARY_PREVIEW_PORT} 端口)"
         )
 
     # 前台 exec — K8s exec 命令是 list[str]，shell 命令包成 sh -c
@@ -740,9 +743,9 @@ async def execute_http_check(args: dict, thread: VibeCodingThread, db: AsyncSess
         return _err("缺少 url")
     timeout = int(args.get("timeout") or 10)
 
-    # docker runtime 下：URL 里 localhost / 127.0.0.1 都是容器视角，host 端 backend 直接 curl
+    # docker / k8s runtime 下：URL 里 localhost / 127.0.0.1 都是容器视角，host 端 backend 直接 curl
     # 是访问不到容器内 dev server 的（容器内的 6173 host 端是 5xxxx 动态映射）。
-    # 走 `docker exec curl` 在容器内自检最准。
+    # 走 `exec curl` 在容器内自检最准。
     runtime = await _resolve_runtime(thread.workspace_id)
     if runtime == "docker":
         rt = get_docker_runtime()
@@ -772,6 +775,46 @@ async def execute_http_check(args: dict, thread: VibeCodingThread, db: AsyncSess
                 body_lines.append(line)
         body = "\n".join(body_lines)[:1000]
         return f"[status {status_code}] {url}\n{body}"
+
+    if runtime == "k8s":
+        # 2026-05-18: K8s 分支 — 之前没写这条 fall through 到 host 分支直接 httpx.get(localhost:6173)
+        # 等于在 ming pod 上访问自己的 6173 → 永远 connection refused → agent hallucinate
+        # "dev server 没起来"。改成在 sandbox pod 内 exec curl，跟 docker 分支同结构。
+        from app.vibe_coding.k8s_runtime import get_k8s_runtime
+        rt = get_k8s_runtime()
+        # pod 状态先 probe — 死 pod 直接报错让 agent 别 hallucinate
+        try:
+            status = await rt.container_status(thread.workspace_id)
+        except Exception:
+            status = None
+        if status != "running":
+            return _err(
+                f"K8s 沙箱 Pod 未 Running（当前: {status or 'NotFound'}），无法 http_check。"
+                f"先 run_command 重新启动 sandbox 或等 ensure_container 完成。"
+            )
+        cmd_str = (
+            f"curl -sS -o /tmp/.http_body --max-time {timeout} "
+            f"-w 'STATUS:%{{http_code}}\\n' "
+            f"{shlex_quote(url)} "
+            f"&& head -c 1000 /tmp/.http_body"
+        )
+        result = await rt.exec(thread.workspace_id, ["sh", "-c", cmd_str], timeout=timeout + 5)
+        if result.returncode != 0 and not result.stdout:
+            return _err(f"请求失败: {result.stderr.strip() or 'unknown'}")
+        status_code = "?"
+        body_lines: list[str] = []
+        for line in result.stdout.splitlines():
+            if line.startswith("STATUS:"):
+                status_code = line[len("STATUS:") :].strip() or "?"
+            else:
+                body_lines.append(line)
+        body = "\n".join(body_lines)[:1000]
+        # 顺带告诉 agent 公网入口 URL，让对话里给用户提的是 vibe-first.cn 不是 localhost
+        public_url = f"http://{rt.ingress_host(thread.workspace_id)}"
+        return (
+            f"[status {status_code}] {url} (pod 内)\n{body}\n"
+            f"[公网入口] 用户在浏览器打开 {public_url} 验证（{PRIMARY_PREVIEW_PORT} 端口已通过 ingress 暴露）"
+        )
 
     # host 模式：原行为
     try:
