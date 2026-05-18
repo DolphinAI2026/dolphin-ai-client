@@ -4,7 +4,7 @@
        Existing chat-page-shell is moved INSIDE <main class="chat-main"> unchanged. -->
   <div class="chat-shell">
     <ChatConversationList
-      v-if="!embedMode"
+      v-if="!embedMode && !isPostDeploy"
       :conversations="v2ConversationItems"
       :current-id="v2CurrentConversationId"
       @open="onV2OpenConversation"
@@ -1161,9 +1161,9 @@
   </div><!-- /chat-page-shell -->
     </main><!-- /chat-main -->
 
-    <!-- v2 redesign (Session 5): right-column SPEC blueprint. -->
+    <!-- v2 redesign (Session 5): right-column SPEC blueprint (pre-deploy only). -->
     <AppBlueprintPanel
-      v-if="!embedMode"
+      v-if="!embedMode && !isPostDeploy"
       :models="blueprintSpec.models"
       :forms="blueprintSpec.forms"
       :flows="blueprintSpec.flows"
@@ -1172,6 +1172,12 @@
       :industry-pack-name="currentIndustryPack?.name"
       :industry-object-count="currentIndustryPack?.objectCount"
       @deploy="openDeployModal"
+    />
+    <!-- 2026-05-19 post-deploy 形态：右侧改成配置助手，聊增量调整 -->
+    <ConfigAssistantPanel
+      v-else-if="!embedMode && isPostDeploy && store.currentApp?.id"
+      :application-id="Number(store.currentApp.id)"
+      :app-name="builderAppDisplayName || ''"
     />
   </div><!-- /chat-shell -->
 
@@ -1273,6 +1279,7 @@ import SpecInspector from '@/components/spec/SpecInspector.vue'
 // Existing center content unchanged; new components are pure presentation, no logic.
 import ChatConversationList from '@/components/v2/ChatConversationList.vue'
 import AppBlueprintPanel from '@/components/v2/AppBlueprintPanel.vue'
+import ConfigAssistantPanel from '@/components/v2/ConfigAssistantPanel.vue'
 import DeployConfirmModal from '@/components/v2/DeployConfirmModal.vue'
 import { buildBlueprintSpec } from '@/views/chat/blueprint-adapter'
 
@@ -1656,6 +1663,12 @@ const isPlatformDeployed = computed(() =>
   !!store.currentApp?.apaas_app_id ||
   store.currentApp?.status === 'completed'
 )
+// 2026-05-19 post-deploy 布局判定：当前应用已挂到 aPaaS（拿到 apaas_app_id）即视为
+// 进入"配置助手"形态——左侧对话列表和右侧蓝图 panel 在这种状态下信息冗余，
+// 改为 iframe 全宽 + 右侧 ConfigAssistantPanel 聊增量调整。pre-deploy 阶段保持
+// 老的 3 列蓝图同步布局。判断仅依据 apaas_app_id（不依赖 deployAllDone — 后者只
+// 在本 session 跑过部署流程才为 true，刷新页面后会丢）。
+const isPostDeploy = computed(() => !!store.currentApp?.apaas_app_id)
 const isAppOnline = computed(() =>
   currentRemoteStatus.value === 'ENABLE' ||
   currentRemoteStatus.value === '已上线'
