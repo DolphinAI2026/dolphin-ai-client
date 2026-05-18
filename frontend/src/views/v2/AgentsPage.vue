@@ -13,8 +13,10 @@ import { ElMessage } from 'element-plus'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
 import ShellTopBar from '@/components/v2/ShellTopBar.vue'
 import { useAgentsStore } from '@/stores/agents'
+import { useSkillCatalogStore } from '@/stores/skillCatalog'
 import { llmConfigApi } from '@/api/llmConfig'
 import type { AgentConfig as ApiAgentConfig } from '@/api/agents'
+import type { SkillCatalogItem } from '@/api/skillCatalog'
 
 interface McpServer {
   id: string
@@ -69,6 +71,7 @@ const INDUSTRY_PACKS: IndustryPack[] = [
 
 const router = useRouter()
 const agentsStore = useAgentsStore()
+const skillCatalogStore = useSkillCatalogStore()
 
 // Fallback empty agent so the template never blows up while the first
 // list() request is in-flight (or fails). Once the store has data, `cur`
@@ -216,10 +219,40 @@ function onRemoveSpecTemplate(t: string) {
 function gotoMcp() { router.push('/mcp') }
 function gotoIndustry() { router.push('/industry') }
 
+// Catalog: groupings + display labels
+const CATEGORY_LABEL: Record<string, string> = {
+  platform: '平台 CRUD',
+  component: '组件构建',
+  orchestrator: '编排',
+  general: '通用',
+}
+const catalogGroups = computed<Array<{ category: string; label: string; skills: SkillCatalogItem[] }>>(() => {
+  const map = skillCatalogStore.byCategory
+  const order = ['platform', 'component', 'orchestrator', 'general']
+  const seen = new Set<string>()
+  const out: Array<{ category: string; label: string; skills: SkillCatalogItem[] }> = []
+  for (const k of order) {
+    if (map[k]?.length) {
+      out.push({ category: k, label: CATEGORY_LABEL[k] || k, skills: map[k] })
+      seen.add(k)
+    }
+  }
+  for (const k of Object.keys(map)) {
+    if (!seen.has(k) && map[k]?.length) {
+      out.push({ category: k, label: CATEGORY_LABEL[k] || k, skills: map[k] })
+    }
+  }
+  return out
+})
+function onAddCatalogSkill(s: SkillCatalogItem) {
+  ElMessage.info(`已添加「${s.name}」(mock，待 binding API)`)
+}
+
 onMounted(async () => {
   await Promise.all([
     agentsStore.fetchAgents(),
     loadRealModels(),
+    skillCatalogStore.fetchCatalog(),
   ])
   // Default-select first agent if `builder` not present.
   if (agentsStore.agents.length && !agentsStore.agents.find(a => a.id === selectedId.value)) {
@@ -374,6 +407,42 @@ const knowledgeEmptyHint = computed(() =>
                     <button class="icon-btn icon-btn-sm" title="移除" @click="onRemoveSkill(s)" v-html="renderIcon('trash', 11)" />
                   </div>
                   <div class="agent-skill-desc">{{ s.desc }}</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Skill catalog card — Phase B: real callable skills from app/skills/ -->
+            <div class="card card-pad">
+              <div class="agent-section-head">
+                <span>可用 Skill 库 <span class="agent-section-count">{{ skillCatalogStore.skills.length }} 个</span></span>
+                <span title="来自 backend/app/skills/ 真实可调用函数（lazy-discover）">
+                  <span class="term-mark">?</span>
+                </span>
+              </div>
+              <div v-if="skillCatalogStore.loading && !skillCatalogStore.skills.length" class="agent-empty">
+                正在扫描 Skill 库…
+              </div>
+              <div v-else-if="!skillCatalogStore.skills.length" class="agent-empty">
+                Skill 库为空（后端未发现可调用 skill）
+              </div>
+              <div v-else class="agent-catalog">
+                <div v-for="grp in catalogGroups" :key="grp.category" class="agent-catalog-group">
+                  <div class="agent-catalog-group-head">
+                    {{ grp.label }}
+                    <span class="agent-section-count">{{ grp.skills.length }}</span>
+                  </div>
+                  <div class="agent-catalog-items">
+                    <div v-for="s in grp.skills" :key="s.code" class="agent-catalog-item">
+                      <div class="agent-catalog-head">
+                        <code class="mono agent-skill-code">{{ s.code }}</code>
+                        <span class="agent-skill-name">{{ s.name }}</span>
+                        <span v-if="s.is_async" class="badge">async</span>
+                        <button class="icon-btn icon-btn-sm catalog-add-btn" title="添加到当前 Agent" @click="onAddCatalogSkill(s)">+</button>
+                      </div>
+                      <div class="agent-skill-desc">{{ s.desc }}</div>
+                      <div class="agent-catalog-path mono">{{ s.callable_path }}</div>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -615,6 +684,27 @@ const knowledgeEmptyHint = computed(() =>
 }
 .agent-skill-name { font-size: 12.5px; font-weight: 600; color: var(--text); }
 .agent-skill-desc { font-size: 11.5px; color: var(--text-2); margin-top: 4px; line-height: 1.55; }
+
+/* Skill catalog */
+.agent-catalog { display: flex; flex-direction: column; gap: 14px; }
+.agent-catalog-group { display: flex; flex-direction: column; gap: 8px; }
+.agent-catalog-group-head {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
+  color: var(--text-3); text-transform: uppercase;
+  display: flex; align-items: center; gap: 6px;
+}
+.agent-catalog-items { display: flex; flex-direction: column; gap: 6px; }
+.agent-catalog-item {
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 10px;
+}
+.agent-catalog-head { display: flex; align-items: center; gap: 8px; }
+.agent-catalog-path {
+  margin-top: 4px; font-size: 10.5px; color: var(--text-4);
+}
+.catalog-add-btn {
+  margin-left: auto; font-size: 13px; font-weight: 600;
+}
 
 /* MCP rows */
 .agent-mcps { display: flex; flex-direction: column; gap: 8px; }
