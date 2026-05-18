@@ -44,6 +44,7 @@ from app.routes import (
     requirements,
     runtime_v2,
     sandboxes,
+    skill_catalog,
     spec,
     specs_v2,
     sse,
@@ -203,6 +204,7 @@ app.include_router(agents_config.router, prefix="/api")
 app.include_router(industry.router, prefix="/api")
 app.include_router(specs_v2.router, prefix="/api")
 app.include_router(runtime_v2.router, prefix="/api")
+app.include_router(skill_catalog.router, prefix="/api")
 # 平台代理路由注册在根路径（/platform/... 和 /backend/... 需要直接匹配）
 app.include_router(platform_proxy.router)
 
