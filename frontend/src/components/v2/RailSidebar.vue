@@ -1,20 +1,66 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
+import { useProjectStore } from '@/stores/project'
+import { useMcpStore } from '@/stores/mcp'
+import { useRuntimeDeploymentStore } from '@/stores/runtimeDeployment'
 
 interface NavItem { key: string; label: string; icon: string; path: string; badge?: number }
 interface NavGroup { group: string; items: NavItem[] }
 
-const NAV: NavGroup[] = [
+defineProps<{ collapsed?: boolean }>()
+const route = useRoute()
+const router = useRouter()
+const user = useUserStore()
+const projectStore = useProjectStore()
+const mcpStore = useMcpStore()
+const runtimeStore = useRuntimeDeploymentStore()
+
+// Lazy counts that don't have dedicated stores. undefined → hide badge.
+const appCount = ref<number | undefined>(undefined)
+const codingWorkspaceCount = ref<number | undefined>(undefined)
+
+onMounted(async () => {
+  // Hydrate stores that aren't already loaded. Use optional chaining so missing
+  // actions (e.g. when a sibling agent hasn't added it yet) don't crash the rail.
+  if (!projectStore.projects.length) {
+    try { await (projectStore as any).fetchProjects?.() } catch { /* badge stays 0 → hidden */ }
+  }
+  if (!mcpStore.servers.length) {
+    try { await (mcpStore as any).fetchServers?.() } catch { /* badge stays 0 → hidden */ }
+  }
+  if (!runtimeStore.total) {
+    try { await (runtimeStore as any).fetchDeployments?.() } catch { /* badge stays 0 → hidden */ }
+  }
+  // App count — dynamic import keeps initial bundle slim and avoids breaking if API surface shifts.
+  try {
+    const { applicationApi } = await import('@/api/application')
+    const apps: any = (await applicationApi.list?.({ include_remote: false } as any)) ?? []
+    appCount.value = Array.isArray(apps) ? apps.length : (apps?.items?.length ?? apps?.total ?? 0)
+  } catch {
+    appCount.value = undefined
+  }
+  // Coding workspaces — coding store keeps single active workspace, not a list. Hit the API directly.
+  try {
+    const { codingApi } = await import('@/api/coding')
+    const wss: any = (await (codingApi as any).listWorkspaces?.()) ?? []
+    codingWorkspaceCount.value = Array.isArray(wss) ? wss.length : (wss?.items?.length ?? wss?.total ?? 0)
+  } catch {
+    codingWorkspaceCount.value = undefined
+  }
+})
+
+// `v-if="it.badge"` falsy-hides 0/undefined, so we feed `undefined` when there's nothing meaningful.
+const NAV = computed<NavGroup[]>(() => [
   { group: '搭建', items: [
-    { key: 'home',     label: '新建',           icon: 'home',  path: '/' },
-    { key: 'projects', label: '项目',           icon: 'bldg',  path: '/projects', badge: 4 },
-    { key: 'apps',     label: '应用',           icon: 'apps',  path: '/apps', badge: 6 },
-    { key: 'chat',     label: '睿鲸 AI Builder', icon: 'chat', path: '/chat' },
+    { key: 'home',     label: '新建',            icon: 'home',  path: '/' },
+    { key: 'projects', label: '项目',            icon: 'bldg',  path: '/projects', badge: projectStore.projects.length || undefined },
+    { key: 'apps',     label: '应用',            icon: 'apps',  path: '/apps', badge: appCount.value || undefined },
+    { key: 'chat',     label: '睿鲸 AI Builder', icon: 'chat',  path: '/chat' },
   ]},
   { group: '开发', items: [
-    { key: 'coding', label: '睿鲸 AI Coding', icon: 'whale', path: '/coding', badge: 1 },
+    { key: 'coding', label: '睿鲸 AI Coding', icon: 'whale', path: '/coding', badge: codingWorkspaceCount.value || undefined },
     { key: 'vibe',   label: 'Vibe Coding',    icon: 'code',  path: '/vibe' },
   ]},
   { group: '知识 & 智能体', items: [
@@ -22,18 +68,13 @@ const NAV: NavGroup[] = [
     { key: 'specs',       label: '设计文档',   icon: 'doc',      path: '/specs' },
     { key: 'industry',    label: '行业知识库', icon: 'industry', path: '/industry' },
     { key: 'marketplace', label: '组件市场',   icon: 'store',    path: '/marketplace' },
-    { key: 'mcp',         label: 'MCP 管理',   icon: 'mcp',      path: '/mcp', badge: 8 },
+    { key: 'mcp',         label: 'MCP 管理',   icon: 'mcp',      path: '/mcp', badge: mcpStore.total || undefined },
   ]},
   { group: '管理', items: [
-    { key: 'runtime', label: '运行与发布', icon: 'cloud', path: '/runtime', badge: 3 },
+    { key: 'runtime', label: '运行与发布', icon: 'cloud', path: '/runtime', badge: runtimeStore.total || undefined },
     { key: 'admin',   label: '平台管理',   icon: 'admin', path: '/admin/tenants' },
   ]},
-]
-
-defineProps<{ collapsed?: boolean }>()
-const route = useRoute()
-const router = useRouter()
-const user = useUserStore()
+])
 
 const isActive = (path: string) => {
   if (path === '/') return route.path === '/'

@@ -108,12 +108,10 @@ const router = createRouter({
       meta: { requiresAuth: true }
     },
     {
-      // /vibe — high-fidelity static IDE mockup (P2). Real code-server
-      // iframe is the existing /vibe-coding page, which stays untouched.
+      // /vibe — redirects to the real Vibe Coding workspace catalog
+      // (code-server iframe + AI chat lives at /vibe-coding).
       path: '/vibe',
-      name: 'Vibe',
-      component: () => import('@/views/v2/VibePage.vue'),
-      meta: { requiresAuth: true }
+      redirect: '/vibe-coding'
     },
     {
       path: '/workspace-catalog',
