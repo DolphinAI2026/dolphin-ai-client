@@ -12,6 +12,7 @@ page handles the response shape unchanged).
 from __future__ import annotations
 
 import logging
+import re
 from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends
@@ -21,6 +22,39 @@ from app.deps import get_auth_context, AuthContext
 from app.routes.admin_mcp import _V2_TOOL_PATHS, _fetch_tools_from
 
 logger = logging.getLogger(__name__)
+
+
+def _clean_error_message(err: str | Exception) -> str:
+    """Strip HTML tags + collapse whitespace from raw exception strings.
+
+    Backend may receive nginx 404 HTML when the cluster route is missing;
+    we never want that leaking into UI error fields.
+    """
+    text = str(err)[:300]
+    # Strip HTML tags
+    text = re.sub(r"<[^>]+>", " ", text)
+    # Collapse whitespace
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:200]
+
+
+def _looks_like_cluster_unreachable(err: Exception, err_text: str) -> bool:
+    """Heuristic: is this error a 'cluster not reachable / not configured' (dev mode)
+    rather than a real per-server fault?
+
+    Indicators: connect-refused / DNS / nginx 404 default page / generic Not Found.
+    """
+    s = err_text.lower()
+    raw = str(err).lower()
+    if "connection" in s or "name resolution" in s or "dns" in s:
+        return True
+    if "unreachable" in s or "name or service not known" in s:
+        return True
+    if "404" in s and "nginx" in s:
+        return True
+    if "not found" in s and ("html" in s or "<" in raw):
+        return True
+    return False
 
 router = APIRouter(prefix="/api/mcp-hub", tags=["mcp-hub"])
 
@@ -119,11 +153,17 @@ async def list_servers(
             err: Optional[str] = None
             connected += 1
         except Exception as e:  # noqa: BLE001 - we want to surface any failure as per-server error
-            logger.warning("mcp-hub: fetch tools failed for %s: %s", path, e)
+            err_text = _clean_error_message(e)
+            logger.warning("mcp-hub: fetch tools failed for %s: %s", path, err_text)
             tool_count = 0
-            status = "error"
-            err = str(e)[:200]
-            errors += 1
+            if _looks_like_cluster_unreachable(e, err_text):
+                # Local dev / cluster not configured — treat as "disabled" not "error".
+                status = "disabled"
+                err = "本地未接入 v2 MCP cluster (dev 模式)"
+            else:
+                status = "error"
+                err = err_text
+                errors += 1
 
         servers.append(
             McpServer(
