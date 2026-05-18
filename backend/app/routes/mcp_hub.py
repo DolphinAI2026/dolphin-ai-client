@@ -18,10 +18,69 @@ from typing import Annotated, Optional
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
+from app.ai_chat import mcp_bridge
 from app.deps import get_auth_context, AuthContext
 from app.routes.admin_mcp import _V2_TOOL_PATHS, _fetch_tools_from
 
 logger = logging.getLogger(__name__)
+
+
+# 2026-05-19: 本机 MCP server (mcp_server.py 80 工具) 作为第 1 条 server 暴露给
+# /mcp 管理页。之前 mcp_hub 只 discover v2 cluster 路径，本机 dev 8000 端口实际
+# 跑的真 MCP 完全没体现 — 页面显示 2 个 placeholder 0 工具，dev 体验崩。
+_LOCAL_SERVER_META: dict = {
+    "id": "local-mcp-server",
+    "name": "本地 MCP Server (dev)",
+    "code": "local-mcp-server",
+    "transport": "http",
+    "endpoint": "/api/mcp/mcp",
+    "version": "local-dev",
+    "official": False,
+    "tags": ["本地", "dev"],
+    "desc": "ai-builder backend 内嵌 FastMCP — ai_chat / cowork agent 实际在调的工具集（80 个）。",
+}
+
+
+async def _build_local_server() -> McpServer:
+    """从 mcp_bridge.ensure_loaded() 拉真实工具数构建本地 server 条目。
+
+    失败时降级为 status=error 但不抛 — 整个 /servers 不能因为本地探活挂掉。
+    """
+    try:
+        loaded = await mcp_bridge.ensure_loaded()
+        tools = loaded.get("tools") or []
+        error = loaded.get("error")
+        tool_count = len(tools)
+        if error or tool_count == 0:
+            status = "error"
+            err = error or "本地 MCP 工具数为 0"
+        else:
+            status = "connected"
+            err = None
+    except Exception as e:  # noqa: BLE001
+        err_text = _clean_error_message(e)
+        logger.warning("mcp-hub: local mcp_bridge ensure_loaded failed: %s", err_text)
+        tool_count = 0
+        status = "error"
+        err = err_text
+
+    meta = _LOCAL_SERVER_META
+    return McpServer(
+        id=meta["id"],
+        name=meta["name"],
+        code=meta["code"],
+        status=status,
+        transport=meta["transport"],
+        endpoint=meta["endpoint"],
+        tools=tool_count,
+        last_used=None,
+        usage=0,
+        version=meta["version"],
+        tags=meta["tags"],
+        desc=meta["desc"],
+        official=meta["official"],
+        error=err,
+    )
 
 
 def _clean_error_message(err: str | Exception) -> str:
@@ -143,6 +202,15 @@ async def list_servers(
     servers: list[McpServer] = []
     connected = 0
     errors = 0
+
+    # 2026-05-19: 本机 MCP server 永远是 servers[0]，保留 v2 placeholder 在后
+    # 作为 catalog（v2 cluster 不可达时显示 disabled，可达时显示真工具数）。
+    local_server = await _build_local_server()
+    servers.append(local_server)
+    if local_server.status == "connected":
+        connected += 1
+    elif local_server.status == "error":
+        errors += 1
 
     for path in _V2_TOOL_PATHS:
         meta = _meta_for_path(path)
