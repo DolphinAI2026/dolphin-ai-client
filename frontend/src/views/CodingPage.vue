@@ -594,6 +594,112 @@
           </div>
         </template>
       </aside>
+
+      <!-- v2 redesign: 右侧产物清单 + 接入说明面板
+           替代「不可能实现的实时预览」。低代码自开发组件不支持平台内预览，
+           只能通过编译打包 → 发布到组件市场 → 在表单设计器引用的流程上线。 -->
+      <aside
+        v-if="showCodingArtifactPanel"
+        class="coding-artifact-panel"
+      >
+        <div class="cap-note">
+          提示：低代码自开发组件不支持实时预览。生成产物会发布到组件市场，在表单设计器中引用。
+        </div>
+        <div class="cap-tabs">
+          <button
+            type="button"
+            class="cap-tab"
+            :class="{ active: codingArtifactTab === 'files' }"
+            @click="codingArtifactTab = 'files'"
+          >产物清单</button>
+          <button
+            type="button"
+            class="cap-tab"
+            :class="{ active: codingArtifactTab === 'integrate' }"
+            @click="codingArtifactTab = 'integrate'"
+          >接入说明</button>
+        </div>
+
+        <!-- 产物清单 tab -->
+        <div v-if="codingArtifactTab === 'files'" class="cap-scroll">
+          <template v-if="codingArtifactsHasAny">
+            <template v-if="codingArtifacts.new.length > 0">
+              <div class="cap-section-head">
+                <span class="cap-badge cap-badge-emerald">新增 {{ codingArtifacts.new.length }}</span>
+              </div>
+              <div
+                v-for="(f, idx) in codingArtifacts.new"
+                :key="'cn-' + idx + '-' + f.path"
+                class="cap-file"
+              >
+                <span class="cap-file-path" :title="f.path">{{ f.path }}</span>
+                <span class="cap-file-size">{{ f.size }}</span>
+                <span class="cap-file-diff">
+                  <span class="add">+{{ f.diffAdd }}</span>
+                  <span v-if="f.diffDel > 0" class="del">-{{ f.diffDel }}</span>
+                </span>
+                <span v-if="f.writing" class="cap-spinner" aria-hidden="true" />
+                <span v-else class="cap-badge cap-badge-new">NEW</span>
+              </div>
+            </template>
+            <template v-if="codingArtifacts.modified.length > 0">
+              <div class="cap-section-head">
+                <span class="cap-badge cap-badge-amber">修改 {{ codingArtifacts.modified.length }}</span>
+              </div>
+              <div
+                v-for="(f, idx) in codingArtifacts.modified"
+                :key="'cm-' + idx + '-' + f.path"
+                class="cap-file"
+              >
+                <span class="cap-file-path" :title="f.path">{{ f.path }}</span>
+                <span class="cap-file-size">{{ f.size }}</span>
+                <span class="cap-file-diff">
+                  <span class="add">+{{ f.diffAdd }}</span>
+                  <span v-if="f.diffDel > 0" class="del">-{{ f.diffDel }}</span>
+                </span>
+                <span v-if="f.writing" class="cap-spinner" aria-hidden="true" />
+              </div>
+            </template>
+          </template>
+          <div v-else class="cap-empty">
+            <p>暂无产物。</p>
+            <p class="cap-empty-hint">在左侧对话区描述需求，AI 会自动写入文件，产物会出现在这里。</p>
+          </div>
+        </div>
+
+        <!-- 接入说明 tab -->
+        <div v-else class="cap-scroll">
+          <div class="cap-guide">
+            <div class="cap-guide-step">
+              <div class="cap-guide-num">1</div>
+              <div>
+                <div class="cap-guide-title">编译打包</div>
+                <div class="cap-guide-desc">
+                  运行 <code>npm run build:component</code> 生成 UMD bundle。
+                </div>
+              </div>
+            </div>
+            <div class="cap-guide-step">
+              <div class="cap-guide-num">2</div>
+              <div>
+                <div class="cap-guide-title">发布到组件市场</div>
+                <div class="cap-guide-desc">
+                  通过 CI 流水线发布到当前租户的组件市场，发布后绑定到自开发组件库。
+                </div>
+              </div>
+            </div>
+            <div class="cap-guide-step">
+              <div class="cap-guide-num">3</div>
+              <div>
+                <div class="cap-guide-title">在表单设计器中引用</div>
+                <div class="cap-guide-desc">
+                  在表单设计器的「自开发组件」面板中按 <code>code</code> 引用。
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </aside>
     </div>
   </BuilderFrame>
 
@@ -832,6 +938,77 @@ function streamCustom(message: AgentMessage): { sm: any; isLast: boolean } {
   const meta = (message.meta || {}) as { streamMsg?: any; isLast?: boolean }
   return { sm: meta.streamMsg || {}, isLast: !!meta.isLast }
 }
+
+// ── v2 redesign: 产物清单 / 接入说明 面板 ──
+// 把 streamMessages 里的 file_write / file_edit 整成 new/modified 两组，
+// 提供给右侧 CodingArtifactPanel 渲染。最后一条 file_write 在 isStreaming
+// 时视为「正在写入」展示 spinner。
+const codingArtifactTab = ref<'files' | 'integrate'>('files')
+
+function _formatSize(content: string | undefined | null): string {
+  const bytes = content ? new Blob([content]).size : 0
+  if (bytes < 1024) return `${bytes} B`
+  return `${(bytes / 1024).toFixed(1)} KB`
+}
+
+interface CodingArtifactItem {
+  path: string
+  size: string
+  diffAdd: number
+  diffDel: number
+  writing?: boolean
+}
+
+const codingArtifacts = computed<{ new: CodingArtifactItem[]; modified: CodingArtifactItem[]; writingPath: string | null }>(() => {
+  const list = streamMessages.value || []
+  const newMap = new Map<string, CodingArtifactItem>()
+  const modMap = new Map<string, CodingArtifactItem>()
+  let writingPath: string | null = null
+
+  for (let i = 0; i < list.length; i++) {
+    const m = list[i] as any
+    if (!m || (m.type !== 'file_write' && m.type !== 'file_edit')) continue
+    const path = (m.fileName || '').trim()
+    if (!path) continue
+    const content = m.fileContent || ''
+    // 粗略 diff：write = 全新增，edit = 行数估算
+    const lines = content ? content.split('\n').length : 0
+    const item: CodingArtifactItem = {
+      path,
+      size: _formatSize(content),
+      diffAdd: m.type === 'file_write' ? lines : Math.max(1, Math.floor(lines * 0.6)),
+      diffDel: m.type === 'file_write' ? 0 : Math.max(0, Math.floor(lines * 0.2)),
+    }
+    if (m.type === 'file_write') {
+      newMap.set(path, item)
+    } else {
+      // 若 same path 之前是 write，仍归到 new（首次写入优先）
+      if (!newMap.has(path)) modMap.set(path, item)
+    }
+    // 最后一条且仍在 streaming → 当前正在写入
+    if (isStreaming.value && i === list.length - 1) {
+      writingPath = path
+      item.writing = true
+    }
+  }
+
+  return {
+    new: Array.from(newMap.values()),
+    modified: Array.from(modMap.values()),
+    writingPath,
+  }
+})
+
+const codingArtifactsHasAny = computed(() =>
+  codingArtifacts.value.new.length > 0 || codingArtifacts.value.modified.length > 0
+)
+
+// 是否显示产物面板：有 workspace 且非嵌入模式（嵌入模式已有自己的 panel）
+const showCodingArtifactPanel = computed(() => {
+  if (embeddedAppId.value) return false
+  if (!codingStore.workspace && streamMessages.value.length === 0) return false
+  return true
+})
 
 // ── 左侧 SessionSidebar 适配 ──
 const sidebarCodingItems = computed<SidebarSessionItem[]>(() =>
@@ -3882,6 +4059,213 @@ watch(() => route.path, () => {
 
 @keyframes composer-submit-spin {
   to { transform: rotate(360deg); }
+}
+
+/* ============ v2 redesign: 产物清单 + 接入说明侧板 ============ */
+.coding-artifact-panel {
+  width: 380px;
+  flex-shrink: 0;
+  background: var(--surface, #fff);
+  border-left: 1px solid var(--border, #e5e5ea);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+.cap-note {
+  padding: 10px 14px;
+  background: var(--ai-soft);
+  color: var(--ai-text);
+  font-size: 12px;
+  border-bottom: 1px solid var(--ai-soft-2);
+  line-height: 1.55;
+}
+.cap-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border, #e5e5ea);
+  padding: 0 8px;
+  flex-shrink: 0;
+}
+.cap-tab {
+  height: 36px;
+  padding: 0 12px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-2, #4f4a6e);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.cap-tab:hover {
+  color: var(--text, #1a1525);
+}
+.cap-tab.active {
+  color: var(--brand-text);
+  border-bottom-color: var(--brand, #6366f1);
+}
+.cap-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+}
+.cap-section-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-3, #837ea0);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 6px 4px;
+  margin-top: 8px;
+}
+.cap-section-head:first-child {
+  margin-top: 0;
+}
+.cap-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  padding: 0 8px;
+  border-radius: 9px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+.cap-badge-emerald {
+  background: var(--emerald-bg, rgba(16, 163, 127, 0.10));
+  color: var(--emerald, #10A37F);
+}
+.cap-badge-amber {
+  background: rgba(245, 158, 11, 0.12);
+  color: #B45309;
+}
+.cap-badge-new {
+  background: var(--emerald-bg, rgba(16, 163, 127, 0.10));
+  color: var(--emerald, #10A37F);
+  font-size: 9.5px;
+  letter-spacing: 0.05em;
+  height: 16px;
+  padding: 0 6px;
+}
+.cap-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--surface-2, #FAF9FD);
+  margin-bottom: 6px;
+  border: 1px solid transparent;
+  transition: border-color 0.15s ease;
+}
+.cap-file:hover {
+  border-color: var(--border, #e5e5ea);
+}
+.cap-file-path {
+  flex: 1;
+  font-family: var(--d-font-mono, "JetBrains Mono", "SF Mono", "Menlo", "Consolas", monospace);
+  font-size: 11.5px;
+  color: var(--text, #1a1525);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cap-file-size {
+  font-size: 10.5px;
+  color: var(--text-3, #837ea0);
+  font-family: var(--d-font-mono, monospace);
+  flex-shrink: 0;
+}
+.cap-file-diff {
+  font-size: 10.5px;
+  font-family: var(--d-font-mono, monospace);
+  flex-shrink: 0;
+}
+.cap-file-diff .add {
+  color: var(--emerald, #10A37F);
+}
+.cap-file-diff .del {
+  color: var(--rose, #DC2626);
+  margin-left: 4px;
+}
+.cap-spinner {
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--brand, #6366f1);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: capSpin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes capSpin {
+  to { transform: rotate(360deg); }
+}
+.cap-empty {
+  text-align: center;
+  padding: 40px 16px;
+  color: var(--text-3, #837ea0);
+  font-size: 12px;
+}
+.cap-empty p {
+  margin: 0;
+}
+.cap-empty-hint {
+  margin-top: 8px !important;
+  font-size: 11px;
+  line-height: 1.55;
+}
+.cap-guide {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 4px;
+}
+.cap-guide-step {
+  background: var(--surface-2, #FAF9FD);
+  border: 1px solid var(--border, #e5e5ea);
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex;
+  gap: 10px;
+}
+.cap-guide-num {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--brand-soft);
+  color: var(--brand-text);
+  font-size: 11px;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+.cap-guide-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text, #1a1525);
+}
+.cap-guide-desc {
+  font-size: 11.5px;
+  color: var(--text-2, #4f4a6e);
+  margin-top: 4px;
+  line-height: 1.55;
+}
+.cap-guide-desc code {
+  font-family: var(--d-font-mono, monospace);
+  background: var(--code-bg, #F6F4FB);
+  color: var(--code-text, #4F4A6E);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 11px;
 }
 </style>
 
