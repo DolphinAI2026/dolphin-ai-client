@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json
 import logging
+import re
 from datetime import datetime
 from typing import Annotated, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
@@ -18,6 +19,7 @@ from app.permissions import has_org_permission, check_resource_permission, batch
 from jose import JWTError, jwt
 from app.config import settings, APP_DEPLOY_ABSTRACT
 from app.apaas_client import APaaSClient
+from app.llm_client import LLMClient
 from app.crypto import decrypt_password
 from app.json_utils import loads_if_str
 from app.error_messages import (
@@ -2118,4 +2120,176 @@ async def deploy_status(
         progress=progress,
         error=error,
         app_id=app.id,
+    )
+
+
+# ============================================================================
+# /chat?app_id=X 部署后配置助手 — 自然语言 → ChangePlan 草案
+# ----------------------------------------------------------------------------
+# 用户在 /chat?app_id=X 看着 apaas iframe（已部署应用），右侧 ConfigAssistantPanel
+# 用自然语言描述想做的调整 (例: "把人员档案的电话改成必填")。本 endpoint:
+#   1. 拉 app 当前 SPEC (requirement_doc / canonical_spec markdown)
+#   2. 调 LLM 把用户意图 → 人话回复 + (可选) ChangePlan JSON
+#   3. 返回 reply / change_plan / actions_summary
+# 真正执行改动走 incremental_update 链路 (`/{app_id}/incremental/preview` +
+# `/{app_id}/incremental/execute`)，本 endpoint 只生成草案，不直接改后端。
+#
+# 当前版本：先接 LLM，但 ChangePlan 解析为最小可用 (从 ```json``` 块抽 JSON)。
+# TODO: 后续把 SpecAgent / incremental_update 的 diff 生成抽公共方法复用，
+#       让 change_plan 字段直接对齐 incremental_update.SelectedChange schema。
+# ============================================================================
+
+
+class ConfigChatReq(BaseModel):
+    message: str  # 本轮用户自然语言诉求
+    history: list[dict] = []  # 之前的对话 [{role: 'user'|'assistant', content: str}]
+
+
+class ConfigChatResp(BaseModel):
+    reply: str  # AI 自然语言回复 (给用户看的解释)
+    change_plan: dict | None = None  # 草拟的 ChangePlan 结构，None 表示未生成
+    requires_confirmation: bool = False  # true 时前端要弹 diff 卡 + 确认按钮
+    actions_summary: list[str] = []  # 人话变更点 ["人员档案: 电话 改为必填"]
+
+
+@router.post("/{app_id}/config-chat", response_model=ConfigChatResp)
+async def config_chat(
+    app_id: int,
+    payload: ConfigChatReq,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """部署后配置助手 — 把用户自然语言转成 ChangePlan 草案 (review 后另走 apply)。"""
+    # 1. 加载 application + 校验租户
+    result = await db.execute(
+        select(Application).where(
+            Application.id == app_id,
+            Application.tenant_id == ctx.tenant_id,
+        )
+    )
+    app = result.scalar_one_or_none()
+    if not app:
+        raise HTTPException(status_code=404, detail="应用不存在")
+    await _require_application_permission(ctx, db, app, Action.VIEW)
+
+    # 2. 拼 SPEC 上下文 (markdown 截选，控制 prompt 体积)
+    spec_ctx_md = ""
+    if app.requirement_doc:
+        spec_ctx_md = app.requirement_doc[:3000]
+    elif app.config_preview:
+        # config_preview 是 JSON，截前 2000 字符做参考
+        spec_ctx_md = f"[config_preview JSON 片段]\n{app.config_preview[:2000]}"
+
+    # 3. 拉租户 LLM 配置 (用现有 _resolve_builder_llm_cfg helper)
+    try:
+        cfg = await _resolve_builder_llm_cfg(
+            db, ctx.tenant_id, conversation_id=app.conversation_id
+        )
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger(__name__).warning(
+            "config_chat: resolve_builder_llm_cfg failed: %r", exc
+        )
+        cfg = None
+    if not cfg:
+        # LLM 没配 — 走 stub 模式，前端能联调
+        return ConfigChatResp(
+            reply=(
+                f"已收到你的需求:「{payload.message}」。\n\n"
+                "当前租户尚未配置可用的 LLM (环境管理 → 模型配置)，"
+                "暂时无法自动生成变更草案。配置完成后即可使用本助手。"
+            ),
+            change_plan=None,
+            requires_confirmation=False,
+            actions_summary=[],
+        )
+
+    # 4. 构造 prompt + 调 LLM
+    system_prompt = (
+        "你是 aPaaS 应用的「配置调整助手」。当前应用:\n"
+        f"- app_name: {app.app_name}\n"
+        f"- app_code: {app.app_code}\n"
+        f"- apaas_app_id: {app.apaas_app_id or '(未部署)'}\n\n"
+        "当前 SPEC (markdown 截选):\n"
+        "```markdown\n"
+        f"{spec_ctx_md or '(暂无 SPEC，应用可能是从 apaas 直接导入)'}\n"
+        "```\n\n"
+        "用户会用自然语言描述想做的调整。你的任务:\n"
+        "1. 先用人话告诉用户你理解的意图，明确具体改哪个模型/字段/枚举/角色。\n"
+        "2. 如果是清晰的字段/枚举/角色调整 (add_field / modify_field / "
+        "add_role / add_dict_item / change_required 等)，**在回复末尾**给出一个 "
+        "```json 代码块，结构如下:\n"
+        "   {\n"
+        '     "summary": ["人话变更点 1", "人话变更点 2"],\n'
+        '     "actions": [\n'
+        '       {"type": "modify_field", "model": "...", "field": "...", '
+        '"changes": {"required": true}}\n'
+        "     ]\n"
+        "   }\n"
+        "3. 如果改动太大、跨多模块或缺信息，**不**输出 json，只用自然语言反问澄清。\n"
+        "4. 不要编造 SPEC 里没有的模型/字段名。如果用户提到的实体在 SPEC 里没找到，明确指出。"
+    )
+
+    messages: list[dict] = [{"role": "system", "content": system_prompt}]
+    # 限制 history 长度，最多保留最近 8 轮
+    for turn in (payload.history or [])[-8:]:
+        role = turn.get("role")
+        content = turn.get("content")
+        if role in ("user", "assistant") and isinstance(content, str):
+            messages.append({"role": role, "content": content})
+    messages.append({"role": "user", "content": payload.message})
+
+    try:
+        llm = LLMClient(
+            api_key=cfg["api_key"],
+            base_url=cfg["base_url"],
+            model=cfg["model"],
+        )
+        llm_resp = await llm.chat_completion(
+            messages,
+            max_tokens=cfg.get("max_tokens", 4096),
+            temperature=0.3,
+        )
+        # chat_completion 返 OpenAI 风格: {choices: [{message: {content: ...}}]}
+        reply = ""
+        try:
+            reply = llm_resp["choices"][0]["message"]["content"] or ""
+        except (KeyError, IndexError, TypeError):
+            reply = ""
+    except Exception as exc:  # noqa: BLE001
+        import logging
+        logging.getLogger(__name__).warning("config_chat LLM call failed: %r", exc)
+        return ConfigChatResp(
+            reply=(
+                f"已收到你的需求:「{payload.message}」。\n\n"
+                f"调用 LLM 时出错: {exc!s}\n请稍后重试，或联系管理员检查模型配置。"
+            ),
+            change_plan=None,
+            requires_confirmation=False,
+            actions_summary=[],
+        )
+
+    if not reply.strip():
+        reply = "我没完全理解你的诉求，可以再描述详细点吗？例如:「把『员工档案』模型的『手机号』字段改成必填」。"
+
+    # 5. 从 reply 抽 ```json 块 (LLM 按 prompt 约定输出)
+    change_plan: dict | None = None
+    actions_summary: list[str] = []
+    m = re.search(r"```json\s*(.*?)\s*```", reply, flags=re.DOTALL)
+    if m:
+        try:
+            parsed = json.loads(m.group(1))
+            if isinstance(parsed, dict):
+                change_plan = parsed
+                summary = parsed.get("summary")
+                if isinstance(summary, list):
+                    actions_summary = [str(s) for s in summary if s]
+        except (json.JSONDecodeError, ValueError):
+            # LLM 出的 json 不合法 — 不抛错，让 reply 自然显示
+            pass
+
+    return ConfigChatResp(
+        reply=reply,
+        change_plan=change_plan,
+        requires_confirmation=bool(change_plan),
+        actions_summary=actions_summary,
     )
