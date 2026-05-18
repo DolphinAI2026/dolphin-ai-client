@@ -117,24 +117,39 @@ const curModel = computed({
 })
 
 // Real configured models from /api/llm-configs (Settings → LLM Configs page).
+// Prefer the non-admin `/options` endpoint so non-tenant-admin users still see
+// the real list; fall back to `list()` (admin only) for richer status info.
 const realModels = ref<string[]>([])
 async function loadRealModels() {
+  const names = new Set<string>()
   try {
-    const list = (await llmConfigApi.list()) as unknown as Array<{ model?: string; config_name?: string; provider?: string; status?: string }>
-    if (Array.isArray(list)) {
-      const names = new Set<string>()
-      for (const cfg of list) {
-        if (!cfg) continue
-        if (cfg.status && cfg.status !== 'active') continue
-        if (cfg.config_name) names.add(cfg.config_name)
-        else if (cfg.model) names.add(cfg.model)
+    const opts = (await llmConfigApi.listOptions('all')) as unknown as Array<{ model?: string; config_name?: string }>
+    if (Array.isArray(opts)) {
+      for (const o of opts) {
+        if (!o) continue
+        if (o.config_name) names.add(o.config_name)
+        else if (o.model) names.add(o.model)
       }
-      realModels.value = Array.from(names)
     }
-  } catch (e) {
-    // Silent: if llm-configs is empty/unreachable, fall back to seed options.
-    realModels.value = []
+  } catch {
+    // ignore — fall through to list()
   }
+  if (names.size === 0) {
+    try {
+      const list = (await llmConfigApi.list()) as unknown as Array<{ model?: string; config_name?: string; status?: string }>
+      if (Array.isArray(list)) {
+        for (const cfg of list) {
+          if (!cfg) continue
+          if (cfg.status && cfg.status !== 'active') continue
+          if (cfg.config_name) names.add(cfg.config_name)
+          else if (cfg.model) names.add(cfg.model)
+        }
+      }
+    } catch {
+      // silent — falls back to seed model_options.
+    }
+  }
+  realModels.value = Array.from(names)
 }
 
 const modelOptions = computed<string[]>(() => {
