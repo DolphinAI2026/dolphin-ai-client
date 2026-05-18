@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useThemeStore } from '@/stores/theme'
+import { useUserStore } from '@/stores/user'
 import ProjectSwitcher from './ProjectSwitcher.vue'
 
 interface BreadcrumbItem {
@@ -17,6 +18,7 @@ const props = defineProps<{
 const route = useRoute()
 const router = useRouter()
 const theme = useThemeStore()
+const user = useUserStore()
 
 const CRUMB_LABELS: Record<string, string> = {
   '/': '新建',
@@ -89,8 +91,8 @@ const isDark = computed(() => theme.mode === 'dark')
       <slot name="actions" />
     </div>
     <div class="topbar-actions">
-      <button class="topbar-action" @click="router.push('/tenant-users')">成员管理</button>
-      <button class="topbar-action" @click="router.push('/platform-envs')">平台环境</button>
+      <button v-if="user.isTenantAdmin" class="topbar-action" @click="router.push('/tenant-users')">成员管理</button>
+      <button v-if="user.isTenantAdmin" class="topbar-action" @click="router.push('/platform-envs')">平台环境</button>
       <button class="icon-btn" @click="toggleTheme" :aria-label="isDark ? '切换浅色主题' : '切换深色主题'">
         <svg v-if="isDark" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 13A9 9 0 0 1 11 3a9 9 0 1 0 10 10z"/></svg>
         <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4 12H2M22 12h-2M6.3 6.3 4.9 4.9M19.1 19.1l-1.4-1.4M6.3 17.7l-1.4 1.4M19.1 4.9l-1.4 1.4"/></svg>
