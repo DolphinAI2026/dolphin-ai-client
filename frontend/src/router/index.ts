@@ -80,7 +80,7 @@ const router = createRouter({
     {
       path: '/agents',
       name: 'Agents',
-      component: () => import('@/views/stubs/StubAgents.vue'),
+      component: () => import('@/views/v2/AgentsPage.vue'),
       meta: { requiresAuth: true }
     },
     {
