@@ -92,7 +92,7 @@ const router = createRouter({
     {
       path: '/industry',
       name: 'Industry',
-      component: () => import('@/views/stubs/StubIndustry.vue'),
+      component: () => import('@/views/v2/IndustryPage.vue'),
       meta: { requiresAuth: true }
     },
     {
