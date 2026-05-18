@@ -249,3 +249,102 @@ async def remove_sandbox(
     if not ok:
         raise HTTPException(status_code=500, detail="删除失败，请查看后端日志")
     return {"ok": True, "workspace_id": workspace_id, "status": "removed"}
+
+
+# ─── v2 RuntimePage shape ──────────────────────────────────────────────────
+# The v2 page uses different fields (flavor / cpu / mem / ttl) than the legacy
+# SandboxMonitorPage. Add a dedicated endpoint so the two pages don't fight.
+
+class RuntimeSandbox(BaseModel):
+    id: str
+    name: str
+    workspace: str
+    flavor: str  # 睿鲸 / Vibe
+    user: str
+    cpu: float
+    cpu_max: int
+    mem: float
+    mem_max: int
+    disk: float
+    idle: str
+    status: str  # active / idle / recycling
+    ttl: str
+    created: str
+    image: str
+
+
+class RuntimeSandboxListResponse(BaseModel):
+    sandboxes: list[RuntimeSandbox]
+    total: int
+    active: int
+    idle_count: int
+
+
+@router.get("/v2/runtime", response_model=RuntimeSandboxListResponse)
+async def list_runtime_sandboxes(
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """List sandboxes in v2 RuntimePage shape (flavor / cpu / mem / ttl)."""
+    metas = _scan_workspaces()
+    scoped = _filter_by_scope(metas, ctx)
+
+    # Live container status — used to map to v2 status enum
+    rt = get_docker_runtime()
+    docker_avail = await rt.is_available()
+
+    out: list[RuntimeSandbox] = []
+    for m in scoped:
+        ws_id = m.get("id", "") or ""
+        title = _workspace_title(m)
+        flavor = "Vibe" if m.get("kind") == "vibe" else "睿鲸"
+        # Resource metrics — docker_runtime doesn't currently surface cpu/mem
+        # per container, so default to 0 and rely on the meta if it ever does.
+        cpu = float(m.get("cpu", 0.0))
+        cpu_max = int(m.get("cpu_max", 4 if flavor == "Vibe" else 2))
+        mem = float(m.get("mem", 0.0))
+        mem_max = int(m.get("mem_max", 8 if flavor == "Vibe" else 4))
+        disk = float(m.get("disk", 0.0))
+        idle = m.get("idle_minutes", "0 min")
+        if isinstance(idle, (int, float)):
+            idle = f"{int(idle)} min"
+        ttl = m.get("ttl", "—")
+        created = m.get("created_at", "—")
+        image = m.get("image", "node:20-alpine" if flavor == "睿鲸" else "code-server")
+
+        # Live status overrides the meta if docker is available.
+        cs = ""
+        if docker_avail:
+            try:
+                cs = (await rt.container_status(ws_id)) or ""
+            except Exception:
+                cs = ""
+        cs = cs.lower()
+        if cs == "running":
+            status = "active"
+        elif cs in ("exited", "paused"):
+            status = "recycling"
+        else:
+            status = "idle"
+
+        out.append(RuntimeSandbox(
+            id=ws_id[:8] if ws_id else "—",
+            name=title,
+            workspace=ws_id,
+            flavor=flavor,
+            user=m.get("owner_username") or str(m.get("user_id", "")),
+            cpu=cpu, cpu_max=cpu_max,
+            mem=mem, mem_max=mem_max,
+            disk=disk,
+            idle=str(idle),
+            status=status,
+            ttl=str(ttl),
+            created=str(created),
+            image=image,
+        ))
+
+    active = sum(1 for s in out if s.status == "active")
+    idle_count = sum(1 for s in out if s.status == "idle")
+    return RuntimeSandboxListResponse(
+        sandboxes=out, total=len(out), active=active, idle_count=idle_count,
+    )
