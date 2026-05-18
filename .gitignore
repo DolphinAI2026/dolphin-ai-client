@@ -49,3 +49,4 @@ workspaces/
 # VS Code extension build artifacts
 extensions/ruijing-ai/dist/
 extensions/ruijing-ai/*.vsix
+.serena/

@@ -4275,6 +4275,9 @@ const enterGeneratedApplicationWorkspace = (app: any) => {
   if (!isGeneratedApplication(app)) return
   const requestedView = Array.isArray(route.query.view) ? route.query.view[0] : route.query.view
   if (requestedView === 'coding' || requestedView === 'platform') return
+  // 2026-05-19 post-deploy 已通过 restoreActiveViewForApp 切到 platform iframe，
+  // 不再自动进左侧 update chat 模式（Plan D：post-deploy 调整走右侧 ConfigAssistantPanel）
+  if (activeView.value === 'platform') return
   startApplicationUpdateChat()
 }
 
