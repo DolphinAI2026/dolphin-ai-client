@@ -71,7 +71,7 @@ function toggle(k: string) { open.value[k] = !open.value[k] }
 
     <div class="bp-scroll">
       <section class="bp-section">
-        <button class="bp-section-head" @click="toggle('models')">
+        <button class="bp-section-head" :aria-expanded="open.models" @click="toggle('models')">
           <span>数据模型 <span class="muted">({{ counts.models }})</span></span>
           <svg :class="{ rot: open.models }" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
         </button>
@@ -97,7 +97,7 @@ function toggle(k: string) { open.value[k] = !open.value[k] }
       </section>
 
       <section class="bp-section">
-        <button class="bp-section-head" @click="toggle('forms')">
+        <button class="bp-section-head" :aria-expanded="open.forms" @click="toggle('forms')">
           <span>表单 <span class="muted">({{ counts.forms }})</span></span>
           <svg :class="{ rot: open.forms }" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
         </button>
@@ -117,7 +117,7 @@ function toggle(k: string) { open.value[k] = !open.value[k] }
       </section>
 
       <section class="bp-section">
-        <button class="bp-section-head" @click="toggle('flows')">
+        <button class="bp-section-head" :aria-expanded="open.flows" @click="toggle('flows')">
           <span>流程 <span class="muted">({{ counts.flows }})</span></span>
           <svg :class="{ rot: open.flows }" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
         </button>
@@ -134,7 +134,7 @@ function toggle(k: string) { open.value[k] = !open.value[k] }
       </section>
 
       <section class="bp-section">
-        <button class="bp-section-head" @click="toggle('roles')">
+        <button class="bp-section-head" :aria-expanded="open.roles" @click="toggle('roles')">
           <span>角色 <span class="muted">({{ counts.roles }})</span></span>
           <svg :class="{ rot: open.roles }" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
         </button>
@@ -150,7 +150,7 @@ function toggle(k: string) { open.value[k] = !open.value[k] }
       </section>
 
       <section class="bp-section">
-        <button class="bp-section-head" @click="toggle('dicts')">
+        <button class="bp-section-head" :aria-expanded="open.dicts" @click="toggle('dicts')">
           <span>字典 <span class="muted">({{ counts.dicts }})</span></span>
           <svg :class="{ rot: open.dicts }" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
         </button>

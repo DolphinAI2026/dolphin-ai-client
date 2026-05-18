@@ -153,13 +153,19 @@ const router = useRouter()
 const selectedId = ref<Agent['id']>('builder')
 const cur = computed<Agent>(() => AGENTS.find(a => a.id === selectedId.value) || AGENTS[0])
 
-// Local edit state for systemPrompt (so 重置 can restore)
+// Local edit state for systemPrompt + model (so 重置 can restore + so the
+// model <select> persists user choice across re-renders).
 const editedPrompt = ref<Record<string, string>>(
   AGENTS.reduce((acc, a) => { acc[a.id] = a.systemPrompt; return acc }, {} as Record<string, string>)
 )
+const editedModel = ref<Record<string, string>>({})
 const curPrompt = computed({
   get: () => editedPrompt.value[cur.value.id],
   set: (v: string) => { editedPrompt.value[cur.value.id] = v },
+})
+const curModel = computed({
+  get: () => editedModel.value[cur.value.id] ?? cur.value.model,
+  set: (v: string) => { editedModel.value[cur.value.id] = v },
 })
 
 const curMcps = computed<McpServer[]>(() =>
@@ -172,13 +178,26 @@ const curMcpToolsTotal = computed(() => curMcps.value.reduce((s, m) => s + m.too
 
 function onReset() {
   editedPrompt.value[cur.value.id] = cur.value.systemPrompt
-  ElMessage.info('已恢复 System Prompt 初始值')
+  editedModel.value[cur.value.id] = cur.value.model
+  ElMessage.info('已恢复 System Prompt 与模型初始值')
 }
 function onSave() {
   ElMessage.success('Agent 配置已保存（mock，暂未持久化）')
 }
 function onAddSkill() {
   ElMessage.info('Skill 库选择即将上线')
+}
+function onRemoveSkill(s: Skill) {
+  ElMessage.info(`Skill「${s.name}」已移除（mock，暂未持久化）`)
+}
+function onRemoveMcp(m: McpServer) {
+  ElMessage.info(`MCP「${m.name}」已解绑（mock，暂未持久化）`)
+}
+function onRemoveKnowledge(p: IndustryPack) {
+  ElMessage.info(`行业包「${p.name}」已移除（mock，暂未持久化）`)
+}
+function onRemoveSpecTemplate(t: string) {
+  ElMessage.info(`SPEC 模板「${t}」已移除（mock，暂未持久化）`)
 }
 function gotoMcp() { router.push('/mcp') }
 function gotoIndustry() { router.push('/industry') }
@@ -235,7 +254,7 @@ const knowledgeEmptyHint = computed(() =>
               v-for="a in AGENTS"
               :key="a.id"
               class="agent-pick"
-              :class="[`agent-tone-${a.tone}`, { active: selectedId === a.id }]"
+              :class="{ active: selectedId === a.id }"
               @click="selectedId = a.id"
             >
               <div :class="['agent-pick-icon', `agent-pick-icon-${a.tone}`]" v-html="renderIcon(a.icon, 18)" />
@@ -290,7 +309,7 @@ const knowledgeEmptyHint = computed(() =>
               <div class="agent-grid">
                 <div class="agent-field">
                   <div class="agent-field-label">模型</div>
-                  <select class="input" :value="cur.model" :key="cur.id">
+                  <select class="input" v-model="curModel">
                     <option v-for="m in cur.modelOptions" :key="m" :value="m">{{ m }}</option>
                   </select>
                 </div>
@@ -324,7 +343,7 @@ const knowledgeEmptyHint = computed(() =>
                   <div class="agent-skill-head">
                     <code class="mono agent-skill-code">{{ s.code }}</code>
                     <span class="agent-skill-name">{{ s.name }}</span>
-                    <button class="icon-btn icon-btn-sm" title="移除" v-html="renderIcon('trash', 11)" />
+                    <button class="icon-btn icon-btn-sm" title="移除" @click="onRemoveSkill(s)" v-html="renderIcon('trash', 11)" />
                   </div>
                   <div class="agent-skill-desc">{{ s.desc }}</div>
                 </div>
@@ -354,7 +373,7 @@ const knowledgeEmptyHint = computed(() =>
                       <span class="mono">{{ m.code }}</span> · {{ m.tools }} 工具 · v{{ m.version }}
                     </div>
                   </div>
-                  <button class="icon-btn icon-btn-sm" title="解绑" v-html="renderIcon('trash', 11)" />
+                  <button class="icon-btn icon-btn-sm" title="解绑" @click="onRemoveMcp(m)" v-html="renderIcon('trash', 11)" />
                 </div>
                 <div v-if="curMcps.length === 0" class="agent-empty">此 Agent 暂未挂载任何 MCP</div>
               </div>
@@ -385,7 +404,7 @@ const knowledgeEmptyHint = computed(() =>
                       {{ pk.stats.entities }} 业务对象 · {{ pk.stats.workflows }} 流程 · {{ pk.stats.dicts }} 字典
                     </div>
                   </div>
-                  <button class="icon-btn icon-btn-sm" title="移除" v-html="renderIcon('trash', 11)" />
+                  <button class="icon-btn icon-btn-sm" title="移除" @click="onRemoveKnowledge(pk)" v-html="renderIcon('trash', 11)" />
                 </div>
                 <div v-for="t in cur.knowledge.specTemplates" :key="t" class="agent-know-row">
                   <div class="know-icon know-icon-doc" v-html="renderIcon('doc', 13)" />
@@ -393,7 +412,7 @@ const knowledgeEmptyHint = computed(() =>
                     <div class="agent-know-name mono">{{ t }}</div>
                     <div class="agent-know-stats">SPEC 模板</div>
                   </div>
-                  <button class="icon-btn icon-btn-sm" title="移除" v-html="renderIcon('trash', 11)" />
+                  <button class="icon-btn icon-btn-sm" title="移除" @click="onRemoveSpecTemplate(t)" v-html="renderIcon('trash', 11)" />
                 </div>
               </div>
               <div v-else class="agent-empty">

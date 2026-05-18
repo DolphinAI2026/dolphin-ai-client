@@ -8132,7 +8132,7 @@ watch(conversationId, (id) => {
    See theme definition for variable values.
    ══════════════════════════════════════════════ */
 
-.chat-page-shell { height: 100vh; display: flex; flex-direction: row; min-width: 0; min-height: 0; }
+.chat-page-shell { height: 100%; display: flex; flex-direction: row; min-width: 0; min-height: 0; }
 .chat-page { flex: 1; min-width: 0; height: 100%; display: flex; flex-direction: column; background: var(--t-bg-base); color: var(--t-text-primary); }
 
 /* ── 导航栏 ── */
