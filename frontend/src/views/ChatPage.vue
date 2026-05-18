@@ -1175,8 +1175,8 @@
     />
     <!-- 2026-05-19 post-deploy 形态：右侧改成配置助手，聊增量调整 -->
     <ConfigAssistantPanel
-      v-else-if="!embedMode && isPostDeploy && store.currentApp?.id"
-      :application-id="Number(store.currentApp.id)"
+      v-else-if="!embedMode && isPostDeploy && resolvedAppId"
+      :application-id="resolvedAppId"
       :app-name="builderAppDisplayName || ''"
     />
   </div><!-- /chat-shell -->
@@ -1669,6 +1669,14 @@ const isPlatformDeployed = computed(() =>
 // 老的 3 列蓝图同步布局。判断仅依据 apaas_app_id（不依赖 deployAllDone — 后者只
 // 在本 session 跑过部署流程才为 true，刷新页面后会丢）。
 const isPostDeploy = computed(() => !!store.currentApp?.apaas_app_id)
+// store.currentApp 这个 slice 只携带 status/apaas_app_id/remote_status，没有 id 字段；
+// route 上的 app_id 是真应用 id，post-deploy 用它做 ConfigAssistantPanel 的 application-id。
+const resolvedAppId = computed(() => {
+  const fromQuery = route.query.app_id
+  const raw = Array.isArray(fromQuery) ? fromQuery[0] : fromQuery
+  const n = Number(raw)
+  return Number.isFinite(n) && n > 0 ? n : null
+})
 const isAppOnline = computed(() =>
   currentRemoteStatus.value === 'ENABLE' ||
   currentRemoteStatus.value === '已上线'
