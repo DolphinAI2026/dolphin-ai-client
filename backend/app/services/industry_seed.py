@@ -1,20 +1,21 @@
-"""Seed the 4 default industry packs and the manufacturing ontology.
+"""Seed lightweight demo industry packs for the /industry knowledge-base page.
 
-Idempotent: re-running on a populated `industry_packs` table is a no-op. Lazy-seeded
-from `routes/industry.py:list_packs` on first call rather than at startup, so this
-doesn't get tangled in the FastAPI lifespan hook (no `main.py` coupling).
+Idempotent: if `industry_packs` already has any row, this is a no-op so existing
+deployments (or repeat startup) don't get duplicated rows.
 
-Data is verbatim from the previous inline `INDUSTRY_PACKS` + `INDUSTRY_ONTOLOGY`
-consts in `frontend/src/views/v2/IndustryPage.vue` (commit history pre-Session-4)
-which itself was lifted from the design handoff data.js.
+Three demo packs ship out-of-the-box so a fresh tenant can browse a non-empty
+catalog immediately:
+- pkg-hr   人力资源 (talent + onboarding flow)
+- pkg-crm  客户运营 (lead → opportunity → contract)
+- pkg-asset 资产管理 (asset → maintenance → disposal)
 
-Only pkg-mfg gets the full ontology (9 entities + 8 relations + 5 workflows +
-4 dictHighlight). pkg-crm / pkg-logi / pkg-govt ship with empty `ontology = {}`
-for now — Session 5+ can populate them when their detail views come online.
+Each pack carries 1-3 entities + 1-2 relations + 1 workflow + 1 dict highlight —
+just enough for the ontology canvas to render something meaningful, not the
+full production catalog. Replace with real customer data via admin tooling
+once that pipeline exists.
 
-No per-tenant `IndustryPackInstall` rows are seeded here. Pre-existing inline UI
-marked pkg-mfg + pkg-crm as already installed, but that was display-only state;
-real installs now happen exclusively via POST /industry/packs/{id}/install.
+Re-enable history: this file was previously disabled (early-return) per user
+request 2026-05-19; restored 2026-05-19 PM with lighter-weight demo content.
 """
 from __future__ import annotations
 
@@ -30,145 +31,148 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Manufacturing ontology — pkg-mfg only
+# HR ontology — 人力资源
 # ---------------------------------------------------------------------------
 
-_MFG_ONTOLOGY: dict[str, Any] = {
+_HR_ONTOLOGY: dict[str, Any] = {
     "entities": [
-        {"code": "work_order", "name": "生产工单", "fields": 18, "x": 50, "y": 50, "hot": True, "tone": "brand"},
-        {"code": "bom", "name": "BOM 物料清单", "fields": 12, "x": 50, "y": 220, "tone": "brand"},
-        {"code": "process", "name": "工序", "fields": 8, "x": 260, "y": 50, "tone": "brand"},
-        {"code": "workshop", "name": "车间", "fields": 6, "x": 260, "y": 220, "tone": "sky"},
-        {"code": "machine", "name": "设备", "fields": 14, "x": 260, "y": 380, "tone": "sky"},
-        {"code": "operator", "name": "操作工", "fields": 10, "x": 470, "y": 220, "tone": "amber"},
-        {"code": "qc_record", "name": "质检记录", "fields": 11, "x": 470, "y": 50, "tone": "rose"},
-        {"code": "material", "name": "原材料", "fields": 9, "x": 50, "y": 380, "tone": "brand"},
-        {"code": "fg_inv", "name": "成品库存", "fields": 8, "x": 470, "y": 380, "tone": "emerald"},
+        {"code": "employee", "name": "员工档案", "fields": 24, "x": 60, "y": 80, "hot": True, "tone": "brand"},
+        {"code": "onboarding", "name": "入职流程", "fields": 12, "x": 320, "y": 80, "tone": "sky"},
+        {"code": "leave_record", "name": "请假记录", "fields": 8, "x": 320, "y": 240, "tone": "amber"},
     ],
     "relations": [
-        {"from": "work_order", "to": "bom", "label": "consumes"},
-        {"from": "work_order", "to": "process", "label": "has steps"},
-        {"from": "process", "to": "workshop", "label": "runs in"},
-        {"from": "process", "to": "machine", "label": "uses"},
-        {"from": "machine", "to": "operator", "label": "operated by"},
-        {"from": "work_order", "to": "qc_record", "label": "inspected by"},
-        {"from": "bom", "to": "material", "label": "composed of"},
-        {"from": "work_order", "to": "fg_inv", "label": "produces"},
+        {"from": "employee", "to": "onboarding", "label": "goes through"},
+        {"from": "employee", "to": "leave_record", "label": "files"},
     ],
     "workflows": [
-        {"name": "工单发起 → 计划排程", "nodes": 4, "sla": "24h"},
-        {"name": "车间派工 → 工序确认", "nodes": 5, "sla": "4h"},
-        {"name": "在制品转序 → 质检", "nodes": 6, "sla": "2h"},
-        {"name": "成品入库 → 工单关闭", "nodes": 4, "sla": "24h"},
-        {"name": "异常停机 → 修复 → 复工", "nodes": 7, "sla": "60min"},
+        {"name": "员工入职 → 三方协议 → 试用考核", "nodes": 6, "sla": "30d"},
     ],
     "dictHighlight": [
-        {"code": "wo_status", "name": "工单状态", "items": 8},
-        {"code": "qc_result", "name": "质检结果", "items": 5},
-        {"code": "machine_state", "name": "设备状态", "items": 6},
-        {"code": "priority", "name": "优先级", "items": 4},
+        {"code": "employee_status", "name": "员工状态", "items": 5},
     ],
 }
 
 
 # ---------------------------------------------------------------------------
-# 4 default packs
+# CRM ontology — 客户运营
+# ---------------------------------------------------------------------------
+
+_CRM_ONTOLOGY: dict[str, Any] = {
+    "entities": [
+        {"code": "lead", "name": "销售线索", "fields": 14, "x": 60, "y": 80, "hot": True, "tone": "sky"},
+        {"code": "opportunity", "name": "商机", "fields": 18, "x": 320, "y": 80, "tone": "brand"},
+        {"code": "contract", "name": "合同", "fields": 22, "x": 580, "y": 80, "tone": "emerald"},
+    ],
+    "relations": [
+        {"from": "lead", "to": "opportunity", "label": "converts to"},
+        {"from": "opportunity", "to": "contract", "label": "closes as"},
+    ],
+    "workflows": [
+        {"name": "线索分配 → 跟进 → 商机转化", "nodes": 5, "sla": "14d"},
+    ],
+    "dictHighlight": [
+        {"code": "lead_source", "name": "线索来源", "items": 8},
+    ],
+}
+
+
+# ---------------------------------------------------------------------------
+# Asset ontology — 资产管理
+# ---------------------------------------------------------------------------
+
+_ASSET_ONTOLOGY: dict[str, Any] = {
+    "entities": [
+        {"code": "asset", "name": "资产档案", "fields": 16, "x": 60, "y": 80, "hot": True, "tone": "amber"},
+        {"code": "maintenance", "name": "维保记录", "fields": 10, "x": 320, "y": 80, "tone": "sky"},
+    ],
+    "relations": [
+        {"from": "asset", "to": "maintenance", "label": "has"},
+    ],
+    "workflows": [
+        {"name": "资产登记 → 领用 → 维保 → 报废", "nodes": 4, "sla": "—"},
+    ],
+    "dictHighlight": [
+        {"code": "asset_category", "name": "资产分类", "items": 12},
+    ],
+}
+
+
+# ---------------------------------------------------------------------------
+# Demo packs (3) — lightweight HR / CRM / Asset Mgmt
 # ---------------------------------------------------------------------------
 
 _DEFAULT_PACKS: list[dict[str, Any]] = [
     {
-        "id": "pkg-mfg",
-        "name": "制造装备",
-        "code": "manufacturing",
-        "tone": "amber",
-        "version": "v2.1",
-        "summary": "面向离散制造与连续生产，覆盖订单 → 计划 → 派工 → 质检 → 入库全链路。",
+        "id": "pkg-hr",
+        "name": "人力资源",
+        "code": "hr",
+        "tone": "brand",
+        "version": "v1.0",
+        "summary": "员工档案、入职流程、请假考勤的基础人事场景。",
         "is_default": True,
-        "maintainer": "得帆云 · 行业卓越中心",
-        "updated": "5/14",
-        "entities_count": 12,
-        "relations_count": 30,
-        "workflows_count": 8,
-        "dicts_count": 24,
-        "forms_count": 18,
-        "roles_count": 6,
-        "ontology": _MFG_ONTOLOGY,
-        "adopted": ["生产工单调度", "资产管理系统", "某汽车制造客户"],
+        "maintainer": "得帆云 · 人事行业小组",
+        "updated": "5/19",
+        "entities_count": 3,
+        "relations_count": 2,
+        "workflows_count": 1,
+        "dicts_count": 1,
+        "forms_count": 4,
+        "roles_count": 3,
+        "ontology": _HR_ONTOLOGY,
+        "adopted": ["示例 · 员工入职"],
     },
     {
         "id": "pkg-crm",
         "name": "客户运营",
-        "code": "crm-ops",
+        "code": "crm",
         "tone": "sky",
-        "version": "v3.0",
-        "summary": "客户 360 + 商机 + 工单 + SLA + 回访的完整对象图谱。",
+        "version": "v1.0",
+        "summary": "线索 → 商机 → 合同的客户关系最小闭环。",
         "is_default": False,
         "maintainer": "得帆云 · 客户成功部",
-        "updated": "5/12",
-        "entities_count": 9,
-        "relations_count": 22,
-        "workflows_count": 6,
-        "dicts_count": 18,
-        "forms_count": 14,
-        "roles_count": 5,
-        "ontology": {},
-        "adopted": ["客户工单中心", "某连锁零售客户"],
+        "updated": "5/19",
+        "entities_count": 3,
+        "relations_count": 2,
+        "workflows_count": 1,
+        "dicts_count": 1,
+        "forms_count": 4,
+        "roles_count": 3,
+        "ontology": _CRM_ONTOLOGY,
+        "adopted": ["示例 · 销售线索池"],
     },
     {
-        "id": "pkg-logi",
-        "name": "智慧物流",
-        "code": "logistics",
-        "tone": "emerald",
-        "version": "v1.4",
-        "summary": "运单 / 仓配 / 路由 / 异常处理，含 GIS 字段类型与司机签收节点。",
+        "id": "pkg-asset",
+        "name": "资产管理",
+        "code": "asset",
+        "tone": "amber",
+        "version": "v1.0",
+        "summary": "资产档案与维保记录的轻量资产追踪场景。",
         "is_default": False,
-        "maintainer": "物流行业小组",
-        "updated": "5/03",
-        "entities_count": 11,
-        "relations_count": 26,
-        "workflows_count": 7,
-        "dicts_count": 21,
-        "forms_count": 15,
-        "roles_count": 5,
-        "ontology": {},
-        "adopted": ["某物流客户（试用）"],
-    },
-    {
-        "id": "pkg-govt",
-        "name": "政企服务",
-        "code": "govt-svc",
-        "tone": "rose",
-        "version": "v0.9",
-        "summary": "事项审批、办件流转、政务字典（行政区划 / 事项分类标准编码）。",
-        "is_default": False,
-        "maintainer": "政企行业小组（Beta）",
-        "updated": "4/28",
-        "entities_count": 8,
-        "relations_count": 16,
-        "workflows_count": 5,
-        "dicts_count": 36,
-        "forms_count": 12,
-        "roles_count": 6,
-        "ontology": {},
+        "maintainer": "得帆云 · 资产行业小组",
+        "updated": "5/19",
+        "entities_count": 2,
+        "relations_count": 1,
+        "workflows_count": 1,
+        "dicts_count": 1,
+        "forms_count": 3,
+        "roles_count": 2,
+        "ontology": _ASSET_ONTOLOGY,
         "adopted": [],
     },
 ]
 
 
 async def seed_industry_packs(db: AsyncSession) -> bool:
-    """DISABLED 2026-05-19 — user requested clean slate.
+    """Insert the 3 demo packs if the table is empty. No-op otherwise.
 
-    To re-enable, remove the early return below. Default pack catalog
-    (制造装备 / 客户运营 / 智慧物流 / 政企服务) is kept in _DEFAULT_PACKS as a
-    reference; load it manually or via admin tool when needed.
+    Returns True if inserted, False if skipped.
     """
-    return False  # no-op; lazy seed disabled
-    existing = (await db.execute(select(IndustryPack.id))).scalars().first()  # type: ignore[unreachable]
+    existing = (await db.execute(select(IndustryPack.id))).scalars().first()
     if existing:
         return False  # already seeded — caller can skip
 
     for spec in _DEFAULT_PACKS:
         db.add(IndustryPack(**spec))
     await db.commit()
-    logger.info("industry_seed: inserted %d default packs", len(_DEFAULT_PACKS))
+    logger.info("industry_seed: inserted %d demo packs", len(_DEFAULT_PACKS))
     return True

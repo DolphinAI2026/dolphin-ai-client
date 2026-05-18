@@ -81,6 +81,19 @@ async def lifespan(app: FastAPI):
     async with AsyncSessionLocal() as session:
         await seed_initial_data(session)
 
+    # /industry + /marketplace demo data — idempotent，已 seeded 即 no-op
+    try:
+        from app.services.industry_seed import seed_industry_packs
+        from app.services.marketplace_seed import seed_marketplace_components
+        async with AsyncSessionLocal() as session:
+            await seed_industry_packs(session)
+            await seed_marketplace_components(session)
+    except Exception as _exc:
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "industry/marketplace demo seed 启动失败 (非致命): %s", _exc,
+        )
+
     # 清理进程上次退出时悬挂的 coding session
     # （uvicorn --reload / 崩溃 / 部署重启留下的 status='running' 行）
     try:
