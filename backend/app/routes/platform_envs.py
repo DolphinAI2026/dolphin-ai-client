@@ -52,7 +52,20 @@ async def list_envs(
     ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """列出当前租户的所有平台环境"""
+    """列出当前租户的所有平台环境.
+
+    Response also carries computed fields used by /runtime envs tab v2:
+      - `health`         — 'ok' | 'warn' | 'error' (derived from `status`)
+      - `heartbeat`      — relative time placeholder (default '—')
+      - `deployed_apps`  — count of Application rows bound to this env
+      - `key_expiry`     — API-key expiry placeholder (default '—')
+      - `key_warn`       — whether key is near expiry (default False)
+      - `tenant_name`    — display name placeholder (default '')
+      - `endpoint`       — alias of `base_url` for consumers that want it
+      - `alias`          — placeholder alias (currently same as env id)
+    Defaults are returned when the underlying source isn't yet wired —
+    the shape matches `frontend/src/api/runtimeEnv.ts`.
+    """
     tenant_id = await resolve_effective_tenant_id(db, ctx)
     result = await db.execute(
         select(PlatformEnv)
@@ -60,15 +73,48 @@ async def list_envs(
         .order_by(PlatformEnv.created_at.desc())
     )
     envs = result.scalars().all()
+
+    # Compute deployed_apps counts in one round-trip.
+    env_ids = [e.id for e in envs]
+    deployed_counts: dict[int, int] = {}
+    if env_ids:
+        count_rows = await db.execute(
+            select(Application.platform_env_id, func.count(Application.id))
+            .where(
+                Application.tenant_id == tenant_id,
+                Application.platform_env_id.in_(env_ids),
+            )
+            .group_by(Application.platform_env_id)
+        )
+        for env_id, cnt in count_rows.all():
+            if env_id is not None:
+                deployed_counts[int(env_id)] = int(cnt or 0)
+
+    def _health_from_status(status: str) -> str:
+        if status == "connected":
+            return "ok"
+        if status == "disconnected":
+            return "warn"
+        return "error"
+
     return [
         {
             "id": e.id,
             "env_name": e.env_name,
+            "name": e.env_name,  # alias for v2 page
             "base_url": e.base_url,
+            "endpoint": e.base_url,  # alias for v2 page
             "platform_tenant_id": e.platform_tenant_id,
+            "tenant_name": "",  # not yet tracked — placeholder
             "username": e.username,
             "is_default": e.is_default,
             "status": e.status,
+            "health": _health_from_status(e.status),
+            "heartbeat": "—",  # last_test_at not yet tracked
+            "deployed_apps": deployed_counts.get(e.id, 0),
+            "key_expiry": "—",  # api-key expiry not yet tracked
+            "key_warn": False,
+            "alias": str(e.id),  # placeholder until env aliases land
             "created_at": e.created_at.isoformat() if e.created_at else None,
         }
         for e in envs
