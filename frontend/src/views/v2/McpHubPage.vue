@@ -8,99 +8,19 @@
   See docs/superpowers/plans/2026-05-18-apaas-builder-redesign-p0-p1.md (P2 — Task #11).
 -->
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
 import ShellTopBar from '@/components/v2/ShellTopBar.vue'
+import { useMcpStore } from '@/stores/mcp'
+import type { McpServer } from '@/api/mcp'
 
-type McpStatus = 'connected' | 'error' | 'disabled'
-type McpTransport = 'sse' | 'http' | 'stdio'
+type McpStatus = McpServer['status']
+type McpTransport = McpServer['transport']
 
-interface McpServer {
-  id: string
-  name: string
-  code: string
-  status: McpStatus
-  transport: McpTransport
-  endpoint: string
-  tools: number
-  lastUsed: string
-  usage: number
-  version: string
-  tags: string[]
-  desc: string
-  official: boolean
-  error?: string
-}
-
-// Seed data — verbatim from $DESIGN_SRC/data.js (lines 540-606).
-const MCP_SERVERS: McpServer[] = [
-  {
-    id: 'mcp-1', name: '得帆云 aPaaS Tools', code: 'apaas-tools', status: 'connected',
-    transport: 'sse', endpoint: 'https://apaas-poc.definesys.cn/mcp/sse',
-    tools: 14, lastUsed: '2 分钟前', usage: 824, version: '2.3.1',
-    tags: ['官方', '应用配置', '部署'],
-    desc: '官方 MCP，提供应用 / 模型 / 表单 / 权限 / 部署等 14 个工具。',
-    official: true,
-  },
-  {
-    id: 'mcp-2', name: '组件市场检索', code: 'marketplace-search', status: 'connected',
-    transport: 'sse', endpoint: 'https://agent.dfy.definesys.cn/mcp/marketplace',
-    tools: 5, lastUsed: '昨天 16:08', usage: 312, version: '1.0.4',
-    tags: ['官方', '组件'],
-    desc: '在 AI Coding 中按需检索组件市场已有产物，避免重复开发。',
-    official: true,
-  },
-  {
-    id: 'mcp-3', name: '需求文档检索（飞书）', code: 'feishu-docs', status: 'connected',
-    transport: 'http', endpoint: 'https://internal-mcp.demo/feishu',
-    tools: 3, lastUsed: '今天 11:30', usage: 142, version: '0.4.2',
-    tags: ['自定义', '文档'],
-    desc: '把租户飞书空间里的设计文档作为上下文喂给 AI。',
-    official: false,
-  },
-  {
-    id: 'mcp-4', name: '内部 ERP 字段映射', code: 'erp-fields', status: 'error',
-    transport: 'stdio', endpoint: 'erp-bridge://localhost',
-    tools: 8, lastUsed: '4 小时前', usage: 56, version: '0.2.0',
-    tags: ['自定义', 'ERP'],
-    desc: '把内部 ERP 系统的字段定义映射到 aPaaS 数据模型字段。',
-    official: false,
-    error: '连接超时（10s），请检查 erp-bridge 是否启动。',
-  },
-  {
-    id: 'mcp-5', name: '生产工单 SOP 库', code: 'sop-library', status: 'disabled',
-    transport: 'sse', endpoint: 'https://internal-mcp.demo/sop',
-    tools: 6, lastUsed: '5 天前', usage: 18, version: '0.1.1',
-    tags: ['自定义', '制造'],
-    desc: '提供生产 SOP 检索能力，给智能搭建生成流程时引用。',
-    official: false,
-  },
-  {
-    id: 'mcp-6', name: 'GitHub Repo 检索', code: 'github-search', status: 'connected',
-    transport: 'http', endpoint: 'https://mcp.github.com',
-    tools: 4, lastUsed: '3 天前', usage: 6, version: '1.2.0',
-    tags: ['第三方', '代码'],
-    desc: '为 Vibe Coding 模式提供跨仓库代码检索能力。',
-    official: false,
-  },
-  {
-    id: 'mcp-7', name: '钉钉审批联动', code: 'dingtalk-approval', status: 'connected',
-    transport: 'http', endpoint: 'https://oapi.dingtalk.com/mcp',
-    tools: 7, lastUsed: '昨天', usage: 92, version: '0.6.0',
-    tags: ['自定义', '审批'],
-    desc: '在搭建审批流程时直接挂载钉钉审批节点。',
-    official: false,
-  },
-  {
-    id: 'mcp-8', name: '内部知识库（私有）', code: 'kb-private', status: 'connected',
-    transport: 'sse', endpoint: 'https://kb.internal.demo/mcp',
-    tools: 2, lastUsed: '今天 09:14', usage: 248, version: '1.5.0',
-    tags: ['自定义', '知识库'],
-    desc: '租户私有知识库，向量检索 + 全文检索。',
-    official: false,
-  },
-]
+// Backend store — replaces the inline `MCP_SERVERS` const previously seeded here.
+const mcpStore = useMcpStore()
+onMounted(() => mcpStore.fetchServers())
 
 // Placeholder tool list — shown verbatim from the design source. Real tool
 // schemas will come from `/mcp/tools` once backend wires land.
@@ -117,19 +37,22 @@ type FilterKey = 'all' | 'connected' | 'error' | 'disabled' | 'official' | 'cust
 
 const filterKey = ref<FilterKey>('all')
 const query = ref('')
-const selectedId = ref<string>(MCP_SERVERS[0].id)
+const selectedId = ref<string>('')
 
-const filters = computed(() => [
-  { k: 'all'       as FilterKey, l: '全部',     c: MCP_SERVERS.length },
-  { k: 'connected' as FilterKey, l: '已连接',   c: MCP_SERVERS.filter(s => s.status === 'connected').length },
-  { k: 'error'     as FilterKey, l: '异常',     c: MCP_SERVERS.filter(s => s.status === 'error').length },
-  { k: 'disabled'  as FilterKey, l: '已停用',   c: MCP_SERVERS.filter(s => s.status === 'disabled').length },
-  { k: 'official'  as FilterKey, l: '官方',     c: MCP_SERVERS.filter(s => s.official).length },
-  { k: 'custom'    as FilterKey, l: '自定义',   c: MCP_SERVERS.filter(s => !s.official).length },
-])
+const filters = computed(() => {
+  const list = mcpStore.servers
+  return [
+    { k: 'all'       as FilterKey, l: '全部',     c: list.length },
+    { k: 'connected' as FilterKey, l: '已连接',   c: list.filter(s => s.status === 'connected').length },
+    { k: 'error'     as FilterKey, l: '异常',     c: list.filter(s => s.status === 'error').length },
+    { k: 'disabled'  as FilterKey, l: '已停用',   c: list.filter(s => s.status === 'disabled').length },
+    { k: 'official'  as FilterKey, l: '官方',     c: list.filter(s => s.official).length },
+    { k: 'custom'    as FilterKey, l: '自定义',   c: list.filter(s => !s.official).length },
+  ]
+})
 
 const filtered = computed<McpServer[]>(() => {
-  let list = MCP_SERVERS.slice()
+  let list = mcpStore.servers.slice()
   if (filterKey.value === 'official')        list = list.filter(s => s.official)
   else if (filterKey.value === 'custom')     list = list.filter(s => !s.official)
   else if (filterKey.value !== 'all')        list = list.filter(s => s.status === filterKey.value)
@@ -139,14 +62,15 @@ const filtered = computed<McpServer[]>(() => {
 })
 
 const current = computed<McpServer | undefined>(
-  () => MCP_SERVERS.find(s => s.id === selectedId.value) || filtered.value[0]
+  () => mcpStore.servers.find(s => s.id === selectedId.value) || filtered.value[0]
 )
 
 const stats = computed(() => {
-  const connected = MCP_SERVERS.filter(s => s.status === 'connected').length
-  const errored = MCP_SERVERS.filter(s => s.status === 'error').length
-  const totalTools = MCP_SERVERS.reduce((s, m) => s + m.tools, 0)
-  const totalUsage = MCP_SERVERS.reduce((s, m) => s + m.usage, 0)
+  const list = mcpStore.servers
+  const connected = mcpStore.connectedCount || list.filter(s => s.status === 'connected').length
+  const errored = mcpStore.errorCount || list.filter(s => s.status === 'error').length
+  const totalTools = mcpStore.toolsTotal
+  const totalUsage = list.reduce((s, m) => s + m.usage, 0)
   return [
     { label: '已连接',     v: String(connected),   tone: 'ok'    as const, icon: 'check' },
     { label: '异常 · 需处理', v: String(errored),  tone: 'warn'  as const, icon: 'bell' },
@@ -196,7 +120,7 @@ function renderIcon(name: string, size = 16): string {
           <div>
             <h1 class="page-title">
               MCP 管理
-              <span class="badge badge-brand" style="margin-left: 8px;">{{ MCP_SERVERS.length }} 个</span>
+              <span class="badge badge-brand" style="margin-left: 8px;">{{ mcpStore.servers.length }} 个</span>
             </h1>
             <div class="page-subtitle">
               Model Context Protocol — AI 工具接入的统一目录。挂载到智能体后，AI 可以调用这些工具。
@@ -210,6 +134,11 @@ function renderIcon(name: string, size = 16): string {
               <span class="icon" v-html="renderIcon('plus', 13)" /> 添加 MCP 服务器
             </button>
           </div>
+        </div>
+
+        <!-- Loading state (first paint only — store reactive, hides automatically) -->
+        <div v-if="mcpStore.loading && !mcpStore.servers.length" class="mcp-loading">
+          加载中...
         </div>
 
         <!-- Summary cards -->
@@ -267,7 +196,7 @@ function renderIcon(name: string, size = 16): string {
               <div class="mcp-list-foot">
                 <span class="badge badge-outline mono" style="text-transform: uppercase; font-size: 10px;">{{ m.transport }}</span>
                 <span style="font-size: 11px; color: var(--text-3);">工具 {{ m.tools }}</span>
-                <span class="mcp-list-time">最近 {{ m.lastUsed }}</span>
+                <span class="mcp-list-time">最近 {{ m.last_used || '—' }}</span>
               </div>
             </button>
             <div v-if="filtered.length === 0" class="mcp-empty">
@@ -410,6 +339,11 @@ function renderIcon(name: string, size = 16): string {
   display: inline-flex; align-items: center;
 }
 .page-subtitle { font-size: 13px; color: var(--text-2); margin-top: 4px; max-width: 760px; line-height: 1.55; }
+
+.mcp-loading {
+  font-size: 13px; color: var(--text-3);
+  padding: 18px 0; text-align: center;
+}
 
 /* Buttons */
 .btn {
