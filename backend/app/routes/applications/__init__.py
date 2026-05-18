@@ -1841,3 +1841,281 @@ async def sync_app_from_chat_md(
         # 前端拿到 content 后调既有的 upload-doc-version 接口（FormData 上传 md）走完整变更流
         "next_step": "POST /applications/{app_id}/upload-doc-version with file=this content",
     }
+
+
+# ============================================================================
+# Plan C (2026-05-19): Deploy from ai_chat artifact
+#
+# 流：AIChatPage 用户点 🚀 → DeployConfirmModal 弹起 → 用户确认 → 调本 endpoint
+#  1. 校验 artifact 属于当前 tenant
+#  2. parse_design_doc(artifact.content) → config_preview JSON
+#  3. 创建 / 复用 Application 记录 (status='generating', requirement_doc=md)
+#  4. 返回 task_id + app_id 供前端轮询
+#
+# 真 build pipeline (run_complete_generation) 复用既有 generate.py 的
+# /api/applications/{app_id}/generate SSE 端点 — 前端拿到 app_id 后接 SSE 即可。
+# 这里 deploy-from-artifact 只做"建库+预解析" + 返回 task_id 做轻量轮询。
+# ============================================================================
+
+
+class DeployFromArtifactReq(BaseModel):
+    """触发部署 — 从 ai_chat_artifacts 拉 md 内容生成应用。"""
+    artifact_id: int
+    env: str = "test"  # dev / test / prod
+    app_code: Optional[str] = None  # 可选覆盖（默认从 md 里解析）
+    platform_env_id: Optional[int] = None  # 可选覆盖（默认走租户 default env）
+
+
+class DeployTaskResp(BaseModel):
+    task_id: str
+    app_id: int
+    sse_url: str  # SSE 进度流 (复用 /api/applications/{app_id}/generate)
+
+
+class DeployStatusResp(BaseModel):
+    done: bool
+    phase: str  # draft / generating / completed / failed
+    progress: int  # 0-100 (粗略估算)
+    error: Optional[str] = None
+    app_id: Optional[int] = None
+
+
+def _parse_task_id(task_id: str) -> Optional[int]:
+    """task_id 格式: deploy-art-{app_id}-{epoch}, 抽出 app_id"""
+    try:
+        parts = task_id.split("-")
+        # ["deploy", "art", "{app_id}", "{epoch}"]
+        if len(parts) >= 4 and parts[0] == "deploy" and parts[1] == "art":
+            return int(parts[2])
+    except Exception:
+        pass
+    return None
+
+
+@router.post("/deploy-from-artifact", response_model=DeployTaskResp)
+async def deploy_from_artifact(
+    payload: DeployFromArtifactReq,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """从 ai_chat artifact (md 设计文档) 触发应用部署。
+
+    返回 task_id 让前端轮询；app_id 让前端可立即跳转应用详情页 / 接 SSE。
+    """
+    from app.models.ai_chat import AIChatArtifact, AIChatSession
+    from app.doc_parser import parse_design_doc
+
+    # 1. 拉 artifact + 校验属于当前 tenant
+    row = (await db.execute(
+        select(AIChatArtifact, AIChatSession)
+        .join(AIChatSession, AIChatArtifact.session_id == AIChatSession.id)
+        .where(
+            AIChatArtifact.id == payload.artifact_id,
+            AIChatSession.tenant_id == ctx.tenant_id,
+        )
+    )).one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail="artifact 不存在或不属于当前租户")
+    art, sess = row
+    if not art.content.strip():
+        raise HTTPException(status_code=400, detail="artifact 内容为空")
+    if art.format != "md":
+        raise HTTPException(
+            status_code=400,
+            detail=f"artifact 格式必须是 md (当前: {art.format})",
+        )
+
+    # 2. parse md → config_preview
+    try:
+        parsed = parse_design_doc(art.content)
+    except Exception as e:
+        logger.error(f"parse_design_doc failed: {e}", exc_info=True)
+        raise HTTPException(status_code=400, detail=f"md 解析失败: {e}")
+
+    if not isinstance(parsed, dict) or "data" not in parsed:
+        raise HTTPException(
+            status_code=400,
+            detail="md 解析未产出 preview data — 请检查文档是否符合标准 6 章节格式",
+        )
+
+    preview_data = parsed.get("data", {})
+    if not isinstance(preview_data, dict):
+        raise HTTPException(status_code=400, detail="md 解析结果格式异常")
+
+    # 3. 推导 app_name / app_code
+    app_name = (
+        preview_data.get("appName")
+        or preview_data.get("app_name")
+        or art.filename.rsplit(".", 1)[0]  # 去 .md 后缀作为 fallback
+        or "未命名应用"
+    )
+    ascii_code = (
+        _normalize_app_code(payload.app_code)
+        or _normalize_app_code(preview_data.get("appCode") or preview_data.get("app_code"))
+        or _coerce_app_code(app_name)
+    )
+    if not ascii_code:
+        import hashlib
+        ascii_code = f"app-{hashlib.md5(app_name.encode()).hexdigest()[:6]}"
+    preview_data["appCode"] = ascii_code
+    preview_data["app_code"] = ascii_code
+
+    # 4. 决定 platform_env_id（优先级：req > tenant default > any connected）
+    resolved_env_id: Optional[int] = None
+    if payload.platform_env_id:
+        env_check = await db.execute(
+            select(PlatformEnv).where(
+                PlatformEnv.id == payload.platform_env_id,
+                PlatformEnv.tenant_id == ctx.tenant_id,
+            )
+        )
+        if env_check.scalar_one_or_none():
+            resolved_env_id = payload.platform_env_id
+    if not resolved_env_id:
+        env_default = await db.execute(
+            select(PlatformEnv).where(
+                PlatformEnv.tenant_id == ctx.tenant_id,
+                PlatformEnv.is_default == True,
+            )
+        )
+        env_obj = env_default.scalar_one_or_none()
+        if env_obj:
+            resolved_env_id = env_obj.id
+    if not resolved_env_id:
+        env_conn = await db.execute(
+            select(PlatformEnv).where(
+                PlatformEnv.tenant_id == ctx.tenant_id,
+                PlatformEnv.status == "connected",
+            ).limit(1)
+        )
+        env_obj = env_conn.scalar_one_or_none()
+        if env_obj:
+            resolved_env_id = env_obj.id
+
+    # 5. 复用同租户 + 同 app_code 的 draft / failed 占位行（防 retry storm）
+    from datetime import datetime as _dt, timedelta
+    dedup_cutoff = _dt.utcnow() - timedelta(minutes=5)
+    config_str = _dump_preview_config(parsed)
+    reused = (
+        await db.execute(
+            select(Application).where(
+                Application.tenant_id == ctx.tenant_id,
+                Application.app_code == ascii_code,
+                Application.status.in_(("draft", "failed", "generating")),
+                Application.apaas_app_id.is_(None),
+                Application.created_at > dedup_cutoff,
+            ).order_by(Application.id.desc()).limit(1)
+        )
+    ).scalar_one_or_none()
+
+    if reused:
+        reused.app_name = app_name
+        reused.config_preview = config_str
+        reused.requirement_doc = art.content
+        if resolved_env_id:
+            reused.platform_env_id = resolved_env_id
+        reused.status = "generating"
+        reused.ai_chat_session_id = sess.id
+        await db.commit()
+        await db.refresh(reused)
+        app = reused
+    else:
+        # 6. 租户应用配额
+        from app.tenant_quota import assert_tenant_quota
+        await assert_tenant_quota(db, ctx.tenant_id, "applications")
+
+        app = Application(
+            user_id=ctx.user.id,
+            tenant_id=ctx.tenant_id,
+            created_by=ctx.user.id,
+            app_name=app_name,
+            app_code=ascii_code,
+            config_preview=config_str,
+            requirement_doc=art.content,
+            platform_env_id=resolved_env_id,
+            ai_chat_session_id=sess.id,
+            status="generating",
+        )
+        db.add(app)
+        await db.commit()
+        await db.refresh(app)
+
+    import time
+    task_id = f"deploy-art-{app.id}-{int(time.time())}"
+
+    logger.info(
+        "deploy-from-artifact: artifact_id=%s tenant=%s → app_id=%s code=%s env=%s task=%s",
+        art.id, ctx.tenant_id, app.id, ascii_code, payload.env, task_id,
+    )
+
+    # SSE URL 走既有 /applications/{app_id}/generate（real build pipeline）
+    # 前端拿到这个 URL 后接 EventSource (要带 ?token=<jwt> query param)
+    sse_url = f"/api/applications/{app.id}/generate"
+
+    return DeployTaskResp(
+        task_id=task_id,
+        app_id=app.id,
+        sse_url=sse_url,
+    )
+
+
+@router.get("/deploy-status/{task_id}", response_model=DeployStatusResp)
+async def deploy_status(
+    task_id: str,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """轮询部署状态 — 根据 task_id 抽 app_id 查 Application.status。
+
+    progress 是基于 status 的粗略估算（draft=10 / generating=50 / completed=100 / failed=0），
+    真细节进度走 SSE /api/applications/{app_id}/generate。
+    """
+    app_id = _parse_task_id(task_id)
+    if not app_id:
+        raise HTTPException(status_code=400, detail=f"task_id 格式错误: {task_id}")
+
+    res = await db.execute(
+        select(Application).where(
+            Application.id == app_id,
+            Application.tenant_id == ctx.tenant_id,
+        )
+    )
+    app = res.scalar_one_or_none()
+    if not app:
+        raise HTTPException(status_code=404, detail="task 对应的应用不存在或不属于当前租户")
+
+    status = app.status or "draft"
+    progress_map = {
+        "draft": 10,
+        "generating": 50,
+        "updating": 60,
+        "completed": 100,
+        "failed": 0,
+    }
+    progress = progress_map.get(status, 0)
+    done = status in ("completed", "failed")
+    error = None
+    if status == "failed":
+        # 老 generation flow 没记结构化错；从 ApiCallLog 抓最近一条失败的 error_message
+        try:
+            log_res = await db.execute(
+                select(ApiCallLog).where(
+                    ApiCallLog.application_id == app.id,
+                    ApiCallLog.success == False,  # noqa: E712
+                ).order_by(ApiCallLog.created_at.desc()).limit(1)
+            )
+            log = log_res.scalar_one_or_none()
+            if log and log.error_message:
+                error = log.error_message[:500]  # 截断防过长
+        except Exception:
+            pass
+        if not error:
+            error = "部署失败（查看应用详情页错误日志）"
+
+    return DeployStatusResp(
+        done=done,
+        phase=status,
+        progress=progress,
+        error=error,
+        app_id=app.id,
+    )
