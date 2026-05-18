@@ -31,7 +31,7 @@ const cta = computed(() => ({ builder: '开始对话', coding: '开始生成', v
 
 function submit() {
   if (!text.value.trim()) return
-  if (mode.value === 'builder') router.push({ path: '/chat', query: { from: 'landing', prompt: text.value } })
+  if (mode.value === 'builder') router.push({ path: '/ai-chat', query: { mode: 'requirements', prompt: text.value } })
   else if (mode.value === 'coding') router.push({ path: '/coding', query: { prompt: text.value } })
   else router.push({ path: '/vibe-coding', query: { prompt: text.value } })
 }
