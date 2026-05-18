@@ -98,7 +98,7 @@ const router = createRouter({
     {
       path: '/runtime',
       name: 'Runtime',
-      component: () => import('@/views/stubs/StubRuntime.vue'),
+      component: () => import('@/views/v2/RuntimePage.vue'),
       meta: { requiresAuth: true }
     },
     {
