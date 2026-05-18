@@ -1203,6 +1203,16 @@
     @confirm="handleRequirementsConfirm"
   />
 
+  <!-- Session 6: v2 deploy-confirm modal. Triggered by AppBlueprintPanel's @deploy. -->
+  <DeployConfirmModal
+    v-model="deployConfirmOpen"
+    :app-name="store.preview.appName || ''"
+    :app-code="displayAppCode || ''"
+    :changes="deployChanges"
+    :impacts="deployImpacts"
+    @confirm="runDeploy"
+  />
+
   </WorkbenchShell>
 </template>
 
@@ -1263,6 +1273,7 @@ import SpecInspector from '@/components/spec/SpecInspector.vue'
 // Existing center content unchanged; new components are pure presentation, no logic.
 import ChatConversationList from '@/components/v2/ChatConversationList.vue'
 import AppBlueprintPanel from '@/components/v2/AppBlueprintPanel.vue'
+import DeployConfirmModal from '@/components/v2/DeployConfirmModal.vue'
 import { buildBlueprintSpec } from '@/views/chat/blueprint-adapter'
 
 const router = useRouter()
@@ -3435,8 +3446,24 @@ function onV2OpenConversation(id: string) {
   if (!Number.isFinite(cid)) return
   loadConversation(cid)
 }
-// Session 5 stub — Session 6 wires a real confirmation modal.
+// Session 6: open the v2 deploy-confirm modal instead of firing the deploy
+// immediately. The modal's `@confirm` event calls `runDeploy(env)` which still
+// routes through the existing `startDeployFromArtifact()` path.
+const deployConfirmOpen = ref(false)
+const deployChanges = computed(() => ([] as { kind: '+' | '~' | '-'; what: string }[]))
+const deployImpacts = computed(() => ({
+  affectedUsers: 0,
+  addedFlows: 0,
+  needMigration: false,
+  etaMinutes: 2,
+}))
 function openDeployModal() {
+  deployConfirmOpen.value = true
+}
+function runDeploy(_env: 'dev' | 'test' | 'prod') {
+  // TODO: pass `_env` through to startDeployFromArtifact when the backend
+  // supports per-environment deploys. For now the existing handler always
+  // deploys to the user's connected aPaaS env.
   startDeployFromArtifact()
 }
 
