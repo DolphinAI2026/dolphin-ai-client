@@ -1,5 +1,15 @@
 <template>
   <WorkbenchShell>
+  <!-- v2 redesign (Session 5): 3-column shell — left rail + center main + right blueprint.
+       Existing chat-page-shell is moved INSIDE <main class="chat-main"> unchanged. -->
+  <div class="chat-shell">
+    <ChatConversationList
+      v-if="!embedMode"
+      :conversations="v2ConversationItems"
+      :current-id="v2CurrentConversationId"
+      @open="onV2OpenConversation"
+    />
+    <main class="chat-main">
   <div class="chat-page-shell">
     <!-- dolphin 接管对话后 sidebar 跟 /apps 列表重复，整体隐藏 -->
     <SessionSidebar
@@ -404,7 +414,11 @@
         </template>
       </div>
 
-      <div v-if="showBuilderArtifactPanel" class="preview-side builder-result-side">
+      <!-- v2 redesign (Session 5): right-side tabs panel hidden — replaced by
+           AppBlueprintPanel mounted to the right of <main class="chat-main">.
+           DOM disabled via v-if="false" so all bound reactives / computeds /
+           store reads are preserved untouched (Session 6 may remove). -->
+      <div v-if="false && showBuilderArtifactPanel" class="preview-side builder-result-side">
         <div v-show="!isUpdateReviewMode" class="builder-canvas-tabs">
           <button
             v-for="tab in builderCanvasTabs"
@@ -1145,6 +1159,21 @@
     </el-dialog>
   </div><!-- /chat-page -->
   </div><!-- /chat-page-shell -->
+    </main><!-- /chat-main -->
+
+    <!-- v2 redesign (Session 5): right-column SPEC blueprint. -->
+    <AppBlueprintPanel
+      v-if="!embedMode"
+      :models="blueprintSpec.models"
+      :forms="blueprintSpec.forms"
+      :flows="blueprintSpec.flows"
+      :roles="blueprintSpec.roles"
+      :dicts="blueprintSpec.dicts"
+      :industry-pack-name="currentIndustryPack?.name"
+      :industry-object-count="currentIndustryPack?.objectCount"
+      @deploy="openDeployModal"
+    />
+  </div><!-- /chat-shell -->
 
   <!-- 用 AI 调整应用：右侧抽屉嵌 AppChatPanel（同 Vue 实例 / 同主题，不跳页不 iframe） -->
   <el-drawer
@@ -1230,6 +1259,11 @@ import { useSpecStore } from '@/stores/spec'
 import PhaseBar from '@/components/spec/PhaseBar.vue'
 import SpecCanvas from '@/components/spec/SpecCanvas.vue'
 import SpecInspector from '@/components/spec/SpecInspector.vue'
+// v2 redesign (Session 5): 3-column shell — left conversation rail + right SPEC blueprint.
+// Existing center content unchanged; new components are pure presentation, no logic.
+import ChatConversationList from '@/components/v2/ChatConversationList.vue'
+import AppBlueprintPanel from '@/components/v2/AppBlueprintPanel.vue'
+import { buildBlueprintSpec } from '@/views/chat/blueprint-adapter'
 
 const router = useRouter()
 const route = useRoute()
@@ -3383,6 +3417,27 @@ const fetchConversationList = async () => {
   } catch (e) {
     console.error('获取对话列表失败:', e)
   }
+}
+
+// ─────────── v2 redesign (Session 5) adapters ───────────
+// 把现有 store.preview SPEC 适配到 AppBlueprintPanel 的 strict prop shape；
+// ChatConversationList 接收 {id,title,updatedAt}[] —— 用现有 conversationList 映射。
+const blueprintSpec = computed(() => buildBlueprintSpec(store.preview as any))
+const currentIndustryPack = computed<{ name: string; objectCount: number } | null>(() => null)
+const v2ConversationItems = computed(() => conversationList.value.map((c) => ({
+  id: String(c.id),
+  title: getConversationLabel(c),
+  updatedAt: formatConvTime(c.updated_at || c.created_at || ''),
+})))
+const v2CurrentConversationId = computed(() => selectedConversationId.value != null ? String(selectedConversationId.value) : '')
+function onV2OpenConversation(id: string) {
+  const cid = Number(id)
+  if (!Number.isFinite(cid)) return
+  loadConversation(cid)
+}
+// Session 5 stub — Session 6 wires a real confirmation modal.
+function openDeployModal() {
+  startDeployFromArtifact()
 }
 
 const loadConversation = async (cid: number) => {
@@ -8039,6 +8094,11 @@ watch(conversationId, (id) => {
 </script>
 
 <style scoped>
+/* v2 redesign (Session 5): 3-column shell wrapper that holds
+   ChatConversationList + <main class="chat-main"> (existing chat-page-shell)
+   + AppBlueprintPanel. Existing layout inside .chat-page-shell unchanged. */
+.chat-shell { display: flex; height: 100%; min-height: 0; background: var(--bg-app); }
+.chat-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 /* ══════════════════════════════════════════════
    Theme — uses CSS custom properties (var(--t-*))
    for light/dark theme support.
