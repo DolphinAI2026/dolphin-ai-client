@@ -19,6 +19,7 @@ import WorkbenchShell from '@/components/WorkbenchShell.vue'
 import ShellTopBar from '@/components/v2/ShellTopBar.vue'
 import { useRuntimeSandboxStore } from '@/stores/sandbox'
 import type { RuntimeSandbox } from '@/api/sandbox'
+import { useRuntimeEnvStore } from '@/stores/runtimeEnv'
 
 type PipelineStatus = 'running' | 'success' | 'failed' | 'pending' | 'skip'
 type EnvId = 'dev' | 'test' | 'prod'
@@ -48,19 +49,9 @@ interface Pipeline {
   stages: PipelineStage[]
 }
 
-interface Environment {
-  id: EnvId
-  name: string
-  endpoint: string
-  tenant: string
-  tenantName: string
-  health: 'ok' | 'warn'
-  heartbeat: string
-  deployedApps: number
-  default: boolean
-  keyExpiry: string
-  keyWarn?: boolean
-}
+// Environment type now comes from `@/api/runtimeEnv` (`RuntimeEnv`). Replaced
+// inline `Environment` interface + `ENVIRONMENTS` seed array — see
+// useRuntimeEnvStore below.
 
 interface Deployment {
   id: string
@@ -78,7 +69,12 @@ interface Deployment {
 
 // Sandboxes: real backend (Pinia store) — replaces the inline SANDBOXES seed.
 const sandboxStore = useRuntimeSandboxStore()
-onMounted(() => sandboxStore.fetchSandboxes())
+// Environments: real backend (Pinia store) — replaces the inline ENVIRONMENTS seed.
+const envStore = useRuntimeEnvStore()
+onMounted(() => {
+  sandboxStore.fetchSandboxes()
+  envStore.fetchEnvironments()
+})
 
 const PIPELINES: Pipeline[] = [
   {
@@ -142,24 +138,6 @@ const PIPELINES: Pipeline[] = [
       { name: 'E2E', status: 'done' as unknown as PipelineStatus, durationS: 14 },
       { name: '发布到组件市场', status: 'done' as unknown as PipelineStatus, durationS: 10 },
     ],
-  },
-]
-
-const ENVIRONMENTS: Environment[] = [
-  {
-    id: 'dev', name: '开发环境', endpoint: 'https://apaas-dev.definesys.cn/backend',
-    tenant: '743906758237356033', tenantName: '得帆云示例租户（开发）',
-    health: 'ok', heartbeat: '30s 前', deployedApps: 9, default: false, keyExpiry: '2027-01-15',
-  },
-  {
-    id: 'test', name: '测试环境', endpoint: 'https://apaas-test.definesys.cn/backend',
-    tenant: '743906758237356033', tenantName: '得帆云示例租户（测试）',
-    health: 'ok', heartbeat: '1m 前', deployedApps: 7, default: true, keyExpiry: '2027-01-15',
-  },
-  {
-    id: 'prod', name: '生产环境', endpoint: 'https://apaas-poc.definesys.cn/backend',
-    tenant: '743906758237356033', tenantName: '得帆云示例租户',
-    health: 'warn', heartbeat: '1m 前', deployedApps: 12, default: false, keyExpiry: '2026-05-31', keyWarn: true,
   },
 ]
 
@@ -285,10 +263,10 @@ function renderIcon(name: string, size = 16) {
 }
 
 const TABS = computed(() => [
-  { k: 'sandboxes' as const, l: '沙箱',     c: sandboxStore.total,  ic: 'cloud' },
-  { k: 'pipelines' as const, l: '流水线',   c: PIPELINES.length,    ic: 'zap' },
-  { k: 'envs'      as const, l: '平台环境', c: ENVIRONMENTS.length, ic: 'admin' },
-  { k: 'history'   as const, l: '部署历史', c: DEPLOYMENTS.length,  ic: 'book' },
+  { k: 'sandboxes' as const, l: '沙箱',     c: sandboxStore.total,           ic: 'cloud' },
+  { k: 'pipelines' as const, l: '流水线',   c: PIPELINES.length,             ic: 'zap' },
+  { k: 'envs'      as const, l: '平台环境', c: envStore.environments.length, ic: 'admin' },
+  { k: 'history'   as const, l: '部署历史', c: DEPLOYMENTS.length,           ic: 'book' },
 ])
 
 // Failure log content for the selected run (lifted verbatim from design source).
@@ -578,7 +556,7 @@ const FAILURE_LOG = `  ▸ npm run build:component --name=客户工单看板
 
           <div class="rt-env-grid">
             <div
-              v-for="e in ENVIRONMENTS"
+              v-for="e in envStore.environments"
               :key="e.id"
               :class="['rt-env-card', `rt-env-${e.id}`]"
             >
@@ -607,18 +585,18 @@ const FAILURE_LOG = `  ▸ npm run build:component --name=客户工单看板
                 </div>
                 <div>
                   <div class="rt-env-label">租户</div>
-                  <div class="rt-env-val truncate">{{ e.tenantName }}</div>
+                  <div class="rt-env-val truncate">{{ e.tenant_name }}</div>
                   <div class="mono" style="font-size: 10.5px; color: var(--text-3);">{{ e.tenant }}</div>
                 </div>
                 <div>
                   <div class="rt-env-label">已部署应用</div>
-                  <div class="rt-env-val">{{ e.deployedApps }} 个</div>
+                  <div class="rt-env-val">{{ e.deployed_apps }} 个</div>
                 </div>
                 <div>
                   <div class="rt-env-label">API Key 到期</div>
-                  <div class="rt-env-val" :style="{ color: e.keyWarn ? 'var(--amber)' : undefined }">
-                    <span v-if="e.keyWarn" class="icon" style="vertical-align: -1px; margin-right: 4px;" v-html="renderIcon('bell', 11)" />
-                    {{ e.keyExpiry }}
+                  <div class="rt-env-val" :style="{ color: e.key_warn ? 'var(--amber)' : undefined }">
+                    <span v-if="e.key_warn" class="icon" style="vertical-align: -1px; margin-right: 4px;" v-html="renderIcon('bell', 11)" />
+                    {{ e.key_expiry }}
                   </div>
                 </div>
               </div>
