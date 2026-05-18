@@ -2,36 +2,20 @@
 <!--
   Agent Config Center — 3 agents (Builder / Coding / Vibe) with their
   model + System Prompt + Skills + MCP + Knowledge bindings.
-  Seed data inline until backend `api/agents.ts` lands; trash/save/add
-  are UI stubs. See docs/superpowers/plans/2026-05-18-apaas-builder-redesign-p0-p1.md
-  (P2 — Task #8).
+  Wired to /api/agents (real backend, lazy-seeds on first read). Model
+  dropdown pulls REAL configured models from /api/llm-configs. See
+  docs/superpowers/plans/2026-05-18-v2-backend-integration.md (Session 3).
 -->
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
 import ShellTopBar from '@/components/v2/ShellTopBar.vue'
+import { useAgentsStore } from '@/stores/agents'
+import { llmConfigApi } from '@/api/llmConfig'
+import type { AgentConfig as ApiAgentConfig } from '@/api/agents'
 
-interface Skill { code: string; name: string; desc: string }
-interface Agent {
-  id: 'builder' | 'whale' | 'vibe'
-  name: string
-  icon: 'chat' | 'whale' | 'code'
-  tone: 'ai' | 'brand' | 'emerald'
-  role: string
-  desc: string
-  model: string
-  modelOptions: string[]
-  systemPrompt: string
-  contextWindow: number
-  maxOutput: number
-  skills: Skill[]
-  mcps: string[]
-  knowledge: { industryPacks: string[]; specTemplates: string[] }
-  activeCalls: number
-  todayCalls: number
-}
 interface McpServer {
   id: string
   name: string
@@ -50,75 +34,9 @@ interface IndustryPack {
   stats: { entities: number; relations: number; workflows: number; dicts: number; forms: number; roles: number }
 }
 
-// Seed data — verbatim from $DESIGN_SRC/data.js (lines 540-606 mcps,
-// 785-822 packs, 946-996 agents). Inline until `api/agents.ts` exists.
-const AGENTS: Agent[] = [
-  {
-    id: 'builder', name: '睿鲸 AI Builder', icon: 'chat', tone: 'ai',
-    role: '业务搭建',
-    desc: '从对话出发，把零碎需求整理成标准 SPEC 设计文档，并驱动 aPaaS 平台生成应用。',
-    model: 'Claude Haiku 4.5',
-    modelOptions: ['Claude Haiku 4.5', 'Qwen-Max', 'MiniMax abab6'],
-    systemPrompt:
-      '你是得帆云 aPaaS Builder 的业务搭建助手，目标是把用户的业务需求转化为标准设计文档（SPEC），同时驱动 aPaaS API 生成对应的模型、表单、流程、权限。',
-    contextWindow: 200000,
-    maxOutput: 8192,
-    skills: [
-      { code: 'apaas-app-builder',  name: '应用搭建',       desc: '把 SPEC 翻译为 aPaaS YAML 配置 + 调用执行引擎' },
-      { code: 'apaas-app-updater',  name: '应用增量更新',   desc: '对已部署应用做增量改动 + diff' },
-      { code: 'apaas-api-reference',name: 'API 参考',       desc: '查询 aPaaS API 文档' },
-      { code: 'std-design-doc',     name: '标准设计文档',   desc: '按章节模板生成 / 校验设计文档' },
-      { code: 'requirements-elicit',name: '需求挖掘',       desc: '多轮追问 + 角色 / 边界澄清' },
-    ],
-    mcps: ['mcp-1', 'mcp-3', 'mcp-8'],
-    knowledge: {
-      industryPacks: ['pkg-mfg', 'pkg-crm'],
-      specTemplates: ['std_design_doc', 'mfg_design_doc', 'crm_design_doc'],
-    },
-    activeCalls: 18, todayCalls: 84,
-  },
-  {
-    id: 'whale', name: '睿鲸 AI Coding', icon: 'whale', tone: 'brand',
-    role: '低代码组件生成',
-    desc: '把组件需求翻译为符合 aPaaS 规范的 Vue 组件，并发布到组件市场。',
-    model: 'Claude Haiku 4.5',
-    modelOptions: ['Claude Haiku 4.5', 'Qwen-Coder', 'DeepSeek Coder'],
-    systemPrompt:
-      '你是得帆云 aPaaS 的组件生成助手，目标是生成符合平台规范的 Vue 自开发组件（表单组件 / 页面 / 列表视图 / 后端接口），并打包为 UMD。',
-    contextWindow: 200000,
-    maxOutput: 8192,
-    skills: [
-      { code: 'form-component', name: '表单组件生成', desc: '按 Element UI 2.x 规范生成表单组件' },
-      { code: 'form-page',      name: '页面生成',     desc: '生成 form-page 整页组件' },
-      { code: 'backend-api',    name: '后端接口生成', desc: '生成 aPaaS 后端 OpenAPI 接口' },
-      { code: 'umd-build',      name: 'UMD 打包',     desc: '编译为可挂载到平台的 UMD bundle' },
-    ],
-    mcps: ['mcp-1', 'mcp-2'],
-    knowledge: { industryPacks: [], specTemplates: [] },
-    activeCalls: 3, todayCalls: 12,
-  },
-  {
-    id: 'vibe', name: 'Vibe Coding', icon: 'code', tone: 'emerald',
-    role: '全代码工作区助手',
-    desc: 'code-server 内置 Chat 扩展，帮你直接编辑 / 重构本项目代码。Cursor 风格。',
-    model: 'MiniMax abab6',
-    modelOptions: ['Claude Haiku 4.5', 'Qwen-Coder', 'MiniMax abab6'],
-    systemPrompt:
-      '你是嵌入 code-server 工作区里的代码助手，可以读写工程文件、执行命令、查看 git 状态。优先用项目内已有模式。',
-    contextWindow: 200000,
-    maxOutput: 8192,
-    skills: [
-      { code: 'project-search', name: '项目检索',   desc: 'ripgrep + 语义搜索' },
-      { code: 'multi-edit',     name: '多文件编辑', desc: '并行修改多个文件 + diff 预览' },
-      { code: 'terminal-exec',  name: '终端执行',   desc: '运行 npm / git / 测试命令' },
-      { code: 'git-aware',      name: 'Git 上下文', desc: '理解 branch / commit / 未提交变更' },
-    ],
-    mcps: ['mcp-2', 'mcp-6'],
-    knowledge: { industryPacks: [], specTemplates: [] },
-    activeCalls: 1, todayCalls: 7,
-  },
-]
-
+// MCP servers + industry packs — still local stubs until Session 4/5 land
+// their own backend tables (these only provide display name/icon/tone for
+// the IDs the backend `mcps` / `knowledge.industry_packs` return).
 const MCP_SERVERS: McpServer[] = [
   { id: 'mcp-1', name: '得帆云 aPaaS Tools',  code: 'apaas-tools',         status: 'connected', tools: 14, version: '2.3.1', official: true  },
   { id: 'mcp-2', name: '组件市场检索',         code: 'marketplace-search',  status: 'connected', tools: 5,  version: '1.0.4', official: true  },
@@ -150,17 +68,47 @@ const INDUSTRY_PACKS: IndustryPack[] = [
 ]
 
 const router = useRouter()
-const selectedId = ref<Agent['id']>('builder')
-const cur = computed<Agent>(() => AGENTS.find(a => a.id === selectedId.value) || AGENTS[0])
+const agentsStore = useAgentsStore()
 
-// Local edit state for systemPrompt + model (so 重置 can restore + so the
+// Fallback empty agent so the template never blows up while the first
+// list() request is in-flight (or fails). Once the store has data, `cur`
+// resolves to a real row.
+const EMPTY_AGENT: ApiAgentConfig = {
+  id: 'builder',
+  name: '',
+  role: '',
+  desc: '',
+  tone: 'ai',
+  icon: 'chat',
+  model: '',
+  model_options: [],
+  system_prompt: '',
+  context_window: 200000,
+  max_output: 8192,
+  active_calls: 0,
+  today_calls: 0,
+  skills: [],
+  mcps: [],
+  knowledge: { industry_packs: [], spec_templates: [] },
+}
+
+const selectedId = ref<string>('builder')
+const cur = computed<ApiAgentConfig>(() => {
+  return (
+    agentsStore.agents.find(a => a.id === selectedId.value) ||
+    agentsStore.agents[0] ||
+    EMPTY_AGENT
+  )
+})
+
+// Local edit state for system_prompt + model (so 重置 can restore + so the
 // model <select> persists user choice across re-renders).
-const editedPrompt = ref<Record<string, string>>(
-  AGENTS.reduce((acc, a) => { acc[a.id] = a.systemPrompt; return acc }, {} as Record<string, string>)
-)
+const editedPrompt = ref<Record<string, string>>({})
 const editedModel = ref<Record<string, string>>({})
+const saving = ref(false)
+
 const curPrompt = computed({
-  get: () => editedPrompt.value[cur.value.id],
+  get: () => editedPrompt.value[cur.value.id] ?? cur.value.system_prompt,
   set: (v: string) => { editedPrompt.value[cur.value.id] = v },
 })
 const curModel = computed({
@@ -168,26 +116,77 @@ const curModel = computed({
   set: (v: string) => { editedModel.value[cur.value.id] = v },
 })
 
+// Real configured models from /api/llm-configs (Settings → LLM Configs page).
+const realModels = ref<string[]>([])
+async function loadRealModels() {
+  try {
+    const list = (await llmConfigApi.list()) as unknown as Array<{ model?: string; config_name?: string; provider?: string; status?: string }>
+    if (Array.isArray(list)) {
+      const names = new Set<string>()
+      for (const cfg of list) {
+        if (!cfg) continue
+        if (cfg.status && cfg.status !== 'active') continue
+        if (cfg.config_name) names.add(cfg.config_name)
+        else if (cfg.model) names.add(cfg.model)
+      }
+      realModels.value = Array.from(names)
+    }
+  } catch (e) {
+    // Silent: if llm-configs is empty/unreachable, fall back to seed options.
+    realModels.value = []
+  }
+}
+
+const modelOptions = computed<string[]>(() => {
+  const merged = new Set<string>()
+  // Always include current value so the select doesn't show empty after PUT.
+  if (cur.value.model) merged.add(cur.value.model)
+  // Seed options from backend (originally from inline seed).
+  for (const m of cur.value.model_options || []) merged.add(m)
+  // Real configured models — preferred source going forward.
+  for (const m of realModels.value) merged.add(m)
+  return Array.from(merged)
+})
+
 const curMcps = computed<McpServer[]>(() =>
   cur.value.mcps.map(id => MCP_SERVERS.find(m => m.id === id)).filter(Boolean) as McpServer[]
 )
 const curPacks = computed<IndustryPack[]>(() =>
-  cur.value.knowledge.industryPacks.map(id => INDUSTRY_PACKS.find(p => p.id === id)).filter(Boolean) as IndustryPack[]
+  cur.value.knowledge.industry_packs.map(id => INDUSTRY_PACKS.find(p => p.id === id)).filter(Boolean) as IndustryPack[]
 )
 const curMcpToolsTotal = computed(() => curMcps.value.reduce((s, m) => s + m.tools, 0))
 
 function onReset() {
-  editedPrompt.value[cur.value.id] = cur.value.systemPrompt
-  editedModel.value[cur.value.id] = cur.value.model
+  delete editedPrompt.value[cur.value.id]
+  delete editedModel.value[cur.value.id]
   ElMessage.info('已恢复 System Prompt 与模型初始值')
 }
-function onSave() {
-  ElMessage.success('Agent 配置已保存（mock，暂未持久化）')
+async function onSave() {
+  if (!cur.value.id || !agentsStore.agents.length) {
+    ElMessage.warning('Agent 列表尚未加载完成')
+    return
+  }
+  if (saving.value) return
+  saving.value = true
+  try {
+    await agentsStore.saveAgent(cur.value.id, {
+      model: curModel.value,
+      system_prompt: curPrompt.value,
+    })
+    // Clear local overrides — server is now source of truth.
+    delete editedPrompt.value[cur.value.id]
+    delete editedModel.value[cur.value.id]
+    ElMessage.success('Agent 配置已保存')
+  } catch (e: any) {
+    ElMessage.error(`保存失败：${e?.message || e}`)
+  } finally {
+    saving.value = false
+  }
 }
 function onAddSkill() {
   ElMessage.info('Skill 库选择即将上线')
 }
-function onRemoveSkill(s: Skill) {
+function onRemoveSkill(s: { code: string; name: string; desc: string }) {
   ElMessage.info(`Skill「${s.name}」已移除（mock，暂未持久化）`)
 }
 function onRemoveMcp(m: McpServer) {
@@ -201,6 +200,17 @@ function onRemoveSpecTemplate(t: string) {
 }
 function gotoMcp() { router.push('/mcp') }
 function gotoIndustry() { router.push('/industry') }
+
+onMounted(async () => {
+  await Promise.all([
+    agentsStore.fetchAgents(),
+    loadRealModels(),
+  ])
+  // Default-select first agent if `builder` not present.
+  if (agentsStore.agents.length && !agentsStore.agents.find(a => a.id === selectedId.value)) {
+    selectedId.value = agentsStore.agents[0].id
+  }
+})
 
 // Icon set — copy from $DESIGN_SRC/shell.jsx (lines 14-75). Same 24 viewBox /
 // 1.6 stroke as RailSidebar. Only the icons this page actually uses.
@@ -223,7 +233,7 @@ function renderIcon(name: string, size = 16) {
   return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`
 }
 
-const ctxWindowK = computed(() => (cur.value.contextWindow / 1000).toFixed(0))
+const ctxWindowK = computed(() => (cur.value.context_window / 1000).toFixed(0))
 const knowledgeEmptyHint = computed(() =>
   cur.value.id === 'whale' ? '组件代码生成基于规范' : 'IDE 内 Agent 基于工程上下文'
 )
@@ -251,7 +261,7 @@ const knowledgeEmptyHint = computed(() =>
           <!-- Left: 3 agents list -->
           <div class="agent-list">
             <button
-              v-for="a in AGENTS"
+              v-for="a in agentsStore.agents"
               :key="a.id"
               class="agent-pick"
               :class="{ active: selectedId === a.id }"
@@ -266,11 +276,14 @@ const knowledgeEmptyHint = computed(() =>
                   <span>·</span>
                   <span><b>{{ a.mcps.length }}</b> MCP</span>
                   <span>·</span>
-                  <span>{{ a.todayCalls }} 今日调用</span>
+                  <span>{{ a.today_calls }} 今日调用</span>
                 </div>
               </div>
               <span v-if="selectedId === a.id" class="agent-pick-chevron" v-html="renderIcon('chevronR', 14)" />
             </button>
+            <div v-if="agentsStore.loading && !agentsStore.agents.length" class="agent-empty">
+              加载中…
+            </div>
 
             <div class="agent-help">
               <div class="agent-help-head">
@@ -300,8 +313,8 @@ const knowledgeEmptyHint = computed(() =>
                   <button class="btn btn-secondary btn-sm" @click="onReset">
                     <span class="icon" v-html="renderIcon('refresh', 12)" /> 重置
                   </button>
-                  <button class="btn btn-primary btn-sm" @click="onSave">
-                    <span class="icon" v-html="renderIcon('check', 12)" /> 保存
+                  <button class="btn btn-primary btn-sm" :disabled="saving" @click="onSave">
+                    <span class="icon" v-html="renderIcon('check', 12)" /> {{ saving ? '保存中…' : '保存' }}
                   </button>
                 </div>
               </div>
@@ -310,7 +323,7 @@ const knowledgeEmptyHint = computed(() =>
                 <div class="agent-field">
                   <div class="agent-field-label">模型</div>
                   <select class="input" v-model="curModel">
-                    <option v-for="m in cur.modelOptions" :key="m" :value="m">{{ m }}</option>
+                    <option v-for="m in modelOptions" :key="m" :value="m">{{ m }}</option>
                   </select>
                 </div>
                 <div class="agent-field">
@@ -319,7 +332,7 @@ const knowledgeEmptyHint = computed(() =>
                 </div>
                 <div class="agent-field">
                   <div class="agent-field-label">最大输出</div>
-                  <div class="agent-field-value mono">{{ cur.maxOutput }} tokens</div>
+                  <div class="agent-field-value mono">{{ cur.max_output }} tokens</div>
                 </div>
               </div>
 
@@ -384,7 +397,7 @@ const knowledgeEmptyHint = computed(() =>
               <div class="agent-section-head">
                 <span>知识源
                   <span class="agent-section-count">
-                    {{ curPacks.length }} 行业包 + {{ cur.knowledge.specTemplates.length }} 文档模板
+                    {{ curPacks.length }} 行业包 + {{ cur.knowledge.spec_templates.length }} 文档模板
                   </span>
                 </span>
                 <span title="行业包 = 业务对象 / 流程 / 字典；SPEC 模板 = 文档章节骨架">
@@ -392,7 +405,7 @@ const knowledgeEmptyHint = computed(() =>
                 </span>
                 <button class="section-action section-action-trailing" @click="gotoIndustry">行业知识库 →</button>
               </div>
-              <div v-if="curPacks.length > 0 || cur.knowledge.specTemplates.length > 0" class="agent-knowledge">
+              <div v-if="curPacks.length > 0 || cur.knowledge.spec_templates.length > 0" class="agent-knowledge">
                 <div v-for="pk in curPacks" :key="pk.id" class="agent-know-row">
                   <div :class="['industry-pack-icon', `tone-${pk.tone}`, 'know-icon']" v-html="renderIcon('industry', 13)" />
                   <div class="agent-know-body">
@@ -406,7 +419,7 @@ const knowledgeEmptyHint = computed(() =>
                   </div>
                   <button class="icon-btn icon-btn-sm" title="移除" @click="onRemoveKnowledge(pk)" v-html="renderIcon('trash', 11)" />
                 </div>
-                <div v-for="t in cur.knowledge.specTemplates" :key="t" class="agent-know-row">
+                <div v-for="t in cur.knowledge.spec_templates" :key="t" class="agent-know-row">
                   <div class="know-icon know-icon-doc" v-html="renderIcon('doc', 13)" />
                   <div class="agent-know-body">
                     <div class="agent-know-name mono">{{ t }}</div>
