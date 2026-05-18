@@ -7583,10 +7583,14 @@ onMounted(async () => {
     currentAgent.value = 'requirements'
   }
 
-  // 2026-05-18: 把 pendingMarkdown / pendingFile / pendingDocUpdate 处理提前
-  // 到 onMounted 最早 — 文档上传不应该等 /apaas/status 和 loadBuilderModelOptions
-  // 拖慢，否则用户从 AI-Chat → Builder 跳过来后看见空白页面以为坏了。
-  // pendingDocUpdate 依赖 existingAppId（在下方 app_id 分支里 set），所以留在原位。
+  // 2026-05-18: 把 pendingMarkdown / pendingFile 处理提前到 onMounted 最早 —
+  // 文档上传不应该等 /apaas/status 和 loadBuilderModelOptions 拖慢，否则用户从
+  // AI-Chat → Builder 跳过来后看见空白页面以为坏了。pendingDocUpdate 依赖
+  // existingAppId（在下方 app_id 分支里 set），所以留在原位。
+  // ⚠️ 必须 await uploadDocFile — fire-and-forget 会跟后续代码（fetchConversationList
+  // 等）race condition：uploadDocFile 内部异步创建 conversation + auto-create app，
+  // 后续 fetchSidebarApps 等可能在 conversation 还没 set conversationId 前就跑完，
+  // 导致 conv=None spec=None 的应用残留（5/18 实测最近 app 77, 76 都 conv=None）。
   if (store.pendingMarkdown) {
     const pending = store.pendingMarkdown
     store.pendingMarkdown = null
@@ -7598,15 +7602,14 @@ onMounted(async () => {
     resetMessagesToWelcome()
     const file = new File([pending.content], pending.filename, { type: 'text/markdown' })
     await nextTick()
-    // 不 await — 让 uploadDocFile 在后台跑，剩余 onMounted 继续（模型列表、apaas status 等）
-    uploadDocFile(file).catch(e => console.error('uploadDocFile from aichat failed:', e))
+    await uploadDocFile(file)
   } else if (store.pendingFile) {
     const file = store.pendingFile
     store.pendingFile = null
     resetConversationWorkspace()
     resetMessagesToWelcome()
     await nextTick()
-    uploadDocFile(file).catch(e => console.error('uploadDocFile from landing failed:', e))
+    await uploadDocFile(file)
   }
 
   // 检查平台连接状态
