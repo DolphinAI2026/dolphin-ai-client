@@ -316,6 +316,7 @@ from app.models.runtime_v2 import (  # noqa: E402, F401
     PipelineRun,
     DeploymentHistory,
 )
+from app.models.skill_catalog import AgentSkillCatalog  # noqa: E402, F401  — register ORM mapping
 
 
 class DolphinUserLink(Base):
