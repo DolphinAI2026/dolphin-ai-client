@@ -8,12 +8,26 @@ import { useRuntimeDeploymentStore } from '@/stores/runtimeDeployment'
 interface NavItem { key: string; label: string; icon: string; path: string; badge?: number }
 interface NavGroup { group: string; items: NavItem[] }
 
-defineProps<{ collapsed?: boolean }>()
+// 2026-05-19 image #37: 用户要求左侧 nav 可收起。collapsed 自己控制 + localStorage 持久化。
+// 仍接受外部 collapsed prop 作为优先 override（兼容老调用方）。
+const props = defineProps<{ collapsed?: boolean }>()
 const route = useRoute()
 const router = useRouter()
 const user = useUserStore()
 const mcpStore = useMcpStore()
 const runtimeStore = useRuntimeDeploymentStore()
+
+const RAIL_COLLAPSE_KEY = 'apaas-rail-collapsed-v1'
+const internalCollapsed = ref<boolean>(localStorage.getItem(RAIL_COLLAPSE_KEY) === '1')
+// Vue gotcha: 未设置的 boolean prop 默认 false (不是 undefined)，
+// 所以"父级显式 override"只识 true → 否则一律走 internal state。
+const effectiveCollapsed = computed(() =>
+  props.collapsed === true ? true : internalCollapsed.value
+)
+function toggleCollapsed() {
+  internalCollapsed.value = !internalCollapsed.value
+  try { localStorage.setItem(RAIL_COLLAPSE_KEY, internalCollapsed.value ? '1' : '0') } catch { /* private mode */ }
+}
 
 // Lazy counts that don't have dedicated stores. undefined → hide badge.
 const appCount = ref<number | undefined>(undefined)
@@ -102,7 +116,7 @@ function renderIcon(name: string): string {
 </script>
 
 <template>
-  <aside class="rail" :class="{ 'rail-collapsed': collapsed }">
+  <aside class="rail" :class="{ 'rail-collapsed': effectiveCollapsed }">
     <div class="rail-brand">
       <button class="rail-logo" @click="router.push('/')" aria-label="aPaaS Builder">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
@@ -112,7 +126,7 @@ function renderIcon(name: string): string {
           <rect x="13" y="13" width="8" height="8" rx="2" fill="white" />
         </svg>
       </button>
-      <div v-if="!collapsed">
+      <div v-if="!effectiveCollapsed">
         <div class="rail-title">aPaaS Builder</div>
         <div class="rail-title-sub">AI · 低代码 · 全代码</div>
       </div>
@@ -136,6 +150,19 @@ function renderIcon(name: string): string {
     </div>
 
     <div class="rail-foot">
+      <button
+        type="button"
+        class="rail-collapse-btn"
+        :title="effectiveCollapsed ? '展开导航' : '收起导航'"
+        :aria-label="effectiveCollapsed ? '展开导航' : '收起导航'"
+        @click="toggleCollapsed"
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline v-if="effectiveCollapsed" points="9 18 15 12 9 6" />
+          <polyline v-else points="15 18 9 12 15 6" />
+        </svg>
+        <span v-if="!effectiveCollapsed" class="rail-collapse-btn-label">收起</span>
+      </button>
       <button class="rail-user">
         <div class="rail-avatar">{{ userName.slice(0, 1).toUpperCase() }}</div>
         <div class="rail-user-info">
@@ -179,4 +206,27 @@ function renderIcon(name: string): string {
 .rail-user-name { font-size: 13px; font-weight: 600; color: var(--text); line-height: 1.2; }
 .rail-user-tenant { font-size: 11px; color: var(--text-3); line-height: 1.2; margin-top: 1px; }
 .rail-collapsed .rail-user-info { display: none; }
+
+/* image #37 收起切换按钮 */
+.rail-collapse-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-3);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.rail-collapse-btn:hover {
+  background: var(--brand-soft);
+  color: var(--text);
+}
+.rail-collapsed .rail-collapse-btn { padding: 8px; }
+.rail-collapse-btn-label { line-height: 1; }
 </style>
