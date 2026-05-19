@@ -4646,3 +4646,53 @@ async def browser_stop_recording(tenant_id: int = 0, user_id: int = 0) -> dict:
         return parsed
     except Exception:
         return {"ok": True, "raw": raw}
+
+
+@mcp.tool()
+async def browser_list_pages(tenant_id: int = 0, user_id: int = 0) -> dict:
+    """列出浏览器里所有打开的 tabs。chrome-devtools-mcp v1.0.1 的 list_pages 返空，
+    改走 Chrome CDP HTTP 端点 /json/list 拿。
+
+    返回 pages: [{id, url, title, type}]。AI 撞 'No page selected' 时用它定位 tab，
+    再 browser_navigate 跳过去（navigate 会自动 select 那个 tab）。
+    """
+    import httpx as _httpx
+    import os as _os
+    base = _os.getenv("CHROME_DEVTOOLS_BROWSER_URL", "http://127.0.0.1:9222")
+    try:
+        async with _httpx.AsyncClient(timeout=5.0) as cli:
+            r = await cli.get(f"{base}/json/list")
+            if r.status_code != 200:
+                return {"ok": False, "error_code": "CDP_HTTP", "message": f"HTTP {r.status_code}"}
+            data = r.json()
+            pages = [
+                {
+                    "id": p.get("id"),
+                    "url": p.get("url"),
+                    "title": p.get("title"),
+                    "type": p.get("type"),
+                }
+                for p in data
+                if p.get("type") in ("page", "tab", "background_page", None)
+            ]
+            return {"ok": True, "count": len(pages), "pages": pages}
+    except Exception as exc:
+        return {"ok": False, "error_code": "CDP_FAIL", "message": str(exc)}
+
+
+@mcp.tool()
+async def browser_select_page(page_id: int, bring_to_front: bool = True, tenant_id: int = 0, user_id: int = 0) -> dict:
+    """切换到指定 tab 当作"活动 page" — 后续 snapshot/click/type 都作用在它上。
+
+    先 browser_list_pages 拿 pageId。bring_to_front=true 会让那个 tab 浮到前面。
+    """
+    from app.browser_mcp_bridge import browser_bridge
+    raw = await browser_bridge.call_tool(
+        "select_page",
+        {"pageId": page_id, "bringToFront": bring_to_front},
+    )
+    try:
+        import json as _j
+        return _j.loads(raw)
+    except Exception:
+        return {"ok": True, "raw": raw}

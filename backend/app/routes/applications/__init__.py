@@ -2274,6 +2274,8 @@ _CONFIG_CHAT_TOOL_WHITELIST: set[str] = {
     "browser_type",
     "browser_navigate",
     "browser_screenshot",
+    "browser_list_pages",
+    "browser_select_page",
     # —— Skill 自学习（image #46） ——
     # 用户教过 AI 一类操作后，AI 用 save_config_skill 把流程总结成 steps_md。
     # 下次同类指令进来，system_prompt 自动注入相关 skills 让 AI 直接 follow。
@@ -2713,6 +2715,11 @@ async def _config_chat_event_stream(
             "- 用旧 snapshot 的 uid 调 click/type 会失败或点错元素\n"
             "- **铁律**：每次 click/type 前都先重新 browser_snapshot 拿当前 uid\n"
             "- 点击后建议再 browser_snapshot 验证 'selected' 状态变了\n\n"
+            "**⚠️ 撞 'No page selected' 错？** chrome-devtools-mcp 内部 active page 状态丢了。修法:\n"
+            "  1. browser_list_pages 拿所有 tab 列表 (含 pageId + URL)\n"
+            "  2. 找用户当前要操作的 tab（一般是 localhost:5173/ai-builder/... 那个）\n"
+            "  3. browser_select_page(pageId) 切过去\n"
+            "  4. 再 snapshot/click 就行了\n\n"
             "**操作完关键步骤建议 browser_screenshot 让用户视觉验收** —— Claude in Chrome\n"
             "风格，截图会在右侧助手面板直接渲染缩略图，用户能确认 AI 真做对了。\n\n"
             "前提：用户 Chrome 必须开 --remote-debugging-port=9222。\n"
