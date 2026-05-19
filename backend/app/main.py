@@ -41,6 +41,7 @@ from app.routes import (
     platform_proxy,
     preferences,
     projects,
+    quick_db,
     proposals,
     requirements,
     runtime_v2,
@@ -185,6 +186,7 @@ app.include_router(projects.router, prefix="/api")
 app.include_router(marketplace.router, prefix="/api")
 app.include_router(templates.router, prefix="/api")
 app.include_router(platform_envs.router, prefix="/api")
+app.include_router(quick_db.router, prefix="/api")
 app.include_router(llm_configs.router, prefix="/api")
 app.include_router(browser.router, prefix="/api")
 app.include_router(harness.router, prefix="/api")
@@ -212,6 +214,9 @@ app.include_router(current_app.router, prefix="/api")
 app.include_router(admin_mcp.router, prefix="/api")
 app.include_router(builder_mcp.router, prefix="/api")
 app.include_router(mcp_hub.router)
+# 2026-05-19 Chrome extension WebSocket bridge — image #50 follow-up POC
+from app.routes import browser_ext_ws  # noqa: E402
+app.include_router(browser_ext_ws.router)
 # V2 redesign routes — agents config / industry packs / SPEC list / runtime pipelines+deployments
 app.include_router(agents_config.router, prefix="/api")
 app.include_router(industry.router, prefix="/api")

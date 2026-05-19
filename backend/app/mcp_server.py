@@ -4264,38 +4264,55 @@ async def doctor_apaas_backend_workspace(
 # 详细架构 + 风险：docs/rfc-2026-05-19-browser-control-poc.md
 
 
+async def _browser_tool_via_ext_or_cdm(cmd: str, args: dict) -> dict | None:
+    """优先用 chrome extension（操作用户真主 Chrome），未连接返 None 让调用方走 chrome-devtools-mcp fallback。"""
+    from app.routes.browser_ext_ws import ext_router
+    if not ext_router.is_connected:
+        return None
+    return await ext_router.call(cmd, args, timeout=30.0)
+
+
 @mcp.tool()
 async def browser_snapshot(tenant_id: int = 0, user_id: int = 0) -> dict:
     """拿当前浏览器活动 tab 的 accessibility tree 快照（含 element uid，给 click/type 用）。
 
-    配置助手在做"加表单组件 / 改流程 / 调菜单"等 MCP API 够不到的操作前，
-    先调它看现场页面结构。要求用户 Chrome 已 --remote-debugging-port=9222。
+    优先走 Chrome extension (apaas-builder-helper) → 操作用户真主 Chrome 所有 tab。
+    extension 没装时降级到 chrome-devtools-mcp (9222 独立 profile Chrome)。
     """
+    via_ext = await _browser_tool_via_ext_or_cdm("snapshot", {})
+    if via_ext is not None:
+        if via_ext.get("ok"):
+            return {"ok": True, "source": "extension", "snapshot": via_ext.get("result")}
+        return via_ext
+    # fallback chrome-devtools-mcp
     from app.browser_mcp_bridge import browser_bridge
     raw = await browser_bridge.call_tool("take_snapshot", {})
     try:
         import json as _j
         parsed = _j.loads(raw)
-        return parsed if isinstance(parsed, dict) else {"ok": True, "raw": raw}
+        return parsed if isinstance(parsed, dict) else {"ok": True, "source": "cdm", "raw": raw}
     except Exception:
-        return {"ok": True, "snapshot": raw[:8000]}
+        return {"ok": True, "source": "cdm", "snapshot": raw[:8000]}
 
 
 @mcp.tool()
 async def browser_click(uid: str, tenant_id: int = 0, user_id: int = 0) -> dict:
     """点击 a11y tree 里的某个元素（uid 由 browser_snapshot 返回）。
 
-    示例 flow: browser_snapshot → 看到「备注」字段 uid=e123 → browser_click(uid=e123)。
+    优先 chrome extension，fallback chrome-devtools-mcp。
     """
     if not uid.strip():
         return {"ok": False, "error_code": "INVALID_UID", "message": "uid 不能为空"}
+    via_ext = await _browser_tool_via_ext_or_cdm("click", {"uid": uid.strip()})
+    if via_ext is not None:
+        return {**via_ext, "source": "extension"}
     from app.browser_mcp_bridge import browser_bridge
     raw = await browser_bridge.call_tool("click", {"uid": uid.strip()})
     try:
         import json as _j
-        return _j.loads(raw)
+        return {**_j.loads(raw), "source": "cdm"}
     except Exception:
-        return {"ok": True, "raw": raw}
+        return {"ok": True, "source": "cdm", "raw": raw}
 
 
 @mcp.tool()
@@ -4303,13 +4320,16 @@ async def browser_type(uid: str, text: str, tenant_id: int = 0, user_id: int = 0
     """往 a11y tree 里某个 input 元素填文本。先 browser_snapshot 拿 uid。"""
     if not uid.strip():
         return {"ok": False, "error_code": "INVALID_UID", "message": "uid 不能为空"}
+    via_ext = await _browser_tool_via_ext_or_cdm("type", {"uid": uid.strip(), "text": text})
+    if via_ext is not None:
+        return {**via_ext, "source": "extension"}
     from app.browser_mcp_bridge import browser_bridge
     raw = await browser_bridge.call_tool("fill", {"uid": uid.strip(), "value": text})
     try:
         import json as _j
-        return _j.loads(raw)
+        return {**_j.loads(raw), "source": "cdm"}
     except Exception:
-        return {"ok": True, "raw": raw}
+        return {"ok": True, "source": "cdm", "raw": raw}
 
 
 @mcp.tool()
@@ -4317,13 +4337,16 @@ async def browser_navigate(url: str, tenant_id: int = 0, user_id: int = 0) -> di
     """让当前活动 tab 跳到指定 URL。等页面加载完返回。"""
     if not url.strip():
         return {"ok": False, "error_code": "INVALID_URL", "message": "url 不能为空"}
+    via_ext = await _browser_tool_via_ext_or_cdm("navigate", {"url": url.strip()})
+    if via_ext is not None:
+        return {**via_ext, "source": "extension"}
     from app.browser_mcp_bridge import browser_bridge
     raw = await browser_bridge.call_tool("navigate_page", {"url": url.strip()})
     try:
         import json as _j
-        return _j.loads(raw)
+        return {**_j.loads(raw), "source": "cdm"}
     except Exception:
-        return {"ok": True, "raw": raw}
+        return {"ok": True, "source": "cdm", "raw": raw}
 
 
 @mcp.tool()
