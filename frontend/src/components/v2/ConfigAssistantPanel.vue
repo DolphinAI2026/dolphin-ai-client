@@ -610,27 +610,31 @@ function onResizeStart(e: MouseEvent) {
   margin: 10px 0;
 }
 
-/* SSE streaming progress log */
+/* SSE streaming progress log — 默认只显示最后 4 行 + 自动滚到底 */
 .ca-stream-log {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
   margin-bottom: 8px;
-  padding: 8px 10px;
-  border-radius: 6px;
+  padding: 10px 12px;
+  border-radius: 8px;
   background: var(--surface-3);
   border: 1px dashed var(--border);
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--text-2);
   font-family: var(--d-font-mono);
-  max-height: 200px;
+  /* 把每行真正撑开，不再 ellipsis 截断；只在 N 行后才滚动 */
+  max-height: 360px;
   overflow-y: auto;
+  line-height: 1.55;
 }
 .ca-stream-line {
-  line-height: 1.5;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-x: auto;
+  padding: 1px 0;
+}
+.ca-stream-line::-webkit-scrollbar {
+  height: 4px;
 }
 .ca-bubble-typing {
   display: flex;
