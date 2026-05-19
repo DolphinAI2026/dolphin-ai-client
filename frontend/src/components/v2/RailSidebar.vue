@@ -57,10 +57,9 @@ const NAV = computed<NavGroup[]>(() => [
     { key: 'coding', label: '睿鲸 AI Coding', icon: 'whale', path: '/coding', badge: codingWorkspaceCount.value || undefined },
     { key: 'vibe',   label: 'Vibe Coding',    icon: 'code',  path: '/vibe' },
   ]},
+  // 2026-05-19 用户拍板"先去掉" 智能体配置 / 设计文档 / 行业知识库 三项 —
+  // 留 组件市场 + MCP 管理 在"知识 & 智能体"分组下。路由保留（admin 可手动访问）。
   { group: '知识 & 智能体', items: [
-    { key: 'agents',      label: '智能体配置', icon: 'sparkle',  path: '/agents' },
-    { key: 'specs',       label: '设计文档',   icon: 'doc',      path: '/specs' },
-    { key: 'industry',    label: '行业知识库', icon: 'industry', path: '/industry' },
     { key: 'marketplace', label: '组件市场',   icon: 'store',    path: '/marketplace' },
     { key: 'mcp',         label: 'MCP 管理',   icon: 'mcp',      path: '/mcp', badge: mcpStore.total || undefined },
   ]},
