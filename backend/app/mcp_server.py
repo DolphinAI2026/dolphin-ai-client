@@ -4328,15 +4328,35 @@ async def browser_navigate(url: str, tenant_id: int = 0, user_id: int = 0) -> di
 
 @mcp.tool()
 async def browser_screenshot(tenant_id: int = 0, user_id: int = 0) -> dict:
-    """截当前 tab 视口（PNG）。返 base64 图像，agent 用 vision LLM 看。
+    """截当前 tab 视口（PNG），返 base64 data URL，前端 <img> 可直显示。
 
-    比 browser_snapshot 信息更全（视觉布局、颜色、错误提示等），但 token 成本更高。
+    比 browser_snapshot 信息更全（视觉布局、颜色、错误提示等），token 成本更高。
     建议：先 snapshot 看 a11y 结构，找不到元素再 screenshot 用视觉定位。
     """
+    import base64 as _b64
+    import os as _os
+    import tempfile as _tmp
+    import time as _t
     from app.browser_mcp_bridge import browser_bridge
-    raw = await browser_bridge.call_tool("take_screenshot", {"format": "png"})
+
+    # chrome-devtools-mcp take_screenshot 默认不返 base64，得指定 filePath 落盘
+    tmp_path = _os.path.join(_tmp.gettempdir(), f"apaas_browser_shot_{int(_t.time()*1000)}.png")
+    raw = await browser_bridge.call_tool(
+        "take_screenshot",
+        {"format": "png", "filePath": tmp_path},
+    )
     try:
-        import json as _j
-        return _j.loads(raw)
-    except Exception:
-        return {"ok": True, "screenshot": raw[:200] + "..."}
+        if not _os.path.exists(tmp_path):
+            return {"ok": False, "error_code": "SCREENSHOT_FAILED", "raw": raw}
+        with open(tmp_path, "rb") as f:
+            data = f.read()
+        _os.unlink(tmp_path)
+        b64 = _b64.b64encode(data).decode("ascii")
+        return {
+            "ok": True,
+            "image_data_url": f"data:image/png;base64,{b64}",
+            "mime_type": "image/png",
+            "data_size": len(data),
+        }
+    except Exception as exc:
+        return {"ok": False, "error_code": "SCREENSHOT_READ_FAILED", "message": str(exc)}

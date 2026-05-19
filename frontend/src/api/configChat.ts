@@ -39,6 +39,8 @@ export interface ConfigChatToolTrace {
   args: Record<string, any>
   ok: boolean
   summary: string
+  /** browser_screenshot 截图返回的 data URL，前端 <img> 直显 */
+  image_data_url?: string
 }
 
 export interface ConfigChatResp {

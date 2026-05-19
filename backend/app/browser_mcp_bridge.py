@@ -63,11 +63,14 @@ class BrowserMcpBridge:
             if self._proc and self._proc.returncode is None:
                 return True
             try:
+                # asyncio default readline buffer = 64KB；PNG base64 screenshot 远超。
+                # 给 stdout 16 MB buffer 兜底，再大就分块协议（Phase 2）。
                 self._proc = await asyncio.create_subprocess_exec(
                     *_CDM_CMD,
                     stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
+                    limit=16 * 1024 * 1024,
                 )
                 self._reader_task = asyncio.create_task(self._read_loop())
                 # MCP initialize handshake
@@ -210,7 +213,19 @@ class BrowserMcpBridge:
             if not content:
                 return json.dumps({"ok": True, "empty": True}, ensure_ascii=False)
             block = content[0]
-            text = block.get("text") if isinstance(block, dict) else None
+            if not isinstance(block, dict):
+                return json.dumps({"ok": True, "raw": result}, ensure_ascii=False)
+            # Image content block — chrome-devtools-mcp 的 take_screenshot 返这种
+            if block.get("type") == "image" and block.get("data"):
+                mime = block.get("mimeType") or "image/png"
+                # 截图直接返 data URL 给前端能 <img src> 渲染
+                return json.dumps({
+                    "ok": True,
+                    "image_data_url": f"data:{mime};base64,{block['data']}",
+                    "mime_type": mime,
+                    "data_size": len(block["data"]),
+                }, ensure_ascii=False)
+            text = block.get("text")
             if text is None:
                 return json.dumps({"ok": True, "raw": result}, ensure_ascii=False)
             return text

@@ -175,6 +175,14 @@ function pickExample(text: string) {
   input.value = text
 }
 
+// 截图大图查看 — 新 tab 打开 data URL
+function openScreenshot(dataUrl: string) {
+  try {
+    const w = window.open()
+    if (w) w.document.write(`<img src="${dataUrl}" style="max-width:100%;height:auto;" />`)
+  } catch { /* popup blocked */ }
+}
+
 // 2026-05-19 image #36: 例子 chip 按当前应用真实 SPEC 动态生成，不再写死
 // "人员档案" 这种跨应用无关的内容。失败/无 SPEC 时 fallback 到能力提示 chip。
 type Example = { id: string; text: string }
@@ -303,6 +311,20 @@ function onResizeStart(e: MouseEvent) {
             >
               {{ t.ok ? '✓' : '✗' }} {{ t.tool_name }}
             </span>
+          </div>
+          <!-- 浏览器截图直接渲染（Claude in Chrome 风格）-->
+          <div
+            v-if="m.role === 'assistant' && m.tool_trace && m.tool_trace.some(t => t.image_data_url)"
+            class="ca-screenshots"
+          >
+            <figure
+              v-for="(t, i) in m.tool_trace.filter(t => t.image_data_url)"
+              :key="'shot-' + i"
+              class="ca-screenshot"
+            >
+              <img :src="t.image_data_url" alt="browser screenshot" @click="openScreenshot(t.image_data_url!)" />
+              <figcaption>📸 {{ t.tool_name }}</figcaption>
+            </figure>
           </div>
           <!-- streaming progress log: SSE 期间显示工具调用实时进度 -->
           <div
@@ -627,6 +649,38 @@ function onResizeStart(e: MouseEvent) {
 @keyframes ca-bounce {
   0%, 80%, 100% { opacity: 0.3; transform: scale(0.85); }
   40% { opacity: 1; transform: scale(1); }
+}
+
+/* image #43 — 浏览器截图缩略图 (Claude in Chrome 风格) */
+.ca-screenshots {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0;
+}
+.ca-screenshot {
+  margin: 0;
+  padding: 4px;
+  border-radius: 6px;
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+}
+.ca-screenshot img {
+  width: 100%;
+  height: auto;
+  display: block;
+  border-radius: 4px;
+  cursor: zoom-in;
+  transition: opacity 0.15s;
+}
+.ca-screenshot img:hover {
+  opacity: 0.92;
+}
+.ca-screenshot figcaption {
+  font-size: 10.5px;
+  color: var(--text-3);
+  margin-top: 3px;
+  text-align: right;
 }
 
 /* tool_trace chips — 让用户看见 AI 真调了哪些 MCP 工具 */

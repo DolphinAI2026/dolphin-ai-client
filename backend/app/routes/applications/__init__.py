@@ -2666,9 +2666,17 @@ async def _config_chat_event_stream(
             "## 浏览器控制兜底 (apaas 平台 MCP API 够不到时)\n"
             "如果用户要做的事 (加表单组件 / 拖拽字段到表单 / 改流程拓扑 / 改菜单顺序等)\n"
             "MCP API 没暴露，**不要直接告诉用户'我做不到，请手动操作'** — 试试浏览器工具：\n"
-            "  1. browser_snapshot — 拿当前浏览器 tab 的 a11y tree (含元素 uid)\n"
-            "  2. browser_click(uid) / browser_type(uid, text) — 操作元素\n"
-            "  3. browser_screenshot — 视觉确认 / 找元素时辅助\n"
+            "  1. browser_navigate(url) — 跳到目标页面\n"
+            "  2. browser_snapshot — 拿当前 tab 的 a11y tree (含元素 uid)\n"
+            "  3. browser_click(uid) / browser_type(uid, text) — 操作元素\n"
+            "  4. browser_screenshot — 截图（直接渲染在会话面板让用户看）\n\n"
+            "**⚠️ uid 跨 snapshot 不稳定！**\n"
+            "- 每次 browser_snapshot 会重置 uid prefix (1_*, 2_*, 3_*...)\n"
+            "- 用旧 snapshot 的 uid 调 click/type 会失败或点错元素\n"
+            "- **铁律**：每次 click/type 前都先重新 browser_snapshot 拿当前 uid\n"
+            "- 点击后建议再 browser_snapshot 验证 'selected' 状态变了\n\n"
+            "**操作完关键步骤建议 browser_screenshot 让用户视觉验收** —— Claude in Chrome\n"
+            "风格，截图会在右侧助手面板直接渲染缩略图，用户能确认 AI 真做对了。\n\n"
             "前提：用户 Chrome 必须开 --remote-debugging-port=9222。\n"
             "失败 (BRIDGE_NOT_STARTED) 时降级到出步骤指引让用户手动点。\n"
         )
@@ -2758,18 +2766,38 @@ async def _config_chat_event_stream(
                         }, ensure_ascii=False)
                         ok_flag = False
 
+                # 检测 image_data_url（browser_screenshot 返的）— 给前端单独 emit
+                # 避免 result_text 全文（含 base64 几十 KB）反复出现在 trace_item
+                # 同时 messages 喂回 LLM 时图像不当 prompt token (vision pipeline 留 Phase 2)
+                image_data_url: str | None = None
+                try:
+                    _parsed_tr = json.loads(result_text)
+                    if isinstance(_parsed_tr, dict) and _parsed_tr.get("image_data_url"):
+                        image_data_url = _parsed_tr["image_data_url"]
+                except Exception:
+                    pass
+
                 summary = result_text[:200] + ("..." if len(result_text) > 200 else "")
                 trace_item = {
                     "tool_name": tool_name, "args": tc_args,
                     "ok": ok_flag, "summary": summary,
                 }
+                if image_data_url:
+                    trace_item["image_data_url"] = image_data_url
                 tool_trace.append(trace_item)
                 yield _sse("tool_result", trace_item)
 
+                # 喂回 LLM 的 tool content：图片用占位文字替代 base64，避免 token 爆炸
+                feed_text = result_text[:4000]
+                if image_data_url:
+                    feed_text = json.dumps({
+                        "ok": True, "image_captured": True,
+                        "note": "已截图，渲染在会话面板内供用户查看；后续可继续 snapshot/click 操作",
+                    }, ensure_ascii=False)
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc_id,
-                    "content": result_text[:4000],
+                    "content": feed_text,
                 })
         else:
             reply = reply or "（已达到工具调用上限 5 轮，可能还需进一步确认）"
