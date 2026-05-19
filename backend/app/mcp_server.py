@@ -4521,3 +4521,128 @@ async def delete_config_skill(
         await db.execute(delete(ConfigAssistantSkill).where(ConfigAssistantSkill.id == skill_id))
         await db.commit()
         return {"ok": True, "message": f"已删除 skill「{name}」"}
+
+
+# ─────────────────────────── Demonstration-based skill recording ───────────────────────────
+# image #46 follow-up: 用户说"我也讲不清楚那么细致的工具调用，能不能我点一遍他自己补?"
+# 流程: AI 调 browser_start_recording 注入 JS 监听 → 用户在浏览器里点点点 →
+# AI 调 browser_stop_recording 拿 event log → AI 自己总结成 steps_md → save_config_skill
+
+
+@mcp.tool()
+async def browser_start_recording(tenant_id: int = 0, user_id: int = 0) -> dict:
+    """开始录制用户在浏览器里的操作。
+
+    注入全局 click/input/change 监听器到当前页面（含 iframe）。返回后让用户去点击，
+    完了再调 browser_stop_recording 拿事件列表。AI 用拿到的事件 + 当前 snapshot
+    总结成 steps_md 调 save_config_skill 存。
+
+    注意：刷新页面会丢录制（监听器在 window 对象上）。
+    """
+    from app.browser_mcp_bridge import browser_bridge
+    # 注入 JS 监听 click / change / submit，记录到 window.__apaasRec
+    js = r"""
+() => {
+  if (window.__apaasRec) {
+    // already recording — reset
+    window.__apaasRec.length = 0;
+    return { status: 'reset', count: 0 };
+  }
+  window.__apaasRec = [];
+  const summarize = (el) => {
+    if (!el) return null;
+    return {
+      tag: el.tagName,
+      text: (el.innerText || el.value || '').slice(0, 60),
+      id: el.id || null,
+      cls: (el.className || '').slice(0, 80),
+      role: el.getAttribute && el.getAttribute('role'),
+      type: el.getAttribute && el.getAttribute('type'),
+      placeholder: el.getAttribute && el.getAttribute('placeholder'),
+      ariaLabel: el.getAttribute && el.getAttribute('aria-label'),
+    };
+  };
+  document.addEventListener('click', (e) => {
+    try {
+      window.__apaasRec.push({
+        type: 'click',
+        time: Date.now(),
+        target: summarize(e.target),
+        url: location.href,
+      });
+    } catch (_) {}
+  }, true);
+  document.addEventListener('change', (e) => {
+    try {
+      window.__apaasRec.push({
+        type: 'change',
+        time: Date.now(),
+        target: summarize(e.target),
+        value: (e.target.value || '').slice(0, 80),
+        url: location.href,
+      });
+    } catch (_) {}
+  }, true);
+  document.addEventListener('input', (e) => {
+    try {
+      // input 太密，每个 target 只记最后一次（500ms debounce）
+      const t = e.target;
+      const key = (t.id || t.name || t.placeholder || 'anon') + '@' + location.href;
+      if (!window.__apaasInputDebounce) window.__apaasInputDebounce = {};
+      if (window.__apaasInputDebounce[key]) clearTimeout(window.__apaasInputDebounce[key]);
+      window.__apaasInputDebounce[key] = setTimeout(() => {
+        window.__apaasRec.push({
+          type: 'input',
+          time: Date.now(),
+          target: summarize(t),
+          value: (t.value || '').slice(0, 80),
+          url: location.href,
+        });
+      }, 500);
+    } catch (_) {}
+  }, true);
+  return { status: 'started', count: 0 };
+}
+"""
+    raw = await browser_bridge.call_tool("evaluate_script", {"function": js})
+    try:
+        import json as _j
+        return _j.loads(raw)
+    except Exception:
+        return {"ok": True, "raw": raw}
+
+
+@mcp.tool()
+async def browser_stop_recording(tenant_id: int = 0, user_id: int = 0) -> dict:
+    """停止录制 + 返回所有录到的事件。AI 拿到后总结成 steps_md。
+
+    返回 events 数组：[{type:'click'|'input'|'change', time, target:{tag,text,id,cls,...}, value?, url}]
+    """
+    from app.browser_mcp_bridge import browser_bridge
+    js = r"""
+() => {
+  const events = window.__apaasRec || [];
+  // 清掉监听器：直接 clone document.body 替换会破页面 — 改 flag 让 listener 早退
+  window.__apaasRec = null;
+  return { events: events, count: events.length };
+}
+"""
+    raw = await browser_bridge.call_tool("evaluate_script", {"function": js})
+    try:
+        import json as _j
+        parsed = _j.loads(raw)
+        # raw 是 chrome-devtools-mcp 返的 "Script ran successfully, here is its result:\n{...}"
+        # 实际 evaluate_script 通常返 text 含 JSON
+        if isinstance(parsed, dict) and 'raw' in parsed:
+            raw_text = parsed['raw']
+            # 尝试从 raw_text 抽 JSON
+            import re
+            m = re.search(r'\{.*\}', raw_text, re.DOTALL)
+            if m:
+                try:
+                    return _j.loads(m.group(0))
+                except Exception:
+                    pass
+        return parsed
+    except Exception:
+        return {"ok": True, "raw": raw}

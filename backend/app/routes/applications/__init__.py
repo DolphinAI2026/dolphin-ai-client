@@ -2281,6 +2281,11 @@ _CONFIG_CHAT_TOOL_WHITELIST: set[str] = {
     "list_config_skills",
     "get_config_skill",
     "delete_config_skill",
+    # —— Demonstration recording ——
+    # 用户说"我点一遍你看"：AI 调 start → 用户操作 → AI 调 stop 拿 event log →
+    # 自己 summarize 成 steps_md → save_config_skill
+    "browser_start_recording",
+    "browser_stop_recording",
 }
 
 
@@ -2721,7 +2726,20 @@ async def _config_chat_event_stream(
             "3. **执行完关键复杂操作后**（譬如成功加了字段挂到表单 / 改了流程节点），主动问用户：\n"
             "   『要把这个流程存成 skill 吗？下次类似指令我能直接做。』用户同意就调 save_config_skill。\n"
             "4. 用户说『忘掉这个流程』/『以后不要这么干』时调 delete_config_skill\n"
-            "5. steps_md 写明: 触发条件 + 前置 (要先 list 啥拿 id) + 具体工具调用序列 + 失败处理\n"
+            "5. steps_md 写明: 触发条件 + 前置 (要先 list 啥拿 id) + 具体工具调用序列 + 失败处理\n\n"
+            "## 演示式学习 (重要！用户不会描述细节工具调用)\n"
+            "当用户说『我点一遍给你看』/『我教你』/『看着我做』/『我演示一下』时:\n"
+            "  1. 你调 browser_start_recording — 注入 click/input/change 监听到浏览器\n"
+            "  2. 告诉用户『好了，请操作。完成后告诉我 \"好了\"』\n"
+            "  3. 用户点点点（你不要插嘴 / 不要调任何工具，让他完整演示）\n"
+            "  4. 用户说『好了 / 完成了 / 就这样』后，你调 browser_stop_recording 拿 events 数组\n"
+            "  5. 你看 events 序列 (click/input 顺序 + target tag/text/role 信息)，结合\n"
+            "     当前 page snapshot 推断对应的 element selector，**总结成步骤化的 steps_md**\n"
+            "  6. 给用户复述: 『我看到你做了这些: 1. 点了xxx 2. 在xxx输入yyy 3. ...对吗?』\n"
+            "  7. 用户确认后调 save_config_skill 存（intent_keywords 从用户首次描述里提取）\n"
+            "演示式学习重点: 用户给的是动作序列，**你的工作是把动作翻译成 MCP / browser 工具\n"
+            "调用序列**（譬如用户点『新增字段』按钮 → 你写成 browser_snapshot 找按钮 +\n"
+            "browser_click 序列），并标清前置 (需要先 navigate / login 到某页)。\n"
         )
 
         messages: list[dict] = [{"role": "system", "content": system_prompt}]
