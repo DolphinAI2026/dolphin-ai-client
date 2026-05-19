@@ -2653,7 +2653,9 @@ async def _config_chat_event_stream(
         skill_hint = ""
         try:
             from app.models import ConfigAssistantSkill
-            from sqlalchemy import select, or_
+            # `select` 和 `or_` 在文件顶层已 import — 这里再 from-import 会让 Python 把
+            # `select` 整个函数视作 local var，函数开头那次 select(Application) 就撞
+            # UnboundLocalError。直接用顶层 import 即可。
             skill_rows = (await db.execute(
                 select(ConfigAssistantSkill)
                 .where(
