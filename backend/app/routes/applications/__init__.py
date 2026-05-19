@@ -2274,6 +2274,13 @@ _CONFIG_CHAT_TOOL_WHITELIST: set[str] = {
     "browser_type",
     "browser_navigate",
     "browser_screenshot",
+    # —— Skill 自学习（image #46） ——
+    # 用户教过 AI 一类操作后，AI 用 save_config_skill 把流程总结成 steps_md。
+    # 下次同类指令进来，system_prompt 自动注入相关 skills 让 AI 直接 follow。
+    "save_config_skill",
+    "list_config_skills",
+    "get_config_skill",
+    "delete_config_skill",
 }
 
 
@@ -2409,7 +2416,7 @@ async def config_chat(
     # 6. Agent loop — 最多 5 轮 tool_call
     tool_trace: list[ConfigChatToolTrace] = []
     reply = ""
-    MAX_TURNS = 5
+    MAX_TURNS = 15
     try:
         llm = LLMClient(
             api_key=cfg["api_key"],
@@ -2637,10 +2644,34 @@ async def _config_chat_event_stream(
         except Exception as exc:
             log.warning("config_chat_stream: mcp_bridge load failed: %r", exc)
 
+        # 拉本租户 + 本应用的已有 skills，注入 prompt 让 AI 自己挑用
+        skill_hint = ""
+        try:
+            from app.models import ConfigAssistantSkill
+            from sqlalchemy import select, or_
+            skill_rows = (await db.execute(
+                select(ConfigAssistantSkill)
+                .where(
+                    ConfigAssistantSkill.tenant_id == ctx.tenant_id,
+                    or_(
+                        ConfigAssistantSkill.app_id.is_(None),
+                        ConfigAssistantSkill.app_id == app_id,
+                    ),
+                )
+                .order_by(ConfigAssistantSkill.use_count.desc(), ConfigAssistantSkill.created_at.desc())
+                .limit(20)
+            )).scalars().all()
+            if skill_rows:
+                lines = [f"- 【skill_id={r.id}】「{r.name}」  关键词: {r.intent_keywords}" for r in skill_rows]
+                skill_hint = "\n".join(lines)
+        except Exception as exc:
+            log.warning("config_chat_stream: load skills failed: %r", exc)
+
         yield _sse("started", {
             "app_id": app_id,
             "spec_source": spec_source,
             "tools": len(tool_schemas),
+            "skills": len(skill_hint.split("\n")) if skill_hint else 0,
         })
 
         # SYSTEM prompt — 跟同步版完全一致
@@ -2678,7 +2709,19 @@ async def _config_chat_event_stream(
             "**操作完关键步骤建议 browser_screenshot 让用户视觉验收** —— Claude in Chrome\n"
             "风格，截图会在右侧助手面板直接渲染缩略图，用户能确认 AI 真做对了。\n\n"
             "前提：用户 Chrome 必须开 --remote-debugging-port=9222。\n"
-            "失败 (BRIDGE_NOT_STARTED) 时降级到出步骤指引让用户手动点。\n"
+            "失败 (BRIDGE_NOT_STARTED) 时降级到出步骤指引让用户手动点。\n\n"
+            "## Skill 自学习（重要！）\n"
+            "你有一套『自学习 skills』 — 用户教你一类操作后，**主动调 save_config_skill** "
+            "把步骤总结成 markdown 存下来，下次同类指令进来你能直接 follow，不用从零摸索。\n\n"
+            "**已加载的当前应用 skills**：\n"
+            f"{skill_hint or '(暂无 — 这是这个应用第一次教你。完成关键操作后主动调 save_config_skill 沉淀)'}\n\n"
+            "工作流：\n"
+            "1. 用户给指令时，先扫上方 skills 列表 — 关键词匹配上就 get_config_skill(id) 拿完整 steps_md 复现\n"
+            "2. 没匹配上则按常规拆解（snapshot → click → ...）执行\n"
+            "3. **执行完关键复杂操作后**（譬如成功加了字段挂到表单 / 改了流程节点），主动问用户：\n"
+            "   『要把这个流程存成 skill 吗？下次类似指令我能直接做。』用户同意就调 save_config_skill。\n"
+            "4. 用户说『忘掉这个流程』/『以后不要这么干』时调 delete_config_skill\n"
+            "5. steps_md 写明: 触发条件 + 前置 (要先 list 啥拿 id) + 具体工具调用序列 + 失败处理\n"
         )
 
         messages: list[dict] = [{"role": "system", "content": system_prompt}]
@@ -2691,7 +2734,7 @@ async def _config_chat_event_stream(
 
         tool_trace: list[dict] = []
         reply = ""
-        MAX_TURNS = 5
+        MAX_TURNS = 15
         llm = LLMClient(
             api_key=cfg["api_key"],
             base_url=cfg["base_url"],

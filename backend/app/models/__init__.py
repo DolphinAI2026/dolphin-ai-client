@@ -317,6 +317,7 @@ from app.models.runtime_v2 import (  # noqa: E402, F401
     DeploymentHistory,
 )
 from app.models.agent_prompt import AgentPrompt  # noqa: E402, F401  — agent prompt templates per-tenant per-phase
+from app.models.config_assistant_skill import ConfigAssistantSkill  # noqa: E402, F401  — 配置助手自学习 skills
 
 
 class DolphinUserLink(Base):
