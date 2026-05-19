@@ -76,6 +76,18 @@ def _sign_service_token(user_id: int, tenant_id: int, ttl_minutes: int = 15) -> 
     return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 
 
+def _build_app_view_url(app_id: int | None) -> str | None:
+    """生成应用查看的链接。优先 env APAAS_BUILDER_PUBLIC_URL，未设走相对路径。
+
+    2026-05-19：之前写死 https://agent.dfy.definesys.cn → dev / localhost 跳出去
+    撞生产域名空页面。改成 env 控制，未设时返相对 URL，跟着当前域名走。
+    """
+    if not app_id:
+        return None
+    base = (os.getenv("APAAS_BUILDER_PUBLIC_URL") or "").strip().rstrip("/")
+    return f"{base}/ai-builder/chat?app_id={app_id}"
+
+
 def _resolve_identity(tenant_id: int | None, user_id: int | None) -> tuple[int, int]:
     """dolphin 自定义 Body 字段硬编码 (tenant_id=1, user_id=1)，但 ai-builder
     用户多租户多账号，直接用这俩调内部 API 会跨租户错位（看不到当前用户的应用）。
@@ -381,9 +393,7 @@ async def generate_app_from_doc(
         "status": "draft",
         "platform_env_id": create_res.get("platform_env_id"),
         "platform_env_name": create_res.get("platform_env_name"),
-        "app_view_url": (
-            f"https://agent.dfy.definesys.cn/ai-builder/chat?app_id={app_id}" if app_id else None
-        ),
+        "app_view_url": _build_app_view_url(app_id),
     }
 
 
@@ -459,7 +469,7 @@ async def get_application(
         "current_doc_version": (meta or {}).get("current_doc_version"),
         "platform_env_id": (meta or {}).get("platform_env_id"),
         "apaas_app_id": (meta or {}).get("apaas_app_id"),
-        "app_view_url": f"https://agent.dfy.definesys.cn/ai-builder/chat?app_id={app_id}",
+        "app_view_url": _build_app_view_url(app_id),
         "spec_markdown": spec_md,
         "spec_markdown_source": spec_source,
         "spec_markdown_version": spec_version,

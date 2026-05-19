@@ -414,6 +414,31 @@
         </template>
       </div>
 
+      <!-- 2026-05-19 image #28: chat-side 已被 showBuilderChatSide=false 砍掉，
+           中间空白让用户进 /chat?app_id=N 后无所适从。补一个空状态卡片告诉
+           他能做什么。仅在 fresh 草稿应用、无消息、非 streaming 时显示。-->
+      <div
+        v-if="existingAppId && !isPlatformDeployed && !appParsedMode"
+        class="builder-empty-app-hint"
+      >
+        <div class="empty-app-icon" aria-hidden="true">📐</div>
+        <h3 class="empty-app-title">{{ builderAppDisplayName || '应用蓝图已就绪' }}</h3>
+        <p class="empty-app-desc">右侧蓝图列出了已生成的模型、表单、角色、字典。下一步：</p>
+        <ul class="empty-app-actions">
+          <li>
+            <strong>🚀 部署到平台</strong> — 点右侧按钮一键同步到 aPaaS
+          </li>
+          <li>
+            <strong>💬 回 AI 对话继续完善</strong> — 在
+            <router-link to="/ai-chat">睿鲸 AI Builder</router-link>
+            里追加需求，会自动生成新版 SPEC
+          </li>
+          <li>
+            <strong>📎 上传新版 .md 文档</strong> — 走文档对比模式做增量更新
+          </li>
+        </ul>
+      </div>
+
       <!-- v2 redesign (Session 5): right-side tabs panel hidden — replaced by
            AppBlueprintPanel mounted to the right of <main class="chat-main">.
            DOM disabled via v-if="false" so all bound reactives / computeds /
@@ -1740,14 +1765,16 @@ const showDeployProgressInline = computed(() => deploySteps.value.length > 0 || 
 // 用户已决定废弃 "已部署应用版本化视图"：右侧永远显示文档（单文档或 diff），
 // 不再区分 showDeployedVersionedView 模式。保留此处常量以便语义搜索，
 // 但所有分支按 false 处理（= 渲染文档视图）。
-const showDeploySidebar = computed(() =>
-  isUpdateReviewMode.value ||
-  isUpdateExecutionMode.value ||
-  !isPlatformDeployed.value ||
-  // 已部署的应用：用户点「创建过程」回看历史步骤时也要让 sidebar 出现。
-  // 否则 openDeployPanel() 把 deployOpen 设 true 后这个 aside 仍未渲染，按钮看着没反应。
-  deployOpen.value
-)
+const showDeploySidebar = computed(() => {
+  // 2026-05-19 image #28: 去掉 `!isPlatformDeployed.value` 自动开 — 进 /chat?app_id=N
+  // 但根本没点部署也会撑出"创建过程 / 更新概览"鬼界面，体验糟糕。改成仅在用户
+  // 显式触发或确有变更/执行中时才显示。注意 deploySteps 后端会返 12 个 pending stub，
+  // 不能直接用 .length > 0 — 必须看是否有 running/completed/error 表示真在执行。
+  if (isUpdateReviewMode.value || isUpdateExecutionMode.value || deployOpen.value) return true
+  return deploySteps.value.some(step =>
+    step.status === 'running' || step.status === 'completed' || step.status === 'error'
+  )
+})
 const showViewSwitcher = computed(() =>
   !!existingAppId.value && (
     builderLifecycleStatus.value.key === 'deployed' ||
@@ -8777,6 +8804,63 @@ html[data-theme="dark"] .mode-btn-link:hover {
   padding: 18px 22px 14px;
   background: transparent;
 }
+
+/* image #28 fresh draft app 空状态卡片 */
+.builder-empty-app-hint {
+  margin: 64px auto;
+  padding: 32px 36px;
+  max-width: 520px;
+  border-radius: 16px;
+  background: var(--t-bg-elevated, rgba(255,255,255,0.04));
+  border: 1px solid var(--t-border-subtle, rgba(255,255,255,0.08));
+  color: var(--t-text-primary);
+  text-align: left;
+}
+.empty-app-icon {
+  font-size: 32px;
+  margin-bottom: 12px;
+}
+.empty-app-title {
+  margin: 0 0 8px;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--t-text-primary);
+}
+.empty-app-desc {
+  margin: 0 0 16px;
+  color: var(--t-text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.empty-app-actions {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.empty-app-actions li {
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.06);
+  color: var(--t-text-secondary);
+}
+.empty-app-actions strong {
+  color: var(--t-text-primary);
+  font-weight: 600;
+}
+.empty-app-actions a {
+  color: var(--t-brand-primary, #5b5bd6);
+  text-decoration: none;
+}
+.empty-app-actions a:hover {
+  text-decoration: underline;
+}
+
 .chat-bubble { margin-bottom: 14px; animation: fadeUp 0.3s ease-out; }
 .chat-bubble.user { display: flex; justify-content: flex-end; }
 .chat-bubble.assistant { display: flex; justify-content: flex-start; }
