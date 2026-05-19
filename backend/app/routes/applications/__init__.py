@@ -2265,6 +2265,14 @@ _CONFIG_CHAT_TOOL_WHITELIST: set[str] = {
     "create_apaas_app_roles",
     "update_apaas_app_role",
     "delete_apaas_app_role",
+    # —— 浏览器控制 (POC, 见 docs/rfc-2026-05-19-browser-control-poc.md) ——
+    # MCP API 够不到的操作 (加表单组件 / 拖拽 / 改流程拓扑等) 走这里:
+    # AI 先 browser_snapshot 看页面结构，再 click/type 操作。
+    # 要求用户 Chrome 已 --remote-debugging-port=9222；没开则工具调用降级失败。
+    "browser_snapshot",
+    "browser_click",
+    "browser_type",
+    "browser_screenshot",
 }
 
 
@@ -2653,7 +2661,15 @@ async def _config_chat_event_stream(
             "1. 优先用工具拉真实状态（list_apaas_app_models 等）\n"
             "2. 调修改类工具（update_apaas_model_field / update_apaas_form_component 等）前用人话说明改啥\n"
             "3. 缺信息就反问\n"
-            "4. 完成后如果做了实际变更，在回复末尾给 ```json 块带 summary + actions\n"
+            "4. 完成后如果做了实际变更，在回复末尾给 ```json 块带 summary + actions\n\n"
+            "## 浏览器控制兜底 (apaas 平台 MCP API 够不到时)\n"
+            "如果用户要做的事 (加表单组件 / 拖拽字段到表单 / 改流程拓扑 / 改菜单顺序等)\n"
+            "MCP API 没暴露，**不要直接告诉用户'我做不到，请手动操作'** — 试试浏览器工具：\n"
+            "  1. browser_snapshot — 拿当前浏览器 tab 的 a11y tree (含元素 uid)\n"
+            "  2. browser_click(uid) / browser_type(uid, text) — 操作元素\n"
+            "  3. browser_screenshot — 视觉确认 / 找元素时辅助\n"
+            "前提：用户 Chrome 必须开 --remote-debugging-port=9222。\n"
+            "失败 (BRIDGE_NOT_STARTED) 时降级到出步骤指引让用户手动点。\n"
         )
 
         messages: list[dict] = [{"role": "system", "content": system_prompt}]

@@ -4249,3 +4249,80 @@ async def doctor_apaas_backend_workspace(
             else f"先修 {len(fatal)} 个 fatal 问题（看每个 check 的 hint）"
         ),
     }
+
+
+
+# ─────────────────────────── Browser control (chrome-devtools-mcp) ───────────────────────────
+# 2026-05-19 image #41 — 配置助手浏览器控制 POC。给 AI 装上 take_snapshot/click/
+# type/screenshot 4 个工具，让它能在 apaas designer 上做 MCP API 够不到的操作
+# （加表单组件 / 拖拽 / 改流程拓扑 etc）。
+#
+# 用户必须先开 Chrome remote debug:
+#   mac: open -a "Google Chrome" --args --remote-debugging-port=9222
+#   win: chrome.exe --remote-debugging-port=9222
+#
+# 详细架构 + 风险：docs/rfc-2026-05-19-browser-control-poc.md
+
+
+@mcp.tool()
+async def browser_snapshot(tenant_id: int = 0, user_id: int = 0) -> dict:
+    """拿当前浏览器活动 tab 的 accessibility tree 快照（含 element uid，给 click/type 用）。
+
+    配置助手在做"加表单组件 / 改流程 / 调菜单"等 MCP API 够不到的操作前，
+    先调它看现场页面结构。要求用户 Chrome 已 --remote-debugging-port=9222。
+    """
+    from app.browser_mcp_bridge import browser_bridge
+    raw = await browser_bridge.call_tool("take_snapshot", {})
+    try:
+        import json as _j
+        parsed = _j.loads(raw)
+        return parsed if isinstance(parsed, dict) else {"ok": True, "raw": raw}
+    except Exception:
+        return {"ok": True, "snapshot": raw[:8000]}
+
+
+@mcp.tool()
+async def browser_click(uid: str, tenant_id: int = 0, user_id: int = 0) -> dict:
+    """点击 a11y tree 里的某个元素（uid 由 browser_snapshot 返回）。
+
+    示例 flow: browser_snapshot → 看到「备注」字段 uid=e123 → browser_click(uid=e123)。
+    """
+    if not uid.strip():
+        return {"ok": False, "error_code": "INVALID_UID", "message": "uid 不能为空"}
+    from app.browser_mcp_bridge import browser_bridge
+    raw = await browser_bridge.call_tool("click", {"uid": uid.strip()})
+    try:
+        import json as _j
+        return _j.loads(raw)
+    except Exception:
+        return {"ok": True, "raw": raw}
+
+
+@mcp.tool()
+async def browser_type(uid: str, text: str, tenant_id: int = 0, user_id: int = 0) -> dict:
+    """往 a11y tree 里某个 input 元素填文本。先 browser_snapshot 拿 uid。"""
+    if not uid.strip():
+        return {"ok": False, "error_code": "INVALID_UID", "message": "uid 不能为空"}
+    from app.browser_mcp_bridge import browser_bridge
+    raw = await browser_bridge.call_tool("fill", {"uid": uid.strip(), "value": text})
+    try:
+        import json as _j
+        return _j.loads(raw)
+    except Exception:
+        return {"ok": True, "raw": raw}
+
+
+@mcp.tool()
+async def browser_screenshot(tenant_id: int = 0, user_id: int = 0) -> dict:
+    """截当前 tab 视口（PNG）。返 base64 图像，agent 用 vision LLM 看。
+
+    比 browser_snapshot 信息更全（视觉布局、颜色、错误提示等），但 token 成本更高。
+    建议：先 snapshot 看 a11y 结构，找不到元素再 screenshot 用视觉定位。
+    """
+    from app.browser_mcp_bridge import browser_bridge
+    raw = await browser_bridge.call_tool("take_screenshot", {"format": "png"})
+    try:
+        import json as _j
+        return _j.loads(raw)
+    except Exception:
+        return {"ok": True, "screenshot": raw[:200] + "..."}
