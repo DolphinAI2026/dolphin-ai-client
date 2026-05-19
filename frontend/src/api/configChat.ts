@@ -51,9 +51,13 @@ export interface ConfigChatResp {
 
 export const configChatApi = {
   chat(applicationId: number, payload: ConfigChatReq) {
+    // 2026-05-19 config-chat 是 agent loop（最多 5 轮 LLM + MCP 工具调用），
+    // 多个 list_* / update_* 串起来很容易超过 axios 默认 60s 超时。
+    // 改 5 分钟，跟 coding install/build 一致量级。
     return request.post<any, ConfigChatResp>(
       `/applications/${applicationId}/config-chat`,
-      payload
+      payload,
+      { timeout: 300000 },
     )
   },
 }
