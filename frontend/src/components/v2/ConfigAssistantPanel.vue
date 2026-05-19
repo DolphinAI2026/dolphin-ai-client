@@ -9,20 +9,24 @@
      the existing incremental_update pipeline). -->
 <script lang="ts">
 /**
- * Tiny markdown renderer (inline-only, safe — no html passthrough).
- * Just supports **bold**, `code`, and newlines for assistant replies.
- * Defined in a normal <script> block so the template can call it directly.
+ * 2026-05-19 image #39: 改用 marked 做完整 GFM 渲染（表格 / 列表 / 代码块 / 标题），
+ * 之前的 tiny renderer 只处理 bold/code/换行，AI 输出的表格全是 raw pipe 字符。
  */
+import { marked } from 'marked'
+marked.setOptions({ breaks: true, gfm: true })
+
 export function renderMd(s: string): string {
   if (!s) return ''
-  const escaped = s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-  return escaped
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/\n/g, '<br/>')
+  try {
+    return marked.parse(s, { async: false }) as string
+  } catch {
+    // 极端 fallback：保留旧 tiny renderer 逻辑避免崩
+    const escaped = s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    return escaped
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\n/g, '<br/>')
+  }
 }
 </script>
 
@@ -171,10 +175,47 @@ async function loadDynamicExamples() {
 
 onMounted(loadDynamicExamples)
 watch(() => props.applicationId, loadDynamicExamples)
+
+// 2026-05-19 image #39: 拖拽改宽度。localStorage 持久化。
+const PANEL_WIDTH_KEY = 'apaas-config-assistant-width-v1'
+const panelWidth = ref<number>(parseInt(localStorage.getItem(PANEL_WIDTH_KEY) || '420', 10) || 420)
+const minWidth = 320
+const maxWidth = 880
+const isResizing = ref(false)
+
+function onResizeStart(e: MouseEvent) {
+  e.preventDefault()
+  isResizing.value = true
+  const startX = e.clientX
+  const startWidth = panelWidth.value
+  function onMove(ev: MouseEvent) {
+    // 拖拽 handle 在左边界，向左拖拽（dx 为负）= 加宽
+    const dx = ev.clientX - startX
+    let next = startWidth - dx
+    if (next < minWidth) next = minWidth
+    if (next > maxWidth) next = maxWidth
+    panelWidth.value = next
+  }
+  function onUp() {
+    isResizing.value = false
+    try { localStorage.setItem(PANEL_WIDTH_KEY, String(panelWidth.value)) } catch { /* private mode */ }
+    window.removeEventListener('mousemove', onMove)
+    window.removeEventListener('mouseup', onUp)
+  }
+  window.addEventListener('mousemove', onMove)
+  window.addEventListener('mouseup', onUp)
+}
 </script>
 
 <template>
-  <aside class="config-assistant" data-design="v2">
+  <aside
+    class="config-assistant"
+    data-design="v2"
+    :class="{ 'is-resizing': isResizing }"
+    :style="{ width: panelWidth + 'px' }"
+  >
+    <!-- 左边缘拖拽 handle -->
+    <div class="ca-resize-handle" @mousedown="onResizeStart" title="拖拽调整宽度" />
     <header class="ca-head">
       <div class="ca-title">配置助手</div>
       <div class="ca-sub">
@@ -274,6 +315,7 @@ watch(() => props.applicationId, loadDynamicExamples)
 
 <style scoped>
 .config-assistant {
+  /* width 由 :style 控制（可拖拽），fallback 360px */
   width: 360px;
   flex-shrink: 0;
   display: flex;
@@ -281,6 +323,27 @@ watch(() => props.applicationId, loadDynamicExamples)
   height: 100%;
   background: var(--surface);
   border-left: 1px solid var(--border);
+  position: relative;
+}
+.config-assistant.is-resizing {
+  cursor: ew-resize;
+  user-select: none;
+}
+.ca-resize-handle {
+  position: absolute;
+  left: -3px;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: ew-resize;
+  z-index: 5;
+  background: transparent;
+  transition: background 0.15s;
+}
+.ca-resize-handle:hover,
+.config-assistant.is-resizing .ca-resize-handle {
+  background: var(--brand, #5b5bd6);
+  opacity: 0.5;
 }
 .ca-head {
   padding: 14px 16px;
@@ -392,6 +455,86 @@ watch(() => props.applicationId, loadDynamicExamples)
   border-radius: 4px;
   font-family: var(--d-font-mono);
   font-size: 11.5px;
+}
+/* 2026-05-19 image #39 — marked GFM 输出的元素样式 */
+.ca-bubble-text :deep(p) {
+  margin: 0 0 8px;
+}
+.ca-bubble-text :deep(p:last-child) { margin-bottom: 0; }
+.ca-bubble-text :deep(ul),
+.ca-bubble-text :deep(ol) {
+  margin: 4px 0 8px;
+  padding-left: 20px;
+}
+.ca-bubble-text :deep(li) {
+  margin: 2px 0;
+}
+.ca-bubble-text :deep(h1),
+.ca-bubble-text :deep(h2),
+.ca-bubble-text :deep(h3),
+.ca-bubble-text :deep(h4) {
+  margin: 10px 0 6px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.ca-bubble-text :deep(h1) { font-size: 16px; }
+.ca-bubble-text :deep(h2) { font-size: 14px; }
+.ca-bubble-text :deep(h3) { font-size: 13px; }
+.ca-bubble-text :deep(h4) { font-size: 12.5px; }
+.ca-bubble-text :deep(pre) {
+  background: var(--surface-3);
+  padding: 8px 10px;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin: 6px 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  font-family: var(--d-font-mono);
+}
+.ca-bubble-text :deep(pre code) {
+  background: transparent;
+  padding: 0;
+  font-size: inherit;
+}
+.ca-bubble-text :deep(blockquote) {
+  border-left: 3px solid var(--brand, #5b5bd6);
+  padding: 2px 10px;
+  margin: 6px 0;
+  color: var(--text-2);
+  background: var(--surface-3);
+  border-radius: 0 4px 4px 0;
+}
+.ca-bubble-text :deep(table) {
+  border-collapse: collapse;
+  margin: 8px 0;
+  width: 100%;
+  font-size: 11.5px;
+  display: block;
+  overflow-x: auto;
+}
+.ca-bubble-text :deep(thead) {
+  background: var(--surface-3);
+}
+.ca-bubble-text :deep(th),
+.ca-bubble-text :deep(td) {
+  border: 1px solid var(--border);
+  padding: 5px 8px;
+  text-align: left;
+  vertical-align: top;
+  white-space: nowrap;
+}
+.ca-bubble-text :deep(th) {
+  font-weight: 600;
+}
+.ca-bubble-text :deep(a) {
+  color: var(--brand, #5b5bd6);
+  text-decoration: none;
+}
+.ca-bubble-text :deep(a:hover) { text-decoration: underline; }
+.ca-bubble-text :deep(hr) {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 10px 0;
 }
 
 /* tool_trace chips — 让用户看见 AI 真调了哪些 MCP 工具 */
