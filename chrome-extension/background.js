@@ -138,3 +138,27 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 // 启动
 connect();
+
+// MV3 service worker 会在 ~30s idle 后睡眠。用 chrome.alarms 每 25s 唤醒一次，
+// 确保 WS 心跳 + 重连 timer 持续运行。
+try {
+  chrome.alarms.create("apaas-keepalive", { periodInMinutes: 0.5 }); // 30s
+  chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name === "apaas-keepalive") {
+      // 简单 touch：检查 socket 状态，没连就 connect
+      if (!socket || socket.readyState !== 1) {
+        log("keepalive: socket dead, reconnecting");
+        connect();
+      } else {
+        // 已连：发个 ping 保活
+        try { socket.send(JSON.stringify({ type: "ping", t: Date.now() })); } catch {}
+      }
+    }
+  });
+} catch (e) {
+  log("alarms unavailable", e);
+}
+
+// onStartup / onInstalled 也启动 connect，避免 idle 后失联
+chrome.runtime.onStartup && chrome.runtime.onStartup.addListener(() => connect());
+chrome.runtime.onInstalled && chrome.runtime.onInstalled.addListener(() => connect());
