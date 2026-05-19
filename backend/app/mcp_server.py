@@ -4313,6 +4313,20 @@ async def browser_type(uid: str, text: str, tenant_id: int = 0, user_id: int = 0
 
 
 @mcp.tool()
+async def browser_navigate(url: str, tenant_id: int = 0, user_id: int = 0) -> dict:
+    """让当前活动 tab 跳到指定 URL。等页面加载完返回。"""
+    if not url.strip():
+        return {"ok": False, "error_code": "INVALID_URL", "message": "url 不能为空"}
+    from app.browser_mcp_bridge import browser_bridge
+    raw = await browser_bridge.call_tool("navigate_page", {"url": url.strip()})
+    try:
+        import json as _j
+        return _j.loads(raw)
+    except Exception:
+        return {"ok": True, "raw": raw}
+
+
+@mcp.tool()
 async def browser_screenshot(tenant_id: int = 0, user_id: int = 0) -> dict:
     """截当前 tab 视口（PNG）。返 base64 图像，agent 用 vision LLM 看。
 

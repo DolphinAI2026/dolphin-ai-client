@@ -2272,6 +2272,7 @@ _CONFIG_CHAT_TOOL_WHITELIST: set[str] = {
     "browser_snapshot",
     "browser_click",
     "browser_type",
+    "browser_navigate",
     "browser_screenshot",
 }
 
