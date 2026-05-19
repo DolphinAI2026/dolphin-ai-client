@@ -36,12 +36,22 @@
         :sessions="sidebarCodingItems"
         :active-id="sidebarCodingActiveId"
         :new-label="'+ 新建组件'"
+        :new-options="codingNewOptions"
         collapse-key="coding:aside-collapsed"
         :empty-hint="'还没有组件，点上面新建一个'"
         @select="onSidebarCodingSelect"
         @create="onSidebarCodingCreate"
+        @create-with-option="onSidebarCodingCreateWithOption"
         @delete="onSidebarCodingDelete"
         :enable-rename="false"
+      />
+      <!-- 隐藏 file input：导入 zip 用 -->
+      <input
+        ref="importZipInputRef"
+        type="file"
+        accept=".zip"
+        style="display: none"
+        @change="handleImportZipChange"
       />
       <!-- Main Content: 对话流 (B 重构 2026-05-17): 合并 Welcome / Chat / IDE -->
       <div class="main-content">
@@ -399,14 +409,10 @@
               </template>
             </template>
 
+            <!-- 2026-05-19 删 list-suffix "打开代码编辑器" 大按钮 — 顶部 toolbar
+                 已有 IDE 按钮做同样事（image #24 冗余反馈）-->
             <template #list-suffix>
-              <div v-if="!isStreaming && pendingIdeUrl" class="stream-actions">
-                <button class="open-ide-btn" @click="openPendingIde">
-                  <span class="ide-btn-icon">&#x1F4BB;</span>
-                  打开代码编辑器
-                </button>
-                <span class="stream-actions-hint">在编辑器中查看和修改 AI 生成的代码</span>
-              </div>
+              <div v-if="false" />
             </template>
           </AgentConversation>
 
@@ -1061,6 +1067,56 @@ async function onSidebarCodingSelect(id: string | number) {
 }
 function onSidebarCodingCreate() {
   startNewWorkspace()
+}
+
+// 2026-05-19 image #25: 新建组件 dropdown 加"导入已有 zip"选项 — 用户可上传
+// form-component-upload-src.zip 等已建好的自开发包，进入 Coding 让 AI 二次调整。
+const codingNewOptions = [
+  { command: 'new',        title: '+ 新建组件',     hint: '基于 CLI 模板生成空脚手架' },
+  { command: 'import-zip', title: '📦 导入已有 zip', hint: '上传现有自开发包 → AI 二次调整' },
+]
+
+const importZipInputRef = ref<HTMLInputElement | null>(null)
+const isImportingZip = ref(false)
+
+function onSidebarCodingCreateWithOption(command: string) {
+  if (command === 'new') {
+    startNewWorkspace()
+  } else if (command === 'import-zip') {
+    importZipInputRef.value?.click()
+  }
+}
+
+async function handleImportZipChange(e: Event) {
+  const target = e.target as HTMLInputElement
+  const file = target.files?.[0]
+  target.value = ''
+  if (!file) return
+  if (!file.name.toLowerCase().endsWith('.zip')) {
+    ElMessage.error('请选择 .zip 文件')
+    return
+  }
+  if (file.size > 30 * 1024 * 1024) {
+    ElMessage.error(`zip 太大 (${(file.size / 1024 / 1024).toFixed(1)}MB > 30MB)`)
+    return
+  }
+  isImportingZip.value = true
+  try {
+    const ws: any = await codingApi.importZipToWorkspace(file)
+    ElMessage.success(`已导入「${ws.display_name || ws.project_name}」(${ws.imported_file_count || 0} 文件)`)
+    // 刷新左侧列表 + 选中新 ws
+    try {
+      const fresh = await codingApi.listWorkspaces()
+      allWorkspaces.value = fresh as any
+    } catch { /* swallow */ }
+    if (ws.id) {
+      onSidebarCodingSelect(ws.id)
+    }
+  } catch (err: any) {
+    ElMessage.error(err?.message || err?.response?.data?.detail || '导入失败')
+  } finally {
+    isImportingZip.value = false
+  }
 }
 async function onSidebarCodingDelete(s: SidebarSessionItem) {
   const target = (existingWorkspaces.value || []).find((w: any) => w.id === s.id)

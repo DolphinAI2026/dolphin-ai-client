@@ -107,6 +107,21 @@ export const codingApi = {
     return request.post<any, WorkspaceInfo>('/coding/workspace/create', { project_type, project_name, project_id, display_name })
   },
 
+  /** 上传已有 zip → 解压成 workspace 供 AI 二次调整 */
+  async importZipToWorkspace(file: File, opts?: { project_type?: string; project_id?: number; display_name?: string }) {
+    const fd = new FormData()
+    fd.append('file', file)
+    const params = new URLSearchParams()
+    if (opts?.project_type) params.append('project_type', opts.project_type)
+    if (opts?.project_id) params.append('project_id', String(opts.project_id))
+    if (opts?.display_name) params.append('display_name', opts.display_name)
+    const qs = params.toString() ? `?${params.toString()}` : ''
+    return request.post<any, WorkspaceInfo>(`/coding/workspace/import-zip${qs}`, fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 120000,
+    })
+  },
+
   /** 安装依赖（npm install 可能较慢，5分钟超时） */
   installDeps(wsId: string) {
     return request.post<any, { status: string; message: string }>(`/coding/workspace/${wsId}/install`, {}, { timeout: 300000 })

@@ -1082,6 +1082,151 @@ async def create_workspace(
     return _decorate_workspace_access(meta, access_role)
 
 
+# 2026-05-19 image #25: 允许上传已有的自开发包 zip 进行二次调整。
+# 流程：先用 workspace_mgr 创建一个空 ws（拿到 id + dir + meta），
+# 然后清空脚手架内容，把 zip 解压到 ws 根目录，重写 .workspace.json
+# 保留 meta 字段（id/user_id/tenant_id/project_id 等）。
+@router.post("/workspace/import-zip")
+async def import_zip_to_workspace_endpoint(
+    file: UploadFile = File(...),
+    project_type: Optional[str] = Query(None, description="可选：手动指定 form-component-dual / form-page / form-list 等；不传则从 package.json 自动检测"),
+    project_id: Optional[int] = Query(None),
+    display_name: Optional[str] = Query(None, description="工作区展示名，默认取 zip 内 package.json.name"),
+    ctx: Annotated[AuthContext, Depends(get_auth_context)] = None,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+):
+    """上传已有的自开发包 zip，解压成新的 coding workspace 供 AI 二次调整。
+
+    入参：
+      file          multipart 文件（必须是 .zip）
+      project_type  可选，未传时从 zip 内 package.json + 目录结构自动检测
+      project_id    可选，关联到某个 project
+      display_name  可选，工作区展示名
+
+    返回：workspace meta + files
+    """
+    import io
+    import json as _json
+    import shutil
+    import zipfile
+
+    # 1. 读取 + 校验 zip
+    if not file.filename or not file.filename.lower().endswith(".zip"):
+        raise HTTPException(400, "只接受 .zip 文件")
+    raw = await file.read()
+    if len(raw) > 30 * 1024 * 1024:
+        raise HTTPException(400, f"zip 太大 ({len(raw)} bytes > 30MB)")
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(raw), "r")
+        names = zf.namelist()
+    except zipfile.BadZipFile:
+        raise HTTPException(400, "不是合法的 zip 文件")
+    if not names:
+        raise HTTPException(400, "zip 内为空")
+
+    # 2. 检测 zip 内 single-root prefix（如 form-component-upload-src/）+ 检测 project_type
+    def _strip_common_prefix(paths: list[str]) -> str:
+        roots = {p.split("/", 1)[0] for p in paths if "/" in p}
+        single_root = next(iter(roots)) if len(roots) == 1 and all(p.startswith(next(iter(roots)) + "/") or p == next(iter(roots)) for p in paths) else ""
+        return single_root + "/" if single_root else ""
+
+    strip_prefix = _strip_common_prefix(names)
+
+    # 找 package.json 用于自动检测 project_type + name
+    pkg_json: dict = {}
+    for n in names:
+        rel = n[len(strip_prefix):] if strip_prefix and n.startswith(strip_prefix) else n
+        if rel == "package.json":
+            try:
+                pkg_json = _json.loads(zf.read(n).decode("utf-8"))
+            except Exception:
+                pkg_json = {}
+            break
+
+    detected_type = project_type or ""
+    if not detected_type:
+        # 用 package.json 的 apaas.scene 或 name prefix 判断
+        apaas_meta = pkg_json.get("apaas") or {}
+        if isinstance(apaas_meta, dict):
+            scene = (apaas_meta.get("scene") or apaas_meta.get("type") or "").lower()
+            if scene:
+                detected_type = scene
+        # fallback：根据目录命名/文件存在判断
+        if not detected_type:
+            joined = " ".join(names).lower()
+            if "form-component" in joined or "widget.config.json" in joined:
+                detected_type = "form-component-dual"
+            elif "form-page-local" in joined or "form-page" in joined:
+                detected_type = "form-page"
+            elif "form-list" in joined or "form-view" in joined:
+                detected_type = "form-list"
+            else:
+                detected_type = "form-component-dual"  # 兜底
+
+    try:
+        pt = ProjectType(detected_type)
+    except ValueError:
+        raise HTTPException(400, f"无法识别 project_type={detected_type!r}，请显式指定")
+
+    pkg_name = (pkg_json.get("name") or "").strip()
+    inferred_name = pkg_name or strip_prefix.rstrip("/") or f"imported-{pt.value}"
+    final_display = display_name or pkg_name or inferred_name
+
+    # 3. 复用 workspace_mgr 创建空壳（拿到 id + dir + meta；不要 access check 是空 zip 时不会 leak）
+    if project_id:
+        await require_project_access(
+            db, project_id=project_id, user_id=ctx.user.id, tenant_id=ctx.tenant_id, minimum_role="member",
+        )
+
+    meta = workspace_mgr.create_workspace(
+        project_type=pt, project_name=inferred_name, display_name=final_display,
+        user_id=ctx.user.id, project_id=project_id, tenant_id=ctx.tenant_id,
+    )
+    ws_id = meta["id"]
+    ws_path = workspace_mgr.get_workspace_path(ws_id)
+
+    # 4. 删脚手架内容（保留 .workspace.json），解压 zip
+    ws_meta_path = ws_path / ".workspace.json"
+    saved_meta = ws_meta_path.read_text(encoding="utf-8") if ws_meta_path.exists() else None
+    for child in ws_path.iterdir():
+        if child.name == ".workspace.json":
+            continue
+        if child.is_dir():
+            shutil.rmtree(child, ignore_errors=True)
+        else:
+            try:
+                child.unlink()
+            except FileNotFoundError:
+                pass
+
+    extracted_count = 0
+    for member in zf.infolist():
+        if member.is_dir():
+            continue
+        rel = member.filename[len(strip_prefix):] if strip_prefix and member.filename.startswith(strip_prefix) else member.filename
+        if not rel or rel.startswith(("..", "/")) or ".." in rel.split("/"):
+            continue
+        target = ws_path / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with zf.open(member) as src, open(target, "wb") as dst:
+            shutil.copyfileobj(src, dst)
+        extracted_count += 1
+
+    # 重写 meta（status: ready, imported=True）
+    if saved_meta:
+        try:
+            meta_dict = _json.loads(saved_meta)
+            meta_dict["status"] = "ready"
+            meta_dict["imported_from_zip"] = file.filename
+            ws_meta_path.write_text(_json.dumps(meta_dict, ensure_ascii=False, indent=2))
+        except Exception:
+            pass
+
+    meta = workspace_mgr.get_workspace_info(ws_id)
+    meta["imported_file_count"] = extracted_count
+    return _decorate_workspace_access(meta, "owner")
+
+
 @router.post("/workspace/{ws_id}/install")
 async def install_workspace_deps(
     ws_id: str,
