@@ -295,13 +295,52 @@ async def list_applications(
 
     # 3. 合并
     remote_map = {}
+    remote_code_map: dict[str, dict] = {}
     for r in remote_apps:
         rid = str(r.get("id", ""))
         if rid:
             remote_map[rid] = r
+        rcode = str(r.get("appCode") or "").strip().lower()
+        if rcode:
+            remote_code_map.setdefault(rcode, r)
+
+    # 2026-05-19 image #32: 用户 generate_app_from_doc 在 platform_env_X 上创建了应用，
+    # 但本地 DB apaas_app_id 没写回（譬如调 MCP 中断 / 手工 SQL 重置）。
+    # 这里按 platform_env_id 聚合 local apps，调 list_apaas_apps_in_env 拿真实
+    # apaas_app_id，按 app_code 匹配回填。
+    env_code_to_apaas: dict[int, dict[str, dict]] = {}  # {env_id: {code_lower: remote_app}}
+    if include_remote and source_filter != "local":
+        try:
+            from app.coding.apaas_tools import APAAS_TOOL_EXECUTORS_PLATFORM
+            list_exec = APAAS_TOOL_EXECUTORS_PLATFORM.get("list_apaas_apps")
+            envs_to_fetch = {
+                a.platform_env_id for a in local_apps
+                if a.platform_env_id and not a.apaas_app_id and a.app_code
+            }
+            for eid in envs_to_fetch:
+                if list_exec is None:
+                    break
+                try:
+                    raw = await list_exec({}, eid, db)
+                    parsed = json.loads(raw) if isinstance(raw, str) else raw
+                    if parsed.get("ok") and isinstance(parsed.get("apps"), list):
+                        code_map: dict[str, dict] = {}
+                        for ra in parsed["apps"]:
+                            code = str(ra.get("app_code") or "").strip().lower()
+                            if code:
+                                code_map.setdefault(code, ra)
+                        env_code_to_apaas[eid] = code_map
+                except Exception as e:
+                    logger.warning(f"backfill: list_apaas_apps for env={eid} failed: {e}")
+        except Exception as e:
+            logger.warning(f"backfill: prep failed (non-fatal): {e}")
 
     merged: list[MergedAppResponse] = []
     matched_remote_ids: set[str] = set()
+    # 2026-05-19: 用 app_code 回填 apaas_app_id — local DB 缺 apaas_app_id 但平台
+    # 上其实已有同 appCode 的应用时（譬如本地手动 SQL 重置或 generate_app_from_doc
+    # 写库失败但平台已创建成功），自动把本地 row 接上去显示成"已部署"。
+    backfilled_ids: list[int] = []
 
     for app in local_apps:
         perms = await _get_application_permissions(ctx, db, app)
@@ -311,6 +350,29 @@ async def list_applications(
         app_env = env_map.get(app.platform_env_id) if app.platform_env_id else None
         app_env_name = app_env["env_name"] if app_env else None
         app_env_status = app_env["status"] if app_env else None
+
+        # app_code 回填逻辑：缺 apaas_app_id 但平台有匹配 appCode 时，
+        # 把 remote.id 写回 local DB + 当成 linked 处理。优先查 platform_env 的 apps，
+        # 再 fallback 用户 home apaas 的 query_app_list。
+        if not app.apaas_app_id and app.app_code:
+            code_key = str(app.app_code).strip().lower()
+            matched_apaas_id: str | None = None
+            # 1) 查 app 自己的 platform_env_id
+            if app.platform_env_id and app.platform_env_id in env_code_to_apaas:
+                ra = env_code_to_apaas[app.platform_env_id].get(code_key)
+                if ra:
+                    matched_apaas_id = str(ra.get("apaas_app_id") or "")
+            # 2) fallback：user home apaas list
+            if not matched_apaas_id:
+                matched_remote = remote_code_map.get(code_key)
+                if matched_remote:
+                    matched_apaas_id = str(matched_remote.get("id", ""))
+            if matched_apaas_id:
+                app.apaas_app_id = matched_apaas_id
+                # 同时把 status 升到 completed（应用确实在平台上了）
+                if not app.status or app.status == "draft":
+                    app.status = "completed"
+                backfilled_ids.append(app.id)
 
         if app.apaas_app_id:
             if app.apaas_app_id in remote_map:
@@ -332,6 +394,15 @@ async def list_applications(
             if source_filter and source_filter != "local":
                 continue
             merged.append(_build_local(app, perms, app_env_name, app_env_status))
+
+    # 持久化 backfilled apaas_app_id（一次 commit，避免循环里 N 次 round-trip）
+    if backfilled_ids:
+        try:
+            await db.commit()
+            logger.info(f"backfilled apaas_app_id for app ids: {backfilled_ids}")
+        except Exception as e:
+            await db.rollback()
+            logger.warning(f"backfill apaas_app_id commit failed (non-fatal): {e}")
 
     # 未匹配的远程应用
     if source_filter != "local":
