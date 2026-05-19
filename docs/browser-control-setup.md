@@ -16,12 +16,47 @@
 
 ## 启动 Chrome with remote debug
 
+### ⚠️ Chrome v136+ 安全限制
+
+Chrome 从 v136 起拒绝给**默认 user-data-dir** 开 `--remote-debugging-port`
+（防 cookie 被远程偷）。直接传 `--remote-debugging-port=9222` 启用户主 Chrome 会**静默失败**
+(进程跑但 9222 不 listen)。
+
+### 推荐方案：clone profile + 用 clone
+
+把用户主 Chrome profile rsync 到非默认路径，从那启 — 保留 cookies / 书签 / 扩展 /
+密码管理器 (autofill)，但 ai-builder 等 localStorage token 可能需重新登一次。
+
 **Mac**:
 ```sh
-# 关掉所有现有 Chrome 窗口（很重要：remote debug 端口必须由新进程占用）
-osascript -e 'quit app "Google Chrome"'
-sleep 2
-open -a "Google Chrome" --args --remote-debugging-port=9222
+# 1. 关掉所有 Chrome
+pkill -f 'Google Chrome'
+sleep 3
+
+# 2. clone profile 到非默认路径 (Cache / Service Worker / IndexedDB 排除，省空间)
+TARGET="$HOME/.chrome-ai-debug-profile-real"
+mkdir -p "$TARGET"
+rsync -a --delete \
+  --exclude='Cache' --exclude='Code Cache' --exclude='Service Worker' \
+  --exclude='GPUCache' --exclude='ShaderCache' --exclude='File System' \
+  --exclude='IndexedDB' --exclude='blob_storage' \
+  "$HOME/Library/Application Support/Google/Chrome/Default" \
+  "$TARGET/"
+
+# 3. 从 clone 启 Chrome + 开 9222
+open -na "Google Chrome" --args --remote-debugging-port=9222 --user-data-dir="$TARGET"
+
+# 4. 验证
+curl -s http://127.0.0.1:9222/json/version | head -c 200
+```
+
+### 兜底方案：纯隔离 profile
+
+如果不需要继承主 Chrome 状态，直接用隔离 profile（空白 Chrome）:
+```sh
+pkill -f 'Google Chrome' && sleep 3
+open -na "Google Chrome" --args --remote-debugging-port=9222 \
+  --user-data-dir="$HOME/.chrome-remote-debug-profile" --no-first-run
 ```
 
 **Windows**:
