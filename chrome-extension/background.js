@@ -127,5 +127,14 @@ async function dispatchCommand(cmd, args) {
   }
 }
 
+// 监听 popup 的状态查询
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg && msg.type === "get_ws_status") {
+    const connected = !!(socket && socket.readyState === 1);
+    sendResponse({ connected, readyState: socket ? socket.readyState : -1 });
+    return false;
+  }
+});
+
 // 启动
 connect();

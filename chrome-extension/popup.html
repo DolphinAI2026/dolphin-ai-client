@@ -25,15 +25,19 @@
 </head>
 <body>
   <h2>aPaaS Builder Helper</h2>
-  <div class="status" id="status">
-    <div class="dot err" id="dot"></div>
-    <div id="statusText">检查连接...</div>
+  <div class="status" id="statusBackend">
+    <div class="dot err" id="dotBackend"></div>
+    <div id="textBackend">检查 backend...</div>
+  </div>
+  <div class="status" id="statusWs">
+    <div class="dot err" id="dotWs"></div>
+    <div id="textWs">检查 WebSocket...</div>
   </div>
   <div class="row"><span>backend:</span><code id="backend">localhost:8000</code></div>
   <div class="row"><span>version:</span><code id="version">-</code></div>
   <div style="margin-top: 10px; color: #6b7280; font-size: 12px;">
-    要让 backend 启动 WebSocket 端点 <code>/ws/browser-ext</code> — 启动指引见
-    <a href="#" id="docLink">browser-ext-setup.md</a>
+    都绿 ✓ 表示 AI 助手已能操作你这个 Chrome。详细见
+    <a href="#" id="docLink">browser-extension-setup.md</a>
   </div>
   <script src="popup.js"></script>
 </body>
