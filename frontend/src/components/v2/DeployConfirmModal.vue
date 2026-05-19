@@ -29,9 +29,11 @@ const ENVS = [
   { id: 'prod', label: '生产', tone: 'rose' },
 ] as const
 
+// 2026-05-19 image #30: 用户拍板"每个租户对应唯一 1 个低代码租户"，不需要选 env。
+// 直接走 tenant 绑定的 default env (后端 deploy-from-artifact 在 env 未传时自走默认)。
 const env = ref<'dev' | 'test' | 'prod'>('test')
 const confirmCode = ref('')
-const phase = ref<'pickEnv' | 'confirm' | 'running' | 'success' | 'failed'>('pickEnv')
+const phase = ref<'pickEnv' | 'confirm' | 'running' | 'success' | 'failed'>('confirm')
 const errorMsg = ref<string>('')
 const deployedAppId = ref<number | null>(null)
 const progressPct = ref<number>(0)
@@ -52,7 +54,7 @@ watch(
   () => props.modelValue,
   v => {
     if (v) {
-      phase.value = 'pickEnv'
+      phase.value = 'confirm'   // 直接进 confirm，跳过 pickEnv（image #30）
       env.value = 'test'
       confirmCode.value = ''
       errorMsg.value = ''
@@ -76,9 +78,7 @@ const isProd = computed(() => env.value === 'prod')
 const canConfirm = computed(() => !isProd.value || confirmCode.value === props.appCode)
 
 async function go() {
-  if (phase.value === 'pickEnv') {
-    phase.value = 'confirm'
-  } else if (phase.value === 'confirm' && canConfirm.value) {
+  if (phase.value === 'confirm' && canConfirm.value) {
     phase.value = 'running'
     errorMsg.value = ''
     progressPct.value = 5
@@ -197,7 +197,7 @@ function backToConfirm() {
     </div>
 
     <div v-else-if="phase === 'confirm'" class="dep">
-      <div class="dep-section-title">2 · 变更预览</div>
+      <div class="dep-section-title">1 · 变更预览</div>
       <ul v-if="changes.length" class="diff">
         <li v-for="c in changes" :key="c.what" :class="'diff-' + c.kind">
           <span class="diff-kind">{{ c.kind }}</span>
@@ -206,7 +206,7 @@ function backToConfirm() {
       </ul>
       <div v-else class="diff-empty">未检测到模型/表单/流程层面的差异（首次部署或纯前端调整）</div>
 
-      <div class="dep-section-title">3 · 影响范围</div>
+      <div class="dep-section-title">2 · 影响范围</div>
       <div class="impact-row">
         <div class="impact-card">
           <div class="impact-num">{{ impacts.affectedUsers }}</div>

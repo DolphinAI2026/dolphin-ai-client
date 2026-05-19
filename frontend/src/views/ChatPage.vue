@@ -3,8 +3,10 @@
   <!-- v2 redesign (Session 5): 3-column shell — left rail + center main + right blueprint.
        Existing chat-page-shell is moved INSIDE <main class="chat-main"> unchanged. -->
   <div class="chat-shell">
+    <!-- 2026-05-19 image #29: 去掉左侧"最近对话"列，简化为 中间 MD 预览 + 右侧蓝图。
+         保留组件挂载但 v-if=false 让 DOM 不出，所有 reactive 不影响。 -->
     <ChatConversationList
-      v-if="!embedMode && !isPostDeploy"
+      v-if="false"
       :conversations="v2ConversationItems"
       :current-id="v2CurrentConversationId"
       @open="onV2OpenConversation"
@@ -414,29 +416,29 @@
         </template>
       </div>
 
-      <!-- 2026-05-19 image #28: chat-side 已被 showBuilderChatSide=false 砍掉，
-           中间空白让用户进 /chat?app_id=N 后无所适从。补一个空状态卡片告诉
-           他能做什么。仅在 fresh 草稿应用、无消息、非 streaming 时显示。-->
+      <!-- 2026-05-19 image #29: 中间默认渲染 latest doc 的 MD。用户拍板"只保留 MD 预览"。
+           判定改用 store.currentApp 实际状态而非 isPlatformDeployed（后者会被旧的
+           completed deploySteps 误判为已部署）。pre-deploy 直接显示 MD；post-deploy
+           已经走 ConfigAssistantPanel 路径（apaas_app_id 存在时由 isPostDeploy 路由）。 -->
       <div
-        v-if="existingAppId && !isPlatformDeployed && !appParsedMode"
-        class="builder-empty-app-hint"
+        v-if="existingAppId && !store.currentApp?.apaas_app_id && !isDeploying"
+        class="builder-md-viewer"
       >
-        <div class="empty-app-icon" aria-hidden="true">📐</div>
-        <h3 class="empty-app-title">{{ builderAppDisplayName || '应用蓝图已就绪' }}</h3>
-        <p class="empty-app-desc">右侧蓝图列出了已生成的模型、表单、角色、字典。下一步：</p>
-        <ul class="empty-app-actions">
-          <li>
-            <strong>🚀 部署到平台</strong> — 点右侧按钮一键同步到 aPaaS
-          </li>
-          <li>
-            <strong>💬 回 AI 对话继续完善</strong> — 在
+        <div class="md-viewer-head">
+          <div class="md-viewer-title">{{ lastParsedFilename || `${builderAppDisplayName || '功能设计文档'}.md` }}</div>
+          <button v-if="latestDocContent || selectedDocDisplayContent" class="md-download-btn" @click="downloadCurrentDoc">下载 .md</button>
+        </div>
+        <div v-if="liveStructuredDocResult" class="md-viewer-body structured-doc-host">
+          <StructuredDocRenderer :doc-result="liveStructuredDocResult" />
+        </div>
+        <pre v-else-if="selectedDocDisplayContent" class="md-viewer-body plain-doc-fallback">{{ selectedDocDisplayContent }}</pre>
+        <pre v-else-if="latestDocContent" class="md-viewer-body plain-doc-fallback">{{ latestDocContent }}</pre>
+        <div v-else class="md-viewer-body md-viewer-empty">
+          <p>暂无设计文档。请回到
             <router-link to="/ai-chat">睿鲸 AI Builder</router-link>
-            里追加需求，会自动生成新版 SPEC
-          </li>
-          <li>
-            <strong>📎 上传新版 .md 文档</strong> — 走文档对比模式做增量更新
-          </li>
-        </ul>
+            上传 .md 或对话生成。
+          </p>
+        </div>
       </div>
 
       <!-- v2 redesign (Session 5): right-side tabs panel hidden — replaced by
@@ -1186,9 +1188,34 @@
   </div><!-- /chat-page-shell -->
     </main><!-- /chat-main -->
 
+    <!-- 2026-05-19 image #29: 部署执行中时右侧改成 progress 面板（用户："执行过程放右侧"） -->
+    <aside v-if="!embedMode && isDeploying" class="deploy-progress-side">
+      <div class="dps-head">
+        <div class="dps-title">🚀 部署进行中</div>
+        <div class="dps-subtitle">{{ store.preview.appName || builderAppDisplayName }}</div>
+      </div>
+      <div class="dps-steps">
+        <div
+          v-for="step in deploySteps"
+          :key="step.key"
+          class="dps-step"
+          :class="['status-' + step.status, { current: step.key === deployExecuting }]"
+        >
+          <span class="dps-step-icon">
+            <span v-if="step.status === 'completed'">✓</span>
+            <span v-else-if="step.status === 'error'">✗</span>
+            <span v-else-if="step.status === 'running' || step.key === deployExecuting" class="dps-spin">○</span>
+            <span v-else>·</span>
+          </span>
+          <span class="dps-step-label">{{ step.label }}</span>
+          <span v-if="step.error" class="dps-step-error" :title="step.error">!</span>
+        </div>
+        <div v-if="!deploySteps.length" class="dps-empty">正在初始化部署任务…</div>
+      </div>
+    </aside>
     <!-- v2 redesign (Session 5): right-column SPEC blueprint (pre-deploy only). -->
     <AppBlueprintPanel
-      v-if="!embedMode && !isPostDeploy"
+      v-else-if="!embedMode && !isPostDeploy"
       :models="blueprintSpec.models"
       :forms="blueprintSpec.forms"
       :flows="blueprintSpec.flows"
@@ -1766,14 +1793,11 @@ const showDeployProgressInline = computed(() => deploySteps.value.length > 0 || 
 // 不再区分 showDeployedVersionedView 模式。保留此处常量以便语义搜索，
 // 但所有分支按 false 处理（= 渲染文档视图）。
 const showDeploySidebar = computed(() => {
-  // 2026-05-19 image #28: 去掉 `!isPlatformDeployed.value` 自动开 — 进 /chat?app_id=N
-  // 但根本没点部署也会撑出"创建过程 / 更新概览"鬼界面，体验糟糕。改成仅在用户
-  // 显式触发或确有变更/执行中时才显示。注意 deploySteps 后端会返 12 个 pending stub，
-  // 不能直接用 .length > 0 — 必须看是否有 running/completed/error 表示真在执行。
+  // 2026-05-19 image #29: 改成仅在 update review/execution、用户显式 deployOpen、
+  // 或部署 step 真在 running 时才显示 — completed/error 的旧 step 不再撑出 sidebar
+  // （部署完之后/失败之后 sidebar 应该自动收掉，状态去右侧/中间反馈）。
   if (isUpdateReviewMode.value || isUpdateExecutionMode.value || deployOpen.value) return true
-  return deploySteps.value.some(step =>
-    step.status === 'running' || step.status === 'completed' || step.status === 'error'
-  )
+  return deploySteps.value.some(step => step.status === 'running')
 })
 const showViewSwitcher = computed(() =>
   !!existingAppId.value && (
@@ -3514,11 +3538,17 @@ function openDeployModal() {
   deployConfirmOpen.value = true
 }
 function runDeploy(_env: 'dev' | 'test' | 'prod') {
-  // TODO: pass `_env` through to startDeployFromArtifact when the backend
-  // supports per-environment deploys. For now the existing handler always
-  // deploys to the user's connected aPaaS env.
+  // 2026-05-19 image #29: 部署 confirm 后立即关 modal，把执行过程放右侧。
+  deployConfirmOpen.value = false
   startDeployFromArtifact()
 }
+
+// 部署是否在跑（任意 step running 或刚启动尚未拿到 steps）
+const isDeploying = computed(() => {
+  if (deployExecuting.value !== null) return true
+  if (deployRunningAll.value) return true
+  return deploySteps.value.some((s: any) => s.status === 'running')
+})
 
 const loadConversation = async (cid: number) => {
   resetConversationWorkspace()
@@ -8805,60 +8835,138 @@ html[data-theme="dark"] .mode-btn-link:hover {
   background: transparent;
 }
 
-/* image #28 fresh draft app 空状态卡片 */
-.builder-empty-app-hint {
-  margin: 64px auto;
-  padding: 32px 36px;
-  max-width: 520px;
-  border-radius: 16px;
-  background: var(--t-bg-elevated, rgba(255,255,255,0.04));
-  border: 1px solid var(--t-border-subtle, rgba(255,255,255,0.08));
-  color: var(--t-text-primary);
-  text-align: left;
-}
-.empty-app-icon {
-  font-size: 32px;
-  margin-bottom: 12px;
-}
-.empty-app-title {
-  margin: 0 0 8px;
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--t-text-primary);
-}
-.empty-app-desc {
-  margin: 0 0 16px;
-  color: var(--t-text-secondary);
-  font-size: 13px;
-  line-height: 1.6;
-}
-.empty-app-actions {
-  list-style: none;
-  padding: 0;
-  margin: 0;
+/* image #29 中间 MD 渲染区 */
+.builder-md-viewer {
+  flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  font-size: 13px;
-  line-height: 1.6;
+  margin: 24px;
+  border-radius: 12px;
+  background: var(--t-bg-elevated, rgba(255,255,255,0.02));
+  border: 1px solid var(--t-border-subtle, rgba(255,255,255,0.06));
+  overflow: hidden;
 }
-.empty-app-actions li {
-  padding: 12px 14px;
-  border-radius: 10px;
-  background: rgba(255,255,255,0.03);
-  border: 1px solid rgba(255,255,255,0.06);
-  color: var(--t-text-secondary);
+.md-viewer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--t-border-subtle, rgba(255,255,255,0.06));
 }
-.empty-app-actions strong {
-  color: var(--t-text-primary);
+.md-viewer-title {
+  font-size: 14px;
   font-weight: 600;
+  color: var(--t-text-primary);
 }
-.empty-app-actions a {
+.md-download-btn {
+  font-size: 12px;
+  padding: 4px 12px;
+  border-radius: 6px;
+  background: transparent;
+  border: 1px solid var(--t-border-subtle);
+  color: var(--t-text-secondary);
+  cursor: pointer;
+}
+.md-download-btn:hover {
+  border-color: var(--t-brand-primary, #5b5bd6);
+  color: var(--t-brand-primary, #5b5bd6);
+}
+.md-viewer-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 24px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--t-text-primary);
+}
+.md-viewer-body.plain-doc-fallback {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SF Mono, Monaco, monospace;
+  font-size: 12.5px;
+}
+.md-viewer-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--t-text-tertiary, var(--t-text-secondary));
+  text-align: center;
+  font-size: 13px;
+}
+.md-viewer-empty a {
   color: var(--t-brand-primary, #5b5bd6);
   text-decoration: none;
 }
-.empty-app-actions a:hover {
-  text-decoration: underline;
+.md-viewer-empty a:hover { text-decoration: underline; }
+
+/* image #29 部署进度右侧面板 */
+.deploy-progress-side {
+  width: 380px;
+  display: flex;
+  flex-direction: column;
+  background: var(--t-bg-secondary, rgba(0,0,0,0.02));
+  border-left: 1px solid var(--t-border-subtle, rgba(255,255,255,0.06));
+}
+.dps-head {
+  padding: 20px 24px 14px;
+  border-bottom: 1px solid var(--t-border-subtle, rgba(255,255,255,0.06));
+}
+.dps-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--t-text-primary);
+  margin-bottom: 4px;
+}
+.dps-subtitle {
+  font-size: 12px;
+  color: var(--t-text-secondary);
+}
+.dps-steps {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px 16px;
+}
+.dps-empty {
+  padding: 14px;
+  color: var(--t-text-tertiary, var(--t-text-secondary));
+  font-size: 13px;
+  text-align: center;
+}
+.dps-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  margin-bottom: 4px;
+  transition: background 0.15s;
+}
+.dps-step.status-completed { color: var(--t-text-secondary); }
+.dps-step.status-error { background: rgba(239,68,68,0.08); color: #f87171; }
+.dps-step.status-running, .dps-step.current { background: var(--t-brand-primary-subtle, rgba(91,91,214,0.08)); color: var(--t-brand-primary, #5b5bd6); }
+.dps-step.status-pending { color: var(--t-text-tertiary, rgba(255,255,255,0.4)); }
+.dps-step-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.dps-step-label { flex: 1; }
+.dps-step-error {
+  color: #f87171;
+  font-weight: 700;
+  cursor: help;
+}
+.dps-spin {
+  display: inline-block;
+  animation: dps-rotate 1s linear infinite;
+}
+@keyframes dps-rotate {
+  to { transform: rotate(360deg); }
 }
 
 .chat-bubble { margin-bottom: 14px; animation: fadeUp 0.3s ease-out; }
