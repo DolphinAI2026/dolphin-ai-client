@@ -2531,3 +2531,269 @@ async def config_chat(
         actions_summary=actions_summary,
         tool_trace=tool_trace,
     )
+
+
+# ── SSE 流式版 ─────────────────────────────────────────────
+# 2026-05-19 image #40 reaction: 同步 config-chat 跑 5 轮 agent loop 容易超过
+# 60s axios 默认超时；改成 SSE 让用户实时看到 "正在调 list_apaas_app_models /
+# 已拿到 7 个模型" 的进度，体验跟 ai-chat 一致。
+async def _config_chat_event_stream(
+    app_id: int,
+    payload: ConfigChatReq,
+    ctx: AuthContext,
+    db: AsyncSession,
+):
+    """SSE generator — 复用同步版的 agent loop 主体，每个关键点 yield 一个 SSE event。
+
+    事件类型：
+      started      {app_id, spec_source, tools}
+      turn_start   {turn, of}
+      tool_call    {tool_name, args}
+      tool_result  {tool_name, ok, summary}
+      assistant    {content}   每轮 LLM 返回的纯文本（即将进下一轮 / 或最终）
+      done         {reply, change_plan, requires_confirmation, actions_summary, tool_trace}
+      error        {message}
+    """
+    log = logging.getLogger(__name__)
+
+    def _sse(event: str, data: dict) -> dict:
+        return {"event": event, "data": json.dumps(data, ensure_ascii=False)}
+
+    try:
+        # ── 复用同步版的 application + spec + cfg + tools 加载 ──
+        result = await db.execute(
+            select(Application).where(
+                Application.id == app_id,
+                Application.tenant_id == ctx.tenant_id,
+            )
+        )
+        app = result.scalar_one_or_none()
+        if not app:
+            yield _sse("error", {"message": "应用不存在"})
+            return
+        await _require_application_permission(ctx, db, app, Action.VIEW)
+
+        # SPEC
+        spec_ctx_text = ""
+        spec_source = "none"
+        try:
+            from app.models.spec import Spec as _Spec
+            if app.canonical_spec_id:
+                spec_row = (await db.execute(
+                    select(_Spec).where(_Spec.id == app.canonical_spec_id)
+                )).scalar_one_or_none()
+                if spec_row and spec_row.payload:
+                    spec_ctx_text = json.dumps(spec_row.payload, ensure_ascii=False)[:12000]
+                    spec_source = f"canonical_spec_id={spec_row.id}"
+        except Exception as exc:
+            log.warning("config_chat_stream: load canonical spec failed: %r", exc)
+        if not spec_ctx_text and app.config_preview:
+            spec_ctx_text = app.config_preview[:12000]
+            spec_source = "config_preview"
+        if not spec_ctx_text and app.requirement_doc:
+            spec_ctx_text = app.requirement_doc[:12000]
+            spec_source = "requirement_doc"
+
+        # LLM cfg
+        try:
+            cfg = await _resolve_builder_llm_cfg(
+                db, ctx.tenant_id, conversation_id=app.conversation_id
+            )
+        except Exception as exc:
+            cfg = None
+            log.warning("config_chat_stream: resolve_builder_llm_cfg failed: %r", exc)
+        if not cfg:
+            yield _sse("done", {
+                "reply": (
+                    f"已收到你的需求:「{payload.message}」。\n\n"
+                    "当前租户尚未配置可用的 LLM (环境管理 → 模型配置)，"
+                    "暂时无法自动生成变更草案。"
+                ),
+                "change_plan": None,
+                "requires_confirmation": False,
+                "actions_summary": [],
+                "tool_trace": [],
+            })
+            return
+
+        # MCP tools
+        tool_schemas: list[dict] = []
+        try:
+            from app.ai_chat import mcp_bridge as _bridge
+            all_schemas = await _bridge.get_tool_schemas_openai()
+            tool_schemas = [
+                s for s in all_schemas
+                if s.get("function", {}).get("name") in _CONFIG_CHAT_TOOL_WHITELIST
+            ]
+        except Exception as exc:
+            log.warning("config_chat_stream: mcp_bridge load failed: %r", exc)
+
+        yield _sse("started", {
+            "app_id": app_id,
+            "spec_source": spec_source,
+            "tools": len(tool_schemas),
+        })
+
+        # SYSTEM prompt — 跟同步版完全一致
+        env_id_hint = app.platform_env_id or "(未绑定 platform_env)"
+        apaas_app_id_hint = app.apaas_app_id or "(未部署到 apaas)"
+        system_prompt = (
+            "你是 aPaaS 应用的「配置调整助手」（部署后的精细化配置编辑器）。\n\n"
+            "## 当前应用上下文\n"
+            f"- app_name: {app.app_name}\n"
+            f"- app_code: {app.app_code}\n"
+            f"- apaas_app_id: {apaas_app_id_hint}   ← 调 apaas 类工具时用这个\n"
+            f"- platform_env_id: {env_id_hint}      ← 调 apaas 类工具的 env_id 参数用这个\n\n"
+            "## 完整 SPEC\n"
+            f"[source: {spec_source}]\n"
+            "```\n"
+            f"{spec_ctx_text or '(应用暂无 SPEC，请先用工具拉真实结构)'}\n"
+            "```\n\n"
+            "## 工作方式\n"
+            "1. 优先用工具拉真实状态（list_apaas_app_models 等）\n"
+            "2. 调修改类工具（update_apaas_model_field / update_apaas_form_component 等）前用人话说明改啥\n"
+            "3. 缺信息就反问\n"
+            "4. 完成后如果做了实际变更，在回复末尾给 ```json 块带 summary + actions\n"
+        )
+
+        messages: list[dict] = [{"role": "system", "content": system_prompt}]
+        for turn in (payload.history or [])[-8:]:
+            r = turn.get("role")
+            c = turn.get("content")
+            if r in ("user", "assistant") and isinstance(c, str):
+                messages.append({"role": r, "content": c})
+        messages.append({"role": "user", "content": payload.message})
+
+        tool_trace: list[dict] = []
+        reply = ""
+        MAX_TURNS = 5
+        llm = LLMClient(
+            api_key=cfg["api_key"],
+            base_url=cfg["base_url"],
+            model=cfg["model"],
+        )
+        from app.ai_chat import mcp_bridge as _bridge
+
+        for turn_idx in range(MAX_TURNS):
+            yield _sse("turn_start", {"turn": turn_idx + 1, "of": MAX_TURNS})
+
+            llm_resp = await llm.chat_completion(
+                messages,
+                max_tokens=cfg.get("max_tokens", 4096),
+                temperature=0.3,
+                tools=tool_schemas if tool_schemas else None,
+                tool_choice="auto" if tool_schemas else None,
+            )
+            try:
+                msg = llm_resp["choices"][0]["message"]
+            except (KeyError, IndexError, TypeError):
+                msg = {}
+            content = (msg.get("content") or "").strip()
+            tool_calls = msg.get("tool_calls") or []
+
+            # 把 assistant 这轮塞回 messages
+            messages.append({
+                "role": "assistant",
+                "content": content,
+                "tool_calls": tool_calls if tool_calls else None,
+            })
+
+            # 每轮 LLM 完成都 emit 一下当前 content（即使有 tool_calls，content 也可能有思考过程）
+            if content:
+                yield _sse("assistant", {"content": content, "has_tool_calls": bool(tool_calls)})
+
+            if not tool_calls:
+                reply = content
+                break
+
+            # 执行 tool calls — 每个 tool start/end emit
+            for tc in tool_calls:
+                tc_id = tc.get("id") or ""
+                fn = tc.get("function") or {}
+                tool_name = fn.get("name") or ""
+                try:
+                    tc_args = json.loads(fn.get("arguments") or "{}")
+                except Exception:
+                    tc_args = {}
+
+                yield _sse("tool_call", {"tool_name": tool_name, "args": tc_args})
+
+                if tool_name not in _CONFIG_CHAT_TOOL_WHITELIST:
+                    result_text = json.dumps({
+                        "ok": False, "error_code": "TOOL_NOT_ALLOWED",
+                        "message": f"工具 {tool_name} 不在白名单内",
+                    }, ensure_ascii=False)
+                    ok_flag = False
+                else:
+                    try:
+                        result_text = await _bridge.call_tool(
+                            tool_name, tc_args,
+                            tenant_id=ctx.tenant_id, user_id=ctx.user.id,
+                        )
+                        try:
+                            parsed = json.loads(result_text)
+                            ok_flag = bool(parsed.get("ok", True)) if isinstance(parsed, dict) else True
+                        except Exception:
+                            ok_flag = True
+                    except Exception as exc:
+                        result_text = json.dumps({
+                            "ok": False, "error_code": "BRIDGE_EXCEPTION", "message": str(exc),
+                        }, ensure_ascii=False)
+                        ok_flag = False
+
+                summary = result_text[:200] + ("..." if len(result_text) > 200 else "")
+                trace_item = {
+                    "tool_name": tool_name, "args": tc_args,
+                    "ok": ok_flag, "summary": summary,
+                }
+                tool_trace.append(trace_item)
+                yield _sse("tool_result", trace_item)
+
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc_id,
+                    "content": result_text[:4000],
+                })
+        else:
+            reply = reply or "（已达到工具调用上限 5 轮，可能还需进一步确认）"
+
+        if not reply.strip():
+            reply = "我没完全理解你的诉求，可以再描述详细点吗？"
+
+        # 抽 ```json 块
+        change_plan: dict | None = None
+        actions_summary: list[str] = []
+        m = re.search(r"```json\s*(.*?)\s*```", reply, flags=re.DOTALL)
+        if m:
+            try:
+                parsed = json.loads(m.group(1))
+                if isinstance(parsed, dict):
+                    change_plan = parsed
+                    summary = parsed.get("summary")
+                    if isinstance(summary, list):
+                        actions_summary = [str(s) for s in summary if s]
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        yield _sse("done", {
+            "reply": reply,
+            "change_plan": change_plan,
+            "requires_confirmation": bool(change_plan),
+            "actions_summary": actions_summary,
+            "tool_trace": tool_trace,
+        })
+    except Exception as exc:
+        log.exception("config_chat_stream failed")
+        yield _sse("error", {"message": str(exc)})
+
+
+@router.post("/{app_id}/config-chat-stream")
+async def config_chat_stream(
+    app_id: int,
+    payload: ConfigChatReq,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """SSE 版本的配置助手 — 用户实时看到 tool 调用进度，不撞 60s 前端超时。"""
+    from sse_starlette.sse import EventSourceResponse
+    return EventSourceResponse(_config_chat_event_stream(app_id, payload, ctx, db))

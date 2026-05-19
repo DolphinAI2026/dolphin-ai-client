@@ -78,37 +78,78 @@ async function send() {
   messages.value.push({ id: nextId++, role: 'user', content: msg })
   scrollToBottom()
 
-  // Build history for backend: last ~10 turns, excluding the just-pushed user msg
+  // Build history for backend
   const history = messages.value
     .slice(-20)
     .slice(0, -1)
     .map((m) => ({ role: m.role, content: m.content }))
 
+  // 2026-05-19 image #40 反馈：长 agent loop 撞 60s timeout。改成 SSE 流式，
+  // 实时显示工具调用进度。
+  // 先 push 一条占位 assistant，后续事件实时更新它。
+  const placeholderId = nextId++
+  const placeholder: ChatMsg = {
+    id: placeholderId,
+    role: 'assistant',
+    content: '',
+    tool_trace: [],
+  }
+  ;(placeholder as any).streaming = true
+  ;(placeholder as any).progressLog = [] as string[]
+  messages.value.push(placeholder)
+  scrollToBottom()
+
   try {
-    const resp = await configChatApi.chat(props.applicationId, {
-      message: msg,
-      history,
-    })
-    messages.value.push({
-      id: nextId++,
-      role: 'assistant',
-      content: resp.reply,
-      change_plan: resp.change_plan,
-      actions_summary: resp.actions_summary,
-      tool_trace: resp.tool_trace,
-    })
-    scrollToBottom()
+    await configChatApi.chatStream(
+      props.applicationId,
+      { message: msg, history },
+      (ev) => {
+        const slot = messages.value.find((m) => m.id === placeholderId) as any
+        if (!slot) return
+        if (ev.type === 'started') {
+          slot.progressLog.push(`📡 connected · ${ev.tools} tools · spec=${ev.spec_source}`)
+        } else if (ev.type === 'turn_start') {
+          slot.progressLog.push(`🔄 第 ${ev.turn}/${ev.of} 轮思考`)
+        } else if (ev.type === 'tool_call') {
+          slot.progressLog.push(`🔧 ${ev.tool_name}`)
+        } else if (ev.type === 'tool_result') {
+          slot.tool_trace.push({
+            tool_name: ev.tool_name,
+            args: ev.args,
+            ok: ev.ok,
+            summary: ev.summary,
+          })
+          slot.progressLog.push(`${ev.ok ? '✓' : '✗'} ${ev.tool_name}`)
+        } else if (ev.type === 'assistant') {
+          // 中间轮（有 tool_calls 时仍有思考文字）合并显示
+          if (ev.content) {
+            slot.content = slot.content
+              ? `${slot.content}\n\n${ev.content}`
+              : ev.content
+          }
+        } else if (ev.type === 'done') {
+          slot.content = ev.reply
+          slot.change_plan = ev.change_plan
+          slot.actions_summary = ev.actions_summary
+          slot.tool_trace = ev.tool_trace
+          slot.streaming = false
+          slot.progressLog = []
+        } else if (ev.type === 'error') {
+          slot.content = `❌ 出错了：${ev.message}`
+          slot.streaming = false
+          slot.progressLog = []
+        }
+        scrollToBottom()
+      },
+    )
   } catch (e: any) {
-    const detail =
-      e?.response?.data?.detail ||
-      e?.response?.data?.message ||
-      e?.message ||
-      '调用失败'
-    messages.value.push({
-      id: nextId++,
-      role: 'assistant',
-      content: `❌ 出错了：${detail}`,
-    })
+    const detail = e?.message || '调用失败'
+    const slot = messages.value.find((m) => m.id === placeholderId) as any
+    if (slot) {
+      slot.content = `❌ 网络/解析失败：${detail}`
+      slot.streaming = false
+      slot.progressLog = []
+    }
     scrollToBottom()
   } finally {
     sending.value = false
@@ -263,7 +304,17 @@ function onResizeStart(e: MouseEvent) {
               {{ t.ok ? '✓' : '✗' }} {{ t.tool_name }}
             </span>
           </div>
-          <div class="ca-bubble-text" v-html="renderMd(m.content)" />
+          <!-- streaming progress log: SSE 期间显示工具调用实时进度 -->
+          <div
+            v-if="(m as any).streaming && (m as any).progressLog && (m as any).progressLog.length"
+            class="ca-stream-log"
+          >
+            <div v-for="(l, i) in (m as any).progressLog" :key="i" class="ca-stream-line">{{ l }}</div>
+          </div>
+          <div v-if="m.content" class="ca-bubble-text" v-html="renderMd(m.content)" />
+          <div v-else-if="(m as any).streaming" class="ca-bubble-typing">
+            <span class="ca-dot" /><span class="ca-dot" /><span class="ca-dot" />
+          </div>
           <div v-if="m.change_plan" class="ca-change-card">
             <div class="ca-change-title">📋 提议的变更</div>
             <ul
@@ -535,6 +586,47 @@ function onResizeStart(e: MouseEvent) {
   border: 0;
   border-top: 1px solid var(--border);
   margin: 10px 0;
+}
+
+/* SSE streaming progress log */
+.ca-stream-log {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--surface-3);
+  border: 1px dashed var(--border);
+  font-size: 11.5px;
+  color: var(--text-2);
+  font-family: var(--d-font-mono);
+  max-height: 200px;
+  overflow-y: auto;
+}
+.ca-stream-line {
+  line-height: 1.5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ca-bubble-typing {
+  display: flex;
+  gap: 4px;
+  padding: 6px 0;
+}
+.ca-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--brand, #5b5bd6);
+  animation: ca-bounce 1.2s infinite ease-in-out both;
+}
+.ca-dot:nth-child(2) { animation-delay: 0.16s; }
+.ca-dot:nth-child(3) { animation-delay: 0.32s; }
+@keyframes ca-bounce {
+  0%, 80%, 100% { opacity: 0.3; transform: scale(0.85); }
+  40% { opacity: 1; transform: scale(1); }
 }
 
 /* tool_trace chips — 让用户看见 AI 真调了哪些 MCP 工具 */
