@@ -1014,24 +1014,28 @@ const codingArtifactsHasAny = computed(() =>
   codingArtifacts.value.new.length > 0 || codingArtifacts.value.modified.length > 0
 )
 
-// 用户主动 toggle 显示右栏（即使没产物也可以查看接入说明）
-const codingArtifactPanelManuallyOpen = ref(false)
+// 产物面板 3 态显示策略（image #24 设计反馈）：
+//   null   → 自动：有产物 / streaming 中默认展开，无产物折叠
+//   true   → 用户显式 open（强制展开）
+//   false  → 用户显式 close（强制折叠，即使有产物也尊重）
+// 解决之前 "codingArtifactsHasAny.value return true" 把用户 toggle 意志盖掉的问题。
+const codingArtifactPanelUserToggle = ref<boolean | null>(null)
 
-// 是否显示产物面板：
-// 1) 有产物文件（写入中或写完） → 自动展开
-// 2) 正在 streaming → 自动展开（产物随时可能开始出现）
-// 3) 用户主动 toggle → 展开
-// 否则折叠，让中间 chat 全宽显示，避免空"暂无产物"占地（image #21 vs #22 设计反馈）
+const codingArtifactPanelAutoShow = computed(() =>
+  codingArtifactsHasAny.value || isStreaming.value
+)
+
 const showCodingArtifactPanel = computed(() => {
   if (embeddedAppId.value) return false
-  if (codingArtifactsHasAny.value) return true
-  if (isStreaming.value) return true
-  if (codingArtifactPanelManuallyOpen.value) return true
-  return false
+  if (codingArtifactPanelUserToggle.value !== null) {
+    return codingArtifactPanelUserToggle.value
+  }
+  return codingArtifactPanelAutoShow.value
 })
 
 const toggleCodingArtifactPanel = () => {
-  codingArtifactPanelManuallyOpen.value = !codingArtifactPanelManuallyOpen.value
+  // 反转当前显示状态，把意志写入 userToggle（之后跟随用户，不再随 auto 变）
+  codingArtifactPanelUserToggle.value = !showCodingArtifactPanel.value
 }
 
 // ── 左侧 SessionSidebar 适配 ──
