@@ -2249,10 +2249,13 @@ _CONFIG_CHAT_TOOL_WHITELIST: set[str] = {
     "list_apaas_app_roles",
     # —— 查重 / 防冲突 ——
     "check_app_code_conflict",
-    # —— 字段级精细修改 —— (单字段 required / 名称 / 类型 / 字典等，最常用)
+    # —— 模型字段层 —— (字段名 / 类型 / 长度；改 required 走表单组件层)
     "add_apaas_model_field",
     "update_apaas_model_field",
     "disable_apaas_model_field",
+    # —— 表单组件层 —— (改 required / label / placeholder / readonly / hidden / 默认值，
+    # 用户最常说的"把手机号改成必填"走这里)
+    "update_apaas_form_component",
     # —— 字典 / 选项 ——
     "create_apaas_app_dict",
     "update_apaas_app_dict",

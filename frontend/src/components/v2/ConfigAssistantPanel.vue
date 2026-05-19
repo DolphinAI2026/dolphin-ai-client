@@ -27,13 +27,14 @@ export function renderMd(s: string): string {
 </script>
 
 <script setup lang="ts">
-import { computed, nextTick, ref } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
   configChatApi,
   type ChangePlanPreview,
   type ConfigChatToolTrace,
 } from '@/api/configChat'
+import { applicationApi } from '@/api/application'
 
 const props = defineProps<{
   applicationId: number
@@ -128,6 +129,48 @@ const emptyHint = computed(
 function pickExample(text: string) {
   input.value = text
 }
+
+// 2026-05-19 image #36: 例子 chip 按当前应用真实 SPEC 动态生成，不再写死
+// "人员档案" 这种跨应用无关的内容。失败/无 SPEC 时 fallback 到能力提示 chip。
+type Example = { id: string; text: string }
+const examples = ref<Example[]>([
+  { id: 'cap-field',  text: '把 [模型].[字段] 改成必填' },
+  { id: 'cap-role',   text: '加一个角色叫"XX管理员"' },
+  { id: 'cap-dict',   text: '[字典名] 字典加一个"XX"选项' },
+])
+
+async function loadDynamicExamples() {
+  if (!props.applicationId) return
+  try {
+    const app = await applicationApi.get(props.applicationId) as any
+    const data = app?.config_preview?.data || app?.config_preview || {}
+    const models: any[] = Array.isArray(data.models) ? data.models : []
+    const dicts: any[]  = Array.isArray(data.dicts)  ? data.dicts  : []
+    const next: Example[] = []
+    // 改字段必填：用 first model 的 first field
+    const m0 = models[0]
+    const f0 = m0?.fields?.[0] || m0?.field_list?.[0]
+    if (m0 && f0) {
+      const mn = m0.label || m0.name || m0.code
+      const fn = f0.label || f0.name || f0.code
+      next.push({ id: 'ex-field', text: `把${mn}的${fn}改成必填` })
+    }
+    // 加角色：通用模板
+    next.push({ id: 'ex-role', text: '加一个角色叫"运维管理员"' })
+    // 改字典选项：用 first dict
+    const d0 = dicts[0]
+    if (d0) {
+      const dn = d0.label || d0.name || d0.code
+      next.push({ id: 'ex-dict', text: `${dn} 字典加一个"XX"选项` })
+    }
+    if (next.length > 0) examples.value = next
+  } catch {
+    // 保持 fallback chip
+  }
+}
+
+onMounted(loadDynamicExamples)
+watch(() => props.applicationId, loadDynamicExamples)
 </script>
 
 <template>
@@ -147,14 +190,13 @@ function pickExample(text: string) {
         <div class="ca-empty-title">配置助手</div>
         <div class="ca-empty-hint">{{ emptyHint }}</div>
         <div class="ca-empty-examples">
-          <button class="ca-example" @click="pickExample('把人员档案的手机号改成必填')">
-            把人员档案的手机号改成必填
-          </button>
-          <button class="ca-example" @click="pickExample('加一个角色叫&quot;运维管理员&quot;')">
-            加一个角色叫"运维管理员"
-          </button>
-          <button class="ca-example" @click="pickExample('员工状态字典加一个&quot;长期休假&quot;选项')">
-            加字典选项「长期休假」
+          <button
+            v-for="ex in examples"
+            :key="ex.id"
+            class="ca-example"
+            @click="pickExample(ex.text)"
+          >
+            {{ ex.text }}
           </button>
         </div>
       </div>
