@@ -73,6 +73,16 @@
               <span>⚙️</span>
               <span class="canvas-action-label">设置</span>
             </button>
+            <button
+              class="canvas-action-btn"
+              :class="{ active: showCodingArtifactPanel }"
+              @click="toggleCodingArtifactPanel"
+              :title="showCodingArtifactPanel ? '隐藏产物面板' : '查看产物 / 接入说明'"
+            >
+              <span>📦</span>
+              <span class="canvas-action-label">产物</span>
+              <span v-if="codingArtifactsHasAny" class="cap-count-pill">{{ codingArtifacts.new.length + codingArtifacts.modified.length }}</span>
+            </button>
           </div>
         </div>
 
@@ -1003,12 +1013,25 @@ const codingArtifactsHasAny = computed(() =>
   codingArtifacts.value.new.length > 0 || codingArtifacts.value.modified.length > 0
 )
 
-// 是否显示产物面板：有 workspace 且非嵌入模式（嵌入模式已有自己的 panel）
+// 用户主动 toggle 显示右栏（即使没产物也可以查看接入说明）
+const codingArtifactPanelManuallyOpen = ref(false)
+
+// 是否显示产物面板：
+// 1) 有产物文件（写入中或写完） → 自动展开
+// 2) 正在 streaming → 自动展开（产物随时可能开始出现）
+// 3) 用户主动 toggle → 展开
+// 否则折叠，让中间 chat 全宽显示，避免空"暂无产物"占地（image #21 vs #22 设计反馈）
 const showCodingArtifactPanel = computed(() => {
   if (embeddedAppId.value) return false
-  if (!codingStore.workspace && streamMessages.value.length === 0) return false
-  return true
+  if (codingArtifactsHasAny.value) return true
+  if (isStreaming.value) return true
+  if (codingArtifactPanelManuallyOpen.value) return true
+  return false
 })
+
+const toggleCodingArtifactPanel = () => {
+  codingArtifactPanelManuallyOpen.value = !codingArtifactPanelManuallyOpen.value
+}
 
 // ── 左侧 SessionSidebar 适配 ──
 const sidebarCodingItems = computed<SidebarSessionItem[]>(() =>
@@ -1823,7 +1846,26 @@ watch(() => route.path, () => {
   opacity: 0.4;
   cursor: not-allowed;
 }
+.canvas-action-btn.active {
+  background: var(--t-brand-primary-subtle, rgba(91, 91, 214, 0.12));
+  color: var(--t-brand-primary, #5b5bd6);
+  border-color: var(--t-brand-primary, #5b5bd6);
+}
 .canvas-action-label {
+  line-height: 1;
+}
+.cap-count-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 9px;
+  background: var(--t-brand-primary, #5b5bd6);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
   line-height: 1;
 }
 
