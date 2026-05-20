@@ -479,7 +479,7 @@ const knowledgeEmptyHint = computed(() =>
   transition: border-color 0.14s, box-shadow 0.14s;
   width: 100%; color: var(--text);
 }
-.agent-pick:hover { border-color: var(--border-strong); box-shadow: var(--shadow-xs); }
+.agent-pick:hover { border-color: var(--border-strong); box-shadow: var(--sh-1); }
 .agent-pick.active { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-ring); }
 .agent-pick-body { flex: 1; min-width: 0; }
 .agent-pick-icon {
@@ -506,7 +506,7 @@ const knowledgeEmptyHint = computed(() =>
 
 /* Right detail */
 .agent-detail { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
-.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-xs); }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--sh-1); }
 .card-pad { padding: 18px; }
 
 .agent-head { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 14px; }
@@ -594,7 +594,7 @@ const knowledgeEmptyHint = computed(() =>
 .agent-skill { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
 .agent-skill-head { display: flex; align-items: center; gap: 8px; }
 .agent-skill-code {
-  background: var(--code-bg); color: var(--code-text);
+  background: var(--surface-3); color: var(--text-3);
   padding: 1px 6px; border-radius: 4px; font-size: 10.5px;
 }
 .agent-skill-name { font-size: 12.5px; font-weight: 600; color: var(--text); }

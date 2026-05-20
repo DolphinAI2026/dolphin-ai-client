@@ -389,7 +389,7 @@ function renderIcon(name: string, size = 16) {
 .btn .icon :deep(svg) { display: block; }
 
 /* Cards */
-.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-xs); }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--sh-1); }
 .card-pad { padding: 16px; }
 
 /* Section heads */
@@ -460,7 +460,7 @@ function renderIcon(name: string, size = 16) {
   color: var(--text); display: flex; flex-direction: column; gap: 10px;
   transition: border-color 0.14s, box-shadow 0.14s, transform 0.14s; width: 100%;
 }
-.industry-pack-card:hover { border-color: var(--border-strong); box-shadow: var(--shadow-md); }
+.industry-pack-card:hover { border-color: var(--border-strong); box-shadow: var(--sh-3); }
 .industry-pack-card.is-selected { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-ring); }
 .industry-pack-head { display: flex; align-items: center; gap: 10px; }
 .industry-pack-icon {

@@ -7,8 +7,10 @@ import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import router from './router'
 import App from './App.vue'
 import './styles/theme-vars.css'
-import './styles/design-v2-tokens.css'
-import './styles/design-v3-tokens.css'  // ★ Claude design v3 — 覆盖 v2 brand/text/surface 等共享 var；保留 v2 独有色
+// v3 2026-05-20 cleanup (code review P3-4): design-v2-tokens.css 已删
+// theme-vars.css (v1 era --t-* legacy aliases) 保留向后兼容
+// design-v3-tokens.css 现在是唯一 brand/state/surface token 来源
+import './styles/design-v3-tokens.css'
 import './style.css'
 import './styles/builder.css'
 import { useThemeStore } from './stores/theme'
