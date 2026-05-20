@@ -109,20 +109,23 @@ function go(path: string) {
   router.push(path)
 }
 
+// v3 2026-05-20: 平台管理打开新 tab — 用户反馈：admin 工作流跟主工作台并行，新 tab 不丢上下文
 function goPlatform() {
   tenantMenuOpen.value = false
-  router.push('/platform-admin')
+  if (typeof window === 'undefined') {
+    router.push('/platform-admin')
+    return
+  }
+  // 优先开新 tab；如果被浏览器拦截则 fallback router.push
+  const url = `${window.location.origin}${import.meta.env.BASE_URL.replace(/\/$/, '')}/platform-admin`
+  const win = window.open(url, '_blank', 'noopener')
+  if (!win) {
+    router.push('/platform-admin')
+  }
 }
 
-const ACCENT_PRESETS = [
-  { color: '#1D4ED8', label: '睿鲸蓝（默认）' },
-  { color: '#0F766E', label: '海青' },
-  { color: '#7C3AED', label: '紫罗兰' },
-  { color: '#DB2777', label: '玫红' },
-  { color: '#EA580C', label: '橙' },
-  { color: '#475569', label: '石灰' },
-] as const
-
+// v3 2026-05-20: ACCENT_PRESETS 主题色 picker 删 — 让 admin/frontend brand 始终一致蓝色
+// theme.ts 默认 #1D4ED8 v3 blue 不再被 user picker 覆盖
 const ICONS: Record<string, string> = {
   home: '<path d="M3 11.5 12 4l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/>',
   apps: '<path d="M3 5h7v7H3z"/><path d="M14 5h7v7h-7z"/><path d="M3 16h7v5H3z"/><path d="M14 16h7v5h-7z"/>',
@@ -247,32 +250,9 @@ function renderIcon(name: string): string {
           <span>平台管理</span>
         </button>
 
+        <!-- v3 2026-05-20: 删主题色 picker 让 admin/frontend brand 始终一致蓝；只保留浅深切换 -->
         <div class="theme-row">
-          <span class="theme-row-label">主题色</span>
-          <div class="accent-picker" role="radiogroup" aria-label="主题色">
-            <button
-              v-for="preset in ACCENT_PRESETS"
-              :key="preset.color"
-              type="button"
-              class="accent-swatch"
-              :class="{ active: theme.accentColor.toLowerCase() === preset.color.toLowerCase() }"
-              :style="{ background: preset.color }"
-              :title="preset.label"
-              :aria-label="preset.label"
-              :aria-checked="theme.accentColor.toLowerCase() === preset.color.toLowerCase()"
-              role="radio"
-              @click="theme.setAccentColor(preset.color)"
-            />
-            <label class="accent-swatch accent-custom" title="自定义">
-              <input
-                type="color"
-                :value="theme.accentColor"
-                aria-label="自定义主题色"
-                @input="theme.setAccentColor(($event.target as HTMLInputElement).value)"
-              />
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
-            </label>
-          </div>
+          <span class="theme-row-label">{{ isDark ? '深色模式' : '浅色模式' }}</span>
           <button
             type="button"
             class="theme-toggle"

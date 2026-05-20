@@ -62,7 +62,7 @@
               <el-icon><CopyDocument /></el-icon>
             </button>
           </div>
-          <span class="tool-count">{{ service.tools }}</span>
+          <span class="tool-count">{{ service.tools }} <small class="tool-count-unit">个工具</small></span>
           <span class="status-pill" :class="service.status">{{ service.status === 'online' ? '在线' : '待接入' }}</span>
           <button type="button" class="test-button" @click="openTester(service)">测试与工具</button>
         </div>
@@ -447,6 +447,23 @@ h1 {
   color: var(--text-2);
   font-size: 12px;
   font-weight: 500;
+}
+
+/* v3 2026-05-20 UED 报告 P1: 工具数纯数字含义不清 — 加"个工具"label */
+.tool-count {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.tool-count-unit {
+  color: var(--text-3);
+  font-size: 10.5px;
+  font-weight: 500;
+  font-family: var(--font-sans, inherit);
+  letter-spacing: 0.02em;
 }
 
 .url-cell {

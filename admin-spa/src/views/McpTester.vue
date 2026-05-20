@@ -48,6 +48,12 @@
             <el-button size="small" @click="selectTool(row)">测试</el-button>
           </template>
         </el-table-column>
+        <!-- v3 2026-05-20 UED 报告 P3: "No Data" 英文残留 → 中文引导 + 指示下一步 -->
+        <template #empty>
+          <div style="padding: 24px 16px; color: var(--text-3); font-size: 13px; line-height: 1.6">
+            暂无工具数据，请先在上方填写 MCP 服务地址并点击「连接服务」获取工具列表。
+          </div>
+        </template>
       </el-table>
     </el-card>
 
