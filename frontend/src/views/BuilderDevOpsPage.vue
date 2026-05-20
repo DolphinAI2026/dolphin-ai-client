@@ -2162,7 +2162,7 @@ onMounted(async () => {
 .dialog-hint {
   margin: 0 0 14px;
   padding: 9px 12px;
-  background: var(--b-brand-soft, rgba(99, 102, 241, 0.07));
+  background: var(--b-brand-soft, var(--brand-soft, rgba(29, 78, 216, 0.07)));
   border: 1px solid color-mix(in srgb, var(--b-brand) 18%, transparent);
   border-radius: 8px;
   color: var(--b-text-muted);

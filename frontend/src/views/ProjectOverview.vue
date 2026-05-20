@@ -255,16 +255,25 @@ const onProjectSaved = async () => {
 </script>
 
 <style scoped>
+/* v3 redesign · 2026-05-20 — token migration, template/script untouched.
+   Legacy --t-* tokens → v3 (--brand / --surface / --text / --line / --ok /
+   --warn / --err). Local radius vars kept as alias to v3 --r-* for safety.
+   Entry-card icon bg colors kept (yellow/green/violet) — SVG strokes are
+   in <template> which is locked; bg tints are scoped to icon container
+   only and don't conflict with v3 blue brand.
+   Added :focus-visible rings everywhere clickable.
+*/
 .project-overview {
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
+  --radius-sm: var(--r-3, 8px);
+  --radius-md: var(--r-4, 12px);
+  --radius-lg: var(--r-5, 16px);
 
   height: 100vh;
   display: flex;
   flex-direction: column;
-  background: var(--t-bg-base);
-  color: var(--t-text-primary);
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans, inherit);
 }
 
 /* ── Header ── */
@@ -273,9 +282,9 @@ const onProjectSaved = async () => {
   justify-content: space-between;
   align-items: center;
   padding: 14px 24px;
-  background: var(--t-bg-base);
+  background: var(--surface-overlay, var(--surface));
   backdrop-filter: blur(12px);
-  border-bottom: 1px solid var(--t-border-subtle);
+  border-bottom: 1px solid var(--line);
   position: sticky;
   top: 0;
   z-index: 100;
@@ -292,21 +301,27 @@ const onProjectSaved = async () => {
   width: 36px;
   height: 36px;
   border-radius: var(--radius-sm);
-  border: 1px solid var(--t-border-subtle);
+  border: 1px solid var(--line);
   background: transparent;
-  color: var(--t-text-secondary);
+  color: var(--text-2);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  transition: background 0.2s, border-color 0.2s, color 0.2s;
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
 }
 
 .back-btn:hover {
-  background: var(--t-bg-elevated);
-  border-color: var(--t-border-strong);
-  color: var(--t-text-primary);
+  background: var(--brand-soft);
+  border-color: var(--brand-ring);
+  color: var(--brand);
+}
+.back-btn:focus-visible {
+  outline: 2px solid var(--line-focus, var(--brand-ring));
+  outline-offset: 2px;
 }
 
 .header-info {
@@ -315,16 +330,18 @@ const onProjectSaved = async () => {
 
 .project-name {
   font-size: 18px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold, 600);
   margin: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  color: var(--text);
+  letter-spacing: -0.005em;
 }
 
 .project-desc {
   font-size: 12px;
-  color: var(--t-text-muted);
+  color: var(--text-3);
   margin: 2px 0 0;
   white-space: nowrap;
   overflow: hidden;
@@ -344,19 +361,19 @@ const onProjectSaved = async () => {
   align-items: center;
   gap: 6px;
   font-size: 12px;
-  font-weight: 500;
+  font-weight: var(--fw-medium, 500);
   padding: 4px 12px;
-  border-radius: 20px;
+  border-radius: var(--r-full, 20px);
 }
 
 .conn-status.connected {
-  color: var(--t-success);
-  background: rgba(16, 185, 129, 0.1);
+  color: var(--ok);
+  background: var(--ok-soft);
 }
 
 .conn-status.disconnected {
-  color: var(--t-text-muted);
-  background: var(--t-bg-subtle);
+  color: var(--text-3);
+  background: var(--surface-2);
 }
 
 .conn-dot {
@@ -366,32 +383,39 @@ const onProjectSaved = async () => {
 }
 
 .conn-status.connected .conn-dot {
-  background: var(--t-success);
-  box-shadow: 0 0 6px rgba(16, 185, 129, 0.5);
+  background: var(--ok);
+  box-shadow: 0 0 6px rgba(4, 120, 87, 0.5);
 }
 
 .conn-status.disconnected .conn-dot {
-  background: rgba(255, 255, 255, 0.2);
+  background: var(--text-4);
+  opacity: 0.5;
 }
 
 .settings-btn {
   width: 36px;
   height: 36px;
   border-radius: var(--radius-sm);
-  border: 1px solid var(--t-border-subtle);
+  border: 1px solid var(--line);
   background: transparent;
-  color: var(--t-text-secondary);
+  color: var(--text-2);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.2s, border-color 0.2s, color 0.2s;
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
 }
 
 .settings-btn:hover {
-  background: var(--t-bg-elevated);
-  border-color: var(--t-border-strong);
-  color: var(--t-text-primary);
+  background: var(--brand-soft);
+  border-color: var(--brand-ring);
+  color: var(--brand);
+}
+.settings-btn:focus-visible {
+  outline: 2px solid var(--line-focus, var(--brand-ring));
+  outline-offset: 2px;
 }
 
 /* ── Scroll Area ── */
@@ -417,21 +441,28 @@ const onProjectSaved = async () => {
 }
 
 .entry-card {
-  background: var(--t-bg-panel);
-  border: 1px solid var(--t-border-subtle);
+  background: var(--surface);
+  border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   padding: 28px 24px;
   cursor: pointer;
-  transition: transform 0.2s, border-color 0.2s, box-shadow 0.2s;
+  transition: transform 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              box-shadow 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
   display: flex;
   flex-direction: column;
   gap: 16px;
+  box-shadow: var(--sh-1);
 }
 
 .entry-card:hover {
   transform: translateY(-2px);
-  border-color: var(--t-border-strong);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  border-color: var(--brand-ring);
+  box-shadow: var(--sh-3);
+}
+.entry-card:focus-visible {
+  outline: 2px solid var(--line-focus, var(--brand-ring));
+  outline-offset: 2px;
 }
 
 .entry-icon {
@@ -445,15 +476,15 @@ const onProjectSaved = async () => {
 }
 
 .build-icon {
-  background: var(--t-brand-subtle);
+  background: var(--brand-soft);
 }
 
 .coding-icon {
-  background: rgba(251, 191, 36, 0.1);
+  background: var(--warn-soft);
 }
 
 .page-icon {
-  background: rgba(52, 211, 153, 0.1);
+  background: var(--ok-soft);
 }
 
 .git-icon {
@@ -466,20 +497,21 @@ const onProjectSaved = async () => {
 
 .entry-title {
   font-size: 17px;
-  font-weight: 600;
-  color: var(--t-text-primary);
+  font-weight: var(--fw-semibold, 600);
+  color: var(--text);
   margin-bottom: 4px;
+  letter-spacing: -0.005em;
 }
 
 .entry-subtitle {
   font-size: 13px;
-  color: var(--t-text-secondary);
+  color: var(--text-2);
   margin-bottom: 6px;
 }
 
 .entry-tags {
   font-size: 12px;
-  color: var(--t-text-muted);
+  color: var(--text-3);
 }
 
 .entry-action {
@@ -487,9 +519,9 @@ const onProjectSaved = async () => {
   align-items: center;
   gap: 4px;
   font-size: 13px;
-  font-weight: 500;
-  color: var(--t-brand);
-  transition: gap 0.2s;
+  font-weight: var(--fw-medium, 500);
+  color: var(--brand);
+  transition: gap 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
 }
 
 .entry-card:hover .entry-action {
@@ -511,8 +543,8 @@ const onProjectSaved = async () => {
 
 .section-title {
   font-size: 13px;
-  font-weight: 500;
-  color: var(--t-text-muted);
+  font-weight: var(--fw-medium, 500);
+  color: var(--text-3);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   margin: 0 0 16px;
@@ -529,15 +561,17 @@ const onProjectSaved = async () => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  background: var(--t-bg-panel);
-  border: 1px solid var(--t-border-subtle);
+  background: var(--surface);
+  border: 1px solid var(--line);
   border-radius: var(--radius-md);
   padding: 12px 16px;
-  transition: border-color 0.2s;
+  transition: border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
 }
 
 .workspace-row:hover {
-  border-color: var(--t-border-strong);
+  border-color: var(--brand-ring);
+  background: var(--brand-soft);
 }
 
 .ws-info {
@@ -549,57 +583,62 @@ const onProjectSaved = async () => {
 
 .ws-name {
   font-size: 14px;
-  font-weight: 500;
-  color: var(--t-text-primary);
+  font-weight: var(--fw-medium, 500);
+  color: var(--text);
 }
 
 .ws-type {
   font-size: 11px;
-  color: var(--t-text-muted);
-  background: var(--t-bg-subtle);
+  color: var(--text-3);
+  background: var(--surface-2);
   padding: 2px 8px;
-  border-radius: 4px;
+  border-radius: var(--r-1, 4px);
 }
 
 .ws-status {
   font-size: 11px;
-  font-weight: 500;
+  font-weight: var(--fw-medium, 500);
   padding: 2px 8px;
-  border-radius: 4px;
+  border-radius: var(--r-1, 4px);
 }
 
 .ws-status.ready {
-  color: var(--t-success);
-  background: rgba(16, 185, 129, 0.1);
+  color: var(--ok);
+  background: var(--ok-soft);
 }
 
 .ws-status.building,
 .ws-status.pending {
-  color: var(--t-warning);
-  background: rgba(251, 191, 36, 0.1);
+  color: var(--warn);
+  background: var(--warn-soft);
 }
 
 .ws-status.error {
-  color: var(--t-danger);
-  background: rgba(248, 113, 113, 0.1);
+  color: var(--err);
+  background: var(--err-soft);
 }
 
 .ws-action-btn {
   background: none;
   border: none;
-  color: var(--t-text-muted);
+  color: var(--text-3);
   cursor: pointer;
   padding: 6px;
   border-radius: var(--radius-sm);
-  transition: background 0.2s, color 0.2s;
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
 .ws-action-btn:hover {
-  background: var(--t-bg-elevated);
-  color: var(--t-text-secondary);
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+.ws-action-btn:focus-visible {
+  outline: 2px solid var(--line-focus, var(--brand-ring));
+  outline-offset: 2px;
 }
 
 /* ── Members ── */
@@ -618,14 +657,14 @@ const onProjectSaved = async () => {
   width: 34px;
   height: 34px;
   border-radius: 50%;
-  background: var(--t-brand-gradient);
-  color: #fff;
+  background: linear-gradient(135deg, var(--blue-500, #3B82F6), var(--blue-800, #1E40AF));
+  color: var(--text-inverse, #fff);
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 13px;
-  font-weight: 600;
-  border: 2px solid var(--t-bg-base);
+  font-weight: var(--fw-semibold, 600);
+  border: 2px solid var(--surface);
   margin-left: -8px;
   flex-shrink: 0;
 }
@@ -639,30 +678,37 @@ const onProjectSaved = async () => {
   align-items: center;
   gap: 4px;
   font-size: 12px;
-  font-weight: 500;
-  color: var(--t-text-secondary);
+  font-weight: var(--fw-medium, 500);
+  color: var(--text-2);
   background: none;
-  border: 1px solid var(--t-border-subtle);
+  border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   padding: 5px 12px;
   cursor: pointer;
-  transition: background 0.2s, border-color 0.2s, color 0.2s;
+  font-family: inherit;
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
 }
 
 .manage-btn:hover {
-  background: var(--t-bg-elevated);
-  border-color: var(--t-border-strong);
-  color: var(--t-text-primary);
+  background: var(--brand-soft);
+  border-color: var(--brand-ring);
+  color: var(--brand);
+}
+.manage-btn:focus-visible {
+  outline: 2px solid var(--line-focus, var(--brand-ring));
+  outline-offset: 2px;
 }
 
 /* ── Empty ── */
 .empty-hint {
   text-align: center;
-  color: var(--t-text-muted);
+  color: var(--text-3);
   font-size: 13px;
   padding: 28px 20px;
-  background: var(--t-bg-panel);
-  border: 1px dashed var(--t-border-subtle);
+  background: var(--surface);
+  border: 1px dashed var(--line-strong);
   border-radius: var(--radius-md);
 }
 
@@ -676,11 +722,11 @@ const onProjectSaved = async () => {
 }
 
 .po-scroll::-webkit-scrollbar-thumb {
-  background: var(--t-border-subtle);
+  background: var(--line-strong);
   border-radius: 3px;
 }
 
 .po-scroll::-webkit-scrollbar-thumb:hover {
-  background: var(--t-border-strong);
+  background: var(--text-3);
 }
 </style>

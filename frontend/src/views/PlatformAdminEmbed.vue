@@ -130,6 +130,11 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+/* v3 redesign · 2026-05-20 — token-driven, template/script untouched.
+   Replaced v2 purple gradients (#766bf1/#5750d8/#5146d8/#eeeaff/#e2def0) +
+   hardcode dark text (#17162f) with v3 blue brand + slate ramp tokens.
+   Added :focus-visible rings on every clickable for a11y.
+*/
 .platform-admin-embed {
   min-width: 0;
   min-height: 0;
@@ -137,9 +142,10 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   background:
-    radial-gradient(ellipse 700px 260px at 54% 0%, rgba(91, 80, 223, 0.12), transparent 70%),
-    linear-gradient(180deg, #fbfdff 0%, #f4f1fb 100%);
-  color: #17162f;
+    radial-gradient(ellipse 700px 260px at 54% 0%, var(--brand-ring), transparent 70%),
+    var(--bg-app, linear-gradient(180deg, var(--surface) 0%, var(--surface-2) 100%));
+  color: var(--text);
+  font-family: var(--font-sans, inherit);
 }
 
 .embed-toolbar {
@@ -149,8 +155,8 @@ onMounted(async () => {
   justify-content: space-between;
   gap: 24px;
   padding: 14px 28px;
-  border-bottom: 1px solid rgba(99, 91, 158, 0.12);
-  background: rgba(255, 255, 255, 0.86);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-overlay, var(--surface));
   backdrop-filter: blur(14px);
 }
 
@@ -174,36 +180,49 @@ onMounted(async () => {
   height: 42px;
   display: grid;
   place-items: center;
-  border-radius: 12px;
-  color: #fff;
-  background: linear-gradient(180deg, #766bf1, #5750d8);
-  box-shadow: 0 14px 30px rgba(87, 80, 216, 0.24);
-  font-weight: 820;
+  border-radius: var(--r-4, 12px);
+  color: var(--text-inverse, #fff);
+  background: linear-gradient(135deg, var(--blue-500, #3B82F6), var(--blue-800, #1E40AF));
+  box-shadow: 0 14px 30px -10px var(--brand-glow);
+  font-weight: var(--fw-bold, 700);
+  transition: transform 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              box-shadow 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+.embed-logo:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: var(--sh-brand);
+}
+.embed-logo:focus-visible {
+  outline: 2px solid var(--line-focus, var(--brand-ring));
+  outline-offset: 2px;
 }
 
 .embed-logo:disabled {
   cursor: default;
+  opacity: 0.7;
 }
 
 .embed-breadcrumb {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: #736d91;
-  font-size: 13px;
-  font-weight: 650;
+  color: var(--text-3);
+  font-size: var(--t-small, 12.5px);
+  font-weight: var(--fw-semibold, 600);
 }
 
 .embed-breadcrumb strong {
-  color: #17162f;
+  color: var(--text);
+  font-weight: var(--fw-semibold, 600);
 }
 
 .embed-toolbar h1 {
   margin: 6px 0 0;
-  color: #17162f;
-  font-size: 22px;
+  color: var(--text);
+  font-size: var(--t-h2, 24px);
   line-height: 1.2;
-  font-weight: 820;
+  font-weight: var(--fw-bold, 700);
+  letter-spacing: -0.01em;
 }
 
 .embed-actions {
@@ -211,45 +230,67 @@ onMounted(async () => {
   align-items: center;
   gap: 2px;
   padding: 4px;
-  border: 1px solid #e2def0;
-  border-radius: 12px;
-  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: var(--r-4, 12px);
+  background: var(--surface);
 }
 
 .embed-nav-gap {
   width: 10px;
   height: 24px;
-  border-left: 1px solid #e2def0;
+  border-left: 1px solid var(--line);
   margin-left: 4px;
 }
 
 .embed-actions button {
   height: 34px;
   border: 0;
-  border-radius: 9px;
+  border-radius: var(--r-3, 8px);
   padding: 0 15px;
   background: transparent;
-  color: #625d82;
+  color: var(--text-2);
   font: inherit;
-  font-size: 14px;
-  font-weight: 760;
+  font-size: var(--t-body, 14px);
+  font-weight: var(--fw-semibold, 600);
   cursor: pointer;
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+.embed-actions button:hover:not(.active) {
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+.embed-actions button:focus-visible {
+  outline: 2px solid var(--line-focus, var(--brand-ring));
+  outline-offset: 2px;
 }
 
 .embed-actions button.active {
-  color: #5146d8;
-  background: #eeeaff;
+  color: var(--brand);
+  background: var(--brand-soft);
 }
 
 .embed-back {
   height: 42px;
   padding: 0 16px;
-  border: 1px solid #ded8ef;
-  border-radius: 10px;
-  background: #fff;
-  color: #514b72;
-  font-size: 14px;
-  font-weight: 760;
+  border: 1px solid var(--line);
+  border-radius: var(--r-3, 8px);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: var(--t-body, 14px);
+  font-weight: var(--fw-semibold, 600);
+  transition: border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+.embed-back:hover:not(:disabled) {
+  color: var(--brand);
+  border-color: var(--brand-ring);
+  background: var(--brand-soft);
+}
+.embed-back:focus-visible {
+  outline: 2px solid var(--line-focus, var(--brand-ring));
+  outline-offset: 2px;
 }
 
 .embed-back:disabled {
@@ -260,12 +301,20 @@ onMounted(async () => {
 .embed-logout {
   height: 42px;
   padding: 0 14px;
-  border: 1px solid #f0d5da;
-  border-radius: 10px;
-  background: #fff;
-  color: #b8485c;
-  font-size: 14px;
-  font-weight: 760;
+  border: 1px solid var(--err-soft, rgba(185, 28, 28, 0.18));
+  border-radius: var(--r-3, 8px);
+  background: var(--surface);
+  color: var(--err);
+  font-size: var(--t-body, 14px);
+  font-weight: var(--fw-semibold, 600);
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+.embed-logout:hover {
+  background: var(--err-soft);
+}
+.embed-logout:focus-visible {
+  outline: 2px solid var(--err);
+  outline-offset: 2px;
 }
 
 .embed-frame-wrap {
@@ -280,9 +329,9 @@ onMounted(async () => {
   height: 100%;
   display: block;
   border: 0;
-  border-radius: 18px;
+  border-radius: var(--r-5, 16px);
   background: transparent;
-  box-shadow: 0 18px 46px rgba(34, 30, 70, 0.08);
+  box-shadow: var(--sh-4);
 }
 
 .embed-loading {
@@ -290,10 +339,10 @@ onMounted(async () => {
   inset: 0;
   display: grid;
   place-items: center;
-  color: #7b7598;
-  background: rgba(244, 241, 251, 0.72);
-  font-size: 14px;
-  font-weight: 700;
+  color: var(--text-3);
+  background: var(--glass, rgba(255, 255, 255, 0.72));
+  font-size: var(--t-body, 14px);
+  font-weight: var(--fw-semibold, 600);
 }
 
 @media (max-width: 920px) {

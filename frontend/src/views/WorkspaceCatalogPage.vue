@@ -273,6 +273,10 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+/* v3 redesign · 2026-05-20 — visual refresh only, template/script untouched.
+   v2 indigo-violet hex → v3 brand-blue token. 4-tier weights, 5-tier sizes,
+   r-/sh-/ease tokens, a11y rings. Status pill uses --ok-soft / --ok semantics. */
+
 .catalog-main {
   flex: 1;
   min-width: 0;
@@ -284,8 +288,8 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding: 16px 24px 0;
+  gap: var(--s-4);
+  padding: var(--s-4) var(--s-6) 0;
   max-width: 1200px;
   margin: 0 auto;
   width: 100%;
@@ -293,51 +297,62 @@ onMounted(async () => {
 
 .filter-tabs {
   display: flex;
-  gap: 4px;
+  gap: var(--s-1);
   flex-wrap: wrap;
 }
 
 .filter-tab {
   background: transparent;
   border: none;
-  padding: 7px 16px;
-  font-size: 13px;
-  color: #6a7997;
+  padding: 7px var(--s-4);
+  font-size: var(--t-body);
+  color: var(--text-3);
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--s-2);
   cursor: pointer;
-  border-radius: 8px;
-  transition: all 0.15s ease;
+  border-radius: var(--r-3);
+  font-family: inherit;
+  transition: background 0.14s var(--ease), color 0.14s var(--ease);
 }
 
 .filter-tab:hover {
-  background: rgba(228, 233, 247, 0.8);
-  color: #31405f;
+  background: var(--surface-2);
+  color: var(--text);
 }
 
 .filter-tab.active {
-  background: rgba(99, 102, 241, 0.12);
-  color: #5b6ef3;
-  font-weight: 600;
+  background: var(--brand-soft);
+  color: var(--brand-text);
+  font-weight: var(--fw-semibold);
+}
+
+.filter-tab:focus-visible {
+  outline: 2px solid var(--line-focus);
+  outline-offset: 2px;
 }
 
 .tab-count {
-  font-size: 11px;
+  font-size: var(--t-micro);
   min-width: 20px;
   padding: 0 7px;
-  border-radius: 999px;
-  background: rgba(99, 102, 241, 0.1);
-  color: #7b88a8;
+  border-radius: var(--r-full);
+  background: var(--brand-soft);
+  color: var(--text-3);
   line-height: 20px;
   text-align: center;
+}
+
+.filter-tab.active .tab-count {
+  background: var(--brand);
+  color: #fff;
 }
 
 .view-toggle {
   display: flex;
   gap: 2px;
-  background: rgba(236, 240, 250, 0.95);
-  border-radius: 8px;
+  background: var(--surface-2);
+  border-radius: var(--r-3);
   padding: 2px;
 }
 
@@ -345,19 +360,28 @@ onMounted(async () => {
   width: 32px;
   height: 32px;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--r-2);
   background: none;
-  color: #7b88a8;
+  color: var(--text-3);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.15s ease;
+  transition: background 0.14s var(--ease), color 0.14s var(--ease);
+}
+
+.toggle-btn:hover {
+  color: var(--text);
 }
 
 .toggle-btn.active {
-  background: rgba(99, 102, 241, 0.12);
-  color: #5b6ef3;
+  background: var(--brand-soft);
+  color: var(--brand-text);
+}
+
+.toggle-btn:focus-visible {
+  outline: 2px solid var(--line-focus);
+  outline-offset: 2px;
 }
 
 .catalog-content {
@@ -366,32 +390,38 @@ onMounted(async () => {
   max-width: 1200px;
   margin: 0 auto;
   width: 100%;
-  padding: 16px 24px 60px;
+  padding: var(--s-4) var(--s-6) 60px;
 }
 
 .catalog-content.grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 14px;
+  gap: var(--s-4);
   align-content: start;
 }
 
 .grid-card,
 .list-card {
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.88);
-  border: 1px solid rgba(226, 231, 246, 0.88);
-  box-shadow: none;
+  border-radius: var(--r-5);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: var(--sh-1);
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: background 0.18s var(--ease), border-color 0.18s var(--ease), box-shadow 0.18s var(--ease), transform 0.18s var(--ease);
 }
 
 .grid-card:hover,
 .list-card:hover {
-  background: rgba(255, 255, 255, 0.96);
-  border-color: rgba(99, 102, 241, 0.18);
-  box-shadow: 0 4px 20px rgba(99, 102, 241, 0.08);
+  background: var(--surface);
+  border-color: var(--brand-ring);
+  box-shadow: var(--sh-3);
   transform: translateY(-2px);
+}
+
+.grid-card:focus-visible,
+.list-card:focus-visible {
+  outline: 2px solid var(--line-focus);
+  outline-offset: 2px;
 }
 
 .grid-card {
@@ -399,7 +429,7 @@ onMounted(async () => {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--s-2);
 }
 
 .grid-card-top,
@@ -418,7 +448,7 @@ onMounted(async () => {
 .grid-card-copy {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--s-1);
   min-width: 0;
 }
 
@@ -426,7 +456,7 @@ onMounted(async () => {
 .card-name-row {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--s-1);
   flex-wrap: wrap;
 }
 
@@ -440,20 +470,20 @@ onMounted(async () => {
   display: inline-flex;
   align-items: center;
   height: 22px;
-  padding: 0 8px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 600;
+  padding: 0 var(--s-2);
+  border-radius: var(--r-full);
+  font-size: var(--t-micro);
+  font-weight: var(--fw-semibold);
 }
 
 .source-badge {
-  background: rgba(238, 240, 252, 0.9);
-  color: #7b88a8;
+  background: var(--surface-3);
+  color: var(--text-3);
 }
 
 .card-status {
-  background: rgba(224, 248, 232, 0.9);
-  color: #39b56c;
+  background: var(--ok-soft);
+  color: var(--ok);
 }
 
 .grid-card-name,
@@ -461,7 +491,8 @@ onMounted(async () => {
   margin: 0;
   font-size: 15px;
   line-height: 1.3;
-  color: #1f2a44;
+  color: var(--text);
+  font-weight: var(--fw-semibold);
   word-break: break-word;
 }
 
@@ -469,26 +500,27 @@ onMounted(async () => {
 .card-meta {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--s-2);
   flex-wrap: wrap;
-  color: #95a2bf;
-  font-size: 11px;
+  color: var(--text-3);
+  font-size: var(--t-micro);
 }
 
 .grid-card-footer {
   margin-top: 2px;
-  padding-top: 8px;
-  border-top: 1px solid rgba(229, 233, 247, 0.9);
+  padding-top: var(--s-2);
+  border-top: 1px solid var(--line);
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--s-3);
 }
 
 .card-code {
   padding: 0 7px;
-  border-radius: 10px;
-  background: rgba(241, 243, 252, 0.95);
+  border-radius: var(--r-3);
+  background: var(--surface-2);
+  font-family: var(--font-mono);
 }
 
 .grid-card-stats,
@@ -496,33 +528,45 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 6px;
-  color: #95a2bf;
-  font-size: 11px;
+  gap: var(--s-2);
+  color: var(--text-3);
+  font-size: var(--t-micro);
 }
 
 .grid-card-actions,
 .card-actions {
   display: flex;
-  gap: 4px;
+  gap: var(--s-1);
 }
 
 .action-btn {
   width: 32px;
   height: 32px;
-  border-radius: 10px;
-  border: 1px solid rgba(226, 231, 246, 0.9);
-  background: #fff;
-  color: #7b88a8;
+  border-radius: var(--r-3);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text-3);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
+  transition: background 0.14s var(--ease), border-color 0.14s var(--ease), color 0.14s var(--ease);
+}
+
+.action-btn:hover {
+  background: var(--brand-soft);
+  border-color: var(--brand-ring);
+  color: var(--brand);
 }
 
 .action-btn.primary {
-  color: #5b6ef3;
-  border-color: rgba(99, 102, 241, 0.2);
+  color: var(--brand);
+  border-color: var(--brand-ring);
+}
+
+.action-btn:focus-visible {
+  outline: 2px solid var(--line-focus);
+  outline-offset: 2px;
 }
 
 .action-btn:disabled,
@@ -560,7 +604,7 @@ onMounted(async () => {
 
 .card-info {
   flex-direction: column;
-  gap: 6px;
+  gap: var(--s-2);
 }
 
 .empty-state {
@@ -568,8 +612,8 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #8b97b2;
-  font-size: 14px;
+  color: var(--text-3);
+  font-size: var(--t-body);
 }
 
 @media (max-width: 1200px) {
@@ -578,11 +622,11 @@ onMounted(async () => {
 
 @media (max-width: 900px) {
   .filter-bar {
-    padding: 14px 16px 8px;
+    padding: 14px var(--s-4) var(--s-2);
   }
 
   .catalog-content {
-    padding: 8px 16px 20px;
+    padding: var(--s-2) var(--s-4) 20px;
   }
 
   .catalog-content.grid {
@@ -609,64 +653,68 @@ onMounted(async () => {
 </style>
 
 <style>
+/* v3 dark theme — all explicit colors swapped to v3 dark tokens.
+   The :root[data-theme="dark"] block in design-v3-tokens.css already remaps
+   --surface / --text / --brand etc, so most rules can use the same vars. */
+
 html[data-theme="dark"] .catalog-main {
-  background: #090b10 !important;
-  color: rgba(248, 250, 252, 0.94) !important;
+  background: var(--bg) !important;
+  color: var(--text) !important;
 }
 
 html[data-theme="dark"] .catalog-main .filter-tab {
-  color: rgba(203, 213, 225, 0.66) !important;
+  color: var(--text-3) !important;
 }
 
 html[data-theme="dark"] .catalog-main .filter-tab:hover {
-  background: #151922 !important;
-  color: rgba(248, 250, 252, 0.90) !important;
+  background: var(--surface-2) !important;
+  color: var(--text) !important;
 }
 
 html[data-theme="dark"] .catalog-main .filter-tab.active {
-  background: rgba(124, 140, 255, 0.14) !important;
-  color: #b6c2ff !important;
+  background: var(--brand-soft) !important;
+  color: var(--brand-text) !important;
 }
 
 html[data-theme="dark"] .catalog-main .tab-count,
 html[data-theme="dark"] .catalog-main .source-badge,
 html[data-theme="dark"] .catalog-main .card-code {
-  background: rgba(148, 163, 184, 0.10) !important;
-  border-color: rgba(148, 163, 184, 0.14) !important;
-  color: rgba(203, 213, 225, 0.72) !important;
+  background: var(--surface-3) !important;
+  border-color: var(--line) !important;
+  color: var(--text-3) !important;
 }
 
 html[data-theme="dark"] .catalog-main .view-toggle {
-  background: #111318 !important;
-  border: 1px solid rgba(148, 163, 184, 0.14) !important;
+  background: var(--surface-2) !important;
+  border: 1px solid var(--line) !important;
 }
 
 html[data-theme="dark"] .catalog-main .toggle-btn {
-  color: rgba(203, 213, 225, 0.62) !important;
+  color: var(--text-3) !important;
 }
 
 html[data-theme="dark"] .catalog-main .toggle-btn.active {
-  background: rgba(124, 140, 255, 0.16) !important;
-  color: #b6c2ff !important;
+  background: var(--brand-soft) !important;
+  color: var(--brand-text) !important;
 }
 
 html[data-theme="dark"] .catalog-main .grid-card,
 html[data-theme="dark"] .catalog-main .list-card {
-  background: #111318 !important;
-  border-color: rgba(148, 163, 184, 0.14) !important;
-  box-shadow: none !important;
+  background: var(--surface) !important;
+  border-color: var(--line) !important;
+  box-shadow: var(--sh-1) !important;
 }
 
 html[data-theme="dark"] .catalog-main .grid-card:hover,
 html[data-theme="dark"] .catalog-main .list-card:hover {
-  background: #151922 !important;
-  border-color: rgba(124, 140, 255, 0.26) !important;
-  box-shadow: none !important;
+  background: var(--surface-2) !important;
+  border-color: var(--brand-ring) !important;
+  box-shadow: var(--sh-3) !important;
 }
 
 html[data-theme="dark"] .catalog-main .grid-card-name,
 html[data-theme="dark"] .catalog-main .card-name-row h3 {
-  color: rgba(248, 250, 252, 0.94) !important;
+  color: var(--text) !important;
 }
 
 html[data-theme="dark"] .catalog-main .grid-card-meta,
@@ -674,33 +722,33 @@ html[data-theme="dark"] .catalog-main .card-meta,
 html[data-theme="dark"] .catalog-main .grid-card-stats,
 html[data-theme="dark"] .catalog-main .card-stats,
 html[data-theme="dark"] .catalog-main .empty-state {
-  color: rgba(203, 213, 225, 0.64) !important;
+  color: var(--text-3) !important;
 }
 
 html[data-theme="dark"] .catalog-main .grid-card-footer {
-  border-top-color: rgba(148, 163, 184, 0.14) !important;
+  border-top-color: var(--line) !important;
 }
 
 html[data-theme="dark"] .catalog-main .card-status {
-  background: rgba(52, 211, 153, 0.12) !important;
-  color: #67e8a9 !important;
+  background: var(--ok-soft) !important;
+  color: var(--ok) !important;
 }
 
 html[data-theme="dark"] .catalog-main .action-btn {
-  background: #151922 !important;
-  border-color: rgba(148, 163, 184, 0.16) !important;
-  color: rgba(203, 213, 225, 0.70) !important;
+  background: var(--surface-2) !important;
+  border-color: var(--line) !important;
+  color: var(--text-3) !important;
 }
 
 html[data-theme="dark"] .catalog-main .action-btn.primary {
-  background: rgba(124, 140, 255, 0.14) !important;
-  border-color: rgba(124, 140, 255, 0.30) !important;
-  color: #b6c2ff !important;
+  background: var(--brand-soft) !important;
+  border-color: var(--brand-ring) !important;
+  color: var(--brand-text) !important;
 }
 
 html[data-theme="dark"] .catalog-main .action-btn:hover {
-  background: #1a1d24 !important;
-  border-color: rgba(124, 140, 255, 0.28) !important;
-  color: rgba(248, 250, 252, 0.92) !important;
+  background: var(--brand-soft) !important;
+  border-color: var(--brand-ring) !important;
+  color: var(--brand-text) !important;
 }
 </style>

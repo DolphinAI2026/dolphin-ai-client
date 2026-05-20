@@ -64,12 +64,14 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+/* v3 redesign · 2026-05-20 — visual refresh only, template/script untouched.
+   Maps v2 --t-* tokens to v3 surface/text/r tokens; preserves spinner anim. */
 .ra-page {
   display: flex;
   flex-direction: column;
   width: 100%;
   height: 100%;
-  background: var(--t-bg, #fff);
+  background: var(--bg);
 }
 .ra-loading,
 .ra-not-configured {
@@ -78,9 +80,9 @@ onMounted(async () => {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 12px;
-  color: var(--t-text-muted);
-  font-size: 14px;
+  gap: var(--s-3, 12px);
+  color: var(--text-3);
+  font-size: var(--t-body, 14px);
 }
 .ra-not-configured-icon {
   font-size: 36px;
@@ -88,8 +90,8 @@ onMounted(async () => {
 }
 .ra-not-configured-title {
   font-size: 15px;
-  color: var(--t-text-primary);
-  font-weight: 600;
+  color: var(--text);
+  font-weight: var(--fw-semibold, 600);
 }
 .ra-not-configured-hint {
   font-size: 13px;
@@ -98,14 +100,17 @@ onMounted(async () => {
   line-height: 1.6;
 }
 .ra-not-configured-hint code {
-  background: var(--t-bg-input);
+  background: var(--surface-3);
   padding: 1px 6px;
-  border-radius: 4px;
-  font-size: 12px;
+  border-radius: var(--r-1, 4px);
+  font-size: var(--t-small, 12.5px);
+  font-family: var(--font-mono);
+  color: var(--text-2);
 }
 .spinner {
   display: inline-block;
   font-size: 24px;
+  color: var(--brand);
   animation: spin 1s linear infinite;
 }
 @keyframes spin {

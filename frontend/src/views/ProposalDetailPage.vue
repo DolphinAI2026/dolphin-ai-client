@@ -366,58 +366,75 @@ onMounted(refresh)
 </script>
 
 <style scoped>
-.proposal-detail { padding: 24px; }
+/* v3 redesign · 2026-05-20 — token migration, template/script untouched.
+   Legacy --t-* tokens (--t-brand-subtle / --t-success / --t-warning /
+   --t-danger / --t-text-inverse) + v2 aliases (--bg-panel / --bg-inset /
+   --fg / --fg-muted) → v3 (--brand / --ok / --warn / --err / --surface /
+   --surface-2 / --text). Added :focus-visible rings.
+*/
+.proposal-detail { padding: 24px; color: var(--text); font-family: var(--font-sans, inherit); }
 .detail-header { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
-.status-badge { padding: 4px 10px; border-radius: 12px; font-size: 12px; }
-.status-draft { background: var(--bg-inset); color: var(--fg-muted); }
-.status-open { background: var(--t-brand-subtle, rgba(79,110,247,0.08)); color: var(--brand); }
-.status-changes_requested { background: var(--t-warning-subtle); color: var(--t-warning); }
-.status-approved { background: var(--t-success-subtle); color: var(--t-success); }
-.status-applying { background: var(--t-warning-subtle); color: var(--t-warning); }
-.status-applied { background: var(--t-success-subtle); color: var(--t-success); }
-.status-apply_failed { background: var(--t-danger-subtle); color: var(--t-danger); }
-.status-closed { background: var(--bg-inset); color: var(--fg-muted); }
+.detail-header h1 { font-size: var(--t-h2, 24px); font-weight: var(--fw-bold, 700); color: var(--text); margin: 0; letter-spacing: -0.01em; }
+.status-badge { padding: 4px 10px; border-radius: var(--r-full, 12px); font-size: 12px; font-weight: var(--fw-medium, 500); }
+.status-draft { background: var(--surface-3); color: var(--text-3); }
+.status-open { background: var(--brand-soft); color: var(--brand); }
+.status-changes_requested { background: var(--warn-soft); color: var(--warn); }
+.status-approved { background: var(--ok-soft); color: var(--ok); }
+.status-applying { background: var(--warn-soft); color: var(--warn); }
+.status-applied { background: var(--ok-soft); color: var(--ok); }
+.status-apply_failed { background: var(--err-soft); color: var(--err); }
+.status-closed { background: var(--surface-3); color: var(--text-3); }
 
 .detail-body { display: grid; grid-template-columns: 2fr 1fr; gap: 24px; }
-.left-pane h3, .right-pane h3 { margin: 16px 0 8px; }
-.description-md { white-space: pre-wrap; padding: 12px; background: var(--bg-inset); color: var(--fg); border-radius: 6px; }
+.left-pane h3, .right-pane h3 { margin: 16px 0 8px; font-size: var(--t-h3, 18px); font-weight: var(--fw-semibold, 600); color: var(--text); letter-spacing: -0.005em; }
+.description-md { white-space: pre-wrap; padding: 12px; background: var(--surface-2); color: var(--text); border-radius: var(--r-2, 6px); font-size: var(--t-body, 14px); line-height: 1.55; }
 .apply-summary ul { padding-left: 0; list-style: none; }
-.apply-summary li { padding: 6px 0; border-bottom: 1px solid var(--line); }
-.reversibility-badge { display: inline-block; padding: 2px 8px; border-radius: 8px; font-size: 11px; margin-right: 8px; color: var(--t-text-inverse, #fff); }
-.reversibility-green { background: var(--t-success); }
-.reversibility-yellow { background: var(--t-warning); color: var(--bg-ink); }
-.reversibility-red { background: var(--t-danger); }
+.apply-summary li { padding: 6px 0; border-bottom: 1px solid var(--line); color: var(--text-2); font-size: var(--t-body, 14px); }
+.reversibility-badge { display: inline-block; padding: 2px 8px; border-radius: var(--r-3, 8px); font-size: 11px; margin-right: 8px; color: var(--text-inverse, #fff); font-weight: var(--fw-medium, 500); }
+.reversibility-green { background: var(--ok); }
+.reversibility-yellow { background: var(--warn); color: var(--text); }
+.reversibility-red { background: var(--err); }
 
 .validation-card, .reviews-card, .apply-card, .applied-card, .apply-failed-card, .draft-card {
-  border: 1px solid var(--line); background: var(--bg-panel); padding: 16px; border-radius: 8px; margin-bottom: 16px;
+  border: 1px solid var(--line); background: var(--surface); padding: 16px; border-radius: var(--r-3, 8px); margin-bottom: 16px; box-shadow: var(--sh-1);
 }
-.check-row { padding: 8px 0; }
-.check-row ul { padding-left: 32px; color: var(--t-danger); font-size: 13px; }
-.check-pass { color: var(--t-success); font-weight: bold; }
-.check-fail { color: var(--t-danger); font-weight: bold; }
+.check-row { padding: 8px 0; font-size: var(--t-body, 14px); color: var(--text); }
+.check-row ul { padding-left: 32px; color: var(--err); font-size: 13px; }
+.check-pass { color: var(--ok); font-weight: var(--fw-bold, 700); }
+.check-fail { color: var(--err); font-weight: var(--fw-bold, 700); }
 
 .review-item { padding: 8px 0; border-bottom: 1px solid var(--line); }
-.action-badge { padding: 2px 8px; border-radius: 8px; font-size: 11px; margin: 0 6px; }
-.action-approve { background: var(--t-success-subtle); color: var(--t-success); }
-.action-request_changes { background: var(--t-danger-subtle); color: var(--t-danger); }
-.action-comment { background: var(--bg-inset); color: var(--fg-muted); }
-.review-body { margin-top: 4px; padding: 8px; background: var(--bg-inset); color: var(--fg); border-radius: 4px; }
+.review-item strong { color: var(--text); font-weight: var(--fw-semibold, 600); }
+.action-badge { padding: 2px 8px; border-radius: var(--r-3, 8px); font-size: 11px; margin: 0 6px; font-weight: var(--fw-medium, 500); }
+.action-approve { background: var(--ok-soft); color: var(--ok); }
+.action-request_changes { background: var(--err-soft); color: var(--err); }
+.action-comment { background: var(--surface-3); color: var(--text-3); }
+.review-body { margin-top: 4px; padding: 8px; background: var(--surface-2); color: var(--text); border-radius: var(--r-1, 4px); font-size: var(--t-body, 14px); }
 
 .review-form { margin-top: 16px; }
-.review-form textarea { width: 100%; padding: 8px; box-sizing: border-box; background: var(--bg-inset); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; }
+.review-form textarea {
+  width: 100%; padding: 8px; box-sizing: border-box;
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--line); border-radius: var(--r-2, 6px);
+  font-family: inherit; font-size: var(--t-body, 14px);
+  transition: border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+.review-form textarea:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-ring); }
 .review-actions { display: flex; gap: 8px; margin-top: 8px; }
-.muted { color: var(--fg-muted); }
+.muted { color: var(--text-3); }
 .small { font-size: 12px; }
 
 .apply-btn { width: 100%; padding: 12px; }
 
-.modal-backdrop { position: fixed; inset: 0; background: var(--t-bg-overlay, rgba(0,0,0,.5)); display: flex; align-items: center; justify-content: center; z-index: 1000; }
-.modal { background: var(--bg-panel); color: var(--fg); padding: 24px; border-radius: 8px; max-width: 600px; width: 90%; box-shadow: var(--sh-pop); }
-.irreversible-list { padding-left: 20px; color: var(--t-danger); }
+.modal-backdrop { position: fixed; inset: 0; background: rgba(11, 27, 63, 0.45); backdrop-filter: blur(2px); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+.modal { background: var(--surface); color: var(--text); padding: 24px; border-radius: var(--r-4, 12px); max-width: 600px; width: 90%; box-shadow: var(--sh-5); border: 1px solid var(--line); }
+.modal h3 { margin: 0 0 12px; color: var(--warn); font-size: var(--t-h3, 18px); font-weight: var(--fw-bold, 700); }
+.irreversible-list { padding-left: 20px; color: var(--err); }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
-.builder-btn-danger { background: var(--t-danger); color: var(--t-text-inverse, #fff); }
-.loading, .error { padding: 48px; text-align: center; color: var(--fg-muted); }
-.error { color: var(--t-danger); }
+.builder-btn-danger { background: var(--err); color: var(--text-inverse, #fff); border-color: var(--err); }
+.builder-btn-danger:hover:not(:disabled) { filter: brightness(1.05); }
+.loading, .error { padding: 48px; text-align: center; color: var(--text-3); font-size: var(--t-body, 14px); }
+.error { color: var(--err); }
 
 .git-pr-btn {
   margin-left: auto;
@@ -426,29 +443,33 @@ onMounted(refresh)
   border: 1px solid var(--brand);
   color: var(--brand);
   background: transparent;
-  border-radius: 6px;
+  border-radius: var(--r-2, 6px);
   text-decoration: none;
-  font-weight: 500;
+  font-weight: var(--fw-medium, 500);
+  transition: all 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
 }
 .git-pr-btn:hover { background: var(--brand-soft); }
+.git-pr-btn:focus-visible { outline: 2px solid var(--line-focus, var(--brand-ring)); outline-offset: 2px; }
 
-.git-tag-row { margin-top: 6px; font-size: 12px; color: var(--fg-muted); }
+.git-tag-row { margin-top: 6px; font-size: 12px; color: var(--text-3); }
 .git-tag-row code {
-  background: var(--bg-inset);
-  color: var(--fg);
+  background: var(--surface-3);
+  color: var(--text);
   padding: 1px 6px;
-  border-radius: 4px;
-  font-family: var(--b-mono, ui-monospace, SFMono-Regular, monospace);
+  border-radius: var(--r-1, 4px);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: var(--t-mono, 12px);
 }
 
 .journal-list, .error-list { list-style: none; padding-left: 0; margin-top: 8px; }
-.journal-list li, .error-list li { padding: 4px 0; border-bottom: 1px solid var(--line); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.journal-list li, .error-list li { padding: 4px 0; border-bottom: 1px solid var(--line); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: var(--t-body, 14px); }
 .journal-icon { display: inline-block; width: 16px; }
 .fixup-link {
   margin-top: 12px; padding: 12px;
-  background: var(--t-warning-subtle); color: var(--t-warning);
-  border-radius: 6px;
+  background: var(--warn-soft); color: var(--warn);
+  border-radius: var(--r-2, 6px);
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  font-size: var(--t-body, 14px); font-weight: var(--fw-medium, 500);
 }
-.error-list li { color: var(--t-danger); }
+.error-list li { color: var(--err); }
 </style>

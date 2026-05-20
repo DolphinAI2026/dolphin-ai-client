@@ -82,10 +82,12 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.workspace-shell { display: flex; flex-direction: column; height: 100vh; background: var(--bg); color: var(--fg); }
+/* v3 redesign · 2026-05-20 — visual refresh only, template/script untouched.
+   Maps v2 tokens (--bg-panel/--fg-muted/--t-danger) to v3 (--surface/--text-3/--err). */
+.workspace-shell { display: flex; flex-direction: column; height: 100vh; background: var(--bg); color: var(--text); }
 .ws-main { display: grid; grid-template-columns: 320px 1fr 320px; gap: 1px; flex: 1; min-height: 0; background: var(--line); }
-.pane { background: var(--bg-panel); overflow: auto; padding: 16px; }
-.loading, .error { padding: 48px; text-align: center; color: var(--fg-muted); }
-.error { color: var(--t-danger); }
-.muted { color: var(--fg-muted); }
+.pane { background: var(--surface); overflow: auto; padding: var(--s-4, 16px); }
+.loading, .error { padding: var(--s-12, 48px); text-align: center; color: var(--text-3); }
+.error { color: var(--err); }
+.muted { color: var(--text-3); }
 </style>

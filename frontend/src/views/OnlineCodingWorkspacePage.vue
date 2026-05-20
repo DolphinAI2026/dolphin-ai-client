@@ -1363,7 +1363,7 @@ function fileName(filePath: string) {
 
 .oc-kicker {
   display: block;
-  color: #536dfe;
+  color: var(--brand);
   font-size: 11px;
   font-weight: 820;
   letter-spacing: 0.08em;
@@ -1428,8 +1428,8 @@ function fileName(filePath: string) {
 .oc-field textarea:focus,
 .oc-composer textarea:focus,
 .oc-spec-editor:focus {
-  border-color: rgba(83, 109, 254, 0.45);
-  box-shadow: 0 0 0 3px rgba(83, 109, 254, 0.10);
+  border-color: var(--line-focus, rgba(29, 78, 216, 0.45));
+  box-shadow: 0 0 0 3px var(--brand-soft, rgba(29, 78, 216, 0.10));
 }
 
 .oc-auth-tabs {
@@ -1538,14 +1538,14 @@ function fileName(filePath: string) {
   border: 1px solid var(--t-border-subtle, rgba(116, 128, 171, 0.16));
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
-  color: var(--t-brand, #536dfe);
+  color: var(--t-brand, var(--brand));
 }
 
 .oc-git-note {
   margin: 16px 0 18px;
-  border: 1px solid var(--t-brand-subtle, rgba(83, 109, 254, 0.14));
+  border: 1px solid var(--t-brand-subtle, var(--brand-ring, rgba(29, 78, 216, 0.14)));
   border-radius: 12px;
-  background: var(--t-brand-subtle, rgba(83, 109, 254, 0.06));
+  background: var(--t-brand-subtle, var(--brand-soft, rgba(29, 78, 216, 0.06)));
   color: var(--t-text-secondary, #526179);
   padding: 12px 14px;
   font-size: 13px;
@@ -1765,9 +1765,9 @@ function fileName(filePath: string) {
 }
 
 .oc-secondary.active {
-  border-color: rgba(83, 109, 254, 0.32);
-  background: rgba(83, 109, 254, 0.08);
-  color: #4357d4;
+  border-color: var(--brand-glow, rgba(29, 78, 216, 0.32));
+  background: var(--brand-soft, rgba(29, 78, 216, 0.08));
+  color: var(--brand-hover);
 }
 
 .oc-runtime-pill {
@@ -1948,8 +1948,8 @@ function fileName(filePath: string) {
   display: inline-flex;
   align-items: center;
   border-radius: 999px;
-  background: rgba(83, 109, 254, 0.10);
-  color: #4357d4;
+  background: var(--brand-soft, rgba(29, 78, 216, 0.10));
+  color: var(--brand-hover);
   padding: 0 9px;
   font-style: normal;
   font-size: 11px;
@@ -2082,9 +2082,9 @@ function fileName(filePath: string) {
 
 .oc-file-chips button:hover,
 .oc-file-chips button.active {
-  border-color: rgba(83, 109, 254, 0.32);
-  background: rgba(83, 109, 254, 0.08);
-  color: #4357d4;
+  border-color: var(--brand-glow, rgba(29, 78, 216, 0.32));
+  background: var(--brand-soft, rgba(29, 78, 216, 0.08));
+  color: var(--brand-hover);
 }
 
 .oc-file-preview {
@@ -2181,7 +2181,7 @@ function fileName(filePath: string) {
   z-index: 5;
 }
 .oc-preview-resizer:hover {
-  background: rgba(90, 120, 255, 0.4);
+  background: var(--brand-glow, rgba(29, 78, 216, 0.4));
 }
 .oc-preview-head {
   flex: 0 0 auto;

@@ -102,39 +102,67 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+/* v3 redesign · 2026-05-20 — visual refresh only, template/script untouched.
+   Replaces v2 --bg-base/--bg-panel/--t-* tokens with v3 surface/text/r/sh tokens. */
 .oauth-callback {
   min-height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--bg-base, var(--t-bg-base));
-  padding: 24px;
+  background: var(--bg);
+  padding: var(--s-6, 24px);
 }
 .cb-card {
-  background: var(--bg-panel, var(--t-bg-panel));
-  border: 1px solid var(--line, var(--t-border-subtle));
-  border-radius: 12px;
-  padding: 32px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-4, 12px);
+  padding: var(--s-8, 32px);
   max-width: 520px;
   width: 100%;
-  color: var(--fg, var(--t-text-primary));
+  color: var(--text);
+  box-shadow: var(--sh-3);
 }
-.cb-card h1 { font-size: 18px; font-weight: 600; margin: 0 0 12px; }
-.muted { color: var(--fg-muted, var(--t-text-muted)); font-size: 14px; }
-.error-text { color: var(--t-danger); font-size: 14px; }
-.cb-actions { margin-top: 20px; }
+.cb-card h1 {
+  font-size: var(--t-h3, 18px);
+  font-weight: var(--fw-semibold, 600);
+  letter-spacing: -0.01em;
+  margin: 0 0 var(--s-3, 12px);
+}
+.muted { color: var(--text-3); font-size: var(--t-body, 14px); line-height: 1.55; }
+.error-text { color: var(--err); font-size: var(--t-body, 14px); line-height: 1.55; }
+.cb-actions { margin-top: var(--s-5, 20px); }
 .btn {
-  padding: 8px 16px;
-  border-radius: 6px;
-  border: 1px solid var(--line, var(--t-border-subtle));
-  background: var(--bg-panel, var(--t-bg-panel));
-  color: var(--fg, var(--t-text-primary));
+  padding: var(--s-2, 8px) var(--s-4, 16px);
+  border-radius: var(--r-2, 6px);
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--text);
   cursor: pointer;
   font-size: 13px;
+  font-weight: var(--fw-medium, 500);
+  font-family: inherit;
+  transition: border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+.btn:hover {
+  border-color: var(--brand-ring);
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+.btn:focus-visible {
+  outline: 2px solid var(--line-focus, var(--brand-ring));
+  outline-offset: 2px;
 }
 .btn-primary {
   background: var(--brand);
   border-color: var(--brand);
-  color: var(--fg-on-ink, #fff);
+  color: var(--text-inverse, #fff);
+  box-shadow: var(--sh-brand);
+}
+.btn-primary:hover {
+  background: var(--brand-hover);
+  border-color: var(--brand-hover);
+  color: var(--text-inverse, #fff);
 }
 </style>

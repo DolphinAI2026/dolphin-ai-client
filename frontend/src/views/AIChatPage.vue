@@ -1575,7 +1575,7 @@ onMounted(async () => {
 /* AI Chat 主题色映射 — 通过 v-bind 注入 .theme-dark / .theme-light class 来切换。
    品牌色统一用全局 --t-brand 跟随。 */
 .ai-chat-app {
-  --ac-brand: var(--t-brand, #5a78ff);
+  --ac-brand: var(--brand, var(--t-brand, #1D4ED8));
   --ac-brand-soft: color-mix(in srgb, var(--ac-brand) 16%, transparent);
   --ac-brand-glow: color-mix(in srgb, var(--ac-brand) 20%, transparent);
 
@@ -2098,8 +2098,8 @@ onMounted(async () => {
   gap: 8px;
   padding: 8px 14px;
   margin-bottom: 8px;
-  background: rgba(59, 130, 246, 0.06);
-  border: 1px solid rgba(59, 130, 246, 0.18);
+  background: var(--brand-soft, rgba(29, 78, 216, 0.06));
+  border: 1px solid var(--brand-ring, rgba(29, 78, 216, 0.18));
   border-radius: 10px;
   font-size: 12.5px;
   color: rgba(31, 41, 55, 0.85);
@@ -2149,12 +2149,12 @@ onMounted(async () => {
 }
 .textarea::placeholder { color: var(--ac-text-faint); }
 .send-btn {
-  width: 34px; height: 34px; border-radius: 50%; background: #3b82f6;
+  width: 34px; height: 34px; border-radius: 50%; background: var(--ac-brand);
   border: none; color: #fff; cursor: pointer; display: grid; place-items: center;
   flex-shrink: 0; transition: all 0.15s;
-  box-shadow: 0 2px 6px rgba(59, 130, 246, 0.3);
+  box-shadow: var(--sh-brand, 0 2px 6px rgba(29, 78, 216, 0.3));
 }
-.send-btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 3px 10px rgba(59, 130, 246, 0.4); }
+.send-btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 3px 10px color-mix(in srgb, var(--ac-brand) 40%, transparent); }
 .send-btn:disabled { opacity: 0.35; cursor: not-allowed; box-shadow: none; }
 .send-btn.stop {
   background: #ef4444;
