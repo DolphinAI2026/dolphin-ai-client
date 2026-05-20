@@ -1893,3 +1893,245 @@ select:focus-visible,
   color: var(--err) !important;
   padding-top: 4px;
 }
+
+/* ===========================================================================
+ * v3 · Phase 10 polish (2026-05-20)
+ * Goal: surface-level polish without touching any .vue file.
+ *   - sticky page elements (header / tabs / filter bar) on long lists
+ *   - card / row hover micro-animations
+ *   - page entry fade-in via Vue transition class
+ *   - Element Plus tooltip / popover / drawer / loading polish
+ *   - scrollbar v3 styling
+ *   - selection (::selection) brand-soft
+ * =========================================================================== */
+
+/* === 10.1 sticky page header / tabs / filter bar ===
+ * When a page has both <BuilderFrame> wrapping content and long scrollable list,
+ * the page header (.page-head / .apps-header / .platform-tenants-header / .tenant-users-header)
+ * should stay visible at top of the scrollable area. Same for tab bars and filter bars. */
+.page-head,
+.apps-header,
+.platform-tenants-header,
+.tenant-users-header,
+.envs-main .tabs-bar,
+.apps-toolbar,
+.filter-bar,
+.platform-tenants-panel .filter-bar,
+.tenant-users-filter {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  background: var(--surface);
+  backdrop-filter: blur(8px);
+}
+
+/* Subtle padding when sticky so border-bottom (already on headers) looks separated when "stuck" */
+.page-head { padding-bottom: 12px; }
+
+/* === 10.2 card hover micro-animations ===
+ * Every card-like surface gets the same subtle hover treatment for cross-page coherence. */
+.env-card,
+.apps-card,
+.mp-card,
+.llm-card,
+.conn-row,
+.mcp-row {
+  transition: transform 0.18s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              box-shadow 0.18s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              border-color 0.18s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)) !important;
+}
+.env-card:hover,
+.apps-card:hover,
+.mp-card:hover,
+.llm-card:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--sh-2);
+  border-color: var(--brand-ring);
+}
+
+/* === 10.3 page entry transition ===
+ * If pages wrap with <transition name="page">, this gives subtle fade. Works even without
+ * the wrapper — pages that don't use transition just see no animation. */
+.page-enter-active,
+.page-leave-active,
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.18s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              transform 0.18s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+.page-enter-from,
+.fade-enter-from {
+  opacity: 0;
+  transform: translateY(4px);
+}
+.page-leave-to,
+.fade-leave-to {
+  opacity: 0;
+}
+
+/* === 10.4 element plus tooltip / popover ===
+ * Tooltip = dark-on-light micro hint. Popover = light bg, has content / actions. */
+.el-tooltip__popper,
+.el-popper {
+  background: var(--text) !important;
+  color: var(--text-inverse) !important;
+  border-radius: var(--r-2) !important;
+  border: none !important;
+  padding: 6px 10px !important;
+  font-size: 12px !important;
+  font-weight: 500;
+  box-shadow: var(--sh-3) !important;
+  max-width: 280px;
+}
+.el-popper__arrow::before {
+  background: var(--text) !important;
+  border: none !important;
+}
+
+/* Popover (with content) — different from tooltip, keep light bg */
+.el-popover.el-popper {
+  background: var(--surface) !important;
+  color: var(--text) !important;
+  border: 1px solid var(--line) !important;
+  box-shadow: var(--sh-4) !important;
+  border-radius: var(--r-3) !important;
+}
+.el-popover.el-popper .el-popper__arrow::before {
+  background: var(--surface) !important;
+  border: 1px solid var(--line) !important;
+}
+
+/* === 10.5 element plus drawer / loading === */
+.el-drawer {
+  background: var(--surface) !important;
+}
+.el-drawer__header {
+  padding: 18px 22px !important;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 0 !important;
+}
+.el-drawer__title {
+  font-size: 15px !important;
+  font-weight: 600 !important;
+  color: var(--text) !important;
+}
+.el-drawer__body {
+  padding: 18px 22px !important;
+}
+
+/* Loading spinner color */
+.el-loading-spinner .circular {
+  height: 36px;
+  width: 36px;
+}
+.el-loading-spinner .path {
+  stroke: var(--brand) !important;
+}
+.el-loading-mask {
+  background: var(--glass) !important;
+  backdrop-filter: blur(2px);
+}
+
+/* === 10.6 scrollbar v3 styling ===
+ * Subtle scrollbar that doesn't fight the layout. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--text-4) transparent;
+}
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--text-4);
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-3);
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* === 10.7 text selection color (brand-soft) === */
+::selection {
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+::-moz-selection {
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+
+/* === 10.8 input number / textarea polish === */
+.el-input-number .el-input__inner {
+  text-align: left !important;
+}
+.el-textarea__inner {
+  background: var(--surface-2) !important;
+  border-color: var(--line) !important;
+  border-radius: var(--r-3) !important;
+  font-size: 13.5px !important;
+  line-height: 1.6 !important;
+  color: var(--text) !important;
+  transition: border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+.el-textarea__inner:focus {
+  border-color: var(--brand) !important;
+  box-shadow: 0 0 0 2px var(--brand-ring) !important;
+}
+
+/* === 10.9 element plus tag polish (5 状态色) === */
+.el-tag {
+  border-radius: var(--r-1) !important;
+  font-size: 10.5px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.02em;
+  padding: 0 7px !important;
+  height: 20px !important;
+  line-height: 20px !important;
+  border: none !important;
+}
+.el-tag--success {
+  background: var(--ok-soft) !important;
+  color: var(--ok) !important;
+}
+.el-tag--warning {
+  background: var(--warn-soft) !important;
+  color: var(--warn) !important;
+}
+.el-tag--danger {
+  background: var(--err-soft) !important;
+  color: var(--err) !important;
+}
+.el-tag--info {
+  background: var(--surface-3) !important;
+  color: var(--text-2) !important;
+}
+.el-tag--primary {
+  background: var(--brand-soft) !important;
+  color: var(--brand) !important;
+}
+
+/* === 10.10 element plus checkbox + radio polish === */
+.el-checkbox__inner,
+.el-radio__inner {
+  border-color: var(--line-strong) !important;
+  background: var(--surface) !important;
+}
+.el-checkbox__input.is-checked .el-checkbox__inner,
+.el-radio__input.is-checked .el-radio__inner {
+  background: var(--brand) !important;
+  border-color: var(--brand) !important;
+}
+.el-checkbox__label,
+.el-radio__label {
+  font-size: 13px !important;
+  color: var(--text) !important;
+}
