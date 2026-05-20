@@ -264,4 +264,61 @@ html[data-theme="dark"] {
   --line-focus:  rgba(96, 165, 250, 0.55);
 
   --bg-rail: var(--surface-2);
+
+  /* 状态色 — v2 dark 用了 --emerald/--amber/--rose/--sky，强制走 v3 --ok/--warn/--err */
+  --ok:        #34D399;
+  --ok-soft:   rgba(52, 211, 153, 0.14);
+  --warn:      #FBBF24;
+  --warn-soft: rgba(251, 191, 36, 0.14);
+  --err:       #F87171;
+  --err-soft:  rgba(248, 113, 113, 0.14);
+  --info:      #60A5FA;
+  --info-soft: rgba(96, 165, 250, 0.14);
+
+  /* v2 别名（被老组件还在用的）都映射到 v3 brand — v3 一种品牌色原则 */
+  --emerald:   var(--ok);
+  --emerald-bg: var(--ok-soft);
+  --amber:     var(--warn);
+  --amber-bg:  var(--warn-soft);
+  --rose:      var(--err);
+  --rose-bg:   var(--err-soft);
+  --sky:       var(--info);
+  --sky-bg:    var(--info-soft);
+
+  /* --ai-* 在 v2 是青色 #5BBBD7，v3 收敛到 brand 蓝 */
+  --ai:        var(--brand);
+  --ai-hover:  var(--brand-hover);
+  --ai-text:   var(--brand-text);
+  --ai-soft:   var(--brand-soft);
+  --ai-soft-2: var(--brand-soft-2);
+  --ai-ring:   var(--brand-ring);
+}
+
+/* Light mode 同补一份状态色 + --ai-* 别名（v2 light 也有这些） */
+[data-design="v2"],
+[data-design="v2"][data-theme="light"] {
+  --ok:        #047857;
+  --ok-soft:   #D1FAE5;
+  --warn:      #B45309;
+  --warn-soft: #FEF3C7;
+  --err:       #B91C1C;
+  --err-soft:  #FEE2E2;
+  --info:      #1D4ED8;
+  --info-soft: #EFF6FF;
+
+  --emerald:   var(--ok);
+  --emerald-bg: var(--ok-soft);
+  --amber:     var(--warn);
+  --amber-bg:  var(--warn-soft);
+  --rose:      var(--err);
+  --rose-bg:   var(--err-soft);
+  --sky:       var(--info);
+  --sky-bg:    var(--info-soft);
+
+  --ai:        var(--brand);
+  --ai-hover:  var(--brand-hover);
+  --ai-text:   var(--brand-text);
+  --ai-soft:   var(--brand-soft);
+  --ai-soft-2: var(--brand-soft-2);
+  --ai-ring:   var(--brand-ring);
 }
