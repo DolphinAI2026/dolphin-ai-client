@@ -1,6 +1,9 @@
 <template>
   <el-container class="admin-layout" :class="{ 'admin-layout-embedded': embedded }">
-    <el-aside v-if="!embedded" width="220px" class="admin-sidebar">
+    <!-- v3 2026-05-20：统一 UI — 不再 v-if="!embedded" 隐藏 sidebar/header
+         独立访问 (localhost:5174/mcp) 和嵌入访问 (/platform-admin) 看起来一样
+         embedded 模式下加 "返回工作台" 按钮（跳父窗口） -->
+    <el-aside width="220px" class="admin-sidebar">
       <div class="admin-brand">
         <div class="brand-mark">AI</div>
         <div>
@@ -25,9 +28,12 @@
     </el-aside>
 
     <el-container>
-      <el-header v-if="!embedded" class="admin-header">
+      <el-header class="admin-header">
         <div class="admin-header-title">平台管理 / {{ currentTitle }}</div>
         <div class="admin-header-right">
+          <el-button v-if="embedded" text class="admin-return-workspace" @click="returnWorkspace">
+            ← 返回工作台
+          </el-button>
           <el-tag v-if="auth.user" type="success" effect="light">{{ auth.user.username }}</el-tag>
           <el-button text @click="onLogout">退出</el-button>
         </div>
@@ -90,6 +96,24 @@ onMounted(async () => {
 function onLogout() {
   auth.logout()
   router.push('/login')
+}
+
+// v3 2026-05-20: 当 admin-spa 在 iframe (embedded) 中时，"返回工作台" 跳父窗口
+// 独立访问时不显（embedded 是 false）
+function returnWorkspace() {
+  if (typeof window === 'undefined') return
+  if (window.self !== window.top && window.top) {
+    // 嵌入模式 — 让父窗口 (frontend) 跳回 ai-builder 主路由
+    try {
+      window.top.location.href = '/ai-builder/'
+    } catch {
+      // 跨 origin 兜底 — postMessage 给父窗口
+      window.parent?.postMessage({ type: 'admin-return-workspace' }, '*')
+    }
+  } else {
+    // 不在 iframe 内（理论上 button 不显，但兜底）
+    router.push('/')
+  }
 }
 </script>
 
