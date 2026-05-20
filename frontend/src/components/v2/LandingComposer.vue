@@ -1,36 +1,31 @@
 <!-- frontend/src/components/v2/LandingComposer.vue
   3-mode composer for Landing v3.
-  - 睿鲸 AI Builder: multi-file (any type) + text → 进 /ai-chat
-  - 睿鲸 AI Coding: 选低代码应用（可不选）+ text → 进 /coding
-  - Vibe Coding: text → 进 /vibe-coding
+  - 睿鲸 AI Builder: 多文件 (any type) + text → /ai-chat（消费 previewStore.pendingAiChatFiles + ?prompt）
+  - 睿鲸 AI Coding: text → /coding（进去后 agent 引导选目标应用 + templateType）
+  - Vibe Coding:    text → /vibe-coding
 -->
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { usePreviewStore } from '@/stores/preview'
 
-interface AppOption { id: number | string; name: string; code?: string }
-
-const props = defineProps<{ apps?: AppOption[] }>()
-
 type Mode = 'builder' | 'coding' | 'vibe'
 const MODES: { id: Mode; label: string; sub: string; tone: 'ai' | 'brand' | 'emerald' }[] = [
-  { id: 'builder', label: '睿鲸 AI Builder', sub: '描述需求 / 上传材料 → SPEC → 部署', tone: 'ai' },
-  { id: 'coding',  label: '睿鲸 AI Coding',  sub: '聊天驱动生成低代码组件',           tone: 'brand' },
-  { id: 'vibe',    label: 'Vibe Coding',    sub: '浏览器 VS Code 全代码 + AI 协助',  tone: 'emerald' },
+  { id: 'builder', label: '睿鲸 AI Builder', sub: '描述需求 / 上传材料 → SPEC → 部署',     tone: 'ai' },
+  { id: 'coding',  label: '睿鲸 AI Coding',  sub: '给应用做自开发：页面 / 组件 / 后端接口', tone: 'brand' },
+  { id: 'vibe',    label: 'Vibe Coding',    sub: '浏览器 VS Code 全代码 + AI 协助',        tone: 'emerald' },
 ]
 
 const mode = ref<Mode>('builder')
 const text = ref('')
 const files = ref<File[]>([])
-const selectedAppId = ref<number | string | ''>('')
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const router = useRouter()
 const previewStore = usePreviewStore()
 
 const placeholder = computed(() => ({
   builder: '说说你想做什么。例：管理我们部门 200 台设备的领用、归还和报废… 也可以直接拖文件进来。',
-  coding:  '描述要给所选应用做的自开发页面或组件。例：给 CRM 加一个客户健康度看板，支持按行业筛选。',
+  coding:  '描述要做的自开发任务，进入工作区后选目标应用 + templateType。例：给 CRM 加一个客户健康度看板。',
   vibe:    '描述你想做的代码任务，进入 Vibe Coding 工作区继续。',
 }[mode.value]))
 
@@ -40,10 +35,6 @@ const canSubmit = computed(() => {
   if (mode.value === 'builder') return !!text.value.trim() || files.value.length > 0
   return !!text.value.trim()
 })
-
-const selectedApp = computed(() =>
-  props.apps?.find(a => String(a.id) === String(selectedAppId.value)) || null,
-)
 
 function onFilesPicked(e: Event) {
   const target = e.target as HTMLInputElement
@@ -73,20 +64,8 @@ function submit() {
       query: { mode: 'requirements', ...(userPrompt ? { prompt: userPrompt } : {}) },
     })
   } else if (mode.value === 'coding') {
-    const app = selectedApp.value
-    const message = app
-      ? `针对低代码应用「${app.name}」${app.code ? `（应用编码：${app.code}）` : ''}做以下自开发需求：\n\n${userPrompt}`
-      : userPrompt
-    try {
-      sessionStorage.setItem('ai_builder_pending_coding', JSON.stringify({ message }))
-    } catch { /* sessionStorage 不可用，继续 — coding 页可在无 message 时 fallback */ }
-    router.push({
-      path: '/coding',
-      query: {
-        from_ai_builder: '1',
-        ...(app ? { app_id: String(app.id) } : {}),
-      },
-    })
+    // Landing 选应用 + 直接跳 /coding 的链路撤掉（UX 不顺）— 进 /coding 后由 agent 引导选目标 app
+    router.push({ path: '/coding', query: userPrompt ? { prompt: userPrompt } : {} })
   } else {
     router.push({ path: '/vibe-coding', query: userPrompt ? { prompt: userPrompt } : {} })
   }
@@ -119,20 +98,6 @@ function submit() {
           <span class="file-chip-size">{{ formatBytes(f.size) }}</span>
           <button class="file-chip-x" type="button" aria-label="移除" @click="removeFile(i)">×</button>
         </span>
-      </div>
-
-      <!-- coding 模式：应用选择器 -->
-      <div v-if="mode === 'coding'" class="app-picker">
-        <label class="app-picker-label">关联应用（可选）</label>
-        <select v-model="selectedAppId" class="app-picker-select">
-          <option value="">不关联应用 — 通用代码任务</option>
-          <option v-for="a in props.apps || []" :key="a.id" :value="a.id">
-            {{ a.name }}{{ a.code ? `（${a.code}）` : '' }}
-          </option>
-        </select>
-        <div v-if="selectedApp" class="app-picker-hint">
-          ✓ 已选 <b>{{ selectedApp.name }}</b>，需求会自动带上应用上下文
-        </div>
       </div>
 
       <textarea v-model="text" class="composer-input" :placeholder="placeholder" rows="3" />
@@ -185,14 +150,6 @@ function submit() {
 .file-chip-size { color: var(--text-3); font-size: 11px; font-variant-numeric: tabular-nums; }
 .file-chip-x { width: 20px; height: 20px; display: grid; place-items: center; padding: 0; background: transparent; border: none; border-radius: 4px; color: var(--text-3); cursor: pointer; font-size: 14px; line-height: 1; font-family: inherit; }
 .file-chip-x:hover { background: var(--surface-3, var(--surface)); color: var(--text); }
-
-/* App picker (coding mode) */
-.app-picker { padding: 12px 14px 0; display: flex; flex-direction: column; gap: 6px; }
-.app-picker-label { font-size: 11.5px; color: var(--text-3); font-weight: 500; letter-spacing: 0.02em; }
-.app-picker-select { height: 32px; padding: 0 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); font-size: 13px; font-family: inherit; cursor: pointer; outline: none; transition: border-color 0.14s; }
-.app-picker-select:hover, .app-picker-select:focus { border-color: var(--brand-ring); }
-.app-picker-hint { font-size: 11.5px; color: var(--brand-text); }
-.app-picker-hint b { color: var(--brand); font-weight: 600; }
 
 /* Textarea */
 .composer-input { width: 100%; min-height: 84px; padding: 14px 16px; border: none; outline: none; resize: none; background: transparent; color: var(--text); font-size: 14px; line-height: 1.55; font-family: inherit; }

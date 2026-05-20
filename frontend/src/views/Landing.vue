@@ -21,11 +21,8 @@ interface RecentApp {
   conversationId?: number | null
 }
 
-interface ComposerApp { id: number | string; name: string; code?: string }
-
 const stats = ref({ apps: 0, specs: 0, deploys: 0, packs: 0 })
 const recent = ref<RecentApp[]>([])
-const allApps = ref<ComposerApp[]>([])
 
 const FLOW_STEPS = [
   { n: '01', label: '描述需求',         tone: 'ai' },
@@ -89,17 +86,6 @@ async function loadLanding() {
   const sourceApps = appRecords.length ? appRecords : fallbackApps
   recent.value = sourceApps.slice(0, 5)
 
-  // 应用选择器用：全量 apps（带 code），优先用 backend appRecords，fallback 用 conversations 推断的
-  allApps.value = Array.isArray(apps)
-    ? apps
-        .filter((app: any) => app?.id && app?.app_name)
-        .map((app: any) => ({
-          id: app.id,
-          name: app.app_name || app.appName || '未命名应用',
-          code: app.app_code || app.appCode || undefined,
-        } as ComposerApp))
-    : []
-
   // 4-stat strip: apps / specs / deploys / packs.
   // - apps: total app count
   // - specs: total conversation count (each builder conversation produces SPEC iterations)
@@ -142,7 +128,7 @@ onMounted(loadLanding)
           <div class="hero-sub">支持 .md 设计文档 · .doc / .docx · .pdf · 直接对话需求 · 复用行业包 · 部署到得帆云</div>
         </div>
 
-        <LandingComposer :apps="allApps" />
+        <LandingComposer />
 
         <div class="strip stats">
           <div class="stat"><div class="stat-num">{{ stats.apps }}</div><div class="stat-lbl">应用</div></div>

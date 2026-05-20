@@ -28,7 +28,6 @@ const NAV = computed<NavItem[]>(() => [
   { key: 'builder', label: '睿鲸 AI Builder', icon: 'chat', path: '/ai-chat?mode=requirements' },
   { key: 'coding', label: '睿鲸 AI Coding', icon: 'code', path: '/coding', badge: codingWorkspaceCount.value || undefined },
   { key: 'vibe', label: 'Vibe Coding', icon: 'sparkles', path: '/vibe-coding' },
-  { key: 'marketplace', label: '组件市场', icon: 'store', path: '/marketplace' },
   // 数据接入 — DB 问数 wizard + 数据库连接管理
   { key: 'db-connections', label: '数据库连接', icon: 'database', path: '/db-connections' },
   { key: 'quick-db', label: 'DB 问数', icon: 'spark', path: '/quick-db' },

@@ -227,12 +227,6 @@ const router = createRouter({
       meta: { requiresAuth: true }
     },
     {
-      path: '/marketplace',
-      name: 'Marketplace',
-      component: () => import('@/views/MarketplacePage.vue'),
-      meta: { requiresAuth: true }
-    },
-    {
       path: '/platform-envs',
       name: 'PlatformEnvs',
       component: () => import('@/views/PlatformEnvs.vue'),

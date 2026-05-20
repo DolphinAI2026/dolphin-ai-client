@@ -25,7 +25,6 @@ const CRUMB_LABELS: Record<string, string> = {
   '/agents': '智能体配置',
   '/specs': '设计文档',
   '/industry': '行业知识库',
-  '/marketplace': '组件市场',
   '/mcp': 'MCP 管理',
   '/runtime': '运行与发布',
   '/admin/tenants': '平台管理',
