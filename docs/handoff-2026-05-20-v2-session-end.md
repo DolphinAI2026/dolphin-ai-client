@@ -1,6 +1,75 @@
 # Session Handoff · 2026-05-20 v2（接续 v1 之后的 11 commits）
 > 接 `docs/handoff-2026-05-20-session-end.md` (v1)；本次 session 把 v1 留尾的 P0 全做了，加上用户陆续提出的 5+ 个新方向。
 
+---
+
+## 🚀 接手快速指南（给同事）
+
+### 仓库 + 分支
+- **GitHub repo**: https://github.com/Mars-hub404/apaas-builder-ai
+- **分支**: `local/ui-redesign-2026-05-20`
+- **最新 HEAD**: `a4b1685` (含本文档)
+- **主分支**: `main`（**不要往 main 推 / 不要 PR**——这分支还有留尾任务，等本系列彻底稳定再考虑 merge）
+
+### 拉代码
+
+```bash
+# === 情况 A：首次 clone ===
+git clone -b local/ui-redesign-2026-05-20 \
+  https://github.com/Mars-hub404/apaas-builder-ai.git
+cd apaas-builder-ai
+
+# === 情况 B：已有本地 repo ===
+cd /path/to/apaas-builder-ai
+git fetch origin
+git checkout local/ui-redesign-2026-05-20
+git pull --ff-only origin local/ui-redesign-2026-05-20
+
+# 确认 HEAD
+git log --oneline -1
+# 应该看到: a4b1685 docs(handoff): 2026-05-20 v2 ...
+```
+
+### 跑起来（3 个进程）
+
+```bash
+# 装依赖（首次）
+cd frontend  && pnpm install
+cd ../admin-spa && pnpm install
+cd ../backend && pip install -r requirements.txt
+cd ..
+
+# Terminal 1: backend (FastAPI 8000)
+cd backend && python -m uvicorn app.main:app --reload --port 8000
+
+# Terminal 2: frontend (Vite 5173) — 主入口
+cd frontend && pnpm dev
+
+# Terminal 3: admin-spa (Vite 5174) — 平台管理 SPA，可选
+cd admin-spa && pnpm dev
+```
+
+### 访问
+- **Frontend 主入口**: http://localhost:5173/ai-builder/
+- **Admin SPA**（平台管理）: http://localhost:5174/
+
+### 验证本 session 改动是否生效（5 分钟自检）
+
+| # | 操作 | 期望看到 |
+|---|---|---|
+| 1 | 打开 `/ai-builder/` | Landing 3 mode picker：睿鲸 AI Builder / 睿鲸 AI Coding / Vibe Coding |
+| 2 | 顶部 topbar | 只有面包屑 `aPaaS Builder / 新建`，**没有** 成员管理 / 平台环境 / 铃铛 / 太阳 4 个按钮 |
+| 3 | 左 sidebar | 7 项：首页 / 应用 / 睿鲸 AI Builder / 睿鲸 AI Coding / **Vibe Coding** / 数据库连接 / DB 问数（**没有** 组件市场） |
+| 4 | 点 AI Builder mode | placeholder 末尾："应用内做自开发（页面 / 后端接口）建议先进入应用，从应用里发起" + "📎 添加附件（多文件）" 按钮 |
+| 5 | 点 AI Coding mode | placeholder "描述要做的通用组件。例：做一个支持多选 + 异步加载的客户树组件…"，**没有** app 下拉选择器 |
+| 6 | 进 `/apps` 点任意 app → 跳 `/chat?app_id=N` | 顶部应该有 `[查看应用]` + **`[→ 自开发]`** 两个按钮 |
+| 7 | 点 "→ 自开发" | 跳 `/coding?app_id=N&from_ai_builder=1&dispatch=app-dev-XXX`，agent 自动发首条消息含 `[应用上下文] 用户已从 AI Builder 切到 AI Coding…app_id, app_code, 数据模型, 表单, 业务流程, 角色` |
+| 8 | 进 `/workspace-catalog` | 顶部新增 **大类切换**：`全部 / 应用相关 / 通用组件` + count 徽章；卡片上有 `📦 app-name` badge（仅 project_id 不空时） |
+
+如果有任何一条对不上，先看 `git log --oneline -15` 确认 HEAD 是 `a4b1685`，然后跑 `pnpm install` 重装（可能 lock 漂了）。
+
+---
+
 ## 一、Branch 状态
 
 - **Branch**: `local/ui-redesign-2026-05-20`
@@ -9,7 +78,9 @@
 - **本 session 累计**: 11 commits / 净 **-2629 行**（删 dead code -3500+，加新 feature +850+）
 - **全部已 push origin**：`56fe00e..5554225  local/ui-redesign-2026-05-20`
 
-## 二、11 commits 按时间顺序
+## 二、11 commits 按时间顺序（含每 commit 详细改动）
+
+### 总览
 
 ```
 ─── P0 用户原 4 个反馈 (v1 handoff #3 章) ────────────────────────
@@ -31,6 +102,134 @@ ab0a5ec  feat(nav): 加 Vibe Coding sidebar 入口 + 清 topbar 4 个重叠 acti
 1f2a2d7  feat: 重定位 AI Coding + 加 Builder→Coding 自开发 handoff bridge
 5554225  feat(workspace): Phase 5 Workspace 分类 — 应用相关 vs 通用组件
 ```
+
+### 详细 per-commit 改动
+
+#### `f641ef7` · P0-A 砍 AIChatPage "按规范重写" 按钮
+
+| 项 | 内容 |
+|---|---|
+| **用户原话** | "按规范重写" 按钮也去掉，没啥卵用 |
+| **改动文件** | `frontend/src/views/AIChatPage.vue` |
+| **改动内容** | 删按钮 (line 226-232) + 删 `rewriteArtifactToSpec` 函数 (line 1339-1361, 23 行死代码) |
+| **行数** | -31 |
+| **如何验证** | /ai-chat 打开 artifact 时，右栏头部不再有"按规范重写" 按钮（保留"复制"⧉、"下载"⤓、"在 Builder 中调整"） |
+
+#### `229e494` · P0-B1 砍应用蓝图链路
+
+| 项 | 内容 |
+|---|---|
+| **用户原话** | "应用蓝图的 UI 渲染做了等于白做，要么 1:1 还原低代码组件，要么别做"——选 B1 别做 |
+| **改动文件** | `frontend/src/views/AIChatPage.vue` (蓝图 tab 删 + computeds 删) / `frontend/src/views/ChatPage.vue` (dead imports 清) / `frontend/src/api/specsV2.ts` (删 parseMd + ParsedSpec*) |
+| **删除文件** | `frontend/src/components/v2/AppBlueprintPanel.vue` (398 行) / `frontend/src/stores/aiChatBlueprint.ts` (60 行) / `frontend/src/views/chat/blueprint-adapter.ts` (153 行, dir 也删了) |
+| **行数** | -850 |
+| **如何验证** | /ai-chat 打开 artifact 时，右栏只有 2 tab（渲染 / 原文），不再有"应用蓝图" tab；DOM 0 处出现"应用蓝图" / .bp-* class |
+
+#### `b63a8c8` · P0-C(c) 清 ChatPage 两段 v-if="false" 死代码
+
+| 项 | 内容 |
+|---|---|
+| **用户决策** | C2 "全砍 + 清死代码 一气呵成" |
+| **改动文件** | `frontend/src/views/ChatPage.vue` / 删 `frontend/src/components/v2/ChatConversationList.vue` |
+| **改动内容** | 删顶部 `<ChatConversationList v-if="false">` 段 (-30) + 中部 `<div v-if="false && showBuilderArtifactPanel">` 整段 448 行 + 删支撑 computeds (v2ConversationItems / v2CurrentConversationId / onV2OpenConversation / currentIndustryPack) + 删 ChatConversationList 组件文件 |
+| **行数** | -510 |
+| **如何验证** | grep `v-if="false"` 在 ChatPage 0 match；/chat 页面渲染无变化（这本来就是死 DOM） |
+
+#### `b7396a4` · P0-C(a) 清非 dolphin 模式 fallback 死分支
+
+| 项 | 内容 |
+|---|---|
+| **背景** | `useDolphinChat = ref(true)` 是冻结常量从未被赋值 false，所有 `!useDolphinChat` 分支运行时全 dead |
+| **改动文件** | `frontend/src/views/ChatPage.vue` |
+| **改动内容** | 删 5 段 template：SessionSidebar / mode-switcher / "部署到预览" / "运行流水线" / builder-chat-phase-strip + 删整段 195 行 `<template v-else>` (老 SPEC chat UI) + 删 `useDolphinChat` ref 本身 + 简化 2 个 `\|\| !useDolphinChat.value` guard |
+| **行数** | -275 |
+| **如何验证** | grep `useDolphinChat` 0 match；/chat 页面 dolphin agent iframe 渲染正常 |
+| **⚠️ 留尾** | 此 commit 误删了 `dispatchCustomDevToCoding` / `dispatchGeneralSpecToCoding` 这两个 Builder→Coding handoff 发起方按钮（在死代码段里），后续 `1f2a2d7` commit 增强后恢复 |
+
+#### `10484c4` · ❌ Landing 错 cherry-pick
+
+| 项 | 内容 |
+|---|---|
+| **用户原话** | "agent.dfy.definesys.cn/ai-builder 那个首页是我想要的" |
+| **错在哪** | 凭印象 cherry-pick `origin/merge-prod-and-integrate` 的 2550 行版本，但用户截图实际是 3-mode hub（更小） |
+| **改动文件** | `frontend/src/views/Landing.vue` |
+| **行数** | +2275 (后被 `27748ec` 完全覆盖) |
+| **保留 commit 的原因** | git 历史诚实记录走过的弯路，可让人理解为什么 27748ec 是 -2598 |
+
+#### `27748ec` · ✅ Landing 改用 1bb5a9d 240 行版本
+
+| 项 | 内容 |
+|---|---|
+| **正确版本来源** | `git checkout 1bb5a9d -- frontend/src/views/Landing.vue frontend/src/components/v2/LandingComposer.vue` (xhh-cleanup-2026-05-20 分支的某中间 commit) |
+| **改动文件** | `frontend/src/views/Landing.vue` (2550 → 240) / `frontend/src/components/v2/LandingComposer.vue` (376 → 88) |
+| **UI 内容** | "APAAS CHAT AI · DESIGN + BUILD" header / "把想法或材料给 AI，它来搭应用" hero / 3-mode hub / 4-stat 卡 / flow strip / 最近应用 list |
+| **行数** | -2598 |
+| **如何验证** | 见快速指南验证 #1 |
+
+#### `ab0a5ec` · 加 Vibe Coding sidebar 入口 + 清 topbar 4 个 action
+
+| 项 | 内容 |
+|---|---|
+| **用户原话** | "Vibe Coding 入口找回" + "成员管理、平台环境、铃铛、太阳跟左下角重复，删" |
+| **改动文件** | `frontend/src/components/v2/RailSidebar.vue` / `frontend/src/components/v2/ShellTopBar.vue` |
+| **RailSidebar 改动** | NAV 数组加 Vibe Coding 项 + 加 sparkles icon SVG + 顺手把 "AI Builder / AI Coding" 重命名 "睿鲸 AI Builder / 睿鲸 AI Coding" 跟首页对齐 |
+| **ShellTopBar 改动** | 删整段 `<div class="topbar-actions">` (4 个按钮) + 删 useThemeStore / useUserStore / useRouter imports + 删 toggleTheme + isDark (全是被删按钮专用 orphan) |
+| **行数** | -19 |
+| **如何验证** | 见快速指南验证 #2 #3 |
+
+#### `0670155` · 多文件上传 + (历史) AI Coding app picker
+
+| 项 | 内容 |
+|---|---|
+| **改动文件** | `frontend/src/components/v2/LandingComposer.vue` (大改) / `frontend/src/views/Landing.vue` |
+| **LandingComposer 改动 (留)** | builder mode 支持 `<input multiple accept>` 任意类型多文件 + 文件 chip 列表 + 文件大小显示 + × 删除按钮 |
+| **LandingComposer 改动 (后撤)** | coding mode app picker dropdown (后 `1428e57` 撤掉) |
+| **submit 时** | Builder mode 把 files 塞 `previewStore.pendingAiChatFiles` + 路由 `/ai-chat?prompt=...`（AIChatPage 已有 `onMounted` 逻辑会消费）|
+| **行数** | +96 |
+| **如何验证** | 见快速指南验证 #4 |
+
+#### `1428e57` · 撤 app picker + 删组件市场
+
+| 项 | 内容 |
+|---|---|
+| **用户原话** | "AI Coding 围绕应用做的话最好在 AI Builder 里实现" + "组件市场删掉先不搞了" |
+| **方向纠错** | audit 后发现把 app 选择放 Landing 跳 /coding 跟"二开归 Builder"决策矛盾，撤回 0670155 加的 app picker |
+| **改动文件** | `frontend/src/components/v2/LandingComposer.vue` / `frontend/src/views/Landing.vue` / `frontend/src/components/v2/RailSidebar.vue` / `frontend/src/components/v2/ShellTopBar.vue` / `frontend/src/router/index.ts` |
+| **删除文件** | `frontend/src/views/MarketplacePage.vue` (762 行) / `frontend/src/api/marketplace.ts` (80 行) |
+| **改动具体** | LandingComposer 撤 app picker (UI + script + CSS) / Landing 删 allApps fetch / RailSidebar 删 marketplace NAV / ShellTopBar 删 marketplace CRUMB / router 删 marketplace route |
+| **行数** | -907 |
+| **如何验证** | 见快速指南验证 #5；左 sidebar 不应有"组件市场"项 |
+
+#### `1f2a2d7` · ⭐ Builder→Coding handoff bridge (核心架构落地)
+
+| 项 | 内容 |
+|---|---|
+| **用户决策** | "AI Coding 重定位为通用组件库 / 应用相关二开在 Builder 入口 / handoff 时 agent 不要现查应用 menu/formid" + "暂停 dolphin admin 集成 先自己跑通" |
+| **改动文件** | `frontend/src/components/v2/LandingComposer.vue` / `frontend/src/views/ChatPage.vue` |
+| **LandingComposer 改动** | mode subs 文案更新："搭应用 + 应用内自开发（页面 / 接口）" / "通用组件库 — 跨应用复用" / 不变 |
+| **ChatPage 改动** | TopBar `#center` slot 加 "→ 自开发" 按钮（v-if="builderCurrentAppId"，在"查看应用"旁）+ 加 `handoffToCodingForAppDev` handler 序列化 `store.preview` (models/forms/flows/roles) 写 sessionStorage('ai_builder_pending_coding') + router push `/coding?app_id=N&from_ai_builder=1&dispatch=app-dev-XXX` |
+| **复用** | `AI_BUILDER_PENDING_CODING_KEY` 常量已存在 (ChatPage line 1975) / `buildCodingRouteQuery` + `openCodingWorkspace` helpers / `CodingPage.vue:1335 maybeConsumeAiBuilderDispatch` 接收端 0 改动 |
+| **行数** | +65 |
+| **E2E 实测** | Claude in Chrome 实测：进 `/chat?app_id=2` (通用费用报销) → 点 "→ 自开发" → /coding agent 真的收到 message 并在 SPEC 的"低代码复用"行写出 "app_id=2、app_code=expense-mgmt、模型 expense_report+expense_item、表单+角色" — **不再凭空猜** |
+| **如何验证** | 见快速指南验证 #6 #7 |
+
+#### `5554225` · Phase 5 Workspace 列表分类
+
+| 项 | 内容 |
+|---|---|
+| **改动文件** | `frontend/src/views/WorkspaceCatalogPage.vue` |
+| **新增** | 顶部 category-bar：全部 / 应用相关 (有 project_id) / 通用组件 (无 project_id) + count 徽章 + active 态下划线 / 第二维度 tab (PC组件/PC页面/...) 保留，先 category 后 project_type 双重过滤 / 卡片标题旁加 `📦 app_name` badge (有 project_id 时) / friendly empty 文案 |
+| **新增 fetch** | `applicationApi.list` 建 `appNameMap: { project_id → app_name }` 索引 |
+| **行数** | +131 |
+| **如何验证** | 见快速指南验证 #8 |
+| **⚠️ 留尾** | 现有 2 个 workspaces（CRM驾驶舱 / 人才管理总览看板）都无 `project_id` → 应用相关分类实际为空。handoff bridge 创建新 workspace 时需 backend 把 project_id set 上才能挂分类 |
+
+#### `a4b1685` · 本 handoff 文档
+
+| 项 | 内容 |
+|---|---|
+| **改动文件** | `docs/handoff-2026-05-20-v2-session-end.md` (本文件) |
+| **行数** | +222 (后续会扩) |
 
 ## 三、🎯 用户最终产品架构（本 session 落地）
 
