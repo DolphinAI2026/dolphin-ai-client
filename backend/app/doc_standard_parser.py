@@ -29,6 +29,13 @@ class ParseResult:
     failed_modules: set = field(default_factory=set)           # 解析失败、需 LLM 兜底的模块
     errors: List[str] = field(default_factory=list)           # 所有错误/警告
     sections_found: List[str] = field(default_factory=list)   # 检测到的章节 key
+    # v3 2026-05-20 (code-review P0 feature): 结构化追踪 code 自动改写
+    # 之前所有改写都塞 errors 字符串数组里前端不展示。改成结构化让 UI 能展示
+    # "你写 X，系统改成 Y，原因 Z"，用户在 generate 之前能看见所有 silent rewrite。
+    # 每个 entry: {path, original, rewritten, reason, severity}
+    #   path: "app.code" / "models[customer].code" / "models[lead].fields[status].code"
+    #   severity: "auto"（系统强制规范）/ "warn"（不规范但能自动修）
+    code_rewrites: List[Dict[str, Any]] = field(default_factory=list)
 
     @property
     def has_critical_failure(self) -> bool:
@@ -38,6 +45,18 @@ class ParseResult:
     def to_preview(self) -> Dict[str, Any]:
         """包装成 preview 格式"""
         return {"type": "preview", "data": self.config}
+
+    def add_rewrite(self, path: str, original: str, rewritten: str, reason: str, severity: str = "auto") -> None:
+        """记录一次 code 改写。供各 parser 调用而不只塞 errors 字符串。"""
+        if original == rewritten:
+            return
+        self.code_rewrites.append({
+            "path": path,
+            "original": original,
+            "rewritten": rewritten,
+            "reason": reason,
+            "severity": severity,
+        })
 
 
 def parse(text: str) -> ParseResult:
@@ -175,8 +194,16 @@ def _parse_app_info(section_text: str, result: ParseResult) -> tuple[str, str]:
     if not is_valid_app_code(app_code):
         normalized = normalize_app_code(app_code)
         if normalized and normalized != app_code:
+            # v3 2026-05-20: 同时塞 errors（兼容）+ 结构化 code_rewrites（UI 用）
             result.errors.append(
                 f"应用编码 '{app_code}' 不合规，已自动规范为 '{normalized}'。{APP_CODE_RULE_TEXT}"
+            )
+            result.add_rewrite(
+                path="app.code",
+                original=app_code,
+                rewritten=normalized,
+                reason=f"不合规（{APP_CODE_RULE_TEXT}）",
+                severity="auto",
             )
             app_code = normalized
         elif not normalized:
