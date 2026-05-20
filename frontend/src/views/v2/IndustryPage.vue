@@ -444,7 +444,7 @@ function renderIcon(name: string, size = 16) {
   color: var(--brand-text); background: var(--brand-soft);
   padding: 2px 7px; border-radius: 4px;
 }
-.industry-concept-pill-final { background: var(--brand-soft); border-color: var(--brand-200); }
+.industry-concept-pill-final { background: var(--brand-soft); border-color: var(--brand-ring); }
 .industry-concept-pill-final b { color: var(--brand-text); }
 .industry-concept-pill-final .industry-concept-num { background: var(--brand); color: #fff; }
 .concept-arrow { display: inline-flex; align-items: center; color: var(--text-4); }
@@ -472,7 +472,7 @@ function renderIcon(name: string, size = 16) {
 .industry-pack-icon.tone-sky     { background: linear-gradient(135deg, #38BDF8, #0284C7); }
 .industry-pack-icon.tone-emerald { background: linear-gradient(135deg, #34D399, #10A37F); }
 .industry-pack-icon.tone-rose    { background: linear-gradient(135deg, #F87171, #DC2626); }
-.industry-pack-icon.tone-brand   { background: linear-gradient(135deg, var(--brand-400), var(--brand-600)); }
+.industry-pack-icon.tone-brand   { background: linear-gradient(135deg, var(--blue-400), var(--blue-700)); }
 .industry-pack-name { font-size: 14px; font-weight: 600; color: var(--text); }
 .industry-pack-meta { font-size: 11px; color: var(--text-3); display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-top: 2px; }
 .industry-pack-summary { font-size: 12.5px; color: var(--text-2); line-height: 1.55; }
@@ -522,7 +522,7 @@ function renderIcon(name: string, size = 16) {
   fill: var(--surface);
   stroke: var(--border-strong); stroke-width: 1.5;
 }
-.industry-onto-node-brand rect   { stroke: var(--brand-400); }
+.industry-onto-node-brand rect   { stroke: var(--blue-400); }
 .industry-onto-node-sky rect     { stroke: var(--sky); }
 .industry-onto-node-amber rect   { stroke: var(--amber); }
 .industry-onto-node-rose rect    { stroke: var(--rose); }

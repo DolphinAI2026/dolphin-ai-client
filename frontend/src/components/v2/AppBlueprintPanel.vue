@@ -167,45 +167,232 @@ function toggle(k: string) { open.value[k] = !open.value[k] }
 </template>
 
 <style scoped>
-.blueprint { width: 420px; flex-shrink: 0; background: var(--surface); border-left: 1px solid var(--border); display: flex; flex-direction: column; height: 100%; overflow: hidden; }
-.bp-knowledge { display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: var(--ai-soft); color: var(--ai-text); font-size: 12px; border-bottom: 1px solid var(--ai-soft-2); }
-.bp-knowledge b { color: var(--ai-text); font-weight: 600; }
-.bp-knowledge-link { margin-left: auto; background: none; border: none; color: var(--ai-text); font-size: 11.5px; cursor: pointer; font-family: inherit; }
-.bp-head { padding: 14px 16px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; }
-.bp-title { font-size: 14px; font-weight: 600; color: var(--text); }
-.bp-stats { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-3); flex-wrap: wrap; }
-.bp-stats b { color: var(--text); font-weight: 600; }
-.btn { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 14px; border-radius: 8px; font-size: 13px; font-weight: 500; cursor: pointer; border: 1px solid transparent; background: transparent; color: var(--text); font-family: inherit; }
-.btn-sm { height: 26px; padding: 0 10px; font-size: 12px; border-radius: 6px; align-self: flex-end; }
-.btn-primary { background: var(--brand); color: #fff; }
+/* v3 redesign · 2026-05-20 — visual refresh only, template/script untouched.
+   Preserved (don't change):
+     - 420px panel width / flex layout / border-left structure
+     - All class names (template references)
+     - Section toggle SVG rotation animation
+   Refreshed:
+     - All hex purples (#5b5bd6 etc.) gone — pure v3 token cascade
+     - --border → --line (intent)
+     - radii 8/10 → --r-3/--r-4 token scale
+     - Card hover: subtle --sh-2 lift + brand-ring border
+     - Title 14 → 14.5 + letter-spacing -0.005em (matches v3 ShellTopBar)
+     - Body sizes tightened to v3 scale (12.5 / 12 / 11)
+     - Font weights 4 档: 700 (card name) / 600 (title) / 500 (meta) / 400
+     - Mono → var(--font-mono) (was --d-font-mono, undefined)
+     - Transition uses var(--ease) 0.14s
+*/
+.blueprint {
+  width: 420px;
+  flex-shrink: 0;
+  background: var(--surface);
+  border-left: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+.bp-knowledge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--brand-soft);
+  color: var(--brand-text);
+  font-size: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.bp-knowledge b { color: var(--brand-text); font-weight: var(--fw-semibold, 600); }
+.bp-knowledge-link {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--brand);
+  font-size: 11.5px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+.bp-knowledge-link:hover { color: var(--brand-hover); }
+
+.bp-head {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.bp-title {
+  font-size: 14.5px;
+  font-weight: var(--fw-semibold, 600);
+  color: var(--text);
+  letter-spacing: -0.005em;
+}
+.bp-stats {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-3);
+  flex-wrap: wrap;
+}
+.bp-stats b { color: var(--text); font-weight: var(--fw-semibold, 600); }
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 14px;
+  border-radius: var(--r-3, 8px);
+  font-size: 13px;
+  font-weight: var(--fw-medium, 500);
+  cursor: pointer;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+.btn-sm {
+  height: 28px;
+  padding: 0 12px;
+  font-size: 12px;
+  border-radius: var(--r-2, 6px);
+  align-self: flex-end;
+}
+.btn-primary {
+  background: var(--brand);
+  color: var(--text-inverse, #fff);
+  box-shadow: var(--sh-brand);
+}
 .btn-primary:hover { background: var(--brand-hover); }
-.bp-scroll { flex: 1; overflow-y: auto; padding: 8px; }
+.btn-primary:focus-visible {
+  outline: 2px solid var(--line-focus, var(--brand-ring));
+  outline-offset: 2px;
+}
+
+.bp-scroll { flex: 1; overflow-y: auto; padding: 10px; }
 .bp-section { margin-bottom: 4px; }
-.bp-section-head { width: 100%; display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; border-radius: 8px; background: transparent; border: none; color: var(--text); font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; }
-.bp-section-head:hover { background: var(--surface-2); }
-.bp-section-head .muted { color: var(--text-3); font-weight: 500; }
-.bp-section-head svg { transition: transform 0.15s; }
+.bp-section-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-radius: var(--r-2, 6px);
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: var(--fw-semibold, 600);
+  cursor: pointer;
+  font-family: inherit;
+  letter-spacing: -0.005em;
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+.bp-section-head:hover {
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+.bp-section-head .muted { color: var(--text-3); font-weight: var(--fw-medium, 500); }
+.bp-section-head svg { transition: transform 0.15s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)); }
 .bp-section-head svg.rot { transform: rotate(180deg); }
 .bp-section-body { padding: 4px 6px 8px; display: flex; flex-direction: column; gap: 8px; }
-.bp-empty { font-size: 11.5px; color: var(--text-3); padding: 6px 8px; }
-.bp-card { background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
-.bp-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
-.bp-card-name { font-size: 13px; font-weight: 600; color: var(--text); }
+.bp-empty {
+  font-size: 11.5px;
+  color: var(--text-3);
+  padding: 6px 8px;
+}
+
+.bp-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-4, 12px);
+  padding: 10px 12px;
+  box-shadow: var(--sh-1);
+  transition: box-shadow 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+.bp-card:hover {
+  box-shadow: var(--sh-2);
+  border-color: var(--line-strong);
+}
+.bp-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.bp-card-name {
+  font-size: 13px;
+  font-weight: var(--fw-semibold, 600);
+  color: var(--text);
+  letter-spacing: -0.005em;
+}
 .bp-card-meta { font-size: 11px; color: var(--text-3); }
-.mono { font-family: var(--d-font-mono); }
+.mono { font-family: var(--font-mono, 'JetBrains Mono', 'SF Mono', Menlo, monospace); }
+
 .bp-fields { display: flex; flex-direction: column; gap: 4px; }
-.bp-field { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 6px; font-size: 11.5px; color: var(--text-2); }
-.bp-field.is-new { background: var(--brand-soft); color: var(--brand-text); }
-.bp-field-name { flex: 1; color: var(--text); font-weight: 500; }
+.bp-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: var(--r-1, 4px);
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+.bp-field.is-new {
+  background: var(--brand-soft);
+  color: var(--brand-text);
+}
+.bp-field-name { flex: 1; color: var(--text); font-weight: var(--fw-medium, 500); }
 .bp-field-code { color: var(--text-3); font-size: 11px; }
 .bp-field-type { color: var(--brand-text); font-size: 11px; }
-.badge { display: inline-flex; align-items: center; gap: 4px; height: 18px; padding: 0 6px; border-radius: 4px; font-size: 10.5px; font-weight: 500; background: var(--surface-3); color: var(--text-2); border: 1px solid transparent; }
-.badge-amber { background: var(--amber-bg); color: var(--amber); }
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: var(--r-1, 4px);
+  font-size: 10.5px;
+  font-weight: var(--fw-medium, 500);
+  background: var(--surface-3);
+  color: var(--text-2);
+  border: 1px solid transparent;
+}
+.badge-amber { background: var(--warn-soft); color: var(--warn); }
 .badge-brand { background: var(--brand-soft); color: var(--brand-text); }
-.badge-outline { background: transparent; border-color: var(--border-strong); color: var(--text-2); }
+.badge-outline {
+  background: transparent;
+  border-color: var(--line-strong);
+  color: var(--text-2);
+}
+
 .bp-flow-chain { font-size: 11.5px; color: var(--text-2); line-height: 1.6; }
 .bp-form-section { margin-top: 6px; }
-.bp-form-section-title { font-size: 11.5px; font-weight: 600; color: var(--text); }
+.bp-form-section-title {
+  font-size: 11.5px;
+  font-weight: var(--fw-semibold, 600);
+  color: var(--text);
+}
 .bp-form-fields { font-size: 11px; color: var(--text-3); margin-top: 2px; }
 .bp-dict { font-size: 11px; color: var(--text-2); line-height: 1.6; }
+
+/* Dark theme — v3 tokens cascade automatically; just nudge a couple of items
+   where the alias map doesn't fit the contextual surface. */
+html[data-theme="dark"] .bp-card {
+  background: var(--surface-2);
+}
+html[data-theme="dark"] .bp-section-head:hover {
+  background: var(--brand-soft);
+  color: var(--brand);
+}
 </style>

@@ -387,6 +387,23 @@ function onResizeStart(e: MouseEvent) {
 </template>
 
 <style scoped>
+/* v3 redesign · 2026-05-20 — visual refresh only, template/script untouched.
+   Preserved (don't change):
+     - 360px → resizable width (panelWidth :style binding) / flex layout
+     - All class names (template + :deep() references)
+     - Resize handle position/z-index
+     - SSE streaming/typing/thinking animation keyframes (just renamed colors)
+   Refreshed:
+     - All hex purples (#5b5bd6) + ai cyan (#1d89a8) gone — pure v3 token cascade
+     - --border → --line / --ai-soft → --brand-soft (alias maps these too)
+     - radii 8/10 → --r-2/--r-3/--r-4 token scale
+     - Card shadows: surfaces lift via --sh-1 / --sh-2 on hover
+     - Title 14 → 14.5 + letter-spacing -0.005em (matches v3 ShellTopBar)
+     - Font weights 4 档: 600 (titles) / 500 (meta) / 400 (body)
+     - Mono → var(--font-mono) (was --d-font-mono, undefined)
+     - Transition uses var(--ease) 0.14s
+     - Button focus-visible ring for a11y
+*/
 .config-assistant {
   /* width 由 :style 控制（可拖拽），fallback 360px */
   width: 360px;
@@ -395,7 +412,7 @@ function onResizeStart(e: MouseEvent) {
   flex-direction: column;
   height: 100%;
   background: var(--surface);
-  border-left: 1px solid var(--border);
+  border-left: 1px solid var(--line);
   position: relative;
 }
 .config-assistant.is-resizing {
@@ -411,25 +428,26 @@ function onResizeStart(e: MouseEvent) {
   cursor: ew-resize;
   z-index: 5;
   background: transparent;
-  transition: background 0.15s;
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
 }
 .ca-resize-handle:hover,
 .config-assistant.is-resizing .ca-resize-handle {
-  background: var(--brand, #5b5bd6);
-  opacity: 0.5;
+  background: var(--brand);
+  opacity: 0.4;
 }
 .ca-head {
   padding: 14px 16px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--line);
   background: var(--surface-2);
 }
 .ca-title {
-  font-size: 14px;
-  font-weight: 600;
+  font-size: 14.5px;
+  font-weight: var(--fw-semibold, 600);
   color: var(--text);
+  letter-spacing: -0.005em;
 }
 .ca-sub {
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--text-3);
   margin-top: 4px;
 }
@@ -454,16 +472,17 @@ function onResizeStart(e: MouseEvent) {
 }
 .ca-empty svg {
   color: var(--brand);
-  opacity: 0.6;
+  opacity: 0.55;
 }
 .ca-empty-title {
   font-size: 13px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold, 600);
   color: var(--text);
   margin-top: 4px;
+  letter-spacing: -0.005em;
 }
 .ca-empty-hint {
-  font-size: 11.5px;
+  font-size: 12px;
   line-height: 1.55;
   color: var(--text-3);
   max-width: 280px;
@@ -476,21 +495,29 @@ function onResizeStart(e: MouseEvent) {
   margin-top: 14px;
 }
 .ca-example {
-  background: var(--surface-2);
-  border: 1px solid var(--border);
+  background: var(--surface);
+  border: 1px solid var(--line);
   color: var(--text-2);
   font-size: 12px;
   padding: 8px 12px;
-  border-radius: 8px;
+  border-radius: var(--r-3, 8px);
   cursor: pointer;
   text-align: left;
   font-family: inherit;
-  transition: all 0.12s;
+  transition: border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              box-shadow 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
 }
 .ca-example:hover {
-  border-color: var(--brand);
-  color: var(--brand-text);
+  border-color: var(--brand-ring);
+  color: var(--brand);
   background: var(--brand-soft);
+  box-shadow: var(--sh-1);
+}
+.ca-example:focus-visible {
+  outline: 2px solid var(--line-focus, var(--brand-ring));
+  outline-offset: 2px;
 }
 
 .ca-msg {
@@ -504,8 +531,8 @@ function onResizeStart(e: MouseEvent) {
 }
 .ca-bubble {
   max-width: 88%;
-  padding: 8px 12px;
-  border-radius: 10px;
+  padding: 10px 12px;
+  border-radius: var(--r-3, 8px);
   font-size: 12.5px;
   line-height: 1.6;
   color: var(--text);
@@ -513,20 +540,22 @@ function onResizeStart(e: MouseEvent) {
 }
 .ca-msg-user .ca-bubble {
   background: var(--brand);
-  color: #fff;
+  color: var(--text-inverse, #fff);
+  box-shadow: var(--sh-brand);
 }
 .ca-msg-assistant .ca-bubble {
-  background: var(--surface-2);
-  border: 1px solid var(--border);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: var(--sh-1);
 }
 .ca-bubble-text :deep(strong) {
-  font-weight: 600;
+  font-weight: var(--fw-semibold, 600);
 }
 .ca-bubble-text :deep(code) {
   background: var(--surface-3);
   padding: 1px 5px;
-  border-radius: 4px;
-  font-family: var(--d-font-mono);
+  border-radius: var(--r-1, 4px);
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
   font-size: 11.5px;
 }
 /* 2026-05-19 image #39 — marked GFM 输出的元素样式 */
@@ -547,8 +576,9 @@ function onResizeStart(e: MouseEvent) {
 .ca-bubble-text :deep(h3),
 .ca-bubble-text :deep(h4) {
   margin: 10px 0 6px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold, 600);
   line-height: 1.3;
+  letter-spacing: -0.005em;
 }
 .ca-bubble-text :deep(h1) { font-size: 16px; }
 .ca-bubble-text :deep(h2) { font-size: 14px; }
@@ -557,12 +587,12 @@ function onResizeStart(e: MouseEvent) {
 .ca-bubble-text :deep(pre) {
   background: var(--surface-3);
   padding: 8px 10px;
-  border-radius: 6px;
+  border-radius: var(--r-2, 6px);
   overflow-x: auto;
   margin: 6px 0;
   font-size: 11.5px;
   line-height: 1.5;
-  font-family: var(--d-font-mono);
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
 }
 .ca-bubble-text :deep(pre code) {
   background: transparent;
@@ -570,12 +600,12 @@ function onResizeStart(e: MouseEvent) {
   font-size: inherit;
 }
 .ca-bubble-text :deep(blockquote) {
-  border-left: 3px solid var(--brand, #5b5bd6);
+  border-left: 3px solid var(--brand);
   padding: 2px 10px;
   margin: 6px 0;
   color: var(--text-2);
   background: var(--surface-3);
-  border-radius: 0 4px 4px 0;
+  border-radius: 0 var(--r-1, 4px) var(--r-1, 4px) 0;
 }
 .ca-bubble-text :deep(table) {
   border-collapse: collapse;
@@ -590,40 +620,39 @@ function onResizeStart(e: MouseEvent) {
 }
 .ca-bubble-text :deep(th),
 .ca-bubble-text :deep(td) {
-  border: 1px solid var(--border);
+  border: 1px solid var(--line);
   padding: 5px 8px;
   text-align: left;
   vertical-align: top;
   white-space: nowrap;
 }
 .ca-bubble-text :deep(th) {
-  font-weight: 600;
+  font-weight: var(--fw-semibold, 600);
 }
 .ca-bubble-text :deep(a) {
-  color: var(--brand, #5b5bd6);
+  color: var(--brand);
   text-decoration: none;
 }
-.ca-bubble-text :deep(a:hover) { text-decoration: underline; }
+.ca-bubble-text :deep(a:hover) { text-decoration: underline; color: var(--brand-hover); }
 .ca-bubble-text :deep(hr) {
   border: 0;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--line);
   margin: 10px 0;
 }
 
-/* SSE streaming progress log — 默认只显示最后 4 行 + 自动滚到底 */
+/* SSE streaming progress log */
 .ca-stream-log {
   display: flex;
   flex-direction: column;
   gap: 4px;
   margin-bottom: 8px;
   padding: 10px 12px;
-  border-radius: 8px;
-  background: var(--surface-3);
-  border: 1px dashed var(--border);
+  border-radius: var(--r-3, 8px);
+  background: var(--surface-2);
+  border: 1px dashed var(--line-strong);
   font-size: 12px;
   color: var(--text-2);
-  font-family: var(--d-font-mono);
-  /* 把每行真正撑开，不再 ellipsis 截断；只在 N 行后才滚动 */
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
   max-height: 360px;
   overflow-y: auto;
   line-height: 1.55;
@@ -645,7 +674,7 @@ function onResizeStart(e: MouseEvent) {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--brand, #5b5bd6);
+  background: var(--brand);
   animation: ca-bounce 1.2s infinite ease-in-out both;
 }
 .ca-dot:nth-child(2) { animation-delay: 0.16s; }
@@ -655,7 +684,7 @@ function onResizeStart(e: MouseEvent) {
   40% { opacity: 1; transform: scale(1); }
 }
 
-/* image #43 — 浏览器截图缩略图 (Claude in Chrome 风格) */
+/* image #43 — 浏览器截图缩略图 */
 .ca-screenshots {
   display: flex;
   flex-direction: column;
@@ -665,17 +694,17 @@ function onResizeStart(e: MouseEvent) {
 .ca-screenshot {
   margin: 0;
   padding: 4px;
-  border-radius: 6px;
-  background: var(--surface-3);
-  border: 1px solid var(--border);
+  border-radius: var(--r-2, 6px);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
 }
 .ca-screenshot img {
   width: 100%;
   height: auto;
   display: block;
-  border-radius: 4px;
+  border-radius: var(--r-1, 4px);
   cursor: zoom-in;
-  transition: opacity 0.15s;
+  transition: opacity 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
 }
 .ca-screenshot img:hover {
   opacity: 0.92;
@@ -698,36 +727,37 @@ function onResizeStart(e: MouseEvent) {
   display: inline-flex;
   align-items: center;
   padding: 1px 6px;
-  border-radius: 10px;
-  font-family: var(--d-font-mono);
+  border-radius: var(--r-1, 4px);
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
   font-size: 10.5px;
   line-height: 1.6;
   border: 1px solid transparent;
   cursor: default;
 }
 .ca-tool-chip-ok {
-  background: rgba(29, 137, 168, 0.08);
-  color: var(--ai-strong, #1d89a8);
-  border-color: rgba(29, 137, 168, 0.2);
+  background: var(--brand-soft);
+  color: var(--brand-text);
+  border-color: var(--brand-ring);
 }
 .ca-tool-chip-err {
-  background: rgba(220, 38, 38, 0.08);
-  color: #b91c1c;
-  border-color: rgba(220, 38, 38, 0.2);
+  background: var(--err-soft);
+  color: var(--err);
+  border-color: var(--err-soft);
 }
 
 .ca-change-card {
   margin-top: 10px;
   padding: 10px 12px;
-  background: var(--ai-soft);
-  border: 1px solid var(--ai-soft-2);
-  border-radius: 8px;
+  background: var(--brand-soft);
+  border: 1px solid var(--brand-ring);
+  border-radius: var(--r-3, 8px);
 }
 .ca-change-title {
-  font-size: 11.5px;
-  font-weight: 600;
-  color: var(--ai-text);
+  font-size: 12px;
+  font-weight: var(--fw-semibold, 600);
+  color: var(--brand-text);
   margin-bottom: 6px;
+  letter-spacing: -0.005em;
 }
 .ca-change-list {
   margin: 6px 0;
@@ -738,12 +768,12 @@ function onResizeStart(e: MouseEvent) {
 }
 .ca-change-json {
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: 1px solid var(--line);
   padding: 8px;
-  border-radius: 6px;
+  border-radius: var(--r-2, 6px);
   max-height: 200px;
   overflow: auto;
-  font-family: var(--d-font-mono);
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
   font-size: 10.5px;
   color: var(--text-2);
 }
@@ -754,25 +784,38 @@ function onResizeStart(e: MouseEvent) {
 }
 .ca-btn-secondary,
 .ca-btn-primary {
-  padding: 4px 12px;
-  border-radius: 6px;
+  padding: 5px 12px;
+  border-radius: var(--r-2, 6px);
   font-size: 11.5px;
+  font-weight: var(--fw-medium, 500);
   cursor: pointer;
   font-family: inherit;
-  border: 1px solid var(--border);
+  border: 1px solid var(--line);
   background: var(--surface);
   color: var(--text);
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
 }
 .ca-btn-secondary:hover {
-  background: var(--surface-2);
+  background: var(--brand-soft);
+  border-color: var(--brand-ring);
+  color: var(--brand);
+}
+.ca-btn-secondary:focus-visible,
+.ca-btn-primary:focus-visible {
+  outline: 2px solid var(--line-focus, var(--brand-ring));
+  outline-offset: 2px;
 }
 .ca-btn-primary {
   background: var(--brand);
-  color: #fff;
+  color: var(--text-inverse, #fff);
   border-color: var(--brand);
+  box-shadow: var(--sh-brand);
 }
 .ca-btn-primary:hover {
   background: var(--brand-hover);
+  border-color: var(--brand-hover);
 }
 
 .ca-thinking {
@@ -809,25 +852,28 @@ function onResizeStart(e: MouseEvent) {
   display: flex;
   gap: 8px;
   padding: 10px 12px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--line);
   background: var(--surface);
 }
 .ca-input {
   flex: 1;
   resize: none;
   padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-3, 8px);
   background: var(--surface-2);
   color: var(--text);
   font-size: 12.5px;
   line-height: 1.5;
   font-family: inherit;
   outline: none;
-  transition: border-color 0.12s, box-shadow 0.12s;
+  transition: border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              box-shadow 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
 }
 .ca-input:focus {
   border-color: var(--brand);
+  background: var(--surface);
   box-shadow: 0 0 0 3px var(--brand-ring);
 }
 .ca-input:disabled {
@@ -840,20 +886,41 @@ function onResizeStart(e: MouseEvent) {
   align-items: center;
   gap: 4px;
   padding: 7px 14px;
-  border-radius: 8px;
+  border-radius: var(--r-3, 8px);
   background: var(--brand);
-  color: #fff;
+  color: var(--text-inverse, #fff);
   border: none;
   font-size: 12.5px;
-  font-weight: 500;
+  font-weight: var(--fw-medium, 500);
   cursor: pointer;
   font-family: inherit;
+  box-shadow: var(--sh-brand);
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
 }
 .ca-send:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+  box-shadow: none;
 }
 .ca-send:not(:disabled):hover {
   background: var(--brand-hover);
+}
+.ca-send:focus-visible {
+  outline: 2px solid var(--line-focus, var(--brand-ring));
+  outline-offset: 2px;
+}
+
+/* Dark theme — most tokens cascade; explicit override only where needed
+   to keep contrast on assistant bubbles + tool chips. */
+html[data-theme="dark"] .ca-msg-assistant .ca-bubble {
+  background: var(--surface-2);
+}
+html[data-theme="dark"] .ca-example {
+  background: var(--surface-2);
+}
+html[data-theme="dark"] .ca-tool-chip-err {
+  background: var(--err-soft);
+  color: var(--err);
+  border-color: var(--err);
 }
 </style>

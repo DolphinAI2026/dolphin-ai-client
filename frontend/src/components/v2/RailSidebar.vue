@@ -114,6 +114,15 @@ function goPlatform() {
   router.push('/platform-admin')
 }
 
+const ACCENT_PRESETS = [
+  { color: '#1D4ED8', label: '睿鲸蓝（默认）' },
+  { color: '#0F766E', label: '海青' },
+  { color: '#7C3AED', label: '紫罗兰' },
+  { color: '#DB2777', label: '玫红' },
+  { color: '#EA580C', label: '橙' },
+  { color: '#475569', label: '石灰' },
+] as const
+
 const ICONS: Record<string, string> = {
   home: '<path d="M3 11.5 12 4l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/>',
   apps: '<path d="M3 5h7v7H3z"/><path d="M14 5h7v7h-7z"/><path d="M3 16h7v5H3z"/><path d="M14 16h7v5h-7z"/>',
@@ -240,14 +249,30 @@ function renderIcon(name: string): string {
 
         <div class="theme-row">
           <span class="theme-row-label">主题色</span>
-          <label class="accent-picker" title="选择主题色">
-            <input
-              type="color"
-              :value="theme.accentColor"
-              aria-label="选择主题色"
-              @input="theme.setAccentColor(($event.target as HTMLInputElement).value)"
+          <div class="accent-picker" role="radiogroup" aria-label="主题色">
+            <button
+              v-for="preset in ACCENT_PRESETS"
+              :key="preset.color"
+              type="button"
+              class="accent-swatch"
+              :class="{ active: theme.accentColor.toLowerCase() === preset.color.toLowerCase() }"
+              :style="{ background: preset.color }"
+              :title="preset.label"
+              :aria-label="preset.label"
+              :aria-checked="theme.accentColor.toLowerCase() === preset.color.toLowerCase()"
+              role="radio"
+              @click="theme.setAccentColor(preset.color)"
             />
-          </label>
+            <label class="accent-swatch accent-custom" title="自定义">
+              <input
+                type="color"
+                :value="theme.accentColor"
+                aria-label="自定义主题色"
+                @input="theme.setAccentColor(($event.target as HTMLInputElement).value)"
+              />
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+            </label>
+          </div>
           <button
             type="button"
             class="theme-toggle"
@@ -271,6 +296,23 @@ function renderIcon(name: string): string {
 </template>
 
 <style scoped>
+/* v3 redesign · 2026-05-20 — visual refresh only, template/script structure preserved.
+   Phase 8A.1 + 8A.2:
+     - Collapsed (56px) → centered 38×38 icons, active 3px left bar + brand-soft
+     - Expanded (224px) → surface-2 bg, brand title, brand-soft active state, line dividers
+     - Accent picker → 6-preset palette + custom rainbow swatch (template tweak in 8A.2)
+   Preserved class names (used by script + external CSS):
+     .rail, .rail-collapsed, .rail-brand, .rail-logo, .rail-brand-copy, .rail-title,
+     .rail-title-sub, .rail-scroll, .rail-expand-top, .rail-item, .rail-item-icon,
+     .rail-item-label, .rail-item-badge, .rail-foot, .rail-collapse-btn, .rail-console,
+     .rail-console-label, .tenant-switch-wrap, .tenant-switch, .tenant-icon, .tenant-name,
+     .tenant-arrow, .tenant-menu, .tenant-option, .tenant-empty, .console-row,
+     .console-row-icon, .platform-row, .theme-row, .theme-row-label, .accent-picker,
+     .theme-toggle, .account-row, .rail-avatar, .rail-user-info, .rail-user-name,
+     .rail-user-status
+   New classes (CSS only, no JS depends on them): .accent-swatch, .accent-custom
+*/
+
 .rail {
   width: 224px;
   height: 100%;
@@ -279,120 +321,153 @@ function renderIcon(name: string): string {
   flex-shrink: 0;
   overflow: hidden;
   color: var(--text);
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--brand-soft) 72%, #fff 28%) 0%,
-      color-mix(in srgb, var(--brand-soft-2) 58%, #fff 42%) 100%
-    );
-  border-right: 1px solid rgba(58, 50, 121, 0.12);
+  background: var(--surface-2);
+  border-right: 1px solid var(--line);
 }
 
 .rail-collapsed {
-  width: 48px;
+  width: 56px;
 }
 
+/* ─── Brand ─────────────────────────────────────────────────────── */
 .rail-brand {
-  min-height: 76px;
+  min-height: 60px;
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 16px 18px 14px;
+  gap: 10px;
+  padding: 14px 16px 12px;
 }
 
 .rail-logo {
-  width: 36px;
-  height: 36px;
+  width: 28px;
+  height: 28px;
   display: grid;
   place-items: center;
   flex-shrink: 0;
-  color: #fff;
-  background: linear-gradient(135deg, var(--brand-400), var(--brand-700));
+  color: var(--text-inverse);
+  background: var(--brand);
   border: none;
-  border-radius: 10px;
-  box-shadow: 0 10px 22px rgba(91, 91, 214, 0.22), inset 0 -1px 0 rgba(255, 255, 255, 0.2);
+  border-radius: var(--r-2, 6px);
+  box-shadow: var(--sh-2);
   cursor: pointer;
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              box-shadow 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+.rail-logo:hover {
+  background: var(--brand-hover);
+  box-shadow: var(--sh-brand);
+}
+.rail-logo:focus-visible {
+  outline: 2px solid var(--line-focus, var(--brand-ring));
+  outline-offset: 2px;
+}
+
+.rail-brand-copy {
+  min-width: 0;
 }
 
 .rail-title {
-  color: #18152e;
-  font-size: 17px;
-  font-weight: 820;
-  letter-spacing: 0;
+  color: var(--text);
+  font-size: 16px;
+  font-weight: var(--fw-bold, 700);
+  letter-spacing: -0.01em;
   line-height: 1.1;
   white-space: nowrap;
 }
 
 .rail-title-sub {
-  margin-top: 4px;
-  color: #817ba0;
-  font-size: 12px;
-  font-weight: 650;
+  margin-top: 3px;
+  color: var(--text-3);
+  font-size: 11.5px;
+  font-weight: var(--fw-medium, 500);
   white-space: nowrap;
 }
 
-.rail-scroll {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  overflow-y: auto;
-  padding: 12px 14px 10px;
-}
-
+/* ─── Expand top (collapsed-only) ────────────────────────────── */
 .rail-expand-top {
   width: 34px;
   height: 30px;
   display: grid;
   place-items: center;
   flex-shrink: 0;
-  margin: -4px auto 6px;
-  color: var(--brand-text);
-  background: rgba(255, 255, 255, 0.72);
-  border: 1px solid rgba(91, 91, 214, 0.18);
-  border-radius: 9px;
+  margin: -2px auto 6px;
+  color: var(--text-3);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-2, 6px);
   cursor: pointer;
-  box-shadow: var(--shadow-xs);
-  transition: background 0.14s, border-color 0.14s, transform 0.14s;
+  box-shadow: var(--sh-1);
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+.rail-expand-top:hover {
+  background: var(--brand-soft);
+  color: var(--brand);
+  border-color: var(--brand-ring);
+}
+.rail-expand-top:focus-visible {
+  outline: 2px solid var(--line-focus, var(--brand-ring));
+  outline-offset: 2px;
 }
 
-.rail-expand-top:hover {
-  background: #fff;
-  border-color: rgba(91, 91, 214, 0.34);
-  transform: translateX(1px);
+/* ─── Nav scroll + items ─────────────────────────────────────── */
+.rail-scroll {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+  padding: 8px 10px 10px;
 }
 
 .rail-item {
   position: relative;
   width: 100%;
-  min-height: 42px;
+  min-height: 36px;
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 0 14px;
-  color: #565171;
+  gap: 10px;
+  padding: 0 10px;
+  color: var(--text-2);
   background: transparent;
-  border: 1px solid transparent;
-  border-radius: 10px;
+  border: none;
+  border-radius: var(--r-3, 8px);
   font-family: inherit;
-  font-size: 14px;
-  font-weight: 720;
+  font-size: 13px;
+  font-weight: var(--fw-medium, 500);
   text-align: left;
   cursor: pointer;
-  transition: background 0.16s, color 0.16s, border-color 0.16s, box-shadow 0.16s;
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
 }
 
 .rail-item:hover {
-  color: var(--brand-text);
-  background: rgba(255, 255, 255, 0.7);
+  color: var(--text);
+  background: var(--surface);
 }
 
 .rail-item.active {
-  color: var(--brand-text);
-  background: rgba(230, 227, 253, 0.88);
-  border-color: rgba(91, 91, 214, 0.16);
-  box-shadow: inset 3px 0 0 var(--brand);
+  color: var(--brand);
+  background: var(--brand-soft);
+  font-weight: var(--fw-semibold, 600);
+}
+
+.rail-item.active::before {
+  content: '';
+  position: absolute;
+  left: -2px;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  border-radius: 0 var(--r-1, 4px) var(--r-1, 4px) 0;
+  background: var(--brand);
+}
+
+.rail-item:focus-visible {
+  outline: 2px solid var(--line-focus, var(--brand-ring));
+  outline-offset: -2px;
 }
 
 .rail-item-icon {
@@ -418,17 +493,21 @@ function renderIcon(name: string): string {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 0 7px;
-  border-radius: 999px;
-  color: var(--brand-text);
-  background: rgba(255, 255, 255, 0.8);
-  font-size: 10px;
-  font-weight: 800;
+  padding: 0 6px;
+  border-radius: var(--r-full, 999px);
+  color: var(--brand);
+  background: var(--brand-soft-2);
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  font-size: 11px;
+  font-weight: var(--fw-semibold, 600);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
 }
 
+/* ─── Foot ───────────────────────────────────────────────────── */
 .rail-foot {
-  padding: 10px 12px 14px;
-  border-top: 1px solid rgba(58, 50, 121, 0.10);
+  padding: 10px 10px 12px;
+  border-top: 1px solid var(--line);
 }
 
 .rail-collapse-btn {
@@ -437,84 +516,94 @@ function renderIcon(name: string): string {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  margin-bottom: 8px;
-  color: #8b85a8;
-  background: rgba(255, 255, 255, 0.34);
-  border: 1px solid rgba(58, 50, 121, 0.10);
-  border-radius: 8px;
+  gap: 6px;
+  margin-bottom: 10px;
+  color: var(--text-3);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: var(--r-2, 6px);
   font-family: inherit;
   font-size: 12px;
-  font-weight: 650;
+  font-weight: var(--fw-medium, 500);
   cursor: pointer;
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
 }
 
 .rail-collapse-btn:hover {
-  color: var(--brand-text);
-  background: rgba(255, 255, 255, 0.74);
+  color: var(--brand);
+  background: var(--brand-soft);
+  border-color: var(--brand-ring);
 }
 
+.rail-collapse-btn:focus-visible {
+  outline: 2px solid var(--line-focus, var(--brand-ring));
+  outline-offset: 2px;
+}
+
+/* ─── Console (expanded only) ────────────────────────────────── */
 .rail-console {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 10px;
-  border: 1px solid rgba(91, 91, 214, 0.18);
-  border-radius: 14px;
-  background: rgba(246, 244, 255, 0.92);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  gap: 6px;
 }
 
 .rail-console-label {
-  color: #837ea0;
+  margin: 2px 4px 2px;
+  color: var(--text-3);
   font-size: 11px;
-  font-weight: 760;
-}
-
-.tenant-switch,
-.console-row,
-.theme-row,
-.account-row {
-  min-height: 42px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 0 10px;
-  border: 1px solid rgba(91, 91, 214, 0.13);
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.86);
-  box-shadow: var(--shadow-xs);
+  font-weight: var(--fw-semibold, 600);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .tenant-switch-wrap {
   position: relative;
 }
 
-.tenant-icon,
-.console-row-icon {
-  width: 22px;
-  height: 22px;
-  display: grid;
-  place-items: center;
-  flex-shrink: 0;
-  color: var(--brand-text);
-}
-
 .tenant-switch {
   width: 100%;
-  color: #211d3a;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-3, 8px);
   font-family: inherit;
-  font-size: 13px;
-  font-weight: 780;
+  font-size: 12.5px;
+  font-weight: var(--fw-medium, 500);
   cursor: pointer;
   text-align: left;
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
 }
 
 .tenant-switch:hover,
 .tenant-switch.open {
-  color: var(--brand-text);
-  border-color: rgba(91, 91, 214, 0.32);
-  background: #fff;
+  border-color: var(--brand-ring);
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+
+.tenant-switch:focus-visible {
+  outline: 2px solid var(--line-focus, var(--brand-ring));
+  outline-offset: 2px;
+}
+
+.tenant-icon {
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  color: var(--brand);
+  background: var(--brand-soft);
+  border-radius: var(--r-1, 4px);
+  padding: 2px;
 }
 
 .tenant-name {
@@ -526,13 +615,13 @@ function renderIcon(name: string): string {
 }
 
 .tenant-arrow {
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
   display: grid;
   place-items: center;
   flex-shrink: 0;
-  color: #8b85a8;
-  transition: transform 0.14s;
+  color: var(--text-4);
+  transition: transform 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
 }
 
 .tenant-switch.open .tenant-arrow {
@@ -547,177 +636,287 @@ function renderIcon(name: string): string {
   z-index: 20;
   max-height: 220px;
   overflow-y: auto;
-  padding: 6px;
-  border: 1px solid rgba(91, 91, 214, 0.18);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.98);
-  box-shadow: 0 16px 36px rgba(28, 21, 73, 0.16);
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-3, 8px);
+  background: var(--surface);
+  box-shadow: var(--sh-3);
 }
 
 .tenant-option {
   width: 100%;
-  min-height: 34px;
+  min-height: 32px;
   padding: 0 10px;
-  color: #211d3a;
+  color: var(--text);
   background: transparent;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--r-2, 6px);
   font-family: inherit;
-  font-size: 12px;
-  font-weight: 720;
+  font-size: 12.5px;
+  font-weight: var(--fw-medium, 500);
   text-align: left;
   cursor: pointer;
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
 }
 
 .tenant-option:hover,
 .tenant-option.active {
-  color: var(--brand-text);
+  color: var(--brand);
   background: var(--brand-soft);
+}
+
+.tenant-option:focus-visible {
+  outline: 2px solid var(--line-focus, var(--brand-ring));
+  outline-offset: -2px;
 }
 
 .tenant-empty {
   padding: 8px 10px;
   color: var(--text-3);
   font-size: 12px;
-  font-weight: 650;
+  font-weight: var(--fw-regular, 400);
 }
 
+/* ─── Console rows (platform/etc) ─────────────────────────── */
 .console-row {
   width: 100%;
-  color: #211d3a;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  color: var(--text-2);
+  background: transparent;
+  border: none;
+  border-radius: var(--r-3, 8px);
   font-family: inherit;
-  font-size: 13px;
-  font-weight: 780;
+  font-size: 12.5px;
+  font-weight: var(--fw-medium, 500);
   cursor: pointer;
+  text-align: left;
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
 }
 
 .console-row:hover {
-  color: var(--brand-text);
-  border-color: rgba(91, 91, 214, 0.32);
-  background: #fff;
-}
-
-.console-row.active {
-  color: var(--brand-text);
-  border-color: rgba(91, 91, 214, 0.24);
+  color: var(--brand);
   background: var(--brand-soft);
 }
 
+.console-row.active {
+  color: var(--brand);
+  background: var(--brand-soft);
+  font-weight: var(--fw-semibold, 600);
+}
+
+.console-row:focus-visible {
+  outline: 2px solid var(--line-focus, var(--brand-ring));
+  outline-offset: -2px;
+}
+
+.console-row-icon {
+  width: 14px;
+  height: 14px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  color: currentColor;
+}
+
+/* ─── Theme row ──────────────────────────────────────────── */
 .theme-row {
-  min-height: 48px;
-  justify-content: space-between;
-  color: #565171;
-  font-size: 12px;
-  font-weight: 760;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-weight: var(--fw-medium, 500);
 }
 
 .theme-row-label {
   white-space: nowrap;
+  color: var(--text-3);
+  flex-shrink: 0;
 }
 
+/* Accent picker — 6 preset palette + custom rainbow */
 .accent-picker {
-  width: 30px;
-  height: 26px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+}
+
+.accent-swatch {
+  width: 16px;
+  height: 16px;
+  border-radius: var(--r-full, 999px);
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+  position: relative;
+  flex-shrink: 0;
+  transition: transform 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+
+.accent-swatch:hover {
+  transform: scale(1.12);
+}
+
+.accent-swatch.active {
+  border-color: var(--surface);
+  box-shadow: 0 0 0 2px var(--text);
+}
+
+.accent-swatch:focus-visible {
+  outline: 2px solid var(--line-focus, var(--brand-ring));
+  outline-offset: 2px;
+}
+
+.accent-custom {
+  background: linear-gradient(135deg, #ef4444 0%, #f97316 20%, #eab308 40%, #22c55e 60%, #06b6d4 75%, #3b82f6 88%, #8b5cf6 100%);
   display: grid;
   place-items: center;
-  margin-left: auto;
-  padding: 3px;
-  border: 1px solid rgba(91, 91, 214, 0.18);
-  border-radius: 8px;
-  background: var(--surface);
+  color: #fff;
+  margin-left: 1px;
+}
+
+.accent-custom input[type="color"] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
   cursor: pointer;
-}
-
-.accent-picker input {
-  width: 22px;
-  height: 18px;
-  padding: 0;
   border: none;
-  border-radius: 5px;
-  background: transparent;
-  cursor: pointer;
-}
-
-.accent-picker input::-webkit-color-swatch-wrapper {
   padding: 0;
-}
-
-.accent-picker input::-webkit-color-swatch {
-  border: none;
-  border-radius: 5px;
 }
 
 .theme-toggle {
-  width: 30px;
-  height: 26px;
-  display: grid;
-  place-items: center;
-  color: var(--brand-text);
-  background: var(--brand-soft);
-  border: 1px solid rgba(91, 91, 214, 0.18);
-  border-radius: 999px;
-  cursor: pointer;
-}
-
-.account-row {
-  min-height: 50px;
-}
-
-.rail-avatar {
-  width: 30px;
-  height: 30px;
+  width: 28px;
+  height: 28px;
   display: grid;
   place-items: center;
   flex-shrink: 0;
-  color: #fff;
-  background: linear-gradient(135deg, var(--brand-400), var(--brand-700));
-  border-radius: 50%;
-  font-size: 13px;
-  font-weight: 820;
-  box-shadow: 0 8px 18px rgba(91, 91, 214, 0.2);
+  color: var(--text-3);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: var(--r-2, 6px);
+  cursor: pointer;
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+
+.theme-toggle:hover {
+  color: var(--brand);
+  background: var(--brand-soft);
+  border-color: var(--brand-ring);
+}
+
+.theme-toggle:focus-visible {
+  outline: 2px solid var(--line-focus, var(--brand-ring));
+  outline-offset: 2px;
+}
+
+/* ─── Account row ─────────────────────────────────────── */
+.account-row {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  margin-top: 4px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.rail-avatar {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  color: var(--text-inverse);
+  background: var(--brand);
+  border-radius: var(--r-full, 999px);
+  font-size: 12.5px;
+  font-weight: var(--fw-semibold, 600);
 }
 
 .rail-user-info {
   min-width: 0;
+  flex: 1;
 }
 
 .rail-user-name {
-  color: #211d3a;
-  font-size: 13px;
-  font-weight: 820;
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: var(--fw-semibold, 600);
   line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .rail-user-status {
   display: flex;
   align-items: center;
   gap: 5px;
-  margin-top: 3px;
-  color: #7f789f;
+  margin-top: 2px;
+  color: var(--text-3);
   font-size: 11px;
-  font-weight: 650;
+  font-weight: var(--fw-regular, 400);
 }
 
 .rail-user-status span {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #22c55e;
-  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.14);
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-full, 999px);
+  background: var(--ok);
 }
 
+/* ─── Collapsed state overrides (56px) ────────────────────── */
 .rail-collapsed .rail-brand {
   justify-content: center;
-  padding: 14px 6px;
+  padding: 14px 8px 10px;
+  min-height: 56px;
 }
 
 .rail-collapsed .rail-scroll {
-  padding: 10px 6px;
+  padding: 8px 6px;
+  gap: 4px;
 }
 
 .rail-collapsed .rail-item {
   justify-content: center;
   padding: 0;
+  width: 38px;
+  height: 38px;
+  min-height: 38px;
+  margin: 0 auto;
+  color: var(--text-3);
+  border-radius: var(--r-3, 8px);
+}
+
+.rail-collapsed .rail-item:hover {
+  color: var(--brand);
+  background: var(--surface);
+}
+
+.rail-collapsed .rail-item.active {
+  color: var(--brand);
+  background: var(--brand-soft);
+}
+
+.rail-collapsed .rail-item.active::before {
+  left: -6px;
+  top: 8px;
+  bottom: 8px;
 }
 
 .rail-collapsed .rail-item-label,
@@ -726,41 +925,57 @@ function renderIcon(name: string): string {
 }
 
 .rail-collapsed .rail-foot {
-  padding: 8px 6px;
+  padding: 8px 6px 10px;
 }
 
 .rail-collapsed .rail-collapse-btn {
   margin-bottom: 0;
+  height: 38px;
+  min-height: 38px;
 }
 
+/* ─── Dark theme tweaks ──────────────────────────────────── */
 html[data-theme="dark"] .rail {
-  background: var(--bg-rail);
+  background: var(--surface-2);
+  border-right-color: var(--line);
 }
 
-html[data-theme="dark"] .rail-title,
-html[data-theme="dark"] .tenant-switch,
-html[data-theme="dark"] .tenant-option,
-html[data-theme="dark"] .console-row,
-html[data-theme="dark"] .rail-user-name {
-  color: var(--text);
+html[data-theme="dark"] .rail-item:hover {
+  background: var(--surface-3);
 }
 
-html[data-theme="dark"] .rail-console,
-html[data-theme="dark"] .tenant-switch,
-html[data-theme="dark"] .console-row,
-html[data-theme="dark"] .theme-row,
-html[data-theme="dark"] .account-row {
+html[data-theme="dark"] .rail-item.active,
+html[data-theme="dark"] .console-row:hover,
+html[data-theme="dark"] .console-row.active,
+html[data-theme="dark"] .tenant-option:hover,
+html[data-theme="dark"] .tenant-option.active {
+  background: var(--brand-soft);
+}
+
+html[data-theme="dark"] .tenant-switch {
   background: var(--surface);
+}
+
+html[data-theme="dark"] .tenant-switch:hover,
+html[data-theme="dark"] .tenant-switch.open {
+  background: var(--brand-soft);
 }
 
 html[data-theme="dark"] .tenant-menu {
   background: var(--surface);
-  border-color: var(--border-strong);
 }
 
-html[data-theme="dark"] .tenant-switch:hover,
-html[data-theme="dark"] .tenant-switch.open,
-html[data-theme="dark"] .console-row:hover {
-  background: var(--surface-2);
+html[data-theme="dark"] .rail-collapse-btn {
+  background: transparent;
+}
+
+html[data-theme="dark"] .rail-expand-top {
+  background: var(--surface);
+  color: var(--text-3);
+}
+
+html[data-theme="dark"] .accent-swatch.active {
+  border-color: var(--surface);
+  box-shadow: 0 0 0 2px var(--text);
 }
 </style>

@@ -488,7 +488,7 @@ const knowledgeEmptyHint = computed(() =>
 }
 .agent-pick-icon :deep(svg) { display: block; }
 .agent-pick-icon-ai      { background: linear-gradient(135deg, var(--ai-300), var(--ai-500)); }
-.agent-pick-icon-brand   { background: linear-gradient(135deg, var(--brand-400), var(--brand-600)); }
+.agent-pick-icon-brand   { background: linear-gradient(135deg, var(--blue-400), var(--blue-700)); }
 .agent-pick-icon-emerald { background: linear-gradient(135deg, #34D399, #10A37F); }
 .agent-pick-name { font-size: 13.5px; font-weight: 600; color: var(--text); }
 .agent-pick-role { font-size: 11.5px; color: var(--text-3); margin-top: 2px; }
@@ -653,7 +653,7 @@ const knowledgeEmptyHint = computed(() =>
 .industry-pack-icon.tone-sky     { background: linear-gradient(135deg, #38BDF8, #0284C7); }
 .industry-pack-icon.tone-emerald { background: linear-gradient(135deg, #34D399, #10A37F); }
 .industry-pack-icon.tone-rose    { background: linear-gradient(135deg, #F87171, #DC2626); }
-.industry-pack-icon.tone-brand   { background: linear-gradient(135deg, var(--brand-400), var(--brand-600)); }
+.industry-pack-icon.tone-brand   { background: linear-gradient(135deg, var(--blue-400), var(--blue-700)); }
 
 .agent-empty {
   padding: 12px; color: var(--text-3); font-size: 12px; text-align: center;

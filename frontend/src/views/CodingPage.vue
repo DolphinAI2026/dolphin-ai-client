@@ -1908,9 +1908,9 @@ watch(() => route.path, () => {
   cursor: not-allowed;
 }
 .canvas-action-btn.active {
-  background: var(--t-brand-primary-subtle, rgba(91, 91, 214, 0.12));
-  color: var(--t-brand-primary, #5b5bd6);
-  border-color: var(--t-brand-primary, #5b5bd6);
+  background: var(--t-brand-primary-subtle, rgba(29, 78, 216, 0.12));
+  color: var(--t-brand-primary, #1D4ED8);
+  border-color: var(--t-brand-primary, #1D4ED8);
 }
 .canvas-action-label {
   line-height: 1;
@@ -1923,7 +1923,7 @@ watch(() => route.path, () => {
   height: 18px;
   padding: 0 6px;
   border-radius: 9px;
-  background: var(--t-brand-primary, #5b5bd6);
+  background: var(--t-brand-primary, #1D4ED8);
   color: #fff;
   font-size: 11px;
   font-weight: 600;

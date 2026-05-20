@@ -34,6 +34,14 @@ const CRUMB_LABELS: Record<string, string> = {
   '/mcp': 'MCP 管理',
   '/runtime': '运行与发布',
   '/admin/tenants': '平台管理',
+  '/db-connections': '数据库连接',
+  '/quick-db': 'DB 问数',
+  '/sandbox-monitor': '沙箱监控',
+  '/tenant-users': '成员管理',
+  '/platform-envs': '平台环境',
+  '/platform-tenants': '租户管理',
+  '/platform-admin': '平台管理',
+  '/devops': 'DevOps',
 }
 const crumbCurrent = computed(() => {
   const exact = CRUMB_LABELS[route.path]

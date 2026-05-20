@@ -165,65 +165,261 @@ defineExpose({ open: () => { step.value = 0; visible.value = true } })
 </template>
 
 <style scoped>
+/* v3 redesign · 2026-05-20 — visual refresh only.
+   Preserved (don't change):
+     - <template> and <script setup>
+     - All class names (.onb-*)
+     - 3-step phase machine (step 0/1/2 + dots + skip + next/prev)
+     - Teleport target / data-design="v2" attribute on overlay
+     - 720px panel width / 80vh max
+   Refreshed:
+     - Overlay backdrop: blue-tinted rgba(11, 27, 63, 0.55) instead of neutral grey
+     - Panel: var(--surface) + var(--line) + r-4 + sh-5 (no more --shadow-xl miss)
+     - Step counter mono (X/Y) tabular-nums in addition to dots
+     - tone-ai/brand/emerald/amber all collapse to single brand family per v3 rule 03
+       (Status colors only for state — ok/warn — not decoration)
+     - "Highlight ring" brand-glow 4px on active flow step + recommended role
+     - Primary CTA: brand + brand-hover; Secondary: surface-2 neutral
+*/
 .onb-overlay {
   position: fixed; inset: 0; z-index: 9000;
-  background: rgba(11, 10, 20, 0.42);
-  backdrop-filter: blur(4px);
+  background: rgba(11, 27, 63, 0.55);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
   display: grid; place-items: center;
-  padding: 24px;
+  padding: var(--s-6, 24px);
 }
 .onb-panel {
   width: 720px; max-width: 100%;
-  background: var(--glass-strong, var(--surface));
-  backdrop-filter: blur(20px);
-  border: 1px solid var(--border-strong);
-  border-radius: 16px;
-  box-shadow: var(--shadow-xl);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-4, 12px);
+  box-shadow: var(--sh-5);
   overflow: hidden;
   display: flex; flex-direction: column;
   max-height: 80vh;
 }
+
+/* Header — dot indicator + mono step counter + skip pill */
 .onb-head {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 14px 18px; border-bottom: 1px solid var(--border);
+  padding: var(--s-4, 14px) var(--s-5, 18px);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
 }
-.onb-step-dots { display: flex; gap: 6px; }
-.onb-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--surface-3); transition: background 0.2s; }
-.onb-dot.active { background: var(--brand); width: 18px; border-radius: 999px; }
-.onb-skip { background: none; border: none; cursor: pointer; font-family: inherit; font-size: 12.5px; color: var(--text-3); padding: 4px 8px; border-radius: 6px; }
+.onb-step-dots {
+  display: flex; align-items: center; gap: var(--s-2, 8px);
+}
+.onb-step-dots::after {
+  content: counter(onb-step) ' / 3';
+  counter-reset: onb-step var(--onb-step, 1);
+  font-family: var(--font-mono);
+  font-size: var(--t-mono, 12px);
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  margin-left: var(--s-2, 8px);
+}
+.onb-dot {
+  width: 6px; height: 6px;
+  border-radius: var(--r-full, 999px);
+  background: var(--surface-3);
+  transition: background 0.2s var(--ease), width 0.2s var(--ease);
+}
+.onb-dot.active {
+  background: var(--brand);
+  width: 18px;
+}
+.onb-skip {
+  background: none; border: none; cursor: pointer; font-family: inherit;
+  font-size: var(--t-small, 12.5px); color: var(--text-3);
+  padding: var(--s-1, 4px) var(--s-2, 8px);
+  border-radius: var(--r-2, 6px);
+  transition: background 0.14s var(--ease), color 0.14s var(--ease);
+}
 .onb-skip:hover { background: var(--surface-2); color: var(--text-2); }
-.onb-body { padding: 28px 32px; overflow-y: auto; }
-.onb-title { font-size: 22px; font-weight: 600; letter-spacing: -0.02em; color: var(--text); margin: 0 0 8px; }
-.onb-subtitle { font-size: 13.5px; color: var(--text-2); margin: 0 0 24px; line-height: 1.55; }
-.onb-subtitle b { color: var(--text); font-weight: 600; }
-.onb-tip { padding: 10px 14px; background: var(--ai-soft); color: var(--ai-text); border-radius: 8px; font-size: 12.5px; margin-bottom: 16px; }
-.onb-flow { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
-.onb-flow-step { padding: 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
-.onb-flow-step.tone-ai     { border-color: var(--ai-soft-2); background: var(--ai-soft); }
-.onb-flow-step.tone-brand  { border-color: var(--brand-200); background: var(--brand-soft); }
-.onb-flow-step.tone-emerald{ border-color: var(--emerald); background: var(--emerald-bg); }
-.onb-flow-step.tone-amber  { border-color: var(--amber); background: var(--amber-bg); }
-.onb-flow-step.active { box-shadow: 0 0 0 3px var(--brand-ring); }
-.onb-flow-num { font-family: var(--d-font-mono); font-size: 11px; font-weight: 700; color: var(--text-3); }
-.onb-flow-label { font-size: 14px; font-weight: 600; color: var(--text); margin-top: 4px; }
-.onb-flow-desc { font-size: 11.5px; color: var(--text-2); margin-top: 6px; line-height: 1.55; }
-.onb-concept-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
-.onb-concept-card { padding: 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
-.onb-concept-name { font-size: 14px; font-weight: 600; color: var(--text); }
-.onb-concept-count { font-size: 11px; color: var(--brand-text); font-family: var(--d-font-mono); margin-top: 2px; }
-.onb-concept-desc { font-size: 12px; color: var(--text-2); margin-top: 8px; line-height: 1.55; }
-.onb-role-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
-.onb-role-card { padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
-.onb-role-card.recommended { border-color: var(--brand); background: var(--brand-soft); box-shadow: 0 0 0 3px var(--brand-ring); }
+
+.onb-body { padding: var(--s-8, 28px) var(--s-8, 32px); overflow-y: auto; }
+.onb-title {
+  font-size: var(--t-h2, 22px);
+  font-weight: var(--fw-semibold, 600);
+  letter-spacing: -0.02em;
+  color: var(--text);
+  margin: 0 0 var(--s-2, 8px);
+}
+.onb-subtitle {
+  font-size: var(--t-body, 13.5px);
+  color: var(--text-2);
+  margin: 0 0 var(--s-6, 24px);
+  line-height: 1.55;
+}
+.onb-subtitle b { color: var(--text); font-weight: var(--fw-semibold, 600); }
+
+/* Tip banner — info / brand-soft */
+.onb-tip {
+  padding: var(--s-3, 10px) var(--s-4, 14px);
+  background: var(--brand-soft);
+  color: var(--brand);
+  border-radius: var(--r-3, 8px);
+  font-size: var(--t-small, 12.5px);
+  margin-bottom: var(--s-4, 16px);
+  border-left: 3px solid var(--brand);
+}
+
+/* Flow step grid — v3 rule 03: one brand, status only for state */
+.onb-flow { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--s-2, 10px); }
+.onb-flow-step {
+  padding: var(--s-4, 14px);
+  border: 1px solid var(--line);
+  border-radius: var(--r-3, 8px);
+  background: var(--surface-2);
+  transition: border-color 0.14s var(--ease), box-shadow 0.14s var(--ease), transform 0.14s var(--ease);
+}
+/* tone-* classes preserved for template stability — all map to brand family */
+.onb-flow-step.tone-ai,
+.onb-flow-step.tone-brand   { border-color: var(--line); background: var(--surface-2); }
+.onb-flow-step.tone-emerald { border-color: var(--line); background: var(--surface-2); }
+.onb-flow-step.tone-amber   { border-color: var(--line); background: var(--surface-2); }
+.onb-flow-step.active {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+  box-shadow: 0 0 0 4px var(--brand-glow);
+}
+.onb-flow-num {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro, 11px);
+  font-weight: var(--fw-bold, 700);
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.onb-flow-label {
+  font-size: var(--t-body, 14px);
+  font-weight: var(--fw-semibold, 600);
+  color: var(--text);
+  margin-top: var(--s-1, 4px);
+}
+.onb-flow-desc {
+  font-size: var(--t-small, 11.5px);
+  color: var(--text-2);
+  margin-top: var(--s-2, 6px);
+  line-height: 1.55;
+}
+
+/* Concept cards */
+.onb-concept-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--s-3, 12px); }
+.onb-concept-card {
+  padding: var(--s-4, 14px);
+  border: 1px solid var(--line);
+  border-radius: var(--r-3, 8px);
+  background: var(--surface);
+  transition: border-color 0.14s var(--ease), box-shadow 0.14s var(--ease);
+}
+.onb-concept-card:hover {
+  border-color: var(--line-strong);
+  box-shadow: var(--sh-2);
+}
+.onb-concept-name {
+  font-size: var(--t-body, 14px);
+  font-weight: var(--fw-semibold, 600);
+  color: var(--text);
+}
+.onb-concept-count {
+  font-size: var(--t-micro, 11px);
+  color: var(--brand);
+  font-family: var(--font-mono);
+  margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+.onb-concept-desc {
+  font-size: var(--t-mono, 12px);
+  color: var(--text-2);
+  margin-top: var(--s-2, 8px);
+  line-height: 1.55;
+}
+
+/* Role cards — recommended gets brand glow ring */
+.onb-role-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--s-2, 10px); }
+.onb-role-card {
+  padding: var(--s-3, 12px) var(--s-4, 14px);
+  border: 1px solid var(--line);
+  border-radius: var(--r-3, 8px);
+  background: var(--surface);
+  transition: border-color 0.14s var(--ease), box-shadow 0.14s var(--ease);
+}
+.onb-role-card:hover { border-color: var(--line-strong); }
+.onb-role-card.recommended {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+  box-shadow: 0 0 0 4px var(--brand-glow);
+}
 .onb-role-head { display: flex; align-items: center; justify-content: space-between; }
-.onb-role-name { font-size: 13.5px; font-weight: 600; color: var(--text); }
-.onb-role-badge { font-size: 10px; font-weight: 700; padding: 2px 7px; background: var(--brand); color: #fff; border-radius: 999px; }
-.onb-role-desc { font-size: 11.5px; color: var(--text-2); margin-top: 4px; }
-.onb-role-positions { font-size: 11px; color: var(--text-3); margin-top: 6px; }
-.onb-role-path { font-size: 11.5px; color: var(--brand-text); margin-top: 4px; font-weight: 500; }
-.onb-foot { display: flex; align-items: center; gap: 8px; padding: 14px 18px; border-top: 1px solid var(--border); background: var(--surface-2); }
-.onb-btn-primary { height: 36px; padding: 0 18px; border-radius: 8px; background: var(--brand); color: #fff; border: none; font-size: 13.5px; font-weight: 500; cursor: pointer; font-family: inherit; }
-.onb-btn-primary:hover { background: var(--brand-hover); }
-.onb-btn-secondary { height: 36px; padding: 0 14px; border-radius: 8px; background: var(--surface); color: var(--text); border: 1px solid var(--border-strong); font-size: 13.5px; font-weight: 500; cursor: pointer; font-family: inherit; }
-.onb-btn-secondary:hover { background: var(--surface-2); }
+.onb-role-name {
+  font-size: var(--t-body, 13.5px);
+  font-weight: var(--fw-semibold, 600);
+  color: var(--text);
+}
+.onb-role-badge {
+  font-size: var(--t-micro, 10px);
+  font-weight: var(--fw-bold, 700);
+  padding: 2px var(--s-2, 7px);
+  background: var(--brand);
+  color: var(--text-inverse, #fff);
+  border-radius: var(--r-full, 999px);
+}
+.onb-role-desc { font-size: var(--t-small, 11.5px); color: var(--text-2); margin-top: var(--s-1, 4px); }
+.onb-role-positions { font-size: var(--t-micro, 11px); color: var(--text-3); margin-top: var(--s-2, 6px); }
+.onb-role-path {
+  font-size: var(--t-small, 11.5px);
+  color: var(--brand);
+  margin-top: var(--s-1, 4px);
+  font-weight: var(--fw-medium, 500);
+}
+
+/* Footer — neutral secondary + brand primary */
+.onb-foot {
+  display: flex; align-items: center; gap: var(--s-2, 8px);
+  padding: var(--s-4, 14px) var(--s-5, 18px);
+  border-top: 1px solid var(--line);
+  background: var(--surface-2);
+}
+.onb-btn-primary {
+  height: 36px;
+  padding: 0 var(--s-5, 18px);
+  border-radius: var(--r-2, 6px);
+  background: var(--brand);
+  color: var(--text-inverse, #fff);
+  border: none;
+  font-size: var(--t-body, 13.5px);
+  font-weight: var(--fw-medium, 500);
+  cursor: pointer;
+  font-family: inherit;
+  box-shadow: var(--sh-brand);
+  transition: background 0.14s var(--ease), box-shadow 0.14s var(--ease);
+}
+.onb-btn-primary:hover { background: var(--brand-hover); box-shadow: var(--sh-3); }
+.onb-btn-primary:focus-visible {
+  outline: 2px solid var(--line-focus, var(--brand-ring));
+  outline-offset: 2px;
+}
+.onb-btn-secondary {
+  height: 36px;
+  padding: 0 var(--s-4, 14px);
+  border-radius: var(--r-2, 6px);
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--line-strong);
+  font-size: var(--t-body, 13.5px);
+  font-weight: var(--fw-medium, 500);
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.14s var(--ease), border-color 0.14s var(--ease);
+}
+.onb-btn-secondary:hover { background: var(--surface-2); border-color: var(--brand); }
+
+/* Dark theme — overlay slightly deeper, surface tokens already shift */
+html[data-theme="dark"] .onb-overlay {
+  background: rgba(0, 0, 0, 0.65);
+}
+html[data-theme="dark"] .onb-role-badge {
+  color: var(--text-inverse);
+}
 </style>
