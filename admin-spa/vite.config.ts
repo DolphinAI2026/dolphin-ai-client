@@ -9,6 +9,7 @@ export default defineConfig({
   },
   server: {
     port: 5174,
+    host: '127.0.0.1',  // 必须 bind IPv4 — iframe src 用 127.0.0.1，默认 vite 只 ::1 会被浏览器拒连
     proxy: {
       '/api': 'http://localhost:8000'
     }
