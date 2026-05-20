@@ -109,19 +109,16 @@ function go(path: string) {
   router.push(path)
 }
 
-// v3 2026-05-20: 平台管理打开新 tab — 用户反馈：admin 工作流跟主工作台并行，新 tab 不丢上下文
-function goPlatform() {
+// v3 2026-05-20: 平台管理打开新 tab — 用 <a target="_blank"> 让浏览器原生处理
+// 之前用 JS window.open(..., 'noopener') 的 bug：noopener 让返回值永远 null
+// 导致 fallback router.push 总是触发，新 tab 开 + 当前页也跳了
+const platformAdminUrl = computed(() => {
+  const base = import.meta.env.BASE_URL.replace(/\/$/, '')
+  return `${base}/platform-admin`
+})
+
+function closePlatformMenu() {
   tenantMenuOpen.value = false
-  if (typeof window === 'undefined') {
-    router.push('/platform-admin')
-    return
-  }
-  // 优先开新 tab；如果被浏览器拦截则 fallback router.push
-  const url = `${window.location.origin}${import.meta.env.BASE_URL.replace(/\/$/, '')}/platform-admin`
-  const win = window.open(url, '_blank', 'noopener')
-  if (!win) {
-    router.push('/platform-admin')
-  }
 }
 
 // v3 2026-05-20: ACCENT_PRESETS 主题色 picker 删 — 让 admin/frontend brand 始终一致蓝色
@@ -240,15 +237,20 @@ function renderIcon(name: string): string {
           </div>
         </div>
 
-        <button
-          type="button"
+        <!-- v3 2026-05-20: <a target="_blank"> 替代 button + window.open
+             让浏览器原生处理新 tab，不会触发当前页面任何 navigation/refresh -->
+        <a
           class="console-row platform-row"
           :class="{ active: platformActive }"
-          @click="goPlatform"
+          :href="platformAdminUrl"
+          target="_blank"
+          rel="noopener"
+          @click="closePlatformMenu"
         >
           <span class="console-row-icon" v-html="renderIcon('shield')" />
           <span>平台管理</span>
-        </button>
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left:auto;opacity:0.5"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+        </a>
 
         <!-- v3 2026-05-20: 删主题色 picker 让 admin/frontend brand 始终一致蓝；只保留浅深切换 -->
         <div class="theme-row">
@@ -675,8 +677,18 @@ function renderIcon(name: string): string {
   font-weight: var(--fw-medium, 500);
   cursor: pointer;
   text-align: left;
+  /* v3 2026-05-20: 兼容 <a> 元素（平台管理新 tab 用 a 标签）
+     去掉 <a> 默认下划线，跟其他 console-row（button）视觉一致 */
+  text-decoration: none;
   transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
               color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+.console-row:visited {
+  color: var(--text-2);
+}
+.console-row:hover:visited,
+.console-row.active:visited {
+  color: var(--brand);
 }
 
 .console-row:hover {
