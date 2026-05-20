@@ -11,8 +11,8 @@ import { usePreviewStore } from '@/stores/preview'
 
 type Mode = 'builder' | 'coding' | 'vibe'
 const MODES: { id: Mode; label: string; sub: string; tone: 'ai' | 'brand' | 'emerald' }[] = [
-  { id: 'builder', label: '睿鲸 AI Builder', sub: '描述需求 / 上传材料 → SPEC → 部署',     tone: 'ai' },
-  { id: 'coding',  label: '睿鲸 AI Coding',  sub: '给应用做自开发：页面 / 组件 / 后端接口', tone: 'brand' },
+  { id: 'builder', label: '睿鲸 AI Builder', sub: '搭应用 + 应用内自开发（页面 / 接口）',   tone: 'ai' },
+  { id: 'coding',  label: '睿鲸 AI Coding',  sub: '通用组件库 — 跨应用复用',                tone: 'brand' },
   { id: 'vibe',    label: 'Vibe Coding',    sub: '浏览器 VS Code 全代码 + AI 协助',        tone: 'emerald' },
 ]
 
@@ -24,8 +24,8 @@ const router = useRouter()
 const previewStore = usePreviewStore()
 
 const placeholder = computed(() => ({
-  builder: '说说你想做什么。例：管理我们部门 200 台设备的领用、归还和报废… 也可以直接拖文件进来。',
-  coding:  '描述要做的自开发任务，进入工作区后选目标应用 + templateType。例：给 CRM 加一个客户健康度看板。',
+  builder: '说说你想做什么。例：管理我们部门 200 台设备的领用、归还和报废… 也可以直接拖文件进来。\n应用内做自开发（页面 / 后端接口）建议先进入应用，从应用里发起。',
+  coding:  '描述要做的通用组件。例：做一个支持多选 + 异步加载的客户树组件 / 一个 OCR 上传组件。',
   vibe:    '描述你想做的代码任务，进入 Vibe Coding 工作区继续。',
 }[mode.value]))
 

@@ -35,6 +35,24 @@
             </span>
             <span>查看应用</span>
           </button>
+          <!-- "→ 自开发"：当前应用上下文里发起自开发任务，带应用结构跳到 AI Coding agent。
+               这是 Builder→Coding handoff bridge，恢复 commit b63a8c8 误删的能力，
+               但增强为：frontend 直接把 store.preview 应用结构序列化进 message，
+               不依赖 Coding agent 主动 fetch（agent prompt 暂不动）。 -->
+          <button
+            v-if="builderCurrentAppId"
+            type="button"
+            class="mode-btn mode-btn-link"
+            title="把当前应用的结构（模型/表单/流程）带进 AI Coding 工作区，做自开发页面或后端接口"
+            @click="handoffToCodingForAppDev"
+          >
+            <span class="mode-btn-icon" aria-hidden="true">
+              <svg viewBox="0 0 16 16" fill="none">
+                <path d="m6 4-3 4 3 4M10 4l3 4-3 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+            </span>
+            <span>→ 自开发</span>
+          </button>
         </div>
       </template>
       <template #actions>
@@ -1974,6 +1992,49 @@ function openCodingWorkspace(dispatchToken = '') {
     path: '/coding',
     query: buildCodingRouteQuery(dispatchToken),
   })
+}
+
+// ── Builder → AI Coding 自开发 handoff bridge ──
+// 把当前应用的结构（模型/表单/流程/角色）打包成 message 注入 Coding agent 首条对话，
+// 不依赖 Coding agent 主动 fetch（agent prompt 暂不动，本 session 用户决策不集成 dolphin admin）。
+// CodingPage.vue:maybeConsumeAiBuilderDispatch 会读 sessionStorage('ai_builder_pending_coding')
+// 然后把 message 作为 userInput 自动 sendMessage。
+function handoffToCodingForAppDev() {
+  const appId = builderCurrentAppId.value
+  if (!appId) return
+  const appName = builderAppDisplayName.value || '当前应用'
+  const appCode = displayAppCode.value || ''
+  const models = (store.preview.models || []) as any[]
+  const forms = (store.preview.forms || []) as any[]
+  const flows = (store.preview.flows || []) as any[]
+  const roles = (store.preview.roles || []) as any[]
+
+  const lines: string[] = []
+  lines.push(`[应用上下文] 用户已从 AI Builder 切到 AI Coding，要给「${appName}」做自开发。`)
+  lines.push(`- app_id: ${appId}`)
+  if (appCode) lines.push(`- app_code: ${appCode}`)
+  if (models.length) {
+    lines.push(`- 数据模型 (${models.length})：${models.map((m: any) => `${m?.name || m?.code}${m?.code ? `(${m.code})` : ''}`).filter(Boolean).slice(0, 12).join('、')}`)
+  }
+  if (forms.length) {
+    lines.push(`- 表单 (${forms.length})：${forms.map((f: any) => `${f?.formName || f?.name || f?.code}${f?.modelCode ? `→${f.modelCode}` : ''}`).filter(Boolean).slice(0, 12).join('、')}`)
+  }
+  if (flows.length) {
+    lines.push(`- 业务流程 (${flows.length})：${flows.map((f: any) => f?.name || f?.flowName).filter(Boolean).slice(0, 8).join('、')}`)
+  }
+  if (roles.length) {
+    lines.push(`- 角色：${roles.map((r: any) => r?.name || r?.code).filter(Boolean).slice(0, 8).join('、')}`)
+  }
+  lines.push('')
+  lines.push('请问候我并询问要做什么类型的自开发任务（自开发页面 / 后端接口 / 移动端 / 定时任务），同时基于以上应用结构给出 1-2 个合理建议。')
+
+  const message = lines.join('\n')
+  try {
+    sessionStorage.setItem(AI_BUILDER_PENDING_CODING_KEY, JSON.stringify({ message, app_id: appId, app_name: appName }))
+  } catch { /* sessionStorage 不可用就不传，Coding 页 fallback */ }
+  const token = `app-dev-${Date.now().toString(36)}`
+  codingDispatchToken.value = token
+  openCodingWorkspace(token)
 }
 
 // ── 平台配置 iframe ──
