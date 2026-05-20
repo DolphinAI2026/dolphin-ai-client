@@ -5,23 +5,6 @@
   <div class="chat-shell">
     <main class="chat-main">
   <div class="chat-page-shell">
-    <!-- dolphin 接管对话后 sidebar 跟 /apps 列表重复，整体隐藏 -->
-    <SessionSidebar
-      v-if="!embedMode && !useDolphinChat"
-      module-name="AI 搭建"
-      brand-color="#8b5cf6"
-      :sessions="sidebarSessionItems"
-      :active-id="sidebarActiveAppId"
-      :new-label="'+ 新建应用'"
-      back-route="/apps"
-      back-label="返回应用"
-      collapse-key="aibuilder:aside-collapsed"
-      :empty-hint="'还没有应用，点上面新建一个'"
-      @select="onSidebarSelectApp"
-      @create="onSidebarCreateApp"
-      @rename="onSidebarRenameApp"
-      @delete="onSidebarDeleteApp"
-    />
   <div class="chat-page">
     <TopBar v-if="!embedMode" title="" show-back :show-home="false" back-to="/apps">
       <template #center>
@@ -32,26 +15,6 @@
             <span>{{ builderAppDisplayName || '新建应用' }}</span>
             <span>/</span>
             <strong>AI-Builder</strong>
-          </div>
-          <div v-if="showViewSwitcher && !useDolphinChat" class="mode-switcher">
-            <button class="mode-btn" :class="{ active: activeView === 'builder' }" @click="setActiveView('builder')">
-              <span class="mode-btn-icon" aria-hidden="true">
-                <svg viewBox="0 0 16 16" fill="none">
-                  <path d="M3.5 5.2h9M3.5 8h9M3.5 10.8h6.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
-                  <circle cx="12.2" cy="10.8" r="1.2" fill="currentColor" />
-                </svg>
-              </span>
-              <span>智能搭建</span>
-            </button>
-            <button v-if="SHOW_PLATFORM_CONFIG" class="mode-btn" :class="{ active: activeView === 'platform' }" @click="setActiveView('platform')">
-              <span class="mode-btn-icon" aria-hidden="true">
-                <svg viewBox="0 0 16 16" fill="none">
-                  <rect x="2.3" y="3" width="11.4" height="8.4" rx="1.8" stroke="currentColor" stroke-width="1.3" />
-                  <path d="M5.2 13h5.6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
-                </svg>
-              </span>
-              <span>辅助搭建</span>
-            </button>
           </div>
           <!-- "查看应用"：应用部署完成后显示在顶部明显位置；点击在当前页切到
                aPaaS 平台 inline iframe（走 platform_proxy SSO 免登），不开新标签页
@@ -93,20 +56,6 @@
             </svg>
           </span>
         </button>
-        <!-- "部署到预览"按钮已删 — dolphin 模式下让 agent 调 publish_application 工具发布。
-             非 dolphin 模式（useDolphinChat=false 时回退老 SPEC chat 流程）保留兜底 -->
-        <button
-          v-if="!useDolphinChat && showStartDeployButton"
-          class="builder-top-action primary"
-          type="button"
-          @click="startDeployFromTopbar"
-          :disabled="assembling || generating || deployRunningAll || deployExecuting !== null || !hasPreviewContent"
-        >
-          部署到预览
-        </button>
-        <button v-else-if="!useDolphinChat && !showBuildHistoryButton" class="builder-top-action primary" type="button" @click="router.push('/devops')">
-          运行流水线
-        </button>
         <button
           v-if="SHOW_PLATFORM_CONFIG && activeView === 'platform' && platformIframeUrl"
           class="top-bar-icon-btn"
@@ -115,28 +64,6 @@
         >↗</button>
       </template>
     </TopBar>
-    <div v-if="!embedMode && !useDolphinChat" v-show="showBuilderPhaseStrip" class="builder-chat-phase-strip">
-      <div class="builder-chat-agent">
-        <span class="builder-chat-agent-dot"></span>
-        <span>搭建智能体</span>
-        <code>{{ selectedBuilderModelName }}</code>
-      </div>
-      <div class="builder-chat-phases" aria-label="搭建阶段">
-        <div
-          v-for="(phase, index) in builderPhaseSteps"
-          :key="phase.key"
-          class="builder-chat-phase"
-          :class="phase.status"
-        >
-          <span>{{ index + 1 }}</span>
-          {{ phase.label }}
-        </div>
-      </div>
-      <div class="builder-chat-save-state">
-        <span :class="['state-dot', builderLifecycleStatus.key]"></span>
-        {{ builderStatusText }}
-      </div>
-    </div>
     <div class="content-area">
 
       <!-- 平台配置 iframe（v-show 保持不销毁） -->
@@ -202,210 +129,15 @@
              5 秒超时兜底，即使 sync 失败也允许加载（init-app-context endpoint
              内部也会强制写 state，二重保险）。 -->
         <DolphinAgentEmbed
-          v-if="useDolphinChat && (!builderCurrentAppId || currentAppSynced || syncTimeoutFallback)"
+          v-if="!builderCurrentAppId || currentAppSynced || syncTimeoutFallback"
           :app-id="builderCurrentAppId"
           :app-name="builderAppDisplayName"
           title="AI-Builder 应用调整助手"
         />
-        <div v-else-if="useDolphinChat" class="dolphin-loading-pane">
+        <div v-else class="dolphin-loading-pane">
           <span class="loading-dot"></span>
           <span>正在切换应用上下文…</span>
         </div>
-        <template v-else>
-        <div v-if="appParsedMode" class="doc-view-wrap">
-          <div class="doc-view-head">
-            <div class="doc-view-title">功能设计文档</div>
-            <div class="doc-view-meta">
-              <div class="doc-view-file">{{ lastParsedFilename || `${store.preview.appName || '功能设计文档'}.md` }}</div>
-              <button class="doc-download-btn" @click="downloadCurrentDoc">下载 .md</button>
-            </div>
-          </div>
-          <div v-if="liveStructuredDocResult" class="doc-preview-body structured-doc-host">
-            <StructuredDocRenderer :doc-result="liveStructuredDocResult" />
-          </div>
-          <pre v-else-if="selectedDocDisplayContent" class="doc-preview-body plain-doc-fallback">{{ selectedDocDisplayContent }}</pre>
-          <div v-else class="doc-view-empty">
-            暂无可展示的文档内容，可重新上传文档后查看。
-          </div>
-        </div>
-        <template v-else>
-          <!-- Claude 风格：先纯对话。AI 判定需求收集足够（SPEC phase 离开 gathering）会自动展开三栏 -->
-          <div v-if="useSpecMode && !specPanelExpanded" class="spec-cta-banner" role="note">
-            <div class="spec-cta-text">
-              <span class="spec-cta-icon" aria-hidden="true">💬</span>
-              <span>告诉我你想搭建什么。我会先帮你梳理需求，准备好就自动生成设计文档。</span>
-            </div>
-          </div>
-          <section v-if="showBuilderSpecBrief" class="builder-spec-brief" aria-label="当前 SPEC 摘要">
-            <div class="builder-spec-brief-main">
-              <span class="builder-spec-kicker">当前 SPEC</span>
-              <strong>{{ specCompletenessScore }}% 完整</strong>
-              <p>{{ specOverviewLead }}</p>
-            </div>
-            <div class="builder-spec-brief-stats">
-              <button
-                v-for="stat in specOverviewStats"
-                :key="stat.key"
-                type="button"
-                @click="openArtifactPanel(stat.tab)"
-              >
-                <span>{{ stat.value }}</span>
-                {{ stat.label }}
-              </button>
-            </div>
-          </section>
-          <div class="messages" ref="messagesRef">
-            <div
-              v-for="(msg, idx) in visibleMessages"
-              :key="msg.id ?? `msg-${idx}`"
-              class="chat-bubble"
-              :class="[msg.role, { 'streaming-message': isStreamingAssistantMessage(msg) }]"
-            >
-              <div class="bubble-row" :class="msg.role">
-                <div v-if="msg.role === 'assistant'" class="assistant-avatar" aria-hidden="true">AI</div>
-                <div class="bubble-inner" :class="{ 'welcome-bubble': msg.role === 'assistant' && msg.content === BUILDER_WELCOME_MESSAGE }">
-                  <div class="bubble-content" :class="msg.role" v-html="formatContent(msg.content)"></div>
-                  <!-- 消息附带的 action 按钮组（如 DOC_NOT_STANDARD 错误的"返回 AI-Chat"）-->
-                  <div v-if="(msg as any).actions?.length" class="bubble-actions">
-                    <button
-                      v-for="(action, ai) in (msg as any).actions"
-                      :key="ai"
-                      type="button"
-                      class="bubble-action-btn"
-                      :class="action.type"
-                      @click="handleMessageAction(action)"
-                    >{{ action.label }}</button>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div v-if="isTyping" class="chat-bubble assistant">
-              <div class="bubble-row assistant">
-                <div class="assistant-avatar" aria-hidden="true">AI</div>
-                <div class="bubble-inner">
-                  <div class="bubble-content assistant typing-with-meta">
-                    <span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span>
-                    <span v-if="sendingMessage && pendingDurationSec > 0" class="typing-meta">
-                      AI 思考中 · {{ pendingDurationSec }}s
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <!-- 编码冲突修复输入 -->
-            <div v-if="activeConflict" class="chat-bubble assistant">
-              <div class="bubble-row assistant">
-                <div class="assistant-avatar" aria-hidden="true">AI</div>
-                <div class="bubble-inner">
-                  <div class="bubble-content assistant conflict-resolve-box">
-                    <div class="conflict-label">检测到编码冲突，请确认最新编码（默认已补上 <code>V1</code>）</div>
-                    <div class="conflict-input-row">
-                      <input
-                        v-model="activeConflict.newCode"
-                        class="conflict-input"
-                        placeholder="输入新编码，如 codeV1"
-                        @keydown.enter="resolveConflictAndRetry"
-                        :disabled="activeConflict.resolving"
-                      />
-                      <button class="conflict-btn confirm" @click="resolveConflictAndRetry" :disabled="activeConflict.resolving">
-                        {{ activeConflict.resolving ? '修复中...' : '修复' }}
-                      </button>
-                      <button class="conflict-btn cancel" @click="cancelConflict" :disabled="activeConflict.resolving">取消</button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </template>
-
-        <div v-if="showBuilderComposer" class="builder-workbench">
-          <div class="builder-composer-shell">
-            <div v-if="!appParsedMode" class="input-bar quick-edit-bar">
-              <div class="input-card quick-edit-card">
-                <div class="quick-edit-glow" aria-hidden="true"></div>
-                <div class="composer-toolbar">
-                  <el-select
-                    v-model="selectedBuilderModelId"
-                    class="builder-inline-model-select in-card"
-                    popper-class="model-select-dropdown"
-                    size="small"
-                    placeholder="选择对话模型"
-                    :loading="builderModelLoading"
-                    :disabled="builderModelLoading || updatingBuilderModel || builderModelOptions.length === 0"
-                    @change="handleBuilderModelChange"
-                  >
-                    <el-option
-                      v-for="option in builderModelOptions"
-                      :key="option.id"
-                      :label="formatBuilderModelOption(option)"
-                      :value="option.id"
-                    >
-                      <div class="builder-model-option-row">
-                        <span class="builder-model-option-name">{{ option.config_name }}</span>
-                        <span class="builder-model-option-meta">{{ option.provider }} / {{ option.model }}</span>
-                      </div>
-                    </el-option>
-                  </el-select>
-                </div>
-              <div class="builder-control-hint inside-card">{{ builderModelHint }}</div>
-                <div class="input-card-top">
-                <label class="upload-btn" title="上传对话附件（支持各类文档和图片）">
-                  <input
-                    ref="chatImageInputRef"
-                    type="file"
-                    multiple
-                    accept=".md,.markdown,image/*"
-                    @change="handleChatImageChange"
-                    style="display:none"
-                  />
-                  <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M15.5 8.5l-6.4 6.4a3.5 3.5 0 01-5-5l6.4-6.4a2.2 2.2 0 013.1 3.1L7.2 13a.9.9 0 01-1.3-1.3l5.5-5.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                </label>
-                <VoiceInputButton v-model="inputText" :llm-config-id="selectedBuilderModelId" />
-                <textarea
-                  v-model="inputText"
-                  @keydown.enter.exact.prevent="sendMessage"
-                  @keydown.enter.shift.exact="inputText += '\n'"
-                  :placeholder="builderQuickPlaceholder"
-                  rows="1"
-                  ref="inputRef"
-                  @input="autoResizeTextarea"
-                  @paste="handleComposerPaste"
-                ></textarea>
-                <button
-                  v-if="sendingMessage"
-                  class="send-btn stop-btn"
-                  type="button"
-                  @click="stopSending"
-                  title="中断"
-                >
-                  <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><rect x="3" y="3" width="8" height="8" rx="1.5"/></svg>
-                </button>
-                <button v-else class="send-btn" :class="{ disabled: !canSendMessage }" @click="sendMessage">
-                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M14 2L7 9M14 2l-4.5 12-2-5.5L2 6.5 14 2z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
-                </button>
-              </div>
-              <div v-if="pendingChatAttachments.length > 0" class="chat-attachment-preview-list">
-                <div
-                  v-for="(att, idx) in pendingChatAttachments"
-                  :key="idx"
-                  class="chat-attachment-preview"
-                >
-                  <img v-if="att.kind === 'image'" class="chat-attachment-preview-image" :src="att.previewUrl" :alt="att.file.name" />
-                  <div v-else class="chat-attachment-preview-file">📄</div>
-                  <div class="chat-attachment-preview-meta">
-                    <div class="chat-attachment-preview-name">{{ att.file.name }}</div>
-                    <div class="chat-attachment-preview-tip">{{ att.kind === 'image' ? '将随消息一起发送' : '将随消息一起发送' }}</div>
-                  </div>
-                  <button class="chat-attachment-remove" type="button" @click="removePendingChatAttachmentAt(idx)" aria-label="移除附件">×</button>
-                </div>
-              </div>
-            </div>
-          </div>
-          </div>
-
-        </div>
-        </template>
       </div>
 
       <!-- 2026-05-19 image #29: 中间默认渲染 latest doc 的 MD。用户拍板"只保留 MD 预览"。
@@ -981,11 +713,6 @@ const builderCurrentAppId = computed<number | null>(() => {
   return null
 })
 
-// 左侧对话区是否用 dolphin agent (a73e75cd81) 接管 — true 走 dolphin iframe，false 走原 SPEC chat
-// 注：showBuilderChatSide=false 时整个 chat-side 块都不显示，这个 ref 当前无效。
-// 保留 ref 因为别处（如顶上按钮 v-if）还在用它判断"是不是 dolphin 模式"。
-const useDolphinChat = ref(true)
-
 // 把"当前编辑的应用"上报给后端，让 dolphin agent 调 MCP 工具时不传 app_id 也能拿到
 const currentAppSynced = ref(false)
 // 5 秒超时兜底：sync 失败也允许 iframe 加载（init-app-context endpoint 内部
@@ -1043,7 +770,7 @@ let _appPollVisHandler: (() => void) | null = null
 async function primeAppPollingBaseline() {
   let appId: number | null = null
   try { appId = builderCurrentAppId.value } catch { return }
-  if (!appId || !useDolphinChat.value) return
+  if (!appId) return
   _lastAppId = appId
   try {
     const app: any = await applicationApi.get(appId)
@@ -1055,7 +782,7 @@ async function primeAppPollingBaseline() {
 async function pollAppForChanges() {
   let appId: number | null = null
   try { appId = builderCurrentAppId.value } catch { return }
-  if (!appId || !useDolphinChat.value) return
+  if (!appId) return
   // 切应用 → 重置基线（重新 prime 一次）
   if (appId !== _lastAppId) {
     _lastAppId = appId
