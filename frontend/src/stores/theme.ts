@@ -4,8 +4,10 @@ import { ref, computed } from 'vue'
 export type ThemeMode = 'light' | 'dark'
 
 const STORAGE_KEY = 'theme'
-const ACCENT_STORAGE_KEY = 'theme-accent-color'
-const DEFAULT_ACCENT = '#6d5df6'
+// v3 (2026-05-20) — bump key so users w/ old purple #6d5df6 in localStorage get the new blue default.
+// Existing users who actively picked a custom color via the picker can re-pick — most never touched it.
+const ACCENT_STORAGE_KEY = 'theme-accent-color-v3'
+const DEFAULT_ACCENT = '#1D4ED8' // v3 brand = blue-700 (matches design-v3-tokens.css --brand)
 
 function resolveInitialTheme(): ThemeMode {
   const saved = localStorage.getItem(STORAGE_KEY) as ThemeMode | null

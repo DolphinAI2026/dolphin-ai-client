@@ -14,6 +14,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import ShellTopBar from '@/components/v2/ShellTopBar.vue'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
+import EmptyState from '@/components/states/EmptyState.vue'
 import { quickDbApi, type TableHealth } from '@/api/quickDb'
 import { usePreviewStore } from '@/stores/preview'
 
@@ -505,7 +506,22 @@ onMounted(() => {
                 <span v-if="t.badge" class="health-tag" :title="t.reason || ''">{{ t.badge }}</span>
                 <span v-else-if="t.suggestSkip" class="health-tag">建议跳过</span>
               </label>
-              <div v-if="!filteredTables.length" class="empty">没匹配到表</div>
+              <div v-if="!filteredTables.length" class="empty">
+                <EmptyState
+                  :variant="tableSearch ? 'filtered' : 'first'"
+                  :title="tableSearch ? '没有匹配的表' : '这个库里没有可用的业务表'"
+                  :desc="tableSearch
+                    ? `没找到 “${tableSearch}”。换个关键词或清空搜索看全部。`
+                    : '所有表都被分类为框架表 / 审计表 / 无主键 / 关联表。换个 schema 试试，或者直接在对话里描述。'"
+                >
+                  <template #icon>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                  </template>
+                  <template v-if="tableSearch" #cta>
+                    <el-button @click="tableSearch = ''">清空搜索</el-button>
+                  </template>
+                </EmptyState>
+              </div>
             </div>
           </div>
 
@@ -556,148 +572,499 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.quick-db { overflow-y: auto; height: 100%; background: var(--bg-app); flex: 1; min-height: 0; }
+/* v3 redesign · 2026-05-20 — visual refresh only, template/script untouched.
+   Preserved (don't change):
+     - All selector names + 4-step wizard structure (step 1/2/3/4)
+     - source-mode segmented (.source-mode-row / .source-pill) for new|existing
+     - 6 DB type pills (.db-type-pill) — MYSQL/PostgreSQL/SQLServer/ORACLE/DAMENG/KingBase
+     - 7-rule health badge classes (.health-green / .health-yellow / .health-red / + skip)
+     - readonly field visual degradation for existing-connection mode
+     - .lv-info / .lv-ok / .lv-warn / .lv-err progress log color rail
+   Refreshed:
+     - Amber/emerald accent → brand (--brand / --brand-soft) for active states.
+       Status states still use ok/warn/err per their semantics.
+     - Borders: --border → --line (intent clarity; same value via v2→v3 alias)
+     - Radius normalised to --r-2 (6) / --r-3 (8) / --r-4 (12) per v3 token system
+     - Step bar (per spec 06.2 規範): active=brand-soft, done=ok-soft, pending=neutral
+       — "不要 4 色花，按步骤推进色"
+     - Shadows via --sh-2 (card) + --sh-brand (primary hover)
+     - transition unified to 0.14s var(--ease)
+     - mono font uses --font-mono (Inter alias)
+*/
+
+.quick-db {
+  overflow-y: auto;
+  height: 100%;
+  background: var(--bg-app, var(--bg));
+  flex: 1;
+  min-height: 0;
+}
 .page-pad { padding: 36px 32px 80px; max-width: 880px; margin: 0 auto; }
+
+/* ── Hero ─────────────────────────────────────────────────── */
 .hero { text-align: center; margin-bottom: 28px; }
-.db-badge { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 14px; border-radius: 999px; background: var(--amber-bg); color: var(--amber); font-weight: 600; font-size: 13px; border: 1px solid var(--amber-bg); margin-bottom: 12px; }
-.hero-title { font-size: 28px; font-weight: 700; color: var(--text); letter-spacing: -0.02em; line-height: 1.2; margin: 0 0 10px; }
-.hero-title .hl { color: var(--amber); }
+.db-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: var(--r-full, 999px);
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-weight: var(--fw-semibold, 600);
+  font-size: 12.5px;
+  border: 1px solid var(--brand-ring);
+  margin-bottom: 12px;
+}
+.hero-title {
+  font-size: 28px;
+  font-weight: var(--fw-bold, 700);
+  color: var(--text);
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  margin: 0 0 10px;
+}
+.hero-title .hl { color: var(--brand); }
 .hero-sub { font-size: 13px; color: var(--text-2); }
 
-/* Steps */
-.steps { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 24px; }
-.step-node { display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 999px; background: var(--surface); border: 1px solid var(--border); color: var(--text-3); transition: all 0.18s; }
-.step-node.active { background: var(--amber-bg); color: var(--amber); border-color: var(--amber); }
-.step-node.done { color: var(--emerald); border-color: var(--emerald); background: var(--emerald-bg); }
-.step-num { width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: currentColor; color: var(--surface); font-size: 12px; font-weight: 700; }
-.step-label { font-size: 12.5px; font-weight: 500; }
+/* ── Step indicator (per spec 06.2 規範 "按步骤推进色") ───── */
+.steps {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-bottom: 24px;
+}
+.step-node {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: var(--r-full, 999px);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--text-3);
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+.step-node.active {
+  background: var(--brand-soft);
+  color: var(--brand);
+  border-color: var(--brand);
+}
+.step-node.done {
+  background: var(--ok-soft);
+  color: var(--ok);
+  border-color: var(--ok);
+}
+.step-num {
+  width: 22px;
+  height: 22px;
+  border-radius: var(--r-full, 999px);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: currentColor;
+  color: var(--surface);
+  font-size: 11px;
+  font-weight: var(--fw-bold, 700);
+  font-family: var(--font-mono);
+}
+.step-label { font-size: 12.5px; font-weight: var(--fw-medium, 500); }
 .step-arrow { color: var(--text-4); font-size: 14px; }
-.step-arrow.done { color: var(--emerald); }
+.step-arrow.done { color: var(--ok); }
 
-/* Card */
-.card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 28px; box-shadow: var(--shadow-md); margin-bottom: 18px; }
+/* ── Card ─────────────────────────────────────────────────── */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-4, 12px);
+  padding: 28px;
+  box-shadow: var(--sh-2);
+  margin-bottom: 18px;
+}
 .step-body { min-height: 280px; }
 
-/* Forms */
+/* ── Forms ────────────────────────────────────────────────── */
 .form-row { margin-bottom: 18px; }
-.form-row > label { display: block; font-size: 12.5px; font-weight: 600; color: var(--text); margin-bottom: 8px; }
+.form-row > label {
+  display: block;
+  font-size: 12px;
+  font-weight: var(--fw-semibold, 600);
+  color: var(--text-2);
+  margin-bottom: 8px;
+}
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px; }
 .form-cell { display: flex; flex-direction: column; gap: 6px; }
-.form-cell label { font-size: 12px; color: var(--text-2); font-weight: 500; }
-.form-cell input, .form-row textarea {
-  width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px;
-  background: var(--surface); color: var(--text); font-size: 13px; font-family: inherit; outline: none;
-  transition: border-color 0.14s;
+.form-cell label {
+  font-size: 12px;
+  color: var(--text-2);
+  font-weight: var(--fw-semibold, 600);
 }
-.form-cell input:focus, .form-row textarea:focus { border-color: var(--amber); }
+.form-cell input,
+.form-row textarea {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-2, 6px);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              box-shadow 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+.form-cell input:hover:not([readonly]),
+.form-row textarea:hover {
+  border-color: var(--line-strong);
+}
+.form-cell input:focus,
+.form-row textarea:focus {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--brand-ring);
+}
 .form-row textarea { resize: vertical; min-height: 80px; }
 
+/* 6 DB type pills — one tone per spec 06.1 規範 (mono font + brand-soft active) */
 .db-types { display: flex; gap: 8px; flex-wrap: wrap; }
 .db-type-pill {
-  padding: 6px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface);
-  cursor: pointer; font-family: inherit; font-size: 12.5px; font-weight: 500; color: var(--text-2);
-  transition: all 0.14s;
+  padding: 6px 12px;
+  border-radius: var(--r-2, 6px);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: var(--fw-medium, 500);
+  color: var(--text-2);
+  letter-spacing: 0.01em;
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
 }
-.db-type-pill.active { background: var(--amber-bg); color: var(--amber); border-color: var(--amber); }
+.db-type-pill:hover:not(:disabled):not(.active) {
+  background: var(--surface-2);
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+.db-type-pill.active {
+  background: var(--brand-soft);
+  color: var(--brand);
+  border-color: var(--brand);
+}
 .db-type-pill:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* Step 1 顶部 segmented 切换：新建 / 选已有 */
 .source-mode-row {
   display: inline-flex;
   padding: 3px;
-  border-radius: 10px;
+  border-radius: var(--r-3, 8px);
   background: var(--surface-2);
-  border: 1px solid var(--border);
+  border: 1px solid var(--line);
   margin-bottom: 18px;
 }
 .source-pill {
   padding: 7px 18px;
-  border-radius: 7px;
+  border-radius: var(--r-2, 6px);
   border: none;
   background: transparent;
   font-size: 12.5px;
-  font-weight: 500;
+  font-weight: var(--fw-medium, 500);
   color: var(--text-2);
   cursor: pointer;
   font-family: inherit;
-  transition: all 0.14s;
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              box-shadow 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
 }
 .source-pill.active {
   background: var(--surface);
-  color: var(--amber);
-  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  color: var(--brand);
+  font-weight: var(--fw-semibold, 600);
+  box-shadow: var(--sh-1);
 }
 .source-pill:hover:not(.active) { color: var(--text); }
 
 /* readonly 字段视觉降级 */
-.form-cell input[readonly] { background: var(--surface-2); color: var(--text-2); cursor: default; }
+.form-cell input[readonly] {
+  background: var(--surface-2);
+  color: var(--text-3);
+  cursor: default;
+}
 
 /* 新建模式下"同时保存"checkbox */
 .save-as-new {
-  display: flex; align-items: center; gap: 8px;
-  margin-top: 14px; font-size: 12.5px; color: var(--text-2); cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  font-size: 12.5px;
+  color: var(--text-2);
+  cursor: pointer;
   user-select: none;
 }
-.save-as-new input[type="checkbox"] { cursor: pointer; }
+.save-as-new input[type="checkbox"] {
+  cursor: pointer;
+  accent-color: var(--brand);
+}
 
-.link-inline { color: var(--brand-text); text-decoration: underline; cursor: pointer; }
+.link-inline {
+  color: var(--brand);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.link-inline:hover { color: var(--brand-hover); }
 
-.hint { font-size: 12px; color: var(--text-3); margin-top: 12px; }
-.err-msg { font-size: 12.5px; color: #dc2626; background: rgba(220, 38, 38, 0.08); padding: 8px 12px; border-radius: 8px; margin-top: 12px; }
+.hint { font-size: 12px; color: var(--text-3); margin-top: 12px; line-height: 1.5; }
+.err-msg {
+  font-size: 12.5px;
+  color: var(--err);
+  background: var(--err-soft);
+  padding: 8px 12px;
+  border-radius: var(--r-2, 6px);
+  margin-top: 12px;
+  border: 1px solid color-mix(in srgb, var(--err) 18%, transparent);
+}
 .muted { color: var(--text-3); font-size: 12.5px; }
 
-/* Step 2 */
-.row-between { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
-.search { padding: 6px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); font-size: 12.5px; font-family: inherit; outline: none; width: 200px; }
-.search:focus { border-color: var(--amber); }
-.bulk-actions { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
-.link-btn { background: none; border: none; color: var(--brand-text); font-size: 12.5px; cursor: pointer; padding: 0; font-family: inherit; }
-.link-btn:hover { text-decoration: underline; }
-.table-list { border: 1px solid var(--border); border-radius: 10px; max-height: 360px; overflow-y: auto; background: var(--surface); }
-.table-row { display: flex; align-items: center; gap: 12px; padding: 8px 14px; border-bottom: 1px solid var(--border); cursor: pointer; transition: background 0.1s; }
+/* ── Step 2 — table picker ──────────────────────────────── */
+.row-between {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.search {
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-2, 6px);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12.5px;
+  font-family: inherit;
+  outline: none;
+  width: 200px;
+  transition: border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              box-shadow 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+.search:focus {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--brand-ring);
+}
+.bulk-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--brand);
+  font-size: 12.5px;
+  font-weight: var(--fw-medium, 500);
+  cursor: pointer;
+  padding: 0;
+  font-family: inherit;
+}
+.link-btn:hover { text-decoration: underline; color: var(--brand-hover); }
+
+.table-list {
+  border: 1px solid var(--line);
+  border-radius: var(--r-3, 8px);
+  max-height: 360px;
+  overflow-y: auto;
+  background: var(--surface);
+}
+.table-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
 .table-row:last-child { border-bottom: none; }
 .table-row:hover { background: var(--surface-2); }
+.table-row input[type="checkbox"] { accent-color: var(--brand); }
 .table-row.skip { opacity: 0.55; }
-.table-row.health-red { opacity: 0.75; }
-.table-name { font-family: var(--d-font-mono, monospace); font-size: 12.5px; flex: 1; color: var(--text); }
-.table-meta { font-size: 11.5px; color: var(--text-3); }
-.health-tag { font-size: 11px; padding: 2px 8px; border-radius: 4px; background: var(--surface-2); color: var(--text-3); }
-.table-row.health-green .health-tag { background: var(--emerald-bg); color: var(--emerald); }
-.table-row.health-yellow .health-tag { background: var(--amber-bg); color: var(--amber); }
-.table-row.health-red .health-tag { background: rgba(220, 38, 38, 0.10); color: #dc2626; }
-.empty { padding: 24px; text-align: center; color: var(--text-3); font-size: 12.5px; }
+.table-row.health-red { opacity: 0.78; }
+.table-name {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  flex: 1;
+  color: var(--text);
+  font-weight: var(--fw-medium, 500);
+}
+.table-meta {
+  font-size: 11.5px;
+  color: var(--text-3);
+  font-family: var(--font-mono);
+}
 
-/* Step 3 */
-.styles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
-.style-card { padding: 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); cursor: pointer; text-align: left; font-family: inherit; transition: all 0.14s; }
-.style-card.active { border-color: var(--amber); background: var(--amber-bg); }
-.style-label { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
-.style-card.active .style-label { color: var(--amber); }
-.style-desc { font-size: 11.5px; color: var(--text-3); line-height: 1.4; }
+/* 7-class health badge — preserved class names + classification logic.
+   Defaults to neutral (skip/framework); 4 status mappings override. */
+.health-tag {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: var(--r-1, 4px);
+  background: var(--surface-3);
+  color: var(--text-3);
+  font-weight: var(--fw-semibold, 600);
+}
+.table-row.health-green .health-tag { background: var(--ok-soft);   color: var(--ok); }
+.table-row.health-yellow .health-tag { background: var(--warn-soft); color: var(--warn); }
+.table-row.health-red .health-tag    { background: var(--err-soft);  color: var(--err); }
+/* health-skip + suggestSkip fallback inherit the neutral default above */
 
-/* Step 4 */
-.gen-status { display: flex; align-items: center; gap: 12px; padding: 18px; background: var(--amber-bg); border-radius: 10px; margin-bottom: 14px; color: var(--amber); font-weight: 500; }
-.spinner { width: 18px; height: 18px; border: 2px solid var(--amber); border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; }
+.empty {
+  padding: 24px;
+  text-align: center;
+  color: var(--text-3);
+  font-size: 12.5px;
+}
+
+/* ── Step 3 — business hint + style picker ───────────────── */
+.styles {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+.style-card {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-3, 8px);
+  background: var(--surface);
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              box-shadow 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+.style-card:hover { border-color: var(--line-strong); background: var(--surface-2); }
+.style-card.active {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+  box-shadow: 0 0 0 3px var(--brand-ring);
+}
+.style-label {
+  font-size: 13px;
+  font-weight: var(--fw-semibold, 600);
+  color: var(--text);
+  margin-bottom: 4px;
+}
+.style-card.active .style-label { color: var(--brand); }
+.style-desc { font-size: 11.5px; color: var(--text-3); line-height: 1.5; }
+
+/* ── Step 4 — generation log ─────────────────────────────── */
+.gen-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  background: var(--brand-soft);
+  border: 1px solid var(--brand-ring);
+  border-radius: var(--r-3, 8px);
+  margin-bottom: 14px;
+  color: var(--brand);
+  font-weight: var(--fw-medium, 500);
+  font-size: 13px;
+}
+.spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--brand);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
 @keyframes spin { to { transform: rotate(360deg); } }
-.progress-log { background: var(--surface-2); border-radius: 8px; padding: 14px; max-height: 320px; overflow-y: auto; font-family: var(--d-font-mono, monospace); font-size: 12px; }
+.progress-log {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-3, 8px);
+  padding: 14px;
+  max-height: 320px;
+  overflow-y: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+}
 .log-line { padding: 3px 0; }
 .lv-info { color: var(--text-2); }
-.lv-ok { color: var(--emerald); }
-.lv-warn { color: var(--amber); }
-.lv-err { color: #dc2626; }
+.lv-ok { color: var(--ok); }
+.lv-warn { color: var(--warn); }
+.lv-err { color: var(--err); }
 
-/* Footer nav */
-.foot-nav { display: flex; align-items: center; gap: 16px; }
+/* ── Footer nav ─────────────────────────────────────────── */
+.foot-nav {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
 .foot-nav .btn-primary { margin-left: auto; }
-.foot-nav .step-meta { color: var(--text-3); font-size: 12px; }
+.foot-nav .step-meta {
+  color: var(--text-3);
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+}
 .foot-nav .btn-ghost + .step-meta { margin-left: auto; }
 .foot-nav .step-meta + .btn-primary { margin-left: 0; }
 
-.btn { display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 16px; border-radius: 8px; font-size: 13px; font-weight: 500; cursor: pointer; border: 1px solid transparent; background: transparent; color: var(--text); font-family: inherit; transition: all 0.12s; }
-.btn-primary { background: var(--amber); color: white; }
-.btn-primary:hover:not(:disabled) { opacity: 0.9; }
-.btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
-.btn-ghost { color: var(--text-2); border-color: var(--border); }
-.btn-ghost:hover:not(:disabled) { background: var(--surface-2); }
-.btn-ghost:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 18px;
+  border-radius: var(--r-2, 6px);
+  font-size: 13px;
+  font-weight: var(--fw-medium, 500);
+  cursor: pointer;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              box-shadow 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+.btn-primary {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: var(--text-inverse, #fff);
+  font-weight: var(--fw-semibold, 600);
+}
+.btn-primary:hover:not(:disabled) {
+  background: var(--brand-hover);
+  border-color: var(--brand-hover);
+  box-shadow: var(--sh-brand);
+}
+.btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn-ghost {
+  color: var(--text-2);
+  border-color: var(--line);
+  background: var(--surface);
+}
+.btn-ghost:hover:not(:disabled) {
+  background: var(--brand-soft);
+  color: var(--brand);
+  border-color: var(--brand-ring);
+}
+.btn-ghost:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* ── Dark theme tune ────────────────────────────────────── */
+:global(html[data-theme="dark"]) .source-pill.active {
+  background: var(--surface);
+  box-shadow: var(--sh-2);
+}
 </style>

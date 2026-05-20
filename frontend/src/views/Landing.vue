@@ -90,15 +90,26 @@ function handleFileUpload(event: Event) {
 </template>
 
 <style scoped>
+/* v3 redesign · 2026-05-20 — visual refresh only, template/script untouched.
+   Preserved (don't change):
+     - hero + composer-mount + 4 flow-cards layout
+     - All class names (.landing/.hero/.ai-mark/.eyebrow/.flow/.flow-card/.flow-icon/.flow-arrow)
+     - Responsive breakpoints 1180/760 + dark-theme overrides
+   Refreshed:
+     - bg radial uses --brand-soft (blue-50) instead of indigo brand-soft-2
+     - hardcoded rgba(91,91,214,X) → --brand-ring / --brand-glow / --brand-soft
+     - linear-gradient(--brand-400,--brand-700) → (--blue-500,--blue-800) to match design-spec hero brand
+     - radius 14/15px → var(--r-5,16px) outer / var(--r-4,12px) inner
+     - weights 850/820/650/620 → capped at fw-bold(700)/fw-semibold(600)/fw-medium(500) per v3 4-档
+     - flow-arrow grey #9690b0 → var(--text-4)
+*/
 .landing {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   background:
-    radial-gradient(circle at 50% 6%, color-mix(in srgb, var(--brand-soft-2) 58%, transparent), transparent 34%),
-    linear-gradient(180deg,
-      color-mix(in srgb, var(--brand-soft) 76%, #fbfcff 24%) 0%,
-      color-mix(in srgb, var(--brand-soft-2) 42%, #f7f8fb 58%) 100%);
+    radial-gradient(ellipse 760px 380px at 50% 8%, var(--brand-soft), transparent 70%),
+    linear-gradient(180deg, var(--bg) 0%, var(--surface-3) 100%);
 }
 
 .landing-inner {
@@ -119,30 +130,30 @@ function handleFileUpload(event: Event) {
   display: grid;
   place-items: center;
   margin: 0 auto 16px;
-  border-radius: 15px;
+  border-radius: var(--r-5, 16px);
   color: #fff;
-  background: linear-gradient(135deg, var(--brand-400), var(--brand-700));
-  box-shadow: 0 22px 54px rgba(91, 91, 214, 0.22), inset 0 -1px 0 rgba(255, 255, 255, 0.22);
-  font-size: 26px;
-  font-weight: 850;
-  letter-spacing: 0;
+  background: linear-gradient(135deg, var(--blue-500, #3B82F6), var(--blue-800, #1E40AF));
+  box-shadow: 0 14px 30px -10px var(--brand-glow), inset 0 -1px 0 rgba(255, 255, 255, 0.22);
+  font-size: 24px;
+  font-weight: var(--fw-bold, 700);
+  letter-spacing: -0.02em;
 }
 
 .eyebrow {
   margin-bottom: 14px;
   color: var(--brand-text);
-  font-size: 11px;
-  font-weight: 800;
+  font-size: var(--t-micro, 11px);
+  font-weight: var(--fw-bold, 700);
   letter-spacing: 0.24em;
 }
 
 .hero h1 {
   margin: 0;
   color: var(--text);
-  font-size: clamp(34px, 3.2vw, 50px);
+  font-size: clamp(28px, 3.2vw, 44px);
   line-height: 1.12;
-  font-weight: 850;
-  letter-spacing: 0;
+  font-weight: var(--fw-bold, 700);
+  letter-spacing: -0.02em;
 }
 
 .hero h1 span {
@@ -152,9 +163,9 @@ function handleFileUpload(event: Event) {
 .hero p {
   margin: 16px 0 0;
   color: var(--text-2);
-  font-size: 14px;
+  font-size: var(--t-body, 14px);
   line-height: 1.55;
-  font-weight: 620;
+  font-weight: var(--fw-regular, 400);
 }
 
 .flow {
@@ -173,10 +184,19 @@ function handleFileUpload(event: Event) {
   align-items: center;
   gap: 12px;
   padding: 16px;
-  border: 1px solid rgba(91, 91, 214, 0.14);
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.88);
-  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--line);
+  border-radius: var(--r-4, 12px);
+  background: var(--surface);
+  box-shadow: var(--sh-2);
+  transition: border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              box-shadow 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              transform 0.12s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+
+.flow-card:hover {
+  border-color: var(--brand-ring);
+  box-shadow: var(--sh-3);
+  transform: translateY(-1px);
 }
 
 .flow-icon {
@@ -186,37 +206,38 @@ function handleFileUpload(event: Event) {
   place-items: center;
   flex-shrink: 0;
   color: #fff;
-  border-radius: 10px;
-  background: linear-gradient(135deg, var(--brand-400), var(--brand-700));
-  box-shadow: 0 12px 24px rgba(91, 91, 214, 0.20);
+  border-radius: var(--r-3, 8px);
+  background: linear-gradient(135deg, var(--blue-500, #3B82F6), var(--blue-800, #1E40AF));
+  box-shadow: var(--sh-brand);
 }
 
 .flow-card h2 {
   margin: 0;
   color: var(--text);
-  font-size: 14px;
+  font-size: var(--t-body, 14px);
   line-height: 1.25;
-  font-weight: 820;
+  font-weight: var(--fw-semibold, 600);
+  letter-spacing: -0.005em;
 }
 
 .flow-card p {
   margin: 6px 0 0;
   color: var(--text-3);
-  font-size: 12px;
+  font-size: var(--t-small, 12.5px);
   line-height: 1.5;
-  font-weight: 650;
+  font-weight: var(--fw-regular, 400);
 }
 
 .flow-arrow {
-  color: #9690b0;
+  color: var(--text-4);
   text-align: center;
   font-size: 22px;
-  font-weight: 300;
+  font-weight: var(--fw-regular, 400);
 }
 
 html[data-theme="dark"] .landing {
   background:
-    radial-gradient(circle at 50% 6%, color-mix(in srgb, var(--brand-soft-2) 48%, transparent), transparent 34%),
+    radial-gradient(ellipse 760px 380px at 50% 8%, var(--brand-soft), transparent 70%),
     var(--bg-app);
 }
 

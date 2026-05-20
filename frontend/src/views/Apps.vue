@@ -59,22 +59,29 @@
       </section>
 
       <section class="apps-content" :class="`is-${viewMode}`">
-        <div v-if="loading" class="apps-state">加载中...</div>
+        <div v-if="loading" class="apps-state apps-empty-v2">
+          <SkeletonCard :lines="3" with-avatar with-footer />
+        </div>
         <div v-else-if="filteredApps.length === 0" class="apps-state apps-empty-v2">
-          <span class="apps-state-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none">
-              <rect x="4" y="4" width="6" height="6" rx="1.4" />
-              <rect x="14" y="4" width="6" height="6" rx="1.4" />
-              <rect x="4" y="14" width="6" height="6" rx="1.4" />
-              <rect x="14" y="14" width="6" height="6" rx="1.4" />
-            </svg>
-          </span>
-          <strong>暂无应用</strong>
-          <span>从首页新建应用后，会在这里继续构建、部署和查看历史对话。</span>
-          <button class="btn btn-primary btn-sm apps-empty-cta" type="button" @click="router.push('/')">
-            <el-icon><Plus /></el-icon>
-            <span>新建应用</span>
-          </button>
+          <EmptyState
+            title="暂无应用"
+            desc="从首页新建应用后，会在这里继续构建、部署和查看历史对话。"
+          >
+            <template #icon>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="3" width="7" height="7"/>
+                <rect x="14" y="3" width="7" height="7"/>
+                <rect x="14" y="14" width="7" height="7"/>
+                <rect x="3" y="14" width="7" height="7"/>
+              </svg>
+            </template>
+            <template #cta>
+              <button class="btn btn-primary btn-sm apps-empty-cta" type="button" @click="router.push('/')">
+                <el-icon><Plus /></el-icon>
+                <span>新建应用</span>
+              </button>
+            </template>
+          </EmptyState>
         </div>
 
         <div v-else-if="viewMode === 'list'" class="apps-table">
@@ -225,6 +232,8 @@ import { applicationApi } from '@/api/application'
 import { conversationApi, type ConversationWithApp } from '@/api/conversation'
 import BuilderFrame from '@/components/BuilderFrame.vue'
 import ImportAppDialog from '@/components/ImportAppDialog.vue'
+import EmptyState from '@/components/states/EmptyState.vue'
+import SkeletonCard from '@/components/states/SkeletonCard.vue'
 import type { MergedApplication } from '@/types'
 
 type AppTab = 'all' | 'active' | 'deployed' | 'draft'
@@ -560,49 +569,29 @@ onMounted(() => { refreshApps() })
 </script>
 
 <style scoped>
-.apps-create-btn {
-  height: 34px;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  border: 1px solid #4357e8;
-  border-radius: 10px;
-  background: linear-gradient(135deg, #5a6cff, #4154e8);
-  color: #fff;
-  padding: 0 14px;
-  font-size: 12px;
-  font-weight: 760;
-  cursor: pointer;
-  box-shadow: 0 10px 22px rgba(65, 84, 232, 0.20);
-  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
-}
-
-.apps-create-btn:hover {
-  transform: translateY(-1px);
-  background: linear-gradient(135deg, #6677ff, #4b5df2);
-  box-shadow: 0 14px 28px rgba(65, 84, 232, 0.26);
-}
-
-:global(html[data-theme="dark"]) .apps-create-btn,
-:global(html[data-theme="dark"]) .apps-mini-action.primary {
-  background: linear-gradient(135deg, #7b88ff, #5265ff) !important;
-  border-color: rgba(154, 168, 255, 0.48) !important;
-  color: #ffffff !important;
-  box-shadow: 0 12px 26px rgba(82, 101, 255, 0.30) !important;
-}
-
-:global(html[data-theme="dark"]) .apps-create-btn:hover,
-:global(html[data-theme="dark"]) .apps-mini-action.primary:hover {
-  background: linear-gradient(135deg, #8a96ff, #6273ff) !important;
-  border-color: rgba(181, 190, 255, 0.62) !important;
-  color: #ffffff !important;
-}
-
-.apps-pagination {
-  display: flex;
-  justify-content: flex-end;
-  padding: 16px 4px 4px;
-}
+/* v3 redesign · 2026-05-20 — visual refresh only, template/script untouched.
+   Preserved (don't change):
+     - BuilderFrame wrap + apps-header / apps-toolbar / apps-content layout
+     - 4 tabs (全部/进行中/已部署/草稿) + tab-count pill
+     - list / card viewMode toggle + apps-table grid columns
+     - apps-avatar inline appAccentStyle gradient (per-app accent color)
+     - 4 stage tones (active / success / draft / danger) — appStage tone class
+     - progress bar mirrors stage tone
+     - el-pagination + ImportAppDialog
+     - mobile @media (max-width: 860px) layout
+     - .modal + .builder-btn legacy classes (used by other dialogs in this view)
+   Refreshed:
+     - v2 紫 (#5b5bd6 / #4357e8 / linear gradients) → v3 brand (--blue-700 #1D4ED8) single color
+     - All --b-* aliases → v3 --surface / --line / --text / --brand
+     - font-weight 750/760/850 → var(--fw-bold) 700 / 650 → var(--fw-semibold) 600
+     - radius 7/8/10/12 → var(--r-2) 6 / var(--r-3) 8 / var(--r-4) 12
+     - transition unified to 0.14s var(--ease)
+     - stage-pill tone 4 colors mapped to v3 status tokens
+     - progress fill tone mirrors stage with v3 status tokens
+     - empty-state icon: glow gradient → flat brand-soft + brand border
+     - mini-action.primary: --b-ink (dark grey) → --brand (blue)
+     - dark theme block dropped legacy gradient overrides (v3 tokens auto-handle dark)
+*/
 
 .apps-page {
   display: flex;
@@ -623,16 +612,16 @@ onMounted(() => { refreshApps() })
 
 .apps-header h1 {
   margin: 0;
-  color: var(--b-text);
-  font-size: 24px;
+  color: var(--text);
+  font-size: var(--t-h2, 24px);
   line-height: 1.25;
-  font-weight: 750;
-  letter-spacing: 0;
+  font-weight: var(--fw-bold, 700);
+  letter-spacing: -0.01em;
 }
 
 .apps-header p {
   margin: 6px 0 0;
-  color: var(--b-text-muted);
+  color: var(--text-3);
   font-size: 13px;
 }
 
@@ -655,78 +644,114 @@ onMounted(() => { refreshApps() })
 }
 
 .apps-toolbar-action {
-  height: 40px;
-  padding: 0 18px;
-  border-radius: 10px;
-  font-size: 15px;
-  font-weight: 760;
+  height: 36px;
+  padding: 0 16px;
+  border-radius: var(--r-3, 8px);
+  font-size: 13px;
+  font-weight: var(--fw-semibold, 600);
 }
 
-.apps-tabs,
-.apps-view-toggle {
+/* ── Tabs ─────────────────────────────────────────────────── */
+.apps-tabs {
   display: inline-flex;
   align-items: center;
-  border: 1px solid var(--b-line);
-  border-radius: var(--b-radius-md);
-  background: var(--b-bg-sub);
-  padding: 2px;
+  gap: 2px;
+  border-bottom: 1px solid var(--line);
+  padding: 0;
+  background: transparent;
 }
 
 .apps-tab {
+  position: relative;
   min-width: 58px;
-  height: 30px;
+  height: 36px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 0;
   background: transparent;
-  color: var(--b-text-muted);
+  color: var(--text-3);
   font: inherit;
   font-size: 13px;
+  font-weight: var(--fw-medium, 500);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 0 10px;
+  padding: 0 14px;
+  transition: color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+
+.apps-tab:hover:not(.active) {
+  color: var(--text);
 }
 
 .apps-tab.active {
-  background: var(--b-panel);
-  color: var(--b-text);
-  font-weight: 650;
-  box-shadow: var(--b-shadow-xs);
+  color: var(--brand);
+  font-weight: var(--fw-semibold, 600);
+}
+
+.apps-tab.active::after {
+  content: '';
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  bottom: -1px;
+  height: 2px;
+  background: var(--brand);
+  border-radius: 1px;
 }
 
 .apps-tab-count {
   min-width: 18px;
   padding: 1px 6px;
-  border-radius: 999px;
-  background: var(--b-brand-soft);
-  color: var(--b-brand);
-  font-family: var(--b-mono);
+  border-radius: var(--r-full, 999px);
+  background: var(--surface-2);
+  color: var(--text-3);
+  font-family: var(--font-mono);
   font-size: 11px;
   line-height: 15px;
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
 }
 
+.apps-tab.active .apps-tab-count {
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+
+/* ── View toggle (list / card) ────────────────────────────── */
 .apps-view-toggle {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: var(--r-3, 8px);
+  background: var(--surface-2);
+  padding: 2px;
   flex-shrink: 0;
 }
 
 .apps-view-btn {
   width: 32px;
-  height: 26px;
+  height: 28px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--r-2, 6px);
   background: transparent;
-  color: var(--b-text-muted);
+  color: var(--text-3);
   display: grid;
   place-items: center;
   cursor: pointer;
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+
+.apps-view-btn:hover:not(.active) {
+  color: var(--text);
 }
 
 .apps-view-btn.active {
-  background: var(--b-panel);
-  color: var(--b-text);
-  box-shadow: var(--b-shadow-xs);
+  background: var(--surface);
+  color: var(--brand);
+  box-shadow: var(--sh-1);
 }
 
 .apps-content {
@@ -735,51 +760,55 @@ onMounted(() => { refreshApps() })
   margin: 0 auto;
 }
 
+/* ── Empty / loading state ────────────────────────────────── */
 .apps-state {
   min-height: 340px;
-  border: 1px solid var(--b-line);
-  border-radius: var(--b-radius-md);
-  background: var(--b-panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r-4, 12px);
+  background: var(--surface);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  color: var(--b-text-muted);
+  color: var(--text-3);
   font-size: 13px;
   text-align: center;
 }
 
 .apps-state strong {
-  color: var(--b-text);
-  font-size: 14px;
+  color: var(--text);
+  font-size: 14.5px;
+  font-weight: var(--fw-semibold, 600);
 }
 
 .apps-state-icon {
-  width: 38px;
-  height: 38px;
-  border-radius: 12px;
+  width: 56px;
+  height: 56px;
+  border-radius: var(--r-full, 999px);
   display: grid;
   place-items: center;
-  background: linear-gradient(180deg, var(--brand, #6d5df6), var(--brand-hover, #5b4ee6));
-  color: #fff;
-  box-shadow: 0 14px 28px var(--brand-ring, rgba(109, 93, 246, 0.18));
+  background: var(--surface-2);
+  color: var(--text-3);
+  margin-bottom: 4px;
 }
 
 .apps-state-icon svg {
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
 }
 
 .apps-state-icon rect {
   fill: currentColor;
 }
 
+/* ── List view: table ─────────────────────────────────────── */
 .apps-table {
   overflow: hidden;
-  border: 1px solid var(--b-line);
-  border-radius: var(--b-radius-md);
-  background: var(--b-panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r-4, 12px);
+  background: var(--surface);
+  box-shadow: var(--sh-1);
 }
 
 .apps-table-head,
@@ -791,20 +820,22 @@ onMounted(() => { refreshApps() })
 }
 
 .apps-table-head {
-  min-height: 32px;
-  padding: 0 12px;
-  border-bottom: 1px solid var(--b-line);
-  color: var(--b-text-muted);
-  font-size: 13px;
+  min-height: 36px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--line);
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: var(--fw-medium, 500);
+  background: var(--surface-2);
 }
 
 .apps-row {
   min-height: 56px;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--b-line);
-  color: var(--b-text);
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
   cursor: pointer;
-  transition: background 0.15s ease;
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
   outline: none;
 }
 
@@ -814,7 +845,7 @@ onMounted(() => { refreshApps() })
 
 .apps-row:hover,
 .apps-row:focus-visible {
-  background: var(--b-panel-soft);
+  background: var(--surface-2);
 }
 
 .apps-row-app {
@@ -824,23 +855,26 @@ onMounted(() => { refreshApps() })
   gap: 11px;
 }
 
+/* avatar — appAccentStyle inline gradient drives the color via per-app accent;
+   we set a fallback brand so the box never collapses when style is missing. */
 .apps-avatar {
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   flex: 0 0 auto;
-  border-radius: 7px;
+  border-radius: var(--r-3, 8px);
   display: grid;
   place-items: center;
-  color: #fff;
+  background: var(--brand);
+  color: var(--text-inverse, #fff);
   font-size: 13px;
-  font-weight: 750;
+  font-weight: var(--fw-bold, 700);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
 }
 
 .apps-avatar.large {
   width: 44px;
   height: 44px;
-  border-radius: 10px;
+  border-radius: var(--r-3, 8px);
   font-size: 18px;
 }
 
@@ -853,9 +887,9 @@ onMounted(() => { refreshApps() })
 
 .apps-row-main strong {
   min-width: 0;
-  color: var(--b-text);
+  color: var(--text);
   font-size: 14px;
-  font-weight: 700;
+  font-weight: var(--fw-semibold, 600);
   line-height: 1.2;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -867,33 +901,33 @@ onMounted(() => { refreshApps() })
   display: flex;
   align-items: center;
   gap: 7px;
-  color: var(--b-text-muted);
+  color: var(--text-3);
   font-size: 12px;
 }
 
 .apps-row-meta code,
 .apps-card-code code {
-  border-radius: 4px;
-  background: var(--b-bg-sub);
-  color: var(--b-text-muted);
-  padding: 2px 5px;
-  font-family: var(--b-mono);
+  border-radius: var(--r-1, 4px);
+  background: var(--surface-2);
+  color: var(--text-3);
+  padding: 2px 6px;
+  font-family: var(--font-mono);
   font-size: 11px;
-  line-height: 1;
+  line-height: 1.2;
 }
 
 .apps-dot-sep {
   width: 3px;
   height: 3px;
-  border-radius: 999px;
-  background: var(--b-text-faint);
+  border-radius: var(--r-full, 999px);
+  background: var(--text-4);
 }
 
 .apps-history-link {
   min-width: 0;
   border: 0;
   background: transparent;
-  color: var(--b-text-muted);
+  color: var(--brand);
   font: inherit;
   font-size: 12px;
   padding: 0;
@@ -901,61 +935,71 @@ onMounted(() => { refreshApps() })
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  transition: color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
 }
 
 .apps-history-link:hover {
-  color: var(--b-text);
+  color: var(--brand-hover);
+  text-decoration: underline;
 }
 
+/* ── Stage pill — 4 tones per appStage(app).tone ──────────── */
 .apps-stage-pill {
-  height: 28px;
+  height: 24px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--b-line);
-  border-radius: 6px;
-  background: var(--b-bg-sub);
-  color: var(--b-text-muted);
-  padding: 0 9px;
-  font-size: 12px;
-  font-weight: 650;
+  border: 1px solid transparent;
+  border-radius: var(--r-full, 999px);
+  background: var(--surface-3);
+  color: var(--text-3);
+  padding: 0 10px;
+  font-size: 11.5px;
+  font-weight: var(--fw-semibold, 600);
   white-space: nowrap;
 }
 
+/* active = 进行中 → warn (amber, in-progress signal) */
 .apps-stage-pill.active {
-  background: var(--b-brand-soft);
-  color: var(--b-brand-ink);
-  border-color: rgba(79, 110, 247, 0.18);
+  background: var(--warn-soft);
+  color: var(--warn);
 }
 
+/* success = 已部署 → ok (green) */
 .apps-stage-pill.success {
-  background: var(--b-teal-soft);
-  color: var(--b-teal);
-  border-color: rgba(15, 159, 143, 0.16);
+  background: var(--ok-soft);
+  color: var(--ok);
 }
 
+/* draft = 草稿 → muted neutral */
+.apps-stage-pill.draft {
+  background: var(--surface-3);
+  color: var(--text-3);
+}
+
+/* danger = 失败 → err (red) */
 .apps-stage-pill.danger {
-  background: var(--b-red-soft);
-  color: var(--b-red);
-  border-color: rgba(209, 74, 97, 0.16);
+  background: var(--err-soft);
+  color: var(--err);
 }
 
+/* ── Progress bar — track + fill mirrors stage tone ───────── */
 .apps-row-progress,
 .apps-card-progress {
   min-width: 0;
   display: flex;
   align-items: center;
   gap: 9px;
-  color: var(--b-text-muted);
-  font-family: var(--b-mono);
-  font-size: 12px;
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
 }
 
 .apps-progress-track {
   width: 80px;
-  height: 3px;
-  border-radius: 999px;
-  background: var(--b-bg-sub);
+  height: 4px;
+  border-radius: var(--r-full, 999px);
+  background: var(--surface-2);
   overflow: hidden;
 }
 
@@ -963,37 +1007,28 @@ onMounted(() => { refreshApps() })
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: var(--b-ink);
+  background: var(--brand);
+  transition: width 0.2s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
 }
 
-.apps-progress-bar.active {
-  background: var(--b-ink);
-}
-
-.apps-progress-bar.success {
-  background: var(--b-teal);
-}
-
-.apps-progress-bar.draft {
-  background: #aab5c5;
-}
-
-.apps-progress-bar.danger {
-  background: var(--b-red);
-}
+.apps-progress-bar.active { background: var(--warn); }
+.apps-progress-bar.success { background: var(--ok); }
+.apps-progress-bar.draft { background: var(--text-4); }
+.apps-progress-bar.danger { background: var(--err); }
 
 .apps-row-updated {
-  color: var(--b-text-muted);
-  font-size: 13px;
+  color: var(--text-3);
+  font-size: 12.5px;
 }
 
 .apps-row-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 9px;
+  gap: 8px;
   flex-wrap: wrap;
 }
 
+/* ── Card view ────────────────────────────────────────────── */
 .apps-card-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(286px, 1fr));
@@ -1002,20 +1037,23 @@ onMounted(() => { refreshApps() })
 
 .apps-card {
   min-height: 240px;
-  border: 1px solid var(--b-line);
-  border-radius: var(--b-radius-md);
-  background: var(--b-panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r-4, 12px);
+  background: var(--surface);
   padding: 16px;
   display: flex;
   flex-direction: column;
   gap: 12px;
   cursor: pointer;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+  box-shadow: var(--sh-1);
+  transition: border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              box-shadow 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              transform 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
 }
 
 .apps-card:hover {
-  border-color: var(--b-line-strong);
-  box-shadow: var(--b-shadow-sm);
+  border-color: var(--brand-ring);
+  box-shadow: var(--sh-2);
   transform: translateY(-1px);
 }
 
@@ -1034,40 +1072,48 @@ onMounted(() => { refreshApps() })
 
 .apps-card h2 {
   margin: 2px 0 0;
-  color: var(--b-text);
+  color: var(--text);
   font-size: 16px;
   line-height: 1.35;
-  font-weight: 750;
+  font-weight: var(--fw-semibold, 600);
+  letter-spacing: -0.005em;
 }
 
 .apps-card-code {
   gap: 8px;
-  color: var(--b-text-muted);
+  color: var(--text-3);
   font-size: 12px;
 }
 
 .apps-card-stats {
-  gap: 11px;
+  gap: 12px;
   flex-wrap: wrap;
   padding-top: 10px;
-  border-top: 1px solid var(--b-line);
-  color: var(--b-text-muted);
-  font-size: 12px;
+  border-top: 1px solid var(--line);
+  color: var(--text-3);
+  font-size: 11.5px;
 }
 
 .apps-card-history {
   width: 100%;
-  border: 1px solid var(--b-line);
-  border-radius: var(--b-radius-md);
-  background: var(--b-panel-soft);
+  border: 1px solid var(--line);
+  border-radius: var(--r-3, 8px);
+  background: var(--surface-2);
   padding: 9px 10px;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 3px;
-  color: var(--b-text);
+  color: var(--text);
   text-align: left;
   cursor: pointer;
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+
+.apps-card-history:hover {
+  background: var(--brand-soft);
+  border-color: var(--brand-ring);
 }
 
 .apps-card-history span {
@@ -1076,44 +1122,47 @@ onMounted(() => { refreshApps() })
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 13px;
+  font-weight: var(--fw-medium, 500);
 }
 
 .apps-card-history small {
-  color: var(--b-text-muted);
-  font-size: 12px;
+  color: var(--text-3);
+  font-size: 11.5px;
 }
 
 .apps-card-actions {
   margin-top: auto;
   justify-content: flex-end;
-  gap: 9px;
+  gap: 8px;
   flex-wrap: wrap;
 }
 
+/* ── Mini action buttons (对话 / 构建 / 发布 / 删除) ───────── */
 .apps-mini-action {
-  min-height: 36px;
-  border: 1px solid var(--b-line);
-  border-radius: 8px;
-  background: var(--b-panel);
-  color: var(--b-text-muted);
+  min-height: 30px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-2, 6px);
+  background: var(--surface);
+  color: var(--text-2);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 0 15px;
+  padding: 0 12px;
   font-family: inherit;
-  font-size: 14px;
-  font-weight: 650;
+  font-size: 12.5px;
+  font-weight: var(--fw-medium, 500);
   cursor: pointer;
   white-space: nowrap;
-  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, transform 0.15s ease;
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
 }
 
 .apps-mini-action:hover {
-  border-color: var(--b-line-strong);
-  color: var(--b-text);
-  background: var(--b-bg-sub);
-  transform: translateY(-1px);
+  border-color: var(--brand-ring);
+  color: var(--brand);
+  background: var(--brand-soft);
 }
 
 .apps-mini-action span {
@@ -1122,21 +1171,42 @@ onMounted(() => { refreshApps() })
 }
 
 .apps-mini-action.primary {
-  background: var(--b-ink);
-  border-color: var(--b-ink);
-  color: #fff;
+  background: var(--brand);
+  border-color: var(--brand);
+  color: var(--text-inverse, #fff);
+}
+
+.apps-mini-action.primary:hover {
+  background: var(--brand-hover);
+  border-color: var(--brand-hover);
+  color: var(--text-inverse, #fff);
 }
 
 .apps-mini-action.danger {
-  color: var(--b-red);
+  color: var(--err);
+  border-color: var(--line);
+  background: var(--surface);
+}
+
+.apps-mini-action.danger:hover {
+  color: var(--err);
+  background: var(--err-soft);
+  border-color: var(--err-soft);
 }
 
 .apps-mini-action:disabled {
   cursor: not-allowed;
-  opacity: 0.62;
+  opacity: 0.55;
   transform: none;
 }
 
+.apps-pagination {
+  display: flex;
+  justify-content: flex-end;
+  padding: 16px 4px 4px;
+}
+
+/* ── Responsive ───────────────────────────────────────────── */
 @media (max-width: 860px) {
   .apps-page {
     padding: 18px 16px 28px;
@@ -1168,6 +1238,7 @@ onMounted(() => { refreshApps() })
   .apps-table {
     border: 0;
     background: transparent;
+    box-shadow: none;
     display: flex;
     flex-direction: column;
     gap: 10px;
@@ -1175,9 +1246,9 @@ onMounted(() => { refreshApps() })
 
   .apps-row {
     min-height: 0;
-    border: 1px solid var(--b-line);
-    border-radius: var(--b-radius-md);
-    background: var(--b-panel);
+    border: 1px solid var(--line);
+    border-radius: var(--r-4, 12px);
+    background: var(--surface);
     grid-template-columns: 1fr;
     row-gap: 10px;
     padding: 12px;
@@ -1187,7 +1258,7 @@ onMounted(() => { refreshApps() })
   .apps-row-progress,
   .apps-row-updated,
   .apps-row-actions {
-    margin-left: 41px;
+    margin-left: 43px;
   }
 
   .apps-row-actions {
@@ -1195,11 +1266,11 @@ onMounted(() => { refreshApps() })
   }
 }
 
-/* Phase A: members dialog */
+/* ── Legacy modal (kept for any inline dialogs still using these classes) ── */
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(3, 7, 18, 0.64);
+  background: rgba(11, 27, 63, 0.55);
   backdrop-filter: blur(6px);
   display: flex;
   align-items: center;
@@ -1208,14 +1279,14 @@ onMounted(() => { refreshApps() })
   padding: 28px;
 }
 .modal {
-  background: var(--b-panel);
-  border: 1px solid var(--b-line);
-  border-radius: var(--b-radius-md);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-4, 12px);
   min-width: min(480px, calc(100vw - 32px));
   max-width: min(960px, calc(100vw - 32px));
   max-height: min(86vh, 820px);
   overflow: auto;
-  box-shadow: var(--b-shadow-lg);
+  box-shadow: var(--sh-4);
 }
 .modal-large {
   width: min(960px, calc(100vw - 32px));
@@ -1226,37 +1297,37 @@ onMounted(() => { refreshApps() })
   align-items: center;
   gap: 14px;
   padding: 16px 18px;
-  border-bottom: 1px solid var(--b-line);
+  border-bottom: 1px solid var(--line);
 }
 .modal-header h3 {
   margin: 0;
-  color: var(--b-text);
+  color: var(--text);
   font-size: 16px;
-  font-weight: 750;
+  font-weight: var(--fw-semibold, 600);
 }
 .builder-btn {
   height: 32px;
   padding: 0 12px;
-  border: 1px solid var(--b-line);
-  background: var(--b-bg-sub);
-  color: var(--b-text);
-  border-radius: var(--b-radius-sm);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: var(--r-2, 6px);
   font: inherit;
-  font-size: 12px;
-  font-weight: 650;
+  font-size: 12.5px;
+  font-weight: var(--fw-medium, 500);
   cursor: pointer;
 }
 .builder-btn-primary {
-  background: var(--b-brand);
-  color: #070a12;
-  border-color: var(--b-brand);
+  background: var(--brand);
+  color: var(--text-inverse, #fff);
+  border-color: var(--brand);
 }
 .builder-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-/* --- v2 visual refresh: header + empty state + primary button (Task 6.2). Logic untouched. --- */
+/* ── Page head ────────────────────────────────────────────── */
 .page-head {
   display: flex;
   align-items: flex-end;
@@ -1267,19 +1338,20 @@ onMounted(() => { refreshApps() })
 
 .page-title {
   margin: 0;
-  font-size: 22px;
-  font-weight: 600;
+  font-size: var(--t-h2, 24px);
+  font-weight: var(--fw-bold, 700);
   letter-spacing: -0.02em;
   line-height: 1.2;
-  color: var(--text, var(--b-text));
+  color: var(--text);
 }
 
 .page-subtitle {
   margin: 4px 0 0;
   font-size: 13px;
-  color: var(--text-2, var(--b-text-muted));
+  color: var(--text-3);
 }
 
+/* ── Buttons ──────────────────────────────────────────────── */
 .btn {
   display: inline-flex;
   align-items: center;
@@ -1287,43 +1359,47 @@ onMounted(() => { refreshApps() })
   gap: 6px;
   height: 32px;
   padding: 0 14px;
-  border-radius: 8px;
+  border-radius: var(--r-3, 8px);
   font-family: inherit;
   font-size: 13px;
-  font-weight: 500;
+  font-weight: var(--fw-medium, 500);
   cursor: pointer;
   border: 1px solid transparent;
   background: transparent;
-  color: var(--text, var(--b-text));
-  transition: filter 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+  color: var(--text);
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
 }
 
 .btn-sm {
-  height: 26px;
-  padding: 0 10px;
-  font-size: 12px;
-  border-radius: 6px;
+  height: 28px;
+  padding: 0 12px;
+  font-size: 12.5px;
+  border-radius: var(--r-2, 6px);
 }
 
 .btn-primary {
-  background: var(--brand, #5b5bd6);
-  color: #fff;
+  background: var(--brand);
+  color: var(--text-inverse, #fff);
+  border-color: var(--brand);
 }
 
 .btn-primary:hover {
-  filter: brightness(1.06);
-  box-shadow: 0 6px 16px rgba(91, 91, 214, 0.18);
+  background: var(--brand-hover);
+  border-color: var(--brand-hover);
 }
 
 .btn-secondary {
-  background: var(--surface, var(--b-panel));
-  color: var(--text, var(--b-text));
-  border-color: var(--border, var(--b-line));
+  background: var(--surface);
+  color: var(--text-2);
+  border-color: var(--line);
 }
 
 .btn-secondary:hover {
-  background: var(--b-bg-sub);
-  border-color: var(--b-line-strong);
+  background: var(--brand-soft);
+  border-color: var(--brand-ring);
+  color: var(--brand);
 }
 
 .apps-new-btn {
@@ -1333,12 +1409,76 @@ onMounted(() => { refreshApps() })
 
 .apps-empty-v2 {
   border-style: dashed;
-  border-color: var(--border-strong, var(--b-line-strong));
-  background: var(--surface, var(--b-panel));
-  padding: 32px 24px;
+  border-color: var(--line-strong);
+  background: var(--surface);
+  padding: 36px 24px;
+}
+
+.apps-empty-v2 strong {
+  font-size: 14.5px;
+  font-weight: var(--fw-semibold, 600);
+  color: var(--text);
+}
+
+.apps-empty-v2 > span {
+  color: var(--text-3);
+  font-size: 13px;
+  max-width: 360px;
 }
 
 .apps-empty-cta {
   margin-top: 14px;
+}
+
+/* ── Dark theme polish (rely mostly on v3 token cascade) ──── */
+html[data-theme="dark"] .apps-row:hover,
+html[data-theme="dark"] .apps-row:focus-visible {
+  background: var(--surface-2);
+}
+
+html[data-theme="dark"] .apps-card:hover {
+  border-color: var(--brand-ring);
+}
+
+html[data-theme="dark"] .apps-mini-action:hover {
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+
+/* ── Phase 6 · table density + filter UX tightening (append-only) ──
+   Apps.vue is a div-based custom table (not el-table). We tighten
+   typography rhythm so it matches the el-table density in sibling pages
+   (PlatformTenants / TenantUsers / DbConnections). All changes are
+   visual-only via class selectors that already exist in the template. */
+
+/* Header row — small, semibold, letter-spaced — matches v3 spec for
+   el-table thead th. Original .apps-table-head sets fw-medium 500 +
+   12px; tighten to 11.5px + 600 + letter-spacing 0.02em + uppercase
+   color text-2 so the column labels read as labels, not body. */
+.apps-table-head {
+  font-size: 11.5px;
+  font-weight: var(--fw-semibold, 600);
+  letter-spacing: 0.02em;
+  color: var(--text-2);
+  text-transform: none;
+}
+
+/* Tighter cell padding to match the 10-14px rhythm used by el-table cells.
+   Original .apps-row uses 8px 14px which is already close; just align
+   the head to the same horizontal padding for visual continuity. */
+.apps-table-head {
+  padding-left: 14px;
+  padding-right: 14px;
+}
+
+/* Toolbar tabs row — wrap into a boxed filter-bar style only if the
+   container is .apps-toolbar (already exists). Don't add background
+   chrome (the tabs already sit on the page surface) but tighten the
+   right-side cluster gap rhythm. */
+.apps-toolbar {
+  align-items: center;
+}
+.apps-toolbar-right {
+  gap: 8px;          /* was 10px; matches v3 cluster rhythm */
 }
 </style>

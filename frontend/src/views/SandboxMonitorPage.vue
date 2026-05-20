@@ -49,7 +49,16 @@
           <tbody>
             <tr v-if="!data.sandboxes.length">
               <td :colspan="colspan" class="sb-empty">
-                {{ loading ? '加载中…' : '暂无沙箱' }}
+                <SkeletonCard v-if="loading" :lines="3" with-footer />
+                <EmptyState
+                  v-else
+                  title="暂无沙箱"
+                  desc="还没有任何 Vibe Coding 工作区在运行。去对话里告诉 AI 你要做什么，它会帮你启动。"
+                >
+                  <template #icon>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+                  </template>
+                </EmptyState>
               </td>
             </tr>
             <tr
@@ -125,6 +134,8 @@ import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
+import EmptyState from '@/components/states/EmptyState.vue'
+import SkeletonCard from '@/components/states/SkeletonCard.vue'
 import { useThemeStore } from '@/stores/theme'
 import { sandboxApi, type SandboxInfo, type SandboxListResponse } from '@/api/sandboxes'
 
@@ -304,123 +315,191 @@ watch(autoRefresh, () => {
 </script>
 
 <style scoped>
+/* v3 redesign · 2026-05-20 — visual refresh only, template/script untouched.
+   Preserved (don't change):
+     - WorkbenchShell wrapper + all .sb-* class names
+     - 3-scope (user/tenant/platform) column visibility (API-driven, not UI toggle)
+     - busyMap row disable behaviour
+     - footer semantic note "停止 vs 删除容器"
+     - dark theme rules (re-pointed at v3 tokens; same selector contract)
+   Refreshed:
+     - All hex → v3 tokens (--brand / --surface / --line / --text / --ok / --warn / --err)
+     - Stats numbers 20px → 24px 700 with tnum
+     - running stat colored --ok; stopped goes muted --text-3
+     - Auto-refresh checkbox uses accent-color: var(--brand)
+     - Table head bg --surface-2 + 11.5px 600 letter-spacing
+     - Status pill: 5px left dot (currentColor) + status-tinted soft bg
+     - Workspace cell stacked (--text title + mono --text-3 id)
+     - Port chip --surface-3 + mono 10.5px + r-1
+     - Row actions render as link-style buttons (start/stop = brand; delete = err)
+*/
 .sandbox-page {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
   padding: 24px 28px;
-  gap: 16px;
-  background: var(--t-bg-base, #f6f8fc);
-  color: var(--t-text-primary, #0f172a);
+  gap: 18px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
   overflow: auto;
 }
 
+/* ── Header ─────────────────────────────────────────────────────── */
 .sb-head {
   display: grid;
   grid-template-columns: 1fr auto auto;
   gap: 24px;
   align-items: center;
+  padding: 18px 20px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-4, 12px);
+  box-shadow: var(--sh-1);
 }
+.sb-title { min-width: 0; }
 .sb-title h1 {
-  margin: 4px 0 6px;
-  font-size: 22px;
-  font-weight: 700;
+  margin: 6px 0 4px;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: -0.01em;
 }
 .sb-kicker {
+  display: inline-block;
   font-size: 11px;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.14em;
   font-weight: 700;
-  color: var(--t-brand, #6366f1);
+  color: var(--brand);
+  text-transform: uppercase;
 }
 .sb-desc {
   margin: 0;
-  font-size: 13px;
-  color: var(--t-text-secondary, #526179);
+  font-size: 12.5px;
+  color: var(--text-3);
 }
+
 .sb-stats {
   display: flex;
-  gap: 12px;
+  gap: 10px;
 }
 .sb-stat {
-  border: 1px solid var(--t-border-subtle, rgba(116, 128, 171, 0.16));
-  border-radius: 10px;
-  padding: 10px 18px;
-  background: var(--t-bg-elevated, #fff);
+  min-width: 92px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-3, 8px);
+  padding: 10px 16px;
+  background: var(--surface);
   text-align: center;
 }
 .sb-stat strong {
   display: block;
-  font-size: 20px;
+  font-size: 24px;
   font-weight: 700;
-  color: var(--t-text-primary);
+  color: var(--text);
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
 }
 .sb-stat span {
+  display: block;
+  margin-top: 2px;
   font-size: 11px;
-  color: var(--t-text-muted);
+  color: var(--text-3);
+  letter-spacing: 0.02em;
 }
+/* Stats are rendered in fixed order: running / stopped / total.
+   Color via :nth-child so we keep the template untouched. */
+.sb-stats .sb-stat:nth-child(1) strong { color: var(--ok); }
+.sb-stats .sb-stat:nth-child(2) strong { color: var(--text-3); }
+
 .sb-actions {
   display: flex;
   gap: 10px;
   align-items: center;
 }
 .sb-auto {
-  font-size: 12px;
-  color: var(--t-text-secondary);
+  font-size: 12.5px;
+  color: var(--text-2);
   display: inline-flex;
   align-items: center;
   gap: 6px;
   cursor: pointer;
+  user-select: none;
 }
-.sb-btn {
-  border: 1px solid var(--t-border-subtle, rgba(116, 128, 171, 0.18));
-  border-radius: 8px;
-  padding: 6px 14px;
-  background: var(--t-bg-elevated, #fff);
-  color: var(--t-text-primary);
+.sb-auto input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--brand);
   cursor: pointer;
-  font-size: 13px;
-  font-weight: 600;
-  transition: background 0.15s;
-}
-.sb-btn:hover:not(:disabled) {
-  background: var(--t-bg-soft, rgba(15, 23, 42, 0.06));
-}
-.sb-btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-.sb-btn.sm {
-  padding: 4px 10px;
-  font-size: 12px;
-}
-.sb-btn.danger {
-  color: #b91c1c;
-  border-color: rgba(239, 68, 68, 0.32);
-}
-.sb-btn.danger:hover:not(:disabled) {
-  background: rgba(239, 68, 68, 0.06);
-}
-.sb-btn.primary {
-  color: #15803d;
-  border-color: rgba(34, 197, 94, 0.36);
-}
-.sb-btn.primary:hover:not(:disabled) {
-  background: rgba(34, 197, 94, 0.08);
-}
-.sandbox-page.theme-dark .sb-btn.primary {
-  color: #4ade80;
-  border-color: rgba(34, 197, 94, 0.42);
-}
-.sandbox-page.theme-dark .sb-btn.primary:hover:not(:disabled) {
-  background: rgba(34, 197, 94, 0.10);
 }
 
+/* ── Buttons (header refresh + row actions) ─────────────────────── */
+.sb-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-2, 6px);
+  background: var(--surface);
+  color: var(--text-2);
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 500;
+  font-family: inherit;
+  transition: border-color 0.14s var(--ease),
+              background 0.14s var(--ease),
+              color 0.14s var(--ease);
+}
+.sb-btn:hover:not(:disabled) {
+  color: var(--brand);
+  border-color: var(--brand-ring);
+  background: var(--brand-soft);
+}
+.sb-btn:focus-visible {
+  outline: 2px solid var(--line-focus);
+  outline-offset: 2px;
+}
+.sb-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Row-action buttons render as plain links to keep the table calm. */
+.sb-btn.sm {
+  height: auto;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--brand);
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 0;
+}
+.sb-btn.sm:hover:not(:disabled) {
+  background: transparent;
+  color: var(--brand-hover);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.sb-btn.sm.primary { color: var(--brand); }
+.sb-btn.sm.primary:hover:not(:disabled) { color: var(--brand-hover); }
+.sb-btn.sm.danger { color: var(--err); }
+.sb-btn.sm.danger:hover:not(:disabled) {
+  color: var(--err);
+  opacity: 0.82;
+}
+
+/* ── Table ──────────────────────────────────────────────────────── */
 .sb-table-wrap {
-  border: 1px solid var(--t-border-subtle, rgba(116, 128, 171, 0.16));
-  border-radius: 12px;
-  background: var(--t-bg-elevated, #fff);
+  border: 1px solid var(--line);
+  border-radius: var(--r-4, 12px);
+  background: var(--surface);
   overflow: hidden;
+  box-shadow: var(--sh-1);
 }
 .sb-table {
   width: 100%;
@@ -429,117 +508,183 @@ watch(autoRefresh, () => {
 }
 .sb-table th {
   text-align: left;
-  padding: 10px 14px;
-  background: var(--t-bg-soft, rgba(15, 23, 42, 0.04));
+  padding: 10px 16px;
+  background: var(--surface-2);
   font-weight: 600;
-  color: var(--t-text-secondary);
+  color: var(--text-3);
   font-size: 11.5px;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
-  border-bottom: 1px solid var(--t-border-subtle, rgba(116, 128, 171, 0.14));
+  letter-spacing: 0.06em;
+  border-bottom: 1px solid var(--line);
 }
 .sb-table td {
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--t-border-soft, rgba(116, 128, 171, 0.10));
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
   vertical-align: middle;
+  color: var(--text-2);
 }
-.sb-table tr:last-child td {
-  border-bottom: none;
-}
-.sb-table tr.is-running {
-  background: rgba(34, 197, 94, 0.04);
-}
+.sb-table tr:last-child td { border-bottom: none; }
+.sb-table tr.is-running { background: transparent; }
+.sb-table tbody tr:hover { background: var(--surface-2); }
+
 .sb-empty {
   text-align: center;
-  padding: 48px;
-  color: var(--t-text-muted);
+  padding: 56px 24px;
+  color: var(--text-3);
+  font-size: 13px;
 }
+
+/* Workspace cell — stacked title + mono id */
 .sb-ws-title {
-  font-weight: 600;
-  color: var(--t-brand, #6366f1);
+  font-weight: 500;
+  color: var(--text);
   cursor: pointer;
-  text-decoration: none;
   max-width: 280px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  letter-spacing: -0.005em;
 }
 .sb-ws-title:hover {
-  text-decoration: underline;
+  color: var(--brand);
 }
 .sb-ws-id {
-  font-size: 11px;
-  color: var(--t-text-muted);
-  font-family: ui-monospace, monospace;
+  margin-top: 2px;
+  font-size: 10.5px;
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  letter-spacing: 0;
 }
+
+/* Status pill — 5px left dot in currentColor */
 .sb-status {
-  padding: 2px 10px;
-  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px 3px 9px;
+  border-radius: var(--r-full, 999px);
   font-size: 11.5px;
   font-weight: 600;
+  letter-spacing: 0.01em;
+  line-height: 1.4;
+}
+.sb-status::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
 }
 .sb-status.status-running {
-  background: rgba(34, 197, 94, 0.12);
-  color: #15803d;
+  background: var(--ok-soft);
+  color: var(--ok);
 }
 .sb-status.status-exited,
 .sb-status.status-paused {
-  background: rgba(148, 163, 184, 0.16);
-  color: #475569;
+  background: var(--surface-3);
+  color: var(--text-3);
 }
 .sb-status.status-created {
-  background: rgba(245, 158, 11, 0.16);
-  color: #b45309;
+  background: var(--warn-soft);
+  color: var(--warn);
 }
 .sb-status.status-none {
-  background: rgba(148, 163, 184, 0.10);
-  color: var(--t-text-muted);
+  background: var(--surface-3);
+  color: var(--text-3);
 }
+
+/* Port chips */
 .sb-ports {
   display: inline-flex;
   flex-wrap: wrap;
   gap: 4px;
 }
 .sb-port-chip {
-  font-family: ui-monospace, monospace;
-  font-size: 11px;
-  padding: 1px 6px;
-  border-radius: 4px;
-  background: rgba(99, 102, 241, 0.10);
-  color: var(--t-brand, #6366f1);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  padding: 2px 6px;
+  border-radius: var(--r-1, 4px);
+  background: var(--surface-3);
+  color: var(--text-2);
 }
+
 .sb-time {
   font-size: 12px;
-  color: var(--t-text-secondary);
+  color: var(--text-3);
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 .sb-row-actions {
   display: flex;
-  gap: 6px;
+  gap: 14px;
   flex-wrap: nowrap;
+  align-items: center;
 }
 .sb-muted {
-  color: var(--t-text-muted);
+  color: var(--text-3);
   font-size: 12px;
 }
+
+/* ── Footer ─────────────────────────────────────────────────────── */
 .sb-foot {
   font-size: 11.5px;
-  color: var(--t-text-muted);
+  color: var(--text-3);
+  line-height: 1.6;
+  padding: 0 4px;
 }
 
-/* dark theme */
+/* ── Dark theme overrides (v3 tokens already shift via [data-theme]) ─ */
+.sandbox-page.theme-dark .sb-head,
 .sandbox-page.theme-dark .sb-stat,
-.sandbox-page.theme-dark .sb-btn,
 .sandbox-page.theme-dark .sb-table-wrap {
-  background: #111318;
-  border-color: rgba(148, 163, 184, 0.14);
-  color: rgba(226, 232, 240, 0.86);
+  background: var(--surface);
+  border-color: var(--line);
+}
+.sandbox-page.theme-dark .sb-btn {
+  background: var(--surface);
+  color: var(--text-2);
+  border-color: var(--line);
+}
+.sandbox-page.theme-dark .sb-btn:hover:not(:disabled) {
+  color: var(--brand);
+  background: var(--brand-soft);
+  border-color: var(--brand-ring);
 }
 .sandbox-page.theme-dark .sb-table th {
-  background: rgba(255, 255, 255, 0.04);
-  color: rgba(226, 232, 240, 0.7);
+  background: var(--surface-2);
+  color: var(--text-3);
+}
+.sandbox-page.theme-dark .sb-table tbody tr:hover {
+  background: var(--surface-2);
 }
 .sandbox-page.theme-dark .sb-table tr.is-running {
-  background: rgba(34, 197, 94, 0.06);
+  background: transparent;
+}
+
+/* ── Phase 6 · table density + filter UX tightening (append-only) ──
+   .sb-table is a native HTML <table>, already styled by the block
+   above. This block adds the missing density nuances:
+   - sticky thead (works because .sb-table-wrap has overflow: hidden
+     but the table itself can scroll within a parent .sandbox-page)
+   - thead th letter-spacing slightly tighter (0.04em was a bit airy)
+   - row vertical padding align with el-table (10/12 px)
+   - cell-level transition for hover smoothness */
+
+.sb-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface-2);
+  letter-spacing: 0.04em;        /* keep readable, was 0.06 */
+}
+.sb-table tbody tr {
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+
+/* Dark variant of sticky thead — must repeat the bg because position
+   sticky elements need an explicit bg to cover scrolled rows. */
+.sandbox-page.theme-dark .sb-table thead th {
+  background: var(--surface-2);
 }
 </style>

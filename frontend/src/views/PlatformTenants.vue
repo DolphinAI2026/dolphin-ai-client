@@ -80,6 +80,23 @@
           @row-click="onRowClick"
           highlight-current-row
         >
+          <template #empty>
+            <EmptyState
+              :variant="(filterQ || filterStatus !== null) ? 'filtered' : 'first'"
+              :title="(filterQ || filterStatus !== null) ? '没有匹配的租户' : '还没有租户'"
+              :desc="(filterQ || filterStatus !== null) ? '换个关键词，或清空筛选条件查看全部。' : '新建第一个租户，开始为客户/业务部门做配额隔离。'"
+            >
+              <template #icon>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M5 21V7l8-4v18"/><path d="M19 21V11l-6-4"/><path d="M9 9v.01"/><path d="M9 12v.01"/><path d="M9 15v.01"/></svg>
+              </template>
+              <template v-if="filterQ || filterStatus !== null" #cta>
+                <el-button @click="() => { filterQ = ''; filterStatus = null; load() }">清空筛选</el-button>
+              </template>
+              <template v-else #cta>
+                <el-button type="primary" @click="openCreate">新建租户</el-button>
+              </template>
+            </EmptyState>
+          </template>
           <el-table-column prop="tenant_name" label="租户名称" min-width="180" />
           <el-table-column prop="tenant_code" label="租户编码" min-width="160">
             <template #default="{ row }">
@@ -322,6 +339,7 @@
 import { onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import BuilderFrame from '@/components/BuilderFrame.vue'
+import EmptyState from '@/components/states/EmptyState.vue'
 import { computed } from 'vue'
 import {
   authApi,
@@ -685,25 +703,41 @@ onMounted(() => {
 </script>
 
 <style scoped>
+/* v3 redesign · 2026-05-20 — visual refresh only.
+   Preserved: template (BuilderFrame + el-table + dialogs + drawer), script (CRUD/dashboard).
+   Refreshed: dashboard cards, near-limit banner, filter-bar, table chrome via :deep,
+              tenant-code mono-pill, role-pill / member-platform / member-default
+              to v3 tokens. el-table structure not touched — only stripe / hover /
+              header / border colors via Element CSS vars. */
+
 .platform-tenants-page {
   padding: 24px;
+  font-family: var(--font-sans);
+  color: var(--text);
 }
+
 .platform-tenants-header {
   display: flex;
   justify-content: space-between;
   align-items: flex-end;
-  margin-bottom: 16px;
+  margin-bottom: 20px;
 }
 .platform-tenants-header h1 {
-  font-size: 20px;
-  font-weight: 600;
+  font-size: var(--t-h2);          /* 24px */
+  font-weight: var(--fw-bold);
+  letter-spacing: -0.02em;
+  color: var(--text);
   margin: 0 0 6px;
 }
 .platform-tenants-header p {
-  color: var(--t-text-muted);
-  font-size: 13px;
+  color: var(--text-3);
+  font-size: 13.5px;
+  line-height: 1.55;
   margin: 0;
+  max-width: 720px;
 }
+
+/* ── Dashboard 5-card grid ───────────────────────────────────── */
 .dashboard-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -711,96 +745,173 @@ onMounted(() => {
   margin-bottom: 16px;
 }
 .dashboard-card {
-  background: var(--t-bg-panel);
-  border: 1px solid var(--t-border-subtle);
-  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-4);
   padding: 14px 16px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
+  transition: border-color 0.16s var(--ease), box-shadow 0.16s var(--ease);
+}
+.dashboard-card:hover {
+  border-color: var(--brand-ring);
+  box-shadow: var(--sh-2);
 }
 .dashboard-card-label {
-  font-size: 12px;
-  color: var(--t-text-muted);
+  font-size: 11.5px;
+  color: var(--text-3);
   text-transform: uppercase;
   letter-spacing: 0.04em;
+  font-weight: var(--fw-medium);
 }
 .dashboard-card-value {
-  font-size: 22px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  color: var(--t-text-primary);
+  font-size: 24px;
+  font-weight: var(--fw-bold);
+  letter-spacing: -0.02em;
+  font-feature-settings: 'tnum';
+  color: var(--text);
 }
 .dashboard-card-suffix {
   font-size: 13px;
-  font-weight: 400;
-  color: var(--t-text-muted);
+  font-weight: var(--fw-regular);
+  color: var(--text-3);
   margin-left: 4px;
 }
 
+/* ── Near-limit banner (warn soft) ───────────────────────────── */
 .near-limit-banner {
   margin-bottom: 16px;
   padding: 10px 14px;
-  background: rgba(240, 160, 32, 0.1);
-  border: 1px solid rgba(240, 160, 32, 0.4);
-  border-radius: 8px;
+  background: var(--warn-soft);
+  border: 1px solid var(--warn);
+  border-radius: var(--r-3);
   font-size: 13px;
-  color: var(--t-text-primary);
+  color: var(--text);
+  line-height: 1.55;
 }
+.near-limit-banner strong { color: var(--warn); font-weight: var(--fw-semibold); }
 .near-limit-link {
-  color: #c47c00;
+  color: var(--warn);
   cursor: pointer;
   text-decoration: underline;
+  text-underline-offset: 2px;
+  font-weight: var(--fw-medium);
 }
-.near-limit-link:hover { color: #d33; }
+.near-limit-link:hover { color: var(--err); }
 
+/* ── Filter bar — boxed surface card per design spec ─────────── */
 .filter-bar {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 12px;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-4);
 }
 
+/* ── Table panel ─────────────────────────────────────────────── */
 .platform-tenants-panel {
-  background: var(--t-bg-panel);
-  border: 1px solid var(--t-border-subtle);
-  border-radius: 10px;
-  padding: 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-4);
+  overflow: hidden;
 }
-.tenant-code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 12px;
-  background: var(--t-bg-input);
-  padding: 2px 6px;
-  border-radius: 4px;
-  color: var(--t-text-secondary);
-}
-.tenant-email { color: var(--t-text-muted); font-size: 12px; }
-.tenant-muted { color: var(--t-text-muted); }
-.quota-cell {
-  font-variant-numeric: tabular-nums;
+
+/* Element Plus table — only override colors via CSS vars,
+   don't change structure (cell padding, fixed-col, row hover model). */
+.platform-tenants-panel :deep(.el-table) {
+  --el-table-header-bg-color: var(--surface-2);
+  --el-table-header-text-color: var(--text-2);
+  --el-table-bg-color: var(--surface);
+  --el-table-tr-bg-color: var(--surface);
+  --el-table-row-hover-bg-color: var(--surface-2);
+  --el-table-current-row-bg-color: var(--brand-soft);
+  --el-table-border-color: var(--line);
+  --el-table-text-color: var(--text);
+  background: var(--surface);
   font-size: 13px;
+  color: var(--text);
+}
+.platform-tenants-panel :deep(.el-table th.el-table__cell) {
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-weight: var(--fw-semibold);
+  font-size: 11.5px;
+  letter-spacing: 0.02em;
+  border-bottom: 1px solid var(--line);
+}
+.platform-tenants-panel :deep(.el-table td.el-table__cell) {
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
+}
+/* Kill default stripe — spec uses no zebra */
+.platform-tenants-panel :deep(.el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell) {
+  background: var(--surface);
+}
+.platform-tenants-panel :deep(.el-table__body tr:hover > td.el-table__cell) {
+  background: var(--surface-2);
+}
+
+/* Table action buttons — link style, no chrome */
+.platform-tenants-panel :deep(.el-button.is-link) {
+  color: var(--brand);
+  font-weight: var(--fw-medium);
+  font-size: 12px;
+}
+.platform-tenants-panel :deep(.el-button.is-link:hover) {
+  color: var(--brand-hover);
+}
+.platform-tenants-panel :deep(.el-button.is-link.el-button--danger) {
+  color: var(--err);
+}
+.platform-tenants-panel :deep(.el-button.is-link.el-button--danger:hover) {
+  color: var(--err);
+  opacity: 0.85;
+}
+
+/* Tenant code cell — mono mini-pill */
+.tenant-code {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  background: var(--surface-3);
+  padding: 2px 6px;
+  border-radius: var(--r-1);
+  color: var(--text-2);
+}
+.tenant-email { color: var(--text-3); font-size: 12px; }
+.tenant-muted { color: var(--text-4); }
+
+.quota-cell {
+  font-family: var(--font-mono);
+  font-feature-settings: 'tnum';
+  font-size: 12px;
+  color: var(--text);
 }
 .quota-sep {
-  color: var(--t-text-muted);
-  margin: 0 2px;
+  color: var(--text-4);
+  margin: 0 3px;
 }
 
+/* ── Detail drawer ──────────────────────────────────────────── */
 .tenant-detail {
   padding: 0 8px 16px;
+  font-family: var(--font-sans);
+  color: var(--text);
 }
-.detail-section {
-  margin-bottom: 24px;
-}
+.detail-section { margin-bottom: 24px; }
 .detail-section h4 {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--t-text-secondary);
+  font-size: 11.5px;
+  font-weight: var(--fw-semibold);
+  color: var(--text-2);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   margin: 0 0 12px;
   padding-bottom: 8px;
-  border-bottom: 1px solid var(--t-border-subtle);
+  border-bottom: 1px solid var(--line);
 }
 .usage-grid {
   display: flex;
@@ -814,8 +925,12 @@ onMounted(() => {
   font-size: 13px;
   padding: 4px 0;
 }
-.usage-label { color: var(--t-text-secondary); }
-.usage-value { font-weight: 500; }
+.usage-label { color: var(--text-2); }
+.usage-value {
+  font-weight: var(--fw-semibold);
+  color: var(--text);
+  font-feature-settings: 'tnum';
+}
 .detail-dl {
   display: grid;
   grid-template-columns: 92px 1fr;
@@ -823,22 +938,14 @@ onMounted(() => {
   font-size: 13px;
   margin: 0;
 }
-.detail-dl dt {
-  color: var(--t-text-muted);
-}
-.detail-dl dd {
-  margin: 0;
-  color: var(--t-text-primary);
-}
-.detail-muted {
-  color: var(--t-text-muted);
-  font-size: 13px;
-}
+.detail-dl dt { color: var(--text-3); }
+.detail-dl dd { margin: 0; color: var(--text); }
+.detail-muted { color: var(--text-3); font-size: 13px; }
 .detail-section-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  border-bottom: 1px solid var(--t-border-subtle);
+  border-bottom: 1px solid var(--line);
   margin-bottom: 12px;
   padding-bottom: 8px;
 }
@@ -846,13 +953,14 @@ onMounted(() => {
   margin: 0;
   border: 0;
   padding: 0;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--t-text-secondary);
+  font-size: 11.5px;
+  font-weight: var(--fw-semibold);
+  color: var(--text-2);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
 
+/* ── Member list (inside detail drawer) ──────────────────────── */
 .member-list {
   list-style: none;
   margin: 0;
@@ -865,7 +973,7 @@ onMounted(() => {
   justify-content: space-between;
   align-items: center;
   padding: 10px 0;
-  border-bottom: 1px solid var(--t-border-subtle);
+  border-bottom: 1px solid var(--line);
 }
 .member-row:last-child { border-bottom: 0; }
 .member-info {
@@ -875,23 +983,27 @@ onMounted(() => {
 }
 .member-username {
   font-size: 13px;
-  font-weight: 500;
-  color: var(--t-text-primary);
+  font-weight: var(--fw-medium);
+  color: var(--text);
 }
 .member-meta {
   display: flex;
   gap: 6px;
   align-items: center;
   font-size: 12px;
-  color: var(--t-text-muted);
+  color: var(--text-3);
 }
 .member-platform {
-  font-weight: 500;
-  color: #f0a020;
+  display: inline-flex;
+  padding: 2px 7px;
+  border-radius: var(--r-1);
+  font-size: 11px;
+  font-weight: var(--fw-semibold);
+  background: var(--err-soft);
+  color: var(--err);
+  letter-spacing: 0.02em;
 }
-.member-inactive {
-  color: #d33;
-}
+.member-inactive { color: var(--err); font-weight: var(--fw-medium); }
 .member-actions {
   display: flex;
   align-items: center;
@@ -901,16 +1013,59 @@ onMounted(() => {
   display: inline-block;
   margin-left: 4px;
   font-size: 10px;
-  font-weight: 500;
-  color: #4f46e5;
-  background: rgba(79, 70, 229, 0.1);
+  font-weight: var(--fw-semibold);
+  color: var(--brand);
+  background: var(--brand-soft);
   padding: 1px 6px;
-  border-radius: 8px;
+  border-radius: var(--r-1);
   vertical-align: middle;
+  letter-spacing: 0.02em;
 }
 .form-hint {
   margin-top: 4px;
   font-size: 12px;
-  color: var(--t-text-muted);
+  color: var(--text-3);
+  line-height: 1.5;
+}
+
+/* ── Phase 6 · table density + filter UX tightening (append-only) ──
+   Adds the visual nuances missing from the initial Phase 4 :deep block:
+   - thead th padding 10px 14px (tighter, label-feel)
+   - cell horizontal padding 14px
+   - link button font-size 12.5 (was 12)
+   - filter-bar summary count anchored right (margin-left: auto)
+   No existing rule is rewritten; everything here adds new property
+   declarations that take effect via natural cascade order. */
+
+.platform-tenants-panel :deep(.el-table thead th.el-table__cell) {
+  padding: 10px 14px;
+}
+.platform-tenants-panel :deep(.el-table .cell) {
+  padding-left: 14px;
+  padding-right: 14px;
+}
+.platform-tenants-panel :deep(.el-table .el-button.is-link) {
+  font-size: 12.5px;
+}
+
+/* Sticky thead — only takes effect when el-table has height/max-height
+   set (this template doesn't, so it's a no-op safety net for future
+   height additions). Safe to keep as it does nothing without scroll. */
+.platform-tenants-panel :deep(.el-table--scrollable-y .el-table__header-wrapper),
+.platform-tenants-panel :deep(.el-table--scrollable-x .el-table__header-wrapper) {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface-2);
+}
+
+/* Filter bar — summary count anchored right (template doesn't have one
+   today, but if a future .filter-summary span is added it'll auto-right).
+   Also bump radius from r-4 to keep consistent with Apps.vue toolbar. */
+.filter-bar .filter-summary {
+  margin-left: auto;
+  color: var(--text-3);
+  font-size: 12px;
+  font-feature-settings: 'tnum';
 }
 </style>

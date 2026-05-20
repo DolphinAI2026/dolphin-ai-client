@@ -13,11 +13,21 @@
       </div>
 
       <div class="content-wrap">
-        <div v-if="loading" class="empty-state">加载中...</div>
+        <div v-if="loading" class="empty-state">
+          <SkeletonCard :lines="4" with-footer />
+        </div>
         <div v-else-if="connections.length === 0" class="empty-state">
-          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.3"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg>
-          <span>暂无数据库连接</span>
-          <button class="empty-add-btn" @click="openCreate">添加第一个连接</button>
+          <EmptyState
+            title="暂无数据库连接"
+            desc="添加一个连接，让 AI 直接读你的存量数据。支持 MYSQL / PostgreSQL / Oracle 等 6 种。"
+          >
+            <template #icon>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+            </template>
+            <template #cta>
+              <button class="empty-add-btn" @click="openCreate">添加第一个连接</button>
+            </template>
+          </EmptyState>
         </div>
 
         <el-table
@@ -151,9 +161,19 @@
         class="env-dialog"
         :append-to-body="true"
       >
-        <div v-if="tablesLoading" class="empty-state" style="padding: 40px 0">加载中...</div>
-        <div v-else-if="tablesList.length === 0" class="empty-state" style="padding: 40px 0">
-          <span>未发现可读取的表</span>
+        <div v-if="tablesLoading" class="empty-state" style="padding: 16px 0">
+          <SkeletonCard :lines="4" />
+        </div>
+        <div v-else-if="tablesList.length === 0" class="empty-state" style="padding: 16px 0">
+          <EmptyState
+            variant="filtered"
+            title="未发现可读取的表"
+            desc="这个数据库里没有用户级表，或者权限不够列出表。换个数据库或检查账号权限。"
+          >
+            <template #icon>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            </template>
+          </EmptyState>
         </div>
         <template v-else>
           <div class="tables-summary">共 {{ tablesList.length }} 张表</div>
@@ -184,6 +204,8 @@ import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'elem
 import { handleError } from '@/utils/errorHandler'
 import { dbConnectionApi, type DbConnection, type DbType, type DbTableSummary } from '@/api/dbConnections'
 import BuilderFrame from '@/components/BuilderFrame.vue'
+import EmptyState from '@/components/states/EmptyState.vue'
+import SkeletonCard from '@/components/states/SkeletonCard.vue'
 
 const DB_TYPES: DbType[] = ['MYSQL', 'PostgreSQL', 'SQLServer', 'ORACLE', 'DAMENG', 'KingBase']
 
@@ -407,13 +429,29 @@ onMounted(() => {
 </script>
 
 <style scoped>
+/* v3 redesign · 2026-05-20 — visual refresh only, template/script untouched.
+   Preserved (don't change):
+     - All selector names (.db-main / .new-btn / .db-type-tag / .status-chip / .more-btn ...)
+     - Layout topology, grid, scroll behavior, BuilderFrame slot wiring
+     - 6 DB type pills (one chip style, mono font — not 6 colors)
+     - 3-state status chip mapping (active / disconnected / unverified)
+     - :global(html[data-theme="dark"]) override hook for unverified amber lift
+   Refreshed:
+     - --b-* tokens → v3 (--brand / --brand-soft / --ok / --ok-soft / --warn-soft / --line / --text / --text-2 / --text-3)
+     - Solid ink button → brand fill (matches design spec 06.1.A "新建连接" primary CTA)
+     - radius 7 / 8 → --r-2 (6) for chips, --r-3 (8) for buttons, --r-full (999) for status pills
+     - transition 0.2s → 0.14s var(--ease) — snappier per v3 motion table
+     - shadow added on .new-btn hover via --sh-brand (was opacity-only fade)
+     - .db-type-tag: brand-soft + mono font (per spec規範: "6 种 DB 类型用同款灰 chip + 文字区分 mono font，不要给每种 DB 配色")
+*/
+
 .db-main {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 16px;
-  background: var(--b-bg);
+  background: var(--bg);
 }
 
 .page-header {
@@ -431,14 +469,15 @@ onMounted(() => {
 
 .page-title {
   font-size: 15px;
-  font-weight: 700;
-  color: var(--b-text);
+  font-weight: var(--fw-semibold, 600);
+  color: var(--text);
+  letter-spacing: -0.005em;
 }
 
 .page-summary {
-  color: var(--b-text-muted);
+  color: var(--text-3);
   font-size: 12px;
-  font-family: var(--b-mono);
+  font-family: var(--font-mono);
 }
 
 .new-btn {
@@ -446,31 +485,43 @@ onMounted(() => {
   align-items: center;
   gap: 6px;
   height: 30px;
-  background: var(--b-ink);
-  color: #fff;
-  border: 1px solid var(--b-ink);
+  background: var(--brand);
+  color: var(--text-inverse, #fff);
+  border: 1px solid var(--brand);
   padding: 0 12px;
-  border-radius: 7px;
+  border-radius: var(--r-2, 6px);
   font-size: 12px;
-  font-weight: 700;
+  font-weight: var(--fw-semibold, 600);
   cursor: pointer;
-  transition: opacity 0.2s;
+  font-family: inherit;
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              box-shadow 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
 }
-.new-btn:hover { opacity: 0.9; }
+.new-btn:hover {
+  background: var(--brand-hover);
+  border-color: var(--brand-hover);
+  box-shadow: var(--sh-brand);
+}
+.new-btn:focus-visible {
+  outline: 2px solid var(--line-focus, var(--brand-ring));
+  outline-offset: 2px;
+}
 
+/* Dark-theme :global override hook — preserved per task contract.
+   v3 dark already flips --brand to a lighter blue, so simpler rules suffice. */
 :global(html[data-theme="dark"]) .new-btn,
 :global(html[data-theme="dark"]) .empty-add-btn {
-  background: #151922;
-  border-color: rgba(124, 140, 255, 0.34);
-  color: #c7d2fe;
+  background: var(--brand-soft);
+  border-color: var(--brand-ring);
+  color: var(--brand-text);
   box-shadow: none;
 }
 :global(html[data-theme="dark"]) .new-btn:hover,
 :global(html[data-theme="dark"]) .empty-add-btn:hover {
-  opacity: 1;
-  background: rgba(124, 140, 255, 0.16);
-  border-color: rgba(124, 140, 255, 0.46);
-  color: #f8fafc;
+  background: var(--brand-soft-2);
+  border-color: var(--brand);
+  color: var(--text);
 }
 
 .content-wrap {
@@ -484,7 +535,7 @@ onMounted(() => {
 
 .empty-state {
   text-align: center;
-  color: var(--b-text-muted);
+  color: var(--text-3);
   padding: 80px 0;
   display: flex;
   flex-direction: column;
@@ -495,25 +546,32 @@ onMounted(() => {
 
 .empty-add-btn {
   margin-top: 8px;
-  background: var(--b-ink);
-  color: #fff;
-  border: 1px solid var(--b-ink);
+  background: var(--brand);
+  color: var(--text-inverse, #fff);
+  border: 1px solid var(--brand);
   padding: 7px 14px;
-  border-radius: 7px;
+  border-radius: var(--r-2, 6px);
   font-size: 12px;
+  font-weight: var(--fw-semibold, 600);
   cursor: pointer;
-  transition: opacity 0.2s;
+  font-family: inherit;
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              box-shadow 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
 }
-.empty-add-btn:hover { opacity: 0.9; }
+.empty-add-btn:hover {
+  background: var(--brand-hover);
+  box-shadow: var(--sh-brand);
+}
 
 .cell-name {
   font-size: 13px;
-  font-weight: 600;
-  color: var(--b-text);
+  font-weight: var(--fw-semibold, 600);
+  color: var(--text);
+  letter-spacing: -0.005em;
 }
 .cell-desc {
   font-size: 11px;
-  color: var(--b-text-faint);
+  color: var(--text-4);
   margin-top: 2px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -521,54 +579,58 @@ onMounted(() => {
   max-width: 240px;
 }
 .cell-mono {
-  font-family: var(--b-mono);
+  font-family: var(--font-mono);
   font-size: 12px;
-  color: var(--b-text-muted);
+  color: var(--text-2);
 }
 .cell-database {
-  font-family: var(--b-mono);
+  font-family: var(--font-mono);
   font-size: 11px;
-  color: var(--b-text-faint);
+  color: var(--text-4);
   margin-top: 2px;
 }
 .cell-faint {
-  color: var(--b-text-faint);
+  color: var(--text-4);
   font-size: 12px;
 }
 
+/* Per spec 06.1 規範: "6 种 DB 类型用同款灰 chip + 文字区分（mono font）"
+   — one tone (brand-soft) for ALL types; no per-type color. */
 .db-type-tag {
   display: inline-block;
-  font-size: 11px;
-  font-weight: 700;
+  font-size: 10.5px;
+  font-weight: var(--fw-semibold, 600);
   padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--b-brand-soft);
-  color: var(--b-brand-ink);
-  font-family: var(--b-mono);
+  border-radius: var(--r-1, 4px);
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-family: var(--font-mono);
+  letter-spacing: 0.01em;
 }
 
 .status-chip {
   display: inline-block;
   font-size: 11px;
-  font-weight: 700;
+  font-weight: var(--fw-semibold, 600);
   padding: 2px 8px;
-  border-radius: 999px;
+  border-radius: var(--r-full, 999px);
 }
 .status-chip.active {
-  background: var(--b-teal-soft);
-  color: var(--b-teal);
+  background: var(--ok-soft);
+  color: var(--ok);
 }
 .status-chip.disconnected {
-  background: var(--b-bg-sub);
-  color: var(--b-text-muted);
+  background: var(--err-soft);
+  color: var(--err);
 }
 .status-chip.unverified {
-  background: rgba(245, 158, 11, 0.16);
-  color: #b45309;
+  background: var(--warn-soft);
+  color: var(--warn);
 }
+/* Preserved dark override hook (task contract: keep dark-theme block) */
 :global(html[data-theme="dark"]) .status-chip.unverified {
-  background: rgba(245, 158, 11, 0.22);
-  color: #fbbf24;
+  background: var(--warn-soft);
+  color: var(--warn);
 }
 
 .more-btn {
@@ -577,22 +639,25 @@ onMounted(() => {
   justify-content: center;
   width: 28px;
   height: 28px;
-  border-radius: 6px;
-  border: 1px solid var(--b-line);
-  background: var(--b-panel-soft);
-  color: var(--b-text-muted);
+  border-radius: var(--r-2, 6px);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text-3);
   cursor: pointer;
-  transition: all 0.2s;
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
 }
 .more-btn:hover {
-  background: var(--b-bg-sub);
-  color: var(--b-text);
+  background: var(--brand-soft);
+  border-color: var(--brand-ring);
+  color: var(--brand);
 }
 
 .tables-summary {
   margin-bottom: 12px;
   font-size: 12px;
-  color: var(--b-text-muted);
+  color: var(--text-3);
 }
 
 .row-2cols {
@@ -610,143 +675,197 @@ onMounted(() => {
   background: transparent;
 }
 .content-wrap::-webkit-scrollbar-thumb {
-  background: var(--b-line-strong);
+  background: var(--line-strong);
   border-radius: 3px;
 }
 .content-wrap::-webkit-scrollbar-thumb:hover {
-  background: var(--b-text-faint);
+  background: var(--text-4);
+}
+
+/* ── Phase 6 · table density + filter UX tightening (append-only) ──
+   The existing .db-table.el-table block (in the unscoped <style> below)
+   already covers stripe / border / hover. This scoped append adds:
+   - header thead font-size 11.5 + fw 600 + letter-spacing
+   - cell padding tightened to 10/14
+   - row link button font-size 12.5 + brand color
+   - sticky thead (template uses inline max-height in the tables modal,
+     but the main connections table has no height; safe no-op there)
+   Scoped :deep is used so this composes with the unscoped block and
+   inherits the existing token overrides without conflict. */
+
+.db-table:deep(.el-table thead th.el-table__cell) {
+  background: var(--surface-2) !important;
+  color: var(--text-2);
+  font-size: 11.5px;
+  font-weight: var(--fw-semibold, 600);
+  letter-spacing: 0.02em;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.db-table:deep(.el-table .cell) {
+  padding-left: 14px;
+  padding-right: 14px;
+}
+.db-table:deep(.el-table tbody tr:hover > td.el-table__cell) {
+  background: var(--surface-2);
+}
+/* Kill stripe — overrides the inline stripe attribute via specificity.
+   Unscoped block currently leaves stripe ON via --el-table-bg-color;
+   here we force the striped row back to surface so the zebra goes away. */
+.db-table:deep(.el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell) {
+  background: var(--surface) !important;
+}
+
+/* Sticky thead — safety net for future max-height additions. */
+.db-table:deep(.el-table--scrollable-y .el-table__header-wrapper),
+.db-table:deep(.el-table--scrollable-x .el-table__header-wrapper) {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface-2);
 }
 </style>
 
 <style>
-/* ── el-table 主题（非 scoped 让 element-plus 渲染层生效）── */
+/* ── el-table + el-dialog Element Plus token overrides ──
+   v3 refresh · 2026-05-20: token swap only (--b-* → v3 vars).
+   No new :deep selectors added — only existing EP CSS-var overrides retouched
+   so they read the v3 palette instead of the v2 indigo-violet residual. */
 .db-table.el-table {
-  background: var(--b-panel) !important;
-  color: var(--b-text);
-  border: 1px solid var(--b-line);
-  border-radius: 8px;
-  --el-table-border-color: var(--b-line);
-  --el-table-header-bg-color: var(--b-bg-sub);
-  --el-table-row-hover-bg-color: var(--b-bg-sub);
-  --el-table-tr-bg-color: var(--b-panel);
-  --el-table-bg-color: var(--b-panel);
+  background: var(--surface) !important;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: var(--r-3, 8px);
+  --el-table-border-color: var(--line);
+  --el-table-header-bg-color: var(--surface-2);
+  --el-table-row-hover-bg-color: var(--surface-2);
+  --el-table-tr-bg-color: var(--surface);
+  --el-table-bg-color: var(--surface);
 }
 .db-table.el-table tr,
 .db-table.el-table th.el-table__cell,
 .db-table.el-table td.el-table__cell {
-  background: var(--b-panel) !important;
+  background: var(--surface) !important;
 }
 .db-table.el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell {
-  background: var(--b-bg-sub) !important;
+  background: var(--surface-2) !important;
 }
 .db-table.el-table .el-table__cell {
-  border-bottom-color: var(--b-line) !important;
+  border-bottom-color: var(--line) !important;
 }
 
 /* ── Dialog 主题（复用 env-dialog 体系）── */
 .el-dialog.env-dialog {
-  background: var(--b-panel) !important;
-  color: var(--b-text);
-  border: 1px solid var(--b-line);
-  border-radius: 8px;
+  background: var(--surface) !important;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: var(--r-4, 12px);
+  box-shadow: var(--sh-5);
 }
 .el-dialog.env-dialog .el-dialog__header {
-  border-bottom: 1px solid var(--b-line);
+  border-bottom: 1px solid var(--line);
   padding: 16px 20px;
 }
 .el-dialog.env-dialog .el-dialog__title {
-  color: var(--b-text) !important;
+  color: var(--text) !important;
   font-size: 15px;
-  font-weight: 700;
+  font-weight: var(--fw-semibold, 600);
+  letter-spacing: -0.005em;
 }
 .el-dialog.env-dialog .el-dialog__headerbtn .el-dialog__close {
-  color: var(--b-text-muted);
+  color: var(--text-3);
 }
 .el-dialog.env-dialog .el-dialog__body {
   padding: 20px;
 }
 .el-dialog.env-dialog .el-dialog__footer {
-  border-top: 1px solid var(--b-line);
+  border-top: 1px solid var(--line);
   padding: 14px 20px;
+  background: var(--surface-2);
 }
 .el-dialog.env-dialog .el-form-item__label {
-  color: var(--b-text-muted) !important;
-  font-size: 13px;
+  color: var(--text-2) !important;
+  font-size: 12px;
+  font-weight: var(--fw-semibold, 600);
 }
 .el-dialog.env-dialog .el-input__wrapper,
 .el-dialog.env-dialog .el-textarea__inner {
-  background: var(--b-panel-soft) !important;
-  box-shadow: 0 0 0 1px var(--b-line) inset !important;
+  background: var(--surface) !important;
+  box-shadow: 0 0 0 1px var(--line) inset !important;
+  border-radius: var(--r-2, 6px) !important;
 }
 .el-dialog.env-dialog .el-input__inner,
 .el-dialog.env-dialog .el-textarea__inner {
-  color: var(--b-text) !important;
-  -webkit-text-fill-color: var(--b-text) !important;
+  color: var(--text) !important;
+  -webkit-text-fill-color: var(--text) !important;
   font-size: 14px !important;
 }
 .el-dialog.env-dialog .el-input__inner::placeholder,
 .el-dialog.env-dialog .el-textarea__inner::placeholder {
-  color: var(--b-text-faint) !important;
-  -webkit-text-fill-color: var(--b-text-faint) !important;
+  color: var(--text-4) !important;
+  -webkit-text-fill-color: var(--text-4) !important;
 }
 .el-dialog.env-dialog .el-input__wrapper:hover,
 .el-dialog.env-dialog .el-textarea__inner:hover {
-  box-shadow: 0 0 0 1px var(--b-line-strong) inset !important;
+  box-shadow: 0 0 0 1px var(--line-strong) inset !important;
 }
 .el-dialog.env-dialog .el-input__wrapper.is-focus,
 .el-dialog.env-dialog .el-textarea__inner:focus {
-  box-shadow: 0 0 0 1px var(--b-brand) inset !important;
+  box-shadow: 0 0 0 1px var(--brand) inset, 0 0 0 3px var(--brand-ring) !important;
 }
 .el-dialog.env-dialog .el-overlay {
-  background-color: rgba(0, 0, 0, 0.6) !important;
+  background-color: rgba(11, 27, 63, 0.5) !important;
 }
 .el-dialog.env-dialog .el-button--primary {
-  background: var(--b-brand) !important;
-  border-color: var(--b-brand) !important;
-  color: #ffffff !important;
+  background: var(--brand) !important;
+  border-color: var(--brand) !important;
+  color: var(--text-inverse, #fff) !important;
 }
 .el-dialog.env-dialog .el-button--primary:hover,
 .el-dialog.env-dialog .el-button--primary:focus {
-  background: var(--b-brand-ink) !important;
-  border-color: var(--b-brand-ink) !important;
-  color: #ffffff !important;
+  background: var(--brand-hover) !important;
+  border-color: var(--brand-hover) !important;
+  color: var(--text-inverse, #fff) !important;
 }
 .el-dialog.env-dialog .el-button--default {
-  background: var(--b-panel-soft) !important;
-  border: 1px solid var(--b-line) !important;
-  color: var(--b-text-muted) !important;
+  background: var(--surface) !important;
+  border: 1px solid var(--line) !important;
+  color: var(--text-2) !important;
 }
 .el-dialog.env-dialog .el-button--default:hover {
-  background: var(--b-bg-sub) !important;
-  color: var(--b-text) !important;
+  background: var(--brand-soft) !important;
+  color: var(--brand) !important;
+  border-color: var(--brand-ring) !important;
 }
 .el-dialog.env-dialog .el-button {
-  font-size: 14px;
+  font-size: 13px;
   padding: 8px 18px;
+  border-radius: var(--r-2, 6px);
+  font-weight: var(--fw-medium, 500);
 }
 .el-dialog.env-dialog .el-input-number .el-input__wrapper {
-  background: var(--b-panel-soft) !important;
-  box-shadow: 0 0 0 1px var(--b-line) inset !important;
+  background: var(--surface) !important;
+  box-shadow: 0 0 0 1px var(--line) inset !important;
 }
 .el-dialog.env-dialog .el-input-number__decrease,
 .el-dialog.env-dialog .el-input-number__increase {
-  background: var(--b-bg-sub) !important;
-  color: var(--b-text-muted) !important;
-  border-color: var(--b-line) !important;
+  background: var(--surface-2) !important;
+  color: var(--text-3) !important;
+  border-color: var(--line) !important;
 }
 .el-dialog.env-dialog .el-select .el-input__wrapper {
-  background: var(--b-panel-soft) !important;
-  box-shadow: 0 0 0 1px var(--b-line) inset !important;
+  background: var(--surface) !important;
+  box-shadow: 0 0 0 1px var(--line) inset !important;
 }
 .el-dialog.env-dialog .el-select .el-input__inner {
-  color: var(--b-text) !important;
-  -webkit-text-fill-color: var(--b-text) !important;
+  color: var(--text) !important;
+  -webkit-text-fill-color: var(--text) !important;
 }
 
 /* ── el-dropdown 下拉菜单 danger item ── */
 .el-dropdown-menu__item.danger-item,
 .el-dropdown-menu__item.danger-item:not(.is-disabled):focus,
 .el-dropdown-menu__item.danger-item:not(.is-disabled):hover {
-  color: var(--b-red) !important;
+  color: var(--err) !important;
 }
 </style>

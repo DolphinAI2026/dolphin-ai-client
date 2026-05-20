@@ -32,8 +32,17 @@
         </div>
       </section>
 
-      <div v-if="loading" class="mcp-state">加载中…</div>
-      <div v-else-if="error" class="mcp-state error">{{ error }}</div>
+      <div v-if="loading" class="mcp-state">
+        <SkeletonCard :lines="4" with-avatar with-footer />
+      </div>
+      <div v-else-if="error" class="mcp-state error">
+        <ErrorCard
+          level="err"
+          title="拉取 MCP 工具列表失败"
+          :message="error"
+          :actions="[{ label: '重试', primary: true, onClick: () => loadTools() }]"
+        />
+      </div>
 
       <template v-else>
         <!-- 分类筛选 -->
@@ -57,7 +66,18 @@
         </section>
 
         <section v-if="filteredTools.length === 0" class="mcp-empty">
-          <span>没匹配的工具</span>
+          <EmptyState
+            :variant="search ? 'filtered' : 'first'"
+            :title="search ? '没有匹配的工具' : '当前分类下没有工具'"
+            :desc="search ? `没找到 “${search}”。换个关键词试试，或者清空搜索看全部。` : '切换上方分类，或清空筛选条件查看所有工具。'"
+          >
+            <template #icon>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            </template>
+            <template v-if="search" #cta>
+              <el-button @click="search = ''">清空搜索</el-button>
+            </template>
+          </EmptyState>
         </section>
 
         <!-- 工具卡片网格 -->
@@ -169,6 +189,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import BuilderFrame from '@/components/BuilderFrame.vue'
+import EmptyState from '@/components/states/EmptyState.vue'
+import ErrorCard from '@/components/states/ErrorCard.vue'
+import SkeletonCard from '@/components/states/SkeletonCard.vue'
 import request from '@/utils/request'
 
 interface ToolParam {
@@ -315,7 +338,9 @@ function categoryIcon(key: string): string {
   }[key] || '🔧'
 }
 
-onMounted(async () => {
+async function loadTools() {
+  loading.value = true
+  error.value = ''
   try {
     const data = await request.get<any, any>('/admin/mcp/tools')
     total.value = data.total
@@ -327,208 +352,357 @@ onMounted(async () => {
   } finally {
     loading.value = false
   }
-})
+}
+
+onMounted(() => { loadTools() })
 </script>
 
 <style scoped>
+/* v3 redesign · 2026-05-20 — MCP Hub visual refresh, template/script untouched.
+   Refresh focus:
+     - drop indigo-violet gradients (linear-gradient(#6366f1, #8b5cf6)) → flat var(--brand)
+     - hardcoded greys (#e1e4ec / #6b7280 / #4b5563 / #f3f4f6) → var(--line) / --text-* / --surface-*
+     - KPI strong: 22px → 24px tnum on Inter
+     - card radius 10 → var(--r-4) 12; chip pills 4–6 → var(--r-2) 6
+     - status header tokens → ok-soft / err-soft for solid semantics
+     - row hover → var(--surface-2); icon soft → var(--brand-soft) by default
+     - mono font normalised to var(--font-mono) with tnum
+     - kept all class names; preserved dark theme block (rewritten via tokens so it
+       inherits dark-mode automatically via v3-tokens.css cascade).
+*/
+
+/* Server chip in topbar #actions slot */
 .mcp-server-chip {
   display: inline-flex;
   align-items: center;
   gap: 8px;
   height: 30px;
   padding: 0 12px;
-  border-radius: 999px;
-  background: rgba(116, 128, 171, 0.08);
-  font-size: 12px;
+  border-radius: var(--r-full, 999px);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  font-size: var(--t-small, 12.5px);
+  color: var(--text-2);
 }
 .mcp-dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #d0d4dc;
+  background: var(--text-4);
 }
-.mcp-dot.online { background: #67c23a; box-shadow: 0 0 4px rgba(103, 194, 58, 0.6); }
-.mcp-server-name { font-weight: 600; }
-.mcp-endpoint { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: #777; }
+.mcp-dot.online {
+  background: var(--ok);
+  box-shadow: 0 0 0 3px var(--ok-soft);
+}
+.mcp-server-name {
+  font-weight: var(--fw-semibold, 600);
+  color: var(--text);
+}
+.mcp-endpoint {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro, 11px);
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
 
-.mcp-main { padding: 16px 24px 40px; }
+.mcp-main {
+  padding: 16px 24px 40px;
+  background: var(--bg);
+  min-height: 100%;
+}
+
+/* KPI summary row — 4 stat cards + search */
 .mcp-summary {
   display: flex;
   align-items: center;
-  gap: 24px;
-  padding: 18px 20px;
-  border-radius: 12px;
-  background: linear-gradient(135deg, rgba(99, 102, 241, 0.06), rgba(139, 92, 246, 0.04));
-  border: 1px solid rgba(99, 102, 241, 0.12);
+  gap: 12px;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  border: 0;
   margin-bottom: 20px;
 }
-.mcp-stat { display: flex; flex-direction: column; gap: 2px; }
-.mcp-stat strong { font-size: 22px; font-weight: 700; color: #1f2937; }
-.mcp-stat span { font-size: 12px; color: #6b7280; }
+.mcp-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  padding: 16px 18px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-4, 12px);
+  box-shadow: var(--sh-1);
+  transition: border-color 0.14s var(--ease), box-shadow 0.14s var(--ease);
+}
+.mcp-stat:hover {
+  border-color: var(--line-strong);
+  box-shadow: var(--sh-2);
+}
+.mcp-stat strong {
+  font-size: var(--t-h2, 24px);
+  font-weight: var(--fw-bold, 700);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+}
+.mcp-stat span {
+  font-size: 11.5px;
+  color: var(--text-3);
+  font-weight: var(--fw-medium, 500);
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+}
 .mcp-summary-right { margin-left: auto; }
 .mcp-search {
   width: 280px;
-  height: 32px;
+  height: 36px;
   padding: 0 12px;
-  border: 1px solid #e1e4ec;
-  border-radius: 8px;
-  font-size: 13px;
-  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: var(--r-3, 8px);
+  font-size: var(--t-body, 14px);
+  background: var(--surface);
+  color: var(--text);
   outline: none;
-  transition: border-color 0.15s;
+  font-family: inherit;
+  transition: border-color 0.14s var(--ease), box-shadow 0.14s var(--ease);
 }
-.mcp-search:focus { border-color: #6366f1; }
+.mcp-search::placeholder { color: var(--text-4); }
+.mcp-search:focus {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--brand-ring);
+}
 
-.mcp-tabs { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+/* Category pills */
+.mcp-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
 .mcp-tab {
   padding: 6px 14px;
-  border: 1px solid #e1e4ec;
-  border-radius: 999px;
-  background: #fff;
-  font-size: 13px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-full, 999px);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: var(--t-small, 12.5px);
+  font-weight: var(--fw-medium, 500);
   cursor: pointer;
-  transition: all 0.15s;
+  font-family: inherit;
+  transition: border-color 0.14s var(--ease), background 0.14s var(--ease), color 0.14s var(--ease);
   display: inline-flex;
   align-items: center;
   gap: 6px;
 }
-.mcp-tab:hover { border-color: #c7c9d1; }
-.mcp-tab.active { background: #6366f1; color: white; border-color: #6366f1; }
-.mcp-tab-count {
-  font-size: 11px;
-  padding: 1px 7px;
-  border-radius: 999px;
-  background: rgba(0, 0, 0, 0.08);
-  font-weight: 600;
+.mcp-tab:hover {
+  border-color: var(--brand-ring);
+  background: var(--brand-soft);
+  color: var(--brand);
 }
-.mcp-tab.active .mcp-tab-count { background: rgba(255, 255, 255, 0.25); }
+.mcp-tab.active {
+  background: var(--brand);
+  color: var(--text-inverse);
+  border-color: var(--brand);
+}
+.mcp-tab-count {
+  font-size: var(--t-micro, 11px);
+  padding: 1px 7px;
+  border-radius: var(--r-full, 999px);
+  background: var(--surface-3);
+  color: var(--text-3);
+  font-weight: var(--fw-semibold, 600);
+  font-variant-numeric: tabular-nums;
+}
+.mcp-tab:hover .mcp-tab-count {
+  background: var(--brand-soft-2);
+  color: var(--brand);
+}
+.mcp-tab.active .mcp-tab-count {
+  background: rgba(255, 255, 255, 0.22);
+  color: var(--text-inverse);
+}
 
-.mcp-state { padding: 32px; text-align: center; color: #888; }
-.mcp-state.error { color: #d32f2f; }
-.mcp-empty { padding: 24px; text-align: center; color: #aaa; font-size: 13px; }
+.mcp-state {
+  padding: 32px;
+  text-align: center;
+  color: var(--text-3);
+  font-size: var(--t-body, 14px);
+}
+.mcp-state.error { color: var(--err); }
+.mcp-empty {
+  padding: 24px;
+  text-align: center;
+  color: var(--text-4);
+  font-size: var(--t-small, 12.5px);
+}
 
+/* Tool list grid */
 .mcp-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
-  gap: 14px;
+  gap: 12px;
 }
 .mcp-card {
-  border: 1px solid #e1e4ec;
-  border-radius: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-4, 12px);
   padding: 14px 16px;
-  background: #fff;
+  background: var(--surface);
   display: flex;
   flex-direction: column;
   gap: 10px;
-  transition: all 0.15s;
+  box-shadow: var(--sh-1);
+  transition: border-color 0.14s var(--ease), background 0.14s var(--ease), box-shadow 0.14s var(--ease);
 }
-.mcp-card:hover { border-color: #c7c9d1; box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
-.mcp-card.expanded { background: #fafbfc; }
+.mcp-card:hover {
+  background: var(--surface-2);
+  border-color: var(--line-strong);
+  box-shadow: var(--sh-2);
+}
+.mcp-card.expanded { background: var(--surface-2); }
 
-.mcp-card-header { display: flex; flex-direction: column; gap: 4px; }
+.mcp-card-header { display: flex; flex-direction: column; gap: 6px; }
 .mcp-card-title-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .mcp-card-icon {
-  width: 22px;
-  height: 22px;
-  font-size: 13px;
+  width: 36px;
+  height: 36px;
+  font-size: 16px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 6px;
-  background: #f3f4f6;
+  border-radius: var(--r-2, 6px);
+  background: var(--brand-soft);
+  color: var(--brand);
+  border: 1px solid var(--brand-soft-2);
+  flex-shrink: 0;
 }
-.mcp-card-icon.cat-apaas_introspect { background: rgba(139, 92, 246, 0.12); }
-.mcp-card-icon.cat-doc { background: rgba(99, 102, 241, 0.12); }
-.mcp-card-icon.cat-app_lifecycle { background: rgba(245, 158, 11, 0.12); }
-.mcp-card-icon.cat-env { background: rgba(34, 197, 94, 0.12); }
+.mcp-card-icon.cat-apaas_introspect {
+  background: var(--brand-soft);
+  color: var(--brand);
+  border-color: var(--brand-soft-2);
+}
+.mcp-card-icon.cat-doc {
+  background: var(--info-soft);
+  color: var(--info);
+  border-color: var(--brand-soft-2);
+}
+.mcp-card-icon.cat-app_lifecycle {
+  background: var(--warn-soft);
+  color: var(--warn);
+  border-color: transparent;
+}
+.mcp-card-icon.cat-env {
+  background: var(--ok-soft);
+  color: var(--ok);
+  border-color: transparent;
+}
 .mcp-card-name {
-  font-family: ui-monospace, Menlo, monospace;
-  font-size: 13px;
-  font-weight: 600;
-  color: #1f2937;
+  font-family: var(--font-mono);
+  font-size: var(--t-body, 14px);
+  font-weight: var(--fw-semibold, 600);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.005em;
 }
 .mcp-card-cat {
-  font-size: 11px;
-  color: #6b7280;
-  padding: 1px 6px;
-  border-radius: 4px;
-  background: #f3f4f6;
+  font-size: var(--t-micro, 11px);
+  color: var(--text-3);
+  padding: 2px 8px;
+  border-radius: var(--r-2, 6px);
+  background: var(--surface-3);
+  font-weight: var(--fw-medium, 500);
 }
 .mcp-card-title {
-  font-size: 13px;
-  color: #4b5563;
-  line-height: 1.45;
+  font-size: var(--t-small, 12.5px);
+  color: var(--text-2);
+  line-height: 1.5;
   margin: 0;
 }
 
-.mcp-card-params { font-size: 12px; }
+.mcp-card-params { font-size: var(--t-small, 12.5px); }
 .mcp-params-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.mcp-params-label { color: #6b7280; }
-.mcp-params-empty { color: #c0c2cb; font-style: italic; }
+.mcp-params-label { color: var(--text-3); font-weight: var(--fw-medium, 500); }
+.mcp-params-empty { color: var(--text-4); font-style: italic; }
 .mcp-param-chip {
-  font-family: ui-monospace, Menlo, monospace;
-  font-size: 11px;
+  font-family: var(--font-mono);
+  font-size: var(--t-micro, 11px);
   padding: 2px 8px;
-  border-radius: 6px;
-  background: #f3f4f6;
-  color: #4b5563;
+  border-radius: var(--r-2, 6px);
+  background: var(--surface-3);
+  color: var(--text-2);
+  border: 1px solid transparent;
+  font-variant-numeric: tabular-nums;
 }
 .mcp-param-chip.required {
-  background: rgba(99, 102, 241, 0.1);
-  color: #6366f1;
-  font-weight: 600;
+  background: var(--brand-soft);
+  color: var(--brand);
+  border-color: var(--brand-soft-2);
+  font-weight: var(--fw-semibold, 600);
 }
-.mcp-param-type { color: #9ca3af; font-weight: 400; }
+.mcp-param-type { color: var(--text-4); font-weight: var(--fw-regular, 400); }
 
 .mcp-card-actions {
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 8px;
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
+  margin-top: 2px;
 }
 .mcp-expand-btn {
   padding: 4px 8px;
-  font-size: 11px;
-  color: #6b7280;
-  background: none;
+  font-size: var(--t-micro, 11px);
+  color: var(--text-3);
+  background: transparent;
   border: none;
   cursor: pointer;
+  font-family: inherit;
+  font-weight: var(--fw-medium, 500);
+  transition: color 0.14s var(--ease);
 }
-.mcp-expand-btn:hover { color: #6366f1; }
+.mcp-expand-btn:hover { color: var(--brand); }
 .mcp-try-btn {
-  padding: 4px 12px;
-  font-size: 11px;
-  color: #fff;
-  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  padding: 6px 14px;
+  font-size: var(--t-micro, 11px);
+  color: var(--text-inverse);
+  background: var(--brand);
   border: none;
-  border-radius: 6px;
+  border-radius: var(--r-2, 6px);
   cursor: pointer;
-  font-weight: 600;
-  transition: transform 0.1s, box-shadow 0.2s;
+  font-weight: var(--fw-semibold, 600);
+  font-family: inherit;
+  letter-spacing: 0.005em;
+  transition: background 0.14s var(--ease), box-shadow 0.14s var(--ease);
 }
-.mcp-try-btn:hover { transform: translateY(-1px); box-shadow: 0 2px 6px rgba(99,102,241,0.3); }
-.mcp-try-btn:active { transform: translateY(0); }
+.mcp-try-btn:hover {
+  background: var(--brand-hover);
+  box-shadow: var(--sh-brand);
+}
+.mcp-try-btn:active { background: var(--brand-hover); transform: translateY(0.5px); }
 
-/* 试调对话框 */
+/* Try-call modal */
 .mcp-try-modal {
   position: fixed;
   inset: 0;
-  background: rgba(15, 23, 42, 0.45);
+  background: rgba(11, 27, 63, 0.45);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 9000;
-  backdrop-filter: blur(2px);
+  backdrop-filter: blur(4px);
 }
 .mcp-try-card {
   width: 720px;
   max-width: 92vw;
   max-height: 88vh;
-  background: #fff;
-  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-5, 16px);
   display: flex;
   flex-direction: column;
-  box-shadow: 0 20px 60px rgba(0,0,0,0.25);
+  box-shadow: var(--sh-5);
   overflow: hidden;
 }
 .mcp-try-header {
@@ -536,25 +710,48 @@ onMounted(async () => {
   justify-content: space-between;
   align-items: flex-start;
   padding: 18px 22px;
-  border-bottom: 1px solid #eef0f6;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
 }
-.mcp-try-header h3 { margin: 0; font-size: 15px; }
+.mcp-try-header h3 {
+  margin: 0;
+  font-size: var(--t-h3, 18px);
+  font-weight: var(--fw-semibold, 600);
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
 .mcp-try-header h3 code {
-  font-family: ui-monospace, Menlo, monospace;
-  color: #6366f1;
-  font-size: 14px;
-  background: rgba(99,102,241,0.08);
-  padding: 1px 6px;
-  border-radius: 4px;
+  font-family: var(--font-mono);
+  color: var(--brand);
+  font-size: var(--t-body, 14px);
+  background: var(--brand-soft);
+  padding: 2px 8px;
+  border-radius: var(--r-2, 6px);
+  font-weight: var(--fw-semibold, 600);
+  font-variant-numeric: tabular-nums;
 }
-.mcp-try-header p { margin: 4px 0 0; font-size: 12px; color: #6b7280; }
+.mcp-try-header p {
+  margin: 4px 0 0;
+  font-size: var(--t-small, 12.5px);
+  color: var(--text-3);
+}
 .mcp-try-close {
-  background: none;
+  background: transparent;
   border: none;
   font-size: 18px;
-  color: #94a3b8;
+  color: var(--text-4);
   cursor: pointer;
-  padding: 0;
+  padding: 4px;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-2, 6px);
+  transition: background 0.14s var(--ease), color 0.14s var(--ease);
+}
+.mcp-try-close:hover {
+  background: var(--surface-2);
+  color: var(--text);
 }
 .mcp-try-body {
   padding: 18px 22px;
@@ -564,110 +761,165 @@ onMounted(async () => {
   gap: 14px;
 }
 .mcp-try-label {
-  font-size: 12px;
-  color: #374151;
+  font-size: var(--t-small, 12.5px);
+  color: var(--text-2);
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
+  font-weight: var(--fw-medium, 500);
 }
 .mcp-required-chip {
-  font-family: ui-monospace, Menlo, monospace;
-  font-size: 11px;
-  background: rgba(99, 102, 241, 0.1);
-  color: #6366f1;
+  font-family: var(--font-mono);
+  font-size: var(--t-micro, 11px);
+  background: var(--brand-soft);
+  color: var(--brand);
   padding: 2px 8px;
-  border-radius: 4px;
-  font-weight: 600;
+  border-radius: var(--r-2, 6px);
+  border: 1px solid var(--brand-soft-2);
+  font-weight: var(--fw-semibold, 600);
+  font-variant-numeric: tabular-nums;
 }
-.mcp-required-empty { color: #9ca3af; font-style: italic; }
+.mcp-required-empty { color: var(--text-4); font-style: italic; }
 .mcp-try-input {
   width: 100%;
   min-height: 160px;
-  padding: 10px 14px;
-  border: 1px solid #e1e4ec;
-  border-radius: 8px;
-  font-family: ui-monospace, Menlo, monospace;
-  font-size: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-3, 8px);
+  font-family: var(--font-mono);
+  font-size: var(--t-mono, 12px);
   resize: vertical;
   outline: none;
+  background: var(--surface-2);
+  color: var(--text);
+  line-height: 1.6;
+  font-variant-numeric: tabular-nums;
+  transition: border-color 0.14s var(--ease), box-shadow 0.14s var(--ease);
 }
-.mcp-try-input:focus { border-color: #6366f1; }
+.mcp-try-input:focus {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--brand-ring);
+  background: var(--surface);
+}
 .mcp-try-actions { display: flex; gap: 8px; }
 .mcp-try-run {
   padding: 8px 22px;
-  background: linear-gradient(135deg, #6366f1, #8b5cf6);
-  color: #fff;
+  background: var(--brand);
+  color: var(--text-inverse);
   border: none;
-  border-radius: 8px;
-  font-weight: 600;
-  font-size: 13px;
+  border-radius: var(--r-3, 8px);
+  font-weight: var(--fw-semibold, 600);
+  font-size: var(--t-body, 14px);
   cursor: pointer;
+  font-family: inherit;
+  transition: background 0.14s var(--ease), box-shadow 0.14s var(--ease);
+}
+.mcp-try-run:hover:not(:disabled) {
+  background: var(--brand-hover);
+  box-shadow: var(--sh-brand);
 }
 .mcp-try-run:disabled { opacity: 0.5; cursor: not-allowed; }
 .mcp-try-cancel {
   padding: 8px 16px;
-  background: #f3f4f6;
-  border: none;
-  border-radius: 8px;
-  color: #374151;
-  font-size: 13px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-3, 8px);
+  color: var(--text-2);
+  font-size: var(--t-body, 14px);
+  font-weight: var(--fw-medium, 500);
   cursor: pointer;
+  font-family: inherit;
+  transition: background 0.14s var(--ease), border-color 0.14s var(--ease), color 0.14s var(--ease);
+}
+.mcp-try-cancel:hover {
+  background: var(--surface-3);
+  border-color: var(--line-strong);
+  color: var(--text);
 }
 .mcp-try-result {
-  border-radius: 8px;
+  border-radius: var(--r-3, 8px);
   overflow: hidden;
-  border: 1px solid #e1e4ec;
+  border: 1px solid var(--line);
 }
 .mcp-try-result-header {
   padding: 8px 14px;
-  font-weight: 600;
-  font-size: 12px;
+  font-weight: var(--fw-semibold, 600);
+  font-size: var(--t-small, 12.5px);
   display: flex;
   justify-content: space-between;
   align-items: center;
 }
-.mcp-try-result-header.ok { background: rgba(34, 197, 94, 0.1); color: #16a34a; }
-.mcp-try-result-header.err { background: rgba(239, 68, 68, 0.1); color: #dc2626; }
-.mcp-try-cost { font-family: ui-monospace, Menlo, monospace; font-weight: 400; }
+.mcp-try-result-header.ok {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+.mcp-try-result-header.err {
+  background: var(--err-soft);
+  color: var(--err);
+}
+.mcp-try-cost {
+  font-family: var(--font-mono);
+  font-weight: var(--fw-regular, 400);
+  font-variant-numeric: tabular-nums;
+}
 .mcp-try-result-body {
   margin: 0;
   padding: 14px 18px;
-  font-family: ui-monospace, Menlo, monospace;
-  font-size: 12px;
-  background: #fafbfc;
+  font-family: var(--font-mono);
+  font-size: var(--t-mono, 12px);
+  background: var(--surface-2);
+  color: var(--text);
   max-height: 280px;
   overflow-y: auto;
   white-space: pre-wrap;
   word-break: break-all;
+  line-height: 1.6;
+  font-variant-numeric: tabular-nums;
 }
 
 .mcp-desc {
-  font-size: 12px;
-  color: #4b5563;
-  background: #fafbfc;
-  border-left: 3px solid #6366f1;
-  padding: 10px 14px;
-  border-radius: 4px;
+  font-size: var(--t-small, 12.5px);
+  color: var(--text-2);
+  background: var(--surface-2);
+  border-left: 3px solid var(--brand);
+  padding: 12px 14px;
+  border-radius: var(--r-2, 6px);
   white-space: pre-wrap;
-  line-height: 1.6;
-  font-family: ui-sans-serif, system-ui, -apple-system;
+  line-height: 1.65;
+  font-family: var(--font-sans);
+  margin: 0;
 }
 
-.mcp-schema { font-size: 11px; }
-.mcp-schema summary { cursor: pointer; color: #6b7280; padding: 4px 0; }
+.mcp-schema { font-size: var(--t-micro, 11px); }
+.mcp-schema summary {
+  cursor: pointer;
+  color: var(--text-3);
+  padding: 4px 0;
+  font-weight: var(--fw-medium, 500);
+  font-family: inherit;
+}
+.mcp-schema summary:hover { color: var(--brand); }
 .mcp-schema pre {
-  background: #1f2937;
-  color: #f9fafb;
-  padding: 10px 14px;
-  border-radius: 6px;
+  background: var(--surface-3);
+  color: var(--text);
+  padding: 12px 14px;
+  border-radius: var(--r-2, 6px);
   overflow-x: auto;
-  font-size: 11px;
-  line-height: 1.5;
+  font-size: var(--t-micro, 11px);
+  line-height: 1.6;
+  font-family: var(--font-mono);
+  border: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
 }
 
-:global(html[data-theme="dark"]) .mcp-summary { background: linear-gradient(135deg, rgba(99,102,241,0.12), rgba(139,92,246,0.08)); }
-:global(html[data-theme="dark"]) .mcp-card { background: rgba(255,255,255,0.03); border-color: rgba(255,255,255,0.08); }
-:global(html[data-theme="dark"]) .mcp-card-name { color: rgba(255,255,255,0.92); }
-:global(html[data-theme="dark"]) .mcp-card-title { color: rgba(255,255,255,0.7); }
+/* Dark theme — tokens already auto-swap via v3-tokens.css.
+   These remaining overrides keep parity with v2 dark experience
+   where the v2 styles diverged from the auto-swap. */
+:global(html[data-theme="dark"]) .mcp-try-modal {
+  background: rgba(0, 0, 0, 0.55);
+}
+:global(html[data-theme="dark"]) .mcp-schema pre {
+  background: var(--surface-3);
+}
 </style>

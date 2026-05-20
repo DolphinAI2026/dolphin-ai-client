@@ -23,11 +23,21 @@
 
       <!-- ==================== Tab 1: 平台环境 ==================== -->
       <div v-show="activeTab === 'envs'" class="env-content">
-      <div v-if="loading" class="empty-state">加载中...</div>
+      <div v-if="loading" class="empty-state">
+        <SkeletonCard :lines="3" with-footer />
+      </div>
       <div v-else-if="envs.length === 0" class="empty-state">
-        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.3"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-        <span>暂无环境配置</span>
-        <button class="empty-add-btn" @click="openCreate">添加第一个环境</button>
+        <EmptyState
+          title="暂无环境配置"
+          desc="添加一个 aPaaS 平台环境，登录后即可发布应用、同步元数据。"
+        >
+          <template #icon>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          </template>
+          <template #cta>
+            <button class="empty-add-btn" @click="openCreate">添加第一个环境</button>
+          </template>
+        </EmptyState>
       </div>
 
       <template v-else>
@@ -90,11 +100,21 @@
 
       <!-- ==================== Tab 2: 模型配置 ==================== -->
       <div v-show="activeTab === 'llm'" class="env-content">
-      <div v-if="llmLoading" class="empty-state">加载中...</div>
+      <div v-if="llmLoading" class="empty-state">
+        <SkeletonCard :lines="3" with-footer />
+      </div>
       <div v-else-if="llmConfigs.length === 0" class="empty-state">
-        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.3"><path d="M12 2a4 4 0 0 0-4 4v2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2h-2V6a4 4 0 0 0-4-4z"/><circle cx="12" cy="15" r="2"/></svg>
-        <span>暂无模型配置</span>
-        <button class="empty-add-btn" @click="openLlmCreate">新增第一个模型</button>
+        <EmptyState
+          title="暂无模型配置"
+          desc="新增一个大模型配置，AI Builder / AI Coding 会自动消费这里的 API Key 与默认模型。"
+        >
+          <template #icon>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 0 0-4 4v2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2h-2V6a4 4 0 0 0-4-4z"/><circle cx="12" cy="15" r="2"/></svg>
+          </template>
+          <template #cta>
+            <button class="empty-add-btn" @click="openLlmCreate">新增第一个模型</button>
+          </template>
+        </EmptyState>
       </div>
 
       <template v-else>
@@ -314,6 +334,8 @@ import { platformEnvApi, type PlatformEnv } from '@/api/platformEnv'
 import { llmConfigApi, type LlmConfig, type ProviderPreset } from '@/api/llmConfig'
 import { providerOptions, providerLabel, purposeLabel } from '@/utils/llmConfig'
 import BuilderFrame from '@/components/BuilderFrame.vue'
+import EmptyState from '@/components/states/EmptyState.vue'
+import SkeletonCard from '@/components/states/SkeletonCard.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -749,116 +771,83 @@ watch(
 </script>
 
 <style scoped>
+/* v3 redesign · 2026-05-20 — visual refresh only, template/script untouched.
+   Source: design-spec/07-admin.html §07.1 ENVIRONMENTS
+   Preserved (don't change):
+     - all class names referenced by template (.env-grid / .env-card /
+       .env-card-header / .env-card-left / .env-status-dot / .env-name /
+       .default-star / .env-status-tag / .env-card-body / .env-field /
+       .env-label / .env-value / .env-card-actions / .env-action-btn /
+       .auth-section / .auth-section-label / .auth-tabs / .auth-tab /
+       .llm-params-row / .llm-param-item / .temperature-control /
+       .temperature-value / .llm-default-switch / .llm-switch-label /
+       .tabs-bar / .tabs-group / .tabs-summary / .tab-item /
+       .env-content / .empty-state / .empty-add-btn / .new-btn)
+     - dark theme overrides (re-scoped to v3 tokens — colors derive from
+       v2→v3 alias block in design-v3-tokens.css)
+     - dialog styles live in non-scoped <style> block (teleported el-dialog)
+   Refreshed:
+     - swap --b-* v2 vars → v3 tokens (--surface / --line / --text /
+       --brand / --ok / --err / --warn / --r-* / --sh-* / --font-mono)
+     - status dot 8×8 with 3px halo box-shadow (ok / surface-3 二色)
+     - status tag rectangle r-1 (ok-soft / surface-3 二色 — not pill)
+     - env-card border --line + r-4 + hover brand-ring + sh-2
+     - card actions row gets top divider --line
+     - action btn: neutral grey + hover brand-soft, .danger hover err-soft
+     - "+ 添加环境/新增模型" topbar primary buttons go brand solid
+     - tab switch underline 2px brand bottom (not pill)
+     - default ★ marker forced text-rendered amber (#F59E0B) not emoji
+     - auth-tab segmented: brand-soft active + transparent default
+*/
 .envs-main {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 16px;
-  background: var(--b-bg);
+  background: transparent;
 }
 
-/* ── Nav ── */
-.nav-bar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 12px 24px;
-  background: var(--b-panel);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border-bottom: 1px solid var(--b-line);
-  flex-shrink: 0;
-}
-
-.nav-left {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.back-btn {
-  background: none;
-  border: none;
-  color: var(--b-text-muted);
-  cursor: pointer;
-  padding: 4px;
-  border-radius: 6px;
-  display: flex;
-  align-items: center;
-  transition: all 0.2s;
-}
-.back-btn:hover { color: var(--b-text); background: var(--b-bg-sub); }
-
-.logo-box {
-  width: 28px;
-  height: 28px;
-  background: var(--b-ink);
-  border-radius: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #fff;
-  font-weight: 700;
-  font-size: 12px;
-}
-
-.title {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--b-text);
-}
-
+/* ── Topbar primary button (forwarded via BuilderFrame #actions slot) ── */
 .new-btn {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 6px;
   height: 30px;
-  background: var(--b-ink);
-  color: #fff;
-  border: 1px solid var(--b-ink);
   padding: 0 12px;
-  border-radius: 7px;
-  font-size: 12px;
-  font-weight: 700;
+  background: var(--brand);
+  color: #fff;
+  border: 1px solid var(--brand);
+  border-radius: var(--r-2, 6px);
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
   cursor: pointer;
-  transition: opacity 0.2s;
+  font-family: inherit;
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
 }
-.nav-right-group {
-  display: flex;
-  align-items: center;
-  gap: 12px;
+.new-btn:hover {
+  background: var(--brand-hover);
+  border-color: var(--brand-hover);
 }
-.new-btn:hover { opacity: 0.9; }
-
-:global(html[data-theme="dark"]) .new-btn,
-:global(html[data-theme="dark"]) .empty-add-btn {
-  background: #151922;
-  border-color: rgba(124, 140, 255, 0.34);
-  color: #c7d2fe;
-  box-shadow: none;
+.new-btn:focus-visible {
+  outline: 2px solid var(--line-focus, var(--brand-ring));
+  outline-offset: 2px;
 }
 
-:global(html[data-theme="dark"]) .new-btn:hover,
-:global(html[data-theme="dark"]) .empty-add-btn:hover {
-  opacity: 1;
-  background: rgba(124, 140, 255, 0.16);
-  border-color: rgba(124, 140, 255, 0.46);
-  color: #f8fafc;
-}
-
-/* ── Tabs Bar ── */
+/* ── Tabs bar (underline style, not pill) ── */
 .tabs-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
   max-width: 1180px;
-  margin: 0 auto 2px;
+  margin: 0 auto;
   width: 100%;
-  padding: 0;
+  padding: 0 0 0 4px;
   background: transparent;
-  border-bottom: none;
+  border-bottom: 1px solid var(--line);
   flex-shrink: 0;
   box-sizing: border-box;
 }
@@ -866,42 +855,48 @@ watch(
 .tabs-group {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 0;
   min-width: 0;
-  padding: 3px;
-  background: var(--b-panel);
-  border: 1px solid var(--b-line);
-  border-radius: 8px;
-  box-shadow: var(--b-shadow-xs);
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 .tabs-summary {
-  color: var(--b-text-muted);
+  color: var(--text-3);
   font-size: 12px;
-  font-family: var(--b-mono);
+  font-family: var(--font-mono);
 }
 
 .tab-item {
-  height: 28px;
-  padding: 0 12px;
+  height: auto;
+  padding: 10px 4px;
+  margin-right: 18px;
   border: none;
-  background: none;
-  color: var(--b-text-muted);
-  font-size: 12px;
-  font-weight: 700;
+  background: transparent;
+  border-bottom: 2px solid transparent;
+  color: var(--text-3);
+  font-size: 13.5px;
+  font-weight: 500;
   cursor: pointer;
   position: relative;
-  border-radius: 6px;
-  transition: all 0.2s;
+  border-radius: 0;
+  transition: color 0.15s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              border-color 0.15s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+  font-family: inherit;
 }
 .tab-item:hover {
-  color: var(--b-text);
-  background: var(--b-bg-sub);
+  color: var(--text);
+  background: transparent;
 }
 .tab-item.active {
-  color: var(--b-text);
-  background: var(--b-bg-sub);
-  box-shadow: inset 0 0 0 1px var(--b-line);
+  color: var(--text);
+  background: transparent;
+  border-bottom-color: var(--brand);
+  font-weight: 600;
+  box-shadow: none;
 }
 
 /* ── Content ── */
@@ -911,12 +906,12 @@ watch(
   max-width: 1180px;
   margin: 0 auto;
   width: 100%;
-  padding: 0 0 44px;
+  padding: 16px 0 44px;
 }
 
 .empty-state {
   text-align: center;
-  color: var(--b-text-muted);
+  color: var(--text-3);
   padding: 80px 0;
   display: flex;
   flex-direction: column;
@@ -927,45 +922,51 @@ watch(
 
 .empty-add-btn {
   margin-top: 8px;
-  background: var(--b-ink);
+  background: var(--brand);
   color: #fff;
-  border: 1px solid var(--b-ink);
+  border: 1px solid var(--brand);
   padding: 7px 14px;
-  border-radius: 7px;
-  font-size: 12px;
+  border-radius: var(--r-2, 6px);
+  font-size: 12.5px;
+  font-weight: 600;
   cursor: pointer;
-  transition: opacity 0.2s;
+  font-family: inherit;
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
 }
-.empty-add-btn:hover { opacity: 0.9; }
+.empty-add-btn:hover {
+  background: var(--brand-hover);
+  border-color: var(--brand-hover);
+}
 
 /* ── Grid ── */
 .env-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 14px;
 }
 
 /* ── Card ── */
 .env-card {
-  background: var(--b-panel);
-  border: 1px solid var(--b-line);
-  border-radius: 8px;
-  padding: 14px;
-  transition: all 0.2s;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-4, 12px);
+  padding: 16px 18px 14px;
+  transition: border-color 0.18s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              box-shadow 0.18s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  box-shadow: var(--b-shadow-xs);
+  gap: 0;
 }
 .env-card:hover {
-  border-color: var(--b-line-strong);
-  box-shadow: var(--b-shadow-sm);
+  border-color: var(--brand-ring);
+  box-shadow: var(--sh-2);
 }
 
 .env-card-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  margin-bottom: 12px;
 }
 
 .env-card-left {
@@ -979,130 +980,169 @@ watch(
   height: 8px;
   border-radius: 50%;
   flex-shrink: 0;
+  background: var(--ok);
+  box-shadow: 0 0 0 3px var(--ok-soft);
 }
 .env-status-dot.connected {
-  background: #10b981;
+  background: var(--ok);
+  box-shadow: 0 0 0 3px var(--ok-soft);
 }
 .env-status-dot.disconnected {
-  background: var(--b-text-faint);
+  background: var(--text-4);
+  box-shadow: 0 0 0 3px var(--surface-3);
 }
 
 .env-name {
-  font-size: 15px;
-  font-weight: 700;
-  color: var(--b-text);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
   margin: 0;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
+  letter-spacing: -0.005em;
 }
 
+/* Force the ⭐ emoji glyph (template uses &#11088;) to render as
+   text-style amber star rather than full-color emoji. */
 .default-star {
-  font-size: 14px;
+  color: #F59E0B;
+  font-size: 12px;
+  margin-left: 2px;
+  font-variant-emoji: text;
+  -webkit-font-feature-settings: 'liga' off;
 }
 
 .env-status-tag {
-  font-size: 11px;
+  font-size: 10.5px;
   padding: 2px 8px;
-  border-radius: 999px;
-  font-weight: 700;
+  border-radius: var(--r-1, 4px);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: var(--ok-soft);
+  color: var(--ok);
 }
 .env-status-tag.connected {
-  background: var(--b-teal-soft);
-  color: var(--b-teal);
+  background: var(--ok-soft);
+  color: var(--ok);
 }
 .env-status-tag.disconnected {
-  background: var(--b-bg-sub);
-  color: var(--b-text-muted);
+  background: var(--surface-3);
+  color: var(--text-3);
 }
 
 .env-card-body {
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 0;
+  padding: 6px 0;
 }
 
 .env-field {
   display: flex;
   align-items: baseline;
-  gap: 8px;
+  gap: 12px;
+  font-size: 12.5px;
+  padding: 4px 0;
 }
 
 .env-label {
-  font-size: 11px;
-  color: var(--b-text-faint);
+  font-size: 12.5px;
+  color: var(--text-3);
   flex-shrink: 0;
-  min-width: 52px;
+  width: 60px;
+  min-width: 60px;
 }
 
 .env-value {
-  font-size: 12px;
-  color: var(--b-text-muted);
+  font-size: 12.5px;
+  color: var(--text);
+  font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .env-value.mono {
-  font-family: var(--b-mono);
-  font-size: 11px;
-  color: var(--b-text-muted);
-  background: var(--b-bg-sub);
-  padding: 1px 6px;
-  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text);
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  font-weight: 500;
 }
 
 .env-card-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 4px;
+  margin-top: 10px;
   padding-top: 10px;
-  border-top: 1px solid var(--b-line);
+  border-top: 1px solid var(--line);
 }
 
 .env-action-btn {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 4px;
   padding: 4px 8px;
-  border-radius: 6px;
-  border: 1px solid var(--b-line);
-  background: var(--b-panel-soft);
-  color: var(--b-text-muted);
+  border-radius: var(--r-1, 4px);
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--text-2);
   font-size: 11px;
+  font-weight: 500;
   cursor: pointer;
-  transition: all 0.2s;
+  font-family: inherit;
+  transition: background 0.15s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              border-color 0.15s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              color 0.15s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
 }
 .env-action-btn:hover {
-  background: var(--b-bg-sub);
-  color: var(--b-text);
+  background: var(--brand-soft);
+  color: var(--brand);
+  border-color: var(--brand-ring);
+}
+.env-action-btn:focus-visible {
+  outline: 2px solid var(--line-focus, var(--brand-ring));
+  outline-offset: 2px;
 }
 .env-action-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
+.env-action-btn:disabled:hover {
+  background: transparent;
+  color: var(--text-2);
+  border-color: var(--line);
+}
 .env-action-btn.danger {
-  border-color: rgba(209, 74, 97, 0.22);
-  color: var(--b-red);
+  border-color: var(--line);
+  color: var(--text-2);
 }
 .env-action-btn.danger:hover {
-  background: var(--b-red-soft);
-  color: var(--b-red);
+  background: var(--err-soft);
+  color: var(--err);
+  border-color: var(--err);
 }
 .env-action-btn.status-toggle {
-  border-color: rgba(79, 110, 247, 0.22);
-  color: var(--b-brand-ink);
+  border-color: var(--line);
+  color: var(--text-2);
 }
 .env-action-btn.status-toggle:hover {
-  background: var(--b-brand-soft);
-  color: var(--b-brand-ink);
+  background: var(--brand-soft);
+  color: var(--brand);
+  border-color: var(--brand-ring);
 }
 .env-action-btn.status-toggle.inactive {
-  border-color: rgba(15, 159, 143, 0.24);
-  color: var(--b-teal);
+  border-color: var(--line);
+  color: var(--ok);
 }
 .env-action-btn.status-toggle.inactive:hover {
-  background: var(--b-teal-soft);
+  background: var(--ok-soft);
+  color: var(--ok);
+  border-color: var(--ok);
 }
 
 /* Dialog styles moved to non-scoped block below */
@@ -1111,24 +1151,24 @@ watch(
 .auth-section {
   margin-top: 8px;
   padding: 16px;
-  background: var(--b-bg-sub);
-  border: 1px solid var(--b-line);
-  border-radius: 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-3, 8px);
 }
 .auth-section-label {
   font-size: 12px;
-  color: var(--b-text-muted);
+  color: var(--text-3);
   margin-bottom: 10px;
   font-weight: 500;
 }
 
-/* Auth tabs */
+/* Auth tabs — segmented control (brand-soft active) */
 .auth-tabs {
   display: flex;
   gap: 2px;
-  background: var(--b-panel);
-  border: 1px solid var(--b-line);
-  border-radius: 8px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-3, 8px);
   padding: 3px;
   margin: 8px 0 20px;
 }
@@ -1137,19 +1177,22 @@ watch(
   flex: 1;
   padding: 8px 0;
   border: none;
-  background: none;
-  color: var(--b-text-muted);
+  background: transparent;
+  color: var(--text-3);
   font-size: 13px;
+  font-weight: 500;
   cursor: pointer;
-  border-radius: 6px;
-  transition: all 0.2s;
+  border-radius: var(--r-2, 6px);
+  font-family: inherit;
+  transition: background 0.15s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              color 0.15s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
 }
 .auth-tab:hover {
-  color: var(--b-text);
+  color: var(--text);
 }
 .auth-tab.active {
-  background: var(--b-brand-soft);
-  color: var(--b-brand-ink);
+  background: var(--brand-soft);
+  color: var(--brand);
   font-weight: 600;
 }
 
@@ -1174,10 +1217,10 @@ watch(
 .temperature-value {
   font-size: 13px;
   font-weight: 600;
-  color: var(--b-text);
+  color: var(--text);
   min-width: 28px;
   text-align: right;
-  font-family: var(--b-mono);
+  font-family: var(--font-mono);
 }
 
 .llm-default-switch {
@@ -1190,7 +1233,7 @@ watch(
 
 .llm-switch-label {
   font-size: 13px;
-  color: var(--b-text-muted);
+  color: var(--text-2);
 }
 
 /* ── Scrollbar ── */
@@ -1201,103 +1244,150 @@ watch(
   background: transparent;
 }
 .env-content::-webkit-scrollbar-thumb {
-  background: var(--b-line-strong);
+  background: var(--line-strong);
   border-radius: 3px;
 }
 .env-content::-webkit-scrollbar-thumb:hover {
-  background: var(--b-text-faint);
+  background: var(--text-4);
+}
+
+/* ── Dark theme overrides ── */
+:global(html[data-theme="dark"]) .new-btn,
+:global(html[data-theme="dark"]) .empty-add-btn {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: var(--text-inverse);
+}
+:global(html[data-theme="dark"]) .new-btn:hover,
+:global(html[data-theme="dark"]) .empty-add-btn:hover {
+  background: var(--brand-hover);
+  border-color: var(--brand-hover);
+  color: var(--text-inverse);
+}
+
+/* ── Phase 6 · table density + filter UX tightening (append-only) ──
+   PlatformEnvs is a card grid (no el-table); only the tabs-bar is
+   a "filter-like" surface. The Phase 4 underline-style tabs already
+   match v3 spec, so this block only tightens the rhythm + adds a
+   subtle hover-line on inactive tabs so they read as interactive. */
+
+.tabs-bar {
+  padding-top: 4px;
+  padding-bottom: 0;
+}
+.tabs-summary {
+  font-feature-settings: 'tnum';
+  letter-spacing: 0.01em;
+}
+
+/* Inactive tab hover gets a 1px underline preview so it's clear they
+   are clickable (Phase 4 only changes color on hover, which can be
+   missed). 1px transparent → 1px text-4 on hover. */
+.tab-item {
+  border-bottom-width: 2px;
+}
+.tab-item:not(.active):hover {
+  border-bottom-color: var(--line-strong);
 }
 </style>
 
 <style>
+/* v3 redesign · 2026-05-20 — el-dialog (teleported to body) styling.
+   Lives outside scoped block because Element Plus dialog mounts to
+   document.body and the .env-dialog class is the only handle we have.
+   Token swap: --b-* (v2) → v3 tokens (--surface / --line / --text /
+   --brand / --r-* / --font-mono). Logic untouched. */
 html[data-theme="dark"] .builder-topbar .new-btn {
-  background: #151922 !important;
-  border-color: rgba(124, 140, 255, 0.34) !important;
-  color: #c7d2fe !important;
+  background: var(--brand) !important;
+  border-color: var(--brand) !important;
+  color: var(--text-inverse) !important;
   box-shadow: none !important;
 }
 
 html[data-theme="dark"] .builder-topbar .new-btn:hover {
-  background: rgba(124, 140, 255, 0.16) !important;
-  border-color: rgba(124, 140, 255, 0.46) !important;
-  color: #f8fafc !important;
+  background: var(--brand-hover) !important;
+  border-color: var(--brand-hover) !important;
+  color: var(--text-inverse) !important;
 }
 
 /* ── Dialog theme (non-scoped for teleported el-dialog) ── */
 .el-dialog.env-dialog {
-  background: var(--b-panel) !important;
-  color: var(--b-text);
-  border: 1px solid var(--b-line);
-  border-radius: 8px;
+  background: var(--surface) !important;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: var(--r-4, 12px);
+  box-shadow: var(--sh-4) !important;
 }
 .el-dialog.env-dialog .el-dialog__header {
-  border-bottom: 1px solid var(--b-line);
+  border-bottom: 1px solid var(--line);
   padding: 16px 20px;
 }
 .el-dialog.env-dialog .el-dialog__title {
-  color: var(--b-text) !important;
+  color: var(--text) !important;
   font-size: 15px;
-  font-weight: 700;
+  font-weight: 600;
+  letter-spacing: -0.005em;
 }
 .el-dialog.env-dialog .el-dialog__headerbtn .el-dialog__close {
-  color: var(--b-text-muted);
+  color: var(--text-3);
 }
 .el-dialog.env-dialog .el-dialog__body {
   padding: 20px;
 }
 .el-dialog.env-dialog .el-dialog__footer {
-  border-top: 1px solid var(--b-line);
+  border-top: 1px solid var(--line);
   padding: 14px 20px;
 }
 .el-dialog.env-dialog .el-form-item__label {
-  color: var(--b-text-muted) !important;
+  color: var(--text-2) !important;
   font-size: 13px;
 }
 .el-dialog.env-dialog .el-input__wrapper {
-  background: var(--b-panel-soft) !important;
-  box-shadow: 0 0 0 1px var(--b-line) inset !important;
+  background: var(--surface-2) !important;
+  box-shadow: 0 0 0 1px var(--line) inset !important;
 }
 .el-dialog.env-dialog .el-input__inner {
-  color: var(--b-text) !important;
-  -webkit-text-fill-color: var(--b-text) !important;
+  color: var(--text) !important;
+  -webkit-text-fill-color: var(--text) !important;
 }
 .el-dialog.env-dialog .el-input__inner::placeholder {
-  color: var(--b-text-faint) !important;
-  -webkit-text-fill-color: var(--b-text-faint) !important;
+  color: var(--text-4) !important;
+  -webkit-text-fill-color: var(--text-4) !important;
 }
 .el-dialog.env-dialog .el-textarea__inner {
-  background: var(--b-panel-soft) !important;
-  box-shadow: 0 0 0 1px var(--b-line) inset !important;
-  color: var(--b-text) !important;
+  background: var(--surface-2) !important;
+  box-shadow: 0 0 0 1px var(--line) inset !important;
+  color: var(--text) !important;
 }
 .el-dialog.env-dialog .el-input__wrapper:hover,
 .el-dialog.env-dialog .el-textarea__inner:hover {
-  box-shadow: 0 0 0 1px var(--b-line-strong) inset !important;
+  box-shadow: 0 0 0 1px var(--line-strong) inset !important;
 }
 .el-dialog.env-dialog .el-input__wrapper.is-focus,
 .el-dialog.env-dialog .el-textarea__inner:focus {
-  box-shadow: 0 0 0 1px var(--b-brand) inset !important;
+  box-shadow: 0 0 0 1px var(--brand) inset !important;
 }
 .el-dialog.env-dialog .el-overlay {
-  background-color: rgba(0, 0, 0, 0.6) !important;
+  background-color: rgba(11, 27, 63, 0.45) !important;
 }
-/* 确保 dark 模式下 primary 按钮可见 + 字号统一 */
+/* primary button — brand solid */
 .el-dialog.env-dialog .el-button--primary {
-  background: var(--b-brand) !important;
-  border-color: var(--b-brand) !important;
+  background: var(--brand) !important;
+  border-color: var(--brand) !important;
   color: #ffffff !important;
 }
 .el-dialog.env-dialog .el-button--primary:hover,
 .el-dialog.env-dialog .el-button--primary:focus {
-  background: var(--b-brand-ink) !important;
-  border-color: var(--b-brand-ink) !important;
+  background: var(--brand-hover) !important;
+  border-color: var(--brand-hover) !important;
   color: #ffffff !important;
 }
 .el-dialog.env-dialog .el-button {
   font-size: 14px;
   padding: 8px 18px;
+  border-radius: var(--r-2, 6px);
 }
-/* 输入框字体放大（用户反馈过小） */
+/* input font-size lift (user requested) */
 .el-dialog.env-dialog .el-input__inner,
 .el-dialog.env-dialog .el-textarea__inner,
 .el-dialog.env-dialog .el-select__wrapper {
@@ -1308,97 +1398,98 @@ html[data-theme="dark"] .builder-topbar .new-btn:hover {
   font-size: 14px;
 }
 .el-dialog.env-dialog .el-input__suffix {
-  color: var(--b-text-muted);
+  color: var(--text-3);
 }
-/* 密码框眼睛图标 */
+/* password reveal icon */
 .el-dialog.env-dialog .el-input__password {
-  color: var(--b-text-muted) !important;
+  color: var(--text-3) !important;
 }
 .el-dialog.env-dialog .el-input__password:hover {
-  color: var(--b-text) !important;
+  color: var(--text) !important;
 }
-/* 确保 prefix/suffix icon 颜色 */
+/* prefix/suffix icon color */
 .el-dialog.env-dialog .el-input__prefix,
 .el-dialog.env-dialog .el-input__suffix-inner {
-  color: var(--b-text-muted) !important;
+  color: var(--text-3) !important;
 }
-/* 覆盖浏览器自动填充的背景色 */
+/* override browser autofill background */
 .el-dialog.env-dialog .el-input__inner:-webkit-autofill,
 .el-dialog.env-dialog .el-input__inner:-webkit-autofill:hover,
 .el-dialog.env-dialog .el-input__inner:-webkit-autofill:focus {
-  -webkit-box-shadow: 0 0 0 1000px var(--b-panel-soft) inset !important;
-  -webkit-text-fill-color: var(--b-text) !important;
+  -webkit-box-shadow: 0 0 0 1000px var(--surface-2) inset !important;
+  -webkit-text-fill-color: var(--text) !important;
   transition: background-color 5000s ease-in-out 0s;
 }
-/* 按钮样式覆盖（修：之前用了未定义的 --b-ink，dark 模式下变成默认浅色） */
-.el-dialog.env-dialog .el-button--primary {
-  background: var(--b-brand) !important;
-  border: 1px solid var(--b-brand) !important;
-  color: #ffffff !important;
-}
+/* default (cancel) button — neutral */
 .el-dialog.env-dialog .el-button--default {
-  background: var(--b-panel-soft) !important;
-  border: 1px solid var(--b-line) !important;
-  color: var(--b-text-muted) !important;
+  background: var(--surface-2) !important;
+  border: 1px solid var(--line) !important;
+  color: var(--text-2) !important;
 }
 .el-dialog.env-dialog .el-button--default:hover {
-  background: var(--b-bg-sub) !important;
-  color: var(--b-text) !important;
+  background: var(--surface-3) !important;
+  color: var(--text) !important;
+  border-color: var(--line-strong) !important;
 }
-/* ── Select dropdown 主题 ── */
+/* ── Select dropdown theme ── */
 .el-dialog.env-dialog .el-select .el-input__wrapper {
-  background: var(--b-panel-soft) !important;
-  box-shadow: 0 0 0 1px var(--b-line) inset !important;
+  background: var(--surface-2) !important;
+  box-shadow: 0 0 0 1px var(--line) inset !important;
 }
 .el-dialog.env-dialog .el-select .el-input__inner {
-  color: var(--b-text) !important;
-  -webkit-text-fill-color: var(--b-text) !important;
+  color: var(--text) !important;
+  -webkit-text-fill-color: var(--text) !important;
 }
-/* ── InputNumber 主题 ── */
+/* ── InputNumber theme ── */
 .el-dialog.env-dialog .el-input-number .el-input__wrapper {
-  background: var(--b-panel-soft) !important;
-  box-shadow: 0 0 0 1px var(--b-line) inset !important;
+  background: var(--surface-2) !important;
+  box-shadow: 0 0 0 1px var(--line) inset !important;
 }
 .el-dialog.env-dialog .el-input-number__decrease,
 .el-dialog.env-dialog .el-input-number__increase {
-  background: var(--b-bg-sub) !important;
-  color: var(--b-text-muted) !important;
-  border-color: var(--b-line) !important;
+  background: var(--surface-3) !important;
+  color: var(--text-3) !important;
+  border-color: var(--line) !important;
 }
 .el-dialog.env-dialog .el-input-number__decrease:hover,
 .el-dialog.env-dialog .el-input-number__increase:hover {
-  color: var(--b-text) !important;
+  color: var(--text) !important;
 }
-/* ── Slider 主题 ── */
+/* ── Slider theme ── */
 .el-dialog.env-dialog .el-slider__runway {
-  background: var(--b-line) !important;
+  background: var(--line) !important;
+}
+.el-dialog.env-dialog .el-slider__bar {
+  background: var(--brand) !important;
 }
 .el-dialog.env-dialog .el-slider__button {
-  border-color: var(--b-brand) !important;
+  border-color: var(--brand) !important;
 }
-/* ── Switch 主题 ── */
+/* ── Switch theme ── */
 .el-dialog.env-dialog .el-switch.is-checked .el-switch__core {
-  border-color: var(--b-brand) !important;
-  background-color: var(--b-brand) !important;
+  border-color: var(--brand) !important;
+  background-color: var(--brand) !important;
 }
-/* ── Select popper 全局样式 ── */
+/* ── Select popper (mounted to body) ── */
 .el-select-dropdown {
-  background: var(--b-panel) !important;
-  border: 1px solid var(--b-line) !important;
+  background: var(--surface) !important;
+  border: 1px solid var(--line) !important;
+  border-radius: var(--r-3, 8px) !important;
+  box-shadow: var(--sh-3) !important;
 }
 .el-select-dropdown__item {
-  color: var(--b-text-muted) !important;
+  color: var(--text-2) !important;
 }
 .el-select-dropdown__item.hover,
 .el-select-dropdown__item:hover {
-  background: var(--b-bg-sub) !important;
-  color: var(--b-text) !important;
+  background: var(--surface-2) !important;
+  color: var(--text) !important;
 }
 .el-select-dropdown__item.is-selected {
-  color: var(--b-brand-ink) !important;
+  color: var(--brand) !important;
   font-weight: 600;
 }
 .el-select-dropdown .el-scrollbar__bar {
-  background: var(--b-line);
+  background: var(--line);
 }
 </style>

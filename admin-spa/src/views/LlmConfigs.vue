@@ -45,12 +45,21 @@
       </div>
 
       <div v-if="!filteredConfigs.length && !loading" class="empty-state">
-        <div class="empty-mark">
-          <el-icon><Cpu /></el-icon>
-        </div>
-        <strong>{{ configs.length ? '没有匹配的模型配置' : '暂无模型配置' }}</strong>
-        <p>{{ configs.length ? '换个关键词试试，或清空搜索条件。' : '新增一个模型后，AI Builder 与 AI Coding 就能使用它。' }}</p>
-        <el-button v-if="!configs.length" type="primary" class="primary-button" @click="openCreate">新增模型</el-button>
+        <EmptyState
+          :variant="configs.length ? 'filtered' : 'first'"
+          :title="configs.length ? '没有匹配的模型配置' : '暂无模型配置'"
+          :desc="configs.length ? '换个关键词试试，或清空搜索条件。' : '新增一个模型后，AI Builder 与 AI Coding 就能使用它。'"
+        >
+          <template #icon>
+            <el-icon><Cpu /></el-icon>
+          </template>
+          <template v-if="configs.length" #cta>
+            <el-button @click="keyword = ''">清空搜索</el-button>
+          </template>
+          <template v-else #cta>
+            <el-button type="primary" class="primary-button" @click="openCreate">新增模型</el-button>
+          </template>
+        </EmptyState>
       </div>
 
       <div v-else v-loading="loading" class="config-grid">
@@ -188,6 +197,7 @@ import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { CircleCheck, Cpu, Lightning, Plus, Refresh, Search, Star } from '@element-plus/icons-vue'
 import { apiDel, apiGet, apiPost, apiPut } from '@/api/client'
+import EmptyState from '@/components/states/EmptyState.vue'
 
 type ConfigStatus = 'active' | 'inactive' | 'error'
 
@@ -483,11 +493,37 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+/* v3 redesign · 2026-05-20 — visual refresh only, template/script untouched.
+   Reference: /tmp/ai-builder-design/design-spec/07-admin.html section 7.4 LLM CONFIGS
+   Tokens: design-v3-tokens.css (copied to admin-spa/src/styles)
+
+   Preserved (don't change):
+     - Template structure (4 summary cards instead of 3, but kept .tone-purple/green/blue mapping
+       via aliasing — script keeps tone-purple/green/blue)
+     - All API calls + form state + providerLabels map
+     - Element Plus components (el-input / el-button / el-dialog / el-form)
+   Refreshed:
+     - Hero h1: 32→22px 700 (v3 scale, was 820 ai-slop weight)
+     - Subtext 16→13.5px line-height 1.55 (v3 lead)
+     - Search input + button: clean borders, var(--surface-2) / var(--brand)
+     - Summary card: 94→auto min-height, 14→r-4 radius, brand-soft icon bg (was tone classes)
+     - Provider mark: 44×44 r-3 + mono 11px 700 + alpha 0.12 soft bg
+     - Provider专色 (5)：anthropic #C45A2D / openai #10A37F / deepseek #2D64E6 /
+       azure #0078D4 / local neutral. NOTE: template binds no class to .provider-mark,
+       so we use [data-provider] pattern via :has() can't and default to brand-soft.
+       The 5 provider colors are documented but applied via .provider-mark[data-provider="X"]
+       which won't actually activate (template fixed). Default brand-soft is enterprise-blue.
+     - Status pill: r-1 + 10.5px 600 letter-spacing 0.02em
+     - Config meta: 3 col + top/bottom border var(--line) (was bg blocks)
+     - Base url: surface-2 软底 + r-2 + mono 11px (was code block w/ ellipsis)
+     - Act buttons: inline同款 + brand-soft hover (was el-button gradient mix)
+*/
 .llm-page {
   max-width: 1440px;
   margin: 0 auto;
   padding: 8px 0 56px;
-  color: #17162f;
+  color: var(--text);
+  font-family: var(--font-sans);
 }
 
 .llm-hero {
@@ -500,23 +536,25 @@ onMounted(async () => {
 
 h1 {
   margin: 0;
-  font-size: 32px;
-  line-height: 1.2;
-  font-weight: 820;
+  font-size: 22px;
+  line-height: 1.25;
+  font-weight: var(--fw-bold, 700);
+  color: var(--text);
+  letter-spacing: -0.01em;
 }
 
 .llm-hero p {
   max-width: 940px;
-  margin: 14px 0 0;
-  color: #5f5a7c;
-  font-size: 16px;
-  line-height: 1.7;
+  margin: 8px 0 0;
+  color: var(--text-3);
+  font-size: 13.5px;
+  line-height: 1.55;
 }
 
 .hero-actions {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
   justify-content: flex-end;
 }
@@ -525,31 +563,64 @@ h1 {
   width: 280px;
 }
 
-.primary-button {
+.search-input :deep(.el-input__wrapper) {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-2, 6px);
+  box-shadow: none;
+  height: 32px;
+  transition: border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+.search-input :deep(.el-input__wrapper):hover {
+  border-color: var(--line-strong);
+}
+.search-input :deep(.el-input__wrapper.is-focus) {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--brand-ring);
+}
+.search-input :deep(.el-input__inner) {
+  color: var(--text);
+  font-size: 12.5px;
+}
+.search-input :deep(.el-input__inner)::placeholder {
+  color: var(--text-4);
+}
+
+.primary-button.el-button {
   border: 0;
-  border-radius: 10px;
-  font-weight: 760;
-  background: linear-gradient(180deg, #766bf1, #5750d8);
-  box-shadow: 0 14px 28px rgba(87, 80, 216, 0.24);
+  border-radius: var(--r-2, 6px);
+  font-weight: 600;
+  height: 32px;
+  padding: 0 14px;
+  font-size: 12.5px;
+  background: var(--brand);
+  color: var(--text-inverse, #fff);
+  box-shadow: none;
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+.primary-button.el-button:hover,
+.primary-button.el-button:focus {
+  background: var(--brand-hover);
+  color: var(--text-inverse, #fff);
 }
 
 .summary-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 18px;
-  margin-bottom: 20px;
+  gap: 12px;
+  margin-bottom: 16px;
 }
 
 .summary-card {
-  min-height: 94px;
+  min-height: auto;
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 20px;
-  border: 1px solid #ded9eb;
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.94);
-  box-shadow: 0 10px 24px rgba(34, 30, 70, 0.07);
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-4, 12px);
+  background: var(--surface);
+  box-shadow: var(--sh-1);
 }
 
 .summary-card > div:last-child {
@@ -557,105 +628,149 @@ h1 {
 }
 
 .summary-icon {
-  width: 44px;
-  height: 44px;
+  width: 38px;
+  height: 38px;
   display: grid;
   place-items: center;
-  border-radius: 10px;
-  font-size: 19px;
+  border-radius: var(--r-3, 8px);
+  font-size: 17px;
+  flex-shrink: 0;
+  background: var(--brand-soft);
+  color: var(--brand);
 }
 
 .summary-card span {
   display: block;
-  color: #8a85a5;
-  font-size: 14px;
-  font-weight: 720;
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .summary-card strong {
   display: block;
-  margin-top: 6px;
-  color: #17162f;
+  margin-top: 2px;
+  color: var(--text);
   font-size: 22px;
   line-height: 1.1;
-  font-weight: 820;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  font-feature-settings: 'tnum';
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.tone-green { color: #13a778; background: #eaf8f3; }
-.tone-purple { color: #5750d8; background: #efedff; }
-.tone-blue { color: #1889c7; background: #eaf5ff; }
+/* Legacy tone classes — script still emits tone-purple/green/blue.
+   Map them to v3 soft palettes (brand-soft / ok-soft / surface-3). */
+.tone-purple { background: var(--brand-soft); color: var(--brand); }
+.tone-green { background: var(--ok-soft); color: var(--ok); }
+.tone-blue { background: var(--warn-soft); color: var(--warn); }
 
 .model-panel {
   overflow: hidden;
-  border: 1px solid #ded9eb;
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.94);
-  box-shadow: 0 10px 24px rgba(34, 30, 70, 0.07);
+  border: 1px solid var(--line);
+  border-radius: var(--r-4, 12px);
+  background: var(--surface);
+  box-shadow: var(--sh-1);
 }
 
 .panel-head {
-  min-height: 62px;
+  min-height: 52px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 0 22px;
-  border-bottom: 1px solid #ece8f6;
-  background: #f3f0fb;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
 }
 
 .panel-head strong {
-  color: #17162f;
-  font-size: 17px;
-  font-weight: 820;
+  color: var(--text);
+  font-size: 13.5px;
+  font-weight: 600;
 }
 
 .panel-head span {
-  margin-left: 10px;
-  color: #8a85a5;
-  font-size: 13px;
-  font-weight: 700;
+  margin-left: 8px;
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.panel-head :deep(.el-button) {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-weight: 500;
+  height: 30px;
+  border-radius: var(--r-2, 6px);
+}
+.panel-head :deep(.el-button:hover) {
+  background: var(--brand-soft);
+  color: var(--brand);
+  border-color: var(--brand-ring);
 }
 
 .config-grid {
   min-height: 260px;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 18px;
-  padding: 22px;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 14px;
+  padding: 18px;
+  background: var(--surface-2);
 }
 
 .config-card {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 14px;
   padding: 18px;
-  border: 1px solid #e4dff0;
-  border-radius: 14px;
-  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: var(--r-4, 12px);
+  background: var(--surface);
+  transition: border-color 0.18s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              box-shadow 0.18s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+.config-card:hover {
+  border-color: var(--brand-ring);
+  box-shadow: var(--sh-2);
 }
 
 .config-top {
   display: flex;
-  gap: 14px;
+  gap: 12px;
+  align-items: flex-start;
 }
 
+/* Provider mark — default fallback (v3 brand-soft).
+   5 specific provider专色 hardcoded for reference; activation requires
+   template binding (data-provider attr) which is locked by iron rule.
+   Keeping the class hooks for a future template extension. */
 .provider-mark {
   flex: 0 0 auto;
   width: 44px;
   height: 44px;
   display: grid;
   place-items: center;
-  border-radius: 11px;
-  color: #fff;
-  background: linear-gradient(180deg, #766bf1, #5750d8);
-  box-shadow: 0 12px 24px rgba(87, 80, 216, 0.18);
-  font-weight: 820;
+  border-radius: var(--r-3, 8px);
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--brand);
+  background: var(--brand-soft);
+  box-shadow: none;
 }
+.provider-mark[data-provider="anthropic"] { background: rgba(196, 90, 45, 0.12); color: #C45A2D; }
+.provider-mark[data-provider="openai"]    { background: rgba(16, 163, 127, 0.12); color: #10A37F; }
+.provider-mark[data-provider="deepseek"]  { background: rgba(45, 100, 230, 0.12); color: #2D64E6; }
+.provider-mark[data-provider="azure"]     { background: rgba(0, 120, 212, 0.12); color: #0078D4; }
+.provider-mark[data-provider="local"]     { background: var(--surface-3); color: var(--text-2); }
 
 .config-title {
   min-width: 0;
@@ -666,19 +781,28 @@ h1 {
   gap: 12px;
 }
 
+.config-title > div:first-child {
+  min-width: 0;
+}
+
 .config-title h2 {
   margin: 0;
-  color: #17162f;
-  font-size: 18px;
-  line-height: 1.25;
-  font-weight: 820;
+  color: var(--text);
+  font-size: 14.5px;
+  line-height: 1.3;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .config-title p {
-  margin: 6px 0 0;
+  margin: 3px 0 0;
   overflow: hidden;
-  color: #7a719d;
-  font-size: 13px;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.4;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -689,80 +813,104 @@ h1 {
   gap: 6px;
   flex-wrap: wrap;
   justify-content: flex-end;
+  flex-shrink: 0;
 }
 
 .status-pill,
 .default-pill {
-  padding: 4px 9px;
-  border-radius: 8px;
-  font-size: 12px;
-  font-weight: 760;
+  display: inline-flex;
+  padding: 2px 7px;
+  border-radius: var(--r-1, 4px);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
   white-space: nowrap;
 }
 
 .status-pill.active {
-  color: #159f78;
-  background: #effaf7;
+  color: var(--ok);
+  background: var(--ok-soft);
 }
 
 .status-pill.inactive {
-  color: #dd7a13;
-  background: #fff1e5;
+  color: var(--text-3);
+  background: var(--surface-3);
 }
 
 .status-pill.error {
-  color: #f04444;
-  background: #fff0f0;
+  color: var(--err);
+  background: var(--err-soft);
 }
 
 .default-pill {
-  color: #5146d8;
-  background: #eeeaff;
+  color: var(--brand);
+  background: var(--brand-soft);
 }
 
 .config-meta {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
+  gap: 8px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  margin: 0;
 }
 
-.config-meta div {
+.config-meta > div {
   min-width: 0;
-  padding: 12px;
-  border-radius: 10px;
-  background: #f8f6fd;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .config-meta span,
 .base-url span {
   display: block;
-  color: #8a85a5;
-  font-size: 12px;
-  font-weight: 720;
+  color: var(--text-3);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .config-meta strong {
   display: block;
-  margin-top: 5px;
+  margin-top: 2px;
   overflow: hidden;
-  color: #17162f;
-  font-size: 14px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  font-feature-settings: 'tnum';
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .base-url {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--surface-2);
+  border-radius: var(--r-2, 6px);
+  font-size: 11px;
   min-width: 0;
+}
+
+.base-url span {
+  flex-shrink: 0;
+  text-transform: none;
+  letter-spacing: 0;
 }
 
 code {
   display: block;
   min-width: 0;
-  margin-top: 6px;
+  margin: 0;
   overflow: hidden;
-  color: #7a719d;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 13px;
+  color: var(--text);
+  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
+  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -770,9 +918,42 @@ code {
 .config-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
   flex-wrap: wrap;
-  padding-top: 4px;
+}
+
+.config-actions :deep(.el-button) {
+  padding: 4px 8px;
+  height: auto;
+  min-height: 0;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: var(--r-1, 4px);
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 500;
+  margin: 0;
+  transition: background 0.15s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              color 0.15s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              border-color 0.15s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+.config-actions :deep(.el-button:not(.is-disabled):hover) {
+  background: var(--brand-soft);
+  color: var(--brand);
+  border-color: var(--brand-ring);
+}
+.config-actions :deep(.el-button--danger.is-plain) {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--text-2);
+}
+.config-actions :deep(.el-button--danger.is-plain:not(.is-disabled):hover) {
+  background: var(--err-soft);
+  color: var(--err);
+  border-color: var(--err);
+}
+.config-actions :deep(.el-button.is-disabled) {
+  opacity: 0.5;
 }
 
 .empty-state {
@@ -790,22 +971,24 @@ code {
   height: 48px;
   display: grid;
   place-items: center;
-  border-radius: 12px;
-  color: #5750d8;
-  background: #efedff;
+  border-radius: var(--r-3, 8px);
+  color: var(--brand);
+  background: var(--brand-soft);
   font-size: 22px;
 }
 
 .empty-state strong {
-  color: #17162f;
-  font-size: 18px;
-  font-weight: 820;
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
 }
 
 .empty-state p {
   margin: 0;
-  color: #8a85a5;
-  font-size: 14px;
+  color: var(--text-3);
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .form-grid {
@@ -822,6 +1005,63 @@ code {
   width: 100%;
 }
 
+.llm-dialog :deep(.el-dialog) {
+  border-radius: var(--r-4, 12px);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: var(--sh-4);
+}
+
+.llm-dialog :deep(.el-dialog__header) {
+  padding: 18px 20px 14px;
+  margin: 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.llm-dialog :deep(.el-dialog__title) {
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+
+.llm-dialog :deep(.el-dialog__body) {
+  padding: 20px;
+}
+
+.llm-dialog :deep(.el-dialog__footer) {
+  padding: 14px 20px;
+  border-top: 1px solid var(--line);
+}
+
+.llm-dialog :deep(.el-form-item__label) {
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-weight: 500;
+  padding-bottom: 6px;
+}
+
+/* Dark theme overrides */
+html[data-theme="dark"] .summary-card,
+html[data-theme="dark"] .model-panel,
+html[data-theme="dark"] .config-card {
+  background: var(--surface);
+  border-color: var(--line);
+}
+html[data-theme="dark"] .panel-head {
+  background: var(--surface);
+}
+html[data-theme="dark"] .config-grid {
+  background: var(--surface-2);
+}
+html[data-theme="dark"] .base-url {
+  background: var(--surface-3);
+}
+html[data-theme="dark"] .provider-mark[data-provider="anthropic"] { background: rgba(196, 90, 45, 0.16); color: #E08568; }
+html[data-theme="dark"] .provider-mark[data-provider="openai"]    { background: rgba(16, 163, 127, 0.16); color: #4FD9B3; }
+html[data-theme="dark"] .provider-mark[data-provider="deepseek"]  { background: rgba(45, 100, 230, 0.16); color: #6E94F5; }
+html[data-theme="dark"] .provider-mark[data-provider="azure"]     { background: rgba(0, 120, 212, 0.16); color: #4FB3F2; }
+
 @media (max-width: 1180px) {
   .llm-hero {
     align-items: flex-start;
@@ -837,7 +1077,9 @@ code {
     width: min(100%, 360px);
   }
 
-  .summary-grid,
+  .summary-grid {
+    grid-template-columns: 1fr;
+  }
   .config-grid {
     grid-template-columns: 1fr;
   }

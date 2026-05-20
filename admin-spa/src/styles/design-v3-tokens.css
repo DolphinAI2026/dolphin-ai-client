@@ -1,0 +1,210 @@
+/* frontend/src/styles/design-v3-tokens.css
+ *
+ * Claude Design v3 token system — 替代 v2 indigo-violet 老配色。
+ * Source: /tmp/ai-builder-design/design-spec/spec.css (Claude design "睿鲸AI · Design Spec v1")
+ *
+ * 4 条不可动摇原则：
+ *   01. 一套 token — .vue 里禁止 hex，全走 --brand / --text / --surface / --line
+ *   02. 一个尺度 — 字号 5 档（11/12.5/14/18/24/32），字重 4 档（400/500/600/700）
+ *   03. 一种品牌 — 睿鲸 = 蓝色一种。智能体用形状/图标区分，不抢色
+ *   04. 对话为中心 — 工作流收敛到对话，表单/向导只用于"必须分步"
+ *
+ * Cascade：v3 在 main.ts 里 import 在 v2 之后，相同 var 名 v3 win（覆盖）。
+ * v2 独有的 var（--ai-* / --amber-* / --emerald-*）保留以避免现有组件破。
+ * v2 别名（--border / --bg-base 等）通过本文件末尾的 alias 块映射到 v3。
+ */
+
+/* ─── Fonts ─────────────────────────────────────────────────────── */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+SC:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap');
+
+/* ─── Light theme (default) ────────────────────────────────────── */
+:root,
+html[data-theme="light"] {
+  /* Brand — clean enterprise blue (avoiding Tailwind indigo / AI-slop tell) */
+  --blue-50:  #EFF6FF;
+  --blue-100: #DBEAFE;
+  --blue-200: #BFDBFE;
+  --blue-300: #93C5FD;
+  --blue-400: #60A5FA;
+  --blue-500: #3B82F6;
+  --blue-600: #2563EB;
+  --blue-700: #1D4ED8;
+  --blue-800: #1E40AF;
+  --blue-900: #1E3A8A;
+
+  --brand:        var(--blue-700);
+  --brand-hover:  var(--blue-800);
+  --brand-text:   var(--blue-700);
+  --brand-soft:   var(--blue-50);
+  --brand-soft-2: var(--blue-100);
+  --brand-ring:   rgba(29, 78, 216, 0.18);
+  --brand-glow:   rgba(29, 78, 216, 0.32);
+
+  /* Surfaces */
+  --bg:         #F8FAFC;
+  --bg-app:     linear-gradient(180deg, #F8FAFC 0%, #F1F5F9 100%);
+  --surface:    #FFFFFF;
+  --surface-2:  #F8FAFC;
+  --surface-3:  #F1F5F9;
+  --surface-overlay: rgba(255, 255, 255, 0.78);
+  --glass:      rgba(255, 255, 255, 0.72);
+
+  /* Text — slate ramp, 4 档 */
+  --text:    #0B1B3F;
+  --text-2:  #3F4D6B;
+  --text-3:  #64748B;
+  --text-4:  #94A3B8;
+  --text-inverse: #FFFFFF;
+
+  /* Lines */
+  --line:        rgba(11, 27, 63, 0.08);
+  --line-strong: rgba(11, 27, 63, 0.14);
+  --line-focus:  rgba(29, 78, 216, 0.45);
+
+  /* Status — only for state, never for decoration */
+  --ok:        #047857;
+  --ok-soft:   #D1FAE5;
+  --warn:      #B45309;
+  --warn-soft: #FEF3C7;
+  --err:       #B91C1C;
+  --err-soft:  #FEE2E2;
+  --info:      var(--blue-700);
+  --info-soft: var(--blue-50);
+
+  /* Type scale — 5 档（不写 13.5、不写 780） */
+  --t-display: 40px;
+  --t-h1:      32px;
+  --t-h2:      24px;
+  --t-h3:      18px;
+  --t-body:    14px;
+  --t-small:   12.5px;
+  --t-mono:    12px;
+  --t-micro:   11px;
+
+  /* Font weights — 4 档 */
+  --fw-regular:  400;
+  --fw-medium:   500;
+  --fw-semibold: 600;
+  --fw-bold:     700;
+
+  /* Spacing scale */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 20px;
+  --s-6: 24px;
+  --s-8: 32px;
+  --s-10: 40px;
+  --s-12: 48px;
+  --s-16: 64px;
+  --s-20: 80px;
+
+  /* Radii */
+  --r-1: 4px;
+  --r-2: 6px;
+  --r-3: 8px;
+  --r-4: 12px;
+  --r-5: 16px;
+  --r-full: 999px;
+
+  /* Shadows */
+  --sh-1: 0 1px 2px rgba(11, 27, 63, 0.04);
+  --sh-2: 0 1px 3px rgba(11, 27, 63, 0.06), 0 1px 2px rgba(11, 27, 63, 0.04);
+  --sh-3: 0 4px 12px rgba(11, 27, 63, 0.06), 0 2px 4px rgba(11, 27, 63, 0.04);
+  --sh-4: 0 12px 32px rgba(11, 27, 63, 0.10), 0 4px 12px rgba(11, 27, 63, 0.06);
+  --sh-5: 0 24px 60px rgba(11, 27, 63, 0.14), 0 8px 24px rgba(11, 27, 63, 0.08);
+  --sh-brand: 0 8px 22px -8px rgba(29, 78, 216, 0.32);
+
+  /* Easing */
+  --ease:        cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* Fonts */
+  --font-sans: 'Inter', 'Noto Sans SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+}
+
+/* ─── Dark theme ───────────────────────────────────────────────── */
+html[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg:         #0B1224;
+  --bg-app:     linear-gradient(180deg, #0B1224 0%, #0A1020 100%);
+  --surface:    #131A2E;
+  --surface-2:  #182142;
+  --surface-3:  #1F2A50;
+  --surface-overlay: rgba(19, 26, 46, 0.78);
+  --glass:      rgba(19, 26, 46, 0.78);
+
+  --text:    #E8EEFB;
+  --text-2:  #A8B4D0;
+  --text-3:  #6F7DA0;
+  --text-4:  #4C587A;
+  --text-inverse: #0B1224;
+
+  --line:        rgba(255, 255, 255, 0.07);
+  --line-strong: rgba(255, 255, 255, 0.13);
+  --line-focus:  rgba(96, 165, 250, 0.55);
+
+  --brand:        #60A5FA;
+  --brand-hover:  #93C5FD;
+  --brand-text:   #BFDBFE;
+  --brand-soft:   rgba(96, 165, 250, 0.12);
+  --brand-soft-2: rgba(96, 165, 250, 0.20);
+  --brand-ring:   rgba(96, 165, 250, 0.28);
+  --brand-glow:   rgba(96, 165, 250, 0.45);
+
+  --ok:        #34D399;
+  --ok-soft:   rgba(52, 211, 153, 0.14);
+  --warn:      #FBBF24;
+  --warn-soft: rgba(251, 191, 36, 0.14);
+  --err:       #F87171;
+  --err-soft:  rgba(248, 113, 113, 0.14);
+  --info:      #60A5FA;
+  --info-soft: rgba(96, 165, 250, 0.14);
+
+  --sh-1: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --sh-2: 0 1px 3px rgba(0, 0, 0, 0.4);
+  --sh-3: 0 4px 12px rgba(0, 0, 0, 0.5);
+  --sh-4: 0 12px 32px rgba(0, 0, 0, 0.6);
+  --sh-5: 0 24px 60px rgba(0, 0, 0, 0.7);
+  --sh-brand: 0 8px 22px -8px rgba(96, 165, 250, 0.45);
+}
+
+/* ─── v2 → v3 兼容 alias 块 ────────────────────────────────────────
+ *
+ * v2 时代用过的 var 名（散在很多 .vue 文件里），映射到 v3 等价物。
+ * 这样老组件不用改就能继承新色。
+ */
+:root,
+html[data-theme="light"],
+html[data-theme="dark"] {
+  /* v2 用的 border 系列 → v3 用 line */
+  --border:        var(--line);
+  --border-strong: var(--line-strong);
+  --border-focus:  var(--line-focus);
+
+  /* v2 用 bg-base → v3 用 bg */
+  --bg-base: var(--bg);
+
+  /* v2 sidebar bg — v3 没单独定义，跟 surface-2 */
+  --bg-rail: var(--surface-2);
+
+  /* v2 code-bg → v3 surface-3 兜底 */
+  --code-bg: var(--surface-3);
+
+  /* AI 二色（青）— v3 取消，保留 v2 名让现有"AI 助手" 标签不破，但映射到 brand */
+  --ai:        var(--brand);
+  --ai-hover:  var(--brand-hover);
+  --ai-text:   var(--brand-text);
+  --ai-soft:   var(--brand-soft);
+  --ai-soft-2: var(--brand-soft-2);
+  --ai-ring:   var(--brand-ring);
+
+  /* v2 状态色别名（被数据接入 wizard 用到）保留以兼容 */
+  --amber:     var(--warn);
+  --amber-bg:  var(--warn-soft);
+  --emerald:   var(--ok);
+  --emerald-bg: var(--ok-soft);
+}

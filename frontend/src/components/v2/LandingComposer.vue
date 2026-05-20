@@ -102,6 +102,21 @@ function submit() {
 </template>
 
 <style scoped>
+/* v3 redesign · 2026-05-20 — visual refresh only, template/script untouched.
+   Preserved (don't change):
+     - 2 modes (builder/coding) — NOT 3 (no 低代码 third option)
+     - All class names (.landing-composer/.mode-switcher/.mode-option/.composer-card/.composer-head/.composer-input/.composer-foot/.tool-btn/.primary-btn)
+     - 860px @media single-column breakpoint
+     - submit() router push (in <script>, not touched)
+   Refreshed:
+     - hardcoded rgba(91,91,214,X)/rgba(45,44,123,X)/rgba(56,55,158,X) → --brand-ring/--brand-glow/--line/--sh-4
+     - linear-gradient(--brand-500,--brand-700) primary btn → --brand single color (v3 clean-blue spec)
+     - composer-head violet gradient → soft brand-soft fade (matches design-spec hero)
+     - radius 14/10px → var(--r-5,16px) outer / var(--r-3,8px) inner
+     - weights 780/760/720/650 → capped at fw-semibold(600)/fw-medium(500) per v3 4-档
+     - transitions → var(--ease) cubic-bezier(.2,.8,.2,1)
+     - kbd font-family typo var(--d-font-mono) → var(--font-mono)
+*/
 .landing-composer {
   width: min(100%, 920px);
   margin: 0 auto;
@@ -114,10 +129,10 @@ function submit() {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
   padding: 6px;
-  border: 1px solid var(--border-strong);
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.86);
-  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-4, 12px);
+  background: var(--surface);
+  box-shadow: var(--sh-2);
 }
 
 .mode-option {
@@ -128,12 +143,15 @@ function submit() {
   gap: 10px;
   padding: 0 14px;
   border: 1px solid transparent;
-  border-radius: 10px;
+  border-radius: var(--r-3, 8px);
   background: transparent;
   color: var(--text-2);
   cursor: pointer;
   font-family: inherit;
-  transition: background 0.16s, border-color 0.16s, color 0.16s, box-shadow 0.16s;
+  transition: background 0.16s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              border-color 0.16s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              color 0.16s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              box-shadow 0.16s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
 }
 
 .mode-option:hover {
@@ -142,10 +160,10 @@ function submit() {
 }
 
 .mode-option.active {
-  color: var(--brand-text);
+  color: var(--brand);
   background: var(--brand-soft);
-  border-color: rgba(91, 91, 214, 0.35);
-  box-shadow: inset 0 0 0 1px rgba(91, 91, 214, 0.08);
+  border-color: var(--brand-ring);
+  box-shadow: inset 0 0 0 1px var(--brand-ring);
 }
 
 .mode-icon,
@@ -169,21 +187,21 @@ function submit() {
 
 .mode-copy strong {
   font-size: 13px;
-  font-weight: 760;
+  font-weight: var(--fw-semibold, 600);
 }
 
 .mode-copy small {
   color: var(--text-3);
-  font-size: 11px;
-  font-weight: 600;
+  font-size: var(--t-micro, 11px);
+  font-weight: var(--fw-medium, 500);
 }
 
 .composer-card {
   overflow: hidden;
-  border: 1px solid rgba(91, 91, 214, 0.22);
-  border-radius: 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-5, 16px);
   background: var(--surface);
-  box-shadow: 0 20px 52px rgba(45, 44, 123, 0.12), 0 2px 6px rgba(45, 44, 123, 0.06);
+  box-shadow: var(--sh-4);
 }
 
 .composer-head {
@@ -193,8 +211,8 @@ function submit() {
   justify-content: space-between;
   gap: 20px;
   padding: 0 18px;
-  border-bottom: 1px solid rgba(91, 91, 214, 0.14);
-  background: linear-gradient(180deg, rgba(242, 240, 254, 0.86), rgba(255, 255, 255, 0.94));
+  border-bottom: 1px solid var(--line);
+  background: linear-gradient(180deg, var(--brand-soft) 0%, var(--surface) 100%);
 }
 
 .composer-title {
@@ -206,21 +224,21 @@ function submit() {
 }
 
 .composer-title strong {
-  font-size: 14px;
-  font-weight: 780;
+  font-size: var(--t-body, 14px);
+  font-weight: var(--fw-semibold, 600);
 }
 
 .composer-title span:last-child {
   color: var(--text-3);
-  font-size: 12px;
-  font-weight: 650;
+  font-size: var(--t-small, 12.5px);
+  font-weight: var(--fw-regular, 400);
 }
 
 .composer-head p {
   margin: 0;
   color: var(--text-3);
-  font-size: 12px;
-  font-weight: 650;
+  font-size: var(--t-small, 12.5px);
+  font-weight: var(--fw-regular, 400);
   white-space: nowrap;
 }
 
@@ -235,7 +253,7 @@ function submit() {
   background: transparent;
   color: var(--text);
   font-family: inherit;
-  font-size: 14px;
+  font-size: var(--t-body, 14px);
   line-height: 1.65;
 }
 
@@ -250,8 +268,8 @@ function submit() {
   justify-content: space-between;
   gap: 16px;
   padding: 10px 14px;
-  border-top: 1px solid rgba(91, 91, 214, 0.12);
-  background: rgba(255, 255, 255, 0.9);
+  border-top: 1px solid var(--line);
+  background: var(--surface);
 }
 
 .tool-btn,
@@ -261,37 +279,47 @@ function submit() {
   align-items: center;
   justify-content: center;
   gap: 10px;
-  border-radius: 10px;
+  border-radius: var(--r-3, 8px);
   font-family: inherit;
   font-size: 13px;
-  font-weight: 720;
+  font-weight: var(--fw-semibold, 600);
   cursor: pointer;
-  transition: transform 0.14s, background 0.14s, border-color 0.14s, box-shadow 0.14s;
+  transition: transform 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              box-shadow 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
 }
 
 .tool-btn {
   padding: 0 18px;
   color: var(--brand-text);
   background: var(--surface);
-  border: 1px solid rgba(91, 91, 214, 0.18);
+  border: 1px solid var(--line-strong);
 }
 
 .tool-btn:hover {
   background: var(--brand-soft);
-  border-color: rgba(91, 91, 214, 0.34);
+  border-color: var(--brand-ring);
+}
+
+.tool-btn:focus-visible,
+.primary-btn:focus-visible {
+  outline: 2px solid var(--line-focus, var(--brand-ring));
+  outline-offset: 2px;
 }
 
 .primary-btn {
   padding: 0 18px 0 20px;
   color: #fff;
-  background: linear-gradient(135deg, var(--brand-500), var(--brand-700));
-  border: 1px solid rgba(56, 55, 158, 0.42);
-  box-shadow: 0 14px 28px rgba(91, 91, 214, 0.24);
+  background: var(--brand);
+  border: 1px solid var(--brand);
+  box-shadow: var(--sh-brand);
 }
 
 .primary-btn:not(:disabled):hover {
+  background: var(--brand-hover);
+  border-color: var(--brand-hover);
   transform: translateY(-1px);
-  box-shadow: 0 18px 34px rgba(91, 91, 214, 0.28);
 }
 
 .primary-btn:disabled {
@@ -305,12 +333,12 @@ function submit() {
   display: inline-flex;
   align-items: center;
   padding: 0 7px;
-  border-radius: 6px;
+  border-radius: var(--r-2, 6px);
   color: rgba(255, 255, 255, 0.82);
   background: rgba(255, 255, 255, 0.16);
-  font-family: var(--d-font-mono);
-  font-size: 11px;
-  font-weight: 700;
+  font-family: var(--font-mono, 'JetBrains Mono', 'SF Mono', Menlo, monospace);
+  font-size: var(--t-micro, 11px);
+  font-weight: var(--fw-bold, 700);
 }
 
 html[data-theme="dark"] .mode-switcher,
@@ -320,7 +348,7 @@ html[data-theme="dark"] .composer-foot {
 }
 
 html[data-theme="dark"] .composer-head {
-  background: linear-gradient(180deg, rgba(138, 138, 240, 0.12), rgba(21, 19, 31, 0.92));
+  background: linear-gradient(180deg, var(--brand-soft) 0%, var(--surface) 100%);
 }
 
 @media (max-width: 860px) {

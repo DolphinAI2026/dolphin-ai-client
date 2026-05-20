@@ -49,6 +49,23 @@
 
       <div class="tenant-users-panel">
         <el-table v-loading="loading" :data="pagedUsers" stripe>
+          <template #empty>
+            <EmptyState
+              :variant="(filterQ || filterRole || filterTenant) ? 'filtered' : 'first'"
+              :title="(filterQ || filterRole || filterTenant) ? '没有匹配的成员' : '还没有成员'"
+              :desc="(filterQ || filterRole || filterTenant) ? '换个关键词，或清空筛选条件查看所有成员。' : '添加成员，分配角色（管理员 / 开发者 / 查看者），让团队一起协作。'"
+            >
+              <template #icon>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/></svg>
+              </template>
+              <template v-if="filterQ || filterRole || filterTenant" #cta>
+                <el-button @click="() => { filterQ = ''; filterRole = ''; filterTenant = '' }">清空筛选</el-button>
+              </template>
+              <template v-else #cta>
+                <el-button type="primary" @click="openInviteDialog">添加用户</el-button>
+              </template>
+            </EmptyState>
+          </template>
           <el-table-column prop="username" label="用户名" min-width="180" />
           <el-table-column v-if="isPlatformAdmin" label="所属组织" min-width="220">
             <template #default="{ row }">
@@ -207,6 +224,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import BuilderFrame from '@/components/BuilderFrame.vue'
+import EmptyState from '@/components/states/EmptyState.vue'
 import { authApi, type TenantAdminItem, type TenantRoleOption, type TenantUser } from '@/api/auth'
 import { useUserStore } from '@/stores/user'
 
@@ -460,101 +478,295 @@ onMounted(() => {
 </script>
 
 <style scoped>
+/* v3 redesign · 2026-05-20 — visual refresh only.
+   Preserved: template (BuilderFrame + el-table + inline el-select / el-switch /
+              el-tag / el-pagination + 2 dialogs), script (CRUD + role/status mutation).
+   Refreshed: page header, filter-bar boxed surface, el-table colors via :deep,
+              inline role select 24px / r-1 / surface-2, el-tag 5-color mapping
+              (platform_admin=err / tenant_admin=brand / developer=ok / viewer=text-3 /
+               member=neutral), el-pagination active solid brand. */
+
 .tenant-users-page {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  background: var(--b-bg);
+  gap: 16px;
+  padding: 24px;
+  font-family: var(--font-sans);
+  color: var(--text);
 }
 
 .tenant-users-header {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: space-between;
   gap: 16px;
+  margin-bottom: 4px;
 }
-
 .tenant-users-actions {
   display: flex;
   gap: 10px;
 }
-
 .tenant-users-header h1 {
-  margin: 0;
-  font-size: 18px;
-  color: var(--b-text);
-  letter-spacing: 0;
+  margin: 0 0 6px;
+  font-size: var(--t-h2);          /* 24px */
+  font-weight: var(--fw-bold);
+  letter-spacing: -0.02em;
+  color: var(--text);
 }
-
 .tenant-users-header p {
-  margin: 5px 0 0;
-  color: var(--b-text-muted);
-  font-size: 12px;
+  margin: 0;
+  color: var(--text-3);
+  font-size: 13.5px;
+  line-height: 1.55;
+  max-width: 720px;
 }
-
 .tenant-users-header .tenant-users-note {
-  color: var(--b-text-dim);
-}
-
-.tenant-users-panel {
-  background: var(--b-panel);
-  border: 1px solid var(--b-line);
-  border-radius: 8px;
-  padding: 10px;
-  box-shadow: var(--b-shadow-xs);
-}
-
-.tenant-users-panel :deep(.el-table) {
-  --el-table-header-bg-color: var(--b-panel-soft);
-  --el-table-tr-bg-color: var(--b-panel);
-  --el-table-row-hover-bg-color: var(--b-bg-sub);
-  --el-table-border-color: var(--b-line);
-  color: var(--b-text);
-  font-size: 12px;
-}
-
-.tenant-users-panel :deep(.el-table th.el-table__cell) {
-  color: var(--b-text-muted);
-  font-weight: 700;
-}
-
-.tenant-users-panel :deep(.el-table td.el-table__cell) {
-  color: var(--b-text);
-}
-
-:deep(.builder-topbar .el-button) {
-  height: 30px;
-  border-radius: 7px;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.form-hint {
   margin-top: 4px;
-  font-size: 12px;
-  color: var(--b-text-muted, #999);
-  line-height: 1.5;
+  color: var(--text-4);
+  font-size: 12.5px;
 }
 
+/* ── Filter bar — boxed surface card ─────────────────────────── */
 .tenant-users-filter {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-bottom: 12px;
+  padding: 12px 14px;
+  margin-bottom: 0;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-4);
   flex-wrap: wrap;
 }
 .tenant-users-summary {
   font-size: 12px;
-  color: var(--b-text-muted, #999);
+  color: var(--text-3);
   margin-left: auto;
+  font-feature-settings: 'tnum';
 }
+
+/* ── Table panel ─────────────────────────────────────────────── */
+.tenant-users-panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-4);
+  overflow: hidden;
+}
+
+/* Element Plus table — only override colors via CSS vars,
+   no structural change (don't touch cell padding / fixed-col / scroll). */
+.tenant-users-panel :deep(.el-table) {
+  --el-table-header-bg-color: var(--surface-2);
+  --el-table-header-text-color: var(--text-2);
+  --el-table-bg-color: var(--surface);
+  --el-table-tr-bg-color: var(--surface);
+  --el-table-row-hover-bg-color: var(--surface-2);
+  --el-table-border-color: var(--line);
+  --el-table-text-color: var(--text);
+  background: var(--surface);
+  font-size: 13px;
+  color: var(--text);
+}
+.tenant-users-panel :deep(.el-table th.el-table__cell) {
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-weight: var(--fw-semibold);
+  font-size: 11.5px;
+  letter-spacing: 0.02em;
+  border-bottom: 1px solid var(--line);
+}
+.tenant-users-panel :deep(.el-table td.el-table__cell) {
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
+}
+/* Kill default stripe — spec uses no zebra */
+.tenant-users-panel :deep(.el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell) {
+  background: var(--surface);
+}
+.tenant-users-panel :deep(.el-table__body tr:hover > td.el-table__cell) {
+  background: var(--surface-2);
+}
+
+/* Inline role select in row — 24px h, r-1, surface-2 ground */
+.tenant-users-panel :deep(.el-table .el-select .el-select__wrapper) {
+  min-height: 24px;
+  padding: 0 8px;
+  background: var(--surface-2);
+  border-radius: var(--r-1);
+  box-shadow: 0 0 0 1px var(--line);
+  font-size: 12px;
+}
+.tenant-users-panel :deep(.el-table .el-select .el-select__wrapper:hover) {
+  box-shadow: 0 0 0 1px var(--brand-ring);
+}
+.tenant-users-panel :deep(.el-table .el-select .el-select__wrapper.is-focused) {
+  box-shadow: 0 0 0 1px var(--brand);
+}
+.tenant-users-panel :deep(.el-table .el-select .el-select__placeholder),
+.tenant-users-panel :deep(.el-table .el-select .el-select__selected-item) {
+  color: var(--text);
+  font-size: 12px;
+}
+
+/* el-switch — accent on brand */
+.tenant-users-panel :deep(.el-switch.is-checked .el-switch__core) {
+  background-color: var(--brand);
+  border-color: var(--brand);
+}
+
+/* Row action links — link style, no button chrome */
+.tenant-users-panel :deep(.el-button.is-link) {
+  color: var(--brand);
+  font-weight: var(--fw-medium);
+  font-size: 12px;
+}
+.tenant-users-panel :deep(.el-button.is-link:hover) {
+  color: var(--brand-hover);
+}
+.tenant-users-panel :deep(.el-button.is-link.el-button--danger) {
+  color: var(--err);
+}
+
+/* ── el-tag → role-pill 5-color (spec 07.3) ─────────────────────
+   platform_admin = err   (red)
+   tenant_admin   = brand (blue) — type="warning" in code
+   developer      = ok    (green) — type="primary" in code
+   viewer         = text-3 neutral — type="info" in code
+   member         = neutral grey — type="primary" default fallback
+*/
+.tenant-users-panel :deep(.el-tag) {
+  height: auto;
+  padding: 2px 8px;
+  border-radius: var(--r-1);
+  font-size: 11px;
+  font-weight: var(--fw-semibold);
+  letter-spacing: 0.02em;
+  border: 0;
+  background: var(--surface-3);
+  color: var(--text-2);
+}
+/* type=danger → platform_admin */
+.tenant-users-panel :deep(.el-tag.el-tag--danger) {
+  background: var(--err-soft);
+  color: var(--err);
+}
+/* type=warning → tenant_admin */
+.tenant-users-panel :deep(.el-tag.el-tag--warning) {
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+/* type=success / type=primary → developer */
+.tenant-users-panel :deep(.el-tag.el-tag--success),
+.tenant-users-panel :deep(.el-tag.el-tag--primary) {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+/* type=info → viewer */
+.tenant-users-panel :deep(.el-tag.el-tag--info) {
+  background: var(--surface-3);
+  color: var(--text-3);
+}
+
+/* ── el-pagination — active solid brand ────────────────────── */
 .tenant-users-pager {
   display: flex;
   justify-content: flex-end;
-  padding: 16px 8px 4px;
+  padding: 14px 14px 4px;
+  background: var(--surface);
+  border-top: 1px solid var(--line);
 }
-.row-action-disabled {
-  color: var(--b-text-muted, #999);
+.tenant-users-pager :deep(.el-pagination) {
+  --el-pagination-text-color: var(--text-2);
+  --el-pagination-button-color: var(--text-2);
+  --el-pagination-button-bg-color: var(--surface-2);
+  --el-pagination-hover-color: var(--brand);
+  --el-pagination-button-disabled-color: var(--text-4);
+  --el-pagination-button-disabled-bg-color: var(--surface-2);
+  font-feature-settings: 'tnum';
+  font-size: 12.5px;
+}
+.tenant-users-pager :deep(.el-pagination.is-background .el-pager li) {
+  background: var(--surface-2);
+  color: var(--text-2);
+  border-radius: var(--r-1);
+}
+.tenant-users-pager :deep(.el-pagination.is-background .el-pager li.is-active) {
+  background: var(--brand);
+  color: var(--text-inverse);
+  font-weight: var(--fw-semibold);
+}
+.tenant-users-pager :deep(.el-pagination.is-background .btn-prev),
+.tenant-users-pager :deep(.el-pagination.is-background .btn-next) {
+  background: var(--surface-2);
+  color: var(--text-2);
+  border-radius: var(--r-1);
+}
+
+/* ── Topbar action button — reset ─────────────────────────── */
+:deep(.builder-topbar .el-button) {
+  height: 30px;
+  border-radius: var(--r-2);
+  font-size: 12.5px;
+  font-weight: var(--fw-medium);
+}
+
+/* ── Form hint inside dialogs ────────────────────────────── */
+.form-hint {
+  margin-top: 4px;
   font-size: 12px;
+  color: var(--text-3);
+  line-height: 1.5;
+}
+
+.row-action-disabled {
+  color: var(--text-4);
+  font-size: 12px;
+}
+
+/* ── Phase 6 · table density + filter UX tightening (append-only) ──
+   Phase 4 already established the el-table token overrides; this block
+   adds the missing density nuances (header padding, cell padding,
+   sticky thead safety net, pagination polish, filter-bar count). */
+
+.tenant-users-panel :deep(.el-table thead th.el-table__cell) {
+  padding: 10px 14px;
+}
+.tenant-users-panel :deep(.el-table .cell) {
+  padding-left: 14px;
+  padding-right: 14px;
+}
+.tenant-users-panel :deep(.el-table .el-button.is-link) {
+  font-size: 12.5px;
+}
+
+/* Sticky thead — no-op until template adds height/max-height; safe. */
+.tenant-users-panel :deep(.el-table--scrollable-y .el-table__header-wrapper),
+.tenant-users-panel :deep(.el-table--scrollable-x .el-table__header-wrapper) {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface-2);
+}
+
+/* Pagination — active page gets brand solid, radius r-2 (was r-1) for
+   consistency with v3 button radius. Phase 4 used r-1; tighten to r-2
+   without rewriting Phase 4 rules (different selector specificity). */
+.tenant-users-pager :deep(.el-pagination .btn-prev),
+.tenant-users-pager :deep(.el-pagination .btn-next),
+.tenant-users-pager :deep(.el-pagination.is-background .el-pager li),
+.tenant-users-pager :deep(.el-pagination.is-background .btn-prev),
+.tenant-users-pager :deep(.el-pagination.is-background .btn-next) {
+  border-radius: var(--r-2, 6px);
+}
+.tenant-users-pager :deep(.el-pagination.is-background .el-pager li:not(.is-disabled).is-active) {
+  background: var(--brand);
+  color: var(--text-inverse, #fff);
+}
+
+/* Filter bar — already boxed in Phase 4; add a hover affordance to the
+   wrapper to signal it's a contained surface. Original .tenant-users-filter
+   keeps its border/padding/bg untouched. */
+.tenant-users-filter:hover {
+  border-color: var(--line-strong);
 }
 </style>

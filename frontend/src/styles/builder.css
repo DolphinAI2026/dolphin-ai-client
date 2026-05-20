@@ -1750,3 +1750,146 @@ html[data-theme="dark"] .builder-btn-primary:hover {
     grid-template-columns: 1fr;
   }
 }
+
+/* === v3 · global a11y + button utilities (2026-05-20) ===
+ * Goal: make ALL interactive elements visibly focusable via keyboard.
+ * Default outline: 2px brand-ring + 2px offset, rounded inherit.
+ * Mouse click doesn't trigger (uses :focus-visible not :focus). */
+
+button:focus-visible,
+[role="button"]:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+[tabindex]:not([tabindex="-1"]):focus-visible {
+  outline: 2px solid var(--line-focus, var(--brand-ring));
+  outline-offset: 2px;
+  border-radius: inherit;
+}
+
+/* Skip outline on Element Plus internal elements that have their own focus ring */
+.el-input__wrapper:focus-visible,
+.el-button:focus-visible,
+.el-select__wrapper:focus-visible {
+  outline: none;
+}
+
+/* === v3 · element plus button polish === */
+.el-button {
+  transition: all 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)) !important;
+}
+.el-button--primary {
+  background: var(--brand) !important;
+  border-color: var(--brand) !important;
+}
+.el-button--primary:hover,
+.el-button--primary:focus {
+  background: var(--brand-hover) !important;
+  border-color: var(--brand-hover) !important;
+}
+.el-button--primary.is-plain {
+  background: var(--brand-soft) !important;
+  border-color: var(--brand-ring) !important;
+  color: var(--brand) !important;
+}
+.el-button--danger {
+  background: var(--err) !important;
+  border-color: var(--err) !important;
+}
+.el-button--danger.is-plain {
+  background: var(--err-soft) !important;
+  border-color: var(--err) !important;
+  color: var(--err) !important;
+}
+.el-button.is-link {
+  color: var(--brand);
+}
+.el-button.is-link:hover {
+  color: var(--brand-hover);
+}
+.el-button--danger.is-link {
+  color: var(--err);
+}
+
+/* === v3 · message / notification position === */
+.el-message {
+  top: 60px !important;  /* 避开 48px topbar */
+  border-radius: var(--r-3) !important;
+  box-shadow: var(--sh-3) !important;
+  border: 1px solid var(--line) !important;
+}
+.el-message--success {
+  border-color: var(--ok) !important;
+  background: var(--ok-soft) !important;
+}
+.el-message--success .el-message__content {
+  color: var(--ok) !important;
+}
+.el-message--warning {
+  border-color: var(--warn) !important;
+  background: var(--warn-soft) !important;
+}
+.el-message--warning .el-message__content {
+  color: var(--warn) !important;
+}
+.el-message--error {
+  border-color: var(--err) !important;
+  background: var(--err-soft) !important;
+}
+.el-message--error .el-message__content {
+  color: var(--err) !important;
+}
+.el-message--info .el-message__content {
+  color: var(--brand) !important;
+}
+
+.el-notification {
+  border-radius: var(--r-4) !important;
+  box-shadow: var(--sh-4) !important;
+  border: 1px solid var(--line) !important;
+}
+
+/* === v3 · element plus dialog === */
+.el-dialog {
+  border-radius: var(--r-4) !important;
+  box-shadow: var(--sh-5) !important;
+  border: 1px solid var(--line) !important;
+}
+.el-dialog__header {
+  padding: 18px 22px 14px !important;
+  border-bottom: 1px solid var(--line);
+}
+.el-dialog__title {
+  font-size: 15px !important;
+  font-weight: 600 !important;
+  color: var(--text) !important;
+  letter-spacing: -0.005em;
+}
+.el-dialog__body {
+  padding: 18px 22px !important;
+}
+.el-dialog__footer {
+  padding: 14px 22px 18px !important;
+  border-top: 1px solid var(--line);
+}
+
+/* === v3 · element plus form === */
+.el-form-item__label {
+  font-size: 12.5px !important;
+  font-weight: 500 !important;
+  color: var(--text) !important;
+  letter-spacing: -0.005em;
+}
+.el-form-item {
+  margin-bottom: 14px !important;
+}
+.el-form-item.is-error .el-input__wrapper {
+  box-shadow: 0 0 0 1px var(--err) inset !important;
+  background: var(--err-soft) !important;
+}
+.el-form-item__error {
+  font-size: 11.5px !important;
+  color: var(--err) !important;
+  padding-top: 4px;
+}
