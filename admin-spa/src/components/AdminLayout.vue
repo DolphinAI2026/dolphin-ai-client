@@ -1,7 +1,9 @@
 <template>
   <!-- v3 2026-05-20 FINAL FIX: 严格 mirror frontend/src/components/v2/RailSidebar.vue
        所有尺寸/padding/字号/字重 1:1 复刻，不再凭印象写。 -->
-  <div class="admin-shell" :class="{ 'admin-shell-embedded': embedded }">
+  <!-- v3 2026-05-20 fix (code review #P2-13): 去掉 :class admin-shell-embedded
+       这个 class 没对应 CSS 选择器，是 v-class hook 没写完的 placeholder -->
+  <div class="admin-shell">
     <!-- ═══════════ 左 RAIL ═══════════ -->
     <aside class="rail">
       <div class="rail-brand">
@@ -163,7 +165,19 @@ function returnWorkspace() {
     try {
       window.top.location.href = '/ai-builder/'
     } catch {
-      window.parent?.postMessage({ type: 'admin-return-workspace' }, '*')
+      // v3 2026-05-20 fix (code review #P1): targetOrigin 用具体值不要 '*'
+      // 跨 origin 时 referrer 头部能拿到父 origin；测不到时 fallback 用 location.ancestorOrigins
+      const parentOrigin = (() => {
+        try {
+          if (document.referrer) return new URL(document.referrer).origin
+          if (window.location.ancestorOrigins?.length) return window.location.ancestorOrigins[0]
+          return null
+        } catch { return null }
+      })()
+      if (parentOrigin) {
+        window.parent?.postMessage({ type: 'admin-return-workspace' }, parentOrigin)
+      }
+      // 父 origin 拿不到 → 静默 fail（不发 '*' 防止任意 iframe 接到）
     }
   } else {
     router.push('/')
@@ -345,7 +359,8 @@ function renderIcon(name: string): string {
 
 /* ─── Rail foot ───────────────────────────────────────────────── */
 .rail-foot {
-  padding: 8px 10px 12px;
+  /* v3 2026-05-20 fix (code review #P2-7): padding 改 10px 跟 frontend RailSidebar 一致 */
+  padding: 10px 10px 12px;
   border-top: 1px solid var(--line);
 }
 

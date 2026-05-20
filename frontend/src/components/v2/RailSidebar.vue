@@ -734,59 +734,9 @@ function renderIcon(name: string): string {
   flex-shrink: 0;
 }
 
-/* Accent picker — 6 preset palette + custom rainbow */
-.accent-picker {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  margin-left: auto;
-}
-
-.accent-swatch {
-  width: 16px;
-  height: 16px;
-  border-radius: var(--r-full, 999px);
-  border: 2px solid transparent;
-  cursor: pointer;
-  padding: 0;
-  position: relative;
-  flex-shrink: 0;
-  transition: transform 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
-              border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
-}
-
-.accent-swatch:hover {
-  transform: scale(1.12);
-}
-
-.accent-swatch.active {
-  border-color: var(--surface);
-  box-shadow: 0 0 0 2px var(--text);
-}
-
-.accent-swatch:focus-visible {
-  outline: 2px solid var(--line-focus, var(--brand-ring));
-  outline-offset: 2px;
-}
-
-.accent-custom {
-  background: linear-gradient(135deg, #ef4444 0%, #f97316 20%, #eab308 40%, #22c55e 60%, #06b6d4 75%, #3b82f6 88%, #8b5cf6 100%);
-  display: grid;
-  place-items: center;
-  color: #fff;
-  margin-left: 1px;
-}
-
-.accent-custom input[type="color"] {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  opacity: 0;
-  cursor: pointer;
-  border: none;
-  padding: 0;
-}
+/* v3 2026-05-20 fix (code review #P2-5): 删 .accent-picker / .accent-swatch /
+   .accent-custom 死 CSS 块 — template 已删 picker UI（commit f5e6c0a），
+   只剩 CSS 选择器没人引用 = 死代码 55 行 */
 
 .theme-toggle {
   width: 28px;
@@ -966,8 +916,5 @@ html[data-theme="dark"] .rail-expand-top {
   color: var(--text-3);
 }
 
-html[data-theme="dark"] .accent-swatch.active {
-  border-color: var(--surface);
-  box-shadow: 0 0 0 2px var(--text);
-}
+/* (deleted) html[data-theme="dark"] .accent-swatch.active — accent picker 死代码 */
 </style>

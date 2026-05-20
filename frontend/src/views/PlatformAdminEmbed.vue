@@ -23,7 +23,7 @@
  *
  * 这样 localhost:5174/mcp 和 /platform-admin 两条路径视觉完全一致。
  */
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 
@@ -55,19 +55,39 @@ watch(iframeSrc, () => {
   loading.value = true
 })
 
-// 兜底：监听 admin-spa 跨 origin postMessage（同 origin 时按 top.location 直接跳）
+// v3 2026-05-20 fix (code review #P1): postMessage listener 加 origin 检查 + cleanup
+// 之前 missing origin check 任意 iframe 都能触发 redirect
+// missing cleanup 导致组件 unmount 后 listener 累积
+function handleAdminMessage(event: MessageEvent) {
+  // 只接受来自 admin-spa iframe 的同 host message
+  // dev: admin-spa 在 :5174，prod: 同 origin /admin/
+  const adminOriginAllowed = (() => {
+    try {
+      const adminUrl = new URL(iframeSrc.value)
+      return event.origin === adminUrl.origin
+    } catch {
+      return false
+    }
+  })()
+  if (!adminOriginAllowed) return
+  if (event.data?.type === 'admin-return-workspace') {
+    window.location.href = `${import.meta.env.BASE_URL || '/ai-builder/'}`
+  }
+}
+
 onMounted(() => {
   if (typeof window === 'undefined') return
-  window.addEventListener('message', (event) => {
-    if (event.data?.type === 'admin-return-workspace') {
-      window.location.href = '/ai-builder/'
-    }
-  })
+  window.addEventListener('message', handleAdminMessage)
 
   // 兼容老 userStore 用法（保留兜底以防其他地方 watch tenantId）
   if (!userStore.tenantId) {
     userStore.fetchAvailableTenants().catch(() => {})
   }
+})
+
+onBeforeUnmount(() => {
+  if (typeof window === 'undefined') return
+  window.removeEventListener('message', handleAdminMessage)
 })
 </script>
 

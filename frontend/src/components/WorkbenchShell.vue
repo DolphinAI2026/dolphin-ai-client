@@ -1,5 +1,8 @@
 <template>
-  <div class="workbench-shell" data-design="v2" :data-theme="theme.mode" :style="theme.accentVars">
+  <!-- v3 2026-05-20 cleanup (code review #P2-6): 删 :style="theme.accentVars"
+       theme.ts 已删 accentVars (无 picker = 无 user-chosen accent)
+       brand 色阶完全由 design-v3-tokens.css 的 :root --brand-* 提供 -->
+  <div class="workbench-shell" data-design="v2" :data-theme="theme.mode">
     <RailSidebar v-if="showNav" />
     <div class="workbench-main">
       <slot />
