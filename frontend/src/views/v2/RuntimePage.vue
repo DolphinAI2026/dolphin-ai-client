@@ -16,7 +16,6 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
-import ShellTopBar from '@/components/v2/ShellTopBar.vue'
 import { useRuntimeSandboxStore } from '@/stores/sandbox'
 import type { RuntimeSandbox } from '@/api/sandbox'
 import { useRuntimeEnvStore } from '@/stores/runtimeEnv'
@@ -190,7 +189,6 @@ const FAILURE_LOG = `  ▸ npm run build:component --name=客户工单看板
 
 <template>
   <WorkbenchShell>
-    <ShellTopBar />
     <div class="page">
       <div class="page-pad">
         <!-- Page head -->

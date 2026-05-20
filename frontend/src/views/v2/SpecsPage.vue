@@ -7,7 +7,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
-import ShellTopBar from '@/components/v2/ShellTopBar.vue'
 import { useSpecsV2Store } from '@/stores/specsV2'
 import type { SpecListItem } from '@/api/specsV2'
 
@@ -63,7 +62,6 @@ const docTypeBadgeClass: Record<string, string> = {
 
 <template>
   <WorkbenchShell>
-    <ShellTopBar />
     <div class="page">
       <div class="page-pad">
         <div class="page-head">

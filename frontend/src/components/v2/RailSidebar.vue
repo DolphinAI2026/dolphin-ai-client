@@ -1,48 +1,51 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
-import { useMcpStore } from '@/stores/mcp'
-import { useRuntimeDeploymentStore } from '@/stores/runtimeDeployment'
+import { useThemeStore } from '@/stores/theme'
 
 interface NavItem { key: string; label: string; icon: string; path: string; badge?: number }
-interface NavGroup { group: string; items: NavItem[] }
 
-// 2026-05-19 image #37: 用户要求左侧 nav 可收起。collapsed 自己控制 + localStorage 持久化。
-// 仍接受外部 collapsed prop 作为优先 override（兼容老调用方）。
 const props = defineProps<{ collapsed?: boolean }>()
 const route = useRoute()
 const router = useRouter()
 const user = useUserStore()
-const mcpStore = useMcpStore()
-const runtimeStore = useRuntimeDeploymentStore()
+const theme = useThemeStore()
 
 const RAIL_COLLAPSE_KEY = 'apaas-rail-collapsed-v1'
 const internalCollapsed = ref<boolean>(localStorage.getItem(RAIL_COLLAPSE_KEY) === '1')
-// Vue gotcha: 未设置的 boolean prop 默认 false (不是 undefined)，
-// 所以"父级显式 override"只识 true → 否则一律走 internal state。
+const appCount = ref<number | undefined>(undefined)
+const codingWorkspaceCount = ref<number | undefined>(undefined)
+const tenantMenuOpen = ref(false)
+
 const effectiveCollapsed = computed(() =>
   props.collapsed === true ? true : internalCollapsed.value
 )
-function toggleCollapsed() {
-  internalCollapsed.value = !internalCollapsed.value
-  try { localStorage.setItem(RAIL_COLLAPSE_KEY, internalCollapsed.value ? '1' : '0') } catch { /* private mode */ }
+
+const NAV = computed<NavItem[]>(() => [
+  { key: 'home', label: '首页', icon: 'home', path: '/' },
+  { key: 'apps', label: '应用', icon: 'apps', path: '/apps', badge: appCount.value || undefined },
+  { key: 'builder', label: 'AI Builder', icon: 'chat', path: '/ai-chat?mode=requirements' },
+  { key: 'coding', label: 'AI Coding', icon: 'code', path: '/coding', badge: codingWorkspaceCount.value || undefined },
+  { key: 'marketplace', label: '组件市场', icon: 'store', path: '/marketplace' },
+])
+
+const userName = computed(() => user.user?.username || '未登录')
+const tenantName = computed(() => user.user?.tenant_name || '未选择租户')
+const tenantOptions = computed(() => user.availableTenants || [])
+const currentTenantValue = computed(() => user.tenantId ? String(user.tenantId) : '')
+const currentTenantLabel = computed(() => {
+  const match = tenantOptions.value.find((tenant) => String(tenant.tenant_id) === currentTenantValue.value)
+  return match?.tenant_name || tenantName.value
+})
+const isDark = computed(() => theme.mode === 'dark')
+const platformActive = computed(() => route.path.startsWith('/platform-admin'))
+
+function closeTenantMenu() {
+  tenantMenuOpen.value = false
 }
 
-// Lazy counts that don't have dedicated stores. undefined → hide badge.
-const appCount = ref<number | undefined>(undefined)
-const codingWorkspaceCount = ref<number | undefined>(undefined)
-
 onMounted(async () => {
-  // Hydrate stores that aren't already loaded. Use optional chaining so missing
-  // actions (e.g. when a sibling agent hasn't added it yet) don't crash the rail.
-  if (!mcpStore.servers.length) {
-    try { await (mcpStore as any).fetchServers?.() } catch { /* badge stays 0 → hidden */ }
-  }
-  if (!runtimeStore.total) {
-    try { await (runtimeStore as any).fetchDeployments?.() } catch { /* badge stays 0 → hidden */ }
-  }
-  // App count — dynamic import keeps initial bundle slim and avoids breaking if API surface shifts.
   try {
     const { applicationApi } = await import('@/api/application')
     const apps: any = (await applicationApi.list?.({ include_remote: false } as any)) ?? []
@@ -50,104 +53,132 @@ onMounted(async () => {
   } catch {
     appCount.value = undefined
   }
-  // Coding workspaces — coding store keeps single active workspace, not a list. Hit the API directly.
+
   try {
     const { codingApi } = await import('@/api/coding')
-    const wss: any = (await (codingApi as any).listWorkspaces?.()) ?? []
-    codingWorkspaceCount.value = Array.isArray(wss) ? wss.length : (wss?.items?.length ?? wss?.total ?? 0)
+    const workspaces: any = (await (codingApi as any).listWorkspaces?.()) ?? []
+    codingWorkspaceCount.value = Array.isArray(workspaces)
+      ? workspaces.length
+      : (workspaces?.items?.length ?? workspaces?.total ?? 0)
   } catch {
     codingWorkspaceCount.value = undefined
   }
+
+  try {
+    await user.fetchAvailableTenants()
+  } catch {
+    // Bottom tenant selector stays on current tenant when the list is unavailable.
+  }
+
+  window.addEventListener('click', closeTenantMenu)
 })
 
-// `v-if="it.badge"` falsy-hides 0/undefined, so we feed `undefined` when there's nothing meaningful.
-const NAV = computed<NavGroup[]>(() => [
-  { group: '搭建', items: [
-    { key: 'home',     label: '新建',            icon: 'home',  path: '/' },
-    { key: 'apps',     label: '应用',            icon: 'apps',  path: '/apps', badge: appCount.value || undefined },
-    { key: 'chat',     label: '睿鲸 AI Builder', icon: 'chat',  path: '/ai-chat?mode=requirements' },
-  ]},
-  { group: '开发', items: [
-    { key: 'coding', label: '睿鲸 AI Coding', icon: 'whale', path: '/coding', badge: codingWorkspaceCount.value || undefined },
-    { key: 'vibe',   label: 'Vibe Coding',    icon: 'code',  path: '/vibe' },
-  ]},
-  // 2026-05-19 用户拍板"先去掉" 智能体配置 / 设计文档 / 行业知识库 三项 —
-  // 留 组件市场 + MCP 管理 在"知识 & 智能体"分组下。路由保留（admin 可手动访问）。
-  { group: '知识 & 智能体', items: [
-    { key: 'marketplace', label: '组件市场',   icon: 'store',    path: '/marketplace' },
-    { key: 'mcp',         label: 'MCP 管理',   icon: 'mcp',      path: '/mcp', badge: mcpStore.total || undefined },
-  ]},
-  { group: '管理', items: [
-    { key: 'runtime', label: '运行与发布', icon: 'cloud', path: '/runtime', badge: runtimeStore.total || undefined },
-    { key: 'admin',   label: '平台管理',   icon: 'admin', path: '/admin/tenants' },
-  ]},
-])
+onBeforeUnmount(() => {
+  window.removeEventListener('click', closeTenantMenu)
+})
 
-const isActive = (path: string) => {
-  // Strip query string for path comparison (e.g. '/ai-chat?mode=requirements' → '/ai-chat')
+function toggleCollapsed() {
+  internalCollapsed.value = !internalCollapsed.value
+  tenantMenuOpen.value = false
+  try { localStorage.setItem(RAIL_COLLAPSE_KEY, internalCollapsed.value ? '1' : '0') } catch { /* private mode */ }
+}
+
+function isActive(path: string) {
   const basePath = path.split('?')[0]
   if (basePath === '/') return route.path === '/'
   return route.path === basePath || route.path.startsWith(basePath + '/')
 }
-const userName = computed(() => user.user?.username || '未登录')
-const tenantName = computed(() => user.user?.tenant_name || '得帆云示例租户')
 
-// Icon set copied from $DESIGN_SRC/shell.jsx (lines 14-75). Keep stroke 1.6,
-// 24 viewBox, no fill. Only inline the icons we actually reference in NAV.
-const ICONS: Record<string, string> = {
-  home:     '<path d="M3 11.5 12 4l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/>',
-  apps:     '<path d="M3 5h7v7H3z"/><path d="M14 5h7v7h-7z"/><path d="M3 16h7v5H3z"/><path d="M14 16h7v5h-7z"/>',
-  chat:     '<path d="M21 12a8 8 0 0 1-11.9 7L4 21l1.6-4.4A8 8 0 1 1 21 12z"/>',
-  doc:      '<path d="M7 3h8l4 4v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v5h5"/><path d="M9 13h6"/><path d="M9 17h4"/>',
-  code:     '<path d="m9 17-5-5 5-5"/><path d="m15 7 5 5-5 5"/><path d="m13 5-2 14"/>',
-  store:    '<path d="M3 9 5 4h14l2 5"/><path d="M4 9v10a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V9"/><path d="M3 9h18"/>',
-  admin:    '<path d="M12 2 4 5v7c0 5 3.5 8.5 8 10 4.5-1.5 8-5 8-10V5z"/><path d="M9 12l2 2 4-4"/>',
-  sparkle:  '<path d="M12 3 14 9l6 2-6 2-2 6-2-6-6-2 6-2z"/><path d="M19 17l1 3 3 1-3 1-1 3-1-3-3-1 3-1z"/>',
-  bldg:     '<path d="M4 21V5l8-3 8 3v16"/><path d="M9 9h.01M9 13h.01M9 17h.01M15 9h.01M15 13h.01M15 17h.01"/><path d="M4 21h16"/>',
-  cloud:    '<path d="M18 18a4 4 0 0 0 0-8 6 6 0 0 0-12 1 4 4 0 0 0 0 8z"/>',
-  whale:    '<path d="M5 3c-1.5 0-2.2 1.2-2.2 2.4v3l-1.4 1 1.4 1v3.2c0 1.2.7 2.4 2.2 2.4"/><path d="M19 3c1.5 0 2.2 1.2 2.2 2.4v3l1.4 1-1.4 1v3.2c0 1.2-.7 2.4-2.2 2.4"/>',
-  industry: '<path d="M3 21V11l6-4v4l6-4v4l6-4v14H3z"/><path d="M7 17h2M11 17h2M15 17h2"/>',
-  mcp:      '<path d="M12 3 4 7v5c0 4 3.4 7.4 8 9 4.6-1.6 8-5 8-9V7z"/><path d="M8.5 11l2.5 2.5L15.5 9"/>',
+function toggleTenantMenu(event: MouseEvent) {
+  event.stopPropagation()
+  tenantMenuOpen.value = !tenantMenuOpen.value
 }
+
+async function selectTenant(value: number) {
+  tenantMenuOpen.value = false
+  if (!Number.isFinite(value) || !value || value === user.tenantId) return
+  await user.switchTenant(value)
+  router.push('/')
+}
+
+function go(path: string) {
+  tenantMenuOpen.value = false
+  router.push(path)
+}
+
+function goPlatform() {
+  tenantMenuOpen.value = false
+  router.push('/platform-admin')
+}
+
+const ICONS: Record<string, string> = {
+  home: '<path d="M3 11.5 12 4l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/>',
+  apps: '<path d="M3 5h7v7H3z"/><path d="M14 5h7v7h-7z"/><path d="M3 16h7v5H3z"/><path d="M14 16h7v5h-7z"/>',
+  chat: '<path d="M21 12a8 8 0 0 1-11.9 7L4 21l1.6-4.4A8 8 0 1 1 21 12z"/>',
+  code: '<path d="m9 17-5-5 5-5"/><path d="m15 7 5 5-5 5"/><path d="m13 5-2 14"/>',
+  store: '<path d="M3 9 5 4h14l2 5"/><path d="M4 9v10a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V9"/><path d="M3 9h18"/>',
+  bldg: '<path d="M4 21V5l8-3 8 3v16"/><path d="M9 9h.01M9 13h.01M9 17h.01M15 9h.01M15 13h.01M15 17h.01"/><path d="M4 21h16"/>',
+  shield: '<path d="M12 2 4 5v7c0 5 3.5 8.5 8 10 4.5-1.5 8-5 8-10V5z"/><path d="M9 12l2 2 4-4"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4 12H2M22 12h-2M6.3 6.3 4.9 4.9M19.1 19.1l-1.4-1.4M6.3 17.7l-1.4 1.4M19.1 4.9l-1.4 1.4"/>',
+  moon: '<path d="M21 13A9 9 0 0 1 11 3a9 9 0 1 0 10 10z"/>',
+  chevronLeft: '<polyline points="15 18 9 12 15 6"/>',
+  chevronRight: '<polyline points="9 18 15 12 9 6"/>',
+  chevronDown: '<polyline points="6 9 12 15 18 9"/>',
+}
+
 function renderIcon(name: string): string {
   const inner = ICONS[name] ?? ''
-  return `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`
+  return `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`
 }
 </script>
 
 <template>
   <aside class="rail" :class="{ 'rail-collapsed': effectiveCollapsed }">
     <div class="rail-brand">
-      <button class="rail-logo" @click="router.push('/')" aria-label="aPaaS Builder">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-          <rect x="3" y="3" width="8" height="8" rx="2" fill="white" />
-          <rect x="13" y="3" width="8" height="8" rx="2" fill="rgba(255,255,255,0.6)" />
-          <rect x="3" y="13" width="8" height="8" rx="2" fill="rgba(255,255,255,0.6)" />
-          <rect x="13" y="13" width="8" height="8" rx="2" fill="white" />
+      <button
+        class="rail-logo"
+        type="button"
+        :aria-label="effectiveCollapsed ? '展开导航' : '睿鲸AI 首页'"
+        @click="effectiveCollapsed ? toggleCollapsed() : go('/')"
+      >
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
+          <rect x="3" y="3" width="8" height="8" rx="2.2" fill="white" />
+          <rect x="13" y="3" width="8" height="8" rx="2.2" fill="rgba(255,255,255,0.68)" />
+          <rect x="3" y="13" width="8" height="8" rx="2.2" fill="rgba(255,255,255,0.68)" />
+          <rect x="13" y="13" width="8" height="8" rx="2.2" fill="white" />
         </svg>
       </button>
-      <div v-if="!effectiveCollapsed">
-        <div class="rail-title">aPaaS Builder</div>
-        <div class="rail-title-sub">AI · 低代码 · 全代码</div>
+      <div v-if="!effectiveCollapsed" class="rail-brand-copy">
+        <div class="rail-title">睿鲸AI</div>
+        <div class="rail-title-sub">AI · 低代码</div>
       </div>
     </div>
 
-    <div class="rail-scroll">
-      <div v-for="g in NAV" :key="g.group" class="rail-group">
-        <div class="rail-group-label">{{ g.group }}</div>
-        <button
-          v-for="it in g.items"
-          :key="it.key"
-          class="rail-item"
-          :class="{ active: isActive(it.path) }"
-          @click="router.push(it.path)"
-        >
-          <span class="rail-item-icon" v-html="renderIcon(it.icon)" />
-          <span class="rail-item-label">{{ it.label }}</span>
-          <span v-if="it.badge" class="rail-item-badge">{{ it.badge }}</span>
-        </button>
-      </div>
-    </div>
+    <button
+      v-if="effectiveCollapsed"
+      type="button"
+      class="rail-expand-top"
+      title="展开导航"
+      aria-label="展开导航"
+      @click="toggleCollapsed"
+    >
+      <span v-html="renderIcon('chevronRight')" />
+    </button>
+
+    <nav class="rail-scroll" aria-label="主导航">
+      <button
+        v-for="it in NAV"
+        :key="it.key"
+        type="button"
+        class="rail-item"
+        :class="{ active: isActive(it.path) }"
+        @click="go(it.path)"
+      >
+        <span class="rail-item-icon" v-html="renderIcon(it.icon)" />
+        <span class="rail-item-label">{{ it.label }}</span>
+        <span v-if="it.badge" class="rail-item-badge">{{ it.badge }}</span>
+      </button>
+    </nav>
 
     <div class="rail-foot">
       <button
@@ -157,76 +188,574 @@ function renderIcon(name: string): string {
         :aria-label="effectiveCollapsed ? '展开导航' : '收起导航'"
         @click="toggleCollapsed"
       >
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <polyline v-if="effectiveCollapsed" points="9 18 15 12 9 6" />
-          <polyline v-else points="15 18 9 12 15 6" />
-        </svg>
-        <span v-if="!effectiveCollapsed" class="rail-collapse-btn-label">收起</span>
+        <span v-html="renderIcon(effectiveCollapsed ? 'chevronRight' : 'chevronLeft')" />
+        <span v-if="!effectiveCollapsed">收起</span>
       </button>
-      <button class="rail-user">
-        <div class="rail-avatar">{{ userName.slice(0, 1).toUpperCase() }}</div>
-        <div class="rail-user-info">
-          <div class="rail-user-name">{{ userName }}</div>
-          <div class="rail-user-tenant">{{ tenantName }}</div>
+
+      <div v-if="!effectiveCollapsed" class="rail-console">
+        <div class="rail-console-label">当前租户</div>
+        <div class="tenant-switch-wrap" @click.stop>
+          <button
+            type="button"
+            class="tenant-switch"
+            :class="{ open: tenantMenuOpen }"
+            aria-haspopup="menu"
+            :aria-expanded="tenantMenuOpen"
+            @click="toggleTenantMenu"
+          >
+            <span class="tenant-icon" v-html="renderIcon('bldg')" />
+            <span class="tenant-name">{{ currentTenantLabel }}</span>
+            <span class="tenant-arrow" v-html="renderIcon('chevronDown')" />
+          </button>
+          <div v-if="tenantMenuOpen" class="tenant-menu" role="menu">
+            <button
+              v-for="tenant in tenantOptions"
+              :key="tenant.tenant_id"
+              type="button"
+              class="tenant-option"
+              :class="{ active: String(tenant.tenant_id) === currentTenantValue }"
+              role="menuitem"
+              @click="selectTenant(Number(tenant.tenant_id))"
+            >
+              {{ tenant.tenant_name }}
+            </button>
+            <div v-if="!tenantOptions.length" class="tenant-empty">暂无可切换租户</div>
+          </div>
         </div>
-      </button>
+
+        <button
+          type="button"
+          class="console-row platform-row"
+          :class="{ active: platformActive }"
+          @click="goPlatform"
+        >
+          <span class="console-row-icon" v-html="renderIcon('shield')" />
+          <span>平台管理</span>
+        </button>
+
+        <div class="theme-row">
+          <span class="theme-row-label">主题色</span>
+          <label class="accent-picker" title="选择主题色">
+            <input
+              type="color"
+              :value="theme.accentColor"
+              aria-label="选择主题色"
+              @input="theme.setAccentColor(($event.target as HTMLInputElement).value)"
+            />
+          </label>
+          <button
+            type="button"
+            class="theme-toggle"
+            :aria-label="isDark ? '切换浅色主题' : '切换深色主题'"
+            @click="theme.toggle()"
+          >
+            <span v-html="renderIcon(isDark ? 'moon' : 'sun')" />
+          </button>
+        </div>
+
+        <div class="account-row">
+          <div class="rail-avatar">{{ userName.slice(0, 1).toUpperCase() }}</div>
+          <div class="rail-user-info">
+            <div class="rail-user-name">{{ userName }}</div>
+            <div class="rail-user-status"><span />在线</div>
+          </div>
+        </div>
+      </div>
     </div>
   </aside>
 </template>
 
 <style scoped>
-/* Visual rules copied verbatim from $DESIGN_SRC/styles.css lines 230-392.
-   Component-scoped so they only apply within this rail. */
-.rail { display: flex; flex-direction: column; background: var(--bg-rail); border-right: 1px solid var(--border); overflow: hidden; position: relative; width: 232px; flex-shrink: 0; height: 100%; }
-.rail-collapsed { width: 56px; }
-.rail-brand { display: flex; align-items: center; gap: 10px; padding: 14px 16px 12px; min-height: 56px; border-bottom: 1px solid var(--border); }
-.rail-logo { width: 30px; height: 30px; border-radius: 9px; background: linear-gradient(135deg, var(--brand-500), var(--brand-700)); display: grid; place-items: center; color: #fff; flex-shrink: 0; box-shadow: 0 4px 12px var(--brand-ring), inset 0 -1px 0 rgba(255,255,255,0.15); border: none; cursor: pointer; }
-.rail-title { font-size: 14px; font-weight: 600; color: var(--text); letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; }
-.rail-title-sub { font-size: 10.5px; font-weight: 500; color: var(--text-3); letter-spacing: 0.08em; text-transform: uppercase; margin-top: 1px; }
-.rail-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 8px 4px; }
-.rail-group { padding: 10px 8px 4px; }
-.rail-group-label { font-size: 10.5px; font-weight: 600; color: var(--text-3); letter-spacing: 0.10em; text-transform: uppercase; padding: 4px 8px; margin-bottom: 2px; }
-.rail-collapsed .rail-group-label { opacity: 0; height: 0; padding: 0; margin: 0; overflow: hidden; }
-.rail-item { width: 100%; display: flex; align-items: center; gap: 10px; padding: 7px 10px; border: none; background: transparent; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 500; color: var(--text-2); text-align: left; transition: background 0.12s, color 0.12s; position: relative; }
-.rail-item:hover { background: var(--brand-soft); color: var(--text); }
-.rail-item.active { background: var(--brand-soft-2); color: var(--brand-text); }
-.rail-item.active::before { content: ''; position: absolute; left: -10px; top: 8px; bottom: 8px; width: 3px; border-radius: 2px; background: var(--brand); }
-.rail-item-icon { width: 18px; height: 18px; flex-shrink: 0; display: grid; place-items: center; color: currentColor; }
-.rail-item-icon :deep(svg) { width: 18px; height: 18px; }
-.rail-item-label { flex: 1; white-space: nowrap; overflow: hidden; }
-.rail-item-badge { font-size: 10.5px; font-weight: 600; padding: 1px 6px; border-radius: 999px; background: var(--surface); color: var(--text-3); border: 1px solid var(--border); }
-.rail-item.active .rail-item-badge { background: var(--brand); color: #fff; border-color: var(--brand); }
-.rail-collapsed .rail-item { justify-content: center; padding: 8px; }
-.rail-collapsed .rail-item-label, .rail-collapsed .rail-item-badge, .rail-collapsed .rail-title, .rail-collapsed .rail-title-sub { display: none; }
-.rail-foot { padding: 8px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 4px; }
-.rail-user { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; cursor: pointer; transition: background 0.12s; background: transparent; border: none; width: 100%; text-align: left; }
-.rail-user:hover { background: var(--brand-soft); }
-.rail-avatar { width: 28px; height: 28px; border-radius: 50%; background: linear-gradient(135deg, var(--brand-400), var(--brand-600)); color: #fff; font-size: 12px; font-weight: 600; display: grid; place-items: center; flex-shrink: 0; }
-.rail-user-info { flex: 1; min-width: 0; }
-.rail-user-name { font-size: 13px; font-weight: 600; color: var(--text); line-height: 1.2; }
-.rail-user-tenant { font-size: 11px; color: var(--text-3); line-height: 1.2; margin-top: 1px; }
-.rail-collapsed .rail-user-info { display: none; }
+.rail {
+  width: 224px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  overflow: hidden;
+  color: var(--text);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--brand-soft) 72%, #fff 28%) 0%,
+      color-mix(in srgb, var(--brand-soft-2) 58%, #fff 42%) 100%
+    );
+  border-right: 1px solid rgba(58, 50, 121, 0.12);
+}
 
-/* image #37 收起切换按钮 */
+.rail-collapsed {
+  width: 48px;
+}
+
+.rail-brand {
+  min-height: 76px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 18px 14px;
+}
+
+.rail-logo {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  color: #fff;
+  background: linear-gradient(135deg, var(--brand-400), var(--brand-700));
+  border: none;
+  border-radius: 10px;
+  box-shadow: 0 10px 22px rgba(91, 91, 214, 0.22), inset 0 -1px 0 rgba(255, 255, 255, 0.2);
+  cursor: pointer;
+}
+
+.rail-title {
+  color: #18152e;
+  font-size: 17px;
+  font-weight: 820;
+  letter-spacing: 0;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.rail-title-sub {
+  margin-top: 4px;
+  color: #817ba0;
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.rail-scroll {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+  padding: 12px 14px 10px;
+}
+
+.rail-expand-top {
+  width: 34px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  margin: -4px auto 6px;
+  color: var(--brand-text);
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(91, 91, 214, 0.18);
+  border-radius: 9px;
+  cursor: pointer;
+  box-shadow: var(--shadow-xs);
+  transition: background 0.14s, border-color 0.14s, transform 0.14s;
+}
+
+.rail-expand-top:hover {
+  background: #fff;
+  border-color: rgba(91, 91, 214, 0.34);
+  transform: translateX(1px);
+}
+
+.rail-item {
+  position: relative;
+  width: 100%;
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 14px;
+  color: #565171;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 720;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.16s, color 0.16s, border-color 0.16s, box-shadow 0.16s;
+}
+
+.rail-item:hover {
+  color: var(--brand-text);
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.rail-item.active {
+  color: var(--brand-text);
+  background: rgba(230, 227, 253, 0.88);
+  border-color: rgba(91, 91, 214, 0.16);
+  box-shadow: inset 3px 0 0 var(--brand);
+}
+
+.rail-item-icon {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  color: currentColor;
+}
+
+.rail-item-label {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rail-item-badge {
+  min-width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 7px;
+  border-radius: 999px;
+  color: var(--brand-text);
+  background: rgba(255, 255, 255, 0.8);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.rail-foot {
+  padding: 10px 12px 14px;
+  border-top: 1px solid rgba(58, 50, 121, 0.10);
+}
+
 .rail-collapse-btn {
+  width: 100%;
+  min-height: 30px;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  width: 100%;
-  padding: 7px 10px;
+  margin-bottom: 8px;
+  color: #8b85a8;
+  background: rgba(255, 255, 255, 0.34);
+  border: 1px solid rgba(58, 50, 121, 0.10);
   border-radius: 8px;
-  border: 1px solid var(--border);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.rail-collapse-btn:hover {
+  color: var(--brand-text);
+  background: rgba(255, 255, 255, 0.74);
+}
+
+.rail-console {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(91, 91, 214, 0.18);
+  border-radius: 14px;
+  background: rgba(246, 244, 255, 0.92);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+.rail-console-label {
+  color: #837ea0;
+  font-size: 11px;
+  font-weight: 760;
+}
+
+.tenant-switch,
+.console-row,
+.theme-row,
+.account-row {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px;
+  border: 1px solid rgba(91, 91, 214, 0.13);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: var(--shadow-xs);
+}
+
+.tenant-switch-wrap {
+  position: relative;
+}
+
+.tenant-icon,
+.console-row-icon {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  color: var(--brand-text);
+}
+
+.tenant-switch {
+  width: 100%;
+  color: #211d3a;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 780;
+  cursor: pointer;
+  text-align: left;
+}
+
+.tenant-switch:hover,
+.tenant-switch.open {
+  color: var(--brand-text);
+  border-color: rgba(91, 91, 214, 0.32);
+  background: #fff;
+}
+
+.tenant-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tenant-arrow {
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  color: #8b85a8;
+  transition: transform 0.14s;
+}
+
+.tenant-switch.open .tenant-arrow {
+  transform: rotate(180deg);
+}
+
+.tenant-menu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 6px);
+  z-index: 20;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid rgba(91, 91, 214, 0.18);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 16px 36px rgba(28, 21, 73, 0.16);
+}
+
+.tenant-option {
+  width: 100%;
+  min-height: 34px;
+  padding: 0 10px;
+  color: #211d3a;
   background: transparent;
+  border: none;
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 720;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tenant-option:hover,
+.tenant-option.active {
+  color: var(--brand-text);
+  background: var(--brand-soft);
+}
+
+.tenant-empty {
+  padding: 8px 10px;
   color: var(--text-3);
   font-size: 12px;
-  cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  font-weight: 650;
 }
-.rail-collapse-btn:hover {
+
+.console-row {
+  width: 100%;
+  color: #211d3a;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 780;
+  cursor: pointer;
+}
+
+.console-row:hover {
+  color: var(--brand-text);
+  border-color: rgba(91, 91, 214, 0.32);
+  background: #fff;
+}
+
+.console-row.active {
+  color: var(--brand-text);
+  border-color: rgba(91, 91, 214, 0.24);
   background: var(--brand-soft);
+}
+
+.theme-row {
+  min-height: 48px;
+  justify-content: space-between;
+  color: #565171;
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.theme-row-label {
+  white-space: nowrap;
+}
+
+.accent-picker {
+  width: 30px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  margin-left: auto;
+  padding: 3px;
+  border: 1px solid rgba(91, 91, 214, 0.18);
+  border-radius: 8px;
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.accent-picker input {
+  width: 22px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.accent-picker input::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.accent-picker input::-webkit-color-swatch {
+  border: none;
+  border-radius: 5px;
+}
+
+.theme-toggle {
+  width: 30px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  color: var(--brand-text);
+  background: var(--brand-soft);
+  border: 1px solid rgba(91, 91, 214, 0.18);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.account-row {
+  min-height: 50px;
+}
+
+.rail-avatar {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  color: #fff;
+  background: linear-gradient(135deg, var(--brand-400), var(--brand-700));
+  border-radius: 50%;
+  font-size: 13px;
+  font-weight: 820;
+  box-shadow: 0 8px 18px rgba(91, 91, 214, 0.2);
+}
+
+.rail-user-info {
+  min-width: 0;
+}
+
+.rail-user-name {
+  color: #211d3a;
+  font-size: 13px;
+  font-weight: 820;
+  line-height: 1.2;
+}
+
+.rail-user-status {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 3px;
+  color: #7f789f;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.rail-user-status span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #22c55e;
+  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.14);
+}
+
+.rail-collapsed .rail-brand {
+  justify-content: center;
+  padding: 14px 6px;
+}
+
+.rail-collapsed .rail-scroll {
+  padding: 10px 6px;
+}
+
+.rail-collapsed .rail-item {
+  justify-content: center;
+  padding: 0;
+}
+
+.rail-collapsed .rail-item-label,
+.rail-collapsed .rail-item-badge {
+  display: none;
+}
+
+.rail-collapsed .rail-foot {
+  padding: 8px 6px;
+}
+
+.rail-collapsed .rail-collapse-btn {
+  margin-bottom: 0;
+}
+
+html[data-theme="dark"] .rail {
+  background: var(--bg-rail);
+}
+
+html[data-theme="dark"] .rail-title,
+html[data-theme="dark"] .tenant-switch,
+html[data-theme="dark"] .tenant-option,
+html[data-theme="dark"] .console-row,
+html[data-theme="dark"] .rail-user-name {
   color: var(--text);
 }
-.rail-collapsed .rail-collapse-btn { padding: 8px; }
-.rail-collapse-btn-label { line-height: 1; }
+
+html[data-theme="dark"] .rail-console,
+html[data-theme="dark"] .tenant-switch,
+html[data-theme="dark"] .console-row,
+html[data-theme="dark"] .theme-row,
+html[data-theme="dark"] .account-row {
+  background: var(--surface);
+}
+
+html[data-theme="dark"] .tenant-menu {
+  background: var(--surface);
+  border-color: var(--border-strong);
+}
+
+html[data-theme="dark"] .tenant-switch:hover,
+html[data-theme="dark"] .tenant-switch.open,
+html[data-theme="dark"] .console-row:hover {
+  background: var(--surface-2);
+}
 </style>

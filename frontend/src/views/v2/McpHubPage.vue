@@ -11,7 +11,6 @@
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
-import ShellTopBar from '@/components/v2/ShellTopBar.vue'
 import { useMcpStore } from '@/stores/mcp'
 import type { McpServer } from '@/api/mcp'
 
@@ -112,7 +111,6 @@ function renderIcon(name: string, size = 16): string {
 
 <template>
   <WorkbenchShell>
-    <ShellTopBar />
     <div class="page">
       <div class="page-pad">
         <!-- Page head -->

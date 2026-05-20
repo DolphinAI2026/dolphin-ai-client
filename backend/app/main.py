@@ -34,6 +34,7 @@ from app.routes import (
     industry,
     llm_configs,
     marketplace,
+    mcp_platform,
     mcp_hub,
     online_coding,
     online_coding_runtime,
@@ -210,6 +211,7 @@ app.include_router(dolphin_sso.router, prefix="/api")
 app.include_router(requirements.router, prefix="/api")
 app.include_router(current_app.router, prefix="/api")
 app.include_router(admin_mcp.router, prefix="/api")
+app.include_router(mcp_platform.router, prefix="/api")
 app.include_router(builder_mcp.router, prefix="/api")
 app.include_router(mcp_hub.router)
 # V2 redesign routes — agents config / industry packs / SPEC list / runtime pipelines+deployments

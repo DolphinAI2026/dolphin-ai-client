@@ -1,5 +1,6 @@
 <template>
   <div class="login-page">
+    <div class="login-bg"></div>
     <button
       type="button"
       class="login-theme-toggle"
@@ -13,26 +14,24 @@
       <span>{{ themeStore.isDark ? '浅色' : '夜间' }}</span>
     </button>
 
-    <div class="brand-panel">
-      <div class="brand-content">
-        <div class="brand-logo">
-          <div class="logo-mark">AI</div>
-          <span class="logo-text">Builder AI</span>
+    <main class="login-shell">
+      <section class="login-card" aria-label="登录睿鲸AI">
+        <div class="login-brand">
+          <div class="logo-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none">
+              <rect x="3" y="3" width="8" height="8" rx="2" fill="currentColor" />
+              <rect x="13" y="3" width="8" height="8" rx="2" fill="currentColor" opacity=".62" />
+              <rect x="3" y="13" width="8" height="8" rx="2" fill="currentColor" opacity=".62" />
+              <rect x="13" y="13" width="8" height="8" rx="2" fill="currentColor" />
+            </svg>
+          </div>
+          <h1 class="login-title">睿鲸AI</h1>
+          <p class="login-subtitle">请使用 aPaaS 账号和密码登录</p>
         </div>
-        <p class="brand-sub">V3 · Builder / 智能搭建工作台</p>
-        <ul class="feature-list">
-          <li><span class="dot"></span>Builder 智能搭建：一句话生成可上线应用</li>
-          <li><span class="dot"></span>SPEC 自动梳理角色、模型、表单和流程</li>
-          <li><span class="dot"></span>自开发边界清晰交给睿鲸AI Coding</li>
-          <li><span class="dot"></span>全代码项目接入 Vibe Coding 工作区</li>
-        </ul>
-      </div>
-    </div>
 
-    <div class="form-panel">
-      <div class="form-card">
-        <h2 class="form-title">登录 Builder</h2>
-        <p class="form-subtitle">使用管理员创建的账号进入智能搭建工作台</p>
+        <div class="login-hint">
+          登录后会自动识别你的 aPaaS 租户和平台管理权限。
+        </div>
 
         <el-form
           :model="loginForm"
@@ -41,10 +40,11 @@
           class="login-form"
           @submit.prevent="handleLogin"
         >
+          <label class="login-label">aPaaS 账号</label>
           <el-form-item prop="username">
             <el-input
               v-model="loginForm.username"
-              placeholder="请输入用户名"
+              placeholder="请输入 aPaaS 账号"
               size="large"
               :prefix-icon="User"
               autocomplete="username"
@@ -52,11 +52,12 @@
             />
           </el-form-item>
 
+          <label class="login-label">aPaaS 密码</label>
           <el-form-item prop="password">
             <el-input
               v-model="loginForm.password"
               type="password"
-              placeholder="请输入密码"
+              placeholder="请输入 aPaaS 密码"
               size="large"
               :prefix-icon="Lock"
               autocomplete="current-password"
@@ -64,6 +65,11 @@
               @keyup.enter="handleLogin"
             />
           </el-form-item>
+
+          <div class="login-row">
+            <label class="remember-check"><input type="checkbox" checked> 记住登录状态</label>
+            <button class="login-link" type="button">忘记密码？</button>
+          </div>
 
           <el-form-item>
             <el-button
@@ -78,9 +84,9 @@
           </el-form-item>
         </el-form>
 
-        <p class="account-note">账号由管理员统一创建；如需加入团队，请联系管理员在成员管理中添加。</p>
-      </div>
-    </div>
+        <p class="account-note">还没有账号？请联系平台管理员开通。</p>
+      </section>
+    </main>
   </div>
 </template>
 
@@ -149,361 +155,284 @@ const handleLogin = async () => {
 
 <style scoped>
 .login-page {
-  --login-panel-bg: #ffffff;
-  --login-text: #111827;
-  --login-muted: #64748b;
-  --login-subtle: #94a3b8;
-  --login-border: #d8e1f0;
-  --login-border-strong: #b8c7dd;
-  --login-input-bg: #ffffff;
-  --login-input-hover: #f8fbff;
-  --login-focus: #6177f6;
   min-height: 100vh;
-  display: grid;
-  grid-template-columns: minmax(520px, 64vw) minmax(380px, 1fr);
-  background: var(--login-panel-bg);
-  color: var(--login-text);
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   overflow: hidden;
+  background: linear-gradient(180deg, #fbfdff 0%, #f5f1ff 100%);
+  color: #17162f;
+}
+
+.login-bg {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 760px 360px at 50% 26%, rgba(101, 82, 220, 0.13), transparent 68%),
+    radial-gradient(ellipse 620px 300px at 50% 70%, rgba(120, 108, 240, 0.11), transparent 70%);
 }
 
 .login-theme-toggle {
   position: fixed;
-  top: 24px;
-  right: 26px;
+  top: 18px;
+  right: 20px;
   z-index: 5;
-  height: 34px;
+  height: 32px;
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
   padding: 0 12px;
-  border-radius: 999px;
-  border: 1px solid var(--login-border);
-  background: color-mix(in srgb, var(--login-panel-bg) 88%, transparent);
-  color: var(--login-muted);
+  border-radius: 8px;
+  border: 1px solid rgba(99, 91, 158, 0.14);
+  background: rgba(255, 255, 255, 0.72);
+  color: #625d82;
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  backdrop-filter: blur(14px);
-  transition: border-color 0.18s ease, color 0.18s ease, background 0.18s ease;
+  backdrop-filter: blur(16px);
 }
 
-.login-theme-toggle:hover {
-  color: var(--login-text);
-  border-color: var(--login-border-strong);
-  background: var(--login-input-hover);
-}
-
-.brand-panel {
-  position: relative;
-  min-height: 100vh;
-  display: grid;
-  place-items: center;
-  padding: 72px;
-  overflow: hidden;
-  background:
-    radial-gradient(circle at 92% 18%, rgba(255, 255, 255, 0.14) 0 18%, transparent 18.4%),
-    radial-gradient(circle at 0 100%, rgba(255, 255, 255, 0.10) 0 20%, transparent 20.4%),
-    linear-gradient(135deg, #3123b8 0%, #4932dc 46%, #667dff 100%);
-}
-
-.brand-panel::before,
-.brand-panel::after {
-  content: "";
-  position: absolute;
-  border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  pointer-events: none;
-}
-
-.brand-panel::before {
-  width: 420px;
-  height: 420px;
-  right: -68px;
-  top: -88px;
-}
-
-.brand-panel::after {
-  width: 300px;
-  height: 300px;
-  right: 116px;
-  bottom: 160px;
-}
-
-.brand-content {
+.login-shell {
   position: relative;
   z-index: 1;
-  width: min(420px, 100%);
-  color: #fff;
-}
-
-.brand-logo {
+  width: min(560px, calc(100vw - 40px));
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 18px;
-  margin-bottom: 18px;
+  gap: 0;
+  padding: 32px 0;
 }
 
 .logo-mark {
-  width: 40px;
-  height: 40px;
-  border-radius: 11px;
+  width: 56px;
+  height: 56px;
+  margin: 0 auto 16px;
+  border-radius: 14px;
   display: grid;
   place-items: center;
   color: #fff;
-  font-size: 21px;
-  font-weight: 800;
-  letter-spacing: 0;
-  background:
-    radial-gradient(circle at 28% 22%, #70f1ff 0 16%, transparent 17%),
-    linear-gradient(145deg, #19b7d4 0%, #4659ff 50%, #1b2abf 100%);
-  box-shadow: 0 14px 40px rgba(8, 21, 84, 0.32);
+  background: linear-gradient(180deg, #786cf0, #5146c9);
+  box-shadow: 0 14px 30px rgba(81, 70, 201, 0.26);
 }
 
-.logo-text {
-  color: #fff;
+.logo-mark svg {
+  width: 28px;
+  height: 28px;
+}
+
+.login-card {
+  width: min(520px, 100%);
+  padding: 40px 42px;
+  border-radius: 20px;
+  border: 1px solid rgba(99, 91, 158, 0.14);
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 24px 70px rgba(31, 35, 62, 0.14);
+  backdrop-filter: blur(18px);
+}
+
+.login-brand {
+  text-align: center;
+  margin-bottom: 18px;
+}
+
+.login-title {
+  margin: 0;
+  color: #17162f;
   font-size: 32px;
-  font-weight: 800;
-  line-height: 1;
-  letter-spacing: 0;
+  line-height: 1.2;
+  font-weight: 780;
 }
 
-.brand-sub {
-  margin: 0 0 52px 58px;
-  color: rgba(255, 255, 255, 0.78);
-  font-size: 17px;
-  line-height: 1.5;
+.login-subtitle {
+  margin: 10px 0 0;
+  color: #8a85a5;
+  font-size: 15px;
+  line-height: 1.4;
 }
 
-.feature-list {
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 24px;
-  margin: 0 0 0 6px;
-  padding: 0;
-}
-
-.feature-list li {
-  display: flex;
-  align-items: center;
-  gap: 18px;
-  color: rgba(255, 255, 255, 0.9);
-  font-size: 16px;
-  font-weight: 500;
-  letter-spacing: 0;
-}
-
-.feature-list .dot {
-  width: 8px;
-  height: 8px;
-  flex: 0 0 8px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.58);
-}
-
-.form-panel {
-  min-height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 80px 56px;
-  background: var(--login-panel-bg);
-}
-
-.form-card {
-  width: 100%;
-  max-width: 420px;
-}
-
-.form-title {
-  margin: 0 0 10px;
-  color: var(--login-text);
-  font-size: 26px;
-  font-weight: 800;
-  letter-spacing: 0;
-}
-
-.form-subtitle {
-  margin: 0 0 34px;
-  color: var(--login-muted);
+.login-hint {
+  margin: 0 0 24px;
+  padding: 12px 14px;
+  border: 1px solid #e2def0;
+  border-radius: 12px;
+  background: #f7f4ff;
+  color: #625d82;
   font-size: 14px;
   line-height: 1.5;
+  text-align: center;
 }
 
 .login-form {
-  margin-top: 2px;
+  margin: 0;
+}
+
+.login-label {
+  display: block;
+  margin: 16px 0 8px;
+  color: #625d82;
+  font-size: 13px;
+  font-weight: 700;
 }
 
 :deep(.el-form-item) {
-  margin-bottom: 22px;
+  margin-bottom: 0;
 }
 
 :deep(.el-input__wrapper) {
-  height: 54px;
-  padding: 0 18px;
-  border-radius: 10px;
-  background: var(--login-input-bg) !important;
-  box-shadow: 0 0 0 1px var(--login-border) inset !important;
-  transition: box-shadow 0.18s ease, background 0.18s ease;
+  height: 52px;
+  padding: 0 14px;
+  border-radius: 12px;
+  background: #fff !important;
+  box-shadow: 0 0 0 1px rgba(99, 91, 158, 0.16) inset !important;
 }
 
 :deep(.el-input__wrapper:hover) {
-  background: var(--login-input-hover) !important;
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--login-focus) 45%, var(--login-border-strong)) inset !important;
+  box-shadow: 0 0 0 1px rgba(81, 70, 201, 0.34) inset !important;
 }
 
 :deep(.el-input__wrapper.is-focus) {
-  box-shadow: 0 0 0 2px var(--login-focus) inset !important;
+  box-shadow: 0 0 0 2px rgba(81, 70, 201, 0.92) inset !important;
 }
 
 :deep(.el-input__inner) {
-  color: var(--login-text) !important;
-  -webkit-text-fill-color: var(--login-text) !important;
-  caret-color: var(--login-text) !important;
+  color: #17162f !important;
+  -webkit-text-fill-color: #17162f !important;
+  caret-color: #5146c9 !important;
   font-size: 15px;
   font-weight: 500;
 }
 
-:deep(.el-input__inner::selection) {
-  color: #0f172a;
-  background: #dbe7ff;
-  -webkit-text-fill-color: #0f172a;
-}
-
 :deep(.el-input__inner::placeholder) {
-  color: var(--login-subtle) !important;
-  -webkit-text-fill-color: var(--login-subtle) !important;
-  opacity: 1;
-  font-weight: 400;
+  color: #a5a0ba !important;
 }
 
 :deep(.el-input__prefix .el-icon),
 :deep(.el-input__suffix .el-icon) {
-  color: var(--login-muted);
+  color: #8a85a5;
 }
 
 :deep(.el-input__inner:-webkit-autofill),
 :deep(.el-input__inner:-webkit-autofill:hover),
 :deep(.el-input__inner:-webkit-autofill:focus),
 :deep(.el-input__inner:-webkit-autofill:active) {
-  -webkit-box-shadow: 0 0 0 9999px var(--login-input-bg) inset !important;
-  -webkit-text-fill-color: var(--login-text) !important;
-  caret-color: var(--login-text);
+  -webkit-box-shadow: 0 0 0 9999px #fff inset !important;
+  -webkit-text-fill-color: #17162f !important;
+  caret-color: #5146c9;
   transition: background-color 9999s ease-in-out 0s;
 }
 
-.account-note {
-  margin: 16px 0 0;
-  color: var(--login-muted);
+.login-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 14px 0 22px;
+}
+
+.remember-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: #756f93;
   font-size: 12px;
-  line-height: 1.6;
+  cursor: pointer;
+}
+
+.remember-check input {
+  accent-color: #5146c9;
+}
+
+.login-link {
+  border: 0;
+  background: transparent;
+  color: #5146c9;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 680;
+  cursor: pointer;
 }
 
 .submit-btn {
   width: 100%;
   height: 52px;
   border: 0;
-  border-radius: 10px;
+  border-radius: 12px;
   color: #fff;
-  background: linear-gradient(135deg, #3426c6 0%, #4a39dc 48%, #667dff 100%);
+  background: linear-gradient(180deg, #786cf0, #5146c9);
   font-size: 16px;
-  font-weight: 800;
+  font-weight: 760;
   letter-spacing: 0;
-  box-shadow: 0 16px 36px rgba(79, 70, 229, 0.18);
-  transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease;
+  box-shadow: 0 12px 24px rgba(81, 70, 201, 0.22);
 }
 
 .submit-btn:hover,
 .submit-btn:focus {
   color: #fff;
-  filter: brightness(1.03);
-  transform: translateY(-1px);
-  box-shadow: 0 20px 42px rgba(79, 70, 229, 0.24);
 }
 
-.submit-btn:active {
-  transform: translateY(0);
-}
-
-:global(html[data-theme="dark"]) .login-page {
-  --login-panel-bg: #090b10;
-  --login-text: #f8fafc;
-  --login-muted: #a7b0c0;
-  --login-subtle: #64748b;
-  --login-border: rgba(148, 163, 184, 0.22);
-  --login-border-strong: rgba(148, 163, 184, 0.36);
-  --login-input-bg: #10141c;
-  --login-input-hover: #131925;
-  --login-focus: #8190ff;
-  background: var(--login-panel-bg);
-}
-
-:global(html[data-theme="dark"]) .brand-panel {
-  background:
-    radial-gradient(circle at 92% 18%, rgba(255, 255, 255, 0.10) 0 18%, transparent 18.4%),
-    radial-gradient(circle at 0 100%, rgba(255, 255, 255, 0.07) 0 20%, transparent 20.4%),
-    linear-gradient(135deg, #14115c 0%, #2520a3 45%, #4356ef 100%);
-}
-
-:global(html[data-theme="dark"]) .form-panel {
-  background: var(--login-panel-bg);
+.account-note {
+  margin: 20px 0 0;
+  color: #8a85a5;
+  text-align: center;
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 :global(html[data-theme="dark"]) .login-theme-toggle {
-  background: rgba(17, 19, 24, 0.82);
+  border-color: rgba(148, 163, 184, 0.16);
+  background: rgba(17, 19, 24, 0.72);
+  color: rgba(203, 213, 225, 0.72);
 }
 
-@media (max-width: 900px) {
+:global(html[data-theme="dark"]) .login-page {
+  background: linear-gradient(180deg, #090b10 0%, #111022 100%);
+  color: #f8fafc;
+}
+
+:global(html[data-theme="dark"]) .login-card {
+  border-color: rgba(148, 163, 184, 0.16);
+  background: rgba(17, 19, 24, 0.86);
+}
+
+:global(html[data-theme="dark"]) .login-title {
+  color: rgba(248, 250, 252, 0.94);
+}
+
+:global(html[data-theme="dark"]) .login-subtitle,
+:global(html[data-theme="dark"]) .account-note {
+  color: rgba(203, 213, 225, 0.66);
+}
+
+:global(html[data-theme="dark"]) .login-hint {
+  border-color: rgba(148, 163, 184, 0.16);
+  background: rgba(99, 91, 158, 0.16);
+  color: rgba(248, 250, 252, 0.86);
+}
+
+:global(html[data-theme="dark"]) :deep(.el-input__wrapper) {
+  background: #111827 !important;
+  border-color: rgba(148, 163, 184, 0.16);
+}
+
+:global(html[data-theme="dark"]) :deep(.el-input__inner) {
+  color: #f8fafc !important;
+  -webkit-text-fill-color: #f8fafc !important;
+}
+
+@media (max-width: 780px) {
   .login-page {
-    grid-template-columns: 1fr;
     overflow: auto;
   }
 
-  .brand-panel {
-    min-height: auto;
-    padding: 44px 32px;
-    place-items: start;
+  .login-shell {
+    width: min(520px, calc(100vw - 28px));
+    padding: 72px 0 24px;
   }
 
-  .brand-content {
-    width: 100%;
-  }
-
-  .brand-sub {
-    margin-bottom: 28px;
-  }
-
-  .feature-list {
-    gap: 14px;
-  }
-
-  .form-panel {
-    min-height: auto;
-    align-items: flex-start;
-    padding: 42px 28px 56px;
-  }
-}
-
-@media (max-width: 560px) {
-  .login-theme-toggle {
-    top: 14px;
-    right: 14px;
-  }
-
-  .brand-panel {
-    padding: 56px 24px 32px;
-  }
-
-  .logo-text {
-    font-size: 26px;
-  }
-
-  .brand-sub {
-    margin-left: 0;
-  }
-
-  .form-panel {
-    padding: 32px 20px 48px;
+  .login-card {
+    padding: 32px 24px;
   }
 }
 </style>

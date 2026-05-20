@@ -48,11 +48,6 @@ const crumbCurrent = computed(() => {
 // hierarchy (e.g. 设置 / 成员管理) is preserved.
 const hasCustomCrumbs = computed(() => Array.isArray(props.breadcrumbs) && props.breadcrumbs.length > 0)
 
-// Dispatches the event BuilderCommandPalette.vue listens for (see its
-// onMounted -> window.addEventListener('builder:open-command', show)).
-function openCmdK() {
-  window.dispatchEvent(new CustomEvent('builder:open-command'))
-}
 function toggleTheme() {
   theme.toggle()
 }
@@ -76,11 +71,6 @@ const isDark = computed(() => theme.mode === 'dark')
         <span class="topbar-crumb-current">{{ crumbCurrent }}</span>
       </template>
     </div>
-    <button class="topbar-search" @click="openCmdK">
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-      <span>搜索 · 跳转 · 操作</span>
-      <span class="topbar-search-kbd">⌘K</span>
-    </button>
     <!-- Per-page action surface. BuilderFrame forwards its `#actions` slot here
          so pages (Apps / TenantUsers / PlatformTenants / PlatformEnvs /
          McpToolsPage / OnlineCodingPage / OnlineCodingWorkspacePage) keep
@@ -109,14 +99,9 @@ const isDark = computed(() => theme.mode === 'dark')
 .topbar-crumb-sep { color: var(--text-4); }
 .topbar-crumb-mid { color: var(--text-2); }
 .topbar-crumb-current { color: var(--text); font-weight: 600; }
-/* Holds per-page action buttons forwarded from BuilderFrame's #actions slot.
-   Sits between the search input and the global icon cluster so page-level
-   buttons (e.g. "新建应用", workspace view-toggle) stay visually grouped. */
+/* Holds per-page action buttons forwarded from BuilderFrame's #actions slot. */
 .topbar-page-actions { display: flex; align-items: center; gap: 6px; }
 .topbar-page-actions:empty { display: none; }
-.topbar-search { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); color: var(--text-3); font-size: 12.5px; cursor: pointer; min-width: 240px; transition: border-color 0.12s, background 0.12s; font-family: inherit; }
-.topbar-search:hover { border-color: var(--border-strong); background: var(--surface); }
-.topbar-search-kbd { margin-left: auto; display: inline-flex; align-items: center; gap: 2px; font-family: var(--d-font-mono); font-size: 10.5px; color: var(--text-3); padding: 1px 5px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); }
 .topbar-actions { display: flex; align-items: center; gap: 4px; }
 .topbar-action { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text-2); font-size: 12.5px; font-weight: 500; cursor: pointer; font-family: inherit; transition: border-color 0.12s, background 0.12s, color 0.12s; }
 .topbar-action:hover { color: var(--text); border-color: var(--border-strong); background: var(--surface-2); }

@@ -1213,22 +1213,6 @@
         <div v-if="!deploySteps.length" class="dps-empty">正在初始化部署任务…</div>
       </div>
     </aside>
-    <!-- 2026-05-19 image #31: 右侧 AppBlueprintPanel 跟中间 MD 信息重复，
-         改成"MD 助手"对话面板，用户聊调整 md。AppChatPanel 已支持 write_artifact 写新版 md +
-         一键应用到 Builder。中间 MD viewer 会自动刷新到最新版。 -->
-    <aside v-else-if="!embedMode && !isPostDeploy && existingAppId" class="md-assistant-side">
-      <AppChatPanel
-        :visible="true"
-        :app-id="existingAppId"
-        :app-name="store.preview.appName || ''"
-        @close="() => {}"
-        @applied="onAppChatPanelApplied"
-      />
-      <!-- 部署 CTA 单独保留：点击展开 DeployConfirmModal -->
-      <div class="md-assistant-cta">
-        <button class="md-assistant-deploy-btn" @click="openDeployModal">🚀 部署到平台</button>
-      </div>
-    </aside>
     <!-- 2026-05-19 post-deploy 形态：右侧改成配置助手，聊增量调整 -->
     <ConfigAssistantPanel
       v-else-if="!embedMode && isPostDeploy && resolvedAppId"
@@ -8972,40 +8956,6 @@ html[data-theme="dark"] .mode-btn-link:hover {
 @keyframes dps-rotate {
   to { transform: rotate(360deg); }
 }
-
-/* image #31 右侧 MD 助手面板 */
-.md-assistant-side {
-  width: 420px;
-  display: flex;
-  flex-direction: column;
-  background: var(--t-bg-secondary, rgba(0,0,0,0.02));
-  border-left: 1px solid var(--t-border-subtle, rgba(255,255,255,0.06));
-  overflow: hidden;
-}
-.md-assistant-side > .app-chat-panel {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-.md-assistant-cta {
-  padding: 12px 16px;
-  border-top: 1px solid var(--t-border-subtle, rgba(255,255,255,0.06));
-  background: var(--t-bg-elevated, rgba(255,255,255,0.02));
-}
-.md-assistant-deploy-btn {
-  width: 100%;
-  padding: 10px 16px;
-  border-radius: 8px;
-  background: var(--t-brand-primary, #5b5bd6);
-  color: #fff;
-  border: 0;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: opacity 0.15s;
-}
-.md-assistant-deploy-btn:hover { opacity: 0.9; }
 
 .chat-bubble { margin-bottom: 14px; animation: fadeUp 0.3s ease-out; }
 .chat-bubble.user { display: flex; justify-content: flex-end; }

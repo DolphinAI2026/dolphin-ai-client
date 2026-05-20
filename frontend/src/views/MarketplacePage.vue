@@ -4,9 +4,6 @@
       <button class="btn btn-secondary mp-action-btn" type="button" @click="showMyComponents = !showMyComponents">
         {{ showMyComponents ? '浏览市场' : '我的发布' }}
       </button>
-      <button class="btn btn-secondary mp-action-btn" type="button" @click="$router.push('/coding')">
-        <el-icon><Monitor /></el-icon><span>Vibe Coding</span>
-      </button>
     </template>
 
     <main class="marketplace-page builder-page" data-design="v2">
@@ -131,7 +128,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Monitor, Search, Download } from '@element-plus/icons-vue'
+import { Search, Download } from '@element-plus/icons-vue'
 import { marketplaceApi, type MarketplaceComponent } from '@/api/marketplace'
 import { useUserStore } from '@/stores/user'
 import BuilderFrame from '@/components/BuilderFrame.vue'
@@ -250,20 +247,17 @@ onMounted(() => loadComponents())
   color: var(--text);
 }
 
-/* Page-level action buttons forwarded into ShellTopBar's #actions slot.
-   Sized to match the v2 topbar height + token-driven so they look the
-   same as Apps.vue's 导入应用 / 新建应用 buttons. */
 .mp-action-btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 30px;
-  padding: 0 10px;
+  height: 28px;
+  padding: 0 9px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 7px;
   background: var(--surface);
   color: var(--text-2);
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 500;
   cursor: pointer;
   font-family: inherit;

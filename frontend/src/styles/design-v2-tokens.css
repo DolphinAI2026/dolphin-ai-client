@@ -146,6 +146,105 @@
   --ai-ring: rgba(91, 187, 215, 0.30);
 }
 
+[data-design="v2"][data-accent="blue"] {
+  --bg-app: linear-gradient(180deg, #F6FAFF 0%, #EEF5FF 100%);
+  --bg-rail: #EAF2FF;
+  --brand-50: #EFF6FF;
+  --brand-100: #DBEAFE;
+  --brand-200: #BFDBFE;
+  --brand-300: #93C5FD;
+  --brand-400: #60A5FA;
+  --brand-500: #3B82F6;
+  --brand-600: #2563EB;
+  --brand-700: #1D4ED8;
+  --brand-800: #1E40AF;
+  --brand: #3B82F6;
+  --brand-hover: #2563EB;
+  --brand-text: #1D4ED8;
+  --brand-soft: #EFF6FF;
+  --brand-soft-2: #DBEAFE;
+  --brand-ring: rgba(59, 130, 246, 0.18);
+  --border-focus: rgba(59, 130, 246, 0.45);
+}
+
+[data-design="v2"][data-accent="cyan"] {
+  --bg-app: linear-gradient(180deg, #F6FEFF 0%, #ECFAFC 100%);
+  --bg-rail: #E8FAFC;
+  --brand-50: #ECFEFF;
+  --brand-100: #CFFAFE;
+  --brand-200: #A5F3FC;
+  --brand-300: #67E8F9;
+  --brand-400: #22D3EE;
+  --brand-500: #06B6D4;
+  --brand-600: #0891B2;
+  --brand-700: #0E7490;
+  --brand-800: #155E75;
+  --brand: #06B6D4;
+  --brand-hover: #0891B2;
+  --brand-text: #0E7490;
+  --brand-soft: #ECFEFF;
+  --brand-soft-2: #CFFAFE;
+  --brand-ring: rgba(6, 182, 212, 0.18);
+  --border-focus: rgba(6, 182, 212, 0.45);
+}
+
+[data-design="v2"][data-accent="rose"] {
+  --bg-app: linear-gradient(180deg, #FFF8FA 0%, #FFF1F4 100%);
+  --bg-rail: #FFF0F3;
+  --brand-50: #FFF1F2;
+  --brand-100: #FFE4E6;
+  --brand-200: #FECDD3;
+  --brand-300: #FDA4AF;
+  --brand-400: #FB7185;
+  --brand-500: #E11D48;
+  --brand-600: #BE123C;
+  --brand-700: #9F1239;
+  --brand-800: #881337;
+  --brand: #E11D48;
+  --brand-hover: #BE123C;
+  --brand-text: #BE123C;
+  --brand-soft: #FFF1F2;
+  --brand-soft-2: #FFE4E6;
+  --brand-ring: rgba(225, 29, 72, 0.18);
+  --border-focus: rgba(225, 29, 72, 0.45);
+}
+
+[data-design="v2"][data-theme="dark"][data-accent="blue"] {
+  --bg-app: linear-gradient(180deg, #0B1220 0%, #080D18 100%);
+  --bg-rail: #0D1424;
+  --brand: #60A5FA;
+  --brand-hover: #93C5FD;
+  --brand-text: #BFDBFE;
+  --brand-soft: rgba(96, 165, 250, 0.12);
+  --brand-soft-2: rgba(96, 165, 250, 0.20);
+  --brand-ring: rgba(96, 165, 250, 0.28);
+  --border-focus: rgba(96, 165, 250, 0.55);
+}
+
+[data-design="v2"][data-theme="dark"][data-accent="cyan"] {
+  --bg-app: linear-gradient(180deg, #07161A 0%, #061115 100%);
+  --bg-rail: #08191E;
+  --brand: #22D3EE;
+  --brand-hover: #67E8F9;
+  --brand-text: #A5F3FC;
+  --brand-soft: rgba(34, 211, 238, 0.12);
+  --brand-soft-2: rgba(34, 211, 238, 0.20);
+  --brand-ring: rgba(34, 211, 238, 0.28);
+  --border-focus: rgba(34, 211, 238, 0.55);
+}
+
+[data-design="v2"][data-theme="dark"][data-accent="rose"] {
+  --bg-app: linear-gradient(180deg, #1A0A10 0%, #12070C 100%);
+  --bg-rail: #1D0B12;
+  --brand: #FB7185;
+  --brand-hover: #FDA4AF;
+  --brand-text: #FECDD3;
+  --brand-soft: rgba(251, 113, 133, 0.12);
+  --brand-soft-2: rgba(251, 113, 133, 0.20);
+  --brand-ring: rgba(251, 113, 133, 0.28);
+  --border-focus: rgba(251, 113, 133, 0.55);
+}
+
 /* Status badges. Used by ProjectSwitcher stage chips today and reusable for
    Sessions 3-6 (Projects list cards, Specs status, Apps refresh chips). Scoped
    under [data-design="v2"] so the legacy chrome remains untouched. */
