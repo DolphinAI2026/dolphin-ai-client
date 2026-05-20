@@ -18,25 +18,7 @@
       <slot name="center" />
     </div>
     <div v-if="$slots.actions" class="top-bar-right">
-      <button class="top-bar-command" type="button" @click="openCommandPalette" title="命令面板">
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-          <circle cx="7" cy="7" r="4.2" stroke="currentColor" stroke-width="1.4" />
-          <path d="m10.2 10.2 2.8 2.8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
-        </svg>
-        <span>搜索应用、模型、对话...</span>
-        <kbd>⌘K</kbd>
-      </button>
       <slot name="actions" />
-    </div>
-    <div v-else class="top-bar-right">
-      <button class="top-bar-command" type="button" @click="openCommandPalette" title="命令面板">
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-          <circle cx="7" cy="7" r="4.2" stroke="currentColor" stroke-width="1.4" />
-          <path d="m10.2 10.2 2.8 2.8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
-        </svg>
-        <span>搜索应用、模型、对话...</span>
-        <kbd>⌘K</kbd>
-      </button>
     </div>
   </nav>
 </template>
@@ -67,10 +49,6 @@ const router = useRouter()
 function handleBack() {
   router.push(props.backTo)
 }
-
-function openCommandPalette() {
-  window.dispatchEvent(new CustomEvent('builder:open-command'))
-}
 </script>
 
 <style scoped>
@@ -93,38 +71,6 @@ function openCommandPalette() {
   flex: 1;
 }
 .top-bar-right { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
-
-.top-bar-command {
-  height: 30px;
-  min-width: 260px;
-  border: 1px solid var(--t-border-subtle);
-  border-radius: 8px;
-  background: var(--t-bg-input);
-  color: var(--t-text-secondary);
-  display: inline-flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 0 8px;
-  cursor: pointer;
-  font-size: 12px;
-}
-
-.top-bar-command:hover {
-  background: var(--t-bg-panel-hover);
-  color: var(--t-text-primary);
-}
-
-.top-bar-command kbd {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 10px;
-  line-height: 1;
-  padding: 3px 5px;
-  border-radius: 4px;
-  border: 1px solid var(--t-border-subtle);
-  background: var(--t-bg-panel);
-  color: var(--t-text-muted);
-}
 
 /* Buttons */
 .top-bar-btn {

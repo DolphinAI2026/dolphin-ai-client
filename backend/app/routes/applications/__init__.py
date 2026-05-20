@@ -1090,8 +1090,9 @@ async def import_from_platform(
     env = env_result.scalar_one_or_none()
     if not env:
         raise HTTPException(status_code=404, detail="环境不存在")
-    if not env.token:
-        raise HTTPException(status_code=400, detail="环境未连接，请先登录")
+    token = env.token or getattr(ctx.user, "apaas_token", None)
+    if not token:
+        raise HTTPException(status_code=400, detail="当前用户平台 token 不可用，请重新登录")
 
     # 2. 检查是否已导入
     existing = await db.execute(
@@ -1106,7 +1107,7 @@ async def import_from_platform(
     client = APaaSClient(
         base_url=env.base_url,
         tenant_id=env.platform_tenant_id,
-        token=env.token,
+        token=token,
     )
 
     try:

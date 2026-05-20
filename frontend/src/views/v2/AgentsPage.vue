@@ -11,7 +11,6 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
-import ShellTopBar from '@/components/v2/ShellTopBar.vue'
 import { useAgentsStore } from '@/stores/agents'
 import { llmConfigApi } from '@/api/llmConfig'
 import type { AgentConfig as ApiAgentConfig } from '@/api/agents'
@@ -242,7 +241,6 @@ const knowledgeEmptyHint = computed(() =>
 
 <template>
   <WorkbenchShell>
-    <ShellTopBar />
     <div class="page">
       <div class="page-pad">
         <div class="page-head">

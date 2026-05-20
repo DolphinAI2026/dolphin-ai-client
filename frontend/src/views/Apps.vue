@@ -1,16 +1,5 @@
 <template>
   <BuilderFrame :breadcrumbs="[{ label: '应用' }]">
-    <template #actions>
-      <button class="btn btn-secondary apps-new-btn" type="button" @click="importDialogOpen = true">
-        <el-icon><Download /></el-icon>
-        <span>导入应用</span>
-      </button>
-      <button class="btn btn-primary apps-new-btn" type="button" @click="router.push('/')">
-        <el-icon><Plus /></el-icon>
-        <span>新建应用</span>
-      </button>
-    </template>
-
     <main class="apps-page builder-page">
       <section class="apps-header page-head">
         <div>
@@ -36,32 +25,50 @@
           </button>
         </div>
 
-        <div class="apps-view-toggle" aria-label="视图切换">
-          <button
-            class="apps-view-btn"
-            :class="{ active: viewMode === 'list' }"
-            type="button"
-            title="列表视图"
-            @click="viewMode = 'list'"
-          >
-            <el-icon><List /></el-icon>
+        <div class="apps-toolbar-right">
+          <button class="btn btn-secondary apps-toolbar-action" type="button" @click="importDialogOpen = true">
+            <el-icon><Download /></el-icon>
+            <span>导入应用</span>
           </button>
-          <button
-            class="apps-view-btn"
-            :class="{ active: viewMode === 'card' }"
-            type="button"
-            title="卡片视图"
-            @click="viewMode = 'card'"
-          >
-            <el-icon><Grid /></el-icon>
+          <button class="btn btn-primary apps-toolbar-action" type="button" @click="router.push('/')">
+            <el-icon><Plus /></el-icon>
+            <span>新建应用</span>
           </button>
+
+          <div class="apps-view-toggle" aria-label="视图切换">
+            <button
+              class="apps-view-btn"
+              :class="{ active: viewMode === 'list' }"
+              type="button"
+              title="列表视图"
+              @click="viewMode = 'list'"
+            >
+              <el-icon><List /></el-icon>
+            </button>
+            <button
+              class="apps-view-btn"
+              :class="{ active: viewMode === 'card' }"
+              type="button"
+              title="卡片视图"
+              @click="viewMode = 'card'"
+            >
+              <el-icon><Grid /></el-icon>
+            </button>
+          </div>
         </div>
       </section>
 
       <section class="apps-content" :class="`is-${viewMode}`">
         <div v-if="loading" class="apps-state">加载中...</div>
         <div v-else-if="filteredApps.length === 0" class="apps-state apps-empty-v2">
-          <span class="apps-state-icon">ap</span>
+          <span class="apps-state-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none">
+              <rect x="4" y="4" width="6" height="6" rx="1.4" />
+              <rect x="14" y="4" width="6" height="6" rx="1.4" />
+              <rect x="4" y="14" width="6" height="6" rx="1.4" />
+              <rect x="14" y="14" width="6" height="6" rx="1.4" />
+            </svg>
+          </span>
           <strong>暂无应用</strong>
           <span>从首页新建应用后，会在这里继续构建、部署和查看历史对话。</span>
           <button class="btn btn-primary btn-sm apps-empty-cta" type="button" @click="router.push('/')">
@@ -118,60 +125,18 @@
             <div class="apps-row-updated">{{ appUpdatedLabel(app) }}</div>
 
             <div class="apps-row-actions" @click.stop>
+              <button class="apps-mini-action" type="button" @click="openDialog(app)">对话</button>
+              <button v-if="canBuildApp(app)" class="apps-mini-action primary" type="button" @click="buildApp(app)">构建</button>
               <button
-                class="apps-icon-btn ai-adjust"
+                v-if="canPublishApp(app)"
+                class="apps-mini-action primary"
                 type="button"
-                title="AI 调整这个应用"
-                @click="openAiAdjust(app)"
+                :disabled="isPublishingApp(app)"
+                @click="publishApp(app)"
               >
-                <svg viewBox="0 0 16 16" width="15" height="15" fill="none" aria-hidden="true">
-                  <rect x="3.5" y="5" width="9" height="7" rx="1.5" stroke="currentColor" stroke-width="1.4"/>
-                  <circle cx="6.2" cy="8.4" r="0.9" fill="currentColor"/>
-                  <circle cx="9.8" cy="8.4" r="0.9" fill="currentColor"/>
-                  <path d="M8 5V3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-                  <circle cx="8" cy="2.5" r="0.8" fill="currentColor"/>
-                  <path d="M2 9v1.5M14 9v1.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-                </svg>
+                {{ isPublishingApp(app) ? '发布中' : '发布' }}
               </button>
-              <button
-                v-if="canOpenPlatform(app)"
-                class="apps-icon-btn"
-                type="button"
-                title="在平台中打开"
-                @click="openInPlatform(app)"
-              >
-                <el-icon><LinkIcon /></el-icon>
-              </button>
-              <button
-                v-if="canDeployApp(app)"
-                class="apps-icon-btn"
-                type="button"
-                title="生成到平台"
-                @click="deployApp(app)"
-              >
-                <el-icon><Promotion /></el-icon>
-              </button>
-              <button
-                v-if="canManageMembers(app)"
-                class="apps-icon-btn"
-                type="button"
-                :title="`管理 ${app.app_name} 的成员`"
-                @click="openMembersDialog(app)"
-              >
-                <el-icon><UserFilled /></el-icon>
-              </button>
-              <button
-                v-if="canDeleteApp(app)"
-                class="apps-icon-btn danger"
-                type="button"
-                :title="deleteTooltip(app)"
-                @click="confirmDelete(app)"
-              >
-                <el-icon><Delete /></el-icon>
-              </button>
-              <button v-if="!canOpenPlatform(app) && !canDeployApp(app) && !canManageMembers(app) && !canDeleteApp(app)" class="apps-icon-btn muted" type="button" title="更多">
-                <el-icon><MoreFilled /></el-icon>
-              </button>
+              <button v-if="canDeleteApp(app)" class="apps-mini-action danger" type="button" @click="confirmDelete(app)">删除</button>
             </div>
           </div>
         </div>
@@ -214,20 +179,17 @@
               <small>{{ latestHistoryMeta(app) }}</small>
             </button>
             <div class="apps-card-actions" @click.stop>
-              <button class="apps-mini-action ai-adjust" type="button" @click="openAiAdjust(app)">
-                <svg viewBox="0 0 16 16" width="13" height="13" fill="none" style="margin-right: 3px; vertical-align: -2px;" aria-hidden="true">
-                  <rect x="3.5" y="5" width="9" height="7" rx="1.5" stroke="currentColor" stroke-width="1.4"/>
-                  <circle cx="6.2" cy="8.4" r="0.9" fill="currentColor"/>
-                  <circle cx="9.8" cy="8.4" r="0.9" fill="currentColor"/>
-                  <path d="M8 5V3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-                  <circle cx="8" cy="2.5" r="0.8" fill="currentColor"/>
-                </svg>
-                AI 调整
+              <button class="apps-mini-action" type="button" @click="openDialog(app)">对话</button>
+              <button v-if="canBuildApp(app)" class="apps-mini-action primary" type="button" @click="buildApp(app)">构建</button>
+              <button
+                v-if="canPublishApp(app)"
+                class="apps-mini-action primary"
+                type="button"
+                :disabled="isPublishingApp(app)"
+                @click="publishApp(app)"
+              >
+                {{ isPublishingApp(app) ? '发布中' : '发布' }}
               </button>
-              <button class="apps-mini-action" type="button" @click="openAppInChat(app)">对话</button>
-              <button v-if="canOpenPlatform(app)" class="apps-mini-action" type="button" @click="openInPlatform(app)">平台</button>
-              <button v-if="canDeployApp(app)" class="apps-mini-action primary" type="button" @click="deployApp(app)">生成</button>
-              <button v-if="canManageMembers(app)" class="apps-mini-action" type="button" @click="openMembersDialog(app)">成员</button>
               <button v-if="canDeleteApp(app)" class="apps-mini-action danger" type="button" @click="confirmDelete(app)">删除</button>
             </div>
           </article>
@@ -247,30 +209,8 @@
       </section>
     </main>
 
-    <!-- 导入应用弹窗 — 入口在顶栏 actions 槽 -->
+    <!-- 导入应用弹窗 -->
     <ImportAppDialog v-model="importDialogOpen" @imported="refreshApps" />
-
-    <!-- Phase A: 成员管理弹窗 -->
-    <div v-if="membersDialogApp" class="modal-backdrop" @click.self="membersDialogApp = null">
-      <div class="modal modal-large" @click.stop>
-        <div class="modal-header">
-          <h3>{{ membersDialogApp.app_name }} — 成员管理</h3>
-          <button class="builder-btn" type="button" @click="membersDialogApp = null">关闭</button>
-        </div>
-        <MembersPanel
-          :title="`应用 ${membersDialogApp.app_name}`"
-          :current-role="membersDialogRole"
-          :current-user-id="userStore.user?.id"
-          :load-members="loadAppMembers"
-          :load-user-options="loadTenantUserOptions"
-          :invite="inviteAppMember"
-          :update-role="updateAppMemberRole"
-          :remove="removeAppMember"
-          :open-user-management="openTenantUserManagement"
-          :can-open-user-management="userStore.isTenantAdmin"
-        />
-      </div>
-    </div>
 
   </BuilderFrame>
 </template>
@@ -278,20 +218,14 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { Delete, Download, Grid, Link as LinkIcon, List, MoreFilled, Plus, Promotion, UserFilled } from '@element-plus/icons-vue'
+import { Download, Grid, List, Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { handleError } from '@/utils/errorHandler'
 import { applicationApi } from '@/api/application'
-import { authApi } from '@/api/auth'
 import { conversationApi, type ConversationWithApp } from '@/api/conversation'
 import BuilderFrame from '@/components/BuilderFrame.vue'
 import ImportAppDialog from '@/components/ImportAppDialog.vue'
-import MembersPanel from '@/components/MembersPanel.vue'
 import type { MergedApplication } from '@/types'
-import { buildPlatformProxyEntryUrl } from '@/utils/platformIframe'
-import { useUserStore } from '@/stores/user'
-import { applicationMembersApi } from '@/api/applicationMembers'
-import { normalizeRole, type ProjectRole, type ApplicationMember, type MemberUserOption } from '@/types/collaboration'
 
 type AppTab = 'all' | 'active' | 'deployed' | 'draft'
 type ViewMode = 'list' | 'card'
@@ -303,13 +237,13 @@ type AppStage = {
 }
 
 const router = useRouter()
-const userStore = useUserStore()
 const apps = ref<MergedApplication[]>([])
 const appHistoryMap = ref<Record<number, ConversationWithApp[]>>({})
 const loading = ref(true)
 const activeTab = ref<AppTab>('all')
 const viewMode = ref<ViewMode>('list')
 const importDialogOpen = ref(false)
+const publishingIds = ref<Set<number>>(new Set())
 
 const tabDefinitions: Array<{ label: string; value: AppTab }> = [
   { label: '全部', value: 'all' },
@@ -403,10 +337,6 @@ function appNumericId(app: MergedApplication) {
   return Number.isFinite(raw) ? raw : null
 }
 
-function canOpenPlatform(app: MergedApplication) {
-  return Boolean(app.apaas_url || app.apaas_app_id)
-}
-
 function isGeneratedApp(app: MergedApplication) {
   return Boolean(
     app.apaas_app_id ||
@@ -423,40 +353,55 @@ function appWorkspaceQuery(app: MergedApplication) {
   return { app_id: appId }
 }
 
-function openInPlatform(app: MergedApplication) {
-  if (app.apaas_url) {
-    window.open(app.apaas_url, '_blank', 'noopener,noreferrer')
-    return
-  }
-  const appId = appNumericId(app)
-  if (!appId) return
-  const token = userStore.token || localStorage.getItem('token') || ''
-  const url = buildPlatformProxyEntryUrl(appId, token)
-  window.open(url, '_blank', 'noopener,noreferrer')
-}
-
 function openApp(app: MergedApplication) {
   // WorkspaceShell is not a complete editing surface yet. Keep the primary
   // application entry on ChatPage, which owns app-scoped SPEC/edit/deploy flow.
   router.push({ path: '/chat', query: appWorkspaceQuery(app) })
 }
 
-function openAppInChat(app: MergedApplication) {
-  // 备选：直达老 ChatPage（保留为 mini-action / 兼容入口）。
+function openDialog(app: MergedApplication) {
   router.push({ path: '/chat', query: appWorkspaceQuery(app) })
 }
 
-// AI 调整应用 — 直接跳进应用编辑页（左侧已是 dolphin agent inline 嵌入）
-async function openAiAdjust(app: MergedApplication) {
-  router.push({ path: '/chat', query: appWorkspaceQuery(app) })
+function hasDesignOutput(app: MergedApplication) {
+  return Boolean(hasAppStats(app) || app.config_preview || app.canonical_spec_id || app.conversation_id)
 }
 
-function canDeployApp(app: MergedApplication) {
-  return app.source === 'local' && (app.local_status === 'draft' || app.local_status === 'failed')
+function canBuildApp(app: MergedApplication) {
+  if (app.source !== 'local') return false
+  if (app.apaas_app_id || app.local_status === 'completed') return false
+  if (app.local_status === 'generating' || app.local_status === 'updating') return false
+  return hasDesignOutput(app) || app.local_status === 'draft' || app.local_status === 'failed'
 }
 
-function deployApp(app: MergedApplication) {
+function buildApp(app: MergedApplication) {
   router.push({ path: '/chat', query: { deploy_app_id: String(app.id) } })
+}
+
+function canPublishApp(app: MergedApplication) {
+  return app.source === 'local' && Boolean(app.apaas_app_id)
+}
+
+function isPublishingApp(app: MergedApplication) {
+  const appId = appNumericId(app)
+  return appId != null && publishingIds.value.has(appId)
+}
+
+async function publishApp(app: MergedApplication) {
+  const appId = appNumericId(app)
+  if (appId == null || isPublishingApp(app)) return
+  publishingIds.value = new Set([...publishingIds.value, appId])
+  try {
+    await applicationApi.publish(appId)
+    ElMessage.success('已发布')
+    await refreshApps()
+  } catch (error) {
+    handleError(error, { fallback: '发布失败' })
+  } finally {
+    const next = new Set(publishingIds.value)
+    next.delete(appId)
+    publishingIds.value = next
+  }
 }
 
 function openConversation(app: MergedApplication, item?: ConversationWithApp) {
@@ -564,8 +509,8 @@ function relativeTime(value?: string | null) {
 
 function canDeleteApp(app: MergedApplication) {
   if (app.source !== 'local') return false
-  if (app.apaas_app_id) return false
-  return app.local_status === 'draft' || app.local_status === 'failed'
+  if (app.apaas_app_id || app.local_status === 'completed') return false
+  return app.local_status !== 'generating' && app.local_status !== 'updating'
 }
 
 function deleteTooltip(app: MergedApplication) {
@@ -612,60 +557,6 @@ async function refreshApps() {
 }
 
 onMounted(() => { refreshApps() })
-
-// ---- Phase A: Application member management ----
-const membersDialogApp = ref<{ id: number; app_name: string } | null>(null)
-const membersDialogRole = ref<ProjectRole>('viewer')
-
-function canManageMembers(app: MergedApplication) {
-  // 本地/已关联应用才有 Builder 侧成员关系；权限由弹窗内根据 effective role 再细分。
-  return app.source === 'local' || app.source === 'linked'
-}
-
-async function openMembersDialog(app: MergedApplication) {
-  const numericId = Number(app.id)
-  if (!Number.isFinite(numericId)) {
-    ElMessage.warning('该应用暂不支持成员管理')
-    return
-  }
-  membersDialogApp.value = { id: numericId, app_name: app.app_name }
-  try {
-    const list = await applicationMembersApi.list(numericId)
-    const me = list.find(m => m.user_id === userStore.user?.id)
-    membersDialogRole.value = normalizeRole(me?.role)
-  } catch {
-    membersDialogRole.value = 'viewer'
-  }
-}
-
-async function loadAppMembers(): Promise<ApplicationMember[]> {
-  if (!membersDialogApp.value) return []
-  return applicationMembersApi.list(membersDialogApp.value.id)
-}
-
-async function inviteAppMember(req: { username?: string; user_id?: number; role: ProjectRole }) {
-  if (!membersDialogApp.value) return
-  await applicationMembersApi.invite(membersDialogApp.value.id, req)
-}
-
-async function loadTenantUserOptions(): Promise<MemberUserOption[]> {
-  const users = await authApi.listActiveUsers()
-  return (users || []).map(user => ({ id: user.id, username: user.username }))
-}
-
-function openTenantUserManagement() {
-  router.push('/tenant-users')
-}
-
-async function updateAppMemberRole(userId: number, role: ProjectRole) {
-  if (!membersDialogApp.value) return
-  await applicationMembersApi.updateRole(membersDialogApp.value.id, userId, role)
-}
-
-async function removeAppMember(userId: number) {
-  if (!membersDialogApp.value) return
-  await applicationMembersApi.remove(membersDialogApp.value.id, userId)
-}
 </script>
 
 <style scoped>
@@ -755,6 +646,22 @@ async function removeAppMember(userId: number) {
   gap: 14px;
 }
 
+.apps-toolbar-right {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.apps-toolbar-action {
+  height: 40px;
+  padding: 0 18px;
+  border-radius: 10px;
+  font-size: 15px;
+  font-weight: 760;
+}
+
 .apps-tabs,
 .apps-view-toggle {
   display: inline-flex;
@@ -766,14 +673,14 @@ async function removeAppMember(userId: number) {
 }
 
 .apps-tab {
-  min-width: 52px;
-  height: 26px;
+  min-width: 58px;
+  height: 30px;
   border: 0;
   border-radius: 6px;
   background: transparent;
   color: var(--b-text-muted);
   font: inherit;
-  font-size: 12px;
+  font-size: 13px;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -796,8 +703,8 @@ async function removeAppMember(userId: number) {
   background: var(--b-brand-soft);
   color: var(--b-brand);
   font-family: var(--b-mono);
-  font-size: 10px;
-  line-height: 14px;
+  font-size: 11px;
+  line-height: 15px;
 }
 
 .apps-view-toggle {
@@ -849,15 +756,23 @@ async function removeAppMember(userId: number) {
 }
 
 .apps-state-icon {
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
   display: grid;
   place-items: center;
-  background: var(--b-ink);
+  background: linear-gradient(180deg, var(--brand, #6d5df6), var(--brand-hover, #5b4ee6));
   color: #fff;
-  font-family: var(--b-mono);
-  font-weight: 700;
+  box-shadow: 0 14px 28px var(--brand-ring, rgba(109, 93, 246, 0.18));
+}
+
+.apps-state-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.apps-state-icon rect {
+  fill: currentColor;
 }
 
 .apps-table {
@@ -870,17 +785,17 @@ async function removeAppMember(userId: number) {
 .apps-table-head,
 .apps-row {
   display: grid;
-  grid-template-columns: minmax(320px, 1.5fr) minmax(120px, 0.7fr) minmax(150px, 0.7fr) minmax(110px, 0.45fr) 112px;
+  grid-template-columns: minmax(320px, 1.35fr) minmax(120px, 0.58fr) minmax(150px, 0.58fr) minmax(110px, 0.45fr) minmax(360px, 0.9fr);
   align-items: center;
   column-gap: 18px;
 }
 
 .apps-table-head {
-  min-height: 28px;
+  min-height: 32px;
   padding: 0 12px;
   border-bottom: 1px solid var(--b-line);
   color: var(--b-text-muted);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .apps-row {
@@ -939,7 +854,7 @@ async function removeAppMember(userId: number) {
 .apps-row-main strong {
   min-width: 0;
   color: var(--b-text);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 700;
   line-height: 1.2;
   overflow: hidden;
@@ -953,7 +868,7 @@ async function removeAppMember(userId: number) {
   align-items: center;
   gap: 7px;
   color: var(--b-text-muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .apps-row-meta code,
@@ -963,7 +878,7 @@ async function removeAppMember(userId: number) {
   color: var(--b-text-muted);
   padding: 2px 5px;
   font-family: var(--b-mono);
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1;
 }
 
@@ -980,7 +895,7 @@ async function removeAppMember(userId: number) {
   background: transparent;
   color: var(--b-text-muted);
   font: inherit;
-  font-size: 11px;
+  font-size: 12px;
   padding: 0;
   cursor: pointer;
   overflow: hidden;
@@ -993,7 +908,7 @@ async function removeAppMember(userId: number) {
 }
 
 .apps-stage-pill {
-  height: 24px;
+  height: 28px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1002,7 +917,7 @@ async function removeAppMember(userId: number) {
   background: var(--b-bg-sub);
   color: var(--b-text-muted);
   padding: 0 9px;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 650;
   white-space: nowrap;
 }
@@ -1033,7 +948,7 @@ async function removeAppMember(userId: number) {
   gap: 9px;
   color: var(--b-text-muted);
   font-family: var(--b-mono);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .apps-progress-track {
@@ -1069,58 +984,14 @@ async function removeAppMember(userId: number) {
 
 .apps-row-updated {
   color: var(--b-text-muted);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .apps-row-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 6px;
-}
-
-.apps-icon-btn {
-  width: 28px;
-  height: 28px;
-  border: 1px solid var(--b-line);
-  border-radius: 7px;
-  background: var(--b-panel);
-  color: var(--b-text-muted);
-  display: grid;
-  place-items: center;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.apps-icon-btn:hover {
-  border-color: var(--b-line-strong);
-  color: var(--b-text);
-  background: var(--b-bg-sub);
-}
-
-.apps-icon-btn.danger {
-  color: var(--b-red);
-}
-
-.apps-icon-btn.muted {
-  color: var(--b-text-faint);
-}
-
-.apps-icon-btn.ai-adjust {
-  font-size: 16px;
-  color: #7c3aed;
-}
-
-.apps-icon-btn.ai-adjust:hover {
-  background: #f3eefe;
-}
-
-.apps-mini-action.ai-adjust {
-  color: #7c3aed;
-  border-color: #d9d4f5;
-}
-
-.apps-mini-action.ai-adjust:hover {
-  background: #f3eefe;
+  gap: 9px;
+  flex-wrap: wrap;
 }
 
 .apps-card-grid {
@@ -1164,7 +1035,7 @@ async function removeAppMember(userId: number) {
 .apps-card h2 {
   margin: 2px 0 0;
   color: var(--b-text);
-  font-size: 15px;
+  font-size: 16px;
   line-height: 1.35;
   font-weight: 750;
 }
@@ -1172,7 +1043,7 @@ async function removeAppMember(userId: number) {
 .apps-card-code {
   gap: 8px;
   color: var(--b-text-muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .apps-card-stats {
@@ -1181,7 +1052,7 @@ async function removeAppMember(userId: number) {
   padding-top: 10px;
   border-top: 1px solid var(--b-line);
   color: var(--b-text-muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .apps-card-history {
@@ -1204,29 +1075,50 @@ async function removeAppMember(userId: number) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .apps-card-history small {
   color: var(--b-text-muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .apps-card-actions {
   margin-top: auto;
   justify-content: flex-end;
-  gap: 7px;
+  gap: 9px;
+  flex-wrap: wrap;
 }
 
 .apps-mini-action {
-  height: 26px;
+  min-height: 36px;
   border: 1px solid var(--b-line);
-  border-radius: 6px;
+  border-radius: 8px;
   background: var(--b-panel);
   color: var(--b-text-muted);
-  padding: 0 9px;
-  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 15px;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 650;
   cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, transform 0.15s ease;
+}
+
+.apps-mini-action:hover {
+  border-color: var(--b-line-strong);
+  color: var(--b-text);
+  background: var(--b-bg-sub);
+  transform: translateY(-1px);
+}
+
+.apps-mini-action span {
+  display: inline-flex;
+  align-items: center;
 }
 
 .apps-mini-action.primary {
@@ -1239,6 +1131,12 @@ async function removeAppMember(userId: number) {
   color: var(--b-red);
 }
 
+.apps-mini-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+  transform: none;
+}
+
 @media (max-width: 860px) {
   .apps-page {
     padding: 18px 16px 28px;
@@ -1249,13 +1147,18 @@ async function removeAppMember(userId: number) {
     flex-direction: column;
   }
 
+  .apps-toolbar-right {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
   .apps-tabs {
     width: 100%;
     overflow-x: auto;
   }
 
   .apps-view-toggle {
-    align-self: flex-end;
+    align-self: auto;
   }
 
   .apps-table-head {

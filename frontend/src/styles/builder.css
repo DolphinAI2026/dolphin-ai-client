@@ -1,6 +1,12 @@
 :root {
-  --b-bg: #f7f8fb;
-  --b-bg-sub: #f2f4f8;
+  --b-bg: color-mix(in srgb, var(--brand-soft, #f2f0ff) 52%, #f7f8fb 48%);
+  --b-bg-sub: color-mix(in srgb, var(--brand-soft-2, #ebe8ff) 38%, #f2f4f8 62%);
+  --b-bg-wash:
+    radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--brand-soft-2, #ebe8ff) 54%, transparent) 0%, transparent 34%),
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--brand-soft, #f2f0ff) 70%, #fbfcff 30%) 0%,
+      color-mix(in srgb, var(--brand-soft-2, #ebe8ff) 36%, #f7f8fb 64%) 46%,
+      color-mix(in srgb, var(--brand-soft, #f2f0ff) 28%, #f7f8fb 72%) 100%);
   --b-panel: #ffffff;
   --b-panel-soft: #fbfcff;
   --b-line: rgba(24, 31, 45, 0.09);
@@ -28,8 +34,13 @@
 }
 
 html[data-theme="dark"] {
-  --b-bg: #090b10;
-  --b-bg-sub: #0d1117;
+  --b-bg: color-mix(in srgb, var(--brand-soft, rgba(124, 140, 255, 0.14)) 24%, #090b10 76%);
+  --b-bg-sub: color-mix(in srgb, var(--brand-soft-2, rgba(124, 140, 255, 0.20)) 18%, #0d1117 82%);
+  --b-bg-wash:
+    radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--brand-soft-2, rgba(124, 140, 255, 0.20)) 46%, transparent) 0%, transparent 34%),
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--brand-soft, rgba(124, 140, 255, 0.14)) 26%, #090b10 74%) 0%,
+      color-mix(in srgb, var(--brand-soft-2, rgba(124, 140, 255, 0.20)) 18%, #0d1117 82%) 100%);
   --b-panel: #111318;
   --b-panel-soft: #151922;
   --b-line: rgba(148, 163, 184, 0.14);
@@ -59,7 +70,7 @@ html[data-theme="dark"] {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: var(--b-bg);
+  background: var(--b-bg-wash);
   color: var(--b-text);
 }
 

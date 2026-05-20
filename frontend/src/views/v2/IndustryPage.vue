@@ -15,7 +15,6 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
-import ShellTopBar from '@/components/v2/ShellTopBar.vue'
 import { useIndustryStore } from '@/stores/industry'
 import type {
   IndustryPack,
@@ -105,7 +104,6 @@ function renderIcon(name: string, size = 16) {
 
 <template>
   <WorkbenchShell>
-    <ShellTopBar />
     <div class="page">
       <div class="page-pad">
         <div class="page-head">

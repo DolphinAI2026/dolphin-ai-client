@@ -21,6 +21,24 @@ class Tenant(Base):
     status: Mapped[int] = mapped_column(Integer, default=1, nullable=False)  # 1=active, 0=disabled
     contact_name: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     contact_email: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    # ai-builder 租户级身份对齐：一个本地租户可绑定唯一 aPaaS 平台环境。
+    apaas_env_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("platform_envs.id", ondelete="SET NULL"), nullable=True,
+        comment="ai-builder 租户唯一绑定的 apaas 平台环境 (PlatformEnv.id)",
+    )
+    apaas_tenant_id_str: Mapped[Optional[str]] = mapped_column(
+        String(40), nullable=True, unique=True,
+        comment="aPaaS 平台租户 ID；NULL=不强绑单一 apaas tenant",
+    )
+    dolphin_tenant_code: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    dolphin_tenant_id_str: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    dolphin_agent_code: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    dolphin_copilot_agent_code: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    dolphin_coding_agent_code: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    dolphin_app_adjust_agent_code: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    dolphin_requirements_agent_code: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    dolphin_customer_name: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    dolphin_server_url: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -87,3 +105,28 @@ class TeamMember(Base):
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     team_role: Mapped[str] = mapped_column(String(32), default="member", nullable=False)  # admin / member / viewer
     joined_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class TenantDolphinAgent(Base):
+    """dolphin agent 入口表 — per-tenant N 行。"""
+    __tablename__ = "tenant_dolphin_agents"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "agent_code", name="uk_tenant_agent"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    agent_code: Mapped[str] = mapped_column(String(40), nullable=False, comment="dolphin agent code")
+    instance_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    nav_path: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    nav_icon: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+    button_text: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    status: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)

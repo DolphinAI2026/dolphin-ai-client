@@ -1,243 +1,254 @@
-<!-- frontend/src/views/Landing.vue
-  v2 Landing — cyan AI hub + 3-mode composer + 4-stat strip + flow chips + recent apps.
-  Preserves the existing upload-to-/chat flow via `previewStore.pendingFile` + `from=upload`
-  (router guard at frontend/src/router/index.ts:30-44 whitelists `from=upload`).
--->
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import LandingComposer from '@/components/v2/LandingComposer.vue'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
-import ShellTopBar from '@/components/v2/ShellTopBar.vue'
 import { usePreviewStore } from '@/stores/preview'
-import { conversationApi, type ConversationWithApp } from '@/api/conversation'
-import { applicationApi } from '@/api/application'
-import { industryApi } from '@/api/industry'
 
 const router = useRouter()
 const previewStore = usePreviewStore()
-
-interface RecentApp {
-  id: number | string
-  name: string
-  updatedAt: string
-  conversationId?: number | null
-}
-
-const stats = ref({ apps: 0, specs: 0, deploys: 0, packs: 0 })
-const recent = ref<RecentApp[]>([])
-const prdInputRef = ref<HTMLInputElement | null>(null)
+const fileInputRef = ref<HTMLInputElement | null>(null)
 
 const FLOW_STEPS = [
-  { n: '01', label: '描述需求',         tone: 'ai' },
-  { n: '02', label: '生成 SPEC',        tone: 'brand' },
-  { n: '03', label: '复用行业沉淀',     tone: 'emerald' },
-  { n: '04', label: '部署上线',         tone: 'amber' },
+  { icon: 'chat', title: '描述需求', desc: '业务目标与材料' },
+  { icon: 'doc', title: '构建应用', desc: '页面 / 表单 / 流程' },
+  { icon: 'cube', title: '调用 MCP', desc: '后端工具补齐配置' },
+  { icon: 'rocket', title: '部署上线', desc: '使用平台管理中的环境' },
 ]
 
-function formatDate(dateStr: string) {
-  if (!dateStr) return '今天'
-  const d = new Date(dateStr)
-  return `${d.getMonth() + 1}月${d.getDate()}日`
+const ICONS: Record<string, string> = {
+  chat: '<path d="M21 12a8 8 0 0 1-11.9 7L4 21l1.6-4.4A8 8 0 1 1 21 12z"/>',
+  doc: '<path d="M7 3h8l4 4v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v5h5"/><path d="M9 13h6"/><path d="M9 17h4"/>',
+  cube: '<path d="M20.5 7.5 12 12 3.5 7.5"/><path d="M12 12v9"/><path d="M21 8v8l-9 5-9-5V8l9-5z"/>',
+  rocket: '<path d="M4.5 16.5 3 21l4.5-1.5"/><path d="M8 16 4 12l8.5-8.5c2.5-2.5 6-1.5 8 .5 2 2 3 5.5.5 8L12 20l-4-4z"/><path d="M14 6l4 4"/>',
 }
 
-function buildFallbackAppsFromConversations(list: ConversationWithApp[]) {
-  const appMap = new Map<number, ConversationWithApp>()
-  for (const conv of list) {
-    if (!conv.app_id || !conv.app_name) continue
-    const existing = appMap.get(conv.app_id)
-    const convTime = new Date(conv.updated_at || conv.created_at || 0).getTime()
-    const existingTime = existing ? new Date(existing.updated_at || existing.created_at || 0).getTime() : -1
-    if (!existing || convTime > existingTime) appMap.set(conv.app_id, conv)
-  }
-  return Array.from(appMap.values()).sort((a, b) => {
-    const ta = new Date(a.updated_at || a.created_at || 0).getTime()
-    const tb = new Date(b.updated_at || b.created_at || 0).getTime()
-    return tb - ta
-  })
+function renderIcon(name: string): string {
+  const inner = ICONS[name] ?? ''
+  return `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`
 }
 
-async function loadLanding() {
-  const [conversations, apps, industryPacks] = await Promise.all([
-    conversationApi.listWithApps({ agent_type: 'builder' }).catch(() => [] as ConversationWithApp[]),
-    applicationApi.list({ include_remote: true }).catch(() => [] as any[]),
-    industryApi.listPacks().catch(() => ({ packs: [] as any[] })),
-  ])
-
-  const appRecords = Array.isArray(apps)
-    ? apps
-        .filter((app: any) => app?.id && app?.app_name)
-        .sort((a: any, b: any) => {
-          const ta = new Date(a.updated_at || a.created_at || 0).getTime()
-          const tb = new Date(b.updated_at || b.created_at || 0).getTime()
-          return tb - ta
-        })
-        .map((app: any) => ({
-          id: app.id,
-          name: app.app_name || app.appName || '未命名应用',
-          updatedAt: formatDate(app.updated_at || app.created_at || ''),
-          conversationId: app.conversation_id ?? null,
-        } as RecentApp))
-    : []
-
-  const fallbackApps = buildFallbackAppsFromConversations(conversations).map(conv => ({
-    id: conv.app_id as number,
-    name: conv.app_name || '未命名应用',
-    updatedAt: formatDate(conv.updated_at || conv.created_at || ''),
-    conversationId: conv.id,
-  } as RecentApp))
-
-  const sourceApps = appRecords.length ? appRecords : fallbackApps
-  recent.value = sourceApps.slice(0, 5)
-
-  // 4-stat strip: apps / specs / deploys / packs.
-  // - apps: total app count
-  // - specs: total conversation count (each builder conversation produces SPEC iterations)
-  // - deploys: sum of deploy counts across apps (apaas_app_id != null implies deployed)
-  // - packs: industry packs from /industry/packs (defaults 0 if API down)
-  const deployedCount = Array.isArray(apps)
-    ? apps.filter((app: any) => app?.apaas_app_id).length
-    : 0
-  const packsCount = ((industryPacks as any)?.packs || []).length
-  stats.value = {
-    apps: sourceApps.length,
-    specs: conversations.length,
-    deploys: deployedCount,
-    packs: packsCount,
-  }
+function openUpload() {
+  fileInputRef.value?.click()
 }
 
-function onToolClick(mode: 'builder' | 'coding' | 'vibe' | 'db') {
-  if (mode === 'builder') {
-    prdInputRef.value?.click()
-  } else if (mode === 'db') {
-    // db 模式：tool button 是说明性的（列支持的 DB 类型），点了直接跳 wizard
-    router.push({ path: '/quick-db' })
-  } else if (mode === 'coding') {
-    // P2: open MCP picker dialog
-    ElMessage.info('MCP 选择即将上线')
-  } else {
-    // P2: open repo picker dialog
-    ElMessage.info('仓库选择即将上线')
-  }
-}
-
-function handleLandingDocUpload(event: Event) {
+function handleFileUpload(event: Event) {
   const target = event.target as HTMLInputElement
   const files = Array.from(target.files || [])
   target.value = ''
   if (!files.length) return
 
   const file = files[0]
+  if (!file) return
   if (!/\.(md|markdown)$/i.test(file.name)) {
-    ElMessage.warning('当前仅支持 .md / .markdown 文件，其它格式请到 AI 对话里上传')
+    ElMessage.warning('当前首页直达 Builder 仅支持 .md / .markdown 文件')
     return
   }
-  // 标准 md 快路：写入 previewStore.pendingFile + router from=upload，ChatPage 自动接管解析
-  // （与旧 Landing.vue:387 acceptCoworkFiles 单 .md 分支等价）
+
   previewStore.pendingFile = file
   router.push({ path: '/chat', query: { from: 'upload' } })
 }
-
-function openApp(r: RecentApp) {
-  // 与旧 Landing.vue 一致：带 app_id 进入 ChatPage（router guard 已放行 app_id）
-  router.push({ path: '/chat', query: { app_id: String(r.id) } })
-}
-
-const recentCount = computed(() => recent.value.length)
-
-onMounted(loadLanding)
 </script>
 
 <template>
   <WorkbenchShell>
-    <ShellTopBar />
-    <div class="page landing">
-      <div class="page-pad">
-        <div class="hero">
-          <div class="ai-badge">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 14 9l6 2-6 2-2 6-2-6-6-2 6-2z"/><path d="M19 17l1 3 3 1-3 1-1 3-1-3-3-1 3-1z"/></svg>
-            <span>AI</span>
-          </div>
-          <div class="eyebrow">APAAS CHAT AI · DESIGN + BUILD</div>
-          <h1 class="hero-title">把<span class="hl">想法或材料</span>给 AI，<br/>它来搭<span class="hl">应用</span>。</h1>
-          <div class="hero-sub">支持 .md 设计文档 · .doc / .docx · .pdf · 直接对话需求 · 复用行业包 · 部署到得帆云</div>
-        </div>
+    <main class="landing" data-design="v2">
+      <div class="landing-inner">
+        <section class="hero">
+          <div class="ai-mark">AI</div>
+          <div class="eyebrow">RUIJING AI · BUILDER + CODING</div>
+          <h1>把想法交给<span>睿鲸AI</span><br />自动构建可上线应用</h1>
+          <p>支持 .md 设计文档上传，单 .md 直接走 AI Builder 秒级生成。</p>
+        </section>
 
-        <LandingComposer @tool-click="onToolClick" />
+        <LandingComposer @upload-file="openUpload" />
 
-        <div class="strip stats">
-          <div class="stat"><div class="stat-num">{{ stats.apps }}</div><div class="stat-lbl">应用</div></div>
-          <div class="stat"><div class="stat-num">{{ stats.specs }}</div><div class="stat-lbl">SPEC 版本</div></div>
-          <div class="stat"><div class="stat-num">{{ stats.deploys }}</div><div class="stat-lbl">部署次数</div></div>
-          <div class="stat"><div class="stat-num">{{ stats.packs }}</div><div class="stat-lbl">行业包</div></div>
-        </div>
-
-        <div class="flow">
-          <div v-for="(s, i) in FLOW_STEPS" :key="s.n" class="flow-step" :class="'tone-' + s.tone">
-            <div class="flow-num">{{ s.n }}</div>
-            <div class="flow-label">{{ s.label }}</div>
-            <svg v-if="i < FLOW_STEPS.length - 1" class="flow-arrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m13 5 7 7-7 7"/></svg>
-          </div>
-        </div>
-
-        <div class="section-head">
-          <div class="section-title">最近应用 <span class="section-title-count">{{ recentCount }}</span></div>
-          <button class="section-action" @click="router.push('/apps')">查看全部 →</button>
-        </div>
-        <div class="recent" v-if="recent.length">
-          <button v-for="r in recent" :key="r.id" class="recent-row" @click="openApp(r)">
-            <div class="recent-name">{{ r.name }}</div>
-            <div class="recent-when">{{ r.updatedAt }}</div>
-          </button>
-        </div>
-        <div v-else class="recent-empty">还没有应用 — 上面输入框开始描述需求，或者 <a @click.prevent="router.push('/apps')">浏览应用</a>。</div>
+        <section class="flow" aria-label="构建流程">
+          <template v-for="(step, index) in FLOW_STEPS" :key="step.title">
+            <article class="flow-card">
+              <div class="flow-icon" v-html="renderIcon(step.icon)" />
+              <div>
+                <h2>{{ step.title }}</h2>
+                <p>{{ step.desc }}</p>
+              </div>
+            </article>
+            <div v-if="index < FLOW_STEPS.length - 1" class="flow-arrow" aria-hidden="true">→</div>
+          </template>
+        </section>
 
         <input
-          ref="prdInputRef"
+          ref="fileInputRef"
           type="file"
           accept=".md,.markdown"
           hidden
-          @change="handleLandingDocUpload"
+          @change="handleFileUpload"
         />
       </div>
-    </div>
+    </main>
   </WorkbenchShell>
 </template>
 
 <style scoped>
-.landing { overflow-y: auto; height: 100%; background: var(--bg-app); flex: 1; min-height: 0; }
-.page-pad { padding: 48px 32px 80px; max-width: 960px; margin: 0 auto; }
-.hero { text-align: center; margin-bottom: 36px; }
-.ai-badge { display: inline-flex; align-items: center; gap: 6px; height: 38px; padding: 0 14px; border-radius: 999px; background: var(--ai-soft); color: var(--ai-text); font-weight: 700; font-size: 14px; letter-spacing: 0.02em; border: 1px solid var(--ai-soft-2); margin-bottom: 14px; }
-.eyebrow { font-size: 11px; font-weight: 600; letter-spacing: 0.20em; text-transform: uppercase; color: var(--ai-text); margin-bottom: 16px; }
-.hero-title { font-size: 38px; font-weight: 700; color: var(--text); letter-spacing: -0.025em; line-height: 1.15; margin: 0 0 14px; }
-.hero-title .hl { color: var(--ai-text); }
-.hero-sub { font-size: 13.5px; color: var(--text-2); max-width: 600px; margin: 0 auto; line-height: 1.6; }
-.strip.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 32px 0 22px; }
-.stat { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; text-align: center; box-shadow: var(--shadow-xs); }
-.stat-num { font-size: 26px; font-weight: 600; color: var(--text); letter-spacing: -0.02em; line-height: 1; }
-.stat-lbl { font-size: 12px; color: var(--text-3); margin-top: 4px; }
-.flow { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 14px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 28px; }
-.flow-step { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; background: var(--surface); border: 1px solid var(--border); }
-.flow-step.tone-ai      { color: var(--ai-text);     background: var(--ai-soft); }
-.flow-step.tone-brand   { color: var(--brand-text);  background: var(--brand-soft); }
-.flow-step.tone-emerald { color: var(--emerald);     background: var(--emerald-bg); }
-.flow-step.tone-amber   { color: var(--amber);       background: var(--amber-bg); }
-.flow-num { font-family: var(--d-font-mono); font-size: 11px; font-weight: 700; }
-.flow-label { font-size: 12.5px; font-weight: 500; }
-.flow-arrow { color: var(--text-4); margin: 0 -2px; }
-.section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 24px 0 12px; }
-.section-title { font-size: 14px; font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 8px; }
-.section-title-count { font-size: 12px; color: var(--text-3); font-weight: 500; }
-.section-action { font-size: 12.5px; color: var(--brand-text); font-weight: 500; background: none; border: none; cursor: pointer; padding: 4px 8px; border-radius: 6px; font-family: inherit; }
-.section-action:hover { background: var(--brand-soft); }
-.recent { display: flex; flex-direction: column; gap: 4px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 6px; }
-.recent-row { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-radius: 8px; cursor: pointer; background: transparent; border: none; color: var(--text); font-family: inherit; }
-.recent-row:hover { background: var(--surface-2); }
-.recent-name { font-size: 13px; font-weight: 500; }
-.recent-when { font-size: 11px; color: var(--text-3); }
-.recent-empty { background: var(--surface); border: 1px dashed var(--border-strong); border-radius: 12px; padding: 24px; text-align: center; color: var(--text-3); font-size: 13px; }
-.recent-empty a { color: var(--brand-text); cursor: pointer; }
+.landing {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  background:
+    radial-gradient(circle at 50% 6%, color-mix(in srgb, var(--brand-soft-2) 58%, transparent), transparent 34%),
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--brand-soft) 76%, #fbfcff 24%) 0%,
+      color-mix(in srgb, var(--brand-soft-2) 42%, #f7f8fb 58%) 100%);
+}
+
+.landing-inner {
+  width: min(100%, 1040px);
+  margin: 0 auto;
+  padding: 42px 40px 44px;
+}
+
+.hero {
+  width: min(100%, 920px);
+  margin: 0 auto 20px;
+  text-align: center;
+}
+
+.ai-mark {
+  width: 58px;
+  height: 58px;
+  display: grid;
+  place-items: center;
+  margin: 0 auto 16px;
+  border-radius: 15px;
+  color: #fff;
+  background: linear-gradient(135deg, var(--brand-400), var(--brand-700));
+  box-shadow: 0 22px 54px rgba(91, 91, 214, 0.22), inset 0 -1px 0 rgba(255, 255, 255, 0.22);
+  font-size: 26px;
+  font-weight: 850;
+  letter-spacing: 0;
+}
+
+.eyebrow {
+  margin-bottom: 14px;
+  color: var(--brand-text);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.24em;
+}
+
+.hero h1 {
+  margin: 0;
+  color: var(--text);
+  font-size: clamp(34px, 3.2vw, 50px);
+  line-height: 1.12;
+  font-weight: 850;
+  letter-spacing: 0;
+}
+
+.hero h1 span {
+  color: var(--brand);
+}
+
+.hero p {
+  margin: 16px 0 0;
+  color: var(--text-2);
+  font-size: 14px;
+  line-height: 1.55;
+  font-weight: 620;
+}
+
+.flow {
+  width: min(100%, 920px);
+  display: grid;
+  grid-template-columns: 1fr 28px 1fr 28px 1fr 28px 1fr;
+  align-items: center;
+  gap: 10px;
+  margin: 18px auto 0;
+}
+
+.flow-card {
+  min-width: 0;
+  min-height: 96px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid rgba(91, 91, 214, 0.14);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: var(--shadow-sm);
+}
+
+.flow-icon {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  color: #fff;
+  border-radius: 10px;
+  background: linear-gradient(135deg, var(--brand-400), var(--brand-700));
+  box-shadow: 0 12px 24px rgba(91, 91, 214, 0.20);
+}
+
+.flow-card h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.25;
+  font-weight: 820;
+}
+
+.flow-card p {
+  margin: 6px 0 0;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.5;
+  font-weight: 650;
+}
+
+.flow-arrow {
+  color: #9690b0;
+  text-align: center;
+  font-size: 22px;
+  font-weight: 300;
+}
+
+html[data-theme="dark"] .landing {
+  background:
+    radial-gradient(circle at 50% 6%, color-mix(in srgb, var(--brand-soft-2) 48%, transparent), transparent 34%),
+    var(--bg-app);
+}
+
+html[data-theme="dark"] .flow-card {
+  background: var(--surface);
+}
+
+@media (max-width: 1180px) {
+  .landing-inner {
+    padding: 34px 24px 42px;
+  }
+
+  .flow {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .flow-arrow {
+    display: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .landing-inner {
+    padding: 28px 16px 36px;
+  }
+
+  .flow {
+    grid-template-columns: 1fr;
+  }
+
+  .flow-card {
+    min-height: 92px;
+  }
+}
 </style>

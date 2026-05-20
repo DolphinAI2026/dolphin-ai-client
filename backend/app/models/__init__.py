@@ -12,7 +12,7 @@ from app.database import Base
 BigText = Text().with_variant(LONGTEXT, "mysql")
 
 # Import tenant models
-from app.models.tenant import Tenant, UserTenant, Role, Team, TeamMember
+from app.models.tenant import Tenant, UserTenant, Role, Team, TeamMember, TenantDolphinAgent
 from app.models.spec import Spec  # noqa: F401  — register ORM mapping
 from app.models.preference import UserPreference  # noqa: F401  — register ORM mapping
 from app.models.collaboration import (  # noqa: F401  — register ORM mapping
@@ -36,6 +36,52 @@ class User(Base):
     apaas_tenant_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     is_platform_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class APaaSPlatformCredential(Base):
+    """aPaaS 平台级凭据，用于平台管理员长任务续 token。"""
+    __tablename__ = "apaas_platform_credentials"
+    __table_args__ = (
+        UniqueConstraint("user_id", "base_url", "account", name="uq_apaas_platform_credential"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    base_url: Mapped[str] = mapped_column(String(255), nullable=False)
+    account: Mapped[str] = mapped_column(String(100), nullable=False)
+    password_enc: Mapped[str] = mapped_column(Text, nullable=False)
+    token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    token_expire_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="connected", nullable=False)
+    last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class APaaSUserCredential(Base):
+    """aPaaS 租户用户凭据，按 user + tenant 保存，供长任务续 token。"""
+    __tablename__ = "apaas_user_credentials"
+    __table_args__ = (
+        UniqueConstraint("user_id", "local_tenant_id", name="uq_apaas_user_credential"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    local_tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    apaas_user_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    apaas_tenant_id: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    base_url: Mapped[str] = mapped_column(String(255), nullable=False)
+    account: Mapped[str] = mapped_column(String(100), nullable=False)
+    password_enc: Mapped[str] = mapped_column(Text, nullable=False)
+    token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    token_expire_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="connected", nullable=False)
+    last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -191,6 +237,7 @@ class PlatformEnv(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
     env_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    alias: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, unique=True)
     base_url: Mapped[str] = mapped_column(String(255), nullable=False)
     platform_tenant_id: Mapped[str] = mapped_column(String(50), nullable=False)
     username: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
@@ -280,6 +327,31 @@ class ApiCallLog(Base):
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     elapsed_ms: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class MCPCallLog(Base):
+    """MCP 网关调用日志，用于平台管理页排查工具调用。"""
+    __tablename__ = "mcp_call_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    log_id: Mapped[str] = mapped_column(String(32), unique=True, nullable=False, index=True)
+    service: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    path: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    rpc_method: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    tool: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    request_params: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    request_arguments: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    request_headers: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    status_code: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    success: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    auth_source: Mapped[Optional[str]] = mapped_column(String(60), nullable=True)
+    apaas_tenant_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
+    apaas_user_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    local_user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    local_tenant_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    elapsed_ms: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False, index=True)
 
 
 # AIChat 模块 — 注册 ORM mapping

@@ -202,6 +202,14 @@ class LLMConfigSnapshot:
         self.temperature = temperature
 
 
+def _apply_provider_payload_compat(cfg: LLMConfigSnapshot, payload: dict) -> dict:
+    model = (cfg.model or "").lower()
+    base_url = (cfg.base_url or "").lower()
+    if "qwen3" in model or "dashscope.aliyuncs.com" in base_url:
+        payload["enable_thinking"] = False
+    return payload
+
+
 async def _resolve_llm_config(
     db: AsyncSession, session: AIChatSession
 ) -> LLMConfigSnapshot:
@@ -263,12 +271,12 @@ async def generate_title(
                     "Authorization": f"Bearer {cfg.api_key}",
                     "Content-Type": "application/json",
                 },
-                json={
+                json=_apply_provider_payload_compat(cfg, {
                     "model": cfg.model,
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.3,
                     "max_tokens": 60,
-                },
+                }),
             )
             resp.raise_for_status()
             data = resp.json()
@@ -298,6 +306,7 @@ async def _call_llm(
         "temperature": cfg.temperature,
         "max_tokens": cfg.max_tokens,
     }
+    _apply_provider_payload_compat(cfg, payload)
     async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=timeout, write=10, pool=10)) as client:
         resp = await client.post(
             f"{cfg.base_url}/chat/completions",
@@ -336,6 +345,7 @@ async def _call_llm_stream(
         "max_tokens": cfg.max_tokens,
         "stream": True,
     }
+    _apply_provider_payload_compat(cfg, payload)
     accumulated_content = ""
     tool_buf: dict[int, dict] = {}
 
@@ -350,7 +360,9 @@ async def _call_llm_stream(
             },
             json=payload,
         ) as resp:
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                await resp.aread()
+                resp.raise_for_status()
             async for raw_line in resp.aiter_lines():
                 if abort_event.is_set():
                     break

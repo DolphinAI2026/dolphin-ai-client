@@ -1,17 +1,20 @@
 import logging
+import re
+from datetime import datetime
 from typing import Annotated, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from jose import jwt, JWTError
 from app.database import get_db
-from app.models import User
+from app.models import APaaSPlatformCredential, APaaSUserCredential, PlatformEnv, User
 from app.models.tenant import Tenant, UserTenant, Role
 from app.schemas import (
     UserLogin, Token, UserInfo,
     LoginResponse, TenantOption, TenantSelectRequest
 )
 from app.auth import verify_password, get_password_hash, create_access_token, create_selection_token
+from app.crypto import encrypt_password
 from app.deps import (
     AuthContext,
     get_auth_context,
@@ -77,7 +80,7 @@ def _serialize_platform_user(user: User, memberships: list[tuple[UserTenant, Ten
         tenant_role = "platform_admin"
         role_code = "platform_admin"
         role_name = "平台超级管理员"
-        tenant_summary = "全部组织"
+        tenant_summary = "平台级权限"
     else:
         for _membership, _tenant, role in memberships:
             resolved_role, resolved_name, resolved_permissions = _resolve_tenant_role(role)
@@ -145,11 +148,657 @@ class InviteTenantUserRequest(BaseModel):
     tenant_id: Optional[int] = None
 
 
+def _normalize_apaas_origin(base_url: str) -> str:
+    base = (base_url or "").strip().rstrip("/")
+    if base.endswith("/backend"):
+        base = base[:-len("/backend")]
+    return base
+
+
+def _normalize_tenant_code(value: str, fallback: str) -> str:
+    code = re.sub(r"[^a-zA-Z0-9_-]+", "-", (value or "").strip().lower()).strip("-_")
+    if not code:
+        code = f"apaas-{fallback[-8:]}" if fallback else "apaas"
+    return code[:60]
+
+
+def _extract_apaas_token(payload: object) -> Optional[str]:
+    if isinstance(payload, dict):
+        for key in ("xdaptoken", "xdapToken", "token", "accessToken", "access_token"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.count(".") >= 1:
+                return value
+        for value in payload.values():
+            found = _extract_apaas_token(value)
+            if found:
+                return found
+    if isinstance(payload, list):
+        for item in payload:
+            found = _extract_apaas_token(item)
+            if found:
+                return found
+    return None
+
+
+def _decode_jwt_exp(token: Optional[str]) -> Optional[datetime]:
+    if not token:
+        return None
+    try:
+        from app.auth import decode_token
+        payload = decode_token(token)
+        exp = payload.get("exp")
+        return datetime.utcfromtimestamp(int(exp)) if exp else None
+    except Exception:
+        return None
+
+
+def _extract_apaas_user(payload: object, username: str) -> dict:
+    if isinstance(payload, dict):
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+        user = data.get("user") if isinstance(data.get("user"), dict) else data.get("userInfo")
+        if isinstance(user, dict):
+            return user
+        for value in data.values():
+            found = _extract_apaas_user(value, username)
+            if found:
+                return found
+    return {"account": username, "username": username}
+
+
+def _tenant_item_id(item: object) -> str:
+    if not isinstance(item, dict):
+        return ""
+    value = (
+        item.get("tenantId")
+        or item.get("tenant_id")
+        or item.get("id")
+        or item.get("tenantID")
+    )
+    return str(value or "").strip()
+
+
+def _tenant_item_name(item: object, fallback: str) -> str:
+    if not isinstance(item, dict):
+        return fallback
+    return str(
+        item.get("tenantName")
+        or item.get("tenant_name")
+        or item.get("name")
+        or item.get("displayName")
+        or fallback
+    ).strip()
+
+
+def _tenant_item_code(item: object, fallback: str) -> str:
+    if not isinstance(item, dict):
+        return _normalize_tenant_code(fallback, fallback)
+    raw = item.get("tenantCode") or item.get("tenant_code") or item.get("code") or ""
+    return _normalize_tenant_code(str(raw or ""), fallback)
+
+
+def _tenant_enabled(item: object) -> bool:
+    if not isinstance(item, dict):
+        return True
+    value = item.get("status", item.get("state", item.get("enabled", item.get("enable"))))
+    if value in (None, ""):
+        return True
+    if value in (1, "1", True):
+        return True
+    text = str(value).strip().lower()
+    return text in {"enable", "enabled", "active", "normal", "启用"}
+
+
+def _tenant_admin_matches(item: object, username: str, user_info: dict) -> bool:
+    if not isinstance(item, dict):
+        return False
+    admin_list = item.get("adminList") or item.get("admins") or item.get("tenantAdmins") or []
+    if not isinstance(admin_list, list):
+        return False
+    username_text = str(username or "").strip().lower()
+    apaas_uid = str(user_info.get("id") or user_info.get("userId") or user_info.get("user_id") or "").strip()
+    for admin in admin_list:
+        if not isinstance(admin, dict):
+            continue
+        candidates = [
+            admin.get("account"),
+            admin.get("username"),
+            admin.get("name"),
+            admin.get("mobile"),
+            admin.get("phone"),
+        ]
+        ids = [admin.get("id"), admin.get("userId"), admin.get("user_id")]
+        if username_text and any(str(value or "").strip().lower() == username_text for value in candidates):
+            return True
+        if apaas_uid and any(str(value or "").strip() == apaas_uid for value in ids):
+            return True
+    return False
+
+
+def _extract_tenant_items(payload: object) -> list[dict]:
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict) and _tenant_item_id(item)]
+    if not isinstance(payload, dict):
+        return []
+    data = payload.get("data")
+    candidates = [data, payload]
+    for candidate in candidates:
+        if isinstance(candidate, list):
+            return [item for item in candidate if isinstance(item, dict) and _tenant_item_id(item)]
+        if isinstance(candidate, dict):
+            for key in ("tenantInfos", "tenants", "tenantList", "table", "list", "records", "rows", "items", "data"):
+                value = candidate.get(key)
+                if isinstance(value, list):
+                    return [item for item in value if isinstance(item, dict) and _tenant_item_id(item)]
+                if isinstance(value, dict):
+                    nested = _extract_tenant_items(value)
+                    if nested:
+                        return nested
+    return []
+
+
+def _find_tenant_item_by_id(payload: object, tenant_id: str) -> Optional[dict]:
+    if not tenant_id:
+        return None
+    for item in _extract_tenant_items(payload):
+        if _tenant_item_id(item) == tenant_id:
+            return item
+    return None
+
+
+def _extract_default_tenant_id(payload: object) -> str:
+    if isinstance(payload, dict):
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+        for key in (
+            "defaultTenantId",
+            "default_tenant_id",
+            "currentTenantId",
+            "current_tenant_id",
+            "tenantId",
+            "tenant_id",
+            "xdaptenantid",
+        ):
+            value = data.get(key)
+            if value not in (None, ""):
+                return str(value).strip()
+        for key in ("defaultTenant", "currentTenant", "tenant", "tenantInfo"):
+            value = data.get(key)
+            tid = _tenant_item_id(value)
+            if tid:
+                return tid
+        for value in data.values():
+            tid = _extract_default_tenant_id(value)
+            if tid:
+                return tid
+    if isinstance(payload, list):
+        for item in payload:
+            tid = _extract_default_tenant_id(item)
+            if tid:
+                return tid
+    return ""
+
+
+def _extract_default_tenant_item(payload: object) -> Optional[dict]:
+    tenant_id = _extract_default_tenant_id(payload)
+    if not tenant_id:
+        items = _extract_tenant_items(payload)
+        return items[0] if len(items) == 1 else None
+    found = _find_tenant_item_by_id(payload, tenant_id)
+    return found or {"tenantId": tenant_id, "tenantName": tenant_id, "tenantCode": tenant_id}
+
+
+async def _apaas_platform_login(username: str, password: str) -> tuple[Optional[str], dict]:
+    """Try aPaaS platform-admin login. Success means platform admin."""
+    from app.routes import mcp_platform
+    import httpx
+    import time
+
+    base_url = _normalize_apaas_origin(settings.apaas_base_url)
+    rsa_public_key = await mcp_platform._get_apaas_rsa_public_key(base_url)
+    ts = str(int(time.time() * 1000))
+    url = f"{mcp_platform._api_base(base_url)}/xdap-admin/platform/apaasSystemAdmin/login?timestamp={ts}"
+    headers = mcp_platform._headers(base_url, tenant_id="", rsa_public_key=rsa_public_key)
+    headers["referer"] = f"{base_url}/platform/account/login"
+    body = {
+        "type": "account",
+        "account": username,
+        "password": mcp_platform._encrypt_apaas_password(password, rsa_public_key),
+        "securityCode": "",
+    }
+    async with httpx.AsyncClient(timeout=20, verify=False) as client:
+        resp = await client.post(url, headers=headers, json=body)
+    try:
+        payload = resp.json()
+    except Exception:
+        payload = {"raw": resp.text}
+    if not resp.is_success:
+        return None, payload if isinstance(payload, dict) else {}
+    return _extract_apaas_token(payload), payload if isinstance(payload, dict) else {}
+
+
+async def _apaas_backend_login(username: str, password: str, tenant_id: str = "") -> tuple[Optional[str], dict]:
+    """Try aPaaS manage-login. With empty tenant_id, some aPaaS versions return selectable tenants."""
+    from app.routes import mcp_platform
+    import httpx
+    import time
+
+    base_url = _normalize_apaas_origin(settings.apaas_base_url)
+    rsa_public_key = await mcp_platform._get_apaas_rsa_public_key(base_url)
+    ts = str(int(time.time() * 1000))
+    url = f"{mcp_platform._api_base(base_url)}/xdap-admin/user/login?timestamp={ts}"
+    headers = mcp_platform._headers(base_url, tenant_id=tenant_id, rsa_public_key=rsa_public_key)
+    headers["referer"] = f"{base_url}/platform/account/login"
+    body = {
+        "type": "account",
+        "account": username,
+        "password": mcp_platform._encrypt_apaas_password(password, rsa_public_key),
+        "tenantId": tenant_id,
+        "loginType": "MANAGE",
+        "securityCode": "",
+    }
+    async with httpx.AsyncClient(timeout=20, verify=False) as client:
+        resp = await client.post(url, headers=headers, json=body)
+    try:
+        payload = resp.json()
+    except Exception:
+        payload = {"raw": resp.text}
+    if not resp.is_success:
+        return None, payload if isinstance(payload, dict) else {}
+    return _extract_apaas_token(payload), payload if isinstance(payload, dict) else {}
+
+
+async def _apaas_all_tenants(platform_token: str) -> list[dict]:
+    from app.routes import mcp_platform
+    import httpx
+    import time
+
+    base_url = _normalize_apaas_origin(settings.apaas_base_url)
+    rsa_public_key = await mcp_platform._get_apaas_rsa_public_key(base_url)
+    ts = str(int(time.time() * 1000))
+    url = f"{mcp_platform._api_base(base_url)}/xdap-admin/platform/query/tenantList?timestamp={ts}"
+    headers = mcp_platform._headers(base_url, token=platform_token, rsa_public_key=rsa_public_key)
+    async with httpx.AsyncClient(timeout=20, verify=False) as client:
+        resp = await client.post(url, headers=headers, json={"page": 1, "pageSize": 500, "keyword": ""})
+    try:
+        payload = resp.json()
+    except Exception:
+        payload = {"raw": resp.text}
+    if not resp.is_success:
+        return []
+    return _extract_tenant_items(payload)
+
+
+async def _apaas_switchable_tenants(backend_token: str, default_tenant_id: str) -> list[dict]:
+    from app.routes import mcp_platform
+    import httpx
+    import time
+
+    if not backend_token or not default_tenant_id:
+        return []
+    base_url = _normalize_apaas_origin(settings.apaas_base_url)
+    rsa_public_key = await mcp_platform._get_apaas_rsa_public_key(base_url)
+    ts = str(int(time.time() * 1000))
+    url = f"{mcp_platform._api_base(base_url)}/xdap-app/tenant/query/adminTenantListByUser?timestamp={ts}"
+    headers = mcp_platform._headers(
+        base_url,
+        token=backend_token,
+        tenant_id=default_tenant_id,
+        rsa_public_key=rsa_public_key,
+    )
+    headers["referer"] = f"{base_url}/platform/{default_tenant_id}/admin/data-dictionary"
+    async with httpx.AsyncClient(timeout=20, verify=False) as client:
+        resp = await client.get(url, headers=headers)
+    try:
+        payload = resp.json()
+    except Exception:
+        payload = {"raw": resp.text}
+    if not resp.is_success:
+        return []
+    return _extract_tenant_items(payload)
+
+
+def _merge_tenant_items(primary: list[dict], secondary: list[dict]) -> list[dict]:
+    merged: dict[str, dict] = {}
+    order: list[str] = []
+    for item in primary + secondary:
+        tid = _tenant_item_id(item)
+        if not tid:
+            continue
+        if tid not in merged:
+            order.append(tid)
+            merged[tid] = item
+        else:
+            merged[tid] = {**merged[tid], **item}
+    return [merged[tid] for tid in order]
+
+
+async def _ensure_apaas_tenant(db: AsyncSession, item: dict) -> Tenant:
+    platform_tid = _tenant_item_id(item)
+    if not platform_tid:
+        raise HTTPException(status_code=400, detail="aPaaS 租户缺 tenantId")
+    name = _tenant_item_name(item, platform_tid)
+    code = _tenant_item_code(item, platform_tid)
+    tenant = (
+        await db.execute(select(Tenant).where(Tenant.apaas_tenant_id_str == platform_tid))
+    ).scalar_one_or_none()
+    if not tenant:
+        tenant = (await db.execute(select(Tenant).where(Tenant.tenant_code == code))).scalar_one_or_none()
+        if tenant and not tenant.apaas_tenant_id_str:
+            tenant.apaas_tenant_id_str = platform_tid
+    if not tenant:
+        base_code = code
+        suffix = 2
+        while (await db.execute(select(Tenant).where(Tenant.tenant_code == code))).scalar_one_or_none():
+            marker = f"-{suffix}"
+            code = f"{base_code[:60-len(marker)]}{marker}"
+            suffix += 1
+        tenant = Tenant(
+            tenant_name=name,
+            tenant_code=code,
+            status=1 if _tenant_enabled(item) else 0,
+            apaas_tenant_id_str=platform_tid,
+        )
+        db.add(tenant)
+        await db.flush()
+        from app.seed_data import seed_default_roles, sync_builtin_llm_configs
+        await seed_default_roles(db, tenant.id, commit=False)
+        try:
+            await sync_builtin_llm_configs(db, tenant_ids=[tenant.id], commit=False)
+        except Exception as exc:
+            logger.warning("sync builtin llm skipped for apaas tenant %s: %s", tenant.id, exc)
+    else:
+        tenant.tenant_name = name
+        tenant.status = 1 if _tenant_enabled(item) else 0
+
+    env = None
+    if tenant.apaas_env_id:
+        env = (await db.execute(select(PlatformEnv).where(PlatformEnv.id == tenant.apaas_env_id))).scalar_one_or_none()
+    if not env:
+        env = (
+            await db.execute(
+                select(PlatformEnv).where(
+                    PlatformEnv.tenant_id == tenant.id,
+                    PlatformEnv.platform_tenant_id == platform_tid,
+                )
+            )
+        ).scalar_one_or_none()
+    if not env:
+        alias = _normalize_tenant_code(code, platform_tid)
+        if (await db.execute(select(PlatformEnv).where(PlatformEnv.alias == alias))).scalar_one_or_none():
+            alias = None
+        env = PlatformEnv(
+            tenant_id=tenant.id,
+            env_name=name,
+            alias=alias,
+            base_url=_normalize_apaas_origin(settings.apaas_base_url),
+            platform_tenant_id=platform_tid,
+            is_default=True,
+            status="connected",
+        )
+        db.add(env)
+        await db.flush()
+        tenant.apaas_env_id = env.id
+    else:
+        env.env_name = name
+        env.base_url = _normalize_apaas_origin(settings.apaas_base_url)
+        env.platform_tenant_id = platform_tid
+        env.is_default = True
+    return tenant
+
+
+async def _ensure_apaas_user(db: AsyncSession, username: str, password: str, user_info: dict, is_platform_admin: bool) -> User:
+    apaas_uid = str(user_info.get("id") or user_info.get("userId") or user_info.get("user_id") or "").strip() or None
+    user = None
+    if apaas_uid:
+        user = (await db.execute(select(User).where(User.apaas_user_id == apaas_uid))).scalar_one_or_none()
+    if not user:
+        user = (await db.execute(select(User).where(User.username == username))).scalar_one_or_none()
+    if not user:
+        user = User(
+            username=username,
+            hashed_password=get_password_hash(password),
+            apaas_user_id=apaas_uid,
+            is_platform_admin=is_platform_admin,
+            is_active=True,
+        )
+        db.add(user)
+        await db.flush()
+    else:
+        user.username = username
+        user.hashed_password = get_password_hash(password)
+        if apaas_uid:
+            user.apaas_user_id = apaas_uid
+        user.is_platform_admin = is_platform_admin
+        user.is_active = True
+    user.apaas_base_url = _normalize_apaas_origin(settings.apaas_base_url)
+    return user
+
+
+async def _upsert_platform_credential(db: AsyncSession, user: User, username: str, password: str, token: str) -> None:
+    base_url = _normalize_apaas_origin(settings.apaas_base_url)
+    row = (
+        await db.execute(
+            select(APaaSPlatformCredential).where(
+                APaaSPlatformCredential.user_id == user.id,
+                APaaSPlatformCredential.base_url == base_url,
+                APaaSPlatformCredential.account == username,
+            )
+        )
+    ).scalar_one_or_none()
+    if not row:
+        row = APaaSPlatformCredential(user_id=user.id, base_url=base_url, account=username, password_enc=encrypt_password(password))
+        db.add(row)
+    else:
+        row.password_enc = encrypt_password(password)
+    row.token = token
+    row.token_expire_at = _decode_jwt_exp(token)
+    row.status = "connected"
+    row.last_login_at = datetime.utcnow()
+    row.last_error = None
+
+
+async def _upsert_user_credential(
+    db: AsyncSession,
+    user: User,
+    tenant: Tenant,
+    username: str,
+    password: str,
+    token: str,
+    apaas_user_id: Optional[str],
+    apaas_tenant_id: str,
+) -> None:
+    row = (
+        await db.execute(
+            select(APaaSUserCredential).where(
+                APaaSUserCredential.user_id == user.id,
+                APaaSUserCredential.local_tenant_id == tenant.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if not row:
+        row = APaaSUserCredential(
+            user_id=user.id,
+            local_tenant_id=tenant.id,
+            apaas_tenant_id=apaas_tenant_id,
+            base_url=_normalize_apaas_origin(settings.apaas_base_url),
+            account=username,
+            password_enc=encrypt_password(password),
+        )
+        db.add(row)
+    else:
+        row.password_enc = encrypt_password(password)
+    row.apaas_user_id = apaas_user_id
+    row.apaas_tenant_id = apaas_tenant_id
+    row.base_url = _normalize_apaas_origin(settings.apaas_base_url)
+    row.account = username
+    row.token = token
+    row.token_expire_at = _decode_jwt_exp(token)
+    row.status = "connected"
+    row.last_login_at = datetime.utcnow()
+    row.last_error = None
+
+
+async def _sync_user_membership(db: AsyncSession, user: User, tenant: Tenant, is_default: bool) -> UserTenant:
+    role = (
+        await db.execute(
+            select(Role)
+            .where(Role.tenant_id == tenant.id)
+            .where(Role.role_code.in_(["R_developer", "R_tenant_admin", "admin"]))
+            .order_by(Role.role_code.asc())
+        )
+    ).scalars().first()
+    membership = (
+        await db.execute(
+            select(UserTenant).where(UserTenant.user_id == user.id, UserTenant.tenant_id == tenant.id)
+        )
+    ).scalar_one_or_none()
+    if membership:
+        membership.status = 1 if tenant.status == 1 else 0
+        if role:
+            membership.role_id = role.id
+    else:
+        membership = UserTenant(
+            user_id=user.id,
+            tenant_id=tenant.id,
+            role_id=role.id if role else None,
+            status=1 if tenant.status == 1 else 0,
+            is_default=is_default,
+        )
+        db.add(membership)
+    if is_default:
+        await db.execute(
+            UserTenant.__table__.update()
+            .where(UserTenant.user_id == user.id)
+            .values(is_default=False)
+        )
+        membership.is_default = True
+    return membership
+
+
+async def _try_apaas_login_flow(user_data: UserLogin, db: AsyncSession) -> Optional[LoginResponse]:
+    """aPaaS authoritative login flow.
+
+    Returns None when aPaaS cannot authenticate the user, letting the legacy
+    local login path work as a development fallback.
+    """
+    username = user_data.username.strip()
+    password = user_data.password
+    if not username or not password or not settings.apaas_base_url:
+        return None
+
+    platform_token, platform_payload = await _apaas_platform_login(username, password)
+    is_platform_admin = bool(platform_token)
+
+    backend_token, backend_payload = await _apaas_backend_login(username, password, "")
+    default_tenant_item = _extract_default_tenant_item(backend_payload) if backend_token else None
+    default_tenant_id = _tenant_item_id(default_tenant_item) if default_tenant_item else ""
+    has_backend_identity = bool(backend_token and default_tenant_id)
+
+    if not has_backend_identity and not is_platform_admin:
+        return None
+
+    all_tenants = await _apaas_all_tenants(platform_token) if platform_token else []
+    if all_tenants:
+        for item in all_tenants:
+            try:
+                await _ensure_apaas_tenant(db, item)
+            except Exception as exc:
+                logger.warning("sync apaas tenant skipped: %s", exc)
+    all_by_id = {_tenant_item_id(item): item for item in all_tenants if _tenant_item_id(item)}
+    if default_tenant_item and default_tenant_id in all_by_id:
+        default_tenant_item = {**default_tenant_item, **all_by_id[default_tenant_id]}
+        if str(default_tenant_item.get("tenantName") or "") == default_tenant_id and default_tenant_item.get("name"):
+            default_tenant_item["tenantName"] = default_tenant_item["name"]
+
+    user_info = _extract_apaas_user(backend_payload or platform_payload, username)
+
+    switchable_items: list[dict] = []
+    if has_backend_identity and not is_platform_admin:
+        switchable_items = await _apaas_switchable_tenants(backend_token, default_tenant_id)
+
+    if has_backend_identity:
+        if is_platform_admin:
+            available_items = [default_tenant_item] if default_tenant_item else []
+        else:
+            available_items = _merge_tenant_items(
+                [default_tenant_item] if default_tenant_item else [],
+                switchable_items,
+            )
+        available_items = [item for item in available_items if _tenant_enabled(item)]
+    else:
+        available_items = []
+
+    user = await _ensure_apaas_user(db, username, password, user_info, is_platform_admin)
+    if platform_token:
+        await _upsert_platform_credential(db, user, username, password, platform_token)
+
+    local_tenants: list[Tenant] = []
+    for idx, item in enumerate(available_items):
+        tenant = await _ensure_apaas_tenant(db, item)
+        local_tenants.append(tenant)
+        if backend_token:
+            user.apaas_token = backend_token
+            user.apaas_tenant_id = tenant.apaas_tenant_id_str
+            await _upsert_user_credential(
+                db,
+                user,
+                tenant,
+                username,
+                password,
+                backend_token,
+                user.apaas_user_id,
+                tenant.apaas_tenant_id_str or _tenant_item_id(item),
+            )
+        await _sync_user_membership(db, user, tenant, is_default=idx == 0)
+
+    await db.commit()
+
+    if local_tenants:
+        selected = local_tenants[0]
+        try:
+            from app.routes.current_app import set_current_app, set_apaas_user_alias
+            set_current_app(user.id, selected.id, 0, "")
+            if user.apaas_user_id:
+                set_apaas_user_alias(user.apaas_user_id, user.id, selected.id)
+        except Exception as exc:
+            logger.warning("apaas login slot prime failed: %s", exc)
+        access_token = create_access_token(
+            user,
+            tenant_id=selected.id,
+            apaas_user_id=user.apaas_user_id,
+            apaas_tenant_id=selected.apaas_tenant_id_str or user.apaas_tenant_id,
+        )
+        return LoginResponse(
+            access_token=access_token,
+            tenants=[
+                TenantOption(tenant_id=t.id, tenant_name=t.tenant_name, tenant_code=t.tenant_code)
+                for t in local_tenants
+            ],
+            entry_path="/",
+            is_platform_admin=is_platform_admin,
+            has_tenant_context=True,
+        )
+
+    if is_platform_admin:
+        access_token = create_access_token(user, tenant_id=None, apaas_user_id=user.apaas_user_id)
+        return LoginResponse(
+            access_token=access_token,
+            entry_path="/platform-admin",
+            is_platform_admin=True,
+            has_tenant_context=False,
+        )
+
+    return None
+
+
 @router.post("/login", response_model=LoginResponse)
 async def login(
     user_data: UserLogin,
     db: Annotated[AsyncSession, Depends(get_db)]
 ):
+    apaas_response = await _try_apaas_login_flow(user_data, db)
+    if apaas_response:
+        return apaas_response
+
     # 验证用户
     result = await db.execute(select(User).where(User.username == user_data.username))
     user = result.scalar_one_or_none()
@@ -166,11 +815,85 @@ async def login(
             detail="用户已被禁用"
         )
 
+    # 登录成功后立刻往 current_app slot 写入 user→tenant 映射。
+    # 这是 P1 stop bleed 关键：dolphin agent 调 MCP 工具时反查 slot 拿真实 tenant_id，
+    # 避免 slot miss 后 fallback 到 admin（旧行为导致跨租户数据泄漏）。app_id=0 表示
+    # 用户已登录但未打开具体应用 —— 用户进 /apps 打开应用后会再调 set_current_app 覆盖。
+    # 2026-05-10：同时写 apaas_uid → 本地 (uid, tid) alias，让 dolphin SDK 透传 aPaaS
+    # 大整数 user_id 调 MCP 工具时 _resolve_identity 能命中缓存零 DB。
+    def _prime_slot(real_user_id: int, real_tenant_id: int) -> None:
+        try:
+            from app.routes.current_app import set_current_app, set_apaas_user_alias
+            set_current_app(real_user_id, real_tenant_id, 0, "")
+            if user.apaas_user_id:
+                set_apaas_user_alias(user.apaas_user_id, real_user_id, real_tenant_id)
+        except Exception as exc:
+            logger.warning("登录后写 current_app slot 失败: %s", exc)
+
+    # P3 v2：同时尝试用 (username, plain_password) 调 dolphin login 拿真身 token。
+    # 成功 → 缓存进程内，/api/dolphin/config 优先返这个真身 token；让用户在 dolphin
+    # 那边落到自己真实账号（如 li.l.77 = sub=94 in 宝洁租户），而不是镜像账号 sub=120。
+    # 失败仅 silent log（用户 dolphin 没同名账号 / 密码不一致），ai-builder login 不阻断。
+    # 这是平滑过渡：现有用户没建好 dolphin 账号也能用 ai-builder UI，进 dolphin chat
+    # 时 fallback 到 v1 镜像账号机制。
+    async def _try_dolphin_real_login(real_user_id: int, plain_pw: str) -> None:
+        try:
+            from app.services.dolphin_sso_v2 import login_dolphin_for_user
+            await login_dolphin_for_user(real_user_id, user_data.username, plain_pw)
+        except Exception as exc:
+            logger.warning("登录后 dolphin 真身 login 失败 user_id=%s: %s", real_user_id, exc)
+
+    # 2026-05-10 Phase 4：登 apaas 拿 token 同步存。前提：用户 ai-builder 密码 == apaas
+    # 同名账号密码（生产很少同步，admin 团队偶尔统一）。失败 silent log，登录流程不阻断。
+    # 成功 → user.apaas_token 更新；user.apaas_user_id 校对 backfill；JWT 自动嵌完整 claims。
+    async def _try_apaas_real_login(target_user: User, plain_pw: str, target_tid: int) -> None:
+        if not target_user.username or not plain_pw:
+            return
+        try:
+            # 找 user 默认 tenant 绑定的 apaas env
+            from app.models import PlatformEnv
+            t_res = await db.execute(select(Tenant).where(Tenant.id == target_tid))
+            target_tenant = t_res.scalar_one_or_none()
+            if not target_tenant or not target_tenant.apaas_env_id:
+                return  # 该租户没绑 apaas env
+            e_res = await db.execute(
+                select(PlatformEnv).where(PlatformEnv.id == target_tenant.apaas_env_id)
+            )
+            env = e_res.scalar_one_or_none()
+            if not env or env.status != "connected":
+                return
+            from app.apaas_client import APaaSClient
+            cli = APaaSClient(base_url=env.base_url, tenant_id=env.platform_tenant_id)
+            result = await cli.login(target_user.username, plain_pw)
+            tok = result.get("token") or ""
+            if not tok:
+                return
+            target_user.apaas_token = tok
+            target_user.apaas_base_url = env.base_url
+            target_user.apaas_tenant_id = env.platform_tenant_id
+            uinfo = result.get("user") or {}
+            if uinfo.get("id"):
+                target_user.apaas_user_id = str(uinfo["id"])
+            await db.commit()
+            logger.info(
+                "apaas chain login OK user_id=%s username=%s apaas_tid=%s",
+                target_user.id, target_user.username, env.platform_tenant_id,
+            )
+        except Exception as exc:
+            logger.info(
+                "apaas chain login skipped user_id=%s username=%s: %s",
+                target_user.id, target_user.username, exc,
+            )
+
     # 平台管理员直接进入默认租户上下文。平台管理权限仍由
     # is_platform_admin 标识提供，tenant_id 用于租户级配置页查询。
     if user.is_platform_admin:
         tenant_id = await resolve_default_tenant_id_for_user(db, user.id)
-        access_token = create_access_token(data={"sub": user.id}, tenant_id=tenant_id)
+        _prime_slot(user.id, tenant_id or 0)
+        await _try_dolphin_real_login(user.id, user_data.password)
+        if tenant_id:
+            await _try_apaas_real_login(user, user_data.password, tenant_id)
+        access_token = create_access_token(user, tenant_id=tenant_id)
         return LoginResponse(access_token=access_token)
 
     # 获取用户的租户成员关系
@@ -191,7 +914,10 @@ async def login(
     if len(memberships) == 1:
         # 单租户 — 直接登录
         tenant_id = memberships[0].tenant_id
-        access_token = create_access_token(data={"sub": user.id}, tenant_id=tenant_id)
+        _prime_slot(user.id, tenant_id)
+        await _try_dolphin_real_login(user.id, user_data.password)
+        await _try_apaas_real_login(user, user_data.password, tenant_id)
+        access_token = create_access_token(user, tenant_id=tenant_id)
         return LoginResponse(access_token=access_token)
 
     # 多租户 — 返回租户列表
@@ -216,7 +942,10 @@ async def login(
 
     # 如果有默认租户，自动选择
     if default_tid:
-        access_token = create_access_token(data={"sub": user.id}, tenant_id=default_tid)
+        _prime_slot(user.id, default_tid)
+        await _try_dolphin_real_login(user.id, user_data.password)
+        await _try_apaas_real_login(user, user_data.password, default_tid)
+        access_token = create_access_token(user, tenant_id=default_tid)
         return LoginResponse(access_token=access_token, tenants=tenants)
 
     # 需要用户选择租户
@@ -234,8 +963,9 @@ async def select_tenant(
     db: Annotated[AsyncSession, Depends(get_db)]
 ):
     """用户选择租户，换取完整 JWT"""
+    from app.auth import decode_token
     try:
-        payload = jwt.decode(data.selection_token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
+        payload = decode_token(data.selection_token)
         if payload.get("type") != "selection":
             raise HTTPException(status_code=401, detail=SELECT_TOKEN_INVALID)
         user_id = int(payload.get("sub"))
@@ -253,9 +983,167 @@ async def select_tenant(
     if not result.scalar_one_or_none():
         raise HTTPException(status_code=403, detail="你不是该租户的成员")
 
-    # 生成完整 JWT
-    access_token = create_access_token(data={"sub": user_id}, tenant_id=data.tenant_id)
+    # 选完租户写 slot（覆盖 prime_slot 的 0 占位）
+    try:
+        from app.routes.current_app import set_current_app
+        set_current_app(user_id, data.tenant_id, 0, "")
+    except Exception as exc:
+        logger.warning("select-tenant 后写 current_app slot 失败: %s", exc)
+
+    # 生成完整 JWT —— 拉 user 对象让 create_access_token 自动嵌 apaas claims
+    u_res = await db.execute(select(User).where(User.id == user_id))
+    user_obj = u_res.scalar_one_or_none()
+    access_token = create_access_token(
+        user_obj or user_id, tenant_id=data.tenant_id
+    )
     return Token(access_token=access_token)
+
+
+# ─── Phase 2 · 密钥换取端点 ────────────────────────────────────────────
+class ExchangeApaasTokenRequest(BaseModel):
+    apaas_token: str
+    apaas_base_url: Optional[str] = None    # 可选，缺省取 settings.apaas_base_url
+    apaas_tenant_id: Optional[str] = None   # 用户希望进入哪个 apaas 租户上下文，
+                                            # 缺省取 user/info 返的 tenantInfos[0]
+
+
+class ExchangeApaasTokenResponse(BaseModel):
+    access_token: str
+    user_id: int            # 本地 ai-builder users.id
+    tenant_id: int          # 本地 ai-builder tenants.id
+    apaas_user_id: str
+    apaas_tenant_id: str
+    username: str
+    auth_mode: str = "apaas_token_exchange"
+
+
+@router.post("/exchange-apaas-token", response_model=ExchangeApaasTokenResponse)
+async def exchange_apaas_token(
+    data: ExchangeApaasTokenRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """密钥换取：拿 apaas token 换 ai-builder JWT（含双 ID claims）。
+
+    流程：
+      1. 调 apaas POST /xdap-admin/user/info 间接验签 + 拿 tenantInfos[]
+      2. 选 apaas_tenant_id：入参优先 → tenantInfos 唯一一个 → 第一个
+      3. 反查本地 User by apaas_user_id（UNIQUE 索引）
+         - 命中：用本地 User.id 签 JWT
+         - miss：报错（管理员需先 backfill / 手工建 ai-builder 账号绑定）
+      4. 反查本地 Tenant by apaas_tenant_id_str
+         - 命中：用本地 tenant.id
+         - miss：尝试 user 的默认 ai-builder tenant；都没则报错
+      5. 签 ai-builder JWT 返
+    """
+    from app.services.apaas_token_validator import validate_apaas_token
+
+    apaas_base_url = (data.apaas_base_url or settings.apaas_base_url or "").rstrip("/")
+    if not apaas_base_url:
+        raise HTTPException(status_code=400, detail="缺 apaas_base_url（且 settings.apaas_base_url 为空）")
+
+    # tenant context for /user/info：入参优先，否则空字符串（apaas 自己 fallback）
+    tenant_ctx = data.apaas_tenant_id or ""
+
+    info = await validate_apaas_token(data.apaas_token, apaas_base_url, tenant_ctx)
+    if not info:
+        raise HTTPException(status_code=401, detail="apaas token 无效或已过期")
+
+    apaas_uid = str(info["user_id"])
+    tenants_info = info.get("tenants") or []
+
+    # 选 apaas_tenant_id
+    chosen_apaas_tid: Optional[str] = None
+    if data.apaas_tenant_id:
+        # 入参指定的 tenant 必须在用户所属列表里（防越权）
+        if any(str(t.get("tenantId")) == str(data.apaas_tenant_id) for t in tenants_info):
+            chosen_apaas_tid = str(data.apaas_tenant_id)
+        else:
+            raise HTTPException(
+                status_code=403,
+                detail=f"apaas user 不在租户 {data.apaas_tenant_id} 内（tenantInfos: "
+                       f"{[t.get('tenantId') for t in tenants_info]}）",
+            )
+    elif len(tenants_info) == 1:
+        chosen_apaas_tid = str(tenants_info[0].get("tenantId"))
+    elif tenants_info:
+        chosen_apaas_tid = str(tenants_info[0].get("tenantId"))  # 取第一个
+    if not chosen_apaas_tid:
+        raise HTTPException(status_code=403, detail="apaas user 不属于任何租户")
+
+    # 本地 User 反查
+    u_res = await db.execute(select(User).where(User.apaas_user_id == apaas_uid))
+    local_user = u_res.scalar_one_or_none()
+    if not local_user or not local_user.is_active:
+        raise HTTPException(
+            status_code=403,
+            detail=f"apaas user {apaas_uid} 在 ai-builder 没有对应账号。"
+                   "请管理员先在 ai-builder 建账号 + 设 users.apaas_user_id "
+                   "字段，或跑 backfill 脚本。",
+        )
+
+    # 本地 Tenant 反查（按 apaas_tenant_id_str）
+    t_res = await db.execute(
+        select(Tenant).where(Tenant.apaas_tenant_id_str == chosen_apaas_tid)
+    )
+    local_tenant = t_res.scalar_one_or_none()
+    local_tid: Optional[int] = None
+    if local_tenant:
+        # 用户必须是该 tenant 成员
+        ut_res = await db.execute(
+            select(UserTenant).where(
+                UserTenant.user_id == local_user.id,
+                UserTenant.tenant_id == local_tenant.id,
+                UserTenant.status == 1,
+            )
+        )
+        if ut_res.scalar_one_or_none():
+            local_tid = local_tenant.id
+        else:
+            logger.warning(
+                "exchange-apaas-token: user %s 不是本地 tenant %s 成员，回退到 default",
+                local_user.id, local_tenant.id,
+            )
+
+    if local_tid is None:
+        # fallback：用户的默认 ai-builder tenant
+        local_tid = await resolve_default_tenant_id_for_user(db, local_user.id)
+    if not local_tid:
+        raise HTTPException(
+            status_code=403,
+            detail=f"apaas user {apaas_uid} 在 ai-builder 没绑定任何租户",
+        )
+
+    # 缓存 apaas alias（让下次 MCP 调用零 DB 命中 + 把 apaas token 顺手存 user 行）
+    try:
+        from app.routes.current_app import set_apaas_user_alias, set_current_app
+        set_apaas_user_alias(apaas_uid, local_user.id, local_tid)
+        set_current_app(local_user.id, local_tid, 0, "")
+    except Exception as exc:
+        logger.warning("exchange-apaas-token slot prime 失败: %s", exc)
+    # 顺便把 apaas_token 存 user 行（MCP 调 apaas 业务接口时可用）
+    if not local_user.apaas_token or local_user.apaas_token != data.apaas_token:
+        local_user.apaas_token = data.apaas_token
+        local_user.apaas_tenant_id = chosen_apaas_tid
+        if apaas_base_url:
+            local_user.apaas_base_url = apaas_base_url
+        await db.commit()
+
+    # 签 ai-builder JWT（含 apaas 双 ID）
+    new_token = create_access_token(
+        local_user,
+        tenant_id=local_tid,
+        apaas_user_id=apaas_uid,
+        apaas_tenant_id=chosen_apaas_tid,
+    )
+
+    return ExchangeApaasTokenResponse(
+        access_token=new_token,
+        user_id=local_user.id,
+        tenant_id=local_tid,
+        apaas_user_id=apaas_uid,
+        apaas_tenant_id=chosen_apaas_tid,
+        username=local_user.username,
+    )
 
 
 class TenantSwitchRequest(BaseModel):
@@ -293,7 +1181,14 @@ async def switch_tenant(
         if not membership:
             raise HTTPException(status_code=403, detail="你不是该租户的成员")
 
-    access_token = create_access_token(data={"sub": ctx.user.id}, tenant_id=data.tenant_id)
+    # 切租户后重写 slot 到新 tenant_id
+    try:
+        from app.routes.current_app import set_current_app
+        set_current_app(ctx.user.id, data.tenant_id, 0, "")
+    except Exception as exc:
+        logger.warning("switch-tenant 后写 current_app slot 失败: %s", exc)
+
+    access_token = create_access_token(ctx.user, tenant_id=data.tenant_id)
     return Token(access_token=access_token)
 
 
@@ -324,6 +1219,23 @@ class TenantUpdateRequest(BaseModel):
     max_components: Optional[int] = None
     contact_name: Optional[str] = None
     contact_email: Optional[str] = None
+    # 2026-05-09 P3 v3：三平台绑定字段（ai-builder ↔ apaas ↔ dolphin 租户级身份对齐）
+    # UI 直接输 apaas_base_url + apaas_platform_tenant_id（不暴露 PlatformEnv 概念，
+    # 后端自动 maintain 一条对应 env 记录）
+    apaas_base_url: Optional[str] = None
+    apaas_platform_tenant_id: Optional[str] = None
+    dolphin_tenant_code: Optional[str] = None
+    dolphin_copilot_agent_code: Optional[str] = None
+    dolphin_coding_agent_code: Optional[str] = None
+    # 2026-05-11 dolphin SDK 官方公开参数（per-tenant 配置）
+    dolphin_customer_name: Optional[str] = None
+    dolphin_server_url: Optional[str] = None
+    # 高级字段（UI 默认不显示，特殊场景下走 API 直传）
+    apaas_env_id: Optional[int] = None
+    dolphin_tenant_id_str: Optional[str] = None
+    dolphin_agent_code: Optional[str] = None
+    dolphin_app_adjust_agent_code: Optional[str] = None
+    dolphin_requirements_agent_code: Optional[str] = None
 
 
 class TenantAdminItem(BaseModel):
@@ -343,9 +1255,34 @@ class TenantAdminItem(BaseModel):
     contact_email: Optional[str] = None
     member_count: int = 0
     created_at: Optional[str] = None
+    # 2026-05-09 P3 v3：三平台绑定（前端编辑用）
+    # apaas_base_url + apaas_platform_tenant_id 是从 PlatformEnv 反查回来的（前端 prefill）
+    apaas_base_url: Optional[str] = None
+    apaas_platform_tenant_id: Optional[str] = None
+    apaas_env_id: Optional[int] = None
+    dolphin_tenant_code: Optional[str] = None
+    dolphin_tenant_id_str: Optional[str] = None
+    dolphin_agent_code: Optional[str] = None
+    dolphin_copilot_agent_code: Optional[str] = None
+    dolphin_coding_agent_code: Optional[str] = None
+    dolphin_app_adjust_agent_code: Optional[str] = None
+    dolphin_requirements_agent_code: Optional[str] = None
+    # 2026-05-11 dolphin SDK 官方公开参数
+    dolphin_customer_name: Optional[str] = None
+    dolphin_server_url: Optional[str] = None
+    # 1:1:1 完整性（admin 视图标红用）
+    binding_complete: bool = False
+    missing_fields: list[str] = []
 
 
 def _tenant_admin_item(t: Tenant, member_count: int) -> TenantAdminItem:
+    missing: list[str] = []
+    if not t.apaas_env_id:
+        missing.append("apaas_env_id")
+    if not t.dolphin_customer_name:
+        missing.append("dolphin_customer_name")
+    if not (t.dolphin_copilot_agent_code or t.dolphin_agent_code):
+        missing.append("dolphin_(copilot|default)_agent_code")
     return TenantAdminItem(
         id=t.id,
         tenant_name=t.tenant_name,
@@ -358,7 +1295,49 @@ def _tenant_admin_item(t: Tenant, member_count: int) -> TenantAdminItem:
         contact_email=t.contact_email,
         member_count=member_count,
         created_at=t.created_at.isoformat() if t.created_at else None,
+        apaas_env_id=t.apaas_env_id,
+        dolphin_tenant_code=t.dolphin_tenant_code,
+        dolphin_tenant_id_str=t.dolphin_tenant_id_str,
+        dolphin_agent_code=t.dolphin_agent_code,
+        dolphin_copilot_agent_code=t.dolphin_copilot_agent_code,
+        dolphin_coding_agent_code=t.dolphin_coding_agent_code,
+        dolphin_app_adjust_agent_code=t.dolphin_app_adjust_agent_code,
+        dolphin_requirements_agent_code=t.dolphin_requirements_agent_code,
+        dolphin_customer_name=t.dolphin_customer_name,
+        dolphin_server_url=t.dolphin_server_url,
+        binding_complete=not missing,
+        missing_fields=missing,
     )
+
+
+async def _attach_apaas_env_info(item: TenantAdminItem, db: AsyncSession) -> TenantAdminItem:
+    """从 apaas_env_id 反查 PlatformEnv 拿 base_url + platform_tenant_id 塞到 item。
+    给前端 prefill 用 — admin 编辑租户时不暴露 env_id 概念，只暴露这两个字段。"""
+    if item.apaas_env_id:
+        from app.models import PlatformEnv
+        env = (
+            await db.execute(select(PlatformEnv).where(PlatformEnv.id == item.apaas_env_id))
+        ).scalar_one_or_none()
+        if env:
+            item.apaas_base_url = env.base_url
+            item.apaas_platform_tenant_id = env.platform_tenant_id
+    return item
+
+
+async def _attach_apaas_env_info_batch(items: list[TenantAdminItem], db: AsyncSession) -> list[TenantAdminItem]:
+    """批量版（list_all_tenants 用，避免 N+1）。"""
+    env_ids = [i.apaas_env_id for i in items if i.apaas_env_id]
+    if not env_ids:
+        return items
+    from app.models import PlatformEnv
+    rows = (await db.execute(select(PlatformEnv).where(PlatformEnv.id.in_(env_ids)))).scalars().all()
+    env_map = {e.id: e for e in rows}
+    for i in items:
+        if i.apaas_env_id and i.apaas_env_id in env_map:
+            e = env_map[i.apaas_env_id]
+            i.apaas_base_url = e.base_url
+            i.apaas_platform_tenant_id = e.platform_tenant_id
+    return items
 
 
 @router.get("/tenants", response_model=list[TenantAdminItem])
@@ -402,7 +1381,8 @@ async def list_all_tenants(
     ).all()
     count_map = {tid: cnt for tid, cnt in counts_rows}
 
-    return [_tenant_admin_item(t, count_map.get(t.id, 0)) for t in rows]
+    items = [_tenant_admin_item(t, count_map.get(t.id, 0)) for t in rows]
+    return await _attach_apaas_env_info_batch(items, db)
 
 
 @router.post("/tenants", response_model=TenantAdminItem)
@@ -496,6 +1476,71 @@ async def update_tenant(
     if data.contact_email is not None:
         t.contact_email = data.contact_email.strip() or None
 
+    # 三平台绑定字段（apaas + dolphin）
+    # apaas：admin 直接输 base_url + platform_tenant_id（不暴露 env_id）。
+    # 后端帮他 maintain 一条 PlatformEnv 记录：第一次绑定时创建，后续编辑就 update。
+    base_url_in = (data.apaas_base_url or "").strip() if data.apaas_base_url is not None else None
+    platform_tid_in = (data.apaas_platform_tenant_id or "").strip() if data.apaas_platform_tenant_id is not None else None
+    if base_url_in is not None or platform_tid_in is not None:
+        from app.models import PlatformEnv
+        # 拿现有 env（如果绑定了）或新建
+        env = None
+        if t.apaas_env_id:
+            env = (
+                await db.execute(select(PlatformEnv).where(PlatformEnv.id == t.apaas_env_id))
+            ).scalar_one_or_none()
+        if env is None:
+            env = PlatformEnv(
+                tenant_id=t.id,
+                env_name=f"{t.tenant_name}-默认环境",
+                base_url=base_url_in or "",
+                platform_tenant_id=platform_tid_in or "",
+                status="disconnected",
+                is_default=True,
+            )
+            db.add(env)
+            await db.flush()
+            t.apaas_env_id = env.id
+        # 已存在 env：更新 base_url + tid
+        if base_url_in is not None:
+            env.base_url = base_url_in.rstrip("/") if base_url_in else ""
+        if platform_tid_in is not None:
+            env.platform_tenant_id = platform_tid_in
+
+    # 高级路径：直接传 apaas_env_id（手动指定已存在的 env），UI 默认不暴露
+    if data.apaas_env_id is not None and base_url_in is None and platform_tid_in is None:
+        if data.apaas_env_id <= 0:
+            t.apaas_env_id = None
+        else:
+            from app.models import PlatformEnv
+            env = (
+                await db.execute(select(PlatformEnv).where(PlatformEnv.id == data.apaas_env_id))
+            ).scalar_one_or_none()
+            if not env:
+                raise HTTPException(status_code=400, detail=f"apaas_env_id={data.apaas_env_id} 不存在")
+            if env.tenant_id != t.id:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"apaas_env_id={data.apaas_env_id} 属于租户 {env.tenant_id}，不能绑定到租户 {t.id}",
+                )
+            t.apaas_env_id = data.apaas_env_id
+
+    # 简单 string 字段：非 None 则覆盖（空串 → None）
+    for field in (
+        "dolphin_tenant_code",
+        "dolphin_tenant_id_str",
+        "dolphin_agent_code",
+        "dolphin_copilot_agent_code",
+        "dolphin_coding_agent_code",
+        "dolphin_app_adjust_agent_code",
+        "dolphin_requirements_agent_code",
+        "dolphin_customer_name",
+        "dolphin_server_url",
+    ):
+        val = getattr(data, field)
+        if val is not None:
+            setattr(t, field, val.strip() or None)
+
     await db.commit()
     await db.refresh(t)
 
@@ -506,7 +1551,7 @@ async def update_tenant(
             .where(UserTenant.tenant_id == t.id, UserTenant.status == 1)
         )
     ).scalar() or 0
-    return _tenant_admin_item(t, int(cnt))
+    return await _attach_apaas_env_info(_tenant_admin_item(t, int(cnt)), db)
 
 
 class TenantMemberAddRequest(BaseModel):
@@ -567,6 +1612,41 @@ async def list_tenant_members(
         )
     ).all()
     return [_serialize_tenant_member(user, m, role) for m, user, role in rows]
+
+
+@router.get("/tenants/{tenant_id}/roles")
+async def list_roles_for_tenant(
+    tenant_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """列出指定租户角色（仅平台管理员）。
+
+    平台管理页在任意租户下添加/调整成员时不能使用当前 token 的租户角色，
+    必须读取目标租户自己的角色清单。
+    """
+    _require_platform_admin(ctx)
+    tenant = (await db.execute(select(Tenant).where(Tenant.id == tenant_id))).scalar_one_or_none()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="租户不存在")
+
+    rows = (
+        await db.execute(
+            select(Role)
+            .where(Role.tenant_id == tenant_id)
+            .order_by(Role.is_system.desc(), Role.created_at.asc(), Role.id.asc())
+        )
+    ).scalars().all()
+    return [
+        {
+            "id": role.id,
+            "role_code": role.role_code,
+            "role_name": role.role_name,
+            "is_system": role.is_system,
+            "permissions": role.permissions or {},
+        }
+        for role in rows
+    ]
 
 
 @router.post("/tenants/{tenant_id}/members", response_model=TenantMemberItem)
@@ -797,8 +1877,54 @@ async def delete_tenant(
             },
         )
 
-    await db.delete(t)
-    await db.commit()
+    # 🆕 force=true 路径：手动级联删 7 张直挂 tenants 的表 + 关 FK 检查兜底子层级
+    # 历史问题：原代码注释说"DB 层 ON DELETE CASCADE"但实际 7 张表 FK 全是 NO ACTION
+    # （applications/platform_envs/projects/conversations/marketplace_components/
+    # llm_configs/api_call_logs），直接 db.delete(t) 会被 FK 阻止抛 IntegrityError 500。
+    if force:
+        from sqlalchemy import text as _sql_text
+
+        # 临时关 FK 检查（mysql 会话级）—— 兜底处理子层级 FK
+        # （applications.id → application_doc_versions.app_id 等深度依赖）
+        # 删完后 commit 自动结束会话，FK 检查在新会话里恢复。
+        await db.execute(_sql_text("SET FOREIGN_KEY_CHECKS = 0"))
+        try:
+            # 直接挂 tenants 的 8 张表（model 定义里 ForeignKey("tenants.id") 但实测 mysql
+            # FK 没 ondelete CASCADE，所以手动 delete）
+            # 注意：user_tenants 必须含 —— 之前漏列导致 li.l.77 删 tenant 5 后留孤儿
+            # 记录指向不存在的 tenant，登录时 default tenant fallback 失败陷"选择组织"页
+            for table in (
+                "applications",
+                "platform_envs",
+                "projects",
+                "conversations",
+                "marketplace_components",
+                "llm_configs",
+                "api_call_logs",
+                "user_tenants",  # ← 用户与租户关联表，删租户时该用户的对应行也要清
+            ):
+                await db.execute(
+                    _sql_text(f"DELETE FROM {table} WHERE tenant_id = :tid"),
+                    {"tid": tenant_id},
+                )
+
+            # 删 tenant 本身（user_tenant_memberships / 其他已配 ondelete=CASCADE 的表
+            # 自动跟着删；剩下的孤儿数据不影响业务因为 tenant 不存在了，但 mysql FK
+            # 检查关了所以不会阻止 tenant 删除）
+            await db.delete(t)
+            await db.commit()
+        finally:
+            # 恢复 FK 检查（即使前面失败 commit/rollback 后也尽量恢复）
+            try:
+                await db.execute(_sql_text("SET FOREIGN_KEY_CHECKS = 1"))
+                await db.commit()
+            except Exception:
+                pass
+    else:
+        # has_data=False 路径（租户没残留）：直接删
+        await db.delete(t)
+        await db.commit()
+
     return {"ok": True, "deleted_tenant_id": tenant_id, "residual": residual}
 
 
@@ -1041,26 +2167,18 @@ async def list_my_tenants(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """返回当前用户可切换的租户列表（用于顶栏 dropdown）。"""
-    if ctx.user.is_platform_admin:
-        rows = (
-            await db.execute(
-                select(Tenant)
-                .where(Tenant.status == 1)
-                .order_by(Tenant.tenant_name.asc())
+    rows = (
+        await db.execute(
+            select(Tenant)
+            .join(UserTenant, UserTenant.tenant_id == Tenant.id)
+            .where(
+                UserTenant.user_id == ctx.user.id,
+                UserTenant.status == 1,
+                Tenant.status == 1,
             )
-        ).scalars().all()
-    else:
-        rows = (
-            await db.execute(
-                select(Tenant)
-                .join(UserTenant, UserTenant.tenant_id == Tenant.id)
-                .where(
-                    UserTenant.user_id == ctx.user.id,
-                    UserTenant.status == 1,
-                )
-                .order_by(Tenant.tenant_name.asc())
-            )
-        ).scalars().all()
+            .order_by(UserTenant.is_default.desc(), Tenant.tenant_name.asc())
+        )
+    ).scalars().all()
     return [
         TenantOption(tenant_id=t.id, tenant_name=t.tenant_name, tenant_code=t.tenant_code)
         for t in rows
@@ -1186,6 +2304,9 @@ async def invite_tenant_user(
             if not target_tenant:
                 raise HTTPException(status_code=404, detail="指定的租户不存在")
             # 找该租户的默认开发者角色（兼容老 init_db 的 R_tenant_admin 和新 seed 的 R_developer）
+            # 注意：tenant seed 会同时建 R_developer + R_tenant_admin + R_viewer 三个角色，
+            # 老代码用 .scalar_one_or_none() 撞 MultipleResultsFound 500。
+            # 改 .scalars().first() —— order_by R_developer < R_tenant_admin < admin 字母序优先开发者角色。
             tenant_role = (
                 await db.execute(
                     select(Role)
@@ -1193,7 +2314,7 @@ async def invite_tenant_user(
                     .where(Role.role_code.in_(["R_developer", "R_tenant_admin", "admin"]))
                     .order_by(Role.role_code.asc())
                 )
-            ).scalar_one_or_none()
+            ).scalars().first()
             if tenant_role:
                 existing = (
                     await db.execute(

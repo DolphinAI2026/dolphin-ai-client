@@ -239,6 +239,12 @@ const router = createRouter({
       meta: { requiresAuth: true, requiresTenantAdmin: true, navExpanded: true }
     },
     {
+      path: '/platform-admin/:pathMatch(.*)*',
+      name: 'PlatformAdmin',
+      component: () => import('@/views/PlatformAdminEmbed.vue'),
+      meta: { requiresAuth: true, requiresPlatformAdmin: true, navExpanded: true }
+    },
+    {
       path: '/tenant-users',
       name: 'TenantUsers',
       component: () => import('@/views/TenantUsers.vue'),
@@ -307,6 +313,16 @@ router.beforeEach(async (to, _from, next) => {
 
   if (to.meta.requiresPlatformAdmin && !userStore.isPlatformAdmin) {
     next('/')
+    return
+  }
+
+  if (
+    to.meta.requiresAuth
+    && userStore.isPlatformAdmin
+    && !userStore.tenantId
+    && !to.path.startsWith('/platform-admin')
+  ) {
+    next('/platform-admin')
     return
   }
 
