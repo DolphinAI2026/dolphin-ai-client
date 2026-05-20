@@ -8,6 +8,7 @@ import router from './router'
 import App from './App.vue'
 import './styles/theme-vars.css'
 import './styles/design-v2-tokens.css'
+import './styles/design-v3-tokens.css'  // ★ Claude design v3 — 覆盖 v2 brand/text/surface 等共享 var；保留 v2 独有色
 import './style.css'
 import './styles/builder.css'
 import { useThemeStore } from './stores/theme'
