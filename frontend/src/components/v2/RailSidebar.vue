@@ -25,8 +25,9 @@ const effectiveCollapsed = computed(() =>
 const NAV = computed<NavItem[]>(() => [
   { key: 'home', label: '首页', icon: 'home', path: '/' },
   { key: 'apps', label: '应用', icon: 'apps', path: '/apps', badge: appCount.value || undefined },
-  { key: 'builder', label: 'AI Builder', icon: 'chat', path: '/ai-chat?mode=requirements' },
-  { key: 'coding', label: 'AI Coding', icon: 'code', path: '/coding', badge: codingWorkspaceCount.value || undefined },
+  { key: 'builder', label: '睿鲸 AI Builder', icon: 'chat', path: '/ai-chat?mode=requirements' },
+  { key: 'coding', label: '睿鲸 AI Coding', icon: 'code', path: '/coding', badge: codingWorkspaceCount.value || undefined },
+  { key: 'vibe', label: 'Vibe Coding', icon: 'sparkles', path: '/vibe-coding' },
   { key: 'marketplace', label: '组件市场', icon: 'store', path: '/marketplace' },
   // 数据接入 — DB 问数 wizard + 数据库连接管理
   { key: 'db-connections', label: '数据库连接', icon: 'database', path: '/db-connections' },
@@ -131,6 +132,7 @@ const ICONS: Record<string, string> = {
   store: '<path d="M3 9 5 4h14l2 5"/><path d="M4 9v10a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V9"/><path d="M3 9h18"/>',
   database: '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/>',
   spark: '<path d="M12 3 14 9l6 2-6 2-2 6-2-6-6-2 6-2z"/>',
+  sparkles: '<path d="M9 4 10 7 13 8 10 9 9 12 8 9 5 8 8 7z"/><path d="M17 3l.7 2.3L20 6l-2.3.7L17 9l-.7-2.3L14 6l2.3-.7z"/><path d="M16 15l1 2.5 2.5 1-2.5 1-1 2.5-1-2.5-2.5-1 2.5-1z"/>',
   bldg: '<path d="M4 21V5l8-3 8 3v16"/><path d="M9 9h.01M9 13h.01M9 17h.01M15 9h.01M15 13h.01M15 17h.01"/><path d="M4 21h16"/>',
   shield: '<path d="M12 2 4 5v7c0 5 3.5 8.5 8 10 4.5-1.5 8-5 8-10V5z"/><path d="M9 12l2 2 4-4"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4 12H2M22 12h-2M6.3 6.3 4.9 4.9M19.1 19.1l-1.4-1.4M6.3 17.7l-1.4 1.4M19.1 4.9l-1.4 1.4"/>',

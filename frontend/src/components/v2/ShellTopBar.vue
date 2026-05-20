@@ -1,8 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
-import { useThemeStore } from '@/stores/theme'
-import { useUserStore } from '@/stores/user'
+import { useRoute } from 'vue-router'
 
 interface BreadcrumbItem {
   label: string
@@ -15,9 +13,6 @@ const props = defineProps<{
 }>()
 
 const route = useRoute()
-const router = useRouter()
-const theme = useThemeStore()
-const user = useUserStore()
 
 const CRUMB_LABELS: Record<string, string> = {
   '/': '新建',
@@ -58,11 +53,6 @@ const crumbCurrent = computed(() => {
 // When non-empty, prefer those over the route-derived label so per-page
 // hierarchy (e.g. 设置 / 成员管理) is preserved.
 const hasCustomCrumbs = computed(() => Array.isArray(props.breadcrumbs) && props.breadcrumbs.length > 0)
-
-function toggleTheme() {
-  theme.toggle()
-}
-const isDark = computed(() => theme.mode === 'dark')
 </script>
 
 <template>
@@ -88,17 +78,6 @@ const isDark = computed(() => theme.mode === 'dark')
          their toolbars rendered in the topbar. -->
     <div class="topbar-page-actions">
       <slot name="actions" />
-    </div>
-    <div class="topbar-actions">
-      <button v-if="user.isTenantAdmin" class="topbar-action" @click="router.push('/tenant-users')">成员管理</button>
-      <button v-if="user.isTenantAdmin" class="topbar-action" @click="router.push('/platform-envs')">平台环境</button>
-      <button class="icon-btn" @click="toggleTheme" :aria-label="isDark ? '切换浅色主题' : '切换深色主题'">
-        <svg v-if="isDark" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 13A9 9 0 0 1 11 3a9 9 0 1 0 10 10z"/></svg>
-        <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4 12H2M22 12h-2M6.3 6.3 4.9 4.9M19.1 19.1l-1.4-1.4M6.3 17.7l-1.4 1.4M19.1 4.9l-1.4 1.4"/></svg>
-      </button>
-      <button class="icon-btn" aria-label="通知">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10 21a2 2 0 0 0 4 0"/></svg>
-      </button>
     </div>
   </div>
 </template>
