@@ -223,13 +223,6 @@
           <span class="art-meta-text">{{ artifactStats }}</span>
           <button class="small-btn" @click="copyArtifact" title="复制">⧉</button>
           <button class="small-btn" @click="downloadArtifact" title="下载">⤓</button>
-          <button
-            v-if="canSendArtifactToBuilder"
-            class="small-btn"
-            :disabled="isSending"
-            @click="rewriteArtifactToSpec"
-            title="让 AI 按 aPaaS 标准规范重写本文档（同名覆盖，自动 +1 版本）"
-          >按规范重写</button>
           <!-- "→ Builder" 按钮只在「已部署过」时显示（已经存在 app_id 才能"调整") -->
           <!-- 首次部署用蓝图右上 🚀 按钮 — 不离开 AIChatPage -->
           <button
@@ -1335,30 +1328,6 @@ const canSendArtifactToBuilder = computed(() =>
   && !!activeArtifactContent.value
   && /\.md$/i.test(activeArtifactName.value)
 )
-
-// 让 AI 用 aPaaS 标准规范重写当前 artifact —— 把现有内容塞进一条消息，
-// AI 会调 write_artifact 同名覆盖（后端自动 version+1）。
-async function rewriteArtifactToSpec() {
-  if (!canSendArtifactToBuilder.value || isSending.value) return
-  if (!currentSession.value || !activeArtifactName.value) return
-  const filename = activeArtifactName.value
-  const content = activeArtifactContent.value
-  if (!content) {
-    ElMessage.warning('当前文档为空')
-    return
-  }
-  inputText.value = (
-    `请按 aPaaS Builder 的设计文档标准规范重写《${filename}》——\n` +
-    `必须严格遵循 SYSTEM_PROMPT 中的 6 章节顺序、表头、字段编码与命名约束；` +
-    `数据模型只描述数据库怎么存，字典/组件/关联都写到「五、表单定义」里；` +
-    `任何"数据单选/数据选择/关联表单"字段引用的目标模型，都必须先在 ## 四、数据模型 中显式定义，` +
-    `否则改成单行输入；缺信息留空单元格即可，不要写"未定义"、"待定"等占位文字。\n` +
-    `重写完用 write_artifact 同名（${filename}）覆盖保存（会自动 +1 版本）。\n\n` +
-    `当前版本内容如下：\n\n\`\`\`markdown\n${content}\n\`\`\``
-  )
-  await nextTick()
-  onSend()
-}
 
 // localStorage 缓存：(session_id + artifact filename) → 已建 application id
 // 同一个 md → Builder 重复点不再重复建应用，直接跳已有应用的 SPEC 工作台
