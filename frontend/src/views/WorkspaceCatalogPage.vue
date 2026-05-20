@@ -1,6 +1,18 @@
 <template>
   <WorkbenchShell>
     <div class="catalog-main">
+      <!-- 大类切换：应用相关 vs 通用组件 — 第一维度（基于 ws.project_id 是否绑定应用） -->
+      <div class="category-bar">
+        <button
+          v-for="cat in CATEGORIES"
+          :key="cat.value"
+          :class="['category-tab', { active: activeCategory === cat.value }]"
+          @click="activeCategory = cat.value"
+        >
+          {{ cat.label }}
+          <span class="tab-count" v-if="categoryCounts[cat.value]">{{ categoryCounts[cat.value] }}</span>
+        </button>
+      </div>
       <div class="filter-bar">
         <div class="filter-tabs">
           <button
@@ -25,7 +37,9 @@
 
       <div class="catalog-content" :class="viewMode">
         <div v-if="loading" class="empty-state">加载中...</div>
-        <div v-else-if="filteredWorkspaces.length === 0" class="empty-state">暂无组件</div>
+        <div v-else-if="filteredWorkspaces.length === 0" class="empty-state">
+          {{ activeCategory === 'generic' ? '还没有通用组件 — 在 AI Coding 主页发起组件开发' : '还没有应用相关的自开发 — 进应用从「→ 自开发」发起' }}
+        </div>
 
         <template v-else-if="viewMode === 'grid'">
           <article
@@ -44,6 +58,7 @@
                 </div>
               </div>
               <div class="grid-card-badges">
+                <span v-if="workspaceAppName(ws)" class="app-badge">📦 {{ workspaceAppName(ws) }}</span>
                 <span class="source-badge">{{ workspaceGroupLabel(ws.project_type) }}</span>
                 <span class="card-status">{{ workspaceStatusLabel(ws.status) }}</span>
               </div>
@@ -81,6 +96,7 @@
                 <div class="card-info">
                   <div class="card-name-row">
                     <h3>{{ workspaceDisplayName(ws) }}</h3>
+                    <span v-if="workspaceAppName(ws)" class="app-badge">📦 {{ workspaceAppName(ws) }}</span>
                     <span class="source-badge">{{ workspaceGroupLabel(ws.project_type) }}</span>
                     <span class="card-status">{{ workspaceStatusLabel(ws.status) }}</span>
                   </div>
@@ -122,6 +138,7 @@ import { ElMessage } from 'element-plus'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
 import EnvSelectModal from '@/components/EnvSelectModal.vue'
 import { codingApi, type WorkspaceInfo } from '@/api/coding'
+import { applicationApi } from '@/api/application'
 import { platformEnvApi } from '@/api/platformEnv'
 
 const router = useRouter()
@@ -129,8 +146,16 @@ const route = useRoute()
 const loading = ref(true)
 const workspaces = ref<WorkspaceInfo[]>([])
 const activeTab = ref('all')
+const activeCategory = ref<'all' | 'app-bound' | 'generic'>('all')
 const viewMode = ref<'grid' | 'list'>('grid')
 const appId = computed(() => String(route.query.app_id || ''))
+const appNameMap = ref<Record<number, string>>({})
+
+const CATEGORIES: Array<{ value: 'all' | 'app-bound' | 'generic'; label: string }> = [
+  { value: 'all',       label: '全部' },
+  { value: 'app-bound', label: '应用相关' },
+  { value: 'generic',   label: '通用组件' },
+]
 
 // 上传组件包相关状态
 const uploadingWsId = ref<string | null>(null)
@@ -158,25 +183,51 @@ const tabs = [
   { label: '应用布局', value: 'layout' },
 ]
 
+// URL ?app_id=N 限定到具体应用 (从应用上下文跳过来的)；否则全部
 const visibleWorkspaces = computed(() => {
   if (!appId.value) return workspaces.value
   return workspaces.value.filter(ws => String(ws.project_id || '') === appId.value)
 })
 
+// 第一维度筛：全部 / 应用相关 (有 project_id) / 通用组件 (无 project_id)
+const categoryFilteredWorkspaces = computed(() => {
+  const all = visibleWorkspaces.value
+  if (activeCategory.value === 'all') return all
+  if (activeCategory.value === 'app-bound') return all.filter(ws => !!ws.project_id)
+  return all.filter(ws => !ws.project_id)
+})
+
+// 第二维度：再按 project_type tab 过滤
 const filteredWorkspaces = computed(() => {
-  if (activeTab.value === 'all') return visibleWorkspaces.value
-  return visibleWorkspaces.value.filter(ws => groupMap[ws.project_type]?.key === activeTab.value)
+  const pool = categoryFilteredWorkspaces.value
+  if (activeTab.value === 'all') return pool
+  return pool.filter(ws => groupMap[ws.project_type]?.key === activeTab.value)
 })
 
 const tabCounts = computed(() => {
   const counts: Record<string, number> = {}
+  const pool = categoryFilteredWorkspaces.value
   for (const tab of tabs) {
     counts[tab.value] = tab.value === 'all'
-      ? visibleWorkspaces.value.length
-      : visibleWorkspaces.value.filter(ws => groupMap[ws.project_type]?.key === tab.value).length
+      ? pool.length
+      : pool.filter(ws => groupMap[ws.project_type]?.key === tab.value).length
   }
   return counts
 })
+
+const categoryCounts = computed(() => {
+  const all = visibleWorkspaces.value
+  return {
+    all: all.length,
+    'app-bound': all.filter(ws => !!ws.project_id).length,
+    generic: all.filter(ws => !ws.project_id).length,
+  } as Record<string, number>
+})
+
+function workspaceAppName(ws: WorkspaceInfo): string {
+  if (!ws.project_id) return ''
+  return appNameMap.value[ws.project_id] || `应用 #${ws.project_id}`
+}
 
 function workspaceDisplayName(ws: WorkspaceInfo) {
   return ws.display_name?.trim() || ws.project_name
@@ -265,7 +316,20 @@ function onEnvSelected(envId: number) {
 
 onMounted(async () => {
   try {
-    workspaces.value = await codingApi.listWorkspaces()
+    const [wsList, apps] = await Promise.all([
+      codingApi.listWorkspaces(),
+      applicationApi.list({ include_remote: false } as any).catch(() => [] as any[]),
+    ])
+    workspaces.value = wsList
+    if (Array.isArray(apps)) {
+      const map: Record<number, string> = {}
+      for (const app of apps) {
+        if (app?.id && (app.app_name || app.appName)) {
+          map[Number(app.id)] = app.app_name || app.appName
+        }
+      }
+      appNameMap.value = map
+    }
   } finally {
     loading.value = false
   }
@@ -282,6 +346,50 @@ onMounted(async () => {
   min-width: 0;
   display: flex;
   flex-direction: column;
+}
+
+/* 大类切换条 — Phase 5: 应用相关 vs 通用组件 */
+.category-bar {
+  display: flex;
+  gap: var(--s-2);
+  padding: var(--s-5) var(--s-6) 0;
+  max-width: 1200px;
+  margin: 0 auto;
+  width: 100%;
+  border-bottom: 1px solid var(--line);
+}
+
+.category-tab {
+  background: transparent;
+  border: none;
+  padding: 10px var(--s-5);
+  font-size: var(--t-body);
+  font-weight: var(--fw-medium);
+  color: var(--text-3);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  font-family: inherit;
+  transition: color 0.14s var(--ease), border-color 0.14s var(--ease);
+}
+
+.category-tab:hover {
+  color: var(--text);
+}
+
+.category-tab.active {
+  color: var(--brand);
+  font-weight: var(--fw-semibold);
+  border-bottom-color: var(--brand);
+}
+
+.category-tab:focus-visible {
+  outline: 2px solid var(--line-focus);
+  outline-offset: -2px;
+  border-radius: var(--r-1);
 }
 
 .filter-bar {
@@ -463,6 +571,23 @@ onMounted(async () => {
 .grid-card-badges {
   justify-content: flex-end;
   max-width: 120px;
+}
+
+.app-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  font-size: var(--t-micro);
+  font-weight: var(--fw-medium);
+  background: var(--brand-soft);
+  color: var(--brand-text);
+  border: 1px solid var(--brand-ring);
+  border-radius: var(--r-full);
+  white-space: nowrap;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .source-badge,
