@@ -2135,3 +2135,72 @@ select:focus-visible,
   font-size: 13px !important;
   color: var(--text) !important;
 }
+
+/* ═════════════════════════════════════════════════════════════════════
+ * v3 2026-05-20 (code review #P2-11): EP portal 类组件全局 var 覆盖
+ * popper / dropdown / dialog / picker 都 portal 渲染在 <body> 末尾，
+ * 不被 .admin-content :deep / .builder-page 覆盖。
+ * 在 :root level 让 Element Plus 自己的 var(--el-*) 都指向 v3 token —
+ * portal 也跟着 dark mode 翻转，不再视觉割裂。
+ * ═════════════════════════════════════════════════════════════════════ */
+:root {
+  --el-bg-color: var(--surface);
+  --el-bg-color-overlay: var(--surface);
+  --el-bg-color-page: var(--bg);
+  --el-text-color-primary: var(--text);
+  --el-text-color-regular: var(--text-2);
+  --el-text-color-secondary: var(--text-3);
+  --el-text-color-placeholder: var(--text-4);
+  --el-border-color: var(--line);
+  --el-border-color-light: var(--line);
+  --el-border-color-lighter: var(--line);
+  --el-fill-color: var(--surface-2);
+  --el-fill-color-light: var(--surface-2);
+  --el-fill-color-lighter: var(--surface-3);
+  --el-fill-color-blank: var(--surface);
+  --el-color-primary: var(--brand);
+  --el-color-primary-light-3: var(--brand-soft-2);
+  --el-color-primary-light-5: var(--brand-soft);
+  --el-color-primary-light-7: var(--brand-soft);
+  --el-color-primary-light-8: var(--brand-soft);
+  --el-color-primary-light-9: var(--brand-soft);
+  --el-color-success: var(--ok);
+  --el-color-warning: var(--warn);
+  --el-color-danger: var(--err);
+  --el-color-info: var(--text-3);
+}
+
+.el-popper.is-light,
+.el-select__popper,
+.el-dropdown__popper,
+.el-date-picker,
+.el-time-panel,
+.el-cascader__dropdown {
+  background: var(--surface) !important;
+  border: 1px solid var(--line) !important;
+  color: var(--text) !important;
+}
+.el-popper.is-light .el-popper__arrow::before {
+  background: var(--surface) !important;
+  border-color: var(--line) !important;
+}
+.el-select-dropdown__item {
+  color: var(--text-2) !important;
+}
+.el-select-dropdown__item:hover,
+.el-select-dropdown__item.hover {
+  background: var(--brand-soft) !important;
+  color: var(--brand) !important;
+}
+.el-select-dropdown__item.selected {
+  background: var(--brand-soft) !important;
+  color: var(--brand) !important;
+  font-weight: 600;
+}
+.el-dropdown-menu__item {
+  color: var(--text-2) !important;
+}
+.el-dropdown-menu__item:not(.is-disabled):hover {
+  background: var(--brand-soft) !important;
+  color: var(--brand) !important;
+}

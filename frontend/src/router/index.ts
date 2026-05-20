@@ -306,13 +306,16 @@ router.beforeEach(async (to, _from, next) => {
     }
   }
 
+  // v3 2026-05-20 fix (code review #P2-10): 权限被拒时用 replace
+  // 之前 next('/') 默认 push → 浏览器历史栈多一格 /tenant-admin-page 死路径
+  // → 用户点后退按钮先回到 '/' 再点又回 '/' → 后退坏
   if (to.meta.requiresTenantAdmin && !userStore.isTenantAdmin) {
-    next('/')
+    next({ path: '/', replace: true })
     return
   }
 
   if (to.meta.requiresPlatformAdmin && !userStore.isPlatformAdmin) {
-    next('/')
+    next({ path: '/', replace: true })
     return
   }
 
