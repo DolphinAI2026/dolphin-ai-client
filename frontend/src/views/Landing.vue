@@ -1,22 +1,18 @@
 <!-- frontend/src/views/Landing.vue
   v2 Landing — cyan AI hub + 3-mode composer + 4-stat strip + flow chips + recent apps.
-  Preserves the existing upload-to-/chat flow via `previewStore.pendingFile` + `from=upload`
-  (router guard at frontend/src/router/index.ts:30-44 whitelists `from=upload`).
+  Composer 自己处理多文件 / 应用选择 / 路由 — Landing 只负责 fetch + 传 props。
 -->
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
 import LandingComposer from '@/components/v2/LandingComposer.vue'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
 import ShellTopBar from '@/components/v2/ShellTopBar.vue'
-import { usePreviewStore } from '@/stores/preview'
 import { conversationApi, type ConversationWithApp } from '@/api/conversation'
 import { applicationApi } from '@/api/application'
 import { industryApi } from '@/api/industry'
 
 const router = useRouter()
-const previewStore = usePreviewStore()
 
 interface RecentApp {
   id: number | string
@@ -25,9 +21,11 @@ interface RecentApp {
   conversationId?: number | null
 }
 
+interface ComposerApp { id: number | string; name: string; code?: string }
+
 const stats = ref({ apps: 0, specs: 0, deploys: 0, packs: 0 })
 const recent = ref<RecentApp[]>([])
-const prdInputRef = ref<HTMLInputElement | null>(null)
+const allApps = ref<ComposerApp[]>([])
 
 const FLOW_STEPS = [
   { n: '01', label: '描述需求',         tone: 'ai' },
@@ -91,6 +89,17 @@ async function loadLanding() {
   const sourceApps = appRecords.length ? appRecords : fallbackApps
   recent.value = sourceApps.slice(0, 5)
 
+  // 应用选择器用：全量 apps（带 code），优先用 backend appRecords，fallback 用 conversations 推断的
+  allApps.value = Array.isArray(apps)
+    ? apps
+        .filter((app: any) => app?.id && app?.app_name)
+        .map((app: any) => ({
+          id: app.id,
+          name: app.app_name || app.appName || '未命名应用',
+          code: app.app_code || app.appCode || undefined,
+        } as ComposerApp))
+    : []
+
   // 4-stat strip: apps / specs / deploys / packs.
   // - apps: total app count
   // - specs: total conversation count (each builder conversation produces SPEC iterations)
@@ -106,35 +115,6 @@ async function loadLanding() {
     deploys: deployedCount,
     packs: packsCount,
   }
-}
-
-function onToolClick(mode: 'builder' | 'coding' | 'vibe') {
-  if (mode === 'builder') {
-    prdInputRef.value?.click()
-  } else if (mode === 'coding') {
-    // P2: open MCP picker dialog
-    ElMessage.info('MCP 选择即将上线')
-  } else {
-    // P2: open repo picker dialog
-    ElMessage.info('仓库选择即将上线')
-  }
-}
-
-function handleLandingDocUpload(event: Event) {
-  const target = event.target as HTMLInputElement
-  const files = Array.from(target.files || [])
-  target.value = ''
-  if (!files.length) return
-
-  const file = files[0]
-  if (!/\.(md|markdown)$/i.test(file.name)) {
-    ElMessage.warning('当前仅支持 .md / .markdown 文件，其它格式请到 AI 对话里上传')
-    return
-  }
-  // 标准 md 快路：写入 previewStore.pendingFile + router from=upload，ChatPage 自动接管解析
-  // （与旧 Landing.vue:387 acceptCoworkFiles 单 .md 分支等价）
-  previewStore.pendingFile = file
-  router.push({ path: '/chat', query: { from: 'upload' } })
 }
 
 function openApp(r: RecentApp) {
@@ -162,7 +142,7 @@ onMounted(loadLanding)
           <div class="hero-sub">支持 .md 设计文档 · .doc / .docx · .pdf · 直接对话需求 · 复用行业包 · 部署到得帆云</div>
         </div>
 
-        <LandingComposer @tool-click="onToolClick" />
+        <LandingComposer :apps="allApps" />
 
         <div class="strip stats">
           <div class="stat"><div class="stat-num">{{ stats.apps }}</div><div class="stat-lbl">应用</div></div>
@@ -190,14 +170,6 @@ onMounted(loadLanding)
           </button>
         </div>
         <div v-else class="recent-empty">还没有应用 — 上面输入框开始描述需求，或者 <a @click.prevent="router.push('/apps')">浏览应用</a>。</div>
-
-        <input
-          ref="prdInputRef"
-          type="file"
-          accept=".md,.markdown"
-          hidden
-          @change="handleLandingDocUpload"
-        />
       </div>
     </div>
   </WorkbenchShell>

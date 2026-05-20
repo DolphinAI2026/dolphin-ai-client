@@ -1,60 +1,160 @@
 <!-- frontend/src/components/v2/LandingComposer.vue
-  Centered 3-mode composer for the v2 Landing page.
-  Emits `tool-click` so the parent can wire mode-specific tool buttons
-  (e.g. file-picker for builder) without coupling the composer to stores.
+  3-mode composer for Landing v3.
+  - 睿鲸 AI Builder: multi-file (any type) + text → 进 /ai-chat
+  - 睿鲸 AI Coding: 选低代码应用（可不选）+ text → 进 /coding
+  - Vibe Coding: text → 进 /vibe-coding
 -->
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { usePreviewStore } from '@/stores/preview'
+
+interface AppOption { id: number | string; name: string; code?: string }
+
+const props = defineProps<{ apps?: AppOption[] }>()
 
 type Mode = 'builder' | 'coding' | 'vibe'
 const MODES: { id: Mode; label: string; sub: string; tone: 'ai' | 'brand' | 'emerald' }[] = [
-  { id: 'builder', label: 'AI 对话',          sub: '描述需求 → SPEC → 部署',           tone: 'ai' },
-  { id: 'coding',  label: '睿鲸 AI Coding',   sub: '聊天驱动生成低代码组件',           tone: 'brand' },
-  { id: 'vibe',    label: 'Vibe Coding',     sub: '浏览器 VS Code 全代码 + AI 协助',  tone: 'emerald' },
+  { id: 'builder', label: '睿鲸 AI Builder', sub: '描述需求 / 上传材料 → SPEC → 部署', tone: 'ai' },
+  { id: 'coding',  label: '睿鲸 AI Coding',  sub: '聊天驱动生成低代码组件',           tone: 'brand' },
+  { id: 'vibe',    label: 'Vibe Coding',    sub: '浏览器 VS Code 全代码 + AI 协助',  tone: 'emerald' },
 ]
 
 const mode = ref<Mode>('builder')
 const text = ref('')
+const files = ref<File[]>([])
+const selectedAppId = ref<number | string | ''>('')
+const fileInputRef = ref<HTMLInputElement | null>(null)
 const router = useRouter()
-
-const emit = defineEmits<{
-  (e: 'tool-click', mode: Mode): void
-}>()
+const previewStore = usePreviewStore()
 
 const placeholder = computed(() => ({
-  builder: '说说你想做什么。例：管理我们部门 200 台设备的领用、归还和报废…',
-  coding:  '描述要生成的低代码组件或页面。例：做一个支持多选 + 异步加载的客户树组件…',
+  builder: '说说你想做什么。例：管理我们部门 200 台设备的领用、归还和报废… 也可以直接拖文件进来。',
+  coding:  '描述要给所选应用做的自开发页面或组件。例：给 CRM 加一个客户健康度看板，支持按行业筛选。',
   vibe:    '描述你想做的代码任务，进入 Vibe Coding 工作区继续。',
 }[mode.value]))
+
 const cta = computed(() => ({ builder: '开始对话', coding: '开始生成', vibe: '打开工作区' }[mode.value]))
 
+const canSubmit = computed(() => {
+  if (mode.value === 'builder') return !!text.value.trim() || files.value.length > 0
+  return !!text.value.trim()
+})
+
+const selectedApp = computed(() =>
+  props.apps?.find(a => String(a.id) === String(selectedAppId.value)) || null,
+)
+
+function onFilesPicked(e: Event) {
+  const target = e.target as HTMLInputElement
+  const picked = Array.from(target.files || [])
+  files.value.push(...picked)
+  target.value = ''
+}
+
+function removeFile(idx: number) {
+  files.value.splice(idx, 1)
+}
+
+function formatBytes(n: number) {
+  if (n < 1024) return `${n}B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}KB`
+  return `${(n / 1024 / 1024).toFixed(1)}MB`
+}
+
 function submit() {
-  if (!text.value.trim()) return
-  if (mode.value === 'builder') router.push({ path: '/ai-chat', query: { mode: 'requirements', prompt: text.value } })
-  else if (mode.value === 'coding') router.push({ path: '/coding', query: { prompt: text.value } })
-  else router.push({ path: '/vibe-coding', query: { prompt: text.value } })
+  if (!canSubmit.value) return
+  const userPrompt = text.value.trim()
+  if (mode.value === 'builder') {
+    // 把多文件交给 store，prompt 走 URL；AIChatPage onMounted 已经会消费 pendingAiChatFiles + ?prompt
+    previewStore.pendingAiChatFiles = [...files.value]
+    router.push({
+      path: '/ai-chat',
+      query: { mode: 'requirements', ...(userPrompt ? { prompt: userPrompt } : {}) },
+    })
+  } else if (mode.value === 'coding') {
+    const app = selectedApp.value
+    const message = app
+      ? `针对低代码应用「${app.name}」${app.code ? `（应用编码：${app.code}）` : ''}做以下自开发需求：\n\n${userPrompt}`
+      : userPrompt
+    try {
+      sessionStorage.setItem('ai_builder_pending_coding', JSON.stringify({ message }))
+    } catch { /* sessionStorage 不可用，继续 — coding 页可在无 message 时 fallback */ }
+    router.push({
+      path: '/coding',
+      query: {
+        from_ai_builder: '1',
+        ...(app ? { app_id: String(app.id) } : {}),
+      },
+    })
+  } else {
+    router.push({ path: '/vibe-coding', query: userPrompt ? { prompt: userPrompt } : {} })
+  }
 }
 </script>
 
 <template>
   <div class="composer">
     <div class="composer-modes">
-      <button v-for="m in MODES" :key="m.id" class="mode-pill" :class="['tone-' + m.tone, { active: mode === m.id }]" @click="mode = m.id">
+      <button
+        v-for="m in MODES"
+        :key="m.id"
+        class="mode-pill"
+        :class="['tone-' + m.tone, { active: mode === m.id }]"
+        @click="mode = m.id"
+      >
         <div class="mode-pill-label">{{ m.label }}</div>
         <div class="mode-pill-sub">{{ m.sub }}</div>
       </button>
     </div>
+
     <div class="composer-card" :data-tone="MODES.find(m => m.id === mode)?.tone">
       <div class="composer-strip" />
+
+      <!-- builder 模式：附件 chip 列表 -->
+      <div v-if="mode === 'builder' && files.length" class="file-chips">
+        <span v-for="(f, i) in files" :key="i" class="file-chip">
+          <span class="file-chip-icon">{{ /\.(png|jpe?g|gif|webp|svg)$/i.test(f.name) ? '🖼️' : '📄' }}</span>
+          <span class="file-chip-name" :title="f.name">{{ f.name }}</span>
+          <span class="file-chip-size">{{ formatBytes(f.size) }}</span>
+          <button class="file-chip-x" type="button" aria-label="移除" @click="removeFile(i)">×</button>
+        </span>
+      </div>
+
+      <!-- coding 模式：应用选择器 -->
+      <div v-if="mode === 'coding'" class="app-picker">
+        <label class="app-picker-label">关联应用（可选）</label>
+        <select v-model="selectedAppId" class="app-picker-select">
+          <option value="">不关联应用 — 通用代码任务</option>
+          <option v-for="a in props.apps || []" :key="a.id" :value="a.id">
+            {{ a.name }}{{ a.code ? `（${a.code}）` : '' }}
+          </option>
+        </select>
+        <div v-if="selectedApp" class="app-picker-hint">
+          ✓ 已选 <b>{{ selectedApp.name }}</b>，需求会自动带上应用上下文
+        </div>
+      </div>
+
       <textarea v-model="text" class="composer-input" :placeholder="placeholder" rows="3" />
+
       <div class="composer-foot">
         <div class="composer-tools">
-          <button v-if="mode === 'builder'" class="btn btn-ghost btn-sm" @click="emit('tool-click', 'builder')">📎 上传 .md 文档</button>
-          <button v-if="mode === 'coding'"  class="btn btn-ghost btn-sm" @click="emit('tool-click', 'coding')">🔌 选择 MCP</button>
-          <button v-if="mode === 'vibe'"    class="btn btn-ghost btn-sm" @click="emit('tool-click', 'vibe')">📁 选择仓库</button>
+          <template v-if="mode === 'builder'">
+            <button class="btn btn-ghost btn-sm" type="button" @click="fileInputRef?.click()">
+              📎 添加附件（多文件）
+            </button>
+            <input
+              ref="fileInputRef"
+              type="file"
+              multiple
+              accept=".md,.markdown,.txt,.doc,.docx,.pdf,.xls,.xlsx,.csv,.json,.png,.jpg,.jpeg,.gif,.webp,.svg"
+              hidden
+              @change="onFilesPicked"
+            />
+            <span v-if="files.length" class="file-count">已选 {{ files.length }} 个文件</span>
+          </template>
         </div>
-        <button class="btn btn-primary" :disabled="!text.trim()" @click="submit">{{ cta }}</button>
+        <button class="btn btn-primary" :disabled="!canSubmit" @click="submit">{{ cta }}</button>
       </div>
     </div>
   </div>
@@ -70,14 +170,38 @@ function submit() {
 .mode-pill.tone-ai.active     { color: var(--ai-text);   background: var(--ai-soft);    --ring: var(--ai-ring); }
 .mode-pill.tone-brand.active  { color: var(--brand-text); background: var(--brand-soft); --ring: var(--brand-ring); }
 .mode-pill.tone-emerald.active{ color: var(--emerald);    background: var(--emerald-bg);--ring: rgba(16, 163, 127, 0.2); }
+
 .composer-card { position: relative; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 16px; box-shadow: var(--shadow-md); overflow: hidden; }
 .composer-strip { height: 3px; }
 .composer-card[data-tone="ai"] .composer-strip      { background: var(--ai); }
 .composer-card[data-tone="brand"] .composer-strip   { background: var(--brand); }
 .composer-card[data-tone="emerald"] .composer-strip { background: var(--emerald); }
+
+/* File chips (builder mode) */
+.file-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px 14px 0; }
+.file-chip { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 4px 0 8px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; font-size: 12px; max-width: 240px; }
+.file-chip-icon { font-size: 12px; line-height: 1; flex-shrink: 0; }
+.file-chip-name { color: var(--text); font-weight: 500; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-chip-size { color: var(--text-3); font-size: 11px; font-variant-numeric: tabular-nums; }
+.file-chip-x { width: 20px; height: 20px; display: grid; place-items: center; padding: 0; background: transparent; border: none; border-radius: 4px; color: var(--text-3); cursor: pointer; font-size: 14px; line-height: 1; font-family: inherit; }
+.file-chip-x:hover { background: var(--surface-3, var(--surface)); color: var(--text); }
+
+/* App picker (coding mode) */
+.app-picker { padding: 12px 14px 0; display: flex; flex-direction: column; gap: 6px; }
+.app-picker-label { font-size: 11.5px; color: var(--text-3); font-weight: 500; letter-spacing: 0.02em; }
+.app-picker-select { height: 32px; padding: 0 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); font-size: 13px; font-family: inherit; cursor: pointer; outline: none; transition: border-color 0.14s; }
+.app-picker-select:hover, .app-picker-select:focus { border-color: var(--brand-ring); }
+.app-picker-hint { font-size: 11.5px; color: var(--brand-text); }
+.app-picker-hint b { color: var(--brand); font-weight: 600; }
+
+/* Textarea */
 .composer-input { width: 100%; min-height: 84px; padding: 14px 16px; border: none; outline: none; resize: none; background: transparent; color: var(--text); font-size: 14px; line-height: 1.55; font-family: inherit; }
+
+/* Foot */
 .composer-foot { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px 12px; gap: 8px; }
-.composer-tools { display: flex; gap: 6px; }
+.composer-tools { display: flex; align-items: center; gap: 8px; }
+.file-count { color: var(--text-3); font-size: 11.5px; }
+
 .btn { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 14px; border-radius: 8px; font-size: 13px; font-weight: 500; cursor: pointer; border: 1px solid transparent; background: transparent; color: var(--text); font-family: inherit; transition: background 0.12s, border-color 0.12s; }
 .btn-sm { height: 26px; padding: 0 10px; font-size: 12px; border-radius: 6px; }
 .btn-primary { background: var(--brand); color: #fff; }
