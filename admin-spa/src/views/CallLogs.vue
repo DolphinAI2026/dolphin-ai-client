@@ -90,7 +90,13 @@ onMounted(loadLogs)
 </script>
 
 <style scoped>
-.page { max-width: 1400px; margin: 0 auto; }
+/* v3 token 化 · 2026-05-20 — visual refresh only. template/script untouched. */
+.page {
+  max-width: 1400px;
+  margin: 0 auto;
+  color: var(--text);
+  font-family: var(--font-sans);
+}
 .page-header {
   display: flex;
   align-items: flex-start;
@@ -98,11 +104,24 @@ onMounted(loadLogs)
   margin-bottom: 20px;
   gap: 16px;
 }
-.page-header h1 { margin: 0 0 4px; font-size: 20px; }
-.page-header p { margin: 0; font-size: 13px; color: #66756d; }
+.page-header h1 {
+  margin: 0 0 4px;
+  font-size: 22px;
+  line-height: 1.25;
+  font-weight: var(--fw-bold, 700);
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+.page-header p {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--text-3);
+}
 .empty-copy {
   max-width: none;
-  color: #66756d;
+  color: var(--text-3);
+  font-size: 13px;
   line-height: 1.7;
   white-space: nowrap;
 }
@@ -114,19 +133,22 @@ onMounted(loadLogs)
 }
 .log-detail h3 {
   margin: 0 0 8px;
-  font-size: 13px;
-  color: #233129;
+  font-size: 12.5px;
+  font-weight: var(--fw-semibold, 600);
+  color: var(--text);
+  letter-spacing: 0.02em;
 }
 .log-detail pre {
   margin: 0;
   max-height: 260px;
   overflow: auto;
-  border: 1px solid #dfe8e2;
-  border-radius: 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-2, 6px);
   padding: 10px;
-  background: #f7faf8;
-  color: #26352d;
-  font-size: 12px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  font-size: 11.5px;
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;

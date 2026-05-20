@@ -132,7 +132,13 @@ onMounted(load)
 </script>
 
 <style scoped>
-.sandbox-monitor { max-width: 1400px; margin: 0 auto; }
+/* v3 token 化 · 2026-05-20 — visual refresh only. template/script untouched. */
+.sandbox-monitor {
+  max-width: 1400px;
+  margin: 0 auto;
+  color: var(--text);
+  font-family: var(--font-sans);
+}
 .page-header {
   margin-bottom: 20px;
   display: flex;
@@ -140,6 +146,18 @@ onMounted(load)
   justify-content: space-between;
   gap: 16px;
 }
-.page-header h1 { margin: 0 0 4px; font-size: 20px; }
-.page-header p  { margin: 0; font-size: 13px; color: #909399; }
+.page-header h1 {
+  margin: 0 0 4px;
+  font-size: 22px;
+  line-height: 1.25;
+  font-weight: var(--fw-bold, 700);
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+.page-header p {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--text-3);
+}
 </style>

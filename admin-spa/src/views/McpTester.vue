@@ -417,7 +417,14 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.page { max-width: 1400px; margin: 0 auto; }
+/* v3 redesign · 2026-05-20 — visual refresh only, template/script untouched.
+   Tokens: design-v3-tokens.css (var(--brand)/--text/--surface/--line) */
+.page {
+  max-width: 1400px;
+  margin: 0 auto;
+  color: var(--text);
+  font-family: var(--font-sans);
+}
 .page-header {
   display: flex;
   align-items: flex-start;
@@ -425,9 +432,43 @@ onMounted(async () => {
   margin-bottom: 20px;
   gap: 16px;
 }
-.page-header h1 { margin: 0 0 4px; font-size: 20px; }
-.page-header p { margin: 0; font-size: 13px; color: #66756d; }
-.section { margin-bottom: 16px; }
+.page-header h1 {
+  margin: 0 0 4px;
+  font-size: 22px;
+  font-weight: var(--fw-bold, 700);
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+.page-header p {
+  margin: 0;
+  font-size: 13.5px;
+  color: var(--text-3);
+  line-height: 1.55;
+}
+.section {
+  margin-bottom: 16px;
+}
+.section :deep(.el-card) {
+  border: 1px solid var(--line);
+  border-radius: var(--r-4, 12px);
+  background: var(--surface);
+  box-shadow: var(--sh-1);
+}
+.section :deep(.el-card__header) {
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.section :deep(.el-card__body) {
+  padding: 18px;
+}
+.section :deep(.el-form-item__label) {
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-weight: 500;
+}
 .inline-row {
   display: flex;
   width: 100%;
@@ -436,11 +477,25 @@ onMounted(async () => {
 .result {
   white-space: pre-wrap;
   margin: 0;
-  padding: 12px;
-  border-radius: 10px;
-  color: #d7ffe8;
-  background: #17211d;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-3, 8px);
+  color: var(--text-2);
+  background: var(--surface-3);
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  font-size: 12px;
+  line-height: 1.6;
   max-height: 420px;
   overflow: auto;
+}
+
+/* Dark theme overrides */
+html[data-theme="dark"] .section :deep(.el-card) {
+  background: var(--surface);
+  border-color: var(--line);
+}
+html[data-theme="dark"] .result {
+  background: var(--surface-3);
+  border-color: var(--line);
 }
 </style>

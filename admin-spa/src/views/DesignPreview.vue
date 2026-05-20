@@ -115,9 +115,12 @@ onMounted(load)
 </script>
 
 <style scoped>
+/* v3 token 化 · 2026-05-20 — visual refresh only. template/script untouched. */
 .design-preview {
   min-height: 100vh;
-  background: #f5f7fa;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
 }
 .error-banner {
   padding: 24px 40px;
@@ -127,26 +130,31 @@ onMounted(load)
   justify-content: space-between;
   align-items: flex-start;
   padding: 20px 40px;
-  background: #fff;
-  border-bottom: 1px solid #e4e7ed;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
 }
 .header h1 {
   margin: 0 0 8px;
   font-size: 22px;
+  line-height: 1.25;
+  font-weight: var(--fw-bold, 700);
+  letter-spacing: -0.01em;
+  color: var(--text);
 }
 .header .meta {
-  color: #909399;
+  color: var(--text-3);
   font-size: 13px;
 }
 .header .meta span {
   margin-right: 24px;
 }
 .header .meta code {
-  background: #f4f4f5;
+  background: var(--surface-2);
   padding: 1px 6px;
-  border-radius: 3px;
-  font-size: 12px;
-  color: #5e6d82;
+  border-radius: var(--r-1, 4px);
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  font-size: 11.5px;
+  color: var(--text-2);
 }
 .actions {
   display: flex;
@@ -156,7 +164,7 @@ onMounted(load)
   padding: 0 40px;
 }
 .tabs :deep(.el-tabs__nav-wrap) {
-  background: #fff;
+  background: var(--surface);
 }
 .tabs :deep(.el-tabs__content) {
   padding: 20px 0;

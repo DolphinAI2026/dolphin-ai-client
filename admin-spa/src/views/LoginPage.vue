@@ -91,32 +91,37 @@ async function onSubmit() {
 </script>
 
 <style scoped>
+/* v3 token 化 · 2026-05-20 — visual refresh only. template/script untouched.
+   Login 页改为 v3 enterprise-blue 气质：深 slate 渐变背景 + 白卡 + brand-glow 软光。 */
 .login-bg {
   min-height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
   background:
-    radial-gradient(circle at 18% 18%, rgba(91, 210, 145, .45), transparent 320px),
-    radial-gradient(circle at 82% 78%, rgba(24, 82, 61, .55), transparent 360px),
-    linear-gradient(135deg, #101915 0%, #1f3029 100%);
+    radial-gradient(circle at 18% 18%, var(--brand-glow), transparent 320px),
+    radial-gradient(circle at 82% 78%, rgba(11, 27, 63, 0.55), transparent 360px),
+    linear-gradient(135deg, var(--blue-900) 0%, #0B1224 100%);
+  font-family: var(--font-sans);
 }
 .login-card {
-  background: #fff;
-  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-4, 12px);
   padding: 32px 40px;
   width: 360px;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.2);
+  box-shadow: var(--sh-4);
 }
 .login-brand {
   font-size: 22px;
-  font-weight: 700;
-  color: #17211d;
+  font-weight: var(--fw-bold, 700);
+  letter-spacing: -0.01em;
+  color: var(--text);
   text-align: center;
 }
 .login-sub {
   font-size: 13px;
-  color: #8a93a6;
+  color: var(--text-3);
   text-align: center;
   margin-bottom: 24px;
 }
@@ -126,7 +131,7 @@ async function onSubmit() {
 .login-foot {
   margin-top: 16px;
   font-size: 12px;
-  color: #999;
+  color: var(--text-4);
   text-align: center;
   line-height: 1.6;
 }

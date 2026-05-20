@@ -233,11 +233,19 @@ onMounted(load)
 </script>
 
 <style scoped>
+/* v3 redesign · 2026-05-20 — visual refresh only, template/script untouched.
+   Tokens: design-v3-tokens.css. Tone classes (script-bound) mapped to v3 soft palettes.
+   Preserved semantic colors:
+     - connected → ok (green = state)
+     - warning → err (red = state)
+     - disabled → warn (amber = state)
+     - activity.green/blue/purple → ok/info/brand (state markers, not decoration) */
 .platform-page {
   max-width: 1440px;
   margin: 0 auto;
   padding: 8px 0 56px;
-  color: #17162f;
+  color: var(--text);
+  font-family: var(--font-sans);
 }
 
 .platform-hero {
@@ -245,99 +253,114 @@ onMounted(load)
   align-items: flex-end;
   justify-content: space-between;
   gap: 24px;
-  margin-bottom: 24px;
+  margin-bottom: 22px;
 }
 
 h1 {
   margin: 0;
-  font-size: 32px;
-  line-height: 1.2;
-  font-weight: 820;
+  font-size: 22px;
+  line-height: 1.25;
+  font-weight: var(--fw-bold, 700);
+  color: var(--text);
+  letter-spacing: -0.01em;
 }
 
 .platform-hero p {
   max-width: 980px;
-  margin: 16px 0 0;
-  color: #5f5a7c;
-  font-size: 16px;
-  line-height: 1.7;
+  margin: 8px 0 0;
+  color: var(--text-3);
+  font-size: 13.5px;
+  line-height: 1.55;
 }
 
 .refresh-button {
-  height: 42px;
-  padding: 0 18px;
+  height: 32px;
+  padding: 0 14px;
   border: 0;
-  border-radius: 9px;
-  font-weight: 760;
-  background: linear-gradient(180deg, #766bf1, #5750d8);
-  box-shadow: 0 14px 28px rgba(87, 80, 216, 0.24);
+  border-radius: var(--r-2, 6px);
+  font-size: 12.5px;
+  font-weight: 600;
+  background: var(--brand);
+  color: var(--text-inverse, #fff);
+  box-shadow: none;
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+.refresh-button:hover,
+.refresh-button:focus {
+  background: var(--brand-hover);
 }
 
 .overview-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 18px;
-  margin-bottom: 24px;
+  gap: 12px;
+  margin-bottom: 16px;
 }
 
 .overview-card {
-  min-height: 104px;
+  min-height: auto;
   display: grid;
-  grid-template-columns: 52px minmax(0, 1fr) auto;
+  grid-template-columns: 38px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 16px;
-  padding: 20px;
-  border: 1px solid #ded9eb;
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.94);
-  box-shadow: 0 10px 24px rgba(34, 30, 70, 0.07);
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-4, 12px);
+  background: var(--surface);
+  box-shadow: var(--sh-1);
 }
 
 .card-icon {
-  width: 42px;
-  height: 42px;
+  width: 38px;
+  height: 38px;
   display: grid;
   place-items: center;
-  border-radius: 9px;
-  font-size: 18px;
+  border-radius: var(--r-3, 8px);
+  font-size: 17px;
 }
 
-.tone-green { color: #13a778; background: #eaf8f3; }
-.tone-purple { color: #5750d8; background: #efedff; }
-.tone-blue { color: #1889c7; background: #eaf5ff; }
-.tone-orange { color: #dd7a13; background: #fff1e5; }
+/* Tone classes — script emits tone-green/purple/blue/orange. Map to v3 soft palettes.
+   Green/orange keep their semantic meaning (ok/warn). Purple/blue both map to brand-soft
+   since v3 has only one brand color. */
+.tone-green { color: var(--ok); background: var(--ok-soft); }
+.tone-purple { color: var(--brand); background: var(--brand-soft); }
+.tone-blue { color: var(--brand); background: var(--brand-soft); }
+.tone-orange { color: var(--warn); background: var(--warn-soft); }
 
 .overview-card h2 {
-  margin: 0 0 6px;
-  color: #17162f;
-  font-size: 18px;
-  font-weight: 820;
+  margin: 0 0 3px;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
 }
 
 .overview-card p {
   margin: 0;
-  color: #8a85a5;
-  font-size: 14px;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .card-value {
   justify-self: end;
-  padding: 4px 10px;
-  border: 1px solid #e2def0;
-  border-radius: 8px;
-  color: #625d82;
-  background: #fff;
-  font-weight: 760;
+  padding: 3px 9px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-1, 4px);
+  color: var(--text-2);
+  background: var(--surface);
+  font-size: 11px;
+  font-weight: 600;
   white-space: nowrap;
 }
 
 .service-panel,
 .activity-panel {
   overflow: hidden;
-  border: 1px solid #ded9eb;
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.94);
-  box-shadow: 0 10px 24px rgba(34, 30, 70, 0.07);
+  border: 1px solid var(--line);
+  border-radius: var(--r-4, 12px);
+  background: var(--surface);
+  box-shadow: var(--sh-1);
 }
 
 .table-head,
@@ -345,69 +368,82 @@ h1 {
   display: grid;
   grid-template-columns: minmax(260px, 1.25fr) 160px 140px minmax(320px, 1fr) 96px;
   align-items: center;
-  gap: 18px;
+  gap: 16px;
 }
 
 .table-head {
-  height: 54px;
-  padding: 0 24px;
-  color: #8a85a5;
-  background: #f3f0fb;
-  font-size: 14px;
-  font-weight: 760;
+  height: 46px;
+  padding: 0 18px;
+  color: var(--text-3);
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .service-row {
-  min-height: 76px;
-  padding: 14px 24px;
-  border-top: 1px solid #ece8f6;
+  min-height: 68px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--line);
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+
+.service-row:hover {
+  background: var(--surface-2);
 }
 
 .service-row strong {
-  color: #17162f;
-  font-size: 16px;
-  font-weight: 820;
+  color: var(--text);
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
 }
 
 .service-row p {
-  margin: 6px 0 0;
-  color: #8a85a5;
-  font-size: 13px;
+  margin: 3px 0 0;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .status-pill {
   width: max-content;
-  padding: 4px 10px;
-  border-radius: 7px;
-  font-size: 13px;
-  font-weight: 760;
+  padding: 2px 7px;
+  border-radius: var(--r-1, 4px);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
 }
 
 .status-pill.connected {
-  color: #159f78;
-  background: #effaf7;
+  color: var(--ok);
+  background: var(--ok-soft);
 }
 
 .status-pill.warning {
-  color: #f04444;
-  background: #fff0f0;
+  color: var(--err);
+  background: var(--err-soft);
 }
 
 .status-pill.disabled {
-  color: #dd7a13;
-  background: #fff1e5;
+  color: var(--warn);
+  background: var(--warn-soft);
 }
 
 .tool-count {
-  color: #625d82;
-  font-weight: 720;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 500;
 }
 
 code {
   min-width: 0;
   overflow: hidden;
-  color: #7a719d;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color: var(--text-2);
+  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
+  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -418,25 +454,38 @@ code {
   gap: 4px;
 }
 
+.row-actions :deep(.el-button) {
+  color: var(--text-2);
+}
+.row-actions :deep(.el-button:hover) {
+  color: var(--brand);
+  background: var(--brand-soft);
+}
+
 .activity-panel {
-  margin-top: 24px;
-  padding: 24px;
+  margin-top: 16px;
+  padding: 18px;
 }
 
 .section-title {
   display: flex;
   align-items: baseline;
   gap: 8px;
-  margin-bottom: 18px;
+  margin-bottom: 14px;
 }
 
 .section-title strong {
-  font-size: 18px;
+  font-size: 13.5px;
+  color: var(--text);
+  font-weight: 600;
 }
 
 .section-title span {
-  color: #8a85a5;
-  font-size: 13px;
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .activity-list {
@@ -446,10 +495,10 @@ code {
 .activity-item {
   display: grid;
   grid-template-columns: 52px 4px minmax(0, 1fr);
-  gap: 18px;
-  min-height: 58px;
+  gap: 14px;
+  min-height: 54px;
   padding: 10px 0;
-  border-top: 1px solid #ece8f6;
+  border-top: 1px solid var(--line);
 }
 
 .activity-item:first-child {
@@ -457,29 +506,33 @@ code {
 }
 
 .activity-time {
-  color: #7a719d;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color: var(--text-3);
+  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
+  font-size: 11px;
 }
 
 .activity-mark {
   width: 4px;
-  border-radius: 99px;
-  background: #5750d8;
+  border-radius: var(--r-full, 999px);
+  background: var(--brand);
 }
 
-.activity-mark.green { background: #1fb994; }
-.activity-mark.blue { background: #1f9be0; }
-.activity-mark.purple { background: #5750d8; }
+/* Activity tone markers — script emits green/blue/purple. State semantic mapping. */
+.activity-mark.green { background: var(--ok); }
+.activity-mark.blue { background: var(--info); }
+.activity-mark.purple { background: var(--brand); }
 
 .activity-item strong {
-  color: #17162f;
-  font-size: 15px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .activity-item p {
-  margin: 6px 0 0;
-  color: #8a85a5;
-  font-size: 13px;
+  margin: 3px 0 0;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 @media (max-width: 1180px) {
@@ -510,6 +563,22 @@ code {
   .overview-grid {
     grid-template-columns: 1fr;
   }
+}
 
+/* Dark theme overrides */
+html[data-theme="dark"] .overview-card,
+html[data-theme="dark"] .service-panel,
+html[data-theme="dark"] .activity-panel {
+  background: var(--surface);
+  border-color: var(--line);
+}
+html[data-theme="dark"] .table-head {
+  background: var(--surface);
+}
+html[data-theme="dark"] .service-row:hover {
+  background: var(--surface-2);
+}
+html[data-theme="dark"] .card-value {
+  background: var(--surface);
 }
 </style>
