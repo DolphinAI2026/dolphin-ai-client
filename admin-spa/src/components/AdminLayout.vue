@@ -1,9 +1,6 @@
 <template>
-  <!-- v3 2026-05-20 (FINAL): admin-spa AdminLayout 重写
-       不再用 Element Plus el-container/el-aside/el-menu/el-header
-       完全 mirror frontend/src/components/v2/RailSidebar.vue + ShellTopBar.vue 的
-       DOM 结构和 class 命名，让两个 SPA 视觉完全一致
-       -->
+  <!-- v3 2026-05-20 FINAL FIX: 严格 mirror frontend/src/components/v2/RailSidebar.vue
+       所有尺寸/padding/字号/字重 1:1 复刻，不再凭印象写。 -->
   <div class="admin-shell" :class="{ 'admin-shell-embedded': embedded }">
     <!-- ═══════════ 左 RAIL ═══════════ -->
     <aside class="rail">
@@ -48,6 +45,18 @@
             <span>返回工作台</span>
           </a>
 
+          <div class="theme-row">
+            <span class="theme-row-label">{{ isDark ? '深色模式' : '浅色模式' }}</span>
+            <button
+              type="button"
+              class="theme-toggle"
+              :aria-label="isDark ? '切换浅色主题' : '切换深色主题'"
+              @click="toggleTheme"
+            >
+              <span v-html="renderIcon(isDark ? 'moon' : 'sun')" />
+            </button>
+          </div>
+
           <div class="account-row">
             <div class="rail-avatar">{{ (auth.user?.username || 'A').slice(0, 1).toUpperCase() }}</div>
             <div class="rail-user-info">
@@ -62,7 +71,7 @@
       </div>
     </aside>
 
-    <!-- ═══════════ 主区域 (顶 TopBar + Content) ═══════════ -->
+    <!-- ═══════════ 主区域 ═══════════ -->
     <div class="admin-main-col">
       <header class="topbar">
         <div class="topbar-crumb">
@@ -82,7 +91,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 
@@ -96,7 +105,6 @@ interface MenuItem {
   icon: string
 }
 
-// v3: 用 Lucide-style svg paths（跟 frontend RailSidebar 同款），不用 Element Plus icons
 const menus: MenuItem[] = [
   { path: '/mcp',         label: 'MCP 接入',  icon: 'connection' },
   { path: '/tester',      label: 'MCP 测试',  icon: 'flask' },
@@ -114,7 +122,31 @@ const embedded = computed(() => {
   return queryEmbedded || framed
 })
 
+// 主题切换（admin-spa 没 theme store，简单 localStorage + data-theme 接管）
+const isDark = ref<boolean>((() => {
+  if (typeof window === 'undefined') return false
+  const saved = localStorage.getItem('theme')
+  return saved === 'dark'
+})())
+
+function applyTheme(dark: boolean) {
+  isDark.value = dark
+  if (typeof document !== 'undefined') {
+    document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light')
+  }
+  if (typeof localStorage !== 'undefined') {
+    localStorage.setItem('theme', dark ? 'dark' : 'light')
+  }
+}
+
+function toggleTheme() {
+  applyTheme(!isDark.value)
+}
+
 onMounted(async () => {
+  // 初始化主题
+  applyTheme(isDark.value)
+
   if (auth.isAuthenticated && !auth.user) {
     await auth.fetchMe()
   }
@@ -138,7 +170,6 @@ function returnWorkspace() {
   }
 }
 
-// 与 frontend RailSidebar 同款 SVG icon library（feather/lucide style）
 const ICONS: Record<string, string> = {
   connection: '<path d="M9 12L11 14L15 10"/><path d="M21 12A9 9 0 1 1 12 3"/>',
   flask: '<path d="M9 3h6"/><path d="M10 3v6.5L6 17a2 2 0 0 0 1.7 3h8.6A2 2 0 0 0 18 17l-4-7.5V3"/><path d="M9 13h6"/>',
@@ -148,6 +179,8 @@ const ICONS: Record<string, string> = {
   user: '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
   back: '<polyline points="15 18 9 12 15 6"/>',
   logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4 12H2M22 12h-2M6.3 6.3 4.9 4.9M19.1 19.1l-1.4-1.4M6.3 17.7l-1.4 1.4M19.1 4.9l-1.4 1.4"/>',
+  moon: '<path d="M21 13A9 9 0 0 1 11 3a9 9 0 1 0 10 10z"/>',
 }
 
 function renderIcon(name: string): string {
@@ -158,20 +191,8 @@ function renderIcon(name: string): string {
 
 <style scoped>
 /* ═══════════════════════════════════════════════════════════════════
- * v3 2026-05-20 — admin-spa AdminLayout 视觉跟 frontend 完全对齐
- *
- * 复制自 frontend/src/components/v2/RailSidebar.vue 关键样式：
- *   - .rail (224px width + surface-2 bg + line border)
- *   - .rail-brand (logo + title)
- *   - .rail-item (active brand-soft + 3px brand left bar)
- *   - .rail-foot console
- * 复制自 frontend/src/components/v2/ShellTopBar.vue：
- *   - .topbar (48px height + line border)
- *   - .topbar-crumb (text-3 + brand-final)
- *
- * Important: 不要用 Element Plus 的 el-aside/el-menu/el-header
- * 它们带自己的 chrome（border, padding, focus-shadow），即使 :deep 覆盖
- * 也无法跟 frontend custom DOM 完全一致。改用纯 HTML <aside><button><header>
+ * v3 2026-05-20 FINAL — 1:1 复刻 frontend RailSidebar.vue 的所有值
+ * 不再凭印象写 — 每一个 px / padding / font-size 都对照源文件
  * ═══════════════════════════════════════════════════════════════════ */
 
 .admin-shell {
@@ -193,76 +214,82 @@ function renderIcon(name: string): string {
   overflow: hidden;
 }
 
-/* ─── Rail (左 sidebar) ────────────────────────────────────────── */
+/* ─── Rail (跟 frontend 1:1) ──────────────────────────────────── */
 .rail {
   width: 224px;
   height: 100%;
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
+  overflow: hidden;
+  color: var(--text);
   background: var(--surface-2);
   border-right: 1px solid var(--line);
-  overflow: hidden;
 }
 
 .rail-brand {
+  min-height: 60px;
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 14px 14px;
-  min-height: 56px;
+  padding: 14px 16px 12px;
 }
 
 .rail-logo {
-  width: 32px;
-  height: 32px;
-  border-radius: var(--r-2, 6px);
+  width: 28px;
+  height: 28px;
   display: grid;
   place-items: center;
-  color: var(--text-inverse, #fff);
-  background: linear-gradient(135deg, var(--blue-500, #3B82F6), var(--blue-800, #1E40AF));
-  box-shadow: var(--sh-brand, 0 8px 22px -8px rgba(29, 78, 216, 0.32));
   flex-shrink: 0;
+  color: var(--text-inverse);
+  background: var(--brand);
+  border: none;
+  border-radius: var(--r-2, 6px);
+  box-shadow: var(--sh-2);
 }
 
 .rail-brand-copy { min-width: 0; }
 
 .rail-title {
   color: var(--text);
-  font-size: 13px;
+  font-size: 16px;
   font-weight: var(--fw-bold, 700);
-  line-height: 1.2;
   letter-spacing: -0.01em;
+  line-height: 1.1;
+  white-space: nowrap;
 }
 
 .rail-title-sub {
+  margin-top: 3px;
   color: var(--text-3);
-  font-size: 10.5px;
+  font-size: 11.5px;
   font-weight: var(--fw-medium, 500);
-  margin-top: 2px;
-  letter-spacing: 0.04em;
+  white-space: nowrap;
 }
 
-/* ─── Rail items (nav) ─────────────────────────────────────────── */
+/* ─── Nav (跟 frontend 1:1) ───────────────────────────────────── */
 .rail-scroll {
   flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 10px 10px;
   overflow-y: auto;
+  padding: 8px 10px 10px;
 }
 
 .rail-item {
+  position: relative;
+  width: 100%;
+  min-height: 36px;
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 0 12px;
-  height: 36px;
-  border: 0;
-  border-radius: var(--r-3, 8px);
-  background: transparent;
+  padding: 0 10px;
   color: var(--text-2);
+  background: transparent;
+  border: none;
+  border-radius: var(--r-3, 8px);
   font-family: inherit;
   font-size: 13px;
   font-weight: var(--fw-medium, 500);
@@ -273,15 +300,25 @@ function renderIcon(name: string): string {
 }
 
 .rail-item:hover {
-  background: var(--brand-soft);
-  color: var(--brand);
+  color: var(--text);
+  background: var(--surface);
 }
 
 .rail-item.active {
-  background: var(--brand-soft);
   color: var(--brand);
+  background: var(--brand-soft);
   font-weight: var(--fw-semibold, 600);
-  box-shadow: inset 3px 0 0 var(--brand);
+}
+
+.rail-item.active::before {
+  content: '';
+  position: absolute;
+  left: -2px;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  border-radius: 0 var(--r-1, 4px) var(--r-1, 4px) 0;
+  background: var(--brand);
 }
 
 .rail-item:focus-visible {
@@ -290,56 +327,59 @@ function renderIcon(name: string): string {
 }
 
 .rail-item-icon {
-  display: grid;
-  place-items: center;
   width: 18px;
   height: 18px;
+  display: grid;
+  place-items: center;
   flex-shrink: 0;
+  color: currentColor;
 }
 
 .rail-item-label {
-  min-width: 0;
   flex: 1;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-/* ─── Rail foot (bottom console) ───────────────────────────────── */
+/* ─── Rail foot ───────────────────────────────────────────────── */
 .rail-foot {
-  padding: 10px 10px 14px;
+  padding: 8px 10px 12px;
   border-top: 1px solid var(--line);
 }
 
 .rail-console {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
+  margin-top: 4px;
 }
 
 .console-row {
+  width: 100%;
+  min-height: 32px;
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 0 10px;
-  min-height: 32px;
-  border: 0;
-  border-radius: var(--r-3, 8px);
-  background: transparent;
   color: var(--text-2);
+  background: transparent;
+  border: none;
+  border-radius: var(--r-3, 8px);
   font-family: inherit;
   font-size: 12.5px;
   font-weight: var(--fw-medium, 500);
+  cursor: pointer;
   text-align: left;
   text-decoration: none;
-  cursor: pointer;
   transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
               color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
 }
 
 .console-row:hover {
-  background: var(--brand-soft);
   color: var(--brand);
+  background: var(--brand-soft);
 }
 
 .console-row-icon {
@@ -350,11 +390,50 @@ function renderIcon(name: string): string {
   flex-shrink: 0;
 }
 
+/* ─── Theme toggle row (跟 frontend 1:1) ─────────────────────── */
+.theme-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  margin: 4px 0;
+}
+
+.theme-row-label {
+  flex: 1;
+  color: var(--text-3);
+  font-size: 11.5px;
+  font-weight: var(--fw-medium, 500);
+}
+
+.theme-toggle {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  color: var(--text-3);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-2, 6px);
+  cursor: pointer;
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+
+.theme-toggle:hover {
+  background: var(--brand-soft);
+  color: var(--brand);
+  border-color: var(--brand-ring);
+}
+
+/* ─── Account row ─────────────────────────────────────────────── */
 .account-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 10px 4px;
+  padding: 8px 10px 4px;
   margin-top: 4px;
   border-top: 1px solid var(--line);
 }
@@ -420,7 +499,7 @@ function renderIcon(name: string): string {
   color: var(--err, #B91C1C);
 }
 
-/* ─── TopBar (复制自 ShellTopBar) ────────────────────────────── */
+/* ─── TopBar (跟 frontend ShellTopBar 1:1) ──────────────────── */
 .topbar {
   display: flex;
   align-items: center;
@@ -450,6 +529,7 @@ function renderIcon(name: string): string {
 .topbar-crumb > span:first-child {
   color: var(--text-3);
   font-weight: var(--fw-medium, 500);
+  letter-spacing: -0.005em;
 }
 
 .topbar-crumb-sep {
@@ -477,13 +557,8 @@ function renderIcon(name: string): string {
   overflow-y: auto;
 }
 
-/* ─── Embedded（被 iframe 包时）──────────────────────────────
- * 之前 v-if="!embedded" 隐藏 sidebar/header — 现在永远显
- * embedded 时让"返回工作台"按钮在 sidebar 显出，hostname 跟父窗口走 */
-
 /* ═══════════════════════════════════════════════════════════════════
- * page-level :deep — 让所有 admin-spa view 内部的 .page-header 等
- * 跟 frontend BuilderFrame + h1 一样的视觉风格
+ * page :deep — admin-spa view 内部样式跟 frontend BuilderFrame 风格对齐
  * ═══════════════════════════════════════════════════════════════════ */
 .admin-content :deep(.page) {
   max-width: 1280px;
@@ -526,7 +601,6 @@ function renderIcon(name: string): string {
   justify-content: flex-end;
 }
 
-/* el-card 兼容 — 这次往 v3 v3 v3 token */
 .admin-content :deep(.el-card) {
   border: 1px solid var(--line) !important;
   border-radius: var(--r-4, 12px) !important;
@@ -626,7 +700,6 @@ function renderIcon(name: string): string {
   box-shadow: 0 0 0 2px var(--brand) inset !important;
 }
 
-/* ─── Dark theme overrides ─────────────────────────────────────── */
 html[data-theme="dark"] .rail {
   background: var(--surface-2);
 }
