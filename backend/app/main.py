@@ -24,6 +24,7 @@ from app.routes import (
     coding_v2_spec,
     conversations,
     current_app,
+    db_connections,
     dolphin_sso,
     generation_steps,
     git_connection,
@@ -187,6 +188,7 @@ app.include_router(marketplace.router, prefix="/api")
 app.include_router(templates.router, prefix="/api")
 app.include_router(platform_envs.router, prefix="/api")
 app.include_router(quick_db.router, prefix="/api")
+app.include_router(db_connections.router, prefix="/api")
 app.include_router(llm_configs.router, prefix="/api")
 app.include_router(browser.router, prefix="/api")
 app.include_router(harness.router, prefix="/api")

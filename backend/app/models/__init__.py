@@ -353,3 +353,32 @@ class DolphinAppSession(Base):
     __table_args__ = (
         UniqueConstraint("user_id", "app_id", name="uniq_user_app"),
     )
+
+
+class DbConnection(Base):
+    """数据库连接 — platform_envs 的兄弟模型，托管租户外部 DB 凭据 (fernet 加密 password)。"""
+    __tablename__ = "db_connections"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    created_by_user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    # MYSQL / PostgreSQL / SQLServer / ORACLE / DAMENG / KingBase（与 quick_db 对齐）
+    db_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    host: Mapped[str] = mapped_column(String(255), nullable=False)
+    port: Mapped[int] = mapped_column(Integer, nullable=False)
+    # `database` 是 SQL 保留字，列名加 _name 后缀；API 层 alias 回 `database`。
+    database_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    username: Mapped[str] = mapped_column(String(100), nullable=False)
+    password_enc: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # fernet 加密
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # active / disconnected
+    status: Mapped[str] = mapped_column(String(20), default="active", nullable=False)
+    last_tested_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    table_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "name", name="uq_db_conn_tenant_name"),
+    )

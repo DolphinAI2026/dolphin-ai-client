@@ -77,6 +77,11 @@ const NAV = computed<NavGroup[]>(() => [
     { key: 'marketplace', label: '组件市场',   icon: 'store',    path: '/marketplace' },
     { key: 'mcp',         label: 'MCP 管理',   icon: 'mcp',      path: '/mcp', badge: mcpStore.total || undefined },
   ]},
+  // 2026-05-20 新加"数据接入"分组 — 未来还会加 API/文件/数仓 接入，独立成组。
+  // 目前只有"数据库连接"一个入口（与 /quick-db wizard 共享连接复用）。
+  { group: '数据接入', items: [
+    { key: 'db-connections', label: '数据库连接', icon: 'database', path: '/db-connections' },
+  ]},
   { group: '管理', items: [
     { key: 'runtime', label: '运行与发布', icon: 'cloud', path: '/runtime', badge: runtimeStore.total || undefined },
     { key: 'admin',   label: '平台管理',   icon: 'admin', path: '/admin/tenants' },
@@ -108,6 +113,8 @@ const ICONS: Record<string, string> = {
   whale:    '<path d="M5 3c-1.5 0-2.2 1.2-2.2 2.4v3l-1.4 1 1.4 1v3.2c0 1.2.7 2.4 2.2 2.4"/><path d="M19 3c1.5 0 2.2 1.2 2.2 2.4v3l1.4 1-1.4 1v3.2c0 1.2-.7 2.4-2.2 2.4"/>',
   industry: '<path d="M3 21V11l6-4v4l6-4v4l6-4v14H3z"/><path d="M7 17h2M11 17h2M15 17h2"/>',
   mcp:      '<path d="M12 3 4 7v5c0 4 3.4 7.4 8 9 4.6-1.6 8-5 8-9V7z"/><path d="M8.5 11l2.5 2.5L15.5 9"/>',
+  // database：圆柱体（ellipse 顶盖 + 两条侧线 + 中段虚线表示分层）— 跟 QuickDbPage hero 的图标视觉一致
+  database: '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/>',
 }
 function renderIcon(name: string): string {
   const inner = ICONS[name] ?? ''

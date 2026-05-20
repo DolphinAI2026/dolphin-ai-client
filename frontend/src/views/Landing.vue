@@ -108,9 +108,12 @@ async function loadLanding() {
   }
 }
 
-function onToolClick(mode: 'builder' | 'coding' | 'vibe') {
+function onToolClick(mode: 'builder' | 'coding' | 'vibe' | 'db') {
   if (mode === 'builder') {
     prdInputRef.value?.click()
+  } else if (mode === 'db') {
+    // db 模式：tool button 是说明性的（列支持的 DB 类型），点了直接跳 wizard
+    router.push({ path: '/quick-db' })
   } else if (mode === 'coding') {
     // P2: open MCP picker dialog
     ElMessage.info('MCP 选择即将上线')

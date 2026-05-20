@@ -58,6 +58,21 @@ const router = createRouter({
       meta: { requiresAuth: true, navExpanded: true }
     },
     {
+      // 存量 DB 快速接入 wizard：DB 连接 → 表多选 → 业务描述 → 进度。
+      // Landing 第 4 张卡 "DB 问数" 入口。
+      path: '/quick-db',
+      name: 'QuickDb',
+      component: () => import('@/views/QuickDbPage.vue'),
+      meta: { requiresAuth: true, navExpanded: true }
+    },
+    {
+      // 数据接入 group 入口：数据库连接管理
+      path: '/db-connections',
+      name: 'DbConnections',
+      component: () => import('@/views/DbConnectionsPage.vue'),
+      meta: { requiresAuth: true, navExpanded: true }
+    },
+    {
       path: '/apps',
       name: 'Apps',
       component: () => import('@/views/Apps.vue'),
