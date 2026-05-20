@@ -208,3 +208,60 @@ html[data-theme="dark"] {
   --emerald:   var(--ok);
   --emerald-bg: var(--ok-soft);
 }
+
+/* ─── [data-design="v2"] 局部 scope 反盖 ────────────────────────────
+ *
+ * 问题：design-v2-tokens.css 在 [data-design="v2"][data-theme="dark"]
+ *   选择器里把 --surface 设成 #15131F（v2 老深色），这个选择器命中
+ *   .workbench-shell 元素 → 子元素 .mp-card 等用 var(--surface) 时
+ *   得到 v2 老色而不是 v3 #131A2E。
+ *
+ * 修法：v3 文件末尾用同款选择器追加 v3 token 值；同 specificity
+ *   后定义胜，让 v3 token 在 [data-design="v2"] 局部 scope 内也生效。
+ *
+ * 这是 v2 → v3 过渡期的兼容层，待 [data-design="v2"] 属性下线后可删。
+ */
+[data-design="v2"],
+[data-design="v2"][data-theme="light"] {
+  --bg:         #F8FAFC;
+  --bg-app:     linear-gradient(180deg, #F8FAFC 0%, #F1F5F9 100%);
+  --surface:    #FFFFFF;
+  --surface-2:  #F8FAFC;
+  --surface-3:  #F1F5F9;
+  --surface-overlay: rgba(255, 255, 255, 0.78);
+  --glass:      rgba(255, 255, 255, 0.72);
+
+  --text:    #0B1B3F;
+  --text-2:  #3F4D6B;
+  --text-3:  #64748B;
+  --text-4:  #94A3B8;
+  --text-inverse: #FFFFFF;
+
+  --line:        rgba(11, 27, 63, 0.08);
+  --line-strong: rgba(11, 27, 63, 0.14);
+  --line-focus:  rgba(29, 78, 216, 0.45);
+
+  --bg-rail: var(--surface-2);
+}
+
+[data-design="v2"][data-theme="dark"] {
+  --bg:         #0B1224;
+  --bg-app:     linear-gradient(180deg, #0B1224 0%, #0A1020 100%);
+  --surface:    #131A2E;
+  --surface-2:  #182142;
+  --surface-3:  #1F2A50;
+  --surface-overlay: rgba(19, 26, 46, 0.78);
+  --glass:      rgba(19, 26, 46, 0.78);
+
+  --text:    #E8EEFB;
+  --text-2:  #A8B4D0;
+  --text-3:  #6F7DA0;
+  --text-4:  #4C587A;
+  --text-inverse: #0B1224;
+
+  --line:        rgba(255, 255, 255, 0.07);
+  --line-strong: rgba(255, 255, 255, 0.13);
+  --line-focus:  rgba(96, 165, 250, 0.55);
+
+  --bg-rail: var(--surface-2);
+}

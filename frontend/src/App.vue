@@ -23,7 +23,11 @@ const showAssistant = computed(() => {
 </script>
 
 <template>
-  <RouterView />
+  <RouterView v-slot="{ Component }">
+    <transition name="page" mode="out-in">
+      <component :is="Component" />
+    </transition>
+  </RouterView>
   <HelpAssistant v-if="showAssistant" />
 </template>
 
@@ -36,6 +40,7 @@ const showAssistant = computed(() => {
 
 html, body, #app {
   height: 100%;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  /* v3: use --font-sans token (Inter + Noto Sans SC), with system fallback */
+  font-family: var(--font-sans, 'Inter', 'Noto Sans SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif);
 }
 </style>
