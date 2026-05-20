@@ -69,7 +69,6 @@
               <span class="art-card-icon">📄</span>
               <span class="art-card-name">{{ artifact.filename }}</span>
               <span class="art-card-version">v{{ artifact.version }}</span>
-              <!-- Plan C: inline "→ Builder" 只在已部署过时显示。首次部署走右侧蓝图 tab 🚀 -->
               <button
                 v-if="isMarkdownArtifact(artifact.raw) && !!getCachedAppId(currentSession?.id ?? 0, artifact.filename)"
                 class="art-card-handoff"
@@ -190,13 +189,7 @@
       </div>
       <div class="art-preview" v-if="activeArtifactContent">
         <div class="art-preview-head">
-          <!-- ═══ Plan C: 3 tabs — 蓝图 (default) / 渲染 / 原文 ═══ -->
-          <button
-            class="small-btn"
-            :class="{ active: panelTab === 'blueprint' }"
-            @click="panelTab = 'blueprint'"
-            title="把 .md 解析为结构化 SPEC（数据模型/表单/流程/角色/字典），可直接部署"
-          >应用蓝图</button>
+          <!-- 2 tabs — 渲染 / 原文 -->
           <button
             class="small-btn"
             :class="{ active: panelTab === 'rendered' }"
@@ -223,8 +216,6 @@
           <span class="art-meta-text">{{ artifactStats }}</span>
           <button class="small-btn" @click="copyArtifact" title="复制">⧉</button>
           <button class="small-btn" @click="downloadArtifact" title="下载">⤓</button>
-          <!-- "→ Builder" 按钮只在「已部署过」时显示（已经存在 app_id 才能"调整") -->
-          <!-- 首次部署用蓝图右上 🚀 按钮 — 不离开 AIChatPage -->
           <button
             v-if="canSendArtifactToBuilder && alreadyDeployedAppId"
             class="small-btn primary"
@@ -232,30 +223,8 @@
             title="跳转到 Builder 继续维护已部署应用"
           >在 Builder 中调整</button>
         </div>
-        <!-- ═══ Tab body ═══ -->
-        <div v-if="panelTab === 'blueprint'" class="art-preview-blueprint">
-          <div v-if="blueprintStore.loading" class="bp-loading">
-            <span class="bp-loading-dots"><span></span><span></span><span></span></span>
-            <span>正在解析设计文档…</span>
-          </div>
-          <div v-else-if="!blueprintReady" class="bp-empty-state">
-            <div class="bp-empty-icon">📐</div>
-            <p class="bp-empty-title">蓝图还在等 SPEC 章节</p>
-            <p class="bp-empty-sub">AI 把"数据模型 / 表单 / 流程 / 角色 / 字典"6 章节按规范写完后，这里会显示结构化蓝图。可以先看「渲染」或「原文」。</p>
-            <button class="small-btn" @click="panelTab = 'rendered'">查看渲染版</button>
-          </div>
-          <AppBlueprintPanel
-            v-else
-            class="bp-embedded"
-            :models="mappedBlueprintModels"
-            :forms="mappedBlueprintForms"
-            :flows="mappedBlueprintFlows"
-            :roles="mappedBlueprintRoles"
-            :dicts="mappedBlueprintDicts"
-            @deploy="onDeployRequest"
-          />
-        </div>
-        <pre v-else-if="panelTab === 'raw'" class="art-preview-body">{{ activeArtifactContent }}</pre>
+        <!-- Tab body -->
+        <pre v-if="panelTab === 'raw'" class="art-preview-body">{{ activeArtifactContent }}</pre>
         <div v-else class="art-preview-body md" v-html="renderMd(activeArtifactContent)"></div>
       </div>
       <div v-else class="art-empty">
@@ -270,21 +239,6 @@
     :candidates="chooseDialogCandidates"
     :loading="chooseDialogLoading"
     @confirm="onChooseDialogConfirm"
-  />
-  <!-- Plan C: 部署确认 modal — 由蓝图 tab 🚀 按钮触发 -->
-  <!-- Agent Z 在并行扩展该组件 + backend deploy endpoint; 这里 mount 完成时 props 自然 picks up -->
-  <DeployConfirmModal
-    v-model="deployModalOpen"
-    :app-name="mappedBlueprintModels[0]?.name || (activeArtifactName.replace(/\.(md|markdown)$/i, '') || '新应用')"
-    :app-code="''"
-    :changes="[]"
-    :impacts="{
-      affectedUsers: 0,
-      addedFlows: mappedBlueprintFlows.length,
-      needMigration: false,
-      etaMinutes: 2,
-    }"
-    @confirm="onDeployConfirm"
   />
   </WorkbenchShell>
 </template>
@@ -302,13 +256,10 @@ import SessionSidebar, { type SessionItem, type SessionTab, type NewSessionOptio
 import AgentConversation from '@/components/common/AgentConversation.vue'
 import VoiceInputButton from '@/components/common/VoiceInputButton.vue'
 import ChooseAppTargetDialog from '@/components/ChooseAppTargetDialog.vue'
-import AppBlueprintPanel from '@/components/v2/AppBlueprintPanel.vue'
-import DeployConfirmModal from '@/components/v2/DeployConfirmModal.vue'
 import type { AgentMessage } from '@/components/common/agent-conversation/types'
 import { ElMessage, ElMessageBox } from 'element-plus'
 // chat / cowork mode 已合并 — ChatDotRound / Folder 已无引用
 import { applicationApi } from '@/api/application'
-import { useAIChatBlueprintStore } from '@/stores/aiChatBlueprint'
 
 const previewStore = usePreviewStore()
 const themeStore = useThemeStore()
@@ -516,95 +467,9 @@ const activeArtifactName = ref('')
 const activeArtifactContent = ref('')
 const artifactRawView = ref(false)
 
-// 右栏 tab：blueprint (默认) / rendered / raw
-// blueprint = 调 /specs-v2/parse-md 拿结构化数据喂 AppBlueprintPanel
-type PanelTab = 'blueprint' | 'rendered' | 'raw'
-const panelTab = ref<PanelTab>('blueprint')
-
-// Blueprint store — 解析后的 SPEC 缓存
-const blueprintStore = useAIChatBlueprintStore()
-
-// 解析失败/空时落到"渲染" tab，让用户至少能看到 md
-const blueprintReady = computed(
-  () => !blueprintStore.loading && !blueprintStore.isEmpty && !!blueprintStore.parsed,
-)
-
-// 把后端 snake_case 形状映射成 AppBlueprintPanel 的 camelCase props
-const mappedBlueprintModels = computed(() => {
-  const ms = blueprintStore.parsed?.models || []
-  return ms.map(m => ({
-    name: m.name,
-    code: m.code,
-    fields: (m.fields || []).map(f => ({
-      name: f.name || '',
-      code: f.code || '',
-      type: f.type || '',
-      required: !!f.required,
-      unique: !!f.unique,
-    })),
-  }))
-})
-const mappedBlueprintForms = computed(() => {
-  const fs = blueprintStore.parsed?.forms || []
-  return fs.map(f => ({
-    name: f.name,
-    backingModel: f.backing_model || '',
-    sections: (f.sections || []).map(s => ({
-      title: s.title || '',
-      fields: s.fields || [],
-    })),
-  }))
-})
-const mappedBlueprintFlows = computed(() => {
-  const fs = blueprintStore.parsed?.flows || []
-  return fs.map(f => ({
-    name: f.name,
-    trigger: f.trigger || '',
-    nodes: (f.nodes || []).map(n => ({
-      role: n.role || '',
-      action: n.action || '',
-      sla: n.sla,
-    })),
-  }))
-})
-const mappedBlueprintRoles = computed(() => {
-  const rs = blueprintStore.parsed?.roles || []
-  return rs.map(r => ({ name: r.name, scope: r.scope || '' }))
-})
-const mappedBlueprintDicts = computed(() => {
-  const ds = blueprintStore.parsed?.dicts || []
-  return ds.map(d => ({
-    name: d.name,
-    entries: (d.entries || []).map(e => ({ code: e.code, label: e.label })),
-  }))
-})
-
-// 部署 modal — 由 AppBlueprintPanel 的 🚀 按钮触发
-const deployModalOpen = ref(false)
-const deployBusy = ref(false)
-
-function onDeployRequest() {
-  if (!activeArtifactContent.value || !activeArtifactName.value) {
-    ElMessage.warning('当前未选中任何设计文档')
-    return
-  }
-  deployModalOpen.value = true
-}
-
-// DeployConfirmModal 暂时只走 placeholder：Agent Z 在并行加 backend deploy endpoint
-// 完成后这里改成调真 endpoint；现在点确认后退回到原来的 sendArtifactToBuilder 流程
-async function onDeployConfirm(env: 'dev' | 'test' | 'prod') {
-  deployBusy.value = true
-  try {
-    // 占位：Agent Z 的后端 deploy endpoint 尚未上线 — 暂时复用现有"选目标"流程
-    ElMessage.info(`部署到 ${env}：调用 Agent Z 的部署接口（待接入）`)
-    // 触发现有 → Builder 流程作为兜底
-    await sendArtifactToBuilder()
-  } finally {
-    deployBusy.value = false
-    // modal 内部 phase 自动进 success；2.5s 后用户关闭即可
-  }
-}
+// 右栏 tab：rendered / raw
+type PanelTab = 'rendered' | 'raw'
+const panelTab = ref<PanelTab>('rendered')
 
 // ── Render helpers ──
 
@@ -1264,27 +1129,6 @@ watch(
     if (open && n > 0 && !activeArtifactContent.value && uniqueFilenames.value[0]) {
       loadArtifactByName(uniqueFilenames.value[0])
     }
-  },
-)
-
-// 当前打开的设计文档内容变化 → 重新解析为结构化 SPEC，喂给右侧蓝图 tab
-// 切会话 / 切版本 / artifact 自动刷新都会触发
-watch(
-  () => activeArtifactContent.value,
-  (content) => {
-    if (content && /\.md$/i.test(activeArtifactName.value)) {
-      blueprintStore.parseFromContent(content)
-    } else {
-      blueprintStore.clear()
-    }
-  },
-  { immediate: false },
-)
-watch(
-  () => activeArtifactName.value,
-  (name) => {
-    // 切换非 md 文件 → 清掉蓝图
-    if (name && !/\.md$/i.test(name)) blueprintStore.clear()
   },
 )
 
@@ -2250,35 +2094,4 @@ onMounted(async () => {
 .art-preview-body.md :deep(pre) { background: var(--ac-bg); border: 1px solid var(--ac-border); border-radius: 6px; padding: 10px 12px; overflow-x: auto; }
 .art-preview-body.md :deep(pre code) { background: transparent; padding: 0; color: var(--ac-text); }
 .art-preview-body.md :deep(blockquote) { border-left: 3px solid rgba(255,255,255,0.2); padding-left: 10px; color: var(--ac-text-mute); }
-
-/* ═══ Plan C: 蓝图 tab body — 嵌入 AppBlueprintPanel ═══ */
-.art-preview-blueprint {
-  flex: 1; overflow: hidden; display: flex; flex-direction: column;
-}
-/* AppBlueprintPanel 自身用 width: 420px + border-left — 我们嵌入时去掉边框 + 填满 */
-.art-preview-blueprint .bp-embedded {
-  width: 100% !important;
-  border-left: none !important;
-  background: transparent !important;
-}
-.bp-loading {
-  display: flex; align-items: center; gap: 10px;
-  padding: 30px 18px; color: var(--ac-text-faint); font-size: 13px;
-}
-.bp-loading-dots { display: inline-flex; gap: 4px; }
-.bp-loading-dots span {
-  display: inline-block; width: 6px; height: 6px; border-radius: 50%;
-  background: var(--ac-text-faint); opacity: 0.4;
-  animation: bp-loading-blink 1.2s infinite;
-}
-.bp-loading-dots span:nth-child(2) { animation-delay: 0.2s; }
-.bp-loading-dots span:nth-child(3) { animation-delay: 0.4s; }
-@keyframes bp-loading-blink { 0%, 80%, 100% { opacity: 0.3; } 40% { opacity: 1; } }
-.bp-empty-state {
-  padding: 60px 30px 30px; text-align: center;
-  display: flex; flex-direction: column; align-items: center; gap: 8px;
-}
-.bp-empty-icon { font-size: 36px; opacity: 0.6; margin-bottom: 4px; }
-.bp-empty-title { color: var(--ac-text); font-size: 14px; font-weight: 600; margin: 0; }
-.bp-empty-sub { color: var(--ac-text-faint); font-size: 12px; line-height: 1.6; margin: 0 0 8px; max-width: 320px; }
 </style>

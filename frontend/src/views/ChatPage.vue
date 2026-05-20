@@ -1318,10 +1318,8 @@ import SpecInspector from '@/components/spec/SpecInspector.vue'
 // v2 redesign (Session 5): 3-column shell — left conversation rail + right SPEC blueprint.
 // Existing center content unchanged; new components are pure presentation, no logic.
 import ChatConversationList from '@/components/v2/ChatConversationList.vue'
-import AppBlueprintPanel from '@/components/v2/AppBlueprintPanel.vue'
 import ConfigAssistantPanel from '@/components/v2/ConfigAssistantPanel.vue'
 import DeployConfirmModal from '@/components/v2/DeployConfirmModal.vue'
-import { buildBlueprintSpec } from '@/views/chat/blueprint-adapter'
 
 const router = useRouter()
 const route = useRoute()
@@ -3496,9 +3494,7 @@ const fetchConversationList = async () => {
 }
 
 // ─────────── v2 redesign (Session 5) adapters ───────────
-// 把现有 store.preview SPEC 适配到 AppBlueprintPanel 的 strict prop shape；
 // ChatConversationList 接收 {id,title,updatedAt}[] —— 用现有 conversationList 映射。
-const blueprintSpec = computed(() => buildBlueprintSpec(store.preview as any))
 const currentIndustryPack = computed<{ name: string; objectCount: number } | null>(() => null)
 const v2ConversationItems = computed(() => conversationList.value.map((c) => ({
   id: String(c.id),
