@@ -109,6 +109,15 @@ function go(path: string) {
   router.push(path)
 }
 
+function onLogout() {
+  tenantMenuOpen.value = false
+  user.logout()
+  // 顺手清掉所有 localStorage（包含 dolphin agent cache / theme / 折叠态 等历史 key），
+  // 避免换 aPaaS 实例 / 切账号时旧状态污染。
+  try { localStorage.clear() } catch { /* private mode */ }
+  router.push({ path: '/login' })
+}
+
 // v3 2026-05-20: 平台管理打开新 tab — 用 <a target="_blank"> 让浏览器原生处理
 // 之前用 JS window.open(..., 'noopener') 的 bug：noopener 让返回值永远 null
 // 导致 fallback router.push 总是触发，新 tab 开 + 当前页也跳了
@@ -139,6 +148,7 @@ const ICONS: Record<string, string> = {
   chevronLeft: '<polyline points="15 18 9 12 15 6"/>',
   chevronRight: '<polyline points="9 18 15 12 9 6"/>',
   chevronDown: '<polyline points="6 9 12 15 18 9"/>',
+  logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>',
 }
 
 function renderIcon(name: string): string {
@@ -272,6 +282,15 @@ function renderIcon(name: string): string {
             <div class="rail-user-name">{{ userName }}</div>
             <div class="rail-user-status"><span />在线</div>
           </div>
+          <button
+            type="button"
+            class="account-logout"
+            title="退出登录"
+            aria-label="退出登录"
+            @click="onLogout"
+          >
+            <span v-html="renderIcon('logout')" />
+          </button>
         </div>
       </div>
     </div>
@@ -821,6 +840,31 @@ function renderIcon(name: string): string {
   height: 6px;
   border-radius: var(--r-full, 999px);
   background: var(--ok);
+}
+
+.account-logout {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  color: var(--text-3);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: var(--r-2, 6px);
+  cursor: pointer;
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+.account-logout:hover {
+  color: var(--danger, #ef4444);
+  background: var(--danger-soft, rgba(239, 68, 68, 0.08));
+  border-color: var(--danger-ring, rgba(239, 68, 68, 0.3));
+}
+.account-logout:focus-visible {
+  outline: 2px solid var(--line-focus, var(--brand-ring));
+  outline-offset: 2px;
 }
 
 /* ─── Collapsed state overrides (56px) ────────────────────── */
