@@ -1,8 +1,15 @@
 <template>
   <div class="llm-page">
     <section class="llm-hero">
-      <div>
-        <h1>模型配置</h1>
+      <div class="llm-hero-info">
+        <div class="llm-hero-title">
+          <h1>模型配置</h1>
+          <div class="llm-hero-badges">
+            <el-tag size="small" effect="plain">{{ configs.length }} 个配置</el-tag>
+            <el-tag size="small" type="success" effect="plain">{{ activeCount }} 启用</el-tag>
+            <el-tag size="small" type="info" effect="plain" :title="defaultConfigLabel">默认：{{ defaultConfigLabel }}</el-tag>
+          </div>
+        </div>
         <p>集中维护睿鲸AI可用的大模型供应商、模型、API Key 和默认模型，前台 Builder 与 AI Coding 直接消费这里的配置。</p>
       </div>
       <div class="hero-actions">
@@ -18,18 +25,6 @@
           新增模型
         </el-button>
       </div>
-    </section>
-
-    <section class="summary-grid">
-      <article v-for="item in summaryCards" :key="item.label" class="summary-card">
-        <div class="summary-icon" :class="item.tone">
-          <el-icon><component :is="item.icon" /></el-icon>
-        </div>
-        <div>
-          <span>{{ item.label }}</span>
-          <strong :title="item.value">{{ item.value }}</strong>
-        </div>
-      </article>
     </section>
 
     <section class="model-panel">
@@ -186,10 +181,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, markRaw, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { CircleCheck, Cpu, Lightning, Plus, Refresh, Search, Star } from '@element-plus/icons-vue'
+import { Cpu, Lightning, Plus, Refresh, Search } from '@element-plus/icons-vue'
 import { apiDel, apiGet, apiPost, apiPut } from '@/api/client'
 
 type ConfigStatus = 'active' | 'inactive' | 'error'
@@ -308,12 +303,6 @@ const defaultConfigLabel = computed(() => {
   if (!config) return '未设置'
   return `${config.config_name} · ${config.model}`
 })
-
-const summaryCards = computed(() => [
-  { label: '模型配置', value: `${configs.value.length} 个`, tone: 'tone-purple', icon: markRaw(Cpu) },
-  { label: '启用中', value: `${activeCount.value} 个`, tone: 'tone-green', icon: markRaw(CircleCheck) },
-  { label: '默认模型', value: defaultConfigLabel.value, tone: 'tone-blue', icon: markRaw(Star) },
-])
 
 function assignForm(value: Partial<LlmForm>) {
   Object.assign(form, { ...defaultForm, ...value })
@@ -504,11 +493,16 @@ async function toggleStatus(config: LlmConfig) {
 
 async function removeConfig(config: LlmConfig) {
   try {
-    await ElMessageBox.confirm(`确认删除「${config.config_name}」？删除后前台将无法再选择该模型。`, '删除模型配置', {
-      confirmButtonText: '删除',
-      cancelButtonText: '取消',
-      type: 'warning',
-    })
+    await ElMessageBox.confirm(
+      `确认删除「${config.config_name}」？此操作不可撤销，删除后前台将无法再选择该模型。`,
+      '删除模型配置',
+      {
+        confirmButtonText: '确认删除',
+        cancelButtonText: '取消',
+        confirmButtonClass: 'el-button--danger',
+        type: 'warning',
+      },
+    )
     await apiDel(`/llm-configs/${config.id}`)
     ElMessage.success('模型配置已删除')
     await loadConfigs()
@@ -536,22 +530,26 @@ onMounted(async () => {
   align-items: flex-end;
   justify-content: space-between;
   gap: 24px;
-  margin-bottom: 22px;
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--line, #ded9eb);
 }
 
 h1 {
   margin: 0;
-  font-size: 32px;
+  font-size: 26px;
   line-height: 1.2;
-  font-weight: 820;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text, #17162f);
 }
 
 .llm-hero p {
   max-width: 940px;
-  margin: 14px 0 0;
-  color: #5f5a7c;
-  font-size: 16px;
-  line-height: 1.7;
+  margin: 8px 0 0;
+  color: var(--text-3, #5f5a7c);
+  font-size: 13.5px;
+  line-height: 1.55;
 }
 
 .hero-actions {
@@ -574,60 +572,31 @@ h1 {
   box-shadow: 0 14px 28px rgba(87, 80, 216, 0.24);
 }
 
-.summary-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 18px;
-  margin-bottom: 20px;
+.llm-hero-info {
+  min-width: 0;
+  flex: 1;
 }
 
-.summary-card {
-  min-height: 94px;
+.llm-hero-title {
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 20px;
-  border: 1px solid #ded9eb;
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.94);
-  box-shadow: 0 10px 24px rgba(34, 30, 70, 0.07);
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
-.summary-card > div:last-child {
-  min-width: 0;
+.llm-hero-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
-.summary-icon {
-  width: 44px;
-  height: 44px;
-  display: grid;
-  place-items: center;
-  border-radius: 10px;
-  font-size: 19px;
-}
-
-.summary-card span {
-  display: block;
-  color: #8a85a5;
-  font-size: 14px;
-  font-weight: 720;
-}
-
-.summary-card strong {
-  display: block;
-  margin-top: 6px;
-  color: #17162f;
-  font-size: 22px;
-  line-height: 1.1;
-  font-weight: 820;
+.llm-hero-badges :deep(.el-tag) {
+  max-width: 280px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
-.tone-green { color: #13a778; background: #eaf8f3; }
-.tone-purple { color: #5750d8; background: #efedff; }
-.tone-blue { color: #1889c7; background: #eaf5ff; }
 
 .model-panel {
   overflow: hidden;
@@ -882,7 +851,6 @@ code {
     width: min(100%, 360px);
   }
 
-  .summary-grid,
   .config-grid {
     grid-template-columns: 1fr;
   }

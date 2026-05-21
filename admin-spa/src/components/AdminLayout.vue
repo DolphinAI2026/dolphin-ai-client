@@ -47,17 +47,15 @@
             <span>返回工作台</span>
           </a>
 
-          <div class="theme-row">
-            <span class="theme-row-label">{{ isDark ? '深色模式' : '浅色模式' }}</span>
-            <button
-              type="button"
-              class="theme-toggle"
-              :aria-label="isDark ? '切换浅色主题' : '切换深色主题'"
-              @click="toggleTheme"
-            >
-              <span v-html="renderIcon(isDark ? 'moon' : 'sun')" />
-            </button>
-          </div>
+          <button
+            type="button"
+            class="theme-row"
+            :aria-label="isDark ? '切换到浅色模式' : '切换到深色模式'"
+            @click="toggleTheme"
+          >
+            <span class="theme-row-icon" v-html="renderIcon(isDark ? 'moon' : 'sun')" />
+            <span class="theme-row-label">{{ isDark ? '深色模式 · 切到浅色' : '浅色模式 · 切到深色' }}</span>
+          </button>
 
           <div class="account-row">
             <div class="rail-avatar">{{ (auth.user?.username || 'A').slice(0, 1).toUpperCase() }}</div>
@@ -405,42 +403,52 @@ function renderIcon(name: string): string {
   flex-shrink: 0;
 }
 
-/* ─── Theme toggle row (跟 frontend 1:1) ─────────────────────── */
+/* ─── Theme toggle row — 整行可点击 ─────────────────────────── */
 .theme-row {
+  width: 100%;
+  min-height: 32px;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 10px;
+  padding: 0 10px;
   margin: 4px 0;
+  color: var(--text-2);
+  background: transparent;
+  border: none;
+  border-radius: var(--r-3, 8px);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: var(--fw-medium, 500);
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+
+.theme-row:hover {
+  color: var(--brand);
+  background: var(--brand-soft);
+}
+
+.theme-row:focus-visible {
+  outline: 2px solid var(--line-focus, var(--brand-ring));
+  outline-offset: -2px;
+}
+
+.theme-row-icon {
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
 }
 
 .theme-row-label {
   flex: 1;
-  color: var(--text-3);
-  font-size: 11.5px;
-  font-weight: var(--fw-medium, 500);
-}
-
-.theme-toggle {
-  width: 28px;
-  height: 28px;
-  display: grid;
-  place-items: center;
-  flex-shrink: 0;
-  color: var(--text-3);
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--r-2, 6px);
-  cursor: pointer;
-  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
-              color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
-              border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
-}
-
-.theme-toggle:hover {
-  background: var(--brand-soft);
-  color: var(--brand);
-  border-color: var(--brand-ring);
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ─── Account row ─────────────────────────────────────────────── */
@@ -588,13 +596,15 @@ function renderIcon(name: string): string {
   justify-content: space-between;
   gap: 20px;
   margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--line);
   flex-wrap: wrap;
 }
 
 .admin-content :deep(.page-header h1) {
   margin: 0;
   color: var(--text);
-  font-size: 22px;
+  font-size: 26px;
   line-height: 1.2;
   font-weight: var(--fw-bold, 700);
   letter-spacing: -0.02em;
@@ -602,7 +612,7 @@ function renderIcon(name: string): string {
 
 .admin-content :deep(.page-header p) {
   max-width: 720px;
-  margin: 6px 0 0;
+  margin: 8px 0 0;
   color: var(--text-3);
   font-size: 13.5px;
   line-height: 1.55;
