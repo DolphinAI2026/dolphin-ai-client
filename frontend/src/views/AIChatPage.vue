@@ -935,10 +935,19 @@ function onAgentAnswerAsk(option: string) {
 
 const lastEventIsAsk = computed(() => {
   // 最后一次工具调用是 ask_clarifying_question success → AI 在等用户回答
+  // 但前提是用户还没回答 — 如果在最后一个 ask 之后已经有新 user message，
+  // 说明用户已答, agent 正在跑下一轮, 不应再显示"等用户回答"状态
+  // (2026-05-21 fix: 之前的 bug 导致 typing bubble + thinkingLabel 在 ask → user
+  // 答 → turn 2 LLM 调用期间不渲染, 用户看不到 "AI 正在写设计文档" 文案)
   const tcs = toolCalls.value
   const last = tcs[tcs.length - 1]
   if (!last) return false
-  return last.tool_name === 'ask_clarifying_question' && last.status === 'success'
+  if (last.tool_name !== 'ask_clarifying_question' || last.status !== 'success') return false
+  // 检查最后一条 message 是不是 user message (用户已回答)
+  const msgs = messages.value
+  const lastMsg = msgs[msgs.length - 1]
+  if (lastMsg?.role === 'user') return false
+  return true
 })
 
 const canSend = computed(() => !isSending.value && (!!inputText.value.trim() || pendingFiles.value.length > 0))
