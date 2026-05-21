@@ -306,6 +306,10 @@ async def execute_tool(
 
     自动塞 session.tenant_id / session.user_id 给 MCP（很多 MCP 工具签名隐式接受
     tenant_id / user_id 做 fallback admin）。
+
+    ⚠️ Side-effect intercept (2026-05-21)：generate_app_from_doc / update_app_from_doc
+    成功调用时，把 args.md_content 落 AIChatArtifact 表（用户能在右侧面板回看 SPEC）。
+    不污染 MCP 工具本身（外部 dolphin / Claude / Cursor 调那俩工具不受影响）。
     """
     handler = TOOL_HANDLERS.get(tool_name)
     if handler:
@@ -317,10 +321,70 @@ async def execute_tool(
     # 兜底：尝试通过 MCP bridge 调本机 MCP server
     from app.ai_chat.mcp_bridge import list_mcp_tool_names_cached, call_tool as _mcp_call
     if tool_name in list_mcp_tool_names_cached():
-        return await _mcp_call(
+        result_text = await _mcp_call(
             tool_name, args,
             tenant_id=int(getattr(session, "tenant_id", 0) or 0),
             user_id=int(getattr(session, "user_id", 0) or 0),
         )
+        # SPEC artifact 落地副作用 — 仅 ai_chat 走这条 dispatcher，外部调用方不会触发
+        if tool_name in ("generate_app_from_doc", "update_app_from_doc"):
+            await _persist_spec_artifact(tool_name, args, result_text, session, db)
+        return result_text
 
     return f"错误：未知工具 '{tool_name}'"
+
+
+async def _persist_spec_artifact(
+    tool_name: str,
+    args: dict,
+    result_text: str,
+    session: AIChatSession,
+    db: AsyncSession,
+) -> None:
+    """把 generate_app_from_doc / update_app_from_doc 的 md_content 落 artifact 表。
+
+    成功失败都落（哪怕 deploy 失败，SPEC 是 agent 想表达的设计意图，得保留）。
+    失败时只 log warning 不抛 — artifact 落地是副作用，不能因此把工具结果污染。
+    """
+    import logging as _log
+    md_content = (args.get("md_content") or "").strip()
+    if not md_content:
+        return  # 没 md 内容（不该发生但防御一下）
+
+    # 文件名优先级：generate 用 args.app_name；update 用 app_id；
+    # 兜底从 result_text JSON 拿 app_name / app_id；最后用通用名
+    fname: str = ""
+    app_name = (args.get("app_name") or "").strip()
+    if app_name:
+        fname = f"{app_name}-设计文档.md"
+    elif tool_name == "update_app_from_doc" and args.get("app_id"):
+        fname = f"app-{args['app_id']}-设计文档.md"
+
+    if not fname:
+        # 尝试从 result_text 里 parse JSON 拿 app_name
+        try:
+            parsed = json.loads(result_text)
+            if isinstance(parsed, dict):
+                rname = (parsed.get("app_name") or "").strip()
+                rid = parsed.get("app_id")
+                if rname:
+                    fname = f"{rname}-设计文档.md"
+                elif rid:
+                    fname = f"app-{rid}-设计文档.md"
+        except Exception:
+            pass
+
+    if not fname:
+        fname = "app-design.md"
+
+    try:
+        await execute_write_artifact(
+            {"filename": fname, "content": md_content, "format": "md"},
+            session,
+            db,
+        )
+    except Exception as e:
+        _log.getLogger(__name__).warning(
+            "persist SPEC artifact failed (tool=%s filename=%s): %s",
+            tool_name, fname, e,
+        )

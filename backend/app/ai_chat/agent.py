@@ -627,6 +627,52 @@ async def run_agent(
 
         # 没有工具调用：output final 文本然后结束
         if not tool_calls:
+            # 2026-05-21：LLM 跑完一串工具后可能直接 stop 没输出文本（gpt-5.5 实测在
+            # generate_app_from_doc + deploy + get_application 链路尾巴沉默退出）。
+            # 用户只看到工具卡片，看不到 app_id / app_view_url 总结，体验差。
+            # → 在这里强行 inject 一段 system 提醒，再 stream 一次让它必须总结。
+            # 限定只重试一次，避免 LLM 钻牛角尖死循环空响应。
+            if not content:
+                summary_hint = {
+                    "role": "system",
+                    "content": (
+                        "你刚才调完了一串工具但没有给用户做总结。"
+                        "请用 1-3 句中文向用户说明这次操作的结果（成功/失败、关键产物）。"
+                        "如果工具结果里包含 app_id / app_view_url 等用户可用的链接或 ID，"
+                        "把它写进总结里，并加一句『点击下方蓝色按钮去打开应用验证』。"
+                        "不要再调用任何工具，只输出文本。"
+                    ),
+                }
+                retry_messages = messages + [summary_hint]
+                retry_assistant: Optional[dict] = None
+                _delta_buf = []
+                _delta_buf_len = 0
+                _delta_last_flush = time.monotonic()
+                try:
+                    async for chunk in _call_llm_stream(cfg, retry_messages, tool_schemas, abort_event):
+                        if chunk["type"] == "content_delta":
+                            _delta_buf.append(chunk["text"])
+                            _delta_buf_len += len(chunk["text"])
+                            if (
+                                _delta_buf_len >= DELTA_FLUSH_CHARS
+                                or (time.monotonic() - _delta_last_flush) >= DELTA_FLUSH_MS
+                            ):
+                                evt = _drain_delta()
+                                if evt is not None:
+                                    yield evt
+                        elif chunk["type"] == "done":
+                            evt = _drain_delta()
+                            if evt is not None:
+                                yield evt
+                            retry_assistant = chunk["message"]
+                        # 忽略 tool_call_delta — system 已经禁止工具调用，万一 LLM 不听话也不执行
+                except Exception as e:
+                    logger.warning("final-summary retry failed: %s", e)
+                if retry_assistant:
+                    forced = (retry_assistant.get("content") or "").strip()
+                    if forced:
+                        content = forced
+
             if content:
                 # 持久化 assistant message
                 asst_db = AIChatMessage(
@@ -730,18 +776,35 @@ async def run_agent(
             })
 
             # 特殊：write_artifact 成功 → 单独通知前端刷新右栏
-            if tool_name == "write_artifact" and tc_db.status == "success":
-                # 拿最新版本
+            # 2026-05-21 扩展：generate_app_from_doc / update_app_from_doc 也会
+            # 被 dispatcher 拦截把 md_content 落 artifact（见 tools._persist_spec_artifact），
+            # 这两个工具结束时也得发 artifact_created 让右栏立即刷新。
+            _emits_artifact = (
+                (tool_name == "write_artifact" and tc_db.status == "success")
+                or (tool_name in ("generate_app_from_doc", "update_app_from_doc") and tc_db.status == "success")
+            )
+            if _emits_artifact:
                 from sqlalchemy import desc as _desc
-                res = await db.execute(
-                    select(AIChatArtifact)
-                    .where(
-                        AIChatArtifact.session_id == session.id,
-                        AIChatArtifact.filename == args.get("filename"),
+                # write_artifact: filename 在 args；generate/update_app_from_doc:
+                # 不知道 dispatcher 落 artifact 用了什么 filename，直接拉本 session
+                # 最近落的那条
+                if tool_name == "write_artifact":
+                    res = await db.execute(
+                        select(AIChatArtifact)
+                        .where(
+                            AIChatArtifact.session_id == session.id,
+                            AIChatArtifact.filename == args.get("filename"),
+                        )
+                        .order_by(_desc(AIChatArtifact.version))
+                        .limit(1)
                     )
-                    .order_by(_desc(AIChatArtifact.version))
-                    .limit(1)
-                )
+                else:
+                    res = await db.execute(
+                        select(AIChatArtifact)
+                        .where(AIChatArtifact.session_id == session.id)
+                        .order_by(_desc(AIChatArtifact.id))
+                        .limit(1)
+                    )
                 art = res.scalar_one_or_none()
                 if art:
                     yield _sse("artifact_created", {
