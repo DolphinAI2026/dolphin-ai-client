@@ -281,17 +281,17 @@ function renderIcon(name: string): string {
         </a>
 
         <!-- v3 2026-05-20: 删主题色 picker 让 admin/frontend brand 始终一致蓝；只保留浅深切换 -->
-        <div class="theme-row">
-          <span class="theme-row-label">{{ isDark ? '深色模式' : '浅色模式' }}</span>
-          <button
-            type="button"
-            class="theme-toggle"
-            :aria-label="isDark ? '切换浅色主题' : '切换深色主题'"
-            @click="theme.toggle()"
-          >
-            <span v-html="renderIcon(isDark ? 'moon' : 'sun')" />
-          </button>
-        </div>
+        <!-- 2026-05-21 整 row 改成 button — 之前 label 跟太阳 icon 视觉分离体验割裂。
+             现在 icon + 文字 + 切换方向提示一体，跟 admin-spa AdminLayout 一致 -->
+        <button
+          type="button"
+          class="theme-row"
+          :aria-label="isDark ? '切换到浅色模式' : '切换到深色模式'"
+          @click="theme.toggle()"
+        >
+          <span class="theme-row-icon" v-html="renderIcon(isDark ? 'moon' : 'sun')" />
+          <span class="theme-row-label">{{ isDark ? '深色模式 · 切到浅色' : '浅色模式 · 切到深色' }}</span>
+        </button>
 
         <div class="account-row">
           <div class="rail-avatar">{{ userName.slice(0, 1).toUpperCase() }}</div>
@@ -782,53 +782,57 @@ function renderIcon(name: string): string {
 }
 
 /* ─── Theme row ──────────────────────────────────────────── */
+/* 2026-05-21 整 row 改成可点击 button — 之前 label + sun icon 分离割裂。
+   配色跟 .console-row hover/focus 一致让两个 footer entry 视觉同步 */
 .theme-row {
+  width: 100%;
   min-height: 36px;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: var(--r-3, 8px);
+  background: transparent;
   color: var(--text-2);
+  font-family: inherit;
   font-size: 12.5px;
   font-weight: var(--fw-medium, 500);
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+.theme-row:hover {
+  color: var(--brand);
+  background: var(--brand-soft);
+  border-color: var(--brand-ring);
+}
+.theme-row:focus-visible {
+  outline: 2px solid var(--line-focus, var(--brand-ring));
+  outline-offset: 2px;
+}
+
+.theme-row-icon {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  color: currentColor;
 }
 
 .theme-row-label {
+  flex: 1;
   white-space: nowrap;
-  color: var(--text-3);
-  flex-shrink: 0;
+  color: inherit;
 }
 
 /* v3 2026-05-20 fix (code review #P2-5): 删 .accent-picker / .accent-swatch /
    .accent-custom 死 CSS 块 — template 已删 picker UI（commit f5e6c0a），
    只剩 CSS 选择器没人引用 = 死代码 55 行 */
 
-.theme-toggle {
-  width: 28px;
-  height: 28px;
-  display: grid;
-  place-items: center;
-  flex-shrink: 0;
-  color: var(--text-3);
-  background: transparent;
-  border: 1px solid var(--line);
-  border-radius: var(--r-2, 6px);
-  cursor: pointer;
-  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
-              color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
-              border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
-}
-
-.theme-toggle:hover {
-  color: var(--brand);
-  background: var(--brand-soft);
-  border-color: var(--brand-ring);
-}
-
-.theme-toggle:focus-visible {
-  outline: 2px solid var(--line-focus, var(--brand-ring));
-  outline-offset: 2px;
-}
+/* 2026-05-21: 老 .theme-toggle 独立 button 已合并到 .theme-row 整 row
+   可点击，删 30 行 dead CSS */
 
 /* ─── Account row ─────────────────────────────────────── */
 .account-row {
