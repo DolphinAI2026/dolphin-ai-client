@@ -675,13 +675,17 @@ async def run_agent(
 
             if content:
                 # 持久化 assistant message
+                # 2026-05-21 fix: asyncio.shield 防 client disconnect 把 commit cancel
+                # 中断 — 之前 bug: auto-increment id 已分配但 COMMIT 命令没送达 mysql,
+                # tool_call 表 message_id 引用查不到的 id (id 跳号 242/244/246), 后续
+                # _build_initial_messages 重建 messages 序列错乱 LLM 卡死
                 asst_db = AIChatMessage(
                     session_id=session.id,
                     role="assistant",
                     content=content,
                 )
                 db.add(asst_db)
-                await db.commit()
+                await asyncio.shield(db.commit())
                 await db.refresh(asst_db)
                 yield _sse("assistant_message", {
                     "id": asst_db.id,
@@ -709,7 +713,8 @@ async def run_agent(
             extra_meta={"tool_calls": tool_calls},
         )
         db.add(asst_tool_use_db)
-        await db.commit()
+        # 2026-05-21 fix: shield 防 cancel — 见上方注释
+        await asyncio.shield(db.commit())
         await db.refresh(asst_tool_use_db)
         asst_message_id = asst_tool_use_db.id
 
@@ -742,7 +747,8 @@ async def run_agent(
                 started_at=_start_dt,
             )
             db.add(tc_db)
-            await db.commit()
+            # 2026-05-21 fix: shield 防 cancel
+            await asyncio.shield(db.commit())
             await db.refresh(tc_db)
             yield _sse("tool_call_start", {
                 "id": tc_db.id,
@@ -764,7 +770,8 @@ async def run_agent(
 
             tc_db.ended_at = datetime.utcnow()
             tc_db.duration_ms = int((time.monotonic() - _start_mono) * 1000)
-            await db.commit()
+            # 2026-05-21 fix: shield 防 cancel
+            await asyncio.shield(db.commit())
             await db.refresh(tc_db)
 
             yield _sse("tool_call_end", {
