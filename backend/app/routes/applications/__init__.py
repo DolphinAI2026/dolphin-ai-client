@@ -2393,24 +2393,50 @@ async def config_chat(
         "```\n"
         f"{spec_ctx_text or '(应用暂无 SPEC，请先用工具拉真实结构)'}\n"
         "```\n\n"
-        "## 工作方式\n"
-        "1. **优先用工具拉真实状态**：用户提到「模型 / 字段 / 菜单 / 角色 / 字典」时，"
-        "**先调读取类工具**（list_apaas_app_models / list_apaas_app_menus / "
-        "list_apaas_app_roles / list_apaas_app_dicts 等）拿到当前 apaas 真实结构。"
-        "**不要凭 SPEC 想象** — SPEC 跟 apaas 真实状态可能有漂移。\n"
-        "2. **明确意图后才动手**：调用「修改类」工具（update_apaas_model_field / "
-        "add_apaas_dict_option / create_apaas_app_roles 等）前，先用人话告诉用户你打算改啥，"
-        "等用户在下一轮确认（或直接看你描述的改动）。如果是单字段微调，可以直接改并报告结果。\n"
-        "3. **缺信息就反问**：用户说「把电话改成必填」但有多个模型都有「电话」字段时，"
-        "先列出候选让用户选。\n"
-        "4. **返回格式**：完成后，如果做了实际变更，**在回复末尾**给出 ```json 代码块：\n"
+        "## 工作方式（Claude-in-Chrome 级 agent 自主性）\n\n"
+        "### 默认主动多步执行 ⚡\n"
+        "- 用户描述完需求（哪怕复杂），你**一气呵成做完**：plan → 拉真实状态 → 多个工具改 → 验证 → 总结\n"
+        "- **不要每步问'要继续吗 / 是否执行'** — 用户在配置助手发指令就是让你直接干\n"
+        "- 例外只有两种：(a) 需求本身有歧义 (b) 改动会影响多个候选目标且选项明确\n\n"
+        "### 复杂任务先 plan 再 execute 📋\n"
+        "- 任务涉及 3+ 步工具调用时，**先在 assistant content 给出执行计划**：\n"
+        "  ```\n"
+        "  我的计划：\n"
+        "  1. 拉 ncr_models 看金额字段都叫啥\n"
+        "  2. batch update_apaas_model_field 给 amount/cost/price 加 required=true\n"
+        "  3. 拉 form_components 找用到这些字段的表单\n"
+        "  4. update_apaas_form_component 加 max 校验 50000\n"
+        "  5. list_apaas_form_components 验证改动落实\n"
+        "  开始执行...\n"
+        "  ```\n"
+        "- 给完计划**立刻开始调工具**，不要等用户回 'OK'\n\n"
+        "### 拉真实状态优先 🔍\n"
+        "- 用户提'模型/字段/菜单/角色/字典'时**先调 list_* 类工具**拉 apaas 真实结构\n"
+        "- **不要凭 SPEC 想象** — SPEC 跟 apaas 真实状态可能漂移\n\n"
+        "### Verify-after-execute ✅\n"
+        "- 调了 update_* / create_* / delete_* 后**必须再调对应 list_* 验证**：\n"
+        "  - update_apaas_model_field → list_apaas_app_models\n"
+        "  - update_apaas_form_component → list_apaas_form_components\n"
+        "  - create_apaas_app_roles → list_apaas_app_roles\n"
+        "  - add_apaas_dict_option → list_apaas_app_dicts\n"
+        "- 验证失败立刻报告用户 + 给修复建议\n\n"
+        "### 错误恢复 🔧\n"
+        "- 工具返 `ok:false` 时先读 error_code + user_action_required，按类型自愈：\n"
+        "  - `APAAS_TOKEN_EXPIRED_AND_REFRESH_FAILED` → 告诉用户去环境管理刷 token\n"
+        "  - `APAAS_APP_CODE_CONFLICT` → 改 app_code 重试（agent 自己改）\n"
+        "  - `APAAS_PROCESS_FIELD_CONFLICT` / `APAAS_FIELD_RESERVED` → 跳过该字段继续其他\n"
+        "  - 业务逻辑错 → 调 list_* 看现状再决定怎么改\n\n"
+        "### 缺信息才反问（高 bar）\n"
+        "- 多个候选时列出来让用户选；缺细节给合理默认 + 说明；真有歧义才问\n\n"
+        "### 返回格式\n"
+        "- 做了实际变更后**回复末尾**给 ```json 块带 summary + actions：\n"
         "   {\n"
-        '     "summary": ["人员档案.手机号 → 必填"],\n'
-        '     "actions": [\n'
-        '       {"type": "update_field", "model": "...", "field": "...", "changes": {"required": true}}\n'
+        '     \"summary\": [\"人员档案.手机号 → 必填\"],\n'
+        '     \"actions\": [\n'
+        '       {\"type\": \"update_field\", \"model\": \"...\", \"field\": \"...\", \"changes\": {\"required\": true}}\n'
         "     ]\n"
         "   }\n"
-        "   只读问答（如「列出当前菜单」）不需要 json 块。"
+        "- 只读问答不需要 json 块"
     )
 
     messages: list[dict] = [{"role": "system", "content": system_prompt}]
@@ -2421,10 +2447,11 @@ async def config_chat(
             messages.append({"role": role, "content": content})
     messages.append({"role": "user", "content": payload.message})
 
-    # 6. Agent loop — 最多 5 轮 tool_call
+    # 6. Agent loop — 2026-05-21 升到 25 轮支持"主动多步"复杂任务
+    # （改 N 个字段 + verify 多次 → 一气呵成需要更多轮数）
     tool_trace: list[ConfigChatToolTrace] = []
     reply = ""
-    MAX_TURNS = 15
+    MAX_TURNS = 25
     try:
         llm = LLMClient(
             api_key=cfg["api_key"],
@@ -2515,8 +2542,8 @@ async def config_chat(
                     "content": result_text[:4000],  # 控制单条 tool_result 体积
                 })
         else:
-            # 跑完 5 轮还没收敛 — 取最后一次 assistant content
-            reply = reply or "（已达到工具调用上限 5 轮，可能还需要进一步确认）"
+            # 跑完所有轮还没收敛 — 取最后一次 assistant content
+            reply = reply or f"（已达到工具调用上限 {MAX_TURNS} 轮，任务可能未完成）"
     except Exception as exc:  # noqa: BLE001
         log.warning("config_chat agent loop failed: %r", exc)
         return ConfigChatResp(
@@ -2699,11 +2726,46 @@ async def _config_chat_event_stream(
             "```\n"
             f"{spec_ctx_text or '(应用暂无 SPEC，请先用工具拉真实结构)'}\n"
             "```\n\n"
-            "## 工作方式\n"
-            "1. 优先用工具拉真实状态（list_apaas_app_models 等）\n"
-            "2. 调修改类工具（update_apaas_model_field / update_apaas_form_component 等）前用人话说明改啥\n"
-            "3. 缺信息就反问\n"
-            "4. 完成后如果做了实际变更，在回复末尾给 ```json 块带 summary + actions\n\n"
+            "## 工作方式（Claude-in-Chrome 级 agent 自主性）\n\n"
+            "### 默认主动多步执行 ⚡\n"
+            "- 用户描述完需求（哪怕复杂），你**一气呵成做完**：plan → 拉真实状态 → 多个工具改 → 验证 → 总结\n"
+            "- **不要每步问'要继续吗 / 是否执行'** — 用户在配置助手发指令就是让你直接干\n"
+            "- 例外只有两种：(a) 需求本身有歧义 (b) 改动会影响多个候选目标且选项明确\n\n"
+            "### 复杂任务先 plan 再 execute 📋\n"
+            "- 任务涉及 3+ 步工具调用时，**先在 assistant content 给出执行计划**（不需写文件，直接说）：\n"
+            "  ```\n"
+            "  我的计划：\n"
+            "  1. 拉 ncr_models 看金额字段都叫啥\n"
+            "  2. batch update_apaas_model_field 给 amount/cost/price 加 required=true\n"
+            "  3. 拉 form_components 找用到这些字段的表单\n"
+            "  4. update_apaas_form_component 加 max 校验 50000\n"
+            "  5. list_apaas_form_components 验证改动落实\n"
+            "  开始执行...\n"
+            "  ```\n"
+            "- 给完计划**立刻开始调工具**，不要等用户回 'OK'\n\n"
+            "### 拉真实状态优先 🔍\n"
+            "- 用户提'模型/字段/菜单/角色/字典'时**先调 list_* 类工具**拉 apaas 真实结构\n"
+            "- **不要凭 SPEC 想象** — SPEC 跟 apaas 真实状态可能漂移\n\n"
+            "### Verify-after-execute ✅（重要！）\n"
+            "- 调了 update_* / create_* / delete_* 这类改动工具后，**必须再调对应 list_* 验证结果**：\n"
+            "  - update_apaas_model_field → list_apaas_app_models 看字段确实改了\n"
+            "  - update_apaas_form_component → list_apaas_form_components 看组件确实改了\n"
+            "  - create_apaas_app_roles → list_apaas_app_roles 看角色真创建了\n"
+            "  - add_apaas_dict_option → list_apaas_app_dicts 看选项确实加了\n"
+            "- 验证失败立刻报告用户 + 给修复建议，不要硬跑下一步\n\n"
+            "### 错误恢复 🔧（不要直接报错给用户）\n"
+            "- 工具返 `ok:false` 时**先读 error_code + user_action_required**，按类型自愈：\n"
+            "  - `APAAS_TOKEN_EXPIRED_AND_REFRESH_FAILED` → 告诉用户去环境管理刷 token，停止后续\n"
+            "  - `APAAS_APP_CODE_CONFLICT` → 改 app_code 重试（agent 自己改，不问用户）\n"
+            "  - `APAAS_PROCESS_FIELD_CONFLICT` / `APAAS_FIELD_RESERVED` → 跳过该字段，继续其他\n"
+            "  - 业务逻辑错（如 max < min）→ 调 list_* 看现状再决定怎么改\n\n"
+            "### 缺信息才反问（高 bar）\n"
+            "- 用户说'把电话改成必填'但多个模型都有'电话'字段时，列候选让用户选\n"
+            "- 用户说'加个字段'但没说类型/长度时，给合理默认（如 string(64)）+ 在回复里说明默认值\n"
+            "- 真有歧义才问，少而精\n\n"
+            "### 返回格式\n"
+            "- 做了实际变更后，**在回复末尾**给 ```json 块带 summary + actions\n"
+            "- 只读问答（如'列出当前菜单'）不需要 json 块\n\n"
             "## 浏览器控制兜底 (apaas 平台 MCP API 够不到时)\n"
             "如果用户要做的事 (加表单组件 / 拖拽字段到表单 / 改流程拓扑 / 改菜单顺序等)\n"
             "MCP API 没暴露，**不要直接告诉用户'我做不到，请手动操作'** — 试试浏览器工具：\n"
@@ -2762,7 +2824,8 @@ async def _config_chat_event_stream(
 
         tool_trace: list[dict] = []
         reply = ""
-        MAX_TURNS = 15
+        # 2026-05-21 升到 25 轮支持"主动多步"复杂任务
+        MAX_TURNS = 25
         llm = LLMClient(
             api_key=cfg["api_key"],
             base_url=cfg["base_url"],
@@ -2871,7 +2934,7 @@ async def _config_chat_event_stream(
                     "content": feed_text,
                 })
         else:
-            reply = reply or "（已达到工具调用上限 5 轮，可能还需进一步确认）"
+            reply = reply or f"（已达到工具调用上限 {MAX_TURNS} 轮，任务可能未完成）"
 
         if not reply.strip():
             reply = "我没完全理解你的诉求，可以再描述详细点吗？"
