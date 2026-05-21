@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Optional
 
 import httpx
@@ -417,7 +418,17 @@ async def _ensure_proxy_state():
             if env:
                 if not env.token and not await _refresh_env_token(env):
                     return False
+                # token 已有时 _refresh_env_token 不会被调用 → 必须在此显式 set _proxy_state
+                # 避免 backend 重启后第一个 /platform/* 请求拿到空 host 报"missing protocol"
                 if env.token:
+                    _proxy_state["host"] = env.base_url.rstrip("/").replace("/backend", "")
+                    _proxy_state["token"] = env.token
+                    _proxy_state["tenant_id"] = env.platform_tenant_id
+                    _proxy_state["username"] = env.username or ""
+                    try:
+                        _proxy_state["password"] = decrypt_password(env.password_enc) if env.password_enc else ""
+                    except Exception:
+                        _proxy_state["password"] = ""
                     await db.commit()
                     logger.info(f"Proxy state auto-recovered: host={_proxy_state['host']}")
                     return True
@@ -495,6 +506,25 @@ async def _proxy_request(request: Request, path: str, inject_auth: bool = False)
             html_text = content.decode("utf-8", errors="replace")
             vuex = _build_vuex_state(token, _proxy_state.get("tenant_id", ""), _proxy_state.get("username", ""))
             content = _inject_sso_script(html_text, vuex).encode("utf-8")
+
+        # env.tmpl.js: 把里面的绝对 URL（VUE_APP_BASE_DOMAIN 等）改成同 origin，
+        # 防 trial 平台自带的 dev8 残留（早期版本）或 trial 自己的 URL 让 iframe 跨域绕开 proxy。
+        # 同时 no-cache 避免浏览器把老的 dev8 版本永久缓存（实测踩坑：trial 切回后 iframe 仍用浏览器 cache 跑 dev8）。
+        if "env.tmpl.js" in path:
+            try:
+                js_text = content.decode("utf-8", errors="replace")
+                # 任何 https://apaas-*.definesys.cn/backend/ 都改成相对 /backend/ — same-origin
+                js_text = re.sub(
+                    r"https?://apaas-[a-zA-Z0-9._-]+\.definesys\.cn/backend/?",
+                    "/backend/",
+                    js_text,
+                )
+                content = js_text.encode("utf-8")
+            except Exception as exc:
+                logger.warning(f"env.tmpl.js rewrite failed: {exc}")
+            resp_headers["cache-control"] = "no-cache, no-store, must-revalidate"
+            resp_headers.pop("etag", None)
+            resp_headers.pop("last-modified", None)
 
         # 缓存静态资源
         if is_static and resp.status_code == 200:
