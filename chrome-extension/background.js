@@ -104,16 +104,43 @@ async function dispatchCommand(cmd, args) {
     case "tab_info":
       return { id: tab.id, url: tab.url, title: tab.title };
     case "list_tabs": {
+      // 2026-05-21: 跟 backend browser_list_pages 字段名对齐 (pages 数组)
       const all = await chrome.tabs.query({});
       return {
         count: all.length,
-        tabs: all.map(t => ({ id: t.id, url: t.url, title: t.title, active: t.active, windowId: t.windowId })),
+        tabs: all.map(t => ({ id: t.id, url: t.url, title: t.title, active: t.active, windowId: t.windowId, type: "page" })),
+      };
+    }
+    case "select_tab": {
+      // 2026-05-21 新增 — 跟 backend browser_select_page 对齐 (chrome.tabs.update active)
+      const tabId = args.tabId;
+      if (typeof tabId !== "number") throw new Error("select_tab: tabId 必须是 number");
+      await chrome.tabs.update(tabId, { active: true });
+      if (args.bringToFront !== false) {
+        try {
+          const targetTab = await chrome.tabs.get(tabId);
+          if (targetTab.windowId !== undefined) {
+            await chrome.windows.update(targetTab.windowId, { focused: true });
+          }
+        } catch (e) { /* window 可能已关，忽略 */ }
+      }
+      return { ok: true, tabId };
+    }
+    case "screenshot": {
+      // 2026-05-21: 改用 chrome.tabs.captureVisibleTab 比 content script 截图快得多
+      // 直接拿 png dataUrl, 跟 backend browser_screenshot return schema 对齐
+      const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+      const sizeApprox = Math.floor((dataUrl.length - "data:image/png;base64,".length) * 0.75);
+      return {
+        ok: true,
+        image_data_url: dataUrl,
+        mime_type: "image/png",
+        data_size: sizeApprox,
       };
     }
     case "snapshot":
     case "click":
     case "type":
-    case "screenshot":
     case "start_recording":
     case "stop_recording":
     case "evaluate":

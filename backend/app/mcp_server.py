@@ -4420,13 +4420,30 @@ async def browser_screenshot(tenant_id: int = 0, user_id: int = 0) -> dict:
 
     比 browser_snapshot 信息更全（视觉布局、颜色、错误提示等），token 成本更高。
     建议：先 snapshot 看 a11y 结构，找不到元素再 screenshot 用视觉定位。
+
+    优先 Chrome extension (用 chrome.tabs.captureVisibleTab, 走用户真 Chrome)，
+    fallback chrome-devtools-mcp (:9222 独立 profile).
     """
     import base64 as _b64
     import os as _os
     import tempfile as _tmp
     import time as _t
-    from app.browser_mcp_bridge import browser_bridge
 
+    # 2026-05-21: ext 优先 — extension 用 chrome.tabs.captureVisibleTab 直接返 data URL
+    via_ext = await _browser_tool_via_ext_or_cdm("screenshot", {})
+    if via_ext is not None:
+        if via_ext.get("ok"):
+            res = via_ext.get("result") or {}
+            return {
+                "ok": True,
+                "source": "extension",
+                "image_data_url": res.get("image_data_url") or res.get("dataUrl"),
+                "mime_type": res.get("mime_type") or "image/png",
+                "data_size": res.get("data_size"),
+            }
+        return via_ext
+
+    from app.browser_mcp_bridge import browser_bridge
     # chrome-devtools-mcp take_screenshot 默认不返 base64，得指定 filePath 落盘
     tmp_path = _os.path.join(_tmp.gettempdir(), f"apaas_browser_shot_{int(_t.time()*1000)}.png")
     raw = await browser_bridge.call_tool(
@@ -4738,12 +4755,25 @@ async def browser_stop_recording(tenant_id: int = 0, user_id: int = 0) -> dict:
 
 @mcp.tool()
 async def browser_list_pages(tenant_id: int = 0, user_id: int = 0) -> dict:
-    """列出浏览器里所有打开的 tabs。chrome-devtools-mcp v1.0.1 的 list_pages 返空，
-    改走 Chrome CDP HTTP 端点 /json/list 拿。
+    """列出浏览器里所有打开的 tabs。优先 Chrome extension (chrome.tabs.query 拿全 tab,
+    含 cookies + 真 user profile), fallback chrome-devtools-mcp HTTP /json/list (:9222).
 
     返回 pages: [{id, url, title, type}]。AI 撞 'No page selected' 时用它定位 tab，
     再 browser_navigate 跳过去（navigate 会自动 select 那个 tab）。
     """
+    # 2026-05-21: ext 优先 — extension list_tabs 命令返完整 chrome.tabs.query 结果
+    via_ext = await _browser_tool_via_ext_or_cdm("list_tabs", {})
+    if via_ext is not None:
+        if via_ext.get("ok"):
+            res = via_ext.get("result") or {}
+            return {
+                "ok": True,
+                "source": "extension",
+                "count": res.get("count", 0),
+                "pages": res.get("tabs", []),
+            }
+        return via_ext
+
     import httpx as _httpx
     import os as _os
     base = _os.getenv("CHROME_DEVTOOLS_BROWSER_URL", "http://127.0.0.1:9222")
@@ -4763,9 +4793,9 @@ async def browser_list_pages(tenant_id: int = 0, user_id: int = 0) -> dict:
                 for p in data
                 if p.get("type") in ("page", "tab", "background_page", None)
             ]
-            return {"ok": True, "count": len(pages), "pages": pages}
+            return {"ok": True, "source": "cdm", "count": len(pages), "pages": pages}
     except Exception as exc:
-        return {"ok": False, "error_code": "CDP_FAIL", "message": str(exc)}
+        return {"ok": False, "error_code": "CDP_FAIL", "message": f"{exc}. 提示: 安装 apaas-builder-helper Chrome extension 走用户真 Chrome 路径, 不用开 --remote-debugging-port=9222"}
 
 
 @mcp.tool()
@@ -4773,7 +4803,13 @@ async def browser_select_page(page_id: int, bring_to_front: bool = True, tenant_
     """切换到指定 tab 当作"活动 page" — 后续 snapshot/click/type 都作用在它上。
 
     先 browser_list_pages 拿 pageId。bring_to_front=true 会让那个 tab 浮到前面。
+    优先 Chrome extension (chrome.tabs.update active=true), fallback chrome-devtools-mcp.
     """
+    # 2026-05-21: ext 优先 — extension select_tab cmd 用 chrome.tabs.update 激活
+    via_ext = await _browser_tool_via_ext_or_cdm("select_tab", {"tabId": page_id, "bringToFront": bring_to_front})
+    if via_ext is not None:
+        return {**via_ext, "source": "extension"}
+
     from app.browser_mcp_bridge import browser_bridge
     raw = await browser_bridge.call_tool(
         "select_page",
@@ -4783,4 +4819,4 @@ async def browser_select_page(page_id: int, bring_to_front: bool = True, tenant_
         import json as _j
         return _j.loads(raw)
     except Exception:
-        return {"ok": True, "raw": raw}
+        return {"ok": True, "source": "cdm", "raw": raw}
