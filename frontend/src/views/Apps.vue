@@ -89,6 +89,7 @@
             <span>应用</span>
             <span>阶段</span>
             <span>进度</span>
+            <span>组成</span>
             <span>更新</span>
             <span aria-hidden="true"></span>
           </div>
@@ -127,6 +128,18 @@
                 <span class="apps-progress-bar" :class="appStage(app).tone" :style="{ width: `${appProgress(app)}%` }"></span>
               </span>
               <span>{{ appProgress(app) }}%</span>
+            </div>
+
+            <!-- Fix 14 (2026-05-21): 列表视图加 "组成" 一列展示模型/表单/角色/字典 4 项核心元数据，
+                 解决"列表 vs 卡片信息密度落差"问题。无数据应用占位 - 不打扰阅读节奏。 -->
+            <div class="apps-row-metrics">
+              <template v-if="hasAppStats(app)">
+                <span class="apps-metric-chip" :title="`${app.models || 0} 模型`"><strong>{{ app.models || 0 }}</strong>模型</span>
+                <span class="apps-metric-chip" :title="`${app.forms || 0} 表单`"><strong>{{ app.forms || 0 }}</strong>表单</span>
+                <span class="apps-metric-chip" :title="`${app.roles || 0} 角色`"><strong>{{ app.roles || 0 }}</strong>角色</span>
+                <span class="apps-metric-chip" :title="`${app.dicts || 0} 字典`"><strong>{{ app.dicts || 0 }}</strong>字典</span>
+              </template>
+              <span v-else class="apps-metrics-empty">-</span>
             </div>
 
             <div class="apps-row-updated">{{ appUpdatedLabel(app) }}</div>
@@ -185,19 +198,39 @@
               <span>{{ latestHistoryTitle(app) }}</span>
               <small>{{ latestHistoryMeta(app) }}</small>
             </button>
+            <!-- Fix 15 (2026-05-21): 卡片 actions 区
+                 - "对话" 主按钮 (primary blue)
+                 - 阶段性次要动作: 构建/发布 (primary, 跟阶段挂钩)
+                 - "⋯" 更多菜单: 查看 SPEC / 进入应用 / 删除 (ghost) -->
             <div class="apps-card-actions" @click.stop>
-              <button class="apps-mini-action" type="button" @click="openDialog(app)">对话</button>
-              <button v-if="canBuildApp(app)" class="apps-mini-action primary" type="button" @click="buildApp(app)">构建</button>
+              <button class="apps-mini-action primary" type="button" @click="openDialog(app)">对话</button>
+              <button v-if="canBuildApp(app)" class="apps-mini-action" type="button" @click="buildApp(app)">构建</button>
               <button
                 v-if="canPublishApp(app)"
-                class="apps-mini-action primary"
+                class="apps-mini-action"
                 type="button"
                 :disabled="isPublishingApp(app)"
                 @click="publishApp(app)"
               >
                 {{ isPublishingApp(app) ? '发布中' : '发布' }}
               </button>
-              <button v-if="canDeleteApp(app)" class="apps-mini-action danger" type="button" @click="confirmDelete(app)">删除</button>
+              <el-dropdown
+                v-if="hasCardMoreActions(app)"
+                trigger="click"
+                placement="bottom-end"
+                @command="(cmd: 'spec' | 'platform' | 'delete') => onCardMoreCommand(app, cmd)"
+              >
+                <button class="apps-mini-action apps-more-action" type="button" title="更多操作" aria-label="更多操作">
+                  <el-icon><MoreFilled /></el-icon>
+                </button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item v-if="canViewSpec(app)" command="spec">查看 SPEC</el-dropdown-item>
+                    <el-dropdown-item v-if="canOpenInPlatform(app)" command="platform">进入应用 ↗</el-dropdown-item>
+                    <el-dropdown-item v-if="canDeleteApp(app)" command="delete" divided class="apps-more-danger">删除应用</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
             </div>
           </article>
         </div>
@@ -225,7 +258,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { Download, Grid, List, Plus } from '@element-plus/icons-vue'
+import { Download, Grid, List, MoreFilled, Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { handleError } from '@/utils/errorHandler'
 import { applicationApi } from '@/api/application'
@@ -263,7 +296,11 @@ const tabDefinitions: Array<{ label: string; value: AppTab }> = [
   { label: '草稿', value: 'draft' },
 ]
 
-const APP_ACCENTS = ['#5871e8', '#2aa871', '#d28b16', '#14aeb8', '#e35a49', '#8a65d9']
+// Fix 16 (2026-05-21): 扩展调色板 — 让每个应用图标按 (name|code|id) hash 落到不同颜色，
+// 而不是被 stage tone 强行同色（之前 deployed 全绿、draft 全灰）。6 色覆盖蓝 / 绿 / 琥珀 /
+// 青 / 珊瑚 / 紫，与 v3 token 调性吻合（不直接用 token 是因为 token 在 :root，inline
+// style 无法解析 var()）。
+const APP_ACCENTS = ['#1D4ED8', '#047857', '#B45309', '#0E7490', '#C2410C', '#7C3AED']
 
 const tabs = computed(() =>
   tabDefinitions.map(tab => ({
@@ -390,6 +427,55 @@ function openDialog(app: MergedApplication) {
   openApp(app)
 }
 
+/* ── Fix 15 (2026-05-21): 卡片视图 "更多" 菜单 ───────────────────────────
+   "对话" 仍是主按钮 + 旁边 "⋯" 弹 ElDropdown，提供 3 项次要动作：
+   - 查看 SPEC：跳 ChatPage tab=spec（hasDesignOutput 才显示）
+   - 进入应用：apaas_url 存在则新开标签页进入 aPaaS（apaas_app_id 才显示）
+   - 删除应用：canDeleteApp 才显示，触发原有 confirmDelete 二次确认
+   每项 v-if 控制可见性，菜单本身只在至少有 1 个动作可执行时才挂出。  */
+function canViewSpec(app: MergedApplication) {
+  return hasDesignOutput(app)
+}
+
+function openSpec(app: MergedApplication) {
+  const appId = String(appNumericId(app) ?? app.id)
+  const query: Record<string, string> = { app_id: appId, tab: 'spec' }
+  if (isGeneratedApp(app)) query.workspace = 'update'
+  const qs = new URLSearchParams(query).toString()
+  const path = `/chat?${qs}`
+  tabsStore.openTab({
+    id: `app:${appId}`,
+    path,
+    label: app.app_name || `应用 ${appId}`,
+    icon: 'app',
+    closable: true,
+    kind: 'app',
+  })
+  router.push({ path: '/chat', query })
+}
+
+function canOpenInPlatform(app: MergedApplication) {
+  return Boolean(app.apaas_url)
+}
+
+function openInPlatform(app: MergedApplication) {
+  if (!app.apaas_url) {
+    ElMessage.info('该应用尚未部署到 aPaaS 平台')
+    return
+  }
+  window.open(app.apaas_url, '_blank', 'noopener,noreferrer')
+}
+
+function hasCardMoreActions(app: MergedApplication) {
+  return canViewSpec(app) || canOpenInPlatform(app) || canDeleteApp(app)
+}
+
+function onCardMoreCommand(app: MergedApplication, cmd: 'spec' | 'platform' | 'delete') {
+  if (cmd === 'spec') openSpec(app)
+  else if (cmd === 'platform') openInPlatform(app)
+  else if (cmd === 'delete') confirmDelete(app)
+}
+
 function hasDesignOutput(app: MergedApplication) {
   return Boolean(hasAppStats(app) || app.config_preview || app.canonical_spec_id || app.conversation_id)
 }
@@ -506,10 +592,10 @@ function appIconInitial(app: MergedApplication): string {
 }
 
 function appAccentStyle(app: MergedApplication) {
-  const stage = appStage(app)
-  if (stage.tone === 'draft') return { background: '#aab5c5' }
-  if (stage.tone === 'danger') return { background: '#d14a61' }
-  if (stage.tone === 'success') return { background: '#2aa871' }
+  // Fix 16 (2026-05-21): icon 颜色按 (app_name|app_code|id) hash 映射到 APP_ACCENTS
+  // 6 色调色板，让不同应用的图标视觉可区分。只对 "失败" 这一种强信号保留红色（用户
+  // 一眼能挑出风险应用），其余阶段（success/active/draft）全部按 hash 走调色板。
+  if (appStage(app).tone === 'danger') return { background: '#d14a61' }
   const seed = app.app_name || app.app_code || String(app.id)
   return { background: APP_ACCENTS[nameHash(seed) % APP_ACCENTS.length] }
 }
@@ -832,9 +918,16 @@ onMounted(() => { refreshApps() })
 .apps-table-head,
 .apps-row {
   display: grid;
-  grid-template-columns: minmax(320px, 1.35fr) minmax(120px, 0.58fr) minmax(150px, 0.58fr) minmax(110px, 0.45fr) minmax(360px, 0.9fr);
+  /* Fix 14 (2026-05-21): 加 "组成" 列展示 M/F/R/D 元数据，actions 区适度收窄给元数据腾位 */
+  grid-template-columns:
+    minmax(280px, 1.2fr)   /* 应用 */
+    minmax(110px, 0.5fr)   /* 阶段 */
+    minmax(140px, 0.55fr)  /* 进度 */
+    minmax(220px, 0.85fr)  /* 组成 (M/F/R/D) */
+    minmax(100px, 0.4fr)   /* 更新 */
+    minmax(300px, 0.8fr);  /* actions */
   align-items: center;
-  column-gap: 18px;
+  column-gap: 16px;
 }
 
 .apps-table-head {
@@ -1014,8 +1107,9 @@ onMounted(() => { refreshApps() })
 }
 
 .apps-progress-track {
+  /* Fix 13 (2026-05-21): track 4px→6px 厚度更可读；--surface-2 浅灰提供柔和对比 */
   width: 80px;
-  height: 4px;
+  height: 6px;
   border-radius: var(--r-full, 999px);
   background: var(--surface-2);
   overflow: hidden;
@@ -1024,15 +1118,64 @@ onMounted(() => { refreshApps() })
 .apps-progress-bar {
   display: block;
   height: 100%;
-  border-radius: inherit;
+  border-radius: var(--r-full, 999px);
   background: var(--brand);
   transition: width 0.2s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
 }
 
+/* Fix 13 (2026-05-21): 100% 完成态从 --ok (#047857 深绿，跟浅 surface 对比过强) 改成
+   --brand (蓝) — 跟 brand 主色调一致，视觉更柔和，跟 stage-pill 的绿色独立分工：
+   pill 给出语义色，progress 给出进度色不抢戏。其它 tone 维持原色：
+   - active (进行中 / 待部署) = warn 琥珀（清晰区分"还在进行"）
+   - draft (需求理解) = text-4 中性灰
+   - danger (失败) = err 红 */
 .apps-progress-bar.active { background: var(--warn); }
-.apps-progress-bar.success { background: var(--ok); }
+.apps-progress-bar.success { background: var(--brand); }
 .apps-progress-bar.draft { background: var(--text-4); }
 .apps-progress-bar.danger { background: var(--err); }
+
+/* ── Fix 14 (2026-05-21): 列表视图 "组成" 列 — 紧凑展示 M/F/R/D 4 项 ───── */
+.apps-row-metrics {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  color: var(--text-3);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.apps-metric-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  padding: 2px 6px;
+  border-radius: var(--r-1, 4px);
+  background: var(--surface-2);
+  color: var(--text-3);
+  font-size: 11px;
+  white-space: nowrap;
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+
+.apps-row:hover .apps-metric-chip {
+  background: var(--surface);
+}
+
+.apps-metric-chip strong {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-weight: var(--fw-semibold, 600);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.apps-metrics-empty {
+  color: var(--text-4);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
 
 .apps-row-updated {
   color: var(--text-3);
@@ -1218,6 +1361,31 @@ onMounted(() => { refreshApps() })
   transform: none;
 }
 
+/* Fix 15 (2026-05-21): "⋯" 更多操作按钮 — 正方形 ghost icon button */
+.apps-mini-action.apps-more-action {
+  width: 30px;
+  min-width: 30px;
+  padding: 0;
+  color: var(--text-3);
+}
+
+.apps-mini-action.apps-more-action:hover {
+  color: var(--brand);
+}
+
+.apps-mini-action.apps-more-action .el-icon {
+  font-size: 16px;
+}
+
+/* "删除应用" 菜单项标红 */
+:deep(.apps-more-danger) {
+  color: var(--err);
+}
+:deep(.apps-more-danger:hover) {
+  color: var(--err);
+  background: var(--err-soft);
+}
+
 .apps-pagination {
   display: flex;
   justify-content: flex-end;
@@ -1274,9 +1442,15 @@ onMounted(() => { refreshApps() })
 
   .apps-row-stage,
   .apps-row-progress,
+  .apps-row-metrics,
   .apps-row-updated,
   .apps-row-actions {
     margin-left: 43px;
+  }
+
+  /* Fix 14: 窄屏堆叠时元数据 chip 单独成行也别撑爆，让它换行收窄 */
+  .apps-row-metrics {
+    flex-wrap: wrap;
   }
 
   .apps-row-actions {
