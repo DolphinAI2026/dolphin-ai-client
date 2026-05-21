@@ -172,7 +172,9 @@
               <option v-for="m in llmOptions" :key="m.id" :value="m.id">{{ m.config_name }}</option>
             </select>
             <span class="hint">{{ messages.length === 0 ? '首条消息会使用当前选择的模型' : '切换后仅影响后续对话' }}</span>
-            <span v-if="durationSec > 0" class="hint timer">· AI 思考中 {{ durationSec }}s</span>
+            <!-- 等用户回答 (ask_clarifying_question) 时 agent 没在思考，把计时器藏起来；
+                 否则显示 "AI 思考中 Ns" — 跟 typing 指示器同条件保持一致 -->
+            <span v-if="durationSec > 0 && !lastEventIsAsk" class="hint timer">· AI 思考中 {{ durationSec }}s</span>
           </div>
         </div>
       </div>

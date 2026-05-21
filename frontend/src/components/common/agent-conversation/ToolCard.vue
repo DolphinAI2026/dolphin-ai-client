@@ -17,8 +17,13 @@
            解析失败/老调用方不填时退化为只显 duration。 -->
       <span v-if="tool.resultSummary" class="tc-result-summary" :title="tool.resultSummary">{{ tool.resultSummary }}</span>
       <span v-else class="tc-meta">工具调用</span>
-      <span v-if="tool.duration_ms" class="tc-sep">·</span>
-      <span v-if="tool.duration_ms" class="tc-duration">{{ (tool.duration_ms / 1000).toFixed(1) }}s</span>
+      <!-- 时长 chip：仅当 >= 100ms 时显示。
+           - ask_clarifying_question 之类纯 signal 工具的 duration 永远 ~ 0ms，
+             显示 "0.0s" 让人误以为工具没真跑（用户实证 2026-05-21）
+           - 100ms 以下 toFixed(1) 都是 0.0s，没有信息量 — 去掉减噪音
+           - >= 100ms 的工具（aPaaS API / SSE 等）才显示，仍是 "0.1s / 25.0s" 形式 -->
+      <span v-if="tool.duration_ms && tool.duration_ms >= 100" class="tc-sep">·</span>
+      <span v-if="tool.duration_ms && tool.duration_ms >= 100" class="tc-duration">{{ (tool.duration_ms / 1000).toFixed(1) }}s</span>
       <span class="tc-toggle">›</span>
     </div>
     <div class="tc-body" v-if="expanded">

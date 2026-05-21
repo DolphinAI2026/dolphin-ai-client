@@ -191,6 +191,18 @@ function renderIcon(name: string): string {
         <div class="rail-title">睿鲸AI</div>
         <div class="rail-title-sub">AI · 低代码</div>
       </div>
+      <!-- 收起按钮放在 brand 区右侧 — 跟 SessionSidebar 的 « 按钮位置一致，
+           比放底部更顺手。展开 / 收起两个状态用同一个 button，方向不一样。 -->
+      <button
+        v-if="!effectiveCollapsed"
+        type="button"
+        class="rail-collapse-top"
+        title="收起导航"
+        aria-label="收起导航"
+        @click="toggleCollapsed"
+      >
+        <span v-html="renderIcon('chevronLeft')" />
+      </button>
     </div>
 
     <button
@@ -220,16 +232,7 @@ function renderIcon(name: string): string {
     </nav>
 
     <div class="rail-foot">
-      <button
-        type="button"
-        class="rail-collapse-btn"
-        :title="effectiveCollapsed ? '展开导航' : '收起导航'"
-        :aria-label="effectiveCollapsed ? '展开导航' : '收起导航'"
-        @click="toggleCollapsed"
-      >
-        <span v-html="renderIcon(effectiveCollapsed ? 'chevronRight' : 'chevronLeft')" />
-        <span v-if="!effectiveCollapsed">收起</span>
-      </button>
+      <!-- 老的 .rail-collapse-btn 已移到顶部 brand 区，这里删掉减少重复入口 -->
 
       <div v-if="!effectiveCollapsed" class="rail-console">
         <div class="rail-console-label">当前租户</div>
@@ -380,6 +383,34 @@ function renderIcon(name: string): string {
 
 .rail-brand-copy {
   min-width: 0;
+  flex: 1;
+}
+
+/* 顶部 brand 区右侧的小收起按钮，跟 SessionSidebar 的 « 形态对齐 */
+.rail-collapse-top {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  margin-left: auto;
+  color: var(--text-3);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r-2, 6px);
+  cursor: pointer;
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+.rail-collapse-top:hover {
+  background: var(--brand-soft);
+  color: var(--brand);
+  border-color: var(--brand-ring);
+}
+.rail-collapse-top:focus-visible {
+  outline: 2px solid var(--line-focus, var(--brand-ring));
+  outline-offset: 2px;
 }
 
 .rail-title {
