@@ -1,34 +1,20 @@
 <script setup lang="ts">
-import { computed, watch } from 'vue'
+import { watch } from 'vue'
 import { RouterView, useRoute } from 'vue-router'
-import HelpAssistant from '@/components/HelpAssistant.vue'
-import { useUserStore } from '@/stores/user'
 import { useTabsStore } from '@/stores/tabs'
 
+// 2026-05-21 dolphin agent 浮窗 (HelpAssistant) 暂时下线 — 用户决策：
+// 现 /ai-chat 内置 gpt-5.5 加 MCP 工具能力后，浮窗 dolphin agent 变冗余。
+// 后端 dolphin_sso 路由 + HelpAssistant.vue + DolphinAgentEmbed 文件全保留可逆。
+
 const route = useRoute()
-const userStore = useUserStore()
 const tabsStore = useTabsStore()
 
-// 同步当前路由到 tab activeId（用户按浏览器后退/前进 / 手动改 URL 时）
 watch(
   () => route.fullPath,
   (path) => tabsStore.syncFromRoute(path),
   { immediate: true },
 )
-
-// 助手浮窗在顶层挂一次（路由切换不重新挂）：登录前 / 嵌入模式 / iframe 内都不挂
-function isInIframe(): boolean {
-  if (typeof window === 'undefined') return false
-  try { return window.self !== window.top } catch { return true }
-}
-const showAssistant = computed(() => {
-  if (!userStore.token) return false
-  if (route.path === '/login' || route.path === '/tenant-select') return false
-  if (route.query.embed_nav === '0') return false
-  if (route.query.embed === 'app_chat') return false
-  if (isInIframe()) return false
-  return true
-})
 </script>
 
 <template>
@@ -41,7 +27,6 @@ const showAssistant = computed(() => {
       <component :is="Component" :key="$route.fullPath" />
     </KeepAlive>
   </RouterView>
-  <HelpAssistant v-if="showAssistant" />
 </template>
 
 <style>
