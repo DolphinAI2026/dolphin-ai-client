@@ -160,25 +160,35 @@ function onLogout() {
 function returnWorkspace() {
   if (typeof window === 'undefined') return
   if (window.self !== window.top && window.top) {
-    try {
-      window.top.location.href = '/ai-builder/'
-    } catch {
-      // v3 2026-05-20 fix (code review #P1): targetOrigin 用具体值不要 '*'
-      // 跨 origin 时 referrer 头部能拿到父 origin；测不到时 fallback 用 location.ancestorOrigins
-      const parentOrigin = (() => {
-        try {
-          if (document.referrer) return new URL(document.referrer).origin
-          if (window.location.ancestorOrigins?.length) return window.location.ancestorOrigins[0]
-          return null
-        } catch { return null }
-      })()
-      if (parentOrigin) {
-        window.parent?.postMessage({ type: 'admin-return-workspace' }, parentOrigin)
-      }
-      // 父 origin 拿不到 → 静默 fail（不发 '*' 防止任意 iframe 接到）
+    // 2026-05-21 修：之前先尝试 `window.top.location.href = '/ai-builder/'`
+    // — **相对 URL** 不是按 top 的 origin 解析，而是按当前 iframe 的 origin 解析
+    // (admin-spa dev :5174)，结果 top 被导航到 http://localhost:5174/ai-builder/
+    // 整个 tab 跑到 admin-spa 端口去了。
+    //
+    // 修法：永远走 postMessage 让 parent (frontend :5173 + import.meta.env.BASE_URL)
+    // 自己决定跳哪个 URL。原 catch 分支早就是这个逻辑，干脆把它提到默认路径。
+    const parentOrigin = (() => {
+      try {
+        if (document.referrer) return new URL(document.referrer).origin
+        if (window.location.ancestorOrigins?.length) return window.location.ancestorOrigins[0]
+        return null
+      } catch { return null }
+    })()
+    if (parentOrigin) {
+      window.parent?.postMessage({ type: 'admin-return-workspace' }, parentOrigin)
     }
+    // 父 origin 拿不到 → 静默 fail（不发 '*' 防止任意 iframe 接到）
   } else {
-    router.push('/')
+    // admin-spa 独立访问（非 iframe 嵌入），跳到 frontend 的工作台。
+    // 注意 admin-spa router base 是 '/'，所以这里不能用 router.push 跳到
+    // frontend SPA，直接 window.location.assign 到 frontend dev origin。
+    if (typeof window !== 'undefined') {
+      // dev: frontend 在 :5173，admin-spa 在 :5174；prod: 同 origin 不同 path
+      const frontendOrigin = import.meta.env.DEV
+        ? `${window.location.protocol}//${window.location.hostname}:5173`
+        : window.location.origin
+      window.location.assign(`${frontendOrigin}/ai-builder/`)
+    }
   }
 }
 
