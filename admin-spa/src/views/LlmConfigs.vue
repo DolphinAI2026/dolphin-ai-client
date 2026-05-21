@@ -154,7 +154,10 @@
 
         <div class="form-grid form-grid-three">
           <el-form-item label="Max Tokens" prop="max_tokens">
-            <el-input-number v-model="form.max_tokens" :min="512" :max="200000" :step="512" controls-position="right" />
+            <!-- 2026-05-21 上限从 200000 (200K) 提到 2000000 (2M)
+                 现 Claude Sonnet 4.6 / gpt-5.x 都支持 1M context，
+                 留 2M buffer 防未来模型再翻倍。step 1024 不再 512 以适应大值。 -->
+            <el-input-number v-model="form.max_tokens" :min="512" :max="2000000" :step="1024" controls-position="right" />
           </el-form-item>
           <el-form-item label="Temperature" prop="temperature">
             <el-input-number v-model="form.temperature" :min="0" :max="2" :step="0.1" controls-position="right" />
