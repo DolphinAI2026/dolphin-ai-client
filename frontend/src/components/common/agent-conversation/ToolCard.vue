@@ -12,7 +12,11 @@
       <span class="tc-name">{{ tool.name }}</span>
       <span v-if="brief" class="tc-args">{{ brief }}</span>
       <span class="tc-spacer"></span>
-      <span class="tc-meta">工具调用</span>
+      <!-- 结果摘要 chip：父组件按工具名解析 result 后填 tool.resultSummary，
+           让一眼能看出工具做成了什么 — 比单看 "0.0s" 直观得多。
+           解析失败/老调用方不填时退化为只显 duration。 -->
+      <span v-if="tool.resultSummary" class="tc-result-summary" :title="tool.resultSummary">{{ tool.resultSummary }}</span>
+      <span v-else class="tc-meta">工具调用</span>
       <span v-if="tool.duration_ms" class="tc-sep">·</span>
       <span v-if="tool.duration_ms" class="tc-duration">{{ (tool.duration_ms / 1000).toFixed(1) }}s</span>
       <span class="tc-toggle">›</span>
@@ -187,6 +191,18 @@ function formatArgs(args: any): string {
   color: rgba(116, 128, 171, 0.85);
   font-size: 11.5px;
 }
+/* 结果摘要 chip — 比 .tc-meta 更醒目（深色字 + 浅底）让用户一眼扫到 */
+.tc-result-summary {
+  color: rgba(31, 41, 55, 0.92);
+  font-size: 11.5px;
+  font-weight: 500;
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tool-card.status-success .tc-result-summary { color: #15803d; }
+.tool-card.status-error .tc-result-summary { color: #b91c1c; }
 .tc-duration {
   font-size: 11.5px;
   color: rgba(116, 128, 171, 0.85);

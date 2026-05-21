@@ -81,6 +81,31 @@
             <div class="art-card-preview" v-if="artifact.preview">{{ artifact.preview }}</div>
           </div>
         </template>
+        <!-- 应用就绪 CTA — generate_app_from_doc / deploy_application 成功后 inline 一张大卡，
+             一键跳 app_view_url（或 fallback 到 /chat?app_id=N）。
+             比让用户从工具卡 result JSON 里抠 app_id 直观得多。 -->
+        <template #custom="{ message }">
+          <div
+            v-if="message.meta?.kind === 'app-ready' && message.meta?.info"
+            class="app-ready-cta"
+            @click="openAppReady(message.meta.info)"
+          >
+            <div class="cta-icon">🚀</div>
+            <div class="cta-body">
+              <div class="cta-title">应用「{{ message.meta.info.appName }}」已就绪</div>
+              <div class="cta-sub">
+                <span v-if="message.meta.info.appId">app_id={{ message.meta.info.appId }}</span>
+                <span v-if="message.meta.info.appId && message.meta.info.apaasAppId" class="cta-sub-sep">·</span>
+                <span v-if="message.meta.info.apaasAppId">apaas_app_id={{ message.meta.info.apaasAppId }}</span>
+                <span v-if="message.meta.info.appCode" class="cta-sub-sep">·</span>
+                <span v-if="message.meta.info.appCode">{{ message.meta.info.appCode }}</span>
+              </div>
+            </div>
+            <button class="cta-action" type="button" @click.stop="openAppReady(message.meta.info)">
+              打开应用 →
+            </button>
+          </div>
+        </template>
         <template #typing>
           <div class="ai-avatar pulsing">AI</div>
           <div class="bubble thinking-bubble">
@@ -508,6 +533,194 @@ const toolArgsBrief = (tc: AIChatToolCall): string => {
   return ''
 }
 
+/**
+ * 安全解析 tool 的 result_text JSON。MCP 工具走 streamable HTTP，result_text 通常是
+ * `{"ok": true, ...}` 形态；本地工具（read_attachment/write_artifact 等）也是 JSON。
+ * 解析失败返回 null — 上层降级到默认显示，避免崩。
+ */
+function _parseToolResult(text: string | null | undefined): any | null {
+  if (!text) return null
+  try {
+    return JSON.parse(text)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 按工具名 + result JSON 生成一行摘要 chip，让用户一眼看出工具做成了什么。
+ * status=error 时全部退化到"❌ {error_code or message}"。
+ * 解析失败/不认识的工具 → 返回空串，ToolCard 退化到默认 "工具调用 · Xs"。
+ */
+function summarizeToolResult(name: string, status: string, resultText: string | null | undefined): string {
+  // 失败时优先用 error message / error_code
+  if (status === 'error' || status === 'aborted') {
+    const r = _parseToolResult(resultText) || {}
+    const ec = r.error_code || r.code
+    const msg = r.message || r.error || r.detail
+    if (ec) return `❌ ${ec}`
+    if (msg) return `❌ ${String(msg).slice(0, 60)}`
+    return '❌ 调用失败'
+  }
+  if (status !== 'success') return ''  // running / pending 不显摘要
+
+  const r = _parseToolResult(resultText)
+  if (!r) return ''
+
+  // MCP 平台工具
+  if (name === 'list_platform_envs') {
+    const envs: any[] = Array.isArray(r.envs) ? r.envs : []
+    const count = r.connected_count ?? envs.filter(e => e?.status === 'connected').length ?? envs.length
+    const def = envs.find(e => e?.is_default) || envs[0]
+    if (def?.name) return `✅ 找到 ${count} 个环境，默认 ${def.name}`
+    return `✅ 找到 ${count} 个环境`
+  }
+  if (name === 'validate_builder_doc' || name === 'validate_apaas_builder_doc') {
+    const errs: any[] = Array.isArray(r.errors) ? r.errors : []
+    const warns: any[] = Array.isArray(r.warnings) ? r.warnings : []
+    const sections = r.section_count ?? r.sections_count ?? (Array.isArray(r.sections) ? r.sections.length : null)
+    if (errs.length === 0) {
+      const secPart = sections != null ? `${sections} 章节 / ` : ''
+      return `✅ 校验通过 ${secPart}${warns.length} warning`
+    }
+    return `⚠️ ${errs.length} 个错误 / ${warns.length} warning`
+  }
+  if (name === 'generate_app_from_doc') {
+    if (r.ok === false) return '❌ 生成失败'
+    const appId = r.app_id ?? r.application_id
+    const appName = r.app_name || r.application_name || ''
+    if (appId) return `✅ app_id=${appId}${appName ? ' ' + appName : ''}`
+    return '✅ 应用已生成'
+  }
+  if (name === 'deploy_application') {
+    if (r.ok === false) return '❌ 部署失败'
+    const apaasId = r.apaas_app_id
+    const status = r.status || r.deploy_status
+    if (apaasId) return `✅ 部署完成 apaas_app_id=${apaasId}`
+    if (status === 'pending' || status === 'running') return '🟡 后台部署中'
+    return '✅ 部署完成'
+  }
+  if (name === 'get_application') {
+    const appName = r.app_name || r.application_name || ''
+    const st = r.status || r.app_status
+    if (appName || st) return `应用信息已就绪${appName ? '（' + appName + (st ? ', status=' + st : '') + '）' : st ? '（status=' + st + '）' : ''}`
+    return '应用信息已就绪'
+  }
+  if (name === 'list_my_applications' || name === 'list_applications' || name === 'list_apaas_apps' || name === 'list_apaas_apps_in_env') {
+    const items: any[] = Array.isArray(r.apps) ? r.apps : Array.isArray(r.applications) ? r.applications : Array.isArray(r.items) ? r.items : []
+    return `找到 ${items.length} 个应用`
+  }
+  if (name === 'ask_clarifying_question') {
+    return '⏸️ 等待用户回答'
+  }
+  if (name === 'write_artifact') {
+    const fname = r.filename || r.path
+    const ver = r.version
+    if (fname && ver != null) return `✅ ${fname} v${ver}`
+    if (fname) return `✅ ${fname}`
+    return '✅ 已写入设计文档'
+  }
+  if (name === 'read_attachment') {
+    const fname = r.filename
+    const lines = r.line_count ?? r.lines
+    if (fname && lines != null) return `✅ 读取 ${fname} (${lines} 行)`
+    if (fname) return `✅ 读取 ${fname}`
+    return '✅ 已读取附件'
+  }
+
+  // 兜底：r.ok=true / r.success=true → ✅，否则不显示（让默认 "工具调用 · Xs" 兜底）
+  if (r.ok === true || r.success === true) return '✅ 完成'
+  if (r.ok === false || r.success === false) return '❌ 失败'
+  return ''
+}
+
+/**
+ * 检测最近一次"应用就绪"事件 — 用于在对话流里 inline 渲染一张"打开应用"CTA 卡片。
+ *
+ * 触发：tool_calls 数组里存在 generate_app_from_doc / deploy_application 状态为 success
+ * 且 result JSON 含 app_id（或 apaas_app_id）。
+ *
+ * 选取规则：取最新一次（按 tool.id 倒序）匹配 tool 的 result 作为锚点；deploy 比 generate
+ * 更晚 → 自然胜出，不会出现两张 CTA。
+ *
+ * 卡片用 AgentConversation 的 #custom slot 渲染，inline 插在锚点 tool 之后。
+ */
+interface AppReadyInfo {
+  anchorToolId: number          // CTA 卡要插在哪条 tool 之后
+  appId: number | null          // ai-builder 本地 app_id
+  apaasAppId: string | null     // aPaaS 平台 app_id（部署后才有）
+  appName: string
+  appCode: string | null
+  appViewUrl: string | null     // 工具返回的 view url（若有，优先用）
+}
+const appReadyInfo = computed<AppReadyInfo | null>(() => {
+  // 跨多个 tool 合并 — 不同工具返回不同字段：
+  //   - generate_app_from_doc → app_id / app_name / app_code
+  //   - deploy_application    → ok / app_view_url (apaas_app_id 有时缺)
+  //   - get_application       → app_name / apaas_app_id / status
+  // 任一成功就触发；锚点是"最新一次成功"的 tool id（CTA 卡插它后面）。
+  const tcs = toolCalls.value
+  let anchorToolId: number | null = null
+  let appId: number | null = null
+  let apaasAppId: string | null = null
+  let appName: string = ''
+  let appCode: string | null = null
+  let appViewUrl: string | null = null
+  const TRIGGER_TOOLS = new Set(['generate_app_from_doc', 'deploy_application'])
+  const MERGE_TOOLS = new Set(['generate_app_from_doc', 'deploy_application', 'get_application'])
+  for (const tc of tcs) {
+    if (!tc) continue
+    if (tc.status !== 'success') continue
+    if (!MERGE_TOOLS.has(tc.tool_name)) continue
+    const r = _parseToolResult(tc.result_text)
+    if (!r || r.ok === false) continue
+    // merge fields — 后写的覆盖（保留最新），但只有非空才覆盖（不能把好数据洗掉）
+    if (appId == null) {
+      const aid = typeof r.app_id === 'number' ? r.app_id : (typeof r.application_id === 'number' ? r.application_id : null)
+      if (aid != null) appId = aid
+    }
+    if (r.apaas_app_id) apaasAppId = String(r.apaas_app_id)
+    if (r.app_name || r.application_name) appName = String(r.app_name || r.application_name)
+    if (r.app_code) appCode = String(r.app_code)
+    if (r.app_view_url) appViewUrl = String(r.app_view_url)
+    // 锚点：仅 TRIGGER_TOOLS 的最后一次成功；get_application 不算锚点（避免没生成/部署只读取时弹卡）
+    if (TRIGGER_TOOLS.has(tc.tool_name)) {
+      anchorToolId = tc.id
+    }
+  }
+  if (anchorToolId == null) return null
+  if (!appId && !apaasAppId) return null
+  return {
+    anchorToolId,
+    appId,
+    apaasAppId,
+    appName: appName || '未命名应用',
+    appCode,
+    appViewUrl,
+  }
+})
+
+function openAppReady(info: AppReadyInfo) {
+  // 优先用 agent 工具返回的 view url（绝对路径或 /xxx 相对路径）
+  if (info.appViewUrl) {
+    // 相对路径走 vue-router；绝对路径直接 window.location 跳
+    if (/^https?:\/\//i.test(info.appViewUrl)) {
+      window.location.assign(info.appViewUrl)
+      return
+    }
+    // /ai-builder/chat?app_id=N → 剥 /ai-builder 前缀让 vue-router 接管（base 已含）
+    const stripped = info.appViewUrl.replace(/^\/ai-builder/, '')
+    router.push(stripped)
+    return
+  }
+  // fallback：用 app_id 跳 ChatPage
+  if (info.appId) {
+    router.push({ path: '/chat', query: { app_id: String(info.appId), from: 'aichat' } })
+    return
+  }
+  ElMessage.warning('找不到应用入口')
+}
+
 // 把 messages + tool_calls + transient 按时间合成一条线
 type TLItem =
   | { kind: 'msg'; msg: AIChatMessage }
@@ -636,9 +849,11 @@ const agentMessages = computed<AgentMessage[]>(() => {
     args: tc.args_json,
     argsBrief: toolArgsBrief(tc),
     result: tc.result_text || undefined,
+    resultSummary: summarizeToolResult(tc.tool_name, tc.status, tc.result_text) || undefined,
     status: mapStatus(tc.status),
     duration_ms: tc.duration_ms ?? undefined,
   })
+  const ctaInfo = appReadyInfo.value
   for (const item of renderTimeline.value) {
     if (item.kind === 'msg' && item.msg.role === 'user') {
       const atts = userMessageAttachments(item.msg)
@@ -656,6 +871,9 @@ const agentMessages = computed<AgentMessage[]>(() => {
       }
     } else if (item.kind === 'tool') {
       out.push({ id: 't' + item.tool.id, kind: 'tool', tool: mapTool(item.tool) })
+      if (ctaInfo && item.tool.id === ctaInfo.anchorToolId) {
+        out.push({ id: 'cta-app-ready-' + ctaInfo.anchorToolId, kind: 'custom', meta: { kind: 'app-ready', info: ctaInfo } })
+      }
     } else if (item.kind === 'tool_group') {
       // 把 group 拆开成单条 tool — AgentConversation 内部按需 re-group
       // 但 AIChatPage 已经预先 collapseTools 了，这里直接传成 group 的"展开形式"
@@ -665,6 +883,9 @@ const agentMessages = computed<AgentMessage[]>(() => {
       // AIChat 的 collapseTools 保证了 group 内 tool 是连续的，传单条 + toolGrouping=true 即可
       for (const t of item.tools) {
         out.push({ id: 't' + t.id, kind: 'tool', tool: mapTool(t) })
+        if (ctaInfo && t.id === ctaInfo.anchorToolId) {
+          out.push({ id: 'cta-app-ready-' + ctaInfo.anchorToolId, kind: 'custom', meta: { kind: 'app-ready', info: ctaInfo } })
+        }
       }
     } else if (item.kind === 'ask') {
       out.push({
@@ -1870,6 +2091,75 @@ onMounted(async () => {
   height: 28px;
   background: linear-gradient(180deg, transparent, var(--ac-input));
   pointer-events: none;
+}
+
+/* 应用就绪 CTA — 大号 inline 蓝条卡，generate / deploy 成功后渲染在工具卡后 */
+.app-ready-cta {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.14), rgba(99, 102, 241, 0.10));
+  border: 1px solid rgba(59, 130, 246, 0.42);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, transform 0.15s;
+  max-width: 600px;
+  width: 100%;
+}
+.app-ready-cta:hover {
+  border-color: rgba(59, 130, 246, 0.75);
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.22), rgba(99, 102, 241, 0.16));
+  transform: translateY(-1px);
+}
+.app-ready-cta .cta-icon {
+  font-size: 28px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.app-ready-cta .cta-body {
+  flex: 1;
+  min-width: 0;
+}
+.app-ready-cta .cta-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ac-text, #1f2937);
+  margin-bottom: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.app-ready-cta .cta-sub {
+  font-size: 12px;
+  color: var(--ac-text-faint, rgba(116, 128, 171, 0.85));
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.app-ready-cta .cta-sub-sep {
+  opacity: 0.5;
+}
+.app-ready-cta .cta-action {
+  flex-shrink: 0;
+  appearance: none;
+  background: #3b82f6;
+  border: none;
+  color: #fff;
+  padding: 9px 18px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+  white-space: nowrap;
+}
+.app-ready-cta .cta-action:hover {
+  background: #2563eb;
+}
+.app-ready-cta .cta-action:active {
+  transform: scale(0.97);
 }
 
 .dots { display: inline-flex; gap: 4px; vertical-align: middle; }

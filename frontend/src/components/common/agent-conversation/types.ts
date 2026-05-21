@@ -32,6 +32,10 @@ export interface AgentToolPayload {
   args?: any                         // 入参（任意 JSON）
   argsBrief?: string                 // 一行摘要（如 "src/foo.ts"），优先于 args 显示
   result?: string                    // 结果文本
+  /** 工具执行完后的结果摘要（如 "✅ app_id=6 物料管理系统"），父组件按 tool name 解析 result 后填。
+   *  ToolCard header 在 duration 之前会显示这段摘要 chip，让用户一眼看出工具到底做成了什么；
+   *  父组件不填则 ToolCard 退化为只显 duration（兼容老调用方）。 */
+  resultSummary?: string
   status: 'running' | 'success' | 'error' | 'pending'
   duration_ms?: number
   /** 自定义渲染槽 key — 父组件可针对特定工具用 #tool-renderer slot 替换默认卡片 */
