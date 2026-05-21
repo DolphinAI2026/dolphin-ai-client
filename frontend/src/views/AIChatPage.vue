@@ -1582,6 +1582,21 @@ function scrollBottom() {
 // 不再走 ai-chat 跳转方案，这里永远 false）
 const isEmbeddedAppChat = computed(() => false)
 
+// 2026-05-21 修 KeepAlive singleton 的副作用：/ai-chat/12 ↔ /ai-chat/14
+// 切换不再触发 component remount（共享 cache entry），所以要 watch route
+// param 主动 loadSession 否则切 session 不刷新内容。
+// onMounted 那次会先跑，watch 用 flush:'post' + 跳过初次 trigger 避免重复。
+watch(
+  () => route.params.id,
+  async (newId, oldId) => {
+    if (newId === oldId) return
+    const id = newId ? Number(newId) : null
+    if (id && currentSession.value?.id !== id) {
+      await loadSession(id)
+    }
+  },
+)
+
 onMounted(async () => {
   await Promise.all([loadSessions(), loadLlmOptions()])
 
