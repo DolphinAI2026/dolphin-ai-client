@@ -244,13 +244,17 @@ async def sync_builtin_llm_configs(
                 )
                 db.add(row)
             else:
+                # 2026-05-21 修：之前每次重启都把 max_tokens / temperature 强制覆盖
+                # 回 spec hardcode (8192 / 0.3)，用户改成 200K / 1M 都被擦掉。
+                # 现在只同步 .env 真"权威"字段 (provider/base_url/api_key/model)，
+                # max_tokens / temperature 是用户在前台可调的"偏好"字段，保留不动。
                 row.provider = spec["provider"]
                 row.base_url = spec["base_url"]
                 row.api_key_enc = encrypt_password(spec["api_key"])
                 row.model = spec["model"]
                 row.purpose = spec["purpose"]
-                row.max_tokens = spec["max_tokens"]
-                row.temperature = spec["temperature"]
+                # row.max_tokens = spec["max_tokens"]      ← 故意删，保留用户编辑
+                # row.temperature = spec["temperature"]    ← 同上
                 if row.status not in {"active", "inactive", "error"}:
                     row.status = "active"
             synced_pairs.append((row, spec))
