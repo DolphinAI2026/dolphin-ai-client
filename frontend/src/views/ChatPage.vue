@@ -166,7 +166,7 @@
            completed deploySteps 误判为已部署）。pre-deploy 直接显示 MD；post-deploy
            已经走 ConfigAssistantPanel 路径（apaas_app_id 存在时由 isPostDeploy 路由）。 -->
       <div
-        v-if="existingAppId && !store.currentApp?.apaas_app_id && !isDeploying"
+        v-if="existingAppId && !store.currentApp?.apaas_app_id && !isDeploying && !deployAllDone"
         class="builder-md-viewer"
       >
         <div class="md-viewer-head">
@@ -183,6 +183,47 @@
             <router-link to="/ai-chat">睿鲸 AI Builder</router-link>
             上传 .md 或对话生成。
           </p>
+        </div>
+      </div>
+
+      <!-- 2026-05-21 中间 hero 区：deploy 进行中显示居中 placeholder（避免左右两侧都在
+           列步骤、中间一片空），deploy 完成后显示大 CTA "打开应用 →"。
+           右侧 .deploy-progress-side / ConfigAssistantPanel 各自承担 timeline / 配置 UI，
+           中间只承担"主要动作"。-->
+      <div
+        v-else-if="deployAllDone"
+        class="builder-deploy-hero"
+      >
+        <div class="bdh-card">
+          <div class="bdh-emoji" aria-hidden="true">🎉</div>
+          <div class="bdh-title">「{{ builderAppDisplayName || '应用' }}」已部署完成</div>
+          <div class="bdh-sub" v-if="store.currentApp?.apaas_app_id">
+            apaas_app_id = <code>{{ store.currentApp.apaas_app_id }}</code>
+          </div>
+          <div class="bdh-actions">
+            <button
+              v-if="store.currentApp?.apaas_app_id || platformDirectUrl"
+              type="button"
+              class="bdh-btn primary"
+              @click="openInPlatform"
+            >打开应用 →</button>
+            <button
+              v-if="showAnyBuilderArtifactPanel === false && showBuilderArtifactToggle"
+              type="button"
+              class="bdh-btn ghost"
+              @click="toggleArtifactPanel"
+            >看 SPEC</button>
+          </div>
+        </div>
+      </div>
+      <div
+        v-else-if="isDeploying"
+        class="builder-deploy-hero"
+      >
+        <div class="bdh-card">
+          <div class="bdh-emoji" aria-hidden="true">⚙️</div>
+          <div class="bdh-title">正在创建应用，请耐心等待…</div>
+          <div class="bdh-sub">详细进度在右侧 timeline</div>
         </div>
       </div>
 
@@ -1069,11 +1110,11 @@ const showDeployProgressInline = computed(() => deploySteps.value.length > 0 || 
 // 不再区分 showDeployedVersionedView 模式。保留此处常量以便语义搜索，
 // 但所有分支按 false 处理（= 渲染文档视图）。
 const showDeploySidebar = computed(() => {
-  // 2026-05-19 image #29: 改成仅在 update review/execution、用户显式 deployOpen、
-  // 或部署 step 真在 running 时才显示 — completed/error 的旧 step 不再撑出 sidebar
-  // （部署完之后/失败之后 sidebar 应该自动收掉，状态去右侧/中间反馈）。
-  if (isUpdateReviewMode.value || isUpdateExecutionMode.value || deployOpen.value) return true
-  return deploySteps.value.some(step => step.status === 'running')
+  // 2026-05-21 删左侧"创建过程" sidebar（image: 左右两侧重复显示步骤列表）。
+  // 新建应用的 deploy 进度统一去右侧 .deploy-progress-side timeline；
+  // 完成态去中间 hero CTA。左侧 sidebar 只保留"更新应用"流程
+  // （isUpdateReviewMode / isUpdateExecutionMode）— 它没有右侧对应面板。
+  return isUpdateReviewMode.value || isUpdateExecutionMode.value
 })
 const showViewSwitcher = computed(() =>
   !!existingAppId.value && (
@@ -8270,6 +8311,76 @@ html[data-theme="dark"] .mode-btn-link:hover {
 }
 @keyframes dps-rotate {
   to { transform: rotate(360deg); }
+}
+
+/* 2026-05-21 中间 hero CTA：deploy 完成大按钮 / 部署中居中 placeholder。
+   避免 deployAllDone 时整个中间区一片空白只剩侧栏角落小按钮。 */
+.builder-deploy-hero {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.bdh-card {
+  width: 100%;
+  max-width: 560px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 48px 40px;
+  border-radius: 16px;
+  background: var(--t-bg-elevated, rgba(255,255,255,0.02));
+  border: 1px solid var(--t-border-subtle, rgba(255,255,255,0.06));
+  text-align: center;
+}
+.bdh-emoji { font-size: 56px; line-height: 1; }
+.bdh-title {
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--t-text-primary);
+  line-height: 1.4;
+}
+.bdh-sub {
+  font-size: 13px;
+  color: var(--t-text-secondary);
+}
+.bdh-sub code {
+  font-family: 'SF Mono', Menlo, monospace;
+  font-size: 12px;
+  background: rgba(91,91,214,0.10);
+  color: var(--t-brand-primary, #5b5bd6);
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+.bdh-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 16px;
+}
+.bdh-btn {
+  font-size: 14px;
+  font-weight: 500;
+  padding: 10px 22px;
+  border-radius: 8px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: transform 0.15s, background 0.15s, border-color 0.15s;
+}
+.bdh-btn.primary {
+  background: var(--t-brand-gradient, linear-gradient(135deg, #5b5bd6, #7c3aed));
+  color: #fff;
+}
+.bdh-btn.primary:hover { transform: translateY(-1px); }
+.bdh-btn.ghost {
+  background: transparent;
+  color: var(--t-text-secondary);
+  border-color: var(--t-border-subtle, rgba(255,255,255,0.12));
+}
+.bdh-btn.ghost:hover {
+  color: var(--t-text-primary);
+  border-color: var(--t-border, rgba(255,255,255,0.2));
 }
 
 .chat-bubble { margin-bottom: 14px; animation: fadeUp 0.3s ease-out; }
