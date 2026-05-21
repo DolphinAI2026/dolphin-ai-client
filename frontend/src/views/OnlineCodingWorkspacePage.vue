@@ -591,7 +591,12 @@ async function loadFromRoute() {
       seedImportStream(loaded)
     }
   } catch (error: any) {
-    ElMessage.error(error?.response?.data?.detail || 'Vibe Coding 工作区加载失败')
+    // 2026-05-21: 404 = workspace 真不存在 (可能 backend restart 后 in-memory state 丢，
+    // 或 KeepAlive 路由切换时旧组件用 stale id 查到不存在的 workspace) — silent fallback
+    // 进 import 流程让用户重建即可，不弹噪音 toast。其他错误仍报。
+    if (error?.response?.status !== 404) {
+      ElMessage.error(error?.response?.data?.detail || 'Vibe Coding 工作区加载失败')
+    }
     seedImportStream()
   } finally {
     loading.value = false
