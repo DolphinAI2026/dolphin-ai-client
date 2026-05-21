@@ -45,7 +45,7 @@
             <el-tag :type="row.is_active ? 'success' : 'info'" size="small">{{ row.is_active ? '启用' : '禁用' }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="创建时间" prop="created_at" min-width="170" show-overflow-tooltip />
+        <el-table-column label="创建时间" prop="created_at" min-width="190" show-overflow-tooltip />
       </el-table>
     </section>
 
@@ -71,7 +71,7 @@
             <el-tag :type="row.is_active ? 'success' : 'info'" size="small">{{ row.is_active ? '启用' : '禁用' }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="创建时间" prop="created_at" min-width="170" show-overflow-tooltip />
+        <el-table-column label="创建时间" prop="created_at" min-width="190" show-overflow-tooltip />
       </el-table>
     </section>
   </div>

@@ -14,8 +14,15 @@
             :value="item.id"
           />
         </el-select>
-        <el-input v-model="keyword" placeholder="租户名称/编码" clearable style="width: 200px" />
-        <el-button @click="syncTenants()" :loading="loading" type="primary">刷新租户</el-button>
+        <el-input
+          v-model="searchQuery"
+          placeholder="搜索租户名称/编码/ID"
+          clearable
+          style="width: 240px"
+        />
+        <el-button @click="syncTenants()" :loading="loading" type="primary" title="从 aPaaS 拉取最新租户列表（与搜索独立）">
+          刷新租户
+        </el-button>
       </div>
     </div>
 
@@ -38,8 +45,15 @@
     />
 
     <el-card>
-      <template #header>租户列表</template>
-      <el-table :data="rows" v-loading="loading" stripe empty-text="暂无租户数据">
+      <template #header>
+        <div class="card-head">
+          <span>租户列表</span>
+          <span class="card-meta">
+            共 {{ rows.length }} 条<template v-if="searchQuery">（过滤后 {{ filteredTenants.length }}）</template>
+          </span>
+        </div>
+      </template>
+      <el-table :data="pagedTenants" v-loading="loading" stripe empty-text="暂无租户数据">
         <el-table-column label="租户名称" min-width="180">
           <template #default="{ row }">{{ pick(row, ['tenantName', 'name', 'tenant_name']) }}</template>
         </el-table-column>
@@ -55,13 +69,24 @@
           </template>
         </el-table-column>
       </el-table>
+      <div class="pagination-wrap">
+        <el-pagination
+          v-model:current-page="currentPage"
+          v-model:page-size="pageSize"
+          :total="filteredTenants.length"
+          :page-sizes="[20, 50, 100, 200]"
+          layout="total, sizes, prev, pager, next, jumper"
+          background
+          small
+        />
+      </div>
     </el-card>
 
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { apiGet } from '@/api/client'
 
@@ -77,9 +102,40 @@ interface AdminRow {
 const admins = ref<AdminRow[]>([])
 const selectedAdminId = ref('')
 const rows = ref<any[]>([])
-const keyword = ref('')
+const searchQuery = ref('')
 const loading = ref(false)
 const error = ref('')
+
+// 客户端分页 + 实时搜索（rows 已经一次性拉全 page_size=500，搜索/翻页都本地处理）
+const currentPage = ref(1)
+const pageSize = ref(20)
+
+const filteredTenants = computed(() => {
+  const kw = searchQuery.value.trim().toLowerCase()
+  if (!kw) return rows.value
+  return rows.value.filter((row) => {
+    const fields = [
+      pick(row, ['tenantName', 'name', 'tenant_name']),
+      pick(row, ['id', 'tenantId', 'tenant_id']),
+      pick(row, ['tenantCode', 'code', 'tenant_code']),
+      pick(row, ['status', 'state']),
+    ]
+    return fields.some((v) => String(v ?? '').toLowerCase().includes(kw))
+  })
+})
+
+const pagedTenants = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  return filteredTenants.value.slice(start, start + pageSize.value)
+})
+
+// 搜索内容变化时回到第 1 页，避免停留在已过滤后的越界页
+watch(searchQuery, () => {
+  currentPage.value = 1
+})
+watch(pageSize, () => {
+  currentPage.value = 1
+})
 
 function pick(row: any, keys: string[]) {
   for (const key of keys) {
@@ -105,7 +161,6 @@ async function loadLocalTenants() {
   error.value = ''
   try {
     const resp = await apiGet<{ items: any[]; synced?: { tenants?: number; envs?: number } }>('/mcp-platform/apaas-tenants', {
-      keyword: keyword.value,
       local_only: true,
       page_size: 500,
     })
@@ -123,8 +178,7 @@ async function syncTenants(options: { silent?: boolean } = {}) {
   try {
     const resp = await apiGet<{ items: any[]; synced?: { tenants?: number; envs?: number } }>('/mcp-platform/apaas-tenants', {
       admin_id: selectedAdminId.value || undefined,
-      keyword: keyword.value,
-      page_size: 100,
+      page_size: 500,
     })
     rows.value = resp.items || []
     const synced = resp.synced || {}
@@ -180,5 +234,21 @@ onMounted(async () => {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+.card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.card-meta {
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: var(--fw-medium, 500);
+}
+.pagination-wrap {
+  display: flex;
+  justify-content: flex-end;
+  padding: 12px 0 4px;
 }
 </style>
