@@ -12,6 +12,16 @@ const request: AxiosInstance = axios.create({
   timeout: 60000
 })
 
+function currentRouteAsRedirect(): string {
+  const base = import.meta.env.BASE_URL || '/'
+  const current = `${window.location.pathname}${window.location.search}${window.location.hash}`
+  if (base !== '/' && current.startsWith(base)) {
+    const withoutBase = current.slice(base.length)
+    return `/${withoutBase.replace(/^\/+/, '')}` || '/'
+  }
+  return current || '/'
+}
+
 // 请求拦截器
 request.interceptors.request.use(
   (config) => {
@@ -51,7 +61,8 @@ request.interceptors.response.use(
 
     if ((status === 401 || status === 403) && !isAuthRequest && !isLoginPage && !isPlatformSessionIssue) {
       localStorage.removeItem('token')
-      window.location.href = `${import.meta.env.BASE_URL}login`
+      const redirect = encodeURIComponent(currentRouteAsRedirect())
+      window.location.href = `${import.meta.env.BASE_URL}login?redirect=${redirect}`
     }
     return Promise.reject(error)
   }

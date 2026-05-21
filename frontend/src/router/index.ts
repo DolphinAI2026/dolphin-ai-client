@@ -260,6 +260,14 @@ const router = createRouter({
   ]
 })
 
+function safeRedirectPath(raw: unknown): string {
+  const value = Array.isArray(raw) ? raw[0] : raw
+  const text = typeof value === 'string' ? value.trim() : ''
+  if (!text.startsWith('/') || text.startsWith('//')) return ''
+  if (text.startsWith('/login') || text.startsWith('/tenant-select')) return ''
+  return text
+}
+
 router.beforeEach(async (to, _from, next) => {
   const userStore = useUserStore()
 
@@ -277,7 +285,7 @@ router.beforeEach(async (to, _from, next) => {
   }
 
   if (to.meta.requiresAuth && !userStore.token) {
-    next('/login')
+    next({ path: '/login', query: { redirect: to.fullPath } })
     return
   }
 
@@ -295,7 +303,7 @@ router.beforeEach(async (to, _from, next) => {
       } catch { /* ignore */ }
     } catch {
       // token 过期或无效，跳登录
-      next('/login')
+      next({ path: '/login', query: { redirect: to.fullPath } })
       return
     }
   }
@@ -324,7 +332,7 @@ router.beforeEach(async (to, _from, next) => {
   }
 
   if (to.path === '/login' && userStore.token) {
-    next('/')
+    next(safeRedirectPath(to.query.redirect) || '/')
   } else {
     next()
   }

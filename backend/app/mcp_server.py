@@ -9,7 +9,7 @@
 
 环境变量：
 - MCP_API_KEYS: 逗号分隔的合法 Bearer token（dolphin 配置里填其中一个）
-- MCP_INTERNAL_BASE: 内部回环 base URL，默认 http://127.0.0.1:8003/api
+- MCP_INTERNAL_BASE: 内部回环 base URL，默认跟随后端 settings.port
 """
 from __future__ import annotations
 
@@ -49,7 +49,10 @@ def _load_api_keys() -> set[str]:
     return {k.strip() for k in raw.split(",") if k.strip()}
 
 
-_INTERNAL_BASE = os.getenv("MCP_INTERNAL_BASE", "http://127.0.0.1:8003/api")
+_INTERNAL_BASE = (
+    os.getenv("MCP_INTERNAL_BASE", "").strip()
+    or f"http://127.0.0.1:{getattr(settings, 'port', 8000)}/api"
+)
 _API_KEYS = _load_api_keys()
 
 

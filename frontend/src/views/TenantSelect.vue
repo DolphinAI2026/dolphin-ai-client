@@ -46,6 +46,14 @@ const userStore = useUserStore()
 const selectionToken = ref('')
 const tenants = ref<TenantOption[]>([])
 
+function safeRedirectPath(raw: unknown): string {
+  const value = Array.isArray(raw) ? raw[0] : raw
+  const text = typeof value === 'string' ? value.trim() : ''
+  if (!text.startsWith('/') || text.startsWith('//')) return ''
+  if (text.startsWith('/login') || text.startsWith('/tenant-select')) return ''
+  return text
+}
+
 onMounted(() => {
   selectionToken.value = route.query.token as string
   const tenantsStr = route.query.tenants as string
@@ -66,14 +74,15 @@ const handleSelect = async (tenantId: number) => {
   try {
     await userStore.selectTenant(selectionToken.value, tenantId)
     ElMessage.success('登录成功')
-    router.push('/')
+    router.replace(safeRedirectPath(route.query.redirect) || '/')
   } catch (error: any) {
     ElMessage.error(error.response?.data?.detail || '选择租户失败')
   }
 }
 
 const handleLogout = () => {
-  router.push('/login')
+  const redirect = safeRedirectPath(route.query.redirect)
+  router.push({ path: '/login', query: redirect ? { redirect } : {} })
 }
 </script>
 

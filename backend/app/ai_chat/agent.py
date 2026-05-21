@@ -94,6 +94,8 @@ SYSTEM_PROMPT_UNIFIED = f"""你是 aPaaS 平台的 AI 全栈助手 — 既能产
 不要只丢一句"已写完"就完事——用户没法预览看不到工具卡内部的代码，体验差。
 
 判断走哪条路：
+- 用户给出已有 aPaaS 应用链接 / app_code / app_id，要求“生成设计文档 / 反向整理文档 / 为什么不全” → **已有应用反向导出路径**：
+  list_platform_envs（如需确认环境）→ export_apaas_app_design_doc。这个工具会用代码确定性查询菜单、模型、字段、表单组件、角色、字典、权限并渲染标准 6 章 md。**不要自己连续调 list_apaas_* 后手写 write_artifact**，除非用户明确要求你基于业务常识重写而不是还原平台现状。
 - 给已有 aPaaS 应用做组件 / 页面 / 后端接口扩展 → **AI Coding 路径**：
   list_dev_scenes → get_dev_scene_spec → list_apaas_apps_in_env → list_apaas_app_menus
   → create_dev_workspace → write_workspace_files / edit_workspace_files → run_workspace_command
@@ -163,7 +165,7 @@ SYSTEM_PROMPT_UNIFIED = f"""你是 aPaaS 平台的 AI 全栈助手 — 既能产
 
 ## 工具速查（55 个，按场景挑用）
 
-文档处理：parse_design_doc / validate_builder_doc / write_artifact / read_attachment
+文档处理：parse_design_doc / validate_builder_doc / write_artifact / read_attachment / export_apaas_app_design_doc
 aPaaS 内省：list_apaas_apps_in_env / list_apaas_app_menus / list_apaas_form_views / list_apaas_form_components / list_apaas_app_models / list_apaas_app_dicts
 应用生命周期：generate_app_from_doc / get_application / update_app_from_doc / execute_change_plan / deploy_application / publish_application
 自开发场景：list_dev_scenes / get_dev_scene_spec / get_dev_scene_full_workflow
@@ -275,6 +277,26 @@ async def _resolve_llm_config(
                 LLMConfig.is_default == True,  # noqa: E712
                 LLMConfig.status == "active",
             )
+            .limit(1)
+        )
+        cfg = res.scalar_one_or_none()
+    if not cfg:
+        # 兜底：某些旧会话 tenant_id / 模型绑定漂移时，仍允许使用全局 active 默认模型。
+        res = await db.execute(
+            select(LLMConfig)
+            .where(
+                LLMConfig.is_default == True,  # noqa: E712
+                LLMConfig.status == "active",
+            )
+            .order_by(LLMConfig.tenant_id == session.tenant_id, LLMConfig.id.asc())
+            .limit(1)
+        )
+        cfg = res.scalar_one_or_none()
+    if not cfg:
+        res = await db.execute(
+            select(LLMConfig)
+            .where(LLMConfig.status == "active")
+            .order_by(LLMConfig.id.asc())
             .limit(1)
         )
         cfg = res.scalar_one_or_none()
@@ -831,7 +853,11 @@ async def run_agent(
             # 这两个工具结束时也得发 artifact_created 让右栏立即刷新。
             _emits_artifact = (
                 (tool_name == "write_artifact" and tc_db.status == "success")
-                or (tool_name in ("generate_app_from_doc", "update_app_from_doc") and tc_db.status == "success")
+                or (tool_name in (
+                    "generate_app_from_doc",
+                    "update_app_from_doc",
+                    "export_apaas_app_design_doc",
+                ) and tc_db.status == "success")
             )
             if _emits_artifact:
                 from sqlalchemy import desc as _desc

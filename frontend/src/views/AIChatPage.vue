@@ -144,7 +144,6 @@
               hidden
               @change="onFilesSelected"
             />
-            <VoiceInputButton v-model="inputText" :llm-config-id="selectedLlmId" />
             <textarea
               v-model="inputText"
               class="textarea"
@@ -298,7 +297,6 @@ import { useThemeStore } from '@/stores/theme'
 import WorkbenchShell from '@/components/WorkbenchShell.vue'
 import SessionSidebar, { type SessionItem, type SessionTab, type NewSessionOption } from '@/components/common/SessionSidebar.vue'
 import AgentConversation from '@/components/common/AgentConversation.vue'
-import VoiceInputButton from '@/components/common/VoiceInputButton.vue'
 import ChooseAppTargetDialog from '@/components/ChooseAppTargetDialog.vue'
 import type { AgentMessage } from '@/components/common/agent-conversation/types'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -622,6 +620,13 @@ function summarizeToolResult(name: string, status: string, resultText: string | 
     return '应用信息已就绪'
   }
   if (name === 'list_my_applications' || name === 'list_applications' || name === 'list_apaas_apps' || name === 'list_apaas_apps_in_env') {
+    if (r.ok === false || r.success === false) {
+      const rawText = Array.isArray(r.raw?.content)
+        ? r.raw.content.map((x: any) => x?.text).filter(Boolean).join('；')
+        : ''
+      const msg = rawText || r.message || r.error || r.detail || r.error_code
+      return msg ? `❌ ${String(msg).slice(0, 60)}` : '❌ 查询应用失败'
+    }
     const items: any[] = Array.isArray(r.apps) ? r.apps : Array.isArray(r.applications) ? r.applications : Array.isArray(r.items) ? r.items : []
     return `找到 ${items.length} 个应用`
   }
@@ -1146,6 +1151,21 @@ async function onSend() {
   if (!canSend.value) return
   const text = inputText.value.trim()
   inputText.value = ''
+  if (
+    selectedLlmId.value != null &&
+    currentSession.value.selected_llm_config_id !== selectedLlmId.value
+  ) {
+    try {
+      const updated = await aiChatApi.updateSession(currentSession.value.id, {
+        selected_llm_config_id: selectedLlmId.value,
+      })
+      currentSession.value.selected_llm_config_id = updated.selected_llm_config_id
+    } catch (e: any) {
+      inputText.value = text
+      ElMessage.error(`切换模型失败：${e?.response?.data?.detail || e?.message || '请重新选择模型'}`)
+      return
+    }
+  }
   // 上传附件
   let uploadedAttIds: number[] = []
   if (pendingFiles.value.length > 0) {
@@ -1688,7 +1708,10 @@ onMounted(async () => {
 
   display: grid;
   grid-template-columns: 240px 1fr auto;  /* 右栏 auto 自适应：无内容时 0 宽 */
-  height: 100vh;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
   background: var(--ac-bg);
   color: var(--ac-text);
   font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
@@ -1896,7 +1919,7 @@ onMounted(async () => {
 }
 .art-version-select:hover { border-color: var(--ac-border-strong); }
 /* ─── Chat main ─── */
-.chat-main { display: flex; flex-direction: column; overflow: hidden; }
+.chat-main { display: flex; flex-direction: column; overflow: hidden; min-width: 0; min-height: 0; }
 .chat-header {
   padding: 12px 24px; border-bottom: 1px solid var(--ac-border);
   display: flex; align-items: center; justify-content: space-between;
@@ -2290,7 +2313,11 @@ onMounted(async () => {
 }
 
 /* ─── Input area ─── */
-.input-area { border-top: 1px solid var(--ac-border); padding: 16px 24px 20px; }
+.input-area {
+  border-top: 1px solid var(--ac-border);
+  padding: 16px 24px calc(20px + env(safe-area-inset-bottom, 0px));
+  flex-shrink: 0;
+}
 
 /* dolphin 风格队列提示卡 */
 .queue-banner {
@@ -2322,7 +2349,9 @@ onMounted(async () => {
 }
 .queue-clear:hover { background: rgba(116, 128, 171, 0.2); }
 .input-card {
-  max-width: 760px; margin: 0 auto;
+  width: 100%;
+  max-width: none;
+  margin: 0;
   background: var(--ac-input); border: 1px solid var(--ac-border-strong); border-radius: 14px; padding: 8px;
   transition: border-color 0.15s;
 }

@@ -92,13 +92,14 @@
 
 <script setup lang="ts">
 import { ref, reactive } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { Lock, Moon, Sunny, User } from '@element-plus/icons-vue'
 import { useUserStore } from '@/stores/user'
 import { useThemeStore } from '@/stores/theme'
 
 const router = useRouter()
+const route = useRoute()
 const userStore = useUserStore()
 const themeStore = useThemeStore()
 
@@ -115,6 +116,14 @@ const loginRules: FormRules = {
   password: [{ required: true, message: '请输入密码', trigger: 'blur' }]
 }
 
+function safeRedirectPath(raw: unknown): string {
+  const value = Array.isArray(raw) ? raw[0] : raw
+  const text = typeof value === 'string' ? value.trim() : ''
+  if (!text.startsWith('/') || text.startsWith('//')) return ''
+  if (text.startsWith('/login') || text.startsWith('/tenant-select')) return ''
+  return text
+}
+
 const handleLogin = async () => {
   if (!loginFormRef.value) return
 
@@ -126,18 +135,20 @@ const handleLogin = async () => {
       const result = await userStore.login(loginForm.username, loginForm.password)
 
       if (result.requiresSelection) {
+        const redirect = safeRedirectPath(route.query.redirect)
         // 多租户用户 — 跳转到租户选择页
         router.push({
           path: '/tenant-select',
           query: {
             token: result.selectionToken,
-            tenants: JSON.stringify(result.tenants)
+            tenants: JSON.stringify(result.tenants),
+            ...(redirect ? { redirect } : {})
           }
         })
       } else {
         // 单租户用户 — 直接登录
         ElMessage.success('登录成功')
-        router.push('/')
+        router.replace(safeRedirectPath(route.query.redirect) || '/')
       }
     } catch (error: any) {
       const detail =
