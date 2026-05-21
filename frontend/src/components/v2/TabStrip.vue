@@ -3,9 +3,10 @@
   - 点 tab → router.push 该 tab path
   - 点 × → tabsStore.closeTab + 自动跳到邻居 tab
   - 首页 tab 不可关
+  - 2026-05-21 UI audit Fix 19: tab 多到溢出时显式给出 ‹ › 滚动按钮（之前只有 overflow-x auto，用户看不出还有更多 tab）
 -->
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, onBeforeUnmount, ref, nextTick, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useTabsStore, type TabItem } from '@/stores/tabs'
 
@@ -42,34 +43,129 @@ function close(e: MouseEvent, tab: TabItem) {
   const next = tabsStore.closeTab(tab.id)
   if (next) router.push(next.path)
 }
+
+// ─────────────────────────────────────────────
+// 2026-05-21 UI audit Fix 19: 溢出滚动按钮
+// 监听 scrollLeft / scrollWidth / clientWidth：决定左右按钮是否显示
+// ─────────────────────────────────────────────
+const scrollerRef = ref<HTMLDivElement | null>(null)
+const canScrollLeft = ref(false)
+const canScrollRight = ref(false)
+
+function updateScrollState() {
+  const el = scrollerRef.value
+  if (!el) {
+    canScrollLeft.value = false
+    canScrollRight.value = false
+    return
+  }
+  // 留 1px 容差避免亚像素抖动
+  canScrollLeft.value = el.scrollLeft > 1
+  canScrollRight.value = el.scrollLeft + el.clientWidth < el.scrollWidth - 1
+}
+
+function scrollByAmount(delta: number) {
+  const el = scrollerRef.value
+  if (!el) return
+  el.scrollBy({ left: delta, behavior: 'smooth' })
+  // smooth scroll 完成后再更新一次状态（200ms 足够覆盖 chrome smooth scroll）
+  setTimeout(updateScrollState, 220)
+}
+
+let _resizeObs: ResizeObserver | null = null
+onMounted(() => {
+  nextTick(() => {
+    updateScrollState()
+    if (typeof ResizeObserver !== 'undefined' && scrollerRef.value) {
+      _resizeObs = new ResizeObserver(updateScrollState)
+      _resizeObs.observe(scrollerRef.value)
+      // 内部 tab 数量变化也算 resize 触发
+      Array.from(scrollerRef.value.children).forEach(child => {
+        if (child instanceof Element) _resizeObs?.observe(child)
+      })
+    }
+  })
+})
+
+onBeforeUnmount(() => {
+  if (_resizeObs) {
+    _resizeObs.disconnect()
+    _resizeObs = null
+  }
+})
+
+// tab 增删时 dom 重建，需要在 nextTick 后再观察新 child
+watch(tabs, async () => {
+  await nextTick()
+  updateScrollState()
+  if (_resizeObs && scrollerRef.value) {
+    _resizeObs.disconnect()
+    _resizeObs.observe(scrollerRef.value)
+    Array.from(scrollerRef.value.children).forEach(child => {
+      if (child instanceof Element) _resizeObs?.observe(child)
+    })
+  }
+}, { deep: false })
 </script>
 
 <template>
-  <div class="tab-strip" v-if="tabs.length">
+  <div class="tab-strip-wrap" v-if="tabs.length">
     <button
-      v-for="tab in tabs"
-      :key="tab.id"
+      v-if="canScrollLeft"
       type="button"
-      class="tab"
-      :class="{ active: tab.id === activeId }"
-      :title="tab.label"
-      @click="activate(tab)"
+      class="tab-scroll-btn left"
+      aria-label="向左滚动 tab"
+      @click="scrollByAmount(-220)"
+    >‹</button>
+    <div
+      ref="scrollerRef"
+      class="tab-strip"
+      @scroll="updateScrollState"
     >
-      <span class="tab-icon" v-html="renderIcon(tab.icon)" />
-      <span class="tab-label">{{ tab.label }}</span>
       <button
-        v-if="tab.closable"
+        v-for="tab in tabs"
+        :key="tab.id"
         type="button"
-        class="tab-close"
-        :aria-label="`关闭 ${tab.label}`"
-        @click="close($event, tab)"
-      >×</button>
-    </button>
+        class="tab"
+        :class="{ active: tab.id === activeId }"
+        :title="tab.label"
+        @click="activate(tab)"
+      >
+        <span class="tab-icon" v-html="renderIcon(tab.icon)" />
+        <span class="tab-label">{{ tab.label }}</span>
+        <button
+          v-if="tab.closable"
+          type="button"
+          class="tab-close"
+          :aria-label="`关闭 ${tab.label}`"
+          @click="close($event, tab)"
+        >×</button>
+      </button>
+    </div>
+    <button
+      v-if="canScrollRight"
+      type="button"
+      class="tab-scroll-btn right"
+      aria-label="向右滚动 tab"
+      @click="scrollByAmount(220)"
+    >›</button>
   </div>
 </template>
 
 <style scoped>
+/* 外壳：position relative 让滚动按钮浮在 tab 之上 */
+.tab-strip-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+  min-height: 36px;
+}
+
 .tab-strip {
+  flex: 1;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -77,13 +173,50 @@ function close(e: MouseEvent, tab: TabItem) {
   overflow-x: auto;
   scrollbar-width: thin;
   padding: 4px 8px 0;
-  background: var(--surface-2);
-  border-bottom: 1px solid var(--line);
-  flex-shrink: 0;  /* ChatPage 等 flex 布局父容器会压缩它，强制不压 */
-  min-height: 36px;
+  scroll-behavior: smooth;
 }
 .tab-strip::-webkit-scrollbar { height: 4px; }
 .tab-strip::-webkit-scrollbar-thumb { background: var(--line); border-radius: 2px; }
+
+/* 2026-05-21 UI audit Fix 19: 溢出滚动按钮
+   绝对定位浮在 tab strip 两侧，加 gradient 让边缘 tab 看起来"渐隐" */
+.tab-scroll-btn {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: linear-gradient(to right, var(--surface-2) 60%, transparent);
+  color: var(--text-2);
+  font-size: 18px;
+  font-family: inherit;
+  line-height: 1;
+  cursor: pointer;
+  z-index: 2;
+  padding: 0 2px;
+  transition: color 0.12s, background 0.12s;
+}
+.tab-scroll-btn.left {
+  left: 0;
+  border-right: 1px solid var(--line);
+  background: linear-gradient(to right, var(--surface-2) 60%, transparent);
+}
+.tab-scroll-btn.right {
+  right: 0;
+  border-left: 1px solid var(--line);
+  background: linear-gradient(to left, var(--surface-2) 60%, transparent);
+}
+.tab-scroll-btn:hover {
+  color: var(--brand);
+  background: var(--surface);
+}
+.tab-scroll-btn:focus-visible {
+  outline: 2px solid var(--line-focus, var(--brand-ring));
+  outline-offset: -2px;
+}
 
 .tab {
   display: inline-flex;

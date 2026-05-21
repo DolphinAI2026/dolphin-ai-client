@@ -31,7 +31,7 @@
     <div class="coding-body">
       <SessionSidebar
         v-if="!embedMode && !embeddedAppId"
-        module-name="AI 编码"
+        module-name="我的组件"
         brand-color="#6366f1"
         :sessions="sidebarCodingItems"
         :active-id="sidebarCodingActiveId"
@@ -112,7 +112,8 @@
               />
 
               <div class="coding-command-copy">
-                <p class="coding-command-kicker">睿鲸AI CODING</p>
+                <!-- 2026-05-21 UI audit Fix 17: kicker 改"创建组件"语义化标识右栏（vs 左栏"我的组件"列表） -->
+                <p class="coding-command-kicker">创建组件 · 新工作区</p>
                 <h1 class="coding-command-title">你想开发什么？</h1>
                 <p class="coding-command-subtitle">描述组件、页面、接口或脚本，AI 会先形成开发任务，再创建工作区。</p>
               </div>
@@ -2074,6 +2075,14 @@ watch(() => route.path, () => {
   min-height: 0;
 }
 
+/* 2026-05-21 UI audit Fix 17: SessionSidebar 右边框加重 + bg 略偏白让左右两区视觉清晰
+   原 SessionSidebar 自身 border 用 --t-border-soft (alpha 0.16) 太弱，从 CodingPage 这边强化 */
+.coding-body :deep(.session-sidebar) {
+  background: var(--t-bg-elevated, #ffffff);
+  border-right-color: var(--t-border-strong, rgba(11, 27, 63, 0.14));
+  box-shadow: 1px 0 0 rgba(11, 27, 63, 0.04);
+}
+
 /* ============ Workspace Sidebar ============ */
 .workspace-sidebar {
   width: 240px;
@@ -3054,7 +3063,8 @@ watch(() => route.path, () => {
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-start;
-  align-items: center;
+  /* 2026-05-21 UI audit Fix 18: center → flex-start，让多行 pill 顶部对齐而不是中线对齐 */
+  align-items: flex-start;
   gap: 8px;
   color: var(--t-text-muted);
   font-size: 12px;
@@ -3064,6 +3074,8 @@ watch(() => route.path, () => {
 .qc-hints-label {
   flex-shrink: 0;
   margin-right: 2px;
+  /* 2026-05-21 UI audit Fix 18: align-items: flex-start 后，label 加 padding-top 与 pill 第一行视觉对齐 */
+  padding-top: 6px;
   color: var(--t-text-muted);
   font-weight: 600;
 }
@@ -3074,9 +3086,17 @@ watch(() => route.path, () => {
   color: #61708c;
   font-size: 12px;
   cursor: pointer;
-  padding: 5px 9px;
-  border-radius: 999px;
+  padding: 6px 12px;
+  border-radius: 14px;
   transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+  /* 2026-05-21 UI audit Fix 18: 长 prompt 不要截断 — 限宽 + 允许换行 + 行高调好
+     原 border-radius 999px 在多行时变怪，改 14px 长方圆角 */
+  max-width: 300px;
+  text-align: left;
+  white-space: normal;
+  line-height: 1.45;
+  word-break: break-word;
+  /* 行内 button 默认 inherit display；保留 flex 让父 .qc-hints 排版正常 */
 }
 
 .qc-hint-item:hover {
@@ -3090,6 +3110,8 @@ watch(() => route.path, () => {
   color: var(--t-text-muted);
   opacity: 0.5;
   user-select: none;
+  /* 2026-05-21 UI audit Fix 18: 分隔点也对齐到 pill 第一行中部 */
+  padding-top: 6px;
 }
 
 @media (max-width: 760px) {

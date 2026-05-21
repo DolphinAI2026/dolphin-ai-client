@@ -171,7 +171,14 @@
               <option :value="null">默认模型</option>
               <option v-for="m in llmOptions" :key="m.id" :value="m.id">{{ m.config_name }}</option>
             </select>
-            <span class="hint">{{ messages.length === 0 ? '首条消息会使用当前选择的模型' : '切换后仅影响后续对话' }}</span>
+            <!-- 2026-05-21 UI audit Fix 12: 字号 11.5 → 12.5 / faint → mute / 文案更明确 + ⓘ tooltip -->
+            <span
+              class="hint hint-info"
+              :title="messages.length === 0 ? '首条消息会使用当前选择的模型；切换模型只影响新发送的消息，不会回放历史对话' : '切换模型只影响下一条消息，之前的回复不会被替换'"
+            >
+              <span class="hint-info-icon" aria-hidden="true">ⓘ</span>
+              {{ messages.length === 0 ? '首条消息将使用当前模型' : '切换模型只影响下一条消息' }}
+            </span>
             <!-- 等用户回答 (ask_clarifying_question) 时 agent 没在思考，把计时器藏起来；
                  否则显示 "AI 思考中 Ns" — 跟 typing 指示器同条件保持一致 -->
             <span v-if="durationSec > 0 && !lastEventIsAsk" class="hint timer">· AI 思考中 {{ durationSec }}s</span>
@@ -295,7 +302,8 @@ import VoiceInputButton from '@/components/common/VoiceInputButton.vue'
 import ChooseAppTargetDialog from '@/components/ChooseAppTargetDialog.vue'
 import type { AgentMessage } from '@/components/common/agent-conversation/types'
 import { ElMessage, ElMessageBox } from 'element-plus'
-// chat / cowork mode 已合并 — ChatDotRound / Folder 已无引用
+// chat / cowork mode 已合并 — ChatDotRound 用作 session 列表前导 icon（dolphin 风格）
+import { ChatDotRound } from '@element-plus/icons-vue'
 import { applicationApi } from '@/api/application'
 
 const previewStore = usePreviewStore()
@@ -317,7 +325,8 @@ type SessionFilter = 'all' | 'chat' | 'cowork'
 const sessionsFilter = ref<SessionFilter>('all')
 const filteredSessions = computed(() => sessions.value)
 
-// 按更新时间分组：今天 / 昨天 / 7 天内 / 更早（dolphin 风格 sidebar）
+// 按更新时间分组：今天 / 昨天 / 本周 / 本月 / 更早（dolphin 风格 sidebar）
+// 2026-05-21 UI audit Fix 11: 7 天内 → 本周/本月 更精细分组
 function _timeGroup(iso: string | null | undefined): string {
   if (!iso) return '更早'
   const t = new Date(iso).getTime()
@@ -327,11 +336,13 @@ function _timeGroup(iso: string | null | undefined): string {
   const dayMs = 24 * 60 * 60 * 1000
   if (t >= today0) return '今天'
   if (t >= today0 - dayMs) return '昨天'
-  if (t >= today0 - 7 * dayMs) return '7 天内'
+  if (t >= today0 - 7 * dayMs) return '本周'
+  if (t >= today0 - 30 * dayMs) return '本月'
   return '更早'
 }
 
 // SessionSidebar 适配 — 加 group 字段触发 SessionSidebar 的分组渲染
+// 2026-05-21 UI audit Fix 11: 加 badgeIcon 让条目有视觉锚点
 const sessionItems = computed<SessionItem[]>(() => {
   // 按 updated_at 倒序（最新在前）
   const sorted = [...filteredSessions.value].sort((a, b) => {
@@ -343,6 +354,8 @@ const sessionItems = computed<SessionItem[]>(() => {
     id: s.id,
     title: s.title,
     group: _timeGroup(s.updated_at || s.created_at),
+    badgeIcon: ChatDotRound,
+    badgeTone: 'chat',
   }))
 })
 const sessionsById = computed(() => {
@@ -1787,6 +1800,31 @@ onMounted(async () => {
 }
 .model-select-inline:hover { border-color: var(--ac-border-strong); color: var(--ac-text); }
 .input-foot .hint { color: var(--ac-text-faint); font-size: 11.5px; }
+/* 2026-05-21 UI audit Fix 12: 模型说明字号 11.5 → 12.5px / faint → mute / 加 ⓘ icon */
+.input-foot .hint-info {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--ac-text-mute);
+  font-size: 12.5px;
+  cursor: help;
+}
+.input-foot .hint-info-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ac-text-faint);
+  opacity: 0.9;
+}
+.input-foot .hint-info:hover .hint-info-icon {
+  color: var(--ac-brand);
+  opacity: 1;
+}
 .input-foot .timer { color: var(--ac-brand); }
 
 .header-mode-badge {
