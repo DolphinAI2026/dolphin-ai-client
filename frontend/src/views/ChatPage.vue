@@ -7339,6 +7339,16 @@ onMounted(async () => {
             }
           }
         }
+        // 2026-05-21 用户点 Apps 列表"构建"按钮 → 期望立即开跑 deploy 流程，
+        // 不是只看 SPEC 干等。Agent C (commit de3a041) 删左侧 deploy 面板后
+        // "一键跑全部"按钮没了，需要这里自动触发。
+        // deployRunAll 自带 guard：deployAllDone / running / executing 任一为
+        // true 时 noop，所以已经部署完的应用重新打开不会重跑。
+        if (!deployAllDone.value && deploySteps.value.length > 0) {
+          deployRunAll().catch(e => {
+            console.error('[deploy_app_id] auto deployRunAll 失败', e)
+          })
+        }
       } catch { /* ignore */ }
     }
   }
