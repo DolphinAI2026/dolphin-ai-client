@@ -551,10 +551,12 @@
       </div>
     </aside>
     <!-- 2026-05-19 post-deploy 形态：右侧改成配置助手，聊增量调整 -->
+    <!-- 2026-05-21 Phase 2: @refresh-iframe 给完成态 hero CTA 用 — 改完 N 步直接 reload iframe 看效果 -->
     <ConfigAssistantPanel
       v-else-if="!embedMode && isPostDeploy && resolvedAppId"
       :application-id="resolvedAppId"
       :app-name="builderAppDisplayName || ''"
+      @refresh-iframe="platformIframeKey += 1"
     />
   </div><!-- /chat-shell -->
 

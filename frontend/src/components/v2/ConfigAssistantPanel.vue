@@ -45,6 +45,11 @@ const props = defineProps<{
   appName?: string
 }>()
 
+const emit = defineEmits<{
+  /** 2026-05-21 Phase 2: 完成态 hero CTA 触发父组件刷新 iframe */
+  (e: 'refresh-iframe'): void
+}>()
+
 interface ChatMsg {
   id: number
   role: 'user' | 'assistant'
@@ -52,6 +57,39 @@ interface ChatMsg {
   change_plan?: ChangePlanPreview | null
   actions_summary?: string[]
   tool_trace?: ConfigChatToolTrace[]
+}
+
+/** 2026-05-21 Phase 2: 修改类工具集 (Hero CTA 显示条件) */
+const MODIFY_TOOL_PATTERN = /^(update_|create_|add_|delete_|disable_|set_)/
+
+function isModifyTool(toolName: string): boolean {
+  return MODIFY_TOOL_PATTERN.test(toolName)
+}
+
+function countModifyOps(msg: ChatMsg): number {
+  return (msg.tool_trace || []).filter(t => t.ok && isModifyTool(t.tool_name)).length
+}
+
+/** 2026-05-21 Phase 2: 从 assistant content 解析"我的计划"块 (顶部独立卡片渲染)
+ *
+ * 匹配：开头是"我的计划"/"计划"/"执行计划" + ":" 或 "：" 后跟 markdown list。
+ * 返 { planMd, rest } — planMd 渲染 plan card，rest 走普通 bubble。
+ * 匹配不到返 { planMd: '', rest: content } 不影响渲染。
+ */
+function extractPlan(content: string): { planMd: string; rest: string } {
+  if (!content) return { planMd: '', rest: '' }
+  const trimmed = content.trimStart()
+  // 匹配开头 "我的计划:" / "执行计划：" 然后接 list（1./2./3. 或 -/* 开头）
+  const reHeader = /^(?:我的计划|执行计划|计划)\s*[：:]\s*\n+([\s\S]*?)(?:\n{2,}|$)/
+  const m = trimmed.match(reHeader)
+  if (!m) return { planMd: '', rest: content }
+  const planBody = m[1].trim()
+  // 必须真是 list (至少 2 行以 数字./-/* 开头)
+  const listLines = planBody.split('\n').filter(l => /^\s*(?:\d+[.、）)]|[-*•])\s+/.test(l))
+  if (listLines.length < 2) return { planMd: '', rest: content }
+  const planMd = planBody
+  const rest = content.substring(content.indexOf(m[0]) + m[0].length).trimStart()
+  return { planMd, rest }
 }
 
 const messages = ref<ChatMsg[]>([])
@@ -333,9 +371,54 @@ function onResizeStart(e: MouseEvent) {
           >
             <div v-for="(l, i) in (m as any).progressLog" :key="i" class="ca-stream-line">{{ l }}</div>
           </div>
-          <div v-if="m.content" class="ca-bubble-text" v-html="renderMd(m.content)" />
+          <!-- 2026-05-21 Phase 2: plan 卡片 — agent 给出"我的计划:" 列表时单独渲染顶部 -->
+          <template v-if="m.role === 'assistant' && m.content">
+            <div
+              v-if="extractPlan(m.content).planMd"
+              class="ca-plan-card"
+            >
+              <div class="ca-plan-head">
+                <span class="ca-plan-icon">📋</span>
+                <span class="ca-plan-title">执行计划</span>
+                <span v-if="(m as any).streaming" class="ca-plan-status">执行中…</span>
+                <span v-else class="ca-plan-status ca-plan-status-done">已完成</span>
+              </div>
+              <div
+                class="ca-plan-body"
+                v-html="renderMd(extractPlan(m.content).planMd)"
+              />
+            </div>
+            <div
+              v-if="extractPlan(m.content).rest"
+              class="ca-bubble-text"
+              v-html="renderMd(extractPlan(m.content).rest)"
+            />
+          </template>
+          <div
+            v-else-if="m.content"
+            class="ca-bubble-text"
+            v-html="renderMd(m.content)"
+          />
           <div v-else-if="(m as any).streaming" class="ca-bubble-typing">
             <span class="ca-dot" /><span class="ca-dot" /><span class="ca-dot" />
+          </div>
+          <!-- 2026-05-21 Phase 2: 完成态 hero CTA — 任务跑完且有修改类工具时显示 -->
+          <div
+            v-if="m.role === 'assistant' && !(m as any).streaming && countModifyOps(m) > 0"
+            class="ca-hero-cta"
+          >
+            <div class="ca-hero-text">
+              <span class="ca-hero-icon">✅</span>
+              <span>已完成 <strong>{{ countModifyOps(m) }}</strong> 步调整</span>
+            </div>
+            <button
+              type="button"
+              class="ca-hero-btn"
+              @click="emit('refresh-iframe')"
+              title="刷新左侧 iframe 应用预览"
+            >
+              刷新预览 ↻
+            </button>
           </div>
           <div v-if="m.change_plan" class="ca-change-card">
             <div class="ca-change-title">📋 提议的变更</div>
@@ -743,6 +826,98 @@ function onResizeStart(e: MouseEvent) {
   background: var(--err-soft);
   color: var(--err);
   border-color: var(--err-soft);
+}
+
+/* 2026-05-21 Phase 2: plan 卡片 — 顶部独立卡片渲染"我的计划:" 列表 */
+.ca-plan-card {
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border-radius: var(--r-3, 8px);
+  background: var(--brand-soft);
+  border: 1px solid var(--brand-ring);
+  box-shadow: var(--sh-1);
+}
+.ca-plan-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  font-size: 12.5px;
+  font-weight: var(--fw-semibold, 600);
+  color: var(--brand-text);
+  letter-spacing: -0.005em;
+}
+.ca-plan-icon { font-size: 14px; }
+.ca-plan-title { flex: 1; }
+.ca-plan-status {
+  font-size: 10.5px;
+  font-weight: 500;
+  padding: 1px 6px;
+  border-radius: var(--r-1, 4px);
+  background: var(--surface);
+  color: var(--text-3);
+  border: 1px solid var(--line);
+}
+.ca-plan-status-done {
+  color: var(--success, #15803d);
+  background: var(--success-soft, #dcfce7);
+  border-color: var(--success-soft, #bbf7d0);
+}
+.ca-plan-body {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-2);
+}
+.ca-plan-body :deep(ol),
+.ca-plan-body :deep(ul) {
+  margin: 0;
+  padding-left: 18px;
+}
+.ca-plan-body :deep(li) {
+  margin: 1px 0;
+}
+
+/* 2026-05-21 Phase 2: 完成态 hero CTA — 跑完 + 有修改类工具时让操作流闭环 */
+.ca-hero-cta {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: var(--r-3, 8px);
+  background: var(--success-soft, #dcfce7);
+  border: 1px solid var(--success-ring, #86efac);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.ca-hero-text {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--success, #15803d);
+}
+.ca-hero-text strong {
+  font-weight: var(--fw-semibold, 600);
+}
+.ca-hero-icon {
+  font-size: 14px;
+}
+.ca-hero-btn {
+  padding: 5px 12px;
+  border-radius: var(--r-2, 6px);
+  background: var(--success, #15803d);
+  color: #fff;
+  border: none;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  transition: opacity 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+.ca-hero-btn:hover { opacity: 0.88; }
+.ca-hero-btn:focus-visible {
+  outline: 2px solid var(--success, #15803d);
+  outline-offset: 2px;
 }
 
 .ca-change-card {
