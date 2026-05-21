@@ -23,10 +23,19 @@ const fileInputRef = ref<HTMLInputElement | null>(null)
 const router = useRouter()
 const previewStore = usePreviewStore()
 
+// Fix 3: placeholder 只保留主提示，"应用内做自开发..." 那条提到 textarea 外面作为永久 hint，
+// 否则用户开始输入后 hint 就消失了
 const placeholder = computed(() => ({
-  builder: '说说你想做什么。例：管理我们部门 200 台设备的领用、归还和报废… 也可以直接拖文件进来。\n应用内做自开发（页面 / 后端接口）建议先进入应用，从应用里发起。',
+  builder: '说说你想做什么。例：管理我们部门 200 台设备的领用、归还和报废…',
   coding:  '描述要做的通用组件。例：做一个支持多选 + 异步加载的客户树组件 / 一个 OCR 上传组件。',
   vibe:    '描述你想做的代码任务，进入 Vibe Coding 工作区继续。',
+}[mode.value]))
+
+// 永久 hint 文字，显示在 textarea 下方
+const persistentHint = computed(() => ({
+  builder: '💡 应用内做自开发（页面 / 后端接口）建议先进入应用，从应用里发起',
+  coding:  '💡 通用组件可跨应用复用，进入 AI Coding 工作区后可挂载到任意应用',
+  vibe:    '💡 全代码模式 — 适合从零搭独立项目（Vue / Next / Go 等）',
 }[mode.value]))
 
 const cta = computed(() => ({ builder: '开始对话', coding: '开始生成', vibe: '打开工作区' }[mode.value]))
@@ -102,10 +111,15 @@ function submit() {
 
       <textarea v-model="text" class="composer-input" :placeholder="placeholder" rows="3" />
 
+      <!-- Fix 3: 持久 hint 文字（textarea 外，不会因为用户输入而消失） -->
+      <div class="composer-hint">{{ persistentHint }}</div>
+
       <div class="composer-foot">
         <div class="composer-tools">
           <template v-if="mode === 'builder'">
-            <button class="btn btn-ghost btn-sm" type="button" @click="fileInputRef?.click()">
+            <!-- Fix 4: 附件按钮视觉权重上调 — 字号 12 → 13.5px / 颜色 text-3 → text-2 /
+                 emoji 视觉锚点 / hover 高亮 brand 色 -->
+            <button class="btn btn-attach" type="button" @click="fileInputRef?.click()">
               📎 添加附件（多文件）
             </button>
             <input
@@ -128,10 +142,29 @@ function submit() {
 <style scoped>
 .composer { width: 100%; max-width: 760px; margin: 0 auto; }
 .composer-modes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 14px; }
-.mode-pill { padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); cursor: pointer; font-family: inherit; text-align: left; transition: border-color 0.14s, box-shadow 0.14s, background 0.14s; }
+/* Fix 2: 未选中 tab 加底色 var(--surface-2) + hover 高亮，让 3 个 tab 都能被识别为可点击区域，
+   不再跟整页背景几乎一样。选中态卡片再深一档 var(--surface) + brand 边框。*/
+.mode-pill {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-2);
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+  transition: border-color 0.14s, box-shadow 0.14s, background 0.14s;
+}
+.mode-pill:hover {
+  background: var(--surface);
+  border-color: var(--brand-ring, var(--brand));
+}
 .mode-pill-label { font-size: 13.5px; font-weight: 600; color: var(--text); letter-spacing: -0.005em; }
 .mode-pill-sub { font-size: 11.5px; color: var(--text-3); margin-top: 3px; }
-.mode-pill.active { border-color: currentColor; box-shadow: 0 0 0 3px var(--ring, var(--brand-ring)); }
+.mode-pill.active {
+  border-color: currentColor;
+  background: var(--surface);
+  box-shadow: 0 0 0 3px var(--ring, var(--brand-ring));
+}
 .mode-pill.tone-ai.active     { color: var(--ai-text);   background: var(--ai-soft);    --ring: var(--ai-ring); }
 .mode-pill.tone-brand.active  { color: var(--brand-text); background: var(--brand-soft); --ring: var(--brand-ring); }
 .mode-pill.tone-emerald.active{ color: var(--emerald);    background: var(--emerald-bg);--ring: rgba(16, 163, 127, 0.2); }
@@ -166,4 +199,30 @@ function submit() {
 .btn-primary:not(:disabled):hover { background: var(--brand-hover); }
 .btn-ghost { color: var(--text-2); }
 .btn-ghost:hover { background: var(--surface-2); color: var(--text); }
+
+/* Fix 4: 附件按钮加视觉权重 — 比普通 btn-ghost 更显眼 */
+.btn-attach {
+  height: 30px;
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  transition: background 0.14s, color 0.14s, border-color 0.14s;
+}
+.btn-attach:hover {
+  background: var(--brand-soft);
+  color: var(--brand);
+  border-color: var(--brand-ring, var(--brand));
+}
+
+/* Fix 3: 持久 hint 文字 — textarea 下方常驻提示，不会因为用户输入消失 */
+.composer-hint {
+  padding: 0 16px 8px;
+  font-size: 12px;
+  color: var(--text-3);
+  line-height: 1.5;
+}
 </style>
