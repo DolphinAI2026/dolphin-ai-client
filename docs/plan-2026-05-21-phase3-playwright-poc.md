@@ -180,6 +180,67 @@ chrome-devtools-mcp@latest (npm package, sidecar process)
 - 不做 per-tenant browser pool + LRU — 真有量级再加，POC 阶段单进程
 - 不做自己的 vision fallback layer — LLM 自己看 screenshot 决策已足够
 
+### Phase 3c · Chrome Extension 路径 — 消掉"每次开端口"用户痛点 (1-2 周) — 中期推荐
+
+**触发场景 (2026-05-21 用户实测反馈)**: 用户发现 `chrome-devtools-mcp + :9222` 路线要求用户
+**每次重启 Chrome 都带 --remote-debugging-port=9222**, 体验对比:
+
+| 方案 | 用户参与 | SSO 复用 | 隐私 | 工程量 |
+|---|---|---|---|---|
+| Claude in Chrome 扩展 (Anthropic 官方) | 装一次, 永久无感 | ✅ | ✅ 本机跑 | — |
+| ChatGPT Operator (云端 Chrome) | 无 | ❌ 拿不到 cookie | ❌ 服务器跑 | — |
+| **我们 chrome-devtools-mcp + :9222 (Phase 3a)** | **每次开端口** | ✅ | ✅ | 低 |
+| Anthropic Computer Use (后端 VM) | 无 | ❌ | ❌ | 高 |
+
+用户原话"Claude / GPT 都不需要开"指 Claude 扩展 + ChatGPT Operator 路线。要追平用户体验
+只有 "**我们自己写浏览器扩展**" 这一条路径 (ChatGPT Operator 模式因为拿不到企业 SSO 不适用).
+
+**架构设计 (Chrome Extension v1)**:
+
+```
+┌─ Chrome Extension (apaas-ai-builder-helper)   manifest_version: 3
+│  ├─ background service_worker                  长期监听 cdp / native messaging
+│  ├─ content scripts (匹配 *.apaas-platform.* / localhost) 注入 DOM 监听 + RPC
+│  ├─ chrome.tabs API                            列 tab / 切 tab
+│  ├─ chrome.scripting.executeScript             跑任意 JS in target tab (含 DOM 操作)
+│  ├─ chrome.debugger API                        DevTools Protocol (snapshot / click 底层走它)
+│  └─ Native Messaging Host → 我们 backend       双向 jsonrpc 替代 stdio chrome-devtools-mcp
+└─ 用户安装: chrome://extensions/ 加载 .crx 或 Chrome Web Store 发布
+```
+
+后端从 `chrome-devtools-mcp + stdio` 切到 `native messaging + extension`:
+- 9 个 `browser_*` 工具 schema 保留不变 (agent prompt 不动)
+- `backend/app/browser_mcp_bridge.py` 内部实现换: 不再 spawn `npx chrome-devtools-mcp`,
+  改成 `native_messaging_send(action, args)` 走 extension
+- chrome.debugger.attach API 可以做跟 CDP 等价的事 (snapshot / click / type / drag)
+- 截图用 `chrome.tabs.captureVisibleTab` 比 CDP `Page.captureScreenshot` 更快
+
+**工程拆解 (5-7 天)**:
+
+1. 扩展骨架 (Manifest V3) + background service_worker + content script — 1 天
+2. 9 个 browser_* RPC handler 实现 (snapshot / click / type / navigate / screenshot /
+   list_pages / select_page / start_recording / stop_recording) — 2 天
+3. Native Messaging Host 配置 + backend bridge.py 切到 native messaging — 1 天
+4. 用户安装文档 + 一键 .crx 打包脚本 — 1 天
+5. 兼容旧 chrome-devtools-mcp + :9222 路径 (fallback) — 0.5 天 (扩展没装 → 降级到 CDP)
+6. 跨平台测试 (mac / windows / linux Chrome) — 1 天
+
+**Phase 3a vs 3c trade-off**:
+
+| 维度 | 3a (CDP + :9222) | 3c (Extension) |
+|---|---|---|
+| 用户教育 | 每次重启带 flag (脚本帮也要点击运行) | 装一次永久 |
+| 跨用户隔离 | 共用 :9222 端口 单实例 | 每用户独立扩展 instance |
+| 高级能力 | CDP 26 工具够用 | 还能用 chrome.* API 做更多 (history / cookies / downloads) |
+| 工程量 | 已落 (POC) | 5-7 天 |
+| 上线分发 | 终端跑命令 | Chrome Web Store / 企业内部 .crx |
+
+**推荐**: Phase 3a 收尾后立即启动 3c — 3c 是消掉用户痛点的真正路径, ChromeExtension 也是
+Anthropic Claude in Chrome 同款架构, 是行业 standard practice.
+
+**Phase 3c 完成后 Phase 3a 仍保留** — 扩展没装的用户降级到 CDP + :9222 路径仍 work,
+两套并行没冲突 (browser_mcp_bridge 内部判断 extension 是否 connected, 没连就 fallback 走 stdio).
+
 ---
 
 ## 6. 关键文件清单
@@ -201,7 +262,8 @@ chrome-devtools-mcp@latest (npm package, sidecar process)
 1. Phase 1 (主动多步 prompt) 已 commit `6fe8010` + push origin — 等 deploy 验证
 2. Phase 2 (plan 卡片 + hero CTA) 已 commit `535f9f1` + push origin — 等 deploy 视觉跟 user 对齐
 3. Phase 3a (chrome-devtools-mcp Phase 1+2 收尾) **推荐立即做** — 3-5 天工作量
-4. Phase 3b (server-side headless fallback) **暂不启动** — 等真用户需求
+4. **Phase 3c (Chrome Extension 消"开端口"痛点) 中期推荐** — 5-7 天, 3a 收尾后立即启动. 同 Claude in Chrome 架构, 行业 standard.
+5. Phase 3b (server-side headless fallback) **暂不启动** — 等真用户需求
 5. 不要按 Plan 文档第 115-149 行假设跑 4-6 周从零搭 Playwright proxy — 是过时认知
 
 ---
