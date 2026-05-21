@@ -954,7 +954,21 @@ const thinkingLabel = computed(() => {
     let suffix = ''
     const filenameMatch = streamingTool.argumentsSoFar.match(/"filename"\s*:\s*"([^"]+)"/)
     if (filenameMatch) suffix = `《${filenameMatch[1]}》`
+    // gpt-5.5/omnigate 等 provider 不真流式 tool args — charsSoFar 卡在很小数字
+    // 此时给一个更准的"在写啥"文案，让用户知道 agent 在干啥不是死了
+    if (charsSoFar < 50 && streamingTool.name === 'write_artifact') {
+      return `AI 正在写设计文档（约 5000+ 字 / 30-60s）…`
+    }
     return `AI 正在生成 ${streamingTool.name}${suffix} 参数（已 ${charsSoFar} 字）`
+  }
+  // 2026-05-21: validate_builder_doc 刚跑完 + LLM 没流式 tool args = 一定是在写 write_artifact
+  // gpt-5.5 类 provider 不流式 tool args, streamingTools 永远空，fallback 文案不准
+  const recentTools = toolCalls.value.slice(-3)
+  const justValidated = recentTools.length > 0 &&
+    recentTools[recentTools.length - 1]?.tool_name === 'validate_builder_doc' &&
+    recentTools[recentTools.length - 1]?.status === 'success'
+  if (justValidated && s > 2) {
+    return `AI 正在写设计文档（约 5000+ 字 / 30-60s）…`
   }
   // 后端正在执行某个工具
   if (toolCalls.value.some(t => t.status === 'running')) {
