@@ -216,6 +216,16 @@
           <span class="art-meta-text">{{ artifactStats }}</span>
           <button class="small-btn" @click="copyArtifact" title="复制">⧉</button>
           <button class="small-btn" @click="downloadArtifact" title="下载">⤓</button>
+          <!-- 设计文档完成 → 一键让 agent 调 generate_app_from_doc 工具创建应用。
+               之前 agent 文案让用户切到「AI 需求分析」菜单 — 那个菜单已删；
+               现在 UX 是用户直接在对话里说"生成应用"，frontend 加按钮帮用户省去打字。 -->
+          <button
+            v-if="canSendArtifactToBuilder && !alreadyDeployedAppId"
+            class="small-btn primary"
+            :disabled="isSending"
+            @click="sendGenerateAppMessage"
+            title="把当前设计文档发给 AI Builder，对话里生成应用（agent 会调 generate_app_from_doc 工具）"
+          >→ 生成应用</button>
           <button
             v-if="canSendArtifactToBuilder && alreadyDeployedAppId"
             class="small-btn primary"
@@ -1270,6 +1280,16 @@ function handleChooseUpdate(appId: number, appName: string) {
 function onChooseDialogConfirm(payload: { mode: 'new' } | { mode: 'update'; appId: number; appName: string }) {
   if (payload.mode === 'new') handleChooseNew()
   else handleChooseUpdate(payload.appId, payload.appName)
+}
+
+// 在 chatbox 注入一条"生成应用"命令，让 agent 调 generate_app_from_doc 工具
+// 取代过时的"切到 AI 需求分析菜单"引导。
+async function sendGenerateAppMessage() {
+  if (!canSendArtifactToBuilder.value || isSending.value) return
+  if (!activeArtifactName.value) return
+  inputText.value = `请基于《${activeArtifactName.value}》调用 generate_app_from_doc 工具直接生成应用，生成完告诉我 app_id。`
+  await nextTick()
+  onSend()
 }
 
 // 把右侧当前打开的设计文档送到 Builder：先弹"新建/更新"选目标对话框
