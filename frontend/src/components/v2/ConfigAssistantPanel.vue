@@ -194,16 +194,9 @@ async function send() {
   }
 }
 
-function onApplyChangePlan(_msg: ChatMsg) {
-  // Stub: real apply will route through incremental_update API.
-  // Plan D+1 will replace this with a confirmation modal + executeUpdate call.
-  ElMessage.info('应用 ChangePlan 功能待 Plan D+1 接入 incremental_update apply')
-}
-
-function onPreviewDiff(_msg: ChatMsg) {
-  // Stub: Plan D+1 will wire this to incrementalApi.previewUpdate.
-  ElMessage.info('Diff preview 待 Plan D+1 接入')
-}
+// 2026-05-21 Task #13: onApplyChangePlan / onPreviewDiff stub 函数 + 对应按钮删了 —
+// 半成品 UI 误导用户. ChangePlan 改纯信息卡片展示 summary. 真要执行配置改动 →
+// agent 直接调真工具 (update_apaas_form_component 等已在白名单).
 
 const emptyHint = computed(
   () => `配置「${props.appName ?? '应用'}」— 描述你想调整的字段、流程、权限...`
@@ -420,8 +413,14 @@ function onResizeStart(e: MouseEvent) {
               刷新预览 ↻
             </button>
           </div>
-          <div v-if="m.change_plan" class="ca-change-card">
-            <div class="ca-change-title">📋 提议的变更</div>
+          <!-- 2026-05-21 Task #13 fix: 隐藏 stub "应用变更" / "预览 diff" 按钮.
+               之前用户点了只 toast "Plan D+1 待接入" 不真做事 — 半成品 UI 误导.
+               Change Plan 渲染成纯信息卡片 (summary + actions list) 让用户知道
+               agent 给的设计方案, 不再有可点按钮. 真要执行配置改动 → agent 直接
+               调 update_apaas_form_component / create_apaas_app_roles 等真工具
+               (config-chat prompt 已写明). -->
+          <div v-if="m.change_plan" class="ca-change-card ca-change-card-info">
+            <div class="ca-change-title">📋 AI 给的方案分析</div>
             <ul
               v-if="m.actions_summary && m.actions_summary.length"
               class="ca-change-list"
@@ -429,9 +428,8 @@ function onResizeStart(e: MouseEvent) {
               <li v-for="(a, i) in m.actions_summary" :key="i">{{ a }}</li>
             </ul>
             <pre v-else class="ca-change-json">{{ JSON.stringify(m.change_plan, null, 2) }}</pre>
-            <div class="ca-change-actions">
-              <button class="ca-btn-secondary" @click="onPreviewDiff(m)">预览 diff</button>
-              <button class="ca-btn-primary" @click="onApplyChangePlan(m)">应用变更</button>
+            <div class="ca-change-note">
+              💡 仅展示 — 如要实际改配置，直接告诉 AI「把 XX 字段改成必填 / 加角色 / 加字典选项」让它调真工具。
             </div>
           </div>
         </div>
@@ -926,6 +924,21 @@ function onResizeStart(e: MouseEvent) {
   background: var(--brand-soft);
   border: 1px solid var(--brand-ring);
   border-radius: var(--r-3, 8px);
+}
+/* 2026-05-21 Task #13: 纯信息卡片变体, 不带 stub 按钮 */
+.ca-change-card-info {
+  background: var(--surface-2);
+  border-color: var(--line);
+}
+.ca-change-note {
+  margin-top: 8px;
+  padding: 6px 8px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-3);
+  background: var(--surface);
+  border: 1px dashed var(--line);
+  border-radius: var(--r-2, 6px);
 }
 .ca-change-title {
   font-size: 12px;
