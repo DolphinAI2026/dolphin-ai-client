@@ -821,7 +821,11 @@ async def _sync_apaas_tenants_to_local(
 
     synced_tenants = 0
     synced_envs = 0
-    base_url = _normalize_origin(_admin_base(admin))
+    # PlatformEnv.base_url 必须是 API base（含 /backend）— APaaSClient 用法是 base_url + "/xdap-app/..."。
+    # _normalize_origin 会 strip /backend，那是给 RSA pub key + login 等"前端 origin 请求"用的，不是给 PlatformEnv 存。
+    # 之前 bug：trial 同步进来的 PlatformEnv.base_url 漏 /backend，import-from-platform 调 query_app_detail 报 404。
+    raw_admin_base = (admin.get("base_url") or APAAS_BASE_URL).strip().rstrip("/")
+    base_url = raw_admin_base if raw_admin_base.endswith("/backend") else f"{raw_admin_base}/backend"
     admin_account = (admin.get("account") or "").strip() or None
     password_enc = admin.get("password_enc")
 

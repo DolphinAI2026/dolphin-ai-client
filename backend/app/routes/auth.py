@@ -529,7 +529,9 @@ async def _ensure_apaas_tenant(db: AsyncSession, item: dict) -> Tenant:
             tenant_id=tenant.id,
             env_name=name,
             alias=alias,
-            base_url=_normalize_apaas_origin(settings.apaas_base_url),
+            # 存 API base（含 /backend）— APaaSClient 用法是 base_url + "/xdap-app/..."，
+            # _normalize_apaas_origin 会 strip /backend 拿 origin，不适合 PlatformEnv.base_url
+            base_url=(settings.apaas_base_url or "").rstrip("/"),
             platform_tenant_id=platform_tid,
             is_default=True,
             status="connected",
@@ -539,7 +541,7 @@ async def _ensure_apaas_tenant(db: AsyncSession, item: dict) -> Tenant:
         tenant.apaas_env_id = env.id
     else:
         env.env_name = name
-        env.base_url = _normalize_apaas_origin(settings.apaas_base_url)
+        env.base_url = (settings.apaas_base_url or "").rstrip("/")
         env.platform_tenant_id = platform_tid
         env.is_default = True
     return tenant
