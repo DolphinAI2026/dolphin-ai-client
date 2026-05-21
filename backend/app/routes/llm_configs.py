@@ -63,6 +63,12 @@ class LLMConfigStatusUpdate(BaseModel):
     status: str
 
 
+class LLMModelsFetchRequest(BaseModel):
+    provider: str
+    base_url: str
+    api_key: str
+
+
 class LLMConfigResponse(BaseModel):
     id: int
     config_name: str
@@ -140,6 +146,35 @@ def build_llm_responses_url(base_url: str) -> str:
     return f"{base}/responses"
 
 
+def _extract_model_names(data: object) -> list[str]:
+    """兼容 OpenAI/DashScope/代理网关常见模型列表响应。"""
+    if isinstance(data, dict):
+        raw_items = data.get("data") or data.get("models") or data.get("model_list") or []
+    elif isinstance(data, list):
+        raw_items = data
+    else:
+        raw_items = []
+
+    names: list[str] = []
+    for item in raw_items:
+        if isinstance(item, str):
+            name = item
+        elif isinstance(item, dict):
+            name = str(
+                item.get("id")
+                or item.get("model")
+                or item.get("name")
+                or item.get("model_name")
+                or ""
+            )
+        else:
+            name = ""
+        name = name.strip()
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
 # ── Routes ──
 
 @router.get("/presets")
@@ -174,6 +209,59 @@ async def list_llm_config_options(
     tenant_id = await resolve_effective_tenant_id(db, ctx)
     rows = await list_llm_configs_for_purpose(db, tenant_id, purpose)
     return [LLMConfigOptionResponse.from_db(row) for row in rows]
+
+
+@router.post("/models")
+async def fetch_llm_models(
+    req: LLMModelsFetchRequest,
+    ctx: Annotated[AuthContext, Depends(require_tenant_admin)],
+):
+    """使用管理员填写的 API Key 从模型服务拉取可用模型。"""
+    if not req.api_key.strip():
+        raise HTTPException(status_code=400, detail="请先填写 API Key，再拉取模型")
+    if not req.base_url.strip():
+        raise HTTPException(status_code=400, detail="请先填写接入地址")
+
+    base = req.base_url.rstrip("/")
+    if base.endswith("/chat/completions"):
+        models_url = f"{base[:-len('/chat/completions')]}/models"
+    elif base.endswith("/responses"):
+        models_url = f"{base[:-len('/responses')]}/models"
+    elif base.endswith("/models"):
+        models_url = base
+    elif base.endswith("/v1"):
+        models_url = f"{base}/models"
+    else:
+        models_url = f"{base}/v1/models"
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            resp = await client.get(
+                models_url,
+                headers={
+                    "Authorization": f"Bearer {req.api_key}",
+                    "Content-Type": "application/json",
+                },
+            )
+    except Exception as exc:
+        logger.warning("fetch llm models failed: %s", exc)
+        raise HTTPException(status_code=502, detail=f"拉取模型失败：{str(exc)[:200]}")
+
+    if resp.status_code >= 400:
+        raise HTTPException(
+            status_code=502,
+            detail=f"拉取模型失败：HTTP {resp.status_code}: {resp.text[:300]}",
+        )
+
+    try:
+        data = resp.json()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"模型服务返回非 JSON：{str(exc)[:200]}")
+
+    models = _extract_model_names(data)
+    if not models:
+        raise HTTPException(status_code=502, detail="模型服务未返回可识别的模型列表")
+    return {"models": models}
 
 
 @router.post("")
@@ -430,13 +518,12 @@ async def update_llm_config_status(
 # ── Helpers ──
 
 async def _clear_defaults(db: AsyncSession, tenant_id: int, purpose: str):
-    """清除同租户同用途的其他默认配置"""
+    """清除同租户所有默认配置；默认模型全局唯一。"""
     await db.execute(
         update(LLMConfig)
         .where(
             LLMConfig.tenant_id == tenant_id,
             LLMConfig.is_default == True,
-            LLMConfig.purpose.in_([purpose, "all"]) if purpose != "all" else LLMConfig.purpose.isnot(None),
         )
         .values(is_default=False)
     )
