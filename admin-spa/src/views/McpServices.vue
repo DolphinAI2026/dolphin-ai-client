@@ -18,12 +18,6 @@
         </div>
       </article>
       <article class="summary-card">
-        <div class="summary-label">服务入口</div>
-        <div class="summary-value-row">
-          <strong>{{ services.length }} 个 MCP 服务</strong>
-        </div>
-      </article>
-      <article class="summary-card">
         <div class="summary-label">认证请求头</div>
         <div class="summary-value-row">
           <strong>{{ authHeaderText }}</strong>
@@ -75,10 +69,16 @@
           <strong>接入参数</strong>
           <span>客户端请求示例</span>
         </div>
-        <button type="button" class="copy-button" @click="copyText(requestExample, '接入参数已复制')">
-          <el-icon><CopyDocument /></el-icon>
-          复制
-        </button>
+        <div class="panel-actions">
+          <button type="button" class="ghost-button" @click="showFullKey = !showFullKey" :aria-label="showFullKey ? '隐藏完整凭证' : '显示完整凭证'">
+            <el-icon><View v-if="!showFullKey" /><Hide v-else /></el-icon>
+            {{ showFullKey ? '隐藏完整凭证' : '显示完整凭证' }}
+          </button>
+          <button type="button" class="copy-button" :class="{ 'copy-button-success': copiedExample }" @click="onCopyRequestExample">
+            <el-icon><CopyDocument /></el-icon>
+            {{ copiedExample ? '已复制 ✓' : '复制' }}
+          </button>
+        </div>
       </div>
       <pre>{{ requestExample }}</pre>
     </section>
@@ -90,9 +90,9 @@
           <span>用于访问上方 MCP 服务入口</span>
         </div>
         <div class="panel-actions">
-          <button type="button" class="copy-button" @click="onCopyKey">
+          <button type="button" class="copy-button" :class="{ 'copy-button-success': copiedKey }" @click="onCopyKey">
             <el-icon><CopyDocument /></el-icon>
-            复制凭证
+            {{ copiedKey ? '已复制 ✓' : '复制凭证' }}
           </button>
           <button type="button" class="danger-button" @click="onResetKey">重置凭证</button>
         </div>
@@ -122,10 +122,10 @@ X-APaaS-Tenant-Id: &lt;租户 ID&gt;
 -->
 
 <script setup lang="ts">
-import { computed, onMounted, reactive } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { CopyDocument } from '@element-plus/icons-vue'
+import { CopyDocument, View, Hide } from '@element-plus/icons-vue'
 import { API_BASE_URL, apiGet } from '@/api/client'
 
 interface ServiceRow {
@@ -145,7 +145,19 @@ const currentKey = reactive({
   fingerprint: '-',
 })
 
-const authHeaderText = computed(() => currentKey.value ? `Authorization: Bearer ${currentKey.value}` : 'Authorization: Bearer <MCP_API_KEY>')
+// v3 2026-05-21 UED 报告 P1: Bearer Token 默认脱敏 + toggle 显示
+const showFullKey = ref(false)
+const copiedExample = ref(false)
+const copiedKey = ref(false)
+
+function maskKey(key: string): string {
+  if (!key) return '<MCP_API_KEY>'
+  if (key.length <= 12) return key
+  return `${key.slice(0, 8)}...${key.slice(-6)}`
+}
+
+const displayKey = computed(() => showFullKey.value ? currentKey.value : maskKey(currentKey.value))
+const authHeaderText = computed(() => currentKey.value ? `Authorization: Bearer ${displayKey.value}` : 'Authorization: Bearer <MCP_API_KEY>')
 const requestExample = computed(() => [
   `POST ${services[0].publicUrl}`,
   'Content-Type: application/json',
@@ -226,6 +238,22 @@ async function onCopyKey() {
   }
   const value = `Bearer ${currentKey.value}`
   await copyText(value, '当前接入凭证已复制')
+  copiedKey.value = true
+  setTimeout(() => { copiedKey.value = false }, 1600)
+}
+
+// v3 2026-05-21 UED 报告 P2: 复制按钮反馈 + 始终复制完整 key (不受脱敏影响)
+async function onCopyRequestExample() {
+  const fullExample = [
+    `POST ${services[0].publicUrl}`,
+    'Content-Type: application/json',
+    currentKey.value ? `Authorization: Bearer ${currentKey.value}` : 'Authorization: Bearer <MCP_API_KEY>',
+    'X-APaaS-Token: <当前 aPaaS 用户凭证>',
+    'X-APaaS-Tenant-Id: <租户 ID>',
+  ].join('\n')
+  await copyText(fullExample, '接入参数已复制（含完整凭证）')
+  copiedExample.value = true
+  setTimeout(() => { copiedExample.value = false }, 1600)
 }
 
 function onResetKey() {
@@ -285,7 +313,7 @@ h1 {
 
 .summary-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 16px;
 }
@@ -519,6 +547,39 @@ code {
   background: var(--brand-hover);
 }
 
+/* v3 2026-05-21 UED 报告 P2: 复制按钮点击后绿色短反馈 */
+.copy-button-success,
+.copy-button-success:hover {
+  background: var(--ok);
+}
+
+/* v3 2026-05-21 UED 报告 P1: 显示/隐藏凭证 toggle 用浅色 ghost 按钮（与主操作复制区分） */
+.ghost-button {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-2, 6px);
+  color: var(--text-2);
+  background: var(--surface);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+
+.ghost-button:hover {
+  background: var(--brand-soft);
+  color: var(--brand);
+  border-color: var(--brand-ring);
+}
+
 .danger-button {
   min-height: 30px;
   padding: 0 12px;
@@ -644,7 +705,8 @@ html[data-theme="dark"] .service-row:hover {
   background: var(--surface);
 }
 html[data-theme="dark"] .icon-copy,
-html[data-theme="dark"] .danger-button {
+html[data-theme="dark"] .danger-button,
+html[data-theme="dark"] .ghost-button {
   background: var(--surface);
 }
 html[data-theme="dark"] .key-grid div {

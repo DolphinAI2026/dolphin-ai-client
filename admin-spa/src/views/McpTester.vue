@@ -179,6 +179,8 @@ const resultText = ref('')
 const loadingTools = ref(false)
 const calling = ref(false)
 const tokenLoading = ref(false)
+// v3 2026-05-21 UED 报告 P1: 切服务时回滚用 — 记住上一次成功的 serviceCode
+const lastServiceCode = ref('apaas-builder-mcp')
 const selectedTool = computed(() => tools.value.find((item) => item.name === callForm.toolName))
 const ENV_PARAM_KEYS = new Set(['env', 'env_id', 'alias', 'platform_env_id'])
 const argsPlaceholder = computed(() => {
@@ -211,13 +213,13 @@ function resolveMcpUrl(url: string) {
   return raw
 }
 
-async function loadTools() {
+async function loadTools(silent = false): Promise<boolean> {
   if (!form.url || !form.key.trim()) {
-    ElMessage.warning('请选择 MCP 服务并填写 MCP 凭证')
-    return
+    if (!silent) ElMessage.warning('请选择 MCP 服务并填写 MCP 凭证')
+    return false
   }
   loadingTools.value = true
-  toolsMessage.value = ''
+  toolsMessage.value = silent ? '切换中…' : ''
   resultText.value = ''
   try {
     const resp = await fetch(resolveMcpUrl(form.url), {
@@ -237,14 +239,18 @@ async function loadTools() {
     tools.value = Array.isArray(list) ? list : []
     if (tools.value.length) {
       toolsMessage.value = `获取成功，共 ${tools.value.length} 个工具`
+      return true
     } else if (text.includes('missing end-user identity')) {
       toolsMessage.value = '后端当前仍要求用户身份。需要把工具清单放开为只校验 MCP 凭证。'
+      return false
     } else {
       toolsMessage.value = `未获取到工具列表：HTTP ${resp.status}，${text.slice(0, 160)}`
+      return false
     }
   } catch (err: any) {
     tools.value = []
     toolsMessage.value = err?.message || '获取工具列表失败'
+    return false
   } finally {
     loadingTools.value = false
   }
@@ -276,13 +282,35 @@ function buildExampleFromSchema(schema: any) {
   return result
 }
 
-function onServiceChange(code: string) {
+async function onServiceChange(code: string) {
   const service = services.find((item) => item.code === code)
   if (!service) return
   form.url = service.url
   tools.value = []
-  toolsMessage.value = ''
   resultText.value = ''
+  // v3 2026-05-21 UED 报告 P1: 切换服务后自动重新拉工具列表，
+  // 不要让用户再手动点"测试连接并获取工具列表"。
+  // 没填 MCP 凭证 / 失败时静默回滚到上一个服务，提示用户。
+  if (!form.key.trim()) {
+    toolsMessage.value = '请先填写 MCP 凭证'
+    lastServiceCode.value = code
+    return
+  }
+  toolsMessage.value = '切换中…'
+  const ok = await loadTools(true)
+  if (ok) {
+    lastServiceCode.value = code
+  } else {
+    // 回滚到上一个成功的服务，避免用户卡在坏状态
+    if (lastServiceCode.value && lastServiceCode.value !== code) {
+      ElMessage.warning(`切到「${service.name || code}」失败，已回到上一个服务`)
+      form.serviceCode = lastServiceCode.value
+      const prev = services.find((item) => item.code === lastServiceCode.value)
+      if (prev) form.url = prev.url
+    } else {
+      lastServiceCode.value = code
+    }
+  }
 }
 
 async function loadAdmins() {
