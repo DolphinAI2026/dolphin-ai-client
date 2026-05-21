@@ -717,7 +717,12 @@ async def _try_apaas_login_flow(user_data: UserLogin, db: AsyncSession) -> Optio
 
     if has_backend_identity:
         if is_platform_admin:
-            available_items = [default_tenant_item] if default_tenant_item else []
+            # 平台管理员能切到所有 aPaaS 同步进来的租户，跟 aPaaS 平台原生行为对齐
+            # （aPaaS 那边 admin 在租户切换下拉里能看到所有租户）
+            available_items = _merge_tenant_items(
+                [default_tenant_item] if default_tenant_item else [],
+                all_tenants,
+            )
         else:
             available_items = _merge_tenant_items(
                 [default_tenant_item] if default_tenant_item else [],
