@@ -314,8 +314,10 @@ function appStage(app: MergedApplication): AppStage {
   if (app.local_status === 'failed') {
     return { group: 'draft', label: '需求理解', tone: 'danger', progress: 18 }
   }
+  // 有结构化数据 (config_preview 解析出 model/form/role/dict) = SPEC 已就绪，等部署
+  // 之前误用"SPEC 设计"让用户以为还在设计，改成"待部署"更准确反映状态
   if (hasAppStats(app)) {
-    return { group: 'active', label: 'SPEC 设计', tone: 'active', progress: 42 }
+    return { group: 'active', label: '待部署', tone: 'active', progress: 70 }
   }
   return { group: 'draft', label: '需求理解', tone: 'draft', progress: 12 }
 }
