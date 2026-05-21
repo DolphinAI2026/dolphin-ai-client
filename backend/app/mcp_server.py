@@ -648,6 +648,30 @@ async def publish_application(
     return {"ok": True, "app_id": app_id, "result": res}
 
 
+async def _load_artifact_content(artifact_id: int) -> str | None:
+    """从 ai_chat_artifacts 表读 content. 找不到返 None.
+
+    2026-05-21 新增 — 让 validate_builder_doc / submit_design_doc 支持 artifact_id
+    引用模式. LLM write_artifact 拿到 id 后, 后续工具传 id 不重写 5000+ 字 md
+    节省 token (每次省 ~5000 token + 30-60s LLM 生成时间).
+    """
+    if not artifact_id or artifact_id <= 0:
+        return None
+    try:
+        from app.database import AsyncSessionLocal
+        from app.models import AIChatArtifact
+        from sqlalchemy import select
+        async with AsyncSessionLocal() as db:
+            res = await db.execute(
+                select(AIChatArtifact.content).where(AIChatArtifact.id == artifact_id)
+            )
+            row = res.first()
+            return row[0] if row else None
+    except Exception as exc:
+        logger.warning("_load_artifact_content(%s) failed: %s", artifact_id, exc)
+        return None
+
+
 def _do_validate_builder_doc(md_content: str) -> dict:
     """validate_builder_doc 的纯函数实现（无 IO，可单独单测）。"""
     from app.doc_standard_detector import detect
@@ -724,8 +748,13 @@ def _do_validate_builder_doc(md_content: str) -> dict:
 
 
 @mcp.tool()
-async def validate_builder_doc(md_content: str) -> dict:
+async def validate_builder_doc(md_content: str = "", artifact_id: int = 0) -> dict:
     """校验一份 markdown 设计文档是否符合 aPaaS Builder 标准（不创建应用、不需要身份）。
+
+    **2026-05-21 加 artifact_id 省 token** — 参数二选一:
+    - `artifact_id` (推荐): write_artifact 返回的 id, backend 自动从 db 读 content 校验.
+      节省 5000+ 字 token + 30-60s LLM 生成时间. **强烈建议**先 write_artifact 拿 id 再 validate.
+    - `md_content`: 直接传完整 md 字符串 (兼容老用法). 给了 artifact_id 时忽略此参数.
 
     用法：写完 / 改完 md 之后，先调这个工具自检。建议工作流：
       1. 写完 md → 调 validate_builder_doc
@@ -752,6 +781,22 @@ async def validate_builder_doc(md_content: str) -> dict:
           "advice": [str],                  # 给 agent 的下一步修补建议（人话）
         }
     """
+    # 2026-05-21 artifact_id 引用模式 (省 token)
+    if artifact_id and artifact_id > 0:
+        content = await _load_artifact_content(artifact_id)
+        if not content:
+            return {
+                "ok": False,
+                "error_code": "ARTIFACT_NOT_FOUND",
+                "error": f"找不到 artifact_id={artifact_id} - 请先 write_artifact 拿 id 或传 md_content",
+            }
+        return _do_validate_builder_doc(content)
+    if not md_content or not md_content.strip():
+        return {
+            "ok": False,
+            "error_code": "MISSING_INPUT",
+            "error": "需要 md_content 或 artifact_id 二选一. 推荐先 write_artifact 拿 id (省 token)",
+        }
     return _do_validate_builder_doc(md_content)
 
 
@@ -792,10 +837,11 @@ def _consume_requirements_doc(user_id: int, pending_id: str) -> dict | None:
 
 @mcp.tool()
 async def submit_design_doc(
-    md_content: str,
+    md_content: str = "",
     file_name: str = "design-doc.md",
     tenant_id: int = 0,
     user_id: int = 0,
+    artifact_id: int = 0,
 ) -> dict:
     """把当前 md 设计文档推送到 ai-builder cache，并返回一条 deeplink — agent 必须把这条
     deeplink 贴到 chat 里让用户点击，**这是把 md 送到 Builder 的唯一推荐路径**。
@@ -819,9 +865,28 @@ async def submit_design_doc(
 
     pending_id 30 分钟后自动失效；用户在 dolphin 修改 md 重新调本工具时会覆盖之前的 cache。
     deeplink 不带 pending_id —— ai-builder 端按当前登录用户从 cache 读最新 md，避免跨用户串号。
+
+    **2026-05-21 加 artifact_id 省 token** — md 内容二选一:
+    - `artifact_id` (推荐): write_artifact 返回的 id, backend 自动读 content 提交.
+      节省 5000+ 字 token. 跟 validate_builder_doc(artifact_id) 配套使用最优.
+    - `md_content`: 直接传完整 md 字符串 (兼容老用法). 给了 artifact_id 时忽略此参数.
     """
+    # 2026-05-21 artifact_id 引用模式
+    if artifact_id and artifact_id > 0:
+        loaded = await _load_artifact_content(artifact_id)
+        if not loaded:
+            return {
+                "ok": False,
+                "error_code": "ARTIFACT_NOT_FOUND",
+                "error": f"找不到 artifact_id={artifact_id} - 请先 write_artifact 拿 id 或传 md_content",
+            }
+        md_content = loaded
     if not md_content or not md_content.strip():
-        return {"ok": False, "error": "md_content 是空的，无法提交"}
+        return {
+            "ok": False,
+            "error_code": "MISSING_INPUT",
+            "error": "需要 md_content 或 artifact_id 二选一",
+        }
 
     tid, uid = _resolve_identity(tenant_id, user_id)
     pending_id = _uuid.uuid4().hex[:16]
