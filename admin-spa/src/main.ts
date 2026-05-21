@@ -3,6 +3,7 @@ import { createPinia } from 'pinia'
 import ElementPlus from 'element-plus'
 import 'element-plus/dist/index.css'
 import './styles/design-v3-tokens.css'  // ★ Claude design v3 — admin-spa 共享 frontend 的 brand/text/surface/line token
+import './styles/density-align.css'    // 2026-05-21 — admin-spa 跟 frontend 密度对齐，覆盖 Element Plus 默认值
 import App from './App.vue'
 import router from './router'
 

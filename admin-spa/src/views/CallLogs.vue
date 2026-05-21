@@ -215,43 +215,25 @@ onMounted(loadLogs)
 
 <style scoped>
 /* v3 token 化 · 2026-05-20 — visual refresh only. template/script untouched. */
+/* v3 2026-05-21 — 跟 frontend 密度对齐：max-width/h1/page-header/toolbar padding
+   都交给 density-align.css 全局规则。本 scoped 只保留 layout + log-detail。 */
 .page {
-  max-width: 1400px;
-  margin: 0 auto;
   color: var(--text);
   font-family: var(--font-sans);
 }
 .page-header {
   display: flex;
-  align-items: flex-start;
+  align-items: flex-end;
   justify-content: space-between;
-  margin-bottom: 20px;
   gap: 16px;
-}
-.page-header h1 {
-  margin: 0 0 4px;
-  font-size: 22px;
-  line-height: 1.25;
-  font-weight: var(--fw-bold, 700);
-  letter-spacing: -0.01em;
-  color: var(--text);
-}
-.page-header p {
-  margin: 0;
-  font-size: 13.5px;
-  line-height: 1.55;
-  color: var(--text-3);
 }
 .toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
   flex-wrap: wrap;
-  margin-bottom: 16px;
-  padding: 12px 14px;
   border: 1px solid var(--line);
-  border-radius: var(--r-4, 12px);
+  border-radius: var(--r-3, 8px);
   background: var(--surface);
   box-shadow: var(--sh-1);
 }

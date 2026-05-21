@@ -278,10 +278,10 @@ onMounted(async () => {
               danger-button (red = state). Replaced all v2 indigo-violet hex with
               tokens; replaced lavender panel-head bg with surface-2;
               4 white cards keep elevation via line + sh-1. */
+/* v3 2026-05-21 — 跟 frontend 密度对齐：max-width/h1/mcp-hero/summary-card 全
+   交给 density-align.css 全局规则。本 scoped 只保留布局 + 独有元素 (provider-mark
+   类似) 的样式。 */
 .mcp-page {
-  max-width: 1440px;
-  margin: 0 auto;
-  padding: 8px 0 56px;
   color: var(--text);
   font-family: var(--font-sans);
 }
@@ -290,32 +290,14 @@ onMounted(async () => {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
-  gap: 24px;
-  margin-bottom: 22px;
-}
-
-h1 {
-  margin: 0;
-  font-size: 22px;
-  line-height: 1.25;
-  font-weight: var(--fw-bold, 700);
-  color: var(--text);
-  letter-spacing: -0.01em;
-}
-
-.mcp-hero p {
-  max-width: 940px;
-  margin: 8px 0 0;
-  color: var(--text-3);
-  font-size: 13.5px;
-  line-height: 1.55;
+  gap: 20px;
 }
 
 .summary-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-  margin-bottom: 16px;
+  gap: 10px;
+  margin-bottom: 14px;
 }
 
 .summary-card,
@@ -330,8 +312,6 @@ h1 {
 
 .summary-card {
   min-width: 0;
-  min-height: auto;
-  padding: 14px 16px;
 }
 
 .summary-label {
@@ -396,35 +376,20 @@ h1 {
 .headers-panel,
 .key-panel {
   overflow: hidden;
-  margin-top: 16px;
+  margin-top: 12px;
 }
 
 .panel-head {
-  min-height: 52px;
+  /* density-align.css 全局已统一 min-height/padding/title — 仅保留 layout */
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding: 0 18px;
+  gap: 14px;
   border-bottom: 1px solid var(--line);
-  background: var(--surface);
-}
-
-.panel-head strong {
-  color: var(--text);
-  font-size: 13.5px;
-  font-weight: 600;
-}
-
-.panel-head span {
-  margin-left: 8px;
-  color: var(--text-3);
-  font-size: 12px;
-  font-weight: 500;
 }
 
 .service-table {
-  padding: 0 18px 16px;
+  padding: 0 14px 12px;
   background: var(--surface-2);
 }
 
@@ -433,23 +398,23 @@ h1 {
   display: grid;
   grid-template-columns: minmax(180px, 1fr) 150px minmax(360px, 1.5fr) 86px 96px 124px;
   align-items: center;
-  gap: 16px;
+  gap: 14px;
 }
 
 .table-head {
-  height: 46px;
+  height: 36px;
   color: var(--text-3);
   font-size: 10.5px;
-  font-weight: 500;
+  font-weight: var(--fw-medium, 500);
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
 
 .service-row {
-  min-height: 68px;
-  padding: 10px 12px;
+  min-height: 52px;
+  padding: 8px 12px;
   border-top: 1px solid var(--line);
-  border-radius: var(--r-3, 8px);
+  border-radius: var(--r-2, 6px);
 }
 
 .service-row:hover {
@@ -621,16 +586,16 @@ code {
 .key-grid {
   display: grid;
   grid-template-columns: minmax(220px, 1fr) minmax(140px, 0.6fr) minmax(320px, 1.4fr);
-  gap: 12px;
-  padding: 18px;
+  gap: 10px;
+  padding: 14px;
   background: var(--surface-2);
 }
 
 .key-grid div {
   min-width: 0;
-  padding: 14px;
+  padding: 10px 12px;
   border: 1px solid var(--line);
-  border-radius: var(--r-3, 8px);
+  border-radius: var(--r-2, 6px);
   background: var(--surface);
 }
 

@@ -201,33 +201,18 @@ onMounted(async () => {
 
 <style scoped>
 /* v3 token 化 · 2026-05-20 — visual refresh only. template/script untouched. */
+/* v3 2026-05-21 — 跟 frontend 密度对齐：max-width/h1/page-header 都交给
+   density-align.css 全局规则。本 scoped 只保留 layout + card-head/meta。 */
 .page {
-  max-width: 1600px;
-  margin: 0 auto;
   color: var(--text);
   font-family: var(--font-sans);
 }
 .page-header {
   display: flex;
-  align-items: flex-start;
+  align-items: flex-end;
   justify-content: space-between;
-  margin-bottom: 20px;
   gap: 16px;
   flex-wrap: wrap;
-}
-.page-header h1 {
-  margin: 0 0 4px;
-  font-size: 22px;
-  line-height: 1.25;
-  font-weight: var(--fw-bold, 700);
-  letter-spacing: -0.01em;
-  color: var(--text);
-}
-.page-header p {
-  margin: 0;
-  font-size: 13.5px;
-  line-height: 1.55;
-  color: var(--text-3);
 }
 .page-actions {
   display: flex;

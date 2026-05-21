@@ -581,51 +581,29 @@ function renderIcon(name: string): string {
 }
 
 /* ─── 内容区 ──────────────────────────────────────────────── */
+/* v3 2026-05-21 — admin-spa 跟 frontend 密度对齐第二轮
+   .admin-content padding 24px 28px → 24px 32px 40px（跟 frontend Apps 一致段）
+   下方 :deep 缩到最小：只保留 admin-spa 独有的 .page max-width 兜底，
+   其余共性样式（h1 / card / table / button / tag / input）全移到
+   density-align.css 全局生效，方便后续统一调。 */
 .admin-content {
   flex: 1;
   min-width: 0;
   min-height: 0;
-  padding: 24px 28px;
+  padding: 24px 32px 40px;
   background: var(--bg, #F8FAFC);
   overflow-y: auto;
 }
 
-/* ═══════════════════════════════════════════════════════════════════
- * page :deep — admin-spa view 内部样式跟 frontend BuilderFrame 风格对齐
- * ═══════════════════════════════════════════════════════════════════ */
-.admin-content :deep(.page) {
+/* 仅保留 max-width 兜底（.page 可能被各 view 自己定义，density-align 用 !important
+   覆盖；这里 fallback 给没显式 .page class 的容器） */
+.admin-content :deep(.page),
+.admin-content :deep(.llm-page),
+.admin-content :deep(.mcp-page),
+.admin-content :deep(.members-page) {
   max-width: 1280px;
   margin: 0 auto;
-  padding: 0 0 40px;
   color: var(--text);
-}
-
-.admin-content :deep(.page-header) {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 20px;
-  margin-bottom: 20px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid var(--line);
-  flex-wrap: wrap;
-}
-
-.admin-content :deep(.page-header h1) {
-  margin: 0;
-  color: var(--text);
-  font-size: 26px;
-  line-height: 1.2;
-  font-weight: var(--fw-bold, 700);
-  letter-spacing: -0.02em;
-}
-
-.admin-content :deep(.page-header p) {
-  max-width: 720px;
-  margin: 8px 0 0;
-  color: var(--text-3);
-  font-size: 13.5px;
-  line-height: 1.55;
 }
 
 .admin-content :deep(.page-actions) {
@@ -634,105 +612,6 @@ function renderIcon(name: string): string {
   gap: 8px;
   flex-wrap: wrap;
   justify-content: flex-end;
-}
-
-.admin-content :deep(.el-card) {
-  border: 1px solid var(--line) !important;
-  border-radius: var(--r-4, 12px) !important;
-  background: var(--surface) !important;
-  box-shadow: var(--sh-1) !important;
-  overflow: hidden;
-  margin-bottom: 16px;
-}
-
-.admin-content :deep(.el-card__header) {
-  min-height: 48px;
-  display: flex;
-  align-items: center;
-  padding: 12px 18px;
-  border-bottom: 1px solid var(--line);
-  background: var(--surface-2);
-  color: var(--text);
-  font-size: 14px;
-  font-weight: var(--fw-semibold, 600);
-}
-
-.admin-content :deep(.el-card__body) {
-  padding: 18px;
-}
-
-.admin-content :deep(.el-table) {
-  --el-table-border-color: var(--line);
-  --el-table-header-bg-color: var(--surface-2);
-  --el-table-row-hover-bg-color: var(--surface-2);
-  --el-table-bg-color: var(--surface);
-  --el-table-text-color: var(--text);
-  font-size: 13px;
-  background: var(--surface);
-}
-
-.admin-content :deep(.el-table th.el-table__cell) {
-  background: var(--surface-2) !important;
-  color: var(--text-2);
-  font-weight: var(--fw-semibold, 600);
-  font-size: 11.5px;
-  letter-spacing: 0.02em;
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--line);
-}
-
-.admin-content :deep(.el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell) {
-  background: var(--surface);
-}
-
-.admin-content :deep(.el-table tbody tr:hover > td.el-table__cell) {
-  background: var(--surface-2);
-}
-
-.admin-content :deep(.el-button) {
-  border-radius: var(--r-2, 6px);
-  font-weight: var(--fw-semibold, 600);
-  font-size: 12.5px;
-  height: 30px;
-}
-
-.admin-content :deep(.el-button--primary) {
-  border: 0;
-  background: var(--brand);
-  color: var(--text-inverse, #fff);
-}
-
-.admin-content :deep(.el-button--primary:hover) {
-  background: var(--brand-hover);
-}
-
-.admin-content :deep(.el-button--danger) {
-  border: 0;
-  background: var(--err);
-}
-
-.admin-content :deep(.el-tag) {
-  border: 0;
-  border-radius: var(--r-1, 4px);
-  font-weight: var(--fw-semibold, 600);
-  font-size: 10.5px;
-  letter-spacing: 0.02em;
-  height: 20px;
-  line-height: 20px;
-  padding: 0 7px;
-}
-
-.admin-content :deep(.el-input__wrapper),
-.admin-content :deep(.el-select__wrapper),
-.admin-content :deep(.el-textarea__inner) {
-  border-radius: var(--r-2, 6px);
-  background: var(--surface) !important;
-  box-shadow: 0 0 0 1px var(--line) inset !important;
-}
-
-.admin-content :deep(.el-input__wrapper.is-focus),
-.admin-content :deep(.el-select__wrapper.is-focused) {
-  box-shadow: 0 0 0 2px var(--brand) inset !important;
 }
 
 html[data-theme="dark"] .rail {

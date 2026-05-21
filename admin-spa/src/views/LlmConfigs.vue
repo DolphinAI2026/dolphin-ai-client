@@ -521,58 +521,41 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+/* v3 2026-05-21 — LlmConfigs 跟 frontend 密度对齐重写：
+   v2 紫色 hex (#5750d8 / #766bf1) + 自定义 font-weight 760/820 全清掉，
+   改 var(--brand) + var(--fw-*) + v3 typography scale (14/13.5/12.5/11)。 */
 .llm-page {
-  max-width: 1440px;
-  margin: 0 auto;
-  padding: 8px 0 56px;
-  color: #17162f;
+  color: var(--text);
+  font-family: var(--font-sans);
 }
 
 .llm-hero {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
-  gap: 24px;
-  margin-bottom: 20px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid var(--line, #ded9eb);
-}
-
-h1 {
-  margin: 0;
-  font-size: 26px;
-  line-height: 1.2;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  color: var(--text, #17162f);
+  gap: 20px;
+  flex-wrap: wrap;
 }
 
 .llm-hero p {
-  max-width: 940px;
-  margin: 8px 0 0;
-  color: var(--text-3, #5f5a7c);
-  font-size: 13.5px;
-  line-height: 1.55;
+  color: var(--text-3);
 }
 
 .hero-actions {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
   justify-content: flex-end;
 }
 
 .search-input {
-  width: 280px;
+  width: 260px;
 }
 
 .primary-button {
-  border: 0;
-  border-radius: 10px;
-  font-weight: 760;
-  background: linear-gradient(180deg, #766bf1, #5750d8);
-  box-shadow: 0 14px 28px rgba(87, 80, 216, 0.24);
+  /* density-align.css 全局已统一 .el-button--primary 样式 — 这里只调宽度 */
+  font-weight: var(--fw-medium, 500);
 }
 
 .llm-hero-info {
@@ -583,7 +566,7 @@ h1 {
 .llm-hero-title {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   flex-wrap: wrap;
 }
 
@@ -603,71 +586,64 @@ h1 {
 
 .model-panel {
   overflow: hidden;
-  border: 1px solid #ded9eb;
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.94);
-  box-shadow: 0 10px 24px rgba(34, 30, 70, 0.07);
+  margin-top: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-4, 12px);
+  background: var(--surface);
+  box-shadow: var(--sh-1);
 }
 
 .panel-head {
-  min-height: 62px;
+  /* density-align.css 全局已统一 min-height/padding/title — 这里只需要 display */
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 0 22px;
-  border-bottom: 1px solid #ece8f6;
-  background: #f3f0fb;
-}
-
-.panel-head strong {
-  color: #17162f;
-  font-size: 17px;
-  font-weight: 820;
-}
-
-.panel-head span {
-  margin-left: 10px;
-  color: #8a85a5;
-  font-size: 13px;
-  font-weight: 700;
+  border-bottom: 1px solid var(--line);
 }
 
 .config-grid {
-  min-height: 260px;
+  min-height: 200px;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 18px;
-  padding: 22px;
+  gap: 14px;
+  padding: 16px;
 }
 
 .config-card {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  padding: 18px;
-  border: 1px solid #e4dff0;
-  border-radius: 14px;
-  background: #fff;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-3, 8px);
+  background: var(--surface);
+  transition: border-color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
+              box-shadow 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+
+.config-card:hover {
+  border-color: var(--brand-ring);
+  box-shadow: var(--sh-1);
 }
 
 .config-top {
   display: flex;
-  gap: 14px;
+  gap: 12px;
 }
 
 .provider-mark {
   flex: 0 0 auto;
-  width: 44px;
-  height: 44px;
+  width: 36px;
+  height: 36px;
   display: grid;
   place-items: center;
-  border-radius: 11px;
-  color: #fff;
-  background: linear-gradient(180deg, #766bf1, #5750d8);
-  box-shadow: 0 12px 24px rgba(87, 80, 216, 0.18);
-  font-weight: 820;
+  border-radius: var(--r-2, 6px);
+  color: var(--text-inverse, #fff);
+  background: var(--brand);
+  font-size: 13px;
+  font-weight: var(--fw-bold, 700);
 }
 
 .config-title {
@@ -676,22 +652,23 @@ h1 {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
+  gap: 10px;
 }
 
 .config-title h2 {
   margin: 0;
-  color: #17162f;
-  font-size: 18px;
+  color: var(--text);
+  font-size: 14px;
   line-height: 1.25;
-  font-weight: 820;
+  font-weight: var(--fw-semibold, 600);
+  letter-spacing: -0.005em;
 }
 
 .config-title p {
-  margin: 6px 0 0;
+  margin: 3px 0 0;
   overflow: hidden;
-  color: #7a719d;
-  font-size: 13px;
+  color: var(--text-3);
+  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -706,60 +683,64 @@ h1 {
 
 .status-pill,
 .default-pill {
-  padding: 4px 9px;
-  border-radius: 8px;
-  font-size: 12px;
-  font-weight: 760;
+  padding: 2px 7px;
+  border-radius: var(--r-1, 4px);
+  font-size: 10.5px;
+  font-weight: var(--fw-semibold, 600);
+  letter-spacing: 0.02em;
   white-space: nowrap;
 }
 
 .status-pill.active {
-  color: #159f78;
-  background: #effaf7;
+  color: var(--ok);
+  background: var(--ok-soft);
 }
 
 .status-pill.inactive {
-  color: #dd7a13;
-  background: #fff1e5;
+  color: var(--warn);
+  background: var(--warn-soft);
 }
 
 .status-pill.error {
-  color: #f04444;
-  background: #fff0f0;
+  color: var(--err);
+  background: var(--err-soft);
 }
 
 .default-pill {
-  color: #5146d8;
-  background: #eeeaff;
+  color: var(--brand);
+  background: var(--brand-soft);
 }
 
 .config-meta {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
+  gap: 8px;
 }
 
 .config-meta div {
   min-width: 0;
-  padding: 12px;
-  border-radius: 10px;
-  background: #f8f6fd;
+  padding: 8px 10px;
+  border-radius: var(--r-2, 6px);
+  background: var(--surface-2);
 }
 
 .config-meta span,
 .base-url span {
   display: block;
-  color: #8a85a5;
-  font-size: 12px;
-  font-weight: 720;
+  color: var(--text-3);
+  font-size: 10.5px;
+  font-weight: var(--fw-medium, 500);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .config-meta strong {
   display: block;
-  margin-top: 5px;
+  margin-top: 3px;
   overflow: hidden;
-  color: #17162f;
-  font-size: 14px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: var(--fw-semibold, 600);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -771,11 +752,11 @@ h1 {
 code {
   display: block;
   min-width: 0;
-  margin-top: 6px;
+  margin-top: 4px;
   overflow: hidden;
-  color: #7a719d;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 13px;
+  color: var(--text-2);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace);
+  font-size: 11.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -783,42 +764,49 @@ code {
 .config-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
   padding-top: 4px;
 }
 
+/* density-align.css 已统一 .el-button — 这里 cardconfig 内的按钮再收一档 */
+.config-actions :deep(.el-button) {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
 .empty-state {
-  min-height: 360px;
+  min-height: 280px;
   display: grid;
   place-items: center;
   align-content: center;
-  gap: 10px;
-  padding: 40px;
+  gap: 8px;
+  padding: 32px;
   text-align: center;
 }
 
 .empty-mark {
-  width: 48px;
-  height: 48px;
+  width: 40px;
+  height: 40px;
   display: grid;
   place-items: center;
-  border-radius: 12px;
-  color: #5750d8;
-  background: #efedff;
-  font-size: 22px;
+  border-radius: var(--r-3, 8px);
+  color: var(--brand);
+  background: var(--brand-soft);
+  font-size: 20px;
 }
 
 .empty-state strong {
-  color: #17162f;
-  font-size: 18px;
-  font-weight: 820;
+  color: var(--text);
+  font-size: 14.5px;
+  font-weight: var(--fw-semibold, 600);
 }
 
 .empty-state p {
   margin: 0;
-  color: #8a85a5;
-  font-size: 14px;
+  color: var(--text-3);
+  font-size: 13px;
 }
 
 .form-grid {

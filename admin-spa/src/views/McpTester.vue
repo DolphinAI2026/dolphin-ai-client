@@ -453,55 +453,20 @@ onMounted(async () => {
 <style scoped>
 /* v3 redesign · 2026-05-20 — visual refresh only, template/script untouched.
    Tokens: design-v3-tokens.css (var(--brand)/--text/--surface/--line) */
+/* v3 2026-05-21 — 跟 frontend 密度对齐：max-width/h1/page-header/section card 全
+   交给 density-align.css 全局规则。本 scoped 只保留 layout + inline-row + result。 */
 .page {
-  max-width: 1400px;
-  margin: 0 auto;
   color: var(--text);
   font-family: var(--font-sans);
 }
 .page-header {
   display: flex;
-  align-items: flex-start;
+  align-items: flex-end;
   justify-content: space-between;
-  margin-bottom: 20px;
   gap: 16px;
 }
-.page-header h1 {
-  margin: 0 0 4px;
-  font-size: 22px;
-  font-weight: var(--fw-bold, 700);
-  color: var(--text);
-  letter-spacing: -0.01em;
-}
-.page-header p {
-  margin: 0;
-  font-size: 13.5px;
-  color: var(--text-3);
-  line-height: 1.55;
-}
 .section {
-  margin-bottom: 16px;
-}
-.section :deep(.el-card) {
-  border: 1px solid var(--line);
-  border-radius: var(--r-4, 12px);
-  background: var(--surface);
-  box-shadow: var(--sh-1);
-}
-.section :deep(.el-card__header) {
-  padding: 14px 18px;
-  border-bottom: 1px solid var(--line);
-  color: var(--text);
-  font-size: 13.5px;
-  font-weight: 600;
-}
-.section :deep(.el-card__body) {
-  padding: 18px;
-}
-.section :deep(.el-form-item__label) {
-  color: var(--text-2);
-  font-size: 12.5px;
-  font-weight: 500;
+  margin-bottom: 14px;
 }
 .inline-row {
   display: flex;

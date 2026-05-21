@@ -156,10 +156,10 @@ onMounted(load)
 <style scoped>
 /* v3 token 化 · 2026-05-20 — visual refresh only. template/script untouched.
    Tokens: design-v3-tokens.css. v2 紫色全 swap 到 v3 slate ramp + line + surface。 */
+/* v3 2026-05-21 — 跟 frontend 密度对齐：max-width/h1/page-header/summary-card/panel-head
+   都交给 density-align.css 全局规则。本 scoped 只保留 admin-spa 特有的 search-input 宽度
+   + member-panel container + el-table token 设置。 */
 .members-page {
-  max-width: 1440px;
-  margin: 0 auto;
-  padding: 8px 0 56px;
   color: var(--text);
   font-family: var(--font-sans);
 }
@@ -167,24 +167,8 @@ onMounted(load)
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
-  gap: 24px;
-  margin-bottom: 22px;
+  gap: 16px;
   flex-wrap: wrap;
-}
-.page-header h1 {
-  margin: 0;
-  color: var(--text);
-  font-size: 22px;
-  line-height: 1.25;
-  font-weight: var(--fw-bold, 700);
-  letter-spacing: -0.01em;
-}
-.page-header p {
-  max-width: 900px;
-  margin: 8px 0 0;
-  color: var(--text-3);
-  font-size: 13.5px;
-  line-height: 1.55;
 }
 .page-actions {
   display: flex;
@@ -193,78 +177,28 @@ onMounted(load)
   flex-wrap: wrap;
   justify-content: flex-end;
 }
-.search-input { width: 280px; }
-.search-input :deep(.el-input__wrapper) {
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  border-radius: var(--r-2, 6px);
-  box-shadow: none;
-  height: 32px;
-}
-.search-input :deep(.el-input__wrapper.is-focus) {
-  border-color: var(--brand);
-  box-shadow: 0 0 0 3px var(--brand-ring);
-}
+.search-input { width: 240px; }
 .summary-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-  margin-bottom: 16px;
-}
-.summary-card {
-  min-height: auto;
-  padding: 14px 16px;
-  border: 1px solid var(--line);
-  border-radius: var(--r-4, 12px);
-  background: var(--surface);
-  box-shadow: var(--sh-1);
-}
-.summary-card span {
-  display: block;
-  color: var(--text-3);
-  font-size: 11px;
-  font-weight: var(--fw-medium, 500);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-.summary-card strong {
-  display: block;
-  margin-top: 4px;
-  color: var(--text);
-  font-size: 22px;
-  line-height: 1.1;
-  font-weight: var(--fw-bold, 700);
-  letter-spacing: -0.02em;
-  font-feature-settings: 'tnum';
+  gap: 10px;
+  margin-bottom: 14px;
 }
 .member-panel {
   overflow: hidden;
-  margin-top: 16px;
+  margin-top: 12px;
   border: 1px solid var(--line);
   border-radius: var(--r-4, 12px);
   background: var(--surface);
   box-shadow: var(--sh-1);
 }
 .panel-head {
-  min-height: 52px;
+  /* density-align.css 全局已统一 min-height/padding/title — 仅保留 layout */
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding: 0 18px;
+  gap: 14px;
   border-bottom: 1px solid var(--line);
-  background: var(--surface);
-}
-.panel-head strong {
-  color: var(--text);
-  font-size: 13.5px;
-  font-weight: var(--fw-semibold, 600);
-}
-.panel-head span {
-  margin-left: 8px;
-  color: var(--text-3);
-  font-size: 12px;
-  font-weight: var(--fw-medium, 500);
 }
 .member-panel :deep(.el-table) {
   --el-table-header-bg-color: var(--surface-2);
