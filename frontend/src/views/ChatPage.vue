@@ -38,9 +38,12 @@
           <!-- "→ 自开发"：当前应用上下文里发起自开发任务，带应用结构跳到 AI Coding agent。
                这是 Builder→Coding handoff bridge，恢复 commit b63a8c8 误删的能力，
                但增强为：frontend 直接把 store.preview 应用结构序列化进 message，
-               不依赖 Coding agent 主动 fetch（agent prompt 暂不动）。 -->
+               不依赖 Coding agent 主动 fetch（agent prompt 暂不动）。
+               2026-05-21 加 apaas_app_id 守卫：draft 应用（status=draft / apaas_app_id=NULL）
+               没 formId/uuid，自开发拿不到真实表单 ID 直接挂。等 deploy_application 跑完
+               写入 apaas_app_id 后才显示这个按钮。 -->
           <button
-            v-if="builderCurrentAppId"
+            v-if="builderCurrentAppId && store.currentApp?.apaas_app_id"
             type="button"
             class="mode-btn mode-btn-link"
             title="把当前应用的结构（模型/表单/流程）带进 AI Coding 工作区，做自开发页面或后端接口"
