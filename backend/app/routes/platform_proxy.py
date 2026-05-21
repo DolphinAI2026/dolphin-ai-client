@@ -504,6 +504,15 @@ async def _proxy_request(request: Request, path: str, inject_auth: bool = False)
         token = _proxy_state.get("token", "")
         if "text/html" in ct and token:
             html_text = content.decode("utf-8", errors="replace")
+            # env.tmpl.js 加 cache-bust 强制 fresh fetch（防浏览器 disk cache 命中老的 dev8 版本）
+            # 这一步必须在 SSO inject 之前，避免被 inject_sso_script 跳过。
+            import time as _t_cb
+            cache_bust = str(int(_t_cb.time()))
+            html_text = re.sub(
+                r'(<script[^>]*src=["\']?[^"\'>]*?env\.tmpl\.js)(["\']?)',
+                rf'\1?_cb={cache_bust}\2',
+                html_text,
+            )
             vuex = _build_vuex_state(token, _proxy_state.get("tenant_id", ""), _proxy_state.get("username", ""))
             content = _inject_sso_script(html_text, vuex).encode("utf-8")
 
