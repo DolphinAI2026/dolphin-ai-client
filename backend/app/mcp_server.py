@@ -998,13 +998,29 @@ async def _refresh_apaas_env_token(env_id: int) -> bool:
 async def _call_apaas_platform_tool(name: str, args: dict, env_id: int) -> dict:
     """统一桥接平台类 apaas 工具：调 executor → JSON 解析为 dict。
 
-    含 token 过期自愈：apaas-trial 401 → 自动刷 platform_envs[env_id].token → retry 一次。
+    含 token 自愈两条路径：
+    1. **首次自愈** (2026-05-22): platform_envs[env_id].token 是空 (env 创建时只存了
+       username/password 没自动 login) → 先 _refresh_apaas_env_token 用 password 登录
+       拿 token 再调. 修用户"我都登录了为啥还说 token 为空"的体验.
+    2. **过期自愈**: 调用撞 401 → 刷 token retry 一次.
     """
+    from sqlalchemy import select
     from app.coding.apaas_tools import APAAS_TOOL_EXECUTORS_PLATFORM
     from app.database import AsyncSessionLocal
+    from app.models import PlatformEnv
+
     executor = APAAS_TOOL_EXECUTORS_PLATFORM.get(name)
     if not executor:
         return {"ok": False, "error_code": "UNKNOWN_TOOL", "message": f"未知工具 {name}"}
+
+    # 2026-05-22 首次自愈: env.token 是空 → 先 login 拿 token
+    try:
+        async with AsyncSessionLocal() as _db:
+            _env = (await _db.execute(select(PlatformEnv).where(PlatformEnv.id == env_id))).scalar_one_or_none()
+        if _env and not (_env.token or "").strip() and _env.username and _env.password_enc:
+            await _refresh_apaas_env_token(env_id)
+    except Exception:
+        pass  # auto-login 失败不阻断后续调用, 让 executor 自己报真错
 
     async def _run_once() -> str:
         async with AsyncSessionLocal() as db:
@@ -1012,7 +1028,7 @@ async def _call_apaas_platform_tool(name: str, args: dict, env_id: int) -> dict:
 
     result_str = await _run_once()
 
-    # token 自愈：apaas-trial 401 没中文 markers，按结构识别 → 刷 token retry 一次
+    # token 过期自愈：apaas-trial 401 没中文 markers，按结构识别 → 刷 token retry 一次
     if _looks_like_apaas_401(result_str):
         if await _refresh_apaas_env_token(env_id):
             result_str = await _run_once()
