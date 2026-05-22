@@ -404,8 +404,14 @@ function renderIcon(name: string): string {
   font-weight: var(--fw-medium, 500);
   text-align: left;
   cursor: pointer;
+  text-decoration: none;  /* 2026-05-22 button → <a> 后禁默认下划线, 跟 frontend RailSidebar 一致 */
   transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
               color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+.rail-item:hover,
+.rail-item:visited,
+.rail-item:active {
+  text-decoration: none;  /* 各 :hover/:visited 状态全锁住, 防 :visited UA 默认 underline */
 }
 
 .rail-item:hover {
