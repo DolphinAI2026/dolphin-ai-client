@@ -22,17 +22,21 @@
       </div>
 
       <nav class="rail-scroll" aria-label="平台管理导航">
-        <button
+        <!-- 2026-05-22: button → <a href> 让 cmd+click / 中键 / 右键"在新标签中打开" 真开 chrome tab.
+             普通 click → 内部 openTab + router.push (走多 tab 体系). -->
+        <a
           v-for="item in menus"
           :key="item.path"
-          type="button"
+          :href="resolveHref(item.path)"
           class="rail-item"
           :class="{ active: route.path === item.path }"
-          @click="router.push(item.path)"
+          :title="`${item.label} (Cmd+点 在新标签中打开)`"
+          @click="onMenuClick($event, item)"
+          @auxclick="onMenuClick($event, item)"
         >
           <span class="rail-item-icon" v-html="renderIcon(item.icon)" />
           <span class="rail-item-label">{{ item.label }}</span>
-        </button>
+        </a>
       </nav>
 
       <div class="rail-foot">
@@ -83,6 +87,9 @@
         </div>
       </header>
 
+      <!-- 2026-05-22 多 tab 栏 — 跟工作台 frontend TabStrip 同款体验, 支持 cmd+click 开新 chrome tab -->
+      <TabStrip />
+
       <main class="admin-content">
         <router-view />
       </main>
@@ -91,21 +98,26 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
+import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { useAdminTabsStore, type TabItem } from '@/stores/tabs'
+import TabStrip from '@/components/TabStrip.vue'
 
 const route  = useRoute()
 const router = useRouter()
 const auth   = useAuthStore()
+const tabsStore = useAdminTabsStore()
 
 interface MenuItem {
   path: string
   label: string
   icon: string
+  closable?: boolean
 }
 
 const menus: MenuItem[] = [
+  { path: '/status',      label: '系统状态',  icon: 'status', closable: false },
   { path: '/mcp',         label: 'MCP 接入',  icon: 'connection' },
   { path: '/tester',      label: 'MCP 测试',  icon: 'flask' },
   { path: '/logs',        label: '调用日志',  icon: 'logs' },
@@ -113,6 +125,53 @@ const menus: MenuItem[] = [
   { path: '/llm-configs', label: 'LLM 配置',  icon: 'cpu' },
   { path: '/users',       label: 'aPaaS 用户', icon: 'user' },
 ]
+
+// 2026-05-22 多 tab 体系: rail 点击 → openTab + router.push, 让用户能同时开多个管理界面
+function resolveHref(path: string): string {
+  try {
+    return router.resolve(path).href
+  } catch {
+    return path
+  }
+}
+
+function onMenuClick(e: MouseEvent, item: MenuItem) {
+  // modifier / 中键 → 浏览器原生开新 chrome tab
+  if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) {
+    return
+  }
+  e.preventDefault()
+  // 普通 click → openTab + 切路由
+  tabsStore.openTab({
+    id: item.path,
+    path: item.path,
+    label: item.label,
+    icon: item.icon,
+    closable: item.closable !== false,
+    kind: 'nav',
+  })
+  router.push(item.path)
+}
+
+// 路由变化 → 同步 active tab (浏览器后退 / deep link 启动场景)
+watch(() => route.path, (path) => {
+  tabsStore.syncFromRoute(path)
+  // 当前路径不在 tabs 里 (deep link 直接进 /tenants) → 自动加进 tabs
+  const hit = tabsStore.tabs.find(t => t.path === path || t.path.split('?')[0] === path.split('?')[0])
+  if (!hit) {
+    const menu = menus.find(m => m.path === path || m.path.split('?')[0] === path.split('?')[0])
+    if (menu) {
+      tabsStore.openTab({
+        id: menu.path,
+        path: menu.path,
+        label: menu.label,
+        icon: menu.icon,
+        closable: menu.closable !== false,
+        kind: 'nav',
+      })
+    }
+  }
+}, { immediate: true })
 
 const currentTitle = computed(() => menus.find(m => m.path === route.path)?.label || '管理后台')
 
