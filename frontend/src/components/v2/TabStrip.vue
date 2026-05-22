@@ -38,7 +38,28 @@ function activate(tab: TabItem) {
   router.push(tab.path)
 }
 
+// 2026-05-22 Phase 4 #4: 浏览器原生 tab 一致 — cmd/ctrl/middle click 让浏览器开新 chrome tab
+// 普通 click 走 SPA 内部切换. 用 router.resolve 把 path 拼成完整 URL 让 href 有效.
+function buildHref(path: string): string {
+  try {
+    return router.resolve(path).href
+  } catch {
+    return path
+  }
+}
+
+function onTabClick(e: MouseEvent, tab: TabItem) {
+  // modifier key 或 middle click (button=1) → 不阻止默认, 让浏览器原生开新 tab
+  if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) {
+    return  // 浏览器会按 href 在新 tab 打开
+  }
+  // 普通 left click → SPA 内部切换
+  e.preventDefault()
+  activate(tab)
+}
+
 function close(e: MouseEvent, tab: TabItem) {
+  e.preventDefault()
   e.stopPropagation()
   const next = tabsStore.closeTab(tab.id)
   if (next) router.push(next.path)
@@ -122,14 +143,16 @@ watch(tabs, async () => {
       class="tab-strip"
       @scroll="updateScrollState"
     >
-      <button
+      <!-- 2026-05-22 Phase 4 #4: button → <a> 让浏览器原生处理 cmd+click / 右键"在新标签中打开" -->
+      <a
         v-for="tab in tabs"
         :key="tab.id"
-        type="button"
+        :href="buildHref(tab.path)"
         class="tab"
         :class="{ active: tab.id === activeId }"
-        :title="tab.label"
-        @click="activate(tab)"
+        :title="`${tab.label} (Cmd+点 在新标签中打开)`"
+        @click="onTabClick($event, tab)"
+        @auxclick="onTabClick($event, tab)"
       >
         <span class="tab-icon" v-html="renderIcon(tab.icon)" />
         <span class="tab-label">{{ tab.label }}</span>
@@ -140,7 +163,7 @@ watch(tabs, async () => {
           :aria-label="`关闭 ${tab.label}`"
           @click="close($event, tab)"
         >×</button>
-      </button>
+      </a>
     </div>
     <button
       v-if="canScrollRight"
