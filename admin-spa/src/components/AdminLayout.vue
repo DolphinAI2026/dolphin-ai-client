@@ -91,7 +91,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 
@@ -123,18 +123,23 @@ const embedded = computed(() => {
 })
 
 // 主题切换（admin-spa 没 theme store，简单 localStorage + data-theme 接管）
+// 2026-05-22: 跟 frontend themeStore 用同一个 localStorage key 'theme'
+// (同 origin localStorage 共享) + 监听 storage event 实现 admin-spa ↔ 工作台
+// 实时联动 — 工作台 (父 tab) 切 dark / admin-spa iframe 也变 dark, 反之亦然.
 const isDark = ref<boolean>((() => {
   if (typeof window === 'undefined') return false
   const saved = localStorage.getItem('theme')
   return saved === 'dark'
 })())
 
-function applyTheme(dark: boolean) {
+function applyTheme(dark: boolean, persist = true) {
   isDark.value = dark
   if (typeof document !== 'undefined') {
     document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light')
+    if (dark) document.documentElement.classList.add('dark')
+    else document.documentElement.classList.remove('dark')
   }
-  if (typeof localStorage !== 'undefined') {
+  if (persist && typeof localStorage !== 'undefined') {
     localStorage.setItem('theme', dark ? 'dark' : 'light')
   }
 }
@@ -143,12 +148,35 @@ function toggleTheme() {
   applyTheme(!isDark.value)
 }
 
+// 2026-05-22 跨 SPA 主题联动: 监听 localStorage 'theme' 变化
+// 工作台 (frontend SPA) 切 dark → 写 localStorage → 同 origin admin-spa 收到 storage event → 同步
+function onStorageThemeChange(e: StorageEvent) {
+  if (e.key !== 'theme') return
+  const newTheme = e.newValue
+  if (newTheme !== 'light' && newTheme !== 'dark') return
+  const wantDark = newTheme === 'dark'
+  if (wantDark !== isDark.value) {
+    applyTheme(wantDark, false)  // 不持久化避免循环触发 storage event
+  }
+}
+
 onMounted(async () => {
   // 初始化主题
-  applyTheme(isDark.value)
+  applyTheme(isDark.value, false)  // 初始化不需要写 localStorage
+
+  // 跨 SPA 主题联动
+  if (typeof window !== 'undefined') {
+    window.addEventListener('storage', onStorageThemeChange)
+  }
 
   if (auth.isAuthenticated && !auth.user) {
     await auth.fetchMe()
+  }
+})
+
+onBeforeUnmount(() => {
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('storage', onStorageThemeChange)
   }
 })
 
