@@ -256,6 +256,24 @@ async function loadDynamicExamples() {
 onMounted(loadDynamicExamples)
 watch(() => props.applicationId, loadDynamicExamples)
 
+// 2026-05-21 Phase 3d: Browser viewport mini preview MJPEG 流.
+// 默认收起 (不主动消费 bandwidth), 用户点 "显示 AI 浏览器画面" 展开.
+import { API_PREFIX as _API_PREFIX } from '@/utils/request'
+const viewportEnabled = ref<boolean>(false)
+const viewportStreamUrl = computed(() => {
+  if (!viewportEnabled.value || !props.applicationId) return ''
+  // MJPEG 流: <img> 直接消费 multipart/x-mixed-replace
+  return `${_API_PREFIX}/applications/${props.applicationId}/browser-stream?t=${Date.now()}`
+})
+function openViewportFull() {
+  if (viewportStreamUrl.value) {
+    try {
+      const w = window.open()
+      if (w) w.document.write(`<img src="${viewportStreamUrl.value}" style="max-width:100%;height:auto;" />`)
+    } catch { /* popup blocked */ }
+  }
+}
+
 // 2026-05-19 image #39: 拖拽改宽度。localStorage 持久化。
 const PANEL_WIDTH_KEY = 'apaas-config-assistant-width-v1'
 const panelWidth = ref<number>(parseInt(localStorage.getItem(PANEL_WIDTH_KEY) || '420', 10) || 420)
@@ -302,6 +320,26 @@ function onResizeStart(e: MouseEvent) {
         {{ appName ? `调整「${appName}」` : '调整已部署应用' }}
       </div>
     </header>
+
+    <!-- 2026-05-21 Phase 3d: Browser viewport mini preview.
+         MJPEG 流, <img> 浏览器原生解码自动播放. 实时显示 agent 操作的画面.
+         扩展未连时显示 placeholder hint. -->
+    <div class="ca-viewport" v-if="viewportEnabled">
+      <div class="ca-viewport-head">
+        <span class="ca-viewport-icon">🖥️</span>
+        <span class="ca-viewport-label">AI 看到的画面 (2fps)</span>
+        <button class="ca-viewport-toggle" @click="viewportEnabled = false" title="收起">×</button>
+      </div>
+      <img
+        :src="viewportStreamUrl"
+        class="ca-viewport-img"
+        alt="agent browser viewport"
+        @click="openViewportFull"
+      />
+    </div>
+    <button v-else class="ca-viewport-show-btn" @click="viewportEnabled = true">
+      🖥️ 显示 AI 浏览器画面
+    </button>
 
     <div ref="scrollerRef" class="ca-scroll">
       <div v-if="messages.length === 0" class="ca-empty">
@@ -516,6 +554,61 @@ function onResizeStart(e: MouseEvent) {
   background: var(--brand);
   opacity: 0.4;
 }
+/* 2026-05-21 Phase 3d: Browser viewport mini preview MJPEG 流 */
+.ca-viewport {
+  margin: 0;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+}
+.ca-viewport-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  font-size: 11px;
+  color: var(--text-3);
+  background: var(--surface-3);
+  border-bottom: 1px solid var(--line);
+}
+.ca-viewport-icon { font-size: 12px; }
+.ca-viewport-label { flex: 1; letter-spacing: -0.005em; }
+.ca-viewport-toggle {
+  background: transparent;
+  border: none;
+  color: var(--text-3);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 4px;
+  line-height: 1;
+}
+.ca-viewport-toggle:hover { color: var(--text); }
+.ca-viewport-img {
+  display: block;
+  width: 100%;
+  max-height: 240px;
+  object-fit: contain;
+  cursor: zoom-in;
+  background: var(--surface);
+}
+.ca-viewport-show-btn {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  background: var(--surface-2);
+  border: none;
+  border-bottom: 1px solid var(--line);
+  color: var(--text-3);
+  font-size: 11px;
+  cursor: pointer;
+  font-family: inherit;
+  letter-spacing: -0.005em;
+  transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+.ca-viewport-show-btn:hover {
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+
 .ca-head {
   padding: 14px 16px;
   border-bottom: 1px solid var(--line);

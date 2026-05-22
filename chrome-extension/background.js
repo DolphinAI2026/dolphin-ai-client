@@ -138,6 +138,25 @@ async function dispatchCommand(cmd, args) {
         data_size: sizeApprox,
       };
     }
+    case "capture_frame_jpeg": {
+      // 2026-05-21 Phase 3d: 给 MJPEG 实时流用的轻量 frame.
+      // 用 jpeg quality 60 + (隐含) 浏览器原生缩放, 单帧 ~30-50KB.
+      // backend MJPEG 流 endpoint 每 500ms 调一次, ~60-100KB/s 流量.
+      const quality = args.quality || 60;
+      const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
+        format: "jpeg",
+        quality: quality,
+      });
+      const sizeApprox = Math.floor((dataUrl.length - "data:image/jpeg;base64,".length) * 0.75);
+      return {
+        ok: true,
+        image_data_url: dataUrl,
+        mime_type: "image/jpeg",
+        data_size: sizeApprox,
+        tab_url: tab.url,
+        tab_title: tab.title,
+      };
+    }
     case "snapshot":
     case "click":
     case "type":

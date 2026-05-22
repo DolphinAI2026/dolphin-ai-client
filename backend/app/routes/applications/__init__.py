@@ -2990,3 +2990,91 @@ async def config_chat_stream(
     """SSE 版本的配置助手 — 用户实时看到 tool 调用进度，不撞 60s 前端超时。"""
     from sse_starlette.sse import EventSourceResponse
     return EventSourceResponse(_config_chat_event_stream(app_id, payload, ctx, db))
+
+
+# ─────────────────────── Phase 3d · Browser viewport mini preview MJPEG 流 ───────────────────────
+# 2026-05-21 用户反馈: agent 操作时用户不知道 agent 在看哪 / 干啥, 要切到其他 tab 看.
+# 终极方案: ConfigAssistantPanel 内嵌 <img src=".../browser-stream"> 浏览器原生 MJPEG 解码,
+# 显示 agent 操作的浏览器画面实时回放, 用户在配置助手原地看 agent.
+#
+# 数据流: ExtensionRouter.call("capture_frame_jpeg") 每 500ms 拿 frame → multipart/x-mixed-replace
+# 浏览器收到自动播放. 单帧 ~30-50KB, 2fps = ~60-100KB/s 流量.
+#
+# 生命周期: stream 在 client 连接时启动, client 断开 (img tag unmount / page close) 时停.
+# extension 没装时返 503.
+
+async def _mjpeg_frame_generator(app_id: int, fps: float = 2.0):
+    """每 1/fps 秒调 extension 拿一帧 jpeg, 包成 multipart frame yield."""
+    import base64 as _b64
+    from app.routes.browser_ext_ws import ext_router
+
+    boundary = b"--apaas-frame"
+    interval = 1.0 / max(fps, 0.5)
+    last_send = 0.0
+    placeholder_sent = False
+
+    while True:
+        now = asyncio.get_event_loop().time()
+        sleep_for = max(0.0, interval - (now - last_send))
+        if sleep_for > 0:
+            await asyncio.sleep(sleep_for)
+        last_send = asyncio.get_event_loop().time()
+
+        if not ext_router.is_connected:
+            if not placeholder_sent:
+                # 一次性 placeholder 文字图片 (1×1 png) 通知 client 扩展未连
+                empty_png = _b64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAQMAAAAl21bKAAAAA1BMVEX///+nxBvIAAAAAXRSTlMAQObYZgAAAApJREFUCNdjYAAAAAIAAeIhvDMAAAAASUVORK5CYII=")
+                yield boundary + b"\r\nContent-Type: image/png\r\nContent-Length: " + str(len(empty_png)).encode() + b"\r\n\r\n" + empty_png + b"\r\n"
+                placeholder_sent = True
+            continue
+
+        try:
+            result = await ext_router.call("capture_frame_jpeg", {"quality": 60}, timeout=5.0)
+        except Exception:
+            continue
+        if not result.get("ok"):
+            continue
+        data_url = (result.get("result") or {}).get("image_data_url") or ""
+        if not data_url.startswith("data:image/jpeg;base64,"):
+            continue
+        try:
+            frame_bytes = _b64.b64decode(data_url[len("data:image/jpeg;base64,"):])
+        except Exception:
+            continue
+        yield boundary + b"\r\nContent-Type: image/jpeg\r\nContent-Length: " + str(len(frame_bytes)).encode() + b"\r\n\r\n" + frame_bytes + b"\r\n"
+        placeholder_sent = False
+
+
+@router.get("/{app_id}/browser-stream")
+async def browser_viewport_stream(
+    app_id: int,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """MJPEG 流 endpoint — ConfigAssistantPanel <img src> 直接消费.
+
+    Browser 原生支持 multipart/x-mixed-replace, 自动播放每帧 jpeg.
+    扩展未连时返一帧 1×1 transparent png placeholder + 继续等扩展上线.
+    """
+    from fastapi.responses import StreamingResponse
+    # 简单 auth check: 应用存在 + 用户能看
+    result = await db.execute(
+        select(Application).where(
+            Application.id == app_id,
+            Application.tenant_id == ctx.tenant_id,
+        )
+    )
+    app = result.scalar_one_or_none()
+    if not app:
+        raise HTTPException(status_code=404, detail="应用不存在")
+    await _require_application_permission(ctx, db, app, Action.VIEW)
+
+    return StreamingResponse(
+        _mjpeg_frame_generator(app_id, fps=2.0),
+        media_type="multipart/x-mixed-replace; boundary=apaas-frame",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "X-Accel-Buffering": "no",  # nginx 不要 buffer
+        },
+    )
