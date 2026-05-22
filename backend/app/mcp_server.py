@@ -279,8 +279,10 @@ async def list_platform_envs(
 ) -> dict:
     """列出当前租户配置的所有低代码平台环境。
 
-    用法（agent 工作流）：用户首次创建应用前**必须**先调本工具拿环境列表，
-    再让用户确认要部署到哪个环境。绝不假设"默认环境"用户就接受。
+    用法（agent 工作流）：只在需要选择或诊断平台环境时调用。
+    普通“查看现有应用 / 查询当前租户应用列表”不要调用本工具，直接用 list_my_applications。
+    当前租户通常已经绑定默认环境；generate_app_from_doc / export_apaas_app_design_doc
+    可以在 env_id=0 或不传 env_id 时走默认环境。
 
     返回示例：
         {
@@ -301,8 +303,7 @@ async def list_platform_envs(
     Agent 选择策略：
     - connected_count == 0 → 报错给用户："你还没配置可用的低代码平台环境，
       请先去 BuilderDevOps 添加，或检查现有环境登录状态。"
-    - connected_count == 1 且唯一 connected 环境 is_default → 直接用，
-      告诉用户"应用会部署到「{name}」"
+    - connected_count == 1 且唯一 connected 环境 is_default → 后续工具直接用默认环境，不需要再让用户确认
     - connected_count > 1 → 列给用户让其选择，等用户回复后用对应 env_id
       调 generate_app_from_doc(env_id=X)
     """
@@ -405,7 +406,12 @@ async def list_my_applications(
     tenant_id: int = 0,
     user_id: int = 0,
 ) -> dict:
-    """列出当前租户下我能访问的所有 aPaaS 应用（分页第 1 页，最多 50 条）。"""
+    """列出当前登录用户在当前租户下能访问的 Builder 应用（分页第 1 页，最多 50 条）。
+
+    直接按注入的 tenant_id 查询应用列表；当前租户已通过 JWT / 切租户确定，
+    不需要先调用 list_platform_envs。只有新建/部署/远端 aPaaS 内省需要 env_id 时，
+    才考虑查询平台环境。
+    """
     tid, uid = _resolve_identity(tenant_id, user_id)
     res = await _api_call(
         "GET",
