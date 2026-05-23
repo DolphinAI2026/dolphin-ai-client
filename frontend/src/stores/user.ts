@@ -85,6 +85,16 @@ export const useUserStore = defineStore('user', () => {
     const res = await authApi.switchTenant(targetTenantId)
     setToken(res.access_token)
     await fetchUser()
+
+    // 2026-05-22 修"切租户数据不刷新"用户痛点 — 整页 reload 让所有 store / 组件
+    // state 重拉新租户数据. 反模式: 只更新 user.tenant_id 不动其他 store 导致
+    // applications / SPEC / workspace / artifact 等列表全部 stale (上一个租户残留).
+    // 整页 reload 避免漏 invalidate 某些 store 缓存. 切租户本来就是 disruptive
+    // 重置工作环境的行为, 副作用 (in-flight SSE 断 / 填一半表单丢) 可接受.
+    if (typeof window !== 'undefined') {
+      // 切到首页再 reload 防止用户停在 /chat?app_id=N 那种含其他租户 app id 的 url
+      window.location.href = '/ai-builder/'
+    }
   }
 
   const logout = () => {
