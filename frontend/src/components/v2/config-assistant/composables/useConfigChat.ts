@@ -45,8 +45,14 @@ export function extractPlan(content: string): { planMd: string; rest: string } {
 export function useConfigChat(opts: {
   applicationId: Ref<number>
   scrollerRef: Ref<HTMLElement | null>
+  /**
+   * 2026-05-24: 模型选择 ref — 由父容器持有 (后续会加 localStorage 持久化)。
+   * undefined / null / 0 时, 后端走默认 LLM (跟老行为一致).
+   * 子组件 ConfigAssistantHeader 通过 v-model 写回这个 ref.
+   */
+  modelId?: Ref<number | null>
 }) {
-  const { applicationId, scrollerRef } = opts
+  const { applicationId, scrollerRef, modelId } = opts
 
   const messages = ref<ChatMsg[]>([])
   const input = ref('')
@@ -90,10 +96,13 @@ export function useConfigChat(opts: {
     messages.value.push(placeholder)
     scrollToBottom()
 
+    // 2026-05-24: 把 Header 选的 model_id 透传给后端 (0/null = 后端走默认)
+    const requestedModelId = modelId?.value ?? null
+
     try {
       await configChatApi.chatStream(
         applicationId.value,
-        { message: msg, history },
+        { message: msg, history, model_id: requestedModelId },
         (ev: any) => {
           const slot = messages.value.find((m) => m.id === placeholderId) as ChatMsg | undefined
           if (!slot) return

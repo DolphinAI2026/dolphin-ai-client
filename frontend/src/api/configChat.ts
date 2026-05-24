@@ -17,6 +17,12 @@ export interface ConfigChatHistoryItem {
 export interface ConfigChatReq {
   message: string
   history: ConfigChatHistoryItem[]
+  /**
+   * 2026-05-24: 用户在 ConfigAssistantHeader 选择的模型 id (LlmConfig.id)。
+   * - 0 / null / undefined: 走后端默认 (跟老行为一致 — 当前租户的 builder default cfg)
+   * - >0: 强制用该 LlmConfig 跑 agent (Claude/DeepSeek 等)
+   */
+  model_id?: number | null
 }
 
 /**
@@ -55,7 +61,7 @@ export interface ConfigChatResp {
  * SSE 流式事件类型 (跟 backend `_config_chat_event_stream` 对齐)
  */
 export type ConfigChatStreamEvent =
-  | { type: 'started'; app_id: number; spec_source: string; tools: number }
+  | { type: 'started'; app_id: number; spec_source: string; tools: number; model?: string; provider?: string }
   | { type: 'turn_start'; turn: number; of: number }
   | { type: 'tool_call'; tool_name: string; args: Record<string, any> }
   | { type: 'tool_result'; tool_name: string; args: Record<string, any>; ok: boolean; summary: string }
