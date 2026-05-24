@@ -203,4 +203,65 @@ export const applicationApi = {
       app_id: number | null
     }>(`/applications/deploy-status/${taskId}`)
   },
+
+  // ── 部署历史 & 回滚 (2026-05-24 Agent C) ─────────────────────────────────────────────────
+  /** 列出应用的部署历史（分页） */
+  listDeployRecords(appId: number, params?: { page?: number; page_size?: number }) {
+    return request.get<any, {
+      total: number
+      page: number
+      page_size: number
+      items: Array<{
+        id: number
+        app_id: number
+        user_id: number
+        version_label: string | null
+        status: 'in_progress' | 'success' | 'failed' | 'rolled_back'
+        deploy_type: 'deploy' | 'publish' | 'rollback'
+        snapshot_artifact_id: number | null
+        snapshot_version: number | null
+        snapshot_summary: string | null
+        snapshot_size: number | null
+        apaas_app_id_before: string | null
+        apaas_app_id_after: string | null
+        error_message: string | null
+        created_at: string | null
+        completed_at: string | null
+      }>
+    }>(`/applications/${appId}/deploy-records`, { params })
+  },
+
+  /** 单条部署记录详情（含 SPEC snapshot content + event log） */
+  getDeployRecord(appId: number, recordId: number) {
+    return request.get<any, {
+      id: number
+      app_id: number
+      user_id: number
+      version_label: string | null
+      status: string
+      deploy_type: string
+      snapshot_artifact_id: number | null
+      snapshot_version: number | null
+      snapshot_summary: string | null
+      snapshot_size: number | null
+      snapshot_content: string | null
+      apaas_app_id_before: string | null
+      apaas_app_id_after: string | null
+      error_message: string | null
+      event_log: any[] | null
+      created_at: string | null
+      completed_at: string | null
+    }>(`/applications/${appId}/deploy-records/${recordId}`)
+  },
+
+  /** 回滚到指定部署记录的 SPEC 快照 */
+  rollbackApplication(appId: number, toRecordId: number) {
+    return request.post<any, {
+      ok: boolean
+      record_id: number
+      snapshot_version: number
+      message: string
+      next_action: string
+    }>(`/applications/${appId}/rollback`, { to_record_id: toRecordId })
+  },
 }
