@@ -22,6 +22,8 @@ from app.models.collaboration import (  # noqa: F401  — register ORM mapping
     GitConnection,
     PlatformDriftLog,
 )
+# Import deploy history (DeployRecord) — 2026-05-24
+from app.models.deploy_history import DeployRecord  # noqa: F401
 
 
 class User(Base):

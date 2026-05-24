@@ -49,6 +49,8 @@ async def init_db():
     import app.models.spec  # noqa: F401
     # ConfigChat 会话持久化（2026-05-24）— config_chat_sessions / config_chat_messages
     import app.models.config_chat  # noqa: F401
+    # 部署历史 + 回滚（2026-05-24）— DeployRecord
+    import app.models.deploy_history  # noqa: F401
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await _migrate_legacy_builder_specs(conn, inspect)
