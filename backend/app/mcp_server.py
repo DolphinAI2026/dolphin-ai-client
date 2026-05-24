@@ -26,6 +26,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
 from app.config import settings
+from app.error_messages import is_apaas_token_error
 
 # pydantic-settings 加载的是 settings.env_var；我们直接读 os.environ 的 MCP_API_KEYS。
 # 显式 load .env 兜底（生产 nohup 启动时 source .env 不一定继承环境变量）
@@ -127,6 +128,19 @@ def _resolve_app_id(app_id: int | None, user_id: int) -> tuple[int, str]:
     return int(real_app_id), real_app_name
 
 
+async def _resolve_env_id_for_app(app_id: int, tenant_id: int, user_id: int) -> int | None:
+    """token retry 用 — 从 app_id 反查 platform_env_id (不撞 apaas, 无递归风险)."""
+    try:
+        app_data = await _api_call(
+            "GET", f"/applications/{app_id}",
+            tenant_id=tenant_id, user_id=user_id,
+        )
+        return (app_data or {}).get("platform_env_id")
+    except Exception as exc:
+        logger.warning("token retry: 从 app=%s 反查 env_id 失败: %s", app_id, exc)
+        return None
+
+
 async def _api_call(
     method: str,
     path: str,
@@ -137,23 +151,44 @@ async def _api_call(
     params: dict | None = None,
     files: dict | None = None,
     timeout: float = 300.0,
+    token_retry_app_id: int | None = None,
+    token_retry_env_id: int | None = None,
 ) -> Any:
-    """调本机内部 endpoint。普通 JSON 接口直接返；SSE 由 _api_call_sse 处理。"""
-    token = _sign_service_token(user_id, tenant_id)
-    headers = {"Authorization": f"Bearer {token}"}
-    async with httpx.AsyncClient(base_url=_INTERNAL_BASE, headers=headers, timeout=timeout) as cli:
-        resp = await cli.request(method, path, json=json_body, params=params, files=files)
-        if resp.status_code >= 400:
-            raise RuntimeError(
-                f"内部接口 {method} {path} 失败 ({resp.status_code}): {resp.text[:500]}"
-            )
-        ct = (resp.headers.get("content-type") or "").lower()
-        if "json" in ct:
-            return resp.json()
-        try:
-            return resp.json()
-        except Exception:
-            return {"raw": resp.text}
+    """调本机内部 endpoint。普通 JSON 接口直接返；SSE 由 _api_call_sse 处理。
+
+    2026-05-23 C 方案 B (移植 b33d18e, 用同进程 _refresh_apaas_env_token 替换
+    internal HTTP refresh): 传 token_retry_app_id / token_retry_env_id 时,
+    撞 APaaS token 过期 (含 is_apaas_token_error markers) 自动刷 token + 重试一次.
+    app_id 优先反查 env_id; 只传 env_id 时直接刷指定环境 (auto-create 场景用).
+    """
+    async def _once() -> Any:
+        token = _sign_service_token(user_id, tenant_id)
+        headers = {"Authorization": f"Bearer {token}"}
+        async with httpx.AsyncClient(base_url=_INTERNAL_BASE, headers=headers, timeout=timeout) as cli:
+            resp = await cli.request(method, path, json=json_body, params=params, files=files)
+            if resp.status_code >= 400:
+                raise RuntimeError(
+                    f"内部接口 {method} {path} 失败 ({resp.status_code}): {resp.text[:500]}"
+                )
+            ct = (resp.headers.get("content-type") or "").lower()
+            if "json" in ct:
+                return resp.json()
+            try:
+                return resp.json()
+            except Exception:
+                return {"raw": resp.text}
+
+    try:
+        return await _once()
+    except RuntimeError as exc:
+        if (token_retry_app_id or token_retry_env_id) and is_apaas_token_error(str(exc)):
+            env_id = token_retry_env_id
+            if env_id is None and token_retry_app_id:
+                env_id = await _resolve_env_id_for_app(token_retry_app_id, tenant_id, user_id)
+            if env_id and await _refresh_apaas_env_token(env_id):
+                logger.info("MCP token 自愈后重试 %s %s", method, path)
+                return await _once()
+        raise
 
 
 async def _api_call_sse_collect(
@@ -166,49 +201,73 @@ async def _api_call_sse_collect(
     params: dict | None = None,
     files: dict | None = None,
     timeout: float = 600.0,
+    token_retry_app_id: int | None = None,
+    token_retry_env_id: int | None = None,
 ) -> dict:
     """专门给 SSE endpoint 用：consume 整个 stream，按事件聚合返回最终状态。
 
     返回 { events: [...], done: <最终 done payload>, errors: [...] }
-    """
-    token = _sign_service_token(user_id, tenant_id)
-    headers = {"Authorization": f"Bearer {token}", "Accept": "text/event-stream"}
-    events: list[dict] = []
-    errors: list[str] = []
-    done_payload: dict | None = None
 
-    async with httpx.AsyncClient(base_url=_INTERNAL_BASE, headers=headers, timeout=timeout) as cli:
-        async with cli.stream(method, path, json=json_body, params=params, files=files) as resp:
-            if resp.status_code >= 400:
-                body = await resp.aread()
-                raise RuntimeError(
-                    f"内部 SSE {method} {path} 失败 ({resp.status_code}): {body[:500]!r}"
-                )
-            current_event = ""
-            async for line in resp.aiter_lines():
-                line = (line or "").rstrip()
-                if not line:
-                    current_event = ""
-                    continue
-                if line.startswith("event:"):
-                    current_event = line[6:].strip()
-                    continue
-                if not line.startswith("data:"):
-                    continue
-                data_str = line[5:].lstrip()
-                if not data_str:
-                    continue
-                try:
-                    data = json.loads(data_str)
-                except Exception:
-                    data = {"_raw": data_str}
-                ev = {"event": current_event or data.get("type") or "message", "data": data}
-                events.append(ev)
-                if ev["event"] == "done":
-                    done_payload = data if isinstance(data, dict) else {"value": data}
-                elif ev["event"] == "error":
-                    errors.append(str(data.get("message") or data.get("error") or data))
-    return {"events": events, "done": done_payload, "errors": errors}
+    2026-05-23 C 方案 B: token_retry_app_id / token_retry_env_id 同 _api_call.
+    SSE 路径 token 过期通常表现为 errors 数组里的 'Token已过期' / 'APaaS平台Token已过期'
+    文案 (apaas_client 401 → APAAS_TOKEN_EXPIRED). 检测到后整段 stream 重新执行
+    (events 清空重收). 重试只发生一次. 依赖 backend handler 内 'if not existing_apaas_app_id'
+    保护防 double create_app (commit b33d18e 已在 prod 跑过 5/7-5/14 验证).
+    """
+    async def _once() -> dict:
+        token = _sign_service_token(user_id, tenant_id)
+        headers = {"Authorization": f"Bearer {token}", "Accept": "text/event-stream"}
+        events: list[dict] = []
+        errors: list[str] = []
+        done_payload: dict | None = None
+
+        async with httpx.AsyncClient(base_url=_INTERNAL_BASE, headers=headers, timeout=timeout) as cli:
+            async with cli.stream(method, path, json=json_body, params=params, files=files) as resp:
+                if resp.status_code >= 400:
+                    body = await resp.aread()
+                    raise RuntimeError(
+                        f"内部 SSE {method} {path} 失败 ({resp.status_code}): {body[:500]!r}"
+                    )
+                current_event = ""
+                async for line in resp.aiter_lines():
+                    line = (line or "").rstrip()
+                    if not line:
+                        current_event = ""
+                        continue
+                    if line.startswith("event:"):
+                        current_event = line[6:].strip()
+                        continue
+                    if not line.startswith("data:"):
+                        continue
+                    data_str = line[5:].lstrip()
+                    if not data_str:
+                        continue
+                    try:
+                        data = json.loads(data_str)
+                    except Exception:
+                        data = {"_raw": data_str}
+                    ev = {"event": current_event or data.get("type") or "message", "data": data}
+                    events.append(ev)
+                    if ev["event"] == "done":
+                        done_payload = data if isinstance(data, dict) else {"value": data}
+                    elif ev["event"] == "error":
+                        errors.append(str(data.get("message") or data.get("error") or data))
+        return {"events": events, "done": done_payload, "errors": errors}
+
+    result = await _once()
+    if (
+        (token_retry_app_id or token_retry_env_id)
+        and result.get("errors")
+        and any(is_apaas_token_error(e) for e in result["errors"])
+    ):
+        env_id = token_retry_env_id
+        if env_id is None and token_retry_app_id:
+            env_id = await _resolve_env_id_for_app(token_retry_app_id, tenant_id, user_id)
+        if env_id and await _refresh_apaas_env_token(env_id):
+            logger.info("MCP token 自愈后重试 SSE %s %s", method, path)
+            result = await _once()
+            result["_token_auto_refreshed"] = True
+    return result
 
 
 # ─────────────────────── FastMCP 实例 ───────────────────────
@@ -1222,6 +1281,9 @@ async def deploy_application(
     FAST_RETURN_TIMEOUT = 25.0
 
     async def _run_full_sse() -> dict:
+        # 2026-05-23 C 方案 B: 传 token_retry_app_id 让 SSE 撞 apaas token 过期时
+        # 自动刷 token + 整段 stream 重跑. backend /generate handler 内已有
+        # 'if not existing_apaas_app_id' 保护防 double create_app.
         return await _api_call_sse_collect(
             "GET",
             f"/applications/{app_id}/generate",
@@ -1229,6 +1291,7 @@ async def deploy_application(
             user_id=uid,
             params={"token": sse_token},
             timeout=600.0,
+            token_retry_app_id=app_id,
         )
 
     sse_task = _asyncio.create_task(_run_full_sse())
