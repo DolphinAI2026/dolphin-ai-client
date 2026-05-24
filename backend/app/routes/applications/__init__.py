@@ -2215,6 +2215,9 @@ async def deploy_status(
 class ConfigChatReq(BaseModel):
     message: str  # 本轮用户自然语言诉求
     history: list[dict] = []  # 之前的对话 [{role: 'user'|'assistant', content: str}]
+    # 2026-05-24: 用户可在 ConfigAssistantHeader 选模型。0/None = 走 _resolve_builder_llm_cfg
+    # 默认 (跟原行为一致)。>0 时强制用该 LlmConfig.id 跑 agent (Claude/DeepSeek 等)。
+    model_id: int | None = 0
 
 
 class ConfigChatToolTrace(BaseModel):
@@ -2646,9 +2649,17 @@ async def _config_chat_event_stream(
             spec_source = "requirement_doc"
 
         # LLM cfg
+        # 2026-05-24: payload.model_id >0 时强制走指定 LlmConfig (用户在 Header 下拉切的);
+        # 0/None 时走 conversation/tenant 默认 (跟老行为一致)。
+        selected_config_id = (
+            payload.model_id if payload.model_id and payload.model_id > 0 else None
+        )
         try:
             cfg = await _resolve_builder_llm_cfg(
-                db, ctx.tenant_id, conversation_id=app.conversation_id
+                db,
+                ctx.tenant_id,
+                conversation_id=app.conversation_id,
+                selected_config_id=selected_config_id,
             )
         except Exception as exc:
             cfg = None
@@ -2709,6 +2720,9 @@ async def _config_chat_event_stream(
             "spec_source": spec_source,
             "tools": len(tool_schemas),
             "skills": len(skill_hint.split("\n")) if skill_hint else 0,
+            # 2026-05-24: 让前端日志显示实际跑的模型 (用户切了 model_id 后能验证生效)
+            "model": cfg.get("model"),
+            "provider": cfg.get("provider"),
         })
 
         # SYSTEM prompt — 跟同步版完全一致
