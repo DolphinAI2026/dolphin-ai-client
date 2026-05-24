@@ -172,6 +172,14 @@
         <div class="md-viewer-head">
           <div class="md-viewer-title">{{ lastParsedFilename || `${builderAppDisplayName || '功能设计文档'}.md` }}</div>
           <button v-if="latestDocContent || selectedDocDisplayContent" class="md-download-btn" @click="downloadCurrentDoc">下载 .md</button>
+          <!-- 2026-05-24 Agent C: 部署历史 + 回滚入口 -->
+          <button
+            v-if="store.currentApp?.id"
+            class="md-download-btn"
+            style="margin-left: 6px"
+            @click="openDeployHistoryDrawer"
+            title="查看部署历史 & 回滚"
+          >📜 部署历史</button>
         </div>
         <div v-if="liveStructuredDocResult" class="md-viewer-body structured-doc-host">
           <StructuredDocRenderer :doc-result="liveStructuredDocResult" />
@@ -521,6 +529,16 @@
         </button>
       </template>
     </el-dialog>
+
+    <!-- 部署历史 Drawer -->
+    <DeployHistoryDrawer
+      v-if="store.currentApp?.id"
+      :application-id="store.currentApp.id"
+      :open="deployHistoryOpen"
+      :app-name="builderAppDisplayName"
+      @update:open="(v) => { deployHistoryOpen = v }"
+      @rolled-back="handleDeployHistoryRollback"
+    />
   </div><!-- /chat-page -->
   </div><!-- /chat-page-shell -->
     </main><!-- /chat-main -->
@@ -646,6 +664,7 @@ import ChooseAppTargetDialog from '@/components/ChooseAppTargetDialog.vue'
 import SessionSidebar, { type SessionItem as SidebarSessionItem } from '@/components/common/SessionSidebar.vue'
 import StructuredDocRenderer from '@/components/StructuredDocRenderer.vue'
 import StructuredDocDiffRenderer from '@/components/StructuredDocDiffRenderer.vue'
+import DeployHistoryDrawer from '@/components/v2/DeployHistoryDrawer.vue'
 import { llmConfigApi, type BuilderModelOption } from '@/api/llmConfig'
 import { convertConfig } from '@/api/conversation'
 import { buildStructuredDocFromPreviewConfig } from '@/utils/structuredDoc'
@@ -755,6 +774,21 @@ const store = usePreviewStore()
 const userStore = useUserStore()
 const specStore = useSpecStore()
 const rightQuickInput = ref('')
+
+// 部署历史 Drawer
+const deployHistoryOpen = ref(false)
+function openDeployHistoryDrawer() {
+  if (store.currentApp?.id) {
+    deployHistoryOpen.value = true
+  }
+}
+function handleDeployHistoryRollback(_recordId: number) {
+  // 回滚后把 currentApp 标记为 updating（提示用户去重新部署）
+  if (store.currentApp) {
+    store.currentApp = { ...store.currentApp, status: 'updating' }
+  }
+}
+
 const parsedAppCode = ref('')
 const loadedAppCode = ref('')
 const currentRemoteStatus = ref('')
