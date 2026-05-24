@@ -218,7 +218,7 @@
                 v-if="hasCardMoreActions(app)"
                 trigger="click"
                 placement="bottom-end"
-                @command="(cmd: 'spec' | 'platform' | 'delete') => onCardMoreCommand(app, cmd)"
+                @command="(cmd: 'spec' | 'platform' | 'history' | 'delete') => onCardMoreCommand(app, cmd)"
               >
                 <button class="apps-mini-action apps-more-action" type="button" title="更多操作" aria-label="更多操作">
                   <el-icon><MoreFilled /></el-icon>
@@ -227,6 +227,7 @@
                   <el-dropdown-menu>
                     <el-dropdown-item v-if="canViewSpec(app)" command="spec">查看 SPEC</el-dropdown-item>
                     <el-dropdown-item v-if="canOpenInPlatform(app)" command="platform">进入应用 ↗</el-dropdown-item>
+                    <el-dropdown-item v-if="canViewDeployHistory(app)" command="history">📜 部署历史</el-dropdown-item>
                     <el-dropdown-item v-if="canDeleteApp(app)" command="delete" divided class="apps-more-danger">删除应用</el-dropdown-item>
                   </el-dropdown-menu>
                 </template>
@@ -252,6 +253,15 @@
     <!-- 导入应用弹窗 -->
     <ImportAppDialog v-model="importDialogOpen" @imported="refreshApps" />
 
+    <!-- 2026-05-24: 部署历史抽屉 (Agent C 实现 + 主分支补卡片菜单入口) -->
+    <DeployHistoryDrawer
+      v-if="deployHistoryApp"
+      v-model:open="deployHistoryOpen"
+      :application-id="Number(deployHistoryApp.id)"
+      :app-name="deployHistoryApp.app_name"
+      @rolled-back="refreshApps"
+    />
+
   </BuilderFrame>
 </template>
 
@@ -266,6 +276,7 @@ import { conversationApi, type ConversationWithApp } from '@/api/conversation'
 import { useTabsStore } from '@/stores/tabs'
 import BuilderFrame from '@/components/BuilderFrame.vue'
 import ImportAppDialog from '@/components/ImportAppDialog.vue'
+import DeployHistoryDrawer from '@/components/v2/DeployHistoryDrawer.vue'
 import EmptyState from '@/components/states/EmptyState.vue'
 import SkeletonCard from '@/components/states/SkeletonCard.vue'
 import type { MergedApplication } from '@/types'
@@ -467,12 +478,26 @@ function openInPlatform(app: MergedApplication) {
 }
 
 function hasCardMoreActions(app: MergedApplication) {
-  return canViewSpec(app) || canOpenInPlatform(app) || canDeleteApp(app)
+  return canViewSpec(app) || canOpenInPlatform(app) || canViewDeployHistory(app) || canDeleteApp(app)
 }
 
-function onCardMoreCommand(app: MergedApplication, cmd: 'spec' | 'platform' | 'delete') {
+// 2026-05-24: 部署历史入口 (Agent C, 主分支补集成)
+function canViewDeployHistory(app: MergedApplication) {
+  return app.source === 'local' && Boolean(app.id)
+}
+
+const deployHistoryOpen = ref(false)
+const deployHistoryApp = ref<MergedApplication | null>(null)
+
+function openDeployHistory(app: MergedApplication) {
+  deployHistoryApp.value = app
+  deployHistoryOpen.value = true
+}
+
+function onCardMoreCommand(app: MergedApplication, cmd: 'spec' | 'platform' | 'history' | 'delete') {
   if (cmd === 'spec') openSpec(app)
   else if (cmd === 'platform') openInPlatform(app)
+  else if (cmd === 'history') openDeployHistory(app)
   else if (cmd === 'delete') confirmDelete(app)
 }
 

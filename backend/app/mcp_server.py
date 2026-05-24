@@ -1361,6 +1361,90 @@ async def deploy_application(
     }
 
 
+# 2026-05-24 Agent C + 主分支补齐: 部署历史 + 回滚 MCP 工具
+@mcp.tool()
+async def list_deploy_records(
+    app_id: int,
+    page: int = 1,
+    page_size: int = 20,
+    tenant_id: int = 0,
+    user_id: int = 0,
+) -> dict:
+    """列指定 ai-builder 应用的部署历史 (含 deploy / publish / rollback 全周期记录).
+
+    使用场景: 用户问 "这个应用部署过几次?" / "上次失败的部署详情" / 准备 rollback 前先看历史.
+
+    返回结构: { total, page, page_size, items: [{id, version_label, status, deploy_type,
+                 snapshot_version, snapshot_summary, error_message, created_at, completed_at}] }
+
+    每条 record 含 snapshot_artifact_id 指向 SPEC 备份, status=success/failed/in_progress/rolled_back.
+    """
+    tid, uid = _resolve_identity(tenant_id, user_id)
+    if not app_id or app_id <= 0:
+        return {"ok": False, "error_code": "INVALID_APP_ID", "message": "app_id 必填"}
+    try:
+        result = await _api_call(
+            "GET",
+            f"/applications/{app_id}/deploy-records",
+            tenant_id=tid,
+            user_id=uid,
+            params={"page": page, "page_size": page_size},
+        )
+        return {"ok": True, **(result if isinstance(result, dict) else {"items": result})}
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error_code": "DEPLOY_RECORDS_QUERY_FAILED",
+            "message": f"查部署历史失败: {exc}",
+            "app_id": app_id,
+        }
+
+
+@mcp.tool()
+async def rollback_application(
+    app_id: int,
+    to_record_id: int,
+    tenant_id: int = 0,
+    user_id: int = 0,
+) -> dict:
+    """回滚 ai-builder 应用到指定历史部署记录的 SPEC 快照.
+
+    用法:
+      1. 先调 list_deploy_records(app_id) 找到要回滚到的那条 record_id
+      2. 调本工具 rollback_application(app_id, to_record_id=N)
+      3. 工具把那个 record 的 SPEC snapshot 写回 application.config_preview, 并插一条新 record
+         deploy_type='rollback'
+      4. **不直接重 deploy 到 apaas** (避免长 SSE 阻塞). 工具返 next_action 提示用户接下来要
+         手动触发 deploy_application 重 deploy.
+
+    返回 { ok, record_id, snapshot_version, message, next_action }.
+
+    使用场景: 用户发现"刚才的 update 把应用搞坏了, 回到 30 分钟前那版" / 失败部署后回滚.
+    """
+    tid, uid = _resolve_identity(tenant_id, user_id)
+    if not app_id or app_id <= 0:
+        return {"ok": False, "error_code": "INVALID_APP_ID", "message": "app_id 必填"}
+    if not to_record_id or to_record_id <= 0:
+        return {"ok": False, "error_code": "INVALID_RECORD_ID", "message": "to_record_id 必填"}
+    try:
+        result = await _api_call(
+            "POST",
+            f"/applications/{app_id}/rollback",
+            tenant_id=tid,
+            user_id=uid,
+            json_body={"to_record_id": to_record_id},
+        )
+        return {"ok": True, **(result if isinstance(result, dict) else {"result": result})}
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error_code": "ROLLBACK_FAILED",
+            "message": f"回滚失败: {exc}",
+            "app_id": app_id,
+            "to_record_id": to_record_id,
+        }
+
+
 @mcp.tool()
 async def list_dev_scenes() -> dict:
     """列出 ai-builder 支持的所有自开发场景类型（首次接到自开发需求时**必调**）。

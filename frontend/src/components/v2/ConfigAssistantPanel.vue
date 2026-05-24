@@ -28,6 +28,7 @@ import ConfigAssistantViewport from './config-assistant/ConfigAssistantViewport.
 import ConfigAssistantMessages from './config-assistant/ConfigAssistantMessages.vue'
 import ConfigAssistantInput from './config-assistant/ConfigAssistantInput.vue'
 import ConfigAssistantSessionDrawer from './config-assistant/ConfigAssistantSessionDrawer.vue'
+import DeployHistoryDrawer from './DeployHistoryDrawer.vue'
 
 import { useConfigChat } from './config-assistant/composables/useConfigChat'
 import { useDynamicExamples } from './config-assistant/composables/useDynamicExamples'
@@ -98,6 +99,9 @@ const {
 // 2026-05-24 Agent A 集成: 历史会话抽屉
 const drawerOpen = ref(false)
 const drawerRef = ref<InstanceType<typeof ConfigAssistantSessionDrawer> | null>(null)
+
+// 2026-05-24 Agent C 集成: 部署历史抽屉 (post-deploy 应用专属入口)
+const deployHistoryOpen = ref(false)
 
 async function onDelete(sid: number) {
   try {
@@ -170,7 +174,7 @@ onUpdated(() => {
     <!-- 左边缘拖拽 handle -->
     <div class="ca-resize-handle" @pointerdown="onResizeStart" title="拖拽调整宽度" />
 
-    <!-- 顶部 actions: 新对话 / 历史 (固定在 panel 顶部右上角) -->
+    <!-- 顶部 actions: 新对话 / 历史 / 部署历史 (固定在 panel 顶部右上角) -->
     <div class="ca-top-actions">
       <button
         class="ca-top-btn"
@@ -188,6 +192,16 @@ onUpdated(() => {
       >
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M3 7h18M3 12h18M3 17h18" />
+        </svg>
+      </button>
+      <button
+        class="ca-top-btn"
+        title="部署历史 / 回滚"
+        @click="deployHistoryOpen = true"
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 8v4l3 2" />
+          <circle cx="12" cy="12" r="9" />
         </svg>
       </button>
     </div>
@@ -226,6 +240,14 @@ onUpdated(() => {
       @new="onNewSession"
       @delete="onDelete"
       @rename="onRename"
+    />
+
+    <!-- 部署历史抽屉 (Agent C 新组件, post-deploy 应用专属入口) -->
+    <DeployHistoryDrawer
+      v-model:open="deployHistoryOpen"
+      :application-id="applicationId"
+      :app-name="appName"
+      @rolled-back="emit('refresh-iframe')"
     />
   </aside>
 </template>
