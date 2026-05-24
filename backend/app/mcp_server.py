@@ -816,56 +816,50 @@ def _do_validate_builder_doc(md_content: str) -> dict:
 
 
 @mcp.tool()
-async def validate_builder_doc(md_content: str = "", artifact_id: int = 0) -> dict:
+async def validate_builder_doc(artifact_id: int) -> dict:
     """校验一份 markdown 设计文档是否符合 aPaaS Builder 标准（不创建应用、不需要身份）。
 
-    **2026-05-21 加 artifact_id 省 token** — 参数二选一:
-    - `artifact_id` (推荐): write_artifact 返回的 id, backend 自动从 db 读 content 校验.
-      节省 5000+ 字 token + 30-60s LLM 生成时间. **强烈建议**先 write_artifact 拿 id 再 validate.
-    - `md_content`: 直接传完整 md 字符串 (兼容老用法). 给了 artifact_id 时忽略此参数.
+    **2026-05-23 强制 artifact_id 模式** (省 token, 消除 LLM 重写 5000+ 字 md 浪费):
+    - 之前 `md_content` 参数已删除. 必须先 write_artifact 拿 id, 再用 id 校验.
+    - 工作流: write_artifact (返 id) → validate_builder_doc(artifact_id=id)
+    - 撞 MISSING_ARTIFACT_ID → 说明 agent 漏调 write_artifact, 先写文档拿 id 再校验
+    - 撞 ARTIFACT_NOT_FOUND → id 错或 artifact 已被删, 重新 write_artifact 拿新 id
 
-    用法：写完 / 改完 md 之后，先调这个工具自检。建议工作流：
-      1. 写完 md → 调 validate_builder_doc
-      2. passes_strict=False → 按 missing_sections / weak_sections / signals / advice 自我修补
-      3. 重复至多 3 轮；仍不通过把问题原文列给用户决定
-      4. passes_strict=True 才把 md 文档输出给用户（或直接用 generate_app_from_doc）
+    建议工作流：
+      1. 写完 md → write_artifact → 拿 artifact_id
+      2. validate_builder_doc(artifact_id=N)
+      3. passes_strict=False → 按 missing_sections / weak_sections / signals / advice 自我修补
+      4. 重新 write_artifact (同名 filename 自动 version++) 拿新 id → 重 validate
+      5. 重复至多 3 轮; 仍不通过把问题原文列给用户决定
+      6. passes_strict=True 才把 md 文档输出给用户（或直接 generate_app_from_doc）
 
     返回：
         {
           "ok": True,
           "score": 0-100,                   # 综合分
           "level": "standard|partial|freeform",
-          "decision": "pure_code|hybrid_fallback|rewrite_first",  # 后端会按此走解析路径
-          "passes_strict": bool,            # score >= 95 且无 missing_sections，可直接送 strict 解析
-          "missing_sections": [str],        # 缺的必填章节中文名
-          "weak_sections": [str],           # 表头不达标的章节中文名
-          "signals": {                       # 5 维子项打分（0~1）
-              "section_coverage": ...,       # 必填章节覆盖率（30 分权重）
-              "header_format": ...,          # ## N、名称 标题格式（15 分）
-              "table_header_match": ...,     # 表头与标准 6 章模板匹配率（25 分）
-              "code_compliance": ...,        # 编码字段全英文小写下划线（15 分）
-              "ref_integrity": ...           # 字典/模型引用闭合（15 分）
-          },
-          "advice": [str],                  # 给 agent 的下一步修补建议（人话）
+          "decision": "pure_code|hybrid_fallback|rewrite_first",
+          "passes_strict": bool,
+          "missing_sections": [str],
+          "weak_sections": [str],
+          "signals": { "section_coverage": ..., "header_format": ..., ... },
+          "advice": [str],
         }
     """
-    # 2026-05-21 artifact_id 引用模式 (省 token)
-    if artifact_id and artifact_id > 0:
-        content = await _load_artifact_content(artifact_id)
-        if not content:
-            return {
-                "ok": False,
-                "error_code": "ARTIFACT_NOT_FOUND",
-                "error": f"找不到 artifact_id={artifact_id} - 请先 write_artifact 拿 id 或传 md_content",
-            }
-        return _do_validate_builder_doc(content)
-    if not md_content or not md_content.strip():
+    if not artifact_id or artifact_id <= 0:
         return {
             "ok": False,
-            "error_code": "MISSING_INPUT",
-            "error": "需要 md_content 或 artifact_id 二选一. 推荐先 write_artifact 拿 id (省 token)",
+            "error_code": "MISSING_ARTIFACT_ID",
+            "error": "artifact_id 必填. 请先 write_artifact 拿 id 再调本工具 (省 token).",
         }
-    return _do_validate_builder_doc(md_content)
+    content = await _load_artifact_content(artifact_id)
+    if not content:
+        return {
+            "ok": False,
+            "error_code": "ARTIFACT_NOT_FOUND",
+            "error": f"找不到 artifact_id={artifact_id} - 请重新 write_artifact 拿新 id.",
+        }
+    return _do_validate_builder_doc(content)
 
 
 # ─────────────────────── 需求分析助手 → ai-builder 设计文档中转 ───────────────────────
@@ -905,20 +899,24 @@ def _consume_requirements_doc(user_id: int, pending_id: str) -> dict | None:
 
 @mcp.tool()
 async def submit_design_doc(
-    md_content: str = "",
+    artifact_id: int,
     file_name: str = "design-doc.md",
     tenant_id: int = 0,
     user_id: int = 0,
-    artifact_id: int = 0,
 ) -> dict:
     """把当前 md 设计文档推送到 ai-builder cache，并返回一条 deeplink — agent 必须把这条
     deeplink 贴到 chat 里让用户点击，**这是把 md 送到 Builder 的唯一推荐路径**。
 
-    用法（在 prompt 工作流里）：
-      1. 写完 md → 调 validate_builder_doc 自检（passes_strict=true）
-      2. 沙箱 Python 写 .md 文件让 dolphin chat UI 自然渲染附件下载（标准 UX）
-      3. **调本工具** submit_design_doc(md_content) — 把内容写入 ai-builder 用户 cache
-      4. **把返回值里的 deeplink 用 markdown 链接格式贴在 chat 回复里**，例如：
+    **2026-05-23 强制 artifact_id 模式** (省 token, 消除 LLM 重写 5000+ 字 md 浪费):
+    - 之前 `md_content` 参数已删除. 必须先 write_artifact 拿 id, 再用 id 提交.
+    - 工作流: write_artifact (返 id) → validate_builder_doc(artifact_id=id) →
+      submit_design_doc(artifact_id=id)
+
+    用法：
+      1. 写完 md → write_artifact 拿 id → validate_builder_doc(artifact_id=id) 自检
+         (passes_strict=true)
+      2. **调本工具** submit_design_doc(artifact_id=id) — 把内容写入 ai-builder 用户 cache
+      3. **把返回值里的 deeplink 用 markdown 链接格式贴在 chat 回复里**，例如：
          「✅ 已生成 sales-design.md（自检 95/100），[点这里在 Builder 中搭建](deeplink)」
 
     返回：
@@ -931,29 +929,22 @@ async def submit_design_doc(
             "ui_hint": "请把 deeplink 用 markdown 链接格式贴给用户，让他点击进 Builder。"
         }
 
-    pending_id 30 分钟后自动失效；用户在 dolphin 修改 md 重新调本工具时会覆盖之前的 cache。
-    deeplink 不带 pending_id —— ai-builder 端按当前登录用户从 cache 读最新 md，避免跨用户串号。
-
-    **2026-05-21 加 artifact_id 省 token** — md 内容二选一:
-    - `artifact_id` (推荐): write_artifact 返回的 id, backend 自动读 content 提交.
-      节省 5000+ 字 token. 跟 validate_builder_doc(artifact_id) 配套使用最优.
-    - `md_content`: 直接传完整 md 字符串 (兼容老用法). 给了 artifact_id 时忽略此参数.
+    pending_id 30 分钟后自动失效；用户修改 md 重新 write_artifact (拿新 id) 调本工具时会
+    覆盖之前的 cache. deeplink 不带 pending_id —— ai-builder 端按当前登录用户从 cache
+    读最新 md，避免跨用户串号。
     """
-    # 2026-05-21 artifact_id 引用模式
-    if artifact_id and artifact_id > 0:
-        loaded = await _load_artifact_content(artifact_id)
-        if not loaded:
-            return {
-                "ok": False,
-                "error_code": "ARTIFACT_NOT_FOUND",
-                "error": f"找不到 artifact_id={artifact_id} - 请先 write_artifact 拿 id 或传 md_content",
-            }
-        md_content = loaded
-    if not md_content or not md_content.strip():
+    if not artifact_id or artifact_id <= 0:
         return {
             "ok": False,
-            "error_code": "MISSING_INPUT",
-            "error": "需要 md_content 或 artifact_id 二选一",
+            "error_code": "MISSING_ARTIFACT_ID",
+            "error": "artifact_id 必填. 请先 write_artifact 拿 id 再调本工具 (省 token).",
+        }
+    md_content = await _load_artifact_content(artifact_id)
+    if not md_content:
+        return {
+            "ok": False,
+            "error_code": "ARTIFACT_NOT_FOUND",
+            "error": f"找不到 artifact_id={artifact_id} - 请重新 write_artifact 拿新 id.",
         }
 
     tid, uid = _resolve_identity(tenant_id, user_id)
