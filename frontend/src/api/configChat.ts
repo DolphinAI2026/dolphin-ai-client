@@ -23,6 +23,8 @@ export interface ConfigChatReq {
    * - >0: 强制用该 LlmConfig 跑 agent (Claude/DeepSeek 等)
    */
   model_id?: number | null
+  /** 2026-05-24 会话持久化：0/undefined → 后端自动新建 session 并在 'started' 事件回 session_id */
+  session_id?: number | null
 }
 
 /**
@@ -49,6 +51,32 @@ export interface ConfigChatToolTrace {
   image_data_url?: string
 }
 
+// ─── 会话持久化 (2026-05-24) ─────────────────────────────────────
+export interface ConfigChatSessionSummary {
+  id: number
+  title: string
+  message_count: number
+  last_message_preview: string | null
+  updated_at: string
+  created_at: string
+}
+
+export interface ConfigChatSessionCreateResp {
+  id: number
+  title: string
+  created_at: string
+}
+
+export interface ConfigChatMessageItem {
+  id: number
+  role: 'user' | 'assistant'
+  content: string
+  tool_trace?: ConfigChatToolTrace[] | null
+  change_plan?: ChangePlanPreview | null
+  actions_summary?: string[] | null
+  created_at: string
+}
+
 export interface ConfigChatResp {
   reply: string
   change_plan: ChangePlanPreview | null
@@ -61,17 +89,55 @@ export interface ConfigChatResp {
  * SSE 流式事件类型 (跟 backend `_config_chat_event_stream` 对齐)
  */
 export type ConfigChatStreamEvent =
-  | { type: 'started'; app_id: number; spec_source: string; tools: number; model?: string; provider?: string }
+  | { type: 'started'; app_id: number; spec_source: string; tools: number; skills?: number; model?: string; provider?: string; session_id?: number | null }
   | { type: 'turn_start'; turn: number; of: number }
   | { type: 'tool_call'; tool_name: string; args: Record<string, any> }
   | { type: 'tool_result'; tool_name: string; args: Record<string, any>; ok: boolean; summary: string }
   | { type: 'assistant'; content: string; has_tool_calls: boolean }
-  | { type: 'done'; reply: string; change_plan: ChangePlanPreview | null; requires_confirmation: boolean; actions_summary: string[]; tool_trace: ConfigChatToolTrace[] }
+  | { type: 'done'; reply: string; change_plan: ChangePlanPreview | null; requires_confirmation: boolean; actions_summary: string[]; tool_trace: ConfigChatToolTrace[]; session_id?: number | null }
   | { type: 'error'; message: string }
 
 import { API_PREFIX } from '@/utils/request'
 
 export const configChatApi = {
+  // ─── 会话持久化 CRUD (2026-05-24) ─────────────────────────────
+  /** 列当前用户在该 app 下的所有 sessions (按 updated_at DESC) */
+  listSessions(applicationId: number) {
+    return request.get<any, ConfigChatSessionSummary[]>(
+      `/applications/${applicationId}/config-chat-sessions`,
+    )
+  },
+
+  /** 主动新建空 session — 一般用户点 "+ 新对话" 时调 (不传 title 走 "新对话" 默认) */
+  createSession(applicationId: number, title?: string) {
+    return request.post<any, ConfigChatSessionCreateResp>(
+      `/applications/${applicationId}/config-chat-sessions`,
+      { title: title || null },
+    )
+  },
+
+  /** 拉某 session 的全部消息 (按 created_at 升序) — 用户选历史 session 时调 */
+  getMessages(sessionId: number) {
+    return request.get<any, ConfigChatMessageItem[]>(
+      `/config-chat-sessions/${sessionId}/messages`,
+    )
+  },
+
+  /** 删 session (后端 cascade 清 messages) */
+  deleteSession(sessionId: number) {
+    return request.delete<any, { ok: boolean }>(
+      `/config-chat-sessions/${sessionId}`,
+    )
+  },
+
+  /** 改 session title */
+  updateSessionTitle(sessionId: number, title: string) {
+    return request.patch<any, { ok: boolean; id: number; title: string }>(
+      `/config-chat-sessions/${sessionId}`,
+      { title },
+    )
+  },
+
   chat(applicationId: number, payload: ConfigChatReq) {
     // legacy 同步接口保留 — 5 分钟 timeout
     return request.post<any, ConfigChatResp>(

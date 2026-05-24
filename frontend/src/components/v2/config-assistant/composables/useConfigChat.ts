@@ -9,6 +9,7 @@
 import { ref, nextTick, type Ref } from 'vue'
 import { configChatApi } from '@/api/configChat'
 import type { ChatMsg } from '../types'
+import type { ConfigChatMessageItem } from '@/api/configChat'
 
 /** 修改类工具集 (Hero CTA 显示条件) — 2026-05-21 Phase 2 */
 const MODIFY_TOOL_PATTERN = /^(update_|create_|add_|delete_|disable_|set_)/
@@ -57,6 +58,8 @@ export function useConfigChat(opts: {
   const messages = ref<ChatMsg[]>([])
   const input = ref('')
   const sending = ref(false)
+  /** 2026-05-24 会话持久化：null 表示新对话 (后端首次 send 时自动建 session 并通过 'started' 回 id sticky 到这里) */
+  const sessionId = ref<number | null>(null)
   let nextId = 1
 
   function scrollToBottom() {
@@ -102,12 +105,16 @@ export function useConfigChat(opts: {
     try {
       await configChatApi.chatStream(
         applicationId.value,
-        { message: msg, history, model_id: requestedModelId },
+        { message: msg, history, model_id: requestedModelId, session_id: sessionId.value },
         (ev: any) => {
           const slot = messages.value.find((m) => m.id === placeholderId) as ChatMsg | undefined
           if (!slot) return
 
           if (ev.type === 'started') {
+            // 2026-05-24: sticky session_id 给后续 send 复用 (新对话时第一轮才有意义)
+            if (typeof ev.session_id === 'number' && ev.session_id > 0) {
+              sessionId.value = ev.session_id
+            }
             slot.progressLog!.push(`📡 connected · ${ev.tools} tools · spec=${ev.spec_source}`)
           } else if (ev.type === 'turn_start') {
             slot.progressLog!.push(`🔄 第 ${ev.turn}/${ev.of} 轮思考`)
@@ -133,6 +140,10 @@ export function useConfigChat(opts: {
             slot.tool_trace = ev.tool_trace
             slot.streaming = false
             slot.progressLog = []
+            // 2026-05-24: done 也带 session_id, 兜底 sticky (started 偶发漏时)
+            if (typeof ev.session_id === 'number' && ev.session_id > 0) {
+              sessionId.value = ev.session_id
+            }
           } else if (ev.type === 'error') {
             slot.content = `❌ 出错了：${ev.message}`
             slot.streaming = false
@@ -159,6 +170,62 @@ export function useConfigChat(opts: {
     input.value = text
   }
 
+  /**
+   * 2026-05-24 会话持久化：清空 messages + sessionId, 用户点 "新对话" 时调.
+   * 不调 backend, 下次 send 不带 session_id, 后端自动新建 session.
+   */
+  function clearMessages() {
+    messages.value = []
+    sessionId.value = null
+    nextId = 1
+  }
+
+  /**
+   * 2026-05-24 会话持久化：显式设 sessionId. 用户点历史 session 时配合 loadHistory 用.
+   * (实际场景下一般直接调 loadHistory, 里面会调 setSession; 暴露独立 setter 给特殊用例.)
+   */
+  function setSession(sid: number | null) {
+    sessionId.value = sid
+  }
+
+  /**
+   * 2026-05-24 会话持久化：从 server 拉指定 session 的 messages, 替换当前 messages ref.
+   * 用户在 SessionDrawer 点某条历史 session 时调.
+   *
+   * - 清空当前 messages
+   * - 拉 server messages → 转 ChatMsg 格式 → push 进 messages
+   * - sticky sessionId 到本 session
+   * - 失败抛错让 caller 显示 toast
+   */
+  async function loadHistory(sid: number) {
+    if (!sid || sid <= 0) {
+      clearMessages()
+      return
+    }
+    const items: ConfigChatMessageItem[] = await configChatApi.getMessages(sid)
+    messages.value = []
+    nextId = 1
+    for (const it of items) {
+      const m: ChatMsg = {
+        id: nextId++,
+        role: it.role,
+        content: it.content || '',
+      }
+      if (it.tool_trace && Array.isArray(it.tool_trace) && it.tool_trace.length) {
+        m.tool_trace = it.tool_trace as any
+      }
+      if (it.change_plan) {
+        m.change_plan = it.change_plan
+      }
+      if (it.actions_summary && Array.isArray(it.actions_summary) && it.actions_summary.length) {
+        m.actions_summary = it.actions_summary
+      }
+      messages.value.push(m)
+    }
+    sessionId.value = sid
+    scrollToBottom()
+  }
+
   return {
     messages,
     input,
@@ -166,5 +233,10 @@ export function useConfigChat(opts: {
     send,
     pickExample,
     scrollToBottom,
+    // 2026-05-24 会话持久化 exports
+    sessionId,
+    clearMessages,
+    setSession,
+    loadHistory,
   }
 }
