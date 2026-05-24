@@ -2768,6 +2768,10 @@ async def create_apaas_app_roles(env_id: int, apaas_app_id: str, roles: list) ->
     if not roles or not isinstance(roles, list):
         return {"ok": False, "error_code": "INVALID_ROLES", "message": "roles 必须是非空数组"}
     # 规整 payload 到 apaas 平台需要的字段（驼峰）
+    # 2026-05-24 修 silent-fail bug: 每项 role 必须含 appId 字段,
+    # 跟 step_executor.py:236 (generator_v2 真成功路径) 一致.
+    # 之前漏 appId 导致 apaas 平台返 200 ok 但角色不创建 (实测 ops_admin 案例).
+    apaas_app_id_clean = apaas_app_id.strip()
     payload_roles = []
     for r in roles:
         if not isinstance(r, dict):
@@ -2778,6 +2782,7 @@ async def create_apaas_app_roles(env_id: int, apaas_app_id: str, roles: list) ->
             return {"ok": False, "error_code": "INVALID_ROLE_ITEM",
                     "message": f"每个 role 必须有 role_code + role_name；问题项：{r}"}
         payload_roles.append({
+            "appId": apaas_app_id_clean,    # ← 必填, 漏了 apaas silent fail
             "roleCode": code,
             "roleName": name,
             "useScope": r.get("use_scope") or r.get("useScope") or "",
