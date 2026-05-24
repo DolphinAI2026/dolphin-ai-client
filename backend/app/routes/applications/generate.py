@@ -130,14 +130,32 @@ async def generate_application(
     # 记住已有的 apaas_app_id（SSE generator 需要自己的 session）
     existing_apaas_app_id = app.apaas_app_id
 
+    # 在主 db session 中预创建 in_progress 部署记录（rollback 历史依赖这条记录）
+    from .deploy_history import create_deploy_record_pre
+    deploy_record = await create_deploy_record_pre(
+        db, app, current_user, deploy_type="deploy", version_label=None
+    )
+    record_id = deploy_record.id
+
     async def event_generator():
         from app.database import AsyncSessionLocal
+        from app.models import DeployRecord
+        from .deploy_history import complete_deploy_record
+        # SSE 用独立 session（外部 session 在 EventSourceResponse 返回时已被释放）
         async with AsyncSessionLocal() as session:
-            # 在新 session 中重新加载 app 对象
+            # 在新 session 中重新加载 app 对象 + DeployRecord
             result = await session.execute(
                 select(Application).where(Application.id == app_id)
             )
             app_obj = result.scalar_one()
+            rec_result = await session.execute(
+                select(DeployRecord).where(DeployRecord.id == record_id)
+            )
+            record = rec_result.scalar_one()
+
+            event_log: list[dict] = []  # SSE event 累计快照（截断防爆 JSON）
+            error_msg_for_record: Optional[str] = None
+            success = False
 
             try:
                 if not existing_apaas_app_id:
@@ -155,13 +173,19 @@ async def generate_application(
                     yield {"event": "progress", "data": json.dumps({"stage": -1, "status": "running", "step": f"复用已有平台应用: {apaas_app_id}"}, ensure_ascii=False)}
 
                 async for event in run_complete_generation(client, apaas_app_id, config):
+                    # 累积 event 到 record event_log（限制 200 条防止 JSON 太大）
+                    if len(event_log) < 200:
+                        event_log.append(event)
                     yield {"event": "progress", "data": json.dumps(event, ensure_ascii=False)}
                     if event.get("type") == "complete":
                         app_obj.status = "completed"
                         await session.commit()
+                        success = True
                     elif event.get("status") == "error":
                         app_obj.status = "failed"
                         await session.commit()
+                        success = False
+                        error_msg_for_record = event.get("error") or event.get("message") or "未知错误"
 
                 yield {"event": "done", "data": json.dumps({"type": "done"})}
             except Exception as e:
@@ -174,7 +198,21 @@ async def generate_application(
                 if "401" in error_msg or is_apaas_token_error(error_msg) or "Unauthorized" in error_msg:
                     error_msg = APAAS_TOKEN_EXPIRED_GENERIC
 
+                success = False
+                error_msg_for_record = error_msg
+                event_log.append({"type": "exception", "error": error_msg})
                 yield {"event": "error", "data": json.dumps({"type": "error", "message": error_msg}, ensure_ascii=False)}
+            finally:
+                # 不管 success/fail，always 落 DeployRecord 终态
+                try:
+                    await complete_deploy_record(
+                        session, record, app_obj,
+                        success=success,
+                        error_message=error_msg_for_record,
+                        event_log=event_log if event_log else None,
+                    )
+                except Exception as record_exc:
+                    logger.warning(f"应用 {app_id} 部署记录写入失败: {record_exc}")
 
     return EventSourceResponse(event_generator())
 

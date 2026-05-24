@@ -1434,6 +1434,12 @@ async def publish_application(
     if not token:
         raise HTTPException(status_code=400, detail="平台 token 不可用，请先在环境管理中登录")
 
+    # 写一条 in_progress 部署记录（用于历史 + 回滚）
+    from .deploy_history import create_deploy_record_pre, complete_deploy_record
+    record = await create_deploy_record_pre(
+        db, app, ctx.user, deploy_type="publish", version_label=None
+    )
+
     try:
         client = APaaSClient(base_url=env.base_url, tenant_id=env.platform_tenant_id, token=token)
         app_detail = await client.query_app_detail(str(app.apaas_app_id))
@@ -1451,7 +1457,11 @@ async def publish_application(
         await client.deploy_app(str(app.apaas_app_id), next_version, abstract=APP_DEPLOY_ABSTRACT)
         app.status = "completed"
         await db.commit()
-        return {"ok": True, "version": next_version, "remote_status": "ENABLE"}
+        await complete_deploy_record(
+            db, record, app, success=True, version_label=next_version,
+            event_log=[{"type": "publish", "version": next_version, "status": "success"}],
+        )
+        return {"ok": True, "version": next_version, "remote_status": "ENABLE", "deploy_record_id": record.id}
     except Exception as e:
         detail = str(e)
         if (is_apaas_token_error(detail) or "401" in detail) and env.username and env.password_enc:
@@ -1480,9 +1490,26 @@ async def publish_application(
                     await client.deploy_app(str(app.apaas_app_id), next_version, abstract=APP_DEPLOY_ABSTRACT)
                     app.status = "completed"
                     await db.commit()
-                    return {"ok": True, "version": next_version, "remote_status": "ENABLE"}
+                    await complete_deploy_record(
+                        db, record, app, success=True, version_label=next_version,
+                        event_log=[
+                            {"type": "publish", "status": "token_refresh"},
+                            {"type": "publish", "version": next_version, "status": "success"},
+                        ],
+                    )
+                    return {"ok": True, "version": next_version, "remote_status": "ENABLE", "deploy_record_id": record.id}
             except Exception as retry_error:
+                await complete_deploy_record(
+                    db, record, app, success=False,
+                    error_message=f"{APAAS_LOGIN_FAILED}：{retry_error}",
+                    event_log=[{"type": "publish", "status": "token_refresh_failed", "error": str(retry_error)}],
+                )
                 raise HTTPException(status_code=401, detail=f"{APAAS_LOGIN_FAILED}：{retry_error}")
+        await complete_deploy_record(
+            db, record, app, success=False,
+            error_message=f"上线失败: {detail}",
+            event_log=[{"type": "publish", "status": "failed", "error": detail}],
+        )
         raise HTTPException(status_code=400, detail=f"上线失败: {detail}")
 
 
@@ -1710,6 +1737,9 @@ from . import docs as _docs  # noqa: E402
 router.include_router(_docs.router)
 from . import preflight as _preflight  # noqa: E402
 router.include_router(_preflight.router)
+# 2026-05-24 部署历史 + 回滚 (Agent C cherry-pick)
+from . import deploy_history as _deploy_history  # noqa: E402
+router.include_router(_deploy_history.router)
 
 
 # ---------------------------------------------------------------------------
