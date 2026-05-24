@@ -142,19 +142,20 @@ SYSTEM_PROMPT_UNIFIED = f"""你是 aPaaS 平台的 AI 全栈助手 — 既能产
 
 ### Phase 2 · 执行 (用户确认 SPEC 后 agent 自主跑完不停顿)
 触发条件：用户说 "OK" / "开始创建" / "部署" / "生成应用" / "上线" / 任何明确推进信号
-1. generate_app_from_doc 创建应用 (拿 app_id, draft 状态)。默认使用当前租户绑定的默认平台环境；不要为了拿默认环境先调 list_platform_envs。
+1. **generate_app_from_doc(artifact_id=<Phase 1 write_artifact 的 id>)** 创建应用 (拿 app_id, draft 状态).
+   schema 已强制 artifact_id 必填 (2026-05-24, 跟 validate/submit 一致), md_content 参数已删除.
+   默认使用当前租户绑定的默认平台环境；不要为了拿默认环境先调 list_platform_envs.
 2. deploy_application 部署到 aPaaS (draft → ready, 这一步才是"真创建到 aPaaS 平台")
 3. publish_application 发布上线 (ready → published, 用户能真访问)
 4. 给一段 1-3 句 final summary: "✅ 已部署完成 - app_id=N, recruit-mgmt - 点击下方按钮打开应用"
 
-### 💰 Token 节省铁律 (2026-05-23 schema 强制版)
+### 💰 Token 节省铁律 (2026-05-24 schema 强制版)
 **LLM 重写完整 5000+ 字 md 多次是巨大浪费**。正确做法:
 - write_artifact 是**唯一**完整生成 md 的地方 (LLM 必须输出 content 参数)
-- validate_builder_doc 的 md_content 参数 **2026-05-23 已删除** — schema 强制
-  artifact_id 必填. 漏传 → MISSING_ARTIFACT_ID; 没 fallback
+- validate_builder_doc / generate_app_from_doc 的 md_content 参数 **2026-05-23/24 已删除** —
+  schema 强制 artifact_id 必填. 漏传 → MISSING_ARTIFACT_ID; 没 fallback
 - 实在改 md → 重新 write_artifact (同名 filename 自动 version++) 拿新 artifact_id, 后续工具用新 id
-- generate_app_from_doc 等下游工具暂未强制 schema, 仍然 read_attachment 拿 md 后传 md_content
-  (artifact_id 模式还在评估)
+- update_app_from_doc 暂未强制 schema, 仍然接受 md_content (评估中)
 
 ### 关键反模式（不要做）
 - ❌ **Phase 1 走完 submit 后立刻 generate_app_from_doc** — 必须先停下让用户 review SPEC！跳过审核 = 错了部署后改回来贵 10 倍。
@@ -854,13 +855,14 @@ async def run_agent(
             })
 
             # 特殊：write_artifact 成功 → 单独通知前端刷新右栏
-            # 2026-05-21 扩展：generate_app_from_doc / update_app_from_doc 也会
+            # 2026-05-21 扩展：update_app_from_doc / export_apaas_app_design_doc 也会
             # 被 dispatcher 拦截把 md_content 落 artifact（见 tools._persist_spec_artifact），
             # 这两个工具结束时也得发 artifact_created 让右栏立即刷新。
+            # 2026-05-24: generate_app_from_doc 改强制 artifact_id 后, 不再产新 artifact
+            # (用户 write_artifact 已经落表), 从列表去掉.
             _emits_artifact = (
                 (tool_name == "write_artifact" and tc_db.status == "success")
                 or (tool_name in (
-                    "generate_app_from_doc",
                     "update_app_from_doc",
                     "export_apaas_app_design_doc",
                 ) and tc_db.status == "success")

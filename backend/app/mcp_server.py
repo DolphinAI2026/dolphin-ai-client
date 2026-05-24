@@ -404,7 +404,7 @@ async def list_platform_envs(
 
 @mcp.tool()
 async def generate_app_from_doc(
-    md_content: str,
+    artifact_id: int,
     app_name: str | None = None,
     env_id: int = 0,
     tenant_id: int = 0,
@@ -414,14 +414,33 @@ async def generate_app_from_doc(
 
     内部分两步：parse → auto-create。md 必须是标准 6 章节格式（参考 parse_design_doc 文档）。
 
+    **2026-05-24 强制 artifact_id 模式** (省 token, 跟 validate/submit 一致 commit 6ba63aa):
+    - 之前 `md_content` 参数已删除. 必须先 write_artifact 拿 id, 再用 id 创建.
+    - 工作流: write_artifact (返 id) → generate_app_from_doc(artifact_id=id)
+    - 漏传 → MISSING_ARTIFACT_ID; id 错 → ARTIFACT_NOT_FOUND
+
     参数：
-    - md_content：标准设计文档全文
+    - artifact_id：write_artifact 返的 id, backend 从 ai_chat_artifacts 表读 md content
     - app_name：可选；不填会从 md 「一、应用信息」推断
     - env_id：部署到哪个 PlatformEnv。**强烈建议先调 list_platform_envs
       让用户确认**。0 表示用租户默认环境（fallback：找一个 connected 环境）。
 
     返回 { app_id, app_name, app_code, status, app_view_url, env: {id, name} }。
     """
+    if not artifact_id or artifact_id <= 0:
+        return {
+            "ok": False,
+            "error_code": "MISSING_ARTIFACT_ID",
+            "error": "artifact_id 必填. 请先 write_artifact 拿 id 再调本工具 (省 token).",
+        }
+    md_content = await _load_artifact_content(artifact_id)
+    if not md_content:
+        return {
+            "ok": False,
+            "error_code": "ARTIFACT_NOT_FOUND",
+            "error": f"找不到 artifact_id={artifact_id} - 请重新 write_artifact 拿新 id.",
+        }
+
     tid, uid = _resolve_identity(tenant_id, user_id)
 
     # 1) 解析

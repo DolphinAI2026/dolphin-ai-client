@@ -1238,7 +1238,10 @@ async def execute_tool(
             user_id=int(getattr(session, "user_id", 0) or 0),
         )
         # SPEC artifact 落地副作用 — 仅 ai_chat 走这条 dispatcher，外部调用方不会触发
-        if tool_name in ("generate_app_from_doc", "update_app_from_doc"):
+        # 2026-05-24: generate_app_from_doc 改强制 artifact_id 后, args 里没 md_content,
+        # 而 artifact 已经在 write_artifact 时落表 — 不需要 _persist. update_app_from_doc
+        # 还接收 md_content (未改 schema), 继续 intercept.
+        if tool_name == "update_app_from_doc":
             await _persist_spec_artifact(tool_name, args, result_text, session, db)
         return result_text
 
