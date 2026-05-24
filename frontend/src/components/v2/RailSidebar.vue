@@ -123,6 +123,25 @@ function go(path: string) {
   router.push(path)
 }
 
+// 2026-05-23: rail nav 改 <a href> 让 Cmd+click / 中键 / 右键"在新标签中打开"
+// 真开 chrome tab — 跟 admin-spa AdminLayout 一致体验
+function resolveHref(path: string): string {
+  try {
+    return router.resolve(path).href
+  } catch {
+    return path
+  }
+}
+
+function onMenuClick(e: MouseEvent, item: NavItem) {
+  // modifier / 中键 → 浏览器原生开新 chrome tab，不拦
+  if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) {
+    return
+  }
+  e.preventDefault()
+  go(item.path)
+}
+
 function onLogout() {
   tenantMenuOpen.value = false
   user.logout()
@@ -217,18 +236,22 @@ function renderIcon(name: string): string {
     </button>
 
     <nav class="rail-scroll" aria-label="主导航">
-      <button
+      <!-- 2026-05-23: button → <a href> 让 cmd+click / 中键 / 右键"在新标签中打开" 真开 chrome tab.
+           普通 click → 内部 openTab + router.push (走多 tab 体系). 跟 admin-spa AdminLayout 一致. -->
+      <a
         v-for="it in NAV"
         :key="it.key"
-        type="button"
+        :href="resolveHref(it.path)"
         class="rail-item"
         :class="{ active: isActive(it.path) }"
-        @click="go(it.path)"
+        :title="`${it.label} (Cmd+点 在新标签中打开)`"
+        @click="onMenuClick($event, it)"
+        @auxclick="onMenuClick($event, it)"
       >
         <span class="rail-item-icon" v-html="renderIcon(it.icon)" />
         <span class="rail-item-label">{{ it.label }}</span>
         <span v-if="it.badge" class="rail-item-badge">{{ it.badge }}</span>
-      </button>
+      </a>
     </nav>
 
     <div class="rail-foot">
@@ -486,8 +509,15 @@ function renderIcon(name: string): string {
   font-weight: var(--fw-medium, 500);
   text-align: left;
   cursor: pointer;
+  /* 2026-05-23 button → <a> 后禁默认下划线, 跟 admin-spa AdminLayout 一致 */
+  text-decoration: none;
   transition: background 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1)),
               color 0.14s var(--ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+.rail-item:hover,
+.rail-item:visited,
+.rail-item:active {
+  text-decoration: none;  /* 各 :hover/:visited 状态锁住, 防 UA :visited 默认 underline */
 }
 
 .rail-item:hover {
