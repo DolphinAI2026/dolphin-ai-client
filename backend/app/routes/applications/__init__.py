@@ -2218,6 +2218,9 @@ class ConfigChatReq(BaseModel):
     # 2026-05-24: 用户可在 ConfigAssistantHeader 选模型。0/None = 走 _resolve_builder_llm_cfg
     # 默认 (跟原行为一致)。>0 时强制用该 LlmConfig.id 跑 agent (Claude/DeepSeek 等)。
     model_id: int | None = 0
+    # 2026-05-24 加：session_id 用于会话持久化。0 / None / 不传 → 后端自动新建 session。
+    # 后端在 'started' SSE 事件中回 session_id 给前端，前端 sticky 到 useConfigChat.sessionId。
+    session_id: int | None = None
 
 
 class ConfigChatToolTrace(BaseModel):
@@ -2627,6 +2630,48 @@ async def _config_chat_event_stream(
             return
         await _require_application_permission(ctx, db, app, Action.VIEW)
 
+        # ── 2026-05-24 会话持久化：resolve session_id（payload.session_id 复用 / 否则新建） ──
+        # session 在 stream 一开始就建好，便于 user message 入库即可见，前端拉历史也对得上。
+        # 失败兜底：任何一步抛异常都不阻断主流程，只 log，让 chat 流退化为旧的 in-memory 模式。
+        from app.models.config_chat import ConfigChatMessage, ConfigChatSession
+        config_session: ConfigChatSession | None = None
+        try:
+            requested_sid = payload.session_id or 0
+            if requested_sid > 0:
+                config_session = (await db.execute(
+                    select(ConfigChatSession).where(
+                        ConfigChatSession.id == requested_sid,
+                        ConfigChatSession.tenant_id == ctx.tenant_id,
+                        ConfigChatSession.user_id == ctx.user.id,
+                        ConfigChatSession.app_id == app_id,
+                    )
+                )).scalar_one_or_none()
+            if config_session is None:
+                # 新建 — title 用 user prompt 截前 30 字（去 newlines 让标题成单行）
+                _msg = (payload.message or "").replace("\n", " ").strip()
+                _title = (_msg[:30] + ("…" if len(_msg) > 30 else "")) or "新对话"
+                config_session = ConfigChatSession(
+                    app_id=app_id,
+                    tenant_id=ctx.tenant_id,
+                    user_id=ctx.user.id,
+                    title=_title,
+                )
+                db.add(config_session)
+                await db.commit()
+                await db.refresh(config_session)
+            # 立刻落 user 消息（无论新老 session）
+            db.add(ConfigChatMessage(
+                session_id=config_session.id,
+                role="user",
+                content=payload.message or "",
+            ))
+            # bump session updated_at 让最近用过的 session 排前面
+            config_session.updated_at = datetime.utcnow()
+            await db.commit()
+        except Exception as exc:
+            log.warning("config_chat_stream: persist session/user-message failed: %r", exc)
+            config_session = None  # 不阻断主流程
+
         # SPEC
         spec_ctx_text = ""
         spec_source = "none"
@@ -2665,16 +2710,30 @@ async def _config_chat_event_stream(
             cfg = None
             log.warning("config_chat_stream: resolve_builder_llm_cfg failed: %r", exc)
         if not cfg:
+            _fallback_reply = (
+                f"已收到你的需求:「{payload.message}」。\n\n"
+                "当前租户尚未配置可用的 LLM (环境管理 → 模型配置)，"
+                "暂时无法自动生成变更草案。"
+            )
+            # 2026-05-24 落兜底 assistant 消息让历史完整
+            if config_session is not None:
+                try:
+                    db.add(ConfigChatMessage(
+                        session_id=config_session.id,
+                        role="assistant",
+                        content=_fallback_reply,
+                    ))
+                    config_session.updated_at = datetime.utcnow()
+                    await db.commit()
+                except Exception as exc:
+                    log.warning("config_chat_stream: persist fallback assistant failed: %r", exc)
             yield _sse("done", {
-                "reply": (
-                    f"已收到你的需求:「{payload.message}」。\n\n"
-                    "当前租户尚未配置可用的 LLM (环境管理 → 模型配置)，"
-                    "暂时无法自动生成变更草案。"
-                ),
+                "reply": _fallback_reply,
                 "change_plan": None,
                 "requires_confirmation": False,
                 "actions_summary": [],
                 "tool_trace": [],
+                "session_id": config_session.id if config_session else None,
             })
             return
 
@@ -2723,6 +2782,8 @@ async def _config_chat_event_stream(
             # 2026-05-24: 让前端日志显示实际跑的模型 (用户切了 model_id 后能验证生效)
             "model": cfg.get("model"),
             "provider": cfg.get("provider"),
+            # 2026-05-24: 让前端 sticky session_id — 后续同 session 续聊只用这个值
+            "session_id": config_session.id if config_session else None,
         })
 
         # SYSTEM prompt — 跟同步版完全一致
@@ -2982,12 +3043,32 @@ async def _config_chat_event_stream(
             except (json.JSONDecodeError, ValueError):
                 pass
 
+        # 2026-05-24 落 assistant 消息 — 在 yield done 前先入库，保证前端拉历史时 reply
+        # 跟当时 SSE 看到的一致。tool_trace_json 可能含 image_data_url，存 JSON 列即可（MySQL
+        # JSON 类型最大 1GB，单图 ~30-50KB 没问题，多图也撑得住）。
+        if config_session is not None:
+            try:
+                db.add(ConfigChatMessage(
+                    session_id=config_session.id,
+                    role="assistant",
+                    content=reply,
+                    tool_trace_json=tool_trace if tool_trace else None,
+                    change_plan_json=change_plan,
+                    actions_summary_json=actions_summary if actions_summary else None,
+                ))
+                config_session.updated_at = datetime.utcnow()
+                await db.commit()
+            except Exception as exc:
+                log.warning("config_chat_stream: persist assistant message failed: %r", exc)
+
         yield _sse("done", {
             "reply": reply,
             "change_plan": change_plan,
             "requires_confirmation": bool(change_plan),
             "actions_summary": actions_summary,
             "tool_trace": tool_trace,
+            # 2026-05-24: done 事件也带 session_id, 前端可以二次确认
+            "session_id": config_session.id if config_session else None,
         })
     except Exception as exc:
         log.exception("config_chat_stream failed")

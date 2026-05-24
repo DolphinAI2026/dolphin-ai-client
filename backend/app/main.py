@@ -19,6 +19,7 @@ from app.routes import (
     auth,
     browser,
     chat,
+    config_chat_sessions,
     coding,
     coding_v2,
     coding_v2_spec,
@@ -181,6 +182,7 @@ app.include_router(conversations.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")
 app.include_router(ai_chat.router, prefix="/api")
 app.include_router(applications.router, prefix="/api")
+app.include_router(config_chat_sessions.router, prefix="/api")  # 配置助手会话持久化 (2026-05-24)
 app.include_router(apaas.router, prefix="/api")
 app.include_router(generation_steps.router, prefix="/api")
 app.include_router(coding.router, prefix="/api")
