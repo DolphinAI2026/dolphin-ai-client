@@ -2879,7 +2879,10 @@ async def create_apaas_app_dict(env_id: int, apaas_app_id: str, dict_code: str, 
     """
     if not (apaas_app_id.strip() and dict_code.strip() and dict_name.strip()):
         return {"ok": False, "error_code": "INVALID_PARAMS", "message": "apaas_app_id + dict_code + dict_name 都必填"}
+    # 2026-05-24 同 create_apaas_app_roles fix: 每项必须含 appId, 漏了 apaas silent ignore
+    apaas_app_id_clean = apaas_app_id.strip()
     payload = [{
+        "appId": apaas_app_id_clean,
         "dictionaryCode": dict_code.strip(),
         "dictionaryName": dict_name.strip(),
         "dictionaryDescribe": describe or "",
@@ -2887,7 +2890,7 @@ async def create_apaas_app_dict(env_id: int, apaas_app_id: str, dict_code: str, 
         "dictionaryMulticolorStatus": "ENABLE",
         "internalResource": True,
     }]
-    ok, raw = await _with_client(env_id, "建字典", lambda c: c.create_dicts(apaas_app_id.strip(), payload))
+    ok, raw = await _with_client(env_id, "建字典", lambda c: c.create_dicts(apaas_app_id_clean, payload))
     if not ok:
         return raw
     return {"ok": True, "env_id": env_id, "apaas_app_id": apaas_app_id.strip(),
