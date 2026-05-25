@@ -4851,12 +4851,13 @@ async def set_apaas_app_process(
                        f"建议在平台 UI 表单设计页确认表单是否完整保存.",
         }
 
-    # 构建 nodes/edges (build-system.py 同款简洁 schema)
-    process_nodes = [{"nodeName": "开始", "nodeId": "start", "approvers": [
-        {"approverType": "SUBMITTER", "approverName": "表单提交人", "approverCode": "SUBMITTER"},
-    ]}]
+    # 构建 nodes/edges. 2026-05-25 修: 不再 explicit 加 "开始"/"结束" 矩形节点 —
+    # 平台 UI 会自动渲染圆形 start/end markers, 我们再加 explicit 节点就会显两套
+    # (圆 开始 + 矩形 开始 + stages + 矩形 结束 + 圆 结束). nodes 只放真实审批
+    # stages, edges 用平台保留的 "start" / "end" 虚拟 id 接进来.
+    process_nodes = []
     process_edges = []
-    prev_id = "start"
+    prev_id = "start"  # 平台自动 start 端点
     for idx, stage in enumerate(stages, start=1):
         approver_type = (stage.get("approver_type") or "ROLE").strip().upper()
         approver_code = str(stage.get("approver_code") or "").strip()
@@ -4879,9 +4880,8 @@ async def set_apaas_app_process(
             "edgeId": f"e_{idx}", "fromNodeId": prev_id, "targetNodeId": nid,
         })
         prev_id = nid
-    process_nodes.append({"nodeName": "结束", "nodeId": "end", "approvers": []})
     process_edges.append({
-        "edgeId": f"e_end", "fromNodeId": prev_id, "targetNodeId": "end",
+        "edgeId": "e_end", "fromNodeId": prev_id, "targetNodeId": "end",
     })
 
     payload = [{
@@ -4909,7 +4909,7 @@ async def set_apaas_app_process(
         "nodes_count": len(process_nodes),
         "platform_response": raw if isinstance(raw, dict) else {"raw": raw},
         "message": (f"流程「{process_name}」已设到表单「{form_name}」"
-                    f"({len(stages)} 个审批阶段 + 开始 + 结束 = {len(process_nodes)} 节点)"),
+                    f"({len(stages)} 个审批节点, 平台自动加圆形 start/end)"),
     }
 
 
