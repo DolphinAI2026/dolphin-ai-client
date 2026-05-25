@@ -468,15 +468,17 @@ const MenuNode = defineComponent({
 
 <style>
 /* 2026-05-25: 全局 (不 scoped) 因为内联 MenuNode 是 defineComponent, scoped data-v-xx
-   attr 不会传给它. 所有 selectors 都带 .ams / .amsn 前缀避免命名冲突. */
+   attr 不会传给它. 所有 selectors 都带 .ams / .amsn 前缀避免命名冲突.
+   配色策略: 全部用 --t-* 语义 token, light/dark 主题自动切. fallback 只是裸跑兜底
+   不再 hardcode rgba 白色 / 紫色 — 主题 brand 在 light 是蓝, dark 是紫. */
 /* ───────── 容器 ───────── */
 .ams {
   width: 248px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  background: var(--t-bg-base, #0e0e16);
-  border-right: 1px solid var(--t-border-subtle, rgba(255, 255, 255, 0.06));
+  background: var(--t-bg-panel, #ffffff);
+  border-right: 1px solid var(--t-border-subtle, rgba(99, 102, 241, 0.08));
   min-height: 0;
   overflow: hidden;
   transition: width 0.2s ease;
@@ -490,15 +492,15 @@ const MenuNode = defineComponent({
   justify-content: space-between;
   height: 40px;
   padding: 0 8px 0 14px;
-  border-bottom: 1px solid var(--t-border-subtle, rgba(255, 255, 255, 0.06));
+  border-bottom: 1px solid var(--t-border-subtle, rgba(99, 102, 241, 0.08));
   flex-shrink: 0;
-  background: linear-gradient(180deg, rgba(124, 58, 237, 0.06) 0%, rgba(124, 58, 237, 0) 100%);
+  background: var(--t-brand-subtle, rgba(79, 110, 247, 0.05));
 }
 .ams-head-main { display: flex; align-items: center; gap: 8px; }
 .ams-head-title {
   font-size: 12px;
   font-weight: 600;
-  color: var(--t-text-secondary, rgba(255, 255, 255, 0.88));
+  color: var(--t-text-primary, #1e293b);
   letter-spacing: 0.4px;
 }
 .ams-head-badge {
@@ -510,10 +512,10 @@ const MenuNode = defineComponent({
   padding: 0 5px;
   font-size: 10px;
   font-weight: 600;
-  color: var(--t-brand-light, #c4b5fd);
-  background: rgba(124, 58, 237, 0.18);
+  color: var(--t-brand, #4f6ef7);
+  background: var(--t-brand-subtle, rgba(79, 110, 247, 0.1));
   border-radius: 8px;
-  border: 1px solid rgba(124, 58, 237, 0.3);
+  border: 1px solid var(--t-border-strong, rgba(79, 110, 247, 0.2));
 }
 
 .ams-head-actions {
@@ -532,11 +534,14 @@ const MenuNode = defineComponent({
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: var(--t-text-muted, rgba(255, 255, 255, 0.5));
+  color: var(--t-text-secondary, #64748b);
   font-size: 14px;
   transition: background 0.12s, color 0.12s;
 }
-.ams-icon-btn:hover { background: rgba(255, 255, 255, 0.06); color: var(--t-text-secondary, #fff); }
+.ams-icon-btn:hover {
+  background: var(--t-bg-panel-hover, rgba(99, 102, 241, 0.08));
+  color: var(--t-brand, #4f6ef7);
+}
 .ams-icon-btn.spinning { animation: ams-spin 1s linear infinite; }
 
 /* ───────── 搜索栏 ───────── */
@@ -549,30 +554,30 @@ const MenuNode = defineComponent({
 }
 .ams-search-input { flex: 1; }
 .ams-search-input :deep(.el-input__wrapper) {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--t-bg-input, #f5f7fc);
   box-shadow: none;
-  border: 1px solid var(--t-border-subtle, rgba(255, 255, 255, 0.08));
+  border: 1px solid var(--t-border-subtle, rgba(99, 102, 241, 0.1));
   border-radius: 6px;
   padding: 0 8px;
   transition: border-color 0.15s, background 0.15s;
 }
 .ams-search-input :deep(.el-input__wrapper:hover) {
-  border-color: rgba(255, 255, 255, 0.15);
+  border-color: var(--t-border-strong, rgba(99, 102, 241, 0.2));
 }
 .ams-search-input :deep(.el-input__wrapper.is-focus) {
-  border-color: var(--t-brand-light, #818cf8) !important;
-  background: rgba(124, 58, 237, 0.08);
-  box-shadow: 0 0 0 2px rgba(124, 58, 237, 0.12) !important;
+  border-color: var(--t-brand, #4f6ef7) !important;
+  background: var(--t-bg-panel, #fff);
+  box-shadow: 0 0 0 2px var(--t-brand-subtle, rgba(79, 110, 247, 0.16)) !important;
 }
 .ams-search-input :deep(.el-input__inner) {
-  color: var(--t-text-secondary, rgba(255, 255, 255, 0.88));
+  color: var(--t-text-primary, #1e293b);
   font-size: 12px;
 }
 .ams-search-input :deep(.el-input__inner::placeholder) {
-  color: var(--t-text-muted, rgba(255, 255, 255, 0.35));
+  color: var(--t-text-muted, #94a3b8);
 }
 .ams-search-input :deep(.el-icon) {
-  color: var(--t-text-muted, rgba(255, 255, 255, 0.4));
+  color: var(--t-text-muted, #94a3b8);
   font-size: 12px;
 }
 
@@ -585,8 +590,8 @@ const MenuNode = defineComponent({
 }
 .ams-body::-webkit-scrollbar { width: 6px; }
 .ams-body::-webkit-scrollbar-track { background: transparent; }
-.ams-body::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.08); border-radius: 3px; }
-.ams-body::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.16); }
+.ams-body::-webkit-scrollbar-thumb { background: var(--t-border-strong, rgba(99, 102, 241, 0.15)); border-radius: 3px; }
+.ams-body::-webkit-scrollbar-thumb:hover { background: var(--t-brand, #4f6ef7); }
 
 /* ───────── 状态视图 ───────── */
 .ams-state {
@@ -596,13 +601,13 @@ const MenuNode = defineComponent({
   justify-content: center;
   gap: 8px;
   padding: 40px 16px;
-  color: var(--t-text-muted, rgba(255, 255, 255, 0.45));
+  color: var(--t-text-muted, #94a3b8);
   font-size: 12px;
   text-align: center;
 }
 .ams-state .el-icon { font-size: 22px; opacity: 0.7; }
 .ams-state p { margin: 0; max-width: 200px; line-height: 1.5; }
-.ams-state-err { color: #fca5a5; }
+.ams-state-err { color: #ef4444; }
 .ams-state-err .el-icon { color: #ef4444; }
 .ams-spin { animation: ams-spin 1s linear infinite; }
 
@@ -618,35 +623,41 @@ const MenuNode = defineComponent({
   padding-right: 8px;
   cursor: pointer;
   border-radius: 6px;
-  color: var(--t-text-secondary, rgba(255, 255, 255, 0.78));
+  color: var(--t-text-primary, #1e293b);
   font-size: 13px;
   user-select: none;
   transition: background 0.12s, color 0.12s, transform 0.08s;
   margin: 1px 2px;
 }
 .amsn:hover {
-  background: rgba(255, 255, 255, 0.05);
-  color: var(--t-text-primary, #fff);
+  background: var(--t-bg-panel-hover, rgba(99, 102, 241, 0.06));
+  color: var(--t-brand, #4f6ef7);
 }
 .amsn:active { transform: scale(0.985); }
 
-/* 分组标题: 更小字号 + 强调色 */
+/* 分组标题: 略小字号 + secondary 色 — 不再 uppercase 太抢眼 */
 .amsn.amsn-group {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
-  color: var(--t-text-muted, rgba(255, 255, 255, 0.5));
+  letter-spacing: 0.2px;
+  color: var(--t-text-secondary, #64748b);
   height: 28px;
   margin-top: 6px;
 }
-.amsn.amsn-group:hover { color: var(--t-text-secondary, #fff); }
+.amsn.amsn-group:hover {
+  color: var(--t-brand, #4f6ef7);
+  background: var(--t-bg-panel-hover, rgba(99, 102, 241, 0.06));
+}
 
-/* 选中态: 背景 + 左侧紫条 + 加粗 */
+/* 选中态: brand 色背景 + 左侧 brand 条 + brand 色文字 */
 .amsn.selected {
-  background: linear-gradient(90deg, rgba(124, 58, 237, 0.22) 0%, rgba(124, 58, 237, 0.10) 100%);
-  color: var(--t-brand-light, #c4b5fd);
+  background: var(--t-brand-subtle, rgba(79, 110, 247, 0.1));
+  color: var(--t-brand, #4f6ef7);
   font-weight: 500;
+}
+.amsn.selected:hover {
+  background: var(--t-brand-subtle, rgba(79, 110, 247, 0.14));
+  color: var(--t-brand, #4f6ef7);
 }
 .amsn.selected::before {
   content: '';
@@ -655,7 +666,7 @@ const MenuNode = defineComponent({
   top: 6px;
   bottom: 6px;
   width: 3px;
-  background: var(--t-brand-light, #a78bfa);
+  background: var(--t-brand, #4f6ef7);
   border-radius: 0 2px 2px 0;
 }
 
@@ -669,12 +680,15 @@ const MenuNode = defineComponent({
   height: 14px;
   font-size: 10px;
   flex-shrink: 0;
-  color: var(--t-text-muted, rgba(255, 255, 255, 0.4));
+  color: var(--t-text-muted, #94a3b8);
   border-radius: 3px;
   transition: color 0.12s, background 0.12s;
 }
 .amsn-chevron { cursor: pointer; }
-.amsn-chevron:hover { color: var(--t-text-secondary, #fff); background: rgba(255, 255, 255, 0.08); }
+.amsn-chevron:hover {
+  color: var(--t-brand, #4f6ef7);
+  background: var(--t-brand-subtle, rgba(79, 110, 247, 0.1));
+}
 .amsn-chevron .el-icon { font-size: 10px; }
 
 .amsn-icon {
@@ -685,12 +699,14 @@ const MenuNode = defineComponent({
   height: 18px;
   font-size: 14px;
   flex-shrink: 0;
-  color: var(--t-text-muted, rgba(255, 255, 255, 0.55));
+  color: var(--t-text-secondary, #64748b);
   transition: color 0.12s;
 }
-.amsn:hover .amsn-icon { color: var(--t-text-secondary, rgba(255, 255, 255, 0.9)); }
-.amsn.selected .amsn-icon { color: var(--t-brand-light, #c4b5fd); }
-.amsn-icon-group { color: var(--t-text-muted, rgba(255, 255, 255, 0.5)); }
+.amsn:hover .amsn-icon { color: var(--t-brand, #4f6ef7); }
+.amsn.selected .amsn-icon { color: var(--t-brand, #4f6ef7); }
+/* group 的 folder 图标用 brand 色, 跟普通菜单区分 */
+.amsn-icon-group { color: var(--t-brand, #4f6ef7); opacity: 0.7; }
+.amsn-group:hover .amsn-icon-group { opacity: 1; }
 .amsn-icon .el-icon { font-size: 14px; }
 
 .amsn-name {
@@ -710,7 +726,7 @@ const MenuNode = defineComponent({
   width: 22px;
   height: 22px;
   border-radius: 4px;
-  color: var(--t-text-muted, rgba(255, 255, 255, 0.45));
+  color: var(--t-text-muted, #94a3b8);
   font-size: 14px;
   flex-shrink: 0;
   opacity: 0;
@@ -719,12 +735,15 @@ const MenuNode = defineComponent({
 .amsn:hover .amsn-actions,
 .amsn.selected .amsn-actions,
 .amsn-group:hover .amsn-actions { opacity: 1; }
-.amsn-actions:hover { background: rgba(255, 255, 255, 0.1); color: var(--t-text-secondary, #fff); }
+.amsn-actions:hover {
+  background: var(--t-bg-panel-hover, rgba(99, 102, 241, 0.1));
+  color: var(--t-brand, #4f6ef7);
+}
 .amsn-actions .el-icon { font-size: 14px; }
 
 /* 删除分组项 — 红色危险态 (作用于 el-dropdown-menu 内, 不能 scoped) */
-.amsn-dd-danger { color: #f56c6c !important; }
-.amsn-dd-danger:hover { background: rgba(245, 108, 108, 0.1) !important; color: #f56c6c !important; }
+.amsn-dd-danger { color: #ef4444 !important; }
+.amsn-dd-danger:hover { background: rgba(239, 68, 68, 0.1) !important; color: #dc2626 !important; }
 
 /* ── 收起态 ── */
 .ams.collapsed .amsn {
@@ -749,7 +768,7 @@ const MenuNode = defineComponent({
   top: 0;
   bottom: 4px;
   width: 1px;
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--t-border-subtle, rgba(99, 102, 241, 0.1));
 }
 
 @keyframes ams-spin {
