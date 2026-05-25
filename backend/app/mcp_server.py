@@ -4696,6 +4696,196 @@ def _make_bpmn_node(node_id: str, title: str, ntype: str, y: float, approvers=No
     return n
 
 
+def _bpmn_random_id() -> str:
+    """生成平台风格的 BPMN_xxx id (16 hex chars)."""
+    import secrets
+    return "BPMN_" + secrets.token_hex(8)
+
+
+# 2026-05-25: 平台审批节点完整 data 模板 — 抓包 docs/captures/process-* 实证.
+# data.title / data.approvers / data.nodeId 需要每节点 swap, 其他默认.
+def _approve_node_data_template(title: str, bpmn_id: str, approvers: list) -> dict:
+    """返一个 APPROVE 节点的完整 data 字段 (含 10 个默认 button + voteConfig 等)."""
+    return {
+        "type": "APPROVE",
+        "title": title,
+        "approveType": "SINGLE",
+        "chooseApprovalMethod": "STAY_AT_THE_NODE",
+        "voteConfig": {
+            "passMode": "PASS_NUMBER",
+            "passNumber": 100,
+            "passRate": "100",
+            "passRateCalcMode": "INCLUDE_ABSTAIN",
+            "oneVoteVeto": False,
+            "flowMode": "ALL",
+        },
+        "sequentialApprover": {
+            "approverSource": "", "approverValue": "", "appointType": "",
+            "approverType": "APPROVER", "personType": "", "roleId": [],
+            "approvalSequenceType": "",
+        },
+        "approvers": approvers,
+        "enableComponentPermission": True,
+        "icon": "approve-icon",
+        "remindList": [], "nodeRemindList": [], "approveRemindList": [],
+        "approveRemindStatus": False, "nodeTriggerRemindStatus": False,
+        "processEventStatus": False, "rejectRemindList": [],
+        "rejectRemindStatus": False, "approveIsApplicantSkip": False,
+        "approveButtons": [
+            {"buttonCode": "APPROVE", "buttonName": "同意", "buttonLabel": "同意", "buttonStatus": True, "buttonStyle": "primary", "buttonLabelI18nAssociated": False},
+            {"buttonCode": "REJECT", "buttonName": "拒绝", "buttonLabel": "拒绝", "buttonStatus": True, "buttonLabelI18nAssociated": False},
+            {"buttonCode": "INQUIRE", "buttonName": "征询", "buttonLabel": "征询", "buttonStyle": "primary", "buttonLabelI18nAssociated": False},
+            {"buttonCode": "REASSIGN", "buttonName": "转交", "buttonLabel": "转交", "buttonStyle": "primary", "buttonLabelI18nAssociated": False, "operatorScope": [], "index": 3},
+            {"buttonCode": "ADDONE", "buttonName": "加签", "buttonLabel": "加签", "buttonStyle": "primary", "buttonLabelI18nAssociated": False},
+            {"buttonCode": "FRONTADDONE", "buttonName": "前加签", "buttonLabel": "前加签", "buttonStyle": "primary", "buttonLabelI18nAssociated": False},
+            {"buttonCode": "ANDCOUNTERSIGN", "buttonName": "并加签", "buttonLabel": "并加签", "buttonStyle": "primary", "buttonLabelI18nAssociated": False},
+            {"buttonCode": "OVERRULE", "buttonName": "驳回", "buttonLabel": "驳回", "buttonStyle": "primary", "buttonLabelI18nAssociated": False, "approveButtonConfigList": [], "overruleType": "any_node", "overruleReapprovalMethodAppoint": "DEFAULT", "overruleReapprovalMethod": "LEVEL_BY_LEVEL_APPROVAL", "modified": False},
+            {"buttonCode": "WITHDRAW", "buttonName": "撤回", "buttonLabel": "撤回", "buttonStatus": False, "buttonStyle": "primary", "buttonLabelI18nAssociated": False, "withdrawalType": "NEXT_NODE", "withdrawalList": []},
+            {"buttonCode": "ABSTAIN", "buttonName": "保留意见", "buttonLabel": "保留意见", "buttonStatus": False, "buttonStyle": "primary", "buttonLabelI18nAssociated": False},
+        ],
+        "initiatorButtons": [
+            {"buttonCode": "INITIATOR_TERMINATE", "buttonName": "终止", "buttonLabel": "终止", "buttonStatus": False, "buttonStyle": "primary", "buttonLabelI18nAssociated": False},
+        ],
+        "operationButtons": [
+            {"buttonCode": "INFORM", "buttonName": "知会", "buttonLabel": "知会", "buttonStatus": False, "buttonStyle": "primary", "buttonLabelI18nAssociated": False},
+            {"buttonCode": "STAGING", "buttonName": "暂存", "buttonLabel": "暂存", "buttonStatus": False, "buttonStyle": "primary", "buttonLabelI18nAssociated": False},
+        ],
+        "overtimeHandleConfig": {"status": False, "handleType": "RECOMMEND_DEAL_TIME", "timeUnit": "H"},
+        "approveSkipConfig": False,
+        "approvePhraseConfig": {"handleType": "INPUT_TYPE", "phrase": "", "status": False},
+        "approveCommentConfig": {"required": False, "attachmentUpload": True, "requiredBtns": [], "show": True},
+        "signatureConfig": {"required": False},
+        "externalSystemApproval": {"status": False, "linkUrl": "", "linkMobileUrl": ""},
+        "nodeId": bpmn_id,
+        "timeoutRemindList": [],
+        "saveFlag": True,
+        "supportBatchApprove": True,
+        "supportBatchReject": True,
+        "titleI18nAssociated": False,
+    }
+
+
+def _process_edge_template(edge_cell_id: str, source: str, target: str) -> dict:
+    """返一条 edge — 平台 BPMN 渲染必填一堆视觉配置."""
+    return {
+        "id": edge_cell_id,
+        "data": {
+            "title": "\\\\", "type": "EDGE", "defaultFlow": True,
+            "id": _bpmn_random_id(), "titleI18nAssociated": False,
+        },
+        "align": "center", "bendable": True, "editable": False, "endArrow": "classic",
+        "fontColor": "rgba(0, 0, 0, 1)", "labelBackgroundColor": "#f8f9fa",
+        "movable": True, "orthogonal": True, "rounded": True, "shape": "connector",
+        "sourceAnchorDx": "0", "stroke": "#313133", "edge": "orth",
+        "sourceAnchorX": "0.5", "sourceAnchorY": "1",
+        "targetAnchorX": "0.5", "targetAnchorY": "0",
+        "label": "\\\\", "x": 0, "y": 0, "width": 0, "height": 0,
+        "relative": True, "translateControlPoints": True, "labelI18nAssociated": False,
+        "schema": {
+            "configurators": ["BpmnConfigTitle", "BpmnConfigDefaultFlow"], "hooks": {},
+        },
+        "visible": True, "source": source, "target": target,
+    }
+
+
+_MIN_BPMN_XML = (
+    '<?xml version="1.0" encoding="UTF-8"?>\n'
+    '<definitions xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" '
+    'xmlns:omgdc="http://www.omg.org/spec/DD/20100524/DC" '
+    'xmlns:omgdi="http://www.omg.org/spec/DD/20100524/DI" '
+    'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
+    'xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" typeLanguage="http://www.w3.org/2001/XMLSchema" '
+    'expressionLanguage="http://www.w3.org/1999/XPath" targetNamespace="http://www.activiti.org/processdef"/>'
+)
+
+
+def _build_process_payload_v2(
+    app_id: str, form_id: str, menu_id: str,
+    process_name: str, process_code: str,
+    stages_with_role: list,  # [{name, approver_type, approver_id_or_submitter, approver_label}]
+) -> dict:
+    """用 capture 实证 schema 构建平台流程 payload.
+
+    每个 stage 期望:
+      - name: 节点显示标题
+      - approver_type: ROLE | SUBMITTER
+      - approver_value: ROLE 时是 role_id (snowflake, 用 query_roles 反查 role_code 拿到的 id); SUBMITTER 时填 "SUBMITTER"
+      - approver_label: 显示名 (角色名 / "申请人")
+    """
+    # START / END 节点 (位置固定, 跟平台 UI 默认对齐)
+    nodes = [
+        {"id": "START", "x": 372, "y": 32},
+        {"id": "END", "x": 372, "y": 32 + 96 * (len(stages_with_role) + 1)},
+    ]
+    edges = []
+    prev_node_id = "START"
+    cell_idx = 1  # cell-N (cell-2 / cell-3 / ...) 从 2 起避免跟 START 冲突
+    edge_idx = len(stages_with_role) + 2  # edges 从 cell-N+2 起
+    y_pos = 160
+    for stage_idx, stage in enumerate(stages_with_role, start=1):
+        cell_idx += 1
+        cell_id = f"cell-{cell_idx}"
+        bpmn_id = _bpmn_random_id()
+        approver_type = (stage.get("approver_type") or "ROLE").upper()
+        if approver_type == "SUBMITTER":
+            approvers = [{
+                "type": "SUBMITTER", "value": "SUBMITTER",
+                "displayData": {"id": "SUBMITTER", "label": "申请人"},
+            }]
+        else:
+            value = str(stage.get("approver_value") or "")
+            label = stage.get("approver_label") or "审批人"
+            approvers = [{
+                "type": approver_type, "value": value,
+                "displayData": {"id": value, "label": label},
+            }]
+        nodes.append({
+            "id": cell_id, "x": 348, "y": y_pos, "height": 48, "width": 112,
+            "timeBoudries": [],
+            "data": _approve_node_data_template(
+                title=stage.get("name") or f"审批 {stage_idx}",
+                bpmn_id=bpmn_id,
+                approvers=approvers,
+            ),
+            "nodeId": bpmn_id,
+        })
+        edge_idx += 1
+        edges.append(_process_edge_template(
+            edge_cell_id=f"cell-{edge_idx}",
+            source=prev_node_id, target=cell_id,
+        ))
+        prev_node_id = cell_id
+        y_pos += 96
+    # 最后一条 edge 接 END
+    edge_idx += 1
+    edges.append(_process_edge_template(
+        edge_cell_id=f"cell-{edge_idx}",
+        source=prev_node_id, target="END",
+    ))
+
+    return {
+        "appId": app_id,
+        "formId": form_id,
+        "menuId": menu_id,
+        "tenantId": "",
+        "processName": process_name,
+        "processCode": process_code,
+        "bpmn": _MIN_BPMN_XML,
+        "status": "ENABLE",
+        "engine": "VERSION_1.1",
+        "nodes": nodes,
+        "edges": edges,
+        "processRule": {},
+        "globalSettings": {},
+        "processGlobalConfig": {},
+        "processDataSource": {},
+        "openProcessVersion": False,
+        "boExist": True,
+        "boRemindExist": True,
+        "predictionFlag": False,
+    }
+
+
 def _build_bpmn_payload_from_stages(menu_id: str, name: str, code: str, stages: list) -> dict:
     """把 LLM 友好的 stages 数组转成 apaas processConfig API 的 payload。
 
@@ -4837,87 +5027,89 @@ async def set_apaas_app_process(
                        f"先调 list_apaas_app_menus 找 form_id 不空那行 menu_id",
         }
 
-    # 二级反查表单配置拿 formCode + formName
-    ok_form, form_cfg = await _with_client(env_id, "查表单",
-        lambda c: c.query_form_config(apaas_app_id.strip(), form_id))
-    if not ok_form:
-        return form_cfg
-    form_code = (form_cfg or {}).get("formCode") or ""
-    form_name = (form_cfg or {}).get("formName") or target_menu.get("menuName") or ""
-    if not form_code:
-        return {
-            "ok": False, "error_code": "FORM_CODE_NOT_FOUND",
-            "message": f"form_id={form_id} 的 formCode 字段为空 (表单元数据异常). "
-                       f"建议在平台 UI 表单设计页确认表单是否完整保存.",
-        }
+    # 反查角色 — 把 stages 里的 approver_code 映射到 role_id (snowflake), 平台
+    # 接受的是 role_id 不是 role_code.
+    ok_roles, roles_list = await _with_client(env_id, "查角色",
+        lambda c: c.query_roles(apaas_app_id.strip()))
+    if not ok_roles:
+        return roles_list
+    role_by_code = {}
+    role_by_id = {}
+    for r in (roles_list or []):
+        if isinstance(r, dict):
+            rcode = str(r.get("roleCode") or "").strip()
+            rid = str(r.get("id") or "").strip()
+            rname = str(r.get("roleName") or rcode).strip()
+            if rcode: role_by_code[rcode] = {"id": rid, "name": rname}
+            if rid: role_by_id[rid] = {"code": rcode, "name": rname}
 
-    # 构建 nodes/edges (build-system.py 实证 schema). 2026-05-25 修复历程:
-    # v1: 老 BPMN 路径 /xdap-app/process/save/processConfig → 返 ok 但 UI 空白 (错端点)
-    # v2: 切 /common/resource/processConfig + 加 explicit 开始/结束 → 平台 UI 显 5 节点
-    #     (圆开始 + 矩形开始 + stages + 矩形结束 + 圆结束) — 冗余但 work
-    # v3: 删 explicit 开始/结束 → edges 引用了 nodes 里不存在的 "start"/"end" → 整
-    #     payload 被平台拒, UI 又空白
-    # 当前 v4: 回到 v2 — 保留 explicit 节点确保流程能写入. 显示冗余的 5 节点等用户
-    # 手动建一次流程 capture 真实 schema (hooks 已挂 docs/captures/process-*.json)
-    # 后再迭代去 dedup.
-    process_nodes = [{"nodeName": "开始", "nodeId": "start", "approvers": [
-        {"approverType": "SUBMITTER", "approverName": "表单提交人", "approverCode": "SUBMITTER"},
-    ]}]
-    process_edges = []
-    prev_id = "start"
-    for idx, stage in enumerate(stages, start=1):
+    # 转 stages → stages_with_role (含 role_id + label)
+    stages_with_role = []
+    for stage_idx, stage in enumerate(stages, start=1):
         approver_type = (stage.get("approver_type") or "ROLE").strip().upper()
-        approver_code = str(stage.get("approver_code") or "").strip()
-        approver_name = (stage.get("approver_name") or stage.get("name")
-                         or approver_code or f"审批人 {idx}").strip()
         if approver_type == "SUBMITTER":
-            approvers = [{"approverType": "SUBMITTER",
-                          "approverName": "表单提交人", "approverCode": "SUBMITTER"}]
-        else:
-            approvers = [{"approverType": approver_type,
-                          "approverName": approver_name,
-                          "approverCode": approver_code}]
-        nid = f"node_{idx}"
-        process_nodes.append({
-            "nodeName": stage.get("name") or f"审批 {idx}",
-            "nodeId": nid,
-            "approvers": approvers,
+            stages_with_role.append({
+                "name": stage.get("name") or f"审批 {stage_idx}",
+                "approver_type": "SUBMITTER",
+                "approver_value": "SUBMITTER",
+                "approver_label": "申请人",
+            })
+            continue
+        # ROLE — code 或 id 都接, 缺哪个用反查表补齐
+        raw_code = str(stage.get("approver_code") or "").strip()
+        role_id = ""
+        role_label = stage.get("approver_name") or ""
+        if raw_code:
+            # 1) 当作 role_code 查
+            hit = role_by_code.get(raw_code)
+            if hit:
+                role_id = hit["id"]
+                role_label = role_label or hit["name"]
+            # 2) 当作 role_id 查 (AI 可能直接传 id 进来)
+            elif raw_code in role_by_id:
+                role_id = raw_code
+                role_label = role_label or role_by_id[raw_code]["name"]
+        if not role_id:
+            return {
+                "ok": False, "error_code": "ROLE_NOT_FOUND",
+                "message": f"stage 「{stage.get('name')}」的 approver_code="
+                           f"'{raw_code}' 在应用角色列表里找不到. "
+                           f"先调 list_apaas_app_roles 看真实 roleCode/id",
+                "available_role_codes": list(role_by_code.keys()),
+            }
+        stages_with_role.append({
+            "name": stage.get("name") or f"审批 {stage_idx}",
+            "approver_type": "ROLE",
+            "approver_value": role_id,
+            "approver_label": role_label or "审批人",
         })
-        process_edges.append({
-            "edgeId": f"e_{idx}", "fromNodeId": prev_id, "targetNodeId": nid,
-        })
-        prev_id = nid
-    process_nodes.append({"nodeName": "结束", "nodeId": "end", "approvers": []})
-    process_edges.append({
-        "edgeId": "e_end", "fromNodeId": prev_id, "targetNodeId": "end",
-    })
 
-    payload = [{
-        "appId": apaas_app_id.strip(),
-        "tenantId": "",  # client 会从 header xdaptenantid 拿
-        "formName": form_name or process_name.strip(),
-        "formCode": form_code,
-        "processNodes": process_nodes,
-        "processEdges": process_edges,
-    }]
+    # 用 capture 实证 schema 构建 payload (BPMN nodes/edges + 10 button + voteConfig 等)
+    payload = _build_process_payload_v2(
+        app_id=apaas_app_id.strip(),
+        form_id=form_id,
+        menu_id=menu_id.strip(),
+        process_name=process_name.strip(),
+        process_code=process_code.strip(),
+        stages_with_role=stages_with_role,
+    )
 
-    ok, raw = await _with_client(env_id, "建流程",
-        lambda c: c.create_process_config(apaas_app_id.strip(), payload))
+    ok, raw = await _with_client(env_id, "存流程",
+        lambda c: c.save_process_config(apaas_app_id.strip(), payload))
     if not ok:
         return raw
 
     return {
         "ok": True,
         "menu_id": menu_id,
-        "form_code": form_code,
-        "form_name": form_name,
+        "form_id": form_id,
         "process_name": process_name,
         "process_code": process_code,
         "stages_count": len(stages),
-        "nodes_count": len(process_nodes),
+        "nodes_count": len(payload["nodes"]),
         "platform_response": raw if isinstance(raw, dict) else {"raw": raw},
-        "message": (f"流程「{process_name}」已设到表单「{form_name}」"
-                    f"({len(stages)} 个审批阶段 + 开始 + 结束 = {len(process_nodes)} 节点)"),
+        "message": (f"流程「{process_name}」已设到表单菜单 (menu_id={menu_id}): "
+                    f"START → {len(stages)} 个审批节点 → END"),
     }
 
 
