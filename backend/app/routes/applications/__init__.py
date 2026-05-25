@@ -2331,6 +2331,11 @@ _CONFIG_CHAT_TOOL_WHITELIST: set[str] = {
     "create_form_event_with_python_code",
     "create_time_event_with_python_code",
     "create_apaas_value_change_assignment_event",   # 用户最高频"X 改成 Y → 填 Z"场景
+    # —— 表单流程 (2026-05-25 补) ——
+    # 给表单菜单设审批流程, 一键 N 阶段顺序审批 (START → 提交 → stage1 → ... → END)
+    # AI 老路是引导用户 "我演示一下" 录制 → 录到的全是 AI 助手输入框里的 click 没用,
+    # 改成调这个工具直接 POST 流程配置到平台.
+    "set_apaas_app_process",
     # —— 表单字段权限 (2026-05-25 补) ——
     "set_apaas_form_permissions",    # 配字段对角色的读/写/隐藏权限
     # —— 浏览器控制 (POC, 见 docs/rfc-2026-05-19-browser-control-poc.md) ——
@@ -2981,7 +2986,26 @@ async def _config_chat_event_stream(
             "  7. 用户确认后调 save_config_skill 存（intent_keywords 从用户首次描述里提取）\n"
             "演示式学习重点: 用户给的是动作序列，**你的工作是把动作翻译成 MCP / browser 工具\n"
             "调用序列**（譬如用户点『新增字段』按钮 → 你写成 browser_snapshot 找按钮 +\n"
-            "browser_click 序列），并标清前置 (需要先 navigate / login 到某页)。\n"
+            "browser_click 序列），并标清前置 (需要先 navigate / login 到某页)。\n\n"
+
+            "## ❌ 不要 demonstration 的场景 — 直接调专属 MCP\n"
+            "下面这些操作 MCP 已封装好一键工具, 不要走 browser_start_recording / browser_click,\n"
+            "也不要让用户『演示一下』 — 直接调对应 MCP 一把过, 比录制 + 重放快 100 倍 + 稳定:\n"
+            "  - **创建/修改表单流程** → `set_apaas_app_process(env_id, apaas_app_id, menu_id,\n"
+            "    process_name, process_code, stages=[{name,approver_type,approver_code}, ...])`\n"
+            "    示例: 借阅记录加管理员审核流程 → list_apaas_app_menus 拿 menu_id (form_id 不空那行)\n"
+            "    → list_apaas_app_roles 拿 R_ADMIN 的 roleCode → set_apaas_app_process(menu_id=...,\n"
+            "    process_name=\"借阅审批\", process_code=\"borrow_approval\",\n"
+            "    stages=[{name:\"管理员审批\",approver_type:\"ROLE\",approver_code:\"R_ADMIN\"}])\n"
+            "  - 加字段必填 → update_apaas_form_component (不是 browser_click)\n"
+            "  - 加角色 → create_apaas_app_roles\n"
+            "  - 加字典选项 → add_apaas_dict_option\n"
+            "  - 加菜单 → create_apaas_form_menu / create_apaas_self_dev_menu\n"
+            "  - 业务事件 → create_apaas_value_change_assignment_event / create_form_event_with_python_code\n"
+            "  - 字段权限 → set_apaas_form_permissions\n"
+            "**铁律**: 用户说『加流程』/『加审批』/『字段必填』/『加角色』/『加菜单』等明确意图时,\n"
+            "**先扫 MCP 工具列表找现成 wrapper, 找到就直接调**, 不要先 browser_snapshot 看页面,\n"
+            "不要劝用户『演示一下』. 没现成 wrapper 才 fallback browser_* 或 demonstration.\n"
         )
 
         messages: list[dict] = [{"role": "system", "content": system_prompt}]
