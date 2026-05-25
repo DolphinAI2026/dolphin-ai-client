@@ -261,7 +261,75 @@ def _inject_sso_script(html: str, vuex_state: str) -> str:
         "</script>\n"
     )
 
-    inject = style + script
+    # 2026-05-25: 注入「左侧 widget-panel 折叠」按钮 + CSS — 给 ChatPage 3 列布局腾地方
+    # 平台 form designer / list designer 左侧 数据模型/业务组件 面板 (.widget-panel, 218px),
+    # 用户嫌挤可以一键折叠成 8px, 释放 ~210px 给中间预览区.
+    panel_style = (
+        "\n<style id='apaas-builder-panel-toggle'>\n"
+        # 按钮 — 固定在左上, 浮在 widget-panel 上方
+        "#apaas-builder-panel-toggle-btn {\n"
+        "  position: fixed;\n"
+        "  left: 0;\n"
+        "  top: 60px;\n"
+        "  width: 14px;\n"
+        "  height: 56px;\n"
+        "  background: linear-gradient(135deg, #7c3aed, #5b21b6);\n"
+        "  color: #fff;\n"
+        "  border: none;\n"
+        "  border-radius: 0 6px 6px 0;\n"
+        "  cursor: pointer;\n"
+        "  font-size: 11px;\n"
+        "  display: flex;\n"
+        "  align-items: center;\n"
+        "  justify-content: center;\n"
+        "  z-index: 9999;\n"
+        "  box-shadow: 2px 2px 8px rgba(124, 58, 237, 0.35);\n"
+        "  transition: left 0.2s ease;\n"
+        "  opacity: 0.6;\n"
+        "}\n"
+        "#apaas-builder-panel-toggle-btn:hover { opacity: 1; }\n"
+        # 折叠态 — body 加 .apaas-builder-panel-collapsed
+        ".apaas-builder-panel-collapsed .widget-panel,\n"
+        ".apaas-builder-panel-collapsed .left-panel,\n"
+        ".apaas-builder-panel-collapsed [class*='widget-panel'] {\n"
+        "  width: 8px !important;\n"
+        "  min-width: 8px !important;\n"
+        "  overflow: hidden !important;\n"
+        "  transition: width 0.2s ease;\n"
+        "}\n"
+        ".widget-panel, .left-panel, [class*='widget-panel'] {\n"
+        "  transition: width 0.2s ease;\n"
+        "}\n"
+        "</style>\n"
+    )
+    panel_script = (
+        "\n<script id='apaas-builder-panel-toggle-script'>\n"
+        "(function(){\n"
+        "  function makeBtn(){\n"
+        "    if (document.getElementById('apaas-builder-panel-toggle-btn')) return;\n"
+        "    var btn = document.createElement('button');\n"
+        "    btn.id = 'apaas-builder-panel-toggle-btn';\n"
+        "    btn.textContent = '◀';\n"
+        "    btn.title = '折叠/展开左侧面板';\n"
+        "    btn.onclick = function(){\n"
+        "      document.body.classList.toggle('apaas-builder-panel-collapsed');\n"
+        "      btn.textContent = document.body.classList.contains('apaas-builder-panel-collapsed') ? '▶' : '◀';\n"
+        "    };\n"
+        "    document.body.appendChild(btn);\n"
+        "  }\n"
+        # 等 DOM ready
+        "  if (document.readyState === 'loading') {\n"
+        "    document.addEventListener('DOMContentLoaded', makeBtn);\n"
+        "  } else {\n"
+        "    makeBtn();\n"
+        "  }\n"
+        # 平台 SPA 路由切换后可能丢 button, 定期补
+        "  setInterval(makeBtn, 2000);\n"
+        "})();\n"
+        "</script>\n"
+    )
+
+    inject = style + script + panel_style + panel_script
     html_lower = html.lower()
     if "</head>" in html_lower:
         idx = html_lower.index("</head>")
