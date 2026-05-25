@@ -543,17 +543,20 @@ async def _proxy_request(request: Request, path: str, inject_auth: bool = False)
             except Exception as exc:
                 logger.warning(f"capture event/save failed: {exc}")
         # 2026-05-25: 抓 menu/save 用 — 用户手动挂菜单到分组时落到文件
-        if body and "menu/save/menu" in path:
+        # 扩展: 抓所有 xdap-app/menu/* POST (除 query/* 读类) 找平台 UI 真用啥端点
+        if body and "/xdap-app/menu/" in path and "/query/" not in path:
             try:
                 import os as _os, time as _t
                 _capture_dir = "/Users/mars/Vibe Coding/apaas-builder-ai/docs/captures"
                 _os.makedirs(_capture_dir, exist_ok=True)
-                fname = f"menu-save-captured-{int(_t.time())}.json"
+                # 端点名编码到文件名 (替换 / 防文件系统冲突)
+                ep = path.split("/xdap-app/menu/")[-1].replace("/", "_")
+                fname = f"menu-{ep}-captured-{int(_t.time())}.json"
                 with open(f"{_capture_dir}/{fname}", "wb") as fp:
                     fp.write(body)
-                logger.info(f"🎯 captured menu/save body to {fname} ({len(body)} bytes)")
+                logger.info(f"🎯 captured menu/{ep} body to {fname} ({len(body)} bytes) path={path}")
             except Exception as exc:
-                logger.warning(f"capture menu/save failed: {exc}")
+                logger.warning(f"capture menu failed: {exc}")
         resp = await client.request(method=request.method, url=target, headers=headers, content=body)
 
         if resp.status_code == 401 and _proxy_state.get("username"):

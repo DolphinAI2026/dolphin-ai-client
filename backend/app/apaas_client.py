@@ -1684,112 +1684,72 @@ class APaaSClient:
         parent_id: str = "",
         menu_order: int = 0,
     ) -> dict:
-        """改菜单的父分组 — 用 interface-engine queue_xdap_appmenu 整树 reorder.
+        """改菜单的父分组 — 用平台真 reorder 端点 POST /xdap-app/menu/queue/appMenu.
 
-        2026-05-25: 平台 save/menu 接受 parentId 但不真的更新已存 menu 的位置 (验证过).
-        正确做法 (跟 super-agents-dev saveMenuOrder 一致) — 构造完整菜单层级数组,
-        每个 group 把它的 submenus 嵌进去, target menu 移到目标 group 的 submenus
-        下并设 parentId. POST 整树到 /api/interface-engine/interfaces/by-code/queue_xdap_appmenu/execute.
+        2026-05-25 v2: 之前用 /xdap-app/menu/save/menu 返 ok 但 parentId 静默不持久化.
+        挖 platform app.*.js bundle 发现真端点是 `/xdap-app/menu/queue/appMenu`
+        (前端常量 MENU_LIST_DROP_SORT — 拖拽排序专用), body 是**完整菜单树**
+        (含 submenus 嵌套). 实证 trial 100% 通, 验证 parent_id 真持久化.
 
         parent_id="" = 移到根; parent_id=<group_id> = 挂到该 group 下.
         """
-        # 先查当前菜单完整树 (manageAppMenu, 含 GROUP + 嵌套 submenus)
+        # 1. 拿当前菜单完整树 (manageAppMenu, 含 GROUP + 嵌套 submenus)
         menus = await self.query_menus(app_id)
 
-        def _strip_clientside(m: dict) -> dict:
-            """去掉前端可能添加的字段, 跟 super-agents saveMenuOrder 一致."""
-            out = {k: v for k, v in m.items() if k not in ("isGroup", "submenus")}
-            return out
+        # 2. 平铺找 target, 从原位置摘出
+        target: dict | None = None
 
-        # 1) 平铺找 target, 然后把它从原位置摘出来
-        target = None
-        all_groups_by_id: dict[str, dict] = {}
-
-        def _walk(nodes: list, parent: dict | None = None) -> list:
-            """递归走 menu tree, 同步在 all_groups_by_id 记 group 索引."""
+        def _walk_remove(nodes: list) -> list:
+            """递归遍历 + 把 target menu 从原位置摘走 (从 root 或 group submenus)."""
+            nonlocal target
             cleaned = []
             for n in nodes or []:
                 if not isinstance(n, dict):
                     continue
                 if str(n.get("id") or n.get("menuId") or "") == str(menu_id):
-                    nonlocal target
                     target = n
-                    continue  # 摘出来, 一会儿重新插
+                    continue
                 copy = dict(n)
                 kids = n.get("submenus") or n.get("children") or []
-                if kids:
-                    copy["submenus"] = _walk(kids, copy)
-                else:
-                    copy["submenus"] = []
-                if str(copy.get("menuType") or "").upper() == "GROUP":
-                    all_groups_by_id[str(copy.get("id") or copy.get("menuId") or "")] = copy
+                copy["submenus"] = _walk_remove(kids) if kids else []
                 cleaned.append(copy)
             return cleaned
 
-        new_tree = _walk(menus or [])
-
+        new_tree = _walk_remove(menus or [])
         if not target:
             raise Exception(f"找不到 menu_id={menu_id} 的菜单, 无法更新父分组")
 
-        # 2) 把 target 摘下来 + 更新 parentId / menuOrder
+        # 3. 更新 target 的 parentId/menuOrder, 子菜单不嵌孙
         target_copy = dict(target)
         target_copy["parentId"] = parent_id.strip() if parent_id else ""
         target_copy["menuOrder"] = menu_order
-        target_copy["submenus"] = []  # 子菜单不能嵌孙 (跟 super-agents 一致)
+        target_copy["submenus"] = []
 
-        # 3) 插入到目标位置
-        if parent_id and parent_id.strip():
-            # 挂到指定 group 下 — 找那个 group 在 new_tree 里 (可能在 root 也可能在嵌套)
-            pid = parent_id.strip()
-            inserted = False
-
-            def _try_insert(nodes: list) -> bool:
+        # 4. 插入到目标位置
+        pid = parent_id.strip() if parent_id else ""
+        if pid:
+            def _insert(nodes: list) -> bool:
                 for n in nodes:
                     if str(n.get("id") or n.get("menuId") or "") == pid:
                         n.setdefault("submenus", []).append(target_copy)
                         return True
-                    if n.get("submenus"):
-                        if _try_insert(n["submenus"]):
-                            return True
+                    if n.get("submenus") and _insert(n["submenus"]):
+                        return True
                 return False
 
-            inserted = _try_insert(new_tree)
-            if not inserted:
-                raise Exception(f"找不到目标 group menu_id={pid}, 无法挂载")
+            if not _insert(new_tree):
+                raise Exception(f"找不到目标 group menu_id={pid}")
         else:
-            # 移到根
             new_tree.append(target_copy)
 
-        # 4) 重新算 menuOrder (顺序按当前位置)
-        def _fix_order(nodes: list) -> None:
-            for i, n in enumerate(nodes):
-                n["menuOrder"] = i
-                if n.get("submenus"):
-                    for j, sub in enumerate(n["submenus"]):
-                        sub["menuOrder"] = j
-                        sub["parentId"] = n.get("id") or n.get("menuId") or ""
-
-        _fix_order(new_tree)
-
-        # 5) target 之前的完整原始字段透传 (含 objectVersionNumber, 平台乐观锁), 仅覆盖 parentId.
-        # interface-engine 不在 trial 平台 — 退回直接 save/menu, 带完整字段 + 乐观锁.
-        full_payload = {
-            k: v for k, v in target.items()
-            if k not in ("submenus", "children", "subMenus", "menuList")
-        }
-        full_payload["parentId"] = parent_id.strip() if parent_id else ""
-        full_payload["menuOrder"] = menu_order
-        # i18n / customIcon 占位 (super-agents 兼容)
-        full_payload.setdefault("menuNameI18nResourceCode", "")
-        full_payload.setdefault("menuNameI18n", {})
-        full_payload.setdefault("menuCustomIcon", "")
-        full_payload.setdefault("datasourceName", "")
-
-        url = f"{self.base_url}/xdap-app/menu/save/menu"
-        _log_request("POST", url, full_payload)
+        # 5. POST 完整树到 queue/appMenu (平台真 reorder 端点)
+        url = f"{self.base_url}/xdap-app/menu/queue/appMenu"
+        _log_request("POST", url, {"_summary": "menu reorder (full tree)",
+                                    "tree_root_count": len(new_tree),
+                                    "target_menu_id": menu_id, "target_parent_id": pid or "root"})
         start = time.time()
         async with httpx.AsyncClient(verify=False, timeout=APAAS_HTTP_TIMEOUT) as client:
-            response = await client.post(url, headers=self._get_headers(app_id), json=full_payload)
+            response = await client.post(url, headers=self._get_headers(app_id), json=new_tree)
             elapsed_ms = (time.time() - start) * 1000
             response.raise_for_status()
             data = response.json()
@@ -1797,31 +1757,26 @@ class APaaSClient:
             if data.get("code") != "ok":
                 raise Exception(data.get("message", "更新菜单父分组失败"))
 
-        # 关键: 平台 save/menu 对 existing menu 的 parentId 改动有时静默不持久化.
-        # 立刻 verify — re-query 看 parentId 真改了没.
+        # 6. verify — 平台对全树 reorder 一般立刻持久化, 但 paranoid check
         verify_menus = await self.query_menus(app_id)
-        def _verify_walk(nodes, target_pid=""):
+
+        def _verify_walk(nodes):
             for n in nodes or []:
                 if str(n.get("id") or n.get("menuId") or "") == str(menu_id):
                     return str(n.get("parentId") or "")
                 if n.get("submenus"):
-                    sub = _verify_walk(n["submenus"], target_pid)
+                    sub = _verify_walk(n["submenus"])
                     if sub is not None:
                         return sub
             return None
+
         actual_parent = _verify_walk(verify_menus or [])
-        expected = parent_id.strip() if parent_id else ""
-        if str(actual_parent or "") != expected:
-            logger.warning(
-                f"菜单 {menu_id} parentId 改动未持久化: expected={expected!r} actual={actual_parent!r}"
-            )
+        if str(actual_parent or "") != pid:
             raise Exception(
-                "平台 API 不支持移动现有菜单到分组 (save/menu 接受 parentId 但不持久化, "
-                "是 apaas trial 版限制). 解决方案: 1) 在平台『菜单功能』tab 内拖拽; "
-                "或 2) 直接在分组下用 create_apaas_form_menu(parent_id=...) 新建菜单."
+                f"queue/appMenu 返 ok 但 parentId 未持久化: expected={pid!r} actual={actual_parent!r}"
             )
-        logger.info(f"菜单 {menu_id} 父分组已更新 → {parent_id or '根'} (verified)")
-        return {"menu_id": menu_id, "parent_id": expected, "verified": True}
+        logger.info(f"菜单 {menu_id} 父分组 → {pid or '根'} (queue/appMenu verified)")
+        return {"menu_id": menu_id, "parent_id": pid, "verified": True}
 
     # ───────────────────── 业务事件 (research-business-event-api.md v2) ─────────────────────
     # 9 个 endpoint 实证, 这里实现 6 个高频. 详 docs/research-business-event-api.md 第 5 节.
